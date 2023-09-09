@@ -7,9 +7,10 @@ cmake_minimum_required(VERSION 3.26.0)
 ##################################################
 ## Project
 ##################################################
-project(Moer2)
+project(MoerEngine)
 
 set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(MOER2_ROOT_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 set(ENGINE_ROOT_DIR ${MOER2_ROOT_DIR}/source)
 

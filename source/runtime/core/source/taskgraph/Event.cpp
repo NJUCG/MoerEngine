@@ -1,13 +1,14 @@
 #include "taskgraph/Event.h"
+#include "taskgraph/StatQueue.h"
 #include "spdlog/spdlog.h"
 #include "platform/Platform.h"
 #include <chrono>
 
 Event* EventPool::getEvent(bool autoReset) {
     Event* target;
-    while (!m_pool.pop(target)) {
+    while (!m_pool->pop(target)) {
         for (size_t i = 0; i < 10; i++) {
-            m_pool.push(new Event(autoReset));
+            m_pool->push(new Event(autoReset));
         }
     }
     target->m_autoReset = autoReset;
@@ -21,13 +22,18 @@ EventPool* EventPool::get() {
 
 void EventPool::releaseEvent(Event* target) {
     target->onReset();
-    m_pool.push(target);
+    m_pool->push(target);
 }
 
 EventPool::EventPool() {
+    m_pool = new LockQueue<Event>;
     for (size_t i = 0; i < 100; i++) {
-        m_pool.push(new Event());
+        m_pool->push(new Event());
     }
+}
+EventPool::~EventPool() {
+    delete m_pool;
+    m_pool = nullptr;
 }
 
 Event::Event(bool autoReset) : m_signal{0}, m_autoReset{autoReset} {

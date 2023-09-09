@@ -3,22 +3,21 @@
 #include <atomic>
 #include <assert.h>
 #include <type_traits>
-#include "spdlog/spdlog.h"
 class Countable{
 public:
-	int32_t addRef() {
+	int32_t AddRef() {
 		return m_counter.fetch_add(1)+1;
 	};
-	virtual void destroy() = 0;
-	int32_t tryDrop() {
+	virtual void Destroy() = 0;
+	int32_t TryDrop() {
 		assert(m_counter >= 0);
 		int32_t current = m_counter.fetch_sub(1);
 		if (current == 1) { 
-			destroy();
+			Destroy();
 		}
 		return current - 1;
 	};
-	int32_t getRefCount() { return m_counter.load(); }
+	int32_t GetRefCount() { return m_counter.load(); }
 	
 protected:
 	std::atomic<int32_t> m_counter;
@@ -31,24 +30,24 @@ public:
 		//if(std::is_convertible<T, Countable>::value) return;
 		//assert(false);
 	}
-	CountableRef(T* countable, bool addRef = true) {
+	CountableRef(T* countable, bool AddRef = true) {
 		ptr = countable;
-		if (ptr != nullptr && addRef) {
-			ptr->addRef();
+		if (ptr != nullptr && AddRef) {
+			ptr->AddRef();
 		}
 	}
 
 	CountableRef(const CountableRef& copy) {
 		ptr = copy.ptr;
 		if (ptr != nullptr) {
-			ptr->addRef();
+			ptr->AddRef();
 		}
 	}
 	template<typename CopyType>
 	CountableRef(const CountableRef<CopyType>& copy) {
 		ptr = copy.ptr;
 		if (ptr != nullptr) {
-			ptr->addRef();
+			ptr->AddRef();
 		}
 	}
 	template<typename MoveType>
@@ -63,7 +62,7 @@ public:
 	}
 	~CountableRef() {
 		if (ptr != nullptr) {
-			ptr->tryDrop();
+			ptr->TryDrop();
 		}
 	}
 	CountableRef& operator=(T* _ptr) {
@@ -71,10 +70,10 @@ public:
 			T* old = ptr;
 			ptr = _ptr;
 			if (ptr != nullptr) {
-				ptr->addRef();
+				ptr->AddRef();
 			}
 			if (old != nullptr) {
-				old->tryDrop();
+				old->TryDrop();
 			}
 		}
 		return *this;
@@ -94,7 +93,7 @@ public:
 			ptr = _ref_move.ptr;
 			_ref_move.ptr = nullptr;
 			if (old != nullptr) {
-				old->tryDrop();
+				old->TryDrop();
 			}
 		}
 		return *this;
@@ -106,7 +105,7 @@ public:
 			ptr = _ref_move.ptr;
 			_ref_move.ptr = nullptr;
 			if (old != nullptr) {
-				old->tryDrop();
+				old->TryDrop();
 			}
 		}
 		return *this;
@@ -139,8 +138,8 @@ public:
 	inline bool operator==(const T* other) {
 		return ptr == other;
 	}
-	int32_t getRefCount() {
-		return ptr->getRefCount();
+	int32_t GetRefCount() {
+		return ptr->GetRefCount();
 	}
 protected:
 	T* ptr;

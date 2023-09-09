@@ -2,6 +2,7 @@
 #include "taskgraph/TaskGraph.h"
 #include "taskgraph/GraphTask.h"
 #include "platform/Platform.h"
+#include "spdlog/spdlog.h"
 BaseGraphTask* TaskThreadAnyThread::findTaskToDo() {
 
 

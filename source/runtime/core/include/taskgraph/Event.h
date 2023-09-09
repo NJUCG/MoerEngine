@@ -1,16 +1,18 @@
 #ifndef EVENT_H
 #define EVENT_H
-#include "StatQueue.h"
 #include <mutex>
 class Event;
+
+template<class T> class LockQueue;
 class EventPool {
 public:
+    ~EventPool();
 	Event* getEvent(bool autoReset=true);
 	static EventPool* get();
 	void releaseEvent(Event* target);
 private:
 	EventPool();
-	LockQueue<Event> m_pool;
+	LockQueue<Event>* m_pool;
 };
 class Event {
 	friend class EventPool;

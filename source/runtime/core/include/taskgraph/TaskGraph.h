@@ -2,6 +2,7 @@
 #define TASK_GRAPH_H
 #include <memory>
 #include "Thread.h"
+#include "misc/StatQueue.h"
 #include "CountableRef.h"
 class GraphEvent;
 typedef CountableRef<GraphEvent>  GraphEventRef;

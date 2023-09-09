@@ -5,7 +5,10 @@
 #elif DX12
 
 #endif
-#include "Core.h"
+#include "API_Macro.h"
+#include <type_traits>
+#include <string>
+#include "config/ConfigMap.h"
 namespace __ENGINE_NAME__ {
 namespace RHI {
     RHI_API extern const std::string RHI_VULKAN_NAME;
@@ -13,7 +16,7 @@ namespace RHI {
     RHI_API extern const std::string RHI_OPENGL_NAME;
     RHI_API extern const std::string RHI_METAL_NAME;
 
-    RHI_API class GenericRenderPlatformInfo {
+    class RHI_API GenericRenderPlatformInfo {
         std::string rhi_name;
         uint32_t    b_is_pc : 1;
         uint32_t    b_is_console : 1;
