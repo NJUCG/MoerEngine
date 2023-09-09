@@ -1,5 +1,6 @@
 #include "taskgraph/GraphTask.h"
 #include "taskgraph/TaskGraph.h"
+#include "taskgraph/Event.h"
 //class GraphEventPool {
 //public:
 //	GraphEvent* getEvent();
@@ -14,6 +15,13 @@ GraphEventRef GraphEvent::CreateGraphEvent() {
     auto instance = new GraphEvent();
     return instance;
 };
+
+bool GraphEvent::addSubsequent(BaseGraphTask* subsequent) {
+    return m_subsequents.tryPush(subsequent);
+}
+bool GraphEvent::isComplete() {
+    return m_subsequents.isClosed();
+}
 void BaseGraphTask::queueTask(EThread::Type currentThread, bool shouldWakeupWorker) {
     TaskGraph::getInterface().queueTask(this, m_preferdThread, currentThread, shouldWakeupWorker);
 }
@@ -64,6 +72,9 @@ void GraphEvent::wait(EThread::Type currentThread) {
     TaskGraph::getInterface().waitUntilTaskComplete(this, currentThread);
 }
 
+void TriggerEventGraphTask::Fire(EThread::Type _type, const GraphEventRef& _event) {
+    m_event->trigger();
+}
 //GraphEvent* GraphEventPool::getEvent()
 //{
 //	GraphEvent* target;

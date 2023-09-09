@@ -9,6 +9,7 @@
 #include "platform/Platform.h"
 #include "taskgraph/GraphTask.h"
 #include "taskgraph/TaskSystem.h"
+#include "spdlog/spdlog.h"
 #include <functional>
 
 using namespace std;
@@ -258,7 +259,7 @@ bool TaskGraphTest() {
     {// check ref count for named thread tasks
         GraphEventRef LocalQueueTask = FunctionGraphTask::ConstructAndDispatchWhenReady([] {}, nullptr, EThread::EGameThread_local);
         LocalQueueTask->wait(EThread::EGameThread_local);
-        assert(LocalQueueTask.getRefCount() == 1);
+        assert(LocalQueueTask.GetRefCount() == 1);
     }
     SPDLOG_INFO("=============== check ref count for named thread tasks ================");
     for (int i = 0; i != 100000; ++i) {// a particular real-life case that doesn't work in the old TaskGraph if run in single-threaded mode.
@@ -268,7 +269,7 @@ bool TaskGraphTest() {
         GraphEventRef AnyTask        = FunctionGraphTask::ConstructAndDispatchWhenReady([] {});
         GraphEventRef LocalQueueTask = FunctionGraphTask::ConstructAndDispatchWhenReady([] {}, AnyTask, EThread::EGameThread_local);
         LocalQueueTask->wait(EThread::EGameThread_local);
-        assert(LocalQueueTask.getRefCount() == 1);
+        assert(LocalQueueTask.GetRefCount() == 1);
     }
     SPDLOG_INFO("=============== (local queue) task  depends on a task that is not in the same queue succuss ================");
     {// launch a GT task, then an any-thread task that depends on it. wait for the any-thread task. this was a deadlock on the new frontend

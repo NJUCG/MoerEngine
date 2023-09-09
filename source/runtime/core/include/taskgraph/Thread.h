@@ -1,8 +1,8 @@
 #ifndef THREAD_H
 #define THREAD_H
 #include "ThreadManager.h"
-
-#include "spdlog/spdlog.h"
+#include "Event.h"
+#include "misc/StatQueue.h"
 #include <iostream>
 class BaseGraphTask;
 
