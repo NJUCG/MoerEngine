@@ -13,6 +13,7 @@ target_include_directories(${MODULE_NAME}
     PUBLIC $<BUILD_INTERFACE:${RUNTIME_CORE_DIR}/include>
     PUBLIC $<BUILD_INTERFACE:${THIRD_PARTY_DIR}/boost>
     PUBLIC $<BUILD_INTERFACE:${THIRD_PARTY_DIR}/spdlog/include>
+    PUBLIC $<BUILD_INTERFACE:${THIRD_PARTY_DIR}/glm>
 )
 
 target_link_libraries(${MODULE_NAME}

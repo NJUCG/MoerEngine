@@ -15,6 +15,9 @@ enum {
     MaxVertexElementCount         = 17,
     MaxVertexElementCount_NumBits = 5,
 };
+enum : uint8_t {
+    MAX_PASS_ATTACHMENT_COUNT = 8
+};
 
 enum class ERHIZBuffer {
     // Before changing this, make sure all math & shader assumptions are correct! Also wrap your C++ assumptions with
@@ -48,7 +51,7 @@ enum {
 #pragma endregion
 
 #pragma region cross-platform param types
-enum ESamplerFilter {
+enum ESamplerFilter : uint8_t {
     SF_NEAREST,
     SF_LINEAR,
     SF_CUBIC,
@@ -58,16 +61,16 @@ enum ESamplerFilter {
     SF_Num,
     SF_NumBits = 3,
 };
-enum ESamplerAddressMode {
-    AM_REPEAT,
-    AM_MIRRORED_REPEAT,
-    AM_CLAMP_TO_EDGE,
+enum ESamplerAddressMode : uint8_t {
+    SAM_REPEAT,
+    SAM_MIRRORED_REPEAT,
+    SAM_CLAMP_TO_EDGE,
     //my not supported
-    AM_CLAMP_TO_BORDER,
-    AM_Num,
-    AM_NumBits = 2
+    SAM_CLAMP_TO_BORDER,
+    SAM_Num,
+    SAM_NumBits = 2
 };
-enum ESamplerCompareFunction {
+enum ESamplerCompareFunction : uint8_t {
     SCF_NEVER,
     SCF_LESS,
     SCF_EQUAL,
@@ -79,7 +82,7 @@ enum ESamplerCompareFunction {
     SCF_Num
 };
 
-enum ERasterizerFillMode {
+enum ERasterizerFillMode : uint8_t {
     FM_FILL,
     FM_LINE,
     FM_POINT,
@@ -89,7 +92,7 @@ enum ERasterizerFillMode {
     FM_NumBits = 2,
 };
 
-enum ERasterizerCullMode {
+enum ERasterizerCullMode : uint8_t {
     CM_NONE,
     CM_FRONT,
     CM_BACK,
@@ -99,7 +102,7 @@ enum ERasterizerCullMode {
     CM_NumBits = 2,
 };
 
-enum EColorWriteMask {
+enum EColorWriteMask : uint8_t {
     CW_RED   = 0x01,
     CW_GREEN = 0x02,
     CW_BLUE  = 0x04,
@@ -114,7 +117,7 @@ enum EColorWriteMask {
     EColorWriteMask_NumBits = 4,
 };
 
-enum ECompareOption {
+enum ECompareOption : uint8_t {
     CO_NEVER,
     CO_LESS,
     CO_EQUAL,
@@ -149,7 +152,7 @@ enum EStencilMask {
     SM_Count
 };
 
-enum EStencilOp {
+enum EStencilOp : uint8_t {
     SO_KEEP,
     SO_ZERO,
     SO_REPLACE,
@@ -164,7 +167,7 @@ enum EStencilOp {
 static_assert(SO_Num <= (1 << SO_NumBits), "EStencilOp_Num will not fit on EStencilOp_NumBits");
 
 /* more to support */
-enum EBlendOperation {
+enum EBlendOperation : uint8_t {
     BO_ADD,
     BO_SUBTRACT,
     BO_REVERSE_SUBTRACT,
@@ -176,7 +179,7 @@ enum EBlendOperation {
 };
 static_assert(BO_Num <= (1 << BO_NumBits), "EBlendOperation_Num will not fit on EBlendOperation_NumBits");
 
-enum EBlendFactor {
+enum EBlendFactor : uint8_t {
     BF_ZERO,
     BF_ONE,
     BF_SRC_COLOR,
@@ -264,8 +267,8 @@ enum class EBufferUsageFlags : uint32_t {
 	*/
     ACCELERATION_STRUCTURE = 1 << 13,
 
-    VERTEX_BUFFER     = 1 << 14,
-    INDEX_BUFFER      = 1 << 15,
+    VERTEX_BUFFER  = 1 << 14,
+    INDEX_BUFFER   = 1 << 15,
     STORAGE_BUFFER = 1 << 16,
 
     /** Buffer memory is allocated independently for multiple GPUs, rather than shared via driver aliasing */
@@ -289,7 +292,8 @@ enum class EBufferUsageFlags : uint32_t {
 
 ENUM_BIT_OP_IMPL(EBufferUsageFlags, FLAG)
 
-enum class EGPUVenderId{
+/*from UE*/
+enum class EGPUVenderId {
     Unknown    = -1,
     NotQueried = 0,
 
@@ -511,6 +515,21 @@ enum EResourceAccessMode {
     RAM_READ_ONLY,
     RAM_WRITE_ONLY,
     RAM_Num
+};
+
+enum ETextureAspectFlagBits {
+    IA_COLOR_BIT              = 0x001,
+    IA_DEPTH_BIT              = 0x002,
+    IA_STENCIL_BIT            = 0x004,
+    IA_METADATA_BIT           = 0x008,
+    IA_PLANE_0_BIT            = 0x010,
+    IA_PLANE_1_BIT            = 0x020,
+    IA_PLANE_2_BIT            = 0x040,
+    IA_NONE                   = 0,
+    IA_MEMORY_PLANE_0_BIT_EXT = 0x080,
+    IA_MEMORY_PLANE_1_BIT_EXT = 0x100,
+    IA_MEMORY_PLANE_2_BIT_EXT = 0x200,
+    IA_MEMORY_PLANE_3_BIT_EXT = 0x400
 };
 
 #pragma endregion

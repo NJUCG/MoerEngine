@@ -11,6 +11,8 @@ namespace RHI {
 
 }
 }
+
+
 class RHI_API RHIResource {
 public:
 RHIResource(ERHIResourceType _type = ERHIResourceType::RRT_NONE) : type(_type) {}
@@ -21,7 +23,7 @@ int32_t AddRef() {
     return m_counter.fetch_add(1) + 1;
 };
 virtual void Destroy() = 0;
-int32_t      TryDrop() {
+int32_t      DeRef() {
     assert(m_counter >= 0);
     int32_t current = m_counter.fetch_sub(1);
     if (current == 1) {
@@ -37,13 +39,13 @@ std::atomic<int32_t> m_counter;
 private:
 struct ResourceAtomicFlags {
     std::atomic_int32_t ref_count;
-    std::atomic_bool     b_pending_deleting;
+    std::atomic_bool    b_pending_deleting;
 
 public:
     int32_t AddRef(std::memory_order memory_order) {
         return ref_count.fetch_add(1, memory_order) + 1;
     }
-    int32_t TryDrop(std::memory_order memory_order) {
+    int32_t DeRef(std::memory_order memory_order) {
         return ref_count.fetch_sub(1, memory_order) - 1;
     }
     bool MarkToDelete(std::memory_order memory_order) {
@@ -71,10 +73,15 @@ public:
 };
 ERHIResourceType type;
 //for const resource state change
-mutable ResourceAtomicFlags flags;
+mutable ResourceAtomicFlags                      flags;
 static std::atomic<StatMPSCQueue<RHIResource*>*> pending_deletings;
+};
 
-
+class RHISampler : public RHIResource {
+public:
+RHISampler(ERHIResourceType _type) : RHIResource(_type){}
 
 };
+
+
 #endif// !RHI_RESOURCE_H
