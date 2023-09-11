@@ -2,3 +2,10 @@ out
 .vs
 target
 build
+/.idea/codeStyles/codeStyleConfig.xml
+/.idea/codeStyles/Project.xml
+/.idea/.gitignore
+/.idea/misc.xml
+/.idea/modules.xml
+/.idea/MoerEngine.iml
+/.idea/vcs.xml

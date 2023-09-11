@@ -1,0 +1,101 @@
+#ifndef HASHABLE_H
+#define HASHABLE_H
+#include "MacroUtils.h"
+#include <type_traits>
+#include <string_view>
+
+template<typename TEnum>
+concept concept_t_is_enum = std::is_enum<TEnum>::value;
+template<typename TEnum>
+concept concept_t_enum_underlying_uint8 = concept_t_is_enum<TEnum> && std::is_same_v<std::underlying_type_t<TEnum>, uint8_t>;
+
+
+template<typename T>
+inline void hash_combine(uint16_t& seed, const T& val) {
+    seed ^= std::hash<T>{}(val) + 0x9e37U + (seed << 3) + (seed >> 1);
+}
+
+template<typename T>
+inline void hash_combine(uint32_t& seed, const T& val) {
+    seed ^= std::hash<T>{}(val) + 0x9e3779b9U + (seed << 6) + (seed >> 2);
+}
+
+template<typename T>
+inline void hash_combine(uint64_t& seed, const T& val) {
+    seed ^= std::hash<T>{}(val) + 0x9e3779b97f4a7c15LLU + (seed << 12) + (seed >> 4);
+}
+
+template<typename T, typename... Rest>
+inline void hash_combine(uint64_t& seed, const T& v, const Rest&... rest) {
+    seed ^= std::hash<T>{}(v) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    (hash_combine(seed, rest), ...);
+}
+#define MAKE_HASHABLE_64(type, ...)        \
+    uint64_t hash() const {               \
+        uint64_t ret = 0;            \
+        hash_combine(ret, __VA_ARGS__); \
+        return ret;                     \
+    }
+template<concept_t_enum_underlying_uint8 TEnum>
+class EnumInByte {
+public:
+    EnumInByte()                        = default;
+    EnumInByte(const EnumInByte& other) = default;
+    EnumInByte(TEnum _enum_value) : value(static_cast<uint8_t>(_enum_value)) {}
+    EnumInByte(uint8_t _value) : value(_value) {}
+    EnumInByte(uint32_t _value) : value(static_cast<uint8_t>(_value)) {}
+    EnumInByte(int32_t _value) : value(static_cast<uint8_t>(_value)) {}
+    EnumInByte& operator=(const EnumInByte&) = default;
+
+    operator TEnum() const { return (TEnum)value; }
+    bool operator==(const EnumInByte& other) {
+        return other.value == value;
+    }   
+    bool operator==(TEnum other) {
+        return (TEnum)value == other;
+    }
+    bool operator==(uint8_t _value) {
+        return _value == value;
+    }
+    TEnum GetValue() const{ return (TEnum)value; }
+    private:
+    friend uint32_t GetHash(const EnumInByte& target);
+    uint8_t         value;
+};
+
+uint32_t GetHash(uint32_t value) {
+    return value;
+}
+uint32_t GetHash(int32_t value) {
+    return value;
+}
+uint32_t GetHash(uint8_t value) {
+    return value;
+}
+/*from UE5.03*/
+FORCEINLINE uint32_t GetHash(uint64_t value) {
+    return (uint32_t)value + ((uint32_t)(value >> 32) * 23);
+}
+
+/*from UE5.03*/
+inline uint32_t GetHash(int64_t target) {
+    return (uint32_t)target + ((uint32_t)(target >> 32) * 23);
+}
+
+uint32_t GetHash(float value) {
+    return *(uint32_t*)&value;
+}
+uint32_t GetHash(double value) {
+    return GetHash(*(uint64_t*)&value);
+}
+uint32_t GetHash(const char* value) {
+    return std::hash<std::string_view>{}(std::string_view(value));
+}
+
+
+
+template<typename T>
+FORCEINLINE uint32_t GetHash(const EnumInByte<T>& t) {
+    return GetHash(t.value);
+}
+#endif// !HASHABLE_H
