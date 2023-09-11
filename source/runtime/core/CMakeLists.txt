@@ -12,9 +12,10 @@ target_include_directories(${TARGET_NAME}
 	PUBLIC $<BUILD_INTERFACE:${RUNTIME_CORE_DIR}/include>
     PUBLIC $<BUILD_INTERFACE:${THIRD_PARTY_DIR}/boost>
     PUBLIC $<BUILD_INTERFACE:${THIRD_PARTY_DIR}/spdlog/include>
+    PUBLIC $<BUILD_INTERFACE:${THIRD_PARTY_DIR}/glm>
 )
 target_link_libraries(${TARGET_NAME}
-    #PUBLIC glm::glm
+    PUBLIC glm::glm
     #PUBLIC glfw
     #PUBLIC assimp
     #PUBLIC imgui

@@ -9,7 +9,7 @@ public:
 		return m_counter.fetch_add(1)+1;
 	};
 	virtual void Destroy() = 0;
-	int32_t TryDrop() {
+	int32_t DeRef() {
 		assert(m_counter >= 0);
 		int32_t current = m_counter.fetch_sub(1);
 		if (current == 1) { 
@@ -62,7 +62,7 @@ public:
 	}
 	~CountableRef() {
 		if (ptr != nullptr) {
-			ptr->TryDrop();
+			ptr->DeRef();
 		}
 	}
 	CountableRef& operator=(T* _ptr) {
@@ -73,7 +73,7 @@ public:
 				ptr->AddRef();
 			}
 			if (old != nullptr) {
-				old->TryDrop();
+				old->DeRef();
 			}
 		}
 		return *this;
@@ -93,7 +93,7 @@ public:
 			ptr = _ref_move.ptr;
 			_ref_move.ptr = nullptr;
 			if (old != nullptr) {
-				old->TryDrop();
+				old->DeRef();
 			}
 		}
 		return *this;
@@ -105,7 +105,7 @@ public:
 			ptr = _ref_move.ptr;
 			_ref_move.ptr = nullptr;
 			if (old != nullptr) {
-				old->TryDrop();
+				old->DeRef();
 			}
 		}
 		return *this;

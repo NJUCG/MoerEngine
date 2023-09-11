@@ -35,6 +35,7 @@
 #define ENUM_BIT_OP_2(TEnum, OPERATION)    ENUM_BIT_OP_##OPERATION(TEnum)
 #define ENUM_BIT_OP(TEnum, OPERATION, ...) ENUM_BIT_OP_2(TEnum, OPERATION) _EXPAND_ARGS_(ENUM_BIT_OP_2(TEnum, ##__VA_ARGS__))
 
+/*implement enum bit operation*/
 #define ENUM_BIT_OP_IMPL(TEnum, ...) ENUM_BIT_OP_IMPL_1(TEnum) _EXPAND_ARGS_(ENUM_BIT_OP(TEnum, ##__VA_ARGS__))
 
 //#undef FORCE_INLINE
