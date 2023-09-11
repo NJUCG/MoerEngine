@@ -48,8 +48,6 @@ BreakBeforeInheritanceComma: false
 BreakAfterJavaFieldAnnotations: true
 BreakStringLiterals: true
 BreakConstructorInitializersBeforeComma: false
-AlwaysBreakAfterDefinitionReturnType: None
-AlwaysBreakBeforeMultilineStrings: false
 ColumnLimit: 0
 SortIncludes: false
 CompactNamespaces: true
@@ -86,7 +84,6 @@ UseTab: Never
 IndentRequires: true
 SpacesInConditionalStatement: false
 SortUsingDeclarations: true
-AlignEscapedNewlines: Left
 Standard: c++20
 ...
 
