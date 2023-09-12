@@ -5,7 +5,8 @@ set(RUNTIME_DIR ${ENGINE_ROOT_DIR}/runtime)
 set(RUNTIME_CORE_DIR ${RUNTIME_DIR}/core)
 set(RUNTIME_MODULE_ROOT_DIR ${RUNTIME_DIR}/modules)
 add_subdirectory(core)
-add_subdirectory(modules)
+
+add_subdirectory(modules/render)
 
 add_library(${TARGET_NAME} INTERFACE)
 

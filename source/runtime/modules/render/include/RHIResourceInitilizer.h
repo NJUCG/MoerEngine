@@ -7,8 +7,8 @@
 #include <array>
 #include "math/Math.h"
 struct RHISamplerInitializer {
-    RHISamplerInitializer() {}
-    RHISamplerInitializer(
+    RHISamplerInitializer() = default;
+    explicit RHISamplerInitializer(
         ESamplerFilter                      _filter,
         ESamplerAddressMode                 _address_mode_u = SAM_REPEAT,
         ESamplerAddressMode                 _address_mode_v = SAM_REPEAT,
@@ -61,7 +61,7 @@ struct RHIDepthStencilStateInitializer {
     uint8_t                    stencil_readmask;
     uint8_t                    stencil_writemask;
 
-    RHIDepthStencilStateInitializer(
+    explicit RHIDepthStencilStateInitializer(
         bool           _b_enable_depth_write              = true,
         ECompareOption _depth_test_op                     = CO_LESS_OR_EQUAL,
         bool           _b_enable_front_face_stencil       = false,
@@ -261,15 +261,14 @@ struct RHICopyTextureInfo {
     uint32_t num_mips      = 1;
 };
 
-struct RHISubresourceRange
-{
-    enum ESliceType: uint32_t{
+struct RHISubresourceRange {
+    enum ESliceType : uint32_t {
         DEPTH_SLICE,
         STENCIL_SLICE,
         ALL
     };
 
-    uint32_t mip_index = ALL;
+    uint32_t mip_index   = ALL;
     uint32_t array_slice = ALL;
     uint32_t plane_slice = ALL;
 
@@ -279,51 +278,103 @@ struct RHISubresourceRange
         uint32_t _mip_index,
         uint32_t _array_slice,
         uint32_t _plane_slice)
-        :mip_index(_mip_index)
-          , array_slice (_array_slice)
-          , plane_slice (_plane_slice)
-    {}
+        : mip_index(_mip_index), array_slice(_array_slice), plane_slice(_plane_slice) {}
 
-    inline bool IsAllMips() const
-    {
+    inline bool IsAllMips() const {
         return mip_index == ALL;
     }
 
-    inline bool IsAllArraySlices() const
-    {
+    inline bool IsAllArraySlices() const {
         return array_slice == ALL;
     }
 
-    inline bool IsAllPlaneSlices() const
-    {
+    inline bool IsAllPlaneSlices() const {
         return plane_slice == ALL;
     }
 
-    inline bool IsWholeResource() const
-    {
+    inline bool IsWholeResource() const {
         return IsAllMips() && IsAllArraySlices() && IsAllPlaneSlices();
     }
 
-    inline bool IgnoreDepthPlane() const
-    {
+    inline bool IgnoreDepthPlane() const {
         return plane_slice == STENCIL_SLICE;
     }
 
-    inline bool IgnoreStencilPlane() const
-    {
+    inline bool IgnoreStencilPlane() const {
         return plane_slice == DEPTH_SLICE;
     }
 
-    inline bool operator == (RHISubresourceRange const& rhs) const
-    {
-        return mip_index == rhs.mip_index
-               && array_slice == rhs.array_slice
-               && plane_slice == rhs.plane_slice;
+    inline bool operator==(RHISubresourceRange const& rhs) const {
+        return mip_index == rhs.mip_index && array_slice == rhs.array_slice && plane_slice == rhs.plane_slice;
     }
 
-    inline bool operator != (RHISubresourceRange const& rhs) const
-    {
+    inline bool operator!=(RHISubresourceRange const& rhs) const {
         return !(*this == rhs);
     }
 };
+
+/* todo: transition information definition */
+struct RHIResourceTransitionInfo{
+
+};
+
+
+/* resource copy definition */
+struct RHICopyTextureRegion {
+    /** offset in texture */
+    uint32_t dst_x;
+    uint32_t dst_y;
+    uint32_t dst_z;
+
+    /** offset in source image data */
+    int32_t src_x;
+    int32_t src_y;
+    int32_t src_z;
+
+    /** size of region to copy */
+    uint32_t width;
+    uint32_t height;
+    uint32_t depth;
+
+    RHICopyTextureRegion() = default;
+    explicit RHICopyTextureRegion(int3 _dst_range, int3 _src_range, int3 _src_size)
+        : dst_x(_dst_range.x),
+          dst_y(_dst_range.y),
+          dst_z(_dst_range.z),
+          src_x(_src_range.x),
+          src_y(_src_range.y),
+          src_z(_src_range.z),
+          width(_src_size.x),
+          height(_src_size.y),
+          depth(_src_size.z) {}
+};
+
+struct RHIDispatchIndirectParameters
+{
+    uint32_t group_count_x;
+    uint32_t group_count_y;
+    uint32_t group_count_z;
+};
+
+struct RHIDrawIndirectParameters
+{
+    uint32_t vertex_count;
+    uint32_t instance_count;
+    uint32_t start_vertex_location;
+    uint32_t start_instance_location;
+};
+
+struct RHIDrawIndexedIndirectParameters
+{
+    uint32_t index_count;
+    uint32_t instance_count;
+    uint32_t start_index_location;
+    int32_t base_vertex_location;
+    uint32_t start_instance_location;
+};
+
+/* todo: transient constructor definitions */
+
+/* todo: ray-tracing constructor definitions */
+
 #endif// !RHI_RESOURCE_INITIALIZER_H
