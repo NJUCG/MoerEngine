@@ -1,14 +1,16 @@
 #ifndef HASHABLE_H
 #define HASHABLE_H
 #include "MacroUtils.h"
+#include "PicoSHA2.h"
 #include <type_traits>
 #include <string_view>
+#include <cstring>
+#include <array>
 
 template<typename TEnum>
 concept concept_t_is_enum = std::is_enum<TEnum>::value;
 template<typename TEnum>
 concept concept_t_enum_underlying_uint8 = concept_t_is_enum<TEnum> && std::is_same_v<std::underlying_type_t<TEnum>, uint8_t>;
-
 
 template<typename T>
 inline void hash_combine(uint16_t& seed, const T& val) {
@@ -30,9 +32,9 @@ inline void hash_combine(uint64_t& seed, const T& v, const Rest&... rest) {
     seed ^= std::hash<T>{}(v) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
     (hash_combine(seed, rest), ...);
 }
-#define MAKE_HASHABLE_64(type, ...)        \
-    uint64_t hash() const {               \
-        uint64_t ret = 0;            \
+#define MAKE_HASHABLE_64(type, ...)     \
+    uint64_t hash() const {             \
+        uint64_t ret = 0;               \
         hash_combine(ret, __VA_ARGS__); \
         return ret;                     \
     }
@@ -50,15 +52,16 @@ public:
     operator TEnum() const { return (TEnum)value; }
     bool operator==(const EnumInByte& other) {
         return other.value == value;
-    }   
+    }
     bool operator==(TEnum other) {
         return (TEnum)value == other;
     }
     bool operator==(uint8_t _value) {
         return _value == value;
     }
-    TEnum GetValue() const{ return (TEnum)value; }
-    private:
+    TEnum GetValue() const { return (TEnum)value; }
+
+private:
     friend uint32_t GetHash(const EnumInByte& target);
     uint8_t         value;
 };
@@ -92,10 +95,36 @@ uint32_t GetHash(const char* value) {
     return std::hash<std::string_view>{}(std::string_view(value));
 }
 
-
-
 template<typename T>
 FORCEINLINE uint32_t GetHash(const EnumInByte<T>& t) {
     return GetHash(t.value);
 }
+
+struct SHA256Hash {
+public:
+    std::array<uint8_t,32> hash_code{};
+    SHA256Hash() {
+        for (unsigned char& i : hash_code) {
+            i = 0;
+        }
+    }
+    FORCEINLINE std::string ToString(){
+        return picosha2::bytes_to_hex_string(hash_code.begin(), hash_code.end());
+    }
+    FORCEINLINE void FromString(std::string_view& src){
+        picosha2::hash256(src, hash_code);
+
+    }
+    friend bool operator==(const SHA256Hash& lhs, const SHA256Hash& rhs){
+        return std::memcmp(lhs.hash_code.data(), rhs.hash_code.data(), sizeof (lhs.hash_code)) == 0;
+    }
+    friend bool operator!=(const SHA256Hash& lhs, const SHA256Hash& rhs){
+        return !(lhs == rhs);
+    }
+    friend bool operator< (const SHA256Hash& lhs, const SHA256Hash& rhs){
+        return std::memcmp(lhs.hash_code.data(), rhs.hash_code.data(), sizeof (lhs.hash_code)) < 0;
+    }
+};
+static_assert(picosha2::k_digest_size == 32);
+
 #endif// !HASHABLE_H

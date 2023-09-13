@@ -255,7 +255,7 @@ enum class EBufferUsageFlags : uint32_t {
     FAST_VRAM = 1 << 10,
 
     /** Buffer should be allocated from transient memory. */
-    TRANSIENT = NONE,
+    TRANSIENT = 1 << 11,
 
     /** Create a buffer that can be shared with an external RHI or process. */
     SHARED = 1 << 12,
@@ -331,18 +331,18 @@ enum ERHIResourceType {
     RRT_GRAPHIC_PIPELINE_STATE,
     RRT_COMPUTE_PIPELINE_STATE,
     RRT_RAY_TRACING_PIPELINE_STATE,
-    RRT_BoundShaderState,
-    RRT_UniformBufferLayout,
-    RRT_UniformBuffer,
-    RRT_Buffer,
-    RRT_Texture,
-    RRT_Texture2D,
-    RRT_Texture2DArray,
-    RRT_Texture3D,
-    RRT_TextureCube,
-    RRT_TextureReference,
+    RRT_PIPELINE_BOUND_SHADER_STATE,
+    RRT_UNIFORM_BUFFER_LAYOUT,
+    RRT_UNIFORM_BUFFER,
+    RRT_BUFFER,
+    RRT_TEXTURE,
+    RRT_TEXTURE2D,
+    RRT_TEXTURE2D_ARRAY,
+    RRT_TEXTURE3D,
+    RRT_TEXTURE_CUBE,
+    RRT_TEXTURE_REFERENCE,
     RRT_TimestampCalibrationQuery,
-    RRT_GPUFence,
+    RRT_GPU_FENCE,
     RRT_RenderQuery,
     RRT_RenderQueryPool,
     RRT_ComputeFence,
@@ -359,6 +359,20 @@ enum ERHIResourceType {
 };
 #pragma endregion
 
+enum EShaderType: uint8_t{
+    ST_VERTEX,
+    ST_GEOMETRY,
+    ST_FRAGMENT,
+    ST_COMPUTE,
+    ST_MESH,
+    ST_RAY_GEN,
+    ST_RAY_MISS,
+    ST_RAY_HIT,
+    ST_CALLABLE,
+    ST_Num,
+    ST_NumBits = 4
+};
+static_assert(ST_Num <= (1 << ST_NumBits), "ST_Num exceeds ST_NumBits bound");
 enum EVertexAttributeType {
     VET_None,
     VET_Float1,
@@ -516,7 +530,18 @@ enum EResourceAccessMode {
     RAM_WRITE_ONLY,
     RAM_Num
 };
-
+enum class ETextureCreateFlags: uint64_t{
+    NONE,
+    ATTACHMENT_RENDER,
+    ATTACHMENT_RESOLVE,
+    ATTACHMENT_DEPTH_STENCIL,
+    SHADER_RESOURCE,
+    CPU_VISIBLE,
+    TILLING_NONE,
+    DYNAMIC,
+    INPUT_ATTACHMEN
+};
+ENUM_BIT_OP_IMPL(ETextureCreateFlags, FLAG)
 enum ETextureAspectFlagBits {
     IA_COLOR_BIT              = 0x001,
     IA_DEPTH_BIT              = 0x002,
