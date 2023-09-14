@@ -11,6 +11,27 @@ template<typename TEnum>
 concept concept_t_is_enum = std::is_enum<TEnum>::value;
 template<typename TEnum>
 concept concept_t_enum_underlying_uint8 = concept_t_is_enum<TEnum> && std::is_same_v<std::underlying_type_t<TEnum>, uint8_t>;
+template<typename TNum>
+concept concept_t_is_vec2 = requires (TNum t)
+{
+    t.x; t.y;
+    sizeof(t.x) + sizeof(t.y) == sizeof(t);
+    {t.x + t.y} -> std::same_as<typeof(t.x)>;
+    {t.x - t.y} -> std::same_as<typeof(t.x)>;
+    {t.x * t.y} -> std::same_as<typeof(t.x)>;
+    {t.x / t.y} -> std::same_as<typeof(t.x)>;
+};
+
+template<typename TNum>
+concept concept_t_is_vec3 = requires (TNum t)
+{
+    t.x; t.y; t.z;
+    sizeof(t.x) + sizeof(t.y) + sizeof(t.z) == sizeof(t);
+    {t.x + t.y} -> std::same_as<typeof(t.x)>;
+    {t.x - t.y} -> std::same_as<typeof(t.x)>;
+    {t.x * t.y} -> std::same_as<typeof(t.x)>;
+    {t.x / t.y} -> std::same_as<typeof(t.x)>;
+};
 
 template<typename T>
 inline void hash_combine(uint16_t& seed, const T& val) {
@@ -94,7 +115,25 @@ uint32_t GetHash(double value) {
 uint32_t GetHash(const char* value) {
     return std::hash<std::string_view>{}(std::string_view(value));
 }
+template<concept_t_is_vec2 T>
+uint32_t GetHash(const T& value) {
+    uint32_t hash = GetHash(value.x);
+    hash_combine(hash, GetHash(value.y));
+    return hash;
+}
 
+template<concept_t_is_vec3 T>
+uint32_t GetHash(const T& value) {
+    uint32_t hash = GetHash(value.x);
+    hash_combine(hash, GetHash(value.y));
+    hash_combine(hash, GetHash(value.z));
+    return hash;
+}
+
+template<concept_t_is_enum T>
+FORCEINLINE uint32_t GetHash(const T& t) {
+    return GetHash((std::underlying_type_t<T>)t);
+}
 template<typename T>
 FORCEINLINE uint32_t GetHash(const EnumInByte<T>& t) {
     return GetHash(t.value);

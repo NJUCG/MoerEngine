@@ -3,6 +3,7 @@
 #include "RHICommon.h"
 #include "API_Macro.h"
 #include "RHIResourceInitilizer.h"
+#include "PixelFormat.h"
 #include <cassert>
 #include <atomic>
 #include <misc/StatQueue.h>
@@ -230,10 +231,67 @@ struct RHITextureInfo{
 
     RHITextureInfo(ETextureDimension _dimension): dimension(_dimension){}
 
-    ETextureDimension dimension;
     ETextureCreateFlags flags;
 
+    int2 extent = int2(1, 1);
 
+    /** Depth of the texture if the dimension is 3D. */
+    uint16_t depth = 1;
+
+    /** The number of array elements in the texture. (Keep at 1 if dimension is 3D). */
+    uint16_t array_size = 1;
+
+    /** Number of mips in the texture mip-map chain. */
+    uint8_t num_mips = 1;
+
+    /** Number of samples in the texture. >1 for MSAA. */
+    uint8_t num_samples : 5;
+
+    /** Texture dimension to use when creating the RHI texture. */
+    ETextureDimension dimension : 3;
+
+    /** Pixel format used to create RHI texture. */
+    EPixelFormat format = PF_UNDEFINED;
+
+    /** Texture format used when creating the UAV. PF_Unknown means to use the default one (same as Format). */
+    EPixelFormat uav_format = PF_UNDEFINED;
+
+    RHIClearAttachment clear_attachment;
+
+    /* A mask representing which GPUs to create the resource on, in a multi-GPU system. */
+//     GPUMask = FRHIGPUMask::All();
+
+    friend uint32_t GetHash(const RHITextureInfo& target){
+        uint32_t hash = GetHash( target.dimension);
+            hash_combine(hash, GetHash(target.format));
+            hash_combine(hash, GetHash(target.array_size));
+            hash_combine(hash, GetHash(target.flags));
+            hash_combine(hash, GetHash(target.extent));
+            hash_combine(hash, GetHash(target.depth));
+            hash_combine(hash, GetHash(target.uav_format));
+            hash_combine(hash, GetHash(target.num_mips));
+            hash_combine(hash, GetHash(target.num_samples));
+            hash_combine(hash, GetHash(target.clear_attachment));
+            return hash;
+    }
+    bool operator == (const RHITextureInfo& Other) const
+    {
+            return dimension  == Other.dimension
+                   && flags      == Other.flags
+                   && format     == Other.format
+                   && uav_format  == Other.uav_format
+                   && extent     == Other.extent
+                   && depth      == Other.depth
+                   && array_size  == Other.array_size
+                   && num_mips    == Other.num_mips
+                   && num_samples == Other.num_samples
+                   && clear_attachment == Other.clear_attachment;
+    }
+
+    bool operator != (const RHITextureInfo& Other) const
+    {
+            return !(*this == Other);
+    }
 };
 
 class RHITexture : public RHIResource {

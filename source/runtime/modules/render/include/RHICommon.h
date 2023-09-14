@@ -1,7 +1,7 @@
 #ifndef RHI_PLATFORM_COMMON_H
 #define RHI_PLATFORM_COMMON_H
 
-#include <stdint.h>
+#include <cstdint>
 #include "misc/EnumBitOperation.h"
 #pragma region CommonEnums
 /** Maximum number of miplevels in a texture. */
