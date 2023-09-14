@@ -292,6 +292,16 @@ enum class EBufferUsageFlags : uint32_t {
 
 ENUM_BIT_OP_IMPL(EBufferUsageFlags, FLAG)
 
+enum class ETextureDimension : uint8_t
+{
+    TEX_2D,
+    TEX_2D_ARRAY,
+    TEX_3D,
+    TEX_CUBE,
+    TEX_UBE_ARRAY
+};
+
+
 /*from UE*/
 enum class EGPUVenderId {
     Unknown    = -1,
@@ -323,7 +333,7 @@ enum ERHIResourceType {
     RRT_VERTEX_DESCRIPTION,
     RRT_VERTEX_SHADER,
     RRT_MESH_SHADER,
-    RRT_AmplificationShader,
+    RRT_AMPLIFICATION_SHADER,
     RRT_FRAGMENT_SHADER,
     RRT_GEOMETRY_SHADER,
     RRT_RAY_TRACING_SHADER,
@@ -365,6 +375,7 @@ enum EShaderType: uint8_t{
     ST_FRAGMENT,
     ST_COMPUTE,
     ST_MESH,
+    ST_AMPLIFICATION,
     ST_RAY_GEN,
     ST_RAY_MISS,
     ST_RAY_HIT,
@@ -539,7 +550,7 @@ enum class ETextureCreateFlags: uint64_t{
     CPU_VISIBLE,
     TILLING_NONE,
     DYNAMIC,
-    INPUT_ATTACHMEN
+    INPUT_ATTACHMENT
 };
 ENUM_BIT_OP_IMPL(ETextureCreateFlags, FLAG)
 enum ETextureAspectFlagBits {

@@ -83,11 +83,29 @@ public:
     virtual bool GetInitializer(struct RHIRasterizationStateInitializer& _init) { return false; }
 };
 
+class RHIDepthStencilState : public RHIResource {
+public:
+    explicit RHIDepthStencilState() : RHIResource(RRT_DEPTH_STENCIL_STATE) {}
+    virtual bool GetInitializer(struct RHIDepthStencilStateInitializer& _init) { return false; }
+};
+
+class RHIBlendState : public RHIResource {
+public:
+    explicit RHIBlendState() : RHIResource(RRT_BLEND_STATE) {}
+    virtual bool GetInitializer(struct RHIBlendStateInitializer& _init) { return false; }
+};
+
+class RHIVertexDescription : public RHIResource {
+public:
+    explicit RHIVertexDescription() : RHIResource(RRT_VERTEX_DESCRIPTION) {}
+};
+
 class RHIPipelineShaderBindingState : public RHIResource {
 public:
     explicit RHIPipelineShaderBindingState() : RHIResource(RRT_PIPELINE_BOUND_SHADER_STATE) {}
 };
 
+#pragma region shader resources
 class RHIShader : public RHIResource {
 public:
     RHIShader() = delete;
@@ -102,16 +120,69 @@ public:
     SHA256Hash  hash;
 };
 
+class RHIVertexShader : public RHIShader {
+public:
+    RHIVertexShader() : RHIShader(RRT_VERTEX_SHADER, ST_VERTEX) {}
+};
+
+class RHIFragmentShader : public RHIShader {
+public:
+    RHIFragmentShader() : RHIShader(RRT_FRAGMENT_SHADER, ST_FRAGMENT) {}
+};
+
+class RHIGeometryShader : public RHIShader {
+public:
+    RHIGeometryShader() : RHIShader(RRT_GEOMETRY_SHADER, ST_GEOMETRY) {}
+};
+
+class RHIComputeShader : public RHIShader {
+public:
+    RHIComputeShader() : RHIShader(RRT_COMPUTE_SHADER, ST_COMPUTE) {}
+};
+
+class RHIMeshShader : public RHIShader {
+public:
+    RHIMeshShader() : RHIShader(RRT_MESH_SHADER, ST_MESH) {}
+};
+class RHIAmplificationShader : public RHIShader {
+public:
+    RHIAmplificationShader() : RHIShader(RRT_AMPLIFICATION_SHADER, ST_AMPLIFICATION) {}
+};
+class RHIRayGenShader : public RHIShader {
+public:
+    RHIRayGenShader() : RHIShader(RRT_RAY_TRACING_SHADER, ST_RAY_GEN) {}
+};
+class RHIRayHitShader : public RHIShader {
+public:
+    RHIRayHitShader() : RHIShader(RRT_RAY_TRACING_SHADER, ST_RAY_HIT) {}
+};
+class RHIRayMissShader : public RHIShader {
+public:
+    RHIRayMissShader() : RHIShader(RRT_RAY_TRACING_SHADER, ST_RAY_MISS) {}
+};
+#pragma endregion
+
 #pragma region pipeline
 
 class RHIGraphicsPipelineState : public RHIResource {
 public:
     RHIGraphicsPipelineState() : RHIResource(RRT_GRAPHIC_PIPELINE_STATE) {}
+
+    bool IsValid() const { return b_valid; }
+    void SetValid(bool _b_valid) { b_valid = _b_valid; }
+
+private:
+    bool b_valid = true;
 };
 
 class RHIComputePipelineState : public RHIResource {
 public:
     RHIComputePipelineState() : RHIResource(RRT_COMPUTE_PIPELINE_STATE) {}
+    bool IsValid() const { return b_valid; }
+    void SetValid(bool _b_valid) { b_valid = _b_valid; }
+
+private:
+    bool b_valid = true;
 };
 
 class RHIRayTracingPipelineState : public RHIResource {
@@ -127,59 +198,87 @@ public:
 class RHIUniformBuffer : public RHIResource {
 public:
     RHIUniformBuffer() : RHIResource(RRT_UNIFORM_BUFFER) {}
-    RHIUniformBuffer(const RHIUniformBufferLayout& _layout){};
+    explicit RHIUniformBuffer(const RHIUniformBufferLayout& _layout){};
 };
 
+struct RHIBufferInfo {
+    uint32_t          size;
+    uint32_t          stride;
+    EBufferUsageFlags flags;
+};
 /* index, vertex, staging, indirect */
 class RHIBuffer : public RHIResource {
 public:
-    RHIBuffer() : RHIResource(RRT_BUFFER) {}
-    RHIBuffer(uint32_t _size, EBufferUsageFlags _usage, uint32_t _stride)
-        : RHIResource(RRT_BUFFER),
-          size(_size),
-          usage(_usage),
-          stride(_stride) {}
+    RHIBuffer(const RHIBufferInfo& _info) : RHIResource(RRT_BUFFER), info(_info) {}
 
-    EBufferUsageFlags GetUsage() const { return usage; }
-    uint32_t          GetSize() const { return size; }
-    uint32_t          GetStride() const { return stride; }
-    std::string       GetName() const { return name; }
-    void              SetName(const std::string& _name) {
+    const RHIBufferInfo& GetDesc() const { return info; }
+    std::string          GetName() const { return name; }
+    void                 SetName(const std::string& _name) {
         name = _name;
     }
 
 protected:
-    EBufferUsageFlags usage;
-    uint32_t          size;
-    uint32_t          stride;
-    std::string       name;
-};
-
-class RHITexture: public RHIResource{
-public:
-    RHITexture(ERHIResourceType _type,
-               uint32_t _num_mips,
-               uint32_t _num_samples,
-               ETextureCreateFlags _flags,
-               const RHIClearAttachment& _clear_attachment)
-        : RHIResource(_type),
-    num_mips(_num_mips),
-    num_samples(_num_samples),
-    create_flags(_flags),
-    clear_attachment(_clear_attachment){}
-
-
-    std::string       GetName() const { return name; }
-    void              SetName(const std::string& _name) {
-        name = _name;
-    }
-protected:
-    ETextureCreateFlags create_flags;
-    RHIClearAttachment clear_attachment;
-    uint32_t num_mips;
-    uint32_t num_samples;
     std::string name;
 
+private:
+    RHIBufferInfo info;
+};
+
+struct RHITextureInfo{
+    RHITextureInfo() = default;
+    RHITextureInfo(const RHITextureInfo& other){ *this = other;}
+
+    RHITextureInfo(ETextureDimension _dimension): dimension(_dimension){}
+
+    ETextureDimension dimension;
+    ETextureCreateFlags flags;
+
+
+};
+
+class RHITexture : public RHIResource {
+public:
+    RHITexture(ERHIResourceType          _type,
+               uint32_t                  _num_mips,
+               uint32_t                  _num_samples,
+               ETextureCreateFlags       _flags,
+               const RHIClearAttachment& _clear_attachment)
+        : RHIResource(_type),
+          num_mips(_num_mips),
+          num_samples(_num_samples),
+          create_flags(_flags),
+          clear_attachment(_clear_attachment) {}
+
+    std::string GetName() const { return name; }
+    void        SetName(const std::string& _name) {
+        name = _name;
+    }
+
+protected:
+    ETextureCreateFlags create_flags;
+    RHIClearAttachment  clear_attachment;
+    uint32_t            num_mips;
+    uint32_t            num_samples;
+    std::string         name;
+};
+
+class RHITexture2D : public RHITexture {
+public:
+    RHITexture2D(uint32_t                  _num_mips,
+                 uint32_t                  _num_samples,
+                 ETextureCreateFlags       _flags,
+                 const RHIClearAttachment& _clear_attachment)
+        : RHITexture(RRT_TEXTURE2D, _num_mips, _num_samples, _flags, _clear_attachment) {}
+};
+
+class RHITexture2DArray : public RHITexture {
+public:
+};
+
+class RHITexture3D : public RHITexture {
+};
+
+class RHITextureCube : public RHITexture {
 };
 #pragma endregion
 #endif// !RHI_RESOURCE_H

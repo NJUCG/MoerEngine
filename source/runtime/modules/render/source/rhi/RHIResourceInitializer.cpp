@@ -101,7 +101,7 @@ bool operator==(const RHIMultisampleStateInitializer& lhs, const RHIMultisampleS
     lhs.b_alpha_to_one == rhs.b_alpha_to_one &&
     lhs.min_sample_shading == rhs.min_sample_shading;
 }
-uint32_t GetHash(const RHIFBlendStateInitializer::AttachmentInitializer& target) {
+uint32_t GetHash(const RHIBlendStateInitializer::AttachmentInitializer& target) {
     uint32_t hash = 0;
     hash_combine(hash, GetHash(target.color_blend_op));
     hash_combine(hash, GetHash(target.color_src_blend_factor));
@@ -112,7 +112,7 @@ uint32_t GetHash(const RHIFBlendStateInitializer::AttachmentInitializer& target)
     hash_combine(hash, GetHash(target.color_write_mask));
     return 0;
 }
-bool operator==(const RHIFBlendStateInitializer::AttachmentInitializer& lhs, const RHIFBlendStateInitializer::AttachmentInitializer& rhs) {
+bool operator==(const RHIBlendStateInitializer::AttachmentInitializer& lhs, const RHIBlendStateInitializer::AttachmentInitializer& rhs) {
     return lhs.color_blend_op == rhs.color_blend_op &&
            lhs.color_src_blend_factor == rhs.color_src_blend_factor &&
            lhs.color_dst_blend_factor == rhs.color_dst_blend_factor &&
@@ -121,14 +121,14 @@ bool operator==(const RHIFBlendStateInitializer::AttachmentInitializer& lhs, con
            lhs.alpha_dst_blend_factor == rhs.alpha_dst_blend_factor &&
            lhs.color_write_mask == rhs.color_write_mask;
 }
-uint32_t GetHash(const RHIFBlendStateInitializer& target) {
+uint32_t GetHash(const RHIBlendStateInitializer& target) {
     uint32_t hash = 0;
     for (int i = 0; i < MAX_PASS_ATTACHMENT_COUNT; ++i) {
         hash_combine(hash, GetHash(target.attachments[i]));
     }
     return hash;
 }
-bool operator==(const RHIFBlendStateInitializer& lhs, const RHIFBlendStateInitializer& rhs) {
+bool operator==(const RHIBlendStateInitializer& lhs, const RHIBlendStateInitializer& rhs) {
     bool _same = true;
     for (int i = 0; i < MAX_PASS_ATTACHMENT_COUNT; ++i) {
         _same = _same && lhs.attachments[i] == rhs.attachments[i];
