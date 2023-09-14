@@ -122,7 +122,7 @@ struct RHIMultisampleStateInitializer {
     RHI_API friend bool     operator==(const RHIMultisampleStateInitializer& lhs, const RHIMultisampleStateInitializer& rhs);
 };
 
-struct RHIFBlendStateInitializer {
+struct RHIBlendStateInitializer {
     /*corresponds to renderTarget in DX12*/
     struct AttachmentInitializer {
 
@@ -151,13 +151,13 @@ struct RHIFBlendStateInitializer {
               color_write_mask(_color_write_mask) {}
     };
 
-    RHIFBlendStateInitializer() = default;
-    explicit RHIFBlendStateInitializer(const AttachmentInitializer& _attachment_desc) {
+    RHIBlendStateInitializer() = default;
+    explicit RHIBlendStateInitializer(const AttachmentInitializer& _attachment_desc) {
         attachments[0] = _attachment_desc;
     }
 
     template<uint32_t attachment_num>
-    explicit RHIFBlendStateInitializer(const std::array<AttachmentInitializer, attachment_num>& _attachment_descs) {
+    explicit RHIBlendStateInitializer(const std::array<AttachmentInitializer, attachment_num>& _attachment_descs) {
         static_assert(attachment_num < MAX_PASS_ATTACHMENT_COUNT);
         for (uint32_t i = 0; i < attachment_num; i++) {
             attachments[i] = _attachment_descs[i];
@@ -166,11 +166,11 @@ struct RHIFBlendStateInitializer {
 
     std::array<AttachmentInitializer, MAX_PASS_ATTACHMENT_COUNT> attachments;
 
-    RHI_API friend uint32_t GetHash(const RHIFBlendStateInitializer::AttachmentInitializer& _attachment_desc);
-    RHI_API friend bool     operator==(const RHIFBlendStateInitializer::AttachmentInitializer& lhs, const RHIFBlendStateInitializer::AttachmentInitializer& rhs);
+    RHI_API friend uint32_t GetHash(const RHIBlendStateInitializer::AttachmentInitializer& _attachment_desc);
+    RHI_API friend bool     operator==(const RHIBlendStateInitializer::AttachmentInitializer& lhs, const RHIBlendStateInitializer::AttachmentInitializer& rhs);
 
-    RHI_API friend uint32_t GetHash(const RHIFBlendStateInitializer& Initializer);
-    RHI_API friend bool     operator==(const RHIFBlendStateInitializer& lhs, const RHIFBlendStateInitializer& rhs);
+    RHI_API friend uint32_t GetHash(const RHIBlendStateInitializer& Initializer);
+    RHI_API friend bool     operator==(const RHIBlendStateInitializer& lhs, const RHIBlendStateInitializer& rhs);
 };
 
 struct RHIGraphicsPipelineStateInitializer {
