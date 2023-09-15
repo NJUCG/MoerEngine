@@ -263,7 +263,7 @@ enum class EBufferUsageFlags : uint32_t {
     /**
 	 * Buffer contains opaque ray tracing acceleration structure data.
 	 * Resources with this flag can't be bound directly to any shader stage and only can be used with ray tracing APIs.
-	 * This flag is mutually exclusive with all other buffer flags except BUF_Static.
+	 * This flag is mutually exclusive with all other buffer usage except BUF_Static.
 	*/
     ACCELERATION_STRUCTURE = 1 << 13,
 
@@ -282,7 +282,7 @@ enum class EBufferUsageFlags : uint32_t {
     MULT_GPU_GRAPHICS_IGNORE = 1 << 18,
 
     /** Allows buffer to be used as a scratch buffer for building ray tracing acceleration structure,
-	 * which implies unordered access. Only changes the buffer alignment and can be combined with other flags.
+	 * which implies unordered access. Only changes the buffer alignment and can be combined with other usage.
 	**/
     ACCELERATION_STRUCTURE_STORAGE = (1 << 19) | UNORDERED_ACCESS,
 
@@ -292,15 +292,13 @@ enum class EBufferUsageFlags : uint32_t {
 
 ENUM_BIT_OP_IMPL(EBufferUsageFlags, FLAG)
 
-enum class ETextureDimension : uint8_t
-{
+enum class ETextureDimension : uint8_t {
     TEX_2D,
     TEX_2D_ARRAY,
     TEX_3D,
     TEX_CUBE,
-    TEX_UBE_ARRAY
+    TEX_CUBE_ARRAY
 };
-
 
 /*from UE*/
 enum class EGPUVenderId {
@@ -369,7 +367,75 @@ enum ERHIResourceType {
 };
 #pragma endregion
 
-enum EShaderType: uint8_t{
+#pragma region pixel format
+
+enum class RHIAccessFlag : uint32_t {
+    UNDEFINED         = 0ULL,
+    INDIRECT_ARGUMENT = 1 << 0,
+    INDEX_BUFFER      = 1 << 1,
+    VERTEX_BUFFER     = 1 << 2,
+    CONSTANT_BUFFER   = 1 << 3, /* constant buffer in dx12 while uniform buffer in vulkan */
+    INPUT_ATTACHMENT  = 1 << 4,
+    SHADER_RESOURCE   = 1 << 5,
+    UNORDERED_ACCESS  = 1 << 6,
+    COLOR_ATTACHMENT  = 1 << 7,
+    //    COLOR_ATTACHMENT_WRITE = 1 << 8,
+    DEPTH_READ   = 1 << 9,
+    DEPTH_WRITE  = 1 << 10,
+    TRANSFER_SRC = 1 << 11,
+    TRANSFER_DST = 1 << 12,
+    PRESENT      = 1 << 15,
+
+    MEMORY_WRITE_BIT = 1 << 16,
+    HOST_READ_BIT    = 1 << 13,
+    HOST_WRITE_BIT   = 1 << 14,
+
+    SHADER_SAMPLED_READ_BIT                   = 1 << 17,
+    SHADER_STORAGE_READ_BIT                   = 1 << 18,
+    SHADER_STORAGE_WRITE_BIT                  = 1 << 19,
+    TRANSFORM_FEEDBACK_WRITE_BIT_EXT          = 1 << 20,
+    TRANSFORM_FEEDBACK_COUNTER_READ_BIT_EXT   = 1 << 21,
+    TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT  = 1 << 22,
+    CONDITIONAL_RENDERING_READ_BIT_EXT        = 1 << 23,
+    COMMAND_PREPROCESS_READ_BIT_NV            = 1 << 24,
+    COMMAND_PREPROCESS_WRITE_BIT_NV           = 1 << 25,
+    FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT = 1 << 26,
+    ACCELERATION_STRUCTURE_READ_BIT           = 1 << 27,
+    ACCELERATION_STRUCTURE_WRITE_BIT          = 1 << 28,
+    FRAGMENT_DENSITY_MAP_READ_BIT_EXT         = 1 << 29
+
+};
+ENUM_BIT_OP_IMPL(RHIAccessFlag, FLAG)
+
+enum ETextureLayout : uint32_t {
+    TEXTURE_LAYOUT_UNDEFINED,
+    TEXTURE_LAYOUT_COMMON,
+    TEXTURE_LAYOUT_COLOR_ATTACHMENT,
+    TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE,
+    TEXTURE_LAYOUT_DEPTH_STENCIL_READ,
+    TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+    TEXTURE_LAYOUT_TRANSFER_SRC,
+    TEXTURE_LAYOUT_TRANSFER_DST,
+    TEXTURE_LAYOUT_PRE_INITIALIZED, /* for linear textures which data can be written to memory immediately without layout transfer */
+    TEXTURE_LAYOUT_DEPTH_READ_STENCIL_WRITE,
+    TEXTURE_LAYOUT_DEPTH_WRITE_STENCIL_READ,
+    TEXTURE_LAYOUT_DEPTH_WRITE,
+    TEXTURE_LAYOUT_DEPTH_READ,
+    TEXTURE_LAYOUT_STENCIL_WRITE,
+    TEXTURE_LAYOUT_STENCIL_READ,
+    TEXTURE_LAYOUT_VIDEO_ENCODE,
+    TEXTURE_LAYOUT_VIDEO_DECODE,
+    TEXTURE_LAYOUT_READ,
+    TEXTURE_LAYOUT_WRITE,
+    TEXTURE_LAYOUT_PRESENT_SRC,
+    TEXTURE_LAYOUT_SHARED_PRESENT,
+    TEXTURE_LAYOUT_FRAGMENT_DENSITY_MAP,
+    TEXTURE_LAYOUT_FRAGMENT_SHADING_RATE_ATTACHMENT,
+    TEXTURE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL,
+    TEXTURE_LAYOUT_Num
+};
+#pragma endregion
+enum EShaderType : uint8_t {
     ST_VERTEX,
     ST_GEOMETRY,
     ST_FRAGMENT,
@@ -541,18 +607,37 @@ enum EResourceAccessMode {
     RAM_WRITE_ONLY,
     RAM_Num
 };
-enum class ETextureCreateFlags: uint64_t{
+enum class ETextureUsageFlags : uint64_t {
     NONE,
+
     ATTACHMENT_RENDER,
     ATTACHMENT_RESOLVE,
     ATTACHMENT_DEPTH_STENCIL,
+
     SHADER_RESOURCE,
     CPU_VISIBLE,
     TILLING_NONE,
     DYNAMIC,
-    INPUT_ATTACHMENT
+
+    INPUT_ATTACHMENT,
+    TRANSFER_SRC,
+    TRANSFER_DST,
+    SAMPLED,
+    UNORDERED_ACCESS,
+    COLOR_ATTACHMENT,
+    DEPTH_STENCIL_ATTACHMENT,
+    TRANSIENT_ATTACHMENT,
+
+    VIDEO_DECODE,
+
+    FRAGMENT_DENSITY_MAP,
+    FRAGMENT_SHADING_RATE_ATTACHMENT,
+
+    VIDEO_ENCODE,
+    ATTACHMENT_FEEDBACK_LOOP,
+    Num
 };
-ENUM_BIT_OP_IMPL(ETextureCreateFlags, FLAG)
+ENUM_BIT_OP_IMPL(ETextureUsageFlags, FLAG)
 enum ETextureAspectFlagBits {
     IA_COLOR_BIT              = 0x001,
     IA_DEPTH_BIT              = 0x002,

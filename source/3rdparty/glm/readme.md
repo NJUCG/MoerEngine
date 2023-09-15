@@ -221,7 +221,7 @@ glm::mat4 camera(float Translate, glm::vec2 const& Rotate)
 - Removed GCC shadow warnings #595
 - Added error for including of different versions of GLM #619
 - Added GLM_FORCE_IGNORE_VERSION to ignore error caused by including different version of GLM #619
-- Reduced warnings when using very strict compilation flags #646
+- Reduced warnings when using very strict compilation usage #646
 - length() member functions are constexpr #657
 - Added support of -Weverything with Clang #646
 - Improved exponential function test coverage
@@ -527,7 +527,7 @@ glm::mat4 camera(float Translate, glm::vec2 const& Rotate)
 ---
 ### [GLM 0.9.6.1](https://github.com/g-truc/glm/releases/tag/0.9.6.1) - 2014-12-10
 #### Features:
-- Added GLM_LANG_CXX14_FLAG and GLM_LANG_CXX1Z_FLAG language feature flags
+- Added GLM_LANG_CXX14_FLAG and GLM_LANG_CXX1Z_FLAG language feature usage
 - Added C++14 detection
 
 #### Improvements:

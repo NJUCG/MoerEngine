@@ -1104,7 +1104,7 @@ SPDLOG_INLINE std::tm pattern_formatter::get_time_(const details::log_msg &msg)
 template<typename Padder>
 SPDLOG_INLINE void pattern_formatter::handle_flag_(char flag, details::padding_info padding)
 {
-    // process custom flags
+    // process custom usage
     auto it = custom_handlers_.find(flag);
     if (it != custom_handlers_.end())
     {
@@ -1114,7 +1114,7 @@ SPDLOG_INLINE void pattern_formatter::handle_flag_(char flag, details::padding_i
         return;
     }
 
-    // process built-in flags
+    // process built-in usage
     switch (flag)
     {
     case ('+'): // default formatter

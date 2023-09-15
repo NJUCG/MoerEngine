@@ -17,7 +17,7 @@
 #include <boost/mpl/aux_/config/msvc.hpp>
 #include <boost/mpl/aux_/config/workaround.hpp>
 
-// flags for MSVC 6.5's so-called "early template instantiation bug"
+// usage for MSVC 6.5's so-called "early template instantiation bug"
 #if    !defined(BOOST_MPL_CFG_MSVC_60_ETI_BUG) \
     && !defined(BOOST_MPL_PREPROCESSING_MODE) \
     && BOOST_WORKAROUND(BOOST_MSVC, < 1300)

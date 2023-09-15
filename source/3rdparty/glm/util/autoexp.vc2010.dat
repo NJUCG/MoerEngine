@@ -1846,7 +1846,7 @@ std::tr1::basic_regex<*>{
 			; When it is 0, basic_regex stores only the resulting finite state machine.
 			$e._Visualization
 		) #else (
-			; basic_regex contains many static const flags, which would be shown in the preview by default.
+			; basic_regex contains many static const usage, which would be shown in the preview by default.
 			; Its actual members are _Rep and _Traits. _Rep holds the finite state machine, so we
 			; use it to preview basic_regex. (It does contain some human-readable information.)
 			*$e._Rep
@@ -1858,7 +1858,7 @@ std::tr1::basic_regex<*>{
 			; We make empty basic_regexes appear to have no children.
 			#array(expr: 0, size: 0)
 		) #elif ($e._EEN_VIS == 1) (
-			; We want to hide those static const flags.
+			; We want to hide those static const usage.
 			; We also want to give _Visualization a fake name.
 			#(
 				#([str] : $e._Visualization),
@@ -1866,7 +1866,7 @@ std::tr1::basic_regex<*>{
 				#(_Traits : $e._Traits)
 			)
 		) #else (
-			; We want to hide those static const flags.
+			; We want to hide those static const usage.
 			#(
 				_Rep : $e._Rep,
 				_Traits : $e._Traits
@@ -1984,7 +1984,7 @@ std::tr1::regex_iterator<*>{
 				#([begin] : $e._Begin),
 				#([end] : $e._End),
 				#([pregex] : $e._MyRe),
-				#([flags] : $e._Flags),
+				#([usage] : $e._Flags),
 				#([match] : $e._MyVal)
 			)
 		)

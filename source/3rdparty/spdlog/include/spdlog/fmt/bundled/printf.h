@@ -343,7 +343,7 @@ int parse_header(const Char*& it, const Char* end,
       if (c == '0') specs.fill[0] = '0';
       if (value != 0) {
         // Nonzero value means that we parsed width and don't need to
-        // parse it or flags again, so return now.
+        // parse it or usage again, so return now.
         if (value == -1) FMT_THROW(format_error("number is too big"));
         specs.width = value;
         return arg_index;
@@ -404,7 +404,7 @@ void vprintf(buffer<Char>& buf, basic_string_view<Char> format,
     basic_format_specs<Char> specs;
     specs.align = align::right;
 
-    // Parse argument index, flags and width.
+    // Parse argument index, usage and width.
     int arg_index = parse_header(it, end, specs, get_arg);
     if (arg_index == 0) parse_ctx.on_error("argument not found");
 
