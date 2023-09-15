@@ -187,7 +187,7 @@ void stopwatch_example()
 ```c++
 // many types of std::container<char> types can be used.
 // ranges are supported too.
-// format flags:
+// format usage:
 // {:X} - print in uppercase.
 // {:s} - don't separate each byte with space.
 // {:p} - don't print the position on each line start.
@@ -306,9 +306,9 @@ void user_defined_example()
 ```
 
 ---
-#### User defined flags in the log pattern
+#### User defined usage in the log pattern
 ```c++ 
-// Log patterns can contain custom flags.
+// Log patterns can contain custom usage.
 // the following example will add new flag '%*' - which will be bound to a <my_formatter_flag> instance.
 #include "spdlog/pattern_formatter.h"
 class my_formatter_flag : public spdlog::custom_flag_formatter

@@ -13,8 +13,8 @@ explicit synchronization ;
 exe has_synchronization_lib : has_synchronization_lib.cpp : <library>synchronization ;
 explicit has_synchronization_lib ;
 
-obj has_sse2 : has_sse2.cpp : <conditional>@atomic-arch-config.sse2-flags ;
+obj has_sse2 : has_sse2.cpp : <conditional>@atomic-arch-config.sse2-usage ;
 explicit has_sse2 ;
 
-obj has_sse41 : has_sse41.cpp : <conditional>@atomic-arch-config.sse41-flags ;
+obj has_sse41 : has_sse41.cpp : <conditional>@atomic-arch-config.sse41-usage ;
 explicit has_sse41 ;

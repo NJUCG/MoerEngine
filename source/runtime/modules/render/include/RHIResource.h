@@ -8,6 +8,7 @@
 #include <atomic>
 #include <misc/StatQueue.h>
 #include <unordered_set>
+#include <string>
 
 class RHI_API RHIResource {
 public:
@@ -206,6 +207,12 @@ struct RHIBufferInfo {
     uint32_t          size;
     uint32_t          stride;
     EBufferUsageFlags flags;
+
+    RHIBufferInfo() = default;
+    RHIBufferInfo(uint32_t _size, uint32_t _stride, EBufferUsageFlags _flags)
+        : size(_size),
+          stride(_stride),
+          flags(_flags) {}
 };
 /* index, vertex, staging, indirect */
 class RHIBuffer : public RHIResource {
@@ -225,13 +232,34 @@ private:
     RHIBufferInfo info;
 };
 
-struct RHITextureInfo{
+struct RHITextureInfo {
     RHITextureInfo() = default;
-    RHITextureInfo(const RHITextureInfo& other){ *this = other;}
+    RHITextureInfo(const RHITextureInfo& other) { *this = other; }
 
-    RHITextureInfo(ETextureDimension _dimension): dimension(_dimension){}
+    RHITextureInfo(ETextureDimension _dimension) : dimension(_dimension) {}
 
-    ETextureCreateFlags flags;
+    RHITextureInfo(
+        ETextureDimension  _dimension,
+        ETextureUsageFlags _usage,
+        ETextureLayout     _layout,
+        EPixelFormat       _format,
+        EClearAttachment   _clear_attachment,
+        int2               _extent,
+        uint16_t           _depth,
+        uint8_t            _num_mips,
+        uint8_t            _num_samples)
+        : dimension(_dimension),
+          usage(_usage),
+          layout(_layout),
+          format(_format),
+          clear_attachment(_clear_attachment),
+          extent(_extent),
+          num_mips(_num_mips),
+          num_samples(_num_samples) {}
+
+    ETextureUsageFlags usage = ETextureUsageFlags::NONE;
+
+    ETextureLayout layout = TEXTURE_LAYOUT_UNDEFINED;
 
     int2 extent = int2(1, 1);
 
@@ -245,10 +273,10 @@ struct RHITextureInfo{
     uint8_t num_mips = 1;
 
     /** Number of samples in the texture. >1 for MSAA. */
-    uint8_t num_samples : 5;
+    uint8_t num_samples = 1;
 
     /** Texture dimension to use when creating the RHI texture. */
-    ETextureDimension dimension : 3;
+    ETextureDimension dimension = ETextureDimension::TEX_2D;
 
     /** Pixel format used to create RHI texture. */
     EPixelFormat format = PF_UNDEFINED;
@@ -259,84 +287,163 @@ struct RHITextureInfo{
     RHIClearAttachment clear_attachment;
 
     /* A mask representing which GPUs to create the resource on, in a multi-GPU system. */
-//     GPUMask = FRHIGPUMask::All();
+    //     GPUMask = FRHIGPUMask::All();
 
-    friend uint32_t GetHash(const RHITextureInfo& target){
-        uint32_t hash = GetHash( target.dimension);
-            hash_combine(hash, GetHash(target.format));
-            hash_combine(hash, GetHash(target.array_size));
-            hash_combine(hash, GetHash(target.flags));
-            hash_combine(hash, GetHash(target.extent));
-            hash_combine(hash, GetHash(target.depth));
-            hash_combine(hash, GetHash(target.uav_format));
-            hash_combine(hash, GetHash(target.num_mips));
-            hash_combine(hash, GetHash(target.num_samples));
-            hash_combine(hash, GetHash(target.clear_attachment));
-            return hash;
+    friend uint32_t GetHash(const RHITextureInfo& target) {
+        uint32_t hash = GetHash(target.dimension);
+        hash_combine(hash, GetHash(target.format));
+        hash_combine(hash, GetHash(target.array_size));
+        hash_combine(hash, GetHash(target.usage));
+        hash_combine(hash, GetHash(target.layout));
+        hash_combine(hash, GetHash(target.extent));
+        hash_combine(hash, GetHash(target.depth));
+        hash_combine(hash, GetHash(target.uav_format));
+        hash_combine(hash, GetHash(target.num_mips));
+        hash_combine(hash, GetHash(target.num_samples));
+        hash_combine(hash, GetHash(target.clear_attachment));
+        return hash;
     }
-    bool operator == (const RHITextureInfo& Other) const
-    {
-            return dimension  == Other.dimension
-                   && flags      == Other.flags
-                   && format     == Other.format
-                   && uav_format  == Other.uav_format
-                   && extent     == Other.extent
-                   && depth      == Other.depth
-                   && array_size  == Other.array_size
-                   && num_mips    == Other.num_mips
-                   && num_samples == Other.num_samples
-                   && clear_attachment == Other.clear_attachment;
+    bool operator==(const RHITextureInfo& other) const {
+        return dimension == other.dimension && usage == other.usage && format == other.format && layout == other.layout && uav_format == other.uav_format && extent == other.extent && depth == other.depth && array_size == other.array_size && num_mips == other.num_mips && num_samples == other.num_samples && clear_attachment == other.clear_attachment;
     }
 
-    bool operator != (const RHITextureInfo& Other) const
-    {
-            return !(*this == Other);
+    bool operator!=(const RHITextureInfo& other) const {
+        return !(*this == other);
     }
+
+    RHITextureInfo& operator=(const RHITextureInfo& other) = default;
+};
+
+struct RHITextureCreateInfo : public RHITextureInfo {
+
+    RHITextureCreateInfo() = default;
+
+    // Constructor with minimal argument set. Name and dimension are always required.
+    RHITextureCreateInfo(const char* _name, ETextureDimension _dimension)
+        : RHITextureInfo(_dimension),
+          name(_name) {
+    }
+
+    // Constructor for when you already have an FRHITextureDesc
+    RHITextureCreateInfo(
+        RHITextureInfo const& _info,
+        const char*           _name)
+        : RHITextureInfo(_info) {}
+
+    static RHITextureCreateInfo Create(const char* _name, ETextureDimension _dimension) {
+        return {_name, _dimension};
+    }
+    static RHITextureCreateInfo Create2D(const char* _name) {
+        return {_name, ETextureDimension::TEX_2D};
+    }
+
+    static RHITextureCreateInfo Create3D(const char* _name) {
+        return {_name, ETextureDimension::TEX_3D};
+    }
+    static RHITextureCreateInfo Create2DArray(const char* _name) {
+        return {_name, ETextureDimension::TEX_2D_ARRAY};
+    }
+    static RHITextureCreateInfo CreateCube(const char* _name) {
+        return {_name, ETextureDimension::TEX_CUBE};
+    }
+    static RHITextureCreateInfo CreateCubeArray(const char* _name) {
+        return {_name, ETextureDimension::TEX_CUBE_ARRAY};
+    }
+    static RHITextureCreateInfo Create2D(const char* _name, int2 _size, EPixelFormat _format){
+        return Create2D(_name).}
+
+    RHITextureCreateInfo& SetUsageFlags(ETextureUsageFlags _usage) {
+        usage = _usage;
+        return *this;
+    }
+    RHITextureCreateInfo& AddUsageFlags(ETextureUsageFlags _usage) {
+        usage |= _usage;
+        return *this;
+    }
+    RHITextureCreateInfo& SetClearAttachment(RHIClearAttachment& _attachment) {
+        clear_attachment = _attachment;
+        return *this;
+    }
+    RHITextureCreateInfo& SetExtent(const int2 _extent) {
+        extent = _extent;
+        return *this;
+    }
+    RHITextureCreateInfo& SetExtent(int32_t _x, int32_t _y) {
+        extent = int2(_x, _y);
+        return *this;
+    }
+    RHITextureCreateInfo& SetExtent(uint32_t _extent) {
+        extent = int2(_extent);
+        return *this;
+    }
+    RHITextureCreateInfo& SetDepth(uint16_t _depth) {
+        depth = _depth;
+        return *this;
+    }
+    RHITextureCreateInfo& SetArraySize(uint16_t _array_size) {
+        array_size = _array_size;
+        return *this;
+    }
+    RHITextureCreateInfo& SetNumMips(uint8_t _num_mips) {
+        num_mips = _num_mips;
+        return *this;
+    }
+    RHITextureCreateInfo& SetNumSamples(uint8_t _num_samples) {
+        num_samples = _num_samples;
+        return *this;
+    }
+    RHITextureCreateInfo& SetDimension(ETextureDimension _dimension) {
+        dimension = _dimension;
+        return *this;
+    }
+    RHITextureCreateInfo& SetInitialLayout(ETextureLayout _texture_layout) {
+        layout = _texture_layout;
+        return *this;
+    }
+    RHITextureCreateInfo& SetFormat(EPixelFormat _format) {
+        format = _format;
+        return *this;
+    }
+    RHITextureCreateInfo& SetUAVFormat(EPixelFormat _uav_format) {
+        uav_format = _uav_format;
+        return *this;
+    }
+    std::string name;
 };
 
 class RHITexture : public RHIResource {
 public:
-    RHITexture(ERHIResourceType          _type,
-               uint32_t                  _num_mips,
-               uint32_t                  _num_samples,
-               ETextureCreateFlags       _flags,
-               const RHIClearAttachment& _clear_attachment)
-        : RHIResource(_type),
-          num_mips(_num_mips),
-          num_samples(_num_samples),
-          create_flags(_flags),
-          clear_attachment(_clear_attachment) {}
+    RHITexture(const RHITextureCreateInfo& _info) : texture_info(_info) {
+        SetName(_info.name);
+    }
 
-    std::string GetName() const { return name; }
-    void        SetName(const std::string& _name) {
+    virtual const RHITextureInfo& GetInfo() const { return texture_info; }
+
+    virtual class RHITextureRef* GetTextureRef() { return nullptr; }
+
+    virtual void* GetNativeResource() const { return nullptr; }
+
+    int3 GetExtent3D() const {
+        const RHITextureInfo& info = GetInfo();
+        switch (info.dimension) {
+            case ETextureDimension::TEX_2D: return {info.extent.x, info.extent.y, 1};
+            case ETextureDimension::TEX_2D_ARRAY: return {info.extent.x, info.extent.y, info.array_size};
+            case ETextureDimension::TEX_3D: return {info.extent.x, info.extent.y, info.depth};
+            case ETextureDimension::TEX_CUBE: return {info.extent.x, info.extent.y, 1};
+            case ETextureDimension::TEX_CUBE_ARRAY: return {info.extent.x, info.extent.y, info.array_size};
+        }
+        return {0, 0, 0};
+    }
+    void SetName(const std::string _name) {
         name = _name;
     }
 
-protected:
-    ETextureCreateFlags create_flags;
-    RHIClearAttachment  clear_attachment;
-    uint32_t            num_mips;
-    uint32_t            num_samples;
-    std::string         name;
+private:
+    friend class RHITextureRef;
+    explicit RHITexture(ERHIResourceType _type) : RHIResource(_type) {}
+    RHITextureInfo texture_info;
+    std::string    name;
 };
 
-class RHITexture2D : public RHITexture {
-public:
-    RHITexture2D(uint32_t                  _num_mips,
-                 uint32_t                  _num_samples,
-                 ETextureCreateFlags       _flags,
-                 const RHIClearAttachment& _clear_attachment)
-        : RHITexture(RRT_TEXTURE2D, _num_mips, _num_samples, _flags, _clear_attachment) {}
-};
-
-class RHITexture2DArray : public RHITexture {
-public:
-};
-
-class RHITexture3D : public RHITexture {
-};
-
-class RHITextureCube : public RHITexture {
-};
 #pragma endregion
 #endif// !RHI_RESOURCE_H

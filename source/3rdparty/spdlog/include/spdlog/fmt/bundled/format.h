@@ -2957,7 +2957,7 @@ class bigint {
   }
 };
 
-// format_dragon flags.
+// format_dragon usage.
 enum dragon {
   predecessor_closer = 1,
   fixup = 2,  // Run fixup to correct exp10 which can be off by one.

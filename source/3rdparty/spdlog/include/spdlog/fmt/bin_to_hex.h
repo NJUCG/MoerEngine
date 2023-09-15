@@ -20,7 +20,7 @@
 
 //
 // Support for logging binary data as hex
-// format flags, any combination of the following:
+// format usage, any combination of the following:
 // {:X} - print in uppercase.
 // {:s} - don't separate each byte with space.
 // {:p} - don't print the position on each line start.
@@ -119,7 +119,7 @@ struct formatter<spdlog::details::dump_info<T>, char>
     bool put_positions = true; // position on start of each line
     bool show_ascii = false;
 
-    // parse the format string flags
+    // parse the format string usage
     template<typename ParseContext>
     SPDLOG_CONSTEXPR_FUNC auto parse(ParseContext &ctx) -> decltype(ctx.begin())
     {

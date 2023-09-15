@@ -76,7 +76,7 @@ public:
         for (auto *rp = addrinfo_result; rp != nullptr; rp = rp->ai_next)
         {
 #if defined(SOCK_CLOEXEC)
-            const int flags = SOCK_CLOEXEC;
+            const int usage = SOCK_CLOEXEC;
 #else
             const int flags = 0;
 #endif
