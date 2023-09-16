@@ -8,6 +8,7 @@
 #include <atomic>
 #include <misc/StatQueue.h>
 #include <unordered_set>
+#include "misc/CountableRef.h"
 #include <string>
 
 class RHI_API RHIResource {
@@ -206,13 +207,13 @@ public:
 struct RHIBufferInfo {
     uint32_t          size;
     uint32_t          stride;
-    EBufferUsageFlags flags;
+    EBufferUsageFlags usage;
 
     RHIBufferInfo() = default;
-    RHIBufferInfo(uint32_t _size, uint32_t _stride, EBufferUsageFlags _flags)
+    RHIBufferInfo(uint32_t _size, uint32_t _stride, EBufferUsageFlags _usage)
         : size(_size),
           stride(_stride),
-          flags(_flags) {}
+          usage(_usage) {}
 };
 /* index, vertex, staging, indirect */
 class RHIBuffer : public RHIResource {
@@ -224,6 +225,10 @@ public:
     void                 SetName(const std::string& _name) {
         name = _name;
     }
+    const RHIBufferInfo& GetInfo() const { return info; }
+    uint32_t             GetSize() const { return info.size; }
+    uint32_t             GetStride() const { return info.stride; }
+    EBufferUsageFlags    GetUsage() const { return info.usage; }
 
 protected:
     std::string name;
@@ -434,9 +439,35 @@ public:
         }
         return {0, 0, 0};
     }
-    void SetName(const std::string _name) {
+
+    int3 GetMipDimension(uint8_t _mip_index) const {
+        const RHITextureInfo& info = GetInfo();
+        return {std::max(info.extent.x >> _mip_index, 1),
+                std::max(info.extent.y >> _mip_index, 1),
+                std::max(info.depth >> _mip_index, 1)};
+    }
+    void SetName(const std::string& _name) {
         name = _name;
     }
+
+    bool IsMultiSampled() const {
+        return GetInfo().num_samples > 1;
+    }
+
+    bool HasClearAttachment() const {
+        return GetInfo().clear_attachment.attachment != EClearAttachment::NONE;
+    }
+
+    uint32_t GetNumMips() const {
+        return GetInfo().num_mips;
+    }
+    EPixelFormat GetFormat() const {
+        return GetInfo().format;
+    }
+    uint32_t GetNumSamples() const {
+        return GetInfo().num_samples;
+    }
+    RHIClearAttachment GetClearAttachment() const { return GetInfo().clear_attachment; }
 
 private:
     friend class RHITextureRef;
@@ -445,5 +476,158 @@ private:
     std::string    name;
 };
 
+/* fences in dx12, fence and timeline semaphore in vulkan */
+class RHIFence : public RHIResource {
+public:
+    RHIFence(std::string _name) : RHIResource(RRT_GPU_FENCE), name(_name) {}
+    virtual bool Signaled() const = 0;
+
+protected:
+    std::string name;
+};
+
+class RHIViewport : public RHIResource {
+public:
+    RHIViewport() : RHIResource(RRT_Viewport) {}
+    virtual void* GetNativeSwapchain() const { return nullptr; }
+    virtual void* GetNativeBufferTexture() const { return nullptr; }
+    virtual void* GetNativeAttachment() const { return nullptr; }
+    virtual void* GetNativeWindow(void** _params) const { return nullptr; }
+    virtual void  Tick(float _delta_time) {}
+    virtual void  WaitForFrameComplete() {}
+};
+
+class RHIViewInfo {
+    enum class EViewType : uint8_t {
+        BUFFER_SRV,
+        BUFFER_UAV,
+        TEXTURE_SRV,
+        TEXTURE_UAV
+    };
+    enum class EBufferType : uint8_t {
+        UNDEFINED,
+        STRUCTURED,
+        ACCELERATION_STRUCTURE,
+        /* a raw buffer can also be called a byte address buffer */
+        RAW
+    };
+
+    struct BaseViewInfo {
+        EViewType    view_type;
+        EPixelFormat format;
+    };
+    struct ViewInfo;
+    struct Buffer : public BaseViewInfo {
+        EBufferType bufferType;
+        uint8_t     b_is_atomic_counter : 1;
+        /* An append and consume buffer is a special type of an unordered resource that
+         * supports adding and removing values from the end of a buffer similar to the way a stack works.
+         * An append and consume buffer must be a structured buffer */
+        uint8_t b_is_append_buffer : 1;
+        uint8_t : 6;
+        uint32_t byte_offset;
+        uint32_t num_elements;
+        uint32_t stride;
+
+    protected:
+        ViewInfo GetViewInfo(RHIBuffer* target) const;
+    };
+
+    struct Texture : public BaseViewInfo {
+        uint8_t           b_disable_srgb : 1;
+        ETextureDimension dimension : uint32_t(ETextureDimension::NumBits);
+        uint8_t /*padding*/ : 7 - uint32_t(ETextureDimension::NumBits);
+        uint8_t  mip_min;
+        uint8_t  mip_max;
+        uint16_t array_min;
+        uint16_t array_max;
+
+    protected:
+        ViewInfo GetViewInfo(RHITexture* target) const;
+    };
+
+    struct BufferSRV : public Buffer {
+        struct Initializer;
+    };
+    struct BufferUAV : public Buffer {
+        struct Initializer;
+    };
+    struct TextureSRV : public Texture {
+        struct Initializer;
+    };
+    struct TextureUAV : public Texture {
+        struct Initializer;
+    };
+    union {
+        BaseViewInfo base_info;
+        union {
+            BufferSRV srv;
+            BufferUAV uav;
+        } buffer;
+        union {
+            TextureSRV srv;
+            TextureUAV uav;
+        } texture;
+    };
+
+    bool IsSRV() const { return base_info.view_type == EViewType::BUFFER_SRV || base_info.view_type == EViewType::TEXTURE_SRV; }
+    bool IsUAV() const { return base_info.view_type == EViewType::BUFFER_UAV || base_info.view_type == EViewType::BUFFER_UAV; }
+
+    bool IsBuffer() const { return base_info.view_type == EViewType::BUFFER_SRV || base_info.view_type == EViewType::BUFFER_UAV; }
+    bool IsTexture() const { return !IsBuffer(); }
+
+    bool operator==(const RHIViewInfo& other) {
+        return memcmp(this, &other, sizeof(*this)) == 0;
+    }
+
+    bool operator!=(const RHIViewInfo& other) {
+        return !(*this == other);
+    }
+
+    RHIViewInfo() : RHIViewInfo(EViewType::BUFFER_SRV) {}
+
+protected:
+    RHIViewInfo(EViewType _type) {
+        base_info.view_type = _type;
+    }
+};
+static_assert(sizeof(RHIViewInfo) == 16, "Packing of RHIViewInfo is unexpected.");
+
+struct RHIViewInfo::BufferSRV::Initializer : private RHIViewInfo {
+    friend RHIViewInfo;
+
+protected:
+    Initializer() : RHIViewInfo(EViewType::BUFFER_SRV) {}
+
+public:
+    Initializer& SetType(EBufferType _type) {
+        assert(_type != EBufferType::UNDEFINED);
+        buffer.srv.bufferType = _type;
+        return *this;
+    }
+    Initializer& SetType(RHIBuffer* _buffer) {
+        buffer.srv.bufferType = EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::BYTE_ADDRESS_BUFFER)    ? EBufferType::RAW :
+                                EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::STRUCTURED_BUFFER)      ? EBufferType::STRUCTURED :
+                                EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::ACCELERATION_STRUCTURE) ? EBufferType::ACCELERATION_STRUCTURE :
+                                                                                                                 EBufferType::UNDEFINED;
+        return *this;
+    }
+    Initializer& SetFormat(EPixelFormat _format) {
+        buffer.srv.format = _format;
+        return *this;
+    }
+    Initializer& SetByteOffset(uint32_t _byte_offset) {
+        buffer.srv.byte_offset = _byte_offset;
+        return *this;
+    }
+    Initializer& SetStride(uint32_t _stride) {
+        buffer.srv.stride = _stride;
+        return *this;
+    }
+    Initializer& SetNumElements(uint32_t _num_elements) {
+        buffer.srv.num_elements = _num_elements;
+        return *this;
+    }
+};
 #pragma endregion
 #endif// !RHI_RESOURCE_H

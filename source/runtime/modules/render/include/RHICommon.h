@@ -243,15 +243,15 @@ enum class EBufferUsageFlags : uint32_t {
     INDIRECT_BUFFER = 1 << 7,
 
     /** 
-	 * Create a buffer that can be bound as a texel buffer. 
+	 * Create a buffer that can be bound as a shader resource.
 	 * This is only needed for buffer types which wouldn't ordinarily be used as a texel buffer, like a vertex buffer.
 	 */
-    TEXEL_BUFFER = 1 << 8,
+    SHADER_RESOURCE = 1 << 8,
 
     /** Request that this buffer is directly CPU accessible. */
     CPU_VISIBLE = 1 << 9,
 
-    /** Buffer should go in fast vram (hint only). Requires BUF_Transient */
+    /** Buffer should go in fast vram (hint only). Requires TRANSIENT */
     FAST_VRAM = 1 << 10,
 
     /** Buffer should be allocated from transient memory. */
@@ -269,7 +269,7 @@ enum class EBufferUsageFlags : uint32_t {
 
     VERTEX_BUFFER  = 1 << 14,
     INDEX_BUFFER   = 1 << 15,
-    STORAGE_BUFFER = 1 << 16,
+    STRUCTURED_BUFFER = 1 << 16,
 
     /** Buffer memory is allocated independently for multiple GPUs, rather than shared via driver aliasing */
     MULTI_GPU_ALLOCATION = 1 << 17,
@@ -297,7 +297,8 @@ enum class ETextureDimension : uint8_t {
     TEX_2D_ARRAY,
     TEX_3D,
     TEX_CUBE,
-    TEX_CUBE_ARRAY
+    TEX_CUBE_ARRAY,
+    NumBits = 3
 };
 
 /*from UE*/

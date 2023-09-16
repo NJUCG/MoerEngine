@@ -3,7 +3,7 @@
 #include "ThreadManager.h"
 #include <vector>
 #include <memory>
-#include "CountableRef.h"
+#include "misc/CountableRef.h"
 #include "TaskGraph.h"
 #include "misc/StatQueue.h"
 
