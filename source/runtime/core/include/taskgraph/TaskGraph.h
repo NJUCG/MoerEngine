@@ -3,7 +3,7 @@
 #include <memory>
 #include "Thread.h"
 #include "misc/StatQueue.h"
-#include "CountableRef.h"
+#include "misc/CountableRef.h"
 class GraphEvent;
 typedef CountableRef<GraphEvent>  GraphEventRef;
 typedef std::vector<GraphEventRef> GraphEventArray;
