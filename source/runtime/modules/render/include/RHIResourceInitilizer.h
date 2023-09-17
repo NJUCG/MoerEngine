@@ -173,10 +173,6 @@ struct RHIBlendStateInitializer {
     RHI_API friend bool     operator==(const RHIBlendStateInitializer& lhs, const RHIBlendStateInitializer& rhs);
 };
 
-struct RHIGraphicsPipelineStateInitializer {
-    /*vulkan subpass setting, if enabled, this pipeline needs to be bounded with renderpasses*/
-    bool b_prefer_subpasses;
-};
 
 /**
  *	Viewport bounds structure to set multiple view ports for the geometry shader

@@ -198,10 +198,23 @@ public:
     RHIUniformBufferLayout() : RHIResource(RRT_UNIFORM_BUFFER_LAYOUT) {}
 };
 
+/* ConstBuffer in dx12, Uniform Buffer in Vulkan */
 class RHIUniformBuffer : public RHIResource {
 public:
     RHIUniformBuffer() : RHIResource(RRT_UNIFORM_BUFFER) {}
     explicit RHIUniformBuffer(const RHIUniformBufferLayout& _layout){};
+};
+
+/* resources which is can be access by shaders via UAV/SRV, like buffer, texture, etc. */
+class RHIViewableResource : public RHIResource {
+public:
+    std::string GetName() const {
+        return name;
+    }
+
+protected:
+    RHIViewableResource(ERHIResourceType _type) : RHIResource(_type) {}
+    std::string name;
 };
 
 struct RHIBufferInfo {
@@ -216,12 +229,11 @@ struct RHIBufferInfo {
           usage(_usage) {}
 };
 /* index, vertex, staging, indirect */
-class RHIBuffer : public RHIResource {
+class RHIBuffer : public RHIViewableResource {
 public:
-    RHIBuffer(const RHIBufferInfo& _info) : RHIResource(RRT_BUFFER), info(_info) {}
+    RHIBuffer(const RHIBufferInfo& _info) : RHIViewableResource(RRT_BUFFER), info(_info) {}
 
     const RHIBufferInfo& GetDesc() const { return info; }
-    std::string          GetName() const { return name; }
     void                 SetName(const std::string& _name) {
         name = _name;
     }
@@ -262,7 +274,7 @@ struct RHITextureInfo {
           num_mips(_num_mips),
           num_samples(_num_samples) {}
 
-    ETextureUsageFlags usage = ETextureUsageFlags::NONE;
+    ETextureUsageFlags usage = ETextureUsageFlags::UNDEFINED;
 
     ETextureLayout layout = TEXTURE_LAYOUT_UNDEFINED;
 
@@ -354,8 +366,9 @@ struct RHITextureCreateInfo : public RHITextureInfo {
     static RHITextureCreateInfo CreateCubeArray(const char* _name) {
         return {_name, ETextureDimension::TEX_CUBE_ARRAY};
     }
-    static RHITextureCreateInfo Create2D(const char* _name, int2 _size, EPixelFormat _format){
-        return Create2D(_name).}
+    static RHITextureCreateInfo Create2D(const char* _name, int2 _size, EPixelFormat _format) {
+        return Create2D(_name).SetExtent(_size).SetFormat(_format);
+    }
 
     RHITextureCreateInfo& SetUsageFlags(ETextureUsageFlags _usage) {
         usage = _usage;
@@ -416,12 +429,8 @@ struct RHITextureCreateInfo : public RHITextureInfo {
     std::string name;
 };
 
-class RHITexture : public RHIResource {
+class RHITexture : public RHIViewableResource {
 public:
-    RHITexture(const RHITextureCreateInfo& _info) : texture_info(_info) {
-        SetName(_info.name);
-    }
-
     virtual const RHITextureInfo& GetInfo() const { return texture_info; }
 
     virtual class RHITextureRef* GetTextureRef() { return nullptr; }
@@ -469,11 +478,13 @@ public:
     }
     RHIClearAttachment GetClearAttachment() const { return GetInfo().clear_attachment; }
 
+protected:
+    RHITexture(const RHITextureCreateInfo& _info);
+
 private:
     friend class RHITextureRef;
-    explicit RHITexture(ERHIResourceType _type) : RHIResource(_type) {}
+    explicit RHITexture(ERHIResourceType _type) : RHIViewableResource(_type) {}
     RHITextureInfo texture_info;
-    std::string    name;
 };
 
 /* fences in dx12, fence and timeline semaphore in vulkan */
@@ -488,7 +499,7 @@ protected:
 
 class RHIViewport : public RHIResource {
 public:
-    RHIViewport() : RHIResource(RRT_Viewport) {}
+    RHIViewport() : RHIResource(RRT_VIEWPORT) {}
     virtual void* GetNativeSwapchain() const { return nullptr; }
     virtual void* GetNativeBufferTexture() const { return nullptr; }
     virtual void* GetNativeAttachment() const { return nullptr; }
@@ -497,7 +508,8 @@ public:
     virtual void  WaitForFrameComplete() {}
 };
 
-class RHIViewInfo {
+#pragma region View info constructor
+struct RHIViewInfo {
     enum class EViewType : uint8_t {
         BUFFER_SRV,
         BUFFER_UAV,
@@ -538,9 +550,9 @@ class RHIViewInfo {
         ETextureDimension dimension : uint32_t(ETextureDimension::NumBits);
         uint8_t /*padding*/ : 7 - uint32_t(ETextureDimension::NumBits);
         uint8_t  mip_min;
-        uint8_t  mip_max;
+        uint8_t  mip_num;
         uint16_t array_min;
-        uint16_t array_max;
+        uint16_t array_num;
 
     protected:
         ViewInfo GetViewInfo(RHITexture* target) const;
@@ -586,6 +598,11 @@ class RHIViewInfo {
 
     RHIViewInfo() : RHIViewInfo(EViewType::BUFFER_SRV) {}
 
+    static BufferSRV::Initializer  CreateBufferSRVInfo();
+    static BufferUAV::Initializer  CreateBufferUAVInfo();
+    static TextureSRV::Initializer CreateTextureSRVInfo();
+    static TextureUAV::Initializer CreateTextureUAVInfo();
+
 protected:
     RHIViewInfo(EViewType _type) {
         base_info.view_type = _type;
@@ -629,5 +646,536 @@ public:
         return *this;
     }
 };
+
+struct RHIViewInfo::BufferUAV::Initializer : private RHIViewInfo {
+    friend RHIViewInfo;
+
+protected:
+    Initializer() : RHIViewInfo(EViewType::BUFFER_UAV) {}
+
+public:
+    Initializer& SetType(EBufferType _type) {
+        assert(_type != EBufferType::UNDEFINED);
+        buffer.uav.bufferType = _type;
+        return *this;
+    }
+    Initializer& SetType(RHIBuffer* _buffer) {
+        buffer.uav.bufferType = EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::BYTE_ADDRESS_BUFFER)    ? EBufferType::RAW :
+                                EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::STRUCTURED_BUFFER)      ? EBufferType::STRUCTURED :
+                                EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::ACCELERATION_STRUCTURE) ? EBufferType::ACCELERATION_STRUCTURE :
+                                                                                                                 EBufferType::UNDEFINED;
+        return *this;
+    }
+    Initializer& SetFormat(EPixelFormat _format) {
+        buffer.uav.format = _format;
+        return *this;
+    }
+    Initializer& SetByteOffset(uint32_t _byte_offset) {
+        buffer.uav.byte_offset = _byte_offset;
+        return *this;
+    }
+    Initializer& SetStride(uint32_t _stride) {
+        buffer.uav.stride = _stride;
+        return *this;
+    }
+    Initializer& SetNumElements(uint32_t _num_elements) {
+        buffer.uav.num_elements = _num_elements;
+        return *this;
+    }
+};
+
+struct RHIViewInfo::TextureSRV::Initializer : private RHIViewInfo {
+    friend RHIViewInfo;
+
+protected:
+    Initializer() : RHIViewInfo(EViewType::TEXTURE_SRV) {}
+
+public:
+    Initializer& SetDimension(ETextureDimension _dimension) {
+        texture.srv.dimension = _dimension;
+        return *this;
+    }
+    Initializer& SetDimension(RHITexture* _texture) {
+        return SetDimension(_texture->GetInfo().dimension);
+    }
+    Initializer& SetFormat(EPixelFormat _format) {
+        texture.srv.format = _format;
+        return *this;
+    }
+    Initializer& SetMipRange(uint8_t _mip_min, uint8_t _mip_num) {
+        texture.srv.mip_min = _mip_min;
+        texture.srv.mip_num = _mip_num;
+        return *this;
+    }
+    Initializer& SetArrayRange(uint16_t _array_min, uint16_t _array_num) {
+        texture.srv.array_min = _array_min;
+        texture.srv.array_num = _array_num;
+        return *this;
+    }
+    Initializer& SetDisableSRGB(bool _b_disable_srgb) {
+        texture.srv.b_disable_srgb = _b_disable_srgb;
+        return *this;
+    }
+};
+
+struct RHIViewInfo::TextureUAV::Initializer : private RHIViewInfo {
+    friend RHIViewInfo;
+
+protected:
+    Initializer() : RHIViewInfo(EViewType::TEXTURE_UAV) { texture.uav.mip_num = 1; }
+
+public:
+    Initializer& SetDimension(ETextureDimension _dimension) {
+        texture.uav.dimension = _dimension;
+        return *this;
+    }
+    Initializer& SetDimension(RHITexture* _texture) {
+        return SetDimension(_texture->GetInfo().dimension);
+    }
+    Initializer& SetFormat(EPixelFormat _format) {
+        texture.uav.format = _format;
+        return *this;
+    }
+    Initializer& SetMipLevel(uint8_t _mip_min) {
+        texture.uav.mip_min = _mip_min;
+        return *this;
+    }
+    Initializer& SetArrayRange(uint16_t _array_min, uint16_t _array_num) {
+        texture.uav.array_min = _array_min;
+        texture.uav.array_num = _array_num;
+        return *this;
+    }
+    Initializer& SetDisableSRGB(bool _b_disable_srgb) {
+        texture.uav.b_disable_srgb = _b_disable_srgb;
+        return *this;
+    }
+};
+
+FORCEINLINE RHIViewInfo::BufferSRV::Initializer RHIViewInfo::CreateBufferSRVInfo() {
+    return {};
+}
+
+FORCEINLINE RHIViewInfo::BufferUAV::Initializer RHIViewInfo::CreateBufferUAVInfo() {
+    return {};
+}
+
+FORCEINLINE RHIViewInfo::TextureSRV::Initializer RHIViewInfo::CreateTextureSRVInfo() {
+    return {};
+}
+FORCEINLINE RHIViewInfo::TextureUAV::Initializer RHIViewInfo::CreateTextureUAVInfo() {
+    return {};
+}
 #pragma endregion
+
+class RHIView : public RHIResource {
+public:
+    RHIView(ERHIResourceType _type, RHIViewableResource* _viewable_resource, const RHIViewInfo& _info)
+        : RHIResource(_type), resource(_viewable_resource), info(_info) {
+        assert(_viewable_resource != nullptr && "ViewableResource is invalid");
+    }
+
+    RHIViewableResource* GetResource() const {
+        return resource;
+    }
+
+    RHIBuffer* GetBuffer() const {
+        return info.IsBuffer() ? dynamic_cast<RHIBuffer*>(resource.get()) : nullptr;
+    }
+
+    RHITexture* GetTexture() const {
+        return info.IsTexture() ? dynamic_cast<RHITexture*>(resource.get()) : nullptr;
+    }
+
+    bool IsBuffer() const {
+        return info.IsBuffer();
+    }
+
+    bool IsTexture() const {
+        return info.IsTexture();
+    }
+
+protected:
+    const RHIViewInfo info;
+
+private:
+    CountableRef<RHIViewableResource> resource;
+};
+
+class RHIUnorderedAccessView : public RHIView {
+public:
+    explicit RHIUnorderedAccessView(RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIView(RRT_UNORDERED_ACCESS_VIEW, _resource, _viewInfo) {
+        assert(_viewInfo.IsUAV() && "view must be uav");
+    }
+};
+
+class RHIShaderResourceView : public RHIView {
+public:
+    explicit RHIShaderResourceView(RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIView(RRT_SHADER_RESOURCE_VIEW, _resource, _viewInfo) {
+        assert(_viewInfo.IsSRV() && "view must be srv");
+    }
+};
+
+class RHIStagingBuffer : public RHIResource {
+public:
+    RHIStagingBuffer() : RHIResource(RRT_STAGING_BUFFER) {}
+    virtual ~RHIStagingBuffer() {}
+
+    virtual uint64_t GetGPUByteSize() const { return 0; }
+};
+
+class RHIColorAttachmentView {
+public:
+    RHIColorAttachmentView()                                         = default;
+    RHIColorAttachmentView(RHIColorAttachmentView&&)                 = default;
+    RHIColorAttachmentView(const RHIColorAttachmentView&)            = default;
+    RHIColorAttachmentView& operator=(RHIColorAttachmentView&&)      = default;
+    RHIColorAttachmentView& operator=(const RHIColorAttachmentView&) = default;
+
+    explicit RHIColorAttachmentView(RHITexture* _texture, EAttachmentLoadOp _load_op)
+        : texture(_texture),
+          mip_index(0),
+          array_index(-1),
+          load_op(_load_op),
+          store_op(EAttachmentStoreOp::STORE) {}
+    explicit RHIColorAttachmentView(RHITexture* _texture, EAttachmentLoadOp _load_op, uint32_t _mip_index, uint32_t _array_index)
+        : texture(_texture),
+          mip_index(_mip_index),
+          load_op(_load_op),
+          array_index(_array_index),
+          store_op(EAttachmentStoreOp::STORE) {}
+    explicit RHIColorAttachmentView(RHITexture* _texture, uint32_t _mip_index, uint32_t _array_index, EAttachmentLoadOp _load_op, EAttachmentStoreOp _store_op)
+        : texture(_texture),
+          mip_index(_mip_index),
+          array_index(_array_index),
+          load_op(_load_op),
+          store_op(_store_op) {}
+
+    bool operator==(const RHIColorAttachmentView& other) const {
+        return texture == other.texture &&
+               mip_index == other.mip_index &&
+               array_index == other.array_index &&
+               load_op == other.load_op &&
+               store_op == other.store_op;
+    }
+
+public:
+    RHITexture* texture   = nullptr;
+    uint32_t    mip_index = 0;
+
+    uint32_t array_index = 0;
+
+    EAttachmentLoadOp  load_op  = EAttachmentLoadOp::DONT_CARE;
+    EAttachmentStoreOp store_op = EAttachmentStoreOp::DONT_CARE;
+};
+
+class RHIDepthAttachmentView {
+public:
+    EAttachmentStoreOp GetStencilStoreOp() const { return stencil_store_op; }
+
+    explicit RHIDepthAttachmentView()
+        : texture(nullptr),
+          depth_load_op(EAttachmentLoadOp::DONT_CARE),
+          depth_store_op(EAttachmentStoreOp::DONT_CARE),
+          stencil_load_op(EAttachmentLoadOp::DONT_CARE),
+          stencil_store_op(EAttachmentStoreOp::DONT_CARE) {
+        Validate();
+    }
+
+    //common case
+    explicit RHIDepthAttachmentView(
+        RHITexture*        _texture,
+        EAttachmentLoadOp  _load_op,
+        EAttachmentStoreOp _store_op)
+        : texture(_texture),
+          depth_load_op(_load_op),
+          depth_store_op(_store_op),
+          stencil_load_op(_load_op),
+          stencil_store_op(_store_op) {
+        Validate();
+    }
+
+    explicit RHIDepthAttachmentView(
+        RHITexture*        _texture,
+        EAttachmentLoadOp  _depth_load_op,
+        EAttachmentStoreOp _depth_store_op,
+        EAttachmentLoadOp  _stencil_load_op,
+        EAttachmentStoreOp _stencil_store_op)
+        : texture(_texture),
+          depth_load_op(_depth_load_op),
+          depth_store_op(_depth_store_op),
+          stencil_load_op(_stencil_load_op),
+          stencil_store_op(_stencil_store_op) {
+        Validate();
+    }
+
+    void Validate() const {
+        // VK and Metal MAY leave the attachment in an undefined state if the StoreAction is DontCare. So we can't assume read-only implies it should be DontCare unless we know for sure it will never be used again.
+        // ensureMsgf(DepthStencilAccess.IsDepthWrite() || DepthStoreAction == ERenderTargetStoreAction::ENoAction, TEXT("Depth is read-only, but we are performing a store.  This is a waste on mobile.  If depth can't change, we don't need to store it out again"));
+        /*ensureMsgf(DepthStencilAccess.IsStencilWrite() || StencilStoreAction == ERenderTargetStoreAction::ENoAction, TEXT("Stencil is read-only, but we are performing a store.  This is a waste on mobile.  If stencil can't change, we don't need to store it out again"));*/
+    }
+
+    bool operator==(const RHIDepthAttachmentView& other) const {
+        return texture == other.texture &&
+               depth_load_op == other.depth_load_op &&
+               depth_store_op == other.depth_store_op &&
+               stencil_load_op == other.stencil_load_op &&
+               stencil_store_op == other.stencil_store_op;
+    }
+
+public:
+    RHITexture* texture;
+
+    EAttachmentLoadOp  depth_load_op;
+    EAttachmentStoreOp depth_store_op;
+    EAttachmentLoadOp  stencil_load_op;
+
+private:
+    EAttachmentStoreOp stencil_store_op;
+};
+struct RHIShaderStage {
+
+    RHIShaderStage() = default;
+    RHIShaderStage(
+        RHIVertexDescription* _vertex_description,
+        RHIVertexShader*      _vertex_shader,
+        RHIFragmentShader*    _fragment_shader,
+        RHIGeometryShader*    _geometry_shader)
+        : p_vertex_description(_vertex_description),
+          p_fragment_shader(_fragment_shader),
+          p_geometry_shader(_geometry_shader) {}
+
+    RHIShaderStage(
+        RHIFragmentShader*      _fragment_shader,
+        RHIMeshShader*          _mesh_shader,
+        RHIAmplificationShader* _amplification_shader)
+        : p_fragment_shader(_fragment_shader),
+          p_mesh_shader(_mesh_shader),
+          p_amplification_shader(_amplification_shader) {}
+
+    //todo: shader library support for tracking shader stage resources
+
+    RHIVertexShader*   GetVertexShader() const { return p_vertex_shader; }
+    RHIFragmentShader* GetFragmentShader() const { return p_fragment_shader; }
+
+    RHIGeometryShader* GetGeometryShader() const { return p_geometry_shader; }
+    void               SetGeometryShader(RHIGeometryShader* _geometry_shader) { p_geometry_shader = _geometry_shader; }
+
+    RHIMeshShader*          GetMeshShader() const { return p_mesh_shader; }
+    RHIAmplificationShader* GetAmplificationShader() const { return p_amplification_shader; }
+
+    void SetMeshShader(RHIMeshShader* _mesh_shader) { p_mesh_shader = _mesh_shader; }
+    void SetAmplificationShader(RHIAmplificationShader* _amplification_shader) { p_amplification_shader = _amplification_shader; }
+    //fields
+
+    RHIVertexDescription* p_vertex_description = nullptr;
+    RHIVertexShader*      p_vertex_shader      = nullptr;
+    RHIFragmentShader*    p_fragment_shader    = nullptr;
+    RHIGeometryShader*    p_geometry_shader    = nullptr;
+
+    //todo: query support for mesh shaders
+    RHIMeshShader*          p_mesh_shader          = nullptr;
+    RHIAmplificationShader* p_amplification_shader = nullptr;
+};
+
+struct GraphicsPipelineAttachmentInfo {
+    GraphicsPipelineAttachmentInfo()
+        : attachment_formats(create_array<MAX_PASS_ATTACHMENT_COUNT, uint8_t>((uint8_t)ETextureUsageFlags::UNDEFINED)),
+          attachment_flags(create_array<MAX_PASS_ATTACHMENT_COUNT, ETextureUsageFlags>(ETextureUsageFlags::UNDEFINED)) {}
+    uint32_t                                                  attachments_count;
+    std::array<uint8_t, MAX_PASS_ATTACHMENT_COUNT>            attachment_formats;
+    std::array<ETextureUsageFlags, MAX_PASS_ATTACHMENT_COUNT> attachment_flags;
+    EPixelFormat                                              depth_stencil_attachment_format;
+    ETextureUsageFlags                                        depth_stencil_attachment_flag = ETextureUsageFlags::UNDEFINED;
+
+    EAttachmentLoadOp  depth_attachment_load_op    = EAttachmentLoadOp::DONT_CARE;
+    EAttachmentStoreOp depth_attachment_store_op   = EAttachmentStoreOp::DONT_CARE;
+    EAttachmentLoadOp  stencil_attachment_load_op  = EAttachmentLoadOp::DONT_CARE;
+    EAttachmentStoreOp stencil_attachment_store_op = EAttachmentStoreOp::DONT_CARE;
+
+    uint16_t num_samples      = 0;
+    uint8_t  multi_view_count = 0;
+
+    /* quoted from https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VK_EXT_fragment_density_map.html
+     * allows an application to specify areas of the render target where the fragment shader may be invoked fewer times.
+     * These fragments are broadcasted out to multiple pixels to cover the render target.
+     * */
+    bool b_has_fragment_density_attachment = false;
+};
+
+struct SubpassSettings {
+
+    bool operator==(const SubpassSettings& other) const{
+        return type == other.type && index == other.index;
+    }
+    enum Type : uint8_t {
+        NONE,
+        DEFERRED
+    } type        = NONE;
+    uint8_t index = 0;
+};
+static_assert(sizeof(SubpassSettings) == 2);
+
+
+
+
+class RHIGraphicsPipelineStateInitializer {
+public:
+    using TAttachmentFormats = std::array<uint8_t, MAX_PASS_ATTACHMENT_COUNT>;
+    using TAttachmentFlags   = std::array<ETextureUsageFlags, MAX_PASS_ATTACHMENT_COUNT>;
+
+    RHIGraphicsPipelineStateInitializer()
+        : blend_state(nullptr),
+          rasterizer_state(nullptr),
+          depth_stencil_state(nullptr),
+          color_attachment_count(0),
+          color_attachment_formats(create_array<MAX_PASS_ATTACHMENT_COUNT, uint8_t>((uint8_t)ETextureUsageFlags::UNDEFINED)),
+          color_attachment_flags(create_array<MAX_PASS_ATTACHMENT_COUNT, ETextureUsageFlags>(ETextureUsageFlags::UNDEFINED)),
+          depth_stencil_format(PF_UNDEFINED),
+          depth_stencil_flag(ETextureUsageFlags::UNDEFINED),
+          depth_attachment_load_op(EAttachmentLoadOp::DONT_CARE),
+          depth_attachment_store_op(EAttachmentStoreOp::DONT_CARE),
+          stencil_attachment_load_op(EAttachmentLoadOp::DONT_CARE),
+          stencil_attachment_store_op(EAttachmentStoreOp::DONT_CARE),
+          num_samples(0),
+          subpass_settings({SubpassSettings::Type::NONE, 0}),
+          b_depth_bound(false),
+          multi_view_count(0),
+          b_has_fragment_density_attachments(false),
+          shading_rate(EVariousShadingRate::VSR_1_1x1),
+          hash_key(0) {}
+
+    RHIGraphicsPipelineStateInitializer(
+        RHIShaderStage            _shader_stage,
+        RHIBlendState*            _blend_state,
+        RHIRasterizationState*    _rasterizer_state,
+        RHIDepthStencilState*     _depth_stencil_state,
+        EPrimitiveTopology        _primitive_topology,
+        uint32_t                  _color_attachment_count,
+        const TAttachmentFormats& _color_attachment_formats,
+        const TAttachmentFlags&   _color_attachment_flags,
+        EPixelFormat              _depth_stencil_format,
+        ETextureUsageFlags        _depth_stencil_flag,
+        EAttachmentLoadOp         _depth_attachment_load_op,
+        EAttachmentStoreOp        _depth_attachment_store_op,
+        EAttachmentLoadOp         _stencil_attachment_load_op,
+        EAttachmentStoreOp        _stencil_attachment_store_op,
+        uint16_t                  _num_samples,
+        const SubpassSettings&    _subpass_settings,
+        bool                      _b_depth_bound,
+        uint8_t                   _multi_view_count,
+        bool                      _b_has_fragment_density_attachments,
+        EVariousShadingRate       _shading_rate)
+        : blend_state(_blend_state),
+          rasterizer_state(_rasterizer_state),
+          depth_stencil_state(_depth_stencil_state),
+          color_attachment_count(_color_attachment_count),
+          color_attachment_formats(_color_attachment_formats),
+          color_attachment_flags(_color_attachment_flags),
+          depth_stencil_format(_depth_stencil_format),
+          depth_stencil_flag(_depth_stencil_flag),
+          depth_attachment_load_op(_depth_attachment_load_op),
+          depth_attachment_store_op(_depth_attachment_store_op),
+          stencil_attachment_load_op(_depth_attachment_load_op),
+          stencil_attachment_store_op(_depth_attachment_store_op),
+          num_samples(_num_samples),
+          subpass_settings(_subpass_settings),
+          b_depth_bound(_b_depth_bound),
+          multi_view_count(_multi_view_count),
+          b_has_fragment_density_attachments(_b_has_fragment_density_attachments),
+          shading_rate(_shading_rate),
+          hash_key(0) {}
+    static constexpr ETextureUsageFlags RelevantColorAttachmentFlagMask = ETextureUsageFlags::SRGB;
+    static constexpr ETextureUsageFlags RelevantDepthStencilFlagMask = ETextureUsageFlags::SRGB | ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT;
+    static bool IsSameColorAttachmentInPSO(ETextureUsageFlags lhs, ETextureUsageFlags rhs){
+        auto l = lhs & RelevantColorAttachmentFlagMask;
+        auto r = rhs & RelevantColorAttachmentFlagMask;
+        return l == r;
+    }
+    static bool IsSameDepthAttachmentInPSO(ETextureUsageFlags lhs, ETextureUsageFlags rhs){
+        auto l = lhs & RelevantDepthStencilFlagMask;
+        auto r = rhs & RelevantDepthStencilFlagMask;
+        return l == r;
+    }
+    static bool IsSameColorAttachmentArray(const TAttachmentFlags& lhs, const TAttachmentFlags& rhs){
+        bool b_same = true;
+        for (int i = 0; i < lhs.size(); ++i) {
+            b_same &= IsSameColorAttachmentInPSO(lhs[i], rhs[i]);
+        }
+        return b_same;
+    }
+
+    bool operator==(const RHIGraphicsPipelineStateInitializer& other) const{
+        return shader_stage.p_vertex_description == other.shader_stage.p_vertex_description
+        && shader_stage.p_vertex_shader == other.shader_stage.p_vertex_shader
+        && shader_stage.p_fragment_shader == other.shader_stage.p_fragment_shader
+        && shader_stage.GetMeshShader() == other.shader_stage.GetMeshShader()
+        && shader_stage.GetGeometryShader() == other.shader_stage.GetGeometryShader()
+        && shader_stage.GetAmplificationShader() == other.shader_stage.GetAmplificationShader()
+        && blend_state == other.blend_state
+        && rasterizer_state == other.rasterizer_state
+        && depth_stencil_state == other.depth_stencil_state
+        && primitive_topology == other.primitive_topology
+        && b_depth_bound == other.b_depth_bound
+        && multi_view_count == other.multi_view_count
+        && shading_rate == other.shading_rate
+        && b_has_fragment_density_attachments == other.b_has_fragment_density_attachments
+        && color_attachment_count == other.color_attachment_count
+        && color_attachment_formats == other.color_attachment_formats
+        && IsSameColorAttachmentArray(color_attachment_flags, other.color_attachment_flags)
+        && depth_stencil_format == other.depth_stencil_format
+        && IsSameDepthAttachmentInPSO(depth_stencil_flag, other.depth_stencil_flag)
+        && depth_attachment_load_op == other.depth_attachment_load_op
+        && depth_attachment_store_op == other.depth_attachment_store_op
+        && stencil_attachment_load_op == other.stencil_attachment_load_op
+        && stencil_attachment_store_op == other.stencil_attachment_store_op
+        && num_samples == other.num_samples
+        && subpass_settings == other.subpass_settings;
+    }
+
+    uint32_t CalcValidColorAttachmentCount() const{
+        if(color_attachment_count > 0){
+            int32_t last_index = -1;
+            for (int i = (int)color_attachment_count; i >=0 ; i--) {
+                if(color_attachment_formats[i] != PF_UNDEFINED){
+                    last_index = i;
+                    break;
+                }
+            }
+            return (uint32_t)(last_index + 1);
+        }
+        return color_attachment_count;
+    }
+
+    RHIShaderStage         shader_stage;
+    RHIBlendState*         blend_state;
+    RHIRasterizationState* rasterizer_state;
+    RHIDepthStencilState*  depth_stencil_state;
+
+    EPrimitiveTopology primitive_topology;
+    uint32_t           color_attachment_count;
+    TAttachmentFormats color_attachment_formats;
+    TAttachmentFlags   color_attachment_flags;
+    EPixelFormat       depth_stencil_format;
+    ETextureUsageFlags depth_stencil_flag;
+    EAttachmentLoadOp  depth_attachment_load_op    = EAttachmentLoadOp::DONT_CARE;
+    EAttachmentStoreOp depth_attachment_store_op   = EAttachmentStoreOp::DONT_CARE;
+    EAttachmentLoadOp  stencil_attachment_load_op  = EAttachmentLoadOp::DONT_CARE;
+    EAttachmentStoreOp stencil_attachment_store_op = EAttachmentStoreOp::DONT_CARE;
+
+    uint16_t num_samples;
+
+    SubpassSettings subpass_settings;
+
+    bool    b_depth_bound;
+    uint8_t multi_view_count;
+
+    //for VSR
+    bool                b_has_fragment_density_attachments;
+    EVariousShadingRate shading_rate;
+
+    uint64_t hash_key;
+};
+
+#pragma endregion
+
 #endif// !RHI_RESOURCE_H

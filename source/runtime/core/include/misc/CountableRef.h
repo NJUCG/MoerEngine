@@ -118,7 +118,7 @@ public:
     T* operator->() const{
         return ptr;
     }
-    operator T() const {
+    operator T*() const {
         return ptr;
     }
     bool isValid() const{

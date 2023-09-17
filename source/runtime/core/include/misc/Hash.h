@@ -166,4 +166,22 @@ public:
 };
 static_assert(picosha2::k_digest_size == 32);
 
+
+namespace inner_utils
+{
+    template <typename T, std::size_t ... Is>
+    constexpr std::array<T, sizeof...(Is)>
+    create_array(T value, std::index_sequence<Is...>)
+    {
+        // cast Is to void to remove the warning: unused value
+        return {{(static_cast<void>(Is), value)...}};
+    }
+}
+
+template <std::size_t N, typename T>
+constexpr std::array<T, N> create_array(const T& value)
+{
+    return inner_utils::create_array(value, std::make_index_sequence<N>());
+}
+
 #endif// !HASHABLE_H

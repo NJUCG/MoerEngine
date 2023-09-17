@@ -6,11 +6,11 @@
 #include <type_traits>
 
 #define ENUM_BIT_OP_IMPL_1(TEnum)                                                                                                                                  \
-    MOER_FORCE_INLINE const TEnum operator^(TEnum lhs, TEnum rhs) { return (TEnum)(((std::underlying_type_t<TEnum>)lhs) ^ ((std::underlying_type_t<TEnum>)rhs)); } \
-    MOER_FORCE_INLINE const TEnum operator|(TEnum lhs, TEnum rhs) { return (TEnum)(((std::underlying_type_t<TEnum>)lhs) | ((std::underlying_type_t<TEnum>)rhs)); } \
-    MOER_FORCE_INLINE const TEnum operator&(TEnum lhs, TEnum rhs) { return (TEnum)(((std::underlying_type_t<TEnum>)lhs) & ((std::underlying_type_t<TEnum>)rhs)); } \
-    MOER_FORCE_INLINE const TEnum operator~(TEnum e) { return (TEnum)(~(std::underlying_type_t<TEnum>)e); }                                                        \
-    MOER_FORCE_INLINE bool        operator!(TEnum e) { return !((std::underlying_type_t<TEnum>)e); }                                                               \
+    MOER_FORCE_INLINE constexpr TEnum operator^(TEnum lhs, TEnum rhs) { return (TEnum)(((std::underlying_type_t<TEnum>)lhs) ^ ((std::underlying_type_t<TEnum>)rhs)); } \
+    MOER_FORCE_INLINE constexpr TEnum operator|(TEnum lhs, TEnum rhs) { return (TEnum)(((std::underlying_type_t<TEnum>)lhs) | ((std::underlying_type_t<TEnum>)rhs)); } \
+    MOER_FORCE_INLINE constexpr TEnum operator&(TEnum lhs, TEnum rhs) { return (TEnum)(((std::underlying_type_t<TEnum>)lhs) & ((std::underlying_type_t<TEnum>)rhs)); } \
+    MOER_FORCE_INLINE constexpr TEnum operator~(TEnum e) { return (TEnum)(~(std::underlying_type_t<TEnum>)e); }                                                        \
+    MOER_FORCE_INLINE constexpr bool        operator!(TEnum e) { return !((std::underlying_type_t<TEnum>)e); }                                                               \
     MOER_FORCE_INLINE TEnum&      operator&=(TEnum& lhs, TEnum rhs) {                                                                                              \
         lhs = lhs & rhs;                                                                                                                                      \
         return lhs;                                                                                                                                           \
