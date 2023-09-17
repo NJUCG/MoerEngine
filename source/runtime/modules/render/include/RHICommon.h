@@ -355,17 +355,36 @@ enum ERHIResourceType {
     RRT_RenderQuery,
     RRT_RenderQueryPool,
     RRT_ComputeFence,
-    RRT_Viewport,
-    RRT_UnorderedAccessView,
-    RRT_ShaderResourceView,
-    RRT_RayTracingAccelerationStructure,
-    RRT_StagingBuffer,
+    RRT_VIEWPORT,
+    RRT_UNORDERED_ACCESS_VIEW,
+    RRT_SHADER_RESOURCE_VIEW,
+    RRT_RAYTRACING_ACCELERATION_STRUCTURE,
+    RRT_STAGING_BUFFER,
     RRT_CustomPresent,
-    RRT_ShaderLibrary,
-    RRT_PipelineBinaryLibrary,
+    RRT_SHADER_LIBRARY,
+    RRT_PIPELINE_BINARY_DATA_LIBRARY,
 
     RRT_Num
 };
+
+enum class EAttachmentLoadOp: uint8_t {
+    LOAD,
+    CLEAR,
+    DONT_CARE,
+    NONE,
+    Num,
+    NumBits = 2
+} ;
+static_assert((int32_t) EAttachmentLoadOp:: Num <= 1 << (uint32_t)EAttachmentLoadOp::NumBits, "EAttachmentLoadOp::Num will not fit on EAttachmentLoadOp::NumBits");
+enum class EAttachmentStoreOp: uint8_t {
+    STORE = 0,
+    DONT_CARE,
+    MULTISAMPLE_RESOLVE,
+    NONE,
+    Num,
+    NumBits = 2
+} ;
+static_assert((int32_t) EAttachmentStoreOp:: Num <= 1 << (uint32_t)EAttachmentStoreOp::NumBits, "EAttachmentStoreOp::Num will not fit on EAttachmentStoreOp::NumBits");
 #pragma endregion
 
 #pragma region pixel format
@@ -609,11 +628,13 @@ enum EResourceAccessMode {
     RAM_Num
 };
 enum class ETextureUsageFlags : uint64_t {
-    NONE,
+    UNDEFINED,
 
     ATTACHMENT_RENDER,
     ATTACHMENT_RESOLVE,
     ATTACHMENT_DEPTH_STENCIL,
+
+    SRGB,
 
     SHADER_RESOURCE,
     CPU_VISIBLE,
@@ -653,6 +674,27 @@ enum ETextureAspectFlagBits {
     IA_MEMORY_PLANE_2_BIT_EXT = 0x200,
     IA_MEMORY_PLANE_3_BIT_EXT = 0x400
 };
+
+
+/* various shading rate palette, VSR_{fragment_invocation_count}_{region_size}
+ * @fragment_invocation_count means fragment shading invocation per region
+ * @region_size means one shading result will be used to color ${regions_size} pixels
+ * */
+enum EVariousShadingRate: uint8_t{
+    VSR_NONE,
+    VSR_16_1x1,
+    VSR_8_1x1,
+    VSR_4_1x1,
+    VSR_2_1x1,
+    VSR_1_1x1,
+    VSR_1_1x2,
+    VSR_1_2x1,
+    VSR_1_2x2,
+    VSR_1_2x4,
+    VSR_1_4x2,
+    VSR_1_4x4
+};
+
 
 #pragma endregion
 #endif// !RHI_PLATFORM_COMMON_H
