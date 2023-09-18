@@ -370,7 +370,6 @@ enum ERHIResourceType {
 enum class EAttachmentLoadOp: uint8_t {
     LOAD,
     CLEAR,
-    DONT_CARE,
     NONE,
     Num,
     NumBits = 2
@@ -378,9 +377,8 @@ enum class EAttachmentLoadOp: uint8_t {
 static_assert((int32_t) EAttachmentLoadOp:: Num <= 1 << (uint32_t)EAttachmentLoadOp::NumBits, "EAttachmentLoadOp::Num will not fit on EAttachmentLoadOp::NumBits");
 enum class EAttachmentStoreOp: uint8_t {
     STORE = 0,
-    DONT_CARE,
-    MULTISAMPLE_RESOLVE,
     NONE,
+    MULTISAMPLE_RESOLVE,
     Num,
     NumBits = 2
 } ;
@@ -694,7 +692,13 @@ enum EVariousShadingRate: uint8_t{
     VSR_1_4x2,
     VSR_1_4x4
 };
-
+enum EVRSRateCombinerOp: uint8_t{
+    VRSRB_KEEP,
+    VRSRB_OVERRIDE,
+    VRSRB_MIN,
+    VRSRB_MAX,
+    VRSRB_MUL
+};
 
 #pragma endregion
 #endif// !RHI_PLATFORM_COMMON_H

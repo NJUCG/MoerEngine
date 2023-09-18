@@ -10,6 +10,9 @@
 #include <unordered_set>
 #include "misc/CountableRef.h"
 #include <string>
+#include <optional>
+class RHITexture;
+using RHITextureRef = CountableRef<RHITexture>;
 
 class RHI_API RHIResource {
 public:
@@ -108,7 +111,7 @@ public:
     explicit RHIPipelineShaderBindingState() : RHIResource(RRT_PIPELINE_BOUND_SHADER_STATE) {}
 };
 
-#pragma region shader resources
+#pragma region shader definitions
 class RHIShader : public RHIResource {
 public:
     RHIShader() = delete;
@@ -165,7 +168,7 @@ public:
 };
 #pragma endregion
 
-#pragma region pipeline
+#pragma region pipeline states definitions
 
 class RHIGraphicsPipelineState : public RHIResource {
 public:
@@ -193,18 +196,24 @@ public:
     RHIRayTracingPipelineState() : RHIResource(RRT_RAY_TRACING_PIPELINE_STATE) {}
 };
 
+#pragma endregion
+
+#pragma region uniform buffer definitions
+/* todo: specification of fields */
 class RHIUniformBufferLayout : public RHIResource {
 public:
     RHIUniformBufferLayout() : RHIResource(RRT_UNIFORM_BUFFER_LAYOUT) {}
 };
 
-/* ConstBuffer in dx12, Uniform Buffer in Vulkan */
+/* ConstBuffer in dx12, Uniform Buffer in Vulkan, created using RHIUniformBufferLayout */
 class RHIUniformBuffer : public RHIResource {
 public:
     RHIUniformBuffer() : RHIResource(RRT_UNIFORM_BUFFER) {}
     explicit RHIUniformBuffer(const RHIUniformBufferLayout& _layout){};
 };
+#pragma endregion
 
+#pragma region viewable resources definitions
 /* resources which is can be access by shaders via UAV/SRV, like buffer, texture, etc. */
 class RHIViewableResource : public RHIResource {
 public:
@@ -227,20 +236,29 @@ struct RHIBufferInfo {
         : size(_size),
           stride(_stride),
           usage(_usage) {}
+
+    static RHIBufferInfo GetNull() {
+        return {
+            0,
+            0,
+            EBufferUsageFlags::NONE};
+    }
+    bool IsNull()const{
+        return usage == EBufferUsageFlags::NONE && size==stride && size==0;
+    }
 };
 /* index, vertex, staging, indirect */
 class RHIBuffer : public RHIViewableResource {
 public:
     RHIBuffer(const RHIBufferInfo& _info) : RHIViewableResource(RRT_BUFFER), info(_info) {}
 
-    const RHIBufferInfo& GetDesc() const { return info; }
+    const RHIBufferInfo& GetInfo() const { return info; }
     void                 SetName(const std::string& _name) {
         name = _name;
     }
-    const RHIBufferInfo& GetInfo() const { return info; }
-    uint32_t             GetSize() const { return info.size; }
-    uint32_t             GetStride() const { return info.stride; }
-    EBufferUsageFlags    GetUsage() const { return info.usage; }
+    uint32_t          GetSize() const { return info.size; }
+    uint32_t          GetStride() const { return info.stride; }
+    EBufferUsageFlags GetUsage() const { return info.usage; }
 
 protected:
     std::string name;
@@ -433,7 +451,7 @@ class RHITexture : public RHIViewableResource {
 public:
     virtual const RHITextureInfo& GetInfo() const { return texture_info; }
 
-    virtual class RHITextureRef* GetTextureRef() { return nullptr; }
+    virtual RHITextureRef* GetTextureRef() { return nullptr; }
 
     virtual void* GetNativeResource() const { return nullptr; }
 
@@ -476,17 +494,20 @@ public:
     uint32_t GetNumSamples() const {
         return GetInfo().num_samples;
     }
+    ETextureUsageFlags GetUsageFlags() const {
+        return GetInfo().usage;
+    }
     RHIClearAttachment GetClearAttachment() const { return GetInfo().clear_attachment; }
 
 protected:
     RHITexture(const RHITextureCreateInfo& _info);
 
 private:
-    friend class RHITextureRef;
+    friend RHITextureRef;
     explicit RHITexture(ERHIResourceType _type) : RHIViewableResource(_type) {}
     RHITextureInfo texture_info;
 };
-
+#pragma endregion
 /* fences in dx12, fence and timeline semaphore in vulkan */
 class RHIFence : public RHIResource {
 public:
@@ -508,7 +529,7 @@ public:
     virtual void  WaitForFrameComplete() {}
 };
 
-#pragma region View info constructor
+#pragma region viewable resources view definitions
 struct RHIViewInfo {
     enum class EViewType : uint8_t {
         BUFFER_SRV,
@@ -528,8 +549,9 @@ struct RHIViewInfo {
         EViewType    view_type;
         EPixelFormat format;
     };
-    struct ViewInfo;
+
     struct Buffer : public BaseViewInfo {
+        struct ViewInfo;
         EBufferType bufferType;
         uint8_t     b_is_atomic_counter : 1;
         /* An append and consume buffer is a special type of an unordered resource that
@@ -544,8 +566,9 @@ struct RHIViewInfo {
     protected:
         ViewInfo GetViewInfo(RHIBuffer* target) const;
     };
-
+    /* equivalent to VkImageView */
     struct Texture : public BaseViewInfo {
+        struct ViewInfo;
         uint8_t           b_disable_srgb : 1;
         ETextureDimension dimension : uint32_t(ETextureDimension::NumBits);
         uint8_t /*padding*/ : 7 - uint32_t(ETextureDimension::NumBits);
@@ -560,15 +583,24 @@ struct RHIViewInfo {
 
     struct BufferSRV : public Buffer {
         struct Initializer;
+        struct ViewInfo;
+
+        ViewInfo GetViewInfo(RHIBuffer*) const;
     };
     struct BufferUAV : public Buffer {
         struct Initializer;
+        struct ViewInfo;
+        ViewInfo GetViewInfo(RHIBuffer*) const;
     };
     struct TextureSRV : public Texture {
         struct Initializer;
+        struct ViewInfo;
+        ViewInfo GetViewInfo(RHITexture*) const;
     };
     struct TextureUAV : public Texture {
         struct Initializer;
+        struct ViewInfo;
+        ViewInfo GetViewInfo(RHITexture*) const;
     };
     union {
         BaseViewInfo base_info;
@@ -608,8 +640,55 @@ protected:
         base_info.view_type = _type;
     }
 };
+
+struct RHIViewInfo::Buffer::ViewInfo {
+    uint32_t     byte_offset;
+    uint32_t     byte_stride;
+    uint32_t     num_elements;
+    uint32_t     byte_size;
+    EBufferType  type;
+    EPixelFormat format;
+
+    //empty buffer view resource
+    bool b_null_view;
+};
+
+struct RHIViewInfo::Texture::ViewInfo {
+    uint16_t array_min;
+    uint16_t array_size;
+
+    EPixelFormat format;
+
+    ETextureDimension dimension : (uint32_t)ETextureDimension::NumBits;
+    uint8_t           b_all_mips : 1;
+    uint8_t           b_all_array_slices : 1;
+};
+
+struct RHIViewInfo::BufferUAV::ViewInfo: public RHIViewInfo::Buffer::ViewInfo {
+
+    //hlsl usage
+    bool b_atomic_counter;
+
+    //append buffer must be unordered access structured buffer
+    bool b_append_buffer;
+};
+
+struct RHIViewInfo::BufferSRV::ViewInfo : public RHIViewInfo::Buffer::ViewInfo {
+};
+
+struct RHIViewInfo::TextureSRV::ViewInfo: public RHIViewInfo::Texture::ViewInfo {
+    uint8_t mip_min;
+    uint8_t mip_num;
+};
+
+struct RHIViewInfo::TextureUAV::ViewInfo: public RHIViewInfo::Texture::ViewInfo {
+    //texture uav support one mip level
+    uint8_t mip_level;
+};
+
 static_assert(sizeof(RHIViewInfo) == 16, "Packing of RHIViewInfo is unexpected.");
 
+//for rhi CommandList to create BufferSRV
 struct RHIViewInfo::BufferSRV::Initializer : private RHIViewInfo {
     friend RHIViewInfo;
 
@@ -647,6 +726,7 @@ public:
     }
 };
 
+//for rhi CommandList to create BufferUAV
 struct RHIViewInfo::BufferUAV::Initializer : private RHIViewInfo {
     friend RHIViewInfo;
 
@@ -684,6 +764,7 @@ public:
     }
 };
 
+//for rhi CommandList to create TextureSRV
 struct RHIViewInfo::TextureSRV::Initializer : private RHIViewInfo {
     friend RHIViewInfo;
 
@@ -718,6 +799,7 @@ public:
     }
 };
 
+//for rhi CommandList to create TextureSRV
 struct RHIViewInfo::TextureUAV::Initializer : private RHIViewInfo {
     friend RHIViewInfo;
 
@@ -751,6 +833,7 @@ public:
     }
 };
 
+
 FORCEINLINE RHIViewInfo::BufferSRV::Initializer RHIViewInfo::CreateBufferSRVInfo() {
     return {};
 }
@@ -765,7 +848,7 @@ FORCEINLINE RHIViewInfo::TextureSRV::Initializer RHIViewInfo::CreateTextureSRVIn
 FORCEINLINE RHIViewInfo::TextureUAV::Initializer RHIViewInfo::CreateTextureUAVInfo() {
     return {};
 }
-#pragma endregion
+
 
 class RHIView : public RHIResource {
 public:
@@ -814,6 +897,7 @@ public:
         assert(_viewInfo.IsSRV() && "view must be srv");
     }
 };
+#pragma endregion
 
 class RHIStagingBuffer : public RHIResource {
 public:
@@ -823,6 +907,8 @@ public:
     virtual uint64_t GetGPUByteSize() const { return 0; }
 };
 
+#pragma region graphic pipeline definitions
+/* converted attachment/RT data */
 class RHIColorAttachmentView {
 public:
     RHIColorAttachmentView()                                         = default;
@@ -864,20 +950,21 @@ public:
 
     uint32_t array_index = 0;
 
-    EAttachmentLoadOp  load_op  = EAttachmentLoadOp::DONT_CARE;
-    EAttachmentStoreOp store_op = EAttachmentStoreOp::DONT_CARE;
+    EAttachmentLoadOp  load_op  = EAttachmentLoadOp::NONE;
+    EAttachmentStoreOp store_op = EAttachmentStoreOp::NONE;
 };
 
+/* converted attachment/RT data */
 class RHIDepthAttachmentView {
 public:
     EAttachmentStoreOp GetStencilStoreOp() const { return stencil_store_op; }
 
     explicit RHIDepthAttachmentView()
         : texture(nullptr),
-          depth_load_op(EAttachmentLoadOp::DONT_CARE),
-          depth_store_op(EAttachmentStoreOp::DONT_CARE),
-          stencil_load_op(EAttachmentLoadOp::DONT_CARE),
-          stencil_store_op(EAttachmentStoreOp::DONT_CARE) {
+          depth_load_op(EAttachmentLoadOp::NONE),
+          depth_store_op(EAttachmentStoreOp::NONE),
+          stencil_load_op(EAttachmentLoadOp::NONE),
+          stencil_store_op(EAttachmentStoreOp::NONE) {
         Validate();
     }
 
@@ -932,6 +1019,7 @@ public:
 private:
     EAttachmentStoreOp stencil_store_op;
 };
+
 struct RHIShaderStage {
 
     RHIShaderStage() = default;
@@ -987,10 +1075,10 @@ struct GraphicsPipelineAttachmentInfo {
     EPixelFormat                                              depth_stencil_attachment_format;
     ETextureUsageFlags                                        depth_stencil_attachment_flag = ETextureUsageFlags::UNDEFINED;
 
-    EAttachmentLoadOp  depth_attachment_load_op    = EAttachmentLoadOp::DONT_CARE;
-    EAttachmentStoreOp depth_attachment_store_op   = EAttachmentStoreOp::DONT_CARE;
-    EAttachmentLoadOp  stencil_attachment_load_op  = EAttachmentLoadOp::DONT_CARE;
-    EAttachmentStoreOp stencil_attachment_store_op = EAttachmentStoreOp::DONT_CARE;
+    EAttachmentLoadOp  depth_attachment_load_op    = EAttachmentLoadOp::NONE;
+    EAttachmentStoreOp depth_attachment_store_op   = EAttachmentStoreOp::NONE;
+    EAttachmentLoadOp  stencil_attachment_load_op  = EAttachmentLoadOp::NONE;
+    EAttachmentStoreOp stencil_attachment_store_op = EAttachmentStoreOp::NONE;
 
     uint16_t num_samples      = 0;
     uint8_t  multi_view_count = 0;
@@ -1004,7 +1092,7 @@ struct GraphicsPipelineAttachmentInfo {
 
 struct SubpassSettings {
 
-    bool operator==(const SubpassSettings& other) const{
+    bool operator==(const SubpassSettings& other) const {
         return type == other.type && index == other.index;
     }
     enum Type : uint8_t {
@@ -1014,9 +1102,6 @@ struct SubpassSettings {
     uint8_t index = 0;
 };
 static_assert(sizeof(SubpassSettings) == 2);
-
-
-
 
 class RHIGraphicsPipelineStateInitializer {
 public:
@@ -1032,10 +1117,10 @@ public:
           color_attachment_flags(create_array<MAX_PASS_ATTACHMENT_COUNT, ETextureUsageFlags>(ETextureUsageFlags::UNDEFINED)),
           depth_stencil_format(PF_UNDEFINED),
           depth_stencil_flag(ETextureUsageFlags::UNDEFINED),
-          depth_attachment_load_op(EAttachmentLoadOp::DONT_CARE),
-          depth_attachment_store_op(EAttachmentStoreOp::DONT_CARE),
-          stencil_attachment_load_op(EAttachmentLoadOp::DONT_CARE),
-          stencil_attachment_store_op(EAttachmentStoreOp::DONT_CARE),
+          depth_attachment_load_op(EAttachmentLoadOp::NONE),
+          depth_attachment_store_op(EAttachmentStoreOp::NONE),
+          stencil_attachment_load_op(EAttachmentLoadOp::NONE),
+          stencil_attachment_store_op(EAttachmentStoreOp::NONE),
           num_samples(0),
           subpass_settings({SubpassSettings::Type::NONE, 0}),
           b_depth_bound(false),
@@ -1085,18 +1170,18 @@ public:
           shading_rate(_shading_rate),
           hash_key(0) {}
     static constexpr ETextureUsageFlags RelevantColorAttachmentFlagMask = ETextureUsageFlags::SRGB;
-    static constexpr ETextureUsageFlags RelevantDepthStencilFlagMask = ETextureUsageFlags::SRGB | ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT;
-    static bool IsSameColorAttachmentInPSO(ETextureUsageFlags lhs, ETextureUsageFlags rhs){
+    static constexpr ETextureUsageFlags RelevantDepthStencilFlagMask    = ETextureUsageFlags::SRGB | ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT;
+    static bool                         IsSameColorAttachmentInPSO(ETextureUsageFlags lhs, ETextureUsageFlags rhs) {
         auto l = lhs & RelevantColorAttachmentFlagMask;
         auto r = rhs & RelevantColorAttachmentFlagMask;
         return l == r;
     }
-    static bool IsSameDepthAttachmentInPSO(ETextureUsageFlags lhs, ETextureUsageFlags rhs){
+    static bool IsSameDepthAttachmentInPSO(ETextureUsageFlags lhs, ETextureUsageFlags rhs) {
         auto l = lhs & RelevantDepthStencilFlagMask;
         auto r = rhs & RelevantDepthStencilFlagMask;
         return l == r;
     }
-    static bool IsSameColorAttachmentArray(const TAttachmentFlags& lhs, const TAttachmentFlags& rhs){
+    static bool IsSameColorAttachmentArray(const TAttachmentFlags& lhs, const TAttachmentFlags& rhs) {
         bool b_same = true;
         for (int i = 0; i < lhs.size(); ++i) {
             b_same &= IsSameColorAttachmentInPSO(lhs[i], rhs[i]);
@@ -1104,39 +1189,15 @@ public:
         return b_same;
     }
 
-    bool operator==(const RHIGraphicsPipelineStateInitializer& other) const{
-        return shader_stage.p_vertex_description == other.shader_stage.p_vertex_description
-        && shader_stage.p_vertex_shader == other.shader_stage.p_vertex_shader
-        && shader_stage.p_fragment_shader == other.shader_stage.p_fragment_shader
-        && shader_stage.GetMeshShader() == other.shader_stage.GetMeshShader()
-        && shader_stage.GetGeometryShader() == other.shader_stage.GetGeometryShader()
-        && shader_stage.GetAmplificationShader() == other.shader_stage.GetAmplificationShader()
-        && blend_state == other.blend_state
-        && rasterizer_state == other.rasterizer_state
-        && depth_stencil_state == other.depth_stencil_state
-        && primitive_topology == other.primitive_topology
-        && b_depth_bound == other.b_depth_bound
-        && multi_view_count == other.multi_view_count
-        && shading_rate == other.shading_rate
-        && b_has_fragment_density_attachments == other.b_has_fragment_density_attachments
-        && color_attachment_count == other.color_attachment_count
-        && color_attachment_formats == other.color_attachment_formats
-        && IsSameColorAttachmentArray(color_attachment_flags, other.color_attachment_flags)
-        && depth_stencil_format == other.depth_stencil_format
-        && IsSameDepthAttachmentInPSO(depth_stencil_flag, other.depth_stencil_flag)
-        && depth_attachment_load_op == other.depth_attachment_load_op
-        && depth_attachment_store_op == other.depth_attachment_store_op
-        && stencil_attachment_load_op == other.stencil_attachment_load_op
-        && stencil_attachment_store_op == other.stencil_attachment_store_op
-        && num_samples == other.num_samples
-        && subpass_settings == other.subpass_settings;
+    bool operator==(const RHIGraphicsPipelineStateInitializer& other) const {
+        return shader_stage.p_vertex_description == other.shader_stage.p_vertex_description && shader_stage.p_vertex_shader == other.shader_stage.p_vertex_shader && shader_stage.p_fragment_shader == other.shader_stage.p_fragment_shader && shader_stage.GetMeshShader() == other.shader_stage.GetMeshShader() && shader_stage.GetGeometryShader() == other.shader_stage.GetGeometryShader() && shader_stage.GetAmplificationShader() == other.shader_stage.GetAmplificationShader() && blend_state == other.blend_state && rasterizer_state == other.rasterizer_state && depth_stencil_state == other.depth_stencil_state && primitive_topology == other.primitive_topology && b_depth_bound == other.b_depth_bound && multi_view_count == other.multi_view_count && shading_rate == other.shading_rate && b_has_fragment_density_attachments == other.b_has_fragment_density_attachments && color_attachment_count == other.color_attachment_count && color_attachment_formats == other.color_attachment_formats && IsSameColorAttachmentArray(color_attachment_flags, other.color_attachment_flags) && depth_stencil_format == other.depth_stencil_format && IsSameDepthAttachmentInPSO(depth_stencil_flag, other.depth_stencil_flag) && depth_attachment_load_op == other.depth_attachment_load_op && depth_attachment_store_op == other.depth_attachment_store_op && stencil_attachment_load_op == other.stencil_attachment_load_op && stencil_attachment_store_op == other.stencil_attachment_store_op && num_samples == other.num_samples && subpass_settings == other.subpass_settings;
     }
 
-    uint32_t CalcValidColorAttachmentCount() const{
-        if(color_attachment_count > 0){
+    uint32_t CalcValidColorAttachmentCount() const {
+        if (color_attachment_count > 0) {
             int32_t last_index = -1;
-            for (int i = (int)color_attachment_count; i >=0 ; i--) {
-                if(color_attachment_formats[i] != PF_UNDEFINED){
+            for (int i = (int)color_attachment_count; i >= 0; i--) {
+                if (color_attachment_formats[i] != PF_UNDEFINED) {
                     last_index = i;
                     break;
                 }
@@ -1157,10 +1218,10 @@ public:
     TAttachmentFlags   color_attachment_flags;
     EPixelFormat       depth_stencil_format;
     ETextureUsageFlags depth_stencil_flag;
-    EAttachmentLoadOp  depth_attachment_load_op    = EAttachmentLoadOp::DONT_CARE;
-    EAttachmentStoreOp depth_attachment_store_op   = EAttachmentStoreOp::DONT_CARE;
-    EAttachmentLoadOp  stencil_attachment_load_op  = EAttachmentLoadOp::DONT_CARE;
-    EAttachmentStoreOp stencil_attachment_store_op = EAttachmentStoreOp::DONT_CARE;
+    EAttachmentLoadOp  depth_attachment_load_op    = EAttachmentLoadOp::NONE;
+    EAttachmentStoreOp depth_attachment_store_op   = EAttachmentStoreOp::NONE;
+    EAttachmentLoadOp  stencil_attachment_load_op  = EAttachmentLoadOp::NONE;
+    EAttachmentStoreOp stencil_attachment_store_op = EAttachmentStoreOp::NONE;
 
     uint16_t num_samples;
 
@@ -1176,6 +1237,381 @@ public:
     uint64_t hash_key;
 };
 
+
+
+struct Offset2D {
+    int32_t x;
+    int32_t y;
+    bool    operator==(const Offset2D&) const = default;
+};
+struct Extent2D {
+    union {
+        uint32_t width;
+        uint32_t x;
+    };
+    union {
+        uint32_t height;
+        uint32_t y;
+    };
+    Extent2D(uint32_t _x, uint32_t _y) : x(_x), y(_y) {
+    }
+    bool operator==(const Extent2D& other) const {
+        return x == other.x && y == other.y;
+    };
+};
+
+struct Rect2D {
+    Offset2D offset;
+    Extent2D extent;
+
+    Rect2D(int32_t offset_x = -1, int32_t offset_y = -1, uint32_t extent_x = 0, uint32_t extent_y = 0)
+        : offset(offset_x, offset_y),
+          extent(extent_x, extent_y) {}
+
+    bool operator==(Rect2D other) const {
+        return offset == other.offset && extent == other.extent;
+    }
+
+    bool operator!=(Rect2D Other) const {
+        return !(*this == Other);
+    }
+
+    bool IsValid() const {
+        return offset.x >= 0 && offset.y >= 0 && extent.width > 0 && extent.height > 0;
+    }
+};
+
+/* struct for RenderPassInfo Only, constructed by texture_view and Pass-Required texture layout */
+struct RenderAttachmentView {
+    friend RHIViewInfo;
+    RHIView*           texture_view    = nullptr;
+    ETextureLayout     required_layout = TEXTURE_LAYOUT_UNDEFINED;
+    RHIClearAttachment clear_attachment{};
+};
+
+//struct AttachmentAction{
+//    union{
+//        uint8_t value;
+//
+//        struct{
+//            EAttachmentLoadOp  lo_0 : 2;
+//            EAttachmentStoreOp so_0 : 2;
+//            EAttachmentLoadOp  lo_1 : 2;
+//            EAttachmentStoreOp lo_2 : 2;
+//        } depth_stencil_ops;
+//        struct{
+//            EAttachmentLoadOp lo : 4;
+//            EAttachmentStoreOp so : 4;
+//        } color_ops;
+//
+//    };
+//    AttachmentAction(EAttachmentLoadOp _color_load, EAttachmentStoreOp _color_store){
+//        color_ops.lo = _color_load;
+//        color_ops.so = _color_store;
+//    }
+//    AttachmentAction(EAttachmentLoadOp _depth_load, EAttachmentStoreOp _depth_store)
+//    operator uint8_t()const{
+//        return value;
+//    }
+//};
+
+enum EAttachmentAction : uint8_t {
+    /* for inner definition use, do not use directly */
+    INNER_DEPTH_MASK_OFFSET = 4,
+#define MAKE_COLOR_ACTION_MASK(LOAD, STORE) ((uint8_t)EAttachmentLoadOp::LOAD << (uint32_t)EAttachmentStoreOp::NumBits | (uint8_t)EAttachmentStoreOp::STORE)
+    AC_NO_LOAD_NO_STORE = MAKE_COLOR_ACTION_MASK(NONE, NONE),
+    AC_LOAD_NO_STORE    = MAKE_COLOR_ACTION_MASK(LOAD, NONE),
+    AC_LOAD_STORE       = MAKE_COLOR_ACTION_MASK(LOAD, STORE),
+    AC_CLEAR_NO_STORE   = MAKE_COLOR_ACTION_MASK(CLEAR, NONE),
+    AC_NO_LOAD_STORE    = MAKE_COLOR_ACTION_MASK(NONE, STORE),
+    AC_CLEAR_STORE      = MAKE_COLOR_ACTION_MASK(CLEAR, STORE),
+    AC_CLEAR_RESOLVE    = MAKE_COLOR_ACTION_MASK(CLEAR, MULTISAMPLE_RESOLVE),
+    AC_LOAD_RESOLVE     = MAKE_COLOR_ACTION_MASK(CLEAR, MULTISAMPLE_RESOLVE),
+#undef MAKE_COLOR_ACTION_MASK
+
+#define MAKE_DEPTH_STENCIL_MASK(DEPTH, STENCIL) ((uint8_t)EAttachmentAction::DEPTH << (uint32_t)INNER_DEPTH_MASK_OFFSET | (uint8_t)EAttachmentAction::STENCIL)
+    AC_DS_NO_LOAD_NO_STORE   = MAKE_DEPTH_STENCIL_MASK(AC_NO_LOAD_NO_STORE, AC_NO_LOAD_NO_STORE),
+    AC_DS_STORE              = MAKE_DEPTH_STENCIL_MASK(AC_NO_LOAD_STORE, AC_NO_LOAD_STORE),
+    AC_DS_DEPTH_STORE        = MAKE_DEPTH_STENCIL_MASK(AC_NO_LOAD_STORE, AC_NO_LOAD_NO_STORE),
+    AC_DS_STENCIL_STORE      = MAKE_DEPTH_STENCIL_MASK(AC_NO_LOAD_NO_STORE, AC_NO_LOAD_STORE),
+    AC_DS_CLEAR_STORE        = MAKE_DEPTH_STENCIL_MASK(AC_CLEAR_STORE, AC_CLEAR_STORE),
+    AC_DS_LOAD_STORE         = MAKE_DEPTH_STENCIL_MASK(AC_LOAD_STORE, AC_LOAD_STORE),
+    AC_DS_LOAD_STORE_DEPTH   = MAKE_DEPTH_STENCIL_MASK(AC_LOAD_STORE, AC_NO_LOAD_NO_STORE),
+    AC_DS_LOAD_DEPTH         = MAKE_DEPTH_STENCIL_MASK(AC_LOAD_NO_STORE, AC_NO_LOAD_NO_STORE),
+    AC_DS_LOAD_STORE_STENCIL = MAKE_DEPTH_STENCIL_MASK(AC_LOAD_NO_STORE, AC_LOAD_STORE),
+
+    AC_DS_CLEAR_NO_STORE                 = MAKE_DEPTH_STENCIL_MASK(AC_CLEAR_NO_STORE, AC_CLEAR_NO_STORE),
+    AC_DS_LOAD_NO_STORE                  = MAKE_DEPTH_STENCIL_MASK(AC_LOAD_NO_STORE, AC_LOAD_NO_STORE),
+    AC_DS_CLEAR_STORE_DEPTH              = MAKE_DEPTH_STENCIL_MASK(AC_CLEAR_STORE, AC_CLEAR_NO_STORE),
+    AC_DS_CLEAR_STORE_STENCIL            = MAKE_DEPTH_STENCIL_MASK(AC_CLEAR_NO_STORE, AC_CLEAR_STORE),
+    AC_DS_CLEAR_RESOLVE_DEPTH            = MAKE_DEPTH_STENCIL_MASK(AC_CLEAR_RESOLVE, AC_CLEAR_NO_STORE),
+    AC_DS_CLEAR_RESOLVE_STENCIL          = MAKE_DEPTH_STENCIL_MASK(AC_CLEAR_NO_STORE, AC_CLEAR_RESOLVE),
+    AC_DS_LOAD_DEPTH_CLEAR_STENCIL_STORE = MAKE_DEPTH_STENCIL_MASK(AC_LOAD_STORE, AC_CLEAR_STORE),
+    AC_DS_CLEAR_STENCIL_STORE_STENCIL    = MAKE_DEPTH_STENCIL_MASK(AC_NO_LOAD_NO_STORE, AC_CLEAR_STORE)
+#undef MAKE_DEPTH_STENCIL_MASK
+};
+FORCEINLINE EAttachmentAction GetDepthAction(EAttachmentAction _depth_stencil_action) {
+    return (EAttachmentAction)(_depth_stencil_action >> (uint32_t)INNER_DEPTH_MASK_OFFSET);
+}
+FORCEINLINE EAttachmentAction GetStencilAction(EAttachmentAction _depth_stencil_action) {
+    return (EAttachmentAction)(_depth_stencil_action & ((1 << (uint32_t)INNER_DEPTH_MASK_OFFSET) - 1));
+}
+FORCEINLINE EAttachmentLoadOp GetLoadOp(EAttachmentAction _load_store_action) {
+    return (EAttachmentLoadOp)(_load_store_action >> (uint32_t)EAttachmentStoreOp::NumBits);
+}
+FORCEINLINE EAttachmentStoreOp GetStoreOp(EAttachmentAction _load_store_action) {
+    return (EAttachmentStoreOp)(_load_store_action & ((1 << (uint32_t)EAttachmentStoreOp::NumBits)) - 1);
+}
+struct RHIRenderPassInfo {
+    /* different from attachment info, this is used for specific RenderPass only*/
+    struct ColorAttachmentInfo {
+        RenderAttachmentView color_attachment_view;
+        RenderAttachmentView resolve_attachment_view;
+        EAttachmentAction    color_attachment_action;
+    };
+
+    struct DepthStencilAttachmentInfo {
+        RenderAttachmentView depth_stencil_attachment_view{};
+        RenderAttachmentView resolve_attachment_view{};
+        EAttachmentAction    depth_stencil_action;
+    };
+    static_assert(sizeof(ColorAttachmentInfo) == sizeof(DepthStencilAttachmentInfo));
+
+    std::array<ColorAttachmentInfo, MAX_PASS_ATTACHMENT_COUNT> color_attachments;
+    DepthStencilAttachmentInfo                                 depth_stencil_attachment;
+
+    Rect2D render_area;
+
+    //for various shading rate
+    RHITextureRef      shading_rate_texture;
+    EVRSRateCombinerOp vrs_rate_combiner_op;
+
+    //for vulkan subpass
+    SubpassSettings subpass_settings;
+
+    uint8_t multi_view_count = 0;
+
+    RHIRenderPassInfo()                                    = default;
+    RHIRenderPassInfo(const RHIRenderPassInfo&)            = default;
+    RHIRenderPassInfo& operator=(const RHIRenderPassInfo&) = default;
+
+    explicit RHIRenderPassInfo(RenderAttachmentView _color_attachment_view,
+                               ETextureLayout       _color_layout_required,
+                               EAttachmentAction    _color_attachment_action,
+                               RenderAttachmentView _resolve_attachment_view = {}) {
+        assert(_color_attachment_view.texture_view && _color_attachment_view.texture_view->IsTexture() && "color attachment source must be a texture");
+        assert(_resolve_attachment_view.texture_view == nullptr || _resolve_attachment_view.texture_view->GetTexture()->IsMultiSampled() && "resolve attachment source must support multisampling");
+        color_attachments[0].color_attachment_view   = _color_attachment_view;
+        color_attachments[0].color_attachment_action = _color_attachment_action;
+        color_attachments[0].resolve_attachment_view = _resolve_attachment_view;
+    }
+    explicit RHIRenderPassInfo(int32_t               _num_color_attachments,
+                               RenderAttachmentView* _color_attachment_views,
+                               EAttachmentAction     _color_attachment_action) {
+        assert(_num_color_attachments > 0 && _num_color_attachments <= MAX_PASS_ATTACHMENT_COUNT && "color attachment count not valid");
+        for (int i = 0; i < _num_color_attachments; ++i) {
+            assert(_color_attachment_views[i].texture_view != nullptr);
+            color_attachments[i].color_attachment_view   = _color_attachment_views[i];
+            color_attachments[i].color_attachment_action = _color_attachment_action;
+        }
+        depth_stencil_attachment.depth_stencil_attachment_view = {};
+        depth_stencil_attachment.depth_stencil_action          = AC_DS_NO_LOAD_NO_STORE;
+        depth_stencil_attachment.resolve_attachment_view       = {};
+    }
+
+    explicit RHIRenderPassInfo(int32_t               _num_color_attachments,
+                               RenderAttachmentView* _color_attachment_views,
+                               EAttachmentAction     _color_attachment_action,
+                               RenderAttachmentView* _resolve_attachment_views) {
+        assert(_num_color_attachments > 0 && _num_color_attachments <= MAX_PASS_ATTACHMENT_COUNT && "color attachment count not valid");
+        assert(_color_attachment_views && _resolve_attachment_views);
+        for (int i = 0; i < _num_color_attachments; ++i) {
+            assert(_color_attachment_views[i].texture_view != nullptr && _resolve_attachment_views[i].texture_view != nullptr);
+            color_attachments[i].color_attachment_view   = _color_attachment_views[i];
+            color_attachments[i].color_attachment_action = _color_attachment_action;
+
+            color_attachments[i].resolve_attachment_view = _resolve_attachment_views[i];
+        }
+
+        depth_stencil_attachment.depth_stencil_attachment_view = {};
+        depth_stencil_attachment.depth_stencil_action          = AC_DS_NO_LOAD_NO_STORE;
+        depth_stencil_attachment.resolve_attachment_view       = {};
+    }
+
+    explicit RHIRenderPassInfo(int32_t               _num_color_attachments,
+                               RenderAttachmentView* _color_attachment_views,
+                               EAttachmentAction     _color_attachment_action,
+                               RenderAttachmentView  _depth_stencil_attachment_view,
+                               EAttachmentAction     _depth_stencil_action) {
+        assert(_num_color_attachments > 0 && _num_color_attachments <= MAX_PASS_ATTACHMENT_COUNT && "color attachment count not valid");
+        assert(_color_attachment_views && _depth_stencil_attachment_view.texture_view);
+        for (int i = 0; i < _num_color_attachments; ++i) {
+            assert(_color_attachment_views[i].texture_view != nullptr);
+            color_attachments[i].color_attachment_view   = _color_attachment_views[i];
+            color_attachments[i].color_attachment_action = _color_attachment_action;
+        }
+        assert(_depth_stencil_attachment_view.texture_view);
+        depth_stencil_attachment.depth_stencil_attachment_view = _depth_stencil_attachment_view;
+        depth_stencil_attachment.depth_stencil_action          = _depth_stencil_action;
+        depth_stencil_attachment.resolve_attachment_view       = {};
+    }
+    explicit RHIRenderPassInfo(int32_t               _num_color_attachments,
+                               RenderAttachmentView* _color_attachment_views,
+                               EAttachmentAction     _color_attachment_action,
+                               RenderAttachmentView* _resolve_attachment_views,
+                               RenderAttachmentView  _depth_stencil_attachment_view,
+                               RenderAttachmentView  _depth_stencil_attachment_view_resolve,
+                               EAttachmentAction     _depth_stencil_action) {
+        assert(_num_color_attachments > 0 && _num_color_attachments <= MAX_PASS_ATTACHMENT_COUNT && "color attachment count not valid");
+        assert(_color_attachment_views && _resolve_attachment_views && _depth_stencil_attachment_view.texture_view);
+        for (int i = 0; i < _num_color_attachments; ++i) {
+            assert(_color_attachment_views[i].texture_view != nullptr && _resolve_attachment_views[i].texture_view != nullptr);
+            color_attachments[i].color_attachment_view   = _color_attachment_views[i];
+            color_attachments[i].color_attachment_action = _color_attachment_action;
+            color_attachments[i].resolve_attachment_view = _resolve_attachment_views[i];
+        }
+        assert(_depth_stencil_attachment_view.texture_view);
+        depth_stencil_attachment.depth_stencil_attachment_view = _depth_stencil_attachment_view;
+        depth_stencil_attachment.depth_stencil_action          = _depth_stencil_action;
+        depth_stencil_attachment.resolve_attachment_view       = _depth_stencil_attachment_view_resolve;
+    }
+
+    explicit RHIRenderPassInfo(
+        RenderAttachmentView _depth_stencil_attachment_view,
+        EAttachmentAction    _depth_stencil_action,
+        RenderAttachmentView _depth_stencil_attachment_view_resolve = {}) {
+        assert(_depth_stencil_attachment_view.texture_view);
+        depth_stencil_attachment.depth_stencil_attachment_view = _depth_stencil_attachment_view;
+        depth_stencil_attachment.depth_stencil_action          = _depth_stencil_action;
+        depth_stencil_attachment.resolve_attachment_view       = _depth_stencil_attachment_view_resolve;
+    }
+    explicit RHIRenderPassInfo(RenderAttachmentView _color_attachment_view,
+                               ETextureLayout       _color_layout_required,
+                               EAttachmentAction    _color_attachment_action,
+                               RenderAttachmentView _depth_stencil_attachment_view,
+                               EAttachmentAction    _depth_stencil_action) {
+        assert(_color_attachment_view.texture_view && _color_attachment_view.texture_view->IsTexture() && "color attachment source must be a texture");
+        color_attachments[0].color_attachment_view   = _color_attachment_view;
+        color_attachments[0].color_attachment_action = _color_attachment_action;
+        color_attachments[0].resolve_attachment_view = {};
+
+        assert(_depth_stencil_attachment_view.texture_view);
+
+        depth_stencil_attachment.depth_stencil_attachment_view = _depth_stencil_attachment_view;
+        depth_stencil_attachment.depth_stencil_action          = _depth_stencil_action;
+        depth_stencil_attachment.resolve_attachment_view       = {};
+    }
+    explicit RHIRenderPassInfo(RenderAttachmentView _color_attachment_view,
+                               ETextureLayout       _color_layout_required,
+                               EAttachmentAction    _color_attachment_action,
+                               RenderAttachmentView _resolve_attachment_view,
+                               RenderAttachmentView _depth_stencil_attachment_view,
+                               EAttachmentAction    _depth_stencil_action,
+                               RenderAttachmentView _depth_stencil_attachment_view_resolve) {
+        assert(_color_attachment_view.texture_view && _color_attachment_view.texture_view->IsTexture() && "color attachment source must be a texture");
+        assert(_resolve_attachment_view.texture_view == nullptr || _resolve_attachment_view.texture_view->GetTexture()->IsMultiSampled() && "resolve attachment source must support multisampling");
+        color_attachments[0].color_attachment_view   = _color_attachment_view;
+        color_attachments[0].color_attachment_action = _color_attachment_action;
+        color_attachments[0].resolve_attachment_view = _resolve_attachment_view;
+
+        assert(_depth_stencil_attachment_view.texture_view);
+
+        depth_stencil_attachment.depth_stencil_attachment_view = _depth_stencil_attachment_view;
+        depth_stencil_attachment.depth_stencil_action          = _depth_stencil_action;
+        depth_stencil_attachment.resolve_attachment_view       = _depth_stencil_attachment_view_resolve;
+    }
+
+    FORCEINLINE int32_t GetNumColorAttachments() const {
+        int32_t count = 0;
+        for (; count < MAX_PASS_ATTACHMENT_COUNT; count++) {
+            const ColorAttachmentInfo& color_attachment_info = color_attachments[count];
+            if (!color_attachment_info.color_attachment_view.texture_view) {
+                break;
+            }
+        }
+        return count;
+    }
+
+    GraphicsPipelineAttachmentInfo GeneratePipelineAttachmentInfo() const {
+        GraphicsPipelineAttachmentInfo target;
+        target.num_samples             = 1;
+        int32_t color_attachment_index = 0;
+        for (; color_attachment_index < MAX_PASS_ATTACHMENT_COUNT; color_attachment_index++) {
+            const ColorAttachmentInfo& color_attachment_info = color_attachments[color_attachment_index];
+            auto                       texture_view          = color_attachment_info.color_attachment_view.texture_view;
+            if (!texture_view) {
+                break;
+            }
+            target.attachment_formats[color_attachment_index] = texture_view->GetTexture()->GetFormat();
+            target.attachment_flags[color_attachment_index]   = texture_view->GetTexture()->GetUsageFlags();
+            target.num_samples |= texture_view->GetTexture()->GetNumSamples();
+        }
+        target.attachments_count = color_attachment_index;
+        //set empty value
+        for (; color_attachment_index < MAX_PASS_ATTACHMENT_COUNT; ++color_attachment_index) {
+            target.attachment_formats[color_attachment_index] = PF_UNDEFINED;
+        }
+        auto depth_stencil_view = depth_stencil_attachment.depth_stencil_attachment_view.texture_view;
+        if (depth_stencil_view) {
+            target.depth_stencil_attachment_format = depth_stencil_view->GetTexture()->GetFormat();
+            target.depth_stencil_attachment_flag   = depth_stencil_view->GetTexture()->GetUsageFlags();
+            target.num_samples |= depth_stencil_view->GetTexture()->GetNumSamples();
+        } else {
+            target.depth_stencil_attachment_format = PF_UNDEFINED;
+        }
+        auto _depth_action   = GetDepthAction(depth_stencil_attachment.depth_stencil_action);
+        auto _stencil_action = GetStencilAction(depth_stencil_attachment.depth_stencil_action);
+
+        target.depth_attachment_load_op  = GetLoadOp(_depth_action);
+        target.depth_attachment_store_op = GetStoreOp(_depth_action);
+
+        target.stencil_attachment_load_op  = GetLoadOp(_stencil_action);
+        target.stencil_attachment_store_op = GetStoreOp(_stencil_action);
+
+        target.multi_view_count                  = multi_view_count;
+        target.b_has_fragment_density_attachment = shading_rate_texture.get() != nullptr;
+
+        return target;
+    };
+};
+
+
+
+#pragma endregion
+//todo: ray-tracing pipeline definitions
+#pragma region ray-tracing
 #pragma endregion
 
+//todo: for rdg usage
+#pragma region RDG resource creater
+struct RHITextureSRVCreateDesc {
+    explicit RHITextureSRVCreateDesc(uint8_t _mip_level = 0, uint8_t _num_mips = 0, EPixelFormat _format = PF_UNDEFINED)
+        : format(_format),
+          mip_level(_mip_level),
+          num_mips(_num_mips),
+          array_index(0),
+          array_size(0) {}
+
+    explicit RHITextureSRVCreateDesc(uint8_t _mip_level, uint8_t _num_mips, uint16_t _array_index, uint16_t _array_size, EPixelFormat _format = PF_UNDEFINED)
+        : format(_format),
+          mip_level(_mip_level),
+          num_mips(_num_mips),
+          array_index(_array_index),
+          array_size(_array_size) {}
+
+    EPixelFormat format;
+    uint8_t      mip_level;
+    uint8_t      num_mips;
+
+    uint8_t array_index;
+    uint8_t array_size;
+
+    std::optional<ETextureDimension> dimension_override;
+
+    FORCEINLINE bool operator==(const RHITextureSRVCreateDesc& other) const {
+        return format == other.format && mip_level == other.mip_level && num_mips == other.num_mips && array_index == other.array_index && array_size == other.array_size && dimension_override == other.dimension_override;
+    }
+};
+
+#pragma endregion
 #endif// !RHI_RESOURCE_H
