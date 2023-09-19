@@ -1,6 +1,7 @@
 #ifndef EVENT_H
 #define EVENT_H
 #include <mutex>
+#include <condition_variable>
 class Event;
 
 template<class T> class LockQueue;

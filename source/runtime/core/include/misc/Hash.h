@@ -138,6 +138,9 @@ template<typename T>
 FORCEINLINE uint32_t GetHash(const EnumInByte<T>& t) {
     return GetHash(t.value);
 }
+FORCEINLINE uint32_t GetHash(const std::string& value){
+    return std::hash<std::string>{}(value);
+}
 
 struct SHA256Hash {
 public:

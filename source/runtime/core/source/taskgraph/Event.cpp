@@ -52,10 +52,10 @@ void Event::trigger() {
 
 void Event::wait() {
     std::unique_lock<std::mutex> lock{m_mutex};
-    //SPDLOG_WARN("start waiting {} signal {}", Platform::GetCurrentThreadID(), m_signal);
+    //SPDLOG_WARN("start waiting {} signal {}", platform::GetCurrentThreadID(), m_signal);
 
     if (m_signal < 1) {
-        //SPDLOG_WARN("actual waiting thread:{}", Platform::GetCurrentThreadID());
+        //SPDLOG_WARN("actual waiting thread:{}", platform::GetCurrentThreadID());
         m_cond.wait(lock);
     }
     if (m_autoReset) onReset();

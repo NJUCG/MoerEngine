@@ -1,6 +1,7 @@
 #ifndef GRAPH_TASK_H
 #define GRAPH_TASK_H
 #include "ThreadManager.h"
+#include <utility>
 #include <vector>
 #include <memory>
 #include "misc/CountableRef.h"
@@ -49,17 +50,17 @@ class GraphEvent : public Countable {
 
 public:
     GraphEvent() : threadToWaitOn{EThread::UNKNOWN_THREAD} {};
-    ~GraphEvent(){};
+    ~GraphEvent()= default;
     static GraphEventRef CreateGraphEvent();
     bool                 addSubsequent(BaseGraphTask* subsequent);
-    virtual void         Destroy() override {
+    void         Destroy() override {
         delete this;
     }
     bool isComplete();
     void waitUntil(GraphEventRef _eventRef) {
         assert(!isComplete());
 
-        m_events_to_wait.push_back(GraphEventRef(_eventRef));
+        m_events_to_wait.emplace_back(std::move(_eventRef));
     }
     void tryUnlockSubsequents(std::vector<BaseGraphTask*>& tasks, EThread::Type currentThread = EThread::UNKNOWN_THREAD);
     void tryUnlockSubsequents(EThread::Type currentThread = EThread::UNKNOWN_THREAD);

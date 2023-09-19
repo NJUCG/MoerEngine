@@ -12,8 +12,8 @@ enum { MAX_MESH_LOD_COUNT = 8 };
 
 /** The maximum number of vertex elements which can be used by a vertex declaration. */
 enum {
-    MaxVertexElementCount         = 17,
-    MaxVertexElementCount_NumBits = 5,
+    MAX_VERTEX_ELEMENT_COUNT      = 17,
+    MAX_VERTEX_ELEMENT_COUNT_NumBits = 5,
 };
 enum : uint8_t {
     MAX_PASS_ATTACHMENT_COUNT = 8
@@ -267,8 +267,8 @@ enum class EBufferUsageFlags : uint32_t {
 	*/
     ACCELERATION_STRUCTURE = 1 << 13,
 
-    VERTEX_BUFFER  = 1 << 14,
-    INDEX_BUFFER   = 1 << 15,
+    VERTEX_BUFFER     = 1 << 14,
+    INDEX_BUFFER      = 1 << 15,
     STRUCTURED_BUFFER = 1 << 16,
 
     /** Buffer memory is allocated independently for multiple GPUs, rather than shared via driver aliasing */
@@ -329,7 +329,7 @@ enum ERHIResourceType {
     RRT_RASTERIZE_STATE,
     RRT_DEPTH_STENCIL_STATE,
     RRT_BLEND_STATE,
-    RRT_VERTEX_DESCRIPTION,
+    RRT_VERTEX_STATE_INITIALIZER,
     RRT_VERTEX_SHADER,
     RRT_MESH_SHADER,
     RRT_AMPLIFICATION_SHADER,
@@ -354,7 +354,6 @@ enum ERHIResourceType {
     RRT_GPU_FENCE,
     RRT_RenderQuery,
     RRT_RenderQueryPool,
-    RRT_ComputeFence,
     RRT_VIEWPORT,
     RRT_UNORDERED_ACCESS_VIEW,
     RRT_SHADER_RESOURCE_VIEW,
@@ -367,63 +366,63 @@ enum ERHIResourceType {
     RRT_Num
 };
 
-enum class EAttachmentLoadOp: uint8_t {
+enum class EAttachmentLoadOp : uint8_t {
     LOAD,
     CLEAR,
     NONE,
     Num,
     NumBits = 2
-} ;
-static_assert((int32_t) EAttachmentLoadOp:: Num <= 1 << (uint32_t)EAttachmentLoadOp::NumBits, "EAttachmentLoadOp::Num will not fit on EAttachmentLoadOp::NumBits");
-enum class EAttachmentStoreOp: uint8_t {
+};
+static_assert((int32_t)EAttachmentLoadOp::Num <= 1 << (uint32_t)EAttachmentLoadOp::NumBits, "EAttachmentLoadOp::Num will not fit on EAttachmentLoadOp::NumBits");
+enum class EAttachmentStoreOp : uint8_t {
     STORE = 0,
     NONE,
     MULTISAMPLE_RESOLVE,
     Num,
     NumBits = 2
-} ;
-static_assert((int32_t) EAttachmentStoreOp:: Num <= 1 << (uint32_t)EAttachmentStoreOp::NumBits, "EAttachmentStoreOp::Num will not fit on EAttachmentStoreOp::NumBits");
+};
+static_assert((int32_t)EAttachmentStoreOp::Num <= 1 << (uint32_t)EAttachmentStoreOp::NumBits, "EAttachmentStoreOp::Num will not fit on EAttachmentStoreOp::NumBits");
 #pragma endregion
 
 #pragma region pixel format
 
-enum class RHIAccessFlag : uint32_t {
-    UNDEFINED         = 0ULL,
-    INDIRECT_ARGUMENT = 1 << 0,
-    INDEX_BUFFER      = 1 << 1,
-    VERTEX_BUFFER     = 1 << 2,
-    CONSTANT_BUFFER   = 1 << 3, /* constant buffer in dx12 while uniform buffer in vulkan */
-    INPUT_ATTACHMENT  = 1 << 4,
-    SHADER_RESOURCE   = 1 << 5,
-    UNORDERED_ACCESS  = 1 << 6,
-    COLOR_ATTACHMENT  = 1 << 7,
-    //    COLOR_ATTACHMENT_WRITE = 1 << 8,
-    DEPTH_READ   = 1 << 9,
-    DEPTH_WRITE  = 1 << 10,
-    TRANSFER_SRC = 1 << 11,
-    TRANSFER_DST = 1 << 12,
-    PRESENT      = 1 << 15,
-
-    MEMORY_WRITE_BIT = 1 << 16,
-    HOST_READ_BIT    = 1 << 13,
-    HOST_WRITE_BIT   = 1 << 14,
-
-    SHADER_SAMPLED_READ_BIT                   = 1 << 17,
-    SHADER_STORAGE_READ_BIT                   = 1 << 18,
-    SHADER_STORAGE_WRITE_BIT                  = 1 << 19,
-    TRANSFORM_FEEDBACK_WRITE_BIT_EXT          = 1 << 20,
-    TRANSFORM_FEEDBACK_COUNTER_READ_BIT_EXT   = 1 << 21,
-    TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT  = 1 << 22,
-    CONDITIONAL_RENDERING_READ_BIT_EXT        = 1 << 23,
-    COMMAND_PREPROCESS_READ_BIT_NV            = 1 << 24,
-    COMMAND_PREPROCESS_WRITE_BIT_NV           = 1 << 25,
-    FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT = 1 << 26,
-    ACCELERATION_STRUCTURE_READ_BIT           = 1 << 27,
-    ACCELERATION_STRUCTURE_WRITE_BIT          = 1 << 28,
-    FRAGMENT_DENSITY_MAP_READ_BIT_EXT         = 1 << 29
-
-};
-ENUM_BIT_OP_IMPL(RHIAccessFlag, FLAG)
+//enum class RHIAccessFlag : uint32_t {
+//    UNDEFINED         = 0ULL,
+//    INDIRECT_ARGUMENT = 1 << 0,
+//    INDEX_BUFFER      = 1 << 1,
+//    VERTEX_BUFFER     = 1 << 2,
+//    CONSTANT_BUFFER   = 1 << 3, /* constant buffer in dx12 while uniform buffer in vulkan */
+//    INPUT_ATTACHMENT  = 1 << 4,
+//    SHADER_RESOURCE   = 1 << 5,
+//    UNORDERED_ACCESS  = 1 << 6,
+//    COLOR_ATTACHMENT  = 1 << 7,
+//    //    COLOR_ATTACHMENT_WRITE = 1 << 8,
+//    DEPTH_READ   = 1 << 9,
+//    DEPTH_WRITE  = 1 << 10,
+//    TRANSFER_SRC = 1 << 11,
+//    TRANSFER_DST = 1 << 12,
+//    PRESENT      = 1 << 15,
+//
+//    MEMORY_WRITE_BIT = 1 << 16,
+//    HOST_READ_BIT    = 1 << 13,
+//    HOST_WRITE_BIT   = 1 << 14,
+//
+//    SHADER_SAMPLED_READ_BIT                   = 1 << 17,
+//    SHADER_STORAGE_READ_BIT                   = 1 << 18,
+//    SHADER_STORAGE_WRITE_BIT                  = 1 << 19,
+//    TRANSFORM_FEEDBACK_WRITE_BIT_EXT          = 1 << 20,
+//    TRANSFORM_FEEDBACK_COUNTER_READ_BIT_EXT   = 1 << 21,
+//    TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT  = 1 << 22,
+//    CONDITIONAL_RENDERING_READ_BIT_EXT        = 1 << 23,
+//    COMMAND_PREPROCESS_READ_BIT_NV            = 1 << 24,
+//    COMMAND_PREPROCESS_WRITE_BIT_NV           = 1 << 25,
+//    FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT = 1 << 26,
+//    ACCELERATION_STRUCTURE_READ_BIT           = 1 << 27,
+//    ACCELERATION_STRUCTURE_WRITE_BIT          = 1 << 28,
+//    FRAGMENT_DENSITY_MAP_READ_BIT_EXT         = 1 << 29
+//
+//};
+//ENUM_BIT_OP_IMPL(RHIAccessFlag, FLAG)
 
 enum ETextureLayout : uint32_t {
     TEXTURE_LAYOUT_UNDEFINED,
@@ -468,7 +467,7 @@ enum EShaderType : uint8_t {
     ST_NumBits = 4
 };
 static_assert(ST_Num <= (1 << ST_NumBits), "ST_Num exceeds ST_NumBits bound");
-enum EVertexAttributeType {
+enum EVertexElementType :uint8_t {
     VET_None,
     VET_Float1,
     VET_Float2,
@@ -490,12 +489,19 @@ enum EVertexAttributeType {
     VET_UShort4N, // 4 X 16 bit word unsigned, normalized
     VET_URGB10A2N,// 10 bit r, g, b and 2 bit a normalized to (value/1023.0f, value/1023.0f, value/1023.0f, value/3.0f)
     VET_UInt,
-    VET_MAX,
+    VET_Num,
 
     VET_NumBits = 5,
 };
-static_assert(VET_MAX <= (1 << VET_NumBits), "VET_MAX will not fit on VET_NumBits");
+static_assert(VET_Num <= (1 << VET_NumBits), "VET_Num will not fit on VET_NumBits");
 
+enum EVertexInputRate :uint8_t{
+    VIR_VERTEX,
+    VIR_INSTANCE,
+    VIR_Num,
+    VIR_NumBits = 2
+};
+static_assert(VIR_Num < (1 << VIR_NumBits), "VIR_Num will not fit on VIR_NumBits");
 enum ECubeFace {
     CUBE_FACE_PX = 0,
     CUBE_FACE_NX,
@@ -673,12 +679,11 @@ enum ETextureAspectFlagBits {
     IA_MEMORY_PLANE_3_BIT_EXT = 0x400
 };
 
-
 /* various shading rate palette, VSR_{fragment_invocation_count}_{region_size}
  * @fragment_invocation_count means fragment shading invocation per region
  * @region_size means one shading result will be used to color ${regions_size} pixels
  * */
-enum EVariousShadingRate: uint8_t{
+enum EVariousShadingRate : uint8_t {
     VSR_NONE,
     VSR_16_1x1,
     VSR_8_1x1,
@@ -692,7 +697,7 @@ enum EVariousShadingRate: uint8_t{
     VSR_1_4x2,
     VSR_1_4x4
 };
-enum EVRSRateCombinerOp: uint8_t{
+enum EVRSRateCombinerOp : uint8_t {
     VRSRB_KEEP,
     VRSRB_OVERRIDE,
     VRSRB_MIN,
@@ -700,5 +705,24 @@ enum EVRSRateCombinerOp: uint8_t{
     VRSRB_MUL
 };
 
+#pragma endregion
+
+#pragma region shader platform
+enum EShaderPlatform : uint16_t{
+    SP_WIN_D3D_SM5,
+    SP_METAL,
+    SP_WIN_D3D_ES3_1,
+    SP_METAL_SM5,
+    SP_WIN_VULKAN_ES3_1,
+    SP_VULKAN_SM5,
+    SP_VULKAN_SM6,
+    SP_WIN_D3D_SM6,
+    SP_METAL_SM6,
+    SP_CUSTOM_PLATFORM_FIRST,
+    SP_Num,
+    SP_NumBits = 16
+
+};
+static_assert(SP_Num < (1 << SP_NumBits) && "");
 #pragma endregion
 #endif// !RHI_PLATFORM_COMMON_H

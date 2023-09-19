@@ -15,7 +15,7 @@ http://www.boost.org/LICENSE_1_0.txt)
 /* tag::reference[]
 = `BOOST_PLAT_WINDOWS_UWP`
 
-http://docs.microsoft.com/windows/uwp/[Universal Windows Platform]
+http://docs.microsoft.com/windows/uwp/[Universal Windows platform]
 is available if the current development environment is capable of targeting 
 UWP development.
 
@@ -53,7 +53,7 @@ UWP development.
 #   include <winapifamily.h>    // Windows SDK
 #endif
 
-#define BOOST_PLAT_WINDOWS_UWP_NAME "Universal Windows Platform"
+#define BOOST_PLAT_WINDOWS_UWP_NAME "Universal Windows platform"
 
 #endif
 
