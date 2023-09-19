@@ -8,6 +8,7 @@
 #include "API_Macro.h"
 #include <type_traits>
 #include <string>
+#include <cstdint>
 #include "config/ConfigMap.h"
 namespace __ENGINE_NAME__ {
 namespace RHI {

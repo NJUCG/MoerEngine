@@ -82,23 +82,23 @@ namespace __ENGINE_NAME__ {
 //
 //	}
 //	const TaskGraph& interface_ = TaskGraph::getInterface();
-//	SPDLOG_INFO("platform worker group: {}",Platform::GetProcessorWorkGroupCount());
-//	SPDLOG_INFO("platform core count: {}", Platform::GetProcessorCoreCount());
-//	int32_t groupCount = Platform::GetProcessorWorkGroupCount();
+//	SPDLOG_INFO("platform worker group: {}",platform::GetProcessorWorkGroupCount());
+//	SPDLOG_INFO("platform core count: {}", platform::GetProcessorCoreCount());
+//	int32_t groupCount = platform::GetProcessorWorkGroupCount();
 //	for (int32_t i = 0; i < groupCount; i++)
 //	{
-//		SPDLOG_INFO("platform core count in group {}: {}", i, Platform::GetProcessorCoreCountInGroup(i));
+//		SPDLOG_INFO("platform core count in group {}: {}", i, platform::GetProcessorCoreCountInGroup(i));
 //	}
 //
 //	GraphEventRef innerTask = GraphTask<MTask>::CreateTask().ConstructAndDispatchWhenReady(EThread::UNKNOWN_THREAD, "launch inner test task");
 //	GraphEventArray _array{ innerTask };
 //	GraphTask<MTask>::CreateTask(&_array).ConstructAndDispatchWhenReady(EThread::Type(EThread::UNKNOWN_THREAD | EThread::NORMAL_PRI), "launch test task");
 //	auto lambda = []() {
-//		SPDLOG_WARN("functional inner task, thread:{}", Platform::GetCurrentThreadID());
+//		SPDLOG_WARN("functional inner task, thread:{}", platform::GetCurrentThreadID());
 //	};
 //	GraphTask<FunctionGraphTaskInner<void()>>::CreateTask(&_array).ConstructAndDispatchWhenReady(lambda, EThread::setPriority(EThread::UNKNOWN_THREAD, EThread::HIGH_PRI));
 //
-//	FunctionGraphTask::ConstructAndDispatchWhenReady([]() {SPDLOG_WARN("functional outer task, thread:{}", Platform::GetCurrentThreadID()); });
+//	FunctionGraphTask::ConstructAndDispatchWhenReady([]() {SPDLOG_WARN("functional outer task, thread:{}", platform::GetCurrentThreadID()); });
 //
 //	assert(TaskGraphTest());
 //

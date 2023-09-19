@@ -16,7 +16,7 @@
 + [1.4. Dependencies](#section1_4)
 + [1.5. Finding GLM with CMake](#section1_5)
 + [2. Preprocessor configurations](#section2)
-+ [2.1. GLM\_FORCE\_MESSAGES: Platform auto detection and default configuration](#section2_1)
++ [2.1. GLM\_FORCE\_MESSAGES: platform auto detection and default configuration](#section2_1)
 + [2.2. GLM\_FORCE\_PLATFORM\_UNKNOWN: Force GLM to no detect the build platform](#section2_2)
 + [2.3. GLM\_FORCE\_COMPILER\_UNKNOWN: Force GLM to no detect the C++ compiler](#section2_3)
 + [2.4. GLM\_FORCE\_ARCH\_UNKNOWN: Force GLM to no detect the build architecture](#section2_4)
@@ -284,7 +284,7 @@ GLM packages a `glmConfig.cmake` and `glmConfig-version.cmake` in the root of th
 
 ## <a name="section2"></a> 2. Preprocessor configurations
 
-### <a name="section2_1"></a> 2.1. GLM\_FORCE\_MESSAGES: Platform auto detection and default configuration
+### <a name="section2_1"></a> 2.1. GLM\_FORCE\_MESSAGES: platform auto detection and default configuration
 
 When included, GLM will first automatically detect the compiler used, the C++ standard supported, the compiler arguments used to configure itself matching the build environment.
 

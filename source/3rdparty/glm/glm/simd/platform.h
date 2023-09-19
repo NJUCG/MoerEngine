@@ -1,7 +1,7 @@
 #pragma once
 
 ///////////////////////////////////////////////////////////////////////////////////
-// Platform
+// platform
 
 #define GLM_PLATFORM_UNKNOWN		0x00000000
 #define GLM_PLATFORM_WINDOWS		0x00010000

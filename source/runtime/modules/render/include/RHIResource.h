@@ -11,8 +11,115 @@
 #include "misc/CountableRef.h"
 #include <string>
 #include <optional>
+
+#pragma region forward definitions
 class RHITexture;
-using RHITextureRef = CountableRef<RHITexture>;
+class RHIAmplificationShader;
+class RHIBlendState;
+class RHIShaderStage;
+class RHIBuffer;
+class RHIComputePipelineState;
+class RHIComputeShader;
+class RHIDepthStencilState;
+class RHIGeometryShader;
+class RHIFence;
+class RHIGraphicsPipelineState;
+class RHIMeshShader;
+class RHIPipelineBinaryDataLibrary;
+class RHIFragmentShader;
+class RHIRasterizationState;
+//class RHIRayTracingGeometry;
+class RHIRayTracingPipelineState;
+//class RHIRayTracingScene;
+//class RHIRayTracingShader;
+//class RHIRenderQuery;
+//class RHIRenderQueryPool;
+class RHIResource;
+class RHISampler;
+class RHIShader;
+class RHIShaderLibrary;
+class RHIShaderResourceView;
+class RHIStagingBuffer;
+class RHITexture;
+class RHITextureReference;
+class RHIUniformBuffer;
+class RHIUnorderedAccessView;
+class RHIVertexInputStateInitializer;
+class RHIVertexShader;
+class RHIViewableResource;
+class RHIViewport;
+
+struct RHIUniformBufferLayout;
+
+using RHIAmplificationShaderRef       = CountableRef<RHIAmplificationShader>;
+using RHIBlendStateRef                = CountableRef<RHIBlendState>;
+using RHIShaderStageRef               = CountableRef<RHIShaderStage>;
+using RHIBufferRef                    = CountableRef<RHIBuffer>;
+using RHIComputePipelineStateRef      = CountableRef<RHIComputePipelineState>;
+using RHIComputeShaderRef             = CountableRef<RHIComputeShader>;
+using RHIDepthStencilStateRef         = CountableRef<RHIDepthStencilState>;
+using RHIGeometryShaderRef            = CountableRef<RHIGeometryShader>;
+using RHIFenceRef                     = CountableRef<RHIFence>;
+using RHIGraphicsPipelineStateRef     = CountableRef<RHIGraphicsPipelineState>;
+using RHIMeshShaderRef                = CountableRef<RHIMeshShader>;
+using RHIPipelineBinaryDataLibraryRef = CountableRef<RHIPipelineBinaryDataLibrary>;
+using RHIFragmentShaderRef            = CountableRef<RHIFragmentShader>;
+using RHIRasterizationStateRef        = CountableRef<RHIRasterizationState>;
+//using RHIRayTracingGeometryRef = CountableRef< RHIRayTracingGeometry>;
+using RHIRayTracingPipelineStateRef = CountableRef<RHIRayTracingPipelineState>;
+//using RHIRayTracingSceneRef = CountableRef< RHIRayTracingScene>;
+//using RHIRayTracingShaderRef = CountableRef< RHIRayTracingShader>;
+//using RHIRenderQueryRef = CountableRef< RHIRenderQuery>;
+//using RHIRenderQueryPoolRef = CountableRef< RHIRenderQueryPool>;
+using RHIResourceRef                    = CountableRef<RHIResource>;
+using RHISamplerRef                     = CountableRef<RHISampler>;
+using RHIShaderRef                      = CountableRef<RHIShader>;
+using RHIShaderLibraryRef               = CountableRef<RHIShaderLibrary>;
+using RHIShaderResourceViewRef          = CountableRef<RHIShaderResourceView>;
+using RHIStagingBufferRef               = CountableRef<RHIStagingBuffer>;
+using RHITextureRef                     = CountableRef<RHITexture>;
+using RHITextureReferenceRef            = CountableRef<RHITextureReference>;
+using RHIUniformBufferRef               = CountableRef<RHIUniformBuffer>;
+using RHIUnorderedAccessViewRef         = CountableRef<RHIUnorderedAccessView>;
+using RHIVertexInputStateInitializerRef = CountableRef<RHIVertexInputStateInitializer>;
+using RHIVertexShaderRef                = CountableRef<RHIVertexShader>;
+using RHIViewableResourceRef            = CountableRef<RHIViewableResource>; 
+using RHIViewportRef                    = CountableRef<RHIViewport>;
+#pragma endregion
+
+#pragma region utils definition
+struct VertexElement {
+    VertexElement() = default;
+    VertexElement(
+        uint8_t            _binding_index,
+        uint8_t            _offset,
+        EVertexElementType _type,
+        uint8_t            _attribute_index,
+        uint16_t           _stride,
+        EVertexInputRate   _input_rate)
+        : binding_index(_binding_index),
+          offset(_offset),
+          type(_type),
+          attribute_index(_attribute_index),
+          stride(_stride),
+          input_rate(_input_rate) {}
+
+    bool operator==(const VertexElement& other) const {
+        return binding_index == other.binding_index && offset == other.offset && type == other.type && attribute_index == other.attribute_index && stride == other.stride && input_rate == other.input_rate;
+    }
+    uint8_t                        binding_index;
+    uint8_t                        offset;
+    EnumInByte<EVertexElementType> type;
+    uint8_t                        attribute_index;
+    uint16_t                       stride;
+    EnumInByte<EVertexInputRate>   input_rate;
+    uint8_t                        _reserve_byte_;
+};
+static_assert(sizeof(VertexElement) == 8, "VertexElement doesn't match cache line size");
+
+typedef std::array<struct FVertexElement, MAX_VERTEX_ELEMENT_COUNT> VertexInputStateInitializerList;
+
+#pragma endregion
 
 class RHI_API RHIResource {
 public:
@@ -20,69 +127,113 @@ public:
     virtual ~RHIResource() = default;
 
 public:
-    int32_t AddRef() {
-        return m_counter.fetch_add(1) + 1;
+    uint32_t AddRef() {
+        //first AddRef() happens before DeRef
+        int32_t ref_count = flags.AddRef(std::memory_order_acquire);
+        assert(ref_count > 0);
+        return ref_count;
     };
-    virtual void Destroy() = 0;
-    int32_t      DeRef() {
-        assert(m_counter >= 0);
-        int32_t current = m_counter.fetch_sub(1);
-        if (current == 1) {
+
+    uint32_t DeRef() {
+        int32_t ref_count = flags.DeRef(std::memory_order_release);
+        assert(ref_count >= 0);
+        if (ref_count == 0) {
             Destroy();
         }
-        return current - 1;
+        return (uint32_t)ref_count;
     };
-    int32_t GetRefCount() { return m_counter.load(); }
+    //only for look-up purposes, don't care about sequences
+    uint32_t GetRefCount() const { return (uint32_t)flags.GetRefCount(std::memory_order_relaxed); }
+
+    bool IsValid() const { return flags.IsValid(std::memory_order_relaxed); }
+    void Delete() {
+        if (flags.MarkToDelete(std::memory_order_acquire)) {
+            g_current_deleting = this;
+            delete this;
+        }
+    }
+    ERHIResourceType GetResourceType() const {
+        return type;
+    }
 
 protected:
-    std::atomic<int32_t> m_counter;
-
 private:
+    RHI_API void Destroy() const;
     struct ResourceAtomicFlags {
-        std::atomic_int32_t ref_count;
-        std::atomic_bool    b_pending_deleting;
+        std::atomic<uint32_t> packed;
+
+        static constexpr uint32_t s_mark_for_delete_mask = 1 << 31;
+        static constexpr uint32_t s_is_deleting_mask     = 1 << 30;
+        static constexpr uint32_t s_ref_count_mask       = s_is_deleting_mask - 1;
 
     public:
         int32_t AddRef(std::memory_order memory_order) {
-            return ref_count.fetch_add(1, memory_order) + 1;
+            uint32_t current_packed = packed.fetch_add(1, memory_order);
+            assert((current_packed & s_is_deleting_mask) == 0 && "resource is deleting");
+            int32_t num_ref = (current_packed & s_ref_count_mask) + 1;
+            assert(num_ref < s_mark_for_delete_mask);
+            return num_ref;
         }
         int32_t DeRef(std::memory_order memory_order) {
-            return ref_count.fetch_sub(1, memory_order) - 1;
+            uint32_t current_packed = packed.fetch_sub(1, memory_order);
+            assert((current_packed & s_is_deleting_mask) == 0 && "resource is deleting");
+            int32_t num_ref = (current_packed & s_ref_count_mask) - 1;
+            assert(num_ref >= 0);
+            return num_ref;
         }
         bool MarkToDelete(std::memory_order memory_order) {
-            return b_pending_deleting.exchange(true, memory_order);
+            uint32_t current_packed = packed.fetch_or(s_mark_for_delete_mask, memory_order);
+            assert((current_packed & s_is_deleting_mask) == 0 && "resource is deleting");
+            return (current_packed & s_mark_for_delete_mask) != 0;
         }
+
         bool UnMarkToDelete(std::memory_order memory_order) {
-            return b_pending_deleting.exchange(false, memory_order);
+            uint32_t current_packed = packed.fetch_xor(s_mark_for_delete_mask, memory_order);
+            assert((current_packed & s_is_deleting_mask) == 0 && "resource is deleting");
+            bool current_mark_for_delete = (current_packed & s_mark_for_delete_mask) != 0;
+            assert(current_mark_for_delete && "resource is not marked for deleting");
+            return current_mark_for_delete;
         }
-        bool IsDeleteing() {
-            assert(b_pending_deleting.load(std::memory_order_relaxed) == 1);
-            if (ref_count.load(std::memory_order_acquire) != 0) {
+        bool IsDeleting() {
+            /* make sure packed data processing sequence handled correctly - acquire-rel */
+            uint32_t current_packed = packed.load(std::memory_order_acquire);
+            assert((current_packed & s_mark_for_delete_mask) != 0 && "resource not marked for deleting");
+            assert((current_packed & s_is_deleting_mask) != 0 && "resource is currently deleting");
+            uint32_t num_ref = current_packed & s_ref_count_mask;
+            if (num_ref == 0) {
                 return true;
             }
-            b_pending_deleting.exchange(false, std::memory_order_release);
+            UnMarkToDelete(std::memory_order_release);
             return false;
         }
         bool IsValid(std::memory_order memory_order) {
-            return !b_pending_deleting.load(memory_order) && ref_count.load(memory_order) > 0;
+            uint32_t current_packed = packed.load(memory_order);
+            return (current_packed & s_mark_for_delete_mask) == 0 && (current_packed & s_ref_count_mask) > 0;
+        }
+
+        bool IsMarkedForDeleting(std::memory_order memory_order) {
+            return (packed.load(memory_order) & s_mark_for_delete_mask) != 0;
         }
         int32_t GetRefCount(std::memory_order memory_order) {
-            std::unordered_set<uint32_t> s;
-            s.count(1);
-            return ref_count.load(memory_order);
+            return packed.load(memory_order) & s_ref_count_mask;
         }
     };
     ERHIResourceType type;
     //for const resource state change
-    mutable ResourceAtomicFlags                      flags;
-    static std::atomic<StatMPSCQueue<RHIResource*>*> pending_deletings;
+    mutable ResourceAtomicFlags flags;
+    //todo: unknown purposes
+    static RHIResource* g_current_deleting;
 };
 
 class RHISampler : public RHIResource {
 public:
     explicit RHISampler() : RHIResource(RRT_SAMPLER) {}
 };
-
+class RHIVertexInputStateInitializer : public RHIResource {
+public:
+    RHIVertexInputStateInitializer() : RHIResource(RRT_VERTEX_STATE_INITIALIZER) {}
+    virtual bool GetInitializer(VertexInputStateInitializerList& _initializer_list) { return false; }
+};
 class RHIRasterizationState : public RHIResource {
 public:
     explicit RHIRasterizationState() : RHIResource(RRT_RASTERIZE_STATE) {}
@@ -103,7 +254,7 @@ public:
 
 class RHIVertexDescription : public RHIResource {
 public:
-    explicit RHIVertexDescription() : RHIResource(RRT_VERTEX_DESCRIPTION) {}
+    explicit RHIVertexDescription() : RHIResource(RRT_VERTEX_STATE_INITIALIZER) {}
 };
 
 class RHIPipelineShaderBindingState : public RHIResource {
@@ -243,8 +394,8 @@ struct RHIBufferInfo {
             0,
             EBufferUsageFlags::NONE};
     }
-    bool IsNull()const{
-        return usage == EBufferUsageFlags::NONE && size==stride && size==0;
+    bool IsNull() const {
+        return usage == EBufferUsageFlags::NONE && size == stride && size == 0;
     }
 };
 /* index, vertex, staging, indirect */
@@ -451,7 +602,7 @@ class RHITexture : public RHIViewableResource {
 public:
     virtual const RHITextureInfo& GetInfo() const { return texture_info; }
 
-    virtual RHITextureRef* GetTextureRef() { return nullptr; }
+    virtual class RHITextureReference* GetTextureRef() { return nullptr; }
 
     virtual void* GetNativeResource() const { return nullptr; }
 
@@ -503,10 +654,11 @@ protected:
     RHITexture(const RHITextureCreateInfo& _info);
 
 private:
-    friend RHITextureRef;
+    friend class RHITextureReference;
     explicit RHITexture(ERHIResourceType _type) : RHIViewableResource(_type) {}
     RHITextureInfo texture_info;
 };
+
 #pragma endregion
 /* fences in dx12, fence and timeline semaphore in vulkan */
 class RHIFence : public RHIResource {
@@ -664,7 +816,7 @@ struct RHIViewInfo::Texture::ViewInfo {
     uint8_t           b_all_array_slices : 1;
 };
 
-struct RHIViewInfo::BufferUAV::ViewInfo: public RHIViewInfo::Buffer::ViewInfo {
+struct RHIViewInfo::BufferUAV::ViewInfo : public RHIViewInfo::Buffer::ViewInfo {
 
     //hlsl usage
     bool b_atomic_counter;
@@ -676,12 +828,12 @@ struct RHIViewInfo::BufferUAV::ViewInfo: public RHIViewInfo::Buffer::ViewInfo {
 struct RHIViewInfo::BufferSRV::ViewInfo : public RHIViewInfo::Buffer::ViewInfo {
 };
 
-struct RHIViewInfo::TextureSRV::ViewInfo: public RHIViewInfo::Texture::ViewInfo {
+struct RHIViewInfo::TextureSRV::ViewInfo : public RHIViewInfo::Texture::ViewInfo {
     uint8_t mip_min;
     uint8_t mip_num;
 };
 
-struct RHIViewInfo::TextureUAV::ViewInfo: public RHIViewInfo::Texture::ViewInfo {
+struct RHIViewInfo::TextureUAV::ViewInfo : public RHIViewInfo::Texture::ViewInfo {
     //texture uav support one mip level
     uint8_t mip_level;
 };
@@ -833,7 +985,6 @@ public:
     }
 };
 
-
 FORCEINLINE RHIViewInfo::BufferSRV::Initializer RHIViewInfo::CreateBufferSRVInfo() {
     return {};
 }
@@ -848,7 +999,6 @@ FORCEINLINE RHIViewInfo::TextureSRV::Initializer RHIViewInfo::CreateTextureSRVIn
 FORCEINLINE RHIViewInfo::TextureUAV::Initializer RHIViewInfo::CreateTextureUAVInfo() {
     return {};
 }
-
 
 class RHIView : public RHIResource {
 public:
@@ -1237,8 +1387,6 @@ public:
     uint64_t hash_key;
 };
 
-
-
 struct Offset2D {
     int32_t x;
     int32_t y;
@@ -1362,6 +1510,7 @@ FORCEINLINE EAttachmentLoadOp GetLoadOp(EAttachmentAction _load_store_action) {
 FORCEINLINE EAttachmentStoreOp GetStoreOp(EAttachmentAction _load_store_action) {
     return (EAttachmentStoreOp)(_load_store_action & ((1 << (uint32_t)EAttachmentStoreOp::NumBits)) - 1);
 }
+using RHITextureRef = CountableRef<RHITexture>;
 struct RHIRenderPassInfo {
     /* different from attachment info, this is used for specific RenderPass only*/
     struct ColorAttachmentInfo {
@@ -1396,7 +1545,6 @@ struct RHIRenderPassInfo {
     RHIRenderPassInfo& operator=(const RHIRenderPassInfo&) = default;
 
     explicit RHIRenderPassInfo(RenderAttachmentView _color_attachment_view,
-                               ETextureLayout       _color_layout_required,
                                EAttachmentAction    _color_attachment_action,
                                RenderAttachmentView _resolve_attachment_view = {}) {
         assert(_color_attachment_view.texture_view && _color_attachment_view.texture_view->IsTexture() && "color attachment source must be a texture");
@@ -1476,9 +1624,11 @@ struct RHIRenderPassInfo {
         depth_stencil_attachment.resolve_attachment_view       = _depth_stencil_attachment_view_resolve;
     }
 
+    //depth stencil only, to distinguish from color only initilization
     explicit RHIRenderPassInfo(
         RenderAttachmentView _depth_stencil_attachment_view,
         EAttachmentAction    _depth_stencil_action,
+        int32_t              var_ignore                             = 1,
         RenderAttachmentView _depth_stencil_attachment_view_resolve = {}) {
         assert(_depth_stencil_attachment_view.texture_view);
         depth_stencil_attachment.depth_stencil_attachment_view = _depth_stencil_attachment_view;
@@ -1486,7 +1636,6 @@ struct RHIRenderPassInfo {
         depth_stencil_attachment.resolve_attachment_view       = _depth_stencil_attachment_view_resolve;
     }
     explicit RHIRenderPassInfo(RenderAttachmentView _color_attachment_view,
-                               ETextureLayout       _color_layout_required,
                                EAttachmentAction    _color_attachment_action,
                                RenderAttachmentView _depth_stencil_attachment_view,
                                EAttachmentAction    _depth_stencil_action) {
@@ -1502,7 +1651,6 @@ struct RHIRenderPassInfo {
         depth_stencil_attachment.resolve_attachment_view       = {};
     }
     explicit RHIRenderPassInfo(RenderAttachmentView _color_attachment_view,
-                               ETextureLayout       _color_layout_required,
                                EAttachmentAction    _color_attachment_action,
                                RenderAttachmentView _resolve_attachment_view,
                                RenderAttachmentView _depth_stencil_attachment_view,
@@ -1575,8 +1723,6 @@ struct RHIRenderPassInfo {
     };
 };
 
-
-
 #pragma endregion
 //todo: ray-tracing pipeline definitions
 #pragma region ray-tracing
@@ -1614,4 +1760,54 @@ struct RHITextureSRVCreateDesc {
 };
 
 #pragma endregion
+
+class RHITextureReference final : public RHITexture {
+};
+
+class RHIShaderLibrary : public RHIResource {
+public:
+    RHIShaderLibrary(EShaderPlatform _platform, std::string const& _name)
+        : RHIResource(RRT_SHADER_LIBRARY),
+          platform(_platform),
+          library_name(_name),
+          library_id(GetHash(_name)) {}
+    virtual ~RHIShaderLibrary() = default;
+
+    FORCEINLINE EShaderPlatform GetPlatform() const { return platform; }
+    FORCEINLINE const std::string& GetName() const { return library_name; }
+    FORCEINLINE uint32_t           GetId() const { return library_id; }
+
+    virtual bool       IsNativeLibrary() const                                    = 0;
+    virtual int32_t    GetNumShaderMaps() const                                   = 0;
+    virtual int32_t    GetNumShaders() const                                      = 0;
+    virtual int32_t    GetNumShadersForShaderMap(int32_t ShaderMapIndex) const    = 0;
+    virtual int32_t    GetShaderIndex(int32_t ShaderMapIndex, int32_t i) const    = 0;
+    virtual SHA256Hash GetShaderHash(int32_t ShaderMapIndex, int32_t ShaderIndex) = 0;
+    virtual int32_t    FindShaderMapIndex(const SHA256Hash& Hash)                 = 0;
+    virtual int32_t    FindShaderIndex(const SHA256Hash& Hash)                    = 0;
+    //    virtual bool PreloadShader(int32_t ShaderIndex, FGraphEventArray& OutCompletionEvents) { return false; }
+    //    virtual bool PreloadShaderMap(int32_t ShaderMapIndex, FGraphEventArray& OutCompletionEvents) { return false; }
+    //    virtual bool PreloadShaderMap(int32_t ShaderMapIndex, FCoreDelegates::FAttachShaderReadRequestFunc AttachShaderReadRequestFunc) { return false; }
+    virtual void ReleasePreloadedShader(int32_t ShaderIndex) {}
+
+    virtual CountableRef<RHIShader> CreateShader(int32_t ShaderIndex) { return nullptr; }
+    virtual void                    Teardown(){};
+
+protected:
+    EShaderPlatform platform;
+    std::string     library_name;
+    uint32_t        library_id;
+};
+
+class RHIPipelineBinaryDataLibrary : public RHIResource {
+public:
+    RHIPipelineBinaryDataLibrary(EShaderPlatform InPlatform, std::string const& FilePath) : RHIResource(RRT_PIPELINE_BINARY_DATA_LIBRARY), Platform(InPlatform) {}
+    virtual ~RHIPipelineBinaryDataLibrary() = default;
+
+    FORCEINLINE EShaderPlatform GetPlatform() const { return Platform; }
+
+protected:
+    EShaderPlatform Platform;
+};
+
 #endif// !RHI_RESOURCE_H
