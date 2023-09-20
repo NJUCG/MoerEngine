@@ -1,4 +1,4 @@
-#include "RHIResourceInitilizer.h"
+#include "rhi/RHIResourceInitilizer.h"
 #include "misc/Hash.h"
 uint32_t GetHash(const RHISamplerInitializer& target) {
     uint32_t hash;

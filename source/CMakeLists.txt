@@ -14,7 +14,7 @@ add_compile_definitions("__ENGINE_NAME__=${CMAKE_PROJECT_NAME}")
 #########################
 
 set(SUPPORTED_RHI_APIS Vulkan DX12)
-set(RHI_API Vulkan CACHE STRING "Choosen Render Hardware API")
+set(RHI_API Vulkan CACHE STRING "Chosen Render Hardware API")
 set_property(CACHE RHI_API PROPERTY STRINGS ${SUPPORTED_RHI_APIS})
 
 if(NOT RHI_API IN_LIST SUPPORTED_RHI_APIS)

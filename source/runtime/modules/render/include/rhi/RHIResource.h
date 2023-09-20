@@ -6,7 +6,7 @@
 #include "PixelFormat.h"
 #include <cassert>
 #include <atomic>
-#include <misc/StatQueue.h>
+#include "misc/StatQueue.h"
 #include <unordered_set>
 #include "misc/CountableRef.h"
 #include <string>
@@ -16,7 +16,7 @@
 class RHITexture;
 class RHIAmplificationShader;
 class RHIBlendState;
-class RHIShaderStage;
+class RHIShaderBoundState;
 class RHIBuffer;
 class RHIComputePipelineState;
 class RHIComputeShader;
@@ -36,6 +36,7 @@ class RHIRayTracingPipelineState;
 //class RHIRenderQueryPool;
 class RHIResource;
 class RHISampler;
+class RHIMultisampleState;
 class RHIShader;
 class RHIShaderLibrary;
 class RHIShaderResourceView;
@@ -44,7 +45,7 @@ class RHITexture;
 class RHITextureReference;
 class RHIUniformBuffer;
 class RHIUnorderedAccessView;
-class RHIVertexInputStateInitializer;
+class RHIVertexInputState;
 class RHIVertexShader;
 class RHIViewableResource;
 class RHIViewport;
@@ -53,7 +54,7 @@ struct RHIUniformBufferLayout;
 
 using RHIAmplificationShaderRef       = CountableRef<RHIAmplificationShader>;
 using RHIBlendStateRef                = CountableRef<RHIBlendState>;
-using RHIShaderStageRef               = CountableRef<RHIShaderStage>;
+using RHIShaderBoundStateRef          = CountableRef<RHIShaderBoundState>;
 using RHIBufferRef                    = CountableRef<RHIBuffer>;
 using RHIComputePipelineStateRef      = CountableRef<RHIComputePipelineState>;
 using RHIComputeShaderRef             = CountableRef<RHIComputeShader>;
@@ -73,6 +74,7 @@ using RHIRayTracingPipelineStateRef = CountableRef<RHIRayTracingPipelineState>;
 //using RHIRenderQueryPoolRef = CountableRef< RHIRenderQueryPool>;
 using RHIResourceRef                    = CountableRef<RHIResource>;
 using RHISamplerRef                     = CountableRef<RHISampler>;
+using RHIMultisampleStateRef           = CountableRef<RHIMultisampleState>;
 using RHIShaderRef                      = CountableRef<RHIShader>;
 using RHIShaderLibraryRef               = CountableRef<RHIShaderLibrary>;
 using RHIShaderResourceViewRef          = CountableRef<RHIShaderResourceView>;
@@ -81,9 +83,9 @@ using RHITextureRef                     = CountableRef<RHITexture>;
 using RHITextureReferenceRef            = CountableRef<RHITextureReference>;
 using RHIUniformBufferRef               = CountableRef<RHIUniformBuffer>;
 using RHIUnorderedAccessViewRef         = CountableRef<RHIUnorderedAccessView>;
-using RHIVertexInputStateInitializerRef = CountableRef<RHIVertexInputStateInitializer>;
+using RHIVertexInputStateRef = CountableRef<RHIVertexInputState>;
 using RHIVertexShaderRef                = CountableRef<RHIVertexShader>;
-using RHIViewableResourceRef            = CountableRef<RHIViewableResource>; 
+using RHIViewableResourceRef            = CountableRef<RHIViewableResource>;
 using RHIViewportRef                    = CountableRef<RHIViewport>;
 #pragma endregion
 
@@ -229,27 +231,32 @@ class RHISampler : public RHIResource {
 public:
     explicit RHISampler() : RHIResource(RRT_SAMPLER) {}
 };
-class RHIVertexInputStateInitializer : public RHIResource {
+class RHIVertexInputState : public RHIResource {
 public:
-    RHIVertexInputStateInitializer() : RHIResource(RRT_VERTEX_STATE_INITIALIZER) {}
+    RHIVertexInputState() : RHIResource(RRT_VERTEX_STATE_INITIALIZER) {}
     virtual bool GetInitializer(VertexInputStateInitializerList& _initializer_list) { return false; }
 };
 class RHIRasterizationState : public RHIResource {
 public:
     explicit RHIRasterizationState() : RHIResource(RRT_RASTERIZE_STATE) {}
-    virtual bool GetInitializer(struct RHIRasterizationStateInitializer& _init) { return false; }
+//    virtual bool GetInitializer(struct RHIRasterizationStateInitializer& _init) { return false; }
 };
 
 class RHIDepthStencilState : public RHIResource {
 public:
     explicit RHIDepthStencilState() : RHIResource(RRT_DEPTH_STENCIL_STATE) {}
-    virtual bool GetInitializer(struct RHIDepthStencilStateInitializer& _init) { return false; }
+//    virtual bool GetInitializer(struct RHIDepthStencilStateInitializer& _init) { return false; }
 };
 
+class RHIMultisampleState : public RHIResource {
+public:
+    explicit RHIMultisampleState() : RHIResource(RRT_MULTI_SAMPLE_STATE) {}
+//    virtual bool GetInitializer(RHIDepthStencilStateInitializer& _init) { return false; }
+};
 class RHIBlendState : public RHIResource {
 public:
     explicit RHIBlendState() : RHIResource(RRT_BLEND_STATE) {}
-    virtual bool GetInitializer(struct RHIBlendStateInitializer& _init) { return false; }
+//    virtual bool GetInitializer(struct RHIBlendStateInitializer& _init) { return false; }
 };
 
 class RHIVertexDescription : public RHIResource {
@@ -1170,10 +1177,10 @@ private:
     EAttachmentStoreOp stencil_store_op;
 };
 
-struct RHIShaderStage {
+struct RHIShaderBoundState {
 
-    RHIShaderStage() = default;
-    RHIShaderStage(
+    RHIShaderBoundState() = default;
+    RHIShaderBoundState(
         RHIVertexDescription* _vertex_description,
         RHIVertexShader*      _vertex_shader,
         RHIFragmentShader*    _fragment_shader,
@@ -1182,7 +1189,7 @@ struct RHIShaderStage {
           p_fragment_shader(_fragment_shader),
           p_geometry_shader(_geometry_shader) {}
 
-    RHIShaderStage(
+    RHIShaderBoundState(
         RHIFragmentShader*      _fragment_shader,
         RHIMeshShader*          _mesh_shader,
         RHIAmplificationShader* _amplification_shader)
@@ -1280,7 +1287,7 @@ public:
           hash_key(0) {}
 
     RHIGraphicsPipelineStateInitializer(
-        RHIShaderStage            _shader_stage,
+        RHIShaderBoundState       _shader_stage,
         RHIBlendState*            _blend_state,
         RHIRasterizationState*    _rasterizer_state,
         RHIDepthStencilState*     _depth_stencil_state,
@@ -1357,7 +1364,7 @@ public:
         return color_attachment_count;
     }
 
-    RHIShaderStage         shader_stage;
+    RHIShaderBoundState    shader_stage;
     RHIBlendState*         blend_state;
     RHIRasterizationState* rasterizer_state;
     RHIDepthStencilState*  depth_stencil_state;
