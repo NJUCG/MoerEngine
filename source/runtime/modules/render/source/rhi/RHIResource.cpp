@@ -1,7 +1,7 @@
 //
 // Created by JohnW1ck on 2023/9/17.
 //
-#include "RHIResource.h"
+#include "rhi/RHIResource.h"
 
 void RHIResource::Destroy() const{
     //mark resource to be deleted

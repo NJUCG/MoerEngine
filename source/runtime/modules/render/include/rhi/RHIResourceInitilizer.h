@@ -253,7 +253,7 @@ struct RHIClearAttachment {
 };
 
 struct RHICopyTextureInfo {
-    // Number of texels to copy. By default it will copy the whole resource if no size is specified.
+    // Number of texels to copy. By default, it will copy the whole resource if no size is specified.
     int3 size;
 
     // Position of the copy from the source texture/to destination texture

@@ -30,6 +30,5 @@ target_link_libraries(${TARGET_NAME}
     #spirv-cross-cpp
     #spirv-cross-glsl
     #spirv-cross-reflect
-    PRIVATE ${vulkan_lib}
     PUBLIC spdlog::spdlog_header_only
 )
