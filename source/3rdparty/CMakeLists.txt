@@ -4,7 +4,7 @@ set(third_party_folder "3rdParty")
 if(WIN32)
     set(vulkan_lib "${THIRD_PARTY_DIR}/VulkanSDK/lib/Windows/vulkan-1.lib" PARENT_SCOPE)
     set(glslangValidator "${THIRD_PARTY_DIR}/VulkanSDK/binary/Windows/glslangValidator.exe" PARENT_SCOPE)
-    # ³ÌÐòÄÚ²¿Éú³ÉÏµÍ³Â·¾¶£¬Ê¹ÓÃ×Ô¼ºµÄVK_LAYER_PATH
+    # ï¿½ï¿½ï¿½ï¿½ï¿½Ú²ï¿½ï¿½ï¿½ï¿½ï¿½ÏµÍ³Â·ï¿½ï¿½ï¿½ï¿½Ê¹ï¿½ï¿½ï¿½Ô¼ï¿½ï¿½ï¿½VK_LAYER_PATH
     add_compile_definitions("${CMAKE_PROJECT_NAME}_VK_LAYER_PATH=${THIRD_PARTY_DIR}/VulkanSDK/binary/Windows")
 
 elseif(APPLE)
@@ -19,6 +19,7 @@ endif()
 
 IF(NOT TARGET spdlog)
     ADD_SUBDIRECTORY(spdlog)
+    SET_TARGET_PROPERTIES(spdlog PROPERTIES FOLDER ${third_party_folder})
 ENDIF()
 
     option(BUILD_STATIC_LIBS ON)

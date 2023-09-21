@@ -72,6 +72,10 @@ public:
 
     virtual void RHICopyBuffer(RHIBuffer* _src, RHIBuffer* _dst) = 0;
 
+    virtual RHIBufferRef RHICreateBuffer(RHICommandListBase*, const RHIBufferCreateInfo& info) = 0;
+
+    virtual RHIShaderResourceViewRef RHICreateShaderResourceView(RHICommandListBase& _cmd_list, RHIViewableResource* _resource, const RHIViewInfo& _view_info) = 0;
+    virtual RHIUnorderedAccessViewRef RHICreateUnorderedAccessView(RHICommandListBase& _cmd_list, RHIViewableResource* _resource, const RHIViewInfo& _view_info) = 0;
 
 
 #pragma endregion
@@ -79,5 +83,7 @@ public:
 private:
     ERHIType rhi_type;
 };
+
+extern RHI* g_rhi;
 
 #endif

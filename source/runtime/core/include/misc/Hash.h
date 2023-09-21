@@ -15,11 +15,12 @@ template<typename TNum>
 concept concept_t_is_vec2 = requires (TNum t)
 {
     t.x; t.y;
+    
     sizeof(t.x) + sizeof(t.y) == sizeof(t);
-    {t.x + t.y} -> std::same_as<typeof(t.x)>;
-    {t.x - t.y} -> std::same_as<typeof(t.x)>;
-    {t.x * t.y} -> std::same_as<typeof(t.x)>;
-    {t.x / t.y} -> std::same_as<typeof(t.x)>;
+    t.x + t.y;
+    t.x - t.y;
+    t.x * t.y;
+    t.x / t.y;
 };
 
 template<typename TNum>
@@ -27,10 +28,10 @@ concept concept_t_is_vec3 = requires (TNum t)
 {
     t.x; t.y; t.z;
     sizeof(t.x) + sizeof(t.y) + sizeof(t.z) == sizeof(t);
-    {t.x + t.y} -> std::same_as<typeof(t.x)>;
-    {t.x - t.y} -> std::same_as<typeof(t.x)>;
-    {t.x * t.y} -> std::same_as<typeof(t.x)>;
-    {t.x / t.y} -> std::same_as<typeof(t.x)>;
+    t.x + t.y;
+    t.x - t.y;
+    t.x * t.y;
+    t.x / t.y;
 };
 
 template<typename T>

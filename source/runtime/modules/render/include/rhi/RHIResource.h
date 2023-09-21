@@ -13,6 +13,7 @@
 #include <optional>
 
 #pragma region forward definitions
+class RHICommandListBase;
 class RHITexture;
 class RHIAmplificationShader;
 class RHIBlendState;
@@ -72,21 +73,21 @@ using RHIRayTracingPipelineStateRef = CountableRef<RHIRayTracingPipelineState>;
 //using RHIRayTracingShaderRef = CountableRef< RHIRayTracingShader>;
 //using RHIRenderQueryRef = CountableRef< RHIRenderQuery>;
 //using RHIRenderQueryPoolRef = CountableRef< RHIRenderQueryPool>;
-using RHIResourceRef                    = CountableRef<RHIResource>;
-using RHISamplerRef                     = CountableRef<RHISampler>;
-using RHIMultisampleStateRef           = CountableRef<RHIMultisampleState>;
-using RHIShaderRef                      = CountableRef<RHIShader>;
-using RHIShaderLibraryRef               = CountableRef<RHIShaderLibrary>;
-using RHIShaderResourceViewRef          = CountableRef<RHIShaderResourceView>;
-using RHIStagingBufferRef               = CountableRef<RHIStagingBuffer>;
-using RHITextureRef                     = CountableRef<RHITexture>;
-using RHITextureReferenceRef            = CountableRef<RHITextureReference>;
-using RHIUniformBufferRef               = CountableRef<RHIUniformBuffer>;
-using RHIUnorderedAccessViewRef         = CountableRef<RHIUnorderedAccessView>;
-using RHIVertexInputStateRef = CountableRef<RHIVertexInputState>;
-using RHIVertexShaderRef                = CountableRef<RHIVertexShader>;
-using RHIViewableResourceRef            = CountableRef<RHIViewableResource>;
-using RHIViewportRef                    = CountableRef<RHIViewport>;
+using RHIResourceRef            = CountableRef<RHIResource>;
+using RHISamplerRef             = CountableRef<RHISampler>;
+using RHIMultisampleStateRef    = CountableRef<RHIMultisampleState>;
+using RHIShaderRef              = CountableRef<RHIShader>;
+using RHIShaderLibraryRef       = CountableRef<RHIShaderLibrary>;
+using RHIShaderResourceViewRef  = CountableRef<RHIShaderResourceView>;
+using RHIStagingBufferRef       = CountableRef<RHIStagingBuffer>;
+using RHITextureRef             = CountableRef<RHITexture>;
+using RHITextureReferenceRef    = CountableRef<RHITextureReference>;
+using RHIUniformBufferRef       = CountableRef<RHIUniformBuffer>;
+using RHIUnorderedAccessViewRef = CountableRef<RHIUnorderedAccessView>;
+using RHIVertexInputStateRef    = CountableRef<RHIVertexInputState>;
+using RHIVertexShaderRef        = CountableRef<RHIVertexShader>;
+using RHIViewableResourceRef    = CountableRef<RHIViewableResource>;
+using RHIViewportRef            = CountableRef<RHIViewport>;
 #pragma endregion
 
 #pragma region utils definition
@@ -160,7 +161,7 @@ public:
 
 protected:
 private:
-    RHI_API void Destroy() const;
+    void Destroy() const;
     struct ResourceAtomicFlags {
         std::atomic<uint32_t> packed;
 
@@ -239,24 +240,24 @@ public:
 class RHIRasterizationState : public RHIResource {
 public:
     explicit RHIRasterizationState() : RHIResource(RRT_RASTERIZE_STATE) {}
-//    virtual bool GetInitializer(struct RHIRasterizationStateInitializer& _init) { return false; }
+    //    virtual bool GetInitializer(struct RHIRasterizationStateInitializer& _init) { return false; }
 };
 
 class RHIDepthStencilState : public RHIResource {
 public:
     explicit RHIDepthStencilState() : RHIResource(RRT_DEPTH_STENCIL_STATE) {}
-//    virtual bool GetInitializer(struct RHIDepthStencilStateInitializer& _init) { return false; }
+    //    virtual bool GetInitializer(struct RHIDepthStencilStateInitializer& _init) { return false; }
 };
 
 class RHIMultisampleState : public RHIResource {
 public:
     explicit RHIMultisampleState() : RHIResource(RRT_MULTI_SAMPLE_STATE) {}
-//    virtual bool GetInitializer(RHIDepthStencilStateInitializer& _init) { return false; }
+    //    virtual bool GetInitializer(RHIDepthStencilStateInitializer& _init) { return false; }
 };
 class RHIBlendState : public RHIResource {
 public:
     explicit RHIBlendState() : RHIResource(RRT_BLEND_STATE) {}
-//    virtual bool GetInitializer(struct RHIBlendStateInitializer& _init) { return false; }
+    //    virtual bool GetInitializer(struct RHIBlendStateInitializer& _init) { return false; }
 };
 
 class RHIVertexDescription : public RHIResource {
@@ -405,6 +406,40 @@ struct RHIBufferInfo {
         return usage == EBufferUsageFlags::NONE && size == stride && size == 0;
     }
 };
+
+struct RHIBufferCreateInfo:public RHIBufferInfo {
+
+    RHIBufferCreateInfo() = default;
+    RHIBufferCreateInfo(uint32_t _size, uint32_t _stride, EBufferUsageFlags _usage)
+        : RHIBufferInfo(
+              _size,
+          _stride,
+          _usage) {}
+
+    static RHIBufferCreateInfo Create(uint32_t _size =0, uint32_t _stride=0, EBufferUsageFlags _usage=EBufferUsageFlags::NONE) {
+        return {
+            _size,
+            _stride,
+            _usage};
+    }
+    RHIBufferCreateInfo& SetSize(uint32_t _size){
+        size = _size;
+        return *this;
+    }
+    RHIBufferCreateInfo& SetStride(uint32_t _stride){
+        stride = _stride;
+        return *this;
+    }
+    RHIBufferCreateInfo& SetUsage(EBufferUsageFlags _usage){
+        usage = _usage;
+        return *this;
+    }
+
+
+
+};
+
+
 /* index, vertex, staging, indirect */
 class RHIBuffer : public RHIViewableResource {
 public:
@@ -789,16 +824,23 @@ struct RHIViewInfo {
 
     RHIViewInfo() : RHIViewInfo(EViewType::BUFFER_SRV) {}
 
+
     static BufferSRV::Initializer  CreateBufferSRVInfo();
     static BufferUAV::Initializer  CreateBufferUAVInfo();
     static TextureSRV::Initializer CreateTextureSRVInfo();
     static TextureUAV::Initializer CreateTextureUAVInfo();
+
 
 protected:
     RHIViewInfo(EViewType _type) {
         base_info.view_type = _type;
     }
 };
+using RHITextureUAVCreateInfo = RHIViewInfo::TextureUAV::Initializer;
+
+using RHITextureSRVCreateInfo = RHIViewInfo::TextureSRV::Initializer;
+using RHIBufferUAVCreateInfo = RHIViewInfo::BufferUAV::Initializer;
+using RHIBufferSRVCreateInfo = RHIViewInfo::BufferSRV::Initializer;
 
 struct RHIViewInfo::Buffer::ViewInfo {
     uint32_t     byte_offset;
@@ -850,7 +892,7 @@ static_assert(sizeof(RHIViewInfo) == 16, "Packing of RHIViewInfo is unexpected."
 //for rhi CommandList to create BufferSRV
 struct RHIViewInfo::BufferSRV::Initializer : private RHIViewInfo {
     friend RHIViewInfo;
-
+    friend RHICommandListBase;
 protected:
     Initializer() : RHIViewInfo(EViewType::BUFFER_SRV) {}
 
@@ -888,6 +930,7 @@ public:
 //for rhi CommandList to create BufferUAV
 struct RHIViewInfo::BufferUAV::Initializer : private RHIViewInfo {
     friend RHIViewInfo;
+    friend RHICommandListBase;
 
 protected:
     Initializer() : RHIViewInfo(EViewType::BUFFER_UAV) {}
@@ -926,7 +969,7 @@ public:
 //for rhi CommandList to create TextureSRV
 struct RHIViewInfo::TextureSRV::Initializer : private RHIViewInfo {
     friend RHIViewInfo;
-
+    friend RHICommandListBase;
 protected:
     Initializer() : RHIViewInfo(EViewType::TEXTURE_SRV) {}
 
@@ -961,6 +1004,7 @@ public:
 //for rhi CommandList to create TextureSRV
 struct RHIViewInfo::TextureUAV::Initializer : private RHIViewInfo {
     friend RHIViewInfo;
+    friend RHICommandListBase;
 
 protected:
     Initializer() : RHIViewInfo(EViewType::TEXTURE_UAV) { texture.uav.mip_num = 1; }
@@ -1420,7 +1464,7 @@ struct Rect2D {
     Extent2D extent;
 
     Rect2D(int32_t offset_x = -1, int32_t offset_y = -1, uint32_t extent_x = 0, uint32_t extent_y = 0)
-        : offset(offset_x, offset_y),
+        : offset{offset_x, offset_y},
           extent(extent_x, extent_y) {}
 
     bool operator==(Rect2D other) const {
@@ -1737,35 +1781,235 @@ struct RHIRenderPassInfo {
 
 //todo: for rdg usage
 #pragma region RDG resource creater
-struct RHITextureSRVCreateDesc {
-    explicit RHITextureSRVCreateDesc(uint8_t _mip_level = 0, uint8_t _num_mips = 0, EPixelFormat _format = PF_UNDEFINED)
-        : format(_format),
-          mip_level(_mip_level),
-          num_mips(_num_mips),
-          array_index(0),
-          array_size(0) {}
-
-    explicit RHITextureSRVCreateDesc(uint8_t _mip_level, uint8_t _num_mips, uint16_t _array_index, uint16_t _array_size, EPixelFormat _format = PF_UNDEFINED)
-        : format(_format),
-          mip_level(_mip_level),
-          num_mips(_num_mips),
-          array_index(_array_index),
-          array_size(_array_size) {}
-
-    EPixelFormat format;
-    uint8_t      mip_level;
-    uint8_t      num_mips;
-
-    uint8_t array_index;
-    uint8_t array_size;
-
-    std::optional<ETextureDimension> dimension_override;
-
-    FORCEINLINE bool operator==(const RHITextureSRVCreateDesc& other) const {
-        return format == other.format && mip_level == other.mip_level && num_mips == other.num_mips && array_index == other.array_index && array_size == other.array_size && dimension_override == other.dimension_override;
-    }
-};
-
+//
+///** Used to specify a texture metadata plane when creating a view. from UE 5.3*/
+//enum class ERHITexturePlane : uint8_t {
+//    // The primary plane is used with default compression behavior.
+//    Primary = 0,
+//
+//    // The primary plane is used without decompressing it.
+//    PrimaryCompressed = 1,
+//
+//    // The depth plane is used with default compression behavior.
+//    Depth = 2,
+//
+//    // The stencil plane is used with default compression behavior.
+//    Stencil = 3,
+//
+//    // The HTile plane is used.
+//    HTile = 4,
+//
+//    // the FMask plane is used.
+//    FMask = 5,
+//
+//    // the CMask plane is used.
+//    CMask = 6,
+//
+//    // This enum is packed into various structures. Avoid adding new
+//    // members without verifying structure sizes aren't increased.
+//    Num,
+//    NumBits = 3,
+//
+//    CompressedSurface = PrimaryCompressed,
+//};
+//static_assert((1u << uint32_t(ERHITexturePlane::NumBits)) >= uint32_t(ERHITexturePlane::Num), "Not enough bits in the ERHITexturePlane enum");
+//
+//struct RHITextureSRVInfo {
+//    explicit RHITextureSRVInfo(uint8_t _mip_level = 0, uint8_t _num_mips = 0, EPixelFormat _format = PF_UNDEFINED)
+//        : format(_format),
+//          mip_level(_mip_level),
+//          num_mips(_num_mips),
+//          array_index(0),
+//          array_size(0) {}
+//
+//    explicit RHITextureSRVInfo(uint8_t _mip_level, uint8_t _num_mips, uint16_t _array_index, uint16_t _array_size, EPixelFormat _format = PF_UNDEFINED)
+//        : format(_format),
+//          mip_level(_mip_level),
+//          num_mips(_num_mips),
+//          array_index(_array_index),
+//          array_size(_array_size) {}
+//
+//    EPixelFormat format;
+//    uint8_t      mip_level;
+//    uint8_t      num_mips;
+//
+//    uint8_t array_index;
+//    uint8_t array_size;
+//
+//    bool disable_srgb;
+//    ERHITexturePlane                 meta_plane = ERHITexturePlane::Primary;
+//    std::optional<ETextureDimension> dimension_override;
+//
+//    FORCEINLINE bool operator==(const RHITextureSRVInfo& other) const {
+//        return format == other.format && mip_level == other.mip_level && num_mips == other.num_mips && array_index == other.array_index && array_size == other.array_size && meta_plane == other.meta_plane && dimension_override == other.dimension_override;
+//    }
+//    FORCEINLINE bool operator!=(const RHITextureSRVInfo& other) const {
+//        return !(*this == other);
+//    }
+//    friend uint32_t GetHash(const RHITextureSRVInfo& value){
+//        uint32_t hash = (uint32_t)value.format | (uint32_t)value.mip_level << 8 | (uint32_t)value.num_mips << 16| (uint32_t)value.disable_srgb << 24;
+//        hash_combine(hash, (uint32_t)value.array_index | (uint32_t)value.array_size << 16);
+//        hash_combine(hash, value.dimension_override.has_value() ? (uint32_t)(value.dimension_override.value()) : std::numeric_limits<uint32_t>::max());
+//        hash_combine(hash, (uint32_t)value.meta_plane);
+//        return hash;
+//    }
+//};
+//
+//struct RHITextureSRVCreateInfo : RHITextureSRVInfo {
+//    RHITextureSRVCreateInfo() = default;
+//    RHITextureSRVCreateInfo(uint8_t _mip_level = 0, uint8_t _num_mips = 0, EPixelFormat _format = PF_UNDEFINED)
+//        : RHITextureSRVInfo(_mip_level, _num_mips, _format) {}
+//
+//    static RHITextureSRVCreateInfo Create(uint8_t _mip_level = 0, uint8_t _num_mips = 0, EPixelFormat _format = PF_UNDEFINED) {
+//        return {_mip_level, _num_mips, _format};
+//    }
+//    RHITextureSRVCreateInfo& SetFormat(EPixelFormat _format) {
+//        format = _format;
+//        return *this;
+//    }
+//    RHITextureSRVCreateInfo& SetMipLevel(uint8_t _mip_level) {
+//        mip_level = _mip_level;
+//        return *this;
+//    }
+//    RHITextureSRVCreateInfo& SetNumMips(uint8_t _num_mips) {
+//        num_mips = _num_mips;
+//        return *this;
+//    }
+//    RHITextureSRVCreateInfo& SetArrayIndex(uint8_t _array_index) {
+//        array_index = _array_index;
+//        return *this;
+//    }
+//
+//    RHITextureSRVCreateInfo& SetArrayCount(uint8_t _array_count) {
+//        _array_count = _array_count;
+//        return *this;
+//    }
+//
+//    RHITextureSRVCreateInfo& SetDisableSRGB(bool _disable_srgb){
+//        disable_srgb = _disable_srgb;
+//        return *this;
+//    }
+//    RHITextureSRVCreateInfo& SetMetaTexturePlane(ERHITexturePlane _meta_plane){
+//        meta_plane = _meta_plane;
+//        return *this;
+//    }
+//    RHITextureSRVCreateInfo& SetDimensionOverride(ETextureDimension _dimension_override){
+//        dimension_override = _dimension_override;
+//        return *this;
+//    }
+//
+//};
+//struct RHITextureUAVInfo {
+//public:
+//    RHITextureUAVInfo() = default;
+//
+//    explicit RHITextureUAVInfo(uint8_t _mip_level = 0, EPixelFormat _format = PF_UNDEFINED, uint16_t _array_index = 0, uint16_t _array_size = 0)
+//        : format(_format),
+//          mip_level(_mip_level),
+//          array_index(_array_index),
+//          array_size(_array_size) {}
+//
+//    explicit RHITextureUAVInfo(ERHITexturePlane _meta_plane)
+//        : meta_plane(_meta_plane) {}
+//
+//    EPixelFormat format;
+//    uint8_t      mip_level;
+//
+//    uint8_t array_index;
+//    uint8_t array_size;
+//
+//    ERHITexturePlane                 meta_plane = ERHITexturePlane::Primary;
+//    std::optional<ETextureDimension> dimension_override;
+//    FORCEINLINE bool                 operator==(const RHITextureUAVInfo& other) const {
+//        return format == other.format && mip_level == other.mip_level && array_index == other.array_index && array_size == other.array_size && meta_plane == other.meta_plane && dimension_override == other.dimension_override;
+//    }
+//    FORCEINLINE bool operator!=(const RHITextureUAVInfo& other) const {
+//        return !(*this == other);
+//    }
+//    friend uint32_t GetHash(const RHITextureUAVInfo& value){
+//        uint32_t hash = (uint32_t)value.format | (uint32_t)value.mip_level << 8 | (uint32_t)value.array_index << 16;
+//        hash_combine(hash, value.dimension_override.has_value() ? (uint32_t)(value.dimension_override.value()) : std::numeric_limits<uint32_t>::max());
+//        hash_combine(hash, (uint32_t)value.array_size | (uint32_t)value.meta_plane << 16);
+//        return hash;
+//    }
+//};
+//
+//struct RHITextureUAVCreateInfo : public RHITextureUAVInfo{
+//    RHITextureUAVCreateInfo(uint8_t _mip_level = 0, EPixelFormat _format = PF_UNDEFINED, uint16_t _array_index = 0, uint16_t _array_size = 0):
+//                                    RHITextureUAVInfo(_mip_level, _format, _array_index, _array_size){}
+//    RHITextureUAVCreateInfo Create(uint8_t _mip_level = 0, EPixelFormat _format = PF_UNDEFINED, uint16_t _array_index = 0, uint16_t _array_size = 0){
+//        return {_mip_level, _format, _array_index, _array_size};
+//    }
+//
+//    RHITextureUAVCreateInfo& SetFormat(EPixelFormat _format) {
+//        format = _format;
+//        return *this;
+//    }
+//    RHITextureUAVCreateInfo& SetMipLevel(uint8_t _mip_level) {
+//        mip_level = _mip_level;
+//        return *this;
+//    }
+//    RHITextureUAVCreateInfo& SetArrayIndex(uint8_t _array_index) {
+//        array_index = _array_index;
+//        return *this;
+//    }
+//
+//    RHITextureUAVCreateInfo& SetArrayCount(uint8_t _array_count) {
+//        _array_count = _array_count;
+//        return *this;
+//    }
+//
+//    RHITextureUAVCreateInfo& SetMetaTexturePlane(ERHITexturePlane _meta_plane){
+//        meta_plane = _meta_plane;
+//        return *this;
+//    }
+//    RHITextureUAVCreateInfo& SetDimensionOverride(ETextureDimension _dimension_override){
+//        dimension_override = _dimension_override;
+//        return *this;
+//    }
+//};
+//
+//struct RHIBufferSRVInfo {
+//    explicit RHIBufferSRVInfo() = default;
+//    explicit RHIBufferSRVInfo(EPixelFormat _format) : format(_format) {}
+//    explicit RHIBufferSRVInfo(uint32_t _byte_offset, uint32_t _num_elements) : byte_offset(_byte_offset), num_elements(_num_elements) {}
+//    bool operator==(const RHIBufferSRVInfo& other) const {
+//        return format == other.format && byte_offset == other.byte_offset && num_elements == other.num_elements;
+//    }
+//    bool operator!=(const RHIBufferSRVInfo& other) const {
+//        return !(*this == other);
+//    }
+//    EPixelFormat format;
+//    uint32_t     byte_offset;
+//    uint32_t     num_elements;
+//};
+//struct RHIBufferUAVInfo{
+//    explicit RHIBufferUAVInfo(EPixelFormat _format): format(_format){}
+//    EPixelFormat format;
+//    uint32_t byte_offset;
+//    uint32_t num_elements;
+//
+//};
+//struct RHIBufferSRVCreateInfo : RHIBufferSRVInfo {
+//    RHIBufferSRVCreateInfo() = default;
+//    RHIBufferSRVCreateInfo(EPixelFormat _format) : RHIBufferSRVInfo(_format) {}
+//
+//    static RHIBufferSRVCreateInfo Create(EPixelFormat _format){
+//        return {_format};
+//    }
+//    RHIBufferSRVCreateInfo& SetFormat(EPixelFormat _format) {
+//        format = _format;
+//        return *this;
+//    }
+//    RHIBufferSRVCreateInfo& SetByteOffset(uint32_t _byte_offset) {
+//        byte_offset = _byte_offset;
+//        return *this;
+//    }
+//    RHIBufferSRVCreateInfo& SetNumElements(uint32_t _num_elements) {
+//        num_elements = _num_elements;
+//        return *this;
+//    }
+//};
 #pragma endregion
 
 class RHITextureReference final : public RHITexture {

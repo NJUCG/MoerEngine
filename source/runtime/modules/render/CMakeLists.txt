@@ -6,7 +6,7 @@ source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${RENDER_MODULE_HEADERS} ${R
 
 add_library(${MODULE_NAME} ${RENDER_MODULE_HEADERS} ${RENDER_MODULE_SOURCES})
 
-set_target_properties(${MODULE_NAME} PROPERTIES FOLDER "engine/runtime/render")
+set_target_properties(${MODULE_NAME} PROPERTIES FOLDER "runtime")
 
 target_include_directories(${MODULE_NAME}
 	PUBLIC $<BUILD_INTERFACE:${MODULE_DIR}/include>
