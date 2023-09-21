@@ -5,8 +5,7 @@ file(GLOB_RECURSE CORE_SOURCES "source/*.cpp")
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${CORE_HEADERS} ${CORE_SOURCES})
 
 add_library(${TARGET_NAME} ${CORE_HEADERS} ${CORE_SOURCES})
-
-set_target_properties(${TARGET_NAME} PROPERTIES FOLDER "engine/runtime/core")
+set_target_properties(${TARGET_NAME} PROPERTIES FOLDER "runtime")
 
 target_include_directories(${TARGET_NAME}
 	PUBLIC $<BUILD_INTERFACE:${RUNTIME_CORE_DIR}/include>

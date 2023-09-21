@@ -1,1 +1,3 @@
-#include "rhi/RHICommon.h"
+#include "rhi/RHI.h"
+
+RHI* g_rhi = nullptr;

@@ -12,9 +12,9 @@ concept concept_is_countable = requires (TCountable t)
 {
 //    t.m_counter;
 //    std::is_same_v<typeof(t.m_counter), std::atomic<int32_t>>;
-    std::is_same_v<typeof(t.AddRef()), int32_t>;
-    std::is_same_v<typeof(t.DeRef()), int32_t>;
-    std::is_same_v<typeof(t.GetRefCount()), int32_t>;
+    t.AddRef() + (uint32_t)1;
+    t.DeRef() + (uint32_t)1;
+    t.GetRefCount() + (uint32_t)1;
 //    t.Destroy();
 };
 

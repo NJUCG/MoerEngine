@@ -1,5 +1,5 @@
 
-set(THIRD_PARTY_DIR "${ENGINE_ROOT_DIR}/3rdParty")
+set(THIRD_PARTY_DIR "${ENGINE_ROOT_DIR}/3rdparty")
 set(ENGINE_ASSET_DIR "asset")
 set(ENGINE_CONFIG_DIR "configs")
 
@@ -30,7 +30,7 @@ endif()
 
 
 ##################################################
-## Sub Directorys
+## Sub Directories
 ##################################################
 
 ADD_SUBDIRECTORY(${THIRD_PARTY_DIR})
