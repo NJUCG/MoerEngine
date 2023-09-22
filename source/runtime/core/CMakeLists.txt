@@ -1,19 +1,19 @@
-set(TARGET_NAME Moer2RuntimeCore)
+set(target_name MoerRuntimeCore)
 file(GLOB_RECURSE CORE_HEADERS "include/*\(.h|.inl\)")
 file(GLOB_RECURSE CORE_SOURCES "source/*.cpp")
 
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${CORE_HEADERS} ${CORE_SOURCES})
 
-add_library(${TARGET_NAME} ${CORE_HEADERS} ${CORE_SOURCES})
-set_target_properties(${TARGET_NAME} PROPERTIES FOLDER "runtime")
+add_library(${target_name} ${CORE_HEADERS} ${CORE_SOURCES})
+set_target_properties(${target_name} PROPERTIES FOLDER "runtime")
 
-target_include_directories(${TARGET_NAME}
-	PUBLIC $<BUILD_INTERFACE:${RUNTIME_CORE_DIR}/include>
-    PUBLIC $<BUILD_INTERFACE:${THIRD_PARTY_DIR}/boost>
-    PUBLIC $<BUILD_INTERFACE:${THIRD_PARTY_DIR}/spdlog/include>
-    PUBLIC $<BUILD_INTERFACE:${THIRD_PARTY_DIR}/glm>
+target_include_directories(${target_name}
+	PUBLIC $<BUILD_INTERFACE:${moer_runtime_core_dir}/include>
+    PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/boost>
+    PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/spdlog/include>
+    PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/glm>
 )
-target_link_libraries(${TARGET_NAME}
+target_link_libraries(${target_name}
     PUBLIC glm::glm
     #PUBLIC glfw
     #PUBLIC assimp

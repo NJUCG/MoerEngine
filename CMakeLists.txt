@@ -1,27 +1,23 @@
-##################################################
-## CMake
-##################################################
 cmake_minimum_required(VERSION 3.26.0)
 
-
-##################################################
-## Project
-##################################################
-project(MoerEngine)
+project(MoerEngine LANGUAGES CXX CUDA)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(MOER_ROOT_DIR ${CMAKE_CURRENT_SOURCE_DIR})
-set(ENGINE_ROOT_DIR ${MOER_ROOT_DIR}/source)
 
-set(CMAKE_INSTALL_PREFIX "${MOER_ROOT_DIR}/target")
+set(moer_root_dir ${CMAKE_CURRENT_SOURCE_DIR})
+set(moer_source_dir ${moer_root_dir}/source)
+
+set(CMAKE_INSTALL_PREFIX "${moer_root_dir}/target")
 set(BINARY_ROOT_DIR "${CMAKE_INSTALL_PREFIX}")
 
-add_definitions(-DASSET_DIR="${MOER_ROOT_DIR}/asset")
+# set ouput folder
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${BINARY_ROOT_DIR}/bin)
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${BINARY_ROOT_DIR}/lib)
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${BINARY_ROOT_DIR}/lib)
 
-if(${CMAKE_BUILD_TYPE} MATCHES "Debug")
-    #set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g")
-    add_definitions(-DDEBUG)
-endif()
+add_definitions(-DASSET_DIR="${moer_root_dir}/asset")
+
+option(moer_build_test "build test unit" ON)
 
 add_subdirectory("source")

@@ -1,13 +1,13 @@
-set(TARGET_NAME Moer2Runtime)
-set(RUNTIME_DIR ${ENGINE_ROOT_DIR}/runtime)
+set(target_name MoerRuntime)
+set(moer_runtime_dir ${moer_source_dir}/runtime)
 
 
-set(RUNTIME_CORE_DIR ${RUNTIME_DIR}/core)
-set(RUNTIME_MODULE_ROOT_DIR ${RUNTIME_DIR}/modules)
+set(moer_runtime_core_dir ${moer_runtime_dir}/core)
+set(moer_runtime_module_root_dir ${moer_runtime_dir}/modules)
 add_subdirectory(core)
 
 add_subdirectory(modules/render)
 
-add_library(${TARGET_NAME} INTERFACE)
+add_library(${target_name} INTERFACE)
 
-set_target_properties(${TARGET_NAME} PROPERTIES FOLDER "engine")
+set_target_properties(${target_name} PROPERTIES FOLDER "engine")
