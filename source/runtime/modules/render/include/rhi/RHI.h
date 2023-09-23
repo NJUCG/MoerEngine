@@ -72,10 +72,10 @@ public:
 
     virtual void RHICopyBuffer(RHIBuffer* _src, RHIBuffer* _dst) = 0;
 
-    virtual RHIBufferRef RHICreateBuffer(RHICommandListBase*, const RHIBufferCreateInfo& info) = 0;
+    virtual RHIBufferRef RHICreateBuffer(const RHIBufferCreateInfo& info) = 0;
 
-    virtual RHIShaderResourceViewRef RHICreateShaderResourceView(RHICommandListBase& _cmd_list, RHIViewableResource* _resource, const RHIViewInfo& _view_info) = 0;
-    virtual RHIUnorderedAccessViewRef RHICreateUnorderedAccessView(RHICommandListBase& _cmd_list, RHIViewableResource* _resource, const RHIViewInfo& _view_info) = 0;
+    virtual RHIShaderResourceViewRef RHICreateShaderResourceView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) = 0;
+    virtual RHIUnorderedAccessViewRef RHICreateUnorderedAccessView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) = 0;
 
 
 #pragma endregion

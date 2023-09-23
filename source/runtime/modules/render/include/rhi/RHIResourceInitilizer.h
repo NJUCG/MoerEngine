@@ -269,36 +269,129 @@ struct RHICopyTextureInfo {
     uint32_t dst_mip_index = 0;
     uint32_t num_mips      = 1;
 };
+struct RHIBufferRegion{
+    uint32_t src_offset;
+    uint32_t dst_offset;
+    uint64_t size;
+};
+struct RHICopyBufferInfo{
+    RHICopyBufferInfo() = default;
 
-struct RHISubresourceRange {
-    enum ESliceType : uint32_t {
-        DEPTH_SLICE,
-        STENCIL_SLICE,
-        ALL
-    };
+    RHICopyBufferInfo(uint32_t _region_count, RHIBufferRegion* _regions): region_count(_region_count), p_regions(_regions){
+        assert(Validate() && "data not valid");
+    }
 
-    uint32_t mip_index   = ALL;
-    uint32_t array_slice = ALL;
-    uint32_t plane_slice = ALL;
+    uint32_t region_count;
+    RHIBufferRegion* p_regions;
+private:
+    bool Validate()const{
+        return region_count > 0 && p_regions != nullptr;
+    }
+};
+//contains one mip subresource data
+struct RHISubresourceSlice{
+    const static uint32_t s_all = std::numeric_limits<uint32_t>::max();
+
+    ETextureAspectFlags aspect = ETextureAspectFlags::NONE;
+    uint32_t mip_index;
+    uint32_t array_index;
+    uint32_t array_count;
+    uint32_t plane_index;
+    uint32_t plane_count;
+
+    RHISubresourceSlice() = default;
+    RHISubresourceSlice(
+        ETextureAspectFlags _aspect,
+        uint32_t _mip_index,
+        uint32_t _array_index,
+        uint32_t _array_count,
+        uint32_t _plane_index,
+        uint32_t _plane_count)
+        : aspect(_aspect),
+          mip_index(_mip_index),
+          array_index (_array_index),
+          array_count(_array_count),
+          plane_index(_plane_index),
+          plane_count(_plane_count) {}
+
+    RHISubresourceSlice(
+        ETextureAspectFlags _aspect,
+        uint32_t _mip_index,
+        uint32_t _array_index,
+        uint32_t _plane_index)
+        : aspect(_aspect),
+          mip_index(_mip_index),
+          array_index (_array_index),
+          array_count(1),
+          plane_index(_plane_index),
+          plane_count(1) {}
+
+    inline bool IsAllArraySlices() const {
+        return array_count == s_all;
+    }
+    //usually set to zero
+    inline bool IsAllPlaneSlices() const {
+        return plane_count == s_all;
+    }
+
+    inline bool IgnoreDepthPlane() const {
+        return aspect == ETextureAspectFlags::STENCIL_SLICE;
+    }
+
+    inline bool IgnoreStencilPlane() const {
+        return aspect == ETextureAspectFlags::DEPTH_SLICE;
+    }
+
+    inline bool operator==(RHISubresourceSlice const& rhs) const {
+        return mip_index == rhs.mip_index
+               && array_index == rhs.array_index
+               && array_count == rhs.array_count
+               && plane_index == rhs.plane_index
+               && plane_count == rhs.plane_count;
+    }
+
+    inline bool operator!=(RHISubresourceSlice const& rhs) const {
+        return !(*this == rhs);
+    }
+};
+struct RHISubresourceRange : public RHISubresourceSlice{
+
+    uint32_t num_mips = s_all;
+
 
     RHISubresourceRange() = default;
 
     RHISubresourceRange(
+        ETextureAspectFlags _aspect,
         uint32_t _mip_index,
-        uint32_t _array_slice,
-        uint32_t _plane_slice)
-        : mip_index(_mip_index), array_slice(_array_slice), plane_slice(_plane_slice) {}
+        uint32_t _num_mips,
+        uint32_t _array_index,
+        uint32_t _array_count,
+        uint32_t _plane_index,
+        uint32_t _plane_count)
+        : RHISubresourceSlice(_aspect, _mip_index, _array_index, _array_count, _plane_index, _plane_count),
+          num_mips(_num_mips)
+    {}
 
+    RHISubresourceRange(
+        ETextureAspectFlags _aspect,
+        uint32_t _mip_index,
+        uint32_t _array_index,
+        uint32_t _plane_index)
+        : RHISubresourceSlice(_aspect,
+                              _mip_index,
+                              _array_index,
+                              _plane_index) {}
     inline bool IsAllMips() const {
-        return mip_index == ALL;
+        return num_mips == s_all;
     }
 
     inline bool IsAllArraySlices() const {
-        return array_slice == ALL;
+        return array_count == s_all;
     }
-
+    //usually set to zero
     inline bool IsAllPlaneSlices() const {
-        return plane_slice == ALL;
+        return plane_count == s_all;
     }
 
     inline bool IsWholeResource() const {
@@ -306,15 +399,20 @@ struct RHISubresourceRange {
     }
 
     inline bool IgnoreDepthPlane() const {
-        return plane_slice == STENCIL_SLICE;
+        return aspect == ETextureAspectFlags::STENCIL_SLICE;
     }
 
     inline bool IgnoreStencilPlane() const {
-        return plane_slice == DEPTH_SLICE;
+        return aspect == ETextureAspectFlags::DEPTH_SLICE;
     }
 
     inline bool operator==(RHISubresourceRange const& rhs) const {
-        return mip_index == rhs.mip_index && array_slice == rhs.array_slice && plane_slice == rhs.plane_slice;
+        return mip_index == rhs.mip_index
+               && num_mips == rhs.num_mips
+               && array_index == rhs.array_index
+               && array_count == rhs.array_count
+               && plane_index == rhs.plane_index
+               && plane_count == rhs.plane_count;
     }
 
     inline bool operator!=(RHISubresourceRange const& rhs) const {

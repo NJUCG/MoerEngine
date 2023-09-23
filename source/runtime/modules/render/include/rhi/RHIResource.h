@@ -407,38 +407,34 @@ struct RHIBufferInfo {
     }
 };
 
-struct RHIBufferCreateInfo:public RHIBufferInfo {
+struct RHIBufferCreateInfo : public RHIBufferInfo {
 
     RHIBufferCreateInfo() = default;
     RHIBufferCreateInfo(uint32_t _size, uint32_t _stride, EBufferUsageFlags _usage)
         : RHIBufferInfo(
               _size,
-          _stride,
-          _usage) {}
+              _stride,
+              _usage) {}
 
-    static RHIBufferCreateInfo Create(uint32_t _size =0, uint32_t _stride=0, EBufferUsageFlags _usage=EBufferUsageFlags::NONE) {
+    static RHIBufferCreateInfo Create(uint32_t _size = 0, uint32_t _stride = 0, EBufferUsageFlags _usage = EBufferUsageFlags::NONE) {
         return {
             _size,
             _stride,
             _usage};
     }
-    RHIBufferCreateInfo& SetSize(uint32_t _size){
+    RHIBufferCreateInfo& SetSize(uint32_t _size) {
         size = _size;
         return *this;
     }
-    RHIBufferCreateInfo& SetStride(uint32_t _stride){
+    RHIBufferCreateInfo& SetStride(uint32_t _stride) {
         stride = _stride;
         return *this;
     }
-    RHIBufferCreateInfo& SetUsage(EBufferUsageFlags _usage){
+    RHIBufferCreateInfo& SetUsage(EBufferUsageFlags _usage) {
         usage = _usage;
         return *this;
     }
-
-
-
 };
-
 
 /* index, vertex, staging, indirect */
 class RHIBuffer : public RHIViewableResource {
@@ -702,6 +698,8 @@ private:
 };
 
 #pragma endregion
+
+#pragma region syncronization
 /* fences in dx12, fence and timeline semaphore in vulkan */
 class RHIFence : public RHIResource {
 public:
@@ -712,6 +710,150 @@ protected:
     std::string name;
 };
 
+struct RHIBarrierInfo {
+    RHIBarrierInfo() : src_stage(ERHIPipelineStageFlags::PS_TOP_OF_PIPE),
+                       dst_stage(ERHIPipelineStageFlags::PS_BOTTOM_OF_PIPE),
+                       src_access(ERHIAccessFlags::UNDEFINED),
+                       dst_access(ERHIAccessFlags::UNDEFINED) {}
+    RHIBarrierInfo(ERHIPipelineStageFlags _src_stage,
+                   ERHIPipelineStageFlags _dst_stage,
+                   ERHIAccessFlags        _src_access,
+                   ERHIAccessFlags        _dst_access)
+        : src_stage(_src_stage),
+          dst_stage(_dst_stage),
+          src_access(_src_access),
+          dst_access(_dst_access) {}
+    ERHIPipelineStageFlags src_stage;
+    ERHIPipelineStageFlags dst_stage;
+
+    ERHIAccessFlags src_access;
+    ERHIAccessFlags dst_access;
+
+    RHIBarrierInfo& SetSrcStage(ERHIPipelineStageFlags _src_stage) {
+        src_stage = _src_stage;
+        return *this;
+    }
+    RHIBarrierInfo& SetDstStage(ERHIPipelineStageFlags _dst_stage) {
+        dst_stage = _dst_stage;
+        return *this;
+    }
+
+    RHIBarrierInfo& SetSrcAccessFlags(ERHIAccessFlags _src_access_flags) {
+        src_access = _src_access_flags;
+        return *this;
+    }
+
+    RHIBarrierInfo& SetDstAccessFlags(ERHIAccessFlags _dst_access_flags) {
+        dst_access = _dst_access_flags;
+        return *this;
+    }
+};
+
+struct RHITextureBarrierInfo : public RHIBarrierInfo {
+    RHITextureBarrierInfo()
+        : RHIBarrierInfo(),
+          p_texture(nullptr),
+          src_layout(TEXTURE_LAYOUT_UNDEFINED),
+          dst_layout(TEXTURE_LAYOUT_UNDEFINED) {}
+    RHITextureBarrierInfo(
+        ERHIPipelineStageFlags _src_stage,
+        ERHIPipelineStageFlags _dst_stage,
+        ERHIAccessFlags        _src_access,
+        ERHIAccessFlags        _dst_access,
+        RHITexture*            _p_texture,
+        ETextureLayout         _src_layout,
+        ETextureLayout         _dst_layout,
+        RHISubresourceRange    _sub_resource_range)
+        : RHIBarrierInfo(_src_stage,
+                         _dst_stage,
+                         _src_access,
+                         _dst_access),
+          p_texture(_p_texture),
+          src_layout(_src_layout),
+          dst_layout(_dst_layout),
+          sub_resource_range(_sub_resource_range) {}
+    static RHITextureBarrierInfo Create() {
+        return {};
+    }
+
+    RHITexture*         p_texture;
+    ETextureLayout      src_layout;
+    ETextureLayout      dst_layout;
+    RHISubresourceRange sub_resource_range;
+
+    RHITextureBarrierInfo& SetTexture(RHITexture* _p_texture) {
+        p_texture = _p_texture;
+        return *this;
+    }
+    RHITextureBarrierInfo& SetSrcTextureLayout(ETextureLayout _src_layout) {
+        src_layout = _src_layout;
+        return *this;
+    }
+    RHITextureBarrierInfo& SetDstTextureLayout(ETextureLayout _dst_layout) {
+        dst_layout = _dst_layout;
+        return *this;
+    }
+
+    RHITextureBarrierInfo& SetSubResourceRange(const RHISubresourceRange& _sub_resource_range) {
+        sub_resource_range = _sub_resource_range;
+        return *this;
+    }
+};
+
+struct RHIBufferBarrierInfo : public RHIBarrierInfo {
+    RHIBufferBarrierInfo(
+        ERHIPipelineStageFlags _src_stage,
+        ERHIPipelineStageFlags _dst_stage,
+        ERHIAccessFlags        _src_access,
+        ERHIAccessFlags        _dst_access,
+        RHIBuffer*             _p_buffer,
+        uint64_t               _offset,
+        uint64_t               _size)
+        : RHIBarrierInfo(_src_stage,
+                         _dst_stage,
+                         _src_access,
+                         _dst_access),
+          p_buffer(_p_buffer),
+          offset(_offset),
+          size(_size) {
+    }
+    RHIBufferBarrierInfo() : RHIBarrierInfo(),
+                             p_buffer(nullptr),
+                             offset(0),
+                             size(0) {}
+
+    static RHIBufferBarrierInfo Create() {
+        return {};
+    }
+    RHIBufferBarrierInfo& SetBuffer(RHIBuffer* _buffer) {
+        p_buffer = _buffer;
+        return *this;
+    }
+    RHIBufferBarrierInfo& SetOffset(uint64_t _offset) {
+        offset = _offset;
+        return *this;
+    }
+    RHIBufferBarrierInfo& SetSize(uint64_t _size) {
+        size = _size;
+        return *this;
+    }
+    RHIBuffer* p_buffer;
+    uint64_t   offset;
+    uint64_t   size;
+};
+
+using RHIMemeryBarrierInfo = RHIBarrierInfo;
+
+struct RHIBarrierDependencyInfo {
+    EBarrierDependencyScope      scope{};
+    uint32_t                     memory_barrier_count  = 0;
+    const RHIMemeryBarrierInfo*  p_memory_barriers     = nullptr;
+    uint32_t                     buffer_barrier_count  = 0;
+    const RHIBufferBarrierInfo*  p_buffer_barriers     = nullptr;
+    uint32_t                     texture_barrier_count = 0;
+    const RHITextureBarrierInfo* p_texture_barriers    = nullptr;
+};
+#pragma endregion
 class RHIViewport : public RHIResource {
 public:
     RHIViewport() : RHIResource(RRT_VIEWPORT) {}
@@ -824,12 +966,10 @@ struct RHIViewInfo {
 
     RHIViewInfo() : RHIViewInfo(EViewType::BUFFER_SRV) {}
 
-
     static BufferSRV::Initializer  CreateBufferSRVInfo();
     static BufferUAV::Initializer  CreateBufferUAVInfo();
     static TextureSRV::Initializer CreateTextureSRVInfo();
     static TextureUAV::Initializer CreateTextureUAVInfo();
-
 
 protected:
     RHIViewInfo(EViewType _type) {
@@ -839,8 +979,8 @@ protected:
 using RHITextureUAVCreateInfo = RHIViewInfo::TextureUAV::Initializer;
 
 using RHITextureSRVCreateInfo = RHIViewInfo::TextureSRV::Initializer;
-using RHIBufferUAVCreateInfo = RHIViewInfo::BufferUAV::Initializer;
-using RHIBufferSRVCreateInfo = RHIViewInfo::BufferSRV::Initializer;
+using RHIBufferUAVCreateInfo  = RHIViewInfo::BufferUAV::Initializer;
+using RHIBufferSRVCreateInfo  = RHIViewInfo::BufferSRV::Initializer;
 
 struct RHIViewInfo::Buffer::ViewInfo {
     uint32_t     byte_offset;
@@ -893,6 +1033,7 @@ static_assert(sizeof(RHIViewInfo) == 16, "Packing of RHIViewInfo is unexpected."
 struct RHIViewInfo::BufferSRV::Initializer : private RHIViewInfo {
     friend RHIViewInfo;
     friend RHICommandListBase;
+
 protected:
     Initializer() : RHIViewInfo(EViewType::BUFFER_SRV) {}
 
@@ -970,6 +1111,7 @@ public:
 struct RHIViewInfo::TextureSRV::Initializer : private RHIViewInfo {
     friend RHIViewInfo;
     friend RHICommandListBase;
+
 protected:
     Initializer() : RHIViewInfo(EViewType::TEXTURE_SRV) {}
 
@@ -1459,6 +1601,40 @@ struct Extent2D {
     };
 };
 
+struct Offset3D {
+    int32_t x;
+    int32_t y;
+    int32_t z;
+    bool    operator==(const Offset3D&) const = default;
+};
+struct Extent3D {
+    union {
+        uint32_t width;
+        uint32_t x;
+    };
+    union {
+        uint32_t height;
+        uint32_t y;
+    };
+    union {
+        uint32_t depth;
+        uint32_t z;
+    };
+    Extent3D(uint32_t _x, uint32_t _y, uint32_t _z) : x(_x), y(_y), z(_z) {
+    }
+    bool operator==(const Extent3D& other) const {
+        return x == other.x && y == other.y && z == other.z;
+    };
+};
+
+struct ViewPort {
+    float x;
+    float y;
+    float width;
+    float height;
+    float minDepth;
+    float maxDepth;
+};
 struct Rect2D {
     Offset2D offset;
     Extent2D extent;
@@ -1783,36 +1959,36 @@ struct RHIRenderPassInfo {
 #pragma region RDG resource creater
 //
 ///** Used to specify a texture metadata plane when creating a view. from UE 5.3*/
-//enum class ERHITexturePlane : uint8_t {
-//    // The primary plane is used with default compression behavior.
-//    Primary = 0,
-//
-//    // The primary plane is used without decompressing it.
-//    PrimaryCompressed = 1,
-//
-//    // The depth plane is used with default compression behavior.
-//    Depth = 2,
-//
-//    // The stencil plane is used with default compression behavior.
-//    Stencil = 3,
-//
-//    // The HTile plane is used.
-//    HTile = 4,
-//
-//    // the FMask plane is used.
-//    FMask = 5,
-//
-//    // the CMask plane is used.
-//    CMask = 6,
-//
-//    // This enum is packed into various structures. Avoid adding new
-//    // members without verifying structure sizes aren't increased.
-//    Num,
-//    NumBits = 3,
-//
-//    CompressedSurface = PrimaryCompressed,
-//};
-//static_assert((1u << uint32_t(ERHITexturePlane::NumBits)) >= uint32_t(ERHITexturePlane::Num), "Not enough bits in the ERHITexturePlane enum");
+enum class ERHITexturePlane : uint8_t {
+    // The primary plane is used with default compression behavior.
+    Primary = 0,
+
+    // The primary plane is used without decompressing it.
+    PrimaryCompressed = 1,
+
+    // The depth plane is used with default compression behavior.
+    Depth = 2,
+
+    // The stencil plane is used with default compression behavior.
+    Stencil = 3,
+
+    // The HTile plane is used.
+    HTile = 4,
+
+    // the FMask plane is used.
+    FMask = 5,
+
+    // the CMask plane is used.
+    CMask = 6,
+
+    // This enum is packed into various structures. Avoid adding new
+    // members without verifying structure sizes aren't increased.
+    Num,
+    NumBits = 3,
+
+    CompressedSurface = PrimaryCompressed,
+};
+static_assert((1u << uint32_t(ERHITexturePlane::NumBits)) >= uint32_t(ERHITexturePlane::Num), "Not enough bits in the ERHITexturePlane enum");
 //
 //struct RHITextureSRVInfo {
 //    explicit RHITextureSRVInfo(uint8_t _mip_level = 0, uint8_t _num_mips = 0, EPixelFormat _format = PF_UNDEFINED)

@@ -12,7 +12,7 @@ enum { MAX_MESH_LOD_COUNT = 8 };
 
 /** The maximum number of vertex elements which can be used by a vertex declaration. */
 enum {
-    MAX_VERTEX_ELEMENT_COUNT      = 17,
+    MAX_VERTEX_ELEMENT_COUNT         = 17,
     MAX_VERTEX_ELEMENT_COUNT_NumBits = 5,
 };
 enum : uint8_t {
@@ -353,6 +353,7 @@ enum ERHIResourceType {
     RRT_TEXTURE_REFERENCE,
     RRT_TimestampCalibrationQuery,
     RRT_GPU_FENCE,
+    RRT_BARRIER,
     RRT_RenderQuery,
     RRT_RenderQueryPool,
     RRT_VIEWPORT,
@@ -383,73 +384,135 @@ enum class EAttachmentStoreOp : uint8_t {
     NumBits = 2
 };
 static_assert((int32_t)EAttachmentStoreOp::Num <= 1 << (uint32_t)EAttachmentStoreOp::NumBits, "EAttachmentStoreOp::Num will not fit on EAttachmentStoreOp::NumBits");
+
+//todo: maybe get rid of some of them, cause not every frag is supported
+enum ERHIPipelineStageFlags : uint32_t {
+    PS_TOP_OF_PIPE                      = 0x00000001,
+    PS_DRAW_INDIRECT                    = 0x00000002,
+    PS_VERTEX_INPUT                     = 0x00000004,
+    PS_VERTEX_SHADER                    = 0x00000008,
+    PS_TESSELLATION_CONTROL_SHADER      = 0x00000010,
+    PS_TESSELLATION_EVALUATION_SHADER   = 0x00000020,
+    PS_GEOMETRY_SHADER                  = 0x00000040,
+    PS_FRAGMENT_SHADER                  = 0x00000080,
+    PS_EARLY_FRAGMENT_TESTS             = 0x00000100,
+    PS_LATE_FRAGMENT_TESTS              = 0x00000200,
+    PS_COLOR_ATTACHMENT_OUTPUT          = 0x00000400,
+    PS_COMPUTE_SHADER                   = 0x00000800,
+    PS_TRANSFER                         = 0x00001000,
+    PS_BOTTOM_OF_PIPE                   = 0x00002000,
+    PS_HOST                             = 0x00004000,
+    PS_ALL_GRAPHICS                     = 0x00008000,
+    PS_ALL_COMMANDS                     = 0x00010000,
+    PS_NONE                             = 0,
+    PS_TRANSFORM_FEEDBACK               = 0x01000000,
+    PS_CONDITIONAL_RENDERING            = 0x00040000,
+    PS_ACCELERATION_STRUCTURE_BUILD     = 0x02000000,
+    PS_RAY_TRACING_SHADER               = 0x00200000,
+    PS_FRAGMENT_DENSITY_PROCESS         = 0x00800000,
+    PS_FRAGMENT_SHADING_RATE_ATTACHMENT = 0x00400000,
+    PS_COMMAND_PREPROCESS_BIT_NV        = 0x00020000,
+    PS_TASK_SHADER_BIT                  = 0x00080000,
+    PS_MESH_SHADER                      = 0x00100000,
+    PS_SHADING_RATE_IMAGE_NV            = PS_FRAGMENT_SHADING_RATE_ATTACHMENT,
+    PS_RAY_TRACING_SHADER_NV            = PS_RAY_TRACING_SHADER,
+    PS_ACCELERATION_STRUCTURE_BUILD_NV  = PS_ACCELERATION_STRUCTURE_BUILD,
+    PS_TASK_SHADER_NV                   = PS_TASK_SHADER_BIT,
+    PS_MESH_SHADER_NV                   = PS_MESH_SHADER,
+    PS_NONE_KHR                         = PS_NONE
+};
 #pragma endregion
 
 #pragma region pixel format
 
-//enum class RHIAccessFlag : uint32_t {
-//    UNDEFINED         = 0ULL,
-//    INDIRECT_ARGUMENT = 1 << 0,
-//    INDEX_BUFFER      = 1 << 1,
-//    VERTEX_BUFFER     = 1 << 2,
-//    CONSTANT_BUFFER   = 1 << 3, /* constant buffer in dx12 while uniform buffer in vulkan */
-//    INPUT_ATTACHMENT  = 1 << 4,
-//    SHADER_RESOURCE   = 1 << 5,
-//    UNORDERED_ACCESS  = 1 << 6,
-//    COLOR_ATTACHMENT  = 1 << 7,
-//    //    COLOR_ATTACHMENT_WRITE = 1 << 8,
-//    DEPTH_READ   = 1 << 9,
-//    DEPTH_WRITE  = 1 << 10,
-//    TRANSFER_SRC = 1 << 11,
-//    TRANSFER_DST = 1 << 12,
-//    PRESENT      = 1 << 15,
-//
-//    MEMORY_WRITE_BIT = 1 << 16,
-//    HOST_READ_BIT    = 1 << 13,
-//    HOST_WRITE_BIT   = 1 << 14,
-//
-//    SHADER_SAMPLED_READ_BIT                   = 1 << 17,
-//    SHADER_STORAGE_READ_BIT                   = 1 << 18,
-//    SHADER_STORAGE_WRITE_BIT                  = 1 << 19,
-//    TRANSFORM_FEEDBACK_WRITE_BIT_EXT          = 1 << 20,
-//    TRANSFORM_FEEDBACK_COUNTER_READ_BIT_EXT   = 1 << 21,
-//    TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT  = 1 << 22,
-//    CONDITIONAL_RENDERING_READ_BIT_EXT        = 1 << 23,
-//    COMMAND_PREPROCESS_READ_BIT_NV            = 1 << 24,
-//    COMMAND_PREPROCESS_WRITE_BIT_NV           = 1 << 25,
-//    FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT = 1 << 26,
-//    ACCELERATION_STRUCTURE_READ_BIT           = 1 << 27,
-//    ACCELERATION_STRUCTURE_WRITE_BIT          = 1 << 28,
-//    FRAGMENT_DENSITY_MAP_READ_BIT_EXT         = 1 << 29
-//
-//};
-//ENUM_BIT_OP_IMPL(RHIAccessFlag, FLAG)
+//temporarily only have effects in vulkan rhi
+enum class EBarrierDependencyScope : uint8_t {
+    /* for barrier happens between stages in
+     * PS_FRAGMENT_SHADER
+     * PS_EARLY_FRAGMENT_TESTS
+     * PS_LATE_FRAGMENT_TESTS
+     * PS_COLOR_ATTACHMENT_OUTPUT
+     * Dependency scope can be called framebuffer local or framebuffer global.
+     * In vulkan, it means barriers only guarantees ordering between corresponding framebuffer regions
+     * between stages above, which can be used to avoid resource flush during multi-subpass in TBR archs.
+     *
+     * not set means framebuffer global
+     */
+    BY_REGION,
+
+    // not set means view-global in multi-view rendering
+    VIEW_LOCAL,
+
+    // not set means device-local
+    NON_DEVICE_LOCAL
+
+};
+enum class ERHIAccessFlags : uint32_t {
+    UNDEFINED              = 0ULL,
+    INDIRECT_COMMAND_READ  = 1 << 0,
+    INDEX_READ             = 1 << 1,
+    VERTEX_ATTRIBUTE_READ  = 1 << 2,
+    UNIFORM_READ           = 1 << 3, /* constant buffer in dx12 while uniform buffer in vulkan */
+    INPUT_ATTACHMENT_READ  = 1 << 4,
+    SHADER_READ            = 1 << 5,
+    SHADER_WRITE           = 1 << 6,
+    COLOR_ATTACHMENT_READ  = 1 << 7,
+    COLOR_ATTACHMENT_WRITE = 1 << 8,
+    DEPTH_STENCIL_READ     = 1 << 9,
+    DEPTH_STENCIL_WRITE    = 1 << 10,
+    TRANSFER_READ          = 1 << 11,
+    TRANSFER_WRITE         = 1 << 12,
+    MEMORY_READ            = 1 << 15,
+
+    MEMORY_WRITE  = 1 << 16,
+    CPU_READ_BIT  = 1 << 13,
+    CPU_WRITE_BIT = 1 << 14,
+
+    SHADER_SAMPLED_READ                       = 1 << 17,
+    SHADER_RESOURCE_VIEW                      = 1 << 18,
+    UNORDERED_ACCESS_VIEW                     = 1 << 19,
+    TRANSFORM_FEEDBACK_WRITE_BIT_EXT          = 1 << 20,
+    TRANSFORM_FEEDBACK_COUNTER_READ_BIT_EXT   = 1 << 21,
+    TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT  = 1 << 22,
+    CONDITIONAL_RENDERING_READ_BIT_EXT        = 1 << 23,
+    COMMAND_PREPROCESS_READ_BIT_VN            = 1 << 24,
+    COMMAND_PREPROCESS_WRITE_BIT_NV           = 1 << 25,
+    FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT = 1 << 26,
+    ACCELERATION_STRUCTURE_READ_BIT           = 1 << 27,
+    ACCELERATION_STRUCTURE_WRITE_BIT          = 1 << 28,
+    FRAGMENT_DENSITY_MAP_READ_BIT_EXT         = 1 << 29
+
+};
+ENUM_BIT_OP_IMPL(ERHIAccessFlags, FLAG)
 
 enum ETextureLayout : uint32_t {
-    TEXTURE_LAYOUT_UNDEFINED,
-    TEXTURE_LAYOUT_COMMON,
-    TEXTURE_LAYOUT_COLOR_ATTACHMENT,
-    TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE,
-    TEXTURE_LAYOUT_DEPTH_STENCIL_READ,
-    TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-    TEXTURE_LAYOUT_TRANSFER_SRC,
-    TEXTURE_LAYOUT_TRANSFER_DST,
-    TEXTURE_LAYOUT_PRE_INITIALIZED, /* for linear textures which data can be written to memory immediately without layout transfer */
-    TEXTURE_LAYOUT_DEPTH_READ_STENCIL_WRITE,
-    TEXTURE_LAYOUT_DEPTH_WRITE_STENCIL_READ,
-    TEXTURE_LAYOUT_DEPTH_WRITE,
-    TEXTURE_LAYOUT_DEPTH_READ,
-    TEXTURE_LAYOUT_STENCIL_WRITE,
-    TEXTURE_LAYOUT_STENCIL_READ,
-    TEXTURE_LAYOUT_VIDEO_ENCODE,
-    TEXTURE_LAYOUT_VIDEO_DECODE,
-    TEXTURE_LAYOUT_READ,
-    TEXTURE_LAYOUT_WRITE,
-    TEXTURE_LAYOUT_PRESENT_SRC,
-    TEXTURE_LAYOUT_SHARED_PRESENT,
-    TEXTURE_LAYOUT_FRAGMENT_DENSITY_MAP,
-    TEXTURE_LAYOUT_FRAGMENT_SHADING_RATE_ATTACHMENT,
-    TEXTURE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL,
+    TEXTURE_LAYOUT_UNDEFINED                        = 1 << 0,
+    TEXTURE_LAYOUT_COMMON                           = 1 << 1,
+    TEXTURE_LAYOUT_COLOR_ATTACHMENT                 = 1 << 2,
+    TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE              = 1 << 3,
+    TEXTURE_LAYOUT_DEPTH_STENCIL_READ               = 1 << 4,
+    TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL         = 1 << 5,
+    TEXTURE_LAYOUT_TRANSFER_SRC                     = 1 << 6,
+    TEXTURE_LAYOUT_TRANSFER_DST                     = 1 << 7,
+    TEXTURE_LAYOUT_PRE_INITIALIZED                  = 1 << 8, /* for linear textures which data can be written to memory immediately without layout transfer */
+    TEXTURE_LAYOUT_DEPTH_READ_STENCIL_WRITE         = 1 << 9,
+    TEXTURE_LAYOUT_DEPTH_WRITE_STENCIL_READ         = 1 << 10,
+    TEXTURE_LAYOUT_DEPTH_WRITE                      = 1 << 11,
+    TEXTURE_LAYOUT_DEPTH_READ                       = 1 << 12,
+    TEXTURE_LAYOUT_STENCIL_WRITE                    = 1 << 13,
+    TEXTURE_LAYOUT_STENCIL_READ                     = 1 << 14,
+    TEXTURE_LAYOUT_VIDEO_ENCODE                     = 1 << 15,
+    TEXTURE_LAYOUT_VIDEO_DECODE                     = 1 << 16,
+    TEXTURE_LAYOUT_READ                             = 1 << 17,
+    TEXTURE_LAYOUT_WRITE                            = 1 << 18,
+    TEXTURE_LAYOUT_PRESENT_SRC                      = 1 << 19,
+    TEXTURE_LAYOUT_SHARED_PRESENT                   = 1 << 20,
+    TEXTURE_LAYOUT_FRAGMENT_DENSITY_MAP             = 1 << 21,
+    TEXTURE_LAYOUT_FRAGMENT_SHADING_RATE_ATTACHMENT = 1 << 22,
+    TEXTURE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL = 1 << 23,
+
+    TEXTURE_LAYOUT_QUEUE_TYPE_GRAPHICS = 1 << 29,
+    TEXTURE_LAYOUT_QUEUE_TYPE_COMPUTE  = 1 << 30,
     TEXTURE_LAYOUT_Num
 };
 #pragma endregion
@@ -468,7 +531,7 @@ enum EShaderType : uint8_t {
     ST_NumBits = 4
 };
 static_assert(ST_Num <= (1 << ST_NumBits), "ST_Num exceeds ST_NumBits bound");
-enum EVertexElementType :uint8_t {
+enum EVertexElementType : uint8_t {
     VET_None,
     VET_Float1,
     VET_Float2,
@@ -496,7 +559,7 @@ enum EVertexElementType :uint8_t {
 };
 static_assert(VET_Num <= (1 << VET_NumBits), "VET_Num will not fit on VET_NumBits");
 
-enum EVertexInputRate :uint8_t{
+enum EVertexInputRate : uint8_t {
     VIR_VERTEX,
     VIR_INSTANCE,
     VIR_Num,
@@ -665,19 +728,23 @@ enum class ETextureUsageFlags : uint64_t {
     Num
 };
 ENUM_BIT_OP_IMPL(ETextureUsageFlags, FLAG)
-enum ETextureAspectFlagBits {
-    IA_COLOR_BIT              = 0x001,
-    IA_DEPTH_BIT              = 0x002,
-    IA_STENCIL_BIT            = 0x004,
-    IA_METADATA_BIT           = 0x008,
-    IA_PLANE_0_BIT            = 0x010,
-    IA_PLANE_1_BIT            = 0x020,
-    IA_PLANE_2_BIT            = 0x040,
-    IA_NONE                   = 0,
-    IA_MEMORY_PLANE_0_BIT_EXT = 0x080,
-    IA_MEMORY_PLANE_1_BIT_EXT = 0x100,
-    IA_MEMORY_PLANE_2_BIT_EXT = 0x200,
-    IA_MEMORY_PLANE_3_BIT_EXT = 0x400
+enum class ETextureAspectFlags : uint32_t {
+    // no
+    NONE,
+    COLOR = 1 << 1,
+    DEPTH_SLICE = 1 << 2,
+    STENCIL_SLICE = 1 << 3,
+    META_DATA = 1 << 4,
+    //for multi-planer texture
+    PLANE_0 = 1 << 5,
+    PLANE_1 = 1 << 6,
+    PLANE_2 = 1 << 7,
+
+    //for ycbcr(used in video encoding, decoding) sampler color conversion
+    MEMORY_PLANE_0 = 1 << 8,
+    MEMORY_PLANE_1 = 1 << 9,
+    MEMORY_PLANE_2 = 1 << 10,
+    MEMORY_PLANE_3 = 1 << 11
 };
 
 /* various shading rate palette, VSR_{fragment_invocation_count}_{region_size}
@@ -709,7 +776,7 @@ enum EVRSRateCombinerOp : uint8_t {
 #pragma endregion
 
 #pragma region shader platform
-enum EShaderPlatform : uint16_t{
+enum EShaderPlatform : uint16_t {
     SP_WIN_D3D_SM5,
     SP_METAL,
     SP_WIN_D3D_ES3_1,
