@@ -25,10 +25,12 @@ public:
 
     virtual void DispatchIndirect(RHIBuffer* _buffer, uint64_t _offset) = 0;
 
-    virtual void CopyBuffer(const RHICopyBufferInfo& _copy_info, RHIBuffer* _src, RHIBuffer* _dst)     = 0;
-    virtual void CopyTexture(const RHICopyTextureInfo& _copy_info, RHITexture* _src, RHITexture* _dst) = 0;
-    virtual void CopyBufferToTexture()                                                                 = 0;
-    virtual void CopyTextureToBuffer()                                                                 = 0;
+    virtual void CopyBuffer(const RHICopyBufferInfo& _copy_info, RHIBuffer* _src, RHIBuffer* _dst)                            = 0;
+    virtual void CopyTexture(const RHICopyTextureInfo& _copy_info, RHITexture* _src, RHITexture* _dst)                        = 0;
+    virtual void CopyBufferToTexture(RHIBuffer* src_buffer, RHITexture* dst_texture, const RHICopyBufferToTextureInfo& _info) = 0;
+
+    virtual void CopyTextureToBuffer(RHITexture* src_texture, RHIBuffer* dst_buffer, const RHICopyTextureToBufferInfo& _info) = 0;
+
 
     //To copy regions of a source texture into a destination texture, potentially performing format conversion, arbitrary scaling, and filtering.
     //must not be used for multi-sampled source or destination textures, use resolve instead
@@ -60,15 +62,18 @@ public:
     virtual void SetCullMode(ERasterizerCullMode _cull_mode)                       = 0;
     virtual void SetPrimitiveTopology(EPrimitiveTopology _topology)                = 0;
     virtual void SetViewPorts(uint32_t num_viewports, const ViewPort* p_viewports) = 0;
+    virtual void SetViewPort(const ViewPort& _viewport)                            = 0;
     virtual void SetScissors(uint32_t num_scissors, const Rect2D* p_scissors)      = 0;
+    virtual void SetScissor(const Rect2D& _scissor)                                = 0;
     virtual void SetBlendFactors(const float _factors[4])                          = 0;
-
+ 
     virtual void BindVertexBuffers(
         uint32_t   _start_index,
         uint32_t   _num_buffers,
         RHIBuffer* p_vertex_buffers) = 0;
 
-    virtual void BeginRendering();
+    virtual void BeginRendering() = 0;
+    virtual void EndRendering()   = 0;
 };
 
 class RHIComputeCommandList final : public RHICommandListBase {
