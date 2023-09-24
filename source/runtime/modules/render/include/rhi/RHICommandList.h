@@ -31,7 +31,6 @@ public:
 
     virtual void CopyTextureToBuffer(RHITexture* src_texture, RHIBuffer* dst_buffer, const RHICopyTextureToBufferInfo& _info) = 0;
 
-
     //To copy regions of a source texture into a destination texture, potentially performing format conversion, arbitrary scaling, and filtering.
     //must not be used for multi-sampled source or destination textures, use resolve instead
     virtual void BlitTexture(RHITexture*         _src_texture,
@@ -66,7 +65,7 @@ public:
     virtual void SetScissors(uint32_t num_scissors, const Rect2D* p_scissors)      = 0;
     virtual void SetScissor(const Rect2D& _scissor)                                = 0;
     virtual void SetBlendFactors(const float _factors[4])                          = 0;
- 
+
     virtual void BindVertexBuffers(
         uint32_t   _start_index,
         uint32_t   _num_buffers,
