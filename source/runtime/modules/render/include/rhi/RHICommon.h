@@ -48,6 +48,55 @@ enum {
     MaxSimultaneousColorAttachments         = 8,
     MaxSimultaneousColorAttachments_NumBits = 3,
 };
+
+struct Offset2D {
+    int32_t x;
+    int32_t y;
+    bool    operator==(const Offset2D&) const = default;
+};
+struct Extent2D {
+    union {
+        uint32_t width;
+        uint32_t x;
+    };
+    union {
+        uint32_t height;
+        uint32_t y;
+    };
+    Extent2D(uint32_t _x, uint32_t _y) : x(_x), y(_y) {
+    }
+    bool operator==(const Extent2D& other) const {
+        return x == other.x && y == other.y;
+    };
+};
+
+struct Offset3D {
+    int32_t x;
+    int32_t y;
+    int32_t z;
+    bool    operator==(const Offset3D&) const = default;
+};
+struct Extent3D {
+    union {
+        uint32_t width;
+        uint32_t x;
+    };
+    union {
+        uint32_t height;
+        uint32_t y;
+    };
+    union {
+        uint32_t depth;
+        uint32_t z;
+    };
+    Extent3D(uint32_t _x, uint32_t _y, uint32_t _z) : x(_x), y(_y), z(_z) {
+    }
+    bool operator==(const Extent3D& other) const {
+        return x == other.x && y == other.y && z == other.z;
+    };
+};
+
+
 #pragma endregion
 
 #pragma region cross-platform param types

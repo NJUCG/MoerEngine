@@ -173,7 +173,6 @@ struct RHIBlendStateInitializer {
     RHI_API friend bool     operator==(const RHIBlendStateInitializer& lhs, const RHIBlendStateInitializer& rhs);
 };
 
-
 /**
  *	Viewport bounds structure to set multiple view ports for the geometry shader
  *  (needs to be 1:1 to the D3D11 structure)
@@ -237,94 +236,56 @@ struct RHIClearAttachment {
         }
         return false;
     }
-    friend uint32_t GetHash(const RHIClearAttachment& value){
+    friend uint32_t GetHash(const RHIClearAttachment& value) {
         uint32_t hash = GetHash(value.attachment);
-        if(EClearAttachment::COLOR == value.attachment){
+        if (EClearAttachment::COLOR == value.attachment) {
             hash_combine(hash, GetHash(value.value.color.uint32[0]));
             hash_combine(hash, GetHash(value.value.color.uint32[1]));
             hash_combine(hash, GetHash(value.value.color.uint32[2]));
             hash_combine(hash, GetHash(value.value.color.uint32[3]));
-        }else{
+        } else {
             hash_combine(hash, GetHash(value.value.depth_stencil.depth));
             hash_combine(hash, GetHash(value.value.depth_stencil.stencil));
         }
         return hash;
     }
 };
-
-struct RHICopyTextureInfo {
-    // Number of texels to copy. By default, it will copy the whole resource if no size is specified.
-    int3 size;
-
-    // Position of the copy from the source texture/to destination texture
-    int3 source_position;
-    int3 dest_position;
-
-    uint32_t src_slice_index = 0;
-    uint32_t dst_slice_index = 0;
-    uint32_t num_slices      = 1;
-
-    // Mips to copy and destination mips
-    uint32_t src_mip_index = 0;
-    uint32_t dst_mip_index = 0;
-    uint32_t num_mips      = 1;
-};
-struct RHIBufferRegion{
-    uint32_t src_offset;
-    uint32_t dst_offset;
-    uint64_t size;
-};
-struct RHICopyBufferInfo{
-    RHICopyBufferInfo() = default;
-
-    RHICopyBufferInfo(uint32_t _region_count, RHIBufferRegion* _regions): region_count(_region_count), p_regions(_regions){
-        assert(Validate() && "data not valid");
-    }
-
-    uint32_t region_count;
-    RHIBufferRegion* p_regions;
-private:
-    bool Validate()const{
-        return region_count > 0 && p_regions != nullptr;
-    }
-};
 //contains one mip subresource data
-struct RHISubresourceSlice{
-    const static uint32_t s_all = std::numeric_limits<uint32_t>::max();
+struct RHISubresourceSlice {
+    const static uint8_t s_all = std::numeric_limits<uint8_t>::max();
 
     ETextureAspectFlags aspect = ETextureAspectFlags::NONE;
-    uint32_t mip_index;
-    uint32_t array_index;
-    uint32_t array_count;
-    uint32_t plane_index;
-    uint32_t plane_count;
+    uint8_t             mip_index;
+    uint8_t             array_index;
+    uint8_t             array_count;
+    uint8_t             plane_index;
+    uint8_t             plane_count;
 
-    RHISubresourceSlice() = default;
     RHISubresourceSlice(
         ETextureAspectFlags _aspect,
-        uint32_t _mip_index,
-        uint32_t _array_index,
-        uint32_t _array_count,
-        uint32_t _plane_index,
-        uint32_t _plane_count)
+        uint8_t             _mip_index,
+        uint8_t             _array_index,
+        uint8_t             _array_count,
+        uint8_t             _plane_index = 0,
+        uint8_t             _plane_count = s_all)
         : aspect(_aspect),
           mip_index(_mip_index),
-          array_index (_array_index),
+          array_index(_array_index),
           array_count(_array_count),
           plane_index(_plane_index),
           plane_count(_plane_count) {}
 
     RHISubresourceSlice(
         ETextureAspectFlags _aspect,
-        uint32_t _mip_index,
-        uint32_t _array_index,
-        uint32_t _plane_index)
+        uint32_t            _mip_index,
+        uint32_t            _array_index,
+        uint32_t            _plane_index = 0)
         : aspect(_aspect),
           mip_index(_mip_index),
-          array_index (_array_index),
+          array_index(_array_index),
           array_count(1),
           plane_index(_plane_index),
-          plane_count(1) {}
+          plane_count(s_all) {}
 
     inline bool IsAllArraySlices() const {
         return array_count == s_all;
@@ -343,41 +304,35 @@ struct RHISubresourceSlice{
     }
 
     inline bool operator==(RHISubresourceSlice const& rhs) const {
-        return mip_index == rhs.mip_index
-               && array_index == rhs.array_index
-               && array_count == rhs.array_count
-               && plane_index == rhs.plane_index
-               && plane_count == rhs.plane_count;
+        return mip_index == rhs.mip_index && array_index == rhs.array_index && array_count == rhs.array_count && plane_index == rhs.plane_index && plane_count == rhs.plane_count;
     }
 
     inline bool operator!=(RHISubresourceSlice const& rhs) const {
         return !(*this == rhs);
     }
 };
-struct RHISubresourceRange : public RHISubresourceSlice{
+struct RHISubresourceRange : public RHISubresourceSlice {
 
-    uint32_t num_mips = s_all;
-
+    uint8_t num_mips = s_all;
 
     RHISubresourceRange() = default;
 
     RHISubresourceRange(
         ETextureAspectFlags _aspect,
-        uint32_t _mip_index,
-        uint32_t _num_mips,
-        uint32_t _array_index,
-        uint32_t _array_count,
-        uint32_t _plane_index,
-        uint32_t _plane_count)
+        uint32_t            _mip_index,
+        uint32_t            _num_mips,
+        uint32_t            _array_index,
+        uint32_t            _array_count,
+        uint32_t            _plane_index,
+        uint32_t            _plane_count)
         : RHISubresourceSlice(_aspect, _mip_index, _array_index, _array_count, _plane_index, _plane_count),
-          num_mips(_num_mips)
-    {}
+          num_mips(_num_mips) {}
 
     RHISubresourceRange(
         ETextureAspectFlags _aspect,
-        uint32_t _mip_index,
-        uint32_t _array_index,
-        uint32_t _plane_index)
+        uint32_t            _mip_index,
+        uint32_t            _array_index,
+        uint32_t            _plane_index)
         : RHISubresourceSlice(_aspect,
                               _mip_index,
                               _array_index,
@@ -407,12 +362,7 @@ struct RHISubresourceRange : public RHISubresourceSlice{
     }
 
     inline bool operator==(RHISubresourceRange const& rhs) const {
-        return mip_index == rhs.mip_index
-               && num_mips == rhs.num_mips
-               && array_index == rhs.array_index
-               && array_count == rhs.array_count
-               && plane_index == rhs.plane_index
-               && plane_count == rhs.plane_count;
+        return mip_index == rhs.mip_index && num_mips == rhs.num_mips && array_index == rhs.array_index && array_count == rhs.array_count && plane_index == rhs.plane_index && plane_count == rhs.plane_count;
     }
 
     inline bool operator!=(RHISubresourceRange const& rhs) const {
@@ -420,63 +370,203 @@ struct RHISubresourceRange : public RHISubresourceSlice{
     }
 };
 
+struct RHICopyTextureInfo {
+    RHISubresourceSlice src_slice;
+    RHISubresourceSlice dst_slice;
+    ETextureLayout      src_layout;
+    ETextureLayout      dst_layout;
+
+    Offset3D src_offset;
+
+    Offset3D dst_offset;
+    Extent3D extent;
+
+    RHICopyTextureInfo(ETextureLayout      _src_layout,
+                       RHISubresourceSlice _src_slice,
+                       ETextureLayout      _dst_layout,
+                       RHISubresourceSlice _dst_slice,
+                       Offset3D            _src_offset,
+                       Offset3D            _dst_offset,
+                       Extent3D            _extent)
+        : src_layout(_src_layout),
+          dst_layout(_dst_layout),
+          src_slice(_src_slice),
+          dst_slice(_dst_slice),
+          src_offset(_src_offset),
+          dst_offset(_dst_offset),
+          extent(_extent) {
+    }
+};
+
+struct RHICopyTextureToBufferInfo{
+    RHISubresourceSlice texture_slice;
+
+    uint64_t buffer_offset;
+    /* he buffer_row_length is the number of pixels from one row to the next.
+     * The buffer_texture_height is the number of rows from one texture layer to the next.*/
+    uint32_t buffer_row_length;
+    uint32_t buffer_texture_height;
+
+    Offset3D texture_offset;
+    Extent3D texture_extent;
+
+    ETextureLayout src_layout;
+
+    RHICopyTextureToBufferInfo(
+        ETextureLayout _src_layout,
+        Extent3D _extent,
+        RHISubresourceSlice _slice)
+        :src_layout(_src_layout),
+          texture_extent(_extent),
+          buffer_offset(0),
+          buffer_row_length(0),
+          buffer_texture_height(0),
+          texture_offset(0),
+          texture_slice(_slice)
+    {
+
+    }
+
+    RHICopyTextureToBufferInfo(
+        ETextureLayout _src_layout,
+        Offset3D _texture_offset,
+        Extent3D _extent,
+        RHISubresourceSlice _slice,
+        uint64_t _buffer_offset,
+        uint32_t _buffer_row_length = 0,
+        uint32_t _buffer_texture_height = 0)
+        :src_layout(_src_layout),
+          texture_extent(_extent),
+          buffer_offset(_buffer_offset),
+          buffer_row_length(_buffer_row_length),
+          buffer_texture_height(_buffer_texture_height),
+          texture_offset(_texture_offset),
+          texture_slice(_slice)
+    {
+
+    }
+};
+struct RHICopyBufferToTextureInfo{
+
+    RHISubresourceSlice texture_slice;
+    uint64_t buffer_offset;
+    /* he buffer_row_length is the number of pixels from one row to the next.
+     * The buffer_texture_height is the number of rows from one texture layer to the next.*/
+    uint32_t buffer_row_length;
+    uint32_t buffer_texture_height;
+
+    Offset3D texture_offset;
+    Extent3D texture_extent;
+
+    ETextureLayout dst_layout;
+
+    RHICopyBufferToTextureInfo(
+        ETextureLayout _dst_layout,
+        Extent3D _extent,
+        RHISubresourceSlice _slice)
+        :dst_layout(_dst_layout),
+          texture_extent(_extent),
+          buffer_offset(0),
+          buffer_row_length(0),
+          buffer_texture_height(0),
+          texture_offset(0),
+          texture_slice(_slice)
+    {
+
+    }
+
+    RHICopyBufferToTextureInfo(
+        ETextureLayout _dst_layout,
+        Offset3D _texture_offset,
+        Extent3D _extent,
+        RHISubresourceSlice _slice,
+        uint64_t _buffer_offset,
+        uint32_t _buffer_row_length = 0,
+        uint32_t _buffer_texture_height = 0)
+        :dst_layout(_dst_layout),
+          texture_extent(_extent),
+          buffer_offset(_buffer_offset),
+          buffer_row_length(_buffer_row_length),
+          buffer_texture_height(_buffer_texture_height),
+          texture_offset(_texture_offset),
+          texture_slice(_slice)
+    {
+
+    }
+};
+struct RHIBufferRegion {
+    uint32_t src_offset;
+    uint32_t dst_offset;
+    uint64_t size;
+};
+struct RHICopyBufferInfo {
+    RHICopyBufferInfo() = default;
+
+    RHICopyBufferInfo(uint32_t _region_count, RHIBufferRegion* _regions) : region_count(_region_count), p_regions(_regions) {
+        assert(Validate() && "data not valid");
+    }
+
+    uint32_t         region_count;
+    RHIBufferRegion* p_regions;
+
+private:
+    bool Validate() const {
+        return region_count > 0 && p_regions != nullptr;
+    }
+};
+
 /* todo: transition information definition */
-struct RHIResourceTransitionInfo{
-
+struct RHIResourceTransitionInfo {
 };
 
+///* resource copy definition */
+//struct RHICopyTextureRegion {
+//    /** offset in texture */
+//    uint32_t dst_x;
+//    uint32_t dst_y;
+//    uint32_t dst_z;
+//
+//    /** offset in source image data */
+//    int32_t src_x;
+//    int32_t src_y;
+//    int32_t src_z;
+//
+//    /** size of region to copy */
+//    uint32_t width;
+//    uint32_t height;
+//    uint32_t depth;
+//
+//    RHICopyTextureRegion() = default;
+//    explicit RHICopyTextureRegion(int3 _dst_range, int3 _src_range, int3 _src_size)
+//        : dst_x(_dst_range.x),
+//          dst_y(_dst_range.y),
+//          dst_z(_dst_range.z),
+//          src_x(_src_range.x),
+//          src_y(_src_range.y),
+//          src_z(_src_range.z),
+//          width(_src_size.x),
+//          height(_src_size.y),
+//          depth(_src_size.z) {}
+//};
 
-/* resource copy definition */
-struct RHICopyTextureRegion {
-    /** offset in texture */
-    uint32_t dst_x;
-    uint32_t dst_y;
-    uint32_t dst_z;
-
-    /** offset in source image data */
-    int32_t src_x;
-    int32_t src_y;
-    int32_t src_z;
-
-    /** size of region to copy */
-    uint32_t width;
-    uint32_t height;
-    uint32_t depth;
-
-    RHICopyTextureRegion() = default;
-    explicit RHICopyTextureRegion(int3 _dst_range, int3 _src_range, int3 _src_size)
-        : dst_x(_dst_range.x),
-          dst_y(_dst_range.y),
-          dst_z(_dst_range.z),
-          src_x(_src_range.x),
-          src_y(_src_range.y),
-          src_z(_src_range.z),
-          width(_src_size.x),
-          height(_src_size.y),
-          depth(_src_size.z) {}
-};
-
-struct RHIDispatchIndirectParameters
-{
+struct RHIDispatchIndirectParameters {
     uint32_t group_count_x;
     uint32_t group_count_y;
     uint32_t group_count_z;
 };
 
-struct RHIDrawIndirectParameters
-{
+struct RHIDrawIndirectParameters {
     uint32_t vertex_count;
     uint32_t instance_count;
     uint32_t start_vertex_location;
     uint32_t start_instance_location;
 };
 
-struct RHIDrawIndexedIndirectParameters
-{
+struct RHIDrawIndexedIndirectParameters {
     uint32_t index_count;
     uint32_t instance_count;
     uint32_t start_index_location;
-    int32_t base_vertex_location;
+    int32_t  base_vertex_location;
     uint32_t start_instance_location;
 };
 
