@@ -315,7 +315,11 @@ struct RHISubresourceRange : public RHISubresourceSlice {
 
     uint8_t num_mips = s_all;
 
-    RHISubresourceRange() = default;
+    RHISubresourceRange():
+                            RHISubresourceSlice(
+                                ETextureAspectFlags::NONE,
+                                0, 0
+                                ){};
 
     RHISubresourceRange(
         ETextureAspectFlags _aspect,
