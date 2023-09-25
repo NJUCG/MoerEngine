@@ -633,33 +633,33 @@ enum class EShaderCodeResourceBindingType : uint8_t {
 
     //// Texture1D: not used in the renderer.
     //// Texture1DArray: not used in the renderer.
-    //Texture2D,
-    //Texture2DArray,
-    //Texture2DMS,
-    //Texture3D,
-    //// Texture3DArray: not used in the renderer.
-    //TextureCube,
-    //TextureCubeArray,
-    //TextureMetadata,
+    Texture2D,
+    Texture2DArray,
+    Texture2DMS,
+    Texture3D,
+    // Texture3DArray: not used in the renderer.
+    TextureCube,
+    TextureCubeArray,
+    TextureMetadata,
 
-    //Buffer,
-    //StructuredBuffer,
-    //ByteAddressBuffer,
-    //RaytracingAccelerationStructure,
+    Buffer,
+    StructuredBuffer,
+    ByteAddressBuffer,
+    RaytracingAccelerationStructure,
 
-    //// RWTexture1D: not used in the renderer.
-    //// RWTexture1DArray: not used in the renderer.
-    //RWTexture2D,
-    //RWTexture2DArray,
-    //RWTexture3D,
-    //// RWTexture3DArray: not used in the renderer.
-    //RWTextureCube,
-    //// RWTextureCubeArray: not used in the renderer.
-    //RWTextureMetadata,
+    // RWTexture1D: not used in the renderer.
+    // RWTexture1DArray: not used in the renderer.
+    RWTexture2D,
+    RWTexture2DArray,
+    RWTexture3D,
+    // RWTexture3DArray: not used in the renderer.
+    RWTextureCube,
+    // RWTextureCubeArray: not used in the renderer.
+    RWTextureMetadata,
 
-    //RWBuffer,
-    //RWStructuredBuffer,
-    //RWByteAddressBuffer,
+    RWBuffer,
+    RWStructuredBuffer,
+    RWByteAddressBuffer,
     CONSTANT_BUFFER,
     COMBINED_IMAGE_SAMPLER,
     SAMPLED_IMAGE,
@@ -698,36 +698,12 @@ enum EUniformBufferBaseType : uint8_t {
     //UBMT_SRV,
     //UBMT_UAV,
     //UBMT_SAMPLER,
-
-    // Resources tracked by render graph.
-    //UBMT_RDG_TEXTURE,
-    //UBMT_RDG_TEXTURE_ACCESS,
-    //UBMT_RDG_TEXTURE_ACCESS_ARRAY,
-    //UBMT_RDG_TEXTURE_SRV,
-    //UBMT_RDG_TEXTURE_UAV,
-    //UBMT_RDG_BUFFER_ACCESS,
-    //UBMT_RDG_BUFFER_ACCESS_ARRAY,
-    //UBMT_RDG_BUFFER_SRV,
-    //UBMT_RDG_BUFFER_UAV,
-    //UBMT_RDG_UNIFORM_BUFFER,
-
-    // Nested structure.
-    UBMT_NESTED_STRUCT,
-
-    // Structure that is nested on C++ side, but included on shader side.
-    UBMT_INCLUDED_STRUCT,
-
-    // GPU Indirection reference of struct, like is currently named Uniform buffer.
-    //UBMT_REFERENCED_STRUCT,
-
-    // Structure dedicated to setup render targets for a rasterizer pass.
-    //UBMT_RENDER_TARGET_BINDING_SLOTS,
-
+    
     UBMT_Num,
     UBMT_NumBits = 3,
 };
 static_assert(UBMT_Num <= (1 << UBMT_NumBits), "EUniformBufferBaseType_Num will not fit on EUniformBufferBaseType_NumBits");
-using FUniformBufferGlobalBindingPoint = uint8_t;
+using UniformBufferGlobalBindingPoint = uint8_t;
 
 enum {
     /** The maximum number of static slots allowed. */
@@ -735,9 +711,26 @@ enum {
 };
 
 /** Returns whether a static uniform buffer slot index is valid. */
-inline bool IsUniformBufferGlobalBindingPointValid(const FUniformBufferGlobalBindingPoint binding_point_) {
+inline bool IsUniformBufferGlobalBindingPointValid(const UniformBufferGlobalBindingPoint binding_point_) {
     return binding_point_ < MAX_UNIFORM_BUFFER_GLOBAL_BINDING_POINT;
 }
+
+/** The list of flags declaring which binding models are allowed for a uniform buffer layout. */
+enum class EUniformBufferBindingFlags : uint8_t
+{
+    /** If set, the uniform buffer can be bound as an RHI shader parameter on an RHI shader (i.e. RHISetShaderUniformBuffer). */
+    SHADER = 1 << 0,
+    
+    /** If set, the uniform buffer can be bound globally through a static slot (i.e. RHISetStaticUniformBuffers). */
+    STATIC = 1 << 1,
+
+    /** If set, the uniform buffer can be bound globally or per-shader, depending on the use case. Only one binding model should be
+	 *  used at a time, and RHI validation will emit an error if both are used for a particular uniform buffer at the same time. This
+	 *  is designed for difficult cases where a fixed single binding model would produce an unnecessary maintenance burden. Using this
+	 *  disables some RHI validation errors for global bindings, so use with care.
+	 */
+    ALL = STATIC | SHADER
+};
 
 enum EResourceAccessMode {
     RAM_READ_ONLY,

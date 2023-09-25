@@ -1100,7 +1100,7 @@ generation distribution
 ---
 ### GLM 0.7.6 final - 2008-08-08
 - Improved C++ standard comformance
-- Added Static assert for types checking
+- Added STATIC assert for types checking
 
 ---
 ### GLM 0.7.5 final - 2008-07-05
