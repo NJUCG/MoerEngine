@@ -11,10 +11,12 @@ set_target_properties(${MODULE_NAME} PROPERTIES FOLDER "runtime")
 target_include_directories(${MODULE_NAME}
 	PUBLIC $<BUILD_INTERFACE:${MODULE_DIR}/include>
 	PUBLIC $<BUILD_INTERFACE:${MODULE_DIR}/include/rhi>
+	PRIVATE $<BUILD_INTERFACE:${MODULE_DIR}/include/rhi/vulkan>
     PUBLIC $<BUILD_INTERFACE:${RUNTIME_CORE_DIR}/include>
     PUBLIC $<BUILD_INTERFACE:${THIRD_PARTY_DIR}/boost>
     PUBLIC $<BUILD_INTERFACE:${THIRD_PARTY_DIR}/spdlog/include>
     PUBLIC $<BUILD_INTERFACE:${THIRD_PARTY_DIR}/glm>
+	PRIVATE $<BUILD_INTERFACE:${THIRD_PARTY_DIR}/VulkanSDK/include/vulkan>
 )
 
 target_link_libraries(${MODULE_NAME}

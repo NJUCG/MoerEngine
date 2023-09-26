@@ -1,4 +1,4 @@
-set(TARGET_NAME Moer2Runtime)
+set(TARGET_NAME MoerEngineRuntime)
 set(RUNTIME_DIR ${ENGINE_ROOT_DIR}/runtime)
 
 

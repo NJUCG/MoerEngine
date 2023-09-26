@@ -5,206 +5,340 @@
 #include "API_Macro.h"
 #include "misc/Hash.h"
 #include "unordered_map"
+#include <cstring>
 #define SHADER_PARAMETER_STRUCTURE_ALIGNMENT 16
+
+#pragma region forward
+class ShaderPipelineType;
+class VertexFactoryType;
+struct ShaderCompilerOutput;
+
+#pragma endregion
 enum class EShaderParameterType : uint8_t {
-    LooseData,
-    UniformBuffer,
-    Sampler,
+    LOOSE_DATA,
+    UNIFORM_BUFFER,
+    SAMPLER,
     SRV,
     UAV,
 
-    Bindless_ResourceIndex,
-    Bindless_SamplerIndex,
+    BINDLESS_RESOURCE_INDEX,
+    BINDLESS_SAMPLER_INDEX,
 
     Num
 };
 
 enum class EShaderPrecisionModifier : uint8_t {
-    Float,
-    Half,
-    Fixed,
-    Invalid
+    FLOAT,
+    HALF,
+    FIXED,
+    INVALID
 };
 ENUM_BIT_OP_IMPL(EShaderPrecisionModifier, )
-struct RHIUniformBufferMemberInitializer {
+
+struct RHIUniformBufferResourceInitializer {
 
     uint16_t member_offset;
 
     /** Type of the member that allow (). */
-    EUniformBufferBaseType member_type;
+    EShaderBindingBaseType member_type;
     uint8_t                padding;
 
     /** Compare two uniform buffer layout resources. */
-    friend inline bool operator==(const RHIUniformBufferMemberInitializer& A, const RHIUniformBufferMemberInitializer& B) {
+    friend inline bool operator==(const RHIUniformBufferResourceInitializer& A, const RHIUniformBufferResourceInitializer& B) {
         return A.member_offset == B.member_offset && A.member_type == B.member_type;
     }
 };
+struct RHIUniformBufferLayoutInitializer {
+    RHIUniformBufferLayoutInitializer() = default;
+    explicit RHIUniformBufferLayoutInitializer(const char* _name, uint32_t _buffer_size) : name(_name), buffer_size(_buffer_size) {
+    }
+    uint32_t    buffer_size;
+    const char* name;
+
+private:
+    void ComputeHash() {
+        //todo
+    }
+
+    uint32_t hash = 0;
+
+public:
+    std::vector<RHIUniformBufferResourceInitializer> inline_resources;
+    std::vector<RHIUniformBufferResourceInitializer> reference_resources;
+
+    uint32_t                        constant_buffer_size;
+    uint16_t                        attachments_offset = std::numeric_limits<uint16_t>::max();
+    UniformBufferGlobalBindingPoint static_slot        = MAX_UNIFORM_BUFFER_GLOBAL_BINDING_POINT;
+
+    EUniformBufferBindingFlags binding_flags = EUniformBufferBindingFlags::SHADER;
+
+    friend inline bool operator==(const RHIUniformBufferLayoutInitializer& lhs, const RHIUniformBufferLayoutInitializer& rhs) {
+        return lhs.constant_buffer_size == rhs.constant_buffer_size && lhs.static_slot == rhs.static_slot && lhs.binding_flags == rhs.binding_flags && lhs.inline_resources == rhs.inline_resources;
+    }
+};
+
+// per parameter allocation in global map
+struct ShaderParameterAllocationInfo {
+    uint16_t             buffer_index = 0;
+    uint16_t             base_index   = 0;
+    uint16_t             size         = 0;
+    EShaderParameterType type{EShaderParameterType::Num};
+    mutable bool         b_bound = false;
+
+    ShaderParameterAllocationInfo() = default;
+    ShaderParameterAllocationInfo(
+        uint16_t             _buffer_index,
+        uint16_t             _base_index,
+        uint16_t             _size,
+        EShaderParameterType _type) : buffer_index(_buffer_index),
+                                      base_index(_base_index),
+                                      size(_size),
+                                      type(_type) {
+    }
+};
+class ShaderParameterMap {
+public:
+    ShaderParameterMap() = default;
+
+    std::optional<ShaderParameterAllocationInfo> FindShaderParameterAllocation(const std::string& _param_name) const;
+    void                                         AddShaderParameterAllocation(const char* _param_name, uint16_t _buffer_index, uint16_t _base_index, uint16_t _size, EShaderParameterType _type);
+    void                                         RemoveShaderParameterAllocation(const char* _param_name);
+
+    inline void GetAllParamsNames(std::vector<std::string>& _out_names) const {
+        for (const auto& params_pair : shader_parameters_map) {
+            _out_names.push_back(params_pair.first);
+        }
+    }
+    inline const std::unordered_map<std::string, ShaderParameterAllocationInfo>& GetShaderParameterMap() const {
+        return shader_parameters_map;
+    }
+
+private:
+    std::unordered_map<std::string, ShaderParameterAllocationInfo> shader_parameters_map;
+};
+
+//compiled shader platform and type information
+struct alignas(4) ShaderTargetInfo {
+    uint32_t shader_type : ST_NumBits;
+    uint32_t shader_platform : SP_NumBits;
+};
+
+class ShaderType {
+public:
+    struct Parameters {
+    };
+};
+struct ShaderReflectionInfo {
+    struct UniformBufferEntry {
+        std::string name;
+        uint32_t    binding;
+    };
+};
+
+//compiled shader output container for shader initialization
+struct ShaderCompiledInfo {
+    const ShaderType*           Type;
+    ShaderTargetInfo            target_info;
+    const std::vector<uint8_t>& compiled_code;
+    const ShaderParameterMap&   ParameterMap;
+    const SHA256Hash&           OutputHash;
+    SHA256Hash                  MaterialShaderMapHash;
+    const ShaderPipelineType*   ShaderPipeline;
+    //    const VertexFactoryType* VertexFactoryType;
+    uint32_t NumInstructions;
+    uint32_t NumTextureSamplers;
+    uint32_t CodeSize;
+    int32_t  PermutationId;
+
+    RHI_API ShaderCompiledInfo(
+        const ShaderType*           _shader_type,
+        const ShaderCompilerOutput& _out_compiler_output,
+        const SHA256Hash&           _material_shader_map_hash,
+        const ShaderPipelineType*   _shader_pipeline_type
+        //        const FVertexFactoryType* InVertexFactoryType
+    );
+};
+
+class Shader {
+    friend class ShaderType;
+
+public:
+    RHI_API Shader();
+
+    RHI_API Shader(const ShaderCompiledInfo& intializer);
+
+    ~Shader();
+
+private:
+    ShaderType*      type;
+    ShaderTargetInfo target_info;
+    int32_t          resource_index;
+
+    int32_t num_samplers;
+    int32_t code_size;
+};
+
 class ShaderParametersMetadata {
 public:
     /** The use case of the uniform buffer structures. */
     enum class EUseCase : uint8_t {
         /** Stand alone shader parameter struct used for render passes and shader parameters. */
-        ShaderParameterStruct,
+        SHADER_PARAMETER_STRUCT,
 
         /** Uniform buffer definition authored at compile-time. */
-        UniformBuffer,
-
-        /** Uniform buffer generated from assets, such as material parameter collection or Niagara. */
-        DataDrivenUniformBuffer,
-    };
-
-    /** Additional flags that can be used to determine usage */
-    enum class EUsageFlags : uint8_t {
-        None = 0,
-
-        /** On platforms that support emulated uniform buffers, disable them for this uniform buffer */
-        NoEmulatedUniformBuffer = 1 << 0,
+        UNIFORM_BUFFER
     };
 
     /** Shader binding name of the uniform buffer that contains the root shader parameters. */
-    static constexpr const char* kRootUniformBufferBindingName = "_RootShaderParameters";
+    static constexpr const char* s_root_shader_binding_name = "_RootShaderParameters";
 
     /** Shader binding name of the uniform buffer that contains the root shader parameters. */
-    static constexpr int32_t kRootCBufferBindingIndex = 0;
+    static constexpr int32_t s_root_constant_buffer_binding_index = 0;
 
     /** A member of a shader parameter structure. */
     class Member {
     public:
         /** Initialization constructor. */
         Member(
-            const char*                     InName,
-            const char*                     InShaderType,
-            int32_t                         InFileLine,
-            uint32_t                        InOffset,
-            EUniformBufferBaseType          InBaseType,
-            EShaderPrecisionModifier        InPrecision,
-            uint32_t                        InNumRows,
-            uint32_t                        InNumColumns,
-            uint32_t                        InNumElements,
-            const ShaderParametersMetadata* InStruct)
-            : Name(InName), ShaderType(InShaderType), FileLine(InFileLine), Offset(InOffset), BaseType(InBaseType), Precision(InPrecision), NumRows(InNumRows), NumColumns(InNumColumns), NumElements(InNumElements), Struct(InStruct) {
+            const char*                     _name,
+            const char*                     _binding_type,
+            int32_t                         _file_line,
+            uint32_t                        _struct_offset,
+            EShaderBindingBaseType          _base_type,
+            EShaderPrecisionModifier        _type_precision,
+            uint32_t                        _num_rows,
+            uint32_t                        _num_columns,
+            uint32_t                        _num_elements,
+            const ShaderParametersMetadata* _p_struct_meta_data)
+            : name(_name),
+              file_line(_file_line),
+              struct_offset(_struct_offset),
+              base_type(_base_type),
+              type_precision(_type_precision),
+              num_rows(_num_rows),
+              num_columns(_num_columns),
+              num_elements(_num_elements),
+              p_struct_meta_data(_p_struct_meta_data) {
+            std::string temp(_binding_type);
+            auto        binding_type_name = std::string(_binding_type).substr(0, temp.find_first_of('<'));
         }
 
         /** Returns the string of the name of the element or name of the array of elements. */
-        const char* GetName() const { return Name; }
+        const char* GetName() const { return name; }
 
         /** Returns the string of the type. */
-        const char* GetShaderType() const { return ShaderType; }
+        EShaderCodeResourceBindingType GetShaderBindingType() const { return binding_type; }
+
+        /** Returns the string of the type. */
+        const char* GetShaderBindingTypeStr() const { return ToString(binding_type); }
 
         /** Returns the C++ line number where the parameter is declared. */
-        int32_t GetFileLine() const { return int32_t(FileLine); }
+        int32_t GetFileLine() const { return int32_t(file_line); }
 
         /** Returns the offset of the element in the shader parameter struct in bytes. */
-        uint32_t GetOffset() const { return Offset; }
+        uint32_t GetOffset() const { return struct_offset; }
 
         /** Returns the type of the elements, int, UAV... */
-        EUniformBufferBaseType GetBaseType() const { return BaseType; }
+        EShaderBindingBaseType GetBaseType() const { return base_type; }
 
         /** Floating point the element is being stored. */
-        EShaderPrecisionModifier GetPrecision() const { return Precision; }
+        EShaderPrecisionModifier GetPrecision() const { return type_precision; }
 
         /** Returns the number of row in the element. For instance FMatrix would return 4, or FVector would return 1. */
-        uint32_t GetNumRows() const { return NumRows; }
+        uint32_t GetNumRows() const { return num_rows; }
 
         /** Returns the number of column in the element. For instance FMatrix would return 4, or FVector would return 3. */
-        uint32_t GetNumColumns() const { return NumColumns; }
+        uint32_t GetNumColumns() const { return num_columns; }
 
         /** Returns the number of elements in array, or 0 if this is not an array. */
-        uint32_t GetNumElements() const { return NumElements; }
+        uint32_t GetNumElements() const { return num_elements; }
 
         /** Returns the metadata of the struct. */
-        const ShaderParametersMetadata* GetStructMetadata() const { return Struct; }
+        const ShaderParametersMetadata* GetStructMetadata() const { return p_struct_meta_data; }
 
         inline bool IsVariableNativeType() const {
-            return BaseType == UBMT_INT32 ||
-                   BaseType == UBMT_UINT32 ||
-                   BaseType == UBMT_FLOAT32;
+            return base_type == SBT_INT32 ||
+                   base_type == SBT_UINT32 ||
+                   base_type == SBT_FLOAT32;
         }
 
         /** Returns the size of the member. */
         inline uint32_t GetMemberSize() const {
-            uint32_t ElementSize = sizeof(uint32_t) * NumRows * NumColumns;
+            uint32_t ElementSize = sizeof(uint32_t) * num_rows * num_columns;
 
             /** If this an array, the alignment of the element are changed. */
-            if (NumElements > 0) {
-                return ((ElementSize - 1) / SHADER_PARAMETER_STRUCTURE_ALIGNMENT + 1) * SHADER_PARAMETER_STRUCTURE_ALIGNMENT * NumElements;
+            if (num_elements > 0) {
+                return ((ElementSize - 1) / SHADER_PARAMETER_STRUCTURE_ALIGNMENT + 1) * SHADER_PARAMETER_STRUCTURE_ALIGNMENT * num_elements;
             }
             return ElementSize;
         }
 
-        static RHI_API void GenerateShaderParameterType(
-            std::string&             Result,
-            bool                     bSupportsPrecisionModifier,
-            EUniformBufferBaseType   BaseType,
-            EShaderPrecisionModifier PrecisionModifier,
-            uint32_t                 NumRows,
-            uint32_t                 NumColumns);
-        RHI_API void GenerateShaderParameterType(std::string& Result, bool bSupportsPrecisionModifier) const;
-        RHI_API void GenerateShaderParameterType(std::string& Result, EShaderPlatform ShaderPlatform) const;
+        //        static RHI_API void GenerateShaderParameterType(
+        //            std::string&             Result,
+        //            bool                     bSupportsPrecisionModifier,
+        //            EShaderBindingBaseType   BaseType,
+        //            EShaderPrecisionModifier PrecisionModifier,
+        //            uint32_t                 NumRows,
+        //            uint32_t                 NumColumns);
+        //        RHI_API void GenerateShaderParameterType(std::string& Result, bool bSupportsPrecisionModifier) const;
+        //        RHI_API void GenerateShaderParameterType(std::string& Result, EShaderPlatform ShaderPlatform) const;
 
     private:
-        const char*                     Name;
-        const char*                     ShaderType;
-        int32_t                         FileLine;
-        uint32_t                        Offset;
-        EUniformBufferBaseType          BaseType;
-        EShaderPrecisionModifier        Precision;
-        uint32_t                        NumRows;
-        uint32_t                        NumColumns;
-        uint32_t                        NumElements;
-        const ShaderParametersMetadata* Struct;
+        const char*                     name;
+        EShaderCodeResourceBindingType  binding_type;
+        int32_t                         file_line;
+        uint32_t                        struct_offset;
+        EShaderBindingBaseType          base_type;
+        EShaderPrecisionModifier        type_precision;
+        uint32_t                        num_rows;
+        uint32_t                        num_columns;
+        uint32_t                        num_elements;
+        const ShaderParametersMetadata* p_struct_meta_data;
     };
 
-    /** Initialization constructor.
-	 *
-	 * EUseCase::UniformBuffer are listed in the global GetStructList() that will be visited at engine startup to know all the global uniform buffer
-	 * that can generate code in /Engine/Generated/GeneratedUniformBuffers.ush. Their initialization will be finished during the this list
-	 * traversal. bForceCompleteInitialization force to ignore the list for EUseCase::UniformBuffer and instead handle it like a standalone non
-	 * globally listed EUseCase::ShaderParameterStruct. This is required for the ShaderCompileWorker to deserialize them without side global effects.
-	 */
     RHI_API ShaderParametersMetadata(
-        EUseCase                           UseCase,
-        EUniformBufferBindingFlags         InBindingFlags,
-        const char*                        InLayoutName,
-        const char*                        InStructTypeName,
-        const char*                        InShaderVariableName,
-        const char*                        InStaticSlotName,
-        const char*                        InFileName,
-        const int32_t                      InFileLine,
-        uint32_t                           InSize,
-        const std::vector<Member>&         InMembers,
-        bool                               bForceCompleteInitialization = false,
-        RHIUniformBufferMemberInitializer* OutLayoutInitializer         = nullptr,
-        uint32_t                           InUsageFlags                 = 0);
+        EUseCase                           _use_case,
+        EUniformBufferBindingFlags         _binding_flags,
+        const char*                        _layout_name,
+        const char*                        _struct_name,
+        const char*                        _shader_variable_name,
+        const char*                        _static_slot_name,
+        const char*                        _file_name,
+        const int32_t                      _file_line,
+        uint32_t                           _size,
+        const std::vector<Member>&         _members,
+        bool                               _b_force_complete_initialization = false,
+        RHIUniformBufferLayoutInitializer* _out_layout_initializer          = nullptr,
+        uint32_t                           _usage_flags                     = 0);
 
     RHI_API virtual ~ShaderParametersMetadata();
 
-    RHI_API void GetNestedStructs(std::vector<const ShaderParametersMetadata*>& OutNestedStructs) const;
+    RHI_API void GetNestedStructs(std::vector<const ShaderParametersMetadata*>& _out_nested_structs) const;
 
-    const char*       GetStructTypeName() const { return StructTypeName; }
-    const char*       GetShaderVariableName() const { return ShaderVariableName; }
-    const SHA256Hash& GetShaderVariableHashedName() const { return ShaderVariableHashedName; }
-    const char*       GetStaticSlotName() const { return StaticSlotName; }
+    const char*       GetStructTypeName() const { return struct_name; }
+    const char*       GetShaderVariableName() const { return shader_variable_name; }
+    const SHA256Hash& GetShaderVariableHashedName() const { return shader_variable_hash_name; }
+    const char*       GetStaticSlotName() const { return static_slot_name; }
 
-    bool HasStaticSlot() const { return StaticSlotName != nullptr; }
+    bool HasStaticSlot() const { return static_slot_name != nullptr; }
 
-    EUniformBufferBindingFlags GetBindingFlags() const { return BindingFlags; }
+    EUniformBufferBindingFlags GetBindingFlags() const { return binding_flags; }
 
     EUniformBufferBindingFlags GetPreferredBindingFlag() const {
         // Decay to static when both binding flags are specified.
-        return BindingFlags != EUniformBufferBindingFlags::ALL ? BindingFlags : EUniformBufferBindingFlags::STATIC;
+        return binding_flags != EUniformBufferBindingFlags::ALL ? binding_flags : EUniformBufferBindingFlags::STATIC;
     }
 
     /** Returns the C++ file name where the parameter structure is declared. */
-    const char* GetFileName() const { return FileName; }
+    const char* GetFileName() const { return file_name; }
 
     /** Returns the C++ line number where the parameter structure is declared. */
-    const int32_t GetFileLine() const { return FileLine; }
+    const int32_t GetFileLine() const { return file_line; }
 
-    uint32_t GetSize() const { return Size; }
-    EUseCase GetUseCase() const { return UseCase; }
+    uint32_t GetSize() const { return size; }
+    EUseCase GetUseCase() const { return use_case; }
     //    inline bool IsLayoutInitialized() const { return Layout != nullptr; }
-    uint32_t GetUsageFlags() const { return UsageFlags; }
+    uint32_t GetUsageFlags() const { return usage_flags; }
 
     //    const RHIUniformBufferLayout& GetLayout() const
     //    {
@@ -216,16 +350,7 @@ public:
     //        assert(IsLayoutInitialized());
     //        return Layout;
     //    }
-    const std::vector<Member>& GetMembers() const { return Members; }
-
-#if WITH_EDITOR
-    inline bool                IsUniformBufferDeclarationInitialized() const { return UniformBufferDeclaration.IsValid(); }
-    FThreadSafeSharedStringPtr GetUniformBufferDeclarationPtr() const { return UniformBufferDeclaration; }
-    const std::string&         GetUniformBufferDeclaration() const { return *UniformBufferDeclaration; }
-    FORCEINLINE const std::string& GetUniformBufferPath() const { return UniformBufferPath; }
-    FORCEINLINE const std::string& GetUniformBufferInclude() const { return UniformBufferInclude; }
-    FORCEINLINE uint32_t           GetUniformBufferPathHash() const { return UniformBufferPathHash; }
-#endif// WITH_EDITOR
+    const std::vector<Member>& GetMembers() const { return members; }
 
     /** Find a member for a given offset. */
     RHI_API void FindMemberFromOffset(
@@ -247,15 +372,15 @@ public:
 
     /** Returns a hash about the entire layout of the structure. */
     uint32_t GetLayoutHash() const {
-        assert(UseCase == EUseCase::ShaderParameterStruct || UseCase == EUseCase::UniformBuffer);
+        assert(use_case == EUseCase::SHADER_PARAMETER_STRUCT || use_case == EUseCase::UNIFORM_BUFFER);
         //        assert(IsLayoutInitialized());
-        return LayoutHash;
+        return layout_hash;
     }
 
     /** Iterate recursively over all FShaderParametersMetadata. */
     template<typename TParameterFunction>
     void IterateStructureMetadataDependencies(TParameterFunction Lambda) const {
-        for (const ShaderParametersMetadata::Member& Member : Members) {
+        for (const ShaderParametersMetadata::Member& Member : members) {
             const ShaderParametersMetadata* NewParametersMetadata = Member.GetStructMetadata();
 
             if (NewParametersMetadata) {
@@ -267,175 +392,181 @@ public:
     }
 
 private:
-    const char* const LayoutName;
+    const char* const layout_name;
 
     /** Name of the structure type in C++ and shader code. */
-    const char* const StructTypeName;
+    const char* const struct_name;
 
     /** Name of the shader variable name for global shader parameter structs. */
-    const char* const ShaderVariableName;
+    const char* const shader_variable_name;
 
     /** Name of the static slot to use for the uniform buffer (or null). */
-    const char* const StaticSlotName;
+    const char* const static_slot_name;
 
-    SHA256Hash ShaderVariableHashedName;
+    SHA256Hash shader_variable_hash_name;
 
     /** Name of the C++ file where the parameter structure is declared. */
-    const char* const FileName;
+    const char* const file_name;
 
     /** Line in the C++ file where the parameter structure is declared. */
-    const int32_t FileLine;
+    const int32_t file_line;
 
     /** Size of the entire struct in bytes. */
-    const uint32_t Size;
+    const uint32_t size;
 
     /** The use case of this shader parameter struct. */
-    const EUseCase UseCase;
+    const EUseCase use_case;
 
     /** The binding model used by this parameter struct. */
-    const EUniformBufferBindingFlags BindingFlags;
+    const EUniformBufferBindingFlags binding_flags;
 
     /** Layout of all the resources in the shader parameter struct. */
     //    UniformBufferLayoutRHIRef Layout{};
 
     /** List of all members. */
-    std::vector<Member> Members;
+    std::vector<Member> members;
 
     /** Shackle elements in global link list of globally named shader parameters. */
     //    TLinkedList<FShaderParametersMetadata*> GlobalListLink;
 
     /** Hash about the entire memory layout of the structure. */
-    uint32_t LayoutHash = 0;
+    uint32_t layout_hash = 0;
 
     /** Additional flags for how to use the buffer */
-    uint32_t UsageFlags = 0;
+    uint32_t usage_flags = 0;
 
-    RHI_API void InitializeLayout(RHIUniformBufferMemberInitializer* OutLayoutInitializer = nullptr);
-
-#if WITH_EDITOR
-    RHI_API void InitializeUniformBufferDeclaration();
-#endif
+    RHI_API void InitializeLayout(RHIUniformBufferLayoutInitializer* OutLayoutInitializer = nullptr);
 };
 
-template<typename PtrType>
-class alignas(SHADER_PARAMETER_STRUCTURE_ALIGNMENT) TAlignedShaderParameterPtr
-{
+template<typename TPtr>
+class alignas(SHADER_PARAMETER_STRUCTURE_ALIGNMENT) TShaderParameterPtr {
 public:
-    TAlignedShaderParameterPtr()
-    { }
+    TShaderParameterPtr() {}
 
-    TAlignedShaderParameterPtr(const PtrType& Other)
-        : Ref(Other)
-    { }
+    TShaderParameterPtr(const TPtr& Other)
+        : ref(Other) {}
 
-    TAlignedShaderParameterPtr(const TAlignedShaderParameterPtr<PtrType>& Other)
-        : Ref(Other.Ref)
-    { }
+    TShaderParameterPtr(const TShaderParameterPtr<TPtr>& Other)
+        : ref(Other.ref) {}
 
-    FORCEINLINE void operator=(const PtrType& Other)
-    {
-        Ref = Other;
+    FORCEINLINE void operator=(const TPtr& Other) {
+        ref = Other;
     }
 
-    FORCEINLINE operator PtrType&()
-    {
-        return Ref;
+    FORCEINLINE operator TPtr&() {
+        return ref;
     }
 
-    FORCEINLINE operator const PtrType&() const
-    {
-        return Ref;
+    FORCEINLINE operator const TPtr&() const {
+        return ref;
     }
 
-    FORCEINLINE const PtrType& operator->() const
-    {
-        return Ref;
+    FORCEINLINE const TPtr& operator->() const {
+        return ref;
     }
 
 private:
-    PtrType Ref;
-//#if !PLATFORM_64BITS
-//    uint32_t _Padding;
-//    static_assert(sizeof(void*) == 8, "Wrong PLATFORM_64BITS settings.");
-//#endif
-//
-//    static_assert(sizeof(PtrType) == sizeof(void*), "T should be a pointer.");
+    TPtr ref;
 };
 
 template<typename ShaderResourceType>
-struct TShaderResourceParameterTypeInfo
+struct TShaderResourceParameterTypeInfo {
+    static constexpr int32_t s_num_rows                     = 1;
+    static constexpr int32_t s_num_columns                  = 1;
+    static constexpr int32_t s_num_elements                 = 0;
+    static constexpr int32_t alignment                      = SHADER_PARAMETER_STRUCTURE_ALIGNMENT;
+    static constexpr bool    b_is_stored_in_constant_buffer = false;
+
+    using TParamPtr = TShaderParameterPtr<ShaderResourceType>;
+
+    static const ShaderParametersMetadata* GetStructMetadata() { return nullptr; }
+
+    static_assert(sizeof(TParamPtr) == SHADER_PARAMETER_STRUCTURE_ALIGNMENT, "Uniform buffer layout must not be platform dependent.");
+};
+
+template<class UniformBufferStructType>
+struct TShaderParameterStructureTypeInfo
 {
     static constexpr int32_t s_num_rows = 1;
     static constexpr int32_t s_num_columns = 1;
     static constexpr int32_t s_num_elements = 0;
-    static constexpr int32_t Alignment = SHADER_PARAMETER_STRUCTURE_ALIGNMENT;
-    static constexpr bool bIsStoredInConstantBuffer = false;
+    static constexpr int32_t alignment = SHADER_PARAMETER_STRUCTURE_ALIGNMENT;
+    static constexpr bool b_is_stored_in_constant_buffer = true;
 
-    using AlignStruct = TAlignedShaderParameterPtr<ShaderResourceType>;
+    using TParamPtr = TShaderParameterPtr<UniformBufferStructType>;
 
-    static const ShaderParametersMetadata* GetStructMetadata() { return nullptr; }
-
-    static_assert(sizeof(AlignStruct) == SHADER_PARAMETER_STRUCTURE_ALIGNMENT, "Uniform buffer layout must not be platform dependent.");
+    static const ShaderParametersMetadata* GetStructMetadata() { return UniformBufferStructType::GetStructMetadata(); }
 };
 
-#define BEGIN_SHADER_PARAMETER_DEFINITION(StructureName)                                                                      \
-    class alignas(SHADER_PARAMETER_STRUCTURE_ALIGNMENT) StructureName {                                                       \
-    public:                                                                                                                   \
-        StructureName() {}                                                                                                    \
-        struct TypeInfo {                                                                                                     \
-            static constexpr int32_t s_num_rows     = 1;                                                                      \
-            static constexpr int32_t s_num_columns = 1;                                                                      \
-            static constexpr int32_t s_num_elements = 0;                                                                      \
-            static constexpr int32_t s_alignment    = SHADER_PARAMETER_STRUCTURE_ALIGNMENT;                                   \
-            using AlignStruct                       = StructureName;                                                          \
-            static const ShaderParametersMetadata* GetStructMetadata() {                                                      \
-                return nullptr;                                                                                               \
-            }                                                                                                                 \
-        };                                                                                                                    \
-                                                                                                                              \
-    private:                                                                                                                  \
-        using TThisStruct = StructureName;                                                                                    \
-        struct _firstMemberId {                                                                                               \
-            enum { HasDeclaredResource = 0 };                                                                                 \
-        };                                                                                                                    \
-        typedef void* (*MemberFunction)(_firstMemberId, std::vector<ShaderParametersMetadata::Member>*);                      \
-        static void* AppendMemberGetPrev(_firstMemberId, std::vector < ShaderParametersMetadata::Member>*) { return nullptr; } \
+
+#define BEGIN_SHADER_PARAMETER_DEFINITION(StructureName)                                                                     \
+    class alignas(SHADER_PARAMETER_STRUCTURE_ALIGNMENT) StructureName {                                                      \
+    public:                                                                                                                  \
+        StructureName() {}                                                                                                   \
+                                                                                                                             \
+    private:                                                                                                                 \
+        using TThisStruct = StructureName;                                                                                   \
+        struct _firstMemberId {                                                                                              \
+            enum { HasDeclaredResource = 0 };                                                                                \
+        };                                                                                                                   \
+        typedef void* (*MemberFunction)(_firstMemberId, std::vector<ShaderParametersMetadata::Member>*);                     \
+        static void* AppendMemberGetPrev(_firstMemberId, std::vector<ShaderParametersMetadata::Member>*) { return nullptr; } \
         typedef _firstMemberId
 
-#define DEFINE_SHADER_PARAM_UAV(TypeInfo, MemberType, MemberName)                                                            \
-    MemberId##MemberName;                                                                                          \
-                                                                                                                   \
-public:                                                                                                            \
-    TypeInfo::AlignStruct MemberName=nullptr;                                                                 \
-                                                                                                                   \
-private:                                                                                                           \
-    struct _nextMemberId##MemberName {                                                                             \
-        enum { HasDeclaredResource = MemberId##MemberName::HasDeclaredResource };                                  \
-    };                                                                                                             \
+#define INTERNAL_DEFINE_SHADER_PARAM_IMPL(TypeInfo, MemberType, MemberName, HlslType, Precision, UBMTBaseType)             \
+    MemberId##MemberName;                                                                                                  \
+                                                                                                                           \
+public:                                                                                                                    \
+    TypeInfo::TParamPtr MemberName = nullptr;                                                                              \
+                                                                                                                           \
+private:                                                                                                                   \
+    struct _nextMemberId##MemberName {                                                                                     \
+        enum { HasDeclaredResource = MemberId##MemberName::HasDeclaredResource };                                          \
+    };                                                                                                                     \
     static void* AppendMemberGetPrev(_nextMemberId##MemberName, std::vector<ShaderParametersMetadata::Member>* _members) { \
-        /*static_assert(offsetof(TThisStruct, MemberName) & (TypeInfo::s_num_columnes - 1) == 0, "");*/                \
-        _members->push_back(ShaderParametersMetadata::Member(                                                      \
-            #MemberName,                                                                                           \
-            (const char*)"x",                                                                                      \
-            __LINE__,                                                                                              \
-            offsetof(TThisStruct, MemberName),                                                                     \
-            UBMT_FLOAT32,                                                                                          \
-            EShaderPrecisionModifier::Float,                                                                       \
-            TypeInfo::s_num_rows,                                                                                  \
-            TypeInfo::s_num_columns,                                                                              \
-            TypeInfo::s_num_elements,                                                                              \
-            TypeInfo::GetStructMetadata()));                                                                       \
-        void* (*PrevFunc)(MemberId##MemberName, std::vector<ShaderParametersMetadata::Member>*);                   \
-        PrevFunc = AppendMemberGetPrev;                                                                            \
-        return (void*)PrevFunc;                                                                                    \
-    }                                                                                                              \
+                                                                                                                           \
+        _members->push_back(ShaderParametersMetadata::Member(                                                              \
+            #MemberName,                                                                                                   \
+            #HlslType,                                                                                                     \
+            __LINE__,                                                                                                      \
+            offsetof(TThisStruct, MemberName),                                                                             \
+            UBMTBaseType,                                                                                                  \
+            Precision,                                                                                                     \
+            TypeInfo::s_num_rows,                                                                                          \
+            TypeInfo::s_num_columns,                                                                                       \
+            TypeInfo::s_num_elements,                                                                                      \
+            TypeInfo::GetStructMetadata()));                                                                               \
+        void* (*PrevFunc)(MemberId##MemberName, std::vector<ShaderParametersMetadata::Member>*);                           \
+        PrevFunc = AppendMemberGetPrev;                                                                                    \
+        return (void*)PrevFunc;                                                                                            \
+    }                                                                                                                      \
     typedef _nextMemberId##MemberName
 
-#define END_SHADER_PARAMETER_DEFINITION(StructureName) \
-    lastMemberId;                                      \
-    }                                                  \
+#define END_SHADER_PARAMETER_DEFINITION(StructureName)                                    \
+    lastMemberId;                                                                         \
+                                                                                          \
+public:                                                                                   \
+    static std::vector<ShaderParametersMetadata::Member> GetMembers() {                   \
+        std::vector<ShaderParametersMetadata::Member> _members;                           \
+        void* (*_lastFunc)(lastMemberId, std::vector<ShaderParametersMetadata::Member>*); \
+        _lastFunc = AppendMemberGetPrev;                                                  \
+        void* Ptr = (void*)_lastFunc;                                                     \
+        do {                                                                              \
+            Ptr = reinterpret_cast<MemberFunction>(Ptr)(_firstMemberId(), &_members);     \
+        } while (Ptr);                                                                    \
+        std::reverse(_members.begin(), _members.end());                                   \
+        return _members;                                                                  \
+    }                                                                                     \
+    }                                                                                     \
     ;
 
+#define DEFINE_SHADER_PARAM_UAV(HLSLType, MemberName) \
+    INTERNAL_DEFINE_SHADER_PARAM_IMPL(TShaderResourceParameterTypeInfo<RHIUnorderedAccessView*>, RHIUnorderedAccessView*, MemberName, HLSLType, EShaderPrecisionModifier::FLOAT, SBT_UAV)
+
+#define DEFINE_SHADER_PARAM_SRV(HLSLType, MemberName) \
+    INTERNAL_DEFINE_SHADER_PARAM_IMPL(TShaderResourceParameterTypeInfo<RHIShaderResourceView*>, RHIShaderResourceView*, MemberName, HLSLType, EShaderPrecisionModifier::FLOAT, SBT_SRV)
+
+#define DEFINE_SHADER_PARAM_STRUCTURED(HLSLTYPE, MemberName) \
 
 
 class ShaderBase {
@@ -443,14 +574,22 @@ class ShaderBase {
     ~ShaderBase();
 };
 
-class GlobalShader : public ShaderBase {
+class TestGlobalShader : public ShaderBase {
 
-        BEGIN_SHADER_PARAMETER_DEFINITION(Parameters)
+public:
+    BEGIN_SHADER_PARAMETER_DEFINITION(Parameters)
 
-        DEFINE_SHADER_PARAM_UAV(TShaderResourceParameterTypeInfo<RHIUnorderedAccessView*>, RHIUnorderedAccessView*, buffer2d)
+    DEFINE_SHADER_PARAM_UAV(RWBuffer2D, buffer2d)
+    DEFINE_SHADER_PARAM_SRV(StructuredBuffer, sbo)
 
-        END_SHADER_PARAMETER_DEFINITION(Parameters)
-
+    END_SHADER_PARAMETER_DEFINITION(Parameters)
 };
+
+void test() {
+    TestGlobalShader::Parameters* pass;
+    TestGlobalShader::Parameters::GetMembers();
+    std::vector<int32_t> int_lists;
+    std::reverse(int_lists.begin(), int_lists.end());
+}
 
 #endif//MOER_ENGINE_SHADER_PROXY_H
