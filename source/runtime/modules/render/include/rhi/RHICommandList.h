@@ -12,7 +12,7 @@ public:
     virtual void EndRendering()   = 0;
 };
 
-class RHIGraphicsCommandList final : public RHICommandListBase {
+class RHIGraphicsCommandList : public RHICommandListBase {
 public:
     virtual void SetPipelineState(RHIGraphicsPipelineState* _graphics_pso) = 0;
     virtual void Close()                                                   = 0;
@@ -67,12 +67,44 @@ public:
     virtual void SetBlendFactors(const float _factors[4])                          = 0;
 
     virtual void BindVertexBuffers(
-        uint32_t   _start_index,
-        uint32_t   _num_buffers,
-        RHIBuffer* p_vertex_buffers) = 0;
+        uint32_t         _start_index,
+        uint32_t         _num_buffers,
+        const RHIBuffer* p_vertex_buffers) = 0;
+
+    virtual void BindIndexBuffer(
+        const RHIBuffer* p_index_buffer) = 0;
+
+    virtual void SetAttachments() {
+    }
+
+    virtual void ClearDepthStencil() = 0;
+    virtual void ClearUAVInt(
+        RHIUnorderedAccessView* _uav,
+        const int4&             _values) = 0;
+    virtual void ClearUAVFloat(
+        RHIUnorderedAccessView* _uav,
+        const float4&           _values) = 0;
 
     virtual void BeginRendering() = 0;
     virtual void EndRendering()   = 0;
+
+    virtual void DrawIndexIndirect(
+        RHIBuffer* _argument_buffer,
+        uint64_t   _arg_offset,
+        RHIBuffer* _count_buffer,
+        uint64_t   _count_buffer_offset,
+        uint32_t   _max_draw_count,
+        uint32_t   _stride) = 0;
+
+    virtual void BeginQuery(ERenderQueryType _query_type) = 0;
+    virtual void EndQuery(ERenderQueryType _query_type)   = 0;
+
+    virtual void GetQueryData(
+        ERenderQueryType _query_type,
+        uint32_t         _first_index,
+        uint32_t         _num_queries,
+        RHIBuffer*       _dst_buffer,
+        uint64_t         _dst_offset) = 0;
 };
 
 class RHIComputeCommandList final : public RHICommandListBase {

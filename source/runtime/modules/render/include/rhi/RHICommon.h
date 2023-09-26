@@ -626,83 +626,90 @@ enum ECubeFace {
 };
 #pragma region Shader Resources
 
+#define ENUM_STR(Enum)
+
+
 enum class EShaderCodeResourceBindingType : uint8_t {
-    Invalid,
+    INVALID,
+    SAMPLER,
 
-    Sampler,
+    TEXTURE_2D,
+    TEXTURE_2D_ARRAY,
+    TEXTURE_2D_MULTISAMPLE,
+    TEXTURE_3D,
+    TEXTURE_CUBE,
+    TEXTURE_CUBE_ARRAY,
+    TEXTURE_META_DATA,
 
-    //// Texture1D: not used in the renderer.
-    //// Texture1DArray: not used in the renderer.
-    Texture2D,
-    Texture2DArray,
-    Texture2DMS,
-    Texture3D,
-    // Texture3DArray: not used in the renderer.
-    TextureCube,
-    TextureCubeArray,
-    TextureMetadata,
+    BUFFER,
+    STRUCTURED_BUFFER,
+    BYTE_ADDRESSED_BUFFER,
+    RAYTRACING_ACCELERATION_STRUCTURE,
 
-    Buffer,
-    StructuredBuffer,
-    ByteAddressBuffer,
-    RaytracingAccelerationStructure,
+    RW_TEXTURE2D,
+    RW_TEXTURE2D_ARRAY,
+    RW_TEXTURE_3D,
+    RW_TEXTURE_CUBE,
+    RW_TEXTURE_META_DATA,
 
-    // RWTexture1D: not used in the renderer.
-    // RWTexture1DArray: not used in the renderer.
-    RWTexture2D,
-    RWTexture2DArray,
-    RWTexture3D,
-    // RWTexture3DArray: not used in the renderer.
-    RWTextureCube,
-    // RWTextureCubeArray: not used in the renderer.
-    RWTextureMetadata,
-
-    RWBuffer,
-    RWStructuredBuffer,
-    RWByteAddressBuffer,
-    CONSTANT_BUFFER,
-    COMBINED_IMAGE_SAMPLER,
-    SAMPLED_IMAGE,
-    STORAGE_IMAGE,
-    UNIFORM_TEXEL_BUFFER,
-    STORAGE_TEXEL_BUFFER,
-    UNIFORM_BUFFER,
-    STORAGE_BUFFER,
-    UNIFORM_BUFFER_DYNAMIC,
-    STORAGE_BUFFER_DYNAMIC,
-    INPUT_ATTACHMENT,
-    INLINE_UNIFORM_BLOCK,
-    ACCELERATION_STRUCTURE,
-    SAMPLE_WEIGHT_IMAGE_QCOM,
-    BLOCK_MATCH_IMAGE_QCOM,
-    MUTABLE_EXT,
-    INLINE_UNIFORM_BLOCK_EXT = INLINE_UNIFORM_BLOCK,
-    MUTABLE_VALVE            = MUTABLE_EXT,
-    MAX
+    RW_BUFFER,
+    RW_STRUCTURED_BUFFER,
+    RW_BYTE_ADDRESSED_BUFFER,
+    CONSTANT_BUFFER
 };
 
-enum EUniformBufferBaseType : uint8_t {
-    UBMT_INVALID,
+BEGIN_ENUM_STR_DEFINITION(EShaderCodeResourceBindingType)
+
+ENUM_STR_ELEMENT(INVALID)
+ENUM_STR_ELEMENT(SAMPLER)
+ENUM_STR_ELEMENT(TEXTURE_2D)
+ENUM_STR_ELEMENT(TEXTURE_2D_ARRAY)
+ENUM_STR_ELEMENT(TEXTURE_2D_MULTISAMPLE)
+ENUM_STR_ELEMENT(TEXTURE_3D)
+ENUM_STR_ELEMENT(TEXTURE_CUBE)
+ENUM_STR_ELEMENT(TEXTURE_CUBE_ARRAY)
+ENUM_STR_ELEMENT(TEXTURE_META_DATA)
+ENUM_STR_ELEMENT(BUFFER)
+ENUM_STR_ELEMENT(STRUCTURED_BUFFER)
+ENUM_STR_ELEMENT(BYTE_ADDRESSED_BUFFER)
+ENUM_STR_ELEMENT(RAYTRACING_ACCELERATION_STRUCTURE)
+ENUM_STR_ELEMENT(RW_TEXTURE2D)
+ENUM_STR_ELEMENT(RW_TEXTURE2D_ARRAY)
+ENUM_STR_ELEMENT(RW_TEXTURE_3D)
+ENUM_STR_ELEMENT(RW_TEXTURE_CUBE)
+ENUM_STR_ELEMENT(RW_TEXTURE_META_DATA)
+ENUM_STR_ELEMENT(RW_BUFFER)
+ENUM_STR_ELEMENT(RW_STRUCTURED_BUFFER)
+ENUM_STR_ELEMENT(RW_BYTE_ADDRESSED_BUFFER)
+ENUM_STR_ELEMENT(CONSTANT_BUFFER)
+END_ENUM_STR_DEFINITION(EShaderCodeResourceBindingType)
+
+enum EShaderBindingBaseType : uint8_t {
+    SBT_INVALID,
 
     // Invalid type when trying to use bool, to have explicit error message to programmer on why
     // they shouldn't use bool in shader parameter structures.
-    UBMT_BOOL,
+    SBT_BOOL,
 
     // Parameter types.
-    UBMT_INT32,
-    UBMT_UINT32,
-    UBMT_FLOAT32,
+    SBT_INT32,
+    SBT_UINT32,
+    SBT_FLOAT32,
 
     // RHI resources not tracked by render graph.
-    //UBMT_TEXTURE,
-    //UBMT_SRV,
-    //UBMT_UAV,
-    //UBMT_SAMPLER,
-    
-    UBMT_Num,
-    UBMT_NumBits = 3,
+    SBT_TEXTURE,
+    SBT_SRV,
+    SBT_UAV,
+    SBT_SAMPLER,
+
+    SBT_NESTED_STRUCT,
+
+    SBT_ATTACHMENT_BINDING_SLOTS,
+
+    SBT_Num,
+    SBT_NumBits = 4,
 };
-static_assert(UBMT_Num <= (1 << UBMT_NumBits), "EUniformBufferBaseType_Num will not fit on EUniformBufferBaseType_NumBits");
+static_assert(SBT_Num <= (1 << SBT_NumBits), "EUniformBufferBaseType_Num will not fit on EUniformBufferBaseType_NumBits");
 using UniformBufferGlobalBindingPoint = uint8_t;
 
 enum {
@@ -730,6 +737,12 @@ enum class EUniformBufferBindingFlags : uint8_t
 	 *  disables some RHI validation errors for global bindings, so use with care.
 	 */
     ALL = STATIC | SHADER
+};
+
+enum EUniformBufferLifeScope{
+    SINGLE_DRAW,
+    SINGLE_FRAME,
+    MULTI_FRAME
 };
 
 enum EResourceAccessMode {
@@ -813,6 +826,14 @@ enum EVRSRateCombinerOp : uint8_t {
     VRSRB_MIN,
     VRSRB_MAX,
     VRSRB_MUL
+};
+enum ERenderQueryType
+{
+    RQT_UNDEFINED,
+    // Result is the number of samples that are not culled (divide by MSAACount to get pixels)
+    RQT_OCCLUSION,
+    // Result is current time in micro seconds = 1/1000 ms = 1/1000000 sec (not a duration).
+    RQT_ABSOLUTE_TIME,
 };
 
 #pragma endregion

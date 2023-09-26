@@ -370,6 +370,41 @@ public:
     RHIUniformBuffer() : RHIResource(RRT_UNIFORM_BUFFER) {}
     explicit RHIUniformBuffer(const RHIUniformBufferLayout& _layout){};
 };
+
+template<typename TBufferStruct>
+class TUniformBufferRef : public RHIUniformBufferRef
+{
+
+public:
+    /** Initializes the reference to null. */
+    TUniformBufferRef()=default;
+
+//    /** Creates a uniform buffer with the given value, and returns a structured reference to it. */
+//    static TUniformBufferRef<TBufferStruct> CreateUniformBufferImmediate(const TBufferStruct& Value, EUniformBufferLifeScope Usage)
+//    {
+//        return TUniformBufferRef<TBufferStruct>(RHICreateUniformBuffer(&Value, TUniformBufferMetadataHelper<TBufferStruct>::GetStructMetadata()->GetLayoutPtr(), Usage));
+//    }
+    /** Creates a uniform buffer with the given value, and returns a structured reference to it. */
+//    static TUniformBufferRef<TBufferStruct> CreateEmptyUniformBufferImmediate(EUniformBufferUsage Usage)
+//    {
+//        return TUniformBufferRef<TBufferStruct>(RHICreateUniformBuffer(nullptr, TUniformBufferMetadataHelper<TBufferStruct>::GetStructMetadata()->GetLayoutPtr(), Usage, EUniformBufferValidation::ValidateResources));
+//    }
+
+    void UpdateUniformBufferImmediate(const TBufferStruct& Value)
+    {
+    }
+
+private:
+
+    /** A private constructor used to coerce an arbitrary RHI uniform buffer reference to a structured reference. */
+    TUniformBufferRef(RHIUniformBuffer* InRHIRef)
+        : RHIUniformBufferRef(InRHIRef)
+    {}
+
+    template<typename TBufferStruct2>
+    friend class TUniformBuffer;
+
+};
 #pragma endregion
 
 #pragma region viewable resources definitions
