@@ -123,7 +123,7 @@ void TaskGraph::waitUntilTasksComplete(const GraphEventArray& task_events, EThre
     if (is_named_thread && !isThreadProcessingTask(current_thread_type)) {
         bool pending = false;
         for (int32_t Index = 0; Index < task_events.size(); Index++) {
-            GraphEvent* task = task_events[Index].get();
+            GraphEvent* task = task_events[Index].Get();
             if (task != nullptr && !task->isComplete()) {
                 pending = true;
                 break;
@@ -143,7 +143,7 @@ void TaskGraph::waitUntilTasksComplete(const GraphEventArray& task_events, EThre
     } else {
         bool pending = false;
         for (int32_t Index = 0; Index < task_events.size(); Index++) {
-            GraphEvent* task = reinterpret_cast<GraphEvent*>(task_events[Index].get());
+            GraphEvent* task = reinterpret_cast<GraphEvent*>(task_events[Index].Get());
             if (task != nullptr && !task->isComplete()) {
                 pending = true;
                 break;
@@ -165,7 +165,7 @@ void TaskGraph::triggerEventWhenTasksComplete(Event* event, const GraphEventArra
     {
         bool pending = false;
         for (int32_t Index = 0; Index < task_events.size(); Index++) {
-            GraphEvent* task = reinterpret_cast<GraphEvent*>(task_events[Index].get());
+            GraphEvent* task = reinterpret_cast<GraphEvent*>(task_events[Index].Get());
             if (task != nullptr && !task->isComplete()) {
                 pending = true;
                 break;

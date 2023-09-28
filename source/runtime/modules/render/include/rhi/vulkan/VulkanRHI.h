@@ -3,8 +3,15 @@
 #include <string>
 #include "RHI.h"
 #include <vulkan.h>
-class VulkanRHI : public RHI{
+class IVulkanRHI : public RHI{
+
+
+
+
 
 };
 
+class VulkanRHIImpl : IVulkanRHI{
+
+};
 #endif// !VULKAN_RHI_H

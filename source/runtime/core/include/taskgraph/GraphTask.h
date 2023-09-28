@@ -149,7 +149,7 @@ private:
         int32_t completed_prerequestCount{0};
         if (prerequests != nullptr) {
             for (int32_t i = 0; i < prerequests->size(); i++) {
-                GraphEvent* _event = (*prerequests)[i].get();
+                GraphEvent* _event = (*prerequests)[i].Get();
                 if (_event == nullptr || !_event->addSubsequent(this)) {
                     completed_prerequestCount++;
                 }
