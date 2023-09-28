@@ -11,6 +11,7 @@
 #include "misc/CountableRef.h"
 #include <string>
 #include <optional>
+#include <bitset>
 
 #pragma region forward definitions
 class RHICommandListBase;
@@ -29,12 +30,13 @@ class RHIMeshShader;
 class RHIPipelineBinaryDataLibrary;
 class RHIFragmentShader;
 class RHIRasterizationState;
-//class RHIRayTracingGeometry;
+class RHIRayTracingGeometry;
 class RHIRayTracingPipelineState;
-//class RHIRayTracingScene;
-//class RHIRayTracingShader;
-//class RHIRenderQuery;
-//class RHIRenderQueryPool;
+class RHIRayTracingScene;
+class RHIRayTracingAccelerationStructure;
+class RHIRayTracingShader;
+class RHIRenderQuery;
+class RHIRenderQueryPool;
 class RHIResource;
 class RHISampler;
 class RHIMultisampleState;
@@ -67,27 +69,27 @@ using RHIMeshShaderRef                = CountableRef<RHIMeshShader>;
 using RHIPipelineBinaryDataLibraryRef = CountableRef<RHIPipelineBinaryDataLibrary>;
 using RHIFragmentShaderRef            = CountableRef<RHIFragmentShader>;
 using RHIRasterizationStateRef        = CountableRef<RHIRasterizationState>;
-//using RHIRayTracingGeometryRef = CountableRef< RHIRayTracingGeometry>;
-using RHIRayTracingPipelineStateRef = CountableRef<RHIRayTracingPipelineState>;
-//using RHIRayTracingSceneRef = CountableRef< RHIRayTracingScene>;
-//using RHIRayTracingShaderRef = CountableRef< RHIRayTracingShader>;
-//using RHIRenderQueryRef = CountableRef< RHIRenderQuery>;
-//using RHIRenderQueryPoolRef = CountableRef< RHIRenderQueryPool>;
-using RHIResourceRef            = CountableRef<RHIResource>;
-using RHISamplerRef             = CountableRef<RHISampler>;
-using RHIMultisampleStateRef    = CountableRef<RHIMultisampleState>;
-using RHIShaderRef              = CountableRef<RHIShader>;
-using RHIShaderLibraryRef       = CountableRef<RHIShaderLibrary>;
-using RHIShaderResourceViewRef  = CountableRef<RHIShaderResourceView>;
-using RHIStagingBufferRef       = CountableRef<RHIStagingBuffer>;
-using RHITextureRef             = CountableRef<RHITexture>;
-using RHITextureReferenceRef    = CountableRef<RHITextureReference>;
-using RHIUniformBufferRef       = CountableRef<RHIUniformBuffer>;
-using RHIUnorderedAccessViewRef = CountableRef<RHIUnorderedAccessView>;
-using RHIVertexInputStateRef    = CountableRef<RHIVertexInputState>;
-using RHIVertexShaderRef        = CountableRef<RHIVertexShader>;
-using RHIViewableResourceRef    = CountableRef<RHIViewableResource>;
-using RHIViewportRef            = CountableRef<RHIViewport>;
+using RHIRayTracingGeometryRef        = CountableRef<RHIRayTracingGeometry>;
+using RHIRayTracingPipelineStateRef   = CountableRef<RHIRayTracingPipelineState>;
+using RHIRayTracingSceneRef           = CountableRef<RHIRayTracingScene>;
+using RHIRayTracingShaderRef          = CountableRef<RHIRayTracingShader>;
+using RHIRenderQueryRef               = CountableRef<RHIRenderQuery>;
+using RHIRenderQueryPoolRef           = CountableRef<RHIRenderQueryPool>;
+using RHIResourceRef                  = CountableRef<RHIResource>;
+using RHISamplerRef                   = CountableRef<RHISampler>;
+using RHIMultisampleStateRef          = CountableRef<RHIMultisampleState>;
+using RHIShaderRef                    = CountableRef<RHIShader>;
+using RHIShaderLibraryRef             = CountableRef<RHIShaderLibrary>;
+using RHIShaderResourceViewRef        = CountableRef<RHIShaderResourceView>;
+using RHIStagingBufferRef             = CountableRef<RHIStagingBuffer>;
+using RHITextureRef                   = CountableRef<RHITexture>;
+using RHITextureReferenceRef          = CountableRef<RHITextureReference>;
+using RHIUniformBufferRef             = CountableRef<RHIUniformBuffer>;
+using RHIUnorderedAccessViewRef       = CountableRef<RHIUnorderedAccessView>;
+using RHIVertexInputStateRef          = CountableRef<RHIVertexInputState>;
+using RHIVertexShaderRef              = CountableRef<RHIVertexShader>;
+using RHIViewableResourceRef          = CountableRef<RHIViewableResource>;
+using RHIViewportRef                  = CountableRef<RHIViewport>;
 #pragma endregion
 
 #pragma region utils definition
@@ -285,19 +287,24 @@ public:
     SHA256Hash  hash;
 };
 
-class RHIVertexShader : public RHIShader {
+class RHIGraphicsShader : public RHIShader {
 public:
-    RHIVertexShader() : RHIShader(RRT_VERTEX_SHADER, ST_VERTEX) {}
+    RHIGraphicsShader(ERHIResourceType _type, EShaderType _shader_type) : RHIShader(_type, _shader_type) {}
 };
 
-class RHIFragmentShader : public RHIShader {
+class RHIVertexShader : public RHIGraphicsShader {
 public:
-    RHIFragmentShader() : RHIShader(RRT_FRAGMENT_SHADER, ST_FRAGMENT) {}
+    RHIVertexShader() : RHIGraphicsShader(RRT_VERTEX_SHADER, ST_VERTEX) {}
 };
 
-class RHIGeometryShader : public RHIShader {
+class RHIFragmentShader : public RHIGraphicsShader {
 public:
-    RHIGeometryShader() : RHIShader(RRT_GEOMETRY_SHADER, ST_GEOMETRY) {}
+    RHIFragmentShader() : RHIGraphicsShader(RRT_FRAGMENT_SHADER, ST_FRAGMENT) {}
+};
+
+class RHIGeometryShader : public RHIGraphicsShader {
+public:
+    RHIGeometryShader() : RHIGraphicsShader(RRT_GEOMETRY_SHADER, ST_GEOMETRY) {}
 };
 
 class RHIComputeShader : public RHIShader {
@@ -305,25 +312,36 @@ public:
     RHIComputeShader() : RHIShader(RRT_COMPUTE_SHADER, ST_COMPUTE) {}
 };
 
-class RHIMeshShader : public RHIShader {
+class RHIMeshShader : public RHIGraphicsShader {
 public:
-    RHIMeshShader() : RHIShader(RRT_MESH_SHADER, ST_MESH) {}
+    RHIMeshShader() : RHIGraphicsShader(RRT_MESH_SHADER, ST_MESH) {}
 };
-class RHIAmplificationShader : public RHIShader {
+class RHIAmplificationShader : public RHIGraphicsShader {
 public:
-    RHIAmplificationShader() : RHIShader(RRT_AMPLIFICATION_SHADER, ST_AMPLIFICATION) {}
+    RHIAmplificationShader() : RHIGraphicsShader(RRT_AMPLIFICATION_SHADER, ST_AMPLIFICATION) {}
 };
-class RHIRayGenShader : public RHIShader {
+
+class RHIRayTracingShader : public RHIShader {
 public:
-    RHIRayGenShader() : RHIShader(RRT_RAY_TRACING_SHADER, ST_RAY_GEN) {}
+    RHIRayTracingShader(EShaderType _shader_type) : RHIShader(RRT_RAY_TRACING_SHADER, _shader_type) {}
 };
-class RHIRayHitShader : public RHIShader {
+
+class RHIRayGenShader : public RHIRayTracingShader {
 public:
-    RHIRayHitShader() : RHIShader(RRT_RAY_TRACING_SHADER, ST_RAY_HIT) {}
+    RHIRayGenShader() : RHIRayTracingShader(ST_RAY_GEN) {}
 };
-class RHIRayMissShader : public RHIShader {
+class RHIRayHitShader : public RHIRayTracingShader {
 public:
-    RHIRayMissShader() : RHIShader(RRT_RAY_TRACING_SHADER, ST_RAY_MISS) {}
+    RHIRayHitShader() : RHIRayTracingShader(ST_RAY_HIT) {}
+};
+class RHIRayMissShader : public RHIRayTracingShader {
+public:
+    RHIRayMissShader() : RHIRayTracingShader(ST_RAY_MISS) {}
+};
+
+class RHIRayCallableShader : public RHIRayTracingShader {
+public:
+    RHIRayCallableShader() : RHIRayTracingShader(ST_RAY_CALLABLE) {}
 };
 #pragma endregion
 
@@ -372,38 +390,33 @@ public:
 };
 
 template<typename TBufferStruct>
-class TUniformBufferRef : public RHIUniformBufferRef
-{
+class TUniformBufferRef : public RHIUniformBufferRef {
 
 public:
     /** Initializes the reference to null. */
-    TUniformBufferRef()=default;
+    TUniformBufferRef() = default;
 
-//    /** Creates a uniform buffer with the given value, and returns a structured reference to it. */
-//    static TUniformBufferRef<TBufferStruct> CreateUniformBufferImmediate(const TBufferStruct& Value, EUniformBufferLifeScope Usage)
-//    {
-//        return TUniformBufferRef<TBufferStruct>(RHICreateUniformBuffer(&Value, TUniformBufferMetadataHelper<TBufferStruct>::GetStructMetadata()->GetLayoutPtr(), Usage));
-//    }
+    //    /** Creates a uniform buffer with the given value, and returns a structured reference to it. */
+    //    static TUniformBufferRef<TBufferStruct> CreateUniformBufferImmediate(const TBufferStruct& Value, EUniformBufferLifeScope Usage)
+    //    {
+    //        return TUniformBufferRef<TBufferStruct>(RHICreateUniformBuffer(&Value, TUniformBufferMetadataHelper<TBufferStruct>::GetStructMetadata()->GetLayoutPtr(), Usage));
+    //    }
     /** Creates a uniform buffer with the given value, and returns a structured reference to it. */
-//    static TUniformBufferRef<TBufferStruct> CreateEmptyUniformBufferImmediate(EUniformBufferUsage Usage)
-//    {
-//        return TUniformBufferRef<TBufferStruct>(RHICreateUniformBuffer(nullptr, TUniformBufferMetadataHelper<TBufferStruct>::GetStructMetadata()->GetLayoutPtr(), Usage, EUniformBufferValidation::ValidateResources));
-//    }
+    //    static TUniformBufferRef<TBufferStruct> CreateEmptyUniformBufferImmediate(EUniformBufferUsage Usage)
+    //    {
+    //        return TUniformBufferRef<TBufferStruct>(RHICreateUniformBuffer(nullptr, TUniformBufferMetadataHelper<TBufferStruct>::GetStructMetadata()->GetLayoutPtr(), Usage, EUniformBufferValidation::ValidateResources));
+    //    }
 
-    void UpdateUniformBufferImmediate(const TBufferStruct& Value)
-    {
+    void UpdateUniformBufferImmediate(const TBufferStruct& Value) {
     }
 
 private:
-
     /** A private constructor used to coerce an arbitrary RHI uniform buffer reference to a structured reference. */
     TUniformBufferRef(RHIUniformBuffer* InRHIRef)
-        : RHIUniformBufferRef(InRHIRef)
-    {}
+        : RHIUniformBufferRef(InRHIRef) {}
 
     template<typename TBufferStruct2>
     friend class TUniformBuffer;
-
 };
 #pragma endregion
 
@@ -678,6 +691,11 @@ public:
     virtual class RHITextureReference* GetTextureRef() { return nullptr; }
 
     virtual void* GetNativeResource() const { return nullptr; }
+
+    virtual void* GetNativeShaderResourceView() const {
+        // Override this in derived classes to expose access to the native texture resource
+        return nullptr;
+    }
 
     int3 GetExtent3D() const {
         const RHITextureInfo& info = GetInfo();
@@ -1240,11 +1258,11 @@ public:
     }
 
     RHIBuffer* GetBuffer() const {
-        return info.IsBuffer() ? dynamic_cast<RHIBuffer*>(resource.get()) : nullptr;
+        return info.IsBuffer() ? dynamic_cast<RHIBuffer*>(resource.Get()) : nullptr;
     }
 
     RHITexture* GetTexture() const {
-        return info.IsTexture() ? dynamic_cast<RHITexture*>(resource.get()) : nullptr;
+        return info.IsTexture() ? dynamic_cast<RHITexture*>(resource.Get()) : nullptr;
     }
 
     bool IsBuffer() const {
@@ -1615,6 +1633,71 @@ public:
     uint64_t hash_key;
 };
 
+class RayTracingPipelineStateInfo {
+protected:
+    uint64_t hash_ray_gen;
+    uint64_t hash_ray_miss;
+    uint64_t hash_ray_hit;
+    uint64_t hash_ray_callable;
+
+public:
+    //should be set in shaders
+    uint32_t max_attribute_byte_size = 8;
+    //should be set in shaders
+    uint32_t max_payload_byte_size      = 24;
+    bool     b_allow_hit_group_indexing = true;
+
+    bool operator==(const RayTracingPipelineStateInfo& value) const {
+        return max_attribute_byte_size == value.max_attribute_byte_size && max_payload_byte_size == value.max_payload_byte_size && b_allow_hit_group_indexing == value.b_allow_hit_group_indexing && hash_ray_gen == value.hash_ray_gen && hash_ray_miss == value.hash_ray_miss && hash_ray_hit == value.hash_ray_hit && hash_ray_callable == value.hash_ray_callable;
+    }
+};
+class RayTracingPipelineStateInitializer : RayTracingPipelineStateInfo {
+public:
+    RayTracingPipelineStateInitializer() = default;
+
+    const std::vector<RHIRayTracingShader*>& GetRayGenTable() const { return ray_gen_table; }
+    const std::vector<RHIRayTracingShader*>& GetRayMissTable() const { return ray_miss_table; }
+    const std::vector<RHIRayTracingShader*>& GetRayHitTable() const { return ray_hit_table; }
+    const std::vector<RHIRayTracingShader*>& GetRayCallableTable() const { return ray_callable_table; }
+
+    void SetRayGenShaderTable(const std::vector<RHIRayTracingShader*>& _ray_gen_shaders, uint64_t _hash = 0) {
+        ray_gen_table = _ray_gen_shaders;
+        hash_ray_gen  = _hash ? _hash : ComputeHash(_ray_gen_shaders);
+    }
+
+    void SetRayMissShaderTable(const std::vector<RHIRayTracingShader*>& _ray_miss_shaders, uint64_t _hash = 0) {
+        ray_miss_table = _ray_miss_shaders;
+        hash_ray_miss  = _hash ? _hash : ComputeHash(_ray_miss_shaders);
+    }
+    void SetRayHitShaderTable(const std::vector<RHIRayTracingShader*>& _ray_hit_shaders, uint64_t _hash = 0) {
+        ray_hit_table = _ray_hit_shaders;
+        hash_ray_hit  = _hash ? _hash : ComputeHash(_ray_hit_shaders);
+    }
+    void SetRayCallableShaderTable(const std::vector<RHIRayTracingShader*>& _ray_callable_shaders, uint64_t _hash = 0) {
+        ray_callable_table = _ray_callable_shaders;
+        hash_ray_callable  = _hash ? _hash : ComputeHash(_ray_callable_shaders);
+    }
+    friend uint32_t GetHash(const RayTracingPipelineStateInitializer& value) {
+        uint32_t hash = GetHash(value.max_attribute_byte_size);
+        hash_combine(hash, value.max_payload_byte_size);
+        hash_combine(hash, value.b_allow_hit_group_indexing);
+        //todo: combine shader hashes
+    }
+
+protected:
+    uint64_t ComputeHash(const std::vector<RHIRayTracingShader*>& target) {
+        for (RHIRayTracingShader* shader : target) {
+            //todo: handle sha256 hash combining and convert shader sha256 to uint64_t
+            shader->GetHash();
+        }
+    }
+
+    RHIRayTracingPipelineStateRef     base_pipeline_handle;
+    std::vector<RHIRayTracingShader*> ray_gen_table;
+    std::vector<RHIRayTracingShader*> ray_miss_table;
+    std::vector<RHIRayTracingShader*> ray_hit_table;
+    std::vector<RHIRayTracingShader*> ray_callable_table;
+};
 
 struct ViewPort {
     float x;
@@ -1933,17 +2016,251 @@ struct RHIRenderPassInfo {
         target.stencil_attachment_store_op = GetStoreOp(_stencil_action);
 
         target.multi_view_count                  = multi_view_count;
-        target.b_has_fragment_density_attachment = shading_rate_texture.get() != nullptr;
+        target.b_has_fragment_density_attachment = shading_rate_texture.Get() != nullptr;
 
         return target;
     };
 };
 
 #pragma endregion
-//todo: ray-tracing pipeline definitions
+
+enum ERayTracingGeometryType : uint8_t {
+    RTGT_TRIANGLES,
+    RTGT_AABBS
+};
+enum class ERayTracingGeometryFlags : uint8_t {
+    NONE,
+    OPAQUE                          = 1 << 0,
+    NO_DUPLICATE_ANY_HIT_INVOCATION = 1 << 1
+};
+enum class ERayTracingInstanceFlags : uint8_t {
+    NONE,
+    TRIANGLE_CULL_DISABLE = 1 << 0,
+    //triangle flip face
+    TRIANGLE_FRONT_COUNTERCLOCKWISE = 1 << 1,
+    FORCE_OPAQUE                    = 1 << 2,
+    FORCE_NO_OPAQUE                 = 1 << 3
+};
+enum class ERayTracingAccelerationStructureBuildFlags : uint8_t {
+    NONE,
+    ALLOW_UPDATE      = 1 << 0,
+    ALLOW_COMPACTION  = 1 << 1,
+    PREFER_FAST_TRACE = 1 << 2,
+    PREFER_FAST_BUILD = 1 << 3,
+    MINIMIZE_MEMORY   = 1 << 4
+
+};
+
+enum class ERayTracingAccelerationStructureCopyMode : uint8_t {
+    CLONE       = 0,
+    COMPACT     = 0x1,
+    SERIALIZE   = 0x2,
+    DESERIALIZE = 0x3
+};
+
+enum class ERayTracingAccelerationStructureType {
+    TOP_LEVEL    = 0,
+    BOTTOM_LEVEL = 0x1
+};
+
+enum class ERayTracingGeometryInitializerUsage : uint8_t {
+    // create buffer and shader params, ready for later usages
+    FULL_INITIALIZE,
+    // no buffer or shader params, used by streaming system to stream into
+    INTERMEDIATE_DST,
+    // buffer created but not shader params, use for steaming system intermediate data transfer
+    INTERMEDIATE_SRC
+};
+
 #pragma region ray-tracing
+
+struct RayTracingAccelerationStructureSizeInfo {
+    uint64_t result_size         = 0;
+    uint64_t build_scratch_size  = 0;
+    uint64_t update_scratch_size = 0;
+};
+
+struct RayTracingGeometryElement {
+    RHIBufferRef vertex_buffer;
+
+    uint64_t vertex_offset;
+
+    uint64_t vertex_buffer_stride;
+
+    uint32_t max_vertex_count;
+    uint32_t start_primitive_id;
+
+    uint32_t num_primitives;
+
+    EVertexElementType       vertex_element_type = VET_FLOAT3;
+    ERayTracingGeometryFlags geometry_flags      = ERayTracingGeometryFlags::NONE;
+    bool                     enabled;
+    uint8_t                  _padding_0;
+};
+static_assert(sizeof(RayTracingGeometryElement) == 40);
+
+struct RayTracingGeometryInitializer {
+    std::vector<RayTracingGeometryElement> elements;
+
+    RHIBufferRef index_buffer;
+
+    uint64_t index_offset;
+
+    ERayTracingGeometryType  geo_type = ERayTracingGeometryType::RTGT_TRIANGLES;
+    ERayTracingGeometryFlags flags;
+
+    ERayTracingGeometryInitializerUsage        usage;
+    ERayTracingAccelerationStructureBuildFlags build_flags;
+
+    uint32_t max_primitive_count = 0;
+
+    // opt: for intermediate usage
+    RHIRayTracingGeometry* src_geometry;
+};
+static_assert(sizeof(RayTracingGeometryInitializer) == 56);
+
+struct Matrix {
+    float matrix[3][4];
+};
+struct RayTracingGeometryInstance {
+
+    //BLAS
+    RHIRayTracingGeometry* p_geometry;
+
+    // a mesh may have multiple instances
+    std::vector<Matrix>& transforms;
+
+    std::vector<uint32_t> scene_instance_data_offsets;
+
+    RHIShaderResourceViewRef transform_data_srv = nullptr;
+    uint32_t                 num_transforms;
+
+    uint32_t              default_index = 0;
+    std::vector<uint32_t> custom_index;
+
+    //sum of previous geo elements, for calculating offset in sbt(prev_element_count * shader_slot_per_element)
+    std::vector<uint32_t> prev_element_count;
+
+    //each geo copy have one bit
+    std::vector<std::bitset<32>> activation_masks;
+
+    uint32_t instance_mask : 8;
+
+    ERayTracingInstanceFlags flags = ERayTracingInstanceFlags::NONE;
+};
+
+struct RayTracingSceneInitializer {
+    std::vector<RHIRayTracingGeometryRef> scene_geometries;
+
+    std::vector<RHIRayTracingGeometry*> instance_geometries;
+
+    std::vector<uint32_t> instance_previous_transform_sum;
+
+    std::vector<uint32_t> instance_previous_element_sum;
+
+    // to support multi-layer ray-tracing: certain instance may exist on certain layer/layers
+    std::vector<uint32_t> instance_count_per_layer;
+    uint32_t              num_total_elements;
+
+    uint32_t shader_slots_per_geometry_element;
+
+    uint32_t callable_shader_slot_num;
+
+    uint32_t miss_shader_slot_num = 1;
+
+    RayTracingSceneInitializer()                                        = default;
+    RayTracingSceneInitializer(RayTracingSceneInitializer&&)            = default;
+    RayTracingSceneInitializer& operator=(RayTracingSceneInitializer&&) = default;
+};
+
+class RHIRayTracingAccelerationStructure : public RHIResource {
+public:
+    RHIRayTracingAccelerationStructure() : RHIResource(RRT_RAYTRACING_ACCELERATION_STRUCTURE) {
+    }
+
+    //create result info
+    RayTracingAccelerationStructureSizeInfo GetSize() const {
+        return size_info;
+    }
+
+protected:
+    RayTracingAccelerationStructureSizeInfo size_info{};
+};
+
+class RHIRayTracingGeometry : RHIRayTracingAccelerationStructure {
+public:
+    RHIRayTracingGeometry() = default;
+    RHIRayTracingGeometry(const RayTracingGeometryInitializer& _init)
+        : initializer(_init),
+          usage(_init.usage) {}
+
+    virtual void SetInitializer(const RayTracingGeometryInitializer& init) {
+        initializer = init;
+    }
+    const RayTracingGeometryInitializer& GetInitializer() { return initializer; }
+
+    uint32_t GetElementCount() {
+        return initializer.elements.size();
+    }
+
+protected:
+    RayTracingGeometryInitializer       initializer{};
+    ERayTracingGeometryInitializerUsage usage = ERayTracingGeometryInitializerUsage::FULL_INITIALIZE;
+};
+
+class RHIRayTracingScene : RHIResource {
+public:
+    RHIRayTracingScene() : RHIResource(RRT_RAYTRACING_SCENE) {}
+
+    virtual const RayTracingGeometryInitializer& GetInitializer() const = 0;
+    //for multi-layer ray-tracing
+    virtual uint32_t GetLayerBufferOffset(uint32_t LayerIndex) const = 0;
+};
+
 #pragma endregion
 
+#pragma region render query
+class RHIRenderQuery : public RHIResource {
+public:
+    RHIRenderQuery() : RHIResource(RRT_RENDER_QUERY) {}
+};
+
+class RHIPooledRenderQuery {
+public:
+    RHIPooledRenderQuery() = default;
+    RHIPooledRenderQuery(RHIRenderQueryPool* _pool, RHIRenderQueryRef _query_ref)
+        : query_ref(_query_ref), pool(_pool) {}
+    ~RHIPooledRenderQuery();
+
+    RHIPooledRenderQuery(const RHIPooledRenderQuery&)            = delete;
+    RHIPooledRenderQuery& operator=(const RHIPooledRenderQuery&) = delete;
+
+    RHIPooledRenderQuery(RHIPooledRenderQuery&&)            = default;
+    RHIPooledRenderQuery& operator=(RHIPooledRenderQuery&&) = default;
+
+    bool IsValid() { return query_ref.isValid(); }
+
+    RHIRenderQuery* GetQuery() const { return query_ref; }
+
+    void Release();
+
+protected:
+    RHIRenderQueryRef   query_ref;
+    RHIRenderQueryPool* pool;
+};
+
+class RHIRenderQueryPool : public RHIResource {
+public:
+    RHIRenderQueryPool() : RHIResource(RRT_RENDER_QUERY_POOL) {}
+    virtual ~RHIRenderQueryPool() {}
+    virtual RHIPooledRenderQuery AllocateQuery() = 0;
+
+private:
+    friend class RHIPooledRenderQuery;
+    virtual void ReleaseQuery(RHIRenderQueryRef&& _query) = 0;
+};
+
+#pragma endregion
 //todo: for rdg usage
 #pragma region RDG resource creater
 //
@@ -1953,7 +2270,7 @@ enum class ERHITexturePlane : uint8_t {
     Primary = 0,
 
     // The primary plane is used without decompressing it.
-    PrimaryCompressed = 1,
+    PRIMARY_COMPRESSED = 1,
 
     // The depth plane is used with default compression behavior.
     Depth = 2,
@@ -1975,7 +2292,7 @@ enum class ERHITexturePlane : uint8_t {
     Num,
     NumBits = 3,
 
-    CompressedSurface = PrimaryCompressed,
+    CompressedSurface = PRIMARY_COMPRESSED,
 };
 static_assert((1u << uint32_t(ERHITexturePlane::NumBits)) >= uint32_t(ERHITexturePlane::Num), "Not enough bits in the ERHITexturePlane enum");
 //
@@ -2178,6 +2495,33 @@ static_assert((1u << uint32_t(ERHITexturePlane::NumBits)) >= uint32_t(ERHITextur
 #pragma endregion
 
 class RHITextureReference final : public RHITexture {
+public:
+    RHI_API RHITextureReference(RHITexture* _texture, RHIShaderResourceView* _bindless_view);
+
+    RHI_API ~RHITextureReference();
+
+    RHI_API virtual class RHITextureReference* GetTextureRef() override;
+    //    RHI_API virtual RHIDescriptorHandle GetDefaultBindlessHandle() const override;
+
+    RHI_API virtual void*                 GetNativeResource() const override;
+    RHI_API virtual void*                 GetNativeShaderResourceView() const override;
+    RHI_API virtual const RHITextureInfo& GetInfo() const override;
+
+    inline RHITexture*            GetReferencedTexture() const { return texture_ref.Get(); }
+    inline RHIShaderResourceView* GetBindlessView() const { return bindless_view.Get(); }
+
+    static inline RHITexture* GetDefaultTexture() { return default_texture; }
+
+private:
+    void SetReferencedTexture(RHITexture* _texture_ref) {
+        texture_ref = _texture_ref;
+    }
+
+    RHITextureRef texture_ref;
+
+    RHIShaderResourceViewRef bindless_view;
+
+    RHI_API static RHITextureRef default_texture;
 };
 
 class RHIShaderLibrary : public RHIResource {

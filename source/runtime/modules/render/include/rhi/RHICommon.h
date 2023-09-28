@@ -40,6 +40,44 @@ namespace EShadingPath {
 #pragma endregion
 
 #pragma region Descriptors Regulation
+
+enum class ERHIDescriptorHeapType : uint8_t
+{
+    STANDARD,
+    SAMPLER,
+    ATTACHMENT,
+    DEPTH_STENCIL,
+    Num,
+    INVALID = 0xff
+};
+
+//todo: bindless handle
+//struct RHIDescriptorHandle {
+//    RHIDescriptorHandle() = default;
+//    RHIDescriptorHandle(ERHIDescriptorHeapType InType, uint32_t InIndex)
+//        : Index(InIndex)
+//          , Type((uint8_t)InType)
+//    {
+//    }
+//    RHIDescriptorHandle(uint8_t InType, uint32_t InIndex)
+//        : Index(InIndex)
+//          , Type(InType)
+//    {
+//    }
+//
+//    inline uint32_t                 GetIndex() const { return Index; }
+//    inline ERHIDescriptorHeapType GetType() const { return (ERHIDescriptorHeapType)Type; }
+//    inline uint8_t                  GetRawType() const { return Type; }
+//
+//    inline bool IsValid() const { return Index != 0xffffffff && Type != (uint8_t)ERHIDescriptorHeapType::Invalid; }
+//
+//private:
+//    uint32_t    Index{ 0xffffffff };
+//    uint8_t     Type{ (uint8_t)ERHIDescriptorHeapType::INVALID };
+//};
+
+
+
 /** The alignment in bytes between elements of array shader parameters. */
 enum { ShaderArrayElementAlignBytes = 16 };
 
@@ -395,22 +433,17 @@ enum ERHIResourceType {
     RRT_UNIFORM_BUFFER,
     RRT_BUFFER,
     RRT_TEXTURE,
-    RRT_TEXTURE2D,
-    RRT_TEXTURE2D_ARRAY,
-    RRT_TEXTURE3D,
-    RRT_TEXTURE_CUBE,
     RRT_TEXTURE_REFERENCE,
     RRT_TimestampCalibrationQuery,
     RRT_GPU_FENCE,
-    RRT_BARRIER,
-    RRT_RenderQuery,
-    RRT_RenderQueryPool,
+    RRT_RENDER_QUERY,
+    RRT_RENDER_QUERY_POOL,
     RRT_VIEWPORT,
     RRT_UNORDERED_ACCESS_VIEW,
     RRT_SHADER_RESOURCE_VIEW,
     RRT_RAYTRACING_ACCELERATION_STRUCTURE,
+    RRT_RAYTRACING_SCENE,
     RRT_STAGING_BUFFER,
-    RRT_CustomPresent,
     RRT_SHADER_LIBRARY,
     RRT_PIPELINE_BINARY_DATA_LIBRARY,
 
@@ -575,7 +608,7 @@ enum EShaderType : uint8_t {
     ST_RAY_GEN,
     ST_RAY_MISS,
     ST_RAY_HIT,
-    ST_CALLABLE,
+    ST_RAY_CALLABLE,
     ST_Num,
     ST_NumBits = 4
 };
@@ -584,7 +617,7 @@ enum EVertexElementType : uint8_t {
     VET_None,
     VET_Float1,
     VET_Float2,
-    VET_Float3,
+    VET_FLOAT3,
     VET_Float4,
     VET_PackedNormal,// FPackedNormal
     VET_UByte4,

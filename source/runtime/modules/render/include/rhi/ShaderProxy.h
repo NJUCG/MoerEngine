@@ -587,9 +587,8 @@ public:
 
 void test() {
     TestGlobalShader::Parameters* pass;
-    TestGlobalShader::Parameters::GetMembers();
-    std::vector<int32_t> int_lists;
-    std::reverse(int_lists.begin(), int_lists.end());
+    const auto& members = TestGlobalShader::Parameters::GetMembers();
+    
 }
 
 #endif//MOER_ENGINE_SHADER_PROXY_H

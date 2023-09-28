@@ -3,13 +3,14 @@
 //
 #include "rhi/RHIResource.h"
 
-void RHIResource::Destroy() const{
+void RHIResource::Destroy() const {
     //mark resource to be deleted
-    if(!flags.MarkToDelete(std::memory_order_release)){
-//        pending_deletings.pr
+    if (!flags.MarkToDelete(std::memory_order_release)) {
+        //        pending_deletings.pr
     }
 }
 
+#pragma region buffer texture initiation
 RHITexture::RHITexture(const RHITextureCreateInfo& _info) : RHIViewableResource(RRT_TEXTURE), texture_info(_info) {
     SetName(_info.name);
 }
@@ -123,3 +124,44 @@ RHIViewInfo::TextureUAV::ViewInfo RHIViewInfo::TextureUAV::GetViewInfo(RHITextur
     _info.b_all_mips = tex_info.num_mips == 1;
     return _info;
 }
+
+RHITextureReference::RHITextureReference(
+    RHITexture*            _texture,
+    RHIShaderResourceView* _bindless_view)
+    : RHITexture(RRT_TEXTURE_REFERENCE),
+      texture_ref(_texture),
+      bindless_view(_bindless_view){
+
+      };
+
+RHITextureReference::~RHITextureReference()=default;
+
+RHITextureReference* RHITextureReference::GetTextureRef(){
+    return this;
+};
+
+void* RHITextureReference::GetNativeResource() const {
+    texture_ref->GetNativeResource();
+}
+void* RHITextureReference::GetNativeShaderResourceView() const {
+    texture_ref->GetNativeShaderResourceView();
+}
+const RHITextureInfo& RHITextureReference::GetInfo() const {
+    texture_ref->GetInfo();
+}
+
+#pragma endregion
+
+#pragma region rende query
+RHIPooledRenderQuery::~RHIPooledRenderQuery() {
+    Release();
+}
+
+void RHIPooledRenderQuery::Release() {
+    if (pool != nullptr && IsValid()) {
+        pool->ReleaseQuery(std::move(query_ref));
+        pool = nullptr;
+    }
+    assert(!IsValid() && "Query not successfully released");
+}
+#pragma endregion

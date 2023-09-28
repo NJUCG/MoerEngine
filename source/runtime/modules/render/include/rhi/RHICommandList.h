@@ -14,12 +14,20 @@ public:
 
 class RHIGraphicsCommandList : public RHICommandListBase {
 public:
-    virtual void SetPipelineState(RHIGraphicsPipelineState* _graphics_pso) = 0;
+    virtual void SetPipelineState(RHIGraphicsPipelineState* _graphics_pso, const RHIShaderBoundState& _shader_input) = 0;
     virtual void Close()                                                   = 0;
     virtual void Reset(RHIGraphicsPipelineState* _graphics_pso)            = 0;
     virtual void ClearState(RHIGraphicsPipelineState* _graphics_pso)       = 0;
 
     virtual void DrawIndexedInstanced(uint32_t _index_count, uint32_t _instance_count, int32_t _base_vertex_location, uint32_t _start_instance_location) = 0;
+
+    virtual void DrawIndexedIndirect(
+        RHIBuffer* _argument_buffer,
+        uint64_t   _arg_offset,
+        RHIBuffer* _count_buffer,
+        uint64_t   _count_buffer_offset,
+        uint32_t   _max_draw_count,
+        uint32_t   _stride) = 0;
 
     virtual void Dispatch(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z) = 0;
 
@@ -85,16 +93,11 @@ public:
         RHIUnorderedAccessView* _uav,
         const float4&           _values) = 0;
 
-    virtual void BeginRendering() = 0;
-    virtual void EndRendering()   = 0;
+    virtual void BeginRenderPass(const RHIRenderPassInfo& _pass_info, const char* _pass_name) = 0;
+    virtual void EndRenderPass()   = 0;
 
-    virtual void DrawIndexIndirect(
-        RHIBuffer* _argument_buffer,
-        uint64_t   _arg_offset,
-        RHIBuffer* _count_buffer,
-        uint64_t   _count_buffer_offset,
-        uint32_t   _max_draw_count,
-        uint32_t   _stride) = 0;
+    virtual void NextSubpass() = 0;
+
 
     virtual void BeginQuery(ERenderQueryType _query_type) = 0;
     virtual void EndQuery(ERenderQueryType _query_type)   = 0;
@@ -105,6 +108,17 @@ public:
         uint32_t         _num_queries,
         RHIBuffer*       _dst_buffer,
         uint64_t         _dst_offset) = 0;
+
+#pragma region ray-tracing
+    virtual void BuildAccelerationStructure(
+        RHIBuffer* _instance_data,
+        uint64_t _instance_offset,
+        bool _b_update,
+        RHIBuffer* _scratch,
+        RHIBuffer* _scratch_offset
+        ) = 0;
+
+#pragma endregion
 };
 
 class RHIComputeCommandList final : public RHICommandListBase {
