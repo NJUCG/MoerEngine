@@ -40,14 +40,10 @@
     MOER_FORCE_INLINE void EnumAddFlags(TEnum& lhs, TEnum rhs) { lhs |= rhs; }                      \
     MOER_FORCE_INLINE void EnumRemoveFlags(TEnum& lhs, TEnum rhs) { lhs &= ~rhs; }
 
-#define _EXPAND_ARGS_(...) __VA_ARGS__
+
 #define ENUM_BIT_OP_(TEnum)
 
 #define ENUM_BIT_OP_2(TEnum, OPERATION)    ENUM_BIT_OP_##OPERATION(TEnum)
-//#define ENUM_BIT_OP(TEnum, OPERATION, ...) ENUM_BIT_OP_2(TEnum, OPERATION) _EXPAND_ARGS_(ENUM_BIT_OP_2(TEnum, ##__VA_ARGS__))
-
-/*implement enum bit operation*/
-//#define ENUM_BIT_OP_IMPL(TEnum, ...) ENUM_BIT_OP_IMPL_1(TEnum) _EXPAND_ARGS_(ENUM_BIT_OP(TEnum, ##__VA_ARGS__))
 
 #define ENUM_BIT_OP(ENUM, ...)                                    \
   __VA_OPT__(EXPAND(FOR_EACH_HELPER(ENUM, __VA_ARGS__)))
@@ -58,9 +54,9 @@
 
 #define FOR_EACH_AGAIN() FOR_EACH_HELPER
 
-#define ENUM_BIT_OP_IMPL(TEnum, ...) ENUM_BIT_OP_IMPL_1(TEnum)
 
-#define ENUM_FLAG_OP_IMPL(TEnum) ENUM_BIT_OP_FLAG(TEnum)
+#define ENUM_BIT_OP_IMPL(TEnum, ...) ENUM_BIT_OP_IMPL_1(TEnum) __VA_OPT__(ENUM_BIT_OP(TEnum, __VA_ARGS__))
+
 
 #define BEGIN_ENUM_STR_DEFINITION(TEnum) \
     const char* ToString(TEnum target) { \
