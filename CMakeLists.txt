@@ -24,4 +24,8 @@ if(${CMAKE_BUILD_TYPE} MATCHES "Debug")
     add_definitions(-DDEBUG)
 endif()
 
+if(${MSVC})
+    add_compile_options("/Zc:preprocessor")
+endif()
+
 add_subdirectory("source")
