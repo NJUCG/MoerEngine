@@ -18,7 +18,6 @@ target_include_directories(${MODULE_NAME}
     PUBLIC $<BUILD_INTERFACE:${THIRD_PARTY_DIR}/glm>
 	PRIVATE $<BUILD_INTERFACE:${THIRD_PARTY_DIR}/VulkanSDK/include/vulkan>
 )
-
 target_link_libraries(${MODULE_NAME}
     #PUBLIC glm::glm
     #PUBLIC glfw

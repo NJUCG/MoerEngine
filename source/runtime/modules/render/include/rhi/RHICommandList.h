@@ -7,9 +7,6 @@ protected:
 
 public:
     RHI_API ~RHICommandListBase();
-
-    virtual void BeginRendering() = 0;
-    virtual void EndRendering()   = 0;
 };
 
 class RHIGraphicsCommandList : public RHICommandListBase {
@@ -98,9 +95,9 @@ public:
 
     virtual void NextSubpass() = 0;
 
-
-    virtual void BeginQuery(ERenderQueryType _query_type) = 0;
-    virtual void EndQuery(ERenderQueryType _query_type)   = 0;
+    //todo: query data declaration
+    virtual void BeginQuery(RHIRenderQuery* _query) = 0;
+    virtual void EndQuery(RHIRenderQuery* _query)   = 0;
 
     virtual void GetQueryData(
         ERenderQueryType _query_type,
@@ -108,6 +105,10 @@ public:
         uint32_t         _num_queries,
         RHIBuffer*       _dst_buffer,
         uint64_t         _dst_offset) = 0;
+
+    virtual void ExecuteSubCommands(uint32_t _num,
+                                    RHIGraphicsCommandList* _sub_commands) = 0;
+
 
 #pragma region ray-tracing
     virtual void BuildAccelerationStructure(

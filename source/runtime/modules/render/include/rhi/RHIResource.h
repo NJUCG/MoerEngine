@@ -1053,9 +1053,9 @@ struct RHIViewInfo::Texture::ViewInfo {
 
     EPixelFormat format;
 
-    ETextureDimension dimension : (uint32_t)ETextureDimension::NumBits;
-    uint8_t           b_all_mips : 1;
-    uint8_t           b_all_array_slices : 1;
+    ETextureDimension dimension;
+    uint8_t           b_all_mips;
+    uint8_t           b_all_array_slices;
 };
 
 struct RHIViewInfo::BufferUAV::ViewInfo : public RHIViewInfo::Buffer::ViewInfo {
@@ -1682,6 +1682,7 @@ public:
         hash_combine(hash, value.max_payload_byte_size);
         hash_combine(hash, value.b_allow_hit_group_indexing);
         //todo: combine shader hashes
+        return hash;
     }
 
 protected:
@@ -1690,6 +1691,7 @@ protected:
             //todo: handle sha256 hash combining and convert shader sha256 to uint64_t
             shader->GetHash();
         }
+        return 0;
     }
 
     RHIRayTracingPipelineStateRef     base_pipeline_handle;

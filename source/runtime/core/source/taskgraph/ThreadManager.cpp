@@ -49,7 +49,7 @@ uint32_t ThreadManager::getCurrentThreadID() {
 
 ThreadManager& ThreadManager::Instance() {
     static ThreadManager singleton;
-    // TODO: ÔÚ´Ë´¦²åÈë return Óï¾ä
+    // TODO: ï¿½Ú´Ë´ï¿½ï¿½ï¿½ï¿½ï¿½ return ï¿½ï¿½ï¿½
     return singleton;
 }
 
@@ -74,7 +74,7 @@ RunnableThread* ThreadManager::getRunnableThread(uint32_t thread_id) {
 }
 
 void RunnableThread::setup(uint64_t affinity) {
-    Platform::SetThreadAffinity(m_thread->native_handle(), affinity);
+    Platform::SetThreadAffinity((void*)m_thread->native_handle(), affinity);
 }
 
 RunnableThread* RunnableThread::create(Runnable* runnable, std::string name, uint64_t affinity) {
