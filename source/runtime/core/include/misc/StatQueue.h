@@ -150,7 +150,7 @@ public:
         for (;;) {
             //push to tail  index of tail become 1 if head
             DoublePtr local_tail(m_tail);
-            int       new_index = local_tail.get_ptr() + 1;
+//            int       new_index = local_tail.get_ptr() + 1;
             int       new_index = local_tail.get_ptr() + 1;
             DoublePtr local_head(m_head);
             DoublePtr new_tail(local_head.get_ptr() + 1, advance_tag(local_head.get_tag()));

@@ -2,6 +2,7 @@
 #define RHI_PLATFORM_COMMON_H
 
 #include <cstdint>
+#include <limits>
 #include "misc/EnumBitOperation.h"
 #pragma region CommonEnums
 /** Maximum number of miplevels in a texture. */
@@ -18,7 +19,9 @@ enum {
 enum : uint8_t {
     MAX_PASS_ATTACHMENT_COUNT = 8
 };
-
+enum : uint64_t{
+    MAX_WAIT_TIME = std::numeric_limits<uint64_t>::max()
+};
 enum class ERHIZBuffer {
     // Before changing this, make sure all math & shader assumptions are correct! Also wrap your C++ assumptions with
     //		static_assert(ERHIZBuffer::IsInvertedZBuffer(), ...);
@@ -889,4 +892,12 @@ enum EShaderPlatform : uint16_t {
 };
 static_assert(SP_Num < (1 << SP_NumBits) && "");
 #pragma endregion
+
+enum class ECommandQueueType {
+    GRAPHICS,
+    SECONDARY,
+    COMPUTE,
+    COPY
+};
+
 #endif// !RHI_PLATFORM_COMMON_H

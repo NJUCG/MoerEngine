@@ -367,8 +367,6 @@ public:
     //    /** Speed up finding the uniform buffer by its name */
     //    static RHI_API std::map<SHA256Hash, FShaderParametersMetadata*>& GetNameStructMap();
 
-    /** Initialize all the global shader parameter structs. */
-    static RHI_API void InitializeAllUniformBufferStructs();
 
     /** Returns a hash about the entire layout of the structure. */
     uint32_t GetLayoutHash() const {
@@ -588,7 +586,7 @@ public:
 void test() {
     TestGlobalShader::Parameters* pass;
     const auto& members = TestGlobalShader::Parameters::GetMembers();
-    
+
 }
 
 #endif//MOER_ENGINE_SHADER_PROXY_H

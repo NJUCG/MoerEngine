@@ -1,6 +1,3 @@
-//
-// Created by JohnW1ck on 2023/9/17.
-//
 #include "rhi/RHIResource.h"
 
 void RHIResource::Destroy() const {
@@ -141,13 +138,13 @@ RHITextureReference* RHITextureReference::GetTextureRef(){
 };
 
 void* RHITextureReference::GetNativeResource() const {
-    texture_ref->GetNativeResource();
+    return texture_ref->GetNativeResource();
 }
 void* RHITextureReference::GetNativeShaderResourceView() const {
-    texture_ref->GetNativeShaderResourceView();
+    return texture_ref->GetNativeShaderResourceView();
 }
 const RHITextureInfo& RHITextureReference::GetInfo() const {
-    texture_ref->GetInfo();
+    return texture_ref->GetInfo();
 }
 
 #pragma endregion
