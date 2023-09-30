@@ -1,5 +1,8 @@
 set(MODULE_NAME render)
 set(MODULE_DIR ${moer_runtime_module_root_dir}/${MODULE_NAME})
+
+configure_file(${MODULE_DIR}/include/rhi/vulkan/config.h.in ${MODULE_DIR}/include/rhi/vulkan/config.h)
+
 file(GLOB_RECURSE RENDER_MODULE_HEADERS "include/*.h")
 file(GLOB_RECURSE RENDER_MODULE_SOURCES "source/*.cpp")
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${RENDER_MODULE_HEADERS} ${RENDER_MODULE_SOURCES})
