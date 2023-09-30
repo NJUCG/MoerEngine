@@ -380,7 +380,8 @@ enum class EBufferUsageFlags : uint32_t {
     DYNAMIC = (LIFE_CYCLE_DYNAMIC | LIFE_CYCLE_ONE_FRAME),
 };
 
-ENUM_BIT_OP_IMPL(EBufferUsageFlags, FLAG)
+ENUM_BIT_OP_IMPL(EBufferUsageFlags)
+ENUM_FLAG_OP_IMPL(EBufferUsageFlags)
 
 enum class ETextureDimension : uint8_t {
     TEX_2D,

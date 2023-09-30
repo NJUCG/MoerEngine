@@ -51,13 +51,16 @@
 
 #define ENUM_BIT_OP(ENUM, ...)                                    \
   __VA_OPT__(EXPAND(FOR_EACH_HELPER(ENUM, __VA_ARGS__)))
+
 #define FOR_EACH_HELPER(ENUM, a1, ...)                         \
   ENUM_BIT_OP_2(ENUM, a1)                                                     \
   __VA_OPT__(FOR_EACH_AGAIN PARENS (macro, __VA_ARGS__))
+
 #define FOR_EACH_AGAIN() FOR_EACH_HELPER
 
-#define ENUM_BIT_OP_IMPL(TEnum, ...) ENUM_BIT_OP_IMPL_1(TEnum) __VA_OPT__(ENUM_BIT_OP(TEnum, __VA_ARGS__))
+#define ENUM_BIT_OP_IMPL(TEnum, ...) ENUM_BIT_OP_IMPL_1(TEnum)
 
+#define ENUM_FLAG_OP_IMPL(TEnum) ENUM_BIT_OP_FLAG(TEnum)
 
 #define BEGIN_ENUM_STR_DEFINITION(TEnum) \
     const char* ToString(TEnum target) { \
