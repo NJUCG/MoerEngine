@@ -122,7 +122,7 @@ struct VertexElement {
 };
 static_assert(sizeof(VertexElement) == 8, "VertexElement doesn't match cache line size");
 
-typedef std::array<struct FVertexElement, MAX_VERTEX_ELEMENT_COUNT> VertexInputStateInitializerList;
+typedef std::array<VertexElement, MAX_VERTEX_ELEMENT_COUNT> VertexInputStateInitializerList;
 
 #pragma endregion
 
