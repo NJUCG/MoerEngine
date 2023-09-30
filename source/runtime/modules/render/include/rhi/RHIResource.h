@@ -2119,7 +2119,7 @@ struct RayTracingGeometryInitializer {
     // opt: for intermediate usage
     RHIRayTracingGeometry* src_geometry;
 };
-static_assert(sizeof(RayTracingGeometryInitializer) == 56);
+static_assert(sizeof(RayTracingGeometryInitializer) == 64);
 
 struct Matrix {
     float matrix[3][4];
