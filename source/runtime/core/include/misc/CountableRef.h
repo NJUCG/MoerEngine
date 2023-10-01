@@ -125,7 +125,7 @@ public:
         }
         return *this;
     }
-    T* get() const{ return ptr; }
+    T* Get() const{ return ptr; }
     T* operator->() const{
         return ptr;
     }

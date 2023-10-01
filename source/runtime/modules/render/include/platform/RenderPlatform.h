@@ -10,7 +10,7 @@
 #include <string>
 #include <cstdint>
 #include "config/ConfigMap.h"
-namespace __ENGINE_NAME__ {
+namespace MoerEngine {
 namespace RHI {
     RHI_API extern const std::string RHI_VULKAN_NAME;
     RHI_API extern const std::string RHI_D3D_NAME;
