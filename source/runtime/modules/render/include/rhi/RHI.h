@@ -6,6 +6,10 @@ enum class ERHIType{
     Vulkan,
     D3D12
 };
+class RHIGraphicsCommandList;
+class RHIComputeCommandList;
+class RHICommandQueue;
+
 class RHI{
 public:
     virtual ~RHI()=default;
@@ -29,14 +33,14 @@ public:
     virtual RHIBlendStateRef RHICreateBlendState(const RHIBlendStateInitializer& _init) = 0;
     virtual RHIVertexInputStateRef RHICreateVertexInputState(const VertexInputStateInitializerList& _init) = 0;
 
-    virtual RHIVertexShaderRef RHICreateVertexShader(std::vector<const uint8_t> _code, const SHA256Hash& _hash) = 0;
-    virtual RHIFragmentShaderRef RHICreateFragmentShader(std::vector<const uint8_t> _code, const SHA256Hash& _hash) = 0;
-    virtual RHIGeometryShaderRef RHICreateGeometryShader(std::vector<const uint8_t> _code, const SHA256Hash& _hash) = 0;
+    virtual RHIVertexShaderRef RHICreateVertexShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) = 0;
+    virtual RHIFragmentShaderRef RHICreateFragmentShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) = 0;
+    virtual RHIGeometryShaderRef RHICreateGeometryShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) = 0;
 
-    virtual RHIMeshShaderRef  RHICreateMeshShader(std::vector<const uint8_t> _code, const SHA256Hash& _hash) = 0;
-    virtual RHIAmplificationShaderRef  RHICreateAmplificationShader(std::vector<const uint8_t> _code, const SHA256Hash& _hash) = 0;
+    virtual RHIMeshShaderRef  RHICreateMeshShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) = 0;
+    virtual RHIAmplificationShaderRef  RHICreateAmplificationShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) = 0;
 
-    virtual RHIComputeShaderRef RHICreateComputeShader(std::vector<const uint8_t> _code, const SHA256Hash& _hash) = 0;
+    virtual RHIComputeShaderRef RHICreateComputeShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) = 0;
 
     virtual RHIShaderLibraryRef RHICreateShaderLibrary(EShaderPlatform _platform, const std::string& _file_path, const std::string& name){return nullptr;};
 
@@ -72,11 +76,21 @@ public:
 
     virtual void RHICopyBuffer(RHIBuffer* _src, RHIBuffer* _dst) = 0;
 
-    virtual RHIBufferRef RHICreateBuffer(RHICommandListBase*, const RHIBufferCreateInfo& info) = 0;
+    virtual RHIBufferRef RHICreateBuffer(const RHIBufferCreateInfo& info) = 0;
 
-    virtual RHIShaderResourceViewRef RHICreateShaderResourceView(RHICommandListBase& _cmd_list, RHIViewableResource* _resource, const RHIViewInfo& _view_info) = 0;
-    virtual RHIUnorderedAccessViewRef RHICreateUnorderedAccessView(RHICommandListBase& _cmd_list, RHIViewableResource* _resource, const RHIViewInfo& _view_info) = 0;
+    virtual RHIShaderResourceViewRef RHICreateShaderResourceView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) = 0;
+    virtual RHIUnorderedAccessViewRef RHICreateUnorderedAccessView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) = 0;
 
+     virtual RHICommandQueue* CreateCommandQueue(
+        ECommandQueueType type) = 0;
+
+    virtual RHIGraphicsCommandList* CreateGraphicsCommandList(
+        RHIGraphicsPipelineState* _initial_state = nullptr
+        )= 0;
+
+    virtual RHIComputeCommandList* CreateComputeCommandList(
+        RHIComputePipelineState* _initial_state = nullptr
+        ) = 0;
 
 #pragma endregion
 

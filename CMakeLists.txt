@@ -20,4 +20,8 @@ add_definitions(-DASSET_DIR="${moer_root_dir}/asset")
 
 option(moer_build_test "build test unit" ON)
 
+if(${MSVC})
+    add_compile_options("/Zc:preprocessor")
+endif()
+
 add_subdirectory("source")

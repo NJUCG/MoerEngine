@@ -171,7 +171,7 @@ bool TaskGraphTest() {
                     //UE_LOG(LogTemp, Log, TEXT("Prereq"));
                     PrereqHolder->wait();// hold it until it's used for `DontCompleteUntil`
                 });
-            GraphEvent* completion = static_cast<GraphEvent*>(MyCompletionGraphEvent.get());
+            GraphEvent* completion = static_cast<GraphEvent*>(MyCompletionGraphEvent.Get());
             completion->waitUntil(Prereq);
             assert(!PrereqHolder->isComplete());// check that prereq was incomplete during DontCompleteUntil ^^
 
@@ -180,7 +180,7 @@ bool TaskGraphTest() {
         };
 
         GraphEventRef Event  = FunctionGraphTask::ConstructAndDispatchWhenReady(std::move(Lambda));
-        GraphEvent*   _event = static_cast<GraphEvent*>(Event.get());
+        GraphEvent*   _event = static_cast<GraphEvent*>(Event.Get());
         assert(!_event->isComplete());
         _event->wait(EThread::EGameThread);
     }

@@ -41,7 +41,7 @@ void GraphEvent::tryUnlockSubsequents(std::vector<BaseGraphTask*>& tasks, EThrea
         //test events to wait has complete
         bool generateEmptyTask = false;
         for (int32_t i = 0; i < tempEvents.size(); i++) {
-            GraphEvent* _event = tempEvents[i].get();
+            GraphEvent* _event = tempEvents[i].Get();
             if (!_event->isComplete()) {
                 generateEmptyTask = true;
                 break;

@@ -15,8 +15,9 @@ target_include_directories(${MODULE_NAME}
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/boost>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/spdlog/include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/glm>
+	PRIVATE $<BUILD_INTERFACE:${MODULE_DIR}/include/rhi/vulkan>
+	PRIVATE $<BUILD_INTERFACE:${moer_third_party_dir}/VulkanSDK/include/vulkan>
 )
-
 target_link_libraries(${MODULE_NAME}
     #PUBLIC glm::glm
     #PUBLIC glfw

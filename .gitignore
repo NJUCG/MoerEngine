@@ -9,3 +9,5 @@ build
 /.idea/modules.xml
 /.idea/MoerEngine.iml
 /.idea/vcs.xml
+build_vs2022
+cmake-build-*/
