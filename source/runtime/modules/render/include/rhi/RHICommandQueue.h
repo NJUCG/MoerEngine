@@ -5,6 +5,7 @@
 
 //todo: need this(dx12 style) or not(vulkan style, stateless)
 class RHICommandQueue{
+public:
     virtual void SubmitCommands(
         uint32_t _num_command_lists,
         RHICommandListBase* const* _command_lists

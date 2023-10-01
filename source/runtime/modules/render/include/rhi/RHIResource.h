@@ -18,7 +18,7 @@ class RHICommandListBase;
 class RHITexture;
 class RHIAmplificationShader;
 class RHIBlendState;
-class RHIShaderBoundState;
+class RHIShaderBoundStateInput;
 class RHIBuffer;
 class RHIComputePipelineState;
 class RHIComputeShader;
@@ -57,7 +57,7 @@ struct RHIUniformBufferLayout;
 
 using RHIAmplificationShaderRef       = CountableRef<RHIAmplificationShader>;
 using RHIBlendStateRef                = CountableRef<RHIBlendState>;
-using RHIShaderBoundStateRef          = CountableRef<RHIShaderBoundState>;
+using RHIShaderBoundStateRef          = CountableRef<RHIShaderBoundStateInput>;
 using RHIBufferRef                    = CountableRef<RHIBuffer>;
 using RHIComputePipelineStateRef      = CountableRef<RHIComputePipelineState>;
 using RHIComputeShaderRef             = CountableRef<RHIComputeShader>;
@@ -262,10 +262,10 @@ public:
     //    virtual bool GetInitializer(struct RHIBlendStateInitializer& _init) { return false; }
 };
 
-class RHIVertexDescription : public RHIResource {
-public:
-    explicit RHIVertexDescription() : RHIResource(RRT_VERTEX_STATE_INITIALIZER) {}
-};
+//class RHIVertexDescription : public RHIResource {
+//public:
+//    explicit RHIVertexDescription() : RHIResource(RRT_VERTEX_STATE_INITIALIZER) {}
+//};
 
 class RHIPipelineShaderBindingState : public RHIResource {
 public:
@@ -633,7 +633,7 @@ struct RHITextureCreateInfo : public RHITextureInfo {
         usage |= _usage;
         return *this;
     }
-    RHITextureCreateInfo& SetClearAttachment(RHIClearAttachment& _attachment) {
+    RHITextureCreateInfo& SetClearAttachment(RHIClearAttachment _attachment) {
         clear_attachment = _attachment;
         return *this;
     }
@@ -1416,19 +1416,19 @@ private:
     EAttachmentStoreOp stencil_store_op;
 };
 
-struct RHIShaderBoundState {
+struct RHIShaderBoundStateInput {
 
-    RHIShaderBoundState() = default;
-    RHIShaderBoundState(
-        RHIVertexDescription* _vertex_description,
+    RHIShaderBoundStateInput() = default;
+    RHIShaderBoundStateInput(
+        RHIVertexInputState* _vertex_input_state,
         RHIVertexShader*      _vertex_shader,
         RHIFragmentShader*    _fragment_shader,
         RHIGeometryShader*    _geometry_shader)
-        : p_vertex_description(_vertex_description),
+        : p_vertex_input_state(_vertex_input_state),
           p_fragment_shader(_fragment_shader),
           p_geometry_shader(_geometry_shader) {}
 
-    RHIShaderBoundState(
+    RHIShaderBoundStateInput(
         RHIFragmentShader*      _fragment_shader,
         RHIMeshShader*          _mesh_shader,
         RHIAmplificationShader* _amplification_shader)
@@ -1451,7 +1451,7 @@ struct RHIShaderBoundState {
     void SetAmplificationShader(RHIAmplificationShader* _amplification_shader) { p_amplification_shader = _amplification_shader; }
     //fields
 
-    RHIVertexDescription* p_vertex_description = nullptr;
+    RHIVertexInputState*  p_vertex_input_state = nullptr;
     RHIVertexShader*      p_vertex_shader      = nullptr;
     RHIFragmentShader*    p_fragment_shader    = nullptr;
     RHIGeometryShader*    p_geometry_shader    = nullptr;
@@ -1526,7 +1526,7 @@ public:
           hash_key(0) {}
 
     RHIGraphicsPipelineStateInitializer(
-        RHIShaderBoundState       _shader_stage,
+        RHIShaderBoundStateInput  _shader_stage,
         RHIBlendState*            _blend_state,
         RHIRasterizationState*    _rasterizer_state,
         RHIDepthStencilState*     _depth_stencil_state,
@@ -1586,7 +1586,7 @@ public:
     }
 
     bool operator==(const RHIGraphicsPipelineStateInitializer& other) const {
-        return shader_stage.p_vertex_description == other.shader_stage.p_vertex_description && shader_stage.p_vertex_shader == other.shader_stage.p_vertex_shader && shader_stage.p_fragment_shader == other.shader_stage.p_fragment_shader && shader_stage.GetMeshShader() == other.shader_stage.GetMeshShader() && shader_stage.GetGeometryShader() == other.shader_stage.GetGeometryShader() && shader_stage.GetAmplificationShader() == other.shader_stage.GetAmplificationShader() && blend_state == other.blend_state && rasterizer_state == other.rasterizer_state && depth_stencil_state == other.depth_stencil_state && primitive_topology == other.primitive_topology && b_depth_bound == other.b_depth_bound && multi_view_count == other.multi_view_count && shading_rate == other.shading_rate && b_has_fragment_density_attachments == other.b_has_fragment_density_attachments && color_attachment_count == other.color_attachment_count && color_attachment_formats == other.color_attachment_formats && IsSameColorAttachmentArray(color_attachment_flags, other.color_attachment_flags) && depth_stencil_format == other.depth_stencil_format && IsSameDepthAttachmentInPSO(depth_stencil_flag, other.depth_stencil_flag) && depth_attachment_load_op == other.depth_attachment_load_op && depth_attachment_store_op == other.depth_attachment_store_op && stencil_attachment_load_op == other.stencil_attachment_load_op && stencil_attachment_store_op == other.stencil_attachment_store_op && num_samples == other.num_samples && subpass_settings == other.subpass_settings;
+        return shader_stage.p_vertex_input_state == other.shader_stage.p_vertex_input_state && shader_stage.p_vertex_shader == other.shader_stage.p_vertex_shader && shader_stage.p_fragment_shader == other.shader_stage.p_fragment_shader && shader_stage.GetMeshShader() == other.shader_stage.GetMeshShader() && shader_stage.GetGeometryShader() == other.shader_stage.GetGeometryShader() && shader_stage.GetAmplificationShader() == other.shader_stage.GetAmplificationShader() && blend_state == other.blend_state && rasterizer_state == other.rasterizer_state && depth_stencil_state == other.depth_stencil_state && primitive_topology == other.primitive_topology && b_depth_bound == other.b_depth_bound && multi_view_count == other.multi_view_count && shading_rate == other.shading_rate && b_has_fragment_density_attachments == other.b_has_fragment_density_attachments && color_attachment_count == other.color_attachment_count && color_attachment_formats == other.color_attachment_formats && IsSameColorAttachmentArray(color_attachment_flags, other.color_attachment_flags) && depth_stencil_format == other.depth_stencil_format && IsSameDepthAttachmentInPSO(depth_stencil_flag, other.depth_stencil_flag) && depth_attachment_load_op == other.depth_attachment_load_op && depth_attachment_store_op == other.depth_attachment_store_op && stencil_attachment_load_op == other.stencil_attachment_load_op && stencil_attachment_store_op == other.stencil_attachment_store_op && num_samples == other.num_samples && subpass_settings == other.subpass_settings;
     }
 
     uint32_t CalcValidColorAttachmentCount() const {
@@ -1603,7 +1603,7 @@ public:
         return color_attachment_count;
     }
 
-    RHIShaderBoundState    shader_stage;
+    RHIShaderBoundStateInput shader_stage;
     RHIBlendState*         blend_state;
     RHIRasterizationState* rasterizer_state;
     RHIDepthStencilState*  depth_stencil_state;

@@ -77,6 +77,11 @@ public:
     virtual void RHICopyBuffer(RHIBuffer* _src, RHIBuffer* _dst) = 0;
 
     virtual RHIBufferRef RHICreateBuffer(const RHIBufferCreateInfo& info) = 0;
+    virtual void* RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size) = 0;
+    virtual void RHIUnmapBuffer(RHIBuffer* _buffer) = 0;
+
+    virtual RHITextureRef RHICreateTexture(const RHITextureCreateInfo& info) = 0;
+
 
     virtual RHIShaderResourceViewRef RHICreateShaderResourceView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) = 0;
     virtual RHIUnorderedAccessViewRef RHICreateUnorderedAccessView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) = 0;

@@ -202,21 +202,15 @@ public:
         Member(
             const char*                     _name,
             const char*                     _binding_type,
-            int32_t                         _file_line,
             uint32_t                        _struct_offset,
             EShaderBindingBaseType          _base_type,
             EShaderPrecisionModifier        _type_precision,
-            uint32_t                        _num_rows,
-            uint32_t                        _num_columns,
             uint32_t                        _num_elements,
             const ShaderParametersMetadata* _p_struct_meta_data)
             : name(_name),
-              file_line(_file_line),
               struct_offset(_struct_offset),
               base_type(_base_type),
               type_precision(_type_precision),
-              num_rows(_num_rows),
-              num_columns(_num_columns),
               num_elements(_num_elements),
               p_struct_meta_data(_p_struct_meta_data) {
             std::string temp(_binding_type);
@@ -232,9 +226,6 @@ public:
         /** Returns the string of the type. */
         const char* GetShaderBindingTypeStr() const { return ToString(binding_type); }
 
-        /** Returns the C++ line number where the parameter is declared. */
-        int32_t GetFileLine() const { return int32_t(file_line); }
-
         /** Returns the offset of the element in the shader parameter struct in bytes. */
         uint32_t GetOffset() const { return struct_offset; }
 
@@ -243,12 +234,6 @@ public:
 
         /** Floating point the element is being stored. */
         EShaderPrecisionModifier GetPrecision() const { return type_precision; }
-
-        /** Returns the number of row in the element. For instance FMatrix would return 4, or FVector would return 1. */
-        uint32_t GetNumRows() const { return num_rows; }
-
-        /** Returns the number of column in the element. For instance FMatrix would return 4, or FVector would return 3. */
-        uint32_t GetNumColumns() const { return num_columns; }
 
         /** Returns the number of elements in array, or 0 if this is not an array. */
         uint32_t GetNumElements() const { return num_elements; }
@@ -262,16 +247,16 @@ public:
                    base_type == SBT_FLOAT32;
         }
 
-        /** Returns the size of the member. */
-        inline uint32_t GetMemberSize() const {
-            uint32_t ElementSize = sizeof(uint32_t) * num_rows * num_columns;
-
-            /** If this an array, the alignment of the element are changed. */
-            if (num_elements > 0) {
-                return ((ElementSize - 1) / SHADER_PARAMETER_STRUCTURE_ALIGNMENT + 1) * SHADER_PARAMETER_STRUCTURE_ALIGNMENT * num_elements;
-            }
-            return ElementSize;
-        }
+//        /** Returns the size of the member. */
+//        inline uint32_t GetMemberSize() const {
+//            uint32_t ElementSize = sizeof(uint32_t) * num_rows * num_columns;
+//
+//            /** If this an array, the alignment of the element are changed. */
+//            if (num_elements > 0) {
+//                return ((ElementSize - 1) / SHADER_PARAMETER_STRUCTURE_ALIGNMENT + 1) * SHADER_PARAMETER_STRUCTURE_ALIGNMENT * num_elements;
+//            }
+//            return ElementSize;
+//        }
 
         //        static RHI_API void GenerateShaderParameterType(
         //            std::string&             Result,
@@ -286,12 +271,11 @@ public:
     private:
         const char*                     name;
         EShaderCodeResourceBindingType  binding_type;
-        int32_t                         file_line;
+
         uint32_t                        struct_offset;
         EShaderBindingBaseType          base_type;
         EShaderPrecisionModifier        type_precision;
-        uint32_t                        num_rows;
-        uint32_t                        num_columns;
+
         uint32_t                        num_elements;
         const ShaderParametersMetadata* p_struct_meta_data;
     };
@@ -496,6 +480,20 @@ struct TShaderParameterStructureTypeInfo
     static const ShaderParametersMetadata* GetStructMetadata() { return UniformBufferStructType::GetStructMetadata(); }
 };
 
+template<>
+struct TShaderParameterStructureTypeInfo<float>
+{
+    static constexpr int32_t s_num_rows = 1;
+    static constexpr int32_t s_num_columns = 1;
+    static constexpr int32_t s_num_elements = 0;
+    static constexpr int32_t alignment = SHADER_PARAMETER_STRUCTURE_ALIGNMENT;
+    static constexpr bool b_is_stored_in_constant_buffer = true;
+
+    using TParamPtr = TShaderParameterPtr<float>;
+
+    static const ShaderParametersMetadata* GetStructMetadata() { return nullptr; }
+};
+// shader->bind("ubo", value);
 
 #define BEGIN_SHADER_PARAMETER_DEFINITION(StructureName)                                                                     \
     class alignas(SHADER_PARAMETER_STRUCTURE_ALIGNMENT) StructureName {                                                      \
@@ -515,6 +513,7 @@ struct TShaderParameterStructureTypeInfo
     MemberId##MemberName;                                                                                                  \
                                                                                                                            \
 public:                                                                                                                    \
+    /* a ptr wrapped shader param type  */    \
     TypeInfo::TParamPtr MemberName = nullptr;                                                                              \
                                                                                                                            \
 private:                                                                                                                   \
@@ -526,12 +525,9 @@ private:                                                                        
         _members->push_back(ShaderParametersMetadata::Member(                                                              \
             #MemberName,                                                                                                   \
             #HlslType,                                                                                                     \
-            __LINE__,                                                                                                      \
             offsetof(TThisStruct, MemberName),                                                                             \
             UBMTBaseType,                                                                                                  \
             Precision,                                                                                                     \
-            TypeInfo::s_num_rows,                                                                                          \
-            TypeInfo::s_num_columns,                                                                                       \
             TypeInfo::s_num_elements,                                                                                      \
             TypeInfo::GetStructMetadata()));                                                                               \
         void* (*PrevFunc)(MemberId##MemberName, std::vector<ShaderParametersMetadata::Member>*);                           \
@@ -558,6 +554,10 @@ public:                                                                         
     }                                                                                     \
     ;
 
+// float [] 1
+// float [] 2
+// float [] 3
+
 #define DEFINE_SHADER_PARAM_UAV(HLSLType, MemberName) \
     INTERNAL_DEFINE_SHADER_PARAM_IMPL(TShaderResourceParameterTypeInfo<RHIUnorderedAccessView*>, RHIUnorderedAccessView*, MemberName, HLSLType, EShaderPrecisionModifier::FLOAT, SBT_UAV)
 
@@ -582,7 +582,11 @@ public:
 
     END_SHADER_PARAMETER_DEFINITION(Parameters)
 };
-
+/*
+ *  uav v1 (register 0);
+ *  srv s1 (register 1);
+ *  constant buffer
+ * */
 void test() {
     TestGlobalShader::Parameters* pass;
     const auto& members = TestGlobalShader::Parameters::GetMembers();

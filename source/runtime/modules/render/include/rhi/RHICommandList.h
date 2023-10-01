@@ -11,7 +11,7 @@ public:
 
 class RHIGraphicsCommandList : public RHICommandListBase {
 public:
-    virtual void SetPipelineState(RHIGraphicsPipelineState* _graphics_pso, const RHIShaderBoundState& _shader_input) = 0;
+    virtual void SetPipelineState(RHIGraphicsPipelineState* _graphics_pso, const RHIShaderBoundStateInput& _shader_input) = 0;
     virtual void Close()                                                   = 0;
     virtual void Reset(RHIGraphicsPipelineState* _graphics_pso)            = 0;
     virtual void ClearState(RHIGraphicsPipelineState* _graphics_pso)       = 0;

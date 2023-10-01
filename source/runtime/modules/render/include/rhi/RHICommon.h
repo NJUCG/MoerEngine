@@ -781,11 +781,6 @@ enum EUniformBufferLifeScope{
     MULTI_FRAME
 };
 
-enum EResourceAccessMode {
-    RAM_READ_ONLY,
-    RAM_WRITE_ONLY,
-    RAM_Num
-};
 enum class ETextureUsageFlags : uint64_t {
     UNDEFINED,
 
@@ -819,6 +814,8 @@ enum class ETextureUsageFlags : uint64_t {
     Num
 };
 ENUM_BIT_OP_IMPL(ETextureUsageFlags, FLAG)
+
+//for barriers
 enum class ETextureAspectFlags : uint32_t {
     // no
     NONE,
