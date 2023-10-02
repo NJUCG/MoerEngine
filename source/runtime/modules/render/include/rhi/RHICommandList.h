@@ -1,6 +1,8 @@
 #ifndef RHI_COMMAND_LIST_H
 #define RHI_COMMAND_LIST_H
 #include "RHI.h"
+#include "math/Base.h"
+
 class RHICommandListBase {
 protected:
     RHI_API RHICommandListBase();
@@ -12,9 +14,9 @@ public:
 class RHIGraphicsCommandList : public RHICommandListBase {
 public:
     virtual void SetPipelineState(RHIGraphicsPipelineState* _graphics_pso, const RHIShaderBoundState& _shader_input) = 0;
-    virtual void Close()                                                   = 0;
-    virtual void Reset(RHIGraphicsPipelineState* _graphics_pso)            = 0;
-    virtual void ClearState(RHIGraphicsPipelineState* _graphics_pso)       = 0;
+    virtual void Close()                                                                                             = 0;
+    virtual void Reset(RHIGraphicsPipelineState* _graphics_pso)                                                      = 0;
+    virtual void ClearState(RHIGraphicsPipelineState* _graphics_pso)                                                 = 0;
 
     virtual void DrawIndexedInstanced(uint32_t _index_count, uint32_t _instance_count, int32_t _base_vertex_location, uint32_t _start_instance_location) = 0;
 
@@ -85,13 +87,13 @@ public:
     virtual void ClearDepthStencil() = 0;
     virtual void ClearUAVInt(
         RHIUnorderedAccessView* _uav,
-        const int4&             _values) = 0;
+        const Moer::Vector4i&   _values) = 0;
     virtual void ClearUAVFloat(
         RHIUnorderedAccessView* _uav,
-        const float4&           _values) = 0;
+        const Moer::Vector4f&   _values) = 0;
 
     virtual void BeginRenderPass(const RHIRenderPassInfo& _pass_info, const char* _pass_name) = 0;
-    virtual void EndRenderPass()   = 0;
+    virtual void EndRenderPass()                                                              = 0;
 
     virtual void NextSubpass() = 0;
 
@@ -106,18 +108,16 @@ public:
         RHIBuffer*       _dst_buffer,
         uint64_t         _dst_offset) = 0;
 
-    virtual void ExecuteSubCommands(uint32_t _num,
+    virtual void ExecuteSubCommands(uint32_t                _num,
                                     RHIGraphicsCommandList* _sub_commands) = 0;
 
-
-#pragma region ray-tracing
+#pragma region ray -tracing
     virtual void BuildAccelerationStructure(
         RHIBuffer* _instance_data,
-        uint64_t _instance_offset,
-        bool _b_update,
+        uint64_t   _instance_offset,
+        bool       _b_update,
         RHIBuffer* _scratch,
-        RHIBuffer* _scratch_offset
-        ) = 0;
+        RHIBuffer* _scratch_offset) = 0;
 
 #pragma endregion
 };
