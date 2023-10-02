@@ -1,7 +1,9 @@
 out
 .vs
+.vscode
 target
 build
+test/
 /.idea/codeStyles/codeStyleConfig.xml
 /.idea/codeStyles/Project.xml
 /.idea/.gitignore
