@@ -1,6 +1,6 @@
 #ifndef MOER_ENGINE_SHADER_PROXY_H
 #define MOER_ENGINE_SHADER_PROXY_H
-#include "RHIResource.h"
+#include "ShaderCommon.h"
 #include <vector>
 #include "API_Macro.h"
 #include "misc/Hash.h"
@@ -9,33 +9,12 @@
 #define SHADER_PARAMETER_STRUCTURE_ALIGNMENT 16
 
 #pragma region forward
-class ShaderPipelineType;
 class VertexFactoryType;
-struct ShaderCompilerOutput;
-
 #pragma endregion
-enum class EShaderParameterType : uint8_t {
-    LOOSE_DATA,
-    UNIFORM_BUFFER,
-    SAMPLER,
-    SRV,
-    UAV,
 
-    BINDLESS_RESOURCE_INDEX,
-    BINDLESS_SAMPLER_INDEX,
 
-    Num
-};
 
-enum class EShaderPrecisionModifier : uint8_t {
-    FLOAT,
-    HALF,
-    FIXED,
-    INVALID
-};
-ENUM_BIT_OP_IMPL(EShaderPrecisionModifier, )
-
-struct RHIUniformBufferResourceInitializer {
+struct RHIGlobalBufferResourceInitializer {
 
     uint16_t member_offset;
 
@@ -44,13 +23,13 @@ struct RHIUniformBufferResourceInitializer {
     uint8_t                padding;
 
     /** Compare two uniform buffer layout resources. */
-    friend inline bool operator==(const RHIUniformBufferResourceInitializer& A, const RHIUniformBufferResourceInitializer& B) {
+    friend inline bool operator==(const RHIGlobalBufferResourceInitializer& A, const RHIGlobalBufferResourceInitializer& B) {
         return A.member_offset == B.member_offset && A.member_type == B.member_type;
     }
 };
-struct RHIUniformBufferLayoutInitializer {
-    RHIUniformBufferLayoutInitializer() = default;
-    explicit RHIUniformBufferLayoutInitializer(const char* _name, uint32_t _buffer_size) : name(_name), buffer_size(_buffer_size) {
+struct RHIGlobalBufferLayoutInitializer {
+    RHIGlobalBufferLayoutInitializer() = default;
+    explicit RHIGlobalBufferLayoutInitializer(const char* _name, uint32_t _buffer_size) : name(_name), buffer_size(_buffer_size) {
     }
     uint32_t    buffer_size;
     const char* name;
@@ -63,71 +42,20 @@ private:
     uint32_t hash = 0;
 
 public:
-    std::vector<RHIUniformBufferResourceInitializer> inline_resources;
-    std::vector<RHIUniformBufferResourceInitializer> reference_resources;
+    std::vector<RHIGlobalBufferResourceInitializer> inline_resources;
+    std::vector<RHIGlobalBufferResourceInitializer> reference_resources;
 
     uint32_t                        constant_buffer_size;
     uint16_t                        attachments_offset = std::numeric_limits<uint16_t>::max();
-    UniformBufferGlobalBindingPoint static_slot        = MAX_UNIFORM_BUFFER_GLOBAL_BINDING_POINT;
+    GlobalBufferStaticBindingPoint  static_slot        = MAX_GLOBAL_BUFFER_GLOBAL_BINDING_POINT;
 
-    EUniformBufferBindingFlags binding_flags = EUniformBufferBindingFlags::SHADER;
+    EGlobalBufferBindingFlags binding_flags = EGlobalBufferBindingFlags::CONSTANT;
 
-    friend inline bool operator==(const RHIUniformBufferLayoutInitializer& lhs, const RHIUniformBufferLayoutInitializer& rhs) {
+    friend inline bool operator==(const RHIGlobalBufferLayoutInitializer& lhs, const RHIGlobalBufferLayoutInitializer& rhs) {
         return lhs.constant_buffer_size == rhs.constant_buffer_size && lhs.static_slot == rhs.static_slot && lhs.binding_flags == rhs.binding_flags && lhs.inline_resources == rhs.inline_resources;
     }
 };
 
-// per parameter allocation in global map
-struct ShaderParameterAllocationInfo {
-    uint16_t             buffer_index = 0;
-    uint16_t             base_index   = 0;
-    uint16_t             size         = 0;
-    EShaderParameterType type{EShaderParameterType::Num};
-    mutable bool         b_bound = false;
-
-    ShaderParameterAllocationInfo() = default;
-    ShaderParameterAllocationInfo(
-        uint16_t             _buffer_index,
-        uint16_t             _base_index,
-        uint16_t             _size,
-        EShaderParameterType _type) : buffer_index(_buffer_index),
-                                      base_index(_base_index),
-                                      size(_size),
-                                      type(_type) {
-    }
-};
-class ShaderParameterMap {
-public:
-    ShaderParameterMap() = default;
-
-    std::optional<ShaderParameterAllocationInfo> FindShaderParameterAllocation(const std::string& _param_name) const;
-    void                                         AddShaderParameterAllocation(const char* _param_name, uint16_t _buffer_index, uint16_t _base_index, uint16_t _size, EShaderParameterType _type);
-    void                                         RemoveShaderParameterAllocation(const char* _param_name);
-
-    inline void GetAllParamsNames(std::vector<std::string>& _out_names) const {
-        for (const auto& params_pair : shader_parameters_map) {
-            _out_names.push_back(params_pair.first);
-        }
-    }
-    inline const std::unordered_map<std::string, ShaderParameterAllocationInfo>& GetShaderParameterMap() const {
-        return shader_parameters_map;
-    }
-
-private:
-    std::unordered_map<std::string, ShaderParameterAllocationInfo> shader_parameters_map;
-};
-
-//compiled shader platform and type information
-struct alignas(4) ShaderTargetInfo {
-    uint32_t shader_type : ST_NumBits;
-    uint32_t shader_platform : SP_NumBits;
-};
-
-class ShaderType {
-public:
-    struct Parameters {
-    };
-};
 struct ShaderReflectionInfo {
     struct UniformBufferEntry {
         std::string name;
@@ -136,64 +64,21 @@ struct ShaderReflectionInfo {
 };
 
 //compiled shader output container for shader initialization
-struct ShaderCompiledInfo {
-    const ShaderType*           Type;
-    ShaderTargetInfo            target_info;
-    const std::vector<uint8_t>& compiled_code;
-    const ShaderParameterMap&   ParameterMap;
-    const SHA256Hash&           OutputHash;
-    SHA256Hash                  MaterialShaderMapHash;
-    const ShaderPipelineType*   ShaderPipeline;
-    //    const VertexFactoryType* VertexFactoryType;
-    uint32_t NumInstructions;
-    uint32_t NumTextureSamplers;
-    uint32_t CodeSize;
-    int32_t  PermutationId;
 
-    RHI_API ShaderCompiledInfo(
-        const ShaderType*           _shader_type,
-        const ShaderCompilerOutput& _out_compiler_output,
-        const SHA256Hash&           _material_shader_map_hash,
-        const ShaderPipelineType*   _shader_pipeline_type
-        //        const FVertexFactoryType* InVertexFactoryType
-    );
-};
 
-class Shader {
-    friend class ShaderType;
 
-public:
-    RHI_API Shader();
 
-    RHI_API Shader(const ShaderCompiledInfo& intializer);
-
-    ~Shader();
-
-private:
-    ShaderType*      type;
-    ShaderTargetInfo target_info;
-    int32_t          resource_index;
-
-    int32_t num_samplers;
-    int32_t code_size;
-};
 
 class ShaderParametersMetadata {
 public:
     /** The use case of the uniform buffer structures. */
     enum class EUseCase : uint8_t {
         /** Stand alone shader parameter struct used for render passes and shader parameters. */
-        SHADER_PARAMETER_STRUCT,
+        SHADER_CONSTANT_STRUCT,
 
-        /** Uniform buffer definition authored at compile-time. */
-        UNIFORM_BUFFER
+        /** Global buffer definition authored at compile-time. */
+        GLOBAL_BUFFER
     };
-
-    /** Shader binding name of the uniform buffer that contains the root shader parameters. */
-    static constexpr const char* s_root_shader_binding_name = "_RootShaderParameters";
-
-    /** Shader binding name of the uniform buffer that contains the root shader parameters. */
-    static constexpr int32_t s_root_constant_buffer_binding_index = 0;
 
     /** A member of a shader parameter structure. */
     class Member {
@@ -208,23 +93,19 @@ public:
             uint32_t                        _num_elements,
             const ShaderParametersMetadata* _p_struct_meta_data)
             : name(_name),
+              binding_type(_binding_type),
               struct_offset(_struct_offset),
               base_type(_base_type),
               type_precision(_type_precision),
               num_elements(_num_elements),
               p_struct_meta_data(_p_struct_meta_data) {
-            std::string temp(_binding_type);
-            auto        binding_type_name = std::string(_binding_type).substr(0, temp.find_first_of('<'));
         }
 
         /** Returns the string of the name of the element or name of the array of elements. */
         const char* GetName() const { return name; }
 
         /** Returns the string of the type. */
-        EShaderCodeResourceBindingType GetShaderBindingType() const { return binding_type; }
-
-        /** Returns the string of the type. */
-        const char* GetShaderBindingTypeStr() const { return ToString(binding_type); }
+        const char* GetShaderBindingTypeStr() const { return binding_type; }
 
         /** Returns the offset of the element in the shader parameter struct in bytes. */
         uint32_t GetOffset() const { return struct_offset; }
@@ -270,7 +151,7 @@ public:
 
     private:
         const char*                     name;
-        EShaderCodeResourceBindingType  binding_type;
+        const char*                     binding_type;
 
         uint32_t                        struct_offset;
         EShaderBindingBaseType          base_type;
@@ -282,17 +163,16 @@ public:
 
     RHI_API ShaderParametersMetadata(
         EUseCase                           _use_case,
-        EUniformBufferBindingFlags         _binding_flags,
+        EGlobalBufferBindingFlags          _binding_flags,
         const char*                        _layout_name,
         const char*                        _struct_name,
         const char*                        _shader_variable_name,
         const char*                        _static_slot_name,
         const char*                        _file_name,
-        const int32_t                      _file_line,
         uint32_t                           _size,
         const std::vector<Member>&         _members,
         bool                               _b_force_complete_initialization = false,
-        RHIUniformBufferLayoutInitializer* _out_layout_initializer          = nullptr,
+        RHIGlobalBufferLayoutInitializer* _out_layout_initializer          = nullptr,
         uint32_t                           _usage_flags                     = 0);
 
     RHI_API virtual ~ShaderParametersMetadata();
@@ -306,11 +186,11 @@ public:
 
     bool HasStaticSlot() const { return static_slot_name != nullptr; }
 
-    EUniformBufferBindingFlags GetBindingFlags() const { return binding_flags; }
+    EGlobalBufferBindingFlags GetBindingFlags() const { return binding_flags; }
 
-    EUniformBufferBindingFlags GetPreferredBindingFlag() const {
+    EGlobalBufferBindingFlags GetPreferredBindingFlag() const {
         // Decay to static when both binding flags are specified.
-        return binding_flags != EUniformBufferBindingFlags::ALL ? binding_flags : EUniformBufferBindingFlags::STATIC;
+        return binding_flags != EGlobalBufferBindingFlags::ALL ? binding_flags : EGlobalBufferBindingFlags::STATIC;
     }
 
     /** Returns the C++ file name where the parameter structure is declared. */
@@ -354,7 +234,7 @@ public:
 
     /** Returns a hash about the entire layout of the structure. */
     uint32_t GetLayoutHash() const {
-        assert(use_case == EUseCase::SHADER_PARAMETER_STRUCT || use_case == EUseCase::UNIFORM_BUFFER);
+        assert(use_case == EUseCase::SHADER_CONSTANT_STRUCT || use_case == EUseCase::GLOBAL_BUFFER);
         //        assert(IsLayoutInitialized());
         return layout_hash;
     }
@@ -400,7 +280,7 @@ private:
     const EUseCase use_case;
 
     /** The binding model used by this parameter struct. */
-    const EUniformBufferBindingFlags binding_flags;
+    const EGlobalBufferBindingFlags binding_flags;
 
     /** Layout of all the resources in the shader parameter struct. */
     //    UniformBufferLayoutRHIRef Layout{};
@@ -417,7 +297,7 @@ private:
     /** Additional flags for how to use the buffer */
     uint32_t usage_flags = 0;
 
-    RHI_API void InitializeLayout(RHIUniformBufferLayoutInitializer* OutLayoutInitializer = nullptr);
+    RHI_API void InitializeLayout(RHIGlobalBufferLayoutInitializer* OutLayoutInitializer = nullptr);
 };
 
 template<typename TPtr>
@@ -466,18 +346,18 @@ struct TShaderResourceParameterTypeInfo {
     static_assert(sizeof(TParamPtr) == SHADER_PARAMETER_STRUCTURE_ALIGNMENT, "Uniform buffer layout must not be platform dependent.");
 };
 
-template<class UniformBufferStructType>
+template<class StructType>
 struct TShaderParameterStructureTypeInfo
 {
     static constexpr int32_t s_num_rows = 1;
     static constexpr int32_t s_num_columns = 1;
     static constexpr int32_t s_num_elements = 0;
-    static constexpr int32_t alignment = SHADER_PARAMETER_STRUCTURE_ALIGNMENT;
+    static constexpr int32_t alignment = sizeof(StructType);
     static constexpr bool b_is_stored_in_constant_buffer = true;
 
-    using TParamPtr = TShaderParameterPtr<UniformBufferStructType>;
+    using TParamPtr = TShaderParameterPtr<StructType>;
 
-    static const ShaderParametersMetadata* GetStructMetadata() { return UniformBufferStructType::GetStructMetadata(); }
+    static const ShaderParametersMetadata* GetStructMetadata() { return StructType::GetStructMetadata(); }
 };
 
 template<>
@@ -486,14 +366,13 @@ struct TShaderParameterStructureTypeInfo<float>
     static constexpr int32_t s_num_rows = 1;
     static constexpr int32_t s_num_columns = 1;
     static constexpr int32_t s_num_elements = 0;
-    static constexpr int32_t alignment = SHADER_PARAMETER_STRUCTURE_ALIGNMENT;
+    static constexpr int32_t alignment = sizeof(float);
     static constexpr bool b_is_stored_in_constant_buffer = true;
 
     using TParamPtr = TShaderParameterPtr<float>;
 
     static const ShaderParametersMetadata* GetStructMetadata() { return nullptr; }
 };
-// shader->bind("ubo", value);
 
 #define BEGIN_SHADER_PARAMETER_DEFINITION(StructureName)                                                                     \
     class alignas(SHADER_PARAMETER_STRUCTURE_ALIGNMENT) StructureName {                                                      \
@@ -554,9 +433,6 @@ public:                                                                         
     }                                                                                     \
     ;
 
-// float [] 1
-// float [] 2
-// float [] 3
 
 #define DEFINE_SHADER_PARAM_UAV(HLSLType, MemberName) \
     INTERNAL_DEFINE_SHADER_PARAM_IMPL(TShaderResourceParameterTypeInfo<RHIUnorderedAccessView*>, RHIUnorderedAccessView*, MemberName, HLSLType, EShaderPrecisionModifier::FLOAT, SBT_UAV)

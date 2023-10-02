@@ -746,25 +746,25 @@ enum EShaderBindingBaseType : uint8_t {
     SBT_NumBits = 4,
 };
 static_assert(SBT_Num <= (1 << SBT_NumBits), "EUniformBufferBaseType_Num will not fit on EUniformBufferBaseType_NumBits");
-using UniformBufferGlobalBindingPoint = uint8_t;
+using GlobalBufferStaticBindingPoint = uint8_t;
 
 enum {
     /** The maximum number of static slots allowed. */
-    MAX_UNIFORM_BUFFER_GLOBAL_BINDING_POINT = 255
+    MAX_GLOBAL_BUFFER_GLOBAL_BINDING_POINT = 255
 };
 
 /** Returns whether a static uniform buffer slot index is valid. */
-inline bool IsUniformBufferGlobalBindingPointValid(const UniformBufferGlobalBindingPoint binding_point_) {
-    return binding_point_ < MAX_UNIFORM_BUFFER_GLOBAL_BINDING_POINT;
+inline bool IsGlobalBindingPointValid(const GlobalBufferStaticBindingPoint binding_point_) {
+    return binding_point_ < MAX_GLOBAL_BUFFER_GLOBAL_BINDING_POINT;
 }
 
 /** The list of flags declaring which binding models are allowed for a uniform buffer layout. */
-enum class EUniformBufferBindingFlags : uint8_t
+enum class EGlobalBufferBindingFlags : uint8_t
 {
-    /** If set, the uniform buffer can be bound as an RHI shader parameter on an RHI shader (i.e. RHISetShaderUniformBuffer). */
-    SHADER = 1 << 0,
+    /** If set, the global buffer can be bound as an RHI shader parameter on an RHI shader (i.e. RHISetConstantGlobalBuffer). */
+    CONSTANT = 1 << 0,
     
-    /** If set, the uniform buffer can be bound globally through a static slot (i.e. RHISetStaticUniformBuffers). */
+    /** If set, the global buffer can be bound globally through a static slot (i.e. RHISetStaticGlobalBuffers). */
     STATIC = 1 << 1,
 
     /** If set, the uniform buffer can be bound globally or per-shader, depending on the use case. Only one binding model should be
@@ -772,7 +772,7 @@ enum class EUniformBufferBindingFlags : uint8_t
 	 *  is designed for difficult cases where a fixed single binding model would produce an unnecessary maintenance burden. Using this
 	 *  disables some RHI validation errors for global bindings, so use with care.
 	 */
-    ALL = STATIC | SHADER
+    ALL = STATIC | CONSTANT
 };
 
 enum EUniformBufferLifeScope{

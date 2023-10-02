@@ -1,36 +1,38 @@
 #ifndef HASHABLE_H
 #define HASHABLE_H
 #include "MacroUtils.h"
-#include "PicoSHA2.h"
 #include <type_traits>
 #include <string_view>
 #include <cstring>
 #include <array>
+#include <cstdint>
+#include <string>
 
 template<typename TEnum>
 concept concept_t_is_enum = std::is_enum<TEnum>::value;
 template<typename TEnum>
 concept concept_t_enum_underlying_uint8 = concept_t_is_enum<TEnum> && std::is_same_v<std::underlying_type_t<TEnum>, uint8_t>;
 template<typename TNum>
-concept concept_t_is_vec2 = requires (TNum t)
-{
-    t.x; t.y;
-    
+concept concept_t_is_vec2 = requires(TNum t) {
+    t.x;
+    t.y;
+
     sizeof(t.x) + sizeof(t.y) == sizeof(t);
     t.x + t.y;
     t.x - t.y;
-    t.x * t.y;
+    t.x* t.y;
     t.x / t.y;
 };
 
 template<typename TNum>
-concept concept_t_is_vec3 = requires (TNum t)
-{
-    t.x; t.y; t.z;
+concept concept_t_is_vec3 = requires(TNum t) {
+    t.x;
+    t.y;
+    t.z;
     sizeof(t.x) + sizeof(t.y) + sizeof(t.z) == sizeof(t);
     t.x + t.y;
     t.x - t.y;
-    t.x * t.y;
+    t.x* t.y;
     t.x / t.y;
 };
 
@@ -139,52 +141,70 @@ template<typename T>
 FORCEINLINE uint32_t GetHash(const EnumInByte<T>& t) {
     return GetHash(t.value);
 }
-FORCEINLINE uint32_t GetHash(const std::string& value){
+FORCEINLINE uint32_t GetHash(const std::string& value) {
     return std::hash<std::string>{}(value);
 }
 
 struct SHA256Hash {
 public:
-    std::array<uint8_t,32> hash_code{};
+    std::array<uint8_t, 32> hash_code{};
     SHA256Hash() {
         for (unsigned char& i : hash_code) {
             i = 0;
         }
     }
-    FORCEINLINE std::string ToString(){
-        return picosha2::bytes_to_hex_string(hash_code.begin(), hash_code.end());
+    std::string ToString();
+    void        FromString(std::string_view& src);
+    friend bool operator==(const SHA256Hash& lhs, const SHA256Hash& rhs) {
+        return std::memcmp(lhs.hash_code.data(), rhs.hash_code.data(), sizeof(lhs.hash_code)) == 0;
     }
-    FORCEINLINE void FromString(std::string_view& src){
-        picosha2::hash256(src, hash_code);
-
-    }
-    friend bool operator==(const SHA256Hash& lhs, const SHA256Hash& rhs){
-        return std::memcmp(lhs.hash_code.data(), rhs.hash_code.data(), sizeof (lhs.hash_code)) == 0;
-    }
-    friend bool operator!=(const SHA256Hash& lhs, const SHA256Hash& rhs){
+    friend bool operator!=(const SHA256Hash& lhs, const SHA256Hash& rhs) {
         return !(lhs == rhs);
     }
-    friend bool operator< (const SHA256Hash& lhs, const SHA256Hash& rhs){
-        return std::memcmp(lhs.hash_code.data(), rhs.hash_code.data(), sizeof (lhs.hash_code)) < 0;
+    friend bool operator<(const SHA256Hash& lhs, const SHA256Hash& rhs) {
+        return std::memcmp(lhs.hash_code.data(), rhs.hash_code.data(), sizeof(lhs.hash_code)) < 0;
     }
 };
-static_assert(picosha2::k_digest_size == 32);
 
+struct Hash64City {
+public:
+    std::array<uint8_t, 8> hash_code{};
 
-namespace inner_utils
-{
-    template <typename T, std::size_t ... Is>
+    Hash64City() {
+        for (unsigned char& i : hash_code) {
+            i = 0;
+        }
+    }
+
+    std::string ToString();
+    void        FromString(std::string_view& src);
+    void        Update(std::string_view& src);
+    void        Update(const uint8_t* data, uint32_t size);
+    //todo: Update() not utterly correct
+    void        Update(const char* data, uint32_t size);
+    friend bool operator==(const Hash64City& lhs, const Hash64City& rhs) {
+        return std::memcmp(lhs.hash_code.data(), rhs.hash_code.data(), sizeof(lhs.hash_code)) == 0;
+    }
+    friend bool operator!=(const Hash64City& lhs, const Hash64City& rhs) {
+        return !(lhs == rhs);
+    }
+    friend bool operator<(const Hash64City& lhs, const Hash64City& rhs) {
+        return std::memcmp(lhs.hash_code.data(), rhs.hash_code.data(), sizeof(lhs.hash_code)) < 0;
+    }
+};
+static_assert(sizeof(Hash64City) == 8);
+
+namespace inner_utils {
+    template<typename T, std::size_t... Is>
     constexpr std::array<T, sizeof...(Is)>
-    create_array(T value, std::index_sequence<Is...>)
-    {
+    create_array(T value, std::index_sequence<Is...>) {
         // cast Is to void to remove the warning: unused value
         return {{(static_cast<void>(Is), value)...}};
     }
-}
+}// namespace inner_utils
 
-template <std::size_t N, typename T>
-constexpr std::array<T, N> create_array(const T& value)
-{
+template<std::size_t N, typename T>
+constexpr std::array<T, N> create_array(const T& value) {
     return inner_utils::create_array(value, std::make_index_sequence<N>());
 }
 
