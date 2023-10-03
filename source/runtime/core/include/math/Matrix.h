@@ -14,7 +14,7 @@ namespace Moer {
                 Vector<T, 2> r0;
                 Vector<T, 2> r1;
             };
-            T e[4];
+            T            e[4];
             Vector<T, 2> re[2];
         };
 
@@ -37,6 +37,8 @@ namespace Moer {
         Vector<T, 2>  operator[](size_t i) const { return re[i]; }
         Vector<T, 2>& operator[](size_t i) { return re[i]; }
 
+        Vector<T, 2> GetColumn(size_t i) { return Vector<T, 2>(re[0][i], re[1][i]); }
+
         static Matrix<T, 2, 2> Identity() noexcept {
             Matrix<T, 2, 2> identity;
             identity[0][0] = (T)1;
@@ -53,7 +55,7 @@ namespace Moer {
                 Vector<T, 3> r1;
                 Vector<T, 3> r2;
             };
-            T e[9];
+            T            e[9];
             Vector<T, 3> re[3];
         };
 
@@ -76,6 +78,8 @@ namespace Moer {
         Vector<T, 3>  operator[](size_t i) const { return re[i]; }
         Vector<T, 3>& operator[](size_t i) { return re[i]; }
 
+        Vector<T, 3> GetColumn(size_t i) { return Vector<T, 3>(re[0][i], re[1][i], re[2][i]); }
+
         static Matrix<T, 3, 3> Identity() noexcept {
             Matrix<T, 3, 3> identity;
             identity[0][0] = (T)1;
@@ -93,7 +97,7 @@ namespace Moer {
                 Vector<T, 4> r1;
                 Vector<T, 4> r2;
             };
-            T e[12];
+            T            e[12];
             Vector<T, 4> re[3];
         };
 
@@ -115,6 +119,8 @@ namespace Moer {
 
         Vector<T, 4>  operator[](size_t i) const { return re[i]; }
         Vector<T, 4>& operator[](size_t i) { return re[i]; }
+
+        Vector<T, 3> GetColumn(size_t i) { return Vector<T, 3>(re[0][i], re[1][i], re[2][i]); }
     };
 
     template<NumericType T>
@@ -126,7 +132,7 @@ namespace Moer {
                 Vector<T, 4> r2;
                 Vector<T, 4> r3;
             };
-            T e[16];
+            T            e[16];
             Vector<T, 4> re[4];
         };
 
@@ -148,6 +154,8 @@ namespace Moer {
 
         Vector<T, 4>  operator[](size_t i) const { return re[i]; }
         Vector<T, 4>& operator[](size_t i) { return re[i]; }
+
+        Vector<T, 4> GetColumn(size_t i) { return Vector<T, 4>(re[0][i], re[1][i], re[2][i], re[3][i]); }
 
         static Matrix<T, 4, 4> Identity() noexcept {
             Matrix<T, 4, 4> identity;
