@@ -36,5 +36,5 @@ target_link_libraries(${MODULE_NAME}
     #spirv-cross-glsl
     #spirv-cross-reflect
     PRIVATE ${vulkan_lib}
-    PRIVATE ${Moer2RuntimeCore}
+    PRIVATE ${MoerRuntimeCore}
 )

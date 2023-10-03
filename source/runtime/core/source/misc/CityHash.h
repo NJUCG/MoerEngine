@@ -45,7 +45,7 @@
 #define CITY_HASH_H_
 
 #if defined(_MSC_VER) || defined(__CYGWIN__)
-#include "pstdint.h"
+#include "stdint.h"
 
 #pragma warning(disable:4267)
 #else
@@ -270,7 +270,7 @@ static uint128_t CityMurmur(const char *s, size_t len, uint128_t seed) {
     uint64_t b = Uint128High64(seed);
     uint64_t c = 0;
     uint64_t d = 0;
-    ssize_t l = len - 16;
+    size_t l = len - 16;
     if (l <= 0) {  // len <= 16
         c = b * k1 + HashLen0to16(s, len);
         d = Rotate(a + (len >= 8 ? UNALIGNED_LOAD64(s) : c), 32);

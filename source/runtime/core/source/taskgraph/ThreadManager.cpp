@@ -4,6 +4,7 @@
 #include <functional>
 #include <algorithm>
 #include <iostream>
+#include "spdlog/details/os.h"
 #include "spdlog/spdlog.h"
 #include "platform/Platform.h"
 #include "taskgraph/Event.h"
@@ -135,5 +136,5 @@ void TestRunnanble::stop() {
 }
 
 void TestRunnanble::exit() {
-    SPDLOG_INFO("thread {} exit", __threadid());
+    SPDLOG_INFO("thread {} exit", static_cast<size_t>(std::hash<std::thread::id>()(std::this_thread::get_id())));
 }

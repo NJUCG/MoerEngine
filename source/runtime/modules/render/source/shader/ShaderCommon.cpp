@@ -15,5 +15,5 @@ void ShaderCompilerOutput::GenerateCompiledHash() {
         hash.Update((const char*)(&param_value.size), sizeof(uint16_t));
     }
 
-
 }
+
