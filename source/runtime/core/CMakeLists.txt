@@ -1,4 +1,4 @@
-set(TARGET_NAME Moer2RuntimeCore)
+set(TARGET_NAME MoerRuntimeCore)
 file(GLOB_RECURSE CORE_HEADERS "include/*.h")
 file(GLOB_RECURSE CORE_SOURCES "source/*.cpp")
 

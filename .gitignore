@@ -12,3 +12,5 @@ build
 build_vs2022
 cmake-build-*/
 /.cache/
+.vscode/launch.json
+.vscode/settings.json
