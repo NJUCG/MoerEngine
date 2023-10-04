@@ -70,7 +70,7 @@ public:
     }
 
     /* constant buffer creation */
-    virtual RHIUniformBufferRef RHICreateUniformBuffer(const void* data, const RHIUniformBufferLayout* layout, EBufferUsageFlags _usage) = 0;
+    virtual RHIGlobalBufferRef RHICreateUniformBuffer(const void* data, const RHIGlobalBufferLayout* layout, EBufferUsageFlags _usage) = 0;
 
     //todo: constant buffer update
 
