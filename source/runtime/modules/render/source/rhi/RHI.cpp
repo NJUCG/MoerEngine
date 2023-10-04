@@ -1,6 +1,8 @@
 #include "rhi/RHI.h"
 RHI* g_rhi = nullptr;
 
+// global shader
+
 #include "RHICommandList.h"
 #include "RHICommandQueue.h"
 RHIBufferRef CreateBufferFromData(const RHIBufferCreateInfo& info, uint32_t size, void* data) {
@@ -29,7 +31,6 @@ void Test() {
     init.primitive_topology          = EPrimitiveTopology::TRIANGLE_LIST;
 
     RHIShaderBoundStateInput& shader_state = init.shader_stage;
-
 
     VertexInputStateInitializerList vertex_init_list;
     for (int i = 0; i < 1; ++i) {
@@ -85,10 +86,14 @@ void Test() {
 
     command_list->EndRenderPass();
 
-    RHICommandQueue* graphics_queue = g_rhi->CreateCommandQueue(ECommandQueueType::GRAPHICS);
+    RHICommandQueue*                         graphics_queue = g_rhi->CreateCommandQueue(ECommandQueueType::GRAPHICS);
     const std::array<RHICommandListBase*, 1> _command_array{command_list};
     graphics_queue->SubmitCommands(1, _command_array.data());
 
     //global buffer
     // start offset
 }
+
+// binding point 0
+
+//

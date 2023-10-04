@@ -19,7 +19,7 @@ enum {
 enum : uint8_t {
     MAX_PASS_ATTACHMENT_COUNT = 8
 };
-enum : uint64_t{
+enum : uint64_t {
     MAX_WAIT_TIME = std::numeric_limits<uint64_t>::max()
 };
 enum class ERHIZBuffer {
@@ -44,8 +44,7 @@ namespace EShadingPath {
 
 #pragma region Descriptors Regulation
 
-enum class ERHIDescriptorHeapType : uint8_t
-{
+enum class ERHIDescriptorHeapType : uint8_t {
     STANDARD,
     SAMPLER,
     ATTACHMENT,
@@ -78,8 +77,6 @@ enum class ERHIDescriptorHeapType : uint8_t
 //    uint32_t    Index{ 0xffffffff };
 //    uint8_t     Type{ (uint8_t)ERHIDescriptorHeapType::INVALID };
 //};
-
-
 
 /** The alignment in bytes between elements of array shader parameters. */
 enum { ShaderArrayElementAlignBytes = 16 };
@@ -136,7 +133,6 @@ struct Extent3D {
         return x == other.x && y == other.y && z == other.z;
     };
 };
-
 
 #pragma endregion
 
@@ -432,8 +428,8 @@ enum ERHIResourceType {
     RRT_COMPUTE_PIPELINE_STATE,
     RRT_RAY_TRACING_PIPELINE_STATE,
     RRT_PIPELINE_BOUND_SHADER_STATE,
-    RRT_UNIFORM_BUFFER_LAYOUT,
-    RRT_UNIFORM_BUFFER,
+    RRT_GLOBAL_BUFFER_LAYOUT,
+    RRT_GLOBAL_BUFFER,
     RRT_BUFFER,
     RRT_TEXTURE,
     RRT_TEXTURE_REFERENCE,
@@ -664,7 +660,6 @@ enum ECubeFace {
 
 #define ENUM_STR(Enum)
 
-
 enum class EShaderCodeResourceBindingType : uint8_t {
     INVALID,
     SAMPLER,
@@ -745,7 +740,7 @@ enum EShaderBindingBaseType : uint8_t {
     SBT_Num,
     SBT_NumBits = 4,
 };
-static_assert(SBT_Num <= (1 << SBT_NumBits), "EUniformBufferBaseType_Num will not fit on EUniformBufferBaseType_NumBits");
+static_assert(SBT_Num <= (1 << SBT_NumBits), "SBT_Num will not fit on SBT_NumBits");
 using GlobalBufferStaticBindingPoint = uint8_t;
 
 enum {
@@ -753,17 +748,16 @@ enum {
     MAX_GLOBAL_BUFFER_GLOBAL_BINDING_POINT = 255
 };
 
-/** Returns whether a static uniform buffer slot index is valid. */
+/** Returns whether a static global buffer slot index is valid. */
 inline bool IsGlobalBindingPointValid(const GlobalBufferStaticBindingPoint binding_point_) {
     return binding_point_ < MAX_GLOBAL_BUFFER_GLOBAL_BINDING_POINT;
 }
 
-/** The list of flags declaring which binding models are allowed for a uniform buffer layout. */
-enum class EGlobalBufferBindingFlags : uint8_t
-{
+/** The list of flags declaring which binding models are allowed for a global buffer layout. */
+enum class EGlobalBufferBindingFlags : uint8_t {
     /** If set, the global buffer can be bound as an RHI shader parameter on an RHI shader (i.e. RHISetConstantGlobalBuffer). */
     CONSTANT = 1 << 0,
-    
+
     /** If set, the global buffer can be bound globally through a static slot (i.e. RHISetStaticGlobalBuffers). */
     STATIC = 1 << 1,
 
@@ -774,8 +768,9 @@ enum class EGlobalBufferBindingFlags : uint8_t
 	 */
     ALL = STATIC | CONSTANT
 };
+ENUM_BIT_OP_IMPL(EGlobalBufferBindingFlags, FLAG)
 
-enum EUniformBufferLifeScope{
+enum EGlobalBufferLifeScope {
     SINGLE_DRAW,
     SINGLE_FRAME,
     MULTI_FRAME
@@ -819,10 +814,10 @@ ENUM_BIT_OP_IMPL(ETextureUsageFlags, FLAG)
 enum class ETextureAspectFlags : uint32_t {
     // no
     NONE,
-    COLOR = 1 << 1,
-    DEPTH_SLICE = 1 << 2,
+    COLOR         = 1 << 1,
+    DEPTH_SLICE   = 1 << 2,
     STENCIL_SLICE = 1 << 3,
-    META_DATA = 1 << 4,
+    META_DATA     = 1 << 4,
     //for multi-planer texture
     PLANE_0 = 1 << 5,
     PLANE_1 = 1 << 6,
@@ -860,8 +855,7 @@ enum EVRSRateCombinerOp : uint8_t {
     VRSRB_MAX,
     VRSRB_MUL
 };
-enum ERenderQueryType
-{
+enum ERenderQueryType {
     RQT_UNDEFINED,
     // Result is the number of samples that are not culled (divide by MSAACount to get pixels)
     RQT_OCCLUSION,

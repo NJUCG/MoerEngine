@@ -46,14 +46,13 @@ class RHIShaderResourceView;
 class RHIStagingBuffer;
 class RHITexture;
 class RHITextureReference;
-class RHIUniformBuffer;
+class RHIGlobalBufferLayout;
+class RHIGlobalBuffer;
 class RHIUnorderedAccessView;
 class RHIVertexInputState;
 class RHIVertexShader;
 class RHIViewableResource;
 class RHIViewport;
-
-struct RHIUniformBufferLayout;
 
 using RHIAmplificationShaderRef       = CountableRef<RHIAmplificationShader>;
 using RHIBlendStateRef                = CountableRef<RHIBlendState>;
@@ -84,7 +83,8 @@ using RHIShaderResourceViewRef        = CountableRef<RHIShaderResourceView>;
 using RHIStagingBufferRef             = CountableRef<RHIStagingBuffer>;
 using RHITextureRef                   = CountableRef<RHITexture>;
 using RHITextureReferenceRef          = CountableRef<RHITextureReference>;
-using RHIUniformBufferRef             = CountableRef<RHIUniformBuffer>;
+using RHIGlobalBufferLayoutRef = CountableRef<RHIGlobalBufferLayout>;
+using RHIGlobalBufferRef             = CountableRef<RHIGlobalBuffer>;
 using RHIUnorderedAccessViewRef       = CountableRef<RHIUnorderedAccessView>;
 using RHIVertexInputStateRef          = CountableRef<RHIVertexInputState>;
 using RHIVertexShaderRef              = CountableRef<RHIVertexShader>;
@@ -375,22 +375,63 @@ public:
 
 #pragma endregion
 
-#pragma region uniform buffer definitions
+#pragma region global buffer definitions
 /* todo: specification of fields */
-class RHIUniformBufferLayout : public RHIResource {
+struct RHIGlobalBufferResourceInitializer {
+
+    uint16_t member_offset;
+
+    /** Type of the member that allow (). */
+    EShaderBindingBaseType member_type;
+    uint8_t                padding;
+
+    /** Compare two uniform buffer layout resources. */
+    friend inline bool operator==(const RHIGlobalBufferResourceInitializer& A, const RHIGlobalBufferResourceInitializer& B) {
+        return A.member_offset == B.member_offset && A.member_type == B.member_type;
+    }
+};
+struct RHIGlobalBufferLayoutInitializer {
+    RHIGlobalBufferLayoutInitializer() = default;
+    explicit RHIGlobalBufferLayoutInitializer(const char* _name, uint32_t _buffer_size) : name(_name), buffer_size(_buffer_size) {
+    }
+    uint32_t    buffer_size;
+    const char* name;
+
+private:
+    void ComputeHash() {
+        //todo
+    }
+
+    uint32_t hash = 0;
+
 public:
-    RHIUniformBufferLayout() : RHIResource(RRT_UNIFORM_BUFFER_LAYOUT) {}
+    std::vector<RHIGlobalBufferResourceInitializer> inline_resources;
+    std::vector<RHIGlobalBufferResourceInitializer> reference_resources;
+
+    uint32_t                        constant_buffer_size;
+    uint16_t                        attachments_offset = std::numeric_limits<uint16_t>::max();
+    GlobalBufferStaticBindingPoint  static_slot        = MAX_GLOBAL_BUFFER_GLOBAL_BINDING_POINT;
+
+    EGlobalBufferBindingFlags binding_flags = EGlobalBufferBindingFlags::CONSTANT;
+
+    friend inline bool operator==(const RHIGlobalBufferLayoutInitializer& lhs, const RHIGlobalBufferLayoutInitializer& rhs) {
+        return lhs.constant_buffer_size == rhs.constant_buffer_size && lhs.static_slot == rhs.static_slot && lhs.binding_flags == rhs.binding_flags && lhs.inline_resources == rhs.inline_resources;
+    }
+};
+class RHIGlobalBufferLayout : public RHIResource {
+public:
+    RHIGlobalBufferLayout() : RHIResource(RRT_GLOBAL_BUFFER_LAYOUT) {}
 };
 
-/* ConstBuffer in dx12, Uniform Buffer in Vulkan, created using RHIUniformBufferLayout */
-class RHIUniformBuffer : public RHIResource {
+/* Buffer for global shader usage, created using RHIGlobalBufferLayout */
+class RHIGlobalBuffer : public RHIResource {
 public:
-    RHIUniformBuffer() : RHIResource(RRT_UNIFORM_BUFFER) {}
-    explicit RHIUniformBuffer(const RHIUniformBufferLayout& _layout){};
+    RHIGlobalBuffer() : RHIResource(RRT_GLOBAL_BUFFER) {}
+    explicit RHIGlobalBuffer(const RHIGlobalBufferLayout& _layout){};
 };
 
 template<typename TBufferStruct>
-class TUniformBufferRef : public RHIUniformBufferRef {
+class TUniformBufferRef : public RHIGlobalBufferRef {
 
 public:
     /** Initializes the reference to null. */
@@ -412,8 +453,8 @@ public:
 
 private:
     /** A private constructor used to coerce an arbitrary RHI uniform buffer reference to a structured reference. */
-    TUniformBufferRef(RHIUniformBuffer* InRHIRef)
-        : RHIUniformBufferRef(InRHIRef) {}
+    TUniformBufferRef(RHIGlobalBuffer* _buffer_ref)
+        : RHIGlobalBufferRef(_buffer_ref) {}
 
     template<typename TBufferStruct2>
     friend class TUniformBuffer;

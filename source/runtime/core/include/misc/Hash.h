@@ -1,6 +1,8 @@
 #ifndef HASHABLE_H
 #define HASHABLE_H
 #include "MacroUtils.h"
+#include <functional>
+#include <string.h>
 #include <type_traits>
 #include <string_view>
 #include <cstring>
@@ -207,5 +209,46 @@ template<std::size_t N, typename T>
 constexpr std::array<T, N> create_array(const T& value) {
     return inner_utils::create_array(value, std::make_index_sequence<N>());
 }
+
+class HashedName {
+    friend struct std::equal_to<HashedName>;
+    friend struct std::hash<HashedName>;
+    uint32_t    hash;
+    const char* value;
+
+public:
+    HashedName(const char* _value) : value(_value), hash(GetHash(_value)) {}
+    HashedName(const HashedName& other) : hash(other.hash), value(other.value) {}
+    HashedName(HashedName&& other) = default;
+
+    operator const char*() const {
+        return value;
+    }
+    friend uint32_t GetHash(const HashedName& value) {
+        if (!value.hash) {
+            return GetHash(value.value);
+        }
+        return value.hash;
+    }
+};
+
+namespace std {
+    template<>
+    class hash<HashedName> {
+        size_t operator()(const HashedName& value) {
+            if (value.hash == 0) {
+                return GetHash(value.value);
+            }
+            return value.hash;
+        }
+    };
+    template<>
+    struct equal_to<HashedName> {
+    public:
+        bool operator()(const HashedName& lhs, const HashedName& rhs) const {
+            return strcmp(lhs.value, rhs.value) == 1;
+        }
+    };
+}// namespace std
 
 #endif// !HASHABLE_H
