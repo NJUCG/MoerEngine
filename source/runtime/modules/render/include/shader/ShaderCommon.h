@@ -1,6 +1,6 @@
 #ifndef MOERENGINE_SHADER_COMMON_H
 #define MOERENGINE_SHADER_COMMON_H
-#include "RHICommon.h"
+#include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include <cstdint>
 #include <list>
@@ -122,12 +122,8 @@ public:
     RHI_API ShaderParametersMetadata(
         EShaderParameterUseCase           _use_case,
         EGlobalBufferBindingFlags         _binding_flags,
-        const char*                       _layout_name,
         const char*                       _struct_name,
         const char*                       _shader_variable_name,
-        const char*                       _static_slot_name,
-        const char*                       _file_name,
-        uint32_t                          _file_line,
         uint32_t                          _size,
         const std::vector<Member>&        _members,
         bool                              _b_force_complete_initialization = false,
@@ -137,12 +133,8 @@ public:
 
     RHI_API void GetNestedStructs(std::vector<const ShaderParametersMetadata*>& _out_nested_structs) const;
 
-    const char*       GetStructTypeName() const { return struct_name; }
-    const char*       GetShaderVariableName() const { return shader_variable_name; }
-    const SHA256Hash& GetShaderVariableHashedName() const { return shader_variable_hash_name; }
-    const char*       GetStaticSlotName() const { return static_slot_name; }
-
-    bool HasStaticSlot() const { return static_slot_name != nullptr; }
+    const char* GetStructTypeName() const { return struct_name; }
+    const char* GetShaderVariableName() const { return shader_variable_name; }
 
     EGlobalBufferBindingFlags GetBindingFlags() const { return binding_flags; }
 
@@ -150,12 +142,6 @@ public:
         // Decay to static when both binding flags are specified.
         return binding_flags != EGlobalBufferBindingFlags::ALL ? binding_flags : EGlobalBufferBindingFlags::STATIC;
     }
-
-    /** Returns the C++ file name where the parameter structure is declared. */
-    const char* GetFileName() const { return file_name; }
-
-    /** Returns the C++ line number where the parameter structure is declared. */
-    const int32_t GetFileLine() const { return file_line; }
 
     uint32_t                GetSize() const { return size; }
     EShaderParameterUseCase GetUseCase() const { return use_case; }
@@ -186,13 +172,6 @@ public:
     //    static RHI_API std::map<SHA256Hash, FShaderParametersMetadata*>& GetNameStructMap();
     inline bool IsLayoutInitialized() const { return layout != nullptr; }
 
-    /** Returns a hash about the entire layout of the structure. */
-    uint32_t GetLayoutHash() const {
-        assert(use_case == EShaderParameterUseCase::SHADER_CONSTANT_STRUCT || use_case == EShaderParameterUseCase::GLOBAL_BUFFER);
-        //        assert(IsLayoutInitialized());
-        return layout_hash;
-    }
-
     /** Iterate recursively over all FShaderParametersMetadata. */
     template<typename TParameterFunction>
     void IterateStructureMetadataDependencies(TParameterFunction Lambda) const {
@@ -208,24 +187,11 @@ public:
     }
 
 private:
-    const char* const layout_name;
-
     /** Name of the structure type in C++ and shader code. */
     const char* const struct_name;
 
     /** Name of the shader variable name for global shader parameter structs. */
     const char* const shader_variable_name;
-
-    /** Name of the static slot to use for the uniform buffer (or null). */
-    const char* const static_slot_name;
-
-    SHA256Hash shader_variable_hash_name;
-
-    /** Name of the C++ file where the parameter structure is declared. */
-    const char* const file_name;
-
-    /** Line in the C++ file where the parameter structure is declared. */
-    const int32_t file_line;
 
     /** Size of the entire struct in bytes. */
     const uint32_t size;
@@ -244,9 +210,6 @@ private:
 
     /** Shackle elements in global link list of globally named shader parameters. */
     //    TLinkedList<FShaderParametersMetadata*> GlobalListLink;
-
-    /** Hash about the entire memory layout of the structure. */
-    uint32_t layout_hash = 0;
 
     RHI_API void InitializeLayout(RHIGlobalBufferLayoutInitializer* OutLayoutInitializer = nullptr);
 };

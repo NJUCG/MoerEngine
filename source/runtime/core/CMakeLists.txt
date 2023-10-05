@@ -15,19 +15,5 @@ target_include_directories(${TARGET_NAME}
 )
 target_link_libraries(${TARGET_NAME}
     PUBLIC glm::glm
-    #PUBLIC glfw
-    #PUBLIC assimp
-    #PUBLIC imgui
-    #glslang
-    #PUBLIC pugixml-shared
-    #nlohmann_json
-    ## HLSL
-    #OSDependent
-    #OGLCompiler
-    #SPIRV
-    #spirv-cross-core
-    #spirv-cross-cpp
-    #spirv-cross-glsl
-    #spirv-cross-reflect
     PUBLIC spdlog::spdlog_header_only
 )

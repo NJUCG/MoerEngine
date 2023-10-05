@@ -3,8 +3,8 @@ RHI* g_rhi = nullptr;
 
 // global shader
 
-#include "RHICommandList.h"
-#include "RHICommandQueue.h"
+#include "rhi/RHICommandList.h"
+#include "rhi/RHICommandQueue.h"
 RHIBufferRef CreateBufferFromData(const RHIBufferCreateInfo& info, uint32_t size, void* data) {
     RHIBufferRef buffer     = g_rhi->RHICreateBuffer(info);
     void*        mapped_ptr = g_rhi->RHIMapBuffer(buffer, 0, size);
@@ -14,6 +14,11 @@ RHIBufferRef CreateBufferFromData(const RHIBufferCreateInfo& info, uint32_t size
 }
 
 void Test() {
+    Hash64City city;
+    Hash64City other;
+    std::string name("name");
+    std::string_view view(name);
+    city.Update(view);
     g_rhi->Initialize();
 
     g_rhi->PostInit();
