@@ -1,5 +1,5 @@
 #include "misc/MacroUtils.h"
-#include "vulkan/VulkanRHI.h"
+#include "rhi/vulkan/VulkanRHI.h"
 
 #include <string>
 #include <vulkan.h>

@@ -4,7 +4,7 @@
 #include <array>
 #include <cstdint>
 #include "math/Math.h"
-#include "ShaderCommon.h"
+#include "shader/ShaderCommon.h"
 #define SHADER_PARAMETER_STRUCTURE_ALIGNMENT 16
 #define SHADER_PARAMETER_ARRAY_ALIGNMENT     16
 template<uint32_t Alignment>
@@ -104,6 +104,7 @@ struct TShaderParameterStructureTypeInfo<StructType[NumElements]> {
 
 template<typename Type>
 struct TShaderParameterTypeInfo {
+    static constexpr EShaderBindingBaseType BaseType = SBT_SRV;
     static constexpr int32_t s_num_rows                     = 1;
     static constexpr int32_t s_num_columns                  = 1;
     static constexpr int32_t s_num_elements                 = 0;
@@ -117,6 +118,7 @@ struct TShaderParameterTypeInfo {
 
 template<typename Type, uint32_t NumElements>
 struct TShaderParameterTypeInfo<Type[NumElements]> {
+    static constexpr EShaderBindingBaseType BaseType = TShaderParameterTypeInfo<Type>::BaseType;
     static constexpr int32_t s_num_rows                     = TShaderParameterTypeInfo<Type>::s_num_rows;
     static constexpr int32_t s_num_columns                  = TShaderParameterTypeInfo<Type>::s_num_columns;
     static constexpr int32_t s_num_elements                 = NumElements;
@@ -130,6 +132,7 @@ struct TShaderParameterTypeInfo<Type[NumElements]> {
 
 template<>
 struct TShaderParameterTypeInfo<float> {
+    static constexpr EShaderBindingBaseType BaseType = SBT_FLOAT32;
     static constexpr int32_t s_num_rows                     = 1;
     static constexpr int32_t s_num_columns                  = 1;
     static constexpr int32_t s_num_elements                 = 0;
@@ -143,6 +146,7 @@ struct TShaderParameterTypeInfo<float> {
 
 template<>
 struct TShaderParameterTypeInfo<int32_t> {
+    static constexpr EShaderBindingBaseType BaseType = SBT_INT32;
     static constexpr int32_t s_num_rows                     = 1;
     static constexpr int32_t s_num_columns                  = 1;
     static constexpr int32_t s_num_elements                 = 0;
@@ -156,6 +160,7 @@ struct TShaderParameterTypeInfo<int32_t> {
 
 template<>
 struct TShaderParameterTypeInfo<uint32_t> {
+    static constexpr EShaderBindingBaseType BaseType = SBT_UINT32;
     static constexpr int32_t s_num_rows                     = 1;
     static constexpr int32_t s_num_columns                  = 1;
     static constexpr int32_t s_num_elements                 = 0;
@@ -169,6 +174,8 @@ struct TShaderParameterTypeInfo<uint32_t> {
 
 template<>
 struct TShaderParameterTypeInfo<float2> {
+    static constexpr EShaderBindingBaseType BaseType = SBT_FLOAT32;
+
     static constexpr int32_t s_num_rows                     = 1;
     static constexpr int32_t s_num_columns                  = 2;
     static constexpr int32_t s_num_elements                 = 0;
@@ -183,6 +190,8 @@ struct TShaderParameterTypeInfo<float2> {
 //float3 packed to float4 in gpu
 template<>
 struct TShaderParameterTypeInfo<float3> {
+    static constexpr EShaderBindingBaseType BaseType = SBT_FLOAT32;
+
     static constexpr int32_t s_num_rows                     = 1;
     static constexpr int32_t s_num_columns                  = 3;
     static constexpr int32_t s_num_elements                 = 0;
@@ -196,6 +205,8 @@ struct TShaderParameterTypeInfo<float3> {
 
 template<>
 struct TShaderParameterTypeInfo<float4> {
+    static constexpr EShaderBindingBaseType BaseType = SBT_FLOAT32;
+
     static constexpr int32_t s_num_rows                     = 1;
     static constexpr int32_t s_num_columns                  = 4;
     static constexpr int32_t s_num_elements                 = 0;
@@ -209,6 +220,8 @@ struct TShaderParameterTypeInfo<float4> {
 
 template<>
 struct TShaderParameterTypeInfo<int2> {
+    static constexpr EShaderBindingBaseType BaseType = SBT_INT32;
+
     static constexpr int32_t s_num_rows                     = 1;
     static constexpr int32_t s_num_columns                  = 2;
     static constexpr int32_t s_num_elements                 = 0;
@@ -222,6 +235,8 @@ struct TShaderParameterTypeInfo<int2> {
 
 template<>
 struct TShaderParameterTypeInfo<uint2> {
+    static constexpr EShaderBindingBaseType BaseType = SBT_UINT32;
+
     static constexpr int32_t s_num_rows                     = 1;
     static constexpr int32_t s_num_columns                  = 2;
     static constexpr int32_t s_num_elements                 = 0;
@@ -235,6 +250,8 @@ struct TShaderParameterTypeInfo<uint2> {
 
 template<>
 struct TShaderParameterTypeInfo<int3> {
+    static constexpr EShaderBindingBaseType BaseType = SBT_INT32;
+
     static constexpr int32_t s_num_rows                     = 1;
     static constexpr int32_t s_num_columns                  = 3;
     static constexpr int32_t s_num_elements                 = 0;
@@ -248,6 +265,8 @@ struct TShaderParameterTypeInfo<int3> {
 
 template<>
 struct TShaderParameterTypeInfo<uint3> {
+    static constexpr EShaderBindingBaseType BaseType = SBT_UINT32;
+
     static constexpr int32_t s_num_rows                     = 1;
     static constexpr int32_t s_num_columns                  = 3;
     static constexpr int32_t s_num_elements                 = 0;
@@ -261,6 +280,8 @@ struct TShaderParameterTypeInfo<uint3> {
 
 template<>
 struct TShaderParameterTypeInfo<int4> {
+    static constexpr EShaderBindingBaseType BaseType = SBT_INT32;
+
     static constexpr int32_t s_num_rows                     = 1;
     static constexpr int32_t s_num_columns                  = 4;
     static constexpr int32_t s_num_elements                 = 0;
@@ -274,6 +295,8 @@ struct TShaderParameterTypeInfo<int4> {
 
 template<>
 struct TShaderParameterTypeInfo<uint4> {
+    static constexpr EShaderBindingBaseType BaseType = SBT_UINT32;
+
     static constexpr int32_t s_num_rows                     = 1;
     static constexpr int32_t s_num_columns                  = 4;
     static constexpr int32_t s_num_elements                 = 0;
@@ -287,6 +310,8 @@ struct TShaderParameterTypeInfo<uint4> {
 
 template<>
 struct TShaderParameterTypeInfo<bool> {
+    static constexpr EShaderBindingBaseType BaseType = SBT_BOOL;
+
     static constexpr int32_t s_num_rows                     = 1;
     static constexpr int32_t s_num_columns                  = 1;
     static constexpr int32_t s_num_elements                 = 0;

@@ -10,9 +10,6 @@ set_target_properties(${MODULE_NAME} PROPERTIES FOLDER "runtime")
 
 target_include_directories(${MODULE_NAME}
 	PUBLIC $<BUILD_INTERFACE:${MODULE_DIR}/include>
-	PUBLIC $<BUILD_INTERFACE:${MODULE_DIR}/include/rhi>
-	PUBLIC $<BUILD_INTERFACE:${MODULE_DIR}/include/shader>
-	PRIVATE $<BUILD_INTERFACE:${MODULE_DIR}/include/rhi/vulkan>
     PUBLIC $<BUILD_INTERFACE:${RUNTIME_CORE_DIR}/include>
     PUBLIC $<BUILD_INTERFACE:${THIRD_PARTY_DIR}/boost>
     PUBLIC $<BUILD_INTERFACE:${THIRD_PARTY_DIR}/spdlog/include>
@@ -20,21 +17,26 @@ target_include_directories(${MODULE_NAME}
 	PRIVATE $<BUILD_INTERFACE:${THIRD_PARTY_DIR}/VulkanSDK/include/vulkan>
 )
 target_link_libraries(${MODULE_NAME}
-    #PUBLIC glm::glm
-    #PUBLIC glfw
-    #PUBLIC assimp
-    #PUBLIC imgui
-    #glslang
-    #PUBLIC pugixml-shared
-    #nlohmann_json
-    ## HLSL
-    #OSDependent
-    #OGLCompiler
-    #SPIRV
-    #spirv-cross-core
-    #spirv-cross-cpp
-    #spirv-cross-glsl
-    #spirv-cross-reflect
     PRIVATE ${vulkan_lib}
-    PRIVATE ${MoerRuntimeCore}
+    PUBLIC MoerRuntimeCore
 )
+
+set(RenderModuleTest ON)
+
+if(${RenderModuleTest})
+
+add_executable(ShaderReflectionTest test/ShaderReflectionTest.cpp)
+target_include_directories(ShaderReflectionTest
+	PUBLIC $<BUILD_INTERFACE:${THIRD_PARTY_DIR}/glm>
+	PUBLIC $<BUILD_INTERFACE:${THIRD_PARTY_DIR}/boost>
+
+	PUBLIC $<BUILD_INTERFACE:${RUNTIME_CORE_DIR}/include>
+	PUBLIC $<BUILD_INTERFACE:${MODULE_DIR}/include>
+
+)
+target_link_libraries(ShaderReflectionTest
+	PRIVATE ${MODULE_NAME}
+)
+
+#add_test(NAME ShaderReflectionTest_ COMMAND ShaderReflectionTest)
+endif()

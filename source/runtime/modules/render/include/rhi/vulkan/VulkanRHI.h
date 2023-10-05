@@ -1,7 +1,7 @@
 #ifndef VULKAN_RHI_H
 #define VULKAN_RHI_H
 #include <string>
-#include "RHI.h"
+#include "rhi/RHI.h"
 #include <vulkan.h>
 class IVulkanRHI : public RHI{
 

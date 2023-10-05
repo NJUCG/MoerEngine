@@ -85,20 +85,20 @@ public:
     bool operator==(uint8_t _value) {
         return _value == value;
     }
-    TEnum GetValue() const { return (TEnum)value; }
+    TEnum           GetValue() const { return (TEnum)value; }
+    friend uint32_t GetHash(const EnumInByte& target);
 
 private:
-    friend uint32_t GetHash(const EnumInByte& target);
-    uint8_t         value;
+    uint8_t value;
 };
 
-uint32_t GetHash(uint32_t value) {
+inline uint32_t GetHash(uint32_t value) {
     return value;
 }
-uint32_t GetHash(int32_t value) {
+inline uint32_t GetHash(int32_t value) {
     return value;
 }
-uint32_t GetHash(uint8_t value) {
+inline uint32_t GetHash(uint8_t value) {
     return value;
 }
 /*from UE5.03*/
@@ -111,13 +111,13 @@ inline uint32_t GetHash(int64_t target) {
     return (uint32_t)target + ((uint32_t)(target >> 32) * 23);
 }
 
-uint32_t GetHash(float value) {
+inline uint32_t GetHash(float value) {
     return *(uint32_t*)&value;
 }
-uint32_t GetHash(double value) {
+inline uint32_t GetHash(double value) {
     return GetHash(*(uint64_t*)&value);
 }
-uint32_t GetHash(const char* value) {
+inline uint32_t GetHash(const char* value) {
     return std::hash<std::string_view>{}(std::string_view(value));
 }
 template<concept_t_is_vec2 T>
@@ -136,7 +136,7 @@ uint32_t GetHash(const T& value) {
 }
 
 template<concept_t_is_enum T>
-FORCEINLINE uint32_t GetHash(const T& t) {
+uint32_t GetHash(const T& t) {
     return GetHash((std::underlying_type_t<T>)t);
 }
 template<typename T>
@@ -168,7 +168,7 @@ public:
     }
 };
 
-struct Hash64City {
+struct __declspec(dllexport) Hash64City {
 public:
     std::array<uint8_t, 8> hash_code{};
 

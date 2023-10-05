@@ -1,6 +1,5 @@
-#include "ShaderCommon.h"
-#include "string_view"
-#include <functional>
+#include "shader/ShaderCommon.h"
+#include "misc/Hash.h"
 #include <vector>
 
 #pragma region shaderParameters metadata
@@ -8,26 +7,51 @@
 ShaderParametersMetadata::ShaderParametersMetadata(
     EShaderParameterUseCase           _use_case,
     EGlobalBufferBindingFlags         _binding_flags,
-    const char*                       _layout_name,
     const char*                       _struct_name,
     const char*                       _shader_variable_name,
-    const char*                       _static_slot_name,
-    const char*                       _file_name,
-    uint32_t                          _file_line,
     uint32_t                          _size,
     const std::vector<Member>&        _members,
     bool                              _b_force_complete_initialization,
     RHIGlobalBufferLayoutInitializer* _out_layout_initializer)
     : use_case(_use_case),
       binding_flags(_binding_flags),
-      layout_name(_layout_name),
       struct_name(_struct_name),
       shader_variable_name(_shader_variable_name),
-      static_slot_name(_static_slot_name),
-      file_name(_file_name),
-      file_line(_file_line),
       size(_size),
       members(_members) {
+}
+
+ShaderParametersMetadata::~ShaderParametersMetadata(){
+    if(IsLayoutInitialized()){
+        //todo: release layout registration
+    }
+};
+
+void ShaderParametersMetadata::GetNestedStructs(std::vector<const ShaderParametersMetadata*>& _out_nested_structs) const {
+    for (const auto& member : members) {
+        const ShaderParametersMetadata* meta_data = member.GetStructMetadata();
+        if(meta_data){
+            _out_nested_structs.push_back(meta_data);
+            meta_data->GetNestedStructs(_out_nested_structs);
+        }
+    }
+}
+void ShaderParametersMetadata::FindMemberFromOffset(uint16_t MemberOffset, const ShaderParametersMetadata** OutContainingStruct, const ShaderParametersMetadata::Member** OutMember, int32_t* ArrayElementId, std::string* NamePrefix) const {
+
+}
+std::string ShaderParametersMetadata::GetFullMemberCodeName(uint16_t MemberOffset) const {
+    return "";
+}
+void ShaderParametersMetadata::InitializeLayout(RHIGlobalBufferLayoutInitializer* _out_layout_initializer) {
+    assert(!IsLayoutInitialized() && "Layout Already Initialized");
+
+    RHIGlobalBufferLayoutInitializer temp_initializer(struct_name);
+    RHIGlobalBufferLayoutInitializer& initializer = _out_layout_initializer == nullptr ? temp_initializer : *_out_layout_initializer;
+
+    initializer.constant_buffer_size = size;
+    initializer.static_slot = slot;
+    initializer.binding_flags = binding_flags;
+
 }
 #pragma endregion
 

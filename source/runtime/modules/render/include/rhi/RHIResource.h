@@ -83,8 +83,8 @@ using RHIShaderResourceViewRef        = CountableRef<RHIShaderResourceView>;
 using RHIStagingBufferRef             = CountableRef<RHIStagingBuffer>;
 using RHITextureRef                   = CountableRef<RHITexture>;
 using RHITextureReferenceRef          = CountableRef<RHITextureReference>;
-using RHIGlobalBufferLayoutRef = CountableRef<RHIGlobalBufferLayout>;
-using RHIGlobalBufferRef             = CountableRef<RHIGlobalBuffer>;
+using RHIGlobalBufferLayoutRef        = CountableRef<RHIGlobalBufferLayout>;
+using RHIGlobalBufferRef              = CountableRef<RHIGlobalBuffer>;
 using RHIUnorderedAccessViewRef       = CountableRef<RHIUnorderedAccessView>;
 using RHIVertexInputStateRef          = CountableRef<RHIVertexInputState>;
 using RHIVertexShaderRef              = CountableRef<RHIVertexShader>;
@@ -153,7 +153,6 @@ public:
     bool IsValid() const { return flags.IsValid(std::memory_order_relaxed); }
     void Delete() {
         if (flags.MarkToDelete(std::memory_order_acquire)) {
-            g_current_deleting = this;
             delete this;
         }
     }
@@ -226,8 +225,6 @@ private:
     ERHIResourceType type;
     //for const resource state change
     mutable ResourceAtomicFlags flags;
-    //todo: unknown purposes
-    static RHIResource* g_current_deleting;
 };
 
 class RHISampler : public RHIResource {
@@ -392,7 +389,7 @@ struct RHIGlobalBufferResourceInitializer {
 };
 struct RHIGlobalBufferLayoutInitializer {
     RHIGlobalBufferLayoutInitializer() = default;
-    explicit RHIGlobalBufferLayoutInitializer(const char* _name, uint32_t _buffer_size) : name(_name), buffer_size(_buffer_size) {
+    explicit RHIGlobalBufferLayoutInitializer(const char* _name, uint32_t _buffer_size = 0) : name(_name), buffer_size(_buffer_size) {
     }
     uint32_t    buffer_size;
     const char* name;
@@ -408,9 +405,9 @@ public:
     std::vector<RHIGlobalBufferResourceInitializer> inline_resources;
     std::vector<RHIGlobalBufferResourceInitializer> reference_resources;
 
-    uint32_t                        constant_buffer_size;
-    uint16_t                        attachments_offset = std::numeric_limits<uint16_t>::max();
-    GlobalBufferStaticBindingPoint  static_slot        = MAX_GLOBAL_BUFFER_GLOBAL_BINDING_POINT;
+    uint32_t                       constant_buffer_size;
+    uint16_t                       attachments_offset = std::numeric_limits<uint16_t>::max();
+    GlobalBufferStaticBindingPoint static_slot        = MAX_GLOBAL_BUFFER_GLOBAL_BINDING_POINT;
 
     EGlobalBufferBindingFlags binding_flags = EGlobalBufferBindingFlags::CONSTANT;
 
@@ -1462,9 +1459,9 @@ struct RHIShaderBoundStateInput {
     RHIShaderBoundStateInput() = default;
     RHIShaderBoundStateInput(
         RHIVertexInputState* _vertex_input_state,
-        RHIVertexShader*      _vertex_shader,
-        RHIFragmentShader*    _fragment_shader,
-        RHIGeometryShader*    _geometry_shader)
+        RHIVertexShader*     _vertex_shader,
+        RHIFragmentShader*   _fragment_shader,
+        RHIGeometryShader*   _geometry_shader)
         : p_vertex_input_state(_vertex_input_state),
           p_fragment_shader(_fragment_shader),
           p_geometry_shader(_geometry_shader) {}
@@ -1492,10 +1489,10 @@ struct RHIShaderBoundStateInput {
     void SetAmplificationShader(RHIAmplificationShader* _amplification_shader) { p_amplification_shader = _amplification_shader; }
     //fields
 
-    RHIVertexInputState*  p_vertex_input_state = nullptr;
-    RHIVertexShader*      p_vertex_shader      = nullptr;
-    RHIFragmentShader*    p_fragment_shader    = nullptr;
-    RHIGeometryShader*    p_geometry_shader    = nullptr;
+    RHIVertexInputState* p_vertex_input_state = nullptr;
+    RHIVertexShader*     p_vertex_shader      = nullptr;
+    RHIFragmentShader*   p_fragment_shader    = nullptr;
+    RHIGeometryShader*   p_geometry_shader    = nullptr;
 
     //todo: query support for mesh shaders
     RHIMeshShader*          p_mesh_shader          = nullptr;
@@ -1645,9 +1642,9 @@ public:
     }
 
     RHIShaderBoundStateInput shader_stage;
-    RHIBlendState*         blend_state;
-    RHIRasterizationState* rasterizer_state;
-    RHIDepthStencilState*  depth_stencil_state;
+    RHIBlendState*           blend_state;
+    RHIRasterizationState*   rasterizer_state;
+    RHIDepthStencilState*    depth_stencil_state;
 
     EPrimitiveTopology primitive_topology;
     uint32_t           color_attachment_count;
