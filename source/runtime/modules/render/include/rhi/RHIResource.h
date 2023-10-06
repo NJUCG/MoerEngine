@@ -9,6 +9,7 @@
 #include "misc/StatQueue.h"
 #include <unordered_set>
 #include "misc/CountableRef.h"
+#include "rhi/RHICommon.h"
 #include <string>
 #include <optional>
 #include <bitset>

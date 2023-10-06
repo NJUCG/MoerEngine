@@ -1,7 +1,10 @@
 #ifndef HASHABLE_H
 #define HASHABLE_H
 #include "MacroUtils.h"
+#include <atomic>
 #include <functional>
+#include <map>
+#include <mutex>
 #include <string.h>
 #include <type_traits>
 #include <string_view>
@@ -9,6 +12,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <shared_mutex>
 
 template<typename TEnum>
 concept concept_t_is_enum = std::is_enum<TEnum>::value;
@@ -213,22 +217,47 @@ constexpr std::array<T, N> create_array(const T& value) {
 class HashedName {
     friend struct std::equal_to<HashedName>;
     friend struct std::hash<HashedName>;
-    uint32_t    hash;
-    const char* value;
+    const char*                            value;
+    static std::map<const char*, uint32_t> s_name_to_hash;
+    static std::atomic_uint32_t            s_size;
+    static std::shared_mutex               s_rw_mutex;
 
 public:
-    HashedName(const char* _value) : value(_value), hash(GetHash(_value)) {}
-    HashedName(const HashedName& other) : hash(other.hash), value(other.value) {}
+    HashedName(const char* _value) : value(_value) {
+        RegisterName();
+    }
+    HashedName(const HashedName& other) : value(other.value) {}
     HashedName(HashedName&& other) = default;
 
     operator const char*() const {
         return value;
     }
     friend uint32_t GetHash(const HashedName& value) {
-        if (!value.hash) {
-            return GetHash(value.value);
+        {
+            std::shared_lock<std::shared_mutex> read_lock(s_rw_mutex);
+            if (const auto& iter = s_name_to_hash.find(value); iter != s_name_to_hash.end()) {
+                return iter->second;
+            }
         }
-        return value.hash;
+        return value.RegisterName();
+    }
+
+private:
+    //thread safe
+    inline uint32_t RegisterName() const {
+        {
+            std::shared_lock<std::shared_mutex> read_lock(s_rw_mutex);
+            if (const auto& iter = s_name_to_hash.find(value); iter != s_name_to_hash.end()) {
+                //found
+                return iter->second;
+            }
+        }
+        {
+            std::unique_lock<std::shared_mutex> write_lock(s_rw_mutex);
+            uint32_t                            index = s_size.fetch_add(1) + 1;
+            s_name_to_hash.insert({value, index});
+            return index;
+        }
     }
 };
 
@@ -236,10 +265,7 @@ namespace std {
     template<>
     class hash<HashedName> {
         size_t operator()(const HashedName& value) {
-            if (value.hash == 0) {
-                return GetHash(value.value);
-            }
-            return value.hash;
+            return GetHash(value);
         }
     };
     template<>

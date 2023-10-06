@@ -104,12 +104,12 @@ struct TShaderParameterStructureTypeInfo<StructType[NumElements]> {
 
 template<typename Type>
 struct TShaderParameterTypeInfo {
-    static constexpr EShaderBindingBaseType BaseType = SBT_SRV;
-    static constexpr int32_t s_num_rows                     = 1;
-    static constexpr int32_t s_num_columns                  = 1;
-    static constexpr int32_t s_num_elements                 = 0;
-    static constexpr int32_t alignment                      = sizeof(Type);
-    static constexpr bool    b_is_stored_in_constant_buffer = true;
+    static constexpr EShaderBindingBaseType BaseType                       = SBT_SRV;
+    static constexpr int32_t                s_num_rows                     = 1;
+    static constexpr int32_t                s_num_columns                  = 1;
+    static constexpr int32_t                s_num_elements                 = 0;
+    static constexpr int32_t                alignment                      = sizeof(Type);
+    static constexpr bool                   b_is_stored_in_constant_buffer = true;
 
     using TParamPtr = TShaderParameterPtr<float>;
 
@@ -118,12 +118,12 @@ struct TShaderParameterTypeInfo {
 
 template<typename Type, uint32_t NumElements>
 struct TShaderParameterTypeInfo<Type[NumElements]> {
-    static constexpr EShaderBindingBaseType BaseType = TShaderParameterTypeInfo<Type>::BaseType;
-    static constexpr int32_t s_num_rows                     = TShaderParameterTypeInfo<Type>::s_num_rows;
-    static constexpr int32_t s_num_columns                  = TShaderParameterTypeInfo<Type>::s_num_columns;
-    static constexpr int32_t s_num_elements                 = NumElements;
-    static constexpr int32_t alignment                      = SHADER_PARAMETER_ARRAY_ALIGNMENT;
-    static constexpr bool    b_is_stored_in_constant_buffer = TShaderParameterTypeInfo<Type>::b_is_stored_in_constant_buffer;
+    static constexpr EShaderBindingBaseType BaseType                       = TShaderParameterTypeInfo<Type>::BaseType;
+    static constexpr int32_t                s_num_rows                     = TShaderParameterTypeInfo<Type>::s_num_rows;
+    static constexpr int32_t                s_num_columns                  = TShaderParameterTypeInfo<Type>::s_num_columns;
+    static constexpr int32_t                s_num_elements                 = NumElements;
+    static constexpr int32_t                alignment                      = SHADER_PARAMETER_ARRAY_ALIGNMENT;
+    static constexpr bool                   b_is_stored_in_constant_buffer = TShaderParameterTypeInfo<Type>::b_is_stored_in_constant_buffer;
 
     using TParamPtr    = std::array<AlignType<Type, alignment>, NumElements>;
     using InstanceType = Type;
@@ -132,12 +132,12 @@ struct TShaderParameterTypeInfo<Type[NumElements]> {
 
 template<>
 struct TShaderParameterTypeInfo<float> {
-    static constexpr EShaderBindingBaseType BaseType = SBT_FLOAT32;
-    static constexpr int32_t s_num_rows                     = 1;
-    static constexpr int32_t s_num_columns                  = 1;
-    static constexpr int32_t s_num_elements                 = 0;
-    static constexpr int32_t alignment                      = sizeof(float);
-    static constexpr bool    b_is_stored_in_constant_buffer = true;
+    static constexpr EShaderBindingBaseType BaseType                       = SBT_FLOAT32;
+    static constexpr int32_t                s_num_rows                     = 1;
+    static constexpr int32_t                s_num_columns                  = 1;
+    static constexpr int32_t                s_num_elements                 = 0;
+    static constexpr int32_t                alignment                      = sizeof(float);
+    static constexpr bool                   b_is_stored_in_constant_buffer = true;
 
     using TParamPtr    = AlignType<float, alignment>;
     using InstanceType = float4;
@@ -146,12 +146,12 @@ struct TShaderParameterTypeInfo<float> {
 
 template<>
 struct TShaderParameterTypeInfo<int32_t> {
-    static constexpr EShaderBindingBaseType BaseType = SBT_INT32;
-    static constexpr int32_t s_num_rows                     = 1;
-    static constexpr int32_t s_num_columns                  = 1;
-    static constexpr int32_t s_num_elements                 = 0;
-    static constexpr int32_t alignment                      = 4;
-    static constexpr bool    b_is_stored_in_constant_buffer = true;
+    static constexpr EShaderBindingBaseType BaseType                       = SBT_INT32;
+    static constexpr int32_t                s_num_rows                     = 1;
+    static constexpr int32_t                s_num_columns                  = 1;
+    static constexpr int32_t                s_num_elements                 = 0;
+    static constexpr int32_t                alignment                      = 4;
+    static constexpr bool                   b_is_stored_in_constant_buffer = true;
 
     using TParamPtr    = AlignType<int32_t, alignment>;
     using InstanceType = int4;
@@ -160,12 +160,12 @@ struct TShaderParameterTypeInfo<int32_t> {
 
 template<>
 struct TShaderParameterTypeInfo<uint32_t> {
-    static constexpr EShaderBindingBaseType BaseType = SBT_UINT32;
-    static constexpr int32_t s_num_rows                     = 1;
-    static constexpr int32_t s_num_columns                  = 1;
-    static constexpr int32_t s_num_elements                 = 0;
-    static constexpr int32_t alignment                      = 4;
-    static constexpr bool    b_is_stored_in_constant_buffer = true;
+    static constexpr EShaderBindingBaseType BaseType                       = SBT_UINT32;
+    static constexpr int32_t                s_num_rows                     = 1;
+    static constexpr int32_t                s_num_columns                  = 1;
+    static constexpr int32_t                s_num_elements                 = 0;
+    static constexpr int32_t                alignment                      = 4;
+    static constexpr bool                   b_is_stored_in_constant_buffer = true;
 
     using TParamPtr    = AlignType<int32_t, alignment>;
     using InstanceType = uint4;
