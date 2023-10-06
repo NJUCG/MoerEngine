@@ -12,6 +12,12 @@ namespace Moer {
     template<NumericType T> inline T Min(T lhs, T rhs) noexcept;
     template<VectorType  T> inline T Max(const T& lhs, const T& rhs) noexcept;
     template<VectorType  T> inline T Min(const T& lhs, const T& rhs) noexcept;
+    
+    template<VectorType T> inline T operator+(const T& v) noexcept;
+    template<VectorType T> inline T operator-(const T& v) noexcept;
+
+    template<VectorType T> inline bool operator==(const T& lhs, const T& rhs) noexcept;
+    template<VectorType T> inline bool operator!=(const T& lhs, const T& rhs) noexcept;
 
     template<VectorType T, VectorType U> inline T operator+(const T& lhs, const U& rhs) noexcept;
     template<VectorType T, VectorType U> inline T operator-(const T& lhs, const U& rhs) noexcept;
@@ -38,6 +44,12 @@ namespace Moer {
     template<VectorType T, NumericType U> inline void operator*=(T& lhs, const U rhs) noexcept;
     template<VectorType T, NumericType U> inline void operator/=(T& lhs, const U rhs) noexcept;
 
+    template<NumericType T> inline bool ApproxEqual(T lhs, T rhs, float eps = Moer::EPS) noexcept;
+    template<VectorType  T> inline bool ApproxEqual(const T& lhs, const T& rhs, float eps = Moer::EPS) noexcept;
+
+    template<NumericType T> inline T Abs(T v) noexcept;
+    template<VectorType  T> inline T Abs(const T& v) noexcept;
+
                        inline float      Lerp(float a, float b, float t) noexcept;
     template<size_t N> inline Vectorf<N> Lerp(const Vectorf<N>& a, const Vectorf<N>& b, const Vectorf<N>& t) noexcept;
                        inline double     Lerp(double a, double b, double t) noexcept;
@@ -55,10 +67,12 @@ namespace Moer {
 
     template<VectorType T> inline float Dotf(const T& lhs, const T& rhs) noexcept;
     template<VectorType T> inline float Lengthf(const T& v) noexcept;
+    template<VectorType T> inline float SquaredLengthf(const T& v) noexcept;
     template<VectorType T> inline Vectorf<T::size> Normalizef(const T& v) noexcept;
 
     template<VectorType T> inline double Dot(const T& lhs, const T& rhs) noexcept;
     template<VectorType T> inline double Length(const T& v) noexcept;
+    template<VectorType T> inline double SquaredLength(const T& v) noexcept;
     template<VectorType T> inline Vectord<T::size> Normalize(const T& v) noexcept;
 
     template<NumericType T> inline Vector<T, 3> Cross(const Vector<T, 3>& lhs, const Vector<T, 3>& rhs) noexcept;
@@ -110,6 +124,38 @@ namespace Moer {
     template<NumericType T> inline Matrix<T, 3, 3> Inverse(const Matrix<T, 3, 3>& m) noexcept;
     template<NumericType T> inline Matrix<T, 4, 4> Inverse(const Matrix<T, 4, 4>& m) noexcept;
 
+    /** get a 2x2 matrix from diagonal
+       @example:
+        a b c       a b c d        a b c d        a b
+        e f g   or  e f g h   or   e f g h   ->   c d
+        i j k       i j k l        i j k l
+                                   m n o p
+    */
+    template<NumericType T, size_t ROW, size_t COL> inline Matrix<T, 2, 2> GetDiagonal2x2(const Matrix<T, ROW, COL>& m) noexcept;
+    
+    // get a 3x3 matrix from diagonal
+    template<NumericType T, size_t ROW, size_t COL> inline Matrix<T, 3, 3> GetDiagonal3x3(const Matrix<T, ROW, COL>& m) noexcept;
+    
+    /** fill a 2x2 matrix into the upper left corner of a 3x3 matrix
+        @param diagonal_element the number used to fill into diagonal
+        @example:
+            diagonal_element == 1
+            a b             a b 0
+            c d     ->      c d 0
+                            0 0 1
+    */
+    template<NumericType T> inline Matrix<T, 3, 3> FillDiagonal3x3(const Matrix<T, 2, 2>& m, T diagonal_element) noexcept;
+    /** fill a 2x2 or 3x3 or 3x4 matrix into the upper left corner of a 4x4 matrix
+        @param diagonal_element the number used to fill into diagonal
+        @example:
+            diagonal_element == 1
+            a b             a b 0 0
+            c d     ->      c d 0 0
+                            0 0 1 0
+                            0 0 0 1
+    */
+    template<NumericType T, size_t ROW, size_t COL> inline Matrix<T, 4, 4> FillDiagonal4x4(const Matrix<T, ROW, COL>& m, T diagonal_element) noexcept;
+
     // clang-format on
 }// namespace Moer
 
@@ -130,6 +176,28 @@ namespace Moer {
         T ret;
         for (int i = 0; i < T::size; i++) ret[i] = Min(lhs[i], rhs[i]);
         return ret;
+    }
+
+    template<VectorType T>
+    inline T operator+(const T& v) noexcept {
+        return v;
+    }
+    template<VectorType T>
+    inline T operator-(const T& v) noexcept {
+        T ret;
+        for (int i = 0; i < T::size; i++) ret[i] = -v[i];
+        return ret;
+    }
+
+    template<VectorType T>
+    inline bool operator==(const T& lhs, const T& rhs) noexcept {
+        bool ret = true;
+        for (int i = 0; i < T::size; i++) ret &= (lhs[i] == rhs[i]);
+        return ret;
+    }
+    template<VectorType T>
+    inline bool operator!=(const T& lhs, const T& rhs) noexcept {
+        return !(lhs == rhs);
     }
 
     template<VectorType T, VectorType U>
@@ -241,6 +309,30 @@ namespace Moer {
         for (int i = 0; i < T::size; i++) lhs[i] /= rhs;
     }
 
+    template<NumericType T>
+    inline bool ApproxEqual(T lhs, T rhs, float eps) noexcept {
+        return (abs(lhs - rhs) < eps);
+    }
+
+    template<VectorType T>
+    inline bool ApproxEqual(const T& lhs, const T& rhs, float eps) noexcept {
+        bool ret = true;
+        for (int i = 0; i < T::size; i++) ret &= (abs(lhs[i] - rhs[i]) < eps);
+        return ret;
+    }
+
+    template<NumericType T>
+    inline T Abs(T v) noexcept {
+        return std::abs(v);
+    }
+
+    template<VectorType T>
+    inline T Abs(const T& v) noexcept {
+        T ret;
+        for (int i = 0; i < T::size; i++) ret[i] = std::abs(v[i]);
+        return ret;
+    }
+
     inline float Lerp(float a, float b, float t) noexcept { return a + t * (b - a); }
     template<size_t N>
     inline Vectorf<N> Lerp(const Vectorf<N>& a, const Vectorf<N>& b, const Vectorf<N>& t) noexcept {
@@ -301,6 +393,11 @@ namespace Moer {
     }
 
     template<VectorType T>
+    inline float SquaredLengthf(const T& v) noexcept {
+        return Dotf(v, v);
+    }
+
+    template<VectorType T>
     inline Vectorf<T::size> Normalizef(const T& v) noexcept {
         return v / Lengthf(v);
     }
@@ -315,6 +412,11 @@ namespace Moer {
     template<VectorType T>
     inline double Length(const T& v) noexcept {
         return std::sqrt(Dot(v, v));
+    }
+
+    template<VectorType T>
+    inline double SquaredLength(const T& v) noexcept {
+        return Dot(v, v);
     }
 
     template<VectorType T>
@@ -565,6 +667,36 @@ namespace Moer {
         ret[1][3] = +(v5 * m[0][0] - v2 * m[0][2] + v1 * m[0][3]) * inv_det;
         ret[2][3] = -(v4 * m[0][0] - v2 * m[0][1] + v0 * m[0][3]) * inv_det;
         ret[3][3] = +(v3 * m[0][0] - v1 * m[0][1] + v0 * m[0][2]) * inv_det;
+        return ret;
+    }
+
+    template<NumericType T, size_t ROW, size_t COL>
+    inline Matrix<T, 2, 2> GetDiagonal2x2(const Matrix<T, ROW, COL>& m) noexcept {
+        return Matrix<T, 2, 2>(m[0][0], m[0][1], m[1][0], m[1][1]);
+    }
+
+    template<NumericType T, size_t ROW, size_t COL>
+    inline Matrix<T, 3, 3> GetDiagonal3x3(const Matrix<T, ROW, COL>& m) noexcept {
+        static_assert((ROW >= 3 && COL >= 3));
+        return Matrix<T, 3, 3>(m[0][0], m[0][1], m[0][2], m[1][0], m[1][1], m[1][2], m[2][0], m[2][1], m[2][2]);
+    }
+
+    template<NumericType T>
+    inline Matrix<T, 3, 3> FillDiagonal3x3(const Matrix<T, 2, 2>& m, T diagonal_element) noexcept {
+        return Matrix<T, 3, 3>(m[0][0], m[0][1], 0, m[1][0], m[1][1], 0, 0, 0, diagonal_element);
+    }
+    template<NumericType T, size_t ROW, size_t COL>
+    inline Matrix<T, 4, 4> FillDiagonal4x4(const Matrix<T, ROW, COL>& m, T diagonal_element) noexcept {
+        static_assert((ROW <= 3 && COL <= 3));
+        Matrix<T, 4, 4> ret;
+        ret.r0 = Vector<T, 4>(m.r0);
+        ret.r1 = Vector<T, 4>(m.r1);
+        if constexpr (ROW == 3)
+            ret.r2 = Vector<T, 4>(m.r2);
+        else
+            ret.r2 = Vector<T, 4>(0, 0, diagonal_element, 0);
+        ret.r3 = Vector<T, 4>(0, 0, 0, diagonal_element);
+
         return ret;
     }
 
