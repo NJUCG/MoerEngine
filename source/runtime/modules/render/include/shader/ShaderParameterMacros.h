@@ -1,5 +1,6 @@
 #ifndef MOER_ENGINE_SHADER_PROXY_H
 #define MOER_ENGINE_SHADER_PROXY_H
+#include "rhi/RHIResource.h"
 #include "shader/ShaderParameterTypeInfo.h"
 #include <array>
 #include <cstddef>
@@ -69,7 +70,7 @@ struct ShaderReflectionInfo {
                                                                                                                            \
 public:                                                                                                                    \
     /* a ptr wrapped shader param type  */                                                                                 \
-    MemberTypeInfo::TParamPtr MemberName;                                                                        \
+    MemberTypeInfo::TParamPtr MemberName;                                                                                  \
                                                                                                                            \
 private:                                                                                                                   \
     struct _nextMemberId##MemberName {                                                                                     \
@@ -83,8 +84,8 @@ private:                                                                        
             offsetof(TThisStruct, MemberName),                                                                             \
             UBMTBaseType,                                                                                                  \
             Precision,                                                                                                     \
-            MemberTypeInfo::s_num_elements,                                                                                      \
-            MemberTypeInfo::GetStructMetadata()));                                                                               \
+            MemberTypeInfo::s_num_elements,                                                                                \
+            MemberTypeInfo::GetStructMetadata()));                                                                         \
         void* (*PrevFunc)(MemberId##MemberName, std::vector<ShaderParametersMetadata::Member>*);                           \
                                                                                                                            \
         PrevFunc = AppendMemberGetPrev;                                                                                    \
@@ -116,12 +117,11 @@ public:                                                                         
 #define DEFINE_SHADER_PARAM_SRV(HLSLType, MemberName) \
     INTERNAL_DEFINE_SHADER_PARAM_IMPL(TShaderResourceParameterTypeInfo<RHIShaderResourceView*>, RHIShaderResourceView*, MemberName, HLSLType, EShaderPrecisionModifier::FLOAT, SBT_SRV)
 
-#define DEFINE_SHADER_PARAM_SRV_ARRAY(HLSLType, MemberName, NumElements)\
+#define DEFINE_SHADER_PARAM_SRV_ARRAY(HLSLType, MemberName, NumElements) \
     INTERNAL_DEFINE_SHADER_PARAM_IMPL(TShaderResourceParameterTypeInfo<RHIShaderResourceView* [NumElements]>, RHIShaderResourceView*, MemberName, HLSLType, EShaderPrecisionModifier::FLOAT, SBT_UAV)
 
 #define DEFINE_SHADER_PARAM_SAMPLER(HLSLType, MemberName) \
     INTERNAL_DEFINE_SHADER_PARAM_IMPL(TShaderResourceParameterTypeInfo<RHISampler*>, RHISampler*, MemberName, HLSLType, EShaderPrecisionModifier::FLOAT, SBT_SAMPLER)
-
 
 #define DEFINE_SHADER_PARAM_STRUCT(StructType, MemberName) \
     INTERNAL_DEFINE_SHADER_PARAM_IMPL(MemberName::TypeInfo, StructType, MemberName, , EShaderPrecisionModifier::FLOAT, SBT_NESTED_STRUCT)
@@ -129,15 +129,16 @@ public:                                                                         
 #define DEFINE_SHADER_PARAM_STRUCT_ARRAY(StructType, MemberName, NumElements) \
     INTERNAL_DEFINE_SHADER_PARAM_IMPL(TShaderParameterStructureTypeInfo<MemberName[NumElements]>, StructType, MemberName, "", EShaderPrecisionModifier::FLOAT, SBT_NESTED_STRUCT)
 
-#define DEFINE_SHADER_PARAM(MemberType, MemberName)\
+#define DEFINE_SHADER_PARAM(MemberType, MemberName) \
     INTERNAL_DEFINE_SHADER_PARAM_IMPL(TShaderParameterTypeInfo<MemberType>, MemberType, MemberName, , EShaderPrecisionModifier::FLOAT, TShaderParameterTypeInfo<MemberType>::BaseType)
+
+#define DEFINE_SHADER_PARAM_ATTACHMENT_BINDING() \
+    INTERNAL_DEFINE_SHADER_PARAM_IMPL(GraphicsPipelineAttachmentInfo, )
 
 class ShaderBase {
     ShaderBase();
     ~ShaderBase();
 };
-
-
 
 /*
  *  uav v1 (register 0);

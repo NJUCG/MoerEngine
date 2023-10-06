@@ -21,8 +21,8 @@ ShaderParametersMetadata::ShaderParametersMetadata(
       members(_members) {
 }
 
-ShaderParametersMetadata::~ShaderParametersMetadata(){
-    if(IsLayoutInitialized()){
+ShaderParametersMetadata::~ShaderParametersMetadata() {
+    if (IsLayoutInitialized()) {
         //todo: release layout registration
     }
 };
@@ -30,14 +30,13 @@ ShaderParametersMetadata::~ShaderParametersMetadata(){
 void ShaderParametersMetadata::GetNestedStructs(std::vector<const ShaderParametersMetadata*>& _out_nested_structs) const {
     for (const auto& member : members) {
         const ShaderParametersMetadata* meta_data = member.GetStructMetadata();
-        if(meta_data){
+        if (meta_data) {
             _out_nested_structs.push_back(meta_data);
             meta_data->GetNestedStructs(_out_nested_structs);
         }
     }
 }
 void ShaderParametersMetadata::FindMemberFromOffset(uint16_t MemberOffset, const ShaderParametersMetadata** OutContainingStruct, const ShaderParametersMetadata::Member** OutMember, int32_t* ArrayElementId, std::string* NamePrefix) const {
-
 }
 std::string ShaderParametersMetadata::GetFullMemberCodeName(uint16_t MemberOffset) const {
     return "";
@@ -45,13 +44,12 @@ std::string ShaderParametersMetadata::GetFullMemberCodeName(uint16_t MemberOffse
 void ShaderParametersMetadata::InitializeLayout(RHIGlobalBufferLayoutInitializer* _out_layout_initializer) {
     assert(!IsLayoutInitialized() && "Layout Already Initialized");
 
-    RHIGlobalBufferLayoutInitializer temp_initializer(struct_name);
+    RHIGlobalBufferLayoutInitializer  temp_initializer(struct_name);
     RHIGlobalBufferLayoutInitializer& initializer = _out_layout_initializer == nullptr ? temp_initializer : *_out_layout_initializer;
 
     initializer.constant_buffer_size = size;
-    initializer.static_slot = slot;
-    initializer.binding_flags = binding_flags;
 
+    initializer.binding_flags = binding_flags;
 }
 #pragma endregion
 
