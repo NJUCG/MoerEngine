@@ -26,9 +26,12 @@ namespace Moer {
         };
         static constexpr size_t size = 2;
 
-        Vector() noexcept : x(0.f), y(0.f) {}
+        Vector() noexcept : x(0), y(0) {}
         Vector(T x, T y) noexcept : x(x), y(y) {}
         Vector(const Vector<T, 2>& v) noexcept : x(v.x), y(v.y) {}
+
+        explicit Vector(const Vector<T, 3>& v) noexcept : x(v.x), y(v.y) {}
+        explicit Vector(const Vector<T, 4>& v) noexcept : x(v.x), y(v.y) {}
         explicit Vector(T xy) noexcept : x(xy), y(xy) {}
 
         template<NumericType U>
@@ -48,9 +51,12 @@ namespace Moer {
         };
         static constexpr size_t size = 3;
 
-        Vector() noexcept : x(0.f), y(0.f), z(0.f) {}
+        Vector() noexcept : x(0), y(0), z(0) {}
         Vector(T x, T y, T z) noexcept : x(x), y(y), z(z) {}
         Vector(const Vector<T, 3>& v) noexcept : x(v.x), y(v.y), z(v.z) {}
+
+        explicit Vector(const Vector<T, 2>& v, T z = 0) noexcept : x(v.x), y(v.y), z(z) {}
+        explicit Vector(const Vector<T, 4>& v) noexcept : x(v.x), y(v.y), z(v.z) {}
         explicit Vector(T xyz) noexcept : x(xyz), y(xyz), z(xyz) {}
 
         template<NumericType U>
@@ -70,9 +76,12 @@ namespace Moer {
         };
         static constexpr size_t size = 4;
 
-        Vector() noexcept : x(0.f), y(0.f), z(0.f), w(0.f) {}
+        Vector() noexcept : x(0), y(0), z(0), w(0) {}
         Vector(T x, T y, T z, T w) noexcept : x(x), y(y), z(z), w(w) {}
         Vector(const Vector<T, 4>& v) noexcept : x(v.x), y(v.y), z(v.z), w(v.w) {}
+
+        explicit Vector(const Vector<T, 2>& v, T z = 0, T w = 0) noexcept : x(v.x), y(v.y), z(z), w(w) {}
+        explicit Vector(const Vector<T, 3>& v, T w = 0) noexcept : x(v.x), y(v.y), z(v.z), w(w) {}
         explicit Vector(T xyzw) noexcept : x(xyzw), y(xyzw), z(xyzw), w(xyzw) {}
 
         template<NumericType U>
@@ -109,4 +118,20 @@ namespace Moer {
     using Vector4ui = Vector<unsigned int, 4>;
 
     // clang-format on
+}// namespace Moer
+
+namespace Moer {
+    // angle of a radian system
+    struct Angle {
+        float radian;
+
+        Angle(float radian = 0.f) noexcept : radian(radian) {}
+        operator float() const noexcept { return radian; }
+
+        void SetDegree(float degree) noexcept { this->radian = degree / 180.f * 3.14159265358979323846f; }
+        void SetRadian(float radian) noexcept { this->radian = radian; }
+
+        float GetDegree() const noexcept { return radian * 180.f / 3.14159265358979323846f; }
+        float GetRadian() const noexcept { return radian; }
+    };
 }// namespace Moer

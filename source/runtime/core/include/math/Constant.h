@@ -11,7 +11,7 @@ namespace Moer {
     static constexpr int   MIN_INT   = std::numeric_limits<int>::lowest();
     static constexpr float MAX_FLOAT = std::numeric_limits<float>::max();
     static constexpr float MIN_FLOAT = std::numeric_limits<float>::lowest();
-    static constexpr float EPS       = 1e-6f;
+    static constexpr float EPS       = 1e-5f;
     static constexpr float PI        = 3.14159265358979323846f;
     static constexpr float INV_PI    = 1.f / PI;
     static constexpr float TWO_PI    = 2.f * PI;
