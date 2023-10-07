@@ -1,10 +1,14 @@
 #include "rhi/RHI.h"
+#include "PixelFormat.h"
+#include "rhi/RHIResource.h"
 RHI* g_rhi = nullptr;
 
 // global shader
 
 #include "rhi/RHICommandList.h"
 #include "rhi/RHICommandQueue.h"
+#include "shader/ShaderParameterMacros.h"
+
 RHIBufferRef CreateBufferFromData(const RHIBufferCreateInfo& info, uint32_t size, void* data) {
     RHIBufferRef buffer     = g_rhi->RHICreateBuffer(info);
     void*        mapped_ptr = g_rhi->RHIMapBuffer(buffer, 0, size);
@@ -13,10 +17,19 @@ RHIBufferRef CreateBufferFromData(const RHIBufferCreateInfo& info, uint32_t size
     return buffer;
 }
 
+class TestShader {
+public:
+    BEGIN_SHADER_PARAMETER_DEFINITION(Parameters)
+
+    DEFINE_SHADER_PARAM_UAV(RWTexture2D, write_target)
+    DEFINE_SHADER_PARAM_ATTACHMENT_BINDING()
+    END_SHADER_PARAMETER_DEFINITION(Parameters)
+};
+
 void Test() {
-    Hash64City city;
-    Hash64City other;
-    std::string name("name");
+    Hash64City       city;
+    Hash64City       other;
+    std::string      name("name");
     std::string_view view(name);
     city.Update(view);
     g_rhi->Initialize();
@@ -84,6 +97,7 @@ void Test() {
     RHIGraphicsCommandList* command_list = g_rhi->CreateGraphicsCommandList(pso);
 
     RHIRenderPassInfo pass_info;
+    pass_info.GeneratePipelineAttachmentInfo();
     command_list->BeginRenderPass(pass_info, "triangle pass");
     command_list->BindVertexBuffers(0, 1, vertex_buffer);
 
@@ -97,6 +111,16 @@ void Test() {
 
     //global buffer
     // start offset
+
+    RHIUnorderedAccessViewRef test_view =
+        g_rhi->RHICreateUnorderedAccessView(tex,
+                                            RHIViewInfo::CreateTextureUAVInfo()
+                                                .SetFormat((PF_R8G8B8A8_SRGB)));
+    TestShader::Parameters*
+        params;
+    params->write_target = test_view;
+    params->Attachments[0];
+    ;
 }
 
 // binding point 0

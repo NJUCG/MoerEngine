@@ -4,9 +4,10 @@
 #include <array>
 #include <cstdint>
 #include "math/Math.h"
+#include "rhi/RHIResource.h"
 #include "shader/ShaderCommon.h"
-#define SHADER_PARAMETER_STRUCTURE_ALIGNMENT 16
-#define SHADER_PARAMETER_ARRAY_ALIGNMENT     16
+#include "RenderCommon.h"
+#include "misc/Ptr.h"
 template<uint32_t Alignment>
 concept concept_valid_alignment =
     (Alignment == 2 || Alignment == 4 || Alignment == 8 || Alignment == 16) == true;
@@ -17,37 +18,6 @@ struct AlignType {
     ALIGNED_TYPE_DEF(TargetType, Type, Alignment);
 };
 
-template<typename TPtr>
-class alignas(SHADER_PARAMETER_STRUCTURE_ALIGNMENT) TShaderParameterPtr {
-public:
-    TShaderParameterPtr() {}
-
-    TShaderParameterPtr(const TPtr& Other)
-        : ref(Other) {}
-
-    TShaderParameterPtr(const TShaderParameterPtr<TPtr>& Other)
-        : ref(Other.ref) {}
-
-    FORCEINLINE void operator=(const TPtr& Other) {
-        ref = Other;
-    }
-
-    FORCEINLINE operator TPtr&() {
-        return ref;
-    }
-
-    FORCEINLINE operator const TPtr&() const {
-        return ref;
-    }
-
-    FORCEINLINE const TPtr& operator->() const {
-        return ref;
-    }
-
-private:
-    TPtr ref;
-};
-
 template<typename ShaderResourceType>
 struct TShaderResourceParameterTypeInfo {
     static constexpr int32_t s_num_rows                     = 1;
@@ -56,11 +26,11 @@ struct TShaderResourceParameterTypeInfo {
     static constexpr int32_t alignment                      = SHADER_PARAMETER_STRUCTURE_ALIGNMENT;
     static constexpr bool    b_is_stored_in_constant_buffer = false;
 
-    using TParamPtr = TShaderParameterPtr<ShaderResourceType>;
+    using TParamPtr = ShaderParameterPtr<ShaderResourceType>;
 
     static const ShaderParametersMetadata* GetStructMetadata() { return nullptr; }
 
-    static_assert(sizeof(TParamPtr) == SHADER_PARAMETER_STRUCTURE_ALIGNMENT, "Uniform buffer layout must not be platform dependent.");
+    static_assert(sizeof(TParamPtr) == SHADER_PARAMETER_PTR_ALIGNMENT, "Uniform buffer layout must not be platform dependent.");
 };
 
 template<typename ShaderResourceType, uint32_t NumElements>
@@ -111,7 +81,7 @@ struct TShaderParameterTypeInfo {
     static constexpr int32_t                alignment                      = sizeof(Type);
     static constexpr bool                   b_is_stored_in_constant_buffer = true;
 
-    using TParamPtr = TShaderParameterPtr<float>;
+    using TParamPtr = ShaderParameterPtr<float>;
 
     static const ShaderParametersMetadata* GetStructMetadata() { return Type::TypeInfo::GetStructMetadata(); }
 };
@@ -320,6 +290,19 @@ struct TShaderParameterTypeInfo<bool> {
 
     using TParamPtr    = AlignType<bool, alignment>;
     using InstanceType = uint4;
+    static const ShaderParametersMetadata* GetStructMetadata() { return nullptr; }
+};
+
+template<>
+struct TShaderParameterTypeInfo<AttachmentBindingSlots> {
+
+    static constexpr int32_t s_num_rows                     = 1;
+    static constexpr int32_t s_num_columns                  = 1;
+    static constexpr int32_t s_num_elements                 = 0;
+    static constexpr int32_t alignment                      = SHADER_PARAMETER_STRUCTURE_ALIGNMENT;
+    static constexpr bool    b_is_stored_in_constant_buffer = false;
+
+    using TParamPtr = AttachmentBindingSlots;
     static const ShaderParametersMetadata* GetStructMetadata() { return nullptr; }
 };
 
