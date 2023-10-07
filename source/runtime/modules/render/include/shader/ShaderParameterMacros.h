@@ -127,13 +127,13 @@ public:                                                                         
     INTERNAL_DEFINE_SHADER_PARAM_IMPL(MemberName::TypeInfo, StructType, MemberName, , EShaderPrecisionModifier::FLOAT, SBT_NESTED_STRUCT)
 
 #define DEFINE_SHADER_PARAM_STRUCT_ARRAY(StructType, MemberName, NumElements) \
-    INTERNAL_DEFINE_SHADER_PARAM_IMPL(TShaderParameterStructureTypeInfo<MemberName[NumElements]>, StructType, MemberName, "", EShaderPrecisionModifier::FLOAT, SBT_NESTED_STRUCT)
+    INTERNAL_DEFINE_SHADER_PARAM_IMPL(TShaderParameterStructureTypeInfo<MemberName[NumElements]>, StructType, MemberName, , EShaderPrecisionModifier::FLOAT, SBT_NESTED_STRUCT)
 
 #define DEFINE_SHADER_PARAM(MemberType, MemberName) \
     INTERNAL_DEFINE_SHADER_PARAM_IMPL(TShaderParameterTypeInfo<MemberType>, MemberType, MemberName, , EShaderPrecisionModifier::FLOAT, TShaderParameterTypeInfo<MemberType>::BaseType)
 
 #define DEFINE_SHADER_PARAM_ATTACHMENT_BINDING() \
-    INTERNAL_DEFINE_SHADER_PARAM_IMPL(GraphicsPipelineAttachmentInfo, )
+    INTERNAL_DEFINE_SHADER_PARAM_IMPL(TShaderParameterTypeInfo<AttachmentBindingSlots>, AttachmentBindingSlots, Attachments, , EShaderPrecisionModifier::FLOAT, SBT_ATTACHMENT_BINDING_SLOTS)
 
 class ShaderBase {
     ShaderBase();

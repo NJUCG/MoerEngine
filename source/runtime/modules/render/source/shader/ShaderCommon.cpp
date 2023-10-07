@@ -53,21 +53,54 @@ void ShaderParametersMetadata::InitializeLayout(RHIGlobalBufferLayoutInitializer
 }
 #pragma endregion
 
-void ShaderTypeInfo::OnRegistration() {
+void ShaderMetaType::OnRegistration() {
     //todo: registration
 }
+ShaderMetaType::ShaderMetaType(
+    const char*                     _type_name,
+    const char*                     _file_name,
+    const char*                     _entry_point,
+    EShaderType                     _shader_type,
+    uint32_t                        _type_size,
+    const ShaderParametersMetadata* _parameter_data)
+    : type_name(_type_name),
+      hash_type_name(type_name),
+      file_name(_file_name),
+      hash_file_name(file_name),
+      entry_point(_entry_point),
+      shader_type(_shader_type),
+      parameter_meta_data(_parameter_data) {
 
-void ShaderTypeRegistration::CollectRegistration(std::function<ShaderTypeInfo*()> _registration_func) {
-    registration_callbacks.push_back(_registration_func);
+    GetNameToTypeMap().insert({hash_type_name, this});
+};
+ShaderMetaType::~ShaderMetaType() {
+    GetNameToTypeMap().erase(hash_type_name);
+}
+
+std::unordered_map<HashedName, ShaderMetaType*>& ShaderMetaType::GetNameToTypeMap() {
+    static std::unordered_map<HashedName, ShaderMetaType*> name_to_shader_meta_type;
+    return name_to_shader_meta_type;
+}
+
+ShaderTypeRegistration::ShaderTypeRegistration(std::function<ShaderMetaType&()> _callback) {
+    GetRegistrations().push_back(_callback);
+}
+
+std::vector<std::function<ShaderMetaType&()>>& ShaderTypeRegistration::GetRegistrations() {
+    static std::vector<std::function<ShaderMetaType&()>> registrations;
+    return registrations;
+}
+void ShaderTypeRegistration::CollectRegistration(std::function<ShaderMetaType&()> _registration_func) {
+    GetRegistrations().push_back(_registration_func);
 }
 
 void ShaderTypeRegistration::SubmitRegistrations() {
-    for (const auto& registration_func : registration_callbacks) {
-        ShaderTypeInfo* info = registration_func();
+    for (const auto& registration_func : GetRegistrations()) {
+        ShaderMetaType& info = registration_func();
         //todo: later process
     }
-    std::vector<std::function<ShaderTypeInfo*()>> temp;
-    temp.swap(registration_callbacks);
+    std::vector<std::function<ShaderMetaType&()>> temp;
+    temp.swap(GetRegistrations());
 }
 
 void ShaderCompilerOutput::GenerateCompiledHash() {

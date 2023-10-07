@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <limits>
+#include "RenderCommon.h"
 #include "misc/EnumBitOperation.h"
 #pragma region CommonEnums
 /** Maximum number of miplevels in a texture. */
@@ -740,6 +741,7 @@ enum EShaderBindingBaseType : uint8_t {
     SBT_Num,
     SBT_NumBits = 4,
 };
+
 static_assert(SBT_Num <= (1 << SBT_NumBits), "SBT_Num will not fit on SBT_NumBits");
 using GlobalBufferStaticBindingPoint = uint8_t;
 
@@ -891,4 +893,39 @@ enum class ECommandQueueType {
     COPY
 };
 
+#pragma utils
+struct Rect2D {
+    Offset2D offset;
+    Extent2D extent;
+
+    Rect2D(int32_t offset_x = -1, int32_t offset_y = -1, uint32_t extent_x = 0, uint32_t extent_y = 0)
+        : offset{offset_x, offset_y},
+          extent(extent_x, extent_y) {}
+
+    bool operator==(Rect2D other) const {
+        return offset == other.offset && extent == other.extent;
+    }
+
+    bool operator!=(Rect2D Other) const {
+        return !(*this == Other);
+    }
+
+    bool IsValid() const {
+        return offset.x >= 0 && offset.y >= 0 && extent.width > 0 && extent.height > 0;
+    }
+};
+
+struct SubpassSettings {
+
+    bool operator==(const SubpassSettings& other) const {
+        return type == other.type && index == other.index;
+    }
+    enum Type : uint8_t {
+        NONE,
+        DEFERRED
+    } type        = NONE;
+    uint8_t index = 0;
+};
+static_assert(sizeof(SubpassSettings) == 2);
+#pragma endregion
 #endif// !RHI_PLATFORM_COMMON_H

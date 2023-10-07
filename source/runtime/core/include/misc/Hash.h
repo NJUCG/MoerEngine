@@ -217,10 +217,15 @@ constexpr std::array<T, N> create_array(const T& value) {
 class HashedName {
     friend struct std::equal_to<HashedName>;
     friend struct std::hash<HashedName>;
-    const char*                            value;
-    static std::map<const char*, uint32_t> s_name_to_hash;
-    static std::atomic_uint32_t            s_size;
-    static std::shared_mutex               s_rw_mutex;
+    const char* value;
+
+    static std::atomic_uint32_t s_size;
+
+    static std::shared_mutex                s_rw_mutex;
+    static std::map<const char*, uint32_t>& GetNameToHash() {
+        static std::map<const char*, uint32_t> s_name_to_hash;
+        return s_name_to_hash;
+    }
 
 public:
     HashedName(const char* _value) : value(_value) {
@@ -235,7 +240,7 @@ public:
     friend uint32_t GetHash(const HashedName& value) {
         {
             std::shared_lock<std::shared_mutex> read_lock(s_rw_mutex);
-            if (const auto& iter = s_name_to_hash.find(value); iter != s_name_to_hash.end()) {
+            if (const auto& iter = GetNameToHash().find(value); iter != GetNameToHash().end()) {
                 return iter->second;
             }
         }
@@ -247,7 +252,7 @@ private:
     inline uint32_t RegisterName() const {
         {
             std::shared_lock<std::shared_mutex> read_lock(s_rw_mutex);
-            if (const auto& iter = s_name_to_hash.find(value); iter != s_name_to_hash.end()) {
+            if (const auto& iter = GetNameToHash().find(value); iter != GetNameToHash().end()) {
                 //found
                 return iter->second;
             }
@@ -255,7 +260,7 @@ private:
         {
             std::unique_lock<std::shared_mutex> write_lock(s_rw_mutex);
             uint32_t                            index = s_size.fetch_add(1) + 1;
-            s_name_to_hash.insert({value, index});
+            GetNameToHash().insert({value, index});
             return index;
         }
     }
@@ -264,7 +269,8 @@ private:
 namespace std {
     template<>
     class hash<HashedName> {
-        size_t operator()(const HashedName& value) {
+    public:
+        size_t operator()(const HashedName& value) const {
             return GetHash(value);
         }
     };

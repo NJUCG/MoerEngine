@@ -48,3 +48,4 @@ void Hash64City::Update(const char* data, uint32_t size) {
 }
 
 std::atomic_uint32_t HashedName::s_size = 0;
+std::shared_mutex    HashedName::s_rw_mutex;

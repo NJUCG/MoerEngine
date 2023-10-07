@@ -3,6 +3,7 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include <cstdint>
+#include <functional>
 #include <list>
 #include <vector>
 #include "misc/MacroUtils.h"
@@ -223,45 +224,42 @@ struct alignas(4) ShaderTargetInfo {
 typedef uint32_t ShaderTypeIndex;
 
 //contains parameter info
-class ShaderTypeInfo {
+class ShaderMetaType {
 public:
-    ShaderTypeInfo(
-        const char*                 _type_name,
-        const char*                 _file_name,
-        const char*                 _function_name,
-        EShaderType                 _shader_type,
-        const EShaderParameterType* _parameter_data)
-        : type_name(_type_name),
-          file_name(_file_name),
-          function_name(_function_name),
-          shader_type(_shader_type) {}
-
+    ShaderMetaType(
+        const char*                     _type_name,
+        const char*                     _file_name,
+        const char*                     _entry_point,
+        EShaderType                     _shader_type,
+        uint32_t                        _type_size,
+        const ShaderParametersMetadata* _parameter_data);
+    ~ShaderMetaType();
     void OnRegistration();
 
     struct Parameters {
     };
+    static RENDER_CORE_API std::unordered_map<HashedName, ShaderMetaType*>& GetNameToTypeMap();
 
 private:
     //todo: currently only support one file one shader, this field for multiple shader single file
-    const char*     type_name;
-    uint32_t        hash_name;
-    uint32_t        hash_type_name;
-    const char*     file_name;
-    const char*     function_name;
-    EShaderType     shader_type;
-    ShaderTypeIndex type_index;
-
-    static std::list<ShaderTypeInfo*> s_linked_shader_type_info;
+    const char*                     type_name;
+    HashedName                      hash_type_name;
+    const char*                     file_name;
+    HashedName                      hash_file_name;
+    const char*                     entry_point;
+    EShaderType                     shader_type;
+    ShaderTypeIndex                 type_index;
+    const ShaderParametersMetadata* parameter_meta_data;
 };
 
 class ShaderTypeRegistration {
 
-    std::vector<std::function<ShaderTypeInfo*()>> registration_callbacks;
-
 public:
-    void CollectRegistration(std::function<ShaderTypeInfo*()> _registration_func);
+    ShaderTypeRegistration(std::function<ShaderMetaType&()>);
+    static std::vector<std::function<ShaderMetaType&()>>& GetRegistrations();
+    static void                                           CollectRegistration(std::function<ShaderMetaType&()> _registration_func);
 
-    void SubmitRegistrations();
+    static void SubmitRegistrations();
 };
 
 class ShaderPipelineType {
@@ -274,14 +272,14 @@ public:
     virtual ~ShaderPipelineType() {}
     ShaderPipelineType(
         const char*           _name,
-        const ShaderTypeInfo* _vertex_shader_info,
-        const ShaderTypeInfo* _geometry_shader_info,
-        const ShaderTypeInfo* _fragment_shader_info);
+        const ShaderMetaType* _vertex_shader_info,
+        const ShaderMetaType* _geometry_shader_info,
+        const ShaderMetaType* _fragment_shader_info);
 
     ShaderPipelineType(
         const char*           _name,
-        const ShaderTypeInfo* _vertex_shader_info,
-        const ShaderTypeInfo* _geometry_shader_info);
+        const ShaderMetaType* _vertex_shader_info,
+        const ShaderMetaType* _geometry_shader_info);
 
     friend uint32_t GetHash(const ShaderPipelineType* _p_value) { return _p_value == nullptr ? 0 : _p_value->hash_index; }
 
@@ -293,7 +291,7 @@ public:
     Hash64City  hash_name;
     Hash64City  hash_file_name;
 
-    std::array<ShaderTypeInfo*, ST_Num> shader_stages;
+    std::array<ShaderMetaType*, ST_Num> shader_stages;
 
     uint32_t    hash_index;
     bool        b_initialized;
@@ -374,7 +372,7 @@ struct ShaderCompilerOutput {
 };
 
 struct ShaderCompiledInfo {
-    const ShaderTypeInfo*       type_info;
+    const ShaderMetaType*       type_info;
     ShaderTargetInfo            target_info;
     const std::vector<uint8_t>& compiled_code;
     const ShaderParameterMap&   ParameterMap;
@@ -388,7 +386,7 @@ struct ShaderCompiledInfo {
     int32_t  PermutationId;
 
     RENDER_CORE_API ShaderCompiledInfo(
-        const ShaderTypeInfo*       _shader_type,
+        const ShaderMetaType*       _shader_type,
         const ShaderCompilerOutput& _compiled_output,
         const Hash64City&           _material_shader_map_hash,
         const ShaderPipelineType*   _shader_pipeline_type

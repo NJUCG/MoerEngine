@@ -4,9 +4,13 @@
 #include "API_Macro.h"
 #include "RHIResourceInitilizer.h"
 #include "PixelFormat.h"
+#include <array>
 #include <cassert>
 #include <atomic>
+#include "RenderCommon.h"
+#include "misc/Ptr.h"
 #include "misc/StatQueue.h"
+#include <cstddef>
 #include <unordered_set>
 #include "misc/CountableRef.h"
 #include "rhi/RHICommon.h"
@@ -1122,7 +1126,7 @@ struct RHIViewInfo::TextureUAV::ViewInfo : public RHIViewInfo::Texture::ViewInfo
 static_assert(sizeof(RHIViewInfo) == 16, "Packing of RHIViewInfo is unexpected.");
 
 //for rhi CommandList to create BufferSRV
-struct RHIViewInfo::BufferSRV::Initializer : private RHIViewInfo {
+struct RHIViewInfo::BufferSRV::Initializer : public RHIViewInfo {
     friend RHIViewInfo;
     friend RHICommandListBase;
 
@@ -1161,7 +1165,7 @@ public:
 };
 
 //for rhi CommandList to create BufferUAV
-struct RHIViewInfo::BufferUAV::Initializer : private RHIViewInfo {
+struct RHIViewInfo::BufferUAV::Initializer : public RHIViewInfo {
     friend RHIViewInfo;
     friend RHICommandListBase;
 
@@ -1200,7 +1204,7 @@ public:
 };
 
 //for rhi CommandList to create TextureSRV
-struct RHIViewInfo::TextureSRV::Initializer : private RHIViewInfo {
+struct RHIViewInfo::TextureSRV::Initializer : public RHIViewInfo {
     friend RHIViewInfo;
     friend RHICommandListBase;
 
@@ -1236,7 +1240,7 @@ public:
 };
 
 //for rhi CommandList to create TextureSRV
-struct RHIViewInfo::TextureUAV::Initializer : private RHIViewInfo {
+struct RHIViewInfo::TextureUAV::Initializer : public RHIViewInfo {
     friend RHIViewInfo;
     friend RHICommandListBase;
 
@@ -1500,6 +1504,147 @@ struct RHIShaderBoundStateInput {
     RHIAmplificationShader* p_amplification_shader = nullptr;
 };
 
+//for shader parameter binding usage
+struct ColorAttachmementBinding {
+    ColorAttachmementBinding() = default;
+
+    ColorAttachmementBinding(RHITexture* _texture, EAttachmentLoadOp _load_op, uint8_t _mip_index, uint8_t _array_index)
+        : texture(_texture),
+          load_op(_load_op),
+          mip_index(_mip_index),
+          array_index(_array_index) {}
+
+    ColorAttachmementBinding(RHITexture* _texture, RHITexture* _resolve_texture, EAttachmentLoadOp _load_op, uint8_t _mip_index, uint8_t _array_index)
+        : texture(_texture),
+          resolve_texture(_resolve_texture),
+          load_op(_load_op),
+          mip_index(_mip_index),
+          array_index(_array_index) {}
+    RHITexture* GetTexture() const {
+        return texture;
+    }
+    RHITexture* GetResolveTexture() const {
+        return resolve_texture;
+    }
+    EAttachmentLoadOp GetLoadOp() const {
+        return load_op;
+    }
+    uint8_t GetMipIndex() const {
+        return mip_index;
+    }
+    uint8_t GetArrayIndex() const {
+        return array_index;
+    }
+
+    void SetTexture(RHITexture* _texture) {
+        texture = _texture;
+    }
+    void SetResolveTexture(RHITexture* _resolve_texture) {
+        resolve_texture = _resolve_texture;
+    }
+    void SetLoadOp(EAttachmentLoadOp _load_op) {
+        load_op = _load_op;
+    }
+    void SetMipIndex(uint8_t _mip_index) {
+        mip_index = _mip_index;
+    }
+    void SetArrayIndex(uint16_t _array_index) {
+        array_index = _array_index;
+    }
+
+private:
+    ShaderParameterPtr<RHITexture*> texture         = nullptr;
+    ShaderParameterPtr<RHITexture*> resolve_texture = nullptr;
+    EAttachmentLoadOp               load_op         = EAttachmentLoadOp::NONE;
+    uint8_t                         mip_index       = 0;
+    uint16_t                        array_index     = 0;
+};
+static_assert(sizeof(ColorAttachmementBinding) == 24);
+
+struct DepthStencilBinding {
+    DepthStencilBinding() = default;
+
+    inline DepthStencilBinding(RHITexture*       _texture,
+                               EAttachmentLoadOp _depth_load_op,
+                               EAttachmentLoadOp _stencil_load_op)
+        : texture(_texture),
+          depth_load_op(_depth_load_op),
+          stencil_load_op(_stencil_load_op) {}
+
+    RHITexture* GetTexture() const {
+        return texture;
+    }
+    EAttachmentLoadOp GetDepthLoadOp() const {
+        return depth_load_op;
+    }
+    EAttachmentLoadOp GetStencilLoadOp() const {
+        return stencil_load_op;
+    }
+    void SetDepthTexture(RHITexture* _texture) {
+        texture = _texture;
+    }
+    void SetDepthLoadOp(EAttachmentLoadOp _depth_load_op) {
+        depth_load_op = _depth_load_op;
+    }
+
+    void SetStencilLoadOp(EAttachmentLoadOp _stencil_load_op) {
+        stencil_load_op = _stencil_load_op;
+    }
+
+private:
+    ShaderParameterPtr<RHITexture*> texture         = nullptr;
+    EAttachmentLoadOp               depth_load_op   = EAttachmentLoadOp::NONE;
+    EAttachmentLoadOp               stencil_load_op = EAttachmentLoadOp::NONE;
+};
+static_assert(sizeof(ShaderParameterPtr<RHITexture*>) % SHADER_PARAMETER_PTR_ALIGNMENT == 0);
+
+struct alignas(SHADER_PARAMETER_STRUCTURE_ALIGNMENT) AttachmentBindingSlots {
+
+    ColorAttachmementBinding& operator[](uint32_t _index) {
+        return color_attachments_binding[_index];
+    }
+
+    const ColorAttachmementBinding& operator[](uint32_t index) const {
+        return color_attachments_binding[index];
+    }
+    template<typename Lambda>
+    void ForEachColorAttachment(Lambda lambda) {
+        for (auto& color_attachment : color_attachments_binding) {
+            if (color_attachment.GetTexture() == nullptr) {
+                break;
+            }
+            lambda(color_attachment);
+        }
+    }
+
+    template<typename Lambda>
+    void ForEachColorAttachment(Lambda lambda) const {
+        for (auto& color_attachment : color_attachments_binding) {
+            if (color_attachment.GetTexture() == nullptr) {
+                break;
+            }
+            lambda(color_attachment);
+        }
+    }
+
+    uint32_t GetColorAttachmentCount() const {
+        uint32_t count = 0;
+        for (; count < MAX_PASS_ATTACHMENT_COUNT && color_attachments_binding[count].GetTexture() != nullptr; count++) {
+        }
+        return count;
+    }
+
+    std::array<ColorAttachmementBinding, MAX_PASS_ATTACHMENT_COUNT> color_attachments_binding;
+    DepthStencilBinding                                             depth_stencil_binding;
+    Rect2D                                                          resolve_rect;
+
+    SubpassSettings subpass_settings;
+    uint8_t         multi_view_count;
+    RHITexture*     shading_rate_texture = nullptr;
+};
+static_assert(sizeof(AttachmentBindingSlots) == 240);
+static_assert(offsetof(AttachmentBindingSlots, depth_stencil_binding) == 192);
+
 struct GraphicsPipelineAttachmentInfo {
     GraphicsPipelineAttachmentInfo()
         : attachment_formats(create_array<MAX_PASS_ATTACHMENT_COUNT, uint8_t>((uint8_t)ETextureUsageFlags::UNDEFINED)),
@@ -1524,19 +1669,6 @@ struct GraphicsPipelineAttachmentInfo {
      * */
     bool b_has_fragment_density_attachment = false;
 };
-
-struct SubpassSettings {
-
-    bool operator==(const SubpassSettings& other) const {
-        return type == other.type && index == other.index;
-    }
-    enum Type : uint8_t {
-        NONE,
-        DEFERRED
-    } type        = NONE;
-    uint8_t index = 0;
-};
-static_assert(sizeof(SubpassSettings) == 2);
 
 class RHIGraphicsPipelineStateInitializer {
 public:
@@ -1747,26 +1879,6 @@ struct ViewPort {
     float height;
     float minDepth;
     float maxDepth;
-};
-struct Rect2D {
-    Offset2D offset;
-    Extent2D extent;
-
-    Rect2D(int32_t offset_x = -1, int32_t offset_y = -1, uint32_t extent_x = 0, uint32_t extent_y = 0)
-        : offset{offset_x, offset_y},
-          extent(extent_x, extent_y) {}
-
-    bool operator==(Rect2D other) const {
-        return offset == other.offset && extent == other.extent;
-    }
-
-    bool operator!=(Rect2D Other) const {
-        return !(*this == Other);
-    }
-
-    bool IsValid() const {
-        return offset.x >= 0 && offset.y >= 0 && extent.width > 0 && extent.height > 0;
-    }
 };
 
 /* struct for RenderPassInfo Only, constructed by texture_view and Pass-Required texture layout */
