@@ -21,7 +21,7 @@ public:
         m_preferdThread = thread;
     }
     void setPriority(ThreadPriority priority) {
-        m_preferdThread = EThread::setPriority(m_preferdThread, priority << EThread::PRIORITY_SHEFT);
+        m_preferdThread = EThread::SetPriority(m_preferdThread, priority << EThread::PRIORITY_SHEFT);
     }
     void queueTask(EThread::Type currentThread, bool shouldWakeWorker);
     void prerequestsComplete(EThread::Type currentThread, int32_t finishedCount, bool unlock = true);
@@ -32,7 +32,7 @@ public:
         }
         return shouldWakeWorker;
     }
-    ThreadPriority getPriority() { return EThread::getThreadPriority(m_preferdThread); }
+    ThreadPriority getPriority() { return EThread::GetThreadPriority(m_preferdThread); }
     EThread::Type  getPreferredThread() { return m_preferdThread; }
 
 protected:
@@ -50,10 +50,10 @@ class GraphEvent : public Countable {
 
 public:
     GraphEvent() : threadToWaitOn{EThread::UNKNOWN_THREAD} {};
-    ~GraphEvent()= default;
+    ~GraphEvent() = default;
     static GraphEventRef CreateGraphEvent();
     bool                 addSubsequent(BaseGraphTask* subsequent);
-    void         Destroy() override {
+    void                 Destroy() override {
         delete this;
     }
     bool isComplete();
@@ -188,7 +188,7 @@ public:
         return m_threadToReturn;
     }
     void Fire(EThread::Type _threadToReturn, const GraphEventRef& _event) {
-        TaskGraph::getInterface().returnThread(m_threadToReturn);
+        TaskGraph::GetInterface().ReturnThread(m_threadToReturn);
     }
 
 private:

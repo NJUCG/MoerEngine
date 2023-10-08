@@ -8,9 +8,9 @@ template<class T> class LockQueue;
 class EventPool {
 public:
     ~EventPool();
-	Event* getEvent(bool autoReset=true);
-	static EventPool* get();
-	void releaseEvent(Event* target);
+	Event*            GetEvent(bool autoReset=true);
+	static EventPool* Get();
+	void              ReleaseEvent(Event* target);
 private:
 	EventPool();
 	LockQueue<Event>* m_pool;
@@ -21,10 +21,10 @@ class Event {
 public:
 	
 	
-	void trigger();
-	void wait();
+	void Trigger();
+	void Wait();
 private:
-	void onReset();
+	void                    OnReset();
 	std::mutex m_mutex;
 	std::condition_variable m_cond;
 	Event() :Event(true) {}
@@ -37,17 +37,17 @@ private:
 class EventRef {
 public:
 	EventRef() {
-		m_event = EventPool::get()->getEvent();
+		m_event = EventPool::Get()->GetEvent();
 	}
 	EventRef(Event* _event) :m_event{ _event } {}
 	~EventRef() {
-		EventPool::get()->releaseEvent(m_event);
+        EventPool::Get()->ReleaseEvent(m_event);
 	}
-	void trigger() {
-		if (m_event) m_event->trigger();
+	void Trigger() {
+		if (m_event) m_event->Trigger();
 	}
-	void wait() {
-		if (m_event) m_event->wait();
+	void Wait() {
+		if (m_event) m_event->Wait();
 	}
 private:
 	Event* m_event;
@@ -56,18 +56,18 @@ class ScopeEventRef {
 	friend class TaskGraph;
 public:
 	ScopeEventRef(bool autoReset=true) {
-		m_event = EventPool::get()->getEvent(autoReset);
+		m_event = EventPool::Get()->GetEvent(autoReset);
 	}
 	ScopeEventRef(Event* _event) :m_event(_event) {}
 	~ScopeEventRef() {
-		m_event->wait();
-		EventPool::get()->releaseEvent(m_event);
+        m_event->Wait();
+        EventPool::Get()->ReleaseEvent(m_event);
 	}
-	void trigger() {
-		if (m_event) m_event->trigger();
+	void Trigger() {
+		if (m_event) m_event->Trigger();
 	}
-	void wait() {
-		if (m_event) m_event->wait();
+	void Wait() {
+		if (m_event) m_event->Wait();
 	}
 private:
 	Event* m_event;

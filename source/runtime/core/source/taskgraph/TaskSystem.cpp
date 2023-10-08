@@ -62,12 +62,12 @@ private:
 
 bool TaskGraphTest();
 
-namespace __ENGINE_NAME__ {
-    void TaskSystem::TaskSystem::init() {
-        TaskGraph::init();
+namespace Moer {
+    void TaskSystem::Init() {
+        TaskGraph::Init();
     }
-    void TaskSystem::TaskSystem::shutDown() {
-        TaskGraph::getInterface().~TaskGraph();
+    void TaskSystem::ShutDown() {
+        TaskGraph::GetInterface().~TaskGraph();
     }
 
 }// namespace Moer

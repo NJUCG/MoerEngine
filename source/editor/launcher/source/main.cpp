@@ -3,11 +3,8 @@
 #include <filesystem>
 
 int main(int argc, char** argv) {
-#if VULKAN
-    return 1;
-#endif
 
-    Launcher& launcher = Launcher::GetInstance();
+    Moer::Launcher& launcher = Moer::Launcher::GetInstance();
 
     std::filesystem::path workspace = argv[0];
 
@@ -20,7 +17,6 @@ int main(int argc, char** argv) {
     }
 
     launcher.Quit();
-
 
     return 0;
 }

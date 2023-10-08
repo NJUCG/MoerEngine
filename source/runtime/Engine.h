@@ -3,24 +3,28 @@
 
 #include <filesystem>
 
-struct EngineInitInfo{
+namespace Moer {
+    struct EngineInitInfo {
 
-    std::filesystem::path config_path;
+        std::filesystem::path config_path;
+    };
 
-};
-
-class Engine final{
+    class Engine final {
     public:
-    void Init(const EngineInitInfo& _init_info);
-    
-    void PostInit();
+        void Init(const EngineInitInfo& _init_info);
 
-    void Run();
+        void PostInit();
 
-    void Quit();
+        void Run();
+
+        void Quit();
 
     private:
-    void Tick();
-};
+        void InitCore();
+        void ShutDownCore();
+        void InitRenderSystem();
+        void Tick();
+    };
+}// namespace Moer
 
 #endif

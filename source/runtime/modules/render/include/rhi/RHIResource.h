@@ -1,8 +1,8 @@
 #ifndef RHI_RESOURCE_H
 #define RHI_RESOURCE_H
-#include "RHICommon.h"
+#include "rhi/RHICommon.h"
 #include "API_Macro.h"
-#include "RHIResourceInitilizer.h"
+#include "rhi/RHIResourceInitilizer.h"
 #include "PixelFormat.h"
 #include <array>
 #include <cassert>
@@ -2183,7 +2183,7 @@ enum ERayTracingGeometryType : uint8_t {
 };
 enum class ERayTracingGeometryFlags : uint8_t {
     NONE,
-    OPAQUE                          = 1 << 0,
+    GEOMETRY_OPAQUE                 = 1 << 0,
     NO_DUPLICATE_ANY_HIT_INVOCATION = 1 << 1
 };
 enum class ERayTracingInstanceFlags : uint8_t {

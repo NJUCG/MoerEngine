@@ -2,28 +2,29 @@
 #include <filesystem>
 #include "Engine.h"
 
-Launcher& Launcher::GetInstance(){
-    static Launcher launcher;
-    return launcher;
-}
+namespace Moer {
+    Launcher& Launcher::GetInstance() {
+        static Launcher launcher;
+        return launcher;
+    }
 
-Launcher::Launcher(){}
+    Launcher::Launcher() {}
 
-void Launcher::Init(const std::filesystem::path& _work_space_path){
-    EngineInitInfo info{_work_space_path};
-    engine = new Engine();
-    engine->Init(info);
+    void Launcher::Init(const std::filesystem::path& _work_space_path) {
+        EngineInitInfo info{_work_space_path};
+        engine = new Engine();
+        engine->Init(info);
 
-    engine->PostInit();
-}
+        engine->PostInit();
+    }
 
-void Launcher::Run(){
+    void Launcher::Run() {
 
-    engine->Run();
-    
-    engine->Quit();
-}
+        engine->Run();
 
-void Launcher::Quit(){
-    
-}
+        engine->Quit();
+    }
+
+    void Launcher::Quit() {
+    }
+}// namespace Moer
