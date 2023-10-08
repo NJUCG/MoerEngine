@@ -1,33 +1,55 @@
 #include "Engine.h"
-#include <spdlog/spdlog.h>
+#include "log/LogSystem.h"
 
-void Engine::Init(const EngineInitInfo& _info){
-    SPDLOG_INFO("Engine Begin Initilization");
+#include "Core.h"
+#include "taskgraph/TaskSystem.h"
+#include "taskgraph/ThreadManager.h"
+#include "RenderSystem.h"
+namespace Moer {
+    void Engine::Init(const EngineInitInfo& _info) {
+        LOG_INFO("Engine Begin Initilization");
 
+        InitCore();
+        InitRenderSystem();
 
-    SPDLOG_INFO("Engine Initilization Finished");
-}
-
-void Engine::PostInit(){
-    SPDLOG_INFO("Engine Begin Post Init");
-
-    SPDLOG_INFO("Engine Post Init Finished");
-}
-
-void Engine::Run(){
-    SPDLOG_INFO("Engine Start Running");
-    for (; ; ) {
-        //todo: currently not functions yet
-        // Tick();
-        break;
+        LOG_INFO("Engine Initilization Finished");
     }
-    SPDLOG_INFO("Engine Stop Running");
-}
 
-void Engine::Tick(){
+    void Engine::PostInit() {
+        LOG_INFO("Engine Begin Post Init");
 
-}
+        LOG_INFO("Engine Post Init Finished");
+    }
 
-void Engine::Quit(){
-    SPDLOG_INFO("Engine Quit");
-}
+    void Engine::Run() {
+        LOG_INFO("Engine Start Running");
+        for (;;) {
+            //todo: currently not functions yet
+            // Tick();
+            break;
+        }
+        LOG_INFO("Engine Stop Running");
+    }
+
+    void Engine::InitCore() {
+        Moer::TaskSystem::Init();
+    }
+    void Engine::ShutDownCore() {
+        Moer::TaskSystem::ShutDown();
+    }
+
+    void Engine::InitRenderSystem() {
+
+        RenderSystem::Init();
+    }
+    void Engine::Tick() {
+    }
+
+    void Engine::Quit() {
+
+        RenderSystem::ShutDown();
+        ShutDownCore();
+
+        SPDLOG_INFO("Engine Quit");
+    }
+}// namespace Moer

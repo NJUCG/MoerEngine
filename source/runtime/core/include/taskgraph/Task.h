@@ -125,11 +125,11 @@ protected:
 	virtual bool tryExecuteTask() = 0;
 	virtual bool isComplete() { return false; }
 	bool addSubsequents(TaskBase* target) {
-		return m_subsequents.tryPush(target);
+		return m_subsequents.TryPush(target);
 	}
 	bool addPrerequests(TaskBase* target) {
 		if (target != nullptr) {
-			if (target->addSubsequents(this) && m_prerequests.tryPush(target)) {
+			if (target->addSubsequents(this) && m_prerequests.TryPush(target)) {
 				m_lock_num.fetch_add(1, std::memory_order_relaxed);
 				return true;
 			}
@@ -144,7 +144,7 @@ protected:
 			TaskBase* task;
 			if (std::is_same_v<TaskBase*, decltype(t)>) {
 				task = t;
-				if (task->addSubsequents(this)&& m_prerequests.tryPush(task)) {
+				if (task->addSubsequents(this)&& m_prerequests.TryPush(task)) {
 					added_count++;
 				}
 			}

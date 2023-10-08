@@ -38,5 +38,5 @@ target_link_libraries(ShaderReflectionTest
 	PRIVATE ${MODULE_NAME}
 )
 
-#add_test(NAME ShaderReflectionTest_ COMMAND ShaderReflectionTest)
+add_test(NAME ShaderReflectionTest_ COMMAND ShaderReflectionTest)
 endif()

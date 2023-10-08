@@ -180,7 +180,7 @@ enum ERasterizerFillMode : uint8_t {
 };
 
 enum ERasterizerCullMode : uint8_t {
-    CM_NONE,
+    CM_UNDEFINED,
     CM_FRONT,
     CM_BACK,
     CM_FRONT_AND_BACK,

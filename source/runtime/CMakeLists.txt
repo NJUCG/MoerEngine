@@ -20,6 +20,25 @@ target_include_directories(${TARGET_NAME}
 )
 
 target_link_libraries(${TARGET_NAME}
-    PRIVATE MoerRuntimeCore
-    PRIVATE render
+    PUBLIC MoerRuntimeCore
+    PUBLIC render
 )
+
+
+set(RUNTIME_TEST ON)
+
+if(${RUNTIME_TEST})
+
+add_executable(RuntimeTest EngineTest.cpp)
+
+target_include_directories(RuntimeTest
+    PRIVATE $<BUILD_INTERFACE:${RUNTIME_CORE_DIR}/include>
+    PRIVATE $<BUILD_INTERFACE:${RUNTIME_MODULE_ROOT_DIR}/render/include>
+    
+    )
+
+    target_link_libraries(RuntimeTest 
+       PUBLIC ${TARGET_NAME})
+
+       set_target_properties(RuntimeTest PROPERTIES FOLDER "test")
+endif()
