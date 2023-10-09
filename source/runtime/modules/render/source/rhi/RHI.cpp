@@ -1,6 +1,8 @@
 #include "rhi/RHI.h"
 #include "PixelFormat.h"
+#include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
+#include "shader/Shader.h"
 RHI* g_rhi = nullptr;
 
 // global shader
@@ -8,6 +10,7 @@ RHI* g_rhi = nullptr;
 #include "rhi/RHICommandList.h"
 #include "rhi/RHICommandQueue.h"
 #include "shader/ShaderParameterMacros.h"
+#include "shader/ShaderLibrary.h"
 
 RHIBufferRef CreateBufferFromData(const RHIBufferCreateInfo& info, uint32_t size, void* data) {
     RHIBufferRef buffer     = g_rhi->RHICreateBuffer(info);
@@ -17,7 +20,8 @@ RHIBufferRef CreateBufferFromData(const RHIBufferCreateInfo& info, uint32_t size
     return buffer;
 }
 
-class TestShader {
+class TestShader : public Shader {
+    DEFINE_SHADER_TYPE(TestShader, Global, RHI_API)
 public:
     BEGIN_SHADER_PARAMETER_DEFINITION(Parameters)
 
@@ -26,6 +30,12 @@ public:
     END_SHADER_PARAMETER_DEFINITION(Parameters)
 };
 
+IMPLEMENT_SHADER_TYPE(TestShader, "testFile.vert", "main", EShaderType::ST_VERTEX)
+
+void RHI::Test() {
+
+    TestShader::Parameters param;
+}
 void Test() {
     Hash64City       city;
     Hash64City       other;

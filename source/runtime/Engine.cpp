@@ -46,7 +46,7 @@ namespace Moer {
     }
 
     void Engine::Quit() {
-
+        b_request_quiting = true;
         RenderSystem::ShutDown();
         ShutDownCore();
 

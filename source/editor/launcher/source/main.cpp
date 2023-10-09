@@ -1,4 +1,5 @@
 #include "Launcher.h"
+#include "log/LogSystem.h"
 #include <exception>
 #include <filesystem>
 
@@ -14,6 +15,7 @@ int main(int argc, char** argv) {
         launcher.Run();
     } catch (std::exception& e) {
         e.what();
+        LOG_ERROR("Engine FATAL ERROR detected.");
     }
 
     launcher.Quit();

@@ -37,8 +37,8 @@ target_include_directories(RuntimeTest
     
     )
 
-    target_link_libraries(RuntimeTest 
-       PUBLIC ${TARGET_NAME})
+target_link_libraries(RuntimeTest 
+    PUBLIC ${TARGET_NAME})
 
-       set_target_properties(RuntimeTest PROPERTIES FOLDER "test")
+    set_target_properties(RuntimeTest PROPERTIES FOLDER "test")
 endif()

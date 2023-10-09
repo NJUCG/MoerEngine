@@ -9,7 +9,8 @@
 #include "platform/Platform.h"
 #include "taskgraph/Event.h"
 
-uint32_t ThreadManager::g_gameThreadID = 0;
+uint32_t ThreadManager::g_game_thread_id = 0;
+uint32_t ThreadManager::g_render_thread_id = 0;
 
 std::string GetPriorityStr(int32_t priority) {
     assert(priority < EThread::PriorityCount);
@@ -42,7 +43,7 @@ void ThreadManager::Tick() {
 }
 
 void ThreadManager::initialize() {
-    g_gameThreadID = Platform::GetCurrentThreadID();
+    g_game_thread_id = Platform::GetCurrentThreadID();
 }
 uint32_t ThreadManager::GetCurrentThreadID() {
     return Platform::GetCurrentThreadID();
@@ -69,7 +70,7 @@ std::string ThreadManager::GetRunnableThreadName(uint32_t id) {
 }
 
 RunnableThread* ThreadManager::GetRunnableThread(uint32_t id) {
-    if (id == g_gameThreadID) return nullptr;
+    if (id == g_game_thread_id) return nullptr;
     auto thread = m_threads.at(id);
     return thread;
 }
