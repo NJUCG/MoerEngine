@@ -2,6 +2,7 @@
 // Created by 74535 on 2023/9/30.
 //
 
+#include "misc/MacroUtils.h"
 #include "VulkanDebug.h"
 #include <sstream>
 #include <spdlog/spdlog.h>
@@ -21,13 +22,13 @@ namespace Vulkan {
             stream << "[" << p_callback_data->messageIdNumber << "][" << p_callback_data->pMessageIdName << "]: " << p_callback_data->pMessage << std::endl;
 
             if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT) {
-                spdlog::debug(stream.str());
+                MOER_LOG_DEBUG(stream.str());
             } else if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT) {
-                spdlog::info(stream.str());
+                MOER_LOG_INFO(stream.str());
             } else if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
-                spdlog::warn(stream.str());
+                MOER_LOG_WARN(stream.str());
             } else if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
-                spdlog::error(stream.str());
+                MOER_LOG_ERROR(stream.str());
             }
 
             return VK_FALSE;
