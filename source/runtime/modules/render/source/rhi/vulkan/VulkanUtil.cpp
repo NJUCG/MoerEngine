@@ -5,8 +5,6 @@
 #include "VulkanUtil.h"
 #include "misc/VulkanMacroUtils.h"
 
-#include <spdlog/spdlog.h>
-
 #if defined(_WIN32)
 #include <windows.h>
 #include <fcntl.h>
@@ -68,6 +66,28 @@ namespace Util {
 #undef STR
             default: return "UNKNOWN_DEVICE_TYPE";
         }
+    }
+
+    SwapChainSupportDetails QuerySwapChainSupport(VkPhysicalDevice _gpu, VkSurfaceKHR _surface) {
+        SwapChainSupportDetails details;
+
+        VK_CHECK_RESULT(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(_gpu, _surface, &details.capabilities));
+
+        uint32_t format_count = 0;
+        VK_CHECK_RESULT(vkGetPhysicalDeviceSurfaceFormatsKHR(_gpu, _surface, &format_count, nullptr));
+        if (format_count > 0) {
+            details.formats.resize(format_count);
+            VK_CHECK_RESULT(vkGetPhysicalDeviceSurfaceFormatsKHR(_gpu, _surface, &format_count, details.formats.data()));
+        }
+
+        uint32_t present_mode_count = 0;
+        VK_CHECK_RESULT(vkGetPhysicalDeviceSurfacePresentModesKHR(_gpu, _surface, &present_mode_count, nullptr));
+        if (present_mode_count > 0) {
+            details.present_modes.resize(present_mode_count);
+            VK_CHECK_RESULT(vkGetPhysicalDeviceSurfacePresentModesKHR(_gpu, _surface, &present_mode_count, details.present_modes.data()));
+        }
+
+        return details;
     }
 
     VkBool32 GetSupportedDepthFormat(VkPhysicalDevice physical_device, VkFormat* depth_format) {
@@ -170,7 +190,7 @@ namespace Util {
             MessageBox(nullptr, message.c_str(), nullptr, MB_OK | MB_ICONERROR);
         }
 #endif
-        spdlog::critical(message);
+        MOER_LOG_CRITICAL(message);
         exit(exit_code);
     }
 
@@ -202,7 +222,7 @@ namespace Util {
 
             return shader_module;
         }
-        CRITICAL_AND_RETURN("Could not open shader file \"" + std::string(file_name) + "\"", VK_NULL_HANDLE)
+        ExitFatal("Could not open shader file \"" + std::string(file_name) + "\"", VK_NULL_HANDLE)
     }
 
     bool FileExists(const std::string& filename) {

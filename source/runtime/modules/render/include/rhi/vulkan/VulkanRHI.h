@@ -1,130 +1,110 @@
 #ifndef VULKAN_RHI_H
 #define VULKAN_RHI_H
-#include <string>
-#include "rhi/RHI.h"
-#include <vulkan.h>
-class IVulkanRHI : public RHI {
+
+#include "IVulkanRHI.h"
+
+#include "VulkanDevice.h"
+#include "VulkanSwapChain.h"
+
+class VulkanViewport;
+
+class VulkanRHIImpl final : IVulkanRHI {
 public:
-    void Initialize() override {}
-    void ShutDown() override {}
-    const char* GetName() override { return "VulkanRHI"; }
+    VulkanRHIImpl();
+
+    void Initialize() final override;
+
+    void ShutDown() final override;
+
+    inline const char* GetName() final override { return "VulkanRHI"; }
 
 #pragma region resources creation
-    RHISamplerRef RHICreateSampler(const RHISamplerInitializer& _initializer) override {}
-    RHIRasterizationStateRef RHICreateRasterizationState(const RHIRasterizationStateInitializer& _init) override {}
-    RHIDepthStencilStateRef RHICreateDepthStencilState(const RHIDepthStencilStateInitializer& _init) override {}
-    RHIMultisampleStateRef RHICreateMultiSampleState(const RHIMultisampleStateInitializer& _init) override {}
-    RHIBlendStateRef RHICreateBlendState(const RHIBlendStateInitializer& _init) override {}
-    RHIVertexInputStateRef RHICreateVertexInputState(const VertexInputStateInitializerList& _init) override {}
+    RHISamplerRef            RHICreateSampler(const RHISamplerInitializer& _initializer) final override;
+    RHIRasterizationStateRef RHICreateRasterizationState(const RHIRasterizationStateInitializer& _init) final override;
+    RHIDepthStencilStateRef  RHICreateDepthStencilState(const RHIDepthStencilStateInitializer& _init) final override;
+    RHIMultisampleStateRef   RHICreateMultiSampleState(const RHIMultisampleStateInitializer& _init) final override;
+    RHIBlendStateRef         RHICreateBlendState(const RHIBlendStateInitializer& _init) final override;
+    RHIVertexInputStateRef   RHICreateVertexInputState(const VertexInputStateInitializerList& _init) final override;
 
-    RHIVertexShaderRef RHICreateVertexShader(std::vector<const uint8_t> _code, const SHA256Hash& _hash) override {}
-    RHIFragmentShaderRef RHICreateFragmentShader(std::vector<const uint8_t> _code, const SHA256Hash& _hash) override {}
-    RHIGeometryShaderRef RHICreateGeometryShader(std::vector<const uint8_t> _code, const SHA256Hash& _hash) override {}
+    RHIVertexShaderRef   RHICreateVertexShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) final override;
+    RHIFragmentShaderRef RHICreateFragmentShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) final override;
+    RHIGeometryShaderRef RHICreateGeometryShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) final override;
 
-    RHIMeshShaderRef RHICreateMeshShader(std::vector<const uint8_t> _code, const SHA256Hash& _hash) override {}
-    RHIAmplificationShaderRef RHICreateAmplificationShader(std::vector<const uint8_t> _code, const SHA256Hash& _hash) override {}
+    RHIMeshShaderRef          RHICreateMeshShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) final override;
+    RHIAmplificationShaderRef RHICreateAmplificationShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) final override;
 
-    RHIComputeShaderRef RHICreateComputeShader(std::vector<const uint8_t> _code, const SHA256Hash& _hash) override {}
+    RHIComputeShaderRef RHICreateComputeShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) final override;
 
-    RHIShaderLibraryRef RHICreateShaderLibrary(EShaderPlatform _platform, const std::string& _file_path, const std::string& name) override {}
+    RHIShaderLibraryRef RHICreateShaderLibrary(EShaderPlatform _platform, const std::string& _file_path, const std::string& name) final override;
 
-    RHIFenceRef RHICreateFence(const std::string& name) override {}
+    RHIFenceRef RHICreateFence(const std::string& name) final override;
 
     /* create cpu visible buffer for direct data transfer */
-    RHIStagingBufferRef RHICreateStagingBuffer() override {}
+    RHIStagingBufferRef RHICreateStagingBuffer() final override;
 
     RHIShaderBoundStateRef RHICreateShaderBoundStage(
         RHIVertexInputState* _vertex_input,
         RHIVertexShader*     _vertex_shader,
         RHIFragmentShader*   _fragment_shader,
-        RHIGeometryShader*   _geometry_shader) override {}
+        RHIGeometryShader*   _geometry_shader) final override;
 
-    RHIGraphicsPipelineStateRef RHICreateGraphicsPipelineState(const RHIGraphicsPipelineStateInitializer& _init) override {}
+    RHIGraphicsPipelineStateRef RHICreateGraphicsPipelineState(const RHIGraphicsPipelineStateInitializer& _init) final override;
 
-    RHIComputePipelineStateRef RHICreateComputePipelineState(RHIComputeShader* _compute_shader) override {}
+    RHIComputePipelineStateRef RHICreateComputePipelineState(RHIComputeShader* _compute_shader) final override;
 
-    RHIUniformBufferRef RHICreateUniformBuffer(const void* data, const RHIUniformBufferLayout* layout, EBufferUsageFlags _usage) override {}
+    RHIUniformBufferRef RHICreateUniformBuffer(const void* data, const RHIUniformBufferLayout* layout, EBufferUsageFlags _usage) final override;
 
-    void RHICopyBuffer(RHIBuffer* _src, RHIBuffer* _dst) override {}
+    void RHICopyBuffer(RHIBuffer* _src, RHIBuffer* _dst) final override;
 
-    RHIBufferRef RHICreateBuffer(const RHIBufferCreateInfo& info) override {}
+    RHIBufferRef RHICreateBuffer(const RHIBufferCreateInfo& info) final override;
 
-    RHIShaderResourceViewRef  RHICreateShaderResourceView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) override {}
-    RHIUnorderedAccessViewRef RHICreateUnorderedAccessView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) override {}
-
+    RHIShaderResourceViewRef  RHICreateShaderResourceView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) final override;
+    RHIUnorderedAccessViewRef RHICreateUnorderedAccessView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) final override;
 #pragma endregion
-};
 
-class VulkanRHIImpl : IVulkanRHI {
 public:
+    struct Settings {
+        /** @brief Activates validation layers (and message output) when set to true */
+        bool validation = false;
+    } settings;
 
-    /**
-     * @brief Setup the vulkan instance, enable required extensions and connect to the physical device (GPU).
-     */
-    void Initialize() override;
+protected:
+    VkInstance               m_instance;
+    std::vector<const char*> m_instance_layers;
 
-    /**
-     * @brief Clean up the vulkan instance.
-     */
-    void ShutDown() override;
+    std::vector<const char*> m_instance_extensions;
+    std::vector<const char*> m_enabled_instance_extensions;
 
-    /**
-     * @brief Get the name of the RHI.
-     * @return The name of the RHI
-     */
-    const char* GetName() override;
+    //std::shared_ptr<VulkanWindow> m_window;
+    VkSurfaceKHR m_surface;
 
-#pragma region resources creation
-    RHISamplerRef RHICreateSampler(const RHISamplerInitializer& _initializer) override;
-    RHIRasterizationStateRef RHICreateRasterizationState(const RHIRasterizationStateInitializer& _init) override;
-    RHIDepthStencilStateRef RHICreateDepthStencilState(const RHIDepthStencilStateInitializer& _init) override;
-    RHIMultisampleStateRef RHICreateMultiSampleState(const RHIMultisampleStateInitializer& _init) override;
-    RHIBlendStateRef RHICreateBlendState(const RHIBlendStateInitializer& _init) override;
-    RHIVertexInputStateRef RHICreateVertexInputState(const VertexInputStateInitializerList& _init) override;
+    std::shared_ptr<VulkanDevice>    m_device;
+    std::shared_ptr<VulkanSwapChain> m_swap_chain;
+    std::vector<VulkanViewport*>     m_viewports;
+    std::shared_ptr<VulkanViewport>  m_current_viewport;
 
-    RHIVertexShaderRef RHICreateVertexShader(std::vector<const uint8_t> _code, const SHA256Hash& _hash) override;
-    RHIFragmentShaderRef RHICreateFragmentShader(std::vector<const uint8_t> _code, const SHA256Hash& _hash) override;
-    RHIGeometryShaderRef RHICreateGeometryShader(std::vector<const uint8_t> _code, const SHA256Hash& _hash) override;
+protected:
+    void InitWindow();
+    void InitVulkan();
 
-    RHIMeshShaderRef RHICreateMeshShader(std::vector<const uint8_t> _code, const SHA256Hash& _hash) override;
-    RHIAmplificationShaderRef RHICreateAmplificationShader(std::vector<const uint8_t> _code, const SHA256Hash& _hash) override;
+    VkPhysicalDeviceFeatures GetEnabledDeviceFeatures() {}
+    std::vector<const char*> GetEnabledDeviceExtensions() {
+        return {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+    }
 
-    RHIComputeShaderRef RHICreateComputeShader(std::vector<const uint8_t> _code, const SHA256Hash& _hash) override;
-
-    RHIShaderLibraryRef RHICreateShaderLibrary(EShaderPlatform _platform, const std::string& _file_path, const std::string& name) override;
-
-    RHIFenceRef RHICreateFence(const std::string& name) override;
-
-    /* create cpu visible buffer for direct data transfer */
-    RHIStagingBufferRef RHICreateStagingBuffer() override;
-
-    RHIShaderBoundStateRef RHICreateShaderBoundStage(
-        RHIVertexInputState* _vertex_input,
-        RHIVertexShader*     _vertex_shader,
-        RHIFragmentShader*   _fragment_shader,
-        RHIGeometryShader*   _geometry_shader) override;
-
-    RHIGraphicsPipelineStateRef RHICreateGraphicsPipelineState(const RHIGraphicsPipelineStateInitializer& _init) override;
-
-    RHIComputePipelineStateRef RHICreateComputePipelineState(RHIComputeShader* _compute_shader) override;
-
-    RHIUniformBufferRef RHICreateUniformBuffer(const void* data, const RHIUniformBufferLayout* layout, EBufferUsageFlags _usage) override;
-
-    void RHICopyBuffer(RHIBuffer* _src, RHIBuffer* _dst) override;
-
-    RHIBufferRef RHICreateBuffer(const RHIBufferCreateInfo& info) override;
-
-    RHIShaderResourceViewRef RHICreateShaderResourceView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) override;
-    RHIUnorderedAccessViewRef RHICreateUnorderedAccessView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) override;
-#pragma endregion
-
+#pragma region vulkan functions
 private:
-    VkInstance m_instance;
-    VkPhysicalDevice m_physical_device;
+    void CreateInstance(bool _enable_validation);
+
+#pragma endregion
 
 #pragma region helper functions
 private:
-    VkResult CreateInstance(bool _enable_validation);
+    std::vector<const char*> GetInstanceExtensions();
+
+    std::vector<const char*> GetRequiredExtensionsSupported();
+
+    bool CheckValidationLayerSupport(const char* layer_name);
 
 #pragma endregion
 };

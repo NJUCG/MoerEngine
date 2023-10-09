@@ -14,4 +14,12 @@
 #endif
 #endif
 
+
+#define MOER_LOG_ERROR(...)    spdlog::error(__VA_ARGS__)
+#define MOER_LOG_INFO(...)     spdlog::info(__VA_ARGS__)
+#define MOER_LOG_WARN(...)     spdlog::warn(__VA_ARGS__)
+#define MOER_LOG_TRACE(...)    spdlog::trace(__VA_ARGS__)
+#define MOER_LOG_DEBUG(...)    spdlog::debug(__VA_ARGS__)
+#define MOER_LOG_CRITICAL(...) spdlog::critical(__VA_ARGS__)
+
 #endif// !MACRO_H

@@ -6,7 +6,7 @@
 #define VULKAN_DEBUG_H
 
 #include <vulkan.h>
-#include <glm/glm.hpp.
+#include <glm/glm.hpp>
 
 #include <string>
 

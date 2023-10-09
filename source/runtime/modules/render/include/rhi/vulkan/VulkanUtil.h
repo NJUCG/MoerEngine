@@ -5,7 +5,7 @@
 #ifndef VULKAN_UTIL_H
 #define VULKAN_UTIL_H
 
-#include <vulkan.h>
+#include "VulkanCommon.h"
 
 #include <string>
 
@@ -14,6 +14,7 @@ namespace RHI {
 namespace Vulkan {
 
 namespace Util {
+    struct SwapChainSupportDetails;
     /** @brief Disable message boxes on fatal errors */
     extern bool error_mode_silent;
 
@@ -22,6 +23,8 @@ namespace Util {
 
     /** @brief Returns the device type as a string */
     std::string PhysicalDeviceTypeString(VkPhysicalDeviceType type);
+
+    SwapChainSupportDetails QuerySwapChainSupport(VkPhysicalDevice _gpu, VkSurfaceKHR _surface);
 
     // Selected a suitable supported depth format starting with 32 bit down to 16 bit
     // Returns false if none of the depth formats in the list is supported by the device
