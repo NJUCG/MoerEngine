@@ -5,7 +5,7 @@
 #ifndef IVULKAN_RHI_H
 #define IVULKAN_RHI_H
 
-#include "RHI.h"
+#include "rhi/RHI.h"
 
 #ifdef _WIN32
 #include "./windows/VulkanWindowsPlatform.h"
