@@ -62,13 +62,13 @@ std::string GetPriorityStr(int32_t priority);
 class Runnable;
 //actual thread
 class RunnableThread;
+//thread manager for runnable thread registration
 class ThreadManager {
     friend class TaskGraph;
 
 public:
-    static uint32_t g_gameThreadID;
-    static uint32_t g_renderThreadID;
-    static uint32_t g_rhiThreadID;
+    static uint32_t g_game_thread_id;
+    static uint32_t g_render_thread_id;
     ~ThreadManager();
 
 private:
@@ -85,9 +85,8 @@ public:
     static ThreadManager& Instance();
     static std::string    GetThreadName(uint32_t id) {
 
-        if (id == g_gameThreadID) return "GameThread";
-        if (id == g_renderThreadID) return "RenderThread";
-        if (id == g_rhiThreadID) return "RHIThread";
+        if (id == g_game_thread_id) return "GameThread";
+        if (id == g_render_thread_id) return "RenderThread";
         return Instance().GetRunnableThreadName(id);
     }
     static uint32_t GetCurrentThreadID();

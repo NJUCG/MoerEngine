@@ -19,11 +19,16 @@ namespace Moer {
 
         void Quit();
 
+        bool IsRequestQuiting() const { return b_request_quiting; }
+
     private:
         void InitCore();
         void ShutDownCore();
         void InitRenderSystem();
         void Tick();
+
+    private:
+        bool b_request_quiting;
     };
 }// namespace Moer
 

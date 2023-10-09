@@ -10,6 +10,7 @@ namespace Moer {
         ~RenderSystem();
 
     private:
+        static void InitShaderLibrary();
         RenderSystem() = default;
     };
 };// namespace Moer

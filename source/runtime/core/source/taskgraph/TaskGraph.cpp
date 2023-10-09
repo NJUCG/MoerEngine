@@ -87,7 +87,7 @@ TaskGraph::~TaskGraph() {
     instance = nullptr;
 }
 EThread::Type TaskGraph::GetCurrentThread(bool localQueue) {
-    if (Platform::GetCurrentThreadID() == ThreadManager::g_gameThreadID) return EThread::Type(localQueue ? (EThread::EGameThread | EThread::LOCAL_QUEUE) : EThread::EGameThread);
+    if (Platform::GetCurrentThreadID() == ThreadManager::g_game_thread_id) return EThread::Type(localQueue ? (EThread::EGameThread | EThread::LOCAL_QUEUE) : EThread::EGameThread);
     auto thread = ThreadManager::Instance().GetRunnableThread(Platform::GetCurrentThreadID());
     if (thread) {
         ThreadIndex index = thread->m_runnable->GetIndex();
@@ -124,7 +124,7 @@ void TaskGraph::WaitUntilTasksComplete(const GraphEventArray& task_events, EThre
         bool pending = false;
         for (int32_t Index = 0; Index < task_events.size(); Index++) {
             GraphEvent* task = task_events[Index].Get();
-            if (task != nullptr && !task->isComplete()) {
+            if (task != nullptr && !task->IsComplete()) {
                 pending = true;
                 break;
             }
@@ -144,7 +144,7 @@ void TaskGraph::WaitUntilTasksComplete(const GraphEventArray& task_events, EThre
         bool pending = false;
         for (int32_t Index = 0; Index < task_events.size(); Index++) {
             GraphEvent* task = reinterpret_cast<GraphEvent*>(task_events[Index].Get());
-            if (task != nullptr && !task->isComplete()) {
+            if (task != nullptr && !task->IsComplete()) {
                 pending = true;
                 break;
             }
@@ -166,7 +166,7 @@ void TaskGraph::TriggerEventWhenTasksComplete(Event* event, const GraphEventArra
         bool pending = false;
         for (int32_t Index = 0; Index < task_events.size(); Index++) {
             GraphEvent* task = reinterpret_cast<GraphEvent*>(task_events[Index].Get());
-            if (task != nullptr && !task->isComplete()) {
+            if (task != nullptr && !task->IsComplete()) {
                 pending = true;
                 break;
             }

@@ -16,24 +16,24 @@ GraphEventRef GraphEvent::CreateGraphEvent() {
     return instance;
 };
 
-bool GraphEvent::addSubsequent(BaseGraphTask* subsequent) {
+bool GraphEvent::AddSubsequent(BaseGraphTask* subsequent) {
     return m_subsequents.TryPush(subsequent);
 }
-bool GraphEvent::isComplete() {
+bool GraphEvent::IsComplete() {
     return m_subsequents.IsClosed();
 }
-void BaseGraphTask::queueTask(EThread::Type currentThread, bool shouldWakeupWorker) {
+void BaseGraphTask::QueueTask(EThread::Type currentThread, bool shouldWakeupWorker) {
     TaskGraph::GetInterface().QueueTask(this, m_preferdThread, currentThread, shouldWakeupWorker);
 }
 
-void BaseGraphTask::prerequestsComplete(EThread::Type currentThread, int32_t finishedCount, bool unlock) {
+void BaseGraphTask::PrerequestsComplete(EThread::Type currentThread, int32_t finishedCount, bool unlock) {
     int32_t finished = finishedCount + (unlock ? 1 : 0);
     if (m_prerequests_count.fetch_sub(finished) == finished) {
-        queueTask(currentThread, true);
+        QueueTask(currentThread, true);
     }
 }
 
-void GraphEvent::tryUnlockSubsequents(std::vector<BaseGraphTask*>& tasks, EThread::Type currentThread) {
+void GraphEvent::TryUnlockSubsequents(std::vector<BaseGraphTask*>& tasks, EThread::Type currentThread) {
     if (tasks.size() > 0) {
         GraphEventArray tempEvents;
         std::swap(m_events_to_wait, tempEvents);// m_events removed
@@ -42,7 +42,7 @@ void GraphEvent::tryUnlockSubsequents(std::vector<BaseGraphTask*>& tasks, EThrea
         bool generateEmptyTask = false;
         for (int32_t i = 0; i < tempEvents.size(); i++) {
             GraphEvent* _event = tempEvents[i].Get();
-            if (!_event->isComplete()) {
+            if (!_event->IsComplete()) {
                 generateEmptyTask = true;
                 break;
             }
@@ -59,15 +59,15 @@ void GraphEvent::tryUnlockSubsequents(std::vector<BaseGraphTask*>& tasks, EThrea
     bool should_wake_up_worker = false;// todo: useless in this version
     for (BaseGraphTask* task : poped) {
         assert(task != nullptr);
-        should_wake_up_worker = task->conditionalQueueTask(currentThread, should_wake_up_worker);
+        should_wake_up_worker = task->ConditionalQueueTask(currentThread, should_wake_up_worker);
     }
 }
 void GraphEvent::tryUnlockSubsequents(EThread::Type currentThread) {
     std::vector<BaseGraphTask*> tasks;
-    tryUnlockSubsequents(tasks, currentThread);
+    TryUnlockSubsequents(tasks, currentThread);
 }
 
-void GraphEvent::wait(EThread::Type currentThread) {
+void GraphEvent::Wait(EThread::Type currentThread) {
 
     TaskGraph::GetInterface().WaitUntilTaskComplete(this, currentThread);
 }
