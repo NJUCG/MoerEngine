@@ -5,7 +5,7 @@
 #ifndef VULKAN_UTIL_H
 #define VULKAN_UTIL_H
 
-#include "VulkanCommon.h"
+#include "rhi/vulkan/VulkanCommon.h"
 
 #include <string>
 
