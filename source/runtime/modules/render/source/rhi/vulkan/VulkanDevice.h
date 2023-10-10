@@ -34,6 +34,10 @@ public:
     void Init(const DeviceInitializer& _initializer);
     void Destroy();
 
+    operator VkDevice() const {
+        return m_device;
+    };
+
     inline VkPhysicalDevice GetGpu() const {
         return m_gpu;
     }
@@ -46,11 +50,14 @@ public:
     inline VkPhysicalDeviceFeatures GetFeatures() const {
         return m_gpu_features;
     }
+    inline VkPhysicalDeviceMemoryProperties GetMemoryProperties() const {
+        return m_gpu_mem_props;
+    }
     inline std::vector<const char*> GetGpuExtensions() const {
         return m_gpu_extensions;
     }
-    inline VkPhysicalDeviceMemoryProperties GetMemoryProperties() const {
-        return m_gpu_mem_props;
+    inline QueueFamilyIndices GetQueueFamilyIndices() const {
+        return m_queue_family_indices;
     }
     inline VkQueue GetGraphicsQueue() const {
         return m_graphics_queue;
