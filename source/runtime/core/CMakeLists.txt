@@ -1,5 +1,5 @@
 set(target_name MoerRuntimeCore)
-file(GLOB_RECURSE CORE_HEADERS "include/*\(.h|.inl\)")
+file(GLOB_RECURSE CORE_HEADERS "include/*.h" "include/*.inl")
 file(GLOB_RECURSE CORE_SOURCES "source/*.cpp")
 
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${CORE_HEADERS} ${CORE_SOURCES})
