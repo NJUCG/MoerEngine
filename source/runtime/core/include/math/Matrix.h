@@ -37,7 +37,7 @@ namespace Moer {
         Vector<T, 2>  operator[](size_t i) const { return re[i]; }
         Vector<T, 2>& operator[](size_t i) { return re[i]; }
 
-        Vector<T, 2> GetColumn(size_t i) { return Vector<T, 2>(re[0][i], re[1][i]); }
+        Vector<T, 2> GetColumn(size_t i) const noexcept { return Vector<T, 2>(re[0][i], re[1][i]); }
 
         static Matrix<T, 2, 2> Identity() noexcept {
             Matrix<T, 2, 2> identity;
@@ -78,7 +78,7 @@ namespace Moer {
         Vector<T, 3>  operator[](size_t i) const { return re[i]; }
         Vector<T, 3>& operator[](size_t i) { return re[i]; }
 
-        Vector<T, 3> GetColumn(size_t i) { return Vector<T, 3>(re[0][i], re[1][i], re[2][i]); }
+        Vector<T, 3> GetColumn(size_t i) const noexcept { return Vector<T, 3>(re[0][i], re[1][i], re[2][i]); }
 
         static Matrix<T, 3, 3> Identity() noexcept {
             Matrix<T, 3, 3> identity;
@@ -120,7 +120,7 @@ namespace Moer {
         Vector<T, 4>  operator[](size_t i) const { return re[i]; }
         Vector<T, 4>& operator[](size_t i) { return re[i]; }
 
-        Vector<T, 3> GetColumn(size_t i) { return Vector<T, 3>(re[0][i], re[1][i], re[2][i]); }
+        Vector<T, 3> GetColumn(size_t i) const noexcept { return Vector<T, 3>(re[0][i], re[1][i], re[2][i]); }
     };
 
     template<NumericType T>
@@ -155,7 +155,7 @@ namespace Moer {
         Vector<T, 4>  operator[](size_t i) const { return re[i]; }
         Vector<T, 4>& operator[](size_t i) { return re[i]; }
 
-        Vector<T, 4> GetColumn(size_t i) { return Vector<T, 4>(re[0][i], re[1][i], re[2][i], re[3][i]); }
+        Vector<T, 4> GetColumn(size_t i) const noexcept { return Vector<T, 4>(re[0][i], re[1][i], re[2][i], re[3][i]); }
 
         static Matrix<T, 4, 4> Identity() noexcept {
             Matrix<T, 4, 4> identity;
