@@ -87,7 +87,7 @@ void VulkanRHIImpl::InitVulkan() {
     m_swap_chain->Connect(m_instance, m_device);
     uint32_t width, height;
     // glfwGetFramebufferSize(m_window, &width, &height);
-    m_swap_chain->Init(&width, &height, false, true);
+    m_swap_chain->Init(&width, &height, true);
 }
 
 #pragma region vulkan functions
