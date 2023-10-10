@@ -2,24 +2,13 @@
 #include "Function.h"
 #include <cmath>
 
-namespace Moer {
-    Quaternion::Quaternion(const Vector3f& axis, const Angle& angle) noexcept {
-        auto half_angle = angle.GetRadian() * 0.5f;
-        vec             = Vector4f(axis * std::sin(half_angle), std::cos(half_angle));
-    }
-
-    Quaternion::Quaternion(const Vector3f& x_axis, const Vector3f& y_axis, const Vector3f& z_axis) noexcept {
-        /**
-         * rotation matrix:
-         *  x_axis.x y_axis.x z_axis.x
-         *  x_axis.y y_axis.y z_axis.y
-         *  x_axis.z y_axis.z z_axis.z
-         * 
-         * Algorithm in Ken Shoemake's article in 1987 SIGGRAPH course notes
-         * article "Quaternion Calculus and Fast Animation".
-        */
-
-        Matrix3x3f rotation(x_axis.x, y_axis.x, z_axis.x, x_axis.y, y_axis.y, z_axis.y, x_axis.z, y_axis.z, z_axis.z);
+namespace {
+    /**
+     * Algorithm in Ken Shoemake's article in 1987 SIGGRAPH course notes
+     * article "Quaternion Calculus and Fast Animation".
+     */
+    Moer::Vector4f QuaternionFromRotation(const Moer::Matrix3x3f& rotation) noexcept {
+        Moer::Vector4f vec;
 
         float trace = rotation[0][0] + rotation[1][1] + rotation[2][2];
         float root;
@@ -50,6 +39,28 @@ namespace Moer {
             vec[j] = (rotation[j][i] + rotation[i][j]) * root;
             vec[k] = (rotation[k][i] + rotation[i][k]) * root;
         }
+    }
+}// namespace
+
+namespace Moer {
+    Quaternion::Quaternion(const Vector3f& axis, const Angle& angle) noexcept {
+        auto half_angle = angle.GetRadian() * 0.5f;
+        vec             = Vector4f(axis * std::sin(half_angle), std::cos(half_angle));
+    }
+
+    Quaternion::Quaternion(const Matrix3x3f& rotation) noexcept {
+        vec = QuaternionFromRotation(rotation);
+    }
+
+    Quaternion::Quaternion(const Vector3f& x_axis, const Vector3f& y_axis, const Vector3f& z_axis) noexcept {
+        /**
+         * rotation matrix:
+         *  x_axis.x y_axis.x z_axis.x
+         *  x_axis.y y_axis.y z_axis.y
+         *  x_axis.z y_axis.z z_axis.z
+        */
+        Matrix3x3f rotation(x_axis.x, y_axis.x, z_axis.x, x_axis.y, y_axis.y, z_axis.y, x_axis.z, y_axis.z, z_axis.z);
+        vec = QuaternionFromRotation(rotation);
     }
 
     Quaternion Quaternion::Inverse() const noexcept {

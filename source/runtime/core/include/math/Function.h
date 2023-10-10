@@ -4,6 +4,7 @@
 #include "Matrix.h"
 
 #include <cmath>
+#include <utility>
 
 // vector functions
 namespace Moer {
@@ -45,7 +46,9 @@ namespace Moer {
     template<VectorType T, NumericType U> inline void operator/=(T& lhs, const U rhs) noexcept;
 
     template<NumericType T> inline bool ApproxEqual(T lhs, T rhs, float eps = Moer::EPS) noexcept;
+    template<NumericType T> inline bool ApproxEqual(T lhs, T rhs, double eps = (double)Moer::EPS) noexcept;
     template<VectorType  T> inline bool ApproxEqual(const T& lhs, const T& rhs, float eps = Moer::EPS) noexcept;
+    template<VectorType  T> inline bool ApproxEqual(const T& lhs, const T& rhs, double eps = (double)Moer::EPS) noexcept;
 
     template<NumericType T> inline T Abs(T v) noexcept;
     template<VectorType  T> inline T Abs(const T& v) noexcept;
@@ -120,9 +123,12 @@ namespace Moer {
     template<NumericType T, size_t N, size_t M> inline Matrix<T, M, N> Transpose(const Matrix<T, N, M>& m) noexcept;
 
     // inverse of a matrix
-    template<NumericType T> inline Matrix<T, 2, 2> Inverse(const Matrix<T, 2, 2>& m) noexcept;
-    template<NumericType T> inline Matrix<T, 3, 3> Inverse(const Matrix<T, 3, 3>& m) noexcept;
-    template<NumericType T> inline Matrix<T, 4, 4> Inverse(const Matrix<T, 4, 4>& m) noexcept;
+    Matrix2x2f Inverse(const Matrix2x2f& m) noexcept;
+    Matrix2x2d Inverse(const Matrix2x2d& m) noexcept;
+    Matrix3x3f Inverse(const Matrix3x3f& m) noexcept;
+    Matrix3x3d Inverse(const Matrix3x3d& m) noexcept;
+    Matrix4x4f Inverse(const Matrix4x4f& m) noexcept;
+    Matrix4x4d Inverse(const Matrix4x4d& m) noexcept;
 
     /** get a 2x2 matrix from diagonal
        @example:
@@ -156,6 +162,18 @@ namespace Moer {
     */
     template<NumericType T, size_t ROW, size_t COL> inline Matrix<T, 4, 4> FillDiagonal4x4(const Matrix<T, ROW, COL>& m, T diagonal_element) noexcept;
 
+    // make the view matrix under the right-handed system
+    Matrix4x4f MakeLookatViewMatrixRH(const Vector3f& origin, const Vector3f& look_at, const Vector3f& up_dir) noexcept;
+    Matrix4x4d MakeLookatViewMatrixRH(const Vector3d& origin, const Vector3d& look_at, const Vector3d& up_dir) noexcept;
+    // make the camera to world matrix under the right-handed system
+    Matrix4x4f MakeLookatToWorldMatrixRH(const Vector3f& origin, const Vector3f& look_at, const Vector3f& up_dir) noexcept;
+    Matrix4x4d MakeLookatToWorldMatrixRH(const Vector3d& origin, const Vector3d& look_at, const Vector3d& up_dir) noexcept;
+    // return world to camera view matrix and camera to world matrix under the right-handed system
+    std::pair<Matrix4x4f, Matrix4x4f> MakeLookatViewMatrixWithInverseRH(const Vector3f& origin, const Vector3f& look_at, const Vector3f& up_dir) noexcept;
+    std::pair<Matrix4x4d, Matrix4x4d> MakeLookatViewMatrixWithInverseRH(const Vector3d& origin, const Vector3d& look_at, const Vector3d& up_dir) noexcept;
+
+    void QDUDecomposition(const Matrix3x3f& m, Matrix3x3f& Q, Vector3f& D, Vector3f& U) noexcept;
+    void QDUDecomposition(const Matrix3x3d& m, Matrix3x3d& Q, Vector3d& D, Vector3d& U) noexcept;
     // clang-format on
 }// namespace Moer
 
@@ -313,9 +331,19 @@ namespace Moer {
     inline bool ApproxEqual(T lhs, T rhs, float eps) noexcept {
         return (abs(lhs - rhs) < eps);
     }
+    template<NumericType T>
+    inline bool ApproxEqual(T lhs, T rhs, double eps) noexcept {
+        return (abs(lhs - rhs) < eps);
+    }
 
     template<VectorType T>
     inline bool ApproxEqual(const T& lhs, const T& rhs, float eps) noexcept {
+        bool ret = true;
+        for (int i = 0; i < T::size; i++) ret &= (abs(lhs[i] - rhs[i]) < eps);
+        return ret;
+    }
+    template<VectorType T>
+    inline bool ApproxEqual(const T& lhs, const T& rhs, double eps) noexcept {
         bool ret = true;
         for (int i = 0; i < T::size; i++) ret &= (abs(lhs[i] - rhs[i]) < eps);
         return ret;
@@ -426,7 +454,7 @@ namespace Moer {
 
     template<NumericType T>
     inline Vector<T, 3> Cross(const Vector<T, 3>& lhs, const Vector<T, 3>& rhs) noexcept {
-        return Vector<T, 3>{lhs.y * rhs.z - lhs.z * rhs.y, lhs.z * rhs.x - lhs.x * rhs.z, lhs.x * rhs.y - lhs.y * rhs.x};
+        return Vector<T, 3>(lhs.y * rhs.z - lhs.z * rhs.y, lhs.z * rhs.x - lhs.x * rhs.z, lhs.x * rhs.y - lhs.y * rhs.x);
     }
 
     template<VectorType T>
@@ -584,92 +612,6 @@ namespace Moer {
         return ret;
     }
 
-    template<NumericType T>
-    inline Matrix<T, 2, 2> Inverse(const Matrix<T, 2, 2>& m) noexcept {
-        Matrix<T, 2, 2> ret;
-
-        T inv_det = (T)1 / (m[0][0] * m[1][1] - m[0][1] * m[1][0]);
-        ret[0][0] = m[1][1] * inv_det;
-        ret[0][1] = -m[0][1] * inv_det;
-        ret[1][0] = -m[1][0] * inv_det;
-        ret[1][1] = m[0][0] * inv_det;
-    }
-    template<NumericType T>
-    inline Matrix<T, 3, 3> Inverse(const Matrix<T, 3, 3>& m) noexcept {
-        Matrix<T, 3, 3> ret;
-
-        T cofactor00 = m[1][1] * m[2][2] - m[1][2] * m[2][1];
-        T cofactor10 = m[1][2] * m[2][0] - m[1][0] * m[2][2];
-        T cofactor20 = m[1][0] * m[2][1] - m[1][1] * m[2][0];
-        T inv_det    = (T)1 / (m[0][0] * cofactor00 + m[0][1] * cofactor10 + m[0][2] * cofactor20);
-
-        ret[0][0] = (m[1][1] * m[2][2] - m[1][2] * m[2][1]) * inv_det;
-        ret[0][1] = (m[0][2] * m[2][1] - m[0][1] * m[2][2]) * inv_det;
-        ret[0][2] = (m[0][1] * m[1][2] - m[0][2] * m[1][1]) * inv_det;
-        ret[1][0] = (m[1][2] * m[2][0] - m[1][0] * m[2][2]) * inv_det;
-        ret[1][1] = (m[0][0] * m[2][2] - m[0][2] * m[2][0]) * inv_det;
-        ret[1][2] = (m[0][2] * m[1][0] - m[0][0] * m[1][2]) * inv_det;
-        ret[2][0] = (m[1][0] * m[2][1] - m[1][1] * m[2][0]) * inv_det;
-        ret[2][1] = (m[0][1] * m[2][0] - m[0][0] * m[2][1]) * inv_det;
-        ret[2][2] = (m[0][0] * m[1][1] - m[0][1] * m[1][0]) * inv_det;
-
-        return ret;
-    }
-    template<NumericType T>
-    inline Matrix<T, 4, 4> Inverse(const Matrix<T, 4, 4>& m) noexcept {
-        Matrix<T, 4, 4> ret;
-
-        T v0 = m[2][0] * m[3][1] - m[2][1] * m[3][0];
-        T v1 = m[2][0] * m[3][2] - m[2][2] * m[3][0];
-        T v2 = m[2][0] * m[3][3] - m[2][3] * m[3][0];
-        T v3 = m[2][1] * m[3][2] - m[2][2] * m[3][1];
-        T v4 = m[2][1] * m[3][3] - m[2][3] * m[3][1];
-        T v5 = m[2][2] * m[3][3] - m[2][3] * m[3][2];
-
-        T t00 = +(v5 * m[1][1] - v4 * m[1][2] + v3 * m[1][3]);
-        T t10 = -(v5 * m[1][0] - v2 * m[1][2] + v1 * m[1][3]);
-        T t20 = +(v4 * m[1][0] - v2 * m[1][1] + v0 * m[1][3]);
-        T t30 = -(v3 * m[1][0] - v1 * m[1][1] + v0 * m[1][2]);
-
-        T det     = t00 * m[0][0] + t10 * m[0][1] + t20 * m[0][2] + t30 * m[0][3];
-        T inv_det = (T)1 / det;
-
-        ret[0][0] = t00 * inv_det;
-        ret[1][0] = t10 * inv_det;
-        ret[2][0] = t20 * inv_det;
-        ret[3][0] = t30 * inv_det;
-
-        ret[0][1] = -(v5 * m[0][1] - v4 * m[0][2] + v3 * m[0][3]) * inv_det;
-        ret[1][1] = +(v5 * m[0][0] - v2 * m[0][2] + v1 * m[0][3]) * inv_det;
-        ret[2][1] = -(v4 * m[0][0] - v2 * m[0][1] + v0 * m[0][3]) * inv_det;
-        ret[3][1] = +(v3 * m[0][0] - v1 * m[0][1] + v0 * m[0][2]) * inv_det;
-
-        v0 = m[1][0] * m[3][1] - m[1][1] * m[3][0];
-        v1 = m[1][0] * m[3][2] - m[1][2] * m[3][0];
-        v2 = m[1][0] * m[3][3] - m[1][3] * m[3][0];
-        v3 = m[1][1] * m[3][2] - m[1][2] * m[3][1];
-        v4 = m[1][1] * m[3][3] - m[1][3] * m[3][1];
-        v5 = m[1][2] * m[3][3] - m[1][3] * m[3][2];
-
-        ret[0][2] = +(v5 * m[0][1] - v4 * m[0][2] + v3 * m[0][3]) * inv_det;
-        ret[1][2] = -(v5 * m[0][0] - v2 * m[0][2] + v1 * m[0][3]) * inv_det;
-        ret[2][2] = +(v4 * m[0][0] - v2 * m[0][1] + v0 * m[0][3]) * inv_det;
-        ret[3][2] = -(v3 * m[0][0] - v1 * m[0][1] + v0 * m[0][2]) * inv_det;
-
-        v0 = m[2][1] * m[1][0] - m[2][0] * m[1][1];
-        v1 = m[2][2] * m[1][0] - m[2][0] * m[1][2];
-        v2 = m[2][3] * m[1][0] - m[2][0] * m[1][3];
-        v3 = m[2][2] * m[1][1] - m[2][1] * m[1][2];
-        v4 = m[2][3] * m[1][1] - m[2][1] * m[1][3];
-        v5 = m[2][3] * m[1][2] - m[2][2] * m[1][3];
-
-        ret[0][3] = -(v5 * m[0][1] - v4 * m[0][2] + v3 * m[0][3]) * inv_det;
-        ret[1][3] = +(v5 * m[0][0] - v2 * m[0][2] + v1 * m[0][3]) * inv_det;
-        ret[2][3] = -(v4 * m[0][0] - v2 * m[0][1] + v0 * m[0][3]) * inv_det;
-        ret[3][3] = +(v3 * m[0][0] - v1 * m[0][1] + v0 * m[0][2]) * inv_det;
-        return ret;
-    }
-
     template<NumericType T, size_t ROW, size_t COL>
     inline Matrix<T, 2, 2> GetDiagonal2x2(const Matrix<T, ROW, COL>& m) noexcept {
         return Matrix<T, 2, 2>(m[0][0], m[0][1], m[1][0], m[1][1]);
@@ -699,5 +641,4 @@ namespace Moer {
 
         return ret;
     }
-
 }// namespace Moer

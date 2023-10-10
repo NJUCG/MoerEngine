@@ -34,6 +34,7 @@ namespace Moer {
 
         explicit Quaternion(const Vector4f& q) noexcept : vec(q) {}
         explicit Quaternion(const Vector3f& axis, const Angle& angle) noexcept;
+        explicit Quaternion(const Matrix3x3f& rotation) noexcept;
         // construct from local orthonormal coordinate system
         explicit Quaternion(const Vector3f& x_axis, const Vector3f& y_axis, const Vector3f& z_axis) noexcept;
 
@@ -46,6 +47,8 @@ namespace Moer {
         Quaternion operator-() const noexcept;
         Quaternion operator+(const Quaternion& p) const noexcept;
         Quaternion operator-(const Quaternion& p) const noexcept;
+
+        // (q1 * q2).Rotate(v) == q1.Rotate(q2.Rotate(v))
         Quaternion operator*(const Quaternion& p) const noexcept;
         Vector3f   Rotate(const Vector3f& v) const noexcept;
 
