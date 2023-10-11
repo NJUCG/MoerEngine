@@ -1,0 +1,60 @@
+#include "Engine.h"
+#include <filesystem>
+#include "Core.h"
+#include "taskgraph/GraphTask.h"
+#include "log/LogSystem.h"
+#include "RenderThread.h"
+#define BEGINE_TEST(TestName)                         \
+    LOG_INFO("===================================="); \
+    LOG_INFO("Begin Test: {}", #TestName);            \
+    LOG_INFO("====================================");
+
+#define END_TEST(TestName)                            \
+    LOG_INFO("===================================="); \
+    LOG_INFO("End Test: {}", #TestName);              \
+    LOG_INFO("====================================");
+
+void RenderThreadSuspendTest(const Moer::Engine& engine) {
+    BEGINE_TEST(RenderThreadSuspendTest)
+
+    {
+        FunctionGraphTask::ConstructAndDispatchWhenReady(
+            [&engine]() {
+                for (uint32_t i = 0; i < 300 && !engine.IsRequestQuiting(); i++) {
+
+                    FunctionGraphTask::ConstructAndDispatchWhenReady(
+                        []() {
+                            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                            LOG_WARNING("Render Thread Ticking");
+                        },
+                        nullptr,
+                        EThread::ERenderThread);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                }
+            },
+            nullptr,
+            EThread::AnyThread_NormalPri);
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+
+        Moer::ScopedResumeRenderThread scope_suspend;
+        for (uint32_t i = 0; i < 5; i++) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            LOG_WARNING("Main Thread Ticking");
+        }
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+
+    END_TEST(RenderThreadSuspendTest)
+}
+int main(int argc, const char** argv) {
+
+    Moer::Engine         engine;
+    Moer::EngineInitInfo info{std::filesystem::path(argv[0])};
+
+    engine.Init(info);
+    engine.PostInit();
+    engine.Run();
+    RenderThreadSuspendTest(engine);
+    engine.Quit();
+}

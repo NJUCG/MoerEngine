@@ -12,27 +12,27 @@ class BaseGraphTask {
 public:
     BaseGraphTask(int32_t count) : m_prerequests_count{count} {}
     virtual ~BaseGraphTask() {}
-    virtual void executeTasks(std::vector<BaseGraphTask*>& tasks, EThread::Type currentThread) = 0;
+    virtual void ExecuteTasks(std::vector<BaseGraphTask*>& tasks, EThread::Type currentThread) = 0;
     virtual void destroyTask()                                                                 = 0;
     void         execute(std::vector<BaseGraphTask*>& newTasks, EThread::Type currentThread) {
-        executeTasks(newTasks, currentThread);
+        ExecuteTasks(newTasks, currentThread);
     }
     void setPreferredThread(EThread::Type thread) {
         m_preferdThread = thread;
     }
     void setPriority(ThreadPriority priority) {
-        m_preferdThread = EThread::setPriority(m_preferdThread, priority << EThread::PRIORITY_SHEFT);
+        m_preferdThread = EThread::SetPriority(m_preferdThread, priority << EThread::PRIORITY_SHEFT);
     }
-    void queueTask(EThread::Type currentThread, bool shouldWakeWorker);
-    void prerequestsComplete(EThread::Type currentThread, int32_t finishedCount, bool unlock = true);
-    bool conditionalQueueTask(EThread::Type currentThread, bool shouldWakeWorker) {
+    void QueueTask(EThread::Type currentThread, bool shouldWakeWorker);
+    void PrerequestsComplete(EThread::Type currentThread, int32_t finishedCount, bool unlock = true);
+    bool ConditionalQueueTask(EThread::Type currentThread, bool shouldWakeWorker) {
         if (m_prerequests_count.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-            queueTask(currentThread, shouldWakeWorker);
+            QueueTask(currentThread, shouldWakeWorker);
             return true;
         }
         return shouldWakeWorker;
     }
-    ThreadPriority getPriority() { return EThread::getThreadPriority(m_preferdThread); }
+    ThreadPriority getPriority() { return EThread::GetThreadPriority(m_preferdThread); }
     EThread::Type  getPreferredThread() { return m_preferdThread; }
 
 protected:
@@ -50,22 +50,22 @@ class GraphEvent : public Countable {
 
 public:
     GraphEvent() : threadToWaitOn{EThread::UNKNOWN_THREAD} {};
-    ~GraphEvent()= default;
+    ~GraphEvent() = default;
     static GraphEventRef CreateGraphEvent();
-    bool                 addSubsequent(BaseGraphTask* subsequent);
-    void         Destroy() override {
+    bool                 AddSubsequent(BaseGraphTask* subsequent);
+    void                 Destroy() override {
         delete this;
     }
-    bool isComplete();
+    bool IsComplete();
     void waitUntil(GraphEventRef _eventRef) {
-        assert(!isComplete());
+        assert(!IsComplete());
 
         m_events_to_wait.emplace_back(std::move(_eventRef));
     }
-    void tryUnlockSubsequents(std::vector<BaseGraphTask*>& tasks, EThread::Type currentThread = EThread::UNKNOWN_THREAD);
+    void TryUnlockSubsequents(std::vector<BaseGraphTask*>& tasks, EThread::Type currentThread = EThread::UNKNOWN_THREAD);
     void tryUnlockSubsequents(EThread::Type currentThread = EThread::UNKNOWN_THREAD);
 
-    void          wait(EThread::Type currentThread = EThread::UNKNOWN_THREAD);
+    void          Wait(EThread::Type currentThread = EThread::UNKNOWN_THREAD);
     GraphEventRef getHandle() {
         return this;
     }
@@ -107,7 +107,7 @@ public:
 
 public:
     friend class Constructor;
-    virtual void executeTasks(std::vector<BaseGraphTask*>& tasks, EThread::Type currentThread) override {
+    virtual void ExecuteTasks(std::vector<BaseGraphTask*>& tasks, EThread::Type currentThread) override {
 
         TaskType& task = *(TaskType*)&taskSlot;
 
@@ -116,24 +116,24 @@ public:
 
         {
             std::atomic_thread_fence(std::memory_order_acq_rel);
-            m_subsequents->tryUnlockSubsequents(tasks, currentThread);
+            m_subsequents->TryUnlockSubsequents(tasks, currentThread);
         }
 
         destroyTask();
     };
     void dispatch(EThread::Type currentThread = EThread::UNKNOWN_THREAD) {
-        conditionalQueueTask(currentThread, true);
+        ConditionalQueueTask(currentThread, true);
     }
     virtual void destroyTask() override {
         delete this;
     }
-    static Constructor CreateTask(GraphEventRef subsequents, const GraphEventArray* graphEvents = nullptr, EThread::Type currentThread = EThread::UNKNOWN_THREAD) {
-        int eventCount = graphEvents == nullptr ? 0 : graphEvents->size();
-        return Constructor(new GraphTask(subsequents, eventCount), graphEvents, currentThread);
+    static Constructor CreateTask(GraphEventRef subsequents, const GraphEventArray* preRequests = nullptr, EThread::Type currentThread = EThread::UNKNOWN_THREAD) {
+        int eventCount = preRequests == nullptr ? 0 : preRequests->size();
+        return Constructor(new GraphTask(subsequents, eventCount), preRequests, currentThread);
     }
-    static Constructor CreateTask(const GraphEventArray* graphEvents = nullptr, EThread::Type currentThread = EThread::UNKNOWN_THREAD) {
-        int eventCount = graphEvents == nullptr ? 0 : graphEvents->size();
-        return Constructor(new GraphTask(GraphEvent::CreateGraphEvent(), eventCount), graphEvents, currentThread);
+    static Constructor CreateTask(const GraphEventArray* preRequests = nullptr, EThread::Type currentThread = EThread::UNKNOWN_THREAD) {
+        int eventCount = preRequests == nullptr ? 0 : preRequests->size();
+        return Constructor(new GraphTask(GraphEvent::CreateGraphEvent(), eventCount), preRequests, currentThread);
     }
     GraphEventRef GetCompletionEvent() { return m_subsequents; };
 
@@ -150,12 +150,12 @@ private:
         if (prerequests != nullptr) {
             for (int32_t i = 0; i < prerequests->size(); i++) {
                 GraphEvent* _event = (*prerequests)[i].Get();
-                if (_event == nullptr || !_event->addSubsequent(this)) {
+                if (_event == nullptr || !_event->AddSubsequent(this)) {
                     completed_prerequestCount++;
                 }
             }
         }
-        prerequestsComplete(currentThread, completed_prerequestCount, unlock);
+        PrerequestsComplete(currentThread, completed_prerequestCount, unlock);
         return prevent_deconstruct;
     }
 
@@ -188,7 +188,7 @@ public:
         return m_threadToReturn;
     }
     void Fire(EThread::Type _threadToReturn, const GraphEventRef& _event) {
-        TaskGraph::getInterface().returnThread(m_threadToReturn);
+        TaskGraph::GetInterface().ReturnThread(m_threadToReturn);
     }
 
 private:

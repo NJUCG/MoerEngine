@@ -15,6 +15,7 @@ public:
         EGameThread,
         ERenderThread,
         ERHIThread,
+        EUIThread,
         NamedThreadCount,
         EAnyThread,
         INDEX_MASK          = 0xff,
@@ -35,39 +36,39 @@ public:
         AnyThread_NormalPri = UNKNOWN_THREAD | NORMAL_PRI,
         AnyThread_LowPri    = UNKNOWN_THREAD | LOW_PRI
     };
-    static ThreadIndex getThreadIndex(EThread::Type type) {
+    static ThreadIndex GetThreadIndex(EThread::Type type) {
         return type & INDEX_MASK;
     }
-    static QueueIndex getQueueIndex(EThread::Type type) {
+    static QueueIndex GetQueueIndex(EThread::Type type) {
         return (type & LOCAL_QUEUE) >> QUEUE_MASK_SHEFT;
     }
-    static ThreadPriority getThreadPriority(EThread::Type type) {
+    static ThreadPriority GetThreadPriority(EThread::Type type) {
         return (type & PRIORITY_MASK) >> PRIORITY_SHEFT;
     }
-    static bool isUnKnownThread(EThread::Type type) {
+    static bool IsUnKnownThread(EThread::Type type) {
         return (type & INDEX_MASK) == UNKNOWN_THREAD;
     }
-    static EThread::Type setPriority(EThread::Type type, ThreadPriority priority) {
+    static EThread::Type SetPriority(EThread::Type type, ThreadPriority priority) {
         assert(priority <= LOW_PRI);
         return Type((type & ~PRIORITY_MASK) | (priority & PRIORITY_MASK));
     }
-    static EThread::Type setThreadIndex(EThread::Type type, ThreadIndex index) {
+    static EThread::Type SetThreadIndex(EThread::Type type, ThreadIndex index) {
         assert(index < INDEX_MASK);
         return Type((type & ~INDEX_MASK) | (INDEX_MASK & index));
     }
 };
-std::string getPriorityStr(int32_t priority);
+std::string GetPriorityStr(int32_t priority);
 //thread executing structure
 class Runnable;
 //actual thread
 class RunnableThread;
+//thread manager for runnable thread registration
 class ThreadManager {
     friend class TaskGraph;
 
 public:
-    static uint32_t g_gameThreadID;
-    static uint32_t g_renderThreadID;
-    static uint32_t g_rhiThreadID;
+    static uint32_t g_game_thread_id;
+    static uint32_t g_render_thread_id;
     ~ThreadManager();
 
 private:
@@ -79,23 +80,22 @@ private:
 public:
     void                  AddThread(uint32_t id, RunnableThread*);
     void                  RemoveThread(RunnableThread*);
-    inline int32_t        getNum() { return m_threads.size(); }
-    void                  tick();
+    inline int32_t        GetNum() { return m_threads.size(); }
+    void                  Tick();
     static ThreadManager& Instance();
-    static std::string    getThreadName(uint32_t id) {
+    static std::string    GetThreadName(uint32_t id) {
 
-        if (id == g_gameThreadID) return "GameThread";
-        if (id == g_renderThreadID) return "RenderThread";
-        if (id == g_rhiThreadID) return "RHIThread";
-        return Instance().getRunnableThreadName(id);
+        if (id == g_game_thread_id) return "GameThread";
+        if (id == g_render_thread_id) return "RenderThread";
+        return Instance().GetRunnableThreadName(id);
     }
-    static uint32_t getCurrentThreadID();
+    static uint32_t GetCurrentThreadID();
 
 private:
-    void                                shutDown();
-    RunnableThread*                     getRunnableThread(uint32_t id);
+    void                                ShutDown();
+    RunnableThread*                     GetRunnableThread(uint32_t id);
     std::map<uint32_t, RunnableThread*> m_threads;
-    std::string                         getRunnableThreadName(uint32_t id);
+    std::string                         GetRunnableThreadName(uint32_t id);
 };
 
 class RunnableThread {
@@ -103,22 +103,26 @@ class RunnableThread {
     friend class TaskGraph;
 
 public:
-    static RunnableThread* create(Runnable*   runnable,
+    static RunnableThread* Create(Runnable*   runnable,
                                   std::string name,
                                   uint64_t    affinity_mask);
-    void                   tick();
-    void                   join() { m_thread->join(); }
-    void                   detach() { m_thread->detach(); }
-    bool                   joinable() { return m_thread->joinable(); }
-    void                   waitUntilFinished();
+    virtual ~RunnableThread();
+    void Tick();
+    void Join() {
+        if (m_thread->joinable()) m_thread->join();
+        m_thread = nullptr;
+    }
+    void Detach() { m_thread->detach(); }
+    bool Joinable() { return m_thread->joinable(); }
+    void WaitUntilFinished();
 
     inline const std::string& getName() { return name; }
 
 protected:
-    void setup(uint64_t affinity);
+    void Setup(uint64_t affinity);
     RunnableThread(Runnable*,
                    std::string name);
-    uint32_t run();
+    uint32_t Run();
 
 private:
     Runnable*    m_runnable;
@@ -131,11 +135,11 @@ private:
 
 class Runnable {
 public:
-    virtual uint32_t    run()      = 0;
-    virtual void        init()     = 0;
-    virtual void        stop()     = 0;
-    virtual void        exit()     = 0;
-    virtual ThreadIndex getIndex() = 0;
+    virtual uint32_t    Run()      = 0;
+    virtual void        Init()     = 0;
+    virtual void        Stop()     = 0;
+    virtual void        Exit()     = 0;
+    virtual ThreadIndex GetIndex() = 0;
 
 protected:
     bool m_stop;
@@ -143,10 +147,10 @@ protected:
 
 class TestRunnanble : public Runnable {
 public:
-    virtual uint32_t    run() override;
-    virtual void        init() override;
-    virtual void        stop() override;
-    virtual void        exit() override;
-    virtual ThreadIndex getIndex() override { return 0; }
+    virtual uint32_t    Run() override;
+    virtual void        Init() override;
+    virtual void        Stop() override;
+    virtual void        Exit() override;
+    virtual ThreadIndex GetIndex() override { return 0; }
 };
 #endif// !THREAD_MANAGER_H

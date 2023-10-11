@@ -1,14 +1,19 @@
 #ifndef RHI_RESOURCE_H
 #define RHI_RESOURCE_H
-#include "RHICommon.h"
+#include "rhi/RHICommon.h"
 #include "API_Macro.h"
-#include "RHIResourceInitilizer.h"
+#include "rhi/RHIResourceInitilizer.h"
 #include "PixelFormat.h"
+#include <array>
 #include <cassert>
 #include <atomic>
+#include "RenderCommon.h"
+#include "misc/Ptr.h"
 #include "misc/StatQueue.h"
+#include <cstddef>
 #include <unordered_set>
 #include "misc/CountableRef.h"
+#include "rhi/RHICommon.h"
 #include <string>
 #include <optional>
 #include <bitset>
@@ -18,7 +23,7 @@ class RHICommandListBase;
 class RHITexture;
 class RHIAmplificationShader;
 class RHIBlendState;
-class RHIShaderBoundState;
+class RHIShaderBoundStateInput;
 class RHIBuffer;
 class RHIComputePipelineState;
 class RHIComputeShader;
@@ -46,18 +51,17 @@ class RHIShaderResourceView;
 class RHIStagingBuffer;
 class RHITexture;
 class RHITextureReference;
-class RHIUniformBuffer;
+class RHIGlobalBufferLayout;
+class RHIGlobalBuffer;
 class RHIUnorderedAccessView;
 class RHIVertexInputState;
 class RHIVertexShader;
 class RHIViewableResource;
 class RHIViewport;
 
-struct RHIUniformBufferLayout;
-
 using RHIAmplificationShaderRef       = CountableRef<RHIAmplificationShader>;
 using RHIBlendStateRef                = CountableRef<RHIBlendState>;
-using RHIShaderBoundStateRef          = CountableRef<RHIShaderBoundState>;
+using RHIShaderBoundStateRef          = CountableRef<RHIShaderBoundStateInput>;
 using RHIBufferRef                    = CountableRef<RHIBuffer>;
 using RHIComputePipelineStateRef      = CountableRef<RHIComputePipelineState>;
 using RHIComputeShaderRef             = CountableRef<RHIComputeShader>;
@@ -84,7 +88,8 @@ using RHIShaderResourceViewRef        = CountableRef<RHIShaderResourceView>;
 using RHIStagingBufferRef             = CountableRef<RHIStagingBuffer>;
 using RHITextureRef                   = CountableRef<RHITexture>;
 using RHITextureReferenceRef          = CountableRef<RHITextureReference>;
-using RHIUniformBufferRef             = CountableRef<RHIUniformBuffer>;
+using RHIGlobalBufferLayoutRef        = CountableRef<RHIGlobalBufferLayout>;
+using RHIGlobalBufferRef              = CountableRef<RHIGlobalBuffer>;
 using RHIUnorderedAccessViewRef       = CountableRef<RHIUnorderedAccessView>;
 using RHIVertexInputStateRef          = CountableRef<RHIVertexInputState>;
 using RHIVertexShaderRef              = CountableRef<RHIVertexShader>;
@@ -153,7 +158,6 @@ public:
     bool IsValid() const { return flags.IsValid(std::memory_order_relaxed); }
     void Delete() {
         if (flags.MarkToDelete(std::memory_order_acquire)) {
-            g_current_deleting = this;
             delete this;
         }
     }
@@ -226,8 +230,6 @@ private:
     ERHIResourceType type;
     //for const resource state change
     mutable ResourceAtomicFlags flags;
-    //todo: unknown purposes
-    static RHIResource* g_current_deleting;
 };
 
 class RHISampler : public RHIResource {
@@ -262,10 +264,10 @@ public:
     //    virtual bool GetInitializer(struct RHIBlendStateInitializer& _init) { return false; }
 };
 
-class RHIVertexDescription : public RHIResource {
-public:
-    explicit RHIVertexDescription() : RHIResource(RRT_VERTEX_STATE_INITIALIZER) {}
-};
+//class RHIVertexDescription : public RHIResource {
+//public:
+//    explicit RHIVertexDescription() : RHIResource(RRT_VERTEX_STATE_INITIALIZER) {}
+//};
 
 class RHIPipelineShaderBindingState : public RHIResource {
 public:
@@ -375,22 +377,63 @@ public:
 
 #pragma endregion
 
-#pragma region uniform buffer definitions
+#pragma region global buffer definitions
 /* todo: specification of fields */
-class RHIUniformBufferLayout : public RHIResource {
+struct RHIGlobalBufferResourceInitializer {
+
+    uint16_t member_offset;
+
+    /** Type of the member that allow (). */
+    EShaderBindingBaseType member_type;
+    uint8_t                padding;
+
+    /** Compare two uniform buffer layout resources. */
+    friend inline bool operator==(const RHIGlobalBufferResourceInitializer& A, const RHIGlobalBufferResourceInitializer& B) {
+        return A.member_offset == B.member_offset && A.member_type == B.member_type;
+    }
+};
+struct RHIGlobalBufferLayoutInitializer {
+    RHIGlobalBufferLayoutInitializer() = default;
+    explicit RHIGlobalBufferLayoutInitializer(const char* _name, uint32_t _buffer_size = 0) : name(_name), buffer_size(_buffer_size) {
+    }
+    uint32_t    buffer_size;
+    const char* name;
+
+private:
+    void ComputeHash() {
+        //todo
+    }
+
+    uint32_t hash = 0;
+
 public:
-    RHIUniformBufferLayout() : RHIResource(RRT_UNIFORM_BUFFER_LAYOUT) {}
+    std::vector<RHIGlobalBufferResourceInitializer> inline_resources;
+    std::vector<RHIGlobalBufferResourceInitializer> reference_resources;
+
+    uint32_t                       constant_buffer_size;
+    uint16_t                       attachments_offset = std::numeric_limits<uint16_t>::max();
+    GlobalBufferStaticBindingPoint static_slot        = MAX_GLOBAL_BUFFER_GLOBAL_BINDING_POINT;
+
+    EGlobalBufferBindingFlags binding_flags = EGlobalBufferBindingFlags::CONSTANT;
+
+    friend inline bool operator==(const RHIGlobalBufferLayoutInitializer& lhs, const RHIGlobalBufferLayoutInitializer& rhs) {
+        return lhs.constant_buffer_size == rhs.constant_buffer_size && lhs.static_slot == rhs.static_slot && lhs.binding_flags == rhs.binding_flags && lhs.inline_resources == rhs.inline_resources;
+    }
+};
+class RHIGlobalBufferLayout : public RHIResource {
+public:
+    RHIGlobalBufferLayout() : RHIResource(RRT_GLOBAL_BUFFER_LAYOUT) {}
 };
 
-/* ConstBuffer in dx12, Uniform Buffer in Vulkan, created using RHIUniformBufferLayout */
-class RHIUniformBuffer : public RHIResource {
+/* Buffer for global shader usage, created using RHIGlobalBufferLayout */
+class RHIGlobalBuffer : public RHIResource {
 public:
-    RHIUniformBuffer() : RHIResource(RRT_UNIFORM_BUFFER) {}
-    explicit RHIUniformBuffer(const RHIUniformBufferLayout& _layout){};
+    RHIGlobalBuffer() : RHIResource(RRT_GLOBAL_BUFFER) {}
+    explicit RHIGlobalBuffer(const RHIGlobalBufferLayout& _layout){};
 };
 
 template<typename TBufferStruct>
-class TUniformBufferRef : public RHIUniformBufferRef {
+class TUniformBufferRef : public RHIGlobalBufferRef {
 
 public:
     /** Initializes the reference to null. */
@@ -412,8 +455,8 @@ public:
 
 private:
     /** A private constructor used to coerce an arbitrary RHI uniform buffer reference to a structured reference. */
-    TUniformBufferRef(RHIUniformBuffer* InRHIRef)
-        : RHIUniformBufferRef(InRHIRef) {}
+    TUniformBufferRef(RHIGlobalBuffer* _buffer_ref)
+        : RHIGlobalBufferRef(_buffer_ref) {}
 
     template<typename TBufferStruct2>
     friend class TUniformBuffer;
@@ -633,7 +676,7 @@ struct RHITextureCreateInfo : public RHITextureInfo {
         usage |= _usage;
         return *this;
     }
-    RHITextureCreateInfo& SetClearAttachment(RHIClearAttachment& _attachment) {
+    RHITextureCreateInfo& SetClearAttachment(RHIClearAttachment _attachment) {
         clear_attachment = _attachment;
         return *this;
     }
@@ -1083,7 +1126,7 @@ struct RHIViewInfo::TextureUAV::ViewInfo : public RHIViewInfo::Texture::ViewInfo
 static_assert(sizeof(RHIViewInfo) == 16, "Packing of RHIViewInfo is unexpected.");
 
 //for rhi CommandList to create BufferSRV
-struct RHIViewInfo::BufferSRV::Initializer : private RHIViewInfo {
+struct RHIViewInfo::BufferSRV::Initializer : public RHIViewInfo {
     friend RHIViewInfo;
     friend RHICommandListBase;
 
@@ -1122,7 +1165,7 @@ public:
 };
 
 //for rhi CommandList to create BufferUAV
-struct RHIViewInfo::BufferUAV::Initializer : private RHIViewInfo {
+struct RHIViewInfo::BufferUAV::Initializer : public RHIViewInfo {
     friend RHIViewInfo;
     friend RHICommandListBase;
 
@@ -1161,7 +1204,7 @@ public:
 };
 
 //for rhi CommandList to create TextureSRV
-struct RHIViewInfo::TextureSRV::Initializer : private RHIViewInfo {
+struct RHIViewInfo::TextureSRV::Initializer : public RHIViewInfo {
     friend RHIViewInfo;
     friend RHICommandListBase;
 
@@ -1197,7 +1240,7 @@ public:
 };
 
 //for rhi CommandList to create TextureSRV
-struct RHIViewInfo::TextureUAV::Initializer : private RHIViewInfo {
+struct RHIViewInfo::TextureUAV::Initializer : public RHIViewInfo {
     friend RHIViewInfo;
     friend RHICommandListBase;
 
@@ -1416,19 +1459,19 @@ private:
     EAttachmentStoreOp stencil_store_op;
 };
 
-struct RHIShaderBoundState {
+struct RHIShaderBoundStateInput {
 
-    RHIShaderBoundState() = default;
-    RHIShaderBoundState(
-        RHIVertexDescription* _vertex_description,
-        RHIVertexShader*      _vertex_shader,
-        RHIFragmentShader*    _fragment_shader,
-        RHIGeometryShader*    _geometry_shader)
-        : p_vertex_description(_vertex_description),
+    RHIShaderBoundStateInput() = default;
+    RHIShaderBoundStateInput(
+        RHIVertexInputState* _vertex_input_state,
+        RHIVertexShader*     _vertex_shader,
+        RHIFragmentShader*   _fragment_shader,
+        RHIGeometryShader*   _geometry_shader)
+        : p_vertex_input_state(_vertex_input_state),
           p_fragment_shader(_fragment_shader),
           p_geometry_shader(_geometry_shader) {}
 
-    RHIShaderBoundState(
+    RHIShaderBoundStateInput(
         RHIFragmentShader*      _fragment_shader,
         RHIMeshShader*          _mesh_shader,
         RHIAmplificationShader* _amplification_shader)
@@ -1451,15 +1494,156 @@ struct RHIShaderBoundState {
     void SetAmplificationShader(RHIAmplificationShader* _amplification_shader) { p_amplification_shader = _amplification_shader; }
     //fields
 
-    RHIVertexDescription* p_vertex_description = nullptr;
-    RHIVertexShader*      p_vertex_shader      = nullptr;
-    RHIFragmentShader*    p_fragment_shader    = nullptr;
-    RHIGeometryShader*    p_geometry_shader    = nullptr;
+    RHIVertexInputState* p_vertex_input_state = nullptr;
+    RHIVertexShader*     p_vertex_shader      = nullptr;
+    RHIFragmentShader*   p_fragment_shader    = nullptr;
+    RHIGeometryShader*   p_geometry_shader    = nullptr;
 
     //todo: query support for mesh shaders
     RHIMeshShader*          p_mesh_shader          = nullptr;
     RHIAmplificationShader* p_amplification_shader = nullptr;
 };
+
+//for shader parameter binding usage
+struct ColorAttachmementBinding {
+    ColorAttachmementBinding() = default;
+
+    ColorAttachmementBinding(RHITexture* _texture, EAttachmentLoadOp _load_op, uint8_t _mip_index, uint8_t _array_index)
+        : texture(_texture),
+          load_op(_load_op),
+          mip_index(_mip_index),
+          array_index(_array_index) {}
+
+    ColorAttachmementBinding(RHITexture* _texture, RHITexture* _resolve_texture, EAttachmentLoadOp _load_op, uint8_t _mip_index, uint8_t _array_index)
+        : texture(_texture),
+          resolve_texture(_resolve_texture),
+          load_op(_load_op),
+          mip_index(_mip_index),
+          array_index(_array_index) {}
+    RHITexture* GetTexture() const {
+        return texture;
+    }
+    RHITexture* GetResolveTexture() const {
+        return resolve_texture;
+    }
+    EAttachmentLoadOp GetLoadOp() const {
+        return load_op;
+    }
+    uint8_t GetMipIndex() const {
+        return mip_index;
+    }
+    uint8_t GetArrayIndex() const {
+        return array_index;
+    }
+
+    void SetTexture(RHITexture* _texture) {
+        texture = _texture;
+    }
+    void SetResolveTexture(RHITexture* _resolve_texture) {
+        resolve_texture = _resolve_texture;
+    }
+    void SetLoadOp(EAttachmentLoadOp _load_op) {
+        load_op = _load_op;
+    }
+    void SetMipIndex(uint8_t _mip_index) {
+        mip_index = _mip_index;
+    }
+    void SetArrayIndex(uint16_t _array_index) {
+        array_index = _array_index;
+    }
+
+private:
+    ShaderParameterPtr<RHITexture*> texture         = nullptr;
+    ShaderParameterPtr<RHITexture*> resolve_texture = nullptr;
+    EAttachmentLoadOp               load_op         = EAttachmentLoadOp::NONE;
+    uint8_t                         mip_index       = 0;
+    uint16_t                        array_index     = 0;
+};
+static_assert(sizeof(ColorAttachmementBinding) == 24);
+
+struct DepthStencilBinding {
+    DepthStencilBinding() = default;
+
+    inline DepthStencilBinding(RHITexture*       _texture,
+                               EAttachmentLoadOp _depth_load_op,
+                               EAttachmentLoadOp _stencil_load_op)
+        : texture(_texture),
+          depth_load_op(_depth_load_op),
+          stencil_load_op(_stencil_load_op) {}
+
+    RHITexture* GetTexture() const {
+        return texture;
+    }
+    EAttachmentLoadOp GetDepthLoadOp() const {
+        return depth_load_op;
+    }
+    EAttachmentLoadOp GetStencilLoadOp() const {
+        return stencil_load_op;
+    }
+    void SetDepthTexture(RHITexture* _texture) {
+        texture = _texture;
+    }
+    void SetDepthLoadOp(EAttachmentLoadOp _depth_load_op) {
+        depth_load_op = _depth_load_op;
+    }
+
+    void SetStencilLoadOp(EAttachmentLoadOp _stencil_load_op) {
+        stencil_load_op = _stencil_load_op;
+    }
+
+private:
+    ShaderParameterPtr<RHITexture*> texture         = nullptr;
+    EAttachmentLoadOp               depth_load_op   = EAttachmentLoadOp::NONE;
+    EAttachmentLoadOp               stencil_load_op = EAttachmentLoadOp::NONE;
+};
+static_assert(sizeof(ShaderParameterPtr<RHITexture*>) % SHADER_PARAMETER_PTR_ALIGNMENT == 0);
+
+struct alignas(SHADER_PARAMETER_STRUCTURE_ALIGNMENT) AttachmentBindingSlots {
+
+    ColorAttachmementBinding& operator[](uint32_t _index) {
+        return color_attachments_binding[_index];
+    }
+
+    const ColorAttachmementBinding& operator[](uint32_t index) const {
+        return color_attachments_binding[index];
+    }
+    template<typename Lambda>
+    void ForEachColorAttachment(Lambda lambda) {
+        for (auto& color_attachment : color_attachments_binding) {
+            if (color_attachment.GetTexture() == nullptr) {
+                break;
+            }
+            lambda(color_attachment);
+        }
+    }
+
+    template<typename Lambda>
+    void ForEachColorAttachment(Lambda lambda) const {
+        for (auto& color_attachment : color_attachments_binding) {
+            if (color_attachment.GetTexture() == nullptr) {
+                break;
+            }
+            lambda(color_attachment);
+        }
+    }
+
+    uint32_t GetColorAttachmentCount() const {
+        uint32_t count = 0;
+        for (; count < MAX_PASS_ATTACHMENT_COUNT && color_attachments_binding[count].GetTexture() != nullptr; count++) {
+        }
+        return count;
+    }
+
+    std::array<ColorAttachmementBinding, MAX_PASS_ATTACHMENT_COUNT> color_attachments_binding;
+    DepthStencilBinding                                             depth_stencil_binding;
+    Rect2D                                                          resolve_rect;
+
+    SubpassSettings subpass_settings;
+    uint8_t         multi_view_count;
+    RHITexture*     shading_rate_texture = nullptr;
+};
+static_assert(sizeof(AttachmentBindingSlots) == 240);
+static_assert(offsetof(AttachmentBindingSlots, depth_stencil_binding) == 192);
 
 struct GraphicsPipelineAttachmentInfo {
     GraphicsPipelineAttachmentInfo()
@@ -1485,19 +1669,6 @@ struct GraphicsPipelineAttachmentInfo {
      * */
     bool b_has_fragment_density_attachment = false;
 };
-
-struct SubpassSettings {
-
-    bool operator==(const SubpassSettings& other) const {
-        return type == other.type && index == other.index;
-    }
-    enum Type : uint8_t {
-        NONE,
-        DEFERRED
-    } type        = NONE;
-    uint8_t index = 0;
-};
-static_assert(sizeof(SubpassSettings) == 2);
 
 class RHIGraphicsPipelineStateInitializer {
 public:
@@ -1526,7 +1697,7 @@ public:
           hash_key(0) {}
 
     RHIGraphicsPipelineStateInitializer(
-        RHIShaderBoundState       _shader_stage,
+        RHIShaderBoundStateInput  _shader_stage,
         RHIBlendState*            _blend_state,
         RHIRasterizationState*    _rasterizer_state,
         RHIDepthStencilState*     _depth_stencil_state,
@@ -1586,7 +1757,7 @@ public:
     }
 
     bool operator==(const RHIGraphicsPipelineStateInitializer& other) const {
-        return shader_stage.p_vertex_description == other.shader_stage.p_vertex_description && shader_stage.p_vertex_shader == other.shader_stage.p_vertex_shader && shader_stage.p_fragment_shader == other.shader_stage.p_fragment_shader && shader_stage.GetMeshShader() == other.shader_stage.GetMeshShader() && shader_stage.GetGeometryShader() == other.shader_stage.GetGeometryShader() && shader_stage.GetAmplificationShader() == other.shader_stage.GetAmplificationShader() && blend_state == other.blend_state && rasterizer_state == other.rasterizer_state && depth_stencil_state == other.depth_stencil_state && primitive_topology == other.primitive_topology && b_depth_bound == other.b_depth_bound && multi_view_count == other.multi_view_count && shading_rate == other.shading_rate && b_has_fragment_density_attachments == other.b_has_fragment_density_attachments && color_attachment_count == other.color_attachment_count && color_attachment_formats == other.color_attachment_formats && IsSameColorAttachmentArray(color_attachment_flags, other.color_attachment_flags) && depth_stencil_format == other.depth_stencil_format && IsSameDepthAttachmentInPSO(depth_stencil_flag, other.depth_stencil_flag) && depth_attachment_load_op == other.depth_attachment_load_op && depth_attachment_store_op == other.depth_attachment_store_op && stencil_attachment_load_op == other.stencil_attachment_load_op && stencil_attachment_store_op == other.stencil_attachment_store_op && num_samples == other.num_samples && subpass_settings == other.subpass_settings;
+        return shader_stage.p_vertex_input_state == other.shader_stage.p_vertex_input_state && shader_stage.p_vertex_shader == other.shader_stage.p_vertex_shader && shader_stage.p_fragment_shader == other.shader_stage.p_fragment_shader && shader_stage.GetMeshShader() == other.shader_stage.GetMeshShader() && shader_stage.GetGeometryShader() == other.shader_stage.GetGeometryShader() && shader_stage.GetAmplificationShader() == other.shader_stage.GetAmplificationShader() && blend_state == other.blend_state && rasterizer_state == other.rasterizer_state && depth_stencil_state == other.depth_stencil_state && primitive_topology == other.primitive_topology && b_depth_bound == other.b_depth_bound && multi_view_count == other.multi_view_count && shading_rate == other.shading_rate && b_has_fragment_density_attachments == other.b_has_fragment_density_attachments && color_attachment_count == other.color_attachment_count && color_attachment_formats == other.color_attachment_formats && IsSameColorAttachmentArray(color_attachment_flags, other.color_attachment_flags) && depth_stencil_format == other.depth_stencil_format && IsSameDepthAttachmentInPSO(depth_stencil_flag, other.depth_stencil_flag) && depth_attachment_load_op == other.depth_attachment_load_op && depth_attachment_store_op == other.depth_attachment_store_op && stencil_attachment_load_op == other.stencil_attachment_load_op && stencil_attachment_store_op == other.stencil_attachment_store_op && num_samples == other.num_samples && subpass_settings == other.subpass_settings;
     }
 
     uint32_t CalcValidColorAttachmentCount() const {
@@ -1603,10 +1774,10 @@ public:
         return color_attachment_count;
     }
 
-    RHIShaderBoundState    shader_stage;
-    RHIBlendState*         blend_state;
-    RHIRasterizationState* rasterizer_state;
-    RHIDepthStencilState*  depth_stencil_state;
+    RHIShaderBoundStateInput shader_stage;
+    RHIBlendState*           blend_state;
+    RHIRasterizationState*   rasterizer_state;
+    RHIDepthStencilState*    depth_stencil_state;
 
     EPrimitiveTopology primitive_topology;
     uint32_t           color_attachment_count;
@@ -1708,26 +1879,6 @@ struct ViewPort {
     float height;
     float minDepth;
     float maxDepth;
-};
-struct Rect2D {
-    Offset2D offset;
-    Extent2D extent;
-
-    Rect2D(int32_t offset_x = -1, int32_t offset_y = -1, uint32_t extent_x = 0, uint32_t extent_y = 0)
-        : offset{offset_x, offset_y},
-          extent(extent_x, extent_y) {}
-
-    bool operator==(Rect2D other) const {
-        return offset == other.offset && extent == other.extent;
-    }
-
-    bool operator!=(Rect2D Other) const {
-        return !(*this == Other);
-    }
-
-    bool IsValid() const {
-        return offset.x >= 0 && offset.y >= 0 && extent.width > 0 && extent.height > 0;
-    }
 };
 
 /* struct for RenderPassInfo Only, constructed by texture_view and Pass-Required texture layout */
@@ -2032,7 +2183,7 @@ enum ERayTracingGeometryType : uint8_t {
 };
 enum class ERayTracingGeometryFlags : uint8_t {
     NONE,
-    OPAQUE                          = 1 << 0,
+    GEOMETRY_OPAQUE                 = 1 << 0,
     NO_DUPLICATE_ANY_HIT_INVOCATION = 1 << 1
 };
 enum class ERayTracingInstanceFlags : uint8_t {

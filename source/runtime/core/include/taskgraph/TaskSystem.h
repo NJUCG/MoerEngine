@@ -2,15 +2,14 @@
 #define TASK_SYSTEM_H
 
 #include "TaskGraph.h"
-namespace __ENGINE_NAME__ {
-	class TaskSystem {
-	public:
-		TaskSystem() = default;
-		~TaskSystem() {}
-		static void init();
-		static void shutDown();
+namespace Moer {
+    class TaskSystem {
+    public:
+        TaskSystem() = default;
+        ~TaskSystem() {}
+        static void Init();
+        static void ShutDown();
+    };
+}// namespace Moer
 
-	};
-}
-
-#endif // !TASK_SYSTEM_H
+#endif// !TASK_SYSTEM_H
