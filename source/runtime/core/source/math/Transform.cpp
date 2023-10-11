@@ -72,8 +72,17 @@ namespace Moer {
         matrix = Moer::MakeLookatViewMatrixRH(origin, look_at, up_dir);
     }
 
+    Transform::Transform(const Moer::Angle& fov_y, float aspect_ratio, float near_clip, float far_clip) noexcept {
+        matrix = Moer::MakePerspectiveMatrixRH(fov_y.GetRadian(), aspect_ratio, near_clip, far_clip);
+    }
+
     void Transform::AppendTransformation(const Transform& new_transform) noexcept {
         matrix = new_transform.matrix * matrix;
+    }
+    Transform Transform::operator*(const Transform& rhs) const noexcept {
+        Transform ret;
+        ret.matrix = matrix * rhs.matrix;
+        return ret;
     }
 
     Matrix3x4f Transform::GetMatrix3x4() const noexcept {
@@ -90,7 +99,7 @@ namespace Moer {
         return ApproxEqual(matrix.r3, Vector4f(0.f, 0.f, 0.f, 1.f), 0.0001f);
     }
 
-    AffineTransformation Transform::Decomposition() const noexcept {
+    AffineTransformation Transform::AffineDecomposition() const noexcept {
         auto m3x3 = Moer::GetDiagonal3x3(matrix);
 
         Matrix3x3f Q;
@@ -102,6 +111,16 @@ namespace Moer {
         affine_trans.quaternion  = Quaternion(Q);
         affine_trans.scaling     = D;
         affine_trans.translation = Vector3f(matrix.GetColumn(3));
+    }
+
+    Vector4f Transform::operator*(const Vector4f& v) const noexcept {
+        return matrix * v;
+    }
+    Vector3f Transform::operator*(const Vector3f& v) const noexcept {
+        auto  p     = Vector4f(v, 1.f);
+        auto  tp    = matrix * p;
+        float inv_w = 1.f / tp.w;
+        return Vector3f(tp) * inv_w;
     }
 
 }// namespace Moer

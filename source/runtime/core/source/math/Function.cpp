@@ -323,4 +323,27 @@ namespace Moer {
     void QDUDecomposition(const Matrix3x3d& m, Matrix3x3d& Q, Vector3d& D, Vector3d& U) noexcept {
         ::QDUDecomposition(m, Q, D, U);
     }
+
+    Matrix4x4f MakePerspectiveMatrixRH(float fov_y, float aspect_ratio, float near_clip, float far_clip) noexcept {
+        float      tan_half_fov = std::tanf(fov_y * 0.5f);
+        float      inv_tan      = 1.f / tan_half_fov;
+        float      f_range      = far_clip / (near_clip - far_clip);
+        Matrix4x4f perspective;
+        perspective[0][0] = inv_tan / aspect_ratio;
+        perspective[1][1] = inv_tan;
+        perspective[2][2] = f_range;
+        perspective[3][2] = -1.f;
+        perspective[2][3] = -near_clip * f_range;
+    }
+    Matrix4x4d MakePerspectiveMatrixRH(double fov_y, double aspect_ratio, double near_clip, double far_clip) noexcept {
+        double     tan_half_fov = std::tan(fov_y * 0.5f);
+        double     inv_tan      = 1.f / tan_half_fov;
+        double     f_range      = far_clip / (near_clip - far_clip);
+        Matrix4x4d perspective;
+        perspective[0][0] = inv_tan / aspect_ratio;
+        perspective[1][1] = inv_tan;
+        perspective[2][2] = f_range;
+        perspective[3][2] = -1.f;
+        perspective[2][3] = -near_clip * f_range;
+    }
 }// namespace Moer
