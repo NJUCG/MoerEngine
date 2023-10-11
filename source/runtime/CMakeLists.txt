@@ -1,4 +1,4 @@
-set(target_name MoerRuntime)
+set(target_name MoerEngineRuntime)
 set(moer_runtime_dir ${moer_source_dir}/runtime)
 
 set(moer_runtime_core_dir ${moer_runtime_dir}/core)
