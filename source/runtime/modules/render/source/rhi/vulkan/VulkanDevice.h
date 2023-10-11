@@ -5,9 +5,11 @@
 #ifndef VULKAN_DEVICE_H
 #define VULKAN_DEVICE_H
 
-#include <vulkan.h>
-#include <vk_mem_alloc.h>
+#include "rhi/vulkan/misc/VulkanTypeDefs.h"
 
+#include <vulkan.h>
+
+#include <optional>
 #include <vector>
 #include <map>
 
@@ -25,7 +27,7 @@ struct DeviceInitializer {
     VkPhysicalDeviceType     gpu_type           = VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
     VkSurfaceKHR             surface            = nullptr;
     VkPhysicalDeviceFeatures enabled_features   = {};
-    std::vector<const char*> enabled_extensions = {};
+    std::vector<std::string> enabled_extensions = {};
     void*                    p_next_chain       = nullptr;
 };
 
@@ -53,7 +55,7 @@ public:
     inline VkPhysicalDeviceMemoryProperties GetMemoryProperties() const {
         return m_gpu_mem_props;
     }
-    inline std::vector<const char*> GetGpuExtensions() const {
+    inline TExtensionArray GetGpuExtensions() const {
         return m_gpu_extensions;
     }
     inline QueueFamilyIndices GetQueueFamilyIndices() const {
@@ -71,38 +73,33 @@ public:
     inline VkQueue GetTransferQueue() const {
         return m_transfer_queue;
     }
-    inline VkCommandPool GetCommandPool() const {
-        return m_command_pool;
-    }
 
 private:
     VkPhysicalDevice                 m_gpu;
     VkPhysicalDeviceProperties       m_gpu_props;
     VkPhysicalDeviceFeatures         m_gpu_features;
     VkPhysicalDeviceMemoryProperties m_gpu_mem_props;
-    std::vector<const char*>         m_gpu_extensions;
+    TExtensionArray                  m_gpu_extensions;
     QueueFamilyIndices               m_queue_family_indices;
 
-    VkDevice      m_device;
-    VmaAllocator  m_allocator;
-    VkQueue       m_graphics_queue;
-    VkQueue       m_present_queue;
-    VkQueue       m_compute_queue;
-    VkQueue       m_transfer_queue;
-    VkCommandPool m_command_pool;
+    VkDevice m_device;
+    VkQueue  m_graphics_queue;
+    VkQueue  m_present_queue;
+    VkQueue  m_compute_queue;
+    VkQueue  m_transfer_queue;
 
 private:
-    VkPhysicalDevice SelectGpu(VkInstance _instance, VkPhysicalDeviceType _type, VkSurfaceKHR _surface, const std::vector<const char*>& _enabled_extensions);
+    VkPhysicalDevice SelectGpu(VkInstance _instance, VkPhysicalDeviceType _type, VkSurfaceKHR _surface, const TExtensionArray& _enabled_extensions);
 
     void CreateDevice(const DeviceInitializer& _initializer);
 
-    std::vector<const char*>         GetGpuExtensions(VkPhysicalDevice _gpu) const;
+    TExtensionArray                  GetGpuExtensions(VkPhysicalDevice _gpu) const;
     VkPhysicalDeviceMemoryProperties GetMemoryProperties(VkPhysicalDevice _gpu) const;
     //    uint32_t                         GetMemoryType(uint32_t type_bits, VkMemoryPropertyFlags properties, VkBool32* mem_type_found = nullptr) const;
     int32_t            GetQueueFamilyIndex(const std::vector<VkQueueFamilyProperties>& queue_family_props, VkQueueFlags _queue_flags) const;
     QueueFamilyIndices QueryQueueFamilyIndices(VkPhysicalDevice _gpu, VkSurfaceKHR _surface) const;
 
-    bool CheckEnabledExtensionsSupported(VkPhysicalDevice _gpu, const std::vector<const char*>& _enabled_extensions) const;
+    bool CheckEnabledExtensionsSupported(VkPhysicalDevice _gpu, const TExtensionArray& _enabled_extensions) const;
 };
 
 #endif// VULKAN_DEVICE_H
