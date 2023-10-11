@@ -1,0 +1,96 @@
+//
+// Created by 74535 on 2023/9/30.
+//
+
+#include "misc/MacroUtils.h"
+#include "VulkanDebug.h"
+#include <sstream>
+#include <spdlog/spdlog.h>
+
+namespace MoerEngine {
+namespace RHI {
+namespace Vulkan {
+
+    PFN_vkCreateDebugUtilsMessengerEXT  Debug::vkCreateDebugUtilsMessengerEXT  = nullptr;
+    PFN_vkDestroyDebugUtilsMessengerEXT Debug::vkDestroyDebugUtilsMessengerEXT = nullptr;
+    VkDebugUtilsMessengerEXT            Debug::debug_utils_messenger           = VK_NULL_HANDLE;
+
+    VKAPI_ATTR VkBool32 VKAPI_CALL Debug::DebugCallback(
+        VkDebugUtilsMessageSeverityFlagBitsEXT      message_severity,
+        VkDebugUtilsMessageTypeFlagsEXT             message_type,
+        const VkDebugUtilsMessengerCallbackDataEXT* p_callback_data,
+        void*                                       p_user_data) {
+
+        std::stringstream stream;
+        stream << "[" << p_callback_data->messageIdNumber << "][" << p_callback_data->pMessageIdName << "]: " << p_callback_data->pMessage << std::endl;
+
+        if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT) {
+            MOER_LOG_DEBUG(stream.str());
+        } else if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT) {
+            MOER_LOG_INFO(stream.str());
+        } else if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
+            MOER_LOG_WARN(stream.str());
+        } else if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
+            MOER_LOG_ERROR(stream.str());
+        }
+
+        return VK_FALSE;
+    }
+
+    void Debug::SetupDebugUtilsMessengerEXT(VkInstance instance) {
+        vkCreateDebugUtilsMessengerEXT  = PFN_vkCreateDebugUtilsMessengerEXT(vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT"));
+        vkDestroyDebugUtilsMessengerEXT = PFN_vkDestroyDebugUtilsMessengerEXT(vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT"));
+
+        if (vkCreateDebugUtilsMessengerEXT == nullptr || vkDestroyDebugUtilsMessengerEXT == nullptr) {
+            assert(false);
+        }
+
+        VkDebugUtilsMessengerCreateInfoEXT debug_utils_messenger_create_info{};
+        debug_utils_messenger_create_info.sType           = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+        debug_utils_messenger_create_info.pNext           = nullptr;
+        debug_utils_messenger_create_info.flags           = 0;
+        debug_utils_messenger_create_info.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+        debug_utils_messenger_create_info.messageType     = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+        debug_utils_messenger_create_info.pfnUserCallback = DebugCallback;
+        debug_utils_messenger_create_info.pUserData       = nullptr;
+
+        assert(vkCreateDebugUtilsMessengerEXT(instance, &debug_utils_messenger_create_info, nullptr, &debug_utils_messenger) == VK_SUCCESS);
+    }
+
+    void Debug::DestroyDebugUtilsMessengerEXT(VkInstance instance) {
+        if (debug_utils_messenger != VK_NULL_HANDLE) {
+            vkDestroyDebugUtilsMessengerEXT(instance, debug_utils_messenger, nullptr);
+        }
+    }
+
+    PFN_vkCmdBeginDebugUtilsLabelEXT  DebugUtils::vkCmdBeginDebugUtilsLabelEXT  = nullptr;
+    PFN_vkCmdEndDebugUtilsLabelEXT    DebugUtils::vkCmdEndDebugUtilsLabelEXT    = nullptr;
+    PFN_vkCmdInsertDebugUtilsLabelEXT DebugUtils::vkCmdInsertDebugUtilsLabelEXT = nullptr;
+
+    void DebugUtils::Setup(VkInstance instance) {
+        vkCmdBeginDebugUtilsLabelEXT  = reinterpret_cast<PFN_vkCmdBeginDebugUtilsLabelEXT>(vkGetInstanceProcAddr(instance, "vkCmdBeginDebugUtilsLabelEXT"));
+        vkCmdEndDebugUtilsLabelEXT    = reinterpret_cast<PFN_vkCmdEndDebugUtilsLabelEXT>(vkGetInstanceProcAddr(instance, "vkCmdEndDebugUtilsLabelEXT"));
+        vkCmdInsertDebugUtilsLabelEXT = reinterpret_cast<PFN_vkCmdInsertDebugUtilsLabelEXT>(vkGetInstanceProcAddr(instance, "vkCmdInsertDebugUtilsLabelEXT"));
+    }
+
+    void DebugUtils::CmdBeginLabel(VkCommandBuffer cmd_buffer, const std::string& caption, glm::vec4 color) {
+        if (!vkCmdBeginDebugUtilsLabelEXT) {
+            return;
+        }
+        VkDebugUtilsLabelEXT label_info{};
+        label_info.sType      = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT;
+        label_info.pLabelName = caption.c_str();
+        memcpy(label_info.color, &color[0], sizeof(float) * 4);
+        vkCmdBeginDebugUtilsLabelEXT(cmd_buffer, &label_info);
+    }
+
+    void DebugUtils::CmdEndLabel(VkCommandBuffer cmd_buffer) {
+        if (!vkCmdEndDebugUtilsLabelEXT) {
+            return;
+        }
+        vkCmdEndDebugUtilsLabelEXT(cmd_buffer);
+    }
+
+}
+}
+}// namespace MoerEngine::RHI::Vulkan
