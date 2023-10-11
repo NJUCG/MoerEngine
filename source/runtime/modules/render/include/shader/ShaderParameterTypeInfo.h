@@ -1,13 +1,15 @@
 #ifndef MOREENGINE_SHADER_PARAM_TYPE_INFO
 #define MOREENGINE_SHADER_PARAM_TYPE_INFO
 
-#include <array>
-#include <cstdint>
 #include "math/Math.h"
 #include "rhi/RHIResource.h"
 #include "shader/ShaderCommon.h"
 #include "RenderCommon.h"
 #include "misc/Ptr.h"
+
+#include <array>
+#include <cstdint>
+
 template<uint32_t Alignment>
 concept concept_valid_alignment =
     (Alignment == 2 || Alignment == 4 || Alignment == 8 || Alignment == 16) == true;
@@ -110,7 +112,7 @@ struct TShaderParameterTypeInfo<float> {
     static constexpr bool                   b_is_stored_in_constant_buffer = true;
 
     using TParamPtr    = AlignType<float, alignment>;
-    using InstanceType = float4;
+    using InstanceType = Moer::Vector4f;
     static const ShaderParametersMetadata* GetStructMetadata() { return nullptr; }
 };
 
@@ -124,7 +126,7 @@ struct TShaderParameterTypeInfo<int32_t> {
     static constexpr bool                   b_is_stored_in_constant_buffer = true;
 
     using TParamPtr    = AlignType<int32_t, alignment>;
-    using InstanceType = int4;
+    using InstanceType = Moer::Vector4i;
     static const ShaderParametersMetadata* GetStructMetadata() { return nullptr; }
 };
 
@@ -138,12 +140,12 @@ struct TShaderParameterTypeInfo<uint32_t> {
     static constexpr bool                   b_is_stored_in_constant_buffer = true;
 
     using TParamPtr    = AlignType<int32_t, alignment>;
-    using InstanceType = uint4;
+    using InstanceType = Moer::Vector4ui;
     static const ShaderParametersMetadata* GetStructMetadata() { return nullptr; }
 };
 
 template<>
-struct TShaderParameterTypeInfo<float2> {
+struct TShaderParameterTypeInfo<Moer::Vector2f> {
     static constexpr EShaderBindingBaseType BaseType = SBT_FLOAT32;
 
     static constexpr int32_t s_num_rows                     = 1;
@@ -152,14 +154,14 @@ struct TShaderParameterTypeInfo<float2> {
     static constexpr int32_t alignment                      = 8;
     static constexpr bool    b_is_stored_in_constant_buffer = true;
 
-    using TParamPtr    = AlignType<float2, alignment>;
-    using InstanceType = float4;
+    using TParamPtr    = AlignType<Moer::Vector2f, alignment>;
+    using InstanceType = Moer::Vector4f;
     static const ShaderParametersMetadata* GetStructMetadata() { return nullptr; }
 };
 
-//float3 packed to float4 in gpu
+//Moer::Vector3f packed to Moer::Vector4f in gpu
 template<>
-struct TShaderParameterTypeInfo<float3> {
+struct TShaderParameterTypeInfo<Moer::Vector3f> {
     static constexpr EShaderBindingBaseType BaseType = SBT_FLOAT32;
 
     static constexpr int32_t s_num_rows                     = 1;
@@ -168,13 +170,13 @@ struct TShaderParameterTypeInfo<float3> {
     static constexpr int32_t alignment                      = 16;
     static constexpr bool    b_is_stored_in_constant_buffer = true;
 
-    using TParamPtr    = AlignType<float3, alignment>;
-    using InstanceType = float4;
+    using TParamPtr    = AlignType<Moer::Vector3f, alignment>;
+    using InstanceType = Moer::Vector4f;
     static const ShaderParametersMetadata* GetStructMetadata() { return nullptr; }
 };
 
 template<>
-struct TShaderParameterTypeInfo<float4> {
+struct TShaderParameterTypeInfo<Moer::Vector4f> {
     static constexpr EShaderBindingBaseType BaseType = SBT_FLOAT32;
 
     static constexpr int32_t s_num_rows                     = 1;
@@ -183,13 +185,13 @@ struct TShaderParameterTypeInfo<float4> {
     static constexpr int32_t alignment                      = 16;
     static constexpr bool    b_is_stored_in_constant_buffer = true;
 
-    using TParamPtr    = AlignType<float4, alignment>;
-    using InstanceType = float4;
+    using TParamPtr    = AlignType<Moer::Vector4f, alignment>;
+    using InstanceType = Moer::Vector4f;
     static const ShaderParametersMetadata* GetStructMetadata() { return nullptr; }
 };
 
 template<>
-struct TShaderParameterTypeInfo<int2> {
+struct TShaderParameterTypeInfo<Moer::Vector2i> {
     static constexpr EShaderBindingBaseType BaseType = SBT_INT32;
 
     static constexpr int32_t s_num_rows                     = 1;
@@ -198,13 +200,13 @@ struct TShaderParameterTypeInfo<int2> {
     static constexpr int32_t alignment                      = 8;
     static constexpr bool    b_is_stored_in_constant_buffer = true;
 
-    using TParamPtr    = AlignType<int2, alignment>;
-    using InstanceType = int4;
+    using TParamPtr    = AlignType<Moer::Vector2i, alignment>;
+    using InstanceType = Moer::Vector4i;
     static const ShaderParametersMetadata* GetStructMetadata() { return nullptr; }
 };
 
 template<>
-struct TShaderParameterTypeInfo<uint2> {
+struct TShaderParameterTypeInfo<Moer::Vector2ui> {
     static constexpr EShaderBindingBaseType BaseType = SBT_UINT32;
 
     static constexpr int32_t s_num_rows                     = 1;
@@ -213,13 +215,13 @@ struct TShaderParameterTypeInfo<uint2> {
     static constexpr int32_t alignment                      = 8;
     static constexpr bool    b_is_stored_in_constant_buffer = true;
 
-    using TParamPtr    = AlignType<uint2, alignment>;
-    using InstanceType = uint4;
+    using TParamPtr    = AlignType<Moer::Vector2ui, alignment>;
+    using InstanceType = Moer::Vector4ui;
     static const ShaderParametersMetadata* GetStructMetadata() { return nullptr; }
 };
 
 template<>
-struct TShaderParameterTypeInfo<int3> {
+struct TShaderParameterTypeInfo<Moer::Vector3i> {
     static constexpr EShaderBindingBaseType BaseType = SBT_INT32;
 
     static constexpr int32_t s_num_rows                     = 1;
@@ -228,13 +230,15 @@ struct TShaderParameterTypeInfo<int3> {
     static constexpr int32_t alignment                      = 16;
     static constexpr bool    b_is_stored_in_constant_buffer = true;
 
-    using TParamPtr    = AlignType<int3, alignment>;
-    using InstanceType = int4;
-    static const ShaderParametersMetadata* GetStructMetadata() { return nullptr; }
+    using TParamPtr    = AlignType<Moer::Vector3i, alignment>;
+    using InstanceType = Moer::Vector4i;
+    static const ShaderParametersMetadata* GetStructMetadata() {
+        return nullptr;
+    }
 };
 
 template<>
-struct TShaderParameterTypeInfo<uint3> {
+struct TShaderParameterTypeInfo<Moer::Vector3ui> {
     static constexpr EShaderBindingBaseType BaseType = SBT_UINT32;
 
     static constexpr int32_t s_num_rows                     = 1;
@@ -243,13 +247,13 @@ struct TShaderParameterTypeInfo<uint3> {
     static constexpr int32_t alignment                      = 16;
     static constexpr bool    b_is_stored_in_constant_buffer = true;
 
-    using TParamPtr    = AlignType<uint3, alignment>;
-    using InstanceType = uint4;
+    using TParamPtr    = AlignType<Moer::Vector3ui, alignment>;
+    using InstanceType = Moer::Vector4ui;
     static const ShaderParametersMetadata* GetStructMetadata() { return nullptr; }
 };
 
 template<>
-struct TShaderParameterTypeInfo<int4> {
+struct TShaderParameterTypeInfo<Moer::Vector4i> {
     static constexpr EShaderBindingBaseType BaseType = SBT_INT32;
 
     static constexpr int32_t s_num_rows                     = 1;
@@ -258,13 +262,13 @@ struct TShaderParameterTypeInfo<int4> {
     static constexpr int32_t alignment                      = 16;
     static constexpr bool    b_is_stored_in_constant_buffer = true;
 
-    using TParamPtr    = AlignType<int4, alignment>;
-    using InstanceType = int4;
+    using TParamPtr    = AlignType<Moer::Vector4i, alignment>;
+    using InstanceType = Moer::Vector4i;
     static const ShaderParametersMetadata* GetStructMetadata() { return nullptr; }
 };
 
 template<>
-struct TShaderParameterTypeInfo<uint4> {
+struct TShaderParameterTypeInfo<Moer::Vector4ui> {
     static constexpr EShaderBindingBaseType BaseType = SBT_UINT32;
 
     static constexpr int32_t s_num_rows                     = 1;
@@ -273,8 +277,8 @@ struct TShaderParameterTypeInfo<uint4> {
     static constexpr int32_t alignment                      = 16;
     static constexpr bool    b_is_stored_in_constant_buffer = true;
 
-    using TParamPtr    = AlignType<uint4, alignment>;
-    using InstanceType = uint4;
+    using TParamPtr    = AlignType<Moer::Vector4ui, alignment>;
+    using InstanceType = Moer::Vector4ui;
     static const ShaderParametersMetadata* GetStructMetadata() { return nullptr; }
 };
 
@@ -289,7 +293,7 @@ struct TShaderParameterTypeInfo<bool> {
     static constexpr bool    b_is_stored_in_constant_buffer = true;
 
     using TParamPtr    = AlignType<bool, alignment>;
-    using InstanceType = uint4;
+    using InstanceType = Moer::Vector4ui;
     static const ShaderParametersMetadata* GetStructMetadata() { return nullptr; }
 };
 
