@@ -1,11 +1,14 @@
 #ifndef RHI_RESOURCE_INITIALIZER_H
 #define RHI_RESOURCE_INITIALIZER_H
 #include "RHICommon.h"
-#include <numeric>
 #include "API_Macro.h"
 #include "misc/Hash.h"
-#include <array>
 #include "math/Math.h"
+
+#include <numeric>
+#include <array>
+#include <assert.h>
+
 struct RHISamplerInitializer {
     RHISamplerInitializer() = default;
     explicit RHISamplerInitializer(
