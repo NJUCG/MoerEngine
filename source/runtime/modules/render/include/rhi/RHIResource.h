@@ -1463,15 +1463,16 @@ private:
     EAttachmentStoreOp stencil_store_op;
 };
 
-struct RHIShaderBoundStateInput {
+struct RHIShaderBoundStateInput: public RHIResource {
 
-    RHIShaderBoundStateInput() = default;
+    RHIShaderBoundStateInput(): RHIResource(RRT_SHADER_BOUND_STATE) {};
     RHIShaderBoundStateInput(
         RHIVertexInputState* _vertex_input_state,
         RHIVertexShader*     _vertex_shader,
         RHIFragmentShader*   _fragment_shader,
         RHIGeometryShader*   _geometry_shader)
-        : p_vertex_input_state(_vertex_input_state),
+        : RHIResource(RRT_SHADER_BOUND_STATE),
+          p_vertex_input_state(_vertex_input_state),
           p_fragment_shader(_fragment_shader),
           p_geometry_shader(_geometry_shader) {}
 
@@ -1479,7 +1480,8 @@ struct RHIShaderBoundStateInput {
         RHIFragmentShader*      _fragment_shader,
         RHIMeshShader*          _mesh_shader,
         RHIAmplificationShader* _amplification_shader)
-        : p_fragment_shader(_fragment_shader),
+        : RHIResource(RRT_SHADER_BOUND_STATE),
+          p_fragment_shader(_fragment_shader),
           p_mesh_shader(_mesh_shader),
           p_amplification_shader(_amplification_shader) {}
 
