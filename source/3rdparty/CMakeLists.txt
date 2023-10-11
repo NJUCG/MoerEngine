@@ -25,4 +25,10 @@ set_target_properties(spdlog PROPERTIES FOLDER ${third_party_folder})
 # option(GLM_TEST_ENABLE OFF)
 # option(BUILD_SHARED_LIBS OFF)
 # ADD_SUBDIRECTORY(glm)
+    
+option(GLFW_BUILD_DOCS OFF)
+option(GLFW_BUILD_EXAMPLES OFF)
+option(GLFW_BUILD_TESTS OFF)
+option(GLFW_INSTALL ON)
+add_subdirectory(glfw)
 
