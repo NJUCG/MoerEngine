@@ -18,21 +18,8 @@ target_include_directories(${MODULE_NAME}
 	PRIVATE $<BUILD_INTERFACE:${MODULE_DIR}/include/rhi/vulkan>
 	PRIVATE $<BUILD_INTERFACE:${moer_third_party_dir}/VulkanSDK/include/vulkan>
 )
+
 target_link_libraries(${MODULE_NAME}
-    #PUBLIC glm::glm
-    #PUBLIC glfw
-    #PUBLIC assimp
-    #PUBLIC imgui
-    #glslang
-    #PUBLIC pugixml-shared
-    #nlohmann_json
-    ## HLSL
-    #OSDependent
-    #OGLCompiler
-    #SPIRV
-    #spirv-cross-core
-    #spirv-cross-cpp
-    #spirv-cross-glsl
-    #spirv-cross-reflect
     PRIVATE ${vulkan_lib}
+    PUBLIC MoerRuntimeCore
 )

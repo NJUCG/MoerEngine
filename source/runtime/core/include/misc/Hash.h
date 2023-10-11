@@ -1,36 +1,44 @@
 #ifndef HASHABLE_H
 #define HASHABLE_H
 #include "MacroUtils.h"
-#include "PicoSHA2.h"
+#include <atomic>
+#include <functional>
+#include <map>
+#include <mutex>
+#include <string.h>
 #include <type_traits>
 #include <string_view>
 #include <cstring>
 #include <array>
+#include <cstdint>
+#include <string>
+#include <shared_mutex>
 
 template<typename TEnum>
 concept concept_t_is_enum = std::is_enum<TEnum>::value;
 template<typename TEnum>
 concept concept_t_enum_underlying_uint8 = concept_t_is_enum<TEnum> && std::is_same_v<std::underlying_type_t<TEnum>, uint8_t>;
 template<typename TNum>
-concept concept_t_is_vec2 = requires (TNum t)
-{
-    t.x; t.y;
-    
+concept concept_t_is_vec2 = requires(TNum t) {
+    t.x;
+    t.y;
+
     sizeof(t.x) + sizeof(t.y) == sizeof(t);
     t.x + t.y;
     t.x - t.y;
-    t.x * t.y;
+    t.x* t.y;
     t.x / t.y;
 };
 
 template<typename TNum>
-concept concept_t_is_vec3 = requires (TNum t)
-{
-    t.x; t.y; t.z;
+concept concept_t_is_vec3 = requires(TNum t) {
+    t.x;
+    t.y;
+    t.z;
     sizeof(t.x) + sizeof(t.y) + sizeof(t.z) == sizeof(t);
     t.x + t.y;
     t.x - t.y;
-    t.x * t.y;
+    t.x* t.y;
     t.x / t.y;
 };
 
@@ -81,20 +89,20 @@ public:
     bool operator==(uint8_t _value) {
         return _value == value;
     }
-    TEnum GetValue() const { return (TEnum)value; }
+    TEnum           GetValue() const { return (TEnum)value; }
+    friend uint32_t GetHash(const EnumInByte& target);
 
 private:
-    friend uint32_t GetHash(const EnumInByte& target);
-    uint8_t         value;
+    uint8_t value;
 };
 
-uint32_t GetHash(uint32_t value) {
+inline uint32_t GetHash(uint32_t value) {
     return value;
 }
-uint32_t GetHash(int32_t value) {
+inline uint32_t GetHash(int32_t value) {
     return value;
 }
-uint32_t GetHash(uint8_t value) {
+inline uint32_t GetHash(uint8_t value) {
     return value;
 }
 /*from UE5.03*/
@@ -107,13 +115,13 @@ inline uint32_t GetHash(int64_t target) {
     return (uint32_t)target + ((uint32_t)(target >> 32) * 23);
 }
 
-uint32_t GetHash(float value) {
+inline uint32_t GetHash(float value) {
     return *(uint32_t*)&value;
 }
-uint32_t GetHash(double value) {
+inline uint32_t GetHash(double value) {
     return GetHash(*(uint64_t*)&value);
 }
-uint32_t GetHash(const char* value) {
+inline uint32_t GetHash(const char* value) {
     return std::hash<std::string_view>{}(std::string_view(value));
 }
 template<concept_t_is_vec2 T>
@@ -132,60 +140,147 @@ uint32_t GetHash(const T& value) {
 }
 
 template<concept_t_is_enum T>
-FORCEINLINE uint32_t GetHash(const T& t) {
+uint32_t GetHash(const T& t) {
     return GetHash((std::underlying_type_t<T>)t);
 }
 template<typename T>
 FORCEINLINE uint32_t GetHash(const EnumInByte<T>& t) {
     return GetHash(t.value);
 }
-FORCEINLINE uint32_t GetHash(const std::string& value){
+FORCEINLINE uint32_t GetHash(const std::string& value) {
     return std::hash<std::string>{}(value);
 }
 
 struct SHA256Hash {
 public:
-    std::array<uint8_t,32> hash_code{};
+    std::array<uint8_t, 32> hash_code{};
     SHA256Hash() {
         for (unsigned char& i : hash_code) {
             i = 0;
         }
     }
-    FORCEINLINE std::string ToString(){
-        return picosha2::bytes_to_hex_string(hash_code.begin(), hash_code.end());
+    std::string ToString();
+    void        FromString(std::string_view& src);
+    friend bool operator==(const SHA256Hash& lhs, const SHA256Hash& rhs) {
+        return std::memcmp(lhs.hash_code.data(), rhs.hash_code.data(), sizeof(lhs.hash_code)) == 0;
     }
-    FORCEINLINE void FromString(std::string_view& src){
-        picosha2::hash256(src, hash_code);
-
-    }
-    friend bool operator==(const SHA256Hash& lhs, const SHA256Hash& rhs){
-        return std::memcmp(lhs.hash_code.data(), rhs.hash_code.data(), sizeof (lhs.hash_code)) == 0;
-    }
-    friend bool operator!=(const SHA256Hash& lhs, const SHA256Hash& rhs){
+    friend bool operator!=(const SHA256Hash& lhs, const SHA256Hash& rhs) {
         return !(lhs == rhs);
     }
-    friend bool operator< (const SHA256Hash& lhs, const SHA256Hash& rhs){
-        return std::memcmp(lhs.hash_code.data(), rhs.hash_code.data(), sizeof (lhs.hash_code)) < 0;
+    friend bool operator<(const SHA256Hash& lhs, const SHA256Hash& rhs) {
+        return std::memcmp(lhs.hash_code.data(), rhs.hash_code.data(), sizeof(lhs.hash_code)) < 0;
     }
 };
-static_assert(picosha2::k_digest_size == 32);
 
+struct __declspec(dllexport) Hash64City {
+public:
+    std::array<uint8_t, 8> hash_code{};
 
-namespace inner_utils
-{
-    template <typename T, std::size_t ... Is>
+    Hash64City() {
+        for (unsigned char& i : hash_code) {
+            i = 0;
+        }
+    }
+
+    std::string ToString();
+    void        FromString(std::string_view& src);
+    void        Update(std::string_view& src);
+    void        Update(const uint8_t* data, uint32_t size);
+    //todo: Update() not utterly correct
+    void        Update(const char* data, uint32_t size);
+    friend bool operator==(const Hash64City& lhs, const Hash64City& rhs) {
+        return std::memcmp(lhs.hash_code.data(), rhs.hash_code.data(), sizeof(lhs.hash_code)) == 0;
+    }
+    friend bool operator!=(const Hash64City& lhs, const Hash64City& rhs) {
+        return !(lhs == rhs);
+    }
+    friend bool operator<(const Hash64City& lhs, const Hash64City& rhs) {
+        return std::memcmp(lhs.hash_code.data(), rhs.hash_code.data(), sizeof(lhs.hash_code)) < 0;
+    }
+};
+static_assert(sizeof(Hash64City) == 8);
+
+namespace inner_utils {
+    template<typename T, std::size_t... Is>
     constexpr std::array<T, sizeof...(Is)>
-    create_array(T value, std::index_sequence<Is...>)
-    {
+    create_array(T value, std::index_sequence<Is...>) {
         // cast Is to void to remove the warning: unused value
         return {{(static_cast<void>(Is), value)...}};
     }
-}
+}// namespace inner_utils
 
-template <std::size_t N, typename T>
-constexpr std::array<T, N> create_array(const T& value)
-{
+template<std::size_t N, typename T>
+constexpr std::array<T, N> create_array(const T& value) {
     return inner_utils::create_array(value, std::make_index_sequence<N>());
 }
+
+class HashedName {
+    friend struct std::equal_to<HashedName>;
+    friend struct std::hash<HashedName>;
+    const char* value;
+
+    static std::atomic_uint32_t s_size;
+
+    static std::shared_mutex                s_rw_mutex;
+    static std::map<const char*, uint32_t>& GetNameToHash() {
+        static std::map<const char*, uint32_t> s_name_to_hash;
+        return s_name_to_hash;
+    }
+
+public:
+    HashedName(const char* _value) : value(_value) {
+        RegisterName();
+    }
+    HashedName(const HashedName& other) : value(other.value) {}
+    HashedName(HashedName&& other) = default;
+
+    operator const char*() const {
+        return value;
+    }
+    friend uint32_t GetHash(const HashedName& value) {
+        {
+            std::shared_lock<std::shared_mutex> read_lock(s_rw_mutex);
+            if (const auto& iter = GetNameToHash().find(value); iter != GetNameToHash().end()) {
+                return iter->second;
+            }
+        }
+        return value.RegisterName();
+    }
+
+private:
+    //thread safe
+    inline uint32_t RegisterName() const {
+        {
+            std::shared_lock<std::shared_mutex> read_lock(s_rw_mutex);
+            if (const auto& iter = GetNameToHash().find(value); iter != GetNameToHash().end()) {
+                //found
+                return iter->second;
+            }
+        }
+        {
+            std::unique_lock<std::shared_mutex> write_lock(s_rw_mutex);
+            uint32_t                            index = s_size.fetch_add(1) + 1;
+            GetNameToHash().insert({value, index});
+            return index;
+        }
+    }
+};
+
+namespace std {
+    template<>
+    class hash<HashedName> {
+    public:
+        size_t operator()(const HashedName& value) const {
+            return GetHash(value);
+        }
+    };
+    template<>
+    struct equal_to<HashedName> {
+    public:
+        bool operator()(const HashedName& lhs, const HashedName& rhs) const {
+            return strcmp(lhs.value, rhs.value) == 1;
+        }
+    };
+}// namespace std
 
 #endif// !HASHABLE_H

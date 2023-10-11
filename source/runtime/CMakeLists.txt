@@ -8,6 +8,16 @@ add_subdirectory(core)
 
 add_subdirectory(modules/render)
 
-add_library(${target_name} INTERFACE)
+add_library(${target_name} Engine.h Engine.cpp)
 
 set_target_properties(${target_name} PROPERTIES FOLDER "engine")
+
+target_include_directories(${target_name} 
+    PRIVATE $<BUILD_INTERFACE:${RUNTIME_CORE_DIR}/include>
+    PRIVATE $<BUILD_INTERFACE:${RUNTIME_MODULE_ROOT_DIR}/render/include>
+)
+
+target_link_libraries(${target_name}
+    PUBLIC MoerRuntimeCore
+    PUBLIC render
+)

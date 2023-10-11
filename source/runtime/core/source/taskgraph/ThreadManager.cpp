@@ -4,13 +4,15 @@
 #include <functional>
 #include <algorithm>
 #include <iostream>
+#include "spdlog/details/os.h"
 #include "spdlog/spdlog.h"
 #include "platform/Platform.h"
 #include "taskgraph/Event.h"
 
-uint32_t ThreadManager::g_gameThreadID = 0;
+uint32_t ThreadManager::g_game_thread_id = 0;
+uint32_t ThreadManager::g_render_thread_id = 0;
 
-std::string getPriorityStr(int32_t priority) {
+std::string GetPriorityStr(int32_t priority) {
     assert(priority < EThread::PriorityCount);
     priority = priority << EThread::PRIORITY_SHEFT;
     switch (priority) {
@@ -25,7 +27,7 @@ std::string getPriorityStr(int32_t priority) {
     return "";
 }
 ThreadManager::~ThreadManager() {
-    shutDown();
+    ShutDown();
 }
 void ThreadManager::AddThread(uint32_t id, RunnableThread* thread) {
     if (m_threads.find(id) == m_threads.end()) m_threads.emplace(id, thread);
@@ -37,13 +39,13 @@ void ThreadManager::RemoveThread(RunnableThread* thread) {
     if (target != m_threads.end()) m_threads.erase(target);
 }
 
-void ThreadManager::tick() {
+void ThreadManager::Tick() {
 }
 
 void ThreadManager::initialize() {
-    g_gameThreadID = Platform::GetCurrentThreadID();
+    g_game_thread_id = Platform::GetCurrentThreadID();
 }
-uint32_t ThreadManager::getCurrentThreadID() {
+uint32_t ThreadManager::GetCurrentThreadID() {
     return Platform::GetCurrentThreadID();
 }
 
@@ -53,73 +55,78 @@ ThreadManager& ThreadManager::Instance() {
     return singleton;
 }
 
-void ThreadManager::shutDown() {
+void ThreadManager::ShutDown() {
     for (auto i = m_threads.begin(); i != m_threads.end(); i++) {
-        if (i->second != nullptr) {
-            i->second = nullptr;
+        if (i->second != nullptr && i->second->Joinable()) {
+            i->second->Join();
         }
     }
 }
 
-std::string ThreadManager::getRunnableThreadName(uint32_t id) {
+std::string ThreadManager::GetRunnableThreadName(uint32_t id) {
     auto target = m_threads.find(id);
     if (target != m_threads.end()) return target->second->name;
     return "NameUnknown";
 }
 
-RunnableThread* ThreadManager::getRunnableThread(uint32_t thread_id) {
-    if (thread_id == g_gameThreadID) return nullptr;
-    auto thread = m_threads.at(thread_id);
+RunnableThread* ThreadManager::GetRunnableThread(uint32_t id) {
+    if (id == g_game_thread_id) return nullptr;
+    auto thread = m_threads.at(id);
     return thread;
 }
 
-void RunnableThread::setup(uint64_t affinity) {
+void RunnableThread::Setup(uint64_t affinity) {
     Platform::SetThreadAffinity((void*)m_thread->native_handle(), affinity);
 }
 
-RunnableThread* RunnableThread::create(Runnable* runnable, std::string name, uint64_t affinity) {
+RunnableThread::~RunnableThread() {
+    ThreadManager::Instance().RemoveThread(this);
+    Join();
+}
+
+RunnableThread* RunnableThread::Create(Runnable* runnable, std::string name, uint64_t affinity_mask) {
 
     RunnableThread* createdThread = nullptr;
 
     createdThread = new RunnableThread(runnable, name);
-    createdThread->setup(affinity);
+    createdThread->Setup(affinity_mask);
     ThreadManager::Instance().AddThread(createdThread->id, createdThread);
     return createdThread;
 }
 
-void RunnableThread::tick() {
+void RunnableThread::Tick() {
 }
 
 RunnableThread::RunnableThread(Runnable* inRunnable, std::string name) {
     assert(inRunnable != nullptr);
     m_runnable    = inRunnable;
-    m_createEvent = EventPool::get()->getEvent(false);
-    m_endEvent    = EventPool::get()->getEvent(false);
+    m_createEvent = EventPool::Get()->GetEvent(false);
+    m_endEvent    = EventPool::Get()->GetEvent(false);
     EventRef createEvent(m_createEvent);
-    m_thread = new std::thread(&RunnableThread::run, this);
-    createEvent.wait();
+    m_thread = new std::thread(&RunnableThread::Run, this);
+    createEvent.Wait();
     this->name = name;
     SPDLOG_INFO("[{}] {} thread created", name, this->id);
 }
 
-uint32_t RunnableThread::run() {
+uint32_t RunnableThread::Run() {
     assert(m_runnable != nullptr);
     id = Platform::GetCurrentThreadID();
-    m_createEvent->trigger();
-    m_runnable->init();
+    m_createEvent->Trigger();
+    m_runnable->Init();
 
-    uint32_t exit_code = m_runnable->run();
+    uint32_t exit_code = m_runnable->Run();
 
-    m_runnable->exit();
-    m_endEvent->trigger();
+    m_runnable->Exit();
+    m_endEvent->Trigger();
     return exit_code;
 }
 
-void RunnableThread::waitUntilFinished() {
-    m_endEvent->wait();
+void RunnableThread::WaitUntilFinished() {
+    m_endEvent->Wait();
 }
 
-uint32_t TestRunnanble::run() {
+uint32_t TestRunnanble::Run() {
     SPDLOG_INFO("[{}] start running", Platform::GetCurrentThreadID());
     while (!m_stop) {
     }
@@ -127,13 +134,13 @@ uint32_t TestRunnanble::run() {
     return 0;
 }
 
-void TestRunnanble::init() {
+void TestRunnanble::Init() {
 }
 
-void TestRunnanble::stop() {
+void TestRunnanble::Stop() {
     m_stop = true;
 }
 
-void TestRunnanble::exit() {
-    SPDLOG_INFO("thread {} exit", __threadid());
+void TestRunnanble::Exit() {
+    SPDLOG_INFO("thread {} exit", static_cast<size_t>(std::hash<std::thread::id>()(std::this_thread::get_id())));
 }

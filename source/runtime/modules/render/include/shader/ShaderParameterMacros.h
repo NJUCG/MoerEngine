@@ -1,0 +1,149 @@
+#ifndef MOER_ENGINE_SHADER_PROXY_H
+#define MOER_ENGINE_SHADER_PROXY_H
+#include "rhi/RHIResource.h"
+#include "shader/ShaderParameterTypeInfo.h"
+#include <array>
+#include <cstddef>
+#include <functional>
+#include <vector>
+#include "API_Macro.h"
+#include "misc/Hash.h"
+#include "unordered_map"
+#include <cstring>
+
+#pragma region forward
+class VertexFactoryType;
+#pragma endregion
+
+struct ShaderReflectionInfo {
+    struct UniformBufferEntry {
+        std::string name;
+        uint32_t    binding;
+    };
+};
+
+#define INNER_GET_STRUCTURE_METADATA_IMPL(StructureName)     \
+    {                                                        \
+        static ShaderParametersMetadata s_struct_metadata(   \
+            EShaderParameterUseCase::SHADER_CONSTANT_STRUCT, \
+            EGlobalBufferBindingFlags::CONSTANT,             \
+            #StructureName,                                  \
+            nullptr,                                         \
+            sizeof(StructureName),                           \
+            StructureName::GetMembers());                    \
+        return &s_struct_metadata;                           \
+    }
+
+//compiled shader output container for shader initialization
+
+#define BEGIN_SHADER_PARAMETER_DEFINITION(StructureName) \
+    INNER_BEGIN_SHADER_PARAMETER_DEFINITION(StructureName, INNER_GET_STRUCTURE_METADATA_IMPL(StructureName))
+
+#define INNER_BEGIN_SHADER_PARAMETER_DEFINITION(StructureName, GetStructMetadataFunctionImpl)                                \
+    class alignas(SHADER_PARAMETER_STRUCTURE_ALIGNMENT) StructureName {                                                      \
+    public:                                                                                                                  \
+        StructureName() {}                                                                                                   \
+        /* struct type info*/                                                                                                \
+        struct TypeInfo {                                                                                                    \
+            static constexpr int32_t s_num_rows                     = 1;                                                     \
+            static constexpr int32_t s_num_columns                  = 1;                                                     \
+            static constexpr int32_t s_num_elements                 = 0;                                                     \
+            static constexpr int32_t alignment                      = SHADER_PARAMETER_STRUCTURE_ALIGNMENT;                  \
+            static constexpr bool    b_is_stored_in_constant_buffer = true;                                                  \
+                                                                                                                             \
+            using TParamPtr = StructureName;                                                                                 \
+                                                                                                                             \
+            static const ShaderParametersMetadata* GetStructMetadata() GetStructMetadataFunctionImpl                         \
+        };                                                                                                                   \
+                                                                                                                             \
+    private:                                                                                                                 \
+        using TThisStruct = StructureName;                                                                                   \
+        struct _firstMemberId {                                                                                              \
+            enum { HasDeclaredResource = 0 };                                                                                \
+        };                                                                                                                   \
+        typedef void* (*MemberFunction)(_firstMemberId, std::vector<ShaderParametersMetadata::Member>*);                     \
+        static void* AppendMemberGetPrev(_firstMemberId, std::vector<ShaderParametersMetadata::Member>*) { return nullptr; } \
+        typedef _firstMemberId
+
+#define INTERNAL_DEFINE_SHADER_PARAM_IMPL(MemberTypeInfo, MemberType, MemberName, HlslType, Precision, UBMTBaseType)       \
+    MemberId##MemberName;                                                                                                  \
+                                                                                                                           \
+public:                                                                                                                    \
+    /* a ptr wrapped shader param type  */                                                                                 \
+    MemberTypeInfo::TParamPtr MemberName;                                                                                  \
+                                                                                                                           \
+private:                                                                                                                   \
+    struct _nextMemberId##MemberName {                                                                                     \
+        enum { HasDeclaredResource = MemberId##MemberName::HasDeclaredResource };                                          \
+    };                                                                                                                     \
+    static void* AppendMemberGetPrev(_nextMemberId##MemberName, std::vector<ShaderParametersMetadata::Member>* _members) { \
+                                                                                                                           \
+        _members->push_back(ShaderParametersMetadata::Member(                                                              \
+            #MemberName,                                                                                                   \
+            #HlslType,                                                                                                     \
+            offsetof(TThisStruct, MemberName),                                                                             \
+            UBMTBaseType,                                                                                                  \
+            Precision,                                                                                                     \
+            MemberTypeInfo::s_num_elements,                                                                                \
+            MemberTypeInfo::GetStructMetadata()));                                                                         \
+        void* (*PrevFunc)(MemberId##MemberName, std::vector<ShaderParametersMetadata::Member>*);                           \
+                                                                                                                           \
+        PrevFunc = AppendMemberGetPrev;                                                                                    \
+        return (void*)PrevFunc;                                                                                            \
+    }                                                                                                                      \
+    typedef _nextMemberId##MemberName
+
+#define END_SHADER_PARAMETER_DEFINITION(StructureName)                                    \
+    lastMemberId;                                                                         \
+                                                                                          \
+public:                                                                                   \
+    static std::vector<ShaderParametersMetadata::Member> GetMembers() {                   \
+        std::vector<ShaderParametersMetadata::Member> _members;                           \
+        void* (*_lastFunc)(lastMemberId, std::vector<ShaderParametersMetadata::Member>*); \
+        _lastFunc = AppendMemberGetPrev;                                                  \
+        void* Ptr = (void*)_lastFunc;                                                     \
+        do {                                                                              \
+            Ptr = reinterpret_cast<MemberFunction>(Ptr)(_firstMemberId(), &_members);     \
+        } while (Ptr);                                                                    \
+        std::reverse(_members.begin(), _members.end());                                   \
+        return _members;                                                                  \
+    }                                                                                     \
+    }                                                                                     \
+    ;
+
+#define DEFINE_SHADER_PARAM_UAV(HLSLType, MemberName) \
+    INTERNAL_DEFINE_SHADER_PARAM_IMPL(TShaderResourceParameterTypeInfo<RHIUnorderedAccessView*>, RHIUnorderedAccessView*, MemberName, HLSLType, EShaderPrecisionModifier::FLOAT, SBT_UAV)
+
+#define DEFINE_SHADER_PARAM_SRV(HLSLType, MemberName) \
+    INTERNAL_DEFINE_SHADER_PARAM_IMPL(TShaderResourceParameterTypeInfo<RHIShaderResourceView*>, RHIShaderResourceView*, MemberName, HLSLType, EShaderPrecisionModifier::FLOAT, SBT_SRV)
+
+#define DEFINE_SHADER_PARAM_SRV_ARRAY(HLSLType, MemberName, NumElements) \
+    INTERNAL_DEFINE_SHADER_PARAM_IMPL(TShaderResourceParameterTypeInfo<RHIShaderResourceView* [NumElements]>, RHIShaderResourceView*, MemberName, HLSLType, EShaderPrecisionModifier::FLOAT, SBT_UAV)
+
+#define DEFINE_SHADER_PARAM_SAMPLER(HLSLType, MemberName) \
+    INTERNAL_DEFINE_SHADER_PARAM_IMPL(TShaderResourceParameterTypeInfo<RHISampler*>, RHISampler*, MemberName, HLSLType, EShaderPrecisionModifier::FLOAT, SBT_SAMPLER)
+
+#define DEFINE_SHADER_PARAM_STRUCT(StructType, MemberName) \
+    INTERNAL_DEFINE_SHADER_PARAM_IMPL(MemberName::TypeInfo, StructType, MemberName, , EShaderPrecisionModifier::FLOAT, SBT_NESTED_STRUCT)
+
+#define DEFINE_SHADER_PARAM_STRUCT_ARRAY(StructType, MemberName, NumElements) \
+    INTERNAL_DEFINE_SHADER_PARAM_IMPL(TShaderParameterStructureTypeInfo<MemberName[NumElements]>, StructType, MemberName, , EShaderPrecisionModifier::FLOAT, SBT_NESTED_STRUCT)
+
+#define DEFINE_SHADER_PARAM(MemberType, MemberName) \
+    INTERNAL_DEFINE_SHADER_PARAM_IMPL(TShaderParameterTypeInfo<MemberType>, MemberType, MemberName, , EShaderPrecisionModifier::FLOAT, TShaderParameterTypeInfo<MemberType>::BaseType)
+
+#define DEFINE_SHADER_PARAM_ATTACHMENT_BINDING() \
+    INTERNAL_DEFINE_SHADER_PARAM_IMPL(TShaderParameterTypeInfo<AttachmentBindingSlots>, AttachmentBindingSlots, Attachments, , EShaderPrecisionModifier::FLOAT, SBT_ATTACHMENT_BINDING_SLOTS)
+
+class ShaderBase {
+    ShaderBase();
+    ~ShaderBase();
+};
+
+/*
+ *  uav v1 (register 0);
+ *  srv s1 (register 1);
+ *  constant buffer
+ * */
+
+#endif//MOER_ENGINE_SHADER_PROXY_H

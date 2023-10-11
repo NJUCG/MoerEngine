@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <limits>
+#include "RenderCommon.h"
 #include "misc/EnumBitOperation.h"
 #pragma region CommonEnums
 /** Maximum number of miplevels in a texture. */
@@ -19,7 +20,7 @@ enum {
 enum : uint8_t {
     MAX_PASS_ATTACHMENT_COUNT = 8
 };
-enum : uint64_t{
+enum : uint64_t {
     MAX_WAIT_TIME = std::numeric_limits<uint64_t>::max()
 };
 enum class ERHIZBuffer {
@@ -44,8 +45,7 @@ namespace EShadingPath {
 
 #pragma region Descriptors Regulation
 
-enum class ERHIDescriptorHeapType : uint8_t
-{
+enum class ERHIDescriptorHeapType : uint8_t {
     STANDARD,
     SAMPLER,
     ATTACHMENT,
@@ -78,8 +78,6 @@ enum class ERHIDescriptorHeapType : uint8_t
 //    uint32_t    Index{ 0xffffffff };
 //    uint8_t     Type{ (uint8_t)ERHIDescriptorHeapType::INVALID };
 //};
-
-
 
 /** The alignment in bytes between elements of array shader parameters. */
 enum { ShaderArrayElementAlignBytes = 16 };
@@ -137,7 +135,6 @@ struct Extent3D {
     };
 };
 
-
 #pragma endregion
 
 #pragma region cross-platform param types
@@ -183,7 +180,7 @@ enum ERasterizerFillMode : uint8_t {
 };
 
 enum ERasterizerCullMode : uint8_t {
-    CM_NONE,
+    CM_UNDEFINED,
     CM_FRONT,
     CM_BACK,
     CM_FRONT_AND_BACK,
@@ -432,8 +429,8 @@ enum ERHIResourceType {
     RRT_COMPUTE_PIPELINE_STATE,
     RRT_RAY_TRACING_PIPELINE_STATE,
     RRT_PIPELINE_BOUND_SHADER_STATE,
-    RRT_UNIFORM_BUFFER_LAYOUT,
-    RRT_UNIFORM_BUFFER,
+    RRT_GLOBAL_BUFFER_LAYOUT,
+    RRT_GLOBAL_BUFFER,
     RRT_BUFFER,
     RRT_TEXTURE,
     RRT_TEXTURE_REFERENCE,
@@ -664,7 +661,6 @@ enum ECubeFace {
 
 #define ENUM_STR(Enum)
 
-
 enum class EShaderCodeResourceBindingType : uint8_t {
     INVALID,
     SAMPLER,
@@ -745,26 +741,26 @@ enum EShaderBindingBaseType : uint8_t {
     SBT_Num,
     SBT_NumBits = 4,
 };
-static_assert(SBT_Num <= (1 << SBT_NumBits), "EUniformBufferBaseType_Num will not fit on EUniformBufferBaseType_NumBits");
-using UniformBufferGlobalBindingPoint = uint8_t;
+
+static_assert(SBT_Num <= (1 << SBT_NumBits), "SBT_Num will not fit on SBT_NumBits");
+using GlobalBufferStaticBindingPoint = uint8_t;
 
 enum {
     /** The maximum number of static slots allowed. */
-    MAX_UNIFORM_BUFFER_GLOBAL_BINDING_POINT = 255
+    MAX_GLOBAL_BUFFER_GLOBAL_BINDING_POINT = 255
 };
 
-/** Returns whether a static uniform buffer slot index is valid. */
-inline bool IsUniformBufferGlobalBindingPointValid(const UniformBufferGlobalBindingPoint binding_point_) {
-    return binding_point_ < MAX_UNIFORM_BUFFER_GLOBAL_BINDING_POINT;
+/** Returns whether a static global buffer slot index is valid. */
+inline bool IsGlobalBindingPointValid(const GlobalBufferStaticBindingPoint binding_point_) {
+    return binding_point_ < MAX_GLOBAL_BUFFER_GLOBAL_BINDING_POINT;
 }
 
-/** The list of flags declaring which binding models are allowed for a uniform buffer layout. */
-enum class EUniformBufferBindingFlags : uint8_t
-{
-    /** If set, the uniform buffer can be bound as an RHI shader parameter on an RHI shader (i.e. RHISetShaderUniformBuffer). */
-    SHADER = 1 << 0,
-    
-    /** If set, the uniform buffer can be bound globally through a static slot (i.e. RHISetStaticUniformBuffers). */
+/** The list of flags declaring which binding models are allowed for a global buffer layout. */
+enum class EGlobalBufferBindingFlags : uint8_t {
+    /** If set, the global buffer can be bound as an RHI shader parameter on an RHI shader (i.e. RHISetConstantGlobalBuffer). */
+    CONSTANT = 1 << 0,
+
+    /** If set, the global buffer can be bound globally through a static slot (i.e. RHISetStaticGlobalBuffers). */
     STATIC = 1 << 1,
 
     /** If set, the uniform buffer can be bound globally or per-shader, depending on the use case. Only one binding model should be
@@ -772,20 +768,16 @@ enum class EUniformBufferBindingFlags : uint8_t
 	 *  is designed for difficult cases where a fixed single binding model would produce an unnecessary maintenance burden. Using this
 	 *  disables some RHI validation errors for global bindings, so use with care.
 	 */
-    ALL = STATIC | SHADER
+    ALL = STATIC | CONSTANT
 };
+ENUM_BIT_OP_IMPL(EGlobalBufferBindingFlags, FLAG)
 
-enum EUniformBufferLifeScope{
+enum EGlobalBufferLifeScope {
     SINGLE_DRAW,
     SINGLE_FRAME,
     MULTI_FRAME
 };
 
-enum EResourceAccessMode {
-    RAM_READ_ONLY,
-    RAM_WRITE_ONLY,
-    RAM_Num
-};
 enum class ETextureUsageFlags : uint64_t {
     UNDEFINED,
 
@@ -819,13 +811,15 @@ enum class ETextureUsageFlags : uint64_t {
     Num
 };
 ENUM_BIT_OP_IMPL(ETextureUsageFlags, FLAG)
+
+//for barriers
 enum class ETextureAspectFlags : uint32_t {
     // no
     NONE,
-    COLOR = 1 << 1,
-    DEPTH_SLICE = 1 << 2,
+    COLOR         = 1 << 1,
+    DEPTH_SLICE   = 1 << 2,
     STENCIL_SLICE = 1 << 3,
-    META_DATA = 1 << 4,
+    META_DATA     = 1 << 4,
     //for multi-planer texture
     PLANE_0 = 1 << 5,
     PLANE_1 = 1 << 6,
@@ -863,8 +857,7 @@ enum EVRSRateCombinerOp : uint8_t {
     VRSRB_MAX,
     VRSRB_MUL
 };
-enum ERenderQueryType
-{
+enum ERenderQueryType {
     RQT_UNDEFINED,
     // Result is the number of samples that are not culled (divide by MSAACount to get pixels)
     RQT_OCCLUSION,
@@ -900,4 +893,39 @@ enum class ECommandQueueType {
     COPY
 };
 
+#pragma utils
+struct Rect2D {
+    Offset2D offset;
+    Extent2D extent;
+
+    Rect2D(int32_t offset_x = -1, int32_t offset_y = -1, uint32_t extent_x = 0, uint32_t extent_y = 0)
+        : offset{offset_x, offset_y},
+          extent(extent_x, extent_y) {}
+
+    bool operator==(Rect2D other) const {
+        return offset == other.offset && extent == other.extent;
+    }
+
+    bool operator!=(Rect2D Other) const {
+        return !(*this == Other);
+    }
+
+    bool IsValid() const {
+        return offset.x >= 0 && offset.y >= 0 && extent.width > 0 && extent.height > 0;
+    }
+};
+
+struct SubpassSettings {
+
+    bool operator==(const SubpassSettings& other) const {
+        return type == other.type && index == other.index;
+    }
+    enum Type : uint8_t {
+        NONE,
+        DEFERRED
+    } type        = NONE;
+    uint8_t index = 0;
+};
+static_assert(sizeof(SubpassSettings) == 2);
+#pragma endregion
 #endif// !RHI_PLATFORM_COMMON_H

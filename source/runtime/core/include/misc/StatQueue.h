@@ -10,11 +10,11 @@
 template<typename T>
 class StatMPSCQueue {
 public:
-    bool tryPush(T value) {
+    bool TryPush(T value) {
         return m_queue.push(value);
     }
-    bool isClosed() { return m_queue.isClosed(); }
-    void popAll(std::vector<T>& target) {
+    bool IsClosed() { return m_queue.isClosed(); }
+    void PopAll(std::vector<T>& target) {
         auto func = [&target](T value) { target.push_back(value); };
         m_queue.consume_all_atomic_reversed(func);
     }
@@ -29,7 +29,7 @@ public:
     ~LockQueue() {
         
     }
-    bool pop(T*& target) {
+    bool Pop(T*& target) {
         std::unique_lock<std::mutex> lk(m_mutex);
         if (m_queue.size() == 0) {
             target = nullptr;
@@ -42,7 +42,7 @@ public:
         return true;
     }
 
-    void push(T* value) {
+    void Push(T* value) {
         std::unique_lock<std::mutex> lk(m_mutex);
         m_queue.push_back(value);
         lk.unlock();
@@ -172,7 +172,7 @@ private:
 template<typename T, uint32_t TaskPriorityCount>
 class TaskFIFOQueue {
 
-    static int32_t getFirstOne(uint32_t target) {
+    static int32_t GetFirstOne(uint32_t target) {
         int index = -1;
         for (int i = 0; i < 31; i++) {
             if (target == 0) break;
@@ -188,7 +188,7 @@ class TaskFIFOQueue {
 
 public:
     TaskFIFOQueue() : state{0} {};
-    int32_t push(T* task, uint32_t index) {
+    int32_t Push(T* task, uint32_t index) {
         DoublePtr local_state;
         DoublePtr new_state;
         int32_t   possibleThread = -1;
@@ -197,7 +197,7 @@ public:
         do {
             local_state       = state;
             uint32_t possible = local_state.get_ptr();
-            possibleThread    = getFirstOne(possible);
+            possibleThread    = GetFirstOne(possible);
             new_state         = advance_ptr(local_state);
             if (possibleThread >= 0) {
                 new_state.set_ptr(new_state.get_ptr() & ~(1ul << (32 - possibleThread - 1)));
@@ -206,7 +206,7 @@ public:
         return possibleThread;
     }
 
-    T* pop(int32_t index, bool allowHang = true) {
+    T* Pop(int32_t index, bool allowHang = true) {
         DoublePtr local_state(state.value.load(std::memory_order_acquire));
         DoublePtr new_state;
         T*        result = nullptr;

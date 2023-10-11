@@ -13,3 +13,6 @@ test/
 /.idea/vcs.xml
 build_vs2022
 cmake-build-*/
+/.cache/
+.vscode/launch.json
+.vscode/settings.json
