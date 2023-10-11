@@ -1,5 +1,5 @@
-#include "Transform.h"
-#include "Function.h"
+#include "math/Transform.h"
+#include "math/Function.h"
 #include <assert.h>
 
 namespace {
@@ -111,6 +111,8 @@ namespace Moer {
         affine_trans.quaternion  = Quaternion(Q);
         affine_trans.scaling     = D;
         affine_trans.translation = Vector3f(matrix.GetColumn(3));
+
+        return affine_trans;
     }
 
     Vector4f Transform::operator*(const Vector4f& v) const noexcept {

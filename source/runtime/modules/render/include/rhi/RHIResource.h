@@ -1,19 +1,23 @@
 #ifndef RHI_RESOURCE_H
 #define RHI_RESOURCE_H
-#include "rhi/RHICommon.h"
 #include "API_Macro.h"
-#include "rhi/RHIResourceInitilizer.h"
 #include "PixelFormat.h"
+#include "RenderCommon.h"
+#include "math/Base.h"
+
+#include "misc/Ptr.h"
+#include "misc/StatQueue.h"
+#include "misc/CountableRef.h"
+
+#include "rhi/RHICommon.h"
+#include "rhi/RHICommon.h"
+#include "rhi/RHIResourceInitilizer.h"
+
 #include <array>
 #include <cassert>
 #include <atomic>
-#include "RenderCommon.h"
-#include "misc/Ptr.h"
-#include "misc/StatQueue.h"
 #include <cstddef>
 #include <unordered_set>
-#include "misc/CountableRef.h"
-#include "rhi/RHICommon.h"
 #include <string>
 #include <optional>
 #include <bitset>
@@ -559,7 +563,7 @@ struct RHITextureInfo {
         ETextureLayout     _layout,
         EPixelFormat       _format,
         EClearAttachment   _clear_attachment,
-        int2               _extent,
+        Moer::Vector2i     _extent,
         uint16_t           _depth,
         uint8_t            _num_mips,
         uint8_t            _num_samples)
@@ -576,7 +580,7 @@ struct RHITextureInfo {
 
     ETextureLayout layout = TEXTURE_LAYOUT_UNDEFINED;
 
-    int2 extent = int2(1, 1);
+    Moer::Vector2i extent = Moer::Vector2i(1, 1);
 
     /** Depth of the texture if the dimension is 3D. */
     uint16_t depth = 1;
@@ -664,7 +668,7 @@ struct RHITextureCreateInfo : public RHITextureInfo {
     static RHITextureCreateInfo CreateCubeArray(const char* _name) {
         return {_name, ETextureDimension::TEX_CUBE_ARRAY};
     }
-    static RHITextureCreateInfo Create2D(const char* _name, int2 _size, EPixelFormat _format) {
+    static RHITextureCreateInfo Create2D(const char* _name, Moer::Vector2i _size, EPixelFormat _format) {
         return Create2D(_name).SetExtent(_size).SetFormat(_format);
     }
 
@@ -680,16 +684,16 @@ struct RHITextureCreateInfo : public RHITextureInfo {
         clear_attachment = _attachment;
         return *this;
     }
-    RHITextureCreateInfo& SetExtent(const int2 _extent) {
+    RHITextureCreateInfo& SetExtent(const Moer::Vector2i _extent) {
         extent = _extent;
         return *this;
     }
     RHITextureCreateInfo& SetExtent(int32_t _x, int32_t _y) {
-        extent = int2(_x, _y);
+        extent = Moer::Vector2i(_x, _y);
         return *this;
     }
     RHITextureCreateInfo& SetExtent(uint32_t _extent) {
-        extent = int2(_extent);
+        extent = Moer::Vector2i(_extent);
         return *this;
     }
     RHITextureCreateInfo& SetDepth(uint16_t _depth) {
@@ -740,7 +744,7 @@ public:
         return nullptr;
     }
 
-    int3 GetExtent3D() const {
+    Moer::Vector3i GetExtent3D() const {
         const RHITextureInfo& info = GetInfo();
         switch (info.dimension) {
             case ETextureDimension::TEX_2D: return {info.extent.x, info.extent.y, 1};
@@ -749,14 +753,14 @@ public:
             case ETextureDimension::TEX_CUBE: return {info.extent.x, info.extent.y, 1};
             case ETextureDimension::TEX_CUBE_ARRAY: return {info.extent.x, info.extent.y, info.array_size};
         }
-        return {0, 0, 0};
+        return Moer::Vector3i(0, 0, 0);
     }
 
-    int3 GetMipDimension(uint8_t _mip_index) const {
+    Moer::Vector3i GetMipDimension(uint8_t _mip_index) const {
         const RHITextureInfo& info = GetInfo();
-        return {std::max(info.extent.x >> _mip_index, 1),
-                std::max(info.extent.y >> _mip_index, 1),
-                std::max(info.depth >> _mip_index, 1)};
+        return Moer::Vector3i(std::max(info.extent.x >> _mip_index, 1),
+                              std::max(info.extent.y >> _mip_index, 1),
+                              std::max(info.depth >> _mip_index, 1));
     }
     void SetName(const std::string& _name) {
         name = _name;
@@ -2225,7 +2229,7 @@ enum class ERayTracingGeometryInitializerUsage : uint8_t {
     INTERMEDIATE_SRC
 };
 
-#pragma region ray-tracing
+#pragma region ray -tracing
 
 struct RayTracingAccelerationStructureSizeInfo {
     uint64_t result_size         = 0;

@@ -1,5 +1,5 @@
-#include "Quaternion.h"
-#include "Function.h"
+#include "math/Quaternion.h"
+#include "math/Function.h"
 #include <cmath>
 
 namespace {
@@ -39,6 +39,8 @@ namespace {
             vec[j] = (rotation[j][i] + rotation[i][j]) * root;
             vec[k] = (rotation[k][i] + rotation[i][k]) * root;
         }
+
+        return vec;
     }
 }// namespace
 

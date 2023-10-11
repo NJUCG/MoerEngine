@@ -14,10 +14,10 @@ set_target_properties(${target_name} PROPERTIES FOLDER "engine")
 target_include_directories(
   ${target_name}
   PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  PRIVATE $<BUILD_INTERFACE:${ENGINE_ROOT_DIR}/${ENGINE_RUNTIME}>
+  PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>
 )
 
-message("[Engine] runtime dir: ${ENGINE_ROOT_DIR}/${ENGINE_RUNTIME}")
+message("[Engine] runtime dir: ${moer_source_dir}/runtime")
 
 target_compile_options(${target_name} PUBLIC "$<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/WX->")
 

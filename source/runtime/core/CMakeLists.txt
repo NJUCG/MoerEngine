@@ -12,9 +12,7 @@ target_include_directories(${target_name}
 	PUBLIC $<BUILD_INTERFACE:${moer_runtime_core_dir}/include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/boost>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/spdlog/include>
-    PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/glm>
 )
 target_link_libraries(${target_name}
-    PUBLIC glm::glm
     PUBLIC spdlog::spdlog_header_only
 )
