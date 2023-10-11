@@ -1,6 +1,8 @@
 #ifndef RHI_COMMAND_LIST_H
 #define RHI_COMMAND_LIST_H
 #include "RHI.h"
+#include "math/Base.h"
+
 class RHICommandListBase {
 protected:
     RHI_API RHICommandListBase();
@@ -85,10 +87,10 @@ public:
     virtual void ClearDepthStencil() = 0;
     virtual void ClearUAVInt(
         RHIUnorderedAccessView* _uav,
-        const int4&             _values) = 0;
+        const Moer::Vector4i&   _values) = 0;
     virtual void ClearUAVFloat(
         RHIUnorderedAccessView* _uav,
-        const float4&           _values) = 0;
+        const Moer::Vector4f&   _values) = 0;
 
     virtual void BeginRenderPass(const RHIRenderPassInfo& _pass_info, const char* _pass_name) = 0;
     virtual void EndRenderPass()                                                              = 0;

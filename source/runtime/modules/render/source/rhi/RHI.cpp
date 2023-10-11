@@ -64,7 +64,7 @@ void Test() {
     for (int i = 0; i < 1; ++i) {
         vertex_init_list[i].type            = EVertexElementType::VET_FLOAT3;
         vertex_init_list[i].offset          = 0;
-        vertex_init_list[i].stride          = sizeof(float3);
+        vertex_init_list[i].stride          = sizeof(Moer::Vector3f);
         vertex_init_list[i].input_rate      = EVertexInputRate::VIR_VERTEX;
         vertex_init_list[i].attribute_index = 0;
         vertex_init_list[i].binding_index   = 0;
@@ -86,7 +86,7 @@ void Test() {
 
     shader_state.p_vertex_input_state = g_rhi->RHICreateVertexInputState(vertex_init_list);
 
-    const int2           attachment_size(4, 4);
+    const Moer::Vector2i attachment_size(4, 4);
     RHITextureCreateInfo tex_info;
     tex_info.SetDimension(ETextureDimension::TEX_2D)
         .SetFormat(PF_R8G8B8A8_SRGB)

@@ -1,4 +1,4 @@
-#ifndef THREAD_MANAGER_H
+﻿#ifndef THREAD_MANAGER_H
 #define THREAD_MANAGER_H
 #include <map>
 #include <string>
