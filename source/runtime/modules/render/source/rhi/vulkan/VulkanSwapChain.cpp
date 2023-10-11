@@ -4,20 +4,13 @@
 
 #include "VulkanUtil.h"
 #include "VulkanSwapChain.h"
-#include "misc/VulkanMacroUtils.h"
+#include "rhi/vulkan/misc/VulkanMacroUtils.h"
 
-namespace VUtil = MoerEngine::RHI::Vulkan::Util;
+namespace VkUtil = MoerEngine::RHI::Vulkan::Util;
 
-#if defined(VK_USE_PLATFORM_WIN32_KHR)
-void VulkanSwapChain::InitSurface(void* platform_handle, void* platform_window) {
-}
-#elif defined(VK_USE_PLATFORM_WAYLAND_KHR)
-void VulkanSwapChain::InitSurface(wl_display* display, wl_surface* window) {
-}
-#endif
-
-void VulkanSwapChain::Connect(VkInstance _instance, const std::shared_ptr<VulkanDevice>& _device) {
+void VulkanSwapChain::Connect(VkInstance _instance, VkSurfaceKHR _surface, const std::shared_ptr<VulkanDevice>& _device) {
     m_instance = _instance;
+    m_surface  = _surface;
     m_device   = _device;
 }
 
@@ -31,7 +24,7 @@ void VulkanSwapChain::Connect(VkInstance _instance, const std::shared_ptr<Vulkan
 void VulkanSwapChain::Init(uint32_t* width, uint32_t* height, bool vsync) {
     auto device = m_device.lock();
 
-    auto details        = VUtil::QuerySwapChainSupport(device->GetGpu(), m_surface);
+    auto details        = VkUtil::QuerySwapChainSupport(device->GetGpu(), m_surface);
     auto surface_format = ChooseSwapSurfaceFormat(details.formats);
     auto present_mode   = ChooseSwapPresentMode(details.present_modes, vsync);
     auto extent         = ChooseSwapExtent(width, height, details.capabilities);
