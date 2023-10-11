@@ -7,7 +7,7 @@
 
 #include "misc/MacroUtils.h"
 
-#include <spdlog/spdlog.h>
+#include "spdlog/spdlog.h"
 
 #define VK_CHECK_RESULT(f)                 \
     {                                      \
