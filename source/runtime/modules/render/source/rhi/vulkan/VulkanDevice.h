@@ -23,9 +23,9 @@ struct QueueFamilyIndices {
 };
 
 struct DeviceInitializer {
-    VkInstance               instance           = nullptr;
-    VkPhysicalDeviceType     gpu_type           = VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
-    VkSurfaceKHR             surface            = nullptr;
+    VkInstance               instance = nullptr;
+    VkPhysicalDeviceType     gpu_type = VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
+    VkSurfaceKHR             surface;
     VkPhysicalDeviceFeatures enabled_features   = {};
     std::vector<std::string> enabled_extensions = {};
     void*                    p_next_chain       = nullptr;
