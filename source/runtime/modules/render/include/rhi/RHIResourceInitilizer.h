@@ -315,11 +315,10 @@ struct RHISubresourceRange : public RHISubresourceSlice {
 
     uint8_t num_mips = s_all;
 
-    RHISubresourceRange():
-                            RHISubresourceSlice(
+    RHISubresourceRange() : RHISubresourceSlice(
                                 ETextureAspectFlags::NONE,
-                                0, 0
-                                ){};
+                                0,
+                                0){};
 
     RHISubresourceRange(
         ETextureAspectFlags _aspect,
@@ -402,7 +401,7 @@ struct RHICopyTextureInfo {
     }
 };
 
-struct RHICopyTextureToBufferInfo{
+struct RHICopyTextureToBufferInfo {
     RHISubresourceSlice texture_slice;
 
     uint64_t buffer_offset;
@@ -417,43 +416,39 @@ struct RHICopyTextureToBufferInfo{
     ETextureLayout src_layout;
 
     RHICopyTextureToBufferInfo(
-        ETextureLayout _src_layout,
-        Extent3D _extent,
+        ETextureLayout      _src_layout,
+        Extent3D            _extent,
         RHISubresourceSlice _slice)
-        :src_layout(_src_layout),
+        : src_layout(_src_layout),
           texture_extent(_extent),
           buffer_offset(0),
           buffer_row_length(0),
           buffer_texture_height(0),
           texture_offset(0),
-          texture_slice(_slice)
-    {
-
+          texture_slice(_slice) {
     }
 
     RHICopyTextureToBufferInfo(
-        ETextureLayout _src_layout,
-        Offset3D _texture_offset,
-        Extent3D _extent,
+        ETextureLayout      _src_layout,
+        Offset3D            _texture_offset,
+        Extent3D            _extent,
         RHISubresourceSlice _slice,
-        uint64_t _buffer_offset,
-        uint32_t _buffer_row_length = 0,
-        uint32_t _buffer_texture_height = 0)
-        :src_layout(_src_layout),
+        uint64_t            _buffer_offset,
+        uint32_t            _buffer_row_length     = 0,
+        uint32_t            _buffer_texture_height = 0)
+        : src_layout(_src_layout),
           texture_extent(_extent),
           buffer_offset(_buffer_offset),
           buffer_row_length(_buffer_row_length),
           buffer_texture_height(_buffer_texture_height),
           texture_offset(_texture_offset),
-          texture_slice(_slice)
-    {
-
+          texture_slice(_slice) {
     }
 };
-struct RHICopyBufferToTextureInfo{
+struct RHICopyBufferToTextureInfo {
 
     RHISubresourceSlice texture_slice;
-    uint64_t buffer_offset;
+    uint64_t            buffer_offset;
     /* he buffer_row_length is the number of pixels from one row to the next.
      * The buffer_texture_height is the number of rows from one texture layer to the next.*/
     uint32_t buffer_row_length;
@@ -465,37 +460,33 @@ struct RHICopyBufferToTextureInfo{
     ETextureLayout dst_layout;
 
     RHICopyBufferToTextureInfo(
-        ETextureLayout _dst_layout,
-        Extent3D _extent,
+        ETextureLayout      _dst_layout,
+        Extent3D            _extent,
         RHISubresourceSlice _slice)
-        :dst_layout(_dst_layout),
+        : dst_layout(_dst_layout),
           texture_extent(_extent),
           buffer_offset(0),
           buffer_row_length(0),
           buffer_texture_height(0),
           texture_offset(0),
-          texture_slice(_slice)
-    {
-
+          texture_slice(_slice) {
     }
 
     RHICopyBufferToTextureInfo(
-        ETextureLayout _dst_layout,
-        Offset3D _texture_offset,
-        Extent3D _extent,
+        ETextureLayout      _dst_layout,
+        Offset3D            _texture_offset,
+        Extent3D            _extent,
         RHISubresourceSlice _slice,
-        uint64_t _buffer_offset,
-        uint32_t _buffer_row_length = 0,
-        uint32_t _buffer_texture_height = 0)
-        :dst_layout(_dst_layout),
+        uint64_t            _buffer_offset,
+        uint32_t            _buffer_row_length     = 0,
+        uint32_t            _buffer_texture_height = 0)
+        : dst_layout(_dst_layout),
           texture_extent(_extent),
           buffer_offset(_buffer_offset),
           buffer_row_length(_buffer_row_length),
           buffer_texture_height(_buffer_texture_height),
           texture_offset(_texture_offset),
-          texture_slice(_slice)
-    {
-
+          texture_slice(_slice) {
     }
 };
 struct RHIBufferRegion {

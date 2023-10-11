@@ -893,7 +893,7 @@ enum class ECommandQueueType {
     COPY
 };
 
-#pragma utils
+#pragma region utils
 struct Rect2D {
     Offset2D offset;
     Extent2D extent;

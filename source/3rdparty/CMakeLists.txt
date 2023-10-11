@@ -1,10 +1,10 @@
-#Vulkan SDK
+
 set(third_party_folder "3rdParty")
 
+#Vulkan SDK
 if(WIN32)
     set(vulkan_lib "${THIRD_PARTY_DIR}/VulkanSDK/lib/Windows/vulkan-1.lib" PARENT_SCOPE)
     set(glslangValidator "${THIRD_PARTY_DIR}/VulkanSDK/binary/Windows/glslangValidator.exe" PARENT_SCOPE)
-    # �����ڲ�����ϵͳ·����ʹ���Լ���VK_LAYER_PATH
     add_compile_definitions("${CMAKE_PROJECT_NAME}_VK_LAYER_PATH=${THIRD_PARTY_DIR}/VulkanSDK/binary/Windows")
 
 elseif(APPLE)
@@ -17,14 +17,69 @@ elseif(APPLE)
 else()
 endif()
 
+#DXC
+
+
+# add_library(ShaderConductorSDK SHARED IMPORTED)
+# set_target_properties(ShaderConductorSDK PROPERTIES
+#     IMPORTED_CONFIGURATIONS        "DEBUG;RELEASE"
+#     IMPORTED_LOCATION_DEBUG        ${ShaderConductorDir_LOCAL}/${ShaderConductor_LIB_NAME}
+#     IMPORTED_IMPLIB_DEBUG          ${ShaderConductorDir_LOCAL}/${ShaderConductor_LIB_NAME}
+#     IMPORTED_LOCATION_RELEASE      ${ShaderConductorDir_LOCAL}/${ShaderConductor_LIB_NAME}
+#     IMPORTED_IMPLIB_RELEASE        ${ShaderConductorDir_LOCAL}/${ShaderConductor_LIB_NAME}
+#     INTERFACE_INCLUDE_DIRECTORIES  ${THIRD_PARTY_DIR}/ShaderConductor/Include
+# )
+IF(NOT TARGET dxc)
+    add_library(dxc SHARED IMPORTED)
+    set_target_properties(dxc PROPERTIES
+         IMPORTED_CONFIGURATIONS        "RELEASE"
+        PROPERTY IMPORTED_LOCATION_RELEASE      ${dxc_lib_dir_local}/${ShaderConductor_LIB_NAME}
+        PROPERTY IMPORTED_IMPLIB_RELEASE        ${dxc_lib_local}
+        PROPERTY INTERFACE_INCLUDE_DIRECTORIES  ${THIRD_PARTY_DIR}/DirectXShaderCompiler/include
+    )
+    add_custom_target(dxc_build)
+    if(WIN32)
+        set(dxc_lib "${THIRD_PARTY_DIR}/DirectXShaderCompiler/lib/Windows/dxcompiler.lib" PARENT_SCOPE)
+        set(dxc_lib_local "${THIRD_PARTY_DIR}/DirectXShaderCompiler/lib/Windows/dxcompiler.lib")
+        set(dxc_runtime "${THIRD_PARTY_DIR}/DirectXShaderCompiler/bin/Windows/dxcompiler.dll")
+        set(dxc_bin_dir "${THIRD_PARTY_DIR}/DirectXShaderCompiler/bin/Windows" PARENT_SCOPE)
+        set(dxc_bin "${THIRD_PARTY_DIR}/DirectXShaderCompiler/bin/Windows/dxc.exe" PARENT_SCOPE)
+    
+        if (${CMAKE_GENERATOR} MATCHES "Ninja")
+            add_custom_command(
+                    OUTPUT ${PROJECT_BINARY_DIR}/dxcompiler.dll
+                    DEPENDS dxc_build
+                    POST_BUILD
+                    COMMAND
+                    ${CMAKE_COMMAND} -E copy_if_different
+                    $<TARGET_FILE:${dxc_runtime}> ${PROJECT_BINARY_DIR}
+            )
+        else ()
+            add_custom_command(
+                    TARGET
+                    dxc
+                    POST_BUILD
+                    COMMAND
+                    ${CMAKE_COMMAND} -E copy_if_different
+                    $<TARGET_FILE:${dxc_runtime}> ${PROJECT_BINARY_DIR}/$<CONFIG>
+            )
+        endif ()
+    elseif(LINUX)
+    endif()
+
+ENDIF()
+
+
 IF(NOT TARGET spdlog)
     ADD_SUBDIRECTORY(spdlog)
     SET_TARGET_PROPERTIES(spdlog PROPERTIES FOLDER ${third_party_folder})
 ENDIF()
 
+IF(NOT TARGET glm)
     option(BUILD_STATIC_LIBS ON)
     option(BUILD_TESTING OFF)
     option(GLM_TEST_ENABLE OFF)
     option(BUILD_SHARED_LIBS OFF)
     ADD_SUBDIRECTORY(glm)
+    ENDIF()
 

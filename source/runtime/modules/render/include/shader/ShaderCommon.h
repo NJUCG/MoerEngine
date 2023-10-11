@@ -7,6 +7,7 @@
 #include <list>
 #include <vector>
 #include "misc/MacroUtils.h"
+
 enum class EShaderParameterType : uint8_t {
     LOOSE_DATA,
     UNIFORM_BUFFER,

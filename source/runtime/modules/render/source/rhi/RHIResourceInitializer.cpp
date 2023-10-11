@@ -46,7 +46,7 @@ uint32_t GetHash(const RHIDepthStencilStateInitializer& target) {
     return hash;
 }
 
-bool operator==(const RHIDepthStencilStateInitializer& lhs, const RHIDepthStencilStateInitializer& rhs){
+bool operator==(const RHIDepthStencilStateInitializer& lhs, const RHIDepthStencilStateInitializer& rhs) {
     return lhs.b_enable_depth_write == rhs.b_enable_depth_write &&
            lhs.depth_test_op == rhs.depth_test_op &&
            lhs.b_enable_front_face_stencil == rhs.b_enable_front_face_stencil &&
@@ -77,29 +77,29 @@ uint32_t GetHash(const RHIRasterizationStateInitializer& target) {
 }
 bool operator==(const RHIRasterizationStateInitializer& lhs, const RHIRasterizationStateInitializer& rhs) {
     return lhs.fill_mode == rhs.fill_mode &&
-    lhs.cull_mode == rhs.cull_mode &&
-    lhs.b_depth_bias == rhs.b_depth_bias &&
-    lhs.b_depth_clamp_enable == rhs.b_depth_clamp_enable &&
-    lhs.b_enable_msaa == rhs.b_enable_msaa &&
-    lhs.depth_bias == rhs.depth_bias &&
-    lhs.depth_bias_clamp == rhs.depth_bias_clamp &&
-    lhs.depth_bias_slop_factor == rhs.depth_bias_slop_factor;
+           lhs.cull_mode == rhs.cull_mode &&
+           lhs.b_depth_bias == rhs.b_depth_bias &&
+           lhs.b_depth_clamp_enable == rhs.b_depth_clamp_enable &&
+           lhs.b_enable_msaa == rhs.b_enable_msaa &&
+           lhs.depth_bias == rhs.depth_bias &&
+           lhs.depth_bias_clamp == rhs.depth_bias_clamp &&
+           lhs.depth_bias_slop_factor == rhs.depth_bias_slop_factor;
 }
 uint32_t GetHash(const RHIMultisampleStateInitializer& target) {
     uint32_t hash = 0;
-    hash_combine(hash,GetHash(target.sample_count));
-    hash_combine(hash,GetHash(target.b_sample_shading));
-    hash_combine(hash,GetHash(target.b_alpha_to_converge));
-    hash_combine(hash,GetHash(target.b_alpha_to_one));
-    hash_combine(hash,GetHash(target.min_sample_shading));
+    hash_combine(hash, GetHash(target.sample_count));
+    hash_combine(hash, GetHash(target.b_sample_shading));
+    hash_combine(hash, GetHash(target.b_alpha_to_converge));
+    hash_combine(hash, GetHash(target.b_alpha_to_one));
+    hash_combine(hash, GetHash(target.min_sample_shading));
     return hash;
 }
 bool operator==(const RHIMultisampleStateInitializer& lhs, const RHIMultisampleStateInitializer& rhs) {
     return lhs.sample_count == rhs.sample_count &&
-    lhs.b_sample_shading == rhs.b_sample_shading &&
-    lhs.b_alpha_to_converge == rhs.b_alpha_to_converge &&
-    lhs.b_alpha_to_one == rhs.b_alpha_to_one &&
-    lhs.min_sample_shading == rhs.min_sample_shading;
+           lhs.b_sample_shading == rhs.b_sample_shading &&
+           lhs.b_alpha_to_converge == rhs.b_alpha_to_converge &&
+           lhs.b_alpha_to_one == rhs.b_alpha_to_one &&
+           lhs.min_sample_shading == rhs.min_sample_shading;
 }
 uint32_t GetHash(const RHIBlendStateInitializer::AttachmentInitializer& target) {
     uint32_t hash = 0;
