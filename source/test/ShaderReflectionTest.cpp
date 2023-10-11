@@ -8,7 +8,7 @@ DEFINE_SHADER_PARAM_SRV(StructuredBuffer, sbo)
 DEFINE_SHADER_PARAM_SAMPLER(Sampler, sampler)
 DEFINE_SHADER_PARAM_SRV_ARRAY(TextureSRVArray, srv_array, 10)
 DEFINE_SHADER_PARAM_ATTACHMENT_BINDING()
-DEFINE_SHADER_PARAM(int2, rect)
+DEFINE_SHADER_PARAM(Moer::Vector2i, rect)
 END_SHADER_PARAMETER_DEFINITION(Parameters)
 
 class TestGlobalShader : public ShaderBase {

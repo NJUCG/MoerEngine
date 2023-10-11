@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Base.h"
+#include <algorithm>
 
 namespace Moer {
     template<NumericType T, size_t ROW, size_t COL>

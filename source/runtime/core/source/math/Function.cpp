@@ -1,5 +1,5 @@
-#include "Function.h"
-#include "Constant.h"
+#include "math/Function.h"
+#include "math/Constant.h"
 
 namespace {
     template<Moer::NumericType T>
@@ -11,6 +11,8 @@ namespace {
         ret[0][1] = -m[0][1] * inv_det;
         ret[1][0] = -m[1][0] * inv_det;
         ret[1][1] = m[0][0] * inv_det;
+
+        return ret;
     }
     template<Moer::NumericType T>
     inline Moer::Matrix<T, 3, 3> Inverse(const Moer::Matrix<T, 3, 3>& m) noexcept {
@@ -91,7 +93,7 @@ namespace {
     template<Moer::NumericType T>
     void QDUDecomposition(const Moer::Matrix<T, 3, 3>& m, Moer::Matrix<T, 3, 3>& Q, Moer::Vector<T, 3>& D, Moer::Vector<T, 3>& U) noexcept {
         T inv_length = m[0][0] * m[0][0] + m[1][0] * m[1][0] + m[2][0] * m[2][0];
-        if (!Moer::ApproxEqual(inv_length, 0.f, std::numeric_limits<T>::epsilon()))
+        if (!Moer::ApproxEqual(inv_length, (T)0, std::numeric_limits<T>::epsilon()))
             inv_length = 1.f / std::sqrt(inv_length);
 
         Q[0][0] = m[0][0] * inv_length;
@@ -103,7 +105,7 @@ namespace {
         Q[1][1]    = m[1][1] - dot * Q[1][0];
         Q[2][1]    = m[2][1] - dot * Q[2][0];
         inv_length = Q[0][1] * Q[0][1] + Q[1][1] * Q[1][1] + Q[2][1] * Q[2][1];
-        if (!Moer::ApproxEqual(inv_length, 0.f, std::numeric_limits<T>::epsilon()))
+        if (!Moer::ApproxEqual(inv_length, (T)0, std::numeric_limits<T>::epsilon()))
             inv_length = 1.f / std::sqrt(inv_length);
 
         Q[0][1] *= inv_length;
@@ -119,7 +121,7 @@ namespace {
         Q[1][2] -= dot * Q[1][1];
         Q[2][2] -= dot * Q[2][1];
         inv_length = Q[0][2] * Q[0][2] + Q[1][2] * Q[1][2] + Q[2][2] * Q[2][2];
-        if (!Moer::ApproxEqual(inv_length, 0.f, std::numeric_limits<T>::epsilon()))
+        if (!Moer::ApproxEqual(inv_length, (T)0, std::numeric_limits<T>::epsilon()))
             inv_length = 1.f / std::sqrt(inv_length);
 
         Q[0][2] *= inv_length;
@@ -334,6 +336,8 @@ namespace Moer {
         perspective[2][2] = f_range;
         perspective[3][2] = -1.f;
         perspective[2][3] = -near_clip * f_range;
+
+        return perspective;
     }
     Matrix4x4d MakePerspectiveMatrixRH(double fov_y, double aspect_ratio, double near_clip, double far_clip) noexcept {
         double     tan_half_fov = std::tan(fov_y * 0.5f);
@@ -345,5 +349,7 @@ namespace Moer {
         perspective[2][2] = f_range;
         perspective[3][2] = -1.f;
         perspective[2][3] = -near_clip * f_range;
+
+        return perspective;
     }
 }// namespace Moer
