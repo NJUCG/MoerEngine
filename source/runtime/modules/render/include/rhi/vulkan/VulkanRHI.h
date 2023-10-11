@@ -2,15 +2,16 @@
 #define VULKAN_RHI_H
 
 #include "IVulkanRHI.h"
+#include <vk_mem_alloc.h>
 
-#include "VulkanDevice.h"
-#include "VulkanSwapChain.h"
-
+struct GLFWwindow;
+class VulkanDevice;
+class VulkanSwapChain;
 class VulkanViewport;
 
-class VulkanRHIImpl final : IVulkanRHI {
+class VulkanRHIImpl final : public IVulkanRHI {
 public:
-    VulkanRHIImpl();
+    VulkanRHIImpl(GLFWwindow* _window);
 
     void Initialize() final override;
 
@@ -52,31 +53,29 @@ public:
 
     RHIComputePipelineStateRef RHICreateComputePipelineState(RHIComputeShader* _compute_shader) final override;
 
-    RHIUniformBufferRef RHICreateUniformBuffer(const void* data, const RHIUniformBufferLayout* layout, EBufferUsageFlags _usage) final override;
+    RHIGlobalBufferRef RHICreateUniformBuffer(const void* data, const RHIGlobalBufferLayout* layout, EBufferUsageFlags _usage) final override;
 
     void RHICopyBuffer(RHIBuffer* _src, RHIBuffer* _dst) final override;
 
     RHIBufferRef RHICreateBuffer(const RHIBufferCreateInfo& info) final override;
+    void*        RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size) final override;
+    void         RHIUnmapBuffer(RHIBuffer* _buffer) final override;
+
+    RHITextureRef RHICreateTexture(const RHITextureCreateInfo& info) final override;
 
     RHIShaderResourceViewRef  RHICreateShaderResourceView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) final override;
     RHIUnorderedAccessViewRef RHICreateUnorderedAccessView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) final override;
 #pragma endregion
 
-public:
-    struct Settings {
-        /** @brief Activates validation layers (and message output) when set to true */
-        bool validation = false;
-    } settings;
-
 protected:
     VkInstance               m_instance;
-    std::vector<const char*> m_instance_layers;
+    std::vector<std::string> m_instance_layers;
 
-    std::vector<const char*> m_instance_extensions;
-    std::vector<const char*> m_enabled_instance_extensions;
+    std::vector<std::string> m_instance_extensions;
+    std::vector<std::string> m_enabled_instance_extensions;
 
-    //std::shared_ptr<VulkanWindow> m_window;
     VkSurfaceKHR m_surface;
+    VmaAllocator m_allocator;
 
     std::shared_ptr<VulkanDevice>    m_device;
     std::shared_ptr<VulkanSwapChain> m_swap_chain;
@@ -84,27 +83,20 @@ protected:
     std::shared_ptr<VulkanViewport>  m_current_viewport;
 
 protected:
-    void InitWindow();
+    void InitSurface(GLFWwindow* _window);
     void InitVulkan();
-
-    VkPhysicalDeviceFeatures GetEnabledDeviceFeatures() {}
-    std::vector<const char*> GetEnabledDeviceExtensions() {
-        return {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
-    }
 
 #pragma region vulkan functions
 private:
-    void CreateInstance(bool _enable_validation);
+    void CreateInstance();
 
 #pragma endregion
 
 #pragma region helper functions
 private:
-    std::vector<const char*> GetInstanceExtensions();
+    bool CheckEnabledExtensions();
 
-    std::vector<const char*> GetRequiredExtensionsSupported();
-
-    bool CheckValidationLayerSupport(const char* layer_name);
+    bool CheckValidationLayer(const std::string& layer_name);
 
 #pragma endregion
 };

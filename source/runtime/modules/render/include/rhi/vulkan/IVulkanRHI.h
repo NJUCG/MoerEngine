@@ -6,14 +6,6 @@
 #define IVULKAN_RHI_H
 
 #include "rhi/RHI.h"
-
-#ifdef _WIN32
-#include "./windows/VulkanWindowsPlatform.h"
-#include <windows.h>
-#elif defined(VK_USE_PLATFORM_WAYLAND_KHR)
-#include "./linux/VulkanLinuxPlatform.h"
-#endif
-
 #include <vulkan.h>
 
 class IVulkanRHI : public RHI {
@@ -23,47 +15,57 @@ public:
     const char* GetName() override { return "VulkanRHI Interface"; }
 
 #pragma region resources creation
-    RHISamplerRef            RHICreateSampler(const RHISamplerInitializer& _initializer) override {}
-    RHIRasterizationStateRef RHICreateRasterizationState(const RHIRasterizationStateInitializer& _init) override {}
-    RHIDepthStencilStateRef  RHICreateDepthStencilState(const RHIDepthStencilStateInitializer& _init) override {}
-    RHIMultisampleStateRef   RHICreateMultiSampleState(const RHIMultisampleStateInitializer& _init) override {}
-    RHIBlendStateRef         RHICreateBlendState(const RHIBlendStateInitializer& _init) override {}
-    RHIVertexInputStateRef   RHICreateVertexInputState(const VertexInputStateInitializerList& _init) override {}
+    RHISamplerRef            RHICreateSampler(const RHISamplerInitializer& _initializer) override { return RHISamplerRef{}; }
+    RHIRasterizationStateRef RHICreateRasterizationState(const RHIRasterizationStateInitializer& _init) override { return RHIRasterizationStateRef{}; }
+    RHIDepthStencilStateRef  RHICreateDepthStencilState(const RHIDepthStencilStateInitializer& _init) override { return RHIDepthStencilStateRef{}; }
+    RHIMultisampleStateRef   RHICreateMultiSampleState(const RHIMultisampleStateInitializer& _init) override { return RHIMultisampleStateRef{}; }
+    RHIBlendStateRef         RHICreateBlendState(const RHIBlendStateInitializer& _init) override { return RHIBlendStateRef{}; }
+    RHIVertexInputStateRef   RHICreateVertexInputState(const VertexInputStateInitializerList& _init) override { return RHIVertexInputStateRef{}; }
 
-    RHIVertexShaderRef   RHICreateVertexShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) override {}
-    RHIFragmentShaderRef RHICreateFragmentShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) override {}
-    RHIGeometryShaderRef RHICreateGeometryShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) override {}
+    RHIVertexShaderRef   RHICreateVertexShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) override { return RHIVertexShaderRef{}; }
+    RHIFragmentShaderRef RHICreateFragmentShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) override { return RHIFragmentShaderRef{}; }
+    RHIGeometryShaderRef RHICreateGeometryShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) override { return RHIGeometryShaderRef{}; }
 
-    RHIMeshShaderRef          RHICreateMeshShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) override {}
-    RHIAmplificationShaderRef RHICreateAmplificationShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) override {}
+    RHIMeshShaderRef          RHICreateMeshShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) override { return RHIMeshShaderRef{}; }
+    RHIAmplificationShaderRef RHICreateAmplificationShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) override { return RHIAmplificationShaderRef{}; }
 
-    RHIComputeShaderRef RHICreateComputeShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) override {}
+    RHIComputeShaderRef RHICreateComputeShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) override { return RHIComputeShaderRef{}; }
 
-    RHIShaderLibraryRef RHICreateShaderLibrary(EShaderPlatform _platform, const std::string& _file_path, const std::string& name) override {}
+    RHIShaderLibraryRef RHICreateShaderLibrary(EShaderPlatform _platform, const std::string& _file_path, const std::string& name) override { return RHIShaderLibraryRef{}; }
 
-    RHIFenceRef RHICreateFence(const std::string& name) override {}
+    RHIFenceRef RHICreateFence(const std::string& name) override { return RHIFenceRef{}; }
 
     /* create cpu visible buffer for direct data transfer */
-    RHIStagingBufferRef RHICreateStagingBuffer() override {}
+    RHIStagingBufferRef RHICreateStagingBuffer() override { return RHIStagingBufferRef{}; }
 
     RHIShaderBoundStateRef RHICreateShaderBoundStage(
         RHIVertexInputState* _vertex_input,
         RHIVertexShader*     _vertex_shader,
         RHIFragmentShader*   _fragment_shader,
-        RHIGeometryShader*   _geometry_shader) override {}
+        RHIGeometryShader*   _geometry_shader) override { return RHIShaderBoundStateRef{}; }
 
-    RHIGraphicsPipelineStateRef RHICreateGraphicsPipelineState(const RHIGraphicsPipelineStateInitializer& _init) override {}
+    RHIGraphicsPipelineStateRef RHICreateGraphicsPipelineState(const RHIGraphicsPipelineStateInitializer& _init) override { return RHIGraphicsPipelineStateRef{}; }
 
-    RHIComputePipelineStateRef RHICreateComputePipelineState(RHIComputeShader* _compute_shader) override {}
+    RHIComputePipelineStateRef RHICreateComputePipelineState(RHIComputeShader* _compute_shader) override { return RHIComputePipelineStateRef{}; }
 
-    RHIUniformBufferRef RHICreateUniformBuffer(const void* data, const RHIUniformBufferLayout* layout, EBufferUsageFlags _usage) override {}
+    RHIGlobalBufferRef RHICreateUniformBuffer(const void* data, const RHIGlobalBufferLayout* layout, EBufferUsageFlags _usage) override { return RHIGlobalBufferRef{}; }
 
     void RHICopyBuffer(RHIBuffer* _src, RHIBuffer* _dst) override {}
 
-    RHIBufferRef RHICreateBuffer(const RHIBufferCreateInfo& info) override {}
+    RHIBufferRef RHICreateBuffer(const RHIBufferCreateInfo& info) override { return RHIBufferRef{}; }
+    void*        RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size) override { return nullptr; }
+    void         RHIUnmapBuffer(RHIBuffer* _buffer) override {}
 
-    RHIShaderResourceViewRef  RHICreateShaderResourceView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) override {}
-    RHIUnorderedAccessViewRef RHICreateUnorderedAccessView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) override {}
+    RHITextureRef RHICreateTexture(const RHITextureCreateInfo& info) override { return RHITextureRef{}; };
+
+    RHIShaderResourceViewRef  RHICreateShaderResourceView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) override { return RHIShaderResourceViewRef{}; }
+    RHIUnorderedAccessViewRef RHICreateUnorderedAccessView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) override { return RHIUnorderedAccessViewRef{}; }
+
+    RHICommandQueue* CreateCommandQueue(ECommandQueueType type) override { return nullptr; }
+
+    RHIGraphicsCommandList* CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state = nullptr) override { return nullptr; }
+
+    RHIComputeCommandList* CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr) override { return nullptr; }
 
 #pragma endregion
 };

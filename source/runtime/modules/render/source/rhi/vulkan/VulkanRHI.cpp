@@ -1,28 +1,32 @@
 #include "config.h"
 #include "misc/MacroUtils.h"
-#include "misc/VulkanMacroUtils.h"
+#include "rhi/vulkan/misc/VulkanMacroUtils.h"
 
 #include "rhi/vulkan/VulkanRHI.h"
+#include "VulkanExtension.h"
 
 #include "VulkanDebug.h"
 #include "VulkanUtil.h"
+
+#include "VulkanDevice.h"
+#include "VulkanSwapChain.h"
+
+#include <GLFW/glfw3.h>
 
 #include <string>
 
 const std::string vk_layer = MACRO_STR(__ENGINE_NAME__) MACRO_STR(_VK_LAYER_PATH);
 
-namespace VUtil       = MoerEngine::RHI::Vulkan::Util;
-namespace VDebug      = MoerEngine::RHI::Vulkan::Debug;
-namespace VDebugUtils = MoerEngine::RHI::Vulkan::DebugUtils;
+namespace VkUtil = MoerEngine::RHI::Vulkan::Util;
 
-VulkanRHIImpl::VulkanRHIImpl() : m_instance(VK_NULL_HANDLE), m_device(nullptr), m_current_viewport(nullptr), settings({true}) {
-    MOER_LOG_INFO("Built with Vulkan header version %u.%u.%u", VK_API_VERSION_MAJOR(VK_HEADER_VERSION_COMPLETE), VK_API_VERSION_MINOR(VK_HEADER_VERSION_COMPLETE), VK_API_VERSION_PATCH(VK_HEADER_VERSION_COMPLETE));
+VulkanRHIImpl::VulkanRHIImpl(GLFWwindow* _window) : m_instance(VK_NULL_HANDLE), m_device(nullptr), m_current_viewport(nullptr) {
+    MOER_LOG_INFO("Built with Vulkan header version {0:d}.{1:d}.{2:d}", VK_API_VERSION_MAJOR(VK_HEADER_VERSION_COMPLETE), VK_API_VERSION_MINOR(VK_HEADER_VERSION_COMPLETE), VK_API_VERSION_PATCH(VK_HEADER_VERSION_COMPLETE));
 
-    CreateInstance(settings.validation);
+    CreateInstance();
+    InitSurface(_window);
 }
 
 void VulkanRHIImpl::Initialize() {
-    InitWindow();
     InitVulkan();
 }
 
@@ -62,29 +66,36 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
 
 RHIComputePipelineStateRef VulkanRHIImpl::RHICreateComputePipelineState(RHIComputeShader* _compute_shader) { return RHIComputePipelineStateRef{}; }
 
-RHIUniformBufferRef VulkanRHIImpl::RHICreateUniformBuffer(const void* data, const RHIUniformBufferLayout* layout, EBufferUsageFlags _usage) { return RHIUniformBufferRef{}; }
+RHIGlobalBufferRef VulkanRHIImpl::RHICreateUniformBuffer(const void* data, const RHIGlobalBufferLayout* layout, EBufferUsageFlags _usage) { return RHIGlobalBufferRef{}; }
 
 void VulkanRHIImpl::RHICopyBuffer(RHIBuffer* _src, RHIBuffer* _dst) {}
 
 RHIBufferRef VulkanRHIImpl::RHICreateBuffer(const RHIBufferCreateInfo& info) { return RHIBufferRef{}; }
+void*        VulkanRHIImpl::RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size) { return nullptr; }
+void         VulkanRHIImpl::RHIUnmapBuffer(RHIBuffer* _buffer) {}
+
+RHITextureRef VulkanRHIImpl::RHICreateTexture(const RHITextureCreateInfo& info) { return RHITextureRef{}; };
 
 RHIShaderResourceViewRef  VulkanRHIImpl::RHICreateShaderResourceView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) { return RHIShaderResourceViewRef{}; }
 RHIUnorderedAccessViewRef VulkanRHIImpl::RHICreateUnorderedAccessView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) { return RHIUnorderedAccessViewRef{}; }
 #pragma endregion
 
-void VulkanRHIImpl::InitWindow() {
+void VulkanRHIImpl::InitSurface(GLFWwindow* _window) {
+    VK_CHECK_RESULT(glfwCreateWindowSurface(m_instance, _window, nullptr, &m_surface));
 }
 
 void VulkanRHIImpl::InitVulkan() {
     DeviceInitializer initializer;
     initializer.instance           = m_instance;
     initializer.surface            = m_surface;
-    initializer.enabled_features   = GetEnabledDeviceFeatures();
-    initializer.enabled_extensions = GetEnabledDeviceExtensions();
+    initializer.enabled_features   = {};
+    initializer.enabled_extensions = VulkanDeviceExtension::GetMESupportedDeviceExtensions();
 
+    m_device = std::make_shared<VulkanDevice>();
     m_device->Init(initializer);
 
-    m_swap_chain->Connect(m_instance, m_device);
+    m_swap_chain = std::make_shared<VulkanSwapChain>();
+    m_swap_chain->Connect(m_instance, m_surface, m_device);
     uint32_t width, height;
     // glfwGetFramebufferSize(m_window, &width, &height);
     m_swap_chain->Init(&width, &height, true);
@@ -92,7 +103,7 @@ void VulkanRHIImpl::InitVulkan() {
 
 #pragma region vulkan functions
 
-void VulkanRHIImpl::CreateInstance(bool _enable_validation) {
+void VulkanRHIImpl::CreateInstance() {
     VkApplicationInfo application_info{};
     application_info.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
     // application_info.pApplicationName = MACRO_STR(__ENGINE_NAME__);
@@ -101,33 +112,29 @@ void VulkanRHIImpl::CreateInstance(bool _enable_validation) {
     application_info.engineVersion = VK_MAKE_VERSION(PROJECT_VERSION_MAJOR, PROJECT_VERSION_MINOR, PROJECT_VERSION_PATCH);
     application_info.apiVersion    = VK_API_VERSION_1_3;
 
-    m_instance_extensions    = GetInstanceExtensions();
-    auto required_extensions = GetRequiredExtensionsSupported();
-    required_extensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
+    m_instance_extensions         = VulkanInstanceExtension::GetDriverSupportedInstanceExtensionNames();
+    m_enabled_instance_extensions = VulkanInstanceExtension::GetMESupportedInstanceExtensions();
 
-    // Enable surface extensions depending on os
-#if defined(_WIN32)
-    required_extensions.push_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
-#elif defined(VK_USE_PLATFORM_WAYLAND_KHR)
-    required_extensions.push_back(VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME);
-#endif
-
-    // Enable the debug utils extension if available
-    bool debug_utils_available = std::find(m_instance_extensions.begin(), m_instance_extensions.end(), VK_EXT_DEBUG_UTILS_EXTENSION_NAME) != m_instance_extensions.end();
-    if (_enable_validation && debug_utils_available) {
-        required_extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-    }
+    bool extension_supported   = CheckEnabledExtensions();
+    bool debug_utils_available = std::find(m_enabled_instance_extensions.begin(), m_enabled_instance_extensions.end(), VK_EXT_DEBUG_UTILS_EXTENSION_NAME) != m_enabled_instance_extensions.end();
 
     VkInstanceCreateInfo instance_create_info{};
-    instance_create_info.sType                   = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
-    instance_create_info.pNext                   = nullptr;
-    instance_create_info.flags                   = 0;
-    instance_create_info.pApplicationInfo        = &application_info;
-    instance_create_info.enabledExtensionCount   = static_cast<uint32_t>(required_extensions.size());
-    instance_create_info.ppEnabledExtensionNames = required_extensions.data();
+    instance_create_info.sType            = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+    instance_create_info.pNext            = nullptr;
+    instance_create_info.flags            = 0;
+    instance_create_info.pApplicationInfo = &application_info;
+
+    auto n = m_enabled_instance_extensions.size();
+
+    std::vector<const char*> r_extensions(n, nullptr);
+    for (size_t i = 0; i < n; ++i) {
+        r_extensions[i] = m_enabled_instance_extensions[i].c_str();
+    }
+    instance_create_info.enabledExtensionCount   = n;
+    instance_create_info.ppEnabledExtensionNames = r_extensions.data();
 
     const char* validation_layer_name = "VK_LAYER_KHRONOS_validation";
-    if (_enable_validation && CheckValidationLayerSupport(validation_layer_name)) {
+    if (CheckValidationLayer(validation_layer_name)) {
         instance_create_info.enabledLayerCount   = 1;
         instance_create_info.ppEnabledLayerNames = &validation_layer_name;
     } else {
@@ -137,12 +144,10 @@ void VulkanRHIImpl::CreateInstance(bool _enable_validation) {
 
     VK_CHECK_RESULT(vkCreateInstance(&instance_create_info, nullptr, &m_instance))
 
-    if (debug_utils_available) {
-        VDebugUtils::Setup(m_instance);
-    }
+    MoerEngine::RHI::Vulkan::Debug::SetupDebugUtilsMessengerEXT(m_instance);
 
-    if (_enable_validation) {
-        VDebug::SetupDebugUtilsMessengerEXT(m_instance);
+    if (debug_utils_available) {
+        MoerEngine::RHI::Vulkan::DebugUtils::Setup(m_instance);
     }
 }
 
@@ -150,38 +155,7 @@ void VulkanRHIImpl::CreateInstance(bool _enable_validation) {
 
 #pragma region helper functions
 
-std::vector<const char*> VulkanRHIImpl::GetInstanceExtensions() {
-    std::vector<const char*> instance_extensions;
-
-    uint32_t ext_count = 0;
-    vkEnumerateInstanceExtensionProperties(nullptr, &ext_count, nullptr);
-    if (ext_count > 0) {
-        std::vector<VkExtensionProperties> extensions(ext_count);
-        if (vkEnumerateInstanceExtensionProperties(nullptr, &ext_count, extensions.data()) == VK_SUCCESS) {
-            for (const auto& extension : extensions) {
-                instance_extensions.push_back(extension.extensionName);
-            }
-        }
-    }
-
-    return instance_extensions;
-}
-
-std::vector<const char*> VulkanRHIImpl::GetRequiredExtensionsSupported() {
-    std::vector<const char*> required_extensions;
-    if (!m_enabled_instance_extensions.empty()) {
-        for (auto* extension : m_enabled_instance_extensions) {
-            if (std::find(m_instance_extensions.begin(), m_instance_extensions.end(), extension) == m_instance_extensions.end()) {
-                VUtil::ExitFatal("Enabled instance extension '" + std::string(extension) + "' is not supported!", -1);
-            }
-            required_extensions.push_back(extension);
-        }
-    }
-
-    return required_extensions;
-}
-
-bool VulkanRHIImpl::CheckValidationLayerSupport(const char* layer_name) {
+bool VulkanRHIImpl::CheckValidationLayer(const std::string& layer_name) {
     uint32_t instance_layer_count = 0;
     vkEnumerateInstanceLayerProperties(&instance_layer_count, nullptr);
     std::vector<VkLayerProperties> instance_layer_properties(instance_layer_count);
@@ -189,13 +163,24 @@ bool VulkanRHIImpl::CheckValidationLayerSupport(const char* layer_name) {
     bool validation_layer_present = false;
 
     for (auto layer_property : instance_layer_properties) {
-        if (strcmp(layer_property.layerName, layer_name) == 0) {
+        if (layer_name == layer_property.layerName) {
             validation_layer_present = true;
             break;
         }
     }
 
     return validation_layer_present;
+}
+bool VulkanRHIImpl::CheckEnabledExtensions() {
+    if (!m_enabled_instance_extensions.empty()) {
+        for (const auto& extension : m_enabled_instance_extensions) {
+            if (std::find(m_instance_extensions.begin(), m_instance_extensions.end(), extension) == m_instance_extensions.end()) {
+                VkUtil::ExitFatal("Enabled instance extension '" + std::string(extension) + "' is not supported!", -1);
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 #pragma endregion

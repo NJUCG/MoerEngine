@@ -3,11 +3,10 @@
 //
 
 #include "VulkanUtil.h"
-#include "misc/VulkanMacroUtils.h"
+#include "rhi/vulkan/misc/VulkanMacroUtils.h"
 
 #if defined(_WIN32)
 #include <windows.h>
-#include <fcntl.h>
 #endif
 
 #include <vector>
@@ -222,7 +221,7 @@ namespace Util {
 
             return shader_module;
         }
-        ExitFatal("Could not open shader file \"" + std::string(file_name) + "\"", VK_NULL_HANDLE)
+        ExitFatal("Could not open shader file \"" + std::string(file_name) + "\"", -1);
     }
 
     bool FileExists(const std::string& filename) {
