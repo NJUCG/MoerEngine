@@ -1,0 +1,10 @@
+//
+// Created by 74535 on 2023/10/11.
+//
+
+#ifndef WINDOWS_VULKAN_PLATFORM_DEFINES_H
+#define WINDOWS_VULKAN_PLATFORM_DEFINES_H
+
+#include "VulkanWindowsPlatform.h"
+
+#endif//WINDOWS_VULKAN_PLATFORM_DEFINES_H
