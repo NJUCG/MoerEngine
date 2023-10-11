@@ -18,64 +18,44 @@ elseif(APPLE)
 else()
 endif()
 
+add_library(dxc SHARED IMPORTED GLOBAL)
+add_custom_target(DXC_COPY ALL)
 #DXC
+if(WIN32)
+    set(dxc_lib "${moer_third_party_dir}/DirectXShaderCompiler/lib/Windows/dxcompiler.lib" PARENT_SCOPE)
+    set(dxc_lib_local "${moer_third_party_dir}/DirectXShaderCompiler/lib/Windows/dxcompiler.lib")
+    set(dxc_runtime_dir "${moer_third_party_dir}/DirectXShaderCompiler/bin/Windows")
+    set(dxc_bin_dir "${moer_third_party_dir}/DirectXShaderCompiler/bin/Windows" PARENT_SCOPE)
+    set(dxc_bin "${moer_third_party_dir}/DirectXShaderCompiler/bin/Windows/dxc.exe" PARENT_SCOPE)
 
+    if(CMAKE_GENERATOR MATCHES "Ninja" OR UNIX AND NOT APPLE) 
+    set(real_out_put_dir "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}") 
+else() 
+    set(real_out_put_dir "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>") 
+endif()
+    add_custom_command(
+        TARGET DXC_COPY
+        POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${dxc_runtime_dir}/dxcompiler.dll"
+        ${real_out_put_dir}
+        # COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        # "${dxc_runtime_dir}/dxcompiler.dll"
+        # ${real_out_put_dir}  #executable
 
-# add_library(ShaderConductorSDK SHARED IMPORTED)
-# set_target_properties(ShaderConductorSDK PROPERTIES
-#     IMPORTED_CONFIGURATIONS        "DEBUG;RELEASE"
-#     IMPORTED_LOCATION_DEBUG        ${ShaderConductorDir_LOCAL}/${ShaderConductor_LIB_NAME}
-#     IMPORTED_IMPLIB_DEBUG          ${ShaderConductorDir_LOCAL}/${ShaderConductor_LIB_NAME}
-#     IMPORTED_LOCATION_RELEASE      ${ShaderConductorDir_LOCAL}/${ShaderConductor_LIB_NAME}
-#     IMPORTED_IMPLIB_RELEASE        ${ShaderConductorDir_LOCAL}/${ShaderConductor_LIB_NAME}
-#     INTERFACE_INCLUDE_DIRECTORIES  ${THIRD_PARTY_DIR}/ShaderConductor/Include
-# )
-IF(NOT TARGET dxc)
-    add_library(dxc SHARED IMPORTED)
-    set_target_properties(dxc PROPERTIES
-         IMPORTED_CONFIGURATIONS        "RELEASE"
-        PROPERTY IMPORTED_LOCATION_RELEASE      ${dxc_lib_dir_local}/${ShaderConductor_LIB_NAME}
-        PROPERTY IMPORTED_IMPLIB_RELEASE        ${dxc_lib_local}
-        PROPERTY INTERFACE_INCLUDE_DIRECTORIES  ${THIRD_PARTY_DIR}/DirectXShaderCompiler/include
+        # COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        # "${dxc_runtime_dir}/dxcompiler.dll"
+        # ${real_out_put_dir}  #test
     )
-    add_custom_target(dxc_build)
-    if(WIN32)
-        set(dxc_lib "${THIRD_PARTY_DIR}/DirectXShaderCompiler/lib/Windows/dxcompiler.lib" PARENT_SCOPE)
-        set(dxc_lib_local "${THIRD_PARTY_DIR}/DirectXShaderCompiler/lib/Windows/dxcompiler.lib")
-        set(dxc_runtime "${THIRD_PARTY_DIR}/DirectXShaderCompiler/bin/Windows/dxcompiler.dll")
-        set(dxc_bin_dir "${THIRD_PARTY_DIR}/DirectXShaderCompiler/bin/Windows" PARENT_SCOPE)
-        set(dxc_bin "${THIRD_PARTY_DIR}/DirectXShaderCompiler/bin/Windows/dxc.exe" PARENT_SCOPE)
-    
-        if (${CMAKE_GENERATOR} MATCHES "Ninja")
-            add_custom_command(
-                    OUTPUT ${PROJECT_BINARY_DIR}/dxcompiler.dll
-                    DEPENDS dxc_build
-                    POST_BUILD
-                    COMMAND
-                    ${CMAKE_COMMAND} -E copy_if_different
-                    $<TARGET_FILE:${dxc_runtime}> ${PROJECT_BINARY_DIR}
-            )
-        else ()
-            add_custom_command(
-                    TARGET
-                    dxc
-                    POST_BUILD
-                    COMMAND
-                    ${CMAKE_COMMAND} -E copy_if_different
-                    $<TARGET_FILE:${dxc_runtime}> ${PROJECT_BINARY_DIR}/$<CONFIG>
-            )
-        endif ()
-    elseif(LINUX)
-    endif()
 
-ENDIF()
+    set_target_properties(dxc PROPERTIES 
+     IMPORTED_IMPLIB  ${dxc_lib_local}
+     IMPORTED_LOCATION  ${dxc_runtime_dir}/dxcompiler.dll)
+
+elseif(LINUX)
+endif()
 
 add_subdirectory(spdlog)
 set_target_properties(spdlog PROPERTIES FOLDER ${third_party_folder})
 
-# option(BUILD_STATIC_LIBS ON)
-# option(BUILD_TESTING OFF)
-# option(GLM_TEST_ENABLE OFF)
-# option(BUILD_SHARED_LIBS OFF)
-# ADD_SUBDIRECTORY(glm)
 

@@ -3,6 +3,7 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "shader/Shader.h"
+#include "shader/ShaderCompiler.h"
 RHI* g_rhi = nullptr;
 
 // global shader
@@ -45,6 +46,7 @@ void Test() {
     g_rhi->Initialize();
 
     g_rhi->PostInit();
+    ShaderCompiler::ShaderConductorTest();
 
     RHIGraphicsPipelineStateInitializer init;
     init.num_samples                 = 1;
