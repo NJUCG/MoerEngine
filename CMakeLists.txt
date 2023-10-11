@@ -21,11 +21,6 @@ set(BINARY_ROOT_DIR "${CMAKE_INSTALL_PREFIX}")
 
 add_definitions(-DASSET_DIR="${MOER_ROOT_DIR}/asset")
 
-if(${CMAKE_BUILD_TYPE} MATCHES "Debug")
-    #set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g")
-    add_definitions(-DDEBUG)
-endif()
-
 if(${MSVC})
     add_compile_options("/Zc:preprocessor")
 endif()

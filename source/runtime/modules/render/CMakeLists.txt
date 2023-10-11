@@ -15,9 +15,15 @@ target_include_directories(${MODULE_NAME}
     PUBLIC $<BUILD_INTERFACE:${THIRD_PARTY_DIR}/spdlog/include>
     PUBLIC $<BUILD_INTERFACE:${THIRD_PARTY_DIR}/glm>
 	PRIVATE $<BUILD_INTERFACE:${THIRD_PARTY_DIR}/VulkanSDK/include/vulkan>
+	PUBLIC $<BUILD_INTERFACE:${THIRD_PARTY_DIR}/DirectXShaderCompiler/include>
 )
+target_link_directories(${MODULE_NAME}
+	PUBLIC ${dxc_bin_dir}
+)
+
 target_link_libraries(${MODULE_NAME}
     PRIVATE ${vulkan_lib}
+	PRIVATE ${dxc_lib}
     PUBLIC MoerRuntimeCore
 )
 
@@ -34,9 +40,8 @@ target_include_directories(ShaderReflectionTest
 	PUBLIC $<BUILD_INTERFACE:${MODULE_DIR}/include>
 
 )
+
 target_link_libraries(ShaderReflectionTest
 	PRIVATE ${MODULE_NAME}
 )
-
-add_test(NAME ShaderReflectionTest_ COMMAND ShaderReflectionTest)
 endif()

@@ -135,11 +135,6 @@ public:                                                                         
 #define DEFINE_SHADER_PARAM_ATTACHMENT_BINDING() \
     INTERNAL_DEFINE_SHADER_PARAM_IMPL(TShaderParameterTypeInfo<AttachmentBindingSlots>, AttachmentBindingSlots, Attachments, , EShaderPrecisionModifier::FLOAT, SBT_ATTACHMENT_BINDING_SLOTS)
 
-class ShaderBase {
-    ShaderBase();
-    ~ShaderBase();
-};
-
 /*
  *  uav v1 (register 0);
  *  srv s1 (register 1);

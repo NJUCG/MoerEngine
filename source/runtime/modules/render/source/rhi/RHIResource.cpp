@@ -131,9 +131,9 @@ RHITextureReference::RHITextureReference(
 
       };
 
-RHITextureReference::~RHITextureReference()=default;
+RHITextureReference::~RHITextureReference() = default;
 
-RHITextureReference* RHITextureReference::GetTextureRef(){
+RHITextureReference* RHITextureReference::GetTextureRef() {
     return this;
 };
 

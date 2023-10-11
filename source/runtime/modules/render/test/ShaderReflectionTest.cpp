@@ -1,3 +1,5 @@
+#include "shader/Shader.h"
+#include "shader/ShaderCompiler.h"
 #include "shader/ShaderParameterMacros.h"
 #include "shader/ShaderCommon.h"
 #include "misc/Hash.h"
@@ -11,7 +13,7 @@ DEFINE_SHADER_PARAM_ATTACHMENT_BINDING()
 DEFINE_SHADER_PARAM(int2, rect)
 END_SHADER_PARAMETER_DEFINITION(Parameters)
 
-class TestGlobalShader : public ShaderBase {
+class TestGlobalShader : public Shader {
 
 public:
     BEGIN_SHADER_PARAMETER_DEFINITION(Parameters)
@@ -32,5 +34,6 @@ void test() {
 }
 int main() {
     test();
+    ShaderCompiler::ShaderConductorTest();
     return 0;
 }
