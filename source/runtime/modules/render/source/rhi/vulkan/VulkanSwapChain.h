@@ -5,7 +5,6 @@
 #ifndef VULKAN_SWAP_CHAIN_H
 #define VULKAN_SWAP_CHAIN_H
 
-#include "rhi/vulkan/windows/VulkanWindowsPlatform.h"
 #include "VulkanDevice.h"
 
 #include <vulkan.h>
@@ -20,12 +19,7 @@ struct SwapChainBuffer {
 
 class VulkanSwapChain {
 public:
-#if defined(VK_USE_PLATFORM_WIN32_KHR)
-    void InitSurface(void* platform_handle, void* platform_window);
-#elif defined(VK_USE_PLATFORM_WAYLAND_KHR)
-    void InitSurface(wl_display* display, wl_surface* window);
-#endif
-    void     Connect(VkInstance _instance, const std::shared_ptr<VulkanDevice>& _device);
+    void     Connect(VkInstance _instance, VkSurfaceKHR _surface, const std::shared_ptr<VulkanDevice>& _device);
     void     Init(uint32_t* width, uint32_t* height, bool vsync);
     uint32_t AcquireNextImage();
     void     Present(VkQueue _queue);
@@ -36,8 +30,6 @@ private:
     std::weak_ptr<VulkanDevice> m_device;
     VkSwapchainKHR              m_swap_chain;
     VkSurfaceKHR                m_surface;
-    VkFormat                    m_color_format;
-    VkColorSpaceKHR             m_color_space;
 
     std::vector<VkSemaphore> m_image_acquired_semaphores;
     std::vector<VkSemaphore> m_render_complete_semaphores;
