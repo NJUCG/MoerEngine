@@ -12,6 +12,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(moer_root_dir ${CMAKE_CURRENT_SOURCE_DIR})
 set(moer_source_dir ${moer_root_dir}/source)
+set(moer_third_party_dir "${moer_root_dir}/3rdparty")
 
 set(CMAKE_INSTALL_PREFIX "${moer_root_dir}/target")
 set(BINARY_ROOT_DIR "${CMAKE_INSTALL_PREFIX}")
@@ -29,4 +30,7 @@ if(${MSVC})
     add_compile_options("/Zc:preprocessor")
 endif()
 
+
+
+add_subdirectory("3rdParty")
 add_subdirectory("source")

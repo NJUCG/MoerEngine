@@ -1,5 +1,5 @@
 
-set(moer_third_party_dir "${moer_source_dir}/3rdparty")
+
 set(moer_asset_dir "asset")
 set(moer_config_dir "configs")
 
@@ -22,7 +22,6 @@ endif()
 
 message(STATUS "backend graphics api: ${moer_rhi_api}")
 
-add_subdirectory(3rdParty)
 add_subdirectory(runtime)
 add_subdirectory(editor)
 

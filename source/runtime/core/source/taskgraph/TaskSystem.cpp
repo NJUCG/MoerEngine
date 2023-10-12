@@ -16,9 +16,9 @@ using namespace std;
 
 class MTask {
 public:
-    MTask(EThread::Type _threadToReturn, std::string info) : m_threadToReturn{_threadToReturn}, m_info{info} {}
-    EThread::Type getPreferredThread() {
-        return m_threadToReturn;
+    MTask(EThread::Type _threadToReturn, std::string info) : m_thread_to_return{_threadToReturn}, m_info{info} {}
+    EThread::Type GetPreferredThread() {
+        return m_thread_to_return;
     }
     void Fire(EThread::Type _threadToReturn, const GraphEventRef& _event) {
 
@@ -26,7 +26,7 @@ public:
     }
 
 private:
-    EThread::Type m_threadToReturn;
+    EThread::Type m_thread_to_return;
     std::string   m_info;
 };
 //class MTestRenderThread :public Runnable {
@@ -138,7 +138,7 @@ bool TaskGraphTest() {
 
         FunctionGraphTask::ConstructAndDispatchWhenReady(
             [&Event] {
-                Event->tryUnlockSubsequents();
+                Event->TryUnlockSubsequents();
             });
         while (!Event->IsComplete())// in single-threaded mode tasks are executed only when waited for
         {
@@ -151,7 +151,7 @@ bool TaskGraphTest() {
         auto          Lambda = [&Event] {
             SPDLOG_WARN("before lambda sleep");
             this_thread::sleep_for(50ms);// pause for a bit to let waiting start
-            Event->tryUnlockSubsequents();
+            Event->TryUnlockSubsequents();
             SPDLOG_WARN("sleep over");
         };
         GraphEventRef Task = FunctionGraphTask::ConstructAndDispatchWhenReady(std::move(Lambda));
@@ -172,11 +172,11 @@ bool TaskGraphTest() {
                     PrereqHolder->Wait();// hold it until it's used for `DontCompleteUntil`
                 });
             GraphEvent* completion = static_cast<GraphEvent*>(MyCompletionGraphEvent.Get());
-            completion->waitUntil(Prereq);
+            completion->WaitUntil(Prereq);
             assert(!PrereqHolder->IsComplete());// check that prereq was incomplete during DontCompleteUntil ^^
 
             // now that Prereq was registered in DontCompleteUntil, unlock it
-            PrereqHolder->tryUnlockSubsequents();
+            PrereqHolder->TryUnlockSubsequents();
         };
 
         GraphEventRef Event  = FunctionGraphTask::ConstructAndDispatchWhenReady(std::move(Lambda));
@@ -194,7 +194,7 @@ bool TaskGraphTest() {
 
         GraphEventRef Event = FunctionGraphTask::ConstructAndDispatchWhenReady(
             [&Prereq](EThread::Type CurrentThread, const GraphEventRef& MyCompletionGraphEvent) {
-                MyCompletionGraphEvent->waitUntil(Prereq);
+                MyCompletionGraphEvent->WaitUntil(Prereq);
                 //UE_LOG(LogTemp, Log, TEXT("Main task"));
             });
 
@@ -214,7 +214,7 @@ bool TaskGraphTest() {
         // dummy task that is executed while the main task is waiting for its prereq
         FunctionGraphTask::ConstructAndDispatchWhenReady([] {})->Wait();
         assert(!bExecuted);
-        Prereq->tryUnlockSubsequents();
+        Prereq->TryUnlockSubsequents();
         MainTask->Wait();
         assert(bExecuted);
     }
@@ -227,11 +227,11 @@ bool TaskGraphTest() {
         FunctionGraphTask::ConstructAndDispatchWhenReady([] {})->Wait();
         assert(!bExecuted);
 
-        Prereqs[0]->tryUnlockSubsequents();
+        Prereqs[0]->TryUnlockSubsequents();
         FunctionGraphTask::ConstructAndDispatchWhenReady([] {})->Wait();
         assert(!bExecuted);
 
-        Prereqs[1]->tryUnlockSubsequents();
+        Prereqs[1]->TryUnlockSubsequents();
         MainTask->Wait();
         assert(bExecuted);
     }
@@ -239,7 +239,7 @@ bool TaskGraphTest() {
     {// holding a task
         struct FTask {
 
-            EThread::Type getPreferredThread() {
+            EThread::Type GetPreferredThread() {
                 return EThread::UNKNOWN_THREAD;
             }
 
@@ -250,7 +250,7 @@ bool TaskGraphTest() {
             GraphTask<FTask>* Task  = GraphTask<FTask>::CreateTask().ConstructAndHold();
             GraphEventRef     Event = Task->GetCompletionEvent();
             assert(!Event->IsComplete());
-            Task->dispatch();
+            Task->Dispatch();
             Event->Wait();
             assert(Event->IsComplete());
         }

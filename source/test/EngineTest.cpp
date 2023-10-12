@@ -33,7 +33,7 @@ void RenderThreadSuspendTest(const Moer::Engine& engine) {
                 }
             },
             nullptr,
-            EThread::AnyThread_NormalPri);
+            EThread::AnyThread_HighPri);
 
         std::this_thread::sleep_for(std::chrono::milliseconds(2000));
 
@@ -54,7 +54,8 @@ int main(int argc, const char** argv) {
 
     engine.Init(info);
     engine.PostInit();
-    engine.Run();
     RenderThreadSuspendTest(engine);
+    engine.Run();
+
     engine.Quit();
 }

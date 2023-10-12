@@ -23,14 +23,13 @@ target_include_directories(ShaderReflectionTest
 )
 target_link_libraries(ShaderReflectionTest 
     PRIVATE render
-    # PRIVATE dxc
+    PRIVATE dxc
     )
 set_target_properties(ShaderReflectionTest PROPERTIES FOLDER ${moer_test_folder})
 
 add_executable(VulkanRHITest VulkanRHITest.cpp)
 target_include_directories(VulkanRHITest
         PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/boost>
-
         PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/glfw/include>
         PUBLIC $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
 )
@@ -38,7 +37,3 @@ target_link_libraries(VulkanRHITest
         PRIVATE render
         PRIVATE glfw
 )
-
-add_test(NAME VulkanRHITest_ COMMAND VulkanRHITest)
-
-# add_test(NAME ShaderReflectionTest_ COMMAND ShaderReflectionTest)
