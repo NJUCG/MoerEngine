@@ -131,10 +131,14 @@ void VulkanRHIImpl::CreateInstance() {
     instance_create_info.enabledExtensionCount   = n;
     instance_create_info.ppEnabledExtensionNames = r_extensions.data();
 
+    VkDebugUtilsMessengerCreateInfoEXT debug_create_info{};
+
     const char* validation_layer_name = "VK_LAYER_KHRONOS_validation";
     if (CheckValidationLayer(validation_layer_name)) {
         instance_create_info.enabledLayerCount   = 1;
         instance_create_info.ppEnabledLayerNames = &validation_layer_name;
+        MoerEngine::RHI::Vulkan::Debug::PopulateDebugMessengerCreateInfo(debug_create_info);
+        instance_create_info.pNext = &debug_create_info;
     } else {
         instance_create_info.enabledLayerCount   = 0;
         instance_create_info.ppEnabledLayerNames = nullptr;
