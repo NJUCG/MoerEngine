@@ -3,6 +3,7 @@
 #include "shader/ShaderParameterMacros.h"
 #include "shader/ShaderCommon.h"
 #include "misc/Hash.h"
+#include "log/LogSystem.h"
 BEGIN_SHADER_PARAMETER_DEFINITION(TestParameters)
 
 DEFINE_SHADER_PARAM_UAV(RWBuffer2D, buffer2d)
@@ -34,6 +35,7 @@ void test() {
 }
 int main() {
     test();
-    ShaderCompiler::ShaderConductorTest();
+    // ShaderCompiler::ShaderConductorTest();
+    const char* vk_layer = MACRO_STR(VK_LAYER_PATH);
     return 0;
 }

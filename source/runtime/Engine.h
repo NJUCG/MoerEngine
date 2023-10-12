@@ -28,7 +28,7 @@ namespace Moer {
         void Tick();
 
     private:
-        bool b_request_quiting;
+        bool b_request_quiting = false;
     };
 }// namespace Moer
 

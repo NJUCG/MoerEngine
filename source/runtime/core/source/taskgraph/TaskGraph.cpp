@@ -122,8 +122,8 @@ void TaskGraph::WaitUntilTasksComplete(const GraphEventArray& task_events, EThre
     is_named_thread = EThread::GetThreadIndex(current_thread_type) < EThread::NamedThreadCount;
     if (is_named_thread && !IsThreadProcessingTask(current_thread_type)) {
         bool pending = false;
-        for (int32_t Index = 0; Index < task_events.size(); Index++) {
-            GraphEvent* task = task_events[Index].Get();
+        for (int32_t index = 0; index < task_events.size(); index++) {
+            GraphEvent* task = task_events[index].Get();
             if (task != nullptr && !task->IsComplete()) {
                 pending = true;
                 break;
@@ -142,8 +142,8 @@ void TaskGraph::WaitUntilTasksComplete(const GraphEventArray& task_events, EThre
         ProcessThreadUntilReturn(current_thread_type);
     } else {
         bool pending = false;
-        for (int32_t Index = 0; Index < task_events.size(); Index++) {
-            GraphEvent* task = reinterpret_cast<GraphEvent*>(task_events[Index].Get());
+        for (int32_t index = 0; index < task_events.size(); index++) {
+            GraphEvent* task = reinterpret_cast<GraphEvent*>(task_events[index].Get());
             if (task != nullptr && !task->IsComplete()) {
                 pending = true;
                 break;
@@ -153,8 +153,8 @@ void TaskGraph::WaitUntilTasksComplete(const GraphEventArray& task_events, EThre
             // no task left
             return;
         }
-        ScopeEventRef scopeEvent;
-        TriggerEventWhenTasksComplete(scopeEvent.m_event, task_events, currentThread);
+        ScopeEventRef scope_event;
+        TriggerEventWhenTasksComplete(scope_event.m_event, task_events, currentThread);
     }
 }
 
@@ -164,8 +164,8 @@ void TaskGraph::TriggerEventWhenTasksComplete(Event* event, const GraphEventArra
     if (task_events.size() < 8)// don't bother to check for completion if there are lots of prereqs...too expensive to check
     {
         bool pending = false;
-        for (int32_t Index = 0; Index < task_events.size(); Index++) {
-            GraphEvent* task = reinterpret_cast<GraphEvent*>(task_events[Index].Get());
+        for (int32_t index = 0; index < task_events.size(); index++) {
+            GraphEvent* task = reinterpret_cast<GraphEvent*>(task_events[index].Get());
             if (task != nullptr && !task->IsComplete()) {
                 pending = true;
                 break;
@@ -180,8 +180,8 @@ void TaskGraph::TriggerEventWhenTasksComplete(Event* event, const GraphEventArra
 }
 void TaskGraph::QueueTask(BaseGraphTask* task, EThread::Type prefered_thread, EThread::Type current_thread, bool wake_worker) {
     if (EThread::GetThreadIndex(prefered_thread) == EThread::UNKNOWN_THREAD) {//any thread is ok
-        EThread::Type  prefered_thread         = task->getPreferredThread();
-        ThreadPriority priority                = task->getPriority();
+        EThread::Type  prefered_thread         = task->GetPreferredThread();
+        ThreadPriority priority                = task->GetPriority();
         int32_t        possible_thread_to_wake = m_task_queue[priority].Push(task, 1);
         if (possible_thread_to_wake >= 0) {
             //start task thread

@@ -18,13 +18,19 @@ target_include_directories(${MODULE_NAME}
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/spdlog/include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/glfw/include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/glm>
-	PRIVATE $<BUILD_INTERFACE:${moer_third_party_dir}/VulkanSDK/include/vulkan>
+	PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/VulkanSDK/include/vulkan>
 	PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/DirectXShaderCompiler/include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/VulkanMemoryAllocator>
 )
 
 target_link_libraries(${MODULE_NAME}
-    PRIVATE ${vulkan_lib}
+    PUBLIC ${vulkan_lib}
 	PUBLIC dxc
     PUBLIC MoerRuntimeCore
 )
+if(WINDOWS)
+target_compile_definitions(${MODULE_NAME}
+    PUBLIC "VK_LAYER_PATH=${moer_third_party_dir}/VulkanSDK/binary/Windows")
+elseif(LINUX)
+
+endif()
