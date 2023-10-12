@@ -6,6 +6,3 @@ class TestShaderClass : Shader {
 };
 
 IMPLEMENT_SHADER_TYPE(TestShaderClass, "shader/testVert.vert", "main", EShaderType::ST_VERTEX)
-
-void test() {
-}

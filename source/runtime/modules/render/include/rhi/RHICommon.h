@@ -871,15 +871,9 @@ enum ERenderQueryType {
 #pragma region shader platform
 enum EShaderPlatform : uint16_t {
     SP_WIN_D3D_SM5,
-    SP_METAL,
-    SP_WIN_D3D_ES3_1,
-    SP_METAL_SM5,
-    SP_WIN_VULKAN_ES3_1,
     SP_VULKAN_SM5,
     SP_VULKAN_SM6,
     SP_WIN_D3D_SM6,
-    SP_METAL_SM6,
-    SP_CUSTOM_PLATFORM_FIRST,
     SP_Num,
     SP_NumBits = 16
 

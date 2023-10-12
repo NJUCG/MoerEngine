@@ -25,9 +25,9 @@ namespace Moer {
             _is_bound_to_taskgraph_event->Trigger();
         }
         assert(IsRenderThreadInitialized() && "render thread not set");
-        LOG_INFO("render thread {} executing", ThreadManager::g_render_thread_id);
+        LOG_INFO("[RENDER THREAD] thread id:{} executing", ThreadManager::g_render_thread_id);
         TaskGraph::GetInterface().ProcessThreadUntilReturn(EThread::ERenderThread);
-        LOG_INFO("render thread {} end", ThreadManager::g_render_thread_id);
+        LOG_INFO("[RENDER THREAD] thread id:{} end", ThreadManager::g_render_thread_id);
     }
     class RenderThread : public Runnable {
     public:

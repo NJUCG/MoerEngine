@@ -1,8 +1,11 @@
 #include "shader/ShaderCommon.h"
 #include "misc/Hash.h"
+#include "misc/MacroUtils.h"
 #include <vector>
 
 #pragma region shaderParameters metadata
+
+const char* g_global_shader_resource_root_dir = MACRO_STR(GLOBAL_SHADER_RESOURCE_ROOT);
 
 ShaderParametersMetadata::ShaderParametersMetadata(
     EShaderParameterUseCase           _use_case,

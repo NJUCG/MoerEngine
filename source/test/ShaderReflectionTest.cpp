@@ -35,7 +35,6 @@ void test() {
 }
 int main() {
     test();
-    // ShaderCompiler::ShaderConductorTest();
-    const char* vk_layer = MACRO_STR(VK_LAYER_PATH);
+    ShaderCompiler::ShaderConductorTest();
     return 0;
 }
