@@ -25,21 +25,21 @@ void VulkanDevice::Init(const DeviceInitializer& _initializer) {
     m_gpu_extensions       = GetGpuExtensions(m_gpu);
     m_queue_family_indices = QueryQueueFamilyIndices(m_gpu, _initializer.surface);
 
-    MOER_LOG_INFO("\n- DeviceName: {}."
-                  "\n- API={}.{}.{} (0x{:x}) Driver=0x{:x} VendorId=0x{:x}."
-                  "\n- DeviceID=0x{:x} Type={}."
-                  "\n- Max Descriptor Sets Bound {}, Timestamps {}.",
-                  m_gpu_props.deviceName,
-                  VK_API_VERSION_MAJOR(m_gpu_props.apiVersion),
-                  VK_API_VERSION_MINOR(m_gpu_props.apiVersion),
-                  VK_API_VERSION_PATCH(m_gpu_props.apiVersion),
-                  m_gpu_props.apiVersion,
-                  m_gpu_props.driverVersion,
-                  m_gpu_props.vendorID,
-                  m_gpu_props.deviceID,
-                  std::to_string(m_gpu_props.deviceType),
-                  m_gpu_props.limits.maxBoundDescriptorSets,
-                  m_gpu_props.limits.timestampComputeAndGraphics);
+    LOG_INFO("\n- DeviceName: {}."
+             "\n- API={}.{}.{} (0x{:x}) Driver=0x{:x} VendorId=0x{:x}."
+             "\n- DeviceID=0x{:x} Type={}."
+             "\n- Max Descriptor Sets Bound {}, Timestamps {}.",
+             m_gpu_props.deviceName,
+             VK_API_VERSION_MAJOR(m_gpu_props.apiVersion),
+             VK_API_VERSION_MINOR(m_gpu_props.apiVersion),
+             VK_API_VERSION_PATCH(m_gpu_props.apiVersion),
+             m_gpu_props.apiVersion,
+             m_gpu_props.driverVersion,
+             m_gpu_props.vendorID,
+             m_gpu_props.deviceID,
+             std::to_string(m_gpu_props.deviceType),
+             m_gpu_props.limits.maxBoundDescriptorSets,
+             m_gpu_props.limits.timestampComputeAndGraphics);
 
     CreateDevice(_initializer);
 }
@@ -56,15 +56,10 @@ void VulkanDevice::Destroy() {
  * @return selected gpu
  */
 VkPhysicalDevice VulkanDevice::SelectGpu(VkInstance _instance, VkPhysicalDeviceType _type, VkSurfaceKHR _surface, const TExtensionArray& _enabled_extensions) {
-    MOER_LOG_INFO(_enabled_extensions.size());
-    for (const auto& extension : _enabled_extensions) {
-        MOER_LOG_INFO(extension);
-    }
-
     uint32_t gpu_count = 0;
     VK_CHECK_RESULT(vkEnumeratePhysicalDevices(_instance, &gpu_count, nullptr))
     if (gpu_count == 0) {
-        MOER_LOG_WARN("No GPU with Vulkan support found!");
+        LOG_WARNING("No GPU with Vulkan support found!");
         return VK_NULL_HANDLE;
     }
     std::vector<VkPhysicalDevice> gpu_list(gpu_count);
@@ -91,7 +86,7 @@ VkPhysicalDevice VulkanDevice::SelectGpu(VkInstance _instance, VkPhysicalDeviceT
         }
     }
 
-    MOER_LOG_WARN("No available target type (discrete, etc.) GPU found!");
+    LOG_WARNING("No available target type (discrete, etc.) GPU found!");
 
     return VK_NULL_HANDLE;
 }
@@ -252,7 +247,7 @@ bool VulkanDevice::CheckEnabledExtensionsSupported(VkPhysicalDevice _gpu, const 
 
     if (!enabled_extensions.empty()) {
         for (const auto& extension : enabled_extensions) {
-            MOER_LOG_CRITICAL("Enabled GPU extension '" + extension + "' is not supported!");
+            LOG_CRITICAL("Enabled GPU extension '" + extension + "' is not supported!");
         }
         return false;
     }

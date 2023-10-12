@@ -1,6 +1,7 @@
 #include "config.h"
-#include "misc/MacroUtils.h"
+
 #include "rhi/vulkan/misc/VulkanMacroUtils.h"
+#include "misc/MacroUtils.h"
 
 #include "rhi/vulkan/VulkanRHI.h"
 #include "VulkanExtension.h"
@@ -15,12 +16,13 @@
 
 #include <string>
 
-const std::string vk_layer = MACRO_STR(__ENGINE_NAME__) MACRO_STR(_VK_LAYER_PATH);
+const char* vk_layer = MACRO_STR(VK_LAYER_PATH);
 
 namespace VkUtil = MoerEngine::RHI::Vulkan::Util;
 
 VulkanRHIImpl::VulkanRHIImpl(GLFWwindow* _window) : m_instance(VK_NULL_HANDLE), m_device(nullptr), m_current_viewport(nullptr) {
-    MOER_LOG_INFO("Built with Vulkan header version {0:d}.{1:d}.{2:d}", VK_API_VERSION_MAJOR(VK_HEADER_VERSION_COMPLETE), VK_API_VERSION_MINOR(VK_HEADER_VERSION_COMPLETE), VK_API_VERSION_PATCH(VK_HEADER_VERSION_COMPLETE));
+    LOG_INFO("Built with Vulkan header version {0:d}.{1:d}.{2:d}", VK_API_VERSION_MAJOR(VK_HEADER_VERSION_COMPLETE), VK_API_VERSION_MINOR(VK_HEADER_VERSION_COMPLETE), VK_API_VERSION_PATCH(VK_HEADER_VERSION_COMPLETE));
+    // SetEnvironmentVariableA("VK_LAYER_PATH", vk_layer);
 
     CreateInstance();
     InitSurface(_window);
