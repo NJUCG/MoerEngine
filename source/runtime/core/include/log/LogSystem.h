@@ -1,9 +1,11 @@
 #ifndef MOERENGINE_LOG_SYSTEM_H
 #define MOERENGINE_LOG_SYSTEM_H
 #include "spdlog/spdlog.h"
-#define LOG_INFO(...)    SPDLOG_INFO(__VA_ARGS__)
-#define LOG_WARNING(...) SPDLOG_INFO(__VA_ARGS__)
-#define LOG_ERROR(...)   SPDLOG_ERROR(__VA_ARGS__)
+#define LOG_DEBUG(...)    SPDLOG_DEBUG(__VA_ARGS__)
+#define LOG_INFO(...)     SPDLOG_INFO(__VA_ARGS__)
+#define LOG_WARNING(...)  SPDLOG_WARN(__VA_ARGS__)
+#define LOG_ERROR(...)    SPDLOG_ERROR(__VA_ARGS__)
+#define LOG_CRITICAL(...) SPDLOG_CRITICAL(__VA_ARGS__)
 
 namespace Moer {
 namespace LogSystem {

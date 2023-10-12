@@ -2,10 +2,9 @@
 // Created by 74535 on 2023/9/30.
 //
 
-#include "misc/MacroUtils.h"
+#include "log/LogSystem.h"
 #include "VulkanDebug.h"
 #include <sstream>
-#include <spdlog/spdlog.h>
 
 namespace MoerEngine {
 namespace RHI {
@@ -25,13 +24,13 @@ namespace Vulkan {
         stream << "[" << p_callback_data->messageIdNumber << "][" << p_callback_data->pMessageIdName << "]: " << p_callback_data->pMessage << std::endl;
 
         if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT) {
-            MOER_LOG_DEBUG(stream.str());
+            LOG_DEBUG(stream.str());
         } else if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT) {
-            MOER_LOG_INFO(stream.str());
+            LOG_INFO(stream.str());
         } else if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
-            MOER_LOG_WARN(stream.str());
+            LOG_WARNING(stream.str());
         } else if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
-            MOER_LOG_ERROR(stream.str());
+            LOG_ERROR(stream.str());
         }
 
         return VK_FALSE;
