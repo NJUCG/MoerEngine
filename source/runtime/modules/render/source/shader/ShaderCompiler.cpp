@@ -1,4 +1,5 @@
 #include "shader/ShaderCompiler.h"
+#include "spirv_cross.hpp"
 #include <filesystem>
 #include <iostream>
 #define NOMINMAX 1
@@ -57,10 +58,10 @@ void ShaderCompiler::ShaderConductorTest() {
     if (idx != std::string::npos) {
         std::wstring extension = file_name.substr(idx + 1);
         if (extension == L"vert") {
-            targetProfile = L"vs_6_4";
+            targetProfile = L"vs_6_1";
         }
         if (extension == L"frag") {
-            targetProfile = L"ps_6_4";
+            targetProfile = L"ps_6_1";
         }
         // Mapping for other file types go here (cs_x_y, lib_x_y, etc.)
     }
@@ -75,9 +76,11 @@ void ShaderCompiler::ShaderConductorTest() {
         // Shader target profile
         L"-T",
         targetProfile,
-        L"-fspv-reflect"
         // Compile to SPIRV
-        L"-spirv"};
+        L"-spirv",
+        L"-fspv-reflect",
+        DXC_ARG_ALL_RESOURCES_BOUND,
+        DXC_ARG_DEBUG};
 
     // Compile shader
     DxcBuffer buffer{};
@@ -109,16 +112,17 @@ void ShaderCompiler::ShaderConductorTest() {
             LOG_INFO(error_stream.str());
         }
     }
-    CComPtr<IDxcBlob> reflectionBlob{};
-    result->GetOutput(DXC_OUT_REFLECTION, IID_PPV_ARGS(&reflectionBlob), nullptr);
-
-    const DxcBuffer reflectionBuffer{
-        .Ptr      = reflectionBlob->GetBufferPointer(),
-        .Size     = reflectionBlob->GetBufferSize(),
-        .Encoding = 0,
-    };
 
     // Get compilation result
-    CComPtr<IDxcBlob> code;
+    IDxcBlob* code;
     result->GetResult(&code);
+    const uint32_t*              data = (uint32_t*)code->GetBufferPointer();
+    uint32_t                     size = code->GetBufferSize();
+    spirv_cross::Compiler        comp(data, size);
+    spirv_cross::ShaderResources res = comp.get_shader_resources();
+    for (const spirv_cross::Resource& resource : res.stage_inputs) {
+        unsigned location = comp.get_decoration(resource.id, spv::DecorationLocation);
+        LOG_INFO(location);
+    }
+    LOG_INFO("?????????????");
 }
