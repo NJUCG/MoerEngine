@@ -8,6 +8,7 @@
 #include <vector>
 #include "misc/MacroUtils.h"
 
+extern const char* g_global_shader_resource_root_dir;
 enum class EShaderParameterType : uint8_t {
     LOOSE_DATA,
     UNIFORM_BUFFER,
@@ -393,5 +394,17 @@ struct ShaderCompiledInfo {
         const ShaderPipelineType*   _shader_pipeline_type
         //        const FVertexFactoryType* InVertexFactoryType
     );
+};
+
+struct ShaderCompilerInput {
+
+    ShaderTargetInfo target_info;
+    EShaderPlatform  platform;
+
+    std::string entry_point;
+    std::string relative_source_file_path;
+    std::string shader_name;
+
+    const ShaderParametersMetadata* param_meta_data;
 };
 #endif//MOERENGINE_SHADER_COMMON_H
