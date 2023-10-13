@@ -14,6 +14,15 @@
 #include <winnt.h>
 #include <sstream>
 
+/**
+ * @brief cross-compile shader
+ * 
+ * @param input ShaderCompilerInput: contains all information compiler needs
+ * @param output ShaderCompilerOutput: output shader code, error messages and param data bindings
+ */
+void ShaderCompiler::Compile(const ShaderCompilerInput& input, ShaderCompilerOutput& output) {
+}
+
 void ShaderCompiler::ShaderConductorTest() {
     const char* file_name_c = "TestVert.vert";
     HRESULT     hres;
@@ -51,23 +60,23 @@ void ShaderCompiler::ShaderConductorTest() {
     }
 
     // Load the HLSL text shader from disk
-    uint32_t                  codePage = DXC_CP_ACP;
-    CComPtr<IDxcBlobEncoding> sourceBlob;
-    hres = utils->LoadFile(file_name.c_str(), &codePage, &sourceBlob);
+    uint32_t                  code_page = DXC_CP_ACP;
+    CComPtr<IDxcBlobEncoding> source_blob;
+    hres = utils->LoadFile(file_name.c_str(), &code_page, &source_blob);
     if (FAILED(hres)) {
         throw std::runtime_error("Could not load shader file");
     }
 
     // Select target profile based on shader file extension
-    LPCWSTR targetProfile{};
+    LPCWSTR target_profile{};
     size_t  idx = file_name.rfind('.');
     if (idx != std::string::npos) {
         std::wstring extension = file_name.substr(idx + 1);
         if (extension == L"vert") {
-            targetProfile = L"vs_6_1";
+            target_profile = L"vs_6_1";
         }
         if (extension == L"frag") {
-            targetProfile = L"ps_6_1";
+            target_profile = L"ps_6_1";
         }
         // Mapping for other file types go here (cs_x_y, lib_x_y, etc.)
     }
@@ -81,7 +90,7 @@ void ShaderCompiler::ShaderConductorTest() {
         L"main",
         // Shader target profile
         L"-T",
-        targetProfile,
+        target_profile,
         // Compile to SPIRV
         L"-spirv",
         L"-fspv-reflect",
@@ -91,8 +100,8 @@ void ShaderCompiler::ShaderConductorTest() {
     // Compile shader
     DxcBuffer buffer{};
     buffer.Encoding = DXC_CP_ACP;
-    buffer.Ptr      = sourceBlob->GetBufferPointer();
-    buffer.Size     = sourceBlob->GetBufferSize();
+    buffer.Ptr      = source_blob->GetBufferPointer();
+    buffer.Size     = source_blob->GetBufferSize();
 
     CComPtr<IDxcResult> result{nullptr};
     hres = compiler->Compile(
@@ -108,13 +117,13 @@ void ShaderCompiler::ShaderConductorTest() {
 
     // Output error if compilation failed
     if (FAILED(hres) && (result)) {
-        CComPtr<IDxcBlobEncoding> errorBlob;
-        hres = result->GetErrorBuffer(&errorBlob);
+        CComPtr<IDxcBlobEncoding> error_blob;
+        hres = result->GetErrorBuffer(&error_blob);
         std::stringstream error_stream;
-        if (SUCCEEDED(hres) && errorBlob) {
+        if (SUCCEEDED(hres) && error_blob) {
 
             error_stream << "Shader compilation failed :\n\n"
-                         << (const char*)errorBlob->GetBufferPointer();
+                         << (const char*)error_blob->GetBufferPointer();
             LOG_INFO(error_stream.str());
         }
     }
