@@ -14,7 +14,7 @@ set_target_properties(${MODULE_NAME} PROPERTIES FOLDER "runtime")
 target_include_directories(${MODULE_NAME}
 	PUBLIC $<BUILD_INTERFACE:${MODULE_DIR}/include>
     PUBLIC $<BUILD_INTERFACE:${moer_runtime_core_dir}/include>
-    PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/SPIRV-Cross>
+    PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/SPIRV-Reflect>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/boost>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/spdlog/include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/glfw/include>
@@ -26,7 +26,7 @@ target_include_directories(${MODULE_NAME}
 
 target_link_libraries(${MODULE_NAME}
     PUBLIC ${vulkan_lib}
-    PUBLIC spirv-cross-core
+    PUBLIC spirv-reflect-static
 	PUBLIC dxc
     PUBLIC MoerRuntimeCore
 )
