@@ -69,6 +69,6 @@ public:                                                                   \
             ShaderClassName::GetParametersMetaData());                           \
         return s_meta_type;                                                      \
     }                                                                            \
-    ShaderTypeRegistration ShaderClassName::s_registration(ShaderClassName::GetStaticType);
+    ShaderTypeRegistration ShaderClassName::s_registration(ShaderClassName::GetMetaType);
 
 #endif//MOERENGINE_SHADER_H
