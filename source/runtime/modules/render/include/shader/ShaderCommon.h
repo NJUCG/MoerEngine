@@ -1,5 +1,6 @@
 #ifndef MOERENGINE_SHADER_COMMON_H
 #define MOERENGINE_SHADER_COMMON_H
+#include "rhi/RHI.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include <cstdint>
@@ -399,12 +400,22 @@ struct ShaderCompiledInfo {
 struct ShaderCompilerInput {
 
     ShaderTargetInfo target_info;
-    EShaderPlatform  platform;
-
-    std::string entry_point;
-    std::string relative_source_file_path;
-    std::string shader_name;
+    std::string      entry_point;
+    std::string      relative_source_file_path;
+    std::string      shader_name;
 
     const ShaderParametersMetadata* param_meta_data;
 };
+
+FORCEINLINE EShaderPlatform GetShaderPlatformByRHIType(ERHIType _type) {
+    switch (_type) {
+
+        case ERHIType::Vulkan:
+            return EShaderPlatform::SP_VULKAN_SM6;
+        case ERHIType::D3D12:
+            return EShaderPlatform::SP_WIN_D3D_SM6;
+            break;
+        default: assert(false && "not supported rhi");
+    }
+}
 #endif//MOERENGINE_SHADER_COMMON_H
