@@ -56,10 +56,10 @@ private:
 public:                                                                   \
     using ShaderMapType = ShaderMapScope##ShaderMap;                      \
     static ShaderTypeRegistration s_registration;                         \
-    static API ShaderMetaType&    GetStaticType();
+    static API ShaderMetaType&    GetMetaType();
 
 #define IMPLEMENT_SHADER_TYPE(ShaderClassName, FileName, EntryPoint, ShaderType) \
-    ShaderMetaType& ShaderClassName::GetStaticType() {                           \
+    ShaderMetaType& ShaderClassName::GetMetaType() {                             \
         static ShaderMetaType s_meta_type(                                       \
             #ShaderClassName,                                                    \
             FileName,                                                            \
