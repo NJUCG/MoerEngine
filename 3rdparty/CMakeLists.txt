@@ -60,6 +60,7 @@ option(GLFW_BUILD_TESTS OFF)
 option(GLFW_INSTALL ON)
 add_subdirectory(glfw)
 
-add_subdirectory(SPIRV-Cross)
-set_target_properties(spirv-cross-core PROPERTIES FOLDER ${third_party_folder})
+set(SPIRV_REFLECT_EXECUTABLE      OFF)
 
+set(SPIRV_REFLECT_STATIC_LIB     ON)
+add_subdirectory(SPIRV-Reflect)

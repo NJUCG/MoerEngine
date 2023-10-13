@@ -1,6 +1,7 @@
 #include "shader/ShaderCompiler.h"
-#include "spirv_cross.hpp"
+#include "spirv_reflect.h"
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #define NOMINMAX 1
 #include "Windows.h"
@@ -22,6 +23,11 @@ void ShaderCompiler::ShaderConductorTest() {
 
     std::wstring file_name = file_path.generic_wstring();
 
+    std::ifstream f(file_path);
+
+    std::stringstream s;
+    ;
+    s << f.rdbuf();
     // Initialize DXC library
     CComPtr<IDxcLibrary>
         library;
@@ -116,13 +122,25 @@ void ShaderCompiler::ShaderConductorTest() {
     // Get compilation result
     IDxcBlob* code;
     result->GetResult(&code);
-    const uint32_t*              data = (uint32_t*)code->GetBufferPointer();
-    uint32_t                     size = code->GetBufferSize();
-    spirv_cross::Compiler        comp(data, size);
-    spirv_cross::ShaderResources res = comp.get_shader_resources();
-    for (const spirv_cross::Resource& resource : res.stage_inputs) {
-        unsigned location = comp.get_decoration(resource.id, spv::DecorationLocation);
-        LOG_INFO(location);
-    }
-    LOG_INFO("?????????????");
+    const uint8_t* data = (uint8_t*)code->GetBufferPointer();
+    uint32_t       size = code->GetBufferSize();
+
+    SpvReflectShaderModule module;
+    SpvReflectResult       ref_result = spvReflectCreateShaderModule(size, data, &module);
+    assert(ref_result == SPV_REFLECT_RESULT_SUCCESS);
+
+    // Enumerate and extract shader's input variables
+    uint32_t var_count = 0;
+    ref_result         = spvReflectEnumerateInputVariables(&module, &var_count, NULL);
+    assert(ref_result == SPV_REFLECT_RESULT_SUCCESS);
+    SpvReflectInterfaceVariable** input_vars =
+        (SpvReflectInterfaceVariable**)malloc(var_count * sizeof(SpvReflectInterfaceVariable*));
+    ref_result = spvReflectEnumerateInputVariables(&module, &var_count, input_vars);
+    assert(ref_result == SPV_REFLECT_RESULT_SUCCESS);
+
+    // Output variables, descriptor bindings, descriptor sets, and push constants
+    // can be enumerated and extracted using a similar mechanism.
+
+    // Destroy the reflection data when no longer required.
+    spvReflectDestroyShaderModule(&module);
 }
