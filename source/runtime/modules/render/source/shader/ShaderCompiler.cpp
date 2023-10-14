@@ -1,11 +1,26 @@
+#include "math/Matrix.h"
+#include "rhi/RHI.h"
+#include "rhi/RHICommon.h"
+#include "rhi/vulkan/IVulkanRHI.h"
+#include "shader/ShaderParameterMacros.h"
+#include <algorithm>
+#include <string>
+#include <vcruntime_string.h>
+#ifndef NOMINMAX
+#define NOMINMAX 1
+#endif
+
+#include "Windows.h"
+#include "dxc/dxcapi.h"
+
 #include "shader/ShaderCompiler.h"
+#include "shader/Shader.h"
+#include "shader/ShaderMap.h"
 #include "spirv_reflect.h"
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#define NOMINMAX 1
-#include "Windows.h"
-#include "dxc/dxcapi.h"
+
 #include "log/LogSystem.h"
 #include "shader/ShaderCommon.h"
 #include <vector>
@@ -13,6 +28,76 @@
 #include <atlcomcli.h>
 #include <winnt.h>
 #include <sstream>
+#include "rhi/RHI.h"
+
+class ShaderCompileJob {
+
+    void RegisterCompileJob(uint32_t _shader_type_hash);
+};
+BEGIN_SHADER_PARAMETER_DEFINITION(TestUBO)
+DEFINE_SHADER_PARAM(Moer::Matrix4x4f, projectionMatrix)
+
+DEFINE_SHADER_PARAM(Moer::Matrix4x4f, modelMatrix)
+
+DEFINE_SHADER_PARAM(Moer::Matrix4x4f, viewMatrix)
+
+END_SHADER_PARAMETER_DEFINITION(TestUBO)
+class TestReflectionShader : public Shader {
+    DEFINE_SHADER_TYPE(TestReflectionShader, Global, )
+public:
+    BEGIN_SHADER_PARAMETER_DEFINITION(Parameters)
+
+    DEFINE_SHADER_PARAM_STRUCT(TestUBO, ubo)
+
+    END_SHADER_PARAMETER_DEFINITION(Parameters)
+};
+
+IMPLEMENT_SHADER_TYPE(TestReflectionShader, "TestVert.vert", "main", EShaderType::ST_VERTEX);
+
+EShaderParameterType ToShaderParameterType(SpvReflectResourceType _type) {
+    switch (_type) {
+
+        case SPV_REFLECT_RESOURCE_FLAG_UNDEFINED:
+            return EShaderParameterType::Num;
+        case SPV_REFLECT_RESOURCE_FLAG_SAMPLER:
+            return EShaderParameterType::SAMPLER;
+        case SPV_REFLECT_RESOURCE_FLAG_CBV:
+            return EShaderParameterType::UNIFORM_BUFFER;
+        case SPV_REFLECT_RESOURCE_FLAG_SRV:
+            return EShaderParameterType::SRV;
+        case SPV_REFLECT_RESOURCE_FLAG_UAV:
+            return EShaderParameterType::UAV;
+            break;
+    }
+    return EShaderParameterType::Num;
+}
+
+ERHIPipelineStageFlags ToPipelineStageFlag(SpvReflectShaderStageFlagBits _stage) {
+    switch (_stage) {
+
+        case SPV_REFLECT_SHADER_STAGE_VERTEX_BIT:
+            return ERHIPipelineStageFlags::PS_VERTEX_SHADER;
+
+        case SPV_REFLECT_SHADER_STAGE_GEOMETRY_BIT:
+            return ERHIPipelineStageFlags::PS_GEOMETRY_SHADER;
+        case SPV_REFLECT_SHADER_STAGE_FRAGMENT_BIT:
+            return ERHIPipelineStageFlags::PS_FRAGMENT_SHADER;
+        case SPV_REFLECT_SHADER_STAGE_COMPUTE_BIT:
+            return ERHIPipelineStageFlags::PS_COMPUTE_SHADER;
+        case SPV_REFLECT_SHADER_STAGE_RAYGEN_BIT_KHR:
+        case SPV_REFLECT_SHADER_STAGE_ANY_HIT_BIT_KHR:
+        case SPV_REFLECT_SHADER_STAGE_CLOSEST_HIT_BIT_KHR:
+        case SPV_REFLECT_SHADER_STAGE_MISS_BIT_KHR:
+        case SPV_REFLECT_SHADER_STAGE_INTERSECTION_BIT_KHR:
+            return ERHIPipelineStageFlags::PS_RAY_TRACING_SHADER;
+        case SPV_REFLECT_SHADER_STAGE_TASK_BIT_NV:
+        case SPV_REFLECT_SHADER_STAGE_MESH_BIT_NV:
+        case SPV_REFLECT_SHADER_STAGE_TESSELLATION_CONTROL_BIT:
+        case SPV_REFLECT_SHADER_STAGE_TESSELLATION_EVALUATION_BIT:
+        case SPV_REFLECT_SHADER_STAGE_CALLABLE_BIT_KHR: break;
+    }
+    return ERHIPipelineStageFlags::PS_NONE;
+}
 
 /**
  * @brief cross-compile shader
@@ -21,42 +106,46 @@
  * @param output ShaderCompilerOutput: output shader code, error messages and param data bindings
  */
 void ShaderCompiler::Compile(const ShaderCompilerInput& input, ShaderCompilerOutput& output) {
-}
 
-void ShaderCompiler::ShaderConductorTest() {
-    const char* file_name_c = "TestVert.vert";
-    HRESULT     hres;
+    auto OnFail = [&](const char* messsage) {
+        output.errors.push_back(messsage);
+        output.b_succeeded = false;
+        output.target_info = input.target_info;
+    };
+
+    const char*        file_name_c = input.relative_source_file_path.c_str();
+    const std::wstring entry_name  = std::wstring(input.entry_point.begin(), input.entry_point.end());
+    HRESULT            hres;
 
     std::filesystem::path file_path = g_global_shader_resource_root_dir;
     file_path /= file_name_c;
 
     std::wstring file_name = file_path.generic_wstring();
 
-    std::ifstream f(file_path);
-
-    std::stringstream s;
-    ;
-    s << f.rdbuf();
     // Initialize DXC library
     CComPtr<IDxcLibrary>
         library;
     hres = DxcCreateInstance(CLSID_DxcLibrary, IID_PPV_ARGS(&library));
     if (FAILED(hres)) {
-        throw std::runtime_error("Could not init DXC Library");
+        OnFail("Could not init DXC Library");
+
+        return;
     }
 
     // Initialize DXC compiler
     CComPtr<IDxcCompiler3> compiler;
     hres = DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&compiler));
     if (FAILED(hres)) {
-        throw std::runtime_error("Could not init DXC Compiler");
+        OnFail("Could not init DXC Compiler");
+        return;
     }
 
     // Initialize DXC utility
     CComPtr<IDxcUtils> utils;
     hres = DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&utils));
     if (FAILED(hres)) {
-        throw std::runtime_error("Could not init DXC Utiliy");
+        OnFail("Could not init DXC Utiliy");
+        return;
     }
 
     // Load the HLSL text shader from disk
@@ -64,7 +153,8 @@ void ShaderCompiler::ShaderConductorTest() {
     CComPtr<IDxcBlobEncoding> source_blob;
     hres = utils->LoadFile(file_name.c_str(), &code_page, &source_blob);
     if (FAILED(hres)) {
-        throw std::runtime_error("Could not load shader file");
+        OnFail("Could not load shader file");
+        return;
     }
 
     // Select target profile based on shader file extension
@@ -73,10 +163,10 @@ void ShaderCompiler::ShaderConductorTest() {
     if (idx != std::string::npos) {
         std::wstring extension = file_name.substr(idx + 1);
         if (extension == L"vert") {
-            target_profile = L"vs_6_1";
+            target_profile = L"vs_6_4";
         }
         if (extension == L"frag") {
-            target_profile = L"ps_6_1";
+            target_profile = L"ps_6_4";
         }
         // Mapping for other file types go here (cs_x_y, lib_x_y, etc.)
     }
@@ -87,7 +177,7 @@ void ShaderCompiler::ShaderConductorTest() {
         file_name.c_str(),
         // Shader main entry point
         L"-E",
-        L"main",
+        entry_name.c_str(),
         // Shader target profile
         L"-T",
         target_profile,
@@ -124,6 +214,9 @@ void ShaderCompiler::ShaderConductorTest() {
 
             error_stream << "Shader compilation failed :\n\n"
                          << (const char*)error_blob->GetBufferPointer();
+            OnFail("Shader compilation failed");
+            output.errors.push_back((const char*)error_blob->GetBufferPointer());
+
             LOG_INFO(error_stream.str());
         }
     }
@@ -133,6 +226,10 @@ void ShaderCompiler::ShaderConductorTest() {
     result->GetResult(&code);
     const uint8_t* data = (uint8_t*)code->GetBufferPointer();
     uint32_t       size = code->GetBufferSize();
+    output.b_succeeded  = true;
+
+    output.shader_code.resize(size);
+    memcpy(&output.shader_code[0], data, size);
 
     SpvReflectShaderModule module;
     SpvReflectResult       ref_result = spvReflectCreateShaderModule(size, data, &module);
@@ -149,7 +246,42 @@ void ShaderCompiler::ShaderConductorTest() {
 
     // Output variables, descriptor bindings, descriptor sets, and push constants
     // can be enumerated and extracted using a similar mechanism.
-
+    // module.
     // Destroy the reflection data when no longer required.
+    //generate pipeline layout
+
+    ShaderParametersInfoMap& shader_params = output.parameter_map;
+    for (uint32_t binding_index = 0; binding_index < module.descriptor_binding_count; ++binding_index) {
+        auto& binding = module.descriptor_bindings[binding_index];
+
+        auto& param = shader_params.param_map[binding.name];
+        param.slot  = binding_index;
+        param.type  = ToShaderParameterType(binding.resource_type);
+        param.stage = ToPipelineStageFlag(module.shader_stage);
+    }
+
+    output.target_info = input.target_info;
     spvReflectDestroyShaderModule(&module);
+}
+
+class FakeRHI : public IVulkanRHI {
+public:
+    FakeRHI() {
+        rhi_type = ERHIType::Vulkan;
+    }
+};
+
+void ShaderCompiler::ShaderConductorTest() {
+    g_rhi = new FakeRHI;
+    TestReflectionShader::GetMetaType();
+
+    ShaderTypeRegistration::SubmitRegistrations();
+
+    const auto& works = ShaderCompileRegistration::RetrieveShaderCompileWorks();
+
+    std::for_each(works.begin(), works.end(), [](const ShaderCompilerInput& input) {
+        ShaderCompilerOutput output;
+
+        Compile(input, output);
+    });
 }

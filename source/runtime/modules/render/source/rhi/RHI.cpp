@@ -20,14 +20,17 @@ RHIBufferRef CreateBufferFromData(const RHIBufferCreateInfo& info, uint32_t size
     g_rhi->RHIUnmapBuffer(buffer);
     return buffer;
 }
+BEGIN_SHADER_PARAMETER_DEFINITION(UniformStructure)
 
+END_SHADER_PARAMETER_DEFINITION(UniformStructure)
 class TestShader : public Shader {
     DEFINE_SHADER_TYPE(TestShader, Global, RHI_API)
 public:
     BEGIN_SHADER_PARAMETER_DEFINITION(Parameters)
-
     DEFINE_SHADER_PARAM_UAV(RWTexture2D, write_target)
+    DEFINE_SHADER_PARAM_STRUCT(UniformStructure, ubo)//should bind a buffer view
     DEFINE_SHADER_PARAM_ATTACHMENT_BINDING()
+
     END_SHADER_PARAMETER_DEFINITION(Parameters)
 };
 
@@ -128,11 +131,18 @@ void Test() {
         g_rhi->RHICreateUnorderedAccessView(tex,
                                             RHIViewInfo::CreateTextureUAVInfo()
                                                 .SetFormat((PF_R8G8B8A8_SRGB)));
-    TestShader::Parameters*
-        params;
-    params->write_target = test_view;
-    params->Attachments[0];
-    ;
+    TestShader*            test_shader_vs;
+    TestShader::Parameters params;
+
+    auto test_buff = g_rhi->RHICreateBuffer(buffer_info);
+    params.GetMembers();
+    params.write_target = test_view;
+    params.ubo.GetMembers();
+
+    // command_list->SetBatchedShaderParameter();
+    //VkSetDescriptorWrite()
+
+    //rootSignature => pipelineLayout -> descriptorLayout descriptorLayoutBinding
 }
 
 // binding point 0

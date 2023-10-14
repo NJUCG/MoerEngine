@@ -13,6 +13,6 @@ public:
     * @param input ShaderCompilerInput: contains all information compiler needs
     * @param output ShaderCompilerOutput: output shader code, error messages and param data bindings
     */
-    void Compile(const ShaderCompilerInput& input, ShaderCompilerOutput& output);
+    static void Compile(const ShaderCompilerInput& input, ShaderCompilerOutput& output);
 };
 #endif
