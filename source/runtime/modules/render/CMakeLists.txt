@@ -33,7 +33,9 @@ target_link_libraries(${MODULE_NAME}
 
 add_dependencies(${MODULE_NAME} DXC_COPY)
 target_compile_definitions(${MODULE_NAME} 
-    PUBLIC "GLOBAL_SHADER_RESOURCE_ROOT=${moer_root_dir}/shaders")
+    PUBLIC "GLOBAL_SHADER_RESOURCE_ROOT=${moer_root_dir}/shaders"
+    PUBLIC "GLOBAL_SHADER_RESOURCE_OUTPUT=${moer_root_dir}/shaders/compiled"
+    )
 
 if(WINDOWS)
 target_compile_definitions(${MODULE_NAME}

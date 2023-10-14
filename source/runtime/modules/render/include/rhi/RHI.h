@@ -99,7 +99,7 @@ public:
 
 #pragma endregion
 
-private:
+protected:
     ERHIType rhi_type;
 };
 

@@ -1,5 +1,6 @@
 #ifndef MOERENGINE_SHADER_COMMON_H
 #define MOERENGINE_SHADER_COMMON_H
+#include "misc/Hash.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
@@ -10,6 +11,7 @@
 #include "misc/MacroUtils.h"
 
 extern const char* g_global_shader_resource_root_dir;
+extern const char* g_global_shader_resource_output_dir;
 enum class EShaderParameterType : uint8_t {
     LOOSE_DATA,
     UNIFORM_BUFFER,
@@ -243,6 +245,15 @@ public:
     };
     static RENDER_CORE_API std::unordered_map<HashedName, ShaderMetaType*>& GetNameToTypeMap();
 
+    const HashedName GetNameHash() const { return hash_type_name; }
+    EShaderType      GetShaderType() const { return shader_type; }
+    const HashedName GetFileNameHash() const { return hash_file_name; }
+
+    const char*                     GetName() const { return type_name; }
+    const char*                     GetFileName() const { return file_name; }
+    const char*                     GetEntryPoint() const { return entry_point; }
+    const ShaderParametersMetadata* GetParameterMetaData() const { return parameter_meta_data; }
+
 private:
     //todo: currently only support one file one shader, this field for multiple shader single file
     const char*                     type_name;
@@ -301,48 +312,22 @@ public:
     const char* name;
 };
 // per parameter allocation in global map
-struct ShaderParameterAllocationInfo {
-    //global buffer index
-    uint16_t buffer_index = 0;
-    //binding/slot
-    uint16_t             slot = 0;
-    uint16_t             size = 0;
-    EShaderParameterType type{EShaderParameterType::Num};
-    mutable bool         b_bound = false;
-
-    ShaderParameterAllocationInfo() = default;
-    ShaderParameterAllocationInfo(
-        uint16_t             _buffer_index,
-        uint16_t             _slot,
-        uint16_t             _size,
-        EShaderParameterType _type) : buffer_index(_buffer_index),
-                                      slot(_slot),
-                                      size(_size),
-                                      type(_type) {
-    }
+struct ParameterInfo {
+    int16_t                slot = -1;
+    EShaderParameterType   type{EShaderParameterType::Num};
+    ERHIPipelineStageFlags stage{ERHIPipelineStageFlags::PS_NONE};
 };
+struct ShaderParametersInfoMap {
+    friend class ShaderCompiler;
 
-class ShaderParameterMap {
 public:
-    ShaderParameterMap() = default;
-
-    std::optional<ShaderParameterAllocationInfo> FindShaderParameterAllocation(const std::string& _param_name) const;
-    void                                         AddShaderParameterAllocation(const char* _param_name, uint16_t _buffer_index, uint16_t _base_index, uint16_t _size, EShaderParameterType _type);
-    void                                         RemoveShaderParameterAllocation(const char* _param_name);
-
-    inline void GetAllParamsNames(std::vector<std::string>& _out_names) const {
-        for (const auto& params_pair : shader_parameters_map) {
-            _out_names.push_back(params_pair.first);
-        }
-    }
-    inline const std::unordered_map<std::string, ShaderParameterAllocationInfo>& GetShaderParameterMap() const {
-        return shader_parameters_map;
+    const std::unordered_map<std::string, ParameterInfo>& GetShaderParameterInfoMap() {
+        return param_map;
     }
 
 private:
-    std::unordered_map<std::string, ShaderParameterAllocationInfo> shader_parameters_map;
+    std::unordered_map<std::string, ParameterInfo> param_map;
 };
-
 struct ShaderCompilerOutput {
 
     ShaderCompilerOutput()
@@ -352,7 +337,7 @@ struct ShaderCompilerOutput {
           preprocessing_time(0.0),
           b_succeeded(false) {}
 
-    ShaderParameterMap       parameter_map;
+    ShaderParametersInfoMap  parameter_map;
     std::vector<std::string> errors;
     std::vector<std::string> pragma;
 
@@ -375,13 +360,13 @@ struct ShaderCompilerOutput {
 };
 
 struct ShaderCompiledInfo {
-    const ShaderMetaType*       type_info;
-    ShaderTargetInfo            target_info;
-    const std::vector<uint8_t>& compiled_code;
-    const ShaderParameterMap&   ParameterMap;
-    const Hash64City&           OutputHash;
-    Hash64City                  MaterialShaderMapHash;
-    const ShaderPipelineType*   ShaderPipeline;
+    const ShaderMetaType*          type_info;
+    ShaderTargetInfo               target_info;
+    const std::vector<uint8_t>&    compiled_code;
+    const ShaderParametersInfoMap& ParameterMap;
+    const Hash64City&              OutputHash;
+    Hash64City                     MaterialShaderMapHash;
+    const ShaderPipelineType*      ShaderPipeline;
     //    const VertexFactoryType* VertexFactoryType;
     uint32_t NumInstructions;
     uint32_t NumTextureSamplers;
@@ -418,4 +403,11 @@ FORCEINLINE EShaderPlatform GetShaderPlatformByRHIType(ERHIType _type) {
         default: assert(false && "not supported rhi");
     }
 }
+
+class ShaderCompileRegistration {
+public:
+    static void RegistrateCompileWorkIfNeed(const ShaderMetaType& _shader_type);
+
+    static std::vector<ShaderCompilerInput>& RetrieveShaderCompileWorks();
+};
 #endif//MOERENGINE_SHADER_COMMON_H

@@ -5,7 +5,8 @@
 
 #pragma region shaderParameters metadata
 
-const char* g_global_shader_resource_root_dir = MACRO_STR(GLOBAL_SHADER_RESOURCE_ROOT);
+const char* g_global_shader_resource_root_dir   = MACRO_STR(GLOBAL_SHADER_RESOURCE_ROOT);
+const char* g_global_shader_resource_output_dir = MACRO_STR(GLOBAL_SHADER_RESOURCE_OUTPUT);
 
 ShaderParametersMetadata::ShaderParametersMetadata(
     EShaderParameterUseCase           _use_case,
@@ -56,8 +57,14 @@ void ShaderParametersMetadata::InitializeLayout(RHIGlobalBufferLayoutInitializer
 }
 #pragma endregion
 
+/**
+ * @brief Registrate ShaderMetaType on initalization
+ * 
+ */
 void ShaderMetaType::OnRegistration() {
-    //todo: registration
+    GetNameToTypeMap().insert({hash_type_name, this});
+    ShaderCompileRegistration::RegistrateCompileWorkIfNeed(*this);
+    //worker
 }
 ShaderMetaType::ShaderMetaType(
     const char*                     _type_name,
@@ -74,7 +81,7 @@ ShaderMetaType::ShaderMetaType(
       shader_type(_shader_type),
       parameter_meta_data(_parameter_data) {
 
-    GetNameToTypeMap().insert({hash_type_name, this});
+    OnRegistration();
 };
 ShaderMetaType::~ShaderMetaType() {
     GetNameToTypeMap().erase(hash_type_name);
@@ -110,14 +117,32 @@ void ShaderCompilerOutput::GenerateCompiledHash() {
     Hash64City& hash = compiled_hash;
     hash.Update(shader_code.data(), shader_code.size());
 
-    auto param_map = parameter_map.GetShaderParameterMap();
+    auto param_map = parameter_map.GetShaderParameterInfoMap();
     for (const auto& param : param_map) {
         const auto& name        = param.first;
         const auto& param_value = param.second;
         hash.Update(name.data(), name.length());
         hash.Update((const char*)(&param_value.type), sizeof(EShaderParameterType));
-        hash.Update((const char*)(&param_value.buffer_index), sizeof(uint16_t));
         hash.Update((const char*)(&param_value.slot), sizeof(uint16_t));
-        hash.Update((const char*)(&param_value.size), sizeof(uint16_t));
+        hash.Update((const char*)(&param_value.stage), sizeof(uint16_t));
     }
+}
+
+std::vector<ShaderCompilerInput> g_compiled_inputs;
+
+void ShaderCompileRegistration::RegistrateCompileWorkIfNeed(const ShaderMetaType& _shader_type) {
+    ShaderTargetInfo target_info;
+    std::string      entry_point;
+    std::string      relative_source_file_path;
+    std::string      shader_name;
+
+    const ShaderParametersMetadata* param_meta_data;
+    assert(g_rhi);
+
+    g_compiled_inputs.emplace_back(
+        ShaderTargetInfo{_shader_type.GetShaderType(), GetShaderPlatformByRHIType(g_rhi->GetType())}, _shader_type.GetEntryPoint(), _shader_type.GetFileName(), _shader_type.GetName(), _shader_type.GetParameterMetaData());
+}
+
+std::vector<ShaderCompilerInput>& ShaderCompileRegistration::RetrieveShaderCompileWorks() {
+    return g_compiled_inputs;
 }

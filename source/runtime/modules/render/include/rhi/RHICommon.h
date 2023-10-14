@@ -497,12 +497,6 @@ enum ERHIPipelineStageFlags : uint32_t {
     PS_COMMAND_PREPROCESS_BIT_NV        = 0x00020000,
     PS_TASK_SHADER_BIT                  = 0x00080000,
     PS_MESH_SHADER                      = 0x00100000,
-    PS_SHADING_RATE_IMAGE_NV            = PS_FRAGMENT_SHADING_RATE_ATTACHMENT,
-    PS_RAY_TRACING_SHADER_NV            = PS_RAY_TRACING_SHADER,
-    PS_ACCELERATION_STRUCTURE_BUILD_NV  = PS_ACCELERATION_STRUCTURE_BUILD,
-    PS_TASK_SHADER_NV                   = PS_TASK_SHADER_BIT,
-    PS_MESH_SHADER_NV                   = PS_MESH_SHADER,
-    PS_NONE_KHR                         = PS_NONE
 };
 #pragma endregion
 

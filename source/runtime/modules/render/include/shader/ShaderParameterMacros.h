@@ -35,6 +35,11 @@ struct ShaderReflectionInfo {
     }
 
 //compiled shader output container for shader initialization
+#define BEGIN_STRUCTURED_SHADER_PARAMETER_DEFINITION(StructureName) \
+    INNER_BEGIN_SHADER_PARAMETER_DEFINITION(StructureName, INNER_GET_STRUCTURE_METADATA_IMPL(StructureName))
+
+#define END_STRUCTURED_SHADER_PARAMETER_DEFINITION(StructureName) \
+    END_SHADER_PARAMETER_DEFINITION(StructureName)
 
 #define BEGIN_SHADER_PARAMETER_DEFINITION(StructureName) \
     INNER_BEGIN_SHADER_PARAMETER_DEFINITION(StructureName, INNER_GET_STRUCTURE_METADATA_IMPL(StructureName))
@@ -124,7 +129,7 @@ public:                                                                         
     INTERNAL_DEFINE_SHADER_PARAM_IMPL(TShaderResourceParameterTypeInfo<RHISampler*>, RHISampler*, MemberName, HLSLType, EShaderPrecisionModifier::FLOAT, SBT_SAMPLER)
 
 #define DEFINE_SHADER_PARAM_STRUCT(StructType, MemberName) \
-    INTERNAL_DEFINE_SHADER_PARAM_IMPL(MemberName::TypeInfo, StructType, MemberName, , EShaderPrecisionModifier::FLOAT, SBT_NESTED_STRUCT)
+    INTERNAL_DEFINE_SHADER_PARAM_IMPL(StructType::TypeInfo, StructType, MemberName, , EShaderPrecisionModifier::FLOAT, SBT_NESTED_STRUCT)
 
 #define DEFINE_SHADER_PARAM_STRUCT_ARRAY(StructType, MemberName, NumElements) \
     INTERNAL_DEFINE_SHADER_PARAM_IMPL(TShaderParameterStructureTypeInfo<MemberName[NumElements]>, StructType, MemberName, , EShaderPrecisionModifier::FLOAT, SBT_NESTED_STRUCT)
