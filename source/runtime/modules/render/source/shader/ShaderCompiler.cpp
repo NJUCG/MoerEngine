@@ -30,24 +30,18 @@
 #include <sstream>
 #include "rhi/RHI.h"
 
-class ShaderCompileJob {
-
-    void RegisterCompileJob(uint32_t _shader_type_hash);
-};
-BEGIN_SHADER_PARAMETER_DEFINITION(TestUBO)
+BEGIN_STRUCTURED_SHADER_PARAMETER_DEFINITION(TestUBO)
 DEFINE_SHADER_PARAM(Moer::Matrix4x4f, projectionMatrix)
 
 DEFINE_SHADER_PARAM(Moer::Matrix4x4f, modelMatrix)
 
 DEFINE_SHADER_PARAM(Moer::Matrix4x4f, viewMatrix)
 
-END_SHADER_PARAMETER_DEFINITION(TestUBO)
+END_STRUCTURED_SHADER_PARAMETER_DEFINITION(TestUBO)
 class TestReflectionShader : public Shader {
     DEFINE_SHADER_TYPE(TestReflectionShader, Global, )
 public:
     BEGIN_SHADER_PARAMETER_DEFINITION(Parameters)
-
-    DEFINE_SHADER_PARAM_STRUCT(TestUBO, ubo)
 
     END_SHADER_PARAMETER_DEFINITION(Parameters)
 };

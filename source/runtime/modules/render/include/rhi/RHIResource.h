@@ -534,6 +534,12 @@ struct RHIBufferCreateInfo : public RHIBufferInfo {
 /* index, vertex, staging, indirect */
 class RHIBuffer : public RHIViewableResource {
 public:
+    
+    /**
+     * @brief Construct a new RHIBuffer object
+     * 
+     * @param _info 
+     */
     RHIBuffer(const RHIBufferInfo& _info) : RHIViewableResource(RRT_BUFFER), info(_info) {}
 
     const RHIBufferInfo& GetInfo() const { return info; }
@@ -545,10 +551,53 @@ public:
     EBufferUsageFlags GetUsage() const { return info.usage; }
 
 protected:
+    /**
+     * @brief Create an empty RHIBuffer, do nothing in rhi backend
+     * 
+     */
+    RHIBuffer(): RHIViewableResource(RRT_BUFFER){}
     std::string name;
 
-private:
+protected:
     RHIBufferInfo info;
+};
+
+template<typename TStructuredParam>
+concept concept_is_shader_struct = requires (TStructuredParam t){
+    std::is_same<typename TStructuredParam::TypeInfo::TParamPtr, TStructuredParam>();
+    t.GetStructMetadata();
+};
+
+/**
+ * @brief Actually the same as RHIBuffer, but created with Fix size for shader parameter updates
+ * 
+ */
+template <concept_is_shader_struct TStructuredParam>
+class RHIStructureBuffer: public RHIBuffer{
+    public:
+    /**
+     * @brief Construct a new RHIStructureBuffer object with standalone buffer
+     * 
+     * @param _usages Buffer Usage, StructuredBuffer .etc
+     */
+    RHIStructureBuffer(EBufferUsageFlags _usages): RHIBuffer(RHIBufferInfo(sizeof(TStructuredParam), TStructuredParam::TypeInfo::s_stride, _usages)){}
+    
+    /**
+     * @brief Construct a new RHIStructureBuffer object from existing RHIBuffer
+     * 
+     * @param _reference existing RHIBuffer
+     * @param offset offset in RHIBuffer
+     */
+    RHIStructureBuffer(RHIBuffer* _reference, uint32_t offset = 0): RHIBuffer(){ assert(_reference != nullptr);};
+
+    virtual void UpLoadParameters(){};
+
+    TStructuredParam param;
+    private:
+
+    RHIBuffer* reference;
+    uint32_t offset;
+
 };
 
 struct RHITextureInfo {

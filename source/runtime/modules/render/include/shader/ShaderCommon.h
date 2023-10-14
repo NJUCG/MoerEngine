@@ -2,7 +2,6 @@
 #define MOERENGINE_SHADER_COMMON_H
 #include "misc/Hash.h"
 #include "rhi/RHI.h"
-#include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include <cstdint>
 #include <functional>
@@ -12,6 +11,8 @@
 
 extern const char* g_global_shader_resource_root_dir;
 extern const char* g_global_shader_resource_output_dir;
+
+
 enum class EShaderParameterType : uint8_t {
     LOOSE_DATA,
     UNIFORM_BUFFER,

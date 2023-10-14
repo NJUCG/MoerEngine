@@ -1,6 +1,7 @@
 #ifndef RHI_H
 #define RHI_H
 #include "RHIResource.h"
+#include "rhi/RHIResource.h"
 #include <vector>
 enum class ERHIType {
     Vulkan,
@@ -80,6 +81,7 @@ public:
     virtual void RHICopyBuffer(RHIBuffer* _src, RHIBuffer* _dst) = 0;
 
     virtual RHIBufferRef RHICreateBuffer(const RHIBufferCreateInfo& info)                   = 0;
+    
     virtual void*        RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size) = 0;
     virtual void         RHIUnmapBuffer(RHIBuffer* _buffer)                                 = 0;
 
