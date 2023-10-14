@@ -38,4 +38,6 @@ class ShaderMapResource : ShaderResource{
 
 };
 
+
+
 #endif//MOERENGINE_SHADER_RESOURCE_H

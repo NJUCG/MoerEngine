@@ -23,7 +23,7 @@ public:
     DEFINE_SHADER_PARAM_SRV(StructuredBuffer, sbo)
     DEFINE_SHADER_PARAM_SAMPLER(Sampler, sampler)
     DEFINE_SHADER_PARAM_SRV_ARRAY(TextureSRVArray, srv_array, 10)
-    DEFINE_SHADER_PARAM_STRUCT(TestParameters, struct_buffer)
+
     END_SHADER_PARAMETER_DEFINITION(Parameters)
 };
 
