@@ -6,6 +6,7 @@
 #define IVULKAN_RHI_H
 
 #include "rhi/RHI.h"
+#include "rhi/RHIResource.h"
 #include <vulkan.h>
 
 class IVulkanRHI : public RHI {
@@ -48,7 +49,7 @@ public:
 
     RHIComputePipelineStateRef RHICreateComputePipelineState(RHIComputeShader* _compute_shader) override { return RHIComputePipelineStateRef{}; }
 
-    RHIGlobalBufferRef RHICreateUniformBuffer(const void* data, const RHIGlobalBufferLayout* layout, EBufferUsageFlags _usage) override { return RHIGlobalBufferRef{}; }
+    virtual void RHIUploadBuffer(RHIBufferRef _buffer_ref, const uint8_t* _data, uint32_t _size) override{};
 
     void RHICopyBuffer(RHIBuffer* _src, RHIBuffer* _dst) override {}
 

@@ -865,11 +865,14 @@ enum ERenderQueryType {
 #pragma region shader platform
 enum EShaderPlatform : uint16_t {
     SP_WIN_D3D_SM5,
+    SP_WIN_D3D_SM6,
     SP_VULKAN_SM5,
     SP_VULKAN_SM6,
-    SP_WIN_D3D_SM6,
+
     SP_Num,
-    SP_NumBits = 16
+    SP_D3D_SM_Num    = 2,
+    SP_VULKAN_SM_Num = 2,
+    SP_NumBits       = 16
 
 };
 static_assert(SP_Num < (1 << SP_NumBits) && "");
@@ -917,4 +920,5 @@ struct SubpassSettings {
 };
 static_assert(sizeof(SubpassSettings) == 2);
 #pragma endregion
+
 #endif// !RHI_PLATFORM_COMMON_H

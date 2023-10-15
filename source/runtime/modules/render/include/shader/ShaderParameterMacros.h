@@ -15,7 +15,6 @@
 class VertexFactoryType;
 #pragma endregion
 
-
 #define INNER_GET_STRUCTURE_METADATA_IMPL(StructureName)     \
     {                                                        \
         static ShaderParametersMetadata s_struct_metadata(   \
@@ -29,10 +28,16 @@ class VertexFactoryType;
     }
 
 //compiled shader output container for shader initialization
-#define BEGIN_STRUCTURED_SHADER_PARAMETER_DEFINITION(StructureName) \
+#define BEGIN_DESCRIPTOR_TABLE_DEFINITION(StructureName) \
     INNER_BEGIN_SHADER_PARAMETER_DEFINITION(StructureName, INNER_GET_STRUCTURE_METADATA_IMPL(StructureName))
 
-#define END_STRUCTURED_SHADER_PARAMETER_DEFINITION(StructureName) \
+#define END_DESCRIPTOR_TABLE_DEFINITION(StructureName) \
+    END_SHADER_PARAMETER_DEFINITION(StructureName)
+
+#define BEGIN_SHADER_STRUCT_DEFINITION(StructureName) \
+    INNER_BEGIN_SHADER_PARAMETER_DEFINITION(StructureName, INNER_GET_STRUCTURE_METADATA_IMPL(StructureName))
+
+#define END_SHADER_STRUCT_DEFINITION(StructureName) \
     END_SHADER_PARAMETER_DEFINITION(StructureName)
 
 #define BEGIN_SHADER_PARAMETER_DEFINITION(StructureName) \
@@ -122,9 +127,8 @@ public:                                                                         
 #define DEFINE_SHADER_PARAM_SAMPLER(HLSLType, MemberName) \
     INTERNAL_DEFINE_SHADER_PARAM_IMPL(TShaderResourceParameterTypeInfo<RHISampler*>, RHISampler*, MemberName, HLSLType, EShaderPrecisionModifier::FLOAT, SBT_SAMPLER)
 
-// dont need to support this, because we only need Basic Resources
-// #define DEFINE_SHADER_PARAM_STRUCT(StructType, MemberName) \
-//     INTERNAL_DEFINE_SHADER_PARAM_IMPL(StructType::TypeInfo, StructType, MemberName, , EShaderPrecisionModifier::FLOAT, SBT_NESTED_STRUCT)
+#define DEFINE_SHADER_PARAM_SET(StructType, MemberName) \
+    INTERNAL_DEFINE_SHADER_PARAM_IMPL(StructType::TypeInfo, StructType, MemberName, , EShaderPrecisionModifier::FLOAT, SBT_NESTED_STRUCT)
 
 // #define DEFINE_SHADER_PARAM_STRUCT_ARRAY(StructType, MemberName, NumElements) \
 //     INTERNAL_DEFINE_SHADER_PARAM_IMPL(TShaderParameterStructureTypeInfo<MemberName[NumElements]>, StructType, MemberName, , EShaderPrecisionModifier::FLOAT, SBT_NESTED_STRUCT)

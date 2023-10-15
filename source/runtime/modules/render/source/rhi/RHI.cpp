@@ -28,6 +28,7 @@ class TestShader : public Shader {
 public:
     BEGIN_SHADER_PARAMETER_DEFINITION(Parameters)
     DEFINE_SHADER_PARAM_UAV(RWTexture2D, write_target)
+    DEFINE_SHADER_PARAM_SRV(StructuredBuffer, ubo)
     DEFINE_SHADER_PARAM_ATTACHMENT_BINDING()
 
     END_SHADER_PARAMETER_DEFINITION(Parameters)
@@ -137,10 +138,10 @@ void Test() {
     params.GetMembers();
     params.write_target = test_view;
 
-    // command_list->SetBatchedShaderParameter();
+    //command_list->SetBatchedShaderParameter();
     //VkSetDescriptorWrite()
 
-    //rootSignature => pipelineLayout -> descriptorLayout descriptorLayoutBinding
+    //rootSignature <=> pipelineLayout -> descriptorLayout descriptorLayoutBinding
 }
 
 // binding point 0

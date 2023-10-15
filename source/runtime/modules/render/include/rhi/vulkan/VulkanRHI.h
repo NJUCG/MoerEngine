@@ -53,8 +53,6 @@ public:
 
     RHIComputePipelineStateRef RHICreateComputePipelineState(RHIComputeShader* _compute_shader) final override;
 
-    RHIGlobalBufferRef RHICreateUniformBuffer(const void* data, const RHIGlobalBufferLayout* layout, EBufferUsageFlags _usage) final override;
-
     void RHICopyBuffer(RHIBuffer* _src, RHIBuffer* _dst) final override;
 
     RHIBufferRef RHICreateBuffer(const RHIBufferCreateInfo& info) final override;

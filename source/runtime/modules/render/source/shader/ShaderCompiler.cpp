@@ -1,16 +1,22 @@
 #include "math/Matrix.h"
 #include "rhi/RHI.h"
-#include "rhi/RHICommon.h"
 #include "rhi/vulkan/IVulkanRHI.h"
 #include "shader/ShaderParameterMacros.h"
+#include "taskgraph/GraphTask.h"
+#include "taskgraph/TaskGraph.h"
 #include <algorithm>
+#include <functional>
 #include <string>
-#include <vcruntime_string.h>
+
+#include "platform/Platform.h"
+
+#if PLATFORM_WINDOWS
 #ifndef NOMINMAX
 #define NOMINMAX 1
 #endif
-
 #include "Windows.h"
+#endif
+
 #include "dxc/dxcapi.h"
 
 #include "shader/ShaderCompiler.h"
@@ -30,14 +36,24 @@
 #include <sstream>
 #include "rhi/RHI.h"
 
-BEGIN_STRUCTURED_SHADER_PARAMETER_DEFINITION(TestUBO)
-DEFINE_SHADER_PARAM(Moer::Matrix4x4f, projectionMatrix)
+BEGIN_DESCRIPTOR_TABLE_DEFINITION(TestUBO)
+DEFINE_SHADER_PARAM_SRV(StructuredBuffer, srv_0)
 
-DEFINE_SHADER_PARAM(Moer::Matrix4x4f, modelMatrix)
+DEFINE_SHADER_PARAM_SRV(StructuredBuffer, uav_0)
 
-DEFINE_SHADER_PARAM(Moer::Matrix4x4f, viewMatrix)
+DEFINE_SHADER_PARAM_SRV(StructuredBuffer, srv_1)
 
-END_STRUCTURED_SHADER_PARAMETER_DEFINITION(TestUBO)
+END_DESCRIPTOR_TABLE_DEFINITION(TestUBO)
+
+BEGIN_DESCRIPTOR_TABLE_DEFINITION(TestUBO2)
+DEFINE_SHADER_PARAM_SRV(StructuredBuffer, srv_0)
+
+DEFINE_SHADER_PARAM_SRV(StructuredBuffer, uav_0)
+
+DEFINE_SHADER_PARAM_SRV(StructuredBuffer, srv_1)
+
+END_DESCRIPTOR_TABLE_DEFINITION(TestUBO)
+
 class TestReflectionShader : public Shader {
     DEFINE_SHADER_TYPE(TestReflectionShader, Global, )
 public:
@@ -93,13 +109,10 @@ ERHIPipelineStageFlags ToPipelineStageFlag(SpvReflectShaderStageFlagBits _stage)
     return ERHIPipelineStageFlags::PS_NONE;
 }
 
-/**
- * @brief cross-compile shader
- * 
- * @param input ShaderCompilerInput: contains all information compiler needs
- * @param output ShaderCompilerOutput: output shader code, error messages and param data bindings
- */
-void ShaderCompiler::Compile(const ShaderCompilerInput& input, ShaderCompilerOutput& output) {
+void ShaderCompiler::CompileD3D12(const ShaderCompilerInput& input, ShaderCompilerOutput& output) {
+}
+
+void ShaderCompiler::CompileVulkan(const ShaderCompilerInput& input, ShaderCompilerOutput& output) {
 
     auto OnFail = [&](const char* messsage) {
         output.errors.push_back(messsage);
@@ -116,9 +129,14 @@ void ShaderCompiler::Compile(const ShaderCompilerInput& input, ShaderCompilerOut
 
     std::wstring file_name = file_path.generic_wstring();
 
+    if (!std::filesystem::exists(file_path)) {
+        OnFail("Could not load shader file");
+    }
+
+    //ReadFile
+
     // Initialize DXC library
-    CComPtr<IDxcLibrary>
-        library;
+    CComPtr<IDxcLibrary> library;
     hres = DxcCreateInstance(CLSID_DxcLibrary, IID_PPV_ARGS(&library));
     if (FAILED(hres)) {
         OnFail("Could not init DXC Library");
@@ -258,6 +276,23 @@ void ShaderCompiler::Compile(const ShaderCompilerInput& input, ShaderCompilerOut
     spvReflectDestroyShaderModule(&module);
 }
 
+std::function<void(const ShaderCompilerInput& input, ShaderCompilerOutput& output)> ShaderCompiler::g_compiler_func_table[EShaderPlatform::SP_Num]{
+    CompileD3D12,
+    CompileD3D12,
+    CompileVulkan,
+    CompileVulkan};
+
+/**
+ * @brief cross-compile shader
+ * 
+ * @param input ShaderCompilerInput: contains all information compiler needs
+ * @param output ShaderCompilerOutput: output shader code, error messages and param data bindings
+ */
+void ShaderCompiler::Compile(const ShaderCompilerInput& input, ShaderCompilerOutput& output) {
+
+    g_compiler_func_table[input.target_info.shader_platform](input, output);
+}
+
 class FakeRHI : public IVulkanRHI {
 public:
     FakeRHI() {
@@ -273,9 +308,30 @@ void ShaderCompiler::ShaderConductorTest() {
 
     const auto& works = ShaderCompileRegistration::RetrieveShaderCompileWorks();
 
+    GraphEventRef collect_job = GraphTask<EmptyGraphTask>::CreateTask().ConstructAndDispatchWhenReady(EThread::EGameThread);
+
+    // static auto library_instance_ =
+    //     CComPtr<IDxcLibrary>([&](auto ptr) {
+    //         return DxcCreateInstance(CLSID_DxcLibrary,
+    //                                  __uuidof(IDxcLibrary),
+    //                                  (LPVOID*)ptr);
+    //     });
+
+    // static auto compiler_instance_ =
+    //     CComPtr<IDxcCompiler>([&](auto ptr) {
+    //         return create_proc(CLSID_DxcCompiler,
+    //                            __uuidof(IDxcCompiler),
+    //                            (LPVOID*)ptr);
+    //     });
+
+    // static auto include_handler_ =
+    //     CComPtr<IDxcIncludeHandler>([&](auto ptr) {
+    //         return library_instance_->CreateIncludeHandler(ptr);
+    //     });
+
     std::for_each(works.begin(), works.end(), [](const ShaderCompilerInput& input) {
         ShaderCompilerOutput output;
-
+        //todo: check file cached
         Compile(input, output);
     });
 }

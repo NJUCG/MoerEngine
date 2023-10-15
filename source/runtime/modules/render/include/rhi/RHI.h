@@ -1,6 +1,7 @@
 #ifndef RHI_H
 #define RHI_H
 #include "RHIResource.h"
+#include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include <vector>
 enum class ERHIType {
@@ -72,18 +73,14 @@ public:
     virtual RHIComputePipelineStateRef RHICreateComputePipelineState(RHIComputeShader* _compute_shader, RHIPipelineBinaryDataLibrary* _pipeline_library) {
         return RHICreateComputePipelineState(_compute_shader);
     }
-
-    /* constant buffer creation */
-    virtual RHIGlobalBufferRef RHICreateUniformBuffer(const void* data, const RHIGlobalBufferLayout* layout, EBufferUsageFlags _usage) = 0;
-
-    //todo: constant buffer update
+    virtual void RHIUploadBuffer(RHIBufferRef _buffer_ref, const uint8_t* _data, uint32_t _size) = 0;
 
     virtual void RHICopyBuffer(RHIBuffer* _src, RHIBuffer* _dst) = 0;
 
-    virtual RHIBufferRef RHICreateBuffer(const RHIBufferCreateInfo& info)                   = 0;
-    
-    virtual void*        RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size) = 0;
-    virtual void         RHIUnmapBuffer(RHIBuffer* _buffer)                                 = 0;
+    virtual RHIBufferRef RHICreateBuffer(const RHIBufferCreateInfo& info) = 0;
+
+    virtual void* RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size) = 0;
+    virtual void  RHIUnmapBuffer(RHIBuffer* _buffer)                                 = 0;
 
     virtual RHITextureRef RHICreateTexture(const RHITextureCreateInfo& info) = 0;
 
