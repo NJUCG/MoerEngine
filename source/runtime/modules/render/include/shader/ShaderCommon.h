@@ -12,7 +12,6 @@
 extern const char* g_global_shader_resource_root_dir;
 extern const char* g_global_shader_resource_output_dir;
 
-
 enum class EShaderParameterType : uint8_t {
     LOOSE_DATA,
     UNIFORM_BUFFER,
@@ -364,15 +363,15 @@ struct ShaderCompiledInfo {
     const ShaderMetaType*          type_info;
     ShaderTargetInfo               target_info;
     const std::vector<uint8_t>&    compiled_code;
-    const ShaderParametersInfoMap& ParameterMap;
-    const Hash64City&              OutputHash;
-    Hash64City                     MaterialShaderMapHash;
-    const ShaderPipelineType*      ShaderPipeline;
+    const ShaderParametersInfoMap& parameter_map;
+    const Hash64City&              output_hash;
+    Hash64City                     material_shader_map_hash;
+    const ShaderPipelineType*      shader_pipeline;
     //    const VertexFactoryType* VertexFactoryType;
-    uint32_t NumInstructions;
-    uint32_t NumTextureSamplers;
-    uint32_t CodeSize;
-    int32_t  PermutationId;
+    uint32_t num_instructions;
+    uint32_t num_texture_samplers;
+    uint32_t code_size;
+    int32_t  permutation_id;
 
     RENDER_CORE_API ShaderCompiledInfo(
         const ShaderMetaType*       _shader_type,

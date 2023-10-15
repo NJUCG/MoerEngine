@@ -21,7 +21,11 @@
 #include <string>
 #include <optional>
 #include <bitset>
-
+template<typename TStructuredParam>
+concept concept_is_shader_struct = requires(TStructuredParam t) {
+    std::is_same<typename TStructuredParam::TypeInfo::TParamPtr, TStructuredParam>();
+    t.GetStructMetadata();
+};
 #pragma region forward definitions
 class RHICommandListBase;
 class RHITexture;
@@ -63,10 +67,16 @@ class RHIVertexShader;
 class RHIViewableResource;
 class RHIViewport;
 
-using RHIAmplificationShaderRef       = CountableRef<RHIAmplificationShader>;
-using RHIBlendStateRef                = CountableRef<RHIBlendState>;
-using RHIShaderBoundStateRef          = CountableRef<RHIShaderBoundStateInput>;
-using RHIBufferRef                    = CountableRef<RHIBuffer>;
+template<concept_is_shader_struct TStructuredType>
+class RHIStructuredBuffer;
+
+using RHIAmplificationShaderRef = CountableRef<RHIAmplificationShader>;
+using RHIBlendStateRef          = CountableRef<RHIBlendState>;
+using RHIShaderBoundStateRef    = CountableRef<RHIShaderBoundStateInput>;
+using RHIBufferRef              = CountableRef<RHIBuffer>;
+
+template<concept_is_shader_struct TStructuredType>
+using RHIStructuredBufferRef          = CountableRef<RHIStructuredBuffer<TStructuredType>>;
 using RHIComputePipelineStateRef      = CountableRef<RHIComputePipelineState>;
 using RHIComputeShaderRef             = CountableRef<RHIComputeShader>;
 using RHIDepthStencilStateRef         = CountableRef<RHIDepthStencilState>;
@@ -534,7 +544,6 @@ struct RHIBufferCreateInfo : public RHIBufferInfo {
 /* index, vertex, staging, indirect */
 class RHIBuffer : public RHIViewableResource {
 public:
-    
     /**
      * @brief Construct a new RHIBuffer object
      * 
@@ -555,49 +564,52 @@ protected:
      * @brief Create an empty RHIBuffer, do nothing in rhi backend
      * 
      */
-    RHIBuffer(): RHIViewableResource(RRT_BUFFER){}
+    RHIBuffer() : RHIViewableResource(RRT_BUFFER) {}
     std::string name;
 
 protected:
     RHIBufferInfo info;
 };
 
-template<typename TStructuredParam>
-concept concept_is_shader_struct = requires (TStructuredParam t){
-    std::is_same<typename TStructuredParam::TypeInfo::TParamPtr, TStructuredParam>();
-    t.GetStructMetadata();
-};
-
 /**
  * @brief Actually the same as RHIBuffer, but created with Fix size for shader parameter updates
  * 
  */
-template <concept_is_shader_struct TStructuredParam>
-class RHIStructureBuffer: public RHIBuffer{
-    public:
+template<concept_is_shader_struct TStructuredParam>
+class RHIStructuredBuffer : public RHIResource {
+public:
     /**
      * @brief Construct a new RHIStructureBuffer object with standalone buffer
      * 
      * @param _usages Buffer Usage, StructuredBuffer .etc
      */
-    RHIStructureBuffer(EBufferUsageFlags _usages): RHIBuffer(RHIBufferInfo(sizeof(TStructuredParam), TStructuredParam::TypeInfo::s_stride, _usages)){}
-    
+    RHIStructuredBuffer() : RHIResource(RRT_BUFFER) {}
+
     /**
      * @brief Construct a new RHIStructureBuffer object from existing RHIBuffer
      * 
      * @param _reference existing RHIBuffer
      * @param offset offset in RHIBuffer
      */
-    RHIStructureBuffer(RHIBuffer* _reference, uint32_t offset = 0): RHIBuffer(){ assert(_reference != nullptr);};
+    RHIStructuredBuffer(RHIBufferRef _reference, uint32_t _offset = 0) : RHIResource(RRT_BUFFER), reference(_reference), offset(_offset) { assert(_reference != nullptr); };
 
-    virtual void UpLoadParameters(){};
+    /**
+     * @brief Upload Parameters to target RHIBuffer in graphic queue, recommend to use barrier instead
+     * 
+     */
+    void UpLoadParameters() {
+        if (reference->IsValid()) {
+            RHIUploadBuffer((uint8_t*)&param, sizeof(TStructuredParam), reference);
+        }
+    };
 
     TStructuredParam param;
-    private:
 
-    RHIBuffer* reference;
-    uint32_t offset;
+private:
+    friend void RHIUploadBuffer(const uint8_t* data, uint32_t size, RHIBuffer* _target);
 
+    RHIBufferRef reference;
+    uint32_t     offset;
 };
 
 struct RHITextureInfo {
@@ -1512,9 +1524,9 @@ private:
     EAttachmentStoreOp stencil_store_op;
 };
 
-struct RHIShaderBoundStateInput: public RHIResource {
+struct RHIShaderBoundStateInput : public RHIResource {
 
-    RHIShaderBoundStateInput(): RHIResource(RRT_SHADER_BOUND_STATE) {};
+    RHIShaderBoundStateInput() : RHIResource(RRT_SHADER_BOUND_STATE){};
     RHIShaderBoundStateInput(
         RHIVertexInputState* _vertex_input_state,
         RHIVertexShader*     _vertex_shader,

@@ -1,4 +1,6 @@
 #include "rhi/RHIResource.h"
+#include "rhi/RHI.h"
+#include "rhi/RHICommandList.h"
 
 void RHIResource::Destroy() const {
     //mark resource to be deleted
@@ -147,6 +149,10 @@ const RHITextureInfo& RHITextureReference::GetInfo() const {
     return texture_ref->GetInfo();
 }
 
+void RHIUploadBuffer(const uint8_t* data, uint32_t size, RHIBuffer* _target) {
+    //todo: not implemented
+    g_rhi->RHIUploadBuffer(_target, data, size);
+};
 #pragma endregion
 
 #pragma region rende query
