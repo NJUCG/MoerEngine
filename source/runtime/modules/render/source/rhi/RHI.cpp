@@ -20,18 +20,18 @@ RHIBufferRef CreateBufferFromData(const RHIBufferCreateInfo& info, uint32_t size
     g_rhi->RHIUnmapBuffer(buffer);
     return buffer;
 }
-BEGIN_SHADER_PARAMETER_DEFINITION(UniformStructure)
+BEGIN_SHADER_UNIFORM_STRUCT_DEFINITION(UniformStructure)
 
-END_SHADER_PARAMETER_DEFINITION(UniformStructure)
+END_SHADER_UNIFORM_STRUCT_DEFINITION(UniformStructure)
 class TestShader : public Shader {
     DEFINE_SHADER_TYPE(TestShader, Global, RHI_API)
 public:
-    BEGIN_SHADER_PARAMETER_DEFINITION(Parameters)
+    BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
     DEFINE_SHADER_PARAM_UAV(RWTexture2D, write_target)
     DEFINE_SHADER_PARAM_SRV(StructuredBuffer, ubo)
     DEFINE_SHADER_PARAM_ATTACHMENT_BINDING()
 
-    END_SHADER_PARAMETER_DEFINITION(Parameters)
+    END_ROOT_PARAMETER_DEFINITION(Parameters)
 };
 
 IMPLEMENT_SHADER_TYPE(TestShader, "testFile.vert", "main", EShaderType::ST_VERTEX)

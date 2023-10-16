@@ -860,6 +860,12 @@ private:
 
 #pragma endregion
 
+#pragma region shader param
+struct PipelineParametersBinding {
+};
+
+#pragma endregion
+
 #pragma region syncronization
 /* fences in dx12, fence and timeline semaphore in vulkan */
 class RHIFence : public RHIResource {
@@ -1032,12 +1038,16 @@ struct RHIViewInfo {
         BUFFER_SRV,
         BUFFER_UAV,
         TEXTURE_SRV,
-        TEXTURE_UAV
+        TEXTURE_UAV,
+        BUFFER_CBV,
+        TEXTURE_CBV
     };
     enum class EBufferType : uint8_t {
         UNDEFINED,
         STRUCTURED,
         ACCELERATION_STRUCTURE,
+        UNIFROM,
+        TEXTURE,
         /* a raw buffer can also be called a byte address buffer */
         RAW
     };
@@ -1099,11 +1109,18 @@ struct RHIViewInfo {
         struct ViewInfo;
         ViewInfo GetViewInfo(RHITexture*) const;
     };
+
+    struct BufferCBV : public Buffer {
+        struct Initializer;
+        struct ViewInfo;
+        ViewInfo GetViewInfo(RHIBuffer*) const;
+    };
     union {
         BaseViewInfo base_info;
         union {
             BufferSRV srv;
             BufferUAV uav;
+            BufferCBV cbv;
         } buffer;
         union {
             TextureSRV srv;
@@ -1113,6 +1130,7 @@ struct RHIViewInfo {
 
     bool IsSRV() const { return base_info.view_type == EViewType::BUFFER_SRV || base_info.view_type == EViewType::TEXTURE_SRV; }
     bool IsUAV() const { return base_info.view_type == EViewType::BUFFER_UAV || base_info.view_type == EViewType::BUFFER_UAV; }
+    bool IsUBV() const { return base_info.view_type == EViewType::BUFFER_CBV || base_info.view_type == EViewType::TEXTURE_CBV; }
 
     bool IsBuffer() const { return base_info.view_type == EViewType::BUFFER_SRV || base_info.view_type == EViewType::BUFFER_UAV; }
     bool IsTexture() const { return !IsBuffer(); }
@@ -1131,6 +1149,7 @@ struct RHIViewInfo {
     static BufferUAV::Initializer  CreateBufferUAVInfo();
     static TextureSRV::Initializer CreateTextureSRVInfo();
     static TextureUAV::Initializer CreateTextureUAVInfo();
+    static BufferCBV::Initializer  CreateBufferUBVInfo();
 
 protected:
     RHIViewInfo(EViewType _type) {
@@ -1142,7 +1161,7 @@ using RHITextureUAVCreateInfo = RHIViewInfo::TextureUAV::Initializer;
 using RHITextureSRVCreateInfo = RHIViewInfo::TextureSRV::Initializer;
 using RHIBufferUAVCreateInfo  = RHIViewInfo::BufferUAV::Initializer;
 using RHIBufferSRVCreateInfo  = RHIViewInfo::BufferSRV::Initializer;
-
+using RHIBufferUBVCreateInfo  = RHIViewInfo::BufferCBV::Initializer;
 struct RHIViewInfo::Buffer::ViewInfo {
     uint32_t     byte_offset;
     uint32_t     byte_stride;
@@ -1186,6 +1205,9 @@ struct RHIViewInfo::TextureSRV::ViewInfo : public RHIViewInfo::Texture::ViewInfo
 struct RHIViewInfo::TextureUAV::ViewInfo : public RHIViewInfo::Texture::ViewInfo {
     //texture uav support one mip level
     uint8_t mip_level;
+};
+
+struct RHIViewInfo::BufferCBV::ViewInfo : public RHIViewInfo::Buffer::ViewInfo {
 };
 
 static_assert(sizeof(RHIViewInfo) == 16, "Packing of RHIViewInfo is unexpected.");
@@ -1339,6 +1361,43 @@ public:
     }
 };
 
+struct RHIViewInfo::BufferCBV::Initializer : public RHIViewInfo {
+    friend RHIViewInfo;
+    friend RHICommandListBase;
+
+protected:
+    Initializer() : RHIViewInfo(EViewType::BUFFER_CBV) {}
+
+public:
+    Initializer& SetType(EBufferType _type) {
+        assert(_type != EBufferType::UNDEFINED);
+        buffer.cbv.bufferType = _type;
+        return *this;
+    }
+    Initializer& SetType(RHIBuffer* _buffer) {
+        buffer.cbv.bufferType = EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::UNIFORM_BUFFER) ? EBufferType::UNIFROM :
+                                EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::TEXTURE_BUFFER) ? EBufferType::TEXTURE :
+                                                                                                         EBufferType::UNDEFINED;
+        return *this;
+    }
+    // Initializer& SetFormat(EPixelFormat _format) {
+    //     buffer.ubv.format = _format;
+    //     return *this;
+    // }
+    Initializer& SetByteOffset(uint32_t _byte_offset) {
+        buffer.cbv.byte_offset = _byte_offset;
+        return *this;
+    }
+    Initializer& SetStride(uint32_t _stride) {
+        buffer.cbv.stride = _stride;
+        return *this;
+    }
+    Initializer& SetNumElements(uint32_t _num_elements) {
+        buffer.cbv.num_elements = _num_elements;
+        return *this;
+    }
+};
+
 FORCEINLINE RHIViewInfo::BufferSRV::Initializer RHIViewInfo::CreateBufferSRVInfo() {
     return {};
 }
@@ -1351,6 +1410,10 @@ FORCEINLINE RHIViewInfo::TextureSRV::Initializer RHIViewInfo::CreateTextureSRVIn
     return {};
 }
 FORCEINLINE RHIViewInfo::TextureUAV::Initializer RHIViewInfo::CreateTextureUAVInfo() {
+    return {};
+}
+
+FORCEINLINE RHIViewInfo::BufferCBV::Initializer RHIViewInfo::CreateBufferUBVInfo() {
     return {};
 }
 
@@ -1386,6 +1449,13 @@ protected:
 
 private:
     CountableRef<RHIViewableResource> resource;
+};
+
+class RHIConstantBufferView : public RHIView {
+public:
+    explicit RHIConstantBufferView(RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIView(RRT_UNORDERED_ACCESS_VIEW, _resource, _viewInfo) {
+        assert(_viewInfo.IsUAV() && "view must be uav");
+    }
 };
 
 class RHIUnorderedAccessView : public RHIView {
