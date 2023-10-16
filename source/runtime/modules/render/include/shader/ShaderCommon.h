@@ -14,7 +14,7 @@ extern const char* g_global_shader_resource_output_dir;
 
 enum class EShaderParameterType : uint8_t {
     LOOSE_DATA,
-    UNIFORM_BUFFER,
+    CBV,
     SAMPLER,
     SRV,
     UAV,
@@ -24,6 +24,16 @@ enum class EShaderParameterType : uint8_t {
 
     Num
 };
+BEGIN_ENUM_STR_DEFINITION(EShaderParameterType)
+
+ENUM_STR_ELEMENT(LOOSE_DATA)
+ENUM_STR_ELEMENT(CBV)
+ENUM_STR_ELEMENT(SAMPLER)
+ENUM_STR_ELEMENT(SRV)
+ENUM_STR_ELEMENT(UAV)
+ENUM_STR_ELEMENT(BINDLESS_RESOURCE_INDEX)
+ENUM_STR_ELEMENT(BINDLESS_SAMPLER_INDEX)
+END_ENUM_STR_DEFINITION(EShaderParameterType)
 
 enum class EShaderPrecisionModifier : uint8_t {
     FLOAT,
@@ -36,10 +46,17 @@ ENUM_BIT_OP_IMPL(EShaderPrecisionModifier)
 /** The use case of the global buffer structures. */
 enum class EShaderParameterUseCase : uint8_t {
     /** Stand alone shader parameter struct used for render passes and shader parameters. */
-    SHADER_CONSTANT_STRUCT,
+    SHADER_ROOT_PARAMETERS,
 
-    /** Global buffer definition authored at compile-time. */
-    GLOBAL_BUFFER
+    SHADER_CONSTANTS,
+
+    SHADER_SRV_TABLE,
+
+    SHADER_UAV_TABLE,
+
+    SHADER_CBV_TABLE,
+
+    SHADER_UNIFORM_STRUCT
 };
 
 class ShaderParametersMetadata {
@@ -129,7 +146,6 @@ public:
         EShaderParameterUseCase           _use_case,
         EGlobalBufferBindingFlags         _binding_flags,
         const char*                       _struct_name,
-        const char*                       _shader_variable_name,
         uint32_t                          _size,
         const std::vector<Member>&        _members,
         bool                              _b_force_complete_initialization = false,
@@ -140,7 +156,6 @@ public:
     RHI_API void GetNestedStructs(std::vector<const ShaderParametersMetadata*>& _out_nested_structs) const;
 
     const char* GetStructTypeName() const { return struct_name; }
-    const char* GetShaderVariableName() const { return shader_variable_name; }
 
     EGlobalBufferBindingFlags GetBindingFlags() const { return binding_flags; }
 
@@ -196,9 +211,6 @@ private:
     /** Name of the structure type in C++ and shader code. */
     const char* const struct_name;
 
-    /** Name of the shader variable name for global shader parameter structs. */
-    const char* const shader_variable_name;
-
     /** Size of the entire struct in bytes. */
     const uint32_t size;
 
@@ -213,9 +225,6 @@ private:
 
     /** List of all members. */
     std::vector<Member> members;
-
-    /** Shackle elements in global link list of globally named shader parameters. */
-    //    TLinkedList<FShaderParametersMetadata*> GlobalListLink;
 
     RHI_API void InitializeLayout(RHIGlobalBufferLayoutInitializer* OutLayoutInitializer = nullptr);
 };
@@ -243,7 +252,7 @@ public:
 
     struct Parameters {
     };
-    static RENDER_CORE_API std::unordered_map<HashedName, ShaderMetaType*>& GetNameToTypeMap();
+    static RENDER_CORE_API std::unordered_map<std::string, ShaderMetaType*>& GetNameToTypeMap();
 
     const HashedName GetNameHash() const { return hash_type_name; }
     EShaderType      GetShaderType() const { return shader_type; }
@@ -313,7 +322,8 @@ public:
 };
 // per parameter allocation in global map
 struct ParameterInfo {
-    int16_t                slot = -1;
+    int16_t                slot : 8  = -1;
+    int16_t                space : 8 = -1;
     EShaderParameterType   type{EShaderParameterType::Num};
     ERHIPipelineStageFlags stage{ERHIPipelineStageFlags::PS_NONE};
 };
@@ -355,8 +365,6 @@ struct ShaderCompilerOutput {
     ShaderCompilerOutput(const ShaderCompilerOutput&)            = default;
     ShaderCompilerOutput& operator=(ShaderCompilerOutput&&)      = default;
     ShaderCompilerOutput& operator=(const ShaderCompilerOutput&) = default;
-
-    void GenerateCompiledHash();
 };
 
 struct ShaderCompiledInfo {

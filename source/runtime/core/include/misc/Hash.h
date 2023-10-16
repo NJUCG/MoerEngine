@@ -266,21 +266,21 @@ private:
     }
 };
 
-namespace std {
-    template<>
-    class hash<HashedName> {
-    public:
-        size_t operator()(const HashedName& value) const {
-            return GetHash(value);
-        }
-    };
-    template<>
-    struct equal_to<HashedName> {
-    public:
-        bool operator()(const HashedName& lhs, const HashedName& rhs) const {
-            return strcmp(lhs.value, rhs.value) == 1;
-        }
-    };
-}// namespace std
+// namespace std {
+//     template<>
+//     class hash<HashedName> {
+//     public:
+//         size_t operator()(const HashedName& value) const {
+//             return GetHash(value);
+//         }
+//     };
+//     template<>
+//     struct equal_to<HashedName> {
+//     public:
+//         bool operator()(const HashedName& lhs, const HashedName& rhs) const {
+//             return strcmp(lhs.value, rhs.value) == 1;
+//         }
+//     };
+// }// namespace std
 
 #endif// !HASHABLE_H

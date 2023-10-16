@@ -12,7 +12,6 @@ ShaderParametersMetadata::ShaderParametersMetadata(
     EShaderParameterUseCase           _use_case,
     EGlobalBufferBindingFlags         _binding_flags,
     const char*                       _struct_name,
-    const char*                       _shader_variable_name,
     uint32_t                          _size,
     const std::vector<Member>&        _members,
     bool                              _b_force_complete_initialization,
@@ -20,7 +19,6 @@ ShaderParametersMetadata::ShaderParametersMetadata(
     : use_case(_use_case),
       binding_flags(_binding_flags),
       struct_name(_struct_name),
-      shader_variable_name(_shader_variable_name),
       size(_size),
       members(_members) {
 }
@@ -62,7 +60,7 @@ void ShaderParametersMetadata::InitializeLayout(RHIGlobalBufferLayoutInitializer
  * 
  */
 void ShaderMetaType::OnRegistration() {
-    GetNameToTypeMap().insert({hash_type_name, this});
+    GetNameToTypeMap().insert({type_name, this});
     ShaderCompileRegistration::RegistrateCompileWorkIfNeed(*this);
     //worker
 }
@@ -84,11 +82,11 @@ ShaderMetaType::ShaderMetaType(
     OnRegistration();
 };
 ShaderMetaType::~ShaderMetaType() {
-    GetNameToTypeMap().erase(hash_type_name);
+    GetNameToTypeMap().erase(type_name);
 }
 
-std::unordered_map<HashedName, ShaderMetaType*>& ShaderMetaType::GetNameToTypeMap() {
-    static std::unordered_map<HashedName, ShaderMetaType*> name_to_shader_meta_type;
+std::unordered_map<std::string, ShaderMetaType*>& ShaderMetaType::GetNameToTypeMap() {
+    static std::unordered_map<std::string, ShaderMetaType*> name_to_shader_meta_type;
     return name_to_shader_meta_type;
 }
 
@@ -111,21 +109,6 @@ void ShaderTypeRegistration::SubmitRegistrations() {
     }
     std::vector<std::function<ShaderMetaType&()>> temp;
     temp.swap(GetRegistrations());
-}
-
-void ShaderCompilerOutput::GenerateCompiledHash() {
-    Hash64City& hash = compiled_hash;
-    hash.Update(shader_code.data(), shader_code.size());
-
-    auto param_map = parameter_map.GetShaderParameterInfoMap();
-    for (const auto& param : param_map) {
-        const auto& name        = param.first;
-        const auto& param_value = param.second;
-        hash.Update(name.data(), name.length());
-        hash.Update((const char*)(&param_value.type), sizeof(EShaderParameterType));
-        hash.Update((const char*)(&param_value.slot), sizeof(uint16_t));
-        hash.Update((const char*)(&param_value.stage), sizeof(uint16_t));
-    }
 }
 
 std::vector<ShaderCompilerInput> g_compiled_inputs;

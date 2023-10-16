@@ -1,12 +1,16 @@
+#include "math/Base.h"
 #include "math/Matrix.h"
 #include "rhi/RHI.h"
+#include "rhi/RHICommon.h"
 #include "rhi/vulkan/IVulkanRHI.h"
 #include "shader/ShaderParameterMacros.h"
 #include "taskgraph/GraphTask.h"
 #include "taskgraph/TaskGraph.h"
 #include <algorithm>
+#include <format>
 #include <functional>
 #include <string>
+#include <unordered_map>
 
 #include "platform/Platform.h"
 
@@ -36,30 +40,24 @@
 #include <sstream>
 #include "rhi/RHI.h"
 
-BEGIN_DESCRIPTOR_TABLE_DEFINITION(TestUBO)
-DEFINE_SHADER_PARAM_SRV(StructuredBuffer, srv_0)
-
-DEFINE_SHADER_PARAM_SRV(StructuredBuffer, uav_0)
-
-DEFINE_SHADER_PARAM_SRV(StructuredBuffer, srv_1)
-
-END_DESCRIPTOR_TABLE_DEFINITION(TestUBO)
-
-BEGIN_DESCRIPTOR_TABLE_DEFINITION(TestUBO2)
-DEFINE_SHADER_PARAM_SRV(StructuredBuffer, srv_0)
-
-DEFINE_SHADER_PARAM_SRV(StructuredBuffer, uav_0)
-
-DEFINE_SHADER_PARAM_SRV(StructuredBuffer, srv_1)
-
-END_DESCRIPTOR_TABLE_DEFINITION(TestUBO)
-
 class TestReflectionShader : public Shader {
     DEFINE_SHADER_TYPE(TestReflectionShader, Global, )
 public:
-    BEGIN_SHADER_PARAMETER_DEFINITION(Parameters)
+    BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
+    //constant
+    DEFINE_SHADER_PARAM(Moer::Vector4f, color)
+    DEFINE_SHADER_PARAM_SRV(Buffer, bar)
+    //Ubo set
+    DEFINE_SHADER_PARAM_UAV(RWBuffer, dataLog)
 
-    END_SHADER_PARAMETER_DEFINITION(Parameters)
+    DEFINE_SHADER_PARAM_SAMPLER_ARRAY(Sampler[2], samp, 2)
+    DEFINE_SHADER_PARAM_SAMPLER(Sampler, aniso)
+    //srv set
+    DEFINE_SHADER_PARAM_SRV_ARRAY(Texture2D[5], foo, 5)
+    //uav set
+    DEFINE_SHADER_PARAM_CBV(ConstantBuffer<UBO>, ubo)
+
+    END_ROOT_PARAMETER_DEFINITION(Parameters)
 };
 
 IMPLEMENT_SHADER_TYPE(TestReflectionShader, "TestVert.vert", "main", EShaderType::ST_VERTEX);
@@ -72,7 +70,7 @@ EShaderParameterType ToShaderParameterType(SpvReflectResourceType _type) {
         case SPV_REFLECT_RESOURCE_FLAG_SAMPLER:
             return EShaderParameterType::SAMPLER;
         case SPV_REFLECT_RESOURCE_FLAG_CBV:
-            return EShaderParameterType::UNIFORM_BUFFER;
+            return EShaderParameterType::CBV;
         case SPV_REFLECT_RESOURCE_FLAG_SRV:
             return EShaderParameterType::SRV;
         case SPV_REFLECT_RESOURCE_FLAG_UAV:
@@ -107,6 +105,30 @@ ERHIPipelineStageFlags ToPipelineStageFlag(SpvReflectShaderStageFlagBits _stage)
         case SPV_REFLECT_SHADER_STAGE_CALLABLE_BIT_KHR: break;
     }
     return ERHIPipelineStageFlags::PS_NONE;
+}
+
+EShaderParameterType BindingTypeToParameterType(EShaderBindingBaseType _type) {
+    switch (_type) {
+
+        case SBT_INVALID:
+        case SBT_BOOL:
+        case SBT_INT32:
+        case SBT_UINT32:
+        case SBT_FLOAT32:
+            return EShaderParameterType::Num;
+        case SBT_CBV:
+            return EShaderParameterType::CBV;
+        case SBT_SRV:
+            return EShaderParameterType::SRV;
+        case SBT_UAV:
+            return EShaderParameterType::UAV;
+        case SBT_SAMPLER:
+            return EShaderParameterType::SAMPLER;
+        case SBT_ATTACHMENT_BINDING_SLOTS:
+
+        case SBT_Num: break;
+    }
+    return EShaderParameterType::Num;
 }
 
 void ShaderCompiler::CompileD3D12(const ShaderCompilerInput& input, ShaderCompilerOutput& output) {
@@ -197,7 +219,8 @@ void ShaderCompiler::CompileVulkan(const ShaderCompilerInput& input, ShaderCompi
         L"-spirv",
         L"-fspv-reflect",
         DXC_ARG_ALL_RESOURCES_BOUND,
-        DXC_ARG_DEBUG};
+        DXC_ARG_DEBUG,
+        DXC_ARG_SKIP_OPTIMIZATIONS};
 
     // Compile shader
     DxcBuffer buffer{};
@@ -230,6 +253,7 @@ void ShaderCompiler::CompileVulkan(const ShaderCompilerInput& input, ShaderCompi
             output.errors.push_back((const char*)error_blob->GetBufferPointer());
 
             LOG_INFO(error_stream.str());
+            return;
         }
     }
 
@@ -256,22 +280,56 @@ void ShaderCompiler::CompileVulkan(const ShaderCompilerInput& input, ShaderCompi
     ref_result = spvReflectEnumerateInputVariables(&module, &var_count, input_vars);
     assert(ref_result == SPV_REFLECT_RESULT_SUCCESS);
 
+    std::vector<SpvReflectDescriptorBinding> bindings;
+    bindings.resize(module.descriptor_binding_count);
+
+    for (uint32_t i = 0; i < bindings.size(); ++i) {
+        bindings[i] = module.descriptor_bindings[i];
+    }
     // Output variables, descriptor bindings, descriptor sets, and push constants
     // can be enumerated and extracted using a similar mechanism.
     // module.
     // Destroy the reflection data when no longer required.
     //generate pipeline layout
 
-    ShaderParametersInfoMap& shader_params = output.parameter_map;
+    std::unordered_map<std::string, ParameterInfo> param_map;
+    const ShaderParametersMetadata*                meta_data = input.param_meta_data;
     for (uint32_t binding_index = 0; binding_index < module.descriptor_binding_count; ++binding_index) {
         auto& binding = module.descriptor_bindings[binding_index];
 
-        auto& param = shader_params.param_map[binding.name];
+        auto& param = param_map[binding.name];
         param.slot  = binding_index;
+        param.space = binding.set;
         param.type  = ToShaderParameterType(binding.resource_type);
         param.stage = ToPipelineStageFlag(module.shader_stage);
     }
 
+    const auto&              members = meta_data->GetMembers();
+    std::vector<std::string> not_reflected_members;
+    for (const ShaderParametersMetadata::Member& member : members) {
+        member.GetBaseType();
+        std::string name = member.GetName();
+
+        auto entry = param_map.find(name);
+        auto end   = param_map.end();
+        auto count = param_map.count(name);
+        if (count <= 0) {
+            not_reflected_members.push_back(std::format("param {} not found in shader reflection data", member.GetName()));
+            continue;
+        }
+        const auto& param = entry->second;
+        //check type
+        if (auto base_type = member.GetBaseType(); BindingTypeToParameterType(base_type) != param.type) {
+            not_reflected_members.push_back(std::format("param {} format mismatch! param format: {}, shader format {}", member.GetName(), ToString(base_type), ToString(param.type)));
+            continue;
+        }
+        LOG_INFO("param {}: {{ slot:{}, set:{} }}", member.GetName(), param.slot, param.space);
+    }
+
+    for (const auto& msg : not_reflected_members) {
+        LOG_ERROR(msg);
+    }
+    output.parameter_map.param_map.swap(param_map);
     output.target_info = input.target_info;
     spvReflectDestroyShaderModule(&module);
 }
@@ -308,7 +366,7 @@ void ShaderCompiler::ShaderConductorTest() {
 
     const auto& works = ShaderCompileRegistration::RetrieveShaderCompileWorks();
 
-    GraphEventRef collect_job = GraphTask<EmptyGraphTask>::CreateTask().ConstructAndDispatchWhenReady(EThread::EGameThread);
+    // GraphEventRef collect_job = GraphTask<EmptyGraphTask>::CreateTask().ConstructAndDispatchWhenReady(EThread::EGameThread);
 
     // static auto library_instance_ =
     //     CComPtr<IDxcLibrary>([&](auto ptr) {
