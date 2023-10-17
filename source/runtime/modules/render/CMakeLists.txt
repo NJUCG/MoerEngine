@@ -15,6 +15,7 @@ target_include_directories(${MODULE_NAME}
 	PUBLIC $<BUILD_INTERFACE:${MODULE_DIR}/include>
     PUBLIC $<BUILD_INTERFACE:${moer_runtime_core_dir}/include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/SPIRV-Reflect>
+    PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/DirectX-Headers/include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/boost>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/spdlog/include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/glfw/include>
@@ -23,12 +24,14 @@ target_include_directories(${MODULE_NAME}
 	PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/DirectXShaderCompiler/include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/VulkanMemoryAllocator>
 )
-
+message(${moer_third_party_dir}/DirectX-Headers/include)
 target_link_libraries(${MODULE_NAME}
     PUBLIC ${vulkan_lib}
     PUBLIC spirv-reflect-static
 	PUBLIC dxc
     PUBLIC MoerRuntimeCore
+    PUBLIC Microsoft::DirectX-Guids
+    PUBLIC Microsoft::DirectX-Headers
 )
 
 add_dependencies(${MODULE_NAME} DXC_COPY)

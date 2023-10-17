@@ -5,11 +5,14 @@
 #include "rhi/RHICommon.h"
 #include "shader/Shader.h"
 #include "shader/ShaderCommon.h"
+#include "shader/ShaderResource.h"
 #include <array>
 
 //Compile
 
 class ShaderResourceMap {
+
+    ShaderCodeResourceMap code_map;
 };
 class GlobalShaderMap {
     friend class ShaderResourceManager;

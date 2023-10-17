@@ -671,16 +671,16 @@ struct RHITextureInfo {
 
     friend uint32_t GetHash(const RHITextureInfo& target) {
         uint32_t hash = GetHash(target.dimension);
-        hash_combine(hash, GetHash(target.format));
-        hash_combine(hash, GetHash(target.array_size));
-        hash_combine(hash, GetHash(target.usage));
-        hash_combine(hash, GetHash(target.layout));
-        hash_combine(hash, GetHash(target.extent));
-        hash_combine(hash, GetHash(target.depth));
-        hash_combine(hash, GetHash(target.uav_format));
-        hash_combine(hash, GetHash(target.num_mips));
-        hash_combine(hash, GetHash(target.num_samples));
-        hash_combine(hash, GetHash(target.clear_attachment));
+        HashCombine(hash, GetHash(target.format));
+        HashCombine(hash, GetHash(target.array_size));
+        HashCombine(hash, GetHash(target.usage));
+        HashCombine(hash, GetHash(target.layout));
+        HashCombine(hash, GetHash(target.extent));
+        HashCombine(hash, GetHash(target.depth));
+        HashCombine(hash, GetHash(target.uav_format));
+        HashCombine(hash, GetHash(target.num_mips));
+        HashCombine(hash, GetHash(target.num_samples));
+        HashCombine(hash, GetHash(target.clear_attachment));
         return hash;
     }
     bool operator==(const RHITextureInfo& other) const {
@@ -1784,8 +1784,8 @@ struct alignas(SHADER_PARAMETER_STRUCTURE_ALIGNMENT) AttachmentBindingSlots {
 
 struct GraphicsPipelineAttachmentInfo {
     GraphicsPipelineAttachmentInfo()
-        : attachment_formats(create_array<MAX_PASS_ATTACHMENT_COUNT, uint8_t>((uint8_t)ETextureUsageFlags::UNDEFINED)),
-          attachment_flags(create_array<MAX_PASS_ATTACHMENT_COUNT, ETextureUsageFlags>(ETextureUsageFlags::UNDEFINED)) {}
+        : attachment_formats(CreateArray<MAX_PASS_ATTACHMENT_COUNT, uint8_t>((uint8_t)ETextureUsageFlags::UNDEFINED)),
+          attachment_flags(CreateArray<MAX_PASS_ATTACHMENT_COUNT, ETextureUsageFlags>(ETextureUsageFlags::UNDEFINED)) {}
     uint32_t                                                  attachments_count;
     std::array<uint8_t, MAX_PASS_ATTACHMENT_COUNT>            attachment_formats;
     std::array<ETextureUsageFlags, MAX_PASS_ATTACHMENT_COUNT> attachment_flags;
@@ -1817,8 +1817,8 @@ public:
           rasterizer_state(nullptr),
           depth_stencil_state(nullptr),
           color_attachment_count(0),
-          color_attachment_formats(create_array<MAX_PASS_ATTACHMENT_COUNT, uint8_t>((uint8_t)ETextureUsageFlags::UNDEFINED)),
-          color_attachment_flags(create_array<MAX_PASS_ATTACHMENT_COUNT, ETextureUsageFlags>(ETextureUsageFlags::UNDEFINED)),
+          color_attachment_formats(CreateArray<MAX_PASS_ATTACHMENT_COUNT, uint8_t>((uint8_t)ETextureUsageFlags::UNDEFINED)),
+          color_attachment_flags(CreateArray<MAX_PASS_ATTACHMENT_COUNT, ETextureUsageFlags>(ETextureUsageFlags::UNDEFINED)),
           depth_stencil_format(PF_UNDEFINED),
           depth_stencil_flag(ETextureUsageFlags::UNDEFINED),
           depth_attachment_load_op(EAttachmentLoadOp::NONE),
@@ -1987,8 +1987,8 @@ public:
     }
     friend uint32_t GetHash(const RayTracingPipelineStateInitializer& value) {
         uint32_t hash = GetHash(value.max_attribute_byte_size);
-        hash_combine(hash, value.max_payload_byte_size);
-        hash_combine(hash, value.b_allow_hit_group_indexing);
+        HashCombine(hash, value.max_payload_byte_size);
+        HashCombine(hash, value.b_allow_hit_group_indexing);
         //todo: combine shader hashes
         return hash;
     }
