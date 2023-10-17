@@ -3,6 +3,7 @@
 #include "platform/Platform.h"
 #include "shader/Shader.h"
 #include "shader/ShaderCommon.h"
+#include "shader/ShaderCompiler.h"
 #include "taskgraph/GraphTask.h"
 #include "taskgraph/TaskSystem.h"
 #include "taskgraph/ThreadManager.h"
@@ -17,7 +18,7 @@ namespace Moer {
 
     void RenderSystem::Init() {
 
-        // InitShaderLibrary();
+        InitShaderLibrary();
 
         //
         StartRenderThread();
@@ -31,7 +32,7 @@ namespace Moer {
     }
 
     void RenderSystem::InitShaderLibrary() {
-
+        ShaderCompiler::Init();
         ShaderTypeRegistration::SubmitRegistrations();
 
         // auto& map = ShaderMetaType::GetNameToTypeMap();

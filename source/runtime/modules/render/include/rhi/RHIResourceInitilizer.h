@@ -242,13 +242,13 @@ struct RHIClearAttachment {
     friend uint32_t GetHash(const RHIClearAttachment& value) {
         uint32_t hash = GetHash(value.attachment);
         if (EClearAttachment::COLOR == value.attachment) {
-            hash_combine(hash, GetHash(value.value.color.uint32[0]));
-            hash_combine(hash, GetHash(value.value.color.uint32[1]));
-            hash_combine(hash, GetHash(value.value.color.uint32[2]));
-            hash_combine(hash, GetHash(value.value.color.uint32[3]));
+            HashCombine(hash, GetHash(value.value.color.uint32[0]));
+            HashCombine(hash, GetHash(value.value.color.uint32[1]));
+            HashCombine(hash, GetHash(value.value.color.uint32[2]));
+            HashCombine(hash, GetHash(value.value.color.uint32[3]));
         } else {
-            hash_combine(hash, GetHash(value.value.depth_stencil.depth));
-            hash_combine(hash, GetHash(value.value.depth_stencil.stencil));
+            HashCombine(hash, GetHash(value.value.depth_stencil.depth));
+            HashCombine(hash, GetHash(value.value.depth_stencil.stencil));
         }
         return hash;
     }

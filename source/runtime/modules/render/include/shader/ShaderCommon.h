@@ -22,7 +22,8 @@ enum class EShaderParameterType : uint8_t {
     BINDLESS_RESOURCE_INDEX,
     BINDLESS_SAMPLER_INDEX,
 
-    Num
+    Num,
+    NumBits = 4
 };
 BEGIN_ENUM_STR_DEFINITION(EShaderParameterType)
 
@@ -322,13 +323,16 @@ public:
 };
 // per parameter allocation in global map
 struct ParameterInfo {
+    ERHIPipelineStageFlags stage{ERHIPipelineStageFlags::PS_NONE};
     int16_t                slot : 8  = -1;
     int16_t                space : 8 = -1;
+    int8_t                 num       = 0;
     EShaderParameterType   type{EShaderParameterType::Num};
-    ERHIPipelineStageFlags stage{ERHIPipelineStageFlags::PS_NONE};
 };
+static_assert(sizeof(ParameterInfo) == 8);
 struct ShaderParametersInfoMap {
     friend class ShaderCompiler;
+    friend class DXCompiler;
 
 public:
     const std::unordered_map<std::string, ParameterInfo>& GetShaderParameterInfoMap() {
