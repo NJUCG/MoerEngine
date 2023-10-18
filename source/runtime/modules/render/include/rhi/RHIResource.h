@@ -250,7 +250,7 @@ public:
 class RHIVertexInputState : public RHIResource {
 public:
     RHIVertexInputState() : RHIResource(RRT_VERTEX_STATE_INITIALIZER) {}
-    virtual bool GetInitializer(VertexInputStateInitializerList& _initializer_list) { return false; }
+    //    virtual bool GetInitializer(VertexInputStateInitializerList& _initializer_list) { return false; }
 };
 class RHIRasterizationState : public RHIResource {
 public:
@@ -1286,7 +1286,7 @@ public:
     }
 };
 
-//for rhi CommandList to create TextureSRV
+//for rhi CommandList to create TextureUAV
 struct RHIViewInfo::TextureUAV::Initializer : public RHIViewInfo {
     friend RHIViewInfo;
     friend RHICommandListBase;

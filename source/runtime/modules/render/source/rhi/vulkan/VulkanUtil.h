@@ -5,8 +5,9 @@
 #ifndef VULKAN_UTIL_H
 #define VULKAN_UTIL_H
 
-#include "rhi/vulkan/VulkanCommon.h"
+#include <vulkan.h>
 
+#include <vector>
 #include <string>
 
 namespace MoerEngine {
@@ -14,7 +15,11 @@ namespace RHI {
 namespace Vulkan {
 
 namespace Util {
-    struct SwapChainSupportDetails;
+    struct SwapChainSupportDetails {
+        VkSurfaceCapabilitiesKHR        capabilities;
+        std::vector<VkSurfaceFormatKHR> formats;
+        std::vector<VkPresentModeKHR>   present_modes;
+    };
     /** @brief Disable message boxes on fatal errors */
     extern bool error_mode_silent;
 
