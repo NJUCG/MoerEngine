@@ -31,6 +31,8 @@ struct DeviceInitializer {
     void*                    p_next_chain       = nullptr;
 };
 
+class VulkanGraphicsCommandList;
+
 class VulkanDevice {
 public:
     void Init(const DeviceInitializer& _initializer);
@@ -39,6 +41,8 @@ public:
     operator VkDevice() const {
         return m_device;
     };
+
+    VulkanGraphicsCommandList CreateGraphicsCommandList(VkCommandBufferLevel _level);
 
     inline VkPhysicalDevice GetGpu() const {
         return m_gpu;
@@ -87,6 +91,9 @@ private:
     VkQueue  m_present_queue;
     VkQueue  m_compute_queue;
     VkQueue  m_transfer_queue;
+
+    VkCommandPool m_default_pool;
+    VkCommandPool m_transfer_pool;
 
 private:
     VkPhysicalDevice SelectGpu(VkInstance _instance, VkPhysicalDeviceType _type, VkSurfaceKHR _surface, const TExtensionArray& _enabled_extensions);
