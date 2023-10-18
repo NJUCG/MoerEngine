@@ -2,6 +2,8 @@
 #define VULKAN_RHI_H
 
 #include "IVulkanRHI.h"
+
+#define VMA_IMPLEMENTATION
 #include <vk_mem_alloc.h>
 
 struct GLFWwindow;
@@ -75,14 +77,15 @@ protected:
     VkSurfaceKHR m_surface;
     VmaAllocator m_allocator;
 
-    std::shared_ptr<VulkanDevice>    m_device;
-    std::shared_ptr<VulkanSwapChain> m_swap_chain;
-    std::vector<VulkanViewport*>     m_viewports;
-    std::shared_ptr<VulkanViewport>  m_current_viewport;
+    VulkanDevice*                m_device;
+    VulkanSwapChain*             m_swap_chain;
+    std::vector<VulkanViewport*> m_viewports;
+    VulkanViewport*              m_current_viewport;
 
 protected:
     void InitSurface(GLFWwindow* _window);
     void InitVulkan();
+    void InitVulkanMemoryAllocator();
 
 #pragma region vulkan functions
 private:
