@@ -6,10 +6,14 @@
 #include <atomic>
 #include <misc/CountableRef.h>
 #include <misc/Hash.h>
+#include <mutex>
 #include <shared_mutex>
+#include <string>
 #include <unordered_map>
 #include <vector>
 #include "ShaderCommon.h"
+#include "rhi/RHICommon.h"
+#include "shader/Shader.h"
 #include "shader/ShaderCommon.h"
 
 class ShaderResource : Countable {
@@ -39,17 +43,36 @@ public:
     // std::vector<Hash64City>                      shader_hashes;
     // std::vector<ShaderEntry>                     shader_entries;
     std::map<std::string, ShaderEntry> shader_code_entries;
-    ShaderCodeResourceMap() {}
-    ShaderCodeResourceMap(const ShaderCodeResourceMap& other) {}
-    ShaderCodeResourceMap(ShaderCodeResourceMap&& other) {}
+    std::shared_mutex                  rw_mutex;
 
 private:
-    std::shared_mutex rw_mutex;
-    // friend class ShaderResourceManager;
+    EShaderPlatform platform;
+    friend class ShaderResourceManager;
+    ShaderCodeResourceMap() {}
+    ShaderCodeResourceMap(EShaderPlatform _platform) : platform(_platform) {}
 };
 
 //for RHI shader creation
-class ShaderMapResource : ShaderResource {
+class ShaderTypeResourceMap : ShaderResource {
+
+public:
+    ~ShaderTypeResourceMap();
+    void AddShader(const char* type_name, Shader* shader);
+
+    Shader* FindOrAddShader(const char* type_name, Shader* shader);
+
+protected:
+    friend class ShaderResourceManager;
+    ShaderTypeResourceMap(EShaderPlatform platform);
+
+protected:
+    std::unordered_map<std::string, Shader*> shader_type_map;
+
+    EShaderPlatform platform;
+
+    std::shared_mutex shared_mutex;
+
+private:
 };
 
 #endif//MOERENGINE_SHADER_RESOURCE_H

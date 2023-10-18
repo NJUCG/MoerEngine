@@ -2,8 +2,10 @@
 #include "math/Matrix.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommon.h"
+#include "rhi/RHIResource.h"
 #include "rhi/vulkan/IVulkanRHI.h"
 #include "shader/ShaderParameterMacros.h"
+#include "shader/ShaderResource.h"
 #include "shader/ShaderResourceManager.h"
 #include "taskgraph/GraphTask.h"
 #include "taskgraph/TaskGraph.h"
@@ -74,16 +76,25 @@ void ShaderCompiler::Compile(const ShaderCompilerInput& input, ShaderCompilerOut
     //todo: need to consider include dependencies
     compiler->Compile(input, output);
 }
+bool IsResource(EShaderBindingBaseType base_type) {
+    return base_type == SBT_CBV ||
+           base_type == SBT_SRV ||
+           base_type == SBT_UAV ||
+           base_type == SBT_SAMPLER;
+}
+void ShaderCompiler::CompileAllGlobalShaderIfNeed() {
 
+    const auto& works = ShaderCompileRegistration::RetrieveShaderCompileWorks();
+}
 void ShaderCompiler::ShaderConductorTest() {
     g_rhi = new FakeRHI;
     TestReflectionShader::GetMetaType();
-
     ShaderTypeRegistration::SubmitRegistrations();
 
     const auto& works = ShaderCompileRegistration::RetrieveShaderCompileWorks();
 
     ShaderCompiler::Init();
+    ShaderResourceManager::Init(GetShaderPlatformByRHIType(g_rhi->GetType()));
 
     std::for_each(works.begin(), works.end(), [](const ShaderCompilerInput& input) {
         ShaderCompilerOutput output;
@@ -97,16 +108,56 @@ void ShaderCompiler::ShaderConductorTest() {
             return;
         }
         EShaderPlatform platform = input.target_info.shader_platform;
-        auto&           code_map = ShaderResourceManager::GetShaderCodeMap(platform);
+        auto&           code_map = ShaderResourceManager::GetInstance().GetShaderCodeMap(platform);
         // std::string     pragmas;
         // std::for_each(output.pragma.begin(), output.pragma.end(), [&pragmas](const std::string& pragma) {
         //     pragmas.append(std::format("{}\n", pragma));
         // });
         code_map.AddShaderCompilerOutput(std::format("{}", input.shader_name), output);
 
-        //construct shader
-    });
+        Shader* shader = new Shader(ShaderCompiledInitializer(
+            ShaderMetaType::GetNameToTypeMap().at(input.shader_name),
+            output));
 
-    auto& map = ShaderResourceManager::GetShaderCodeMap(EShaderPlatform::SP_VULKAN_SM6);
-    map.shader_code_entries.size();
+        ShaderResourceManager::GetInstance().GetShaderTypeMap(input.target_info.shader_platform).AddShader(input.shader_name.c_str(), shader);
+        //test code
+        const auto& param_map = output.parameter_map;
+
+        auto& map = ShaderResourceManager::GetInstance().GetShaderCodeMap(EShaderPlatform::SP_VULKAN_SM6);
+
+        TestReflectionShader::Parameters params;
+        RHIBatchedShaderParameters       batched_params;
+
+        const ShaderParametersMetadata*     meta_data   = TestReflectionShader::GetParametersMetaData();
+        const RHIShaderRootParameterLayout& root_layout = TestReflectionShader::GetParametersMetaData()->GetLayout();
+        for (const auto& parameter : root_layout.resource_parameters) {
+            std::string param_name = meta_data->GetMemberNameByOffset(parameter.offset);
+            if (param_map.param_map.count(param_name) > 0) {
+
+                //param info includes slots/space and array size
+                const auto& param_info = param_map.param_map.find(param_name)->second;
+                //vkDescriptorWrite()
+                RHIResource* resource = (RHIResource*)((uint8_t*)&params + parameter.offset);
+
+                switch (param_info.type) {
+
+                    case EShaderParameterType::CBV:
+                        LOG_INFO("set cbv {}", param_name);
+                        break;
+                    case EShaderParameterType::SAMPLER:
+                        LOG_INFO("set sampler {}", param_name);
+                        break;
+                    case EShaderParameterType::SRV:
+                        LOG_INFO("set srv {}", param_name);
+                        break;
+                    case EShaderParameterType::UAV:
+                        LOG_INFO("set uav {}", param_name);
+                        break;
+                    case EShaderParameterType::BINDLESS_RESOURCE_INDEX:
+                    case EShaderParameterType::BINDLESS_SAMPLER_INDEX:
+                    default: break;
+                }
+            }
+        }
+    });
 }

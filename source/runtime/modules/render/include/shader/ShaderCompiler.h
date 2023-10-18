@@ -14,7 +14,7 @@ class ShaderCompiler {
 public:
     static void Init();
     static void ShaderConductorTest();
-
+    static void CompileAllGlobalShaderIfNeed();
     /**
     * @brief cross-compile shader
     * 

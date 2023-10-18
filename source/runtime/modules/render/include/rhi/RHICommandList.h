@@ -111,6 +111,7 @@ public:
     virtual void ExecuteSubCommands(uint32_t                _num,
                                     RHIGraphicsCommandList* _sub_commands) = 0;
 
+    virtual void BindParameters();
 #pragma region ray-tracing
     virtual void BuildAccelerationStructure(
         RHIBuffer* _instance_data,
