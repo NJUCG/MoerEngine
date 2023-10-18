@@ -18,7 +18,7 @@ public:
     // Array of required extensions for the platform (Required!)
     static void GetInstanceExtensions(std::vector<std::string>& _extensions);
     static void GetInstanceLayers(std::vector<std::string>& _layers) {}
-    static void GetDeviceExtensions(const std::shared_ptr<VulkanDevice>& _device, std::vector<std::string>& _extensions);
+    static void GetDeviceExtensions(const VulkanDevice* _device, std::vector<std::string>& _extensions);
     static void GetDeviceLayers(std::vector<std::string>& _layers) {}
     // create the platform-specific surface object - required
     static VkSurfaceKHR CreateSurface();
