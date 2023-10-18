@@ -1,4 +1,5 @@
 #include "DirectXShaderCompiler.h"
+#include "misc/Hash.h"
 #include "platform/Platform.h"
 #include <cstddef>
 #include <filesystem>
@@ -203,6 +204,9 @@ void DXCompiler::CompileVulkan(const ShaderCompilerInput& _input, ShaderCompiler
     _output.b_succeeded = true;
 
     _output.shader_code.resize(size);
+
+    _output.compiled_hash.FromData(data, size);
+    LOG_INFO("file {} compiled hash: {}", file_path.string(), _output.compiled_hash.ToString());
     memcpy(&_output.shader_code[0], data, size);
 
     SpvReflectShaderModule module;
@@ -365,7 +369,8 @@ EShaderParameterType BindingTypeToParameterType(EShaderBindingBaseType _type) {
             return EShaderParameterType::SAMPLER;
         case SBT_ATTACHMENT_BINDING_SLOTS:
 
-        case SBT_Num: break;
+        defualt:
+            break;
     }
     return EShaderParameterType::Num;
 }

@@ -184,6 +184,7 @@ public:
 
     std::string ToString();
     void        FromString(std::string_view& src);
+    void        FromData(const uint8_t* data, size_t size);
     void        Update(std::string_view& src);
     void        Update(const uint8_t* data, uint32_t size);
     //todo: Update() not utterly correct

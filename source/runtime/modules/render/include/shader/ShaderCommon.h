@@ -12,6 +12,7 @@
 extern const char* g_global_shader_resource_root_dir;
 extern const char* g_global_shader_resource_output_dir;
 
+struct ShaderCompiledInitializer;
 enum class EShaderParameterType : uint8_t {
     LOOSE_DATA,
     CBV,
@@ -70,6 +71,7 @@ public:
             const char*                     _name,
             const char*                     _binding_type,
             uint32_t                        _struct_offset,
+            uint32_t                        _stride,
             EShaderBindingBaseType          _base_type,
             EShaderPrecisionModifier        _type_precision,
             uint32_t                        _num_elements,
@@ -77,12 +79,18 @@ public:
             : name(_name),
               binding_type(_binding_type),
               struct_offset(_struct_offset),
+              stride(_stride),
               base_type(_base_type),
               type_precision(_type_precision),
               num_elements(_num_elements),
               p_struct_meta_data(_p_struct_meta_data) {
         }
-
+        inline friend bool operator<(const Member& lhs, const uint32_t& rhs) {
+            return lhs.struct_offset < rhs;
+        }
+        inline friend bool operator<(const uint32_t& lhs, const Member& rhs) {
+            return lhs < rhs.struct_offset;
+        }
         /** Returns the string of the name of the element or name of the array of elements. */
         const char* GetName() const { return name; }
 
@@ -91,6 +99,9 @@ public:
 
         /** Returns the offset of the element in the shader parameter struct in bytes. */
         uint32_t GetOffset() const { return struct_offset; }
+
+        /** Returns the stride of the element in the shader parameter struct in bytes. */
+        uint32_t GetStride() const { return stride; }
 
         /** Returns the type of the elements, int, UAV... */
         EShaderBindingBaseType GetBaseType() const { return base_type; }
@@ -135,12 +146,13 @@ public:
         const char* name;
         const char* binding_type;
 
-        uint32_t                 struct_offset;
         EShaderBindingBaseType   base_type;
         EShaderPrecisionModifier type_precision;
 
+        uint32_t                        struct_offset;
         uint32_t                        num_elements;
         const ShaderParametersMetadata* p_struct_meta_data;
+        uint32_t                        stride;
     };
 
     RHI_API ShaderParametersMetadata(
@@ -168,40 +180,42 @@ public:
     uint32_t                GetSize() const { return size; }
     EShaderParameterUseCase GetUseCase() const { return use_case; }
 
-    const RHIGlobalBufferLayout& GetLayout() const {
+    const RHIShaderRootParameterLayout& GetLayout() const {
         assert(IsLayoutInitialized());
         return *layout;
     }
-    const RHIGlobalBufferLayout* GetLayoutPtr() const {
+    const RHIShaderRootParameterLayout* GetLayoutPtr() const {
         assert(IsLayoutInitialized());
         return layout;
     }
+
     const std::vector<Member>& GetMembers() const { return members; }
 
-    /** Find a member for a given offset. */
-    RHI_API void FindMemberFromOffset(
-        uint16_t                                 MemberOffset,
-        const ShaderParametersMetadata**         OutContainingStruct,
-        const ShaderParametersMetadata::Member** OutMember,
-        int32_t*                                 ArrayElementId,
-        std::string*                             NamePrefix) const;
+    // /** Find a member for a given offset. */
+    // RHI_API void FindMemberFromOffset(
+    //     uint16_t                                 MemberOffset,
+    //     const ShaderParametersMetadata**         OutContainingStruct,
+    //     const ShaderParametersMetadata::Member** OutMember,
+    //     int32_t*                                 ArrayElementId,
+    //     std::string*                             NamePrefix) const;
 
     /** Returns the full C++ member name from it's byte offset in the structure. */
-    RHI_API std::string GetFullMemberCodeName(uint16_t MemberOffset) const;
+    RHI_API std::string GetMemberNameByOffset(uint16_t _member_offset) const;
 
     //    static RHI_API TLinkedList<FShaderParametersMetadata*>*& GetStructList();
     //    /** Speed up finding the uniform buffer by its name */
     //    static RHI_API std::map<SHA256Hash, FShaderParametersMetadata*>& GetNameStructMap();
     inline bool IsLayoutInitialized() const { return layout != nullptr; }
 
+    void InitializeLayout();
     /** Iterate recursively over all FShaderParametersMetadata. */
     template<typename TParameterFunction>
     void IterateStructureMetadataDependencies(TParameterFunction Lambda) const {
-        for (const ShaderParametersMetadata::Member& Member : members) {
-            const ShaderParametersMetadata* NewParametersMetadata = Member.GetStructMetadata();
+        for (const ShaderParametersMetadata::Member& member : members) {
+            const ShaderParametersMetadata* new_parameters_metadata = member.GetStructMetadata();
 
-            if (NewParametersMetadata) {
-                NewParametersMetadata->IterateStructureMetadataDependencies(Lambda);
+            if (new_parameters_metadata) {
+                new_parameters_metadata->IterateStructureMetadataDependencies(Lambda);
             }
         }
 
@@ -222,14 +236,29 @@ private:
     const EGlobalBufferBindingFlags binding_flags;
 
     /** Layout of all the resources in the shader parameter struct. */
-    RHIGlobalBufferLayoutRef layout{};
+    RHIShaderRootParameterLayout* layout{};
 
     /** List of all members. */
     std::vector<Member> members;
 
-    RHI_API void InitializeLayout(RHIGlobalBufferLayoutInitializer* OutLayoutInitializer = nullptr);
-};
+    // static std::vector<RHIShaderRootParameterLayout> root_parameter_layouts;
 
+    // RHI_API void InitializeLayout(RHIGlobalBufferLayoutInitializer* OutLayoutInitializer = nullptr);
+};
+namespace std {
+    template<>
+    struct less<ShaderParametersMetadata::Member> {
+        bool operator()(const ShaderParametersMetadata::Member& lhs, const ShaderParametersMetadata::Member& rhs) const {
+            return lhs.GetOffset() < rhs.GetOffset();
+        }
+        bool operator()(const ShaderParametersMetadata::Member& lhs, const uint32_t& rhs) const {
+            return lhs.GetOffset() < rhs;
+        }
+        bool operator()(const uint32_t& lhs, const ShaderParametersMetadata::Member& rhs) const {
+            return lhs < rhs.GetOffset();
+        }
+    };
+}// namespace std
 //compiled shader platform and type information
 struct alignas(4) ShaderTargetInfo {
     EShaderType     shader_type : ST_NumBits;
@@ -241,13 +270,16 @@ typedef uint32_t ShaderTypeIndex;
 //contains parameter info
 class ShaderMetaType {
 public:
+    using ConstructShaderInstanceProc = std::function<class Shader*(const ShaderCompiledInitializer&)>;
+
     ShaderMetaType(
         const char*                     _type_name,
         const char*                     _file_name,
         const char*                     _entry_point,
         EShaderType                     _shader_type,
         uint32_t                        _type_size,
-        const ShaderParametersMetadata* _parameter_data);
+        const ShaderParametersMetadata* _parameter_data,
+        ConstructShaderInstanceProc     _shader_type_constructor);
     ~ShaderMetaType();
     void OnRegistration();
 
@@ -264,6 +296,8 @@ public:
     const char*                     GetEntryPoint() const { return entry_point; }
     const ShaderParametersMetadata* GetParameterMetaData() const { return parameter_meta_data; }
 
+    Shader* ConstructShaderInstance(const ShaderCompiledInitializer& _initializer) { return construct_shader_instance(_initializer); }
+
 private:
     //todo: currently only support one file one shader, this field for multiple shader single file
     const char*                     type_name;
@@ -274,6 +308,7 @@ private:
     EShaderType                     shader_type;
     ShaderTypeIndex                 type_index;
     const ShaderParametersMetadata* parameter_meta_data;
+    ConstructShaderInstanceProc     construct_shader_instance;
 };
 
 class ShaderTypeRegistration {
@@ -371,25 +406,18 @@ struct ShaderCompilerOutput {
     ShaderCompilerOutput& operator=(const ShaderCompilerOutput&) = default;
 };
 
-struct ShaderCompiledInfo {
+struct ShaderCompiledInitializer {
     const ShaderMetaType*          type_info;
     ShaderTargetInfo               target_info;
     const std::vector<uint8_t>&    compiled_code;
     const ShaderParametersInfoMap& parameter_map;
     const Hash64City&              output_hash;
-    Hash64City                     material_shader_map_hash;
-    const ShaderPipelineType*      shader_pipeline;
     //    const VertexFactoryType* VertexFactoryType;
-    uint32_t num_instructions;
-    uint32_t num_texture_samplers;
-    uint32_t code_size;
-    int32_t  permutation_id;
-
-    RENDER_CORE_API ShaderCompiledInfo(
+    uint32_t        num_instructions;
+    uint32_t        code_size;
+    RENDER_CORE_API ShaderCompiledInitializer(
         const ShaderMetaType*       _shader_type,
-        const ShaderCompilerOutput& _compiled_output,
-        const Hash64City&           _material_shader_map_hash,
-        const ShaderPipelineType*   _shader_pipeline_type
+        const ShaderCompilerOutput& _compiled_output
         //        const FVertexFactoryType* InVertexFactoryType
     );
 };
@@ -414,6 +442,7 @@ FORCEINLINE EShaderPlatform GetShaderPlatformByRHIType(ERHIType _type) {
             break;
         default: assert(false && "not supported rhi");
     }
+    return EShaderPlatform::SP_VULKAN_SM6;
 }
 
 class ShaderCompileRegistration {

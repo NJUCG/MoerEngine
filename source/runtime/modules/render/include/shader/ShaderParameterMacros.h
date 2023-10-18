@@ -116,6 +116,7 @@ private:                                                                        
             #MemberName,                                                                                                   \
             #HlslType,                                                                                                     \
             offsetof(TThisStruct, MemberName),                                                                             \
+            sizeof(MemberTypeInfo::TParamPtr),                                                                             \
             UBMTBaseType,                                                                                                  \
             Precision,                                                                                                     \
             MemberTypeInfo::s_num_elements,                                                                                \

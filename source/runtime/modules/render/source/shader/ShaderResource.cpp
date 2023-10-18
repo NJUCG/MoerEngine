@@ -1,4 +1,6 @@
 #include "shader/ShaderResource.h"
+#include "rhi/RHICommon.h"
+#include <cstddef>
 #include <mutex>
 #include <shared_mutex>
 
@@ -18,3 +20,31 @@ void ShaderCodeResourceMap::AddShaderCompilerOutput(std::string _shader_sort_key
 // if(pos == shader_hashes.end())return -1;
 // return pos - shader_hashes.begin();
 // }
+
+void ShaderTypeResourceMap::AddShader(const char* type_name, Shader* shader) {
+    // assert()
+    std::unique_lock<std::shared_mutex> write_lock(shared_mutex);
+    shader_type_map.emplace(type_name, shader);
+}
+
+Shader* ShaderTypeResourceMap::FindOrAddShader(const char* type_name, Shader* shader) {
+
+    {
+        std::unique_lock<std::shared_mutex> read_lock(shared_mutex);
+        if (shader_type_map.count(type_name)) {
+            return shader_type_map.find(type_name)->second;
+        }
+    }
+    if (shader == nullptr) return nullptr;
+    //add shader
+    std::unique_lock<std::shared_mutex> write_lock(shared_mutex);
+    shader_type_map.emplace(type_name, shader);
+    return shader;
+}
+ShaderTypeResourceMap::ShaderTypeResourceMap(EShaderPlatform _platform) {
+}
+ShaderTypeResourceMap::~ShaderTypeResourceMap() {
+    for (auto& shader : shader_type_map) {
+        shader.second->Delete();
+    }
+}

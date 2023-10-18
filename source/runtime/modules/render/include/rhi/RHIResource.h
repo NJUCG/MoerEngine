@@ -59,7 +59,7 @@ class RHIShaderResourceView;
 class RHIStagingBuffer;
 class RHITexture;
 class RHITextureReference;
-class RHIGlobalBufferLayout;
+class RHIShaderRootParameterLayout;
 class RHIGlobalBuffer;
 class RHIUnorderedAccessView;
 class RHIVertexInputState;
@@ -102,7 +102,7 @@ using RHIShaderResourceViewRef        = CountableRef<RHIShaderResourceView>;
 using RHIStagingBufferRef             = CountableRef<RHIStagingBuffer>;
 using RHITextureRef                   = CountableRef<RHITexture>;
 using RHITextureReferenceRef          = CountableRef<RHITextureReference>;
-using RHIGlobalBufferLayoutRef        = CountableRef<RHIGlobalBufferLayout>;
+using RHIShaderRootParameterLayoutRef = CountableRef<RHIShaderRootParameterLayout>;
 using RHIGlobalBufferRef              = CountableRef<RHIGlobalBuffer>;
 using RHIUnorderedAccessViewRef       = CountableRef<RHIUnorderedAccessView>;
 using RHIVertexInputStateRef          = CountableRef<RHIVertexInputState>;
@@ -434,47 +434,43 @@ public:
         return lhs.constant_buffer_size == rhs.constant_buffer_size && lhs.static_slot == rhs.static_slot && lhs.binding_flags == rhs.binding_flags && lhs.inline_resources == rhs.inline_resources;
     }
 };
-class RHIGlobalBufferLayout : public RHIResource {
-public:
-    RHIGlobalBufferLayout() : RHIResource(RRT_GLOBAL_BUFFER_LAYOUT) {}
+struct RHIResourceParameterLayout {
+    //offset in parameter meta data to get name
+    uint16_t               offset;
+    uint16_t               stride;
+    EShaderBindingBaseType base_type;
 };
 
-/* Buffer for global shader usage, created using RHIGlobalBufferLayout */
-class RHIGlobalBuffer : public RHIResource {
-public:
-    RHIGlobalBuffer() : RHIResource(RRT_GLOBAL_BUFFER) {}
-    explicit RHIGlobalBuffer(const RHIGlobalBufferLayout& _layout){};
+struct RHIConstParameterLayout {
+    //origin offset in parameter data for copy
+    uint16_t               byte_offset;
+    uint16_t               byte_size;
+    EShaderBindingBaseType base_type;
 };
-
-template<typename TBufferStruct>
-class TUniformBufferRef : public RHIGlobalBufferRef {
-
-public:
-    /** Initializes the reference to null. */
-    TUniformBufferRef() = default;
-
-    //    /** Creates a uniform buffer with the given value, and returns a structured reference to it. */
-    //    static TUniformBufferRef<TBufferStruct> CreateUniformBufferImmediate(const TBufferStruct& Value, EUniformBufferLifeScope Usage)
-    //    {
-    //        return TUniformBufferRef<TBufferStruct>(RHICreateUniformBuffer(&Value, TUniformBufferMetadataHelper<TBufferStruct>::GetStructMetadata()->GetLayoutPtr(), Usage));
-    //    }
-    /** Creates a uniform buffer with the given value, and returns a structured reference to it. */
-    //    static TUniformBufferRef<TBufferStruct> CreateEmptyUniformBufferImmediate(EUniformBufferUsage Usage)
-    //    {
-    //        return TUniformBufferRef<TBufferStruct>(RHICreateUniformBuffer(nullptr, TUniformBufferMetadataHelper<TBufferStruct>::GetStructMetadata()->GetLayoutPtr(), Usage, EUniformBufferValidation::ValidateResources));
-    //    }
-
-    void UpdateUniformBufferImmediate(const TBufferStruct& Value) {
+template<typename RootParameter>
+concept concept_is_root_parameter_struct = requires(RootParameter t) {
+    RootParameter::TypeInfo::GetStructMetadata();
+    t.GetMembers();
+};
+struct RHIBatchedShaderParameters {
+    //CBV SRV UAV SAMPLER
+    std::vector<RHIResourceParameterLayout> resource_parameters;
+    std::vector<RHIConstParameterLayout>    const_parameters;
+    std::vector<uint8_t>                    const_parameter_data;
+    template<concept_is_root_parameter_struct TRootParameter>
+    void SetParameters(const TRootParameter& params) {
+        params.GetMembers();
     }
-
-private:
-    /** A private constructor used to coerce an arbitrary RHI uniform buffer reference to a structured reference. */
-    TUniformBufferRef(RHIGlobalBuffer* _buffer_ref)
-        : RHIGlobalBufferRef(_buffer_ref) {}
-
-    template<typename TBufferStruct2>
-    friend class TUniformBuffer;
 };
+//todo: may not inherit from RHIResource
+class RHIShaderRootParameterLayout : public RHIResource {
+public:
+    RHIShaderRootParameterLayout() : RHIResource(RRT_ROOT_PARAMETER_LAYOUT) {}
+    ~RHIShaderRootParameterLayout() {}
+
+    std::vector<RHIResourceParameterLayout> resource_parameters;
+};
+
 #pragma endregion
 
 #pragma region viewable resources definitions

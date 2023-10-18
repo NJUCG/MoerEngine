@@ -431,7 +431,7 @@ enum ERHIResourceType {
     RRT_COMPUTE_PIPELINE_STATE,
     RRT_RAY_TRACING_PIPELINE_STATE,
     RRT_PIPELINE_BOUND_SHADER_STATE,
-    RRT_GLOBAL_BUFFER_LAYOUT,
+    RRT_ROOT_PARAMETER_LAYOUT,
     RRT_GLOBAL_BUFFER,
     RRT_BUFFER,
     RRT_TEXTURE,
@@ -731,7 +731,8 @@ enum EShaderBindingBaseType : uint8_t {
     SBT_SAMPLER,
 
     SBT_ATTACHMENT_BINDING_SLOTS,
-
+    SBT_ResourceNum     = 4,
+    SBT_ResourceNumBits = 4,
     SBT_Num,
     SBT_NumBits = 4,
 };

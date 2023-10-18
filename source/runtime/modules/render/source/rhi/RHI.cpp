@@ -1,5 +1,6 @@
 #include "rhi/RHI.h"
 #include "PixelFormat.h"
+#include "math/Base.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "shader/Shader.h"
@@ -27,8 +28,10 @@ class TestShader : public Shader {
     DEFINE_SHADER_TYPE(TestShader, Global, RHI_API)
 public:
     BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
+
     DEFINE_SHADER_PARAM_UAV(RWTexture2D, write_target)
     DEFINE_SHADER_PARAM_SRV(StructuredBuffer, ubo)
+    DEFINE_SHADER_PARAM_CBV(StructuredBuffer, cbv)
     DEFINE_SHADER_PARAM_ATTACHMENT_BINDING()
 
     END_ROOT_PARAMETER_DEFINITION(Parameters)
@@ -40,6 +43,7 @@ void RHI::Test() {
 
     TestShader::Parameters param;
 }
+
 void Test() {
     Hash64City       city;
     Hash64City       other;
