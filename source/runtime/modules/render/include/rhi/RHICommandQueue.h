@@ -1,5 +1,5 @@
-#ifndef MOERENGINE_RHI_COMMANDQUEUE_H
-#define MOERENGINE_RHI_COMMANDQUEUE_H
+#ifndef RHI_COMMAND_QUEUE_H
+#define RHI_COMMAND_QUEUE_H
 #include <cstdint>
 #include "RHIResource.h"
 
@@ -16,4 +16,4 @@ public:
     //post-submit
     virtual void Signal(RHIFence* _p_fence, uint64_t _value) = 0;
 };
-#endif//MOERENGINE_RHI_COMMANDQUEUE_H
+#endif//RHI_COMMAND_QUEUE_H

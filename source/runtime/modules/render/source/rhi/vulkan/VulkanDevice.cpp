@@ -3,6 +3,7 @@
 //
 
 #include "rhi/vulkan/misc/VulkanMacroUtils.h"
+#include "rhi/vulkan/VulkanCommandList.h"
 #include "VulkanDevice.h"
 #include "VulkanUtil.h"
 
@@ -45,6 +46,10 @@ void VulkanDevice::Init(const DeviceInitializer& _initializer) {
 }
 
 void VulkanDevice::Destroy() {
+}
+
+VulkanGraphicsCommandList VulkanDevice::CreateGraphicsCommandList(VkCommandBufferLevel _level) {
+    return VulkanGraphicsCommandList(this, m_default_pool, _level);
 }
 
 /**
