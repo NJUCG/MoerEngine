@@ -37,3 +37,5 @@ target_link_libraries(VulkanRHITest
         PRIVATE render
         PRIVATE glfw
 )
+
+set_target_properties(VulkanRHITest PROPERTIES FOLDER ${moer_test_folder})
