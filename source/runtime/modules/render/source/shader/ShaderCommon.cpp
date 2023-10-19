@@ -22,7 +22,6 @@ ShaderParametersMetadata::ShaderParametersMetadata(
       struct_name(_struct_name),
       size(_size),
       members(_members) {
-    InitializeLayout();
 }
 
 ShaderParametersMetadata::~ShaderParametersMetadata() {
@@ -89,6 +88,7 @@ void ShaderParametersMetadata::InitializeLayout() {
             layout.resource_parameters.emplace_back(
                 RHIResourceParameterLayout(member.GetOffset(),
                                            member.GetStride(),
+                                           
                                            base_type));
         } else if (base_type == SBT_ATTACHMENT_BINDING_SLOTS) {
             // member.

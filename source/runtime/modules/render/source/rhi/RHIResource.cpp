@@ -1,9 +1,11 @@
 #include "rhi/RHIResource.h"
+#include "misc/StatQueue.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommandList.h"
 #include "shader/Shader.h"
 #include "shader/ShaderCommon.h"
 #include <cstddef>
+#include <vcruntime_string.h>
 
 void RHIResource::Destroy() const {
     //mark resource to be deleted
@@ -171,36 +173,26 @@ void RHIPooledRenderQuery::Release() {
     assert(!IsValid() && "Query not successfully released");
 }
 #pragma endregion
-RHIUnorderedAccessView* GetUAV(uint8_t* data, uint32_t offset) {
-    return (RHIUnorderedAccessView*)(data + offset);
+
+RHIResource* GetResource(uint8_t* data, uint32_t offset) {
+    return (RHIResource*)(*(uint64_t*)(data + offset));
 }
-RHIShaderResourceView* GetSRV(uint8_t* data, uint32_t offset) {
-    return (RHIShaderResourceView*)(data + offset);
-}
-RHIConstantBufferView* GetCBV(uint8_t* data, uint32_t offset) {
-    return (RHIConstantBufferView*)(data + offset);
-}
+
 AttachmentBindingSlots* GetAttachmentBindings(uint8_t* data, uint32_t offset) {
     return (AttachmentBindingSlots*)(data + offset);
 }
-void RHIBatchedShaderParameters::SetParameters(Shader* shader, size_t _data_size, void* data_source) {
-    ShaderParametersMetadata* meta_data = shader->GetParametersMetaData();
-    const auto&               layout    = meta_data->GetLayout();
-    uint8_t*                  raw_data  = (uint8_t*)data_source;
-    const auto&               param_map = shader->GetParametersMap().GetShaderParameterInfoMap();
-
-    // layout.resource_parameters
-    for (const auto& parameter : layout.resource_parameters) {
-        std::string param_name = meta_data->GetMemberNameByOffset(parameter.offset);
-        if (param_map.count(param_name) > 0) {
-
-            //param info includes slots/space and array size
-            const auto& param_info = param_map.find(param_name)->second;
-            //vkDescriptorWrite()
-            if (IsParameterResource(param_info.type)) {
-                RHIResource* resource = (RHIResource*)(raw_data + parameter.offset);
-                resource_parameters.emplace_back(RHIShaderResourceParameter(resource, param_info.slot, param_info.space, param_info.num));
-            }
+void RHIBatchedShaderParameters::SetParameters(Shader* shader, size_t _data_size, uint8_t* data_source) {
+    const auto& param_layout_info = shader->GetRootParametersLayoutInfo();
+    uint32_t param_max_size = _data_size >> 3;
+    size_t left_size = resource_parameters.capacity() - resource_parameters.size();
+    
+    if(left_size < param_max_size)resource_parameters.reserve(left_size + resource_parameters.size());
+    for (const auto& param_info: param_layout_info.GetLayoutInfos()) {
+        RHIResource* data = GetResource(data_source, param_info.offset);
+        bool npt = data;
+        bool b_set = param_info.IsValid() && IsParameterResource(param_info.type) && data;
+        if(b_set){
+            resource_parameters.emplace_back(RHIShaderResourceParameter(data, param_info.slot, param_info.space));
         }
     }
 }

@@ -137,8 +137,8 @@ void Test() {
     auto test_buff = g_rhi->RHICreateBuffer(buffer_info);
 
     params.write_target = test_view;
-    for (const auto& iter : test_shader_vs->GetParametersMap().GetShaderParameterInfoMap()) {
-    };
+    RHIBatchedShaderParameters batched_params;
+    batched_params.SetParameters(test_shader_vs, params);
     //command_list->SetBatchedShaderParameter();
     //VkSetDescriptorWrite()
 
