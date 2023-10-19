@@ -10,7 +10,6 @@
 #include "misc/CountableRef.h"
 
 #include "rhi/RHICommon.h"
-#include "rhi/RHICommon.h"
 #include "rhi/RHIResourceInitilizer.h"
 
 #include <array>
@@ -56,11 +55,11 @@ class RHIMultisampleState;
 class RHIShader;
 class RHIShaderLibrary;
 class RHIShaderResourceView;
+class RHIConstantBufferView;
 class RHIStagingBuffer;
 class RHITexture;
 class RHITextureReference;
 class RHIShaderRootParameterLayout;
-class RHIGlobalBuffer;
 class RHIUnorderedAccessView;
 class RHIVertexInputState;
 class RHIVertexShader;
@@ -103,7 +102,6 @@ using RHIStagingBufferRef             = CountableRef<RHIStagingBuffer>;
 using RHITextureRef                   = CountableRef<RHITexture>;
 using RHITextureReferenceRef          = CountableRef<RHITextureReference>;
 using RHIShaderRootParameterLayoutRef = CountableRef<RHIShaderRootParameterLayout>;
-using RHIGlobalBufferRef              = CountableRef<RHIGlobalBuffer>;
 using RHIUnorderedAccessViewRef       = CountableRef<RHIUnorderedAccessView>;
 using RHIVertexInputStateRef          = CountableRef<RHIVertexInputState>;
 using RHIVertexShaderRef              = CountableRef<RHIVertexShader>;
@@ -137,7 +135,7 @@ struct VertexElement {
     uint8_t                        attribute_index;
     uint16_t                       stride;
     EnumInByte<EVertexInputRate>   input_rate;
-    uint8_t                        _reserve_byte_;
+    uint8_t                        reserve_byte;
 };
 static_assert(sizeof(VertexElement) == 8, "VertexElement doesn't match cache line size");
 
@@ -391,49 +389,8 @@ public:
 
 #pragma endregion
 
-#pragma region global buffer definitions
-/* todo: specification of fields */
-struct RHIGlobalBufferResourceInitializer {
+#pragma region rhi shader definitions
 
-    uint16_t member_offset;
-
-    /** Type of the member that allow (). */
-    EShaderBindingBaseType member_type;
-    uint8_t                padding;
-
-    /** Compare two uniform buffer layout resources. */
-    friend inline bool operator==(const RHIGlobalBufferResourceInitializer& A, const RHIGlobalBufferResourceInitializer& B) {
-        return A.member_offset == B.member_offset && A.member_type == B.member_type;
-    }
-};
-struct RHIGlobalBufferLayoutInitializer {
-    RHIGlobalBufferLayoutInitializer() = default;
-    explicit RHIGlobalBufferLayoutInitializer(const char* _name, uint32_t _buffer_size = 0) : name(_name), buffer_size(_buffer_size) {
-    }
-    uint32_t    buffer_size;
-    const char* name;
-
-private:
-    void ComputeHash() {
-        //todo
-    }
-
-    uint32_t hash = 0;
-
-public:
-    std::vector<RHIGlobalBufferResourceInitializer> inline_resources;
-    std::vector<RHIGlobalBufferResourceInitializer> reference_resources;
-
-    uint32_t                       constant_buffer_size;
-    uint16_t                       attachments_offset = std::numeric_limits<uint16_t>::max();
-    GlobalBufferStaticBindingPoint static_slot        = MAX_GLOBAL_BUFFER_GLOBAL_BINDING_POINT;
-
-    EGlobalBufferBindingFlags binding_flags = EGlobalBufferBindingFlags::CONSTANT;
-
-    friend inline bool operator==(const RHIGlobalBufferLayoutInitializer& lhs, const RHIGlobalBufferLayoutInitializer& rhs) {
-        return lhs.constant_buffer_size == rhs.constant_buffer_size && lhs.static_slot == rhs.static_slot && lhs.binding_flags == rhs.binding_flags && lhs.inline_resources == rhs.inline_resources;
-    }
-};
 struct RHIResourceParameterLayout {
     //offset in parameter meta data to get name
     uint16_t               offset;
@@ -441,26 +398,34 @@ struct RHIResourceParameterLayout {
     EShaderBindingBaseType base_type;
 };
 
-struct RHIConstParameterLayout {
-    //origin offset in parameter data for copy
-    uint16_t               byte_offset;
-    uint16_t               byte_size;
-    EShaderBindingBaseType base_type;
-};
 template<typename RootParameter>
 concept concept_is_root_parameter_struct = requires(RootParameter t) {
     RootParameter::TypeInfo::GetStructMetadata();
     t.GetMembers();
 };
+
+struct RHIShaderResourceParameter {
+    RHIResource* resource;
+    int16_t      slot;
+    int16_t      space;
+    uint32_t     count;
+};
+
+struct RHIAttachmentBindingParameter {
+};
 struct RHIBatchedShaderParameters {
     //CBV SRV UAV SAMPLER
-    std::vector<RHIResourceParameterLayout> resource_parameters;
-    std::vector<RHIConstParameterLayout>    const_parameters;
-    std::vector<uint8_t>                    const_parameter_data;
     template<concept_is_root_parameter_struct TRootParameter>
-    void SetParameters(const TRootParameter& params) {
-        params.GetMembers();
+    void SetParameters(class Shader* shader, const TRootParameter& params) {
+        size_t data_size = sizeof(TRootParameter);
+        SetParameters(shader, data_size, &params);
     }
+
+private:
+    void SetParameters(class Shader* shader, size_t _data_size, void* data_source);
+    //offset in raw_data, size, slot and space
+    std::vector<RHIShaderResourceParameter> resource_parameters;
+    std::vector<uint8_t>                    raw_data;
 };
 //todo: may not inherit from RHIResource
 class RHIShaderRootParameterLayout : public RHIResource {
@@ -1055,7 +1020,7 @@ struct RHIViewInfo {
 
     struct Buffer : public BaseViewInfo {
         struct ViewInfo;
-        EBufferType bufferType;
+        EBufferType buffer_type;
         uint8_t     b_is_atomic_counter : 1;
         /* An append and consume buffer is a special type of an unordered resource that
          * supports adding and removing values from the end of a buffer similar to the way a stack works.
@@ -1219,14 +1184,14 @@ protected:
 public:
     Initializer& SetType(EBufferType _type) {
         assert(_type != EBufferType::UNDEFINED);
-        buffer.srv.bufferType = _type;
+        buffer.srv.buffer_type = _type;
         return *this;
     }
     Initializer& SetType(RHIBuffer* _buffer) {
-        buffer.srv.bufferType = EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::BYTE_ADDRESS_BUFFER)    ? EBufferType::RAW :
-                                EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::STRUCTURED_BUFFER)      ? EBufferType::STRUCTURED :
-                                EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::ACCELERATION_STRUCTURE) ? EBufferType::ACCELERATION_STRUCTURE :
-                                                                                                                 EBufferType::UNDEFINED;
+        buffer.srv.buffer_type = EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::BYTE_ADDRESS_BUFFER)    ? EBufferType::RAW :
+                                 EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::STRUCTURED_BUFFER)      ? EBufferType::STRUCTURED :
+                                 EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::ACCELERATION_STRUCTURE) ? EBufferType::ACCELERATION_STRUCTURE :
+                                                                                                                  EBufferType::UNDEFINED;
         return *this;
     }
     Initializer& SetFormat(EPixelFormat _format) {
@@ -1258,14 +1223,14 @@ protected:
 public:
     Initializer& SetType(EBufferType _type) {
         assert(_type != EBufferType::UNDEFINED);
-        buffer.uav.bufferType = _type;
+        buffer.uav.buffer_type = _type;
         return *this;
     }
     Initializer& SetType(RHIBuffer* _buffer) {
-        buffer.uav.bufferType = EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::BYTE_ADDRESS_BUFFER)    ? EBufferType::RAW :
-                                EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::STRUCTURED_BUFFER)      ? EBufferType::STRUCTURED :
-                                EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::ACCELERATION_STRUCTURE) ? EBufferType::ACCELERATION_STRUCTURE :
-                                                                                                                 EBufferType::UNDEFINED;
+        buffer.uav.buffer_type = EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::BYTE_ADDRESS_BUFFER)    ? EBufferType::RAW :
+                                 EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::STRUCTURED_BUFFER)      ? EBufferType::STRUCTURED :
+                                 EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::ACCELERATION_STRUCTURE) ? EBufferType::ACCELERATION_STRUCTURE :
+                                                                                                                  EBufferType::UNDEFINED;
         return *this;
     }
     Initializer& SetFormat(EPixelFormat _format) {
@@ -1367,13 +1332,13 @@ protected:
 public:
     Initializer& SetType(EBufferType _type) {
         assert(_type != EBufferType::UNDEFINED);
-        buffer.cbv.bufferType = _type;
+        buffer.cbv.buffer_type = _type;
         return *this;
     }
     Initializer& SetType(RHIBuffer* _buffer) {
-        buffer.cbv.bufferType = EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::UNIFORM_BUFFER) ? EBufferType::UNIFROM :
-                                EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::TEXTURE_BUFFER) ? EBufferType::TEXTURE :
-                                                                                                         EBufferType::UNDEFINED;
+        buffer.cbv.buffer_type = EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::UNIFORM_BUFFER) ? EBufferType::UNIFROM :
+                                 EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::TEXTURE_BUFFER) ? EBufferType::TEXTURE :
+                                                                                                          EBufferType::UNDEFINED;
         return *this;
     }
     // Initializer& SetFormat(EPixelFormat _format) {
@@ -1869,16 +1834,16 @@ public:
           b_has_fragment_density_attachments(_b_has_fragment_density_attachments),
           shading_rate(_shading_rate),
           hash_key(0) {}
-    static constexpr ETextureUsageFlags RelevantColorAttachmentFlagMask = ETextureUsageFlags::SRGB;
-    static constexpr ETextureUsageFlags RelevantDepthStencilFlagMask    = ETextureUsageFlags::SRGB | ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT;
+    static constexpr ETextureUsageFlags relevant_color_attachment_flag_mask = ETextureUsageFlags::SRGB;
+    static constexpr ETextureUsageFlags relevant_depth_stencil_flag_mask    = ETextureUsageFlags::SRGB | ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT;
     static bool                         IsSameColorAttachmentInPSO(ETextureUsageFlags lhs, ETextureUsageFlags rhs) {
-        auto l = lhs & RelevantColorAttachmentFlagMask;
-        auto r = rhs & RelevantColorAttachmentFlagMask;
+        auto l = lhs & relevant_color_attachment_flag_mask;
+        auto r = rhs & relevant_color_attachment_flag_mask;
         return l == r;
     }
     static bool IsSameDepthAttachmentInPSO(ETextureUsageFlags lhs, ETextureUsageFlags rhs) {
-        auto l = lhs & RelevantDepthStencilFlagMask;
-        auto r = rhs & RelevantDepthStencilFlagMask;
+        auto l = lhs & relevant_depth_stencil_flag_mask;
+        auto r = rhs & relevant_depth_stencil_flag_mask;
         return l == r;
     }
     static bool IsSameColorAttachmentArray(const TAttachmentFlags& lhs, const TAttachmentFlags& rhs) {
@@ -2010,8 +1975,8 @@ struct ViewPort {
     float y;
     float width;
     float height;
-    float minDepth;
-    float maxDepth;
+    float min_depth;
+    float max_depth;
 };
 
 /* struct for RenderPassInfo Only, constructed by texture_view and Pass-Required texture layout */
@@ -2271,7 +2236,7 @@ struct RHIRenderPassInfo {
         int32_t color_attachment_index = 0;
         for (; color_attachment_index < MAX_PASS_ATTACHMENT_COUNT; color_attachment_index++) {
             const ColorAttachmentInfo& color_attachment_info = color_attachments[color_attachment_index];
-            auto                       texture_view          = color_attachment_info.color_attachment_view.texture_view;
+            auto*                      texture_view          = color_attachment_info.color_attachment_view.texture_view;
             if (!texture_view) {
                 break;
             }
@@ -2284,7 +2249,7 @@ struct RHIRenderPassInfo {
         for (; color_attachment_index < MAX_PASS_ATTACHMENT_COUNT; ++color_attachment_index) {
             target.attachment_formats[color_attachment_index] = PF_UNDEFINED;
         }
-        auto depth_stencil_view = depth_stencil_attachment.depth_stencil_attachment_view.texture_view;
+        auto* depth_stencil_view = depth_stencil_attachment.depth_stencil_attachment_view.texture_view;
         if (depth_stencil_view) {
             target.depth_stencil_attachment_format = depth_stencil_view->GetTexture()->GetFormat();
             target.depth_stencil_attachment_flag   = depth_stencil_view->GetTexture()->GetUsageFlags();
@@ -2292,14 +2257,14 @@ struct RHIRenderPassInfo {
         } else {
             target.depth_stencil_attachment_format = PF_UNDEFINED;
         }
-        auto _depth_action   = GetDepthAction(depth_stencil_attachment.depth_stencil_action);
-        auto _stencil_action = GetStencilAction(depth_stencil_attachment.depth_stencil_action);
+        auto depth_action   = GetDepthAction(depth_stencil_attachment.depth_stencil_action);
+        auto stencil_action = GetStencilAction(depth_stencil_attachment.depth_stencil_action);
 
-        target.depth_attachment_load_op  = GetLoadOp(_depth_action);
-        target.depth_attachment_store_op = GetStoreOp(_depth_action);
+        target.depth_attachment_load_op  = GetLoadOp(depth_action);
+        target.depth_attachment_store_op = GetStoreOp(depth_action);
 
-        target.stencil_attachment_load_op  = GetLoadOp(_stencil_action);
-        target.stencil_attachment_store_op = GetStoreOp(_stencil_action);
+        target.stencil_attachment_load_op  = GetLoadOp(stencil_action);
+        target.stencil_attachment_store_op = GetStoreOp(stencil_action);
 
         target.multi_view_count                  = multi_view_count;
         target.b_has_fragment_density_attachment = shading_rate_texture.Get() != nullptr;
@@ -2381,7 +2346,7 @@ struct RayTracingGeometryElement {
     EVertexElementType       vertex_element_type = VET_FLOAT3;
     ERayTracingGeometryFlags geometry_flags      = ERayTracingGeometryFlags::NONE;
     bool                     enabled;
-    uint8_t                  _padding_0;
+    uint8_t                  padding_0;
 };
 static_assert(sizeof(RayTracingGeometryElement) == 40);
 
@@ -2846,13 +2811,13 @@ protected:
 
 class RHIPipelineBinaryDataLibrary : public RHIResource {
 public:
-    RHIPipelineBinaryDataLibrary(EShaderPlatform InPlatform, std::string const& FilePath) : RHIResource(RRT_PIPELINE_BINARY_DATA_LIBRARY), Platform(InPlatform) {}
+    RHIPipelineBinaryDataLibrary(EShaderPlatform InPlatform, std::string const& FilePath) : RHIResource(RRT_PIPELINE_BINARY_DATA_LIBRARY), platform(InPlatform) {}
     virtual ~RHIPipelineBinaryDataLibrary() = default;
 
-    FORCEINLINE EShaderPlatform GetPlatform() const { return Platform; }
+    FORCEINLINE EShaderPlatform GetPlatform() const { return platform; }
 
 protected:
-    EShaderPlatform Platform;
+    EShaderPlatform platform;
 };
 
 #endif// !RHI_RESOURCE_H

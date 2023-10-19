@@ -5,8 +5,18 @@
 #include "API_Macro.h"
 #include "ShaderCommon.h"
 #include "rhi/RHICommon.h"
+#include "shader/ShaderCommon.h"
+#include "shader/ShaderParameterMacros.h"
 
 typedef uint32_t ShaderResourceIndex;
+/**
+ * @brief Shader Type information,
+    contains:
+    reflect parameter data from compiled info,
+    targeted platform information
+    meta type information
+ * 
+ */
 class Shader {
     friend class ShaderMetaType;
 
@@ -17,27 +27,54 @@ public:
 
     ~Shader();
     virtual void Delete() {}
-    //compiled shader hash
-    RENDER_CORE_API const Hash64City& GetCompiledHash() const;
 
+    /**
+     * @brief Get the Compiled Hash object
+     * 
+     * @return const Hash64City& 
+     */
+    const Hash64City& GetCompiledHash() const;
+
+    /**
+    * @brief Get the Hash Key object
+    * 
+    * @return uint32_t 
+    */
     uint32_t GetHashKey() const { return hash_key; }
 
     EShaderPlatform GetShaderPlatform() const { return static_cast<EShaderPlatform>(target_info.shader_platform); }
-    EShaderType     GetShaderType() const { return static_cast<EShaderType>(target_info.shader_type); }
-    // get resource index in resource map
-    ShaderResourceIndex GetShaderResourceIndex() const { return resource_index; }
+
+    /**
+     * @brief Get the Shader Meta Type object
+     * 
+     * @return EShaderType 
+     */
+    EShaderType GetShaderMetaType() const { return static_cast<EShaderType>(target_info.shader_type); }
 
     static ShaderParametersMetadata* GetParametersMetaData() { return nullptr; }
+
+    /**
+     * @brief Get the Parameters Map object(generated from compiled data)
+     * 
+     * @return const ShaderParametersInfoMap& 
+     */
+    const ShaderParametersInfoMap& GetParametersMap() const { return param_map; }
+
+    /**
+     * @brief Get the Code Entry object, contains compiled code and target platform
+     * 
+     * @return const ShaderCodeEntry* 
+     */
+    const class ShaderCodeEntry* GetCodeEntry() const;
 
 protected:
     Hash64City compiled_hash;
 
 private:
-    const ShaderMetaType* type;
-    ShaderTargetInfo      target_info;
-    ShaderResourceIndex   resource_index;
-
-    int32_t code_size;
+    const ShaderMetaType*   type;
+    ShaderTargetInfo        target_info;
+    ShaderParametersInfoMap param_map;
+    int32_t                 code_size;
     //compiled shader hash in 32 bit
     uint32_t hash_key;
 };
@@ -54,7 +91,6 @@ private:
 #define INTERNAL_DEFINE_SHADER_TYPE(ShaderClassName, ShaderMapScope, API) \
                                                                           \
 public:                                                                   \
-    using ShaderMapType = ShaderMapScope##ShaderMap;                      \
     static ShaderTypeRegistration s_registration;                         \
     static API ShaderMetaType&    GetMetaType();                          \
     DEFINE_SHADER_FUNCION_PROC(ShaderClassName)                           \
@@ -74,4 +110,23 @@ public:                                                                   \
     }                                                                            \
     ShaderTypeRegistration ShaderClassName::s_registration(ShaderClassName::GetMetaType);
 
+class TestReflectionShader : public Shader {
+    DEFINE_SHADER_TYPE(TestReflectionShader, Global, )
+public:
+    BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
+    //constant
+    DEFINE_SHADER_PARAM(Moer::Vector4f, color)
+    DEFINE_SHADER_PARAM_SRV(Buffer, bar)
+    //Ubo set
+    DEFINE_SHADER_PARAM_UAV(RWBuffer, dataLog)
+
+    DEFINE_SHADER_PARAM_SAMPLER_ARRAY(Sampler[2], samp, 2)
+    DEFINE_SHADER_PARAM_SAMPLER(Sampler, aniso)
+    //srv set
+    DEFINE_SHADER_PARAM_SRV_ARRAY(Texture2D[5], foo, 5)
+    //uav set
+    DEFINE_SHADER_PARAM_CBV(ConstantBuffer<UBO>, ubo)
+
+    END_ROOT_PARAMETER_DEFINITION(Parameters)
+};
 #endif//MOERENGINE_SHADER_H

@@ -2,17 +2,20 @@
 #define RHI_COMMAND_LIST_H
 #include "RHI.h"
 #include "math/Base.h"
+#include "rhi/RHIResource.h"
 
 class RHICommandListBase {
 protected:
     RHI_API RHICommandListBase();
 
 public:
+    virtual void SetBatchedShaderParameter(RHIShaderRef shader, const RHIBatchedShaderParameters& parameters) = 0;
     RHI_API ~RHICommandListBase();
 };
 
 class RHIGraphicsCommandList : public RHICommandListBase {
 public:
+    virtual void SetBatchedShaderParameter(RHIShaderRef shader, const RHIBatchedShaderParameters& parameters)             = 0;
     virtual void SetPipelineState(RHIGraphicsPipelineState* _graphics_pso, const RHIShaderBoundStateInput& _shader_input) = 0;
     virtual void Close()                                                                                                  = 0;
     virtual void Reset(RHIGraphicsPipelineState* _graphics_pso)                                                           = 0;
@@ -123,6 +126,7 @@ public:
 #pragma endregion
 };
 
-class RHIComputeCommandList final : public RHICommandListBase {
+class RHIComputeCommandList : public RHICommandListBase {
+    virtual void SetBatchedShaderParameter(RHIShaderRef shader, const RHIBatchedShaderParameters& parameters) = 0;
 };
 #endif//RHI_COMMAND_LIST_H

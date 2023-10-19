@@ -9,7 +9,7 @@
 #include "platform/Platform.h"
 #include "taskgraph/Event.h"
 
-uint32_t ThreadManager::g_game_thread_id = 0;
+uint32_t ThreadManager::g_game_thread_id   = 0;
 uint32_t ThreadManager::g_render_thread_id = 0;
 
 std::string GetPriorityStr(int32_t priority) {
@@ -51,7 +51,6 @@ uint32_t ThreadManager::GetCurrentThreadID() {
 
 ThreadManager& ThreadManager::Instance() {
     static ThreadManager singleton;
-    // TODO: �ڴ˴����� return ���
     return singleton;
 }
 
@@ -71,7 +70,7 @@ std::string ThreadManager::GetRunnableThreadName(uint32_t id) {
 
 RunnableThread* ThreadManager::GetRunnableThread(uint32_t id) {
     if (id == g_game_thread_id) return nullptr;
-    auto thread = m_threads.at(id);
+    auto* thread = m_threads.at(id);
     return thread;
 }
 
@@ -86,12 +85,12 @@ RunnableThread::~RunnableThread() {
 
 RunnableThread* RunnableThread::Create(Runnable* runnable, std::string name, uint64_t affinity_mask) {
 
-    RunnableThread* createdThread = nullptr;
+    RunnableThread* created_thread = nullptr;
 
-    createdThread = new RunnableThread(runnable, name);
-    createdThread->Setup(affinity_mask);
-    ThreadManager::Instance().AddThread(createdThread->id, createdThread);
-    return createdThread;
+    created_thread = new RunnableThread(runnable, name);
+    created_thread->Setup(affinity_mask);
+    ThreadManager::Instance().AddThread(created_thread->id, created_thread);
+    return created_thread;
 }
 
 void RunnableThread::Tick() {
@@ -102,9 +101,9 @@ RunnableThread::RunnableThread(Runnable* inRunnable, std::string name) {
     m_runnable    = inRunnable;
     m_createEvent = EventPool::Get()->GetEvent(false);
     m_endEvent    = EventPool::Get()->GetEvent(false);
-    EventRef createEvent(m_createEvent);
+    EventRef create_event(m_createEvent);
     m_thread = new std::thread(&RunnableThread::Run, this);
-    createEvent.Wait();
+    create_event.Wait();
     this->name = name;
     SPDLOG_INFO("[{}] {} thread created", name, this->id);
 }

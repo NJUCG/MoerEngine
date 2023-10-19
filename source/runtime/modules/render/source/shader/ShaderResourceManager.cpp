@@ -1,4 +1,5 @@
 #include "shader/ShaderResourceManager.h"
+#include "log/LogSystem.h"
 #include "misc/Hash.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
@@ -19,13 +20,15 @@ void ShaderResourceManager::Init(EShaderPlatform _platform) {
 
 void ShaderResourceManager::ShutDown() {
     for (uint32_t index = 0; index < EShaderPlatform::SP_Num; index++) {
-        auto& c_ptr = GetInstance().code_resources;
+        ShaderCodeResourceMap* c_ptr = GetInstance().code_resources;
         if (c_ptr != nullptr) {
             c_ptr->~ShaderCodeResourceMap();
+            GetInstance().code_resources = nullptr;
         }
-        auto& t_ptr = GetInstance().type_resources;
+        ShaderTypeResourceMap* t_ptr = GetInstance().type_resources;
         if (t_ptr != nullptr) {
             t_ptr->~ShaderTypeResourceMap();
+            GetInstance().type_resources = nullptr;
         }
     }
 }
@@ -57,7 +60,7 @@ void ShaderResourceManager::PrepareGlobalShaderResources() {
             return;
         }
         EShaderPlatform platform = input.target_info.shader_platform;
-        auto&           code_map = self.GetShaderCodeMap(platform);
+        auto&           code_map = self.GetShaderCodeMap();
         // std::string     pragmas;
         // std::for_each(output.pragma.begin(), output.pragma.end(), [&pragmas](const std::string& pragma) {
         //     pragmas.append(std::format("{}\n", pragma));
@@ -66,14 +69,14 @@ void ShaderResourceManager::PrepareGlobalShaderResources() {
         ShaderMetaType* meta_type = ShaderMetaType::GetNameToTypeMap().at(input.shader_name);
 
         Shader* shader = meta_type->ConstructShaderInstance(ShaderCompiledInitializer(
-            ShaderMetaType::GetNameToTypeMap().at(input.shader_name),
+            meta_type,
             output));
 
-        self.GetShaderTypeMap(input.target_info.shader_platform).AddShader(input.shader_name.c_str(), shader);
+        self.GetShaderTypeMap().AddShader(input.shader_name.c_str(), shader);
         //test code
         const auto& param_map = output.parameter_map;
 
-        auto& map = ShaderResourceManager::GetInstance().GetShaderCodeMap(EShaderPlatform::SP_VULKAN_SM6);
+        auto& map = ShaderResourceManager::GetInstance().GetShaderCodeMap();
     });
 }
 

@@ -6,15 +6,19 @@
 class IShaderCompiler {
 public:
     virtual void Compile(const ShaderCompilerInput& input, ShaderCompilerOutput& output) = 0;
-
+    /**
+     * @brief Return If support target platform or shader type
+     * 
+     * @return true 
+     * @return false 
+     */
     virtual bool IsSupportTarget(const ShaderTargetInfo&) { return false; }
 };
 class ShaderCompiler {
 
 public:
     static void Init();
-    static void ShaderConductorTest();
-    static void CompileAllGlobalShaderIfNeed();
+    static void ShaderCompileTest();
     /**
     * @brief cross-compile shader
     * 

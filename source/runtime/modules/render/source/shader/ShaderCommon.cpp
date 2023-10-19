@@ -13,15 +13,12 @@ const char* g_global_shader_resource_root_dir   = MACRO_STR(GLOBAL_SHADER_RESOUR
 const char* g_global_shader_resource_output_dir = MACRO_STR(GLOBAL_SHADER_RESOURCE_OUTPUT);
 
 ShaderParametersMetadata::ShaderParametersMetadata(
-    EShaderParameterUseCase           _use_case,
-    EGlobalBufferBindingFlags         _binding_flags,
-    const char*                       _struct_name,
-    uint32_t                          _size,
-    const std::vector<Member>&        _members,
-    bool                              _b_force_complete_initialization,
-    RHIGlobalBufferLayoutInitializer* _out_layout_initializer)
+    EShaderParameterUseCase    _use_case,
+    const char*                _struct_name,
+    uint32_t                   _size,
+    const std::vector<Member>& _members,
+    bool                       _b_force_complete_initialization)
     : use_case(_use_case),
-      binding_flags(_binding_flags),
       struct_name(_struct_name),
       size(_size),
       members(_members) {
@@ -34,16 +31,6 @@ ShaderParametersMetadata::~ShaderParametersMetadata() {
         layout->~RHIShaderRootParameterLayout();
     }
 };
-
-void ShaderParametersMetadata::GetNestedStructs(std::vector<const ShaderParametersMetadata*>& _out_nested_structs) const {
-    for (const auto& member : members) {
-        const ShaderParametersMetadata* meta_data = member.GetStructMetadata();
-        if (meta_data) {
-            _out_nested_structs.push_back(meta_data);
-            meta_data->GetNestedStructs(_out_nested_structs);
-        }
-    }
-}
 
 std::string ShaderParametersMetadata::GetMemberNameByOffset(uint16_t _member_offset) const {
     const auto& members = GetMembers();
@@ -98,10 +85,13 @@ void ShaderParametersMetadata::InitializeLayout() {
     for (const auto& member : members) {
         EShaderBindingBaseType base_type = member.GetBaseType();
         if (is_resource(base_type)) {
+
             layout.resource_parameters.emplace_back(
                 RHIResourceParameterLayout(member.GetOffset(),
                                            member.GetStride(),
                                            base_type));
+        } else if (base_type == SBT_ATTACHMENT_BINDING_SLOTS) {
+            // member.
         }
     }
     this->layout = &layout;
@@ -126,9 +116,7 @@ ShaderMetaType::ShaderMetaType(
     const ShaderParametersMetadata*             _parameter_data,
     ShaderMetaType::ConstructShaderInstanceProc _shader_type_constructor)
     : type_name(_type_name),
-      hash_type_name(type_name),
       file_name(_file_name),
-      hash_file_name(file_name),
       entry_point(_entry_point),
       shader_type(_shader_type),
       parameter_meta_data(_parameter_data),
@@ -190,9 +178,9 @@ ShaderCompiledInitializer::ShaderCompiledInitializer(
     const ShaderCompilerOutput& _compiled_output
     //        const FVertexFactoryType* InVertexFactoryType
     )
-    : compiled_code(_compiled_output.shader_code),
+    : type_info(_shader_type),
+      compiled_code(_compiled_output.shader_code),
       target_info(_compiled_output.target_info),
       parameter_map(_compiled_output.parameter_map),
-      output_hash(_compiled_output.compiled_hash),
-      num_instructions(_compiled_output.num_instructions),
+      compiled_hash(_compiled_output.compiled_hash),
       code_size(_compiled_output.shader_code.size()){};

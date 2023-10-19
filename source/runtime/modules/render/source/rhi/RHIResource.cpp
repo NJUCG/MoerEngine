@@ -1,6 +1,9 @@
 #include "rhi/RHIResource.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommandList.h"
+#include "shader/Shader.h"
+#include "shader/ShaderCommon.h"
+#include <cstddef>
 
 void RHIResource::Destroy() const {
     //mark resource to be deleted
@@ -18,23 +21,23 @@ RHIViewInfo::Buffer::ViewInfo RHIViewInfo::Buffer::GetViewInfo(RHIBuffer* target
     assert(target && "invalid buffer.");
     const auto& info = target->GetInfo();
     if (info.IsNull()) return {.b_null_view = true};
-    uint32_t     _byte_stride  = 0;
-    EPixelFormat _format       = format;
-    EBufferType  _buffer_type  = bufferType;
-    uint32_t     _byte_offset  = 0;
-    uint32_t     _byte_size    = 0;
-    uint32_t     _num_elements = 0;
+    uint32_t     temp_byte_stride  = 0;
+    EPixelFormat temp_format       = format;
+    EBufferType  temp_buffer_type  = buffer_type;
+    uint32_t     temp_byte_offset  = 0;
+    uint32_t     temp_byte_size    = 0;
+    uint32_t     temp_num_elements = 0;
 
-    switch (bufferType) {
+    switch (temp_buffer_type) {
         case EBufferType::STRUCTURED:
             assert(EnumHasAnyFlag(info.usage, EBufferUsageFlags::STRUCTURED_BUFFER) && "the buffer is not a structured buffer.");
             assert(format == PF_UNDEFINED && "structured buffer should not have a pixel format.");
-            _byte_stride = stride == 0 ? info.stride : stride;
+            temp_byte_stride = stride == 0 ? info.stride : stride;
             break;
         case EBufferType::ACCELERATION_STRUCTURE:
             assert(EnumHasAnyFlag(info.usage, EBufferUsageFlags::ACCELERATION_STRUCTURE) && "the buffer is not a ray-tracing acceleration buffer");
             assert(format == PF_UNDEFINED && "acceleration structure views should not specify pixel format.");
-            _byte_stride = 1;
+            temp_byte_stride = 1;
             break;
         case EBufferType::RAW:
             break;
@@ -42,28 +45,28 @@ RHIViewInfo::Buffer::ViewInfo RHIViewInfo::Buffer::GetViewInfo(RHIBuffer* target
             assert(format == PF_UNDEFINED && "byte addressed buffer should not specify pixel format");
             assert(stride == 0 && "should not specify stride of raw buffer");
             assert(byte_offset % 16 && "");
-            _byte_stride = sizeof(uint32_t);
-            _format      = PF_UNDEFINED;
+            temp_byte_stride = sizeof(uint32_t);
+            temp_format      = PF_UNDEFINED;
         default: assert(false && "unrecognized buffer type");
     }
     assert(byte_offset < info.size && "offset out of bounds of buffer size");
-    assert(byte_offset % _byte_stride == 0 && "offset must be a multiple of stride");
-    _byte_offset = byte_offset;
-    assert(_buffer_type == EBufferType::ACCELERATION_STRUCTURE || (byte_offset == 0 || num_elements > 0) && "");
-    _num_elements = num_elements == 0 ? (info.size - byte_offset) / _byte_stride : num_elements;
-    _byte_size    = _num_elements * _byte_stride;
+    assert(byte_offset % temp_byte_stride == 0 && "offset must be a multiple of stride");
+    temp_byte_offset = byte_offset;
+    assert(temp_buffer_type == EBufferType::ACCELERATION_STRUCTURE || (byte_offset == 0 || num_elements > 0) && "");
+    temp_num_elements = num_elements == 0 ? (info.size - byte_offset) / temp_byte_stride : num_elements;
+    temp_byte_size    = temp_num_elements * temp_byte_stride;
 
-    assert(_byte_offset + _byte_size < info.size && "total size out of bound");
+    assert(temp_byte_offset + temp_byte_size < info.size && "total size out of bound");
 
     //todo platform support query
-    assert(_format == PF_UNDEFINED || true && "platform not support such pixel format");
+    assert(temp_format == PF_UNDEFINED || true && "platform not support such pixel format");
     return {
-        _byte_offset,
-        _byte_stride,
-        _num_elements,
-        _byte_size,
-        _buffer_type,
-        _format};
+        temp_byte_offset,
+        temp_byte_stride,
+        temp_num_elements,
+        temp_byte_size,
+        temp_buffer_type,
+        temp_format};
 }
 
 RHIViewInfo::BufferSRV::ViewInfo RHIViewInfo::BufferSRV::GetViewInfo(RHIBuffer* target) const {
@@ -76,52 +79,52 @@ RHIViewInfo::Texture::ViewInfo RHIViewInfo::Texture::GetViewInfo(RHITexture* tar
 
     assert(mip_num > 0 || mip_min == 0 && "num mips cannot be 0 except creating entire range");
     assert(mip_min + mip_num <= info.num_mips && "mip range out of bound");
-    EPixelFormat      _format    = format == PF_UNDEFINED ? info.format : format;
-    ETextureDimension _dimension = dimension;
+    EPixelFormat      temp_format    = format == PF_UNDEFINED ? info.format : format;
+    ETextureDimension temp_dimension = dimension;
     //todo check platform support
-    assert(_format == PF_UNDEFINED || true && "pixel format not supported");
+    assert(temp_format == PF_UNDEFINED || true && "pixel format not supported");
 
     //b_all_mip is not set, it varies between view types
     return {
         array_min,
         array_num == 0 ? info.array_size : array_num,
-        _format,
+        temp_format,
         dimension,
         false,
         mip_num == 0 && mip_min == 0};
 }
 RHIViewInfo::BufferUAV::ViewInfo RHIViewInfo::BufferUAV::GetViewInfo(RHIBuffer* target) const {
     assert(view_type == EViewType::BUFFER_UAV);
-    ViewInfo _info         = {Buffer::GetViewInfo(target)};
-    _info.b_atomic_counter = b_is_atomic_counter;
-    _info.b_append_buffer  = b_is_append_buffer;
-    return _info;
+    ViewInfo temp_info         = {Buffer::GetViewInfo(target)};
+    temp_info.b_atomic_counter = b_is_atomic_counter;
+    temp_info.b_append_buffer  = b_is_append_buffer;
+    return temp_info;
 }
 RHIViewInfo::TextureSRV::ViewInfo RHIViewInfo::TextureSRV::GetViewInfo(RHITexture* target) const {
     assert(view_type == EViewType::TEXTURE_SRV);
     assert(target);
     const auto& tex_info = target->GetInfo();
 
-    ViewInfo _info   = {Texture::GetViewInfo(target)};
-    _info.mip_min    = mip_min;
-    _info.mip_num    = mip_num == 0 ? tex_info.num_mips : mip_num;
-    _info.b_all_mips = mip_min == 0 && _info.mip_num == tex_info.num_mips;
+    ViewInfo temp_info   = {Texture::GetViewInfo(target)};
+    temp_info.mip_min    = mip_min;
+    temp_info.mip_num    = mip_num == 0 ? tex_info.num_mips : mip_num;
+    temp_info.b_all_mips = mip_min == 0 && temp_info.mip_num == tex_info.num_mips;
 
-    return _info;
+    return temp_info;
 }
 RHIViewInfo::TextureUAV::ViewInfo RHIViewInfo::TextureUAV::GetViewInfo(RHITexture* target) const {
     assert(view_type == EViewType::TEXTURE_UAV);
     assert(target);
     const auto& tex_info = target->GetInfo();
 
-    ViewInfo _info = {Texture::GetViewInfo(target)};
+    ViewInfo info = {Texture::GetViewInfo(target)};
     assert(tex_info.num_samples == 1 && "cannot create uav on multi-sampled texture");
 
-    _info.mip_level = mip_min;
-    assert(_info.mip_level <= tex_info.num_mips && "mip level out of bounds");
+    info.mip_level = mip_min;
+    assert(info.mip_level <= tex_info.num_mips && "mip level out of bounds");
 
-    _info.b_all_mips = tex_info.num_mips == 1;
-    return _info;
+    info.b_all_mips = tex_info.num_mips == 1;
+    return info;
 }
 
 RHITextureReference::RHITextureReference(
@@ -168,3 +171,36 @@ void RHIPooledRenderQuery::Release() {
     assert(!IsValid() && "Query not successfully released");
 }
 #pragma endregion
+RHIUnorderedAccessView* GetUAV(uint8_t* data, uint32_t offset) {
+    return (RHIUnorderedAccessView*)(data + offset);
+}
+RHIShaderResourceView* GetSRV(uint8_t* data, uint32_t offset) {
+    return (RHIShaderResourceView*)(data + offset);
+}
+RHIConstantBufferView* GetCBV(uint8_t* data, uint32_t offset) {
+    return (RHIConstantBufferView*)(data + offset);
+}
+AttachmentBindingSlots* GetAttachmentBindings(uint8_t* data, uint32_t offset) {
+    return (AttachmentBindingSlots*)(data + offset);
+}
+void RHIBatchedShaderParameters::SetParameters(Shader* shader, size_t _data_size, void* data_source) {
+    ShaderParametersMetadata* meta_data = shader->GetParametersMetaData();
+    const auto&               layout    = meta_data->GetLayout();
+    uint8_t*                  raw_data  = (uint8_t*)data_source;
+    const auto&               param_map = shader->GetParametersMap().GetShaderParameterInfoMap();
+
+    // layout.resource_parameters
+    for (const auto& parameter : layout.resource_parameters) {
+        std::string param_name = meta_data->GetMemberNameByOffset(parameter.offset);
+        if (param_map.count(param_name) > 0) {
+
+            //param info includes slots/space and array size
+            const auto& param_info = param_map.find(param_name)->second;
+            //vkDescriptorWrite()
+            if (IsParameterResource(param_info.type)) {
+                RHIResource* resource = (RHIResource*)(raw_data + parameter.offset);
+                resource_parameters.emplace_back(RHIShaderResourceParameter(resource, param_info.slot, param_info.space, param_info.num));
+            }
+        }
+    }
+}

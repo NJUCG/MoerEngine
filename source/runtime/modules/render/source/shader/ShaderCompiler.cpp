@@ -19,7 +19,6 @@
 
 #include "shader/ShaderCompiler.h"
 #include "shader/Shader.h"
-#include "shader/ShaderMap.h"
 #include "spirv_reflect.h"
 #include <filesystem>
 #include <fstream>
@@ -31,34 +30,13 @@
 #include <vector>
 #include "rhi/RHI.h"
 
-#include "DirectXShaderCompiler.h"
+#include "DXC/DirectXShaderCompiler.h"
 
 IShaderCompiler* ShaderCompiler::compiler = nullptr;
 void             ShaderCompiler::Init() {
     //currently use dxc for all compile missions
     compiler = &(DXCompiler::GetInstance());
 }
-class TestReflectionShader : public Shader {
-    DEFINE_SHADER_TYPE(TestReflectionShader, Global, )
-public:
-    BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
-    //constant
-    DEFINE_SHADER_PARAM(Moer::Vector4f, color)
-    DEFINE_SHADER_PARAM_SRV(Buffer, bar)
-    //Ubo set
-    DEFINE_SHADER_PARAM_UAV(RWBuffer, dataLog)
-
-    DEFINE_SHADER_PARAM_SAMPLER_ARRAY(Sampler[2], samp, 2)
-    DEFINE_SHADER_PARAM_SAMPLER(Sampler, aniso)
-    //srv set
-    DEFINE_SHADER_PARAM_SRV_ARRAY(Texture2D[5], foo, 5)
-    //uav set
-    DEFINE_SHADER_PARAM_CBV(ConstantBuffer<UBO>, ubo)
-
-    END_ROOT_PARAMETER_DEFINITION(Parameters)
-};
-
-IMPLEMENT_SHADER_TYPE(TestReflectionShader, "TestVert.vert", "main", EShaderType::ST_VERTEX);
 
 class FakeRHI : public IVulkanRHI {
 public:
@@ -82,11 +60,7 @@ bool IsResource(EShaderBindingBaseType base_type) {
            base_type == SBT_UAV ||
            base_type == SBT_SAMPLER;
 }
-void ShaderCompiler::CompileAllGlobalShaderIfNeed() {
-
-    const auto& works = ShaderCompileRegistration::RetrieveShaderCompileWorks();
-}
-void ShaderCompiler::ShaderConductorTest() {
+void ShaderCompiler::ShaderCompileTest() {
     g_rhi = new FakeRHI;
     TestReflectionShader::GetMetaType();
     ShaderTypeRegistration::SubmitRegistrations();
@@ -107,8 +81,7 @@ void ShaderCompiler::ShaderConductorTest() {
             });
             return;
         }
-        EShaderPlatform platform = input.target_info.shader_platform;
-        auto&           code_map = ShaderResourceManager::GetInstance().GetShaderCodeMap(platform);
+        auto& code_map = ShaderResourceManager::GetInstance().GetShaderCodeMap();
         // std::string     pragmas;
         // std::for_each(output.pragma.begin(), output.pragma.end(), [&pragmas](const std::string& pragma) {
         //     pragmas.append(std::format("{}\n", pragma));
@@ -119,11 +92,11 @@ void ShaderCompiler::ShaderConductorTest() {
             ShaderMetaType::GetNameToTypeMap().at(input.shader_name),
             output));
 
-        ShaderResourceManager::GetInstance().GetShaderTypeMap(input.target_info.shader_platform).AddShader(input.shader_name.c_str(), shader);
+        ShaderResourceManager::GetInstance().GetShaderTypeMap().AddShader(input.shader_name.c_str(), shader);
         //test code
         const auto& param_map = output.parameter_map;
 
-        auto& map = ShaderResourceManager::GetInstance().GetShaderCodeMap(EShaderPlatform::SP_VULKAN_SM6);
+        auto& map = ShaderResourceManager::GetInstance().GetShaderCodeMap();
 
         TestReflectionShader::Parameters params;
         RHIBatchedShaderParameters       batched_params;

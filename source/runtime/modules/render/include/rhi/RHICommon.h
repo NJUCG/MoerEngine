@@ -760,23 +760,6 @@ inline bool IsGlobalBindingPointValid(const GlobalBufferStaticBindingPoint bindi
     return binding_point_ < MAX_GLOBAL_BUFFER_GLOBAL_BINDING_POINT;
 }
 
-/** The list of flags declaring which binding models are allowed for a global buffer layout. */
-enum class EGlobalBufferBindingFlags : uint8_t {
-    /** If set, the global buffer can be bound as an RHI shader parameter on an RHI shader (i.e. RHISetConstantGlobalBuffer). */
-    CONSTANT = 1 << 0,
-
-    /** If set, the global buffer can be bound globally through a static slot (i.e. RHISetStaticGlobalBuffers). */
-    STATIC = 1 << 1,
-
-    /** If set, the uniform buffer can be bound globally or per-shader, depending on the use case. Only one binding model should be
-	 *  used at a time, and RHI validation will emit an error if both are used for a particular uniform buffer at the same time. This
-	 *  is designed for difficult cases where a fixed single binding model would produce an unnecessary maintenance burden. Using this
-	 *  disables some RHI validation errors for global bindings, so use with care.
-	 */
-    ALL = STATIC | CONSTANT
-};
-ENUM_BIT_OP_IMPL(EGlobalBufferBindingFlags, FLAG)
-
 enum EGlobalBufferLifeScope {
     SINGLE_DRAW,
     SINGLE_FRAME,
@@ -883,6 +866,10 @@ enum EShaderPlatform : uint16_t {
     SP_NumBits       = 16
 
 };
+BEGIN_ENUM_STR_DEFINITION(EShaderPlatform)
+ENUM_STR_ELEMENT(SP_WIN_D3D_SM6)
+ENUM_STR_ELEMENT(SP_VULKAN_SM6)
+END_ENUM_STR_DEFINITION(EShaderPlatform)
 static_assert(SP_Num < (1 << SP_NumBits) && "");
 #pragma endregion
 

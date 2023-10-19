@@ -54,7 +54,7 @@ int main(int argc, const char** argv) {
 
     engine.Init(info);
     engine.PostInit();
-    RenderThreadSuspendTest(engine);
+    // RenderThreadSuspendTest(engine);
     engine.Run();
 
     engine.Quit();

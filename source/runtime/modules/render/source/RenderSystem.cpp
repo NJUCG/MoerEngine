@@ -1,37 +1,40 @@
 #include "RenderSystem.h"
 #include "log/LogSystem.h"
 #include "platform/Platform.h"
-#include "rhi/RHICommon.h"
-#include "rhi/vulkan/IVulkanRHI.h"
+
 #include "shader/Shader.h"
-#include "shader/ShaderCommon.h"
 #include "shader/ShaderCompiler.h"
 #include "shader/ShaderResourceManager.h"
 #include "taskgraph/GraphTask.h"
 #include "taskgraph/TaskSystem.h"
 #include "taskgraph/ThreadManager.h"
 #include "RenderThread.h"
-#include <chrono>
-#include <ratio>
-#include <thread>
+
 #include "rhi/RHI.h"
+#include "rhi/vulkan/IVulkanRHI.h"
 namespace Moer {
     RenderSystem::~RenderSystem() {
     }
 
     void RenderSystem::Init() {
         //init rhi first
+        InitRHI();
 
         InitShaderResources();
 
-        //
         StartRenderThread();
     }
     //use in single thread mode
     void RenderSystem::Tick() {
     }
     void RenderSystem::ShutDown() {
+
         StopRenderThread();
+
+        FreeShaderResources();
+
+        ShutDownRHI();
+
         LOG_INFO("Render System Shut down.");
     }
     class FakeRHI : public IVulkanRHI {
@@ -52,8 +55,17 @@ namespace Moer {
         ShaderResourceManager::Init(platform);
         ShaderResourceManager::GetInstance().PrepareGlobalShaderResources();
 
-        ShaderResourceManager::GetInstance().GetShaderTypeMap(platform);
+        Shader* shader = ShaderResourceManager::GetShader<TestReflectionShader>();
+
         int i = 1;
+    }
+
+    void RenderSystem::ShutDownRHI() {
+        g_rhi->ShutDown();
+    }
+
+    void RenderSystem::FreeShaderResources() {
+        ShaderResourceManager::ShutDown();
     }
 
 }// namespace Moer
