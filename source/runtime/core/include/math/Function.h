@@ -2,6 +2,7 @@
 
 #include "Base.h"
 #include "Matrix.h"
+#include "Constant.h"
 
 #include <cmath>
 #include <utility>

@@ -43,24 +43,24 @@ concept concept_t_is_vec3 = requires(TNum t) {
 };
 
 template<typename T>
-inline void hash_combine(uint16_t& seed, const T& val) {
+inline void HashCombine(uint16_t& seed, const T& val) {
     seed ^= std::hash<T>{}(val) + 0x9e37U + (seed << 3) + (seed >> 1);
 }
 
 template<typename T>
-inline void hash_combine(uint32_t& seed, const T& val) {
+inline void HashCombine(uint32_t& seed, const T& val) {
     seed ^= std::hash<T>{}(val) + 0x9e3779b9U + (seed << 6) + (seed >> 2);
 }
 
 template<typename T>
-inline void hash_combine(uint64_t& seed, const T& val) {
+inline void HashCombine(uint64_t& seed, const T& val) {
     seed ^= std::hash<T>{}(val) + 0x9e3779b97f4a7c15LLU + (seed << 12) + (seed >> 4);
 }
 
 template<typename T, typename... Rest>
-inline void hash_combine(uint64_t& seed, const T& v, const Rest&... rest) {
+inline void HashCombine(uint64_t& seed, const T& v, const Rest&... rest) {
     seed ^= std::hash<T>{}(v) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-    (hash_combine(seed, rest), ...);
+    (HashCombine(seed, rest), ...);
 }
 #define MAKE_HASHABLE_64(type, ...)     \
     uint64_t hash() const {             \
@@ -127,15 +127,15 @@ inline uint32_t GetHash(const char* value) {
 template<concept_t_is_vec2 T>
 uint32_t GetHash(const T& value) {
     uint32_t hash = GetHash(value.x);
-    hash_combine(hash, GetHash(value.y));
+    HashCombine(hash, GetHash(value.y));
     return hash;
 }
 
 template<concept_t_is_vec3 T>
 uint32_t GetHash(const T& value) {
     uint32_t hash = GetHash(value.x);
-    hash_combine(hash, GetHash(value.y));
-    hash_combine(hash, GetHash(value.z));
+    HashCombine(hash, GetHash(value.y));
+    HashCombine(hash, GetHash(value.z));
     return hash;
 }
 
@@ -172,7 +172,7 @@ public:
     }
 };
 
-struct __declspec(dllexport) Hash64City {
+struct Hash64City {
 public:
     std::array<uint8_t, 8> hash_code{};
 
@@ -184,6 +184,7 @@ public:
 
     std::string ToString();
     void        FromString(std::string_view& src);
+    void        FromData(const uint8_t* data, size_t size);
     void        Update(std::string_view& src);
     void        Update(const uint8_t* data, uint32_t size);
     //todo: Update() not utterly correct
@@ -203,15 +204,15 @@ static_assert(sizeof(Hash64City) == 8);
 namespace inner_utils {
     template<typename T, std::size_t... Is>
     constexpr std::array<T, sizeof...(Is)>
-    create_array(T value, std::index_sequence<Is...>) {
+    CreateArray(T value, std::index_sequence<Is...>) {
         // cast Is to void to remove the warning: unused value
         return {{(static_cast<void>(Is), value)...}};
     }
 }// namespace inner_utils
 
 template<std::size_t N, typename T>
-constexpr std::array<T, N> create_array(const T& value) {
-    return inner_utils::create_array(value, std::make_index_sequence<N>());
+constexpr std::array<T, N> CreateArray(const T& value) {
+    return inner_utils::CreateArray(value, std::make_index_sequence<N>());
 }
 
 class HashedName {
@@ -266,21 +267,21 @@ private:
     }
 };
 
-namespace std {
-    template<>
-    class hash<HashedName> {
-    public:
-        size_t operator()(const HashedName& value) const {
-            return GetHash(value);
-        }
-    };
-    template<>
-    struct equal_to<HashedName> {
-    public:
-        bool operator()(const HashedName& lhs, const HashedName& rhs) const {
-            return strcmp(lhs.value, rhs.value) == 1;
-        }
-    };
-}// namespace std
+// namespace std {
+//     template<>
+//     class hash<HashedName> {
+//     public:
+//         size_t operator()(const HashedName& value) const {
+//             return GetHash(value);
+//         }
+//     };
+//     template<>
+//     struct equal_to<HashedName> {
+//     public:
+//         bool operator()(const HashedName& lhs, const HashedName& rhs) const {
+//             return strcmp(lhs.value, rhs.value) == 1;
+//         }
+//     };
+// }// namespace std
 
 #endif// !HASHABLE_H

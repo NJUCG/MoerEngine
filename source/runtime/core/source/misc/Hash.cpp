@@ -33,6 +33,11 @@ void Hash64City::FromString(std::string_view& src) {
     auto* start = (uint64_t*)(&hash_code[0]);
     *start      = CityHash64(src.data(), src.size());
 }
+void Hash64City::FromData(const uint8_t* data, size_t size) {
+
+    auto* start = (uint64_t*)(&hash_code[0]);
+    *start      = CityHash64((const char*)data, size);
+}
 void Hash64City::Update(std::string_view& src) {
     uint64_t src_seed           = *(uint64_t*)(&hash_code[0]);
     *(uint64_t*)(&hash_code[0]) = CityHash64WithSeed(src.data(), src.length(), src_seed);

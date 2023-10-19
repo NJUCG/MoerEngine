@@ -2,6 +2,9 @@
 #define MOREENGINE_SHADER_PARAM_TYPE_INFO
 
 #include "math/Math.h"
+#include "math/Matrix.h"
+#include "math/Quaternion.h"
+#include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "shader/ShaderCommon.h"
 #include "RenderCommon.h"
@@ -311,6 +314,51 @@ struct TShaderParameterTypeInfo<AttachmentBindingSlots> {
 };
 
 //todo: quaternion
+
+template<>
+struct TShaderParameterTypeInfo<Moer::Matrix4x4f> {
+    static constexpr EShaderBindingBaseType BaseType = SBT_FLOAT32;
+
+    static constexpr int32_t s_num_rows                     = 4;
+    static constexpr int32_t s_num_columns                  = 4;
+    static constexpr int32_t s_num_elements                 = 0;
+    static constexpr int32_t alignment                      = 16;
+    static constexpr bool    b_is_stored_in_constant_buffer = true;
+
+    using TParamPtr    = AlignType<Moer::Matrix4x4f, alignment>;
+    using InstanceType = Moer::Matrix4x4f;
+    static const ShaderParametersMetadata* GetStructMetadata() { return nullptr; }
+};
+
+template<>
+struct TShaderParameterTypeInfo<Moer::Matrix3x4f> {
+    static constexpr EShaderBindingBaseType BaseType = SBT_FLOAT32;
+
+    static constexpr int32_t s_num_rows                     = 3;
+    static constexpr int32_t s_num_columns                  = 4;
+    static constexpr int32_t s_num_elements                 = 0;
+    static constexpr int32_t alignment                      = 16;
+    static constexpr bool    b_is_stored_in_constant_buffer = true;
+
+    using TParamPtr    = AlignType<Moer::Matrix3x4f, alignment>;
+    using InstanceType = Moer::Matrix3x4f;
+    static const ShaderParametersMetadata* GetStructMetadata() { return nullptr; }
+};
+
+template<>
+struct TShaderParameterTypeInfo<Moer::Quaternion> {
+    static constexpr EShaderBindingBaseType BaseType = SBT_FLOAT32;
+
+    static constexpr int32_t s_num_rows                     = 1;
+    static constexpr int32_t s_num_columns                  = 4;
+    static constexpr int32_t s_num_elements                 = 0;
+    static constexpr int32_t alignment                      = 16;
+    static constexpr bool    b_is_stored_in_constant_buffer = true;
+
+    using TParamPtr    = AlignType<Moer::Quaternion, alignment>;
+    using InstanceType = Moer::Quaternion;
+    static const ShaderParametersMetadata* GetStructMetadata() { return nullptr; }
+};
 //todo: matrix
 
 #endif

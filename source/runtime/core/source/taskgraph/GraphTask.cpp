@@ -12,7 +12,7 @@
 //};
 
 GraphEventRef GraphEvent::CreateGraphEvent() {
-    auto instance = new GraphEvent();
+    auto* instance = new GraphEvent();
     return instance;
 };
 
@@ -23,7 +23,7 @@ bool GraphEvent::IsComplete() {
     return m_subsequents.IsClosed();
 }
 void BaseGraphTask::QueueTask(EThread::Type currentThread, bool shouldWakeupWorker) {
-    TaskGraph::GetInterface().QueueTask(this, m_preferdThread, currentThread, shouldWakeupWorker);
+    TaskGraph::GetInterface().QueueTask(this, m_preferd_thread, currentThread, shouldWakeupWorker);
 }
 
 void BaseGraphTask::PrerequestsComplete(EThread::Type currentThread, int32_t finishedCount, bool unlock) {
@@ -35,22 +35,22 @@ void BaseGraphTask::PrerequestsComplete(EThread::Type currentThread, int32_t fin
 
 void GraphEvent::TryUnlockSubsequents(std::vector<BaseGraphTask*>& tasks, EThread::Type currentThread) {
     if (tasks.size() > 0) {
-        GraphEventArray tempEvents;
-        std::swap(m_events_to_wait, tempEvents);// m_events removed
+        GraphEventArray temp_events;
+        std::swap(m_events_to_wait, temp_events);// m_events removed
 
         //test events to wait has complete
-        bool generateEmptyTask = false;
-        for (int32_t i = 0; i < tempEvents.size(); i++) {
-            GraphEvent* _event = tempEvents[i].Get();
-            if (!_event->IsComplete()) {
-                generateEmptyTask = true;
+        bool generate_empty_task = false;
+        for (int32_t i = 0; i < temp_events.size(); i++) {
+            GraphEvent* event = temp_events[i].Get();
+            if (!event->IsComplete()) {
+                generate_empty_task = true;
                 break;
             }
         }
 
-        if (generateEmptyTask) {
-            EThread::Type collectionThread = EThread::SetPriority(EThread::UNKNOWN_THREAD, EThread::HIGH_PRI);
-            GraphTask<EmptyGraphTask>::CreateTask(GraphEventRef(this), &tempEvents, currentThread).ConstructAndDispatchWhenReady(collectionThread);
+        if (generate_empty_task) {
+            EThread::Type collection_thread = EThread::SetPriority(EThread::UNKNOWN_THREAD, EThread::HIGH_PRI);
+            GraphTask<EmptyGraphTask>::CreateTask(GraphEventRef(this), &temp_events, currentThread).ConstructAndDispatchWhenReady(collection_thread);
         }
         return;
     }
@@ -62,7 +62,7 @@ void GraphEvent::TryUnlockSubsequents(std::vector<BaseGraphTask*>& tasks, EThrea
         should_wake_up_worker = task->ConditionalQueueTask(currentThread, should_wake_up_worker);
     }
 }
-void GraphEvent::tryUnlockSubsequents(EThread::Type currentThread) {
+void GraphEvent::TryUnlockSubsequents(EThread::Type currentThread) {
     std::vector<BaseGraphTask*> tasks;
     TryUnlockSubsequents(tasks, currentThread);
 }

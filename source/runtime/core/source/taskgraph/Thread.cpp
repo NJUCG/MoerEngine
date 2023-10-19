@@ -18,15 +18,15 @@ uint32_t TaskThreadAnyThread::ProcessTasks() {
             if (m_queue.m_close) break;
             continue;
         }
-        task->execute(m_graphTasks, m_threadType);
+        task->Execute(m_graphTasks, m_threadType);
     }
     assert(--m_queue.callAmount == 0);
     return 0;
 }
 
-uint32_t NamedThread::processTasks(QueueIndex queueIndex, bool allowHang) {
+uint32_t NamedThread::ProcessTasks(QueueIndex queueIndex, bool allowHang) {
     assert(++m_queue[queueIndex].callAmount == 1);
-    bool isRenderQueue = (m_threadType & EThread::INDEX_MASK) == EThread::ERenderThread;
+    // bool isRenderQueue = (m_threadType & EThread::INDEX_MASK) == EThread::ERenderThread;
     while (!m_queue[queueIndex].m_should_return) {
         BaseGraphTask* task = m_queue[queueIndex].m_queue.Pop(0, allowHang);//set avaliable thread bit
         if (!task) {
@@ -38,7 +38,7 @@ uint32_t NamedThread::processTasks(QueueIndex queueIndex, bool allowHang) {
                 break;
             }
         } else {
-            task->execute(m_graphTasks, m_threadType);
+            task->Execute(m_graphTasks, m_threadType);
         }
     }
     assert(--m_queue[queueIndex].callAmount == 0);
