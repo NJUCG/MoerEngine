@@ -43,117 +43,42 @@ void VulkanRHIImpl::ShutDown() {
 #pragma region resources creation
 RHISamplerRef  VulkanRHIImpl::RHICreateSampler(const RHISamplerInitializer& _initializer) {
     VulkanRHISampler* vk_sampler = new VulkanRHISampler();
-
-    auto sampler_create_info = VulkanRHISamplerInitializer::FromRHISamplerInitializer(m_device, _initializer);
-
-    VK_CHECK_RESULT(vkCreateSampler(*m_device, &sampler_create_info, nullptr, &vk_sampler->m_sampler));
+    vk_sampler->GenerateSamplerFromInitializer(m_device, _initializer);
 
     return RHISamplerRef(vk_sampler);
 }
 
 RHIRasterizationStateRef VulkanRHIImpl::RHICreateRasterizationState(const RHIRasterizationStateInitializer& _init) {
-    VkPipelineRasterizationStateCreateInfo rasterization_state_create_info{};
-    rasterization_state_create_info.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-    rasterization_state_create_info.pNext                   = nullptr;
-    rasterization_state_create_info.flags                   = 0;
-    rasterization_state_create_info.depthClampEnable        = _init.b_depth_clamp_enable ? VK_TRUE : VK_FALSE;
-    rasterization_state_create_info.rasterizerDiscardEnable = VK_FALSE;// MARK...
-    rasterization_state_create_info.polygonMode             = VulkanRHIRasterizationState::METoVKPolygonMode(_init.fill_mode);
-    rasterization_state_create_info.cullMode                = VulkanRHIRasterizationState::METoVKCullModeFlags(_init.cull_mode);
-    rasterization_state_create_info.frontFace               = VK_FRONT_FACE_COUNTER_CLOCKWISE;// MARK...
-    rasterization_state_create_info.depthBiasEnable         = _init.b_depth_bias ? VK_TRUE : VK_FALSE;
-    rasterization_state_create_info.depthBiasConstantFactor = _init.depth_bias;
-    rasterization_state_create_info.depthBiasClamp          = _init.depth_bias_clamp;
-    rasterization_state_create_info.depthBiasSlopeFactor    = _init.depth_bias_slop_factor;
-    rasterization_state_create_info.lineWidth               = 1.0f;
-
-    VulkanRHIRasterizationState* vk_rasterization_state = new VulkanRHIRasterizationState(rasterization_state_create_info);
+    VulkanRHIRasterizationState* vk_rasterization_state = new VulkanRHIRasterizationState();
+    vk_rasterization_state->GenerateRasterizationStateFromInitializer(_init);
 
     return RHIRasterizationStateRef(vk_rasterization_state);
 }
 
 RHIDepthStencilStateRef VulkanRHIImpl::RHICreateDepthStencilState(const RHIDepthStencilStateInitializer& _init) {
-    VkPipelineDepthStencilStateCreateInfo depth_stencil_state_create_info{};
-    depth_stencil_state_create_info.sType                 = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-    depth_stencil_state_create_info.pNext                 = nullptr;
-    depth_stencil_state_create_info.flags                 = 0;
-    depth_stencil_state_create_info.depthTestEnable       = (_init.b_enable_depth_write || _init.depth_test_op != ECompareOption::CO_ALWAYS) ? VK_TRUE : VK_FALSE;
-    depth_stencil_state_create_info.depthWriteEnable      = _init.b_enable_depth_write;
-    depth_stencil_state_create_info.depthCompareOp        = VulkanRHIDepthStencilState::METoVKCompareOp(_init.depth_test_op);
-    depth_stencil_state_create_info.depthBoundsTestEnable = VK_FALSE;// MARK...
-    depth_stencil_state_create_info.minDepthBounds        = 0.0f;
-    depth_stencil_state_create_info.maxDepthBounds        = 1.0f;
-
-    depth_stencil_state_create_info.stencilTestEnable = (_init.b_enable_front_face_stencil || _init.b_enable_back_face_stencil) ? VK_TRUE : VK_FALSE;
-    depth_stencil_state_create_info.front.failOp      = VulkanRHIDepthStencilState::METoVKStencilOp(_init.front_face_stencil_fail_stencilOp);
-    depth_stencil_state_create_info.front.passOp      = VulkanRHIDepthStencilState::METoVKStencilOp(_init.front_face_pass_stencil_op);
-    depth_stencil_state_create_info.front.depthFailOp = VulkanRHIDepthStencilState::METoVKStencilOp(_init.front_face_depth_fail_stencilOp);
-    depth_stencil_state_create_info.front.compareOp   = VulkanRHIDepthStencilState::METoVKCompareOp(_init.front_face_stencil_test);
-    depth_stencil_state_create_info.front.compareMask = _init.stencil_readmask;
-    depth_stencil_state_create_info.front.writeMask   = _init.stencil_writemask;
-    depth_stencil_state_create_info.front.reference   = 0;
-
-    if (_init.b_enable_back_face_stencil) {
-        depth_stencil_state_create_info.back.failOp      = VulkanRHIDepthStencilState::METoVKStencilOp(_init.back_face_stencil_fail_stencil_op);
-        depth_stencil_state_create_info.back.passOp      = VulkanRHIDepthStencilState::METoVKStencilOp(_init.back_face_pass_stencil_op);
-        depth_stencil_state_create_info.back.depthFailOp = VulkanRHIDepthStencilState::METoVKStencilOp(_init.back_face_depth_fail_stencil_op);
-        depth_stencil_state_create_info.back.compareOp   = VulkanRHIDepthStencilState::METoVKCompareOp(_init.back_face_stencil_test);
-        depth_stencil_state_create_info.back.compareMask = _init.stencil_readmask;
-        depth_stencil_state_create_info.back.writeMask   = _init.stencil_writemask;
-        depth_stencil_state_create_info.back.reference   = 0;
-    } else {
-        depth_stencil_state_create_info.front = depth_stencil_state_create_info.back;
-    }
-
-    VulkanRHIDepthStencilState* vk_depth_stencil_state = new VulkanRHIDepthStencilState(depth_stencil_state_create_info);
+    VulkanRHIDepthStencilState* vk_depth_stencil_state = new VulkanRHIDepthStencilState();
+    vk_depth_stencil_state->GenerateDepthStencilStateFromInitializer(_init);
 
     return RHIDepthStencilStateRef(vk_depth_stencil_state);
 }
 
 RHIMultisampleStateRef VulkanRHIImpl::RHICreateMultiSampleState(const RHIMultisampleStateInitializer& _init) {
-    VkPipelineMultisampleStateCreateInfo multisample_state_create_info{};
-    multisample_state_create_info.sType                 = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    multisample_state_create_info.pNext                 = nullptr;
-    multisample_state_create_info.flags                 = 0;
-    multisample_state_create_info.rasterizationSamples  = VulkanRHIMultisampleState::METoVKSampleCountFlagBits(_init.sample_count);
-    multisample_state_create_info.sampleShadingEnable   = _init.b_sample_shading;
-    multisample_state_create_info.minSampleShading      = _init.min_sample_shading;
-    multisample_state_create_info.pSampleMask           = nullptr;// MARK...
-    multisample_state_create_info.alphaToCoverageEnable = _init.b_alpha_to_converge;
-    multisample_state_create_info.alphaToOneEnable      = _init.b_alpha_to_one;
-
-    VulkanRHIMultisampleState* vk_multisample_state = new VulkanRHIMultisampleState(multisample_state_create_info);
+    VulkanRHIMultisampleState* vk_multisample_state = new VulkanRHIMultisampleState();
+    vk_multisample_state->GenerateMultisampleStateFromInitializer(_init);
 
     return RHIMultisampleStateRef(vk_multisample_state);
 }
 
-RHIBlendStateRef VulkanRHIImpl::RHICreateBlendState(const RHIBlendStateInitializer& _init) { return RHIBlendStateRef{}; }
+RHIBlendStateRef VulkanRHIImpl::RHICreateBlendState(const RHIBlendStateInitializer& _init) {
+    VulkanRHIBlendState* vk_blend_state = new VulkanRHIBlendState();
+    vk_blend_state->GenerateBlendStateFromInitializer(_init);
+
+    return RHIBlendStateRef(vk_blend_state);
+}
 
 RHIVertexInputStateRef VulkanRHIImpl::RHICreateVertexInputState(const VertexInputStateInitializerList& _init) {
-    const uint32_t descriptor_count = _init.size();
-
-    std::vector<VkVertexInputBindingDescription>   bindings(descriptor_count);
-    std::vector<VkVertexInputAttributeDescription> attributes(descriptor_count);// MARK...
-    for (uint32_t i = 0; i < descriptor_count; i++) {
-        bindings[i].binding    = _init[i].binding_index;
-        bindings[i].stride     = _init[i].stride;
-        bindings[i].inputRate  = VulkanRHIVertexInputState::METoVKVertexInputRate(_init[i].input_rate);
-        attributes[i].location = _init[i].attribute_index;
-        attributes[i].binding  = _init[i].binding_index;
-        attributes[i].format   = VulkanRHIVertexInputState::METoVKFormat(_init[i].type);
-        attributes[i].offset   = _init[i].offset;
-    }
-
-    VkPipelineVertexInputStateCreateInfo input_state_create_info{};
-    input_state_create_info.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    input_state_create_info.pNext                           = nullptr;
-    input_state_create_info.flags                           = 0;
-    input_state_create_info.vertexBindingDescriptionCount   = descriptor_count;
-    input_state_create_info.pVertexBindingDescriptions      = bindings.data();
-    input_state_create_info.vertexAttributeDescriptionCount = descriptor_count;
-    input_state_create_info.pVertexAttributeDescriptions    = attributes.data();
-
-    VulkanRHIVertexInputState* vk_input_state = new VulkanRHIVertexInputState(input_state_create_info);
+    VulkanRHIVertexInputState* vk_input_state = new VulkanRHIVertexInputState();
+    vk_input_state->GenerateVertexInputStateFromInitializer(_init);
 
     return RHIVertexInputStateRef(vk_input_state);
 }
@@ -169,7 +94,11 @@ RHIComputeShaderRef VulkanRHIImpl::RHICreateComputeShader(const std::vector<uint
 
 RHIShaderLibraryRef VulkanRHIImpl::RHICreateShaderLibrary(EShaderPlatform _platform, const std::string& _file_path, const std::string& name) { return RHIShaderLibraryRef{}; }
 
-RHIFenceRef VulkanRHIImpl::RHICreateFence(const std::string& name) { return RHIFenceRef{}; }
+RHIFenceRef VulkanRHIImpl::RHICreateFence(const std::string& name) {
+    VulkanRHIFence* vk_fence = new VulkanRHIFence(name, m_device);
+
+    return RHIFenceRef(vk_fence);
+}
 
 /* create cpu visible buffer for direct data transfer */
 RHIStagingBufferRef VulkanRHIImpl::RHICreateStagingBuffer() { return RHIStagingBufferRef{}; }

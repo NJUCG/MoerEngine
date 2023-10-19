@@ -14,15 +14,7 @@
 class VulkanDevice;
 class VulkanRHIImpl;
 
-class VulkanMemoryManager final {
-public:
-    VulkanMemoryManager()                                      = delete;
-    VulkanMemoryManager(const VulkanMemoryManager&)            = delete;
-    VulkanMemoryManager& operator=(const VulkanMemoryManager&) = delete;
-
-    static VmaMemoryUsage MEGenerateVmaMemoryUsage(EBufferUsageFlags _flags);
-};
-
+#pragma region forward definitions
 class VulkanRHICommandList;
 class VulkanRHITexture;
 class VulkanRHIAmplificationShader;
@@ -60,12 +52,34 @@ class VulkanRHIVertexInputState;
 class VulkanRHIVertexShader;
 class VulkanRHIViewableResource;
 class VulkanRHIViewport;
+#pragma endregion
+
+#pragma region utils definition
+
+class VulkanMemoryManager final {
+public:
+    VulkanMemoryManager()                                      = delete;
+    VulkanMemoryManager(const VulkanMemoryManager&)            = delete;
+    VulkanMemoryManager& operator=(const VulkanMemoryManager&) = delete;
+
+    static VmaMemoryUsage MEGenerateVmaMemoryUsage(EBufferUsageFlags _flags);
+};
+
+#pragma endregion
 
 class VulkanRHISampler final : public RHISampler {
     friend VulkanRHIImpl;
 
 public:
     explicit VulkanRHISampler() : RHISampler() {}
+
+    void GenerateSamplerFromInitializer(const VulkanDevice* _device, const RHISamplerInitializer& _initializer);
+
+private:
+    VkFilter             METoVKMinMagFilterMode(ESamplerFilter _filter);
+    VkSamplerMipmapMode  METoVKMipmapMode(ESamplerFilter _filter);
+    VkSamplerAddressMode METoVKWrapMode(ESamplerAddressMode _address_mode);
+    VkCompareOp          METoVKCompareOp(ESamplerCompareFunction _compare_op);
 
 private:
     VkSampler m_sampler;
@@ -75,23 +89,35 @@ class VulkanRHIVertexInputState final : public RHIVertexInputState {
     friend VulkanRHIImpl;
 
 public:
-    explicit VulkanRHIVertexInputState(const VkPipelineVertexInputStateCreateInfo& _info) : RHIVertexInputState(), m_input_state_create_info(_info) {}
+    explicit VulkanRHIVertexInputState() : RHIVertexInputState() {}
 
-    static VkVertexInputRate METoVKVertexInputRate(EVertexInputRate _me_rate);
-    static VkFormat          METoVKFormat(EVertexElementType _me_format);
+    void GenerateVertexInputStateFromInitializer(const VertexInputStateInitializerList& _init);
+
+private:
+    VkVertexInputRate METoVKVertexInputRate(EVertexInputRate _me_rate);
+    VkFormat          METoVKFormat(EVertexElementType _me_format);
 
 private:
     VkPipelineVertexInputStateCreateInfo m_input_state_create_info;
+
+    uint32_t m_binding_count   = 0;
+    uint32_t m_attribute_count = 0;
+
+    std::array<VkVertexInputBindingDescription, MAX_VERTEX_ELEMENT_COUNT>   m_bindings;
+    std::array<VkVertexInputAttributeDescription, MAX_VERTEX_ELEMENT_COUNT> m_attributes;
 };
 
 class VulkanRHIRasterizationState : public RHIRasterizationState {
     friend VulkanRHIImpl;
 
 public:
-    explicit VulkanRHIRasterizationState(const VkPipelineRasterizationStateCreateInfo& _info) : RHIRasterizationState(), m_rasterization_state_create_info(_info) {}
+    explicit VulkanRHIRasterizationState() : RHIRasterizationState() {}
 
-    static VkPolygonMode   METoVKPolygonMode(ERasterizerFillMode _fill_mode);
-    static VkCullModeFlags METoVKCullModeFlags(ERasterizerCullMode _cull_mode);
+    void GenerateRasterizationStateFromInitializer(const RHIRasterizationStateInitializer& _init);
+
+private:
+    VkPolygonMode   METoVKPolygonMode(ERasterizerFillMode _fill_mode);
+    VkCullModeFlags METoVKCullModeFlags(ERasterizerCullMode _cull_mode);
 
 private:
     VkPipelineRasterizationStateCreateInfo m_rasterization_state_create_info;
@@ -99,10 +125,13 @@ private:
 
 class VulkanRHIDepthStencilState : public RHIDepthStencilState {
 public:
-    explicit VulkanRHIDepthStencilState(const VkPipelineDepthStencilStateCreateInfo& _info) : RHIDepthStencilState(), m_depth_stencil_state_create_info(_info) {}
+    explicit VulkanRHIDepthStencilState() : RHIDepthStencilState() {}
 
-    static VkCompareOp METoVKCompareOp(ECompareOption _compare_op);
-    static VkStencilOp METoVKStencilOp(EStencilOp _stencil_op);
+    void GenerateDepthStencilStateFromInitializer(const RHIDepthStencilStateInitializer& _init);
+
+private:
+    VkCompareOp METoVKCompareOp(ECompareOption _compare_op);
+    VkStencilOp METoVKStencilOp(EStencilOp _stencil_op);
 
 private:
     VkPipelineDepthStencilStateCreateInfo m_depth_stencil_state_create_info;
@@ -112,13 +141,33 @@ class VulkanRHIMultisampleState : public RHIMultisampleState {
     friend VulkanRHIImpl;
 
 public:
-    explicit VulkanRHIMultisampleState(const VkPipelineMultisampleStateCreateInfo& _info) : RHIMultisampleState(), m_multisample_state_create_info(_info) {}
+    explicit VulkanRHIMultisampleState() : RHIMultisampleState() {}
 
-    static VkSampleCountFlagBits METoVKSampleCountFlagBits(uint32_t _me_count);
+    void GenerateMultisampleStateFromInitializer(const RHIMultisampleStateInitializer& _init);
+
+private:
+    VkSampleCountFlagBits METoVKSampleCountFlagBits(uint32_t _me_count);
 
 private:
     VkPipelineMultisampleStateCreateInfo m_multisample_state_create_info;
 };
+
+class VulkanRHIBlendState : public RHIBlendState {
+public:
+    explicit VulkanRHIBlendState() : RHIBlendState() {}
+
+    void GenerateBlendStateFromInitializer(const RHIBlendStateInitializer& _init);
+
+private:
+    VkBlendOp     METoVKBlendOp(EBlendOperation _blend_op);
+    VkBlendFactor METoVKBlendFactor(EBlendFactor _blend_factor);
+
+private:
+    VkPipelineColorBlendStateCreateInfo m_blend_state_create_info;
+};
+
+#pragma region shader definitions
+#pragma endregion
 
 #pragma region pipeline states definitions
 
@@ -129,6 +178,9 @@ public:
 private:
     VkPipeline m_pipeline;
 };
+#pragma endregion
+
+#pragma region global buffer definitions
 #pragma endregion
 
 #pragma region viewable resources definitions
@@ -156,6 +208,38 @@ private:
         VmaAllocation alloc;
     } m_alloc;
 };
+#pragma endregion
+
+#pragma region shader param
+#pragma endregion
+
+#pragma region synchronization
+
+class VulkanRHIFence final : public RHIFence {
+public:
+    VulkanRHIFence(const std::string& _name, VulkanDevice* _device);
+    bool Signaled() const final override;
+
+private:
+    VulkanDevice* m_device;
+    VkFence       m_fence;
+};
+
+#pragma endregion
+
+#pragma region viewable resources view definitions
+#pragma endregion
+
+#pragma region graphic pipeline definitions
+#pragma endregion
+
+#pragma region raytracing
+#pragma endregion
+
+#pragma region render query
+#pragma endregion
+
+#pragma region RDG resource creater
 #pragma endregion
 
 #endif//VULKAN_RHI_RESOURCE_H
