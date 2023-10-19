@@ -830,7 +830,7 @@ struct PipelineParametersBinding {
 /* fences in dx12, fence and timeline semaphore in vulkan */
 class RHIFence : public RHIResource {
 public:
-    RHIFence(std::string _name) : RHIResource(RRT_GPU_FENCE), name(_name) {}
+    RHIFence(const std::string& _name) : RHIResource(RRT_GPU_FENCE), name(_name) {}
     virtual bool Signaled() const = 0;
 
 protected:
