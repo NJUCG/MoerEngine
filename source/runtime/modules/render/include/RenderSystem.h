@@ -11,7 +11,9 @@ namespace Moer {
 
     private:
         static void InitShaderResources();
+        static void FreeShaderResources();
         static void InitRHI();
+        static void ShutDownRHI();
         RenderSystem() = default;
     };
 };// namespace Moer

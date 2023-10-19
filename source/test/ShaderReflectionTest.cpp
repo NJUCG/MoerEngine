@@ -4,10 +4,10 @@
 #include "shader/ShaderCommon.h"
 #include "misc/Hash.h"
 #include "log/LogSystem.h"
-BEGIN_SHADER_UNIFORM_STRUCT_DEFINITION(TestParameters)
+BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(TestParameters)
 
 DEFINE_SHADER_PARAM(Moer::Vector2i, rect)
-END_SHADER_UNIFORM_STRUCT_DEFINITION(Parameters)
+END_SHADER_CONSTANT_STRUCT_DEFINITION(Parameters)
 
 class TestGlobalShader : public Shader {
 
@@ -22,14 +22,14 @@ public:
     END_ROOT_PARAMETER_DEFINITION(Parameters)
 };
 
-void test() {
+void Test() {
     TestGlobalShader::Parameters* pass;
     const auto&                   members          = TestGlobalShader::Parameters::GetMembers();
-    const auto                    struct_mata_data = TestGlobalShader::Parameters::TypeInfo::GetStructMetadata();
+    const auto* const             struct_mata_data = TestGlobalShader::Parameters::TypeInfo::GetStructMetadata();
     int                           i                = 1;
 }
 int main() {
-    test();
-    ShaderCompiler::ShaderConductorTest();
+    Test();
+    ShaderCompiler::ShaderCompileTest();
     return 0;
 }

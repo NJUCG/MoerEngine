@@ -4,7 +4,6 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "shader/ShaderCommon.h"
-#include "shader/ShaderMap.h"
 #include "shader/ShaderResource.h"
 #include <array>
 #include <unordered_map>
@@ -21,10 +20,10 @@ public:
         return GetInstance().GetShader(meta_type);
     }
 
-    ShaderCodeResourceMap& GetShaderCodeMap(EShaderPlatform _platform) {
+    ShaderCodeResourceMap& GetShaderCodeMap() {
         return *code_resources;
     }
-    ShaderTypeResourceMap& GetShaderTypeMap(EShaderPlatform _platform) {
+    ShaderTypeResourceMap& GetShaderTypeMap() {
         return *type_resources;
     }
 

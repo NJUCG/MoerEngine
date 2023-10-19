@@ -19,7 +19,6 @@ class VertexFactoryType;
     {                                                                    \
         static ShaderParametersMetadata s_struct_metadata(               \
             ParameterUsage,                                              \
-            EGlobalBufferBindingFlags::CONSTANT,                         \
             #StructureName,                                              \
             sizeof(StructureName),                                       \
             StructureName::GetMembers());                                \
@@ -32,30 +31,6 @@ class VertexFactoryType;
 #define END_ROOT_PARAMETER_DEFINITION(StructureName) \
     END_SHADER_PARAMETER_DEFINITION(StructureName, IS_ROOT)
 
-// #define BEGIN_CONSTANTS_DEFINITION(StructureName) \
-//     INNER_BEGIN_SHADER_PARAMETER_DEFINITION(StructureName, INNER_GET_STRUCTURE_METADATA_IMPL(StructureName, EShaderParameterUseCase::SHADER_CONSTANTS))
-
-// #define END_CONSTANTS_DEFINITION(StructureName) \
-//     END_SHADER_PARAMETER_DEFINITION(StructureName)
-
-// #define BEGIN_UBV_TABLE_DEFINITION(StructureName) \
-//     INNER_BEGIN_SHADER_PARAMETER_DEFINITION(StructureName, INNER_GET_STRUCTURE_METADATA_IMPL(StructureName, EShaderParameterUseCase::SHADER_CBV_TABLE))
-
-// #define END_UBV_TABLE_DEFINITION(StructureName) \
-//     END_SHADER_PARAMETER_DEFINITION(StructureName)
-
-// #define BEGIN_SRV_TABLE_DEFINITION(StructureName) \
-//     INNER_BEGIN_SHADER_PARAMETER_DEFINITION(StructureName, INNER_GET_STRUCTURE_METADATA_IMPL(StructureName, EShaderParameterUseCase::SHADER_SRV_TABLE))
-
-// #define END_SRV_TABLE_DEFINITION(StructureName) \
-//     END_SHADER_PARAMETER_DEFINITION(StructureName)
-
-// #define BEGIN_UAV_TABLE_DEFINITION(StructureName) \
-//     INNER_BEGIN_SHADER_PARAMETER_DEFINITION(StructureName, INNER_GET_STRUCTURE_METADATA_IMPL(StructureName, EShaderParameterUseCase::SHADER_UAV_TABLE))
-
-// #define END_UAV_TABLE_DEFINITION(StructureName) \
-//     END_SHADER_PARAMETER_DEFINITION(StructureName)
-
 #define INNER_DEFINE_GET_ROOT_PARAMETER(StructureName, IS_ROOT) \
     static const ShaderParametersMetadata* GetParametersMetaData();
 
@@ -64,13 +39,13 @@ class VertexFactoryType;
         return StructureName::TypeInfo::GetStructMetadata();         \
     }
 /**
- * @brief Uniform buffer table, means descriptor set layout which contains uniform buffers, or CBV table in D3D12
+ * @brief Uniform buffer table, means descriptor set layout which contains constant buffers, or CBV table in D3D12
  * 
  */
-#define BEGIN_SHADER_UNIFORM_STRUCT_DEFINITION(StructureName) \
-    INNER_BEGIN_SHADER_PARAMETER_DEFINITION(StructureName, INNER_GET_STRUCTURE_METADATA_IMPL(StructureName, EShaderParameterUseCase::SHADER_UNIFORM_STRUCT), )
+#define BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(StructureName) \
+    INNER_BEGIN_SHADER_PARAMETER_DEFINITION(StructureName, INNER_GET_STRUCTURE_METADATA_IMPL(StructureName, EShaderParameterUseCase::SHADER_CONSTANT_STRUCT), )
 
-#define END_SHADER_UNIFORM_STRUCT_DEFINITION(StructureName) \
+#define END_SHADER_CONSTANT_STRUCT_DEFINITION(StructureName) \
     END_SHADER_PARAMETER_DEFINITION(StructureName, )
 
 #define INNER_BEGIN_SHADER_PARAMETER_DEFINITION(StructureName, GetStructMetadataFunctionImpl, ...)                           \
@@ -165,14 +140,11 @@ public:                                                                         
 #define DEFINE_SHADER_PARAM_SAMPLER_ARRAY(HLSLType, MemberName, NumElements) \
     INTERNAL_DEFINE_SHADER_PARAM_IMPL(TShaderResourceParameterTypeInfo<RHISampler* [NumElements]>, RHISampler*, MemberName, HLSLType, EShaderPrecisionModifier::FLOAT, SBT_SAMPLER)
 
-#define DEFINE_SHADER_PARAM_SET(StructType, MemberName) \
-    INTERNAL_DEFINE_SHADER_PARAM_IMPL(StructType::TypeInfo, StructType, MemberName, , EShaderPrecisionModifier::FLOAT, SBT_NESTED_STRUCT)
+// #define DEFINE_SHADER_PARAM_SET(StructType, MemberName) \
+//     INTERNAL_DEFINE_SHADER_PARAM_IMPL(StructType::TypeInfo, StructType, MemberName, , EShaderPrecisionModifier::FLOAT, SBT_NESTED_STRUCT)
 
 // #define DEFINE_SHADER_PARAM_STRUCT_ARRAY(StructType, MemberName, NumElements) \
 //     INTERNAL_DEFINE_SHADER_PARAM_IMPL(TShaderParameterStructureTypeInfo<MemberName[NumElements]>, StructType, MemberName, , EShaderPrecisionModifier::FLOAT, SBT_DESCRIPTOR_TABLE)
-
-#define DEFINE_SHADER_PARAM_TABLE(StructType, MemberName) \
-    INTERNAL_DEFINE_SHADER_PARAM_IMPL(TShaderParameterStructureTypeInfo<StructType>, StructType, MemberName, , EShaderPrecisionModifier::FLOAT, SBT_DESCRIPTOR_TABLE)
 
 #define DEFINE_SHADER_PARAM(MemberType, MemberName) \
     INTERNAL_DEFINE_SHADER_PARAM_IMPL(TShaderParameterTypeInfo<MemberType>, MemberType, MemberName, , EShaderPrecisionModifier::FLOAT, TShaderParameterTypeInfo<MemberType>::BaseType)

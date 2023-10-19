@@ -13,6 +13,11 @@ extern const char* g_global_shader_resource_root_dir;
 extern const char* g_global_shader_resource_output_dir;
 
 struct ShaderCompiledInitializer;
+
+/**
+ * @brief Binding Parameter Enum
+ * 
+ */
 enum class EShaderParameterType : uint8_t {
     LOOSE_DATA,
     CBV,
@@ -26,6 +31,21 @@ enum class EShaderParameterType : uint8_t {
     Num,
     NumBits = 4
 };
+inline bool IsParameterResource(EShaderParameterType _base_type) {
+
+    switch (_base_type) {
+
+        case EShaderParameterType::CBV:
+        case EShaderParameterType::SAMPLER:
+        case EShaderParameterType::SRV:
+        case EShaderParameterType::UAV:
+            return true;
+        case EShaderParameterType::BINDLESS_RESOURCE_INDEX:
+        case EShaderParameterType::BINDLESS_SAMPLER_INDEX:
+        default: break;
+    }
+    return false;
+}
 BEGIN_ENUM_STR_DEFINITION(EShaderParameterType)
 
 ENUM_STR_ELEMENT(LOOSE_DATA)
@@ -45,22 +65,18 @@ enum class EShaderPrecisionModifier : uint8_t {
 };
 ENUM_BIT_OP_IMPL(EShaderPrecisionModifier)
 
-/** The use case of the global buffer structures. */
+/** The use case of parameter struct. */
 enum class EShaderParameterUseCase : uint8_t {
     /** Stand alone shader parameter struct used for render passes and shader parameters. */
     SHADER_ROOT_PARAMETERS,
 
-    SHADER_CONSTANTS,
-
-    SHADER_SRV_TABLE,
-
-    SHADER_UAV_TABLE,
-
-    SHADER_CBV_TABLE,
-
-    SHADER_UNIFORM_STRUCT
+    /** For Structured buffer creation */
+    SHADER_CONSTANT_STRUCT
 };
-
+/**
+ * @brief Shader Param meta data for Shader Root Parameters and Structured Buffer Struct
+ * 
+ */
 class ShaderParametersMetadata {
 public:
     /** A member of a shader parameter structure. */
@@ -156,26 +172,15 @@ public:
     };
 
     RHI_API ShaderParametersMetadata(
-        EShaderParameterUseCase           _use_case,
-        EGlobalBufferBindingFlags         _binding_flags,
-        const char*                       _struct_name,
-        uint32_t                          _size,
-        const std::vector<Member>&        _members,
-        bool                              _b_force_complete_initialization = false,
-        RHIGlobalBufferLayoutInitializer* _out_layout_initializer          = nullptr);
+        EShaderParameterUseCase    _use_case,
+        const char*                _struct_name,
+        uint32_t                   _size,
+        const std::vector<Member>& _members,
+        bool                       _b_force_complete_initialization = false);
 
     RHI_API virtual ~ShaderParametersMetadata();
 
-    RHI_API void GetNestedStructs(std::vector<const ShaderParametersMetadata*>& _out_nested_structs) const;
-
     const char* GetStructTypeName() const { return struct_name; }
-
-    EGlobalBufferBindingFlags GetBindingFlags() const { return binding_flags; }
-
-    EGlobalBufferBindingFlags GetPreferredBindingFlag() const {
-        // Decay to static when both binding flags are specified.
-        return binding_flags != EGlobalBufferBindingFlags::ALL ? binding_flags : EGlobalBufferBindingFlags::STATIC;
-    }
 
     uint32_t                GetSize() const { return size; }
     EShaderParameterUseCase GetUseCase() const { return use_case; }
@@ -191,36 +196,12 @@ public:
 
     const std::vector<Member>& GetMembers() const { return members; }
 
-    // /** Find a member for a given offset. */
-    // RHI_API void FindMemberFromOffset(
-    //     uint16_t                                 MemberOffset,
-    //     const ShaderParametersMetadata**         OutContainingStruct,
-    //     const ShaderParametersMetadata::Member** OutMember,
-    //     int32_t*                                 ArrayElementId,
-    //     std::string*                             NamePrefix) const;
-
     /** Returns the full C++ member name from it's byte offset in the structure. */
     RHI_API std::string GetMemberNameByOffset(uint16_t _member_offset) const;
 
-    //    static RHI_API TLinkedList<FShaderParametersMetadata*>*& GetStructList();
-    //    /** Speed up finding the uniform buffer by its name */
-    //    static RHI_API std::map<SHA256Hash, FShaderParametersMetadata*>& GetNameStructMap();
     inline bool IsLayoutInitialized() const { return layout != nullptr; }
 
     void InitializeLayout();
-    /** Iterate recursively over all FShaderParametersMetadata. */
-    template<typename TParameterFunction>
-    void IterateStructureMetadataDependencies(TParameterFunction Lambda) const {
-        for (const ShaderParametersMetadata::Member& member : members) {
-            const ShaderParametersMetadata* new_parameters_metadata = member.GetStructMetadata();
-
-            if (new_parameters_metadata) {
-                new_parameters_metadata->IterateStructureMetadataDependencies(Lambda);
-            }
-        }
-
-        Lambda(this);
-    }
 
 private:
     /** Name of the structure type in C++ and shader code. */
@@ -232,18 +213,11 @@ private:
     /** The use case of this shader parameter struct. */
     const EShaderParameterUseCase use_case;
 
-    /** The binding model used by this parameter struct. */
-    const EGlobalBufferBindingFlags binding_flags;
-
     /** Layout of all the resources in the shader parameter struct. */
     RHIShaderRootParameterLayout* layout{};
 
     /** List of all members. */
     std::vector<Member> members;
-
-    // static std::vector<RHIShaderRootParameterLayout> root_parameter_layouts;
-
-    // RHI_API void InitializeLayout(RHIGlobalBufferLayoutInitializer* OutLayoutInitializer = nullptr);
 };
 namespace std {
     template<>
@@ -267,7 +241,10 @@ struct alignas(4) ShaderTargetInfo {
 
 typedef uint32_t ShaderTypeIndex;
 
-//contains parameter info
+/**
+ * @brief Shader Type Meta Data
+ * 
+ */
 class ShaderMetaType {
 public:
     using ConstructShaderInstanceProc = std::function<class Shader*(const ShaderCompiledInitializer&)>;
@@ -287,9 +264,12 @@ public:
     };
     static RENDER_CORE_API std::unordered_map<std::string, ShaderMetaType*>& GetNameToTypeMap();
 
-    const HashedName GetNameHash() const { return hash_type_name; }
-    EShaderType      GetShaderType() const { return shader_type; }
-    const HashedName GetFileNameHash() const { return hash_file_name; }
+    /**
+     * @brief Get the Shader Type Enum
+     * 
+     * @return EShaderType 
+     */
+    EShaderType GetShaderType() const { return shader_type; }
 
     const char*                     GetName() const { return type_name; }
     const char*                     GetFileName() const { return file_name; }
@@ -299,18 +279,25 @@ public:
     Shader* ConstructShaderInstance(const ShaderCompiledInitializer& _initializer) { return construct_shader_instance(_initializer); }
 
 private:
-    //todo: currently only support one file one shader, this field for multiple shader single file
-    const char*                     type_name;
-    HashedName                      hash_type_name;
-    const char*                     file_name;
-    HashedName                      hash_file_name;
-    const char*                     entry_point;
-    EShaderType                     shader_type;
-    ShaderTypeIndex                 type_index;
+    // shader type name in cpp
+    const char* type_name;
+    // shader file name/relative path
+    const char* file_name;
+    // shader entry point
+    const char* entry_point;
+    // shader type enum, Vertex, Fragment .etc
+    EShaderType shader_type;
+    // shader root parameter meta data
     const ShaderParametersMetadata* parameter_meta_data;
-    ConstructShaderInstanceProc     construct_shader_instance;
+    // shader construct function, for sub class creation
+    ConstructShaderInstanceProc construct_shader_instance;
 };
-
+/**
+ * @brief Registrate All used shader types on launching,
+    collect Shader meta data create function for later 
+    shader type creation.
+ * 
+ */
 class ShaderTypeRegistration {
 
 public:
@@ -321,56 +308,35 @@ public:
     static void SubmitRegistrations();
 };
 
-class ShaderPipelineType {
-    enum class Type : uint8_t {
-        Graphics,
-        Mesh
-    };
-
-public:
-    virtual ~ShaderPipelineType() {}
-    ShaderPipelineType(
-        const char*           _name,
-        const ShaderMetaType* _vertex_shader_info,
-        const ShaderMetaType* _geometry_shader_info,
-        const ShaderMetaType* _fragment_shader_info);
-
-    ShaderPipelineType(
-        const char*           _name,
-        const ShaderMetaType* _vertex_shader_info,
-        const ShaderMetaType* _geometry_shader_info);
-
-    friend uint32_t GetHash(const ShaderPipelineType* _p_value) { return _p_value == nullptr ? 0 : _p_value->hash_index; }
-
-    //todo: currently support only global shader
-    bool              IsGlobalShaderPipeline() const { return shader_stages[0]; }
-    const Hash64City& GetSourceCodehash(EShaderPlatform _platform) const;
-
-    const char* GetName() const { return name; }
-    Hash64City  hash_name;
-    Hash64City  hash_file_name;
-
-    std::array<ShaderMetaType*, ST_Num> shader_stages;
-
-    uint32_t    hash_index;
-    bool        b_initialized;
-    const char* name;
-};
-// per parameter allocation in global map
+/**
+ * @brief Shader Root Parameter info
+ * 
+ */
 struct ParameterInfo {
+    // source pipeline stage
     ERHIPipelineStageFlags stage{ERHIPipelineStageFlags::PS_NONE};
-    int16_t                slot : 8  = -1;
-    int16_t                space : 8 = -1;
-    int8_t                 num       = 0;
-    EShaderParameterType   type{EShaderParameterType::Num};
+    // slot in dx12 while binding in Vulkan
+    int16_t slot : 8 = -1;
+    // space in dx12 while set in Vulkan
+    int16_t space : 8 = -1;
+    // array size, invalid for root cbv
+    int8_t num = 0;
+    // parameter type enum
+    EShaderParameterType type{EShaderParameterType::Num};
 };
 static_assert(sizeof(ParameterInfo) == 8);
+
+/**
+ * @brief ParameterInfo Container,
+    index with parameter name
+ * 
+ */
 struct ShaderParametersInfoMap {
     friend class ShaderCompiler;
     friend class DXCompiler;
 
 public:
-    const std::unordered_map<std::string, ParameterInfo>& GetShaderParameterInfoMap() {
+    const std::unordered_map<std::string, ParameterInfo>& GetShaderParameterInfoMap() const {
         return param_map;
     }
 
@@ -405,15 +371,17 @@ struct ShaderCompilerOutput {
     ShaderCompilerOutput& operator=(ShaderCompilerOutput&&)      = default;
     ShaderCompilerOutput& operator=(const ShaderCompilerOutput&) = default;
 };
-
+/**
+ * @brief ALL Compiled information needed for Shader Type Creation
+ * 
+ */
 struct ShaderCompiledInitializer {
     const ShaderMetaType*          type_info;
     ShaderTargetInfo               target_info;
     const std::vector<uint8_t>&    compiled_code;
     const ShaderParametersInfoMap& parameter_map;
-    const Hash64City&              output_hash;
-    //    const VertexFactoryType* VertexFactoryType;
-    uint32_t        num_instructions;
+    const Hash64City&              compiled_hash;
+
     uint32_t        code_size;
     RENDER_CORE_API ShaderCompiledInitializer(
         const ShaderMetaType*       _shader_type,
@@ -445,6 +413,10 @@ FORCEINLINE EShaderPlatform GetShaderPlatformByRHIType(ERHIType _type) {
     return EShaderPlatform::SP_VULKAN_SM6;
 }
 
+/**
+ * @brief for registrate shader compile jobs
+ * 
+ */
 class ShaderCompileRegistration {
 public:
     static void RegistrateCompileWorkIfNeed(const ShaderMetaType& _shader_type);

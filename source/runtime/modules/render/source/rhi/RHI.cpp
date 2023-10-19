@@ -5,6 +5,7 @@
 #include "rhi/RHIResource.h"
 #include "shader/Shader.h"
 #include "shader/ShaderCompiler.h"
+#include "shader/ShaderResourceManager.h"
 RHI* g_rhi = nullptr;
 
 // global shader
@@ -12,7 +13,6 @@ RHI* g_rhi = nullptr;
 #include "rhi/RHICommandList.h"
 #include "rhi/RHICommandQueue.h"
 #include "shader/ShaderParameterMacros.h"
-#include "shader/ShaderMap.h"
 
 RHIBufferRef CreateBufferFromData(const RHIBufferCreateInfo& info, uint32_t size, void* data) {
     RHIBufferRef buffer     = g_rhi->RHICreateBuffer(info);
@@ -21,9 +21,9 @@ RHIBufferRef CreateBufferFromData(const RHIBufferCreateInfo& info, uint32_t size
     g_rhi->RHIUnmapBuffer(buffer);
     return buffer;
 }
-BEGIN_SHADER_UNIFORM_STRUCT_DEFINITION(UniformStructure)
+BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(UniformStructure)
 
-END_SHADER_UNIFORM_STRUCT_DEFINITION(UniformStructure)
+END_SHADER_CONSTANT_STRUCT_DEFINITION(UniformStructure)
 class TestShader : public Shader {
     DEFINE_SHADER_TYPE(TestShader, Global, RHI_API)
 public:
@@ -45,15 +45,11 @@ void RHI::Test() {
 }
 
 void Test() {
-    Hash64City       city;
-    Hash64City       other;
-    std::string      name("name");
-    std::string_view view(name);
-    city.Update(view);
+
     g_rhi->Initialize();
 
     g_rhi->PostInit();
-    ShaderCompiler::ShaderConductorTest();
+    ShaderCompiler::ShaderCompileTest();
 
     RHIGraphicsPipelineStateInitializer init;
     init.num_samples                 = 1;
@@ -85,7 +81,7 @@ void Test() {
         .SetStride(sizeof(uint16_t))
         .SetSize(sizeof(indices));
 
-    RHIBufferRef indexBuffer = CreateBufferFromData(buffer_info, sizeof(indices), (void*)indices);
+    RHIBufferRef index_buffer = CreateBufferFromData(buffer_info, sizeof(indices), (void*)indices);
 
     RHIBufferCreateInfo v_info;
     v_info.SetSize(16).SetStride(4).SetUsage(EBufferUsageFlags::VERTEX_BUFFER);
@@ -125,8 +121,8 @@ void Test() {
     command_list->EndRenderPass();
 
     RHICommandQueue*                         graphics_queue = g_rhi->CreateCommandQueue(ECommandQueueType::GRAPHICS);
-    const std::array<RHICommandListBase*, 1> _command_array{command_list};
-    graphics_queue->SubmitCommands(1, _command_array.data());
+    const std::array<RHICommandListBase*, 1> command_array{command_list};
+    graphics_queue->SubmitCommands(1, command_array.data());
 
     //global buffer
     // start offset
@@ -135,13 +131,14 @@ void Test() {
         g_rhi->RHICreateUnorderedAccessView(tex,
                                             RHIViewInfo::CreateTextureUAVInfo()
                                                 .SetFormat((PF_R8G8B8A8_SRGB)));
-    TestShader*            test_shader_vs;
+    TestShader*            test_shader_vs = (TestShader*)ShaderResourceManager::GetShader<TestShader>();
     TestShader::Parameters params;
 
     auto test_buff = g_rhi->RHICreateBuffer(buffer_info);
-    params.GetMembers();
-    params.write_target = test_view;
 
+    params.write_target = test_view;
+    for (const auto& iter : test_shader_vs->GetParametersMap().GetShaderParameterInfoMap()) {
+    };
     //command_list->SetBatchedShaderParameter();
     //VkSetDescriptorWrite()
 

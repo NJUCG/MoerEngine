@@ -27,7 +27,7 @@ protected:
 //     std::string file_path;
 //     std::string macro_definitions;
 // };
-struct ShaderEntry {
+struct ShaderCodeEntry {
     //shader compiled code
     std::vector<uint8_t> code;
     EShaderType          type;
@@ -37,19 +37,22 @@ struct ShaderEntry {
 class ShaderCodeResourceMap {
 
 public:
-    void AddShaderCompilerOutput(std::string shader_sort_key, const ShaderCompilerOutput& _output);
+    const ShaderCodeEntry* GetCodeEntry(const char*);
+    void                   AddShaderCompilerOutput(std::string shader_sort_key, const ShaderCompilerOutput& _output);
     // int32_t                                      GetIndexByHash(const Hash64City& _hash);
     // Hash64City                                   resource_hash;
     // std::vector<Hash64City>                      shader_hashes;
     // std::vector<ShaderEntry>                     shader_entries;
-    std::map<std::string, ShaderEntry> shader_code_entries;
-    std::shared_mutex                  rw_mutex;
 
 private:
     EShaderPlatform platform;
     friend class ShaderResourceManager;
     ShaderCodeResourceMap() {}
     ShaderCodeResourceMap(EShaderPlatform _platform) : platform(_platform) {}
+
+protected:
+    std::map<std::string, ShaderCodeEntry> shader_code_entries;
+    std::shared_mutex                      rw_mutex;
 };
 
 //for RHI shader creation
