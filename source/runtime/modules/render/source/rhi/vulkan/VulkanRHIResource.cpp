@@ -6,10 +6,138 @@
 
 #include "VulkanDevice.h"
 
+#include "rhi/vulkan/misc/VulkanMacroUtils.h"
 #include "log/LogSystem.h"
 
 VmaMemoryUsage VulkanMemoryManager::MEGenerateVmaMemoryUsage(EBufferUsageFlags _flags) {
     return VMA_MEMORY_USAGE_AUTO;
+}
+
+void VulkanRHISampler::GenerateSamplerFromInitializer(const VulkanDevice* _device, const RHISamplerInitializer& _initializer) {
+    VkSamplerCreateInfo sampler_create_info{};
+
+    sampler_create_info.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    sampler_create_info.flags        = 0;
+    sampler_create_info.magFilter    = METoVKMinMagFilterMode(_initializer.filter);
+    sampler_create_info.minFilter    = METoVKMinMagFilterMode(_initializer.filter);
+    sampler_create_info.mipmapMode   = METoVKMipmapMode(_initializer.filter);
+    sampler_create_info.addressModeU = METoVKWrapMode(_initializer.address_mode_u);
+    sampler_create_info.addressModeV = METoVKWrapMode(_initializer.address_mode_v);
+    sampler_create_info.addressModeW = METoVKWrapMode(_initializer.address_mode_w);
+    sampler_create_info.mipLodBias   = _initializer.mip_lod_bias;
+
+    sampler_create_info.maxAnisotropy = 1.0f;
+    if (_initializer.filter == SF_ANISOTROPIC_NEAREST || _initializer.filter == SF_ANISOTROPIC_LINEAR) {
+        sampler_create_info.maxAnisotropy = std::clamp(static_cast<float>(_initializer.max_anisotropy), 1.0f, _device->GetProperties().limits.maxSamplerAnisotropy);
+    }
+    sampler_create_info.anisotropyEnable = sampler_create_info.maxAnisotropy > 1.0f ? VK_TRUE : VK_FALSE;
+
+    sampler_create_info.compareEnable = _initializer.compare_op != SCF_NEVER ? VK_TRUE : VK_FALSE;
+    sampler_create_info.compareOp     = METoVKCompareOp(_initializer.compare_op);
+    sampler_create_info.minLod        = _initializer.min_mip_level;
+    sampler_create_info.maxLod        = _initializer.max_mip_level;
+    sampler_create_info.borderColor   = _initializer.border_color == 0 ? VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK : VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+
+    VK_CHECK_RESULT(vkCreateSampler(*_device, &sampler_create_info, nullptr, &m_sampler));
+}
+
+VkFilter VulkanRHISampler::METoVKMinMagFilterMode(ESamplerFilter _filter) {
+    switch (_filter) {
+        case SF_NEAREST:
+            return VK_FILTER_NEAREST;
+        case SF_LINEAR:
+        case SF_CUBIC:
+            return VK_FILTER_LINEAR;
+        case SF_ANISOTROPIC_NEAREST:
+        case SF_ANISOTROPIC_LINEAR:
+            return VK_FILTER_LINEAR;
+        default:
+            LOG_CRITICAL("Unknown ESamplerFilter {:d}", static_cast<uint8_t>(_filter));
+            return VK_FILTER_MAX_ENUM;
+    }
+}
+
+VkSamplerMipmapMode VulkanRHISampler::METoVKMipmapMode(ESamplerFilter _filter) {
+    switch (_filter) {
+        case SF_NEAREST:
+        case SF_LINEAR:
+            return VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        case SF_CUBIC:
+            return VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        case SF_ANISOTROPIC_NEAREST:
+            return VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        case SF_ANISOTROPIC_LINEAR:
+            return VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        default:
+            LOG_CRITICAL("Unknown Mipmap ESamplerFilter {:d}", static_cast<uint8_t>(_filter));
+            return VK_SAMPLER_MIPMAP_MODE_MAX_ENUM;
+    }
+}
+
+VkSamplerAddressMode VulkanRHISampler::METoVKWrapMode(ESamplerAddressMode _address_mode) {
+    switch (_address_mode) {
+        case SAM_REPEAT:
+            return VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        case SAM_MIRRORED_REPEAT:
+            return VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;
+        case SAM_CLAMP_TO_EDGE:
+            return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        case SAM_CLAMP_TO_BORDER:
+            return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+        default:
+            LOG_CRITICAL("Unknown ESamplerAddressMode {:d}", static_cast<uint8_t>(_address_mode));
+            return VK_SAMPLER_ADDRESS_MODE_MAX_ENUM;
+    }
+}
+
+VkCompareOp VulkanRHISampler::METoVKCompareOp(ESamplerCompareFunction _compare_op) {
+    switch (_compare_op) {
+        case SCF_NEVER:
+            return VK_COMPARE_OP_NEVER;
+        case SCF_LESS:
+            return VK_COMPARE_OP_LESS;
+        case SCF_EQUAL:
+            return VK_COMPARE_OP_EQUAL;
+        case SCF_LESS_OR_EQUAL:
+            return VK_COMPARE_OP_LESS_OR_EQUAL;
+        case SCF_GREATER:
+            return VK_COMPARE_OP_GREATER;
+        case SCF_NOT_EQUAL:
+            return VK_COMPARE_OP_NOT_EQUAL;
+        case SCF_GREATER_OR_EQUAL:
+            return VK_COMPARE_OP_GREATER_OR_EQUAL;
+        case SCF_ALWAYS:
+            return VK_COMPARE_OP_ALWAYS;
+        default:
+            LOG_CRITICAL("Unknown ESamplerCompareFunction {:d}", static_cast<uint8_t>(_compare_op));
+            return VK_COMPARE_OP_MAX_ENUM;
+    }
+}
+
+void VulkanRHIVertexInputState::GenerateVertexInputStateFromInitializer(const VertexInputStateInitializerList& _init) {
+    for (uint32_t i = 0; i < MAX_VERTEX_ELEMENT_COUNT; ++i) {
+        if (_init[i].type == EVertexElementType::VET_None) {
+            break;
+        }
+        m_bindings[i].binding    = _init[i].binding_index;
+        m_bindings[i].stride     = _init[i].stride;
+        m_bindings[i].inputRate  = METoVKVertexInputRate(_init[i].input_rate);
+        m_attributes[i].location = _init[i].attribute_index;
+        m_attributes[i].binding  = _init[i].binding_index;
+        m_attributes[i].format   = METoVKFormat(_init[i].type);
+        m_attributes[i].offset   = _init[i].offset;
+
+        m_binding_count = _init[i].binding_index;
+        ++m_attribute_count;
+    }
+
+    m_input_state_create_info.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    m_input_state_create_info.pNext                           = nullptr;
+    m_input_state_create_info.flags                           = 0;
+    m_input_state_create_info.vertexBindingDescriptionCount   = m_binding_count;
+    m_input_state_create_info.pVertexBindingDescriptions      = m_bindings.data();
+    m_input_state_create_info.vertexAttributeDescriptionCount = m_attribute_count;
+    m_input_state_create_info.pVertexAttributeDescriptions    = m_attributes.data();
 }
 
 VkVertexInputRate VulkanRHIVertexInputState::METoVKVertexInputRate(EVertexInputRate _me_rate) {
@@ -74,6 +202,22 @@ VkFormat VulkanRHIVertexInputState::METoVKFormat(EVertexElementType _me_format) 
     }
 }
 
+void VulkanRHIRasterizationState::GenerateRasterizationStateFromInitializer(const RHIRasterizationStateInitializer& _init) {
+    m_rasterization_state_create_info.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    m_rasterization_state_create_info.pNext                   = nullptr;
+    m_rasterization_state_create_info.flags                   = 0;
+    m_rasterization_state_create_info.depthClampEnable        = _init.b_depth_clamp_enable ? VK_TRUE : VK_FALSE;
+    m_rasterization_state_create_info.rasterizerDiscardEnable = VK_FALSE;// MARK...
+    m_rasterization_state_create_info.polygonMode             = METoVKPolygonMode(_init.fill_mode);
+    m_rasterization_state_create_info.cullMode                = METoVKCullModeFlags(_init.cull_mode);
+    m_rasterization_state_create_info.frontFace               = VK_FRONT_FACE_COUNTER_CLOCKWISE;// MARK...
+    m_rasterization_state_create_info.depthBiasEnable         = _init.b_depth_bias ? VK_TRUE : VK_FALSE;
+    m_rasterization_state_create_info.depthBiasConstantFactor = _init.depth_bias;
+    m_rasterization_state_create_info.depthBiasClamp          = _init.depth_bias_clamp;
+    m_rasterization_state_create_info.depthBiasSlopeFactor    = _init.depth_bias_slop_factor;
+    m_rasterization_state_create_info.lineWidth               = 1.0f;
+}
+
 VkPolygonMode VulkanRHIRasterizationState::METoVKPolygonMode(ERasterizerFillMode _fill_mode) {
     switch (_fill_mode) {
         case ERasterizerFillMode::FM_FILL:
@@ -106,6 +250,39 @@ VkCullModeFlags VulkanRHIRasterizationState::METoVKCullModeFlags(ERasterizerCull
     }
 }
 
+void VulkanRHIDepthStencilState::GenerateDepthStencilStateFromInitializer(const RHIDepthStencilStateInitializer& _init) {
+    m_depth_stencil_state_create_info.sType                 = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    m_depth_stencil_state_create_info.pNext                 = nullptr;
+    m_depth_stencil_state_create_info.flags                 = 0;
+    m_depth_stencil_state_create_info.depthTestEnable       = (_init.b_enable_depth_write || _init.depth_test_op != ECompareOption::CO_ALWAYS) ? VK_TRUE : VK_FALSE;
+    m_depth_stencil_state_create_info.depthWriteEnable      = _init.b_enable_depth_write;
+    m_depth_stencil_state_create_info.depthCompareOp        = VulkanRHIDepthStencilState::METoVKCompareOp(_init.depth_test_op);
+    m_depth_stencil_state_create_info.depthBoundsTestEnable = VK_FALSE;// MARK...
+    m_depth_stencil_state_create_info.minDepthBounds        = 0.0f;
+    m_depth_stencil_state_create_info.maxDepthBounds        = 1.0f;
+
+    m_depth_stencil_state_create_info.stencilTestEnable = (_init.b_enable_front_face_stencil || _init.b_enable_back_face_stencil) ? VK_TRUE : VK_FALSE;
+    m_depth_stencil_state_create_info.front.failOp      = METoVKStencilOp(_init.front_face_stencil_fail_stencilOp);
+    m_depth_stencil_state_create_info.front.passOp      = METoVKStencilOp(_init.front_face_pass_stencil_op);
+    m_depth_stencil_state_create_info.front.depthFailOp = METoVKStencilOp(_init.front_face_depth_fail_stencilOp);
+    m_depth_stencil_state_create_info.front.compareOp   = METoVKCompareOp(_init.front_face_stencil_test);
+    m_depth_stencil_state_create_info.front.compareMask = _init.stencil_readmask;
+    m_depth_stencil_state_create_info.front.writeMask   = _init.stencil_writemask;
+    m_depth_stencil_state_create_info.front.reference   = 0;
+
+    if (_init.b_enable_back_face_stencil) {
+        m_depth_stencil_state_create_info.back.failOp      = METoVKStencilOp(_init.back_face_stencil_fail_stencil_op);
+        m_depth_stencil_state_create_info.back.passOp      = METoVKStencilOp(_init.back_face_pass_stencil_op);
+        m_depth_stencil_state_create_info.back.depthFailOp = METoVKStencilOp(_init.back_face_depth_fail_stencil_op);
+        m_depth_stencil_state_create_info.back.compareOp   = METoVKCompareOp(_init.back_face_stencil_test);
+        m_depth_stencil_state_create_info.back.compareMask = _init.stencil_readmask;
+        m_depth_stencil_state_create_info.back.writeMask   = _init.stencil_writemask;
+        m_depth_stencil_state_create_info.back.reference   = 0;
+    } else {
+        m_depth_stencil_state_create_info.front = m_depth_stencil_state_create_info.back;
+    }
+}
+
 VkCompareOp VulkanRHIDepthStencilState::METoVKCompareOp(ECompareOption _compare_op) {
     switch (_compare_op) {
         case ECompareOption::CO_NEVER:
@@ -131,7 +308,39 @@ VkCompareOp VulkanRHIDepthStencilState::METoVKCompareOp(ECompareOption _compare_
 }
 
 VkStencilOp VulkanRHIDepthStencilState::METoVKStencilOp(EStencilOp _stencil_op) {
-    return VK_STENCIL_OP_INCREMENT_AND_CLAMP;
+    switch (_stencil_op) {
+        case SO_KEEP:
+            return VK_STENCIL_OP_KEEP;
+        case SO_ZERO:
+            return VK_STENCIL_OP_ZERO;
+        case SO_REPLACE:
+            return VK_STENCIL_OP_REPLACE;
+        case SO_INCREMENT_AND_CLAMP:
+            return VK_STENCIL_OP_INCREMENT_AND_CLAMP;
+        case SO_DECREMENT_AND_CLAMP:
+            return VK_STENCIL_OP_DECREMENT_AND_CLAMP;
+        case SO_INVERT:
+            return VK_STENCIL_OP_INVERT;
+        case SO_INCREMENT_AND_WRAP:
+            return VK_STENCIL_OP_INCREMENT_AND_WRAP;
+        case SO_DECREMENT_AND_WRAP:
+            return VK_STENCIL_OP_DECREMENT_AND_WRAP;
+        default:
+            LOG_CRITICAL("Unsupported depth stencil operation: {}", static_cast<uint32_t>(_stencil_op));
+            return VK_STENCIL_OP_MAX_ENUM;
+    };
+}
+
+void VulkanRHIMultisampleState::GenerateMultisampleStateFromInitializer(const RHIMultisampleStateInitializer& _init) {
+    m_multisample_state_create_info.sType                 = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    m_multisample_state_create_info.pNext                 = nullptr;
+    m_multisample_state_create_info.flags                 = 0;
+    m_multisample_state_create_info.rasterizationSamples  = METoVKSampleCountFlagBits(_init.sample_count);
+    m_multisample_state_create_info.sampleShadingEnable   = _init.b_sample_shading;
+    m_multisample_state_create_info.minSampleShading      = _init.min_sample_shading;
+    m_multisample_state_create_info.pSampleMask           = nullptr;// MARK...
+    m_multisample_state_create_info.alphaToCoverageEnable = _init.b_alpha_to_converge;
+    m_multisample_state_create_info.alphaToOneEnable      = _init.b_alpha_to_one;
 }
 
 VkSampleCountFlagBits VulkanRHIMultisampleState::METoVKSampleCountFlagBits(uint32_t _me_count) {
@@ -153,6 +362,99 @@ VkSampleCountFlagBits VulkanRHIMultisampleState::METoVKSampleCountFlagBits(uint3
         default:
             LOG_CRITICAL("Unsupported multisample count: {}", static_cast<uint32_t>(_me_count));
             return VK_SAMPLE_COUNT_FLAG_BITS_MAX_ENUM;
+    }
+}
+
+void VulkanRHIBlendState::GenerateBlendStateFromInitializer(const RHIBlendStateInitializer& _init) {
+    const auto n = 1;// MARK...
+
+    std::vector<VkPipelineColorBlendAttachmentState> attachments(n);
+    for (size_t i = 0; i < n; ++i) {
+        auto& attachment_init = _init.attachments[i];
+        auto& attachment      = attachments[i];
+
+        attachment.blendEnable =
+            (attachment_init.color_blend_op != BO_ADD || attachment_init.color_dst_blend_factor != BF_ZERO || attachment_init.color_src_blend_factor != BF_ONE ||
+             attachment_init.alpha_blend_op != BO_ADD || attachment_init.alpha_dst_blend_factor != BF_ZERO || attachment_init.alpha_src_blend_factor != BF_ONE) ?
+                VK_TRUE :
+                VK_FALSE;
+        attachment.srcColorBlendFactor = VulkanRHIBlendState::METoVKBlendFactor(attachment_init.color_src_blend_factor);
+        attachment.dstColorBlendFactor = VulkanRHIBlendState::METoVKBlendFactor(attachment_init.color_dst_blend_factor);
+        attachment.colorBlendOp        = VulkanRHIBlendState::METoVKBlendOp(attachment_init.color_blend_op);
+        attachment.srcAlphaBlendFactor = VulkanRHIBlendState::METoVKBlendFactor(attachment_init.alpha_src_blend_factor);
+        attachment.dstAlphaBlendFactor = VulkanRHIBlendState::METoVKBlendFactor(attachment_init.alpha_dst_blend_factor);
+        attachment.alphaBlendOp        = VulkanRHIBlendState::METoVKBlendOp(attachment_init.alpha_blend_op);
+        attachment.colorWriteMask      = (attachment_init.color_write_mask & CW_RED) ? VK_COLOR_COMPONENT_R_BIT : 0;
+        attachment.colorWriteMask |= (attachment_init.color_write_mask & CW_GREEN) ? VK_COLOR_COMPONENT_G_BIT : 0;
+        attachment.colorWriteMask |= (attachment_init.color_write_mask & CW_BLUE) ? VK_COLOR_COMPONENT_B_BIT : 0;
+        attachment.colorWriteMask |= (attachment_init.color_write_mask & CW_ALPHA) ? VK_COLOR_COMPONENT_A_BIT : 0;
+    }
+
+    VkPipelineColorBlendStateCreateInfo blend_state_create_info{};
+    blend_state_create_info.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    blend_state_create_info.pNext           = nullptr;
+    blend_state_create_info.flags           = 0;
+    blend_state_create_info.logicOpEnable   = VK_FALSE;
+    blend_state_create_info.logicOp         = VK_LOGIC_OP_COPY;
+    blend_state_create_info.attachmentCount = n;
+    blend_state_create_info.pAttachments    = attachments.data();
+}
+
+VkBlendOp VulkanRHIBlendState::METoVKBlendOp(EBlendOperation _blend_op) {
+    switch (_blend_op) {
+        case BO_ADD:
+            return VK_BLEND_OP_ADD;
+        case BO_SUBTRACT:
+            return VK_BLEND_OP_SUBTRACT;
+        case BO_REVERSE_SUBTRACT:
+            return VK_BLEND_OP_REVERSE_SUBTRACT;
+        case BO_MIN:
+            return VK_BLEND_OP_MIN;
+        case BO_MAX:
+            return VK_BLEND_OP_MAX;
+        default:
+            LOG_CRITICAL("Unsupported color blend operation: {}", static_cast<uint32_t>(_blend_op));
+            return VK_BLEND_OP_MAX_ENUM;
+    }
+}
+
+VkBlendFactor VulkanRHIBlendState::METoVKBlendFactor(EBlendFactor _blend_factor) {
+    switch (_blend_factor) {
+        case BF_ZERO:
+            return VK_BLEND_FACTOR_ZERO;
+        case BF_ONE:
+            return VK_BLEND_FACTOR_ONE;
+        case BF_SRC_COLOR:
+            return VK_BLEND_FACTOR_SRC_COLOR;
+        case BF_ONE_MINUS_SRC_COLOR:
+            return VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR;
+        case BF_DST_COLOR:
+            return VK_BLEND_FACTOR_DST_COLOR;
+        case BF_ONE_MINUS_DST_COLOR:
+            return VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR;
+        case BF_SRC_ALPHA:
+            return VK_BLEND_FACTOR_SRC_ALPHA;
+        case BF_ONE_MINUS_SRC_ALPHA:
+            return VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        case BF_DST_ALPHA:
+            return VK_BLEND_FACTOR_DST_ALPHA;
+        case BF_ONE_MINUS_DST_ALPHA:
+            return VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA;
+        case BF_CONSTANT_ALPHA:
+            return VK_BLEND_FACTOR_CONSTANT_ALPHA;
+        case BF_ONE_MINUS_CONSTANT_ALPHA:
+            return VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA;
+        case BF_SRC1_COLOR:
+            return VK_BLEND_FACTOR_SRC1_COLOR;
+        case BF_ONE_MINUS_SRC1_COLOR:
+            return VK_BLEND_FACTOR_ONE_MINUS_SRC1_COLOR;
+        case BF_SRC1_ALPHA:
+            return VK_BLEND_FACTOR_SRC1_ALPHA;
+        case BF_ONE_MINUS_SRC1_ALPHA:
+            return VK_BLEND_FACTOR_ONE_MINUS_SRC1_ALPHA;
+        default:
+            LOG_CRITICAL("Unsupported color blend factor: {}", static_cast<uint32_t>(_blend_factor));
+            return VK_BLEND_FACTOR_MAX_ENUM;
     }
 }
 
@@ -193,4 +495,17 @@ VkBufferUsageFlags VulkanRHIBuffer::METoVKBufferUsageFlags(VulkanDevice* _device
     // }
 
     return vk_flags;
+}
+
+VulkanRHIFence::VulkanRHIFence(const std::string& _name, VulkanDevice* _device) : RHIFence(_name), m_device(_device) {
+    VkFenceCreateInfo create_info{};
+    create_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    create_info.pNext = nullptr;
+    create_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+
+    VK_CHECK_RESULT(vkCreateFence(*m_device, &create_info, nullptr, &m_fence));
+}
+
+bool VulkanRHIFence::Signaled() const {
+    return vkGetFenceStatus(*m_device, m_fence) == VK_SUCCESS;
 }
