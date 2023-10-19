@@ -2342,7 +2342,7 @@ struct RayTracingGeometryElement {
 
     uint32_t num_primitives;
 
-    EVertexElementType       vertex_element_type = VET_FLOAT3;
+    EVertexElementType       vertex_element_type = VET_Float3;
     ERayTracingGeometryFlags geometry_flags      = ERayTracingGeometryFlags::NONE;
     bool                     enabled;
     uint8_t                  padding_0;
