@@ -15,6 +15,7 @@ target_include_directories(
   ${target_name}
   PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>
+  PRIVATE $<BUILD_INTERFACE:${moer_third_party_dir}/spdlog/include>
 )
 
 message("[Engine] runtime dir: ${moer_source_dir}/runtime")
@@ -23,7 +24,7 @@ target_compile_options(${target_name} PUBLIC "$<$<COMPILE_LANG_AND_ID:CXX,MSVC>:
 
 target_link_libraries(${target_name} MoerEngineRuntime)
 
-if(UNIX AND NOT APPLE) 
+if( CMAKE_GENERATOR MATCHES "Ninja" OR UNIX AND NOT APPLE) 
     set(output_dir "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}") 
 else() 
     set(output_dir "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>") 

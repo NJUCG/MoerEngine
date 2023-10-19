@@ -1,8 +1,10 @@
 #include "rhi/RHI.h"
 #include "PixelFormat.h"
+#include "math/Base.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "shader/Shader.h"
+#include "shader/ShaderCompiler.h"
 RHI* g_rhi = nullptr;
 
 // global shader
@@ -10,7 +12,7 @@ RHI* g_rhi = nullptr;
 #include "rhi/RHICommandList.h"
 #include "rhi/RHICommandQueue.h"
 #include "shader/ShaderParameterMacros.h"
-#include "shader/ShaderLibrary.h"
+#include "shader/ShaderMap.h"
 
 RHIBufferRef CreateBufferFromData(const RHIBufferCreateInfo& info, uint32_t size, void* data) {
     RHIBufferRef buffer     = g_rhi->RHICreateBuffer(info);
@@ -19,15 +21,20 @@ RHIBufferRef CreateBufferFromData(const RHIBufferCreateInfo& info, uint32_t size
     g_rhi->RHIUnmapBuffer(buffer);
     return buffer;
 }
+BEGIN_SHADER_UNIFORM_STRUCT_DEFINITION(UniformStructure)
 
+END_SHADER_UNIFORM_STRUCT_DEFINITION(UniformStructure)
 class TestShader : public Shader {
     DEFINE_SHADER_TYPE(TestShader, Global, RHI_API)
 public:
-    BEGIN_SHADER_PARAMETER_DEFINITION(Parameters)
+    BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
 
     DEFINE_SHADER_PARAM_UAV(RWTexture2D, write_target)
+    DEFINE_SHADER_PARAM_SRV(StructuredBuffer, ubo)
+    DEFINE_SHADER_PARAM_CBV(StructuredBuffer, cbv)
     DEFINE_SHADER_PARAM_ATTACHMENT_BINDING()
-    END_SHADER_PARAMETER_DEFINITION(Parameters)
+
+    END_ROOT_PARAMETER_DEFINITION(Parameters)
 };
 
 IMPLEMENT_SHADER_TYPE(TestShader, "testFile.vert", "main", EShaderType::ST_VERTEX)
@@ -36,6 +43,7 @@ void RHI::Test() {
 
     TestShader::Parameters param;
 }
+
 void Test() {
     Hash64City       city;
     Hash64City       other;
@@ -45,6 +53,7 @@ void Test() {
     g_rhi->Initialize();
 
     g_rhi->PostInit();
+    ShaderCompiler::ShaderConductorTest();
 
     RHIGraphicsPipelineStateInitializer init;
     init.num_samples                 = 1;
@@ -126,11 +135,17 @@ void Test() {
         g_rhi->RHICreateUnorderedAccessView(tex,
                                             RHIViewInfo::CreateTextureUAVInfo()
                                                 .SetFormat((PF_R8G8B8A8_SRGB)));
-    TestShader::Parameters*
-        params;
-    params->write_target = test_view;
-    params->Attachments[0];
-    ;
+    TestShader*            test_shader_vs;
+    TestShader::Parameters params;
+
+    auto test_buff = g_rhi->RHICreateBuffer(buffer_info);
+    params.GetMembers();
+    params.write_target = test_view;
+
+    //command_list->SetBatchedShaderParameter();
+    //VkSetDescriptorWrite()
+
+    //rootSignature <=> pipelineLayout -> descriptorLayout descriptorLayoutBinding
 }
 
 // binding point 0

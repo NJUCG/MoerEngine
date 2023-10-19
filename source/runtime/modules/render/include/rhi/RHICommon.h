@@ -357,21 +357,22 @@ enum class EBufferUsageFlags : uint32_t {
     VERTEX_BUFFER     = 1 << 14,
     INDEX_BUFFER      = 1 << 15,
     STRUCTURED_BUFFER = 1 << 16,
-
+    UNIFORM_BUFFER    = 1 << 17,
+    TEXTURE_BUFFER    = 1 << 18,
     /** Buffer memory is allocated independently for multiple GPUs, rather than shared via driver aliasing */
-    MULTI_GPU_ALLOCATION = 1 << 17,
+    MULTI_GPU_ALLOCATION = 1 << 19,
 
     /**
 	 * Tells the render graph to not bother transferring across GPUs in multi-GPU scenarios.  Useful for cases where
 	 * a buffer is read back to the CPU (such as streaming request buffers), or written to each frame by CPU (such
 	 * as indirect arg buffers), and the other GPU doesn't actually care about the data.
 	*/
-    MULT_GPU_GRAPHICS_IGNORE = 1 << 18,
+    MULT_GPU_GRAPHICS_IGNORE = 1 << 20,
 
     /** Allows buffer to be used as a scratch buffer for building ray tracing acceleration structure,
 	 * which implies unordered access. Only changes the buffer alignment and can be combined with other usage.
 	**/
-    ACCELERATION_STRUCTURE_STORAGE = (1 << 19) | UNORDERED_ACCESS,
+    ACCELERATION_STRUCTURE_STORAGE = (1 << 21) | UNORDERED_ACCESS,
 
     // Helper bit-masks
     DYNAMIC = (LIFE_CYCLE_DYNAMIC | LIFE_CYCLE_ONE_FRAME),
@@ -430,7 +431,7 @@ enum ERHIResourceType {
     RRT_COMPUTE_PIPELINE_STATE,
     RRT_RAY_TRACING_PIPELINE_STATE,
     RRT_PIPELINE_BOUND_SHADER_STATE,
-    RRT_GLOBAL_BUFFER_LAYOUT,
+    RRT_ROOT_PARAMETER_LAYOUT,
     RRT_GLOBAL_BUFFER,
     RRT_BUFFER,
     RRT_TEXTURE,
@@ -497,12 +498,6 @@ enum ERHIPipelineStageFlags : uint32_t {
     PS_COMMAND_PREPROCESS_BIT_NV        = 0x00020000,
     PS_TASK_SHADER_BIT                  = 0x00080000,
     PS_MESH_SHADER                      = 0x00100000,
-    PS_SHADING_RATE_IMAGE_NV            = PS_FRAGMENT_SHADING_RATE_ATTACHMENT,
-    PS_RAY_TRACING_SHADER_NV            = PS_RAY_TRACING_SHADER,
-    PS_ACCELERATION_STRUCTURE_BUILD_NV  = PS_ACCELERATION_STRUCTURE_BUILD,
-    PS_TASK_SHADER_NV                   = PS_TASK_SHADER_BIT,
-    PS_MESH_SHADER_NV                   = PS_MESH_SHADER,
-    PS_NONE_KHR                         = PS_NONE
 };
 #pragma endregion
 
@@ -730,19 +725,28 @@ enum EShaderBindingBaseType : uint8_t {
     SBT_FLOAT32,
 
     // RHI resources not tracked by render graph.
-    SBT_TEXTURE,
+    SBT_CBV,
     SBT_SRV,
     SBT_UAV,
     SBT_SAMPLER,
 
-    SBT_NESTED_STRUCT,
-
     SBT_ATTACHMENT_BINDING_SLOTS,
-
+    SBT_ResourceNum     = 4,
+    SBT_ResourceNumBits = 4,
     SBT_Num,
     SBT_NumBits = 4,
 };
-
+BEGIN_ENUM_STR_DEFINITION(EShaderBindingBaseType)
+ENUM_STR_ELEMENT(SBT_INVALID)
+ENUM_STR_ELEMENT(SBT_BOOL)
+ENUM_STR_ELEMENT(SBT_INT32)
+ENUM_STR_ELEMENT(SBT_FLOAT32)
+ENUM_STR_ELEMENT(SBT_CBV)
+ENUM_STR_ELEMENT(SBT_SRV)
+ENUM_STR_ELEMENT(SBT_UAV)
+ENUM_STR_ELEMENT(SBT_SAMPLER)
+ENUM_STR_ELEMENT(SBT_ATTACHMENT_BINDING_SLOTS)
+END_ENUM_STR_DEFINITION(EShaderBindingBaseType)
 static_assert(SBT_Num <= (1 << SBT_NumBits), "SBT_Num will not fit on SBT_NumBits");
 using GlobalBufferStaticBindingPoint = uint8_t;
 
@@ -870,18 +874,13 @@ enum ERenderQueryType {
 
 #pragma region shader platform
 enum EShaderPlatform : uint16_t {
-    SP_WIN_D3D_SM5,
-    SP_METAL,
-    SP_WIN_D3D_ES3_1,
-    SP_METAL_SM5,
-    SP_WIN_VULKAN_ES3_1,
-    SP_VULKAN_SM5,
-    SP_VULKAN_SM6,
     SP_WIN_D3D_SM6,
-    SP_METAL_SM6,
-    SP_CUSTOM_PLATFORM_FIRST,
+    SP_VULKAN_SM6,
+
     SP_Num,
-    SP_NumBits = 16
+    SP_D3D_SM_Num    = 1,
+    SP_VULKAN_SM_Num = 1,
+    SP_NumBits       = 16
 
 };
 static_assert(SP_Num < (1 << SP_NumBits) && "");
@@ -929,4 +928,5 @@ struct SubpassSettings {
 };
 static_assert(sizeof(SubpassSettings) == 2);
 #pragma endregion
+
 #endif// !RHI_PLATFORM_COMMON_H

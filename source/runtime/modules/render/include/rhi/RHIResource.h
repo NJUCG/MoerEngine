@@ -21,7 +21,11 @@
 #include <string>
 #include <optional>
 #include <bitset>
-
+template<typename TStructuredParam>
+concept concept_is_shader_struct = requires(TStructuredParam t) {
+    std::is_same<typename TStructuredParam::TypeInfo::TParamPtr, TStructuredParam>();
+    t.GetStructMetadata();
+};
 #pragma region forward definitions
 class RHICommandListBase;
 class RHITexture;
@@ -55,7 +59,7 @@ class RHIShaderResourceView;
 class RHIStagingBuffer;
 class RHITexture;
 class RHITextureReference;
-class RHIGlobalBufferLayout;
+class RHIShaderRootParameterLayout;
 class RHIGlobalBuffer;
 class RHIUnorderedAccessView;
 class RHIVertexInputState;
@@ -63,10 +67,16 @@ class RHIVertexShader;
 class RHIViewableResource;
 class RHIViewport;
 
-using RHIAmplificationShaderRef       = CountableRef<RHIAmplificationShader>;
-using RHIBlendStateRef                = CountableRef<RHIBlendState>;
-using RHIShaderBoundStateRef          = CountableRef<RHIShaderBoundStateInput>;
-using RHIBufferRef                    = CountableRef<RHIBuffer>;
+template<concept_is_shader_struct TStructuredType>
+class RHIStructuredBuffer;
+
+using RHIAmplificationShaderRef = CountableRef<RHIAmplificationShader>;
+using RHIBlendStateRef          = CountableRef<RHIBlendState>;
+using RHIShaderBoundStateRef    = CountableRef<RHIShaderBoundStateInput>;
+using RHIBufferRef              = CountableRef<RHIBuffer>;
+
+template<concept_is_shader_struct TStructuredType>
+using RHIStructuredBufferRef          = CountableRef<RHIStructuredBuffer<TStructuredType>>;
 using RHIComputePipelineStateRef      = CountableRef<RHIComputePipelineState>;
 using RHIComputeShaderRef             = CountableRef<RHIComputeShader>;
 using RHIDepthStencilStateRef         = CountableRef<RHIDepthStencilState>;
@@ -92,7 +102,7 @@ using RHIShaderResourceViewRef        = CountableRef<RHIShaderResourceView>;
 using RHIStagingBufferRef             = CountableRef<RHIStagingBuffer>;
 using RHITextureRef                   = CountableRef<RHITexture>;
 using RHITextureReferenceRef          = CountableRef<RHITextureReference>;
-using RHIGlobalBufferLayoutRef        = CountableRef<RHIGlobalBufferLayout>;
+using RHIShaderRootParameterLayoutRef = CountableRef<RHIShaderRootParameterLayout>;
 using RHIGlobalBufferRef              = CountableRef<RHIGlobalBuffer>;
 using RHIUnorderedAccessViewRef       = CountableRef<RHIUnorderedAccessView>;
 using RHIVertexInputStateRef          = CountableRef<RHIVertexInputState>;
@@ -424,47 +434,43 @@ public:
         return lhs.constant_buffer_size == rhs.constant_buffer_size && lhs.static_slot == rhs.static_slot && lhs.binding_flags == rhs.binding_flags && lhs.inline_resources == rhs.inline_resources;
     }
 };
-class RHIGlobalBufferLayout : public RHIResource {
-public:
-    RHIGlobalBufferLayout() : RHIResource(RRT_GLOBAL_BUFFER_LAYOUT) {}
+struct RHIResourceParameterLayout {
+    //offset in parameter meta data to get name
+    uint16_t               offset;
+    uint16_t               stride;
+    EShaderBindingBaseType base_type;
 };
 
-/* Buffer for global shader usage, created using RHIGlobalBufferLayout */
-class RHIGlobalBuffer : public RHIResource {
-public:
-    RHIGlobalBuffer() : RHIResource(RRT_GLOBAL_BUFFER) {}
-    explicit RHIGlobalBuffer(const RHIGlobalBufferLayout& _layout){};
+struct RHIConstParameterLayout {
+    //origin offset in parameter data for copy
+    uint16_t               byte_offset;
+    uint16_t               byte_size;
+    EShaderBindingBaseType base_type;
 };
-
-template<typename TBufferStruct>
-class TUniformBufferRef : public RHIGlobalBufferRef {
-
-public:
-    /** Initializes the reference to null. */
-    TUniformBufferRef() = default;
-
-    //    /** Creates a uniform buffer with the given value, and returns a structured reference to it. */
-    //    static TUniformBufferRef<TBufferStruct> CreateUniformBufferImmediate(const TBufferStruct& Value, EUniformBufferLifeScope Usage)
-    //    {
-    //        return TUniformBufferRef<TBufferStruct>(RHICreateUniformBuffer(&Value, TUniformBufferMetadataHelper<TBufferStruct>::GetStructMetadata()->GetLayoutPtr(), Usage));
-    //    }
-    /** Creates a uniform buffer with the given value, and returns a structured reference to it. */
-    //    static TUniformBufferRef<TBufferStruct> CreateEmptyUniformBufferImmediate(EUniformBufferUsage Usage)
-    //    {
-    //        return TUniformBufferRef<TBufferStruct>(RHICreateUniformBuffer(nullptr, TUniformBufferMetadataHelper<TBufferStruct>::GetStructMetadata()->GetLayoutPtr(), Usage, EUniformBufferValidation::ValidateResources));
-    //    }
-
-    void UpdateUniformBufferImmediate(const TBufferStruct& Value) {
+template<typename RootParameter>
+concept concept_is_root_parameter_struct = requires(RootParameter t) {
+    RootParameter::TypeInfo::GetStructMetadata();
+    t.GetMembers();
+};
+struct RHIBatchedShaderParameters {
+    //CBV SRV UAV SAMPLER
+    std::vector<RHIResourceParameterLayout> resource_parameters;
+    std::vector<RHIConstParameterLayout>    const_parameters;
+    std::vector<uint8_t>                    const_parameter_data;
+    template<concept_is_root_parameter_struct TRootParameter>
+    void SetParameters(const TRootParameter& params) {
+        params.GetMembers();
     }
-
-private:
-    /** A private constructor used to coerce an arbitrary RHI uniform buffer reference to a structured reference. */
-    TUniformBufferRef(RHIGlobalBuffer* _buffer_ref)
-        : RHIGlobalBufferRef(_buffer_ref) {}
-
-    template<typename TBufferStruct2>
-    friend class TUniformBuffer;
 };
+//todo: may not inherit from RHIResource
+class RHIShaderRootParameterLayout : public RHIResource {
+public:
+    RHIShaderRootParameterLayout() : RHIResource(RRT_ROOT_PARAMETER_LAYOUT) {}
+    ~RHIShaderRootParameterLayout() {}
+
+    std::vector<RHIResourceParameterLayout> resource_parameters;
+};
+
 #pragma endregion
 
 #pragma region viewable resources definitions
@@ -534,6 +540,11 @@ struct RHIBufferCreateInfo : public RHIBufferInfo {
 /* index, vertex, staging, indirect */
 class RHIBuffer : public RHIViewableResource {
 public:
+    /**
+     * @brief Construct a new RHIBuffer object
+     * 
+     * @param _info 
+     */
     RHIBuffer(const RHIBufferInfo& _info) : RHIViewableResource(RRT_BUFFER), info(_info) {}
 
     const RHIBufferInfo& GetInfo() const { return info; }
@@ -545,10 +556,56 @@ public:
     EBufferUsageFlags GetUsage() const { return info.usage; }
 
 protected:
+    /**
+     * @brief Create an empty RHIBuffer, do nothing in rhi backend
+     * 
+     */
+    RHIBuffer() : RHIViewableResource(RRT_BUFFER) {}
     std::string name;
 
-private:
+protected:
     RHIBufferInfo info;
+};
+
+/**
+ * @brief Actually the same as RHIBuffer, but created with Fix size for shader parameter updates
+ * 
+ */
+template<concept_is_shader_struct TStructuredParam>
+class RHIStructuredBuffer : public RHIResource {
+public:
+    /**
+     * @brief Construct a new RHIStructureBuffer object with standalone buffer
+     * 
+     * @param _usages Buffer Usage, StructuredBuffer .etc
+     */
+    RHIStructuredBuffer() : RHIResource(RRT_BUFFER) {}
+
+    /**
+     * @brief Construct a new RHIStructureBuffer object from existing RHIBuffer
+     * 
+     * @param _reference existing RHIBuffer
+     * @param offset offset in RHIBuffer
+     */
+    RHIStructuredBuffer(RHIBufferRef _reference, uint32_t _offset = 0) : RHIResource(RRT_BUFFER), reference(_reference), offset(_offset) { assert(_reference != nullptr); };
+
+    /**
+     * @brief Upload Parameters to target RHIBuffer in graphic queue, recommend to use barrier instead
+     * 
+     */
+    void UpLoadParameters() {
+        if (reference->IsValid()) {
+            RHIUploadBuffer((uint8_t*)&param, sizeof(TStructuredParam), reference);
+        }
+    };
+
+    TStructuredParam param;
+
+private:
+    friend void RHIUploadBuffer(const uint8_t* data, uint32_t size, RHIBuffer* _target);
+
+    RHIBufferRef reference;
+    uint32_t     offset;
 };
 
 struct RHITextureInfo {
@@ -610,16 +667,16 @@ struct RHITextureInfo {
 
     friend uint32_t GetHash(const RHITextureInfo& target) {
         uint32_t hash = GetHash(target.dimension);
-        hash_combine(hash, GetHash(target.format));
-        hash_combine(hash, GetHash(target.array_size));
-        hash_combine(hash, GetHash(target.usage));
-        hash_combine(hash, GetHash(target.layout));
-        hash_combine(hash, GetHash(target.extent));
-        hash_combine(hash, GetHash(target.depth));
-        hash_combine(hash, GetHash(target.uav_format));
-        hash_combine(hash, GetHash(target.num_mips));
-        hash_combine(hash, GetHash(target.num_samples));
-        hash_combine(hash, GetHash(target.clear_attachment));
+        HashCombine(hash, GetHash(target.format));
+        HashCombine(hash, GetHash(target.array_size));
+        HashCombine(hash, GetHash(target.usage));
+        HashCombine(hash, GetHash(target.layout));
+        HashCombine(hash, GetHash(target.extent));
+        HashCombine(hash, GetHash(target.depth));
+        HashCombine(hash, GetHash(target.uav_format));
+        HashCombine(hash, GetHash(target.num_mips));
+        HashCombine(hash, GetHash(target.num_samples));
+        HashCombine(hash, GetHash(target.clear_attachment));
         return hash;
     }
     bool operator==(const RHITextureInfo& other) const {
@@ -799,6 +856,12 @@ private:
 
 #pragma endregion
 
+#pragma region shader param
+struct PipelineParametersBinding {
+};
+
+#pragma endregion
+
 #pragma region syncronization
 /* fences in dx12, fence and timeline semaphore in vulkan */
 class RHIFence : public RHIResource {
@@ -971,12 +1034,16 @@ struct RHIViewInfo {
         BUFFER_SRV,
         BUFFER_UAV,
         TEXTURE_SRV,
-        TEXTURE_UAV
+        TEXTURE_UAV,
+        BUFFER_CBV,
+        TEXTURE_CBV
     };
     enum class EBufferType : uint8_t {
         UNDEFINED,
         STRUCTURED,
         ACCELERATION_STRUCTURE,
+        UNIFROM,
+        TEXTURE,
         /* a raw buffer can also be called a byte address buffer */
         RAW
     };
@@ -1038,11 +1105,18 @@ struct RHIViewInfo {
         struct ViewInfo;
         ViewInfo GetViewInfo(RHITexture*) const;
     };
+
+    struct BufferCBV : public Buffer {
+        struct Initializer;
+        struct ViewInfo;
+        ViewInfo GetViewInfo(RHIBuffer*) const;
+    };
     union {
         BaseViewInfo base_info;
         union {
             BufferSRV srv;
             BufferUAV uav;
+            BufferCBV cbv;
         } buffer;
         union {
             TextureSRV srv;
@@ -1052,6 +1126,7 @@ struct RHIViewInfo {
 
     bool IsSRV() const { return base_info.view_type == EViewType::BUFFER_SRV || base_info.view_type == EViewType::TEXTURE_SRV; }
     bool IsUAV() const { return base_info.view_type == EViewType::BUFFER_UAV || base_info.view_type == EViewType::BUFFER_UAV; }
+    bool IsUBV() const { return base_info.view_type == EViewType::BUFFER_CBV || base_info.view_type == EViewType::TEXTURE_CBV; }
 
     bool IsBuffer() const { return base_info.view_type == EViewType::BUFFER_SRV || base_info.view_type == EViewType::BUFFER_UAV; }
     bool IsTexture() const { return !IsBuffer(); }
@@ -1070,6 +1145,7 @@ struct RHIViewInfo {
     static BufferUAV::Initializer  CreateBufferUAVInfo();
     static TextureSRV::Initializer CreateTextureSRVInfo();
     static TextureUAV::Initializer CreateTextureUAVInfo();
+    static BufferCBV::Initializer  CreateBufferUBVInfo();
 
 protected:
     RHIViewInfo(EViewType _type) {
@@ -1081,7 +1157,7 @@ using RHITextureUAVCreateInfo = RHIViewInfo::TextureUAV::Initializer;
 using RHITextureSRVCreateInfo = RHIViewInfo::TextureSRV::Initializer;
 using RHIBufferUAVCreateInfo  = RHIViewInfo::BufferUAV::Initializer;
 using RHIBufferSRVCreateInfo  = RHIViewInfo::BufferSRV::Initializer;
-
+using RHIBufferUBVCreateInfo  = RHIViewInfo::BufferCBV::Initializer;
 struct RHIViewInfo::Buffer::ViewInfo {
     uint32_t     byte_offset;
     uint32_t     byte_stride;
@@ -1125,6 +1201,9 @@ struct RHIViewInfo::TextureSRV::ViewInfo : public RHIViewInfo::Texture::ViewInfo
 struct RHIViewInfo::TextureUAV::ViewInfo : public RHIViewInfo::Texture::ViewInfo {
     //texture uav support one mip level
     uint8_t mip_level;
+};
+
+struct RHIViewInfo::BufferCBV::ViewInfo : public RHIViewInfo::Buffer::ViewInfo {
 };
 
 static_assert(sizeof(RHIViewInfo) == 16, "Packing of RHIViewInfo is unexpected.");
@@ -1278,6 +1357,43 @@ public:
     }
 };
 
+struct RHIViewInfo::BufferCBV::Initializer : public RHIViewInfo {
+    friend RHIViewInfo;
+    friend RHICommandListBase;
+
+protected:
+    Initializer() : RHIViewInfo(EViewType::BUFFER_CBV) {}
+
+public:
+    Initializer& SetType(EBufferType _type) {
+        assert(_type != EBufferType::UNDEFINED);
+        buffer.cbv.bufferType = _type;
+        return *this;
+    }
+    Initializer& SetType(RHIBuffer* _buffer) {
+        buffer.cbv.bufferType = EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::UNIFORM_BUFFER) ? EBufferType::UNIFROM :
+                                EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::TEXTURE_BUFFER) ? EBufferType::TEXTURE :
+                                                                                                         EBufferType::UNDEFINED;
+        return *this;
+    }
+    // Initializer& SetFormat(EPixelFormat _format) {
+    //     buffer.ubv.format = _format;
+    //     return *this;
+    // }
+    Initializer& SetByteOffset(uint32_t _byte_offset) {
+        buffer.cbv.byte_offset = _byte_offset;
+        return *this;
+    }
+    Initializer& SetStride(uint32_t _stride) {
+        buffer.cbv.stride = _stride;
+        return *this;
+    }
+    Initializer& SetNumElements(uint32_t _num_elements) {
+        buffer.cbv.num_elements = _num_elements;
+        return *this;
+    }
+};
+
 FORCEINLINE RHIViewInfo::BufferSRV::Initializer RHIViewInfo::CreateBufferSRVInfo() {
     return {};
 }
@@ -1290,6 +1406,10 @@ FORCEINLINE RHIViewInfo::TextureSRV::Initializer RHIViewInfo::CreateTextureSRVIn
     return {};
 }
 FORCEINLINE RHIViewInfo::TextureUAV::Initializer RHIViewInfo::CreateTextureUAVInfo() {
+    return {};
+}
+
+FORCEINLINE RHIViewInfo::BufferCBV::Initializer RHIViewInfo::CreateBufferUBVInfo() {
     return {};
 }
 
@@ -1325,6 +1445,13 @@ protected:
 
 private:
     CountableRef<RHIViewableResource> resource;
+};
+
+class RHIConstantBufferView : public RHIView {
+public:
+    explicit RHIConstantBufferView(RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIView(RRT_UNORDERED_ACCESS_VIEW, _resource, _viewInfo) {
+        assert(_viewInfo.IsUAV() && "view must be uav");
+    }
 };
 
 class RHIUnorderedAccessView : public RHIView {
@@ -1463,9 +1590,9 @@ private:
     EAttachmentStoreOp stencil_store_op;
 };
 
-struct RHIShaderBoundStateInput: public RHIResource {
+struct RHIShaderBoundStateInput : public RHIResource {
 
-    RHIShaderBoundStateInput(): RHIResource(RRT_SHADER_BOUND_STATE) {};
+    RHIShaderBoundStateInput() : RHIResource(RRT_SHADER_BOUND_STATE){};
     RHIShaderBoundStateInput(
         RHIVertexInputState* _vertex_input_state,
         RHIVertexShader*     _vertex_shader,
@@ -1565,7 +1692,7 @@ private:
     uint8_t                         mip_index       = 0;
     uint16_t                        array_index     = 0;
 };
-static_assert(sizeof(ColorAttachmementBinding) == 24);
+// static_assert(sizeof(ColorAttachmementBinding) == 16);
 
 struct DepthStencilBinding {
     DepthStencilBinding() = default;
@@ -1648,13 +1775,13 @@ struct alignas(SHADER_PARAMETER_STRUCTURE_ALIGNMENT) AttachmentBindingSlots {
     uint8_t         multi_view_count;
     RHITexture*     shading_rate_texture = nullptr;
 };
-static_assert(sizeof(AttachmentBindingSlots) == 240);
-static_assert(offsetof(AttachmentBindingSlots, depth_stencil_binding) == 192);
+// static_assert(sizeof(AttachmentBindingSlots) == 240);
+// static_assert(offsetof(AttachmentBindingSlots, depth_stencil_binding) == 192);
 
 struct GraphicsPipelineAttachmentInfo {
     GraphicsPipelineAttachmentInfo()
-        : attachment_formats(create_array<MAX_PASS_ATTACHMENT_COUNT, uint8_t>((uint8_t)ETextureUsageFlags::UNDEFINED)),
-          attachment_flags(create_array<MAX_PASS_ATTACHMENT_COUNT, ETextureUsageFlags>(ETextureUsageFlags::UNDEFINED)) {}
+        : attachment_formats(CreateArray<MAX_PASS_ATTACHMENT_COUNT, uint8_t>((uint8_t)ETextureUsageFlags::UNDEFINED)),
+          attachment_flags(CreateArray<MAX_PASS_ATTACHMENT_COUNT, ETextureUsageFlags>(ETextureUsageFlags::UNDEFINED)) {}
     uint32_t                                                  attachments_count;
     std::array<uint8_t, MAX_PASS_ATTACHMENT_COUNT>            attachment_formats;
     std::array<ETextureUsageFlags, MAX_PASS_ATTACHMENT_COUNT> attachment_flags;
@@ -1686,8 +1813,8 @@ public:
           rasterizer_state(nullptr),
           depth_stencil_state(nullptr),
           color_attachment_count(0),
-          color_attachment_formats(create_array<MAX_PASS_ATTACHMENT_COUNT, uint8_t>((uint8_t)ETextureUsageFlags::UNDEFINED)),
-          color_attachment_flags(create_array<MAX_PASS_ATTACHMENT_COUNT, ETextureUsageFlags>(ETextureUsageFlags::UNDEFINED)),
+          color_attachment_formats(CreateArray<MAX_PASS_ATTACHMENT_COUNT, uint8_t>((uint8_t)ETextureUsageFlags::UNDEFINED)),
+          color_attachment_flags(CreateArray<MAX_PASS_ATTACHMENT_COUNT, ETextureUsageFlags>(ETextureUsageFlags::UNDEFINED)),
           depth_stencil_format(PF_UNDEFINED),
           depth_stencil_flag(ETextureUsageFlags::UNDEFINED),
           depth_attachment_load_op(EAttachmentLoadOp::NONE),
@@ -1856,8 +1983,8 @@ public:
     }
     friend uint32_t GetHash(const RayTracingPipelineStateInitializer& value) {
         uint32_t hash = GetHash(value.max_attribute_byte_size);
-        hash_combine(hash, value.max_payload_byte_size);
-        hash_combine(hash, value.b_allow_hit_group_indexing);
+        HashCombine(hash, value.max_payload_byte_size);
+        HashCombine(hash, value.b_allow_hit_group_indexing);
         //todo: combine shader hashes
         return hash;
     }

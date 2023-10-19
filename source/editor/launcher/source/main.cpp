@@ -1,5 +1,5 @@
 #include "Launcher.h"
-#include "log/LogSystem.h"
+#include "core/include/log/LogSystem.h"
 #include <exception>
 #include <filesystem>
 

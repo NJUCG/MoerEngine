@@ -1,27 +1,25 @@
+#include "shader/Shader.h"
+#include "shader/ShaderCompiler.h"
 #include "shader/ShaderParameterMacros.h"
 #include "shader/ShaderCommon.h"
 #include "misc/Hash.h"
-BEGIN_SHADER_PARAMETER_DEFINITION(TestParameters)
+#include "log/LogSystem.h"
+BEGIN_SHADER_UNIFORM_STRUCT_DEFINITION(TestParameters)
 
-DEFINE_SHADER_PARAM_UAV(RWBuffer2D, buffer2d)
-DEFINE_SHADER_PARAM_SRV(StructuredBuffer, sbo)
-DEFINE_SHADER_PARAM_SAMPLER(Sampler, sampler)
-DEFINE_SHADER_PARAM_SRV_ARRAY(TextureSRVArray, srv_array, 10)
-DEFINE_SHADER_PARAM_ATTACHMENT_BINDING()
 DEFINE_SHADER_PARAM(Moer::Vector2i, rect)
-END_SHADER_PARAMETER_DEFINITION(Parameters)
+END_SHADER_UNIFORM_STRUCT_DEFINITION(Parameters)
 
-class TestGlobalShader : public ShaderBase {
+class TestGlobalShader : public Shader {
 
 public:
-    BEGIN_SHADER_PARAMETER_DEFINITION(Parameters)
+    BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
 
     DEFINE_SHADER_PARAM_UAV(RWBuffer2D, buffer2d)
     DEFINE_SHADER_PARAM_SRV(StructuredBuffer, sbo)
     DEFINE_SHADER_PARAM_SAMPLER(Sampler, sampler)
     DEFINE_SHADER_PARAM_SRV_ARRAY(TextureSRVArray, srv_array, 10)
-    DEFINE_SHADER_PARAM_STRUCT(StructuredBuffer, TestParameters)
-    END_SHADER_PARAMETER_DEFINITION(Parameters)
+
+    END_ROOT_PARAMETER_DEFINITION(Parameters)
 };
 
 void test() {
@@ -32,5 +30,6 @@ void test() {
 }
 int main() {
     test();
+    ShaderCompiler::ShaderConductorTest();
     return 0;
 }
