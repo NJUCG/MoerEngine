@@ -7,8 +7,39 @@
 #include "rhi/RHICommon.h"
 #include "shader/ShaderCommon.h"
 #include "shader/ShaderParameterMacros.h"
+#include <stdint.h>
+#include <vector>
 
-typedef uint32_t ShaderResourceIndex;
+struct ShaderParameterLayoutInfo{
+    bool IsValid()const{
+        return !(slot == -1 || space == -1 || type == EShaderParameterType::UNKNOWN);
+    }
+    ShaderParameterLayoutInfo(uint16_t _offset,
+        uint16_t _stride,
+        uint8_t _slot = -1,
+        int8_t _space = -1,
+        EShaderParameterType _type = EShaderParameterType::UNKNOWN)
+        : offset(_offset),
+        stride(_stride),
+        slot(_slot),
+        space(_space),
+        type(_type){}
+    uint16_t offset;
+    uint16_t stride;
+
+    int8_t slot;
+    int8_t space;
+    EShaderParameterType type;
+};
+struct ShaderRootParametersLayoutInfo{
+
+    public:
+    const std::vector<ShaderParameterLayoutInfo>& GetLayoutInfos()const{return layout_infos;}
+    private:
+    friend class Shader;
+    std::vector<ShaderParameterLayoutInfo> layout_infos;
+
+};
 /**
  * @brief Shader Type information,
     contains:
@@ -54,26 +85,22 @@ public:
     static ShaderParametersMetadata* GetParametersMetaData() { return nullptr; }
 
     /**
-     * @brief Get the Parameters Map object(generated from compiled data)
-     * 
-     * @return const ShaderParametersInfoMap& 
-     */
-    const ShaderParametersInfoMap& GetParametersMap() const { return param_map; }
-
-    /**
      * @brief Get the Code Entry object, contains compiled code and target platform
      * 
      * @return const ShaderCodeEntry* 
      */
     const class ShaderCodeEntry* GetCodeEntry() const;
 
+    const ShaderRootParametersLayoutInfo& GetRootParametersLayoutInfo()const{return param_layout_info;}
 protected:
     Hash64City compiled_hash;
-
+private:
+    void ConstructRootParameterLayoutInfo(const ShaderParametersInfoMap& _param_map);
 private:
     const ShaderMetaType*   type;
     ShaderTargetInfo        target_info;
-    ShaderParametersInfoMap param_map;
+    
+    ShaderRootParametersLayoutInfo param_layout_info;
     int32_t                 code_size;
     //compiled shader hash in 32 bit
     uint32_t hash_key;

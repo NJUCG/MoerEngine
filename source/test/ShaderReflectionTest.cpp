@@ -22,14 +22,14 @@ public:
     END_ROOT_PARAMETER_DEFINITION(Parameters)
 };
 
-void Test() {
+void ShaderCppReflectTest() {
     TestGlobalShader::Parameters* pass;
     const auto&                   members          = TestGlobalShader::Parameters::GetMembers();
     const auto* const             struct_mata_data = TestGlobalShader::Parameters::TypeInfo::GetStructMetadata();
     int                           i                = 1;
 }
 int main() {
-    Test();
+    ShaderCppReflectTest();
     ShaderCompiler::ShaderCompileTest();
     return 0;
 }

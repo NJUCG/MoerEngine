@@ -1,6 +1,9 @@
 #include "Engine.h"
 #include <filesystem>
 #include "Core.h"
+#include "rhi/RHIResource.h"
+#include "shader/Shader.h"
+#include "shader/ShaderResourceManager.h"
 #include "taskgraph/GraphTask.h"
 #include "log/LogSystem.h"
 #include "RenderThread.h"
@@ -56,6 +59,12 @@ int main(int argc, const char** argv) {
     engine.PostInit();
     // RenderThreadSuspendTest(engine);
     engine.Run();
+    TestReflectionShader::Parameters params{};
+    Shader* shader = ShaderResourceManager::GetShader<TestReflectionShader>();
+    RHIBatchedShaderParameters batched_params;
+    auto view_info = RHIViewInfo::CreateBufferSRVInfo();
 
+    params.bar = new RHIShaderResourceView(nullptr, view_info);
+    batched_params.SetParameters(shader, params);
     engine.Quit();
 }

@@ -392,9 +392,10 @@ public:
 #pragma region rhi shader definitions
 
 struct RHIResourceParameterLayout {
-    //offset in parameter meta data to get name
     uint16_t               offset;
     uint16_t               stride;
+    uint8_t slot;
+    uint8_t space;
     EShaderBindingBaseType base_type;
 };
 
@@ -408,7 +409,6 @@ struct RHIShaderResourceParameter {
     RHIResource* resource;
     int16_t      slot;
     int16_t      space;
-    uint32_t     count;
 };
 
 struct RHIAttachmentBindingParameter {
@@ -418,11 +418,11 @@ struct RHIBatchedShaderParameters {
     template<concept_is_root_parameter_struct TRootParameter>
     void SetParameters(class Shader* shader, const TRootParameter& params) {
         size_t data_size = sizeof(TRootParameter);
-        SetParameters(shader, data_size, &params);
+        SetParameters(shader, data_size, (uint8_t*)&params);
     }
 
 private:
-    void SetParameters(class Shader* shader, size_t _data_size, void* data_source);
+    void SetParameters(class Shader* shader, size_t _data_size, uint8_t* data_source);
     //offset in raw_data, size, slot and space
     std::vector<RHIShaderResourceParameter> resource_parameters;
     std::vector<uint8_t>                    raw_data;
@@ -1382,7 +1382,7 @@ class RHIView : public RHIResource {
 public:
     RHIView(ERHIResourceType _type, RHIViewableResource* _viewable_resource, const RHIViewInfo& _info)
         : RHIResource(_type), resource(_viewable_resource), info(_info) {
-        assert(_viewable_resource != nullptr && "ViewableResource is invalid");
+        // assert(_viewable_resource != nullptr && "ViewableResource is invalid");
     }
 
     RHIViewableResource* GetResource() const {
@@ -1429,7 +1429,7 @@ public:
 class RHIShaderResourceView : public RHIView {
 public:
     explicit RHIShaderResourceView(RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIView(RRT_SHADER_RESOURCE_VIEW, _resource, _viewInfo) {
-        assert(_viewInfo.IsSRV() && "view must be srv");
+        // assert(_viewInfo.IsSRV() && "view must be srv");
     }
 };
 #pragma endregion

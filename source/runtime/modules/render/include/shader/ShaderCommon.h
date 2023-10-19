@@ -19,7 +19,7 @@ struct ShaderCompiledInitializer;
  * 
  */
 enum class EShaderParameterType : uint8_t {
-    LOOSE_DATA,
+    UNKNOWN,
     CBV,
     SAMPLER,
     SRV,
@@ -48,7 +48,7 @@ inline bool IsParameterResource(EShaderParameterType _base_type) {
 }
 BEGIN_ENUM_STR_DEFINITION(EShaderParameterType)
 
-ENUM_STR_ELEMENT(LOOSE_DATA)
+ENUM_STR_ELEMENT(UNKNOWN)
 ENUM_STR_ELEMENT(CBV)
 ENUM_STR_ELEMENT(SAMPLER)
 ENUM_STR_ELEMENT(SRV)
