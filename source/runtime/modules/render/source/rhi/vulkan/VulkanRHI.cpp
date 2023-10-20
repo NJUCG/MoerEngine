@@ -117,10 +117,9 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
 
 RHIComputePipelineStateRef VulkanRHIImpl::RHICreateComputePipelineState(RHIComputeShader* _compute_shader) { return RHIComputePipelineStateRef{}; }
 
-RHIGlobalBufferRef VulkanRHIImpl::RHICreateUniformBuffer(const void* data, const RHIGlobalBufferLayout* layout, EBufferUsageFlags _usage) { return RHIGlobalBufferRef{}; }
+void VulkanRHIImpl::RHIUploadBuffer(RHIBufferRef _buffer_ref, const uint8_t* _data, uint32_t _size) {}
 
-void VulkanRHIImpl::RHICopyBuffer(RHIBuffer* _src, RHIBuffer* _dst) {
-}
+void VulkanRHIImpl::RHICopyBuffer(RHIBuffer* _src, RHIBuffer* _dst) {}
 
 RHIBufferRef VulkanRHIImpl::RHICreateBuffer(const RHIBufferCreateInfo& info) {
     RHIBufferInfo buffer_info{};
@@ -159,6 +158,13 @@ RHITextureRef VulkanRHIImpl::RHICreateTexture(const RHITextureCreateInfo& info) 
 
 RHIShaderResourceViewRef  VulkanRHIImpl::RHICreateShaderResourceView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) { return RHIShaderResourceViewRef{}; }
 RHIUnorderedAccessViewRef VulkanRHIImpl::RHICreateUnorderedAccessView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) { return RHIUnorderedAccessViewRef{}; }
+
+RHICommandQueue* VulkanRHIImpl::CreateCommandQueue(ECommandQueueType type) {}
+
+RHIGraphicsCommandList* VulkanRHIImpl::CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state) {}
+
+RHIComputeCommandList* VulkanRHIImpl::CreateComputeCommandList(RHIComputePipelineState* _initial_state) {}
+
 #pragma endregion
 
 void VulkanRHIImpl::InitSurface(GLFWwindow* _window) {
