@@ -62,7 +62,12 @@ public:
     VulkanMemoryManager(const VulkanMemoryManager&)            = delete;
     VulkanMemoryManager& operator=(const VulkanMemoryManager&) = delete;
 
-    static VmaMemoryUsage MEGenerateVmaMemoryUsage(EBufferUsageFlags _flags);
+    static VmaMemoryUsage MEGenerateVmaMemoryUsage();
+};
+
+class VulkanEnumTranslator final {
+public:
+    static VkSampleCountFlagBits METoVKSampleCountFlagBits(uint32_t _me_count);
 };
 
 #pragma endregion
@@ -146,9 +151,6 @@ public:
     void GenerateMultisampleStateFromInitializer(const RHIMultisampleStateInitializer& _init);
 
 private:
-    VkSampleCountFlagBits METoVKSampleCountFlagBits(uint32_t _me_count);
-
-private:
     VkPipelineMultisampleStateCreateInfo m_multisample_state_create_info;
 };
 
@@ -208,6 +210,33 @@ private:
         VmaAllocation alloc;
     } m_alloc;
 };
+
+class VulkanRHITexture final : public RHITexture {
+    friend VulkanRHIImpl;
+
+public:
+    VulkanRHITexture() = delete;
+    explicit VulkanRHITexture(const RHITextureCreateInfo& _info) : RHITexture(_info) {}
+
+    inline const VmaAllocation GetAllocation() const {
+        return m_alloc.alloc;
+    }
+
+    inline VkImage GetHandle() const {
+        return m_alloc.image;
+    }
+
+    static VkImageType       METoVKImageType(ETextureDimension _dim);
+    static VkImageUsageFlags METoVKImageUsageFlags(ETextureUsageFlags _me_flags);
+    static VkImageLayout     METoVKImageLayout(ETextureLayout _layout);
+
+private:
+    struct TextureAlloc {
+        VkImage       image;
+        VmaAllocation alloc;
+    } m_alloc;
+};
+
 #pragma endregion
 
 #pragma region shader param

@@ -7,10 +7,10 @@
 
 class VulkanDevice;
 
-class VulkanGraphicsCommandList final : public RHIGraphicsCommandList {
+class VulkanRHIGraphicsCommandList final : public RHIGraphicsCommandList {
 public:
-    VulkanGraphicsCommandList(VulkanDevice* _device, VkCommandPool _pool, VkCommandBufferLevel _level = VK_COMMAND_BUFFER_LEVEL_PRIMARY);
-    ~VulkanGraphicsCommandList();
+    VulkanRHIGraphicsCommandList(VulkanDevice* _device, VkCommandPool _pool, VkCommandBufferLevel _level = VK_COMMAND_BUFFER_LEVEL_PRIMARY);
+    ~VulkanRHIGraphicsCommandList();
 
     void SetPipelineState(RHIGraphicsPipelineState* _graphics_pso, const RHIShaderBoundStateInput& _shader_input) override;
     void Open() override;
@@ -124,6 +124,10 @@ public:
 private:
     VulkanDevice*   m_device;
     VkCommandBuffer m_command_buffer;
+
+private:
+    VkRenderingAttachmentInfo FromColorAttachmentInfo(const RHIRenderPassInfo::ColorAttachmentInfo& _color_attachment_info) const;
+    VkRenderingAttachmentInfo FromDepthStencilAttachmentInfo(const RHIRenderPassInfo::DepthStencilAttachmentInfo& _depth_stencil_attachment_info) const;
 };
 
 #endif//VULKAN_COMMAND_LIST_H

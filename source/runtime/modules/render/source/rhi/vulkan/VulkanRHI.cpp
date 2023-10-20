@@ -4,6 +4,8 @@
 #include "misc/MacroUtils.h"
 
 #include "rhi/vulkan/VulkanRHI.h"
+#include "rhi/vulkan/VulkanCommandList.h"
+
 #include "VulkanRHIResource.h"
 #include "VulkanRHIInitializer.h"
 #include "VulkanExtension.h"
@@ -144,7 +146,7 @@ RHIBufferRef VulkanRHIImpl::RHICreateBuffer(const RHIBufferCreateInfo& info) {
 
     VmaAllocationCreateInfo alloc_create_info{};
     alloc_create_info.flags = 0;
-    alloc_create_info.usage = VulkanMemoryManager::MEGenerateVmaMemoryUsage(info.usage);
+    alloc_create_info.usage = VulkanMemoryManager::MEGenerateVmaMemoryUsage();
 
     VK_CHECK_RESULT(vmaCreateBuffer(m_allocator, &buffer_create_info, &alloc_create_info, &vk_buffer->m_alloc.buffer, &vk_buffer->m_alloc.alloc, nullptr));
 
@@ -154,16 +156,51 @@ RHIBufferRef VulkanRHIImpl::RHICreateBuffer(const RHIBufferCreateInfo& info) {
 void* VulkanRHIImpl::RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size) { return nullptr; }
 void  VulkanRHIImpl::RHIUnmapBuffer(RHIBuffer* _buffer) {}
 
-RHITextureRef VulkanRHIImpl::RHICreateTexture(const RHITextureCreateInfo& info) { return RHITextureRef{}; };
+RHITextureRef VulkanRHIImpl::RHICreateTexture(const RHITextureCreateInfo& info) {
+    VulkanRHITexture* vk_texture = new VulkanRHITexture(info);
+
+    VkImageCreateInfo image_create_info{};
+    image_create_info.sType                 = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    image_create_info.pNext                 = nullptr;
+    image_create_info.flags                 = 0;
+    image_create_info.imageType             = VulkanRHITexture::METoVKImageType(info.dimension);
+    image_create_info.format                = VkFormat(info.format);
+    image_create_info.extent.width          = info.extent.x;
+    image_create_info.extent.height         = info.extent.y;
+    image_create_info.extent.depth          = info.depth;
+    image_create_info.mipLevels             = info.num_mips;
+    image_create_info.arrayLayers           = info.array_size;
+    image_create_info.samples               = VulkanEnumTranslator::METoVKSampleCountFlagBits(info.num_samples);
+    image_create_info.tiling                = VK_IMAGE_TILING_OPTIMAL;// MARK...
+    image_create_info.usage                 = VulkanRHITexture::METoVKImageUsageFlags(info.usage);
+    image_create_info.sharingMode           = VK_SHARING_MODE_EXCLUSIVE;
+    image_create_info.queueFamilyIndexCount = 0;
+    image_create_info.pQueueFamilyIndices   = nullptr;
+    image_create_info.initialLayout         = VulkanRHITexture::METoVKImageLayout(info.layout);
+
+    VmaAllocationCreateInfo alloc_create_info{};
+    alloc_create_info.flags = 0;
+    alloc_create_info.usage = VulkanMemoryManager::MEGenerateVmaMemoryUsage();
+
+    VK_CHECK_RESULT(vmaCreateImage(m_allocator, &image_create_info, &alloc_create_info, &vk_texture->m_alloc.image, &vk_texture->m_alloc.alloc, nullptr));
+
+    return RHITextureRef(vk_texture);
+};
 
 RHIShaderResourceViewRef  VulkanRHIImpl::RHICreateShaderResourceView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) { return RHIShaderResourceViewRef{}; }
 RHIUnorderedAccessViewRef VulkanRHIImpl::RHICreateUnorderedAccessView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) { return RHIUnorderedAccessViewRef{}; }
 
-RHICommandQueue* VulkanRHIImpl::CreateCommandQueue(ECommandQueueType type) {}
+RHICommandQueue* VulkanRHIImpl::CreateCommandQueue(ECommandQueueType type) {
+    return nullptr;
+}
 
-RHIGraphicsCommandList* VulkanRHIImpl::CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state) {}
+RHIGraphicsCommandList* VulkanRHIImpl::CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state) {
+    return new VulkanRHIGraphicsCommandList(m_device, m_device->GetDefaultCommandPool(), VK_COMMAND_BUFFER_LEVEL_PRIMARY);
+}
 
-RHIComputeCommandList* VulkanRHIImpl::CreateComputeCommandList(RHIComputePipelineState* _initial_state) {}
+RHIComputeCommandList* VulkanRHIImpl::CreateComputeCommandList(RHIComputePipelineState* _initial_state) {
+    return nullptr;
+}
 
 #pragma endregion
 
@@ -175,7 +212,8 @@ void VulkanRHIImpl::InitVulkan() {
     DeviceInitializer initializer;
     initializer.instance           = m_instance;
     initializer.surface            = m_surface;
-    initializer.enabled_features   = {};
+    initializer.api_version        = VK_API_VERSION_1_3;
+    initializer.enabled_features   = VulkanDeviceFeature::GetMESupportedDeviceFeatures(initializer.api_version);
     initializer.enabled_extensions = VulkanDeviceExtension::GetMESupportedDeviceExtensions();
 
     m_device = new VulkanDevice();

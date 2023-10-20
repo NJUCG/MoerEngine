@@ -9,9 +9,35 @@
 #include "rhi/vulkan/misc/VulkanMacroUtils.h"
 #include "log/LogSystem.h"
 
-VmaMemoryUsage VulkanMemoryManager::MEGenerateVmaMemoryUsage(EBufferUsageFlags _flags) {
+#pragma region utils definition
+
+VmaMemoryUsage VulkanMemoryManager::MEGenerateVmaMemoryUsage() {
     return VMA_MEMORY_USAGE_AUTO;
 }
+
+VkSampleCountFlagBits VulkanEnumTranslator::METoVKSampleCountFlagBits(uint32_t _me_count) {
+    switch (_me_count) {
+        case 1:
+            return VK_SAMPLE_COUNT_1_BIT;
+        case 2:
+            return VK_SAMPLE_COUNT_2_BIT;
+        case 4:
+            return VK_SAMPLE_COUNT_4_BIT;
+        case 8:
+            return VK_SAMPLE_COUNT_8_BIT;
+        case 16:
+            return VK_SAMPLE_COUNT_16_BIT;
+        case 32:
+            return VK_SAMPLE_COUNT_32_BIT;
+        case 64:
+            return VK_SAMPLE_COUNT_64_BIT;
+        default:
+            LOG_CRITICAL("Unsupported multisample count: {}", static_cast<uint32_t>(_me_count));
+            return VK_SAMPLE_COUNT_FLAG_BITS_MAX_ENUM;
+    }
+}
+
+#pragma endregion
 
 void VulkanRHISampler::GenerateSamplerFromInitializer(const VulkanDevice* _device, const RHISamplerInitializer& _initializer) {
     VkSamplerCreateInfo sampler_create_info{};
@@ -335,34 +361,12 @@ void VulkanRHIMultisampleState::GenerateMultisampleStateFromInitializer(const RH
     m_multisample_state_create_info.sType                 = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
     m_multisample_state_create_info.pNext                 = nullptr;
     m_multisample_state_create_info.flags                 = 0;
-    m_multisample_state_create_info.rasterizationSamples  = METoVKSampleCountFlagBits(_init.sample_count);
+    m_multisample_state_create_info.rasterizationSamples  = VulkanEnumTranslator::METoVKSampleCountFlagBits(_init.sample_count);
     m_multisample_state_create_info.sampleShadingEnable   = _init.b_sample_shading;
     m_multisample_state_create_info.minSampleShading      = _init.min_sample_shading;
     m_multisample_state_create_info.pSampleMask           = nullptr;// MARK...
     m_multisample_state_create_info.alphaToCoverageEnable = _init.b_alpha_to_converge;
     m_multisample_state_create_info.alphaToOneEnable      = _init.b_alpha_to_one;
-}
-
-VkSampleCountFlagBits VulkanRHIMultisampleState::METoVKSampleCountFlagBits(uint32_t _me_count) {
-    switch (_me_count) {
-        case 1:
-            return VK_SAMPLE_COUNT_1_BIT;
-        case 2:
-            return VK_SAMPLE_COUNT_2_BIT;
-        case 4:
-            return VK_SAMPLE_COUNT_4_BIT;
-        case 8:
-            return VK_SAMPLE_COUNT_8_BIT;
-        case 16:
-            return VK_SAMPLE_COUNT_16_BIT;
-        case 32:
-            return VK_SAMPLE_COUNT_32_BIT;
-        case 64:
-            return VK_SAMPLE_COUNT_64_BIT;
-        default:
-            LOG_CRITICAL("Unsupported multisample count: {}", static_cast<uint32_t>(_me_count));
-            return VK_SAMPLE_COUNT_FLAG_BITS_MAX_ENUM;
-    }
 }
 
 void VulkanRHIBlendState::GenerateBlendStateFromInitializer(const RHIBlendStateInitializer& _init) {
@@ -458,6 +462,17 @@ VkBlendFactor VulkanRHIBlendState::METoVKBlendFactor(EBlendFactor _blend_factor)
     }
 }
 
+#pragma region shader definitions
+#pragma endregion
+
+#pragma region pipeline states definitions
+#pragma endregion
+
+#pragma region global buffer definitions
+#pragma endregion
+
+#pragma region viewable resources definitions
+
 VkBufferUsageFlags VulkanRHIBuffer::METoVKBufferUsageFlags(VulkanDevice* _device, EBufferUsageFlags _me_flags) {
     // Always include TRANSFER_SRC since hardware vendors confirmed it wouldn't have any performance cost and we need it for some debug functionalities.
     VkBufferUsageFlags vk_flags = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
@@ -497,6 +512,120 @@ VkBufferUsageFlags VulkanRHIBuffer::METoVKBufferUsageFlags(VulkanDevice* _device
     return vk_flags;
 }
 
+VkImageType VulkanRHITexture::METoVKImageType(ETextureDimension _dim) {
+    switch (_dim) {
+        case ETextureDimension::TEX_2D:
+        case ETextureDimension::TEX_2D_ARRAY:
+        case ETextureDimension::TEX_CUBE:
+        case ETextureDimension::TEX_CUBE_ARRAY:
+            return VK_IMAGE_TYPE_2D;
+        case ETextureDimension::TEX_3D:
+            return VK_IMAGE_TYPE_3D;
+        default:
+            LOG_CRITICAL("Unsupported texture dimension: {}", static_cast<uint32_t>(_dim));
+            return VK_IMAGE_TYPE_MAX_ENUM;
+    }
+}
+
+VkImageUsageFlags VulkanRHITexture::METoVKImageUsageFlags(ETextureUsageFlags _me_flags) {
+    // Always include TRANSFER_SRC since hardware vendors confirmed it wouldn't have any performance cost and we need it for some debug functionalities.
+    VkImageUsageFlags vk_flags = 0;
+
+    auto TranslateFlag = [&vk_flags, &_me_flags](ETextureUsageFlags _search_me_flags, VkImageUsageFlags _added_if_found, VkImageUsageFlags _added_if_not_found = 0) {
+        const bool has_flag = (_me_flags & _search_me_flags) == _search_me_flags;
+        vk_flags |= has_flag ? _added_if_found : _added_if_not_found;
+    };
+
+    TranslateFlag(ETextureUsageFlags::TRANSFER_SRC, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+    TranslateFlag(ETextureUsageFlags::TRANSFER_DST, VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+    TranslateFlag(ETextureUsageFlags::SAMPLED, VK_IMAGE_USAGE_SAMPLED_BIT);
+    TranslateFlag(ETextureUsageFlags::SHADER_RESOURCE, VK_IMAGE_USAGE_STORAGE_BIT);
+    TranslateFlag(ETextureUsageFlags::COLOR_ATTACHMENT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
+    TranslateFlag(ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT);
+    TranslateFlag(ETextureUsageFlags::TRANSIENT_ATTACHMENT, VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT);
+    TranslateFlag(ETextureUsageFlags::INPUT_ATTACHMENT, VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT);
+#ifdef VK_ENABLE_BETA_EXTENSIONS
+    TranslateFlag(ETextureUsageFlags::VIDEO_DECODE, VK_IMAGE_USAGE_VIDEO_DECODE_DST_BIT_KHR | VK_IMAGE_USAGE_VIDEO_DECODE_SRC_BIT_KHR | VK_IMAGE_USAGE_VIDEO_DECODE_DPB_BIT_KHR);
+#endif
+    TranslateFlag(ETextureUsageFlags::FRAGMENT_DENSITY_MAP, VK_IMAGE_USAGE_FRAGMENT_DENSITY_MAP_BIT_EXT);
+    TranslateFlag(ETextureUsageFlags::FRAGMENT_SHADING_RATE_ATTACHMENT, VK_IMAGE_USAGE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR);
+#ifdef VK_ENABLE_BETA_EXTENSIONS
+    TranslateFlag(ETextureUsageFlags::VIDEO_ENCODE, VK_IMAGE_USAGE_VIDEO_ENCODE_DST_BIT_KHR | VK_IMAGE_USAGE_VIDEO_ENCODE_SRC_BIT_KHR | VK_IMAGE_USAGE_VIDEO_ENCODE_DPB_BIT_KHR);
+#endif
+    TranslateFlag(ETextureUsageFlags::ATTACHMENT_FEEDBACK_LOOP, VK_IMAGE_USAGE_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT);
+
+    return vk_flags;
+}
+
+VkImageLayout VulkanRHITexture::METoVKImageLayout(ETextureLayout _layout) {
+    switch (_layout) {
+        case ETextureLayout::TEXTURE_LAYOUT_UNDEFINED:
+            return VK_IMAGE_LAYOUT_UNDEFINED;
+        case ETextureLayout::TEXTURE_LAYOUT_COMMON:
+            return VK_IMAGE_LAYOUT_GENERAL;
+        case ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT:
+            return VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        case ETextureLayout::TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE:
+            return VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        case ETextureLayout::TEXTURE_LAYOUT_DEPTH_STENCIL_READ:
+            return VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+        case ETextureLayout::TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+            return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        case ETextureLayout::TEXTURE_LAYOUT_TRANSFER_SRC:
+            return VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        case ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST:
+            return VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        case ETextureLayout::TEXTURE_LAYOUT_PRE_INITIALIZED:
+            return VK_IMAGE_LAYOUT_PREINITIALIZED;
+        case ETextureLayout::TEXTURE_LAYOUT_DEPTH_READ_STENCIL_WRITE:
+            return VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL;
+        case ETextureLayout::TEXTURE_LAYOUT_DEPTH_WRITE_STENCIL_READ:
+            return VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL;
+        case ETextureLayout::TEXTURE_LAYOUT_DEPTH_WRITE:
+            return VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        case ETextureLayout::TEXTURE_LAYOUT_DEPTH_READ:
+            return VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL;
+        case ETextureLayout::TEXTURE_LAYOUT_STENCIL_WRITE:
+            return VK_IMAGE_LAYOUT_STENCIL_ATTACHMENT_OPTIMAL;
+        case ETextureLayout::TEXTURE_LAYOUT_STENCIL_READ:
+            return VK_IMAGE_LAYOUT_STENCIL_READ_ONLY_OPTIMAL;
+#ifdef VK_ENABLE_BETA_EXTENSIONS
+        case ETextureLayout::TEXTURE_LAYOUT_VIDEO_ENCODE:
+            return VK_IMAGE_LAYOUT_VIDEO_ENCODE_DST_KHR | VK_IMAGE_LAYOUT_VIDEO_ENCODE_SRC_KHR | VK_IMAGE_LAYOUT_VIDEO_ENCODE_DPB_KHR;
+        case ETextureLayout::TEXTURE_LAYOUT_VIDEO_DECODE:
+            return VK_IMAGE_LAYOUT_VIDEO_DECODE_DST_KHR | VK_IMAGE_LAYOUT_VIDEO_DECODE_SRC_KHR | VK_IMAGE_LAYOUT_VIDEO_DECODE_DPB_KHR;
+#endif
+        case ETextureLayout::TEXTURE_LAYOUT_READ:
+            return VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL;
+        case ETextureLayout::TEXTURE_LAYOUT_WRITE:
+            return VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL;
+        case ETextureLayout::TEXTURE_LAYOUT_PRESENT_SRC:
+            return VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        case ETextureLayout::TEXTURE_LAYOUT_SHARED_PRESENT:
+            return VK_IMAGE_LAYOUT_SHARED_PRESENT_KHR;
+        case ETextureLayout::TEXTURE_LAYOUT_FRAGMENT_DENSITY_MAP:
+            return VK_IMAGE_LAYOUT_FRAGMENT_DENSITY_MAP_OPTIMAL_EXT;
+        case ETextureLayout::TEXTURE_LAYOUT_FRAGMENT_SHADING_RATE_ATTACHMENT:
+            return VK_IMAGE_LAYOUT_FRAGMENT_SHADING_RATE_ATTACHMENT_OPTIMAL_KHR;
+        case ETextureLayout::TEXTURE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL:
+            return VK_IMAGE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT;
+            //        case ETextureLayout::TEXTURE_LAYOUT_QUEUE_TYPE_GRAPHICS: // MARK...
+            //            return VK_IMAGE_LAYOUT_GENERAL;
+            //        case ETextureLayout::TEXTURE_LAYOUT_QUEUE_TYPE_COMPUTE:
+            //            return VK_IMAGE_LAYOUT_GENERAL;
+        default:
+            LOG_CRITICAL("Unsupported texture layout: {}", static_cast<uint32_t>(_layout));
+            return VK_IMAGE_LAYOUT_MAX_ENUM;
+    }
+}
+
+#pragma endregion
+
+#pragma region shader param
+#pragma endregion
+
+#pragma region synchronization
+
 VulkanRHIFence::VulkanRHIFence(const std::string& _name, VulkanDevice* _device) : RHIFence(_name), m_device(_device) {
     VkFenceCreateInfo create_info{};
     create_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
@@ -509,3 +638,20 @@ VulkanRHIFence::VulkanRHIFence(const std::string& _name, VulkanDevice* _device) 
 bool VulkanRHIFence::Signaled() const {
     return vkGetFenceStatus(*m_device, m_fence) == VK_SUCCESS;
 }
+
+#pragma endregion
+
+#pragma region viewable resources view definitions
+#pragma endregion
+
+#pragma region graphic pipeline definitions
+#pragma endregion
+
+#pragma region raytracing
+#pragma endregion
+
+#pragma region render query
+#pragma endregion
+
+#pragma region RDG resource creater
+#pragma endregion
