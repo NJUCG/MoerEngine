@@ -25,6 +25,7 @@ namespace Moer {
         void InitCore();
         void ShutDownCore();
         void InitRenderSystem();
+        void ShutDownRenderSystem();
         void Tick();
 
     private:

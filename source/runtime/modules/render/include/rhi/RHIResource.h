@@ -394,8 +394,8 @@ public:
 struct RHIResourceParameterLayout {
     uint16_t               offset;
     uint16_t               stride;
-    uint8_t slot;
-    uint8_t space;
+    uint8_t                slot;
+    uint8_t                space;
     EShaderBindingBaseType base_type;
 };
 
@@ -1429,7 +1429,7 @@ public:
 class RHIShaderResourceView : public RHIView {
 public:
     explicit RHIShaderResourceView(RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIView(RRT_SHADER_RESOURCE_VIEW, _resource, _viewInfo) {
-        // assert(_viewInfo.IsSRV() && "view must be srv");
+        assert(_viewInfo.IsSRV() && "view must be srv");
     }
 };
 #pragma endregion

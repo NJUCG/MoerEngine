@@ -7,7 +7,7 @@
 #include "taskgraph/GraphTask.h"
 #include "log/LogSystem.h"
 #include "RenderThread.h"
-#define BEGINE_TEST(TestName)                         \
+#define BEGIN_TEST(TestName)                          \
     LOG_INFO("===================================="); \
     LOG_INFO("Begin Test: {}", #TestName);            \
     LOG_INFO("====================================");
@@ -18,7 +18,7 @@
     LOG_INFO("====================================");
 
 void RenderThreadSuspendTest(const Moer::Engine& engine) {
-    BEGINE_TEST(RenderThreadSuspendTest)
+    BEGIN_TEST(RenderThreadSuspendTest)
 
     {
         FunctionGraphTask::ConstructAndDispatchWhenReady(
@@ -50,6 +50,17 @@ void RenderThreadSuspendTest(const Moer::Engine& engine) {
 
     END_TEST(RenderThreadSuspendTest)
 }
+
+void ShaderParameterSetTest() {
+    BEGIN_TEST(ShaderParameterSetTest)
+    TestReflectionShader::Parameters params{};
+    Shader*                          shader = ShaderResourceManager::GetShader<TestReflectionShader>();
+    RHIBatchedShaderParameters       batched_params;
+    auto                             view_info = RHIViewInfo::CreateBufferSRVInfo();
+    params.bar                                 = new RHIShaderResourceView(nullptr, view_info);
+    batched_params.SetParameters(shader, params);
+    END_TEST(ShaderParameterSetTest)
+}
 int main(int argc, const char** argv) {
 
     Moer::Engine         engine;
@@ -57,14 +68,8 @@ int main(int argc, const char** argv) {
 
     engine.Init(info);
     engine.PostInit();
-    // RenderThreadSuspendTest(engine);
+    ShaderParameterSetTest();
     engine.Run();
-    TestReflectionShader::Parameters params{};
-    Shader* shader = ShaderResourceManager::GetShader<TestReflectionShader>();
-    RHIBatchedShaderParameters batched_params;
-    auto view_info = RHIViewInfo::CreateBufferSRVInfo();
 
-    params.bar = new RHIShaderResourceView(nullptr, view_info);
-    batched_params.SetParameters(shader, params);
     engine.Quit();
 }
