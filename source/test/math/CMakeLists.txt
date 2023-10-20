@@ -1,4 +1,4 @@
-set(target_name math_test)
+set(target_name MathTest)
 
 add_executable(${target_name} main.cpp)
 target_link_libraries(${target_name} PUBLIC MoerRuntimeCore)

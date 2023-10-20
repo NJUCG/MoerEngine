@@ -73,7 +73,7 @@ namespace Vulkan {
         vkCmdInsertDebugUtilsLabelEXT = reinterpret_cast<PFN_vkCmdInsertDebugUtilsLabelEXT>(vkGetInstanceProcAddr(instance, "vkCmdInsertDebugUtilsLabelEXT"));
     }
 
-    void DebugUtils::CmdBeginLabel(VkCommandBuffer cmd_buffer, const std::string& caption, glm::vec4 color) {
+    void DebugUtils::CmdBeginLabel(VkCommandBuffer cmd_buffer, const std::string& caption, Moer::Vector4f color) {
         if (!vkCmdBeginDebugUtilsLabelEXT) {
             return;
         }
