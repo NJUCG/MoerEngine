@@ -2,7 +2,7 @@
 #define THREAD_H
 #include "ThreadManager.h"
 #include "Event.h"
-#include "misc/StatQueue.h"
+#include "misc/AsyncQueue.h"
 #include <iostream>
 class BaseGraphTask;
 

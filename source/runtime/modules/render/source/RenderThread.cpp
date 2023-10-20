@@ -2,10 +2,8 @@
 #include "Core.h"
 #include "log/LogSystem.h"
 #include "platform/Platform.h"
-#include "taskgraph/Event.h"
-#include "taskgraph/GraphTask.h"
-#include "taskgraph/TaskGraph.h"
 #include "taskgraph/TaskSystem.h"
+#include "taskgraph/GraphTask.h"
 #include "taskgraph/ThreadManager.h"
 #include <atomic>
 #include <cstddef>
@@ -25,9 +23,9 @@ namespace Moer {
             _is_bound_to_taskgraph_event->Trigger();
         }
         assert(IsRenderThreadInitialized() && "render thread not set");
-        LOG_INFO("[RENDER THREAD] thread id:{} executing", ThreadManager::g_render_thread_id);
+        LOG_INFO("[RENDER THREAD] thread id:{} executing", GetRenderThreadId());
         TaskGraph::GetInterface().ProcessThreadUntilReturn(EThread::ERenderThread);
-        LOG_INFO("[RENDER THREAD] thread id:{} end", ThreadManager::g_render_thread_id);
+        LOG_INFO("[RENDER THREAD] thread id:{} end", GetRenderThreadId());
     }
     class RenderThread : public Runnable {
     public:
@@ -43,7 +41,7 @@ namespace Moer {
         }
 
         virtual void Init() override {
-            ThreadManager::g_render_thread_id = Platform::GetCurrentThreadID();
+            ThreadManager::SetRenderThreadID(Platform::GetCurrentThreadID());
         }
         virtual uint32_t Run() override {
 
@@ -53,7 +51,7 @@ namespace Moer {
         }
         virtual void Stop() override{};
         virtual void Exit() override {
-            ThreadManager::g_render_thread_id = 0;
+            ThreadManager::SetRenderThreadID(0);
         };
         virtual ThreadIndex GetIndex() override { return EThread::ERenderThread; };
 

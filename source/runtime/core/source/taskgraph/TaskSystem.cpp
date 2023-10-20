@@ -3,8 +3,8 @@
 
 #include <iostream>
 #include <thread>
+#include "Core.h"
 #include "taskgraph/TaskGraph.h"
-#include "taskgraph/StatQueue.h"
 #include "taskgraph/ThreadManager.h"
 #include "platform/Platform.h"
 #include "taskgraph/GraphTask.h"
@@ -273,7 +273,7 @@ bool TaskGraphTest() {
     }
     SPDLOG_INFO("=============== (local queue) task  depends on a task that is not in the same queue succuss ================");
     {// launch a GT task, then an any-thread task that depends on it. wait for the any-thread task. this was a deadlock on the new frontend
-        GraphEventRef GTTask = FunctionGraphTask::ConstructAndDispatchWhenReady([] { return ThreadManager::g_game_thread_id == Platform::GetCurrentThreadID(); }, nullptr, EThread::EGameThread);
+        GraphEventRef GTTask = FunctionGraphTask::ConstructAndDispatchWhenReady([] { return Moer::GetGameThreadId() == Platform::GetCurrentThreadID(); }, nullptr, EThread::EGameThread);
         GTTask->Wait();//delete this will cause dead lock
         GraphEventRef AnyThreadTask = FunctionGraphTask::ConstructAndDispatchWhenReady([] {}, GTTask);
         AnyThreadTask->Wait();

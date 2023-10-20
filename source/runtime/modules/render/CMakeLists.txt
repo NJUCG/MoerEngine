@@ -7,7 +7,7 @@ file(GLOB_RECURSE RENDER_MODULE_HEADERS "include/*.h")
 file(GLOB_RECURSE RENDER_MODULE_SOURCES "source/*.cpp" "source/*.h")
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${RENDER_MODULE_HEADERS} ${RENDER_MODULE_SOURCES})
 
-add_library(${MODULE_NAME} ${RENDER_MODULE_HEADERS} ${RENDER_MODULE_SOURCES})
+add_library(${MODULE_NAME} STATIC ${RENDER_MODULE_HEADERS} ${RENDER_MODULE_SOURCES})
 
 set_target_properties(${MODULE_NAME} PROPERTIES FOLDER "runtime")
 
@@ -32,6 +32,7 @@ target_link_libraries(${MODULE_NAME}
     PUBLIC MoerRuntimeCore
     PUBLIC Microsoft::DirectX-Guids
     PUBLIC Microsoft::DirectX-Headers
+    PUBLIC glfw
 )
 
 add_dependencies(${MODULE_NAME} DXC_COPY)

@@ -1,5 +1,5 @@
 #include "rhi/RHIResource.h"
-#include "misc/StatQueue.h"
+#include "misc/AsyncQueue.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommandList.h"
 #include "shader/Shader.h"
@@ -183,15 +183,15 @@ AttachmentBindingSlots* GetAttachmentBindings(uint8_t* data, uint32_t offset) {
 }
 void RHIBatchedShaderParameters::SetParameters(Shader* shader, size_t _data_size, uint8_t* data_source) {
     const auto& param_layout_info = shader->GetRootParametersLayoutInfo();
-    uint32_t param_max_size = _data_size >> 3;
-    size_t left_size = resource_parameters.capacity() - resource_parameters.size();
-    
-    if(left_size < param_max_size)resource_parameters.reserve(left_size + resource_parameters.size());
-    for (const auto& param_info: param_layout_info.GetLayoutInfos()) {
-        RHIResource* data = GetResource(data_source, param_info.offset);
-        bool npt = data;
-        bool b_set = param_info.IsValid() && IsParameterResource(param_info.type) && data;
-        if(b_set){
+    uint32_t    param_max_size    = _data_size >> 3;
+    size_t      left_size         = resource_parameters.capacity() - resource_parameters.size();
+
+    if (left_size < param_max_size) resource_parameters.reserve(left_size + resource_parameters.size());
+    for (const auto& param_info : param_layout_info.GetLayoutInfos()) {
+        RHIResource* data  = GetResource(data_source, param_info.offset);
+        bool         npt   = data;
+        bool         b_set = param_info.IsValid() && IsParameterResource(param_info.type) && data;
+        if (b_set) {
             resource_parameters.emplace_back(RHIShaderResourceParameter(data, param_info.slot, param_info.space));
         }
     }

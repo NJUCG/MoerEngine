@@ -6,7 +6,7 @@
 #include <memory>
 #include "misc/CountableRef.h"
 #include "TaskGraph.h"
-#include "misc/StatQueue.h"
+#include "misc/AsyncQueue.h"
 
 class BaseGraphTask {
 public:
@@ -23,9 +23,9 @@ public:
     void SetPriority(ThreadPriority priority) {
         m_preferd_thread = EThread::SetPriority(m_preferd_thread, priority << EThread::PRIORITY_SHEFT);
     }
-    void QueueTask(EThread::Type currentThread, bool shouldWakeWorker);
-    void PrerequestsComplete(EThread::Type currentThread, int32_t finishedCount, bool unlock = true);
-    bool ConditionalQueueTask(EThread::Type currentThread, bool shouldWakeWorker) {
+    void          QueueTask(EThread::Type currentThread, bool shouldWakeWorker);
+    CORE_API void PrerequestsComplete(EThread::Type currentThread, int32_t finishedCount, bool unlock = true);
+    bool          ConditionalQueueTask(EThread::Type currentThread, bool shouldWakeWorker) {
         if (m_prerequests_count.fetch_sub(1, std::memory_order_acq_rel) == 1) {
             QueueTask(currentThread, shouldWakeWorker);
             return true;
@@ -51,9 +51,9 @@ class GraphEvent : public Countable {
 public:
     GraphEvent() : thread_to_wait_on{EThread::UNKNOWN_THREAD} {};
     ~GraphEvent() = default;
-    static GraphEventRef CreateGraphEvent();
-    bool                 AddSubsequent(BaseGraphTask* subsequent);
-    void                 Destroy() override {
+    CORE_API static GraphEventRef CreateGraphEvent();
+    CORE_API bool                 AddSubsequent(BaseGraphTask* subsequent);
+    void                          Destroy() override {
         delete this;
     }
     bool IsComplete();
@@ -62,10 +62,10 @@ public:
 
         m_events_to_wait.emplace_back(std::move(_eventRef));
     }
-    void TryUnlockSubsequents(std::vector<BaseGraphTask*>& tasks, EThread::Type currentThread = EThread::UNKNOWN_THREAD);
-    void TryUnlockSubsequents(EThread::Type currentThread = EThread::UNKNOWN_THREAD);
+    CORE_API void TryUnlockSubsequents(std::vector<BaseGraphTask*>& tasks, EThread::Type currentThread = EThread::UNKNOWN_THREAD);
+    CORE_API void TryUnlockSubsequents(EThread::Type currentThread = EThread::UNKNOWN_THREAD);
 
-    void          Wait(EThread::Type currentThread = EThread::UNKNOWN_THREAD);
+    CORE_API void Wait(EThread::Type currentThread = EThread::UNKNOWN_THREAD);
     GraphEventRef GetHandle() {
         return this;
     }

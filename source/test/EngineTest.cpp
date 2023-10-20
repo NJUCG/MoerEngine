@@ -4,7 +4,6 @@
 #include "rhi/RHIResource.h"
 #include "shader/Shader.h"
 #include "shader/ShaderResourceManager.h"
-#include "taskgraph/GraphTask.h"
 #include "log/LogSystem.h"
 #include "RenderThread.h"
 #define BEGIN_TEST(TestName)                          \

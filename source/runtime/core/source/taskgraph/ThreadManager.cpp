@@ -9,8 +9,8 @@
 #include "platform/Platform.h"
 #include "taskgraph/Event.h"
 
-uint32_t ThreadManager::g_game_thread_id   = 0;
-uint32_t ThreadManager::g_render_thread_id = 0;
+CORE_API uint32_t ThreadManager::g_game_thread_id   = 0;
+CORE_API uint32_t ThreadManager::g_render_thread_id = 0;
 
 std::string GetPriorityStr(int32_t priority) {
     assert(priority < EThread::PriorityCount);
@@ -38,15 +38,34 @@ void ThreadManager::RemoveThread(RunnableThread* thread) {
     auto target = m_threads.find(thread->id);
     if (target != m_threads.end()) m_threads.erase(target);
 }
+void ThreadManager::SetGameThreadID(uint32_t _game_thread_id) {
+    g_game_thread_id = _game_thread_id;
+}
 
+void ThreadManager::SetRenderThreadID(uint32_t _render_thread_id) {
+    g_render_thread_id = _render_thread_id;
+}
+uint32_t ThreadManager::GetRenderThreadID() {
+    return g_render_thread_id;
+}
+uint32_t ThreadManager::GetGameThreadID() {
+    return g_game_thread_id;
+}
 void ThreadManager::Tick() {
 }
 
-void ThreadManager::initialize() {
+void ThreadManager::Initialize() {
     g_game_thread_id = Platform::GetCurrentThreadID();
 }
 uint32_t ThreadManager::GetCurrentThreadID() {
     return Platform::GetCurrentThreadID();
+}
+
+std::string ThreadManager::GetThreadName(uint32_t id) {
+
+    if (id == g_game_thread_id) return "GameThread";
+    if (id == g_render_thread_id) return "RenderThread";
+    return Instance().GetRunnableThreadName(id);
 }
 
 ThreadManager& ThreadManager::Instance() {
