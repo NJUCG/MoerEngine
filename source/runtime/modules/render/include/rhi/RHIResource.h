@@ -6,7 +6,6 @@
 #include "math/Base.h"
 
 #include "misc/Ptr.h"
-#include "misc/StatQueue.h"
 #include "misc/CountableRef.h"
 
 #include "rhi/RHICommon.h"

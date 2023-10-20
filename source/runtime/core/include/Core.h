@@ -3,9 +3,10 @@
 #include "API_Macro.h"
 #include "platform/Platform.h"
 #include "taskgraph/TaskSystem.h"
+#include "taskgraph/GraphTask.h"
 #include "config/ConfigMap.h"
 #include "misc/EnumBitOperation.h"
-#include "misc/StatQueue.h"
+#include "misc/AsyncQueue.h"
 #include "misc/Hash.h"
 #include "math/Math.h"
 
@@ -18,6 +19,10 @@ namespace Moer {
     CORE_API extern bool IsGameThreadInitialized();
 
     CORE_API extern bool IsRenderThreadInitialized();
+
+    CORE_API extern uint32_t GetRenderThreadId();
+
+    CORE_API extern uint32_t GetGameThreadId();
 }// namespace Moer
 
 #endif// !MOER_CORE_H

@@ -1,5 +1,6 @@
 ﻿#ifndef THREAD_MANAGER_H
 #define THREAD_MANAGER_H
+#include "API_Macro.h"
 #include <map>
 #include <string>
 #include <thread>
@@ -63,19 +64,19 @@ class Runnable;
 //actual thread
 class RunnableThread;
 //thread manager for runnable thread registration
-class ThreadManager {
+class CORE_API ThreadManager {
     friend class TaskGraph;
 
 public:
-    static uint32_t g_game_thread_id;
-    static uint32_t g_render_thread_id;
     ~ThreadManager();
 
 private:
+    static uint32_t g_game_thread_id;
+    static uint32_t g_render_thread_id;
     ThreadManager() {
-        initialize();
+        Initialize();
     }
-    void initialize();
+    void Initialize();
 
 public:
     void                  AddThread(uint32_t id, RunnableThread*);
@@ -83,13 +84,12 @@ public:
     inline int32_t        GetNum() { return m_threads.size(); }
     void                  Tick();
     static ThreadManager& Instance();
-    static std::string    GetThreadName(uint32_t id) {
-
-        if (id == g_game_thread_id) return "GameThread";
-        if (id == g_render_thread_id) return "RenderThread";
-        return Instance().GetRunnableThreadName(id);
-    }
-    static uint32_t GetCurrentThreadID();
+    static std::string    GetThreadName(uint32_t id);
+    static void           SetGameThreadID(uint32_t _game_thread_id);
+    static void           SetRenderThreadID(uint32_t _render_thread_id);
+    static uint32_t       GetRenderThreadID();
+    static uint32_t       GetGameThreadID();
+    static uint32_t       GetCurrentThreadID();
 
 private:
     void                                ShutDown();
@@ -103,9 +103,9 @@ class RunnableThread {
     friend class TaskGraph;
 
 public:
-    static RunnableThread* Create(Runnable*   runnable,
-                                  std::string name,
-                                  uint64_t    affinity_mask);
+    CORE_API static RunnableThread* Create(Runnable*   runnable,
+                                           std::string name,
+                                           uint64_t    affinity_mask);
     virtual ~RunnableThread();
     void Tick();
     void Join() {

@@ -3,7 +3,7 @@
 
 #include "TaskGraph.h"
 namespace Moer {
-    class TaskSystem {
+    class CORE_API TaskSystem {
     public:
         TaskSystem() = default;
         ~TaskSystem() {}

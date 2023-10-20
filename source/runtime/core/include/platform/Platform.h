@@ -1,5 +1,6 @@
 #ifndef PLATFORM_H
 #define PLATFORM_H
+#include "API_Macro.h"
 #include <cstdint>
 #if defined(WIN32) || defined(_WIN32) || defined(_WIN32_) || defined(WIN64) || defined(_WIN64) || defined(_WIN64_)
 
@@ -19,11 +20,11 @@ protected:
     static class PlatformImplement* GetInstance();
 
 public:
-    static void     SetThreadAffinity(void* current_thread_handle, uint64_t mask);
-    static void     SetThreadGroupAffinity(void* current_thread_handle, uint16_t group_mask, uint64_t affinity_mask);
-    static int32_t  GetProcessorWorkGroupCount();
-    static int32_t  GetProcessorCoreCountInGroup(uint32_t groupID);
-    static int32_t  GetProcessorCoreCount();
-    static uint32_t GetCurrentThreadID();
+    CORE_API static void     SetThreadAffinity(void* current_thread_handle, uint64_t mask);
+    CORE_API static void     SetThreadGroupAffinity(void* current_thread_handle, uint16_t group_mask, uint64_t affinity_mask);
+    CORE_API static int32_t  GetProcessorWorkGroupCount();
+    CORE_API static int32_t  GetProcessorCoreCountInGroup(uint32_t groupID);
+    CORE_API static int32_t  GetProcessorCoreCount();
+    CORE_API static uint32_t GetCurrentThreadID();
 };
 #endif// !PLATFORM_H

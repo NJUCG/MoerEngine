@@ -1,5 +1,5 @@
 #include "taskgraph/Event.h"
-#include "taskgraph/StatQueue.h"
+#include "misc/AsyncQueue.h"
 #include "spdlog/spdlog.h"
 #include "platform/Platform.h"
 #include <chrono>

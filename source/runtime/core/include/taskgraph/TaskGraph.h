@@ -1,8 +1,9 @@
 #ifndef TASK_GRAPH_H
 #define TASK_GRAPH_H
 #include <memory>
+#include "API_Macro.h"
 #include "Thread.h"
-#include "misc/StatQueue.h"
+#include "misc/AsyncQueue.h"
 #include "misc/CountableRef.h"
 class GraphEvent;
 typedef CountableRef<GraphEvent>   GraphEventRef;
@@ -16,20 +17,20 @@ private:
     static TaskGraph* instance;
 
 public:
-    static TaskGraph& GetInterface();
-    static void       Init();
+    CORE_API static TaskGraph& GetInterface();
+    static void                Init();
     TaskGraph();
     ~TaskGraph();
-    void                   WaitUntilTasksComplete(const GraphEventArray& task_events, EThread::Type currentThread);
-    void                   WaitUntilTaskComplete(const GraphEventRef& task, EThread::Type currentThread);
-    void                   WaitUntilTaskComplete(GraphEventRef&& task, EThread::Type currentThread);
-    void                   AttachToNameThread(EThread::Type type);
+    CORE_API void          WaitUntilTasksComplete(const GraphEventArray& task_events, EThread::Type currentThread);
+    CORE_API void          WaitUntilTaskComplete(const GraphEventRef& task, EThread::Type currentThread);
+    CORE_API void          WaitUntilTaskComplete(GraphEventRef&& task, EThread::Type currentThread);
+    CORE_API void          AttachToNameThread(EThread::Type type);
     virtual void           QueueTask(BaseGraphTask* task, EThread::Type prefered_thread, EThread::Type current_thread = EThread::UNKNOWN_THREAD, bool wake_worker = true);
     virtual void           ReturnThread(EThread::Type index);
     virtual BaseGraphTask* DequeueTask(int32_t threadIndex);
-    virtual void           ProcessThreadUntilIdle(EThread::Type index);
-    virtual void           ProcessThreadUntilReturn(EThread::Type index);
-    bool                   IsThreadProcessingTask(EThread::Type index);
+    CORE_API virtual void  ProcessThreadUntilIdle(EThread::Type index);
+    CORE_API virtual void  ProcessThreadUntilReturn(EThread::Type index);
+    CORE_API bool          IsThreadProcessingTask(EThread::Type index);
 
 protected:
     EThread::Type GetCurrentThread(bool localQueue = false);

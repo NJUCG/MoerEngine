@@ -1,5 +1,4 @@
 #include "taskgraph/TaskGraph.h"
-#include "taskgraph/StatQueue.h"
 #include "taskgraph/ThreadManager.h"
 #include "platform/Platform.h"
 #include "taskgraph/GraphTask.h"
