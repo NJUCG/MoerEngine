@@ -42,12 +42,15 @@ namespace Moer {
 
         RenderSystem::Init();
     }
+    void Engine::ShutDownRenderSystem() {
+        RenderSystem::ShutDown();
+    }
     void Engine::Tick() {
     }
 
     void Engine::Quit() {
         b_request_quiting = true;
-        RenderSystem::ShutDown();
+        ShutDownRenderSystem();
         ShutDownCore();
 
         SPDLOG_INFO("Engine Quit");
