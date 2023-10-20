@@ -5,9 +5,9 @@
 #ifndef VULKAN_DEBUG_H
 #define VULKAN_DEBUG_H
 
-#include <vulkan.h>
-#include <glm/glm.hpp>
+#include "math/Base.h"
 
+#include <vulkan.h>
 #include <string>
 
 namespace MoerEngine {
@@ -34,7 +34,7 @@ namespace Vulkan {
         static PFN_vkCmdInsertDebugUtilsLabelEXT vkCmdInsertDebugUtilsLabelEXT;
 
         static void Setup(VkInstance instance);
-        static void CmdBeginLabel(VkCommandBuffer cmd_buffer, const std::string& caption, glm::vec4 color);
+        static void CmdBeginLabel(VkCommandBuffer cmd_buffer, const std::string& caption, Moer::Vector4f color);
         static void CmdEndLabel(VkCommandBuffer cmd_buffer);
     };
 

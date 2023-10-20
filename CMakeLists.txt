@@ -28,6 +28,8 @@ option(moer_build_test "build test unit" ON)
 
 if(${MSVC})
     add_compile_options("/Zc:preprocessor")
+    add_compile_options("/wd5105")
+    add_compile_options("/wd5104")
 endif()
 
 
