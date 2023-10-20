@@ -55,8 +55,8 @@ public:
 
     RHIComputePipelineStateRef RHICreateComputePipelineState(RHIComputeShader* _compute_shader) final override;
 
-    void RHICopyBuffer(RHIBuffer* _src, RHIBuffer* _dst) final override;
-
+    void         RHIUploadBuffer(RHIBufferRef _buffer_ref, const uint8_t* _data, uint32_t _size) final override;
+    void         RHICopyBuffer(RHIBuffer* _src, RHIBuffer* _dst) final override;
     RHIBufferRef RHICreateBuffer(const RHIBufferCreateInfo& info) final override;
     void*        RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size) final override;
     void         RHIUnmapBuffer(RHIBuffer* _buffer) final override;
@@ -65,6 +65,11 @@ public:
 
     RHIShaderResourceViewRef  RHICreateShaderResourceView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) final override;
     RHIUnorderedAccessViewRef RHICreateUnorderedAccessView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) final override;
+
+    RHICommandQueue*        CreateCommandQueue(ECommandQueueType type) final override;
+    RHIGraphicsCommandList* CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state = nullptr) final override;
+    RHIComputeCommandList*  CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr) final override;
+
 #pragma endregion
 
 protected:

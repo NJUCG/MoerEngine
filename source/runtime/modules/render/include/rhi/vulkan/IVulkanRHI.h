@@ -49,10 +49,8 @@ public:
 
     RHIComputePipelineStateRef RHICreateComputePipelineState(RHIComputeShader* _compute_shader) override { return RHIComputePipelineStateRef{}; }
 
-    virtual void RHIUploadBuffer(RHIBufferRef _buffer_ref, const uint8_t* _data, uint32_t _size) override{};
-
-    void RHICopyBuffer(RHIBuffer* _src, RHIBuffer* _dst) override {}
-
+    void         RHIUploadBuffer(RHIBufferRef _buffer_ref, const uint8_t* _data, uint32_t _size) override{};
+    void         RHICopyBuffer(RHIBuffer* _src, RHIBuffer* _dst) override {}
     RHIBufferRef RHICreateBuffer(const RHIBufferCreateInfo& info) override { return RHIBufferRef{}; }
     void*        RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size) override { return nullptr; }
     void         RHIUnmapBuffer(RHIBuffer* _buffer) override {}
@@ -62,11 +60,9 @@ public:
     RHIShaderResourceViewRef  RHICreateShaderResourceView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) override { return RHIShaderResourceViewRef{}; }
     RHIUnorderedAccessViewRef RHICreateUnorderedAccessView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) override { return RHIUnorderedAccessViewRef{}; }
 
-    RHICommandQueue* CreateCommandQueue(ECommandQueueType type) override { return nullptr; }
-
+    RHICommandQueue*        CreateCommandQueue(ECommandQueueType type) override { return nullptr; }
     RHIGraphicsCommandList* CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state = nullptr) override { return nullptr; }
-
-    RHIComputeCommandList* CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr) override { return nullptr; }
+    RHIComputeCommandList*  CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr) override { return nullptr; }
 
 #pragma endregion
 };
