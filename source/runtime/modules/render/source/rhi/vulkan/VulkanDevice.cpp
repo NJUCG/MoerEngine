@@ -21,7 +21,7 @@ void VulkanDevice::Init(const DeviceInitializer& _initializer) {
         VkUtil::ExitFatal("No available GPU found.", -1);
     }
     vkGetPhysicalDeviceProperties(m_gpu, &m_gpu_props);
-    vkGetPhysicalDeviceFeatures(m_gpu, &m_gpu_features);
+    m_gpu_features.Query(m_gpu, _initializer.api_version);
     vkGetPhysicalDeviceMemoryProperties(m_gpu, &m_gpu_mem_props);
     m_gpu_extensions       = GetGpuExtensions(m_gpu);
     m_queue_family_indices = QueryQueueFamilyIndices(m_gpu, _initializer.surface);
@@ -46,10 +46,6 @@ void VulkanDevice::Init(const DeviceInitializer& _initializer) {
 }
 
 void VulkanDevice::Destroy() {
-}
-
-VulkanGraphicsCommandList VulkanDevice::CreateGraphicsCommandList(VkCommandBufferLevel _level) {
-    return VulkanGraphicsCommandList(this, m_default_pool, _level);
 }
 
 /**
@@ -129,15 +125,15 @@ void VulkanDevice::CreateDevice(const DeviceInitializer& _initializer) {
         device_create_info.ppEnabledExtensionNames = enabled_extensions.data();
     }
 
-    VkPhysicalDeviceFeatures2 gpu_features2{};
-    if (_initializer.p_next_chain) {
-        gpu_features2.sType                 = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-        gpu_features2.pNext                 = _initializer.p_next_chain;
-        gpu_features2.features              = _initializer.enabled_features;
+    VkPhysicalDeviceFeatures2 enabled_features;
+    if (_initializer.api_version >= VK_API_VERSION_1_0) {
+        enabled_features.sType              = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        enabled_features.features           = _initializer.enabled_features.core_1_0;
+        enabled_features.pNext              = const_cast<VkPhysicalDeviceVulkan11Features*>(&_initializer.enabled_features.core_1_1);
         device_create_info.pEnabledFeatures = nullptr;
-        device_create_info.pNext            = &gpu_features2;
+        device_create_info.pNext            = &enabled_features;
     } else {
-        device_create_info.pEnabledFeatures = &_initializer.enabled_features;
+        device_create_info.pEnabledFeatures = &_initializer.enabled_features.core_1_0;
         device_create_info.pNext            = nullptr;
     }
 

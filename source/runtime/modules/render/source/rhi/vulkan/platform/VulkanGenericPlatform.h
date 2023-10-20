@@ -12,6 +12,7 @@
 #include "vulkan.h"
 
 class VulkanDevice;
+class VulkanPhysicalDeviceFeatures;
 
 class VulkanGenericPlatform {
 public:
@@ -22,6 +23,8 @@ public:
     static void GetDeviceLayers(std::vector<std::string>& _layers) {}
     // create the platform-specific surface object - required
     static VkSurfaceKHR CreateSurface();
+    // Allow the platform code to restrict the device features
+    static void RestrictEnabledPhysicalDeviceFeatures(VulkanPhysicalDeviceFeatures* _gpu_features);
 };
 
 #endif// VULKAN_GENERIC_PLATFORM_H
