@@ -47,12 +47,6 @@ endif()
 
 add_subdirectory(spdlog)
 set_target_properties(spdlog PROPERTIES FOLDER ${third_party_folder})
-
-# option(BUILD_STATIC_LIBS ON)
-# option(BUILD_TESTING OFF)
-# option(GLM_TEST_ENABLE OFF)
-# option(BUILD_SHARED_LIBS OFF)
-# ADD_SUBDIRECTORY(glm)
     
 option(GLFW_BUILD_DOCS OFF)
 option(GLFW_BUILD_EXAMPLES OFF)
@@ -66,3 +60,5 @@ set(SPIRV_REFLECT_STATIC_LIB     ON)
 add_subdirectory(SPIRV-Reflect)
 
 add_subdirectory(DirectX-Headers)
+
+add_subdirectory(AssetLoad)
