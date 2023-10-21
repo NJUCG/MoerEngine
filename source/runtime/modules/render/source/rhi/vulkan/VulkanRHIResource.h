@@ -68,6 +68,7 @@ public:
 class VulkanEnumTranslator final {
 public:
     static VkSampleCountFlagBits METoVKSampleCountFlagBits(uint32_t _me_count);
+    static VkImageViewType       METoVKImageViewType(ETextureDimension _dim);
 };
 
 #pragma endregion
@@ -257,7 +258,59 @@ private:
 #pragma endregion
 
 #pragma region viewable resources view definitions
+
+class VulkanRHIUnorderedAccessView final : public RHIUnorderedAccessView {
+    friend VulkanRHIImpl;
+
+public:
+    explicit VulkanRHIUnorderedAccessView(RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIUnorderedAccessView(_resource, _viewInfo) {}
+
+private:
+    VkImageView m_view;
+};
+
+class VulkanRHIShaderResourceView final : public RHIShaderResourceView {
+    friend VulkanRHIImpl;
+
+public:
+    explicit VulkanRHIShaderResourceView(RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIShaderResourceView(_resource, _viewInfo) {}
+
+private:
+    VkImageView m_view;
+};
+
 #pragma endregion
+
+class VulkanRHIStagingBuffer : public RHIStagingBuffer {
+    friend VulkanRHIImpl;
+
+public:
+    VulkanRHIStagingBuffer(uint64_t _byte_size) : RHIStagingBuffer(), m_gpu_byte_size(_byte_size) {}
+    ~VulkanRHIStagingBuffer() {}
+
+    uint64_t GetGPUByteSize() const override { return m_gpu_byte_size; }
+
+    inline const VmaAllocation GetAllocation() const {
+        return m_alloc.alloc;
+    }
+
+    inline VkBuffer GetHandle() const {
+        return m_alloc.buffer;
+    }
+
+    void* GetSuballocationFromBuffer(uint32_t _size);
+
+private:
+    struct BufferAlloc {
+        VkBuffer      buffer;
+        VmaAllocation alloc;
+    } m_alloc;
+
+    void*    m_head_ptr;
+    void*    m_cur_ptr;
+    void*    m_tail_ptr;
+    uint64_t m_gpu_byte_size;
+};
 
 #pragma region graphic pipeline definitions
 #pragma endregion

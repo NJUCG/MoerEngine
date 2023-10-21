@@ -37,6 +37,24 @@ VkSampleCountFlagBits VulkanEnumTranslator::METoVKSampleCountFlagBits(uint32_t _
     }
 }
 
+VkImageViewType VulkanEnumTranslator::METoVKImageViewType(ETextureDimension _dim) {
+    switch (_dim) {
+        case ETextureDimension::TEX_2D:
+            return VK_IMAGE_VIEW_TYPE_2D;
+        case ETextureDimension::TEX_2D_ARRAY:
+            return VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+        case ETextureDimension::TEX_3D:
+            return VK_IMAGE_VIEW_TYPE_3D;
+        case ETextureDimension::TEX_CUBE:
+            return VK_IMAGE_VIEW_TYPE_CUBE;
+        case ETextureDimension::TEX_CUBE_ARRAY:
+            return VK_IMAGE_VIEW_TYPE_CUBE_ARRAY;
+        default:
+            LOG_CRITICAL("Unsupported SRV dimension type: {}", static_cast<uint32_t>(_dim));
+            return VK_IMAGE_VIEW_TYPE_MAX_ENUM;
+    }
+}
+
 #pragma endregion
 
 void VulkanRHISampler::GenerateSamplerFromInitializer(const VulkanDevice* _device, const RHISamplerInitializer& _initializer) {
@@ -642,7 +660,13 @@ bool VulkanRHIFence::Signaled() const {
 #pragma endregion
 
 #pragma region viewable resources view definitions
+
 #pragma endregion
+
+void* VulkanRHIStagingBuffer::GetSuballocationFromBuffer(uint32_t _size) {
+    assert(reinterpret_cast<uint8_t*>(m_cur_ptr) + _size <= m_tail_ptr);
+    return reinterpret_cast<uint8_t*>(m_cur_ptr) + _size;
+}
 
 #pragma region graphic pipeline definitions
 #pragma endregion

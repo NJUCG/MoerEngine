@@ -6,6 +6,7 @@
 #include "rhi/vulkan/VulkanCommandList.h"
 
 #include "VulkanDevice.h"
+#include "VulkanRHIResource.h"
 
 VulkanRHIGraphicsCommandList::VulkanRHIGraphicsCommandList(VulkanDevice* _device, VkCommandPool _pool, VkCommandBufferLevel _level) : m_device(_device) {
     VkCommandBufferAllocateInfo buffer_alloc_info{};
