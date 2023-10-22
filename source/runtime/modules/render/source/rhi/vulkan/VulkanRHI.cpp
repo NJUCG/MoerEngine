@@ -234,7 +234,7 @@ RHITextureRef VulkanRHIImpl::RHICreateTexture(const RHITextureCreateInfo& info) 
     image_create_info.sharingMode           = VK_SHARING_MODE_EXCLUSIVE;
     image_create_info.queueFamilyIndexCount = 0;
     image_create_info.pQueueFamilyIndices   = nullptr;
-    image_create_info.initialLayout         = VulkanRHITexture::METoVKImageLayout(info.layout);
+    image_create_info.initialLayout         = VulkanEnumTranslator::METoVKImageLayout(info.layout);
 
     VmaAllocationCreateInfo alloc_create_info{};
     alloc_create_info.flags = 0;

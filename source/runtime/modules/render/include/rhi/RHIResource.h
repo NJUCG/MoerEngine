@@ -1089,8 +1089,8 @@ struct RHIViewInfo {
     };
 
     bool IsSRV() const { return base_info.view_type == EViewType::BUFFER_SRV || base_info.view_type == EViewType::TEXTURE_SRV; }
-    bool IsUAV() const { return base_info.view_type == EViewType::BUFFER_UAV || base_info.view_type == EViewType::BUFFER_UAV; }
-    bool IsUBV() const { return base_info.view_type == EViewType::BUFFER_CBV || base_info.view_type == EViewType::TEXTURE_CBV; }
+    bool IsUAV() const { return base_info.view_type == EViewType::BUFFER_UAV || base_info.view_type == EViewType::TEXTURE_UAV; }
+    bool IsCBV() const { return base_info.view_type == EViewType::BUFFER_CBV || base_info.view_type == EViewType::TEXTURE_CBV; }
 
     bool IsBuffer() const { return base_info.view_type == EViewType::BUFFER_SRV || base_info.view_type == EViewType::BUFFER_UAV; }
     bool IsTexture() const { return !IsBuffer(); }
@@ -1402,6 +1402,18 @@ public:
 
     bool IsTexture() const {
         return info.IsTexture();
+    }
+
+    bool IsSRV() const {
+        return info.IsSRV();
+    }
+
+    bool IsUAV() const {
+        return info.IsUAV();
+    }
+
+    bool IsCBV() const {
+        return info.IsCBV();
     }
 
 protected:
