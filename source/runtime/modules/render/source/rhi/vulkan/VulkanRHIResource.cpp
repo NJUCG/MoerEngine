@@ -55,6 +55,96 @@ VkImageViewType VulkanEnumTranslator::METoVKImageViewType(ETextureDimension _dim
     }
 }
 
+VkImageLayout VulkanEnumTranslator::METoVKImageLayout(ETextureLayout _layout) {
+    switch (_layout) {
+        case ETextureLayout::TEXTURE_LAYOUT_UNDEFINED:
+            return VK_IMAGE_LAYOUT_UNDEFINED;
+        case ETextureLayout::TEXTURE_LAYOUT_COMMON:
+            return VK_IMAGE_LAYOUT_GENERAL;
+        case ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT:
+            return VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        case ETextureLayout::TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE:
+            return VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        case ETextureLayout::TEXTURE_LAYOUT_DEPTH_STENCIL_READ:
+            return VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+        case ETextureLayout::TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+            return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        case ETextureLayout::TEXTURE_LAYOUT_TRANSFER_SRC:
+            return VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        case ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST:
+            return VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        case ETextureLayout::TEXTURE_LAYOUT_PRE_INITIALIZED:
+            return VK_IMAGE_LAYOUT_PREINITIALIZED;
+        case ETextureLayout::TEXTURE_LAYOUT_DEPTH_READ_STENCIL_WRITE:
+            return VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL;
+        case ETextureLayout::TEXTURE_LAYOUT_DEPTH_WRITE_STENCIL_READ:
+            return VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL;
+        case ETextureLayout::TEXTURE_LAYOUT_DEPTH_WRITE:
+            return VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        case ETextureLayout::TEXTURE_LAYOUT_DEPTH_READ:
+            return VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL;
+        case ETextureLayout::TEXTURE_LAYOUT_STENCIL_WRITE:
+            return VK_IMAGE_LAYOUT_STENCIL_ATTACHMENT_OPTIMAL;
+        case ETextureLayout::TEXTURE_LAYOUT_STENCIL_READ:
+            return VK_IMAGE_LAYOUT_STENCIL_READ_ONLY_OPTIMAL;
+#ifdef VK_ENABLE_BETA_EXTENSIONS
+        case ETextureLayout::TEXTURE_LAYOUT_VIDEO_ENCODE:
+            return VK_IMAGE_LAYOUT_VIDEO_ENCODE_DST_KHR | VK_IMAGE_LAYOUT_VIDEO_ENCODE_SRC_KHR | VK_IMAGE_LAYOUT_VIDEO_ENCODE_DPB_KHR;
+        case ETextureLayout::TEXTURE_LAYOUT_VIDEO_DECODE:
+            return VK_IMAGE_LAYOUT_VIDEO_DECODE_DST_KHR | VK_IMAGE_LAYOUT_VIDEO_DECODE_SRC_KHR | VK_IMAGE_LAYOUT_VIDEO_DECODE_DPB_KHR;
+#endif
+        case ETextureLayout::TEXTURE_LAYOUT_READ:
+            return VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL;
+        case ETextureLayout::TEXTURE_LAYOUT_WRITE:
+            return VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL;
+        case ETextureLayout::TEXTURE_LAYOUT_PRESENT_SRC:
+            return VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        case ETextureLayout::TEXTURE_LAYOUT_SHARED_PRESENT:
+            return VK_IMAGE_LAYOUT_SHARED_PRESENT_KHR;
+        case ETextureLayout::TEXTURE_LAYOUT_FRAGMENT_DENSITY_MAP:
+            return VK_IMAGE_LAYOUT_FRAGMENT_DENSITY_MAP_OPTIMAL_EXT;
+        case ETextureLayout::TEXTURE_LAYOUT_FRAGMENT_SHADING_RATE_ATTACHMENT:
+            return VK_IMAGE_LAYOUT_FRAGMENT_SHADING_RATE_ATTACHMENT_OPTIMAL_KHR;
+        case ETextureLayout::TEXTURE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL:
+            return VK_IMAGE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT;
+            //        case ETextureLayout::TEXTURE_LAYOUT_QUEUE_TYPE_GRAPHICS: // MARK...
+            //            return VK_IMAGE_LAYOUT_GENERAL;
+            //        case ETextureLayout::TEXTURE_LAYOUT_QUEUE_TYPE_COMPUTE:
+            //            return VK_IMAGE_LAYOUT_GENERAL;
+        default:
+            LOG_CRITICAL("Unsupported texture layout: {}", static_cast<uint32_t>(_layout));
+            return VK_IMAGE_LAYOUT_MAX_ENUM;
+    }
+}
+
+VkAttachmentLoadOp VulkanEnumTranslator::METoVKAttachmentLoadOp(EAttachmentLoadOp _load_op) {
+    switch (_load_op) {
+        case EAttachmentLoadOp::LOAD:
+            return VK_ATTACHMENT_LOAD_OP_LOAD;
+        case EAttachmentLoadOp::CLEAR:
+            return VK_ATTACHMENT_LOAD_OP_CLEAR;
+        case EAttachmentLoadOp::NONE:
+            return VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        default:
+            LOG_CRITICAL("Unsupported EAttachmentLoadOp: {}", static_cast<uint32_t>(_load_op));
+            return VK_ATTACHMENT_LOAD_OP_MAX_ENUM;
+    }
+}
+
+VkAttachmentStoreOp VulkanEnumTranslator::METoVKAttachmentStoreOp(EAttachmentStoreOp _store_op) {
+    switch (_store_op) {
+        case EAttachmentStoreOp::STORE:
+            return VK_ATTACHMENT_STORE_OP_STORE;
+        case EAttachmentStoreOp::NONE:
+            return VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        case EAttachmentStoreOp::MULTISAMPLE_RESOLVE:
+            return VK_ATTACHMENT_STORE_OP_STORE;
+        default:
+            LOG_CRITICAL("Unsupported EAttachmentStoreOp: {}", static_cast<uint32_t>(_store_op));
+            return VK_ATTACHMENT_STORE_OP_MAX_ENUM;
+    }
+}
+
 #pragma endregion
 
 void VulkanRHISampler::GenerateSamplerFromInitializer(const VulkanDevice* _device, const RHISamplerInitializer& _initializer) {
@@ -573,68 +663,6 @@ VkImageUsageFlags VulkanRHITexture::METoVKImageUsageFlags(ETextureUsageFlags _me
     TranslateFlag(ETextureUsageFlags::ATTACHMENT_FEEDBACK_LOOP, VK_IMAGE_USAGE_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT);
 
     return vk_flags;
-}
-
-VkImageLayout VulkanRHITexture::METoVKImageLayout(ETextureLayout _layout) {
-    switch (_layout) {
-        case ETextureLayout::TEXTURE_LAYOUT_UNDEFINED:
-            return VK_IMAGE_LAYOUT_UNDEFINED;
-        case ETextureLayout::TEXTURE_LAYOUT_COMMON:
-            return VK_IMAGE_LAYOUT_GENERAL;
-        case ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT:
-            return VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        case ETextureLayout::TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE:
-            return VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-        case ETextureLayout::TEXTURE_LAYOUT_DEPTH_STENCIL_READ:
-            return VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-        case ETextureLayout::TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
-            return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        case ETextureLayout::TEXTURE_LAYOUT_TRANSFER_SRC:
-            return VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        case ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST:
-            return VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        case ETextureLayout::TEXTURE_LAYOUT_PRE_INITIALIZED:
-            return VK_IMAGE_LAYOUT_PREINITIALIZED;
-        case ETextureLayout::TEXTURE_LAYOUT_DEPTH_READ_STENCIL_WRITE:
-            return VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL;
-        case ETextureLayout::TEXTURE_LAYOUT_DEPTH_WRITE_STENCIL_READ:
-            return VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL;
-        case ETextureLayout::TEXTURE_LAYOUT_DEPTH_WRITE:
-            return VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-        case ETextureLayout::TEXTURE_LAYOUT_DEPTH_READ:
-            return VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL;
-        case ETextureLayout::TEXTURE_LAYOUT_STENCIL_WRITE:
-            return VK_IMAGE_LAYOUT_STENCIL_ATTACHMENT_OPTIMAL;
-        case ETextureLayout::TEXTURE_LAYOUT_STENCIL_READ:
-            return VK_IMAGE_LAYOUT_STENCIL_READ_ONLY_OPTIMAL;
-#ifdef VK_ENABLE_BETA_EXTENSIONS
-        case ETextureLayout::TEXTURE_LAYOUT_VIDEO_ENCODE:
-            return VK_IMAGE_LAYOUT_VIDEO_ENCODE_DST_KHR | VK_IMAGE_LAYOUT_VIDEO_ENCODE_SRC_KHR | VK_IMAGE_LAYOUT_VIDEO_ENCODE_DPB_KHR;
-        case ETextureLayout::TEXTURE_LAYOUT_VIDEO_DECODE:
-            return VK_IMAGE_LAYOUT_VIDEO_DECODE_DST_KHR | VK_IMAGE_LAYOUT_VIDEO_DECODE_SRC_KHR | VK_IMAGE_LAYOUT_VIDEO_DECODE_DPB_KHR;
-#endif
-        case ETextureLayout::TEXTURE_LAYOUT_READ:
-            return VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL;
-        case ETextureLayout::TEXTURE_LAYOUT_WRITE:
-            return VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL;
-        case ETextureLayout::TEXTURE_LAYOUT_PRESENT_SRC:
-            return VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-        case ETextureLayout::TEXTURE_LAYOUT_SHARED_PRESENT:
-            return VK_IMAGE_LAYOUT_SHARED_PRESENT_KHR;
-        case ETextureLayout::TEXTURE_LAYOUT_FRAGMENT_DENSITY_MAP:
-            return VK_IMAGE_LAYOUT_FRAGMENT_DENSITY_MAP_OPTIMAL_EXT;
-        case ETextureLayout::TEXTURE_LAYOUT_FRAGMENT_SHADING_RATE_ATTACHMENT:
-            return VK_IMAGE_LAYOUT_FRAGMENT_SHADING_RATE_ATTACHMENT_OPTIMAL_KHR;
-        case ETextureLayout::TEXTURE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL:
-            return VK_IMAGE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT;
-            //        case ETextureLayout::TEXTURE_LAYOUT_QUEUE_TYPE_GRAPHICS: // MARK...
-            //            return VK_IMAGE_LAYOUT_GENERAL;
-            //        case ETextureLayout::TEXTURE_LAYOUT_QUEUE_TYPE_COMPUTE:
-            //            return VK_IMAGE_LAYOUT_GENERAL;
-        default:
-            LOG_CRITICAL("Unsupported texture layout: {}", static_cast<uint32_t>(_layout));
-            return VK_IMAGE_LAYOUT_MAX_ENUM;
-    }
 }
 
 #pragma endregion

@@ -126,13 +126,25 @@ void VulkanRHIGraphicsCommandList::BeginRenderPass(const RHIRenderPassInfo& _pas
     dynamic_rendering_info.renderArea.extent.height = _pass_info.render_area.extent.height;
     dynamic_rendering_info.layerCount               = 1;
     dynamic_rendering_info.viewMask                 = 0;
-    dynamic_rendering_info.colorAttachmentCount     = _pass_info.GetNumColorAttachments();
-    dynamic_rendering_info.pColorAttachments        = _pass_info.color_attachments.data();
-    dynamic_rendering_info.pDepthAttachment         = _pass_info.depth_stencil_attachment;
-    dynamic_rendering_info.pStencilAttachment       = _pass_info.depth_stencil_attachment;
+
+    const uint32_t num_color_attachments = _pass_info.GetNumColorAttachments();
+
+    std::vector<VkRenderingAttachmentInfo> color_attachments(num_color_attachments);
+    for (uint32_t i = 0; i < num_color_attachments; ++i) {
+        color_attachments[i] = FromColorAttachmentInfo(_pass_info.color_attachments[i]);
+    }
+    VkRenderingAttachmentInfo depth_stencil_attachment = FromDepthStencilAttachmentInfo(_pass_info.depth_stencil_attachment);
+
+    dynamic_rendering_info.colorAttachmentCount = num_color_attachments;
+    dynamic_rendering_info.pColorAttachments    = color_attachments.data();
+    dynamic_rendering_info.pDepthAttachment     = &depth_stencil_attachment;
+    dynamic_rendering_info.pStencilAttachment   = &depth_stencil_attachment;
+
+    vkCmdBeginRendering(m_command_buffer, &dynamic_rendering_info);
 }
 
 void VulkanRHIGraphicsCommandList::EndRenderPass() {
+    vkCmdEndRenderingKHR(m_command_buffer);
 }
 
 void VulkanRHIGraphicsCommandList::NextSubpass() {
@@ -157,10 +169,69 @@ VkRenderingAttachmentInfo VulkanRHIGraphicsCommandList::FromColorAttachmentInfo(
     VkRenderingAttachmentInfo attachment_info{};
     attachment_info.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
     attachment_info.pNext = nullptr;
-    //    attachment_info.imageView   = _color_attachment_info.color_attachment_view.texture_view;
-    //    attachment_info.imageLayout = ;
+
+    auto* texture_view = _color_attachment_info.color_attachment_view.texture_view;
+
+    if (texture_view->IsSRV()) {
+        auto* texture_srv         = static_cast<VulkanRHIShaderResourceView*>(texture_view);
+        attachment_info.imageView = texture_srv->GetView();
+    } else if (texture_view->IsUAV()) {
+        auto* texture_uav         = static_cast<VulkanRHIUnorderedAccessView*>(texture_view);
+        attachment_info.imageView = texture_uav->GetView();
+    } else {
+        LOG_CRITICAL("Invalid texture view type: {}.", typeid(*texture_view).name());
+        return attachment_info;
+    }
+
+    attachment_info.imageLayout                 = VulkanEnumTranslator::METoVKImageLayout(_color_attachment_info.color_attachment_view.required_layout);
+    attachment_info.loadOp                      = VulkanEnumTranslator::METoVKAttachmentLoadOp(GetLoadOp(_color_attachment_info.color_attachment_action));
+    attachment_info.storeOp                     = VulkanEnumTranslator::METoVKAttachmentStoreOp(GetStoreOp(_color_attachment_info.color_attachment_action));
+    attachment_info.clearValue.color.float32[0] = _color_attachment_info.color_attachment_view.clear_attachment.value.color.float32[0];
+    attachment_info.clearValue.color.float32[1] = _color_attachment_info.color_attachment_view.clear_attachment.value.color.float32[1];
+    attachment_info.clearValue.color.float32[2] = _color_attachment_info.color_attachment_view.clear_attachment.value.color.float32[2];
+    attachment_info.clearValue.color.float32[3] = _color_attachment_info.color_attachment_view.clear_attachment.value.color.float32[3];
+
+    auto* resolve_texture_view = _color_attachment_info.resolve_attachment_view.texture_view;
+    if (resolve_texture_view->IsSRV()) {
+        auto* resolve_texture_srv        = static_cast<VulkanRHIShaderResourceView*>(resolve_texture_view);
+        attachment_info.resolveImageView = resolve_texture_srv->GetView();
+    } else if (resolve_texture_view->IsUAV()) {
+        auto* resolve_texture_uav        = static_cast<VulkanRHIUnorderedAccessView*>(resolve_texture_view);
+        attachment_info.resolveImageView = resolve_texture_uav->GetView();
+    } else {
+        LOG_CRITICAL("Invalid resolve texture view type: {}.", typeid(*resolve_texture_view).name());
+        return attachment_info;
+    }
+
+    attachment_info.resolveMode        = VK_RESOLVE_MODE_AVERAGE_BIT;
+    attachment_info.resolveImageLayout = VulkanEnumTranslator::METoVKImageLayout(_color_attachment_info.resolve_attachment_view.required_layout);
+
+    return attachment_info;
 }
 
 VkRenderingAttachmentInfo VulkanRHIGraphicsCommandList::FromDepthStencilAttachmentInfo(const RHIRenderPassInfo::DepthStencilAttachmentInfo& _depth_stencil_attachment_info) const {
-    return VkRenderingAttachmentInfo();
+    VkRenderingAttachmentInfo attachment_info{};
+    attachment_info.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    attachment_info.pNext = nullptr;
+
+    auto* depth_stencil_view = _depth_stencil_attachment_info.depth_stencil_attachment_view.texture_view;
+
+    if (depth_stencil_view->IsSRV()) {
+        auto* depth_stencil_srv   = static_cast<VulkanRHIShaderResourceView*>(depth_stencil_view);
+        attachment_info.imageView = depth_stencil_srv->GetView();
+    } else if (depth_stencil_view->IsUAV()) {
+        auto* depth_stencil_uav   = static_cast<VulkanRHIUnorderedAccessView*>(depth_stencil_view);
+        attachment_info.imageView = depth_stencil_uav->GetView();
+    } else {
+        LOG_CRITICAL("Invalid depth view type: {}.", typeid(*depth_stencil_view).name());
+        return attachment_info;
+    }
+
+    attachment_info.imageLayout                     = VulkanEnumTranslator::METoVKImageLayout(_depth_stencil_attachment_info.depth_stencil_attachment_view.required_layout);
+    attachment_info.loadOp                          = VulkanEnumTranslator::METoVKAttachmentLoadOp(GetLoadOp(_depth_stencil_attachment_info.depth_stencil_action));
+    attachment_info.storeOp                         = VulkanEnumTranslator::METoVKAttachmentStoreOp(GetStoreOp(_depth_stencil_attachment_info.depth_stencil_action));
+    attachment_info.clearValue.depthStencil.depth   = _depth_stencil_attachment_info.depth_stencil_attachment_view.clear_attachment.value.depth_stencil.depth;
+    attachment_info.clearValue.depthStencil.stencil = _depth_stencil_attachment_info.depth_stencil_attachment_view.clear_attachment.value.depth_stencil.stencil;
+
+    return attachment_info;
 }

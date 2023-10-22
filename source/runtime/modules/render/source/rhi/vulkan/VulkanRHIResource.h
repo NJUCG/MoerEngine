@@ -69,6 +69,9 @@ class VulkanEnumTranslator final {
 public:
     static VkSampleCountFlagBits METoVKSampleCountFlagBits(uint32_t _me_count);
     static VkImageViewType       METoVKImageViewType(ETextureDimension _dim);
+    static VkImageLayout         METoVKImageLayout(ETextureLayout _layout);
+    static VkAttachmentLoadOp    METoVKAttachmentLoadOp(EAttachmentLoadOp _load_op);
+    static VkAttachmentStoreOp   METoVKAttachmentStoreOp(EAttachmentStoreOp _store_op);
 };
 
 #pragma endregion
@@ -229,7 +232,6 @@ public:
 
     static VkImageType       METoVKImageType(ETextureDimension _dim);
     static VkImageUsageFlags METoVKImageUsageFlags(ETextureUsageFlags _me_flags);
-    static VkImageLayout     METoVKImageLayout(ETextureLayout _layout);
 
 private:
     struct TextureAlloc {
@@ -265,6 +267,8 @@ class VulkanRHIUnorderedAccessView final : public RHIUnorderedAccessView {
 public:
     explicit VulkanRHIUnorderedAccessView(RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIUnorderedAccessView(_resource, _viewInfo) {}
 
+    inline VkImageView GetView() const { return m_view; }
+
 private:
     VkImageView m_view;
 };
@@ -274,6 +278,8 @@ class VulkanRHIShaderResourceView final : public RHIShaderResourceView {
 
 public:
     explicit VulkanRHIShaderResourceView(RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIShaderResourceView(_resource, _viewInfo) {}
+
+    inline VkImageView GetView() const { return m_view; }
 
 private:
     VkImageView m_view;
