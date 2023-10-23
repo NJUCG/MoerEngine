@@ -287,37 +287,6 @@ private:
 
 #pragma endregion
 
-class VulkanRHIStagingBuffer : public RHIStagingBuffer {
-    friend VulkanRHIImpl;
-
-public:
-    VulkanRHIStagingBuffer(uint64_t _byte_size) : RHIStagingBuffer(), m_gpu_byte_size(_byte_size) {}
-    ~VulkanRHIStagingBuffer() {}
-
-    uint64_t GetGPUByteSize() const override { return m_gpu_byte_size; }
-
-    inline const VmaAllocation GetAllocation() const {
-        return m_alloc.alloc;
-    }
-
-    inline VkBuffer GetHandle() const {
-        return m_alloc.buffer;
-    }
-
-    void* GetSuballocationFromBuffer(uint32_t _size);
-
-private:
-    struct BufferAlloc {
-        VkBuffer      buffer;
-        VmaAllocation alloc;
-    } m_alloc;
-
-    void*    m_head_ptr;
-    void*    m_cur_ptr;
-    void*    m_tail_ptr;
-    uint64_t m_gpu_byte_size;
-};
-
 #pragma region graphic pipeline definitions
 #pragma endregion
 

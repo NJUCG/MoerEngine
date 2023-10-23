@@ -10,6 +10,7 @@ struct GLFWwindow;
 class VulkanDevice;
 class VulkanSwapChain;
 class VulkanViewport;
+class VulkanRHIBuffer;
 
 class VulkanRHIImpl final : public IVulkanRHI {
 public:
@@ -41,9 +42,6 @@ public:
     RHIShaderLibraryRef RHICreateShaderLibrary(EShaderPlatform _platform, const std::string& _file_path, const std::string& name) final override;
 
     RHIFenceRef RHICreateFence(const std::string& name) final override;
-
-    /* create cpu visible buffer for direct data transfer */
-    RHIStagingBufferRef RHICreateStagingBuffer() final override;
 
     RHIShaderBoundStateRef RHICreateShaderBoundStage(
         RHIVertexInputState* _vertex_input,
@@ -103,6 +101,11 @@ private:
     bool CheckEnabledExtensions();
 
     bool CheckValidationLayer(const std::string& layer_name);
+
+    VkCommandBuffer BeginSingleTimeCommands(VkCommandPool _pool);
+    void            EndSingleTimeCommands(VkCommandBuffer _command_buffer, VkCommandPool _pool, VkQueue _queue);
+
+    void CopyBuffer(VulkanRHIBuffer* _src, VulkanRHIBuffer* _dst);
 
 #pragma endregion
 };

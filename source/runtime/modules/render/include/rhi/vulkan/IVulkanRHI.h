@@ -36,9 +36,6 @@ public:
 
     RHIFenceRef RHICreateFence(const std::string& name) override { return RHIFenceRef{}; }
 
-    /* create cpu visible buffer for direct data transfer */
-    RHIStagingBufferRef RHICreateStagingBuffer() override { return RHIStagingBufferRef{}; }
-
     RHIShaderBoundStateRef RHICreateShaderBoundStage(
         RHIVertexInputState* _vertex_input,
         RHIVertexShader*     _vertex_shader,

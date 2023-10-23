@@ -50,10 +50,7 @@ public:
     virtual RHIShaderLibraryRef RHICreateShaderLibrary(EShaderPlatform _platform, const std::string& _file_path, const std::string& name) { return nullptr; };
 
     virtual RHIFenceRef RHICreateFence(const std::string& name) = 0;
-
-    /* create cpu visible buffer for direct data transfer */
-    virtual RHIStagingBufferRef RHICreateStagingBuffer() = 0;
-
+    
     virtual RHIShaderBoundStateRef RHICreateShaderBoundStage(
         RHIVertexInputState* _vertex_input,
         RHIVertexShader*     _vertex_shader,
