@@ -85,14 +85,47 @@ RHIVertexInputStateRef VulkanRHIImpl::RHICreateVertexInputState(const VertexInpu
     return RHIVertexInputStateRef(vk_input_state);
 }
 
-RHIVertexShaderRef   VulkanRHIImpl::RHICreateVertexShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) { return RHIVertexShaderRef{}; }
-RHIFragmentShaderRef VulkanRHIImpl::RHICreateFragmentShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) { return RHIFragmentShaderRef{}; }
-RHIGeometryShaderRef VulkanRHIImpl::RHICreateGeometryShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) { return RHIGeometryShaderRef{}; }
+RHIVertexShaderRef VulkanRHIImpl::RHICreateVertexShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) {
+    auto* vk_shader = new VulkanRHIVertexShader();
+    vk_shader->CreateShaderModule(m_device, _code);
 
-RHIMeshShaderRef          VulkanRHIImpl::RHICreateMeshShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) { return RHIMeshShaderRef{}; }
-RHIAmplificationShaderRef VulkanRHIImpl::RHICreateAmplificationShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) { return RHIAmplificationShaderRef{}; }
+    return RHIVertexShaderRef(vk_shader);
+}
 
-RHIComputeShaderRef VulkanRHIImpl::RHICreateComputeShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) { return RHIComputeShaderRef{}; }
+RHIFragmentShaderRef VulkanRHIImpl::RHICreateFragmentShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) {
+    auto* vk_shader = new VulkanRHIFragmentShader();
+    vk_shader->CreateShaderModule(m_device, _code);
+
+    return RHIFragmentShaderRef(vk_shader);
+}
+
+RHIGeometryShaderRef VulkanRHIImpl::RHICreateGeometryShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) {
+    auto* vk_shader = new VulkanRHIGeometryShader();
+    vk_shader->CreateShaderModule(m_device, _code);
+
+    return RHIGeometryShaderRef(vk_shader);
+}
+
+RHIMeshShaderRef VulkanRHIImpl::RHICreateMeshShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) {
+    auto* vk_shader = new VulkanRHIMeshShader();
+    vk_shader->CreateShaderModule(m_device, _code);
+
+    return RHIMeshShaderRef(vk_shader);
+}
+
+RHIAmplificationShaderRef VulkanRHIImpl::RHICreateAmplificationShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) {
+    auto* vk_shader = new VulkanRHIAmplificationShader();
+    vk_shader->CreateShaderModule(m_device, _code);
+
+    return RHIAmplificationShaderRef(vk_shader);
+}
+
+RHIComputeShaderRef VulkanRHIImpl::RHICreateComputeShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) {
+    auto* vk_shader = new VulkanRHIComputeShader();
+    vk_shader->CreateShaderModule(m_device, _code);
+
+    return RHIComputeShaderRef(vk_shader);
+}
 
 RHIShaderLibraryRef VulkanRHIImpl::RHICreateShaderLibrary(EShaderPlatform _platform, const std::string& _file_path, const std::string& name) { return RHIShaderLibraryRef{}; }
 
@@ -110,6 +143,104 @@ RHIShaderBoundStateRef VulkanRHIImpl::RHICreateShaderBoundStage(
 
 RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const RHIGraphicsPipelineStateInitializer& _init) {
     VulkanRHIGraphicsPipelineState* vk_pipeline = new VulkanRHIGraphicsPipelineState();
+
+    // rendering create info
+    VkPipelineRenderingCreateInfo rendering_create_info{};
+    rendering_create_info.sType                = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    rendering_create_info.pNext                = nullptr;
+    rendering_create_info.viewMask             = 0;
+    rendering_create_info.colorAttachmentCount = _init.color_attachment_count;
+    std::vector<VkFormat> color_attachment_formats(_init.color_attachment_count);
+    for (int i = 0; i < _init.color_attachment_count; ++i) {
+        color_attachment_formats[i] = VkFormat(_init.color_attachment_formats[i]);
+    }
+    rendering_create_info.pColorAttachmentFormats = color_attachment_formats.data();
+    rendering_create_info.depthAttachmentFormat   = VkFormat(_init.depth_stencil_format);
+    rendering_create_info.stencilAttachmentFormat = VkFormat(_init.depth_stencil_format);
+
+    // shader stage
+    auto shader_stages = VulkanRHIGraphicsPipelineState::METoVKShaderStageCreateInfo(_init.shader_stage);
+
+    // vertex input state
+    auto vertex_input_state = VulkanRHIGraphicsPipelineState::METoVKVertexInputStateCreateInfo(*_init.shader_stage.p_vertex_input_state);
+
+    // input assembly
+    VkPipelineInputAssemblyStateCreateInfo input_assembly_state{};
+    input_assembly_state.sType                  = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    input_assembly_state.pNext                  = nullptr;
+    input_assembly_state.flags                  = 0;
+    input_assembly_state.topology               = VulkanRHIGraphicsPipelineState::METoVKPrimitiveTopology(_init.primitive_topology);
+    input_assembly_state.primitiveRestartEnable = VK_FALSE;
+
+    // viewport state
+    VkPipelineViewportStateCreateInfo viewport_state{};
+    viewport_state.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewport_state.pNext         = nullptr;
+    viewport_state.flags         = 0;
+    viewport_state.viewportCount = _init.multi_view_count;
+    viewport_state.scissorCount  = _init.multi_view_count;
+
+    // rasterization state
+    auto* vk_rasterizer_state = dynamic_cast<VulkanRHIRasterizationState*>(_init.rasterizer_state);
+    if (vk_rasterizer_state == nullptr) {
+        LOG_CRITICAL("RHICreateGraphicsPipelineState: Invalid rasterization state type: {}.", typeid(_init.rasterizer_state).name());
+        return RHIGraphicsPipelineStateRef{};
+    }
+    auto rasterization_state = vk_rasterizer_state->GetHandle();
+
+    // multisample state
+    auto* vk_multisample_state = dynamic_cast<VulkanRHIMultisampleState*>(_init.multisample_state);
+    if (vk_multisample_state == nullptr) {
+        LOG_CRITICAL("RHICreateGraphicsPipelineState: Invalid multisample state type: {}.", typeid(_init.multisample_state).name());
+        return RHIGraphicsPipelineStateRef{};
+    }
+    auto multisample_state = vk_multisample_state->GetHandle();
+
+    // depth stencil state
+    auto* vk_depth_stencil_state = dynamic_cast<VulkanRHIDepthStencilState*>(_init.depth_stencil_state);
+    if (vk_depth_stencil_state == nullptr) {
+        LOG_CRITICAL("RHICreateGraphicsPipelineState: Invalid depth stencil state type: {}.", typeid(_init.depth_stencil_state).name());
+        return RHIGraphicsPipelineStateRef{};
+    }
+    auto depth_stencil_state = vk_depth_stencil_state->GetHandle();
+
+    // color blend state
+    auto* vk_blend_state = dynamic_cast<VulkanRHIBlendState*>(_init.blend_state);
+    if (vk_blend_state == nullptr) {
+        LOG_CRITICAL("RHICreateGraphicsPipelineState: Invalid color blend state type: {}.", typeid(_init.blend_state).name());
+        return RHIGraphicsPipelineStateRef{};
+    }
+    auto color_blend_state = vk_blend_state->GetHandle();
+
+    // dynamic state
+    std::array<VkDynamicState, 2>    states = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dynamic_state{};
+    dynamic_state.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamic_state.pNext             = nullptr;
+    dynamic_state.flags             = 0;
+    dynamic_state.dynamicStateCount = states.size();
+    dynamic_state.pDynamicStates    = states.data();
+
+    VkGraphicsPipelineCreateInfo pipeline_create_info{};
+    pipeline_create_info.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipeline_create_info.pNext               = &rendering_create_info;
+    pipeline_create_info.flags               = 0;
+    pipeline_create_info.stageCount          = shader_stages.size();
+    pipeline_create_info.pStages             = shader_stages.data();
+    pipeline_create_info.pVertexInputState   = &vertex_input_state;
+    pipeline_create_info.pInputAssemblyState = &input_assembly_state;
+    pipeline_create_info.pTessellationState  = nullptr;
+    pipeline_create_info.pViewportState      = &viewport_state;
+    pipeline_create_info.pRasterizationState = &rasterization_state;
+    pipeline_create_info.pMultisampleState   = &multisample_state;
+    pipeline_create_info.pDepthStencilState  = &depth_stencil_state;
+    pipeline_create_info.pColorBlendState    = &color_blend_state;
+    pipeline_create_info.pDynamicState       = &dynamic_state;
+    pipeline_create_info.layout              = nullptr;// MARK...
+    pipeline_create_info.basePipelineHandle  = nullptr;// MARK...
+    pipeline_create_info.basePipelineIndex   = -1;
+
+    VK_CHECK_RESULT(vkCreateGraphicsPipelines(*m_device, nullptr, 1, &pipeline_create_info, nullptr, &vk_pipeline->m_pipeline));
 
     return RHIGraphicsPipelineStateRef(vk_pipeline);
 }

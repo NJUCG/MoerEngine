@@ -12,6 +12,7 @@ public:
     VulkanRHIGraphicsCommandList(VulkanDevice* _device, VkCommandPool _pool, VkCommandBufferLevel _level = VK_COMMAND_BUFFER_LEVEL_PRIMARY);
     ~VulkanRHIGraphicsCommandList();
 
+    void SetBatchedShaderParameter(RHIShaderRef shader, const RHIBatchedShaderParameters& parameters) override;
     void SetPipelineState(RHIGraphicsPipelineState* _graphics_pso, const RHIShaderBoundStateInput& _shader_input) override;
     void Open() override;
     void Close() override;

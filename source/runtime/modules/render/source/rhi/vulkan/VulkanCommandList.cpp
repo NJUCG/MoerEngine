@@ -23,6 +23,9 @@ VulkanRHIGraphicsCommandList::~VulkanRHIGraphicsCommandList() {
     m_device = nullptr;
 }
 
+void VulkanRHIGraphicsCommandList::SetBatchedShaderParameter(RHIShaderRef shader, const RHIBatchedShaderParameters& parameters) {
+}
+
 void VulkanRHIGraphicsCommandList::SetPipelineState(RHIGraphicsPipelineState* _graphics_pso, const RHIShaderBoundStateInput& _shader_input) {
 }
 
@@ -162,8 +165,12 @@ void VulkanRHIGraphicsCommandList::GetQueryData(ERenderQueryType _query_type, ui
 void VulkanRHIGraphicsCommandList::ExecuteSubCommands(uint32_t _num, RHIGraphicsCommandList* _sub_commands) {
 }
 
+#pragma region ray-tracing
+
 void VulkanRHIGraphicsCommandList::BuildAccelerationStructure(RHIBuffer* _instance_data, uint64_t _instance_offset, bool _b_update, RHIBuffer* _scratch, RHIBuffer* _scratch_offset) {
 }
+
+#pragma endregion
 
 VkRenderingAttachmentInfo VulkanRHIGraphicsCommandList::FromColorAttachmentInfo(const RHIRenderPassInfo::ColorAttachmentInfo& _color_attachment_info) const {
     VkRenderingAttachmentInfo attachment_info{};

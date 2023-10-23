@@ -124,6 +124,10 @@ public:
 
     void GenerateRasterizationStateFromInitializer(const RHIRasterizationStateInitializer& _init);
 
+    VkPipelineRasterizationStateCreateInfo GetHandle() const {
+        return m_rasterization_state_create_info;
+    }
+
 private:
     VkPolygonMode   METoVKPolygonMode(ERasterizerFillMode _fill_mode);
     VkCullModeFlags METoVKCullModeFlags(ERasterizerCullMode _cull_mode);
@@ -137,6 +141,10 @@ public:
     explicit VulkanRHIDepthStencilState() : RHIDepthStencilState() {}
 
     void GenerateDepthStencilStateFromInitializer(const RHIDepthStencilStateInitializer& _init);
+
+    VkPipelineDepthStencilStateCreateInfo GetHandle() const {
+        return m_depth_stencil_state_create_info;
+    }
 
 private:
     VkCompareOp METoVKCompareOp(ECompareOption _compare_op);
@@ -154,6 +162,10 @@ public:
 
     void GenerateMultisampleStateFromInitializer(const RHIMultisampleStateInitializer& _init);
 
+    VkPipelineMultisampleStateCreateInfo GetHandle() const {
+        return m_multisample_state_create_info;
+    }
+
 private:
     VkPipelineMultisampleStateCreateInfo m_multisample_state_create_info;
 };
@@ -164,6 +176,10 @@ public:
 
     void GenerateBlendStateFromInitializer(const RHIBlendStateInitializer& _init);
 
+    VkPipelineColorBlendStateCreateInfo GetHandle() const {
+        return m_blend_state_create_info;
+    }
+
 private:
     VkBlendOp     METoVKBlendOp(EBlendOperation _blend_op);
     VkBlendFactor METoVKBlendFactor(EBlendFactor _blend_factor);
@@ -173,13 +189,74 @@ private:
 };
 
 #pragma region shader definitions
+
+class VulkanRHIGraphicsShader {
+public:
+    void CreateShaderModule(const VulkanDevice* _device, const std::vector<uint8_t>& _code);
+
+    VkShaderModule GetHandle() const {
+        return m_shader_module;
+    }
+
+protected:
+    VkShaderModule m_shader_module;
+};
+
+class VulkanRHIVertexShader : public RHIVertexShader, public VulkanRHIGraphicsShader {
+    friend VulkanRHIImpl;
+
+public:
+    explicit VulkanRHIVertexShader() : RHIVertexShader(), VulkanRHIGraphicsShader() {}
+};
+
+class VulkanRHIFragmentShader : public RHIFragmentShader, public VulkanRHIGraphicsShader {
+    friend VulkanRHIImpl;
+
+public:
+    explicit VulkanRHIFragmentShader() : RHIFragmentShader(), VulkanRHIGraphicsShader() {}
+};
+
+class VulkanRHIGeometryShader : public RHIGeometryShader, public VulkanRHIGraphicsShader {
+    friend VulkanRHIImpl;
+
+public:
+    explicit VulkanRHIGeometryShader() : RHIGeometryShader(), VulkanRHIGraphicsShader() {}
+};
+
+class VulkanRHIComputeShader : public RHIComputeShader, public VulkanRHIGraphicsShader {
+    friend VulkanRHIImpl;
+
+public:
+    explicit VulkanRHIComputeShader() : RHIComputeShader(), VulkanRHIGraphicsShader() {}
+};
+
+class VulkanRHIMeshShader : public RHIMeshShader, public VulkanRHIGraphicsShader {
+    friend VulkanRHIImpl;
+
+public:
+    explicit VulkanRHIMeshShader() : RHIMeshShader(), VulkanRHIGraphicsShader() {}
+};
+
+class VulkanRHIAmplificationShader : public RHIAmplificationShader, public VulkanRHIGraphicsShader {
+    friend VulkanRHIImpl;
+
+public:
+    explicit VulkanRHIAmplificationShader() : RHIAmplificationShader(), VulkanRHIGraphicsShader() {}
+};
+
 #pragma endregion
 
 #pragma region pipeline states definitions
 
 class VulkanRHIGraphicsPipelineState final : public RHIGraphicsPipelineState {
+    friend VulkanRHIImpl;
+
 public:
     VulkanRHIGraphicsPipelineState() : RHIGraphicsPipelineState() {}
+
+    static std::vector<VkPipelineShaderStageCreateInfo> METoVKShaderStageCreateInfo(const RHIShaderBoundStateInput& _shader_bound_state);
+    static VkPipelineVertexInputStateCreateInfo         METoVKVertexInputStateCreateInfo(const RHIVertexInputState& _vertex_input_state);
+    static VkPrimitiveTopology                          METoVKPrimitiveTopology(EPrimitiveTopology _primitive_type);
 
 private:
     VkPipeline m_pipeline;
