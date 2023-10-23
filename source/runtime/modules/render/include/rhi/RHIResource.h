@@ -1787,17 +1787,13 @@ public:
     RHIGraphicsPipelineStateInitializer()
         : blend_state(nullptr),
           rasterizer_state(nullptr),
+          multisample_state(nullptr),
           depth_stencil_state(nullptr),
           color_attachment_count(0),
           color_attachment_formats(CreateArray<MAX_PASS_ATTACHMENT_COUNT, uint8_t>((uint8_t)ETextureUsageFlags::UNDEFINED)),
           color_attachment_flags(CreateArray<MAX_PASS_ATTACHMENT_COUNT, ETextureUsageFlags>(ETextureUsageFlags::UNDEFINED)),
           depth_stencil_format(PF_UNDEFINED),
           depth_stencil_flag(ETextureUsageFlags::UNDEFINED),
-          depth_attachment_load_op(EAttachmentLoadOp::NONE),
-          depth_attachment_store_op(EAttachmentStoreOp::NONE),
-          stencil_attachment_load_op(EAttachmentLoadOp::NONE),
-          stencil_attachment_store_op(EAttachmentStoreOp::NONE),
-          num_samples(0),
           subpass_settings({SubpassSettings::Type::NONE, 0}),
           b_depth_bound(false),
           multi_view_count(0),
@@ -1806,9 +1802,9 @@ public:
           hash_key(0) {}
 
     RHIGraphicsPipelineStateInitializer(
-        RHIShaderBoundStateInput  _shader_stage,
         RHIBlendState*            _blend_state,
         RHIRasterizationState*    _rasterizer_state,
+        RHIMultisampleState*      _multisample_state,
         RHIDepthStencilState*     _depth_stencil_state,
         EPrimitiveTopology        _primitive_topology,
         uint32_t                  _color_attachment_count,
@@ -1816,11 +1812,6 @@ public:
         const TAttachmentFlags&   _color_attachment_flags,
         EPixelFormat              _depth_stencil_format,
         ETextureUsageFlags        _depth_stencil_flag,
-        EAttachmentLoadOp         _depth_attachment_load_op,
-        EAttachmentStoreOp        _depth_attachment_store_op,
-        EAttachmentLoadOp         _stencil_attachment_load_op,
-        EAttachmentStoreOp        _stencil_attachment_store_op,
-        uint16_t                  _num_samples,
         const SubpassSettings&    _subpass_settings,
         bool                      _b_depth_bound,
         uint8_t                   _multi_view_count,
@@ -1828,17 +1819,14 @@ public:
         EVariousShadingRate       _shading_rate)
         : blend_state(_blend_state),
           rasterizer_state(_rasterizer_state),
+          multisample_state(_multisample_state),
           depth_stencil_state(_depth_stencil_state),
+          primitive_topology(_primitive_topology),
           color_attachment_count(_color_attachment_count),
           color_attachment_formats(_color_attachment_formats),
           color_attachment_flags(_color_attachment_flags),
           depth_stencil_format(_depth_stencil_format),
           depth_stencil_flag(_depth_stencil_flag),
-          depth_attachment_load_op(_depth_attachment_load_op),
-          depth_attachment_store_op(_depth_attachment_store_op),
-          stencil_attachment_load_op(_depth_attachment_load_op),
-          stencil_attachment_store_op(_depth_attachment_store_op),
-          num_samples(_num_samples),
           subpass_settings(_subpass_settings),
           b_depth_bound(_b_depth_bound),
           multi_view_count(_multi_view_count),
@@ -1886,6 +1874,7 @@ public:
     RHIShaderBoundStateInput shader_stage;
     RHIBlendState*           blend_state;
     RHIRasterizationState*   rasterizer_state;
+    RHIMultisampleState*     multisample_state;
     RHIDepthStencilState*    depth_stencil_state;
 
     EPrimitiveTopology primitive_topology;
@@ -1894,12 +1883,6 @@ public:
     TAttachmentFlags   color_attachment_flags;
     EPixelFormat       depth_stencil_format;
     ETextureUsageFlags depth_stencil_flag;
-    EAttachmentLoadOp  depth_attachment_load_op    = EAttachmentLoadOp::NONE;
-    EAttachmentStoreOp depth_attachment_store_op   = EAttachmentStoreOp::NONE;
-    EAttachmentLoadOp  stencil_attachment_load_op  = EAttachmentLoadOp::NONE;
-    EAttachmentStoreOp stencil_attachment_store_op = EAttachmentStoreOp::NONE;
-
-    uint16_t num_samples;
 
     SubpassSettings subpass_settings;
 
