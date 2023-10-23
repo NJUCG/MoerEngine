@@ -613,7 +613,7 @@ enum EVertexElementType : uint8_t {
     VET_None,
     VET_Float1,
     VET_Float2,
-    VET_FLOAT3,
+    VET_Float3,
     VET_Float4,
     VET_PackedNormal,// FPackedNormal
     VET_UByte4,

@@ -26,6 +26,7 @@ namespace Vulkan {
             void*                                       pUserData);
         static void SetupDebugUtilsMessengerEXT(VkInstance instance);
         static void DestroyDebugUtilsMessengerEXT(VkInstance instance);
+        static void PopulateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& create_info);
     };
 
     struct DebugUtils {
