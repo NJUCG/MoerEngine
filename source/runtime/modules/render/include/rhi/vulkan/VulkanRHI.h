@@ -2,12 +2,15 @@
 #define VULKAN_RHI_H
 
 #include "IVulkanRHI.h"
+
+#define VMA_IMPLEMENTATION
 #include <vk_mem_alloc.h>
 
 struct GLFWwindow;
 class VulkanDevice;
 class VulkanSwapChain;
 class VulkanViewport;
+class VulkanRHIBuffer;
 
 class VulkanRHIImpl final : public IVulkanRHI {
 public:
@@ -40,9 +43,6 @@ public:
 
     RHIFenceRef RHICreateFence(const std::string& name) final override;
 
-    /* create cpu visible buffer for direct data transfer */
-    RHIStagingBufferRef RHICreateStagingBuffer() final override;
-
     RHIShaderBoundStateRef RHICreateShaderBoundStage(
         RHIVertexInputState* _vertex_input,
         RHIVertexShader*     _vertex_shader,
@@ -53,8 +53,8 @@ public:
 
     RHIComputePipelineStateRef RHICreateComputePipelineState(RHIComputeShader* _compute_shader) final override;
 
-    void RHICopyBuffer(RHIBuffer* _src, RHIBuffer* _dst) final override;
-
+    void         RHIUploadBuffer(RHIBufferRef _buffer_ref, const uint8_t* _data, uint32_t _size) final override;
+    void         RHICopyBuffer(RHIBuffer* _src, RHIBuffer* _dst) final override;
     RHIBufferRef RHICreateBuffer(const RHIBufferCreateInfo& info) final override;
     void*        RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size) final override;
     void         RHIUnmapBuffer(RHIBuffer* _buffer) final override;
@@ -63,6 +63,11 @@ public:
 
     RHIShaderResourceViewRef  RHICreateShaderResourceView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) final override;
     RHIUnorderedAccessViewRef RHICreateUnorderedAccessView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) final override;
+
+    RHICommandQueue*        CreateCommandQueue(ECommandQueueType type) final override;
+    RHIGraphicsCommandList* CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state = nullptr) final override;
+    RHIComputeCommandList*  CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr) final override;
+
 #pragma endregion
 
 protected:
@@ -75,14 +80,15 @@ protected:
     VkSurfaceKHR m_surface;
     VmaAllocator m_allocator;
 
-    std::shared_ptr<VulkanDevice>    m_device;
-    std::shared_ptr<VulkanSwapChain> m_swap_chain;
-    std::vector<VulkanViewport*>     m_viewports;
-    std::shared_ptr<VulkanViewport>  m_current_viewport;
+    VulkanDevice*                m_device;
+    VulkanSwapChain*             m_swap_chain;
+    std::vector<VulkanViewport*> m_viewports;
+    VulkanViewport*              m_current_viewport;
 
 protected:
     void InitSurface(GLFWwindow* _window);
     void InitVulkan();
+    void InitVulkanMemoryAllocator();
 
 #pragma region vulkan functions
 private:
@@ -95,6 +101,11 @@ private:
     bool CheckEnabledExtensions();
 
     bool CheckValidationLayer(const std::string& layer_name);
+
+    VkCommandBuffer BeginSingleTimeCommands(VkCommandPool _pool);
+    void            EndSingleTimeCommands(VkCommandBuffer _command_buffer, VkCommandPool _pool, VkQueue _queue);
+
+    void CopyBuffer(VulkanRHIBuffer* _src, VulkanRHIBuffer* _dst);
 
 #pragma endregion
 };

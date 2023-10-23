@@ -2,10 +2,9 @@
 // Created by 74535 on 2023/9/30.
 //
 
-#include "misc/MacroUtils.h"
+#include "log/LogSystem.h"
 #include "VulkanDebug.h"
 #include <sstream>
-#include <spdlog/spdlog.h>
 
 namespace MoerEngine {
 namespace RHI {
@@ -25,13 +24,13 @@ namespace Vulkan {
         stream << "[" << p_callback_data->messageIdNumber << "][" << p_callback_data->pMessageIdName << "]: " << p_callback_data->pMessage << std::endl;
 
         if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT) {
-            MOER_LOG_DEBUG(stream.str());
+            LOG_DEBUG(stream.str());
         } else if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT) {
-            MOER_LOG_INFO(stream.str());
+            LOG_INFO(stream.str());
         } else if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
-            MOER_LOG_WARN(stream.str());
+            LOG_WARNING(stream.str());
         } else if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
-            MOER_LOG_ERROR(stream.str());
+            LOG_ERROR(stream.str());
         }
 
         return VK_FALSE;
@@ -46,13 +45,7 @@ namespace Vulkan {
         }
 
         VkDebugUtilsMessengerCreateInfoEXT debug_utils_messenger_create_info{};
-        debug_utils_messenger_create_info.sType           = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
-        debug_utils_messenger_create_info.pNext           = nullptr;
-        debug_utils_messenger_create_info.flags           = 0;
-        debug_utils_messenger_create_info.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
-        debug_utils_messenger_create_info.messageType     = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
-        debug_utils_messenger_create_info.pfnUserCallback = DebugCallback;
-        debug_utils_messenger_create_info.pUserData       = nullptr;
+        PopulateDebugMessengerCreateInfo(debug_utils_messenger_create_info);
 
         assert(vkCreateDebugUtilsMessengerEXT(instance, &debug_utils_messenger_create_info, nullptr, &debug_utils_messenger) == VK_SUCCESS);
     }
@@ -61,6 +54,18 @@ namespace Vulkan {
         if (debug_utils_messenger != VK_NULL_HANDLE) {
             vkDestroyDebugUtilsMessengerEXT(instance, debug_utils_messenger, nullptr);
         }
+    }
+
+    void Debug::PopulateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& create_info) {
+        create_info = {};
+
+        create_info.sType           = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+        create_info.pNext           = nullptr;
+        create_info.flags           = 0;
+        create_info.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+        create_info.messageType     = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+        create_info.pfnUserCallback = DebugCallback;
+        create_info.pUserData       = nullptr;
     }
 
     PFN_vkCmdBeginDebugUtilsLabelEXT  DebugUtils::vkCmdBeginDebugUtilsLabelEXT  = nullptr;

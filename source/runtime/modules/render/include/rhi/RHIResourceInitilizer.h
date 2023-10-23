@@ -143,7 +143,7 @@ struct RHIBlendStateInitializer {
             EBlendFactor    _color_dst_blend_factor = BF_ZERO,
             EBlendOperation _alpha_blend_op         = BO_ADD,
             EBlendFactor    _alpha_src_blend_factor = BF_ONE,
-            EBlendFactor    _alpha_dst_blend_factor = BF_ONE,
+            EBlendFactor    _alpha_dst_blend_factor = BF_ZERO,
             EColorWriteMask _color_write_mask       = CW_RGBA)
             : color_blend_op(_color_blend_op),
               color_src_blend_factor(_color_src_blend_factor),
