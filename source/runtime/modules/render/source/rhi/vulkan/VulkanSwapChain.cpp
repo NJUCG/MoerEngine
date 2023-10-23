@@ -8,7 +8,7 @@
 
 namespace VkUtil = MoerEngine::RHI::Vulkan::Util;
 
-void VulkanSwapChain::Connect(VkInstance _instance, VkSurfaceKHR _surface, const VulkanDevice* _device) {
+void VulkanSwapChain::Connect(VkInstance _instance, VkSurfaceKHR _surface, VulkanDevice* _device) {
     m_instance = _instance;
     m_surface  = _surface;
     m_device   = _device;
@@ -22,7 +22,7 @@ void VulkanSwapChain::Connect(VkInstance _instance, VkSurfaceKHR _surface, const
  * @param fullscreen
  */
 void VulkanSwapChain::Init(uint32_t* width, uint32_t* height, bool vsync) {
-    auto device = m_device.lock();
+    auto* device = m_device;
 
     auto details        = VkUtil::QuerySwapChainSupport(device->GetGpu(), m_surface);
     auto surface_format = ChooseSwapSurfaceFormat(details.formats);
@@ -87,7 +87,7 @@ void VulkanSwapChain::Cleanup() {
 }
 
 VkImageView VulkanSwapChain::CreateImageView(VkImage _image, VkFormat _format, uint32_t _mip_levels, VkImageAspectFlags _aspect_mask) {
-    auto device = m_device.lock();
+    auto* device = m_device;
 
     VkImageView view;
 

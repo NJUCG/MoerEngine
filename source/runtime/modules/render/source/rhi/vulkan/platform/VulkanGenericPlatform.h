@@ -9,7 +9,7 @@
 #include <vector>
 #include <string>
 
-#include "vulkan.h"
+#include <vulkan/vulkan.h>
 
 class VulkanDevice;
 class VulkanPhysicalDeviceFeatures;

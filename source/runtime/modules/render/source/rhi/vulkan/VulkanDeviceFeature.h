@@ -5,7 +5,7 @@
 #ifndef VULKAN_DEVICE_FEATURE_H
 #define VULKAN_DEVICE_FEATURE_H
 
-#include <vulkan.h>
+#include <vulkan/vulkan.h>
 
 class VulkanPhysicalDeviceFeatures {
 public:

@@ -52,12 +52,7 @@ void Test() {
     ShaderCompiler::ShaderCompileTest();
 
     RHIGraphicsPipelineStateInitializer init;
-    init.num_samples                 = 1;
     init.multi_view_count            = 1;
-    init.stencil_attachment_store_op = EAttachmentStoreOp::NONE;
-    init.stencil_attachment_load_op  = EAttachmentLoadOp::NONE;
-    init.depth_attachment_store_op   = EAttachmentStoreOp::NONE;
-    init.depth_attachment_load_op    = EAttachmentLoadOp::NONE;
     init.color_attachment_count      = 1;
     init.color_attachment_formats[0] = EPixelFormat::PF_R8G8B8A8_SRGB;
     init.color_attachment_flags[0]   = ETextureUsageFlags::COLOR_ATTACHMENT;

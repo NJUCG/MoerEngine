@@ -5,7 +5,7 @@
 #ifndef VULKAN_UTIL_H
 #define VULKAN_UTIL_H
 
-#include <vulkan.h>
+#include <vulkan/vulkan.h>
 
 #include <vector>
 #include <string>

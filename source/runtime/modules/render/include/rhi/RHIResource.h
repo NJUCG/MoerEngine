@@ -1854,7 +1854,22 @@ public:
     }
 
     bool operator==(const RHIGraphicsPipelineStateInitializer& other) const {
-        return shader_stage.p_vertex_input_state == other.shader_stage.p_vertex_input_state && shader_stage.p_vertex_shader == other.shader_stage.p_vertex_shader && shader_stage.p_fragment_shader == other.shader_stage.p_fragment_shader && shader_stage.GetMeshShader() == other.shader_stage.GetMeshShader() && shader_stage.GetGeometryShader() == other.shader_stage.GetGeometryShader() && shader_stage.GetAmplificationShader() == other.shader_stage.GetAmplificationShader() && blend_state == other.blend_state && rasterizer_state == other.rasterizer_state && depth_stencil_state == other.depth_stencil_state && primitive_topology == other.primitive_topology && b_depth_bound == other.b_depth_bound && multi_view_count == other.multi_view_count && shading_rate == other.shading_rate && b_has_fragment_density_attachments == other.b_has_fragment_density_attachments && color_attachment_count == other.color_attachment_count && color_attachment_formats == other.color_attachment_formats && IsSameColorAttachmentArray(color_attachment_flags, other.color_attachment_flags) && depth_stencil_format == other.depth_stencil_format && IsSameDepthAttachmentInPSO(depth_stencil_flag, other.depth_stencil_flag) && depth_attachment_load_op == other.depth_attachment_load_op && depth_attachment_store_op == other.depth_attachment_store_op && stencil_attachment_load_op == other.stencil_attachment_load_op && stencil_attachment_store_op == other.stencil_attachment_store_op && num_samples == other.num_samples && subpass_settings == other.subpass_settings;
+        return shader_stage.p_vertex_input_state == other.shader_stage.p_vertex_input_state && shader_stage.p_vertex_shader == other.shader_stage.p_vertex_shader &&
+               shader_stage.p_fragment_shader == other.shader_stage.p_fragment_shader &&
+               shader_stage.GetMeshShader() == other.shader_stage.GetMeshShader() &&
+               shader_stage.GetGeometryShader() == other.shader_stage.GetGeometryShader() &&
+               shader_stage.GetAmplificationShader() == other.shader_stage.GetAmplificationShader() &&
+               blend_state == other.blend_state && rasterizer_state == other.rasterizer_state &&
+               depth_stencil_state == other.depth_stencil_state &&
+               primitive_topology == other.primitive_topology &&
+               b_depth_bound == other.b_depth_bound && multi_view_count == other.multi_view_count &&
+               shading_rate == other.shading_rate &&
+               b_has_fragment_density_attachments == other.b_has_fragment_density_attachments &&
+               color_attachment_count == other.color_attachment_count &&
+               color_attachment_formats == other.color_attachment_formats &&
+               IsSameColorAttachmentArray(color_attachment_flags, other.color_attachment_flags) &&
+               depth_stencil_format == other.depth_stencil_format &&
+               IsSameDepthAttachmentInPSO(depth_stencil_flag, other.depth_stencil_flag) && subpass_settings == other.subpass_settings;
     }
 
     uint32_t CalcValidColorAttachmentCount() const {

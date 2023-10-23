@@ -3,7 +3,7 @@
 #define VULKAN_COMMAND_LIST_H
 #include "rhi/RHICommandList.h"
 
-#include <vulkan.h>
+#include <vulkan/vulkan.h>
 
 class VulkanDevice;
 

@@ -7,7 +7,7 @@
 
 #include "math/Base.h"
 
-#include <vulkan.h>
+#include <vulkan/vulkan.h>
 #include <string>
 
 namespace MoerEngine {

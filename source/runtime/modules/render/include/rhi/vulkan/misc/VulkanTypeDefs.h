@@ -4,7 +4,7 @@
 
 #include <vector>
 #include <string>
-#include "vulkan.h"
+#include <vulkan/vulkan.h>
 
 #ifndef VULKAN_TYPEDEFS_H
 #define VULKAN_TYPEDEFS_H
