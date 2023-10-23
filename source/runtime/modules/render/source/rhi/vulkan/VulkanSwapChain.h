@@ -7,7 +7,7 @@
 
 #include "VulkanDevice.h"
 
-#include <vulkan.h>
+#include <vulkan/vulkan.h>
 
 #include <memory>
 #include <vector>
@@ -19,7 +19,7 @@ struct SwapChainBuffer {
 
 class VulkanSwapChain {
 public:
-    void     Connect(VkInstance _instance, VkSurfaceKHR _surface, const VulkanDevice* _device);
+    void     Connect(VkInstance _instance, VkSurfaceKHR _surface, VulkanDevice* _device);
     void     Init(uint32_t* width, uint32_t* height, bool vsync);
     uint32_t AcquireNextImage();
     void     Present(VkQueue _queue);
@@ -27,7 +27,7 @@ public:
 
 private:
     VkInstance     m_instance;
-    VulkanDevice   m_device;
+    VulkanDevice*  m_device;
     VkSwapchainKHR m_swap_chain;
     VkSurfaceKHR   m_surface;
 

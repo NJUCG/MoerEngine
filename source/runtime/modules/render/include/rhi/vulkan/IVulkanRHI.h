@@ -7,7 +7,7 @@
 
 #include "rhi/RHI.h"
 #include "rhi/RHIResource.h"
-#include <vulkan.h>
+#include <vulkan/vulkan.h>
 
 class IVulkanRHI : public RHI {
 public:

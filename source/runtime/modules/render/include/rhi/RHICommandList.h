@@ -3,7 +3,7 @@
 #include "RHI.h"
 #include "math/Base.h"
 #include "rhi/RHIResource.h"
-
+class Shader;
 class RHICommandListBase {
 protected:
     RHI_API RHICommandListBase();
@@ -115,7 +115,7 @@ public:
     virtual void ExecuteSubCommands(uint32_t                _num,
                                     RHIGraphicsCommandList* _sub_commands) = 0;
 
-    virtual void BindParameters();
+    virtual void BindParameters(Shader* shader, RHIBatchedShaderParameters* batched_params){};
 #pragma region ray-tracing
     virtual void BuildAccelerationStructure(
         RHIBuffer* _instance_data,

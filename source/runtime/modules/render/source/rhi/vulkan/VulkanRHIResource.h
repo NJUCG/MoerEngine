@@ -7,8 +7,8 @@
 
 #include "rhi/RHIResource.h"
 
-#include <vulkan.h>
-#define VMA_IMPLEMENTATION
+#include <vulkan/vulkan.h>
+
 #include <vk_mem_alloc.h>
 
 class VulkanDevice;

@@ -147,7 +147,7 @@ void VulkanRHIGraphicsCommandList::BeginRenderPass(const RHIRenderPassInfo& _pas
 }
 
 void VulkanRHIGraphicsCommandList::EndRenderPass() {
-    vkCmdEndRenderingKHR(m_command_buffer);
+    vkCmdEndRendering(m_command_buffer);
 }
 
 void VulkanRHIGraphicsCommandList::NextSubpass() {

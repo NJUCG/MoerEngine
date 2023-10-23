@@ -1,10 +1,9 @@
 #include "GLFWWindowImpl.h"
 #include "rhi/vulkan/VulkanRHI.h"
-#include "vulkan_core.h"
 #include "window/WindowContext.h"
 #include "platform/Platform.h"
 //define vulkan ahead of glfw
-#include "vulkan.h"
+#include "vulkan/vulkan.h"
 #include "GLFW/glfw3.h"
 #if PLATFORM_WINDOWS
 //for dx12

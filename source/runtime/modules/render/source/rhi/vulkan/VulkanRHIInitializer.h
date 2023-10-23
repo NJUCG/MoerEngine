@@ -7,7 +7,7 @@
 
 #include "rhi/RHIResourceInitilizer.h"
 
-#include <vulkan.h>
+#include <vulkan/vulkan.h>
 
 //class VulkanDevice;
 //

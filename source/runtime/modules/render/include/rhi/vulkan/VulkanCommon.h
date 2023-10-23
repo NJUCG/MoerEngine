@@ -1,7 +1,7 @@
 #ifndef VULKAN_COMMON_H
 #define VULKAN_COMMON_H
 
-#include <vulkan.h>
+#include <vulkan/vulkan.h>
 
 #include <vector>
 

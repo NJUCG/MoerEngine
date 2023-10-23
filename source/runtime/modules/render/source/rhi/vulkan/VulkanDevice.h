@@ -8,7 +8,7 @@
 #include "rhi/vulkan/misc/VulkanTypeDefs.h"
 #include "VulkanDeviceFeature.h"
 
-#include <vulkan.h>
+#include <vulkan/vulkan.h>
 
 #include <optional>
 #include <vector>
