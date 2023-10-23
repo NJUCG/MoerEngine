@@ -571,9 +571,102 @@ VkBlendFactor VulkanRHIBlendState::METoVKBlendFactor(EBlendFactor _blend_factor)
 }
 
 #pragma region shader definitions
+
+void VulkanRHIGraphicsShader::CreateShaderModule(const VulkanDevice* _device, const std::vector<uint8_t>& _code) {
+    VkShaderModuleCreateInfo shader_module_create_info{};
+    shader_module_create_info.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    shader_module_create_info.pNext    = nullptr;
+    shader_module_create_info.flags    = 0;
+    shader_module_create_info.codeSize = _code.size();
+    shader_module_create_info.pCode    = reinterpret_cast<const uint32_t*>(_code.data());
+
+    VK_CHECK_RESULT(vkCreateShaderModule(*_device, &shader_module_create_info, nullptr, &m_shader_module));
+}
+
 #pragma endregion
 
 #pragma region pipeline states definitions
+
+std::vector<VkPipelineShaderStageCreateInfo> VulkanRHIGraphicsPipelineState::METoVKShaderStageCreateInfo(const RHIShaderBoundStateInput& _shader_bound_state) {
+    std::vector<VkPipelineShaderStageCreateInfo> shader_stage_create_infos;
+    // vert-frag pipeline
+    VkPipelineShaderStageCreateInfo shader_stage_create_info{};
+    shader_stage_create_info.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    shader_stage_create_info.pNext = nullptr;
+    shader_stage_create_info.flags = 0;
+    if (_shader_bound_state.p_vertex_shader) {
+        auto* vk_vert_shader                         = static_cast<VulkanRHIVertexShader*>(_shader_bound_state.p_vertex_shader);
+        shader_stage_create_info.stage               = VK_SHADER_STAGE_VERTEX_BIT;
+        shader_stage_create_info.module              = vk_vert_shader->GetHandle();
+        shader_stage_create_info.pName               = "main";
+        shader_stage_create_info.pSpecializationInfo = nullptr;
+        shader_stage_create_infos.push_back(shader_stage_create_info);
+    }
+    if (_shader_bound_state.p_geometry_shader) {
+        auto* vk_geom_shader                         = static_cast<VulkanRHIGeometryShader*>(_shader_bound_state.p_geometry_shader);
+        shader_stage_create_info.stage               = VK_SHADER_STAGE_GEOMETRY_BIT;
+        shader_stage_create_info.module              = vk_geom_shader->GetHandle();
+        shader_stage_create_info.pName               = "main";
+        shader_stage_create_info.pSpecializationInfo = nullptr;
+        shader_stage_create_infos.push_back(shader_stage_create_info);
+    }
+    // mesh-frag pipeline
+    if (_shader_bound_state.p_mesh_shader) {
+        auto* vk_mesh_shader                         = static_cast<VulkanRHIMeshShader*>(_shader_bound_state.p_mesh_shader);
+        shader_stage_create_info.stage               = VK_SHADER_STAGE_MESH_BIT_NV;
+        shader_stage_create_info.module              = vk_mesh_shader->GetHandle();
+        shader_stage_create_info.pName               = "main";
+        shader_stage_create_info.pSpecializationInfo = nullptr;
+        shader_stage_create_infos.push_back(shader_stage_create_info);
+    }
+    if (_shader_bound_state.p_amplification_shader) {
+        auto* vk_amp_shader                          = static_cast<VulkanRHIAmplificationShader*>(_shader_bound_state.p_amplification_shader);
+        shader_stage_create_info.stage               = VK_SHADER_STAGE_TASK_BIT_NV;
+        shader_stage_create_info.module              = vk_amp_shader->GetHandle();
+        shader_stage_create_info.pName               = "main";
+        shader_stage_create_info.pSpecializationInfo = nullptr;
+        shader_stage_create_infos.push_back(shader_stage_create_info);
+    }
+    if (_shader_bound_state.p_fragment_shader) {
+        auto* vk_frag_shader                         = static_cast<VulkanRHIFragmentShader*>(_shader_bound_state.p_fragment_shader);
+        shader_stage_create_info.stage               = VK_SHADER_STAGE_FRAGMENT_BIT;
+        shader_stage_create_info.module              = vk_frag_shader->GetHandle();
+        shader_stage_create_info.pName               = "main";
+        shader_stage_create_info.pSpecializationInfo = nullptr;
+        shader_stage_create_infos.push_back(shader_stage_create_info);
+    }
+
+    return shader_stage_create_infos;
+}
+
+VkPipelineVertexInputStateCreateInfo VulkanRHIGraphicsPipelineState::METoVKVertexInputStateCreateInfo(const RHIVertexInputState& _vertex_input_state) {
+    return VkPipelineVertexInputStateCreateInfo();
+}
+
+VkPrimitiveTopology VulkanRHIGraphicsPipelineState::METoVKPrimitiveTopology(EPrimitiveTopology _primitive_type) {
+    switch (_primitive_type) {
+        case EPrimitiveTopology::POINT_LIST:
+            return VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
+        case EPrimitiveTopology::LINE_LIST:
+            return VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
+        case EPrimitiveTopology::LINE_STRIP:
+            return VK_PRIMITIVE_TOPOLOGY_LINE_STRIP;
+        case EPrimitiveTopology::TRIANGLE_LIST:
+            return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        case EPrimitiveTopology::TRIANGLE_STRIP:
+            return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+        case EPrimitiveTopology::TRIANGLE_LIST_WITH_ADJACENCY:
+            return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_WITH_ADJACENCY;
+        case EPrimitiveTopology::TRIANGLE_STRIP_WITH_ADJACENCY:
+            return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP_WITH_ADJACENCY;
+        case EPrimitiveTopology::PATCH_LIST:
+            return VK_PRIMITIVE_TOPOLOGY_PATCH_LIST;
+        default:
+            LOG_CRITICAL("Unsupported primitive topology: {}", static_cast<uint32_t>(_primitive_type));
+            return VK_PRIMITIVE_TOPOLOGY_MAX_ENUM;
+    }
+}
+
 #pragma endregion
 
 #pragma region global buffer definitions
@@ -691,12 +784,8 @@ bool VulkanRHIFence::Signaled() const {
 
 #pragma endregion
 
-void* VulkanRHIStagingBuffer::GetSuballocationFromBuffer(uint32_t _size) {
-    assert(reinterpret_cast<uint8_t*>(m_cur_ptr) + _size <= m_tail_ptr);
-    return reinterpret_cast<uint8_t*>(m_cur_ptr) + _size;
-}
-
 #pragma region graphic pipeline definitions
+
 #pragma endregion
 
 #pragma region raytracing
