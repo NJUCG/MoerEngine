@@ -102,36 +102,6 @@ RHIFenceRef VulkanRHIImpl::RHICreateFence(const std::string& name) {
     return RHIFenceRef(vk_fence);
 }
 
-/* create cpu visible buffer for direct data transfer */
-RHIStagingBufferRef VulkanRHIImpl::RHICreateStagingBuffer() {
-    // MARK...
-    uint64_t byte_size = 64 * 1024;
-
-    VulkanRHIStagingBuffer* vk_staging_buffer = new VulkanRHIStagingBuffer(byte_size);
-
-    VkBufferCreateInfo buffer_create_info{};
-    buffer_create_info.sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    buffer_create_info.pNext       = nullptr;
-    buffer_create_info.flags       = 0;
-    buffer_create_info.size        = byte_size;
-    buffer_create_info.usage       = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-    buffer_create_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-    VmaAllocationCreateInfo alloc_create_info{};
-    alloc_create_info.flags = 0;
-    alloc_create_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-
-    vmaCreateBuffer(m_allocator, &buffer_create_info, &alloc_create_info, &vk_staging_buffer->m_alloc.buffer, &vk_staging_buffer->m_alloc.alloc, nullptr);
-
-    void* p_data;
-    vmaMapMemory(m_allocator, vk_staging_buffer->m_alloc.alloc, &p_data);
-    vk_staging_buffer->m_head_ptr = reinterpret_cast<uint8_t*>(p_data);
-    vk_staging_buffer->m_tail_ptr = reinterpret_cast<uint8_t*>(p_data) + byte_size;
-    vk_staging_buffer->m_cur_ptr  = vk_staging_buffer->m_head_ptr;
-
-    return RHIStagingBufferRef(vk_staging_buffer);
-}
-
 RHIShaderBoundStateRef VulkanRHIImpl::RHICreateShaderBoundStage(
     RHIVertexInputState* _vertex_input,
     RHIVertexShader*     _vertex_shader,
@@ -147,19 +117,36 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
 RHIComputePipelineStateRef VulkanRHIImpl::RHICreateComputePipelineState(RHIComputeShader* _compute_shader) { return RHIComputePipelineStateRef{}; }
 
 void VulkanRHIImpl::RHIUploadBuffer(RHIBufferRef _buffer_ref, const uint8_t* _data, uint32_t _size) {
-    auto* staging_buffer = dynamic_cast<VulkanRHIStagingBuffer*>(_buffer_ref.Get());
-    if (staging_buffer == nullptr) {
-        LOG_CRITICAL("Invalid RHIBufferRef type: {}.", typeid(_buffer_ref).name());
+    auto* vk_buffer = dynamic_cast<VulkanRHIBuffer*>(_buffer_ref.Get());
+    if (vk_buffer == nullptr) {
+        LOG_CRITICAL("RHIUploadBuffer: Invalid RHIBufferRef type: {}.", typeid(_buffer_ref).name());
         return;
     }
 
-    void* p_data_cur = staging_buffer->GetSuballocationFromBuffer(_size);
-    memcpy(p_data_cur, _data, _size);
-    staging_buffer->m_cur_ptr = p_data_cur;
+    VulkanRHIBuffer* staging_buffer = static_cast<VulkanRHIBuffer*>(RHICreateBuffer({_size, 1, EBufferUsageFlags::TRANSFER_SRC}).Get());
+
+    void* p_data;
+    VK_CHECK_RESULT(vmaMapMemory(m_allocator, staging_buffer->m_alloc.alloc, &p_data));
+    memcpy(p_data, _data, _size);
+    vmaUnmapMemory(m_allocator, staging_buffer->m_alloc.alloc);
+
+    CopyBuffer(staging_buffer, vk_buffer);
 }
 
 void VulkanRHIImpl::RHICopyBuffer(RHIBuffer* _src, RHIBuffer* _dst) {
-    LOG_WARNING("VulkanRHI::RHICopyBuffer is not implemented.");
+    if (_src->GetInfo().size != _dst->GetInfo().size) {
+        LOG_CRITICAL("RHICopyBuffer: Source buffer size {} is not equal to destination buffer size {}.", _src->GetInfo().size, _dst->GetInfo().size);
+        return;
+    }
+
+    auto src = dynamic_cast<VulkanRHIBuffer*>(_src);
+    auto dst = dynamic_cast<VulkanRHIBuffer*>(_dst);
+    if (src == nullptr || dst == nullptr) {
+        LOG_CRITICAL("RHICopyBuffer: Invalid RHIBuffer type, src: {}, dst: {}.", typeid(_src).name(), typeid(_dst).name());
+        return;
+    }
+
+    CopyBuffer(src, dst);
 }
 
 RHIBufferRef VulkanRHIImpl::RHICreateBuffer(const RHIBufferCreateInfo& info) {
@@ -170,18 +157,15 @@ RHIBufferRef VulkanRHIImpl::RHICreateBuffer(const RHIBufferCreateInfo& info) {
 
     VulkanRHIBuffer* vk_buffer = new VulkanRHIBuffer(buffer_info);
 
-    auto indices = m_device->GetQueueFamilyIndices();
-
-    std::array<uint32_t, 2> allowed_queue_indices = {indices.graphics.value(), indices.transfer.value()};
-    VkBufferCreateInfo      buffer_create_info{};
+    VkBufferCreateInfo buffer_create_info{};
     buffer_create_info.sType                 = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     buffer_create_info.pNext                 = nullptr;
     buffer_create_info.flags                 = 0;
     buffer_create_info.size                  = info.size;
     buffer_create_info.usage                 = VulkanRHIBuffer::METoVKBufferUsageFlags(m_device, info.usage);
-    buffer_create_info.sharingMode           = VK_SHARING_MODE_CONCURRENT;
-    buffer_create_info.queueFamilyIndexCount = allowed_queue_indices.size();
-    buffer_create_info.pQueueFamilyIndices   = allowed_queue_indices.data();
+    buffer_create_info.sharingMode           = VK_SHARING_MODE_EXCLUSIVE;
+    buffer_create_info.queueFamilyIndexCount = 0;
+    buffer_create_info.pQueueFamilyIndices   = nullptr;
 
     VmaAllocationCreateInfo alloc_create_info{};
     alloc_create_info.flags = 0;
@@ -195,7 +179,7 @@ RHIBufferRef VulkanRHIImpl::RHICreateBuffer(const RHIBufferCreateInfo& info) {
 void* VulkanRHIImpl::RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size) {
     auto* vk_buffer = dynamic_cast<VulkanRHIBuffer*>(_buffer);
     if (vk_buffer == nullptr) {
-        LOG_CRITICAL("Invalid RHIBuffer type: {}.", typeid(*_buffer).name());
+        LOG_CRITICAL("RHIMapBuffer: Invalid RHIBuffer type: {}.", typeid(*_buffer).name());
         return nullptr;
     }
 
@@ -207,7 +191,7 @@ void* VulkanRHIImpl::RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t
 void VulkanRHIImpl::RHIUnmapBuffer(RHIBuffer* _buffer) {
     auto* vk_buffer = dynamic_cast<VulkanRHIBuffer*>(_buffer);
     if (vk_buffer == nullptr) {
-        LOG_CRITICAL("Invalid RHIBuffer type: {}.", typeid(*_buffer).name());
+        LOG_CRITICAL("RHIUnmapBuffer: Invalid RHIBuffer type: {}.", typeid(*_buffer).name());
         return;
     }
 
@@ -434,6 +418,60 @@ bool VulkanRHIImpl::CheckEnabledExtensions() {
         }
     }
     return true;
+}
+
+VkCommandBuffer VulkanRHIImpl::BeginSingleTimeCommands(VkCommandPool _pool) {
+    VkCommandBufferAllocateInfo alloc_info{};
+    alloc_info.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    alloc_info.pNext              = nullptr;
+    alloc_info.commandPool        = _pool;
+    alloc_info.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    alloc_info.commandBufferCount = 1;
+
+    VkCommandBuffer command_buffer;
+    VK_CHECK_RESULT(vkAllocateCommandBuffers(*m_device, &alloc_info, &command_buffer));
+
+    VkCommandBufferBeginInfo begin_info{};
+    begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin_info.pNext = nullptr;
+    begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+    vkBeginCommandBuffer(command_buffer, &begin_info);
+
+    return command_buffer;
+}
+
+void VulkanRHIImpl::EndSingleTimeCommands(VkCommandBuffer _command_buffer, VkCommandPool _pool, VkQueue _queue) {
+    vkEndCommandBuffer(_command_buffer);
+
+    VkSubmitInfo submit_info{};
+    submit_info.sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit_info.pNext                = nullptr;
+    submit_info.waitSemaphoreCount   = 0;
+    submit_info.pWaitSemaphores      = nullptr;
+    submit_info.pWaitDstStageMask    = nullptr;
+    submit_info.commandBufferCount   = 1;
+    submit_info.pCommandBuffers      = &_command_buffer;
+    submit_info.signalSemaphoreCount = 0;
+    submit_info.pSignalSemaphores    = nullptr;
+
+    vkQueueSubmit(_queue, 1, &submit_info, VK_NULL_HANDLE);
+    vkQueueWaitIdle(_queue);
+
+    vkFreeCommandBuffers(*m_device, _pool, 1, &_command_buffer);
+}
+
+void VulkanRHIImpl::CopyBuffer(VulkanRHIBuffer* _src, VulkanRHIBuffer* _dst) {
+    auto transfer_pool  = m_device->GetTransferCommandPool();
+    auto command_buffer = BeginSingleTimeCommands(transfer_pool);
+
+    VkBufferCopy copy_region{};
+    copy_region.srcOffset = 0;
+    copy_region.dstOffset = 0;
+    copy_region.size      = _src->GetInfo().size;
+    vkCmdCopyBuffer(command_buffer, _src->GetHandle(), _dst->GetHandle(), 1, &copy_region);
+
+    EndSingleTimeCommands(command_buffer, transfer_pool, m_device->GetTransferQueue());
 }
 
 #pragma endregion
