@@ -98,6 +98,13 @@ public:
 
 #pragma endregion
 
+#pragma region GUI
+    virtual bool GUIInit() { return false; };
+    virtual bool GUIShutDown() { return false; };
+    virtual bool GUINewFrame() { return false; };
+    virtual bool GUIRender() { return false; };
+#pragma endregion
+
 protected:
     ERHIType rhi_type;
 };
