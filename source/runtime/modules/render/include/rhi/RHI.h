@@ -50,10 +50,7 @@ public:
     virtual RHIShaderLibraryRef RHICreateShaderLibrary(EShaderPlatform _platform, const std::string& _file_path, const std::string& name) { return nullptr; };
 
     virtual RHIFenceRef RHICreateFence(const std::string& name) = 0;
-
-    /* create cpu visible buffer for direct data transfer */
-    virtual RHIStagingBufferRef RHICreateStagingBuffer() = 0;
-
+    
     virtual RHIShaderBoundStateRef RHICreateShaderBoundStage(
         RHIVertexInputState* _vertex_input,
         RHIVertexShader*     _vertex_shader,
@@ -73,28 +70,20 @@ public:
     virtual RHIComputePipelineStateRef RHICreateComputePipelineState(RHIComputeShader* _compute_shader, RHIPipelineBinaryDataLibrary* _pipeline_library) {
         return RHICreateComputePipelineState(_compute_shader);
     }
-    virtual void RHIUploadBuffer(RHIBufferRef _buffer_ref, const uint8_t* _data, uint32_t _size) = 0;
-
-    virtual void RHICopyBuffer(RHIBuffer* _src, RHIBuffer* _dst) = 0;
-
-    virtual RHIBufferRef RHICreateBuffer(const RHIBufferCreateInfo& info) = 0;
-
-    virtual void* RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size) = 0;
-    virtual void  RHIUnmapBuffer(RHIBuffer* _buffer)                                 = 0;
+    virtual void         RHIUploadBuffer(RHIBufferRef _buffer_ref, const uint8_t* _data, uint32_t _size) = 0;
+    virtual void         RHICopyBuffer(RHIBuffer* _src, RHIBuffer* _dst)                                 = 0;
+    virtual RHIBufferRef RHICreateBuffer(const RHIBufferCreateInfo& info)                                = 0;
+    virtual void*        RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size)              = 0;
+    virtual void         RHIUnmapBuffer(RHIBuffer* _buffer)                                              = 0;
 
     virtual RHITextureRef RHICreateTexture(const RHITextureCreateInfo& info) = 0;
 
     virtual RHIShaderResourceViewRef  RHICreateShaderResourceView(RHIViewableResource* _resource, const RHIViewInfo& _view_info)  = 0;
     virtual RHIUnorderedAccessViewRef RHICreateUnorderedAccessView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) = 0;
 
-    virtual RHICommandQueue* CreateCommandQueue(
-        ECommandQueueType type) = 0;
-
-    virtual RHIGraphicsCommandList* CreateGraphicsCommandList(
-        RHIGraphicsPipelineState* _initial_state = nullptr) = 0;
-
-    virtual RHIComputeCommandList* CreateComputeCommandList(
-        RHIComputePipelineState* _initial_state = nullptr) = 0;
+    virtual RHICommandQueue*        CreateCommandQueue(ECommandQueueType type)                                    = 0;
+    virtual RHIGraphicsCommandList* CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state = nullptr) = 0;
+    virtual RHIComputeCommandList*  CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr)   = 0;
 
 #pragma endregion
 

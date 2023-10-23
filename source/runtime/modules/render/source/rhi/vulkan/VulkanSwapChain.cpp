@@ -8,7 +8,7 @@
 
 namespace VkUtil = MoerEngine::RHI::Vulkan::Util;
 
-void VulkanSwapChain::Connect(VkInstance _instance, VkSurfaceKHR _surface, const std::shared_ptr<VulkanDevice>& _device) {
+void VulkanSwapChain::Connect(VkInstance _instance, VkSurfaceKHR _surface, const VulkanDevice* _device) {
     m_instance = _instance;
     m_surface  = _surface;
     m_device   = _device;

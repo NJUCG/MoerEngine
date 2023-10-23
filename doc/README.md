@@ -94,7 +94,7 @@ void Example(){
 
     VertexInputStateInitializerList vertex_init_list;
     for (int i = 0; i < 1; ++i) {
-        vertex_init_list[i].type            = EVertexElementType::VET_FLOAT3;
+        vertex_init_list[i].type            = EVertexElementType::VET_Float3;
         vertex_init_list[i].offset          = 0;
         vertex_init_list[i].stride          = sizeof(Moer::Vector3f);
         vertex_init_list[i].input_rate      = EVertexInputRate::VIR_VERTEX;

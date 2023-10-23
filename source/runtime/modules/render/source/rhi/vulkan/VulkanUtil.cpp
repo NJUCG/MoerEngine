@@ -2,8 +2,8 @@
 // Created by 74535 on 2023/10/1.
 //
 
-#include "VulkanUtil.h"
 #include "rhi/vulkan/misc/VulkanMacroUtils.h"
+#include "VulkanUtil.h"
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -22,7 +22,7 @@ namespace Util {
     std::string ErrorString(VkResult error_code) {
         switch (error_code) {
 #define STR(r) \
-    case VK_##r: return #r
+case VK_##r: return #r
             STR(NOT_READY);
             STR(TIMEOUT);
             STR(EVENT_SET);
@@ -56,7 +56,7 @@ namespace Util {
     std::string PhysicalDeviceTypeString(VkPhysicalDeviceType type) {
         switch (type) {
 #define STR(r) \
-    case VK_PHYSICAL_DEVICE_TYPE_##r: return #r
+case VK_PHYSICAL_DEVICE_TYPE_##r: return #r
             STR(OTHER);
             STR(INTEGRATED_GPU);
             STR(DISCRETE_GPU);
@@ -189,7 +189,7 @@ namespace Util {
             MessageBox(nullptr, message.c_str(), nullptr, MB_OK | MB_ICONERROR);
         }
 #endif
-        MOER_LOG_CRITICAL(message);
+        LOG_CRITICAL(message);
         exit(exit_code);
     }
 
