@@ -5,9 +5,7 @@
 #ifndef VULKAN_MACRO_UTILS_H
 #define VULKAN_MACRO_UTILS_H
 
-#include "misc/MacroUtils.h"
-
-#include "spdlog/spdlog.h"
+#include "log/LogSystem.h"
 
 #define VK_CHECK_RESULT(f)                 \
     {                                      \
@@ -20,7 +18,7 @@
                << "\" in " << __FILE__     \
                << " at line " << __LINE__  \
                << "\n";                    \
-            MOER_LOG_CRITICAL(ss.str());   \
+            LOG_CRITICAL(ss.str());        \
             assert(res == VK_SUCCESS);     \
         }                                  \
     }

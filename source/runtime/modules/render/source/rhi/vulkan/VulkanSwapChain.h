@@ -19,17 +19,17 @@ struct SwapChainBuffer {
 
 class VulkanSwapChain {
 public:
-    void     Connect(VkInstance _instance, VkSurfaceKHR _surface, const std::shared_ptr<VulkanDevice>& _device);
+    void     Connect(VkInstance _instance, VkSurfaceKHR _surface, const VulkanDevice* _device);
     void     Init(uint32_t* width, uint32_t* height, bool vsync);
     uint32_t AcquireNextImage();
     void     Present(VkQueue _queue);
     void     Cleanup();
 
 private:
-    VkInstance                  m_instance;
-    std::weak_ptr<VulkanDevice> m_device;
-    VkSwapchainKHR              m_swap_chain;
-    VkSurfaceKHR                m_surface;
+    VkInstance     m_instance;
+    VulkanDevice   m_device;
+    VkSwapchainKHR m_swap_chain;
+    VkSurfaceKHR   m_surface;
 
     std::vector<VkSemaphore> m_image_acquired_semaphores;
     std::vector<VkSemaphore> m_render_complete_semaphores;

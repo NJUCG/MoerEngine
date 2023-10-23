@@ -6,6 +6,7 @@
 #define VULKAN_DEVICE_H
 
 #include "rhi/vulkan/misc/VulkanTypeDefs.h"
+#include "VulkanDeviceFeature.h"
 
 #include <vulkan.h>
 
@@ -23,12 +24,12 @@ struct QueueFamilyIndices {
 };
 
 struct DeviceInitializer {
-    VkInstance               instance = nullptr;
-    VkPhysicalDeviceType     gpu_type = VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
-    VkSurfaceKHR             surface;
-    VkPhysicalDeviceFeatures enabled_features   = {};
-    std::vector<std::string> enabled_extensions = {};
-    void*                    p_next_chain       = nullptr;
+    VkInstance                   instance = nullptr;
+    VkPhysicalDeviceType         gpu_type = VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
+    VkSurfaceKHR                 surface;
+    uint32_t                     api_version        = VK_API_VERSION_1_3;
+    VulkanPhysicalDeviceFeatures enabled_features   = {};
+    std::vector<std::string>     enabled_extensions = {};
 };
 
 class VulkanDevice {
@@ -49,7 +50,7 @@ public:
     inline VkPhysicalDeviceProperties GetProperties() const {
         return m_gpu_props;
     }
-    inline VkPhysicalDeviceFeatures GetFeatures() const {
+    inline VulkanPhysicalDeviceFeatures GetFeatures() const {
         return m_gpu_features;
     }
     inline VkPhysicalDeviceMemoryProperties GetMemoryProperties() const {
@@ -73,11 +74,17 @@ public:
     inline VkQueue GetTransferQueue() const {
         return m_transfer_queue;
     }
+    inline VkCommandPool GetDefaultCommandPool() const {
+        return m_default_pool;
+    }
+    inline VkCommandPool GetTransferCommandPool() const {
+        return m_transfer_pool;
+    }
 
 private:
     VkPhysicalDevice                 m_gpu;
     VkPhysicalDeviceProperties       m_gpu_props;
-    VkPhysicalDeviceFeatures         m_gpu_features;
+    VulkanPhysicalDeviceFeatures     m_gpu_features;
     VkPhysicalDeviceMemoryProperties m_gpu_mem_props;
     TExtensionArray                  m_gpu_extensions;
     QueueFamilyIndices               m_queue_family_indices;
@@ -87,6 +94,9 @@ private:
     VkQueue  m_present_queue;
     VkQueue  m_compute_queue;
     VkQueue  m_transfer_queue;
+
+    VkCommandPool m_default_pool;
+    VkCommandPool m_transfer_pool;
 
 private:
     VkPhysicalDevice SelectGpu(VkInstance _instance, VkPhysicalDeviceType _type, VkSurfaceKHR _surface, const TExtensionArray& _enabled_extensions);
