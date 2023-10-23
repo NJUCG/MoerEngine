@@ -1,6 +1,8 @@
 #include "Launcher.h"
 #include <filesystem>
+#include "Editor.h"
 #include "Engine.h"
+//compile set
 
 namespace Moer {
     Launcher& Launcher::GetInstance() {
@@ -11,20 +13,26 @@ namespace Moer {
     Launcher::Launcher() {}
 
     void Launcher::Init(const std::filesystem::path& _work_space_path) {
+
         EngineInitInfo info{_work_space_path};
-        engine = new Engine();
+        Engine*        engine = new Engine();
         engine->Init(info);
+        editor = new Editor;
+
+        editor->Init(engine);
 
         engine->PostInit();
     }
 
     void Launcher::Run() {
 
-        engine->Run();
+        editor->Run();
 
-        engine->Quit();
+        editor->ShutDown();
     }
 
     void Launcher::Quit() {
+        delete editor;
+        editor = nullptr;
     }
 }// namespace Moer

@@ -1,6 +1,6 @@
 #include <filesystem>
 namespace Moer {
-    class Engine;
+    class Editor;
     class Launcher {
     public:
         Launcher(const Launcher&)            = delete;
@@ -20,6 +20,6 @@ namespace Moer {
     private:
         Launcher();
 
-        Engine* engine;
+        Editor* editor;
     };
 }// namespace Moer

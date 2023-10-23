@@ -5,11 +5,13 @@
 #include "taskgraph/TaskSystem.h"
 #include "taskgraph/ThreadManager.h"
 #include "RenderSystem.h"
+#include "window/WindowContext.h"
 namespace Moer {
     void Engine::Init(const EngineInitInfo& _info) {
         LOG_INFO("Engine Begin Initilization");
 
         InitCore();
+        InitWindow();
         InitRenderSystem();
 
         LOG_INFO("Engine Initilization Finished");
@@ -23,11 +25,12 @@ namespace Moer {
 
     void Engine::Run() {
         LOG_INFO("Engine Start Running");
-        for (;;) {
-            //todo: currently not functions yet
-            // Tick();
-            break;
-        }
+
+        WindowContext& context = WindowContext::GetInstance();
+        // while (!context.ShouldClose()) {
+        //     ;
+        //     ;
+        // }
         LOG_INFO("Engine Stop Running");
     }
 
@@ -45,12 +48,21 @@ namespace Moer {
     void Engine::ShutDownRenderSystem() {
         RenderSystem::ShutDown();
     }
+
+    void Engine::InitWindow() {
+        //todo: get from config
+        SurfaceInfo info{"", 1920, 1080, "MoerEditor", false};
+        WindowContext::GetInstance().Init(info);
+    }
+    void Engine::ShutDownWindow() {
+    }
     void Engine::Tick() {
     }
 
     void Engine::Quit() {
         b_request_quiting = true;
         ShutDownRenderSystem();
+        ShutDownWindow();
         ShutDownCore();
 
         SPDLOG_INFO("Engine Quit");
