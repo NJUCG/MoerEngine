@@ -6,7 +6,7 @@
 #include "VulkanSwapChain.h"
 #include "rhi/vulkan/misc/VulkanMacroUtils.h"
 
-namespace VkUtil = MoerEngine::RHI::Vulkan::Util;
+namespace VkUtil = Moer::RHI::Vulkan::Util;
 
 void VulkanSwapChain::Connect(VkInstance _instance, VkSurfaceKHR _surface, VulkanDevice* _device) {
     m_instance = _instance;
@@ -24,10 +24,10 @@ void VulkanSwapChain::Connect(VkInstance _instance, VkSurfaceKHR _surface, Vulka
 void VulkanSwapChain::Init(uint32_t* width, uint32_t* height, bool vsync) {
     auto* device = m_device;
 
-    auto details        = VkUtil::QuerySwapChainSupport(device->GetGpu(), m_surface);
-    auto surface_format = ChooseSwapSurfaceFormat(details.formats);
-    auto present_mode   = ChooseSwapPresentMode(details.present_modes, vsync);
-    auto extent         = ChooseSwapExtent(width, height, details.capabilities);
+    auto details      = VkUtil::QuerySwapChainSupport(device->GetGpu(), m_surface);
+    surface_format    = ChooseSwapSurfaceFormat(details.formats);
+    auto present_mode = ChooseSwapPresentMode(details.present_modes, vsync);
+    auto extent       = ChooseSwapExtent(width, height, details.capabilities);
 
     // set the number of images
     uint32_t image_count = details.capabilities.minImageCount + 1;

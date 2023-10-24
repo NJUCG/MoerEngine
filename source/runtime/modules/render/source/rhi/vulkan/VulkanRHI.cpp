@@ -22,7 +22,7 @@
 
 const char* vk_layer = MACRO_STR(VK_LAYER_PATH);
 
-namespace VkUtil = MoerEngine::RHI::Vulkan::Util;
+namespace VkUtil = Moer::RHI::Vulkan::Util;
 
 VulkanRHIImpl::VulkanRHIImpl(GLFWwindow* _window) : m_instance(VK_NULL_HANDLE), m_device(nullptr), m_current_viewport(nullptr) {
     LOG_INFO("Built with Vulkan header version {0:d}.{1:d}.{2:d}", VK_API_VERSION_MAJOR(VK_HEADER_VERSION_COMPLETE), VK_API_VERSION_MINOR(VK_HEADER_VERSION_COMPLETE), VK_API_VERSION_PATCH(VK_HEADER_VERSION_COMPLETE));
@@ -503,7 +503,7 @@ void VulkanRHIImpl::CreateInstance() {
     if (CheckValidationLayer(validation_layer_name)) {
         instance_create_info.enabledLayerCount   = 1;
         instance_create_info.ppEnabledLayerNames = &validation_layer_name;
-        MoerEngine::RHI::Vulkan::Debug::PopulateDebugMessengerCreateInfo(debug_create_info);
+        Moer::RHI::Vulkan::Debug::PopulateDebugMessengerCreateInfo(debug_create_info);
         instance_create_info.pNext = &debug_create_info;
     } else {
         instance_create_info.enabledLayerCount   = 0;
@@ -512,10 +512,10 @@ void VulkanRHIImpl::CreateInstance() {
 
     VK_CHECK_RESULT(vkCreateInstance(&instance_create_info, nullptr, &m_instance))
 
-    MoerEngine::RHI::Vulkan::Debug::SetupDebugUtilsMessengerEXT(m_instance);
+    Moer::RHI::Vulkan::Debug::SetupDebugUtilsMessengerEXT(m_instance);
 
     if (debug_utils_available) {
-        MoerEngine::RHI::Vulkan::DebugUtils::Setup(m_instance);
+        Moer::RHI::Vulkan::DebugUtils::Setup(m_instance);
     }
 }
 

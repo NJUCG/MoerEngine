@@ -10,7 +10,7 @@
 #include <vector>
 #include <string>
 
-namespace MoerEngine {
+namespace Moer {
 namespace RHI {
 namespace Vulkan {
 
@@ -84,10 +84,13 @@ namespace Util {
     bool FileExists(const std::string& filename);
 
     uint32_t AlignedSize(uint32_t value, uint32_t alignment);
+
+    VkSurfaceFormatKHR SelectSurfaceFormat(VkPhysicalDevice physical_device, VkSurfaceKHR surface, const VkFormat* request_formats, int request_formats_count, VkColorSpaceKHR request_color_space);
+    VkPresentModeKHR   SelectPresentMode(VkPhysicalDevice physical_device, VkSurfaceKHR surface, const VkPresentModeKHR* request_modes, int request_modes_count);
 }
 
 }
 }
-}// namespace MoerEngine::RHI::Vulkan::Util
+}// namespace Moer::RHI::Vulkan::Util
 
 #endif// !VULKAN_UTIL_H

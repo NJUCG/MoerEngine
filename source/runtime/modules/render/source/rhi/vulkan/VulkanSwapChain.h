@@ -6,6 +6,7 @@
 #define VULKAN_SWAP_CHAIN_H
 
 #include "VulkanDevice.h"
+#include "vulkan/vulkan_core.h"
 
 #include <vulkan/vulkan.h>
 
@@ -25,6 +26,8 @@ public:
     void     Present(VkQueue _queue);
     void     Cleanup();
 
+    VkSurfaceFormatKHR GetSurfaceFormat() const { return surface_format; }
+
 private:
     VkInstance     m_instance;
     VulkanDevice*  m_device;
@@ -39,6 +42,8 @@ private:
 
     uint32_t current_image_index;
     uint32_t semaphore_index;
+
+    VkSurfaceFormatKHR surface_format;
 
 private:
     VkImageView CreateImageView(VkImage _image, VkFormat _format, uint32_t mipLevels, VkImageAspectFlags aspectMask);
