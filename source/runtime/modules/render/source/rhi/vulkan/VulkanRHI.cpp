@@ -174,7 +174,7 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
     input_assembly_state.sType                  = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
     input_assembly_state.pNext                  = nullptr;
     input_assembly_state.flags                  = 0;
-    input_assembly_state.topology               = VulkanRHIGraphicsPipelineState::METoVKPrimitiveTopology(_init.primitive_topology);
+    input_assembly_state.topology               = VulkanEnumTranslator::METoVKPrimitiveTopology(_init.primitive_topology);
     input_assembly_state.primitiveRestartEnable = VK_FALSE;
 
     // viewport state
