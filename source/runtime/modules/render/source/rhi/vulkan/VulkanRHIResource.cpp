@@ -37,6 +37,10 @@ VkSampleCountFlagBits VulkanEnumTranslator::METoVKSampleCountFlagBits(uint32_t _
     }
 }
 
+VkImageAspectFlags VulkanEnumTranslator::METoVKImageAspectFlags(ETextureAspectFlags _flags) {
+    return VkImageAspectFlags(_flags);
+}
+
 VkImageViewType VulkanEnumTranslator::METoVKImageViewType(ETextureDimension _dim) {
     switch (_dim) {
         case ETextureDimension::TEX_2D:
@@ -145,6 +149,123 @@ VkAttachmentStoreOp VulkanEnumTranslator::METoVKAttachmentStoreOp(EAttachmentSto
     }
 }
 
+VkFilter VulkanEnumTranslator::METoVKImageFilter(ESamplerFilter _filter) {
+    switch (_filter) {
+        case SF_NEAREST:
+            return VK_FILTER_NEAREST;
+        case SF_LINEAR:
+        case SF_CUBIC:
+            return VK_FILTER_LINEAR;
+        case SF_ANISOTROPIC_NEAREST:
+        case SF_ANISOTROPIC_LINEAR:
+            return VK_FILTER_LINEAR;
+        default:
+            LOG_CRITICAL("Unsupported ESamplerFilter {}", static_cast<uint8_t>(_filter));
+            return VK_FILTER_MAX_ENUM;
+    }
+}
+
+VkPipelineStageFlags VulkanEnumTranslator::METoVkPipelineStageFlags(ERHIPipelineStageFlags _flags) {
+    return VkPipelineStageFlags(_flags);// MARK...
+}
+
+VkAccessFlags VulkanEnumTranslator::METoVkAccessFlags(ERHIAccessFlags _flags) {
+    // clang-format off
+    switch (_flags) {
+        case ERHIAccessFlags::UNDEFINED:                                    return VK_ACCESS_NONE;
+        case ERHIAccessFlags::INDIRECT_COMMAND_READ:                        return VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+        case ERHIAccessFlags::INDEX_READ:                                   return VK_ACCESS_INDEX_READ_BIT;
+        case ERHIAccessFlags::VERTEX_ATTRIBUTE_READ:                        return VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
+        case ERHIAccessFlags::UNIFORM_READ:                                 return VK_ACCESS_UNIFORM_READ_BIT;
+        case ERHIAccessFlags::INPUT_ATTACHMENT_READ:                        return VK_ACCESS_INPUT_ATTACHMENT_READ_BIT;
+        case ERHIAccessFlags::SHADER_READ:                                  return VK_ACCESS_SHADER_READ_BIT;
+        case ERHIAccessFlags::SHADER_WRITE:                                 return VK_ACCESS_SHADER_WRITE_BIT;
+        case ERHIAccessFlags::COLOR_ATTACHMENT_READ:                        return VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
+        case ERHIAccessFlags::COLOR_ATTACHMENT_WRITE:                       return VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        case ERHIAccessFlags::DEPTH_STENCIL_READ:                           return VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+        case ERHIAccessFlags::DEPTH_STENCIL_WRITE:                          return VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        case ERHIAccessFlags::TRANSFER_READ:                                return VK_ACCESS_TRANSFER_READ_BIT;
+        case ERHIAccessFlags::TRANSFER_WRITE:                               return VK_ACCESS_TRANSFER_WRITE_BIT;
+        case ERHIAccessFlags::CPU_READ_BIT:                                 return VK_ACCESS_HOST_READ_BIT;
+        case ERHIAccessFlags::CPU_WRITE_BIT:                                return VK_ACCESS_HOST_WRITE_BIT;
+        case ERHIAccessFlags::MEMORY_READ:                                  return VK_ACCESS_MEMORY_READ_BIT;
+        case ERHIAccessFlags::MEMORY_WRITE:                                 return VK_ACCESS_MEMORY_WRITE_BIT;
+        case ERHIAccessFlags::SHADER_SAMPLED_READ:                          return VK_ACCESS_SHADER_READ_BIT;
+        case ERHIAccessFlags::SHADER_RESOURCE_VIEW:                         return VK_ACCESS_SHADER_READ_BIT;
+        case ERHIAccessFlags::UNORDERED_ACCESS_VIEW:                        return VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        case ERHIAccessFlags::TRANSFORM_FEEDBACK_WRITE_BIT_EXT:             return VK_ACCESS_TRANSFORM_FEEDBACK_WRITE_BIT_EXT;
+        case ERHIAccessFlags::TRANSFORM_FEEDBACK_COUNTER_READ_BIT_EXT:      return VK_ACCESS_TRANSFORM_FEEDBACK_COUNTER_READ_BIT_EXT;
+        case ERHIAccessFlags::TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT:     return VK_ACCESS_TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT;
+        case ERHIAccessFlags::CONDITIONAL_RENDERING_READ_BIT_EXT:           return VK_ACCESS_CONDITIONAL_RENDERING_READ_BIT_EXT;
+        case ERHIAccessFlags::COMMAND_PREPROCESS_READ_BIT_NV:               return VK_ACCESS_COMMAND_PREPROCESS_READ_BIT_NV;
+        case ERHIAccessFlags::COMMAND_PREPROCESS_WRITE_BIT_NV:              return VK_ACCESS_COMMAND_PREPROCESS_WRITE_BIT_NV;
+        case ERHIAccessFlags::FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT:    return VK_ACCESS_FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT_KHR;
+        case ERHIAccessFlags::ACCELERATION_STRUCTURE_READ_BIT:              return VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+        case ERHIAccessFlags::ACCELERATION_STRUCTURE_WRITE_BIT:             return VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+        case ERHIAccessFlags::FRAGMENT_DENSITY_MAP_READ_BIT_EXT:            return VK_ACCESS_FRAGMENT_DENSITY_MAP_READ_BIT_EXT;
+        default:
+            LOG_CRITICAL("Unsupported ERHIAccessFlags: {}", static_cast<uint32_t>(_flags));
+            return VK_ACCESS_FLAG_BITS_MAX_ENUM;
+    }
+    // clang-format on
+}
+
+VkCullModeFlags VulkanEnumTranslator::METoVKCullModeFlags(ERasterizerCullMode _cull_mode) {
+    switch (_cull_mode) {
+        case ERasterizerCullMode::CM_UNDEFINED:
+            return VK_CULL_MODE_NONE;
+        case ERasterizerCullMode::CM_FRONT:
+            return VK_CULL_MODE_FRONT_BIT;
+        case ERasterizerCullMode::CM_BACK:
+            return VK_CULL_MODE_BACK_BIT;
+        case ERasterizerCullMode::CM_FRONT_AND_BACK:
+            return VK_CULL_MODE_FRONT_AND_BACK;
+        default:
+            LOG_CRITICAL("Unsupported rasterizer cull mode: {}", static_cast<uint32_t>(_cull_mode));
+            return VK_CULL_MODE_FLAG_BITS_MAX_ENUM;
+    }
+}
+
+VkPrimitiveTopology VulkanEnumTranslator::METoVKPrimitiveTopology(EPrimitiveTopology _primitive_type) {
+    switch (_primitive_type) {
+        case EPrimitiveTopology::POINT_LIST:
+            return VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
+        case EPrimitiveTopology::LINE_LIST:
+            return VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
+        case EPrimitiveTopology::LINE_STRIP:
+            return VK_PRIMITIVE_TOPOLOGY_LINE_STRIP;
+        case EPrimitiveTopology::TRIANGLE_LIST:
+            return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        case EPrimitiveTopology::TRIANGLE_STRIP:
+            return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+        case EPrimitiveTopology::TRIANGLE_LIST_WITH_ADJACENCY:
+            return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_WITH_ADJACENCY;
+        case EPrimitiveTopology::TRIANGLE_STRIP_WITH_ADJACENCY:
+            return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP_WITH_ADJACENCY;
+        case EPrimitiveTopology::PATCH_LIST:
+            return VK_PRIMITIVE_TOPOLOGY_PATCH_LIST;
+        default:
+            LOG_CRITICAL("Unsupported primitive topology: {}", static_cast<uint32_t>(_primitive_type));
+            return VK_PRIMITIVE_TOPOLOGY_MAX_ENUM;
+    }
+}
+
+VkPolygonMode VulkanEnumTranslator::METoVKPolygonMode(ERasterizerFillMode _fill_mode) {
+    switch (_fill_mode) {
+        case ERasterizerFillMode::FM_FILL:
+            return VK_POLYGON_MODE_FILL;
+        case ERasterizerFillMode::FM_LINE:
+            return VK_POLYGON_MODE_LINE;
+        case ERasterizerFillMode::FM_POINT:
+            return VK_POLYGON_MODE_POINT;
+        case ERasterizerFillMode::FM_FILL_RECTANGLE_NV:
+            return VK_POLYGON_MODE_FILL_RECTANGLE_NV;
+        default:
+            LOG_CRITICAL("Unsupported rasterizer fill mode: {}", static_cast<uint32_t>(_fill_mode));
+            return VK_POLYGON_MODE_MAX_ENUM;
+    }
+}
+
 #pragma endregion
 
 void VulkanRHISampler::GenerateSamplerFromInitializer(const VulkanDevice* _device, const RHISamplerInitializer& _initializer) {
@@ -176,19 +297,7 @@ void VulkanRHISampler::GenerateSamplerFromInitializer(const VulkanDevice* _devic
 }
 
 VkFilter VulkanRHISampler::METoVKMinMagFilterMode(ESamplerFilter _filter) {
-    switch (_filter) {
-        case SF_NEAREST:
-            return VK_FILTER_NEAREST;
-        case SF_LINEAR:
-        case SF_CUBIC:
-            return VK_FILTER_LINEAR;
-        case SF_ANISOTROPIC_NEAREST:
-        case SF_ANISOTROPIC_LINEAR:
-            return VK_FILTER_LINEAR;
-        default:
-            LOG_CRITICAL("Unknown ESamplerFilter {:d}", static_cast<uint8_t>(_filter));
-            return VK_FILTER_MAX_ENUM;
-    }
+    return VulkanEnumTranslator::METoVKImageFilter(_filter);
 }
 
 VkSamplerMipmapMode VulkanRHISampler::METoVKMipmapMode(ESamplerFilter _filter) {
@@ -643,36 +752,28 @@ VkPipelineVertexInputStateCreateInfo VulkanRHIGraphicsPipelineState::METoVKVerte
     return VkPipelineVertexInputStateCreateInfo();
 }
 
-VkPrimitiveTopology VulkanRHIGraphicsPipelineState::METoVKPrimitiveTopology(EPrimitiveTopology _primitive_type) {
-    switch (_primitive_type) {
-        case EPrimitiveTopology::POINT_LIST:
-            return VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
-        case EPrimitiveTopology::LINE_LIST:
-            return VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
-        case EPrimitiveTopology::LINE_STRIP:
-            return VK_PRIMITIVE_TOPOLOGY_LINE_STRIP;
-        case EPrimitiveTopology::TRIANGLE_LIST:
-            return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-        case EPrimitiveTopology::TRIANGLE_STRIP:
-            return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
-        case EPrimitiveTopology::TRIANGLE_LIST_WITH_ADJACENCY:
-            return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_WITH_ADJACENCY;
-        case EPrimitiveTopology::TRIANGLE_STRIP_WITH_ADJACENCY:
-            return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP_WITH_ADJACENCY;
-        case EPrimitiveTopology::PATCH_LIST:
-            return VK_PRIMITIVE_TOPOLOGY_PATCH_LIST;
-        default:
-            LOG_CRITICAL("Unsupported primitive topology: {}", static_cast<uint32_t>(_primitive_type));
-            return VK_PRIMITIVE_TOPOLOGY_MAX_ENUM;
-    }
-}
-
 #pragma endregion
 
 #pragma region global buffer definitions
 #pragma endregion
 
 #pragma region viewable resources definitions
+
+VkIndexType VulkanRHIBuffer::METoVKIndexType(EIndexElementType _type) {
+    switch (_type) {
+        case EIndexElementType::IET_NONE:
+            return VK_INDEX_TYPE_NONE_KHR;
+        case EIndexElementType::IET_UINT8:
+            return VK_INDEX_TYPE_UINT8_EXT;
+        case EIndexElementType::IET_UINT16:
+            return VK_INDEX_TYPE_UINT16;
+        case EIndexElementType::IET_UINT32:
+            return VK_INDEX_TYPE_UINT32;
+        default:
+            LOG_CRITICAL("Unsupported index element type: {}", static_cast<uint32_t>(_type));
+            return VK_INDEX_TYPE_MAX_ENUM;
+    }
+}
 
 VkBufferUsageFlags VulkanRHIBuffer::METoVKBufferUsageFlags(VulkanDevice* _device, EBufferUsageFlags _me_flags) {
     // Always include TRANSFER_SRC since hardware vendors confirmed it wouldn't have any performance cost and we need it for some debug functionalities.

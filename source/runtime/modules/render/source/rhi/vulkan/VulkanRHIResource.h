@@ -68,10 +68,19 @@ public:
 class VulkanEnumTranslator final {
 public:
     static VkSampleCountFlagBits METoVKSampleCountFlagBits(uint32_t _me_count);
+    static VkImageAspectFlags    METoVKImageAspectFlags(ETextureAspectFlags _flags);
     static VkImageViewType       METoVKImageViewType(ETextureDimension _dim);
     static VkImageLayout         METoVKImageLayout(ETextureLayout _layout);
     static VkAttachmentLoadOp    METoVKAttachmentLoadOp(EAttachmentLoadOp _load_op);
     static VkAttachmentStoreOp   METoVKAttachmentStoreOp(EAttachmentStoreOp _store_op);
+    static VkFilter              METoVKImageFilter(ESamplerFilter _filter);
+
+    static VkPipelineStageFlags METoVkPipelineStageFlags(ERHIPipelineStageFlags _flags);
+    static VkAccessFlags        METoVkAccessFlags(ERHIAccessFlags _flags);
+
+    static VkCullModeFlags     METoVKCullModeFlags(ERasterizerCullMode _cull_mode);
+    static VkPrimitiveTopology METoVKPrimitiveTopology(EPrimitiveTopology _primitive_type);
+    static VkPolygonMode       METoVKPolygonMode(ERasterizerFillMode _fill_mode);
 };
 
 #pragma endregion
@@ -256,7 +265,6 @@ public:
 
     static std::vector<VkPipelineShaderStageCreateInfo> METoVKShaderStageCreateInfo(const RHIShaderBoundStateInput& _shader_bound_state);
     static VkPipelineVertexInputStateCreateInfo         METoVKVertexInputStateCreateInfo(const RHIVertexInputState& _vertex_input_state);
-    static VkPrimitiveTopology                          METoVKPrimitiveTopology(EPrimitiveTopology _primitive_type);
 
 private:
     VkPipeline m_pipeline;
@@ -283,6 +291,7 @@ public:
         return m_alloc.buffer;
     }
 
+    static VkIndexType        METoVKIndexType(EIndexElementType _type);
     static VkBufferUsageFlags METoVKBufferUsageFlags(VulkanDevice* _device, EBufferUsageFlags _me_flags);
 
 private:
