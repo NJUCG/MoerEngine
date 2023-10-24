@@ -23,13 +23,10 @@
 
 #include <string>
 
-const char* vk_layer = MACRO_STR(VK_LAYER_PATH);
-
-namespace VkUtil = Moer::RHI::Vulkan::Util;
+namespace VkUtil = MoerEngine::RHI::Vulkan::Util;
 
 VulkanRHIImpl::VulkanRHIImpl(GLFWwindow* _window) : m_instance(VK_NULL_HANDLE), m_device(nullptr), m_current_viewport(nullptr) {
     LOG_INFO("Built with Vulkan header version {0:d}.{1:d}.{2:d}", VK_API_VERSION_MAJOR(VK_HEADER_VERSION_COMPLETE), VK_API_VERSION_MINOR(VK_HEADER_VERSION_COMPLETE), VK_API_VERSION_PATCH(VK_HEADER_VERSION_COMPLETE));
-    // SetEnvironmentVariableA("VK_LAYER_PATH", vk_layer);
 
     CreateInstance();
     InitSurface(_window);
@@ -142,7 +139,12 @@ RHIShaderBoundStateRef VulkanRHIImpl::RHICreateShaderBoundStage(
     RHIVertexInputState* _vertex_input,
     RHIVertexShader*     _vertex_shader,
     RHIFragmentShader*   _fragment_shader,
-    RHIGeometryShader*   _geometry_shader) { return RHIShaderBoundStateRef{}; }
+    RHIGeometryShader*   _geometry_shader) {
+
+    auto* input = new RHIShaderBoundStateInput(_vertex_input, _vertex_shader, _fragment_shader, _geometry_shader);
+
+    return RHIShaderBoundStateRef(input);
+}
 
 RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const RHIGraphicsPipelineStateInitializer& _init) {
     VulkanRHIGraphicsPipelineState* vk_pipeline = new VulkanRHIGraphicsPipelineState();
@@ -184,35 +186,23 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
     viewport_state.scissorCount  = _init.multi_view_count;
 
     // rasterization state
-    auto* vk_rasterizer_state = dynamic_cast<VulkanRHIRasterizationState*>(_init.rasterizer_state);
-    if (vk_rasterizer_state == nullptr) {
-        LOG_CRITICAL("RHICreateGraphicsPipelineState: Invalid rasterization state type: {}.", typeid(_init.rasterizer_state).name());
-        return RHIGraphicsPipelineStateRef{};
-    }
+    auto* vk_rasterizer_state = static_cast<VulkanRHIRasterizationState*>(_init.rasterizer_state);
+    VK_CHECK_NULLPTR(vk_rasterizer_state, "RHICreateGraphicsPipelineState: initializer's rasterization state is nullptr!", RHIGraphicsPipelineStateRef{});
     auto rasterization_state = vk_rasterizer_state->GetHandle();
 
     // multisample state
-    auto* vk_multisample_state = dynamic_cast<VulkanRHIMultisampleState*>(_init.multisample_state);
-    if (vk_multisample_state == nullptr) {
-        LOG_CRITICAL("RHICreateGraphicsPipelineState: Invalid multisample state type: {}.", typeid(_init.multisample_state).name());
-        return RHIGraphicsPipelineStateRef{};
-    }
+    auto* vk_multisample_state = static_cast<VulkanRHIMultisampleState*>(_init.multisample_state);
+    VK_CHECK_NULLPTR(vk_multisample_state, "RHICreateGraphicsPipelineState: initializer's multisample state is nullptr!", RHIGraphicsPipelineStateRef{});
     auto multisample_state = vk_multisample_state->GetHandle();
 
     // depth stencil state
-    auto* vk_depth_stencil_state = dynamic_cast<VulkanRHIDepthStencilState*>(_init.depth_stencil_state);
-    if (vk_depth_stencil_state == nullptr) {
-        LOG_CRITICAL("RHICreateGraphicsPipelineState: Invalid depth stencil state type: {}.", typeid(_init.depth_stencil_state).name());
-        return RHIGraphicsPipelineStateRef{};
-    }
+    auto* vk_depth_stencil_state = static_cast<VulkanRHIDepthStencilState*>(_init.depth_stencil_state);
+    VK_CHECK_NULLPTR(vk_depth_stencil_state, "RHICreateGraphicsPipelineState: initializer's depth stencil state is nullptr!", RHIGraphicsPipelineStateRef{});
     auto depth_stencil_state = vk_depth_stencil_state->GetHandle();
 
     // color blend state
-    auto* vk_blend_state = dynamic_cast<VulkanRHIBlendState*>(_init.blend_state);
-    if (vk_blend_state == nullptr) {
-        LOG_CRITICAL("RHICreateGraphicsPipelineState: Invalid color blend state type: {}.", typeid(_init.blend_state).name());
-        return RHIGraphicsPipelineStateRef{};
-    }
+    auto* vk_blend_state = static_cast<VulkanRHIBlendState*>(_init.blend_state);
+    VK_CHECK_NULLPTR(vk_blend_state, "RHICreateGraphicsPipelineState: initializer's color blend state is nullptr!", RHIGraphicsPipelineStateRef{});
     auto color_blend_state = vk_blend_state->GetHandle();
 
     // dynamic state
@@ -251,11 +241,8 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
 RHIComputePipelineStateRef VulkanRHIImpl::RHICreateComputePipelineState(RHIComputeShader* _compute_shader) { return RHIComputePipelineStateRef{}; }
 
 void VulkanRHIImpl::RHIUploadBuffer(RHIBufferRef _buffer_ref, const uint8_t* _data, uint32_t _size) {
-    auto* vk_buffer = dynamic_cast<VulkanRHIBuffer*>(_buffer_ref.Get());
-    if (vk_buffer == nullptr) {
-        LOG_CRITICAL("RHIUploadBuffer: Invalid RHIBufferRef type: {}.", typeid(_buffer_ref).name());
-        return;
-    }
+    auto* vk_buffer = static_cast<VulkanRHIBuffer*>(_buffer_ref.Get());
+    VK_CHECK_NULLPTR(vk_buffer, "RHIUploadBuffer: buffer to be uploaded is nullptr!");
 
     VulkanRHIBuffer* staging_buffer = static_cast<VulkanRHIBuffer*>(RHICreateBuffer({_size, 1, EBufferUsageFlags::TRANSFER_SRC}).Get());
 
@@ -268,15 +255,14 @@ void VulkanRHIImpl::RHIUploadBuffer(RHIBufferRef _buffer_ref, const uint8_t* _da
 }
 
 void VulkanRHIImpl::RHICopyBuffer(RHIBuffer* _src, RHIBuffer* _dst) {
-    if (_src->GetInfo().size != _dst->GetInfo().size) {
-        LOG_CRITICAL("RHICopyBuffer: Source buffer size {} is not equal to destination buffer size {}.", _src->GetInfo().size, _dst->GetInfo().size);
+    auto* src = static_cast<VulkanRHIBuffer*>(_src);
+    auto* dst = static_cast<VulkanRHIBuffer*>(_dst);
+    if (src == nullptr || dst == nullptr) {
+        LOG_CRITICAL("RHICopyBuffer: buffer src or dst is nullptr, src: {}, dst: {}.", typeid(_src).name(), typeid(_dst).name());
         return;
     }
-
-    auto src = dynamic_cast<VulkanRHIBuffer*>(_src);
-    auto dst = dynamic_cast<VulkanRHIBuffer*>(_dst);
-    if (src == nullptr || dst == nullptr) {
-        LOG_CRITICAL("RHICopyBuffer: Invalid RHIBuffer type, src: {}, dst: {}.", typeid(_src).name(), typeid(_dst).name());
+    if (_src->GetInfo().size != _dst->GetInfo().size) {
+        LOG_CRITICAL("RHICopyBuffer: Source buffer size {} is not equal to destination buffer size {}.", _src->GetInfo().size, _dst->GetInfo().size);
         return;
     }
 
@@ -311,11 +297,8 @@ RHIBufferRef VulkanRHIImpl::RHICreateBuffer(const RHIBufferCreateInfo& info) {
 }
 
 void* VulkanRHIImpl::RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size) {
-    auto* vk_buffer = dynamic_cast<VulkanRHIBuffer*>(_buffer);
-    if (vk_buffer == nullptr) {
-        LOG_CRITICAL("RHIMapBuffer: Invalid RHIBuffer type: {}.", typeid(*_buffer).name());
-        return nullptr;
-    }
+    auto* vk_buffer = static_cast<VulkanRHIBuffer*>(_buffer);
+    VK_CHECK_NULLPTR(vk_buffer, "RHIMapBuffer: buffer to be mapped is nullptr!", nullptr);
 
     void* p_data;
     VK_CHECK_RESULT(vmaMapMemory(m_allocator, vk_buffer->m_alloc.alloc, &p_data));
@@ -323,11 +306,8 @@ void* VulkanRHIImpl::RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t
     return p_data;
 }
 void VulkanRHIImpl::RHIUnmapBuffer(RHIBuffer* _buffer) {
-    auto* vk_buffer = dynamic_cast<VulkanRHIBuffer*>(_buffer);
-    if (vk_buffer == nullptr) {
-        LOG_CRITICAL("RHIUnmapBuffer: Invalid RHIBuffer type: {}.", typeid(*_buffer).name());
-        return;
-    }
+    auto* vk_buffer = static_cast<VulkanRHIBuffer*>(_buffer);
+    VK_CHECK_NULLPTR(vk_buffer, "RHIUnmapBuffer: buffer to be unmapped is nullptr!");
 
     vmaUnmapMemory(m_allocator, vk_buffer->m_alloc.alloc);
 }
@@ -371,11 +351,8 @@ RHIShaderResourceViewRef VulkanRHIImpl::RHICreateShaderResourceView(RHIViewableR
     image_view_create_info.pNext = nullptr;
     image_view_create_info.flags = 0;
 
-    auto* vk_texture = dynamic_cast<VulkanRHITexture*>(_resource);
-    if (vk_texture == nullptr) {
-        LOG_CRITICAL("Invalid RHIViewableResource input: {}", static_cast<void*>(_resource));
-        return nullptr;
-    }
+    auto* vk_texture = static_cast<VulkanRHITexture*>(_resource);
+    VK_CHECK_NULLPTR(vk_texture, "RHICreateShaderResourceView: resource to be viewed is nullptr!", RHIShaderResourceViewRef{});
 
     image_view_create_info.image                           = vk_texture->GetHandle();
     image_view_create_info.viewType                        = VulkanEnumTranslator::METoVKImageViewType(_view_info.texture.srv.dimension);
@@ -400,11 +377,8 @@ RHIUnorderedAccessViewRef VulkanRHIImpl::RHICreateUnorderedAccessView(RHIViewabl
     image_view_create_info.pNext = nullptr;
     image_view_create_info.flags = 0;
 
-    auto* vk_texture = dynamic_cast<VulkanRHITexture*>(_resource);
-    if (vk_texture == nullptr) {
-        LOG_CRITICAL("Invalid RHIViewableResource input: {}", typeid(*_resource).name());
-        return nullptr;
-    }
+    auto* vk_texture = static_cast<VulkanRHITexture*>(_resource);
+    VK_CHECK_NULLPTR(vk_texture, "RHICreateUnorderedAccessView: resource to be viewed is nullptr!", RHIUnorderedAccessViewRef{});
 
     image_view_create_info.image                           = vk_texture->GetHandle();
     image_view_create_info.viewType                        = VulkanEnumTranslator::METoVKImageViewType(_view_info.texture.uav.dimension);
