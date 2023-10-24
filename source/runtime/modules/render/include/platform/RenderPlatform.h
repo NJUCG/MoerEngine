@@ -10,7 +10,7 @@
 #include <string>
 #include <cstdint>
 #include "config/ConfigMap.h"
-namespace MoerEngine {
+namespace Moer {
 namespace RHI {
     RHI_API extern const std::string RHI_VULKAN_NAME;
     RHI_API extern const std::string RHI_D3D_NAME;
@@ -86,7 +86,6 @@ namespace RHI {
         uint32_t b_support_3d_texture_atomics : 1;
 
         GenericRenderPlatformInfo() {
-
         }
 
     private:
@@ -94,7 +93,7 @@ namespace RHI {
 
     public:
         void Initialize();
-        void ParseValuesFromConfiguration(const ConfigMap& _value_map, GenericRenderPlatformInfo& target_platform_info);
+        void ParseValuesFromConfiguration(const Moer::ConfigMap& _value_map, GenericRenderPlatformInfo& target_platform_info);
     };
 }
 }// namespace Moer::RHI

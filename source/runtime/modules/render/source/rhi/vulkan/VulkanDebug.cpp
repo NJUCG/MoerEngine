@@ -6,7 +6,7 @@
 #include "VulkanDebug.h"
 #include <sstream>
 
-namespace MoerEngine {
+namespace Moer {
 namespace RHI {
 namespace Vulkan {
 
@@ -98,4 +98,4 @@ namespace Vulkan {
 
 }
 }
-}// namespace MoerEngine::RHI::Vulkan
+}// namespace Moer::RHI::Vulkan

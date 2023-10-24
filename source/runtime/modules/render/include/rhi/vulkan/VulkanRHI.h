@@ -68,7 +68,12 @@ public:
     RHIComputeCommandList*  CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr) final override;
 
 #pragma endregion
-
+#pragma region GUI
+    virtual bool GUIInit(uint32_t _num_frames_in_flight) final override;
+    virtual void GUIShutDown() final override;
+    virtual void GUINewFrame() final override;
+    virtual void GUIRender() final override;
+#pragma endregion
 protected:
     VkInstance               m_instance;
     std::vector<std::string> m_instance_layers;

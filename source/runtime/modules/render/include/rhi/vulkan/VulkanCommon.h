@@ -5,11 +5,11 @@
 
 #include <vector>
 
-namespace MoerEngine {
+namespace Moer {
 namespace RHI {
 namespace Vulkan {
 
 }
 }
-}// namespace MoerEngine::RHI::Vulkan
+}// namespace Moer::RHI::Vulkan
 #endif// !VULKAN_COMMON_H

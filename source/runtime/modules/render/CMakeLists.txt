@@ -5,9 +5,10 @@ configure_file(${MODULE_DIR}/include/config.h.in ${MODULE_DIR}/include/config.h)
 
 file(GLOB_RECURSE RENDER_MODULE_HEADERS "include/*.h")
 file(GLOB_RECURSE RENDER_MODULE_SOURCES "source/*.cpp" "source/*.h")
-source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${RENDER_MODULE_HEADERS} ${RENDER_MODULE_SOURCES})
+file(GLOB IMGUI_SOURCES "${moer_third_party_dir}/imgui/*.cpp" "${moer_third_party_dir}/imgui/*.h")
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${RENDER_MODULE_HEADERS} ${RENDER_MODULE_SOURCES} )
 
-add_library(${MODULE_NAME} STATIC ${RENDER_MODULE_HEADERS} ${RENDER_MODULE_SOURCES})
+add_library(${MODULE_NAME} STATIC ${RENDER_MODULE_HEADERS} ${RENDER_MODULE_SOURCES} ${IMGUI_SOURCES})
 
 set_target_properties(${MODULE_NAME} PROPERTIES FOLDER "runtime")
 
@@ -23,6 +24,7 @@ target_include_directories(${MODULE_NAME}
 	PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/VulkanSDK/include>
 	PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/DirectXShaderCompiler/include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/VulkanMemoryAllocator>
+    PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/imgui>
 )
 message(${moer_third_party_dir}/DirectX-Headers/include)
 target_link_libraries(${MODULE_NAME}

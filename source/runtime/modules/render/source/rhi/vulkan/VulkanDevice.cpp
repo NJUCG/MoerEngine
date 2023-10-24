@@ -9,7 +9,7 @@
 
 #include <set>
 
-namespace VkUtil = MoerEngine::RHI::Vulkan::Util;
+namespace VkUtil = Moer::RHI::Vulkan::Util;
 
 /**
  * Initialize GPU, GPU related resources, create the logical device, etc.

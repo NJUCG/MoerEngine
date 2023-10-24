@@ -1,5 +1,5 @@
 #include "platform/RenderPlatform.h"
-using namespace __ENGINE_NAME__::RHI;
+using namespace Moer::RHI;
 using string = std::string;
 const string RHI_VULKAN_NAME("Vulkan");
 const string RHI_D3D_NAME("D3D");

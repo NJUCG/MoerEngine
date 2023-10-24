@@ -50,7 +50,7 @@ public:
     virtual RHIShaderLibraryRef RHICreateShaderLibrary(EShaderPlatform _platform, const std::string& _file_path, const std::string& name) { return nullptr; };
 
     virtual RHIFenceRef RHICreateFence(const std::string& name) = 0;
-    
+
     virtual RHIShaderBoundStateRef RHICreateShaderBoundStage(
         RHIVertexInputState* _vertex_input,
         RHIVertexShader*     _vertex_shader,
@@ -88,10 +88,10 @@ public:
 #pragma endregion
 
 #pragma region GUI
-    virtual bool GUIInit() { return false; };
-    virtual bool GUIShutDown() { return false; };
-    virtual bool GUINewFrame() { return false; };
-    virtual bool GUIRender() { return false; };
+    virtual bool GUIInit(uint32_t _num_frames_in_flight);
+    virtual void GUIShutDown();
+    virtual void GUINewFrame();
+    virtual void GUIRender();
 #pragma endregion
 
 protected:
