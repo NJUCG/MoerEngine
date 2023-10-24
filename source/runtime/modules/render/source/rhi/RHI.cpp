@@ -84,6 +84,8 @@ void Test() {
     const float  vertex_data[] = {-1, -1, 0, 1, -1, 0, -1, 1, 0, 1, 1, 1};
     RHIBufferRef vertex_buffer = CreateBufferFromData(v_info, sizeof(vertex_data), (void*)vertex_data);
 
+    std::vector<RHIBufferRef> vertex_buffers = {vertex_buffer};
+
     shader_state.p_vertex_input_state = g_rhi->RHICreateVertexInputState(vertex_init_list);
 
     const Moer::Vector2i attachment_size(4, 4);
@@ -109,7 +111,7 @@ void Test() {
     RHIRenderPassInfo pass_info;
     pass_info.GeneratePipelineAttachmentInfo();
     command_list->BeginRenderPass(pass_info, "triangle pass");
-    command_list->BindVertexBuffers(0, 1, vertex_buffer);
+    command_list->BindVertexBuffers(0, 1, vertex_buffers.data(), 0);
 
     command_list->DrawIndexedInstanced(1, 1, 0, 0);
 

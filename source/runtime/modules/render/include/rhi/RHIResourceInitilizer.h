@@ -411,7 +411,7 @@ struct RHICopyTextureToBufferInfo {
     RHISubresourceSlice texture_slice;
 
     uint64_t buffer_offset;
-    /* he buffer_row_length is the number of pixels from one row to the next.
+    /* The buffer_row_length is the number of pixels from one row to the next.
      * The buffer_texture_height is the number of rows from one texture layer to the next.*/
     uint32_t buffer_row_length;
     uint32_t buffer_texture_height;
