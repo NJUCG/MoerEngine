@@ -75,12 +75,15 @@ public:
     void SetBlendFactors(const float _factors[4]) override;
 
     void BindVertexBuffers(
-        uint32_t         _start_index,
-        uint32_t         _num_buffers,
-        const RHIBuffer* p_vertex_buffers) override;
+        uint32_t            _start_index,
+        uint32_t            _num_buffers,
+        const RHIBufferRef* p_vertex_buffers,
+        const uint32_t*     _offsets) override;
 
     void BindIndexBuffer(
-        const RHIBuffer* p_index_buffer) override;
+        const RHIBuffer*  p_index_buffer,
+        uint32_t          _offset,
+        EIndexElementType _type) override;
 
     void SetAttachments() override {
     }

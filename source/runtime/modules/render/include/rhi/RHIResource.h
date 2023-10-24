@@ -1588,6 +1588,7 @@ struct RHIShaderBoundStateInput : public RHIResource {
         RHIGeometryShader*   _geometry_shader)
         : RHIResource(RRT_SHADER_BOUND_STATE),
           p_vertex_input_state(_vertex_input_state),
+          p_vertex_shader(_vertex_shader),
           p_fragment_shader(_fragment_shader),
           p_geometry_shader(_geometry_shader) {}
 
