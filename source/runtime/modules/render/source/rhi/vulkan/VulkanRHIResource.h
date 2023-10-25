@@ -67,6 +67,8 @@ public:
 
 class VulkanEnumTranslator final {
 public:
+    static VkFormat METoVKFormat(EPixelFormat _format);
+
     static VkSampleCountFlagBits METoVKSampleCountFlagBits(uint32_t _me_count);
     static VkImageAspectFlags    METoVKImageAspectFlags(ETextureAspectFlags _flags);
     static VkImageViewType       METoVKImageViewType(ETextureDimension _dim);
@@ -113,7 +115,6 @@ public:
 
 private:
     VkVertexInputRate METoVKVertexInputRate(EVertexInputRate _me_rate);
-    VkFormat          METoVKFormat(EVertexElementType _me_format);
 
 private:
     VkPipelineVertexInputStateCreateInfo m_input_state_create_info;

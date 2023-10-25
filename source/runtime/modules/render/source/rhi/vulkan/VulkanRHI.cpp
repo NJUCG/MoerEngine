@@ -160,8 +160,8 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
         color_attachment_formats[i] = VkFormat(_init.color_attachment_formats[i]);
     }
     rendering_create_info.pColorAttachmentFormats = color_attachment_formats.data();
-    rendering_create_info.depthAttachmentFormat   = VkFormat(_init.depth_stencil_format);
-    rendering_create_info.stencilAttachmentFormat = VkFormat(_init.depth_stencil_format);
+    rendering_create_info.depthAttachmentFormat   = VulkanEnumTranslator::METoVKFormat(_init.depth_stencil_format);
+    rendering_create_info.stencilAttachmentFormat = VulkanEnumTranslator::METoVKFormat(_init.depth_stencil_format);
 
     // shader stage
     auto shader_stages = VulkanRHIGraphicsPipelineState::METoVKShaderStageCreateInfo(_init.shader_stage);
@@ -320,7 +320,7 @@ RHITextureRef VulkanRHIImpl::RHICreateTexture(const RHITextureCreateInfo& info) 
     image_create_info.pNext                 = nullptr;
     image_create_info.flags                 = 0;
     image_create_info.imageType             = VulkanRHITexture::METoVKImageType(info.dimension);
-    image_create_info.format                = VkFormat(info.format);
+    image_create_info.format                = VulkanEnumTranslator::METoVKFormat(info.format);
     image_create_info.extent.width          = info.extent.x;
     image_create_info.extent.height         = info.extent.y;
     image_create_info.extent.depth          = info.depth;
@@ -356,7 +356,7 @@ RHIShaderResourceViewRef VulkanRHIImpl::RHICreateShaderResourceView(RHIViewableR
 
     image_view_create_info.image                           = vk_texture->GetHandle();
     image_view_create_info.viewType                        = VulkanEnumTranslator::METoVKImageViewType(_view_info.texture.srv.dimension);
-    image_view_create_info.format                          = VkFormat(_view_info.texture.srv.format);
+    image_view_create_info.format                          = VulkanEnumTranslator::METoVKFormat(_view_info.texture.srv.format);
     image_view_create_info.components                      = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
     image_view_create_info.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;// MARK...
     image_view_create_info.subresourceRange.baseMipLevel   = _view_info.texture.srv.mip_min;
@@ -382,7 +382,7 @@ RHIUnorderedAccessViewRef VulkanRHIImpl::RHICreateUnorderedAccessView(RHIViewabl
 
     image_view_create_info.image                           = vk_texture->GetHandle();
     image_view_create_info.viewType                        = VulkanEnumTranslator::METoVKImageViewType(_view_info.texture.uav.dimension);
-    image_view_create_info.format                          = VkFormat(_view_info.texture.uav.format);
+    image_view_create_info.format                          = VulkanEnumTranslator::METoVKFormat(_view_info.texture.uav.format);
     image_view_create_info.components                      = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
     image_view_create_info.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;// MARK...
     image_view_create_info.subresourceRange.baseMipLevel   = _view_info.texture.uav.mip_min;

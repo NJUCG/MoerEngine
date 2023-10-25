@@ -15,6 +15,14 @@ VmaMemoryUsage VulkanMemoryManager::MEGenerateVmaMemoryUsage() {
     return VMA_MEMORY_USAGE_AUTO;
 }
 
+VkFormat VulkanEnumTranslator::METoVKFormat(EPixelFormat _format) {
+    if (_format > 184) {
+        LOG_CRITICAL("Unsupported pixel format: {}", static_cast<uint32_t>(_format));
+        return VK_FORMAT_MAX_ENUM;
+    }
+    return VkFormat(_format);// MARK...
+}
+
 VkSampleCountFlagBits VulkanEnumTranslator::METoVKSampleCountFlagBits(uint32_t _me_count) {
     switch (_me_count) {
         case 1:
@@ -359,7 +367,7 @@ VkCompareOp VulkanRHISampler::METoVKCompareOp(ESamplerCompareFunction _compare_o
 
 void VulkanRHIVertexInputState::GenerateVertexInputStateFromInitializer(const VertexInputStateInitializerList& _init) {
     for (uint32_t i = 0; i < MAX_VERTEX_ELEMENT_COUNT; ++i) {
-        if (_init[i].format == EVertexElementType::VET_None) {
+        if (_init[i].format == EPixelFormat::PF_UNDEFINED) {
             break;
         }
         m_bindings[i].binding    = _init[i].binding_index;
@@ -367,8 +375,8 @@ void VulkanRHIVertexInputState::GenerateVertexInputStateFromInitializer(const Ve
         m_bindings[i].inputRate  = METoVKVertexInputRate(_init[i].input_rate);
         m_attributes[i].location = _init[i].attribute_index;
         m_attributes[i].binding  = _init[i].binding_index;
-        // m_attributes[i].format   = METoVKFormat(_init[i].format);
-        m_attributes[i].offset = _init[i].offset;
+        m_attributes[i].format   = VulkanEnumTranslator::METoVKFormat(_init[i].format);
+        m_attributes[i].offset   = _init[i].offset;
 
         m_binding_count = _init[i].binding_index;
         ++m_attribute_count;
@@ -392,56 +400,6 @@ VkVertexInputRate VulkanRHIVertexInputState::METoVKVertexInputRate(EVertexInputR
         default:
             LOG_CRITICAL("Unsupported vertex input rate: {}", static_cast<uint32_t>(_me_rate));
             return VK_VERTEX_INPUT_RATE_MAX_ENUM;
-    }
-}
-
-VkFormat VulkanRHIVertexInputState::METoVKFormat(EVertexElementType _me_format) {
-    switch (_me_format) {
-        case EVertexElementType::VET_None:
-            return VK_FORMAT_UNDEFINED;
-        case EVertexElementType::VET_Float1:
-            return VK_FORMAT_R32_SFLOAT;
-        case EVertexElementType::VET_Float2:
-            return VK_FORMAT_R32G32_SFLOAT;
-        case EVertexElementType::VET_Float3:
-            return VK_FORMAT_R32G32B32_SFLOAT;
-        case EVertexElementType::VET_Float4:
-            return VK_FORMAT_R32G32B32A32_SFLOAT;
-        case EVertexElementType::VET_PackedNormal:
-            return VK_FORMAT_R8G8B8A8_SNORM;
-        case EVertexElementType::VET_UByte4:
-            return VK_FORMAT_R8G8B8A8_UINT;
-        case EVertexElementType::VET_UByte4N:
-            return VK_FORMAT_R8G8B8A8_UNORM;
-        case EVertexElementType::VET_Color:
-            return VK_FORMAT_B8G8R8A8_UNORM;
-        case EVertexElementType::VET_Short2:
-            return VK_FORMAT_R16G16_SINT;
-        case EVertexElementType::VET_Short4:
-            return VK_FORMAT_R16G16B16A16_SINT;
-        case EVertexElementType::VET_Short2N:
-            return VK_FORMAT_R16G16_SNORM;
-        case EVertexElementType::VET_Half2:
-            return VK_FORMAT_R16G16_SFLOAT;
-        case EVertexElementType::VET_Half4:
-            return VK_FORMAT_R16G16B16A16_SFLOAT;
-        case EVertexElementType::VET_Short4N:// 4 X 16 bit word: normalized
-            return VK_FORMAT_R16G16B16A16_SNORM;
-        case EVertexElementType::VET_UShort2:
-            return VK_FORMAT_R16G16_UINT;
-        case EVertexElementType::VET_UShort4:
-            return VK_FORMAT_R16G16B16A16_UINT;
-        case EVertexElementType::VET_UShort2N:// 16 bit word normalized to (value/65535.0:value/65535.0:0:0:1)
-            return VK_FORMAT_R16G16_UNORM;
-        case EVertexElementType::VET_UShort4N:// 4 X 16 bit word unsigned: normalized
-            return VK_FORMAT_R16G16B16A16_UNORM;
-        case EVertexElementType::VET_URGB10A2N:
-            return VK_FORMAT_A2B10G10R10_UNORM_PACK32;
-        case EVertexElementType::VET_UInt:
-            return VK_FORMAT_R32_UINT;
-        default:
-            LOG_CRITICAL("Unsupported vertex element type: {}", static_cast<uint32_t>(_me_format));
-            return VK_FORMAT_MAX_ENUM;
     }
 }
 
