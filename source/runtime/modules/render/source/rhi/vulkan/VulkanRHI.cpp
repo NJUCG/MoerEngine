@@ -10,6 +10,8 @@
 #include "VulkanRHIInitializer.h"
 #include "VulkanExtension.h"
 
+#include "shader/Shader.h"
+
 #include "VulkanDebug.h"
 #include "VulkanUtil.h"
 
@@ -21,7 +23,9 @@
 
 #include <GLFW/glfw3.h>
 
+#include <unordered_map>
 #include <string>
+#include <set>
 
 namespace VkUtil = MoerEngine::RHI::Vulkan::Util;
 
@@ -214,6 +218,60 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
     dynamic_state.dynamicStateCount = states.size();
     dynamic_state.pDynamicStates    = states.data();
 
+    // pipeline layout
+    std::vector<Shader*> shaders;
+
+    using VulkanDescriptorSetLayout = std::pair<VkDescriptorSetLayout, std::vector<VkDescriptorSetLayoutBinding>>;
+
+    std::unordered_map<uint8_t, VulkanDescriptorSetLayout> layout_mappings;
+
+    // construct layout mappings
+    for (const auto* shader : shaders) {
+        auto infos = shader->GetRootParametersLayoutInfo().GetLayoutInfos();
+
+        for (const auto& info : infos) {
+            VkDescriptorSetLayoutBinding binding;
+            binding.binding            = info.slot;
+            binding.descriptorType     = VulkanEnumTranslator::METoVKDescriptorType(info.type);
+            binding.descriptorCount    = 1;
+            binding.stageFlags         = VulkanEnumTranslator::METoVKShaderStageFlags(shader->GetShaderType());
+            binding.pImmutableSamplers = nullptr;
+
+            layout_mappings[info.space].second.push_back(binding);
+        }
+    }
+
+    // create descriptor set layouts
+    for (auto& [space, layout] : layout_mappings) {
+        VkDescriptorSetLayoutCreateInfo layout_create_info{};
+        layout_create_info.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        layout_create_info.pNext        = nullptr;
+        layout_create_info.flags        = 0;
+        layout_create_info.bindingCount = layout.second.size();
+        layout_create_info.pBindings    = layout.second.data();
+
+        VK_CHECK_RESULT(vkCreateDescriptorSetLayout(*m_device, &layout_create_info, nullptr, &layout.first));
+    }
+
+    // extract descriptor set layouts
+    std::vector<VkDescriptorSetLayout> layouts;
+    for (auto& [space, layout] : layout_mappings) {
+        layouts.push_back(layout.first);
+    }
+
+    // create pipeline layout
+    VkPipelineLayoutCreateInfo pipeline_layout_create_info{};
+    pipeline_layout_create_info.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pipeline_layout_create_info.pNext                  = nullptr;
+    pipeline_layout_create_info.flags                  = 0;
+    pipeline_layout_create_info.setLayoutCount         = layouts.size();
+    pipeline_layout_create_info.pSetLayouts            = layouts.data();
+    pipeline_layout_create_info.pushConstantRangeCount = 0;
+    pipeline_layout_create_info.pPushConstantRanges    = nullptr;
+
+    VkPipelineLayout pipeline_layout;
+    vkCreatePipelineLayout(*m_device, &pipeline_layout_create_info, nullptr, &pipeline_layout);
+
     VkGraphicsPipelineCreateInfo pipeline_create_info{};
     pipeline_create_info.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
     pipeline_create_info.pNext               = &rendering_create_info;
@@ -229,7 +287,7 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
     pipeline_create_info.pDepthStencilState  = &depth_stencil_state;
     pipeline_create_info.pColorBlendState    = &color_blend_state;
     pipeline_create_info.pDynamicState       = &dynamic_state;
-    pipeline_create_info.layout              = nullptr;// MARK...
+    pipeline_create_info.layout              = pipeline_layout;
     pipeline_create_info.basePipelineHandle  = nullptr;// MARK...
     pipeline_create_info.basePipelineIndex   = -1;
 
