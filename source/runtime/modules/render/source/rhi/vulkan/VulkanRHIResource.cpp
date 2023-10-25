@@ -250,7 +250,7 @@ VkCompareOp VulkanRHISampler::METoVKCompareOp(ESamplerCompareFunction _compare_o
 
 void VulkanRHIVertexInputState::GenerateVertexInputStateFromInitializer(const VertexInputStateInitializerList& _init) {
     for (uint32_t i = 0; i < MAX_VERTEX_ELEMENT_COUNT; ++i) {
-        if (_init[i].type == EVertexElementType::VET_None) {
+        if (_init[i].format == EVertexElementType::VET_None) {
             break;
         }
         m_bindings[i].binding    = _init[i].binding_index;
@@ -258,8 +258,8 @@ void VulkanRHIVertexInputState::GenerateVertexInputStateFromInitializer(const Ve
         m_bindings[i].inputRate  = METoVKVertexInputRate(_init[i].input_rate);
         m_attributes[i].location = _init[i].attribute_index;
         m_attributes[i].binding  = _init[i].binding_index;
-        m_attributes[i].format   = METoVKFormat(_init[i].type);
-        m_attributes[i].offset   = _init[i].offset;
+        // m_attributes[i].format   = METoVKFormat(_init[i].format);
+        m_attributes[i].offset = _init[i].offset;
 
         m_binding_count = _init[i].binding_index;
         ++m_attribute_count;
@@ -370,13 +370,13 @@ VkPolygonMode VulkanRHIRasterizationState::METoVKPolygonMode(ERasterizerFillMode
 
 VkCullModeFlags VulkanRHIRasterizationState::METoVKCullModeFlags(ERasterizerCullMode _cull_mode) {
     switch (_cull_mode) {
-        case ERasterizerCullMode::CM_UNDEFINED:
+        case ERasterizerCullMode::RCM_NONE:
             return VK_CULL_MODE_NONE;
-        case ERasterizerCullMode::CM_FRONT:
+        case ERasterizerCullMode::RCM_FRONT:
             return VK_CULL_MODE_FRONT_BIT;
-        case ERasterizerCullMode::CM_BACK:
+        case ERasterizerCullMode::RCM_BACK:
             return VK_CULL_MODE_BACK_BIT;
-        case ERasterizerCullMode::CM_FRONT_AND_BACK:
+        case ERasterizerCullMode::RCM_FRONT_AND_BACK:
             return VK_CULL_MODE_FRONT_AND_BACK;
         default:
             LOG_CRITICAL("Unsupported rasterizer cull mode: {}", static_cast<uint32_t>(_cull_mode));
@@ -396,9 +396,9 @@ void VulkanRHIDepthStencilState::GenerateDepthStencilStateFromInitializer(const 
     m_depth_stencil_state_create_info.maxDepthBounds        = 1.0f;
 
     m_depth_stencil_state_create_info.stencilTestEnable = (_init.b_enable_front_face_stencil || _init.b_enable_back_face_stencil) ? VK_TRUE : VK_FALSE;
-    m_depth_stencil_state_create_info.front.failOp      = METoVKStencilOp(_init.front_face_stencil_fail_stencilOp);
+    m_depth_stencil_state_create_info.front.failOp      = METoVKStencilOp(_init.front_face_stencil_fail_stencil_op);
     m_depth_stencil_state_create_info.front.passOp      = METoVKStencilOp(_init.front_face_pass_stencil_op);
-    m_depth_stencil_state_create_info.front.depthFailOp = METoVKStencilOp(_init.front_face_depth_fail_stencilOp);
+    m_depth_stencil_state_create_info.front.depthFailOp = METoVKStencilOp(_init.front_face_depth_fail_stencil_op);
     m_depth_stencil_state_create_info.front.compareOp   = METoVKCompareOp(_init.front_face_stencil_test);
     m_depth_stencil_state_create_info.front.compareMask = _init.stencil_readmask;
     m_depth_stencil_state_create_info.front.writeMask   = _init.stencil_writemask;

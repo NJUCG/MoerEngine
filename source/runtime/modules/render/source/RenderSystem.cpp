@@ -2,6 +2,7 @@
 #include "log/LogSystem.h"
 #include "platform/Platform.h"
 
+#include "rhi/RHIResource.h"
 #include "shader/Shader.h"
 #include "shader/ShaderCompiler.h"
 #include "shader/ShaderResourceManager.h"
@@ -42,6 +43,7 @@ namespace Moer {
         FakeRHI() {
             rhi_type = ERHIType::Vulkan;
         }
+        RHIShaderRef RHICreateShader(Shader*) override { return nullptr; }
     };
     void RenderSystem::InitRHI() {
         //todo: init by config

@@ -1,8 +1,39 @@
 
+#include "PixelFormat.h"
 #include "rhi/RHI.h"
 #include "RHIUIImplement.h"
+#include "rhi/RHICommon.h"
+#include "rhi/RHIResource.h"
+#include "rhi/RHIResourceInitilizer.h"
+#include "shader/Shader.h"
+#include "shader/ShaderParameterMacros.h"
+#include "shader/ShaderResourceManager.h"
 
 #include <imgui.h>
+
+class ImGuiShaderVert : public Shader {
+    DEFINE_SHADER_TYPE(ImGuiShaderVert, Global, RHI_API, ...)
+public:
+    BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
+
+    DEFINE_SHADER_PARAM_CBV(Constant, vertexBuffer)
+
+    END_ROOT_PARAMETER_DEFINITION(Parameters)
+};
+IMPLEMENT_SHADER_TYPE(ImGuiShaderVert, "GuiVert.frag", "main", ST_VERTEX)
+class ImGuiShaderFrag : public Shader {
+    DEFINE_SHADER_TYPE(ImGuiShaderFrag, Global, RHI_API, ...)
+public:
+    BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
+
+    DEFINE_SHADER_PARAM_SRV(SamplerState, sampler0)
+    DEFINE_SHADER_PARAM_SAMPLER(Texture2D, texture0)
+
+    END_ROOT_PARAMETER_DEFINITION(Parameters)
+};
+
+IMPLEMENT_SHADER_TYPE(ImGuiShaderFrag, "GuiFrag.frag", "main", ST_FRAGMENT)
+
 void GuiInitPlatformInterface();
 
 inline GuiBackendData* GetBackendData() {
@@ -41,11 +72,11 @@ void RHI::GUIShutDown() {
 
     // Manually delete main viewport render resources in-case we haven't initialized for viewports
     ImGuiViewport* main_viewport = ImGui::GetMainViewport();
-    if (GuiViewportData* vd = (GuiViewportData*)main_viewport->RendererUserData) {
+    if (GuiViewportData* viewport_data = (GuiViewportData*)main_viewport->RendererUserData) {
         // We could just call ImGui_ImplDX12_DestroyWindow(main_viewport) as a convenience but that would be misleading since we only use data->Resources[]
         for (uint32_t i = 0; i < bd->num_frames_in_flight; i++)
-            // DestroyRenderBuffers(&vd->render_buffers[i]);
-            IM_DELETE(vd);
+            DestroyRenderBuffers(&viewport_data->render_buffers[i]);
+        IM_DELETE(viewport_data);
         main_viewport->RendererUserData = nullptr;
     }
 
@@ -110,6 +141,8 @@ bool CreateDeviceObjects() {
     //     param[1].DescriptorTable.pDescriptorRanges   = &descRange;
     //     param[1].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
 
+    RHISamplerRef sampler;
+    RHITextureRef texture;
     //     // Bilinear sampling is required by default. Set 'io.Fonts->Flags |= ImFontAtlasFlags_NoBakedLines' or 'style.AntiAliasedLinesUseTex = false' to allow point/nearest sampling.
     //     D3D12_STATIC_SAMPLER_DESC staticSampler = {};
     //     staticSampler.Filter                    = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
@@ -186,130 +219,75 @@ bool CreateDeviceObjects() {
     // psoDesc.RTVFormats[0]         = bd->RTVFormat;
     // psoDesc.SampleDesc.Count      = 1;
     // psoDesc.Flags                 = D3D12_PIPELINE_STATE_FLAG_NONE;
+    RHIGraphicsPipelineStateInitializer pso_init;
 
-    // ID3DBlob* vertexShaderBlob;
-    // ID3DBlob* pixelShaderBlob;
+    pso_init.color_attachment_formats[0] = bd->attachment_format;
+    pso_init.color_attachment_flags[0]   = ETextureUsageFlags::COLOR_ATTACHMENT;
+    pso_init.color_attachment_count      = pso_init.CalcValidColorAttachmentCount();
 
-    // // Create the vertex shader
-    // {
-    //     static const char* vertexShader =
-    //         "cbuffer vertexBuffer : register(b0) \
-    //         {\
-    //           float4x4 ProjectionMatrix; \
-    //         };\
-    //         struct VS_INPUT\
-    //         {\
-    //           float2 pos : POSITION;\
-    //           float4 col : COLOR0;\
-    //           float2 uv  : TEXCOORD0;\
-    //         };\
-    //         \
-    //         struct PS_INPUT\
-    //         {\
-    //           float4 pos : SV_POSITION;\
-    //           float4 col : COLOR0;\
-    //           float2 uv  : TEXCOORD0;\
-    //         };\
-    //         \
-    //         PS_INPUT main(VS_INPUT input)\
-    //         {\
-    //           PS_INPUT output;\
-    //           output.pos = mul( ProjectionMatrix, float4(input.pos.xy, 0.f, 1.f));\
-    //           output.col = input.col;\
-    //           output.uv  = input.uv;\
-    //           return output;\
-    //         }";
+    auto& shader_stage_input = pso_init.shader_stage;
 
-    //     if (FAILED(D3DCompile(vertexShader, strlen(vertexShader), nullptr, nullptr, nullptr, "main", "vs_5_0", 0, 0, &vertexShaderBlob, nullptr)))
-    //         return false;// NB: Pass ID3DBlob* pErrorBlob to D3DCompile() to get error showing in (const char*)pErrorBlob->GetBufferPointer(). Make sure to Release() the blob!
-    //     psoDesc.VS = {vertexShaderBlob->GetBufferPointer(), vertexShaderBlob->GetBufferSize()};
+    // VertexElement
+    VertexInputStateInitializerList input_intializer{};
+    input_intializer[0] = VertexElement(0, IM_OFFSETOF(ImDrawVert, pos), PF_R32G32_SFLOAT, 0, sizeof(ImDrawVert), EVertexInputRate::VIR_VERTEX);
+    input_intializer[1] = VertexElement(0, IM_OFFSETOF(ImDrawVert, uv), PF_R32G32_SFLOAT, 1, sizeof(ImDrawVert), EVertexInputRate::VIR_VERTEX);
+    input_intializer[1] = VertexElement(0, IM_OFFSETOF(ImDrawVert, col), PF_R8G8B8A8_UNORM, 2, sizeof(ImDrawVert), EVertexInputRate::VIR_VERTEX);
 
-    //     // Create the input layout
-    //     static D3D12_INPUT_ELEMENT_DESC local_layout[] =
-    //         {
-    //             {"POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, (UINT)IM_OFFSETOF(ImDrawVert, pos), D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
-    //             {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, (UINT)IM_OFFSETOF(ImDrawVert, uv), D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
-    //             {"COLOR", 0, DXGI_FORMAT_R8G8B8A8_UNORM, 0, (UINT)IM_OFFSETOF(ImDrawVert, col), D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
-    //         };
-    //     psoDesc.InputLayout = {local_layout, 3};
-    // }
+    RHIShaderRef gui_vert = g_rhi->RHICreateShader(ShaderResourceManager::GetShader<ImGuiShaderVert>());
+    RHIShaderRef gui_frag = g_rhi->RHICreateShader(ShaderResourceManager::GetShader<ImGuiShaderFrag>());
 
-    // // Create the pixel shader
-    // {
-    //     static const char* pixelShader =
-    //         "struct PS_INPUT\
-    //         {\
-    //           float4 pos : SV_POSITION;\
-    //           float4 col : COLOR0;\
-    //           float2 uv  : TEXCOORD0;\
-    //         };\
-    //         SamplerState sampler0 : register(s0);\
-    //         Texture2D texture0 : register(t0);\
-    //         \
-    //         float4 main(PS_INPUT input) : SV_Target\
-    //         {\
-    //           float4 out_col = input.col * texture0.Sample(sampler0, input.uv); \
-    //           return out_col; \
-    //         }";
+    shader_stage_input.p_vertex_input_state = g_rhi->RHICreateVertexInputState(input_intializer);
 
-    //     if (FAILED(D3DCompile(pixelShader, strlen(pixelShader), nullptr, nullptr, nullptr, "main", "ps_5_0", 0, 0, &pixelShaderBlob, nullptr))) {
-    //         vertexShaderBlob->Release();
-    //         return false;// NB: Pass ID3DBlob* pErrorBlob to D3DCompile() to get error showing in (const char*)pErrorBlob->GetBufferPointer(). Make sure to Release() the blob!
-    //     }
-    //     psoDesc.PS = {pixelShaderBlob->GetBufferPointer(), pixelShaderBlob->GetBufferSize()};
-    // }
+    shader_stage_input.p_vertex_shader   = (RHIVertexShader*)gui_vert.Get();
+    shader_stage_input.p_fragment_shader = (RHIFragmentShader*)gui_frag.Get();
 
-    // // Create the blending setup
-    // {
-    //     D3D12_BLEND_DESC& desc                     = psoDesc.BlendState;
-    //     desc.AlphaToCoverageEnable                 = false;
-    //     desc.RenderTarget[0].BlendEnable           = true;
-    //     desc.RenderTarget[0].SrcBlend              = D3D12_BLEND_SRC_ALPHA;
-    //     desc.RenderTarget[0].DestBlend             = D3D12_BLEND_INV_SRC_ALPHA;
-    //     desc.RenderTarget[0].BlendOp               = D3D12_BLEND_OP_ADD;
-    //     desc.RenderTarget[0].SrcBlendAlpha         = D3D12_BLEND_ONE;
-    //     desc.RenderTarget[0].DestBlendAlpha        = D3D12_BLEND_INV_SRC_ALPHA;
-    //     desc.RenderTarget[0].BlendOpAlpha          = D3D12_BLEND_OP_ADD;
-    //     desc.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
-    // }
+    RHIBlendStateInitializer blend_state_info;
+    blend_state_info.attachments[0].color_blend_op         = BO_ADD;
+    blend_state_info.attachments[0].color_src_blend_factor = BF_SRC_COLOR;
+    blend_state_info.attachments[0].color_src_blend_factor = BF_ONE_MINUS_SRC_ALPHA;
+    blend_state_info.attachments[0].alpha_blend_op         = BO_ADD;
+    blend_state_info.attachments[0].alpha_src_blend_factor = BF_ONE;
+    blend_state_info.attachments[0].alpha_dst_blend_factor = BF_ONE_MINUS_SRC_ALPHA;
+    blend_state_info.attachments[0].color_write_mask       = CW_RGBA;
 
-    // // Create the rasterizer state
-    // {
-    //     D3D12_RASTERIZER_DESC& desc = psoDesc.RasterizerState;
-    //     desc.FillMode               = D3D12_FILL_MODE_SOLID;
-    //     desc.CullMode               = D3D12_CULL_MODE_NONE;
-    //     desc.FrontCounterClockwise  = FALSE;
-    //     desc.DepthBias              = D3D12_DEFAULT_DEPTH_BIAS;
-    //     desc.DepthBiasClamp         = D3D12_DEFAULT_DEPTH_BIAS_CLAMP;
-    //     desc.SlopeScaledDepthBias   = D3D12_DEFAULT_SLOPE_SCALED_DEPTH_BIAS;
-    //     desc.DepthClipEnable        = true;
-    //     desc.MultisampleEnable      = FALSE;
-    //     desc.AntialiasedLineEnable  = FALSE;
-    //     desc.ForcedSampleCount      = 0;
-    //     desc.ConservativeRaster     = D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF;
-    // }
+    auto blend_state = g_rhi->RHICreateBlendState(blend_state_info);
 
-    // // Create depth-stencil State
-    // {
-    //     D3D12_DEPTH_STENCIL_DESC& desc = psoDesc.DepthStencilState;
-    //     desc.DepthEnable               = false;
-    //     desc.DepthWriteMask            = D3D12_DEPTH_WRITE_MASK_ALL;
-    //     desc.DepthFunc                 = D3D12_COMPARISON_FUNC_ALWAYS;
-    //     desc.StencilEnable             = false;
-    //     desc.FrontFace.StencilFailOp = desc.FrontFace.StencilDepthFailOp = desc.FrontFace.StencilPassOp = D3D12_STENCIL_OP_KEEP;
-    //     desc.FrontFace.StencilFunc                                                                      = D3D12_COMPARISON_FUNC_ALWAYS;
-    //     desc.BackFace                                                                                   = desc.FrontFace;
-    // }
+    pso_init.blend_state = blend_state;
 
-    // HRESULT result_pipeline_state = bd->pd3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&bd->pPipelineState));
-    // vertexShaderBlob->Release();
-    // pixelShaderBlob->Release();
-    // if (result_pipeline_state != S_OK)
-    //     return false;
+    RHIRasterizationStateInitializer rast_init{};
+    rast_init.fill_mode              = FM_FILL;
+    rast_init.cull_mode              = RCM_NONE;
+    rast_init.depth_bias             = 0;
+    rast_init.depth_bias_clamp       = 0.f;
+    rast_init.depth_bias_slop_factor = 0.f;
+    rast_init.b_depth_clamp_enable   = true;
+    rast_init.b_enable_msaa          = false;
+    rast_init.b_depth_bias           = false;
+
+    RHIMultisampleStateInitializer msaa_init{};
+    msaa_init.sample_count = 1;
+
+    RHIDepthStencilStateInitializer depth_stencil_init{};
+    depth_stencil_init.depth_test_op                    = CO_ALWAYS;
+    depth_stencil_init.b_enable_depth_write             = false;
+    depth_stencil_init.b_enable_front_face_stencil      = false;
+    depth_stencil_init.b_enable_back_face_stencil       = false;
+    depth_stencil_init.front_face_depth_fail_stencil_op = SO_KEEP;
+    depth_stencil_init.front_face_pass_stencil_op       = SO_KEEP;
+    depth_stencil_init.front_face_stencil_test          = CO_ALWAYS;
+
+    pso_init.multisample_state   = g_rhi->RHICreateMultiSampleState(msaa_init);
+    pso_init.rasterizer_state    = g_rhi->RHICreateRasterizationState(rast_init);
+    pso_init.depth_stencil_state = g_rhi->RHICreateDepthStencilState(depth_stencil_init);
+
+    bd->pipeline = g_rhi->RHICreateGraphicsPipelineState(pso_init);
 
     // ImGui_ImplDX12_CreateFontsTexture();
 
     return true;
 };
 void GuiInitPlatformInterface() {
+}
+
+void DestroyRenderBuffers(GuiFrameRenderBuffers* buffer) {
 }

@@ -11,6 +11,7 @@ enum class ERHIType {
 class RHIGraphicsCommandList;
 class RHIComputeCommandList;
 class RHICommandQueue;
+class Shader;
 
 class RHI {
 public:
@@ -38,14 +39,14 @@ public:
     virtual RHIBlendStateRef         RHICreateBlendState(const RHIBlendStateInitializer& _init)                 = 0;
     virtual RHIVertexInputStateRef   RHICreateVertexInputState(const VertexInputStateInitializerList& _init)    = 0;
 
-    virtual RHIVertexShaderRef   RHICreateVertexShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash)   = 0;
-    virtual RHIFragmentShaderRef RHICreateFragmentShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) = 0;
-    virtual RHIGeometryShaderRef RHICreateGeometryShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) = 0;
+    virtual RHIVertexShaderRef   RHICreateVertexShader(const Shader*)   = 0;
+    virtual RHIFragmentShaderRef RHICreateFragmentShader(const Shader*) = 0;
+    virtual RHIGeometryShaderRef RHICreateGeometryShader(const Shader*) = 0;
 
-    virtual RHIMeshShaderRef          RHICreateMeshShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash)          = 0;
-    virtual RHIAmplificationShaderRef RHICreateAmplificationShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) = 0;
+    virtual RHIMeshShaderRef          RHICreateMeshShader(const Shader*)          = 0;
+    virtual RHIAmplificationShaderRef RHICreateAmplificationShader(const Shader*) = 0;
 
-    virtual RHIComputeShaderRef RHICreateComputeShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) = 0;
+    virtual RHIComputeShaderRef RHICreateComputeShader(const Shader*) = 0;
 
     virtual RHIShaderLibraryRef RHICreateShaderLibrary(EShaderPlatform _platform, const std::string& _file_path, const std::string& name) { return nullptr; };
 
@@ -84,6 +85,8 @@ public:
     virtual RHICommandQueue*        CreateCommandQueue(ECommandQueueType type)                                    = 0;
     virtual RHIGraphicsCommandList* CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state = nullptr) = 0;
     virtual RHIComputeCommandList*  CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr)   = 0;
+
+    virtual RHIShaderRef RHICreateShader(Shader*) = 0;
 
 #pragma endregion
 

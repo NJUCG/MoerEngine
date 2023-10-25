@@ -1,8 +1,10 @@
 #ifndef MOER_RHI_UI_IMPLEMENT_H
 #define MOER_RHI_UI_IMPLEMENT_H
 
+#include "PixelFormat.h"
 #include "rhi/RHICommandList.h"
 #include "rhi/RHIResource.h"
+#include "shader/Shader.h"
 
 struct GuiFrameRenderBuffers {
 
@@ -29,6 +31,7 @@ struct GuiBackendData {
 
     // Render buffers for main window
     GuiWindowRenderBuffers main_window_render_buffers;
+    EPixelFormat           attachment_format;
     uint32_t               num_frames_in_flight;
 
     GuiBackendData() {

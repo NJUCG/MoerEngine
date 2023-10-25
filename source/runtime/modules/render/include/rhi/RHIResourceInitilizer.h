@@ -51,18 +51,21 @@ struct RHISamplerInitializer {
 struct RHIDepthStencilStateInitializer {
     bool                       b_enable_depth_write;
     EnumInByte<ECompareOption> depth_test_op;
+
     bool                       b_enable_front_face_stencil;
     EnumInByte<ECompareOption> front_face_stencil_test;
-    EnumInByte<EStencilOp>     front_face_stencil_fail_stencilOp;
-    EnumInByte<EStencilOp>     front_face_depth_fail_stencilOp;
+    EnumInByte<EStencilOp>     front_face_stencil_fail_stencil_op;
+    EnumInByte<EStencilOp>     front_face_depth_fail_stencil_op;
     EnumInByte<EStencilOp>     front_face_pass_stencil_op;
+
     bool                       b_enable_back_face_stencil;
     EnumInByte<ECompareOption> back_face_stencil_test;
     EnumInByte<EStencilOp>     back_face_stencil_fail_stencil_op;
     EnumInByte<EStencilOp>     back_face_depth_fail_stencil_op;
     EnumInByte<EStencilOp>     back_face_pass_stencil_op;
-    uint8_t                    stencil_readmask;
-    uint8_t                    stencil_writemask;
+
+    uint8_t stencil_readmask;
+    uint8_t stencil_writemask;
 
     explicit RHIDepthStencilStateInitializer(
         bool           _b_enable_depth_write              = true,
@@ -83,8 +86,8 @@ struct RHIDepthStencilStateInitializer {
           depth_test_op(_depth_test_op),
           b_enable_front_face_stencil(_b_enable_front_face_stencil),
           front_face_stencil_test(_front_face_stencil_test),
-          front_face_stencil_fail_stencilOp(_front_face_stencil_fail_stencilOp),
-          front_face_depth_fail_stencilOp(_front_face_depth_fail_stencilOp),
+          front_face_stencil_fail_stencil_op(_front_face_stencil_fail_stencilOp),
+          front_face_depth_fail_stencil_op(_front_face_depth_fail_stencilOp),
           front_face_pass_stencil_op(_front_face_pass_stencil_op),
           b_enable_back_face_stencil(_b_enable_back_face_stencil),
           back_face_stencil_test(_back_face_stencil_test),
