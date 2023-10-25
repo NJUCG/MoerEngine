@@ -206,6 +206,8 @@ private:
 
 class VulkanRHIGraphicsShader {
 public:
+    explicit VulkanRHIGraphicsShader(const Shader* _shader) : m_shader(_shader) {}
+
     void CreateShaderModule(const VulkanDevice* _device, const std::vector<uint8_t>& _code);
 
     VkShaderModule GetHandle() const {
@@ -214,48 +216,49 @@ public:
 
 protected:
     VkShaderModule m_shader_module;
+    const Shader*  m_shader;
 };
 
 class VulkanRHIVertexShader : public RHIVertexShader, public VulkanRHIGraphicsShader {
     friend VulkanRHIImpl;
 
 public:
-    explicit VulkanRHIVertexShader() : RHIVertexShader(), VulkanRHIGraphicsShader() {}
+    explicit VulkanRHIVertexShader(const Shader* _shader) : RHIVertexShader(), VulkanRHIGraphicsShader(_shader) {}
 };
 
 class VulkanRHIFragmentShader : public RHIFragmentShader, public VulkanRHIGraphicsShader {
     friend VulkanRHIImpl;
 
 public:
-    explicit VulkanRHIFragmentShader() : RHIFragmentShader(), VulkanRHIGraphicsShader() {}
+    explicit VulkanRHIFragmentShader(const Shader* _shader) : RHIFragmentShader(), VulkanRHIGraphicsShader(_shader) {}
 };
 
 class VulkanRHIGeometryShader : public RHIGeometryShader, public VulkanRHIGraphicsShader {
     friend VulkanRHIImpl;
 
 public:
-    explicit VulkanRHIGeometryShader() : RHIGeometryShader(), VulkanRHIGraphicsShader() {}
+    explicit VulkanRHIGeometryShader(const Shader* _shader) : RHIGeometryShader(), VulkanRHIGraphicsShader(_shader) {}
 };
 
 class VulkanRHIComputeShader : public RHIComputeShader, public VulkanRHIGraphicsShader {
     friend VulkanRHIImpl;
 
 public:
-    explicit VulkanRHIComputeShader() : RHIComputeShader(), VulkanRHIGraphicsShader() {}
+    explicit VulkanRHIComputeShader(const Shader* _shader) : RHIComputeShader(), VulkanRHIGraphicsShader(_shader) {}
 };
 
 class VulkanRHIMeshShader : public RHIMeshShader, public VulkanRHIGraphicsShader {
     friend VulkanRHIImpl;
 
 public:
-    explicit VulkanRHIMeshShader() : RHIMeshShader(), VulkanRHIGraphicsShader() {}
+    explicit VulkanRHIMeshShader(const Shader* _shader) : RHIMeshShader(), VulkanRHIGraphicsShader(_shader) {}
 };
 
 class VulkanRHIAmplificationShader : public RHIAmplificationShader, public VulkanRHIGraphicsShader {
     friend VulkanRHIImpl;
 
 public:
-    explicit VulkanRHIAmplificationShader() : RHIAmplificationShader(), VulkanRHIGraphicsShader() {}
+    explicit VulkanRHIAmplificationShader(const Shader* _shader) : RHIAmplificationShader(), VulkanRHIGraphicsShader(_shader) {}
 };
 
 #pragma endregion

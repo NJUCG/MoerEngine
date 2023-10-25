@@ -220,13 +220,13 @@ VkAccessFlags VulkanEnumTranslator::METoVkAccessFlags(ERHIAccessFlags _flags) {
 
 VkCullModeFlags VulkanEnumTranslator::METoVKCullModeFlags(ERasterizerCullMode _cull_mode) {
     switch (_cull_mode) {
-        case ERasterizerCullMode::CM_UNDEFINED:
+        case ERasterizerCullMode::RCM_NONE:
             return VK_CULL_MODE_NONE;
-        case ERasterizerCullMode::CM_FRONT:
+        case ERasterizerCullMode::RCM_FRONT:
             return VK_CULL_MODE_FRONT_BIT;
-        case ERasterizerCullMode::CM_BACK:
+        case ERasterizerCullMode::RCM_BACK:
             return VK_CULL_MODE_BACK_BIT;
-        case ERasterizerCullMode::CM_FRONT_AND_BACK:
+        case ERasterizerCullMode::RCM_FRONT_AND_BACK:
             return VK_CULL_MODE_FRONT_AND_BACK;
         default:
             LOG_CRITICAL("Unsupported rasterizer cull mode: {}", static_cast<uint32_t>(_cull_mode));
