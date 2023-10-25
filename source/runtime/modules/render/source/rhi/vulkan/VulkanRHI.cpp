@@ -27,7 +27,7 @@
 #include <string>
 #include <set>
 
-namespace VkUtil = MoerEngine::RHI::Vulkan::Util;
+namespace VkUtil = Moer::RHI::Vulkan::Util;
 
 VulkanRHIImpl::VulkanRHIImpl(GLFWwindow* _window) : m_instance(VK_NULL_HANDLE), m_device(nullptr), m_current_viewport(nullptr) {
     LOG_INFO("Built with Vulkan header version {0:d}.{1:d}.{2:d}", VK_API_VERSION_MAJOR(VK_HEADER_VERSION_COMPLETE), VK_API_VERSION_MINOR(VK_HEADER_VERSION_COMPLETE), VK_API_VERSION_PATCH(VK_HEADER_VERSION_COMPLETE));
@@ -90,42 +90,42 @@ RHIVertexInputStateRef VulkanRHIImpl::RHICreateVertexInputState(const VertexInpu
 }
 
 RHIVertexShaderRef VulkanRHIImpl::RHICreateVertexShader(const Shader* shader) {
-    auto* vk_shader = new VulkanRHIVertexShader();
+    auto* vk_shader = new VulkanRHIVertexShader(shader);
     vk_shader->CreateShaderModule(m_device, shader->GetCodeEntry()->code);
 
     return RHIVertexShaderRef(vk_shader);
 }
 
 RHIFragmentShaderRef VulkanRHIImpl::RHICreateFragmentShader(const Shader* shader) {
-    auto* vk_shader = new VulkanRHIFragmentShader();
+    auto* vk_shader = new VulkanRHIFragmentShader(shader);
     vk_shader->CreateShaderModule(m_device, shader->GetCodeEntry()->code);
 
     return RHIFragmentShaderRef(vk_shader);
 }
 
 RHIGeometryShaderRef VulkanRHIImpl::RHICreateGeometryShader(const Shader* shader) {
-    auto* vk_shader = new VulkanRHIGeometryShader();
+    auto* vk_shader = new VulkanRHIGeometryShader(shader);
     vk_shader->CreateShaderModule(m_device, shader->GetCodeEntry()->code);
 
     return RHIGeometryShaderRef(vk_shader);
 }
 
 RHIMeshShaderRef VulkanRHIImpl::RHICreateMeshShader(const Shader* shader) {
-    auto* vk_shader = new VulkanRHIMeshShader();
+    auto* vk_shader = new VulkanRHIMeshShader(shader);
     vk_shader->CreateShaderModule(m_device, shader->GetCodeEntry()->code);
 
     return RHIMeshShaderRef(vk_shader);
 }
 
 RHIAmplificationShaderRef VulkanRHIImpl::RHICreateAmplificationShader(const Shader* shader) {
-    auto* vk_shader = new VulkanRHIAmplificationShader();
+    auto* vk_shader = new VulkanRHIAmplificationShader(shader);
     vk_shader->CreateShaderModule(m_device, shader->GetCodeEntry()->code);
 
     return RHIAmplificationShaderRef(vk_shader);
 }
 
 RHIComputeShaderRef VulkanRHIImpl::RHICreateComputeShader(const Shader* shader) {
-    auto* vk_shader = new VulkanRHIComputeShader();
+    auto* vk_shader = new VulkanRHIComputeShader(shader);
     vk_shader->CreateShaderModule(m_device, shader->GetCodeEntry()->code);
 
     return RHIComputeShaderRef(vk_shader);
@@ -457,6 +457,14 @@ RHICommandQueue* VulkanRHIImpl::CreateCommandQueue(ECommandQueueType type) {
     return nullptr;
 }
 
+RHIGraphicsCommandList* VulkanRHIImpl::CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state) {
+    return new VulkanRHIGraphicsCommandList(m_device, m_device->GetDefaultCommandPool(), VK_COMMAND_BUFFER_LEVEL_PRIMARY);
+}
+
+RHIComputeCommandList* VulkanRHIImpl::CreateComputeCommandList(RHIComputePipelineState* _initial_state) {
+    return nullptr;
+}
+
 RHIShaderRef VulkanRHIImpl::RHICreateShader(Shader* shader) {
     const ShaderCodeEntry* compiled_code = shader->GetCodeEntry();
 
@@ -471,14 +479,6 @@ RHIShaderRef VulkanRHIImpl::RHICreateShader(Shader* shader) {
 
     //todo: create shader from information above
 
-    return nullptr;
-}
-
-RHIGraphicsCommandList* VulkanRHIImpl::CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state) {
-    return new VulkanRHIGraphicsCommandList(m_device, m_device->GetDefaultCommandPool(), VK_COMMAND_BUFFER_LEVEL_PRIMARY);
-}
-
-RHIComputeCommandList* VulkanRHIImpl::CreateComputeCommandList(RHIComputePipelineState* _initial_state) {
     return nullptr;
 }
 
