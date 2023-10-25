@@ -6,6 +6,7 @@
 #define VULKAN_RHI_RESOURCE_H
 
 #include "rhi/RHIResource.h"
+#include "shader/ShaderCommon.h"
 
 #include <vulkan/vulkan.h>
 
@@ -83,6 +84,9 @@ public:
     static VkCullModeFlags     METoVKCullModeFlags(ERasterizerCullMode _cull_mode);
     static VkPrimitiveTopology METoVKPrimitiveTopology(EPrimitiveTopology _primitive_type);
     static VkPolygonMode       METoVKPolygonMode(ERasterizerFillMode _fill_mode);
+
+    static VkDescriptorType   METoVKDescriptorType(EShaderParameterType _type);
+    static VkShaderStageFlags METoVKShaderStageFlags(EShaderType _type);
 };
 
 #pragma endregion

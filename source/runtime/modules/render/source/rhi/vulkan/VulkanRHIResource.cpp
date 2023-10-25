@@ -274,6 +274,54 @@ VkPolygonMode VulkanEnumTranslator::METoVKPolygonMode(ERasterizerFillMode _fill_
     }
 }
 
+VkDescriptorType VulkanEnumTranslator::METoVKDescriptorType(EShaderParameterType _type) {
+    switch (_type) {
+        case EShaderParameterType::CBV:
+            return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        case EShaderParameterType::SAMPLER:
+            return VK_DESCRIPTOR_TYPE_SAMPLER;
+        case EShaderParameterType::SRV:
+            return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        case EShaderParameterType::UAV:
+            return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        case EShaderParameterType::BINDLESS_RESOURCE_INDEX:// MARK...
+            return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        case EShaderParameterType::BINDLESS_SAMPLER_INDEX:// MARK...
+            return VK_DESCRIPTOR_TYPE_SAMPLER;
+        default:
+            LOG_CRITICAL("Unsupported EShaderParameterType: {}", static_cast<uint32_t>(_type));
+            return VK_DESCRIPTOR_TYPE_MAX_ENUM;
+    }
+}
+
+VkShaderStageFlags VulkanEnumTranslator::METoVKShaderStageFlags(EShaderType _type) {
+    switch (_type) {
+        case EShaderType::ST_VERTEX:
+            return VK_SHADER_STAGE_VERTEX_BIT;
+        case EShaderType::ST_FRAGMENT:
+            return VK_SHADER_STAGE_FRAGMENT_BIT;
+        case EShaderType::ST_GEOMETRY:
+            return VK_SHADER_STAGE_GEOMETRY_BIT;
+        case EShaderType::ST_COMPUTE:
+            return VK_SHADER_STAGE_COMPUTE_BIT;
+        case EShaderType::ST_MESH:
+            return VK_SHADER_STAGE_MESH_BIT_NV;
+        case EShaderType::ST_AMPLIFICATION:
+            return VK_SHADER_STAGE_TASK_BIT_NV;
+        case EShaderType::ST_RAY_GEN:
+            return VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+        case EShaderType::ST_RAY_MISS:
+            return VK_SHADER_STAGE_MISS_BIT_KHR;
+        case EShaderType::ST_RAY_HIT:
+            return VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+        case EShaderType::ST_RAY_CALLABLE:
+            return VK_SHADER_STAGE_CALLABLE_BIT_KHR;
+        default:
+            LOG_CRITICAL("Unsupported EShaderType: {}", static_cast<uint32_t>(_type));
+            return VK_SHADER_STAGE_FLAG_BITS_MAX_ENUM;
+    }
+}
+
 #pragma endregion
 
 void VulkanRHISampler::GenerateSamplerFromInitializer(const VulkanDevice* _device, const RHISamplerInitializer& _initializer) {
