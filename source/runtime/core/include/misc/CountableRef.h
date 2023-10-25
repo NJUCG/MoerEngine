@@ -7,24 +7,23 @@
 #include <atomic>
 #include <assert.h>
 #include <type_traits>
-template <typename TCountable>
-concept concept_is_countable = requires (TCountable t)
-{
-//    t.m_counter;
-//    std::is_same_v<typeof(t.m_counter), std::atomic<int32_t>>;
+template<typename TCountable>
+concept concept_is_countable = requires(TCountable t) {
+    //    t.m_counter;
+    //    std::is_same_v<typeof(t.m_counter), std::atomic<int32_t>>;
     t.AddRef() + (uint32_t)1;
     t.DeRef() + (uint32_t)1;
     t.GetRefCount() + (uint32_t)1;
-//    t.Destroy();
+    //    t.Destroy();
 };
 
-class Countable{
+class Countable {
 public:
     int32_t AddRef() {
-        return m_counter.fetch_add(1)+1;
+        return m_counter.fetch_add(1) + 1;
     };
     virtual void Destroy() = 0;
-    int32_t DeRef() {
+    int32_t      DeRef() {
         assert(m_counter >= 0);
         int32_t current = m_counter.fetch_sub(1);
         if (current == 1) {
@@ -41,7 +40,7 @@ protected:
 template<typename T>
 class CountableRef {
 public:
-    CountableRef() :ptr{ nullptr } {
+    CountableRef() : ptr{nullptr} {
         //if(std::is_convertible<T, Countable>::value) return;
         //assert(false);
     }
@@ -67,12 +66,12 @@ public:
     }
     template<typename MoveType>
     CountableRef(CountableRef<MoveType>&& move) {
-        ptr = move.ptr;
+        ptr      = move.ptr;
         move.ptr = nullptr;
     }
 
     CountableRef(CountableRef&& move) {
-        ptr = move.ptr;
+        ptr      = move.ptr;
         move.ptr = nullptr;
     }
     ~CountableRef() {
@@ -83,7 +82,7 @@ public:
     CountableRef& operator=(T* _ptr) {
         if (ptr != _ptr) {
             T* old = ptr;
-            ptr = _ptr;
+            ptr    = _ptr;
             if (ptr != nullptr) {
                 ptr->AddRef();
             }
@@ -104,8 +103,8 @@ public:
     template<typename MoveType>
     CountableRef& operator=(CountableRef<MoveType>&& _ref_move) {
         if (this != &_ref_move) {
-            Countable* old = ptr;
-            ptr = _ref_move.ptr;
+            MoveType* old = ptr;
+            ptr           = _ref_move.ptr;
             _ref_move.ptr = nullptr;
             if (old != nullptr) {
                 old->DeRef();
@@ -116,8 +115,8 @@ public:
 
     CountableRef& operator=(CountableRef&& _ref_move) {
         if (this != &_ref_move) {
-            Countable* old = ptr;
-            ptr = _ref_move.ptr;
+            T* old        = ptr;
+            ptr           = _ref_move.ptr;
             _ref_move.ptr = nullptr;
             if (old != nullptr) {
                 old->DeRef();
@@ -125,20 +124,20 @@ public:
         }
         return *this;
     }
-    T* Get() const{ return ptr; }
-    T* operator->() const{
+    T* Get() const { return ptr; }
+    T* operator->() const {
         return ptr;
     }
     operator T*() const {
         return ptr;
     }
-    bool isValid() const{
+    bool isValid() const {
         return ptr != nullptr;
     }
 
     void swap(CountableRef& other) {
-        T* old = ptr;
-        ptr = other.ptr;
+        T* old    = ptr;
+        ptr       = other.ptr;
         other.ptr = old;
     }
     template<typename Other>
@@ -156,6 +155,7 @@ public:
     int32_t GetRefCount() {
         return ptr->GetRefCount();
     }
+
 protected:
     T* ptr;
 };

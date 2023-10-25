@@ -23,10 +23,7 @@ protected:
         delete this;
     }
 };
-// struct ShaderCodeSortKey {
-//     std::string file_path;
-//     std::string macro_definitions;
-// };
+
 struct ShaderCodeEntry {
     //shader compiled code
     std::vector<uint8_t> code;
@@ -56,7 +53,7 @@ protected:
 };
 
 //for RHI shader creation
-class ShaderTypeResourceMap : ShaderResource {
+class ShaderTypeResourceMap {
 
 public:
     ~ShaderTypeResourceMap();

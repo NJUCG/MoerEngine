@@ -16,6 +16,9 @@
 #include "VulkanDevice.h"
 #include "VulkanSwapChain.h"
 
+#include "shader/Shader.h"
+#include "shader/ShaderResource.h"
+
 #include <GLFW/glfw3.h>
 
 #include <string>
@@ -85,44 +88,44 @@ RHIVertexInputStateRef VulkanRHIImpl::RHICreateVertexInputState(const VertexInpu
     return RHIVertexInputStateRef(vk_input_state);
 }
 
-RHIVertexShaderRef VulkanRHIImpl::RHICreateVertexShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) {
+RHIVertexShaderRef VulkanRHIImpl::RHICreateVertexShader(const Shader* shader) {
     auto* vk_shader = new VulkanRHIVertexShader();
-    vk_shader->CreateShaderModule(m_device, _code);
+    vk_shader->CreateShaderModule(m_device, shader->GetCodeEntry()->code);
 
     return RHIVertexShaderRef(vk_shader);
 }
 
-RHIFragmentShaderRef VulkanRHIImpl::RHICreateFragmentShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) {
+RHIFragmentShaderRef VulkanRHIImpl::RHICreateFragmentShader(const Shader* shader) {
     auto* vk_shader = new VulkanRHIFragmentShader();
-    vk_shader->CreateShaderModule(m_device, _code);
+    vk_shader->CreateShaderModule(m_device, shader->GetCodeEntry()->code);
 
     return RHIFragmentShaderRef(vk_shader);
 }
 
-RHIGeometryShaderRef VulkanRHIImpl::RHICreateGeometryShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) {
+RHIGeometryShaderRef VulkanRHIImpl::RHICreateGeometryShader(const Shader* shader) {
     auto* vk_shader = new VulkanRHIGeometryShader();
-    vk_shader->CreateShaderModule(m_device, _code);
+    vk_shader->CreateShaderModule(m_device, shader->GetCodeEntry()->code);
 
     return RHIGeometryShaderRef(vk_shader);
 }
 
-RHIMeshShaderRef VulkanRHIImpl::RHICreateMeshShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) {
+RHIMeshShaderRef VulkanRHIImpl::RHICreateMeshShader(const Shader* shader) {
     auto* vk_shader = new VulkanRHIMeshShader();
-    vk_shader->CreateShaderModule(m_device, _code);
+    vk_shader->CreateShaderModule(m_device, shader->GetCodeEntry()->code);
 
     return RHIMeshShaderRef(vk_shader);
 }
 
-RHIAmplificationShaderRef VulkanRHIImpl::RHICreateAmplificationShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) {
+RHIAmplificationShaderRef VulkanRHIImpl::RHICreateAmplificationShader(const Shader* shader) {
     auto* vk_shader = new VulkanRHIAmplificationShader();
-    vk_shader->CreateShaderModule(m_device, _code);
+    vk_shader->CreateShaderModule(m_device, shader->GetCodeEntry()->code);
 
     return RHIAmplificationShaderRef(vk_shader);
 }
 
-RHIComputeShaderRef VulkanRHIImpl::RHICreateComputeShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) {
+RHIComputeShaderRef VulkanRHIImpl::RHICreateComputeShader(const Shader* shader) {
     auto* vk_shader = new VulkanRHIComputeShader();
-    vk_shader->CreateShaderModule(m_device, _code);
+    vk_shader->CreateShaderModule(m_device, shader->GetCodeEntry()->code);
 
     return RHIComputeShaderRef(vk_shader);
 }
@@ -419,6 +422,23 @@ RHIUnorderedAccessViewRef VulkanRHIImpl::RHICreateUnorderedAccessView(RHIViewabl
 }
 
 RHICommandQueue* VulkanRHIImpl::CreateCommandQueue(ECommandQueueType type) {
+    return nullptr;
+}
+
+RHIShaderRef VulkanRHIImpl::RHICreateShader(Shader* shader) {
+    const ShaderCodeEntry* compiled_code = shader->GetCodeEntry();
+
+    //information needed for pipeline layout creation
+    const auto& params_layout = shader->GetRootParametersLayoutInfo();
+
+    for (auto& param_layout : params_layout.GetLayoutInfos()) {
+        if (param_layout.IsValid()) {
+            //means correctly corresponding param in target shader
+        }
+    }
+
+    //todo: create shader from information above
+
     return nullptr;
 }
 

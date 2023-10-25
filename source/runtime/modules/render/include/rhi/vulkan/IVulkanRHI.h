@@ -23,14 +23,14 @@ public:
     RHIBlendStateRef         RHICreateBlendState(const RHIBlendStateInitializer& _init) override { return RHIBlendStateRef{}; }
     RHIVertexInputStateRef   RHICreateVertexInputState(const VertexInputStateInitializerList& _init) override { return RHIVertexInputStateRef{}; }
 
-    RHIVertexShaderRef   RHICreateVertexShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) override { return RHIVertexShaderRef{}; }
-    RHIFragmentShaderRef RHICreateFragmentShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) override { return RHIFragmentShaderRef{}; }
-    RHIGeometryShaderRef RHICreateGeometryShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) override { return RHIGeometryShaderRef{}; }
+    RHIVertexShaderRef   RHICreateVertexShader(const Shader*) override { return RHIVertexShaderRef{}; }
+    RHIFragmentShaderRef RHICreateFragmentShader(const Shader*) override { return RHIFragmentShaderRef{}; }
+    RHIGeometryShaderRef RHICreateGeometryShader(const Shader*) override { return RHIGeometryShaderRef{}; }
 
-    RHIMeshShaderRef          RHICreateMeshShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) override { return RHIMeshShaderRef{}; }
-    RHIAmplificationShaderRef RHICreateAmplificationShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) override { return RHIAmplificationShaderRef{}; }
+    RHIMeshShaderRef          RHICreateMeshShader(const Shader*) override { return RHIMeshShaderRef{}; }
+    RHIAmplificationShaderRef RHICreateAmplificationShader(const Shader*) override { return RHIAmplificationShaderRef{}; }
 
-    RHIComputeShaderRef RHICreateComputeShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) override { return RHIComputeShaderRef{}; }
+    RHIComputeShaderRef RHICreateComputeShader(const Shader*) override { return RHIComputeShaderRef{}; }
 
     RHIShaderLibraryRef RHICreateShaderLibrary(EShaderPlatform _platform, const std::string& _file_path, const std::string& name) override { return RHIShaderLibraryRef{}; }
 

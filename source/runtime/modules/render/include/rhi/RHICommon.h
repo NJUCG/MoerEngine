@@ -180,13 +180,13 @@ enum ERasterizerFillMode : uint8_t {
 };
 
 enum ERasterizerCullMode : uint8_t {
-    CM_UNDEFINED,
-    CM_FRONT,
-    CM_BACK,
-    CM_FRONT_AND_BACK,
+    RCM_NONE,
+    RCM_FRONT,
+    RCM_BACK,
+    RCM_FRONT_AND_BACK,
 
-    CM_Num,
-    CM_NumBits = 2,
+    RCM_Num,
+    RCM_NumBits = 2,
 };
 
 enum EColorWriteMask : uint8_t {

@@ -29,14 +29,14 @@ public:
     RHIBlendStateRef         RHICreateBlendState(const RHIBlendStateInitializer& _init) final override;
     RHIVertexInputStateRef   RHICreateVertexInputState(const VertexInputStateInitializerList& _init) final override;
 
-    RHIVertexShaderRef   RHICreateVertexShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) final override;
-    RHIFragmentShaderRef RHICreateFragmentShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) final override;
-    RHIGeometryShaderRef RHICreateGeometryShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) final override;
+    RHIVertexShaderRef   RHICreateVertexShader(const Shader*) final override;
+    RHIFragmentShaderRef RHICreateFragmentShader(const Shader*) final override;
+    RHIGeometryShaderRef RHICreateGeometryShader(const Shader*) final override;
 
-    RHIMeshShaderRef          RHICreateMeshShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) final override;
-    RHIAmplificationShaderRef RHICreateAmplificationShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) final override;
+    RHIMeshShaderRef          RHICreateMeshShader(const Shader*) final override;
+    RHIAmplificationShaderRef RHICreateAmplificationShader(const Shader*) final override;
 
-    RHIComputeShaderRef RHICreateComputeShader(const std::vector<uint8_t>& _code, const SHA256Hash& _hash) final override;
+    RHIComputeShaderRef RHICreateComputeShader(const Shader*) final override;
 
     RHIShaderLibraryRef RHICreateShaderLibrary(EShaderPlatform _platform, const std::string& _file_path, const std::string& name) final override;
 
@@ -66,6 +66,7 @@ public:
     RHICommandQueue*        CreateCommandQueue(ECommandQueueType type) final override;
     RHIGraphicsCommandList* CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state = nullptr) final override;
     RHIComputeCommandList*  CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr) final override;
+    RHIShaderRef            RHICreateShader(Shader* shader) final override;
 
 #pragma endregion
 #pragma region GUI

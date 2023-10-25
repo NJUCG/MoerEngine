@@ -9,36 +9,55 @@
 #include "shader/ShaderParameterMacros.h"
 #include <stdint.h>
 #include <vector>
+/**
+ * @brief Contains Layout info of a shader parameter,
+    contains offset and stride in parameter structure
+    in cpp end. And slot, space and Type in shader
+ * 
+ */
+struct ShaderParameterLayoutInfo {
 
-struct ShaderParameterLayoutInfo{
-    bool IsValid()const{
+    /**
+     * @brief means the defined parameter in cpp is not correctly reflected in corresponding shader
+     * 
+     * @return true 
+     * @return false 
+     */
+    bool IsValid() const {
         return !(slot == -1 || space == -1 || type == EShaderParameterType::UNKNOWN);
     }
-    ShaderParameterLayoutInfo(uint16_t _offset,
-        uint16_t _stride,
-        uint8_t _slot = -1,
-        int8_t _space = -1,
-        EShaderParameterType _type = EShaderParameterType::UNKNOWN)
+    ShaderParameterLayoutInfo(uint16_t             _offset,
+                              uint16_t             _stride,
+                              uint8_t              _slot  = -1,
+                              int8_t               _space = -1,
+                              EShaderParameterType _type  = EShaderParameterType::UNKNOWN)
         : offset(_offset),
-        stride(_stride),
-        slot(_slot),
-        space(_space),
-        type(_type){}
+          stride(_stride),
+          slot(_slot),
+          space(_space),
+          type(_type) {}
     uint16_t offset;
     uint16_t stride;
 
-    int8_t slot;
-    int8_t space;
+    int8_t               slot;
+    int8_t               space;
     EShaderParameterType type;
 };
-struct ShaderRootParametersLayoutInfo{
 
-    public:
-    const std::vector<ShaderParameterLayoutInfo>& GetLayoutInfos()const{return layout_infos;}
-    private:
+/**
+ * @brief Contains Layout info of root shader parameters,
+    contains all param info(except names) that was reflected
+    in target shader.
+ * 
+ */
+struct ShaderRootParametersLayoutInfo {
+
+public:
+    const std::vector<ShaderParameterLayoutInfo>& GetLayoutInfos() const { return layout_infos; }
+
+private:
     friend class Shader;
     std::vector<ShaderParameterLayoutInfo> layout_infos;
-
 };
 /**
  * @brief Shader Type information,
@@ -76,11 +95,13 @@ public:
     EShaderPlatform GetShaderPlatform() const { return static_cast<EShaderPlatform>(target_info.shader_platform); }
 
     /**
-     * @brief Get the Shader Meta Type object
+     * @brief Get the Shader Type
      * 
      * @return EShaderType 
      */
-    EShaderType GetShaderMetaType() const { return static_cast<EShaderType>(target_info.shader_type); }
+    EShaderType GetShaderType() const { return static_cast<EShaderType>(target_info.shader_type); }
+
+    const ShaderMetaType* GetShaderMetaType() const { return type; }
 
     static ShaderParametersMetadata* GetParametersMetaData() { return nullptr; }
 
@@ -91,17 +112,21 @@ public:
      */
     const class ShaderCodeEntry* GetCodeEntry() const;
 
-    const ShaderRootParametersLayoutInfo& GetRootParametersLayoutInfo()const{return param_layout_info;}
+    const ShaderRootParametersLayoutInfo& GetRootParametersLayoutInfo() const { return param_layout_info; }
+
 protected:
     Hash64City compiled_hash;
+
 private:
     void ConstructRootParameterLayoutInfo(const ShaderParametersInfoMap& _param_map);
+
 private:
-    const ShaderMetaType*   type;
-    ShaderTargetInfo        target_info;
-    
+    const ShaderMetaType* type;
+    ShaderTargetInfo      target_info;
+
     ShaderRootParametersLayoutInfo param_layout_info;
-    int32_t                 code_size;
+
+    int32_t code_size;
     //compiled shader hash in 32 bit
     uint32_t hash_key;
 };

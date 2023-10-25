@@ -33,8 +33,8 @@ uint32_t GetHash(const RHIDepthStencilStateInitializer& target) {
     HashCombine(hash, GetHash(target.depth_test_op));
     HashCombine(hash, GetHash(target.b_enable_front_face_stencil));
     HashCombine(hash, GetHash(target.front_face_stencil_test));
-    HashCombine(hash, GetHash(target.front_face_stencil_fail_stencilOp));
-    HashCombine(hash, GetHash(target.front_face_depth_fail_stencilOp));
+    HashCombine(hash, GetHash(target.front_face_stencil_fail_stencil_op));
+    HashCombine(hash, GetHash(target.front_face_depth_fail_stencil_op));
     HashCombine(hash, GetHash(target.front_face_pass_stencil_op));
     HashCombine(hash, GetHash(target.b_enable_back_face_stencil));
     HashCombine(hash, GetHash(target.back_face_stencil_test));
@@ -51,8 +51,8 @@ bool operator==(const RHIDepthStencilStateInitializer& lhs, const RHIDepthStenci
            lhs.depth_test_op == rhs.depth_test_op &&
            lhs.b_enable_front_face_stencil == rhs.b_enable_front_face_stencil &&
            lhs.front_face_stencil_test == rhs.front_face_stencil_test &&
-           lhs.front_face_stencil_fail_stencilOp == rhs.front_face_stencil_fail_stencilOp &&
-           lhs.front_face_depth_fail_stencilOp == rhs.front_face_depth_fail_stencilOp &&
+           lhs.front_face_stencil_fail_stencil_op == rhs.front_face_stencil_fail_stencil_op &&
+           lhs.front_face_depth_fail_stencil_op == rhs.front_face_depth_fail_stencil_op &&
            lhs.front_face_pass_stencil_op == rhs.front_face_pass_stencil_op &&
            lhs.b_enable_back_face_stencil == rhs.b_enable_back_face_stencil &&
            lhs.back_face_stencil_test == rhs.back_face_stencil_test &&

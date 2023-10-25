@@ -112,29 +112,29 @@ using RHIViewportRef                  = CountableRef<RHIViewport>;
 struct VertexElement {
     VertexElement() = default;
     VertexElement(
-        uint8_t            _binding_index,
-        uint8_t            _offset,
-        EVertexElementType _type,
-        uint8_t            _attribute_index,
-        uint16_t           _stride,
-        EVertexInputRate   _input_rate)
+        uint8_t          _binding_index,
+        uint8_t          _offset,
+        EPixelFormat     _format,
+        uint8_t          _attribute_index,
+        uint16_t         _stride,
+        EVertexInputRate _input_rate)
         : binding_index(_binding_index),
           offset(_offset),
-          type(_type),
+          format(_format),
           attribute_index(_attribute_index),
           stride(_stride),
           input_rate(_input_rate) {}
 
     bool operator==(const VertexElement& other) const {
-        return binding_index == other.binding_index && offset == other.offset && type == other.type && attribute_index == other.attribute_index && stride == other.stride && input_rate == other.input_rate;
+        return binding_index == other.binding_index && offset == other.offset && format == other.format && attribute_index == other.attribute_index && stride == other.stride && input_rate == other.input_rate;
     }
-    uint8_t                        binding_index;
-    uint8_t                        offset;
-    EnumInByte<EVertexElementType> type;
-    uint8_t                        attribute_index;
-    uint16_t                       stride;
-    EnumInByte<EVertexInputRate>   input_rate;
-    uint8_t                        reserve_byte;
+    uint8_t                      binding_index;
+    uint8_t                      offset;
+    EnumInByte<EPixelFormat>     format;
+    uint8_t                      attribute_index;
+    uint16_t                     stride;
+    EnumInByte<EVertexInputRate> input_rate;
+    uint8_t                      reserve_byte;
 };
 static_assert(sizeof(VertexElement) == 8, "VertexElement doesn't match cache line size");
 
@@ -1564,6 +1564,18 @@ public:
 
 private:
     EAttachmentStoreOp stencil_store_op;
+};
+
+struct RHIShaderMapRef {
+
+    Shader* meta_shader;
+
+    RHIVertexShader*   GetVertexShader();
+    RHIFragmentShader* GetFragmentShader();
+    RHIGeometryShader* GetGeometryShader();
+
+    RHIMeshShader*          GetMeshShader();
+    RHIAmplificationShader* GetAmplificationShader();
 };
 
 struct RHIShaderBoundStateInput : public RHIResource {

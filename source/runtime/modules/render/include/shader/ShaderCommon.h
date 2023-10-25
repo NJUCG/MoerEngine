@@ -327,7 +327,7 @@ struct ParameterInfo {
 static_assert(sizeof(ParameterInfo) == 8);
 
 /**
- * @brief ParameterInfo Container,
+ * @brief Shader Reflected ParameterInfo Container,
     index with parameter name
  * 
  */

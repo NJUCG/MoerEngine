@@ -30,7 +30,8 @@ public:
     void PrepareGlobalShaderResources();
 
 private:
-    Shader* GetShader(const ShaderMetaType& _meta_type);
+    Shader*          GetShader(const ShaderMetaType& _meta_type);
+    RHIShaderMapRef* GetShaderMapRef(const ShaderMetaType& _meta_type);
     ShaderResourceManager();
     ShaderCodeResourceMap* code_resources;
     ShaderTypeResourceMap* type_resources;
