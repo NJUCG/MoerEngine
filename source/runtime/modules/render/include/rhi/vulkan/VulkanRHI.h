@@ -17,6 +17,8 @@ public:
 
     void Initialize() final override;
 
+    void PostInit() final override;
+
     void ShutDown() final override;
 
     inline const char* GetName() final override { return "VulkanRHI"; }
