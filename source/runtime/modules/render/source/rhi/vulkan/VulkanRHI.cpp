@@ -41,6 +41,10 @@ void VulkanRHIImpl::Initialize() {
     InitVulkanMemoryAllocator();
 }
 
+void VulkanRHIImpl::PostInit() {
+    LOG_INFO("VulkanRHIImpl::PostInit()");
+}
+
 void VulkanRHIImpl::ShutDown() {
     delete m_swap_chain;
     delete m_device;
@@ -509,12 +513,20 @@ void VulkanRHIImpl::InitVulkan() {
 void VulkanRHIImpl::InitVulkanMemoryAllocator() {
     VmaAllocatorCreateInfo alloc_create_info{};
 
+    VmaVulkanFunctions vma_functions{};
+    vma_functions.vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)vkGetInstanceProcAddr;
+    vma_functions.vkGetDeviceProcAddr   = (PFN_vkGetDeviceProcAddr)vkGetDeviceProcAddr;
+
     alloc_create_info.vulkanApiVersion = VK_API_VERSION_1_3;
+
     alloc_create_info.instance         = m_instance;
     alloc_create_info.physicalDevice   = m_device->GetGpu();
     alloc_create_info.device           = m_device->GetDevice();
+    alloc_create_info.pVulkanFunctions = &vma_functions;
 
     VK_CHECK_RESULT(vmaCreateAllocator(&alloc_create_info, &m_allocator));
+
+    LOG_INFO("Vulkan Memory Allocator initialized with api version: {}.", alloc_create_info.vulkanApiVersion);
 }
 
 #pragma region vulkan functions

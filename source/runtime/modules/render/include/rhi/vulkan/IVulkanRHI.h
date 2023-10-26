@@ -12,6 +12,7 @@
 class IVulkanRHI : public RHI {
 public:
     void        Initialize() override {}
+    void        PostInit() override {}
     void        ShutDown() override {}
     const char* GetName() override { return "VulkanRHI Interface"; }
 
