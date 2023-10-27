@@ -1,5 +1,6 @@
 
 #include "PixelFormat.h"
+#include "math/Matrix.h"
 #include "rhi/RHI.h"
 #include "RHIUIImplement.h"
 #include "rhi/RHICommon.h"
@@ -14,20 +15,24 @@
 class ImGuiShaderVert : public Shader {
     DEFINE_SHADER_TYPE(ImGuiShaderVert, Global, RHI_API, ...)
 public:
+    BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(UIVertex)
+    DEFINE_SHADER_PARAM(Moer::Matrix4x4f, ProjectionMatrix)
+    END_SHADER_CONSTANT_STRUCT_DEFINITION()
     BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
 
-    DEFINE_SHADER_PARAM_CBV(Constant, vertexBuffer)
+    // DEFINE_SHADER_PARAM_CBV(Constant, vertexBuffer)
+    DEFINE_SHADER_PARAM_STRUCT(UIVertex, vertexBuffer)
 
     END_ROOT_PARAMETER_DEFINITION(Parameters)
 };
-IMPLEMENT_SHADER_TYPE(ImGuiShaderVert, "GuiVert.frag", "main", ST_VERTEX)
+IMPLEMENT_SHADER_TYPE(ImGuiShaderVert, "GuiVert.vert", "main", ST_VERTEX)
 class ImGuiShaderFrag : public Shader {
     DEFINE_SHADER_TYPE(ImGuiShaderFrag, Global, RHI_API, ...)
 public:
     BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
 
-    DEFINE_SHADER_PARAM_SRV(SamplerState, sampler0)
-    DEFINE_SHADER_PARAM_SAMPLER(Texture2D, texture0)
+    DEFINE_SHADER_PARAM_SAMPLER(SamplerState, sampler0)
+    DEFINE_SHADER_PARAM_SRV(Texture2D, texture0)
 
     END_ROOT_PARAMETER_DEFINITION(Parameters)
 };

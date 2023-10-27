@@ -1,6 +1,8 @@
 #include "Engine.h"
 #include <filesystem>
+#include <vcruntime_string.h>
 #include "Core.h"
+#include "math/Matrix.h"
 #include "rhi/RHIResource.h"
 #include "shader/Shader.h"
 #include "shader/ShaderResourceManager.h"
@@ -57,7 +59,11 @@ void ShaderParameterSetTest() {
     RHIBatchedShaderParameters       batched_params;
     auto                             view_info = RHIViewInfo::CreateBufferSRVInfo();
     params.bar                                 = new RHIShaderResourceView(nullptr, view_info);
+    params.ubo.viewMatrix                      = Moer::Matrix4x4f::Identity();
+    Moer::Matrix4x4f param_test;
+
     batched_params.SetParameters(shader, params);
+
     END_TEST(ShaderParameterSetTest)
 }
 int main(int argc, const char** argv) {

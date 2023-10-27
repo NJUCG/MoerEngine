@@ -51,7 +51,7 @@ class VertexFactoryType;
 #define INNER_BEGIN_SHADER_PARAMETER_DEFINITION(StructureName, GetStructMetadataFunctionImpl, ...)                           \
     class alignas(SHADER_PARAMETER_STRUCTURE_ALIGNMENT) StructureName {                                                      \
     public:                                                                                                                  \
-        StructureName() {memset(this, 0, sizeof(StructureName));}                                                                                                   \
+        StructureName() { memset(this, 0, sizeof(StructureName)); }                                                          \
         /* struct type info*/                                                                                                \
         struct TypeInfo {                                                                                                    \
             static constexpr int32_t s_num_rows                     = 1;                                                     \
@@ -74,33 +74,33 @@ class VertexFactoryType;
         static void* AppendMemberGetPrev(_firstMemberId, std::vector<ShaderParametersMetadata::Member>*) { return nullptr; } \
         typedef _firstMemberId
 
-#define INTERNAL_DEFINE_SHADER_PARAM_IMPL(MemberTypeInfo, MemberType, MemberName, HlslType, Precision, UBMTBaseType, DefaultValue)       \
-    MemberId##MemberName;                                                                                                  \
-                                                                                                                           \
-public:                                                                                                                    \
-    /* a ptr wrapped shader param type  */                                                                                 \
-    MemberTypeInfo::TParamPtr MemberName;                                                                                  \
-                                                                                                                           \
-private:                                                                                                                   \
-    struct _nextMemberId##MemberName {                                                                                     \
-        enum { HasDeclaredResource = MemberId##MemberName::HasDeclaredResource };                                          \
-    };                                                                                                                     \
-    static void* AppendMemberGetPrev(_nextMemberId##MemberName, std::vector<ShaderParametersMetadata::Member>* _members) { \
-                                                                                                                           \
-        _members->push_back(ShaderParametersMetadata::Member(                                                              \
-            #MemberName,                                                                                                   \
-            #HlslType,                                                                                                     \
-            offsetof(TThisStruct, MemberName),                                                                             \
-            sizeof(MemberTypeInfo::TParamPtr),                                                                             \
-            UBMTBaseType,                                                                                                  \
-            Precision,                                                                                                     \
-            MemberTypeInfo::s_num_elements,                                                                                \
-            MemberTypeInfo::GetStructMetadata()));                                                                         \
-        void* (*PrevFunc)(MemberId##MemberName, std::vector<ShaderParametersMetadata::Member>*);                           \
-                                                                                                                           \
-        PrevFunc = AppendMemberGetPrev;                                                                                    \
-        return (void*)PrevFunc;                                                                                            \
-    }                                                                                                                      \
+#define INTERNAL_DEFINE_SHADER_PARAM_IMPL(MemberTypeInfo, MemberType, MemberName, HlslType, Precision, UBMTBaseType, DefaultValue) \
+    MemberId##MemberName;                                                                                                          \
+                                                                                                                                   \
+public:                                                                                                                            \
+    /* a ptr wrapped shader param type  */                                                                                         \
+    MemberTypeInfo::TParamPtr MemberName;                                                                                          \
+                                                                                                                                   \
+private:                                                                                                                           \
+    struct _nextMemberId##MemberName {                                                                                             \
+        enum { HasDeclaredResource = MemberId##MemberName::HasDeclaredResource };                                                  \
+    };                                                                                                                             \
+    static void* AppendMemberGetPrev(_nextMemberId##MemberName, std::vector<ShaderParametersMetadata::Member>* _members) {         \
+                                                                                                                                   \
+        _members->push_back(ShaderParametersMetadata::Member(                                                                      \
+            #MemberName,                                                                                                           \
+            #HlslType,                                                                                                             \
+            offsetof(TThisStruct, MemberName),                                                                                     \
+            sizeof(MemberTypeInfo::TParamPtr),                                                                                     \
+            UBMTBaseType,                                                                                                          \
+            Precision,                                                                                                             \
+            MemberTypeInfo::s_num_elements,                                                                                        \
+            MemberTypeInfo::GetStructMetadata()));                                                                                 \
+        void* (*PrevFunc)(MemberId##MemberName, std::vector<ShaderParametersMetadata::Member>*);                                   \
+                                                                                                                                   \
+        PrevFunc = AppendMemberGetPrev;                                                                                            \
+        return (void*)PrevFunc;                                                                                                    \
+    }                                                                                                                              \
     typedef _nextMemberId##MemberName
 
 #define END_SHADER_PARAMETER_DEFINITION(StructureName, ...)                               \
@@ -143,14 +143,14 @@ public:                                                                         
 // #define DEFINE_SHADER_PARAM_SET(StructType, MemberName) \
 //     INTERNAL_DEFINE_SHADER_PARAM_IMPL(StructType::TypeInfo, StructType, MemberName, , EShaderPrecisionModifier::FLOAT, SBT_NESTED_STRUCT)
 
-// #define DEFINE_SHADER_PARAM_STRUCT_ARRAY(StructType, MemberName, NumElements) \
-//     INTERNAL_DEFINE_SHADER_PARAM_IMPL(TShaderParameterStructureTypeInfo<MemberName[NumElements]>, StructType, MemberName, , EShaderPrecisionModifier::FLOAT, SBT_DESCRIPTOR_TABLE)
+#define DEFINE_SHADER_PARAM_STRUCT(StructType, MemberName) \
+    INTERNAL_DEFINE_SHADER_PARAM_IMPL(TShaderParameterStructureTypeInfo<StructType>, StructType, MemberName, StructType, EShaderPrecisionModifier::FLOAT, SBT_CONST_STRUCT, )
 
 #define DEFINE_SHADER_PARAM(MemberType, MemberName) \
     INTERNAL_DEFINE_SHADER_PARAM_IMPL(TShaderParameterTypeInfo<MemberType>, MemberType, MemberName, , EShaderPrecisionModifier::FLOAT, TShaderParameterTypeInfo<MemberType>::BaseType, )
 
 #define DEFINE_SHADER_PARAM_ATTACHMENT_BINDING() \
-    INTERNAL_DEFINE_SHADER_PARAM_IMPL(TShaderParameterTypeInfo<AttachmentBindingSlots>, AttachmentBindingSlots, Attachments, , EShaderPrecisionModifier::FLOAT, SBT_ATTACHMENT_BINDING_SLOTS,)
+    INTERNAL_DEFINE_SHADER_PARAM_IMPL(TShaderParameterTypeInfo<AttachmentBindingSlots>, AttachmentBindingSlots, Attachments, , EShaderPrecisionModifier::FLOAT, SBT_ATTACHMENT_BINDING_SLOTS, )
 
 /*
  *  uav v1 (register 0);

@@ -20,6 +20,7 @@ struct ShaderCompiledInitializer;
  */
 enum class EShaderParameterType : uint8_t {
     UNKNOWN,
+    CONSTANT_STRUCT,
     CBV,
     SAMPLER,
     SRV,

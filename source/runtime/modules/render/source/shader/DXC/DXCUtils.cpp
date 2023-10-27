@@ -1,6 +1,7 @@
 #include "DXCUtils.h"
 #include "platform/Platform.h"
 #include <format>
+#include "shader/ShaderCommon.h"
 #include "wsl/wrladapter.h"
 #include "dxguids/dxguids.h"
 
@@ -59,7 +60,10 @@ EShaderParameterType BindingTypeToParameterType(EShaderBindingBaseType _type) {
         case SBT_FLOAT32:
             return EShaderParameterType::Num;
         case SBT_CBV:
+
             return EShaderParameterType::CBV;
+        case SBT_CONST_STRUCT:
+            return EShaderParameterType::CONSTANT_STRUCT;
         case SBT_SRV:
             return EShaderParameterType::SRV;
         case SBT_UAV:

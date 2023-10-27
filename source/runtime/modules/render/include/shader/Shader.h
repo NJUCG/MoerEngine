@@ -4,6 +4,8 @@
 //#include "ShaderProxy.h"
 #include "API_Macro.h"
 #include "ShaderCommon.h"
+#include "math/Base.h"
+#include "math/Matrix.h"
 #include "rhi/RHICommon.h"
 #include "shader/ShaderCommon.h"
 #include "shader/ShaderParameterMacros.h"
@@ -54,10 +56,12 @@ struct ShaderRootParametersLayoutInfo {
 
 public:
     const std::vector<ShaderParameterLayoutInfo>& GetLayoutInfos() const { return layout_infos; }
+    const std::vector<ShaderParameterLayoutInfo>& GetConstantsInfos() const { return constant_infos; }
 
 private:
     friend class Shader;
     std::vector<ShaderParameterLayoutInfo> layout_infos;
+    std::vector<ShaderParameterLayoutInfo> constant_infos;
 };
 /**
  * @brief Shader Type information,
@@ -165,9 +169,15 @@ public:                                                                   \
 class TestReflectionShader : public Shader {
     DEFINE_SHADER_TYPE(TestReflectionShader, Global, )
 public:
+    BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(Ubo)
+    DEFINE_SHADER_PARAM(Moer::Matrix4x4f, projectionMatrix)
+    DEFINE_SHADER_PARAM(Moer::Matrix4x4f, modelMatrix)
+    DEFINE_SHADER_PARAM(Moer::Matrix4x4f, viewMatrix)
+
+    END_SHADER_CONSTANT_STRUCT_DEFINITION(Ubo)
+public:
     BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
-    //constant
-    DEFINE_SHADER_PARAM(Moer::Vector4f, color)
+    DEFINE_SHADER_PARAM_STRUCT(Ubo, ubo)
     DEFINE_SHADER_PARAM_SRV(Buffer, bar)
     //Ubo set
     DEFINE_SHADER_PARAM_UAV(RWBuffer, dataLog)
@@ -176,8 +186,7 @@ public:
     DEFINE_SHADER_PARAM_SAMPLER(Sampler, aniso)
     //srv set
     DEFINE_SHADER_PARAM_SRV_ARRAY(Texture2D[5], foo, 5)
-    //uav set
-    DEFINE_SHADER_PARAM_CBV(ConstantBuffer<UBO>, ubo)
+    //uav se
 
     END_ROOT_PARAMETER_DEFINITION(Parameters)
 };
