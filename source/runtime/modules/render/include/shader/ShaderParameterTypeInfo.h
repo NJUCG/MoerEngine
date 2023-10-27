@@ -12,6 +12,7 @@
 
 #include <array>
 #include <cstdint>
+#include <vcruntime_string.h>
 
 template<uint32_t Alignment>
 concept concept_valid_alignment =
@@ -21,6 +22,11 @@ template<typename TargetType, uint32_t Alignment>
     requires concept_valid_alignment<Alignment>
 struct AlignType {
     ALIGNED_TYPE_DEF(TargetType, Type, Alignment);
+    AlignType& operator=(const TargetType& t) {
+        memcpy(this, &t, sizeof(TargetType));
+        return *this;
+    };
+    TargetType t;
 };
 
 template<typename ShaderResourceType>
@@ -61,7 +67,7 @@ struct TShaderParameterStructureTypeInfo {
 
     using TParamPtr = StructType;
 
-    static const ShaderParametersMetadata* GetStructMetadata() { return StructType::FTypeInfo::GetStructMetadata(); }
+    static const ShaderParametersMetadata* GetStructMetadata() { return StructType::TypeInfo::GetStructMetadata(); }
 };
 
 template<class StructType, uint32_t NumElements>

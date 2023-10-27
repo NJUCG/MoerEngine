@@ -723,7 +723,7 @@ enum EShaderBindingBaseType : uint8_t {
     SBT_INT32,
     SBT_UINT32,
     SBT_FLOAT32,
-
+    SBT_CONST_STRUCT,
     // RHI resources not tracked by render graph.
     SBT_CBV,
     SBT_SRV,

@@ -100,7 +100,8 @@ void DXCompiler::CompileVulkan(const ShaderCompilerInput& _input, ShaderCompiler
     std::wstring file_name = file_path.generic_wstring();
 
     if (!std::filesystem::exists(file_path)) {
-        on_fail("Could not load shader file");
+        on_fail(std::format("Could not load shader file: {}", file_path.generic_string()).c_str());
+
         return;
     }
     // Load the HLSL text shader from disk
@@ -112,7 +113,7 @@ void DXCompiler::CompileVulkan(const ShaderCompilerInput& _input, ShaderCompiler
     std::stringstream file_source_stream;
     file_source_stream << file_stream.rdbuf();
     if (file_source_stream.str().empty()) {
-        on_fail(std::format("shader file {} is empty", file_path.string()).c_str());
+        on_fail(std::format("shader file {} is empty", file_path.generic_string()).c_str());
         return;
     }
     hres = utils->CreateBlob(file_source_stream.str().data(), file_source_stream.str().size(), CP_UTF8, source_blob.GetAddressOf());
@@ -248,8 +249,13 @@ void DXCompiler::CompileVulkan(const ShaderCompilerInput& _input, ShaderCompiler
         const auto& param = entry->second;
         //check type
         if (auto base_type = member.GetBaseType(); BindingTypeToParameterType(base_type) != param.type) {
-            not_reflected_members.push_back(std::format("param {} format mismatch! param format: {}, shader format {}", member.GetName(), ToString(base_type), ToString(param.type)));
-            continue;
+            if (BindingTypeToParameterType(base_type) == EShaderParameterType::CONSTANT_STRUCT && param.type == EShaderParameterType::CBV) {
+                //is root constant
+                param_map[name].type = EShaderParameterType::CONSTANT_STRUCT;
+            } else {
+                not_reflected_members.push_back(std::format("param {} format mismatch! param format: {}, shader format {}", member.GetName(), ToString(base_type), ToString(param.type)));
+                continue;
+            }
         }
         LOG_INFO("param {}: {{ slot:{}, set:{}, array_num:{} }}", member.GetName(), param.slot, param.space, param.num);
     }

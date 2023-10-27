@@ -15,10 +15,12 @@
 #include <cassert>
 #include <atomic>
 #include <cstddef>
+#include <stdint.h>
 #include <unordered_set>
 #include <string>
 #include <optional>
 #include <bitset>
+#include <vector>
 template<typename TStructuredParam>
 concept concept_is_shader_struct = requires(TStructuredParam t) {
     std::is_same<typename TStructuredParam::TypeInfo::TParamPtr, TStructuredParam>();
@@ -410,6 +412,12 @@ struct RHIShaderResourceParameter {
     int16_t      space;
 };
 
+struct RHIShaderConstantParameter {
+    uint32_t byte_offset_in_raw_data;
+    int16_t  size_in_32bit;
+    int16_t  slot;
+    int16_t  space;
+};
 struct RHIAttachmentBindingParameter {
 };
 struct RHIBatchedShaderParameters {
@@ -419,11 +427,15 @@ struct RHIBatchedShaderParameters {
         size_t data_size = sizeof(TRootParameter);
         SetParameters(shader, data_size, (uint8_t*)&params);
     }
+    const uint8_t* GetConstData(uint32_t byte_offset) const {
+        return &raw_data[byte_offset];
+    }
 
 private:
     void SetParameters(class Shader* shader, size_t _data_size, uint8_t* data_source);
     //offset in raw_data, size, slot and space
     std::vector<RHIShaderResourceParameter> resource_parameters;
+    std::vector<RHIShaderConstantParameter> constant_parameters;
     std::vector<uint8_t>                    raw_data;
 };
 //todo: may not inherit from RHIResource

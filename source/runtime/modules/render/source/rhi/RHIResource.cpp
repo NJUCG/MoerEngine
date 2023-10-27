@@ -2,6 +2,7 @@
 #include "misc/AsyncQueue.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommandList.h"
+#include "rhi/RHICommon.h"
 #include "shader/Shader.h"
 #include "shader/ShaderCommon.h"
 #include <cstddef>
@@ -183,10 +184,12 @@ AttachmentBindingSlots* GetAttachmentBindings(uint8_t* data, uint32_t offset) {
 }
 void RHIBatchedShaderParameters::SetParameters(Shader* shader, size_t _data_size, uint8_t* data_source) {
     const auto& param_layout_info = shader->GetRootParametersLayoutInfo();
-    uint32_t    param_max_size    = _data_size >> 3;
-    size_t      left_size         = resource_parameters.capacity() - resource_parameters.size();
 
-    if (left_size < param_max_size) resource_parameters.reserve(left_size + resource_parameters.size());
+    //not presices since it may contains const data
+    uint32_t resource_param_max_size = _data_size >> 3;
+    size_t   left_size               = resource_parameters.capacity() - resource_parameters.size();
+
+    if (left_size < resource_param_max_size) resource_parameters.reserve(left_size + resource_parameters.size());
     for (const auto& param_info : param_layout_info.GetLayoutInfos()) {
         RHIResource* data  = GetResource(data_source, param_info.offset);
         bool         npt   = data;
@@ -194,5 +197,15 @@ void RHIBatchedShaderParameters::SetParameters(Shader* shader, size_t _data_size
         if (b_set) {
             resource_parameters.emplace_back(RHIShaderResourceParameter(data, param_info.slot, param_info.space));
         }
+    }
+
+    //copy constant parameters to raw data
+    for (const auto& param_info : param_layout_info.GetConstantsInfos()) {
+        uint8_t* data = data_source + param_info.offset;
+        //const must set
+        uint32_t origin_offset = raw_data.size();
+        raw_data.resize(origin_offset + param_info.stride);
+        memcpy(&raw_data[origin_offset], data_source, param_info.stride);
+        constant_parameters.emplace_back(origin_offset, (param_info.stride + sizeof(uint32_t) - 1) / 4, param_info.slot, param_info.space);
     }
 }
