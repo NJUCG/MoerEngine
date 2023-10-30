@@ -26,7 +26,7 @@ VulkanRHIGraphicsCommandList::~VulkanRHIGraphicsCommandList() {
 void VulkanRHIGraphicsCommandList::SetBatchedShaderParameter(RHIShaderRef shader, const RHIBatchedShaderParameters& parameters) {
 }
 
-void VulkanRHIGraphicsCommandList::SetPipelineState(RHIGraphicsPipelineState* _graphics_pso, const RHIShaderBoundStateInput& _shader_input) {
+void VulkanRHIGraphicsCommandList::SetPipelineState(RHIGraphicsPipelineState* _graphics_pso) {
     // MARK...
     // need to implemented
     // bind descriptor sets
@@ -60,14 +60,14 @@ void VulkanRHIGraphicsCommandList::ClearState(RHIGraphicsPipelineState* _graphic
     VK_CHECK_NULLPTR(vk_pipelie_state, "ClearState: graphics pipeline state is nullptr!");
 }
 
-void VulkanRHIGraphicsCommandList::DrawIndexedInstanced(uint32_t _index_count, uint32_t _instance_count, int32_t _base_vertex_location, uint32_t _start_instance_location) {
+void VulkanRHIGraphicsCommandList::DrawIndexedInstanced(uint32_t _index_count, uint32_t _instance_count, uint32_t _start_index_location, int32_t _base_vertex_location) {
     vkCmdDrawIndexed(
         m_command_buffer,
         _index_count,
         _instance_count,
+        _start_index_location,
         _base_vertex_location,
-        0,
-        _start_instance_location);
+        0);
 }
 
 void VulkanRHIGraphicsCommandList::DrawIndexedIndirect(RHIBuffer* _argument_buffer, uint64_t _arg_offset, RHIBuffer* _count_buffer, uint64_t _count_buffer_offset, uint32_t _max_draw_count, uint32_t _stride) {

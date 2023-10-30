@@ -32,7 +32,6 @@ public:
     DEFINE_SHADER_PARAM_UAV(RWTexture2D, write_target)
     DEFINE_SHADER_PARAM_SRV(StructuredBuffer, ubo)
     DEFINE_SHADER_PARAM_CBV(StructuredBuffer, cbv)
-    DEFINE_SHADER_PARAM_ATTACHMENT_BINDING()
 
     END_ROOT_PARAMETER_DEFINITION(Parameters)
 };

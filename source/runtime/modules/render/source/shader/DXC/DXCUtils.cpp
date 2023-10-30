@@ -70,7 +70,6 @@ EShaderParameterType BindingTypeToParameterType(EShaderBindingBaseType _type) {
             return EShaderParameterType::UAV;
         case SBT_SAMPLER:
             return EShaderParameterType::SAMPLER;
-        case SBT_ATTACHMENT_BINDING_SLOTS:
 
         defualt:
             break;

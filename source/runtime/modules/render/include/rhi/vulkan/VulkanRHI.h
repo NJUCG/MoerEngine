@@ -42,7 +42,7 @@ public:
 
     RHIShaderLibraryRef RHICreateShaderLibrary(EShaderPlatform _platform, const std::string& _file_path, const std::string& name) final override;
 
-    RHIFenceRef RHICreateFence(const std::string& name) final override;
+    RHIFenceRef RHICreateFence(const RHIFenceCreateInfo&) final override;
 
     RHIShaderBoundStateRef RHICreateShaderBoundStage(
         RHIVertexInputState* _vertex_input,
@@ -76,7 +76,7 @@ public:
     virtual bool GUIInit(uint32_t _num_frames_in_flight) final override;
     virtual void GUIShutDown() final override;
     virtual void GUINewFrame() final override;
-    virtual void GUIRender() final override {}
+    virtual void GUIRender(RHIGraphicsCommandList* _ui_command_list) final override {}
 #pragma endregion
 protected:
     VkInstance               m_instance;

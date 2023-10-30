@@ -1,5 +1,6 @@
 #include "config.h"
 
+#include "rhi/RHIResource.h"
 #include "rhi/vulkan/misc/VulkanMacroUtils.h"
 #include "misc/MacroUtils.h"
 
@@ -137,8 +138,9 @@ RHIComputeShaderRef VulkanRHIImpl::RHICreateComputeShader(const Shader* shader) 
 
 RHIShaderLibraryRef VulkanRHIImpl::RHICreateShaderLibrary(EShaderPlatform _platform, const std::string& _file_path, const std::string& name) { return RHIShaderLibraryRef{}; }
 
-RHIFenceRef VulkanRHIImpl::RHICreateFence(const std::string& name) {
-    VulkanRHIFence* vk_fence = new VulkanRHIFence(m_device);
+RHIFenceRef VulkanRHIImpl::RHICreateFence(const RHIFenceCreateInfo& _info) {
+
+    VulkanRHIFence* vk_fence = new VulkanRHIFence(m_device, _info.usage);
 
     return RHIFenceRef(vk_fence);
 }

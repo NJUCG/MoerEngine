@@ -711,7 +711,6 @@ enum EShaderBindingBaseType : uint8_t {
     SBT_UAV,
     SBT_SAMPLER,
 
-    SBT_ATTACHMENT_BINDING_SLOTS,
     SBT_ResourceNum     = 4,
     SBT_ResourceNumBits = 4,
     SBT_Num,
@@ -726,7 +725,6 @@ ENUM_STR_ELEMENT(SBT_CBV)
 ENUM_STR_ELEMENT(SBT_SRV)
 ENUM_STR_ELEMENT(SBT_UAV)
 ENUM_STR_ELEMENT(SBT_SAMPLER)
-ENUM_STR_ELEMENT(SBT_ATTACHMENT_BINDING_SLOTS)
 END_ENUM_STR_DEFINITION(EShaderBindingBaseType)
 static_assert(SBT_Num <= (1 << SBT_NumBits), "SBT_Num will not fit on SBT_NumBits");
 using GlobalBufferStaticBindingPoint = uint8_t;
