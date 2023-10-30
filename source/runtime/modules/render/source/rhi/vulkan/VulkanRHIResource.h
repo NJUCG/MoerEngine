@@ -6,6 +6,7 @@
 #define VULKAN_RHI_RESOURCE_H
 
 #include "rhi/RHIResource.h"
+#include "vulkan/vulkan_core.h"
 
 #include <vulkan/vulkan.h>
 
@@ -326,12 +327,16 @@ private:
 
 class VulkanRHIFence final : public RHIFence {
 public:
-    VulkanRHIFence(const std::string& _name, VulkanDevice* _device);
-    bool Signaled() const final override;
+    VulkanRHIFence(VulkanDevice* _device);
+
+    uint64_t GetValue() const override;
+
+    void Wait(uint64_t value) override;
 
 private:
     VulkanDevice* m_device;
     VkFence       m_fence;
+    VkSemaphore   m_semaphore;
 };
 
 #pragma endregion

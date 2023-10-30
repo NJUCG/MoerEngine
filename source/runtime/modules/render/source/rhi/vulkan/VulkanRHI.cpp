@@ -133,7 +133,7 @@ RHIComputeShaderRef VulkanRHIImpl::RHICreateComputeShader(const Shader* shader) 
 RHIShaderLibraryRef VulkanRHIImpl::RHICreateShaderLibrary(EShaderPlatform _platform, const std::string& _file_path, const std::string& name) { return RHIShaderLibraryRef{}; }
 
 RHIFenceRef VulkanRHIImpl::RHICreateFence(const std::string& name) {
-    VulkanRHIFence* vk_fence = new VulkanRHIFence(name, m_device);
+    VulkanRHIFence* vk_fence = new VulkanRHIFence(m_device);
 
     return RHIFenceRef(vk_fence);
 }

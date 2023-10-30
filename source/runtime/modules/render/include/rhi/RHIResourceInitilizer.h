@@ -4,6 +4,7 @@
 #include "API_Macro.h"
 #include "misc/Hash.h"
 #include "math/Math.h"
+#include "rhi/RHICommon.h"
 
 #include <numeric>
 #include <array>
@@ -321,10 +322,10 @@ struct RHISubresourceRange : public RHISubresourceSlice {
 
     uint8_t num_mips = s_all;
 
-    RHISubresourceRange() : RHISubresourceSlice(
-                                ETextureAspectFlags::NONE,
-                                0,
-                                0){};
+    RHISubresourceRange(ETextureAspectFlags _aspect = ETextureAspectFlags::NONE) : RHISubresourceSlice(
+                                                                                       _aspect,
+                                                                                       0,
+                                                                                       0){};
 
     RHISubresourceRange(
         ETextureAspectFlags _aspect,
