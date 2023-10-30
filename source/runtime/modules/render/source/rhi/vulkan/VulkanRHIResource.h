@@ -7,6 +7,7 @@
 
 #include "rhi/RHIResource.h"
 #include "vulkan/vulkan_core.h"
+#include "shader/ShaderCommon.h"
 
 #include <vulkan/vulkan.h>
 
@@ -68,11 +69,25 @@ public:
 
 class VulkanEnumTranslator final {
 public:
+    static VkFormat METoVKFormat(EPixelFormat _format);
+
     static VkSampleCountFlagBits METoVKSampleCountFlagBits(uint32_t _me_count);
+    static VkImageAspectFlags    METoVKImageAspectFlags(ETextureAspectFlags _flags);
     static VkImageViewType       METoVKImageViewType(ETextureDimension _dim);
     static VkImageLayout         METoVKImageLayout(ETextureLayout _layout);
     static VkAttachmentLoadOp    METoVKAttachmentLoadOp(EAttachmentLoadOp _load_op);
     static VkAttachmentStoreOp   METoVKAttachmentStoreOp(EAttachmentStoreOp _store_op);
+    static VkFilter              METoVKImageFilter(ESamplerFilter _filter);
+
+    static VkPipelineStageFlags METoVkPipelineStageFlags(ERHIPipelineStageFlags _flags);
+    static VkAccessFlags        METoVkAccessFlags(ERHIAccessFlags _flags);
+
+    static VkCullModeFlags     METoVKCullModeFlags(ERasterizerCullMode _cull_mode);
+    static VkPrimitiveTopology METoVKPrimitiveTopology(EPrimitiveTopology _primitive_type);
+    static VkPolygonMode       METoVKPolygonMode(ERasterizerFillMode _fill_mode);
+
+    static VkDescriptorType   METoVKDescriptorType(EShaderParameterType _type);
+    static VkShaderStageFlags METoVKShaderStageFlags(EShaderType _type);
 };
 
 #pragma endregion
@@ -105,7 +120,6 @@ public:
 
 private:
     VkVertexInputRate METoVKVertexInputRate(EVertexInputRate _me_rate);
-    VkFormat          METoVKFormat(EVertexElementType _me_format);
 
 private:
     VkPipelineVertexInputStateCreateInfo m_input_state_create_info;
@@ -193,6 +207,8 @@ private:
 
 class VulkanRHIGraphicsShader {
 public:
+    explicit VulkanRHIGraphicsShader(const Shader* _shader) : m_shader(_shader) {}
+
     void CreateShaderModule(const VulkanDevice* _device, const std::vector<uint8_t>& _code);
 
     VkShaderModule GetHandle() const {
@@ -201,48 +217,49 @@ public:
 
 protected:
     VkShaderModule m_shader_module;
+    const Shader*  m_shader;
 };
 
 class VulkanRHIVertexShader : public RHIVertexShader, public VulkanRHIGraphicsShader {
     friend VulkanRHIImpl;
 
 public:
-    explicit VulkanRHIVertexShader() : RHIVertexShader(), VulkanRHIGraphicsShader() {}
+    explicit VulkanRHIVertexShader(const Shader* _shader) : RHIVertexShader(), VulkanRHIGraphicsShader(_shader) {}
 };
 
 class VulkanRHIFragmentShader : public RHIFragmentShader, public VulkanRHIGraphicsShader {
     friend VulkanRHIImpl;
 
 public:
-    explicit VulkanRHIFragmentShader() : RHIFragmentShader(), VulkanRHIGraphicsShader() {}
+    explicit VulkanRHIFragmentShader(const Shader* _shader) : RHIFragmentShader(), VulkanRHIGraphicsShader(_shader) {}
 };
 
 class VulkanRHIGeometryShader : public RHIGeometryShader, public VulkanRHIGraphicsShader {
     friend VulkanRHIImpl;
 
 public:
-    explicit VulkanRHIGeometryShader() : RHIGeometryShader(), VulkanRHIGraphicsShader() {}
+    explicit VulkanRHIGeometryShader(const Shader* _shader) : RHIGeometryShader(), VulkanRHIGraphicsShader(_shader) {}
 };
 
 class VulkanRHIComputeShader : public RHIComputeShader, public VulkanRHIGraphicsShader {
     friend VulkanRHIImpl;
 
 public:
-    explicit VulkanRHIComputeShader() : RHIComputeShader(), VulkanRHIGraphicsShader() {}
+    explicit VulkanRHIComputeShader(const Shader* _shader) : RHIComputeShader(), VulkanRHIGraphicsShader(_shader) {}
 };
 
 class VulkanRHIMeshShader : public RHIMeshShader, public VulkanRHIGraphicsShader {
     friend VulkanRHIImpl;
 
 public:
-    explicit VulkanRHIMeshShader() : RHIMeshShader(), VulkanRHIGraphicsShader() {}
+    explicit VulkanRHIMeshShader(const Shader* _shader) : RHIMeshShader(), VulkanRHIGraphicsShader(_shader) {}
 };
 
 class VulkanRHIAmplificationShader : public RHIAmplificationShader, public VulkanRHIGraphicsShader {
     friend VulkanRHIImpl;
 
 public:
-    explicit VulkanRHIAmplificationShader() : RHIAmplificationShader(), VulkanRHIGraphicsShader() {}
+    explicit VulkanRHIAmplificationShader(const Shader* _shader) : RHIAmplificationShader(), VulkanRHIGraphicsShader(_shader) {}
 };
 
 #pragma endregion
@@ -257,7 +274,6 @@ public:
 
     static std::vector<VkPipelineShaderStageCreateInfo> METoVKShaderStageCreateInfo(const RHIShaderBoundStateInput& _shader_bound_state);
     static VkPipelineVertexInputStateCreateInfo         METoVKVertexInputStateCreateInfo(const RHIVertexInputState& _vertex_input_state);
-    static VkPrimitiveTopology                          METoVKPrimitiveTopology(EPrimitiveTopology _primitive_type);
 
 private:
     VkPipeline m_pipeline;
@@ -284,6 +300,7 @@ public:
         return m_alloc.buffer;
     }
 
+    static VkIndexType        METoVKIndexType(EIndexElementType _type);
     static VkBufferUsageFlags METoVKBufferUsageFlags(VulkanDevice* _device, EBufferUsageFlags _me_flags);
 
 private:

@@ -12,6 +12,7 @@
 class IVulkanRHI : public RHI {
 public:
     void        Initialize() override {}
+    void        PostInit() override {}
     void        ShutDown() override {}
     const char* GetName() override { return "VulkanRHI Interface"; }
 
@@ -60,6 +61,8 @@ public:
     RHICommandQueue*        CreateCommandQueue(ECommandQueueType type) override { return nullptr; }
     RHIGraphicsCommandList* CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state = nullptr) override { return nullptr; }
     RHIComputeCommandList*  CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr) override { return nullptr; }
+
+    RHIShaderRef RHICreateShader(Shader*) override { return RHIShaderRef{}; }
 
 #pragma endregion
 };

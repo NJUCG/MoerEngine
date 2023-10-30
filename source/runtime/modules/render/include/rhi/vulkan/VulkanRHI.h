@@ -17,6 +17,8 @@ public:
 
     void Initialize() final override;
 
+    void PostInit() final override;
+
     void ShutDown() final override;
 
     inline const char* GetName() final override { return "VulkanRHI"; }
@@ -66,14 +68,15 @@ public:
     RHICommandQueue*        CreateCommandQueue(ECommandQueueType type) final override;
     RHIGraphicsCommandList* CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state = nullptr) final override;
     RHIComputeCommandList*  CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr) final override;
-    RHIShaderRef            RHICreateShader(Shader* shader) final override;
+
+    RHIShaderRef RHICreateShader(Shader* shader) final override;
 
 #pragma endregion
 #pragma region GUI
     virtual bool GUIInit(uint32_t _num_frames_in_flight) final override;
     virtual void GUIShutDown() final override;
     virtual void GUINewFrame() final override;
-    virtual void GUIRender() final override;
+    virtual void GUIRender() final override {}
 #pragma endregion
 protected:
     VkInstance               m_instance;

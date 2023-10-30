@@ -69,35 +69,9 @@ CORE_API inline void HashCombine(uint64_t& seed, const T& v, const Rest&... rest
         HashCombine(ret, __VA_ARGS__); \
         return ret;                    \
     }
+
 template<concept_t_enum_underlying_uint8 TEnum>
-class CORE_API EnumInByte {
-public:
-    EnumInByte()                        = default;
-    EnumInByte(const EnumInByte& other) = default;
-    EnumInByte(TEnum _enum_value) : value(static_cast<uint8_t>(_enum_value)) {}
-    EnumInByte(uint8_t _value) : value(_value) {}
-    EnumInByte(uint32_t _value) : value(static_cast<uint8_t>(_value)) {}
-    EnumInByte(int32_t _value) : value(static_cast<uint8_t>(_value)) {}
-    EnumInByte& operator=(const EnumInByte&) = default;
-
-    operator TEnum() const { return (TEnum)value; }
-    bool operator==(const EnumInByte& other) {
-        return other.value == value;
-    }
-    bool operator==(TEnum other) {
-        return (TEnum)value == other;
-    }
-    bool operator==(uint8_t _value) {
-        return _value == value;
-    }
-    TEnum           GetValue() const { return (TEnum)value; }
-    friend uint32_t CORE_API inline GetHash(const EnumInByte& target) {
-        return GetHash(target.value);
-    };
-
-private:
-    uint8_t value;
-};
+class CORE_API EnumInByte;
 
 CORE_API inline uint32_t GetHash(uint32_t value) {
     return value;
@@ -105,9 +79,7 @@ CORE_API inline uint32_t GetHash(uint32_t value) {
 CORE_API inline uint32_t GetHash(int32_t value) {
     return value;
 }
-CORE_API inline uint32_t GetHash(uint8_t value) {
-    return value;
-}
+
 /*from UE5.03*/
 CORE_API FORCEINLINE uint32_t GetHash(uint64_t value) {
     return (uint32_t)value + ((uint32_t)(value >> 32) * 23);
@@ -153,6 +125,36 @@ CORE_API FORCEINLINE uint32_t GetHash(const EnumInByte<T>& t) {
 CORE_API FORCEINLINE uint32_t GetHash(const std::string& value) {
     return std::hash<std::string>{}(value);
 }
+
+template<concept_t_enum_underlying_uint8 TEnum>
+class CORE_API EnumInByte {
+public:
+    EnumInByte()                        = default;
+    EnumInByte(const EnumInByte& other) = default;
+    EnumInByte(TEnum _enum_value) : value(static_cast<uint8_t>(_enum_value)) {}
+    EnumInByte(uint8_t _value) : value(_value) {}
+    EnumInByte(uint32_t _value) : value(static_cast<uint8_t>(_value)) {}
+    EnumInByte(int32_t _value) : value(static_cast<uint8_t>(_value)) {}
+    EnumInByte& operator=(const EnumInByte&) = default;
+
+    operator TEnum() const { return (TEnum)value; }
+    bool operator==(const EnumInByte& other) {
+        return other.value == value;
+    }
+    bool operator==(TEnum other) {
+        return (TEnum)value == other;
+    }
+    bool operator==(uint8_t _value) {
+        return _value == value;
+    }
+    TEnum           GetValue() const { return (TEnum)value; }
+    friend uint32_t CORE_API inline GetHash(const EnumInByte& target) {
+        return GetHash(target.value);
+    };
+
+private:
+    uint8_t value;
+};
 
 struct SHA256Hash {
 public:

@@ -62,7 +62,7 @@ void Test() {
 
     VertexInputStateInitializerList vertex_init_list;
     for (int i = 0; i < 1; ++i) {
-        vertex_init_list[i].format          = EVertexElementType::VET_Float3;
+        vertex_init_list[i].format          = EPixelFormat::PF_R32G32B32_SFLOAT;
         vertex_init_list[i].offset          = 0;
         vertex_init_list[i].stride          = sizeof(Moer::Vector3f);
         vertex_init_list[i].input_rate      = EVertexInputRate::VIR_VERTEX;
@@ -83,6 +83,8 @@ void Test() {
 
     const float  vertex_data[] = {-1, -1, 0, 1, -1, 0, -1, 1, 0, 1, 1, 1};
     RHIBufferRef vertex_buffer = CreateBufferFromData(v_info, sizeof(vertex_data), (void*)vertex_data);
+
+    std::vector<RHIBufferRef> vertex_buffers = {vertex_buffer};
 
     shader_state.p_vertex_input_state = g_rhi->RHICreateVertexInputState(vertex_init_list);
 
@@ -109,7 +111,7 @@ void Test() {
     RHIRenderPassInfo pass_info;
     pass_info.GeneratePipelineAttachmentInfo();
     command_list->BeginRenderPass(pass_info, "triangle pass");
-    command_list->BindVertexBuffers(0, 1, vertex_buffer);
+    command_list->BindVertexBuffers(0, 1, vertex_buffers.data(), 0);
 
     command_list->DrawIndexedInstanced(1, 1, 0, 0);
 
