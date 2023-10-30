@@ -1600,6 +1600,7 @@ struct RHIShaderBoundStateInput : public RHIResource {
         RHIGeometryShader*   _geometry_shader)
         : RHIResource(RRT_SHADER_BOUND_STATE),
           p_vertex_input_state(_vertex_input_state),
+          p_vertex_shader(_vertex_shader),
           p_fragment_shader(_fragment_shader),
           p_geometry_shader(_geometry_shader) {}
 
@@ -2376,7 +2377,7 @@ struct RayTracingGeometryElement {
 
     uint32_t num_primitives;
 
-    EVertexElementType       vertex_element_type = VET_Float3;
+    EPixelFormat             vertex_element_type = PF_R32G32B32_SFLOAT;
     ERayTracingGeometryFlags geometry_flags      = ERayTracingGeometryFlags::NONE;
     bool                     enabled;
     uint8_t                  padding_0;

@@ -74,6 +74,8 @@ void VulkanSwapChain::Init(uint32_t* width, uint32_t* height, bool vsync) {
         m_swap_chain_buffers[i].image = m_swap_chain_images[i];
         m_swap_chain_buffers[i].view  = CreateImageView(m_swap_chain_images[i], surface_format.format, 1, VK_IMAGE_ASPECT_COLOR_BIT);
     }
+
+    LOG_INFO("Vulkan swapchain initialized with {} images.", image_count);
 }
 
 uint32_t VulkanSwapChain::AcquireNextImage() {
