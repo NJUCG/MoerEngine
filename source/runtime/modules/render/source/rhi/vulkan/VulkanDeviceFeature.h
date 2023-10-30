@@ -9,7 +9,7 @@
 
 class VulkanPhysicalDeviceFeatures {
 public:
-    VulkanPhysicalDeviceFeatures() {}
+    VulkanPhysicalDeviceFeatures() : core_1_0(), core_1_1(), core_1_2(), core_1_3() {}
 
     void Query(VkPhysicalDevice _gpu, uint32_t _api_version);
 

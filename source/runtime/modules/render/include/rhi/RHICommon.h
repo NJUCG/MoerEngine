@@ -496,7 +496,7 @@ enum ERHIPipelineStageFlags : uint32_t {
     PS_FRAGMENT_DENSITY_PROCESS         = 0x00800000,
     PS_FRAGMENT_SHADING_RATE_ATTACHMENT = 0x00400000,
     PS_COMMAND_PREPROCESS_BIT_NV        = 0x00020000,
-    PS_TASK_SHADER_BIT                  = 0x00080000,
+    PS_TASK_SHADER                      = 0x00080000,
     PS_MESH_SHADER                      = 0x00100000,
 };
 #pragma endregion
@@ -553,7 +553,7 @@ enum class ERHIAccessFlags : uint32_t {
     TRANSFORM_FEEDBACK_COUNTER_READ_BIT_EXT   = 1 << 21,
     TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT  = 1 << 22,
     CONDITIONAL_RENDERING_READ_BIT_EXT        = 1 << 23,
-    COMMAND_PREPROCESS_READ_BIT_VN            = 1 << 24,
+    COMMAND_PREPROCESS_READ_BIT_NV            = 1 << 24,
     COMMAND_PREPROCESS_WRITE_BIT_NV           = 1 << 25,
     FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT = 1 << 26,
     ACCELERATION_STRUCTURE_READ_BIT           = 1 << 27,
@@ -609,34 +609,15 @@ enum EShaderType : uint8_t {
     ST_NumBits = 4
 };
 static_assert(ST_Num <= (1 << ST_NumBits), "ST_Num exceeds ST_NumBits bound");
-enum EVertexElementType : uint8_t {
-    VET_None,
-    VET_Float1,
-    VET_Float2,
-    VET_Float3,
-    VET_Float4,
-    VET_PackedNormal,// FPackedNormal
-    VET_UByte4,
-    VET_UByte4N,
-    VET_Color,
-    VET_Short2,
-    VET_Short4,
-    VET_Short2N,// 16 bit word normalized to (value/32767.0,value/32767.0,0,0,1)
-    VET_Half2,  // 16 bit float using 1 bit sign, 5 bit exponent, 10 bit mantissa
-    VET_Half4,
-    VET_Short4N,// 4 X 16 bit word, normalized
-    VET_UShort2,
-    VET_UShort4,
-    VET_UShort2N, // 16 bit word normalized to (value/65535.0,value/65535.0,0,0,1)
-    VET_UShort4N, // 4 X 16 bit word unsigned, normalized
-    VET_URGB10A2N,// 10 bit r, g, b and 2 bit a normalized to (value/1023.0f, value/1023.0f, value/1023.0f, value/3.0f)
-    VET_UInt,
-    VET_Num,
-
-    VET_NumBits = 5,
+enum EIndexElementType : uint8_t {
+    IET_NONE,
+    IET_UINT8,
+    IET_UINT16,
+    IET_UINT32,
+    IET_Num,
+    IET_NumBits = 2
 };
-static_assert(VET_Num <= (1 << VET_NumBits), "VET_Num will not fit on VET_NumBits");
-
+static_assert(IET_Num <= (1 << IET_NumBits), "IET_Num will not fit on IET_NumBits");
 enum EVertexInputRate : uint8_t {
     VIR_VERTEX,
     VIR_INSTANCE,
@@ -804,20 +785,20 @@ ENUM_BIT_OP_IMPL(ETextureUsageFlags, FLAG)
 enum class ETextureAspectFlags : uint32_t {
     // no
     NONE,
-    COLOR         = 1 << 1,
-    DEPTH_SLICE   = 1 << 2,
-    STENCIL_SLICE = 1 << 3,
-    META_DATA     = 1 << 4,
+    COLOR         = 1 << 0,
+    DEPTH_SLICE   = 1 << 1,
+    STENCIL_SLICE = 1 << 2,
+    META_DATA     = 1 << 3,
     //for multi-planer texture
-    PLANE_0 = 1 << 5,
-    PLANE_1 = 1 << 6,
-    PLANE_2 = 1 << 7,
+    PLANE_0 = 1 << 4,
+    PLANE_1 = 1 << 5,
+    PLANE_2 = 1 << 6,
 
     //for ycbcr(used in video encoding, decoding) sampler color conversion
-    MEMORY_PLANE_0 = 1 << 8,
-    MEMORY_PLANE_1 = 1 << 9,
-    MEMORY_PLANE_2 = 1 << 10,
-    MEMORY_PLANE_3 = 1 << 11
+    MEMORY_PLANE_0 = 1 << 7,
+    MEMORY_PLANE_1 = 1 << 8,
+    MEMORY_PLANE_2 = 1 << 9,
+    MEMORY_PLANE_3 = 1 << 10
 };
 
 /* various shading rate palette, VSR_{fragment_invocation_count}_{region_size}
