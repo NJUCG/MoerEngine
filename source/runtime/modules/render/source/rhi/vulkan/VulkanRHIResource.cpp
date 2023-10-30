@@ -875,17 +875,17 @@ VkImageUsageFlags VulkanRHITexture::METoVKImageUsageFlags(ETextureUsageFlags _me
 
 #pragma region synchronization
 
-VulkanRHIFence::VulkanRHIFence(VulkanDevice* _device) : m_device(_device) {
+VulkanRHIFence::VulkanRHIFence(VulkanDevice* _device, EFenceUsage _usage) : m_device(_device) {
     // VkFenceCreateInfo create_info{};
 
     VkSemaphoreCreateInfo create_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+    if (_usage == EFenceUsage::TIMELINE) {
+        VkSemaphoreTypeCreateInfo timeline_semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
+        timeline_semaphore_info.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+        timeline_semaphore_info.initialValue  = 0;
 
-    VkSemaphoreTypeCreateInfo timeline_semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
-    timeline_semaphore_info.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
-    timeline_semaphore_info.initialValue  = 0;
-
-    create_info.pNext = &timeline_semaphore_info;
-    create_info.flags = VK_SEMAPHORE_IMPORT_FLAG_BITS_MAX_ENUM;
+        create_info.pNext = &timeline_semaphore_info;
+    }
 
     VK_CHECK_RESULT(vkCreateSemaphore(*m_device, &create_info, nullptr, &m_semaphore));
 }

@@ -5,6 +5,7 @@
 #include "RenderCommon.h"
 #include "math/Base.h"
 
+#include "misc/Hash.h"
 #include "misc/Ptr.h"
 #include "misc/CountableRef.h"
 
@@ -296,10 +297,16 @@ public:
         return shader_type;
     }
 
-    void        SetHash(const SHA256Hash& _hash) { hash = _hash; }
-    SHA256Hash  GetHash() const { return hash; }
+    void       SetHash(const Hash64City& _hash) { hash = _hash; }
+    Hash64City GetHash() const { return hash; }
+
     EShaderType shader_type;
-    SHA256Hash  hash;
+    Hash64City  hash;
+
+protected:
+    friend class RHIBatchedShaderParameters;
+    class Shader* GetMetaShader() const;
+    class Shader* meta_shader;
 };
 
 class RHIGraphicsShader : public RHIShader {
@@ -427,11 +434,19 @@ struct RHIBatchedShaderParameters {
         size_t data_size = sizeof(TRootParameter);
         SetParameters(shader, data_size, (uint8_t*)&params);
     }
+
+    template<concept_is_root_parameter_struct TRootParameter>
+    void SetParameters(class RHIShader* shader, const TRootParameter& params) {
+        size_t data_size = sizeof(TRootParameter);
+        SetParameters(shader, data_size, (uint8_t*)&params);
+    }
+
     const uint8_t* GetConstData(uint32_t byte_offset) const {
         return &raw_data[byte_offset];
     }
 
 private:
+    void SetParameters(RHIShader* shader, size_t _data_size, uint8_t* data_source);
     void SetParameters(class Shader* shader, size_t _data_size, uint8_t* data_source);
     //offset in raw_data, size, slot and space
     std::vector<RHIShaderResourceParameter> resource_parameters;
@@ -841,10 +856,11 @@ struct PipelineParametersBinding {
 #pragma region syncronization
 
 enum class EFenceUsage {
-
+    TIMELINE,
+    BINARY
 };
 struct RHIFenceCreateInfo {
-    EFenceUsage usage;
+    EFenceUsage usage = EFenceUsage::TIMELINE;
 };
 /* fences in dx12, fence and timeline semaphore in vulkan */
 class RHIFence : public RHIResource {

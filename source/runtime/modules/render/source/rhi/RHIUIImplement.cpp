@@ -12,7 +12,9 @@
 #include "shader/ShaderParameterMacros.h"
 #include "shader/ShaderResourceManager.h"
 
+#include <cstring>
 #include <imgui.h>
+#include <stdint.h>
 #include <vadefs.h>
 #include <vcruntime_string.h>
 
@@ -20,7 +22,7 @@ class ImGuiShaderVert : public Shader {
     DEFINE_SHADER_TYPE(ImGuiShaderVert, Global, RHI_API, ...)
 public:
     BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(UIVertex)
-    DEFINE_SHADER_PARAM(Moer::Matrix4x4f, ProjectionMatrix)
+    DEFINE_SHADER_PARAM(Moer::Matrix4x4f, mvp)
     END_SHADER_CONSTANT_STRUCT_DEFINITION()
     BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
 
@@ -49,10 +51,11 @@ inline GuiBackendData* GetBackendData() {
     return ImGui::GetCurrentContext() ? (GuiBackendData*)ImGui::GetIO().BackendRendererUserData : nullptr;
 }
 
-void DestroyRenderBuffers(GuiFrameRenderBuffers* buffer);
+void DestroyRenderBuffers(GuiFrameRenderBuffers* _render_buffers);
 
 bool CreateDeviceObjects();
 void CreateFontsTexture();
+void SetupRenderState(ImDrawData* draw_data, RHIGraphicsCommandList* commandList, GuiFrameRenderBuffers* render_buffers);
 void InvalidateDeviceObjects();
 
 bool RHI::GUIInit(uint32_t _num_frames_in_flight) {
@@ -106,7 +109,127 @@ void RHI::GUINewFrame() {
     if (!bd->pipeline)
         CreateDeviceObjects();
 }
-void RHI::GUIRender() {
+void RHI::GUIRender(RHIGraphicsCommandList* _ui_command_list) {
+
+    ImDrawData*  draw_data       = ImGui::GetDrawData();
+    Shader*      frag_shader     = ShaderResourceManager::GetShader<ImGuiShaderFrag>();
+    RHIShaderRef frag_rhi_shader = g_rhi->RHICreateShader(frag_shader);
+
+    GuiBackendData*  backend_data  = GetBackendData();
+    GuiViewportData* viewport_data = (GuiViewportData*)draw_data->OwnerViewport->RendererUserData;
+
+    //todo frame_index should not manage here
+    viewport_data->frame_index += 1;
+    GuiFrameRenderBuffers* render_buffers = &viewport_data->render_buffers[viewport_data->frame_index % backend_data->num_frames_in_flight];
+
+    if (render_buffers->vertex_buffer == nullptr || render_buffers->vertex_buffer->GetSize() < draw_data->TotalVtxCount * sizeof(ImDrawVert)) {
+        //delete the old one and create new
+        render_buffers->vertex_buffer->DeRef();
+        uint32_t new_size             = (draw_data->TotalVtxCount + 4096) * sizeof(ImDrawVert);
+        render_buffers->vertex_buffer = g_rhi->RHICreateBuffer(RHIBufferCreateInfo::Create(new_size, sizeof(ImDrawVert), EBufferUsageFlags::VERTEX_BUFFER));
+    }
+    if (render_buffers->index_buffer == nullptr || render_buffers->index_buffer->GetSize() < draw_data->TotalIdxCount * sizeof(ImDrawIdx)) {
+        render_buffers->index_buffer->DeRef();
+        uint32_t new_size            = (draw_data->TotalIdxCount + 8192) * sizeof(ImDrawIdx);
+        render_buffers->index_buffer = g_rhi->RHICreateBuffer(RHIBufferCreateInfo::Create(new_size, sizeof(ImDrawIdx), EBufferUsageFlags::INDEX_BUFFER));
+    }
+
+    ImDrawVert* vertex_dst = nullptr;
+    ImDrawIdx*  index_dst  = nullptr;
+
+    vertex_dst = (ImDrawVert*)g_rhi->RHIMapBuffer(render_buffers->vertex_buffer, 0, UINT64_MAX);
+    index_dst  = (ImDrawIdx*)g_rhi->RHIMapBuffer(render_buffers->index_buffer, 0, UINT64_MAX);
+
+    for (int32_t n = 0; n < draw_data->CmdListsCount; n++) {
+        const ImDrawList* cmd_list = draw_data->CmdLists[n];
+        memcpy(vertex_dst, cmd_list->VtxBuffer.Data, cmd_list->VtxBuffer.Size * sizeof(ImDrawVert));
+        memcpy(index_dst, cmd_list->IdxBuffer.Data, cmd_list->IdxBuffer.Size * sizeof(ImDrawIdx));
+
+        vertex_dst += cmd_list->VtxBuffer.Size;
+        index_dst += cmd_list->IdxBuffer.Size;
+    }
+    g_rhi->RHIUnmapBuffer(render_buffers->vertex_buffer);
+    g_rhi->RHIUnmapBuffer(render_buffers->index_buffer);
+
+    SetupRenderState(draw_data, _ui_command_list, render_buffers);
+    int32_t global_vertex_offset = 0,
+            global_index_offset  = 0;
+
+    ImVec2 clip_off = draw_data->DisplayPos;
+    for (int32_t n = 0; n < draw_data->CmdListsCount; n++) {
+        const ImDrawList* cmd_list = draw_data->CmdLists[n];
+        for (int32_t cmd_index; cmd_list->CmdBuffer.Size; cmd_index++) {
+            const ImDrawCmd* cmd = &cmd_list->CmdBuffer[cmd_index];
+            if (cmd->UserCallback != nullptr) {
+                if (cmd->UserCallback == ImDrawCallback_ResetRenderState) {
+                    SetupRenderState(draw_data, _ui_command_list, render_buffers);
+                } else {
+                    cmd->UserCallback(cmd_list, cmd);
+                }
+            } else {
+                // Project scissor/clipping rectangles into framebuffer space
+                ImVec2 clip_min(cmd->ClipRect.x - clip_off.x, cmd->ClipRect.y - clip_off.y);
+                ImVec2 clip_max(cmd->ClipRect.z - clip_off.x, cmd->ClipRect.w - clip_off.y);
+                if (clip_max.x <= clip_min.x || clip_max.y <= clip_min.y)
+                    continue;
+
+                Rect2D r = {(int32_t)clip_min.x, (int32_t)clip_min.y, (uint32_t)(clip_max.x - clip_min.x), uint32_t(clip_max.y - clip_min.y)};
+
+                RHIShaderResourceView* texture_view = (RHIShaderResourceView*)cmd->GetTexID();
+
+                ImGuiShaderFrag::Parameters params;
+                params.texture0 = texture_view;
+
+                RHIBatchedShaderParameters batched_params;
+                batched_params.SetParameters(frag_shader, params);
+
+                _ui_command_list->SetBatchedShaderParameter(frag_rhi_shader, batched_params);
+                _ui_command_list->SetScissor(r);
+                _ui_command_list->DrawIndexedInstanced(cmd->ElemCount, 1, cmd->IdxOffset, cmd->VtxOffset + global_vertex_offset);
+            }
+        }
+        global_index_offset += cmd_list->IdxBuffer.Size;
+        global_vertex_offset += cmd_list->VtxBuffer.Size;
+    }
+}
+
+void SetupRenderState(ImDrawData* draw_data, RHIGraphicsCommandList* commandList, GuiFrameRenderBuffers* render_buffers) {
+    GuiBackendData* backend_data = GetBackendData();
+
+    ImGuiShaderVert::Parameters param;
+    std::memset(&param.vertexBuffer, 0, sizeof(param.vertexBuffer));
+    {
+        float l = draw_data->DisplayPos.x;
+        float r = draw_data->DisplayPos.x + draw_data->DisplaySize.x;
+        float t = draw_data->DisplayPos.y;
+        float b = draw_data->DisplayPos.y + draw_data->DisplaySize.y;
+        float mvp[4][4] =
+            {
+                {2.0f / (r - l), 0.0f, 0.0f, 0.0f},
+                {0.0f, 2.0f / (t - b), 0.0f, 0.0f},
+                {0.0f, 0.0f, 0.5f, 0.0f},
+                {(r + l) / (l - r), (t + b) / (b - t), 0.5f, 1.0f},
+            };
+        memcpy(&param.vertexBuffer.mvp, mvp, sizeof(mvp));
+    }
+    ImGuiShaderFrag::Parameters frag_param;
+    frag_param.sampler0 = backend_data->font_sampler;
+
+    ViewPort view_port(0, 0, draw_data->DisplaySize.x, draw_data->DisplaySize.y, 0.f, 1.f);
+    commandList->SetViewPort(view_port);
+
+    uint32_t offsets[] = {0};
+    commandList->BindVertexBuffers(0, 1, &render_buffers->vertex_buffer, offsets);
+    commandList->BindIndexBuffer(render_buffers->index_buffer.Get(), 0, EIndexElementType::IET_UINT16);
+
+    RHIBatchedShaderParameters batched_params;
+
+    batched_params.SetParameters(backend_data->shader_module_vert, param);
+    batched_params.SetParameters(backend_data->shader_module_frag, frag_param);
+
+    commandList->SetPipelineState(backend_data->pipeline);
+    commandList->SetBatchedShaderParameter(nullptr, batched_params);
+    //blend factor?
 }
 
 //
@@ -120,22 +243,29 @@ void InvalidateDeviceObjects() {
     //todo: destroy maybe?
     bd->pipeline->DeRef();
     bd->font_texture->DeRef();
+    bd->font_view->DeRef();
+    bd->font_sampler->DeRef();
+
+    bd->shader_module_frag->DeRef();
+    bd->shader_module_vert->DeRef();
+
     io.Fonts->SetTexID(0);// We copied bd->pFontTextureView to io.Fonts->TexID so let's clear that as well.
 }
 bool CreateDeviceObjects() {
-    GuiBackendData* bd = GetBackendData();
-    if (!bd)
+    GuiBackendData* backend_data = GetBackendData();
+    if (!backend_data)
         return false;
-    if (bd->pipeline)
+    if (backend_data->pipeline)
         InvalidateDeviceObjects();
 
     RHISamplerInitializer sampler_init(ESamplerFilter::SF_LINEAR);
-    sampler_init.compare_op = CO_ALWAYS;
-    RHISamplerRef sampler   = g_rhi->RHICreateSampler(sampler_init);
+    sampler_init.compare_op    = CO_ALWAYS;
+    RHISamplerRef sampler      = g_rhi->RHICreateSampler(sampler_init);
+    backend_data->font_sampler = sampler;
 
     RHIGraphicsPipelineStateInitializer pso_init;
 
-    pso_init.color_attachment_formats[0] = bd->attachment_format;
+    pso_init.color_attachment_formats[0] = backend_data->attachment_format;
     pso_init.color_attachment_flags[0]   = ETextureUsageFlags::COLOR_ATTACHMENT;
     pso_init.color_attachment_count      = pso_init.CalcValidColorAttachmentCount();
 
@@ -194,9 +324,9 @@ bool CreateDeviceObjects() {
     pso_init.rasterizer_state    = g_rhi->RHICreateRasterizationState(rast_init);
     pso_init.depth_stencil_state = g_rhi->RHICreateDepthStencilState(depth_stencil_init);
 
-    bd->pipeline = g_rhi->RHICreateGraphicsPipelineState(pso_init);
-
-    // ImGui_ImplDX12_CreateFontsTexture();
+    backend_data->pipeline = g_rhi->RHICreateGraphicsPipelineState(pso_init);
+    //font texture and srv
+    CreateFontsTexture();
 
     return true;
 };
@@ -285,13 +415,37 @@ void CreateFontsTexture() {
         command_list->Close();
 
         RHICommandQueue* queue = g_rhi->CreateCommandQueue(ECommandQueueType::GRAPHICS);
-        queue->SubmitCommands(1, command_list);
 
-        RHIFenceRef fence = g_rhi->RHICreateFence("font_tex_creation");
+        RHIFenceCreateInfo fence_info{EFenceUsage::TIMELINE};
+        RHIFenceRef        fence = g_rhi->RHICreateFence(fence_info);
+
+        RHISubmitInfo submit_info;
+
+        uint64_t wait_value = 1;
+        submit_info.Signal(fence, wait_value);
+        queue->SubmitCommands(1, command_list, &submit_info);
+
+        fence->Wait(wait_value);
+
+        auto srv_info = RHIViewInfo::CreateTextureSRVInfo()
+                            .SetFormat(PF_R8G8B8A8_UNORM)
+                            .SetDimension(ETextureDimension::TEX_2D)
+                            .SetMipRange(0, 1);
+
+        backend_data->font_view    = g_rhi->RHICreateShaderResourceView(font_texture, srv_info);
+        backend_data->font_texture = font_texture;
     }
+    io.Fonts->SetTexID((ImTextureID)backend_data->font_view);
 }
 void GuiInitPlatformInterface() {
 }
 
-void DestroyRenderBuffers(GuiFrameRenderBuffers* buffer) {
+void DestroyRenderBuffers(GuiFrameRenderBuffers* _render_buffers) {
+    _render_buffers->index_buffer->DeRef();
+    _render_buffers->vertex_buffer->DeRef();
+}
+
+static void GuiCreateWindow(ImGuiViewport* viewport) {
+    GuiBackendData*  backend_data  = GetBackendData();
+    GuiViewportData* viewport_data = IM_NEW(GuiViewportData)(backend_data->num_frames_in_flight);
 }

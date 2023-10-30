@@ -344,7 +344,7 @@ private:
 
 class VulkanRHIFence final : public RHIFence {
 public:
-    VulkanRHIFence(VulkanDevice* _device);
+    VulkanRHIFence(VulkanDevice* _device, EFenceUsage _usage);
 
     uint64_t GetValue() const override;
 
@@ -352,7 +352,6 @@ public:
 
 private:
     VulkanDevice* m_device;
-    VkFence       m_fence;
     VkSemaphore   m_semaphore;
 };
 

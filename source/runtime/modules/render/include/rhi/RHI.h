@@ -50,7 +50,7 @@ public:
 
     virtual RHIShaderLibraryRef RHICreateShaderLibrary(EShaderPlatform _platform, const std::string& _file_path, const std::string& name) { return nullptr; };
 
-    virtual RHIFenceRef RHICreateFence(const std::string& name) = 0;
+    virtual RHIFenceRef RHICreateFence(const RHIFenceCreateInfo&) = 0;
 
     virtual RHIShaderBoundStateRef RHICreateShaderBoundStage(
         RHIVertexInputState* _vertex_input,
@@ -94,7 +94,7 @@ public:
     virtual bool GUIInit(uint32_t _num_frames_in_flight);
     virtual void GUIShutDown();
     virtual void GUINewFrame();
-    virtual void GUIRender();
+    virtual void GUIRender(RHIGraphicsCommandList* _ui_command_list);
 #pragma endregion
 
 protected:

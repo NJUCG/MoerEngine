@@ -35,7 +35,7 @@ public:
 
     RHIShaderLibraryRef RHICreateShaderLibrary(EShaderPlatform _platform, const std::string& _file_path, const std::string& name) override { return RHIShaderLibraryRef{}; }
 
-    RHIFenceRef RHICreateFence(const std::string& name) override { return RHIFenceRef{}; }
+    RHIFenceRef RHICreateFence(const RHIFenceCreateInfo&) override { return RHIFenceRef{}; }
 
     RHIShaderBoundStateRef RHICreateShaderBoundStage(
         RHIVertexInputState* _vertex_input,
