@@ -10,6 +10,8 @@
 #include "VulkanRHIInitializer.h"
 #include "VulkanExtension.h"
 
+#include "shader/Shader.h"
+
 #include "VulkanDebug.h"
 #include "VulkanUtil.h"
 
@@ -21,15 +23,14 @@
 
 #include <GLFW/glfw3.h>
 
+#include <unordered_map>
 #include <string>
-
-const char* vk_layer = MACRO_STR(VK_LAYER_PATH);
+#include <set>
 
 namespace VkUtil = Moer::RHI::Vulkan::Util;
 
 VulkanRHIImpl::VulkanRHIImpl(GLFWwindow* _window) : m_instance(VK_NULL_HANDLE), m_device(nullptr), m_current_viewport(nullptr) {
     LOG_INFO("Built with Vulkan header version {0:d}.{1:d}.{2:d}", VK_API_VERSION_MAJOR(VK_HEADER_VERSION_COMPLETE), VK_API_VERSION_MINOR(VK_HEADER_VERSION_COMPLETE), VK_API_VERSION_PATCH(VK_HEADER_VERSION_COMPLETE));
-    // SetEnvironmentVariableA("VK_LAYER_PATH", vk_layer);
 
     CreateInstance();
     InitSurface(_window);
@@ -38,6 +39,10 @@ VulkanRHIImpl::VulkanRHIImpl(GLFWwindow* _window) : m_instance(VK_NULL_HANDLE), 
 void VulkanRHIImpl::Initialize() {
     InitVulkan();
     InitVulkanMemoryAllocator();
+}
+
+void VulkanRHIImpl::PostInit() {
+    LOG_INFO("VulkanRHIImpl::PostInit()");
 }
 
 void VulkanRHIImpl::ShutDown() {
@@ -89,42 +94,42 @@ RHIVertexInputStateRef VulkanRHIImpl::RHICreateVertexInputState(const VertexInpu
 }
 
 RHIVertexShaderRef VulkanRHIImpl::RHICreateVertexShader(const Shader* shader) {
-    auto* vk_shader = new VulkanRHIVertexShader();
+    auto* vk_shader = new VulkanRHIVertexShader(shader);
     vk_shader->CreateShaderModule(m_device, shader->GetCodeEntry()->code);
 
     return RHIVertexShaderRef(vk_shader);
 }
 
 RHIFragmentShaderRef VulkanRHIImpl::RHICreateFragmentShader(const Shader* shader) {
-    auto* vk_shader = new VulkanRHIFragmentShader();
+    auto* vk_shader = new VulkanRHIFragmentShader(shader);
     vk_shader->CreateShaderModule(m_device, shader->GetCodeEntry()->code);
 
     return RHIFragmentShaderRef(vk_shader);
 }
 
 RHIGeometryShaderRef VulkanRHIImpl::RHICreateGeometryShader(const Shader* shader) {
-    auto* vk_shader = new VulkanRHIGeometryShader();
+    auto* vk_shader = new VulkanRHIGeometryShader(shader);
     vk_shader->CreateShaderModule(m_device, shader->GetCodeEntry()->code);
 
     return RHIGeometryShaderRef(vk_shader);
 }
 
 RHIMeshShaderRef VulkanRHIImpl::RHICreateMeshShader(const Shader* shader) {
-    auto* vk_shader = new VulkanRHIMeshShader();
+    auto* vk_shader = new VulkanRHIMeshShader(shader);
     vk_shader->CreateShaderModule(m_device, shader->GetCodeEntry()->code);
 
     return RHIMeshShaderRef(vk_shader);
 }
 
 RHIAmplificationShaderRef VulkanRHIImpl::RHICreateAmplificationShader(const Shader* shader) {
-    auto* vk_shader = new VulkanRHIAmplificationShader();
+    auto* vk_shader = new VulkanRHIAmplificationShader(shader);
     vk_shader->CreateShaderModule(m_device, shader->GetCodeEntry()->code);
 
     return RHIAmplificationShaderRef(vk_shader);
 }
 
 RHIComputeShaderRef VulkanRHIImpl::RHICreateComputeShader(const Shader* shader) {
-    auto* vk_shader = new VulkanRHIComputeShader();
+    auto* vk_shader = new VulkanRHIComputeShader(shader);
     vk_shader->CreateShaderModule(m_device, shader->GetCodeEntry()->code);
 
     return RHIComputeShaderRef(vk_shader);
@@ -142,7 +147,12 @@ RHIShaderBoundStateRef VulkanRHIImpl::RHICreateShaderBoundStage(
     RHIVertexInputState* _vertex_input,
     RHIVertexShader*     _vertex_shader,
     RHIFragmentShader*   _fragment_shader,
-    RHIGeometryShader*   _geometry_shader) { return RHIShaderBoundStateRef{}; }
+    RHIGeometryShader*   _geometry_shader) {
+
+    auto* input = new RHIShaderBoundStateInput(_vertex_input, _vertex_shader, _fragment_shader, _geometry_shader);
+
+    return RHIShaderBoundStateRef(input);
+}
 
 RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const RHIGraphicsPipelineStateInitializer& _init) {
     VulkanRHIGraphicsPipelineState* vk_pipeline = new VulkanRHIGraphicsPipelineState();
@@ -158,8 +168,8 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
         color_attachment_formats[i] = VkFormat(_init.color_attachment_formats[i]);
     }
     rendering_create_info.pColorAttachmentFormats = color_attachment_formats.data();
-    rendering_create_info.depthAttachmentFormat   = VkFormat(_init.depth_stencil_format);
-    rendering_create_info.stencilAttachmentFormat = VkFormat(_init.depth_stencil_format);
+    rendering_create_info.depthAttachmentFormat   = VulkanEnumTranslator::METoVKFormat(_init.depth_stencil_format);
+    rendering_create_info.stencilAttachmentFormat = VulkanEnumTranslator::METoVKFormat(_init.depth_stencil_format);
 
     // shader stage
     auto shader_stages = VulkanRHIGraphicsPipelineState::METoVKShaderStageCreateInfo(_init.shader_stage);
@@ -172,7 +182,7 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
     input_assembly_state.sType                  = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
     input_assembly_state.pNext                  = nullptr;
     input_assembly_state.flags                  = 0;
-    input_assembly_state.topology               = VulkanRHIGraphicsPipelineState::METoVKPrimitiveTopology(_init.primitive_topology);
+    input_assembly_state.topology               = VulkanEnumTranslator::METoVKPrimitiveTopology(_init.primitive_topology);
     input_assembly_state.primitiveRestartEnable = VK_FALSE;
 
     // viewport state
@@ -184,35 +194,23 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
     viewport_state.scissorCount  = _init.multi_view_count;
 
     // rasterization state
-    auto* vk_rasterizer_state = dynamic_cast<VulkanRHIRasterizationState*>(_init.rasterizer_state);
-    if (vk_rasterizer_state == nullptr) {
-        LOG_CRITICAL("RHICreateGraphicsPipelineState: Invalid rasterization state type: {}.", typeid(_init.rasterizer_state).name());
-        return RHIGraphicsPipelineStateRef{};
-    }
+    auto* vk_rasterizer_state = static_cast<VulkanRHIRasterizationState*>(_init.rasterizer_state);
+    VK_CHECK_NULLPTR(vk_rasterizer_state, "RHICreateGraphicsPipelineState: initializer's rasterization state is nullptr!", RHIGraphicsPipelineStateRef{});
     auto rasterization_state = vk_rasterizer_state->GetHandle();
 
     // multisample state
-    auto* vk_multisample_state = dynamic_cast<VulkanRHIMultisampleState*>(_init.multisample_state);
-    if (vk_multisample_state == nullptr) {
-        LOG_CRITICAL("RHICreateGraphicsPipelineState: Invalid multisample state type: {}.", typeid(_init.multisample_state).name());
-        return RHIGraphicsPipelineStateRef{};
-    }
+    auto* vk_multisample_state = static_cast<VulkanRHIMultisampleState*>(_init.multisample_state);
+    VK_CHECK_NULLPTR(vk_multisample_state, "RHICreateGraphicsPipelineState: initializer's multisample state is nullptr!", RHIGraphicsPipelineStateRef{});
     auto multisample_state = vk_multisample_state->GetHandle();
 
     // depth stencil state
-    auto* vk_depth_stencil_state = dynamic_cast<VulkanRHIDepthStencilState*>(_init.depth_stencil_state);
-    if (vk_depth_stencil_state == nullptr) {
-        LOG_CRITICAL("RHICreateGraphicsPipelineState: Invalid depth stencil state type: {}.", typeid(_init.depth_stencil_state).name());
-        return RHIGraphicsPipelineStateRef{};
-    }
+    auto* vk_depth_stencil_state = static_cast<VulkanRHIDepthStencilState*>(_init.depth_stencil_state);
+    VK_CHECK_NULLPTR(vk_depth_stencil_state, "RHICreateGraphicsPipelineState: initializer's depth stencil state is nullptr!", RHIGraphicsPipelineStateRef{});
     auto depth_stencil_state = vk_depth_stencil_state->GetHandle();
 
     // color blend state
-    auto* vk_blend_state = dynamic_cast<VulkanRHIBlendState*>(_init.blend_state);
-    if (vk_blend_state == nullptr) {
-        LOG_CRITICAL("RHICreateGraphicsPipelineState: Invalid color blend state type: {}.", typeid(_init.blend_state).name());
-        return RHIGraphicsPipelineStateRef{};
-    }
+    auto* vk_blend_state = static_cast<VulkanRHIBlendState*>(_init.blend_state);
+    VK_CHECK_NULLPTR(vk_blend_state, "RHICreateGraphicsPipelineState: initializer's color blend state is nullptr!", RHIGraphicsPipelineStateRef{});
     auto color_blend_state = vk_blend_state->GetHandle();
 
     // dynamic state
@@ -223,6 +221,60 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
     dynamic_state.flags             = 0;
     dynamic_state.dynamicStateCount = states.size();
     dynamic_state.pDynamicStates    = states.data();
+
+    // pipeline layout
+    std::vector<Shader*> shaders;
+
+    using VulkanDescriptorSetLayout = std::pair<VkDescriptorSetLayout, std::vector<VkDescriptorSetLayoutBinding>>;
+
+    std::unordered_map<uint8_t, VulkanDescriptorSetLayout> layout_mappings;
+
+    // construct layout mappings
+    for (const auto* shader : shaders) {
+        auto infos = shader->GetRootParametersLayoutInfo().GetLayoutInfos();
+
+        for (const auto& info : infos) {
+            VkDescriptorSetLayoutBinding binding;
+            binding.binding            = info.slot;
+            binding.descriptorType     = VulkanEnumTranslator::METoVKDescriptorType(info.type);
+            binding.descriptorCount    = 1;
+            binding.stageFlags         = VulkanEnumTranslator::METoVKShaderStageFlags(shader->GetShaderType());
+            binding.pImmutableSamplers = nullptr;
+
+            layout_mappings[info.space].second.push_back(binding);
+        }
+    }
+
+    // create descriptor set layouts
+    for (auto& [space, layout] : layout_mappings) {
+        VkDescriptorSetLayoutCreateInfo layout_create_info{};
+        layout_create_info.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        layout_create_info.pNext        = nullptr;
+        layout_create_info.flags        = 0;
+        layout_create_info.bindingCount = layout.second.size();
+        layout_create_info.pBindings    = layout.second.data();
+
+        VK_CHECK_RESULT(vkCreateDescriptorSetLayout(*m_device, &layout_create_info, nullptr, &layout.first));
+    }
+
+    // extract descriptor set layouts
+    std::vector<VkDescriptorSetLayout> layouts;
+    for (auto& [space, layout] : layout_mappings) {
+        layouts.push_back(layout.first);
+    }
+
+    // create pipeline layout
+    VkPipelineLayoutCreateInfo pipeline_layout_create_info{};
+    pipeline_layout_create_info.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pipeline_layout_create_info.pNext                  = nullptr;
+    pipeline_layout_create_info.flags                  = 0;
+    pipeline_layout_create_info.setLayoutCount         = layouts.size();
+    pipeline_layout_create_info.pSetLayouts            = layouts.data();
+    pipeline_layout_create_info.pushConstantRangeCount = 0;
+    pipeline_layout_create_info.pPushConstantRanges    = nullptr;
+
+    VkPipelineLayout pipeline_layout;
+    vkCreatePipelineLayout(*m_device, &pipeline_layout_create_info, nullptr, &pipeline_layout);
 
     VkGraphicsPipelineCreateInfo pipeline_create_info{};
     pipeline_create_info.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
@@ -239,7 +291,7 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
     pipeline_create_info.pDepthStencilState  = &depth_stencil_state;
     pipeline_create_info.pColorBlendState    = &color_blend_state;
     pipeline_create_info.pDynamicState       = &dynamic_state;
-    pipeline_create_info.layout              = nullptr;// MARK...
+    pipeline_create_info.layout              = pipeline_layout;
     pipeline_create_info.basePipelineHandle  = nullptr;// MARK...
     pipeline_create_info.basePipelineIndex   = -1;
 
@@ -251,11 +303,8 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
 RHIComputePipelineStateRef VulkanRHIImpl::RHICreateComputePipelineState(RHIComputeShader* _compute_shader) { return RHIComputePipelineStateRef{}; }
 
 void VulkanRHIImpl::RHIUploadBuffer(RHIBufferRef _buffer_ref, const uint8_t* _data, uint32_t _size) {
-    auto* vk_buffer = dynamic_cast<VulkanRHIBuffer*>(_buffer_ref.Get());
-    if (vk_buffer == nullptr) {
-        LOG_CRITICAL("RHIUploadBuffer: Invalid RHIBufferRef type: {}.", typeid(_buffer_ref).name());
-        return;
-    }
+    auto* vk_buffer = static_cast<VulkanRHIBuffer*>(_buffer_ref.Get());
+    VK_CHECK_NULLPTR(vk_buffer, "RHIUploadBuffer: buffer to be uploaded is nullptr!");
 
     VulkanRHIBuffer* staging_buffer = static_cast<VulkanRHIBuffer*>(RHICreateBuffer({_size, 1, EBufferUsageFlags::TRANSFER_SRC}).Get());
 
@@ -268,15 +317,14 @@ void VulkanRHIImpl::RHIUploadBuffer(RHIBufferRef _buffer_ref, const uint8_t* _da
 }
 
 void VulkanRHIImpl::RHICopyBuffer(RHIBuffer* _src, RHIBuffer* _dst) {
-    if (_src->GetInfo().size != _dst->GetInfo().size) {
-        LOG_CRITICAL("RHICopyBuffer: Source buffer size {} is not equal to destination buffer size {}.", _src->GetInfo().size, _dst->GetInfo().size);
+    auto* src = static_cast<VulkanRHIBuffer*>(_src);
+    auto* dst = static_cast<VulkanRHIBuffer*>(_dst);
+    if (src == nullptr || dst == nullptr) {
+        LOG_CRITICAL("RHICopyBuffer: buffer src or dst is nullptr, src: {}, dst: {}.", typeid(_src).name(), typeid(_dst).name());
         return;
     }
-
-    auto src = dynamic_cast<VulkanRHIBuffer*>(_src);
-    auto dst = dynamic_cast<VulkanRHIBuffer*>(_dst);
-    if (src == nullptr || dst == nullptr) {
-        LOG_CRITICAL("RHICopyBuffer: Invalid RHIBuffer type, src: {}, dst: {}.", typeid(_src).name(), typeid(_dst).name());
+    if (_src->GetInfo().size != _dst->GetInfo().size) {
+        LOG_CRITICAL("RHICopyBuffer: Source buffer size {} is not equal to destination buffer size {}.", _src->GetInfo().size, _dst->GetInfo().size);
         return;
     }
 
@@ -311,11 +359,8 @@ RHIBufferRef VulkanRHIImpl::RHICreateBuffer(const RHIBufferCreateInfo& info) {
 }
 
 void* VulkanRHIImpl::RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size) {
-    auto* vk_buffer = dynamic_cast<VulkanRHIBuffer*>(_buffer);
-    if (vk_buffer == nullptr) {
-        LOG_CRITICAL("RHIMapBuffer: Invalid RHIBuffer type: {}.", typeid(*_buffer).name());
-        return nullptr;
-    }
+    auto* vk_buffer = static_cast<VulkanRHIBuffer*>(_buffer);
+    VK_CHECK_NULLPTR(vk_buffer, "RHIMapBuffer: buffer to be mapped is nullptr!", nullptr);
 
     void* p_data;
     VK_CHECK_RESULT(vmaMapMemory(m_allocator, vk_buffer->m_alloc.alloc, &p_data));
@@ -323,11 +368,8 @@ void* VulkanRHIImpl::RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t
     return p_data;
 }
 void VulkanRHIImpl::RHIUnmapBuffer(RHIBuffer* _buffer) {
-    auto* vk_buffer = dynamic_cast<VulkanRHIBuffer*>(_buffer);
-    if (vk_buffer == nullptr) {
-        LOG_CRITICAL("RHIUnmapBuffer: Invalid RHIBuffer type: {}.", typeid(*_buffer).name());
-        return;
-    }
+    auto* vk_buffer = static_cast<VulkanRHIBuffer*>(_buffer);
+    VK_CHECK_NULLPTR(vk_buffer, "RHIUnmapBuffer: buffer to be unmapped is nullptr!");
 
     vmaUnmapMemory(m_allocator, vk_buffer->m_alloc.alloc);
 }
@@ -340,7 +382,7 @@ RHITextureRef VulkanRHIImpl::RHICreateTexture(const RHITextureCreateInfo& info) 
     image_create_info.pNext                 = nullptr;
     image_create_info.flags                 = 0;
     image_create_info.imageType             = VulkanRHITexture::METoVKImageType(info.dimension);
-    image_create_info.format                = VkFormat(info.format);
+    image_create_info.format                = VulkanEnumTranslator::METoVKFormat(info.format);
     image_create_info.extent.width          = info.extent.x;
     image_create_info.extent.height         = info.extent.y;
     image_create_info.extent.depth          = info.depth;
@@ -371,15 +413,12 @@ RHIShaderResourceViewRef VulkanRHIImpl::RHICreateShaderResourceView(RHIViewableR
     image_view_create_info.pNext = nullptr;
     image_view_create_info.flags = 0;
 
-    auto* vk_texture = dynamic_cast<VulkanRHITexture*>(_resource);
-    if (vk_texture == nullptr) {
-        LOG_CRITICAL("Invalid RHIViewableResource input: {}", static_cast<void*>(_resource));
-        return nullptr;
-    }
+    auto* vk_texture = static_cast<VulkanRHITexture*>(_resource);
+    VK_CHECK_NULLPTR(vk_texture, "RHICreateShaderResourceView: resource to be viewed is nullptr!", RHIShaderResourceViewRef{});
 
     image_view_create_info.image                           = vk_texture->GetHandle();
     image_view_create_info.viewType                        = VulkanEnumTranslator::METoVKImageViewType(_view_info.texture.srv.dimension);
-    image_view_create_info.format                          = VkFormat(_view_info.texture.srv.format);
+    image_view_create_info.format                          = VulkanEnumTranslator::METoVKFormat(_view_info.texture.srv.format);
     image_view_create_info.components                      = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
     image_view_create_info.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;// MARK...
     image_view_create_info.subresourceRange.baseMipLevel   = _view_info.texture.srv.mip_min;
@@ -400,15 +439,12 @@ RHIUnorderedAccessViewRef VulkanRHIImpl::RHICreateUnorderedAccessView(RHIViewabl
     image_view_create_info.pNext = nullptr;
     image_view_create_info.flags = 0;
 
-    auto* vk_texture = dynamic_cast<VulkanRHITexture*>(_resource);
-    if (vk_texture == nullptr) {
-        LOG_CRITICAL("Invalid RHIViewableResource input: {}", typeid(*_resource).name());
-        return nullptr;
-    }
+    auto* vk_texture = static_cast<VulkanRHITexture*>(_resource);
+    VK_CHECK_NULLPTR(vk_texture, "RHICreateUnorderedAccessView: resource to be viewed is nullptr!", RHIUnorderedAccessViewRef{});
 
     image_view_create_info.image                           = vk_texture->GetHandle();
     image_view_create_info.viewType                        = VulkanEnumTranslator::METoVKImageViewType(_view_info.texture.uav.dimension);
-    image_view_create_info.format                          = VkFormat(_view_info.texture.uav.format);
+    image_view_create_info.format                          = VulkanEnumTranslator::METoVKFormat(_view_info.texture.uav.format);
     image_view_create_info.components                      = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
     image_view_create_info.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;// MARK...
     image_view_create_info.subresourceRange.baseMipLevel   = _view_info.texture.uav.mip_min;
@@ -422,6 +458,14 @@ RHIUnorderedAccessViewRef VulkanRHIImpl::RHICreateUnorderedAccessView(RHIViewabl
 }
 
 RHICommandQueue* VulkanRHIImpl::CreateCommandQueue(ECommandQueueType type) {
+    return nullptr;
+}
+
+RHIGraphicsCommandList* VulkanRHIImpl::CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state) {
+    return new VulkanRHIGraphicsCommandList(m_device, m_device->GetDefaultCommandPool(), VK_COMMAND_BUFFER_LEVEL_PRIMARY);
+}
+
+RHIComputeCommandList* VulkanRHIImpl::CreateComputeCommandList(RHIComputePipelineState* _initial_state) {
     return nullptr;
 }
 
@@ -439,14 +483,6 @@ RHIShaderRef VulkanRHIImpl::RHICreateShader(Shader* shader) {
 
     //todo: create shader from information above
 
-    return nullptr;
-}
-
-RHIGraphicsCommandList* VulkanRHIImpl::CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state) {
-    return new VulkanRHIGraphicsCommandList(m_device, m_device->GetDefaultCommandPool(), VK_COMMAND_BUFFER_LEVEL_PRIMARY);
-}
-
-RHIComputeCommandList* VulkanRHIImpl::CreateComputeCommandList(RHIComputePipelineState* _initial_state) {
     return nullptr;
 }
 
@@ -477,12 +513,20 @@ void VulkanRHIImpl::InitVulkan() {
 void VulkanRHIImpl::InitVulkanMemoryAllocator() {
     VmaAllocatorCreateInfo alloc_create_info{};
 
+    VmaVulkanFunctions vma_functions{};
+    vma_functions.vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)vkGetInstanceProcAddr;
+    vma_functions.vkGetDeviceProcAddr   = (PFN_vkGetDeviceProcAddr)vkGetDeviceProcAddr;
+
     alloc_create_info.vulkanApiVersion = VK_API_VERSION_1_3;
+
     alloc_create_info.instance         = m_instance;
     alloc_create_info.physicalDevice   = m_device->GetGpu();
     alloc_create_info.device           = m_device->GetDevice();
+    alloc_create_info.pVulkanFunctions = &vma_functions;
 
     VK_CHECK_RESULT(vmaCreateAllocator(&alloc_create_info, &m_allocator));
+
+    LOG_INFO("Vulkan Memory Allocator initialized with api version: {}.", alloc_create_info.vulkanApiVersion);
 }
 
 #pragma region vulkan functions

@@ -78,12 +78,15 @@ public:
     virtual void SetBlendFactors(const float _factors[4])                          = 0;
 
     virtual void BindVertexBuffers(
-        uint32_t         _start_index,
-        uint32_t         _num_buffers,
-        const RHIBuffer* p_vertex_buffers) = 0;
+        uint32_t            _start_index,
+        uint32_t            _num_buffers,
+        const RHIBufferRef* p_vertex_buffers,
+        const uint32_t*     _offsets) = 0;
 
     virtual void BindIndexBuffer(
-        const RHIBuffer* p_index_buffer) = 0;
+        const RHIBuffer*  p_index_buffer,
+        uint32_t          _offset,
+        EIndexElementType _type) = 0;
 
     virtual void SetAttachments() {
     }
