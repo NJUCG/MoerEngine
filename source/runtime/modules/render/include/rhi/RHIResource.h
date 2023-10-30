@@ -839,14 +839,21 @@ struct PipelineParametersBinding {
 #pragma endregion
 
 #pragma region syncronization
+
+enum class EFenceUsage {
+
+};
+struct RHIFenceCreateInfo {
+    EFenceUsage usage;
+};
 /* fences in dx12, fence and timeline semaphore in vulkan */
 class RHIFence : public RHIResource {
 public:
-    RHIFence(const std::string& _name) : RHIResource(RRT_GPU_FENCE), name(_name) {}
-    virtual bool Signaled() const = 0;
+    RHIFence() : RHIResource(RRT_GPU_FENCE) {}
+    virtual uint64_t GetValue() const     = 0;
+    virtual void     Wait(uint64_t value) = 0;
 
 protected:
-    std::string name;
 };
 
 struct RHIBarrierInfo {
@@ -992,6 +999,7 @@ struct RHIBarrierDependencyInfo {
     uint32_t                     texture_barrier_count = 0;
     const RHITextureBarrierInfo* p_texture_barriers    = nullptr;
 };
+
 #pragma endregion
 class RHIViewport : public RHIResource {
 public:

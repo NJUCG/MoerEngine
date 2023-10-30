@@ -115,9 +115,8 @@ void Test() {
 
     command_list->EndRenderPass();
 
-    RHICommandQueue*                         graphics_queue = g_rhi->CreateCommandQueue(ECommandQueueType::GRAPHICS);
-    const std::array<RHICommandListBase*, 1> command_array{command_list};
-    graphics_queue->SubmitCommands(1, command_array.data());
+    RHICommandQueue* graphics_queue = g_rhi->CreateCommandQueue(ECommandQueueType::GRAPHICS);
+    graphics_queue->SubmitCommands(1, command_list);
 
     //global buffer
     // start offset

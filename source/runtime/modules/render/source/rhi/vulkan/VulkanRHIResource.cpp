@@ -6,8 +6,11 @@
 
 #include "VulkanDevice.h"
 
+#include "rhi/RHIResource.h"
 #include "rhi/vulkan/misc/VulkanMacroUtils.h"
 #include "log/LogSystem.h"
+#include "vulkan/vulkan_core.h"
+#include <stdint.h>
 
 #pragma region utils definition
 
@@ -765,17 +768,33 @@ VkImageUsageFlags VulkanRHITexture::METoVKImageUsageFlags(ETextureUsageFlags _me
 
 #pragma region synchronization
 
-VulkanRHIFence::VulkanRHIFence(const std::string& _name, VulkanDevice* _device) : RHIFence(_name), m_device(_device) {
-    VkFenceCreateInfo create_info{};
-    create_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-    create_info.pNext = nullptr;
-    create_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+VulkanRHIFence::VulkanRHIFence(VulkanDevice* _device) : m_device(_device) {
+    // VkFenceCreateInfo create_info{};
 
-    VK_CHECK_RESULT(vkCreateFence(*m_device, &create_info, nullptr, &m_fence));
+    VkSemaphoreCreateInfo create_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+
+    VkSemaphoreTypeCreateInfo timeline_semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
+    timeline_semaphore_info.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+    timeline_semaphore_info.initialValue  = 0;
+
+    create_info.pNext = &timeline_semaphore_info;
+    create_info.flags = VK_SEMAPHORE_IMPORT_FLAG_BITS_MAX_ENUM;
+
+    VK_CHECK_RESULT(vkCreateSemaphore(*m_device, &create_info, nullptr, &m_semaphore));
 }
 
-bool VulkanRHIFence::Signaled() const {
-    return vkGetFenceStatus(*m_device, m_fence) == VK_SUCCESS;
+uint64_t VulkanRHIFence::GetValue() const {
+    uint64_t value;
+    vkGetSemaphoreCounterValue(*m_device, m_semaphore, &value);
+    return value;
+}
+
+void VulkanRHIFence::Wait(uint64_t value) {
+    VkSemaphoreWaitInfo info{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
+    info.pSemaphores    = &m_semaphore;
+    info.semaphoreCount = 1;
+    info.pValues        = &value;
+    vkWaitSemaphores(*m_device, &info, UINT64_MAX);
 }
 
 #pragma endregion
