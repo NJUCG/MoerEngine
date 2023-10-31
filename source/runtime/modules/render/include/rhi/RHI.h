@@ -1,5 +1,6 @@
 #ifndef RHI_H
 #define RHI_H
+#include "PixelFormat.h"
 #include "RHIResource.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
@@ -95,6 +96,21 @@ public:
     virtual void GUIShutDown();
     virtual void GUINewFrame();
     virtual void GUIRender(RHIGraphicsCommandList* _ui_command_list);
+#pragma endregion
+
+#pragma region Viewport
+
+    virtual RHIViewportRef RHICreateViewport(const RHIViewportInitializer& _init) = 0;
+
+    virtual void RHIResizeViewport(RHIViewport* _viewport, Extent2D _size, bool _b_full_screen, EPixelFormat _format = PF_UNDEFINED) = 0;
+
+    virtual RHITextureRef RHIGetViewportBackBuffer(RHIViewport* _viewport) = 0;
+
+    virtual RHIUnorderedAccessViewRef RHIGetViewportBackBufferUAV(RHIViewport* _viewport) { return nullptr; }
+
+    virtual void RHIBeginDrawingViewport(RHIViewport*, RHITexture* _viewport_attachment) = 0;
+    //present to swapchain here
+    virtual void RHIEndDrawingViewport(RHIViewport*, bool _b_present) = 0;
 #pragma endregion
 
 protected:

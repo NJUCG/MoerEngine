@@ -17,8 +17,15 @@ namespace Moer {
         return WindowImpl::GetInstance().window;
     }
     void* WindowContext::GetNativeWindow() const {
-        return nullptr;
+        return WindowImpl::GetInstance().GetNativeWindow();
     }
+    void WindowContext::GuiInit(const GuiWindowInitInfo& _init_info) {
+        WindowImpl::GetInstance().GuiInit(_init_info);
+    };
+    void WindowContext::GuiUpdate() {
+        WindowImpl::GetInstance().GuiUpdate();
+    }
+
     bool WindowContext::GetFocusMode() const {
         return WindowImpl::GetInstance().focused;
     }

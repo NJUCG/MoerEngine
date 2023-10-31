@@ -448,4 +448,29 @@ void DestroyRenderBuffers(GuiFrameRenderBuffers* _render_buffers) {
 static void GuiCreateWindow(ImGuiViewport* viewport) {
     GuiBackendData*  backend_data  = GetBackendData();
     GuiViewportData* viewport_data = IM_NEW(GuiViewportData)(backend_data->num_frames_in_flight);
+
+    viewport->RendererUserData = viewport_data;
+
+    viewport_data->frame_index   = UINT_MAX;
+    viewport_data->command_queue = g_rhi->CreateCommandQueue(ECommandQueueType::GRAPHICS);
+
+    viewport_data->comand_list = g_rhi->CreateGraphicsCommandList();
+
+    viewport_data->comand_list->Close();
+
+    RHIFenceCreateInfo fence_info{EFenceUsage::TIMELINE};
+    viewport_data->fence = g_rhi->RHICreateFence(fence_info);
+
+    RHIViewportInitializer viewport_info;
+    g_rhi->RHICreateViewport(viewport_info);
+}
+
+static void GuiRenderWindows() {
+    // ImGuiPlatformIO& platform_io = ImGui::GetPlatformIO();
+    //    for (int i = 1; i < platform_io.Viewports.Size; i++)
+    //        if ((platform_io.Viewports[i]->Flags & ImGuiViewportFlags_IsMinimized) == 0)
+    //            MyRenderFunction(platform_io.Viewports[i], my_args);
+    //    for (int i = 1; i < platform_io.Viewports.Size; i++)
+    //        if ((platform_io.Viewports[i]->Flags & ImGuiViewportFlags_IsMinimized) == 0)
+    //            MySwapBufferFunction(platform_io.Viewports[i], my_args);
 }

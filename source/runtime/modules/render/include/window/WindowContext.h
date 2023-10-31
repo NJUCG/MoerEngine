@@ -1,9 +1,16 @@
 #ifndef MOERENGINE_WINDOW_CONTEXT_H
 #define MOERENGINE_WINDOW_CONTEXT_H
+#include "rhi/RHI.h"
 #include <functional>
 #include <vector>
 namespace Moer {
     using WindowType = void;
+
+    struct GuiWindowInitInfo {
+        WindowType* window;
+        bool        b_install_callbacks = true;
+        ERHIType    rhi_type;
+    };
     struct SurfaceInfo {
         SurfaceInfo(const char* _rhi_name,
                     uint32_t    _width,
@@ -37,8 +44,16 @@ namespace Moer {
         void                  SetTitle(const char* newTitle);
         bool                  ShouldClose() const;
         void                  PollEvents() const;
-        void*                 GetNativeWindow() const;
-        void                  CreateVulkanSurface(void* instance, WindowType* window, void* allocation_callback, void* surface);
+
+        //for dx12 rhi
+        void* GetNativeWindow() const;
+
+        //for vulkan
+        void CreateVulkanSurface(void* instance, WindowType* window, void* allocation_callback, void* surface);
+
+        //init for gui window
+        void GuiInit(const GuiWindowInitInfo&);
+        void GuiUpdate();
 
         typedef std::function<void(unsigned int)>                                OnCharFunc;
         typedef std::function<void(int entered)>                                 OnCursorEnterFunc;

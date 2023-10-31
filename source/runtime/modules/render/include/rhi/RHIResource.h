@@ -1017,7 +1017,13 @@ struct RHIBarrierDependencyInfo {
 };
 
 #pragma endregion
+
+struct RHIViewportInfo {
+    uint32_t max_frame_in_flight;
+};
 class RHIViewport : public RHIResource {
+    RHIViewportInfo info;
+
 public:
     RHIViewport() : RHIResource(RRT_VIEWPORT) {}
     virtual void* GetNativeSwapchain() const { return nullptr; }
@@ -1026,6 +1032,9 @@ public:
     virtual void* GetNativeWindow(void** _params) const { return nullptr; }
     virtual void  Tick(float _delta_time) {}
     virtual void  WaitForFrameComplete() {}
+
+    virtual void                   Present() {}
+    virtual const RHIViewportInfo& GetViewportInfo() const { return info; }
 };
 
 #pragma region viewable resources view definitions
