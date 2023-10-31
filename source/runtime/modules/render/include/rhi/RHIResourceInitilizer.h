@@ -1,5 +1,6 @@
 #ifndef RHI_RESOURCE_INITIALIZER_H
 #define RHI_RESOURCE_INITIALIZER_H
+#include "PixelFormat.h"
 #include "RHICommon.h"
 #include "API_Macro.h"
 #include "misc/Hash.h"
@@ -197,6 +198,13 @@ struct ViewportBounds {
     ViewportBounds(float _top_left_x, float _top_left_y, float _width, float _height, float _min_depth = 0.0f, float _max_depth = 1.0f)
         : top_left_x(_top_left_x), top_left_y(_top_left_y), width(_width), height(_height), min_depth(_min_depth), max_depth(_max_depth) {
     }
+};
+
+struct RHIViewportInitializer {
+    void*        window_handle;
+    Extent2D     size{0, 0};
+    bool         b_is_full_screen;
+    EPixelFormat preferred_format;
 };
 
 enum class EClearAttachment {

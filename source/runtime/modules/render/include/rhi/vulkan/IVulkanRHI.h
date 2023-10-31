@@ -65,6 +65,22 @@ public:
     RHIShaderRef RHICreateShader(Shader*) override { return RHIShaderRef{}; }
 
 #pragma endregion
+
+#pragma region Viewport
+
+    virtual RHIViewportRef RHICreateViewport(const RHIViewportInitializer& _init) override { return nullptr; };
+
+    virtual void RHIResizeViewport(RHIViewport* _viewport, Extent2D _size, bool _b_full_screen, EPixelFormat _format = PF_UNDEFINED) override{};
+
+    virtual RHITextureRef RHIGetViewportBackBuffer(RHIViewport* _viewport) override { return nullptr; };
+
+    virtual RHIUnorderedAccessViewRef RHIGetViewportBackBufferUAV(RHIViewport* _viewport) override { return nullptr; }
+
+    virtual void RHIBeginDrawingViewport(RHIViewport*, RHITexture* _viewport_attachment) override{};
+
+    virtual void RHIEndDrawingViewport(RHIViewport*, bool _b_present) override{};
+
+#pragma endregion
 };
 
 #endif// IVULKAN_RHI_H
