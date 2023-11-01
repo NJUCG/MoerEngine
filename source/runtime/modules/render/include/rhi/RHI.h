@@ -14,11 +14,14 @@ class RHIComputeCommandList;
 class RHICommandQueue;
 class Shader;
 
+struct RHIInitInfo {
+    uint32_t max_frame_in_flight = 3;
+};
 class RHI {
 public:
     virtual ~RHI() = default;
 
-    virtual void Initialize() = 0;
+    virtual void Initialize(const RHIInitInfo& _init) = 0;
 
     virtual void PostInit() {}
 
@@ -95,7 +98,7 @@ public:
     virtual bool GUIInit(uint32_t _num_frames_in_flight);
     virtual void GUIShutDown();
     virtual void GUINewFrame();
-    virtual void GUIRender(RHIGraphicsCommandList* _ui_command_list);
+    virtual void GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list);
 #pragma endregion
 
 #pragma region Viewport
@@ -115,6 +118,7 @@ public:
 
 protected:
     ERHIType rhi_type;
+    uint32_t max_frame_in_flight;
 };
 
 extern RHI* g_rhi;

@@ -4,7 +4,15 @@
 
 #include "VulkanUtil.h"
 #include "VulkanSwapChain.h"
+#include "log/LogSystem.h"
+#include "rhi/RHI.h"
+#include "rhi/RHIResource.h"
+#include "rhi/vulkan/VulkanRHI.h"
 #include "rhi/vulkan/misc/VulkanMacroUtils.h"
+#include "vulkan/vulkan_core.h"
+#include "VulkanRHIResource.h"
+
+#include <stdint.h>
 
 namespace VkUtil = Moer::RHI::Vulkan::Util;
 
@@ -21,12 +29,17 @@ void VulkanSwapChain::Connect(VkInstance _instance, VkSurfaceKHR _surface, Vulka
  * @param vsync (Optional) Can be used to force vsync-ed rendering (by using VK_PRESENT_MODE_FIFO_KHR as presentation mode)
  * @param fullscreen
  */
-void VulkanSwapChain::Init(uint32_t* width, uint32_t* height, bool vsync) {
+void VulkanSwapChain::Init(uint32_t* width, uint32_t* height, uint32_t max_frame_in_flight, bool vsync) {
+    m_image_acquired_semaphores.resize(max_frame_in_flight);
+    m_render_complete_semaphores.resize(max_frame_in_flight);
+    Create(width, height, vsync);
+}
+void VulkanSwapChain::Create(uint32_t* width, uint32_t* height, bool vsync) {
     auto* device = m_device;
 
     auto details      = VkUtil::QuerySwapChainSupport(device->GetGpu(), m_surface);
     surface_format    = ChooseSwapSurfaceFormat(details.formats);
-    auto present_mode = ChooseSwapPresentMode(details.present_modes, vsync);
+    auto present_mode = ChooseSwapPresentMode(details.present_modes, true);
     auto extent       = ChooseSwapExtent(width, height, details.capabilities);
 
     // set the number of images
@@ -66,26 +79,87 @@ void VulkanSwapChain::Init(uint32_t* width, uint32_t* height, bool vsync) {
     VK_CHECK_RESULT(vkCreateSwapchainKHR(*device, &create_info, nullptr, &m_swap_chain));
 
     vkGetSwapchainImagesKHR(*device, m_swap_chain, &image_count, nullptr);
-    m_swap_chain_images.resize(image_count);
+    m_swap_chain_buffers.resize(image_count);
+
     vkGetSwapchainImagesKHR(*device, m_swap_chain, &image_count, m_swap_chain_images.data());
 
-    m_swap_chain_buffers.resize(image_count);
     for (size_t i = 0; i < image_count; ++i) {
         m_swap_chain_buffers[i].image = m_swap_chain_images[i];
-        m_swap_chain_buffers[i].view  = CreateImageView(m_swap_chain_images[i], surface_format.format, 1, VK_IMAGE_ASPECT_COLOR_BIT);
+        VkImageView temp_view         = CreateImageView(m_swap_chain_images[i], surface_format.format, 1, VK_IMAGE_ASPECT_COLOR_BIT);
+        m_swap_chain_buffers[i].view  = new VulkanAttachmentView(temp_view, RHIViewInfo::CreateBufferSRVInfo());
+        m_swap_chain_buffers[i].view->AddRef();
+    }
+    VkSemaphoreCreateInfo image_semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+    for (uint32_t i = 0; i < m_image_acquired_semaphores.size(); i++) {
+        vkCreateSemaphore(device->GetDevice(), &image_semaphore_info, VK_NULL_HANDLE, &m_image_acquired_semaphores[i]);
+    }
+    for (uint32_t i = 0; i < m_render_complete_semaphores.size(); i++) {
+        vkCreateSemaphore(device->GetDevice(), &image_semaphore_info, VK_NULL_HANDLE, &m_render_complete_semaphores[i]);
     }
 
     LOG_INFO("Vulkan swapchain initialized with {} images.", image_count);
 }
+void VulkanSwapChain::Recreate() {
+    LOG_DEBUG("Try to recreate swapchain");
+    vkQueueWaitIdle(m_device->GetPresentQueue());
+    Cleanup();
+    uint32_t width, height;
+    Create(&width, &height, true);
+}
 
 uint32_t VulkanSwapChain::AcquireNextImage() {
-    return 0;
+    uint32_t                  image_index = 0;
+    VkAcquireNextImageInfoKHR aquire_info{VK_STRUCTURE_TYPE_ACQUIRE_NEXT_IMAGE_INFO_KHR};
+    aquire_info.swapchain = m_swap_chain;
+    aquire_info.semaphore = m_image_acquired_semaphores[current_frame_offset];
+
+    VkResult result = vkAcquireNextImage2KHR(m_device->GetDevice(), &aquire_info, &image_index);
+    //probably caused by resize
+    if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+        //not to render this frame
+        Recreate();
+        image_index = INT32_MAX;
+    }
+    if (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR) {
+        current_image_index = image_index;
+        return image_index;
+    }
+    assert(false && "Error acquiring next present texture.");
+    return INT32_MAX;
 }
 
 void VulkanSwapChain::Present(VkQueue _queue) {
+    VkPresentInfoKHR present_info{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
+    VkSemaphore      render_finished_semaphore;
+    present_info.waitSemaphoreCount = 1;
+    present_info.pWaitSemaphores    = &render_finished_semaphore;
+    present_info.swapchainCount     = 1;
+    present_info.pSwapchains        = &m_swap_chain;
+    present_info.pImageIndices      = &current_image_index;
+
+    VkResult result = vkQueuePresentKHR(_queue, &present_info);
+
+    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+        Recreate();
+    } else if (result != VK_SUCCESS) {
+        assert(false && "Error presenting to swapchain.");
+    }
 }
 
 void VulkanSwapChain::Cleanup() {
+
+    for (uint32_t i = 0; i < m_swap_chain_buffers.size(); i++) {
+        m_swap_chain_buffers[i].view->DeRef();
+    }
+    vkDestroySwapchainKHR(m_device->GetDevice(), m_swap_chain, VK_NULL_HANDLE);
+
+    for (uint32_t i = 0; i < m_image_acquired_semaphores.size(); i++) {
+        vkDestroySemaphore(m_device->GetDevice(), m_image_acquired_semaphores[i], VK_NULL_HANDLE);
+    }
+
+    for (uint32_t i = 0; i < m_render_complete_semaphores.size(); i++) {
+        vkDestroySemaphore(m_device->GetDevice(), m_render_complete_semaphores[i], VK_NULL_HANDLE);
+    }
 }
 
 VkImageView VulkanSwapChain::CreateImageView(VkImage _image, VkFormat _format, uint32_t _mip_levels, VkImageAspectFlags _aspect_mask) {

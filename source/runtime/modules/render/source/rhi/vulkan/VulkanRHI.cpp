@@ -21,8 +21,7 @@
 
 #include "shader/Shader.h"
 #include "shader/ShaderResource.h"
-
-#include <GLFW/glfw3.h>
+#include "window/WindowContext.h"
 
 #include <unordered_map>
 #include <string>
@@ -37,7 +36,9 @@ VulkanRHIImpl::VulkanRHIImpl(GLFWwindow* _window) : m_instance(VK_NULL_HANDLE), 
     InitSurface(_window);
 }
 
-void VulkanRHIImpl::Initialize() {
+void VulkanRHIImpl::Initialize(const RHIInitInfo& _init) {
+    //todo: need more elegant way
+    max_frame_in_flight = _init.max_frame_in_flight;
     InitVulkan();
     InitVulkanMemoryAllocator();
 }
@@ -491,7 +492,7 @@ RHIShaderRef VulkanRHIImpl::RHICreateShader(Shader* shader) {
 #pragma endregion
 
 void VulkanRHIImpl::InitSurface(GLFWwindow* _window) {
-    VK_CHECK_RESULT(glfwCreateWindowSurface(m_instance, _window, nullptr, &m_surface));
+    Moer::WindowContext::GetInstance().CreateVulkanSurface(m_instance, _window, nullptr, &m_surface);
 }
 
 void VulkanRHIImpl::InitVulkan() {
@@ -509,7 +510,7 @@ void VulkanRHIImpl::InitVulkan() {
     m_swap_chain->Connect(m_instance, m_surface, m_device);
     uint32_t width, height;
     // glfwGetFramebufferSize(m_window, &width, &height);
-    m_swap_chain->Init(&width, &height, true);
+    m_swap_chain->Init(&width, &height, max_frame_in_flight, true);
 }
 
 void VulkanRHIImpl::InitVulkanMemoryAllocator() {

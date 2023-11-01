@@ -65,4 +65,8 @@ struct GuiViewportData {
     }
     ~GuiViewportData() {}
 };
+
+struct GuiViewportData2 {
+    RHIViewportRef viewport;
+};
 #endif

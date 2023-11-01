@@ -435,6 +435,7 @@ enum ERHIResourceType {
     RRT_GLOBAL_BUFFER,
     RRT_BUFFER,
     RRT_TEXTURE,
+    RRT_ATTACHMENT_VIEW,
     RRT_TEXTURE_REFERENCE,
     RRT_TimestampCalibrationQuery,
     RRT_GPU_FENCE,

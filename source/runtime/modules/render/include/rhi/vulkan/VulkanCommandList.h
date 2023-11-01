@@ -2,6 +2,8 @@
 #ifndef VULKAN_COMMAND_LIST_H
 #define VULKAN_COMMAND_LIST_H
 #include "rhi/RHICommandList.h"
+#include "rhi/vulkan/VulkanCommandQueue.h"
+#include "vulkan/vulkan_core.h"
 
 #include <vulkan/vulkan.h>
 
@@ -124,6 +126,9 @@ public:
         RHIBuffer* _scratch_offset) override;
 
 #pragma endregion
+protected:
+    friend class VulkanRHICommandQueue;
+    inline void* GetNativeHandle() const override { return m_command_buffer; }
 
 private:
     VulkanDevice*   m_device;

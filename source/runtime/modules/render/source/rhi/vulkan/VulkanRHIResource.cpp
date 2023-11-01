@@ -6,10 +6,14 @@
 
 #include "VulkanDevice.h"
 
+#include "rhi/RHICommandQueue.h"
+#include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
+#include "rhi/RHIResourceInitilizer.h"
 #include "rhi/vulkan/misc/VulkanMacroUtils.h"
 #include "log/LogSystem.h"
 #include "vulkan/vulkan_core.h"
+#include "VulkanSwapChain.h"
 #include <stdint.h>
 
 #pragma region utils definition
@@ -908,6 +912,24 @@ void VulkanRHIFence::Wait(uint64_t value) {
 
 #pragma region viewable resources view definitions
 
+#pragma endregion
+
+#pragma region viewport
+
+void VulkanViewport::Present() {
+
+    //todo validate index
+    uint32_t      present_index = swapchain->AcquireNextImage();
+    VulkanDevice* device        = swapchain->m_device;
+    assert(device != nullptr && "Swapchain not valid");
+
+    swapchain->Present(device->GetPresentQueue());
+    // swapchain->Present();
+}
+void VulkanViewport::GetCurrentAttachmentView(RenderAttachmentView& _rav) {
+    _rav.texture_view    = (RHIView*)swapchain->m_swap_chain_buffers[swapchain->current_frame_offset].view;
+    _rav.required_layout = ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT;
+}
 #pragma endregion
 
 #pragma region graphic pipeline definitions

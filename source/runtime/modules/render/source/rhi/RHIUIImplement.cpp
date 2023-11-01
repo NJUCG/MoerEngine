@@ -109,9 +109,9 @@ void RHI::GUINewFrame() {
     if (!bd->pipeline)
         CreateDeviceObjects();
 }
-void RHI::GUIRender(RHIGraphicsCommandList* _ui_command_list) {
+void RHI::GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list) {
 
-    ImDrawData*  draw_data       = ImGui::GetDrawData();
+    ImDrawData*  draw_data       = static_cast<ImDrawData*>(_draw_data);
     Shader*      frag_shader     = ShaderResourceManager::GetShader<ImGuiShaderFrag>();
     RHIShaderRef frag_rhi_shader = g_rhi->RHICreateShader(frag_shader);
 

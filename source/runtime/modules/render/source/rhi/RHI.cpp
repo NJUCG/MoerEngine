@@ -6,6 +6,9 @@
 #include "shader/Shader.h"
 #include "shader/ShaderCompiler.h"
 #include "shader/ShaderResourceManager.h"
+#include "taskgraph/GraphTask.h"
+#include "taskgraph/TaskGraph.h"
+#include "taskgraph/ThreadManager.h"
 RHI* g_rhi = nullptr;
 
 // global shader
@@ -45,7 +48,8 @@ void RHI::Test() {
 
 void Test() {
 
-    g_rhi->Initialize();
+    RHIInitInfo init_info{3};
+    g_rhi->Initialize(init_info);
 
     g_rhi->PostInit();
     ShaderCompiler::ShaderCompileTest();
