@@ -24,12 +24,19 @@ VulkanRHIGraphicsCommandList::~VulkanRHIGraphicsCommandList() {
 }
 
 void VulkanRHIGraphicsCommandList::SetBatchedShaderParameter(RHIShaderRef shader, const RHIBatchedShaderParameters& parameters) {
+    auto* vk_shader_info = dynamic_cast<VulkanRHIShader*>(shader.Get());
+    VK_CHECK_NULLPTR(vk_shader_info, "SetBatchedShaderParameter: shader is nullptr!");
+    // MARK...
 }
 
 void VulkanRHIGraphicsCommandList::SetPipelineState(RHIGraphicsPipelineState* _graphics_pso, const RHIShaderBoundStateInput& _shader_input) {
     // MARK...
     // need to implemented
-    // bind descriptor sets
+    // bind descriptor sets and pipeline
+    auto* vk_pso = static_cast<const VulkanRHIGraphicsPipelineState*>(_graphics_pso);
+    VK_CHECK_NULLPTR(vk_pso, "SetPipelineState: graphics pipeline state is nullptr!");
+
+    vkCmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk_pso->GetHandle());
 }
 
 void VulkanRHIGraphicsCommandList::Open() {

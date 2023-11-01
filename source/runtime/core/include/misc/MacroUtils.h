@@ -31,4 +31,20 @@
 #endif
 #endif
 
+#define GET_HIGH_BIT_UINT32(x) \
+    {                          \
+        x = x | (x >> 1);      \
+        x = x | (x >> 2);      \
+        x = x | (x >> 4);      \
+        x = x | (x >> 8);      \
+        x = x | (x >> 16);     \
+        return (x >> 1) + 1;   \
+    }
+
+#define CHECK_AND_DELETE(ptr) \
+    if (ptr != nullptr) {     \
+        delete ptr;           \
+        ptr = nullptr;        \
+    }
+
 #endif// !MACRO_H
