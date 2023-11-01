@@ -10,6 +10,7 @@ class VulkanDevice;
 class VulkanSwapChain;
 class VulkanViewport;
 class VulkanRHIBuffer;
+class VulkanDescriptorAllocator;
 
 class VulkanRHIImpl final : public IVulkanRHI {
 public:
@@ -92,6 +93,8 @@ protected:
     VulkanSwapChain*             m_swap_chain;
     std::vector<VulkanViewport*> m_viewports;
     VulkanViewport*              m_current_viewport;
+
+    VulkanDescriptorAllocator* m_descriptor_allocator;
 
 protected:
     void InitSurface(GLFWwindow* _window);

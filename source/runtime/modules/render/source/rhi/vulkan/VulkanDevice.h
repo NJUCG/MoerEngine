@@ -87,6 +87,7 @@ private:
     VulkanPhysicalDeviceFeatures     m_gpu_features;
     VkPhysicalDeviceMemoryProperties m_gpu_mem_props;
     TExtensionArray                  m_gpu_extensions;
+    TQueueFamilyPropertiesArray      m_queue_family_props;
     QueueFamilyIndices               m_queue_family_indices;
 
     VkDevice m_device;
@@ -102,9 +103,12 @@ private:
     VkPhysicalDevice SelectGpu(VkInstance _instance, VkPhysicalDeviceType _type, VkSurfaceKHR _surface, const TExtensionArray& _enabled_extensions);
 
     void CreateDevice(const DeviceInitializer& _initializer);
+    void CreateCommandPools();
 
     TExtensionArray                  GetGpuExtensions(VkPhysicalDevice _gpu) const;
     VkPhysicalDeviceMemoryProperties GetMemoryProperties(VkPhysicalDevice _gpu) const;
+    TQueueFamilyPropertiesArray      GetQueueFamilyProperties(VkPhysicalDevice _gpu) const;
+
     //    uint32_t                         GetMemoryType(uint32_t type_bits, VkMemoryPropertyFlags properties, VkBool32* mem_type_found = nullptr) const;
     int32_t            GetQueueFamilyIndex(const std::vector<VkQueueFamilyProperties>& queue_family_props, VkQueueFlags _queue_flags) const;
     QueueFamilyIndices QueryQueueFamilyIndices(VkPhysicalDevice _gpu, VkSurfaceKHR _surface) const;

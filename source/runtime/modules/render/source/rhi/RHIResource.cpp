@@ -13,6 +13,7 @@ void RHIResource::Destroy() const {
     if (!flags.MarkToDelete(std::memory_order_release)) {
         //        pending_deletings.pr
     }
+    delete this;
 }
 
 #pragma region buffer texture initiation

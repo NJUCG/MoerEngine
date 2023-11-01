@@ -6,6 +6,7 @@
 #include <vulkan/vulkan.h>
 
 class VulkanDevice;
+class VulkanDescriptorAllocator;
 
 class VulkanRHIGraphicsCommandList final : public RHIGraphicsCommandList {
 public:
@@ -126,8 +127,9 @@ public:
 #pragma endregion
 
 private:
-    VulkanDevice*   m_device;
-    VkCommandBuffer m_command_buffer;
+    VulkanDevice*              m_device;
+    VulkanDescriptorAllocator* m_descriptor_allocator;
+    VkCommandBuffer            m_command_buffer;
 
 private:
     VkRenderingAttachmentInfo FromColorAttachmentInfo(const RHIRenderPassInfo::ColorAttachmentInfo& _color_attachment_info) const;

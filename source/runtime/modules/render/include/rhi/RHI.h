@@ -82,7 +82,8 @@ public:
     virtual RHIShaderResourceViewRef  RHICreateShaderResourceView(RHIViewableResource* _resource, const RHIViewInfo& _view_info)  = 0;
     virtual RHIUnorderedAccessViewRef RHICreateUnorderedAccessView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) = 0;
 
-    virtual RHICommandQueue*        CreateCommandQueue(ECommandQueueType type)                                    = 0;
+    virtual RHICommandQueue* CreateCommandQueue(ECommandQueueType type) = 0;
+    // DX12 only: _initial_state
     virtual RHIGraphicsCommandList* CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state = nullptr) = 0;
     virtual RHIComputeCommandList*  CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr)   = 0;
 

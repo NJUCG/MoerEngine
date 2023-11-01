@@ -595,6 +595,7 @@ enum ETextureLayout : uint32_t {
 };
 #pragma endregion
 enum EShaderType : uint8_t {
+    ST_NONE,
     ST_VERTEX,
     ST_GEOMETRY,
     ST_FRAGMENT,

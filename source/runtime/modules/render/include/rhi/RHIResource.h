@@ -302,38 +302,33 @@ public:
     SHA256Hash  hash;
 };
 
-class RHIGraphicsShader : public RHIShader {
+class RHIVertexShader : virtual public RHIShader {
 public:
-    RHIGraphicsShader(ERHIResourceType _type, EShaderType _shader_type) : RHIShader(_type, _shader_type) {}
+    RHIVertexShader() : RHIShader(RRT_VERTEX_SHADER, ST_VERTEX) {}
 };
 
-class RHIVertexShader : public RHIGraphicsShader {
+class RHIFragmentShader : virtual public RHIShader {
 public:
-    RHIVertexShader() : RHIGraphicsShader(RRT_VERTEX_SHADER, ST_VERTEX) {}
+    RHIFragmentShader() : RHIShader(RRT_FRAGMENT_SHADER, ST_FRAGMENT) {}
 };
 
-class RHIFragmentShader : public RHIGraphicsShader {
+class RHIGeometryShader : virtual public RHIShader {
 public:
-    RHIFragmentShader() : RHIGraphicsShader(RRT_FRAGMENT_SHADER, ST_FRAGMENT) {}
+    RHIGeometryShader() : RHIShader(RRT_GEOMETRY_SHADER, ST_GEOMETRY) {}
 };
 
-class RHIGeometryShader : public RHIGraphicsShader {
-public:
-    RHIGeometryShader() : RHIGraphicsShader(RRT_GEOMETRY_SHADER, ST_GEOMETRY) {}
-};
-
-class RHIComputeShader : public RHIShader {
+class RHIComputeShader : virtual public RHIShader {
 public:
     RHIComputeShader() : RHIShader(RRT_COMPUTE_SHADER, ST_COMPUTE) {}
 };
 
-class RHIMeshShader : public RHIGraphicsShader {
+class RHIMeshShader : virtual public RHIShader {
 public:
-    RHIMeshShader() : RHIGraphicsShader(RRT_MESH_SHADER, ST_MESH) {}
+    RHIMeshShader() : RHIShader(RRT_MESH_SHADER, ST_MESH) {}
 };
-class RHIAmplificationShader : public RHIGraphicsShader {
+class RHIAmplificationShader : virtual public RHIShader {
 public:
-    RHIAmplificationShader() : RHIGraphicsShader(RRT_AMPLIFICATION_SHADER, ST_AMPLIFICATION) {}
+    RHIAmplificationShader() : RHIShader(RRT_AMPLIFICATION_SHADER, ST_AMPLIFICATION) {}
 };
 
 class RHIRayTracingShader : public RHIShader {

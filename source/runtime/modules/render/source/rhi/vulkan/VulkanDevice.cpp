@@ -25,6 +25,7 @@ void VulkanDevice::Init(const DeviceInitializer& _initializer) {
     vkGetPhysicalDeviceMemoryProperties(m_gpu, &m_gpu_mem_props);
     m_gpu_extensions       = GetGpuExtensions(m_gpu);
     m_queue_family_indices = QueryQueueFamilyIndices(m_gpu, _initializer.surface);
+    m_queue_family_props   = GetQueueFamilyProperties(m_gpu);
 
     LOG_INFO("\n- DeviceName: {}."
              "\n- API={}.{}.{} (0x{:x}) Driver=0x{:x} VendorId=0x{:x}."
@@ -43,6 +44,7 @@ void VulkanDevice::Init(const DeviceInitializer& _initializer) {
              m_gpu_props.limits.timestampComputeAndGraphics);
 
     CreateDevice(_initializer);
+    CreateCommandPools();
 }
 
 void VulkanDevice::Destroy() {
@@ -145,6 +147,21 @@ void VulkanDevice::CreateDevice(const DeviceInitializer& _initializer) {
     vkGetDeviceQueue(m_device, m_queue_family_indices.transfer.value(), 0, &m_transfer_queue);
 }
 
+void VulkanDevice::CreateCommandPools() {
+    VkCommandPoolCreateInfo pool_create_info{};
+    pool_create_info.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    pool_create_info.flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+    pool_create_info.queueFamilyIndex = m_queue_family_indices.graphics.value();
+
+    VK_CHECK_RESULT(vkCreateCommandPool(m_device, &pool_create_info, nullptr, &m_default_pool));
+
+    pool_create_info.flags            = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+    pool_create_info.queueFamilyIndex = m_queue_family_indices.transfer.value();
+    VK_CHECK_RESULT(vkCreateCommandPool(m_device, &pool_create_info, nullptr, &m_transfer_pool));
+
+    LOG_INFO("VulkanRHI: Command pools created, graphics: {}, transfer: {}", (void*)m_default_pool, (void*)m_transfer_pool);
+}
+
 TExtensionArray VulkanDevice::GetGpuExtensions(VkPhysicalDevice _gpu) const {
     uint32_t gpu_extension_count;
     // check extensions
@@ -164,6 +181,16 @@ VkPhysicalDeviceMemoryProperties VulkanDevice::GetMemoryProperties(VkPhysicalDev
     VkPhysicalDeviceMemoryProperties props{};
     vkGetPhysicalDeviceMemoryProperties(_gpu, &props);
     return props;
+}
+
+TQueueFamilyPropertiesArray VulkanDevice::GetQueueFamilyProperties(VkPhysicalDevice _gpu) const {
+    uint32_t queue_family_count = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(_gpu, &queue_family_count, nullptr);
+    assert(queue_family_count > 0);
+    TQueueFamilyPropertiesArray queue_family_props(queue_family_count);
+    vkGetPhysicalDeviceQueueFamilyProperties(_gpu, &queue_family_count, queue_family_props.data());
+
+    return queue_family_props;
 }
 
 //uint32_t VulkanDevice::GetMemoryType(uint32_t type_bits, VkMemoryPropertyFlags properties, VkBool32* mem_type_found) const {
@@ -203,11 +230,7 @@ int32_t VulkanDevice::GetQueueFamilyIndex(const std::vector<VkQueueFamilyPropert
 QueueFamilyIndices VulkanDevice::QueryQueueFamilyIndices(VkPhysicalDevice _gpu, VkSurfaceKHR _surface) const {
     QueueFamilyIndices indices;
 
-    uint32_t queue_family_count = 0;
-    vkGetPhysicalDeviceQueueFamilyProperties(_gpu, &queue_family_count, nullptr);
-    assert(queue_family_count > 0);
-    std::vector<VkQueueFamilyProperties> queue_family_props(queue_family_count);
-    vkGetPhysicalDeviceQueueFamilyProperties(_gpu, &queue_family_count, queue_family_props.data());
+    auto queue_family_props = GetQueueFamilyProperties(_gpu);
 
     auto graphics = GetQueueFamilyIndex(queue_family_props, VK_QUEUE_GRAPHICS_BIT);
     if (graphics >= 0) {
@@ -226,7 +249,7 @@ QueueFamilyIndices VulkanDevice::QueryQueueFamilyIndices(VkPhysicalDevice _gpu, 
         indices.compute = indices.transfer;
     }
 
-    for (uint32_t i = 0; i < queue_family_count; ++i) {
+    for (uint32_t i = 0; i < queue_family_props.size(); ++i) {
         VkBool32 present_supported = false;
         vkGetPhysicalDeviceSurfaceSupportKHR(_gpu, i, _surface, &present_supported);
         if (present_supported) {
