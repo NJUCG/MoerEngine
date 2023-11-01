@@ -243,8 +243,8 @@ bool CreateDeviceObjects() {
 
     shader_stage_input.p_vertex_input_state = g_rhi->RHICreateVertexInputState(input_intializer);
 
-    shader_stage_input.p_vertex_shader   = (RHIVertexShader*)gui_vert.Get();
-    shader_stage_input.p_fragment_shader = (RHIFragmentShader*)gui_frag.Get();
+    shader_stage_input.p_vertex_shader   = dynamic_cast<RHIVertexShader*>(gui_vert.Get());
+    shader_stage_input.p_fragment_shader = dynamic_cast<RHIFragmentShader*>(gui_frag.Get());
 
     RHIBlendStateInitializer blend_state_info;
     blend_state_info.attachments[0].color_blend_op         = BO_ADD;

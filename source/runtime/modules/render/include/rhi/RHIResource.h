@@ -331,27 +331,22 @@ public:
     RHIAmplificationShader() : RHIShader(RRT_AMPLIFICATION_SHADER, ST_AMPLIFICATION) {}
 };
 
-class RHIRayTracingShader : public RHIShader {
+class RHIRayGenShader : virtual public RHIShader {
 public:
-    RHIRayTracingShader(EShaderType _shader_type) : RHIShader(RRT_RAY_TRACING_SHADER, _shader_type) {}
+    RHIRayGenShader() : RHIShader(RRT_RAY_TRACING_SHADER, ST_RAY_GEN) {}
+};
+class RHIRayHitShader : virtual public RHIShader {
+public:
+    RHIRayHitShader() : RHIShader(RRT_RAY_TRACING_SHADER, ST_RAY_HIT) {}
+};
+class RHIRayMissShader : virtual public RHIShader {
+public:
+    RHIRayMissShader() : RHIShader(RRT_RAY_TRACING_SHADER, ST_RAY_MISS) {}
 };
 
-class RHIRayGenShader : public RHIRayTracingShader {
+class RHIRayCallableShader : virtual public RHIShader {
 public:
-    RHIRayGenShader() : RHIRayTracingShader(ST_RAY_GEN) {}
-};
-class RHIRayHitShader : public RHIRayTracingShader {
-public:
-    RHIRayHitShader() : RHIRayTracingShader(ST_RAY_HIT) {}
-};
-class RHIRayMissShader : public RHIRayTracingShader {
-public:
-    RHIRayMissShader() : RHIRayTracingShader(ST_RAY_MISS) {}
-};
-
-class RHIRayCallableShader : public RHIRayTracingShader {
-public:
-    RHIRayCallableShader() : RHIRayTracingShader(ST_RAY_CALLABLE) {}
+    RHIRayCallableShader() : RHIShader(RRT_RAY_TRACING_SHADER, ST_RAY_CALLABLE) {}
 };
 #pragma endregion
 
@@ -1953,27 +1948,27 @@ class RayTracingPipelineStateInitializer : RayTracingPipelineStateInfo {
 public:
     RayTracingPipelineStateInitializer() = default;
 
-    const std::vector<RHIRayTracingShader*>& GetRayGenTable() const { return ray_gen_table; }
-    const std::vector<RHIRayTracingShader*>& GetRayMissTable() const { return ray_miss_table; }
-    const std::vector<RHIRayTracingShader*>& GetRayHitTable() const { return ray_hit_table; }
-    const std::vector<RHIRayTracingShader*>& GetRayCallableTable() const { return ray_callable_table; }
+    const std::vector<RHIRayGenShader*>&      GetRayGenTable() const { return ray_gen_table; }
+    const std::vector<RHIRayMissShader*>&     GetRayMissTable() const { return ray_miss_table; }
+    const std::vector<RHIRayHitShader*>&      GetRayHitTable() const { return ray_hit_table; }
+    const std::vector<RHIRayCallableShader*>& GetRayCallableTable() const { return ray_callable_table; }
 
-    void SetRayGenShaderTable(const std::vector<RHIRayTracingShader*>& _ray_gen_shaders, uint64_t _hash = 0) {
+    void SetRayGenShaderTable(const std::vector<RHIRayGenShader*>& _ray_gen_shaders, uint64_t _hash = 0) {
         ray_gen_table = _ray_gen_shaders;
-        hash_ray_gen  = _hash ? _hash : ComputeHash(_ray_gen_shaders);
+        hash_ray_gen  = _hash ? _hash : ComputeHash(std::vector<RHIShader*>(_ray_gen_shaders.begin(), _ray_gen_shaders.end()));
     }
 
-    void SetRayMissShaderTable(const std::vector<RHIRayTracingShader*>& _ray_miss_shaders, uint64_t _hash = 0) {
+    void SetRayMissShaderTable(const std::vector<RHIRayMissShader*>& _ray_miss_shaders, uint64_t _hash = 0) {
         ray_miss_table = _ray_miss_shaders;
-        hash_ray_miss  = _hash ? _hash : ComputeHash(_ray_miss_shaders);
+        hash_ray_miss  = _hash ? _hash : ComputeHash(std::vector<RHIShader*>(_ray_miss_shaders.begin(), _ray_miss_shaders.end()));
     }
-    void SetRayHitShaderTable(const std::vector<RHIRayTracingShader*>& _ray_hit_shaders, uint64_t _hash = 0) {
+    void SetRayHitShaderTable(const std::vector<RHIRayHitShader*>& _ray_hit_shaders, uint64_t _hash = 0) {
         ray_hit_table = _ray_hit_shaders;
-        hash_ray_hit  = _hash ? _hash : ComputeHash(_ray_hit_shaders);
+        hash_ray_hit  = _hash ? _hash : ComputeHash(std::vector<RHIShader*>(_ray_hit_shaders.begin(), _ray_hit_shaders.end()));
     }
-    void SetRayCallableShaderTable(const std::vector<RHIRayTracingShader*>& _ray_callable_shaders, uint64_t _hash = 0) {
+    void SetRayCallableShaderTable(const std::vector<RHIRayCallableShader*>& _ray_callable_shaders, uint64_t _hash = 0) {
         ray_callable_table = _ray_callable_shaders;
-        hash_ray_callable  = _hash ? _hash : ComputeHash(_ray_callable_shaders);
+        hash_ray_callable  = _hash ? _hash : ComputeHash(std::vector<RHIShader*>(_ray_callable_shaders.begin(), _ray_callable_shaders.end()));
     }
     friend uint32_t GetHash(const RayTracingPipelineStateInitializer& value) {
         uint32_t hash = GetHash(value.max_attribute_byte_size);
@@ -1984,19 +1979,19 @@ public:
     }
 
 protected:
-    uint64_t ComputeHash(const std::vector<RHIRayTracingShader*>& target) {
-        for (RHIRayTracingShader* shader : target) {
+    uint64_t ComputeHash(const std::vector<RHIShader*>& target) {
+        for (RHIShader* shader : target) {
             //todo: handle sha256 hash combining and convert shader sha256 to uint64_t
             shader->GetHash();
         }
         return 0;
     }
 
-    RHIRayTracingPipelineStateRef     base_pipeline_handle;
-    std::vector<RHIRayTracingShader*> ray_gen_table;
-    std::vector<RHIRayTracingShader*> ray_miss_table;
-    std::vector<RHIRayTracingShader*> ray_hit_table;
-    std::vector<RHIRayTracingShader*> ray_callable_table;
+    RHIRayTracingPipelineStateRef      base_pipeline_handle;
+    std::vector<RHIRayGenShader*>      ray_gen_table;
+    std::vector<RHIRayMissShader*>     ray_miss_table;
+    std::vector<RHIRayHitShader*>      ray_hit_table;
+    std::vector<RHIRayCallableShader*> ray_callable_table;
 };
 
 struct ViewPort {
