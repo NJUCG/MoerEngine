@@ -39,6 +39,9 @@ struct RHISubmitInfo {
         signal_infos.emplace_back(_signal_value, _fence);
     };
 
+    const std::vector<RHIFenceWaitInfo>&   GetWaitInfos() const { return wait_infos; }
+    const std::vector<RHIFenceSignalInfo>& GetSignalInfos() const { return signal_infos; }
+
 private:
     std::vector<RHIFenceWaitInfo>   wait_infos;
     std::vector<RHIFenceSignalInfo> signal_infos;

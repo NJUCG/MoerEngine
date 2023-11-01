@@ -11,6 +11,8 @@ protected:
 public:
     virtual void SetBatchedShaderParameter(RHIShaderRef shader, const RHIBatchedShaderParameters& parameters) = 0;
     RHI_API ~RHICommandListBase();
+
+    virtual void* GetNativeHandle() const { return nullptr; }
 };
 
 class RHIGraphicsCommandList : public RHICommandListBase {

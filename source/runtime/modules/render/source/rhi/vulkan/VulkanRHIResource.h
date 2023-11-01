@@ -5,6 +5,7 @@
 #ifndef VULKAN_RHI_RESOURCE_H
 #define VULKAN_RHI_RESOURCE_H
 
+#include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "vulkan/vulkan_core.h"
 #include "shader/ShaderCommon.h"
@@ -53,7 +54,7 @@ class VulkanRHIUnorderedAccessView;
 class VulkanRHIVertexInputState;
 class VulkanRHIVertexShader;
 class VulkanRHIViewableResource;
-class VulkanRHIViewport;
+class VulkanViewport;
 #pragma endregion
 
 #pragma region utils definition
@@ -348,7 +349,9 @@ public:
 
     uint64_t GetValue() const override;
 
-    void Wait(uint64_t value) override;
+    void               Wait(uint64_t value) override;
+    inline VkSemaphore GetSemaphoreHandle() { return m_semaphore; }
+    inline VkFence     GetFence() { return VK_NULL_HANDLE; }
 
 private:
     VulkanDevice* m_device;
@@ -377,12 +380,37 @@ class VulkanRHIShaderResourceView final : public RHIShaderResourceView {
 public:
     explicit VulkanRHIShaderResourceView(RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIShaderResourceView(_resource, _viewInfo) {}
 
+    explicit VulkanRHIShaderResourceView(VkImageView _view, const RHIViewInfo& _viewInfo) : RHIShaderResourceView(nullptr, _viewInfo), m_view(_view) {}
     inline VkImageView GetView() const { return m_view; }
 
 private:
     VkImageView m_view;
 };
 
+class VulkanAttachmentView final : public RHIView {
+    friend VulkanRHIImpl;
+
+public:
+    explicit VulkanAttachmentView(RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIView(RRT_ATTACHMENT_VIEW, _resource, _viewInfo) {}
+
+    explicit VulkanAttachmentView(VkImageView _view, const RHIViewInfo& _viewInfo) : RHIView(RRT_ATTACHMENT_VIEW, nullptr, _viewInfo), m_view(_view) {}
+    inline VkImageView GetView() const { return m_view; }
+
+private:
+    VkImageView m_view;
+};
+
+#pragma endregion
+
+#pragma region viewport
+
+class VulkanViewport final : RHIViewport {
+    virtual void Present() override;
+    virtual void GetCurrentAttachmentView(RenderAttachmentView&) override;
+
+private:
+    class VulkanSwapChain* swapchain;
+};
 #pragma endregion
 
 #pragma region graphic pipeline definitions

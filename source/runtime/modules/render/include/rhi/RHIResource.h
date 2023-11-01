@@ -1034,6 +1034,7 @@ public:
     virtual void  WaitForFrameComplete() {}
 
     virtual void                   Present() {}
+    virtual void                   GetCurrentAttachmentView(struct RenderAttachmentView&);
     virtual const RHIViewportInfo& GetViewportInfo() const { return info; }
 };
 
