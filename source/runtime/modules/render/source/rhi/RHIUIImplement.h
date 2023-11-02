@@ -52,12 +52,14 @@ struct GuiViewportData {
     RHICommandQueue*        command_queue;
     RHIGraphicsCommandList* comand_list;
 
-    RHIFenceRef fence;
+    RHIFenceRef present_fence;
 
     uint32_t         num_frames_in_flight;
     GuiFrameContext* frames;
 
-    uint32_t               frame_index;   // Current frame being rendered to (0 <= FrameIndex < FrameInFlightCount)
+    RHIViewportRef viewport;
+
+    uint64_t               frame_index;   // Current frame being rendered to (0 <= FrameIndex < FrameInFlightCount)
     GuiFrameRenderBuffers* render_buffers;// Used by all viewports
 
     GuiViewportData(uint32_t _num_frames_in_flight) : num_frames_in_flight(_num_frames_in_flight) {

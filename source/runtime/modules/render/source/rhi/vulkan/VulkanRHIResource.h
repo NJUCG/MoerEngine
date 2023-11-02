@@ -318,6 +318,8 @@ public:
     VulkanRHITexture() = delete;
     explicit VulkanRHITexture(const RHITextureCreateInfo& _info) : RHITexture(_info) {}
 
+    explicit VulkanRHITexture(const RHITextureCreateInfo& _info, VkImage _image) : RHITexture(_info), m_alloc(_image, VK_NULL_HANDLE) {}
+
     inline const VmaAllocation GetAllocation() const {
         return m_alloc.alloc;
     }
@@ -346,16 +348,18 @@ private:
 class VulkanRHIFence final : public RHIFence {
 public:
     VulkanRHIFence(VulkanDevice* _device, EFenceUsage _usage);
+    virtual ~VulkanRHIFence();
 
     uint64_t GetValue() const override;
 
     void               Wait(uint64_t value) override;
     inline VkSemaphore GetSemaphoreHandle() { return m_semaphore; }
-    inline VkFence     GetFence() { return VK_NULL_HANDLE; }
+    inline VkSemaphore GetBinaryHandle() { return m_binary; }
 
 private:
     VulkanDevice* m_device;
     VkSemaphore   m_semaphore;
+    VkSemaphore   m_binary;
 };
 
 #pragma endregion
@@ -387,13 +391,14 @@ private:
     VkImageView m_view;
 };
 
-class VulkanAttachmentView final : public RHIView {
+class VulkanImageView final : public RHIView {
     friend VulkanRHIImpl;
 
 public:
-    explicit VulkanAttachmentView(RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIView(RRT_ATTACHMENT_VIEW, _resource, _viewInfo) {}
+    explicit VulkanImageView(RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIView(RRT_ATTACHMENT_VIEW, _resource, _viewInfo) {}
 
-    explicit VulkanAttachmentView(VkImageView _view, const RHIViewInfo& _viewInfo) : RHIView(RRT_ATTACHMENT_VIEW, nullptr, _viewInfo), m_view(_view) {}
+    explicit VulkanImageView(RHIViewableResource* _resource, VkImageView _view, const RHIViewInfo& _viewInfo) : RHIView(RRT_ATTACHMENT_VIEW, _resource, _viewInfo), m_view(_view) {
+    }
     inline VkImageView GetView() const { return m_view; }
 
 private:
@@ -405,8 +410,8 @@ private:
 #pragma region viewport
 
 class VulkanViewport final : RHIViewport {
-    virtual void Present() override;
-    virtual void GetCurrentAttachmentView(RenderAttachmentView&) override;
+    virtual void     Present(RHIFence* _render_finished) override;
+    virtual RHIView* GetNextFrameView() override;
 
 private:
     class VulkanSwapChain* swapchain;

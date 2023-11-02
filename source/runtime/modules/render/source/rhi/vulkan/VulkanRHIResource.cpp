@@ -880,18 +880,24 @@ VkImageUsageFlags VulkanRHITexture::METoVKImageUsageFlags(ETextureUsageFlags _me
 #pragma region synchronization
 
 VulkanRHIFence::VulkanRHIFence(VulkanDevice* _device, EFenceUsage _usage) : m_device(_device) {
-    // VkFenceCreateInfo create_info{};
-
     VkSemaphoreCreateInfo create_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
-    if (_usage == EFenceUsage::TIMELINE) {
-        VkSemaphoreTypeCreateInfo timeline_semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
-        timeline_semaphore_info.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
-        timeline_semaphore_info.initialValue  = 0;
-
-        create_info.pNext = &timeline_semaphore_info;
+    if (_usage == EFenceUsage::PRESENT) {
+        //do nothing
+        VK_CHECK_RESULT(vkCreateSemaphore(*m_device, &create_info, nullptr, &m_binary));
     }
+    VkSemaphoreTypeCreateInfo timeline_semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
+    timeline_semaphore_info.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+    timeline_semaphore_info.initialValue  = 0;
 
+    create_info.pNext = &timeline_semaphore_info;
+    m_binary          = VK_NULL_HANDLE;
     VK_CHECK_RESULT(vkCreateSemaphore(*m_device, &create_info, nullptr, &m_semaphore));
+}
+VulkanRHIFence::~VulkanRHIFence() {
+    vkDestroySemaphore(m_device->GetDevice(), m_semaphore, VK_NULL_HANDLE);
+    if (m_binary != VK_NULL_HANDLE) {
+        vkDestroySemaphore(m_device->GetDevice(), m_binary, VK_NULL_HANDLE);
+    }
 }
 
 uint64_t VulkanRHIFence::GetValue() const {
@@ -916,19 +922,20 @@ void VulkanRHIFence::Wait(uint64_t value) {
 
 #pragma region viewport
 
-void VulkanViewport::Present() {
+void VulkanViewport::Present(RHIFence* _render_finished) {
 
-    //todo validate index
-    uint32_t      present_index = swapchain->AcquireNextImage();
-    VulkanDevice* device        = swapchain->m_device;
+    assert(_render_finished && "Fence Empty");
+    VulkanRHIFence* vk_fence = (VulkanRHIFence*)_render_finished;
+    VulkanDevice*   device   = swapchain->m_device;
     assert(device != nullptr && "Swapchain not valid");
 
-    swapchain->Present(device->GetPresentQueue());
+    swapchain->Present(device->GetPresentQueue(), vk_fence->GetBinaryHandle());
     // swapchain->Present();
 }
-void VulkanViewport::GetCurrentAttachmentView(RenderAttachmentView& _rav) {
-    _rav.texture_view    = (RHIView*)swapchain->m_swap_chain_buffers[swapchain->current_frame_offset].view;
-    _rav.required_layout = ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT;
+RHIView* VulkanViewport::GetNextFrameView() {
+    uint32_t index = swapchain->AcquireNextImage();
+    if (index == UINT32_MAX) return nullptr;
+    return swapchain->m_swap_chain_buffers[index].view;
 }
 #pragma endregion
 
