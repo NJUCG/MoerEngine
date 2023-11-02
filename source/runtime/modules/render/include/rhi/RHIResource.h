@@ -857,7 +857,7 @@ struct PipelineParametersBinding {
 
 enum class EFenceUsage {
     TIMELINE,
-    BINARY
+    PRESENT
 };
 struct RHIFenceCreateInfo {
     EFenceUsage usage = EFenceUsage::TIMELINE;
@@ -1033,8 +1033,9 @@ public:
     virtual void  Tick(float _delta_time) {}
     virtual void  WaitForFrameComplete() {}
 
-    virtual void                   Present() {}
-    virtual void                   GetCurrentAttachmentView(struct RenderAttachmentView&);
+    virtual void Present(RHIFence* _render_finished) {}
+    //aquire next back buffer index
+    virtual class RHIView*         GetNextFrameView() { return nullptr; }
     virtual const RHIViewportInfo& GetViewportInfo() const { return info; }
 };
 

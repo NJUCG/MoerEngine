@@ -2,10 +2,12 @@
 // Created by 74535 on 2023/10/5.
 //
 
+#include "PixelFormat.h"
 #include "VulkanUtil.h"
 #include "VulkanSwapChain.h"
 #include "log/LogSystem.h"
 #include "rhi/RHI.h"
+#include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "rhi/vulkan/VulkanRHI.h"
 #include "rhi/vulkan/misc/VulkanMacroUtils.h"
@@ -84,9 +86,13 @@ void VulkanSwapChain::Create(uint32_t* width, uint32_t* height, bool vsync) {
     vkGetSwapchainImagesKHR(*device, m_swap_chain, &image_count, m_swap_chain_images.data());
 
     for (size_t i = 0; i < image_count; ++i) {
-        m_swap_chain_buffers[i].image = m_swap_chain_images[i];
+
+        m_swap_chain_buffers[i].image = new VulkanRHITexture(RHITextureCreateInfo::Create2D("swapchain_image")
+                                                                 .SetExtent((int32_t)width, (int32_t)height)
+                                                                 .SetInitialLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED),
+                                                             m_swap_chain_images[i]);
         VkImageView temp_view         = CreateImageView(m_swap_chain_images[i], surface_format.format, 1, VK_IMAGE_ASPECT_COLOR_BIT);
-        m_swap_chain_buffers[i].view  = new VulkanAttachmentView(temp_view, RHIViewInfo::CreateBufferSRVInfo());
+        m_swap_chain_buffers[i].view  = new VulkanImageView(m_swap_chain_buffers[i].image, temp_view, RHIViewInfo::CreateBufferSRVInfo());
         m_swap_chain_buffers[i].view->AddRef();
     }
     VkSemaphoreCreateInfo image_semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
@@ -122,17 +128,23 @@ uint32_t VulkanSwapChain::AcquireNextImage() {
     }
     if (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR) {
         current_image_index = image_index;
+        //should wait
+        VkSemaphoreWaitInfo info;
+        info.sType          = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO;
+        info.semaphoreCount = 1;
+        info.pSemaphores    = &m_image_acquired_semaphores[current_frame_offset++];
+        vkWaitSemaphores(m_device->GetDevice(), &info, UINT64_MAX);
+
         return image_index;
     }
     assert(false && "Error acquiring next present texture.");
     return INT32_MAX;
 }
 
-void VulkanSwapChain::Present(VkQueue _queue) {
+void VulkanSwapChain::Present(VkQueue _queue, VkSemaphore _render_finished) {
     VkPresentInfoKHR present_info{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
-    VkSemaphore      render_finished_semaphore;
     present_info.waitSemaphoreCount = 1;
-    present_info.pWaitSemaphores    = &render_finished_semaphore;
+    present_info.pWaitSemaphores    = &_render_finished;
     present_info.swapchainCount     = 1;
     present_info.pSwapchains        = &m_swap_chain;
     present_info.pImageIndices      = &current_image_index;
@@ -149,7 +161,8 @@ void VulkanSwapChain::Present(VkQueue _queue) {
 void VulkanSwapChain::Cleanup() {
 
     for (uint32_t i = 0; i < m_swap_chain_buffers.size(); i++) {
-        m_swap_chain_buffers[i].view->DeRef();
+        m_swap_chain_buffers[i].view->Delete();
+        m_swap_chain_buffers[i].image->Delete();
     }
     vkDestroySwapchainKHR(m_device->GetDevice(), m_swap_chain, VK_NULL_HANDLE);
 
@@ -160,6 +173,7 @@ void VulkanSwapChain::Cleanup() {
     for (uint32_t i = 0; i < m_render_complete_semaphores.size(); i++) {
         vkDestroySemaphore(m_device->GetDevice(), m_render_complete_semaphores[i], VK_NULL_HANDLE);
     }
+    current_frame_offset = 0;
 }
 
 VkImageView VulkanSwapChain::CreateImageView(VkImage _image, VkFormat _format, uint32_t _mip_levels, VkImageAspectFlags _aspect_mask) {

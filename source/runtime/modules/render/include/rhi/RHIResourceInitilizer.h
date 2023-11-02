@@ -330,10 +330,10 @@ struct RHISubresourceRange : public RHISubresourceSlice {
 
     uint8_t num_mips = s_all;
 
-    RHISubresourceRange(ETextureAspectFlags _aspect = ETextureAspectFlags::NONE) : RHISubresourceSlice(
-                                                                                       _aspect,
-                                                                                       0,
-                                                                                       0){};
+    RHISubresourceRange(ETextureAspectFlags _aspect = ETextureAspectFlags::COLOR) : RHISubresourceSlice(
+                                                                                        _aspect,
+                                                                                        0,
+                                                                                        0){};
 
     RHISubresourceRange(
         ETextureAspectFlags _aspect,

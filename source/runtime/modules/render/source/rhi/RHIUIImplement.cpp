@@ -12,6 +12,7 @@
 #include "shader/ShaderParameterMacros.h"
 #include "shader/ShaderResourceManager.h"
 
+#include <array>
 #include <cstring>
 #include <imgui.h>
 #include <stdint.h>
@@ -45,8 +46,8 @@ public:
 
 IMPLEMENT_SHADER_TYPE(ImGuiShaderFrag, "GuiFrag.frag", "main", ST_FRAGMENT)
 
-void GuiInitPlatformInterface();
-
+void                   GuiInitPlatformInterface();
+void                   GuiRenderWindow(ImGuiViewport* viewport, void*);
 inline GuiBackendData* GetBackendData() {
     return ImGui::GetCurrentContext() ? (GuiBackendData*)ImGui::GetIO().BackendRendererUserData : nullptr;
 }
@@ -458,19 +459,92 @@ static void GuiCreateWindow(ImGuiViewport* viewport) {
 
     viewport_data->comand_list->Close();
 
-    RHIFenceCreateInfo fence_info{EFenceUsage::TIMELINE};
-    viewport_data->fence = g_rhi->RHICreateFence(fence_info);
+    RHIFenceCreateInfo present_fence_info{EFenceUsage::PRESENT};
+    viewport_data->present_fence = g_rhi->RHICreateFence(present_fence_info);
 
     RHIViewportInitializer viewport_info;
-    g_rhi->RHICreateViewport(viewport_info);
+
+    viewport_data->viewport = g_rhi->RHICreateViewport(viewport_info);
+}
+void GuiRenderWindow(ImGuiViewport* viewport, void*) {
+    GuiBackendData*  backend_data  = GetBackendData();
+    GuiViewportData* viewport_data = (GuiViewportData*)viewport->RendererUserData;
+
+    RHIView* present_view = viewport_data->viewport->GetNextFrameView();
+    if (present_view == nullptr) {
+        //meet resize event
+        return;
+    }
+
+    //transfer present texture layout to color attachment layout
+    RHIBarrierDependencyInfo             dependency_info;
+    std::array<RHITextureBarrierInfo, 1> texture_barriers;
+
+    texture_barriers[0].SetDstTextureLayout(ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT);
+    texture_barriers[0].SetSrcTextureLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED);
+    texture_barriers[0].p_texture = present_view->GetTexture();
+    texture_barriers[0].SetSrcStage(PS_BOTTOM_OF_PIPE);
+    texture_barriers[0].SetDstStage(PS_FRAGMENT_SHADER);
+    texture_barriers[0].SetSrcAccessFlags(ERHIAccessFlags::UNDEFINED);
+    texture_barriers[0].SetDstAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
+
+    dependency_info.texture_barrier_count = 1;
+    dependency_info.p_texture_barriers    = texture_barriers.data();
+
+    viewport_data->comand_list->Reset();
+
+    viewport_data->comand_list->Open();
+    viewport_data->comand_list->SetPipelineBarrier(dependency_info);
+
+    RHIRenderPassInfo pass_info;
+    pass_info.color_attachments[0].color_attachment_action               = AC_CLEAR_STORE;
+    pass_info.color_attachments[0].color_attachment_view.texture_view    = present_view;
+    pass_info.color_attachments[0].color_attachment_view.required_layout = ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT;
+
+    viewport_data->comand_list->BeginRenderPass(pass_info, "Imgui Window");
+
+    g_rhi->GUIRender(viewport->DrawData, viewport_data->comand_list);
+
+    //transfer present texture layout to present src
+    RHIBarrierDependencyInfo             texture_dependency_info;
+    std::array<RHITextureBarrierInfo, 1> texture_barriers_present;
+    texture_barriers_present[0].SetDstTextureLayout(ETextureLayout::TEXTURE_LAYOUT_PRESENT_SRC);
+    texture_barriers_present[0].SetSrcTextureLayout(ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT);
+    texture_barriers_present[0].p_texture = present_view->GetTexture();
+    texture_barriers_present[0].SetSrcAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
+
+    texture_dependency_info.texture_barrier_count = 1;
+    texture_dependency_info.p_texture_barriers    = texture_barriers.data();
+
+    viewport_data->comand_list->SetPipelineBarrier(texture_dependency_info);
+
+    viewport_data->comand_list->EndRenderPass();
+
+    viewport_data->comand_list->Close();
+
+    RHISubmitInfo submit_info{};
+
+    //wait for last frame recording
+    submit_info.Wait(viewport_data->present_fence, viewport_data->frame_index);
+    //signal this frame present fence
+    submit_info.Signal(viewport_data->present_fence, ++viewport_data->frame_index);
+
+    viewport_data->command_queue->SubmitCommands(1, viewport_data->comand_list);
+}
+
+void GuiSwapbuffer(ImGuiViewport* viewport, void*) {
+    GuiBackendData*  backend_data  = GetBackendData();
+    GuiViewportData* viewport_data = (GuiViewportData*)viewport->RendererUserData;
+    //present wait for this frame rendering end fence
+    viewport_data->viewport->Present(viewport_data->present_fence);
 }
 
 static void GuiRenderWindows() {
-    // ImGuiPlatformIO& platform_io = ImGui::GetPlatformIO();
-    //    for (int i = 1; i < platform_io.Viewports.Size; i++)
-    //        if ((platform_io.Viewports[i]->Flags & ImGuiViewportFlags_IsMinimized) == 0)
-    //            MyRenderFunction(platform_io.Viewports[i], my_args);
-    //    for (int i = 1; i < platform_io.Viewports.Size; i++)
-    //        if ((platform_io.Viewports[i]->Flags & ImGuiViewportFlags_IsMinimized) == 0)
-    //            MySwapBufferFunction(platform_io.Viewports[i], my_args);
+    ImGuiPlatformIO& platform_io = ImGui::GetPlatformIO();
+    for (int i = 1; i < platform_io.Viewports.Size; i++)
+        if ((platform_io.Viewports[i]->Flags & ImGuiViewportFlags_IsMinimized) == 0)
+            GuiRenderWindow(platform_io.Viewports[i], nullptr);
+    for (int i = 1; i < platform_io.Viewports.Size; i++)
+        if ((platform_io.Viewports[i]->Flags & ImGuiViewportFlags_IsMinimized) == 0)
+            GuiSwapbuffer(platform_io.Viewports[i], nullptr);
 }

@@ -16,9 +16,10 @@
 #include <vector>
 
 struct SwapChainBuffer {
-    VkImage image;
+    // VkImage image;
+    class VulkanRHITexture* image;
     // VkImageView view;
-    class VulkanAttachmentView* view;
+    class VulkanImageView* view;
 };
 
 class VulkanSwapChain {
@@ -26,7 +27,7 @@ public:
     void     Connect(VkInstance _instance, VkSurfaceKHR _surface, VulkanDevice* _device);
     void     Init(uint32_t* width, uint32_t* height, uint32_t max_frame_in_flight, bool vsync);
     uint32_t AcquireNextImage();
-    void     Present(VkQueue _queue);
+    void     Present(VkQueue _queue, VkSemaphore _render_finished);
     void     Cleanup();
 
     VkSurfaceFormatKHR GetSurfaceFormat() const { return surface_format; }
