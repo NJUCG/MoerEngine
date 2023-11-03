@@ -11,18 +11,20 @@ protected:
 public:
     virtual void SetBatchedShaderParameter(const RHIBatchedShaderParameters& _parameters) = 0;
     RHI_API ~RHICommandListBase();
+
+    virtual void* GetNativeHandle() const { return nullptr; }
 };
 
 class RHIGraphicsCommandList : public RHICommandListBase {
 public:
-    virtual void SetBatchedShaderParameter(const RHIBatchedShaderParameters& _parameters)                                 = 0;
-    virtual void SetPipelineState(RHIGraphicsPipelineState* _graphics_pso, const RHIShaderBoundStateInput& _shader_input) = 0;
+    virtual void SetBatchedShaderParameter(const RHIBatchedShaderParameters& _parameters) = 0;
+    virtual void SetPipelineState(RHIGraphicsPipelineState* _graphics_pso)                = 0;
     virtual void Open() {}
-    virtual void Close()                                             = 0;
-    virtual void Reset(RHIGraphicsPipelineState* _graphics_pso)      = 0;
-    virtual void ClearState(RHIGraphicsPipelineState* _graphics_pso) = 0;
+    virtual void Close()                                                  = 0;
+    virtual void Reset(RHIGraphicsPipelineState* _graphics_pso = nullptr) = 0;
+    virtual void ClearState(RHIGraphicsPipelineState* _graphics_pso)      = 0;
 
-    virtual void DrawIndexedInstanced(uint32_t _index_count, uint32_t _instance_count, int32_t _base_vertex_location, uint32_t _start_instance_location) = 0;
+    virtual void DrawIndexedInstanced(uint32_t _index_count, uint32_t _instance_count, uint32_t _start_index_location, int32_t _base_vertex_location) = 0;
 
     virtual void DrawIndexedIndirect(
         RHIBuffer* _argument_buffer,

@@ -6,6 +6,8 @@
 #define VULKAN_SWAP_CHAIN_H
 
 #include "VulkanDevice.h"
+#include "misc/CountableRef.h"
+#include "rhi/vulkan/VulkanRHI.h"
 #include "vulkan/vulkan_core.h"
 
 #include <vulkan/vulkan.h>
@@ -14,21 +16,28 @@
 #include <vector>
 
 struct SwapChainBuffer {
-    VkImage     image;
-    VkImageView view;
+    // VkImage image;
+    class VulkanRHITexture* image;
+    // VkImageView view;
+    class VulkanImageView* view;
 };
 
 class VulkanSwapChain {
 public:
     void     Connect(VkInstance _instance, VkSurfaceKHR _surface, VulkanDevice* _device);
-    void     Init(uint32_t* width, uint32_t* height, bool vsync);
+    void     Init(uint32_t* width, uint32_t* height, uint32_t max_frame_in_flight, bool vsync);
     uint32_t AcquireNextImage();
-    void     Present(VkQueue _queue);
+    void     Present(VkQueue _queue, VkSemaphore _render_finished);
     void     Cleanup();
 
     VkSurfaceFormatKHR GetSurfaceFormat() const { return surface_format; }
 
 private:
+    void Create(uint32_t* width, uint32_t* height, bool vsync);
+    void Recreate();
+
+private:
+    friend class VulkanViewport;
     VkInstance     m_instance;
     VulkanDevice*  m_device;
     VkSwapchainKHR m_swap_chain;
@@ -41,6 +50,7 @@ private:
     std::vector<SwapChainBuffer> m_swap_chain_buffers;
 
     uint32_t current_image_index;
+    uint32_t current_frame_offset;
     uint32_t semaphore_index;
 
     VkSurfaceFormatKHR surface_format;

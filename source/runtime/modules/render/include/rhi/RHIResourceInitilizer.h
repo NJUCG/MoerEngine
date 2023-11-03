@@ -1,9 +1,11 @@
 #ifndef RHI_RESOURCE_INITIALIZER_H
 #define RHI_RESOURCE_INITIALIZER_H
+#include "PixelFormat.h"
 #include "RHICommon.h"
 #include "API_Macro.h"
 #include "misc/Hash.h"
 #include "math/Math.h"
+#include "rhi/RHICommon.h"
 
 #include <numeric>
 #include <array>
@@ -198,6 +200,13 @@ struct ViewportBounds {
     }
 };
 
+struct RHIViewportInitializer {
+    void*        window_handle;
+    Extent2D     size{0, 0};
+    bool         b_is_full_screen;
+    EPixelFormat preferred_format;
+};
+
 enum class EClearAttachment {
     NONE,
     COLOR,
@@ -321,10 +330,10 @@ struct RHISubresourceRange : public RHISubresourceSlice {
 
     uint8_t num_mips = s_all;
 
-    RHISubresourceRange() : RHISubresourceSlice(
-                                ETextureAspectFlags::NONE,
-                                0,
-                                0){};
+    RHISubresourceRange(ETextureAspectFlags _aspect = ETextureAspectFlags::COLOR) : RHISubresourceSlice(
+                                                                                        _aspect,
+                                                                                        0,
+                                                                                        0){};
 
     RHISubresourceRange(
         ETextureAspectFlags _aspect,

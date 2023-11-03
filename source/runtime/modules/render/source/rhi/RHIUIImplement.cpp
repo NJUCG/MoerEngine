@@ -3,6 +3,8 @@
 #include "math/Matrix.h"
 #include "rhi/RHI.h"
 #include "RHIUIImplement.h"
+#include "rhi/RHICommandList.h"
+#include "rhi/RHICommandQueue.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
@@ -10,13 +12,18 @@
 #include "shader/ShaderParameterMacros.h"
 #include "shader/ShaderResourceManager.h"
 
+#include <array>
+#include <cstring>
 #include <imgui.h>
+#include <stdint.h>
+#include <vadefs.h>
+#include <vcruntime_string.h>
 
 class ImGuiShaderVert : public Shader {
     DEFINE_SHADER_TYPE(ImGuiShaderVert, Global, RHI_API, ...)
 public:
     BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(UIVertex)
-    DEFINE_SHADER_PARAM(Moer::Matrix4x4f, ProjectionMatrix)
+    DEFINE_SHADER_PARAM(Moer::Matrix4x4f, mvp)
     END_SHADER_CONSTANT_STRUCT_DEFINITION()
     BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
 
@@ -39,15 +46,17 @@ public:
 
 IMPLEMENT_SHADER_TYPE(ImGuiShaderFrag, "GuiFrag.frag", "main", ST_FRAGMENT)
 
-void GuiInitPlatformInterface();
-
+void                   GuiInitPlatformInterface();
+void                   GuiRenderWindow(ImGuiViewport* viewport, void*);
 inline GuiBackendData* GetBackendData() {
     return ImGui::GetCurrentContext() ? (GuiBackendData*)ImGui::GetIO().BackendRendererUserData : nullptr;
 }
 
-void DestroyRenderBuffers(GuiFrameRenderBuffers* buffer);
+void DestroyRenderBuffers(GuiFrameRenderBuffers* _render_buffers);
 
 bool CreateDeviceObjects();
+void CreateFontsTexture();
+void SetupRenderState(ImDrawData* draw_data, RHIGraphicsCommandList* commandList, GuiFrameRenderBuffers* render_buffers);
 void InvalidateDeviceObjects();
 
 bool RHI::GUIInit(uint32_t _num_frames_in_flight) {
@@ -101,7 +110,127 @@ void RHI::GUINewFrame() {
     if (!bd->pipeline)
         CreateDeviceObjects();
 }
-void RHI::GUIRender() {
+void RHI::GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list) {
+
+    ImDrawData*  draw_data       = static_cast<ImDrawData*>(_draw_data);
+    Shader*      frag_shader     = ShaderResourceManager::GetShader<ImGuiShaderFrag>();
+    RHIShaderRef frag_rhi_shader = g_rhi->RHICreateShader(frag_shader);
+
+    GuiBackendData*  backend_data  = GetBackendData();
+    GuiViewportData* viewport_data = (GuiViewportData*)draw_data->OwnerViewport->RendererUserData;
+
+    //todo frame_index should not manage here
+    viewport_data->frame_index += 1;
+    GuiFrameRenderBuffers* render_buffers = &viewport_data->render_buffers[viewport_data->frame_index % backend_data->num_frames_in_flight];
+
+    if (render_buffers->vertex_buffer == nullptr || render_buffers->vertex_buffer->GetSize() < draw_data->TotalVtxCount * sizeof(ImDrawVert)) {
+        //delete the old one and create new
+        render_buffers->vertex_buffer->DeRef();
+        uint32_t new_size             = (draw_data->TotalVtxCount + 4096) * sizeof(ImDrawVert);
+        render_buffers->vertex_buffer = g_rhi->RHICreateBuffer(RHIBufferCreateInfo::Create(new_size, sizeof(ImDrawVert), EBufferUsageFlags::VERTEX_BUFFER));
+    }
+    if (render_buffers->index_buffer == nullptr || render_buffers->index_buffer->GetSize() < draw_data->TotalIdxCount * sizeof(ImDrawIdx)) {
+        render_buffers->index_buffer->DeRef();
+        uint32_t new_size            = (draw_data->TotalIdxCount + 8192) * sizeof(ImDrawIdx);
+        render_buffers->index_buffer = g_rhi->RHICreateBuffer(RHIBufferCreateInfo::Create(new_size, sizeof(ImDrawIdx), EBufferUsageFlags::INDEX_BUFFER));
+    }
+
+    ImDrawVert* vertex_dst = nullptr;
+    ImDrawIdx*  index_dst  = nullptr;
+
+    vertex_dst = (ImDrawVert*)g_rhi->RHIMapBuffer(render_buffers->vertex_buffer, 0, UINT64_MAX);
+    index_dst  = (ImDrawIdx*)g_rhi->RHIMapBuffer(render_buffers->index_buffer, 0, UINT64_MAX);
+
+    for (int32_t n = 0; n < draw_data->CmdListsCount; n++) {
+        const ImDrawList* cmd_list = draw_data->CmdLists[n];
+        memcpy(vertex_dst, cmd_list->VtxBuffer.Data, cmd_list->VtxBuffer.Size * sizeof(ImDrawVert));
+        memcpy(index_dst, cmd_list->IdxBuffer.Data, cmd_list->IdxBuffer.Size * sizeof(ImDrawIdx));
+
+        vertex_dst += cmd_list->VtxBuffer.Size;
+        index_dst += cmd_list->IdxBuffer.Size;
+    }
+    g_rhi->RHIUnmapBuffer(render_buffers->vertex_buffer);
+    g_rhi->RHIUnmapBuffer(render_buffers->index_buffer);
+
+    SetupRenderState(draw_data, _ui_command_list, render_buffers);
+    int32_t global_vertex_offset = 0,
+            global_index_offset  = 0;
+
+    ImVec2 clip_off = draw_data->DisplayPos;
+    for (int32_t n = 0; n < draw_data->CmdListsCount; n++) {
+        const ImDrawList* cmd_list = draw_data->CmdLists[n];
+        for (int32_t cmd_index; cmd_list->CmdBuffer.Size; cmd_index++) {
+            const ImDrawCmd* cmd = &cmd_list->CmdBuffer[cmd_index];
+            if (cmd->UserCallback != nullptr) {
+                if (cmd->UserCallback == ImDrawCallback_ResetRenderState) {
+                    SetupRenderState(draw_data, _ui_command_list, render_buffers);
+                } else {
+                    cmd->UserCallback(cmd_list, cmd);
+                }
+            } else {
+                // Project scissor/clipping rectangles into framebuffer space
+                ImVec2 clip_min(cmd->ClipRect.x - clip_off.x, cmd->ClipRect.y - clip_off.y);
+                ImVec2 clip_max(cmd->ClipRect.z - clip_off.x, cmd->ClipRect.w - clip_off.y);
+                if (clip_max.x <= clip_min.x || clip_max.y <= clip_min.y)
+                    continue;
+
+                Rect2D r = {(int32_t)clip_min.x, (int32_t)clip_min.y, (uint32_t)(clip_max.x - clip_min.x), uint32_t(clip_max.y - clip_min.y)};
+
+                RHIShaderResourceView* texture_view = (RHIShaderResourceView*)cmd->GetTexID();
+
+                ImGuiShaderFrag::Parameters params;
+                params.texture0 = texture_view;
+
+                RHIBatchedShaderParameters batched_params;
+                batched_params.SetParameters(frag_shader, params);
+
+                _ui_command_list->SetBatchedShaderParameter(frag_rhi_shader, batched_params);
+                _ui_command_list->SetScissor(r);
+                _ui_command_list->DrawIndexedInstanced(cmd->ElemCount, 1, cmd->IdxOffset, cmd->VtxOffset + global_vertex_offset);
+            }
+        }
+        global_index_offset += cmd_list->IdxBuffer.Size;
+        global_vertex_offset += cmd_list->VtxBuffer.Size;
+    }
+}
+
+void SetupRenderState(ImDrawData* draw_data, RHIGraphicsCommandList* commandList, GuiFrameRenderBuffers* render_buffers) {
+    GuiBackendData* backend_data = GetBackendData();
+
+    ImGuiShaderVert::Parameters param;
+    std::memset(&param.vertexBuffer, 0, sizeof(param.vertexBuffer));
+    {
+        float l = draw_data->DisplayPos.x;
+        float r = draw_data->DisplayPos.x + draw_data->DisplaySize.x;
+        float t = draw_data->DisplayPos.y;
+        float b = draw_data->DisplayPos.y + draw_data->DisplaySize.y;
+        float mvp[4][4] =
+            {
+                {2.0f / (r - l), 0.0f, 0.0f, 0.0f},
+                {0.0f, 2.0f / (t - b), 0.0f, 0.0f},
+                {0.0f, 0.0f, 0.5f, 0.0f},
+                {(r + l) / (l - r), (t + b) / (b - t), 0.5f, 1.0f},
+            };
+        memcpy(&param.vertexBuffer.mvp, mvp, sizeof(mvp));
+    }
+    ImGuiShaderFrag::Parameters frag_param;
+    frag_param.sampler0 = backend_data->font_sampler;
+
+    ViewPort view_port(0, 0, draw_data->DisplaySize.x, draw_data->DisplaySize.y, 0.f, 1.f);
+    commandList->SetViewPort(view_port);
+
+    uint32_t offsets[] = {0};
+    commandList->BindVertexBuffers(0, 1, &render_buffers->vertex_buffer, offsets);
+    commandList->BindIndexBuffer(render_buffers->index_buffer.Get(), 0, EIndexElementType::IET_UINT16);
+
+    RHIBatchedShaderParameters batched_params;
+
+    batched_params.SetParameters(backend_data->shader_module_vert, param);
+    batched_params.SetParameters(backend_data->shader_module_frag, frag_param);
+
+    commandList->SetPipelineState(backend_data->pipeline);
+    commandList->SetBatchedShaderParameter(nullptr, batched_params);
+    //blend factor?
 }
 
 //
@@ -115,118 +244,29 @@ void InvalidateDeviceObjects() {
     //todo: destroy maybe?
     bd->pipeline->DeRef();
     bd->font_texture->DeRef();
+    bd->font_view->DeRef();
+    bd->font_sampler->DeRef();
+
+    bd->shader_module_frag->DeRef();
+    bd->shader_module_vert->DeRef();
+
     io.Fonts->SetTexID(0);// We copied bd->pFontTextureView to io.Fonts->TexID so let's clear that as well.
 }
 bool CreateDeviceObjects() {
-    GuiBackendData* bd = GetBackendData();
-    if (!bd)
+    GuiBackendData* backend_data = GetBackendData();
+    if (!backend_data)
         return false;
-    if (bd->pipeline)
+    if (backend_data->pipeline)
         InvalidateDeviceObjects();
 
-    // // Create the root signature
-    // {
-    //     D3D12_DESCRIPTOR_RANGE descRange            = {};
-    //     descRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    //     descRange.NumDescriptors                    = 1;
-    //     descRange.BaseShaderRegister                = 0;
-    //     descRange.RegisterSpace                     = 0;
-    //     descRange.OffsetInDescriptorsFromTableStart = 0;
+    RHISamplerInitializer sampler_init(ESamplerFilter::SF_LINEAR);
+    sampler_init.compare_op    = CO_ALWAYS;
+    RHISamplerRef sampler      = g_rhi->RHICreateSampler(sampler_init);
+    backend_data->font_sampler = sampler;
 
-    //     D3D12_ROOT_PARAMETER param[2] = {};
-
-    //     param[0].ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    //     param[0].Constants.ShaderRegister = 0;
-    //     param[0].Constants.RegisterSpace  = 0;
-    //     param[0].Constants.Num32BitValues = 16;
-    //     param[0].ShaderVisibility         = D3D12_SHADER_VISIBILITY_VERTEX;
-
-    //     param[1].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    //     param[1].DescriptorTable.NumDescriptorRanges = 1;
-    //     param[1].DescriptorTable.pDescriptorRanges   = &descRange;
-    //     param[1].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
-
-    RHISamplerRef sampler;
-    RHITextureRef texture;
-    //     // Bilinear sampling is required by default. Set 'io.Fonts->Flags |= ImFontAtlasFlags_NoBakedLines' or 'style.AntiAliasedLinesUseTex = false' to allow point/nearest sampling.
-    //     D3D12_STATIC_SAMPLER_DESC staticSampler = {};
-    //     staticSampler.Filter                    = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
-    //     staticSampler.AddressU                  = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-    //     staticSampler.AddressV                  = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-    //     staticSampler.AddressW                  = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-    //     staticSampler.MipLODBias                = 0.f;
-    //     staticSampler.MaxAnisotropy             = 0;
-    //     staticSampler.ComparisonFunc            = D3D12_COMPARISON_FUNC_ALWAYS;
-    //     staticSampler.BorderColor               = D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK;
-    //     staticSampler.MinLOD                    = 0.f;
-    //     staticSampler.MaxLOD                    = 0.f;
-    //     staticSampler.ShaderRegister            = 0;
-    //     staticSampler.RegisterSpace             = 0;
-    //     staticSampler.ShaderVisibility          = D3D12_SHADER_VISIBILITY_PIXEL;
-
-    //     D3D12_ROOT_SIGNATURE_DESC desc = {};
-    //     desc.NumParameters             = _countof(param);
-    //     desc.pParameters               = param;
-    //     desc.NumStaticSamplers         = 1;
-    //     desc.pStaticSamplers           = &staticSampler;
-    //     desc.Flags =
-    //         D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT |
-    //         D3D12_ROOT_SIGNATURE_FLAG_DENY_HULL_SHADER_ROOT_ACCESS |
-    //         D3D12_ROOT_SIGNATURE_FLAG_DENY_DOMAIN_SHADER_ROOT_ACCESS |
-    //         D3D12_ROOT_SIGNATURE_FLAG_DENY_GEOMETRY_SHADER_ROOT_ACCESS;
-
-    //     // Load d3d12.dll and D3D12SerializeRootSignature() function address dynamically to facilitate using with D3D12On7.
-    //     // See if any version of d3d12.dll is already loaded in the process. If so, give preference to that.
-    //     static HINSTANCE d3d12_dll = ::GetModuleHandleA("d3d12.dll");
-    //     if (d3d12_dll == nullptr) {
-    //         // Attempt to load d3d12.dll from local directories. This will only succeed if
-    //         // (1) the current OS is Windows 7, and
-    //         // (2) there exists a version of d3d12.dll for Windows 7 (D3D12On7) in one of the following directories.
-    //         // See https://github.com/ocornut/imgui/pull/3696 for details.
-    //         const char* localD3d12Paths[] = {".\\d3d12.dll", ".\\d3d12on7\\d3d12.dll", ".\\12on7\\d3d12.dll"};// A. current directory, B. used by some games, C. used in Microsoft D3D12On7 sample
-    //         for (int i = 0; i < IM_ARRAYSIZE(localD3d12Paths); i++)
-    //             if ((d3d12_dll = ::LoadLibraryA(localD3d12Paths[i])) != nullptr)
-    //                 break;
-
-    //         // If failed, we are on Windows >= 10.
-    //         if (d3d12_dll == nullptr)
-    //             d3d12_dll = ::LoadLibraryA("d3d12.dll");
-
-    //         if (d3d12_dll == nullptr)
-    //             return false;
-    //     }
-
-    //     PFN_D3D12_SERIALIZE_ROOT_SIGNATURE D3D12SerializeRootSignatureFn = (PFN_D3D12_SERIALIZE_ROOT_SIGNATURE)::GetProcAddress(d3d12_dll, "D3D12SerializeRootSignature");
-    //     if (D3D12SerializeRootSignatureFn == nullptr)
-    //         return false;
-
-    //     ID3DBlob* blob = nullptr;
-    //     if (D3D12SerializeRootSignatureFn(&desc, D3D_ROOT_SIGNATURE_VERSION_1, &blob, nullptr) != S_OK)
-    //         return false;
-
-    //     bd->pd3dDevice->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(), IID_PPV_ARGS(&bd->pRootSignature));
-    //     blob->Release();
-    // }
-
-    // // By using D3DCompile() from <d3dcompiler.h> / d3dcompiler.lib, we introduce a dependency to a given version of d3dcompiler_XX.dll (see D3DCOMPILER_DLL_A)
-    // // If you would like to use this DX12 sample code but remove this dependency you can:
-    // //  1) compile once, save the compiled shader blobs into a file or source code and assign them to psoDesc.VS/PS [preferred solution]
-    // //  2) use code to detect any version of the DLL and grab a pointer to D3DCompile from the DLL.
-    // // See https://github.com/ocornut/imgui/pull/638 for sources and details.
-
-    // D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc;
-    // memset(&psoDesc, 0, sizeof(D3D12_GRAPHICS_PIPELINE_STATE_DESC));
-    // psoDesc.NodeMask              = 1;
-    // psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-    // psoDesc.pRootSignature        = bd->pRootSignature;
-    // psoDesc.SampleMask            = UINT_MAX;
-    // psoDesc.NumRenderTargets      = 1;
-    // psoDesc.RTVFormats[0]         = bd->RTVFormat;
-    // psoDesc.SampleDesc.Count      = 1;
-    // psoDesc.Flags                 = D3D12_PIPELINE_STATE_FLAG_NONE;
     RHIGraphicsPipelineStateInitializer pso_init;
 
-    pso_init.color_attachment_formats[0] = bd->attachment_format;
+    pso_init.color_attachment_formats[0] = backend_data->attachment_format;
     pso_init.color_attachment_flags[0]   = ETextureUsageFlags::COLOR_ATTACHMENT;
     pso_init.color_attachment_count      = pso_init.CalcValidColorAttachmentCount();
 
@@ -285,14 +325,226 @@ bool CreateDeviceObjects() {
     pso_init.rasterizer_state    = g_rhi->RHICreateRasterizationState(rast_init);
     pso_init.depth_stencil_state = g_rhi->RHICreateDepthStencilState(depth_stencil_init);
 
-    bd->pipeline = g_rhi->RHICreateGraphicsPipelineState(pso_init);
-
-    // ImGui_ImplDX12_CreateFontsTexture();
+    backend_data->pipeline = g_rhi->RHICreateGraphicsPipelineState(pso_init);
+    //font texture and srv
+    CreateFontsTexture();
 
     return true;
 };
+
+void CreateFontsTexture() {
+    ImGuiIO&        io           = ImGui::GetIO();
+    GuiBackendData* backend_data = GetBackendData();
+
+    uint8_t* pixels;
+
+    int width, height;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+
+    //upload texture
+    {
+        const uint32_t alignment    = 256;
+        RHITextureRef  font_texture = nullptr;
+
+        font_texture          = g_rhi->RHICreateTexture(RHITextureCreateInfo::Create("FontTexture2D", ETextureDimension::TEX_2D)
+                                                   .SetNumSamples(1)
+                                                   .SetExtent({width, height})
+                                                   .SetNumMips(1)
+                                                   .SetArraySize(1)
+                                                   .SetFormat(PF_R8G8B8A8_UNORM)
+                                                   .SetUsageFlags(ETextureUsageFlags::SHADER_RESOURCE | ETextureUsageFlags::SRGB)
+                                                   .SetInitialLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED));
+        uint32_t upload_pitch = (width * 4 + alignment - 1u) & ~(alignment - 1u);
+        uint32_t upload_size  = height * upload_pitch;
+
+        RHIBufferRef staging_buffer = g_rhi->RHICreateBuffer(
+            RHIBufferCreateInfo::Create(upload_size, 0, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE));
+
+        assert(font_texture.Get() && staging_buffer.Get());
+
+        void* mapped = g_rhi->RHIMapBuffer(staging_buffer, 0, upload_size);
+        for (int32_t y = 0; y < height; y++) {
+            memcpy((void*)((uintptr_t)mapped + y * upload_pitch), pixels + y * width * 4, width * 4);
+        }
+        g_rhi->RHIUnmapBuffer(staging_buffer);
+
+        RHISubresourceRange range{ETextureAspectFlags::COLOR};
+
+        RHITextureBarrierInfo tex_barriers[2];
+
+        tex_barriers[0].src_layout         = TEXTURE_LAYOUT_UNDEFINED;
+        tex_barriers[0].dst_layout         = TEXTURE_LAYOUT_TRANSFER_DST;
+        tex_barriers[0].src_access         = ERHIAccessFlags::UNDEFINED;
+        tex_barriers[0].dst_access         = ERHIAccessFlags::TRANSFER_WRITE;
+        tex_barriers[0].p_texture          = font_texture;
+        tex_barriers[0].sub_resource_range = range;
+
+        tex_barriers[1].src_layout         = TEXTURE_LAYOUT_TRANSFER_DST;
+        tex_barriers[1].dst_layout         = TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        tex_barriers[1].src_access         = ERHIAccessFlags::TRANSFER_WRITE;
+        tex_barriers[1].dst_access         = ERHIAccessFlags::SHADER_READ;
+        tex_barriers[1].p_texture          = font_texture;
+        tex_barriers[1].sub_resource_range = range;
+
+        RHIGraphicsCommandList* command_list = g_rhi->CreateGraphicsCommandList();
+
+        RHIBarrierDependencyInfo font_create_barriers{};
+        font_create_barriers.texture_barrier_count = 1;
+        font_create_barriers.p_texture_barriers    = tex_barriers;
+
+        command_list->Open();
+        command_list->SetPipelineBarrier(font_create_barriers);
+
+        RHISubresourceSlice        resource_slice(ETextureAspectFlags::COLOR, 0, 0);
+        RHICopyBufferToTextureInfo copy_info(
+            ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST,
+            {0, 0, 0},
+            {(uint32_t)width, (uint32_t)height, 1},
+            resource_slice,
+            0,
+            upload_pitch,
+            height);
+
+        command_list->CopyBufferToTexture(staging_buffer, font_texture, copy_info);
+
+        RHIBarrierDependencyInfo font_copy_barriers{};
+        font_copy_barriers.p_texture_barriers    = &tex_barriers[1];
+        font_copy_barriers.texture_barrier_count = 1;
+
+        command_list->SetPipelineBarrier(font_copy_barriers);
+
+        command_list->Close();
+
+        RHICommandQueue* queue = g_rhi->CreateCommandQueue(ECommandQueueType::GRAPHICS);
+
+        RHIFenceCreateInfo fence_info{EFenceUsage::TIMELINE};
+        RHIFenceRef        fence = g_rhi->RHICreateFence(fence_info);
+
+        RHISubmitInfo submit_info;
+
+        uint64_t wait_value = 1;
+        submit_info.Signal(fence, wait_value);
+        queue->SubmitCommands(1, command_list, &submit_info);
+
+        fence->Wait(wait_value);
+
+        auto srv_info = RHIViewInfo::CreateTextureSRVInfo()
+                            .SetFormat(PF_R8G8B8A8_UNORM)
+                            .SetDimension(ETextureDimension::TEX_2D)
+                            .SetMipRange(0, 1);
+
+        backend_data->font_view    = g_rhi->RHICreateShaderResourceView(font_texture, srv_info);
+        backend_data->font_texture = font_texture;
+    }
+    io.Fonts->SetTexID((ImTextureID)backend_data->font_view);
+}
 void GuiInitPlatformInterface() {
 }
 
-void DestroyRenderBuffers(GuiFrameRenderBuffers* buffer) {
+void DestroyRenderBuffers(GuiFrameRenderBuffers* _render_buffers) {
+    _render_buffers->index_buffer->DeRef();
+    _render_buffers->vertex_buffer->DeRef();
+}
+
+static void GuiCreateWindow(ImGuiViewport* viewport) {
+    GuiBackendData*  backend_data  = GetBackendData();
+    GuiViewportData* viewport_data = IM_NEW(GuiViewportData)(backend_data->num_frames_in_flight);
+
+    viewport->RendererUserData = viewport_data;
+
+    viewport_data->frame_index   = UINT_MAX;
+    viewport_data->command_queue = g_rhi->CreateCommandQueue(ECommandQueueType::GRAPHICS);
+
+    viewport_data->comand_list = g_rhi->CreateGraphicsCommandList();
+
+    viewport_data->comand_list->Close();
+
+    RHIFenceCreateInfo present_fence_info{EFenceUsage::PRESENT};
+    viewport_data->present_fence = g_rhi->RHICreateFence(present_fence_info);
+
+    RHIViewportInitializer viewport_info;
+
+    viewport_data->viewport = g_rhi->RHICreateViewport(viewport_info);
+}
+void GuiRenderWindow(ImGuiViewport* viewport, void*) {
+    GuiBackendData*  backend_data  = GetBackendData();
+    GuiViewportData* viewport_data = (GuiViewportData*)viewport->RendererUserData;
+
+    RHIView* present_view = viewport_data->viewport->GetNextFrameView();
+    if (present_view == nullptr) {
+        //meet resize event
+        return;
+    }
+
+    //transfer present texture layout to color attachment layout
+    RHIBarrierDependencyInfo             dependency_info;
+    std::array<RHITextureBarrierInfo, 1> texture_barriers;
+
+    texture_barriers[0].SetDstTextureLayout(ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT);
+    texture_barriers[0].SetSrcTextureLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED);
+    texture_barriers[0].p_texture = present_view->GetTexture();
+    texture_barriers[0].SetSrcStage(PS_BOTTOM_OF_PIPE);
+    texture_barriers[0].SetDstStage(PS_FRAGMENT_SHADER);
+    texture_barriers[0].SetSrcAccessFlags(ERHIAccessFlags::UNDEFINED);
+    texture_barriers[0].SetDstAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
+
+    dependency_info.texture_barrier_count = 1;
+    dependency_info.p_texture_barriers    = texture_barriers.data();
+
+    viewport_data->comand_list->Reset();
+
+    viewport_data->comand_list->Open();
+    viewport_data->comand_list->SetPipelineBarrier(dependency_info);
+
+    RHIRenderPassInfo pass_info;
+    pass_info.color_attachments[0].color_attachment_action               = AC_CLEAR_STORE;
+    pass_info.color_attachments[0].color_attachment_view.texture_view    = present_view;
+    pass_info.color_attachments[0].color_attachment_view.required_layout = ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT;
+
+    viewport_data->comand_list->BeginRenderPass(pass_info, "Imgui Window");
+
+    g_rhi->GUIRender(viewport->DrawData, viewport_data->comand_list);
+
+    //transfer present texture layout to present src
+    RHIBarrierDependencyInfo             texture_dependency_info;
+    std::array<RHITextureBarrierInfo, 1> texture_barriers_present;
+    texture_barriers_present[0].SetDstTextureLayout(ETextureLayout::TEXTURE_LAYOUT_PRESENT_SRC);
+    texture_barriers_present[0].SetSrcTextureLayout(ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT);
+    texture_barriers_present[0].p_texture = present_view->GetTexture();
+    texture_barriers_present[0].SetSrcAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
+
+    texture_dependency_info.texture_barrier_count = 1;
+    texture_dependency_info.p_texture_barriers    = texture_barriers.data();
+
+    viewport_data->comand_list->SetPipelineBarrier(texture_dependency_info);
+
+    viewport_data->comand_list->EndRenderPass();
+
+    viewport_data->comand_list->Close();
+
+    RHISubmitInfo submit_info{};
+
+    //wait for last frame recording
+    submit_info.Wait(viewport_data->present_fence, viewport_data->frame_index);
+    //signal this frame present fence
+    submit_info.Signal(viewport_data->present_fence, ++viewport_data->frame_index);
+
+    viewport_data->command_queue->SubmitCommands(1, viewport_data->comand_list);
+}
+
+void GuiSwapbuffer(ImGuiViewport* viewport, void*) {
+    GuiBackendData*  backend_data  = GetBackendData();
+    GuiViewportData* viewport_data = (GuiViewportData*)viewport->RendererUserData;
+    //present wait for this frame rendering end fence
+    viewport_data->viewport->Present(viewport_data->present_fence);
+}
+
+static void GuiRenderWindows() {
+    ImGuiPlatformIO& platform_io = ImGui::GetPlatformIO();
+    for (int i = 1; i < platform_io.Viewports.Size; i++)
+        if ((platform_io.Viewports[i]->Flags & ImGuiViewportFlags_IsMinimized) == 0)
+            GuiRenderWindow(platform_io.Viewports[i], nullptr);
+    for (int i = 1; i < platform_io.Viewports.Size; i++)
+        if ((platform_io.Viewports[i]->Flags & ImGuiViewportFlags_IsMinimized) == 0)
+            GuiSwapbuffer(platform_io.Viewports[i], nullptr);
 }

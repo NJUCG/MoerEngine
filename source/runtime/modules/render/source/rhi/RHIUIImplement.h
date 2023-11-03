@@ -3,6 +3,7 @@
 
 #include "PixelFormat.h"
 #include "rhi/RHICommandList.h"
+#include "rhi/RHICommandQueue.h"
 #include "rhi/RHIResource.h"
 #include "shader/Shader.h"
 
@@ -48,18 +49,26 @@ struct GuiViewportData {
     int width;
     int height;
 
+    RHICommandQueue*        command_queue;
     RHIGraphicsCommandList* comand_list;
-    RHIFence*               fence;
+
+    RHIFenceRef present_fence;
 
     uint32_t         num_frames_in_flight;
     GuiFrameContext* frames;
 
-    uint32_t               frame_index;   // Current frame being rendered to (0 <= FrameIndex < FrameInFlightCount)
+    RHIViewportRef viewport;
+
+    uint64_t               frame_index;   // Current frame being rendered to (0 <= FrameIndex < FrameInFlightCount)
     GuiFrameRenderBuffers* render_buffers;// Used by all viewports
 
     GuiViewportData(uint32_t _num_frames_in_flight) : num_frames_in_flight(_num_frames_in_flight) {
         memset(&render_buffers, 0, sizeof(render_buffers));
     }
     ~GuiViewportData() {}
+};
+
+struct GuiViewportData2 {
+    RHIViewportRef viewport;
 };
 #endif

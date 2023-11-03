@@ -1,5 +1,6 @@
 #ifndef RHI_H
 #define RHI_H
+#include "PixelFormat.h"
 #include "RHIResource.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
@@ -13,13 +14,16 @@ class RHIComputeCommandList;
 class RHICommandQueue;
 class Shader;
 
+struct RHIInitInfo {
+    uint32_t max_frame_in_flight = 3;
+};
 class RHI {
 public:
     RHI(ERHIType _type) : rhi_type(_type) {}
 
     virtual ~RHI() = default;
 
-    virtual void Initialize() = 0;
+    virtual void Initialize(const RHIInitInfo& _init) = 0;
 
     virtual void PostInit() {}
 
@@ -52,7 +56,7 @@ public:
 
     virtual RHIShaderLibraryRef RHICreateShaderLibrary(EShaderPlatform _platform, const std::string& _file_path, const std::string& name) { return nullptr; };
 
-    virtual RHIFenceRef RHICreateFence(const std::string& name) = 0;
+    virtual RHIFenceRef RHICreateFence(const RHIFenceCreateInfo&) = 0;
 
     virtual RHIShaderBoundStateRef RHICreateShaderBoundStage(
         RHIVertexInputState* _vertex_input,
@@ -97,11 +101,27 @@ public:
     virtual bool GUIInit(uint32_t _num_frames_in_flight);
     virtual void GUIShutDown();
     virtual void GUINewFrame();
-    virtual void GUIRender();
+    virtual void GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list);
+#pragma endregion
+
+#pragma region Viewport
+
+    virtual RHIViewportRef RHICreateViewport(const RHIViewportInitializer& _init) = 0;
+
+    virtual void RHIResizeViewport(RHIViewport* _viewport, Extent2D _size, bool _b_full_screen, EPixelFormat _format = PF_UNDEFINED) = 0;
+
+    virtual RHITextureRef RHIGetViewportBackBuffer(RHIViewport* _viewport) = 0;
+
+    virtual RHIUnorderedAccessViewRef RHIGetViewportBackBufferUAV(RHIViewport* _viewport) { return nullptr; }
+
+    virtual void RHIBeginDrawingViewport(RHIViewport*, RHITexture* _viewport_attachment) = 0;
+    //present to swapchain here
+    virtual void RHIEndDrawingViewport(RHIViewport*, bool _b_present) = 0;
 #pragma endregion
 
 protected:
     ERHIType rhi_type;
+    uint32_t max_frame_in_flight;
 };
 
 extern RHI* g_rhi;

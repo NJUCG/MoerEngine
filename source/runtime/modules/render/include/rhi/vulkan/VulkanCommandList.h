@@ -2,6 +2,8 @@
 #ifndef VULKAN_COMMAND_LIST_H
 #define VULKAN_COMMAND_LIST_H
 #include "rhi/RHICommandList.h"
+#include "rhi/vulkan/VulkanCommandQueue.h"
+#include "vulkan/vulkan_core.h"
 
 #include <vulkan/vulkan.h>
 
@@ -16,13 +18,13 @@ public:
     ~VulkanRHIGraphicsCommandList();
 
     void SetBatchedShaderParameter(const RHIBatchedShaderParameters& _parameters) override;
-    void SetPipelineState(RHIGraphicsPipelineState* _graphics_pso, const RHIShaderBoundStateInput& _shader_input) override;
+    void SetPipelineState(RHIGraphicsPipelineState* _graphics_pso) override;
     void Open() override;
     void Close() override;
     void Reset(RHIGraphicsPipelineState* _graphics_pso) override;
     void ClearState(RHIGraphicsPipelineState* _graphics_pso) override;
 
-    void DrawIndexedInstanced(uint32_t _index_count, uint32_t _instance_count, int32_t _base_vertex_location, uint32_t _start_instance_location) override;
+    void DrawIndexedInstanced(uint32_t _index_count, uint32_t _instance_count, uint32_t _start_index_location, int32_t _base_vertex_location) override;
 
     void DrawIndexedIndirect(
         RHIBuffer* _argument_buffer,
@@ -127,6 +129,9 @@ public:
         RHIBuffer* _scratch_offset) override;
 
 #pragma endregion
+protected:
+    friend class VulkanRHICommandQueue;
+    inline void* GetNativeHandle() const override { return m_command_buffer; }
 
 private:
     VulkanDevice*   m_device;

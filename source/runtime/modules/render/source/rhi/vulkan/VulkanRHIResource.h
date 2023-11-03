@@ -5,6 +5,7 @@
 #ifndef VULKAN_RHI_RESOURCE_H
 #define VULKAN_RHI_RESOURCE_H
 
+#include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "rhi/vulkan/misc/VulkanTypeDefs.h"
 
@@ -55,7 +56,7 @@ class VulkanRHIUnorderedAccessView;
 class VulkanRHIVertexInputState;
 class VulkanRHIVertexShader;
 class VulkanRHIViewableResource;
-class VulkanRHIViewport;
+class VulkanViewport;
 #pragma endregion
 
 #pragma region utils definition
@@ -324,6 +325,8 @@ public:
     VulkanRHITexture() = delete;
     explicit VulkanRHITexture(const RHITextureCreateInfo& _info) : RHITexture(_info) {}
 
+    explicit VulkanRHITexture(const RHITextureCreateInfo& _info, VkImage _image) : RHITexture(_info), m_alloc(_image, VK_NULL_HANDLE) {}
+
     inline const VmaAllocation GetAllocation() const {
         return m_alloc.alloc;
     }
@@ -351,12 +354,19 @@ private:
 
 class VulkanRHIFence final : public RHIFence {
 public:
-    VulkanRHIFence(const std::string& _name, VulkanDevice* _device);
-    bool Signaled() const final override;
+    VulkanRHIFence(VulkanDevice* _device, EFenceUsage _usage);
+    virtual ~VulkanRHIFence();
+
+    uint64_t GetValue() const override;
+
+    void               Wait(uint64_t value) override;
+    inline VkSemaphore GetSemaphoreHandle() { return m_semaphore; }
+    inline VkSemaphore GetBinaryHandle() { return m_binary; }
 
 private:
     VulkanDevice* m_device;
-    VkFence       m_fence;
+    VkSemaphore   m_semaphore;
+    VkSemaphore   m_binary;
 };
 
 #pragma endregion
@@ -381,12 +391,38 @@ class VulkanRHIShaderResourceView final : public RHIShaderResourceView {
 public:
     explicit VulkanRHIShaderResourceView(RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIShaderResourceView(_resource, _viewInfo) {}
 
+    explicit VulkanRHIShaderResourceView(VkImageView _view, const RHIViewInfo& _viewInfo) : RHIShaderResourceView(nullptr, _viewInfo), m_view(_view) {}
     inline VkImageView GetView() const { return m_view; }
 
 private:
     VkImageView m_view;
 };
 
+class VulkanImageView final : public RHIView {
+    friend VulkanRHIImpl;
+
+public:
+    explicit VulkanImageView(RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIView(RRT_ATTACHMENT_VIEW, _resource, _viewInfo) {}
+
+    explicit VulkanImageView(RHIViewableResource* _resource, VkImageView _view, const RHIViewInfo& _viewInfo) : RHIView(RRT_ATTACHMENT_VIEW, _resource, _viewInfo), m_view(_view) {
+    }
+    inline VkImageView GetView() const { return m_view; }
+
+private:
+    VkImageView m_view;
+};
+
+#pragma endregion
+
+#pragma region viewport
+
+class VulkanViewport final : RHIViewport {
+    virtual void     Present(RHIFence* _render_finished) override;
+    virtual RHIView* GetNextFrameView() override;
+
+private:
+    class VulkanSwapChain* swapchain;
+};
 #pragma endregion
 
 #pragma region graphic pipeline definitions

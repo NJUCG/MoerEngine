@@ -16,7 +16,7 @@ class VulkanRHIImpl final : public IVulkanRHI {
 public:
     VulkanRHIImpl(GLFWwindow* _window);
 
-    void Initialize() final override;
+    void Initialize(const RHIInitInfo& _init) final override;
 
     void PostInit() final override;
 
@@ -43,7 +43,7 @@ public:
 
     RHIShaderLibraryRef RHICreateShaderLibrary(EShaderPlatform _platform, const std::string& _file_path, const std::string& name) final override;
 
-    RHIFenceRef RHICreateFence(const std::string& name) final override;
+    RHIFenceRef RHICreateFence(const RHIFenceCreateInfo&) final override;
 
     RHIShaderBoundStateRef RHICreateShaderBoundStage(
         RHIVertexInputState* _vertex_input,
@@ -73,12 +73,7 @@ public:
     RHIShaderRef RHICreateShader(Shader* shader) final override;
 
 #pragma endregion
-#pragma region GUI
-    virtual bool GUIInit(uint32_t _num_frames_in_flight) final override;
-    virtual void GUIShutDown() final override;
-    virtual void GUINewFrame() final override;
-    virtual void GUIRender() final override {}
-#pragma endregion
+
 protected:
     VkInstance               m_instance;
     std::vector<std::string> m_instance_layers;

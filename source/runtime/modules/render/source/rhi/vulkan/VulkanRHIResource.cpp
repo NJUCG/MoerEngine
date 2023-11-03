@@ -7,8 +7,15 @@
 
 #include "VulkanRHIResource.h"
 
+#include "rhi/RHICommandQueue.h"
+#include "rhi/RHICommon.h"
+#include "rhi/RHIResource.h"
+#include "rhi/RHIResourceInitilizer.h"
 #include "rhi/vulkan/misc/VulkanMacroUtils.h"
 #include "log/LogSystem.h"
+#include "vulkan/vulkan_core.h"
+#include "VulkanSwapChain.h"
+#include <stdint.h>
 
 #pragma region utils definition
 
@@ -906,23 +913,64 @@ VkImageUsageFlags VulkanRHITexture::METoVKImageUsageFlags(ETextureUsageFlags _me
 
 #pragma region synchronization
 
-VulkanRHIFence::VulkanRHIFence(const std::string& _name, VulkanDevice* _device) : RHIFence(_name), m_device(_device) {
-    VkFenceCreateInfo create_info{};
-    create_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-    create_info.pNext = nullptr;
-    create_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+VulkanRHIFence::VulkanRHIFence(VulkanDevice* _device, EFenceUsage _usage) : m_device(_device) {
+    VkSemaphoreCreateInfo create_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+    if (_usage == EFenceUsage::PRESENT) {
+        //do nothing
+        VK_CHECK_RESULT(vkCreateSemaphore(*m_device, &create_info, nullptr, &m_binary));
+    }
+    VkSemaphoreTypeCreateInfo timeline_semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
+    timeline_semaphore_info.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+    timeline_semaphore_info.initialValue  = 0;
 
-    VK_CHECK_RESULT(vkCreateFence(*m_device, &create_info, nullptr, &m_fence));
+    create_info.pNext = &timeline_semaphore_info;
+    m_binary          = VK_NULL_HANDLE;
+    VK_CHECK_RESULT(vkCreateSemaphore(*m_device, &create_info, nullptr, &m_semaphore));
+}
+VulkanRHIFence::~VulkanRHIFence() {
+    vkDestroySemaphore(m_device->GetDevice(), m_semaphore, VK_NULL_HANDLE);
+    if (m_binary != VK_NULL_HANDLE) {
+        vkDestroySemaphore(m_device->GetDevice(), m_binary, VK_NULL_HANDLE);
+    }
 }
 
-bool VulkanRHIFence::Signaled() const {
-    return vkGetFenceStatus(*m_device, m_fence) == VK_SUCCESS;
+uint64_t VulkanRHIFence::GetValue() const {
+    uint64_t value;
+    vkGetSemaphoreCounterValue(*m_device, m_semaphore, &value);
+    return value;
+}
+
+void VulkanRHIFence::Wait(uint64_t value) {
+    VkSemaphoreWaitInfo info{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
+    info.pSemaphores    = &m_semaphore;
+    info.semaphoreCount = 1;
+    info.pValues        = &value;
+    vkWaitSemaphores(*m_device, &info, UINT64_MAX);
 }
 
 #pragma endregion
 
 #pragma region viewable resources view definitions
 
+#pragma endregion
+
+#pragma region viewport
+
+void VulkanViewport::Present(RHIFence* _render_finished) {
+
+    assert(_render_finished && "Fence Empty");
+    VulkanRHIFence* vk_fence = (VulkanRHIFence*)_render_finished;
+    VulkanDevice*   device   = swapchain->m_device;
+    assert(device != nullptr && "Swapchain not valid");
+
+    swapchain->Present(device->GetPresentQueue(), vk_fence->GetBinaryHandle());
+    // swapchain->Present();
+}
+RHIView* VulkanViewport::GetNextFrameView() {
+    uint32_t index = swapchain->AcquireNextImage();
+    if (index == UINT32_MAX) return nullptr;
+    return swapchain->m_swap_chain_buffers[index].view;
+}
 #pragma endregion
 
 #pragma region graphic pipeline definitions

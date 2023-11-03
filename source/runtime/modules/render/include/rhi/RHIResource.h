@@ -5,6 +5,7 @@
 #include "RenderCommon.h"
 #include "math/Base.h"
 
+#include "misc/Hash.h"
 #include "misc/Ptr.h"
 #include "misc/CountableRef.h"
 
@@ -296,14 +297,16 @@ public:
         return shader_type;
     }
 
-    void          SetHash(const SHA256Hash& _hash) { hash = _hash; }
-    SHA256Hash    GetHash() const { return hash; }
-    const Shader* GetShaderInfo() const { return shader_info; }
+    void       SetHash(const Hash64City& _hash) { hash = _hash; }
+    Hash64City GetHash() const { return hash; }
+
+    EShaderType shader_type;
+    Hash64City  hash;
 
 protected:
-    EShaderType   shader_type;
-    SHA256Hash    hash;
-    const Shader* shader_info;
+    friend class RHIBatchedShaderParameters;
+    class Shader* GetMetaShader() const;
+    class Shader* meta_shader;
 };
 
 class RHIGraphicsShader : public RHIShader {
@@ -431,6 +434,13 @@ struct RHIBatchedShaderParameters {
         size_t data_size = sizeof(TRootParameter);
         SetParameters(shader, data_size, (uint8_t*)&params);
     }
+
+    template<concept_is_root_parameter_struct TRootParameter>
+    void SetParameters(class RHIShader* shader, const TRootParameter& params) {
+        size_t data_size = sizeof(TRootParameter);
+        SetParameters(shader, data_size, (uint8_t*)&params);
+    }
+
     const uint8_t* GetConstData(uint32_t byte_offset) const {
         return &raw_data[byte_offset];
     }
@@ -444,6 +454,7 @@ struct RHIBatchedShaderParameters {
     }
 
 private:
+    void SetParameters(RHIShader* shader, size_t _data_size, uint8_t* data_source);
     void SetParameters(class Shader* shader, size_t _data_size, uint8_t* data_source);
     //offset in raw_data, size, slot and space
     std::vector<RHIShaderResourceParameter> resource_parameters;
@@ -851,14 +862,22 @@ struct PipelineParametersBinding {
 #pragma endregion
 
 #pragma region syncronization
+
+enum class EFenceUsage {
+    TIMELINE,
+    PRESENT
+};
+struct RHIFenceCreateInfo {
+    EFenceUsage usage = EFenceUsage::TIMELINE;
+};
 /* fences in dx12, fence and timeline semaphore in vulkan */
 class RHIFence : public RHIResource {
 public:
-    RHIFence(const std::string& _name) : RHIResource(RRT_GPU_FENCE), name(_name) {}
-    virtual bool Signaled() const = 0;
+    RHIFence() : RHIResource(RRT_GPU_FENCE) {}
+    virtual uint64_t GetValue() const     = 0;
+    virtual void     Wait(uint64_t value) = 0;
 
 protected:
-    std::string name;
 };
 
 struct RHIBarrierInfo {
@@ -1004,8 +1023,15 @@ struct RHIBarrierDependencyInfo {
     uint32_t                     texture_barrier_count = 0;
     const RHITextureBarrierInfo* p_texture_barriers    = nullptr;
 };
+
 #pragma endregion
+
+struct RHIViewportInfo {
+    uint32_t max_frame_in_flight;
+};
 class RHIViewport : public RHIResource {
+    RHIViewportInfo info;
+
 public:
     RHIViewport() : RHIResource(RRT_VIEWPORT) {}
     virtual void* GetNativeSwapchain() const { return nullptr; }
@@ -1014,6 +1040,11 @@ public:
     virtual void* GetNativeWindow(void** _params) const { return nullptr; }
     virtual void  Tick(float _delta_time) {}
     virtual void  WaitForFrameComplete() {}
+
+    virtual void Present(RHIFence* _render_finished) {}
+    //aquire next back buffer index
+    virtual class RHIView*         GetNextFrameView() { return nullptr; }
+    virtual const RHIViewportInfo& GetViewportInfo() const { return info; }
 };
 
 #pragma region viewable resources view definitions
