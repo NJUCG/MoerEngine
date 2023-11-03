@@ -6,6 +6,9 @@
 #include "shader/Shader.h"
 #include "shader/ShaderCompiler.h"
 #include "shader/ShaderResourceManager.h"
+#include "taskgraph/GraphTask.h"
+#include "taskgraph/TaskGraph.h"
+#include "taskgraph/ThreadManager.h"
 RHI* g_rhi = nullptr;
 
 // global shader
@@ -32,7 +35,6 @@ public:
     DEFINE_SHADER_PARAM_UAV(RWTexture2D, write_target)
     DEFINE_SHADER_PARAM_SRV(StructuredBuffer, ubo)
     DEFINE_SHADER_PARAM_CBV(StructuredBuffer, cbv)
-    DEFINE_SHADER_PARAM_ATTACHMENT_BINDING()
 
     END_ROOT_PARAMETER_DEFINITION(Parameters)
 };
@@ -46,7 +48,8 @@ void RHI::Test() {
 
 void Test() {
 
-    g_rhi->Initialize();
+    RHIInitInfo init_info{3};
+    g_rhi->Initialize(init_info);
 
     g_rhi->PostInit();
     ShaderCompiler::ShaderCompileTest();
@@ -117,9 +120,8 @@ void Test() {
 
     command_list->EndRenderPass();
 
-    RHICommandQueue*                         graphics_queue = g_rhi->CreateCommandQueue(ECommandQueueType::GRAPHICS);
-    const std::array<RHICommandListBase*, 1> command_array{command_list};
-    graphics_queue->SubmitCommands(1, command_array.data());
+    RHICommandQueue* graphics_queue = g_rhi->CreateCommandQueue(ECommandQueueType::GRAPHICS);
+    graphics_queue->SubmitCommands(1, command_list);
 
     //global buffer
     // start offset

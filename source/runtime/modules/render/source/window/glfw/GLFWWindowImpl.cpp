@@ -1,4 +1,5 @@
 #include "GLFWWindowImpl.h"
+#include "rhi/RHI.h"
 #include "rhi/vulkan/VulkanRHI.h"
 #include "window/WindowContext.h"
 #include "platform/Platform.h"
@@ -11,6 +12,9 @@
 #define GLFW_EXPOSE_NATIVE_WIN32
 #include <GLFW/glfw3native.h>
 #endif
+#include "GLFWUIImpl.h"
+
+#include <imgui.h>
 
 #include "log/LogSystem.h"
 #include <string.h>
@@ -19,6 +23,7 @@ namespace Moer {
     GLFWWindowImpl::GLFWWindowImpl() {
     }
     GLFWWindowImpl::~GLFWWindowImpl() {
+        GuiShutDown();
         glfwDestroyWindow((GLFWwindow*)window);
     }
 
@@ -33,6 +38,9 @@ namespace Moer {
 #endif
         return nullptr;
     }
+    void GLFWWindowImpl::GuiInit(const GuiWindowInitInfo& _init_info) {
+        GuiWindowInit(_init_info);
+    };
 
     void GLFWWindowImpl::Init(const SurfaceInfo& info) {
         if (!glfwInit()) {
@@ -65,6 +73,9 @@ namespace Moer {
         glfwSetWindowSizeCallback(window, [](GLFWwindow* window, int width, int height) { WindowContext::OnWindowSizeCallback(window, width, height); });
         glfwSetWindowFocusCallback(window, [](GLFWwindow* window, int focused) { WindowContext::OnWindowFocusCallback(window, focused); });
         this->window = window;
+
+        GuiWindowInitInfo window_info{.window = window, true};
+        GuiInit(window_info);
     }
 
     void GLFWWindowImpl::InitVulkan() {
@@ -77,6 +88,12 @@ namespace Moer {
 #if PLATFORM_WINDOWS
 
 #endif
+    }
+    void GLFWWindowImpl::GuiUpdate() {
+        GuiWindowNewFrame();
+    }
+    void GLFWWindowImpl::GuiShutDown() {
+        GuiWindowShutDown();
     }
     void GLFWWindowImpl::CreateVulkanSurface(void* instance, WindowType* window, void* allocation_callback, void* surface) {
         glfwCreateWindowSurface((VkInstance)instance, (GLFWwindow*)window, (const VkAllocationCallbacks*)allocation_callback, (VkSurfaceKHR*)surface);

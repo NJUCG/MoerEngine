@@ -13,6 +13,9 @@ namespace Moer {
         virtual bool  ShouldClose() const                                  = 0;
         virtual void  PollEvents() const                                   = 0;
         virtual void* GetNativeWindow() const                              = 0;
+        virtual void  GuiInit(const GuiWindowInitInfo&)                    = 0;
+        virtual void  GuiUpdate()                                          = 0;
+        virtual void  GuiShutDown()                                        = 0;
 
     protected:
         static WindowImpl& GetInstance();

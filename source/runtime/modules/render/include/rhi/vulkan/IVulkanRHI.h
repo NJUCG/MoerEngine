@@ -13,7 +13,7 @@ class IVulkanRHI : public RHI {
 public:
     IVulkanRHI() : RHI(ERHIType::Vulkan) {}
 
-    void        Initialize() override {}
+    void        Initialize(const RHIInitInfo& _init) override {}
     void        PostInit() override {}
     void        ShutDown() override {}
     const char* GetName() override { return "VulkanRHI Interface"; }
@@ -37,7 +37,7 @@ public:
 
     RHIShaderLibraryRef RHICreateShaderLibrary(EShaderPlatform _platform, const std::string& _file_path, const std::string& name) override { return RHIShaderLibraryRef{}; }
 
-    RHIFenceRef RHICreateFence(const std::string& name) override { return RHIFenceRef{}; }
+    RHIFenceRef RHICreateFence(const RHIFenceCreateInfo&) override { return RHIFenceRef{}; }
 
     RHIShaderBoundStateRef RHICreateShaderBoundStage(
         RHIVertexInputState* _vertex_input,
@@ -65,6 +65,22 @@ public:
     RHIComputeCommandList*  CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr) override { return nullptr; }
 
     RHIShaderRef RHICreateShader(Shader*) override { return RHIShaderRef{}; }
+
+#pragma endregion
+
+#pragma region Viewport
+
+    virtual RHIViewportRef RHICreateViewport(const RHIViewportInitializer& _init) override { return nullptr; };
+
+    virtual void RHIResizeViewport(RHIViewport* _viewport, Extent2D _size, bool _b_full_screen, EPixelFormat _format = PF_UNDEFINED) override{};
+
+    virtual RHITextureRef RHIGetViewportBackBuffer(RHIViewport* _viewport) override { return nullptr; };
+
+    virtual RHIUnorderedAccessViewRef RHIGetViewportBackBufferUAV(RHIViewport* _viewport) override { return nullptr; }
+
+    virtual void RHIBeginDrawingViewport(RHIViewport*, RHITexture* _viewport_attachment) override{};
+
+    virtual void RHIEndDrawingViewport(RHIViewport*, bool _b_present) override{};
 
 #pragma endregion
 };

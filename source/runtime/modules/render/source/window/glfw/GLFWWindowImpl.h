@@ -17,6 +17,9 @@ namespace Moer {
         virtual void  PollEvents() const override;
         virtual void* GetNativeWindow() const override;
         virtual void  CreateVulkanSurface(void* instance, WindowType* window, void* allocation_callback, void* surface) override;
+        virtual void  GuiInit(const GuiWindowInitInfo&) override;
+        virtual void  GuiUpdate() override;
+        virtual void  GuiShutDown() override;
 
     protected:
         GLFWWindowImpl();
