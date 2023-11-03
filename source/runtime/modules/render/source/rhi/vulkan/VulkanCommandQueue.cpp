@@ -8,6 +8,8 @@
 #include <vector>
 #include <vulkan/vulkan.h>
 
+VulkanRHICommandQueue::~VulkanRHICommandQueue() {
+}
 void VulkanRHICommandQueue::SubmitCommands(
     uint32_t                  _num_command_lists,
     const RHICommandListBase* _command_lists,

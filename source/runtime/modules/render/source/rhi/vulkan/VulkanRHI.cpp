@@ -1,5 +1,7 @@
 #include "config.h"
 
+#include "log/LogSystem.h"
+#include "rhi/RHI.h"
 #include "rhi/RHIResource.h"
 #include "rhi/vulkan/misc/VulkanMacroUtils.h"
 #include "misc/MacroUtils.h"
@@ -21,6 +23,7 @@
 
 #include "shader/Shader.h"
 #include "shader/ShaderResource.h"
+#include "vulkan/vulkan_core.h"
 #include "window/WindowContext.h"
 
 #include <unordered_map>
@@ -29,16 +32,17 @@
 
 namespace VkUtil = Moer::RHI::Vulkan::Util;
 
-VulkanRHIImpl::VulkanRHIImpl(GLFWwindow* _window) : m_instance(VK_NULL_HANDLE), m_device(nullptr), m_current_viewport(nullptr) {
+VulkanRHIImpl::VulkanRHIImpl() : m_instance(VK_NULL_HANDLE), m_device(nullptr), m_current_viewport(nullptr) {
     LOG_INFO("Built with Vulkan header version {0:d}.{1:d}.{2:d}", VK_API_VERSION_MAJOR(VK_HEADER_VERSION_COMPLETE), VK_API_VERSION_MINOR(VK_HEADER_VERSION_COMPLETE), VK_API_VERSION_PATCH(VK_HEADER_VERSION_COMPLETE));
 
     CreateInstance();
-    InitSurface(_window);
+    InitSurface(Moer::WindowContext::GetInstance().GetWindow());
 }
 
 void VulkanRHIImpl::Initialize(const RHIInitInfo& _init) {
     //todo: need more elegant way
     max_frame_in_flight = _init.max_frame_in_flight;
+    rhi_type            = ERHIType::Vulkan;
     InitVulkan();
     InitVulkanMemoryAllocator();
 }
@@ -48,7 +52,7 @@ void VulkanRHIImpl::PostInit() {
 }
 
 void VulkanRHIImpl::ShutDown() {
-    delete m_swap_chain;
+    delete m_main_viewport;
     delete m_device;
 }
 
@@ -491,7 +495,7 @@ RHIShaderRef VulkanRHIImpl::RHICreateShader(Shader* shader) {
 
 #pragma endregion
 
-void VulkanRHIImpl::InitSurface(GLFWwindow* _window) {
+void VulkanRHIImpl::InitSurface(void* _window) {
     Moer::WindowContext::GetInstance().CreateVulkanSurface(m_instance, _window, nullptr, &m_surface);
 }
 
@@ -506,11 +510,12 @@ void VulkanRHIImpl::InitVulkan() {
     m_device = new VulkanDevice();
     m_device->Init(initializer);
 
-    m_swap_chain = new VulkanSwapChain();
-    m_swap_chain->Connect(m_instance, m_surface, m_device);
+    VulkanSwapChain* swap_chain = new VulkanSwapChain();
+    swap_chain->Connect(m_instance, m_surface, m_device);
     uint32_t width, height;
-    // glfwGetFramebufferSize(m_window, &width, &height);
-    m_swap_chain->Init(&width, &height, max_frame_in_flight, true);
+
+    swap_chain->Init(&width, &height, max_frame_in_flight, true);
+    m_main_viewport = new VulkanViewport(swap_chain);
 }
 
 void VulkanRHIImpl::InitVulkanMemoryAllocator() {
@@ -672,4 +677,52 @@ void VulkanRHIImpl::CopyBuffer(VulkanRHIBuffer* _src, VulkanRHIBuffer* _dst) {
     EndSingleTimeCommands(command_buffer, transfer_pool, m_device->GetTransferQueue());
 }
 
+#pragma endregion
+
+#pragma region viewport
+RHIViewport*   VulkanRHIImpl::RHIGetMainViewport() {
+    return static_cast<RHIViewport*>(m_main_viewport);
+}
+//create external viewport
+RHIViewportRef VulkanRHIImpl::RHICreateViewport(const RHIViewportInitializer& _init) {
+    VulkanSwapChain* swapchain = new VulkanSwapChain();
+    uint32_t         width, height;
+    swapchain->Init(&width, &height, max_frame_in_flight, true);
+    VkSurfaceKHR surface;
+    Moer::WindowContext::GetInstance().CreateVulkanSurface(m_instance, _init.window_handle, nullptr, &surface);
+    swapchain->Connect(m_instance, surface, m_device);
+    VulkanViewport* viewport = new VulkanViewport(swapchain);
+
+    return static_cast<RHIViewport*>(viewport);
+}
+void VulkanRHIImpl::RHIResizeViewport(RHIViewport* _viewport, Extent2D _size, bool _b_full_screen, EPixelFormat _format) {
+    assert(_viewport != nullptr && "Passing invalid viewport");
+    VulkanViewport* vk_viewport = static_cast<VulkanViewport*>(_viewport);
+
+    auto* swapchain = (VulkanSwapChain*)vk_viewport->GetNativeSwapchain();
+
+    vk_viewport->OnResize(_size);
+}
+RHIViewportNextBackBufferInfo VulkanRHIImpl::RHIGetNextFrameViewportBufferInfo(RHIViewport* _viewport) {
+    assert(_viewport != nullptr && "Passing invalid viewport");
+    VulkanViewport* vk_viewport = static_cast<VulkanViewport*>(_viewport);
+
+    return vk_viewport->GetNextFrameBackBufferInfo();
+}
+RHIUnorderedAccessView* VulkanRHIImpl::RHIGetViewportBackBufferUAV(RHIViewport* _viewport, uint32_t index) {
+    assert(_viewport != nullptr && "Passing invalid viewport");
+    VulkanViewport* vk_viewport = static_cast<VulkanViewport*>(_viewport);
+    if (index == UINT32_MAX) {
+        LOG_WARNING("Not valid viewport back buffer index");
+        return nullptr;
+    }
+    VulkanRHIUnorderedAccessView* uav = vk_viewport->GetCurrentBackBuffer(index);
+    return static_cast<RHIUnorderedAccessView*>(uav);
+}
+void VulkanRHIImpl::RHIPresentViewport(RHIViewport* _viewport, RHIFence* _render_end_fence) {
+    assert(_viewport != nullptr && "Passing invalid viewport");
+    VulkanViewport* vk_viewport = static_cast<VulkanViewport*>(_viewport);
+
+    vk_viewport->Present(_render_end_fence);
+}
 #pragma endregion

@@ -10,7 +10,7 @@
 
 VulkanRHIGraphicsCommandList::VulkanRHIGraphicsCommandList(VulkanDevice* _device, VkCommandPool _pool, VkCommandBufferLevel _level) : m_device(_device) {
     VkCommandBufferAllocateInfo buffer_alloc_info{};
-    buffer_alloc_info.sType              = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    buffer_alloc_info.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     buffer_alloc_info.pNext              = nullptr;
     buffer_alloc_info.commandPool        = _pool;
     buffer_alloc_info.level              = _level;

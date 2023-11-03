@@ -26,7 +26,7 @@ class VulkanSwapChain {
 public:
     void     Connect(VkInstance _instance, VkSurfaceKHR _surface, VulkanDevice* _device);
     void     Init(uint32_t* width, uint32_t* height, uint32_t max_frame_in_flight, bool vsync);
-    uint32_t AcquireNextImage();
+    uint32_t AcquireNextImage(VkSemaphore _aquire_semaphore);
     void     Present(VkQueue _queue, VkSemaphore _render_finished);
     void     Cleanup();
 
@@ -43,16 +43,12 @@ private:
     VkSwapchainKHR m_swap_chain;
     VkSurfaceKHR   m_surface;
 
-    std::vector<VkSemaphore> m_image_acquired_semaphores;
-    std::vector<VkSemaphore> m_render_complete_semaphores;
-
-    std::vector<VkImage>         m_swap_chain_images;
-    std::vector<SwapChainBuffer> m_swap_chain_buffers;
+    std::vector<VkImage> m_swap_chain_images;
 
     uint32_t current_image_index;
-    uint32_t current_frame_offset;
-    uint32_t semaphore_index;
 
+    VkExtent2D         extent;
+    VkFormat           image_format;
     VkSurfaceFormatKHR surface_format;
 
 private:

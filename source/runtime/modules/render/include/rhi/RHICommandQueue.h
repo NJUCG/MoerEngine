@@ -6,19 +6,14 @@
 #include "rhi/RHIResource.h"
 
 struct RHISubmitInfo;
-//todo: need this(dx12 style) or not(vulkan style, stateless)
+
 class RHICommandQueue {
 public:
+    virtual ~RHICommandQueue(){};
     virtual void SubmitCommands(
         uint32_t                  _num_command_lists,
         const RHICommandListBase* _command_lists,
         const RHISubmitInfo*      _submit_info = nullptr) = 0;
-
-    // //pre-submit
-    // virtual void Wait(RHIFence* _p_fence, uint64_t _value) = 0;
-
-    // //post-submit
-    // virtual void Signal(RHIFence* _p_fence, uint64_t _value) = 0;
 };
 struct RHIFenceWaitInfo {
     uint64_t  wait_value;

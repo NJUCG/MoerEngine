@@ -2,10 +2,10 @@
 #define VULKAN_RHI_H
 
 #include "IVulkanRHI.h"
+#include "window/WindowContext.h"
 
 #include <vk_mem_alloc.h>
 
-struct GLFWwindow;
 class VulkanDevice;
 class VulkanSwapChain;
 class VulkanViewport;
@@ -13,7 +13,7 @@ class VulkanRHIBuffer;
 
 class VulkanRHIImpl final : public IVulkanRHI {
 public:
-    VulkanRHIImpl(GLFWwindow* _window);
+    VulkanRHIImpl();
 
     void Initialize(const RHIInitInfo& _init) final override;
 
@@ -73,6 +73,22 @@ public:
 
 #pragma endregion
 
+#pragma region viewport
+
+    virtual RHIViewport* RHIGetMainViewport() override;
+
+    virtual RHIViewportRef RHICreateViewport(const RHIViewportInitializer& _init) override;
+
+    virtual void RHIResizeViewport(RHIViewport* _viewport, Extent2D _size, bool _b_full_screen, EPixelFormat _format = PF_UNDEFINED) override;
+
+    virtual RHIViewportNextBackBufferInfo RHIGetNextFrameViewportBufferInfo(RHIViewport* _viewport) override;
+
+    virtual RHIUnorderedAccessView* RHIGetViewportBackBufferUAV(RHIViewport* _viewport, uint32_t index) override;
+
+    virtual void RHIPresentViewport(RHIViewport* _viewport, RHIFence* _render_end_fence) override;
+
+#pragma endregion
+
 protected:
     VkInstance               m_instance;
     std::vector<std::string> m_instance_layers;
@@ -83,13 +99,14 @@ protected:
     VkSurfaceKHR m_surface;
     VmaAllocator m_allocator;
 
-    VulkanDevice*                m_device;
-    VulkanSwapChain*             m_swap_chain;
-    std::vector<VulkanViewport*> m_viewports;
-    VulkanViewport*              m_current_viewport;
+    VulkanDevice*    m_device;
+    VulkanViewport*  m_main_viewport;
+    VulkanSwapChain* m_swap_chain;
+    // std::vector<VulkanViewport*> m_viewports;
+    VulkanViewport* m_current_viewport;
 
 protected:
-    void InitSurface(GLFWwindow* _window);
+    void InitSurface(void* _window);
     void InitVulkan();
     void InitVulkanMemoryAllocator();
 

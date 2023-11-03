@@ -95,6 +95,7 @@ public:
 #pragma endregion
 
 #pragma region GUI
+
     virtual bool GUIInit(uint32_t _num_frames_in_flight);
     virtual void GUIShutDown();
     virtual void GUINewFrame();
@@ -103,17 +104,17 @@ public:
 
 #pragma region Viewport
 
+    virtual RHIViewport* RHIGetMainViewport() = 0;
+
     virtual RHIViewportRef RHICreateViewport(const RHIViewportInitializer& _init) = 0;
 
     virtual void RHIResizeViewport(RHIViewport* _viewport, Extent2D _size, bool _b_full_screen, EPixelFormat _format = PF_UNDEFINED) = 0;
 
-    virtual RHITextureRef RHIGetViewportBackBuffer(RHIViewport* _viewport) = 0;
+    virtual RHIViewportNextBackBufferInfo RHIGetNextFrameViewportBufferInfo(RHIViewport* _viewport) = 0;
 
-    virtual RHIUnorderedAccessViewRef RHIGetViewportBackBufferUAV(RHIViewport* _viewport) { return nullptr; }
+    virtual RHIUnorderedAccessView* RHIGetViewportBackBufferUAV(RHIViewport* _viewport, uint32_t index) = 0;
 
-    virtual void RHIBeginDrawingViewport(RHIViewport*, RHITexture* _viewport_attachment) = 0;
-    //present to swapchain here
-    virtual void RHIEndDrawingViewport(RHIViewport*, bool _b_present) = 0;
+    virtual void RHIPresentViewport(RHIViewport* _viewport, RHIFence* _render_end_fence) = 0;
 #pragma endregion
 
 protected:
