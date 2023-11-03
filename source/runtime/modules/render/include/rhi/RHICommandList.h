@@ -9,7 +9,7 @@ protected:
     RHI_API RHICommandListBase();
 
 public:
-    virtual void SetBatchedShaderParameter(RHIShaderRef shader, const RHIBatchedShaderParameters& parameters) = 0;
+    virtual void SetBatchedShaderParameter(const RHIBatchedShaderParameters& _parameters) = 0;
     RHI_API ~RHICommandListBase();
 
     virtual void* GetNativeHandle() const { return nullptr; }
@@ -17,8 +17,8 @@ public:
 
 class RHIGraphicsCommandList : public RHICommandListBase {
 public:
-    virtual void SetBatchedShaderParameter(RHIShaderRef shader, const RHIBatchedShaderParameters& parameters) = 0;
-    virtual void SetPipelineState(RHIGraphicsPipelineState* _graphics_pso)                                    = 0;
+    virtual void SetBatchedShaderParameter(const RHIBatchedShaderParameters& _parameters) = 0;
+    virtual void SetPipelineState(RHIGraphicsPipelineState* _graphics_pso)                = 0;
     virtual void Open() {}
     virtual void Close()                                                  = 0;
     virtual void Reset(RHIGraphicsPipelineState* _graphics_pso = nullptr) = 0;
@@ -133,6 +133,6 @@ public:
 };
 
 class RHIComputeCommandList : public RHICommandListBase {
-    virtual void SetBatchedShaderParameter(RHIShaderRef shader, const RHIBatchedShaderParameters& parameters) = 0;
+    virtual void SetBatchedShaderParameter(const RHIBatchedShaderParameters& parameters) = 0;
 };
 #endif//RHI_COMMAND_LIST_H

@@ -2,9 +2,10 @@
 // Created by 74535 on 2023/10/12.
 //
 
-#include "VulkanRHIResource.h"
-
 #include "VulkanDevice.h"
+#include "VulkanDescriptor.h"
+
+#include "VulkanRHIResource.h"
 
 #include "rhi/RHICommandQueue.h"
 #include "rhi/RHICommon.h"
@@ -286,6 +287,7 @@ VkDescriptorType VulkanEnumTranslator::METoVKDescriptorType(EShaderParameterType
         case EShaderParameterType::CBV:
             return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         case EShaderParameterType::SAMPLER:
+        case EShaderParameterType::BINDLESS_SAMPLER_INDEX:// MARK...
             return VK_DESCRIPTOR_TYPE_SAMPLER;
         case EShaderParameterType::SRV:
             return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
@@ -293,8 +295,6 @@ VkDescriptorType VulkanEnumTranslator::METoVKDescriptorType(EShaderParameterType
             return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         case EShaderParameterType::BINDLESS_RESOURCE_INDEX:// MARK...
             return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        case EShaderParameterType::BINDLESS_SAMPLER_INDEX:// MARK...
-            return VK_DESCRIPTOR_TYPE_SAMPLER;
         default:
             LOG_CRITICAL("Unsupported EShaderParameterType: {}", static_cast<uint32_t>(_type));
             return VK_DESCRIPTOR_TYPE_MAX_ENUM;
@@ -694,17 +694,6 @@ VkBlendFactor VulkanRHIBlendState::METoVKBlendFactor(EBlendFactor _blend_factor)
 
 #pragma region shader definitions
 
-void VulkanRHIGraphicsShader::CreateShaderModule(const VulkanDevice* _device, const std::vector<uint8_t>& _code) {
-    VkShaderModuleCreateInfo shader_module_create_info{};
-    shader_module_create_info.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    shader_module_create_info.pNext    = nullptr;
-    shader_module_create_info.flags    = 0;
-    shader_module_create_info.codeSize = _code.size();
-    shader_module_create_info.pCode    = reinterpret_cast<const uint32_t*>(_code.data());
-
-    VK_CHECK_RESULT(vkCreateShaderModule(*_device, &shader_module_create_info, nullptr, &m_shader_module));
-}
-
 #pragma endregion
 
 #pragma region pipeline states definitions
@@ -762,7 +751,52 @@ std::vector<VkPipelineShaderStageCreateInfo> VulkanRHIGraphicsPipelineState::MET
 }
 
 VkPipelineVertexInputStateCreateInfo VulkanRHIGraphicsPipelineState::METoVKVertexInputStateCreateInfo(const RHIVertexInputState& _vertex_input_state) {
-    return VkPipelineVertexInputStateCreateInfo();
+    return VkPipelineVertexInputStateCreateInfo();// MARK...
+}
+
+std::vector<const Shader*> VulkanRHIGraphicsPipelineState::GetShaderInfoList(const RHIShaderBoundStateInput& _shader_bound_state) {
+    std::vector<const Shader*> shader_list;
+    if (_shader_bound_state.p_vertex_shader) {
+        shader_list.push_back(_shader_bound_state.p_vertex_shader->GetMetaShader());
+    }
+    if (_shader_bound_state.p_geometry_shader) {
+        shader_list.push_back(_shader_bound_state.p_geometry_shader->GetMetaShader());
+    }
+    // mesh-frag pipeline
+    if (_shader_bound_state.p_mesh_shader) {
+        shader_list.push_back(_shader_bound_state.p_mesh_shader->GetMetaShader());
+    }
+    if (_shader_bound_state.p_amplification_shader) {
+        shader_list.push_back(_shader_bound_state.p_amplification_shader->GetMetaShader());
+    }
+    if (_shader_bound_state.p_fragment_shader) {
+        shader_list.push_back(_shader_bound_state.p_fragment_shader->GetMetaShader());
+    }
+    return shader_list;
+}
+
+void VulkanRHIGraphicsPipelineState::GenerateDescriptorSetLayouts(const VulkanDevice* _device, std::unordered_map<uint8_t, TDescriptorSetLayout>& _layout_mappings) {
+    // create descriptor set layouts
+    uint8_t max_space = 0;
+    for (auto& [space, layout] : _layout_mappings) {
+        VkDescriptorSetLayoutCreateInfo layout_create_info{};
+        layout_create_info.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        layout_create_info.pNext        = nullptr;
+        layout_create_info.flags        = 0;
+        layout_create_info.bindingCount = layout.second.size();
+        layout_create_info.pBindings    = layout.second.data();
+
+        VK_CHECK_RESULT(vkCreateDescriptorSetLayout(*_device, &layout_create_info, nullptr, &layout.first));
+        max_space = std::max(max_space, space);
+    }
+
+    // extract descriptor set layouts
+    m_layout = new VulkanDescriptorSetsLayout();
+    m_layout->Init(max_space + 1, _layout_mappings);
+}
+
+void VulkanRHIGraphicsPipelineState::CreateDescriptorSets(VulkanDevice* _device) {
+    _device->AllocateDescriptorSets(*m_layout, m_descriptor_sets);
 }
 
 #pragma endregion
