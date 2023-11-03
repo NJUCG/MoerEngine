@@ -750,25 +750,20 @@ VkPipelineVertexInputStateCreateInfo VulkanRHIGraphicsPipelineState::METoVKVerte
 std::vector<const Shader*> VulkanRHIGraphicsPipelineState::GetShaderInfoList(const RHIShaderBoundStateInput& _shader_bound_state) {
     std::vector<const Shader*> shader_list;
     if (_shader_bound_state.p_vertex_shader) {
-        auto* vk_vert_shader = static_cast<VulkanRHIVertexShader*>(_shader_bound_state.p_vertex_shader);
-        shader_list.push_back(vk_vert_shader->GetShaderInfo());
+        shader_list.push_back(_shader_bound_state.p_vertex_shader->GetShaderInfo());
     }
     if (_shader_bound_state.p_geometry_shader) {
-        auto* vk_geom_shader = static_cast<VulkanRHIGeometryShader*>(_shader_bound_state.p_geometry_shader);
-        shader_list.push_back(vk_geom_shader->GetShaderInfo());
+        shader_list.push_back(_shader_bound_state.p_geometry_shader->GetShaderInfo());
     }
     // mesh-frag pipeline
     if (_shader_bound_state.p_mesh_shader) {
-        auto* vk_mesh_shader = static_cast<VulkanRHIMeshShader*>(_shader_bound_state.p_mesh_shader);
-        shader_list.push_back(vk_mesh_shader->GetShaderInfo());
+        shader_list.push_back(_shader_bound_state.p_mesh_shader->GetShaderInfo());
     }
     if (_shader_bound_state.p_amplification_shader) {
-        auto* vk_amp_shader = static_cast<VulkanRHIAmplificationShader*>(_shader_bound_state.p_amplification_shader);
-        shader_list.push_back(vk_amp_shader->GetShaderInfo());
+        shader_list.push_back(_shader_bound_state.p_amplification_shader->GetShaderInfo());
     }
     if (_shader_bound_state.p_fragment_shader) {
-        auto* vk_frag_shader = static_cast<VulkanRHIFragmentShader*>(_shader_bound_state.p_fragment_shader);
-        shader_list.push_back(vk_frag_shader->GetShaderInfo());
+        shader_list.push_back(_shader_bound_state.p_fragment_shader->GetShaderInfo());
     }
     return shader_list;
 }
@@ -799,6 +794,10 @@ void VulkanRHIGraphicsPipelineState::GenerateDescriptorSetLayouts(const VulkanDe
         }
     }
     m_layout->m_binding_count = binding_count;
+}
+
+void VulkanRHIGraphicsPipelineState::CreateDescriptorSets(VulkanDevice* _device) {
+    _device->AllocateDescriptorSets(*m_layout, m_descriptor_sets);
 }
 
 #pragma endregion
