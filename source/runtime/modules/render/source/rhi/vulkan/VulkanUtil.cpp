@@ -224,6 +224,20 @@ case VK_PHYSICAL_DEVICE_TYPE_##r: return #r
         ExitFatal("Could not open shader file \"" + std::string(file_name) + "\"", -1);
     }
 
+    VkShaderModule CreateShaderModule(const std::vector<uint8_t>& _code, VkDevice device) {
+        VkShaderModule           shader_module;
+        VkShaderModuleCreateInfo module_create_info{};
+        module_create_info.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        module_create_info.pNext    = nullptr;
+        module_create_info.flags    = 0;
+        module_create_info.codeSize = _code.size();
+        module_create_info.pCode    = reinterpret_cast<const uint32_t*>(_code.data());
+
+        VK_CHECK_RESULT(vkCreateShaderModule(device, &module_create_info, nullptr, &shader_module))
+
+        return shader_module;
+    }
+
     bool FileExists(const std::string& filename) {
         std::ifstream f(filename.c_str());
         return !f.fail();

@@ -133,21 +133,20 @@ void Example(){
 
     RHIGraphicsCommandList* command_list = g_rhi->CreateGraphicsCommandList(pso);
     
-    //need low level manner to control bindings
-    command_list->BindParams(params);
-
+    command_list->Open();                                       // 1. start command 
     RHIRenderPassInfo pass_info;
     pass_info.GeneratePipelineAttachmentInfo();
-    command_list->BeginRenderPass(pass_info, "triangle pass");
-    command_list->BindVertexBuffers(0, 1, vertex_buffer);
-
-    command_list->DrawIndexedInstanced(1, 1, 0, 0);
-
-    command_list->EndRenderPass();
+    command_list->BeginRenderPass(pass_info, "triangle pass");  // 2. begin rendering
+    command_list->BindParams(params);                           // 3. bind shader params
+    command_list->SetPipelineState(pso, shader_state);          // 4. bind pipeline and decriptor set
+    command_list->BindVertexBuffers(0, 1, vertex_buffer);       // 5. bind vertex buffers
+    command_list->DrawIndexedInstanced(1, 1, 0, 0);             // 6. draw call
+    command_list->EndRenderPass();                              // 7. end rendering
+    command_list->Close();                                      // 8. end command
 
     RHICommandQueue*                         graphics_queue = g_rhi->CreateCommandQueue(ECommandQueueType::GRAPHICS);
     const std::array<RHICommandListBase*, 1> _command_array{command_list};
-    graphics_queue->SubmitCommands(1, _command_array.data());
+    graphics_queue->SubmitCommands(1, _command_array.data());   // 9. submit commands
     
 }
 ```
