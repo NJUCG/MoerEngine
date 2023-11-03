@@ -11,6 +11,8 @@
 
 class IVulkanRHI : public RHI {
 public:
+    IVulkanRHI() : RHI(ERHIType::Vulkan) {}
+
     void        Initialize() override {}
     void        PostInit() override {}
     void        ShutDown() override {}

@@ -15,6 +15,8 @@ class Shader;
 
 class RHI {
 public:
+    RHI(ERHIType _type) : rhi_type(_type) {}
+
     virtual ~RHI() = default;
 
     virtual void Initialize() = 0;
