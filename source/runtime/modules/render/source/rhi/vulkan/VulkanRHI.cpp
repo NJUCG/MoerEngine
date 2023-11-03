@@ -18,6 +18,7 @@
 
 #include "VulkanDevice.h"
 #include "VulkanSwapChain.h"
+#include "VulkanDescriptor.h"
 
 #include "shader/Shader.h"
 #include "shader/ShaderResource.h"
@@ -29,7 +30,9 @@
 
 namespace VkUtil = Moer::RHI::Vulkan::Util;
 
-VulkanRHIImpl::VulkanRHIImpl(GLFWwindow* _window) : m_instance(VK_NULL_HANDLE), m_device(nullptr), m_current_viewport(nullptr) {
+VulkanRHIImpl::VulkanRHIImpl(GLFWwindow* _window)
+    : m_instance(VK_NULL_HANDLE), m_surface(VK_NULL_HANDLE), m_allocator(VK_NULL_HANDLE),
+      m_device(nullptr), m_swap_chain(nullptr), m_current_viewport(nullptr) {
     LOG_INFO("Built with Vulkan header version {0:d}.{1:d}.{2:d}", VK_API_VERSION_MAJOR(VK_HEADER_VERSION_COMPLETE), VK_API_VERSION_MINOR(VK_HEADER_VERSION_COMPLETE), VK_API_VERSION_PATCH(VK_HEADER_VERSION_COMPLETE));
 
     CreateInstance();
@@ -48,8 +51,11 @@ void VulkanRHIImpl::PostInit() {
 }
 
 void VulkanRHIImpl::ShutDown() {
-    delete m_swap_chain;
-    delete m_device;
+    vmaDestroyAllocator(m_allocator);
+
+    // CHECK_AND_DELETE(m_current_viewport);
+    CHECK_AND_DELETE(m_swap_chain);
+    CHECK_AND_DELETE(m_device);
 }
 
 #pragma region resources creation
@@ -96,44 +102,42 @@ RHIVertexInputStateRef VulkanRHIImpl::RHICreateVertexInputState(const VertexInpu
 }
 
 RHIVertexShaderRef VulkanRHIImpl::RHICreateVertexShader(const Shader* shader) {
-    auto* vk_shader = new VulkanRHIVertexShader(shader);
-    vk_shader->CreateShaderModule(m_device, shader->GetCodeEntry()->code);
+    auto* vk_shader            = new VulkanRHIVertexShader(shader);
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
 
     return RHIVertexShaderRef(vk_shader);
 }
 
 RHIFragmentShaderRef VulkanRHIImpl::RHICreateFragmentShader(const Shader* shader) {
-    auto* vk_shader = new VulkanRHIFragmentShader(shader);
-    vk_shader->CreateShaderModule(m_device, shader->GetCodeEntry()->code);
+    auto* vk_shader            = new VulkanRHIFragmentShader(shader);
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
 
     return RHIFragmentShaderRef(vk_shader);
 }
 
 RHIGeometryShaderRef VulkanRHIImpl::RHICreateGeometryShader(const Shader* shader) {
-    auto* vk_shader = new VulkanRHIGeometryShader(shader);
-    vk_shader->CreateShaderModule(m_device, shader->GetCodeEntry()->code);
+    auto* vk_shader            = new VulkanRHIGeometryShader(shader);
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
 
     return RHIGeometryShaderRef(vk_shader);
 }
 
 RHIMeshShaderRef VulkanRHIImpl::RHICreateMeshShader(const Shader* shader) {
-    auto* vk_shader = new VulkanRHIMeshShader(shader);
-    vk_shader->CreateShaderModule(m_device, shader->GetCodeEntry()->code);
+    auto* vk_shader            = new VulkanRHIMeshShader(shader);
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
 
     return RHIMeshShaderRef(vk_shader);
 }
 
 RHIAmplificationShaderRef VulkanRHIImpl::RHICreateAmplificationShader(const Shader* shader) {
-    auto* vk_shader = new VulkanRHIAmplificationShader(shader);
-    vk_shader->CreateShaderModule(m_device, shader->GetCodeEntry()->code);
-
+    auto* vk_shader            = new VulkanRHIAmplificationShader(shader);
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
     return RHIAmplificationShaderRef(vk_shader);
 }
 
 RHIComputeShaderRef VulkanRHIImpl::RHICreateComputeShader(const Shader* shader) {
-    auto* vk_shader = new VulkanRHIComputeShader(shader);
-    vk_shader->CreateShaderModule(m_device, shader->GetCodeEntry()->code);
-
+    auto* vk_shader            = new VulkanRHIComputeShader(shader);
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
     return RHIComputeShaderRef(vk_shader);
 }
 
@@ -226,46 +230,33 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
     dynamic_state.pDynamicStates    = states.data();
 
     // pipeline layout
-    std::vector<Shader*> shaders;
+    auto shader_info_list = VulkanRHIGraphicsPipelineState::GetShaderInfoList(_init.shader_stage);// MARK...
 
-    using VulkanDescriptorSetLayout = std::pair<VkDescriptorSetLayout, std::vector<VkDescriptorSetLayoutBinding>>;
-
-    std::unordered_map<uint8_t, VulkanDescriptorSetLayout> layout_mappings;
+    std::unordered_map<uint8_t, TDescriptorSetLayout> layout_mappings;
+    TDescriptorCountMap                               descriptor_type_mappings;
 
     // construct layout mappings
-    for (const auto* shader : shaders) {
-        auto infos = shader->GetRootParametersLayoutInfo().GetLayoutInfos();
+    for (const auto* meta_shader : shader_info_list) {
+        auto layout_infos = meta_shader->GetRootParametersLayoutInfo().GetLayoutInfos();
 
-        for (const auto& info : infos) {
+        for (const auto& info : layout_infos) {
             VkDescriptorSetLayoutBinding binding;
             binding.binding            = info.slot;
             binding.descriptorType     = VulkanEnumTranslator::METoVKDescriptorType(info.type);
             binding.descriptorCount    = 1;
-            binding.stageFlags         = VulkanEnumTranslator::METoVKShaderStageFlags(shader->GetShaderType());
+            binding.stageFlags         = VulkanEnumTranslator::METoVKShaderStageFlags(meta_shader->GetShaderType());
             binding.pImmutableSamplers = nullptr;
 
             layout_mappings[info.space].second.push_back(binding);
+            ++descriptor_type_mappings[binding.descriptorType];
         }
     }
 
-    // create descriptor set layouts
-    for (auto& [space, layout] : layout_mappings) {
-        VkDescriptorSetLayoutCreateInfo layout_create_info{};
-        layout_create_info.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        layout_create_info.pNext        = nullptr;
-        layout_create_info.flags        = 0;
-        layout_create_info.bindingCount = layout.second.size();
-        layout_create_info.pBindings    = layout.second.data();
+    // generate descriptor set layouts
+    vk_pipeline->GenerateDescriptorSetLayouts(m_device, layout_mappings);
+    vk_pipeline->CreateDescriptorSets(m_device);
 
-        VK_CHECK_RESULT(vkCreateDescriptorSetLayout(*m_device, &layout_create_info, nullptr, &layout.first));
-    }
-
-    // extract descriptor set layouts
-    std::vector<VkDescriptorSetLayout> layouts;
-    for (auto& [space, layout] : layout_mappings) {
-        layouts.push_back(layout.first);
-    }
-
+    auto layouts = vk_pipeline->m_layout->GetLayouts();
     // create pipeline layout
     VkPipelineLayoutCreateInfo pipeline_layout_create_info{};
     pipeline_layout_create_info.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -295,6 +286,8 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
     pipeline_create_info.pColorBlendState    = &color_blend_state;
     pipeline_create_info.pDynamicState       = &dynamic_state;
     pipeline_create_info.layout              = pipeline_layout;
+    pipeline_create_info.renderPass          = nullptr;
+    pipeline_create_info.subpass             = 0;
     pipeline_create_info.basePipelineHandle  = nullptr;// MARK...
     pipeline_create_info.basePipelineIndex   = -1;
 

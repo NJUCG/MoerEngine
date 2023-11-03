@@ -7,7 +7,8 @@
 
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
-#include "vulkan/vulkan_core.h"
+#include "rhi/vulkan/misc/VulkanTypeDefs.h"
+
 #include "shader/ShaderCommon.h"
 
 #include <vulkan/vulkan.h>
@@ -16,6 +17,7 @@
 
 class VulkanDevice;
 class VulkanRHIImpl;
+class VulkanDescriptorSetsLayout;
 
 #pragma region forward definitions
 class VulkanRHICommandList;
@@ -207,60 +209,47 @@ private:
 #pragma region shader definitions
 
 class VulkanRHIGraphicsShader {
+    friend VulkanRHIImpl;
+
 public:
-    explicit VulkanRHIGraphicsShader(const Shader* _shader) : m_shader(_shader) {}
+    explicit VulkanRHIGraphicsShader() : m_shader_module(VK_NULL_HANDLE) {}
 
-    void CreateShaderModule(const VulkanDevice* _device, const std::vector<uint8_t>& _code);
-
-    VkShaderModule GetHandle() const {
+    inline VkShaderModule GetHandle() const {
         return m_shader_module;
     }
 
 protected:
     VkShaderModule m_shader_module;
-    const Shader*  m_shader;
 };
 
 class VulkanRHIVertexShader : public RHIVertexShader, public VulkanRHIGraphicsShader {
-    friend VulkanRHIImpl;
-
 public:
-    explicit VulkanRHIVertexShader(const Shader* _shader) : RHIVertexShader(), VulkanRHIGraphicsShader(_shader) {}
+    explicit VulkanRHIVertexShader(const Shader* _meta_shader) : RHIVertexShader(_meta_shader), VulkanRHIGraphicsShader() {}
 };
 
 class VulkanRHIFragmentShader : public RHIFragmentShader, public VulkanRHIGraphicsShader {
-    friend VulkanRHIImpl;
-
 public:
-    explicit VulkanRHIFragmentShader(const Shader* _shader) : RHIFragmentShader(), VulkanRHIGraphicsShader(_shader) {}
+    explicit VulkanRHIFragmentShader(const Shader* _meta_shader) : RHIFragmentShader(_meta_shader), VulkanRHIGraphicsShader() {}
 };
 
 class VulkanRHIGeometryShader : public RHIGeometryShader, public VulkanRHIGraphicsShader {
-    friend VulkanRHIImpl;
-
 public:
-    explicit VulkanRHIGeometryShader(const Shader* _shader) : RHIGeometryShader(), VulkanRHIGraphicsShader(_shader) {}
+    explicit VulkanRHIGeometryShader(const Shader* _meta_shader) : RHIGeometryShader(_meta_shader), VulkanRHIGraphicsShader() {}
 };
 
 class VulkanRHIComputeShader : public RHIComputeShader, public VulkanRHIGraphicsShader {
-    friend VulkanRHIImpl;
-
 public:
-    explicit VulkanRHIComputeShader(const Shader* _shader) : RHIComputeShader(), VulkanRHIGraphicsShader(_shader) {}
+    explicit VulkanRHIComputeShader(const Shader* _meta_shader) : RHIComputeShader(_meta_shader), VulkanRHIGraphicsShader() {}
 };
 
 class VulkanRHIMeshShader : public RHIMeshShader, public VulkanRHIGraphicsShader {
-    friend VulkanRHIImpl;
-
 public:
-    explicit VulkanRHIMeshShader(const Shader* _shader) : RHIMeshShader(), VulkanRHIGraphicsShader(_shader) {}
+    explicit VulkanRHIMeshShader(const Shader* _meta_shader) : RHIMeshShader(_meta_shader), VulkanRHIGraphicsShader() {}
 };
 
 class VulkanRHIAmplificationShader : public RHIAmplificationShader, public VulkanRHIGraphicsShader {
-    friend VulkanRHIImpl;
-
 public:
-    explicit VulkanRHIAmplificationShader(const Shader* _shader) : RHIAmplificationShader(), VulkanRHIGraphicsShader(_shader) {}
+    explicit VulkanRHIAmplificationShader(const Shader* _meta_shader) : RHIAmplificationShader(_meta_shader), VulkanRHIGraphicsShader() {}
 };
 
 #pragma endregion
@@ -271,13 +260,31 @@ class VulkanRHIGraphicsPipelineState final : public RHIGraphicsPipelineState {
     friend VulkanRHIImpl;
 
 public:
-    VulkanRHIGraphicsPipelineState() : RHIGraphicsPipelineState() {}
+    VulkanRHIGraphicsPipelineState() : RHIGraphicsPipelineState(), m_pipeline(VK_NULL_HANDLE), m_layout(nullptr) {}
+
+    VkPipeline GetHandle() const {
+        return m_pipeline;
+    }
+
+    const VulkanDescriptorSetsLayout* GetLayout() const {
+        return m_layout;
+    }
+
+    const std::vector<VkDescriptorSet>& GetDescriptorSets() const {
+        return m_descriptor_sets;
+    }
+
+    void GenerateDescriptorSetLayouts(const VulkanDevice* _device, std::unordered_map<uint8_t, TDescriptorSetLayout>& _layout_mappings);
+    void CreateDescriptorSets(VulkanDevice* _device);
 
     static std::vector<VkPipelineShaderStageCreateInfo> METoVKShaderStageCreateInfo(const RHIShaderBoundStateInput& _shader_bound_state);
     static VkPipelineVertexInputStateCreateInfo         METoVKVertexInputStateCreateInfo(const RHIVertexInputState& _vertex_input_state);
+    static std::vector<const Shader*>                   GetShaderInfoList(const RHIShaderBoundStateInput& _shader_bound_state);
 
 private:
-    VkPipeline m_pipeline;
+    VkPipeline                   m_pipeline;
+    VulkanDescriptorSetsLayout*  m_layout;
+    std::vector<VkDescriptorSet> m_descriptor_sets;
 };
 #pragma endregion
 
