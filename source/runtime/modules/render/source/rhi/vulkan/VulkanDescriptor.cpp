@@ -1,7 +1,17 @@
-#include "VulkanDevice.h"
-#include "VulkanDescriptor.h"
-
 #include "rhi/vulkan/misc/VulkanMacroUtils.h"
+#include "VulkanDescriptor.h"
+#include "VulkanDevice.h"
+
+void VulkanDescriptorSetsLayout::Init(uint32_t _max_sets, const std::unordered_map<uint8_t, TDescriptorSetLayout>& _layout_mappings) {
+    m_layouts.resize(_max_sets, {});
+    for (const auto& [space, layout] : _layout_mappings) {
+        m_layouts[space] = layout.first;
+        for (auto& binding : layout.second) {
+            m_sets_binding_count[binding.descriptorType] += binding.descriptorCount;
+            m_descriptor_binding_infos[space][binding.binding] = {binding.descriptorType, binding.descriptorCount};
+        }
+    }
+}
 
 VulkanDescriptorAllocator::~VulkanDescriptorAllocator() {
     // Destructor implementation
@@ -12,11 +22,14 @@ void VulkanDescriptorAllocator::Init(VulkanDevice* device) {
     this->m_device = device;
 }
 
-bool VulkanDescriptorAllocator::Allocate(VkDescriptorSet& _set, const VulkanDescriptorSetsLayout& _layout) {
+bool VulkanDescriptorAllocator::Allocate(const VulkanDescriptorSetsLayout& _layout, std::vector<VkDescriptorSet>& _sets) {
     if (m_current_pool == VK_NULL_HANDLE) {
         m_current_pool = GetAvailablePool(_layout);
         m_used_pools.push_back(m_current_pool);
     }
+
+    uint32_t set_count = _layout.GetDescriptorSetCount();
+    _sets.reserve(set_count);
 
     VkDescriptorSetAllocateInfo alloc_info{};
     alloc_info.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -25,7 +38,7 @@ bool VulkanDescriptorAllocator::Allocate(VkDescriptorSet& _set, const VulkanDesc
     alloc_info.descriptorSetCount = _layout.GetDescriptorSetCount();
     alloc_info.pSetLayouts        = _layout.GetLayouts().data();
 
-    auto result          = vkAllocateDescriptorSets(m_device->GetDevice(), &alloc_info, &_set);
+    auto result          = vkAllocateDescriptorSets(m_device->GetDevice(), &alloc_info, _sets.data());
     bool need_reallocate = false;
     switch (result) {
         case VK_SUCCESS:
@@ -37,6 +50,7 @@ bool VulkanDescriptorAllocator::Allocate(VkDescriptorSet& _set, const VulkanDesc
             need_reallocate = true;
             break;
         default:
+            LOG_ERROR("Allocate: Unexpected error code: {}.", static_cast<int32_t>(result));
             //unrecoverable error
             return false;
     }
@@ -45,7 +59,7 @@ bool VulkanDescriptorAllocator::Allocate(VkDescriptorSet& _set, const VulkanDesc
         m_current_pool = GetAvailablePool(_layout);
         m_used_pools.push_back(m_current_pool);
 
-        VK_CHECK_RESULT(vkAllocateDescriptorSets(m_device->GetDevice(), &alloc_info, &_set));
+        VK_CHECK_RESULT(vkAllocateDescriptorSets(m_device->GetDevice(), &alloc_info, _sets.data()));
     }
 
     return true;
@@ -83,10 +97,10 @@ VkDescriptorPool VulkanDescriptorAllocator::GetAvailablePool(const VulkanDescrip
 }
 
 VkDescriptorPool VulkanDescriptorAllocator::CreatePool(const VulkanDescriptorSetsLayout& _layout) {
-    TDescriptorMap pool_size_info;
-    const uint32_t set_count = _layout.GetDescriptorSetCount();
+    TDescriptorCountMap pool_size_info;
+    const uint32_t      set_count = _layout.GetDescriptorSetCount();
 
-    for (const auto& [type, count] : _layout.GetBindingCount()) {
+    for (const auto& [type, count] : _layout.GetSetsBindingCount()) {
         pool_size_info[type] = count / set_count + 1;
     }
 

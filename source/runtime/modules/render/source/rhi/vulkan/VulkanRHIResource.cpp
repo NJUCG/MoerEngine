@@ -784,16 +784,8 @@ void VulkanRHIGraphicsPipelineState::GenerateDescriptorSetLayouts(const VulkanDe
     }
 
     // extract descriptor set layouts
-    TDescriptorMap binding_count;
     m_layout = new VulkanDescriptorSetsLayout();
-    m_layout->m_layouts.reserve(max_space);
-    for (const auto& [space, layout] : _layout_mappings) {
-        m_layout->m_layouts[space] = layout.first;
-        for (auto& binding : layout.second) {
-            binding_count[binding.descriptorType] += binding.descriptorCount;
-        }
-    }
-    m_layout->m_binding_count = binding_count;
+    m_layout->Init(max_space + 1, _layout_mappings);
 }
 
 void VulkanRHIGraphicsPipelineState::CreateDescriptorSets(VulkanDevice* _device) {

@@ -120,17 +120,6 @@ void Test() {
     command_list->BeginRenderPass(pass_info, "triangle pass");
     command_list->BindVertexBuffers(0, 1, vertex_buffers.data(), 0);
 
-    command_list->DrawIndexedInstanced(1, 1, 0, 0);
-
-    command_list->EndRenderPass();
-
-    RHICommandQueue*                         graphics_queue = g_rhi->CreateCommandQueue(ECommandQueueType::GRAPHICS);
-    const std::array<RHICommandListBase*, 1> command_array{command_list};
-    graphics_queue->SubmitCommands(1, command_array.data());
-
-    //global buffer
-    // start offset
-
     RHIUnorderedAccessViewRef test_view =
         g_rhi->RHICreateUnorderedAccessView(tex,
                                             RHIViewInfo::CreateTextureUAVInfo()
@@ -143,7 +132,18 @@ void Test() {
     params.write_target = test_view;
     RHIBatchedShaderParameters batched_params;
     batched_params.SetParameters(test_shader_vs, params);
-    //command_list->SetBatchedShaderParameter();
+    command_list->SetBatchedShaderParameter(batched_params);
+
+    command_list->DrawIndexedInstanced(1, 1, 0, 0);
+
+    command_list->EndRenderPass();
+
+    RHICommandQueue*                         graphics_queue = g_rhi->CreateCommandQueue(ECommandQueueType::GRAPHICS);
+    const std::array<RHICommandListBase*, 1> command_array{command_list};
+    graphics_queue->SubmitCommands(1, command_array.data());
+
+    //global buffer
+    // start offset
     //VkSetDescriptorWrite()
 
     //rootSignature <=> pipelineLayout -> descriptorLayout descriptorLayoutBinding

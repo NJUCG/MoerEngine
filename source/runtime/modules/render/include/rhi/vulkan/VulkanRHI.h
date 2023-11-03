@@ -94,8 +94,6 @@ protected:
     std::vector<VulkanViewport*> m_viewports;
     VulkanViewport*              m_current_viewport;
 
-    VulkanDescriptorAllocator* m_descriptor_allocator;
-
 protected:
     void InitSurface(GLFWwindow* _window);
     void InitVulkan();

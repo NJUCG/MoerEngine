@@ -17,6 +17,6 @@ using TExtensionPropsArray        = std::vector<VkExtensionProperties>;
 using TLayerArray                 = std::vector<std::string>;
 using TQueueFamilyPropertiesArray = std::vector<VkQueueFamilyProperties>;
 using TDescriptorSetLayout        = std::pair<VkDescriptorSetLayout, std::vector<VkDescriptorSetLayoutBinding>>;
-using TDescriptorMap              = std::unordered_map<VkDescriptorType, uint32_t>;
+using TDescriptorCountMap         = std::unordered_map<VkDescriptorType, uint32_t>;
 
 #endif//VULKAN_TYPEDEFS_H
