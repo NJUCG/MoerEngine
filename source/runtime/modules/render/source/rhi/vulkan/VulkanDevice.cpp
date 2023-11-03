@@ -4,6 +4,7 @@
 
 #include "rhi/vulkan/misc/VulkanMacroUtils.h"
 #include "rhi/vulkan/VulkanCommandList.h"
+#include "VulkanDescriptor.h"
 #include "VulkanDevice.h"
 #include "VulkanUtil.h"
 
@@ -45,9 +46,14 @@ void VulkanDevice::Init(const DeviceInitializer& _initializer) {
 
     CreateDevice(_initializer);
     CreateCommandPools();
+    CreateDescriptorAllocator();
 }
 
 void VulkanDevice::Destroy() {
+}
+
+void VulkanDevice::AllocateDescriptorSets(const VulkanDescriptorSetsLayout& _layout, std::vector<VkDescriptorSet>& _sets) {
+    m_descriptor_allocator->Allocate(_layout, _sets);
 }
 
 /**
@@ -160,6 +166,12 @@ void VulkanDevice::CreateCommandPools() {
     VK_CHECK_RESULT(vkCreateCommandPool(m_device, &pool_create_info, nullptr, &m_transfer_pool));
 
     LOG_INFO("VulkanRHI: Command pools created, graphics: {}, transfer: {}", (void*)m_default_pool, (void*)m_transfer_pool);
+}
+
+void VulkanDevice::CreateDescriptorAllocator() {
+    m_descriptor_allocator = new VulkanDescriptorAllocator();
+    m_descriptor_allocator->Init(this);
+    LOG_INFO("VulkanRHI: Descriptor allocator created.");
 }
 
 TExtensionArray VulkanDevice::GetGpuExtensions(VkPhysicalDevice _gpu) const {

@@ -57,7 +57,6 @@ class RHIShader;
 class RHIShaderLibrary;
 class RHIShaderResourceView;
 class RHIConstantBufferView;
-class RHIStagingBuffer;
 class RHITexture;
 class RHITextureReference;
 class RHIShaderRootParameterLayout;
@@ -99,7 +98,6 @@ using RHIMultisampleStateRef          = CountableRef<RHIMultisampleState>;
 using RHIShaderRef                    = CountableRef<RHIShader>;
 using RHIShaderLibraryRef             = CountableRef<RHIShaderLibrary>;
 using RHIShaderResourceViewRef        = CountableRef<RHIShaderResourceView>;
-using RHIStagingBufferRef             = CountableRef<RHIStagingBuffer>;
 using RHITextureRef                   = CountableRef<RHITexture>;
 using RHITextureReferenceRef          = CountableRef<RHITextureReference>;
 using RHIShaderRootParameterLayoutRef = CountableRef<RHIShaderRootParameterLayout>;
@@ -1470,14 +1468,6 @@ public:
     }
 };
 #pragma endregion
-
-class RHIStagingBuffer : public RHIResource {
-public:
-    RHIStagingBuffer() : RHIResource(RRT_STAGING_BUFFER) {}
-    virtual ~RHIStagingBuffer() {}
-
-    virtual uint64_t GetGPUByteSize() const { return 0; }
-};
 
 #pragma region graphic pipeline definitions
 /* converted attachment/RT data */

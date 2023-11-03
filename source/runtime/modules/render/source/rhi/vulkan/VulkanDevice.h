@@ -14,6 +14,9 @@
 #include <vector>
 #include <map>
 
+class VulkanDescriptorSetsLayout;
+class VulkanDescriptorAllocator;
+
 struct QueueFamilyIndices {
     std::optional<uint32_t> graphics;
     std::optional<uint32_t> present;
@@ -81,6 +84,8 @@ public:
         return m_transfer_pool;
     }
 
+    void AllocateDescriptorSets(const VulkanDescriptorSetsLayout& _layouts, std::vector<VkDescriptorSet>& _sets);
+
 private:
     VkPhysicalDevice                 m_gpu;
     VkPhysicalDeviceProperties       m_gpu_props;
@@ -99,11 +104,14 @@ private:
     VkCommandPool m_default_pool;
     VkCommandPool m_transfer_pool;
 
+    VulkanDescriptorAllocator* m_descriptor_allocator;
+
 private:
     VkPhysicalDevice SelectGpu(VkInstance _instance, VkPhysicalDeviceType _type, VkSurfaceKHR _surface, const TExtensionArray& _enabled_extensions);
 
     void CreateDevice(const DeviceInitializer& _initializer);
     void CreateCommandPools();
+    void CreateDescriptorAllocator();
 
     TExtensionArray                  GetGpuExtensions(VkPhysicalDevice _gpu) const;
     VkPhysicalDeviceMemoryProperties GetMemoryProperties(VkPhysicalDevice _gpu) const;

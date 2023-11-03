@@ -32,7 +32,7 @@ namespace VkUtil = Moer::RHI::Vulkan::Util;
 
 VulkanRHIImpl::VulkanRHIImpl(GLFWwindow* _window)
     : m_instance(VK_NULL_HANDLE), m_surface(VK_NULL_HANDLE), m_allocator(VK_NULL_HANDLE),
-      m_device(nullptr), m_swap_chain(nullptr), m_current_viewport(nullptr), m_descriptor_allocator(nullptr) {
+      m_device(nullptr), m_swap_chain(nullptr), m_current_viewport(nullptr) {
     LOG_INFO("Built with Vulkan header version {0:d}.{1:d}.{2:d}", VK_API_VERSION_MAJOR(VK_HEADER_VERSION_COMPLETE), VK_API_VERSION_MINOR(VK_HEADER_VERSION_COMPLETE), VK_API_VERSION_PATCH(VK_HEADER_VERSION_COMPLETE));
 
     CreateInstance();
@@ -51,7 +51,6 @@ void VulkanRHIImpl::PostInit() {
 void VulkanRHIImpl::ShutDown() {
     vmaDestroyAllocator(m_allocator);
 
-    CHECK_AND_DELETE(m_descriptor_allocator);
     // CHECK_AND_DELETE(m_current_viewport);
     CHECK_AND_DELETE(m_swap_chain);
     CHECK_AND_DELETE(m_device);
@@ -231,7 +230,7 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
     auto shader_info_list = VulkanRHIGraphicsPipelineState::GetShaderInfoList(_init.shader_stage);// MARK...
 
     std::unordered_map<uint8_t, TDescriptorSetLayout> layout_mappings;
-    TDescriptorMap                                    descriptor_type_mappings;
+    TDescriptorCountMap                               descriptor_type_mappings;
 
     // construct layout mappings
     for (const auto* shader_info : shader_info_list) {
@@ -252,10 +251,9 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
 
     // generate descriptor set layouts
     vk_pipeline->GenerateDescriptorSetLayouts(m_device, layout_mappings);
-    vk_pipeline->m_descriptor_allocator = m_descriptor_allocator;
+    vk_pipeline->CreateDescriptorSets(m_device);
 
     auto layouts = vk_pipeline->m_layout->GetLayouts();
-
     // create pipeline layout
     VkPipelineLayoutCreateInfo pipeline_layout_create_info{};
     pipeline_layout_create_info.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -503,9 +501,6 @@ void VulkanRHIImpl::InitVulkan() {
     uint32_t width, height;
     // glfwGetFramebufferSize(m_window, &width, &height);
     m_swap_chain->Init(&width, &height, true);
-
-    m_descriptor_allocator = new VulkanDescriptorAllocator();
-    m_descriptor_allocator->Init(m_device);
 }
 
 void VulkanRHIImpl::InitVulkanMemoryAllocator() {

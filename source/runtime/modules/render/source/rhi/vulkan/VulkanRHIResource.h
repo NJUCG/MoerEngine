@@ -265,11 +265,11 @@ public:
         return m_pipeline;
     }
 
-    VulkanDescriptorSetsLayout* GetLayout() const {
+    const VulkanDescriptorSetsLayout* GetLayout() const {
         return m_layout;
     }
 
-    std::vector<VkDescriptorSet> GetDescriptorSets() const {
+    const std::vector<VkDescriptorSet>& GetDescriptorSets() const {
         return m_descriptor_sets;
     }
 
