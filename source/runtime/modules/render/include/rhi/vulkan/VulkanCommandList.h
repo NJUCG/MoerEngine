@@ -12,7 +12,7 @@ class VulkanDevice;
 class VulkanRHIGraphicsCommandList final : public RHIGraphicsCommandList {
 public:
     VulkanRHIGraphicsCommandList(VulkanDevice* _device, VkCommandPool _pool, VkCommandBufferLevel _level = VK_COMMAND_BUFFER_LEVEL_PRIMARY);
-    ~VulkanRHIGraphicsCommandList();
+    virtual ~VulkanRHIGraphicsCommandList();
 
     void SetBatchedShaderParameter(RHIShaderRef shader, const RHIBatchedShaderParameters& parameters) override;
     void SetPipelineState(RHIGraphicsPipelineState* _graphics_pso) override;

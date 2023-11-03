@@ -3,6 +3,7 @@
 #include "platform/Platform.h"
 
 #include "rhi/RHIResource.h"
+#include "rhi/vulkan/VulkanRHI.h"
 #include "shader/Shader.h"
 #include "shader/ShaderCompiler.h"
 #include "shader/ShaderResourceManager.h"
@@ -47,7 +48,11 @@ namespace Moer {
     };
     void RenderSystem::InitRHI() {
         //todo: init by config
-        g_rhi = new FakeRHI();
+        g_rhi = new VulkanRHIImpl();
+        RHIInitInfo info;
+        info.max_frame_in_flight = 3;
+        g_rhi->Initialize(info);
+        g_rhi->PostInit();
     }
     void RenderSystem::InitShaderResources() {
         //init shader compiler

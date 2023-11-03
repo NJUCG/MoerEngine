@@ -7,9 +7,11 @@
 
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
+#include "rhi/vulkan/VulkanRHI.h"
 #include "vulkan/vulkan_core.h"
 #include "shader/ShaderCommon.h"
 
+#include <vector>
 #include <vulkan/vulkan.h>
 
 #include <vk_mem_alloc.h>
@@ -70,7 +72,8 @@ public:
 
 class VulkanEnumTranslator final {
 public:
-    static VkFormat METoVKFormat(EPixelFormat _format);
+    static VkFormat     METoVKFormat(EPixelFormat _format);
+    static EPixelFormat VKToMEFormat(VkFormat _format);
 
     static VkSampleCountFlagBits METoVKSampleCountFlagBits(uint32_t _me_count);
     static VkImageAspectFlags    METoVKImageAspectFlags(ETextureAspectFlags _flags);
@@ -316,8 +319,11 @@ class VulkanRHITexture final : public RHITexture {
 
 public:
     VulkanRHITexture() = delete;
+    ~VulkanRHITexture();
+
     explicit VulkanRHITexture(const RHITextureCreateInfo& _info) : RHITexture(_info) {}
 
+    //for inner usage only
     explicit VulkanRHITexture(const RHITextureCreateInfo& _info, VkImage _image) : RHITexture(_info), m_alloc(_image, VK_NULL_HANDLE) {}
 
     inline const VmaAllocation GetAllocation() const {
@@ -326,6 +332,10 @@ public:
 
     inline VkImage GetHandle() const {
         return m_alloc.image;
+    }
+    //for inner usage only
+    inline void SetAttachedImageInner(VkImage _image) {
+        m_alloc.image = _image;
     }
 
     static VkImageType       METoVKImageType(ETextureDimension _dim);
@@ -409,12 +419,36 @@ private:
 
 #pragma region viewport
 
-class VulkanViewport final : RHIViewport {
-    virtual void     Present(RHIFence* _render_finished) override;
-    virtual RHIView* GetNextFrameView() override;
+class VulkanViewport final : public RHIViewport {
+public:
+    VulkanViewport(VulkanSwapChain* _swapchain);
+    ~VulkanViewport();
+    virtual void OnResize(Extent2D _size) override;
+
+    virtual void    Present(RHIFence* _render_finished) override;
+    VulkanRHIFence* GetAcquireNextImageFence();
+
+    RHIViewportNextBackBufferInfo GetNextFrameBackBufferInfo() override;
+
+    VulkanRHIUnorderedAccessView* GetCurrentBackBuffer(uint32_t index);
+
+    virtual void WaitForQueueComplete(class RHICommandQueue* _command_queue, RHIFence* _optional_fence) override;
 
 private:
+    void                   InnerCreateResources();
+    void                   InnerDestroyResources();
+    void                   ResetResources();
     class VulkanSwapChain* swapchain;
+
+    std::vector<VulkanRHIFence*> image_aquire_fences;
+
+    std::vector<VulkanRHIUnorderedAccessView*> swapchain_image_uavs;
+
+    std::vector<VulkanRHITexture*> swapchain_images;
+
+    uint32_t frame_offset;
+
+    uint32_t max_frame_in_flight = 3;
 };
 #pragma endregion
 

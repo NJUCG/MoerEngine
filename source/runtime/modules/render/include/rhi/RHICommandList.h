@@ -10,13 +10,14 @@ protected:
 
 public:
     virtual void SetBatchedShaderParameter(RHIShaderRef shader, const RHIBatchedShaderParameters& parameters) = 0;
-    RHI_API ~RHICommandListBase();
+    RHI_API virtual ~RHICommandListBase();
 
     virtual void* GetNativeHandle() const { return nullptr; }
 };
 
 class RHIGraphicsCommandList : public RHICommandListBase {
 public:
+    virtual ~RHIGraphicsCommandList(){};
     virtual void SetBatchedShaderParameter(RHIShaderRef shader, const RHIBatchedShaderParameters& parameters) = 0;
     virtual void SetPipelineState(RHIGraphicsPipelineState* _graphics_pso)                                    = 0;
     virtual void Open() {}

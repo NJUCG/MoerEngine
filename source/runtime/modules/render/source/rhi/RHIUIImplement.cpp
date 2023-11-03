@@ -71,12 +71,11 @@ bool RHI::GUIInit(uint32_t _num_frames_in_flight) {
     io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;
     io.BackendFlags |= ImGuiBackendFlags_RendererHasViewports;
     ImGuiViewport* main_viewport    = ImGui::GetMainViewport();
-    main_viewport->RendererUserData = IM_NEW(GuiViewportData)(render_backend_data->num_frames_in_flight);
+    main_viewport->RendererUserData = IM_NEW(GuiViewportData)();
 
     if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
         GuiInitPlatformInterface();
 
-    // render_backend_data->
     return true;
 }
 void RHI::GUIShutDown() {
@@ -438,7 +437,19 @@ void CreateFontsTexture() {
     }
     io.Fonts->SetTexID((ImTextureID)backend_data->font_view);
 }
+void GuiCreateWindow(ImGuiViewport* viewport);
+void GuiDestroyWindow(ImGuiViewport* viewport);
+void GuiSetWindowSize(ImGuiViewport* viewport, ImVec2 size);
+void GuiRenderWindow(ImGuiViewport* viewport, void*);
+void GuiSwapbuffer(ImGuiViewport* viewport, void*);
+
 void GuiInitPlatformInterface() {
+    ImGuiPlatformIO& platform_io       = ImGui::GetPlatformIO();
+    platform_io.Renderer_CreateWindow  = GuiCreateWindow;
+    platform_io.Renderer_DestroyWindow = GuiDestroyWindow;
+    platform_io.Renderer_SetWindowSize = GuiSetWindowSize;
+    platform_io.Renderer_RenderWindow  = GuiRenderWindow;
+    platform_io.Renderer_SwapBuffers   = GuiSwapbuffer;
 }
 
 void DestroyRenderBuffers(GuiFrameRenderBuffers* _render_buffers) {
@@ -446,13 +457,12 @@ void DestroyRenderBuffers(GuiFrameRenderBuffers* _render_buffers) {
     _render_buffers->vertex_buffer->DeRef();
 }
 
-static void GuiCreateWindow(ImGuiViewport* viewport) {
+void GuiCreateWindow(ImGuiViewport* viewport) {
     GuiBackendData*  backend_data  = GetBackendData();
-    GuiViewportData* viewport_data = IM_NEW(GuiViewportData)(backend_data->num_frames_in_flight);
+    GuiViewportData* viewport_data = IM_NEW(GuiViewportData)();
 
     viewport->RendererUserData = viewport_data;
 
-    viewport_data->frame_index   = UINT_MAX;
     viewport_data->command_queue = g_rhi->CreateCommandQueue(ECommandQueueType::GRAPHICS);
 
     viewport_data->comand_list = g_rhi->CreateGraphicsCommandList();
@@ -463,14 +473,57 @@ static void GuiCreateWindow(ImGuiViewport* viewport) {
     viewport_data->present_fence = g_rhi->RHICreateFence(present_fence_info);
 
     RHIViewportInitializer viewport_info;
+    viewport_data->frame_index = 0;
 
     viewport_data->viewport = g_rhi->RHICreateViewport(viewport_info);
+}
+
+void GuiDestroyWindow(ImGuiViewport* viewport) {
+    GuiBackendData* backend_data = GetBackendData();
+
+    if (GuiViewportData* viewport_data = (GuiViewportData*)viewport->RendererUserData) {
+        if (viewport_data && viewport_data->command_queue && viewport_data->present_fence) {
+            viewport_data->viewport->WaitForQueueComplete(viewport_data->command_queue, viewport_data->present_fence);
+
+            delete viewport_data->comand_list;
+            viewport_data->comand_list = nullptr;
+            delete viewport_data->command_queue;
+            viewport_data->command_queue = nullptr;
+
+            viewport_data->present_fence->DeRef();
+
+            uint32_t max_frame = viewport_data->viewport->GetViewportInfo().max_frame_in_flight;
+
+            for (uint32_t index = 0; index < max_frame; index++) {
+                viewport_data->render_buffers[index].index_buffer->DeRef();
+                viewport_data->render_buffers[index].vertex_buffer->DeRef();
+            }
+
+            viewport_data->viewport->DeRef();
+            IM_DELETE(viewport_data);
+        }
+    }
+    viewport->RendererUserData = nullptr;
+}
+void GuiSetWindowSize(ImGuiViewport* viewport, ImVec2 size) {
+    GuiViewportData* viewport_data = (GuiViewportData*)viewport->RendererUserData;
+
+    auto m_viewport = viewport_data->viewport;
+
+    m_viewport->WaitForQueueComplete(viewport_data->command_queue, viewport_data->present_fence);
+
+    m_viewport->OnResize(Extent2D(size.x, size.y));
 }
 void GuiRenderWindow(ImGuiViewport* viewport, void*) {
     GuiBackendData*  backend_data  = GetBackendData();
     GuiViewportData* viewport_data = (GuiViewportData*)viewport->RendererUserData;
+    RHIViewport*     rhi_viewport  = viewport_data->viewport;
 
-    RHIView* present_view = viewport_data->viewport->GetNextFrameView();
+    RHIViewportNextBackBufferInfo info = g_rhi->RHIGetNextFrameViewportBufferInfo(rhi_viewport);
+
+    if (info.backbuffer_index == UINT32_MAX) return;
+
+    RHIUnorderedAccessView* present_view = g_rhi->RHIGetViewportBackBufferUAV(rhi_viewport, info.backbuffer_index);
     if (present_view == nullptr) {
         //meet resize event
         return;
@@ -526,6 +579,8 @@ void GuiRenderWindow(ImGuiViewport* viewport, void*) {
 
     //wait for last frame recording
     submit_info.Wait(viewport_data->present_fence, viewport_data->frame_index);
+    //wait for back_buffer ready
+    submit_info.Wait(info.backbuffer_ready_fence, 0);
     //signal this frame present fence
     submit_info.Signal(viewport_data->present_fence, ++viewport_data->frame_index);
 

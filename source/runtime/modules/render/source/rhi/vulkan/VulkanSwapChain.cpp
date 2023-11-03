@@ -32,8 +32,6 @@ void VulkanSwapChain::Connect(VkInstance _instance, VkSurfaceKHR _surface, Vulka
  * @param fullscreen
  */
 void VulkanSwapChain::Init(uint32_t* width, uint32_t* height, uint32_t max_frame_in_flight, bool vsync) {
-    m_image_acquired_semaphores.resize(max_frame_in_flight);
-    m_render_complete_semaphores.resize(max_frame_in_flight);
     Create(width, height, vsync);
 }
 void VulkanSwapChain::Create(uint32_t* width, uint32_t* height, bool vsync) {
@@ -43,18 +41,21 @@ void VulkanSwapChain::Create(uint32_t* width, uint32_t* height, bool vsync) {
     surface_format    = ChooseSwapSurfaceFormat(details.formats);
     auto present_mode = ChooseSwapPresentMode(details.present_modes, true);
     auto extent       = ChooseSwapExtent(width, height, details.capabilities);
-
+    extent.width      = *width;
+    extent.height     = *height;
     // set the number of images
     uint32_t image_count = details.capabilities.minImageCount + 1;
     if (details.capabilities.maxImageCount > 0 && image_count > details.capabilities.maxImageCount) {
         image_count = details.capabilities.maxImageCount;
     }
 
+    image_format = surface_format.format;
+
     VkSwapchainCreateInfoKHR create_info{};
     create_info.sType            = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
     create_info.surface          = m_surface;
     create_info.minImageCount    = image_count;
-    create_info.imageFormat      = surface_format.format;
+    create_info.imageFormat      = image_format;
     create_info.imageColorSpace  = surface_format.colorSpace;
     create_info.imageExtent      = extent;
     create_info.imageArrayLayers = 1;
@@ -81,27 +82,8 @@ void VulkanSwapChain::Create(uint32_t* width, uint32_t* height, bool vsync) {
     VK_CHECK_RESULT(vkCreateSwapchainKHR(*device, &create_info, nullptr, &m_swap_chain));
 
     vkGetSwapchainImagesKHR(*device, m_swap_chain, &image_count, nullptr);
-    m_swap_chain_buffers.resize(image_count);
-
+    m_swap_chain_images.resize(image_count);
     vkGetSwapchainImagesKHR(*device, m_swap_chain, &image_count, m_swap_chain_images.data());
-
-    for (size_t i = 0; i < image_count; ++i) {
-
-        m_swap_chain_buffers[i].image = new VulkanRHITexture(RHITextureCreateInfo::Create2D("swapchain_image")
-                                                                 .SetExtent((int32_t)width, (int32_t)height)
-                                                                 .SetInitialLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED),
-                                                             m_swap_chain_images[i]);
-        VkImageView temp_view         = CreateImageView(m_swap_chain_images[i], surface_format.format, 1, VK_IMAGE_ASPECT_COLOR_BIT);
-        m_swap_chain_buffers[i].view  = new VulkanImageView(m_swap_chain_buffers[i].image, temp_view, RHIViewInfo::CreateBufferSRVInfo());
-        m_swap_chain_buffers[i].view->AddRef();
-    }
-    VkSemaphoreCreateInfo image_semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
-    for (uint32_t i = 0; i < m_image_acquired_semaphores.size(); i++) {
-        vkCreateSemaphore(device->GetDevice(), &image_semaphore_info, VK_NULL_HANDLE, &m_image_acquired_semaphores[i]);
-    }
-    for (uint32_t i = 0; i < m_render_complete_semaphores.size(); i++) {
-        vkCreateSemaphore(device->GetDevice(), &image_semaphore_info, VK_NULL_HANDLE, &m_render_complete_semaphores[i]);
-    }
 
     LOG_INFO("Vulkan swapchain initialized with {} images.", image_count);
 }
@@ -112,12 +94,12 @@ void VulkanSwapChain::Recreate() {
     uint32_t width, height;
     Create(&width, &height, true);
 }
-
-uint32_t VulkanSwapChain::AcquireNextImage() {
+uint32_t VulkanSwapChain::AcquireNextImage(VkSemaphore _aquire_semaphore) {
     uint32_t                  image_index = 0;
     VkAcquireNextImageInfoKHR aquire_info{VK_STRUCTURE_TYPE_ACQUIRE_NEXT_IMAGE_INFO_KHR};
     aquire_info.swapchain = m_swap_chain;
-    aquire_info.semaphore = m_image_acquired_semaphores[current_frame_offset];
+    // VkSemaphore aquire_semaphore = m_image_acquired_semaphores[current_frame_offset];
+    aquire_info.semaphore = _aquire_semaphore;
 
     VkResult result = vkAcquireNextImage2KHR(m_device->GetDevice(), &aquire_info, &image_index);
     //probably caused by resize
@@ -127,14 +109,6 @@ uint32_t VulkanSwapChain::AcquireNextImage() {
         image_index = INT32_MAX;
     }
     if (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR) {
-        current_image_index = image_index;
-        //should wait
-        VkSemaphoreWaitInfo info;
-        info.sType          = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO;
-        info.semaphoreCount = 1;
-        info.pSemaphores    = &m_image_acquired_semaphores[current_frame_offset++];
-        vkWaitSemaphores(m_device->GetDevice(), &info, UINT64_MAX);
-
         return image_index;
     }
     assert(false && "Error acquiring next present texture.");
@@ -160,20 +134,7 @@ void VulkanSwapChain::Present(VkQueue _queue, VkSemaphore _render_finished) {
 
 void VulkanSwapChain::Cleanup() {
 
-    for (uint32_t i = 0; i < m_swap_chain_buffers.size(); i++) {
-        m_swap_chain_buffers[i].view->Delete();
-        m_swap_chain_buffers[i].image->Delete();
-    }
     vkDestroySwapchainKHR(m_device->GetDevice(), m_swap_chain, VK_NULL_HANDLE);
-
-    for (uint32_t i = 0; i < m_image_acquired_semaphores.size(); i++) {
-        vkDestroySemaphore(m_device->GetDevice(), m_image_acquired_semaphores[i], VK_NULL_HANDLE);
-    }
-
-    for (uint32_t i = 0; i < m_render_complete_semaphores.size(); i++) {
-        vkDestroySemaphore(m_device->GetDevice(), m_render_complete_semaphores[i], VK_NULL_HANDLE);
-    }
-    current_frame_offset = 0;
 }
 
 VkImageView VulkanSwapChain::CreateImageView(VkImage _image, VkFormat _format, uint32_t _mip_levels, VkImageAspectFlags _aspect_mask) {

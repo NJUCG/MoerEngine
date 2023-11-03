@@ -7,6 +7,7 @@
 
 #include "rhi/RHI.h"
 #include "rhi/RHIResource.h"
+#include <stdint.h>
 #include <vulkan/vulkan.h>
 
 class IVulkanRHI : public RHI {
@@ -68,18 +69,17 @@ public:
 
 #pragma region Viewport
 
-    virtual RHIViewportRef RHICreateViewport(const RHIViewportInitializer& _init) override { return nullptr; };
+    virtual RHIViewportRef RHICreateViewport(const RHIViewportInitializer& _init) override { return nullptr; }
 
-    virtual void RHIResizeViewport(RHIViewport* _viewport, Extent2D _size, bool _b_full_screen, EPixelFormat _format = PF_UNDEFINED) override{};
+    virtual void RHIResizeViewport(RHIViewport* _viewport, Extent2D _size, bool _b_full_screen, EPixelFormat _format = PF_UNDEFINED) override {}
 
-    virtual RHITextureRef RHIGetViewportBackBuffer(RHIViewport* _viewport) override { return nullptr; };
+    virtual RHIViewportNextBackBufferInfo RHIGetNextFrameViewportBufferInfo(RHIViewport* _viewport) override { return RHIViewportNextBackBufferInfo(); }
 
-    virtual RHIUnorderedAccessViewRef RHIGetViewportBackBufferUAV(RHIViewport* _viewport) override { return nullptr; }
+    virtual RHIUnorderedAccessView* RHIGetViewportBackBufferUAV(RHIViewport* _viewport, uint32_t index) override { return nullptr; }
 
-    virtual void RHIBeginDrawingViewport(RHIViewport*, RHITexture* _viewport_attachment) override{};
+    virtual void RHIPresentViewport(RHIViewport* _viewport, RHIFence* _render_end_fence) override {}
 
-    virtual void RHIEndDrawingViewport(RHIViewport*, bool _b_present) override{};
-
+    virtual RHIViewport* RHIGetMainViewport() override { return nullptr; }
 #pragma endregion
 };
 

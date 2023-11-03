@@ -4,12 +4,15 @@
 
 #include "VulkanRHIResource.h"
 
+#include "PixelFormat.h"
 #include "VulkanDevice.h"
 
 #include "rhi/RHICommandQueue.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
+#include "rhi/vulkan/VulkanCommandQueue.h"
+#include "rhi/vulkan/VulkanRHI.h"
 #include "rhi/vulkan/misc/VulkanMacroUtils.h"
 #include "log/LogSystem.h"
 #include "vulkan/vulkan_core.h"
@@ -28,6 +31,265 @@ VkFormat VulkanEnumTranslator::METoVKFormat(EPixelFormat _format) {
         return VK_FORMAT_MAX_ENUM;
     }
     return VkFormat(_format);// MARK...
+}
+
+EPixelFormat VulkanEnumTranslator::VKToMEFormat(VkFormat _format) {
+    switch (_format) {
+
+        case VK_FORMAT_UNDEFINED:
+            return PF_UNDEFINED;
+        case VK_FORMAT_R4G4_UNORM_PACK8:
+            return PF_R4G4_UNORM_PACK8;
+        case VK_FORMAT_R4G4B4A4_UNORM_PACK16:
+            return PF_R4G4B4A4_UNORM_PACK16;
+        case VK_FORMAT_B4G4R4A4_UNORM_PACK16:
+        case VK_FORMAT_R5G6B5_UNORM_PACK16:
+        case VK_FORMAT_B5G6R5_UNORM_PACK16:
+        case VK_FORMAT_R5G5B5A1_UNORM_PACK16:
+        case VK_FORMAT_B5G5R5A1_UNORM_PACK16:
+        case VK_FORMAT_A1R5G5B5_UNORM_PACK16:
+        case VK_FORMAT_R8_UNORM:
+        case VK_FORMAT_R8_SNORM:
+        case VK_FORMAT_R8_USCALED:
+        case VK_FORMAT_R8_SSCALED:
+        case VK_FORMAT_R8_UINT:
+        case VK_FORMAT_R8_SINT:
+        case VK_FORMAT_R8_SRGB:
+        case VK_FORMAT_R8G8_UNORM:
+        case VK_FORMAT_R8G8_SNORM:
+        case VK_FORMAT_R8G8_USCALED:
+        case VK_FORMAT_R8G8_SSCALED:
+        case VK_FORMAT_R8G8_UINT:
+        case VK_FORMAT_R8G8_SINT:
+        case VK_FORMAT_R8G8_SRGB:
+        case VK_FORMAT_R8G8B8_UNORM:
+        case VK_FORMAT_R8G8B8_SNORM:
+        case VK_FORMAT_R8G8B8_USCALED:
+        case VK_FORMAT_R8G8B8_SSCALED:
+        case VK_FORMAT_R8G8B8_UINT:
+        case VK_FORMAT_R8G8B8_SINT:
+        case VK_FORMAT_R8G8B8_SRGB:
+        case VK_FORMAT_B8G8R8_UNORM:
+        case VK_FORMAT_B8G8R8_SNORM:
+        case VK_FORMAT_B8G8R8_USCALED:
+        case VK_FORMAT_B8G8R8_SSCALED:
+        case VK_FORMAT_B8G8R8_UINT:
+        case VK_FORMAT_B8G8R8_SINT:
+        case VK_FORMAT_B8G8R8_SRGB:
+        case VK_FORMAT_R8G8B8A8_UNORM:
+        case VK_FORMAT_R8G8B8A8_SNORM:
+        case VK_FORMAT_R8G8B8A8_USCALED:
+        case VK_FORMAT_R8G8B8A8_SSCALED:
+        case VK_FORMAT_R8G8B8A8_UINT:
+        case VK_FORMAT_R8G8B8A8_SINT:
+        case VK_FORMAT_R8G8B8A8_SRGB:
+        case VK_FORMAT_B8G8R8A8_UNORM:
+        case VK_FORMAT_B8G8R8A8_SNORM:
+        case VK_FORMAT_B8G8R8A8_USCALED:
+        case VK_FORMAT_B8G8R8A8_SSCALED:
+        case VK_FORMAT_B8G8R8A8_UINT:
+        case VK_FORMAT_B8G8R8A8_SINT:
+        case VK_FORMAT_B8G8R8A8_SRGB:
+        case VK_FORMAT_A8B8G8R8_UNORM_PACK32:
+        case VK_FORMAT_A8B8G8R8_SNORM_PACK32:
+        case VK_FORMAT_A8B8G8R8_USCALED_PACK32:
+        case VK_FORMAT_A8B8G8R8_SSCALED_PACK32:
+        case VK_FORMAT_A8B8G8R8_UINT_PACK32:
+        case VK_FORMAT_A8B8G8R8_SINT_PACK32:
+        case VK_FORMAT_A8B8G8R8_SRGB_PACK32:
+        case VK_FORMAT_A2R10G10B10_UNORM_PACK32:
+        case VK_FORMAT_A2R10G10B10_SNORM_PACK32:
+        case VK_FORMAT_A2R10G10B10_USCALED_PACK32:
+        case VK_FORMAT_A2R10G10B10_SSCALED_PACK32:
+        case VK_FORMAT_A2R10G10B10_UINT_PACK32:
+        case VK_FORMAT_A2R10G10B10_SINT_PACK32:
+        case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
+        case VK_FORMAT_A2B10G10R10_SNORM_PACK32:
+        case VK_FORMAT_A2B10G10R10_USCALED_PACK32:
+        case VK_FORMAT_A2B10G10R10_SSCALED_PACK32:
+        case VK_FORMAT_A2B10G10R10_UINT_PACK32:
+        case VK_FORMAT_A2B10G10R10_SINT_PACK32:
+        case VK_FORMAT_R16_UNORM:
+        case VK_FORMAT_R16_SNORM:
+        case VK_FORMAT_R16_USCALED:
+        case VK_FORMAT_R16_SSCALED:
+        case VK_FORMAT_R16_UINT:
+        case VK_FORMAT_R16_SINT:
+        case VK_FORMAT_R16_SFLOAT:
+        case VK_FORMAT_R16G16_UNORM:
+        case VK_FORMAT_R16G16_SNORM:
+        case VK_FORMAT_R16G16_USCALED:
+        case VK_FORMAT_R16G16_SSCALED:
+        case VK_FORMAT_R16G16_UINT:
+        case VK_FORMAT_R16G16_SINT:
+        case VK_FORMAT_R16G16_SFLOAT:
+        case VK_FORMAT_R16G16B16_UNORM:
+        case VK_FORMAT_R16G16B16_SNORM:
+        case VK_FORMAT_R16G16B16_USCALED:
+        case VK_FORMAT_R16G16B16_SSCALED:
+        case VK_FORMAT_R16G16B16_UINT:
+        case VK_FORMAT_R16G16B16_SINT:
+        case VK_FORMAT_R16G16B16_SFLOAT:
+        case VK_FORMAT_R16G16B16A16_UNORM:
+        case VK_FORMAT_R16G16B16A16_SNORM:
+        case VK_FORMAT_R16G16B16A16_USCALED:
+        case VK_FORMAT_R16G16B16A16_SSCALED:
+        case VK_FORMAT_R16G16B16A16_UINT:
+        case VK_FORMAT_R16G16B16A16_SINT:
+        case VK_FORMAT_R16G16B16A16_SFLOAT:
+        case VK_FORMAT_R32_UINT:
+        case VK_FORMAT_R32_SINT:
+        case VK_FORMAT_R32_SFLOAT:
+        case VK_FORMAT_R32G32_UINT:
+        case VK_FORMAT_R32G32_SINT:
+        case VK_FORMAT_R32G32_SFLOAT:
+        case VK_FORMAT_R32G32B32_UINT:
+        case VK_FORMAT_R32G32B32_SINT:
+        case VK_FORMAT_R32G32B32_SFLOAT:
+        case VK_FORMAT_R32G32B32A32_UINT:
+        case VK_FORMAT_R32G32B32A32_SINT:
+        case VK_FORMAT_R32G32B32A32_SFLOAT:
+        case VK_FORMAT_R64_UINT:
+        case VK_FORMAT_R64_SINT:
+        case VK_FORMAT_R64_SFLOAT:
+        case VK_FORMAT_R64G64_UINT:
+        case VK_FORMAT_R64G64_SINT:
+        case VK_FORMAT_R64G64_SFLOAT:
+        case VK_FORMAT_R64G64B64_UINT:
+        case VK_FORMAT_R64G64B64_SINT:
+        case VK_FORMAT_R64G64B64_SFLOAT:
+        case VK_FORMAT_R64G64B64A64_UINT:
+        case VK_FORMAT_R64G64B64A64_SINT:
+        case VK_FORMAT_R64G64B64A64_SFLOAT:
+        case VK_FORMAT_B10G11R11_UFLOAT_PACK32:
+        case VK_FORMAT_E5B9G9R9_UFLOAT_PACK32:
+        case VK_FORMAT_D16_UNORM:
+        case VK_FORMAT_X8_D24_UNORM_PACK32:
+        case VK_FORMAT_D32_SFLOAT:
+        case VK_FORMAT_S8_UINT:
+        case VK_FORMAT_D16_UNORM_S8_UINT:
+        case VK_FORMAT_D24_UNORM_S8_UINT:
+        case VK_FORMAT_D32_SFLOAT_S8_UINT:
+        case VK_FORMAT_BC1_RGB_UNORM_BLOCK:
+        case VK_FORMAT_BC1_RGB_SRGB_BLOCK:
+        case VK_FORMAT_BC1_RGBA_UNORM_BLOCK:
+        case VK_FORMAT_BC1_RGBA_SRGB_BLOCK:
+        case VK_FORMAT_BC2_UNORM_BLOCK:
+        case VK_FORMAT_BC2_SRGB_BLOCK:
+        case VK_FORMAT_BC3_UNORM_BLOCK:
+        case VK_FORMAT_BC3_SRGB_BLOCK:
+        case VK_FORMAT_BC4_UNORM_BLOCK:
+        case VK_FORMAT_BC4_SNORM_BLOCK:
+        case VK_FORMAT_BC5_UNORM_BLOCK:
+        case VK_FORMAT_BC5_SNORM_BLOCK:
+        case VK_FORMAT_BC6H_UFLOAT_BLOCK:
+        case VK_FORMAT_BC6H_SFLOAT_BLOCK:
+        case VK_FORMAT_BC7_UNORM_BLOCK:
+        case VK_FORMAT_BC7_SRGB_BLOCK:
+        case VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK:
+        case VK_FORMAT_ETC2_R8G8B8_SRGB_BLOCK:
+        case VK_FORMAT_ETC2_R8G8B8A1_UNORM_BLOCK:
+        case VK_FORMAT_ETC2_R8G8B8A1_SRGB_BLOCK:
+        case VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK:
+        case VK_FORMAT_ETC2_R8G8B8A8_SRGB_BLOCK:
+        case VK_FORMAT_EAC_R11_UNORM_BLOCK:
+        case VK_FORMAT_EAC_R11_SNORM_BLOCK:
+        case VK_FORMAT_EAC_R11G11_UNORM_BLOCK:
+        case VK_FORMAT_EAC_R11G11_SNORM_BLOCK:
+        case VK_FORMAT_ASTC_4x4_UNORM_BLOCK:
+        case VK_FORMAT_ASTC_4x4_SRGB_BLOCK:
+        case VK_FORMAT_ASTC_5x4_UNORM_BLOCK:
+        case VK_FORMAT_ASTC_5x4_SRGB_BLOCK:
+        case VK_FORMAT_ASTC_5x5_UNORM_BLOCK:
+        case VK_FORMAT_ASTC_5x5_SRGB_BLOCK:
+        case VK_FORMAT_ASTC_6x5_UNORM_BLOCK:
+        case VK_FORMAT_ASTC_6x5_SRGB_BLOCK:
+        case VK_FORMAT_ASTC_6x6_UNORM_BLOCK:
+        case VK_FORMAT_ASTC_6x6_SRGB_BLOCK:
+        case VK_FORMAT_ASTC_8x5_UNORM_BLOCK:
+        case VK_FORMAT_ASTC_8x5_SRGB_BLOCK:
+        case VK_FORMAT_ASTC_8x6_UNORM_BLOCK:
+        case VK_FORMAT_ASTC_8x6_SRGB_BLOCK:
+        case VK_FORMAT_ASTC_8x8_UNORM_BLOCK:
+        case VK_FORMAT_ASTC_8x8_SRGB_BLOCK:
+        case VK_FORMAT_ASTC_10x5_UNORM_BLOCK:
+        case VK_FORMAT_ASTC_10x5_SRGB_BLOCK:
+        case VK_FORMAT_ASTC_10x6_UNORM_BLOCK:
+        case VK_FORMAT_ASTC_10x6_SRGB_BLOCK:
+        case VK_FORMAT_ASTC_10x8_UNORM_BLOCK:
+        case VK_FORMAT_ASTC_10x8_SRGB_BLOCK:
+        case VK_FORMAT_ASTC_10x10_UNORM_BLOCK:
+        case VK_FORMAT_ASTC_10x10_SRGB_BLOCK:
+        case VK_FORMAT_ASTC_12x10_UNORM_BLOCK:
+        case VK_FORMAT_ASTC_12x10_SRGB_BLOCK:
+        case VK_FORMAT_ASTC_12x12_UNORM_BLOCK:
+        case VK_FORMAT_ASTC_12x12_SRGB_BLOCK:
+        case VK_FORMAT_G8B8G8R8_422_UNORM:
+        case VK_FORMAT_B8G8R8G8_422_UNORM:
+        case VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM:
+        case VK_FORMAT_G8_B8R8_2PLANE_420_UNORM:
+        case VK_FORMAT_G8_B8_R8_3PLANE_422_UNORM:
+        case VK_FORMAT_G8_B8R8_2PLANE_422_UNORM:
+        case VK_FORMAT_G8_B8_R8_3PLANE_444_UNORM:
+        case VK_FORMAT_R10X6_UNORM_PACK16:
+        case VK_FORMAT_R10X6G10X6_UNORM_2PACK16:
+        case VK_FORMAT_R10X6G10X6B10X6A10X6_UNORM_4PACK16:
+        case VK_FORMAT_G10X6B10X6G10X6R10X6_422_UNORM_4PACK16:
+        case VK_FORMAT_B10X6G10X6R10X6G10X6_422_UNORM_4PACK16:
+        case VK_FORMAT_G10X6_B10X6_R10X6_3PLANE_420_UNORM_3PACK16:
+        case VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16:
+        case VK_FORMAT_G10X6_B10X6_R10X6_3PLANE_422_UNORM_3PACK16:
+        case VK_FORMAT_G10X6_B10X6R10X6_2PLANE_422_UNORM_3PACK16:
+        case VK_FORMAT_G10X6_B10X6_R10X6_3PLANE_444_UNORM_3PACK16:
+        case VK_FORMAT_R12X4_UNORM_PACK16:
+        case VK_FORMAT_R12X4G12X4_UNORM_2PACK16:
+        case VK_FORMAT_R12X4G12X4B12X4A12X4_UNORM_4PACK16:
+        case VK_FORMAT_G12X4B12X4G12X4R12X4_422_UNORM_4PACK16:
+        case VK_FORMAT_B12X4G12X4R12X4G12X4_422_UNORM_4PACK16:
+        case VK_FORMAT_G12X4_B12X4_R12X4_3PLANE_420_UNORM_3PACK16:
+        case VK_FORMAT_G12X4_B12X4R12X4_2PLANE_420_UNORM_3PACK16:
+        case VK_FORMAT_G12X4_B12X4_R12X4_3PLANE_422_UNORM_3PACK16:
+        case VK_FORMAT_G12X4_B12X4R12X4_2PLANE_422_UNORM_3PACK16:
+        case VK_FORMAT_G12X4_B12X4_R12X4_3PLANE_444_UNORM_3PACK16:
+        case VK_FORMAT_G16B16G16R16_422_UNORM:
+        case VK_FORMAT_B16G16R16G16_422_UNORM:
+        case VK_FORMAT_G16_B16_R16_3PLANE_420_UNORM:
+        case VK_FORMAT_G16_B16R16_2PLANE_420_UNORM:
+        case VK_FORMAT_G16_B16_R16_3PLANE_422_UNORM:
+        case VK_FORMAT_G16_B16R16_2PLANE_422_UNORM:
+        case VK_FORMAT_G16_B16_R16_3PLANE_444_UNORM:
+        case VK_FORMAT_G8_B8R8_2PLANE_444_UNORM:
+        case VK_FORMAT_G10X6_B10X6R10X6_2PLANE_444_UNORM_3PACK16:
+        case VK_FORMAT_G12X4_B12X4R12X4_2PLANE_444_UNORM_3PACK16:
+        case VK_FORMAT_G16_B16R16_2PLANE_444_UNORM:
+        case VK_FORMAT_A4R4G4B4_UNORM_PACK16:
+        case VK_FORMAT_A4B4G4R4_UNORM_PACK16:
+        case VK_FORMAT_ASTC_4x4_SFLOAT_BLOCK:
+        case VK_FORMAT_ASTC_5x4_SFLOAT_BLOCK:
+        case VK_FORMAT_ASTC_5x5_SFLOAT_BLOCK:
+        case VK_FORMAT_ASTC_6x5_SFLOAT_BLOCK:
+        case VK_FORMAT_ASTC_6x6_SFLOAT_BLOCK:
+        case VK_FORMAT_ASTC_8x5_SFLOAT_BLOCK:
+        case VK_FORMAT_ASTC_8x6_SFLOAT_BLOCK:
+        case VK_FORMAT_ASTC_8x8_SFLOAT_BLOCK:
+        case VK_FORMAT_ASTC_10x5_SFLOAT_BLOCK:
+        case VK_FORMAT_ASTC_10x6_SFLOAT_BLOCK:
+        case VK_FORMAT_ASTC_10x8_SFLOAT_BLOCK:
+        case VK_FORMAT_ASTC_10x10_SFLOAT_BLOCK:
+        case VK_FORMAT_ASTC_12x10_SFLOAT_BLOCK:
+        case VK_FORMAT_ASTC_12x12_SFLOAT_BLOCK:
+        case VK_FORMAT_PVRTC1_2BPP_UNORM_BLOCK_IMG:
+        case VK_FORMAT_PVRTC1_4BPP_UNORM_BLOCK_IMG:
+        case VK_FORMAT_PVRTC2_2BPP_UNORM_BLOCK_IMG:
+        case VK_FORMAT_PVRTC2_4BPP_UNORM_BLOCK_IMG:
+        case VK_FORMAT_PVRTC1_2BPP_SRGB_BLOCK_IMG:
+        case VK_FORMAT_PVRTC1_4BPP_SRGB_BLOCK_IMG:
+        case VK_FORMAT_PVRTC2_2BPP_SRGB_BLOCK_IMG:
+        case VK_FORMAT_PVRTC2_4BPP_SRGB_BLOCK_IMG:
+        case VK_FORMAT_R16G16_S10_5_NV:
+        case VK_FORMAT_MAX_ENUM: break;
+    }
+    return PF_UNDEFINED;
 }
 
 VkSampleCountFlagBits VulkanEnumTranslator::METoVKSampleCountFlagBits(uint32_t _me_count) {
@@ -842,6 +1104,13 @@ VkImageType VulkanRHITexture::METoVKImageType(ETextureDimension _dim) {
     }
 }
 
+VulkanRHITexture::~VulkanRHITexture() {
+    if (m_alloc.alloc && m_alloc.image != VK_NULL_HANDLE) {
+        //todo:
+        // vmaDestroyImage(, m_alloc.image, m_alloc.alloc);
+    }
+}
+
 VkImageUsageFlags VulkanRHITexture::METoVKImageUsageFlags(ETextureUsageFlags _me_flags) {
     // Always include TRANSFER_SRC since hardware vendors confirmed it wouldn't have any performance cost and we need it for some debug functionalities.
     VkImageUsageFlags vk_flags = 0;
@@ -893,8 +1162,11 @@ VulkanRHIFence::VulkanRHIFence(VulkanDevice* _device, EFenceUsage _usage) : m_de
     m_binary          = VK_NULL_HANDLE;
     VK_CHECK_RESULT(vkCreateSemaphore(*m_device, &create_info, nullptr, &m_semaphore));
 }
+
 VulkanRHIFence::~VulkanRHIFence() {
-    vkDestroySemaphore(m_device->GetDevice(), m_semaphore, VK_NULL_HANDLE);
+    if (m_semaphore != VK_NULL_HANDLE) {
+        vkDestroySemaphore(m_device->GetDevice(), m_semaphore, VK_NULL_HANDLE);
+    }
     if (m_binary != VK_NULL_HANDLE) {
         vkDestroySemaphore(m_device->GetDevice(), m_binary, VK_NULL_HANDLE);
     }
@@ -921,7 +1193,98 @@ void VulkanRHIFence::Wait(uint64_t value) {
 #pragma endregion
 
 #pragma region viewport
+VulkanViewport::VulkanViewport(VulkanSwapChain* _swapchain) : RHIViewport() {
+    swapchain = _swapchain;
+}
 
+VulkanViewport::~VulkanViewport() {
+    InnerDestroyResources();
+
+    delete swapchain;
+    swapchain = nullptr;
+}
+
+void VulkanViewport::InnerCreateResources() {
+    uint32_t back_buffer_size = swapchain->m_swap_chain_images.size();
+
+    swapchain_image_uavs.resize(back_buffer_size);
+    image_aquire_fences.resize(max_frame_in_flight);
+    swapchain_images.resize(back_buffer_size);
+
+    EPixelFormat swapchain_format = VulkanEnumTranslator::VKToMEFormat(swapchain->image_format);
+    for (uint32_t index = 0; index < swapchain_image_uavs.size(); index++) {
+        swapchain_images[index] = new VulkanRHITexture(RHITextureCreateInfo::Create2D("swapchain")
+                                                           .SetExtent(swapchain->extent.width, swapchain->extent.height)
+                                                           .SetFormat(swapchain_format)
+                                                           .SetUAVFormat(swapchain_format)
+                                                           .SetInitialLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED));
+
+        swapchain_image_uavs[index] = new VulkanRHIUnorderedAccessView(swapchain_images[index], RHIViewInfo::CreateTextureUAVInfo());
+    }
+    for (uint32_t index = 0; index < image_aquire_fences.size(); index++) {
+        image_aquire_fences[index] = new VulkanRHIFence(swapchain->m_device, EFenceUsage::PRESENT);
+    }
+    frame_offset = 0;
+}
+void VulkanViewport::InnerDestroyResources() {
+
+    for (uint32_t index = 0; index < swapchain_image_uavs.size(); index++) {
+        delete swapchain_images[index];
+
+        delete swapchain_image_uavs[index];
+    }
+    for (uint32_t index = 0; index < image_aquire_fences.size(); index++) {
+        delete image_aquire_fences[index];
+    }
+}
+
+void VulkanViewport::ResetResources() {
+    assert(swapchain != nullptr);
+
+    uint32_t back_buffer_size = swapchain->m_swap_chain_images.size();
+
+    swapchain_image_uavs.resize(back_buffer_size);
+    image_aquire_fences.resize(max_frame_in_flight);
+    swapchain_images.resize(back_buffer_size);
+
+    for (uint32_t index = 0; index < swapchain_image_uavs.size(); index++) {
+        swapchain_images[index]->SetAttachedImageInner(swapchain->m_swap_chain_images[index]);
+
+        delete swapchain_image_uavs[index];
+        swapchain_image_uavs[index] = new VulkanRHIUnorderedAccessView(swapchain_images[index], RHIViewInfo::CreateTextureUAVInfo());
+    }
+    for (uint32_t index = 0; index < image_aquire_fences.size(); index++) {
+        delete image_aquire_fences[index];
+        image_aquire_fences[index] = new VulkanRHIFence(swapchain->m_device, EFenceUsage::PRESENT);
+    }
+    frame_offset = 0;
+}
+void VulkanViewport::OnResize(Extent2D _size) {
+
+    swapchain->Recreate();
+    ResetResources();
+}
+
+VulkanRHIFence* VulkanViewport::GetAcquireNextImageFence() {
+    return image_aquire_fences[frame_offset = (frame_offset - 1) % max_frame_in_flight];
+}
+RHIViewportNextBackBufferInfo VulkanViewport::GetNextFrameBackBufferInfo() {
+    uint32_t index = swapchain->AcquireNextImage(image_aquire_fences[frame_offset]->GetBinaryHandle());
+    if (index != UINT32_MAX) {
+        frame_offset = (frame_offset + 1) % max_frame_in_flight;
+        return {.backbuffer_index = index, .backbuffer_ready_fence = image_aquire_fences[frame_offset - 1]};
+    }
+    //recreate
+    swapchain->Recreate();
+    ResetResources();
+    return {.backbuffer_index = UINT32_MAX, .backbuffer_ready_fence = nullptr};
+}
+VulkanRHIUnorderedAccessView* VulkanViewport::GetCurrentBackBuffer(uint32_t index) {
+    if (index != UINT32_MAX) {
+        return swapchain_image_uavs[index];
+    }
+    return nullptr;
+}
 void VulkanViewport::Present(RHIFence* _render_finished) {
 
     assert(_render_finished && "Fence Empty");
@@ -932,10 +1295,11 @@ void VulkanViewport::Present(RHIFence* _render_finished) {
     swapchain->Present(device->GetPresentQueue(), vk_fence->GetBinaryHandle());
     // swapchain->Present();
 }
-RHIView* VulkanViewport::GetNextFrameView() {
-    uint32_t index = swapchain->AcquireNextImage();
-    if (index == UINT32_MAX) return nullptr;
-    return swapchain->m_swap_chain_buffers[index].view;
+
+void VulkanViewport::WaitForQueueComplete(RHICommandQueue* _command_queue, RHIFence* _optional_fence) {
+    if (!_command_queue) return;
+    VulkanRHICommandQueue* vk_queue = dynamic_cast<VulkanRHICommandQueue*>(_command_queue);
+    vkQueueWaitIdle(vk_queue->GetHandle());
 }
 #pragma endregion
 

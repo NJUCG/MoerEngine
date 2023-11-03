@@ -74,7 +74,9 @@ namespace Moer {
         glfwSetWindowFocusCallback(window, [](GLFWwindow* window, int focused) { WindowContext::OnWindowFocusCallback(window, focused); });
         this->window = window;
 
-        GuiWindowInitInfo window_info{.window = window, true};
+        GuiWindowInitInfo window_info{.window              = window,
+                                      .b_install_callbacks = true,
+                                      .rhi_type            = ERHIType::Vulkan};
         GuiInit(window_info);
     }
 

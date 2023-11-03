@@ -1021,21 +1021,42 @@ struct RHIBarrierDependencyInfo {
 struct RHIViewportInfo {
     uint32_t max_frame_in_flight;
 };
+
+struct RHIViewportNextBackBufferInfo {
+    uint32_t  backbuffer_index;
+    RHIFence* backbuffer_ready_fence;
+};
 class RHIViewport : public RHIResource {
     RHIViewportInfo info;
 
 public:
     RHIViewport() : RHIResource(RRT_VIEWPORT) {}
+    virtual ~RHIViewport(){};
     virtual void* GetNativeSwapchain() const { return nullptr; }
-    virtual void* GetNativeBufferTexture() const { return nullptr; }
-    virtual void* GetNativeAttachment() const { return nullptr; }
     virtual void* GetNativeWindow(void** _params) const { return nullptr; }
-    virtual void  Tick(float _delta_time) {}
-    virtual void  WaitForFrameComplete() {}
 
+    /**
+     * @brief resize viewport, must manually wait for queue that write to frame view complete
+     * 
+     * @param _size new size
+     */
+    virtual void OnResize(Extent2D _size) = 0;
     virtual void Present(RHIFence* _render_finished) {}
-    //aquire next back buffer index
-    virtual class RHIView*         GetNextFrameView() { return nullptr; }
+    /**
+     * @brief Get the Next Frame View object
+     * 
+     * @return RHIView* result view
+     */
+    virtual RHIViewportNextBackBufferInfo GetNextFrameBackBufferInfo() = 0;
+
+    /**
+     * @brief wait for queue tasks complete
+     * 
+     * @param _command_queue target queue
+     * @param _optional_fence for dx12
+     */
+    virtual void WaitForQueueComplete(class RHICommandQueue* _command_queue, RHIFence* _optional_fence) = 0;
+
     virtual const RHIViewportInfo& GetViewportInfo() const { return info; }
 };
 

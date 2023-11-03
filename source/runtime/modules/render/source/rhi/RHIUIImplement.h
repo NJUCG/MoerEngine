@@ -31,9 +31,11 @@ struct GuiBackendData {
     RHIBufferRef             upload_buffer;
 
     // Render buffers for main window
-    GuiWindowRenderBuffers main_window_render_buffers;
-    EPixelFormat           attachment_format;
-    uint32_t               num_frames_in_flight;
+    GuiFrameRenderBuffers* main_viewport_render_buffers;
+    RHIViewport*           main_viewport;
+
+    EPixelFormat attachment_format;
+    uint32_t     num_frames_in_flight;
 
     GuiBackendData() {
         memset((void*)this, 0, sizeof(*this));
@@ -41,28 +43,20 @@ struct GuiBackendData {
     }
 };
 
-struct GuiFrameContext {
-    RHIResource* attachment;
-};
-
 struct GuiViewportData {
-    int width;
-    int height;
 
     RHICommandQueue*        command_queue;
     RHIGraphicsCommandList* comand_list;
 
     RHIFenceRef present_fence;
 
-    uint32_t         num_frames_in_flight;
-    GuiFrameContext* frames;
-
     RHIViewportRef viewport;
 
-    uint64_t               frame_index;   // Current frame being rendered to (0 <= FrameIndex < FrameInFlightCount)
     GuiFrameRenderBuffers* render_buffers;// Used by all viewports
 
-    GuiViewportData(uint32_t _num_frames_in_flight) : num_frames_in_flight(_num_frames_in_flight) {
+    uint64_t frame_index;
+
+    GuiViewportData() {
         memset(&render_buffers, 0, sizeof(render_buffers));
     }
     ~GuiViewportData() {}
