@@ -292,78 +292,77 @@ public:
 class RHIShader : public RHIResource {
 public:
     RHIShader() = delete;
-    RHIShader(ERHIResourceType _type, EShaderType _shader_type, const Shader* _shader_info) : RHIResource(_type), shader_type(_shader_type), shader_info(_shader_info) {}
+    RHIShader(ERHIResourceType _type, EShaderType _shader_type, const Shader* _meta_shader) : RHIResource(_type), shader_type(_shader_type), meta_shader(_meta_shader) {}
     FORCEINLINE EShaderType GetShaderType() const {
         return shader_type;
     }
 
-    void       SetHash(const Hash64City& _hash) { hash = _hash; }
-    Hash64City GetHash() const { return hash; }
+    void          SetHash(const Hash64City& _hash) { hash = _hash; }
+    Hash64City    GetHash() const { return hash; }
+    const Shader* GetMetaShader() const { return meta_shader; }
 
     EShaderType shader_type;
     Hash64City  hash;
 
 protected:
-    friend class RHIBatchedShaderParameters;
-    class Shader* GetMetaShader() const;
-    class Shader* meta_shader;
+    const Shader* meta_shader;
 };
 
 class RHIGraphicsShader : public RHIShader {
 public:
-    RHIGraphicsShader(ERHIResourceType _type, EShaderType _shader_type, const Shader* _shader_info) : RHIShader(_type, _shader_type, _shader_info) {}
+    RHIGraphicsShader(ERHIResourceType _type, EShaderType _shader_type, const Shader* _meta_shader) : RHIShader(_type, _shader_type, _meta_shader) {}
 };
 
 class RHIVertexShader : public RHIGraphicsShader {
 public:
-    RHIVertexShader(const Shader* _shader_info) : RHIGraphicsShader(RRT_VERTEX_SHADER, ST_VERTEX, _shader_info) {}
+    RHIVertexShader(const Shader* _meta_shader) : RHIGraphicsShader(RRT_VERTEX_SHADER, ST_VERTEX, _meta_shader) {}
 };
 
 class RHIFragmentShader : public RHIGraphicsShader {
 public:
-    RHIFragmentShader(const Shader* _shader_info) : RHIGraphicsShader(RRT_FRAGMENT_SHADER, ST_FRAGMENT, _shader_info) {}
+    RHIFragmentShader(const Shader* _meta_shader) : RHIGraphicsShader(RRT_FRAGMENT_SHADER, ST_FRAGMENT, _meta_shader) {}
 };
 
 class RHIGeometryShader : public RHIGraphicsShader {
 public:
-    RHIGeometryShader(const Shader* _shader_info) : RHIGraphicsShader(RRT_GEOMETRY_SHADER, ST_GEOMETRY, _shader_info) {}
+    RHIGeometryShader(const Shader* _meta_shader) : RHIGraphicsShader(RRT_GEOMETRY_SHADER, ST_GEOMETRY, _meta_shader) {}
 };
 
 class RHIComputeShader : public RHIShader {
 public:
-    RHIComputeShader(const Shader* _shader_info) : RHIShader(RRT_COMPUTE_SHADER, ST_COMPUTE, _shader_info) {}
+    RHIComputeShader(const Shader* _meta_shader) : RHIShader(RRT_COMPUTE_SHADER, ST_COMPUTE, _meta_shader) {}
 };
 
 class RHIMeshShader : public RHIGraphicsShader {
 public:
-    RHIMeshShader(const Shader* _shader_info) : RHIGraphicsShader(RRT_MESH_SHADER, ST_MESH, _shader_info) {}
+    RHIMeshShader(const Shader* _meta_shader) : RHIGraphicsShader(RRT_MESH_SHADER, ST_MESH, _meta_shader) {}
 };
 class RHIAmplificationShader : public RHIGraphicsShader {
 public:
-    RHIAmplificationShader(const Shader* _shader_info) : RHIGraphicsShader(RRT_AMPLIFICATION_SHADER, ST_AMPLIFICATION, _shader_info) {}
+    RHIAmplificationShader(const Shader* _meta_shader) : RHIGraphicsShader(RRT_AMPLIFICATION_SHADER, ST_AMPLIFICATION, _meta_shader) {}
 };
 
 class RHIRayTracingShader : public RHIShader {
 public:
-    RHIRayTracingShader(EShaderType _shader_type, const Shader* _shader_info) : RHIShader(RRT_RAY_TRACING_SHADER, _shader_type, _shader_info) {}
+    RHIRayTracingShader(EShaderType _shader_type, const Shader* _meta_shader) : RHIShader(RRT_RAY_TRACING_SHADER, _shader_type, _meta_shader) {}
 };
 
 class RHIRayGenShader : public RHIRayTracingShader {
 public:
-    RHIRayGenShader(const Shader* _shader_info) : RHIRayTracingShader(ST_RAY_GEN, _shader_info) {}
+    RHIRayGenShader(const Shader* _meta_shader) : RHIRayTracingShader(ST_RAY_GEN, _meta_shader) {}
 };
 class RHIRayHitShader : public RHIRayTracingShader {
 public:
-    RHIRayHitShader(const Shader* _shader_info) : RHIRayTracingShader(ST_RAY_HIT, _shader_info) {}
+    RHIRayHitShader(const Shader* _meta_shader) : RHIRayTracingShader(ST_RAY_HIT, _meta_shader) {}
 };
 class RHIRayMissShader : public RHIRayTracingShader {
 public:
-    RHIRayMissShader(const Shader* _shader_info) : RHIRayTracingShader(ST_RAY_MISS, _shader_info) {}
+    RHIRayMissShader(const Shader* _meta_shader) : RHIRayTracingShader(ST_RAY_MISS, _meta_shader) {}
 };
 
 class RHIRayCallableShader : public RHIRayTracingShader {
 public:
-    RHIRayCallableShader(const Shader* _shader_info) : RHIRayTracingShader(ST_RAY_CALLABLE, _shader_info) {}
+    RHIRayCallableShader(const Shader* _meta_shader) : RHIRayTracingShader(ST_RAY_CALLABLE, _meta_shader) {}
 };
 #pragma endregion
 
@@ -430,13 +429,13 @@ struct RHIAttachmentBindingParameter {
 struct RHIBatchedShaderParameters {
     //CBV SRV UAV SAMPLER
     template<concept_is_root_parameter_struct TRootParameter>
-    void SetParameters(class Shader* shader, const TRootParameter& params) {
+    void SetParameters(const Shader* shader, const TRootParameter& params) {
         size_t data_size = sizeof(TRootParameter);
         SetParameters(shader, data_size, (uint8_t*)&params);
     }
 
     template<concept_is_root_parameter_struct TRootParameter>
-    void SetParameters(class RHIShader* shader, const TRootParameter& params) {
+    void SetParameters(RHIShader* shader, const TRootParameter& params) {
         size_t data_size = sizeof(TRootParameter);
         SetParameters(shader, data_size, (uint8_t*)&params);
     }
@@ -454,8 +453,8 @@ struct RHIBatchedShaderParameters {
     }
 
 private:
+    void SetParameters(const Shader* shader, size_t _data_size, uint8_t* data_source);
     void SetParameters(RHIShader* shader, size_t _data_size, uint8_t* data_source);
-    void SetParameters(class Shader* shader, size_t _data_size, uint8_t* data_source);
     //offset in raw_data, size, slot and space
     std::vector<RHIShaderResourceParameter> resource_parameters;
     std::vector<RHIShaderConstantParameter> constant_parameters;

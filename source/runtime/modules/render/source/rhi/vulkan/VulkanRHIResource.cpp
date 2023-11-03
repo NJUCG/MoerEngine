@@ -757,20 +757,20 @@ VkPipelineVertexInputStateCreateInfo VulkanRHIGraphicsPipelineState::METoVKVerte
 std::vector<const Shader*> VulkanRHIGraphicsPipelineState::GetShaderInfoList(const RHIShaderBoundStateInput& _shader_bound_state) {
     std::vector<const Shader*> shader_list;
     if (_shader_bound_state.p_vertex_shader) {
-        shader_list.push_back(_shader_bound_state.p_vertex_shader->GetShaderInfo());
+        shader_list.push_back(_shader_bound_state.p_vertex_shader->GetMetaShader());
     }
     if (_shader_bound_state.p_geometry_shader) {
-        shader_list.push_back(_shader_bound_state.p_geometry_shader->GetShaderInfo());
+        shader_list.push_back(_shader_bound_state.p_geometry_shader->GetMetaShader());
     }
     // mesh-frag pipeline
     if (_shader_bound_state.p_mesh_shader) {
-        shader_list.push_back(_shader_bound_state.p_mesh_shader->GetShaderInfo());
+        shader_list.push_back(_shader_bound_state.p_mesh_shader->GetMetaShader());
     }
     if (_shader_bound_state.p_amplification_shader) {
-        shader_list.push_back(_shader_bound_state.p_amplification_shader->GetShaderInfo());
+        shader_list.push_back(_shader_bound_state.p_amplification_shader->GetMetaShader());
     }
     if (_shader_bound_state.p_fragment_shader) {
-        shader_list.push_back(_shader_bound_state.p_fragment_shader->GetShaderInfo());
+        shader_list.push_back(_shader_bound_state.p_fragment_shader->GetMetaShader());
     }
     return shader_list;
 }

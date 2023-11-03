@@ -180,10 +180,6 @@ RHIResource* GetResource(uint8_t* data, uint32_t offset) {
     return (RHIResource*)(*(uint64_t*)(data + offset));
 }
 
-Shader* RHIShader::GetMetaShader() const {
-    return meta_shader;
-}
-
 AttachmentBindingSlots* GetAttachmentBindings(uint8_t* data, uint32_t offset) {
     return (AttachmentBindingSlots*)(data + offset);
 }
@@ -191,7 +187,7 @@ AttachmentBindingSlots* GetAttachmentBindings(uint8_t* data, uint32_t offset) {
 void RHIBatchedShaderParameters::SetParameters(RHIShader* shader, size_t _data_size, uint8_t* data_source) {
     SetParameters(shader->GetMetaShader(), _data_size, data_source);
 }
-void RHIBatchedShaderParameters::SetParameters(Shader* shader, size_t _data_size, uint8_t* data_source) {
+void RHIBatchedShaderParameters::SetParameters(const Shader* shader, size_t _data_size, uint8_t* data_source) {
     const auto& param_layout_info = shader->GetRootParametersLayoutInfo();
 
     //not presices since it may contains const data

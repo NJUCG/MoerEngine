@@ -184,7 +184,7 @@ void RHI::GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list) 
                 RHIBatchedShaderParameters batched_params;
                 batched_params.SetParameters(frag_shader, params);
 
-                _ui_command_list->SetBatchedShaderParameter(frag_rhi_shader, batched_params);
+                _ui_command_list->SetBatchedShaderParameter(batched_params);
                 _ui_command_list->SetScissor(r);
                 _ui_command_list->DrawIndexedInstanced(cmd->ElemCount, 1, cmd->IdxOffset, cmd->VtxOffset + global_vertex_offset);
             }
@@ -229,7 +229,7 @@ void SetupRenderState(ImDrawData* draw_data, RHIGraphicsCommandList* commandList
     batched_params.SetParameters(backend_data->shader_module_frag, frag_param);
 
     commandList->SetPipelineState(backend_data->pipeline);
-    commandList->SetBatchedShaderParameter(nullptr, batched_params);
+    commandList->SetBatchedShaderParameter(batched_params);
     //blend factor?
 }
 
