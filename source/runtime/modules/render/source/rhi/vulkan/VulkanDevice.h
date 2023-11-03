@@ -14,6 +14,9 @@
 #include <vector>
 #include <map>
 
+class VulkanDescriptorSetsLayout;
+class VulkanDescriptorAllocator;
+
 struct QueueFamilyIndices {
     std::optional<uint32_t> graphics;
     std::optional<uint32_t> present;
@@ -81,12 +84,15 @@ public:
         return m_transfer_pool;
     }
 
+    void AllocateDescriptorSets(const VulkanDescriptorSetsLayout& _layouts, std::vector<VkDescriptorSet>& _sets);
+
 private:
     VkPhysicalDevice                 m_gpu;
     VkPhysicalDeviceProperties       m_gpu_props;
     VulkanPhysicalDeviceFeatures     m_gpu_features;
     VkPhysicalDeviceMemoryProperties m_gpu_mem_props;
     TExtensionArray                  m_gpu_extensions;
+    TQueueFamilyPropertiesArray      m_queue_family_props;
     QueueFamilyIndices               m_queue_family_indices;
 
     VkDevice m_device;
@@ -98,13 +104,19 @@ private:
     VkCommandPool m_default_pool;
     VkCommandPool m_transfer_pool;
 
+    VulkanDescriptorAllocator* m_descriptor_allocator;
+
 private:
     VkPhysicalDevice SelectGpu(VkInstance _instance, VkPhysicalDeviceType _type, VkSurfaceKHR _surface, const TExtensionArray& _enabled_extensions);
 
     void CreateDevice(const DeviceInitializer& _initializer);
+    void CreateCommandPools();
+    void CreateDescriptorAllocator();
 
     TExtensionArray                  GetGpuExtensions(VkPhysicalDevice _gpu) const;
     VkPhysicalDeviceMemoryProperties GetMemoryProperties(VkPhysicalDevice _gpu) const;
+    TQueueFamilyPropertiesArray      GetQueueFamilyProperties(VkPhysicalDevice _gpu) const;
+
     //    uint32_t                         GetMemoryType(uint32_t type_bits, VkMemoryPropertyFlags properties, VkBool32* mem_type_found = nullptr) const;
     int32_t            GetQueueFamilyIndex(const std::vector<VkQueueFamilyProperties>& queue_family_props, VkQueueFlags _queue_flags) const;
     QueueFamilyIndices QueryQueueFamilyIndices(VkPhysicalDevice _gpu, VkSurfaceKHR _surface) const;

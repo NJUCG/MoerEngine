@@ -8,13 +8,16 @@
 #include <vulkan/vulkan.h>
 
 class VulkanDevice;
+class VulkanDescriptorAllocator;
+
+class VulkanRHIGraphicsPipelineState;
 
 class VulkanRHIGraphicsCommandList final : public RHIGraphicsCommandList {
 public:
     VulkanRHIGraphicsCommandList(VulkanDevice* _device, VkCommandPool _pool, VkCommandBufferLevel _level = VK_COMMAND_BUFFER_LEVEL_PRIMARY);
     virtual ~VulkanRHIGraphicsCommandList();
 
-    void SetBatchedShaderParameter(RHIShaderRef shader, const RHIBatchedShaderParameters& parameters) override;
+    void SetBatchedShaderParameter(const RHIBatchedShaderParameters& _parameters) override;
     void SetPipelineState(RHIGraphicsPipelineState* _graphics_pso) override;
     void Open() override;
     void Close() override;
@@ -133,6 +136,8 @@ protected:
 private:
     VulkanDevice*   m_device;
     VkCommandBuffer m_command_buffer;
+
+    VulkanRHIGraphicsPipelineState* m_current_pipeline_state;
 
 private:
     VkRenderingAttachmentInfo FromColorAttachmentInfo(const RHIRenderPassInfo::ColorAttachmentInfo& _color_attachment_info) const;

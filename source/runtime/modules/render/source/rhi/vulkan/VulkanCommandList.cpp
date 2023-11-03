@@ -7,6 +7,7 @@
 
 #include "VulkanDevice.h"
 #include "VulkanRHIResource.h"
+#include "VulkanDescriptor.h"
 
 VulkanRHIGraphicsCommandList::VulkanRHIGraphicsCommandList(VulkanDevice* _device, VkCommandPool _pool, VkCommandBufferLevel _level) : m_device(_device) {
     VkCommandBufferAllocateInfo buffer_alloc_info{};
@@ -23,13 +24,66 @@ VulkanRHIGraphicsCommandList::~VulkanRHIGraphicsCommandList() {
     m_device = nullptr;
 }
 
-void VulkanRHIGraphicsCommandList::SetBatchedShaderParameter(RHIShaderRef shader, const RHIBatchedShaderParameters& parameters) {
+void VulkanRHIGraphicsCommandList::SetBatchedShaderParameter(const RHIBatchedShaderParameters& _parameters) {
+    VK_CHECK_NULLPTR(m_current_pipeline_state, "SetBatchedShaderParameter: graphics pipeline state is nullptr!");
+    const auto* vk_pso = m_current_pipeline_state;
+    // MARK...
+    const auto& descriptor_sets          = vk_pso->GetDescriptorSets();
+    const auto& descriptor_binding_infos = vk_pso->GetLayout()->GetDescriptorBindingInfos();
+
+    std::vector<VkWriteDescriptorSet> write_descriptor_sets;
+
+    RHIView* view = nullptr;
+
+    std::vector<VkDescriptorBufferInfo> buffer_infos;
+    std::vector<VkDescriptorImageInfo>  image_infos;
+    for (const auto& params : _parameters.GetResourceParameters()) {
+        view = static_cast<RHIView*>(params.resource);
+        VK_CHECK_NULLPTR(view, "SetBatchedShaderParameter: resource is nullptr!");
+
+        VkWriteDescriptorSet write_descriptor_set{};
+        write_descriptor_set.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write_descriptor_set.pNext           = nullptr;
+        write_descriptor_set.dstSet          = descriptor_sets[params.space];
+        write_descriptor_set.dstBinding      = params.slot;
+        write_descriptor_set.dstArrayElement = 0;
+        write_descriptor_set.descriptorCount = descriptor_binding_infos.at(params.space).at(params.slot).count;
+        // MARK... count这里难道一直是1吗
+        write_descriptor_set.descriptorType = descriptor_binding_infos.at(params.space).at(params.slot).type;
+        // MARK... type是不是该提前记录起来, 目前的参数只能记录到VulkanRHIGraphicsPipelineState中, UE通过传参解决
+
+        if (view->IsBuffer()) {
+            auto* buffer = static_cast<VulkanRHIBuffer*>(view->GetBuffer());
+            buffer_infos.emplace_back(buffer->GetHandle(), 0, VK_WHOLE_SIZE);
+            write_descriptor_set.pBufferInfo = &buffer_infos.back();
+        } else if (view->IsSRV()) {
+            // MARK...如何获取Sampler, 参数填充不足
+            auto* texture_view = static_cast<VulkanRHIShaderResourceView*>(view)->GetView();
+            image_infos.emplace_back(VK_NULL_HANDLE, texture_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            write_descriptor_set.pImageInfo = &image_infos.back();
+        } else if (view->IsUAV()) {
+            auto* texture_view = static_cast<VulkanRHIUnorderedAccessView*>(view)->GetView();
+            image_infos.emplace_back(VK_NULL_HANDLE, texture_view, VK_IMAGE_LAYOUT_GENERAL);
+            write_descriptor_set.pImageInfo = &image_infos.back();
+        }
+        write_descriptor_set.pTexelBufferView = nullptr;// pXXXX, 因此这些参数都需要保存在循环外
+
+        write_descriptor_sets.push_back(write_descriptor_set);
+    }
+
+    vkUpdateDescriptorSets(*m_device, write_descriptor_sets.size(), write_descriptor_sets.data(), 0, nullptr);
 }
 
 void VulkanRHIGraphicsCommandList::SetPipelineState(RHIGraphicsPipelineState* _graphics_pso) {
     // MARK...
     // need to implemented
-    // bind descriptor sets
+    // bind descriptor sets and pipeline
+    auto* vk_pso = static_cast<VulkanRHIGraphicsPipelineState*>(_graphics_pso);
+    VK_CHECK_NULLPTR(vk_pso, "SetPipelineState: graphics pipeline state is nullptr!");
+
+    vkCmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk_pso->GetHandle());
+
+    m_current_pipeline_state = vk_pso;
 }
 
 void VulkanRHIGraphicsCommandList::Open() {

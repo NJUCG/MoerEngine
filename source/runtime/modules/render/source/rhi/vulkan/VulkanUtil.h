@@ -80,6 +80,9 @@ namespace Util {
     // Load a SPIR-V shader (binary)
     VkShaderModule LoadShader(const char* file_name, VkDevice device);
 
+    // Create a SPIR-V shader from code
+    VkShaderModule CreateShaderModule(const std::vector<uint8_t>& _code, VkDevice device);
+
     /** @brief Checks if a file exists */
     bool FileExists(const std::string& filename);
 

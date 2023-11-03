@@ -10,6 +10,7 @@ class VulkanDevice;
 class VulkanSwapChain;
 class VulkanViewport;
 class VulkanRHIBuffer;
+class VulkanDescriptorAllocator;
 
 class VulkanRHIImpl final : public IVulkanRHI {
 public:
