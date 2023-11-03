@@ -236,15 +236,15 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
     TDescriptorCountMap                               descriptor_type_mappings;
 
     // construct layout mappings
-    for (const auto* shader_info : shader_info_list) {
-        auto layout_infos = shader_info->GetRootParametersLayoutInfo().GetLayoutInfos();
+    for (const auto* meta_shader : shader_info_list) {
+        auto layout_infos = meta_shader->GetRootParametersLayoutInfo().GetLayoutInfos();
 
         for (const auto& info : layout_infos) {
             VkDescriptorSetLayoutBinding binding;
             binding.binding            = info.slot;
             binding.descriptorType     = VulkanEnumTranslator::METoVKDescriptorType(info.type);
             binding.descriptorCount    = 1;
-            binding.stageFlags         = VulkanEnumTranslator::METoVKShaderStageFlags(shader_info->GetShaderType());
+            binding.stageFlags         = VulkanEnumTranslator::METoVKShaderStageFlags(meta_shader->GetShaderType());
             binding.pImmutableSamplers = nullptr;
 
             layout_mappings[info.space].second.push_back(binding);

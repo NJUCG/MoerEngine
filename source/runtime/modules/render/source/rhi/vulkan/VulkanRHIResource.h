@@ -224,32 +224,32 @@ protected:
 
 class VulkanRHIVertexShader : public RHIVertexShader, public VulkanRHIGraphicsShader {
 public:
-    explicit VulkanRHIVertexShader(const Shader* _shader_info) : RHIVertexShader(_shader_info), VulkanRHIGraphicsShader() {}
+    explicit VulkanRHIVertexShader(const Shader* _meta_shader) : RHIVertexShader(_meta_shader), VulkanRHIGraphicsShader() {}
 };
 
 class VulkanRHIFragmentShader : public RHIFragmentShader, public VulkanRHIGraphicsShader {
 public:
-    explicit VulkanRHIFragmentShader(const Shader* _shader_info) : RHIFragmentShader(_shader_info), VulkanRHIGraphicsShader() {}
+    explicit VulkanRHIFragmentShader(const Shader* _meta_shader) : RHIFragmentShader(_meta_shader), VulkanRHIGraphicsShader() {}
 };
 
 class VulkanRHIGeometryShader : public RHIGeometryShader, public VulkanRHIGraphicsShader {
 public:
-    explicit VulkanRHIGeometryShader(const Shader* _shader_info) : RHIGeometryShader(_shader_info), VulkanRHIGraphicsShader() {}
+    explicit VulkanRHIGeometryShader(const Shader* _meta_shader) : RHIGeometryShader(_meta_shader), VulkanRHIGraphicsShader() {}
 };
 
 class VulkanRHIComputeShader : public RHIComputeShader, public VulkanRHIGraphicsShader {
 public:
-    explicit VulkanRHIComputeShader(const Shader* _shader_info) : RHIComputeShader(_shader_info), VulkanRHIGraphicsShader() {}
+    explicit VulkanRHIComputeShader(const Shader* _meta_shader) : RHIComputeShader(_meta_shader), VulkanRHIGraphicsShader() {}
 };
 
 class VulkanRHIMeshShader : public RHIMeshShader, public VulkanRHIGraphicsShader {
 public:
-    explicit VulkanRHIMeshShader(const Shader* _shader_info) : RHIMeshShader(_shader_info), VulkanRHIGraphicsShader() {}
+    explicit VulkanRHIMeshShader(const Shader* _meta_shader) : RHIMeshShader(_meta_shader), VulkanRHIGraphicsShader() {}
 };
 
 class VulkanRHIAmplificationShader : public RHIAmplificationShader, public VulkanRHIGraphicsShader {
 public:
-    explicit VulkanRHIAmplificationShader(const Shader* _shader_info) : RHIAmplificationShader(_shader_info), VulkanRHIGraphicsShader() {}
+    explicit VulkanRHIAmplificationShader(const Shader* _meta_shader) : RHIAmplificationShader(_meta_shader), VulkanRHIGraphicsShader() {}
 };
 
 #pragma endregion
