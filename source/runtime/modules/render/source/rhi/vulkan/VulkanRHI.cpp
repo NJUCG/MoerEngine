@@ -35,7 +35,7 @@
 namespace VkUtil = Moer::RHI::Vulkan::Util;
 
 VulkanRHIImpl::VulkanRHIImpl()
-    : m_instance(VK_NULL_HANDLE), m_surface(VK_NULL_HANDLE), m_allocator(VK_NULL_HANDLE),
+    : m_instance(VK_NULL_HANDLE), m_surface(VK_NULL_HANDLE),
       m_device(nullptr), m_swap_chain(nullptr), m_current_viewport(nullptr) {
     LOG_INFO("Built with Vulkan header version {0:d}.{1:d}.{2:d}", VK_API_VERSION_MAJOR(VK_HEADER_VERSION_COMPLETE), VK_API_VERSION_MINOR(VK_HEADER_VERSION_COMPLETE), VK_API_VERSION_PATCH(VK_HEADER_VERSION_COMPLETE));
     rhi_type = ERHIType::Vulkan;
@@ -48,7 +48,6 @@ void VulkanRHIImpl::Initialize(const RHIInitInfo& _init) {
     CreateInstance();
     InitSurface(Moer::WindowContext::GetInstance().GetWindow());
     InitVulkan();
-    InitVulkanMemoryAllocator();
 }
 
 void VulkanRHIImpl::PostInit() {
@@ -58,8 +57,6 @@ void VulkanRHIImpl::PostInit() {
 void VulkanRHIImpl::ShutDown() {
     delete m_main_viewport;
     delete m_device;
-    vmaDestroyAllocator(m_allocator);
-
     // CHECK_AND_DELETE(m_current_viewport);
     CHECK_AND_DELETE(m_swap_chain);
     CHECK_AND_DELETE(m_device);
@@ -309,12 +306,13 @@ void VulkanRHIImpl::RHIUploadBuffer(RHIBufferRef _buffer_ref, const uint8_t* _da
     auto* vk_buffer = static_cast<VulkanRHIBuffer*>(_buffer_ref.Get());
     VK_CHECK_NULLPTR(vk_buffer, "RHIUploadBuffer: buffer to be uploaded is nullptr!");
 
+    VmaAllocator     allocator      = m_device->GetVmaAllocator();
     VulkanRHIBuffer* staging_buffer = static_cast<VulkanRHIBuffer*>(RHICreateBuffer({_size, 1, EBufferUsageFlags::TRANSFER_SRC}).Get());
 
     void* p_data;
-    VK_CHECK_RESULT(vmaMapMemory(m_allocator, staging_buffer->m_alloc.alloc, &p_data));
+    VK_CHECK_RESULT(vmaMapMemory(allocator, staging_buffer->m_alloc.alloc, &p_data));
     memcpy(p_data, _data, _size);
-    vmaUnmapMemory(m_allocator, staging_buffer->m_alloc.alloc);
+    vmaUnmapMemory(allocator, staging_buffer->m_alloc.alloc);
 
     CopyBuffer(staging_buffer, vk_buffer);
 }
@@ -356,7 +354,8 @@ RHIBufferRef VulkanRHIImpl::RHICreateBuffer(const RHIBufferCreateInfo& info) {
     alloc_create_info.flags = 0;
     alloc_create_info.usage = VulkanMemoryManager::MEGenerateVmaMemoryUsage();
 
-    VK_CHECK_RESULT(vmaCreateBuffer(m_allocator, &buffer_create_info, &alloc_create_info, &vk_buffer->m_alloc.buffer, &vk_buffer->m_alloc.alloc, nullptr));
+    VmaAllocator allocator = m_device->GetVmaAllocator();
+    VK_CHECK_RESULT(vmaCreateBuffer(allocator, &buffer_create_info, &alloc_create_info, &vk_buffer->m_alloc.buffer, &vk_buffer->m_alloc.alloc, nullptr));
 
     return RHIBufferRef(vk_buffer);
 }
@@ -365,8 +364,10 @@ void* VulkanRHIImpl::RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t
     auto* vk_buffer = static_cast<VulkanRHIBuffer*>(_buffer);
     VK_CHECK_NULLPTR(vk_buffer, "RHIMapBuffer: buffer to be mapped is nullptr!", nullptr);
 
+    VmaAllocator allocator = m_device->GetVmaAllocator();
+
     void* p_data;
-    VK_CHECK_RESULT(vmaMapMemory(m_allocator, vk_buffer->m_alloc.alloc, &p_data));
+    VK_CHECK_RESULT(vmaMapMemory(allocator, vk_buffer->m_alloc.alloc, &p_data));
 
     return p_data;
 }
@@ -374,7 +375,8 @@ void VulkanRHIImpl::RHIUnmapBuffer(RHIBuffer* _buffer) {
     auto* vk_buffer = static_cast<VulkanRHIBuffer*>(_buffer);
     VK_CHECK_NULLPTR(vk_buffer, "RHIUnmapBuffer: buffer to be unmapped is nullptr!");
 
-    vmaUnmapMemory(m_allocator, vk_buffer->m_alloc.alloc);
+    VmaAllocator allocator = m_device->GetVmaAllocator();
+    vmaUnmapMemory(allocator, vk_buffer->m_alloc.alloc);
 }
 
 RHITextureRef VulkanRHIImpl::RHICreateTexture(const RHITextureCreateInfo& info) {
@@ -403,7 +405,8 @@ RHITextureRef VulkanRHIImpl::RHICreateTexture(const RHITextureCreateInfo& info) 
     alloc_create_info.flags = 0;
     alloc_create_info.usage = VulkanMemoryManager::MEGenerateVmaMemoryUsage();
 
-    VK_CHECK_RESULT(vmaCreateImage(m_allocator, &image_create_info, &alloc_create_info, &vk_texture->m_alloc.image, &vk_texture->m_alloc.alloc, nullptr));
+    VmaAllocator allocator = m_device->GetVmaAllocator();
+    VK_CHECK_RESULT(vmaCreateImage(allocator, &image_create_info, &alloc_create_info, &vk_texture->m_alloc.image, &vk_texture->m_alloc.alloc, nullptr));
 
     return RHITextureRef(vk_texture);
 };
@@ -505,32 +508,13 @@ void VulkanRHIImpl::InitVulkan() {
 
     m_device = new VulkanDevice();
     m_device->Init(initializer);
+    m_device->InitMemoryAllocator(m_instance);
 
     VulkanSwapChain* swap_chain = new VulkanSwapChain();
     swap_chain->Connect(m_instance, m_surface, m_device);
     uint32_t width, height;
-
-    swap_chain->Init(&width, &height, max_frame_in_flight, true);
-    m_main_viewport = new VulkanViewport(swap_chain);
-}
-
-void VulkanRHIImpl::InitVulkanMemoryAllocator() {
-    VmaAllocatorCreateInfo alloc_create_info{};
-
-    VmaVulkanFunctions vma_functions{};
-    vma_functions.vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)vkGetInstanceProcAddr;
-    vma_functions.vkGetDeviceProcAddr   = (PFN_vkGetDeviceProcAddr)vkGetDeviceProcAddr;
-
-    alloc_create_info.vulkanApiVersion = VK_API_VERSION_1_3;
-
-    alloc_create_info.instance         = m_instance;
-    alloc_create_info.physicalDevice   = m_device->GetGpu();
-    alloc_create_info.device           = m_device->GetDevice();
-    alloc_create_info.pVulkanFunctions = &vma_functions;
-
-    VK_CHECK_RESULT(vmaCreateAllocator(&alloc_create_info, &m_allocator));
-
-    LOG_INFO("Vulkan Memory Allocator initialized with api version: {}.", alloc_create_info.vulkanApiVersion);
+    // glfwGetFramebufferSize(m_window, &width, &height);
+    m_swap_chain->Init(&width, &height, max_frame_in_flight, true);
 }
 
 #pragma region vulkan functions

@@ -11,6 +11,12 @@
 
 namespace VkUtil = Moer::RHI::Vulkan::Util;
 
+VulkanDevice::VulkanDevice()
+    : m_gpu(VK_NULL_HANDLE), m_gpu_props(), m_gpu_features(), m_gpu_mem_props(), m_gpu_extensions(), m_queue_family_props(), m_queue_family_indices(),
+      m_device(VK_NULL_HANDLE), m_graphics_queue(VK_NULL_HANDLE), m_present_queue(VK_NULL_HANDLE), m_compute_queue(VK_NULL_HANDLE), m_transfer_queue(VK_NULL_HANDLE),
+      m_default_pool(VK_NULL_HANDLE), m_transfer_pool(VK_NULL_HANDLE),
+      m_allocator(VK_NULL_HANDLE), m_descriptor_allocator(nullptr) {}
+
 /**
  * Initialize GPU, GPU related resources, create the logical device, etc.
  * @param DeviceInitializer
@@ -48,7 +54,27 @@ void VulkanDevice::Init(const DeviceInitializer& _initializer) {
     CreateDescriptorAllocator();
 }
 
+void VulkanDevice::InitMemoryAllocator(VkInstance _instance) {
+    VmaAllocatorCreateInfo alloc_create_info{};
+
+    VmaVulkanFunctions vma_functions{};
+    vma_functions.vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)vkGetInstanceProcAddr;
+    vma_functions.vkGetDeviceProcAddr   = (PFN_vkGetDeviceProcAddr)vkGetDeviceProcAddr;
+
+    alloc_create_info.vulkanApiVersion = VK_API_VERSION_1_3;
+
+    alloc_create_info.instance         = _instance;
+    alloc_create_info.physicalDevice   = m_gpu;
+    alloc_create_info.device           = m_device;
+    alloc_create_info.pVulkanFunctions = &vma_functions;
+
+    VK_CHECK_RESULT(vmaCreateAllocator(&alloc_create_info, &m_allocator));
+
+    LOG_INFO("Vulkan Memory Allocator initialized with api version: {}.", alloc_create_info.vulkanApiVersion);
+}
+
 void VulkanDevice::Destroy() {
+    vmaDestroyAllocator(m_allocator);
 }
 
 void VulkanDevice::AllocateDescriptorSets(const VulkanDescriptorSetsLayout& _layout, std::vector<VkDescriptorSet>& _sets) {
