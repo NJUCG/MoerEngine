@@ -23,6 +23,8 @@ TExtensionArray VulkanInstanceExtension::GetMESupportedInstanceExtensions() {
     // platform specific extensions
     VulkanPlatform::GetInstanceExtensions(extensions);
 
+    // custom extensions
+
 #undef ADD_EXTENSION
 
     return extensions;

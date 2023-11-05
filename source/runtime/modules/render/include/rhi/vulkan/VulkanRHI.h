@@ -4,8 +4,6 @@
 #include "IVulkanRHI.h"
 #include "window/WindowContext.h"
 
-#include <vk_mem_alloc.h>
-
 class VulkanDevice;
 class VulkanSwapChain;
 class VulkanViewport;
@@ -98,7 +96,6 @@ protected:
     std::vector<std::string> m_enabled_instance_extensions;
 
     VkSurfaceKHR m_surface;
-    VmaAllocator m_allocator;
 
     VulkanDevice*    m_device;
     VulkanViewport*  m_main_viewport;
@@ -109,7 +106,6 @@ protected:
 protected:
     void InitSurface(void* _window);
     void InitVulkan();
-    void InitVulkanMemoryAllocator();
 
 #pragma region vulkan functions
 private:
