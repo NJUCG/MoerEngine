@@ -5,6 +5,7 @@
 #include "VulkanExtension.h"
 #include "VulkanPlatform.h"
 #include "rhi/vulkan/misc/VulkanMacroUtils.h"
+#include "vulkan/vulkan_core.h"
 
 TExtensionArray VulkanInstanceExtension::GetMESupportedInstanceExtensions() {
     TExtensionArray extensions;
@@ -63,7 +64,8 @@ TExtensionArray VulkanDeviceExtension::GetMESupportedDeviceExtensions() {
 #define ADD_EXTENSION(ext_name) extensions.push_back(ext_name)
     // generic simple extensions
     ADD_EXTENSION(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
-
+    // timeline semaphore extensions
+    ADD_EXTENSION(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME);
     // raytracing extensions
 
     // vendor extensions

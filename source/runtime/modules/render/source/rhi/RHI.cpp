@@ -116,7 +116,7 @@ void Test() {
     command_list->BeginRenderPass(pass_info, "triangle pass");
     command_list->BindVertexBuffers(0, 1, vertex_buffers.data(), 0);
 
-    command_list->DrawIndexedInstanced(1, 1, 0, 0);
+    command_list->DrawIndexedInstanced(1, 1, 0, 0, 0);
 
     command_list->EndRenderPass();
 

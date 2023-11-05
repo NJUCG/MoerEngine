@@ -26,6 +26,7 @@ namespace Moer {
         void ShutDownCore();
 
         void InitRenderSystem();
+        void PostInitRenderSystem();
         void ShutDownRenderSystem();
 
         void InitWindow();

@@ -13,9 +13,8 @@ namespace Moer {
         virtual bool  ShouldClose() const                                  = 0;
         virtual void  PollEvents() const                                   = 0;
         virtual void* GetNativeWindow() const                              = 0;
-        virtual void  GuiInit(const GuiWindowInitInfo&)                    = 0;
-        virtual void  GuiUpdate()                                          = 0;
-        virtual void  GuiShutDown()                                        = 0;
+        virtual void  ShutDown()                                           = 0;
+        virtual void  Tick()                                               = 0;
 
     protected:
         static WindowImpl& GetInstance();
@@ -34,6 +33,10 @@ namespace Moer {
         virtual void       OnWindowSizeCallbackImpl(WindowType* window, int width, int height)                               = 0;
         virtual void       OnWindowFocusCallbackImpl(WindowType* window, int focused)                                        = 0;
         virtual void       CreateVulkanSurface(void* instance, WindowType* window, void* allocation_callback, void* surface) = 0;
+
+        virtual void GuiInit(const GuiWindowInitInfo&) = 0;
+        virtual void GuiUpdate()                       = 0;
+        virtual void GuiShutDown()                     = 0;
 
     protected:
         WindowImpl() {}

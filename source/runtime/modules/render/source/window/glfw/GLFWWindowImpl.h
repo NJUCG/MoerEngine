@@ -17,9 +17,8 @@ namespace Moer {
         virtual void  PollEvents() const override;
         virtual void* GetNativeWindow() const override;
         virtual void  CreateVulkanSurface(void* instance, WindowType* window, void* allocation_callback, void* surface) override;
-        virtual void  GuiInit(const GuiWindowInitInfo&) override;
-        virtual void  GuiUpdate() override;
-        virtual void  GuiShutDown() override;
+        virtual void  Tick() override;
+        virtual void  ShutDown() override;
 
     protected:
         GLFWWindowImpl();
@@ -37,6 +36,10 @@ namespace Moer {
         virtual void OnWindowPosCallbackImpl(WindowType* window, int xpos, int ypos) override;
         virtual void OnWindowSizeCallbackImpl(WindowType* window, int width, int height) override;
         virtual void OnWindowFocusCallbackImpl(WindowType* window, int focused) override;
+
+        virtual void GuiInit(const GuiWindowInitInfo&) override;
+        virtual void GuiUpdate() override;
+        virtual void GuiShutDown() override;
 
     private:
         void InitVulkan();

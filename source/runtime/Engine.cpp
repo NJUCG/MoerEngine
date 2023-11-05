@@ -19,20 +19,64 @@ namespace Moer {
         LOG_INFO("Engine Begin Initilization");
 
         InitCore();
-        InitWindow();
         InitRenderSystem();
+        InitWindow();
 
         LOG_INFO("Engine Initilization Finished");
     }
 
     void Engine::PostInit() {
         LOG_INFO("Engine Begin Post Init");
-
+        PostInitRenderSystem();
         LOG_INFO("Engine Post Init Finished");
     }
-
+    void TestDrawUI();
     void Engine::Run() {
         LOG_INFO("Engine Start Running");
+
+        LOG_INFO("Engine Stop Running");
+    }
+
+    void Engine::InitCore() {
+        Moer::TaskSystem::Init();
+    }
+    void Engine::ShutDownCore() {
+        Moer::TaskSystem::ShutDown();
+    }
+
+    void Engine::InitRenderSystem() {
+
+        RenderSystem::Init();
+    }
+    void Engine::PostInitRenderSystem() {
+        RenderSystem::PostInit();
+    }
+    void Engine::ShutDownRenderSystem() {
+        RenderSystem::ShutDown();
+    }
+
+    void Engine::InitWindow() {
+        //todo: get from config
+        SurfaceInfo info{"", 1920, 1080, "MoerEditor", false};
+        WindowContext::GetInstance().Init(info);
+    }
+    void Engine::ShutDownWindow() {
+        WindowContext::GetInstance().ShutDown();
+    }
+    void Engine::Tick() {
+        TestDrawUI();
+    }
+
+    void Engine::Quit() {
+        b_request_quiting = true;
+        ShutDownRenderSystem();
+        ShutDownWindow();
+        ShutDownCore();
+
+        SPDLOG_INFO("Engine Quit");
+    }
+
+    void TestDrawUI() {
 
         WindowContext& context = WindowContext::GetInstance();
         g_rhi->GUIInit(3);
@@ -43,6 +87,10 @@ namespace Moer {
         uint64_t    frame_index   = 0;
         RHIFenceRef present_fence = g_rhi->RHICreateFence(RHIFenceCreateInfo(EFenceUsage::PRESENT));
         while (!context.ShouldClose()) {
+
+            WindowContext::GetInstance().Tick();
+            g_rhi->GUINewFrame();
+
             RHIViewport* main_viewport   = g_rhi->RHIGetMainViewport();
             auto         next_frame_info = g_rhi->RHIGetNextFrameViewportBufferInfo(main_viewport);
 
@@ -108,41 +156,5 @@ namespace Moer {
         }
 
         g_rhi->GUIShutDown();
-
-        LOG_INFO("Engine Stop Running");
-    }
-
-    void Engine::InitCore() {
-        Moer::TaskSystem::Init();
-    }
-    void Engine::ShutDownCore() {
-        Moer::TaskSystem::ShutDown();
-    }
-
-    void Engine::InitRenderSystem() {
-
-        RenderSystem::Init();
-    }
-    void Engine::ShutDownRenderSystem() {
-        RenderSystem::ShutDown();
-    }
-
-    void Engine::InitWindow() {
-        //todo: get from config
-        SurfaceInfo info{"", 1920, 1080, "MoerEditor", false};
-        WindowContext::GetInstance().Init(info);
-    }
-    void Engine::ShutDownWindow() {
-    }
-    void Engine::Tick() {
-    }
-
-    void Engine::Quit() {
-        b_request_quiting = true;
-        ShutDownRenderSystem();
-        ShutDownWindow();
-        ShutDownCore();
-
-        SPDLOG_INFO("Engine Quit");
     }
 }// namespace Moer

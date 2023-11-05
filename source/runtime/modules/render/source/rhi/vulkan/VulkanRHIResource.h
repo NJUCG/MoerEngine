@@ -320,17 +320,24 @@ private:
     } m_alloc;
 };
 
-class VulkanRHITexture final : public RHITexture {
+class VulkanDeviceObject {
+public:
+    VulkanDeviceObject(VulkanDevice* device);
+
+protected:
+    VulkanDevice* device;
+};
+class VulkanRHITexture final : public RHITexture, public VulkanDeviceObject {
     friend VulkanRHIImpl;
 
 public:
     VulkanRHITexture() = delete;
     ~VulkanRHITexture();
 
-    explicit VulkanRHITexture(const RHITextureCreateInfo& _info) : RHITexture(_info) {}
+    explicit VulkanRHITexture(const RHITextureCreateInfo& _info, VulkanDevice* _device);
 
     //for inner usage only
-    explicit VulkanRHITexture(const RHITextureCreateInfo& _info, VkImage _image) : RHITexture(_info), m_alloc(_image, VK_NULL_HANDLE) {}
+    explicit VulkanRHITexture(const RHITextureCreateInfo& _info, VkImage _image, VulkanDevice* _device);
 
     inline const VmaAllocation GetAllocation() const {
         return m_alloc.alloc;
@@ -452,7 +459,7 @@ private:
 
     std::vector<VulkanRHITexture*> swapchain_images;
 
-    uint32_t frame_offset;
+    uint32_t frame_offset = 0;
 
     uint32_t max_frame_in_flight = 3;
 };

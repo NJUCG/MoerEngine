@@ -185,7 +185,7 @@ void RHI::GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list) 
 
                 _ui_command_list->SetBatchedShaderParameter(batched_params);
                 _ui_command_list->SetScissor(r);
-                _ui_command_list->DrawIndexedInstanced(cmd->ElemCount, 1, cmd->IdxOffset, cmd->VtxOffset + global_vertex_offset);
+                _ui_command_list->DrawIndexedInstanced(cmd->ElemCount, 1, cmd->IdxOffset, cmd->VtxOffset + global_vertex_offset, 0);
             }
         }
         global_index_offset += cmd_list->IdxBuffer.Size;

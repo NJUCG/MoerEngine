@@ -3,11 +3,12 @@
 #include "log/LogSystem.h"
 #include "rhi/RHI.h"
 #include "rhi/RHIResource.h"
+#include "VulkanCommandQueue.h"
 #include "rhi/vulkan/misc/VulkanMacroUtils.h"
 #include "misc/MacroUtils.h"
 
 #include "rhi/vulkan/VulkanRHI.h"
-#include "rhi/vulkan/VulkanCommandList.h"
+#include "VulkanCommandList.h"
 
 #include "VulkanRHIResource.h"
 #include "VulkanRHIInitializer.h"
@@ -37,15 +38,15 @@ VulkanRHIImpl::VulkanRHIImpl()
     : m_instance(VK_NULL_HANDLE), m_surface(VK_NULL_HANDLE), m_allocator(VK_NULL_HANDLE),
       m_device(nullptr), m_swap_chain(nullptr), m_current_viewport(nullptr) {
     LOG_INFO("Built with Vulkan header version {0:d}.{1:d}.{2:d}", VK_API_VERSION_MAJOR(VK_HEADER_VERSION_COMPLETE), VK_API_VERSION_MINOR(VK_HEADER_VERSION_COMPLETE), VK_API_VERSION_PATCH(VK_HEADER_VERSION_COMPLETE));
-
-    CreateInstance();
-    InitSurface(Moer::WindowContext::GetInstance().GetWindow());
+    rhi_type = ERHIType::Vulkan;
 }
 
 void VulkanRHIImpl::Initialize(const RHIInitInfo& _init) {
     //todo: need more elegant way
     max_frame_in_flight = _init.max_frame_in_flight;
-    rhi_type            = ERHIType::Vulkan;
+
+    CreateInstance();
+    InitSurface(Moer::WindowContext::GetInstance().GetWindow());
     InitVulkan();
     InitVulkanMemoryAllocator();
 }
@@ -377,7 +378,7 @@ void VulkanRHIImpl::RHIUnmapBuffer(RHIBuffer* _buffer) {
 }
 
 RHITextureRef VulkanRHIImpl::RHICreateTexture(const RHITextureCreateInfo& info) {
-    VulkanRHITexture* vk_texture = new VulkanRHITexture(info);
+    VulkanRHITexture* vk_texture = new VulkanRHITexture(info, m_device);
 
     VkImageCreateInfo image_create_info{};
     image_create_info.sType                 = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -460,7 +461,7 @@ RHIUnorderedAccessViewRef VulkanRHIImpl::RHICreateUnorderedAccessView(RHIViewabl
 }
 
 RHICommandQueue* VulkanRHIImpl::CreateCommandQueue(ECommandQueueType type) {
-    return nullptr;
+    return new VulkanRHICommandQueue(m_device, type);
 }
 
 RHIGraphicsCommandList* VulkanRHIImpl::CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state) {

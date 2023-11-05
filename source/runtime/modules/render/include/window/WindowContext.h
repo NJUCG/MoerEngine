@@ -37,6 +37,7 @@ namespace Moer {
         static WindowContext& GetInstance();
         void                  Init(SurfaceInfo info);
         void                  Tick();
+        void                  ShutDown();
         void                  GetWindowSize(int* width, int* height) const;
         void                  SetFocusMode(bool focused);
         bool                  GetFocusMode() const;
@@ -50,10 +51,6 @@ namespace Moer {
 
         //for vulkan
         void CreateVulkanSurface(void* instance, WindowType* window, void* allocation_callback, void* surface);
-
-        //init for gui window
-        void GuiInit(const GuiWindowInitInfo&);
-        void GuiUpdate();
 
         typedef std::function<void(unsigned int)>                                OnCharFunc;
         typedef std::function<void(int entered)>                                 OnCursorEnterFunc;
