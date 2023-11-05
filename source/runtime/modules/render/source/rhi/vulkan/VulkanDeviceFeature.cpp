@@ -57,5 +57,7 @@ VulkanPhysicalDeviceFeatures VulkanDeviceFeature::GetMESupportedDeviceFeatures(u
     // Apply platform restrictions
     VulkanPlatform::RestrictEnabledPhysicalDeviceFeatures(&enabled_features);
 
+    // Custom features
+
     return enabled_features;
 }

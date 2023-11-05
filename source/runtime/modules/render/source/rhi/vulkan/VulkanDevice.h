@@ -9,6 +9,7 @@
 #include "VulkanDeviceFeature.h"
 
 #include <vulkan/vulkan.h>
+#include <vk_mem_alloc.h>
 
 #include <optional>
 #include <vector>
@@ -37,7 +38,10 @@ struct DeviceInitializer {
 
 class VulkanDevice {
 public:
+    VulkanDevice();
+
     void Init(const DeviceInitializer& _initializer);
+    void InitMemoryAllocator(VkInstance _instance);
     void Destroy();
 
     operator VkDevice() const {
@@ -49,6 +53,9 @@ public:
     }
     inline VkDevice GetDevice() const {
         return m_device;
+    }
+    inline VmaAllocator GetVmaAllocator() const {
+        return m_allocator;
     }
     inline VkPhysicalDeviceProperties GetProperties() const {
         return m_gpu_props;
@@ -104,6 +111,7 @@ private:
     VkCommandPool m_default_pool;
     VkCommandPool m_transfer_pool;
 
+    VmaAllocator               m_allocator;
     VulkanDescriptorAllocator* m_descriptor_allocator;
 
 private:
@@ -111,6 +119,7 @@ private:
 
     void CreateDevice(const DeviceInitializer& _initializer);
     void CreateCommandPools();
+    void CreateMemoryAllocator();
     void CreateDescriptorAllocator();
 
     TExtensionArray                  GetGpuExtensions(VkPhysicalDevice _gpu) const;
