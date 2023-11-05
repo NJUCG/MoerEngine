@@ -1,13 +1,33 @@
-#include "rhi/vulkan/VulkanCommandQueue.h"
-#include "rhi/vulkan/VulkanCommandList.h"
+#include "VulkanCommandQueue.h"
+#include "rhi/RHICommon.h"
+#include "VulkanCommandList.h"
 #include "rhi/RHIResource.h"
 #include "vulkan/vulkan_core.h"
 #include "VulkanRHIResource.h"
+#include "VulkanDevice.h"
 
 #include <algorithm>
 #include <vector>
 #include <vulkan/vulkan.h>
+VulkanRHICommandQueue::VulkanRHICommandQueue(VulkanDevice* _device, ECommandQueueType _type) : VulkanDeviceObject(_device) {
 
+    switch (_type) {
+
+        case ECommandQueueType::GRAPHICS:
+            queue = _device->GetGraphicsQueue();
+            break;
+        case ECommandQueueType::COMPUTE:
+            queue = _device->GetComputeQueue();
+            break;
+        case ECommandQueueType::COPY:
+            queue = _device->GetTransferQueue();
+            break;
+        default:
+            queue = _device->GetGraphicsQueue();
+            break;
+    }
+    device = _device;
+}
 VulkanRHICommandQueue::~VulkanRHICommandQueue() {
 }
 void VulkanRHICommandQueue::SubmitCommands(

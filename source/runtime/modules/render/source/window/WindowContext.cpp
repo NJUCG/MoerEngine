@@ -11,6 +11,12 @@ namespace Moer {
     void WindowContext::Init(SurfaceInfo info) {
         WindowImpl::GetInstance().Init(info);
     }
+    void WindowContext::Tick() {
+        WindowImpl::GetInstance().Tick();
+    }
+    void WindowContext::ShutDown() {
+        WindowImpl::GetInstance().ShutDown();
+    }
     WindowContext::~WindowContext() {
     }
     WindowType* WindowContext::GetWindow() const {
@@ -19,12 +25,15 @@ namespace Moer {
     void* WindowContext::GetNativeWindow() const {
         return WindowImpl::GetInstance().GetNativeWindow();
     }
-    void WindowContext::GuiInit(const GuiWindowInitInfo& _init_info) {
-        WindowImpl::GetInstance().GuiInit(_init_info);
-    };
-    void WindowContext::GuiUpdate() {
-        WindowImpl::GetInstance().GuiUpdate();
-    }
+    // void WindowContext::GuiInit(const GuiWindowInitInfo& _init_info) {
+    //     WindowImpl::GetInstance().GuiInit(_init_info);
+    // };
+    // void WindowContext::GuiUpdate() {
+    //     WindowImpl::GetInstance().GuiUpdate();
+    // }
+    // void WindowContext::GuiShutDown() {
+    //     WindowImpl::GetInstance().GuiShutDown();
+    // }
 
     bool WindowContext::GetFocusMode() const {
         return WindowImpl::GetInstance().focused;

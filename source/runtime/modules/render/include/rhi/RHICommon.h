@@ -856,7 +856,6 @@ static_assert(SP_Num < (1 << SP_NumBits) && "");
 
 enum class ECommandQueueType {
     GRAPHICS,
-    SECONDARY,
     COMPUTE,
     COPY
 };

@@ -3,13 +3,14 @@
 //
 
 #include "rhi/vulkan/misc/VulkanMacroUtils.h"
-#include "rhi/vulkan/VulkanCommandList.h"
+#include "VulkanCommandList.h"
 
 #include "VulkanDevice.h"
 #include "VulkanRHIResource.h"
 #include "VulkanDescriptor.h"
+#include "vulkan/vulkan_core.h"
 
-VulkanRHIGraphicsCommandList::VulkanRHIGraphicsCommandList(VulkanDevice* _device, VkCommandPool _pool, VkCommandBufferLevel _level) : m_device(_device) {
+VulkanRHIGraphicsCommandList::VulkanRHIGraphicsCommandList(VulkanDevice* _device, VkCommandPool _pool, VkCommandBufferLevel _level) : VulkanDeviceObject(_device) {
     VkCommandBufferAllocateInfo buffer_alloc_info{};
     buffer_alloc_info.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     buffer_alloc_info.pNext              = nullptr;
@@ -17,11 +18,11 @@ VulkanRHIGraphicsCommandList::VulkanRHIGraphicsCommandList(VulkanDevice* _device
     buffer_alloc_info.level              = _level;
     buffer_alloc_info.commandBufferCount = 1;
 
-    VK_CHECK_RESULT(vkAllocateCommandBuffers(*m_device, &buffer_alloc_info, &m_command_buffer));
+    VK_CHECK_RESULT(vkAllocateCommandBuffers(*device, &buffer_alloc_info, &m_command_buffer));
 }
 
 VulkanRHIGraphicsCommandList::~VulkanRHIGraphicsCommandList() {
-    m_device = nullptr;
+    device = nullptr;
 }
 
 void VulkanRHIGraphicsCommandList::SetBatchedShaderParameter(const RHIBatchedShaderParameters& _parameters) {
@@ -71,7 +72,7 @@ void VulkanRHIGraphicsCommandList::SetBatchedShaderParameter(const RHIBatchedSha
         write_descriptor_sets.push_back(write_descriptor_set);
     }
 
-    vkUpdateDescriptorSets(*m_device, write_descriptor_sets.size(), write_descriptor_sets.data(), 0, nullptr);
+    vkUpdateDescriptorSets(*device, write_descriptor_sets.size(), write_descriptor_sets.data(), 0, nullptr);
 }
 
 void VulkanRHIGraphicsCommandList::SetPipelineState(RHIGraphicsPipelineState* _graphics_pso) {
@@ -105,6 +106,7 @@ void VulkanRHIGraphicsCommandList::Reset(RHIGraphicsPipelineState* _graphics_pso
     // need to implemented
     auto* vk_pipelie_state = static_cast<const VulkanRHIGraphicsPipelineState*>(_graphics_pso);
     VK_CHECK_NULLPTR(vk_pipelie_state, "Reset: graphics pipeline state is nullptr!");
+    vkResetCommandBuffer(m_command_buffer, VK_COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT);
 }
 
 void VulkanRHIGraphicsCommandList::ClearState(RHIGraphicsPipelineState* _graphics_pso) {
@@ -114,14 +116,19 @@ void VulkanRHIGraphicsCommandList::ClearState(RHIGraphicsPipelineState* _graphic
     VK_CHECK_NULLPTR(vk_pipelie_state, "ClearState: graphics pipeline state is nullptr!");
 }
 
-void VulkanRHIGraphicsCommandList::DrawIndexedInstanced(uint32_t _index_count, uint32_t _instance_count, uint32_t _start_index_location, int32_t _base_vertex_location) {
+void VulkanRHIGraphicsCommandList::DrawIndexedInstanced(
+    uint32_t _index_count,
+    uint32_t _instance_count,
+    uint32_t _start_index_location,
+    uint32_t _start_vertex_location,
+    uint32_t _start_instance_location) {
     vkCmdDrawIndexed(
         m_command_buffer,
         _index_count,
         _instance_count,
         _start_index_location,
-        _base_vertex_location,
-        0);
+        _start_vertex_location,
+        _start_instance_location);
 }
 
 void VulkanRHIGraphicsCommandList::DrawIndexedIndirect(RHIBuffer* _argument_buffer, uint64_t _arg_offset, RHIBuffer* _count_buffer, uint64_t _count_buffer_offset, uint32_t _max_draw_count, uint32_t _stride) {

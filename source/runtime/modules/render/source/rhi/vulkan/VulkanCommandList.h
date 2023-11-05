@@ -2,7 +2,7 @@
 #ifndef VULKAN_COMMAND_LIST_H
 #define VULKAN_COMMAND_LIST_H
 #include "rhi/RHICommandList.h"
-#include "rhi/vulkan/VulkanCommandQueue.h"
+#include "VulkanCommandQueue.h"
 #include "vulkan/vulkan_core.h"
 
 #include <vulkan/vulkan.h>
@@ -12,7 +12,7 @@ class VulkanDescriptorAllocator;
 
 class VulkanRHIGraphicsPipelineState;
 
-class VulkanRHIGraphicsCommandList final : public RHIGraphicsCommandList {
+class VulkanRHIGraphicsCommandList final : public RHIGraphicsCommandList, public VulkanDeviceObject {
 public:
     VulkanRHIGraphicsCommandList(VulkanDevice* _device, VkCommandPool _pool, VkCommandBufferLevel _level = VK_COMMAND_BUFFER_LEVEL_PRIMARY);
     virtual ~VulkanRHIGraphicsCommandList();
@@ -24,7 +24,11 @@ public:
     void Reset(RHIGraphicsPipelineState* _graphics_pso) override;
     void ClearState(RHIGraphicsPipelineState* _graphics_pso) override;
 
-    void DrawIndexedInstanced(uint32_t _index_count, uint32_t _instance_count, uint32_t _start_index_location, int32_t _base_vertex_location) override;
+    void DrawIndexedInstanced(uint32_t _index_count,
+                              uint32_t _instance_count,
+                              uint32_t _start_index_location,
+                              uint32_t _start_vertex_location,
+                              uint32_t _start_instance_location) override;
 
     void DrawIndexedIndirect(
         RHIBuffer* _argument_buffer,
@@ -134,7 +138,6 @@ protected:
     inline void* GetNativeHandle() const override { return m_command_buffer; }
 
 private:
-    VulkanDevice*   m_device;
     VkCommandBuffer m_command_buffer;
 
     VulkanRHIGraphicsPipelineState* m_current_pipeline_state;

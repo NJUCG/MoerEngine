@@ -25,7 +25,12 @@ public:
     virtual void Reset(RHIGraphicsPipelineState* _graphics_pso = nullptr) = 0;
     virtual void ClearState(RHIGraphicsPipelineState* _graphics_pso)      = 0;
 
-    virtual void DrawIndexedInstanced(uint32_t _index_count, uint32_t _instance_count, uint32_t _start_index_location, int32_t _base_vertex_location) = 0;
+    virtual void DrawIndexedInstanced(
+        uint32_t _index_count,
+        uint32_t _instance_count,
+        uint32_t _start_index_location,
+        uint32_t _start_vertex_location,
+        uint32_t _start_instance_location) = 0;
 
     virtual void DrawIndexedIndirect(
         RHIBuffer* _argument_buffer,

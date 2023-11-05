@@ -3,7 +3,6 @@
 //
 
 #include "rhi/vulkan/misc/VulkanMacroUtils.h"
-#include "rhi/vulkan/VulkanCommandList.h"
 #include "VulkanDescriptor.h"
 #include "VulkanDevice.h"
 #include "VulkanUtil.h"
@@ -132,7 +131,6 @@ void VulkanDevice::CreateDevice(const DeviceInitializer& _initializer) {
         device_create_info.enabledExtensionCount   = static_cast<uint32_t>(enabled_extensions.size());
         device_create_info.ppEnabledExtensionNames = enabled_extensions.data();
     }
-
     VkPhysicalDeviceFeatures2 enabled_features;
     if (_initializer.api_version >= VK_API_VERSION_1_0) {
         enabled_features.sType              = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;

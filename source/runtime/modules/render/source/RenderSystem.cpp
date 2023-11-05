@@ -26,6 +26,9 @@ namespace Moer {
 
         StartRenderThread();
     }
+    void RenderSystem::PostInit() {
+        PostInitRHI();
+    }
     //use in single thread mode
     void RenderSystem::Tick() {
     }
@@ -49,6 +52,9 @@ namespace Moer {
     void RenderSystem::InitRHI() {
         //todo: init by config
         g_rhi = new VulkanRHIImpl();
+    }
+
+    void RenderSystem::PostInitRHI() {
         RHIInitInfo info;
         info.max_frame_in_flight = 3;
         g_rhi->Initialize(info);

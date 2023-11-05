@@ -12,7 +12,7 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
-#include "rhi/vulkan/VulkanCommandQueue.h"
+#include "VulkanCommandQueue.h"
 #include "rhi/vulkan/VulkanRHI.h"
 #include "rhi/vulkan/misc/VulkanMacroUtils.h"
 #include "log/LogSystem.h"
@@ -44,6 +44,7 @@ EPixelFormat VulkanEnumTranslator::VKToMEFormat(VkFormat _format) {
         case VK_FORMAT_R4G4B4A4_UNORM_PACK16:
             return PF_R4G4B4A4_UNORM_PACK16;
         case VK_FORMAT_B4G4R4A4_UNORM_PACK16:
+            return PF_B4G4R4A4_UNORM_PACK16;
         case VK_FORMAT_R5G6B5_UNORM_PACK16:
         case VK_FORMAT_B5G6R5_UNORM_PACK16:
         case VK_FORMAT_R5G5B5A1_UNORM_PACK16:
@@ -77,13 +78,19 @@ EPixelFormat VulkanEnumTranslator::VKToMEFormat(VkFormat _format) {
         case VK_FORMAT_B8G8R8_UINT:
         case VK_FORMAT_B8G8R8_SINT:
         case VK_FORMAT_B8G8R8_SRGB:
+            return PF_B8G8R8_SRGB;
         case VK_FORMAT_R8G8B8A8_UNORM:
+            return PF_R8G8B8A8_UNORM;
         case VK_FORMAT_R8G8B8A8_SNORM:
+            return PF_R8G8B8A8_SNORM;
         case VK_FORMAT_R8G8B8A8_USCALED:
         case VK_FORMAT_R8G8B8A8_SSCALED:
         case VK_FORMAT_R8G8B8A8_UINT:
+            return PF_R8G8B8A8_UINT;
         case VK_FORMAT_R8G8B8A8_SINT:
+            return PF_R8G8B8A8_SINT;
         case VK_FORMAT_R8G8B8A8_SRGB:
+            return PF_R8G8B8A8_SRGB;
         case VK_FORMAT_B8G8R8A8_UNORM:
         case VK_FORMAT_B8G8R8A8_SNORM:
         case VK_FORMAT_B8G8R8A8_USCALED:
@@ -1063,6 +1070,9 @@ void VulkanRHIGraphicsPipelineState::CreateDescriptorSets(VulkanDevice* _device)
 
 #pragma endregion
 
+VulkanDeviceObject::VulkanDeviceObject(VulkanDevice* _device) : device(_device) {
+}
+
 #pragma region global buffer definitions
 #pragma endregion
 
@@ -1138,10 +1148,18 @@ VkImageType VulkanRHITexture::METoVKImageType(ETextureDimension _dim) {
     }
 }
 
+VulkanRHITexture::VulkanRHITexture(const RHITextureCreateInfo& _info, VulkanDevice* _device)
+    : RHITexture(_info), VulkanDeviceObject(_device) {}
+
+VulkanRHITexture::VulkanRHITexture(const RHITextureCreateInfo& _info, VkImage _image, VulkanDevice* _device)
+    : RHITexture(_info),
+      VulkanDeviceObject(_device),
+      m_alloc(_image, VK_NULL_HANDLE) {}
+
 VulkanRHITexture::~VulkanRHITexture() {
     if (m_alloc.alloc && m_alloc.image != VK_NULL_HANDLE) {
         //todo:
-        // vmaDestroyImage(, m_alloc.image, m_alloc.alloc);
+        // vmaDestroyImage(device->Get, m_alloc.image, m_alloc.alloc);
     }
 }
 
@@ -1229,6 +1247,7 @@ void VulkanRHIFence::Wait(uint64_t value) {
 #pragma region viewport
 VulkanViewport::VulkanViewport(VulkanSwapChain* _swapchain) : RHIViewport() {
     swapchain = _swapchain;
+    InnerCreateResources();
 }
 
 VulkanViewport::~VulkanViewport() {
@@ -1251,7 +1270,9 @@ void VulkanViewport::InnerCreateResources() {
                                                            .SetExtent(swapchain->extent.width, swapchain->extent.height)
                                                            .SetFormat(swapchain_format)
                                                            .SetUAVFormat(swapchain_format)
-                                                           .SetInitialLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED));
+                                                           .SetInitialLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED),
+                                                       swapchain->m_device);
+        swapchain_images[index]->AddRef();
 
         swapchain_image_uavs[index] = new VulkanRHIUnorderedAccessView(swapchain_images[index], RHIViewInfo::CreateTextureUAVInfo());
     }
@@ -1263,8 +1284,6 @@ void VulkanViewport::InnerCreateResources() {
 void VulkanViewport::InnerDestroyResources() {
 
     for (uint32_t index = 0; index < swapchain_image_uavs.size(); index++) {
-        delete swapchain_images[index];
-
         delete swapchain_image_uavs[index];
     }
     for (uint32_t index = 0; index < image_aquire_fences.size(); index++) {

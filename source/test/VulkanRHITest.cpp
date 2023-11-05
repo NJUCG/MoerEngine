@@ -43,14 +43,14 @@ public:
 IMPLEMENT_SHADER_TYPE(TestShader, "testFile.vert", "main", EShaderType::ST_VERTEX)
 
 void Test() {
-    glfwInit();
+    // glfwInit();
 
-    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+    // glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    // glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
-    GLFWwindow* window = glfwCreateWindow(800, 800, "VulkanRHITest", nullptr, nullptr);
+    // GLFWwindow* window = glfwCreateWindow(800, 800, "VulkanRHITest", nullptr, nullptr);
 
-    g_rhi = new VulkanRHIImpl(window);
+    g_rhi = new VulkanRHIImpl();
 
     g_rhi->Initialize(RHIInitInfo());
     g_rhi->PostInit();
@@ -133,7 +133,7 @@ void Test() {
     batched_params.SetParameters(test_shader_vs, params);
     command_list->SetBatchedShaderParameter(batched_params);
 
-    command_list->DrawIndexedInstanced(1, 1, 0, 0);
+    command_list->DrawIndexedInstanced(1, 1, 0, 0, 0);
 
     command_list->EndRenderPass();
 

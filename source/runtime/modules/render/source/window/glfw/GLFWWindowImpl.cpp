@@ -23,8 +23,6 @@ namespace Moer {
     GLFWWindowImpl::GLFWWindowImpl() {
     }
     GLFWWindowImpl::~GLFWWindowImpl() {
-        GuiShutDown();
-        glfwDestroyWindow((GLFWwindow*)window);
     }
 
     void  GLFWWindowImpl::SetFocusMode(bool _focused) { glfwSetInputMode((GLFWwindow*)window, GLFW_CURSOR, focused ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL); }
@@ -76,8 +74,15 @@ namespace Moer {
 
         GuiWindowInitInfo window_info{.window              = window,
                                       .b_install_callbacks = true,
-                                      .rhi_type            = ERHIType::Vulkan};
+                                      .rhi_type            = g_rhi->GetType()};
         GuiInit(window_info);
+    }
+    void GLFWWindowImpl::Tick() {
+        GuiUpdate();
+    }
+    void GLFWWindowImpl::ShutDown() {
+        GuiShutDown();
+        glfwDestroyWindow((GLFWwindow*)window);
     }
 
     void GLFWWindowImpl::InitVulkan() {
