@@ -1967,10 +1967,10 @@ public:
     }
 
     RHIShaderBoundStateInput shader_stage;
-    RHIBlendState*           blend_state;
-    RHIRasterizationState*   rasterizer_state;
-    RHIMultisampleState*     multisample_state;
-    RHIDepthStencilState*    depth_stencil_state;
+    RHIBlendStateRef         blend_state;
+    RHIRasterizationStateRef rasterizer_state;
+    RHIMultisampleStateRef   multisample_state;
+    RHIDepthStencilStateRef  depth_stencil_state;
 
     EPrimitiveTopology primitive_topology;
     uint32_t           color_attachment_count;

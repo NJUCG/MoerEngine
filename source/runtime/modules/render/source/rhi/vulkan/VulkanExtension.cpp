@@ -15,7 +15,6 @@ TExtensionArray VulkanInstanceExtension::GetMESupportedInstanceExtensions() {
     // generic simple extensions
     ADD_EXTENSION(VK_KHR_SURFACE_EXTENSION_NAME);
     ADD_EXTENSION(VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);
-
     // debug extensions
     ADD_EXTENSION(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
     ADD_EXTENSION(VK_EXT_DEBUG_REPORT_EXTENSION_NAME);
