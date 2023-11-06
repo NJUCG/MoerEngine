@@ -64,11 +64,9 @@ public:
     RHIShaderResourceViewRef  RHICreateShaderResourceView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) final override;
     RHIUnorderedAccessViewRef RHICreateUnorderedAccessView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) final override;
 
-    RHICommandQueue*        CreateCommandQueue(ECommandQueueType type) final override;
+    RHICommandQueue*        CreateCommandQueue(ECommandQueueType _type) final override;
     RHIGraphicsCommandList* CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state = nullptr) final override;
     RHIComputeCommandList*  CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr) final override;
-
-    RHIShaderRef RHICreateShader(Shader* shader) final override;
 
 #pragma endregion
 

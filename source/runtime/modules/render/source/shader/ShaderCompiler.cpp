@@ -43,9 +43,6 @@ public:
     FakeRHI() {
         rhi_type = ERHIType::Vulkan;
     }
-    RHIShaderRef RHICreateShader(Shader* shader) override {
-        return nullptr;
-    }
 };
 /**
  * @brief cross-compile shader

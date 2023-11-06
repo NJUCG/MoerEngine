@@ -463,32 +463,16 @@ RHIUnorderedAccessViewRef VulkanRHIImpl::RHICreateUnorderedAccessView(RHIViewabl
     return RHIUnorderedAccessViewRef(vk_uav);
 }
 
-RHICommandQueue* VulkanRHIImpl::CreateCommandQueue(ECommandQueueType type) {
-    return new VulkanRHICommandQueue(m_device, type);
+RHICommandQueue* VulkanRHIImpl::CreateCommandQueue(ECommandQueueType _type) {
+    return new VulkanRHICommandQueue(m_device, _type);
 }
 
 RHIGraphicsCommandList* VulkanRHIImpl::CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state) {
+    // todo: need to be more elegant and explicit
     return new VulkanRHIGraphicsCommandList(m_device, m_device->GetDefaultCommandPool(), VK_COMMAND_BUFFER_LEVEL_PRIMARY);
 }
 
 RHIComputeCommandList* VulkanRHIImpl::CreateComputeCommandList(RHIComputePipelineState* _initial_state) {
-    return nullptr;
-}
-
-RHIShaderRef VulkanRHIImpl::RHICreateShader(Shader* shader) {
-    const ShaderCodeEntry* compiled_code = shader->GetCodeEntry();
-
-    //information needed for pipeline layout creation
-    const auto& params_layout = shader->GetRootParametersLayoutInfo();
-
-    for (auto& param_layout : params_layout.GetLayoutInfos()) {
-        if (param_layout.IsValid()) {
-            //means correctly corresponding param in target shader
-        }
-    }
-
-    //todo: create shader from information above
-
     return nullptr;
 }
 
