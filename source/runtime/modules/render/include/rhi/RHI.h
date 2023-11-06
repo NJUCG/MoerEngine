@@ -93,8 +93,6 @@ public:
     virtual RHIGraphicsCommandList* CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state = nullptr) = 0;
     virtual RHIComputeCommandList*  CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr)   = 0;
 
-    virtual RHIShaderRef RHICreateShader(Shader*) = 0;
-
 #pragma endregion
 
 #pragma region GUI

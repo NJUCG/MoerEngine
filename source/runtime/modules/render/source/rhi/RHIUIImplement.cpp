@@ -111,9 +111,9 @@ void RHI::GUINewFrame() {
 }
 void RHI::GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list) {
 
-    ImDrawData*  draw_data       = static_cast<ImDrawData*>(_draw_data);
-    Shader*      frag_shader     = ShaderResourceManager::GetShader<ImGuiShaderFrag>();
-    RHIShaderRef frag_rhi_shader = g_rhi->RHICreateShader(frag_shader);
+    ImDrawData*          draw_data       = static_cast<ImDrawData*>(_draw_data);
+    Shader*              frag_shader     = ShaderResourceManager::GetShader<ImGuiShaderFrag>();
+    RHIFragmentShaderRef frag_rhi_shader = g_rhi->RHICreateFragmentShader(frag_shader);
 
     GuiBackendData*  backend_data  = GetBackendData();
     GuiViewportData* viewport_data = (GuiViewportData*)draw_data->OwnerViewport->RendererUserData;
@@ -277,8 +277,8 @@ bool CreateDeviceObjects() {
     input_intializer[1] = VertexElement(0, IM_OFFSETOF(ImDrawVert, uv), PF_R32G32_SFLOAT, 1, sizeof(ImDrawVert), EVertexInputRate::VIR_VERTEX);
     input_intializer[1] = VertexElement(0, IM_OFFSETOF(ImDrawVert, col), PF_R8G8B8A8_UNORM, 2, sizeof(ImDrawVert), EVertexInputRate::VIR_VERTEX);
 
-    RHIShaderRef gui_vert = g_rhi->RHICreateShader(ShaderResourceManager::GetShader<ImGuiShaderVert>());
-    RHIShaderRef gui_frag = g_rhi->RHICreateShader(ShaderResourceManager::GetShader<ImGuiShaderFrag>());
+    RHIVertexShaderRef   gui_vert = g_rhi->RHICreateVertexShader(ShaderResourceManager::GetShader<ImGuiShaderVert>());
+    RHIFragmentShaderRef gui_frag = g_rhi->RHICreateFragmentShader(ShaderResourceManager::GetShader<ImGuiShaderFrag>());
 
     shader_stage_input.p_vertex_input_state = g_rhi->RHICreateVertexInputState(input_intializer);
 

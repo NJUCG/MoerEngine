@@ -10,9 +10,7 @@
 #include <vector>
 #include <vulkan/vulkan.h>
 VulkanRHICommandQueue::VulkanRHICommandQueue(VulkanDevice* _device, ECommandQueueType _type) : VulkanDeviceObject(_device) {
-
     switch (_type) {
-
         case ECommandQueueType::GRAPHICS:
             queue = _device->GetGraphicsQueue();
             break;
@@ -26,7 +24,6 @@ VulkanRHICommandQueue::VulkanRHICommandQueue(VulkanDevice* _device, ECommandQueu
             queue = _device->GetGraphicsQueue();
             break;
     }
-    device = _device;
 }
 VulkanRHICommandQueue::~VulkanRHICommandQueue() {
 }

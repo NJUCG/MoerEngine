@@ -47,7 +47,6 @@ namespace Moer {
         FakeRHI() {
             rhi_type = ERHIType::Vulkan;
         }
-        RHIShaderRef RHICreateShader(Shader*) override { return nullptr; }
     };
     void RenderSystem::InitRHI() {
         //todo: init by config
