@@ -277,13 +277,14 @@ bool CreateDeviceObjects() {
     input_intializer[1] = VertexElement(0, IM_OFFSETOF(ImDrawVert, uv), PF_R32G32_SFLOAT, 1, sizeof(ImDrawVert), EVertexInputRate::VIR_VERTEX);
     input_intializer[1] = VertexElement(0, IM_OFFSETOF(ImDrawVert, col), PF_R8G8B8A8_UNORM, 2, sizeof(ImDrawVert), EVertexInputRate::VIR_VERTEX);
 
-    RHIVertexShaderRef   gui_vert = g_rhi->RHICreateVertexShader(ShaderResourceManager::GetShader<ImGuiShaderVert>());
-    RHIFragmentShaderRef gui_frag = g_rhi->RHICreateFragmentShader(ShaderResourceManager::GetShader<ImGuiShaderFrag>());
+    RHIVertexShaderRef     gui_vert    = g_rhi->RHICreateVertexShader(ShaderResourceManager::GetShader<ImGuiShaderVert>());
+    RHIFragmentShaderRef   gui_frag    = g_rhi->RHICreateFragmentShader(ShaderResourceManager::GetShader<ImGuiShaderFrag>());
+    RHIVertexInputStateRef input_state = g_rhi->RHICreateVertexInputState(input_intializer);
 
-    shader_stage_input.p_vertex_input_state = g_rhi->RHICreateVertexInputState(input_intializer);
+    shader_stage_input.p_vertex_input_state = input_state;
 
-    shader_stage_input.p_vertex_shader   = dynamic_cast<RHIVertexShader*>(gui_vert.Get());
-    shader_stage_input.p_fragment_shader = dynamic_cast<RHIFragmentShader*>(gui_frag.Get());
+    shader_stage_input.p_vertex_shader   = gui_vert;
+    shader_stage_input.p_fragment_shader = gui_frag;
 
     RHIBlendStateInitializer blend_state_info;
     blend_state_info.attachments[0].color_blend_op         = BO_ADD;
@@ -296,7 +297,8 @@ bool CreateDeviceObjects() {
 
     auto blend_state = g_rhi->RHICreateBlendState(blend_state_info);
 
-    pso_init.blend_state = blend_state;
+    pso_init.blend_state        = blend_state;
+    pso_init.primitive_topology = EPrimitiveTopology::TRIANGLE_LIST;
 
     RHIRasterizationStateInitializer rast_init{};
     rast_init.fill_mode              = FM_FILL;

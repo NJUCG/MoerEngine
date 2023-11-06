@@ -42,7 +42,10 @@ Shader* ShaderTypeResourceMap::FindOrAddShader(const char* type_name, Shader* sh
 
     {
         std::shared_lock<std::shared_mutex> read_lock(shared_mutex);
-        if (shader_type_map.count(type_name)) {
+
+        auto count = shader_type_map.count(type_name);
+
+        if (count) {
             return shader_type_map.find(type_name)->second;
         }
     }

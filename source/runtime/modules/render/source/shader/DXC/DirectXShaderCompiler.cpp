@@ -144,7 +144,7 @@ void DXCompiler::CompileVulkan(const ShaderCompilerInput& _input, ShaderCompiler
         target_profile.c_str(),
         // Compile to SPIRV
         L"-spirv",
-        L"-fspv-reflect",
+        // L"-fspv-reflect",
         DXC_ARG_ALL_RESOURCES_BOUND,
         DXC_ARG_DEBUG,
         DXC_ARG_SKIP_OPTIMIZATIONS};
@@ -236,19 +236,24 @@ void DXCompiler::CompileVulkan(const ShaderCompilerInput& _input, ShaderCompiler
     const auto&              members = meta_data->GetMembers();
     std::vector<std::string> not_reflected_members;
     for (const ShaderParametersMetadata::Member& member : members) {
-        member.GetBaseType();
-        std::string name = member.GetName();
+        EShaderBindingBaseType base_type = member.GetBaseType();
+        std::string            name      = member.GetName();
 
         auto entry = param_map.find(name);
         auto end   = param_map.end();
         auto count = param_map.count(name);
         if (count <= 0) {
+            if (BindingTypeToParameterType(base_type) == EShaderParameterType::CONSTANT_STRUCT) {
+                //is root constant
+                param_map[name].type = EShaderParameterType::CONSTANT_STRUCT;
+            }
+
             not_reflected_members.push_back(std::format("param {} not found in shader reflection data", member.GetName()));
             continue;
         }
         const auto& param = entry->second;
         //check type
-        if (auto base_type = member.GetBaseType(); BindingTypeToParameterType(base_type) != param.type) {
+        if (BindingTypeToParameterType(base_type) != param.type) {
             if (BindingTypeToParameterType(base_type) == EShaderParameterType::CONSTANT_STRUCT && param.type == EShaderParameterType::CBV) {
                 //is root constant
                 param_map[name].type = EShaderParameterType::CONSTANT_STRUCT;

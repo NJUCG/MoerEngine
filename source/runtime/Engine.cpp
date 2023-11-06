@@ -33,7 +33,7 @@ namespace Moer {
     void TestDrawUI();
     void Engine::Run() {
         LOG_INFO("Engine Start Running");
-
+        TestDrawUI();
         LOG_INFO("Engine Stop Running");
     }
 
