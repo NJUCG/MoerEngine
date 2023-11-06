@@ -65,8 +65,6 @@ public:
     RHIGraphicsCommandList* CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state = nullptr) override { return nullptr; }
     RHIComputeCommandList*  CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr) override { return nullptr; }
 
-    RHIShaderRef RHICreateShader(Shader*) override { return RHIShaderRef{}; }
-
 #pragma endregion
 
 #pragma region Viewport
