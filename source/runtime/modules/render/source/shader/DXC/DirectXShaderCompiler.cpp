@@ -1,6 +1,7 @@
 #include "DirectXShaderCompiler.h"
 #include "misc/Hash.h"
 
+#include "rhi/RHI.h"
 #include "wsl/wrladapter.h"
 #include "dxguids/dxguids.h"
 
@@ -20,6 +21,7 @@
 
 #include "dxc/dxcapi.h"
 #include "shader/ShaderCommon.h"
+#include "DirectXShaderReflectorVulkan.h"
 
 std::function<void(const ShaderCompilerInput& input, ShaderCompilerOutput& output)> DXCompiler::s_compiler_func_table[EShaderPlatform::SP_Num]{};
 
@@ -65,6 +67,9 @@ DXCompiler::DXCompiler() {
 
     s_compiler_func_table[0] = std::bind(&DXCompiler::CompileD3D12, this, std::placeholders::_1, std::placeholders::_2);
     s_compiler_func_table[1] = std::bind(&DXCompiler::CompileVulkan, this, std::placeholders::_1, std::placeholders::_2);
+
+    if (g_rhi->GetType() == ERHIType::Vulkan)
+        reflector = new DirectXShaderReflectorVulkan();
 }
 
 void DXCompiler::Compile(const ShaderCompilerInput& _input, ShaderCompilerOutput& _output) {
@@ -183,7 +188,6 @@ void DXCompiler::CompileVulkan(const ShaderCompilerInput& _input, ShaderCompiler
             return;
         }
     }
-
     // Get compilation result
     IDxcBlob* code;
     result->GetResult(&code);
@@ -197,81 +201,10 @@ void DXCompiler::CompileVulkan(const ShaderCompilerInput& _input, ShaderCompiler
     LOG_INFO("file {} compiled hash: {}", file_path.string(), _output.compiled_hash.ToString());
     memcpy(&_output.shader_code[0], data, size);
 
-    SpvReflectShaderModule module;
-    SpvReflectResult       ref_result = spvReflectCreateShaderModule(size, data, &module);
-    assert(ref_result == SPV_REFLECT_RESULT_SUCCESS);
-
-    // Enumerate and extract shader's input variables
-    uint32_t var_count = 0;
-    ref_result         = spvReflectEnumerateInputVariables(&module, &var_count, NULL);
-    assert(ref_result == SPV_REFLECT_RESULT_SUCCESS);
-    std::vector<SpvReflectInterfaceVariable*> input_vars(var_count);
-    ref_result = spvReflectEnumerateInputVariables(&module, &var_count, input_vars.data());
-    assert(ref_result == SPV_REFLECT_RESULT_SUCCESS);
-
-    // Output variables, descriptor bindings, descriptor sets, and push constants
-    // can be enumerated and extracted using a similar mechanism.
-    // module.
-    // Destroy the reflection data when no longer required.
-    //generate pipeline layout
-
     std::unordered_map<std::string, ParameterInfo> param_map;
-    const ShaderParametersMetadata*                meta_data = _input.param_meta_data;
-    for (uint32_t binding_index = 0; binding_index < module.descriptor_binding_count; ++binding_index) {
-        auto& binding = module.descriptor_bindings[binding_index];
-
-        auto& param = param_map[binding.name];
-        param.slot  = binding.binding;
-        param.space = binding.set;
-        param.type  = ToShaderParameterType(binding.resource_type);
-        param.stage = ToPipelineStageFlag(module.shader_stage);
-        param.num   = binding.count;
-    }
-
-    for (uint32_t input_index = 0; input_index < module.input_variable_count && _input.target_info.shader_type == EShaderType::ST_VERTEX; input_index++) {
-
-        auto& vertex_input = module.input_variables[input_index];
-    }
-
-    const auto&              members = meta_data->GetMembers();
-    std::vector<std::string> not_reflected_members;
-    for (const ShaderParametersMetadata::Member& member : members) {
-        EShaderBindingBaseType base_type = member.GetBaseType();
-        std::string            name      = member.GetName();
-
-        auto entry = param_map.find(name);
-        auto end   = param_map.end();
-        auto count = param_map.count(name);
-        if (count <= 0) {
-            if (BindingTypeToParameterType(base_type) == EShaderParameterType::CONSTANT_STRUCT) {
-                //is root constant
-                param_map[name].type = EShaderParameterType::CONSTANT_STRUCT;
-            }
-
-            not_reflected_members.push_back(std::format("param {} not found in shader reflection data", member.GetName()));
-            continue;
-        }
-        const auto& param = entry->second;
-        //check type
-        if (BindingTypeToParameterType(base_type) != param.type) {
-            if (BindingTypeToParameterType(base_type) == EShaderParameterType::CONSTANT_STRUCT && param.type == EShaderParameterType::CBV) {
-                //is root constant
-                param_map[name].type = EShaderParameterType::CONSTANT_STRUCT;
-            } else {
-                not_reflected_members.push_back(std::format("param {} format mismatch! param format: {}, shader format {}", member.GetName(), ToString(base_type), ToString(param.type)));
-                continue;
-            }
-        }
-        LOG_INFO("param {}: {{ slot:{}, set:{}, array_num:{} }}", member.GetName(), param.slot, param.space, param.num);
-    }
-
-    for (const auto& msg : not_reflected_members) {
-        LOG_ERROR(msg);
-    }
+    reflector->ReflectShader(result.Get(), _input.param_meta_data, param_map);
     _output.parameter_map.param_map.swap(param_map);
     _output.target_info = _input.target_info;
-
-    spvReflectDestroyShaderModule(&module);
 }
 
 bool DXCompiler::IsSupportTarget(const ShaderTargetInfo& _target_info) {

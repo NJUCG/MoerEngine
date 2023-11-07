@@ -39,6 +39,7 @@ namespace Moer {
 
     void Engine::InitCore() {
         Moer::TaskSystem::Init();
+        Moer::LogSystem::Init();
     }
     void Engine::ShutDownCore() {
         Moer::TaskSystem::ShutDown();

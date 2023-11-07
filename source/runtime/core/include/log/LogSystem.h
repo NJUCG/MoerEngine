@@ -1,11 +1,7 @@
 #ifndef MOERENGINE_LOG_SYSTEM_H
 #define MOERENGINE_LOG_SYSTEM_H
+#include "API_Macro.h"
 #include "spdlog/spdlog.h"
-#define LOG_DEBUG(...)    SPDLOG_DEBUG(__VA_ARGS__)
-#define LOG_INFO(...)     SPDLOG_INFO(__VA_ARGS__)
-#define LOG_WARNING(...)  SPDLOG_WARN(__VA_ARGS__)
-#define LOG_ERROR(...)    SPDLOG_ERROR(__VA_ARGS__)
-#define LOG_CRITICAL(...) SPDLOG_CRITICAL(__VA_ARGS__)
 
 namespace Moer {
 namespace LogSystem {
@@ -16,6 +12,7 @@ namespace LogSystem {
         LOG_LEVEL_WARNING,
         LOG_LEVEL_ERROR
     };
+    CORE_API void Init();
     // void LogInfo(...);
     // void LogWarning(...);
     // void LogError(...);
@@ -38,7 +35,15 @@ namespace LogSystem {
     // void log(source_loc loc, level::level_enum lvl, const T& msg) {
     //     log(loc, lvl, "{}", msg);
     // }
+    static std::shared_ptr<spdlog::logger> basic_file_logger;
+    static std::shared_ptr<spdlog::logger> console_logger;
 }
 
 }// namespace Moer::LogSystem
+#define LOG_DEBUG(...) SPDLOG_DEBUG(__VA_ARGS__)
+
+#define LOG_INFO(...)     SPDLOG_INFO(__VA_ARGS__)
+#define LOG_WARNING(...)  SPDLOG_WARN(__VA_ARGS__)
+#define LOG_ERROR(...)    SPDLOG_ERROR(__VA_ARGS__)
+#define LOG_CRITICAL(...) SPDLOG_CRITICAL(__VA_ARGS__)
 #endif
