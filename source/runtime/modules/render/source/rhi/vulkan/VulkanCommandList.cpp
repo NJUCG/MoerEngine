@@ -28,11 +28,11 @@ VulkanRHIGraphicsCommandList::~VulkanRHIGraphicsCommandList() {
 }
 
 void VulkanRHIGraphicsCommandList::SetBatchedShaderParameter(const RHIBatchedShaderParameters& _parameters) {
-    VK_CHECK_NULLPTR(m_current_pipeline_state, "SetBatchedShaderParameter: graphics pipeline state is nullptr!");
+    VK_CHECK_NULLPTR(m_current_pipeline_state, "SetBatchedShaderParameter: graphics pipeline state is nullptr!", return);
     const auto* vk_pso = m_current_pipeline_state;
-    // MARK...
+    // resources
     const auto& descriptor_sets          = vk_pso->GetDescriptorSets();
-    const auto& descriptor_binding_infos = vk_pso->GetLayout()->GetDescriptorBindingInfos();
+    const auto& descriptor_binding_infos = vk_pso->GetDescriptorSetsLayout()->GetDescriptorBindingInfos();
 
     std::vector<VkWriteDescriptorSet> write_descriptor_sets;
 
@@ -42,7 +42,7 @@ void VulkanRHIGraphicsCommandList::SetBatchedShaderParameter(const RHIBatchedSha
     std::vector<VkDescriptorImageInfo>  image_infos;
     for (const auto& params : _parameters.GetResourceParameters()) {
         view = static_cast<RHIView*>(params.resource);
-        VK_CHECK_NULLPTR(view, "SetBatchedShaderParameter: resource is nullptr!");
+        VK_CHECK_NULLPTR(view, "SetBatchedShaderParameter: resource is nullptr!", continue);
 
         VkWriteDescriptorSet write_descriptor_set{};
         write_descriptor_set.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -75,6 +75,14 @@ void VulkanRHIGraphicsCommandList::SetBatchedShaderParameter(const RHIBatchedSha
     }
 
     vkUpdateDescriptorSets(*device, write_descriptor_sets.size(), write_descriptor_sets.data(), 0, nullptr);
+
+    // constants
+    auto constant_params        = _parameters.GetConstantParameters();
+    auto constant_shader_stages = vk_pso->GetConstantShaderStages();
+    for (uint32_t i = 0; i < constant_params.size(); ++i) {
+        auto* constant = reinterpret_cast<const uint32_t*>(_parameters.GetConstData(constant_params[i].byte_offset_in_raw_data));
+        vkCmdPushConstants(m_command_buffer, vk_pso->GetPipelineLayout(), constant_shader_stages[i], 0, constant_params[i].size_in_32bit, constant);
+    }
 }
 
 void VulkanRHIGraphicsCommandList::SetPipelineState(RHIGraphicsPipelineState* _graphics_pso) {
@@ -82,7 +90,7 @@ void VulkanRHIGraphicsCommandList::SetPipelineState(RHIGraphicsPipelineState* _g
     // need to implemented
     // bind descriptor sets and pipeline
     auto* vk_pso = static_cast<VulkanRHIGraphicsPipelineState*>(_graphics_pso);
-    VK_CHECK_NULLPTR(vk_pso, "SetPipelineState: graphics pipeline state is nullptr!");
+    VK_CHECK_NULLPTR(vk_pso, "SetPipelineState: graphics pipeline state is nullptr!", return);
 
     vkCmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk_pso->GetHandle());
 
@@ -107,7 +115,7 @@ void VulkanRHIGraphicsCommandList::Reset(RHIGraphicsPipelineState* _graphics_pso
     // MARK...
     // need to implemented
     auto* vk_pipelie_state = static_cast<const VulkanRHIGraphicsPipelineState*>(_graphics_pso);
-    VK_CHECK_NULLPTR(vk_pipelie_state, "Reset: graphics pipeline state is nullptr!");
+    VK_CHECK_NULLPTR(vk_pipelie_state, "Reset: graphics pipeline state is nullptr!", return);
     vkResetCommandBuffer(m_command_buffer, VK_COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT);
 }
 
@@ -115,7 +123,7 @@ void VulkanRHIGraphicsCommandList::ClearState(RHIGraphicsPipelineState* _graphic
     // MARK...
     // need to implemented
     auto* vk_pipelie_state = static_cast<const VulkanRHIGraphicsPipelineState*>(_graphics_pso);
-    VK_CHECK_NULLPTR(vk_pipelie_state, "ClearState: graphics pipeline state is nullptr!");
+    VK_CHECK_NULLPTR(vk_pipelie_state, "ClearState: graphics pipeline state is nullptr!", return);
 }
 
 void VulkanRHIGraphicsCommandList::DrawIndexedInstanced(
@@ -370,7 +378,7 @@ void VulkanRHIGraphicsCommandList::SetPipelineBarrier(const RHIBarrierDependency
     VulkanRHIBuffer* vk_buffer = nullptr;
     for (uint32_t i = 0; i < _dependency.buffer_barrier_count; ++i) {
         vk_buffer = static_cast<VulkanRHIBuffer*>(_dependency.p_buffer_barriers[i].p_buffer);
-        VK_CHECK_NULLPTR(vk_buffer, "SetPipelineBarrier->VkBufferMemoryBarrier2: VulkanRHIBuffer is nullptr!");
+        VK_CHECK_NULLPTR(vk_buffer, "SetPipelineBarrier->VkBufferMemoryBarrier2: VulkanRHIBuffer is nullptr!", continue);
 
         buffer_barriers[i].sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
         buffer_barriers[i].pNext               = nullptr;
@@ -388,7 +396,7 @@ void VulkanRHIGraphicsCommandList::SetPipelineBarrier(const RHIBarrierDependency
     VulkanRHITexture* vk_texture = nullptr;
     for (uint32_t i = 0; i < _dependency.texture_barrier_count; ++i) {
         vk_texture = static_cast<VulkanRHITexture*>(_dependency.p_texture_barriers[i].p_texture);
-        VK_CHECK_NULLPTR(vk_texture, "SetPipelineBarrier->VkImageMemoryBarrier2: VulkanRHITexture is nullptr!");
+        VK_CHECK_NULLPTR(vk_texture, "SetPipelineBarrier->VkImageMemoryBarrier2: VulkanRHITexture is nullptr!", continue);
 
         image_barriers[i].sType                           = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
         image_barriers[i].pNext                           = nullptr;
@@ -484,7 +492,7 @@ void VulkanRHIGraphicsCommandList::BindVertexBuffers(uint32_t _start_index, uint
     std::vector<VkDeviceSize> offsets(_num_buffers);
     for (uint32_t i = 0; i < _num_buffers; ++i) {
         auto* vk_buffer = static_cast<const VulkanRHIBuffer*>(p_vertex_buffers[i].Get());
-        VK_CHECK_NULLPTR(vk_buffer, "BindVertexBuffers: vertex buffer is nullptr!");
+        VK_CHECK_NULLPTR(vk_buffer, "BindVertexBuffers: vertex buffer is nullptr!", continue);
         buffers[i] = vk_buffer->GetHandle();
         offsets[i] = _offsets[i];
     }
@@ -493,7 +501,7 @@ void VulkanRHIGraphicsCommandList::BindVertexBuffers(uint32_t _start_index, uint
 
 void VulkanRHIGraphicsCommandList::BindIndexBuffer(const RHIBuffer* p_index_buffer, uint32_t _offset, EIndexElementType _type) {
     auto* vk_index_buffer = static_cast<const VulkanRHIBuffer*>(p_index_buffer);
-    VK_CHECK_NULLPTR(vk_index_buffer, "BindIndexBuffer: index buffer is nullptr!");
+    VK_CHECK_NULLPTR(vk_index_buffer, "BindIndexBuffer: index buffer is nullptr!", return);
     vkCmdBindIndexBuffer(
         m_command_buffer,
         vk_index_buffer->GetHandle(),
@@ -502,17 +510,20 @@ void VulkanRHIGraphicsCommandList::BindIndexBuffer(const RHIBuffer* p_index_buff
 }
 
 void VulkanRHIGraphicsCommandList::ClearDepthStencil() {
+    // MARK...
     // to-be implemented
 }
 
 void VulkanRHIGraphicsCommandList::ClearUAVInt(RHIUnorderedAccessView* _uav, const Moer::Vector4i& _values) {
+    // MARK...
     auto* vk_uav = static_cast<VulkanRHIUnorderedAccessView*>(_uav);
-    VK_CHECK_NULLPTR(vk_uav, "ClearUAVInt: uav is nullptr!");
+    VK_CHECK_NULLPTR(vk_uav, "ClearUAVInt: uav is nullptr!", return);
 }
 
 void VulkanRHIGraphicsCommandList::ClearUAVFloat(RHIUnorderedAccessView* _uav, const Moer::Vector4f& _values) {
+    // MARK...
     auto* vk_uav = static_cast<VulkanRHIUnorderedAccessView*>(_uav);
-    VK_CHECK_NULLPTR(vk_uav, "ClearUAVFloat: uav is nullptr!");
+    VK_CHECK_NULLPTR(vk_uav, "ClearUAVFloat: uav is nullptr!", return);
 }
 
 void VulkanRHIGraphicsCommandList::BeginRenderPass(const RHIRenderPassInfo& _pass_info, const char* _pass_name) {

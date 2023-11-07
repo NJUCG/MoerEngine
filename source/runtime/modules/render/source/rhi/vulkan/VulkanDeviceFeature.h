@@ -10,8 +10,11 @@
 class VulkanPhysicalDeviceFeatures {
 public:
     VulkanPhysicalDeviceFeatures() : core_1_0(), core_1_1(), core_1_2(), core_1_3() {}
+    VulkanPhysicalDeviceFeatures(const VulkanPhysicalDeviceFeatures& _other) = default;
 
     void Query(VkPhysicalDevice _gpu, uint32_t _api_version);
+
+    void PreCreateDevice(VkDeviceCreateInfo& _device_create_info, uint32_t _api_version);
 
     VkPhysicalDeviceFeatures         core_1_0;
     VkPhysicalDeviceVulkan11Features core_1_1;

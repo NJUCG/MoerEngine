@@ -7,6 +7,7 @@
 
 #include "rhi/vulkan/misc/VulkanTypeDefs.h"
 #include "VulkanDeviceFeature.h"
+#include "VulkanExtension.h"
 
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
@@ -33,7 +34,7 @@ struct DeviceInitializer {
     VkSurfaceKHR                 surface;
     uint32_t                     api_version        = VK_API_VERSION_1_3;
     VulkanPhysicalDeviceFeatures enabled_features   = {};
-    std::vector<std::string>     enabled_extensions = {};
+    TVulkanDeviceExtensionArray  enabled_extensions = {};
 };
 
 class VulkanDevice {
@@ -60,13 +61,13 @@ public:
     inline VkPhysicalDeviceProperties GetProperties() const {
         return m_gpu_props;
     }
-    inline VulkanPhysicalDeviceFeatures GetFeatures() const {
+    inline const VulkanPhysicalDeviceFeatures& GetFeatures() const {
         return m_gpu_features;
     }
     inline VkPhysicalDeviceMemoryProperties GetMemoryProperties() const {
         return m_gpu_mem_props;
     }
-    inline TExtensionArray GetGpuExtensions() const {
+    inline const TExtensionArray& GetGpuExtensions() const {
         return m_gpu_extensions;
     }
     inline QueueFamilyIndices GetQueueFamilyIndices() const {
@@ -115,8 +116,9 @@ private:
     VulkanDescriptorAllocator* m_descriptor_allocator;
 
 private:
-    VkPhysicalDevice SelectGpu(VkInstance _instance, VkPhysicalDeviceType _type, VkSurfaceKHR _surface, const TExtensionArray& _enabled_extensions);
+    VkPhysicalDevice SelectGpu(VkInstance _instance, VkPhysicalDeviceType _type, VkSurfaceKHR _surface, const TVulkanDeviceExtensionArray& _enabled_extensions);
 
+    void InitGpu(const DeviceInitializer& _initializer);
     void CreateDevice(const DeviceInitializer& _initializer);
     void CreateCommandPools();
     void CreateMemoryAllocator();
@@ -130,7 +132,7 @@ private:
     int32_t            GetQueueFamilyIndex(const std::vector<VkQueueFamilyProperties>& queue_family_props, VkQueueFlags _queue_flags) const;
     QueueFamilyIndices QueryQueueFamilyIndices(VkPhysicalDevice _gpu, VkSurfaceKHR _surface) const;
 
-    bool CheckEnabledExtensionsSupported(VkPhysicalDevice _gpu, const TExtensionArray& _enabled_extensions) const;
+    bool CheckEnabledExtensionsSupported(VkPhysicalDevice _gpu, const TVulkanDeviceExtensionArray& _enabled_extensions) const;
 };
 
 #endif// VULKAN_DEVICE_H

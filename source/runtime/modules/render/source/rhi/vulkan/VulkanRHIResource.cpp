@@ -1219,8 +1219,20 @@ std::vector<VkPipelineShaderStageCreateInfo> VulkanRHIGraphicsPipelineState::MET
     return shader_stage_create_infos;
 }
 
-VkPipelineVertexInputStateCreateInfo VulkanRHIGraphicsPipelineState::METoVKVertexInputStateCreateInfo(const RHIVertexInputState& _vertex_input_state) {
-    return VkPipelineVertexInputStateCreateInfo();// MARK...
+VkPipelineVertexInputStateCreateInfo VulkanRHIGraphicsPipelineState::METoVKVertexInputStateCreateInfo(const RHIVertexInputState* _vertex_input_state) {
+    auto* vk_vertex_input_state = static_cast<const VulkanRHIVertexInputState*>(_vertex_input_state);
+    VK_CHECK_NULLPTR(vk_vertex_input_state, "RHICreateGraphicsPipelineState: initializer's vertex input state is nullptr!", return {});
+
+    VkPipelineVertexInputStateCreateInfo vertex_input_state_create_info{};
+    vertex_input_state_create_info.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertex_input_state_create_info.pNext                           = nullptr;
+    vertex_input_state_create_info.flags                           = 0;
+    vertex_input_state_create_info.vertexBindingDescriptionCount   = vk_vertex_input_state->GetBindingCount();
+    vertex_input_state_create_info.pVertexBindingDescriptions      = vk_vertex_input_state->GetBindings();
+    vertex_input_state_create_info.vertexAttributeDescriptionCount = vk_vertex_input_state->GetAttributeCount();
+    vertex_input_state_create_info.pVertexAttributeDescriptions    = vk_vertex_input_state->GetAttributes();
+
+    return vertex_input_state_create_info;
 }
 
 std::vector<const Shader*> VulkanRHIGraphicsPipelineState::GetShaderInfoList(const RHIShaderBoundStateInput& _shader_bound_state) {
@@ -1260,12 +1272,12 @@ void VulkanRHIGraphicsPipelineState::GenerateDescriptorSetLayouts(const VulkanDe
     }
 
     // extract descriptor set layouts
-    m_layout = new VulkanDescriptorSetsLayout();
-    m_layout->Init(max_space + 1, _layout_mappings);
+    m_descriptor_sets_layout = new VulkanDescriptorSetsLayout();
+    m_descriptor_sets_layout->Init(max_space + 1, _layout_mappings);
 }
 
 void VulkanRHIGraphicsPipelineState::CreateDescriptorSets(VulkanDevice* _device) {
-    _device->AllocateDescriptorSets(*m_layout, m_descriptor_sets);
+    _device->AllocateDescriptorSets(*m_descriptor_sets_layout, m_descriptor_sets);
 }
 
 #pragma endregion

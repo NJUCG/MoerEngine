@@ -5,7 +5,6 @@
 #ifndef VULKAN_MACRO_UTILS_H
 #define VULKAN_MACRO_UTILS_H
 
-#include "misc/MacroUtils.h"
 #include "log/LogSystem.h"
 
 #define VK_CHECK_RESULT(f)                 \
@@ -28,7 +27,7 @@
     {                                   \
         if (ptr == nullptr) {           \
             LOG_CRITICAL(msg);          \
-            return __VA_ARGS__;         \
+            __VA_ARGS__;                \
         }                               \
     }
 

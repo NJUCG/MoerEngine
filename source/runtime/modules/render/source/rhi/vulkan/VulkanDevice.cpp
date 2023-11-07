@@ -4,6 +4,7 @@
 
 #include "rhi/vulkan/misc/VulkanMacroUtils.h"
 #include "VulkanDescriptor.h"
+#include "VulkanExtension.h"
 #include "VulkanDevice.h"
 #include "VulkanUtil.h"
 
@@ -26,12 +27,8 @@ void VulkanDevice::Init(const DeviceInitializer& _initializer) {
     if (m_gpu == VK_NULL_HANDLE) {
         VkUtil::ExitFatal("No available GPU found.", -1);
     }
-    vkGetPhysicalDeviceProperties(m_gpu, &m_gpu_props);
-    m_gpu_features.Query(m_gpu, _initializer.api_version);
-    vkGetPhysicalDeviceMemoryProperties(m_gpu, &m_gpu_mem_props);
-    m_gpu_extensions       = GetGpuExtensions(m_gpu);
-    m_queue_family_indices = QueryQueueFamilyIndices(m_gpu, _initializer.surface);
-    m_queue_family_props   = GetQueueFamilyProperties(m_gpu);
+
+    InitGpu(_initializer);
 
     LOG_INFO("\n- DeviceName: {}."
              "\n- API={}.{}.{} (0x{:x}) Driver=0x{:x} VendorId=0x{:x}."
@@ -89,7 +86,7 @@ void VulkanDevice::AllocateDescriptorSets(const VulkanDescriptorSetsLayout& _lay
  * @param _enabled_extensions
  * @return selected gpu
  */
-VkPhysicalDevice VulkanDevice::SelectGpu(VkInstance _instance, VkPhysicalDeviceType _type, VkSurfaceKHR _surface, const TExtensionArray& _enabled_extensions) {
+VkPhysicalDevice VulkanDevice::SelectGpu(VkInstance _instance, VkPhysicalDeviceType _type, VkSurfaceKHR _surface, const TVulkanDeviceExtensionArray& _enabled_extensions) {
     uint32_t gpu_count = 0;
     VK_CHECK_RESULT(vkEnumeratePhysicalDevices(_instance, &gpu_count, nullptr))
     if (gpu_count == 0) {
@@ -125,9 +122,42 @@ VkPhysicalDevice VulkanDevice::SelectGpu(VkInstance _instance, VkPhysicalDeviceT
     return VK_NULL_HANDLE;
 }
 
+void VulkanDevice::InitGpu(const DeviceInitializer& _initializer) {
+    vkGetPhysicalDeviceProperties(m_gpu, &m_gpu_props);
+    vkGetPhysicalDeviceMemoryProperties(m_gpu, &m_gpu_mem_props);
+    m_gpu_features.Query(m_gpu, _initializer.api_version);
+
+    m_gpu_extensions       = GetGpuExtensions(m_gpu);
+    m_queue_family_indices = QueryQueueFamilyIndices(m_gpu, _initializer.surface);
+    m_queue_family_props   = GetQueueFamilyProperties(m_gpu);
+
+    // query advanced features. MARK: not used elsewhere
+    {
+        VkPhysicalDeviceFeatures2 features2{};
+        features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        for (const auto& extension : _initializer.enabled_extensions) {
+            extension->PreGpuFeatures(features2);
+        }
+        vkGetPhysicalDeviceFeatures2(m_gpu, &features2);
+    }
+
+    // query advanced properties. MARK: not used elsewhere
+    {
+        VkPhysicalDeviceProperties2 props2{};
+        props2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+        for (const auto& extension : _initializer.enabled_extensions) {
+            extension->PreGpuProperties(props2);
+        }
+        vkGetPhysicalDeviceProperties2(m_gpu, &props2);
+    }
+
+    LOG_INFO("VulkanRHI: GPU initialized.");
+}
+
 void VulkanDevice::CreateDevice(const DeviceInitializer& _initializer) {
     std::set<uint32_t> unique_family_indices = {m_queue_family_indices.graphics.value(), m_queue_family_indices.present.value(), m_queue_family_indices.compute.value(), m_queue_family_indices.transfer.value()};
 
+    // setup queue info
     std::vector<VkDeviceQueueCreateInfo> queue_create_infos;
 
     const float default_queue_priority = 1.0f;
@@ -146,27 +176,27 @@ void VulkanDevice::CreateDevice(const DeviceInitializer& _initializer) {
     device_create_info.queueCreateInfoCount = static_cast<uint32_t>(queue_create_infos.size());
     device_create_info.pQueueCreateInfos    = queue_create_infos.data();
 
+    // setup extension and feature info
     std::vector<const char*> enabled_extensions;
-    if (!_initializer.enabled_extensions.empty()) {
-        auto n = _initializer.enabled_extensions.size();
+    for (const auto& extension : _initializer.enabled_extensions) {
+        enabled_extensions.emplace_back(extension->GetExtensionName().c_str());
+        extension->PreCreateDevice(device_create_info);
+    }
 
-        enabled_extensions.resize(n, nullptr);
-        for (size_t i = 0; i < n; ++i) {
-            enabled_extensions[i] = _initializer.enabled_extensions[i].c_str();
-        }
+    if (!enabled_extensions.empty()) {
         device_create_info.enabledExtensionCount   = static_cast<uint32_t>(enabled_extensions.size());
         device_create_info.ppEnabledExtensionNames = enabled_extensions.data();
     }
     VkPhysicalDeviceFeatures2 enabled_features;
-    if (_initializer.api_version >= VK_API_VERSION_1_0) {
-        enabled_features.sType              = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-        enabled_features.features           = _initializer.enabled_features.core_1_0;
-        enabled_features.pNext              = const_cast<VkPhysicalDeviceVulkan11Features*>(&_initializer.enabled_features.core_1_1);
-        device_create_info.pEnabledFeatures = nullptr;
-        device_create_info.pNext            = &enabled_features;
+    if (_initializer.api_version > VK_API_VERSION_1_0) {
+        VulkanPhysicalDeviceFeatures features(_initializer.enabled_features);
+        enabled_features.sType    = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        enabled_features.features = features.core_1_0;
+        enabled_features.pNext    = &features.core_1_1;
+        features.PreCreateDevice(device_create_info, _initializer.api_version);
+        device_create_info.pNext = &enabled_features;
     } else {
         device_create_info.pEnabledFeatures = &_initializer.enabled_features.core_1_0;
-        device_create_info.pNext            = nullptr;
     }
 
     VK_CHECK_RESULT(vkCreateDevice(m_gpu, &device_create_info, nullptr, &m_device));
@@ -297,20 +327,16 @@ QueueFamilyIndices VulkanDevice::QueryQueueFamilyIndices(VkPhysicalDevice _gpu, 
     return indices;
 }
 
-bool VulkanDevice::CheckEnabledExtensionsSupported(VkPhysicalDevice _gpu, const TExtensionArray& _enabled_extensions) const {
+bool VulkanDevice::CheckEnabledExtensionsSupported(VkPhysicalDevice _gpu, const TVulkanDeviceExtensionArray& _enabled_extensions) const {
     auto gpu_extensions = GetGpuExtensions(_gpu);
 
-    std::set<std::string> enabled_extensions(_enabled_extensions.begin(), _enabled_extensions.end());
-    for (const auto& extension : gpu_extensions) {
-        enabled_extensions.erase(extension);
-    }
-
-    if (!enabled_extensions.empty()) {
-        for (const auto& extension : enabled_extensions) {
-            LOG_CRITICAL("Enabled GPU extension '" + extension + "' is not supported!");
+    bool supported = true;
+    for (const auto& extension : _enabled_extensions) {
+        if (std::find(gpu_extensions.begin(), gpu_extensions.end(), extension->GetExtensionName()) == gpu_extensions.end()) {
+            LOG_WARNING("Enabled GPU extension '" + extension->GetExtensionName() + "' is not supported!");
+            supported = false;
         }
-        return false;
     }
 
-    return true;
+    return supported;
 }

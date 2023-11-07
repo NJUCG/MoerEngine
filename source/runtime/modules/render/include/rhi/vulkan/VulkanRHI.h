@@ -113,9 +113,8 @@ private:
 
 #pragma region helper functions
 private:
-    bool CheckEnabledExtensions();
-
     bool CheckValidationLayer(const std::string& layer_name);
+    bool CheckEnabledExtensions();
 
     VkCommandBuffer BeginSingleTimeCommands(VkCommandPool _pool);
     void            EndSingleTimeCommands(VkCommandBuffer _command_buffer, VkCommandPool _pool, VkQueue _queue);

@@ -123,6 +123,22 @@ public:
 
     void GenerateVertexInputStateFromInitializer(const VertexInputStateInitializerList& _init);
 
+    inline uint32_t GetBindingCount() const {
+        return m_binding_count;
+    }
+
+    inline const VkVertexInputBindingDescription* GetBindings() const {
+        return m_bindings.data();
+    }
+
+    inline uint32_t GetAttributeCount() const {
+        return m_attribute_count;
+    }
+
+    inline const VkVertexInputAttributeDescription* GetAttributes() const {
+        return m_attributes.data();
+    }
+
 private:
     VkVertexInputRate METoVKVertexInputRate(EVertexInputRate _me_rate);
 
@@ -262,31 +278,43 @@ class VulkanRHIGraphicsPipelineState final : public RHIGraphicsPipelineState {
     friend VulkanRHIImpl;
 
 public:
-    VulkanRHIGraphicsPipelineState() : RHIGraphicsPipelineState(), m_pipeline(VK_NULL_HANDLE), m_layout(nullptr) {}
+    VulkanRHIGraphicsPipelineState()
+        : RHIGraphicsPipelineState(),
+          m_pipeline(VK_NULL_HANDLE), m_pipeline_layout(VK_NULL_HANDLE), m_descriptor_sets_layout(nullptr) {}
 
-    VkPipeline GetHandle() const {
+    inline VkPipeline GetHandle() const {
         return m_pipeline;
     }
 
-    const VulkanDescriptorSetsLayout* GetLayout() const {
-        return m_layout;
+    inline const VkPipelineLayout GetPipelineLayout() const {
+        return m_pipeline_layout;
     }
 
-    const std::vector<VkDescriptorSet>& GetDescriptorSets() const {
+    inline const VulkanDescriptorSetsLayout* GetDescriptorSetsLayout() const {
+        return m_descriptor_sets_layout;
+    }
+
+    inline const std::vector<VkDescriptorSet>& GetDescriptorSets() const {
         return m_descriptor_sets;
+    }
+
+    inline const std::vector<VkShaderStageFlags>& GetConstantShaderStages() const {
+        return m_constant_shader_stages;
     }
 
     void GenerateDescriptorSetLayouts(const VulkanDevice* _device, std::unordered_map<uint8_t, TDescriptorSetLayout>& _layout_mappings);
     void CreateDescriptorSets(VulkanDevice* _device);
 
     static std::vector<VkPipelineShaderStageCreateInfo> METoVKShaderStageCreateInfo(const RHIShaderBoundStateInput& _shader_bound_state);
-    static VkPipelineVertexInputStateCreateInfo         METoVKVertexInputStateCreateInfo(const RHIVertexInputState& _vertex_input_state);
+    static VkPipelineVertexInputStateCreateInfo         METoVKVertexInputStateCreateInfo(const RHIVertexInputState* _vertex_input_state);
     static std::vector<const Shader*>                   GetShaderInfoList(const RHIShaderBoundStateInput& _shader_bound_state);
 
 private:
-    VkPipeline                   m_pipeline;
-    VulkanDescriptorSetsLayout*  m_layout;
-    std::vector<VkDescriptorSet> m_descriptor_sets;
+    VkPipeline                      m_pipeline;
+    VkPipelineLayout                m_pipeline_layout;
+    VulkanDescriptorSetsLayout*     m_descriptor_sets_layout;
+    std::vector<VkDescriptorSet>    m_descriptor_sets;
+    std::vector<VkShaderStageFlags> m_constant_shader_stages;
 };
 #pragma endregion
 
