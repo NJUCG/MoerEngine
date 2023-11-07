@@ -36,7 +36,7 @@ namespace VkUtil = Moer::RHI::Vulkan::Util;
 
 VulkanRHIImpl::VulkanRHIImpl()
     : m_instance(VK_NULL_HANDLE), m_surface(VK_NULL_HANDLE),
-      m_device(nullptr), m_swap_chain(nullptr), m_current_viewport(nullptr) {
+      m_device(nullptr), m_current_viewport(nullptr) {
     LOG_INFO("Built with Vulkan header version {0:d}.{1:d}.{2:d}", VK_API_VERSION_MAJOR(VK_HEADER_VERSION_COMPLETE), VK_API_VERSION_MINOR(VK_HEADER_VERSION_COMPLETE), VK_API_VERSION_PATCH(VK_HEADER_VERSION_COMPLETE));
     rhi_type = ERHIType::Vulkan;
 }
@@ -58,7 +58,7 @@ void VulkanRHIImpl::ShutDown() {
     delete m_main_viewport;
     delete m_device;
     // CHECK_AND_DELETE(m_current_viewport);
-    CHECK_AND_DELETE(m_swap_chain);
+    // CHECK_AND_DELETE(m_swap_chain);
     CHECK_AND_DELETE(m_device);
 }
 
@@ -213,25 +213,25 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
     // rasterization state
     VkPipelineRasterizationStateCreateInfo rasterization_state{};
 
-    auto* vk_rasterizer_state = static_cast<VulkanRHIRasterizationState*>(_init.rasterizer_state);
+    auto* vk_rasterizer_state = static_cast<VulkanRHIRasterizationState*>(_init.rasterizer_state.Get());
     CHECK_AND_SET(vk_rasterizer_state, rasterization_state, "RHICreateGraphicsPipelineState: rasterization state is nullptr!");
 
     // multisample state
     VkPipelineMultisampleStateCreateInfo multisample_state{};
 
-    auto* vk_multisample_state = static_cast<VulkanRHIMultisampleState*>(_init.multisample_state);
+    auto* vk_multisample_state = static_cast<VulkanRHIMultisampleState*>(_init.multisample_state.Get());
     CHECK_AND_SET(vk_multisample_state, multisample_state, "RHICreateGraphicsPipelineState: multisample state is nullptr!");
 
     // depth stencil state
     VkPipelineDepthStencilStateCreateInfo depth_stencil_state{};
 
-    auto* vk_depth_stencil_state = static_cast<VulkanRHIDepthStencilState*>(_init.depth_stencil_state);
+    auto* vk_depth_stencil_state = static_cast<VulkanRHIDepthStencilState*>(_init.depth_stencil_state.Get());
     CHECK_AND_SET(vk_depth_stencil_state, depth_stencil_state, "RHICreateGraphicsPipelineState: depth stencil state is nullptr!");
 
     // color blend state
     VkPipelineColorBlendStateCreateInfo color_blend_state{};
 
-    auto* vk_blend_state = static_cast<VulkanRHIBlendState*>(_init.blend_state);
+    auto* vk_blend_state = static_cast<VulkanRHIBlendState*>(_init.blend_state.Get());
     CHECK_AND_SET(vk_blend_state, color_blend_state, "RHICreateGraphicsPipelineState: blend state is nullptr!");
 
 #undef CHECK_AND_SET
@@ -262,10 +262,10 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
         // resources
         for (const auto& info : layout_infos) {
             VkDescriptorSetLayoutBinding binding;
-            binding.binding            = info.slot;
-            binding.descriptorType     = VulkanEnumTranslator::METoVKDescriptorType(info.type);
-            binding.descriptorCount    = 1;
-            binding.stageFlags         = VulkanEnumTranslator::METoVKShaderStageFlags(meta_shader->GetShaderType());
+            binding.binding         = info.slot;
+            binding.descriptorType  = VulkanEnumTranslator::METoVKDescriptorType(info.type);
+            binding.descriptorCount = 1;
+            binding.stageFlags |= VulkanEnumTranslator::METoVKShaderStageFlags(meta_shader->GetShaderType());
             binding.pImmutableSamplers = nullptr;
 
             layout_mappings[info.space].second.push_back(binding);
@@ -526,7 +526,8 @@ void VulkanRHIImpl::InitVulkan() {
     swap_chain->Connect(m_instance, m_surface, m_device);
     uint32_t width, height;
     // glfwGetFramebufferSize(m_window, &width, &height);
-    m_swap_chain->Init(&width, &height, max_frame_in_flight, true);
+    swap_chain->Init(&width, &height, max_frame_in_flight, true);
+    m_main_viewport = new VulkanViewport(swap_chain);
 }
 
 #pragma region vulkan functions

@@ -1,7 +1,9 @@
-cbuffer vertexBuffer : register(b0) 
-{
-    float4x4 ProjectionMatrix; 
+
+struct ProjectionMatrix{
+    float4x4 matrix;
 };
+[[vk::push_constant]]
+ConstantBuffer<ProjectionMatrix> vertexBuffer : register(b0);
 struct VS_INPUT
 {
     float2 pos : POSITION;
@@ -19,7 +21,7 @@ struct PS_INPUT
 PS_INPUT main(VS_INPUT input)
 {
     PS_INPUT output;
-    output.pos = mul( ProjectionMatrix, float4(input.pos.xy, 0.f, 1.f));
+    output.pos = mul( vertexBuffer.matrix, float4(input.pos.xy, 0.f, 1.f));
     output.col = input.col;
     output.uv  = input.uv;
     return output;
