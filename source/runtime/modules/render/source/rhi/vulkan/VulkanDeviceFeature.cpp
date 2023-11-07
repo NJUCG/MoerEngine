@@ -28,6 +28,16 @@ void VulkanPhysicalDeviceFeatures::Query(VkPhysicalDevice _gpu, uint32_t _api_ve
     core_1_0 = gpu_features_2.features;
 }
 
+void VulkanPhysicalDeviceFeatures::PreCreateDevice(VkDeviceCreateInfo& _device_create_info, uint32_t _api_version) {
+    if (_api_version >= VK_API_VERSION_1_3) {
+        core_1_3.pNext = (void*)_device_create_info.pNext;
+    } else if (_api_version == VK_API_VERSION_1_2) {
+        core_1_2.pNext = (void*)_device_create_info.pNext;
+    } else {
+        core_1_1.pNext = (void*)_device_create_info.pNext;
+    }
+}
+
 VulkanPhysicalDeviceFeatures VulkanDeviceFeature::GetMESupportedDeviceFeatures(uint32_t _api_version) {
     VulkanPhysicalDeviceFeatures enabled_features;
 

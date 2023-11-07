@@ -1,4 +1,5 @@
 #include "rhi/vulkan/misc/VulkanMacroUtils.h"
+#include "misc/MacroUtils.h"
 #include "VulkanDescriptor.h"
 #include "VulkanDevice.h"
 
