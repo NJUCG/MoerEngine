@@ -12,7 +12,7 @@ public:
     VulkanExtensionBase(const std::string& _ext_name) : m_extension_name(_ext_name) {}
     virtual ~VulkanExtensionBase() = default;
 
-    inline const std::string GetExtensionName() const { return m_extension_name; }
+    inline const std::string& GetExtensionName() const { return m_extension_name; }
 
 protected:
     const std::string m_extension_name;

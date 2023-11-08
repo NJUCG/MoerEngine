@@ -89,6 +89,6 @@ void DirectXShaderReflectorVulkan::ReflectShader(const void* _compiled_result, c
     for (const auto& msg : not_reflected_members) {
         LOG_ERROR(msg);
     }
-
+    _out_parameters.swap(param_map);
     spvReflectDestroyShaderModule(&reflect_module);
 }

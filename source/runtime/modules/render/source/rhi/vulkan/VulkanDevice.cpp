@@ -180,13 +180,8 @@ void VulkanDevice::CreateDevice(const DeviceInitializer& _initializer) {
 
     // setup extension and feature info
     std::vector<const char*> enabled_extensions;
-    std::vector<std::string> enabled_extensions_str;
     for (const auto& extension : _initializer.enabled_extensions) {
-        //why enabled_extensions contains false data?
-        enabled_extensions_str.emplace_back(extension->GetExtensionName().c_str());
-        // LOG_INFO(extension->GetExtensionName().c_str());
-        enabled_extensions.emplace_back(enabled_extensions_str[enabled_extensions_str.size() - 1].data());
-        LOG_INFO(enabled_extensions[enabled_extensions.size() - 1]);
+        enabled_extensions.emplace_back(extension->GetExtensionName().c_str());
         extension->PreCreateDevice(device_create_info);
     }
 
