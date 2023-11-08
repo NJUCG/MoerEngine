@@ -21,6 +21,7 @@ TExtensionArray VulkanInstanceExtension::GetMESupportedInstanceExtensions() {
     // generic simple extensions
     ADD_EXTENSION(VK_KHR_SURFACE_EXTENSION_NAME);
     ADD_EXTENSION(VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);
+    ADD_EXTENSION(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
     // debug extensions
     ADD_EXTENSION(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
     ADD_EXTENSION(VK_EXT_DEBUG_REPORT_EXTENSION_NAME);
@@ -123,6 +124,8 @@ public:
     VulkanKHRAccelerationStructureExtension()
         : VulkanDeviceExtension(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME) {}
 
+    bool IsOptional() const override { return true; }
+
     void PreGpuFeatures(VkPhysicalDeviceFeatures2& _gpu_features2) override final {
         AddToPNext(_gpu_features2, m_acceleration_structure_features);
     }
@@ -146,6 +149,8 @@ public:
     VulkanKHRRayTracingPipelineExtension()
         : VulkanDeviceExtension(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME) {}
 
+    bool IsOptional() const override { return true; }
+
     void PreGpuFeatures(VkPhysicalDeviceFeatures2& _gpu_features2) override final {
         AddToPNext(_gpu_features2, m_ray_tracing_pipeline_features);
     }
@@ -168,6 +173,8 @@ class FVulkanKHRRayQueryExtension : public VulkanDeviceExtension {
 public:
     FVulkanKHRRayQueryExtension()
         : VulkanDeviceExtension(VK_KHR_RAY_QUERY_EXTENSION_NAME) {}
+
+    bool IsOptional() const override { return true; }
 
     void PreGpuFeatures(VkPhysicalDeviceFeatures2& _gpu_features2) override final {
         AddToPNext(_gpu_features2, m_ray_query_features);

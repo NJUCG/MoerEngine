@@ -815,7 +815,7 @@ void VulkanRHISampler::GenerateSamplerFromInitializer(const VulkanDevice* _devic
 
     sampler_create_info.maxAnisotropy = 1.0f;
     if (_initializer.filter == SF_ANISOTROPIC_NEAREST || _initializer.filter == SF_ANISOTROPIC_LINEAR) {
-        sampler_create_info.maxAnisotropy = std::clamp(static_cast<float>(_initializer.max_anisotropy), 1.0f, _device->GetProperties().limits.maxSamplerAnisotropy);
+        sampler_create_info.maxAnisotropy = std::clamp(static_cast<float>(_initializer.max_anisotropy), 1.0f, _device->GetProperties().properties.limits.maxSamplerAnisotropy);
     }
     sampler_create_info.anisotropyEnable = sampler_create_info.maxAnisotropy > 1.0f ? VK_TRUE : VK_FALSE;
 
@@ -902,9 +902,12 @@ void VulkanRHIVertexInputState::GenerateVertexInputStateFromInitializer(const Ve
         m_attributes[i].format   = VulkanEnumTranslator::METoVKFormat(_init[i].format);
         m_attributes[i].offset   = _init[i].offset;
 
-        m_binding_count = _init[i].binding_index;
+        // fallback
+        m_binding_count = std::max(m_binding_count, static_cast<uint32_t>(_init[i].binding_index));
         ++m_attribute_count;
     }
+
+    ++m_binding_count;
 
     m_input_state_create_info.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     m_input_state_create_info.pNext                           = nullptr;

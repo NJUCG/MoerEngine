@@ -12,7 +12,7 @@ public:
     VulkanExtensionBase(const std::string& _ext_name) : m_extension_name(_ext_name) {}
     virtual ~VulkanExtensionBase() = default;
 
-    inline const std::string GetExtensionName() const { return m_extension_name; }
+    inline const std::string& GetExtensionName() const { return m_extension_name; }
 
 protected:
     const std::string m_extension_name;
@@ -37,6 +37,7 @@ public:
     static TExtensionPropsArray        GetDriverSupportedDeviceExtensions(VkPhysicalDevice _gpu, const char* _layer_name = nullptr);
     static TExtensionArray             GetDriverSupportedDeviceExtensionNames(VkPhysicalDevice _gpu, const char* _layer_name = nullptr);
 
+    virtual bool IsOptional() const { return false; }
     virtual void PreGpuFeatures(VkPhysicalDeviceFeatures2& _gpu_features2) {}
     virtual void PreGpuProperties(VkPhysicalDeviceProperties2& _gpu_properties2) {}
     virtual void PreCreateDevice(VkDeviceCreateInfo& _device_create_info) {}

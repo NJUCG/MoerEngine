@@ -14,6 +14,8 @@ public:
 
     void Query(VkPhysicalDevice _gpu, uint32_t _api_version);
 
+    bool Contains(const VulkanPhysicalDeviceFeatures& _other) const;
+
     void PreCreateDevice(VkDeviceCreateInfo& _device_create_info, uint32_t _api_version);
 
     VkPhysicalDeviceFeatures         core_1_0;
@@ -32,5 +34,10 @@ class VulkanDeviceFeature {
 public:
     static VulkanPhysicalDeviceFeatures GetMESupportedDeviceFeatures(uint32_t _api_version);
 };
+
+bool operator>=(const VkPhysicalDeviceFeatures& _lhs, const VkPhysicalDeviceFeatures& _rhs);
+bool operator>=(const VkPhysicalDeviceVulkan11Features& _lhs, const VkPhysicalDeviceVulkan11Features& _rhs);
+bool operator>=(const VkPhysicalDeviceVulkan12Features& _lhs, const VkPhysicalDeviceVulkan12Features& _rhs);
+bool operator>=(const VkPhysicalDeviceVulkan13Features& _lhs, const VkPhysicalDeviceVulkan13Features& _rhs);
 
 #endif//VULKAN_DEVICE_FEATURE_H
