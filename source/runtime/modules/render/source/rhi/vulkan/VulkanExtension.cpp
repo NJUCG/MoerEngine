@@ -131,7 +131,6 @@ public:
     void PreGpuProperties(VkPhysicalDeviceProperties2& _gpu_properties2) override final {
         AddToPNext(_gpu_properties2, m_ray_tracing_pipeline_props);
     }
-
     void PreCreateDevice(VkDeviceCreateInfo& _device_create_info) override final {
         AddToPNext(_device_create_info, m_ray_tracing_pipeline_features);
     }

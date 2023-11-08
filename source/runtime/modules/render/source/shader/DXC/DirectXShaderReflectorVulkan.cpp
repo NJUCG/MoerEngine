@@ -11,6 +11,11 @@
 #include <format>
 
 void DirectXShaderReflectorVulkan::ReflectShader(const void* _compiled_result, const ShaderParametersMetadata* _param_meta_data, std::unordered_map<std::string, ParameterInfo>& _out_parameters) {
+    if (_param_meta_data == nullptr) {
+        // May be material shader
+        return;
+    }
+
     using Microsoft::WRL::ComPtr;
     // Reflect the shader and fill the unordered map with the results
     ComPtr<IDxcResult> result = (IDxcResult*)_compiled_result;

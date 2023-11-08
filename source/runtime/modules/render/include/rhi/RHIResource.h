@@ -1876,7 +1876,7 @@ public:
           depth_stencil_flag(ETextureUsageFlags::UNDEFINED),
           subpass_settings({SubpassSettings::Type::NONE, 0}),
           b_depth_bound(false),
-          multi_view_count(0),
+          multi_view_count(1),
           b_has_fragment_density_attachments(false),
           shading_rate(EVariousShadingRate::VSR_1_1x1),
           hash_key(0) {}
@@ -1982,7 +1982,7 @@ public:
     SubpassSettings subpass_settings;
 
     bool    b_depth_bound;
-    uint8_t multi_view_count;
+    uint8_t multi_view_count = 1;
 
     //for VSR
     bool                b_has_fragment_density_attachments;
