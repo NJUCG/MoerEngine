@@ -275,7 +275,7 @@ bool CreateDeviceObjects() {
     VertexInputStateInitializerList input_intializer{};
     input_intializer[0] = VertexElement(0, IM_OFFSETOF(ImDrawVert, pos), PF_R32G32_SFLOAT, 0, sizeof(ImDrawVert), EVertexInputRate::VIR_VERTEX);
     input_intializer[1] = VertexElement(0, IM_OFFSETOF(ImDrawVert, uv), PF_R32G32_SFLOAT, 1, sizeof(ImDrawVert), EVertexInputRate::VIR_VERTEX);
-    input_intializer[1] = VertexElement(0, IM_OFFSETOF(ImDrawVert, col), PF_R8G8B8A8_UNORM, 2, sizeof(ImDrawVert), EVertexInputRate::VIR_VERTEX);
+    input_intializer[2] = VertexElement(0, IM_OFFSETOF(ImDrawVert, col), PF_R8G8B8A8_UNORM, 2, sizeof(ImDrawVert), EVertexInputRate::VIR_VERTEX);
 
     RHIVertexShaderRef     gui_vert    = g_rhi->RHICreateVertexShader(ShaderResourceManager::GetShader<ImGuiShaderVert>());
     RHIFragmentShaderRef   gui_frag    = g_rhi->RHICreateFragmentShader(ShaderResourceManager::GetShader<ImGuiShaderFrag>());

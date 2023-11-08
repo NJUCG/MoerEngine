@@ -906,6 +906,8 @@ void VulkanRHIVertexInputState::GenerateVertexInputStateFromInitializer(const Ve
         m_binding_count = std::max(m_binding_count, static_cast<uint32_t>(_init[i].binding_index));
         ++m_attribute_count;
     }
+    // count = max_index + 1
+    m_binding_count++;
 
     ++m_binding_count;
 

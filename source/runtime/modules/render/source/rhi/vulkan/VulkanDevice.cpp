@@ -9,6 +9,8 @@
 #include "VulkanUtil.h"
 
 #include <set>
+#include <string>
+#include <vector>
 
 namespace VkUtil = Moer::RHI::Vulkan::Util;
 
