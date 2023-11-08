@@ -146,9 +146,9 @@ private:
 };
 
 // ***** VK_KHR_ray_query
-class FVulkanKHRRayQueryExtension : public VulkanDeviceExtension {
+class VulkanKHRRayQueryExtension : public VulkanDeviceExtension {
 public:
-    FVulkanKHRRayQueryExtension()
+    VulkanKHRRayQueryExtension()
         : VulkanDeviceExtension(VK_KHR_RAY_QUERY_EXTENSION_NAME) {}
 
     bool IsOptional() const override { return true; }
@@ -165,27 +165,27 @@ private:
     VkPhysicalDeviceRayQueryFeaturesKHR m_ray_query_features;
 };
 
-class VulkanKHRTimelineSemaphoreExtension : public VulkanDeviceExtension {
-public:
-    VulkanKHRTimelineSemaphoreExtension()
-        : VulkanDeviceExtension(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME),
-          m_timeline_semaphore_features(
-              VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES_KHR,
-              VK_NULL_HANDLE,
-              VK_TRUE) {}
-
-    void PreGpuFeatures(VkPhysicalDeviceFeatures2& _gpu_features2) override final {
-        AddToPNext(_gpu_features2, m_timeline_semaphore_features);
-    }
-    void PreGpuProperties(VkPhysicalDeviceProperties2& _gpu_properties2) override {
-    }
-    void PreCreateDevice(VkDeviceCreateInfo& _device_create_info) override final {
-        AddToPNext(_device_create_info, m_timeline_semaphore_features);
-    }
-
-private:
-    VkPhysicalDeviceTimelineSemaphoreFeatures m_timeline_semaphore_features;
-};
+//class VulkanKHRTimelineSemaphoreExtension : public VulkanDeviceExtension {
+//public:
+//    VulkanKHRTimelineSemaphoreExtension()
+//        : VulkanDeviceExtension(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME),
+//          m_timeline_semaphore_features(
+//              VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES_KHR,
+//              VK_NULL_HANDLE,
+//              VK_TRUE) {}
+//
+//    void PreGpuFeatures(VkPhysicalDeviceFeatures2& _gpu_features2) override final {
+//        AddToPNext(_gpu_features2, m_timeline_semaphore_features);
+//    }
+//    void PreGpuProperties(VkPhysicalDeviceProperties2& _gpu_properties2) override {
+//    }
+//    void PreCreateDevice(VkDeviceCreateInfo& _device_create_info) override final {
+//        AddToPNext(_device_create_info, m_timeline_semaphore_features);
+//    }
+//
+//private:
+//    VkPhysicalDeviceTimelineSemaphoreFeatures m_timeline_semaphore_features;
+//};
 
 TVulkanDeviceExtensionArray VulkanDeviceExtension::GetMESupportedDeviceExtensions() {
     TVulkanDeviceExtensionArray extensions;
@@ -194,7 +194,7 @@ TVulkanDeviceExtensionArray VulkanDeviceExtension::GetMESupportedDeviceExtension
     // generic simple extensions
     ADD_EXTENSION(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
     // timeline semaphore extensions
-    extensions.emplace_back(std::make_unique<VulkanKHRTimelineSemaphoreExtension>());
+    // extensions.emplace_back(std::make_unique<VulkanKHRTimelineSemaphoreExtension>());
     // raytracing extensions
 
     // vendor extensions

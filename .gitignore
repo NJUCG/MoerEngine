@@ -15,3 +15,5 @@ cmake-build-*/
 /.cache/
 .vscode/launch.json
 .vscode/settings.json
+
+logs/

@@ -367,12 +367,12 @@ void VulkanRHIGraphicsCommandList::SetPipelineBarrier(const RHIBarrierDependency
     std::vector<VkImageMemoryBarrier2>  image_barriers(_dependency.texture_barrier_count);
 
     for (uint32_t i = 0; i < _dependency.memory_barrier_count; ++i) {
-        memory_barriers[i].sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        memory_barriers[i].sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
         memory_barriers[i].pNext         = nullptr;
-        memory_barriers[i].srcStageMask  = VulkanEnumTranslator::METoVkPipelineStageFlags(_dependency.p_memory_barriers[i].src_stage);
-        memory_barriers[i].srcAccessMask = VulkanEnumTranslator::METoVkAccessFlags(_dependency.p_memory_barriers[i].src_access);
-        memory_barriers[i].dstStageMask  = VulkanEnumTranslator::METoVkPipelineStageFlags(_dependency.p_memory_barriers[i].dst_stage);
-        memory_barriers[i].dstAccessMask = VulkanEnumTranslator::METoVkAccessFlags(_dependency.p_memory_barriers[i].dst_access);
+        memory_barriers[i].srcStageMask  = VulkanEnumTranslator::METoVkPipelineStageFlags2(_dependency.p_memory_barriers[i].src_stage);
+        memory_barriers[i].srcAccessMask = VulkanEnumTranslator::METoVkAccessFlags2(_dependency.p_memory_barriers[i].src_access);
+        memory_barriers[i].dstStageMask  = VulkanEnumTranslator::METoVkPipelineStageFlags2(_dependency.p_memory_barriers[i].dst_stage);
+        memory_barriers[i].dstAccessMask = VulkanEnumTranslator::METoVkAccessFlags2(_dependency.p_memory_barriers[i].dst_access);
     }
 
     VulkanRHIBuffer* vk_buffer = nullptr;
@@ -380,12 +380,12 @@ void VulkanRHIGraphicsCommandList::SetPipelineBarrier(const RHIBarrierDependency
         vk_buffer = static_cast<VulkanRHIBuffer*>(_dependency.p_buffer_barriers[i].p_buffer);
         VK_CHECK_NULLPTR(vk_buffer, "SetPipelineBarrier->VkBufferMemoryBarrier2: VulkanRHIBuffer is nullptr!", continue);
 
-        buffer_barriers[i].sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        buffer_barriers[i].sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
         buffer_barriers[i].pNext               = nullptr;
-        buffer_barriers[i].srcStageMask        = VulkanEnumTranslator::METoVkPipelineStageFlags(_dependency.p_buffer_barriers[i].src_stage);
-        buffer_barriers[i].srcAccessMask       = VulkanEnumTranslator::METoVkAccessFlags(_dependency.p_buffer_barriers[i].src_access);
-        buffer_barriers[i].dstStageMask        = VulkanEnumTranslator::METoVkPipelineStageFlags(_dependency.p_buffer_barriers[i].dst_stage);
-        buffer_barriers[i].dstAccessMask       = VulkanEnumTranslator::METoVkAccessFlags(_dependency.p_buffer_barriers[i].dst_access);
+        buffer_barriers[i].srcStageMask        = VulkanEnumTranslator::METoVkPipelineStageFlags2(_dependency.p_buffer_barriers[i].src_stage);
+        buffer_barriers[i].srcAccessMask       = VulkanEnumTranslator::METoVkAccessFlags2(_dependency.p_buffer_barriers[i].src_access);
+        buffer_barriers[i].dstStageMask        = VulkanEnumTranslator::METoVkPipelineStageFlags2(_dependency.p_buffer_barriers[i].dst_stage);
+        buffer_barriers[i].dstAccessMask       = VulkanEnumTranslator::METoVkAccessFlags2(_dependency.p_buffer_barriers[i].dst_access);
         buffer_barriers[i].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;//MARK...
         buffer_barriers[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         buffer_barriers[i].buffer              = vk_buffer->GetHandle();
@@ -398,20 +398,20 @@ void VulkanRHIGraphicsCommandList::SetPipelineBarrier(const RHIBarrierDependency
         vk_texture = static_cast<VulkanRHITexture*>(_dependency.p_texture_barriers[i].p_texture);
         VK_CHECK_NULLPTR(vk_texture, "SetPipelineBarrier->VkImageMemoryBarrier2: VulkanRHITexture is nullptr!", continue);
 
-        image_barriers[i].sType                           = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        image_barriers[i].sType                           = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
         image_barriers[i].pNext                           = nullptr;
-        image_barriers[i].srcStageMask                    = VulkanEnumTranslator::METoVkPipelineStageFlags(_dependency.p_texture_barriers[i].src_stage);
-        image_barriers[i].srcAccessMask                   = VulkanEnumTranslator::METoVkAccessFlags(_dependency.p_texture_barriers[i].src_access);
-        image_barriers[i].dstStageMask                    = VulkanEnumTranslator::METoVkPipelineStageFlags(_dependency.p_texture_barriers[i].dst_stage);
-        image_barriers[i].dstAccessMask                   = VulkanEnumTranslator::METoVkAccessFlags(_dependency.p_texture_barriers[i].dst_access);
+        image_barriers[i].srcStageMask                    = VulkanEnumTranslator::METoVkPipelineStageFlags2(_dependency.p_texture_barriers[i].src_stage);
+        image_barriers[i].srcAccessMask                   = VulkanEnumTranslator::METoVkAccessFlags2(_dependency.p_texture_barriers[i].src_access);
+        image_barriers[i].dstStageMask                    = VulkanEnumTranslator::METoVkPipelineStageFlags2(_dependency.p_texture_barriers[i].dst_stage);
+        image_barriers[i].dstAccessMask                   = VulkanEnumTranslator::METoVkAccessFlags2(_dependency.p_texture_barriers[i].dst_access);
         image_barriers[i].oldLayout                       = VulkanEnumTranslator::METoVKImageLayout(_dependency.p_texture_barriers[i].src_layout);
         image_barriers[i].newLayout                       = VulkanEnumTranslator::METoVKImageLayout(_dependency.p_texture_barriers[i].dst_layout);
         image_barriers[i].srcQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
         image_barriers[i].dstQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
-        image_barriers[i].image                           = vk_texture->GetHandle();
+        image_barriers[i].image                           = vk_texture->GetHandle();// 2. MARK... layout transition need image has 'VK_IMAGE_USAGE_TRANSFER_DST_BIT'
         image_barriers[i].subresourceRange.aspectMask     = VulkanEnumTranslator::METoVKImageAspectFlags(_dependency.p_texture_barriers[i].sub_resource_range.aspect);
         image_barriers[i].subresourceRange.baseMipLevel   = _dependency.p_texture_barriers[i].sub_resource_range.mip_index;
-        image_barriers[i].subresourceRange.levelCount     = _dependency.p_texture_barriers[i].sub_resource_range.num_mips;
+        image_barriers[i].subresourceRange.levelCount     = _dependency.p_texture_barriers[i].sub_resource_range.num_mips;// 1. MARK... levelCount + baseMipLevel must <= image mip levels
         image_barriers[i].subresourceRange.baseArrayLayer = _dependency.p_texture_barriers[i].sub_resource_range.array_index;
         image_barriers[i].subresourceRange.layerCount     = _dependency.p_texture_barriers[i].sub_resource_range.array_count;
     }
