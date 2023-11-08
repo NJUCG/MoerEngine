@@ -261,7 +261,7 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
 
         // resources
         for (const auto& info : layout_infos) {
-            VkDescriptorSetLayoutBinding binding;
+            VkDescriptorSetLayoutBinding binding{};
             binding.binding         = info.slot;
             binding.descriptorType  = VulkanEnumTranslator::METoVKDescriptorType(info.type);
             binding.descriptorCount = 1;
@@ -274,7 +274,7 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
 
         // constants
         for (const auto& info : constant_infos) {
-            VkPushConstantRange range;
+            VkPushConstantRange range{};
             range.stageFlags = VulkanEnumTranslator::METoVKShaderStageFlags(meta_shader->GetShaderType());
             range.offset     = info.offset;
             range.size       = info.stride;
@@ -379,7 +379,7 @@ RHIBufferRef VulkanRHIImpl::RHICreateBuffer(const RHIBufferCreateInfo& info) {
     buffer_create_info.pQueueFamilyIndices   = nullptr;
 
     VmaAllocationCreateInfo alloc_create_info{};
-    alloc_create_info.flags = 0;
+    alloc_create_info.flags = VulkanMemoryManager::MEGenerateVmaMemoryFlags(info.usage);
     alloc_create_info.usage = VulkanMemoryManager::MEGenerateVmaMemoryUsage();
 
     VmaAllocator allocator = m_device->GetVmaAllocator();

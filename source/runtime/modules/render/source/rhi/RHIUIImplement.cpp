@@ -353,10 +353,10 @@ void CreateFontsTexture() {
                                                    .SetNumMips(1)
                                                    .SetArraySize(1)
                                                    .SetFormat(PF_R8G8B8A8_UNORM)
-                                                   .SetUsageFlags(ETextureUsageFlags::SHADER_RESOURCE | ETextureUsageFlags::SRGB)
+                                                   .SetUsageFlags(ETextureUsageFlags::SAMPLED | ETextureUsageFlags::SRGB | ETextureUsageFlags::TRANSFER_DST)
                                                    .SetInitialLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED));
         uint32_t upload_pitch = (width * 4 + alignment - 1u) & ~(alignment - 1u);
-        uint32_t upload_size  = height * upload_pitch;
+        uint32_t upload_size  = 4 * height * upload_pitch;
 
         RHIBufferRef staging_buffer = g_rhi->RHICreateBuffer(
             RHIBufferCreateInfo::Create(upload_size, 0, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE));
@@ -370,6 +370,7 @@ void CreateFontsTexture() {
         g_rhi->RHIUnmapBuffer(staging_buffer);
 
         RHISubresourceRange range{ETextureAspectFlags::COLOR};
+        range.num_mips = font_texture->GetNumMips();
 
         RHITextureBarrierInfo tex_barriers[2];
 
@@ -377,6 +378,7 @@ void CreateFontsTexture() {
         tex_barriers[0].dst_layout         = TEXTURE_LAYOUT_TRANSFER_DST;
         tex_barriers[0].src_access         = ERHIAccessFlags::UNDEFINED;
         tex_barriers[0].dst_access         = ERHIAccessFlags::TRANSFER_WRITE;
+        tex_barriers[0].dst_stage          = PS_TRANSFER;
         tex_barriers[0].p_texture          = font_texture;
         tex_barriers[0].sub_resource_range = range;
 
@@ -384,6 +386,8 @@ void CreateFontsTexture() {
         tex_barriers[1].dst_layout         = TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         tex_barriers[1].src_access         = ERHIAccessFlags::TRANSFER_WRITE;
         tex_barriers[1].dst_access         = ERHIAccessFlags::SHADER_READ;
+        tex_barriers[1].src_stage          = PS_TRANSFER;
+        tex_barriers[1].dst_stage          = PS_FRAGMENT_SHADER;
         tex_barriers[1].p_texture          = font_texture;
         tex_barriers[1].sub_resource_range = range;
 
@@ -406,6 +410,7 @@ void CreateFontsTexture() {
             upload_pitch,
             height);
 
+        // 3. MARK... pRegion[0] is trying to copy 518144 bytes plus 0 offset to/from the VkBuffer (VkBuffer 0xcb1c7c000000001b[]) which exceeds the VkBuffer total size of 131072 bytes.
         command_list->CopyBufferToTexture(staging_buffer, font_texture, copy_info);
 
         RHIBarrierDependencyInfo font_copy_barriers{};

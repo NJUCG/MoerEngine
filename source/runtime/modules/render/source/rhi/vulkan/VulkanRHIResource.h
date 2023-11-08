@@ -68,7 +68,8 @@ public:
     VulkanMemoryManager(const VulkanMemoryManager&)            = delete;
     VulkanMemoryManager& operator=(const VulkanMemoryManager&) = delete;
 
-    static VmaMemoryUsage MEGenerateVmaMemoryUsage();
+    static VmaAllocationCreateFlags MEGenerateVmaMemoryFlags(EBufferUsageFlags _flags);
+    static VmaMemoryUsage           MEGenerateVmaMemoryUsage();
 };
 
 class VulkanEnumTranslator final {
@@ -84,8 +85,8 @@ public:
     static VkAttachmentStoreOp   METoVKAttachmentStoreOp(EAttachmentStoreOp _store_op);
     static VkFilter              METoVKImageFilter(ESamplerFilter _filter);
 
-    static VkPipelineStageFlags METoVkPipelineStageFlags(ERHIPipelineStageFlags _flags);
-    static VkAccessFlags        METoVkAccessFlags(ERHIAccessFlags _flags);
+    static VkPipelineStageFlags2 METoVkPipelineStageFlags2(ERHIPipelineStageFlags _flags);
+    static VkAccessFlags2        METoVkAccessFlags2(ERHIAccessFlags _flags);
 
     static VkCullModeFlags     METoVKCullModeFlags(ERasterizerCullMode _cull_mode);
     static VkPrimitiveTopology METoVKPrimitiveTopology(EPrimitiveTopology _primitive_type);

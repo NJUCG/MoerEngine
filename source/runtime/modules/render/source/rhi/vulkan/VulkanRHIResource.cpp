@@ -22,6 +22,11 @@
 
 #pragma region utils definition
 
+VmaAllocationCreateFlags VulkanMemoryManager::MEGenerateVmaMemoryFlags(EBufferUsageFlags _flags) {
+    if ((_flags & EBufferUsageFlags::CPU_VISIBLE) == EBufferUsageFlags::CPU_VISIBLE) return VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+    return 0;
+}
+
 VmaMemoryUsage VulkanMemoryManager::MEGenerateVmaMemoryUsage() {
     return VMA_MEMORY_USAGE_AUTO;
 }
@@ -650,44 +655,44 @@ VkFilter VulkanEnumTranslator::METoVKImageFilter(ESamplerFilter _filter) {
     }
 }
 
-VkPipelineStageFlags VulkanEnumTranslator::METoVkPipelineStageFlags(ERHIPipelineStageFlags _flags) {
-    return VkPipelineStageFlags(_flags);// MARK...
+VkPipelineStageFlags2 VulkanEnumTranslator::METoVkPipelineStageFlags2(ERHIPipelineStageFlags _flags) {
+    return VkPipelineStageFlags2(_flags);// MARK...
 }
 
-VkAccessFlags VulkanEnumTranslator::METoVkAccessFlags(ERHIAccessFlags _flags) {
+VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) {
     // clang-format off
     switch (_flags) {
-        case ERHIAccessFlags::UNDEFINED:                                    return VK_ACCESS_NONE;
-        case ERHIAccessFlags::INDIRECT_COMMAND_READ:                        return VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
-        case ERHIAccessFlags::INDEX_READ:                                   return VK_ACCESS_INDEX_READ_BIT;
-        case ERHIAccessFlags::VERTEX_ATTRIBUTE_READ:                        return VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
-        case ERHIAccessFlags::UNIFORM_READ:                                 return VK_ACCESS_UNIFORM_READ_BIT;
-        case ERHIAccessFlags::INPUT_ATTACHMENT_READ:                        return VK_ACCESS_INPUT_ATTACHMENT_READ_BIT;
-        case ERHIAccessFlags::SHADER_READ:                                  return VK_ACCESS_SHADER_READ_BIT;
-        case ERHIAccessFlags::SHADER_WRITE:                                 return VK_ACCESS_SHADER_WRITE_BIT;
-        case ERHIAccessFlags::COLOR_ATTACHMENT_READ:                        return VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
-        case ERHIAccessFlags::COLOR_ATTACHMENT_WRITE:                       return VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        case ERHIAccessFlags::DEPTH_STENCIL_READ:                           return VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
-        case ERHIAccessFlags::DEPTH_STENCIL_WRITE:                          return VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-        case ERHIAccessFlags::TRANSFER_READ:                                return VK_ACCESS_TRANSFER_READ_BIT;
-        case ERHIAccessFlags::TRANSFER_WRITE:                               return VK_ACCESS_TRANSFER_WRITE_BIT;
-        case ERHIAccessFlags::CPU_READ_BIT:                                 return VK_ACCESS_HOST_READ_BIT;
-        case ERHIAccessFlags::CPU_WRITE_BIT:                                return VK_ACCESS_HOST_WRITE_BIT;
-        case ERHIAccessFlags::MEMORY_READ:                                  return VK_ACCESS_MEMORY_READ_BIT;
-        case ERHIAccessFlags::MEMORY_WRITE:                                 return VK_ACCESS_MEMORY_WRITE_BIT;
-        case ERHIAccessFlags::SHADER_SAMPLED_READ:                          return VK_ACCESS_SHADER_READ_BIT;
-        case ERHIAccessFlags::SHADER_RESOURCE_VIEW:                         return VK_ACCESS_SHADER_READ_BIT;
-        case ERHIAccessFlags::UNORDERED_ACCESS_VIEW:                        return VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-        case ERHIAccessFlags::TRANSFORM_FEEDBACK_WRITE_BIT_EXT:             return VK_ACCESS_TRANSFORM_FEEDBACK_WRITE_BIT_EXT;
-        case ERHIAccessFlags::TRANSFORM_FEEDBACK_COUNTER_READ_BIT_EXT:      return VK_ACCESS_TRANSFORM_FEEDBACK_COUNTER_READ_BIT_EXT;
-        case ERHIAccessFlags::TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT:     return VK_ACCESS_TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT;
-        case ERHIAccessFlags::CONDITIONAL_RENDERING_READ_BIT_EXT:           return VK_ACCESS_CONDITIONAL_RENDERING_READ_BIT_EXT;
-        case ERHIAccessFlags::COMMAND_PREPROCESS_READ_BIT_NV:               return VK_ACCESS_COMMAND_PREPROCESS_READ_BIT_NV;
-        case ERHIAccessFlags::COMMAND_PREPROCESS_WRITE_BIT_NV:              return VK_ACCESS_COMMAND_PREPROCESS_WRITE_BIT_NV;
-        case ERHIAccessFlags::FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT:    return VK_ACCESS_FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT_KHR;
-        case ERHIAccessFlags::ACCELERATION_STRUCTURE_READ_BIT:              return VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-        case ERHIAccessFlags::ACCELERATION_STRUCTURE_WRITE_BIT:             return VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
-        case ERHIAccessFlags::FRAGMENT_DENSITY_MAP_READ_BIT_EXT:            return VK_ACCESS_FRAGMENT_DENSITY_MAP_READ_BIT_EXT;
+        case ERHIAccessFlags::UNDEFINED:                                    return VK_ACCESS_2_NONE;
+        case ERHIAccessFlags::INDIRECT_COMMAND_READ:                        return VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
+        case ERHIAccessFlags::INDEX_READ:                                   return VK_ACCESS_2_INDEX_READ_BIT;
+        case ERHIAccessFlags::VERTEX_ATTRIBUTE_READ:                        return VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT;
+        case ERHIAccessFlags::UNIFORM_READ:                                 return VK_ACCESS_2_UNIFORM_READ_BIT;
+        case ERHIAccessFlags::INPUT_ATTACHMENT_READ:                        return VK_ACCESS_2_INPUT_ATTACHMENT_READ_BIT;
+        case ERHIAccessFlags::SHADER_READ:                                  return VK_ACCESS_2_SHADER_READ_BIT;
+        case ERHIAccessFlags::SHADER_WRITE:                                 return VK_ACCESS_2_SHADER_WRITE_BIT;
+        case ERHIAccessFlags::COLOR_ATTACHMENT_READ:                        return VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT;
+        case ERHIAccessFlags::COLOR_ATTACHMENT_WRITE:                       return VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+        case ERHIAccessFlags::DEPTH_STENCIL_READ:                           return VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+        case ERHIAccessFlags::DEPTH_STENCIL_WRITE:                          return VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        case ERHIAccessFlags::TRANSFER_READ:                                return VK_ACCESS_2_TRANSFER_READ_BIT;
+        case ERHIAccessFlags::TRANSFER_WRITE:                               return VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        case ERHIAccessFlags::CPU_READ_BIT:                                 return VK_ACCESS_2_HOST_READ_BIT;
+        case ERHIAccessFlags::CPU_WRITE_BIT:                                return VK_ACCESS_2_HOST_WRITE_BIT;
+        case ERHIAccessFlags::MEMORY_READ:                                  return VK_ACCESS_2_MEMORY_READ_BIT;
+        case ERHIAccessFlags::MEMORY_WRITE:                                 return VK_ACCESS_2_MEMORY_WRITE_BIT;
+        case ERHIAccessFlags::SHADER_SAMPLED_READ:                          return VK_ACCESS_2_SHADER_READ_BIT;
+        case ERHIAccessFlags::SHADER_RESOURCE_VIEW:                         return VK_ACCESS_2_SHADER_READ_BIT;
+        case ERHIAccessFlags::UNORDERED_ACCESS_VIEW:                        return VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        case ERHIAccessFlags::TRANSFORM_FEEDBACK_WRITE_BIT_EXT:             return VK_ACCESS_2_TRANSFORM_FEEDBACK_WRITE_BIT_EXT;
+        case ERHIAccessFlags::TRANSFORM_FEEDBACK_COUNTER_READ_BIT_EXT:      return VK_ACCESS_2_TRANSFORM_FEEDBACK_COUNTER_READ_BIT_EXT;
+        case ERHIAccessFlags::TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT:     return VK_ACCESS_2_TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT;
+        case ERHIAccessFlags::CONDITIONAL_RENDERING_READ_BIT_EXT:           return VK_ACCESS_2_CONDITIONAL_RENDERING_READ_BIT_EXT;
+        case ERHIAccessFlags::COMMAND_PREPROCESS_READ_BIT_NV:               return VK_ACCESS_2_COMMAND_PREPROCESS_READ_BIT_NV;
+        case ERHIAccessFlags::COMMAND_PREPROCESS_WRITE_BIT_NV:              return VK_ACCESS_2_COMMAND_PREPROCESS_WRITE_BIT_NV;
+        case ERHIAccessFlags::FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT:    return VK_ACCESS_2_FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT_KHR;
+        case ERHIAccessFlags::ACCELERATION_STRUCTURE_READ_BIT:              return VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+        case ERHIAccessFlags::ACCELERATION_STRUCTURE_WRITE_BIT:             return VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+        case ERHIAccessFlags::FRAGMENT_DENSITY_MAP_READ_BIT_EXT:            return VK_ACCESS_2_FRAGMENT_DENSITY_MAP_READ_BIT_EXT;
         default:
             LOG_CRITICAL("Unsupported ERHIAccessFlags: {}", static_cast<uint32_t>(_flags));
             return VK_ACCESS_FLAG_BITS_MAX_ENUM;
@@ -815,7 +820,7 @@ void VulkanRHISampler::GenerateSamplerFromInitializer(const VulkanDevice* _devic
 
     sampler_create_info.maxAnisotropy = 1.0f;
     if (_initializer.filter == SF_ANISOTROPIC_NEAREST || _initializer.filter == SF_ANISOTROPIC_LINEAR) {
-        sampler_create_info.maxAnisotropy = std::clamp(static_cast<float>(_initializer.max_anisotropy), 1.0f, _device->GetProperties().limits.maxSamplerAnisotropy);
+        sampler_create_info.maxAnisotropy = std::clamp(static_cast<float>(_initializer.max_anisotropy), 1.0f, _device->GetProperties().properties.limits.maxSamplerAnisotropy);
     }
     sampler_create_info.anisotropyEnable = sampler_create_info.maxAnisotropy > 1.0f ? VK_TRUE : VK_FALSE;
 
@@ -902,11 +907,12 @@ void VulkanRHIVertexInputState::GenerateVertexInputStateFromInitializer(const Ve
         m_attributes[i].format   = VulkanEnumTranslator::METoVKFormat(_init[i].format);
         m_attributes[i].offset   = _init[i].offset;
 
-        m_binding_count = _init[i].binding_index;
+        // fallback
+        m_binding_count = std::max(m_binding_count, static_cast<uint32_t>(_init[i].binding_index));
         ++m_attribute_count;
     }
     // count = max_index + 1
-    m_binding_count++;
+    ++m_binding_count;
 
     m_input_state_create_info.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     m_input_state_create_info.pNext                           = nullptr;
@@ -1239,20 +1245,20 @@ VkPipelineVertexInputStateCreateInfo VulkanRHIGraphicsPipelineState::METoVKVerte
 
 std::vector<const Shader*> VulkanRHIGraphicsPipelineState::GetShaderInfoList(const RHIShaderBoundStateInput& _shader_bound_state) {
     std::vector<const Shader*> shader_list;
-    if (_shader_bound_state.p_vertex_shader) {
+    if (_shader_bound_state.p_vertex_shader->shader_type == EShaderType::ST_VERTEX) {
         shader_list.push_back(_shader_bound_state.p_vertex_shader->GetMetaShader());
     }
-    if (_shader_bound_state.p_geometry_shader) {
+    if (_shader_bound_state.p_geometry_shader != nullptr) {
         shader_list.push_back(_shader_bound_state.p_geometry_shader->GetMetaShader());
     }
     // mesh-frag pipeline
-    if (_shader_bound_state.p_mesh_shader) {
+    if (_shader_bound_state.p_mesh_shader != nullptr) {
         shader_list.push_back(_shader_bound_state.p_mesh_shader->GetMetaShader());
     }
-    if (_shader_bound_state.p_amplification_shader) {
+    if (_shader_bound_state.p_amplification_shader != nullptr) {
         shader_list.push_back(_shader_bound_state.p_amplification_shader->GetMetaShader());
     }
-    if (_shader_bound_state.p_fragment_shader) {
+    if (_shader_bound_state.p_fragment_shader != nullptr) {
         shader_list.push_back(_shader_bound_state.p_fragment_shader->GetMetaShader());
     }
     return shader_list;

@@ -40,7 +40,7 @@ public:
     END_ROOT_PARAMETER_DEFINITION(Parameters)
 };
 
-IMPLEMENT_SHADER_TYPE(TestShader, "testFile.vert", "main", EShaderType::ST_VERTEX)
+// IMPLEMENT_SHADER_TYPE(TestShader, "TestVert.vert", "main", EShaderType::ST_VERTEX)
 
 void Test() {
     // glfwInit();

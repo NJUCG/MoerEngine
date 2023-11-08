@@ -37,6 +37,7 @@ public:
     static TExtensionPropsArray        GetDriverSupportedDeviceExtensions(VkPhysicalDevice _gpu, const char* _layer_name = nullptr);
     static TExtensionArray             GetDriverSupportedDeviceExtensionNames(VkPhysicalDevice _gpu, const char* _layer_name = nullptr);
 
+    virtual bool IsOptional() const { return false; }
     virtual void PreGpuFeatures(VkPhysicalDeviceFeatures2& _gpu_features2) {}
     virtual void PreGpuProperties(VkPhysicalDeviceProperties2& _gpu_properties2) {}
     virtual void PreCreateDevice(VkDeviceCreateInfo& _device_create_info) {}

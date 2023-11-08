@@ -66,6 +66,7 @@ void ShaderParameterSetTest() {
 
     END_TEST(ShaderParameterSetTest)
 }
+
 int main(int argc, const char** argv) {
 
     Moer::Engine         engine;
