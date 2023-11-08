@@ -28,6 +28,10 @@ void VulkanPhysicalDeviceFeatures::Query(VkPhysicalDevice _gpu, uint32_t _api_ve
     core_1_0 = gpu_features_2.features;
 }
 
+bool VulkanPhysicalDeviceFeatures::Contains(const VulkanPhysicalDeviceFeatures& _other) const {
+    return core_1_0 >= _other.core_1_0 && core_1_1 >= _other.core_1_1 && core_1_2 >= _other.core_1_2 && core_1_3 >= _other.core_1_3;
+}
+
 void VulkanPhysicalDeviceFeatures::PreCreateDevice(VkDeviceCreateInfo& _device_create_info, uint32_t _api_version) {
     if (_api_version >= VK_API_VERSION_1_3) {
         core_1_3.pNext = (void*)_device_create_info.pNext;
@@ -54,6 +58,8 @@ VulkanPhysicalDeviceFeatures VulkanDeviceFeature::GetMESupportedDeviceFeatures(u
     if (_api_version >= VK_API_VERSION_1_2) {
         enabled_features.core_1_1.pNext = &enabled_features.core_1_2;
         enabled_features.core_1_2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+
+        enabled_features.core_1_2.timelineSemaphore = VK_TRUE;
     }
 
     // 1.3 features
@@ -67,7 +73,49 @@ VulkanPhysicalDeviceFeatures VulkanDeviceFeature::GetMESupportedDeviceFeatures(u
     // Apply platform restrictions
     VulkanPlatform::RestrictEnabledPhysicalDeviceFeatures(&enabled_features);
 
-    // Custom features
-
     return enabled_features;
+}
+
+bool operator>=(const VkPhysicalDeviceFeatures& _lhs, const VkPhysicalDeviceFeatures& _rhs) {
+    auto* lp = (VkBool32*)&_lhs;
+    auto* rp = (VkBool32*)&_rhs;
+    for (size_t i = 0; i < sizeof(VkPhysicalDeviceFeatures) / sizeof(VkBool32); ++i) {
+        if (lp[i] < rp[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool operator>=(const VkPhysicalDeviceVulkan11Features& _lhs, const VkPhysicalDeviceVulkan11Features& _rhs) {
+    auto* lp = (VkBool32*)&_lhs;
+    auto* rp = (VkBool32*)&_rhs;
+    for (size_t i = 4; i < sizeof(VkPhysicalDeviceVulkan11Features) / sizeof(VkBool32); ++i) {
+        if (lp[i] < rp[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool operator>=(const VkPhysicalDeviceVulkan12Features& _lhs, const VkPhysicalDeviceVulkan12Features& _rhs) {
+    auto* lp = (VkBool32*)&_lhs;
+    auto* rp = (VkBool32*)&_rhs;
+    for (size_t i = 4; i < sizeof(VkPhysicalDeviceVulkan12Features) / sizeof(VkBool32); ++i) {
+        if (lp[i] < rp[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool operator>=(const VkPhysicalDeviceVulkan13Features& _lhs, const VkPhysicalDeviceVulkan13Features& _rhs) {
+    auto* lp = (VkBool32*)&_lhs;
+    auto* rp = (VkBool32*)&_rhs;
+    for (size_t i = 4; i < sizeof(VkPhysicalDeviceVulkan13Features) / sizeof(VkBool32); ++i) {
+        if (lp[i] < rp[i]) {
+            return false;
+        }
+    }
+    return true;
 }
