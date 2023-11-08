@@ -749,36 +749,36 @@ enum EGlobalBufferLifeScope {
 };
 
 enum class ETextureUsageFlags : uint64_t {
-    UNDEFINED,
+    UNDEFINED = 0ULL,
 
-    ATTACHMENT_RENDER,
-    ATTACHMENT_RESOLVE,
-    ATTACHMENT_DEPTH_STENCIL,
+    ATTACHMENT_RENDER        = 1 << 0,
+    ATTACHMENT_RESOLVE       = 1 << 1,
+    ATTACHMENT_DEPTH_STENCIL = 1 << 2,
 
-    SRGB,
+    SRGB = 1 << 3,
 
-    SHADER_RESOURCE,
-    CPU_VISIBLE,
-    TILLING_NONE,
-    DYNAMIC,
+    SHADER_RESOURCE = 1 << 4,
+    CPU_VISIBLE     = 1 << 5,
+    TILLING_NONE    = 1 << 6,
+    DYNAMIC         = 1 << 7,
 
-    INPUT_ATTACHMENT,
-    TRANSFER_SRC,
-    TRANSFER_DST,
-    SAMPLED,
-    UNORDERED_ACCESS,
-    COLOR_ATTACHMENT,
-    DEPTH_STENCIL_ATTACHMENT,
-    TRANSIENT_ATTACHMENT,
+    INPUT_ATTACHMENT         = 1 << 8,
+    TRANSFER_SRC             = 1 << 9,
+    TRANSFER_DST             = 1 << 10,
+    SAMPLED                  = 1 << 11,
+    UNORDERED_ACCESS         = 1 << 12,
+    COLOR_ATTACHMENT         = 1 << 13,
+    DEPTH_STENCIL_ATTACHMENT = 1 << 14,
+    TRANSIENT_ATTACHMENT     = 1 << 15,
 
-    VIDEO_DECODE,
+    VIDEO_DECODE = 1 << 16,
 
-    FRAGMENT_DENSITY_MAP,
-    FRAGMENT_SHADING_RATE_ATTACHMENT,
+    FRAGMENT_DENSITY_MAP             = 1 << 17,
+    FRAGMENT_SHADING_RATE_ATTACHMENT = 1 << 18,
 
-    VIDEO_ENCODE,
-    ATTACHMENT_FEEDBACK_LOOP,
-    Num
+    VIDEO_ENCODE             = 1 << 19,
+    ATTACHMENT_FEEDBACK_LOOP = 1 << 20,
+    Num                      = 22
 };
 ENUM_BIT_OP_IMPL(ETextureUsageFlags, FLAG)
 

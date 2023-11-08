@@ -46,7 +46,7 @@ void VulkanRHICommandQueue::SubmitCommands(
     std::vector<VkSemaphoreSubmitInfo> vk_wait_infos(wait_infos.size());
 
     uint32_t extra_biranry_semaphores = 0;
-    for (uint32_t signal_index = 0; signal_index < vk_signal_infos.size(); signal_index++) {
+    for (uint32_t signal_index = 0; signal_index < signal_infos.size(); signal_index++) {
         VulkanRHIFence* target_fence = (VulkanRHIFence*)signal_infos[signal_index].signal_fence;
         vk_signal_infos.emplace_back(VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO,
                                      VK_NULL_HANDLE,

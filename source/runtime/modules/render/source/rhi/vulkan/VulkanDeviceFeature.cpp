@@ -68,6 +68,7 @@ VulkanPhysicalDeviceFeatures VulkanDeviceFeature::GetMESupportedDeviceFeatures(u
         enabled_features.core_1_2.pNext = &enabled_features.core_1_3;
         enabled_features.core_1_3.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
 
+        enabled_features.core_1_3.synchronization2 = VK_TRUE;
         enabled_features.core_1_3.dynamicRendering = VK_TRUE;
     }
 
