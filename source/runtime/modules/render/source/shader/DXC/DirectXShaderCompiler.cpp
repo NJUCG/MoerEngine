@@ -39,6 +39,7 @@ DXCompiler::~DXCompiler() {
     utils->Release();
     library->Release();
     compiler->Release();
+    delete reflector;
 }
 
 DXCompiler::DXCompiler() {

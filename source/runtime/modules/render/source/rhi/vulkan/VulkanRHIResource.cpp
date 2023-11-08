@@ -905,6 +905,8 @@ void VulkanRHIVertexInputState::GenerateVertexInputStateFromInitializer(const Ve
         m_binding_count = _init[i].binding_index;
         ++m_attribute_count;
     }
+    // count = max_index + 1
+    m_binding_count++;
 
     m_input_state_create_info.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     m_input_state_create_info.pNext                           = nullptr;

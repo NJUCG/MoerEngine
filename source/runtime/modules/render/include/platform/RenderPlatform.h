@@ -19,9 +19,10 @@ namespace RHI {
 
     class RHI_API GenericRenderPlatformInfo {
         std::string rhi_name;
-        uint32_t    b_is_pc : 1;
-        uint32_t    b_is_console : 1;
-        uint32_t    b_support_debug_view_shaders : 1;
+
+        uint32_t b_is_pc : 1;
+        uint32_t b_is_console : 1;
+        uint32_t b_support_debug_view_shaders : 1;
 
         uint32_t b_support_array_texture_compression : 1;
         uint32_t b_support_distance_fields : 1;
