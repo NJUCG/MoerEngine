@@ -58,13 +58,13 @@ public:
     inline VmaAllocator GetVmaAllocator() const {
         return m_allocator;
     }
-    inline VkPhysicalDeviceProperties GetProperties() const {
+    inline VkPhysicalDeviceProperties2 GetProperties() const {
         return m_gpu_props;
     }
     inline const VulkanPhysicalDeviceFeatures& GetFeatures() const {
         return m_gpu_features;
     }
-    inline VkPhysicalDeviceMemoryProperties GetMemoryProperties() const {
+    inline VkPhysicalDeviceMemoryProperties2 GetMemoryProperties() const {
         return m_gpu_mem_props;
     }
     inline const TExtensionArray& GetGpuExtensions() const {
@@ -95,13 +95,13 @@ public:
     void AllocateDescriptorSets(const VulkanDescriptorSetsLayout& _layouts, std::vector<VkDescriptorSet>& _sets);
 
 private:
-    VkPhysicalDevice                 m_gpu;
-    VkPhysicalDeviceProperties       m_gpu_props;
-    VulkanPhysicalDeviceFeatures     m_gpu_features;
-    VkPhysicalDeviceMemoryProperties m_gpu_mem_props;
-    TExtensionArray                  m_gpu_extensions;
-    TQueueFamilyPropertiesArray      m_queue_family_props;
-    QueueFamilyIndices               m_queue_family_indices;
+    VkPhysicalDevice                  m_gpu;
+    VkPhysicalDeviceProperties2       m_gpu_props;
+    VulkanPhysicalDeviceFeatures      m_gpu_features;
+    VkPhysicalDeviceMemoryProperties2 m_gpu_mem_props;
+    TExtensionArray                   m_gpu_extensions;
+    TQueueFamilyPropertiesArray       m_queue_family_props;
+    QueueFamilyIndices                m_queue_family_indices;
 
     VkDevice m_device;
     VkQueue  m_graphics_queue;
@@ -116,7 +116,7 @@ private:
     VulkanDescriptorAllocator* m_descriptor_allocator;
 
 private:
-    VkPhysicalDevice SelectGpu(VkInstance _instance, VkPhysicalDeviceType _type, VkSurfaceKHR _surface, const TVulkanDeviceExtensionArray& _enabled_extensions);
+    VkPhysicalDevice SelectGpu(const DeviceInitializer& _init);
 
     void InitGpu(const DeviceInitializer& _initializer);
     void CreateDevice(const DeviceInitializer& _initializer);
@@ -133,6 +133,7 @@ private:
     QueueFamilyIndices QueryQueueFamilyIndices(VkPhysicalDevice _gpu, VkSurfaceKHR _surface) const;
 
     bool CheckEnabledExtensionsSupported(VkPhysicalDevice _gpu, const TVulkanDeviceExtensionArray& _enabled_extensions) const;
+    bool CheckEnabledFeaturesSupported(VkPhysicalDevice _gpu, const VulkanPhysicalDeviceFeatures& _enabled_features, uint32_t _api_version);
 };
 
 #endif// VULKAN_DEVICE_H
