@@ -5,6 +5,7 @@
 #include "VulkanDeviceFeature.h"
 
 #include "VulkanPlatform.h"
+#include "vulkan/vulkan_core.h"
 
 void VulkanPhysicalDeviceFeatures::Query(VkPhysicalDevice _gpu, uint32_t _api_version) {
     VkPhysicalDeviceFeatures2 gpu_features_2;
@@ -48,7 +49,7 @@ VulkanPhysicalDeviceFeatures VulkanDeviceFeature::GetMESupportedDeviceFeatures(u
     // 1.0 features
     enabled_features.core_1_0.samplerAnisotropy = VK_TRUE;
     enabled_features.core_1_0.sampleRateShading = VK_TRUE;
-
+    enabled_features.core_1_0.depthClamp        = VK_TRUE;
     // 1.1 features
     if (_api_version >= VK_API_VERSION_1_1) {
         enabled_features.core_1_1.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;

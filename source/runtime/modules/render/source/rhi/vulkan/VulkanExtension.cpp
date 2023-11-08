@@ -66,28 +66,6 @@ TExtensionArray VulkanInstanceExtension::GetDriverSupportedInstanceExtensionName
     return extensions;
 }
 
-TVulkanDeviceExtensionArray VulkanDeviceExtension::GetMESupportedDeviceExtensions() {
-    TVulkanDeviceExtensionArray extensions;
-
-#define ADD_EXTENSION(ext_name) extensions.emplace_back(std::make_unique<VulkanDeviceExtension>(ext_name))
-    // generic simple extensions
-    ADD_EXTENSION(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
-    // timeline semaphore extensions
-    ADD_EXTENSION(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME);
-    // raytracing extensions
-
-    // vendor extensions
-
-    // debug extensions
-
-    // platform specific extensions
-    VulkanPlatform::GetDeviceExtensions(extensions);
-
-#undef ADD_EXTENSION
-
-    return extensions;
-}
-
 TExtensionPropsArray VulkanDeviceExtension::GetDriverSupportedDeviceExtensions(VkPhysicalDevice _gpu, const char* _layer_name) {
     TExtensionPropsArray ext_props;
 
@@ -158,7 +136,6 @@ public:
     void PreGpuProperties(VkPhysicalDeviceProperties2& _gpu_properties2) override final {
         AddToPNext(_gpu_properties2, m_ray_tracing_pipeline_props);
     }
-
     void PreCreateDevice(VkDeviceCreateInfo& _device_create_info) override final {
         AddToPNext(_device_create_info, m_ray_tracing_pipeline_features);
     }
@@ -187,3 +164,47 @@ public:
 private:
     VkPhysicalDeviceRayQueryFeaturesKHR m_ray_query_features;
 };
+
+class VulkanKHRTimelineSemaphoreExtension : public VulkanDeviceExtension {
+public:
+    VulkanKHRTimelineSemaphoreExtension()
+        : VulkanDeviceExtension(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME),
+          m_timeline_semaphore_features(
+              VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES_KHR,
+              VK_NULL_HANDLE,
+              VK_TRUE) {}
+
+    void PreGpuFeatures(VkPhysicalDeviceFeatures2& _gpu_features2) override final {
+        AddToPNext(_gpu_features2, m_timeline_semaphore_features);
+    }
+    void PreGpuProperties(VkPhysicalDeviceProperties2& _gpu_properties2) override {
+    }
+    void PreCreateDevice(VkDeviceCreateInfo& _device_create_info) override final {
+        AddToPNext(_device_create_info, m_timeline_semaphore_features);
+    }
+
+private:
+    VkPhysicalDeviceTimelineSemaphoreFeatures m_timeline_semaphore_features;
+};
+
+TVulkanDeviceExtensionArray VulkanDeviceExtension::GetMESupportedDeviceExtensions() {
+    TVulkanDeviceExtensionArray extensions;
+
+#define ADD_EXTENSION(ext_name) extensions.emplace_back(std::make_unique<VulkanDeviceExtension>(ext_name))
+    // generic simple extensions
+    ADD_EXTENSION(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+    // timeline semaphore extensions
+    extensions.emplace_back(std::make_unique<VulkanKHRTimelineSemaphoreExtension>());
+    // raytracing extensions
+
+    // vendor extensions
+
+    // debug extensions
+
+    // platform specific extensions
+    VulkanPlatform::GetDeviceExtensions(extensions);
+
+#undef ADD_EXTENSION
+
+    return extensions;
+}
