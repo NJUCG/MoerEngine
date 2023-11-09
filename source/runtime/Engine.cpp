@@ -119,6 +119,7 @@ namespace Moer {
             dependency_info.texture_barrier_count = 1;
             dependency_info.p_texture_barriers    = texture_barriers.data();
             present_fence->Wait(frame_index);
+
             gui_command_list->Reset();
 
             gui_command_list->Open();

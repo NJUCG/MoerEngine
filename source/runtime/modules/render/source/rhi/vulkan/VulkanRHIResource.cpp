@@ -708,8 +708,9 @@ VkPipelineStageFlags2 VulkanEnumTranslator::METoVkPipelineStageFlags2(ERHIPipeli
             return VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_NV;
         case PS_COMMAND_PREPROCESS_BIT_NV:
             return VK_PIPELINE_STAGE_2_COMMAND_PREPROCESS_BIT_NV;
+        default:
+            return VkPipelineStageFlags2(_flags);// MARK...
     }
-    return VkPipelineStageFlags2(_flags);// MARK...
 }
 
 VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) {
@@ -884,6 +885,7 @@ void VulkanRHISampler::GenerateSamplerFromInitializer(const VulkanDevice* _devic
     sampler_create_info.borderColor   = _initializer.border_color == 0 ? VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK : VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
 
     VK_CHECK_RESULT(vkCreateSampler(*_device, &sampler_create_info, nullptr, &m_sampler));
+    m_image_layout = VulkanEnumTranslator::METoVKImageLayout(_initializer.texture_layout);
 }
 
 VkFilter VulkanRHISampler::METoVKMinMagFilterMode(ESamplerFilter _filter) {

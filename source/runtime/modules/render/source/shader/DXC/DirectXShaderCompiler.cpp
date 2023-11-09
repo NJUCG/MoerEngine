@@ -238,6 +238,7 @@ bool DXCompiler::IsSupportTarget(const ShaderTargetInfo& _target_info) {
             b_support_shader_type = true;
             break;
         case ST_Num: break;
+        default: break;
     }
     return b_support_platform && b_support_shader_type;
 }
