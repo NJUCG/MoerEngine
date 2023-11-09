@@ -21,9 +21,9 @@ public:
     virtual void SetBatchedShaderParameter(const RHIBatchedShaderParameters& _parameters) = 0;
     virtual void SetPipelineState(RHIGraphicsPipelineState* _graphics_pso)                = 0;
     virtual void Open() {}
-    virtual void Close()                                                  = 0;
-    virtual void Reset(RHIGraphicsPipelineState* _graphics_pso = nullptr) = 0;
-    virtual void ClearState(RHIGraphicsPipelineState* _graphics_pso)      = 0;
+    virtual void Close()                                             = 0;
+    virtual void Reset()                                             = 0;
+    virtual void ClearState(RHIGraphicsPipelineState* _graphics_pso) = 0;
 
     virtual void DrawIndexedInstanced(
         uint32_t _index_count,

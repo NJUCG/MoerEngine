@@ -15,6 +15,7 @@ struct RHISamplerInitializer {
     RHISamplerInitializer() = default;
     explicit RHISamplerInitializer(
         ESamplerFilter                      _filter,
+        ETextureLayout                      _texture_layout,
         ESamplerAddressMode                 _address_mode_u = SAM_REPEAT,
         ESamplerAddressMode                 _address_mode_v = SAM_REPEAT,
         ESamplerAddressMode                 _address_mode_w = SAM_REPEAT,
@@ -36,6 +37,7 @@ struct RHISamplerInitializer {
           compare_op(_compare_op) {}
 
     EnumInByte<ESamplerFilter>          filter         = SF_NEAREST;
+    ETextureLayout                      texture_layout = ETextureLayout::TEXTURE_LAYOUT_UNDEFINED;
     EnumInByte<ESamplerAddressMode>     address_mode_u = SAM_REPEAT;
     EnumInByte<ESamplerAddressMode>     address_mode_v = SAM_REPEAT;
     EnumInByte<ESamplerAddressMode>     address_mode_w = SAM_REPEAT;
