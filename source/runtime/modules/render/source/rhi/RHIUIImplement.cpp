@@ -70,8 +70,16 @@ bool RHI::GUIInit(uint32_t _num_frames_in_flight) {
     io.BackendRendererName     = "Moer";
     io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;
     io.BackendFlags |= ImGuiBackendFlags_RendererHasViewports;
-    ImGuiViewport* main_viewport    = ImGui::GetMainViewport();
-    main_viewport->RendererUserData = IM_NEW(GuiViewportData)();
+    ImGuiViewport*   main_viewport  = ImGui::GetMainViewport();
+    GuiViewportData* viewport_data  = IM_NEW(GuiViewportData)();
+    main_viewport->RendererUserData = viewport_data;
+
+    viewport_data->render_buffers = new GuiFrameRenderBuffers[_num_frames_in_flight];
+    for (uint32_t i = 0; i < _num_frames_in_flight; i++) {
+        GuiFrameRenderBuffers* render_buffers = &viewport_data->render_buffers[i];
+        render_buffers->vertex_buffer         = nullptr;
+        render_buffers->index_buffer          = nullptr;
+    }
 
     if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
         GuiInitPlatformInterface();
@@ -124,14 +132,25 @@ void RHI::GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list) 
 
     if (render_buffers->vertex_buffer == nullptr || render_buffers->vertex_buffer->GetSize() < draw_data->TotalVtxCount * sizeof(ImDrawVert)) {
         //delete the old one and create new
-        render_buffers->vertex_buffer->DeRef();
+        if (render_buffers->vertex_buffer != nullptr)
+            render_buffers->vertex_buffer->DeRef();
         uint32_t new_size             = (draw_data->TotalVtxCount + 4096) * sizeof(ImDrawVert);
-        render_buffers->vertex_buffer = g_rhi->RHICreateBuffer(RHIBufferCreateInfo::Create(new_size, sizeof(ImDrawVert), EBufferUsageFlags::VERTEX_BUFFER));
+        render_buffers->vertex_buffer = g_rhi->RHICreateBuffer(
+            RHIBufferCreateInfo::Create(
+                new_size,
+                sizeof(ImDrawVert),
+                EBufferUsageFlags::VERTEX_BUFFER | EBufferUsageFlags::CPU_VISIBLE));
     }
     if (render_buffers->index_buffer == nullptr || render_buffers->index_buffer->GetSize() < draw_data->TotalIdxCount * sizeof(ImDrawIdx)) {
-        render_buffers->index_buffer->DeRef();
+
+        if (render_buffers->index_buffer != nullptr)
+            render_buffers->index_buffer->DeRef();
         uint32_t new_size            = (draw_data->TotalIdxCount + 8192) * sizeof(ImDrawIdx);
-        render_buffers->index_buffer = g_rhi->RHICreateBuffer(RHIBufferCreateInfo::Create(new_size, sizeof(ImDrawIdx), EBufferUsageFlags::INDEX_BUFFER));
+        render_buffers->index_buffer = g_rhi->RHICreateBuffer(
+            RHIBufferCreateInfo::Create(
+                new_size,
+                sizeof(ImDrawIdx),
+                EBufferUsageFlags::INDEX_BUFFER | EBufferUsageFlags::CPU_VISIBLE));
     }
 
     ImDrawVert* vertex_dst = nullptr;
@@ -183,7 +202,7 @@ void RHI::GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list) 
                 RHIBatchedShaderParameters batched_params;
                 batched_params.SetParameters(frag_shader, params);
 
-                _ui_command_list->SetBatchedShaderParameter(batched_params);
+                g_rhi->RHISetBatchedShaderParameters(backend_data->pipeline, batched_params);
                 _ui_command_list->SetScissor(r);
                 _ui_command_list->DrawIndexedInstanced(cmd->ElemCount, 1, cmd->IdxOffset, cmd->VtxOffset + global_vertex_offset, 0);
             }
@@ -212,9 +231,6 @@ void SetupRenderState(ImDrawData* draw_data, RHIGraphicsCommandList* commandList
             };
         memcpy(&param.vertexBuffer.mvp, mvp, sizeof(mvp));
     }
-    ImGuiShaderFrag::Parameters frag_param;
-    frag_param.sampler0 = backend_data->font_sampler;
-
     ViewPort view_port(0, 0, draw_data->DisplaySize.x, draw_data->DisplaySize.y, 0.f, 1.f);
     commandList->SetViewPort(view_port);
 
@@ -225,10 +241,10 @@ void SetupRenderState(ImDrawData* draw_data, RHIGraphicsCommandList* commandList
     RHIBatchedShaderParameters batched_params;
 
     batched_params.SetParameters(backend_data->shader_module_vert, param);
-    batched_params.SetParameters(backend_data->shader_module_frag, frag_param);
+
+    g_rhi->RHISetBatchedShaderParameters(backend_data->pipeline, batched_params);
 
     commandList->SetPipelineState(backend_data->pipeline);
-    commandList->SetBatchedShaderParameter(batched_params);
     //blend factor?
 }
 
@@ -327,6 +343,10 @@ bool CreateDeviceObjects() {
     pso_init.depth_stencil_state = g_rhi->RHICreateDepthStencilState(depth_stencil_init);
 
     backend_data->pipeline = g_rhi->RHICreateGraphicsPipelineState(pso_init);
+    // setup backend data
+    backend_data->shader_module_vert = gui_vert;
+    backend_data->shader_module_frag = gui_frag;
+
     //font texture and srv
     CreateFontsTexture();
 
@@ -347,7 +367,7 @@ void CreateFontsTexture() {
         const uint32_t alignment    = 256;
         RHITextureRef  font_texture = nullptr;
 
-        font_texture          = g_rhi->RHICreateTexture(RHITextureCreateInfo::Create("FontTexture2D", ETextureDimension::TEX_2D)
+        font_texture = g_rhi->RHICreateTexture(RHITextureCreateInfo::Create("FontTexture2D", ETextureDimension::TEX_2D)
                                                    .SetNumSamples(1)
                                                    .SetExtent({width, height})
                                                    .SetNumMips(1)
@@ -355,6 +375,7 @@ void CreateFontsTexture() {
                                                    .SetFormat(PF_R8G8B8A8_UNORM)
                                                    .SetUsageFlags(ETextureUsageFlags::SAMPLED | ETextureUsageFlags::SRGB | ETextureUsageFlags::TRANSFER_DST)
                                                    .SetInitialLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED));
+
         uint32_t upload_pitch = (width * 4 + alignment - 1u) & ~(alignment - 1u);
         uint32_t upload_size  = 4 * height * upload_pitch;
 
@@ -369,16 +390,22 @@ void CreateFontsTexture() {
         }
         g_rhi->RHIUnmapBuffer(staging_buffer);
 
-        RHISubresourceRange range{ETextureAspectFlags::COLOR};
-        range.num_mips = font_texture->GetNumMips();
+        RHISubresourceRange range{ETextureAspectFlags::COLOR,
+                                  0,
+                                  1,
+                                  0,
+                                  1,
+                                  0,
+                                  1};
 
         RHITextureBarrierInfo tex_barriers[2];
 
-        tex_barriers[0].src_layout         = TEXTURE_LAYOUT_UNDEFINED;
-        tex_barriers[0].dst_layout         = TEXTURE_LAYOUT_TRANSFER_DST;
-        tex_barriers[0].src_access         = ERHIAccessFlags::UNDEFINED;
-        tex_barriers[0].dst_access         = ERHIAccessFlags::TRANSFER_WRITE;
-        tex_barriers[0].dst_stage          = PS_TRANSFER;
+        tex_barriers[0].src_layout = TEXTURE_LAYOUT_UNDEFINED;
+        tex_barriers[0].dst_layout = TEXTURE_LAYOUT_TRANSFER_DST;
+        tex_barriers[0].src_access = ERHIAccessFlags::UNDEFINED;
+        tex_barriers[0].dst_access = ERHIAccessFlags::TRANSFER_WRITE;
+        tex_barriers[0].dst_stage  = PS_TRANSFER;
+
         tex_barriers[0].p_texture          = font_texture;
         tex_barriers[0].sub_resource_range = range;
 
@@ -400,7 +427,7 @@ void CreateFontsTexture() {
         command_list->Open();
         command_list->SetPipelineBarrier(font_create_barriers);
 
-        RHISubresourceSlice        resource_slice(ETextureAspectFlags::COLOR, 0, 0);
+        RHISubresourceSlice        resource_slice(ETextureAspectFlags::COLOR, 0, 0, 1, 0, 1);
         RHICopyBufferToTextureInfo copy_info(
             ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST,
             {0, 0, 0},
@@ -418,6 +445,14 @@ void CreateFontsTexture() {
         font_copy_barriers.texture_barrier_count = 1;
 
         command_list->SetPipelineBarrier(font_copy_barriers);
+
+        RHIBatchedShaderParameters  batched_params;
+        ImGuiShaderFrag::Parameters params;
+        params.sampler0 = backend_data->font_sampler;
+        params.texture0 = backend_data->font_view;
+
+        batched_params.SetParameters(backend_data->shader_module_frag, params);
+        g_rhi->RHISetBatchedShaderParameters(backend_data->pipeline, batched_params);
 
         command_list->Close();
 
@@ -437,7 +472,8 @@ void CreateFontsTexture() {
         auto srv_info = RHIViewInfo::CreateTextureSRVInfo()
                             .SetFormat(PF_R8G8B8A8_UNORM)
                             .SetDimension(ETextureDimension::TEX_2D)
-                            .SetMipRange(0, 1);
+                            .SetMipRange(0, 1)
+                            .SetArrayRange(0, 1);
 
         backend_data->font_view    = g_rhi->RHICreateShaderResourceView(font_texture, srv_info);
         backend_data->font_texture = font_texture;

@@ -2,6 +2,7 @@
 // Created by 74535 on 2023/10/17.
 //
 
+#include "rhi/RHIResourceInitilizer.h"
 #include "rhi/vulkan/misc/VulkanMacroUtils.h"
 #include "VulkanCommandList.h"
 
@@ -411,9 +412,9 @@ void VulkanRHIGraphicsCommandList::SetPipelineBarrier(const RHIBarrierDependency
         image_barriers[i].image                           = vk_texture->GetHandle();// 2. MARK... layout transition need image has 'VK_IMAGE_USAGE_TRANSFER_DST_BIT'
         image_barriers[i].subresourceRange.aspectMask     = VulkanEnumTranslator::METoVKImageAspectFlags(_dependency.p_texture_barriers[i].sub_resource_range.aspect);
         image_barriers[i].subresourceRange.baseMipLevel   = _dependency.p_texture_barriers[i].sub_resource_range.mip_index;
-        image_barriers[i].subresourceRange.levelCount     = _dependency.p_texture_barriers[i].sub_resource_range.num_mips;// 1. MARK... levelCount + baseMipLevel must <= image mip levels
+        image_barriers[i].subresourceRange.levelCount     = _dependency.p_texture_barriers[i].sub_resource_range.num_mips == RHISubresourceRange::s_all ? VK_REMAINING_MIP_LEVELS : _dependency.p_texture_barriers[i].sub_resource_range.num_mips;// 1. MARK... levelCount + baseMipLevel must <= image mip levels
         image_barriers[i].subresourceRange.baseArrayLayer = _dependency.p_texture_barriers[i].sub_resource_range.array_index;
-        image_barriers[i].subresourceRange.layerCount     = _dependency.p_texture_barriers[i].sub_resource_range.array_count;
+        image_barriers[i].subresourceRange.layerCount     = _dependency.p_texture_barriers[i].sub_resource_range.array_count == RHISubresourceRange::s_all ? VK_REMAINING_ARRAY_LAYERS : _dependency.p_texture_barriers[i].sub_resource_range.array_count;// 1. MARK... layerCount + baseArrayLayer must <= image array layers
     }
 
     VkDependencyInfo dependency_info{};
@@ -607,19 +608,20 @@ VkRenderingAttachmentInfo VulkanRHIGraphicsCommandList::FromColorAttachmentInfo(
     attachment_info.clearValue.color.float32[3] = _color_attachment_info.color_attachment_view.clear_attachment.value.color.float32[3];
 
     auto* resolve_texture_view = _color_attachment_info.resolve_attachment_view.texture_view;
-    if (resolve_texture_view->IsSRV()) {
-        auto* resolve_texture_srv        = static_cast<VulkanRHIShaderResourceView*>(resolve_texture_view);
-        attachment_info.resolveImageView = resolve_texture_srv->GetView();
-    } else if (resolve_texture_view->IsUAV()) {
-        auto* resolve_texture_uav        = static_cast<VulkanRHIUnorderedAccessView*>(resolve_texture_view);
-        attachment_info.resolveImageView = resolve_texture_uav->GetView();
-    } else {
-        LOG_CRITICAL("Invalid resolve texture view type: {}.", typeid(*resolve_texture_view).name());
-        return attachment_info;
+    if (resolve_texture_view != nullptr) {
+        if (resolve_texture_view->IsSRV()) {
+            auto* resolve_texture_srv        = static_cast<VulkanRHIShaderResourceView*>(resolve_texture_view);
+            attachment_info.resolveImageView = resolve_texture_srv->GetView();
+        } else if (resolve_texture_view->IsUAV()) {
+            auto* resolve_texture_uav        = static_cast<VulkanRHIUnorderedAccessView*>(resolve_texture_view);
+            attachment_info.resolveImageView = resolve_texture_uav->GetView();
+        } else {
+            LOG_CRITICAL("Invalid resolve texture view type: {}.", typeid(*resolve_texture_view).name());
+            return attachment_info;
+        }
+        attachment_info.resolveMode        = VK_RESOLVE_MODE_AVERAGE_BIT;
+        attachment_info.resolveImageLayout = VulkanEnumTranslator::METoVKImageLayout(_color_attachment_info.resolve_attachment_view.required_layout);
     }
-
-    attachment_info.resolveMode        = VK_RESOLVE_MODE_AVERAGE_BIT;
-    attachment_info.resolveImageLayout = VulkanEnumTranslator::METoVKImageLayout(_color_attachment_info.resolve_attachment_view.required_layout);
 
     return attachment_info;
 }
@@ -630,7 +632,9 @@ VkRenderingAttachmentInfo VulkanRHIGraphicsCommandList::FromDepthStencilAttachme
     attachment_info.pNext = nullptr;
 
     auto* depth_stencil_view = _depth_stencil_attachment_info.depth_stencil_attachment_view.texture_view;
-
+    if (depth_stencil_view == nullptr) {
+        return attachment_info;
+    }
     if (depth_stencil_view->IsSRV()) {
         auto* depth_stencil_srv   = static_cast<VulkanRHIShaderResourceView*>(depth_stencil_view);
         attachment_info.imageView = depth_stencil_srv->GetView();

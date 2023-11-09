@@ -841,6 +841,9 @@ public:
     ETextureUsageFlags GetUsageFlags() const {
         return GetInfo().usage;
     }
+    EPixelFormat GetUAVFormat() const {
+        return GetInfo().uav_format;
+    }
     RHIClearAttachment GetClearAttachment() const { return GetInfo().clear_attachment; }
 
 protected:
@@ -923,7 +926,7 @@ struct RHITextureBarrierInfo : public RHIBarrierInfo {
         : RHIBarrierInfo(),
           p_texture(nullptr),
           src_layout(TEXTURE_LAYOUT_UNDEFINED),
-          dst_layout(TEXTURE_LAYOUT_UNDEFINED) {}
+          dst_layout(TEXTURE_LAYOUT_UNDEFINED), sub_resource_range() {}
     RHITextureBarrierInfo(
         ERHIPipelineStageFlags _src_stage,
         ERHIPipelineStageFlags _dst_stage,
@@ -1065,6 +1068,8 @@ public:
     virtual void WaitForQueueComplete(class RHICommandQueue* _command_queue, RHIFence* _optional_fence) = 0;
 
     virtual const RHIViewportInfo& GetViewportInfo() const { return info; }
+
+    virtual ViewPort GetViewportExtent() const = 0;
 };
 
 #pragma region viewable resources view definitions
@@ -1089,7 +1094,7 @@ struct RHIViewInfo {
 
     struct BaseViewInfo {
         EViewType    view_type;
-        EPixelFormat format;
+        EPixelFormat format{PF_UNDEFINED};
     };
 
     struct Buffer : public BaseViewInfo {
@@ -1253,7 +1258,9 @@ struct RHIViewInfo::BufferSRV::Initializer : public RHIViewInfo {
     friend RHICommandListBase;
 
 protected:
-    Initializer() : RHIViewInfo(EViewType::BUFFER_SRV) {}
+    Initializer() : RHIViewInfo(EViewType::BUFFER_SRV) {
+        buffer.srv.format = PF_UNDEFINED;
+    }
 
 public:
     Initializer& SetType(EBufferType _type) {
@@ -1292,7 +1299,9 @@ struct RHIViewInfo::BufferUAV::Initializer : public RHIViewInfo {
     friend RHICommandListBase;
 
 protected:
-    Initializer() : RHIViewInfo(EViewType::BUFFER_UAV) {}
+    Initializer() : RHIViewInfo(EViewType::BUFFER_UAV) {
+        buffer.uav.format = PF_UNDEFINED;
+    }
 
 public:
     Initializer& SetType(EBufferType _type) {
@@ -1331,7 +1340,9 @@ struct RHIViewInfo::TextureSRV::Initializer : public RHIViewInfo {
     friend RHICommandListBase;
 
 protected:
-    Initializer() : RHIViewInfo(EViewType::TEXTURE_SRV) {}
+    Initializer() : RHIViewInfo(EViewType::TEXTURE_SRV) {
+        texture.srv.format = PF_UNDEFINED;
+    }
 
 public:
     Initializer& SetDimension(ETextureDimension _dimension) {
@@ -1367,7 +1378,10 @@ struct RHIViewInfo::TextureUAV::Initializer : public RHIViewInfo {
     friend RHICommandListBase;
 
 protected:
-    Initializer() : RHIViewInfo(EViewType::TEXTURE_UAV) { texture.uav.mip_num = 1; }
+    Initializer() : RHIViewInfo(EViewType::TEXTURE_UAV) {
+        texture.uav.mip_num = 1;
+        texture.uav.format  = PF_UNDEFINED;
+    }
 
 public:
     Initializer& SetDimension(ETextureDimension _dimension) {
@@ -2057,15 +2071,6 @@ protected:
     std::vector<RHIRayTracingShader*> ray_miss_table;
     std::vector<RHIRayTracingShader*> ray_hit_table;
     std::vector<RHIRayTracingShader*> ray_callable_table;
-};
-
-struct ViewPort {
-    float x;
-    float y;
-    float width;
-    float height;
-    float min_depth;
-    float max_depth;
 };
 
 /* struct for RenderPassInfo Only, constructed by texture_view and Pass-Required texture layout */

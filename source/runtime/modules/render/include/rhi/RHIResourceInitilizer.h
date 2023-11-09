@@ -334,7 +334,6 @@ struct RHISubresourceRange : public RHISubresourceSlice {
                                                                                         _aspect,
                                                                                         0,
                                                                                         0){};
-
     RHISubresourceRange(
         ETextureAspectFlags _aspect,
         uint32_t            _mip_index,

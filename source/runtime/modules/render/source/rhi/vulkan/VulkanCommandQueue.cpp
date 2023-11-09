@@ -35,27 +35,29 @@ void VulkanRHICommandQueue::SubmitCommands(
     const auto& signal_infos = _submit_info->GetSignalInfos();
     const auto& wait_infos   = _submit_info->GetWaitInfos();
 
-    VkSubmitInfo2 submits;
+    VkSubmitInfo2 submits{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
 
     std::vector<VkCommandBufferSubmitInfo> cmd_submit_infos(_num_command_lists);
     for (uint32_t cmd_index = 0; cmd_index < _num_command_lists; cmd_index++) {
         cmd_submit_infos[cmd_index].commandBuffer = (VkCommandBuffer)(_command_lists[cmd_index].GetNativeHandle());
         cmd_submit_infos[cmd_index].sType         = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
     }
-    std::vector<VkSemaphoreSubmitInfo> vk_signal_infos(signal_infos.size());
-    std::vector<VkSemaphoreSubmitInfo> vk_wait_infos(wait_infos.size());
+    std::vector<VkSemaphoreSubmitInfo> vk_signal_infos;
+    vk_signal_infos.reserve(signal_infos.size());
+    std::vector<VkSemaphoreSubmitInfo> vk_wait_infos;
+    vk_wait_infos.reserve(wait_infos.size());
 
     uint32_t extra_biranry_semaphores = 0;
     for (uint32_t signal_index = 0; signal_index < signal_infos.size(); signal_index++) {
         VulkanRHIFence* target_fence = (VulkanRHIFence*)signal_infos[signal_index].signal_fence;
-        vk_signal_infos.emplace_back(VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO,
+        vk_signal_infos.emplace_back(VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
                                      VK_NULL_HANDLE,
                                      target_fence->GetSemaphoreHandle(),
                                      signal_infos[signal_index].signal_value);
 
         //for binary signals to present stage wait
         if (target_fence->GetBinaryHandle() != VK_NULL_HANDLE) {
-            vk_signal_infos.emplace_back(VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO,
+            vk_signal_infos.emplace_back(VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
                                          VK_NULL_HANDLE,
                                          target_fence->GetBinaryHandle(),
                                          0);

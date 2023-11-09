@@ -895,6 +895,15 @@ struct SubpassSettings {
     uint8_t index = 0;
 };
 static_assert(sizeof(SubpassSettings) == 2);
+
+struct ViewPort {
+    float x;
+    float y;
+    float width;
+    float height;
+    float min_depth;
+    float max_depth;
+};
 #pragma endregion
 
 #endif// !RHI_PLATFORM_COMMON_H
