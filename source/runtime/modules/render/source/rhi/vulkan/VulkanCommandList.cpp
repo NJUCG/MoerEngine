@@ -112,11 +112,11 @@ void VulkanRHIGraphicsCommandList::Close() {
     VK_CHECK_RESULT(vkEndCommandBuffer(m_command_buffer));
 }
 
-void VulkanRHIGraphicsCommandList::Reset(RHIGraphicsPipelineState* _graphics_pso) {
+void VulkanRHIGraphicsCommandList::Reset() {
     // MARK...
     // need to implemented
-    auto* vk_pipelie_state = static_cast<const VulkanRHIGraphicsPipelineState*>(_graphics_pso);
-    VK_CHECK_NULLPTR(vk_pipelie_state, "Reset: graphics pipeline state is nullptr!", return);
+    // auto* vk_pipelie_state = static_cast<const VulkanRHIGraphicsPipelineState*>(_graphics_pso);
+    // VK_CHECK_NULLPTR(vk_pipelie_state, "Reset: graphics pipeline state is nullptr!", return);
     vkResetCommandBuffer(m_command_buffer, VK_COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT);
 }
 
@@ -460,7 +460,7 @@ void VulkanRHIGraphicsCommandList::SetViewPort(const ViewPort& _viewport) {
     vk_viewport.height   = _viewport.height;
     vk_viewport.minDepth = _viewport.min_depth;
     vk_viewport.maxDepth = _viewport.max_depth;
-    vkCmdSetViewportWithCount(m_command_buffer, 1, &vk_viewport);
+    vkCmdSetViewport(m_command_buffer, 0, 1, &vk_viewport);
 }
 
 void VulkanRHIGraphicsCommandList::SetScissors(uint32_t num_scissors, const Rect2D* p_scissors) {
@@ -481,7 +481,8 @@ void VulkanRHIGraphicsCommandList::SetScissor(const Rect2D& _scissor) {
     vk_scissor.offset.y      = _scissor.offset.y;
     vk_scissor.extent.width  = _scissor.extent.width;
     vk_scissor.extent.height = _scissor.extent.height;
-    vkCmdSetScissorWithCount(m_command_buffer, 1, &vk_scissor);
+    // vkCmdSetScissorWithCount(m_command_buffer, 1, &vk_scissor);
+    vkCmdSetScissor(m_command_buffer, 0, 1, &vk_scissor);
 }
 
 void VulkanRHIGraphicsCommandList::SetBlendFactors(const float* _factors) {

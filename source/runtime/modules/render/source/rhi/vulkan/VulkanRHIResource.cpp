@@ -1637,8 +1637,9 @@ VulkanRHIFence* VulkanViewport::GetAcquireNextImageFence() {
 RHIViewportNextBackBufferInfo VulkanViewport::GetNextFrameBackBufferInfo() {
     uint32_t index = swapchain->AcquireNextImage(image_aquire_fences[frame_offset]->GetBinaryHandle());
     if (index != UINT32_MAX) {
-        frame_offset = (frame_offset + 1) % max_frame_in_flight;
-        return {.backbuffer_index = index, .backbuffer_ready_fence = image_aquire_fences[frame_offset - 1]};
+        auto current_frame = frame_offset;
+        frame_offset       = (frame_offset + 1) % max_frame_in_flight;
+        return {.backbuffer_index = index, .backbuffer_ready_fence = image_aquire_fences[current_frame]};
     }
     //recreate
     swapchain->Recreate();

@@ -49,8 +49,7 @@ void Test() {
     // glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
     // GLFWwindow* window = glfwCreateWindow(800, 800, "VulkanRHITest", nullptr, nullptr);
-    RHIInitInfo init_info{3};
-    g_rhi = new VulkanRHIImpl(init_info);
+    g_rhi = new VulkanRHIImpl();
 
     g_rhi->Initialize(RHIInitInfo());
     g_rhi->PostInit();

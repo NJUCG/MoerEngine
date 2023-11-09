@@ -118,7 +118,7 @@ namespace Moer {
 
             dependency_info.texture_barrier_count = 1;
             dependency_info.p_texture_barriers    = texture_barriers.data();
-
+            present_fence->Wait(frame_index);
             gui_command_list->Reset();
 
             gui_command_list->Open();
@@ -139,19 +139,21 @@ namespace Moer {
 
             g_rhi->GUIRender(ImGui::GetDrawData(), gui_command_list);
 
+            gui_command_list->EndRenderPass();
+
             RHIBarrierDependencyInfo             texture_dependency_info;
             std::array<RHITextureBarrierInfo, 1> texture_barriers_present;
             texture_barriers_present[0].SetDstTextureLayout(ETextureLayout::TEXTURE_LAYOUT_PRESENT_SRC);
             texture_barriers_present[0].SetSrcTextureLayout(ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT);
             texture_barriers_present[0].p_texture = present_view->GetTexture();
             texture_barriers_present[0].SetSrcAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
+            texture_barriers_present[0].SetSrcStage(PS_COLOR_ATTACHMENT_OUTPUT);
+            texture_barriers_present[0].SetDstStage(PS_NONE);
 
             texture_dependency_info.texture_barrier_count = 1;
-            texture_dependency_info.p_texture_barriers    = texture_barriers.data();
+            texture_dependency_info.p_texture_barriers    = texture_barriers_present.data();
 
             gui_command_list->SetPipelineBarrier(texture_dependency_info);
-
-            gui_command_list->EndRenderPass();
 
             gui_command_list->Close();
 
@@ -164,7 +166,7 @@ namespace Moer {
             //signal this frame present fence
             submit_info.Signal(present_fence, ++frame_index);
 
-            cmd_queue->SubmitCommands(1, gui_command_list);
+            cmd_queue->SubmitCommands(1, gui_command_list, &submit_info);
 
             g_rhi->RHIPresentViewport(main_viewport, present_fence);
         }
