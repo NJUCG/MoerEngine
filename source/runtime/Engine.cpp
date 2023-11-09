@@ -119,10 +119,21 @@ namespace Moer {
             dependency_info.texture_barrier_count = 1;
             dependency_info.p_texture_barriers    = texture_barriers.data();
 
+            RHIBarrierDependencyInfo             texture_dependency_info;
+            std::array<RHITextureBarrierInfo, 1> texture_barriers_present;
+            texture_barriers_present[0].SetDstTextureLayout(ETextureLayout::TEXTURE_LAYOUT_PRESENT_SRC);
+            texture_barriers_present[0].SetSrcTextureLayout(ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT);
+            texture_barriers_present[0].p_texture = present_view->GetTexture();
+            texture_barriers_present[0].SetSrcAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
+
+            texture_dependency_info.texture_barrier_count = 1;
+            texture_dependency_info.p_texture_barriers    = texture_barriers.data();
+
             gui_command_list->Reset();
 
             gui_command_list->Open();
             gui_command_list->SetPipelineBarrier(dependency_info);
+            gui_command_list->SetPipelineBarrier(texture_dependency_info);
 
             RHIRenderPassInfo pass_info;
             pass_info.color_attachments[0].color_attachment_action               = AC_CLEAR_STORE;
@@ -138,18 +149,6 @@ namespace Moer {
             gui_command_list->BeginRenderPass(pass_info, "Imgui Window");
 
             g_rhi->GUIRender(ImGui::GetDrawData(), gui_command_list);
-
-            RHIBarrierDependencyInfo             texture_dependency_info;
-            std::array<RHITextureBarrierInfo, 1> texture_barriers_present;
-            texture_barriers_present[0].SetDstTextureLayout(ETextureLayout::TEXTURE_LAYOUT_PRESENT_SRC);
-            texture_barriers_present[0].SetSrcTextureLayout(ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT);
-            texture_barriers_present[0].p_texture = present_view->GetTexture();
-            texture_barriers_present[0].SetSrcAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
-
-            texture_dependency_info.texture_barrier_count = 1;
-            texture_dependency_info.p_texture_barriers    = texture_barriers.data();
-
-            gui_command_list->SetPipelineBarrier(texture_dependency_info);
 
             gui_command_list->EndRenderPass();
 

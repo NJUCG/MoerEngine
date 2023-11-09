@@ -274,7 +274,7 @@ bool CreateDeviceObjects() {
     if (backend_data->pipeline)
         InvalidateDeviceObjects();
 
-    RHISamplerInitializer sampler_init(ESamplerFilter::SF_LINEAR);
+    RHISamplerInitializer sampler_init(ESamplerFilter::SF_LINEAR, TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     sampler_init.compare_op    = CO_ALWAYS;
     RHISamplerRef sampler      = g_rhi->RHICreateSampler(sampler_init);
     backend_data->font_sampler = sampler;
@@ -587,20 +587,6 @@ void GuiRenderWindow(ImGuiViewport* viewport, void*) {
     dependency_info.texture_barrier_count = 1;
     dependency_info.p_texture_barriers    = texture_barriers.data();
 
-    viewport_data->comand_list->Reset();
-
-    viewport_data->comand_list->Open();
-    viewport_data->comand_list->SetPipelineBarrier(dependency_info);
-
-    RHIRenderPassInfo pass_info;
-    pass_info.color_attachments[0].color_attachment_action               = AC_CLEAR_STORE;
-    pass_info.color_attachments[0].color_attachment_view.texture_view    = present_view;
-    pass_info.color_attachments[0].color_attachment_view.required_layout = ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT;
-
-    viewport_data->comand_list->BeginRenderPass(pass_info, "Imgui Window");
-
-    g_rhi->GUIRender(viewport->DrawData, viewport_data->comand_list);
-
     //transfer present texture layout to present src
     RHIBarrierDependencyInfo             texture_dependency_info;
     std::array<RHITextureBarrierInfo, 1> texture_barriers_present;
@@ -612,7 +598,21 @@ void GuiRenderWindow(ImGuiViewport* viewport, void*) {
     texture_dependency_info.texture_barrier_count = 1;
     texture_dependency_info.p_texture_barriers    = texture_barriers.data();
 
+    viewport_data->comand_list->Reset();
+
+    viewport_data->comand_list->Open();
+
+    viewport_data->comand_list->SetPipelineBarrier(dependency_info);
     viewport_data->comand_list->SetPipelineBarrier(texture_dependency_info);
+
+    RHIRenderPassInfo pass_info;
+    pass_info.color_attachments[0].color_attachment_action               = AC_CLEAR_STORE;
+    pass_info.color_attachments[0].color_attachment_view.texture_view    = present_view;
+    pass_info.color_attachments[0].color_attachment_view.required_layout = ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT;
+
+    viewport_data->comand_list->BeginRenderPass(pass_info, "Imgui Window");
+
+    g_rhi->GUIRender(viewport->DrawData, viewport_data->comand_list);
 
     viewport_data->comand_list->EndRenderPass();
 
