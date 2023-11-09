@@ -92,6 +92,13 @@ namespace Moer {
             WindowContext::GetInstance().Tick();
             g_rhi->GUINewFrame();
 
+            ImGui::NewFrame();
+            {
+                ImGui::Begin("Hello, world!");
+                ImGui::Text("This is some useful text.");
+                ImGui::End();
+            }
+            ImGui::Render();
             RHIViewport* main_viewport   = g_rhi->RHIGetMainViewport();
             auto         next_frame_info = g_rhi->RHIGetNextFrameViewportBufferInfo(main_viewport);
 
@@ -105,7 +112,7 @@ namespace Moer {
             texture_barriers[0].SetSrcTextureLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED);
             texture_barriers[0].p_texture = present_view->GetTexture();
             texture_barriers[0].SetSrcStage(PS_BOTTOM_OF_PIPE);
-            texture_barriers[0].SetDstStage(PS_FRAGMENT_SHADER);
+            texture_barriers[0].SetDstStage(PS_COLOR_ATTACHMENT_OUTPUT);
             texture_barriers[0].SetSrcAccessFlags(ERHIAccessFlags::UNDEFINED);
             texture_barriers[0].SetDstAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
 
@@ -122,9 +129,15 @@ namespace Moer {
             pass_info.color_attachments[0].color_attachment_view.texture_view    = present_view;
             pass_info.color_attachments[0].color_attachment_view.required_layout = ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT;
 
+            auto viewport_extent                = main_viewport->GetViewportExtent();
+            pass_info.render_area.offset.x      = 0;
+            pass_info.render_area.offset.y      = 0;
+            pass_info.render_area.extent.width  = viewport_extent.width;
+            pass_info.render_area.extent.height = viewport_extent.height;
+
             gui_command_list->BeginRenderPass(pass_info, "Imgui Window");
 
-            g_rhi->GUIRender(ImGui::GetMainViewport()->DrawData, gui_command_list);
+            g_rhi->GUIRender(ImGui::GetDrawData(), gui_command_list);
 
             RHIBarrierDependencyInfo             texture_dependency_info;
             std::array<RHITextureBarrierInfo, 1> texture_barriers_present;

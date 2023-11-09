@@ -49,8 +49,8 @@ void Test() {
     // glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
     // GLFWwindow* window = glfwCreateWindow(800, 800, "VulkanRHITest", nullptr, nullptr);
-
-    g_rhi = new VulkanRHIImpl();
+    RHIInitInfo init_info{3};
+    g_rhi = new VulkanRHIImpl(init_info);
 
     g_rhi->Initialize(RHIInitInfo());
     g_rhi->PostInit();
@@ -131,7 +131,7 @@ void Test() {
     params.write_target = test_view;
     RHIBatchedShaderParameters batched_params;
     batched_params.SetParameters(test_shader_vs, params);
-    command_list->SetBatchedShaderParameter(batched_params);
+    // command_list->SetBatchedShaderParameter(batched_params);
 
     command_list->DrawIndexedInstanced(1, 1, 0, 0, 0);
 

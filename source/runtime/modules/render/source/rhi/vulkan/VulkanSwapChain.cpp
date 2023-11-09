@@ -40,7 +40,7 @@ void VulkanSwapChain::Create(uint32_t* width, uint32_t* height, bool vsync) {
     auto details      = VkUtil::QuerySwapChainSupport(device->GetGpu(), m_surface);
     surface_format    = ChooseSwapSurfaceFormat(details.formats);
     auto present_mode = ChooseSwapPresentMode(details.present_modes, true);
-    auto extent       = ChooseSwapExtent(width, height, details.capabilities);
+    extent            = ChooseSwapExtent(width, height, details.capabilities);
     extent.width      = *width;
     extent.height     = *height;
     // set the number of images
@@ -101,7 +101,8 @@ uint32_t VulkanSwapChain::AcquireNextImage(VkSemaphore _aquire_semaphore) {
     // VkSemaphore aquire_semaphore = m_image_acquired_semaphores[current_frame_offset];
     aquire_info.semaphore = _aquire_semaphore;
 
-    VkResult result = vkAcquireNextImage2KHR(m_device->GetDevice(), &aquire_info, &image_index);
+    VkResult result = vkAcquireNextImageKHR(m_device->GetDevice(), m_swap_chain, UINT64_MAX, aquire_info.semaphore, VK_NULL_HANDLE, &image_index);
+    // VkResult result = vkAcquireNextImage2KHR(m_device->GetDevice(), &aquire_info, &image_index);
     //probably caused by resize
     if (result == VK_ERROR_OUT_OF_DATE_KHR) {
         //not to render this frame

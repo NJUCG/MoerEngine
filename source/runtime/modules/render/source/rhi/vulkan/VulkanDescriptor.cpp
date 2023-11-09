@@ -30,7 +30,7 @@ bool VulkanDescriptorAllocator::Allocate(const VulkanDescriptorSetsLayout& _layo
     }
 
     uint32_t set_count = _layout.GetDescriptorSetCount();
-    _sets.reserve(set_count);
+    _sets.resize(set_count);
 
     VkDescriptorSetAllocateInfo alloc_info{};
     alloc_info.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;

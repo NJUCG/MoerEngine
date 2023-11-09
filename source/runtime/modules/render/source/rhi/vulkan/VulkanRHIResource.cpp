@@ -656,6 +656,59 @@ VkFilter VulkanEnumTranslator::METoVKImageFilter(ESamplerFilter _filter) {
 }
 
 VkPipelineStageFlags2 VulkanEnumTranslator::METoVkPipelineStageFlags2(ERHIPipelineStageFlags _flags) {
+    // translate flags
+    switch (_flags) {
+        case PS_NONE:
+            return VK_PIPELINE_STAGE_2_NONE;
+        case PS_TOP_OF_PIPE:
+            return VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+        case PS_DRAW_INDIRECT:
+            return VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+        case PS_VERTEX_INPUT:
+            return VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT;
+        case PS_VERTEX_SHADER:
+            return VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
+        case PS_TESSELLATION_CONTROL_SHADER:
+            return VK_PIPELINE_STAGE_2_TESSELLATION_CONTROL_SHADER_BIT;
+        case PS_TESSELLATION_EVALUATION_SHADER:
+            return VK_PIPELINE_STAGE_2_TESSELLATION_EVALUATION_SHADER_BIT;
+        case PS_GEOMETRY_SHADER:
+            return VK_PIPELINE_STAGE_2_GEOMETRY_SHADER_BIT;
+        case PS_FRAGMENT_SHADER:
+            return VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        case PS_EARLY_FRAGMENT_TESTS:
+            return VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT;
+        case PS_LATE_FRAGMENT_TESTS:
+            return VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+        case PS_COLOR_ATTACHMENT_OUTPUT:
+            return VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        case PS_COMPUTE_SHADER:
+            return VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        case PS_TRANSFER:
+            return VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+        case PS_BOTTOM_OF_PIPE:
+            return VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT;
+        case PS_HOST:
+            return VK_PIPELINE_STAGE_2_HOST_BIT;
+        case PS_ALL_GRAPHICS:
+            return VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT;
+        case PS_ALL_COMMANDS:
+            return VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        case PS_CONDITIONAL_RENDERING:
+            return VK_PIPELINE_STAGE_2_CONDITIONAL_RENDERING_BIT_EXT;
+        case PS_ACCELERATION_STRUCTURE_BUILD:
+            return VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+        case PS_RAY_TRACING_SHADER:
+            return VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+        case PS_FRAGMENT_DENSITY_PROCESS:
+            return VK_PIPELINE_STAGE_2_FRAGMENT_DENSITY_PROCESS_BIT_EXT;
+        case PS_TASK_SHADER:
+            return VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_NV;
+        case PS_MESH_SHADER:
+            return VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_NV;
+        case PS_COMMAND_PREPROCESS_BIT_NV:
+            return VK_PIPELINE_STAGE_2_COMMAND_PREPROCESS_BIT_NV;
+    }
     return VkPipelineStageFlags2(_flags);// MARK...
 }
 
@@ -1420,7 +1473,7 @@ VkImageUsageFlags VulkanRHITexture::METoVKImageUsageFlags(ETextureUsageFlags _me
 
 #pragma region synchronization
 
-VulkanRHIFence::VulkanRHIFence(VulkanDevice* _device, EFenceUsage _usage) : m_device(_device) {
+VulkanRHIFence::VulkanRHIFence(VulkanDevice* _device, EFenceUsage _usage) : m_device(_device), m_binary(VK_NULL_HANDLE), m_semaphore(VK_NULL_HANDLE) {
     VkSemaphoreCreateInfo create_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
     if (_usage == EFenceUsage::PRESENT) {
         //do nothing
@@ -1431,7 +1484,6 @@ VulkanRHIFence::VulkanRHIFence(VulkanDevice* _device, EFenceUsage _usage) : m_de
     timeline_semaphore_info.initialValue  = 0;
 
     create_info.pNext = &timeline_semaphore_info;
-    m_binary          = VK_NULL_HANDLE;
     VK_CHECK_RESULT(vkCreateSemaphore(*m_device, &create_info, nullptr, &m_semaphore));
 }
 
@@ -1461,6 +1513,11 @@ void VulkanRHIFence::Wait(uint64_t value) {
 #pragma endregion
 
 #pragma region viewable resources view definitions
+VulkanRHIUnorderedAccessView::~VulkanRHIUnorderedAccessView() {
+    if (m_view != VK_NULL_HANDLE) {
+        vkDestroyImageView(device->GetDevice(), m_view, VK_NULL_HANDLE);
+    }
+}
 
 #pragma endregion
 
@@ -1477,6 +1534,29 @@ VulkanViewport::~VulkanViewport() {
     swapchain = nullptr;
 }
 
+VulkanRHIUnorderedAccessView* VulkanViewport::InnerCreateVulkanUnorderedAccessView(VulkanDevice* _device, VulkanRHITexture* texture, const RHIViewInfo& _view_info) {
+    auto* view = new VulkanRHIUnorderedAccessView(_device, texture, _view_info);
+
+    VkImageViewCreateInfo image_view_create_info{};
+    image_view_create_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    image_view_create_info.pNext = nullptr;
+    image_view_create_info.flags = 0;
+
+    image_view_create_info.image                           = texture->GetHandle();
+    image_view_create_info.viewType                        = VulkanEnumTranslator::METoVKImageViewType(_view_info.texture.srv.dimension);
+    image_view_create_info.format                          = _view_info.texture.uav.format == PF_UNDEFINED ? VulkanEnumTranslator::METoVKFormat(texture->GetUAVFormat()) : VulkanEnumTranslator::METoVKFormat(_view_info.texture.uav.format);
+    image_view_create_info.components                      = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
+    image_view_create_info.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;// MARK...
+    image_view_create_info.subresourceRange.baseMipLevel   = _view_info.texture.uav.mip_min;
+    image_view_create_info.subresourceRange.levelCount     = _view_info.texture.uav.mip_num;
+    image_view_create_info.subresourceRange.baseArrayLayer = _view_info.texture.uav.array_min;
+    image_view_create_info.subresourceRange.layerCount     = _view_info.texture.uav.array_num;
+
+    VK_CHECK_RESULT(vkCreateImageView(_device->GetDevice(), &image_view_create_info, nullptr, &view->m_view));
+
+    return view;
+}
+
 void VulkanViewport::InnerCreateResources() {
     uint32_t back_buffer_size = swapchain->m_swap_chain_images.size();
 
@@ -1491,10 +1571,17 @@ void VulkanViewport::InnerCreateResources() {
                                                            .SetFormat(swapchain_format)
                                                            .SetUAVFormat(swapchain_format)
                                                            .SetInitialLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED),
+                                                       swapchain->m_swap_chain_images[index],
                                                        swapchain->m_device);
         swapchain_images[index]->AddRef();
 
-        swapchain_image_uavs[index] = new VulkanRHIUnorderedAccessView(swapchain_images[index], RHIViewInfo::CreateTextureUAVInfo());
+        swapchain_image_uavs[index] = InnerCreateVulkanUnorderedAccessView(
+            swapchain->m_device,
+            swapchain_images[index],
+            RHIViewInfo::CreateTextureUAVInfo()
+                .SetArrayRange(0, 1)
+                .SetDimension(ETextureDimension::TEX_2D)
+                .SetMipLevel(0));
     }
     for (uint32_t index = 0; index < image_aquire_fences.size(); index++) {
         image_aquire_fences[index] = new VulkanRHIFence(swapchain->m_device, EFenceUsage::PRESENT);
@@ -1524,7 +1611,13 @@ void VulkanViewport::ResetResources() {
         swapchain_images[index]->SetAttachedImageInner(swapchain->m_swap_chain_images[index]);
 
         delete swapchain_image_uavs[index];
-        swapchain_image_uavs[index] = new VulkanRHIUnorderedAccessView(swapchain_images[index], RHIViewInfo::CreateTextureUAVInfo());
+        swapchain_image_uavs[index] = InnerCreateVulkanUnorderedAccessView(
+            swapchain->m_device,
+            swapchain_images[index],
+            RHIViewInfo::CreateTextureUAVInfo()
+                .SetArrayRange(0, 1)
+                .SetDimension(ETextureDimension::TEX_2D)
+                .SetMipLevel(0));
     }
     for (uint32_t index = 0; index < image_aquire_fences.size(); index++) {
         delete image_aquire_fences[index];
@@ -1573,6 +1666,9 @@ void VulkanViewport::WaitForQueueComplete(RHICommandQueue* _command_queue, RHIFe
     if (!_command_queue) return;
     VulkanRHICommandQueue* vk_queue = dynamic_cast<VulkanRHICommandQueue*>(_command_queue);
     vkQueueWaitIdle(vk_queue->GetHandle());
+}
+ViewPort VulkanViewport::GetViewportExtent() const {
+    return ViewPort{0, 0, (float)swapchain->extent.width, (float)swapchain->extent.height};
 }
 #pragma endregion
 

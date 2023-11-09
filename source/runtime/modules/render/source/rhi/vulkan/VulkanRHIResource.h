@@ -418,11 +418,13 @@ private:
 
 #pragma region viewable resources view definitions
 
-class VulkanRHIUnorderedAccessView final : public RHIUnorderedAccessView {
+class VulkanRHIUnorderedAccessView final : public RHIUnorderedAccessView, public VulkanDeviceObject {
     friend VulkanRHIImpl;
+    friend VulkanViewport;
 
 public:
-    explicit VulkanRHIUnorderedAccessView(RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIUnorderedAccessView(_resource, _viewInfo) {}
+    virtual ~VulkanRHIUnorderedAccessView();
+    explicit VulkanRHIUnorderedAccessView(VulkanDevice* _device, RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIUnorderedAccessView(_resource, _viewInfo), VulkanDeviceObject(_device) {}
 
     inline VkImageView GetView() const { return m_view; }
 
@@ -435,8 +437,6 @@ class VulkanRHIShaderResourceView final : public RHIShaderResourceView {
 
 public:
     explicit VulkanRHIShaderResourceView(RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIShaderResourceView(_resource, _viewInfo) {}
-
-    explicit VulkanRHIShaderResourceView(VkImageView _view, const RHIViewInfo& _viewInfo) : RHIShaderResourceView(nullptr, _viewInfo), m_view(_view) {}
     inline VkImageView GetView() const { return m_view; }
 
 private:
@@ -476,10 +476,15 @@ public:
 
     virtual void WaitForQueueComplete(class RHICommandQueue* _command_queue, RHIFence* _optional_fence) override;
 
+    virtual ViewPort GetViewportExtent() const override;
+
 private:
-    void                   InnerCreateResources();
-    void                   InnerDestroyResources();
-    void                   ResetResources();
+    void InnerCreateResources();
+    void InnerDestroyResources();
+    void ResetResources();
+
+    VulkanRHIUnorderedAccessView* InnerCreateVulkanUnorderedAccessView(VulkanDevice* _device, VulkanRHITexture* texture, const RHIViewInfo& _view_info);
+
     class VulkanSwapChain* swapchain;
 
     std::vector<VulkanRHIFence*> image_aquire_fences;

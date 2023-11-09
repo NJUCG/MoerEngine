@@ -452,7 +452,7 @@ RHIShaderResourceViewRef VulkanRHIImpl::RHICreateShaderResourceView(RHIViewableR
 
     image_view_create_info.image                           = vk_texture->GetHandle();
     image_view_create_info.viewType                        = VulkanEnumTranslator::METoVKImageViewType(_view_info.texture.srv.dimension);
-    image_view_create_info.format                          = VulkanEnumTranslator::METoVKFormat(_view_info.texture.srv.format);
+    image_view_create_info.format                          = _view_info.texture.srv.format == PF_UNDEFINED ? VulkanEnumTranslator::METoVKFormat(vk_texture->GetUAVFormat()) : VulkanEnumTranslator::METoVKFormat(_view_info.texture.srv.format);
     image_view_create_info.components                      = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
     image_view_create_info.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;// MARK...
     image_view_create_info.subresourceRange.baseMipLevel   = _view_info.texture.srv.mip_min;
@@ -466,19 +466,20 @@ RHIShaderResourceViewRef VulkanRHIImpl::RHICreateShaderResourceView(RHIViewableR
 }
 
 RHIUnorderedAccessViewRef VulkanRHIImpl::RHICreateUnorderedAccessView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) {
-    VulkanRHIUnorderedAccessView* vk_uav = new VulkanRHIUnorderedAccessView(_resource, _view_info);
+
+    auto* vk_texture = static_cast<VulkanRHITexture*>(_resource);
+    VK_CHECK_NULLPTR(vk_texture, "RHICreateUnorderedAccessView: resource to be viewed is nullptr!", return RHIUnorderedAccessViewRef{});
+
+    VulkanRHIUnorderedAccessView* vk_uav = new VulkanRHIUnorderedAccessView(vk_texture->device, _resource, _view_info);
 
     VkImageViewCreateInfo image_view_create_info{};
     image_view_create_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     image_view_create_info.pNext = nullptr;
     image_view_create_info.flags = 0;
 
-    auto* vk_texture = static_cast<VulkanRHITexture*>(_resource);
-    VK_CHECK_NULLPTR(vk_texture, "RHICreateUnorderedAccessView: resource to be viewed is nullptr!", return RHIUnorderedAccessViewRef{});
-
     image_view_create_info.image                           = vk_texture->GetHandle();
     image_view_create_info.viewType                        = VulkanEnumTranslator::METoVKImageViewType(_view_info.texture.uav.dimension);
-    image_view_create_info.format                          = VulkanEnumTranslator::METoVKFormat(_view_info.texture.uav.format);
+    image_view_create_info.format                          = _view_info.texture.srv.format == PF_UNDEFINED ? VulkanEnumTranslator::METoVKFormat(vk_texture->GetUAVFormat()) : VulkanEnumTranslator::METoVKFormat(_view_info.texture.uav.format);
     image_view_create_info.components                      = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
     image_view_create_info.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;// MARK...
     image_view_create_info.subresourceRange.baseMipLevel   = _view_info.texture.uav.mip_min;

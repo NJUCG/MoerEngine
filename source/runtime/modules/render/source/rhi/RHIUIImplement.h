@@ -21,8 +21,8 @@ struct GuiBackendData {
     size_t buffer_memory_alignment;
 
     RHIGraphicsPipelineStateRef pipeline;
-    RHIShaderRef                shader_module_vert;
-    RHIShaderRef                shader_module_frag;
+    RHIVertexShaderRef          shader_module_vert;
+    RHIFragmentShaderRef        shader_module_frag;
 
     // Font data
     RHISamplerRef            font_sampler;
