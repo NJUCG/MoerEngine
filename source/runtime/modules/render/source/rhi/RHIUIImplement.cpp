@@ -204,6 +204,7 @@ void RHI::GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list) 
 
                 g_rhi->RHISetBatchedShaderParameters(backend_data->pipeline, batched_params);
                 _ui_command_list->SetScissor(r);
+                _ui_command_list->SetViewPort(g_rhi->RHIGetMainViewport()->GetViewportExtent());
                 _ui_command_list->DrawIndexedInstanced(cmd->ElemCount, 1, cmd->IdxOffset, cmd->VtxOffset + global_vertex_offset, 0);
             }
         }
