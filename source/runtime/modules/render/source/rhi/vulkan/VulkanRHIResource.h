@@ -106,6 +106,14 @@ public:
 
     void GenerateSamplerFromInitializer(const VulkanDevice* _device, const RHISamplerInitializer& _initializer);
 
+    inline VkSampler GetHandle() const {
+        return m_sampler;
+    }
+
+    inline VkImageLayout GetImageLayout() const {
+        return m_image_layout;
+    }
+
 private:
     VkFilter             METoVKMinMagFilterMode(ESamplerFilter _filter);
     VkSamplerMipmapMode  METoVKMipmapMode(ESamplerFilter _filter);
@@ -113,7 +121,8 @@ private:
     VkCompareOp          METoVKCompareOp(ESamplerCompareFunction _compare_op);
 
 private:
-    VkSampler m_sampler;
+    VkSampler     m_sampler;
+    VkImageLayout m_image_layout;
 };
 
 class VulkanRHIVertexInputState final : public RHIVertexInputState {
