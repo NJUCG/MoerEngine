@@ -78,7 +78,6 @@ EShaderParameterType BindingTypeToParameterType(EShaderBindingBaseType _type) {
 }
 const WCHAR* GetShaderTypeWChar(EShaderType _type) {
     switch (_type) {
-
         case ST_VERTEX:
             return L"vs";
         case ST_GEOMETRY:
@@ -100,6 +99,7 @@ const WCHAR* GetShaderTypeWChar(EShaderType _type) {
         case ST_RAY_CALLABLE:
             return L"lib";
         case ST_Num: break;
+        default: break;
     }
     return L"";
 }

@@ -21,7 +21,7 @@ public:
     void SetPipelineState(RHIGraphicsPipelineState* _graphics_pso) override;
     void Open() override;
     void Close() override;
-    void Reset(RHIGraphicsPipelineState* _graphics_pso) override;
+    void Reset() override;
     void ClearState(RHIGraphicsPipelineState* _graphics_pso) override;
 
     void DrawIndexedInstanced(uint32_t _index_count,
