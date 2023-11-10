@@ -121,6 +121,7 @@ void RHI::GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list) 
 
     ImDrawData*          draw_data       = static_cast<ImDrawData*>(_draw_data);
     Shader*              frag_shader     = ShaderResourceManager::GetShader<ImGuiShaderFrag>();
+    Shader*              vert_shader     = ShaderResourceManager::GetShader<ImGuiShaderVert>();
     RHIFragmentShaderRef frag_rhi_shader = g_rhi->RHICreateFragmentShader(frag_shader);
 
     GuiBackendData*  backend_data  = GetBackendData();
@@ -201,8 +202,10 @@ void RHI::GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list) 
 
                 RHIBatchedShaderParameters batched_params;
                 batched_params.SetParameters(frag_shader, params);
+                batched_params.SetParameters(vert_shader, params);
 
                 g_rhi->RHISetBatchedShaderParameters(backend_data->pipeline, batched_params);
+                _ui_command_list->SetBatchedShaderParameter(batched_params);
                 _ui_command_list->SetScissor(r);
                 _ui_command_list->SetViewPort(g_rhi->RHIGetMainViewport()->GetViewportExtent());
                 _ui_command_list->DrawIndexedInstanced(cmd->ElemCount, 1, cmd->IdxOffset, cmd->VtxOffset + global_vertex_offset, 0);
