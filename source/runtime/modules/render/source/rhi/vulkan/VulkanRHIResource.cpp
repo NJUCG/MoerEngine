@@ -1479,14 +1479,14 @@ VulkanRHIFence::VulkanRHIFence(VulkanDevice* _device, EFenceUsage _usage) : m_de
     VkSemaphoreCreateInfo create_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
     if (_usage == EFenceUsage::PRESENT) {
         //do nothing
-        VK_CHECK_RESULT(vkCreateSemaphore(*m_device, &create_info, nullptr, &m_binary));
+        VK_CHECK_RESULT(vkCreateSemaphore(m_device->GetDevice(), &create_info, nullptr, &m_binary));
     }
     VkSemaphoreTypeCreateInfo timeline_semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
     timeline_semaphore_info.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
     timeline_semaphore_info.initialValue  = 0;
 
     create_info.pNext = &timeline_semaphore_info;
-    VK_CHECK_RESULT(vkCreateSemaphore(*m_device, &create_info, nullptr, &m_semaphore));
+    VK_CHECK_RESULT(vkCreateSemaphore(m_device->GetDevice(), &create_info, nullptr, &m_semaphore));
 }
 
 VulkanRHIFence::~VulkanRHIFence() {
@@ -1500,7 +1500,7 @@ VulkanRHIFence::~VulkanRHIFence() {
 
 uint64_t VulkanRHIFence::GetValue() const {
     uint64_t value;
-    vkGetSemaphoreCounterValue(*m_device, m_semaphore, &value);
+    vkGetSemaphoreCounterValue(m_device->GetDevice(), m_semaphore, &value);
     return value;
 }
 
@@ -1509,7 +1509,7 @@ void VulkanRHIFence::Wait(uint64_t value) {
     info.pSemaphores    = &m_semaphore;
     info.semaphoreCount = 1;
     info.pValues        = &value;
-    vkWaitSemaphores(*m_device, &info, UINT64_MAX);
+    vkWaitSemaphores(m_device->GetDevice(), &info, UINT64_MAX);
 }
 
 #pragma endregion

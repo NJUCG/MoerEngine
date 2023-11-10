@@ -41,13 +41,24 @@ void VulkanRHIGraphicsCommandList::SetBatchedShaderParameter(const RHIBatchedSha
 }
 
 void VulkanRHIGraphicsCommandList::SetPipelineState(RHIGraphicsPipelineState* _graphics_pso) {
-    // MARK...
-    // need to implemented
-    // bind descriptor sets and pipeline
     auto* vk_pso = static_cast<VulkanRHIGraphicsPipelineState*>(_graphics_pso);
     VK_CHECK_NULLPTR(vk_pso, "SetPipelineState: graphics pipeline state is nullptr!", return);
 
+    // bind descriptor sets
+    auto descriptor_sets = vk_pso->GetDescriptorSets();
+    vkCmdBindDescriptorSets(
+        m_command_buffer,
+        VK_PIPELINE_BIND_POINT_GRAPHICS,
+        vk_pso->GetPipelineLayout(),
+        0,
+        descriptor_sets.size(),
+        descriptor_sets.data(),
+        0,
+        nullptr);
+
     vkCmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk_pso->GetHandle());
+
+    // maybe need to implement set Viewports and Scissors
 
     m_current_pipeline_state = vk_pso;
 }
@@ -414,7 +425,7 @@ void VulkanRHIGraphicsCommandList::SetViewPort(const ViewPort& _viewport) {
     vk_viewport.height   = _viewport.height;
     vk_viewport.minDepth = _viewport.min_depth;
     vk_viewport.maxDepth = _viewport.max_depth;
-    vkCmdSetViewport(m_command_buffer, 0, 1, &vk_viewport);
+    vkCmdSetViewportWithCount(m_command_buffer, 1, &vk_viewport);
 }
 
 void VulkanRHIGraphicsCommandList::SetScissors(uint32_t num_scissors, const Rect2D* p_scissors) {
@@ -435,8 +446,7 @@ void VulkanRHIGraphicsCommandList::SetScissor(const Rect2D& _scissor) {
     vk_scissor.offset.y      = _scissor.offset.y;
     vk_scissor.extent.width  = _scissor.extent.width;
     vk_scissor.extent.height = _scissor.extent.height;
-    // vkCmdSetScissorWithCount(m_command_buffer, 1, &vk_scissor);
-    vkCmdSetScissor(m_command_buffer, 0, 1, &vk_scissor);
+    vkCmdSetScissorWithCount(m_command_buffer, 1, &vk_scissor);
 }
 
 void VulkanRHIGraphicsCommandList::SetBlendFactors(const float* _factors) {

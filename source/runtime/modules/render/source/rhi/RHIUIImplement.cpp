@@ -177,7 +177,7 @@ void RHI::GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list) 
     ImVec2 clip_off = draw_data->DisplayPos;
     for (int32_t n = 0; n < draw_data->CmdListsCount; n++) {
         const ImDrawList* cmd_list = draw_data->CmdLists[n];
-        for (int32_t cmd_index; cmd_list->CmdBuffer.Size; cmd_index++) {
+        for (uint32_t cmd_index = 0; cmd_index < cmd_list->CmdBuffer.Size; ++cmd_index) {
             const ImDrawCmd* cmd = &cmd_list->CmdBuffer[cmd_index];
             if (cmd->UserCallback != nullptr) {
                 if (cmd->UserCallback == ImDrawCallback_ResetRenderState) {
