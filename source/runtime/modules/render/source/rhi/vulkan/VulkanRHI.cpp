@@ -299,8 +299,7 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
     pipeline_layout_create_info.pushConstantRangeCount = push_constant_ranges.size();
     pipeline_layout_create_info.pPushConstantRanges    = push_constant_ranges.data();
 
-    VkPipelineLayout pipeline_layout;
-    vkCreatePipelineLayout(*m_device, &pipeline_layout_create_info, nullptr, &pipeline_layout);
+    vkCreatePipelineLayout(m_device->GetDevice(), &pipeline_layout_create_info, nullptr, &vk_pso->m_pipeline_layout);
 
     VkGraphicsPipelineCreateInfo pipeline_create_info{};
     pipeline_create_info.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
@@ -317,13 +316,13 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
     pipeline_create_info.pDepthStencilState  = &depth_stencil_state;
     pipeline_create_info.pColorBlendState    = &color_blend_state;
     pipeline_create_info.pDynamicState       = &dynamic_state;
-    pipeline_create_info.layout              = pipeline_layout;
+    pipeline_create_info.layout              = vk_pso->m_pipeline_layout;
     pipeline_create_info.renderPass          = nullptr;
     pipeline_create_info.subpass             = 0;
     pipeline_create_info.basePipelineHandle  = nullptr;// MARK...
     pipeline_create_info.basePipelineIndex   = -1;
 
-    VK_CHECK_RESULT(vkCreateGraphicsPipelines(*m_device, nullptr, 1, &pipeline_create_info, nullptr, &vk_pso->m_pipeline));
+    VK_CHECK_RESULT(vkCreateGraphicsPipelines(m_device->GetDevice(), nullptr, 1, &pipeline_create_info, nullptr, &vk_pso->m_pipeline));
 
     return RHIGraphicsPipelineStateRef(vk_pso);
 }
@@ -460,7 +459,7 @@ RHIShaderResourceViewRef VulkanRHIImpl::RHICreateShaderResourceView(RHIViewableR
     image_view_create_info.subresourceRange.baseArrayLayer = _view_info.texture.srv.array_min;
     image_view_create_info.subresourceRange.layerCount     = _view_info.texture.srv.array_num;
 
-    VK_CHECK_RESULT(vkCreateImageView(*m_device, &image_view_create_info, nullptr, &vk_srv->m_view));
+    VK_CHECK_RESULT(vkCreateImageView(m_device->GetDevice(), &image_view_create_info, nullptr, &vk_srv->m_view));
 
     return RHIShaderResourceViewRef(vk_srv);
 }
@@ -487,7 +486,7 @@ RHIUnorderedAccessViewRef VulkanRHIImpl::RHICreateUnorderedAccessView(RHIViewabl
     image_view_create_info.subresourceRange.baseArrayLayer = _view_info.texture.uav.array_min;
     image_view_create_info.subresourceRange.layerCount     = _view_info.texture.uav.array_num;
 
-    VK_CHECK_RESULT(vkCreateImageView(*m_device, &image_view_create_info, nullptr, &vk_uav->m_view));
+    VK_CHECK_RESULT(vkCreateImageView(m_device->GetDevice(), &image_view_create_info, nullptr, &vk_uav->m_view));
 
     return RHIUnorderedAccessViewRef(vk_uav);
 }
@@ -687,7 +686,7 @@ VkCommandBuffer VulkanRHIImpl::BeginSingleTimeCommands(VkCommandPool _pool) {
     alloc_info.commandBufferCount = 1;
 
     VkCommandBuffer command_buffer;
-    VK_CHECK_RESULT(vkAllocateCommandBuffers(*m_device, &alloc_info, &command_buffer));
+    VK_CHECK_RESULT(vkAllocateCommandBuffers(m_device->GetDevice(), &alloc_info, &command_buffer));
 
     VkCommandBufferBeginInfo begin_info{};
     begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -716,7 +715,7 @@ void VulkanRHIImpl::EndSingleTimeCommands(VkCommandBuffer _command_buffer, VkCom
     vkQueueSubmit(_queue, 1, &submit_info, VK_NULL_HANDLE);
     vkQueueWaitIdle(_queue);
 
-    vkFreeCommandBuffers(*m_device, _pool, 1, &_command_buffer);
+    vkFreeCommandBuffers(m_device->GetDevice(), _pool, 1, &_command_buffer);
 }
 
 void VulkanRHIImpl::CopyBuffer(VulkanRHIBuffer* _src, VulkanRHIBuffer* _dst) {
