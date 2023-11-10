@@ -515,6 +515,11 @@ void VulkanRHIImpl::RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso
 
     std::vector<VkDescriptorBufferInfo> buffer_infos;
     std::vector<VkDescriptorImageInfo>  image_infos;
+
+    // MARK: 避免空间大小改变造成back指针错误
+    buffer_infos.reserve(_batched_params.GetResourceParameters().size() + 1);
+    image_infos.reserve(_batched_params.GetConstantParameters().size() + 1);
+    
     for (const auto& params : _batched_params.GetResourceParameters()) {
         auto type = params.resource->GetResourceType();
 
