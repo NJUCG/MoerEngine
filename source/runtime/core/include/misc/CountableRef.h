@@ -131,11 +131,11 @@ public:
     operator T*() const {
         return ptr;
     }
-    bool isValid() const {
+    bool IsValid() const {
         return ptr != nullptr;
     }
 
-    void swap(CountableRef& other) {
+    void Swap(CountableRef& other) {
         T* old    = ptr;
         ptr       = other.ptr;
         other.ptr = old;

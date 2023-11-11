@@ -41,6 +41,7 @@ struct GuiBackendData {
         memset((void*)this, 0, sizeof(*this));
         buffer_memory_alignment = 256;
     }
+    ~GuiBackendData();
 };
 
 struct GuiViewportData {

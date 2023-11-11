@@ -52,6 +52,17 @@ inline GuiBackendData* GetBackendData() {
     return ImGui::GetCurrentContext() ? (GuiBackendData*)ImGui::GetIO().BackendRendererUserData : nullptr;
 }
 
+GuiBackendData::~GuiBackendData() {
+
+    // //todo: destroy maybe?
+    // assert(pipeline->DeRef() == 0);
+    // //font_view contains a reference to font_texture, so we don't need to release font_texture separately.
+    // assert(font_view->DeRef() == 0);
+    // assert(font_texture->DeRef() == 0);
+    // assert(font_sampler->DeRef() == 0);
+    // assert(shader_module_frag->DeRef() == 0);
+    // assert(shader_module_vert->DeRef() == 0);
+}
 void DestroyRenderBuffers(GuiFrameRenderBuffers* _render_buffers);
 
 bool CreateDeviceObjects();
@@ -80,6 +91,7 @@ bool RHI::GUIInit(uint32_t _num_frames_in_flight) {
         render_buffers->vertex_buffer         = nullptr;
         render_buffers->index_buffer          = nullptr;
     }
+    viewport_data->frame_index = 0;
 
     if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
         GuiInitPlatformInterface();
@@ -92,7 +104,7 @@ void RHI::GUIShutDown() {
     ImGuiIO& io = ImGui::GetIO();
 
     // Manually delete main viewport render resources in-case we haven't initialized for viewports
-    ImGuiViewport* main_viewport = ImGui::GetMainViewport();
+    auto* main_viewport = ImGui::GetDrawData()->OwnerViewport;
     if (GuiViewportData* viewport_data = (GuiViewportData*)main_viewport->RendererUserData) {
         // We could just call ImGui_ImplDX12_DestroyWindow(main_viewport) as a convenience but that would be misleading since we only use data->Resources[]
         for (uint32_t i = 0; i < bd->num_frames_in_flight; i++)
@@ -127,10 +139,9 @@ void RHI::GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list) 
     GuiBackendData*  backend_data  = GetBackendData();
     GuiViewportData* viewport_data = (GuiViewportData*)draw_data->OwnerViewport->RendererUserData;
 
+    GuiFrameRenderBuffers* render_buffers = &viewport_data->render_buffers[viewport_data->frame_index % backend_data->num_frames_in_flight];
     //todo frame_index should not manage here
     viewport_data->frame_index += 1;
-    GuiFrameRenderBuffers* render_buffers = &viewport_data->render_buffers[viewport_data->frame_index % backend_data->num_frames_in_flight];
-
     if (render_buffers->vertex_buffer == nullptr || render_buffers->vertex_buffer->GetSize() < draw_data->TotalVtxCount * sizeof(ImDrawVert)) {
         //delete the old one and create new
         if (render_buffers->vertex_buffer != nullptr)
@@ -259,15 +270,6 @@ void InvalidateDeviceObjects() {
         return;
 
     ImGuiIO& io = ImGui::GetIO();
-
-    //todo: destroy maybe?
-    bd->pipeline->DeRef();
-    bd->font_texture->DeRef();
-    bd->font_view->DeRef();
-    bd->font_sampler->DeRef();
-
-    bd->shader_module_frag->DeRef();
-    bd->shader_module_vert->DeRef();
 
     io.Fonts->SetTexID(0);// We copied bd->pFontTextureView to io.Fonts->TexID so let's clear that as well.
 }

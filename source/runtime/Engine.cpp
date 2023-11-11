@@ -87,7 +87,7 @@ namespace Moer {
 
         uint64_t    frame_index   = 0;
         RHIFenceRef present_fence = g_rhi->RHICreateFence(RHIFenceCreateInfo(EFenceUsage::PRESENT));
-        while (!context.ShouldClose()) {
+        while (!context.ShouldClose() && frame_index < 3) {
 
             WindowContext::GetInstance().Tick();
             g_rhi->GUINewFrame();

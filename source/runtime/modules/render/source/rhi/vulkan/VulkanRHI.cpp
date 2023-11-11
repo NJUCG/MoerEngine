@@ -55,10 +55,7 @@ void VulkanRHIImpl::PostInit() {
 }
 
 void VulkanRHIImpl::ShutDown() {
-    delete m_main_viewport;
-    delete m_device;
-    // CHECK_AND_DELETE(m_current_viewport);
-    // CHECK_AND_DELETE(m_swap_chain);
+    CHECK_AND_DELETE(m_main_viewport);
     CHECK_AND_DELETE(m_device);
 }
 
@@ -519,7 +516,7 @@ void VulkanRHIImpl::RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso
     // MARK: 避免空间大小改变造成back指针错误
     buffer_infos.reserve(_batched_params.GetResourceParameters().size() + 1);
     image_infos.reserve(_batched_params.GetConstantParameters().size() + 1);
-    
+
     for (const auto& params : _batched_params.GetResourceParameters()) {
         auto type = params.resource->GetResourceType();
 
