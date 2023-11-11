@@ -2582,7 +2582,7 @@ public:
     RHIPooledRenderQuery(RHIPooledRenderQuery&&)            = default;
     RHIPooledRenderQuery& operator=(RHIPooledRenderQuery&&) = default;
 
-    bool IsValid() { return query_ref.isValid(); }
+    bool IsValid() { return query_ref.IsValid(); }
 
     RHIRenderQuery* GetQuery() const { return query_ref; }
 
