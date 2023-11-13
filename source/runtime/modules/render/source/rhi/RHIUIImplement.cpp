@@ -136,7 +136,8 @@ void RHI::GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list) 
     Shader*              vert_shader     = ShaderResourceManager::GetShader<ImGuiShaderVert>();
     RHIFragmentShaderRef frag_rhi_shader = g_rhi->RHICreateFragmentShader(frag_shader);
 
-    GuiBackendData*  backend_data  = GetBackendData();
+    GuiBackendData* backend_data = GetBackendData();
+
     GuiViewportData* viewport_data = (GuiViewportData*)draw_data->OwnerViewport->RendererUserData;
 
     GuiFrameRenderBuffers* render_buffers = &viewport_data->render_buffers[viewport_data->frame_index % backend_data->num_frames_in_flight];
@@ -206,19 +207,20 @@ void RHI::GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list) 
 
                 Rect2D r = {(int32_t)clip_min.x, (int32_t)clip_min.y, (uint32_t)(clip_max.x - clip_min.x), uint32_t(clip_max.y - clip_min.y)};
 
+                // 5. local: set scissor and viewport
+                _ui_command_list->SetScissor(r);
+                _ui_command_list->SetViewPort(g_rhi->RHIGetMainViewport()->GetViewportExtent());
+
+                // 6. local: set texture
                 RHIShaderResourceView* texture_view = (RHIShaderResourceView*)cmd->GetTexID();
 
                 ImGuiShaderFrag::Parameters params;
                 params.texture0 = texture_view;
-
                 RHIBatchedShaderParameters batched_params;
                 batched_params.SetParameters(frag_shader, params);
-                batched_params.SetParameters(vert_shader, params);
-
                 g_rhi->RHISetBatchedShaderParameters(backend_data->pipeline, batched_params);
-                _ui_command_list->SetBatchedShaderParameter(batched_params);
-                _ui_command_list->SetScissor(r);
-                _ui_command_list->SetViewPort(g_rhi->RHIGetMainViewport()->GetViewportExtent());
+
+                // 7. local: draw indexed instanced
                 _ui_command_list->DrawIndexedInstanced(cmd->ElemCount, 1, cmd->IdxOffset, cmd->VtxOffset + global_vertex_offset, 0);
             }
         }
@@ -229,7 +231,10 @@ void RHI::GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list) 
 
 void SetupRenderState(ImDrawData* draw_data, RHIGraphicsCommandList* commandList, GuiFrameRenderBuffers* render_buffers) {
     GuiBackendData* backend_data = GetBackendData();
+    // 1. bind pipeline
+    commandList->SetPipelineState(backend_data->pipeline);
 
+    // 2. global: push constants
     ImGuiShaderVert::Parameters param;
     std::memset(&param.vertexBuffer, 0, sizeof(param.vertexBuffer));
     {
@@ -246,21 +251,18 @@ void SetupRenderState(ImDrawData* draw_data, RHIGraphicsCommandList* commandList
             };
         memcpy(&param.vertexBuffer.mvp, mvp, sizeof(mvp));
     }
+    RHIBatchedShaderParameters batched_params;
+    batched_params.SetParameters(backend_data->shader_module_vert, param);
+    g_rhi->RHISetBatchedShaderParameters(backend_data->pipeline, batched_params);
+
+    // 3. global: set viewport, MARK: does it work ?
     ViewPort view_port(0, 0, draw_data->DisplaySize.x, draw_data->DisplaySize.y, 0.f, 1.f);
     commandList->SetViewPort(view_port);
 
+    // 4. global: bind vertex/index
     uint32_t offsets[] = {0};
     commandList->BindVertexBuffers(0, 1, &render_buffers->vertex_buffer, offsets);
     commandList->BindIndexBuffer(render_buffers->index_buffer.Get(), 0, EIndexElementType::IET_UINT16);
-
-    RHIBatchedShaderParameters batched_params;
-
-    batched_params.SetParameters(backend_data->shader_module_vert, param);
-
-    g_rhi->RHISetBatchedShaderParameters(backend_data->pipeline, batched_params);
-
-    commandList->SetPipelineState(backend_data->pipeline);
-    //blend factor?
 }
 
 //
@@ -443,7 +445,7 @@ void CreateFontsTexture() {
             upload_pitch,
             height);
 
-        // 3. MARK... pRegion[0] is trying to copy 518144 bytes plus 0 offset to/from the VkBuffer (VkBuffer 0xcb1c7c000000001b[]) which exceeds the VkBuffer total size of 131072 bytes.
+        // 3. MARK: pRegion[0] is trying to copy 518144 bytes plus 0 offset to/from the VkBuffer (VkBuffer 0xcb1c7c000000001b[]) which exceeds the VkBuffer total size of 131072 bytes.
         command_list->CopyBufferToTexture(staging_buffer, font_texture, copy_info);
 
         RHIBarrierDependencyInfo font_copy_barriers{};

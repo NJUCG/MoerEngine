@@ -414,15 +414,16 @@ concept concept_is_root_parameter_struct = requires(RootParameter t) {
 
 struct RHIShaderResourceParameter {
     RHIResource* resource;
-    int16_t      slot;
-    int16_t      space;
+    uint16_t     slot;
+    uint16_t     space;
 };
 
 struct RHIShaderConstantParameter {
-    uint32_t byte_offset_in_raw_data;
-    int16_t  size_in_32bit;
-    int16_t  slot;
-    int16_t  space;
+    EShaderType shader_type;
+    uint32_t    byte_offset_in_raw_data;
+    uint16_t    size_in_32bit;
+    uint16_t    slot;
+    uint16_t    space;
 };
 struct RHIAttachmentBindingParameter {
 };
@@ -450,6 +451,10 @@ struct RHIBatchedShaderParameters {
 
     const std::vector<RHIShaderConstantParameter>& GetConstantParameters() const {
         return constant_parameters;
+    }
+
+    const std::vector<uint8_t>& GetRawData() const {
+        return raw_data;
     }
 
 private:
