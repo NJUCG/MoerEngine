@@ -12,6 +12,7 @@
 #include "taskgraph/TaskSystem.h"
 #include "taskgraph/ThreadManager.h"
 #include "RenderSystem.h"
+#include "ui/UIBase.h"
 #include "window/WindowContext.h"
 #include <stdint.h>
 namespace Moer {
@@ -30,7 +31,6 @@ namespace Moer {
         PostInitRenderSystem();
         LOG_INFO("Engine Post Init Finished");
     }
-    void TestDrawUI();
     void Engine::Run() {
         LOG_INFO("Engine Start Running");
         TestDrawUI();
@@ -59,10 +59,10 @@ namespace Moer {
     void Engine::InitWindow() {
         //todo: get from config
         SurfaceInfo info{"", 1920, 1080, "MoerEditor", false};
-        WindowContext::GetInstance().Init(info);
+        WindowContext::Init(info);
     }
     void Engine::ShutDownWindow() {
-        WindowContext::GetInstance().ShutDown();
+        WindowContext::ShutDown();
     }
     void Engine::Tick() {
         TestDrawUI();
@@ -77,30 +77,41 @@ namespace Moer {
         SPDLOG_INFO("Engine Quit");
     }
 
-    void TestDrawUI() {
+    void Engine::RegisterOnDrawUI(std::function<void()> _func) {
+        on_draw_ui_funcs.push_back(_func);
+    }
 
-        WindowContext& context = WindowContext::GetInstance();
+    void Engine::OnDrawUI() {
+        for (auto& func : on_draw_ui_funcs) {
+            func();
+        }
+    }
+
+    void Engine::TestDrawUI() {
+
         g_rhi->GUIInit(3);
+
         RHIGraphicsCommandList* gui_command_list = g_rhi->CreateGraphicsCommandList();
 
         RHICommandQueue* cmd_queue = g_rhi->CreateCommandQueue(ECommandQueueType::GRAPHICS);
 
         uint64_t    frame_index   = 0;
         RHIFenceRef present_fence = g_rhi->RHICreateFence(RHIFenceCreateInfo(EFenceUsage::PRESENT));
-        while (!context.ShouldClose() && frame_index < 3) {
+        while (!WindowContext::ShouldClose(WindowContext::GetMainWindow()) && frame_index < 3) {
 
-            WindowContext::GetInstance().Tick();
+            //window io tick
+            WindowContext::Tick();
+
             g_rhi->GUINewFrame();
-
             ImGui::NewFrame();
             {
-                ImGui::Begin("Hello, world!");
-                ImGui::Text("This is some useful text.");
-                ImGui::End();
+                OnDrawUI();
             }
             ImGui::Render();
-            RHIViewport* main_viewport   = g_rhi->RHIGetMainViewport();
-            auto         next_frame_info = g_rhi->RHIGetNextFrameViewportBufferInfo(main_viewport);
+
+            RHIViewport* main_viewport = g_rhi->RHIGetMainViewport();
+
+            auto next_frame_info = g_rhi->RHIGetNextFrameViewportBufferInfo(main_viewport);
 
             if (next_frame_info.backbuffer_index == UINT32_MAX) return;
 
@@ -137,6 +148,8 @@ namespace Moer {
             pass_info.render_area.extent.height = viewport_extent.height;
 
             gui_command_list->BeginRenderPass(pass_info, "Imgui Window");
+
+            auto* draw_data = ImGui::GetDrawData();
 
             g_rhi->GUIRender(ImGui::GetDrawData(), gui_command_list);
 

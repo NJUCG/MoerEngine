@@ -60,7 +60,9 @@ VulkanPhysicalDeviceFeatures VulkanDeviceFeature::GetMESupportedDeviceFeatures(u
         enabled_features.core_1_1.pNext = &enabled_features.core_1_2;
         enabled_features.core_1_2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
 
-        enabled_features.core_1_2.timelineSemaphore = VK_TRUE;
+        enabled_features.core_1_2.timelineSemaphore   = VK_TRUE;
+        enabled_features.core_1_2.bufferDeviceAddress = VK_TRUE;
+        enabled_features.core_1_2.descriptorIndexing  = VK_TRUE;
     }
 
     // 1.3 features
