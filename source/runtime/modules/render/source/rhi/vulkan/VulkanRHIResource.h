@@ -19,6 +19,7 @@
 class VulkanDevice;
 class VulkanRHIImpl;
 class VulkanDescriptorSetsLayout;
+class VulkanPipelineResourceCache;
 
 #pragma region forward definitions
 class VulkanRHICommandList;
@@ -290,7 +291,7 @@ class VulkanRHIGraphicsPipelineState final : public RHIGraphicsPipelineState {
 public:
     VulkanRHIGraphicsPipelineState()
         : RHIGraphicsPipelineState(),
-          m_pipeline(VK_NULL_HANDLE), m_pipeline_layout(VK_NULL_HANDLE), m_descriptor_sets_layout(nullptr) {}
+          m_pipeline(VK_NULL_HANDLE), m_pipeline_layout(VK_NULL_HANDLE), m_pipeline_state_cache(nullptr) {}
 
     inline VkPipeline GetHandle() const {
         return m_pipeline;
@@ -298,6 +299,10 @@ public:
 
     inline const VkPipelineLayout GetPipelineLayout() const {
         return m_pipeline_layout;
+    }
+
+    inline VulkanPipelineResourceCache* GetPipelineResourceCache() const {
+        return m_pipeline_state_cache;
     }
 
     inline const VulkanDescriptorSetsLayout* GetDescriptorSetsLayout() const {
@@ -314,17 +319,25 @@ public:
 
     void GenerateDescriptorSetLayouts(const VulkanDevice* _device, std::unordered_map<uint8_t, TDescriptorSetLayout>& _layout_mappings);
     void CreateDescriptorSets(VulkanDevice* _device);
+    void GenerateResourceCache();
 
     static std::vector<VkPipelineShaderStageCreateInfo> METoVKShaderStageCreateInfo(const RHIShaderBoundStateInput& _shader_bound_state);
     static VkPipelineVertexInputStateCreateInfo         METoVKVertexInputStateCreateInfo(const RHIVertexInputState* _vertex_input_state);
     static std::vector<const Shader*>                   GetShaderInfoList(const RHIShaderBoundStateInput& _shader_bound_state);
 
 private:
-    VkPipeline                      m_pipeline;
-    VkPipelineLayout                m_pipeline_layout;
-    VulkanDescriptorSetsLayout*     m_descriptor_sets_layout;
-    std::vector<VkDescriptorSet>    m_descriptor_sets;
+    VkPipeline       m_pipeline;
+    VkPipelineLayout m_pipeline_layout;
+    // descriptor sets
+    VulkanDescriptorSetsLayout*  m_descriptor_sets_layout;
+    std::vector<VkDescriptorSet> m_descriptor_sets;
+    // push constants
     std::vector<VkShaderStageFlags> m_constant_shader_stages;
+    // dynamic states
+    std::array<VkViewport, 2> m_viewports;
+    std::array<VkRect2D, 2>   m_scissors;
+
+    VulkanPipelineResourceCache* m_pipeline_state_cache;
 };
 #pragma endregion
 

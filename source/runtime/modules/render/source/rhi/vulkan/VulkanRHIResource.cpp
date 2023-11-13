@@ -4,21 +4,21 @@
 
 #include "PixelFormat.h"
 #include "VulkanDevice.h"
+#include "VulkanSwapChain.h"
 #include "VulkanDescriptor.h"
-
 #include "VulkanRHIResource.h"
+#include "VulkanPipelineResourceCache.h"
+#include "VulkanCommandQueue.h"
 
 #include "rhi/RHICommandQueue.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
-#include "VulkanCommandQueue.h"
 #include "rhi/vulkan/VulkanRHI.h"
 #include "rhi/vulkan/misc/VulkanMacroUtils.h"
 #include "log/LogSystem.h"
-#include "vulkan/vulkan_core.h"
-#include "VulkanSwapChain.h"
-#include <stdint.h>
+
+#include <vulkan/vulkan_core.h>
 
 #pragma region utils definition
 
@@ -1341,6 +1341,10 @@ void VulkanRHIGraphicsPipelineState::GenerateDescriptorSetLayouts(const VulkanDe
 
 void VulkanRHIGraphicsPipelineState::CreateDescriptorSets(VulkanDevice* _device) {
     _device->AllocateDescriptorSets(*m_descriptor_sets_layout, m_descriptor_sets);
+}
+
+void VulkanRHIGraphicsPipelineState::GenerateResourceCache() {
+    m_pipeline_state_cache = new VulkanPipelineResourceCache(this);
 }
 
 #pragma endregion
