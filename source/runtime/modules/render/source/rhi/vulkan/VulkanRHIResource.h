@@ -429,11 +429,13 @@ public:
     void               Wait(uint64_t value) override;
     inline VkSemaphore GetSemaphoreHandle() { return m_semaphore; }
     inline VkSemaphore GetBinaryHandle() { return m_binary; }
+    inline EFenceUsage GetUsage() { return usage; }
 
 private:
     VulkanDevice* m_device;
     VkSemaphore   m_semaphore;
     VkSemaphore   m_binary;
+    EFenceUsage   usage;
 };
 
 #pragma endregion
