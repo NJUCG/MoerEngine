@@ -45,7 +45,7 @@ void VulkanRHICommandQueue::SubmitCommands(
     std::vector<VkSemaphoreSubmitInfo> vk_signal_infos;
     vk_signal_infos.reserve(signal_infos.size());
     std::vector<VkSemaphoreSubmitInfo> vk_wait_infos;
-    vk_wait_infos.resize(wait_infos.size());
+    vk_wait_infos.reserve(wait_infos.size());
 
     uint32_t extra_biranry_semaphores = 0;
     for (uint32_t signal_index = 0; signal_index < signal_infos.size(); signal_index++) {
@@ -65,9 +65,24 @@ void VulkanRHICommandQueue::SubmitCommands(
     }
 
     for (uint32_t wait_index = 0; wait_index < wait_infos.size(); wait_index++) {
-        vk_wait_infos[wait_index].sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-        vk_wait_infos[wait_index].semaphore = ((VulkanRHIFence*)wait_infos[wait_index].wait_fence)->GetSemaphoreHandle();
-        vk_wait_infos[wait_index].value     = wait_infos[wait_index].wait_value;
+
+        VulkanRHIFence* target_fence = (VulkanRHIFence*)wait_infos[wait_index].wait_fence;
+        //for binary signals to present stage wait
+        switch (target_fence->GetUsage()) {
+            case EFenceUsage::AQUIRE_NEXT_FRAME:
+                vk_wait_infos.emplace_back(VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                                           VK_NULL_HANDLE,
+                                           target_fence->GetBinaryHandle(),
+                                           0);
+                break;
+            case EFenceUsage::TIMELINE:
+            case EFenceUsage::PRESENT:
+                vk_wait_infos.emplace_back(VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                                           VK_NULL_HANDLE,
+                                           target_fence->GetSemaphoreHandle(),
+                                           wait_infos[wait_index].wait_value);
+                break;
+        }
     }
 
     submits.sType                  = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
