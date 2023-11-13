@@ -12,7 +12,8 @@ class VulkanDescriptorAllocator;
 
 class VulkanRHIGraphicsPipelineState;
 
-class VulkanRHIGraphicsCommandList final : public RHIGraphicsCommandList, public VulkanDeviceObject {
+class VulkanRHIGraphicsCommandList final : public RHIGraphicsCommandList,
+                                           public VulkanDeviceObject {
 public:
     VulkanRHIGraphicsCommandList(VulkanDevice* _device, VkCommandPool _pool, VkCommandBufferLevel _level = VK_COMMAND_BUFFER_LEVEL_PRIMARY);
     virtual ~VulkanRHIGraphicsCommandList();
@@ -145,6 +146,9 @@ private:
 private:
     VkRenderingAttachmentInfo FromColorAttachmentInfo(const RHIRenderPassInfo::ColorAttachmentInfo& _color_attachment_info) const;
     VkRenderingAttachmentInfo FromDepthStencilAttachmentInfo(const RHIRenderPassInfo::DepthStencilAttachmentInfo& _depth_stencil_attachment_info) const;
+
+    void PrepareDrawCommand();
+    void PostDrawCommand();
 };
 
 #endif//VULKAN_COMMAND_LIST_H

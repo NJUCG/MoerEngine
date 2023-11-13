@@ -22,6 +22,7 @@
 #include "VulkanDevice.h"
 #include "VulkanSwapChain.h"
 #include "VulkanDescriptor.h"
+#include "VulkanPipelineResourceCache.h"
 
 #include "shader/Shader.h"
 #include "shader/ShaderResource.h"
@@ -272,9 +273,9 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
         // constants
         for (const auto& info : constant_infos) {
             VkPushConstantRange range{};
-            range.stageFlags = VulkanEnumTranslator::METoVKShaderStageFlags(meta_shader->GetShaderType());
-            range.offset     = info.offset;
-            range.size       = info.stride;
+            range.stageFlags |= VulkanEnumTranslator::METoVKShaderStageFlags(meta_shader->GetShaderType());
+            range.offset = info.offset;
+            range.size   = info.stride;
 
             push_constant_ranges.push_back(range);
             vk_pso->m_constant_shader_stages.push_back(range.stageFlags);
@@ -284,6 +285,7 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
     // generate descriptor set layouts
     vk_pso->GenerateDescriptorSetLayouts(m_device, layout_mappings);
     vk_pso->CreateDescriptorSets(m_device);
+    vk_pso->GenerateResourceCache();
 
     auto layouts = vk_pso->m_descriptor_sets_layout->GetLayouts();
     // create pipeline layout
@@ -517,7 +519,7 @@ void VulkanRHIImpl::RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso
 
     // MARK: 避免空间大小改变造成back指针错误
     buffer_infos.reserve(_batched_params.GetResourceParameters().size() + 1);
-    image_infos.reserve(_batched_params.GetConstantParameters().size() + 1);
+    image_infos.reserve(_batched_params.GetResourceParameters().size() + 1);
 
     for (const auto& params : _batched_params.GetResourceParameters()) {
         auto type = params.resource->GetResourceType();
@@ -525,6 +527,12 @@ void VulkanRHIImpl::RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso
         VkWriteDescriptorSet write_descriptor_set{};
         write_descriptor_set.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         write_descriptor_set.pNext = nullptr;
+
+        // cache descriptor sets
+        DescriptorBindInfo bind_info{params.space, params.slot, descriptor_sets[params.space]};
+        if (!vk_pso->m_pipeline_state_cache->BindDescriptorSet(bind_info)) {
+            continue;
+        }
 
         if (type == ERHIResourceType::RRT_SAMPLER) {
             // sampler
@@ -563,9 +571,24 @@ void VulkanRHIImpl::RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso
         // MARK: type是不是该提前记录起来, 目前的参数只能记录到VulkanRHIGraphicsPipelineState中, UE通过传参解决
 
         write_descriptor_sets.push_back(write_descriptor_set);
+
+        vk_pso->m_pipeline_state_cache->AddSetToBind(std::move(bind_info));
     }
 
     vkUpdateDescriptorSets(m_device->GetDevice(), write_descriptor_sets.size(), write_descriptor_sets.data(), 0, nullptr);
+
+    // cache push constants
+    const auto& push_constants = _batched_params.GetConstantParameters();
+    for (const auto& params : push_constants) {
+        PushConstantInfo constant_info{
+            VulkanEnumTranslator::METoVKShaderStageFlags(params.shader_type),
+            params.size_in_32bit,
+            params.byte_offset_in_raw_data,
+            std::move(_batched_params.GetRawData())};
+        if (vk_pso->m_pipeline_state_cache->PushConstant(constant_info)) {
+            vk_pso->m_pipeline_state_cache->AddConstantToPush(std::move(constant_info));
+        }
+    }
 }
 
 #pragma endregion
