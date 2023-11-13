@@ -872,7 +872,8 @@ struct PipelineParametersBinding {
 
 enum class EFenceUsage {
     TIMELINE,
-    PRESENT
+    PRESENT,
+    AQUIRE_NEXT_FRAME
 };
 struct RHIFenceCreateInfo {
     EFenceUsage usage = EFenceUsage::TIMELINE;
