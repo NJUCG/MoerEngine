@@ -97,7 +97,7 @@ namespace Moer {
 
         uint64_t    frame_index   = 0;
         RHIFenceRef present_fence = g_rhi->RHICreateFence(RHIFenceCreateInfo(EFenceUsage::PRESENT));
-        while (!WindowContext::ShouldClose(WindowContext::GetMainWindow()) && frame_index < 3) {
+        while (!WindowContext::ShouldClose(WindowContext::GetMainWindow())) {
 
             //window io tick
             WindowContext::Tick();

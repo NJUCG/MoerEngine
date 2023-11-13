@@ -84,7 +84,7 @@ void VulkanSwapChain::Create(uint32_t* width, uint32_t* height, bool vsync) {
     vkGetSwapchainImagesKHR(*device, m_swap_chain, &image_count, nullptr);
     m_swap_chain_images.resize(image_count);
     vkGetSwapchainImagesKHR(*device, m_swap_chain, &image_count, m_swap_chain_images.data());
-
+    current_image_index = 0;
     LOG_INFO("Vulkan swapchain initialized with {} images.", image_count);
 }
 void VulkanSwapChain::Recreate() {
@@ -126,6 +126,7 @@ void VulkanSwapChain::Present(VkQueue _queue, VkSemaphore _render_finished) {
 
     VkResult result = vkQueuePresentKHR(_queue, &present_info);
 
+    current_image_index = (current_image_index + 1) % m_swap_chain_images.size();
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
         Recreate();
     } else if (result != VK_SUCCESS) {

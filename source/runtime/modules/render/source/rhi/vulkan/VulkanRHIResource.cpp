@@ -1479,12 +1479,13 @@ VkImageUsageFlags VulkanRHITexture::METoVKImageUsageFlags(ETextureUsageFlags _me
 
 #pragma region synchronization
 
-VulkanRHIFence::VulkanRHIFence(VulkanDevice* _device, EFenceUsage _usage) : m_device(_device), m_binary(VK_NULL_HANDLE), m_semaphore(VK_NULL_HANDLE) {
+VulkanRHIFence::VulkanRHIFence(VulkanDevice* _device, EFenceUsage _usage) : m_device(_device), m_binary(VK_NULL_HANDLE), m_semaphore(VK_NULL_HANDLE), usage(_usage) {
     VkSemaphoreCreateInfo create_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
-    if (_usage == EFenceUsage::PRESENT) {
+    if (_usage != EFenceUsage::TIMELINE) {
         //do nothing
         VK_CHECK_RESULT(vkCreateSemaphore(m_device->GetDevice(), &create_info, nullptr, &m_binary));
     }
+
     VkSemaphoreTypeCreateInfo timeline_semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
     timeline_semaphore_info.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
     timeline_semaphore_info.initialValue  = 0;
@@ -1590,7 +1591,7 @@ void VulkanViewport::InnerCreateResources() {
                 .SetMipLevel(0));
     }
     for (uint32_t index = 0; index < image_aquire_fences.size(); index++) {
-        image_aquire_fences[index] = new VulkanRHIFence(swapchain->m_device, EFenceUsage::PRESENT);
+        image_aquire_fences[index] = new VulkanRHIFence(swapchain->m_device, EFenceUsage::AQUIRE_NEXT_FRAME);
     }
     frame_offset = 0;
 }
