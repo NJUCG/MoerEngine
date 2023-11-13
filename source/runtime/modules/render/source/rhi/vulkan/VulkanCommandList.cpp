@@ -9,7 +9,9 @@
 #include "VulkanDevice.h"
 #include "VulkanRHIResource.h"
 #include "VulkanDescriptor.h"
-#include "vulkan/vulkan_core.h"
+#include "VulkanPipelineResourceCache.h"
+
+#include <vulkan/vulkan_core.h>
 
 VulkanRHIGraphicsCommandList::VulkanRHIGraphicsCommandList(VulkanDevice* _device, VkCommandPool _pool, VkCommandBufferLevel _level) : VulkanDeviceObject(_device) {
     VkCommandBufferAllocateInfo buffer_alloc_info{};
@@ -29,37 +31,34 @@ VulkanRHIGraphicsCommandList::~VulkanRHIGraphicsCommandList() {
 }
 
 void VulkanRHIGraphicsCommandList::SetBatchedShaderParameter(const RHIBatchedShaderParameters& _parameters) {
-    VK_CHECK_NULLPTR(m_current_pipeline_state, "SetBatchedShaderParameter: graphics pipeline state is nullptr!", return);
-    const auto* vk_pso = m_current_pipeline_state;
-    // constants
-    auto constant_params        = _parameters.GetConstantParameters();
-    auto constant_shader_stages = vk_pso->GetConstantShaderStages();
-    for (uint32_t i = 0; i < constant_params.size(); ++i) {
-        auto* constant = reinterpret_cast<const uint32_t*>(_parameters.GetConstData(constant_params[i].byte_offset_in_raw_data));
-        vkCmdPushConstants(m_command_buffer, vk_pso->GetPipelineLayout(), constant_shader_stages[i], 0, constant_params[i].size_in_32bit, constant);
-    }
+    // VK_CHECK_NULLPTR(m_current_pipeline_state, "SetBatchedShaderParameter: graphics pipeline state is nullptr!", return);
+    // const auto* vk_pso = m_current_pipeline_state;
+    // // constants
+    // auto constant_params        = _parameters.GetConstantParameters();
+    // auto constant_shader_stages = vk_pso->GetConstantShaderStages();
+    // for (uint32_t i = 0; i < constant_params.size(); ++i) {
+    //     auto* constant = reinterpret_cast<const uint32_t*>(_parameters.GetConstData(constant_params[i].byte_offset_in_raw_data));
+    //     vkCmdPushConstants(m_command_buffer, vk_pso->GetPipelineLayout(), constant_shader_stages[i], 0, constant_params[i].size_in_32bit, constant);
+    // }
 }
 
 void VulkanRHIGraphicsCommandList::SetPipelineState(RHIGraphicsPipelineState* _graphics_pso) {
     auto* vk_pso = static_cast<VulkanRHIGraphicsPipelineState*>(_graphics_pso);
     VK_CHECK_NULLPTR(vk_pso, "SetPipelineState: graphics pipeline state is nullptr!", return);
 
-    // bind descriptor sets
-    auto descriptor_sets = vk_pso->GetDescriptorSets();
-    vkCmdBindDescriptorSets(
-        m_command_buffer,
-        VK_PIPELINE_BIND_POINT_GRAPHICS,
-        vk_pso->GetPipelineLayout(),
-        0,
-        descriptor_sets.size(),
-        descriptor_sets.data(),
-        0,
-        nullptr);
+    // // bind descriptor sets
+    // auto descriptor_sets = vk_pso->GetDescriptorSets();
+    // vkCmdBindDescriptorSets(
+    //     m_command_buffer,
+    //     VK_PIPELINE_BIND_POINT_GRAPHICS,
+    //     vk_pso->GetPipelineLayout(),
+    //     0,
+    //     descriptor_sets.size(),
+    //     descriptor_sets.data(),
+    //     0,
+    //     nullptr);
 
     vkCmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk_pso->GetHandle());
-
-    // maybe need to implement set Viewports and Scissors
-
     m_current_pipeline_state = vk_pso;
 }
 
@@ -98,6 +97,9 @@ void VulkanRHIGraphicsCommandList::DrawIndexedInstanced(
     uint32_t _start_index_location,
     uint32_t _start_vertex_location,
     uint32_t _start_instance_location) {
+
+    PrepareDrawCommand();
+
     vkCmdDrawIndexed(
         m_command_buffer,
         _index_count,
@@ -105,6 +107,8 @@ void VulkanRHIGraphicsCommandList::DrawIndexedInstanced(
         _start_index_location,
         _start_vertex_location,
         _start_instance_location);
+
+    PostDrawCommand();
 }
 
 void VulkanRHIGraphicsCommandList::DrawIndexedIndirect(RHIBuffer* _argument_buffer, uint64_t _arg_offset, RHIBuffer* _count_buffer, uint64_t _count_buffer_offset, uint32_t _max_draw_count, uint32_t _stride) {
@@ -618,4 +622,45 @@ VkRenderingAttachmentInfo VulkanRHIGraphicsCommandList::FromDepthStencilAttachme
     attachment_info.clearValue.depthStencil.stencil = _depth_stencil_attachment_info.depth_stencil_attachment_view.clear_attachment.value.depth_stencil.stencil;
 
     return attachment_info;
+}
+
+void VulkanRHIGraphicsCommandList::PrepareDrawCommand() {
+    const auto* vk_pso = m_current_pipeline_state;
+    VK_CHECK_NULLPTR(vk_pso, "PreDrawCommand: graphics pipeline state is nullptr!", return);
+    auto* vk_resource_cache = vk_pso->GetPipelineResourceCache();
+    VK_CHECK_NULLPTR(vk_resource_cache, "PreDrawCommand: graphics pipeline resource cache is nullptr!", return);
+
+    const auto pipeline_layout = vk_pso->GetPipelineLayout();
+    // 1. bind descriptor sets
+    for (const auto& set_info : vk_resource_cache->GetSetsToBind()) {
+        vkCmdBindDescriptorSets(
+            m_command_buffer,
+            VK_PIPELINE_BIND_POINT_GRAPHICS,
+            pipeline_layout,
+            set_info.set,
+            1,
+            &set_info.descriptor_set,
+            0,
+            nullptr);
+    }
+    // 2. push constants
+    for (const auto& constant_info : vk_resource_cache->GetConstantsToPush()) {
+        vkCmdPushConstants(
+            m_command_buffer,
+            pipeline_layout,
+            constant_info.flags,
+            0,
+            constant_info.size,
+            reinterpret_cast<const uint32_t*>(&constant_info.raw_data[constant_info.byte_offset_in_raw_data]));
+    }
+}
+
+void VulkanRHIGraphicsCommandList::PostDrawCommand() {
+    const auto* vk_pso = m_current_pipeline_state;
+    VK_CHECK_NULLPTR(vk_pso, "PostDrawCommand: graphics pipeline state is nullptr!", return);
+    auto* vk_resource_cache = vk_pso->GetPipelineResourceCache();
+    VK_CHECK_NULLPTR(vk_resource_cache, "PostDrawCommand: graphics pipeline resource cache is nullptr!", return);
+
+    vk_resource_cache->ResetToBind();
+    vk_resource_cache->ResetToPush();
 }
