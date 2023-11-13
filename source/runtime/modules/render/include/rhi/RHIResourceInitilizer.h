@@ -202,11 +202,14 @@ struct ViewportBounds {
     }
 };
 
+namespace Moer {
+    class WindowHandle;
+}
 struct RHIViewportInitializer {
-    void*        window_handle;
-    Extent2D     size{0, 0};
-    bool         b_is_full_screen;
-    EPixelFormat preferred_format;
+    Moer::WindowHandle* window_handle;
+    Extent2D            size{0, 0};
+    bool                b_is_full_screen;
+    EPixelFormat        preferred_format;
 };
 
 enum class EClearAttachment {

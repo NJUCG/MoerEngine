@@ -6,6 +6,10 @@
 namespace Moer {
     using WindowType = void;
 
+    struct WindowHandle {
+        WindowType* window{nullptr};
+    };
+
     struct GuiWindowInitInfo {
         WindowType* window;
         bool        b_install_callbacks = true;
@@ -25,32 +29,33 @@ namespace Moer {
         const char* rhi_name;
         int         width{1280};
         int         height{720};
-        const char* title{"Moer"};
+        const char* title{"MoerEngine"};
         bool        b_full_screen{false};
     };
+    //mean to support multi window creation and io-management
     class WindowContext {
         friend class WindowImpl;
 
     public:
         WindowContext() = default;
         ~WindowContext();
-        static WindowContext& GetInstance();
-        void                  Init(SurfaceInfo info);
-        void                  Tick();
-        void                  ShutDown();
-        void                  GetWindowSize(int* width, int* height) const;
-        void                  SetFocusMode(bool focused);
-        bool                  GetFocusMode() const;
-        WindowType*           GetWindow() const;
-        void                  SetTitle(const char* newTitle);
-        bool                  ShouldClose() const;
-        void                  PollEvents() const;
+        static void Init(SurfaceInfo info);
+        static void Tick();
+        static void ShutDown();
 
-        //for dx12 rhi
-        void* GetNativeWindow() const;
+        static void PollEvents();
+        //new support for multi window
+        static void          GetWindowSize(WindowHandle*, int* width, int* height);
+        static void          SetFocusMode(WindowHandle*, bool focused);
+        static bool          GetFocusMode(WindowHandle*);
+        static WindowHandle* GetMainWindow();
+        static void          SetTitle(WindowHandle*, const char* newTitle);
+        static bool          ShouldClose(WindowHandle*);
 
-        //for vulkan
-        void CreateVulkanSurface(void* instance, WindowType* window, void* allocation_callback, void* surface);
+        //for dx12 win32 window
+        static void* GetNativeWindow(WindowHandle*);
+        //for vulkan surface creation
+        static void CreateVulkanSurface(void* instance, WindowHandle* window, void* allocation_callback, void* surface);
 
         typedef std::function<void(unsigned int)>                                OnCharFunc;
         typedef std::function<void(int entered)>                                 OnCursorEnterFunc;
@@ -66,141 +71,22 @@ namespace Moer {
         typedef std::function<void(int width, int height)>                       OnWindowSizeFunc;
         typedef std::function<void(int focused)>                                 OnWindowFocusFunc;
 
-        inline void RegisterOnCharFunc(OnCharFunc func) {
-            on_char_func.push_back(func);
-        }
-        inline void RegisterOnCursorEnterFunc(OnCursorEnterFunc func) {
-            on_cursor_enter_func.push_back(func);
-        }
-        inline void RegisterOnCursorPosFunc(OnCursorPosFunc func) {
-            on_cursor_pos_func.push_back(func);
-        }
-        inline void RegisterOnDropFunc(OnDropFunc func) {
-            on_drop_func.push_back(func);
-        }
-        inline void RegisterOnFrameBufferSizeFunc(OnFrameBufferSizeFunc func) {
-            on_frame_buffer_size_func.push_back(func);
-        }
-        inline void RegisterOnKeyFunc(OnKeyFunc func) {
-            on_key_func.push_back(func);
-        }
-        inline void RegisterOnMouseButtonFunc(OnMouseButtonFunc func) {
-            on_mouse_button_func.push_back(func);
-        }
-        inline void RegisterOnScrollFunc(OnScrollFunc func) {
-            on_scroll_func.push_back(func);
-        }
-        inline void RegisterOnWindowCloseFunc(OnWindowCloseFunc func) {
-            on_window_close_func.push_back(func);
-        }
-        inline void RegisterOnWindowContentScaleFunc(OnWindowContentScaleFunc func) {
-            on_window_content_scale_func.push_back(func);
-        }
-        inline void RegisterOnWindowPosFunc(OnWindowPosFunc func) {
-            on_window_pos_func.push_back(func);
-        }
-        inline void RegisterOnWindowSizeFunc(OnWindowSizeFunc func) {
-            on_window_size_func.push_back(func);
-        }
-        inline void RegisterOnWindowFocusFunc(OnWindowFocusFunc func) {
-            on_window_focus_func.push_back(func);
-        }
-        static void OnCharCallback(WindowType* window, unsigned int codepoint);
-        static void OnCursorEnterCallback(WindowType* window, int entered);
-        static void OnCursorPosCallback(WindowType* window, double xpos, double ypos);
-        static void OnDropCallback(WindowType* window, int path_count, const char** paths);
-        static void OnFramebufferSizeCallback(WindowType* window, int width, int height);
-        static void OnKeyCallback(WindowType* window, int key, int scancode, int action, int mods);
-        static void OnMouseButtonCallback(WindowType* window, int button, int action, int mode);
-        static void OnScrollCallback(WindowType* window, double xoffset, double yoffset);
-        static void OnWindowCloseCallback(WindowType* window);
-        static void OnWindowContentScaleCallback(WindowType* window, float xscale, float yscale);
-        static void OnWindowPosCallback(WindowType* window, int xpos, int ypos);
-        static void OnWindowSizeCallback(WindowType* window, int width, int height);
-        static void OnWindowFocusCallback(WindowType* window, int focused);
+        static void RegisterOnCharFunc(WindowType* handle, OnCharFunc func);
+        static void RegisterOnCursorEnterFunc(WindowType* handle, OnCursorEnterFunc func);
+        static void RegisterOnCursorPosFunc(WindowType* handle, OnCursorPosFunc func);
+        static void RegisterOnDropFunc(WindowType* handle, OnDropFunc func);
+        static void RegisterOnFrameBufferSizeFunc(WindowType* handle, OnFrameBufferSizeFunc func);
+        static void RegisterOnKeyFunc(WindowType* handle, OnKeyFunc func);
+        static void RegisterOnMouseButtonFunc(WindowType* handle, OnMouseButtonFunc func);
+        static void RegisterOnScrollFunc(WindowType* handle, OnScrollFunc func);
+        static void RegisterOnWindowCloseFunc(WindowType* handle, OnWindowCloseFunc func);
+        static void RegisterOnWindowContentScaleFunc(WindowType* handle, OnWindowContentScaleFunc func);
+        static void RegisterOnWindowPosFunc(WindowType* handle, OnWindowPosFunc func);
+        static void RegisterOnWindowSizeFunc(WindowType* handle, OnWindowSizeFunc func);
+        static void RegisterOnWindowFocusFunc(WindowType* handle, OnWindowFocusFunc func);
 
     protected:
-        friend class GLFWWindowImpl;
-        inline void OnChar(unsigned int codepoint) {
-            for (auto func : on_char_func) {
-                func(codepoint);
-            }
-        };
-        inline void OnCursorEnter(int entered) {
-            for (auto func : on_cursor_enter_func) {
-                func(entered);
-            }
-        }
-        inline void OnCursorPos(double xpos, double ypos) {
-            for (auto func : on_cursor_pos_func) {
-                func(xpos, ypos);
-            }
-        }
-        inline void OnDrop(int path_count, const char** paths) {
-            for (auto func : on_drop_func) {
-                func(path_count, paths);
-            }
-        }
-        inline void OnFramebufferSize(int width, int height) {
-            for (auto func : on_frame_buffer_size_func) {
-                func(width, height);
-            }
-        }
-        inline void OnKey(int key, int scancode, int action, int mods) {
-            for (auto func : on_key_func) {
-                func(key, scancode, action, mods);
-            }
-        }
-        inline void OnMouseButton(int button, int action, int mode) {
-            for (auto func : on_mouse_button_func) {
-                func(button, action, mode);
-            }
-        }
-        inline void OnScroll(double xoffset, double yoffset) {
-            for (auto func : on_scroll_func) {
-                func(xoffset, yoffset);
-            }
-        }
-        inline void OnWindowClose() {
-            for (auto func : on_window_close_func) {
-                func();
-            }
-        }
-        inline void OnWindowContentScale(float xscale, float yscale) {
-            for (auto func : on_window_content_scale_func) {
-                func(xscale, yscale);
-            }
-        }
-        inline void OnWindowPos(int xpos, int ypos) {
-            for (auto func : on_window_pos_func) {
-                func(xpos, ypos);
-            }
-        }
-        inline void OnWindowSize(int width, int height) {
-            for (auto func : on_window_size_func) {
-                func(width, height);
-            }
-        }
-        inline void OnWindowFocus(int focused) {
-            for (auto func : on_window_focus_func) {
-                func(focused);
-            }
-        }
-
-    private:
-        std::vector<OnCharFunc>               on_char_func;
-        std::vector<OnCursorEnterFunc>        on_cursor_enter_func;
-        std::vector<OnCursorPosFunc>          on_cursor_pos_func;
-        std::vector<OnDropFunc>               on_drop_func;
-        std::vector<OnFrameBufferSizeFunc>    on_frame_buffer_size_func;
-        std::vector<OnKeyFunc>                on_key_func;
-        std::vector<OnMouseButtonFunc>        on_mouse_button_func;
-        std::vector<OnScrollFunc>             on_scroll_func;
-        std::vector<OnWindowCloseFunc>        on_window_close_func;
-        std::vector<OnWindowContentScaleFunc> on_window_content_scale_func;
-        std::vector<OnWindowPosFunc>          on_window_pos_func;
-        std::vector<OnWindowSizeFunc>         on_window_size_func;
-        std::vector<OnWindowFocusFunc>        on_window_focus_func;
+        friend class WindowImpl;
     };
 }// namespace Moer
 #endif// !UICONTEXT_H

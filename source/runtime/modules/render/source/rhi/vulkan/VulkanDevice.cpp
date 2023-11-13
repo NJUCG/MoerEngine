@@ -67,6 +67,9 @@ void VulkanDevice::InitMemoryAllocator(VkInstance _instance) {
     alloc_create_info.device           = m_device;
     alloc_create_info.pVulkanFunctions = &vma_functions;
 
+    //capable of using buffer via device address(64bit) passed to shader.
+    alloc_create_info.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+
     VK_CHECK_RESULT(vmaCreateAllocator(&alloc_create_info, &m_allocator));
 
     LOG_INFO("Vulkan Memory Allocator initialized with api version: {}.", alloc_create_info.vulkanApiVersion);

@@ -2,6 +2,7 @@
 #define MOREENGINE_ENGINE_H
 
 #include <filesystem>
+#include <functional>
 
 namespace Moer {
     struct EngineInitInfo {
@@ -21,6 +22,8 @@ namespace Moer {
 
         bool IsRequestQuiting() const { return b_request_quiting; }
 
+        void RegisterOnDrawUI(std::function<void()> _func);
+
     private:
         void InitCore();
         void ShutDownCore();
@@ -34,8 +37,15 @@ namespace Moer {
 
         void Tick();
 
+        void OnDrawUI();
+
     private:
         bool b_request_quiting = false;
+
+        std::vector<std::function<void()>> on_draw_ui_funcs;
+
+        //test
+        void TestDrawUI();
     };
 }// namespace Moer
 

@@ -46,7 +46,7 @@ void VulkanRHIImpl::Initialize(const RHIInitInfo& _init) {
     max_frame_in_flight = _init.max_frame_in_flight;
 
     CreateInstance();
-    InitSurface(Moer::WindowContext::GetInstance().GetWindow());
+    InitSurface(Moer::WindowContext::GetMainWindow());
     InitVulkan();
 }
 
@@ -330,7 +330,8 @@ void VulkanRHIImpl::RHIUploadBuffer(RHIBufferRef _buffer_ref, const uint8_t* _da
     auto* vk_buffer = static_cast<VulkanRHIBuffer*>(_buffer_ref.Get());
     VK_CHECK_NULLPTR(vk_buffer, "RHIUploadBuffer: buffer to be uploaded is nullptr!", return);
 
-    VmaAllocator     allocator      = m_device->GetVmaAllocator();
+    VmaAllocator allocator = m_device->GetVmaAllocator();
+    // create staging buffer
     VulkanRHIBuffer* staging_buffer = static_cast<VulkanRHIBuffer*>(RHICreateBuffer({_size, 1, EBufferUsageFlags::TRANSFER_SRC}).Get());
 
     void* p_data;
@@ -365,11 +366,12 @@ RHIBufferRef VulkanRHIImpl::RHICreateBuffer(const RHIBufferCreateInfo& info) {
     VulkanRHIBuffer* vk_buffer = new VulkanRHIBuffer(buffer_info);
 
     VkBufferCreateInfo buffer_create_info{};
-    buffer_create_info.sType                 = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    buffer_create_info.pNext                 = nullptr;
-    buffer_create_info.flags                 = 0;
-    buffer_create_info.size                  = info.size;
-    buffer_create_info.usage                 = VulkanRHIBuffer::METoVKBufferUsageFlags(m_device, info.usage);
+    buffer_create_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    buffer_create_info.pNext = nullptr;
+    buffer_create_info.flags = 0;
+    buffer_create_info.size  = info.size;
+    // add device address flag for addressing buffer with 64-bit address
+    buffer_create_info.usage                 = VulkanRHIBuffer::METoVKBufferUsageFlags(m_device, info.usage) | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
     buffer_create_info.sharingMode           = VK_SHARING_MODE_EXCLUSIVE;
     buffer_create_info.queueFamilyIndexCount = 0;
     buffer_create_info.pQueueFamilyIndices   = nullptr;
@@ -568,8 +570,8 @@ void VulkanRHIImpl::RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso
 
 #pragma endregion
 
-void VulkanRHIImpl::InitSurface(void* _window) {
-    Moer::WindowContext::GetInstance().CreateVulkanSurface(m_instance, _window, nullptr, &m_surface);
+void VulkanRHIImpl::InitSurface(Moer::WindowHandle* _handle) {
+    Moer::WindowContext::CreateVulkanSurface(m_instance, _handle, nullptr, &m_surface);
 }
 
 void VulkanRHIImpl::InitVulkan() {
@@ -745,7 +747,7 @@ RHIViewportRef VulkanRHIImpl::RHICreateViewport(const RHIViewportInitializer& _i
     uint32_t         width, height;
     swapchain->Init(&width, &height, max_frame_in_flight, true);
     VkSurfaceKHR surface;
-    Moer::WindowContext::GetInstance().CreateVulkanSurface(m_instance, _init.window_handle, nullptr, &surface);
+    Moer::WindowContext::CreateVulkanSurface(m_instance, _init.window_handle, nullptr, &surface);
     swapchain->Connect(m_instance, surface, m_device);
     VulkanViewport* viewport = new VulkanViewport(swapchain);
 

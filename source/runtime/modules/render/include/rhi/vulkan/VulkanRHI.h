@@ -104,7 +104,7 @@ protected:
     VulkanViewport* m_current_viewport;
 
 protected:
-    void InitSurface(void* _window);
+    void InitSurface(Moer::WindowHandle* _window);
     void InitVulkan();
 
 #pragma region vulkan functions

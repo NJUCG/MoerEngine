@@ -4,10 +4,6 @@
 
 namespace Moer {
 
-    WindowContext& WindowContext::GetInstance() {
-        static WindowContext context;
-        return context;
-    }
     void WindowContext::Init(SurfaceInfo info) {
         WindowImpl::GetInstance().Init(info);
     }
@@ -19,81 +15,77 @@ namespace Moer {
     }
     WindowContext::~WindowContext() {
     }
-    WindowType* WindowContext::GetWindow() const {
-        return WindowImpl::GetInstance().window;
-    }
-    void* WindowContext::GetNativeWindow() const {
-        return WindowImpl::GetInstance().GetNativeWindow();
-    }
-    // void WindowContext::GuiInit(const GuiWindowInitInfo& _init_info) {
-    //     WindowImpl::GetInstance().GuiInit(_init_info);
-    // };
-    // void WindowContext::GuiUpdate() {
-    //     WindowImpl::GetInstance().GuiUpdate();
-    // }
-    // void WindowContext::GuiShutDown() {
-    //     WindowImpl::GetInstance().GuiShutDown();
-    // }
 
-    bool WindowContext::GetFocusMode() const {
-        return WindowImpl::GetInstance().focused;
-    }
-    void WindowContext::GetWindowSize(int* width, int* height) const {
-        WindowImpl::GetInstance().GetWindowSize(width, height);
-    }
-    void WindowContext::SetFocusMode(bool focused) {
-        WindowImpl::GetInstance().SetFocusMode(focused);
-    };
-    void WindowContext::SetTitle(const char* newTitle) {
-        WindowImpl::GetInstance().SetTitle(newTitle);
-    };
-    bool WindowContext::ShouldClose() const {
-        return WindowImpl::GetInstance().ShouldClose();
-    };
-    void WindowContext::PollEvents() const {
+    void WindowContext::PollEvents() {
         WindowImpl::GetInstance().PollEvents();
     };
 
-    void WindowContext::OnCharCallback(WindowType* window, unsigned int codepoint) {
-        WindowImpl::GetInstance().OnCharCallbackImpl(window, codepoint);
-    }
-    void WindowContext::OnCursorEnterCallback(WindowType* window, int entered) {
-        WindowImpl::GetInstance().OnCursorEnterCallbackImpl(window, entered);
-    }
-    void WindowContext::OnCursorPosCallback(WindowType* window, double xpos, double ypos) {
-        WindowImpl::GetInstance().OnCursorPosCallbackImpl(window, xpos, ypos);
-    }
-    void WindowContext::OnDropCallback(WindowType* window, int path_count, const char** paths) {
-        WindowImpl::GetInstance().OnDropCallbackImpl(window, path_count, paths);
-    }
-    void WindowContext::OnFramebufferSizeCallback(WindowType* window, int width, int height) {
-        WindowImpl::GetInstance().OnFramebufferSizeCallbackImpl(window, width, height);
-    }
-    void WindowContext::OnKeyCallback(WindowType* window, int key, int scancode, int action, int mods) {
-        WindowImpl::GetInstance().OnKeyCallbackImpl(window, key, scancode, action, mods);
-    }
-    void WindowContext::OnMouseButtonCallback(WindowType* window, int button, int action, int mode) {
-        WindowImpl::GetInstance().OnMouseButtonCallbackImpl(window, button, action, mode);
-    }
-    void WindowContext::OnScrollCallback(WindowType* window, double xoffset, double yoffset) {
-        WindowImpl::GetInstance().OnScrollCallbackImpl(window, xoffset, yoffset);
-    }
-    void WindowContext::OnWindowCloseCallback(WindowType* window) {
-        WindowImpl::GetInstance().OnWindowCloseCallbackImpl(window);
-    }
-    void WindowContext::OnWindowContentScaleCallback(WindowType* window, float xscale, float yscale) {
-        WindowImpl::GetInstance().OnWindowContentScaleCallbackImpl(window, xscale, yscale);
-    }
-    void WindowContext::OnWindowPosCallback(WindowType* window, int xpos, int ypos) {
-        WindowImpl::GetInstance().OnWindowPosCallbackImpl(window, xpos, ypos);
-    }
-    void WindowContext::OnWindowSizeCallback(WindowType* window, int width, int height) {
-        WindowImpl::GetInstance().OnWindowSizeCallbackImpl(window, width, height);
-    }
-    void WindowContext::OnWindowFocusCallback(WindowType* window, int focused) {
-        WindowImpl::GetInstance().OnWindowFocusCallbackImpl(window, focused);
-    }
-    void WindowContext::CreateVulkanSurface(void* instance, WindowType* window, void* allocation_callback, void* surface) {
+    void WindowContext::SetFocusMode(WindowHandle* window, bool focused) {
+        WindowImpl::GetInstance().SetFocusMode(window, focused);
+    };
+
+    void WindowContext::GetWindowSize(WindowHandle* window, int* width, int* height) {
+        WindowImpl::GetInstance().GetWindowSize(window, width, height);
+    };
+
+    void WindowContext::SetTitle(WindowHandle* window, const char* newTitle) {
+        WindowImpl::GetInstance().SetTitle(window, newTitle);
+    };
+
+    bool WindowContext::ShouldClose(WindowHandle* window) {
+        return WindowImpl::GetInstance().ShouldClose(window);
+    };
+
+    void* WindowContext::GetNativeWindow(WindowHandle* window) {
+        return WindowImpl::GetInstance().GetNativeWindow(window);
+    };
+
+    WindowHandle* WindowContext::GetMainWindow() {
+        return &WindowImpl::GetInstance().main_window_handle;
+    };
+
+    void WindowContext::CreateVulkanSurface(void* instance, WindowHandle* window, void* allocation_callback, void* surface) {
         WindowImpl::GetInstance().CreateVulkanSurface(instance, window, allocation_callback, surface);
+    };
+
+    void WindowContext::RegisterOnCharFunc(WindowType* handle, OnCharFunc func) {
+        WindowImpl::GetInstance().RegisterOnCharFunc(handle, func);
     }
+    void WindowContext::RegisterOnCursorEnterFunc(WindowType* handle, OnCursorEnterFunc func) {
+        WindowImpl::GetInstance().RegisterOnCursorEnterFunc(handle, func);
+    }
+    void WindowContext::RegisterOnCursorPosFunc(WindowType* handle, OnCursorPosFunc func) {
+        WindowImpl::GetInstance().RegisterOnCursorPosFunc(handle, func);
+    }
+    void WindowContext::RegisterOnDropFunc(WindowType* handle, OnDropFunc func) {
+        WindowImpl::GetInstance().RegisterOnDropFunc(handle, func);
+    }
+    void WindowContext::RegisterOnFrameBufferSizeFunc(WindowType* handle, OnFrameBufferSizeFunc func) {
+        WindowImpl::GetInstance().RegisterOnFrameBufferSizeFunc(handle, func);
+    }
+    void WindowContext::RegisterOnKeyFunc(WindowType* handle, OnKeyFunc func) {
+        WindowImpl::GetInstance().RegisterOnKeyFunc(handle, func);
+    }
+    void WindowContext::RegisterOnMouseButtonFunc(WindowType* handle, OnMouseButtonFunc func) {
+        WindowImpl::GetInstance().RegisterOnMouseButtonFunc(handle, func);
+    }
+    void WindowContext::RegisterOnScrollFunc(WindowType* handle, OnScrollFunc func) {
+        WindowImpl::GetInstance().RegisterOnScrollFunc(handle, func);
+    }
+    void WindowContext::RegisterOnWindowCloseFunc(WindowType* handle, OnWindowCloseFunc func) {
+        WindowImpl::GetInstance().RegisterOnWindowCloseFunc(handle, func);
+    }
+    void WindowContext::RegisterOnWindowContentScaleFunc(WindowType* handle, OnWindowContentScaleFunc func) {
+        WindowImpl::GetInstance().RegisterOnWindowContentScaleFunc(handle, func);
+    }
+    void WindowContext::RegisterOnWindowPosFunc(WindowType* handle, OnWindowPosFunc func) {
+        WindowImpl::GetInstance().RegisterOnWindowPosFunc(handle, func);
+    }
+    void WindowContext::RegisterOnWindowSizeFunc(WindowType* handle, OnWindowSizeFunc func) {
+        WindowImpl::GetInstance().RegisterOnWindowSizeFunc(handle, func);
+    }
+    void WindowContext::RegisterOnWindowFocusFunc(WindowType* handle, OnWindowFocusFunc func) {
+        WindowImpl::GetInstance().RegisterOnWindowFocusFunc(handle, func);
+    }
+
 }// namespace Moer
