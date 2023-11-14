@@ -1632,7 +1632,7 @@ void VulkanViewport::ResetResources() {
     }
     for (uint32_t index = 0; index < image_aquire_fences.size(); index++) {
         delete image_aquire_fences[index];
-        image_aquire_fences[index] = new VulkanRHIFence(swapchain->m_device, EFenceUsage::PRESENT);
+        image_aquire_fences[index] = new VulkanRHIFence(swapchain->m_device, EFenceUsage::AQUIRE_NEXT_FRAME);
     }
     info.backbuffer_format = VulkanEnumTranslator::VKToMEFormat(swapchain->image_format);
     frame_offset           = 0;
@@ -1671,7 +1671,11 @@ void VulkanViewport::Present(RHIFence* _render_finished) {
     VulkanDevice*   device   = swapchain->m_device;
     assert(device != nullptr && "Swapchain not valid");
 
-    swapchain->Present(device->GetPresentQueue(), vk_fence->GetBinaryHandle());
+    VkResult result = swapchain->Present(device->GetPresentQueue(), vk_fence->GetBinaryHandle());
+    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+        swapchain->Recreate();
+        ResetResources();
+    }
     // swapchain->Present();
 }
 
@@ -1681,7 +1685,7 @@ void VulkanViewport::WaitForQueueComplete(RHICommandQueue* _command_queue, RHIFe
     vkQueueWaitIdle(vk_queue->GetHandle());
 }
 ViewPort VulkanViewport::GetViewportExtent() const {
-    return ViewPort{0, 0, (float)swapchain->extent.width, (float)swapchain->extent.height};
+    return ViewPort{0, 0, (float)swapchain->extent.width, (float)swapchain->extent.height, 0.f, 1.f};
 }
 #pragma endregion
 
