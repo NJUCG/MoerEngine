@@ -3,13 +3,13 @@
 #include "VulkanDescriptor.h"
 #include "VulkanDevice.h"
 
-void VulkanDescriptorSetsLayout::Init(uint32_t _max_sets, const std::unordered_map<uint8_t, TDescriptorSetLayout>& _layout_mappings) {
-    m_layouts.resize(_max_sets, {});
-    for (const auto& [space, layout] : _layout_mappings) {
-        m_layouts[space] = layout.first;
-        for (auto& binding : layout.second) {
+void VulkanDescriptorSetsLayout::Init(const std::vector<TDescriptorSetLayout>& _layout_mappings) {
+    m_layouts.resize(_layout_mappings.size(), VK_NULL_HANDLE);
+    for (uint32_t i = 0; i < _layout_mappings.size(); ++i) {
+        m_layouts[i] = _layout_mappings[i].first;
+        for (auto& binding : _layout_mappings[i].second) {
             m_sets_binding_count[binding.descriptorType] += binding.descriptorCount;
-            m_descriptor_binding_infos[space][binding.binding] = {binding.descriptorType, binding.descriptorCount};
+            m_descriptor_binding_infos[i][binding.binding] = {binding.descriptorType, binding.descriptorCount};
         }
     }
 }

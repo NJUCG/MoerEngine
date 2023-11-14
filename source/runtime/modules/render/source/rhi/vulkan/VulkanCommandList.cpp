@@ -46,20 +46,11 @@ void VulkanRHIGraphicsCommandList::SetPipelineState(RHIGraphicsPipelineState* _g
     auto* vk_pso = static_cast<VulkanRHIGraphicsPipelineState*>(_graphics_pso);
     VK_CHECK_NULLPTR(vk_pso, "SetPipelineState: graphics pipeline state is nullptr!", return);
 
-    // // bind descriptor sets
-    // auto descriptor_sets = vk_pso->GetDescriptorSets();
-    // vkCmdBindDescriptorSets(
-    //     m_command_buffer,
-    //     VK_PIPELINE_BIND_POINT_GRAPHICS,
-    //     vk_pso->GetPipelineLayout(),
-    //     0,
-    //     descriptor_sets.size(),
-    //     descriptor_sets.data(),
-    //     0,
-    //     nullptr);
-
     vkCmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk_pso->GetHandle());
     m_current_pipeline_state = vk_pso;
+
+    // set descriptor sets to bind, constants to push
+    m_current_pipeline_state->InitResourceCache();
 }
 
 void VulkanRHIGraphicsCommandList::Open() {
@@ -107,8 +98,6 @@ void VulkanRHIGraphicsCommandList::DrawIndexedInstanced(
         _start_index_location,
         _start_vertex_location,
         _start_instance_location);
-
-    PostDrawCommand();
 }
 
 void VulkanRHIGraphicsCommandList::DrawIndexedIndirect(RHIBuffer* _argument_buffer, uint64_t _arg_offset, RHIBuffer* _count_buffer, uint64_t _count_buffer_offset, uint32_t _max_draw_count, uint32_t _stride) {
@@ -632,19 +621,21 @@ void VulkanRHIGraphicsCommandList::PrepareDrawCommand() {
 
     const auto pipeline_layout = vk_pso->GetPipelineLayout();
     // 1. bind descriptor sets
-    for (const auto& set_info : vk_resource_cache->GetSetsToBind()) {
+    vk_resource_cache->GetSetsToBind(m_sets_to_bind);
+    for (const auto& set_info : m_sets_to_bind) {
         vkCmdBindDescriptorSets(
             m_command_buffer,
             VK_PIPELINE_BIND_POINT_GRAPHICS,
             pipeline_layout,
-            set_info.set,
+            set_info.first,
             1,
-            &set_info.descriptor_set,
+            set_info.second,
             0,
             nullptr);
     }
     // 2. push constants
-    for (const auto& constant_info : vk_resource_cache->GetConstantsToPush()) {
+    vk_resource_cache->GetConstantsToPush(m_constants_to_push);
+    for (const auto& constant_info : m_constants_to_push) {
         vkCmdPushConstants(
             m_command_buffer,
             pipeline_layout,
@@ -653,14 +644,4 @@ void VulkanRHIGraphicsCommandList::PrepareDrawCommand() {
             constant_info.size,
             reinterpret_cast<const uint32_t*>(&constant_info.raw_data[constant_info.byte_offset_in_raw_data]));
     }
-}
-
-void VulkanRHIGraphicsCommandList::PostDrawCommand() {
-    const auto* vk_pso = m_current_pipeline_state;
-    VK_CHECK_NULLPTR(vk_pso, "PostDrawCommand: graphics pipeline state is nullptr!", return);
-    auto* vk_resource_cache = vk_pso->GetPipelineResourceCache();
-    VK_CHECK_NULLPTR(vk_resource_cache, "PostDrawCommand: graphics pipeline resource cache is nullptr!", return);
-
-    vk_resource_cache->ResetToBind();
-    vk_resource_cache->ResetToPush();
 }
