@@ -2,6 +2,7 @@
 #define MOERENGINE_DXC_COMPILER_H
 
 #include "shader/ShaderCompiler.h"
+#include "../ShaderReflector.h"
 class DXCompiler final : public IShaderCompiler {
 
 public:
@@ -17,5 +18,7 @@ private:
 
     void CompileD3D12(const ShaderCompilerInput& input, ShaderCompilerOutput& output);
     void CompileVulkan(const ShaderCompilerInput& input, ShaderCompilerOutput& output);
+
+    ShaderReflector* reflector;
 };
 #endif

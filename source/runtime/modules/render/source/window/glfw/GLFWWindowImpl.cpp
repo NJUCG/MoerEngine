@@ -1,4 +1,5 @@
 #include "GLFWWindowImpl.h"
+#include "rhi/RHI.h"
 #include "rhi/vulkan/VulkanRHI.h"
 #include "window/WindowContext.h"
 #include "platform/Platform.h"
@@ -11,6 +12,9 @@
 #define GLFW_EXPOSE_NATIVE_WIN32
 #include <GLFW/glfw3native.h>
 #endif
+#include "GLFWUIImpl.h"
+
+#include <imgui.h>
 
 #include "log/LogSystem.h"
 #include <string.h>
@@ -19,20 +23,12 @@ namespace Moer {
     GLFWWindowImpl::GLFWWindowImpl() {
     }
     GLFWWindowImpl::~GLFWWindowImpl() {
-        glfwDestroyWindow((GLFWwindow*)window);
     }
+    void GLFWWindowImpl::PollEvents() const { glfwPollEvents(); }
 
-    void  GLFWWindowImpl::SetFocusMode(bool _focused) { glfwSetInputMode((GLFWwindow*)window, GLFW_CURSOR, focused ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL); }
-    void  GLFWWindowImpl::GetWindowSize(int32_t* width, int32_t* height) const { glfwGetWindowSize((GLFWwindow*)window, width, height); }
-    void  GLFWWindowImpl::SetTitle(const char* _new_title) { glfwSetWindowTitle((GLFWwindow*)window, _new_title); }
-    bool  GLFWWindowImpl::ShouldClose() const { return glfwWindowShouldClose((GLFWwindow*)window); }
-    void  GLFWWindowImpl::PollEvents() const { glfwPollEvents(); }
-    void* GLFWWindowImpl::GetNativeWindow() const {
-#if PLATFORM_WINDOWS
-        return glfwGetWin32Window((GLFWwindow*)window);
-#endif
-        return nullptr;
-    }
+    void GLFWWindowImpl::GuiInit(const GuiWindowInitInfo& _init_info) {
+        GuiWindowInit(_init_info);
+    };
 
     void GLFWWindowImpl::Init(const SurfaceInfo& info) {
         if (!glfwInit()) {
@@ -51,20 +47,90 @@ namespace Moer {
 
         glfwSetWindowUserPointer(window, this);
 
-        glfwSetCharCallback(window, [](GLFWwindow* window, unsigned int codepoint) { WindowContext::OnCharCallback((WindowType*)window, codepoint); });
-        glfwSetCursorEnterCallback(window, [](GLFWwindow* window, int entered) { WindowContext::OnCursorEnterCallback(window, entered); });
-        glfwSetCursorPosCallback(window, [](GLFWwindow* window, double xpos, double ypos) { WindowContext::OnCursorPosCallback(window, xpos, ypos); });
-        glfwSetDropCallback(window, [](GLFWwindow* window, int path_count, const char** paths) { WindowContext::OnDropCallback(window, path_count, paths); });
-        glfwSetFramebufferSizeCallback(window, [](GLFWwindow* window, int width, int height) { WindowContext::OnFramebufferSizeCallback(window, width, height); });
-        glfwSetKeyCallback(window, [](GLFWwindow* window, int key, int scancode, int action, int mods) { WindowContext::OnKeyCallback(window, key, scancode, action, mods); });
-        glfwSetMouseButtonCallback(window, [](GLFWwindow* window, int button, int action, int mode) { WindowContext::OnMouseButtonCallback(window, button, action, mode); });
-        glfwSetScrollCallback(window, [](GLFWwindow* window, double xoffset, double yoffset) { WindowContext::OnScrollCallback(window, xoffset, yoffset); });
-        glfwSetWindowCloseCallback(window, [](GLFWwindow* window) { WindowContext::OnWindowCloseCallback(window); });
-        glfwSetWindowContentScaleCallback(window, [](GLFWwindow* window, float xscale, float yscale) { WindowContext::OnWindowContentScaleCallback(window, xscale, yscale); });
-        glfwSetWindowPosCallback(window, [](GLFWwindow* window, int xpos, int ypos) { WindowContext::OnWindowPosCallback(window, xpos, ypos); });
-        glfwSetWindowSizeCallback(window, [](GLFWwindow* window, int width, int height) { WindowContext::OnWindowSizeCallback(window, width, height); });
-        glfwSetWindowFocusCallback(window, [](GLFWwindow* window, int focused) { WindowContext::OnWindowFocusCallback(window, focused); });
-        this->window = window;
+        this->main_window_handle.window = window;
+
+        GuiWindowInitInfo window_info{.window              = window,
+                                      .b_install_callbacks = true,
+                                      .rhi_type            = g_rhi->GetType()};
+        //install imgui io callbacks
+        GuiInit(window_info);
+        //register engine io callbacks
+        InstallInterface(&main_window_handle);
+    }
+
+    void GLFWWindowImpl::InstallInterface(WindowHandle* _handle) {
+        GLFWwindow* window = (GLFWwindow*)_handle->window;
+        {
+            if (GLFWcharfun fc = glfwSetCharCallback(window, [](GLFWwindow* window, unsigned int codepoint) { WindowImpl::OnCharCallback((WindowType*)window, codepoint); }))
+                RegisterOnCharFunc(&main_window_handle, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1));
+        }
+        {
+            GLFWcursorenterfun fc = glfwSetCursorEnterCallback(window, [](GLFWwindow* window, int entered) { WindowImpl::OnCursorEnterCallback(window, entered); });
+            if (fc)
+                RegisterOnCursorEnterFunc(&main_window_handle, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1));
+        }
+        {
+            auto fc = glfwSetCursorPosCallback(window, [](GLFWwindow* window, double xpos, double ypos) { WindowImpl::OnCursorPosCallback(window, xpos, ypos); });
+            if (fc)
+                RegisterOnCursorPosFunc(&main_window_handle, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2));
+        }
+        {
+            auto fc = glfwSetDropCallback(window, [](GLFWwindow* window, int path_count, const char** paths) { WindowImpl::OnDropCallback(window, path_count, paths); });
+            if (fc)
+                RegisterOnDropFunc(&main_window_handle, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2));
+        }
+        {
+            auto fc = glfwSetFramebufferSizeCallback(window, [](GLFWwindow* window, int width, int height) { WindowImpl::OnFramebufferSizeCallback(window, width, height); });
+            if (fc)
+                RegisterOnFrameBufferSizeFunc(&main_window_handle, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2));
+        }
+        {
+            auto fc = glfwSetKeyCallback(window, [](GLFWwindow* window, int key, int scancode, int action, int mods) { WindowImpl::OnKeyCallback(window, key, scancode, action, mods); });
+            if (fc)
+                RegisterOnKeyFunc(&main_window_handle, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4));
+        }
+        {
+            auto fc = glfwSetMouseButtonCallback(window, [](GLFWwindow* window, int button, int action, int mode) { WindowImpl::OnMouseButtonCallback(window, button, action, mode); });
+            if (fc)
+                RegisterOnMouseButtonFunc(&main_window_handle, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
+        }
+        {
+            auto fc = glfwSetScrollCallback(window, [](GLFWwindow* window, double xoffset, double yoffset) { WindowImpl::OnScrollCallback(window, xoffset, yoffset); });
+            if (fc)
+                RegisterOnScrollFunc(&main_window_handle, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2));
+        }
+        {
+            auto fc = glfwSetWindowCloseCallback(window, [](GLFWwindow* window) { WindowImpl::OnWindowCloseCallback(window); });
+            if (fc)
+                RegisterOnWindowCloseFunc(&main_window_handle, std::bind(fc, (GLFWwindow*)window));
+        }
+        {
+            auto fc = glfwSetWindowContentScaleCallback(window, [](GLFWwindow* window, float xscale, float yscale) { WindowImpl::OnWindowContentScaleCallback(window, xscale, yscale); });
+            if (fc)
+                RegisterOnWindowContentScaleFunc(&main_window_handle, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2));
+        }
+        {
+            auto fc = glfwSetWindowPosCallback(window, [](GLFWwindow* window, int xpos, int ypos) { WindowImpl::OnWindowPosCallback(window, xpos, ypos); });
+            if (fc)
+                RegisterOnWindowPosFunc(&main_window_handle, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2));
+        }
+        {
+            auto fc = glfwSetWindowSizeCallback(window, [](GLFWwindow* window, int width, int height) { WindowImpl::OnWindowSizeCallback(window, width, height); });
+            if (fc)
+                RegisterOnWindowSizeFunc(&main_window_handle, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2));
+        }
+        {
+            auto fc = glfwSetWindowFocusCallback(window, [](GLFWwindow* window, int focused) { WindowImpl::OnWindowFocusCallback(window, focused); });
+            if (fc)
+                RegisterOnWindowFocusFunc(&main_window_handle, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1));
+        }
+    }
+    void GLFWWindowImpl::Tick() {
+        GuiUpdate();
+    }
+    void GLFWWindowImpl::ShutDown() {
+        GuiShutDown();
+        glfwDestroyWindow((GLFWwindow*)main_window_handle.window);
     }
 
     void GLFWWindowImpl::InitVulkan() {
@@ -78,88 +144,81 @@ namespace Moer {
 
 #endif
     }
-    void GLFWWindowImpl::CreateVulkanSurface(void* instance, WindowType* window, void* allocation_callback, void* surface) {
-        glfwCreateWindowSurface((VkInstance)instance, (GLFWwindow*)window, (const VkAllocationCallbacks*)allocation_callback, (VkSurfaceKHR*)surface);
+    void GLFWWindowImpl::GuiUpdate() {
+        GuiWindowNewFrame();
+    }
+    void GLFWWindowImpl::GuiShutDown() {
+        GuiWindowShutDown();
+    }
+    // void GLFWWindowImpl::CreateVulkanSurface(void* instance, WindowType* window, void* allocation_callback, void* surface) {
+    //     glfwCreateWindowSurface((VkInstance)instance, (GLFWwindow*)window, (const VkAllocationCallbacks*)allocation_callback, (VkSurfaceKHR*)surface);
+    // }
+    void GLFWWindowImpl::CreateVulkanSurface(void* instance, WindowHandle* window, void* allocation_callback, void* surface) {
+        glfwCreateWindowSurface((VkInstance)instance, (GLFWwindow*)window->window, (const VkAllocationCallbacks*)allocation_callback, (VkSurfaceKHR*)surface);
+    }
+    void GLFWWindowImpl::SetFocusMode(WindowHandle* _window, bool _focused) {
+        glfwSetInputMode((GLFWwindow*)_window->window, GLFW_CURSOR, focused ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
+    }
+
+    void GLFWWindowImpl::GetWindowSize(WindowHandle* _window, int32_t* width, int32_t* height) const {
+        glfwGetWindowSize((GLFWwindow*)_window->window, width, height);
+    }
+
+    void GLFWWindowImpl::SetTitle(WindowHandle* _window, const char* _new_title) {
+        glfwSetWindowTitle((GLFWwindow*)_window->window, _new_title);
+    }
+
+    bool GLFWWindowImpl::ShouldClose(WindowHandle* _window) const {
+        return glfwWindowShouldClose((GLFWwindow*)_window->window);
+    }
+    void* GLFWWindowImpl::GetNativeWindow(WindowHandle* _window) const {
+#if PLATFORM_WINDOWS
+        return glfwGetWin32Window((GLFWwindow*)_window->window);
+#endif
+        return nullptr;
     }
 
     void GLFWWindowImpl::OnCursorEnterCallbackImpl(WindowType* window, int entered) {
-        auto* context = reinterpret_cast<WindowContext*>(glfwGetWindowUserPointer((GLFWwindow*)window));
-        if (context) {
-            context->OnCursorEnter(entered);
-        }
+        OnCursorEnter(window, entered);
     };
 
     void GLFWWindowImpl::OnCharCallbackImpl(WindowType* window, unsigned int codepoint) {
-        auto* context = reinterpret_cast<WindowContext*>(glfwGetWindowUserPointer((GLFWwindow*)window));
-        if (context) {
-            context->OnChar(codepoint);
-        }
+
+        OnChar(window, codepoint);
     }
 
     void GLFWWindowImpl::OnCursorPosCallbackImpl(WindowType* window, double xpos, double ypos) {
-        auto* context = reinterpret_cast<WindowContext*>(glfwGetWindowUserPointer((GLFWwindow*)window));
-        if (context) {
-            context->OnCursorPos(xpos, ypos);
-        }
+        OnCursorPos(window, xpos, ypos);
     }
     void GLFWWindowImpl::OnDropCallbackImpl(WindowType* window, int path_count, const char** paths) {
-        auto* context = reinterpret_cast<WindowContext*>(glfwGetWindowUserPointer((GLFWwindow*)window));
-        if (context) {
-            context->OnDrop(path_count, paths);
-        }
+        OnDrop(window, path_count, paths);
     }
     void GLFWWindowImpl::OnFramebufferSizeCallbackImpl(WindowType* window, int width, int height) {
-        auto* context = reinterpret_cast<WindowContext*>(glfwGetWindowUserPointer((GLFWwindow*)window));
-        if (context) {
-            context->OnFramebufferSize(width, height);
-        }
+        OnFramebufferSize(window, width, height);
     }
     void GLFWWindowImpl::OnKeyCallbackImpl(WindowType* window, int key, int scancode, int action, int mods) {
-        auto* context = reinterpret_cast<WindowContext*>(glfwGetWindowUserPointer((GLFWwindow*)window));
-        if (context) {
-            context->OnKey(key, scancode, action, mods);
-        }
+        OnKey(window, key, scancode, action, mods);
     }
     void GLFWWindowImpl::OnMouseButtonCallbackImpl(WindowType* window, int button, int action, int mode) {
-        auto* context = reinterpret_cast<WindowContext*>(glfwGetWindowUserPointer((GLFWwindow*)window));
-        if (context) {
-            context->OnMouseButton(button, action, mode);
-        }
+        OnMouseButton(window, button, action, mode);
     }
     void GLFWWindowImpl::OnScrollCallbackImpl(WindowType* window, double xoffset, double yoffset) {
-        auto* context = reinterpret_cast<WindowContext*>(glfwGetWindowUserPointer((GLFWwindow*)window));
-        if (context) {
-            context->OnScroll(xoffset, yoffset);
-        }
+        OnScroll(window, xoffset, yoffset);
     }
     void GLFWWindowImpl::OnWindowCloseCallbackImpl(WindowType* window) {
-        auto* context = reinterpret_cast<WindowContext*>(glfwGetWindowUserPointer((GLFWwindow*)window));
-        if (context) {
-            context->OnWindowClose();
-        }
+        OnWindowClose(window);
     }
     void GLFWWindowImpl::OnWindowContentScaleCallbackImpl(WindowType* window, float xscale, float yscale) {
-        auto* context = reinterpret_cast<WindowContext*>(glfwGetWindowUserPointer((GLFWwindow*)window));
-        if (context) {
-            context->OnWindowContentScale(xscale, yscale);
-        }
+        OnWindowContentScale(window, xscale, yscale);
     }
     void GLFWWindowImpl::OnWindowPosCallbackImpl(WindowType* window, int xpos, int ypos) {
-        auto* context = reinterpret_cast<WindowContext*>(glfwGetWindowUserPointer((GLFWwindow*)window));
-        if (context) {
-            context->OnWindowPos(xpos, ypos);
-        }
+        OnWindowPos(window, xpos, ypos);
     }
     void GLFWWindowImpl::OnWindowSizeCallbackImpl(WindowType* window, int width, int height) {
-        auto* context = reinterpret_cast<WindowContext*>(glfwGetWindowUserPointer((GLFWwindow*)window));
-        if (context) {
-            context->OnWindowSize(width, height);
-        }
+        OnWindowSize(window, width, height);
     }
     void GLFWWindowImpl::OnWindowFocusCallbackImpl(WindowType* window, int focused) {
-        auto* context = reinterpret_cast<WindowContext*>(glfwGetWindowUserPointer((GLFWwindow*)window));
-        if (context) {
-            context->OnWindowFocus(focused);
-        }
+        OnWindowFocus(window, focused);
     }
+
 }// namespace Moer

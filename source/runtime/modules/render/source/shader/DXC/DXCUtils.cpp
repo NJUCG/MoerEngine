@@ -1,6 +1,7 @@
 #include "DXCUtils.h"
 #include "platform/Platform.h"
 #include <format>
+#include "shader/ShaderCommon.h"
 #include "wsl/wrladapter.h"
 #include "dxguids/dxguids.h"
 
@@ -59,14 +60,16 @@ EShaderParameterType BindingTypeToParameterType(EShaderBindingBaseType _type) {
         case SBT_FLOAT32:
             return EShaderParameterType::Num;
         case SBT_CBV:
+
             return EShaderParameterType::CBV;
+        case SBT_CONST_STRUCT:
+            return EShaderParameterType::CONSTANT_STRUCT;
         case SBT_SRV:
             return EShaderParameterType::SRV;
         case SBT_UAV:
             return EShaderParameterType::UAV;
         case SBT_SAMPLER:
             return EShaderParameterType::SAMPLER;
-        case SBT_ATTACHMENT_BINDING_SLOTS:
 
         defualt:
             break;
@@ -75,7 +78,6 @@ EShaderParameterType BindingTypeToParameterType(EShaderBindingBaseType _type) {
 }
 const WCHAR* GetShaderTypeWChar(EShaderType _type) {
     switch (_type) {
-
         case ST_VERTEX:
             return L"vs";
         case ST_GEOMETRY:
@@ -97,6 +99,7 @@ const WCHAR* GetShaderTypeWChar(EShaderType _type) {
         case ST_RAY_CALLABLE:
             return L"lib";
         case ST_Num: break;
+        default: break;
     }
     return L"";
 }

@@ -1,9 +1,11 @@
 #ifndef RHI_RESOURCE_INITIALIZER_H
 #define RHI_RESOURCE_INITIALIZER_H
+#include "PixelFormat.h"
 #include "RHICommon.h"
 #include "API_Macro.h"
 #include "misc/Hash.h"
 #include "math/Math.h"
+#include "rhi/RHICommon.h"
 
 #include <numeric>
 #include <array>
@@ -13,6 +15,7 @@ struct RHISamplerInitializer {
     RHISamplerInitializer() = default;
     explicit RHISamplerInitializer(
         ESamplerFilter                      _filter,
+        ETextureLayout                      _texture_layout,
         ESamplerAddressMode                 _address_mode_u = SAM_REPEAT,
         ESamplerAddressMode                 _address_mode_v = SAM_REPEAT,
         ESamplerAddressMode                 _address_mode_w = SAM_REPEAT,
@@ -34,6 +37,7 @@ struct RHISamplerInitializer {
           compare_op(_compare_op) {}
 
     EnumInByte<ESamplerFilter>          filter         = SF_NEAREST;
+    ETextureLayout                      texture_layout = ETextureLayout::TEXTURE_LAYOUT_UNDEFINED;
     EnumInByte<ESamplerAddressMode>     address_mode_u = SAM_REPEAT;
     EnumInByte<ESamplerAddressMode>     address_mode_v = SAM_REPEAT;
     EnumInByte<ESamplerAddressMode>     address_mode_w = SAM_REPEAT;
@@ -198,6 +202,16 @@ struct ViewportBounds {
     }
 };
 
+namespace Moer {
+    class WindowHandle;
+}
+struct RHIViewportInitializer {
+    Moer::WindowHandle* window_handle;
+    Extent2D            size{0, 0};
+    bool                b_is_full_screen;
+    EPixelFormat        preferred_format;
+};
+
 enum class EClearAttachment {
     NONE,
     COLOR,
@@ -321,11 +335,10 @@ struct RHISubresourceRange : public RHISubresourceSlice {
 
     uint8_t num_mips = s_all;
 
-    RHISubresourceRange() : RHISubresourceSlice(
-                                ETextureAspectFlags::NONE,
-                                0,
-                                0){};
-
+    RHISubresourceRange(ETextureAspectFlags _aspect = ETextureAspectFlags::COLOR) : RHISubresourceSlice(
+                                                                                        _aspect,
+                                                                                        0,
+                                                                                        0){};
     RHISubresourceRange(
         ETextureAspectFlags _aspect,
         uint32_t            _mip_index,
@@ -411,7 +424,7 @@ struct RHICopyTextureToBufferInfo {
     RHISubresourceSlice texture_slice;
 
     uint64_t buffer_offset;
-    /* he buffer_row_length is the number of pixels from one row to the next.
+    /* The buffer_row_length is the number of pixels from one row to the next.
      * The buffer_texture_height is the number of rows from one texture layer to the next.*/
     uint32_t buffer_row_length;
     uint32_t buffer_texture_height;

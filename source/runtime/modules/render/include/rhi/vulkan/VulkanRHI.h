@@ -2,20 +2,21 @@
 #define VULKAN_RHI_H
 
 #include "IVulkanRHI.h"
+#include "window/WindowContext.h"
 
-#include <vk_mem_alloc.h>
-
-struct GLFWwindow;
 class VulkanDevice;
 class VulkanSwapChain;
 class VulkanViewport;
 class VulkanRHIBuffer;
+class VulkanDescriptorAllocator;
 
 class VulkanRHIImpl final : public IVulkanRHI {
 public:
-    VulkanRHIImpl(GLFWwindow* _window);
+    VulkanRHIImpl();
 
-    void Initialize() final override;
+    void Initialize(const RHIInitInfo& _init) final override;
+
+    void PostInit() final override;
 
     void ShutDown() final override;
 
@@ -40,7 +41,7 @@ public:
 
     RHIShaderLibraryRef RHICreateShaderLibrary(EShaderPlatform _platform, const std::string& _file_path, const std::string& name) final override;
 
-    RHIFenceRef RHICreateFence(const std::string& name) final override;
+    RHIFenceRef RHICreateFence(const RHIFenceCreateInfo&) final override;
 
     RHIShaderBoundStateRef RHICreateShaderBoundStage(
         RHIVertexInputState* _vertex_input,
@@ -63,18 +64,30 @@ public:
     RHIShaderResourceViewRef  RHICreateShaderResourceView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) final override;
     RHIUnorderedAccessViewRef RHICreateUnorderedAccessView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) final override;
 
-    RHICommandQueue*        CreateCommandQueue(ECommandQueueType type) final override;
+    RHICommandQueue*        CreateCommandQueue(ECommandQueueType _type) final override;
     RHIGraphicsCommandList* CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state = nullptr) final override;
     RHIComputeCommandList*  CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr) final override;
-    RHIShaderRef            RHICreateShader(Shader* shader) final override;
+
+    void RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso, const RHIBatchedShaderParameters& _batched_params) final override;
 
 #pragma endregion
-#pragma region GUI
-    virtual bool GUIInit(uint32_t _num_frames_in_flight) final override;
-    virtual void GUIShutDown() final override;
-    virtual void GUINewFrame() final override;
-    virtual void GUIRender() final override;
+
+#pragma region viewport
+
+    virtual RHIViewport* RHIGetMainViewport() override;
+
+    virtual RHIViewportRef RHICreateViewport(const RHIViewportInitializer& _init) override;
+
+    virtual void RHIResizeViewport(RHIViewport* _viewport, Extent2D _size, bool _b_full_screen, EPixelFormat _format = PF_UNDEFINED) override;
+
+    virtual RHIViewportNextBackBufferInfo RHIGetNextFrameViewportBufferInfo(RHIViewport* _viewport) override;
+
+    virtual RHIUnorderedAccessView* RHIGetViewportBackBufferUAV(RHIViewport* _viewport, uint32_t index) override;
+
+    virtual void RHIPresentViewport(RHIViewport* _viewport, RHIFence* _render_end_fence) override;
+
 #pragma endregion
+
 protected:
     VkInstance               m_instance;
     std::vector<std::string> m_instance_layers;
@@ -83,17 +96,16 @@ protected:
     std::vector<std::string> m_enabled_instance_extensions;
 
     VkSurfaceKHR m_surface;
-    VmaAllocator m_allocator;
 
-    VulkanDevice*                m_device;
-    VulkanSwapChain*             m_swap_chain;
-    std::vector<VulkanViewport*> m_viewports;
-    VulkanViewport*              m_current_viewport;
+    VulkanDevice*   m_device;
+    VulkanViewport* m_main_viewport;
+    // VulkanSwapChain* m_swap_chain;
+    // std::vector<VulkanViewport*> m_viewports;
+    VulkanViewport* m_current_viewport;
 
 protected:
-    void InitSurface(GLFWwindow* _window);
+    void InitSurface(Moer::WindowHandle* _window);
     void InitVulkan();
-    void InitVulkanMemoryAllocator();
 
 #pragma region vulkan functions
 private:
@@ -103,9 +115,8 @@ private:
 
 #pragma region helper functions
 private:
-    bool CheckEnabledExtensions();
-
     bool CheckValidationLayer(const std::string& layer_name);
+    bool CheckEnabledExtensions();
 
     VkCommandBuffer BeginSingleTimeCommands(VkCommandPool _pool);
     void            EndSingleTimeCommands(VkCommandBuffer _command_buffer, VkCommandPool _pool, VkQueue _queue);

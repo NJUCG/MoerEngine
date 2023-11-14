@@ -1,9 +1,9 @@
 #ifndef VULKAN_COMMON_H
 #define VULKAN_COMMON_H
 
-#include <vulkan/vulkan.h>
-
 #include <vector>
+
+class VulkanDevice;
 
 namespace Moer {
 namespace RHI {

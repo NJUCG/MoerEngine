@@ -5,14 +5,21 @@
 #ifndef VULKAN_RHI_RESOURCE_H
 #define VULKAN_RHI_RESOURCE_H
 
+#include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
+#include "rhi/vulkan/misc/VulkanTypeDefs.h"
 
+#include "shader/ShaderCommon.h"
+
+#include <vector>
 #include <vulkan/vulkan.h>
 
 #include <vk_mem_alloc.h>
 
 class VulkanDevice;
 class VulkanRHIImpl;
+class VulkanDescriptorSetsLayout;
+class VulkanPipelineResourceCache;
 
 #pragma region forward definitions
 class VulkanRHICommandList;
@@ -51,7 +58,7 @@ class VulkanRHIUnorderedAccessView;
 class VulkanRHIVertexInputState;
 class VulkanRHIVertexShader;
 class VulkanRHIViewableResource;
-class VulkanRHIViewport;
+class VulkanViewport;
 #pragma endregion
 
 #pragma region utils definition
@@ -62,16 +69,32 @@ public:
     VulkanMemoryManager(const VulkanMemoryManager&)            = delete;
     VulkanMemoryManager& operator=(const VulkanMemoryManager&) = delete;
 
-    static VmaMemoryUsage MEGenerateVmaMemoryUsage();
+    static VmaAllocationCreateFlags MEGenerateVmaMemoryFlags(EBufferUsageFlags _flags);
+    static VmaMemoryUsage           MEGenerateVmaMemoryUsage();
 };
 
 class VulkanEnumTranslator final {
 public:
+    static VkFormat     METoVKFormat(EPixelFormat _format);
+    static EPixelFormat VKToMEFormat(VkFormat _format);
+
     static VkSampleCountFlagBits METoVKSampleCountFlagBits(uint32_t _me_count);
+    static VkImageAspectFlags    METoVKImageAspectFlags(ETextureAspectFlags _flags);
     static VkImageViewType       METoVKImageViewType(ETextureDimension _dim);
     static VkImageLayout         METoVKImageLayout(ETextureLayout _layout);
     static VkAttachmentLoadOp    METoVKAttachmentLoadOp(EAttachmentLoadOp _load_op);
     static VkAttachmentStoreOp   METoVKAttachmentStoreOp(EAttachmentStoreOp _store_op);
+    static VkFilter              METoVKImageFilter(ESamplerFilter _filter);
+
+    static VkPipelineStageFlags2 METoVkPipelineStageFlags2(ERHIPipelineStageFlags _flags);
+    static VkAccessFlags2        METoVkAccessFlags2(ERHIAccessFlags _flags);
+
+    static VkCullModeFlags     METoVKCullModeFlags(ERasterizerCullMode _cull_mode);
+    static VkPrimitiveTopology METoVKPrimitiveTopology(EPrimitiveTopology _primitive_type);
+    static VkPolygonMode       METoVKPolygonMode(ERasterizerFillMode _fill_mode);
+
+    static VkDescriptorType   METoVKDescriptorType(EShaderParameterType _type);
+    static VkShaderStageFlags METoVKShaderStageFlags(EShaderType _type);
 };
 
 #pragma endregion
@@ -84,6 +107,14 @@ public:
 
     void GenerateSamplerFromInitializer(const VulkanDevice* _device, const RHISamplerInitializer& _initializer);
 
+    inline VkSampler GetHandle() const {
+        return m_sampler;
+    }
+
+    inline VkImageLayout GetImageLayout() const {
+        return m_image_layout;
+    }
+
 private:
     VkFilter             METoVKMinMagFilterMode(ESamplerFilter _filter);
     VkSamplerMipmapMode  METoVKMipmapMode(ESamplerFilter _filter);
@@ -91,7 +122,8 @@ private:
     VkCompareOp          METoVKCompareOp(ESamplerCompareFunction _compare_op);
 
 private:
-    VkSampler m_sampler;
+    VkSampler     m_sampler;
+    VkImageLayout m_image_layout;
 };
 
 class VulkanRHIVertexInputState final : public RHIVertexInputState {
@@ -102,9 +134,24 @@ public:
 
     void GenerateVertexInputStateFromInitializer(const VertexInputStateInitializerList& _init);
 
+    inline uint32_t GetBindingCount() const {
+        return m_binding_count;
+    }
+
+    inline const VkVertexInputBindingDescription* GetBindings() const {
+        return m_bindings.data();
+    }
+
+    inline uint32_t GetAttributeCount() const {
+        return m_attribute_count;
+    }
+
+    inline const VkVertexInputAttributeDescription* GetAttributes() const {
+        return m_attributes.data();
+    }
+
 private:
     VkVertexInputRate METoVKVertexInputRate(EVertexInputRate _me_rate);
-    VkFormat          METoVKFormat(EVertexElementType _me_format);
 
 private:
     VkPipelineVertexInputStateCreateInfo m_input_state_create_info;
@@ -191,10 +238,12 @@ private:
 #pragma region shader definitions
 
 class VulkanRHIGraphicsShader {
-public:
-    void CreateShaderModule(const VulkanDevice* _device, const std::vector<uint8_t>& _code);
+    friend VulkanRHIImpl;
 
-    VkShaderModule GetHandle() const {
+public:
+    explicit VulkanRHIGraphicsShader() : m_shader_module(VK_NULL_HANDLE) {}
+
+    inline VkShaderModule GetHandle() const {
         return m_shader_module;
     }
 
@@ -203,45 +252,33 @@ protected:
 };
 
 class VulkanRHIVertexShader : public RHIVertexShader, public VulkanRHIGraphicsShader {
-    friend VulkanRHIImpl;
-
 public:
-    explicit VulkanRHIVertexShader() : RHIVertexShader(), VulkanRHIGraphicsShader() {}
+    explicit VulkanRHIVertexShader(const Shader* _meta_shader) : RHIVertexShader(_meta_shader), VulkanRHIGraphicsShader() {}
 };
 
 class VulkanRHIFragmentShader : public RHIFragmentShader, public VulkanRHIGraphicsShader {
-    friend VulkanRHIImpl;
-
 public:
-    explicit VulkanRHIFragmentShader() : RHIFragmentShader(), VulkanRHIGraphicsShader() {}
+    explicit VulkanRHIFragmentShader(const Shader* _meta_shader) : RHIFragmentShader(_meta_shader), VulkanRHIGraphicsShader() {}
 };
 
 class VulkanRHIGeometryShader : public RHIGeometryShader, public VulkanRHIGraphicsShader {
-    friend VulkanRHIImpl;
-
 public:
-    explicit VulkanRHIGeometryShader() : RHIGeometryShader(), VulkanRHIGraphicsShader() {}
+    explicit VulkanRHIGeometryShader(const Shader* _meta_shader) : RHIGeometryShader(_meta_shader), VulkanRHIGraphicsShader() {}
 };
 
 class VulkanRHIComputeShader : public RHIComputeShader, public VulkanRHIGraphicsShader {
-    friend VulkanRHIImpl;
-
 public:
-    explicit VulkanRHIComputeShader() : RHIComputeShader(), VulkanRHIGraphicsShader() {}
+    explicit VulkanRHIComputeShader(const Shader* _meta_shader) : RHIComputeShader(_meta_shader), VulkanRHIGraphicsShader() {}
 };
 
 class VulkanRHIMeshShader : public RHIMeshShader, public VulkanRHIGraphicsShader {
-    friend VulkanRHIImpl;
-
 public:
-    explicit VulkanRHIMeshShader() : RHIMeshShader(), VulkanRHIGraphicsShader() {}
+    explicit VulkanRHIMeshShader(const Shader* _meta_shader) : RHIMeshShader(_meta_shader), VulkanRHIGraphicsShader() {}
 };
 
 class VulkanRHIAmplificationShader : public RHIAmplificationShader, public VulkanRHIGraphicsShader {
-    friend VulkanRHIImpl;
-
 public:
-    explicit VulkanRHIAmplificationShader() : RHIAmplificationShader(), VulkanRHIGraphicsShader() {}
+    explicit VulkanRHIAmplificationShader(const Shader* _meta_shader) : RHIAmplificationShader(_meta_shader), VulkanRHIGraphicsShader() {}
 };
 
 #pragma endregion
@@ -252,14 +289,55 @@ class VulkanRHIGraphicsPipelineState final : public RHIGraphicsPipelineState {
     friend VulkanRHIImpl;
 
 public:
-    VulkanRHIGraphicsPipelineState() : RHIGraphicsPipelineState() {}
+    VulkanRHIGraphicsPipelineState()
+        : RHIGraphicsPipelineState(),
+          m_pipeline(VK_NULL_HANDLE), m_pipeline_layout(VK_NULL_HANDLE), m_pipeline_state_cache(nullptr) {}
+
+    inline VkPipeline GetHandle() const {
+        return m_pipeline;
+    }
+
+    inline const VkPipelineLayout GetPipelineLayout() const {
+        return m_pipeline_layout;
+    }
+
+    inline VulkanPipelineResourceCache* GetPipelineResourceCache() const {
+        return m_pipeline_state_cache;
+    }
+
+    inline const VulkanDescriptorSetsLayout* GetDescriptorSetsLayout() const {
+        return m_descriptor_sets_layout;
+    }
+
+    inline const std::vector<VkDescriptorSet>& GetDescriptorSets() const {
+        return m_descriptor_sets;
+    }
+
+    inline const std::vector<VkShaderStageFlags>& GetConstantShaderStages() const {
+        return m_constant_shader_stages;
+    }
+
+    void GenerateDescriptorSetLayouts(const VulkanDevice* _device, std::unordered_map<uint8_t, TDescriptorSetLayout>& _layout_mappings);
+    void CreateDescriptorSets(VulkanDevice* _device);
+    void GenerateResourceCache();
 
     static std::vector<VkPipelineShaderStageCreateInfo> METoVKShaderStageCreateInfo(const RHIShaderBoundStateInput& _shader_bound_state);
-    static VkPipelineVertexInputStateCreateInfo         METoVKVertexInputStateCreateInfo(const RHIVertexInputState& _vertex_input_state);
-    static VkPrimitiveTopology                          METoVKPrimitiveTopology(EPrimitiveTopology _primitive_type);
+    static VkPipelineVertexInputStateCreateInfo         METoVKVertexInputStateCreateInfo(const RHIVertexInputState* _vertex_input_state);
+    static std::vector<const Shader*>                   GetShaderInfoList(const RHIShaderBoundStateInput& _shader_bound_state);
 
 private:
-    VkPipeline m_pipeline;
+    VkPipeline       m_pipeline;
+    VkPipelineLayout m_pipeline_layout;
+    // descriptor sets
+    VulkanDescriptorSetsLayout*  m_descriptor_sets_layout;
+    std::vector<VkDescriptorSet> m_descriptor_sets;
+    // push constants
+    std::vector<VkShaderStageFlags> m_constant_shader_stages;
+    // dynamic states
+    std::array<VkViewport, 2> m_viewports;
+    std::array<VkRect2D, 2>   m_scissors;
+
+    VulkanPipelineResourceCache* m_pipeline_state_cache;
 };
 #pragma endregion
 
@@ -283,6 +361,7 @@ public:
         return m_alloc.buffer;
     }
 
+    static VkIndexType        METoVKIndexType(EIndexElementType _type);
     static VkBufferUsageFlags METoVKBufferUsageFlags(VulkanDevice* _device, EBufferUsageFlags _me_flags);
 
 private:
@@ -292,12 +371,24 @@ private:
     } m_alloc;
 };
 
-class VulkanRHITexture final : public RHITexture {
+class VulkanDeviceObject {
+public:
+    VulkanDeviceObject(VulkanDevice* device);
+
+protected:
+    VulkanDevice* device;
+};
+class VulkanRHITexture final : public RHITexture, public VulkanDeviceObject {
     friend VulkanRHIImpl;
 
 public:
     VulkanRHITexture() = delete;
-    explicit VulkanRHITexture(const RHITextureCreateInfo& _info) : RHITexture(_info) {}
+    ~VulkanRHITexture();
+
+    explicit VulkanRHITexture(const RHITextureCreateInfo& _info, VulkanDevice* _device);
+
+    //for inner usage only
+    explicit VulkanRHITexture(const RHITextureCreateInfo& _info, VkImage _image, VulkanDevice* _device);
 
     inline const VmaAllocation GetAllocation() const {
         return m_alloc.alloc;
@@ -305,6 +396,10 @@ public:
 
     inline VkImage GetHandle() const {
         return m_alloc.image;
+    }
+    //for inner usage only
+    inline void SetAttachedImageInner(VkImage _image) {
+        m_alloc.image = _image;
     }
 
     static VkImageType       METoVKImageType(ETextureDimension _dim);
@@ -326,23 +421,34 @@ private:
 
 class VulkanRHIFence final : public RHIFence {
 public:
-    VulkanRHIFence(const std::string& _name, VulkanDevice* _device);
-    bool Signaled() const final override;
+    VulkanRHIFence(VulkanDevice* _device, EFenceUsage _usage);
+    virtual ~VulkanRHIFence();
+
+    uint64_t GetValue() const override;
+
+    void               Wait(uint64_t value) override;
+    inline VkSemaphore GetSemaphoreHandle() { return m_semaphore; }
+    inline VkSemaphore GetBinaryHandle() { return m_binary; }
+    inline EFenceUsage GetUsage() { return usage; }
 
 private:
     VulkanDevice* m_device;
-    VkFence       m_fence;
+    VkSemaphore   m_semaphore;
+    VkSemaphore   m_binary;
+    EFenceUsage   usage;
 };
 
 #pragma endregion
 
 #pragma region viewable resources view definitions
 
-class VulkanRHIUnorderedAccessView final : public RHIUnorderedAccessView {
+class VulkanRHIUnorderedAccessView final : public RHIUnorderedAccessView, public VulkanDeviceObject {
     friend VulkanRHIImpl;
+    friend VulkanViewport;
 
 public:
-    explicit VulkanRHIUnorderedAccessView(RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIUnorderedAccessView(_resource, _viewInfo) {}
+    virtual ~VulkanRHIUnorderedAccessView();
+    explicit VulkanRHIUnorderedAccessView(VulkanDevice* _device, RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIUnorderedAccessView(_resource, _viewInfo), VulkanDeviceObject(_device) {}
 
     inline VkImageView GetView() const { return m_view; }
 
@@ -355,13 +461,66 @@ class VulkanRHIShaderResourceView final : public RHIShaderResourceView {
 
 public:
     explicit VulkanRHIShaderResourceView(RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIShaderResourceView(_resource, _viewInfo) {}
-
     inline VkImageView GetView() const { return m_view; }
 
 private:
     VkImageView m_view;
 };
 
+class VulkanImageView final : public RHIView {
+    friend VulkanRHIImpl;
+
+public:
+    explicit VulkanImageView(RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIView(RRT_ATTACHMENT_VIEW, _resource, _viewInfo) {}
+
+    explicit VulkanImageView(RHIViewableResource* _resource, VkImageView _view, const RHIViewInfo& _viewInfo) : RHIView(RRT_ATTACHMENT_VIEW, _resource, _viewInfo), m_view(_view) {
+    }
+    inline VkImageView GetView() const { return m_view; }
+
+private:
+    VkImageView m_view;
+};
+
+#pragma endregion
+
+#pragma region viewport
+
+class VulkanViewport final : public RHIViewport {
+public:
+    VulkanViewport(class VulkanSwapChain* _swapchain);
+    ~VulkanViewport();
+    virtual void OnResize(Extent2D _size) override;
+
+    virtual void    Present(RHIFence* _render_finished) override;
+    VulkanRHIFence* GetAcquireNextImageFence();
+
+    RHIViewportNextBackBufferInfo GetNextFrameBackBufferInfo() override;
+
+    VulkanRHIUnorderedAccessView* GetCurrentBackBuffer(uint32_t index);
+
+    virtual void WaitForQueueComplete(class RHICommandQueue* _command_queue, RHIFence* _optional_fence) override;
+
+    virtual ViewPort GetViewportExtent() const override;
+
+private:
+    void InnerCreateResources();
+    void InnerDestroyResources();
+    void ResetResources();
+
+    VulkanRHIUnorderedAccessView* InnerCreateVulkanUnorderedAccessView(VulkanDevice* _device, VulkanRHITexture* texture, const RHIViewInfo& _view_info);
+
+    class VulkanSwapChain* swapchain;
+
+    std::vector<VulkanRHIFence*> image_aquire_fences;
+
+    std::vector<VulkanRHIUnorderedAccessView*> swapchain_image_uavs;
+
+    std::vector<VulkanRHITexture*> swapchain_images;
+
+    uint32_t frame_offset = 0;
+
+    uint32_t max_frame_in_flight = 3;
+};
 #pragma endregion
 
 #pragma region graphic pipeline definitions

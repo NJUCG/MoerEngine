@@ -4,6 +4,7 @@ namespace Moer {
     class RenderSystem {
     public:
         static void Init();
+        static void PostInit();
         static void Tick();
         static void ShutDown();
 
@@ -13,6 +14,7 @@ namespace Moer {
         static void InitShaderResources();
         static void FreeShaderResources();
         static void InitRHI();
+        static void PostInitRHI();
         static void ShutDownRHI();
         RenderSystem() = default;
     };

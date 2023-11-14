@@ -74,8 +74,6 @@ void ShaderParametersMetadata::InitializeLayout() {
             case SBT_UAV:
             case SBT_SAMPLER:
                 return true;
-            case SBT_ATTACHMENT_BINDING_SLOTS:
-
             default: break;
         }
         return false;
@@ -88,10 +86,8 @@ void ShaderParametersMetadata::InitializeLayout() {
             layout.resource_parameters.emplace_back(
                 RHIResourceParameterLayout(member.GetOffset(),
                                            member.GetStride(),
-                                           
+
                                            base_type));
-        } else if (base_type == SBT_ATTACHMENT_BINDING_SLOTS) {
-            // member.
         }
     }
     this->layout = &layout;
