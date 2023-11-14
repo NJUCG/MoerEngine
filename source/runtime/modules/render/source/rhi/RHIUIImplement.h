@@ -3,6 +3,7 @@
 
 #include "PixelFormat.h"
 #include "rhi/RHICommandList.h"
+#include "rhi/RHICommandQueue.h"
 #include "rhi/RHIResource.h"
 #include "shader/Shader.h"
 
@@ -20,8 +21,8 @@ struct GuiBackendData {
     size_t buffer_memory_alignment;
 
     RHIGraphicsPipelineStateRef pipeline;
-    RHIShaderRef                shader_module_vert;
-    RHIShaderRef                shader_module_frag;
+    RHIVertexShaderRef          shader_module_vert;
+    RHIFragmentShaderRef        shader_module_frag;
 
     // Font data
     RHISamplerRef            font_sampler;
@@ -30,36 +31,39 @@ struct GuiBackendData {
     RHIBufferRef             upload_buffer;
 
     // Render buffers for main window
-    GuiWindowRenderBuffers main_window_render_buffers;
-    EPixelFormat           attachment_format;
-    uint32_t               num_frames_in_flight;
+    GuiFrameRenderBuffers* main_viewport_render_buffers;
+    RHIViewport*           main_viewport;
+
+    EPixelFormat attachment_format;
+    uint32_t     num_frames_in_flight;
 
     GuiBackendData() {
         memset((void*)this, 0, sizeof(*this));
         buffer_memory_alignment = 256;
     }
-};
-
-struct GuiFrameContext {
-    RHIResource* attachment;
+    ~GuiBackendData();
 };
 
 struct GuiViewportData {
-    int width;
-    int height;
 
+    RHICommandQueue*        command_queue;
     RHIGraphicsCommandList* comand_list;
-    RHIFence*               fence;
 
-    uint32_t         num_frames_in_flight;
-    GuiFrameContext* frames;
+    RHIFenceRef present_fence;
 
-    uint32_t               frame_index;   // Current frame being rendered to (0 <= FrameIndex < FrameInFlightCount)
+    RHIViewportRef viewport;
+
     GuiFrameRenderBuffers* render_buffers;// Used by all viewports
 
-    GuiViewportData(uint32_t _num_frames_in_flight) : num_frames_in_flight(_num_frames_in_flight) {
+    uint64_t frame_index;
+
+    GuiViewportData() {
         memset(&render_buffers, 0, sizeof(render_buffers));
     }
     ~GuiViewportData() {}
+};
+
+struct GuiViewportData2 {
+    RHIViewportRef viewport;
 };
 #endif

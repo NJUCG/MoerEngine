@@ -435,6 +435,7 @@ enum ERHIResourceType {
     RRT_GLOBAL_BUFFER,
     RRT_BUFFER,
     RRT_TEXTURE,
+    RRT_ATTACHMENT_VIEW,
     RRT_TEXTURE_REFERENCE,
     RRT_TimestampCalibrationQuery,
     RRT_GPU_FENCE,
@@ -496,7 +497,7 @@ enum ERHIPipelineStageFlags : uint32_t {
     PS_FRAGMENT_DENSITY_PROCESS         = 0x00800000,
     PS_FRAGMENT_SHADING_RATE_ATTACHMENT = 0x00400000,
     PS_COMMAND_PREPROCESS_BIT_NV        = 0x00020000,
-    PS_TASK_SHADER_BIT                  = 0x00080000,
+    PS_TASK_SHADER                      = 0x00080000,
     PS_MESH_SHADER                      = 0x00100000,
 };
 #pragma endregion
@@ -553,7 +554,7 @@ enum class ERHIAccessFlags : uint32_t {
     TRANSFORM_FEEDBACK_COUNTER_READ_BIT_EXT   = 1 << 21,
     TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT  = 1 << 22,
     CONDITIONAL_RENDERING_READ_BIT_EXT        = 1 << 23,
-    COMMAND_PREPROCESS_READ_BIT_VN            = 1 << 24,
+    COMMAND_PREPROCESS_READ_BIT_NV            = 1 << 24,
     COMMAND_PREPROCESS_WRITE_BIT_NV           = 1 << 25,
     FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT = 1 << 26,
     ACCELERATION_STRUCTURE_READ_BIT           = 1 << 27,
@@ -595,6 +596,7 @@ enum ETextureLayout : uint32_t {
 };
 #pragma endregion
 enum EShaderType : uint8_t {
+    ST_NONE,
     ST_VERTEX,
     ST_GEOMETRY,
     ST_FRAGMENT,
@@ -609,34 +611,15 @@ enum EShaderType : uint8_t {
     ST_NumBits = 4
 };
 static_assert(ST_Num <= (1 << ST_NumBits), "ST_Num exceeds ST_NumBits bound");
-enum EVertexElementType : uint8_t {
-    VET_None,
-    VET_Float1,
-    VET_Float2,
-    VET_Float3,
-    VET_Float4,
-    VET_PackedNormal,// FPackedNormal
-    VET_UByte4,
-    VET_UByte4N,
-    VET_Color,
-    VET_Short2,
-    VET_Short4,
-    VET_Short2N,// 16 bit word normalized to (value/32767.0,value/32767.0,0,0,1)
-    VET_Half2,  // 16 bit float using 1 bit sign, 5 bit exponent, 10 bit mantissa
-    VET_Half4,
-    VET_Short4N,// 4 X 16 bit word, normalized
-    VET_UShort2,
-    VET_UShort4,
-    VET_UShort2N, // 16 bit word normalized to (value/65535.0,value/65535.0,0,0,1)
-    VET_UShort4N, // 4 X 16 bit word unsigned, normalized
-    VET_URGB10A2N,// 10 bit r, g, b and 2 bit a normalized to (value/1023.0f, value/1023.0f, value/1023.0f, value/3.0f)
-    VET_UInt,
-    VET_Num,
-
-    VET_NumBits = 5,
+enum EIndexElementType : uint8_t {
+    IET_NONE,
+    IET_UINT8,
+    IET_UINT16,
+    IET_UINT32,
+    IET_Num,
+    IET_NumBits = 2
 };
-static_assert(VET_Num <= (1 << VET_NumBits), "VET_Num will not fit on VET_NumBits");
-
+static_assert(IET_Num <= (1 << IET_NumBits), "IET_Num will not fit on IET_NumBits");
 enum EVertexInputRate : uint8_t {
     VIR_VERTEX,
     VIR_INSTANCE,
@@ -723,14 +706,13 @@ enum EShaderBindingBaseType : uint8_t {
     SBT_INT32,
     SBT_UINT32,
     SBT_FLOAT32,
-
+    SBT_CONST_STRUCT,
     // RHI resources not tracked by render graph.
     SBT_CBV,
     SBT_SRV,
     SBT_UAV,
     SBT_SAMPLER,
 
-    SBT_ATTACHMENT_BINDING_SLOTS,
     SBT_ResourceNum     = 4,
     SBT_ResourceNumBits = 4,
     SBT_Num,
@@ -741,11 +723,11 @@ ENUM_STR_ELEMENT(SBT_INVALID)
 ENUM_STR_ELEMENT(SBT_BOOL)
 ENUM_STR_ELEMENT(SBT_INT32)
 ENUM_STR_ELEMENT(SBT_FLOAT32)
+ENUM_STR_ELEMENT(SBT_CONST_STRUCT)
 ENUM_STR_ELEMENT(SBT_CBV)
 ENUM_STR_ELEMENT(SBT_SRV)
 ENUM_STR_ELEMENT(SBT_UAV)
 ENUM_STR_ELEMENT(SBT_SAMPLER)
-ENUM_STR_ELEMENT(SBT_ATTACHMENT_BINDING_SLOTS)
 END_ENUM_STR_DEFINITION(EShaderBindingBaseType)
 static_assert(SBT_Num <= (1 << SBT_NumBits), "SBT_Num will not fit on SBT_NumBits");
 using GlobalBufferStaticBindingPoint = uint8_t;
@@ -767,36 +749,36 @@ enum EGlobalBufferLifeScope {
 };
 
 enum class ETextureUsageFlags : uint64_t {
-    UNDEFINED,
+    UNDEFINED = 0ULL,
 
-    ATTACHMENT_RENDER,
-    ATTACHMENT_RESOLVE,
-    ATTACHMENT_DEPTH_STENCIL,
+    ATTACHMENT_RENDER        = 1 << 0,
+    ATTACHMENT_RESOLVE       = 1 << 1,
+    ATTACHMENT_DEPTH_STENCIL = 1 << 2,
 
-    SRGB,
+    SRGB = 1 << 3,
 
-    SHADER_RESOURCE,
-    CPU_VISIBLE,
-    TILLING_NONE,
-    DYNAMIC,
+    SHADER_RESOURCE = 1 << 4,
+    CPU_VISIBLE     = 1 << 5,
+    TILLING_NONE    = 1 << 6,
+    DYNAMIC         = 1 << 7,
 
-    INPUT_ATTACHMENT,
-    TRANSFER_SRC,
-    TRANSFER_DST,
-    SAMPLED,
-    UNORDERED_ACCESS,
-    COLOR_ATTACHMENT,
-    DEPTH_STENCIL_ATTACHMENT,
-    TRANSIENT_ATTACHMENT,
+    INPUT_ATTACHMENT         = 1 << 8,
+    TRANSFER_SRC             = 1 << 9,
+    TRANSFER_DST             = 1 << 10,
+    SAMPLED                  = 1 << 11,
+    UNORDERED_ACCESS         = 1 << 12,
+    COLOR_ATTACHMENT         = 1 << 13,
+    DEPTH_STENCIL_ATTACHMENT = 1 << 14,
+    TRANSIENT_ATTACHMENT     = 1 << 15,
 
-    VIDEO_DECODE,
+    VIDEO_DECODE = 1 << 16,
 
-    FRAGMENT_DENSITY_MAP,
-    FRAGMENT_SHADING_RATE_ATTACHMENT,
+    FRAGMENT_DENSITY_MAP             = 1 << 17,
+    FRAGMENT_SHADING_RATE_ATTACHMENT = 1 << 18,
 
-    VIDEO_ENCODE,
-    ATTACHMENT_FEEDBACK_LOOP,
-    Num
+    VIDEO_ENCODE             = 1 << 19,
+    ATTACHMENT_FEEDBACK_LOOP = 1 << 20,
+    Num                      = 22
 };
 ENUM_BIT_OP_IMPL(ETextureUsageFlags, FLAG)
 
@@ -804,20 +786,20 @@ ENUM_BIT_OP_IMPL(ETextureUsageFlags, FLAG)
 enum class ETextureAspectFlags : uint32_t {
     // no
     NONE,
-    COLOR         = 1 << 1,
-    DEPTH_SLICE   = 1 << 2,
-    STENCIL_SLICE = 1 << 3,
-    META_DATA     = 1 << 4,
+    COLOR         = 1 << 0,
+    DEPTH_SLICE   = 1 << 1,
+    STENCIL_SLICE = 1 << 2,
+    META_DATA     = 1 << 3,
     //for multi-planer texture
-    PLANE_0 = 1 << 5,
-    PLANE_1 = 1 << 6,
-    PLANE_2 = 1 << 7,
+    PLANE_0 = 1 << 4,
+    PLANE_1 = 1 << 5,
+    PLANE_2 = 1 << 6,
 
     //for ycbcr(used in video encoding, decoding) sampler color conversion
-    MEMORY_PLANE_0 = 1 << 8,
-    MEMORY_PLANE_1 = 1 << 9,
-    MEMORY_PLANE_2 = 1 << 10,
-    MEMORY_PLANE_3 = 1 << 11
+    MEMORY_PLANE_0 = 1 << 7,
+    MEMORY_PLANE_1 = 1 << 8,
+    MEMORY_PLANE_2 = 1 << 9,
+    MEMORY_PLANE_3 = 1 << 10
 };
 
 /* various shading rate palette, VSR_{fragment_invocation_count}_{region_size}
@@ -875,7 +857,6 @@ static_assert(SP_Num < (1 << SP_NumBits) && "");
 
 enum class ECommandQueueType {
     GRAPHICS,
-    SECONDARY,
     COMPUTE,
     COPY
 };
@@ -914,6 +895,15 @@ struct SubpassSettings {
     uint8_t index = 0;
 };
 static_assert(sizeof(SubpassSettings) == 2);
+
+struct ViewPort {
+    float x;
+    float y;
+    float width;
+    float height;
+    float min_depth;
+    float max_depth;
+};
 #pragma endregion
 
 #endif// !RHI_PLATFORM_COMMON_H

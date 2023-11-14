@@ -139,7 +139,7 @@ public:
 
 private:
     GraphTask(GraphEventRef _subsequents, int32_t initialCount) : BaseGraphTask(initialCount + 1) {
-        m_subsequents.swap(_subsequents);
+        m_subsequents.Swap(_subsequents);
     }
 
     GraphEventRef Setup(const GraphEventArray* prerequests = nullptr, EThread::Type currentThread = EThread::UNKNOWN_THREAD, bool unlock = true) {

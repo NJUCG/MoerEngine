@@ -9,20 +9,28 @@ protected:
     RHI_API RHICommandListBase();
 
 public:
-    virtual void SetBatchedShaderParameter(RHIShaderRef shader, const RHIBatchedShaderParameters& parameters) = 0;
-    RHI_API ~RHICommandListBase();
+    virtual void SetBatchedShaderParameter(const RHIBatchedShaderParameters& _parameters) = 0;
+    RHI_API virtual ~RHICommandListBase();
+
+    virtual void* GetNativeHandle() const { return nullptr; }
 };
 
 class RHIGraphicsCommandList : public RHICommandListBase {
 public:
-    virtual void SetBatchedShaderParameter(RHIShaderRef shader, const RHIBatchedShaderParameters& parameters)             = 0;
-    virtual void SetPipelineState(RHIGraphicsPipelineState* _graphics_pso, const RHIShaderBoundStateInput& _shader_input) = 0;
+    virtual ~RHIGraphicsCommandList(){};
+    virtual void SetBatchedShaderParameter(const RHIBatchedShaderParameters& _parameters) = 0;
+    virtual void SetPipelineState(RHIGraphicsPipelineState* _graphics_pso)                = 0;
     virtual void Open() {}
     virtual void Close()                                             = 0;
-    virtual void Reset(RHIGraphicsPipelineState* _graphics_pso)      = 0;
+    virtual void Reset()                                             = 0;
     virtual void ClearState(RHIGraphicsPipelineState* _graphics_pso) = 0;
 
-    virtual void DrawIndexedInstanced(uint32_t _index_count, uint32_t _instance_count, int32_t _base_vertex_location, uint32_t _start_instance_location) = 0;
+    virtual void DrawIndexedInstanced(
+        uint32_t _index_count,
+        uint32_t _instance_count,
+        uint32_t _start_index_location,
+        uint32_t _start_vertex_location,
+        uint32_t _start_instance_location) = 0;
 
     virtual void DrawIndexedIndirect(
         RHIBuffer* _argument_buffer,
@@ -78,12 +86,15 @@ public:
     virtual void SetBlendFactors(const float _factors[4])                          = 0;
 
     virtual void BindVertexBuffers(
-        uint32_t         _start_index,
-        uint32_t         _num_buffers,
-        const RHIBuffer* p_vertex_buffers) = 0;
+        uint32_t            _start_index,
+        uint32_t            _num_buffers,
+        const RHIBufferRef* p_vertex_buffers,
+        const uint32_t*     _offsets) = 0;
 
     virtual void BindIndexBuffer(
-        const RHIBuffer* p_index_buffer) = 0;
+        const RHIBuffer*  p_index_buffer,
+        uint32_t          _offset,
+        EIndexElementType _type) = 0;
 
     virtual void SetAttachments() {
     }
@@ -128,6 +139,6 @@ public:
 };
 
 class RHIComputeCommandList : public RHICommandListBase {
-    virtual void SetBatchedShaderParameter(RHIShaderRef shader, const RHIBatchedShaderParameters& parameters) = 0;
+    virtual void SetBatchedShaderParameter(const RHIBatchedShaderParameters& parameters) = 0;
 };
 #endif//RHI_COMMAND_LIST_H

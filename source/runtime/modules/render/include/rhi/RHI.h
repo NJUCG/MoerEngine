@@ -1,5 +1,6 @@
 #ifndef RHI_H
 #define RHI_H
+#include "PixelFormat.h"
 #include "RHIResource.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
@@ -13,11 +14,16 @@ class RHIComputeCommandList;
 class RHICommandQueue;
 class Shader;
 
+struct RHIInitInfo {
+    uint32_t max_frame_in_flight = 3;
+};
 class RHI {
 public:
+    RHI(ERHIType _type) : rhi_type(_type) {}
+
     virtual ~RHI() = default;
 
-    virtual void Initialize() = 0;
+    virtual void Initialize(const RHIInitInfo& _init) = 0;
 
     virtual void PostInit() {}
 
@@ -50,7 +56,7 @@ public:
 
     virtual RHIShaderLibraryRef RHICreateShaderLibrary(EShaderPlatform _platform, const std::string& _file_path, const std::string& name) { return nullptr; };
 
-    virtual RHIFenceRef RHICreateFence(const std::string& name) = 0;
+    virtual RHIFenceRef RHICreateFence(const RHIFenceCreateInfo&) = 0;
 
     virtual RHIShaderBoundStateRef RHICreateShaderBoundStage(
         RHIVertexInputState* _vertex_input,
@@ -82,23 +88,41 @@ public:
     virtual RHIShaderResourceViewRef  RHICreateShaderResourceView(RHIViewableResource* _resource, const RHIViewInfo& _view_info)  = 0;
     virtual RHIUnorderedAccessViewRef RHICreateUnorderedAccessView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) = 0;
 
-    virtual RHICommandQueue*        CreateCommandQueue(ECommandQueueType type)                                    = 0;
+    virtual RHICommandQueue* CreateCommandQueue(ECommandQueueType type) = 0;
+    // DX12 only: _initial_state
     virtual RHIGraphicsCommandList* CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state = nullptr) = 0;
     virtual RHIComputeCommandList*  CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr)   = 0;
 
-    virtual RHIShaderRef RHICreateShader(Shader*) = 0;
+    virtual void RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso, const RHIBatchedShaderParameters& _batched_params) = 0;
 
 #pragma endregion
 
 #pragma region GUI
+
     virtual bool GUIInit(uint32_t _num_frames_in_flight);
     virtual void GUIShutDown();
     virtual void GUINewFrame();
-    virtual void GUIRender();
+    virtual void GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list);
+#pragma endregion
+
+#pragma region Viewport
+
+    virtual RHIViewport* RHIGetMainViewport() = 0;
+
+    virtual RHIViewportRef RHICreateViewport(const RHIViewportInitializer& _init) = 0;
+
+    virtual void RHIResizeViewport(RHIViewport* _viewport, Extent2D _size, bool _b_full_screen, EPixelFormat _format = PF_UNDEFINED) = 0;
+
+    virtual RHIViewportNextBackBufferInfo RHIGetNextFrameViewportBufferInfo(RHIViewport* _viewport) = 0;
+
+    virtual RHIUnorderedAccessView* RHIGetViewportBackBufferUAV(RHIViewport* _viewport, uint32_t index) = 0;
+
+    virtual void RHIPresentViewport(RHIViewport* _viewport, RHIFence* _render_end_fence) = 0;
 #pragma endregion
 
 protected:
     ERHIType rhi_type;
+    uint32_t max_frame_in_flight;
 };
 
 extern RHI* g_rhi;

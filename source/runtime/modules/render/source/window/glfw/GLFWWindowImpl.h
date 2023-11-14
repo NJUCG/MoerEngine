@@ -10,15 +10,20 @@ namespace Moer {
 
     public:
         virtual ~GLFWWindowImpl();
-        virtual void  SetFocusMode(bool _focused) override;
-        virtual void  GetWindowSize(int32_t* width, int32_t* height) const override;
-        virtual void  SetTitle(const char* _new_title) override;
-        virtual bool  ShouldClose() const override;
-        virtual void  PollEvents() const override;
-        virtual void* GetNativeWindow() const override;
-        virtual void  CreateVulkanSurface(void* instance, WindowType* window, void* allocation_callback, void* surface) override;
 
-    protected:
+        virtual void PollEvents() const override;
+        virtual void CreateVulkanSurface(void* instance, WindowHandle* window, void* allocation_callback, void* surface) override;
+        virtual void Tick() override;
+        virtual void ShutDown() override;
+
+        //for multi-window support
+        virtual void  SetFocusMode(WindowHandle*, bool _focused) override;
+        virtual void  GetWindowSize(WindowHandle*, int32_t* width, int32_t* height) const override;
+        virtual void  SetTitle(WindowHandle*, const char* _new_title) override;
+        virtual bool  ShouldClose(WindowHandle*) const override;
+        virtual void* GetNativeWindow(WindowHandle*) const override;
+
+    private:
         GLFWWindowImpl();
         virtual void Init(const SurfaceInfo&) override;
         virtual void OnCharCallbackImpl(WindowType* window, unsigned int codepoint) override;
@@ -34,6 +39,12 @@ namespace Moer {
         virtual void OnWindowPosCallbackImpl(WindowType* window, int xpos, int ypos) override;
         virtual void OnWindowSizeCallbackImpl(WindowType* window, int width, int height) override;
         virtual void OnWindowFocusCallbackImpl(WindowType* window, int focused) override;
+
+        virtual void GuiInit(const GuiWindowInitInfo&) override;
+        virtual void GuiUpdate() override;
+        virtual void GuiShutDown() override;
+
+        void InstallInterface(WindowHandle* _handle);
 
     private:
         void InitVulkan();

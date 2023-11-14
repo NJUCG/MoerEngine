@@ -12,11 +12,12 @@ namespace Moer {
     }
     void Editor::Init(Engine* engine) {
         editor_ui = new EditorUI;
-        UICreateInfo info{&WindowContext::GetInstance()};
+        UICreateInfo info{};
 
         editor_ui->Init(info);
         assert(engine != nullptr && "Fail to create Engine Runtime.");
         engine_runtime = engine;
+        engine_runtime->RegisterOnDrawUI(std::bind(&EditorUI::Tick, (EditorUI*)editor_ui));
     }
 
     void Editor::ShutDown() {

@@ -2,24 +2,34 @@
 #ifndef VULKAN_COMMAND_LIST_H
 #define VULKAN_COMMAND_LIST_H
 #include "rhi/RHICommandList.h"
+#include "VulkanCommandQueue.h"
+#include "vulkan/vulkan_core.h"
 
 #include <vulkan/vulkan.h>
 
 class VulkanDevice;
+class VulkanDescriptorAllocator;
 
-class VulkanRHIGraphicsCommandList final : public RHIGraphicsCommandList {
+class VulkanRHIGraphicsPipelineState;
+
+class VulkanRHIGraphicsCommandList final : public RHIGraphicsCommandList,
+                                           public VulkanDeviceObject {
 public:
     VulkanRHIGraphicsCommandList(VulkanDevice* _device, VkCommandPool _pool, VkCommandBufferLevel _level = VK_COMMAND_BUFFER_LEVEL_PRIMARY);
-    ~VulkanRHIGraphicsCommandList();
+    virtual ~VulkanRHIGraphicsCommandList();
 
-    void SetBatchedShaderParameter(RHIShaderRef shader, const RHIBatchedShaderParameters& parameters) override;
-    void SetPipelineState(RHIGraphicsPipelineState* _graphics_pso, const RHIShaderBoundStateInput& _shader_input) override;
+    void SetBatchedShaderParameter(const RHIBatchedShaderParameters& _parameters) override;
+    void SetPipelineState(RHIGraphicsPipelineState* _graphics_pso) override;
     void Open() override;
     void Close() override;
-    void Reset(RHIGraphicsPipelineState* _graphics_pso) override;
+    void Reset() override;
     void ClearState(RHIGraphicsPipelineState* _graphics_pso) override;
 
-    void DrawIndexedInstanced(uint32_t _index_count, uint32_t _instance_count, int32_t _base_vertex_location, uint32_t _start_instance_location) override;
+    void DrawIndexedInstanced(uint32_t _index_count,
+                              uint32_t _instance_count,
+                              uint32_t _start_index_location,
+                              uint32_t _start_vertex_location,
+                              uint32_t _start_instance_location) override;
 
     void DrawIndexedIndirect(
         RHIBuffer* _argument_buffer,
@@ -75,12 +85,15 @@ public:
     void SetBlendFactors(const float _factors[4]) override;
 
     void BindVertexBuffers(
-        uint32_t         _start_index,
-        uint32_t         _num_buffers,
-        const RHIBuffer* p_vertex_buffers) override;
+        uint32_t            _start_index,
+        uint32_t            _num_buffers,
+        const RHIBufferRef* p_vertex_buffers,
+        const uint32_t*     _offsets) override;
 
     void BindIndexBuffer(
-        const RHIBuffer* p_index_buffer) override;
+        const RHIBuffer*  p_index_buffer,
+        uint32_t          _offset,
+        EIndexElementType _type) override;
 
     void SetAttachments() override {
     }
@@ -121,14 +134,21 @@ public:
         RHIBuffer* _scratch_offset) override;
 
 #pragma endregion
+protected:
+    friend class VulkanRHICommandQueue;
+    inline void* GetNativeHandle() const override { return m_command_buffer; }
 
 private:
-    VulkanDevice*   m_device;
     VkCommandBuffer m_command_buffer;
+
+    VulkanRHIGraphicsPipelineState* m_current_pipeline_state;
 
 private:
     VkRenderingAttachmentInfo FromColorAttachmentInfo(const RHIRenderPassInfo::ColorAttachmentInfo& _color_attachment_info) const;
     VkRenderingAttachmentInfo FromDepthStencilAttachmentInfo(const RHIRenderPassInfo::DepthStencilAttachmentInfo& _depth_stencil_attachment_info) const;
+
+    void PrepareDrawCommand();
+    void PostDrawCommand();
 };
 
 #endif//VULKAN_COMMAND_LIST_H

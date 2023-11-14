@@ -3,6 +3,7 @@
 #include "platform/Platform.h"
 
 #include "rhi/RHIResource.h"
+#include "rhi/vulkan/VulkanRHI.h"
 #include "shader/Shader.h"
 #include "shader/ShaderCompiler.h"
 #include "shader/ShaderResourceManager.h"
@@ -25,6 +26,9 @@ namespace Moer {
 
         StartRenderThread();
     }
+    void RenderSystem::PostInit() {
+        PostInitRHI();
+    }
     //use in single thread mode
     void RenderSystem::Tick() {
     }
@@ -43,11 +47,17 @@ namespace Moer {
         FakeRHI() {
             rhi_type = ERHIType::Vulkan;
         }
-        RHIShaderRef RHICreateShader(Shader*) override { return nullptr; }
     };
     void RenderSystem::InitRHI() {
         //todo: init by config
-        g_rhi = new FakeRHI();
+        g_rhi = new VulkanRHIImpl();
+    }
+
+    void RenderSystem::PostInitRHI() {
+        RHIInitInfo info;
+        info.max_frame_in_flight = 3;
+        g_rhi->Initialize(info);
+        g_rhi->PostInit();
     }
     void RenderSystem::InitShaderResources() {
         //init shader compiler

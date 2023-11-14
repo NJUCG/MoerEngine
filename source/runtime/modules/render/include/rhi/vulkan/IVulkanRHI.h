@@ -7,11 +7,15 @@
 
 #include "rhi/RHI.h"
 #include "rhi/RHIResource.h"
+#include <stdint.h>
 #include <vulkan/vulkan.h>
 
 class IVulkanRHI : public RHI {
 public:
-    void        Initialize() override {}
+    IVulkanRHI() : RHI(ERHIType::Vulkan) {}
+
+    void        Initialize(const RHIInitInfo& _init) override {}
+    void        PostInit() override {}
     void        ShutDown() override {}
     const char* GetName() override { return "VulkanRHI Interface"; }
 
@@ -34,7 +38,7 @@ public:
 
     RHIShaderLibraryRef RHICreateShaderLibrary(EShaderPlatform _platform, const std::string& _file_path, const std::string& name) override { return RHIShaderLibraryRef{}; }
 
-    RHIFenceRef RHICreateFence(const std::string& name) override { return RHIFenceRef{}; }
+    RHIFenceRef RHICreateFence(const RHIFenceCreateInfo&) override { return RHIFenceRef{}; }
 
     RHIShaderBoundStateRef RHICreateShaderBoundStage(
         RHIVertexInputState* _vertex_input,
@@ -61,6 +65,22 @@ public:
     RHIGraphicsCommandList* CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state = nullptr) override { return nullptr; }
     RHIComputeCommandList*  CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr) override { return nullptr; }
 
+    void RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso, const RHIBatchedShaderParameters& _batched_params) override {}
+#pragma endregion
+
+#pragma region Viewport
+
+    virtual RHIViewportRef RHICreateViewport(const RHIViewportInitializer& _init) override { return nullptr; }
+
+    virtual void RHIResizeViewport(RHIViewport* _viewport, Extent2D _size, bool _b_full_screen, EPixelFormat _format = PF_UNDEFINED) override {}
+
+    virtual RHIViewportNextBackBufferInfo RHIGetNextFrameViewportBufferInfo(RHIViewport* _viewport) override { return RHIViewportNextBackBufferInfo(); }
+
+    virtual RHIUnorderedAccessView* RHIGetViewportBackBufferUAV(RHIViewport* _viewport, uint32_t index) override { return nullptr; }
+
+    virtual void RHIPresentViewport(RHIViewport* _viewport, RHIFence* _render_end_fence) override {}
+
+    virtual RHIViewport* RHIGetMainViewport() override { return nullptr; }
 #pragma endregion
 };
 

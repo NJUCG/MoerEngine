@@ -23,4 +23,12 @@
         }                                  \
     }
 
+#define VK_CHECK_NULLPTR(ptr, msg, ...) \
+    {                                   \
+        if (ptr == nullptr) {           \
+            LOG_CRITICAL(msg);          \
+            __VA_ARGS__;                \
+        }                               \
+    }
+
 #endif// VULKAN_MACRO_UTILS_H
