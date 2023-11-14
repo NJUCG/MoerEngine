@@ -150,7 +150,8 @@ void DXCompiler::CompileVulkan(const ShaderCompilerInput& _input, ShaderCompiler
         target_profile.c_str(),
         // Compile to SPIRV
         L"-spirv",
-        // L"-fspv-reflect",
+        // L"-fvk-invert-y",
+        // L"-fvk-use-dx-position-w",
         DXC_ARG_ALL_RESOURCES_BOUND,
         DXC_ARG_DEBUG,
         DXC_ARG_SKIP_OPTIMIZATIONS};

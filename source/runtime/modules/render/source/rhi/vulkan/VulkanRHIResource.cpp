@@ -10,6 +10,7 @@
 #include "VulkanPipelineResourceCache.h"
 #include "VulkanCommandQueue.h"
 
+#include "rhi/RHI.h"
 #include "rhi/RHICommandQueue.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
@@ -1132,10 +1133,10 @@ void VulkanRHIMultisampleState::GenerateMultisampleStateFromInitializer(const RH
 }
 
 void VulkanRHIBlendState::GenerateBlendStateFromInitializer(const RHIBlendStateInitializer& _init) {
-    const auto n = 1;// MARK...
+    // const auto n = 1;// MARK...
 
-    std::vector<VkPipelineColorBlendAttachmentState> attachments(n);
-    for (size_t i = 0; i < n; ++i) {
+    // attachments.resize(MAX_PASS_ATTACHMENT_COUNT);
+    for (size_t i = 0; i < MAX_PASS_ATTACHMENT_COUNT; ++i) {
         auto& attachment_init = _init.attachments[i];
         auto& attachment      = attachments[i];
 
@@ -1156,14 +1157,14 @@ void VulkanRHIBlendState::GenerateBlendStateFromInitializer(const RHIBlendStateI
         attachment.colorWriteMask |= (attachment_init.color_write_mask & CW_ALPHA) ? VK_COLOR_COMPONENT_A_BIT : 0;
     }
 
-    VkPipelineColorBlendStateCreateInfo blend_state_create_info{};
-    blend_state_create_info.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    blend_state_create_info.pNext           = nullptr;
-    blend_state_create_info.flags           = 0;
-    blend_state_create_info.logicOpEnable   = VK_FALSE;
-    blend_state_create_info.logicOp         = VK_LOGIC_OP_COPY;
-    blend_state_create_info.attachmentCount = n;
-    blend_state_create_info.pAttachments    = attachments.data();
+    // // VkPipelineColorBlendStateCreateInfo blend_state_create_info{};
+    // m_blend_state_create_info.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    // m_blend_state_create_info.pNext           = nullptr;
+    // m_blend_state_create_info.flags           = 0;
+    // m_blend_state_create_info.logicOpEnable   = VK_FALSE;
+    // m_blend_state_create_info.logicOp         = VK_LOGIC_OP_COPY;
+    // m_blend_state_create_info.attachmentCount = n;
+    // m_blend_state_create_info.pAttachments    = attachments.data();
 }
 
 VkBlendOp VulkanRHIBlendState::METoVKBlendOp(EBlendOperation _blend_op) {
@@ -1531,6 +1532,8 @@ VulkanRHIUnorderedAccessView::~VulkanRHIUnorderedAccessView() {
 #pragma region viewport
 VulkanViewport::VulkanViewport(VulkanSwapChain* _swapchain) : RHIViewport() {
     swapchain = _swapchain;
+    //MARK... set by config
+    info.max_frame_in_flight = 3;
     InnerCreateResources();
 }
 
@@ -1568,7 +1571,7 @@ void VulkanViewport::InnerCreateResources() {
     uint32_t back_buffer_size = swapchain->m_swap_chain_images.size();
 
     swapchain_image_uavs.resize(back_buffer_size);
-    image_aquire_fences.resize(max_frame_in_flight);
+    image_aquire_fences.resize(info.max_frame_in_flight);
     swapchain_images.resize(back_buffer_size);
 
     EPixelFormat swapchain_format = VulkanEnumTranslator::VKToMEFormat(swapchain->image_format);
@@ -1593,7 +1596,8 @@ void VulkanViewport::InnerCreateResources() {
     for (uint32_t index = 0; index < image_aquire_fences.size(); index++) {
         image_aquire_fences[index] = new VulkanRHIFence(swapchain->m_device, EFenceUsage::AQUIRE_NEXT_FRAME);
     }
-    frame_offset = 0;
+    frame_offset           = 0;
+    info.backbuffer_format = swapchain_format;
 }
 void VulkanViewport::InnerDestroyResources() {
 
@@ -1611,7 +1615,7 @@ void VulkanViewport::ResetResources() {
     uint32_t back_buffer_size = swapchain->m_swap_chain_images.size();
 
     swapchain_image_uavs.resize(back_buffer_size);
-    image_aquire_fences.resize(max_frame_in_flight);
+    image_aquire_fences.resize(info.max_frame_in_flight);
     swapchain_images.resize(back_buffer_size);
 
     for (uint32_t index = 0; index < swapchain_image_uavs.size(); index++) {
@@ -1630,7 +1634,8 @@ void VulkanViewport::ResetResources() {
         delete image_aquire_fences[index];
         image_aquire_fences[index] = new VulkanRHIFence(swapchain->m_device, EFenceUsage::PRESENT);
     }
-    frame_offset = 0;
+    info.backbuffer_format = VulkanEnumTranslator::VKToMEFormat(swapchain->image_format);
+    frame_offset           = 0;
 }
 void VulkanViewport::OnResize(Extent2D _size) {
 
@@ -1639,13 +1644,13 @@ void VulkanViewport::OnResize(Extent2D _size) {
 }
 
 VulkanRHIFence* VulkanViewport::GetAcquireNextImageFence() {
-    return image_aquire_fences[frame_offset = (frame_offset - 1) % max_frame_in_flight];
+    return image_aquire_fences[frame_offset = (frame_offset - 1) % info.max_frame_in_flight];
 }
 RHIViewportNextBackBufferInfo VulkanViewport::GetNextFrameBackBufferInfo() {
     uint32_t index = swapchain->AcquireNextImage(image_aquire_fences[frame_offset]->GetBinaryHandle());
     if (index != UINT32_MAX) {
         auto current_frame = frame_offset;
-        frame_offset       = (frame_offset + 1) % max_frame_in_flight;
+        frame_offset       = (frame_offset + 1) % info.max_frame_in_flight;
         return {.backbuffer_index = index, .backbuffer_ready_fence = image_aquire_fences[current_frame]};
     }
     //recreate

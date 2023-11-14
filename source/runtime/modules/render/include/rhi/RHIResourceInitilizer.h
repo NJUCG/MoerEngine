@@ -26,6 +26,7 @@ struct RHISamplerInitializer {
         uint32_t                            _border_color   = 0,
         EnumInByte<ESamplerCompareFunction> _compare_op     = SCF_NEVER)
         : filter(_filter),
+          texture_layout(_texture_layout),
           address_mode_u(_address_mode_u),
           address_mode_v(_address_mode_v),
           address_mode_w(_address_mode_w),
