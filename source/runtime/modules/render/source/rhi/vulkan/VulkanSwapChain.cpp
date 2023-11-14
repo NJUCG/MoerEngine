@@ -116,7 +116,7 @@ uint32_t VulkanSwapChain::AcquireNextImage(VkSemaphore _aquire_semaphore) {
     return INT32_MAX;
 }
 
-void VulkanSwapChain::Present(VkQueue _queue, VkSemaphore _render_finished) {
+VkResult VulkanSwapChain::Present(VkQueue _queue, VkSemaphore _render_finished) {
     VkPresentInfoKHR present_info{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
     present_info.waitSemaphoreCount = 1;
     present_info.pWaitSemaphores    = &_render_finished;
@@ -127,11 +127,13 @@ void VulkanSwapChain::Present(VkQueue _queue, VkSemaphore _render_finished) {
     VkResult result = vkQueuePresentKHR(_queue, &present_info);
 
     current_image_index = (current_image_index + 1) % m_swap_chain_images.size();
-    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
-        Recreate();
-    } else if (result != VK_SUCCESS) {
-        assert(false && "Error presenting to swapchain.");
-    }
+    // if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+    //     Recreate();
+
+    // } else if (result != VK_SUCCESS) {
+    //     assert(false && "Error presenting to swapchain.");
+    // }
+    return result;
 }
 
 void VulkanSwapChain::Cleanup() {
