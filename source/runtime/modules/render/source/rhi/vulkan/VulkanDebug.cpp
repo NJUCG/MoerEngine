@@ -71,11 +71,14 @@ namespace Vulkan {
     PFN_vkCmdBeginDebugUtilsLabelEXT  DebugUtils::vkCmdBeginDebugUtilsLabelEXT  = nullptr;
     PFN_vkCmdEndDebugUtilsLabelEXT    DebugUtils::vkCmdEndDebugUtilsLabelEXT    = nullptr;
     PFN_vkCmdInsertDebugUtilsLabelEXT DebugUtils::vkCmdInsertDebugUtilsLabelEXT = nullptr;
+    PFN_vkSetDebugUtilsObjectNameEXT  DebugUtils::vkSetDebugUtilsObjectNameEXT  = nullptr;
 
-    void DebugUtils::Setup(VkInstance instance) {
+    void
+    DebugUtils::Setup(VkInstance instance) {
         vkCmdBeginDebugUtilsLabelEXT  = reinterpret_cast<PFN_vkCmdBeginDebugUtilsLabelEXT>(vkGetInstanceProcAddr(instance, "vkCmdBeginDebugUtilsLabelEXT"));
         vkCmdEndDebugUtilsLabelEXT    = reinterpret_cast<PFN_vkCmdEndDebugUtilsLabelEXT>(vkGetInstanceProcAddr(instance, "vkCmdEndDebugUtilsLabelEXT"));
         vkCmdInsertDebugUtilsLabelEXT = reinterpret_cast<PFN_vkCmdInsertDebugUtilsLabelEXT>(vkGetInstanceProcAddr(instance, "vkCmdInsertDebugUtilsLabelEXT"));
+        vkSetDebugUtilsObjectNameEXT  = reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>(vkGetInstanceProcAddr(instance, "vkSetDebugUtilsObjectNameEXT"));
     }
 
     void DebugUtils::CmdBeginLabel(VkCommandBuffer cmd_buffer, const std::string& caption, Moer::Vector4f color) {
@@ -89,11 +92,34 @@ namespace Vulkan {
         vkCmdBeginDebugUtilsLabelEXT(cmd_buffer, &label_info);
     }
 
+    void DebugUtils::CmdInsertLabel(VkCommandBuffer cmd_buffer, const std::string& caption, Moer::Vector4f color) {
+        if (!vkCmdInsertDebugUtilsLabelEXT) {
+            return;
+        }
+        VkDebugUtilsLabelEXT label_info{};
+        label_info.sType      = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT;
+        label_info.pLabelName = caption.c_str();
+        memcpy(label_info.color, &color[0], sizeof(float) * 4);
+        vkCmdInsertDebugUtilsLabelEXT(cmd_buffer, &label_info);
+    }
+
     void DebugUtils::CmdEndLabel(VkCommandBuffer cmd_buffer) {
         if (!vkCmdEndDebugUtilsLabelEXT) {
             return;
         }
         vkCmdEndDebugUtilsLabelEXT(cmd_buffer);
+    }
+
+    void DebugUtils::SetObjectName(VkDevice device, uint64_t object, VkObjectType object_type, const std::string& name) {
+        if (!vkSetDebugUtilsObjectNameEXT) {
+            return;
+        }
+        VkDebugUtilsObjectNameInfoEXT name_info{};
+        name_info.sType        = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
+        name_info.objectType   = object_type;
+        name_info.objectHandle = object;
+        name_info.pObjectName  = name.c_str();
+        vkSetDebugUtilsObjectNameEXT(device, &name_info);
     }
 
 }

@@ -221,7 +221,7 @@ void RHI::GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list) 
                 g_rhi->RHISetBatchedShaderParameters(backend_data->pipeline, batched_params);
 
                 // 7. local: draw indexed instanced
-                _ui_command_list->DrawIndexedInstanced(cmd->ElemCount, 1, cmd->IdxOffset, cmd->VtxOffset + global_vertex_offset, 0);
+                _ui_command_list->DrawIndexedInstanced(cmd->ElemCount, 1, cmd->IdxOffset + global_index_offset, cmd->VtxOffset + global_vertex_offset, 0);
             }
         }
         global_index_offset += cmd_list->IdxBuffer.Size;
@@ -235,8 +235,10 @@ void SetupRenderState(ImDrawData* draw_data, RHIGraphicsCommandList* commandList
     commandList->SetPipelineState(backend_data->pipeline);
 
     // 2. global: push constants
-    ImGuiShaderVert::Parameters param;
-    std::memset(&param.vertexBuffer, 0, sizeof(param.vertexBuffer));
+    ImGuiShaderVert::Parameters vert_param;
+    ImGuiShaderFrag::Parameters frag_param;
+    frag_param.sampler0 = backend_data->font_sampler;
+    std::memset(&vert_param.vertexBuffer, 0, sizeof(vert_param.vertexBuffer));
     {
         float l = draw_data->DisplayPos.x;
         float r = draw_data->DisplayPos.x + draw_data->DisplaySize.x;
@@ -249,10 +251,11 @@ void SetupRenderState(ImDrawData* draw_data, RHIGraphicsCommandList* commandList
                 {0.0f, 0.0f, 0.5f, 0.0f},
                 {(r + l) / (l - r), (t + b) / (b - t), 0.5f, 1.0f},
             };
-        memcpy(&param.vertexBuffer.mvp, mvp, sizeof(mvp));
+        memcpy(&vert_param.vertexBuffer.mvp, mvp, sizeof(mvp));
     }
     RHIBatchedShaderParameters batched_params;
-    batched_params.SetParameters(backend_data->shader_module_vert, param);
+    batched_params.SetParameters(backend_data->shader_module_vert, vert_param);
+    batched_params.SetParameters(backend_data->shader_module_frag, frag_param);
     g_rhi->RHISetBatchedShaderParameters(backend_data->pipeline, batched_params);
 
     // 3. global: set viewport, MARK: does it work ?
@@ -282,37 +285,14 @@ bool CreateDeviceObjects() {
     if (backend_data->pipeline)
         InvalidateDeviceObjects();
 
-    RHISamplerInitializer sampler_init(ESamplerFilter::SF_LINEAR, TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    RHISamplerInitializer sampler_init(ESamplerFilter::SF_CUBIC, TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     sampler_init.compare_op    = CO_ALWAYS;
     RHISamplerRef sampler      = g_rhi->RHICreateSampler(sampler_init);
     backend_data->font_sampler = sampler;
 
-    RHIGraphicsPipelineStateInitializer pso_init;
-
-    pso_init.color_attachment_formats[0] = backend_data->attachment_format;
-    pso_init.color_attachment_flags[0]   = ETextureUsageFlags::COLOR_ATTACHMENT;
-    pso_init.color_attachment_count      = pso_init.CalcValidColorAttachmentCount();
-
-    auto& shader_stage_input = pso_init.shader_stage;
-
-    // VertexElement
-    VertexInputStateInitializerList input_intializer{};
-    input_intializer[0] = VertexElement(0, IM_OFFSETOF(ImDrawVert, pos), PF_R32G32_SFLOAT, 0, sizeof(ImDrawVert), EVertexInputRate::VIR_VERTEX);
-    input_intializer[1] = VertexElement(0, IM_OFFSETOF(ImDrawVert, uv), PF_R32G32_SFLOAT, 1, sizeof(ImDrawVert), EVertexInputRate::VIR_VERTEX);
-    input_intializer[2] = VertexElement(0, IM_OFFSETOF(ImDrawVert, col), PF_R8G8B8A8_UNORM, 2, sizeof(ImDrawVert), EVertexInputRate::VIR_VERTEX);
-
-    RHIVertexShaderRef     gui_vert    = g_rhi->RHICreateVertexShader(ShaderResourceManager::GetShader<ImGuiShaderVert>());
-    RHIFragmentShaderRef   gui_frag    = g_rhi->RHICreateFragmentShader(ShaderResourceManager::GetShader<ImGuiShaderFrag>());
-    RHIVertexInputStateRef input_state = g_rhi->RHICreateVertexInputState(input_intializer);
-
-    shader_stage_input.p_vertex_input_state = input_state;
-
-    shader_stage_input.p_vertex_shader   = gui_vert;
-    shader_stage_input.p_fragment_shader = gui_frag;
-
     RHIBlendStateInitializer blend_state_info;
     blend_state_info.attachments[0].color_blend_op         = BO_ADD;
-    blend_state_info.attachments[0].color_src_blend_factor = BF_SRC_COLOR;
+    blend_state_info.attachments[0].color_src_blend_factor = BF_SRC_ALPHA;
     blend_state_info.attachments[0].color_src_blend_factor = BF_ONE_MINUS_SRC_ALPHA;
     blend_state_info.attachments[0].alpha_blend_op         = BO_ADD;
     blend_state_info.attachments[0].alpha_src_blend_factor = BF_ONE;
@@ -320,9 +300,6 @@ bool CreateDeviceObjects() {
     blend_state_info.attachments[0].color_write_mask       = CW_RGBA;
 
     auto blend_state = g_rhi->RHICreateBlendState(blend_state_info);
-
-    pso_init.blend_state        = blend_state;
-    pso_init.primitive_topology = EPrimitiveTopology::TRIANGLE_LIST;
 
     RHIRasterizationStateInitializer rast_init{};
     rast_init.fill_mode              = FM_FILL;
@@ -346,9 +323,37 @@ bool CreateDeviceObjects() {
     depth_stencil_init.front_face_pass_stencil_op       = SO_KEEP;
     depth_stencil_init.front_face_stencil_test          = CO_ALWAYS;
 
-    pso_init.multisample_state   = g_rhi->RHICreateMultiSampleState(msaa_init);
-    pso_init.rasterizer_state    = g_rhi->RHICreateRasterizationState(rast_init);
-    pso_init.depth_stencil_state = g_rhi->RHICreateDepthStencilState(depth_stencil_init);
+    // VertexElement
+    VertexInputStateInitializerList input_intializer{};
+    input_intializer[0] = VertexElement(0, IM_OFFSETOF(ImDrawVert, pos), PF_R32G32_SFLOAT, 0, sizeof(ImDrawVert), EVertexInputRate::VIR_VERTEX);
+    input_intializer[1] = VertexElement(0, IM_OFFSETOF(ImDrawVert, uv), PF_R32G32_SFLOAT, 1, sizeof(ImDrawVert), EVertexInputRate::VIR_VERTEX);
+    input_intializer[2] = VertexElement(0, IM_OFFSETOF(ImDrawVert, col), PF_R8G8B8A8_UNORM, 2, sizeof(ImDrawVert), EVertexInputRate::VIR_VERTEX);
+
+    RHIVertexShaderRef     gui_vert    = g_rhi->RHICreateVertexShader(ShaderResourceManager::GetShader<ImGuiShaderVert>());
+    RHIFragmentShaderRef   gui_frag    = g_rhi->RHICreateFragmentShader(ShaderResourceManager::GetShader<ImGuiShaderFrag>());
+    RHIVertexInputStateRef input_state = g_rhi->RHICreateVertexInputState(input_intializer);
+
+    RHIGraphicsPipelineStateInitializer pso_init(
+        blend_state,
+        g_rhi->RHICreateRasterizationState(rast_init),
+        g_rhi->RHICreateMultiSampleState(msaa_init),
+        g_rhi->RHICreateDepthStencilState(depth_stencil_init),
+        EPrimitiveTopology::TRIANGLE_LIST,
+        1,
+        {g_rhi->RHIGetMainViewport()->GetViewportInfo().backbuffer_format},
+        {ETextureUsageFlags::COLOR_ATTACHMENT},
+        PF_UNDEFINED,
+        ETextureUsageFlags::UNDEFINED,
+        {SubpassSettings::Type::NONE, 0},
+        false,
+        1,
+        false,
+        VSR_1_1x1);
+    pso_init.shader_stage.p_vertex_shader      = gui_vert;
+    pso_init.shader_stage.p_fragment_shader    = gui_frag;
+    pso_init.shader_stage.p_vertex_input_state = input_state;
+
+    auto c = pso_init.CalcValidColorAttachmentCount();
 
     backend_data->pipeline = g_rhi->RHICreateGraphicsPipelineState(pso_init);
     // setup backend data
@@ -385,7 +390,7 @@ void CreateFontsTexture() {
                                                    .SetInitialLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED));
 
         uint32_t upload_pitch = (width * 4 + alignment - 1u) & ~(alignment - 1u);
-        uint32_t upload_size  = 4 * height * upload_pitch;
+        uint32_t upload_size  = height * upload_pitch;
 
         RHIBufferRef staging_buffer = g_rhi->RHICreateBuffer(
             RHIBufferCreateInfo::Create(upload_size, 0, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE));
@@ -393,9 +398,11 @@ void CreateFontsTexture() {
         assert(font_texture.Get() && staging_buffer.Get());
 
         void* mapped = g_rhi->RHIMapBuffer(staging_buffer, 0, upload_size);
-        for (int32_t y = 0; y < height; y++) {
-            memcpy((void*)((uintptr_t)mapped + y * upload_pitch), pixels + y * width * 4, width * 4);
-        }
+        // for (int32_t y = 0; y < height; y++) {
+        //     memcpy((void*)((uint8_t*)mapped + y * upload_pitch), pixels + y * width * 4, width * 4);
+        // }
+        memcpy(mapped, pixels, upload_size);
+
         g_rhi->RHIUnmapBuffer(staging_buffer);
 
         RHISubresourceRange range{ETextureAspectFlags::COLOR,
@@ -441,9 +448,7 @@ void CreateFontsTexture() {
             {0, 0, 0},
             {(uint32_t)width, (uint32_t)height, 1},
             resource_slice,
-            0,
-            upload_pitch,
-            height);
+            0);
 
         // 3. MARK: pRegion[0] is trying to copy 518144 bytes plus 0 offset to/from the VkBuffer (VkBuffer 0xcb1c7c000000001b[]) which exceeds the VkBuffer total size of 131072 bytes.
         command_list->CopyBufferToTexture(staging_buffer, font_texture, copy_info);

@@ -141,6 +141,8 @@ namespace Moer {
             pass_info.color_attachments[0].color_attachment_view.texture_view    = present_view;
             pass_info.color_attachments[0].color_attachment_view.required_layout = ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT;
 
+            pass_info.color_attachments[0].color_attachment_view.clear_attachment.value.color = {0.0f, 0.0f, 0.0f, 1.0f};
+
             auto viewport_extent                = main_viewport->GetViewportExtent();
             pass_info.render_area.offset.x      = 0;
             pass_info.render_area.offset.y      = 0;
@@ -183,6 +185,7 @@ namespace Moer {
             cmd_queue->SubmitCommands(1, gui_command_list, &submit_info);
 
             g_rhi->RHIPresentViewport(main_viewport, present_fence);
+            WindowContext::PollEvents();
         }
 
         g_rhi->GUIShutDown();

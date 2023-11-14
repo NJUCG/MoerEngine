@@ -10,7 +10,9 @@
 #include "rhi/vulkan/misc/VulkanTypeDefs.h"
 
 #include "shader/ShaderCommon.h"
+#include "vulkan/vulkan_core.h"
 
+#include <array>
 #include <vector>
 #include <vulkan/vulkan.h>
 
@@ -223,8 +225,11 @@ public:
 
     void GenerateBlendStateFromInitializer(const RHIBlendStateInitializer& _init);
 
-    VkPipelineColorBlendStateCreateInfo GetHandle() const {
-        return m_blend_state_create_info;
+    // VkPipelineColorBlendStateCreateInfo GetHandle() const {
+    //     return m_blend_state_create_info;
+    // }
+    const VkPipelineColorBlendAttachmentState* GetAttachments() const {
+        return attachments.data();
     }
 
 private:
@@ -232,7 +237,8 @@ private:
     VkBlendFactor METoVKBlendFactor(EBlendFactor _blend_factor);
 
 private:
-    VkPipelineColorBlendStateCreateInfo m_blend_state_create_info;
+    // VkPipelineColorBlendStateCreateInfo                                        m_blend_state_create_info;
+    std::array<VkPipelineColorBlendAttachmentState, MAX_PASS_ATTACHMENT_COUNT> attachments;
 };
 
 #pragma region shader definitions
@@ -519,7 +525,7 @@ private:
 
     uint32_t frame_offset = 0;
 
-    uint32_t max_frame_in_flight = 3;
+    // uint32_t max_frame_in_flight = 3;
 };
 #pragma endregion
 

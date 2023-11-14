@@ -1035,7 +1035,8 @@ struct RHIBarrierDependencyInfo {
 #pragma endregion
 
 struct RHIViewportInfo {
-    uint32_t max_frame_in_flight;
+    uint32_t     max_frame_in_flight;
+    EPixelFormat backbuffer_format;
 };
 
 struct RHIViewportNextBackBufferInfo {
@@ -1043,7 +1044,6 @@ struct RHIViewportNextBackBufferInfo {
     RHIFence* backbuffer_ready_fence;
 };
 class RHIViewport : public RHIResource {
-    RHIViewportInfo info;
 
 public:
     RHIViewport() : RHIResource(RRT_VIEWPORT) {}
@@ -1076,6 +1076,9 @@ public:
     virtual const RHIViewportInfo& GetViewportInfo() const { return info; }
 
     virtual ViewPort GetViewportExtent() const = 0;
+
+protected:
+    RHIViewportInfo info;
 };
 
 #pragma region viewable resources view definitions

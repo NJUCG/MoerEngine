@@ -10,6 +10,7 @@
 #include "VulkanRHIResource.h"
 #include "VulkanDescriptor.h"
 #include "VulkanPipelineResourceCache.h"
+#include "VulkanDebug.h"
 
 #include <vulkan/vulkan_core.h>
 
@@ -81,6 +82,15 @@ void VulkanRHIGraphicsCommandList::Reset() {
     // need to implemented
     // auto* vk_pipelie_state = static_cast<const VulkanRHIGraphicsPipelineState*>(_graphics_pso);
     // VK_CHECK_NULLPTR(vk_pipelie_state, "Reset: graphics pipeline state is nullptr!", return);
+    // const auto* vk_pso = m_current_pipeline_state;
+    // VK_CHECK_NULLPTR(vk_pso, "PreDrawCommand: graphics pipeline state is nullptr!", return);
+    // auto* vk_resource_cache = vk_pso->GetPipelineResourceCache();
+    // VK_CHECK_NULLPTR(vk_resource_cache, "PreDrawCommand: graphics pipeline resource cache is nullptr!", return);
+    // if (vk_resource_cache) {
+    //     vk_resource_cache->ResetToBind();
+    //     vk_resource_cache->ResetToPush();
+    // }
+
     vkResetCommandBuffer(m_command_buffer, VK_COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT);
 }
 
@@ -99,7 +109,7 @@ void VulkanRHIGraphicsCommandList::DrawIndexedInstanced(
     uint32_t _start_instance_location) {
 
     PrepareDrawCommand();
-
+    Moer::RHI::Vulkan::DebugUtils::CmdInsertLabel(m_command_buffer, "DrawIndexedInstanced", {});
     vkCmdDrawIndexed(
         m_command_buffer,
         _index_count,
@@ -429,6 +439,9 @@ void VulkanRHIGraphicsCommandList::SetViewPort(const ViewPort& _viewport) {
     vk_viewport.height   = _viewport.height;
     vk_viewport.minDepth = _viewport.min_depth;
     vk_viewport.maxDepth = _viewport.max_depth;
+    vk_viewport.y += vk_viewport.height;
+    vk_viewport.height = -vk_viewport.height;
+
     vkCmdSetViewport(m_command_buffer, 0, 1, &vk_viewport);
 }
 
@@ -520,11 +533,12 @@ void VulkanRHIGraphicsCommandList::BeginRenderPass(const RHIRenderPassInfo& _pas
     dynamic_rendering_info.pColorAttachments    = color_attachments.data();
     dynamic_rendering_info.pDepthAttachment     = &depth_stencil_attachment;
     dynamic_rendering_info.pStencilAttachment   = &depth_stencil_attachment;
-
+    Moer::RHI::Vulkan::DebugUtils::CmdBeginLabel(m_command_buffer, _pass_name, {});
     vkCmdBeginRendering(m_command_buffer, &dynamic_rendering_info);
 }
 
 void VulkanRHIGraphicsCommandList::EndRenderPass() {
+    Moer::RHI::Vulkan::DebugUtils::CmdEndLabel(m_command_buffer);
     vkCmdEndRendering(m_command_buffer);
 }
 
@@ -660,7 +674,4 @@ void VulkanRHIGraphicsCommandList::PostDrawCommand() {
     VK_CHECK_NULLPTR(vk_pso, "PostDrawCommand: graphics pipeline state is nullptr!", return);
     auto* vk_resource_cache = vk_pso->GetPipelineResourceCache();
     VK_CHECK_NULLPTR(vk_resource_cache, "PostDrawCommand: graphics pipeline resource cache is nullptr!", return);
-
-    vk_resource_cache->ResetToBind();
-    vk_resource_cache->ResetToPush();
 }

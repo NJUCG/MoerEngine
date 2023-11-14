@@ -8,6 +8,8 @@ add_subdirectory(core)
 add_subdirectory(modules/render)
 add_subdirectory(modules/resource)
 
+# add_subdirectory(functions)
+
 add_library(${target_name} STATIC Engine.h Engine.cpp)
 
 set_target_properties(${target_name} PROPERTIES FOLDER "engine")

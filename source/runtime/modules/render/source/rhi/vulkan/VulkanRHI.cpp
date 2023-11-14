@@ -166,20 +166,31 @@ RHIShaderBoundStateRef VulkanRHIImpl::RHICreateShaderBoundStage(
 RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const RHIGraphicsPipelineStateInitializer& _init) {
     VulkanRHIGraphicsPipelineState* vk_pso = new VulkanRHIGraphicsPipelineState();
 
+    uint32_t attachment_count = _init.CalcValidColorAttachmentCount();
+
     // rendering create info
     VkPipelineRenderingCreateInfo rendering_create_info{};
     rendering_create_info.sType                = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
     rendering_create_info.pNext                = nullptr;
     rendering_create_info.viewMask             = 0;
-    rendering_create_info.colorAttachmentCount = _init.color_attachment_count;
-    std::vector<VkFormat> color_attachment_formats(_init.color_attachment_count);
-    for (int i = 0; i < _init.color_attachment_count; ++i) {
+    rendering_create_info.colorAttachmentCount = attachment_count;
+    std::vector<VkFormat> color_attachment_formats(attachment_count);
+    for (int i = 0; i < attachment_count; ++i) {
         color_attachment_formats[i] = VkFormat(_init.color_attachment_formats[i]);
     }
     rendering_create_info.pColorAttachmentFormats = color_attachment_formats.data();
     rendering_create_info.depthAttachmentFormat   = VulkanEnumTranslator::METoVKFormat(_init.depth_stencil_format);
     rendering_create_info.stencilAttachmentFormat = VulkanEnumTranslator::METoVKFormat(_init.depth_stencil_format);
 
+    // color blend state
+    VkPipelineColorBlendStateCreateInfo color_blend_state{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+
+    auto* vk_blend_state = static_cast<VulkanRHIBlendState*>(_init.blend_state.Get());
+    if (!vk_blend_state) LOG_CRITICAL("RHICreateGraphicsPipelineState: Blend state is nullptr!");
+    color_blend_state.logicOp         = VK_LOGIC_OP_COPY;
+    color_blend_state.logicOpEnable   = VK_FALSE;
+    color_blend_state.attachmentCount = attachment_count;
+    color_blend_state.pAttachments    = vk_blend_state->GetAttachments();
     // shader stage
     auto shader_stages = VulkanRHIGraphicsPipelineState::METoVKShaderStageCreateInfo(_init.shader_stage);
 
@@ -225,12 +236,6 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
 
     auto* vk_depth_stencil_state = static_cast<VulkanRHIDepthStencilState*>(_init.depth_stencil_state.Get());
     CHECK_AND_SET(vk_depth_stencil_state, depth_stencil_state, "RHICreateGraphicsPipelineState: depth stencil state is nullptr!");
-
-    // color blend state
-    VkPipelineColorBlendStateCreateInfo color_blend_state{};
-
-    auto* vk_blend_state = static_cast<VulkanRHIBlendState*>(_init.blend_state.Get());
-    CHECK_AND_SET(vk_blend_state, color_blend_state, "RHICreateGraphicsPipelineState: blend state is nullptr!");
 
 #undef CHECK_AND_SET
 
@@ -405,6 +410,7 @@ void VulkanRHIImpl::RHIUnmapBuffer(RHIBuffer* _buffer) {
 
     VmaAllocator allocator = m_device->GetVmaAllocator();
     vmaUnmapMemory(allocator, vk_buffer->m_alloc.alloc);
+    // vmaFlushAllocation(allocator, vk_buffer->m_alloc.alloc, 0, VK_WHOLE_SIZE);
 }
 
 RHITextureRef VulkanRHIImpl::RHICreateTexture(const RHITextureCreateInfo& info) {
@@ -582,7 +588,7 @@ void VulkanRHIImpl::RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso
     for (const auto& params : push_constants) {
         PushConstantInfo constant_info{
             VulkanEnumTranslator::METoVKShaderStageFlags(params.shader_type),
-            params.size_in_32bit,
+            (uint32_t)params.size_in_32bit * 4,
             params.byte_offset_in_raw_data,
             std::move(_batched_params.GetRawData())};
         if (vk_pso->m_pipeline_state_cache->PushConstant(constant_info)) {
@@ -652,6 +658,7 @@ void VulkanRHIImpl::CreateInstance() {
     VkDebugUtilsMessengerCreateInfoEXT debug_create_info{};
 
     const char* validation_layer_name = "VK_LAYER_KHRONOS_validation";
+
     if (CheckValidationLayer(validation_layer_name)) {
         instance_create_info.enabledLayerCount   = 1;
         instance_create_info.ppEnabledLayerNames = &validation_layer_name;

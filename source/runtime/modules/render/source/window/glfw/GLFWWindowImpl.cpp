@@ -54,8 +54,8 @@ namespace Moer {
                                       .rhi_type            = g_rhi->GetType()};
         //install imgui io callbacks
         GuiInit(window_info);
-        //register engine io callbacks
-        InstallInterface(&main_window_handle);
+        //register engine io callbacks MARK.. remains problems
+        // InstallInterface(&main_window_handle);
     }
 
     void GLFWWindowImpl::InstallInterface(WindowHandle* _handle) {
