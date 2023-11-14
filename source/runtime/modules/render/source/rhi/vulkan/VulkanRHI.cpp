@@ -246,11 +246,10 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
     // pipeline layout
     auto shader_info_list = VulkanRHIGraphicsPipelineState::GetShaderInfoList(_init.shader_stage);// MARK...
 
-    std::unordered_map<uint8_t, TDescriptorSetLayout> layout_mappings;
-    TDescriptorCountMap                               descriptor_type_mappings;
+    std::vector<TDescriptorSetLayout> layout_mappings;
+    TDescriptorCountMap               descriptor_type_mappings;
 
     std::vector<VkPushConstantRange> push_constant_ranges;
-    vk_pso->m_constant_shader_stages.clear();
 
     // construct layout mappings
     for (const auto* meta_shader : shader_info_list) {
@@ -258,6 +257,11 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
         auto constant_infos = meta_shader->GetRootParametersLayoutInfo().GetConstantsInfos();
 
         // resources
+        uint8_t max_set = 0;
+        for (const auto& info : layout_infos) {
+            max_set = std::max(max_set, static_cast<uint8_t>(info.space));
+        }
+        layout_mappings.resize(max_set + 1, {});
         for (const auto& info : layout_infos) {
             VkDescriptorSetLayoutBinding binding{};
             binding.binding         = info.slot;
@@ -266,7 +270,7 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
             binding.stageFlags |= VulkanEnumTranslator::METoVKShaderStageFlags(meta_shader->GetShaderType());
             binding.pImmutableSamplers = nullptr;
 
-            layout_mappings[info.space].second.push_back(binding);
+            layout_mappings[info.space].second.push_back(std::move(binding));
             ++descriptor_type_mappings[binding.descriptorType];
         }
 
@@ -278,14 +282,13 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
             range.size   = info.stride;
 
             push_constant_ranges.push_back(range);
-            vk_pso->m_constant_shader_stages.push_back(range.stageFlags);
         }
     }
 
     // generate descriptor set layouts
     vk_pso->GenerateDescriptorSetLayouts(m_device, layout_mappings);
     vk_pso->CreateDescriptorSets(m_device);
-    vk_pso->GenerateResourceCache();
+    vk_pso->CreateResourceCache();
 
     auto layouts = vk_pso->m_descriptor_sets_layout->GetLayouts();
     // create pipeline layout
@@ -528,12 +531,6 @@ void VulkanRHIImpl::RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso
         write_descriptor_set.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         write_descriptor_set.pNext = nullptr;
 
-        // cache descriptor sets
-        DescriptorBindInfo bind_info{params.space, params.slot, descriptor_sets[params.space]};
-        if (!vk_pso->m_pipeline_state_cache->BindDescriptorSet(bind_info)) {
-            continue;
-        }
-
         if (type == ERHIResourceType::RRT_SAMPLER) {
             // sampler
             auto* vk_sampler = static_cast<VulkanRHISampler*>(params.resource);
@@ -572,7 +569,8 @@ void VulkanRHIImpl::RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso
 
         write_descriptor_sets.push_back(write_descriptor_set);
 
-        vk_pso->m_pipeline_state_cache->AddSetToBind(std::move(bind_info));
+        // cache descriptor sets
+        vk_pso->m_pipeline_state_cache->AddSetToBind({params.space, &descriptor_sets[params.space]});
     }
 
     vkUpdateDescriptorSets(m_device->GetDevice(), write_descriptor_sets.size(), write_descriptor_sets.data(), 0, nullptr);
@@ -580,14 +578,10 @@ void VulkanRHIImpl::RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso
     // cache push constants
     const auto& push_constants = _batched_params.GetConstantParameters();
     for (const auto& params : push_constants) {
-        PushConstantInfo constant_info{
-            VulkanEnumTranslator::METoVKShaderStageFlags(params.shader_type),
-            params.size_in_32bit,
-            params.byte_offset_in_raw_data,
-            std::move(_batched_params.GetRawData())};
-        if (vk_pso->m_pipeline_state_cache->PushConstant(constant_info)) {
-            vk_pso->m_pipeline_state_cache->AddConstantToPush(std::move(constant_info));
-        }
+        vk_pso->m_pipeline_state_cache->AddConstantToPush({VulkanEnumTranslator::METoVKShaderStageFlags(params.shader_type),
+                                                           params.size_in_32bit,
+                                                           params.byte_offset_in_raw_data,
+                                                           std::move(_batched_params.GetRawData())});
     }
 }
 
