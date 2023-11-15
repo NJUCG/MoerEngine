@@ -101,7 +101,7 @@ protected:
     VulkanViewport* m_main_viewport;
     // VulkanSwapChain* m_swap_chain;
     // std::vector<VulkanViewport*> m_viewports;
-    VulkanViewport* m_current_viewport;
+    // VulkanViewport* m_current_viewport;
 
 protected:
     void InitSurface(Moer::WindowHandle* _window);

@@ -1496,6 +1496,8 @@ VulkanRHIFence::VulkanRHIFence(VulkanDevice* _device, EFenceUsage _usage) : m_de
 }
 
 VulkanRHIFence::~VulkanRHIFence() {
+    //wait device idle(to avoid quiting while still waiting for present or submit)
+    vkDeviceWaitIdle(m_device->GetDevice());
     if (m_semaphore != VK_NULL_HANDLE) {
         vkDestroySemaphore(m_device->GetDevice(), m_semaphore, VK_NULL_HANDLE);
     }
@@ -1605,6 +1607,12 @@ void VulkanViewport::InnerDestroyResources() {
         delete swapchain_image_uavs[index];
     }
     for (uint32_t index = 0; index < image_aquire_fences.size(); index++) {
+        VkSemaphoreWaitInfo wait_info{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
+        VkSemaphore         temp[1] = {image_aquire_fences[index]->GetBinaryHandle()};
+        wait_info.semaphoreCount    = 1;
+        wait_info.pSemaphores       = temp;
+        wait_info.pValues           = 0;
+        // vkWaitSemaphores(swapchain->m_device->GetDevice(), &wait_info, UINT64_MAX);
         delete image_aquire_fences[index];
     }
 }

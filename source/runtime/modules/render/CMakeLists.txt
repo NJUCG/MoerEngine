@@ -5,7 +5,13 @@ configure_file(${MODULE_DIR}/include/config.h.in ${MODULE_DIR}/include/config.h)
 
 file(GLOB_RECURSE RENDER_MODULE_HEADERS "include/*.h")
 file(GLOB_RECURSE RENDER_MODULE_SOURCES "source/*.cpp" "source/*.h")
-file(GLOB IMGUI_SOURCES "${moer_third_party_dir}/imgui/*.cpp" "${moer_third_party_dir}/imgui/*.h")
+
+file(GLOB IMGUI_SOURCES 
+    "${moer_third_party_dir}/imgui/*.cpp" 
+    "${moer_third_party_dir}/imgui/*.h"
+    "${moer_third_party_dir}/imgui/IconsFontAwesome6.h" # icon font for imgui, see https://github.com/juliettef/IconFontCppHeaders
+    "${moer_third_party_dir}/imgui/backends/imgui_impl_glfw.*")
+
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${RENDER_MODULE_HEADERS} ${RENDER_MODULE_SOURCES} )
 
 add_library(${MODULE_NAME} STATIC ${RENDER_MODULE_HEADERS} ${RENDER_MODULE_SOURCES} ${IMGUI_SOURCES})

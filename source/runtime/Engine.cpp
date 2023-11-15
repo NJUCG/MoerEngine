@@ -1,5 +1,6 @@
 #include "Engine.h"
 #include "PixelFormat.h"
+#include "config/ConfigManager.h"
 #include "imgui.h"
 #include "log/LogSystem.h"
 
@@ -14,12 +15,13 @@
 #include "RenderSystem.h"
 #include "ui/UIBase.h"
 #include "window/WindowContext.h"
+#include <filesystem>
 #include <stdint.h>
 namespace Moer {
     void Engine::Init(const EngineInitInfo& _info) {
         LOG_INFO("Engine Begin Initilization");
 
-        InitCore();
+        InitCore(_info.workspace_path);
         InitRenderSystem();
         InitWindow();
 
@@ -37,7 +39,8 @@ namespace Moer {
         LOG_INFO("Engine Stop Running");
     }
 
-    void Engine::InitCore() {
+    void Engine::InitCore(const std::filesystem::path& workspace_path) {
+        Moer::ConfigManager::GetInstance().Init(workspace_path);
         Moer::TaskSystem::Init();
         Moer::LogSystem::Init();
     }
@@ -109,82 +112,89 @@ namespace Moer {
             }
             ImGui::Render();
 
-            RHIViewport* main_viewport = g_rhi->RHIGetMainViewport();
+            ImDrawData* main_draw_data     = ImGui::GetDrawData();
+            const bool  b_window_minimized = main_draw_data->DisplaySize.x <= 0.0f || main_draw_data->DisplaySize.y <= 0.0f;
 
-            auto next_frame_info = g_rhi->RHIGetNextFrameViewportBufferInfo(main_viewport);
+            if (!b_window_minimized) {
+                RHIViewport* main_viewport = g_rhi->RHIGetMainViewport();
 
-            if (next_frame_info.backbuffer_index == UINT32_MAX) return;
+                auto next_frame_info = g_rhi->RHIGetNextFrameViewportBufferInfo(main_viewport);
 
-            RHIUnorderedAccessView*              present_view = g_rhi->RHIGetViewportBackBufferUAV(main_viewport, next_frame_info.backbuffer_index);
-            RHIBarrierDependencyInfo             dependency_info;
-            std::array<RHITextureBarrierInfo, 1> texture_barriers;
+                if (next_frame_info.backbuffer_index == UINT32_MAX) return;
 
-            texture_barriers[0].SetDstTextureLayout(ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT);
-            texture_barriers[0].SetSrcTextureLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED);
-            texture_barriers[0].p_texture = present_view->GetTexture();
-            texture_barriers[0].SetSrcStage(PS_BOTTOM_OF_PIPE);
-            texture_barriers[0].SetDstStage(PS_COLOR_ATTACHMENT_OUTPUT);
-            texture_barriers[0].SetSrcAccessFlags(ERHIAccessFlags::UNDEFINED);
-            texture_barriers[0].SetDstAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
+                RHIUnorderedAccessView*              present_view = g_rhi->RHIGetViewportBackBufferUAV(main_viewport, next_frame_info.backbuffer_index);
+                RHIBarrierDependencyInfo             dependency_info;
+                std::array<RHITextureBarrierInfo, 1> texture_barriers;
 
-            dependency_info.texture_barrier_count = 1;
-            dependency_info.p_texture_barriers    = texture_barriers.data();
-            present_fence->Wait(frame_index);
+                texture_barriers[0].SetDstTextureLayout(ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT);
+                texture_barriers[0].SetSrcTextureLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED);
+                texture_barriers[0].p_texture = present_view->GetTexture();
+                texture_barriers[0].SetSrcStage(PS_BOTTOM_OF_PIPE);
+                texture_barriers[0].SetDstStage(PS_COLOR_ATTACHMENT_OUTPUT);
+                texture_barriers[0].SetSrcAccessFlags(ERHIAccessFlags::UNDEFINED);
+                texture_barriers[0].SetDstAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
 
-            gui_command_list->Reset();
+                dependency_info.texture_barrier_count = 1;
+                dependency_info.p_texture_barriers    = texture_barriers.data();
 
-            gui_command_list->Open();
-            gui_command_list->SetPipelineBarrier(dependency_info);
+                //wait for last frame gui_command_list submission
+                present_fence->Wait(frame_index);
 
-            RHIRenderPassInfo pass_info;
-            pass_info.color_attachments[0].color_attachment_action               = AC_CLEAR_STORE;
-            pass_info.color_attachments[0].color_attachment_view.texture_view    = present_view;
-            pass_info.color_attachments[0].color_attachment_view.required_layout = ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT;
+                gui_command_list->Reset();
 
-            pass_info.color_attachments[0].color_attachment_view.clear_attachment.value.color = {0.0f, 0.0f, 0.0f, 1.0f};
+                gui_command_list->Open();
+                gui_command_list->SetPipelineBarrier(dependency_info);
 
-            auto viewport_extent                = main_viewport->GetViewportExtent();
-            pass_info.render_area.offset.x      = 0;
-            pass_info.render_area.offset.y      = 0;
-            pass_info.render_area.extent.width  = viewport_extent.width;
-            pass_info.render_area.extent.height = viewport_extent.height;
+                RHIRenderPassInfo pass_info;
+                pass_info.color_attachments[0].color_attachment_action               = AC_CLEAR_STORE;
+                pass_info.color_attachments[0].color_attachment_view.texture_view    = present_view;
+                pass_info.color_attachments[0].color_attachment_view.required_layout = ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT;
 
-            gui_command_list->BeginRenderPass(pass_info, "Imgui Window");
+                pass_info.color_attachments[0].color_attachment_view.clear_attachment.value.color = {0.0f, 0.0f, 0.0f, 1.0f};
 
-            auto* draw_data = ImGui::GetDrawData();
+                auto viewport_extent                = main_viewport->GetViewportExtent();
+                pass_info.render_area.offset.x      = 0;
+                pass_info.render_area.offset.y      = 0;
+                pass_info.render_area.extent.width  = viewport_extent.width;
+                pass_info.render_area.extent.height = viewport_extent.height;
 
-            g_rhi->GUIRender(ImGui::GetDrawData(), gui_command_list);
+                gui_command_list->BeginRenderPass(pass_info, "Imgui Window");
 
-            gui_command_list->EndRenderPass();
+                auto* draw_data = ImGui::GetDrawData();
 
-            RHIBarrierDependencyInfo             texture_dependency_info;
-            std::array<RHITextureBarrierInfo, 1> texture_barriers_present;
-            texture_barriers_present[0].SetDstTextureLayout(ETextureLayout::TEXTURE_LAYOUT_PRESENT_SRC);
-            texture_barriers_present[0].SetSrcTextureLayout(ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT);
-            texture_barriers_present[0].p_texture = present_view->GetTexture();
-            texture_barriers_present[0].SetSrcAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
-            texture_barriers_present[0].SetSrcStage(PS_COLOR_ATTACHMENT_OUTPUT);
-            texture_barriers_present[0].SetDstStage(PS_NONE);
+                g_rhi->GUIRender(main_draw_data, gui_command_list);
 
-            texture_dependency_info.texture_barrier_count = 1;
-            texture_dependency_info.p_texture_barriers    = texture_barriers_present.data();
+                gui_command_list->EndRenderPass();
 
-            gui_command_list->SetPipelineBarrier(texture_dependency_info);
+                RHIBarrierDependencyInfo             texture_dependency_info;
+                std::array<RHITextureBarrierInfo, 1> texture_barriers_present;
+                texture_barriers_present[0].SetDstTextureLayout(ETextureLayout::TEXTURE_LAYOUT_PRESENT_SRC);
+                texture_barriers_present[0].SetSrcTextureLayout(ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT);
+                texture_barriers_present[0].p_texture = present_view->GetTexture();
+                texture_barriers_present[0].SetSrcAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
+                texture_barriers_present[0].SetSrcStage(PS_COLOR_ATTACHMENT_OUTPUT);
+                texture_barriers_present[0].SetDstStage(PS_NONE);
 
-            gui_command_list->Close();
+                texture_dependency_info.texture_barrier_count = 1;
+                texture_dependency_info.p_texture_barriers    = texture_barriers_present.data();
 
-            RHISubmitInfo submit_info{};
+                gui_command_list->SetPipelineBarrier(texture_dependency_info);
 
-            //wait for last frame recording
-            submit_info.Wait(present_fence, frame_index);
-            //wait for back_buffer ready
-            submit_info.Wait(next_frame_info.backbuffer_ready_fence, 0);
-            //signal this frame present fence
-            submit_info.Signal(present_fence, ++frame_index);
+                gui_command_list->Close();
 
-            cmd_queue->SubmitCommands(1, gui_command_list, &submit_info);
+                RHISubmitInfo submit_info{};
 
-            g_rhi->RHIPresentViewport(main_viewport, present_fence);
+                //wait for last frame recording(don't need if wait before reseting command list)
+                submit_info.Wait(present_fence, frame_index);
+                //wait for back_buffer ready
+                submit_info.Wait(next_frame_info.backbuffer_ready_fence, 0);
+                //signal this frame present fence
+                submit_info.Signal(present_fence, ++frame_index);
+
+                cmd_queue->SubmitCommands(1, gui_command_list, &submit_info);
+
+                g_rhi->RHIPresentViewport(main_viewport, present_fence);
+            }
             WindowContext::PollEvents();
         }
 

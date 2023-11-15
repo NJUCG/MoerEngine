@@ -7,7 +7,7 @@
 namespace Moer {
     struct EngineInitInfo {
 
-        std::filesystem::path config_path;
+        std::filesystem::path workspace_path;
     };
 
     class Engine final {
@@ -25,7 +25,7 @@ namespace Moer {
         void RegisterOnDrawUI(std::function<void()> _func);
 
     private:
-        void InitCore();
+        void InitCore(const std::filesystem::path&);
         void ShutDownCore();
 
         void InitRenderSystem();
