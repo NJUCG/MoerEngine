@@ -1,7 +1,7 @@
 #ifndef VULKAN_PIPELINE_STATE_CACHE_H
 #define VULKAN_PIPELINE_STATE_CACHE_H
 
-#include <set>
+#include <map>
 #include <array>
 #include <vector>
 #include <unordered_map>
@@ -13,12 +13,11 @@ class VulkanRHIGraphicsPipelineState;
 class RHIBatchedShaderParameters;
 
 struct DescriptorBindInfo {
-    uint16_t        set;
-    uint16_t        binding;
-    VkDescriptorSet descriptor_set;
+    uint16_t               set;
+    const VkDescriptorSet* descriptor_set;
 
     bool operator<(const DescriptorBindInfo& _info) const {
-        return set < _info.set || binding < _info.binding || descriptor_set < _info.descriptor_set;
+        return set < _info.set || *descriptor_set < *_info.descriptor_set;
     }
 };
 
@@ -29,7 +28,7 @@ struct PushConstantInfo {
     std::vector<uint8_t> raw_data;
 
     bool operator<(const PushConstantInfo& _info) const {
-        return flags < _info.flags || size < _info.size || byte_offset_in_raw_data < _info.byte_offset_in_raw_data;
+        return flags < _info.flags || size < _info.size || byte_offset_in_raw_data < _info.byte_offset_in_raw_data || raw_data < _info.raw_data;
     }
 };
 
@@ -37,35 +36,26 @@ class VulkanPipelineResourceCache {
 public:
     friend VulkanRHIGraphicsPipelineState;
 
-    VulkanPipelineResourceCache(VulkanRHIGraphicsPipelineState* _graphics_pso = nullptr) : m_pipeline_state(_graphics_pso) {}
-    ~VulkanPipelineResourceCache() { m_pipeline_state = nullptr; }
+    VulkanPipelineResourceCache() : m_bound_descriptor_sets(), m_pushed_constants() {}
 
-    bool BindDescriptorSet(const DescriptorBindInfo& _info);
+    void GetSetsToBind(std::vector<std::pair<uint32_t, const VkDescriptorSet*>>& _sets_to_bind);
 
-    inline const std::vector<DescriptorBindInfo>& GetSetsToBind() const { return m_sets_to_bind; }
+    inline void AddSetToBind(const DescriptorBindInfo& _info) { m_bound_descriptor_sets[_info] = false; }
 
-    inline void AddSetToBind(const DescriptorBindInfo&& _info) { m_sets_to_bind.push_back(_info); }
+    inline void ResetToBind() { m_bound_descriptor_sets.clear(); }
 
-    inline void ResetToBind() { m_sets_to_bind.clear(); }
+    void GetConstantsToPush(std::vector<PushConstantInfo>& _constants_to_push);
 
-    bool PushConstant(const PushConstantInfo& _info);
+    inline void AddConstantToPush(const PushConstantInfo& _info) { m_pushed_constants[_info] = false; }
 
-    inline const std::vector<PushConstantInfo>& GetConstantsToPush() const { return m_constant_to_push; }
-
-    inline void AddConstantToPush(const PushConstantInfo&& _info) { m_constant_to_push.push_back(_info); }
-
-    inline void ResetToPush() { m_constant_to_push.clear(); }
+    inline void ResetToPush() { m_pushed_constants.clear(); }
 
 private:
     // <set, binding> -> descriptor set
-    std::vector<DescriptorBindInfo> m_sets_to_bind;
-    std::set<DescriptorBindInfo>    m_bound_descriptor_sets;
+    std::map<DescriptorBindInfo, bool> m_bound_descriptor_sets;
 
     // <start_addr, size> -> constant data
-    std::vector<PushConstantInfo> m_constant_to_push;
-    std::set<PushConstantInfo>    m_pushed_constants;
-
-    VulkanRHIGraphicsPipelineState* m_pipeline_state;
+    std::map<PushConstantInfo, bool> m_pushed_constants;
 };
 
 #endif// VULKAN_PIPELINE_STATE_CACHE_H

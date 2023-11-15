@@ -1138,23 +1138,22 @@ void VulkanRHIBlendState::GenerateBlendStateFromInitializer(const RHIBlendStateI
     // attachments.resize(MAX_PASS_ATTACHMENT_COUNT);
     for (size_t i = 0; i < MAX_PASS_ATTACHMENT_COUNT; ++i) {
         auto& attachment_init = _init.attachments[i];
-        auto& attachment      = attachments[i];
 
-        attachment.blendEnable =
+        m_attachments[i].blendEnable =
             (attachment_init.color_blend_op != BO_ADD || attachment_init.color_dst_blend_factor != BF_ZERO || attachment_init.color_src_blend_factor != BF_ONE ||
              attachment_init.alpha_blend_op != BO_ADD || attachment_init.alpha_dst_blend_factor != BF_ZERO || attachment_init.alpha_src_blend_factor != BF_ONE) ?
                 VK_TRUE :
                 VK_FALSE;
-        attachment.srcColorBlendFactor = VulkanRHIBlendState::METoVKBlendFactor(attachment_init.color_src_blend_factor);
-        attachment.dstColorBlendFactor = VulkanRHIBlendState::METoVKBlendFactor(attachment_init.color_dst_blend_factor);
-        attachment.colorBlendOp        = VulkanRHIBlendState::METoVKBlendOp(attachment_init.color_blend_op);
-        attachment.srcAlphaBlendFactor = VulkanRHIBlendState::METoVKBlendFactor(attachment_init.alpha_src_blend_factor);
-        attachment.dstAlphaBlendFactor = VulkanRHIBlendState::METoVKBlendFactor(attachment_init.alpha_dst_blend_factor);
-        attachment.alphaBlendOp        = VulkanRHIBlendState::METoVKBlendOp(attachment_init.alpha_blend_op);
-        attachment.colorWriteMask      = (attachment_init.color_write_mask & CW_RED) ? VK_COLOR_COMPONENT_R_BIT : 0;
-        attachment.colorWriteMask |= (attachment_init.color_write_mask & CW_GREEN) ? VK_COLOR_COMPONENT_G_BIT : 0;
-        attachment.colorWriteMask |= (attachment_init.color_write_mask & CW_BLUE) ? VK_COLOR_COMPONENT_B_BIT : 0;
-        attachment.colorWriteMask |= (attachment_init.color_write_mask & CW_ALPHA) ? VK_COLOR_COMPONENT_A_BIT : 0;
+        m_attachments[i].srcColorBlendFactor = VulkanRHIBlendState::METoVKBlendFactor(attachment_init.color_src_blend_factor);
+        m_attachments[i].dstColorBlendFactor = VulkanRHIBlendState::METoVKBlendFactor(attachment_init.color_dst_blend_factor);
+        m_attachments[i].colorBlendOp        = VulkanRHIBlendState::METoVKBlendOp(attachment_init.color_blend_op);
+        m_attachments[i].srcAlphaBlendFactor = VulkanRHIBlendState::METoVKBlendFactor(attachment_init.alpha_src_blend_factor);
+        m_attachments[i].dstAlphaBlendFactor = VulkanRHIBlendState::METoVKBlendFactor(attachment_init.alpha_dst_blend_factor);
+        m_attachments[i].alphaBlendOp        = VulkanRHIBlendState::METoVKBlendOp(attachment_init.alpha_blend_op);
+        m_attachments[i].colorWriteMask      = (attachment_init.color_write_mask & CW_RED) ? VK_COLOR_COMPONENT_R_BIT : 0;
+        m_attachments[i].colorWriteMask |= (attachment_init.color_write_mask & CW_GREEN) ? VK_COLOR_COMPONENT_G_BIT : 0;
+        m_attachments[i].colorWriteMask |= (attachment_init.color_write_mask & CW_BLUE) ? VK_COLOR_COMPONENT_B_BIT : 0;
+        m_attachments[i].colorWriteMask |= (attachment_init.color_write_mask & CW_ALPHA) ? VK_COLOR_COMPONENT_A_BIT : 0;
     }
 
     // // VkPipelineColorBlendStateCreateInfo blend_state_create_info{};
@@ -1320,32 +1319,37 @@ std::vector<const Shader*> VulkanRHIGraphicsPipelineState::GetShaderInfoList(con
     return shader_list;
 }
 
-void VulkanRHIGraphicsPipelineState::GenerateDescriptorSetLayouts(const VulkanDevice* _device, std::unordered_map<uint8_t, TDescriptorSetLayout>& _layout_mappings) {
+void VulkanRHIGraphicsPipelineState::GenerateDescriptorSetLayouts(const VulkanDevice* _device, std::vector<TDescriptorSetLayout>& _layout_mappings) {
     // create descriptor set layouts
-    uint8_t max_space = 0;
-    for (auto& [space, layout] : _layout_mappings) {
+    for (auto& layout : _layout_mappings) {
         VkDescriptorSetLayoutCreateInfo layout_create_info{};
         layout_create_info.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
         layout_create_info.pNext        = nullptr;
         layout_create_info.flags        = 0;
         layout_create_info.bindingCount = layout.second.size();
-        layout_create_info.pBindings    = layout.second.data();
+        layout_create_info.pBindings    = layout.second.empty() ? nullptr : layout.second.data();
 
         VK_CHECK_RESULT(vkCreateDescriptorSetLayout(*_device, &layout_create_info, nullptr, &layout.first));
-        max_space = std::max(max_space, space);
     }
 
     // extract descriptor set layouts
     m_descriptor_sets_layout = new VulkanDescriptorSetsLayout();
-    m_descriptor_sets_layout->Init(max_space + 1, _layout_mappings);
+    m_descriptor_sets_layout->Init(_layout_mappings);
 }
 
 void VulkanRHIGraphicsPipelineState::CreateDescriptorSets(VulkanDevice* _device) {
     _device->AllocateDescriptorSets(*m_descriptor_sets_layout, m_descriptor_sets);
 }
 
-void VulkanRHIGraphicsPipelineState::GenerateResourceCache() {
-    m_pipeline_state_cache = new VulkanPipelineResourceCache(this);
+void VulkanRHIGraphicsPipelineState::CreateResourceCache() {
+    m_pipeline_state_cache = new VulkanPipelineResourceCache();
+}
+
+void VulkanRHIGraphicsPipelineState::InitResourceCache() {
+    for (uint16_t i = 0; i < m_descriptor_sets.size(); ++i) {
+        m_pipeline_state_cache->AddSetToBind({i, &m_descriptor_sets[i]});
+    }
+    m_pipeline_state_cache->ResetToPush();
 }
 
 #pragma endregion

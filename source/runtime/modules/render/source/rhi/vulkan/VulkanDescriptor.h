@@ -18,7 +18,7 @@ public:
     VulkanDescriptorSetsLayout() {}
     ~VulkanDescriptorSetsLayout();
 
-    void Init(uint32_t _max_sets, const std::unordered_map<uint8_t, TDescriptorSetLayout>& _layout_mappings);
+    void Init(const std::vector<TDescriptorSetLayout>& _layout_mappings);
 
     inline uint32_t GetDescriptorSetCount() const {
         return m_layouts.size();
