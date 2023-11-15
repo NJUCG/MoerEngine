@@ -229,7 +229,7 @@ public:
     //     return m_blend_state_create_info;
     // }
     const VkPipelineColorBlendAttachmentState* GetAttachments() const {
-        return attachments.data();
+        return m_attachments.data();
     }
 
 private:
@@ -238,7 +238,7 @@ private:
 
 private:
     // VkPipelineColorBlendStateCreateInfo                                        m_blend_state_create_info;
-    std::array<VkPipelineColorBlendAttachmentState, MAX_PASS_ATTACHMENT_COUNT> attachments;
+    std::array<VkPipelineColorBlendAttachmentState, MAX_PASS_ATTACHMENT_COUNT> m_attachments;
 };
 
 #pragma region shader definitions
@@ -319,13 +319,14 @@ public:
         return m_descriptor_sets;
     }
 
-    inline const std::vector<VkShaderStageFlags>& GetConstantShaderStages() const {
-        return m_constant_shader_stages;
+    inline VulkanPipelineResourceCache* GetPipelineResourceCache() {
+        return m_pipeline_state_cache;
     }
 
-    void GenerateDescriptorSetLayouts(const VulkanDevice* _device, std::unordered_map<uint8_t, TDescriptorSetLayout>& _layout_mappings);
+    void GenerateDescriptorSetLayouts(const VulkanDevice* _device, std::vector<TDescriptorSetLayout>& _layout_mappings);
     void CreateDescriptorSets(VulkanDevice* _device);
-    void GenerateResourceCache();
+    void CreateResourceCache();
+    void InitResourceCache();
 
     static std::vector<VkPipelineShaderStageCreateInfo> METoVKShaderStageCreateInfo(const RHIShaderBoundStateInput& _shader_bound_state);
     static VkPipelineVertexInputStateCreateInfo         METoVKVertexInputStateCreateInfo(const RHIVertexInputState* _vertex_input_state);
@@ -337,8 +338,6 @@ private:
     // descriptor sets
     VulkanDescriptorSetsLayout*  m_descriptor_sets_layout;
     std::vector<VkDescriptorSet> m_descriptor_sets;
-    // push constants
-    std::vector<VkShaderStageFlags> m_constant_shader_stages;
     // dynamic states
     std::array<VkViewport, 2> m_viewports;
     std::array<VkRect2D, 2>   m_scissors;
