@@ -41,10 +41,14 @@ const Hash64City& Shader::GetCompiledHash() const {
     return compiled_hash;
 };
 
+//construct root parameter layout info by reflection and meta_data
 void Shader::ConstructRootParameterLayoutInfo(const ShaderParametersInfoMap& _param_map) {
-    const auto&                            parameter_meta_data = type->GetParameterMetaData();
+
+    const auto& parameter_meta_data = type->GetParameterMetaData();
+
     std::vector<ShaderParameterLayoutInfo> layout_infos;
-    const auto&                            reflect_map = _param_map.GetShaderParameterInfoMap();
+
+    const auto& reflect_map = _param_map.GetShaderParameterInfoMap();
     for (const auto& member : parameter_meta_data->GetMembers()) {
         int16_t              slot = -1, space = -1, num = 0;
         EShaderParameterType param_type = EShaderParameterType::UNKNOWN;

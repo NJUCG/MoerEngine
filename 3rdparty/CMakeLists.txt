@@ -58,6 +58,7 @@ add_subdirectory(glfw)
 set(SPIRV_REFLECT_EXECUTABLE      OFF)
 
 set(SPIRV_REFLECT_STATIC_LIB     ON)
+
 add_subdirectory(SPIRV-Reflect)
 
 add_subdirectory(DirectX-Headers)

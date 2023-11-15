@@ -1,4 +1,5 @@
 #include "GLFWWindowImpl.h"
+#include "config/ConfigManager.h"
 #include "rhi/RHI.h"
 #include "rhi/vulkan/VulkanRHI.h"
 #include "window/WindowContext.h"
@@ -6,6 +7,7 @@
 //define vulkan ahead of glfw
 #include "vulkan/vulkan.h"
 #include "GLFW/glfw3.h"
+#include "IconsFontAwesome6.h"
 #if PLATFORM_WINDOWS
 //for dx12
 //https://docs.microsoft.com/en-us/windows/win32/api/dxgi1_2/nf-dxgi1_2-idxgifactory2-createswapchainforhwnd
@@ -27,7 +29,28 @@ namespace Moer {
     void GLFWWindowImpl::PollEvents() const { glfwPollEvents(); }
 
     void GLFWWindowImpl::GuiInit(const GuiWindowInitInfo& _init_info) {
+
         GuiWindowInit(_init_info);
+
+        ImGuiIO& io = ImGui::GetIO();
+        io.Fonts->AddFontDefault();
+        float base_font_size = 13.0f;                       // 13.0f is the size of the default font. Change to the font size you use.
+        float icon_font_size = base_font_size * 2.0f / 3.0f;// FontAwesome fonts need to have their sizes reduced by 2.0f/3.0f in order to align correctly
+
+        // merge in icons from Font Awesome
+        static const ImWchar icons_ranges[] = {ICON_MIN_FA, ICON_MAX_16_FA, 0};
+        ImFontConfig         icons_config;
+        icons_config.MergeMode        = true;
+        icons_config.PixelSnapH       = true;
+        icons_config.GlyphMinAdvanceX = icon_font_size;
+
+        const auto& font_path = Moer::ConfigManager::GetInstance().GetEditorResourcePath() / FONTS_DIR / FONT_ICON_FILE_NAME_FAS;
+
+        io.Fonts->AddFontFromFileTTF(font_path.generic_string().c_str(), icon_font_size, &icons_config, icons_ranges);
+
+        const auto& reg_font_path = Moer::ConfigManager::GetInstance().GetEditorResourcePath() / FONTS_DIR / FONT_ICON_FILE_NAME_FAR;
+        //read font file from reg_font_path
+        io.Fonts->AddFontFromFileTTF(reg_font_path.generic_string().c_str(), base_font_size, nullptr, io.Fonts->GetGlyphRangesDefault());
     };
 
     void GLFWWindowImpl::Init(const SurfaceInfo& info) {
@@ -52,10 +75,13 @@ namespace Moer {
         GuiWindowInitInfo window_info{.window              = window,
                                       .b_install_callbacks = true,
                                       .rhi_type            = g_rhi->GetType()};
+
+        //register engine io callbacks MARK.. remains problems
+        InstallInterface(&main_window_handle);
         //install imgui io callbacks
         GuiInit(window_info);
-        //register engine io callbacks MARK.. remains problems
-        // InstallInterface(&main_window_handle);
+        // ImGui::CreateContext();
+        // ImGui_ImplGlfw_InitForVulkan(window, true);
     }
 
     void GLFWWindowImpl::InstallInterface(WindowHandle* _handle) {

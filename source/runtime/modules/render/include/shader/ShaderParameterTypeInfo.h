@@ -22,6 +22,9 @@ template<typename TargetType, uint32_t Alignment>
     requires concept_valid_alignment<Alignment>
 struct AlignType {
     ALIGNED_TYPE_DEF(TargetType, Type, Alignment);
+    bool operator==(const TargetType& t) {
+        return memcmp(this, &t, sizeof(TargetType)) == 0;
+    }
     AlignType& operator=(const TargetType& t) {
         memcpy(this, &t, sizeof(TargetType));
         return *this;

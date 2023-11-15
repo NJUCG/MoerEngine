@@ -130,8 +130,9 @@ void RHI::GUINewFrame() {
         CreateDeviceObjects();
 }
 void RHI::GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list) {
-
-    ImDrawData*          draw_data       = static_cast<ImDrawData*>(_draw_data);
+    ImDrawData* draw_data = static_cast<ImDrawData*>(_draw_data);
+    if (draw_data->DisplaySize.x <= 0.0f || draw_data->DisplaySize.y <= 0.0f)
+        return;
     Shader*              frag_shader     = ShaderResourceManager::GetShader<ImGuiShaderFrag>();
     Shader*              vert_shader     = ShaderResourceManager::GetShader<ImGuiShaderVert>();
     RHIFragmentShaderRef frag_rhi_shader = g_rhi->RHICreateFragmentShader(frag_shader);
@@ -145,8 +146,8 @@ void RHI::GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list) 
     viewport_data->frame_index += 1;
     if (render_buffers->vertex_buffer == nullptr || render_buffers->vertex_buffer->GetSize() < draw_data->TotalVtxCount * sizeof(ImDrawVert)) {
         //delete the old one and create new
-        if (render_buffers->vertex_buffer != nullptr)
-            render_buffers->vertex_buffer->DeRef();
+        if (render_buffers->vertex_buffer != nullptr) {}
+        // render_buffers->vertex_buffer->DeRef();
         uint32_t new_size             = (draw_data->TotalVtxCount + 4096) * sizeof(ImDrawVert);
         render_buffers->vertex_buffer = g_rhi->RHICreateBuffer(
             RHIBufferCreateInfo::Create(
@@ -156,8 +157,7 @@ void RHI::GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list) 
     }
     if (render_buffers->index_buffer == nullptr || render_buffers->index_buffer->GetSize() < draw_data->TotalIdxCount * sizeof(ImDrawIdx)) {
 
-        if (render_buffers->index_buffer != nullptr)
-            render_buffers->index_buffer->DeRef();
+        if (render_buffers->index_buffer != nullptr) {}
         uint32_t new_size            = (draw_data->TotalIdxCount + 8192) * sizeof(ImDrawIdx);
         render_buffers->index_buffer = g_rhi->RHICreateBuffer(
             RHIBufferCreateInfo::Create(
@@ -183,11 +183,13 @@ void RHI::GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list) 
     g_rhi->RHIUnmapBuffer(render_buffers->vertex_buffer);
     g_rhi->RHIUnmapBuffer(render_buffers->index_buffer);
 
+    ImVec2 clip_off   = draw_data->DisplayPos;      // (0,0) unless using multi-viewports
+    ImVec2 clip_scale = draw_data->FramebufferScale;// (1,1) unless using retina display which are often (2,2)
     SetupRenderState(draw_data, _ui_command_list, render_buffers);
     int32_t global_vertex_offset = 0,
             global_index_offset  = 0;
 
-    ImVec2 clip_off = draw_data->DisplayPos;
+    // ImVec2 clip_off = draw_data->DisplayPos;
     for (int32_t n = 0; n < draw_data->CmdListsCount; n++) {
         const ImDrawList* cmd_list = draw_data->CmdLists[n];
         for (uint32_t cmd_index = 0; cmd_index < cmd_list->CmdBuffer.Size; ++cmd_index) {
@@ -200,16 +202,20 @@ void RHI::GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list) 
                 }
             } else {
                 // Project scissor/clipping rectangles into framebuffer space
-                ImVec2 clip_min(cmd->ClipRect.x - clip_off.x, cmd->ClipRect.y - clip_off.y);
-                ImVec2 clip_max(cmd->ClipRect.z - clip_off.x, cmd->ClipRect.w - clip_off.y);
+                ImVec2 clip_min((cmd->ClipRect.x - clip_off.x) * clip_scale.x, (cmd->ClipRect.y - clip_off.y) * clip_scale.y);
+                ImVec2 clip_max((cmd->ClipRect.z - clip_off.x) * clip_scale.x, (cmd->ClipRect.w - clip_off.y) * clip_scale.y);
                 if (clip_max.x <= clip_min.x || clip_max.y <= clip_min.y)
                     continue;
 
-                Rect2D r = {(int32_t)clip_min.x, (int32_t)clip_min.y, (uint32_t)(clip_max.x - clip_min.x), uint32_t(clip_max.y - clip_min.y)};
+                Rect2D r = {
+                    (int32_t)clip_min.x,
+                    (int32_t)clip_min.y,
+                    (uint32_t)(clip_max.x - clip_min.x),
+                    uint32_t(clip_max.y - clip_min.y)};
 
                 // 5. local: set scissor and viewport
                 _ui_command_list->SetScissor(r);
-                _ui_command_list->SetViewPort(g_rhi->RHIGetMainViewport()->GetViewportExtent());
+                // _ui_command_list->SetViewPort(g_rhi->RHIGetMainViewport()->GetViewportExtent());
 
                 // 6. local: set texture
                 RHIShaderResourceView* texture_view = (RHIShaderResourceView*)cmd->GetTexID();
@@ -240,26 +246,26 @@ void SetupRenderState(ImDrawData* draw_data, RHIGraphicsCommandList* commandList
     frag_param.sampler0 = backend_data->font_sampler;
     std::memset(&vert_param.vertexBuffer, 0, sizeof(vert_param.vertexBuffer));
     {
-        float l = draw_data->DisplayPos.x;
-        float r = draw_data->DisplayPos.x + draw_data->DisplaySize.x;
-        float t = draw_data->DisplayPos.y;
-        float b = draw_data->DisplayPos.y + draw_data->DisplaySize.y;
-        float mvp[4][4] =
-            {
-                {2.0f / (r - l), 0.0f, 0.0f, 0.0f},
-                {0.0f, 2.0f / (t - b), 0.0f, 0.0f},
-                {0.0f, 0.0f, 0.5f, 0.0f},
-                {(r + l) / (l - r), (t + b) / (b - t), 0.5f, 1.0f},
-            };
+        float l         = draw_data->DisplayPos.x;
+        float r         = draw_data->DisplayPos.x + draw_data->DisplaySize.x;
+        float t         = draw_data->DisplayPos.y;
+        float b         = draw_data->DisplayPos.y + draw_data->DisplaySize.y;
+        float mvp[4][4] = {
+            {2.0f / (r - l), 0.0f, 0.0f, 0.0f},
+            {0.0f, 2.0f / (t - b), 0.0f, 0.0f},
+            {0.0f, 0.0f, 0.5f, 0.0f},
+            {(r + l) / (l - r), (t + b) / (b - t), 0.5f, 1.0f},
+        };
         memcpy(&vert_param.vertexBuffer.mvp, mvp, sizeof(mvp));
     }
     RHIBatchedShaderParameters batched_params;
     batched_params.SetParameters(backend_data->shader_module_vert, vert_param);
     batched_params.SetParameters(backend_data->shader_module_frag, frag_param);
+    // should internally allocate descriptor set for vulkan if not allocated
     g_rhi->RHISetBatchedShaderParameters(backend_data->pipeline, batched_params);
 
     // 3. global: set viewport, MARK: does it work ?
-    ViewPort view_port(0, 0, draw_data->DisplaySize.x, draw_data->DisplaySize.y, 0.f, 1.f);
+    ViewPort view_port(0, 0, draw_data->DisplaySize.x * draw_data->FramebufferScale.x, draw_data->DisplaySize.y * draw_data->FramebufferScale.y, 0.f, 1.f);
     commandList->SetViewPort(view_port);
 
     // 4. global: bind vertex/index
@@ -293,7 +299,7 @@ bool CreateDeviceObjects() {
     RHIBlendStateInitializer blend_state_info;
     blend_state_info.attachments[0].color_blend_op         = BO_ADD;
     blend_state_info.attachments[0].color_src_blend_factor = BF_SRC_ALPHA;
-    blend_state_info.attachments[0].color_src_blend_factor = BF_ONE_MINUS_SRC_ALPHA;
+    blend_state_info.attachments[0].color_dst_blend_factor = BF_ONE_MINUS_SRC_ALPHA;
     blend_state_info.attachments[0].alpha_blend_op         = BO_ADD;
     blend_state_info.attachments[0].alpha_src_blend_factor = BF_ONE;
     blend_state_info.attachments[0].alpha_dst_blend_factor = BF_ONE_MINUS_SRC_ALPHA;

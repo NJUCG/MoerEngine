@@ -9,7 +9,7 @@ int main(int argc, char** argv) {
 
     std::filesystem::path workspace = argv[0];
 
-    launcher.Init(workspace);
+    launcher.Init(workspace.parent_path());
 
     try {
         launcher.Run();

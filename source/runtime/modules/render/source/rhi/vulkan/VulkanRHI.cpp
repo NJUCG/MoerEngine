@@ -37,7 +37,7 @@ namespace VkUtil = Moer::RHI::Vulkan::Util;
 
 VulkanRHIImpl::VulkanRHIImpl()
     : m_instance(VK_NULL_HANDLE), m_surface(VK_NULL_HANDLE),
-      m_device(nullptr), m_current_viewport(nullptr) {
+      m_device(nullptr), m_main_viewport(nullptr) {
     LOG_INFO("Built with Vulkan header version {0:d}.{1:d}.{2:d}", VK_API_VERSION_MAJOR(VK_HEADER_VERSION_COMPLETE), VK_API_VERSION_MINOR(VK_HEADER_VERSION_COMPLETE), VK_API_VERSION_PATCH(VK_HEADER_VERSION_COMPLETE));
     rhi_type = ERHIType::Vulkan;
 }
@@ -56,6 +56,7 @@ void VulkanRHIImpl::PostInit() {
 }
 
 void VulkanRHIImpl::ShutDown() {
+    vkDeviceWaitIdle(m_device->GetDevice());
     CHECK_AND_DELETE(m_main_viewport);
     CHECK_AND_DELETE(m_device);
 }
