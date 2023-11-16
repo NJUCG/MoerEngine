@@ -11,6 +11,8 @@ namespace Moer {
     };
 
     class Engine final {
+        friend class EngineLoop;
+
     public:
         void Init(const EngineInitInfo& _init_info);
 
@@ -35,17 +37,8 @@ namespace Moer {
         void InitWindow();
         void ShutDownWindow();
 
-        void Tick();
-
-        void OnDrawUI();
-
     private:
         bool b_request_quiting = false;
-
-        std::vector<std::function<void()>> on_draw_ui_funcs;
-
-        //test
-        void TestDrawUI();
     };
 }// namespace Moer
 

@@ -25,7 +25,7 @@ namespace Moer {
 
     private:
         GLFWWindowImpl();
-        virtual void Init(const SurfaceInfo&) override;
+        virtual void Init(const SurfaceInitInfo&) override;
         virtual void OnCharCallbackImpl(WindowType* window, unsigned int codepoint) override;
         virtual void OnCursorEnterCallbackImpl(WindowType* window, int entered) override;
         virtual void OnCursorPosCallbackImpl(WindowType* window, double xpos, double ypos) override;

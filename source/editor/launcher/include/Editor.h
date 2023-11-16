@@ -1,5 +1,6 @@
 #ifndef MOER_EDITOR_H
 #define MOER_EDITOR_H
+
 namespace Moer {
     class Engine;
     class UIBase;

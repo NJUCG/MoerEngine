@@ -40,7 +40,7 @@ namespace Moer {
 
     protected:
         static WindowImpl& GetInstance();
-        virtual void       Init(const SurfaceInfo& info)                                                                       = 0;
+        virtual void       Init(const SurfaceInitInfo& info)                                                                   = 0;
         virtual void       OnCharCallbackImpl(WindowType* window, unsigned int codepoint)                                      = 0;
         virtual void       OnCursorEnterCallbackImpl(WindowType* window, int entered)                                          = 0;
         virtual void       OnCursorPosCallbackImpl(WindowType* window, double xpos, double ypos)                               = 0;

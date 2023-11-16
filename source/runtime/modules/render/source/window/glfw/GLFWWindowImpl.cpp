@@ -53,20 +53,20 @@ namespace Moer {
         io.Fonts->AddFontFromFileTTF(reg_font_path.generic_string().c_str(), base_font_size, nullptr, io.Fonts->GetGlyphRangesDefault());
     };
 
-    void GLFWWindowImpl::Init(const SurfaceInfo& info) {
+    void GLFWWindowImpl::Init(const SurfaceInitInfo& info) {
         if (!glfwInit()) {
             //error log and quit
             LOG_ERROR("Window init fail.");
             assert(0 && "Window init fail.");
         }
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-        if (strcmp(info.rhi_name, "D3D12")) {
+        if (info.rhi_name == "D3D12") {
             InitD3D12();
         } else {
             InitVulkan();
         }
 
-        GLFWwindow* window = glfwCreateWindow(info.width, info.height, info.title, nullptr, nullptr);
+        GLFWwindow* window = glfwCreateWindow(info.width, info.height, info.title.c_str(), nullptr, nullptr);
 
         glfwSetWindowUserPointer(window, this);
 
@@ -152,6 +152,7 @@ namespace Moer {
         }
     }
     void GLFWWindowImpl::Tick() {
+        PollEvents();
         GuiUpdate();
     }
     void GLFWWindowImpl::ShutDown() {

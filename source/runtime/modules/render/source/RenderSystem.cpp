@@ -66,14 +66,11 @@ namespace Moer {
         EShaderPlatform platform = GetShaderPlatformByRHIType(g_rhi->GetType());
         ShaderResourceManager::Init(platform);
         ShaderResourceManager::GetInstance().PrepareGlobalShaderResources();
-
-        Shader* shader = ShaderResourceManager::GetShader<TestReflectionShader>();
-
-        int i = 1;
     }
 
     void RenderSystem::ShutDownRHI() {
         g_rhi->ShutDown();
+        g_rhi = nullptr;
     }
 
     void RenderSystem::FreeShaderResources() {

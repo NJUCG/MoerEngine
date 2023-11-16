@@ -9,8 +9,9 @@ add_subdirectory(modules/render)
 add_subdirectory(modules/resource)
 
 # add_subdirectory(functions)
-
-add_library(${target_name} STATIC Engine.h Engine.cpp)
+file(GLOB  ENGINE_HEADERS   "*.h")
+file(GLOB  ENGINE_SOURCES   "*.cpp")
+add_library(${target_name} STATIC ${ENGINE_HEADERS} ${ENGINE_SOURCES})
 
 set_target_properties(${target_name} PROPERTIES FOLDER "engine")
 

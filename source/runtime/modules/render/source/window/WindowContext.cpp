@@ -4,7 +4,7 @@
 
 namespace Moer {
 
-    void WindowContext::Init(SurfaceInfo info) {
+    void WindowContext::Init(const SurfaceInitInfo& info) {
         WindowImpl::GetInstance().Init(info);
     }
     void WindowContext::Tick() {
@@ -15,10 +15,6 @@ namespace Moer {
     }
     WindowContext::~WindowContext() {
     }
-
-    void WindowContext::PollEvents() {
-        WindowImpl::GetInstance().PollEvents();
-    };
 
     void WindowContext::SetFocusMode(WindowHandle* window, bool focused) {
         WindowImpl::GetInstance().SetFocusMode(window, focused);

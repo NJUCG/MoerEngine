@@ -22,7 +22,6 @@ target_include_directories(
 message("[Engine] runtime dir: ${moer_source_dir}/runtime")
 
 target_compile_options(${target_name} PUBLIC "$<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/WX->")
-
 target_link_libraries(${target_name} 
 PRIVATE MoerEngineRuntime
 PRIVATE MoerEditorUI)

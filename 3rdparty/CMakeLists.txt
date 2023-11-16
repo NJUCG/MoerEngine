@@ -64,3 +64,5 @@ add_subdirectory(SPIRV-Reflect)
 add_subdirectory(DirectX-Headers)
 
 add_subdirectory(AssetLoad)
+
+add_subdirectory(json)

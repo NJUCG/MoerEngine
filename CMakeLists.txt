@@ -23,6 +23,8 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${BINARY_ROOT_DIR}/lib)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${BINARY_ROOT_DIR}/lib)
 
 add_definitions(-DASSET_DIR="${moer_root_dir}/asset")
+add_compile_definitions(EDITOR_MODE_ON=1)
+
 
 option(moer_build_test "build test unit" ON)
 
