@@ -32,6 +32,29 @@ namespace Moer {
         const char* title{"MoerEngine"};
         bool        b_full_screen{false};
     };
+
+    struct SurfaceInitInfo {
+        SurfaceInitInfo(const std::string& _rhi_name,
+                        uint32_t           _width,
+                        uint32_t           _height,
+                        const std::string& _title,
+                        bool               _full_screen)
+            : rhi_name(_rhi_name),
+              width(_width),
+              height(_height),
+              title(_title),
+              b_fullscreen(_full_screen) {}
+
+        SurfaceInitInfo()
+            : SurfaceInitInfo("", 1920, 1080, "untitled", false) {}
+
+        std::string rhi_name;
+        int         width{1280};
+        int         height{720};
+        std::string title{"MoerEngine"};
+        bool        b_fullscreen{false};
+        bool        b_vsync{false};
+    };
     //mean to support multi window creation and io-management
     class WindowContext {
         friend class WindowImpl;
@@ -39,11 +62,9 @@ namespace Moer {
     public:
         WindowContext() = default;
         ~WindowContext();
-        static void Init(SurfaceInfo info);
+        static void Init(const SurfaceInitInfo& info);
         static void Tick();
         static void ShutDown();
-
-        static void PollEvents();
         //new support for multi window
         static void          GetWindowSize(WindowHandle*, int* width, int* height);
         static void          SetFocusMode(WindowHandle*, bool focused);

@@ -133,9 +133,9 @@ void RHI::GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list) 
     ImDrawData* draw_data = static_cast<ImDrawData*>(_draw_data);
     if (draw_data->DisplaySize.x <= 0.0f || draw_data->DisplaySize.y <= 0.0f)
         return;
-    Shader*              frag_shader     = ShaderResourceManager::GetShader<ImGuiShaderFrag>();
-    Shader*              vert_shader     = ShaderResourceManager::GetShader<ImGuiShaderVert>();
-    RHIFragmentShaderRef frag_rhi_shader = g_rhi->RHICreateFragmentShader(frag_shader);
+    Shader* frag_shader = ShaderResourceManager::GetShader<ImGuiShaderFrag>();
+    Shader* vert_shader = ShaderResourceManager::GetShader<ImGuiShaderVert>();
+    // RHIFragmentShaderRef frag_rhi_shader = g_rhi->RHICreateFragmentShader(frag_shader);
 
     GuiBackendData* backend_data = GetBackendData();
 
