@@ -4,9 +4,12 @@
 #include <unordered_map>
 #include "API_Macro.h"
 //implement ConfigManager as Singleton
-#define FONTS_DIR "fonts"
+#define FONTS_DIR  "fonts"
+#define CONFIG_DIR "config"
 namespace Moer {
     struct MoerInitConfig {
+#if defined(EDITOR_MODE_ON)
+        //EDITOR CONFIGS
         uint32_t editor_width;
         uint32_t editor_height;
         uint32_t editor_fullscreen : 1;
@@ -16,6 +19,11 @@ namespace Moer {
         uint32_t editor_max_fps : 8;
 
         float editor_font_size{16.f};
+#endif
+        //ENGINE CONFIGS
+        uint32_t max_frame_in_flight : 3;
+
+        char default_rhi[32]{"Vulkan"};
     };
     class CORE_API ConfigManager {
     private:
