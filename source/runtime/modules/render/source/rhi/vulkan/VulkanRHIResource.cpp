@@ -1538,8 +1538,6 @@ VulkanRHIUnorderedAccessView::~VulkanRHIUnorderedAccessView() {
 #pragma region viewport
 VulkanViewport::VulkanViewport(VulkanSwapChain* _swapchain) : RHIViewport() {
     swapchain = _swapchain;
-    //MARK... set by config
-    info.max_frame_in_flight = 3;
     InnerCreateResources();
 }
 
@@ -1602,8 +1600,11 @@ void VulkanViewport::InnerCreateResources() {
     for (uint32_t index = 0; index < image_aquire_fences.size(); index++) {
         image_aquire_fences[index] = new VulkanRHIFence(swapchain->m_device, EFenceUsage::AQUIRE_NEXT_FRAME);
     }
-    frame_offset           = 0;
-    info.backbuffer_format = swapchain_format;
+    frame_offset = 0;
+
+    //init information
+    info.max_frame_in_flight = swapchain->m_swap_chain_images.size();
+    info.backbuffer_format   = swapchain_format;
 }
 void VulkanViewport::InnerDestroyResources() {
 

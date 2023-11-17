@@ -1,6 +1,8 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+// #include <string.h>
+#include <string>
 #include "config/ConfigManager.h"
 
 #include "config/ini.h"
@@ -12,7 +14,7 @@ namespace Moer {
 
     void ConfigManager::Init(const std::filesystem::path& _workspace_path) {
         workspace_path                    = _workspace_path;
-        std::filesystem::path config_path = _workspace_path / "config" / "MoerEngine.ini";
+        std::filesystem::path config_path = _workspace_path / CONFIG_DIR / "MoerEngine.ini";
         if (!std::filesystem::exists(config_path)) {
             throw std::runtime_error("Config directory does not exist");
         }
@@ -22,7 +24,7 @@ namespace Moer {
         if (r.ParseError() < 0) {
             throw std::runtime_error("Can't load 'MoerEditor.ini'");
         }
-
+#if defined(EDITOR_MODE_ON)
         init_config.editor_width           = r.Get<int>("editor", "editor_width", 1920);
         init_config.editor_height          = r.Get<int>("editor", "editor_height", 1080);
         init_config.editor_fullscreen      = r.Get<int>("editor", "editor_fullscreen", 0);
@@ -31,22 +33,12 @@ namespace Moer {
         init_config.editor_fps             = r.Get<int>("editor", "editor_fps", 60);
         init_config.editor_max_fps         = r.Get<int>("editor", "editor_max_fps", 120);
         init_config.editor_font_size       = r.Get<float>("editor", "editor_font_size", 16.f);
+#endif
+        init_config.max_frame_in_flight = r.Get<int>("engine", "max_frame_in_flight", 3);
 
-        // if (!std::filesystem::exists(config_path)) {
-        //     throw std::runtime_error("Config directory does not exist");
-        // }
+        auto default_rhi = r.Get<std::string>("engine", "default_rhi", "Vulkan");
 
-        // for (const auto& entry : std::filesystem::directory_iterator(config_path)) {
-        //     if (entry.is_regular_file()) {
-        //         std::ifstream config_file(entry.path());
-        //         if (config_file.is_open()) {
-        //             std::stringstream buffer;
-        //             buffer << config_file.rdbuf();
-        //             std::string config_content                = buffer.str();
-        //             configs[entry.path().filename().string()] = config_content;
-        //         }
-        //     }
-        // }
+        strcpy_s(init_config.default_rhi, default_rhi.c_str());
     }
 
     // std::string ConfigManager::GetConfig(const std::string& key) {

@@ -178,7 +178,7 @@ namespace inih {
         FILE* file;
         int   error;
 
-        file = fopen(filename, "r");
+        fopen_s(&file, filename, "r");
         if (!file) return -1;
         error = ini_parse_file(file, handler, user);
         fclose(file);
