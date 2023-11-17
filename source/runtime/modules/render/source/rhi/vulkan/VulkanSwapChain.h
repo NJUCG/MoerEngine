@@ -25,9 +25,9 @@ struct SwapChainBuffer {
 class VulkanSwapChain {
 public:
     void     Connect(VkInstance _instance, VkSurfaceKHR _surface, VulkanDevice* _device);
-    void     Init(uint32_t* width, uint32_t* height, uint32_t max_frame_in_flight, bool vsync);
+    void     Init(uint32_t* width, uint32_t* height, bool vsync);
     uint32_t AcquireNextImage(VkSemaphore _aquire_semaphore);
-    VkResult     Present(VkQueue _queue, VkSemaphore _render_finished);
+    VkResult Present(VkQueue _queue, VkSemaphore _render_finished);
     void     Cleanup();
 
     VkSurfaceFormatKHR GetSurfaceFormat() const { return surface_format; }
