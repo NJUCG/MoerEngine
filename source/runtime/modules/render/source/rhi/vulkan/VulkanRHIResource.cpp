@@ -1536,8 +1536,9 @@ VulkanRHIUnorderedAccessView::~VulkanRHIUnorderedAccessView() {
 #pragma endregion
 
 #pragma region viewport
-VulkanViewport::VulkanViewport(VulkanSwapChain* _swapchain) : RHIViewport() {
-    swapchain = _swapchain;
+VulkanViewport::VulkanViewport(VulkanSwapChain* _swapchain, uint32_t _max_frame_in_flight) : RHIViewport() {
+    swapchain                = _swapchain;
+    info.max_frame_in_flight = _max_frame_in_flight;
     InnerCreateResources();
 }
 
@@ -1574,6 +1575,7 @@ VulkanRHIUnorderedAccessView* VulkanViewport::InnerCreateVulkanUnorderedAccessVi
 void VulkanViewport::InnerCreateResources() {
     uint32_t back_buffer_size = swapchain->m_swap_chain_images.size();
 
+    info.max_frame_in_flight = 3;
     swapchain_image_uavs.resize(back_buffer_size);
     image_aquire_fences.resize(info.max_frame_in_flight);
     swapchain_images.resize(back_buffer_size);
@@ -1603,8 +1605,8 @@ void VulkanViewport::InnerCreateResources() {
     frame_offset = 0;
 
     //init information
-    info.max_frame_in_flight = swapchain->m_swap_chain_images.size();
-    info.backbuffer_format   = swapchain_format;
+
+    info.backbuffer_format = swapchain_format;
 }
 void VulkanViewport::InnerDestroyResources() {
 

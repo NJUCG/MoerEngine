@@ -615,8 +615,8 @@ void VulkanRHIImpl::InitVulkan() {
     swap_chain->Connect(m_instance, m_surface, m_device);
     uint32_t width, height;
     // glfwGetFramebufferSize(m_window, &width, &height);
-    swap_chain->Init(&width, &height, max_frame_in_flight, true);
-    m_main_viewport = new VulkanViewport(swap_chain);
+    swap_chain->Init(&width, &height, true);
+    m_main_viewport = new VulkanViewport(swap_chain, max_frame_in_flight);
 }
 
 #pragma region vulkan functions
@@ -771,11 +771,11 @@ RHIViewport*   VulkanRHIImpl::RHIGetMainViewport() {
 RHIViewportRef VulkanRHIImpl::RHICreateViewport(const RHIViewportInitializer& _init) {
     VulkanSwapChain* swapchain = new VulkanSwapChain();
     uint32_t         width, height;
-    swapchain->Init(&width, &height, max_frame_in_flight, true);
+    swapchain->Init(&width, &height, true);
     VkSurfaceKHR surface;
     Moer::WindowContext::CreateVulkanSurface(m_instance, _init.window_handle, nullptr, &surface);
     swapchain->Connect(m_instance, surface, m_device);
-    VulkanViewport* viewport = new VulkanViewport(swapchain);
+    VulkanViewport* viewport = new VulkanViewport(swapchain, max_frame_in_flight);
 
     return static_cast<RHIViewport*>(viewport);
 }

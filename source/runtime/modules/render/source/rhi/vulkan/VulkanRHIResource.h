@@ -492,7 +492,7 @@ private:
 
 class VulkanViewport final : public RHIViewport {
 public:
-    VulkanViewport(class VulkanSwapChain* _swapchain);
+    VulkanViewport(class VulkanSwapChain* _swapchain, uint32_t _max_frame_in_flight);
     ~VulkanViewport();
     virtual void OnResize(Extent2D _size) override;
 

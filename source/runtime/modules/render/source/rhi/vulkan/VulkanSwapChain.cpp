@@ -31,7 +31,7 @@ void VulkanSwapChain::Connect(VkInstance _instance, VkSurfaceKHR _surface, Vulka
  * @param vsync (Optional) Can be used to force vsync-ed rendering (by using VK_PRESENT_MODE_FIFO_KHR as presentation mode)
  * @param fullscreen
  */
-void VulkanSwapChain::Init(uint32_t* width, uint32_t* height, uint32_t max_frame_in_flight, bool vsync) {
+void VulkanSwapChain::Init(uint32_t* width, uint32_t* height, bool vsync) {
     Create(width, height, vsync);
 }
 void VulkanSwapChain::Create(uint32_t* width, uint32_t* height, bool vsync) {

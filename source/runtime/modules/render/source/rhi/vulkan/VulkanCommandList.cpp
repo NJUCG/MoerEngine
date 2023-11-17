@@ -26,9 +26,11 @@ VulkanRHIGraphicsCommandList::VulkanRHIGraphicsCommandList(VulkanDevice* _device
 }
 
 VulkanRHIGraphicsCommandList::~VulkanRHIGraphicsCommandList() {
-    device = nullptr;
+
     //destroy command buffer
+    vkDeviceWaitIdle(device->GetDevice());
     vkFreeCommandBuffers(*device, device->GetDefaultCommandPool(), 1, &m_command_buffer);
+    device = nullptr;
 }
 
 void VulkanRHIGraphicsCommandList::SetBatchedShaderParameter(const RHIBatchedShaderParameters& _parameters) {
