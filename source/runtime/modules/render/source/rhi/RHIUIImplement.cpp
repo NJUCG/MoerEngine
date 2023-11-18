@@ -379,6 +379,7 @@ void CreateFontsTexture() {
     uint8_t* pixels;
 
     int width, height;
+    //MARK... this is freaking slow, it's build first called, we need a default data for it, and async load other fonts
     io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
 
     //upload texture
@@ -499,6 +500,135 @@ void CreateFontsTexture() {
     }
     io.Fonts->SetTexID((ImTextureID)backend_data->font_view);
 }
+// void GuiUpdateFontsTexture() {
+
+//     ImGuiIO&        io           = ImGui::GetIO();
+//     GuiBackendData* backend_data = GetBackendData();
+
+//     uint8_t* pixels;
+
+//     int width, height;
+//     io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+
+//     //upload texture
+//     {
+//         const uint32_t alignment    = 256;
+//         RHITextureRef  font_texture = nullptr;
+
+//         font_texture = g_rhi->RHICreateTexture(RHITextureCreateInfo::Create("FontTexture2D", ETextureDimension::TEX_2D)
+//                                                    .SetNumSamples(1)
+//                                                    .SetExtent({width, height})
+//                                                    .SetNumMips(1)
+//                                                    .SetArraySize(1)
+//                                                    .SetFormat(PF_R8G8B8A8_UNORM)
+//                                                    .SetUsageFlags(ETextureUsageFlags::SAMPLED | ETextureUsageFlags::SRGB | ETextureUsageFlags::TRANSFER_DST)
+//                                                    .SetInitialLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED));
+
+//         uint32_t upload_pitch = (width * 4 + alignment - 1u) & ~(alignment - 1u);
+//         uint32_t upload_size  = height * upload_pitch;
+
+//         RHIBufferRef staging_buffer = g_rhi->RHICreateBuffer(
+//             RHIBufferCreateInfo::Create(upload_size, 0, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE));
+
+//         assert(font_texture.Get() && staging_buffer.Get());
+
+//         void* mapped = g_rhi->RHIMapBuffer(staging_buffer, 0, upload_size);
+//         // for (int32_t y = 0; y < height; y++) {
+//         //     memcpy((void*)((uint8_t*)mapped + y * upload_pitch), pixels + y * width * 4, width * 4);
+//         // }
+//         memcpy(mapped, pixels, upload_size);
+
+//         g_rhi->RHIUnmapBuffer(staging_buffer);
+
+//         RHISubresourceRange range{ETextureAspectFlags::COLOR,
+//                                   0,
+//                                   1,
+//                                   0,
+//                                   1,
+//                                   0,
+//                                   1};
+
+//         RHITextureBarrierInfo tex_barriers[2];
+
+//         tex_barriers[0].src_layout = TEXTURE_LAYOUT_UNDEFINED;
+//         tex_barriers[0].dst_layout = TEXTURE_LAYOUT_TRANSFER_DST;
+//         tex_barriers[0].src_access = ERHIAccessFlags::UNDEFINED;
+//         tex_barriers[0].dst_access = ERHIAccessFlags::TRANSFER_WRITE;
+//         tex_barriers[0].dst_stage  = PS_TRANSFER;
+
+//         tex_barriers[0].p_texture          = font_texture;
+//         tex_barriers[0].sub_resource_range = range;
+
+//         tex_barriers[1].src_layout         = TEXTURE_LAYOUT_TRANSFER_DST;
+//         tex_barriers[1].dst_layout         = TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+//         tex_barriers[1].src_access         = ERHIAccessFlags::TRANSFER_WRITE;
+//         tex_barriers[1].dst_access         = ERHIAccessFlags::SHADER_READ;
+//         tex_barriers[1].src_stage          = PS_TRANSFER;
+//         tex_barriers[1].dst_stage          = PS_FRAGMENT_SHADER;
+//         tex_barriers[1].p_texture          = font_texture;
+//         tex_barriers[1].sub_resource_range = range;
+
+//         RHIGraphicsCommandList* command_list = g_rhi->CreateGraphicsCommandList();
+
+//         RHIBarrierDependencyInfo font_create_barriers{};
+//         font_create_barriers.texture_barrier_count = 1;
+//         font_create_barriers.p_texture_barriers    = tex_barriers;
+
+//         command_list->Open();
+//         command_list->SetPipelineBarrier(font_create_barriers);
+
+//         RHISubresourceSlice        resource_slice(ETextureAspectFlags::COLOR, 0, 0, 1, 0, 1);
+//         RHICopyBufferToTextureInfo copy_info(
+//             ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST,
+//             {0, 0, 0},
+//             {(uint32_t)width, (uint32_t)height, 1},
+//             resource_slice,
+//             0);
+
+//         // 3. MARK: pRegion[0] is trying to copy 518144 bytes plus 0 offset to/from the VkBuffer (VkBuffer 0xcb1c7c000000001b[]) which exceeds the VkBuffer total size of 131072 bytes.
+//         command_list->CopyBufferToTexture(staging_buffer, font_texture, copy_info);
+
+//         RHIBarrierDependencyInfo font_copy_barriers{};
+//         font_copy_barriers.p_texture_barriers    = &tex_barriers[1];
+//         font_copy_barriers.texture_barrier_count = 1;
+
+//         command_list->SetPipelineBarrier(font_copy_barriers);
+
+//         RHIBatchedShaderParameters  batched_params;
+//         ImGuiShaderFrag::Parameters params;
+//         params.sampler0 = backend_data->font_sampler;
+//         params.texture0 = backend_data->font_view;
+
+//         batched_params.SetParameters(backend_data->shader_module_frag, params);
+//         g_rhi->RHISetBatchedShaderParameters(backend_data->pipeline, batched_params);
+
+//         command_list->Close();
+
+//         RHICommandQueue* queue = g_rhi->CreateCommandQueue(ECommandQueueType::COPY);
+
+//         RHIFenceCreateInfo fence_info{EFenceUsage::TIMELINE};
+//         RHIFenceRef        fence = g_rhi->RHICreateFence(fence_info);
+
+//         RHISubmitInfo submit_info;
+
+//         uint64_t wait_value = 1;
+//         submit_info.Signal(fence, wait_value);
+//         queue->SubmitCommands(1, command_list, &submit_info);
+
+//         fence->Wait(wait_value);
+
+//         auto srv_info = RHIViewInfo::CreateTextureSRVInfo()
+//                             .SetFormat(PF_R8G8B8A8_UNORM)
+//                             .SetDimension(ETextureDimension::TEX_2D)
+//                             .SetMipRange(0, 1)
+//                             .SetArrayRange(0, 1);
+
+//         backend_data->font_view    = g_rhi->RHICreateShaderResourceView(font_texture, srv_info);
+//         backend_data->font_texture = font_texture;
+//     }
+//     io.Fonts->SetTexID((ImTextureID)backend_data->font_view);
+// }
+
 void GuiCreateWindow(ImGuiViewport* viewport);
 void GuiDestroyWindow(ImGuiViewport* viewport);
 void GuiSetWindowSize(ImGuiViewport* viewport, ImVec2 size);

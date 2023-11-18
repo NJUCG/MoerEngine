@@ -23,4 +23,9 @@ namespace Moer {
         // Implementation of execute method
         // ...
     }
+
+    void UploadPass::TestDrawTriangle() {
+        // Implementation of execute method
+        // ...
+    }
 }// namespace Moer

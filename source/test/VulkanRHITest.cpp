@@ -11,6 +11,7 @@
 #include "shader/Shader.h"
 #include "shader/ShaderCompiler.h"
 #include "shader/ShaderResourceManager.h"
+
 RHI* g_rhi = nullptr;
 
 // global shader
