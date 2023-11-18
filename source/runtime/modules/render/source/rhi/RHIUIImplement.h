@@ -12,11 +12,6 @@ struct GuiFrameRenderBuffers {
     RHIBufferRef vertex_buffer;
     RHIBufferRef index_buffer;
 };
-struct GuiWindowRenderBuffers {
-    uint32_t               index;
-    uint32_t               count;
-    GuiFrameRenderBuffers* frame_render_buffers;
-};
 struct GuiBackendData {
     size_t buffer_memory_alignment;
 
@@ -49,6 +44,8 @@ struct GuiViewportData {
     RHICommandQueue*        command_queue;
     RHIGraphicsCommandList* comand_list;
 
+    RHIGraphicsCommandList* upload_command_list;
+
     RHIFenceRef present_fence;
 
     RHIViewportRef viewport;
@@ -63,7 +60,4 @@ struct GuiViewportData {
     ~GuiViewportData() {}
 };
 
-struct GuiViewportData2 {
-    RHIViewportRef viewport;
-};
 #endif

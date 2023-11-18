@@ -5,6 +5,8 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include <vector>
+#include "RenderAPI.h"
+
 enum class ERHIType {
     Vulkan,
     D3D12
@@ -125,6 +127,6 @@ protected:
     uint32_t max_frame_in_flight;
 };
 
-extern RHI* g_rhi;
+extern RENDER_API RHI* g_rhi;
 
 #endif

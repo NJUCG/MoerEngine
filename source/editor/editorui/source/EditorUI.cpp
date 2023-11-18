@@ -13,6 +13,8 @@ namespace Moer {
         ShowEditorMenu(&m_b_show_editor_menu);
         ShowMainWindow(&m_b_show_main_window);
         ShowInspectorWindow(&m_b_show_inspector_window);
+        static bool show_demo_window = true;
+        ImGui::ShowDemoWindow(&show_demo_window);
     }
     EditorUI::~EditorUI() {
     }
@@ -20,12 +22,12 @@ namespace Moer {
     void EditorUI::ShowEditorMenu(bool* _b_show) {
 
         static bool               opt_fullscreen  = true;
-        static bool               opt_padding     = true;
+        static bool               opt_padding     = false;
         static ImGuiDockNodeFlags dockspace_flags = ImGuiDockNodeFlags_None;
 
         // We are using the ImGuiWindowFlags_NoDocking flag to make the parent window not dockable into,
         // because it would be confusing to have two docking targets within each others.
-        ImGuiWindowFlags window_flags = ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking;
+        ImGuiWindowFlags window_flags = ImGuiWindowFlags_MenuBar;
         if (opt_fullscreen) {
             const ImGuiViewport* viewport = ImGui::GetMainViewport();
             ImGui::SetNextWindowPos(viewport->WorkPos);
@@ -35,6 +37,7 @@ namespace Moer {
             ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
             window_flags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
             window_flags |= ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
+            window_flags |= ImGuiWindowFlags_NoBackground;
         } else {
             dockspace_flags &= ~ImGuiDockNodeFlags_PassthruCentralNode;
         }
@@ -89,7 +92,7 @@ namespace Moer {
 
     void EditorUI::ShowMainWindow(bool* b_show) {
         ImGuiIO&         io           = ImGui::GetIO();
-        ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_MenuBar;
+        ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoTitleBar;
 
         const ImGuiViewport* main_viewport = ImGui::GetMainViewport();
 
@@ -104,12 +107,6 @@ namespace Moer {
         Moer::Vector2f render_target_window_pos  = {0.0f, 0.0f};
         Moer::Vector2f render_target_window_size = {0.0f, 0.0f};
 
-        auto menu_bar_rect = ImGui::GetCurrentWindow()->MenuBarRect();
-
-        render_target_window_pos.x  = ImGui::GetWindowPos().x;
-        render_target_window_pos.y  = menu_bar_rect.Max.y;
-        render_target_window_size.x = ImGui::GetWindowSize().x;
-        render_target_window_size.y = (ImGui::GetWindowSize().y + ImGui::GetWindowPos().y) - menu_bar_rect.Max.y;// coord of right bottom point of full window minus coord of right bottom point of menu bar window.
         ImGui::ShowStyleEditor();
         //set viewport size(image size) of main viewport
         // ImGui::Image(ImTextureID user_texture_id, render_target_window_size);

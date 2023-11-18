@@ -7,14 +7,17 @@ file(GLOB_RECURSE RENDER_MODULE_HEADERS "include/*.h")
 file(GLOB_RECURSE RENDER_MODULE_SOURCES "source/*.cpp" "source/*.h")
 
 file(GLOB IMGUI_SOURCES 
-    "${moer_third_party_dir}/imgui/*.cpp" 
-    "${moer_third_party_dir}/imgui/*.h"
-    "${moer_third_party_dir}/imgui/IconsFontAwesome6.h" # icon font for imgui, see https://github.com/juliettef/IconFontCppHeaders
-    "${moer_third_party_dir}/imgui/backends/imgui_impl_glfw.*")
+    # "${moer_third_party_dir}/imgui/*.cpp" 
+    # "${moer_third_party_dir}/imgui/*.h"
+    # "${moer_third_party_dir}/imgui/IconsFontAwesome6.h" # icon font for imgui, see https://github.com/juliettef/IconFontCppHeaders
+    # "${moer_third_party_dir}/imgui/backends/imgui_impl_glfw.*"
+    )
 
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${RENDER_MODULE_HEADERS} ${RENDER_MODULE_SOURCES} )
 
-add_library(${MODULE_NAME} STATIC ${RENDER_MODULE_HEADERS} ${RENDER_MODULE_SOURCES} ${IMGUI_SOURCES})
+add_library(${MODULE_NAME} SHARED ${RENDER_MODULE_HEADERS} ${RENDER_MODULE_SOURCES} ${IMGUI_SOURCES})
+
+target_compile_definitions(${MODULE_NAME} PRIVATE RENDER_MODULE_SHARED_LIB)
 
 set_target_properties(${MODULE_NAME} PROPERTIES FOLDER "runtime")
 
@@ -41,6 +44,7 @@ target_link_libraries(${MODULE_NAME}
     PUBLIC Microsoft::DirectX-Guids
     PUBLIC Microsoft::DirectX-Headers
     PUBLIC glfw
+    PUBLIC ImGui::imgui
 )
 
 add_dependencies(${MODULE_NAME} DXC_COPY)
