@@ -1,19 +1,31 @@
 #include "VulkanPipelineResourceCache.h"
 
-void VulkanPipelineResourceCache::GetSetsToBind(std::vector<std::pair<uint32_t, const VkDescriptorSet*>>& _sets_to_bind) {
-    for (auto& [info, bound] : m_bound_descriptor_sets) {
-        if (!bound) {
-            _sets_to_bind.emplace_back(info.set, info.descriptor_set);
-        }
-        bound = true;
-    }
+#include "VulkanDevice.h"
+
+#include "misc/Crc32.h"
+
+void VulkanPipelineResourceCache::UpdateDescriptorSetHashInfo(uint32_t index, const VulkanHashableDescriptorInfo& _info) {
+    m_descriptor_resource_container.hashable_descriptor_infos[index] = _info;
 }
 
-void VulkanPipelineResourceCache::GetConstantsToPush(std::vector<PushConstantInfo>& _constants_to_push) {
-    for (auto& [info, pushed] : m_pushed_constants) {
-        if (!pushed) {
-            _constants_to_push.emplace_back(info);
-        }
-        pushed = true;
-    }
+bool VulkanPipelineResourceCache::UpdateDescriptorSets(VulkanDevice* _device, const VulkanDescriptorSetsLayout* _layout) {
+    return _device->GetDescriptorSets(GetSetsKey(), *_layout, m_descriptor_sets);
+}
+
+void VulkanPipelineResourceCache::BindDescriptorSets(VkCommandBuffer _buffer, VkPipelineBindPoint _bind_point, VkPipelineLayout _layout) {
+    vkCmdBindDescriptorSets(
+        _buffer,
+        _bind_point,
+        _layout,
+        0,
+        m_descriptor_sets.size(),
+        m_descriptor_sets.data(),
+        0,
+        nullptr);
+}
+
+uint32_t VulkanPipelineResourceCache::GetSetsKey() const {
+    return crc32_8bytes(
+        m_descriptor_resource_container.hashable_descriptor_infos.data(),
+        sizeof(VulkanHashableDescriptorInfo) * m_descriptor_resource_container.hashable_descriptor_infos.size());
 }

@@ -17,7 +17,8 @@
 #include <map>
 
 class VulkanDescriptorSetsLayout;
-class VulkanDescriptorAllocator;
+class VulkanDescriptorSetAllocator;
+union VulkanHashableDescriptorInfo;
 
 struct QueueFamilyIndices {
     std::optional<uint32_t> graphics;
@@ -92,7 +93,7 @@ public:
         return m_transfer_pool;
     }
 
-    void AllocateDescriptorSets(const VulkanDescriptorSetsLayout& _layouts, std::vector<VkDescriptorSet>& _sets);
+    bool GetDescriptorSets(uint32_t _hash_key, const VulkanDescriptorSetsLayout& _layout, std::vector<VkDescriptorSet>& _sets);
 
 private:
     VkPhysicalDevice                  m_gpu;
@@ -112,8 +113,8 @@ private:
     VkCommandPool m_default_pool;
     VkCommandPool m_transfer_pool;
 
-    VmaAllocator               m_allocator;
-    VulkanDescriptorAllocator* m_descriptor_allocator;
+    VmaAllocator                  m_allocator;
+    VulkanDescriptorSetAllocator* m_descriptor_allocator;
 
 private:
     VkPhysicalDevice SelectGpu(const DeviceInitializer& _init);
