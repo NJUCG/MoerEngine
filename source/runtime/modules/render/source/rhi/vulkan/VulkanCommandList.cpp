@@ -22,13 +22,13 @@ VulkanRHIGraphicsCommandList::VulkanRHIGraphicsCommandList(VulkanDevice* _device
     buffer_alloc_info.level              = _level;
     buffer_alloc_info.commandBufferCount = 1;
 
-    VK_CHECK_RESULT(vkAllocateCommandBuffers(*device, &buffer_alloc_info, &m_command_buffer));
+    VK_CHECK_RESULT(vkAllocateCommandBuffers(m_device->GetDevice(), &buffer_alloc_info, &m_command_buffer));
 }
 
 VulkanRHIGraphicsCommandList::~VulkanRHIGraphicsCommandList() {
-    device = nullptr;
+    m_device = nullptr;
     //destroy command buffer
-    vkFreeCommandBuffers(*device, device->GetDefaultCommandPool(), 1, &m_command_buffer);
+    vkFreeCommandBuffers(m_device->GetDevice(), m_device->GetDefaultCommandPool(), 1, &m_command_buffer);
 }
 
 void VulkanRHIGraphicsCommandList::SetBatchedShaderParameter(const RHIBatchedShaderParameters& _parameters) {
@@ -49,9 +49,6 @@ void VulkanRHIGraphicsCommandList::SetPipelineState(RHIGraphicsPipelineState* _g
 
     vkCmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk_pso->GetHandle());
     m_current_pipeline_state = vk_pso;
-
-    // set descriptor sets to bind, constants to push
-    m_current_pipeline_state->InitResourceCache();
 }
 
 void VulkanRHIGraphicsCommandList::Open() {
@@ -633,31 +630,25 @@ void VulkanRHIGraphicsCommandList::PrepareDrawCommand() {
     auto* vk_resource_cache = vk_pso->GetPipelineResourceCache();
     VK_CHECK_NULLPTR(vk_resource_cache, "PreDrawCommand: graphics pipeline resource cache is nullptr!", return);
 
-    const auto pipeline_layout = vk_pso->GetPipelineLayout();
-    // 1. bind descriptor sets
-    m_sets_to_bind.clear();
-    vk_resource_cache->GetSetsToBind(m_sets_to_bind);
-    for (const auto& set_info : m_sets_to_bind) {
-        vkCmdBindDescriptorSets(
-            m_command_buffer,
-            VK_PIPELINE_BIND_POINT_GRAPHICS,
-            pipeline_layout,
-            set_info.first,
-            1,
-            set_info.second,
-            0,
-            nullptr);
+    auto pipeline_layout = vk_pso->GetPipelineLayout();
+
+    const auto* vk_sets_layout = vk_pso->GetDescriptorSetsLayout();
+    // 1. update and bind descriptor sets
+    if (vk_resource_cache->UpdateDescriptorSets(m_device, vk_sets_layout)) {
+        vk_resource_cache->BindDescriptorSets(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout);
     }
+
     // 2. push constants
-    m_constants_to_push.clear();
-    vk_resource_cache->GetConstantsToPush(m_constants_to_push);
-    for (const auto& constant_info : m_constants_to_push) {
-        vkCmdPushConstants(
-            m_command_buffer,
-            pipeline_layout,
-            constant_info.flags,
-            0,
-            constant_info.size,
-            reinterpret_cast<const uint32_t*>(&constant_info.raw_data[constant_info.byte_offset_in_raw_data]));
+    for (auto& [constant_info, bound] : vk_resource_cache->GetConstantsToPush()) {
+        if (!bound) {
+            vkCmdPushConstants(
+                m_command_buffer,
+                pipeline_layout,
+                constant_info.flags,
+                constant_info.byte_offset_in_raw_data,
+                constant_info.size,
+                constant_info.raw_data.data());
+        }
+        bound = true;
     }
 }

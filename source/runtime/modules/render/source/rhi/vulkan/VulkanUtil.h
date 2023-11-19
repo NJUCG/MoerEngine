@@ -9,7 +9,6 @@
 
 #include <vector>
 #include <string>
-
 namespace Moer {
 namespace RHI {
 namespace Vulkan {
@@ -90,6 +89,8 @@ namespace Util {
 
     VkSurfaceFormatKHR SelectSurfaceFormat(VkPhysicalDevice physical_device, VkSurfaceKHR surface, const VkFormat* request_formats, int request_formats_count, VkColorSpaceKHR request_color_space);
     VkPresentModeKHR   SelectPresentMode(VkPhysicalDevice physical_device, VkSurfaceKHR surface, const VkPresentModeKHR* request_modes, int request_modes_count);
+
+    uint32_t MemCrc32(const void* data, size_t data_size);
 }
 
 }

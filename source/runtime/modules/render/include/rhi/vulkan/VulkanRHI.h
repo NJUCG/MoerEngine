@@ -8,7 +8,7 @@ class VulkanDevice;
 class VulkanSwapChain;
 class VulkanViewport;
 class VulkanRHIBuffer;
-class VulkanDescriptorAllocator;
+class VulkanDescriptorSetAllocator;
 
 class VulkanRHIImpl final : public IVulkanRHI {
 public:
