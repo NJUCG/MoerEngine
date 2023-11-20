@@ -182,11 +182,12 @@ VulkanDescriptorSetAllocator::VulkanDescriptorSetCachePool::~VulkanDescriptorSet
 }
 
 bool VulkanDescriptorSetAllocator::VulkanDescriptorSetCachePool::FindDescriptorSets(uint32_t _hash_key, std::vector<VkDescriptorSet>& _sets) {
-    const auto& found_sets = m_allocated_sets.find(_hash_key);
+    auto found_sets = m_allocated_sets.find(_hash_key);
     if (found_sets == m_allocated_sets.end()) {
         return false;
     }
     _sets = found_sets->second;
+    return true;
 }
 
 bool VulkanDescriptorSetAllocator::VulkanDescriptorSetCachePool::CreateDescriptorSets(uint32_t _hash_key, const VulkanDescriptorSetsLayout& _layout, std::vector<VulkanDescriptorSetWriter>& _writers, std::vector<VkDescriptorSet>& _sets) {

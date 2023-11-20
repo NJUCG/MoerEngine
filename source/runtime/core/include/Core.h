@@ -9,6 +9,7 @@
 #include "misc/AsyncQueue.h"
 #include "misc/Hash.h"
 #include "math/Math.h"
+#include "misc/Crc32.h"
 
 namespace Moer {
 
