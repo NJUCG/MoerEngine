@@ -1,35 +1,29 @@
+#include <functional>
+#include <vector>
+#include <cstdint>
 
-#include "rhi/RHIResource.h"
-class RHIGraphicsCommandList;
-class RHICommandQueue;
-class RHIFence;
+#include "misc/Singleton.h"
+
 namespace Moer {
-    class EngineLoop {
-    public:
-        static EngineLoop& GetInstance() {
-            static EngineLoop instance;
-            return instance;
-        }
-        void Init();
 
-        void BeforeLoop();
+    class EngineLoop : public Singleton<EngineLoop> {
+    public:
+        void Init();
         void Run();
         bool ShouldEndLoop();
-        void AfterLoop();
+        void Quit();
 
         void RegisterOnDrawUI(std::function<void()> _func);
 
     private:
         void RenderUI();
 
+        void AquireRenderThreadResult();
+
         void ProcessInputEvents();
 
-        RHIGraphicsCommandList* ui_command_list = nullptr;
-        RHICommandQueue*        command_queue   = nullptr;
-        RHIFence*               present_fence   = nullptr;
-
-        uint64_t frame_index = 0;
-
         std::vector<std::function<void()>> on_draw_ui_funcs;
+
+        struct EngineLoopData* data;
     };
 }// namespace Moer

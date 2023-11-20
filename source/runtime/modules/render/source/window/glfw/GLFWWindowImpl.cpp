@@ -8,6 +8,7 @@
 #include "vulkan/vulkan.h"
 #include "GLFW/glfw3.h"
 #include "IconsFontAwesome6.h"
+#include <fstream>
 #if PLATFORM_WINDOWS
 //for dx12
 //https://docs.microsoft.com/en-us/windows/win32/api/dxgi1_2/nf-dxgi1_2-idxgifactory2-createswapchainforhwnd
@@ -22,35 +23,152 @@
 #include <string.h>
 
 namespace Moer {
+    enum class FontRangeTypes {
+        Greek,
+        Chinese,
+        Korean,
+        Japanese,
+        Cyrillic,
+        Thai,
+        Vietnamese,
+        Icon,
+        Default
+    };
     GLFWWindowImpl::GLFWWindowImpl() {
     }
     GLFWWindowImpl::~GLFWWindowImpl() {
     }
     void GLFWWindowImpl::PollEvents() const { glfwPollEvents(); }
 
+    static const ImWchar icons_ranges[] = {ICON_MIN_FA, ICON_MAX_16_FA, 0};
+
+    ImFont* AddGuiFont(const std::string& _font_file, float _font_size, FontRangeTypes _font_range_type, bool _merge = false) {
+        const ImWchar* font_range = nullptr;
+        switch (_font_range_type) {
+            case FontRangeTypes::Greek:
+                font_range = ImGui::GetIO().Fonts->GetGlyphRangesGreek();
+                break;
+            case FontRangeTypes::Chinese:
+                font_range = ImGui::GetIO().Fonts->GetGlyphRangesChineseFull();
+                break;
+            case FontRangeTypes::Korean:
+                font_range = ImGui::GetIO().Fonts->GetGlyphRangesKorean();
+                break;
+            case FontRangeTypes::Japanese:
+                font_range = ImGui::GetIO().Fonts->GetGlyphRangesJapanese();
+                break;
+            case FontRangeTypes::Cyrillic:
+                font_range = ImGui::GetIO().Fonts->GetGlyphRangesCyrillic();
+                break;
+            case FontRangeTypes::Thai:
+                font_range = ImGui::GetIO().Fonts->GetGlyphRangesThai();
+                break;
+            case FontRangeTypes::Vietnamese:
+                font_range = ImGui::GetIO().Fonts->GetGlyphRangesVietnamese();
+                break;
+            case FontRangeTypes::Default:
+                font_range = ImGui::GetIO().Fonts->GetGlyphRangesDefault();
+                break;
+            case FontRangeTypes::Icon:
+                font_range = icons_ranges;
+                break;
+            default:
+                break;
+        }
+
+        ImGuiIO& io = ImGui::GetIO();
+
+        if (_font_range_type == FontRangeTypes::Icon) {
+            float        icon_font_size = _font_size * 2.0f / 3.0f;// FontAwesome fonts need to have their sizes reduced by 2.0f/3.0f in order to align correctly
+            ImFontConfig icons_config;
+            icons_config.MergeMode        = _merge;
+            icons_config.PixelSnapH       = true;
+            icons_config.GlyphMinAdvanceX = icon_font_size;
+
+            return io.Fonts->AddFontFromFileTTF(_font_file.c_str(), _font_size, &icons_config, font_range);
+        }
+        return io.Fonts->AddFontFromFileTTF(_font_file.c_str(), _font_size, nullptr, font_range);
+    }
+
     void GLFWWindowImpl::GuiInit(const GuiWindowInitInfo& _init_info) {
 
         GuiWindowInit(_init_info);
-
         ImGuiIO& io = ImGui::GetIO();
         io.Fonts->AddFontDefault();
-        float base_font_size = 13.0f;                       // 13.0f is the size of the default font. Change to the font size you use.
-        float icon_font_size = base_font_size * 2.0f / 3.0f;// FontAwesome fonts need to have their sizes reduced by 2.0f/3.0f in order to align correctly
+        const auto& font_base_path = Moer::ConfigManager::GetInstance().GetEditorResourcePath() / FONTS_DIR;
 
-        // merge in icons from Font Awesome
-        static const ImWchar icons_ranges[] = {ICON_MIN_FA, ICON_MAX_16_FA, 0};
-        ImFontConfig         icons_config;
-        icons_config.MergeMode        = true;
-        icons_config.PixelSnapH       = true;
-        icons_config.GlyphMinAdvanceX = icon_font_size;
+        //icon fonts
+        {
+            const auto& font_path = font_base_path / FONT_ICON_FILE_NAME_FAS;
 
-        const auto& font_path = Moer::ConfigManager::GetInstance().GetEditorResourcePath() / FONTS_DIR / FONT_ICON_FILE_NAME_FAS;
+            AddGuiFont(font_path.generic_string(), 13.0f, FontRangeTypes::Icon, true);
+        }
+        // {
+        //     const auto& font_path = font_base_path / "Cousine-Regular.ttf";
 
-        io.Fonts->AddFontFromFileTTF(font_path.generic_string().c_str(), icon_font_size, &icons_config, icons_ranges);
+        //     AddGuiFont(font_path.generic_string(), 13.0f, FontRangeTypes::Greek);
+        // }
+        // {
+        //     const auto& font_path = font_base_path / "DroidSans.ttf";
 
-        const auto& reg_font_path = Moer::ConfigManager::GetInstance().GetEditorResourcePath() / FONTS_DIR / FONT_ICON_FILE_NAME_FAR;
-        //read font file from reg_font_path
-        io.Fonts->AddFontFromFileTTF(reg_font_path.generic_string().c_str(), base_font_size, nullptr, io.Fonts->GetGlyphRangesDefault());
+        //     AddGuiFont(font_path.generic_string(), 13.0f, FontRangeTypes::Default);
+        // }
+
+        // {
+        //     const auto& font_path = font_base_path / "Karla-Regular.ttf";
+
+        //     AddGuiFont(font_path.generic_string(), 13.0f, FontRangeTypes::Default);
+        // }
+
+        // {
+        //     const auto& font_path = font_base_path / "Roboto-Medium.ttf";
+
+        //     AddGuiFont(font_path.generic_string(), 13.0f, FontRangeTypes::Default);
+        // }
+
+        {
+            const auto& font_path = font_base_path / "msyh.ttc";
+
+            // io.FontDefault = AddGuiFont(font_path.generic_string(), 20.0f, FontRangeTypes::Chinese);
+
+            //read data from font_path into font data
+            std::ifstream font_file(font_path.generic_string(), std::ios::binary);
+
+            ImFontConfig font_cfg;
+            font_cfg.FontDataOwnedByAtlas = false;
+
+            if (font_file) {
+                font_file.seekg(0, std::ios::end);
+                std::streamsize size = font_file.tellg();
+                font_file.seekg(0, std::ios::beg);
+
+                std::vector<char> data(size);
+                if (font_file.read(data.data(), size)) {
+                    io.FontDefault = io.Fonts->AddFontFromMemoryTTF(data.data(), size, 20.0f, &font_cfg, io.Fonts->GetGlyphRangesChineseFull());
+                }
+            }
+
+            // io.Fonts->AddFontFromMemoryTTF(void *font_data, int font_data_size, float size_pixels)
+        }
+
+        // ImGuiIO& io = ImGui::GetIO();
+        // io.Fonts->AddFontDefault();
+        // float base_font_size = 13.0f;                       // 13.0f is the size of the default font. Change to the font size you use.
+        // float icon_font_size = base_font_size * 2.0f / 3.0f;// FontAwesome fonts need to have their sizes reduced by 2.0f/3.0f in order to align correctly
+
+        // // merge in icons from Font Awesome
+        // ImFontConfig icons_config;
+        // icons_config.MergeMode        = true;
+        // icons_config.PixelSnapH       = true;
+        // icons_config.GlyphMinAdvanceX = icon_font_size;
+
+        // const auto& font_path = Moer::ConfigManager::GetInstance().GetEditorResourcePath() / FONTS_DIR / FONT_ICON_FILE_NAME_FAS;
+
+        // io.Fonts->AddFontFromFileTTF(font_path.generic_string().c_str(), icon_font_size, &icons_config, icons_ranges);
+
+        //     const auto& reg_font_path = Moer::ConfigManager::GetInstance().GetEditorResourcePath() / FONTS_DIR / FONT_ICON_FILE_NAME_FAR;
+        //     //read font file from reg_font_path
+        //     io.Fonts->AddFontFromFileTTF(reg_font_path.generic_string().c_str(), base_font_size, nullptr, io.Fonts->GetGlyphRangesDefault());
     };
 
     void GLFWWindowImpl::Init(const SurfaceInitInfo& info) {

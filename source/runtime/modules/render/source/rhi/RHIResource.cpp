@@ -6,13 +6,16 @@
 #include "shader/Shader.h"
 #include "shader/ShaderCommon.h"
 #include "shader/ShaderParameterMacros.h"
-#include <cstddef>
-#include <vcruntime_string.h>
 
-void RHIResource::Destroy() const {
+//need a mpmc linked list to delete resource
+ConsumeAllMPMCQueue<RHIResource*, 2048> pending_deletings;
+
+void RHIResource::Destroy() {
     //mark resource to be deleted
+    //deferred delete
     if (!flags.MarkToDelete(std::memory_order_release)) {
-        //        pending_deletings.pr
+        //TODO: pending_deletings actual delete on render thread
+        // pending_deletings.Push(this);
     }
     delete this;
 }

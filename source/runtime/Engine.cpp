@@ -33,19 +33,18 @@ namespace Moer {
     void Engine::PostInit() {
         LOG_INFO("Engine Begin Post Init");
         PostInitRenderSystem();
-        EngineLoop::GetInstance().Init();
         LOG_INFO("Engine Post Init Finished");
     }
     void Engine::Run() {
         LOG_INFO("Engine Start Running");
 
         EngineLoop& loop = EngineLoop::GetInstance();
+        loop.Init();
 
-        loop.BeforeLoop();
         while (!loop.ShouldEndLoop()) {
             loop.Run();
         }
-        loop.AfterLoop();
+        loop.Quit();
 
         LOG_INFO("Engine Stop Running");
     }

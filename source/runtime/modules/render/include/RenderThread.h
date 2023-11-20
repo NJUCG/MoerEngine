@@ -2,26 +2,27 @@
 #define MOERENGINE_RENDER_THREAD_H
 #include "API_Macro.h"
 #include <cstdint>
+#include "RenderAPI.h"
 class Runnable;
 class RunnableThread;
 namespace Moer {
     class RenderThread;
-    extern Runnable*            g_render_thread_runnable;
-    extern RunnableThread*      g_render_thread;
-    extern void RENDER_CORE_API StartRenderThread();
+    extern Runnable*       g_render_thread_runnable;
+    extern RunnableThread* g_render_thread;
+    extern void RENDER_API StartRenderThread();
 
-    extern void RENDER_CORE_API StopRenderThread();
+    extern void RENDER_API StopRenderThread();
 
-    extern void RENDER_CORE_API ShutDownRenderThread();
+    extern void RENDER_API ShutDownRenderThread();
 
-    extern void RENDER_CORE_API RestartRenderThread();
+    extern void RENDER_API RestartRenderThread();
 
     //
-    extern void RENDER_CORE_API SuspendRenderThread(bool _restart_later = true);
+    extern void RENDER_API SuspendRenderThread(bool _restart_later = true);
 
-    extern void RENDER_CORE_API ResumeRenderThread(bool _promised_restart_before = true);
+    extern void RENDER_API ResumeRenderThread(bool _promised_restart_before = true);
 
-    class RENDER_CORE_API ScopedResumeRenderThread {
+    class RENDER_API ScopedResumeRenderThread {
     public:
         ScopedResumeRenderThread();
         ~ScopedResumeRenderThread();

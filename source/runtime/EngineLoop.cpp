@@ -1,31 +1,90 @@
 // FILEPATH: /e:/GitHub/MoerEngine/source/runtime/EngineLoop.cpp
 
 #include "EngineLoop.h"
+#include "PixelFormat.h"
+#include "rhi/RHICommon.h"
+#include "rhi/RHIResource.h"
 #include "window/WindowContext.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommandQueue.h"
 #include "rhi/RHICommandList.h"
 
 #include <imgui.h>
-
+#define ENGINE_LOOP_NEW(target)    new target()
+#define ENGINE_LOOP_DELETE(target) delete target
 namespace Moer {
+    struct UIFrameData {
+        RHITextureCreateInfo create_info;
+
+        RHIGraphicsCommandList* ui_command_list = nullptr;
+        RHICommandQueue*        command_queue   = nullptr;
+        RHIFenceRef             present_fence   = nullptr;
+
+        RHIShaderResourceViewRef main_render_view_copy    = nullptr;
+        RHITextureRef            main_render_texture_copy = nullptr;
+        ~UIFrameData() {
+            delete ui_command_list;
+            delete command_queue;
+        }
+    };
+    struct EngineLoopData {
+        UIFrameData ui_frame_data;
+
+        uint64_t FrameIndex() const { return frame_index; }
+        uint64_t IncrementFrameIndex() { return ++frame_index; }
+
+    private:
+        uint64_t frame_index = 0;
+    };
+
+    struct RenderThreadFence {
+        RenderThreadFence(uint32_t _max_frame_in_flight) : max_frame_in_flight(_max_frame_in_flight),
+                                                           max_lacking_frames(std::max(_max_frame_in_flight - 1, 0u)) {}
+        uint64_t CurrentFrameIndex() const { return fences->GetValue(); }
+
+        void WaitForFrame(uint64_t _current_frame) {
+            if (fences->GetValue() + max_lacking_frames < _current_frame)
+                fences->Wait(_current_frame);
+        }
+        RHIFenceRef fences;
+
+        const uint32_t max_frame_in_flight = 3;
+        const uint32_t max_lacking_frames  = 2;
+    };
+
     void EngineLoop::Run() {
         ProcessInputEvents();
         RenderUI();
     }
-    void EngineLoop::BeforeLoop() {
-        // implementation of BeforeLoop method
-    }
     void EngineLoop::Init() {
+
+        data                = ENGINE_LOOP_NEW(EngineLoopData);
+        auto& ui_frame_data = data->ui_frame_data;
         //to avoid ref counter become zero when first created
-        RHIFenceRef temp_present_fence = g_rhi->RHICreateFence(RHIFenceCreateInfo(EFenceUsage::PRESENT));
-        temp_present_fence->AddRef();
-        present_fence   = temp_present_fence;
-        ui_command_list = g_rhi->CreateGraphicsCommandList(nullptr);
-        command_queue   = g_rhi->CreateCommandQueue(ECommandQueueType::GRAPHICS);
+        ui_frame_data.present_fence   = g_rhi->RHICreateFence(RHIFenceCreateInfo(EFenceUsage::PRESENT));
+        ui_frame_data.ui_command_list = g_rhi->CreateGraphicsCommandList(nullptr);
+        ui_frame_data.command_queue   = g_rhi->CreateCommandQueue(ECommandQueueType::GRAPHICS);
+
+        ui_frame_data.create_info = RHITextureCreateInfo::Create("texture_copy", ETextureDimension::TEX_2D)
+                                        .SetArraySize(1)
+                                        .SetInitialLayout(TEXTURE_LAYOUT_UNDEFINED)
+                                        .SetFormat(PF_R8G8B8A8_SRGB)
+                                        .SetUAVFormat(PF_R8G8B8A8_SRGB)
+                                        .SetDepth(1)
+                                        .SetExtent({1, 1})
+                                        .SetNumMips(1)
+                                        .SetUsageFlags(ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::SAMPLED);
+        //create default render texture
+        ui_frame_data.main_render_texture_copy = g_rhi->RHICreateTexture(ui_frame_data.create_info);
 
         g_rhi->GUIInit(3);
     }
+
+    void EngineLoop::AquireRenderThreadResult() {
+        // implementation of AcquireRenderThreadResult method
+    }
+
+    //MARK... ugly implementation
     void EngineLoop::RenderUI() {
 
         g_rhi->GUINewFrame();
@@ -42,7 +101,13 @@ namespace Moer {
         const bool  b_window_minimized = main_draw_data->DisplaySize.x <= 0.0f || main_draw_data->DisplaySize.y <= 0.0f;
 
         if (!b_window_minimized) {
+            auto& ui_frame_data = data->ui_frame_data;
+
             RHIViewport* main_viewport = g_rhi->RHIGetMainViewport();
+
+            auto  present_fence   = ui_frame_data.present_fence;
+            auto* ui_command_list = ui_frame_data.ui_command_list;
+            auto* command_queue   = ui_frame_data.command_queue;
 
             auto next_frame_info = g_rhi->RHIGetNextFrameViewportBufferInfo(main_viewport);
 
@@ -64,7 +129,7 @@ namespace Moer {
             dependency_info.p_texture_barriers    = texture_barriers.data();
 
             //wait for last frame gui_command_list submission
-            present_fence->Wait(frame_index);
+            present_fence->Wait(data->FrameIndex());
 
             ui_command_list->Reset();
 
@@ -108,14 +173,24 @@ namespace Moer {
 
             ui_command_list->Close();
 
+            {
+                // Update and Render additional Platform Windows
+                // May Change in the future
+                auto& io = ImGui::GetIO();
+                if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+                    ImGui::UpdatePlatformWindows();
+                    ImGui::RenderPlatformWindowsDefault(nullptr, nullptr);
+                }
+            }
+
             RHISubmitInfo submit_info{};
 
             //wait for last frame recording(don't need if wait before reseting command list)
-            submit_info.Wait(present_fence, frame_index);
+            submit_info.Wait(present_fence, data->FrameIndex());
             //wait for back_buffer ready
             submit_info.Wait(next_frame_info.backbuffer_ready_fence, 0);
             //signal this frame present fence
-            submit_info.Signal(present_fence, ++frame_index);
+            submit_info.Signal(present_fence, data->IncrementFrameIndex());
 
             command_queue->SubmitCommands(1, ui_command_list, &submit_info);
 
@@ -133,11 +208,9 @@ namespace Moer {
         return WindowContext::ShouldClose(WindowContext::GetMainWindow());
     }
 
-    void EngineLoop::AfterLoop() {
+    void EngineLoop::Quit() {
         // implementation of AfterLoop method
-        present_fence->DeRef();
-        delete ui_command_list;
-        delete command_queue;
+        ENGINE_LOOP_DELETE(data);
         g_rhi->GUIShutDown();
     }
 

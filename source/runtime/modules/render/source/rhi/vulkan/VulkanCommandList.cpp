@@ -27,6 +27,7 @@ VulkanRHIGraphicsCommandList::VulkanRHIGraphicsCommandList(VulkanDevice* _device
 
 VulkanRHIGraphicsCommandList::~VulkanRHIGraphicsCommandList() {
     //destroy command buffer
+    vkDeviceWaitIdle(m_device->GetDevice());
     vkFreeCommandBuffers(m_device->GetDevice(), m_device->GetDefaultCommandPool(), 1, &m_command_buffer);
     m_device = nullptr;
 }

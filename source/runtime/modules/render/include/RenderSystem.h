@@ -1,7 +1,8 @@
 #ifndef MOERENGINE_RENDER_SYSTEM_H
 #define MOERENGINE_RENDER_SYSTEM_H
+#include "RenderAPI.h"
 namespace Moer {
-    class RenderSystem {
+    class RENDER_API RenderSystem {
     public:
         static void Init();
         static void PostInit();

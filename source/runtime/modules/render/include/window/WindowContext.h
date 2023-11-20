@@ -1,39 +1,25 @@
 #ifndef MOERENGINE_WINDOW_CONTEXT_H
 #define MOERENGINE_WINDOW_CONTEXT_H
+
+#include "RenderAPI.h"
+
 #include "rhi/RHI.h"
 #include <functional>
 #include <vector>
 namespace Moer {
     using WindowType = void;
 
-    struct WindowHandle {
+    struct RENDER_API WindowHandle {
         WindowType* window{nullptr};
     };
 
-    struct GuiWindowInitInfo {
+    struct RENDER_API GuiWindowInitInfo {
         WindowType* window;
         bool        b_install_callbacks = true;
         ERHIType    rhi_type;
     };
-    struct SurfaceInfo {
-        SurfaceInfo(const char* _rhi_name,
-                    uint32_t    _width,
-                    uint32_t    _height,
-                    const char* _title,
-                    bool        _full_screen)
-            : rhi_name(_rhi_name),
-              width(_width),
-              height(_height),
-              title(_title),
-              b_full_screen(_full_screen) {}
-        const char* rhi_name;
-        int         width{1280};
-        int         height{720};
-        const char* title{"MoerEngine"};
-        bool        b_full_screen{false};
-    };
 
-    struct SurfaceInitInfo {
+    struct RENDER_API SurfaceInitInfo {
         SurfaceInitInfo(const std::string& _rhi_name,
                         uint32_t           _width,
                         uint32_t           _height,
@@ -56,7 +42,7 @@ namespace Moer {
         bool        b_vsync{false};
     };
     //mean to support multi window creation and io-management
-    class WindowContext {
+    class RENDER_API WindowContext {
         friend class WindowImpl;
 
     public:
