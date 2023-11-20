@@ -79,8 +79,8 @@ void VulkanDevice::Destroy() {
     vmaDestroyAllocator(m_allocator);
 }
 
-void VulkanDevice::AllocateDescriptorSets(const VulkanDescriptorSetsLayout& _layout, std::vector<VkDescriptorSet>& _sets) {
-    m_descriptor_allocator->Allocate(_layout, _sets);
+bool VulkanDevice::GetDescriptorSets(uint32_t _hash_key, const VulkanDescriptorSetsLayout& _layout, std::vector<VulkanDescriptorSetWriter>& _writers, std::vector<VkDescriptorSet>& _sets) {
+    return m_descriptor_allocator->GetDescriptorSets(_hash_key, _layout, _writers, _sets);
 }
 
 /**
@@ -224,7 +224,7 @@ void VulkanDevice::CreateCommandPools() {
 }
 
 void VulkanDevice::CreateDescriptorAllocator() {
-    m_descriptor_allocator = new VulkanDescriptorAllocator();
+    m_descriptor_allocator = new VulkanDescriptorSetAllocator();
     m_descriptor_allocator->Init(this);
     LOG_INFO("VulkanRHI: Descriptor allocator created.");
 }

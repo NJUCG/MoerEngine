@@ -1,61 +1,60 @@
 #ifndef VULKAN_PIPELINE_STATE_CACHE_H
 #define VULKAN_PIPELINE_STATE_CACHE_H
 
+#include "VulkanDescriptor.h"
+
 #include <map>
-#include <array>
 #include <vector>
 #include <unordered_map>
 
-#include <vulkan/vulkan.h>
-
 class VulkanRHIGraphicsPipelineState;
-
-class RHIBatchedShaderParameters;
-
-struct DescriptorBindInfo {
-    uint16_t               set;
-    const VkDescriptorSet* descriptor_set;
-
-    bool operator<(const DescriptorBindInfo& _info) const {
-        return set < _info.set || *descriptor_set < *_info.descriptor_set;
-    }
-};
+class VulkanDescriptorSetsLayout;
+class VulkanDevice;
 
 struct PushConstantInfo {
     VkShaderStageFlags   flags;
     uint32_t             size;
     uint32_t             byte_offset_in_raw_data;
     std::vector<uint8_t> raw_data;
-
-    bool operator<(const PushConstantInfo& _info) const {
-        return flags < _info.flags || size < _info.size || byte_offset_in_raw_data < _info.byte_offset_in_raw_data || raw_data < _info.raw_data;
-    }
 };
 
 class VulkanPipelineResourceCache {
+    friend VulkanDescriptorSetsLayout;
+    friend VulkanDescriptorSetWriter;
+
 public:
-    friend VulkanRHIGraphicsPipelineState;
+    VulkanPipelineResourceCache() = default;
 
-    VulkanPipelineResourceCache() : m_bound_descriptor_sets(), m_pushed_constants() {}
+    void UpdateDescriptorSetHashInfo(uint32_t _index, const VulkanHashableDescriptorInfo& _info);
 
-    void GetSetsToBind(std::vector<std::pair<uint32_t, const VkDescriptorSet*>>& _sets_to_bind);
+    const VkDescriptorImageInfo& UpdateDescriptorImageInfo(uint16_t _set, uint16_t _index_of_binding, const VkDescriptorImageInfo& _info);
 
-    inline void AddSetToBind(const DescriptorBindInfo& _info) { m_bound_descriptor_sets[_info] = false; }
+    const VkDescriptorBufferInfo& UpdateDescriptorBufferInfo(uint16_t _set, uint16_t _index_of_binding, const VkDescriptorBufferInfo& _info);
 
-    inline void ResetToBind() { m_bound_descriptor_sets.clear(); }
+    bool UpdateDescriptorSets(VulkanDevice* _device, const VulkanDescriptorSetsLayout* _layout);
 
-    void GetConstantsToPush(std::vector<PushConstantInfo>& _constants_to_push);
+    void BindDescriptorSets(VkCommandBuffer _buffer, VkPipelineBindPoint _bind_point, VkPipelineLayout _layout);
 
-    inline void AddConstantToPush(const PushConstantInfo& _info) { m_pushed_constants[_info] = false; }
+    inline std::vector<VulkanDescriptorSetWriter>& GetWriters() { return m_descriptor_set_writers; }
 
-    inline void ResetToPush() { m_pushed_constants.clear(); }
+    inline const std::vector<VkDescriptorSet>& GetDescriptorSets() const { return m_descriptor_sets; }
+
+    inline const std::vector<PushConstantInfo>& GetConstantsToPush() const { return m_push_constants; }
+
+    inline void AddConstantToPush(const PushConstantInfo& _info) { m_push_constants.push_back(_info); }
+
+    inline void ResetToPush() { m_push_constants.clear(); }
 
 private:
-    // <set, binding> -> descriptor set
-    std::map<DescriptorBindInfo, bool> m_bound_descriptor_sets;
+    VulkanDescriptorSetWriteContainer m_descriptor_resource_container;
 
-    // <start_addr, size> -> constant data
-    std::map<PushConstantInfo, bool> m_pushed_constants;
+    std::vector<VulkanDescriptorSetWriter> m_descriptor_set_writers;
+
+    std::vector<VkDescriptorSet> m_descriptor_sets;
+
+    std::vector<PushConstantInfo> m_push_constants;
+
+    uint32_t GetSetsKey() const;
 };
 
 #endif// VULKAN_PIPELINE_STATE_CACHE_H

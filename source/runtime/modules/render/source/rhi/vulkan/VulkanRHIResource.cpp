@@ -1230,6 +1230,28 @@ VkBlendFactor VulkanRHIBlendState::METoVKBlendFactor(EBlendFactor _blend_factor)
 
 #pragma region pipeline states definitions
 
+void VulkanRHIGraphicsPipelineState::GenerateDescriptorSetLayouts(const VulkanDevice* _device, std::vector<TDescriptorSetLayout>& _layout_mappings) {
+    // create descriptor set layouts
+    for (auto& layout : _layout_mappings) {
+        VkDescriptorSetLayoutCreateInfo layout_create_info{};
+        layout_create_info.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        layout_create_info.pNext        = nullptr;
+        layout_create_info.flags        = 0;
+        layout_create_info.bindingCount = layout.second.size();
+        layout_create_info.pBindings    = layout.second.empty() ? nullptr : layout.second.data();
+
+        VK_CHECK_RESULT(vkCreateDescriptorSetLayout(*_device, &layout_create_info, nullptr, &layout.first));
+    }
+
+    // extract descriptor set layouts
+    m_descriptor_sets_layout = new VulkanDescriptorSetsLayout();
+    m_descriptor_sets_layout->Init(_layout_mappings, m_pipeline_state_cache);
+}
+
+void VulkanRHIGraphicsPipelineState::CreateResourceCache() {
+    m_pipeline_state_cache = new VulkanPipelineResourceCache();
+}
+
 std::vector<VkPipelineShaderStageCreateInfo> VulkanRHIGraphicsPipelineState::METoVKShaderStageCreateInfo(const RHIShaderBoundStateInput& _shader_bound_state) {
     std::vector<VkPipelineShaderStageCreateInfo> shader_stage_create_infos;
     // vert-frag pipeline
@@ -1319,42 +1341,9 @@ std::vector<const Shader*> VulkanRHIGraphicsPipelineState::GetShaderInfoList(con
     return shader_list;
 }
 
-void VulkanRHIGraphicsPipelineState::GenerateDescriptorSetLayouts(const VulkanDevice* _device, std::vector<TDescriptorSetLayout>& _layout_mappings) {
-    // create descriptor set layouts
-    for (auto& layout : _layout_mappings) {
-        VkDescriptorSetLayoutCreateInfo layout_create_info{};
-        layout_create_info.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        layout_create_info.pNext        = nullptr;
-        layout_create_info.flags        = 0;
-        layout_create_info.bindingCount = layout.second.size();
-        layout_create_info.pBindings    = layout.second.empty() ? nullptr : layout.second.data();
-
-        VK_CHECK_RESULT(vkCreateDescriptorSetLayout(*_device, &layout_create_info, nullptr, &layout.first));
-    }
-
-    // extract descriptor set layouts
-    m_descriptor_sets_layout = new VulkanDescriptorSetsLayout();
-    m_descriptor_sets_layout->Init(_layout_mappings);
-}
-
-void VulkanRHIGraphicsPipelineState::CreateDescriptorSets(VulkanDevice* _device) {
-    _device->AllocateDescriptorSets(*m_descriptor_sets_layout, m_descriptor_sets);
-}
-
-void VulkanRHIGraphicsPipelineState::CreateResourceCache() {
-    m_pipeline_state_cache = new VulkanPipelineResourceCache();
-}
-
-void VulkanRHIGraphicsPipelineState::InitResourceCache() {
-    for (uint16_t i = 0; i < m_descriptor_sets.size(); ++i) {
-        m_pipeline_state_cache->AddSetToBind({i, &m_descriptor_sets[i]});
-    }
-    m_pipeline_state_cache->ResetToPush();
-}
-
 #pragma endregion
 
-VulkanDeviceObject::VulkanDeviceObject(VulkanDevice* _device) : device(_device) {
+VulkanDeviceObject::VulkanDeviceObject(VulkanDevice* _device) : m_device(_device) {
 }
 
 #pragma region global buffer definitions
@@ -1529,7 +1518,7 @@ void VulkanRHIFence::Wait(uint64_t value) {
 #pragma region viewable resources view definitions
 VulkanRHIUnorderedAccessView::~VulkanRHIUnorderedAccessView() {
     if (m_view != VK_NULL_HANDLE) {
-        vkDestroyImageView(device->GetDevice(), m_view, VK_NULL_HANDLE);
+        vkDestroyImageView(m_device->GetDevice(), m_view, VK_NULL_HANDLE);
     }
 }
 

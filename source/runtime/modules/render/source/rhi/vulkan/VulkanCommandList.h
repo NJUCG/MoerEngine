@@ -8,7 +8,7 @@
 #include <vulkan/vulkan.h>
 
 class VulkanDevice;
-class VulkanDescriptorAllocator;
+class VulkanDescriptorSetAllocator;
 
 class VulkanRHIGraphicsPipelineState;
 
@@ -145,14 +145,13 @@ private:
 
     VulkanRHIGraphicsPipelineState* m_current_pipeline_state;
 
-    std::vector<std::pair<uint32_t, const VkDescriptorSet*>> m_sets_to_bind;
-    std::vector<PushConstantInfo>                            m_constants_to_push;
-
 private:
     VkRenderingAttachmentInfo FromColorAttachmentInfo(const RHIRenderPassInfo::ColorAttachmentInfo& _color_attachment_info) const;
     VkRenderingAttachmentInfo FromDepthStencilAttachmentInfo(const RHIRenderPassInfo::DepthStencilAttachmentInfo& _depth_stencil_attachment_info) const;
 
     void PrepareDrawCommand();
+
+    int debug_count = 0;
 };
 
 #endif//VULKAN_COMMAND_LIST_H

@@ -307,26 +307,16 @@ public:
         return m_pipeline_layout;
     }
 
-    inline VulkanPipelineResourceCache* GetPipelineResourceCache() const {
-        return m_pipeline_state_cache;
-    }
-
     inline const VulkanDescriptorSetsLayout* GetDescriptorSetsLayout() const {
         return m_descriptor_sets_layout;
     }
 
-    inline const std::vector<VkDescriptorSet>& GetDescriptorSets() const {
-        return m_descriptor_sets;
-    }
-
-    inline VulkanPipelineResourceCache* GetPipelineResourceCache() {
+    inline VulkanPipelineResourceCache* GetPipelineResourceCache() const {
         return m_pipeline_state_cache;
     }
 
     void GenerateDescriptorSetLayouts(const VulkanDevice* _device, std::vector<TDescriptorSetLayout>& _layout_mappings);
-    void CreateDescriptorSets(VulkanDevice* _device);
     void CreateResourceCache();
-    void InitResourceCache();
 
     static std::vector<VkPipelineShaderStageCreateInfo> METoVKShaderStageCreateInfo(const RHIShaderBoundStateInput& _shader_bound_state);
     static VkPipelineVertexInputStateCreateInfo         METoVKVertexInputStateCreateInfo(const RHIVertexInputState* _vertex_input_state);
@@ -336,12 +326,8 @@ private:
     VkPipeline       m_pipeline;
     VkPipelineLayout m_pipeline_layout;
     // descriptor sets
-    VulkanDescriptorSetsLayout*  m_descriptor_sets_layout;
-    std::vector<VkDescriptorSet> m_descriptor_sets;
-    // dynamic states
-    std::array<VkViewport, 2> m_viewports;
-    std::array<VkRect2D, 2>   m_scissors;
-
+    VulkanDescriptorSetsLayout* m_descriptor_sets_layout;
+    // resource cache
     VulkanPipelineResourceCache* m_pipeline_state_cache;
 };
 #pragma endregion
@@ -378,10 +364,10 @@ private:
 
 class VulkanDeviceObject {
 public:
-    VulkanDeviceObject(VulkanDevice* device);
+    VulkanDeviceObject(VulkanDevice* _device = nullptr);
 
 protected:
-    VulkanDevice* device;
+    VulkanDevice* m_device;
 };
 class VulkanRHITexture final : public RHITexture, public VulkanDeviceObject {
     friend VulkanRHIImpl;
