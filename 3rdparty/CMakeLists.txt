@@ -55,6 +55,8 @@ option(GLFW_INSTALL ON)
 set(GLFW_LIBRARY_TYPE "SHARED")
 add_subdirectory(glfw)
 
+include(${CMAKE_CURRENT_SOURCE_DIR}/imgui.cmake)
+
 set(SPIRV_REFLECT_EXECUTABLE      OFF)
 
 set(SPIRV_REFLECT_STATIC_LIB     ON)
