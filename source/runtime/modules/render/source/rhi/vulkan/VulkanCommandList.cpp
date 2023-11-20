@@ -60,6 +60,8 @@ void VulkanRHIGraphicsCommandList::Open() {
     begin_info.pInheritanceInfo = nullptr;
 
     VK_CHECK_RESULT(vkBeginCommandBuffer(m_command_buffer, &begin_info));
+    m_bound_sets.clear();
+    bind_count = 0;
 }
 
 void VulkanRHIGraphicsCommandList::Close() {
@@ -634,10 +636,11 @@ void VulkanRHIGraphicsCommandList::PrepareDrawCommand() {
     auto pipeline_layout = vk_pso->GetPipelineLayout();
 
     const auto* vk_sets_layout = vk_pso->GetDescriptorSetsLayout();
-    debug_count += 1;
     // 1. update and bind descriptor sets
-    if (vk_resource_cache->UpdateDescriptorSets(m_device, vk_sets_layout)) {
+    vk_resource_cache->UpdateDescriptorSets(m_device, vk_sets_layout);
+    if (m_bound_sets != vk_resource_cache->GetDescriptorSets()) {
         vk_resource_cache->BindDescriptorSets(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout);
+        m_bound_sets = vk_resource_cache->GetDescriptorSets();
     }
 
     // 2. push constants
