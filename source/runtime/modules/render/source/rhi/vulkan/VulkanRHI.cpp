@@ -490,7 +490,7 @@ RHIUnorderedAccessViewRef VulkanRHIImpl::RHICreateUnorderedAccessView(RHIViewabl
 
     image_view_create_info.image                           = vk_texture->GetHandle();
     image_view_create_info.viewType                        = VulkanEnumTranslator::METoVKImageViewType(_view_info.texture.uav.dimension);
-    image_view_create_info.format                          = _view_info.texture.srv.format == PF_UNDEFINED ? VulkanEnumTranslator::METoVKFormat(vk_texture->GetUAVFormat()) : VulkanEnumTranslator::METoVKFormat(_view_info.texture.uav.format);
+    image_view_create_info.format                          = _view_info.texture.uav.format == PF_UNDEFINED ? VulkanEnumTranslator::METoVKFormat(vk_texture->GetUAVFormat()) : VulkanEnumTranslator::METoVKFormat(_view_info.texture.uav.format);
     image_view_create_info.components                      = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
     image_view_create_info.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;// MARK...
     image_view_create_info.subresourceRange.baseMipLevel   = _view_info.texture.uav.mip_min;
@@ -771,10 +771,11 @@ RHIViewport*   VulkanRHIImpl::RHIGetMainViewport() {
 RHIViewportRef VulkanRHIImpl::RHICreateViewport(const RHIViewportInitializer& _init) {
     VulkanSwapChain* swapchain = new VulkanSwapChain();
     uint32_t         width, height;
-    swapchain->Init(&width, &height, true);
-    VkSurfaceKHR surface;
+    VkSurfaceKHR     surface;
     Moer::WindowContext::CreateVulkanSurface(m_instance, _init.window_handle, nullptr, &surface);
     swapchain->Connect(m_instance, surface, m_device);
+    swapchain->Init(&width, &height, true);
+
     VulkanViewport* viewport = new VulkanViewport(swapchain, max_frame_in_flight);
 
     return static_cast<RHIViewport*>(viewport);
@@ -806,6 +807,8 @@ RHIUnorderedAccessView* VulkanRHIImpl::RHIGetViewportBackBufferUAV(RHIViewport* 
 void VulkanRHIImpl::RHIPresentViewport(RHIViewport* _viewport, RHIFence* _render_end_fence) {
     assert(_viewport != nullptr && "Passing invalid viewport");
     VulkanViewport* vk_viewport = static_cast<VulkanViewport*>(_viewport);
+
+    uint32_t value = _render_end_fence->GetValue();
 
     vk_viewport->Present(_render_end_fence);
 }

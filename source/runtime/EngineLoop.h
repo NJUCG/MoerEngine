@@ -2,19 +2,16 @@
 #include <vector>
 #include <cstdint>
 
-namespace Moer {
-    class EngineLoop {
-    public:
-        static EngineLoop& GetInstance() {
-            static EngineLoop instance;
-            return instance;
-        }
-        void Init();
+#include "misc/Singleton.h"
 
-        void BeforeLoop();
+namespace Moer {
+
+    class EngineLoop : public Singleton<EngineLoop> {
+    public:
+        void Init();
         void Run();
         bool ShouldEndLoop();
-        void AfterLoop();
+        void Quit();
 
         void RegisterOnDrawUI(std::function<void()> _func);
 

@@ -1,23 +1,29 @@
 
 #include "PixelFormat.h"
 #include "math/Matrix.h"
+
+#include "UIImplement.h"
+
 #include "rhi/RHI.h"
-#include "RHIUIImplement.h"
 #include "rhi/RHICommandList.h"
 #include "rhi/RHICommandQueue.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
+
 #include "shader/Shader.h"
 #include "shader/ShaderParameterMacros.h"
 #include "shader/ShaderResourceManager.h"
+
+#include "window/WindowContext.h"
 
 #include <array>
 #include <cstring>
 #include <imgui.h>
 #include <stdint.h>
 #include <vadefs.h>
-#include <vcruntime_string.h>
+
+uint32_t GuiViewportData::viewport_count = 0;
 
 class ImGuiShaderVert : public Shader {
     DEFINE_SHADER_TYPE(ImGuiShaderVert, Global, RHI_API, ...)
@@ -75,23 +81,15 @@ bool RHI::GUIInit(uint32_t _num_frames_in_flight) {
     assert(io.BackendRendererUserData == nullptr && "GUI backend already initialized.");
 
     GuiBackendData* render_backend_data       = IM_NEW(GuiBackendData)();
-    render_backend_data->num_frames_in_flight = 3;
+    render_backend_data->num_frames_in_flight = _num_frames_in_flight;
 
     io.BackendRendererUserData = render_backend_data;
     io.BackendRendererName     = "Moer";
     io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;
     io.BackendFlags |= ImGuiBackendFlags_RendererHasViewports;
     ImGuiViewport*   main_viewport  = ImGui::GetMainViewport();
-    GuiViewportData* viewport_data  = IM_NEW(GuiViewportData)();
+    GuiViewportData* viewport_data  = IM_NEW(GuiViewportData)(_num_frames_in_flight);
     main_viewport->RendererUserData = viewport_data;
-
-    viewport_data->render_buffers = new GuiFrameRenderBuffers[_num_frames_in_flight];
-    for (uint32_t i = 0; i < _num_frames_in_flight; i++) {
-        GuiFrameRenderBuffers* render_buffers = &viewport_data->render_buffers[i];
-        render_buffers->vertex_buffer         = nullptr;
-        render_buffers->index_buffer          = nullptr;
-    }
-    viewport_data->frame_index = 0;
 
     if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
         GuiInitPlatformInterface();
@@ -645,13 +643,13 @@ void GuiInitPlatformInterface() {
 }
 
 void DestroyRenderBuffers(GuiFrameRenderBuffers* _render_buffers) {
-    _render_buffers->index_buffer->DeRef();
-    _render_buffers->vertex_buffer->DeRef();
+    _render_buffers->index_buffer  = nullptr;
+    _render_buffers->vertex_buffer = nullptr;
 }
 
 void GuiCreateWindow(ImGuiViewport* viewport) {
     GuiBackendData*  backend_data  = GetBackendData();
-    GuiViewportData* viewport_data = IM_NEW(GuiViewportData)();
+    GuiViewportData* viewport_data = IM_NEW(GuiViewportData)(backend_data->num_frames_in_flight);
 
     viewport->RendererUserData = viewport_data;
 
@@ -663,8 +661,15 @@ void GuiCreateWindow(ImGuiViewport* viewport) {
 
     RHIFenceCreateInfo present_fence_info{EFenceUsage::PRESENT};
     viewport_data->present_fence = g_rhi->RHICreateFence(present_fence_info);
-
     RHIViewportInitializer viewport_info;
+    viewport_info.size = Extent2D(viewport->Size.x, viewport->Size.y);
+
+    Moer::WindowHandle handle{
+        (Moer::WindowType*)(viewport->PlatformHandle ?
+                                viewport->PlatformHandle :
+                                viewport->PlatformHandleRaw)};
+    viewport_info.window_handle = &handle;
+    // viewport_info.window_handle = viewport->PlatformHandleRaw;
     viewport_data->frame_index = 0;
 
     viewport_data->viewport = g_rhi->RHICreateViewport(viewport_info);
@@ -681,17 +686,9 @@ void GuiDestroyWindow(ImGuiViewport* viewport) {
             viewport_data->comand_list = nullptr;
             delete viewport_data->command_queue;
             viewport_data->command_queue = nullptr;
-
-            viewport_data->present_fence->DeRef();
-
-            uint32_t max_frame = viewport_data->viewport->GetViewportInfo().max_frame_in_flight;
-
-            for (uint32_t index = 0; index < max_frame; index++) {
-                viewport_data->render_buffers[index].index_buffer->DeRef();
-                viewport_data->render_buffers[index].vertex_buffer->DeRef();
-            }
-
-            viewport_data->viewport->DeRef();
+            // We could just call ImGui_ImplDX12_DestroyWindow(main_viewport) as a convenience but that would be misleading since we only use data->Resources[]
+            for (uint32_t i = 0; i < backend_data->num_frames_in_flight; i++)
+                DestroyRenderBuffers(&viewport_data->render_buffers[i]);
             IM_DELETE(viewport_data);
         }
     }
@@ -702,9 +699,7 @@ void GuiSetWindowSize(ImGuiViewport* viewport, ImVec2 size) {
 
     auto m_viewport = viewport_data->viewport;
 
-    m_viewport->WaitForQueueComplete(viewport_data->command_queue, viewport_data->present_fence);
-
-    m_viewport->OnResize(Extent2D(size.x, size.y));
+    g_rhi->RHIResizeViewport(m_viewport, Extent2D(size.x, size.y), false);
 }
 void GuiRenderWindow(ImGuiViewport* viewport, void*) {
     GuiBackendData*  backend_data  = GetBackendData();
@@ -716,10 +711,6 @@ void GuiRenderWindow(ImGuiViewport* viewport, void*) {
     if (info.backbuffer_index == UINT32_MAX) return;
 
     RHIUnorderedAccessView* present_view = g_rhi->RHIGetViewportBackBufferUAV(rhi_viewport, info.backbuffer_index);
-    if (present_view == nullptr) {
-        //meet resize event
-        return;
-    }
 
     //transfer present texture layout to color attachment layout
     RHIBarrierDependencyInfo             dependency_info;
@@ -729,7 +720,7 @@ void GuiRenderWindow(ImGuiViewport* viewport, void*) {
     texture_barriers[0].SetSrcTextureLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED);
     texture_barriers[0].p_texture = present_view->GetTexture();
     texture_barriers[0].SetSrcStage(PS_BOTTOM_OF_PIPE);
-    texture_barriers[0].SetDstStage(PS_FRAGMENT_SHADER);
+    texture_barriers[0].SetDstStage(PS_COLOR_ATTACHMENT_OUTPUT);
     texture_barriers[0].SetSrcAccessFlags(ERHIAccessFlags::UNDEFINED);
     texture_barriers[0].SetDstAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
 
@@ -743,21 +734,28 @@ void GuiRenderWindow(ImGuiViewport* viewport, void*) {
     texture_barriers_present[0].SetSrcTextureLayout(ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT);
     texture_barriers_present[0].p_texture = present_view->GetTexture();
     texture_barriers_present[0].SetSrcAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
+    texture_barriers_present[0].SetSrcStage(PS_COLOR_ATTACHMENT_OUTPUT);
 
     texture_dependency_info.texture_barrier_count = 1;
-    texture_dependency_info.p_texture_barriers    = texture_barriers.data();
+    texture_dependency_info.p_texture_barriers    = texture_barriers_present.data();
 
+    viewport_data->present_fence->Wait(viewport_data->frame_index);
     viewport_data->comand_list->Reset();
 
     viewport_data->comand_list->Open();
 
     viewport_data->comand_list->SetPipelineBarrier(dependency_info);
-    viewport_data->comand_list->SetPipelineBarrier(texture_dependency_info);
 
     RHIRenderPassInfo pass_info;
-    pass_info.color_attachments[0].color_attachment_action               = AC_CLEAR_STORE;
-    pass_info.color_attachments[0].color_attachment_view.texture_view    = present_view;
-    pass_info.color_attachments[0].color_attachment_view.required_layout = ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT;
+    pass_info.color_attachments[0].color_attachment_action                            = AC_CLEAR_STORE;
+    pass_info.color_attachments[0].color_attachment_view.texture_view                 = present_view;
+    pass_info.color_attachments[0].color_attachment_view.required_layout              = ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT;
+    pass_info.color_attachments[0].color_attachment_view.clear_attachment.value.color = {0.0f, 0.0f, 0.0f, 1.0f};
+
+    pass_info.render_area.offset.x      = 0;
+    pass_info.render_area.offset.y      = 0;
+    pass_info.render_area.extent.width  = viewport->Size.x;
+    pass_info.render_area.extent.height = viewport->Size.y;
 
     viewport_data->comand_list->BeginRenderPass(pass_info, "Imgui Window");
 
@@ -765,25 +763,28 @@ void GuiRenderWindow(ImGuiViewport* viewport, void*) {
 
     viewport_data->comand_list->EndRenderPass();
 
+    viewport_data->comand_list->SetPipelineBarrier(texture_dependency_info);
+
     viewport_data->comand_list->Close();
 
     RHISubmitInfo submit_info{};
 
     //wait for last frame recording
-    submit_info.Wait(viewport_data->present_fence, viewport_data->frame_index);
+    submit_info.Wait(viewport_data->present_fence, viewport_data->frame_index - 1);
     //wait for back_buffer ready
     submit_info.Wait(info.backbuffer_ready_fence, 0);
     //signal this frame present fence
-    submit_info.Signal(viewport_data->present_fence, ++viewport_data->frame_index);
+    submit_info.Signal(viewport_data->present_fence, viewport_data->frame_index);
 
-    viewport_data->command_queue->SubmitCommands(1, viewport_data->comand_list);
+    viewport_data->command_queue->SubmitCommands(1, viewport_data->comand_list, &submit_info);
 }
 
 void GuiSwapbuffer(ImGuiViewport* viewport, void*) {
     GuiBackendData*  backend_data  = GetBackendData();
     GuiViewportData* viewport_data = (GuiViewportData*)viewport->RendererUserData;
     //present wait for this frame rendering end fence
-    viewport_data->viewport->Present(viewport_data->present_fence);
+    // viewport_data->viewport->Present(viewport_data->present_fence);
+    g_rhi->RHIPresentViewport(viewport_data->viewport, viewport_data->present_fence);
 }
 
 static void GuiRenderWindows() {

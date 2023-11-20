@@ -5,15 +5,20 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 #include "window/WindowContext.h"
+
+#include "MainWindow.h"
+
 namespace Moer {
+    MainWindow  g_main_window;
+    static bool show_demo_window = true;
+
     void EditorUI::Init(const UICreateInfo& info) {
     }
 
     void EditorUI::Tick() {
         ShowEditorMenu(&m_b_show_editor_menu);
-        ShowMainWindow(&m_b_show_main_window);
+        g_main_window.Show();
         ShowInspectorWindow(&m_b_show_inspector_window);
-        static bool show_demo_window = true;
         ImGui::ShowDemoWindow(&show_demo_window);
     }
     EditorUI::~EditorUI() {
@@ -81,8 +86,9 @@ namespace Moer {
             }
             if (ImGui::BeginMenu("Window")) {
 
-                ImGui::MenuItem("Moer Engine", nullptr, &m_b_show_main_window);
+                ImGui::MenuItem("Moer Engine", nullptr, g_main_window.ShowWindow());
                 ImGui::MenuItem("Inspector", nullptr, &m_b_show_inspector_window);
+                ImGui::MenuItem("Demo", nullptr, &show_demo_window);
                 ImGui::EndMenu();
             }
             ImGui::EndMenuBar();

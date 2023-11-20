@@ -4,9 +4,12 @@
 class RHITexture;
 class RHIGraphicsCommandList;
 class RHICommandQueue;
+class RHIShaderResourceView;
 namespace Moer {
     struct GlobalRenderFrameData {
         RHITexture* upload_texture;
+
+        RHIShaderResourceView* upload_texture_srv;
 
         RHIGraphicsCommandList* command_list;
 

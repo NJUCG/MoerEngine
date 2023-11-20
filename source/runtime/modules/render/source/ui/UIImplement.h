@@ -52,12 +52,24 @@ struct GuiViewportData {
 
     GuiFrameRenderBuffers* render_buffers;// Used by all viewports
 
-    uint64_t frame_index;
+    uint64_t        frame_index;
+    uint32_t        viewport_index;
+    static uint32_t viewport_count;
 
-    GuiViewportData() {
-        memset(&render_buffers, 0, sizeof(render_buffers));
+    GuiViewportData(uint32_t _frame_in_flight) {
+        memset((void*)this, 0, sizeof(*this));
+        render_buffers = new GuiFrameRenderBuffers[_frame_in_flight];
+        for (uint32_t i = 0; i < _frame_in_flight; ++i) {
+            render_buffers[i].vertex_buffer = nullptr;
+            render_buffers[i].index_buffer  = nullptr;
+        }
+        viewport_index = viewport_count;
+        viewport_count++;
     }
-    ~GuiViewportData() {}
+    ~GuiViewportData() {
+        delete[] render_buffers;
+        viewport_count--;
+    }
 };
 
 #endif
