@@ -3,6 +3,9 @@
 //
 
 #include "rhi/vulkan/misc/VulkanMacroUtils.h"
+
+#include "misc/Crc32.h"
+
 #include "VulkanUtil.h"
 
 #if defined(_WIN32)
@@ -308,6 +311,10 @@ case VK_PHYSICAL_DEVICE_TYPE_##r: return #r
                     return request_modes[request_i];
 
         return VK_PRESENT_MODE_FIFO_KHR;// Always available
+    }
+
+    uint32_t MemCrc32(const void* data, size_t data_size) {
+        return crc32_8bytes(data, data_size);
     }
 }
 
