@@ -150,6 +150,8 @@ private:
     VkRenderingAttachmentInfo FromDepthStencilAttachmentInfo(const RHIRenderPassInfo::DepthStencilAttachmentInfo& _depth_stencil_attachment_info) const;
 
     void PrepareDrawCommand();
+
+    int debug_count = 0;
 };
 
 #endif//VULKAN_COMMAND_LIST_H

@@ -79,8 +79,8 @@ void VulkanDevice::Destroy() {
     vmaDestroyAllocator(m_allocator);
 }
 
-bool VulkanDevice::GetDescriptorSets(uint32_t _hash_key, const VulkanDescriptorSetsLayout& _layout, std::vector<VkDescriptorSet>& _sets) {
-    return m_descriptor_allocator->GetDescriptorSets(_hash_key, _layout, _sets);
+bool VulkanDevice::GetDescriptorSets(uint32_t _hash_key, const VulkanDescriptorSetsLayout& _layout, std::vector<VulkanDescriptorSetWriter>& _writers, std::vector<VkDescriptorSet>& _sets) {
+    return m_descriptor_allocator->GetDescriptorSets(_hash_key, _layout, _writers, _sets);
 }
 
 /**

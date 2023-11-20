@@ -26,9 +26,9 @@ VulkanRHIGraphicsCommandList::VulkanRHIGraphicsCommandList(VulkanDevice* _device
 }
 
 VulkanRHIGraphicsCommandList::~VulkanRHIGraphicsCommandList() {
-    m_device = nullptr;
     //destroy command buffer
     vkFreeCommandBuffers(m_device->GetDevice(), m_device->GetDefaultCommandPool(), 1, &m_command_buffer);
+    m_device = nullptr;
 }
 
 void VulkanRHIGraphicsCommandList::SetBatchedShaderParameter(const RHIBatchedShaderParameters& _parameters) {
@@ -633,22 +633,25 @@ void VulkanRHIGraphicsCommandList::PrepareDrawCommand() {
     auto pipeline_layout = vk_pso->GetPipelineLayout();
 
     const auto* vk_sets_layout = vk_pso->GetDescriptorSetsLayout();
+    debug_count += 1;
     // 1. update and bind descriptor sets
     if (vk_resource_cache->UpdateDescriptorSets(m_device, vk_sets_layout)) {
         vk_resource_cache->BindDescriptorSets(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout);
     }
 
     // 2. push constants
-    for (auto& [constant_info, bound] : vk_resource_cache->GetConstantsToPush()) {
-        if (!bound) {
-            vkCmdPushConstants(
-                m_command_buffer,
-                pipeline_layout,
-                constant_info.flags,
-                constant_info.byte_offset_in_raw_data,
-                constant_info.size,
-                constant_info.raw_data.data());
-        }
-        bound = true;
+    if (vk_resource_cache->GetConstantsToPush().empty()) {
+        return;
     }
+
+    for (const auto& constant_info : vk_resource_cache->GetConstantsToPush()) {
+        vkCmdPushConstants(
+            m_command_buffer,
+            pipeline_layout,
+            constant_info.flags,
+            constant_info.byte_offset_in_raw_data,
+            constant_info.size,
+            constant_info.raw_data.data());
+    }
+    vk_resource_cache->ResetToPush();
 }
