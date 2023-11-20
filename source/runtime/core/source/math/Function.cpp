@@ -335,7 +335,7 @@ namespace Moer {
         perspective[1][1] = inv_tan;
         perspective[2][2] = f_range;
         perspective[3][2] = -1.f;
-        perspective[2][3] = -near_clip * f_range;
+        perspective[2][3] = near_clip * f_range;
 
         return perspective;
     }
@@ -348,7 +348,7 @@ namespace Moer {
         perspective[1][1] = inv_tan;
         perspective[2][2] = f_range;
         perspective[3][2] = -1.f;
-        perspective[2][3] = -near_clip * f_range;
+        perspective[2][3] = near_clip * f_range;
 
         return perspective;
     }
