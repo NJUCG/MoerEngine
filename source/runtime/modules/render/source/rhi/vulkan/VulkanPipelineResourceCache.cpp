@@ -4,12 +4,22 @@
 
 #include "misc/Crc32.h"
 
-void VulkanPipelineResourceCache::UpdateDescriptorSetHashInfo(uint32_t index, const VulkanHashableDescriptorInfo& _info) {
-    m_descriptor_resource_container.hashable_descriptor_infos[index] = _info;
+void VulkanPipelineResourceCache::UpdateDescriptorSetHashInfo(uint32_t _index, const VulkanHashableDescriptorInfo& _info) {
+    m_descriptor_resource_container.hashable_descriptor_infos[_index] = _info;
+}
+
+const VkDescriptorImageInfo& VulkanPipelineResourceCache::UpdateDescriptorImageInfo(uint16_t _set, uint16_t _index_of_binding, const VkDescriptorImageInfo& _info) {
+    m_descriptor_resource_container.descriptor_image_infos[_set][_index_of_binding] = _info;
+    return m_descriptor_resource_container.descriptor_image_infos[_set][_index_of_binding];
+}
+
+const VkDescriptorBufferInfo& VulkanPipelineResourceCache::UpdateDescriptorBufferInfo(uint16_t _set, uint16_t _index_of_binding, const VkDescriptorBufferInfo& _info) {
+    m_descriptor_resource_container.descriptor_buffer_infos[_set][_index_of_binding] = _info;
+    return m_descriptor_resource_container.descriptor_buffer_infos[_set][_index_of_binding];
 }
 
 bool VulkanPipelineResourceCache::UpdateDescriptorSets(VulkanDevice* _device, const VulkanDescriptorSetsLayout* _layout) {
-    return _device->GetDescriptorSets(GetSetsKey(), *_layout, m_descriptor_sets);
+    return _device->GetDescriptorSets(GetSetsKey(), *_layout, m_descriptor_set_writers, m_descriptor_sets);
 }
 
 void VulkanPipelineResourceCache::BindDescriptorSets(VkCommandBuffer _buffer, VkPipelineBindPoint _bind_point, VkPipelineLayout _layout) {

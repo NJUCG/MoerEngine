@@ -3,6 +3,7 @@
 
 #include "VulkanDescriptor.h"
 
+#include <map>
 #include <vector>
 #include <unordered_map>
 
@@ -15,43 +16,43 @@ struct PushConstantInfo {
     uint32_t             size;
     uint32_t             byte_offset_in_raw_data;
     std::vector<uint8_t> raw_data;
-
-    bool operator<(const PushConstantInfo& _info) const {
-        return flags < _info.flags || size < _info.size || byte_offset_in_raw_data < _info.byte_offset_in_raw_data || raw_data < _info.raw_data;
-    }
 };
 
 class VulkanPipelineResourceCache {
-public:
     friend VulkanDescriptorSetsLayout;
+    friend VulkanDescriptorSetWriter;
 
-    VulkanPipelineResourceCache() : m_pushed_constants() {}
+public:
+    VulkanPipelineResourceCache() = default;
 
-    void UpdateDescriptorSetHashInfo(uint32_t index, const VulkanHashableDescriptorInfo& _info);
+    void UpdateDescriptorSetHashInfo(uint32_t _index, const VulkanHashableDescriptorInfo& _info);
+
+    const VkDescriptorImageInfo& UpdateDescriptorImageInfo(uint16_t _set, uint16_t _index_of_binding, const VkDescriptorImageInfo& _info);
+
+    const VkDescriptorBufferInfo& UpdateDescriptorBufferInfo(uint16_t _set, uint16_t _index_of_binding, const VkDescriptorBufferInfo& _info);
 
     bool UpdateDescriptorSets(VulkanDevice* _device, const VulkanDescriptorSetsLayout* _layout);
 
     void BindDescriptorSets(VkCommandBuffer _buffer, VkPipelineBindPoint _bind_point, VkPipelineLayout _layout);
 
-    inline std::vector<VulkanDescriptorSetWriter>& GetWriters() { return m_writers; }
+    inline std::vector<VulkanDescriptorSetWriter>& GetWriters() { return m_descriptor_set_writers; }
 
     inline const std::vector<VkDescriptorSet>& GetDescriptorSets() const { return m_descriptor_sets; }
 
-    inline std::unordered_map<PushConstantInfo, bool>& GetConstantsToPush() { return m_pushed_constants; }
+    inline const std::vector<PushConstantInfo>& GetConstantsToPush() const { return m_push_constants; }
 
-    inline void AddConstantToPush(const PushConstantInfo& _info) { m_pushed_constants[_info] = false; }
+    inline void AddConstantToPush(const PushConstantInfo& _info) { m_push_constants.push_back(_info); }
 
-    inline void ResetToPush() { m_pushed_constants.clear(); }
+    inline void ResetToPush() { m_push_constants.clear(); }
 
 private:
     VulkanDescriptorSetWriteContainer m_descriptor_resource_container;
 
-    std::vector<VulkanDescriptorSetWriter> m_writers;
+    std::vector<VulkanDescriptorSetWriter> m_descriptor_set_writers;
 
     std::vector<VkDescriptorSet> m_descriptor_sets;
 
-    // <start_addr, size> -> constant data
-    std::unordered_map<PushConstantInfo, bool> m_pushed_constants;
+    std::vector<PushConstantInfo> m_push_constants;
 
     uint32_t GetSetsKey() const;
 };

@@ -532,9 +532,9 @@ void VulkanRHIImpl::RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso
             auto* vk_sampler = static_cast<VulkanRHISampler*>(params.resource);
             VK_CHECK_NULLPTR(vk_sampler, "SetBatchedShaderParameter: sampler is not supported yet!", continue);
             writers[params.space].WriteSampler(
+                params.space,
                 params.slot,
                 {vk_sampler->GetHandle(), VK_NULL_HANDLE, vk_sampler->GetImageLayout()},
-                descriptor_sets[params.space],
                 binding_info.count,
                 binding_info.type);
         } else {
@@ -545,26 +545,26 @@ void VulkanRHIImpl::RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso
             if (view->IsBuffer()) {
                 auto* buffer = static_cast<VulkanRHIBuffer*>(view->GetBuffer());
                 writers[params.space].WriteBuffer(
+                    params.space,
                     params.slot,
                     {buffer->GetHandle(), 0, buffer->GetInfo().size},
-                    descriptor_sets[params.space],
                     binding_info.count,
                     binding_info.type);
             } else if (view->IsSRV()) {
                 // MARK: 如何获取Sampler, 参数填充不足
                 auto* texture_srv = static_cast<VulkanRHIShaderResourceView*>(view)->GetView();
                 writers[params.space].WriteImage(
+                    params.space,
                     params.slot,
                     {VK_NULL_HANDLE, texture_srv, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                    descriptor_sets[params.space],
                     binding_info.count,
                     binding_info.type);
             } else if (view->IsUAV()) {
                 auto* texture_uav = static_cast<VulkanRHIUnorderedAccessView*>(view)->GetView();
                 writers[params.space].WriteImage(
+                    params.space,
                     params.slot,
                     {VK_NULL_HANDLE, texture_uav, VK_IMAGE_LAYOUT_GENERAL},
-                    descriptor_sets[params.space],
                     binding_info.count,
                     binding_info.type);
             }
