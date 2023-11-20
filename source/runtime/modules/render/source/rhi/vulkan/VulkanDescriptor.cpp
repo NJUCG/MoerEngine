@@ -97,11 +97,9 @@ void VulkanDescriptorSetAllocator::Init(VulkanDevice* device) {
 }
 
 bool VulkanDescriptorSetAllocator::GetDescriptorSets(uint32_t _hash_key, const VulkanDescriptorSetsLayout& _layout, std::vector<VulkanDescriptorSetWriter>& _writers, std::vector<VkDescriptorSet>& _sets) {
-    auto afore_sets = _sets;
-
     for (const auto& pool : m_cache_pools) {
         if (pool->FindDescriptorSets(_hash_key, _sets)) {
-            return afore_sets != _sets;
+            return true;
         }
     }
 

@@ -151,7 +151,7 @@ private:
 
     void PrepareDrawCommand();
 
-    int debug_count = 0;
+    std::vector<VkDescriptorSet> m_bound_sets;
 };
 
 #endif//VULKAN_COMMAND_LIST_H
