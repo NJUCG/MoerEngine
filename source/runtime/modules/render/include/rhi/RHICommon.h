@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <limits>
 #include "RenderCommon.h"
+#include "math/Base.h"
 #include "misc/EnumBitOperation.h"
 #pragma region CommonEnums
 /** Maximum number of miplevels in a texture. */
@@ -104,7 +105,13 @@ struct Extent2D {
     };
     Extent2D(uint32_t _x, uint32_t _y) : x(_x), y(_y) {
     }
+    Extent2D() : x(0), y(0) {
+    }
+
     bool operator==(const Extent2D& other) const {
+        return x == other.x && y == other.y;
+    };
+    bool operator==(const Moer::Vector2i& other) const {
         return x == other.x && y == other.y;
     };
 };

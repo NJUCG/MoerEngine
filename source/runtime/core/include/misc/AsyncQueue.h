@@ -7,7 +7,7 @@
 #include "boost/lockfree/stack.hpp"
 #include "boost/lockfree/queue.hpp"
 
-template<typename T>
+template<typename T, uint32_t InitialSize = 1024>
 class StatMPSCQueue {
 public:
     bool TryPush(T value) {
@@ -20,14 +20,31 @@ public:
     }
 
 private:
-    boost::lockfree::closable_stack<T, boost::lockfree::capacity<1024>> m_queue;
+    boost::lockfree::closable_stack<T, boost::lockfree::capacity<InitialSize>> m_queue;
+};
+template<typename T, uint32_t InitialSize = 1024>
+class ConsumeAllMPMCQueue {
+public:
+    bool Push(const T& value) {
+        return m_queue.push(value);
+    }
+    void PopAll(std::vector<T>& target) {
+        auto func = [&target](T value) { target.push_back(value); };
+        m_queue.consume_all(func);
+    }
+    template<typename F>
+    void ComsumeAll(const F& func) {
+        m_queue.consume_all(func);
+    }
+
+private:
+    boost::lockfree::queue<T, boost::lockfree::capacity<InitialSize>> m_queue;
 };
 
 template<typename T>
 class LockQueue {
 public:
     ~LockQueue() {
-        
     }
     bool Pop(T*& target) {
         std::unique_lock<std::mutex> lk(m_mutex);
@@ -150,7 +167,7 @@ public:
         for (;;) {
             //push to tail  index of tail become 1 if head
             DoublePtr local_tail(m_tail);
-//            int       new_index = local_tail.get_ptr() + 1;
+            //            int       new_index = local_tail.get_ptr() + 1;
             int       new_index = local_tail.get_ptr() + 1;
             DoublePtr local_head(m_head);
             DoublePtr new_tail(local_head.get_ptr() + 1, advance_tag(local_head.get_tag()));

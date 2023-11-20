@@ -444,6 +444,7 @@ namespace Moer {
 
         ImGuiIO& io = ImGui::GetIO();
         io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+        io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
         // io.ConfigDockingAlwaysTabBar         = true;
         // io.ConfigWindowsMoveFromTitleBarOnly = true;
 

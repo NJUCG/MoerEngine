@@ -172,7 +172,7 @@ public:
     bool IsValid() const { return flags.IsValid(std::memory_order_relaxed); }
     void Delete() {
         if (flags.MarkToDelete(std::memory_order_acquire)) {
-            delete this;
+            // delete this;
         }
     }
     ERHIResourceType GetResourceType() const {
@@ -181,7 +181,7 @@ public:
 
 protected:
 private:
-    void Destroy() const;
+    void Destroy();
     struct ResourceAtomicFlags {
         std::atomic<uint32_t> packed;
 
