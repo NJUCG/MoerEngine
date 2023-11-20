@@ -51,6 +51,8 @@ namespace Moer {
         this->matrix = Matrix4x4f(matrix.r0, matrix.r1, matrix.r2, Vector4f(0.f, 0.f, 0.f, 1.f));
     }
     Transform::Transform(const Vector3f& translation, const Vector3f& scaling, const Quaternion& quaternion) noexcept {
+        matrix = Moer::IDENTITY_4X4F;
+
         auto rotation_matrix = quaternion.GetRotation();
 
         matrix[0][0] = scaling.x * rotation_matrix[0][0];
