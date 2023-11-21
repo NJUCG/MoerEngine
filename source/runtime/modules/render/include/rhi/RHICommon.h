@@ -107,6 +107,9 @@ struct Extent2D {
     }
     Extent2D() : x(0), y(0) {
     }
+    operator Moer::Vector2i() {
+        return Moer::Vector2i(x, y);
+    }
 
     bool operator==(const Extent2D& other) const {
         return x == other.x && y == other.y;

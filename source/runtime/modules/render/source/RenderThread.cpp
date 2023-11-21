@@ -2,6 +2,8 @@
 #include "Core.h"
 #include "log/LogSystem.h"
 #include "platform/Platform.h"
+#include "rhi/RHI.h"
+#include "taskgraph/TaskGraph.h"
 #include "taskgraph/TaskSystem.h"
 #include "taskgraph/GraphTask.h"
 #include "taskgraph/ThreadManager.h"
@@ -70,11 +72,11 @@ namespace Moer {
 
         LOG_INFO("Wait for Rendering Thread To Stop.");
         //wait for thread to finish executing
-        GraphEventRef return_task = GraphTask<ReturnGraphTask>::CreateTask(nullptr, EThread::EGameThread)
+        GraphEventRef return_task = GraphTask<ReturnGraphTask>::CreateTask(nullptr, EThread::EMainThread)
                                         .ConstructAndDispatchWhenReady(EThread::ERenderThread);
 
         //not sure, game thread tasks should not be executing, because we are currently on Game Thread
-        assert(!TaskGraph::GetInterface().IsThreadProcessingTask(EThread::EGameThread) && "On Game Thread while Game Thread Tasks are being executing");
+        assert(!TaskGraph::GetInterface().IsThreadProcessingTask(EThread::EMainThread) && "On Game Thread while Game Thread Tasks are being executing");
         TaskGraph::GetInterface().WaitUntilTaskComplete(return_task, EThread::EGameThread_local);
 
         delete g_render_thread;
@@ -112,7 +114,7 @@ namespace Moer {
                     },
                     nullptr,
                     EThread::ERenderThread);
-                TaskGraph::GetInterface().WaitUntilTaskComplete(suspend_complete_event, EThread::EGameThread);
+                TaskGraph::GetInterface().WaitUntilTaskComplete(suspend_complete_event, EThread::EMainThread);
                 //now all works on task render thread has finished
                 //start a waiting task on render thread
                 g_render_suspend_end_event = EventPool::Get()->GetEvent();
@@ -152,4 +154,51 @@ namespace Moer {
     ScopedResumeRenderThread::~ScopedResumeRenderThread() {
         ResumeRenderThread(true);
     }
+
+    void RenderThreadFence::BeginFence() {
+        complete_event = GraphEvent::CreateGraphEvent();
+
+        EnqueueRenderTask([temp_complete_event = complete_event]() {
+            if (IsCurrentlyRenderThread()) {
+                temp_complete_event->TryUnlockSubsequents();
+
+                g_rhi->RHIFlushPendingDeletes();
+            }
+        });
+    }
+
+    bool RenderThreadFence::IsFenceComplete() {
+        assert(Moer::IsCurrentlyGameThread());
+        if (!complete_event.Get() || complete_event->IsComplete()) {
+            complete_event = nullptr;
+            return true;
+        }
+        return false;
+    }
+    void RenderThreadFence::Wait() {
+
+        assert(Moer::IsCurrentlyGameThread());
+
+        if (!IsFenceComplete()) {
+            {
+                Event* event = EventPool::Get()->GetEvent();
+
+                static uint32_t wait_recursive_counter = 0;
+
+                wait_recursive_counter++;
+                //already called
+                if (wait_recursive_counter > 1) {
+                    //TODO: messages
+                }
+                GraphEventArray temp_events;
+                temp_events.push_back(complete_event);
+
+                GraphTask<TriggerEventGraphTask>::CreateTask(&temp_events, EThread::EMainThread)
+                    .ConstructAndDispatchWhenReady(event, EThread::AnyThread_NormalPri);
+
+                event->Wait();
+            }
+        }
+    }
+
 }// namespace Moer

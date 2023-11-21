@@ -1,6 +1,7 @@
 #ifndef MOERENGINE_RENDER_THREAD_H
 #define MOERENGINE_RENDER_THREAD_H
 #include "API_Macro.h"
+#include "Core.h"
 #include <cstdint>
 #include "RenderAPI.h"
 class Runnable;
@@ -26,6 +27,20 @@ namespace Moer {
     public:
         ScopedResumeRenderThread();
         ~ScopedResumeRenderThread();
+    };
+
+    class RENDER_API RenderThreadFence {
+    public:
+        RenderThreadFence() {}
+
+        void BeginFence();
+
+        bool IsFenceComplete();
+
+        void Wait();
+
+    private:
+        GraphEventRef complete_event;
     };
 
 }// namespace Moer

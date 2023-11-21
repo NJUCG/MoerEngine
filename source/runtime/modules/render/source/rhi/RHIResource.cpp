@@ -15,7 +15,7 @@ void RHIResource::Destroy() {
     //deferred delete
     if (!flags.MarkToDelete(std::memory_order_release)) {
         //TODO: pending_deletings actual delete on render thread
-        // pending_deletings.Push(this);
+        pending_deletings.Push(this);
     }
     delete this;
 }

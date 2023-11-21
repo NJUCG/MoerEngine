@@ -1,4 +1,9 @@
 #include "rhi/RHI.h"
+#include "log/LogSystem.h"
+#include "rhi/RHIResource.h"
+#include "Core.h"
+
+#include <vector>
 // #include "PixelFormat.h"
 // #include "math/Base.h"
 // #include "rhi/RHICommon.h"
@@ -11,8 +16,34 @@
 // #include "taskgraph/ThreadManager.h"
 RHI* g_rhi = nullptr;
 
+extern ConsumeAllMPMCQueue<RHIResource*, 2048> pending_deletings;
 // global shader
+void MTest() {
 
+    EnqueueRenderTask([] {
+        // do something
+        LOG_INFO("Render System Tick");
+    });
+}
+
+void RHI::RHIFlushPendingDeletes() {
+    std::vector<RHIResource*> resources_to_delete;
+
+    pending_deletings.ComsumeAll([&resources_to_delete](RHIResource* resource) {
+        resources_to_delete.push_back(resource);
+    });
+
+    uint32_t num_deletes = resources_to_delete.size();
+
+    if (num_deletes > 0) {
+        LOG_INFO("{} resources to delete", num_deletes);
+    }
+
+    //test if its ok
+    for (uint32_t i = 0; i < num_deletes; ++i) {
+        delete resources_to_delete[i];
+    }
+}
 // #include "rhi/RHICommandList.h"
 // #include "rhi/RHICommandQueue.h"
 // #include "shader/ShaderParameterMacros.h"

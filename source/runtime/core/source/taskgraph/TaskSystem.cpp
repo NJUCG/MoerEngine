@@ -120,7 +120,7 @@ bool TaskGraphTest() {
         while (!Event->IsComplete())// in single-threaded mode tasks are executed only when waited for
         {
         }
-        Event->Wait(EThread::EGameThread);
+        Event->Wait(EThread::EMainThread);
     }
     SPDLOG_INFO("=============== task completes before it's waited for success ================");
 
@@ -130,7 +130,7 @@ bool TaskGraphTest() {
             this_thread::sleep_for(50ms);// pause for a bit to let waiting start
         });
         assert(!Event->IsComplete());
-        Event->Wait(EThread::EGameThread);
+        Event->Wait(EThread::EMainThread);
     }
     SPDLOG_INFO("=============== task completes after it's waited for success ================");
     {// event w/o a task, signaled by explicit call to DispatchSubsequents before it's waited for
@@ -143,7 +143,7 @@ bool TaskGraphTest() {
         while (!Event->IsComplete())// in single-threaded mode tasks are executed only when waited for
         {
         }
-        Event->Wait(EThread::EGameThread);
+        Event->Wait(EThread::EMainThread);
     }
     SPDLOG_INFO("=============== task signaled by explicit call to DispatchSubsequents before it's waited for success ================");
     {// event w/o a task, signaled by explicit call to DispatchSubsequents after it's waited for
@@ -182,7 +182,7 @@ bool TaskGraphTest() {
         GraphEventRef Event  = FunctionGraphTask::ConstructAndDispatchWhenReady(std::move(Lambda));
         GraphEvent*   _event = static_cast<GraphEvent*>(Event.Get());
         assert(!_event->IsComplete());
-        _event->Wait(EThread::EGameThread);
+        _event->Wait(EThread::EMainThread);
     }
     SPDLOG_INFO("=============== wait for prereq by waitUntil success ================");
     {// prereq is completed before DontCompleteUntil is called
@@ -190,7 +190,7 @@ bool TaskGraphTest() {
             [] {
 
             });
-        Prereq->Wait(EThread::EGameThread);
+        Prereq->Wait(EThread::EMainThread);
 
         GraphEventRef Event = FunctionGraphTask::ConstructAndDispatchWhenReady(
             [&Prereq](EThread::Type CurrentThread, const GraphEventRef& MyCompletionGraphEvent) {
@@ -201,7 +201,7 @@ bool TaskGraphTest() {
         while (!Event->IsComplete())// in single-threaded mode tasks are executed only when waited for
         {
         }
-        Event->Wait(EThread::EGameThread);
+        Event->Wait(EThread::EMainThread);
     }
     SPDLOG_INFO("=============== prereq is completed before waitUntil is called success ================");
 
@@ -273,7 +273,7 @@ bool TaskGraphTest() {
     }
     SPDLOG_INFO("=============== (local queue) task  depends on a task that is not in the same queue succuss ================");
     {// launch a GT task, then an any-thread task that depends on it. wait for the any-thread task. this was a deadlock on the new frontend
-        GraphEventRef GTTask = FunctionGraphTask::ConstructAndDispatchWhenReady([] { return Moer::GetGameThreadId() == Platform::GetCurrentThreadID(); }, nullptr, EThread::EGameThread);
+        GraphEventRef GTTask = FunctionGraphTask::ConstructAndDispatchWhenReady([] { return Moer::GetGameThreadId() == Platform::GetCurrentThreadID(); }, nullptr, EThread::EMainThread);
         GTTask->Wait();//delete this will cause dead lock
         GraphEventRef AnyThreadTask = FunctionGraphTask::ConstructAndDispatchWhenReady([] {}, GTTask);
         AnyThreadTask->Wait();

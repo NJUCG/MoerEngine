@@ -4,7 +4,10 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include <vector>
-class UploadTexture {
+
+//In Editor mode, UI runs and renders on main thread, but in application mode,
+//everything runs on render thread, so we need to create a virtual swap chain
+class VirtualViewport {
 public:
     RHIShaderResourceViewRef GetSRVMainThread();
 
@@ -12,12 +15,12 @@ public:
     RHIUnorderedAccessViewRef GetUAVRenderThread();
 
     //call on main thread
-    void                  OnResize(Extent2D extent);
-    static UploadTexture* Create(const RHITextureCreateInfo& create_info);
+    void                    OnResize(Extent2D extent);
+    static VirtualViewport* Create(const RHITextureCreateInfo& create_info);
 
 private:
-    UploadTexture(const RHITextureCreateInfo& create_info);
-    ~UploadTexture();
+    VirtualViewport(const RHITextureCreateInfo& create_info);
+    ~VirtualViewport();
 
     void InitRenderThread();
     void ResizeRenderThread(Extent2D extent);
@@ -29,6 +32,11 @@ private:
     //resource on render thread
     std::vector<RHITextureRef>             textures_render_thread;
     std::vector<RHIUnorderedAccessViewRef> texture_uavs_render_thread;
+
+// in Application mode, Present operations happens on render thread
+#if !defined(EDITOR_MODE_ON)
+    RHIViewportRef viewport;
+#endif
 };
 
 #endif//MOER_ENGINE_ASYNC_RESOURCES_H

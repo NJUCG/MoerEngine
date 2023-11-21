@@ -7,7 +7,7 @@
 #include "taskgraph/TaskGraph.h"
 #include "taskgraph/ThreadManager.h"
 
-UploadTexture::UploadTexture(const RHITextureCreateInfo& create_info) {
+VirtualViewport::VirtualViewport(const RHITextureCreateInfo& create_info) {
     // Implementation of UploadTexture constructor
     // ...
     upload_texture_create_info = create_info;
@@ -21,19 +21,19 @@ UploadTexture::UploadTexture(const RHITextureCreateInfo& create_info) {
         EThread::ERenderThread);
 }
 
-UploadTexture* UploadTexture::Create(const RHITextureCreateInfo& create_info) {
+VirtualViewport* VirtualViewport::Create(const RHITextureCreateInfo& create_info) {
     // Implementation of Create method
     // ...
-    return new UploadTexture(create_info);
+    return new VirtualViewport(create_info);
     return nullptr;
 }
 
-UploadTexture::~UploadTexture() {
+VirtualViewport::~VirtualViewport() {
     // Implementation of UploadTexture destructor
     // ...
 }
 
-void UploadTexture::InitRenderThread() {
+void VirtualViewport::InitRenderThread() {
     // Implementation of InitRenderThread method
     // ...
     assert(Moer::IsCurrentlyRenderThread());
@@ -51,31 +51,31 @@ void UploadTexture::InitRenderThread() {
     }
 }
 
-void UploadTexture::OnResize(Extent2D extent) {
+void VirtualViewport::OnResize(Extent2D extent) {
     if (extent == upload_texture_create_info.extent) { return; }
     // Implementation of OnResize method
     // ...
-    FunctionGraphTask::ConstructAndDispatchWhenReady(
-        [this, extent]() {
-            ResizeRenderThread(extent);
-        },
-        nullptr,
-        EThread::ERenderThread);
+    upload_texture_create_info.extent = extent;
+    upload_texture                    = g_rhi->RHICreateTexture(upload_texture_create_info);
+
+    EnqueueRenderTask([this, extent]() {
+        ResizeRenderThread(extent);
+    });
 }
 
-void UploadTexture::ResizeRenderThread(Extent2D extent) {
+void VirtualViewport::ResizeRenderThread(Extent2D extent) {
     // Implementation of ResizeRenderThread method
     // ...
     assert(Moer::IsCurrentlyRenderThread());
 }
 
-RHIShaderResourceViewRef UploadTexture::GetSRVMainThread() {
+RHIShaderResourceViewRef VirtualViewport::GetSRVMainThread() {
     // Implementation of GetSRVMainThread method
     // ...
     return nullptr;
 }
 
-RHIUnorderedAccessViewRef UploadTexture::GetUAVRenderThread() {
+RHIUnorderedAccessViewRef VirtualViewport::GetUAVRenderThread() {
     // Implementation of GetUAVMainRenderThread method
     // ...
     return nullptr;

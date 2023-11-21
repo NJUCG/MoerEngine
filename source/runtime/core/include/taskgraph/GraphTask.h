@@ -1,5 +1,6 @@
 #ifndef GRAPH_TASK_H
 #define GRAPH_TASK_H
+#include "API_Macro.h"
 #include "ThreadManager.h"
 #include <utility>
 #include <vector>
@@ -56,8 +57,8 @@ public:
     void                          Destroy() override {
         delete this;
     }
-    bool IsComplete();
-    void WaitUntil(GraphEventRef _eventRef) {
+    CORE_API bool IsComplete();
+    void          WaitUntil(GraphEventRef _eventRef) {
         assert(!IsComplete());
 
         m_events_to_wait.emplace_back(std::move(_eventRef));
@@ -168,7 +169,7 @@ private:
     GraphEventRef               m_subsequents;
 };
 
-class TriggerEventGraphTask {
+class CORE_API TriggerEventGraphTask {
 public:
     TriggerEventGraphTask(Event* _event, EThread::Type _type) : m_event{_event}, m_preferred_thread{_type} {}
     EThread::Type GetPreferredThread() {

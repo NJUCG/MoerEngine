@@ -13,7 +13,7 @@ class EThread {
 public:
     // 0-7
     enum Type : int32_t {
-        EGameThread,
+        EMainThread,
         ERenderThread,
         ERHIThread,
         EUIThread,
@@ -29,7 +29,7 @@ public:
         LOW_PRI             = 0x400,
         PRIORITY_SHEFT      = 9,
         PRIORITY_MASK       = 0x600,//8-10 for priority
-        EGameThread_local   = EGameThread | LOCAL_QUEUE,
+        EGameThread_local   = EMainThread | LOCAL_QUEUE,
         ERenderThread_local = ERenderThread | LOCAL_QUEUE,
         ERHIThread_local    = ERHIThread | LOCAL_QUEUE,
         PriorityCount       = 3,

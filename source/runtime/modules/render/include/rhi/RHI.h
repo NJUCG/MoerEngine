@@ -6,6 +6,9 @@
 #include "rhi/RHIResource.h"
 #include <vector>
 #include "RenderAPI.h"
+#include "Core.h"
+#include "taskgraph/TaskGraph.h"
+#include "taskgraph/ThreadManager.h"
 
 enum class ERHIType {
     Vulkan,
@@ -99,13 +102,13 @@ public:
 
 #pragma endregion
 
-#pragma region GUI
+    // #pragma region GUI
 
-    virtual bool GUIInit(uint32_t _num_frames_in_flight);
-    virtual void GUIShutDown();
-    virtual void GUINewFrame();
-    virtual void GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list);
-#pragma endregion
+    // virtual bool GUIInit(uint32_t _num_frames_in_flight);
+    // virtual void GUIShutDown();
+    // virtual void GUINewFrame();
+    // virtual void GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list);
+    // #pragma endregion
 
 #pragma region Viewport
 
@@ -122,6 +125,11 @@ public:
     virtual void RHIPresentViewport(RHIViewport* _viewport, RHIFence* _render_end_fence) = 0;
 #pragma endregion
 
+#pragma region RenderThread methods
+
+    void RHIFlushPendingDeletes();
+#pragma endregion
+
 protected:
     ERHIType rhi_type;
     uint32_t max_frame_in_flight;
@@ -129,4 +137,54 @@ protected:
 
 extern RENDER_API RHI* g_rhi;
 
+class RenderThreadTask {
+public:
+    // All render commands run on the render thread
+    static EThread::Type GetPreferredThread() {
+        assert(EThread::ERenderThread != EThread::EMainThread);
+        return EThread::ERenderThread;
+    }
+};
+
+template<typename TaskNameType, typename Funtion>
+class RenderThreadTaskType : public RenderThreadTask {
+public:
+    RenderThreadTaskType(Funtion&& _func) : funtion(std::forward<Funtion>(_func)) {}
+    static EThread::Type GetPreferredThread() {
+        return EThread::ERenderThread;
+    }
+    void Fire(EThread::Type _thread, const GraphEventRef& _my_completion_graph_event) {
+        //TODO: profiler here
+        funtion();
+    }
+
+protected:
+    Funtion funtion;
+};
+
+struct UndefinedRenderTaskName {
+    static const char* Name() {
+        return "UndefinedRenderTask";
+    }
+};
+/**
+ * @brief Enqueue a render task to render thread,
+ *        if current thread is render thread, execute immediately
+ * 
+ * @tparam TaskNameType task name type for statistic profiling
+ * @tparam Funtion lambda type
+ * @param _func lambda function
+ * @return FORCEINLINE 
+ */
+template<typename Funtion, typename TaskNameType = UndefinedRenderTaskName>
+FORCEINLINE void EnqueueRenderTask(Funtion&& _func) {
+    using TRenderTaskType = RenderThreadTaskType<TaskNameType, Funtion>;
+    if (Moer::IsCurrentlyGameThread()) {
+        GraphTask<TRenderTaskType>::CreateTask().ConstructAndDispatchWhenReady(std::forward<Funtion>(_func));
+    } else {
+        //immediately execute on render thread
+        TRenderTaskType task(std::forward<Funtion>(_func));
+        task.Fire(EThread::EMainThread, nullptr);
+    }
+}
 #endif

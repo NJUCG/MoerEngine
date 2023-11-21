@@ -86,7 +86,7 @@ TaskGraph::~TaskGraph() {
     instance = nullptr;
 }
 EThread::Type TaskGraph::GetCurrentThread(bool localQueue) {
-    if (Platform::GetCurrentThreadID() == ThreadManager::g_game_thread_id) return EThread::Type(localQueue ? (EThread::EGameThread | EThread::LOCAL_QUEUE) : EThread::EGameThread);
+    if (Platform::GetCurrentThreadID() == ThreadManager::g_game_thread_id) return EThread::Type(localQueue ? (EThread::EMainThread | EThread::LOCAL_QUEUE) : EThread::EMainThread);
     auto thread = ThreadManager::Instance().GetRunnableThread(Platform::GetCurrentThreadID());
     if (thread) {
         ThreadIndex index = thread->m_runnable->GetIndex();
