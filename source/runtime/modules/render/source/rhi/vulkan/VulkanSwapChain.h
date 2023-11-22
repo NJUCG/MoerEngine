@@ -24,6 +24,7 @@ struct SwapChainBuffer {
 
 class VulkanSwapChain {
 public:
+    ~VulkanSwapChain();
     void     Connect(VkInstance _instance, VkSurfaceKHR _surface, VulkanDevice* _device);
     void     Init(uint32_t* width, uint32_t* height, bool vsync);
     uint32_t AcquireNextImage(VkSemaphore _aquire_semaphore);

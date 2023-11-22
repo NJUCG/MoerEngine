@@ -42,5 +42,7 @@ namespace Moer {
         std::vector<std::function<void()>> on_draw_ui_funcs;
 
         struct EngineLoopData* data;
+
+        FrameEndSync frame_end_sync;
     };
 }// namespace Moer

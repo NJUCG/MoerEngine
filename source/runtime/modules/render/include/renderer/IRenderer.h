@@ -1,0 +1,5 @@
+#ifndef MOER_ENGINE_RENDERER_INTERFACE_H
+#define MOER_ENGINE_RENDERER_INTERFACE_H
+class IRenderer {
+};
+#endif

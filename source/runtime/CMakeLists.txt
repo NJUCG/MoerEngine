@@ -13,7 +13,8 @@ file(GLOB  ENGINE_HEADERS   "*.h")
 file(GLOB  ENGINE_SOURCES   "*.cpp")
 add_library(${target_name} STATIC ${ENGINE_HEADERS} ${ENGINE_SOURCES})
 
-set_target_properties(${target_name} PROPERTIES FOLDER "engine")
+set_target_properties(${target_name} PROPERTIES 
+    FOLDER "engine"  )
 
 target_include_directories(${target_name} 
     PRIVATE $<BUILD_INTERFACE:${RUNTIME_CORE_DIR}/include>

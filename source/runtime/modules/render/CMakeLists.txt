@@ -6,16 +6,10 @@ configure_file(${MODULE_DIR}/include/config.h.in ${MODULE_DIR}/include/config.h)
 file(GLOB_RECURSE RENDER_MODULE_HEADERS "include/*.h")
 file(GLOB_RECURSE RENDER_MODULE_SOURCES "source/*.cpp" "source/*.h")
 
-file(GLOB IMGUI_SOURCES 
-    # "${moer_third_party_dir}/imgui/*.cpp" 
-    # "${moer_third_party_dir}/imgui/*.h"
-    # "${moer_third_party_dir}/imgui/IconsFontAwesome6.h" # icon font for imgui, see https://github.com/juliettef/IconFontCppHeaders
-    # "${moer_third_party_dir}/imgui/backends/imgui_impl_glfw.*"
-    )
 
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${RENDER_MODULE_HEADERS} ${RENDER_MODULE_SOURCES} )
 
-add_library(${MODULE_NAME} SHARED ${RENDER_MODULE_HEADERS} ${RENDER_MODULE_SOURCES} ${IMGUI_SOURCES})
+add_library(${MODULE_NAME} SHARED ${RENDER_MODULE_HEADERS} ${RENDER_MODULE_SOURCES})
 
 target_compile_definitions(${MODULE_NAME} PRIVATE RENDER_MODULE_SHARED_LIB)
 
@@ -47,6 +41,18 @@ target_link_libraries(${MODULE_NAME}
 )
 
 add_dependencies(${MODULE_NAME} DXC_COPY)
+
+if(MSVC)
+target_compile_options(
+    ${MODULE_NAME} 
+    PUBLIC 
+    $<$<CONFIG:Debug>:/MDd>
+    $<$<CONFIG:MinSizeRel>:/MD>
+    $<$<CONFIG:Release>:/MD>
+    $<$<CONFIG:RelWithDebInfo>:/MDd>
+    )
+endif() 
+
 target_compile_definitions(${MODULE_NAME} 
     PUBLIC "GLOBAL_SHADER_RESOURCE_ROOT=${moer_root_dir}/shaders"
     PUBLIC "GLOBAL_SHADER_RESOURCE_OUTPUT=${moer_root_dir}/shaders/compiled"

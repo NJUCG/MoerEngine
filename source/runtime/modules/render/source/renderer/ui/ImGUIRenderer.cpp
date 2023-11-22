@@ -1,4 +1,5 @@
 #include "ImGUIRenderer.h"
+#include "RenderThread.h"
 #include "config/ConfigManager.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommandList.h"

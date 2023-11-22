@@ -1489,13 +1489,16 @@ VulkanRHIFence::VulkanRHIFence(VulkanDevice* _device, EFenceUsage _usage) : m_de
 }
 
 VulkanRHIFence::~VulkanRHIFence() {
-    //wait device idle(to avoid quiting while still waiting for present or submit)
-    vkDeviceWaitIdle(m_device->GetDevice());
-    if (m_semaphore != VK_NULL_HANDLE) {
-        vkDestroySemaphore(m_device->GetDevice(), m_semaphore, VK_NULL_HANDLE);
-    }
+
+    VkSemaphoreWaitInfo wait_delete_info{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
+    wait_delete_info.pNext          = nullptr;
+    wait_delete_info.flags          = 0;
+    wait_delete_info.semaphoreCount = 1;
     if (m_binary != VK_NULL_HANDLE) {
         vkDestroySemaphore(m_device->GetDevice(), m_binary, VK_NULL_HANDLE);
+    }
+    if (m_semaphore != VK_NULL_HANDLE) {
+        vkDestroySemaphore(m_device->GetDevice(), m_semaphore, VK_NULL_HANDLE);
     }
 }
 

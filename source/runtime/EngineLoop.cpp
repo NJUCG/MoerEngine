@@ -19,21 +19,12 @@ namespace Moer {
     FrameEndSync::FrameEndSync() : event_index(0) {
         // CleanupDelegate = FCoreDelegates::OnPreExit.AddRaw(this, &FFrameEndSync::Cleanup);
     }
+    FrameEndSync::~FrameEndSync() {
+        // FCoreDelegates::OnPreExit.Remove(CleanupDelegate);
+        Cleanup();
+    }
 
     void FrameEndSync::Sync(bool b_allow_one_frame_lag) {
-        // if (b_allow_one_frame_lag) {
-        //     // Wait for the oldest frame to finish rendering.
-        //     fence[event_index].Wait();
-        //     // Signal the oldest frame that it can continue.
-        //     fence[event_index].BeginFence();
-        //     // Flip the index.
-        //     event_index = 1 - event_index;
-        // } else {
-        //     // Wait for the current frame to finish rendering.
-        //     fence[1 - event_index].Wait();
-        //     // Signal the current frame that it can continue.
-        //     fence[1 - event_index].BeginFence();
-        // }
         fence[event_index].BeginFence();
         if (b_allow_one_frame_lag) {
             event_index = (event_index + 1) % 2;
@@ -65,6 +56,8 @@ namespace Moer {
 
         //record and present gui render command on main thread
         UIRenderer::GetRenderer()->EndRenderFrame();
+
+        frame_end_sync.Sync(true);
     }
     void EngineLoop::Init() {
         UIRenderer::GetRenderer()->Init();

@@ -200,7 +200,7 @@ void DXCompiler::CompileVulkan(const ShaderCompilerInput& _input, ShaderCompiler
     _output.shader_code.resize(size);
 
     _output.compiled_hash.FromData(data, size);
-    LOG_INFO("file {} compiled hash: {}", file_path.string(), _output.compiled_hash.ToString());
+    LOG_INFO("file {} compiled hash: {}", file_path.string().data(), _output.compiled_hash.ToString().data());
     memcpy(&_output.shader_code[0], data, size);
 
     std::unordered_map<std::string, ParameterInfo> param_map;

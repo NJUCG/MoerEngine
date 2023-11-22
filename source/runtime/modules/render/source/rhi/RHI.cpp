@@ -1,5 +1,6 @@
 #include "rhi/RHI.h"
 #include "log/LogSystem.h"
+#include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "Core.h"
 
@@ -35,13 +36,17 @@ void RHI::RHIFlushPendingDeletes() {
 
     uint32_t num_deletes = resources_to_delete.size();
 
-    if (num_deletes > 0) {
-        LOG_INFO("{} resources to delete", num_deletes);
-    }
-
     //test if its ok
     for (uint32_t i = 0; i < num_deletes; ++i) {
+        // LOG_INFO("deleted resource type:{}", uint32_t(resources_to_delete[i]->GetResourceType()));
+        //resources_to_delete[i]->GetResourceType() == RRT_VIEWPORT ||
+        // if (resources_to_delete[i]->GetResourceType() == RRT_GPU_FENCE) {
+        //     continue;
+        // }
         delete resources_to_delete[i];
+    }
+    if (num_deletes > 0) {
+        LOG_INFO("{} resources to delete", num_deletes);
     }
 }
 // #include "rhi/RHICommandList.h"

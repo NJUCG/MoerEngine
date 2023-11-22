@@ -24,6 +24,10 @@ void VulkanSwapChain::Connect(VkInstance _instance, VkSurfaceKHR _surface, Vulka
     m_device   = _device;
 }
 
+VulkanSwapChain::~VulkanSwapChain() {
+    Cleanup();
+}
+
 /**
  * Initialize the swapchain and get its images with given width and height
  * @param width Pointer to the width of the swapchain (may be adjusted to fit the requirements of the swapchain)

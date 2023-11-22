@@ -1,7 +1,9 @@
 #include "MainWindow.h"
 #include "math/Math.h"
+#include "Core.h"
 
 #include "imgui.h"
+#include "misc/Timer.h"
 void StyleColorsDark(ImGuiStyle* dst = nullptr) {
     auto& colors               = ImGui::GetStyle().Colors;
     colors[ImGuiCol_WindowBg]  = ImVec4{0.1f, 0.1f, 0.13f, 1.0f};
@@ -90,6 +92,7 @@ bool ShowStyleSelector(const char* label) {
     }
     return false;
 }
+Moer::Timer timer;
 
 void MainWindow::Show() {
 
@@ -106,7 +109,13 @@ void MainWindow::Show() {
         ImGui::End();
         return;
     }
+    if (timer.IsRunning()) {
 
+        timer.Stop();
+        ImGui::Text("Time: %.3f ms/frame (%.1f FPS)", timer.ElapsedMilliseconds(), 1000.0f / timer.ElapsedMilliseconds());
+    }
+
+    timer.Start();
     Moer::Vector2f render_target_window_pos  = {0.0f, 0.0f};
     Moer::Vector2f render_target_window_size = {0.0f, 0.0f};
     // ShowStyleSelector("choose style color");
