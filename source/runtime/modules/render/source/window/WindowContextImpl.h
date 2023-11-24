@@ -21,7 +21,9 @@ namespace Moer {
         virtual void GetWindowSize(WindowHandle*, int32_t* width, int32_t* height) const = 0;
         virtual void SetTitle(WindowHandle*, const char* _new_title)                     = 0;
         virtual bool ShouldClose(WindowHandle*) const                                    = 0;
-        // virtual void  PollEvents(WindowHandle*) const                                     = 0;
+
+        virtual void AddFont(const FontDesc& _font_desc) = 0;
+
         virtual void* GetNativeWindow(WindowHandle*) const = 0;
 
         static void OnCharCallback(WindowType* window, unsigned int codepoint);

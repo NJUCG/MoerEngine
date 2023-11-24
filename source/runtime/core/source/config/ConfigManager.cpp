@@ -52,4 +52,8 @@ namespace Moer {
     const std::filesystem::path ConfigManager::GetEditorResourcePath() const {
         return workspace_path / "resource";
     }
+
+    const std::filesystem::path ConfigManager::GetEngineShaderPath() const {
+        return workspace_path / "resource" / "shader";
+    }
 }// namespace Moer

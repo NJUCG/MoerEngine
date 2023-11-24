@@ -11,4 +11,5 @@ EShaderParameterType BindingTypeToParameterType(EShaderBindingBaseType _type);
 
 std::wstring GetPlatform(EShaderType _type, EShaderPlatform _platform);
 
+std::wstring SearchValidShaderPath(const std::string& _relative_shader_path);
 #endif

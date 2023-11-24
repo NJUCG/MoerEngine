@@ -3,7 +3,7 @@
 set(moer_asset_dir "asset")
 set(moer_config_dir "configs")
 
-add_compile_definitions("__ENGINE_NAME__=${CMAKE_PROJECT_NAME}")
+# add_compile_definitions("__ENGINE_NAME__=${CMAKE_PROJECT_NAME}")
 
 # Render Backend Options
 set(moer_supported_moer_rhi_api Vulkan DX12)

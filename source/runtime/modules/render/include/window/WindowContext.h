@@ -9,6 +9,26 @@
 namespace Moer {
     using WindowType = void;
 
+    enum class EFontType {
+        Greek,
+        Chinese,
+        Korean,
+        Japanese,
+        Cyrillic,
+        Thai,
+        Vietnamese,
+        Icon,
+        Default
+    };
+
+    struct RENDER_API FontDesc {
+        FontDesc(const char* _font_path, float _font_size, EFontType _font_type)
+            : font_path(_font_path), font_size(_font_size), font_type(_font_type) {}
+        std::string font_path;
+        float       font_size = 13.f;
+        EFontType   font_type;
+    };
+
     struct RENDER_API WindowHandle {
         WindowType* window{nullptr};
     };
@@ -58,7 +78,6 @@ namespace Moer {
         static WindowHandle* GetMainWindow();
         static void          SetTitle(WindowHandle*, const char* newTitle);
         static bool          ShouldClose(WindowHandle*);
-
         //for dx12 win32 window
         static void* GetNativeWindow(WindowHandle*);
         //for vulkan surface creation

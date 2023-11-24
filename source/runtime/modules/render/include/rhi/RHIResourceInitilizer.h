@@ -210,6 +210,7 @@ struct RHIViewportInitializer {
     Moer::WindowHandle* window_handle;
     Extent2D            size{0, 0};
     bool                b_is_full_screen;
+    bool                b_vsync;
     EPixelFormat        preferred_format;
 };
 

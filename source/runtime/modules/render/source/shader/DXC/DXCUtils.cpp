@@ -1,4 +1,5 @@
 #include "DXCUtils.h"
+#include "config/ConfigManager.h"
 #include "platform/Platform.h"
 #include <format>
 #include "shader/ShaderCommon.h"
@@ -120,4 +121,12 @@ std::wstring GetPlatform(EShaderType _type, EShaderPlatform _platform) {
     const WCHAR* platform = GetShaderModel(_platform);
     auto         k        = std::format(L"{}_{}", type, platform);
     return k;
+}
+
+std::wstring SearchValidShaderPath(const std::string& _relative_shader_path) {
+    std::string           shader_path    = _relative_shader_path;
+    Moer::ConfigManager&  config_manager = Moer::ConfigManager::GetInstance();
+    std::filesystem::path shader_dir     = config_manager.GetEngineShaderPath();
+    //TODO: shader dir
+    return L"";
 }

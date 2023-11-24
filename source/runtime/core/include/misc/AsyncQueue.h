@@ -4,8 +4,11 @@
 #include <mutex>
 #include <vector>
 #include <deque>
+#include "boost/lockfree/lockfree_forward.hpp"
+#include "boost/lockfree/policies.hpp"
 #include "boost/lockfree/stack.hpp"
 #include "boost/lockfree/queue.hpp"
+#include "boost/lockfree/spsc_queue.hpp"
 
 template<typename T, uint32_t InitialSize = 1024>
 class StatMPSCQueue {
@@ -22,15 +25,27 @@ public:
 private:
     boost::lockfree::closable_stack<T, boost::lockfree::capacity<InitialSize>> m_queue;
 };
+
+template<typename T, uint32_t InitialSize = 1024>
+class SPSCQueue {
+public:
+    bool Push(const T& value) {
+        return m_queue.push(value);
+    }
+    template<typename F>
+    void ComsumeAll(const F& func) {
+        m_queue.consume_all(func);
+    }
+
+private:
+    boost::lockfree::spsc_queue<T, boost::lockfree::capacity<InitialSize>> m_queue;
+};
+
 template<typename T, uint32_t InitialSize = 1024>
 class ConsumeAllMPMCQueue {
 public:
     bool Push(const T& value) {
         return m_queue.push(value);
-    }
-    void PopAll(std::vector<T>& target) {
-        auto func = [&target](T value) { target.push_back(value); };
-        m_queue.consume_all(func);
     }
     template<typename F>
     void ComsumeAll(const F& func) {

@@ -1,6 +1,7 @@
 #ifndef MOER_ENGINE_CONFIG_MANAGER_H
 #define MOER_ENGINE_CONFIG_MANAGER_H
 #include <filesystem>
+#include <map>
 #include <unordered_map>
 #include "API_Macro.h"
 //implement ConfigManager as Singleton
@@ -45,12 +46,15 @@ namespace Moer {
 
         const std::filesystem::path GetEditorResourcePath() const;
 
+        const std::filesystem::path GetEngineShaderPath() const;
+
         //call after config manager init
         const MoerInitConfig& GetInitConfig() const { return init_config; }
 
     private:
         MoerInitConfig init_config;
     };
+
 }// namespace Moer
 
 #endif//MOER_ENGINE_CONFIG_MANAGER_H

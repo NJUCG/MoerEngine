@@ -19,10 +19,10 @@ namespace Moer {
         ~FrameEndSync();
 
         /**
-	 * Syncs the game thread with the render thread. Depending on passed in bool this will be a total
-	 * sync or a one frame lag.
-	 */
-        RENDER_API void Sync(bool b_allow_one_frame_lag);
+        * Syncs the main thread with the render thread. Depending on passed in bool this will be a total
+        * sync or a one frame lag.
+        */
+        void Sync(bool b_allow_one_frame_lag);
 
     private:
         void Cleanup();

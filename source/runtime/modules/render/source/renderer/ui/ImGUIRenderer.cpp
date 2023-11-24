@@ -1,4 +1,5 @@
 #include "ImGUIRenderer.h"
+#include "IconsFontAwesome6.h"
 #include "RenderThread.h"
 #include "config/ConfigManager.h"
 #include "rhi/RHI.h"
@@ -11,9 +12,13 @@
 
 #include "math/Math.h"
 
+#include "taskgraph/GraphTask.h"
+#include "taskgraph/ThreadManager.h"
 #include "window/WindowContext.h"
 
+#include <atomic>
 #include <imgui.h>
+#include <imgui_internal.h>
 
 struct UIFrameData {
 
@@ -88,6 +93,7 @@ public:
 IMPLEMENT_SHADER_TYPE(ImGuiShaderFrag, "GuiFrag.frag", "main", ST_FRAGMENT)
 
 void GuiInitPlatformInterface();
+void UpdateFontsTexture();
 bool CreateDeviceObjects();
 void DestroyRenderBuffers(GuiFrameRenderBuffers* _render_buffers);
 void InvalidateDeviceObjects();
@@ -326,6 +332,7 @@ GuiBackendData::~GuiBackendData() {
 
 bool CreateDeviceObjects();
 void CreateFontsTexture();
+
 void SetupRenderState(ImDrawData* draw_data, RHIGraphicsCommandList* commandList, GuiFrameRenderBuffers* render_buffers);
 
 void GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list) {
@@ -700,6 +707,40 @@ void CreateFontsTexture() {
     io.Fonts->SetTexID((ImTextureID)backend_data->font_view);
 }
 
+void UpdateFontsTexture() {
+    // Moer::WindowContext::ConsumeAddFontRequests(AddFont);
+
+    // GuiBackendData* backend_data = GetBackendData();
+
+    // if (backend_data->b_dispatch_update_font_texture) {
+    //     backend_data->b_dispatch_update_font_texture = false;
+    //     FunctionGraphTask::ConstructAndDispatchWhenReady(
+    //         []() {
+    //             if (GetBackendData()->update_font_texture_call.load(std::memory_order_acquire)) return;
+
+    //             assert(GetBackendData()->update_font_texture_call.load(std::memory_order_acquire) == 0 &&
+    //                    "update_font_texture_call should be 0 before update font texture");
+
+    //             ImGuiIO& io = ImGui::GetIO();
+
+    //             GetBackendData()->atlas = new ImFontAtlas(*io.Fonts);
+    //             auto& atlas             = *GetBackendData()->atlas;
+    //             // atlas.ClearInputData();
+    //             atlas.Build();
+
+    //             GetBackendData()->update_font_texture_call.fetch_add(1, std::memory_order_release);
+    //         },
+    //         nullptr,
+    //         EThread::AnyThread_NormalPri);
+    // }
+    // if (backend_data->update_font_texture_call) {
+
+    //     ImGui::GetIO().Fonts = backend_data->atlas.load(std::memory_order_acquire);
+
+    //     backend_data->update_font_texture_call.fetch_sub(1, std::memory_order_release);
+    //     CreateFontsTexture();
+    // }
+}
 void GuiCreateWindow(ImGuiViewport* viewport);
 void GuiDestroyWindow(ImGuiViewport* viewport);
 void GuiSetWindowSize(ImGuiViewport* viewport, ImVec2 size);
@@ -739,6 +780,9 @@ void GuiCreateWindow(ImGuiViewport* viewport) {
                                 viewport->PlatformHandle :
                                 viewport->PlatformHandleRaw)};
     viewport_info.window_handle = &handle;
+
+    //TODO: should be controlled by UI
+    viewport_info.b_vsync = false;
     // viewport_info.window_handle = viewport->PlatformHandleRaw;
     viewport_data->frame_index = 0;
 

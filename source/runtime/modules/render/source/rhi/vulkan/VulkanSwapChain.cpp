@@ -43,7 +43,7 @@ void VulkanSwapChain::Create(uint32_t* width, uint32_t* height, bool vsync) {
 
     auto details      = VkUtil::QuerySwapChainSupport(device->GetGpu(), m_surface);
     surface_format    = ChooseSwapSurfaceFormat(details.formats);
-    auto present_mode = ChooseSwapPresentMode(details.present_modes, true);
+    auto present_mode = ChooseSwapPresentMode(details.present_modes, vsync);
     extent            = ChooseSwapExtent(width, height, details.capabilities);
     extent.width      = *width;
     extent.height     = *height;

@@ -1,5 +1,6 @@
 #include "config.h"
 
+#include "config/ConfigManager.h"
 #include "log/LogSystem.h"
 #include "rhi/RHI.h"
 #include "rhi/RHIResource.h"
@@ -602,8 +603,8 @@ void VulkanRHIImpl::InitVulkan() {
     VulkanSwapChain* swap_chain = new VulkanSwapChain();
     swap_chain->Connect(m_instance, m_surface, m_device);
     uint32_t width, height;
-    // glfwGetFramebufferSize(m_window, &width, &height);
-    swap_chain->Init(&width, &height, true);
+
+    swap_chain->Init(&width, &height, Moer::ConfigManager::GetInstance().GetInitConfig().editor_vsync);
     m_main_viewport = new VulkanViewport(swap_chain, max_frame_in_flight);
 }
 
@@ -764,7 +765,7 @@ RHIViewportRef VulkanRHIImpl::RHICreateViewport(const RHIViewportInitializer& _i
     VkSurfaceKHR     surface;
     Moer::WindowContext::CreateVulkanSurface(m_instance, _init.window_handle, nullptr, &surface);
     swapchain->Connect(m_instance, surface, m_device);
-    swapchain->Init(&width, &height, true);
+    swapchain->Init(&width, &height, _init.b_vsync);
 
     VulkanViewport* viewport = new VulkanViewport(swapchain, max_frame_in_flight);
 

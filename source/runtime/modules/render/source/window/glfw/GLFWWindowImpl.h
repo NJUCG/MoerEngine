@@ -16,6 +16,7 @@ namespace Moer {
         virtual void Tick() override;
         virtual void ShutDown() override;
 
+        virtual void AddFont(const FontDesc& _font_desc) override;
         //for multi-window support
         virtual void  SetFocusMode(WindowHandle*, bool _focused) override;
         virtual void  GetWindowSize(WindowHandle*, int32_t* width, int32_t* height) const override;

@@ -3,10 +3,11 @@ set(moer_runtime_dir ${moer_source_dir}/runtime)
 
 set(moer_runtime_core_dir ${moer_runtime_dir}/core)
 set(moer_runtime_module_root_dir ${moer_runtime_dir}/modules)
-add_subdirectory(core)
 
+add_subdirectory(core)
 add_subdirectory(modules/render)
 add_subdirectory(modules/resource)
+
 
 # add_subdirectory(functions)
 file(GLOB  ENGINE_HEADERS   "*.h")
