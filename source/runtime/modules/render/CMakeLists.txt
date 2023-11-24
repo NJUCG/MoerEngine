@@ -16,6 +16,11 @@ target_compile_definitions(${MODULE_NAME} PUBLIC RENDER_MODULE_SHARED_LIB
     PUBLIC "GLOBAL_SHADER_RESOURCE_OUTPUT=${moer_root_dir}/shaders/compiled"
     )
 
+if (MSVC)
+else()
+    target_compile_options(${MODULE_NAME} PRIVATE "-Wno-nullability-completeness")
+endif()
+
 set_target_properties(${MODULE_NAME} PROPERTIES FOLDER "runtime")
 
 target_include_directories(${MODULE_NAME}
