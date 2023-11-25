@@ -24,3 +24,8 @@ target_include_directories(${target_name}
 target_link_libraries(${target_name}
     PUBLIC spdlog::spdlog_header_only
 )
+
+add_executable(TaskGraphTest "source/test/TaskGraphTest.cpp")
+target_link_libraries(TaskGraphTest
+    PUBLIC ${target_name}
+)

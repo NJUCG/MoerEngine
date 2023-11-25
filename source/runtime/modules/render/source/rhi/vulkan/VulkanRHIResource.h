@@ -418,13 +418,13 @@ public:
     uint64_t GetValue() const override;
 
     void               Wait(uint64_t value) override;
-    inline VkSemaphore GetSemaphoreHandle() { return m_semaphore; }
+    inline VkSemaphore GetSemaphoreHandle() { return m_timeline; }
     inline VkSemaphore GetBinaryHandle() { return m_binary; }
     inline EFenceUsage GetUsage() { return usage; }
 
 private:
     VulkanDevice* m_device;
-    VkSemaphore   m_semaphore;
+    VkSemaphore   m_timeline;
     VkSemaphore   m_binary;
     EFenceUsage   usage;
 };

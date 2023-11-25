@@ -1473,7 +1473,7 @@ VkImageUsageFlags VulkanRHITexture::METoVKImageUsageFlags(ETextureUsageFlags _me
 
 #pragma region synchronization
 
-VulkanRHIFence::VulkanRHIFence(VulkanDevice* _device, EFenceUsage _usage) : m_device(_device), m_binary(VK_NULL_HANDLE), m_semaphore(VK_NULL_HANDLE), usage(_usage) {
+VulkanRHIFence::VulkanRHIFence(VulkanDevice* _device, EFenceUsage _usage) : m_device(_device), m_binary(VK_NULL_HANDLE), m_timeline(VK_NULL_HANDLE), usage(_usage) {
     VkSemaphoreCreateInfo create_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
     if (_usage != EFenceUsage::TIMELINE) {
         //do nothing
@@ -1485,7 +1485,7 @@ VulkanRHIFence::VulkanRHIFence(VulkanDevice* _device, EFenceUsage _usage) : m_de
     timeline_semaphore_info.initialValue  = 0;
 
     create_info.pNext = &timeline_semaphore_info;
-    VK_CHECK_RESULT(vkCreateSemaphore(m_device->GetDevice(), &create_info, nullptr, &m_semaphore));
+    VK_CHECK_RESULT(vkCreateSemaphore(m_device->GetDevice(), &create_info, nullptr, &m_timeline));
 }
 
 VulkanRHIFence::~VulkanRHIFence() {
@@ -1497,20 +1497,20 @@ VulkanRHIFence::~VulkanRHIFence() {
     if (m_binary != VK_NULL_HANDLE) {
         vkDestroySemaphore(m_device->GetDevice(), m_binary, VK_NULL_HANDLE);
     }
-    if (m_semaphore != VK_NULL_HANDLE) {
-        vkDestroySemaphore(m_device->GetDevice(), m_semaphore, VK_NULL_HANDLE);
+    if (m_timeline != VK_NULL_HANDLE) {
+        vkDestroySemaphore(m_device->GetDevice(), m_timeline, VK_NULL_HANDLE);
     }
 }
 
 uint64_t VulkanRHIFence::GetValue() const {
     uint64_t value;
-    vkGetSemaphoreCounterValue(m_device->GetDevice(), m_semaphore, &value);
+    vkGetSemaphoreCounterValue(m_device->GetDevice(), m_timeline, &value);
     return value;
 }
 
 void VulkanRHIFence::Wait(uint64_t value) {
     VkSemaphoreWaitInfo info{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
-    info.pSemaphores    = &m_semaphore;
+    info.pSemaphores    = &m_timeline;
     info.semaphoreCount = 1;
     info.pValues        = &value;
     vkWaitSemaphores(m_device->GetDevice(), &info, UINT64_MAX);

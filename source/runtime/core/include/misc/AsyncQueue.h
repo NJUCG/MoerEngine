@@ -85,122 +85,95 @@ private:
     std::deque<T*> m_queue;
 };
 
-typedef uint64_t      l_ptr_t;
-typedef uint32_t      ptr_t;
-typedef uint16_t      tag_t;
 static const uint64_t ptr_mask   = ((1ull << 32) - 1) << 32;
 static const uint64_t tag_mask   = 0xffff0000;
 static const uint16_t stat_mask  = 3;
 static const uint16_t stat_sheft = 2;
 static const uint32_t tag_index  = 2;
+struct ABADoublePtr {
+    static constexpr uint64_t max_ptr_bit_count = 32;
+    /**
+ * @brief 0xffffffff00000000 for state
+ *        0x00000000ffffffff for ptr
+ *        0x00ff0000000000 for tag
+ *        0xff000000000003 for reserved
+ *        0x0000ffff00000003 for counter 
+ */
+    static constexpr uint64_t s_tag_offset          = 48;
+    static constexpr uint64_t s_tag_offset_in_state = 8;
 
-struct DoublePtr {
-public:
-    DoublePtr(DoublePtr& other) : value{other.value.load()} {
+    static constexpr uint64_t s_state_mask = ~((1ull << max_ptr_bit_count) - 1);
+
+    static constexpr uint64_t s_ptr_mask = (1ull << max_ptr_bit_count) - 1;
+
+    static constexpr uint64_t s_tag_mask = 0xffull << s_tag_offset;
+
+    static constexpr uint64_t s_counter_mask_in_state = 0xffffull;
+
+    ABADoublePtr(uint64_t _value) : value{_value} {
     }
-    DoublePtr() : value{0} {}
-    DoublePtr(l_ptr_t val) : value{val} {
+    ABADoublePtr(ABADoublePtr& other) : value{other.value.load()} {
     }
-    DoublePtr(ptr_t ptr, tag_t tag) : DoublePtr(((0ull | ptr) << 32) | ((0ull | tag) << 16)) {
+    ABADoublePtr() : value{0} {}
+
+    uint64_t GetState() {
+        return (value & s_state_mask) >> max_ptr_bit_count;
     }
-    DoublePtr(DoublePtr&& other) : value{other.value.load()} {
+    uint32_t GetPtr() {
+        return value & s_ptr_mask;
     }
-    DoublePtr& operator=(DoublePtr& other) {
+    uint64_t GetTag() {
+        return (value & s_tag_mask) >> s_tag_offset;
+    }
+    void SetAll(uint32_t _ptr, uint64_t _state) {
+        value = _ptr | (_state << max_ptr_bit_count);
+    }
+    void SetPtr(uint32_t _ptr) {
+        value = _ptr | value;
+    }
+    void SetTag(uint64_t _tag) {
+        SetState((_tag << s_tag_offset_in_state) | GetState());
+    }
+    void SetState(uint64_t _state) {
+        SetAll(GetPtr(), _state);
+    }
+    void AdvanceCounter(uint64_t _increment) {
+        uint64_t state = GetState();
+        //avoid overflow
+        SetState(((state + _increment) & s_counter_mask_in_state) | (state & ~s_counter_mask_in_state));
+    }
+
+    uint64_t AtomicLoad(std::memory_order _order) {
+        return value.load(_order);
+    }
+    bool AtomicCompareExchangeWeak(uint64_t _expected, uint64_t _desired, std::memory_order _order) {
+        return value.compare_exchange_weak(_expected, _desired, _order);
+    }
+    bool AtomicCompareExchangeStrong(uint64_t _expected, uint64_t _desired, std::memory_order _order) {
+        return value.compare_exchange_strong(_expected, _desired, _order);
+    }
+
+    bool AtomicCompareExchangeWeak(const ABADoublePtr& _expected, const ABADoublePtr& _desired, std::memory_order _order) {
+        return value.compare_exchange_weak((uint64_t&)_expected.value, _desired.value, _order);
+    }
+    bool AtomicCompareExchangeStrong(const ABADoublePtr& _expected, const ABADoublePtr& _desired, std::memory_order _order) {
+        return value.compare_exchange_strong((uint64_t&)_expected.value, _desired.value, _order);
+    }
+
+    bool operator==(ABADoublePtr& other) {
+        return value == other.value;
+    }
+    bool operator!=(ABADoublePtr& other) {
+        return value != other.value;
+    }
+
+    ABADoublePtr& operator=(const ABADoublePtr& other) {
         this->value = other.value.load();
         return *this;
     }
-    DoublePtr& operator=(DoublePtr&& other) {
-        this->value = other.value.load();
-        return *this;
-    }
-    tag_t get_tag() {
-
-        return (value & tag_mask) >> 16;
-        ;
-    }
-    tag_t get_stat() {
-        return get_tag() & stat_mask;
-    }
-    ptr_t get_ptr() {
-
-        return (value & ptr_mask) >> 32;
-    }
-
-    void set_ptr(ptr_t _ptr) {
-        l_ptr_t v = _ptr;
-
-        value = v << 32 | value & tag_mask;
-    }
-    bool compare_exchange_weak(l_ptr_t expected, l_ptr_t desired) {
-        return value.compare_exchange_weak(expected, desired);
-    }
-    bool compare_exchange_strong(l_ptr_t expected, l_ptr_t desired) {
-        return value.compare_exchange_strong(expected, desired);
-    }
-    operator l_ptr_t() {
-        return value.load();
-    }
-    std::atomic<l_ptr_t> value;
+    std::atomic<uint64_t> value;
 };
 
-static tag_t advance_tag(tag_t in_tag) {
-    return (((in_tag >> stat_sheft) + 1) << stat_sheft) | in_tag & stat_mask;
-}
-static DoublePtr advance_ptr(DoublePtr target) {
-    return DoublePtr(target.get_ptr(), (((target.get_tag() >> stat_sheft) + 1) << stat_sheft) | target.get_stat());
-}
-static DoublePtr set_state(DoublePtr target, tag_t state) {
-
-    return DoublePtr((target.get_ptr(), (target.get_tag() & ~tag_mask)) | (state & stat_mask));
-}
-static DoublePtr advance_ptr_and_state(DoublePtr target, tag_t state) {
-    return DoublePtr(advance_ptr(set_state(target, state)));
-}
-
-template<typename T>
-class LockFreeQueue {
-
-    struct Node {
-        friend class LockFreeQueue;
-
-    public:
-        Node(T* _value, DoublePtr _next) : value{_value}, next{_next} {}
-        void set_next(DoublePtr _next) {
-            next = _next;
-        }
-
-    private:
-        T*        value;
-        DoublePtr next;
-    };
-
-public:
-    LockFreeQueue() : m_head(0, 0), m_tail(0, 0) {
-    }
-    bool push(T* value) {
-        Node new_node(value, 0);
-        for (;;) {
-            //push to tail  index of tail become 1 if head
-            DoublePtr local_tail(m_tail);
-            //            int       new_index = local_tail.get_ptr() + 1;
-            int       new_index = local_tail.get_ptr() + 1;
-            DoublePtr local_head(m_head);
-            DoublePtr new_tail(local_head.get_ptr() + 1, advance_tag(local_head.get_tag()));
-            Node&     node = pool[local_head.get_ptr() % capacity];
-            node.next      = new_index;
-            if (local_head.get_ptr() == local_tail.get_ptr()) {
-                //empty queue
-            }
-        }
-        return true;
-    }
-
-private:
-    DoublePtr             m_head;
-    DoublePtr             m_tail;
-    std::vector<Node>     pool;
-    std::atomic<uint32_t> capacity;
-};
 template<typename T, uint32_t TaskPriorityCount>
 class TaskFIFOQueue {
 
@@ -221,28 +194,32 @@ class TaskFIFOQueue {
 public:
     TaskFIFOQueue() : state{0} {};
     int32_t Push(T* task, uint32_t index) {
-        DoublePtr local_state;
-        DoublePtr new_state;
-        int32_t   possibleThread = -1;
+        ABADoublePtr local_state;
+        ABADoublePtr new_state;
+        int32_t      possible_thread = -1;
         m_queue[index].push(task);
 
         do {
             local_state       = state;
-            uint32_t possible = local_state.get_ptr();
-            possibleThread    = GetFirstOne(possible);
-            new_state         = advance_ptr(local_state);
-            if (possibleThread >= 0) {
-                new_state.set_ptr(new_state.get_ptr() & ~(1ul << (32 - possibleThread - 1)));
+            uint32_t possible = local_state.GetPtr();
+            possible_thread   = GetFirstOne(possible);
+
+            new_state = local_state;
+            new_state.AdvanceCounter(1);
+            if (possible_thread >= 0) {
+                uint32_t thread_mask = ~(uint32_t(1u << (32 - possible_thread - 1)));
+
+                new_state.SetPtr(new_state.GetPtr() & thread_mask);
             }
-        } while (!state.compare_exchange_weak(local_state, new_state));
-        return possibleThread;
+        } while (!state.AtomicCompareExchangeWeak(local_state, new_state, std::memory_order_acq_rel));
+        return possible_thread;
     }
 
     T* Pop(int32_t index, bool allowHang = true) {
-        DoublePtr local_state(state.value.load(std::memory_order_acquire));
-        DoublePtr new_state;
-        T*        result = nullptr;
-        auto      func   = [&result](T* value) { result = value; };
+        ABADoublePtr local_state(state.AtomicLoad(std::memory_order_acquire));
+        ABADoublePtr new_state;
+        T*           result = nullptr;
+        auto         func   = [&result](T* value) { result = value; };
 
         do {
             for (int32_t i = 0; i < TaskPriorityCount; i++) {
@@ -250,23 +227,28 @@ public:
                 if (result != nullptr) {
                     do {
                         local_state = state;
-                        new_state   = advance_ptr(local_state);
+                        new_state.AdvanceCounter(1);
 
-                    } while (!state.compare_exchange_weak(local_state.value, new_state.value));
+                    } while (!state.AtomicCompareExchangeWeak(local_state.value, new_state.value, std::memory_order_acq_rel));
                     return result;
                 }
             }
             local_state = state;
-            new_state   = advance_ptr(local_state);
-            if (allowHang) new_state.set_ptr(new_state.get_ptr() | (1ul << (32 - index - 1)));
 
-        } while (!state.compare_exchange_weak(local_state.value, new_state.value));
+            new_state = local_state;
+            new_state.AdvanceCounter(1);
+            auto new_ptr = new_state.GetPtr() | (1ul << (32 - index - 1));
+            if (allowHang) new_state.SetPtr(new_ptr);
+
+        } while (!state.AtomicCompareExchangeWeak(local_state.value, new_state.value, std::memory_order_acq_rel));
         return result;
     }
 
 private:
     boost::lockfree::queue<T*, boost::lockfree::capacity<128>> m_queue[TaskPriorityCount];
-    DoublePtr                                                  state;
+    // DoublePtr                                                  state;
+
+    ABADoublePtr state;
 };
 
 #endif// !STAT_QUEUE_H

@@ -3,6 +3,7 @@
 
 #include "TaskGraph.h"
 namespace Moer {
+    CORE_API bool  TaskGraphTest();
     class CORE_API TaskSystem {
     public:
         TaskSystem() = default;

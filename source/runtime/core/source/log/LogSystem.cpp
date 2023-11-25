@@ -136,36 +136,14 @@ private:
 namespace Moer {
     namespace LogSystem {
         void Init() {
-            spdlog::set_pattern("%^[%T] %n: %v%$");
-            basic_file_logger = spdlog::basic_logger_mt("basic_file_logger", "logs/log.txt");
-            basic_file_logger->set_level(spdlog::level::info);
-            basic_file_logger->flush_on(spdlog::level::n_levels);
-            basic_file_logger->info("test_flush!");
-            basic_file_logger->error("Some error message with arg: {}", 1);
-            basic_file_logger->warn("Easy padding in numbers like {:08d}", 12);
-            basic_file_logger->critical("Support for int: {0:d}; hex: {0:x}; oct: {0:o}; bin: {0:b}", 42);
-            basic_file_logger->info("Support for floats {:03.2f}", 1.23456);
-            basic_file_logger->info("Positional args are {1} {0}..", "too", "supported");
-            basic_file_logger->info("{:<30}", "left aligned");
-            spdlog::set_level(spdlog::level::debug);// Set global log level to debug
-            basic_file_logger->debug("This message should be displayed..");
-            basic_file_logger->set_level(spdlog::level::info);// Set specific logger's log level
-            basic_file_logger->debug("This message should not be displayed..");
-            basic_file_logger->flush();
-
             auto console_sink = std::make_shared<Sink>();
 #if PLATFORM_WINDOWS
-            // console_sink->set_color(spdlog::level::info, console_sink->WHITE);
-            // console_sink->set_level(spdlog::level::info);
             console_sink->set_color_mode(spdlog::color_mode::always);
             console_sink->set_level(spdlog::level::debug);
 #endif
             spdlog::sinks::stderr_sink_st stl;
             spdlog::logger                console("console", {console_sink});
-            // console.info("info");
             console.set_level(spdlog::level::debug);
-            console.debug("debug");
-            console.info("debug");
         }
 }
 }// namespace Moer::LogSystem

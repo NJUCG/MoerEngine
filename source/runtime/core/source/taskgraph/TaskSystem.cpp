@@ -60,8 +60,6 @@ private:
 //MTestRenderThread* g_render_thread_runnable;
 //RunnableThread* g_render_thread;
 
-bool TaskGraphTest();
-
 namespace Moer {
     void TaskSystem::Init() {
         TaskGraph::Init();
@@ -108,7 +106,7 @@ namespace Moer {
 //	return 0;
 //}
 
-bool TaskGraphTest() {
+bool Moer::TaskGraphTest() {
     // UE task graph test
     SPDLOG_INFO("===============test started================");
     {// task completes before it's waited for
