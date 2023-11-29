@@ -9,8 +9,8 @@
 #include <vector>
 #include "misc/MacroUtils.h"
 
-extern const char* g_global_shader_resource_root_dir;
-extern const char* g_global_shader_resource_output_dir;
+// extern const char* g_global_shader_resource_root_dir;
+// extern const char* g_global_shader_resource_output_dir;
 
 struct ShaderCompiledInitializer;
 

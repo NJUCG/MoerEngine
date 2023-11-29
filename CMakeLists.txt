@@ -1,8 +1,4 @@
 cmake_minimum_required(VERSION 3.26.0)
-# Policy configuration
-if(POLICY CMP0091)
-    cmake_policy(SET CMP0091 NEW) # Enables use of MSVC_RUNTIME_LIBRARY
-endif()
 
 project(MoerEngine LANGUAGES CXX)
 set(PROJECT_VERSION_MAJOR 0)
@@ -25,8 +21,8 @@ set(BINARY_ROOT_DIR "${CMAKE_INSTALL_PREFIX}")
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${BINARY_ROOT_DIR}/bin)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${BINARY_ROOT_DIR}/lib)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${BINARY_ROOT_DIR}/lib)
+set(CMAKE_PDB_OUTPUT_DIRECTORY ${BINARY_ROOT_DIR}/bin)
 
-add_definitions(-DASSET_DIR="${moer_root_dir}/asset")
 add_compile_definitions(EDITOR_MODE_ON=1)
 
 option(moer_build_test "build test unit" ON)

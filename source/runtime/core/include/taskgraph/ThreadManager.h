@@ -103,9 +103,9 @@ class RunnableThread {
     friend class TaskGraph;
 
 public:
-    CORE_API static RunnableThread* Create(Runnable*   runnable,
-                                           std::string name,
-                                           uint64_t    affinity_mask);
+    CORE_API static RunnableThread* Create(Runnable*          runnable,
+                                           const std::string& name,
+                                           uint64_t           affinity_mask);
     virtual ~RunnableThread();
     void Tick();
     void Join() {
@@ -116,18 +116,18 @@ public:
     bool Joinable() { return m_thread->joinable(); }
     void WaitUntilFinished();
 
-    inline const std::string& getName() { return name; }
+    inline const std::string& GetName() { return name; }
 
 protected:
     void Setup(uint64_t affinity);
     RunnableThread(Runnable*,
-                   std::string name);
+                   const std::string& name);
     uint32_t Run();
 
 private:
     Runnable*    m_runnable;
-    Event*       m_createEvent;
-    Event*       m_endEvent;
+    Event*       m_create_event;
+    Event*       m_end_event;
     uint32_t     id;
     std::string  name;
     std::thread* m_thread;

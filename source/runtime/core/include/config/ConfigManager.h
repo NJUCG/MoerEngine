@@ -33,6 +33,8 @@ namespace Moer {
         std::unordered_map<std::string, std::string> configs;
 
         std::filesystem::path workspace_path;
+        std::filesystem::path editor_resource_path;
+        std::filesystem::path engine_shader_path;
         ConfigManager() {}
 
     public:
@@ -42,11 +44,11 @@ namespace Moer {
 
         // std::string GetConfig(const std::string& key);
 
-        const std::filesystem::path GetWorkspacePath() const;
+        const std::filesystem::path& GetWorkspacePath() const;
 
-        const std::filesystem::path GetEditorResourcePath() const;
+        const std::filesystem::path& GetEditorResourcePath() const;
 
-        const std::filesystem::path GetEngineShaderPath() const;
+        const std::filesystem::path& GetEngineShaderPath() const;
 
         //call after config manager init
         const MoerInitConfig& GetInitConfig() const { return init_config; }

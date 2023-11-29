@@ -39,3 +39,14 @@ target_link_libraries(VulkanRHITest
 )
 
 set_target_properties(VulkanRHITest PROPERTIES FOLDER ${moer_test_folder})
+
+
+add_executable(TaskGraphTest "TaskGraphTest.cpp")
+target_include_directories(TaskGraphTest
+PUBLIC $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
+)
+target_link_libraries(TaskGraphTest
+        # PUBLIC mimalloc
+        PUBLIC MoerRuntimeCore
+)
+set_target_properties(TaskGraphTest PROPERTIES FOLDER ${moer_test_folder})

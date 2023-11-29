@@ -12,9 +12,3 @@ add_library(ImGui::imgui ALIAS imgui)
 if(WIN32)
     set_property(TARGET imgui PROPERTY WINDOWS_EXPORT_ALL_SYMBOLS ON)
 endif()
-
-# add_executable(binary_to_compressed ${imgui_source_dir}/misc/fonts/binary_to_compressed_c.cpp)
-# #release o3
-# target_compile_options(binary_to_compressed PUBLIC -O3 -Wall)
-
-# add_dependencies(imgui binary_to_compressed)

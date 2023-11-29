@@ -2,6 +2,7 @@
 #define STAT_QUEUE_H
 #include <atomic>
 #include <mutex>
+#include <stdalign.h>
 #include <vector>
 #include <deque>
 #include "boost/lockfree/lockfree_forward.hpp"
@@ -90,17 +91,17 @@ static const uint64_t tag_mask   = 0xffff0000;
 static const uint16_t stat_mask  = 3;
 static const uint16_t stat_sheft = 2;
 static const uint32_t tag_index  = 2;
-struct ABADoublePtr {
+struct alignas(8) ABADoublePtr {
     static constexpr uint64_t max_ptr_bit_count = 32;
     /**
  * @brief 0xffffffff00000000 for state
  *        0x00000000ffffffff for ptr
- *        0x00ff0000000000 for tag
- *        0xff000000000003 for reserved
- *        0x0000ffff00000003 for counter 
+ *        0x0ff0000000000000 for tag
+ *        0xf000000000000000 for reserved
+ *        0x000fffff00000000 for counter 
  */
-    static constexpr uint64_t s_tag_offset          = 48;
-    static constexpr uint64_t s_tag_offset_in_state = 8;
+    static constexpr uint64_t s_tag_offset          = 52;
+    static constexpr uint64_t s_tag_offset_in_state = 20;
 
     static constexpr uint64_t s_state_mask = ~((1ull << max_ptr_bit_count) - 1);
 
@@ -108,7 +109,9 @@ struct ABADoublePtr {
 
     static constexpr uint64_t s_tag_mask = 0xffull << s_tag_offset;
 
-    static constexpr uint64_t s_counter_mask_in_state = 0xffffull;
+    static constexpr uint64_t s_tag_mask_in_state = 0xffull << s_tag_offset_in_state;
+
+    static constexpr uint64_t s_counter_mask_in_state = 0xfffffull;
 
     ABADoublePtr(uint64_t _value) : value{_value} {
     }
@@ -173,6 +176,8 @@ struct ABADoublePtr {
     }
     std::atomic<uint64_t> value;
 };
+
+static_assert(sizeof(ABADoublePtr) == sizeof(uint64_t) && "size of ABADoublePtr is not equal to uint64_t");
 
 template<typename T, uint32_t TaskPriorityCount>
 class TaskFIFOQueue {

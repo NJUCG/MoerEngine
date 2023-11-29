@@ -21,11 +21,9 @@ target_include_directories(${target_name}
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/boost>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/spdlog/include>
 )
+
 target_link_libraries(${target_name}
-    PUBLIC spdlog::spdlog_header_only
+    PUBLIC mimalloc-static
+    PUBLIC spdlog
 )
 
-add_executable(TaskGraphTest "source/test/TaskGraphTest.cpp")
-target_link_libraries(TaskGraphTest
-    PUBLIC ${target_name}
-)

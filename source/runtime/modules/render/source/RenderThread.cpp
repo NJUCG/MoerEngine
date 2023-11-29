@@ -35,6 +35,7 @@ namespace Moer {
 
         RenderThread() {
             is_bound_to_taskgraph_event = EventPool::Get()->GetEvent(false);
+            int i                       = 1;
             //todo: flush
         }
 

@@ -178,8 +178,8 @@ namespace Moer {
     }
 
     void GLFWWindowImpl::AddFont(const FontDesc& _desc) {
-        const auto& font_base_path = Moer::ConfigManager::GetInstance().GetEditorResourcePath() / FONTS_DIR;
-        const auto& font_path      = font_base_path / _desc.font_path;
+        const auto font_base_path = Moer::ConfigManager::GetInstance().GetEditorResourcePath() / FONTS_DIR;
+        const auto font_path      = font_base_path / _desc.font_path;
 
         auto& io = ImGui::GetIO();
 

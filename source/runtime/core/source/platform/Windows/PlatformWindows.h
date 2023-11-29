@@ -12,5 +12,7 @@ public:
     virtual int32_t GetProcessorCoreCountInGroup(uint32_t groupID) override;
     virtual int32_t GetProcessorCoreCount() override;
     uint32_t        GetCurrentThreadID() override;
+
+    virtual const PlatformMemoryInfo& GetMemoryInfo() override;
 };
 #endif// !WINDOWS_PLATFORM_H

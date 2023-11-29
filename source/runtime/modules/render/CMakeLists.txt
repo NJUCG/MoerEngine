@@ -11,10 +11,7 @@ source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${RENDER_MODULE_HEADERS} ${R
 
 add_library(${MODULE_NAME} SHARED ${RENDER_MODULE_HEADERS} ${RENDER_MODULE_SOURCES})
 
-target_compile_definitions(${MODULE_NAME} PUBLIC RENDER_MODULE_SHARED_LIB
-    PUBLIC "GLOBAL_SHADER_RESOURCE_ROOT=${moer_root_dir}/shaders"
-    PUBLIC "GLOBAL_SHADER_RESOURCE_OUTPUT=${moer_root_dir}/shaders/compiled"
-    )
+target_compile_definitions(${MODULE_NAME} PUBLIC RENDER_MODULE_SHARED_LIB)
 
 if (MSVC)
 else()
@@ -36,7 +33,6 @@ target_include_directories(${MODULE_NAME}
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/VulkanMemoryAllocator>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/imgui>
 )
-message(${moer_third_party_dir}/DirectX-Headers/include)
 target_link_libraries(${MODULE_NAME}
     PUBLIC ${vulkan_lib}
     PRIVATE spirv-reflect-static

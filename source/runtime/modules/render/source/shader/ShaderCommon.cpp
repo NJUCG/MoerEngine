@@ -9,8 +9,8 @@
 
 #pragma region shaderParameters metadata
 
-const char* g_global_shader_resource_root_dir   = MACRO_STR(GLOBAL_SHADER_RESOURCE_ROOT);
-const char* g_global_shader_resource_output_dir = MACRO_STR(GLOBAL_SHADER_RESOURCE_OUTPUT);
+// const char* g_global_shader_resource_root_dir   = MACRO_STR(GLOBAL_SHADER_RESOURCE_ROOT);
+// const char* g_global_shader_resource_output_dir = MACRO_STR(GLOBAL_SHADER_RESOURCE_OUTPUT);
 
 ShaderParametersMetadata::ShaderParametersMetadata(
     EShaderParameterUseCase    _use_case,

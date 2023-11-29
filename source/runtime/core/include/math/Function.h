@@ -188,9 +188,9 @@ namespace Moer {
 // implementation
 namespace Moer {
     template<NumericType T>
-    inline T Max(T lhs, T rhs) noexcept { return std::max(lhs, rhs); }
+    inline T Max(T lhs, T rhs) noexcept { return (std::max)(lhs, rhs); }
     template<NumericType T>
-    inline T Min(T lhs, T rhs) noexcept { return std::min(lhs, rhs); }
+    inline T Min(T lhs, T rhs) noexcept { return (std::min)(lhs, rhs); }
     template<VectorType T>
     inline T Max(const T& lhs, const T& rhs) noexcept {
         T ret;
@@ -470,6 +470,28 @@ namespace Moer {
         return v - 2. * n * Dot(n, v);
     }
 
+    inline uint64_t RoundUpToPowerOf2(uint64_t v) noexcept {
+        v--;
+        v |= v >> 1u;
+        v |= v >> 2u;
+        v |= v >> 4u;
+        v |= v >> 8u;
+        v |= v >> 16u;
+        v |= v >> 32u;
+        v++;
+        return v;
+    }
+
+    inline uint32_t RoundUpToPowerOf2(uint32_t v) noexcept {
+        v--;
+        v |= v >> 1u;
+        v |= v >> 2u;
+        v |= v >> 4u;
+        v |= v >> 8u;
+        v |= v >> 16u;
+        v++;
+        return v;
+    }
 }// namespace Moer
 
 namespace Moer {

@@ -102,7 +102,7 @@ RunnableThread::~RunnableThread() {
     Join();
 }
 
-RunnableThread* RunnableThread::Create(Runnable* runnable, std::string name, uint64_t affinity_mask) {
+RunnableThread* RunnableThread::Create(Runnable* runnable, const std::string& name, uint64_t affinity_mask) {
 
     RunnableThread* created_thread = nullptr;
 
@@ -115,12 +115,12 @@ RunnableThread* RunnableThread::Create(Runnable* runnable, std::string name, uin
 void RunnableThread::Tick() {
 }
 
-RunnableThread::RunnableThread(Runnable* inRunnable, std::string name) {
+RunnableThread::RunnableThread(Runnable* inRunnable, const std::string& name) {
     assert(inRunnable != nullptr);
-    m_runnable    = inRunnable;
-    m_createEvent = EventPool::Get()->GetEvent(false);
-    m_endEvent    = EventPool::Get()->GetEvent(false);
-    EventRef create_event(m_createEvent);
+    m_runnable     = inRunnable;
+    m_create_event = EventPool::Get()->GetEvent(false);
+    m_end_event    = EventPool::Get()->GetEvent(false);
+    EventRef create_event(m_create_event);
     m_thread = new std::thread(&RunnableThread::Run, this);
     create_event.Wait();
     this->name = name;
@@ -130,18 +130,18 @@ RunnableThread::RunnableThread(Runnable* inRunnable, std::string name) {
 uint32_t RunnableThread::Run() {
     assert(m_runnable != nullptr);
     id = Platform::GetCurrentThreadID();
-    m_createEvent->Trigger();
+    m_create_event->Trigger();
     m_runnable->Init();
 
     uint32_t exit_code = m_runnable->Run();
 
     m_runnable->Exit();
-    m_endEvent->Trigger();
+    m_end_event->Trigger();
     return exit_code;
 }
 
 void RunnableThread::WaitUntilFinished() {
-    m_endEvent->Wait();
+    m_end_event->Wait();
 }
 
 uint32_t TestRunnanble::Run() {

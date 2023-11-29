@@ -13,7 +13,10 @@ namespace Moer {
     }
 
     void ConfigManager::Init(const std::filesystem::path& _workspace_path) {
-        workspace_path                    = _workspace_path;
+        workspace_path       = _workspace_path;
+        editor_resource_path = _workspace_path / "resource";
+        engine_shader_path   = _workspace_path / "resource" / "shaders";
+
         std::filesystem::path config_path = _workspace_path / CONFIG_DIR / "MoerEngine.ini";
         if (!std::filesystem::exists(config_path)) {
             throw std::runtime_error("Config directory does not exist");
@@ -45,15 +48,15 @@ namespace Moer {
     //     return configs[key];
     // }
 
-    const std::filesystem::path ConfigManager::GetWorkspacePath() const {
+    const std::filesystem::path& ConfigManager::GetWorkspacePath() const {
         return workspace_path;
     }
 
-    const std::filesystem::path ConfigManager::GetEditorResourcePath() const {
-        return workspace_path / "resource";
+    const std::filesystem::path& ConfigManager::GetEditorResourcePath() const {
+        return editor_resource_path;
     }
 
-    const std::filesystem::path ConfigManager::GetEngineShaderPath() const {
-        return workspace_path / "resource" / "shader";
+    const std::filesystem::path& ConfigManager::GetEngineShaderPath() const {
+        return engine_shader_path;
     }
 }// namespace Moer
