@@ -11,6 +11,7 @@ public:
     static void* CallocAligned(size_t count, size_t size, size_t alignment) noexcept;
     static void* ReAlloc(void* p, size_t newsize) noexcept;
     static void  Free(void* p) noexcept;
+    static void  Free(void* p, size_t size) noexcept;
 };
 struct MoerNewStub {};
 inline void* operator new(size_t, MoerNewStub, void* ptr) { return ptr; }

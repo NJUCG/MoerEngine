@@ -7,7 +7,7 @@
 #include "misc/CountableRef.h"
 class GraphEvent;
 typedef CountableRef<GraphEvent>   GraphEventRef;
-typedef std::vector<GraphEventRef> GraphEventArray;
+typedef Moer::Array<GraphEventRef> GraphEventArray;
 enum class ESchedule {
     Max_Local_Capacity = 16
 };

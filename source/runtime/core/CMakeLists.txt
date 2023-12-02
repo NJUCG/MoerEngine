@@ -9,7 +9,7 @@ option(MOER_CORE_SHARED_LIB "" ON)
 
 if(MOER_CORE_SHARED_LIB)
     add_library(${target_name} SHARED ${CORE_HEADERS} ${CORE_SOURCES} ${CORE_PRIVATE_HEADERS})
-    target_compile_definitions(${target_name} PUBLIC MOER_CORE_SHARED_LIB)
+    target_compile_definitions(${target_name} PRIVATE MOER_CORE_SHARED_LIB)
 else()
     add_library(${target_name} STATIC ${CORE_HEADERS} ${CORE_SOURCES} ${CORE_PRIVATE_HEADERS})
 endif()

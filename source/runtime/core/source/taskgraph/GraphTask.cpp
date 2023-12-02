@@ -1,4 +1,5 @@
 #include "taskgraph/GraphTask.h"
+#include "misc/STL.h"
 #include "taskgraph/TaskGraph.h"
 #include "taskgraph/Event.h"
 //class GraphEventPool {
@@ -17,6 +18,7 @@ GraphEventRef GraphEvent::CreateGraphEvent() {
 };
 
 bool GraphEvent::AddSubsequent(BaseGraphTask* subsequent) {
+    // return m_subsequents.TryPush(subsequent);
     return m_subsequents.TryPush(subsequent);
 }
 bool GraphEvent::IsComplete() {
@@ -33,7 +35,7 @@ void BaseGraphTask::PrerequestsComplete(EThread::Type currentThread, int32_t fin
     }
 }
 
-void GraphEvent::TryUnlockSubsequents(std::vector<BaseGraphTask*>& tasks, EThread::Type currentThread) {
+void GraphEvent::TryUnlockSubsequents(Moer::Array<BaseGraphTask*>& tasks, EThread::Type currentThread) {
     if (tasks.size() > 0) {
         GraphEventArray temp_events;
         std::swap(m_events_to_wait, temp_events);// m_events removed
@@ -54,8 +56,15 @@ void GraphEvent::TryUnlockSubsequents(std::vector<BaseGraphTask*>& tasks, EThrea
         }
         return;
     }
-    std::vector<BaseGraphTask*> poped;
+    Moer::Array<BaseGraphTask*> poped;
+
+#if USE_BOOST_QUEUE
     m_subsequents.PopAll(poped);
+#else
+    m_subsequents.ComsumeAllAndClose(poped);
+    //reverse poped array
+    std::reverse(poped.begin(), poped.end());
+#endif
     bool should_wake_up_worker = false;// todo: useless in this version
     for (BaseGraphTask* task : poped) {
         assert(task != nullptr);
@@ -63,7 +72,7 @@ void GraphEvent::TryUnlockSubsequents(std::vector<BaseGraphTask*>& tasks, EThrea
     }
 }
 void GraphEvent::TryUnlockSubsequents(EThread::Type currentThread) {
-    std::vector<BaseGraphTask*> tasks;
+    Moer::Array<BaseGraphTask*> tasks;
     TryUnlockSubsequents(tasks, currentThread);
 }
 

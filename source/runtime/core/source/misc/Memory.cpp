@@ -25,6 +25,10 @@ void Memory::Free(void* p) noexcept {
     mi_free(p);
 }
 
+void Memory::Free(void* p, size_t size) noexcept {
+    mi_free_size(p, size);
+}
+
 void* Memory::MallocAligned(size_t size, size_t alignment) noexcept {
     return mi_malloc_aligned(size, alignment);
 }

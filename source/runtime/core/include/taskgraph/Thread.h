@@ -71,7 +71,7 @@ public:
 protected:
     WorkerThread*               m_worker;
     EThread::Type               m_threadType;
-    std::vector<BaseGraphTask*> m_graphTasks;
+    Moer::Array<BaseGraphTask*> m_graphTasks;
     std::atomic<uint32_t>       m_hanged;
 };
 
