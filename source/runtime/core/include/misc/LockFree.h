@@ -11,6 +11,8 @@
 #include "misc/MacroUtils.h"
 #include "misc/STL.h"
 
+#include "platform/Platform.h"
+
 static const uint64_t ptr_mask   = ((1ull << 32) - 1) << 32;
 static const uint64_t tag_mask   = 0xffff0000;
 static const uint16_t stat_mask  = 3;
@@ -357,7 +359,6 @@ public:
                     index              = LockFreeNodeStrategy::AllocateNodeIndex();
                     LockFreeNode* node = LockFreeNodeStrategy::GetNode(index);
                     node->SetData(_payload);
-                    assert(node->data != nullptr);
                 }
                 return index;
             }
@@ -400,7 +401,6 @@ public:
         TNodeIndex index = node_list.PopAllAndChangeTag(func_change_state);
         while (index != 0) {
             LockFreeNode* node = LockFreeNodeStrategy::GetNode(index);
-            assert(node->data != nullptr);
             target.push_back((T*)node->data);
             TNodeIndex current_node_index = index;
 
@@ -417,7 +417,7 @@ private:
     LockFreeNodeStack<Padding> node_list;
 };
 
-template<class T, uint32_t Padding = 64>
+template<class T, uint32_t Padding = PLATFORM_CACHELINE_SIZE>
 class LockFreeQueueBase {
     using TNodeIndex = LockFreeNodeStrategy::TNodeIndex;
     using TNode      = LockFreeNodeStrategy::TNode;
@@ -549,7 +549,7 @@ private:
     alignas(Padding) ABADoublePtr m_tail;
 };
 
-template<class T, uint32_t Padding = 64>
+template<class T, uint32_t Padding = PLATFORM_CACHELINE_SIZE>
 class ClosableLockFreeMpScStack : public LockFreeStackBase<T, Padding> {
 public:
     ClosableLockFreeMpScStack() : LockFreeStackBase<T, Padding>() {
@@ -600,8 +600,6 @@ public:
         ABADoublePtr new_state;
         int32_t      possible_thread = -1;
         m_queue[index].Push(task);
-        //  m_queue[index].push(task);
-
         do {
             local_state       = state;
             uint32_t possible = local_state.GetValue();
@@ -623,13 +621,11 @@ public:
     T* Pop(int32_t index, bool allowHang = true) {
         ABADoublePtr local_state;
         ABADoublePtr new_state;
-        T*           result = nullptr;
-        auto         func   = [&result](T* value) { result = value; };
 
+        T* result = nullptr;
         do {
             local_state = state;
             for (int32_t i = 0; i < TaskPriorityCount; i++) {
-                //  m_queue[i].consume_one(func);
                 result = m_queue[i].Pop();
                 if (result != nullptr) {
                     do {
@@ -652,7 +648,7 @@ public:
     }
 
 private:
-    LockFreeQueueBase<T, 64> m_queue[TaskPriorityCount];
+    LockFreeQueueBase<T, PLATFORM_CACHELINE_SIZE> m_queue[TaskPriorityCount];
 
     ABADoublePtr state;
 };

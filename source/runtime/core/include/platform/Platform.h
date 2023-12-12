@@ -14,6 +14,7 @@
 #else
 #define PLATFORM_UNKNOWN 1
 #endif
+#define PLATFORM_CACHELINE_SIZE 64
 struct PlatformMemoryInfo {
     uint64_t total_physical_memory = 0;
     uint64_t total_virtual_memory  = 0;

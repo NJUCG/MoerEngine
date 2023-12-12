@@ -123,6 +123,6 @@ void MainWindow::Show() {
 
     //set viewport size(image size) of main viewport
     // ImGui::Image(ImTextureID user_texture_id, render_target_window_size);
-
+    // ImGui::Image()
     ImGui::End();
 }

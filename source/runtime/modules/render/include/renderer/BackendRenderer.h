@@ -1,0 +1,31 @@
+#ifndef MOER_BACKEND_RENDERER_H
+#define MOER_BACKEND_RENDERER_H
+#include <cstdint>
+namespace Moer {
+    struct BackendRendererInitInfo {
+    };
+#include "RenderAPI.h"
+    /**
+ * @brief BackendRenderer is responsible for rendering on render thread.
+ * there may be multiple BackendRenderer instances, each contains a
+ * VirtualViewport, which is a virtual swap chain for presenting on UI.
+ * 
+ */
+    class BackendRenderer {
+    public:
+        RENDER_API BackendRenderer() = default;
+
+        RENDER_API virtual ~BackendRenderer() = default;
+
+        RENDER_API virtual void Init(const BackendRendererInitInfo& _init_info) = 0;
+
+        RENDER_API virtual void ShutDown() = 0;
+
+        RENDER_API virtual void DrawFrame() = 0;
+
+        RENDER_API virtual void SetOriginResolution(uint32_t _width, uint32_t _height) = 0;
+
+        RENDER_API virtual void SetPresentResolution(uint32_t _width, uint32_t _height) = 0;
+    };
+}// namespace Moer
+#endif

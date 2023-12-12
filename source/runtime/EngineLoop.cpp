@@ -2,6 +2,7 @@
 
 #include "EngineLoop.h"
 #include "PixelFormat.h"
+#include "RendererManager.h"
 #include "renderer/UIRenderer.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
@@ -17,10 +18,8 @@
 namespace Moer {
 
     FrameEndSync::FrameEndSync() : event_index(0) {
-        // CleanupDelegate = FCoreDelegates::OnPreExit.AddRaw(this, &FFrameEndSync::Cleanup);
     }
     FrameEndSync::~FrameEndSync() {
-        // FCoreDelegates::OnPreExit.Remove(CleanupDelegate);
         Cleanup();
     }
 
@@ -46,8 +45,9 @@ namespace Moer {
     };
 
     void EngineLoop::Run() {
+        RendererManager::GetInstance().DrawFrame();
+
         ProcessInputEvents();
-        // RenderUI();
         UIRenderer::GetRenderer()->BeginRenderFrame();
 
         for (auto& func : on_draw_ui_funcs) {
