@@ -2,7 +2,6 @@
 #define MOER_ENGINE_UI_RENDERER_H
 
 #include "RenderAPI.h"
-#include "misc/AsyncQueue.h"
 #include <cstdint>
 
 struct FontUpdateEvent {

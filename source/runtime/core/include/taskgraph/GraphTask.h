@@ -7,8 +7,6 @@
 #include <memory>
 #include "misc/CountableRef.h"
 #include "TaskGraph.h"
-#include "misc/AsyncQueue.h"
-#define USE_BOOST_QUEUE 1
 class BaseGraphTask {
 public:
     BaseGraphTask(int32_t count) : m_prerequests_count{count} {}
@@ -59,7 +57,7 @@ public:
     void                          Destroy() override {
         delete this;
     }
-    CORE_API bool IsComplete();
+    CORE_API bool IsComplete() const;
     void          WaitUntil(GraphEventRef _eventRef) {
         assert(!IsComplete());
 
@@ -74,12 +72,7 @@ public:
     }
 
 private:
-#if USE_BOOST_QUEUE
-    StatMPSCQueue<BaseGraphTask*, 1024> m_subsequents;
-#else
-    ClosableLockFreeMpScStack<BaseGraphTask> m_subsequents;
-
-#endif
+    ClosableLockFreeMpScStack<BaseGraphTask, 0> m_subsequents;
 
     GraphEventArray m_events_to_wait;
 

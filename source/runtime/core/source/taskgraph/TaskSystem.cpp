@@ -1,6 +1,7 @@
 ﻿// TaskSystem.cpp: 定义应用程序的入口点。
 //
 
+#include <chrono>
 #include <iostream>
 #include <thread>
 #include "Core.h"
@@ -143,10 +144,9 @@ bool Moer::TaskGraphTest() {
                 PrereqHolder->TryUnlockSubsequents();
             };
 
-            GraphEventRef Event  = FunctionGraphTask::ConstructAndDispatchWhenReady(std::move(Lambda));
-            GraphEvent*   _event = static_cast<GraphEvent*>(Event.Get());
-            assert(!_event->IsComplete());
-            _event->Wait(EThread::EMainThread);
+            GraphEventRef Event = FunctionGraphTask::ConstructAndDispatchWhenReady(std::move(Lambda));
+            assert(!Event->IsComplete());
+            Event->Wait(EThread::EMainThread);
         }
     }
     SPDLOG_INFO("=============== wait for prereq by waitUntil success ================");
@@ -156,6 +156,7 @@ bool Moer::TaskGraphTest() {
                 [] {
 
                 });
+            std::this_thread::sleep_for(std::chrono::nanoseconds(10));
             Prereq->Wait(EThread::EMainThread);
 
             GraphEventRef Event = FunctionGraphTask::ConstructAndDispatchWhenReady(

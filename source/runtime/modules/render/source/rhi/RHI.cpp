@@ -17,7 +17,7 @@
 // #include "taskgraph/ThreadManager.h"
 RHI* g_rhi = nullptr;
 
-extern ConsumeAllMPMCQueue<RHIResource*, 2048> pending_deletings;
+extern LockFreeQueueBase<RHIResource, 64> pending_deletings;
 // global shader
 void MTest() {
 
@@ -28,11 +28,9 @@ void MTest() {
 }
 
 void RHI::RHIFlushPendingDeletes() {
-    std::vector<RHIResource*> resources_to_delete;
+    Moer::Array<RHIResource*> resources_to_delete;
 
-    pending_deletings.ComsumeAll([&resources_to_delete](RHIResource* resource) {
-        resources_to_delete.push_back(resource);
-    });
+    pending_deletings.PopAll(resources_to_delete);
 
     uint32_t num_deletes = resources_to_delete.size();
 

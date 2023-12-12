@@ -1,5 +1,4 @@
 #include "rhi/RHIResource.h"
-#include "misc/AsyncQueue.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommandList.h"
 #include "rhi/RHICommon.h"
@@ -8,7 +7,7 @@
 #include "shader/ShaderParameterMacros.h"
 
 //need a mpmc linked list to delete resource
-ConsumeAllMPMCQueue<RHIResource*, 2048> pending_deletings;
+LockFreeQueueBase<RHIResource> pending_deletings;
 
 void RHIResource::Destroy() {
     //mark resource to be deleted

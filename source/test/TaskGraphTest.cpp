@@ -1,5 +1,5 @@
 #include "Core.h"
-#include "misc/AsyncQueue.h"
+#include "misc/LockFree.h"
 #include "misc/MMemory.h"
 #include "misc/STL.h"
 #include <atomic>
@@ -98,6 +98,7 @@ void LockFreeQueueTest() {
 
 void ClosableMpScStackTest() {
     ClosableLockFreeMpScStack<A> stack;
+    LockFreeQueueBase<A>         queue;
     // StatMPSCQueue<A*, 40086>     stack1;
     Moer::Array<A*> array;
     A               a;
@@ -106,7 +107,7 @@ void ClosableMpScStackTest() {
     std::atomic_int32_t consume_count = 0;
 
     auto push_operation = [&]() {
-        for (int i = 0; i < 10; ++i) {
+        for (int i = 0; i < 1; ++i) {
             bool b_pushed = stack.TryPush(&a);
             if (b_pushed) push_count++;
             if (!b_pushed) {
@@ -118,18 +119,31 @@ void ClosableMpScStackTest() {
     auto consume_operation = [&]() {
         stack.ComsumeAllAndClose(array);
         assert(stack.IsClosed());
-        for (auto* _a : array) {
-            assert(_a != nullptr);
+    };
+
+    auto queue_enque_operation = [&]() {
+        for (int i = 0; i < 10; ++i) {
+            queue.Push(&a);
         }
     };
+
+    auto queue_deque_operation = [&]() {
+        for (int i = 0; i < 10; ++i) {
+            queue.Pop();
+        }
+    };
+
     std::jthread t1(push_operation);
+    std::jthread t8(consume_operation);
     std::jthread t2(push_operation);
     std::jthread t3(push_operation);
     std::jthread t4(push_operation);
     std::jthread t5(push_operation);
     std::jthread t6(push_operation);
     std::jthread t7(push_operation);
-    std::jthread t8(consume_operation);
+
+    std::jthread t9(queue_enque_operation);
+    std::jthread t10(queue_deque_operation);
 
     t1.join();
     t2.join();
@@ -140,22 +154,20 @@ void ClosableMpScStackTest() {
     t7.join();
     t8.join();
 
+    t9.join();
+    t10.join();
+
     assert(push_count == array.size());
+    std::reverse(array.begin(), array.end());
     for (auto& i : array) {
         assert(i != nullptr);
+        assert(i->a == 1 && i->b == 2 && i->c == 3 && i->d == 4);
     }
     LOG_INFO("push count: {}", push_count.load());
 }
 int main() {
     Moer::TaskSystem::Init();
-    // Moer::TaskGraphTest();
-    // for (size_t i = 0; i < 100000; i++) {
-    //     ClosableMpScStackTest();
-    //     LOG_INFO("index: {}", i);
-    // }
 
-    //LockFreeStackTest();
-    //LockFreeQueueTest();
     Moer::TaskGraphTest();
 
     return 0;

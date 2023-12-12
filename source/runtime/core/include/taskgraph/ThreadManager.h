@@ -15,8 +15,6 @@ public:
     enum Type : int32_t {
         EMainThread,
         ERenderThread,
-        ERHIThread,
-        EUIThread,
         NamedThreadCount,
         EAnyThread,
         INDEX_MASK          = 0xff,
@@ -31,7 +29,6 @@ public:
         PRIORITY_MASK       = 0x600,//8-10 for priority
         EGameThread_local   = EMainThread | LOCAL_QUEUE,
         ERenderThread_local = ERenderThread | LOCAL_QUEUE,
-        ERHIThread_local    = ERHIThread | LOCAL_QUEUE,
         PriorityCount       = 3,
         AnyThread_HighPri   = UNKNOWN_THREAD | HIGH_PRI,
         AnyThread_NormalPri = UNKNOWN_THREAD | NORMAL_PRI,

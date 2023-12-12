@@ -15,8 +15,6 @@ set_target_properties(RuntimeTest PROPERTIES FOLDER ${moer_test_folder})
 
 add_executable(ShaderReflectionTest ShaderReflectionTest.cpp)
 target_include_directories(ShaderReflectionTest
-        PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/boost>
-
         PUBLIC $<BUILD_INTERFACE:${moer_source_dir}/runtime>
         PUBLIC $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
         PUBLIC $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
@@ -29,7 +27,6 @@ set_target_properties(ShaderReflectionTest PROPERTIES FOLDER ${moer_test_folder}
 
 add_executable(VulkanRHITest VulkanRHITest.cpp)
 target_include_directories(VulkanRHITest
-        PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/boost>
         PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/glfw/include>
         PUBLIC $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
 )

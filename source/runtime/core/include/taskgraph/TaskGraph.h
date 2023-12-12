@@ -3,7 +3,6 @@
 #include <memory>
 #include "API_Macro.h"
 #include "Thread.h"
-#include "misc/AsyncQueue.h"
 #include "misc/CountableRef.h"
 class GraphEvent;
 typedef CountableRef<GraphEvent>   GraphEventRef;
