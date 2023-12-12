@@ -57,12 +57,25 @@ VulkanPhysicalDeviceFeatures VulkanDeviceFeature::GetMESupportedDeviceFeatures(u
 
     // 1.2 features
     if (_api_version >= VK_API_VERSION_1_2) {
-        enabled_features.core_1_1.pNext = &enabled_features.core_1_2;
-        enabled_features.core_1_2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
-
+        enabled_features.core_1_1.pNext               = &enabled_features.core_1_2;
+        enabled_features.core_1_2.sType               = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
         enabled_features.core_1_2.timelineSemaphore   = VK_TRUE;
         enabled_features.core_1_2.bufferDeviceAddress = VK_TRUE;
-        enabled_features.core_1_2.descriptorIndexing  = VK_TRUE;
+        // MARK: need fallback to non-bindless if not supported
+        // descriptor indexing features
+        enabled_features.core_1_2.descriptorIndexing = VK_TRUE;
+        // uniform
+        enabled_features.core_1_2.shaderUniformBufferArrayNonUniformIndexing    = VK_TRUE;
+        enabled_features.core_1_2.descriptorBindingUniformBufferUpdateAfterBind = VK_TRUE;
+        // sampler
+        enabled_features.core_1_2.shaderSampledImageArrayNonUniformIndexing    = VK_TRUE;
+        enabled_features.core_1_2.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
+        // image
+        enabled_features.core_1_2.shaderStorageImageArrayNonUniformIndexing    = VK_TRUE;
+        enabled_features.core_1_2.descriptorBindingStorageImageUpdateAfterBind = VK_TRUE;
+        // buffer
+        enabled_features.core_1_2.shaderStorageBufferArrayNonUniformIndexing    = VK_TRUE;
+        enabled_features.core_1_2.descriptorBindingStorageBufferUpdateAfterBind = VK_TRUE;
     }
 
     // 1.3 features
