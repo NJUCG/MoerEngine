@@ -1,5 +1,6 @@
 #ifndef MOER_ENGINE_RENDERER_MANAGER_H
 #define MOER_ENGINE_RENDERER_MANAGER_H
+#include "RenderAPI.h"
 #include "misc/Singleton.h"
 #include "renderer/BackendRenderer.h"
 #include <string>
@@ -13,9 +14,9 @@ namespace Moer {
     class RendererManager : public Singleton<RendererManager> {
     public:
         ~RendererManager() = default;
-        void Init();
-        void ShutDown();
-        void DrawFrame();
+        RENDER_API void Init();
+        RENDER_API void ShutDown();
+        RENDER_API void DrawFrame();
 
         void SetRendererPresentResolution(TRendererID _renderer_id, uint32_t _width, uint32_t _height);
         //call from editor UI
@@ -33,7 +34,8 @@ namespace Moer {
         BackendRenderer* GetRenderer(TRendererID _renderer_id);
 
     protected:
-        RendererManager() = default;
+        friend class Singleton<RendererManager>;
+        RENDER_API           RendererManager(){};
         RendererManagerData* data;
     };
 }// namespace Moer

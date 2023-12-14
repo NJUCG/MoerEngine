@@ -61,6 +61,7 @@ namespace Moer {
     }
     void EngineLoop::Init() {
         UIRenderer::GetRenderer()->Init();
+        RendererManager::GetInstance().Init();
     }
 
     void EngineLoop::ProcessInputEvents() {
