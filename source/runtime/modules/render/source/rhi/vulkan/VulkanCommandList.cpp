@@ -506,7 +506,7 @@ void VulkanRHIGraphicsCommandList::BeginRenderPass(const RHIRenderPassInfo& _pas
     dynamic_rendering_info.renderArea.offset.y      = _pass_info.render_area.offset.y;
     dynamic_rendering_info.renderArea.extent.width  = _pass_info.render_area.extent.width;
     dynamic_rendering_info.renderArea.extent.height = _pass_info.render_area.extent.height;
-    dynamic_rendering_info.layerCount               = 1;
+    dynamic_rendering_info.layerCount               = _pass_info.multi_view_count == 0 ? 1 : _pass_info.multi_view_count;
     dynamic_rendering_info.viewMask                 = 0;
 
     const uint32_t num_color_attachments = _pass_info.GetNumColorAttachments();
@@ -519,8 +519,8 @@ void VulkanRHIGraphicsCommandList::BeginRenderPass(const RHIRenderPassInfo& _pas
 
     dynamic_rendering_info.colorAttachmentCount = num_color_attachments;
     dynamic_rendering_info.pColorAttachments    = color_attachments.data();
-    dynamic_rendering_info.pDepthAttachment     = &depth_stencil_attachment;
-    dynamic_rendering_info.pStencilAttachment   = &depth_stencil_attachment;
+    dynamic_rendering_info.pDepthAttachment     = depth_stencil_attachment.imageLayout == VK_IMAGE_LAYOUT_UNDEFINED ? VK_NULL_HANDLE : &depth_stencil_attachment;
+    dynamic_rendering_info.pStencilAttachment   = depth_stencil_attachment.imageLayout == VK_IMAGE_LAYOUT_UNDEFINED ? VK_NULL_HANDLE : &depth_stencil_attachment;
     Moer::RHI::Vulkan::DebugUtils::CmdBeginLabel(m_command_buffer, _pass_name, {});
     vkCmdBeginRendering(m_command_buffer, &dynamic_rendering_info);
 }

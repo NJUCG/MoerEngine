@@ -241,13 +241,25 @@ struct RHIClearAttachment {
         ClearDepthStencilValue depth_stencil;
     } value;
     EClearAttachment attachment;
-    RHIClearAttachment() : attachment(EClearAttachment::COLOR) {
-        value.color.float32[0] = 0.f;
-        value.color.float32[1] = 0.f;
-        value.color.float32[2] = 0.f;
-        value.color.float32[3] = 0.f;
+    RHIClearAttachment() : RHIClearAttachment(EClearAttachment::COLOR) {
     }
-    explicit RHIClearAttachment(EClearAttachment none) : attachment(none) {}
+    explicit RHIClearAttachment(EClearAttachment none) : attachment(none) {
+        switch (none) {
+
+            case EClearAttachment::NONE:
+
+            case EClearAttachment::COLOR:
+                value.color.float32[0] = 0.f;
+                value.color.float32[1] = 0.f;
+                value.color.float32[2] = 0.f;
+                value.color.float32[3] = 0.f;
+                break;
+            case EClearAttachment::DEPTH_STENCIL:
+                value.depth_stencil.depth   = 0.f;
+                value.depth_stencil.stencil = 0;
+                break;
+        }
+    }
     explicit RHIClearAttachment(float _depth, uint32_t _stencil = 0) : attachment(EClearAttachment::DEPTH_STENCIL) {
         value.depth_stencil.depth   = _depth;
         value.depth_stencil.stencil = _stencil;

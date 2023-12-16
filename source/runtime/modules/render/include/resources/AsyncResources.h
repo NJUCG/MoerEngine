@@ -1,42 +1,60 @@
 #ifndef MOER_ENGINE_ASYNC_RESOURCES_H
 #define MOER_ENGINE_ASYNC_RESOURCES_H
 
+#include "PixelFormat.h"
+#include "math/Base.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include <vector>
 
-//In Editor mode, UI runs and renders on main thread, but in application mode,
-//everything runs on render thread, so we need to create a virtual swap chain
-class VirtualViewport {
-public:
-    RHIShaderResourceViewRef GetSRVMainThread();
+namespace Moer {
+    struct VirtualViewportInfo {
+        std::string    name;
+        Moer::Vector2i extent;
+        EPixelFormat   format;
+        uint32_t       back_buffer_count = 2;
+    };
 
-    //call on render thread
-    RHIUnorderedAccessViewRef GetUAVRenderThread();
+    struct VirtualViewportCreateInfo {
+        std::string    name;
+        Moer::Vector2i extent;
+        EPixelFormat   format;
+        uint32_t       back_buffer_count = 2;
+    };
 
-    //call on main thread
-    void                    OnResize(Extent2D extent);
-    static VirtualViewport* Create(const RHITextureCreateInfo& create_info);
+    struct VirtualViewportNextBackBufferInfo {
+        uint32_t  backbuffer_index;
+        RHIFence* backbuffer_ready_fence;
+    };
+    //In Editor mode, UI runs and renders on main thread, but in application mode,
+    //everything runs on render thread, so we need to create a virtual swap chain
+    class VirtualViewport {
+    public:
+        VirtualViewport(const VirtualViewportCreateInfo& create_info);
+        ~VirtualViewport();
+        //call on main thread
+        void OnResize(Moer::Vector2i extent);
 
-private:
-    VirtualViewport(const RHITextureCreateInfo& create_info);
-    ~VirtualViewport();
+        //call from render thread
+        VirtualViewportNextBackBufferInfo GetNextBackBuffer();
 
-    void InitRenderThread();
-    void ResizeRenderThread(Extent2D extent);
-    //resource copy on main thread
-    RHITextureRef upload_texture;
+        RHIUnorderedAccessViewRef GetNextBackBufferUAV(uint32_t index);
 
-    RHITextureCreateInfo upload_texture_create_info;
+        void Present(RHIFenceRef _render_fence);
 
-    //resource on render thread
-    std::vector<RHITextureRef>             textures_render_thread;
-    std::vector<RHIUnorderedAccessViewRef> texture_uavs_render_thread;
+        const VirtualViewportInfo& GetInfo() const;
+
+    private:
+        void InitRenderThread();
+        void ResizeRenderThread(Moer::Vector2i extent);
 
 // in Application mode, Present operations happens on render thread
 #if !defined(EDITOR_MODE_ON)
-    RHIViewportRef viewport;
+        RHIViewportRef viewport;
 #endif
-};
+        class Impl;
+        Impl* impl;
+    };
+}// namespace Moer
 
 #endif//MOER_ENGINE_ASYNC_RESOURCES_H

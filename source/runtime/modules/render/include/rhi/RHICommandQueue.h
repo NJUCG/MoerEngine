@@ -13,7 +13,7 @@ public:
     virtual void SubmitCommands(
         uint32_t                  _num_command_lists,
         const RHICommandListBase* _command_lists,
-        const RHISubmitInfo*      _submit_info = nullptr) = 0;
+        const RHISubmitInfo*      _submit_info) = 0;
 };
 struct RHIFenceWaitInfo {
     uint64_t  wait_value;

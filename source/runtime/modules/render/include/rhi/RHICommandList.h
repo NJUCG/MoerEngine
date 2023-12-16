@@ -18,8 +18,8 @@ public:
 class RHIGraphicsCommandList : public RHICommandListBase {
 public:
     virtual ~RHIGraphicsCommandList(){};
-    virtual void SetBatchedShaderParameter(const RHIBatchedShaderParameters& _parameters) = 0;
-    virtual void SetPipelineState(RHIGraphicsPipelineState* _graphics_pso)                = 0;
+    virtual void SetBatchedShaderParameter(const RHIBatchedShaderParameters& _parameters){};
+    virtual void SetPipelineState(RHIGraphicsPipelineState* _graphics_pso) = 0;
     virtual void Open() {}
     virtual void Close()                                             = 0;
     virtual void Reset()                                             = 0;

@@ -107,6 +107,8 @@ struct Extent2D {
     }
     Extent2D() : x(0), y(0) {
     }
+    Extent2D(const Moer::Vector2i& _v) : x(_v.x), y(_v.y) {
+    }
     operator Moer::Vector2i() {
         return Moer::Vector2i(x, y);
     }

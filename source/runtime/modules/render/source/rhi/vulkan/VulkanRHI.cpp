@@ -504,12 +504,12 @@ RHIUnorderedAccessViewRef VulkanRHIImpl::RHICreateUnorderedAccessView(RHIViewabl
 }
 
 RHICommandQueue* VulkanRHIImpl::CreateCommandQueue(ECommandQueueType _type) {
-    return new VulkanRHICommandQueue(m_device, _type);
+    return MoerNew(VulkanRHICommandQueue(m_device, _type));
 }
 
 RHIGraphicsCommandList* VulkanRHIImpl::CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state) {
     // todo: need to be more detailed.
-    return new VulkanRHIGraphicsCommandList(m_device, m_device->GetDefaultCommandPool(), VK_COMMAND_BUFFER_LEVEL_PRIMARY);
+    return MoerNew(VulkanRHIGraphicsCommandList(m_device, m_device->GetDefaultCommandPool(), VK_COMMAND_BUFFER_LEVEL_PRIMARY));
 }
 
 RHIComputeCommandList* VulkanRHIImpl::CreateComputeCommandList(RHIComputePipelineState* _initial_state) {

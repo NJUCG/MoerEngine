@@ -13,6 +13,16 @@ namespace Moer {
 
     void RendererManager::Init() {
         data = new RendererManagerData();
+        RegisterRenderer(MOER_DEFAULT_RENDERER_NAME, MoerNew(DeferredRenderer));
+
+        BackendRendererInitInfo init_info;
+        init_info.width  = 1280;
+        init_info.height = 720;
+        init_info.format = PF_R8G8B8A8_SRGB;
+
+        for (auto& it : data->backend_renderers) {
+            it.second->Init(init_info);
+        }
     }
 
     void RendererManager::RegisterRenderer(const std::string& _name, BackendRenderer* _renderer) {
@@ -63,6 +73,12 @@ namespace Moer {
     void RendererManager::DrawFrame() {
         for (auto& it : data->backend_renderers) {
             it.second->DrawFrame();
+        }
+    }
+
+    void RendererManager::Present() {
+        for (auto& it : data->backend_renderers) {
+            it.second->Present();
         }
     }
 

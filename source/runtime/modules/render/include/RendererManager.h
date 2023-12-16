@@ -17,6 +17,7 @@ namespace Moer {
         RENDER_API void Init();
         RENDER_API void ShutDown();
         RENDER_API void DrawFrame();
+        RENDER_API void Present();
 
         void SetRendererPresentResolution(TRendererID _renderer_id, uint32_t _width, uint32_t _height);
         //call from editor UI

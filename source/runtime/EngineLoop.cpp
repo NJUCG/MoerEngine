@@ -45,9 +45,9 @@ namespace Moer {
     };
 
     void EngineLoop::Run() {
-        RendererManager::GetInstance().DrawFrame();
 
         ProcessInputEvents();
+
         UIRenderer::GetRenderer()->BeginRenderFrame();
 
         for (auto& func : on_draw_ui_funcs) {
@@ -56,6 +56,9 @@ namespace Moer {
 
         //record and present gui render command on main thread
         UIRenderer::GetRenderer()->EndRenderFrame();
+
+        // RendererManager::GetInstance().DrawFrame();
+        // RendererManager::GetInstance().Present();
 
         frame_end_sync.Sync(true);
     }
