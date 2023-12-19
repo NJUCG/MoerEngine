@@ -932,7 +932,9 @@ struct RHITextureBarrierInfo : public RHIBarrierInfo {
         : RHIBarrierInfo(),
           p_texture(nullptr),
           src_layout(TEXTURE_LAYOUT_UNDEFINED),
-          dst_layout(TEXTURE_LAYOUT_UNDEFINED), sub_resource_range() {}
+          dst_layout(TEXTURE_LAYOUT_UNDEFINED), sub_resource_range(),
+          src_queue_type(ECommandQueueType::UNDEFINED),
+          dst_queue_type(ECommandQueueType::UNDEFINED) {}
     RHITextureBarrierInfo(
         ERHIPipelineStageFlags _src_stage,
         ERHIPipelineStageFlags _dst_stage,
@@ -941,7 +943,9 @@ struct RHITextureBarrierInfo : public RHIBarrierInfo {
         RHITexture*            _p_texture,
         ETextureLayout         _src_layout,
         ETextureLayout         _dst_layout,
-        RHISubresourceRange    _sub_resource_range)
+        RHISubresourceRange    _sub_resource_range,
+        ECommandQueueType      _src_queue_type,
+        ECommandQueueType      _dst_queue_type)
         : RHIBarrierInfo(_src_stage,
                          _dst_stage,
                          _src_access,
@@ -949,7 +953,9 @@ struct RHITextureBarrierInfo : public RHIBarrierInfo {
           p_texture(_p_texture),
           src_layout(_src_layout),
           dst_layout(_dst_layout),
-          sub_resource_range(_sub_resource_range) {}
+          sub_resource_range(_sub_resource_range),
+          src_queue_type(_src_queue_type),
+          dst_queue_type(_dst_queue_type) {}
     static RHITextureBarrierInfo Create() {
         return {};
     }
@@ -958,6 +964,8 @@ struct RHITextureBarrierInfo : public RHIBarrierInfo {
     ETextureLayout      src_layout;
     ETextureLayout      dst_layout;
     RHISubresourceRange sub_resource_range;
+    ECommandQueueType   src_queue_type;
+    ECommandQueueType   dst_queue_type;
 
     RHITextureBarrierInfo& SetTexture(RHITexture* _p_texture) {
         p_texture = _p_texture;
@@ -976,6 +984,16 @@ struct RHITextureBarrierInfo : public RHIBarrierInfo {
         sub_resource_range = _sub_resource_range;
         return *this;
     }
+
+    RHITextureBarrierInfo& SetSrcQueueType(ECommandQueueType _src_queue_type) {
+        src_queue_type = _src_queue_type;
+        return *this;
+    }
+
+    RHITextureBarrierInfo& SetDstQueueType(ECommandQueueType _dst_queue_type) {
+        dst_queue_type = _dst_queue_type;
+        return *this;
+    }
 };
 
 struct RHIBufferBarrierInfo : public RHIBarrierInfo {
@@ -984,6 +1002,8 @@ struct RHIBufferBarrierInfo : public RHIBarrierInfo {
         ERHIPipelineStageFlags _dst_stage,
         ERHIAccessFlags        _src_access,
         ERHIAccessFlags        _dst_access,
+        ECommandQueueType      _src_queue_type,
+        ECommandQueueType      _dst_queue_type,
         RHIBuffer*             _p_buffer,
         uint64_t               _offset,
         uint64_t               _size)
@@ -992,12 +1012,16 @@ struct RHIBufferBarrierInfo : public RHIBarrierInfo {
                          _src_access,
                          _dst_access),
           p_buffer(_p_buffer),
+          src_queue_type(_src_queue_type),
+          dst_queue_type(_dst_queue_type),
           offset(_offset),
           size(_size) {
     }
     RHIBufferBarrierInfo() : RHIBarrierInfo(),
                              p_buffer(nullptr),
                              offset(0),
+                             src_queue_type(ECommandQueueType::UNDEFINED),
+                             dst_queue_type(ECommandQueueType::UNDEFINED),
                              size(0) {}
 
     static RHIBufferBarrierInfo Create() {
@@ -1015,9 +1039,21 @@ struct RHIBufferBarrierInfo : public RHIBarrierInfo {
         size = _size;
         return *this;
     }
-    RHIBuffer* p_buffer;
-    uint64_t   offset;
-    uint64_t   size;
+
+    RHIBufferBarrierInfo& SetSrcQueueType(ECommandQueueType _src_queue_type) {
+        src_queue_type = _src_queue_type;
+        return *this;
+    }
+
+    RHIBufferBarrierInfo& SetDstQueueType(ECommandQueueType _dst_queue_type) {
+        dst_queue_type = _dst_queue_type;
+        return *this;
+    }
+    RHIBuffer*        p_buffer;
+    ECommandQueueType src_queue_type;
+    ECommandQueueType dst_queue_type;
+    uint64_t          offset;
+    uint64_t          size;
 };
 
 using RHIMemeryBarrierInfo = RHIBarrierInfo;

@@ -97,6 +97,8 @@ public:
 
     static VkDescriptorType   METoVKDescriptorType(EShaderParameterType _type);
     static VkShaderStageFlags METoVKShaderStageFlags(EShaderType _type);
+
+    static uint32_t METoVkQueueFamilyIndex(ECommandQueueType _type, const VulkanDevice* _device);
 };
 
 #pragma endregion

@@ -3,6 +3,8 @@
 #include "RendererManager.h"
 #include "math/Base.h"
 #include "Core.h"
+#include "math/Function.h"
+#include "math/Matrix.h"
 #include "misc/MMemory.h"
 #include "resources/AsyncResources.h"
 #include "rhi/RHI.h"
@@ -221,20 +223,18 @@ namespace Moer {
         RHIGraphicsCommandList* cmd_list = render_cmd_lists[0];
 
         //render
-        RHIUnorderedAccessViewRef passed_uav = uav;
-
         cmd_list->Reset();
 
         cmd_list->Open();
 
-        RHIRenderPassInfo    pass_info{};
-        RenderAttachmentView render_attachment_view{};
-        render_attachment_view.required_layout  = TEXTURE_LAYOUT_COLOR_ATTACHMENT;
-        render_attachment_view.texture_view     = passed_uav;
-        render_attachment_view.clear_attachment = RHIClearAttachment(EClearAttachment::COLOR);
+        RHIRenderPassInfo pass_info{};
 
         pass_info.color_attachments[0].color_attachment_action = AC_CLEAR_STORE;
-        pass_info.color_attachments[0].color_attachment_view   = render_attachment_view;
+        RenderAttachmentView& render_attachment_view           = pass_info.color_attachments[0].color_attachment_view;
+
+        render_attachment_view.required_layout  = TEXTURE_LAYOUT_COLOR_ATTACHMENT;
+        render_attachment_view.texture_view     = uav;
+        render_attachment_view.clear_attachment = RHIClearAttachment(EClearAttachment::COLOR);
 
         pass_info.render_area.extent = Extent2D(virtual_viewport->GetInfo().extent);
         pass_info.render_area.offset = Offset2D(0, 0);
@@ -242,6 +242,8 @@ namespace Moer {
         RHIBarrierDependencyInfo barrier_dependency_info;
         RHITextureBarrierInfo    texture_barrier_info;
         texture_barrier_info.SetDstTextureLayout(TEXTURE_LAYOUT_COLOR_ATTACHMENT);
+        texture_barrier_info.SetSrcTextureLayout(TEXTURE_LAYOUT_TRANSFER_SRC);
+        texture_barrier_info.SetSrcStage(ERHIPipelineStageFlags::PS_TRANSFER);
         texture_barrier_info.SetDstStage(ERHIPipelineStageFlags::PS_COLOR_ATTACHMENT_OUTPUT);
         texture_barrier_info.SetDstAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
         texture_barrier_info.SetTexture(uav->GetTexture());

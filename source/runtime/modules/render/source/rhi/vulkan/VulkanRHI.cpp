@@ -3,6 +3,7 @@
 #include "config/ConfigManager.h"
 #include "log/LogSystem.h"
 #include "rhi/RHI.h"
+#include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "VulkanCommandQueue.h"
 #include "rhi/vulkan/misc/VulkanMacroUtils.h"
@@ -446,7 +447,8 @@ RHITextureRef VulkanRHIImpl::RHICreateTexture(const RHITextureCreateInfo& info) 
 
     VmaAllocator allocator = m_device->GetVmaAllocator();
     VK_CHECK_RESULT(vmaCreateImage(allocator, &image_create_info, &alloc_create_info, &vk_texture->m_alloc.image, &vk_texture->m_alloc.alloc, nullptr));
-
+    // VmaAllocationInfo temp_info;
+    // vmaGetAllocationInfo(allocator, vk_texture->GetAllocation(), &temp_info);
     return RHITextureRef(vk_texture);
 };
 

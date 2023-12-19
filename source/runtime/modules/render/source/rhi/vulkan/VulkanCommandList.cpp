@@ -2,6 +2,8 @@
 // Created by 74535 on 2023/10/17.
 //
 
+#include "misc/STL.h"
+#include "rhi/RHICommon.h"
 #include "rhi/RHIResourceInitilizer.h"
 #include "rhi/vulkan/misc/VulkanMacroUtils.h"
 #include "VulkanCommandList.h"
@@ -354,8 +356,8 @@ void VulkanRHIGraphicsCommandList::SetPipelineBarrier(const RHIBarrierDependency
         buffer_barriers[i].srcAccessMask       = VulkanEnumTranslator::METoVkAccessFlags2(_dependency.p_buffer_barriers[i].src_access);
         buffer_barriers[i].dstStageMask        = VulkanEnumTranslator::METoVkPipelineStageFlags2(_dependency.p_buffer_barriers[i].dst_stage);
         buffer_barriers[i].dstAccessMask       = VulkanEnumTranslator::METoVkAccessFlags2(_dependency.p_buffer_barriers[i].dst_access);
-        buffer_barriers[i].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;//MARK...
-        buffer_barriers[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        buffer_barriers[i].srcQueueFamilyIndex = VulkanEnumTranslator::METoVkQueueFamilyIndex(_dependency.p_buffer_barriers[i].src_queue_type, m_device);
+        buffer_barriers[i].dstQueueFamilyIndex = VulkanEnumTranslator::METoVkQueueFamilyIndex(_dependency.p_buffer_barriers[i].dst_queue_type, m_device);
         buffer_barriers[i].buffer              = vk_buffer->GetHandle();
         buffer_barriers[i].offset              = _dependency.p_buffer_barriers[i].offset;
         buffer_barriers[i].size                = _dependency.p_buffer_barriers[i].size;
@@ -374,8 +376,8 @@ void VulkanRHIGraphicsCommandList::SetPipelineBarrier(const RHIBarrierDependency
         image_barriers[i].dstAccessMask                   = VulkanEnumTranslator::METoVkAccessFlags2(_dependency.p_texture_barriers[i].dst_access);
         image_barriers[i].oldLayout                       = VulkanEnumTranslator::METoVKImageLayout(_dependency.p_texture_barriers[i].src_layout);
         image_barriers[i].newLayout                       = VulkanEnumTranslator::METoVKImageLayout(_dependency.p_texture_barriers[i].dst_layout);
-        image_barriers[i].srcQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
-        image_barriers[i].dstQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
+        image_barriers[i].srcQueueFamilyIndex             = VulkanEnumTranslator::METoVkQueueFamilyIndex(_dependency.p_texture_barriers[i].src_queue_type, m_device);
+        image_barriers[i].dstQueueFamilyIndex             = VulkanEnumTranslator::METoVkQueueFamilyIndex(_dependency.p_texture_barriers[i].dst_queue_type, m_device);
         image_barriers[i].image                           = vk_texture->GetHandle();// 2. MARK... layout transition need image has 'VK_IMAGE_USAGE_TRANSFER_DST_BIT'
         image_barriers[i].subresourceRange.aspectMask     = VulkanEnumTranslator::METoVKImageAspectFlags(_dependency.p_texture_barriers[i].sub_resource_range.aspect);
         image_barriers[i].subresourceRange.baseMipLevel   = _dependency.p_texture_barriers[i].sub_resource_range.mip_index;
@@ -511,7 +513,7 @@ void VulkanRHIGraphicsCommandList::BeginRenderPass(const RHIRenderPassInfo& _pas
 
     const uint32_t num_color_attachments = _pass_info.GetNumColorAttachments();
 
-    std::vector<VkRenderingAttachmentInfo> color_attachments(num_color_attachments);
+    Moer::Array<VkRenderingAttachmentInfo> color_attachments(num_color_attachments);
     for (uint32_t i = 0; i < num_color_attachments; ++i) {
         color_attachments[i] = FromColorAttachmentInfo(_pass_info.color_attachments[i]);
     }

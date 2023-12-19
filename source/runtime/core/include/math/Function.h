@@ -1,5 +1,6 @@
 #pragma once
 
+#include "API_Macro.h"
 #include "Base.h"
 #include "Matrix.h"
 #include "Constant.h"
@@ -124,12 +125,12 @@ namespace Moer {
     template<NumericType T, size_t N, size_t M> inline Matrix<T, M, N> Transpose(const Matrix<T, N, M>& m) noexcept;
 
     // inverse of a matrix
-    Matrix2x2f Inverse(const Matrix2x2f& m) noexcept;
-    Matrix2x2d Inverse(const Matrix2x2d& m) noexcept;
-    Matrix3x3f Inverse(const Matrix3x3f& m) noexcept;
-    Matrix3x3d Inverse(const Matrix3x3d& m) noexcept;
-    Matrix4x4f Inverse(const Matrix4x4f& m) noexcept;
-    Matrix4x4d Inverse(const Matrix4x4d& m) noexcept;
+    CORE_API Matrix2x2f Inverse(const Matrix2x2f& m) noexcept;
+    CORE_API Matrix2x2d Inverse(const Matrix2x2d& m) noexcept;
+    CORE_API Matrix3x3f Inverse(const Matrix3x3f& m) noexcept;
+    CORE_API Matrix3x3d Inverse(const Matrix3x3d& m) noexcept;
+    CORE_API Matrix4x4f Inverse(const Matrix4x4f& m) noexcept;
+    CORE_API Matrix4x4d Inverse(const Matrix4x4d& m) noexcept;
 
     /** get a 2x2 matrix from diagonal
        @example:

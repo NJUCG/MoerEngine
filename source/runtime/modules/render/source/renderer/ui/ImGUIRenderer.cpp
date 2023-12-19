@@ -6,6 +6,7 @@
 #include "rhi/RHICommandList.h"
 #include "rhi/RHICommandQueue.h"
 
+#include "rhi/RHIResourceInitilizer.h"
 #include "shader/Shader.h"
 #include "shader/ShaderParameterMacros.h"
 #include "shader/ShaderResourceManager.h"
@@ -29,8 +30,8 @@ struct UIFrameData {
     uint64_t timeline_index = 0;
 
     ~UIFrameData() {
-        delete ui_command_list;
-        delete command_queue;
+        MoerDelete(ui_command_list);
+        MoerDelete(command_queue);
     }
 };
 struct GuiFrameRenderBuffers {
@@ -233,7 +234,7 @@ void ImGUIRenderer::EndRenderFrame() {
 
         texture_barriers[0].SetDstTextureLayout(ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT);
         texture_barriers[0].SetSrcTextureLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED);
-        texture_barriers[0].p_texture = present_view->GetTexture();
+        texture_barriers[0].SetTexture(present_view->GetTexture());
         texture_barriers[0].SetSrcStage(PS_BOTTOM_OF_PIPE);
         texture_barriers[0].SetDstStage(PS_COLOR_ATTACHMENT_OUTPUT);
         texture_barriers[0].SetSrcAccessFlags(ERHIAccessFlags::UNDEFINED);
@@ -250,12 +251,12 @@ void ImGUIRenderer::EndRenderFrame() {
         ui_command_list->Open();
         ui_command_list->SetPipelineBarrier(dependency_info);
 
-        RHIRenderPassInfo pass_info;
+        RHIRenderPassInfo pass_info{};
         pass_info.color_attachments[0].color_attachment_action               = AC_CLEAR_STORE;
         pass_info.color_attachments[0].color_attachment_view.texture_view    = present_view;
         pass_info.color_attachments[0].color_attachment_view.required_layout = ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT;
 
-        pass_info.color_attachments[0].color_attachment_view.clear_attachment.value.color = {0.0f, 0.0f, 0.0f, 1.0f};
+        pass_info.color_attachments[0].color_attachment_view.clear_attachment = RHIClearAttachment();
 
         auto viewport_extent                = main_viewport->GetViewportExtent();
         pass_info.render_area.offset.x      = 0;

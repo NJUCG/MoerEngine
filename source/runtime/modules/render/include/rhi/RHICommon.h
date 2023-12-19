@@ -868,6 +868,7 @@ static_assert(SP_Num < (1 << SP_NumBits) && "");
 #pragma endregion
 
 enum class ECommandQueueType {
+    UNDEFINED,
     GRAPHICS,
     COMPUTE,
     COPY

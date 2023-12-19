@@ -858,6 +858,19 @@ VkShaderStageFlags VulkanEnumTranslator::METoVKShaderStageFlags(EShaderType _typ
     }
 }
 
+uint32_t VulkanEnumTranslator::METoVkQueueFamilyIndex(ECommandQueueType _type, const VulkanDevice* _device) {
+    switch (_type) {
+        case ECommandQueueType::GRAPHICS:
+            return _device->GetQueueFamilyIndices().graphics.value();
+        case ECommandQueueType::COMPUTE:
+            return _device->GetQueueFamilyIndices().compute.value();
+        case ECommandQueueType::COPY:
+            return _device->GetQueueFamilyIndices().transfer.value();
+        default:
+            return VK_QUEUE_FAMILY_IGNORED;
+    }
+}
+
 #pragma endregion
 
 void VulkanRHISampler::GenerateSamplerFromInitializer(const VulkanDevice* _device, const RHISamplerInitializer& _initializer) {

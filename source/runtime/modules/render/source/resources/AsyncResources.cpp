@@ -70,8 +70,8 @@ namespace Moer {
 
         RHITextureRef present_texture;
 
-        std::vector<RHITextureRef>             swapchain_textures;
-        std::vector<RHIUnorderedAccessViewRef> swapchain_uavs;
+        Moer::Array<RHITextureRef>             swapchain_textures;
+        Moer::Array<RHIUnorderedAccessViewRef> swapchain_uavs;
         uint64_t                               frame_index     = 0;
         uint64_t                               presented_index = 0;
 
@@ -125,12 +125,9 @@ namespace Moer {
     }
 
     VirtualViewport::Impl::~Impl() {
-        // Implementation of UploadTexture destructor
-        // ...
     }
     VirtualViewport::Impl::Impl(const VirtualViewportCreateInfo& create_info) {
-        // Implementation of UploadTexture constructor
-        // ...
+
         present_fence = g_rhi->RHICreateFence({.usage = EFenceUsage::TIMELINE});
 
         copy_queue    = g_rhi->CreateCommandQueue(ECommandQueueType::COPY);
@@ -141,27 +138,27 @@ namespace Moer {
         info.format            = create_info.format;
         info.name              = create_info.name;
 
-        upload_texture_create_info = RHITextureCreateInfo::Create2D(create_info.name.c_str(),
+        upload_texture_create_info = RHITextureCreateInfo::Create2D("virtual viewport",
                                                                     create_info.extent,
                                                                     create_info.format)
                                          .SetArraySize(1)
                                          .SetNumMips(1)
                                          .SetClearAttachment({})
+                                         .SetInitialLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED)
                                          .SetUsageFlags(
-                                             ETextureUsageFlags::ATTACHMENT_RENDER |
+                                             ETextureUsageFlags::COLOR_ATTACHMENT |
                                              ETextureUsageFlags::TRANSFER_SRC |
+                                             ETextureUsageFlags::SRGB |
                                              ETextureUsageFlags::SAMPLED);
 
-        present_texture = g_rhi->RHICreateTexture(upload_texture_create_info);
+        auto present_texture_create_info = upload_texture_create_info;
 
-        EnqueueRenderTask([this]() { InitRenderThread(); });
-    }
+        present_texture = g_rhi->RHICreateTexture(present_texture_create_info.SetUsageFlags(
+            ETextureUsageFlags::COLOR_ATTACHMENT |
+            ETextureUsageFlags::SAMPLED |
+            ETextureUsageFlags::TRANSFER_DST));
 
-    void VirtualViewport::Impl::InitRenderThread() {
-        // Implementation of InitRenderThread method
-        // ...
-        assert(Moer::IsCurrentlyRenderThread());
-
+        auto* texture = g_rhi->RHIGetViewportBackBufferUAV(g_rhi->RHIGetMainViewport(), 0)->GetTexture();
         swapchain_textures.resize(info.back_buffer_count);
         swapchain_uavs.resize(info.back_buffer_count);
         for (int i = 0; i < info.back_buffer_count; ++i) {
@@ -173,6 +170,35 @@ namespace Moer {
                                                         .SetMipLevel(0)
                                                         .SetDimension(ETextureDimension::TEX_2D));
         }
+        RHIFenceRef fence = g_rhi->RHICreateFence({.usage = EFenceUsage::AQUIRE_NEXT_FRAME});
+
+        RHIBarrierDependencyInfo           barrier_info;
+        Moer::Array<RHITextureBarrierInfo> barriers(info.back_buffer_count + 1);
+        for (uint32_t i = 0; i < info.back_buffer_count; ++i) {
+            barriers[i].SetDstTextureLayout(TEXTURE_LAYOUT_COLOR_ATTACHMENT);
+            barriers[i].SetTexture(swapchain_textures[i]);
+            barriers[i].SetSubResourceRange({});
+            barriers[i].SetSrcTextureLayout(TEXTURE_LAYOUT_UNDEFINED);
+        }
+        barriers[info.back_buffer_count].SetDstTextureLayout(TEXTURE_LAYOUT_TRANSFER_DST);
+        barriers[info.back_buffer_count].SetTexture(present_texture);
+        barriers[info.back_buffer_count].SetSubResourceRange({});
+
+        barrier_info.texture_barrier_count = barriers.size();
+        barrier_info.p_texture_barriers    = barriers.data();
+
+        copy_cmd_list->SetPipelineBarrier(barrier_info);
+
+        RHISubmitInfo submit_info;
+        submit_info.Signal(fence, 1);
+        copy_queue->SubmitCommands(1, copy_cmd_list, &submit_info);
+        fence->Wait(1);
+    }
+
+    void VirtualViewport::Impl::InitRenderThread() {
+        // Implementation of InitRenderThread method
+        // ...
+        assert(Moer::IsCurrentlyRenderThread());
     }
 
     void VirtualViewport::Impl::OnResize(Moer::Vector2i extent) {
