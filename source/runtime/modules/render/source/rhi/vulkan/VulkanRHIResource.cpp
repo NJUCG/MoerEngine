@@ -8,10 +8,10 @@
 #include "VulkanDescriptor.h"
 #include "VulkanRHIResource.h"
 #include "VulkanPipelineResourceCache.h"
-#include "VulkanCommandQueue.h"
+#include "VulkanCommand.h"
 
 #include "rhi/RHI.h"
-#include "rhi/RHICommandQueue.h"
+#include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
@@ -868,6 +868,19 @@ uint32_t VulkanEnumTranslator::METoVkQueueFamilyIndex(ECommandQueueType _type, c
             return _device->GetQueueFamilyIndices().transfer.value();
         default:
             return VK_QUEUE_FAMILY_IGNORED;
+    }
+}
+
+uint32_t VulkanEnumTranslator::METoVkQueueFamilyIndex(ECommandListType _type, const VulkanDevice* _device) {
+    switch (_type) {
+        case ECommandListType::GRAPHICS:
+            return _device->GetQueueFamilyIndices().graphics.value();
+        case ECommandListType::COMPUTE:
+            return _device->GetQueueFamilyIndices().compute.value();
+        case ECommandListType::COPY:
+            return _device->GetQueueFamilyIndices().transfer.value();
+        default:
+            return _device->GetQueueFamilyIndices().graphics.value();
     }
 }
 

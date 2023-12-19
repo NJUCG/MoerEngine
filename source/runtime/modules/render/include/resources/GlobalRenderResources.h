@@ -7,22 +7,22 @@ class RHICommandQueue;
 class RHIShaderResourceView;
 namespace Moer {
     struct GlobalRenderFrameData {
-        RHITexture* upload_texture;
+        // RHITexture* upload_texture;
 
-        RHIShaderResourceView* upload_texture_srv;
+        // RHIShaderResourceView* upload_texture_srv;
 
-        RHIGraphicsCommandList* command_list;
+        // RHIGraphicsCommandList* command_list;
 
         //MARK... todo compute command list and queue
     };
     struct GlobalRenderData {
-        std::vector<GlobalRenderFrameData> frame_datas;
+        // std::vector<GlobalRenderFrameData> frame_datas;
 
-        RHICommandQueue* graphics_command_queue;
+        // RHICommandQueue* graphics_command_queue;
 
-        RHICommandQueue* compute_command_queue;
+        // RHICommandQueue* compute_command_queue;
 
-        RHICommandQueue* transfer_command_queue;
+        // RHICommandQueue* transfer_command_queue;
     };
 
     class GlobalRenderResources {

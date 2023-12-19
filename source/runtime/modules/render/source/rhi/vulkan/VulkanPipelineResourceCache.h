@@ -15,7 +15,7 @@ struct PushConstantInfo {
     VkShaderStageFlags   flags;
     uint32_t             size;
     uint32_t             byte_offset_in_raw_data;
-    std::vector<uint8_t> raw_data;
+    Moer::Array<uint8_t> raw_data;
 };
 
 class VulkanPipelineResourceCache {

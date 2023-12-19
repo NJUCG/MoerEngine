@@ -1,6 +1,7 @@
 ﻿#ifndef THREAD_MANAGER_H
 #define THREAD_MANAGER_H
 #include "API_Macro.h"
+#include "misc/STL.h"
 #include <map>
 #include <string>
 #include <thread>
@@ -81,18 +82,20 @@ public:
     inline int32_t        GetNum() { return m_threads.size(); }
     void                  Tick();
     static ThreadManager& Instance();
-    static std::string    GetThreadName(uint32_t id);
+    static const char*    GetThreadName(uint32_t id);
     static void           SetGameThreadID(uint32_t _game_thread_id);
     static void           SetRenderThreadID(uint32_t _render_thread_id);
     static uint32_t       GetRenderThreadID();
     static uint32_t       GetGameThreadID();
     static uint32_t       GetCurrentThreadID();
+    static uint32_t       GetCurrentThreadIndex();
 
 private:
-    void                                ShutDown();
-    RunnableThread*                     GetRunnableThread(uint32_t id);
-    std::map<uint32_t, RunnableThread*> m_threads;
-    std::string                         GetRunnableThreadName(uint32_t id);
+    void                                 ShutDown();
+    RunnableThread*                      GetRunnableThread(uint32_t id);
+    Moer::Map<uint32_t, RunnableThread*> m_threads;
+    Moer::Map<uint32_t, uint32_t>        m_thread_indexs;
+    const char*                          GetRunnableThreadName(uint32_t id);
 };
 
 class RunnableThread {

@@ -11,8 +11,7 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
-#include "rhi/RHICommandList.h"
-#include "rhi/RHICommandQueue.h"
+#include "rhi/RHICommand.h"
 #include "shader/Shader.h"
 #include "shader/ShaderResourceManager.h"
 
@@ -92,13 +91,13 @@ namespace Moer {
         create_info.format            = _init_info.format;
         create_info.back_buffer_count = 3;
         virtual_viewport              = MoerNew(VirtualViewport)(create_info);
-        render_queue                  = g_rhi->CreateCommandQueue(ECommandQueueType::GRAPHICS);
+        render_queue                  = g_rhi->RHICreateCommandQueue(ECommandQueueType::GRAPHICS);
 
         render_cmd_lists.resize(create_info.back_buffer_count);
         // for (uint32_t i = 0; i < create_info.back_buffer_count; ++i) {
         //     render_cmd_lists[i] = g_rhi->CreateGraphicsCommandList();
         // }
-        render_cmd_lists[0] = g_rhi->CreateGraphicsCommandList();
+        render_cmd_lists[0] = g_rhi->RHICreateGraphicsCommandList(g_rhi->RHIGetCurrentCommandAllocator());
 
         render_fence = g_rhi->RHICreateFence({.usage = EFenceUsage::TIMELINE});
 

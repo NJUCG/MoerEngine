@@ -9,6 +9,7 @@
 #include "misc/Ptr.h"
 #include "misc/CountableRef.h"
 
+#include "misc/STL.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResourceInitilizer.h"
 
@@ -445,15 +446,15 @@ struct RHIBatchedShaderParameters {
         return &raw_data[byte_offset];
     }
 
-    const std::vector<RHIShaderResourceParameter>& GetResourceParameters() const {
+    const Moer::Array<RHIShaderResourceParameter>& GetResourceParameters() const {
         return resource_parameters;
     }
 
-    const std::vector<RHIShaderConstantParameter>& GetConstantParameters() const {
+    const Moer::Array<RHIShaderConstantParameter>& GetConstantParameters() const {
         return constant_parameters;
     }
 
-    const std::vector<uint8_t>& GetRawData() const {
+    const Moer::Array<uint8_t>& GetRawData() const {
         return raw_data;
     }
 
@@ -461,9 +462,9 @@ private:
     void SetParameters(const Shader* shader, size_t _data_size, uint8_t* data_source);
     void SetParameters(RHIShader* shader, size_t _data_size, uint8_t* data_source);
     //offset in raw_data, size, slot and space
-    std::vector<RHIShaderResourceParameter> resource_parameters;
-    std::vector<RHIShaderConstantParameter> constant_parameters;
-    std::vector<uint8_t>                    raw_data;
+    Moer::Array<RHIShaderResourceParameter> resource_parameters;
+    Moer::Array<RHIShaderConstantParameter> constant_parameters;
+    Moer::Array<uint8_t>                    raw_data;
 };
 //todo: may not inherit from RHIResource
 class RHIShaderRootParameterLayout : public RHIResource {
@@ -568,47 +569,6 @@ protected:
 
 protected:
     RHIBufferInfo info;
-};
-
-/**
- * @brief Actually the same as RHIBuffer, but created with Fix size for shader parameter updates
- * 
- */
-template<concept_is_shader_struct TStructuredParam>
-class RHIStructuredBuffer : public RHIResource {
-public:
-    /**
-     * @brief Construct a new RHIStructureBuffer object with standalone buffer
-     * 
-     * @param _usages Buffer Usage, StructuredBuffer .etc
-     */
-    RHIStructuredBuffer() : RHIResource(RRT_BUFFER) {}
-
-    /**
-     * @brief Construct a new RHIStructureBuffer object from existing RHIBuffer
-     * 
-     * @param _reference existing RHIBuffer
-     * @param offset offset in RHIBuffer
-     */
-    RHIStructuredBuffer(RHIBufferRef _reference, uint32_t _offset = 0) : RHIResource(RRT_BUFFER), reference(_reference), offset(_offset) { assert(_reference != nullptr); };
-
-    /**
-     * @brief Upload Parameters to target RHIBuffer in graphic queue, recommend to use barrier instead
-     * 
-     */
-    void UpLoadParameters() {
-        if (reference->IsValid()) {
-            RHIUploadBuffer((uint8_t*)&param, sizeof(TStructuredParam), reference);
-        }
-    };
-
-    TStructuredParam param;
-
-private:
-    friend void RHIUploadBuffer(const uint8_t* data, uint32_t size, RHIBuffer* _target);
-
-    RHIBufferRef reference;
-    uint32_t     offset;
 };
 
 struct RHITextureInfo {

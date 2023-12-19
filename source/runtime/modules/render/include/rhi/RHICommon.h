@@ -142,6 +142,8 @@ struct Extent3D {
     };
     Extent3D(uint32_t _x, uint32_t _y, uint32_t _z) : x(_x), y(_y), z(_z) {
     }
+    Extent3D() : x(0), y(0), z(0) {
+    }
     bool operator==(const Extent3D& other) const {
         return x == other.x && y == other.y && z == other.z;
     };
@@ -760,7 +762,7 @@ enum EGlobalBufferLifeScope {
     MULTI_FRAME
 };
 
-enum class ETextureUsageFlags : uint64_t {
+enum class ETextureUsageFlags : uint32_t {
     UNDEFINED = 0ULL,
 
     ATTACHMENT_RENDER        = 1 << 0,
@@ -872,6 +874,17 @@ enum class ECommandQueueType {
     GRAPHICS,
     COMPUTE,
     COPY
+};
+
+enum class ECommandListType {
+    GRAPHICS,
+    SECENDARY,
+    COMPUTE,
+    COPY,
+    VIDEO_ENCODE,
+    VIDEO_PROCESS,
+    VIDEO_DECODE,
+    Num
 };
 
 #pragma region utils

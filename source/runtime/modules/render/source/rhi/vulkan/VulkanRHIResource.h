@@ -99,6 +99,7 @@ public:
     static VkShaderStageFlags METoVKShaderStageFlags(EShaderType _type);
 
     static uint32_t METoVkQueueFamilyIndex(ECommandQueueType _type, const VulkanDevice* _device);
+    static uint32_t METoVkQueueFamilyIndex(ECommandListType _type, const VulkanDevice* _device);
 };
 
 #pragma endregion

@@ -2,11 +2,10 @@
 #include "Core.h"
 #include "misc/MMemory.h"
 #include "rhi/RHI.h"
-#include "rhi/RHICommandQueue.h"
+#include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
-#include "rhi/RHICommandList.h"
 
 #include "taskgraph/GraphTask.h"
 #include "taskgraph/TaskGraph.h"
@@ -77,7 +76,7 @@ namespace Moer {
 
         RHICommandQueue* copy_queue;
 
-        RHIGraphicsCommandList* copy_cmd_list;
+        RHICopyCommandList* copy_cmd_list;
     };
     VirtualViewport::VirtualViewport(const VirtualViewportCreateInfo& create_info) {
         // Implementation of UploadTexture constructor
@@ -130,8 +129,8 @@ namespace Moer {
 
         present_fence = g_rhi->RHICreateFence({.usage = EFenceUsage::TIMELINE});
 
-        copy_queue    = g_rhi->CreateCommandQueue(ECommandQueueType::COPY);
-        copy_cmd_list = g_rhi->CreateGraphicsCommandList();
+        copy_queue    = g_rhi->RHICreateCommandQueue(ECommandQueueType::COPY);
+        copy_cmd_list = g_rhi->RHICreateCopyCommandList(g_rhi->RHIGetCurrentCommandAllocator());
 
         info.back_buffer_count = create_info.back_buffer_count;
         info.extent            = create_info.extent;
@@ -168,6 +167,7 @@ namespace Moer {
                                                     RHIViewInfo::CreateTextureUAVInfo()
                                                         .SetArrayRange(0, 1)
                                                         .SetMipLevel(0)
+                                                        .SetFormat(info.format)
                                                         .SetDimension(ETextureDimension::TEX_2D));
         }
         RHIFenceRef fence = g_rhi->RHICreateFence({.usage = EFenceUsage::AQUIRE_NEXT_FRAME});
@@ -186,9 +186,9 @@ namespace Moer {
 
         barrier_info.texture_barrier_count = barriers.size();
         barrier_info.p_texture_barriers    = barriers.data();
-
+        copy_cmd_list->Open();
         copy_cmd_list->SetPipelineBarrier(barrier_info);
-
+        copy_cmd_list->Close();
         RHISubmitInfo submit_info;
         submit_info.Signal(fence, 1);
         copy_queue->SubmitCommands(1, copy_cmd_list, &submit_info);
@@ -221,16 +221,12 @@ namespace Moer {
         cmd_list->Reset();
         Offset3D zero_offset = {0, 0, 0};
 
-        cmd_list->BlitTexture(
-            swapchain_textures[0],
-            TEXTURE_LAYOUT_COLOR_ATTACHMENT,
-            present_texture,
-            TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            RHISubresourceSlice(ETextureAspectFlags::COLOR, 0, 0),
-            &zero_offset,
-            RHISubresourceSlice(ETextureAspectFlags::COLOR, 0, 0),
-            &zero_offset,
-            SF_CUBIC);
+        RHIBlitTextureInfo blit_info;
+        blit_info.filter = SF_CUBIC;
+
+        cmd_list->BlitTexture(blit_info,
+                              swapchain_textures[current_rendered % info.back_buffer_count],
+                              present_texture);
         cmd_list->Close();
 
         RHISubmitInfo submit_info;

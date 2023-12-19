@@ -321,6 +321,13 @@ struct RHISubresourceSlice {
           plane_index(_plane_index),
           plane_count(s_all) {}
 
+    RHISubresourceSlice() : RHISubresourceSlice(
+                                ETextureAspectFlags::COLOR,
+                                0,
+                                0,
+                                1,
+                                0,
+                                s_all) {}
     inline bool IsAllArraySlices() const {
         return array_count == s_all;
     }
@@ -349,10 +356,10 @@ struct RHISubresourceRange : public RHISubresourceSlice {
 
     uint8_t num_mips = s_all;
 
-    RHISubresourceRange(ETextureAspectFlags _aspect = ETextureAspectFlags::COLOR) : RHISubresourceSlice(
-                                                                                        _aspect,
-                                                                                        0,
-                                                                                        0){};
+    RHISubresourceRange(ETextureAspectFlags _aspect) : RHISubresourceSlice(
+                                                           _aspect,
+                                                           0,
+                                                           0){};
     RHISubresourceRange(
         ETextureAspectFlags _aspect,
         uint32_t            _mip_index,
@@ -373,6 +380,8 @@ struct RHISubresourceRange : public RHISubresourceSlice {
                               _mip_index,
                               _array_index,
                               _plane_index) {}
+
+    RHISubresourceRange() : RHISubresourceRange(ETextureAspectFlags::COLOR, 0, 1, 0, 1, 0, (uint32_t)s_all) {}
     inline bool IsAllMips() const {
         return num_mips == s_all;
     }

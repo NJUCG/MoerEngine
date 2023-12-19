@@ -3,8 +3,7 @@
 #include "RenderThread.h"
 #include "config/ConfigManager.h"
 #include "rhi/RHI.h"
-#include "rhi/RHICommandList.h"
-#include "rhi/RHICommandQueue.h"
+#include "rhi/RHICommand.h"
 
 #include "rhi/RHIResourceInitilizer.h"
 #include "shader/Shader.h"
@@ -145,8 +144,8 @@ void ImGUIRenderer::Init() {
 
     frame_data                  = IM_NEW(UIFrameData)();
     frame_data->present_fence   = g_rhi->RHICreateFence(RHIFenceCreateInfo(EFenceUsage::PRESENT));
-    frame_data->ui_command_list = g_rhi->CreateGraphicsCommandList(nullptr);
-    frame_data->command_queue   = g_rhi->CreateCommandQueue(ECommandQueueType::GRAPHICS);
+    frame_data->ui_command_list = g_rhi->RHICreateGraphicsCommandList(g_rhi->RHIGetCurrentCommandAllocator());
+    frame_data->command_queue   = g_rhi->RHICreateCommandQueue(ECommandQueueType::GRAPHICS);
 
     ImGuiIO& io = ImGui::GetIO();
     assert(io.BackendRendererUserData == nullptr && "GUI backend already initialized.");
@@ -193,7 +192,7 @@ void ImGUIRenderer::ShutDown() {
     io.BackendRendererUserData = nullptr;
     io.BackendFlags &= ~(ImGuiBackendFlags_RendererHasVtxOffset | ImGuiBackendFlags_RendererHasViewports);
     IM_DELETE(bd);
-
+    frame_data->command_queue->WaitForQueueComplete();
     delete frame_data;
 }
 
@@ -469,7 +468,7 @@ void SetupRenderState(ImDrawData* draw_data, RHIGraphicsCommandList* commandList
     batched_params.SetParameters(backend_data->shader_module_vert, vert_param);
     batched_params.SetParameters(backend_data->shader_module_frag, frag_param);
     // should internally allocate descriptor set for vulkan if not allocated
-    g_rhi->RHISetBatchedShaderParameters(backend_data->pipeline, batched_params);
+    g_rhi->RHISetBatchedShaderParameters(backend_data->pipeline, batched_params, true);
 
     // 3. global: set viewport, MARK: does it work ?
     ViewPort view_port(0, 0, draw_data->DisplaySize.x * draw_data->FramebufferScale.x, draw_data->DisplaySize.y * draw_data->FramebufferScale.y, 0.f, 1.f);
@@ -647,7 +646,7 @@ void CreateFontsTexture() {
         tex_barriers[1].p_texture          = font_texture;
         tex_barriers[1].sub_resource_range = range;
 
-        RHIGraphicsCommandList* command_list = g_rhi->CreateGraphicsCommandList();
+        RHIGraphicsCommandList* command_list = g_rhi->RHICreateGraphicsCommandList(g_rhi->RHIGetCurrentCommandAllocator());
 
         RHIBarrierDependencyInfo font_create_barriers{};
         font_create_barriers.texture_barrier_count = 1;
@@ -665,7 +664,7 @@ void CreateFontsTexture() {
             0);
 
         // 3. MARK: pRegion[0] is trying to copy 518144 bytes plus 0 offset to/from the VkBuffer (VkBuffer 0xcb1c7c000000001b[]) which exceeds the VkBuffer total size of 131072 bytes.
-        command_list->CopyBufferToTexture(staging_buffer, font_texture, copy_info);
+        command_list->CopyBufferToTexture(copy_info, staging_buffer, font_texture);
 
         RHIBarrierDependencyInfo font_copy_barriers{};
         font_copy_barriers.p_texture_barriers    = &tex_barriers[1];
@@ -683,7 +682,7 @@ void CreateFontsTexture() {
 
         command_list->Close();
 
-        RHICommandQueue* queue = g_rhi->CreateCommandQueue(ECommandQueueType::GRAPHICS);
+        RHICommandQueue* queue = g_rhi->RHICreateCommandQueue(ECommandQueueType::GRAPHICS);
 
         RHIFenceCreateInfo fence_info{EFenceUsage::TIMELINE};
         RHIFenceRef        fence = g_rhi->RHICreateFence(fence_info);
@@ -767,9 +766,9 @@ void GuiCreateWindow(ImGuiViewport* viewport) {
 
     viewport->RendererUserData = viewport_data;
 
-    viewport_data->command_queue = g_rhi->CreateCommandQueue(ECommandQueueType::GRAPHICS);
+    viewport_data->command_queue = g_rhi->RHICreateCommandQueue(ECommandQueueType::GRAPHICS);
 
-    viewport_data->comand_list = g_rhi->CreateGraphicsCommandList();
+    viewport_data->comand_list = g_rhi->RHICreateGraphicsCommandList(g_rhi->RHIGetCurrentCommandAllocator());
 
     RHIFenceCreateInfo present_fence_info{EFenceUsage::PRESENT};
     viewport_data->present_fence = g_rhi->RHICreateFence(present_fence_info);
@@ -797,9 +796,9 @@ void GuiDestroyWindow(ImGuiViewport* viewport) {
         if (viewport_data && viewport_data->command_queue && viewport_data->present_fence) {
             viewport_data->viewport->WaitForQueueComplete(viewport_data->command_queue, viewport_data->present_fence);
 
-            delete viewport_data->comand_list;
+            MoerDelete(viewport_data->comand_list);
             viewport_data->comand_list = nullptr;
-            delete viewport_data->command_queue;
+            MoerDelete(viewport_data->command_queue);
             viewport_data->command_queue = nullptr;
             // We could just call ImGui_ImplDX12_DestroyWindow(main_viewport) as a convenience but that would be misleading since we only use data->Resources[]
             for (uint32_t i = 0; i < backend_data->num_frames_in_flight; i++)

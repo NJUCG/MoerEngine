@@ -16,9 +16,7 @@ RHI* g_rhi = nullptr;
 
 // global shader
 
-#include "rhi/RHICommandList.h"
-#include "rhi/RHICommandQueue.h"
-
+#include "rhi/RHICommand.h"
 RHIBufferRef CreateBufferFromData(const RHIBufferCreateInfo& info, uint32_t size, void* data) {
     RHIBufferRef buffer     = g_rhi->RHICreateBuffer(info);
     void*        mapped_ptr = g_rhi->RHIMapBuffer(buffer, 0, size);

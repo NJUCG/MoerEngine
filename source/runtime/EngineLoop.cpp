@@ -8,8 +8,7 @@
 #include "rhi/RHIResource.h"
 #include "window/WindowContext.h"
 #include "rhi/RHI.h"
-#include "rhi/RHICommandQueue.h"
-#include "rhi/RHICommandList.h"
+#include "rhi/RHICommand.h"
 
 #include "RenderThread.h"
 

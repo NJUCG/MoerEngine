@@ -5,6 +5,7 @@
 #ifndef VULKAN_DEVICE_H
 #define VULKAN_DEVICE_H
 
+#include "misc/STL.h"
 #include "rhi/vulkan/misc/VulkanTypeDefs.h"
 #include "VulkanDeviceFeature.h"
 #include "VulkanExtension.h"
@@ -88,14 +89,8 @@ public:
     inline VkQueue GetTransferQueue() const {
         return m_transfer_queue;
     }
-    inline VkCommandPool GetDefaultCommandPool() const {
-        return m_default_pool;
-    }
-    inline VkCommandPool GetTransferCommandPool() const {
-        return m_transfer_pool;
-    }
-
-    bool GetDescriptorSets(uint32_t _hash_key, const VulkanDescriptorSetsLayout& _layout, std::vector<VulkanDescriptorSetWriter>& _writers, std::vector<VkDescriptorSet>& _sets);
+    class VulkanCommandAllocator* GetCurrentCommandAllocator();
+    bool                          GetDescriptorSets(uint32_t _hash_key, const VulkanDescriptorSetsLayout& _layout, std::vector<VulkanDescriptorSetWriter>& _writers, std::vector<VkDescriptorSet>& _sets);
 
 private:
     VkPhysicalDevice                  m_gpu;
@@ -112,20 +107,19 @@ private:
     VkQueue  m_compute_queue;
     VkQueue  m_transfer_queue;
 
-    VkCommandPool m_default_pool;
-    VkCommandPool m_transfer_pool;
-
     VmaAllocator                  m_allocator;
     VulkanDescriptorSetAllocator* m_descriptor_allocator;
+
+    Moer::Array<class VulkanCommandAllocator*> m_command_allocators;
 
 private:
     VkPhysicalDevice SelectGpu(const DeviceInitializer& _init);
 
     void InitGpu(const DeviceInitializer& _initializer);
     void CreateDevice(const DeviceInitializer& _initializer);
-    void CreateCommandPools();
     void CreateMemoryAllocator();
     void CreateDescriptorAllocator();
+    void CreateCommandAllocators();
 
     TExtensionArray                  GetGpuExtensions(VkPhysicalDevice _gpu) const;
     VkPhysicalDeviceMemoryProperties GetMemoryProperties(VkPhysicalDevice _gpu) const;

@@ -3,14 +3,14 @@
 #include "config/ConfigManager.h"
 #include "log/LogSystem.h"
 #include "rhi/RHI.h"
+#include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
-#include "VulkanCommandQueue.h"
 #include "rhi/vulkan/misc/VulkanMacroUtils.h"
 #include "misc/MacroUtils.h"
 
 #include "rhi/vulkan/VulkanRHI.h"
-#include "VulkanCommandList.h"
+#include "VulkanCommand.h"
 
 #include "VulkanRHIResource.h"
 #include "VulkanRHIInitializer.h"
@@ -339,37 +339,6 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
 
 RHIComputePipelineStateRef VulkanRHIImpl::RHICreateComputePipelineState(RHIComputeShader* _compute_shader) { return RHIComputePipelineStateRef{}; }
 
-void VulkanRHIImpl::RHIUploadBuffer(RHIBufferRef _buffer_ref, const uint8_t* _data, uint32_t _size) {
-    auto* vk_buffer = static_cast<VulkanRHIBuffer*>(_buffer_ref.Get());
-    VK_CHECK_NULLPTR(vk_buffer, "RHIUploadBuffer: buffer to be uploaded is nullptr!", return);
-
-    VmaAllocator allocator = m_device->GetVmaAllocator();
-    // create staging buffer
-    VulkanRHIBuffer* staging_buffer = static_cast<VulkanRHIBuffer*>(RHICreateBuffer({_size, 1, EBufferUsageFlags::TRANSFER_SRC}).Get());
-
-    void* p_data;
-    VK_CHECK_RESULT(vmaMapMemory(allocator, staging_buffer->m_alloc.alloc, &p_data));
-    memcpy(p_data, _data, _size);
-    vmaUnmapMemory(allocator, staging_buffer->m_alloc.alloc);
-
-    CopyBuffer(staging_buffer, vk_buffer);
-}
-
-void VulkanRHIImpl::RHICopyBuffer(RHIBuffer* _src, RHIBuffer* _dst) {
-    auto* src = static_cast<VulkanRHIBuffer*>(_src);
-    auto* dst = static_cast<VulkanRHIBuffer*>(_dst);
-    if (src == nullptr || dst == nullptr) {
-        LOG_CRITICAL("RHICopyBuffer: buffer src or dst is nullptr, src: {}, dst: {}.", typeid(_src).name(), typeid(_dst).name());
-        return;
-    }
-    if (_src->GetInfo().size != _dst->GetInfo().size) {
-        LOG_CRITICAL("RHICopyBuffer: Source buffer size {} is not equal to destination buffer size {}.", _src->GetInfo().size, _dst->GetInfo().size);
-        return;
-    }
-
-    CopyBuffer(src, dst);
-}
-
 RHIBufferRef VulkanRHIImpl::RHICreateBuffer(const RHIBufferCreateInfo& info) {
     RHIBufferInfo buffer_info{};
     buffer_info.size   = info.size;
@@ -423,23 +392,29 @@ RHITextureRef VulkanRHIImpl::RHICreateTexture(const RHITextureCreateInfo& info) 
     VulkanRHITexture* vk_texture = new VulkanRHITexture(info, m_device);
 
     VkImageCreateInfo image_create_info{};
-    image_create_info.sType                 = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    image_create_info.pNext                 = nullptr;
-    image_create_info.flags                 = 0;
-    image_create_info.imageType             = VulkanRHITexture::METoVKImageType(info.dimension);
-    image_create_info.format                = VulkanEnumTranslator::METoVKFormat(info.format);
-    image_create_info.extent.width          = info.extent.x;
-    image_create_info.extent.height         = info.extent.y;
-    image_create_info.extent.depth          = info.depth;
-    image_create_info.mipLevels             = info.num_mips;
-    image_create_info.arrayLayers           = info.array_size;
-    image_create_info.samples               = VulkanEnumTranslator::METoVKSampleCountFlagBits(info.num_samples);
-    image_create_info.tiling                = VK_IMAGE_TILING_OPTIMAL;// MARK...
-    image_create_info.usage                 = VulkanRHITexture::METoVKImageUsageFlags(info.usage);
-    image_create_info.sharingMode           = VK_SHARING_MODE_EXCLUSIVE;
-    image_create_info.queueFamilyIndexCount = 0;
-    image_create_info.pQueueFamilyIndices   = nullptr;
-    image_create_info.initialLayout         = VulkanEnumTranslator::METoVKImageLayout(info.layout);
+    image_create_info.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    image_create_info.pNext         = nullptr;
+    image_create_info.flags         = 0;
+    image_create_info.imageType     = VulkanRHITexture::METoVKImageType(info.dimension);
+    image_create_info.format        = VulkanEnumTranslator::METoVKFormat(info.format);
+    image_create_info.extent.width  = info.extent.x;
+    image_create_info.extent.height = info.extent.y;
+    image_create_info.extent.depth  = info.depth;
+    image_create_info.mipLevels     = info.num_mips;
+    image_create_info.arrayLayers   = info.array_size;
+    image_create_info.samples       = VulkanEnumTranslator::METoVKSampleCountFlagBits(info.num_samples);
+    image_create_info.tiling        = VK_IMAGE_TILING_OPTIMAL;// MARK...
+    image_create_info.usage         = VulkanRHITexture::METoVKImageUsageFlags(info.usage);
+    image_create_info.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+    if (uint32_t(info.usage | ETextureUsageFlags::TRANSFER_DST) || uint32_t(info.usage | ETextureUsageFlags::TRANSFER_SRC)) {
+        image_create_info.sharingMode           = VK_SHARING_MODE_CONCURRENT;
+        image_create_info.queueFamilyIndexCount = 2;
+        uint32_t queue_family_indices[]         = {m_device->GetQueueFamilyIndices().graphics.value(),
+                                                   m_device->GetQueueFamilyIndices().transfer.value()};
+        image_create_info.pQueueFamilyIndices   = queue_family_indices;
+    }
+
+    image_create_info.initialLayout = VulkanEnumTranslator::METoVKImageLayout(info.layout);
 
     VmaAllocationCreateInfo alloc_create_info{};
     alloc_create_info.flags = 0;
@@ -490,9 +465,11 @@ RHIUnorderedAccessViewRef VulkanRHIImpl::RHICreateUnorderedAccessView(RHIViewabl
     image_view_create_info.pNext = nullptr;
     image_view_create_info.flags = 0;
 
-    image_view_create_info.image                           = vk_texture->GetHandle();
-    image_view_create_info.viewType                        = VulkanEnumTranslator::METoVKImageViewType(_view_info.texture.uav.dimension);
-    image_view_create_info.format                          = _view_info.texture.uav.format == PF_UNDEFINED ? VulkanEnumTranslator::METoVKFormat(vk_texture->GetUAVFormat()) : VulkanEnumTranslator::METoVKFormat(_view_info.texture.uav.format);
+    image_view_create_info.image    = vk_texture->GetHandle();
+    image_view_create_info.viewType = VulkanEnumTranslator::METoVKImageViewType(_view_info.texture.uav.dimension);
+    image_view_create_info.format   = _view_info.texture.uav.format == PF_UNDEFINED ? VulkanEnumTranslator::METoVKFormat(vk_texture->GetUAVFormat()) : VulkanEnumTranslator::METoVKFormat(_view_info.texture.uav.format);
+    assert(image_view_create_info.format != VK_FORMAT_UNDEFINED && "RHICreateUnorderedAccessView: format is undefined!");
+
     image_view_create_info.components                      = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
     image_view_create_info.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;// MARK...
     image_view_create_info.subresourceRange.baseMipLevel   = _view_info.texture.uav.mip_min;
@@ -505,20 +482,33 @@ RHIUnorderedAccessViewRef VulkanRHIImpl::RHICreateUnorderedAccessView(RHIViewabl
     return RHIUnorderedAccessViewRef(vk_uav);
 }
 
-RHICommandQueue* VulkanRHIImpl::CreateCommandQueue(ECommandQueueType _type) {
+RHICommandQueue* VulkanRHIImpl::RHICreateCommandQueue(ECommandQueueType _type) {
     return MoerNew(VulkanRHICommandQueue(m_device, _type));
 }
 
-RHIGraphicsCommandList* VulkanRHIImpl::CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state) {
-    // todo: need to be more detailed.
-    return MoerNew(VulkanRHIGraphicsCommandList(m_device, m_device->GetDefaultCommandPool(), VK_COMMAND_BUFFER_LEVEL_PRIMARY));
+// RHIGraphicsCommandList* VulkanRHIImpl::CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state) {
+//     // todo: need to be more detailed.
+//     return MoerNew(VulkanRHIGraphicsCommandList(m_device, m_device->GetDefaultCommandPool(), VK_COMMAND_BUFFER_LEVEL_PRIMARY));
+// }
+
+RHIGraphicsCommandList* VulkanRHIImpl::RHICreateGraphicsCommandList(RHICommandAllocator* _allocator, RHIGraphicsPipelineState* _initial_state) {
+    auto* vk_allocator = static_cast<VulkanCommandAllocator*>(_allocator);
+    VK_CHECK_NULLPTR(vk_allocator, "RHICreateGraphicsCommandList: allocator is nullptr!", return nullptr);
+
+    return MoerNew(VulkanRHIGraphicsCommandList(m_device, vk_allocator->GetHandle(ECommandListType::GRAPHICS), VK_COMMAND_BUFFER_LEVEL_PRIMARY));
 }
 
-RHIComputeCommandList* VulkanRHIImpl::CreateComputeCommandList(RHIComputePipelineState* _initial_state) {
-    return nullptr;
+// RHIComputeCommandList* VulkanRHIImpl::CreateComputeCommandList(RHIComputePipelineState* _initial_state) {
+//     return nullptr;
+// }
+RHICopyCommandList* VulkanRHIImpl::RHICreateCopyCommandList(RHICommandAllocator* _allocator) {
+    auto* vk_allocator = static_cast<VulkanCommandAllocator*>(_allocator);
+    VK_CHECK_NULLPTR(vk_allocator, "RHICreateCopyCommandList: allocator is nullptr!", return nullptr);
+
+    return MoerNew(VulkanRHICopyCommandList(m_device, vk_allocator->GetHandle(ECommandListType::COPY), VK_COMMAND_BUFFER_LEVEL_PRIMARY));
 }
 
-void VulkanRHIImpl::RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso, const RHIBatchedShaderParameters& _batched_params) {
+void VulkanRHIImpl::RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) {
     const auto* vk_pso = static_cast<VulkanRHIGraphicsPipelineState*>(_pso);
     VK_CHECK_NULLPTR(vk_pso, "SetBatchedShaderParameter: graphics pipeline state is nullptr!", return);
     // resources
@@ -576,12 +566,19 @@ void VulkanRHIImpl::RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso
 
     // cache push constants
     const auto& push_constants = _batched_params.GetConstantParameters();
+    if (!b_update_constant) return;
     for (const auto& params : push_constants) {
         vk_pso->m_pipeline_state_cache->AddConstantToPush({VulkanEnumTranslator::METoVKShaderStageFlags(params.shader_type),
                                                            (uint32_t)params.size_in_32bit * 4,
                                                            params.byte_offset_in_raw_data,
                                                            std::move(_batched_params.GetRawData())});
     }
+}
+
+RHICommandAllocator* VulkanRHIImpl::RHIGetCurrentCommandAllocator() {
+    RHICommandAllocator* allocator = m_device->GetCurrentCommandAllocator();
+    VK_CHECK_NULLPTR(allocator, "RHIGetCurrentCommandAllocator: current command allocator is nullptr!", return nullptr);
+    return m_device->GetCurrentCommandAllocator();
 }
 
 #pragma endregion
@@ -608,6 +605,8 @@ void VulkanRHIImpl::InitVulkan() {
 
     swap_chain->Init(&width, &height, Moer::ConfigManager::GetInstance().GetInitConfig().editor_vsync);
     m_main_viewport = new VulkanViewport(swap_chain, max_frame_in_flight);
+
+    //init command allocator
 }
 
 #pragma region vulkan functions
@@ -739,19 +738,6 @@ void VulkanRHIImpl::EndSingleTimeCommands(VkCommandBuffer _command_buffer, VkCom
     vkQueueWaitIdle(_queue);
 
     vkFreeCommandBuffers(m_device->GetDevice(), _pool, 1, &_command_buffer);
-}
-
-void VulkanRHIImpl::CopyBuffer(VulkanRHIBuffer* _src, VulkanRHIBuffer* _dst) {
-    auto transfer_pool  = m_device->GetTransferCommandPool();
-    auto command_buffer = BeginSingleTimeCommands(transfer_pool);
-
-    VkBufferCopy copy_region{};
-    copy_region.srcOffset = 0;
-    copy_region.dstOffset = 0;
-    copy_region.size      = _src->GetInfo().size;
-    vkCmdCopyBuffer(command_buffer, _src->GetHandle(), _dst->GetHandle(), 1, &copy_region);
-
-    EndSingleTimeCommands(command_buffer, transfer_pool, m_device->GetTransferQueue());
 }
 
 #pragma endregion

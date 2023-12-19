@@ -172,7 +172,6 @@ void RHI::RHIFlushPendingDeletes() {
 //     params.write_target = test_view;
 //     RHIBatchedShaderParameters batched_params;
 //     batched_params.SetParameters(test_shader_vs, params);
-//     //command_list->SetBatchedShaderParameter();
 //     //VkSetDescriptorWrite()
 
 //     //rootSignature <=> pipelineLayout -> descriptorLayout descriptorLayoutBinding

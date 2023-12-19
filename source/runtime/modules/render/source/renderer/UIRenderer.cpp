@@ -1,9 +1,4 @@
 #include "renderer/UIRenderer.h"
-
-#include "rhi/RHI.h"
-#include "rhi/RHICommandList.h"
-#include "rhi/RHICommandQueue.h"
-
 #include "ui/ImGUIRenderer.h"
 
 UIRenderer* ui_renderer = nullptr;

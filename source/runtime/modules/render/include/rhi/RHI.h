@@ -16,7 +16,9 @@ enum class ERHIType {
 };
 class RHIGraphicsCommandList;
 class RHIComputeCommandList;
+class RHICopyCommandList;
 class RHICommandQueue;
+class RHICommandAllocator;
 class Shader;
 
 struct RHIInitInfo {
@@ -82,24 +84,24 @@ public:
     virtual RHIComputePipelineStateRef RHICreateComputePipelineState(RHIComputeShader* _compute_shader, RHIPipelineBinaryDataLibrary* _pipeline_library) {
         return RHICreateComputePipelineState(_compute_shader);
     }
-    virtual void         RHIUploadBuffer(RHIBufferRef _buffer_ref, const uint8_t* _data, uint32_t _size) = 0;
-    virtual void         RHICopyBuffer(RHIBuffer* _src, RHIBuffer* _dst)                                 = 0;
-    virtual RHIBufferRef RHICreateBuffer(const RHIBufferCreateInfo& info)                                = 0;
-    virtual void*        RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size)              = 0;
-    virtual void         RHIUnmapBuffer(RHIBuffer* _buffer)                                              = 0;
+    virtual RHIBufferRef RHICreateBuffer(const RHIBufferCreateInfo& info)                   = 0;
+    virtual void*        RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size) = 0;
+    virtual void         RHIUnmapBuffer(RHIBuffer* _buffer)                                 = 0;
 
     virtual RHITextureRef RHICreateTexture(const RHITextureCreateInfo& info) = 0;
 
     virtual RHIShaderResourceViewRef  RHICreateShaderResourceView(RHIViewableResource* _resource, const RHIViewInfo& _view_info)  = 0;
     virtual RHIUnorderedAccessViewRef RHICreateUnorderedAccessView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) = 0;
 
-    virtual RHICommandQueue* CreateCommandQueue(ECommandQueueType type) = 0;
+    virtual RHICommandQueue* RHICreateCommandQueue(ECommandQueueType type) = 0;
     // DX12 only: _initial_state
-    virtual RHIGraphicsCommandList* CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state = nullptr) = 0;
-    virtual RHIComputeCommandList*  CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr)   = 0;
+    // virtual RHIGraphicsCommandList* CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state = nullptr)                                     = 0;
+    virtual RHIGraphicsCommandList* RHICreateGraphicsCommandList(RHICommandAllocator* _allocator, RHIGraphicsPipelineState* _initial_state = nullptr) = 0;
+    // virtual RHIComputeCommandList*  CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr)                                       = 0;
+    virtual RHICopyCommandList* RHICreateCopyCommandList(RHICommandAllocator* _allocator)                                                                                        = 0;
+    virtual void                RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant = false) = 0;
 
-    virtual void RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso, const RHIBatchedShaderParameters& _batched_params) = 0;
-
+    virtual RHICommandAllocator* RHIGetCurrentCommandAllocator() = 0;
 #pragma endregion
 
     // #pragma region GUI

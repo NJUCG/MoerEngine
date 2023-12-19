@@ -1,6 +1,5 @@
-#include "VulkanCommandQueue.h"
+#include "VulkanCommand.h"
 #include "rhi/RHICommon.h"
-#include "VulkanCommandList.h"
 #include "rhi/RHIResource.h"
 #include "vulkan/vulkan_core.h"
 #include "VulkanRHIResource.h"
@@ -39,7 +38,7 @@ void VulkanRHICommandQueue::SubmitCommands(
 
     std::vector<VkCommandBufferSubmitInfo> cmd_submit_infos(_num_command_lists);
     for (uint32_t cmd_index = 0; cmd_index < _num_command_lists; cmd_index++) {
-        cmd_submit_infos[cmd_index].commandBuffer = (VkCommandBuffer)(_command_lists[cmd_index].GetNativeHandle());
+        cmd_submit_infos[cmd_index].commandBuffer = (VkCommandBuffer)(_command_lists[cmd_index]).GetNativeHandle();
         cmd_submit_infos[cmd_index].sType         = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
     }
     std::vector<VkSemaphoreSubmitInfo> vk_signal_infos;
@@ -96,4 +95,8 @@ void VulkanRHICommandQueue::SubmitCommands(
     submits.waitSemaphoreInfoCount = vk_wait_infos.size();
 
     vkQueueSubmit2(queue, _num_command_lists, &submits, VK_NULL_HANDLE);
+}
+
+void VulkanRHICommandQueue::WaitForQueueComplete() {
+    vkQueueWaitIdle(queue);
 }

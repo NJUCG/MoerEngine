@@ -6,8 +6,6 @@
 
 #include "Core.h"
 #include "rhi/RHI.h"
-#include "rhi/RHICommandQueue.h"
-#include "rhi/RHICommandList.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "taskgraph/TaskSystem.h"
