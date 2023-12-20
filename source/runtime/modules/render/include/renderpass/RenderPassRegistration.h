@@ -1,5 +1,5 @@
+#include "misc/STL.h"
 
-#include <vector>
 #include "RenderPass.h"
 
 namespace Moer {
@@ -14,6 +14,6 @@ namespace Moer {
         friend class RenderLoop;
         RenderPassRegistration() = default;
 
-        std::vector<RenderPassRef> passes;
+        Moer::Array<RenderPassRef> passes;
     };
 }// namespace Moer

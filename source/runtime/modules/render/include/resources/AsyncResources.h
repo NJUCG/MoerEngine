@@ -5,7 +5,6 @@
 #include "math/Base.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
-#include <vector>
 
 namespace Moer {
     struct VirtualViewportInfo {

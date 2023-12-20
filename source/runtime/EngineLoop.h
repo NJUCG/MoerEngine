@@ -1,5 +1,4 @@
 #include <functional>
-#include <vector>
 #include <cstdint>
 #include "RenderThread.h"
 
@@ -39,7 +38,7 @@ namespace Moer {
     private:
         void ProcessInputEvents();
 
-        std::vector<std::function<void()>> on_draw_ui_funcs;
+        Moer::Array<std::function<void()>> on_draw_ui_funcs;
 
         struct EngineLoopData* data;
 

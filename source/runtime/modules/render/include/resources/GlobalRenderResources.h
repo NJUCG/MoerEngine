@@ -1,6 +1,6 @@
 #ifndef MOER_ENGINE_GLOBAL_RENDER_RESOURCES_H
 #define MOER_ENGINE_GLOBAL_RENDER_RESOURCES_H
-#include <vector>
+
 class RHITexture;
 class RHIGraphicsCommandList;
 class RHICommandQueue;
@@ -16,7 +16,7 @@ namespace Moer {
         //MARK... todo compute command list and queue
     };
     struct GlobalRenderData {
-        // std::vector<GlobalRenderFrameData> frame_datas;
+        // Moer::Array<GlobalRenderFrameData> frame_datas;
 
         // RHICommandQueue* graphics_command_queue;
 

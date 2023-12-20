@@ -4,13 +4,13 @@
 #include "RHICommon.h"
 #include "API_Macro.h"
 #include "misc/Hash.h"
+#include "misc/STL.h"
 #include "math/Math.h"
 #include "misc/STL.h"
 #include "rhi/RHICommon.h"
 
 #include <numeric>
-#include <array>
-#include <assert.h>
+#include <cassert>
 
 struct RHISamplerInitializer {
     RHISamplerInitializer() = default;
@@ -169,14 +169,14 @@ struct RHIBlendStateInitializer {
     }
 
     template<uint32_t attachment_num>
-    explicit RHIBlendStateInitializer(const std::array<AttachmentInitializer, attachment_num>& _attachment_descs) {
+    explicit RHIBlendStateInitializer(const Moer::StaticArray<AttachmentInitializer, attachment_num>& _attachment_descs) {
         static_assert(attachment_num < MAX_PASS_ATTACHMENT_COUNT);
         for (uint32_t i = 0; i < attachment_num; i++) {
             attachments[i] = _attachment_descs[i];
         }
     }
 
-    std::array<AttachmentInitializer, MAX_PASS_ATTACHMENT_COUNT> attachments;
+    Moer::StaticArray<AttachmentInitializer, MAX_PASS_ATTACHMENT_COUNT> attachments;
 
     RHI_API friend uint32_t GetHash(const RHIBlendStateInitializer::AttachmentInitializer& _attachment_desc);
     RHI_API friend bool     operator==(const RHIBlendStateInitializer::AttachmentInitializer& lhs, const RHIBlendStateInitializer::AttachmentInitializer& rhs);

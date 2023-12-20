@@ -9,12 +9,11 @@
 #include "rhi/RHIResource.h"
 #include "rhi/vulkan/misc/VulkanTypeDefs.h"
 
-#include "shader/ShaderCommon.h"
-#include "vulkan/vulkan_core.h"
+#include "misc/STL.h"
 
-#include <array>
-#include <vector>
-#include <vulkan/vulkan.h>
+#include "shader/ShaderCommon.h"
+
+#include <vulkan/vulkan_core.h>
 
 #include <vk_mem_alloc.h>
 
@@ -164,8 +163,8 @@ private:
     uint32_t m_binding_count   = 0;
     uint32_t m_attribute_count = 0;
 
-    std::array<VkVertexInputBindingDescription, MAX_VERTEX_ELEMENT_COUNT>   m_bindings;
-    std::array<VkVertexInputAttributeDescription, MAX_VERTEX_ELEMENT_COUNT> m_attributes;
+    Moer::StaticArray<VkVertexInputBindingDescription, MAX_VERTEX_ELEMENT_COUNT>   m_bindings;
+    Moer::StaticArray<VkVertexInputAttributeDescription, MAX_VERTEX_ELEMENT_COUNT> m_attributes;
 };
 
 class VulkanRHIRasterizationState : public RHIRasterizationState {
@@ -243,7 +242,7 @@ private:
 
 private:
     // VkPipelineColorBlendStateCreateInfo                                        m_blend_state_create_info;
-    std::array<VkPipelineColorBlendAttachmentState, MAX_PASS_ATTACHMENT_COUNT> m_attachments;
+    Moer::StaticArray<VkPipelineColorBlendAttachmentState, MAX_PASS_ATTACHMENT_COUNT> m_attachments;
 };
 
 #pragma region shader definitions
@@ -320,12 +319,12 @@ public:
         return m_pipeline_state_cache;
     }
 
-    void GenerateDescriptorSetLayouts(const VulkanDevice* _device, std::vector<TDescriptorSetLayout>& _layout_mappings);
+    void GenerateDescriptorSetLayouts(const VulkanDevice* _device, Moer::Array<TDescriptorSetLayout>& _layout_mappings);
     void CreateResourceCache();
 
-    static std::vector<VkPipelineShaderStageCreateInfo> METoVKShaderStageCreateInfo(const RHIShaderBoundStateInput& _shader_bound_state);
+    static Moer::Array<VkPipelineShaderStageCreateInfo> METoVKShaderStageCreateInfo(const RHIShaderBoundStateInput& _shader_bound_state);
     static VkPipelineVertexInputStateCreateInfo         METoVKVertexInputStateCreateInfo(const RHIVertexInputState* _vertex_input_state);
-    static std::vector<const Shader*>                   GetShaderInfoList(const RHIShaderBoundStateInput& _shader_bound_state);
+    static Moer::Array<const Shader*>                   GetShaderInfoList(const RHIShaderBoundStateInput& _shader_bound_state);
 
 private:
     VkPipeline       m_pipeline;
@@ -507,11 +506,11 @@ private:
 
     class VulkanSwapChain* swapchain;
 
-    std::vector<VulkanRHIFence*> image_aquire_fences;
+    Moer::Array<VulkanRHIFence*> image_aquire_fences;
 
-    std::vector<VulkanRHIUnorderedAccessView*> swapchain_image_uavs;
+    Moer::Array<VulkanRHIUnorderedAccessView*> swapchain_image_uavs;
 
-    std::vector<VulkanRHITexture*> swapchain_images;
+    Moer::Array<VulkanRHITexture*> swapchain_images;
 
     uint32_t frame_offset = 0;
 

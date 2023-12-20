@@ -1,7 +1,6 @@
 #pragma once
 
-#include <string>
-#include <unordered_map>
+#include "misc/STL.h"
 
 namespace Moer::Resource::MiXml {
     enum class ETag : unsigned int {
@@ -35,5 +34,5 @@ namespace Moer::Resource::MiXml {
         NUM_COUNT
     };
 
-    extern const std::unordered_map<std::string, ETag> S_TAG_MAP;
+    extern const Moer::UnorderedMap<std::string, ETag> S_TAG_MAP;
 }// namespace Moer::Resource::MiXml

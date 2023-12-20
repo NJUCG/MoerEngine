@@ -68,7 +68,7 @@ void VulkanSwapChain::Create(uint32_t* width, uint32_t* height, bool vsync) {
 
     auto indices = device->GetQueueFamilyIndices();
 
-    std::vector<uint32_t> swap_chain_queue_family_indices = {indices.graphics.value(), indices.present.value()};
+    Moer::Array<uint32_t> swap_chain_queue_family_indices = {indices.graphics.value(), indices.present.value()};
     if (indices.graphics != indices.present) {
         create_info.imageSharingMode      = VK_SHARING_MODE_CONCURRENT;
         create_info.queueFamilyIndexCount = swap_chain_queue_family_indices.size();
@@ -199,7 +199,7 @@ VkImageView VulkanSwapChain::CreateImageView(VkImage _image, VkFormat _format, u
     return view;
 }
 
-VkSurfaceFormatKHR VulkanSwapChain::ChooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& _available_formats) {
+VkSurfaceFormatKHR VulkanSwapChain::ChooseSwapSurfaceFormat(const Moer::Array<VkSurfaceFormatKHR>& _available_formats) {
     for (const auto& format : _available_formats) {
         if (format.format == VK_FORMAT_B8G8R8A8_SRGB && format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
             return format;
@@ -209,7 +209,7 @@ VkSurfaceFormatKHR VulkanSwapChain::ChooseSwapSurfaceFormat(const std::vector<Vk
     return _available_formats[0];
 }
 
-VkPresentModeKHR VulkanSwapChain::ChooseSwapPresentMode(const std::vector<VkPresentModeKHR>& _available_present_modes, bool vsync) {
+VkPresentModeKHR VulkanSwapChain::ChooseSwapPresentMode(const Moer::Array<VkPresentModeKHR>& _available_present_modes, bool vsync) {
     VkPresentModeKHR present_mode = VK_PRESENT_MODE_FIFO_KHR;
     if (!vsync) {
         for (auto mode : _available_present_modes) {

@@ -96,17 +96,17 @@ public:
 
 protected:
     VkInstance               m_instance;
-    std::vector<std::string> m_instance_layers;
+    Moer::Array<std::string> m_instance_layers;
 
-    std::vector<std::string> m_instance_extensions;
-    std::vector<std::string> m_enabled_instance_extensions;
+    Moer::Array<std::string> m_instance_extensions;
+    Moer::Array<std::string> m_enabled_instance_extensions;
 
     VkSurfaceKHR m_surface;
 
     VulkanDevice*   m_device;
     VulkanViewport* m_main_viewport;
     // VulkanSwapChain* m_swap_chain;
-    // std::vector<VulkanViewport*> m_viewports;
+    // Moer::Array<VulkanViewport*> m_viewports;
     // VulkanViewport* m_current_viewport;
 
 protected:

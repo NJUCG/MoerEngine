@@ -12,8 +12,7 @@
 #include "taskgraph/ThreadManager.h"
 
 #include <atomic>
-#include <stdint.h>
-#include <vector>
+#include <cstdint>
 namespace Moer {
     // struct VirtualViewport::VirtualViewportData {
     //     VirtualViewportData()  = default;
@@ -25,8 +24,8 @@ namespace Moer {
 
     //     RHITextureRef present_texture;
 
-    //     std::vector<RHITextureRef>             swapchain_textures;
-    //     std::vector<RHIUnorderedAccessViewRef> swapchain_uavs;
+    //     Moer::Array<RHITextureRef>             swapchain_textures;
+    //     Moer::Array<RHIUnorderedAccessViewRef> swapchain_uavs;
     //     std::atomic_uint64_t                   frame_index = 0;
 
     //     RHICommandQueue* copy_queue;

@@ -12,7 +12,6 @@
 #include <windows.h>
 #endif
 
-#include <vector>
 #include <fstream>
 
 namespace Moer {
@@ -95,7 +94,7 @@ case VK_PHYSICAL_DEVICE_TYPE_##r: return #r
     VkBool32 GetSupportedDepthFormat(VkPhysicalDevice physical_device, VkFormat* depth_format) {
         // Since all depth formats may be optional, we need to find a suitable depth format to use
         // Start with the highest precision packed format
-        std::vector<VkFormat> format_list = {
+        Moer::Array<VkFormat> format_list = {
             VK_FORMAT_D32_SFLOAT_S8_UINT,
             VK_FORMAT_D32_SFLOAT,
             VK_FORMAT_D24_UNORM_S8_UINT,
@@ -116,7 +115,7 @@ case VK_PHYSICAL_DEVICE_TYPE_##r: return #r
     }
 
     VkBool32 GetSupportedDepthStencilFormat(VkPhysicalDevice physical_device, VkFormat* depth_stencil_format) {
-        std::vector<VkFormat> format_list = {
+        Moer::Array<VkFormat> format_list = {
             VK_FORMAT_D32_SFLOAT_S8_UINT,
             VK_FORMAT_D24_UNORM_S8_UINT,
             VK_FORMAT_D16_UNORM_S8_UINT,
@@ -148,7 +147,7 @@ case VK_PHYSICAL_DEVICE_TYPE_##r: return #r
     }
 
     VkBool32 FormatHasStencil(VkFormat format) {
-        std::vector<VkFormat> stencil_formats = {
+        Moer::Array<VkFormat> stencil_formats = {
             VK_FORMAT_S8_UINT,
             VK_FORMAT_D16_UNORM_S8_UINT,
             VK_FORMAT_D24_UNORM_S8_UINT,
@@ -227,7 +226,7 @@ case VK_PHYSICAL_DEVICE_TYPE_##r: return #r
         ExitFatal("Could not open shader file \"" + std::string(file_name) + "\"", -1);
     }
 
-    VkShaderModule CreateShaderModule(const std::vector<uint8_t>& _code, VkDevice device) {
+    VkShaderModule CreateShaderModule(const Moer::Array<uint8_t>& _code, VkDevice device) {
         VkShaderModule           shader_module;
         VkShaderModuleCreateInfo module_create_info{};
         module_create_info.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
@@ -264,7 +263,7 @@ case VK_PHYSICAL_DEVICE_TYPE_##r: return #r
         // hence we must make sure that a format with the mostly available color space, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, is found and used.
         uint32_t avail_count;
         vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device, surface, &avail_count, nullptr);
-        std::vector<VkSurfaceFormatKHR> avail_format;
+        Moer::Array<VkSurfaceFormatKHR> avail_format;
         avail_format.resize((int)avail_count);
         vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device, surface, &avail_count, avail_format.data());
 
@@ -299,7 +298,7 @@ case VK_PHYSICAL_DEVICE_TYPE_##r: return #r
         // Request a certain mode and confirm that it is available. If not use VK_PRESENT_MODE_FIFO_KHR which is mandatory
         uint32_t avail_count = 0;
         vkGetPhysicalDeviceSurfacePresentModesKHR(physical_device, surface, &avail_count, nullptr);
-        std::vector<VkPresentModeKHR> avail_modes;
+        Moer::Array<VkPresentModeKHR> avail_modes;
         avail_modes.resize((int)avail_count);
         vkGetPhysicalDeviceSurfacePresentModesKHR(physical_device, surface, &avail_count, avail_modes.data());
         //for (uint32_t avail_i = 0; avail_i < avail_count; avail_i++)

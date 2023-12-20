@@ -20,7 +20,7 @@ const float default_pool_size[VK_DESCRIPTOR_TYPE_RANGE_SIZE] = {
     //1 / 8.0 // VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT
 };
 
-void VulkanDescriptorSetsLayout::Init(const std::vector<TDescriptorSetLayout>& _layout_mappings, VulkanPipelineResourceCache* _cache) {
+void VulkanDescriptorSetsLayout::Init(const Moer::Array<TDescriptorSetLayout>& _layout_mappings, VulkanPipelineResourceCache* _cache) {
     m_layouts.resize(_layout_mappings.size(), VK_NULL_HANDLE);
     auto& writers = _cache->m_descriptor_set_writers;
     writers.resize(_layout_mappings.size(), {_cache});
@@ -77,8 +77,8 @@ void VulkanDescriptorSetsLayout::Init(const std::vector<TDescriptorSetLayout>& _
 
             ++hash_index;
         }
-        image_infos.emplace_back(std::vector<VkDescriptorImageInfo>(image_count));
-        buffer_infos.emplace_back(std::vector<VkDescriptorBufferInfo>(buffer_count));
+        image_infos.emplace_back(Moer::Array<VkDescriptorImageInfo>(image_count));
+        buffer_infos.emplace_back(Moer::Array<VkDescriptorBufferInfo>(buffer_count));
     }
 }
 
@@ -96,7 +96,7 @@ void VulkanDescriptorSetAllocator::Init(VulkanDevice* device) {
     m_cache_pools.emplace_front(std::make_unique<VulkanDescriptorSetCachePool>(m_device, default_pool_size, default_set_count));
 }
 
-bool VulkanDescriptorSetAllocator::GetDescriptorSets(uint32_t _hash_key, const VulkanDescriptorSetsLayout& _layout, std::vector<VulkanDescriptorSetWriter>& _writers, std::vector<VkDescriptorSet>& _sets) {
+bool VulkanDescriptorSetAllocator::GetDescriptorSets(uint32_t _hash_key, const VulkanDescriptorSetsLayout& _layout, Moer::Array<VulkanDescriptorSetWriter>& _writers, Moer::Array<VkDescriptorSet>& _sets) {
     for (const auto& pool : m_cache_pools) {
         if (pool->FindDescriptorSets(_hash_key, _sets)) {
             return true;
@@ -127,7 +127,7 @@ void VulkanDescriptorSetAllocator::CreatePool(const VulkanDescriptorSetsLayout& 
 }
 
 VulkanDescriptorSetAllocator::VulkanDescriptorSetCachePool::VulkanDescriptorSetCachePool(VulkanDevice* _device, const float _default_pool_size[VK_DESCRIPTOR_TYPE_RANGE_SIZE], uint32_t _set_count) : VulkanDeviceObject(_device) {
-    std::vector<VkDescriptorPoolSize> pool_sizes(VK_DESCRIPTOR_TYPE_RANGE_SIZE);
+    Moer::Array<VkDescriptorPoolSize> pool_sizes(VK_DESCRIPTOR_TYPE_RANGE_SIZE);
 
     const uint32_t max_sets = GetMaxSets(_set_count);
     for (uint32_t i = 0; i < VK_DESCRIPTOR_TYPE_RANGE_SIZE; ++i) {
@@ -154,7 +154,7 @@ VulkanDescriptorSetAllocator::VulkanDescriptorSetCachePool::VulkanDescriptorSetC
         pool_size_info[type] = count / set_count + 1;
     }
 
-    std::vector<VkDescriptorPoolSize> pool_sizes;
+    Moer::Array<VkDescriptorPoolSize> pool_sizes;
 
     const uint32_t max_sets = GetMaxSets(set_count);
     for (const auto& [type, count] : pool_size_info) {
@@ -179,7 +179,7 @@ VulkanDescriptorSetAllocator::VulkanDescriptorSetCachePool::~VulkanDescriptorSet
     CleanUp();
 }
 
-bool VulkanDescriptorSetAllocator::VulkanDescriptorSetCachePool::FindDescriptorSets(uint32_t _hash_key, std::vector<VkDescriptorSet>& _sets) {
+bool VulkanDescriptorSetAllocator::VulkanDescriptorSetCachePool::FindDescriptorSets(uint32_t _hash_key, Moer::Array<VkDescriptorSet>& _sets) {
     auto found_sets = m_allocated_sets.find(_hash_key);
     if (found_sets == m_allocated_sets.end()) {
         return false;
@@ -188,8 +188,8 @@ bool VulkanDescriptorSetAllocator::VulkanDescriptorSetCachePool::FindDescriptorS
     return true;
 }
 
-bool VulkanDescriptorSetAllocator::VulkanDescriptorSetCachePool::CreateDescriptorSets(uint32_t _hash_key, const VulkanDescriptorSetsLayout& _layout, std::vector<VulkanDescriptorSetWriter>& _writers, std::vector<VkDescriptorSet>& _sets) {
-    std::vector<VkDescriptorSet> new_sets(_writers.size());
+bool VulkanDescriptorSetAllocator::VulkanDescriptorSetCachePool::CreateDescriptorSets(uint32_t _hash_key, const VulkanDescriptorSetsLayout& _layout, Moer::Array<VulkanDescriptorSetWriter>& _writers, Moer::Array<VkDescriptorSet>& _sets) {
+    Moer::Array<VkDescriptorSet> new_sets(_writers.size());
 
     for (uint32_t i = 0; i < _writers.size(); ++i) {
         const auto  set_key   = _writers[i].GetSetKey();

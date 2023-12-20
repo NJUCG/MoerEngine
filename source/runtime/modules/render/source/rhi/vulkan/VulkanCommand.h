@@ -3,7 +3,9 @@
 #define VULKAN_COMMAND_H
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
-#include "vulkan/vulkan_core.h"
+
+#include "misc/STL.h"
+
 #include "VulkanRHIResource.h"
 
 #include <vulkan/vulkan.h>
@@ -61,7 +63,7 @@ public:
     inline VkCommandPool GetHandle(ECommandListType _type) const { return m_command_pool[(size_t)_type]; }
 
 private:
-    std::array<VkCommandPool, (size_t)ECommandListType::Num> m_command_pool;
+    Moer::StaticArray<VkCommandPool, (size_t)ECommandListType::Num> m_command_pool;
 };
 
 class VulkanRHIGraphicsCommandList final : public RHIGraphicsCommandList,
@@ -183,7 +185,7 @@ private:
 
     void PrepareDrawCommand();
 
-    std::vector<VkDescriptorSet> m_bound_sets;
+    Moer::Array<VkDescriptorSet> m_bound_sets;
 };
 
 class VulkanRHICopyCommandList final : public RHICopyCommandList, public VulkanRHICommandListBase {

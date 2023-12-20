@@ -3,10 +3,6 @@
 
 #include "VulkanDescriptor.h"
 
-#include <map>
-#include <vector>
-#include <unordered_map>
-
 class VulkanRHIGraphicsPipelineState;
 class VulkanDescriptorSetsLayout;
 class VulkanDevice;
@@ -35,11 +31,11 @@ public:
 
     void BindDescriptorSets(VkCommandBuffer _buffer, VkPipelineBindPoint _bind_point, VkPipelineLayout _layout);
 
-    inline std::vector<VulkanDescriptorSetWriter>& GetWriters() { return m_descriptor_set_writers; }
+    inline Moer::Array<VulkanDescriptorSetWriter>& GetWriters() { return m_descriptor_set_writers; }
 
-    inline const std::vector<VkDescriptorSet>& GetDescriptorSets() const { return m_descriptor_sets; }
+    inline const Moer::Array<VkDescriptorSet>& GetDescriptorSets() const { return m_descriptor_sets; }
 
-    inline const std::vector<PushConstantInfo>& GetConstantsToPush() const { return m_push_constants; }
+    inline const Moer::Array<PushConstantInfo>& GetConstantsToPush() const { return m_push_constants; }
 
     inline void AddConstantToPush(const PushConstantInfo& _info) { m_push_constants.push_back(_info); }
 
@@ -48,11 +44,11 @@ public:
 private:
     VulkanDescriptorSetWriteContainer m_descriptor_resource_container;
 
-    std::vector<VulkanDescriptorSetWriter> m_descriptor_set_writers;
+    Moer::Array<VulkanDescriptorSetWriter> m_descriptor_set_writers;
 
-    std::vector<VkDescriptorSet> m_descriptor_sets;
+    Moer::Array<VkDescriptorSet> m_descriptor_sets;
 
-    std::vector<PushConstantInfo> m_push_constants;
+    Moer::Array<PushConstantInfo> m_push_constants;
 
     uint32_t GetSetsKey() const;
 };

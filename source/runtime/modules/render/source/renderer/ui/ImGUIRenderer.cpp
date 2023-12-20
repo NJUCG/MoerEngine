@@ -13,6 +13,7 @@
 #include "shader/ShaderResourceManager.h"
 
 #include "math/Math.h"
+#include "misc/STL.h"
 
 #include "taskgraph/GraphTask.h"
 #include "taskgraph/ThreadManager.h"

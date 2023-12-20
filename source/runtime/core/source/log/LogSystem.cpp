@@ -125,9 +125,9 @@
 
 //     std::mutex                                      mutex_;
 //     std::unique_ptr<spdlog::formatter>              formatter_;
-//     std::array<fmt::text_style, spdlog::level::off> styles_;
+//     Moer::StaticArray<fmt::text_style, spdlog::level::off> styles_;
 // #ifdef _WIN32
-//     std::array<DWORD, 7> colors_;
+//     Moer::StaticArray<DWORD, 7> colors_;
 //     bool                 in_console_ = true;
 //     HANDLE               handle_     = nullptr;
 // #endif

@@ -3,6 +3,8 @@
 
 //code ported from https://ssarcandy.tw/ini-cpp/index.html
 
+#include "misc/STL.h"
+
 #include <ctype.h>
 #include <stdio.h>
 #include <string.h>
@@ -14,13 +16,8 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
-#include <map>
-#include <set>
 #include <sstream>
-#include <string>
 #include <type_traits>
-#include <unordered_map>
-#include <vector>
 
 namespace inih {
 
@@ -216,7 +213,7 @@ namespace inih {
         // Return the list of keys in the given section
         const std::set<std::string> Keys(std::string section) const;
 
-        const std::unordered_map<std::string, std::string> Get(
+        const Moer::UnorderedMap<std::string, std::string> Get(
             std::string section) const;
 
         template<typename T = std::string>
@@ -226,30 +223,30 @@ namespace inih {
         T Get(const std::string& section, const std::string& name, T&& default_v) const;
 
         template<typename T = std::string>
-        std::vector<T> GetVector(const std::string& section,
+        Moer::Array<T> GetVector(const std::string& section,
                                  const std::string& name) const;
 
         template<typename T>
-        std::vector<T> GetVector(const std::string&    section,
+        Moer::Array<T> GetVector(const std::string&    section,
                                  const std::string&    name,
-                                 const std::vector<T>& default_v) const;
+                                 const Moer::Array<T>& default_v) const;
 
         template<typename T = std::string>
         void InsertEntry(const std::string& section, const std::string& name, const T& v);
 
         template<typename T = std::string>
-        void InsertEntry(const std::string& section, const std::string& name, const std::vector<T>& vs);
+        void InsertEntry(const std::string& section, const std::string& name, const Moer::Array<T>& vs);
 
         template<typename T = std::string>
         void UpdateEntry(const std::string& section, const std::string& name, const T& v);
 
         template<typename T = std::string>
-        void UpdateEntry(const std::string& section, const std::string& name, const std::vector<T>& vs);
+        void UpdateEntry(const std::string& section, const std::string& name, const Moer::Array<T>& vs);
 
     protected:
         int _error;
-        std::unordered_map<std::string,
-                           std::unordered_map<std::string, std::string>>
+        Moer::UnorderedMap<std::string,
+                           Moer::UnorderedMap<std::string, std::string>>
                    _values;
         static int ValueHandler(void* user, const char* section, const char* name, const char* value);
 
@@ -262,7 +259,7 @@ namespace inih {
         std::string V2String(const T& v) const;
 
         template<typename T>
-        std::string Vec2String(const std::vector<T>& v) const;
+        std::string Vec2String(const Moer::Array<T>& v) const;
     };
 
 #endif// __INIREADER_H__
@@ -312,7 +309,7 @@ namespace inih {
         return retval;
     }
 
-    inline const std::unordered_map<std::string, std::string> INIReader::Get(
+    inline const Moer::UnorderedMap<std::string, std::string> INIReader::Get(
         std::string section) const {
         auto const _section = _values.find(section);
         if (_section == _values.end()) {
@@ -353,15 +350,15 @@ namespace inih {
     }
 
     template<typename T>
-    inline std::vector<T> INIReader::GetVector(const std::string& section,
+    inline Moer::Array<T> INIReader::GetVector(const std::string& section,
                                                const std::string& name) const {
         std::string value = Get(section, name);
 
         std::istringstream             out{value};
-        const std::vector<std::string> strs{std::istream_iterator<std::string>{out},
+        const Moer::Array<std::string> strs{std::istream_iterator<std::string>{out},
                                             std::istream_iterator<std::string>()};
         try {
-            std::vector<T> vs{};
+            Moer::Array<T> vs{};
             for (const std::string& s : strs) {
                 vs.emplace_back(Converter<T>(s));
             }
@@ -373,10 +370,10 @@ namespace inih {
     }
 
     template<typename T>
-    inline std::vector<T> INIReader::GetVector(
+    inline Moer::Array<T> INIReader::GetVector(
         const std::string&    section,
         const std::string&    name,
-        const std::vector<T>& default_v) const {
+        const Moer::Array<T>& default_v) const {
         try {
             return GetVector<T>(section, name);
         } catch (std::runtime_error& e) {
@@ -398,7 +395,7 @@ namespace inih {
     template<typename T>
     inline void INIReader::InsertEntry(const std::string&    section,
                                        const std::string&    name,
-                                       const std::vector<T>& vs) {
+                                       const Moer::Array<T>& vs) {
         if (_values[section][name].size() > 0) {
             throw std::runtime_error("duplicate key '" + std::string(name) +
                                      "' in section '" + section + "'.");
@@ -420,7 +417,7 @@ namespace inih {
     template<typename T>
     inline void INIReader::UpdateEntry(const std::string&    section,
                                        const std::string&    name,
-                                       const std::vector<T>& vs) {
+                                       const Moer::Array<T>& vs) {
         if (!_values[section][name].size()) {
             throw std::runtime_error("key '" + std::string(name) +
                                      "' not exist in section '" + section + "'.");
@@ -436,7 +433,7 @@ namespace inih {
     }
 
     template<typename T>
-    inline std::string INIReader::Vec2String(const std::vector<T>& v) const {
+    inline std::string INIReader::Vec2String(const Moer::Array<T>& v) const {
         if (v.empty()) {
             return "";
         }
@@ -462,7 +459,7 @@ namespace inih {
 
     inline const bool INIReader::BoolConverter(std::string s) const {
         std::transform(s.begin(), s.end(), s.begin(), ::tolower);
-        static const std::unordered_map<std::string, bool> s2b{
+        static const Moer::UnorderedMap<std::string, bool> s2b{
             {"1", true},
             {"true", true},
             {"yes", true},

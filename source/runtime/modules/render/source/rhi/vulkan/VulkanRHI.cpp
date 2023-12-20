@@ -8,6 +8,7 @@
 #include "rhi/RHIResource.h"
 #include "rhi/vulkan/misc/VulkanMacroUtils.h"
 #include "misc/MacroUtils.h"
+#include "misc/STL.h"
 
 #include "rhi/vulkan/VulkanRHI.h"
 #include "VulkanCommand.h"
@@ -31,10 +32,8 @@
 #include "vulkan/vulkan_core.h"
 #include "window/WindowContext.h"
 
-#include <stdint.h>
-#include <unordered_map>
+#include <cstdint>
 #include <string>
-#include <set>
 
 namespace VkUtil = Moer::RHI::Vulkan::Util;
 
@@ -178,7 +177,7 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
     rendering_create_info.pNext                = nullptr;
     rendering_create_info.viewMask             = 0;
     rendering_create_info.colorAttachmentCount = attachment_count;
-    std::vector<VkFormat> color_attachment_formats(attachment_count);
+    Moer::Array<VkFormat> color_attachment_formats(attachment_count);
     for (int i = 0; i < attachment_count; ++i) {
         color_attachment_formats[i] = VkFormat(_init.color_attachment_formats[i]);
     }
@@ -244,8 +243,8 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
 #undef CHECK_AND_SET
 
     // dynamic state
-    std::array<VkDynamicState, 2>    states = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
-    VkPipelineDynamicStateCreateInfo dynamic_state{};
+    Moer::StaticArray<VkDynamicState, 2> states = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo     dynamic_state{};
     dynamic_state.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
     dynamic_state.pNext             = nullptr;
     dynamic_state.flags             = 0;
@@ -255,10 +254,10 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
     // pipeline layout
     auto shader_info_list = VulkanRHIGraphicsPipelineState::GetShaderInfoList(_init.shader_stage);// MARK...
 
-    std::vector<TDescriptorSetLayout> layout_mappings;
+    Moer::Array<TDescriptorSetLayout> layout_mappings;
     TDescriptorCountMap               descriptor_type_mappings;
 
-    std::vector<VkPushConstantRange> push_constant_ranges;
+    Moer::Array<VkPushConstantRange> push_constant_ranges;
 
     // construct layout mappings
     for (const auto* meta_shader : shader_info_list) {
@@ -639,7 +638,7 @@ void VulkanRHIImpl::CreateInstance() {
 
     auto n = m_enabled_instance_extensions.size();
 
-    std::vector<const char*> r_extensions(n, nullptr);
+    Moer::Array<const char*> r_extensions(n, nullptr);
     for (size_t i = 0; i < n; ++i) {
         r_extensions[i] = m_enabled_instance_extensions[i].c_str();
     }
@@ -676,7 +675,7 @@ void VulkanRHIImpl::CreateInstance() {
 bool VulkanRHIImpl::CheckValidationLayer(const std::string& layer_name) {
     uint32_t instance_layer_count = 0;
     vkEnumerateInstanceLayerProperties(&instance_layer_count, nullptr);
-    std::vector<VkLayerProperties> instance_layer_properties(instance_layer_count);
+    Moer::Array<VkLayerProperties> instance_layer_properties(instance_layer_count);
     vkEnumerateInstanceLayerProperties(&instance_layer_count, instance_layer_properties.data());
     bool validation_layer_present = false;
 

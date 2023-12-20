@@ -140,7 +140,7 @@ void DXCompiler::CompileVulkan(const ShaderCompilerInput& _input, ShaderCompiler
     }
 
     // Configure the compiler arguments for compiling the HLSL shader to SPIR-V
-    std::vector<LPCWSTR> arguments = {
+    Moer::Array<LPCWSTR> arguments = {
         // (Optional) name of the shader file to be displayed e.g. in an error message
         file_name.c_str(),
         // Shader main entry point
@@ -218,7 +218,7 @@ void DXCompiler::CompileVulkan(const ShaderCompilerInput& _input, ShaderCompiler
     // test_mi_override = (int32_t*)malloc(10 * sizeof(int32_t));
     // free(test_mi_override);
 
-    std::unordered_map<std::string, ParameterInfo> param_map;
+    Moer::UnorderedMap<std::string, ParameterInfo> param_map;
     reflector->ReflectShader(result.Get(), _input.param_meta_data, param_map);
     _output.parameter_map.param_map.swap(param_map);
     _output.target_info = _input.target_info;

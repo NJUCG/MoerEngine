@@ -1,8 +1,6 @@
 #ifndef VULKAN_COMMON_H
 #define VULKAN_COMMON_H
 
-#include <vector>
-
 class VulkanDevice;
 
 namespace Moer {

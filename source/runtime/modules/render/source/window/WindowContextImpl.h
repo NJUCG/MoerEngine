@@ -99,19 +99,19 @@ namespace Moer {
         bool focused{false};
 
     private:
-        std::unordered_map<WindowType*, std::vector<WindowContext::OnCharFunc>>               window_on_char_func;
-        std::unordered_map<WindowType*, std::vector<WindowContext::OnCursorEnterFunc>>        window_on_cursor_enter_func;
-        std::unordered_map<WindowType*, std::vector<WindowContext::OnCursorPosFunc>>          window_on_cursor_pos_func;
-        std::unordered_map<WindowType*, std::vector<WindowContext::OnDropFunc>>               window_on_drop_func;
-        std::unordered_map<WindowType*, std::vector<WindowContext::OnFrameBufferSizeFunc>>    window_on_frame_buffer_size_func;
-        std::unordered_map<WindowType*, std::vector<WindowContext::OnKeyFunc>>                window_on_key_func;
-        std::unordered_map<WindowType*, std::vector<WindowContext::OnMouseButtonFunc>>        window_on_mouse_button_func;
-        std::unordered_map<WindowType*, std::vector<WindowContext::OnScrollFunc>>             window_on_scroll_func;
-        std::unordered_map<WindowType*, std::vector<WindowContext::OnWindowCloseFunc>>        window_on_window_close_func;
-        std::unordered_map<WindowType*, std::vector<WindowContext::OnWindowContentScaleFunc>> window_on_window_content_scale_func;
-        std::unordered_map<WindowType*, std::vector<WindowContext::OnWindowPosFunc>>          window_on_window_pos_func;
-        std::unordered_map<WindowType*, std::vector<WindowContext::OnWindowSizeFunc>>         window_on_window_size_func;
-        std::unordered_map<WindowType*, std::vector<WindowContext::OnWindowFocusFunc>>        window_on_window_focus_func;
+        Moer::UnorderedMap<WindowType*, Moer::Array<WindowContext::OnCharFunc>>               window_on_char_func;
+        Moer::UnorderedMap<WindowType*, Moer::Array<WindowContext::OnCursorEnterFunc>>        window_on_cursor_enter_func;
+        Moer::UnorderedMap<WindowType*, Moer::Array<WindowContext::OnCursorPosFunc>>          window_on_cursor_pos_func;
+        Moer::UnorderedMap<WindowType*, Moer::Array<WindowContext::OnDropFunc>>               window_on_drop_func;
+        Moer::UnorderedMap<WindowType*, Moer::Array<WindowContext::OnFrameBufferSizeFunc>>    window_on_frame_buffer_size_func;
+        Moer::UnorderedMap<WindowType*, Moer::Array<WindowContext::OnKeyFunc>>                window_on_key_func;
+        Moer::UnorderedMap<WindowType*, Moer::Array<WindowContext::OnMouseButtonFunc>>        window_on_mouse_button_func;
+        Moer::UnorderedMap<WindowType*, Moer::Array<WindowContext::OnScrollFunc>>             window_on_scroll_func;
+        Moer::UnorderedMap<WindowType*, Moer::Array<WindowContext::OnWindowCloseFunc>>        window_on_window_close_func;
+        Moer::UnorderedMap<WindowType*, Moer::Array<WindowContext::OnWindowContentScaleFunc>> window_on_window_content_scale_func;
+        Moer::UnorderedMap<WindowType*, Moer::Array<WindowContext::OnWindowPosFunc>>          window_on_window_pos_func;
+        Moer::UnorderedMap<WindowType*, Moer::Array<WindowContext::OnWindowSizeFunc>>         window_on_window_size_func;
+        Moer::UnorderedMap<WindowType*, Moer::Array<WindowContext::OnWindowFocusFunc>>        window_on_window_focus_func;
     };
 }// namespace Moer
 #endif

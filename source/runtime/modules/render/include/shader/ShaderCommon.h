@@ -5,8 +5,7 @@
 #include "rhi/RHIResource.h"
 #include <cstdint>
 #include <functional>
-#include <list>
-#include <vector>
+
 #include "misc/MacroUtils.h"
 
 // extern const char* g_global_shader_resource_root_dir;
@@ -176,7 +175,7 @@ public:
         EShaderParameterUseCase    _use_case,
         const char*                _struct_name,
         uint32_t                   _size,
-        const std::vector<Member>& _members,
+        const Moer::Array<Member>& _members,
         bool                       _b_force_complete_initialization = false);
 
     RHI_API virtual ~ShaderParametersMetadata();
@@ -195,7 +194,7 @@ public:
         return layout;
     }
 
-    const std::vector<Member>& GetMembers() const { return members; }
+    const Moer::Array<Member>& GetMembers() const { return members; }
 
     /** Returns the full C++ member name from it's byte offset in the structure. */
     RHI_API std::string GetMemberNameByOffset(uint16_t _member_offset) const;
@@ -218,7 +217,7 @@ private:
     RHIShaderRootParameterLayout* layout{};
 
     /** List of all members. */
-    std::vector<Member> members;
+    Moer::Array<Member> members;
 };
 namespace std {
     template<>
@@ -263,7 +262,7 @@ public:
 
     struct Parameters {
     };
-    static RENDER_CORE_API std::unordered_map<std::string, ShaderMetaType*>& GetNameToTypeMap();
+    static RENDER_CORE_API Moer::UnorderedMap<std::string, ShaderMetaType*>& GetNameToTypeMap();
 
     /**
      * @brief Get the Shader Type Enum
@@ -303,7 +302,7 @@ class ShaderTypeRegistration {
 
 public:
     ShaderTypeRegistration(std::function<ShaderMetaType&()>);
-    static std::vector<std::function<ShaderMetaType&()>>& GetRegistrations();
+    static Moer::Array<std::function<ShaderMetaType&()>>& GetRegistrations();
     static void                                           CollectRegistration(std::function<ShaderMetaType&()> _registration_func);
 
     static void SubmitRegistrations();
@@ -337,12 +336,12 @@ struct ShaderParametersInfoMap {
     friend class DXCompiler;
 
 public:
-    const std::unordered_map<std::string, ParameterInfo>& GetShaderParameterInfoMap() const {
+    const Moer::UnorderedMap<std::string, ParameterInfo>& GetShaderParameterInfoMap() const {
         return param_map;
     }
 
 private:
-    std::unordered_map<std::string, ParameterInfo> param_map;
+    Moer::UnorderedMap<std::string, ParameterInfo> param_map;
 };
 struct ShaderCompilerOutput {
 
@@ -354,12 +353,12 @@ struct ShaderCompilerOutput {
           b_succeeded(false) {}
 
     ShaderParametersInfoMap  parameter_map;
-    std::vector<std::string> errors;
-    std::vector<std::string> pragma;
+    Moer::Array<std::string> errors;
+    Moer::Array<std::string> pragma;
 
     ShaderTargetInfo target_info;
 
-    std::vector<uint8_t> shader_code;
+    Moer::Array<uint8_t> shader_code;
     Hash64City           compiled_hash;
     uint32_t             num_instructions;
     uint32_t             num_samplers;
@@ -379,7 +378,7 @@ struct ShaderCompilerOutput {
 struct ShaderCompiledInitializer {
     const ShaderMetaType*          type_info;
     ShaderTargetInfo               target_info;
-    const std::vector<uint8_t>&    compiled_code;
+    const Moer::Array<uint8_t>&    compiled_code;
     const ShaderParametersInfoMap& parameter_map;
     const Hash64City&              compiled_hash;
 
@@ -422,6 +421,6 @@ class ShaderCompileRegistration {
 public:
     static void RegistrateCompileWorkIfNeed(const ShaderMetaType& _shader_type);
 
-    static std::vector<ShaderCompilerInput>& RetrieveShaderCompileWorks();
+    static Moer::Array<ShaderCompilerInput>& RetrieveShaderCompileWorks();
 };
 #endif//MOERENGINE_SHADER_COMMON_H

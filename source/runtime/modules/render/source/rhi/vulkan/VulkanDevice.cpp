@@ -11,10 +11,6 @@
 #include "Core.h"
 #include "taskgraph/ThreadManager.h"
 
-#include <set>
-#include <string>
-#include <vector>
-
 namespace VkUtil = Moer::RHI::Vulkan::Util;
 
 VulkanDevice::VulkanDevice()
@@ -84,7 +80,7 @@ void VulkanDevice::Destroy() {
     vmaDestroyAllocator(m_allocator);
 }
 
-bool VulkanDevice::GetDescriptorSets(uint32_t _hash_key, const VulkanDescriptorSetsLayout& _layout, std::vector<VulkanDescriptorSetWriter>& _writers, std::vector<VkDescriptorSet>& _sets) {
+bool VulkanDevice::GetDescriptorSets(uint32_t _hash_key, const VulkanDescriptorSetsLayout& _layout, Moer::Array<VulkanDescriptorSetWriter>& _writers, Moer::Array<VkDescriptorSet>& _sets) {
     return m_descriptor_allocator->GetDescriptorSets(_hash_key, _layout, _writers, _sets);
 }
 
@@ -101,7 +97,7 @@ VkPhysicalDevice VulkanDevice::SelectGpu(const DeviceInitializer& _init) {
         LOG_WARNING("No GPU with Vulkan support found!");
         return VK_NULL_HANDLE;
     }
-    std::vector<VkPhysicalDevice> gpu_list(gpu_count);
+    Moer::Array<VkPhysicalDevice> gpu_list(gpu_count);
     VK_CHECK_RESULT(vkEnumeratePhysicalDevices(_init.instance, &gpu_count, gpu_list.data()))
 
     for (const auto& gpu : gpu_list) {
@@ -164,7 +160,7 @@ void VulkanDevice::CreateDevice(const DeviceInitializer& _initializer) {
     std::set<uint32_t> unique_family_indices = {m_queue_family_indices.graphics.value(), m_queue_family_indices.present.value(), m_queue_family_indices.compute.value(), m_queue_family_indices.transfer.value()};
 
     // setup queue info
-    std::vector<VkDeviceQueueCreateInfo> queue_create_infos;
+    Moer::Array<VkDeviceQueueCreateInfo> queue_create_infos;
 
     const float default_queue_priority = 1.0f;
     for (const auto& queue_family_index : unique_family_indices) {
@@ -183,7 +179,7 @@ void VulkanDevice::CreateDevice(const DeviceInitializer& _initializer) {
     device_create_info.pQueueCreateInfos    = queue_create_infos.data();
 
     // setup extension and feature info
-    std::vector<const char*> enabled_extensions;
+    Moer::Array<const char*> enabled_extensions;
     for (const auto& extension : _initializer.enabled_extensions) {
         enabled_extensions.emplace_back(extension->GetExtensionName().c_str());
         extension->PreCreateDevice(device_create_info);
@@ -230,7 +226,7 @@ TExtensionArray VulkanDevice::GetGpuExtensions(VkPhysicalDevice _gpu) const {
     uint32_t gpu_extension_count;
     // check extensions
     vkEnumerateDeviceExtensionProperties(_gpu, nullptr, &gpu_extension_count, nullptr);
-    std::vector<VkExtensionProperties> gpu_extensions(gpu_extension_count);
+    Moer::Array<VkExtensionProperties> gpu_extensions(gpu_extension_count);
     vkEnumerateDeviceExtensionProperties(_gpu, nullptr, &gpu_extension_count, gpu_extensions.data());
 
     TExtensionArray ret;
@@ -266,7 +262,7 @@ VulkanCommandAllocator* VulkanDevice::GetCurrentCommandAllocator() {
 //    return 0;
 //}
 
-int32_t VulkanDevice::GetQueueFamilyIndex(const std::vector<VkQueueFamilyProperties>& queue_family_props, VkQueueFlags _queue_flags) const {
+int32_t VulkanDevice::GetQueueFamilyIndex(const Moer::Array<VkQueueFamilyProperties>& queue_family_props, VkQueueFlags _queue_flags) const {
     // Dedicated queue for transfer
     if ((_queue_flags & VK_QUEUE_TRANSFER_BIT) == _queue_flags) {
         for (uint32_t i = 0; i < queue_family_props.size(); ++i) {

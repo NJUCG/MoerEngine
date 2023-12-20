@@ -14,16 +14,13 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResourceInitilizer.h"
 
-#include <array>
 #include <cassert>
 #include <atomic>
 #include <cstddef>
 #include <stdint.h>
-#include <unordered_set>
 #include <string>
 #include <optional>
 #include <bitset>
-#include <vector>
 template<typename TStructuredParam>
 concept concept_is_shader_struct = requires(TStructuredParam t) {
     std::is_same<typename TStructuredParam::TypeInfo::TParamPtr, TStructuredParam>();
@@ -143,7 +140,7 @@ struct VertexElement {
 };
 static_assert(sizeof(VertexElement) == 8, "VertexElement doesn't match cache line size");
 
-typedef std::array<VertexElement, MAX_VERTEX_ELEMENT_COUNT> VertexInputStateInitializerList;
+typedef Moer::StaticArray<VertexElement, MAX_VERTEX_ELEMENT_COUNT> VertexInputStateInitializerList;
 
 #pragma endregion
 
@@ -473,7 +470,7 @@ public:
     RHIShaderRootParameterLayout() : RHIResource(RRT_ROOT_PARAMETER_LAYOUT) {}
     ~RHIShaderRootParameterLayout() {}
 
-    std::vector<RHIResourceParameterLayout> resource_parameters;
+    Moer::Array<RHIResourceParameterLayout> resource_parameters;
 };
 
 #pragma endregion
@@ -1849,9 +1846,9 @@ struct alignas(SHADER_PARAMETER_STRUCTURE_ALIGNMENT) AttachmentBindingSlots {
         return count;
     }
 
-    std::array<ColorAttachmementBinding, MAX_PASS_ATTACHMENT_COUNT> color_attachments_binding;
-    DepthStencilBinding                                             depth_stencil_binding;
-    Rect2D                                                          resolve_rect;
+    Moer::StaticArray<ColorAttachmementBinding, MAX_PASS_ATTACHMENT_COUNT> color_attachments_binding;
+    DepthStencilBinding                                                    depth_stencil_binding;
+    Rect2D                                                                 resolve_rect;
 
     SubpassSettings subpass_settings;
     uint8_t         multi_view_count;
@@ -1864,11 +1861,11 @@ struct GraphicsPipelineAttachmentInfo {
     GraphicsPipelineAttachmentInfo()
         : attachment_formats(CreateArray<MAX_PASS_ATTACHMENT_COUNT, uint8_t>((uint8_t)ETextureUsageFlags::UNDEFINED)),
           attachment_flags(CreateArray<MAX_PASS_ATTACHMENT_COUNT, ETextureUsageFlags>(ETextureUsageFlags::UNDEFINED)) {}
-    uint32_t                                                  attachments_count;
-    std::array<uint8_t, MAX_PASS_ATTACHMENT_COUNT>            attachment_formats;
-    std::array<ETextureUsageFlags, MAX_PASS_ATTACHMENT_COUNT> attachment_flags;
-    EPixelFormat                                              depth_stencil_attachment_format;
-    ETextureUsageFlags                                        depth_stencil_attachment_flag = ETextureUsageFlags::UNDEFINED;
+    uint32_t                                                         attachments_count;
+    Moer::StaticArray<uint8_t, MAX_PASS_ATTACHMENT_COUNT>            attachment_formats;
+    Moer::StaticArray<ETextureUsageFlags, MAX_PASS_ATTACHMENT_COUNT> attachment_flags;
+    EPixelFormat                                                     depth_stencil_attachment_format;
+    ETextureUsageFlags                                               depth_stencil_attachment_flag = ETextureUsageFlags::UNDEFINED;
 
     EAttachmentLoadOp  depth_attachment_load_op    = EAttachmentLoadOp::NONE;
     EAttachmentStoreOp depth_attachment_store_op   = EAttachmentStoreOp::NONE;
@@ -1887,8 +1884,8 @@ struct GraphicsPipelineAttachmentInfo {
 
 class RHIGraphicsPipelineStateInitializer {
 public:
-    using TAttachmentFormats = std::array<uint8_t, MAX_PASS_ATTACHMENT_COUNT>;
-    using TAttachmentFlags   = std::array<ETextureUsageFlags, MAX_PASS_ATTACHMENT_COUNT>;
+    using TAttachmentFormats = Moer::StaticArray<uint8_t, MAX_PASS_ATTACHMENT_COUNT>;
+    using TAttachmentFlags   = Moer::StaticArray<ETextureUsageFlags, MAX_PASS_ATTACHMENT_COUNT>;
 
     RHIGraphicsPipelineStateInitializer()
         : blend_state(nullptr),
@@ -2039,27 +2036,27 @@ class RayTracingPipelineStateInitializer : RayTracingPipelineStateInfo {
 public:
     RayTracingPipelineStateInitializer() = default;
 
-    const std::vector<RHIRayTracingShader*>& GetRayGenTable() const { return ray_gen_table; }
-    const std::vector<RHIRayTracingShader*>& GetRayMissTable() const { return ray_miss_table; }
-    const std::vector<RHIRayTracingShader*>& GetRayHitTable() const { return ray_hit_table; }
-    const std::vector<RHIRayTracingShader*>& GetRayCallableTable() const { return ray_callable_table; }
+    const Moer::Array<RHIRayTracingShader*>& GetRayGenTable() const { return ray_gen_table; }
+    const Moer::Array<RHIRayTracingShader*>& GetRayMissTable() const { return ray_miss_table; }
+    const Moer::Array<RHIRayTracingShader*>& GetRayHitTable() const { return ray_hit_table; }
+    const Moer::Array<RHIRayTracingShader*>& GetRayCallableTable() const { return ray_callable_table; }
 
-    void SetRayGenShaderTable(const std::vector<RHIRayTracingShader*>& _ray_gen_shaders, uint64_t _hash = 0) {
+    void SetRayGenShaderTable(const Moer::Array<RHIRayTracingShader*>& _ray_gen_shaders, uint64_t _hash = 0) {
         ray_gen_table = _ray_gen_shaders;
-        hash_ray_gen  = _hash ? _hash : ComputeHash(std::vector<RHIRayTracingShader*>(_ray_gen_shaders.begin(), _ray_gen_shaders.end()));
+        hash_ray_gen  = _hash ? _hash : ComputeHash(Moer::Array<RHIRayTracingShader*>(_ray_gen_shaders.begin(), _ray_gen_shaders.end()));
     }
 
-    void SetRayMissShaderTable(const std::vector<RHIRayTracingShader*>& _ray_miss_shaders, uint64_t _hash = 0) {
+    void SetRayMissShaderTable(const Moer::Array<RHIRayTracingShader*>& _ray_miss_shaders, uint64_t _hash = 0) {
         ray_miss_table = _ray_miss_shaders;
-        hash_ray_miss  = _hash ? _hash : ComputeHash(std::vector<RHIRayTracingShader*>(_ray_miss_shaders.begin(), _ray_miss_shaders.end()));
+        hash_ray_miss  = _hash ? _hash : ComputeHash(Moer::Array<RHIRayTracingShader*>(_ray_miss_shaders.begin(), _ray_miss_shaders.end()));
     }
-    void SetRayHitShaderTable(const std::vector<RHIRayTracingShader*>& _ray_hit_shaders, uint64_t _hash = 0) {
+    void SetRayHitShaderTable(const Moer::Array<RHIRayTracingShader*>& _ray_hit_shaders, uint64_t _hash = 0) {
         ray_hit_table = _ray_hit_shaders;
-        hash_ray_hit  = _hash ? _hash : ComputeHash(std::vector<RHIRayTracingShader*>(_ray_hit_shaders.begin(), _ray_hit_shaders.end()));
+        hash_ray_hit  = _hash ? _hash : ComputeHash(Moer::Array<RHIRayTracingShader*>(_ray_hit_shaders.begin(), _ray_hit_shaders.end()));
     }
-    void SetRayCallableShaderTable(const std::vector<RHIRayTracingShader*>& _ray_callable_shaders, uint64_t _hash = 0) {
+    void SetRayCallableShaderTable(const Moer::Array<RHIRayTracingShader*>& _ray_callable_shaders, uint64_t _hash = 0) {
         ray_callable_table = _ray_callable_shaders;
-        hash_ray_callable  = _hash ? _hash : ComputeHash(std::vector<RHIRayTracingShader*>(_ray_callable_shaders.begin(), _ray_callable_shaders.end()));
+        hash_ray_callable  = _hash ? _hash : ComputeHash(Moer::Array<RHIRayTracingShader*>(_ray_callable_shaders.begin(), _ray_callable_shaders.end()));
     }
     friend uint32_t GetHash(const RayTracingPipelineStateInitializer& value) {
         uint32_t hash = GetHash(value.max_attribute_byte_size);
@@ -2070,7 +2067,7 @@ public:
     }
 
 protected:
-    uint64_t ComputeHash(const std::vector<RHIRayTracingShader*>& target) {
+    uint64_t ComputeHash(const Moer::Array<RHIRayTracingShader*>& target) {
         for (RHIRayTracingShader* shader : target) {
             //todo: handle sha256 hash combining and convert shader sha256 to uint64_t
             shader->GetHash();
@@ -2079,10 +2076,10 @@ protected:
     }
 
     RHIRayTracingPipelineStateRef     base_pipeline_handle;
-    std::vector<RHIRayTracingShader*> ray_gen_table;
-    std::vector<RHIRayTracingShader*> ray_miss_table;
-    std::vector<RHIRayTracingShader*> ray_hit_table;
-    std::vector<RHIRayTracingShader*> ray_callable_table;
+    Moer::Array<RHIRayTracingShader*> ray_gen_table;
+    Moer::Array<RHIRayTracingShader*> ray_miss_table;
+    Moer::Array<RHIRayTracingShader*> ray_hit_table;
+    Moer::Array<RHIRayTracingShader*> ray_callable_table;
 };
 
 /* struct for RenderPassInfo Only, constructed by texture_view and Pass-Required texture layout */
@@ -2182,8 +2179,8 @@ struct RHIRenderPassInfo {
     };
     static_assert(sizeof(ColorAttachmentInfo) == sizeof(DepthStencilAttachmentInfo));
 
-    std::array<ColorAttachmentInfo, MAX_PASS_ATTACHMENT_COUNT> color_attachments;
-    DepthStencilAttachmentInfo                                 depth_stencil_attachment;
+    Moer::StaticArray<ColorAttachmentInfo, MAX_PASS_ATTACHMENT_COUNT> color_attachments;
+    DepthStencilAttachmentInfo                                        depth_stencil_attachment;
 
     Rect2D render_area;
 
@@ -2457,7 +2454,7 @@ struct RayTracingGeometryElement {
 static_assert(sizeof(RayTracingGeometryElement) == 40);
 
 struct RayTracingGeometryInitializer {
-    std::vector<RayTracingGeometryElement> elements;
+    Moer::Array<RayTracingGeometryElement> elements;
 
     RHIBufferRef index_buffer;
 
@@ -2484,21 +2481,21 @@ struct RayTracingGeometryInstance {
     RHIRayTracingGeometry* p_geometry;
 
     // a mesh may have multiple instances
-    std::vector<Matrix>& transforms;
+    Moer::Array<Matrix>& transforms;
 
-    std::vector<uint32_t> scene_instance_data_offsets;
+    Moer::Array<uint32_t> scene_instance_data_offsets;
 
     RHIShaderResourceViewRef transform_data_srv = nullptr;
     uint32_t                 num_transforms;
 
     uint32_t              default_index = 0;
-    std::vector<uint32_t> custom_index;
+    Moer::Array<uint32_t> custom_index;
 
     //sum of previous geo elements, for calculating offset in sbt(prev_element_count * shader_slot_per_element)
-    std::vector<uint32_t> prev_element_count;
+    Moer::Array<uint32_t> prev_element_count;
 
     //each geo copy have one bit
-    std::vector<std::bitset<32>> activation_masks;
+    Moer::Array<std::bitset<32>> activation_masks;
 
     uint32_t instance_mask : 8;
 
@@ -2506,16 +2503,16 @@ struct RayTracingGeometryInstance {
 };
 
 struct RayTracingSceneInitializer {
-    std::vector<RHIRayTracingGeometryRef> scene_geometries;
+    Moer::Array<RHIRayTracingGeometryRef> scene_geometries;
 
-    std::vector<RHIRayTracingGeometry*> instance_geometries;
+    Moer::Array<RHIRayTracingGeometry*> instance_geometries;
 
-    std::vector<uint32_t> instance_previous_transform_sum;
+    Moer::Array<uint32_t> instance_previous_transform_sum;
 
-    std::vector<uint32_t> instance_previous_element_sum;
+    Moer::Array<uint32_t> instance_previous_element_sum;
 
     // to support multi-layer ray-tracing: certain instance may exist on certain layer/layers
-    std::vector<uint32_t> instance_count_per_layer;
+    Moer::Array<uint32_t> instance_count_per_layer;
     uint32_t              num_total_elements;
 
     uint32_t shader_slots_per_geometry_element;

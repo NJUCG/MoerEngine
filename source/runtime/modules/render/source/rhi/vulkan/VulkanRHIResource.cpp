@@ -1256,7 +1256,7 @@ VkBlendFactor VulkanRHIBlendState::METoVKBlendFactor(EBlendFactor _blend_factor)
 
 #pragma region pipeline states definitions
 
-void VulkanRHIGraphicsPipelineState::GenerateDescriptorSetLayouts(const VulkanDevice* _device, std::vector<TDescriptorSetLayout>& _layout_mappings) {
+void VulkanRHIGraphicsPipelineState::GenerateDescriptorSetLayouts(const VulkanDevice* _device, Moer::Array<TDescriptorSetLayout>& _layout_mappings) {
     // create descriptor set layouts
     for (auto& layout : _layout_mappings) {
         VkDescriptorSetLayoutCreateInfo layout_create_info{};
@@ -1278,8 +1278,8 @@ void VulkanRHIGraphicsPipelineState::CreateResourceCache() {
     m_pipeline_state_cache = new VulkanPipelineResourceCache();
 }
 
-std::vector<VkPipelineShaderStageCreateInfo> VulkanRHIGraphicsPipelineState::METoVKShaderStageCreateInfo(const RHIShaderBoundStateInput& _shader_bound_state) {
-    std::vector<VkPipelineShaderStageCreateInfo> shader_stage_create_infos;
+Moer::Array<VkPipelineShaderStageCreateInfo> VulkanRHIGraphicsPipelineState::METoVKShaderStageCreateInfo(const RHIShaderBoundStateInput& _shader_bound_state) {
+    Moer::Array<VkPipelineShaderStageCreateInfo> shader_stage_create_infos;
     // vert-frag pipeline
     VkPipelineShaderStageCreateInfo shader_stage_create_info{};
     shader_stage_create_info.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -1346,8 +1346,8 @@ VkPipelineVertexInputStateCreateInfo VulkanRHIGraphicsPipelineState::METoVKVerte
     return vertex_input_state_create_info;
 }
 
-std::vector<const Shader*> VulkanRHIGraphicsPipelineState::GetShaderInfoList(const RHIShaderBoundStateInput& _shader_bound_state) {
-    std::vector<const Shader*> shader_list;
+Moer::Array<const Shader*> VulkanRHIGraphicsPipelineState::GetShaderInfoList(const RHIShaderBoundStateInput& _shader_bound_state) {
+    Moer::Array<const Shader*> shader_list;
     if (_shader_bound_state.p_vertex_shader->shader_type == EShaderType::ST_VERTEX) {
         shader_list.push_back(_shader_bound_state.p_vertex_shader->GetMetaShader());
     }

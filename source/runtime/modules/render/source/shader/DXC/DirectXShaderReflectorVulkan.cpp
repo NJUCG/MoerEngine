@@ -10,7 +10,7 @@
 
 #include <format>
 
-void DirectXShaderReflectorVulkan::ReflectShader(const void* _compiled_result, const ShaderParametersMetadata* _param_meta_data, std::unordered_map<std::string, ParameterInfo>& _out_parameters) {
+void DirectXShaderReflectorVulkan::ReflectShader(const void* _compiled_result, const ShaderParametersMetadata* _param_meta_data, Moer::UnorderedMap<std::string, ParameterInfo>& _out_parameters) {
     if (_param_meta_data == nullptr) {
         // May be material shader
         return;
@@ -34,7 +34,7 @@ void DirectXShaderReflectorVulkan::ReflectShader(const void* _compiled_result, c
     uint32_t var_count = 0;
     ref_result         = spvReflectEnumerateInputVariables(&reflect_module, &var_count, NULL);
     assert(ref_result == SPV_REFLECT_RESULT_SUCCESS);
-    std::vector<SpvReflectInterfaceVariable*> input_vars(var_count);
+    Moer::Array<SpvReflectInterfaceVariable*> input_vars(var_count);
     ref_result = spvReflectEnumerateInputVariables(&reflect_module, &var_count, input_vars.data());
     assert(ref_result == SPV_REFLECT_RESULT_SUCCESS);
 
@@ -44,7 +44,7 @@ void DirectXShaderReflectorVulkan::ReflectShader(const void* _compiled_result, c
     // Destroy the reflection data when no longer required.
     //generate pipeline layout
 
-    std::unordered_map<std::string, ParameterInfo> param_map;
+    Moer::UnorderedMap<std::string, ParameterInfo> param_map;
     const ShaderParametersMetadata*                meta_data = _param_meta_data;
     for (uint32_t binding_index = 0; binding_index < reflect_module.descriptor_binding_count; ++binding_index) {
         auto& binding = reflect_module.descriptor_bindings[binding_index];
@@ -58,7 +58,7 @@ void DirectXShaderReflectorVulkan::ReflectShader(const void* _compiled_result, c
     }
 
     const auto&              members = meta_data->GetMembers();
-    std::vector<std::string> not_reflected_members;
+    Moer::Array<std::string> not_reflected_members;
     for (const ShaderParametersMetadata::Member& member : members) {
         EShaderBindingBaseType base_type = member.GetBaseType();
         std::string            name      = member.GetName();

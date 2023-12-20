@@ -3,7 +3,6 @@
 #include "API_Macro.h"
 #include "ThreadManager.h"
 #include <utility>
-#include <vector>
 #include <memory>
 #include "misc/CountableRef.h"
 #include "TaskGraph.h"
