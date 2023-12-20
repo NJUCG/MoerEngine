@@ -41,7 +41,7 @@ public:
     VulkanDescriptorSetsLayout()  = default;
     ~VulkanDescriptorSetsLayout() = default;
 
-    void Init(const Moer::Array<TDescriptorSetLayout>& _layout_mappings, VulkanPipelineResourceCache* _cache);
+    void Init(const Moer::Array<TDescriptorSetLayoutInfo>& _layout_mappings, VulkanPipelineResourceCache* _cache);
 
     inline uint32_t GetDescriptorSetCount() const {
         return m_layouts.size();

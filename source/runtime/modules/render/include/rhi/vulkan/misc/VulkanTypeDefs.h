@@ -16,7 +16,7 @@ using TExtensionArray             = Moer::Array<std::string>;
 using TExtensionPropsArray        = Moer::Array<VkExtensionProperties>;
 using TLayerArray                 = Moer::Array<std::string>;
 using TQueueFamilyPropertiesArray = Moer::Array<VkQueueFamilyProperties>;
-using TDescriptorSetLayout        = std::pair<VkDescriptorSetLayout, Moer::Array<VkDescriptorSetLayoutBinding>>;
+using TDescriptorSetLayoutInfo    = std::pair<VkDescriptorSetLayout, Moer::Array<VkDescriptorSetLayoutBinding>>;
 using TDescriptorCountMap         = Moer::UnorderedMap<VkDescriptorType, uint32_t>;
 
 #endif//VULKAN_TYPEDEFS_H

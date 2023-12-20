@@ -19,6 +19,9 @@ const VkDescriptorBufferInfo& VulkanPipelineResourceCache::UpdateDescriptorBuffe
 }
 
 bool VulkanPipelineResourceCache::UpdateDescriptorSets(VulkanDevice* _device, const VulkanDescriptorSetsLayout* _layout) {
+    if (m_descriptor_sets.empty()) {
+        return false;
+    }
     return _device->GetDescriptorSets(GetSetsKey(), *_layout, m_descriptor_set_writers, m_descriptor_sets);
 }
 

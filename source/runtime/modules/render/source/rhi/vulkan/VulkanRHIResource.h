@@ -319,7 +319,7 @@ public:
         return m_pipeline_state_cache;
     }
 
-    void GenerateDescriptorSetLayouts(const VulkanDevice* _device, Moer::Array<TDescriptorSetLayout>& _layout_mappings);
+    void GenerateDescriptorSetLayouts(const VulkanDevice* _device, Moer::Array<TDescriptorSetLayoutInfo>& _layout_mappings);
     void CreateResourceCache();
 
     static Moer::Array<VkPipelineShaderStageCreateInfo> METoVKShaderStageCreateInfo(const RHIShaderBoundStateInput& _shader_bound_state);
