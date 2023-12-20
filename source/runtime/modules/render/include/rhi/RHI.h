@@ -4,7 +4,6 @@
 #include "RHIResource.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
-#include <vector>
 #include "RenderAPI.h"
 #include "Core.h"
 #include "taskgraph/TaskGraph.h"

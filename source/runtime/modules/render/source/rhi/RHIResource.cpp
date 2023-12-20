@@ -201,7 +201,7 @@ void RHIBatchedShaderParameters::SetParameters(const Shader* shader, size_t _dat
             resource_parameters.emplace_back(RHIShaderResourceParameter(data, param_info.slot, param_info.space));
         }
     }
-    std::vector<RHIShaderConstantParameter> temp_constant;
+    Moer::Array<RHIShaderConstantParameter> temp_constant;
     //copy constant parameters to raw data
 
     //for now only support one constant struct

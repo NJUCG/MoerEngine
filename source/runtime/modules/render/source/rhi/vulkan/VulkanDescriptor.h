@@ -10,9 +10,6 @@
 
 #include <vulkan/vulkan.h>
 
-#include <set>
-#include <memory>
-
 class VulkanDevice;
 class VulkanDescriptorSetWriter;
 
@@ -38,19 +35,19 @@ class VulkanDescriptorSetsLayout {
         uint32_t         count;
         uint32_t         hash_info_index;
     };
-    using TDescriptorBindingInfo = std::unordered_map<uint8_t, std::unordered_map<uint32_t, DescriptorBindingInfo>>;
+    using TDescriptorBindingInfo = Moer::UnorderedMap<uint8_t, Moer::UnorderedMap<uint32_t, DescriptorBindingInfo>>;
 
 public:
     VulkanDescriptorSetsLayout()  = default;
     ~VulkanDescriptorSetsLayout() = default;
 
-    void Init(const std::vector<TDescriptorSetLayout>& _layout_mappings, VulkanPipelineResourceCache* _cache);
+    void Init(const Moer::Array<TDescriptorSetLayout>& _layout_mappings, VulkanPipelineResourceCache* _cache);
 
     inline uint32_t GetDescriptorSetCount() const {
         return m_layouts.size();
     }
 
-    inline const std::vector<VkDescriptorSetLayout>& GetLayouts() const {
+    inline const Moer::Array<VkDescriptorSetLayout>& GetLayouts() const {
         return m_layouts;
     }
 
@@ -63,7 +60,7 @@ public:
     }
 
 private:
-    std::vector<VkDescriptorSetLayout> m_layouts;
+    Moer::Array<VkDescriptorSetLayout> m_layouts;
     TDescriptorCountMap                m_sets_binding_count;
     TDescriptorBindingInfo             m_descriptor_binding_infos;
     // infos[space][slot] = {type, count, hash_info_index}
@@ -76,7 +73,7 @@ public:
 
     void Init(VulkanDevice* device);
 
-    bool GetDescriptorSets(uint32_t _hash_key, const VulkanDescriptorSetsLayout& _layout, std::vector<VulkanDescriptorSetWriter>& _writers, std::vector<VkDescriptorSet>& _sets);
+    bool GetDescriptorSets(uint32_t _hash_key, const VulkanDescriptorSetsLayout& _layout, Moer::Array<VulkanDescriptorSetWriter>& _writers, Moer::Array<VkDescriptorSet>& _sets);
 
     void ResetAll();
 
@@ -88,8 +85,8 @@ public:
         VulkanDescriptorSetCachePool(VulkanDevice* _device, const VulkanDescriptorSetsLayout& _layout);
         ~VulkanDescriptorSetCachePool();
 
-        bool FindDescriptorSets(uint32_t _hash_key, std::vector<VkDescriptorSet>& _sets);
-        bool CreateDescriptorSets(uint32_t _hash_key, const VulkanDescriptorSetsLayout& _layout, std::vector<VulkanDescriptorSetWriter>& _writers, std::vector<VkDescriptorSet>& _sets);
+        bool FindDescriptorSets(uint32_t _hash_key, Moer::Array<VkDescriptorSet>& _sets);
+        bool CreateDescriptorSets(uint32_t _hash_key, const VulkanDescriptorSetsLayout& _layout, Moer::Array<VulkanDescriptorSetWriter>& _writers, Moer::Array<VkDescriptorSet>& _sets);
         bool AllocateDescriptorSet(VkDescriptorSetLayout _layout, VkDescriptorSet& _set);
         void Reset();
         void CleanUp();
@@ -97,8 +94,8 @@ public:
     private:
         VkDescriptorPool m_pool;
 
-        std::unordered_map<uint32_t, std::vector<VkDescriptorSet>> m_allocated_sets;
-        std::unordered_map<uint32_t, VkDescriptorSet>              m_allocated_set;
+        Moer::UnorderedMap<uint32_t, Moer::Array<VkDescriptorSet>> m_allocated_sets;
+        Moer::UnorderedMap<uint32_t, VkDescriptorSet>              m_allocated_set;
 
     private:
         static uint32_t GetMaxSets(uint32_t _set_count);
@@ -112,10 +109,10 @@ private:
 };
 
 struct VulkanDescriptorSetWriteContainer {
-    std::vector<VulkanHashableDescriptorInfo>        hashable_descriptor_infos;
-    std::vector<std::vector<VkDescriptorImageInfo>>  descriptor_image_infos;
-    std::vector<std::vector<VkDescriptorBufferInfo>> descriptor_buffer_infos;
-    // std::vector<VkWriteDescriptorSet>         descriptor_writes;
+    Moer::Array<VulkanHashableDescriptorInfo>        hashable_descriptor_infos;
+    Moer::Array<Moer::Array<VkDescriptorImageInfo>>  descriptor_image_infos;
+    Moer::Array<Moer::Array<VkDescriptorBufferInfo>> descriptor_buffer_infos;
+    // Moer::Array<VkWriteDescriptorSet>         descriptor_writes;
 };
 
 class VulkanDescriptorSetWriter : public VulkanDeviceObject {
@@ -138,13 +135,13 @@ public:
 private:
     uint32_t m_hash_info_head;
 
-    std::vector<VkWriteDescriptorSet> m_write_set;
+    Moer::Array<VkWriteDescriptorSet> m_write_set;
     // <binding, index of write set>
-    std::unordered_map<uint16_t, uint32_t> m_index_of_binding;
+    Moer::UnorderedMap<uint16_t, uint32_t> m_index_of_binding;
     // <binding, index of image>
-    std::unordered_map<uint16_t, uint32_t> m_index_of_image;
+    Moer::UnorderedMap<uint16_t, uint32_t> m_index_of_image;
     // <binding, index of buffer>
-    std::unordered_map<uint16_t, uint32_t> m_index_of_buffer;
+    Moer::UnorderedMap<uint16_t, uint32_t> m_index_of_buffer;
 
     VulkanPipelineResourceCache* m_cache;
 

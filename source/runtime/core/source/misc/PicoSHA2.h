@@ -34,7 +34,6 @@ Copyright (C) 2017 okdshin
 #include <cassert>
 #include <iterator>
 #include <sstream>
-#include <vector>
 #include <fstream>
 namespace picosha2 {
     typedef unsigned long word_t;
@@ -316,7 +315,7 @@ namespace picosha2 {
                 (*begin++) = static_cast<byte_t>(data_bit_length_digits[i]);
             }
         }
-        std::vector<byte_t> buffer_;
+        Moer::Array<byte_t> buffer_;
         word_t              data_length_digits_[4];// as 64bit integer (16bit x 4 integer)
         word_t              h_[8];
     };
@@ -346,7 +345,7 @@ namespace picosha2 {
 
         template<typename InputIter, typename OutIter>
         void hash256_impl(InputIter first, InputIter last, OutIter first2, OutIter last2, int buffer_size, std::input_iterator_tag) {
-            std::vector<byte_t> buffer(buffer_size);
+            Moer::Array<byte_t> buffer(buffer_size);
             hash256_one_by_one  hasher;
             // hasher.init();
             while (first != last) {

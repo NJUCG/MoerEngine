@@ -5,7 +5,6 @@
 #include "rhi/RHIResource.h"
 #include <algorithm>
 #include <stdexcept>
-#include <vector>
 
 #pragma region shaderParameters metadata
 
@@ -16,7 +15,7 @@ ShaderParametersMetadata::ShaderParametersMetadata(
     EShaderParameterUseCase    _use_case,
     const char*                _struct_name,
     uint32_t                   _size,
-    const std::vector<Member>& _members,
+    const Moer::Array<Member>& _members,
     bool                       _b_force_complete_initialization)
     : use_case(_use_case),
       struct_name(_struct_name),
@@ -124,8 +123,8 @@ ShaderMetaType::~ShaderMetaType() {
     GetNameToTypeMap().erase(type_name);
 }
 
-std::unordered_map<std::string, ShaderMetaType*>& ShaderMetaType::GetNameToTypeMap() {
-    static std::unordered_map<std::string, ShaderMetaType*> name_to_shader_meta_type;
+Moer::UnorderedMap<std::string, ShaderMetaType*>& ShaderMetaType::GetNameToTypeMap() {
+    static Moer::UnorderedMap<std::string, ShaderMetaType*> name_to_shader_meta_type;
     return name_to_shader_meta_type;
 }
 
@@ -133,8 +132,8 @@ ShaderTypeRegistration::ShaderTypeRegistration(std::function<ShaderMetaType&()> 
     GetRegistrations().push_back(_callback);
 }
 
-std::vector<std::function<ShaderMetaType&()>>& ShaderTypeRegistration::GetRegistrations() {
-    static std::vector<std::function<ShaderMetaType&()>> registrations;
+Moer::Array<std::function<ShaderMetaType&()>>& ShaderTypeRegistration::GetRegistrations() {
+    static Moer::Array<std::function<ShaderMetaType&()>> registrations;
     return registrations;
 }
 void ShaderTypeRegistration::CollectRegistration(std::function<ShaderMetaType&()> _registration_func) {
@@ -146,11 +145,11 @@ void ShaderTypeRegistration::SubmitRegistrations() {
         ShaderMetaType& info = registration_func();
         //todo: later process
     }
-    std::vector<std::function<ShaderMetaType&()>> temp;
+    Moer::Array<std::function<ShaderMetaType&()>> temp;
     temp.swap(GetRegistrations());
 }
 
-std::vector<ShaderCompilerInput> g_compiled_inputs;
+Moer::Array<ShaderCompilerInput> g_compiled_inputs;
 
 void ShaderCompileRegistration::RegistrateCompileWorkIfNeed(const ShaderMetaType& _shader_type) {
     ShaderTargetInfo target_info;
@@ -165,7 +164,7 @@ void ShaderCompileRegistration::RegistrateCompileWorkIfNeed(const ShaderMetaType
         ShaderTargetInfo{_shader_type.GetShaderType(), GetShaderPlatformByRHIType(g_rhi->GetType())}, _shader_type.GetEntryPoint(), _shader_type.GetFileName(), _shader_type.GetName(), _shader_type.GetParameterMetaData());
 }
 
-std::vector<ShaderCompilerInput>& ShaderCompileRegistration::RetrieveShaderCompileWorks() {
+Moer::Array<ShaderCompilerInput>& ShaderCompileRegistration::RetrieveShaderCompileWorks() {
     return g_compiled_inputs;
 }
 

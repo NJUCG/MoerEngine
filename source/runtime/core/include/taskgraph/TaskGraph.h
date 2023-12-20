@@ -1,6 +1,5 @@
 #ifndef TASK_GRAPH_H
 #define TASK_GRAPH_H
-#include <memory>
 #include "API_Macro.h"
 #include "Thread.h"
 #include "misc/CountableRef.h"

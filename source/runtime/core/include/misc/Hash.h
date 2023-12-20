@@ -1,18 +1,17 @@
 #ifndef HASHABLE_H
 #define HASHABLE_H
+
 #include "API_Macro.h"
 #include "MacroUtils.h"
+
+#include "misc/STL.h"
+
 #include <atomic>
 #include <functional>
-#include <map>
 #include <mutex>
-#include <string.h>
 #include <type_traits>
 #include <string_view>
-#include <cstring>
-#include <array>
 #include <cstdint>
-#include <string>
 #include <shared_mutex>
 
 template<typename TEnum>
@@ -158,7 +157,7 @@ private:
 
 struct SHA256Hash {
 public:
-    std::array<uint8_t, 32> hash_code{};
+    Moer::StaticArray<uint8_t, 32> hash_code{};
     SHA256Hash() {
         for (unsigned char& i : hash_code) {
             i = 0;
@@ -179,7 +178,7 @@ public:
 
 struct CORE_API Hash64City {
 public:
-    std::array<uint8_t, 8> hash_code{};
+    Moer::StaticArray<uint8_t, 8> hash_code{};
 
     Hash64City() {
         for (unsigned char& i : hash_code) {
@@ -208,7 +207,7 @@ static_assert(sizeof(Hash64City) == 8);
 
 namespace inner_utils {
     template<typename T, std::size_t... Is>
-    constexpr std::array<T, sizeof...(Is)>
+    constexpr Moer::StaticArray<T, sizeof...(Is)>
     CreateArray(T value, std::index_sequence<Is...>) {
         // cast Is to void to remove the warning: unused value
         return {{(static_cast<void>(Is), value)...}};
@@ -216,7 +215,7 @@ namespace inner_utils {
 }// namespace inner_utils
 
 template<std::size_t N, typename T>
-constexpr std::array<T, N> CreateArray(const T& value) {
+constexpr Moer::StaticArray<T, N> CreateArray(const T& value) {
     return inner_utils::CreateArray(value, std::make_index_sequence<N>());
 }
 
@@ -227,9 +226,9 @@ class HashedName {
 
     static std::atomic_uint32_t s_size;
 
-    static std::shared_mutex                s_rw_mutex;
-    static std::map<const char*, uint32_t>& GetNameToHash() {
-        static std::map<const char*, uint32_t> s_name_to_hash;
+    static std::shared_mutex                 s_rw_mutex;
+    static Moer::Map<const char*, uint32_t>& GetNameToHash() {
+        static Moer::Map<const char*, uint32_t> s_name_to_hash;
         return s_name_to_hash;
     }
 

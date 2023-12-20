@@ -6,7 +6,7 @@
 #include "shader/ShaderCommon.h"
 #include "shader/ShaderCompiler.h"
 #include "shader/ShaderResource.h"
-#include <array>
+
 ShaderResourceManager::ShaderResourceManager() {
 }
 

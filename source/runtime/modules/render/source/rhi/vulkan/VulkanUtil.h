@@ -5,10 +5,9 @@
 #ifndef VULKAN_UTIL_H
 #define VULKAN_UTIL_H
 
-#include <vulkan/vulkan.h>
+#include "misc/STL.h"
 
-#include <vector>
-#include <string>
+#include <vulkan/vulkan.h>
 namespace Moer {
 namespace RHI {
 namespace Vulkan {
@@ -16,8 +15,8 @@ namespace Vulkan {
 namespace Util {
     struct SwapChainSupportDetails {
         VkSurfaceCapabilitiesKHR        capabilities;
-        std::vector<VkSurfaceFormatKHR> formats;
-        std::vector<VkPresentModeKHR>   present_modes;
+        Moer::Array<VkSurfaceFormatKHR> formats;
+        Moer::Array<VkPresentModeKHR>   present_modes;
     };
     /** @brief Disable message boxes on fatal errors */
     extern bool error_mode_silent;
@@ -80,7 +79,7 @@ namespace Util {
     VkShaderModule LoadShader(const char* file_name, VkDevice device);
 
     // Create a SPIR-V shader from code
-    VkShaderModule CreateShaderModule(const std::vector<uint8_t>& _code, VkDevice device);
+    VkShaderModule CreateShaderModule(const Moer::Array<uint8_t>& _code, VkDevice device);
 
     /** @brief Checks if a file exists */
     bool FileExists(const std::string& filename);

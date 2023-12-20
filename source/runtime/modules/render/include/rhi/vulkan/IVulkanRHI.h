@@ -8,7 +8,7 @@
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIResource.h"
-#include <stdint.h>
+#include <cstdint>
 #include <vulkan/vulkan.h>
 
 class IVulkanRHI : public RHI {

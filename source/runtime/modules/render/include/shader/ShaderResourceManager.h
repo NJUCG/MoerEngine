@@ -5,9 +5,7 @@
 #include "rhi/RHIResource.h"
 #include "shader/ShaderCommon.h"
 #include "shader/ShaderResource.h"
-#include <array>
-#include <unordered_map>
-#include <vector>
+
 class ShaderResourceManager {
 public:
     static void                   Init(EShaderPlatform platform);

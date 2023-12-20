@@ -6,9 +6,9 @@ namespace Moer::Resource::MiXml {
 
     struct GlobalCursor {
         Object*                                      current_obj = nullptr;
-        std::vector<std::unique_ptr<Object>>         objects_pool;
-        std::unordered_map<std::string, std::string> global_params;
-        std::unordered_map<std::string, Object*>     ref_objects_map;
+        Moer::Array<std::unique_ptr<Object>>         objects_pool;
+        Moer::UnorderedMap<std::string, std::string> global_params;
+        Moer::UnorderedMap<std::string, Object*>     ref_objects_map;
 
         void AddGlobalParam(std::string, std::string) noexcept;
 

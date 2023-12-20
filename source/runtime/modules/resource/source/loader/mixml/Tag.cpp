@@ -1,7 +1,7 @@
 #include "loader\mixml\Tag.h"
 
 namespace Moer::Resource::MiXml {
-    const std::unordered_map<std::string, ETag> S_TAG_MAP{
+    const Moer::UnorderedMap<std::string, ETag> S_TAG_MAP{
         {"", ETag::UNKNOWN},
         {"scene", ETag::SCENE},
         {"default", ETag::DEFAULT},

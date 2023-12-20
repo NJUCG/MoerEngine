@@ -9,25 +9,24 @@
 #include "shader/ShaderResourceManager.h"
 #include "taskgraph/GraphTask.h"
 #include "taskgraph/TaskGraph.h"
+
 #include <algorithm>
 #include <format>
 #include <functional>
-#include <string>
-#include <unordered_map>
+#include <utility>
 
 #include "platform/Platform.h"
 
 #include "shader/ShaderCompiler.h"
 #include "shader/Shader.h"
 #include "spirv_reflect.h"
+
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 
 #include "log/LogSystem.h"
 #include "shader/ShaderCommon.h"
-#include <utility>
-#include <vector>
 #include "rhi/RHI.h"
 
 #include "DXC/DirectXShaderCompiler.h"

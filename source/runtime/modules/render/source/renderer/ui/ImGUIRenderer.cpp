@@ -11,6 +11,7 @@
 #include "shader/ShaderResourceManager.h"
 
 #include "math/Math.h"
+#include "misc/STL.h"
 
 #include "taskgraph/GraphTask.h"
 #include "taskgraph/ThreadManager.h"
@@ -227,9 +228,9 @@ void ImGUIRenderer::EndRenderFrame() {
 
         if (next_frame_info.backbuffer_index == UINT32_MAX) return;
 
-        RHIUnorderedAccessView*              present_view = g_rhi->RHIGetViewportBackBufferUAV(main_viewport, next_frame_info.backbuffer_index);
-        RHIBarrierDependencyInfo             dependency_info;
-        std::array<RHITextureBarrierInfo, 1> texture_barriers;
+        RHIUnorderedAccessView*                     present_view = g_rhi->RHIGetViewportBackBufferUAV(main_viewport, next_frame_info.backbuffer_index);
+        RHIBarrierDependencyInfo                    dependency_info;
+        Moer::StaticArray<RHITextureBarrierInfo, 1> texture_barriers;
 
         texture_barriers[0].SetDstTextureLayout(ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT);
         texture_barriers[0].SetSrcTextureLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED);
@@ -271,8 +272,8 @@ void ImGUIRenderer::EndRenderFrame() {
 
         ui_command_list->EndRenderPass();
 
-        RHIBarrierDependencyInfo             texture_dependency_info;
-        std::array<RHITextureBarrierInfo, 1> texture_barriers_present;
+        RHIBarrierDependencyInfo                    texture_dependency_info;
+        Moer::StaticArray<RHITextureBarrierInfo, 1> texture_barriers_present;
         texture_barriers_present[0].SetDstTextureLayout(ETextureLayout::TEXTURE_LAYOUT_PRESENT_SRC);
         texture_barriers_present[0].SetSrcTextureLayout(ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT);
         texture_barriers_present[0].p_texture = present_view->GetTexture();
@@ -827,8 +828,8 @@ void GuiRenderWindow(ImGuiViewport* viewport, void*) {
     RHIUnorderedAccessView* present_view = g_rhi->RHIGetViewportBackBufferUAV(rhi_viewport, info.backbuffer_index);
 
     //transfer present texture layout to color attachment layout
-    RHIBarrierDependencyInfo             dependency_info;
-    std::array<RHITextureBarrierInfo, 1> texture_barriers;
+    RHIBarrierDependencyInfo                    dependency_info;
+    Moer::StaticArray<RHITextureBarrierInfo, 1> texture_barriers;
 
     texture_barriers[0].SetDstTextureLayout(ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT);
     texture_barriers[0].SetSrcTextureLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED);
@@ -842,8 +843,8 @@ void GuiRenderWindow(ImGuiViewport* viewport, void*) {
     dependency_info.p_texture_barriers    = texture_barriers.data();
 
     //transfer present texture layout to present src
-    RHIBarrierDependencyInfo             texture_dependency_info;
-    std::array<RHITextureBarrierInfo, 1> texture_barriers_present;
+    RHIBarrierDependencyInfo                    texture_dependency_info;
+    Moer::StaticArray<RHITextureBarrierInfo, 1> texture_barriers_present;
     texture_barriers_present[0].SetDstTextureLayout(ETextureLayout::TEXTURE_LAYOUT_PRESENT_SRC);
     texture_barriers_present[0].SetSrcTextureLayout(ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT);
     texture_barriers_present[0].p_texture = present_view->GetTexture();

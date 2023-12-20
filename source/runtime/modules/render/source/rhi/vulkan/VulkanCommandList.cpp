@@ -54,7 +54,7 @@ void VulkanRHICommandListBase::CopyBuffer(const RHICopyBufferInfo& _copy_info, R
         return;
     }
 
-    std::vector<VkBufferCopy> copy_regions(_copy_info.region_count);
+    Moer::Array<VkBufferCopy> copy_regions(_copy_info.region_count);
     for (uint32_t i = 0; i < _copy_info.region_count; ++i) {
         copy_regions[i].srcOffset = _copy_info.p_regions[i].src_offset;
         copy_regions[i].dstOffset = _copy_info.p_regions[i].dst_offset;
@@ -245,9 +245,9 @@ void VulkanRHICommandListBase::ResolveTexture(const RHIResolveTextureInfo& _reso
 }
 
 void VulkanRHICommandListBase::SetPipelineBarrier(const RHIBarrierDependencyInfo& _dependency) {
-    std::vector<VkMemoryBarrier2>       memory_barriers(_dependency.memory_barrier_count);
-    std::vector<VkBufferMemoryBarrier2> buffer_barriers(_dependency.buffer_barrier_count);
-    std::vector<VkImageMemoryBarrier2>  image_barriers(_dependency.texture_barrier_count);
+    Moer::Array<VkMemoryBarrier2>       memory_barriers(_dependency.memory_barrier_count);
+    Moer::Array<VkBufferMemoryBarrier2> buffer_barriers(_dependency.buffer_barrier_count);
+    Moer::Array<VkImageMemoryBarrier2>  image_barriers(_dependency.texture_barrier_count);
 
     for (uint32_t i = 0; i < _dependency.memory_barrier_count; ++i) {
         memory_barriers[i].sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
@@ -450,7 +450,7 @@ void VulkanRHIGraphicsCommandList::SetPrimitiveTopology(EPrimitiveTopology _topo
 }
 
 void VulkanRHIGraphicsCommandList::SetViewPorts(uint32_t num_viewports, const ViewPort* p_viewports) {
-    std::vector<VkViewport> vk_viewports(num_viewports);
+    Moer::Array<VkViewport> vk_viewports(num_viewports);
     for (uint32_t i = 0; i < num_viewports; ++i) {
         vk_viewports[i].x        = p_viewports[i].x;
         vk_viewports[i].y        = p_viewports[i].y;
@@ -477,7 +477,7 @@ void VulkanRHIGraphicsCommandList::SetViewPort(const ViewPort& _viewport) {
 }
 
 void VulkanRHIGraphicsCommandList::SetScissors(uint32_t num_scissors, const Rect2D* p_scissors) {
-    std::vector<VkRect2D> vk_scissors(num_scissors);
+    Moer::Array<VkRect2D> vk_scissors(num_scissors);
     for (uint32_t i = 0; i < num_scissors; ++i) {
         vk_scissors[i].offset.x      = p_scissors[i].offset.x;
         vk_scissors[i].offset.y      = p_scissors[i].offset.y;
@@ -502,8 +502,8 @@ void VulkanRHIGraphicsCommandList::SetBlendFactors(const float* _factors) {
 }
 
 void VulkanRHIGraphicsCommandList::BindVertexBuffers(uint32_t _start_index, uint32_t _num_buffers, const RHIBufferRef* p_vertex_buffers, const uint32_t* _offsets) {
-    std::vector<VkBuffer>     buffers(_num_buffers);
-    std::vector<VkDeviceSize> offsets(_num_buffers);
+    Moer::Array<VkBuffer>     buffers(_num_buffers);
+    Moer::Array<VkDeviceSize> offsets(_num_buffers);
     for (uint32_t i = 0; i < _num_buffers; ++i) {
         auto* vk_buffer = static_cast<const VulkanRHIBuffer*>(p_vertex_buffers[i].Get());
         VK_CHECK_NULLPTR(vk_buffer, "BindVertexBuffers: vertex buffer is nullptr!", continue);

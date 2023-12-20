@@ -4,7 +4,6 @@
 #include "rhi/RHIResource.h"
 #include "Core.h"
 
-#include <vector>
 // #include "PixelFormat.h"
 // #include "math/Base.h"
 // #include "rhi/RHICommon.h"
@@ -121,7 +120,7 @@ void RHI::RHIFlushPendingDeletes() {
 //     const float  vertex_data[] = {-1, -1, 0, 1, -1, 0, -1, 1, 0, 1, 1, 1};
 //     RHIBufferRef vertex_buffer = CreateBufferFromData(v_info, sizeof(vertex_data), (void*)vertex_data);
 
-//     std::vector<RHIBufferRef> vertex_buffers = {vertex_buffer};
+//     Moer::Array<RHIBufferRef> vertex_buffers = {vertex_buffer};
 
 //     shader_state.p_vertex_input_state = g_rhi->RHICreateVertexInputState(vertex_init_list);
 

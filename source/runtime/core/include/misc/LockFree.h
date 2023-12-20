@@ -4,7 +4,6 @@
 #include <functional>
 #include <stdalign.h>
 #include <stdint.h>
-#include <vector>
 #include "API_Macro.h"
 #include "log/LogSystem.h"
 #include "misc/MMemory.h"

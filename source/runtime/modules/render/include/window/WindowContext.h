@@ -5,7 +5,7 @@
 
 #include "rhi/RHI.h"
 #include <functional>
-#include <vector>
+
 namespace Moer {
     using WindowType = void;
 

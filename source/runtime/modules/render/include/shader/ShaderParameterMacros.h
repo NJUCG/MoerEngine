@@ -2,14 +2,10 @@
 #define MOER_ENGINE_SHADER_PROXY_H
 #include "rhi/RHIResource.h"
 #include "shader/ShaderParameterTypeInfo.h"
-#include <array>
 #include <cstddef>
 #include <functional>
-#include <vector>
 #include "API_Macro.h"
 #include "misc/Hash.h"
-#include "unordered_map"
-#include <cstring>
 
 #pragma region forward
 class VertexFactoryType;
@@ -90,8 +86,8 @@ class VertexFactoryType;
         struct _firstMemberId {                                                                                              \
             enum { HasDeclaredResource = 0 };                                                                                \
         };                                                                                                                   \
-        typedef void* (*MemberFunction)(_firstMemberId, std::vector<ShaderParametersMetadata::Member>*);                     \
-        static void* AppendMemberGetPrev(_firstMemberId, std::vector<ShaderParametersMetadata::Member>*) { return nullptr; } \
+        typedef void* (*MemberFunction)(_firstMemberId, Moer::Array<ShaderParametersMetadata::Member>*);                     \
+        static void* AppendMemberGetPrev(_firstMemberId, Moer::Array<ShaderParametersMetadata::Member>*) { return nullptr; } \
         typedef _firstMemberId
 
 #define INTERNAL_DEFINE_SHADER_PARAM_IMPL(MemberTypeInfo, MemberType, MemberName, HlslType, Precision, UBMTBaseType, MemberScope, PublicDefs) \
@@ -105,7 +101,7 @@ public:                                                                         
         private : struct _nextMemberId##MemberName {                                                                                          \
         enum { HasDeclaredResource = MemberId##MemberName::HasDeclaredResource };                                                             \
     };                                                                                                                                        \
-    static void* AppendMemberGetPrev(_nextMemberId##MemberName, std::vector<ShaderParametersMetadata::Member>* _members) {                    \
+    static void* AppendMemberGetPrev(_nextMemberId##MemberName, Moer::Array<ShaderParametersMetadata::Member>* _members) {                    \
                                                                                                                                               \
         _members->push_back(ShaderParametersMetadata::Member(                                                                                 \
             #MemberName,                                                                                                                      \
@@ -116,7 +112,7 @@ public:                                                                         
             Precision,                                                                                                                        \
             MemberTypeInfo::s_num_elements,                                                                                                   \
             MemberTypeInfo::GetStructMetadata()));                                                                                            \
-        void* (*PrevFunc)(MemberId##MemberName, std::vector<ShaderParametersMetadata::Member>*);                                              \
+        void* (*PrevFunc)(MemberId##MemberName, Moer::Array<ShaderParametersMetadata::Member>*);                                              \
                                                                                                                                               \
         PrevFunc = AppendMemberGetPrev;                                                                                                       \
         return (void*)PrevFunc;                                                                                                               \
@@ -126,9 +122,9 @@ public:                                                                         
 #define END_SHADER_PARAMETER_DEFINITION(StructureName, ...)                               \
                                                                                           \
 public:                                                                                   \
-    static std::vector<ShaderParametersMetadata::Member> GetMembers() {                   \
-        std::vector<ShaderParametersMetadata::Member> _members;                           \
-        void* (*_lastFunc)(lastMemberId, std::vector<ShaderParametersMetadata::Member>*); \
+    static Moer::Array<ShaderParametersMetadata::Member> GetMembers() {                   \
+        Moer::Array<ShaderParametersMetadata::Member> _members;                           \
+        void* (*_lastFunc)(lastMemberId, Moer::Array<ShaderParametersMetadata::Member>*); \
         _lastFunc = AppendMemberGetPrev;                                                  \
         void* Ptr = (void*)_lastFunc;                                                     \
         do {                                                                              \

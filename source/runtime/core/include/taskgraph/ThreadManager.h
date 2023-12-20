@@ -2,7 +2,6 @@
 #define THREAD_MANAGER_H
 #include "API_Macro.h"
 #include "misc/STL.h"
-#include <map>
 #include <string>
 #include <thread>
 #include <assert.h>

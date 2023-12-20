@@ -1,9 +1,10 @@
 #ifndef MOER_ENGINE_CONFIG_MANAGER_H
 #define MOER_ENGINE_CONFIG_MANAGER_H
 #include <filesystem>
-#include <map>
-#include <unordered_map>
+
 #include "API_Macro.h"
+#include "misc/STL.h"
+
 //implement ConfigManager as Singleton
 #define FONTS_DIR  "fonts"
 #define CONFIG_DIR "config"
@@ -30,7 +31,7 @@ namespace Moer {
     private:
         static ConfigManager* instance;
 
-        std::unordered_map<std::string, std::string> configs;
+        Moer::UnorderedMap<std::string, std::string> configs;
 
         std::filesystem::path workspace_path;
         std::filesystem::path editor_resource_path;
