@@ -36,7 +36,7 @@ namespace Moer {
 
     protected:
         friend class Singleton<RendererManager>;
-        RENDER_API           RendererManager(){};
+                   RendererManager(){};
         RendererManagerData* data;
     };
 }// namespace Moer

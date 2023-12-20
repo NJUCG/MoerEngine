@@ -4,8 +4,7 @@
 #include "shader/ShaderCommon.h"
 #include "shader/ShaderResource.h"
 #include "shader/ShaderResourceManager.h"
-#include <vcruntime_typeinfo.h>
-
+#include <cstring>
 class TestShaderClass : Shader {
     DEFINE_SHADER_TYPE(TestShaderClass, Global, RENDER_CORE_API)
 };

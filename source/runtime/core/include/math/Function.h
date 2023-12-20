@@ -426,7 +426,7 @@ namespace Moer {
 
     template<VectorType T>
     inline float Lengthf(const T& v) noexcept {
-        return std::sqrtf(Dotf(v, v));
+        return sqrtf(Dotf(v, v));
     }
 
     template<VectorType T>

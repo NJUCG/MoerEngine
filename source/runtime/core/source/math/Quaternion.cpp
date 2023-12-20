@@ -157,7 +157,7 @@ namespace Moer {
         if (ApproxEqual(Abs(cos_theta), 1.f, 0.001f))
             return NLerp(p, q, t);
 
-        float sin_theta = std::sqrtf(1 - cos_theta * cos_theta);
+        float sin_theta = sqrtf(1 - cos_theta * cos_theta);
         float radian    = std::atan2(sin_theta, cos_theta);
         float inv_sin   = 1.f / sin_theta;
         float coeff0    = std::sin((1.f - t) * radian) * inv_sin;

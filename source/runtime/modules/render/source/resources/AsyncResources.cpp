@@ -199,9 +199,9 @@ namespace Moer {
         barriers[info.back_buffer_count].SetTexture(present_texture);
         barriers[info.back_buffer_count].SetSubResourceRange({});
 
-        copy_cmd_list->Open();
+        copy_cmd_list->BeginRecording();
         copy_cmd_list->SetPipelineBarrier(barrier_info);
-        copy_cmd_list->Close();
+        copy_cmd_list->EndRecording();
         RHISubmitInfo submit_info;
         submit_info.Signal(fence, 0);
         copy_queue->SubmitCommands(1, copy_cmd_list, &submit_info);
@@ -249,7 +249,7 @@ namespace Moer {
                                   .SetSrcTextureLayout(TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
                                   .SetDstTextureLayout(TEXTURE_LAYOUT_TRANSFER_DST)
                                   .SetSubResourceRange({}));
-        cmd_list->Open();
+        cmd_list->BeginRecording();
         cmd_list->SetPipelineBarrier(barrier_info);
         cmd_list->BlitTexture(blit_info,
                               swapchain_textures[current_rendered % info.back_buffer_count],
@@ -258,7 +258,7 @@ namespace Moer {
         barriers[0].SetSrcTextureLayout(TEXTURE_LAYOUT_TRANSFER_DST);
         barriers[0].SetDstTextureLayout(TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         cmd_list->SetPipelineBarrier(barrier_info);
-        cmd_list->Close();
+        cmd_list->EndRecording();
 
         RHISubmitInfo submit_info;
         submit_info.Wait(_render_fence, presented_index);

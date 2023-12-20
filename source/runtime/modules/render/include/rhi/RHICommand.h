@@ -4,7 +4,6 @@
 #include "misc/STL.h"
 #include "rhi/RHIResource.h"
 #include "RenderAPI.h"
-#include <vcruntime_string.h>
 
 class Shader;
 
@@ -53,8 +52,8 @@ public:
     RENDER_API virtual ~RHICommandListBase();
 
     virtual void* GetNativeHandle() const = 0;
-    virtual void  Open()                  = 0;
-    virtual void  Close()                 = 0;
+    virtual void  BeginRecording()                  = 0;
+    virtual void  EndRecording()                 = 0;
     virtual void  Reset()                 = 0;
 };
 
@@ -174,11 +173,6 @@ public:
 
     virtual void CopyTextureToBuffer(const RHICopyTextureToBufferInfo& _info, RHITexture* src_texture, RHIBuffer* dst_buffer) = 0;
 
-    virtual void BlitTexture(const RHIBlitTextureInfo& _blit_info, RHITexture* _src, RHITexture* _dst) = 0;
-
-    //To resolve a multi-sample color texture to a non-multisample color texture
-    virtual void ResolveTexture(const RHIResolveTextureInfo& _resolve_info, RHITexture* _src, RHITexture* _dst) = 0;
-
     virtual void SetPipelineBarrier(const RHIBarrierDependencyInfo& _dependency) = 0;
 };
 
@@ -190,11 +184,6 @@ public:
     virtual void CopyBufferToTexture(const RHICopyBufferToTextureInfo& _info, RHIBuffer* src_buffer, RHITexture* dst_texture) = 0;
 
     virtual void CopyTextureToBuffer(const RHICopyTextureToBufferInfo& _info, RHITexture* src_texture, RHIBuffer* dst_buffer) = 0;
-
-    virtual void BlitTexture(const RHIBlitTextureInfo& _blit_info, RHITexture* _src, RHITexture* _dst) = 0;
-
-    //To resolve a multi-sample color texture to a non-multisample color texture
-    virtual void ResolveTexture(const RHIResolveTextureInfo& _resolve_info, RHITexture* _src, RHITexture* _dst) = 0;
 
     virtual void SetPipelineBarrier(const RHIBarrierDependencyInfo& _dependency) = 0;
 };

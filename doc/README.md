@@ -133,7 +133,7 @@ void Example(){
 
     RHIGraphicsCommandList* command_list = g_rhi->CreateGraphicsCommandList(pso);
     
-    command_list->Open();                                       // 1. start command 
+    command_list->BeginRecording();                                       // 1. start command 
     RHIRenderPassInfo pass_info;
     pass_info.GeneratePipelineAttachmentInfo();
     command_list->BeginRenderPass(pass_info, "triangle pass");  // 2. begin rendering
@@ -142,7 +142,7 @@ void Example(){
     command_list->BindVertexBuffers(0, 1, vertex_buffer);       // 5. bind vertex buffers
     command_list->DrawIndexedInstanced(1, 1, 0, 0);             // 6. draw call
     command_list->EndRenderPass();                              // 7. end rendering
-    command_list->Close();                                      // 8. end command
+    command_list->EndRecording();                                      // 8. end command
 
     RHICommandQueue*                         graphics_queue = g_rhi->CreateCommandQueue(ECommandQueueType::GRAPHICS);
     const std::array<RHICommandListBase*, 1> _command_array{command_list};

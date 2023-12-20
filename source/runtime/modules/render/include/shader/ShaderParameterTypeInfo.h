@@ -12,8 +12,6 @@
 #include "misc/STL.h"
 
 #include <cstdint>
-#include <vcruntime_string.h>
-
 template<uint32_t Alignment>
 concept concept_valid_alignment =
     (Alignment == 2 || Alignment == 4 || Alignment == 8 || Alignment == 16) == true;

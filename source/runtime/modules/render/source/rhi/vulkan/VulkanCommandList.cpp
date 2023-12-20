@@ -313,7 +313,7 @@ void VulkanRHICommandListBase::SetPipelineBarrier(const RHIBarrierDependencyInfo
     vkCmdPipelineBarrier2(m_command_buffer, &dependency_info);
 }
 
-void VulkanRHICommandListBase::Open() {
+void VulkanRHICommandListBase::Begin() {
     VkCommandBufferBeginInfo begin_info{};
     begin_info.sType            = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     begin_info.pNext            = nullptr;
@@ -323,7 +323,7 @@ void VulkanRHICommandListBase::Open() {
     VK_CHECK_RESULT(vkBeginCommandBuffer(m_command_buffer, &begin_info));
 }
 
-void VulkanRHICommandListBase::Close() {
+void VulkanRHICommandListBase::End() {
     VK_CHECK_RESULT(vkEndCommandBuffer(m_command_buffer));
 }
 
@@ -344,13 +344,13 @@ void VulkanRHIGraphicsCommandList::SetPipelineState(RHIGraphicsPipelineState* _g
     m_current_pipeline_state = vk_pso;
 }
 
-void VulkanRHIGraphicsCommandList::Open() {
-    VulkanRHICommandListBase::Open();
+void VulkanRHIGraphicsCommandList::BeginRecording() {
+    VulkanRHICommandListBase::Begin();
     m_bound_sets.clear();
 }
 
-void VulkanRHIGraphicsCommandList::Close() {
-    VulkanRHICommandListBase::Close();
+void VulkanRHIGraphicsCommandList::EndRecording() {
+    VulkanRHICommandListBase::End();
 }
 
 void VulkanRHIGraphicsCommandList::Reset() {
@@ -708,12 +708,12 @@ VulkanRHIComputeCommandList::VulkanRHIComputeCommandList(VulkanDevice* _device, 
 VulkanRHIComputeCommandList::~VulkanRHIComputeCommandList() {
 }
 
-void VulkanRHIComputeCommandList::Open() {
-    VulkanRHICommandListBase::Open();
+void VulkanRHIComputeCommandList::BeginRecording() {
+    VulkanRHICommandListBase::Begin();
 }
 
-void VulkanRHIComputeCommandList::Close() {
-    VulkanRHICommandListBase::Close();
+void VulkanRHIComputeCommandList::EndRecording() {
+    VulkanRHICommandListBase::End();
 }
 
 void VulkanRHIComputeCommandList::Reset() {
@@ -746,14 +746,6 @@ void VulkanRHIComputeCommandList::CopyTextureToBuffer(const RHICopyTextureToBuff
     VulkanRHICommandListBase::CopyTextureToBuffer(src_texture, dst_buffer, _info);
 }
 
-void VulkanRHIComputeCommandList::BlitTexture(const RHIBlitTextureInfo& _blit_info, RHITexture* _src, RHITexture* _dst) {
-    VulkanRHICommandListBase::BlitTexture(_blit_info, _src, _dst);
-}
-
-void VulkanRHIComputeCommandList::ResolveTexture(const RHIResolveTextureInfo& _resolove_info, RHITexture* _src, RHITexture* _dst) {
-    VulkanRHICommandListBase::ResolveTexture(_resolove_info, _src, _dst);
-}
-
 void VulkanRHIComputeCommandList::SetPipelineBarrier(const RHIBarrierDependencyInfo& _dependency) {
     VulkanRHICommandListBase::SetPipelineBarrier(_dependency);
 }
@@ -763,12 +755,12 @@ VulkanRHICopyCommandList::VulkanRHICopyCommandList(VulkanDevice* _device, VkComm
 VulkanRHICopyCommandList::~VulkanRHICopyCommandList() {
 }
 
-void VulkanRHICopyCommandList::Open() {
-    VulkanRHICommandListBase::Open();
+void VulkanRHICopyCommandList::BeginRecording() {
+    VulkanRHICommandListBase::Begin();
 }
 
-void VulkanRHICopyCommandList::Close() {
-    VulkanRHICommandListBase::Close();
+void VulkanRHICopyCommandList::EndRecording() {
+    VulkanRHICommandListBase::End();
 }
 
 void VulkanRHICopyCommandList::Reset() {
@@ -789,14 +781,6 @@ void VulkanRHICopyCommandList::CopyBufferToTexture(const RHICopyBufferToTextureI
 
 void VulkanRHICopyCommandList::CopyTextureToBuffer(const RHICopyTextureToBufferInfo& _info, RHITexture* src_texture, RHIBuffer* dst_buffer) {
     VulkanRHICommandListBase::CopyTextureToBuffer(src_texture, dst_buffer, _info);
-}
-
-void VulkanRHICopyCommandList::BlitTexture(const RHIBlitTextureInfo& _blit_info, RHITexture* _src, RHITexture* _dst) {
-    VulkanRHICommandListBase::BlitTexture(_blit_info, _src, _dst);
-}
-
-void VulkanRHICopyCommandList::ResolveTexture(const RHIResolveTextureInfo& _resolove_info, RHITexture* _src, RHITexture* _dst) {
-    VulkanRHICommandListBase::ResolveTexture(_resolove_info, _src, _dst);
 }
 
 void VulkanRHICopyCommandList::SetPipelineBarrier(const RHIBarrierDependencyInfo& _dependency) {

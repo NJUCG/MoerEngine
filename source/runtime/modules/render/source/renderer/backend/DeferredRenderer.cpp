@@ -232,7 +232,7 @@ namespace Moer {
 
         cmd_list->Reset();
 
-        cmd_list->Open();
+        cmd_list->BeginRecording();
 
         RHIRenderPassInfo pass_info{};
 
@@ -284,7 +284,7 @@ namespace Moer {
 
         cmd_list->SetPipelineBarrier(barrier_dependency_info);
 
-        cmd_list->Close();
+        cmd_list->EndRecording();
 
         RHISubmitInfo submit_info;
         submit_info.Wait(info.backbuffer_ready_fence, frame_counter);

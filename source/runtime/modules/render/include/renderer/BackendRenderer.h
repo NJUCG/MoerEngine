@@ -17,9 +17,9 @@ namespace Moer {
  */
     class BackendRenderer {
     public:
-        RENDER_API BackendRenderer() = default;
+         BackendRenderer() = default;
 
-        RENDER_API virtual ~BackendRenderer() = default;
+         virtual ~BackendRenderer() = default;
 
         RENDER_API virtual void Init(const BackendRendererInitInfo& _init_info) = 0;
 

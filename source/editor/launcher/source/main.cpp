@@ -1,6 +1,5 @@
 #include "Launcher.h"
 #include "core/include/log/LogSystem.h"
-#include <corecrt_malloc.h>
 #include <exception>
 #include <filesystem>
 #include <stdexcept>

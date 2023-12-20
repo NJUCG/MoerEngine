@@ -20,8 +20,8 @@ class VulkanRHICommandListBase : public VulkanDeviceObject {
 public:
     VulkanRHICommandListBase(VulkanDevice* _device, VkCommandPool _pool, VkCommandBufferLevel _level = VK_COMMAND_BUFFER_LEVEL_PRIMARY);
     virtual ~VulkanRHICommandListBase();
-    void Open();
-    void Close();
+    void Begin();
+    void End();
     void Reset();
 
     void Dispatch(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z);
@@ -77,8 +77,8 @@ public:
     }
 
     void SetPipelineState(RHIGraphicsPipelineState* _graphics_pso) override;
-    void Open() override;
-    void Close() override;
+    void BeginRecording() override;
+    void EndRecording() override;
     void Reset() override;
     void ClearState(RHIGraphicsPipelineState* _graphics_pso) override;
 
@@ -195,8 +195,8 @@ public:
     void* GetNativeHandle() const override {
         return m_command_buffer;
     }
-    void Open() override;
-    void Close() override;
+    void BeginRecording() override;
+    void EndRecording() override;
     void Reset() override;
 
     void CopyBuffer(const RHICopyBufferInfo& _copy_info, RHIBuffer* _src, RHIBuffer* _dst) override;
@@ -204,9 +204,6 @@ public:
     void CopyBufferToTexture(const RHICopyBufferToTextureInfo& _info, RHIBuffer* src_buffer, RHITexture* dst_texture) override;
 
     void CopyTextureToBuffer(const RHICopyTextureToBufferInfo& _info, RHITexture* src_texture, RHIBuffer* dst_buffer) override;
-    void BlitTexture(const RHIBlitTextureInfo& _blit_info, RHITexture* _src, RHITexture* _dst) override;
-    void ResolveTexture(const RHIResolveTextureInfo& _blit_info, RHITexture* _src, RHITexture* _dst) override;
-
     void SetPipelineBarrier(const RHIBarrierDependencyInfo& _dependency) override;
 };
 
@@ -219,8 +216,8 @@ public:
     void* GetNativeHandle() const override {
         return m_command_buffer;
     }
-    void Open() override;
-    void Close() override;
+    void BeginRecording() override;
+    void EndRecording() override;
     void Reset() override;
 
     void Dispatch(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z) override;
@@ -231,8 +228,6 @@ public:
     void CopyBufferToTexture(const RHICopyBufferToTextureInfo& _info, RHIBuffer* src_buffer, RHITexture* dst_texture) override;
 
     void CopyTextureToBuffer(const RHICopyTextureToBufferInfo& _info, RHITexture* src_texture, RHIBuffer* dst_buffer) override;
-    void BlitTexture(const RHIBlitTextureInfo& _blit_info, RHITexture* _src, RHITexture* _dst) override;
-    void ResolveTexture(const RHIResolveTextureInfo& _blit_info, RHITexture* _src, RHITexture* _dst) override;
 
     void SetPipelineBarrier(const RHIBarrierDependencyInfo& _dependency) override;
 };

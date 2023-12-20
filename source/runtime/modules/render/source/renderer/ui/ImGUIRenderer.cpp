@@ -6,6 +6,7 @@
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 
+#include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
 #include "shader/Shader.h"
@@ -40,6 +41,9 @@ struct GuiFrameRenderBuffers {
 
     RHIBufferRef vertex_buffer;
     RHIBufferRef index_buffer;
+
+    RHIBufferRef staging_vertex_buffer;
+    RHIBufferRef staging_index_buffer;
 };
 struct GuiBackendData {
     size_t buffer_memory_alignment;
@@ -150,8 +154,10 @@ struct GuiViewportData {
         memset((void*)this, 0, sizeof(*this));
         render_buffers = new GuiFrameRenderBuffers[_frame_in_flight];
         for (uint32_t i = 0; i < _frame_in_flight; ++i) {
-            render_buffers[i].vertex_buffer = nullptr;
-            render_buffers[i].index_buffer  = nullptr;
+            render_buffers[i].vertex_buffer         = nullptr;
+            render_buffers[i].index_buffer          = nullptr;
+            render_buffers[i].staging_vertex_buffer = nullptr;
+            render_buffers[i].staging_index_buffer  = nullptr;
         }
         viewport_index = viewport_count;
         viewport_count++;
@@ -247,7 +253,7 @@ void ImGUIRenderer::Impl::EndRenderFrame() {
 
         ui_command_list->Reset();
 
-        ui_command_list->Open();
+        ui_command_list->BeginRecording();
         ui_command_list->SetPipelineBarrier(dependency_info);
 
         RHIRenderPassInfo pass_info{};
@@ -284,17 +290,7 @@ void ImGUIRenderer::Impl::EndRenderFrame() {
 
         ui_command_list->SetPipelineBarrier(texture_dependency_info);
 
-        ui_command_list->Close();
-
-        {
-            // Update and Render additional Platform Windows
-            // May Change in the future
-            auto& io = ImGui::GetIO();
-            if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
-                ImGui::UpdatePlatformWindows();
-                ImGui::RenderPlatformWindowsDefault(nullptr, nullptr);
-            }
-        }
+        ui_command_list->EndRecording();
 
         RHISubmitInfo submit_info{};
 
@@ -307,7 +303,13 @@ void ImGUIRenderer::Impl::EndRenderFrame() {
 
         command_queue->SubmitCommands(1, ui_command_list, &submit_info);
 
-        ImGuiIO& io = ImGui::GetIO();
+        g_rhi->RHIPresentViewport(main_viewport, present_fence);
+    }
+    {
+        auto& io = ImGui::GetIO();
+        if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+            ImGui::UpdatePlatformWindows();
+        }
 
         ImGuiPlatformIO& platform_io = ImGui::GetPlatformIO();
 
@@ -319,8 +321,6 @@ void ImGUIRenderer::Impl::EndRenderFrame() {
                 if ((platform_io.Viewports[i]->Flags & ImGuiViewportFlags_IsMinimized) == 0)
                     GuiSwapbuffer(platform_io.Viewports[i], nullptr);
         }
-
-        g_rhi->RHIPresentViewport(main_viewport, present_fence);
     }
 }
 
@@ -376,8 +376,6 @@ void GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list) {
 
     GuiFrameRenderBuffers* render_buffers = &viewport_data->render_buffers[viewport_data->frame_index % backend_data->num_frames_in_flight];
 
-    RHIBufferRef staging_vertex_buffer;
-    RHIBufferRef staging_index_buffer;
     //todo frame_index should not manage here
     viewport_data->frame_index += 1;
     if (render_buffers->vertex_buffer == nullptr || render_buffers->vertex_buffer->GetSize() < draw_data->TotalVtxCount * sizeof(ImDrawVert)) {
@@ -389,13 +387,13 @@ void GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list) {
             RHIBufferCreateInfo::Create(
                 new_size,
                 sizeof(ImDrawVert),
-                EBufferUsageFlags::VERTEX_BUFFER | EBufferUsageFlags::CPU_VISIBLE));
+                EBufferUsageFlags::VERTEX_BUFFER | EBufferUsageFlags::TRANSFER_DST));
 
-        // staging_index_buffer = g_rhi->RHICreateBuffer(
-        //     RHIBufferCreateInfo::Create(
-        //         new_size,
-        //         sizeof(ImDrawVert),
-        //         EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE));
+        render_buffers->staging_vertex_buffer = g_rhi->RHICreateBuffer(
+            RHIBufferCreateInfo::Create(
+                new_size,
+                sizeof(ImDrawVert),
+                EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE));
     }
     if (render_buffers->index_buffer == nullptr || render_buffers->index_buffer->GetSize() < draw_data->TotalIdxCount * sizeof(ImDrawIdx)) {
 
@@ -405,20 +403,20 @@ void GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list) {
             RHIBufferCreateInfo::Create(
                 new_size,
                 sizeof(ImDrawIdx),
-                EBufferUsageFlags::INDEX_BUFFER | EBufferUsageFlags::CPU_VISIBLE));
+                EBufferUsageFlags::INDEX_BUFFER | EBufferUsageFlags::TRANSFER_DST));
 
-        // staging_index_buffer = g_rhi->RHICreateBuffer(
-        //     RHIBufferCreateInfo::Create(
-        //         new_size,
-        //         sizeof(ImDrawIdx),
-        //         EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE));
+        render_buffers->staging_index_buffer = g_rhi->RHICreateBuffer(
+            RHIBufferCreateInfo::Create(
+                new_size,
+                sizeof(ImDrawIdx),
+                EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE));
     }
 
     ImDrawVert* vertex_dst = nullptr;
     ImDrawIdx*  index_dst  = nullptr;
 
-    vertex_dst = (ImDrawVert*)g_rhi->RHIMapBuffer(render_buffers->vertex_buffer, 0, UINT64_MAX);
-    index_dst  = (ImDrawIdx*)g_rhi->RHIMapBuffer(render_buffers->index_buffer, 0, UINT64_MAX);
+    vertex_dst = (ImDrawVert*)g_rhi->RHIMapBuffer(render_buffers->staging_vertex_buffer, 0, UINT64_MAX);
+    index_dst  = (ImDrawIdx*)g_rhi->RHIMapBuffer(render_buffers->staging_index_buffer, 0, UINT64_MAX);
     // vertex_dst = (ImDrawVert*)g_rhi->RHIMapBuffer(staging_vertex_buffer, 0, UINT64_MAX);
     // index_dst  = (ImDrawIdx*)g_rhi->RHIMapBuffer(staging_index_buffer, 0, UINT64_MAX);
     for (int32_t n = 0; n < draw_data->CmdListsCount; n++) {
@@ -429,14 +427,21 @@ void GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list) {
         vertex_dst += cmd_list->VtxBuffer.Size;
         index_dst += cmd_list->IdxBuffer.Size;
     }
-    g_rhi->RHIUnmapBuffer(render_buffers->vertex_buffer);
-    g_rhi->RHIUnmapBuffer(render_buffers->index_buffer);
-    // g_rhi->RHIUnmapBuffer(staging_vertex_buffer);
-    // g_rhi->RHIUnmapBuffer(staging_index_buffer);
+    g_rhi->RHIUnmapBuffer(render_buffers->staging_vertex_buffer);
+    g_rhi->RHIUnmapBuffer(render_buffers->staging_index_buffer);
 
     RHICopyBufferInfo copy_info{};
+    copy_info.regions.emplace_back(0,
+                                   0,
+                                   render_buffers->staging_vertex_buffer->GetSize());
+    _ui_command_list->CopyBuffer(copy_info, render_buffers->staging_vertex_buffer, render_buffers->vertex_buffer);
 
-    // _ui_command_list->CopyBuffer(render_buffers->vertex_buffer, staging_vertex_buffer, 0, 0, staging_vertex_buffer->GetSize());
+    RHICopyBufferInfo copy_index_info{};
+    copy_index_info.regions.emplace_back(0,
+                                         0,
+                                         render_buffers->staging_index_buffer->GetSize());
+
+    _ui_command_list->CopyBuffer(copy_index_info, render_buffers->staging_index_buffer, render_buffers->index_buffer);
 
     ImVec2 clip_off   = draw_data->DisplayPos;      // (0,0) unless using multi-viewports
     ImVec2 clip_scale = draw_data->FramebufferScale;// (1,1) unless using retina display which are often (2,2)
@@ -701,7 +706,7 @@ void CreateFontsTexture() {
         font_create_barriers.texture_barriers.resize(1);
         font_create_barriers.texture_barriers[0] = tex_barriers[0];
 
-        command_list->Open();
+        command_list->BeginRecording();
         command_list->SetPipelineBarrier(font_create_barriers);
 
         RHISubresourceSlice        resource_slice(ETextureAspectFlags::COLOR, 0, 0, 1, 0, 1);
@@ -729,7 +734,7 @@ void CreateFontsTexture() {
         batched_params.SetParameters(backend_data->shader_module_frag, params);
         g_rhi->RHISetBatchedShaderParameters(backend_data->pipeline, batched_params);
 
-        command_list->Close();
+        command_list->EndRecording();
 
         RHICommandQueue* queue = g_rhi->RHICreateCommandQueue(ECommandQueueType::GRAPHICS);
 
@@ -869,7 +874,7 @@ void GuiRenderWindow(ImGuiViewport* viewport, void*) {
     viewport_data->present_fence->Wait(viewport_data->frame_index);
     viewport_data->comand_list->Reset();
 
-    viewport_data->comand_list->Open();
+    viewport_data->comand_list->BeginRecording();
 
     viewport_data->comand_list->SetPipelineBarrier(dependency_info);
 
@@ -892,7 +897,7 @@ void GuiRenderWindow(ImGuiViewport* viewport, void*) {
 
     viewport_data->comand_list->SetPipelineBarrier(texture_dependency_info);
 
-    viewport_data->comand_list->Close();
+    viewport_data->comand_list->EndRecording();
 
     RHISubmitInfo submit_info{};
 

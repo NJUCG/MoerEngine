@@ -6,6 +6,7 @@
 
 #include "misc/STL.h"
 
+#include <cstring>
 #include <atomic>
 #include <functional>
 #include <mutex>
