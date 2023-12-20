@@ -254,22 +254,24 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
     // pipeline layout
     auto shader_info_list = VulkanRHIGraphicsPipelineState::GetShaderInfoList(_init.shader_stage);// MARK...
 
-    Moer::Array<TDescriptorSetLayout> layout_mappings;
-    TDescriptorCountMap               descriptor_type_mappings;
+    Moer::Array<TDescriptorSetLayoutInfo> layout_mappings;
+    Moer::Array<VkPushConstantRange>      push_constant_ranges;
 
-    Moer::Array<VkPushConstantRange> push_constant_ranges;
+    // find max set index
+    int8_t max_set = -1;
+    for (const auto* meta_shader : shader_info_list) {
+        auto layout_infos = meta_shader->GetRootParametersLayoutInfo().GetLayoutInfos();
+        for (const auto& info : layout_infos) {
+            max_set = std::max(max_set, info.space);
+        }
+    }
+    layout_mappings.resize(max_set + 1, {});
 
     // construct layout mappings
     for (const auto* meta_shader : shader_info_list) {
         auto layout_infos   = meta_shader->GetRootParametersLayoutInfo().GetLayoutInfos();
         auto constant_infos = meta_shader->GetRootParametersLayoutInfo().GetConstantsInfos();
 
-        // resources
-        uint8_t max_set = 0;
-        for (const auto& info : layout_infos) {
-            max_set = std::max(max_set, static_cast<uint8_t>(info.space));
-        }
-        layout_mappings.resize(max_set + 1, {});
         for (const auto& info : layout_infos) {
             VkDescriptorSetLayoutBinding binding{};
             binding.binding         = info.slot;
@@ -279,7 +281,6 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
             binding.pImmutableSamplers = nullptr;
 
             layout_mappings[info.space].second.push_back(std::move(binding));
-            ++descriptor_type_mappings[binding.descriptorType];
         }
 
         // constants

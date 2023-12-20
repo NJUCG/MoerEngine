@@ -31,6 +31,10 @@ public:
 
     void BindDescriptorSets(VkCommandBuffer _buffer, VkPipelineBindPoint _bind_point, VkPipelineLayout _layout);
 
+    inline bool HasDescriptorSets() const { return !m_descriptor_sets.empty(); }
+
+    inline bool HasPushConstants() const { return !m_push_constants.empty(); }
+
     inline Moer::Array<VulkanDescriptorSetWriter>& GetWriters() { return m_descriptor_set_writers; }
 
     inline const Moer::Array<VkDescriptorSet>& GetDescriptorSets() const { return m_descriptor_sets; }

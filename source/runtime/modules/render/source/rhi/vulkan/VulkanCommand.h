@@ -185,6 +185,7 @@ private:
 
     void PrepareDrawCommand();
 
+    // MARK: bound sets rely on corresponding command list, it maybe wrong when muti-threading recording.
     Moer::Array<VkDescriptorSet> m_bound_sets;
 };
 

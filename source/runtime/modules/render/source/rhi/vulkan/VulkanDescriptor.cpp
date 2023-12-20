@@ -20,7 +20,7 @@ const float default_pool_size[VK_DESCRIPTOR_TYPE_RANGE_SIZE] = {
     //1 / 8.0 // VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT
 };
 
-void VulkanDescriptorSetsLayout::Init(const Moer::Array<TDescriptorSetLayout>& _layout_mappings, VulkanPipelineResourceCache* _cache) {
+void VulkanDescriptorSetsLayout::Init(const Moer::Array<TDescriptorSetLayoutInfo>& _layout_mappings, VulkanPipelineResourceCache* _cache) {
     m_layouts.resize(_layout_mappings.size(), VK_NULL_HANDLE);
     auto& writers = _cache->m_descriptor_set_writers;
     writers.resize(_layout_mappings.size(), {_cache});

@@ -680,27 +680,27 @@ void VulkanRHIGraphicsCommandList::PrepareDrawCommand() {
 
     const auto* vk_sets_layout = vk_pso->GetDescriptorSetsLayout();
     // 1. update and bind descriptor sets
-    vk_resource_cache->UpdateDescriptorSets(m_device, vk_sets_layout);
-    if (m_bound_sets != vk_resource_cache->GetDescriptorSets()) {
-        vk_resource_cache->BindDescriptorSets(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout);
-        m_bound_sets = vk_resource_cache->GetDescriptorSets();
+    if (vk_resource_cache->HasDescriptorSets()) {
+        vk_resource_cache->UpdateDescriptorSets(m_device, vk_sets_layout);
+        if (m_bound_sets != vk_resource_cache->GetDescriptorSets()) {
+            vk_resource_cache->BindDescriptorSets(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout);
+            m_bound_sets = vk_resource_cache->GetDescriptorSets();
+        }
     }
 
     // 2. push constants
-    if (vk_resource_cache->GetConstantsToPush().empty()) {
-        return;
+    if (vk_resource_cache->HasPushConstants()) {
+        for (const auto& constant_info : vk_resource_cache->GetConstantsToPush()) {
+            vkCmdPushConstants(
+                m_command_buffer,
+                pipeline_layout,
+                constant_info.flags,
+                constant_info.byte_offset_in_raw_data,
+                constant_info.size,
+                constant_info.raw_data.data());
+        }
+        vk_resource_cache->ResetToPush();
     }
-
-    for (const auto& constant_info : vk_resource_cache->GetConstantsToPush()) {
-        vkCmdPushConstants(
-            m_command_buffer,
-            pipeline_layout,
-            constant_info.flags,
-            constant_info.byte_offset_in_raw_data,
-            constant_info.size,
-            constant_info.raw_data.data());
-    }
-    vk_resource_cache->ResetToPush();
 }
 
 VulkanRHIComputeCommandList::VulkanRHIComputeCommandList(VulkanDevice* _device, VkCommandPool _pool, VkCommandBufferLevel _level) : VulkanRHICommandListBase(_device, _pool, _level) {}
