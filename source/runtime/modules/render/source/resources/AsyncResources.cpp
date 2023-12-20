@@ -51,6 +51,8 @@ namespace Moer {
 
         const VirtualViewportInfo& GetInfo() const { return info; }
 
+        RHIShaderResourceViewRef GetPresentTextureSRV() { return present_texture_srv; }
+
     private:
         friend VirtualViewport;
         void InitRenderThread();
@@ -67,7 +69,8 @@ namespace Moer {
 
         RHIFenceRef present_fence;
 
-        RHITextureRef present_texture;
+        RHITextureRef            present_texture;
+        RHIShaderResourceViewRef present_texture_srv;
 
         Moer::Array<RHITextureRef>             swapchain_textures;
         Moer::Array<RHIUnorderedAccessViewRef> swapchain_uavs;
@@ -76,7 +79,7 @@ namespace Moer {
 
         RHICommandQueue* copy_queue;
 
-        RHICopyCommandList* copy_cmd_list;
+        RHIGraphicsCommandList* copy_cmd_list;
     };
     VirtualViewport::VirtualViewport(const VirtualViewportCreateInfo& create_info) {
         // Implementation of UploadTexture constructor
@@ -123,14 +126,18 @@ namespace Moer {
         return impl->GetNextBackBufferUAV(index);
     }
 
+    RHIShaderResourceView* VirtualViewport::GetPresentTextureSRV() {
+        return impl->GetPresentTextureSRV();
+    }
+
     VirtualViewport::Impl::~Impl() {
     }
     VirtualViewport::Impl::Impl(const VirtualViewportCreateInfo& create_info) {
 
-        present_fence = g_rhi->RHICreateFence({.usage = EFenceUsage::TIMELINE});
+        present_fence = g_rhi->RHICreateFence({.usage = EFenceUsageFlags::TIMELINE});
 
-        copy_queue    = g_rhi->RHICreateCommandQueue(ECommandQueueType::COPY);
-        copy_cmd_list = g_rhi->RHICreateCopyCommandList(g_rhi->RHIGetCurrentCommandAllocator());
+        copy_queue    = g_rhi->RHICreateCommandQueue(ECommandQueueType::GRAPHICS);
+        copy_cmd_list = g_rhi->RHICreateGraphicsCommandList(g_rhi->RHIGetCurrentCommandAllocator());
 
         info.back_buffer_count = create_info.back_buffer_count;
         info.extent            = create_info.extent;
@@ -152,10 +159,16 @@ namespace Moer {
 
         auto present_texture_create_info = upload_texture_create_info;
 
-        present_texture = g_rhi->RHICreateTexture(present_texture_create_info.SetUsageFlags(
+        present_texture     = g_rhi->RHICreateTexture(present_texture_create_info.SetUsageFlags(
             ETextureUsageFlags::COLOR_ATTACHMENT |
             ETextureUsageFlags::SAMPLED |
             ETextureUsageFlags::TRANSFER_DST));
+        present_texture_srv = g_rhi->RHICreateShaderResourceView(present_texture,
+                                                                 RHIViewInfo::CreateTextureSRVInfo()
+                                                                     .SetArrayRange(0, 1)
+                                                                     .SetMipRange(0, 1)
+                                                                     .SetFormat(info.format)
+                                                                     .SetDimension(ETextureDimension::TEX_2D));
 
         auto* texture = g_rhi->RHIGetViewportBackBufferUAV(g_rhi->RHIGetMainViewport(), 0)->GetTexture();
         swapchain_textures.resize(info.back_buffer_count);
@@ -170,29 +183,30 @@ namespace Moer {
                                                         .SetFormat(info.format)
                                                         .SetDimension(ETextureDimension::TEX_2D));
         }
-        RHIFenceRef fence = g_rhi->RHICreateFence({.usage = EFenceUsage::AQUIRE_NEXT_FRAME});
+        RHIFenceRef fence = g_rhi->RHICreateFence({.usage = EFenceUsageFlags::BINARY});
 
-        RHIBarrierDependencyInfo           barrier_info;
-        Moer::Array<RHITextureBarrierInfo> barriers(info.back_buffer_count + 1);
+        RHIBarrierDependencyInfo barrier_info;
+        auto&                    barriers = barrier_info.texture_barriers;
+        barriers.resize(info.back_buffer_count + 1);
+
         for (uint32_t i = 0; i < info.back_buffer_count; ++i) {
-            barriers[i].SetDstTextureLayout(TEXTURE_LAYOUT_COLOR_ATTACHMENT);
+            barriers[i].SetDstTextureLayout(TEXTURE_LAYOUT_TRANSFER_SRC);
             barriers[i].SetTexture(swapchain_textures[i]);
             barriers[i].SetSubResourceRange({});
             barriers[i].SetSrcTextureLayout(TEXTURE_LAYOUT_UNDEFINED);
         }
-        barriers[info.back_buffer_count].SetDstTextureLayout(TEXTURE_LAYOUT_TRANSFER_DST);
+        barriers[info.back_buffer_count].SetDstTextureLayout(TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        barriers[info.back_buffer_count].SetSrcTextureLayout(TEXTURE_LAYOUT_UNDEFINED);
         barriers[info.back_buffer_count].SetTexture(present_texture);
         barriers[info.back_buffer_count].SetSubResourceRange({});
 
-        barrier_info.texture_barrier_count = barriers.size();
-        barrier_info.p_texture_barriers    = barriers.data();
         copy_cmd_list->Open();
         copy_cmd_list->SetPipelineBarrier(barrier_info);
         copy_cmd_list->Close();
         RHISubmitInfo submit_info;
-        submit_info.Signal(fence, 1);
+        submit_info.Signal(fence, 0);
         copy_queue->SubmitCommands(1, copy_cmd_list, &submit_info);
-        fence->Wait(1);
+        copy_queue->WaitForQueueComplete();
     }
 
     void VirtualViewport::Impl::InitRenderThread() {
@@ -211,27 +225,45 @@ namespace Moer {
         uint64_t current_rendered = _render_fence->GetValue();
         frame_index++;
 
-        if (current_rendered == presented_index) {
-            return;
-        }
-
-        presented_index = current_rendered;
+        presented_index = frame_index;
 
         auto* cmd_list = copy_cmd_list;
+        present_fence->Wait(presented_index - 1);
         cmd_list->Reset();
-        Offset3D zero_offset = {0, 0, 0};
-
+        Offset3D           zero_offset = {0, 0, 0};
+        Offset2D           extent      = {upload_texture_create_info.extent.x, upload_texture_create_info.extent.y};
         RHIBlitTextureInfo blit_info;
-        blit_info.filter = SF_CUBIC;
+        blit_info.filter         = SF_CUBIC;
+        blit_info.src_offsets[0] = zero_offset;
+        blit_info.src_offsets[1] = Offset3D(extent.x, extent.y, 1);
+        blit_info.dst_offsets[0] = zero_offset;
+        blit_info.dst_offsets[1] = Offset3D(extent.x, extent.y, 1);
+        blit_info.src_layout     = TEXTURE_LAYOUT_TRANSFER_SRC;
+        blit_info.dst_layout     = TEXTURE_LAYOUT_TRANSFER_DST;
+        blit_info.src_slice      = {};
+        blit_info.dst_slice      = {};
 
+        RHIBarrierDependencyInfo barrier_info{};
+        auto&                    barriers = barrier_info.texture_barriers;
+        barriers.emplace_back(RHITextureBarrierInfo::Create()
+                                  .SetTexture(present_texture)
+                                  .SetSrcTextureLayout(TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                                  .SetDstTextureLayout(TEXTURE_LAYOUT_TRANSFER_DST)
+                                  .SetSubResourceRange({}));
+        cmd_list->Open();
+        cmd_list->SetPipelineBarrier(barrier_info);
         cmd_list->BlitTexture(blit_info,
                               swapchain_textures[current_rendered % info.back_buffer_count],
                               present_texture);
+
+        barriers[0].SetSrcTextureLayout(TEXTURE_LAYOUT_TRANSFER_DST);
+        barriers[0].SetDstTextureLayout(TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        cmd_list->SetPipelineBarrier(barrier_info);
         cmd_list->Close();
 
         RHISubmitInfo submit_info;
-        submit_info.Wait(_render_fence, current_rendered);
-        submit_info.Signal(present_fence, current_rendered);
+        submit_info.Wait(_render_fence, presented_index);
+        submit_info.Signal(present_fence, presented_index);
 
         copy_queue->SubmitCommands(1, cmd_list, &submit_info);
     }

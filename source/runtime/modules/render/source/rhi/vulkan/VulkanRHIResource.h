@@ -172,7 +172,8 @@ class VulkanRHIRasterizationState : public RHIRasterizationState {
     friend VulkanRHIImpl;
 
 public:
-    explicit VulkanRHIRasterizationState() : RHIRasterizationState() {}
+    explicit VulkanRHIRasterizationState() : RHIRasterizationState(),
+                                             m_rasterization_state_create_info{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO} {}
 
     void GenerateRasterizationStateFromInitializer(const RHIRasterizationStateInitializer& _init);
 
@@ -190,7 +191,8 @@ private:
 
 class VulkanRHIDepthStencilState : public RHIDepthStencilState {
 public:
-    explicit VulkanRHIDepthStencilState() : RHIDepthStencilState() {}
+    explicit VulkanRHIDepthStencilState() : RHIDepthStencilState(),
+                                            m_depth_stencil_state_create_info(VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO) {}
 
     void GenerateDepthStencilStateFromInitializer(const RHIDepthStencilStateInitializer& _init);
 
@@ -415,21 +417,21 @@ private:
 
 class VulkanRHIFence final : public RHIFence {
 public:
-    VulkanRHIFence(VulkanDevice* _device, EFenceUsage _usage);
+    VulkanRHIFence(VulkanDevice* _device, EFenceUsageFlags _usage);
     virtual ~VulkanRHIFence();
 
     uint64_t GetValue() const override;
 
-    void               Wait(uint64_t value) override;
-    inline VkSemaphore GetSemaphoreHandle() { return m_timeline; }
-    inline VkSemaphore GetBinaryHandle() { return m_binary; }
-    inline EFenceUsage GetUsage() { return usage; }
+    void                    Wait(uint64_t value) override;
+    inline VkSemaphore      GetSemaphoreHandle() { return m_timeline; }
+    inline VkSemaphore      GetBinaryHandle() { return m_binary; }
+    inline EFenceUsageFlags GetUsage() { return usage; }
 
 private:
-    VulkanDevice* m_device;
-    VkSemaphore   m_timeline;
-    VkSemaphore   m_binary;
-    EFenceUsage   usage;
+    VulkanDevice*    m_device;
+    VkSemaphore      m_timeline;
+    VkSemaphore      m_binary;
+    EFenceUsageFlags usage;
 };
 
 #pragma endregion

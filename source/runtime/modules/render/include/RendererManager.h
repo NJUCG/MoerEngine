@@ -23,9 +23,9 @@ namespace Moer {
         //call from editor UI
         void SetRendererOriginResolution(TRendererID _renderer_id, uint32_t _width, uint32_t _height);
         //call this function to get the renderer output
-        TRendererOutput GetRendererOutput(TRendererID _renderer_id);
+        RENDER_API TRendererOutput GetRendererOutput(TRendererID _renderer_id);
 
-        TRendererID GetRendererID(const std::string& _renderer_name);
+        RENDER_API TRendererID GetRendererID(const std::string& _renderer_name);
 
     private:
         friend BackendRenderer;

@@ -1069,7 +1069,7 @@ void VulkanRHIDepthStencilState::GenerateDepthStencilStateFromInitializer(const 
     m_depth_stencil_state_create_info.sType                 = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
     m_depth_stencil_state_create_info.pNext                 = nullptr;
     m_depth_stencil_state_create_info.flags                 = 0;
-    m_depth_stencil_state_create_info.depthTestEnable       = (_init.b_enable_depth_write || _init.depth_test_op != ECompareOption::CO_ALWAYS) ? VK_TRUE : VK_FALSE;
+    m_depth_stencil_state_create_info.depthTestEnable       = (_init.b_enable_depth_write || _init.depth_test_op == ECompareOption::CO_ALWAYS) ? VK_TRUE : VK_FALSE;
     m_depth_stencil_state_create_info.depthWriteEnable      = _init.b_enable_depth_write;
     m_depth_stencil_state_create_info.depthCompareOp        = VulkanRHIDepthStencilState::METoVKCompareOp(_init.depth_test_op);
     m_depth_stencil_state_create_info.depthBoundsTestEnable = VK_FALSE;// MARK...
@@ -1499,19 +1499,30 @@ VkImageUsageFlags VulkanRHITexture::METoVKImageUsageFlags(ETextureUsageFlags _me
 
 #pragma region synchronization
 
-VulkanRHIFence::VulkanRHIFence(VulkanDevice* _device, EFenceUsage _usage) : m_device(_device), m_binary(VK_NULL_HANDLE), m_timeline(VK_NULL_HANDLE), usage(_usage) {
+VulkanRHIFence::VulkanRHIFence(VulkanDevice* _device, EFenceUsageFlags _usage) : m_device(_device), m_binary(VK_NULL_HANDLE), m_timeline(VK_NULL_HANDLE), usage(_usage) {
     VkSemaphoreCreateInfo create_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
-    if (_usage != EFenceUsage::TIMELINE) {
-        //do nothing
+    if (EnumHasAnyFlag(usage, EFenceUsageFlags::PRESENT)) {
+        VK_CHECK_RESULT(vkCreateSemaphore(m_device->GetDevice(), &create_info, nullptr, &m_binary));
+
+        VkSemaphoreTypeCreateInfo timeline_semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
+        timeline_semaphore_info.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+        timeline_semaphore_info.initialValue  = 0;
+
+        create_info.pNext = &timeline_semaphore_info;
+        VK_CHECK_RESULT(vkCreateSemaphore(m_device->GetDevice(), &create_info, nullptr, &m_timeline));
+        return;
+    }
+    if (EnumHasAnyFlag(usage, EFenceUsageFlags::BINARY)) {
         VK_CHECK_RESULT(vkCreateSemaphore(m_device->GetDevice(), &create_info, nullptr, &m_binary));
     }
+    if (EnumHasAnyFlag(usage, EFenceUsageFlags::TIMELINE)) {
+        VkSemaphoreTypeCreateInfo timeline_semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
+        timeline_semaphore_info.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+        timeline_semaphore_info.initialValue  = 0;
 
-    VkSemaphoreTypeCreateInfo timeline_semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
-    timeline_semaphore_info.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
-    timeline_semaphore_info.initialValue  = 0;
-
-    create_info.pNext = &timeline_semaphore_info;
-    VK_CHECK_RESULT(vkCreateSemaphore(m_device->GetDevice(), &create_info, nullptr, &m_timeline));
+        create_info.pNext = &timeline_semaphore_info;
+        VK_CHECK_RESULT(vkCreateSemaphore(m_device->GetDevice(), &create_info, nullptr, &m_timeline));
+    }
 }
 
 VulkanRHIFence::~VulkanRHIFence() {
@@ -1618,7 +1629,7 @@ void VulkanViewport::InnerCreateResources() {
                 .SetMipLevel(0));
     }
     for (uint32_t index = 0; index < image_aquire_fences.size(); index++) {
-        image_aquire_fences[index] = new VulkanRHIFence(swapchain->m_device, EFenceUsage::AQUIRE_NEXT_FRAME);
+        image_aquire_fences[index] = new VulkanRHIFence(swapchain->m_device, EFenceUsageFlags::BINARY);
     }
     frame_offset = 0;
 
@@ -1665,7 +1676,7 @@ void VulkanViewport::ResetResources() {
     }
     for (uint32_t index = 0; index < image_aquire_fences.size(); index++) {
         delete image_aquire_fences[index];
-        image_aquire_fences[index] = new VulkanRHIFence(swapchain->m_device, EFenceUsage::AQUIRE_NEXT_FRAME);
+        image_aquire_fences[index] = new VulkanRHIFence(swapchain->m_device, EFenceUsageFlags::BINARY);
     }
     info.backbuffer_format = VulkanEnumTranslator::VKToMEFormat(swapchain->image_format);
     frame_offset           = 0;

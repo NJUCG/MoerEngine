@@ -121,6 +121,7 @@ private:
 
 #pragma region helper functions
 private:
+    friend VulkanSwapChain;
     bool CheckValidationLayer(const std::string& layer_name);
     bool CheckEnabledExtensions();
 

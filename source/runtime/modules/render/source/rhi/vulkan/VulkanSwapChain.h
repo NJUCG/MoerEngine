@@ -39,6 +39,7 @@ private:
 
 private:
     friend class VulkanViewport;
+    friend class VulkanRHIImpl;
     VkInstance     m_instance;
     VulkanDevice*  m_device;
     VkSwapchainKHR m_swap_chain;

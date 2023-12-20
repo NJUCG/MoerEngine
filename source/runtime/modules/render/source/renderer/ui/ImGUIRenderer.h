@@ -17,6 +17,8 @@ public:
 
 private:
     UIFrameData* frame_data;
+    class Impl;
+    Impl* impl;
 };
 
 #endif

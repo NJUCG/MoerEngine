@@ -44,6 +44,8 @@ namespace Moer {
 
         const VirtualViewportInfo& GetInfo() const;
 
+        RHIShaderResourceView* GetPresentTextureSRV();
+
     private:
         void InitRenderThread();
         void ResizeRenderThread(Moer::Vector2i extent);

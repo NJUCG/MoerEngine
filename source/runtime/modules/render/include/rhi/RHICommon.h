@@ -388,6 +388,8 @@ enum class EBufferUsageFlags : uint32_t {
 	**/
     ACCELERATION_STRUCTURE_STORAGE = (1 << 21) | UNORDERED_ACCESS,
 
+    TRANSFER_DST = 1 << 22,
+
     // Helper bit-masks
     DYNAMIC = (LIFE_CYCLE_DYNAMIC | LIFE_CYCLE_ONE_FRAME),
 };

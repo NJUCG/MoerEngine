@@ -5,6 +5,7 @@
 #include "RenderCommon.h"
 #include "math/Base.h"
 
+#include "misc/EnumBitOperation.h"
 #include "misc/Hash.h"
 #include "misc/Ptr.h"
 #include "misc/CountableRef.h"
@@ -830,13 +831,15 @@ struct PipelineParametersBinding {
 
 #pragma region syncronization
 
-enum class EFenceUsage {
-    TIMELINE,
-    PRESENT,
-    AQUIRE_NEXT_FRAME
+enum class EFenceUsageFlags {
+    TIMELINE = 1 << 0,
+    BINARY   = 1 << 1,
+    PRESENT  = 1 << 2,
 };
+ENUM_BIT_OP_IMPL(EFenceUsageFlags, FLAG)
+
 struct RHIFenceCreateInfo {
-    EFenceUsage usage = EFenceUsage::TIMELINE;
+    EFenceUsageFlags usage = EFenceUsageFlags::TIMELINE;
 };
 /* fences in dx12, fence and timeline semaphore in vulkan */
 class RHIFence : public RHIResource {
@@ -1019,13 +1022,17 @@ struct RHIBufferBarrierInfo : public RHIBarrierInfo {
 using RHIMemeryBarrierInfo = RHIBarrierInfo;
 
 struct RHIBarrierDependencyInfo {
-    EBarrierDependencyScope      scope{};
-    uint32_t                     memory_barrier_count  = 0;
-    const RHIMemeryBarrierInfo*  p_memory_barriers     = nullptr;
-    uint32_t                     buffer_barrier_count  = 0;
-    const RHIBufferBarrierInfo*  p_buffer_barriers     = nullptr;
-    uint32_t                     texture_barrier_count = 0;
-    const RHITextureBarrierInfo* p_texture_barriers    = nullptr;
+    // EBarrierDependencyScope      scope{};
+    // uint32_t                     memory_barrier_count  = 0;
+    // const RHIMemeryBarrierInfo*  p_memory_barriers     = nullptr;
+    // uint32_t                     buffer_barrier_count  = 0;
+    // const RHIBufferBarrierInfo*  p_buffer_barriers     = nullptr;
+    // uint32_t                     texture_barrier_count = 0;
+    // const RHITextureBarrierInfo* p_texture_barriers    = nullptr;
+
+    Moer::Array<RHIMemeryBarrierInfo>  memory_barriers;
+    Moer::Array<RHIBufferBarrierInfo>  buffer_barriers;
+    Moer::Array<RHITextureBarrierInfo> texture_barriers;
 };
 
 #pragma endregion

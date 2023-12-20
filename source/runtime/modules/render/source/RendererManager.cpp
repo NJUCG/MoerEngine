@@ -55,6 +55,14 @@ namespace Moer {
         return data->renderer_ids[_renderer_name];
     }
 
+    TRendererOutput RendererManager::GetRendererOutput(TRendererID _renderer_id) {
+        BackendRenderer* renderer = GetRenderer(_renderer_id);
+        if (renderer == nullptr) {
+            return nullptr;
+        }
+        return renderer->GetRendererOutput();
+    }
+
     BackendRenderer* RendererManager::GetRenderer(TRendererID _renderer_id) {
         if (_renderer_id < 0 || data->backend_renderers.count(_renderer_id) == 0) {
             return nullptr;

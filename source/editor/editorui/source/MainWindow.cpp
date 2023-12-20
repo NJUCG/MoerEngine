@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "RendererManager.h"
 #include "math/Math.h"
 #include "Core.h"
 
@@ -119,10 +120,16 @@ void MainWindow::Show() {
     Moer::Vector2f render_target_window_pos  = {0.0f, 0.0f};
     Moer::Vector2f render_target_window_size = {0.0f, 0.0f};
     // ShowStyleSelector("choose style color");
-    ImGui::ShowStyleEditor();
 
     //set viewport size(image size) of main viewport
-    // ImGui::Image(ImTextureID user_texture_id, render_target_window_size);
+    auto& render_manager = Moer::RendererManager::GetInstance();
+    auto  renderer_id    = render_manager.GetRendererID(MOER_DEFAULT_RENDERER_NAME);
+    void* output         = render_manager.GetRendererOutput(renderer_id);
+    float display_width  = ImGui::GetWindowWidth();
+    float display_height = display_width * 9.f / 16.f;
+    ImGui::Image(output, {display_width, display_height});
+    ImGui::ShowStyleEditor();
+
     // ImGui::Image()
     ImGui::End();
 }

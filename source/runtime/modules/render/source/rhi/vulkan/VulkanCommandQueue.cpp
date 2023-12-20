@@ -49,38 +49,63 @@ void VulkanRHICommandQueue::SubmitCommands(
     uint32_t extra_biranry_semaphores = 0;
     for (uint32_t signal_index = 0; signal_index < signal_infos.size(); signal_index++) {
         VulkanRHIFence* target_fence = (VulkanRHIFence*)signal_infos[signal_index].signal_fence;
-        vk_signal_infos.emplace_back(VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-                                     VK_NULL_HANDLE,
-                                     target_fence->GetSemaphoreHandle(),
-                                     signal_infos[signal_index].signal_value);
 
-        //for binary signals to present stage wait
-        if (target_fence->GetBinaryHandle() != VK_NULL_HANDLE) {
+        auto usage = target_fence->GetUsage();
+
+        if (EnumHasAnyFlag(usage, EFenceUsageFlags::PRESENT)) {
+            vk_signal_infos.emplace_back(VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                                         VK_NULL_HANDLE,
+                                         target_fence->GetSemaphoreHandle(),
+                                         signal_infos[signal_index].signal_value);
             vk_signal_infos.emplace_back(VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
                                          VK_NULL_HANDLE,
                                          target_fence->GetBinaryHandle(),
                                          0);
+        } else {
+            //for timeline signals
+            if (EnumHasAnyFlag(usage, EFenceUsageFlags::TIMELINE)) {
+                vk_signal_infos.emplace_back(VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                                             VK_NULL_HANDLE,
+                                             target_fence->GetSemaphoreHandle(),
+                                             signal_infos[signal_index].signal_value);
+            }
+
+            //for binary signals to present stage wait
+            if (EnumHasAnyFlag(usage, EFenceUsageFlags::BINARY)) {
+                vk_signal_infos.emplace_back(VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                                             VK_NULL_HANDLE,
+                                             target_fence->GetBinaryHandle(),
+                                             0);
+            }
         }
     }
 
     for (uint32_t wait_index = 0; wait_index < wait_infos.size(); wait_index++) {
 
         VulkanRHIFence* target_fence = (VulkanRHIFence*)wait_infos[wait_index].wait_fence;
-        //for binary signals to present stage wait
-        switch (target_fence->GetUsage()) {
-            case EFenceUsage::AQUIRE_NEXT_FRAME:
+
+        auto usage = target_fence->GetUsage();
+
+        if (EnumHasAnyFlag(usage, EFenceUsageFlags::PRESENT)) {
+            vk_wait_infos.emplace_back(VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                                       VK_NULL_HANDLE,
+                                       target_fence->GetSemaphoreHandle(),
+                                       wait_infos[wait_index].wait_value);
+        } else {
+            //for binary signals to present stage wait
+            if (EnumHasAnyFlag(usage, EFenceUsageFlags::BINARY)) {
                 vk_wait_infos.emplace_back(VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
                                            VK_NULL_HANDLE,
                                            target_fence->GetBinaryHandle(),
                                            0);
-                break;
-            case EFenceUsage::TIMELINE:
-            case EFenceUsage::PRESENT:
+            }
+
+            if (EnumHasAnyFlag(usage, EFenceUsageFlags::TIMELINE)) {
                 vk_wait_infos.emplace_back(VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
                                            VK_NULL_HANDLE,
                                            target_fence->GetSemaphoreHandle(),
                                            wait_infos[wait_index].wait_value);
-                break;
+            }
         }
     }
 

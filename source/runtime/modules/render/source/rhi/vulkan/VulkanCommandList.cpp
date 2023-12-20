@@ -54,18 +54,18 @@ void VulkanRHICommandListBase::CopyBuffer(const RHICopyBufferInfo& _copy_info, R
         return;
     }
 
-    std::vector<VkBufferCopy> copy_regions(_copy_info.region_count);
-    for (uint32_t i = 0; i < _copy_info.region_count; ++i) {
-        copy_regions[i].srcOffset = _copy_info.p_regions[i].src_offset;
-        copy_regions[i].dstOffset = _copy_info.p_regions[i].dst_offset;
-        copy_regions[i].size      = _copy_info.p_regions[i].size;
+    Moer::Array<VkBufferCopy> copy_regions(_copy_info.regions.size());
+    for (uint32_t i = 0; i < copy_regions.size(); ++i) {
+        copy_regions[i].srcOffset = _copy_info.regions[i].src_offset;
+        copy_regions[i].dstOffset = _copy_info.regions[i].dst_offset;
+        copy_regions[i].size      = _copy_info.regions[i].size;
     }
 
     vkCmdCopyBuffer(
         m_command_buffer,
         vk_src_buffer->GetHandle(),
         vk_dst_buffer->GetHandle(),
-        _copy_info.region_count,
+        copy_regions.size(),
         copy_regions.data());
 }
 
@@ -245,69 +245,69 @@ void VulkanRHICommandListBase::ResolveTexture(const RHIResolveTextureInfo& _reso
 }
 
 void VulkanRHICommandListBase::SetPipelineBarrier(const RHIBarrierDependencyInfo& _dependency) {
-    std::vector<VkMemoryBarrier2>       memory_barriers(_dependency.memory_barrier_count);
-    std::vector<VkBufferMemoryBarrier2> buffer_barriers(_dependency.buffer_barrier_count);
-    std::vector<VkImageMemoryBarrier2>  image_barriers(_dependency.texture_barrier_count);
+    Moer::Array<VkMemoryBarrier2>       memory_barriers(_dependency.memory_barriers.size());
+    Moer::Array<VkBufferMemoryBarrier2> buffer_barriers(_dependency.buffer_barriers.size());
+    Moer::Array<VkImageMemoryBarrier2>  image_barriers(_dependency.texture_barriers.size());
 
-    for (uint32_t i = 0; i < _dependency.memory_barrier_count; ++i) {
+    for (uint32_t i = 0; i < memory_barriers.size(); ++i) {
         memory_barriers[i].sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
         memory_barriers[i].pNext         = nullptr;
-        memory_barriers[i].srcStageMask  = VulkanEnumTranslator::METoVkPipelineStageFlags2(_dependency.p_memory_barriers[i].src_stage);
-        memory_barriers[i].srcAccessMask = VulkanEnumTranslator::METoVkAccessFlags2(_dependency.p_memory_barriers[i].src_access);
-        memory_barriers[i].dstStageMask  = VulkanEnumTranslator::METoVkPipelineStageFlags2(_dependency.p_memory_barriers[i].dst_stage);
-        memory_barriers[i].dstAccessMask = VulkanEnumTranslator::METoVkAccessFlags2(_dependency.p_memory_barriers[i].dst_access);
+        memory_barriers[i].srcStageMask  = VulkanEnumTranslator::METoVkPipelineStageFlags2(_dependency.memory_barriers[i].src_stage);
+        memory_barriers[i].srcAccessMask = VulkanEnumTranslator::METoVkAccessFlags2(_dependency.memory_barriers[i].src_access);
+        memory_barriers[i].dstStageMask  = VulkanEnumTranslator::METoVkPipelineStageFlags2(_dependency.memory_barriers[i].dst_stage);
+        memory_barriers[i].dstAccessMask = VulkanEnumTranslator::METoVkAccessFlags2(_dependency.memory_barriers[i].dst_access);
     }
 
     VulkanRHIBuffer* vk_buffer = nullptr;
-    for (uint32_t i = 0; i < _dependency.buffer_barrier_count; ++i) {
-        vk_buffer = static_cast<VulkanRHIBuffer*>(_dependency.p_buffer_barriers[i].p_buffer);
+    for (uint32_t i = 0; i < buffer_barriers.size(); ++i) {
+        vk_buffer = static_cast<VulkanRHIBuffer*>(_dependency.buffer_barriers[i].p_buffer);
         VK_CHECK_NULLPTR(vk_buffer, "SetPipelineBarrier->VkBufferMemoryBarrier2: VulkanRHIBuffer is nullptr!", continue);
 
         buffer_barriers[i].sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
         buffer_barriers[i].pNext               = nullptr;
-        buffer_barriers[i].srcStageMask        = VulkanEnumTranslator::METoVkPipelineStageFlags2(_dependency.p_buffer_barriers[i].src_stage);
-        buffer_barriers[i].srcAccessMask       = VulkanEnumTranslator::METoVkAccessFlags2(_dependency.p_buffer_barriers[i].src_access);
-        buffer_barriers[i].dstStageMask        = VulkanEnumTranslator::METoVkPipelineStageFlags2(_dependency.p_buffer_barriers[i].dst_stage);
-        buffer_barriers[i].dstAccessMask       = VulkanEnumTranslator::METoVkAccessFlags2(_dependency.p_buffer_barriers[i].dst_access);
-        buffer_barriers[i].srcQueueFamilyIndex = VulkanEnumTranslator::METoVkQueueFamilyIndex(_dependency.p_buffer_barriers[i].src_queue_type, m_device);
-        buffer_barriers[i].dstQueueFamilyIndex = VulkanEnumTranslator::METoVkQueueFamilyIndex(_dependency.p_buffer_barriers[i].dst_queue_type, m_device);
+        buffer_barriers[i].srcStageMask        = VulkanEnumTranslator::METoVkPipelineStageFlags2(_dependency.buffer_barriers[i].src_stage);
+        buffer_barriers[i].srcAccessMask       = VulkanEnumTranslator::METoVkAccessFlags2(_dependency.buffer_barriers[i].src_access);
+        buffer_barriers[i].dstStageMask        = VulkanEnumTranslator::METoVkPipelineStageFlags2(_dependency.buffer_barriers[i].dst_stage);
+        buffer_barriers[i].dstAccessMask       = VulkanEnumTranslator::METoVkAccessFlags2(_dependency.buffer_barriers[i].dst_access);
+        buffer_barriers[i].srcQueueFamilyIndex = VulkanEnumTranslator::METoVkQueueFamilyIndex(_dependency.buffer_barriers[i].src_queue_type, m_device);
+        buffer_barriers[i].dstQueueFamilyIndex = VulkanEnumTranslator::METoVkQueueFamilyIndex(_dependency.buffer_barriers[i].dst_queue_type, m_device);
         buffer_barriers[i].buffer              = vk_buffer->GetHandle();
-        buffer_barriers[i].offset              = _dependency.p_buffer_barriers[i].offset;
-        buffer_barriers[i].size                = _dependency.p_buffer_barriers[i].size;
+        buffer_barriers[i].offset              = _dependency.buffer_barriers[i].offset;
+        buffer_barriers[i].size                = _dependency.buffer_barriers[i].size;
     }
 
     VulkanRHITexture* vk_texture = nullptr;
-    for (uint32_t i = 0; i < _dependency.texture_barrier_count; ++i) {
-        vk_texture = static_cast<VulkanRHITexture*>(_dependency.p_texture_barriers[i].p_texture);
+    for (uint32_t i = 0; i < image_barriers.size(); ++i) {
+        vk_texture = static_cast<VulkanRHITexture*>(_dependency.texture_barriers[i].p_texture);
         VK_CHECK_NULLPTR(vk_texture, "SetPipelineBarrier->VkImageMemoryBarrier2: VulkanRHITexture is nullptr!", continue);
 
         image_barriers[i].sType                           = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
         image_barriers[i].pNext                           = nullptr;
-        image_barriers[i].srcStageMask                    = VulkanEnumTranslator::METoVkPipelineStageFlags2(_dependency.p_texture_barriers[i].src_stage);
-        image_barriers[i].srcAccessMask                   = VulkanEnumTranslator::METoVkAccessFlags2(_dependency.p_texture_barriers[i].src_access);
-        image_barriers[i].dstStageMask                    = VulkanEnumTranslator::METoVkPipelineStageFlags2(_dependency.p_texture_barriers[i].dst_stage);
-        image_barriers[i].dstAccessMask                   = VulkanEnumTranslator::METoVkAccessFlags2(_dependency.p_texture_barriers[i].dst_access);
-        image_barriers[i].oldLayout                       = VulkanEnumTranslator::METoVKImageLayout(_dependency.p_texture_barriers[i].src_layout);
-        image_barriers[i].newLayout                       = VulkanEnumTranslator::METoVKImageLayout(_dependency.p_texture_barriers[i].dst_layout);
-        image_barriers[i].srcQueueFamilyIndex             = VulkanEnumTranslator::METoVkQueueFamilyIndex(_dependency.p_texture_barriers[i].src_queue_type, m_device);
-        image_barriers[i].dstQueueFamilyIndex             = VulkanEnumTranslator::METoVkQueueFamilyIndex(_dependency.p_texture_barriers[i].dst_queue_type, m_device);
+        image_barriers[i].srcStageMask                    = VulkanEnumTranslator::METoVkPipelineStageFlags2(_dependency.texture_barriers[i].src_stage);
+        image_barriers[i].srcAccessMask                   = VulkanEnumTranslator::METoVkAccessFlags2(_dependency.texture_barriers[i].src_access);
+        image_barriers[i].dstStageMask                    = VulkanEnumTranslator::METoVkPipelineStageFlags2(_dependency.texture_barriers[i].dst_stage);
+        image_barriers[i].dstAccessMask                   = VulkanEnumTranslator::METoVkAccessFlags2(_dependency.texture_barriers[i].dst_access);
+        image_barriers[i].oldLayout                       = VulkanEnumTranslator::METoVKImageLayout(_dependency.texture_barriers[i].src_layout);
+        image_barriers[i].newLayout                       = VulkanEnumTranslator::METoVKImageLayout(_dependency.texture_barriers[i].dst_layout);
+        image_barriers[i].srcQueueFamilyIndex             = VulkanEnumTranslator::METoVkQueueFamilyIndex(_dependency.texture_barriers[i].src_queue_type, m_device);
+        image_barriers[i].dstQueueFamilyIndex             = VulkanEnumTranslator::METoVkQueueFamilyIndex(_dependency.texture_barriers[i].dst_queue_type, m_device);
         image_barriers[i].image                           = vk_texture->GetHandle();// 2. MARK... layout transition need image has 'VK_IMAGE_USAGE_TRANSFER_DST_BIT'
-        image_barriers[i].subresourceRange.aspectMask     = VulkanEnumTranslator::METoVKImageAspectFlags(_dependency.p_texture_barriers[i].sub_resource_range.aspect);
-        image_barriers[i].subresourceRange.baseMipLevel   = _dependency.p_texture_barriers[i].sub_resource_range.mip_index;
-        image_barriers[i].subresourceRange.levelCount     = _dependency.p_texture_barriers[i].sub_resource_range.num_mips == RHISubresourceRange::s_all ? VK_REMAINING_MIP_LEVELS : _dependency.p_texture_barriers[i].sub_resource_range.num_mips;// 1. MARK... levelCount + baseMipLevel must <= image mip levels
-        image_barriers[i].subresourceRange.baseArrayLayer = _dependency.p_texture_barriers[i].sub_resource_range.array_index;
-        image_barriers[i].subresourceRange.layerCount     = _dependency.p_texture_barriers[i].sub_resource_range.array_count == RHISubresourceRange::s_all ? VK_REMAINING_ARRAY_LAYERS : _dependency.p_texture_barriers[i].sub_resource_range.array_count;// 1. MARK... layerCount + baseArrayLayer must <= image array layers
+        image_barriers[i].subresourceRange.aspectMask     = VulkanEnumTranslator::METoVKImageAspectFlags(_dependency.texture_barriers[i].sub_resource_range.aspect);
+        image_barriers[i].subresourceRange.baseMipLevel   = _dependency.texture_barriers[i].sub_resource_range.mip_index;
+        image_barriers[i].subresourceRange.levelCount     = _dependency.texture_barriers[i].sub_resource_range.num_mips == RHISubresourceRange::s_all ? VK_REMAINING_MIP_LEVELS : _dependency.texture_barriers[i].sub_resource_range.num_mips;// 1. MARK... levelCount + baseMipLevel must <= image mip levels
+        image_barriers[i].subresourceRange.baseArrayLayer = _dependency.texture_barriers[i].sub_resource_range.array_index;
+        image_barriers[i].subresourceRange.layerCount     = _dependency.texture_barriers[i].sub_resource_range.array_count == RHISubresourceRange::s_all ? VK_REMAINING_ARRAY_LAYERS : _dependency.texture_barriers[i].sub_resource_range.array_count;// 1. MARK... layerCount + baseArrayLayer must <= image array layers
     }
 
     VkDependencyInfo dependency_info{};
     dependency_info.sType                    = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
     dependency_info.pNext                    = nullptr;
     dependency_info.dependencyFlags          = 0;
-    dependency_info.memoryBarrierCount       = _dependency.memory_barrier_count;
+    dependency_info.memoryBarrierCount       = memory_barriers.size();
     dependency_info.pMemoryBarriers          = memory_barriers.data();
-    dependency_info.bufferMemoryBarrierCount = _dependency.buffer_barrier_count;
+    dependency_info.bufferMemoryBarrierCount = buffer_barriers.size();
     dependency_info.pBufferMemoryBarriers    = buffer_barriers.data();
-    dependency_info.imageMemoryBarrierCount  = _dependency.texture_barrier_count;
+    dependency_info.imageMemoryBarrierCount  = image_barriers.size();
     dependency_info.pImageMemoryBarriers     = image_barriers.data();
 
     vkCmdPipelineBarrier2(m_command_buffer, &dependency_info);

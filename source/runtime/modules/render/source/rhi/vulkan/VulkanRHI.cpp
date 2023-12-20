@@ -598,13 +598,18 @@ void VulkanRHIImpl::InitVulkan() {
     m_device = new VulkanDevice();
     m_device->Init(initializer);
     m_device->InitMemoryAllocator(m_instance);
+    RHIViewportInitializer viewport_init{};
+    viewport_init.window_handle = Moer::WindowContext::GetMainWindow();
+    auto viewport               = RHICreateViewport(viewport_init);
+    m_main_viewport             = (VulkanViewport*)viewport.Get();
 
-    VulkanSwapChain* swap_chain = new VulkanSwapChain();
-    swap_chain->Connect(m_instance, m_surface, m_device);
-    uint32_t width, height;
+    m_main_viewport->AddRef();
+    // VulkanSwapChain* swap_chain = new VulkanSwapChain();
+    // swap_chain->Connect(m_instance, m_surface, m_device);
+    // uint32_t width, height;
 
-    swap_chain->Init(&width, &height, Moer::ConfigManager::GetInstance().GetInitConfig().editor_vsync);
-    m_main_viewport = new VulkanViewport(swap_chain, max_frame_in_flight);
+    // swap_chain->Init(&width, &height, Moer::ConfigManager::GetInstance().GetInitConfig().editor_vsync);
+    // m_main_viewport = new VulkanViewport(swap_chain, max_frame_in_flight);
 
     //init command allocator
 }
@@ -757,7 +762,7 @@ RHIViewportRef VulkanRHIImpl::RHICreateViewport(const RHIViewportInitializer& _i
 
     VulkanViewport* viewport = new VulkanViewport(swapchain, max_frame_in_flight);
 
-    return static_cast<RHIViewport*>(viewport);
+    return viewport;
 }
 void VulkanRHIImpl::RHIResizeViewport(RHIViewport* _viewport, Extent2D _size, bool _b_full_screen, EPixelFormat _format) {
     assert(_viewport != nullptr && "Passing invalid viewport");

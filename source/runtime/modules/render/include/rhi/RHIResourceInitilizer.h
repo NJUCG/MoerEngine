@@ -5,6 +5,7 @@
 #include "API_Macro.h"
 #include "misc/Hash.h"
 #include "math/Math.h"
+#include "misc/STL.h"
 #include "rhi/RHICommon.h"
 
 #include <numeric>
@@ -208,7 +209,6 @@ namespace Moer {
 }
 struct RHIViewportInitializer {
     Moer::WindowHandle* window_handle;
-    Extent2D            size{0, 0};
     bool                b_is_full_screen;
     bool                b_vsync;
     EPixelFormat        preferred_format;
@@ -539,16 +539,15 @@ struct RHIBufferRegion {
 struct RHICopyBufferInfo {
     RHICopyBufferInfo() = default;
 
-    RHICopyBufferInfo(uint32_t _region_count, RHIBufferRegion* _regions) : region_count(_region_count), p_regions(_regions) {
-        assert(Validate() && "data not valid");
-    }
-
-    uint32_t         region_count;
-    RHIBufferRegion* p_regions;
+    Moer::Array<RHIBufferRegion> regions;
 
 private:
     bool Validate() const {
-        return region_count > 0 && p_regions != nullptr;
+        uint64_t total_size = 0;
+        for (auto& region : regions) {
+            total_size += region.size;
+        }
+        return total_size > 0;
     }
 };
 

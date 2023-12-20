@@ -1,6 +1,7 @@
 #ifndef MOER_ENGINE_RHI_COMMAND_H
 #define MOER_ENGINE_RHI_COMMAND_H
 
+#include "misc/STL.h"
 #include "rhi/RHIResource.h"
 #include "RenderAPI.h"
 #include <vcruntime_string.h>
@@ -229,11 +230,11 @@ struct RHISubmitInfo {
         signal_infos.emplace_back(_signal_value, _fence);
     };
 
-    const std::vector<RHIFenceWaitInfo>&   GetWaitInfos() const { return wait_infos; }
-    const std::vector<RHIFenceSignalInfo>& GetSignalInfos() const { return signal_infos; }
+    const Moer::Array<RHIFenceWaitInfo>&   GetWaitInfos() const { return wait_infos; }
+    const Moer::Array<RHIFenceSignalInfo>& GetSignalInfos() const { return signal_infos; }
 
 private:
-    std::vector<RHIFenceWaitInfo>   wait_infos;
-    std::vector<RHIFenceSignalInfo> signal_infos;
+    Moer::Array<RHIFenceWaitInfo>   wait_infos;
+    Moer::Array<RHIFenceSignalInfo> signal_infos;
 };
 #endif
