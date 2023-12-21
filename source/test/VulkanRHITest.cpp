@@ -11,13 +11,12 @@
 #include "shader/Shader.h"
 #include "shader/ShaderCompiler.h"
 #include "shader/ShaderResourceManager.h"
+
 RHI* g_rhi = nullptr;
 
 // global shader
 
-#include "rhi/RHICommandList.h"
-#include "rhi/RHICommandQueue.h"
-
+#include "rhi/RHICommand.h"
 RHIBufferRef CreateBufferFromData(const RHIBufferCreateInfo& info, uint32_t size, void* data) {
     RHIBufferRef buffer     = g_rhi->RHICreateBuffer(info);
     void*        mapped_ptr = g_rhi->RHIMapBuffer(buffer, 0, size);
@@ -89,7 +88,7 @@ void Test() {
     const float  vertex_data[] = {-1, -1, 0, 1, -1, 0, -1, 1, 0, 1, 1, 1};
     RHIBufferRef vertex_buffer = CreateBufferFromData(v_info, sizeof(vertex_data), (void*)vertex_data);
 
-    std::vector<RHIBufferRef> vertex_buffers = {vertex_buffer};
+    Moer::Array<RHIBufferRef> vertex_buffers = {vertex_buffer};
 
     shader_state.p_vertex_input_state = g_rhi->RHICreateVertexInputState(vertex_init_list);
 
@@ -136,8 +135,8 @@ void Test() {
 
     command_list->EndRenderPass();
 
-    RHICommandQueue*                         graphics_queue = g_rhi->CreateCommandQueue(ECommandQueueType::GRAPHICS);
-    const std::array<RHICommandListBase*, 1> command_array{command_list};
+    RHICommandQueue*                                graphics_queue = g_rhi->CreateCommandQueue(ECommandQueueType::GRAPHICS);
+    const Moer::StaticArray<RHICommandListBase*, 1> command_array{command_list};
     // graphics_queue->SubmitCommands(1, command_array.data());
 
     //global buffer

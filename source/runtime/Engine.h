@@ -7,10 +7,12 @@
 namespace Moer {
     struct EngineInitInfo {
 
-        std::filesystem::path config_path;
+        std::filesystem::path workspace_path;
     };
 
     class Engine final {
+        friend class EngineLoop;
+
     public:
         void Init(const EngineInitInfo& _init_info);
 
@@ -25,7 +27,7 @@ namespace Moer {
         void RegisterOnDrawUI(std::function<void()> _func);
 
     private:
-        void InitCore();
+        void InitCore(const std::filesystem::path&);
         void ShutDownCore();
 
         void InitRenderSystem();
@@ -35,17 +37,8 @@ namespace Moer {
         void InitWindow();
         void ShutDownWindow();
 
-        void Tick();
-
-        void OnDrawUI();
-
     private:
         bool b_request_quiting = false;
-
-        std::vector<std::function<void()>> on_draw_ui_funcs;
-
-        //test
-        void TestDrawUI();
     };
 }// namespace Moer
 

@@ -1,6 +1,7 @@
 #ifndef EVENT_H
 #define EVENT_H
 #include "API_Macro.h"
+#include "misc/LockFree.h"
 #include <mutex>
 #include <condition_variable>
 class Event;
@@ -16,7 +17,7 @@ public:
 
 private:
     EventPool();
-    LockQueue<Event>* m_pool;
+    LockFreeQueueBase<Event> m_pool;
 };
 class Event {
     friend class EventPool;

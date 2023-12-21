@@ -2,6 +2,7 @@
 #include <filesystem>
 #include "Editor.h"
 #include "Engine.h"
+#include "Core.h"
 //compile set
 
 namespace Moer {
@@ -15,9 +16,10 @@ namespace Moer {
     void Launcher::Init(const std::filesystem::path& _work_space_path) {
 
         EngineInitInfo info{_work_space_path};
-        Engine*        engine = new Engine();
+
+        Engine* engine = MoerNew(Engine)();
         engine->Init(info);
-        editor = new Editor;
+        editor = MoerNew(Editor);
 
         editor->Init(engine);
 
@@ -32,7 +34,7 @@ namespace Moer {
     }
 
     void Launcher::Quit() {
-        delete editor;
+        MoerDelete(editor);
         editor = nullptr;
     }
 }// namespace Moer

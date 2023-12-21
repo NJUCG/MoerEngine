@@ -9,8 +9,8 @@
 #include "rhi/RHICommon.h"
 #include "shader/ShaderCommon.h"
 #include "shader/ShaderParameterMacros.h"
-#include <stdint.h>
-#include <vector>
+
+#include <cstdint>
 /**
  * @brief Contains Layout info of a shader parameter,
     contains offset and stride in parameter structure
@@ -30,7 +30,7 @@ struct ShaderParameterLayoutInfo {
     }
     ShaderParameterLayoutInfo(uint16_t             _offset,
                               uint16_t             _stride,
-                              uint8_t              _slot  = -1,
+                              int8_t               _slot  = -1,
                               int8_t               _space = -1,
                               EShaderParameterType _type  = EShaderParameterType::UNKNOWN)
         : offset(_offset),
@@ -55,13 +55,13 @@ struct ShaderParameterLayoutInfo {
 struct ShaderRootParametersLayoutInfo {
 
 public:
-    const std::vector<ShaderParameterLayoutInfo>& GetLayoutInfos() const { return layout_infos; }
-    const std::vector<ShaderParameterLayoutInfo>& GetConstantsInfos() const { return constant_infos; }
+    const Moer::Array<ShaderParameterLayoutInfo>& GetLayoutInfos() const { return layout_infos; }
+    const Moer::Array<ShaderParameterLayoutInfo>& GetConstantsInfos() const { return constant_infos; }
 
 private:
     friend class Shader;
-    std::vector<ShaderParameterLayoutInfo> layout_infos;
-    std::vector<ShaderParameterLayoutInfo> constant_infos;
+    Moer::Array<ShaderParameterLayoutInfo> layout_infos;
+    Moer::Array<ShaderParameterLayoutInfo> constant_infos;
 };
 /**
  * @brief Shader Type information,

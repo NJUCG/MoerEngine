@@ -11,7 +11,7 @@
 #endif
 
 #if defined(MOER_CORE_SHARED_LIB)
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(_WIN64)
 #define CORE_API DLLEXPORT
 #else// !defined(_WIN32)
 #define CORE_API __attribute__((visibility("default")))

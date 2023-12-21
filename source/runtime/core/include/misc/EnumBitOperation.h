@@ -34,7 +34,7 @@
 
 #define ENUM_BIT_OP_FLAG(TEnum)                                                                     \
     MOER_FORCE_INLINE bool EnumHasAllFlag(TEnum lhs, TEnum rhs) { return (lhs & rhs) == rhs; }      \
-    MOER_FORCE_INLINE bool EnumHasAnyFlag(TEnum lhs, TEnum rhs) { return (lhs | rhs) != (TEnum)0; } \
+    MOER_FORCE_INLINE bool EnumHasAnyFlag(TEnum lhs, TEnum rhs) { return (lhs & rhs) != (TEnum)0; } \
     MOER_FORCE_INLINE void EnumAddFlags(TEnum& lhs, TEnum rhs) { lhs |= rhs; }                      \
     MOER_FORCE_INLINE void EnumRemoveFlags(TEnum& lhs, TEnum rhs) { lhs &= ~rhs; }
 

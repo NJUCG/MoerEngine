@@ -1,18 +1,18 @@
 #ifndef HASHABLE_H
 #define HASHABLE_H
+
 #include "API_Macro.h"
 #include "MacroUtils.h"
+
+#include "misc/STL.h"
+
+#include <cstring>
 #include <atomic>
 #include <functional>
-#include <map>
 #include <mutex>
-#include <string.h>
 #include <type_traits>
 #include <string_view>
-#include <cstring>
-#include <array>
 #include <cstdint>
-#include <string>
 #include <shared_mutex>
 
 template<typename TEnum>
@@ -44,22 +44,22 @@ concept concept_t_is_vec3 = requires(TNum t) {
 };
 
 template<typename T>
-CORE_API inline void HashCombine(uint16_t& seed, const T& val) {
+inline void HashCombine(uint16_t& seed, const T& val) {
     seed ^= std::hash<T>{}(val) + 0x9e37U + (seed << 3) + (seed >> 1);
 }
 
 template<typename T>
-CORE_API inline void HashCombine(uint32_t& seed, const T& val) {
+inline void HashCombine(uint32_t& seed, const T& val) {
     seed ^= std::hash<T>{}(val) + 0x9e3779b9U + (seed << 6) + (seed >> 2);
 }
 
 template<typename T>
-CORE_API inline void HashCombine(uint64_t& seed, const T& val) {
+inline void HashCombine(uint64_t& seed, const T& val) {
     seed ^= std::hash<T>{}(val) + 0x9e3779b97f4a7c15LLU + (seed << 12) + (seed >> 4);
 }
 
 template<typename T, typename... Rest>
-CORE_API inline void HashCombine(uint64_t& seed, const T& v, const Rest&... rest) {
+inline void HashCombine(uint64_t& seed, const T& v, const Rest&... rest) {
     seed ^= std::hash<T>{}(v) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
     (HashCombine(seed, rest), ...);
 }
@@ -71,43 +71,43 @@ CORE_API inline void HashCombine(uint64_t& seed, const T& v, const Rest&... rest
     }
 
 template<concept_t_enum_underlying_uint8 TEnum>
-class CORE_API EnumInByte;
+class EnumInByte;
 
-CORE_API inline uint32_t GetHash(uint32_t value) {
+inline uint32_t GetHash(uint32_t value) {
     return value;
 }
-CORE_API inline uint32_t GetHash(int32_t value) {
+inline uint32_t GetHash(int32_t value) {
     return value;
 }
 
 /*from UE5.03*/
-CORE_API FORCEINLINE uint32_t GetHash(uint64_t value) {
+FORCEINLINE uint32_t GetHash(uint64_t value) {
     return (uint32_t)value + ((uint32_t)(value >> 32) * 23);
 }
 
 /*from UE5.03*/
-CORE_API inline uint32_t GetHash(int64_t target) {
+inline uint32_t GetHash(int64_t target) {
     return (uint32_t)target + ((uint32_t)(target >> 32) * 23);
 }
 
-CORE_API inline uint32_t GetHash(float value) {
+inline uint32_t GetHash(float value) {
     return *(uint32_t*)&value;
 }
-CORE_API inline uint32_t GetHash(double value) {
+inline uint32_t GetHash(double value) {
     return GetHash(*(uint64_t*)&value);
 }
-CORE_API inline uint32_t GetHash(const char* value) {
+inline uint32_t GetHash(const char* value) {
     return std::hash<std::string_view>{}(std::string_view(value));
 }
 template<concept_t_is_vec2 T>
-CORE_API uint32_t GetHash(const T& value) {
+uint32_t GetHash(const T& value) {
     uint32_t hash = GetHash(value.x);
     HashCombine(hash, GetHash(value.y));
     return hash;
 }
 
 template<concept_t_is_vec3 T>
-CORE_API uint32_t GetHash(const T& value) {
+uint32_t GetHash(const T& value) {
     uint32_t hash = GetHash(value.x);
     HashCombine(hash, GetHash(value.y));
     HashCombine(hash, GetHash(value.z));
@@ -115,19 +115,19 @@ CORE_API uint32_t GetHash(const T& value) {
 }
 
 template<concept_t_is_enum T>
-CORE_API uint32_t GetHash(const T& t) {
+uint32_t GetHash(const T& t) {
     return GetHash((std::underlying_type_t<T>)t);
 }
 template<typename T>
-CORE_API FORCEINLINE uint32_t GetHash(const EnumInByte<T>& t) {
+FORCEINLINE uint32_t GetHash(const EnumInByte<T>& t) {
     return GetHash(t.value);
 }
-CORE_API FORCEINLINE uint32_t GetHash(const std::string& value) {
+FORCEINLINE uint32_t GetHash(const std::string& value) {
     return std::hash<std::string>{}(value);
 }
 
 template<concept_t_enum_underlying_uint8 TEnum>
-class CORE_API EnumInByte {
+class EnumInByte {
 public:
     EnumInByte()                        = default;
     EnumInByte(const EnumInByte& other) = default;
@@ -147,8 +147,8 @@ public:
     bool operator==(uint8_t _value) {
         return _value == value;
     }
-    TEnum           GetValue() const { return (TEnum)value; }
-    friend uint32_t CORE_API inline GetHash(const EnumInByte& target) {
+    inline TEnum GetValue() const { return (TEnum)value; }
+    friend uint32_t inline GetHash(const EnumInByte& target) {
         return GetHash(target.value);
     };
 
@@ -158,7 +158,7 @@ private:
 
 struct SHA256Hash {
 public:
-    std::array<uint8_t, 32> hash_code{};
+    Moer::StaticArray<uint8_t, 32> hash_code{};
     SHA256Hash() {
         for (unsigned char& i : hash_code) {
             i = 0;
@@ -179,7 +179,7 @@ public:
 
 struct CORE_API Hash64City {
 public:
-    std::array<uint8_t, 8> hash_code{};
+    Moer::StaticArray<uint8_t, 8> hash_code{};
 
     Hash64City() {
         for (unsigned char& i : hash_code) {
@@ -208,7 +208,7 @@ static_assert(sizeof(Hash64City) == 8);
 
 namespace inner_utils {
     template<typename T, std::size_t... Is>
-    constexpr std::array<T, sizeof...(Is)>
+    constexpr Moer::StaticArray<T, sizeof...(Is)>
     CreateArray(T value, std::index_sequence<Is...>) {
         // cast Is to void to remove the warning: unused value
         return {{(static_cast<void>(Is), value)...}};
@@ -216,7 +216,7 @@ namespace inner_utils {
 }// namespace inner_utils
 
 template<std::size_t N, typename T>
-constexpr std::array<T, N> CreateArray(const T& value) {
+constexpr Moer::StaticArray<T, N> CreateArray(const T& value) {
     return inner_utils::CreateArray(value, std::make_index_sequence<N>());
 }
 
@@ -227,9 +227,9 @@ class HashedName {
 
     static std::atomic_uint32_t s_size;
 
-    static std::shared_mutex                s_rw_mutex;
-    static std::map<const char*, uint32_t>& GetNameToHash() {
-        static std::map<const char*, uint32_t> s_name_to_hash;
+    static std::shared_mutex                 s_rw_mutex;
+    static Moer::Map<const char*, uint32_t>& GetNameToHash() {
+        static Moer::Map<const char*, uint32_t> s_name_to_hash;
         return s_name_to_hash;
     }
 

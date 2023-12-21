@@ -4,14 +4,20 @@
 #include "RHIResource.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
-#include <vector>
+#include "RenderAPI.h"
+#include "Core.h"
+#include "taskgraph/TaskGraph.h"
+#include "taskgraph/ThreadManager.h"
+
 enum class ERHIType {
     Vulkan,
     D3D12
 };
 class RHIGraphicsCommandList;
 class RHIComputeCommandList;
+class RHICopyCommandList;
 class RHICommandQueue;
+class RHICommandAllocator;
 class Shader;
 
 struct RHIInitInfo {
@@ -77,33 +83,33 @@ public:
     virtual RHIComputePipelineStateRef RHICreateComputePipelineState(RHIComputeShader* _compute_shader, RHIPipelineBinaryDataLibrary* _pipeline_library) {
         return RHICreateComputePipelineState(_compute_shader);
     }
-    virtual void         RHIUploadBuffer(RHIBufferRef _buffer_ref, const uint8_t* _data, uint32_t _size) = 0;
-    virtual void         RHICopyBuffer(RHIBuffer* _src, RHIBuffer* _dst)                                 = 0;
-    virtual RHIBufferRef RHICreateBuffer(const RHIBufferCreateInfo& info)                                = 0;
-    virtual void*        RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size)              = 0;
-    virtual void         RHIUnmapBuffer(RHIBuffer* _buffer)                                              = 0;
+    virtual RHIBufferRef RHICreateBuffer(const RHIBufferCreateInfo& info)                   = 0;
+    virtual void*        RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size) = 0;
+    virtual void         RHIUnmapBuffer(RHIBuffer* _buffer)                                 = 0;
 
     virtual RHITextureRef RHICreateTexture(const RHITextureCreateInfo& info) = 0;
 
     virtual RHIShaderResourceViewRef  RHICreateShaderResourceView(RHIViewableResource* _resource, const RHIViewInfo& _view_info)  = 0;
     virtual RHIUnorderedAccessViewRef RHICreateUnorderedAccessView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) = 0;
 
-    virtual RHICommandQueue* CreateCommandQueue(ECommandQueueType type) = 0;
+    virtual RHICommandQueue* RHICreateCommandQueue(ECommandQueueType type) = 0;
     // DX12 only: _initial_state
-    virtual RHIGraphicsCommandList* CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state = nullptr) = 0;
-    virtual RHIComputeCommandList*  CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr)   = 0;
+    // virtual RHIGraphicsCommandList* CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state = nullptr)                                     = 0;
+    virtual RHIGraphicsCommandList* RHICreateGraphicsCommandList(RHICommandAllocator* _allocator, RHIGraphicsPipelineState* _initial_state = nullptr) = 0;
+    // virtual RHIComputeCommandList*  CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr)                                       = 0;
+    virtual RHICopyCommandList* RHICreateCopyCommandList(RHICommandAllocator* _allocator)                                                                                        = 0;
+    virtual void                RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant = false) = 0;
 
-    virtual void RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso, const RHIBatchedShaderParameters& _batched_params) = 0;
-
+    virtual RHICommandAllocator* RHIGetCurrentCommandAllocator() = 0;
 #pragma endregion
 
-#pragma region GUI
+    // #pragma region GUI
 
-    virtual bool GUIInit(uint32_t _num_frames_in_flight);
-    virtual void GUIShutDown();
-    virtual void GUINewFrame();
-    virtual void GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list);
-#pragma endregion
+    // virtual bool GUIInit(uint32_t _num_frames_in_flight);
+    // virtual void GUIShutDown();
+    // virtual void GUINewFrame();
+    // virtual void GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list);
+    // #pragma endregion
 
 #pragma region Viewport
 
@@ -120,11 +126,66 @@ public:
     virtual void RHIPresentViewport(RHIViewport* _viewport, RHIFence* _render_end_fence) = 0;
 #pragma endregion
 
+#pragma region RenderThread methods
+
+    void RHIFlushPendingDeletes();
+#pragma endregion
+
 protected:
     ERHIType rhi_type;
     uint32_t max_frame_in_flight;
 };
 
-extern RHI* g_rhi;
+extern RENDER_API RHI* g_rhi;
 
+class RenderThreadTask {
+public:
+    // All render commands run on the render thread
+    static EThread::Type GetPreferredThread() {
+        assert(EThread::ERenderThread != EThread::EMainThread);
+        return EThread::ERenderThread;
+    }
+};
+
+template<typename TaskNameType, typename Funtion>
+class RenderThreadTaskType : public RenderThreadTask {
+public:
+    RenderThreadTaskType(Funtion&& _func) : funtion(std::forward<Funtion>(_func)) {}
+    static EThread::Type GetPreferredThread() {
+        return EThread::ERenderThread;
+    }
+    void Fire(EThread::Type _thread, const GraphEventRef& _my_completion_graph_event) {
+        //TODO: profiler here
+        funtion();
+    }
+
+protected:
+    Funtion funtion;
+};
+
+struct UndefinedRenderTaskName {
+    static const char* Name() {
+        return "UndefinedRenderTask";
+    }
+};
+/**
+ * @brief Enqueue a render task to render thread,
+ *        if current thread is render thread, execute immediately
+ * 
+ * @tparam TaskNameType task name type for statistic profiling
+ * @tparam Funtion lambda type
+ * @param _func lambda function
+ * @return FORCEINLINE 
+ */
+template<typename Funtion, typename TaskNameType = UndefinedRenderTaskName>
+FORCEINLINE void EnqueueRenderTask(Funtion&& _func) {
+    using TRenderTaskType = RenderThreadTaskType<TaskNameType, Funtion>;
+    if (Moer::IsCurrentlyGameThread()) {
+        GraphTask<TRenderTaskType>::CreateTask().ConstructAndDispatchWhenReady(std::forward<Funtion>(_func));
+    } else {
+        //immediately execute on render thread
+        TRenderTaskType task(std::forward<Funtion>(_func));
+        task.Fire(EThread::EMainThread, nullptr);
+    }
+}
 #endif

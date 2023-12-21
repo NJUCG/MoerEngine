@@ -9,6 +9,10 @@
 #include "platform/Platform.h"
 #include "taskgraph/Event.h"
 
+#define MAIN_THREAD_NAME    "MainThread"
+#define RENDER_THREAD_NAME  "RenderThread"
+#define UNKNOWN_THREAD_NAME "UnknownThread"
+
 CORE_API uint32_t ThreadManager::g_game_thread_id   = 0;
 CORE_API uint32_t ThreadManager::g_render_thread_id = 0;
 
@@ -30,13 +34,19 @@ ThreadManager::~ThreadManager() {
     ShutDown();
 }
 void ThreadManager::AddThread(uint32_t id, RunnableThread* thread) {
-    if (m_threads.find(id) == m_threads.end()) m_threads.emplace(id, thread);
+    if (m_threads.find(id) == m_threads.end()) {
+        m_threads.emplace(id, thread);
+        m_thread_indexs.emplace(id, m_threads.size() - 1);
+    }
 }
 
 void ThreadManager::RemoveThread(RunnableThread* thread) {
     assert(thread != nullptr);
     auto target = m_threads.find(thread->id);
-    if (target != m_threads.end()) m_threads.erase(target);
+    if (target != m_threads.end()) {
+        m_threads.erase(target);
+        m_thread_indexs.erase(thread->id);
+    }
 }
 void ThreadManager::SetGameThreadID(uint32_t _game_thread_id) {
     g_game_thread_id = _game_thread_id;
@@ -56,15 +66,20 @@ void ThreadManager::Tick() {
 
 void ThreadManager::Initialize() {
     g_game_thread_id = Platform::GetCurrentThreadID();
+    AddThread(g_game_thread_id, nullptr);
 }
 uint32_t ThreadManager::GetCurrentThreadID() {
     return Platform::GetCurrentThreadID();
 }
 
-std::string ThreadManager::GetThreadName(uint32_t id) {
+uint32_t ThreadManager::GetCurrentThreadIndex() {
+    return Instance().m_thread_indexs.at(Platform::GetCurrentThreadID());
+}
 
-    if (id == g_game_thread_id) return "GameThread";
-    if (id == g_render_thread_id) return "RenderThread";
+const char* ThreadManager::GetThreadName(uint32_t id) {
+
+    if (id == g_game_thread_id) return MAIN_THREAD_NAME;
+    if (id == g_render_thread_id) return RENDER_THREAD_NAME;
     return Instance().GetRunnableThreadName(id);
 }
 
@@ -81,10 +96,10 @@ void ThreadManager::ShutDown() {
     }
 }
 
-std::string ThreadManager::GetRunnableThreadName(uint32_t id) {
+const char* ThreadManager::GetRunnableThreadName(uint32_t id) {
     auto target = m_threads.find(id);
-    if (target != m_threads.end()) return target->second->name;
-    return "NameUnknown";
+    if (target != m_threads.end()) return target->second->name.c_str();
+    return UNKNOWN_THREAD_NAME;
 }
 
 RunnableThread* ThreadManager::GetRunnableThread(uint32_t id) {
@@ -102,7 +117,7 @@ RunnableThread::~RunnableThread() {
     Join();
 }
 
-RunnableThread* RunnableThread::Create(Runnable* runnable, std::string name, uint64_t affinity_mask) {
+RunnableThread* RunnableThread::Create(Runnable* runnable, const std::string& name, uint64_t affinity_mask) {
 
     RunnableThread* created_thread = nullptr;
 
@@ -115,12 +130,12 @@ RunnableThread* RunnableThread::Create(Runnable* runnable, std::string name, uin
 void RunnableThread::Tick() {
 }
 
-RunnableThread::RunnableThread(Runnable* inRunnable, std::string name) {
+RunnableThread::RunnableThread(Runnable* inRunnable, const std::string& name) {
     assert(inRunnable != nullptr);
-    m_runnable    = inRunnable;
-    m_createEvent = EventPool::Get()->GetEvent(false);
-    m_endEvent    = EventPool::Get()->GetEvent(false);
-    EventRef create_event(m_createEvent);
+    m_runnable     = inRunnable;
+    m_create_event = EventPool::Get()->GetEvent(false);
+    m_end_event    = EventPool::Get()->GetEvent(false);
+    EventRef create_event(m_create_event);
     m_thread = new std::thread(&RunnableThread::Run, this);
     create_event.Wait();
     this->name = name;
@@ -130,18 +145,18 @@ RunnableThread::RunnableThread(Runnable* inRunnable, std::string name) {
 uint32_t RunnableThread::Run() {
     assert(m_runnable != nullptr);
     id = Platform::GetCurrentThreadID();
-    m_createEvent->Trigger();
+    m_create_event->Trigger();
     m_runnable->Init();
 
     uint32_t exit_code = m_runnable->Run();
 
     m_runnable->Exit();
-    m_endEvent->Trigger();
+    m_end_event->Trigger();
     return exit_code;
 }
 
 void RunnableThread::WaitUntilFinished() {
-    m_endEvent->Wait();
+    m_end_event->Wait();
 }
 
 uint32_t TestRunnanble::Run() {

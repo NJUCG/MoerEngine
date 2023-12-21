@@ -1,6 +1,7 @@
 #include "misc/Hash.h"
 #include "PicoSHA2.h"
 #include "CityHash.h"
+#include <string>
 
 static_assert(picosha2::k_digest_size == 32);
 
@@ -26,7 +27,7 @@ std::string Hash64City::ToString() {
         }
         oss.setf(std::ios::dec, std::ios::basefield);
     }
-    return oss.str();
+    return oss.str().data();
 }
 
 void Hash64City::FromString(std::string_view& src) {

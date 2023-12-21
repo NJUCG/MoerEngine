@@ -1,4 +1,5 @@
 #include "taskgraph/GraphTask.h"
+#include "misc/STL.h"
 #include "taskgraph/TaskGraph.h"
 #include "taskgraph/Event.h"
 //class GraphEventPool {
@@ -17,9 +18,11 @@ GraphEventRef GraphEvent::CreateGraphEvent() {
 };
 
 bool GraphEvent::AddSubsequent(BaseGraphTask* subsequent) {
+    // return m_subsequents.TryPush(subsequent);
+    assert(subsequent != nullptr);
     return m_subsequents.TryPush(subsequent);
 }
-bool GraphEvent::IsComplete() {
+bool GraphEvent::IsComplete() const {
     return m_subsequents.IsClosed();
 }
 void BaseGraphTask::QueueTask(EThread::Type currentThread, bool shouldWakeupWorker) {
@@ -33,8 +36,8 @@ void BaseGraphTask::PrerequestsComplete(EThread::Type currentThread, int32_t fin
     }
 }
 
-void GraphEvent::TryUnlockSubsequents(std::vector<BaseGraphTask*>& tasks, EThread::Type currentThread) {
-    if (tasks.size() > 0) {
+void GraphEvent::TryUnlockSubsequents(Moer::Array<BaseGraphTask*>& tasks, EThread::Type currentThread) {
+    if (m_events_to_wait.size() > 0) {
         GraphEventArray temp_events;
         std::swap(m_events_to_wait, temp_events);// m_events removed
 
@@ -51,11 +54,12 @@ void GraphEvent::TryUnlockSubsequents(std::vector<BaseGraphTask*>& tasks, EThrea
         if (generate_empty_task) {
             EThread::Type collection_thread = EThread::SetPriority(EThread::UNKNOWN_THREAD, EThread::HIGH_PRI);
             GraphTask<EmptyGraphTask>::CreateTask(GraphEventRef(this), &temp_events, currentThread).ConstructAndDispatchWhenReady(collection_thread);
+            return;
         }
-        return;
     }
-    std::vector<BaseGraphTask*> poped;
-    m_subsequents.PopAll(poped);
+    Moer::Array<BaseGraphTask*> poped;
+    m_subsequents.ComsumeAllAndClose(poped);
+    std::reverse(poped.begin(), poped.end());
     bool should_wake_up_worker = false;// todo: useless in this version
     for (BaseGraphTask* task : poped) {
         assert(task != nullptr);
@@ -63,7 +67,7 @@ void GraphEvent::TryUnlockSubsequents(std::vector<BaseGraphTask*>& tasks, EThrea
     }
 }
 void GraphEvent::TryUnlockSubsequents(EThread::Type currentThread) {
-    std::vector<BaseGraphTask*> tasks;
+    Moer::Array<BaseGraphTask*> tasks;
     TryUnlockSubsequents(tasks, currentThread);
 }
 

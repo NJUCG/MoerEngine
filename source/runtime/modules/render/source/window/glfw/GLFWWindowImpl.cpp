@@ -1,4 +1,5 @@
 #include "GLFWWindowImpl.h"
+#include "config/ConfigManager.h"
 #include "rhi/RHI.h"
 #include "rhi/vulkan/VulkanRHI.h"
 #include "window/WindowContext.h"
@@ -6,6 +7,8 @@
 //define vulkan ahead of glfw
 #include "vulkan/vulkan.h"
 #include "GLFW/glfw3.h"
+#include "IconsFontAwesome6.h"
+#include <fstream>
 #if PLATFORM_WINDOWS
 //for dx12
 //https://docs.microsoft.com/en-us/windows/win32/api/dxgi1_2/nf-dxgi1_2-idxgifactory2-createswapchainforhwnd
@@ -20,30 +23,75 @@
 #include <string.h>
 
 namespace Moer {
+
     GLFWWindowImpl::GLFWWindowImpl() {
     }
     GLFWWindowImpl::~GLFWWindowImpl() {
     }
     void GLFWWindowImpl::PollEvents() const { glfwPollEvents(); }
 
+    const ImWchar* FontTypeToRange(Moer::EFontType _font_range_type) {
+        using namespace Moer;
+        static const ImWchar icons_ranges[] = {ICON_MIN_FA, ICON_MAX_16_FA, 0};
+
+        switch (_font_range_type) {
+            case EFontType::Greek:
+                return ImGui::GetIO().Fonts->GetGlyphRangesGreek();
+            case EFontType::Chinese:
+                return ImGui::GetIO().Fonts->GetGlyphRangesChineseFull();
+            case EFontType::Korean:
+                return ImGui::GetIO().Fonts->GetGlyphRangesKorean();
+            case EFontType::Japanese:
+                return ImGui::GetIO().Fonts->GetGlyphRangesJapanese();
+            case EFontType::Cyrillic:
+                return ImGui::GetIO().Fonts->GetGlyphRangesCyrillic();
+            case EFontType::Thai:
+                return ImGui::GetIO().Fonts->GetGlyphRangesThai();
+            case EFontType::Vietnamese:
+                return ImGui::GetIO().Fonts->GetGlyphRangesVietnamese();
+            case EFontType::Default:
+                return ImGui::GetIO().Fonts->GetGlyphRangesDefault();
+            case EFontType::Icon:
+                return icons_ranges;
+            default:
+                break;
+        }
+        return ImGui::GetIO().Fonts->GetGlyphRangesDefault();
+    }
+
     void GLFWWindowImpl::GuiInit(const GuiWindowInitInfo& _init_info) {
+
         GuiWindowInit(_init_info);
+        ImGuiIO& io = ImGui::GetIO();
+        io.Fonts->AddFontDefault();
+        //icon fonts
+        {
+            AddFont({FONT_ICON_FILE_NAME_FAS,
+                     13.0f,
+                     EFontType::Icon});
+        }
+
+        {
+            AddFont({"msyh.ttc",
+                     20.0f,
+                     EFontType::Chinese});
+        }
     };
 
-    void GLFWWindowImpl::Init(const SurfaceInfo& info) {
+    void GLFWWindowImpl::Init(const SurfaceInitInfo& info) {
         if (!glfwInit()) {
             //error log and quit
             LOG_ERROR("Window init fail.");
             assert(0 && "Window init fail.");
         }
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-        if (strcmp(info.rhi_name, "D3D12")) {
+        if (info.rhi_name == "D3D12") {
             InitD3D12();
         } else {
             InitVulkan();
         }
 
-        GLFWwindow* window = glfwCreateWindow(info.width, info.height, info.title, nullptr, nullptr);
+        GLFWwindow* window = glfwCreateWindow(info.width, info.height, info.title.c_str(), nullptr, nullptr);
 
         glfwSetWindowUserPointer(window, this);
 
@@ -52,10 +100,13 @@ namespace Moer {
         GuiWindowInitInfo window_info{.window              = window,
                                       .b_install_callbacks = true,
                                       .rhi_type            = g_rhi->GetType()};
+
+        //register engine io callbacks MARK.. remains problems
+        InstallInterface(&main_window_handle);
         //install imgui io callbacks
         GuiInit(window_info);
-        //register engine io callbacks
-        InstallInterface(&main_window_handle);
+        // ImGui::CreateContext();
+        // ImGui_ImplGlfw_InitForVulkan(window, true);
     }
 
     void GLFWWindowImpl::InstallInterface(WindowHandle* _handle) {
@@ -125,7 +176,32 @@ namespace Moer {
                 RegisterOnWindowFocusFunc(&main_window_handle, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1));
         }
     }
+
+    void GLFWWindowImpl::AddFont(const FontDesc& _desc) {
+        const auto font_base_path = Moer::ConfigManager::GetInstance().GetEditorResourcePath() / FONTS_DIR;
+        const auto font_path      = font_base_path / _desc.font_path;
+
+        auto& io = ImGui::GetIO();
+
+        const ImWchar* font_range = FontTypeToRange(_desc.font_type);
+        ImFontConfig   icons_config;
+        icons_config.MergeMode            = false;
+        icons_config.PixelSnapH           = true;
+        icons_config.FontDataOwnedByAtlas = false;
+        if (_desc.font_type == Moer::EFontType::Icon) {
+            float icon_font_size = _desc.font_size * 2.0f / 3.0f;// FontAwesome fonts need to have their sizes reduced by 2.0f/3.0f in order to align correctly
+
+            icons_config.MergeMode        = true;
+            icons_config.GlyphMinAdvanceX = icon_font_size;
+
+            io.Fonts->AddFontFromFileTTF(font_path.generic_string().data(), icon_font_size, &icons_config, font_range);
+        } else {
+            io.FontDefault = io.Fonts->AddFontFromFileTTF(font_path.generic_string().data(), _desc.font_size, &icons_config, font_range);
+        }
+    }
+
     void GLFWWindowImpl::Tick() {
+        PollEvents();
         GuiUpdate();
     }
     void GLFWWindowImpl::ShutDown() {

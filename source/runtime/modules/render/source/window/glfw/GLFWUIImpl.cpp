@@ -444,8 +444,9 @@ namespace Moer {
 
         ImGuiIO& io = ImGui::GetIO();
         io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-        io.ConfigDockingAlwaysTabBar         = true;
-        io.ConfigWindowsMoveFromTitleBarOnly = true;
+        io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
+        // io.ConfigDockingAlwaysTabBar         = true;
+        // io.ConfigWindowsMoveFromTitleBarOnly = true;
 
         IM_ASSERT(io.BackendPlatformUserData == nullptr && "Already initialized a platform backend!");
         //printf("GLFW_VERSION: %d.%d.%d (%d)", GLFW_VERSION_MAJOR, GLFW_VERSION_MINOR, GLFW_VERSION_REVISION, GLFW_VERSION_COMBINED);

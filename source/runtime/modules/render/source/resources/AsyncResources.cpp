@@ -1,0 +1,295 @@
+#include "resources/AsyncResources.h"
+#include "Core.h"
+#include "misc/MMemory.h"
+#include "rhi/RHI.h"
+#include "rhi/RHICommand.h"
+#include "rhi/RHICommon.h"
+#include "rhi/RHIResource.h"
+#include "rhi/RHIResourceInitilizer.h"
+
+#include "taskgraph/GraphTask.h"
+#include "taskgraph/TaskGraph.h"
+#include "taskgraph/ThreadManager.h"
+
+#include <atomic>
+#include <cstdint>
+namespace Moer {
+    // struct VirtualViewport::VirtualViewportData {
+    //     VirtualViewportData()  = default;
+    //     ~VirtualViewportData() = default;
+
+    //     RHITextureCreateInfo upload_texture_create_info;
+
+    //     RHIFenceRef present_fence;
+
+    //     RHITextureRef present_texture;
+
+    //     Moer::Array<RHITextureRef>             swapchain_textures;
+    //     Moer::Array<RHIUnorderedAccessViewRef> swapchain_uavs;
+    //     std::atomic_uint64_t                   frame_index = 0;
+
+    //     RHICommandQueue* copy_queue;
+
+    //     RHIGraphicsCommandList* copy_cmd_list;
+    // };
+
+    class VirtualViewport::Impl {
+
+    public:
+        Impl(const VirtualViewportCreateInfo& create_info);
+        ~Impl();
+        //call on main thread
+        void OnResize(Moer::Vector2i extent);
+
+        //call from render thread
+        VirtualViewportNextBackBufferInfo GetNextBackBuffer();
+
+        RHIUnorderedAccessViewRef GetNextBackBufferUAV(uint32_t index);
+
+        void Present(RHIFenceRef _render_fence);
+
+        const VirtualViewportInfo& GetInfo() const { return info; }
+
+        RHIShaderResourceViewRef GetPresentTextureSRV() { return present_texture_srv; }
+
+    private:
+        friend VirtualViewport;
+        void InitRenderThread();
+        void ResizeRenderThread(Moer::Vector2i extent);
+
+// in Application mode, Present operations happens on render thread
+#if !defined(EDITOR_MODE_ON)
+        RHIViewportRef viewport;
+#endif
+        VirtualViewportInfo info;
+
+    private:
+        RHITextureCreateInfo upload_texture_create_info;
+
+        RHIFenceRef present_fence;
+
+        RHITextureRef            present_texture;
+        RHIShaderResourceViewRef present_texture_srv;
+
+        Moer::Array<RHITextureRef>             swapchain_textures;
+        Moer::Array<RHIUnorderedAccessViewRef> swapchain_uavs;
+        uint64_t                               frame_index     = 0;
+        uint64_t                               presented_index = 0;
+
+        RHICommandQueue* copy_queue;
+
+        RHIGraphicsCommandList* copy_cmd_list;
+    };
+    VirtualViewport::VirtualViewport(const VirtualViewportCreateInfo& create_info) {
+        // Implementation of UploadTexture constructor
+        // ...
+        impl = MoerNew(Impl)(create_info);
+    }
+
+    VirtualViewport::~VirtualViewport() {
+        // Implementation of UploadTexture destructor
+        // ...
+        MoerDelete(impl);
+    }
+
+    void VirtualViewport::InitRenderThread() {
+        impl->InitRenderThread();
+    }
+
+    void VirtualViewport::OnResize(Moer::Vector2i extent) {
+        // Implementation of OnResize method
+        // ...
+        impl->OnResize(extent);
+    }
+
+    void VirtualViewport::Present(RHIFenceRef _render_fence) {
+        impl->Present(_render_fence);
+    }
+
+    void VirtualViewport::ResizeRenderThread(Moer::Vector2i extent) {
+        // Implementation of ResizeRenderThread method
+        // ...
+        assert(Moer::IsCurrentlyRenderThread());
+        impl->ResizeRenderThread(extent);
+    }
+
+    const VirtualViewportInfo& VirtualViewport::GetInfo() const {
+        return impl->GetInfo();
+    }
+
+    VirtualViewportNextBackBufferInfo VirtualViewport::GetNextBackBuffer() {
+        return impl->GetNextBackBuffer();
+    }
+
+    RHIUnorderedAccessViewRef VirtualViewport::GetNextBackBufferUAV(uint32_t index) {
+        return impl->GetNextBackBufferUAV(index);
+    }
+
+    RHIShaderResourceView* VirtualViewport::GetPresentTextureSRV() {
+        return impl->GetPresentTextureSRV();
+    }
+
+    VirtualViewport::Impl::~Impl() {
+    }
+    VirtualViewport::Impl::Impl(const VirtualViewportCreateInfo& create_info) {
+
+        present_fence = g_rhi->RHICreateFence({.usage = EFenceUsageFlags::TIMELINE});
+
+        copy_queue    = g_rhi->RHICreateCommandQueue(ECommandQueueType::GRAPHICS);
+        copy_cmd_list = g_rhi->RHICreateGraphicsCommandList(g_rhi->RHIGetCurrentCommandAllocator());
+
+        info.back_buffer_count = create_info.back_buffer_count;
+        info.extent            = create_info.extent;
+        info.format            = create_info.format;
+        info.name              = create_info.name;
+
+        upload_texture_create_info = RHITextureCreateInfo::Create2D("virtual viewport",
+                                                                    create_info.extent,
+                                                                    create_info.format)
+                                         .SetArraySize(1)
+                                         .SetNumMips(1)
+                                         .SetClearAttachment({})
+                                         .SetInitialLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED)
+                                         .SetUsageFlags(
+                                             ETextureUsageFlags::COLOR_ATTACHMENT |
+                                             ETextureUsageFlags::TRANSFER_SRC |
+                                             ETextureUsageFlags::SRGB |
+                                             ETextureUsageFlags::SAMPLED);
+
+        auto present_texture_create_info = upload_texture_create_info;
+
+        present_texture     = g_rhi->RHICreateTexture(present_texture_create_info.SetUsageFlags(
+            ETextureUsageFlags::COLOR_ATTACHMENT |
+            ETextureUsageFlags::SAMPLED |
+            ETextureUsageFlags::TRANSFER_DST));
+        present_texture_srv = g_rhi->RHICreateShaderResourceView(present_texture,
+                                                                 RHIViewInfo::CreateTextureSRVInfo()
+                                                                     .SetArrayRange(0, 1)
+                                                                     .SetMipRange(0, 1)
+                                                                     .SetFormat(info.format)
+                                                                     .SetDimension(ETextureDimension::TEX_2D));
+
+        auto* texture = g_rhi->RHIGetViewportBackBufferUAV(g_rhi->RHIGetMainViewport(), 0)->GetTexture();
+        swapchain_textures.resize(info.back_buffer_count);
+        swapchain_uavs.resize(info.back_buffer_count);
+        for (int i = 0; i < info.back_buffer_count; ++i) {
+            swapchain_textures[i] = g_rhi->RHICreateTexture(upload_texture_create_info);
+            swapchain_uavs[i] =
+                g_rhi->RHICreateUnorderedAccessView(swapchain_textures[i],
+                                                    RHIViewInfo::CreateTextureUAVInfo()
+                                                        .SetArrayRange(0, 1)
+                                                        .SetMipLevel(0)
+                                                        .SetFormat(info.format)
+                                                        .SetDimension(ETextureDimension::TEX_2D));
+        }
+        RHIFenceRef fence = g_rhi->RHICreateFence({.usage = EFenceUsageFlags::BINARY});
+
+        RHIBarrierDependencyInfo barrier_info;
+        auto&                    barriers = barrier_info.texture_barriers;
+        barriers.resize(info.back_buffer_count + 1);
+
+        for (uint32_t i = 0; i < info.back_buffer_count; ++i) {
+            barriers[i].SetDstTextureLayout(TEXTURE_LAYOUT_TRANSFER_SRC);
+            barriers[i].SetTexture(swapchain_textures[i]);
+            barriers[i].SetSubResourceRange({});
+            barriers[i].SetSrcTextureLayout(TEXTURE_LAYOUT_UNDEFINED);
+        }
+        barriers[info.back_buffer_count].SetDstTextureLayout(TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        barriers[info.back_buffer_count].SetSrcTextureLayout(TEXTURE_LAYOUT_UNDEFINED);
+        barriers[info.back_buffer_count].SetTexture(present_texture);
+        barriers[info.back_buffer_count].SetSubResourceRange({});
+
+        copy_cmd_list->BeginRecording();
+        copy_cmd_list->SetPipelineBarrier(barrier_info);
+        copy_cmd_list->EndRecording();
+        RHISubmitInfo submit_info;
+        submit_info.Signal(fence, 0);
+        copy_queue->SubmitCommands(1, copy_cmd_list, &submit_info);
+        copy_queue->WaitForQueueComplete();
+    }
+
+    void VirtualViewport::Impl::InitRenderThread() {
+        // Implementation of InitRenderThread method
+        // ...
+        assert(Moer::IsCurrentlyRenderThread());
+    }
+
+    void VirtualViewport::Impl::OnResize(Moer::Vector2i extent) {
+    }
+
+    void VirtualViewport::Impl::Present(RHIFenceRef _render_fence) {
+        // Implementation of Present method
+        // ...
+        assert(Moer::IsCurrentlyGameThread() && "Present should be called on main thread");
+        uint64_t current_rendered = _render_fence->GetValue();
+        frame_index++;
+
+        presented_index = frame_index;
+
+        auto* cmd_list = copy_cmd_list;
+        present_fence->Wait(presented_index - 1);
+        cmd_list->Reset();
+        Offset3D           zero_offset = {0, 0, 0};
+        Offset2D           extent      = {upload_texture_create_info.extent.x, upload_texture_create_info.extent.y};
+        RHIBlitTextureInfo blit_info;
+        blit_info.filter         = SF_CUBIC;
+        blit_info.src_offsets[0] = zero_offset;
+        blit_info.src_offsets[1] = Offset3D(extent.x, extent.y, 1);
+        blit_info.dst_offsets[0] = zero_offset;
+        blit_info.dst_offsets[1] = Offset3D(extent.x, extent.y, 1);
+        blit_info.src_layout     = TEXTURE_LAYOUT_TRANSFER_SRC;
+        blit_info.dst_layout     = TEXTURE_LAYOUT_TRANSFER_DST;
+        blit_info.src_slice      = {};
+        blit_info.dst_slice      = {};
+
+        RHIBarrierDependencyInfo barrier_info{};
+        auto&                    barriers = barrier_info.texture_barriers;
+        barriers.emplace_back(RHITextureBarrierInfo::Create()
+                                  .SetTexture(present_texture)
+                                  .SetSrcTextureLayout(TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                                  .SetDstTextureLayout(TEXTURE_LAYOUT_TRANSFER_DST)
+                                  .SetSubResourceRange({}));
+        cmd_list->BeginRecording();
+        cmd_list->SetPipelineBarrier(barrier_info);
+        cmd_list->BlitTexture(blit_info,
+                              swapchain_textures[current_rendered % info.back_buffer_count],
+                              present_texture);
+
+        barriers[0].SetSrcTextureLayout(TEXTURE_LAYOUT_TRANSFER_DST);
+        barriers[0].SetDstTextureLayout(TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        cmd_list->SetPipelineBarrier(barrier_info);
+        cmd_list->EndRecording();
+
+        RHISubmitInfo submit_info;
+        submit_info.Wait(_render_fence, presented_index);
+        submit_info.Signal(present_fence, presented_index);
+
+        copy_queue->SubmitCommands(1, cmd_list, &submit_info);
+    }
+
+    void VirtualViewport::Impl::ResizeRenderThread(Moer::Vector2i extent) {
+        // Implementation of ResizeRenderThread method
+        // ...
+        assert(Moer::IsCurrentlyRenderThread());
+    }
+
+    VirtualViewportNextBackBufferInfo VirtualViewport::Impl::GetNextBackBuffer() {
+        // Implementation of GetNextBackBuffer method
+        // ...
+        assert(Moer::IsCurrentlyGameThread());
+        uint32_t backbuffer_index = frame_index % info.back_buffer_count;
+
+        return {
+            .backbuffer_index       = backbuffer_index,
+            .backbuffer_ready_fence = present_fence};
+    }
+
+    RHIUnorderedAccessViewRef VirtualViewport::Impl::GetNextBackBufferUAV(uint32_t index) {
+        // Implementation of GetNextBackBufferUAV method
+        // ...
+        assert(Moer::IsCurrentlyGameThread());
+
+        return swapchain_uavs[index];
+    }
+
+}// namespace Moer

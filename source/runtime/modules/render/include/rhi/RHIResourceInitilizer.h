@@ -4,12 +4,13 @@
 #include "RHICommon.h"
 #include "API_Macro.h"
 #include "misc/Hash.h"
+#include "misc/STL.h"
 #include "math/Math.h"
+#include "misc/STL.h"
 #include "rhi/RHICommon.h"
 
 #include <numeric>
-#include <array>
-#include <assert.h>
+#include <cassert>
 
 struct RHISamplerInitializer {
     RHISamplerInitializer() = default;
@@ -26,6 +27,7 @@ struct RHISamplerInitializer {
         uint32_t                            _border_color   = 0,
         EnumInByte<ESamplerCompareFunction> _compare_op     = SCF_NEVER)
         : filter(_filter),
+          texture_layout(_texture_layout),
           address_mode_u(_address_mode_u),
           address_mode_v(_address_mode_v),
           address_mode_w(_address_mode_w),
@@ -167,14 +169,14 @@ struct RHIBlendStateInitializer {
     }
 
     template<uint32_t attachment_num>
-    explicit RHIBlendStateInitializer(const std::array<AttachmentInitializer, attachment_num>& _attachment_descs) {
+    explicit RHIBlendStateInitializer(const Moer::StaticArray<AttachmentInitializer, attachment_num>& _attachment_descs) {
         static_assert(attachment_num < MAX_PASS_ATTACHMENT_COUNT);
         for (uint32_t i = 0; i < attachment_num; i++) {
             attachments[i] = _attachment_descs[i];
         }
     }
 
-    std::array<AttachmentInitializer, MAX_PASS_ATTACHMENT_COUNT> attachments;
+    Moer::StaticArray<AttachmentInitializer, MAX_PASS_ATTACHMENT_COUNT> attachments;
 
     RHI_API friend uint32_t GetHash(const RHIBlendStateInitializer::AttachmentInitializer& _attachment_desc);
     RHI_API friend bool     operator==(const RHIBlendStateInitializer::AttachmentInitializer& lhs, const RHIBlendStateInitializer::AttachmentInitializer& rhs);
@@ -207,8 +209,8 @@ namespace Moer {
 }
 struct RHIViewportInitializer {
     Moer::WindowHandle* window_handle;
-    Extent2D            size{0, 0};
     bool                b_is_full_screen;
+    bool                b_vsync;
     EPixelFormat        preferred_format;
 };
 
@@ -239,13 +241,25 @@ struct RHIClearAttachment {
         ClearDepthStencilValue depth_stencil;
     } value;
     EClearAttachment attachment;
-    RHIClearAttachment() : attachment(EClearAttachment::COLOR) {
-        value.color.float32[0] = 0.f;
-        value.color.float32[1] = 0.f;
-        value.color.float32[2] = 0.f;
-        value.color.float32[3] = 0.f;
+    RHIClearAttachment() : RHIClearAttachment(EClearAttachment::COLOR) {
     }
-    explicit RHIClearAttachment(EClearAttachment none) : attachment(none) {}
+    explicit RHIClearAttachment(EClearAttachment none) : attachment(none) {
+        switch (none) {
+
+            case EClearAttachment::NONE:
+
+            case EClearAttachment::COLOR:
+                value.color.float32[0] = 0.f;
+                value.color.float32[1] = 0.f;
+                value.color.float32[2] = 0.f;
+                value.color.float32[3] = 0.f;
+                break;
+            case EClearAttachment::DEPTH_STENCIL:
+                value.depth_stencil.depth   = 0.f;
+                value.depth_stencil.stencil = 0;
+                break;
+        }
+    }
     explicit RHIClearAttachment(float _depth, uint32_t _stencil = 0) : attachment(EClearAttachment::DEPTH_STENCIL) {
         value.depth_stencil.depth   = _depth;
         value.depth_stencil.stencil = _stencil;
@@ -307,6 +321,13 @@ struct RHISubresourceSlice {
           plane_index(_plane_index),
           plane_count(s_all) {}
 
+    RHISubresourceSlice() : RHISubresourceSlice(
+                                ETextureAspectFlags::COLOR,
+                                0,
+                                0,
+                                1,
+                                0,
+                                s_all) {}
     inline bool IsAllArraySlices() const {
         return array_count == s_all;
     }
@@ -335,10 +356,10 @@ struct RHISubresourceRange : public RHISubresourceSlice {
 
     uint8_t num_mips = s_all;
 
-    RHISubresourceRange(ETextureAspectFlags _aspect = ETextureAspectFlags::COLOR) : RHISubresourceSlice(
-                                                                                        _aspect,
-                                                                                        0,
-                                                                                        0){};
+    RHISubresourceRange(ETextureAspectFlags _aspect) : RHISubresourceSlice(
+                                                           _aspect,
+                                                           0,
+                                                           0){};
     RHISubresourceRange(
         ETextureAspectFlags _aspect,
         uint32_t            _mip_index,
@@ -359,6 +380,8 @@ struct RHISubresourceRange : public RHISubresourceSlice {
                               _mip_index,
                               _array_index,
                               _plane_index) {}
+
+    RHISubresourceRange() : RHISubresourceRange(ETextureAspectFlags::COLOR, 0, 1, 0, 1, 0, (uint32_t)s_all) {}
     inline bool IsAllMips() const {
         return num_mips == s_all;
     }
@@ -516,16 +539,15 @@ struct RHIBufferRegion {
 struct RHICopyBufferInfo {
     RHICopyBufferInfo() = default;
 
-    RHICopyBufferInfo(uint32_t _region_count, RHIBufferRegion* _regions) : region_count(_region_count), p_regions(_regions) {
-        assert(Validate() && "data not valid");
-    }
-
-    uint32_t         region_count;
-    RHIBufferRegion* p_regions;
+    Moer::Array<RHIBufferRegion> regions;
 
 private:
     bool Validate() const {
-        return region_count > 0 && p_regions != nullptr;
+        uint64_t total_size = 0;
+        for (auto& region : regions) {
+            total_size += region.size;
+        }
+        return total_size > 0;
     }
 };
 

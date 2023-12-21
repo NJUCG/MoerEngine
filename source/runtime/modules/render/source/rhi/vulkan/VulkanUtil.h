@@ -5,11 +5,9 @@
 #ifndef VULKAN_UTIL_H
 #define VULKAN_UTIL_H
 
+#include "misc/STL.h"
+
 #include <vulkan/vulkan.h>
-
-#include <vector>
-#include <string>
-
 namespace Moer {
 namespace RHI {
 namespace Vulkan {
@@ -17,8 +15,8 @@ namespace Vulkan {
 namespace Util {
     struct SwapChainSupportDetails {
         VkSurfaceCapabilitiesKHR        capabilities;
-        std::vector<VkSurfaceFormatKHR> formats;
-        std::vector<VkPresentModeKHR>   present_modes;
+        Moer::Array<VkSurfaceFormatKHR> formats;
+        Moer::Array<VkPresentModeKHR>   present_modes;
     };
     /** @brief Disable message boxes on fatal errors */
     extern bool error_mode_silent;
@@ -81,7 +79,7 @@ namespace Util {
     VkShaderModule LoadShader(const char* file_name, VkDevice device);
 
     // Create a SPIR-V shader from code
-    VkShaderModule CreateShaderModule(const std::vector<uint8_t>& _code, VkDevice device);
+    VkShaderModule CreateShaderModule(const Moer::Array<uint8_t>& _code, VkDevice device);
 
     /** @brief Checks if a file exists */
     bool FileExists(const std::string& filename);
@@ -90,6 +88,8 @@ namespace Util {
 
     VkSurfaceFormatKHR SelectSurfaceFormat(VkPhysicalDevice physical_device, VkSurfaceKHR surface, const VkFormat* request_formats, int request_formats_count, VkColorSpaceKHR request_color_space);
     VkPresentModeKHR   SelectPresentMode(VkPhysicalDevice physical_device, VkSurfaceKHR surface, const VkPresentModeKHR* request_modes, int request_modes_count);
+
+    uint32_t MemCrc32(const void* data, size_t data_size);
 }
 
 }

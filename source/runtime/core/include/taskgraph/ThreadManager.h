@@ -1,7 +1,7 @@
 ﻿#ifndef THREAD_MANAGER_H
 #define THREAD_MANAGER_H
 #include "API_Macro.h"
-#include <map>
+#include "misc/STL.h"
 #include <string>
 #include <thread>
 #include <assert.h>
@@ -13,10 +13,8 @@ class EThread {
 public:
     // 0-7
     enum Type : int32_t {
-        EGameThread,
+        EMainThread,
         ERenderThread,
-        ERHIThread,
-        EUIThread,
         NamedThreadCount,
         EAnyThread,
         INDEX_MASK          = 0xff,
@@ -29,9 +27,8 @@ public:
         LOW_PRI             = 0x400,
         PRIORITY_SHEFT      = 9,
         PRIORITY_MASK       = 0x600,//8-10 for priority
-        EGameThread_local   = EGameThread | LOCAL_QUEUE,
+        EGameThread_local   = EMainThread | LOCAL_QUEUE,
         ERenderThread_local = ERenderThread | LOCAL_QUEUE,
-        ERHIThread_local    = ERHIThread | LOCAL_QUEUE,
         PriorityCount       = 3,
         AnyThread_HighPri   = UNKNOWN_THREAD | HIGH_PRI,
         AnyThread_NormalPri = UNKNOWN_THREAD | NORMAL_PRI,
@@ -84,18 +81,20 @@ public:
     inline int32_t        GetNum() { return m_threads.size(); }
     void                  Tick();
     static ThreadManager& Instance();
-    static std::string    GetThreadName(uint32_t id);
+    static const char*    GetThreadName(uint32_t id);
     static void           SetGameThreadID(uint32_t _game_thread_id);
     static void           SetRenderThreadID(uint32_t _render_thread_id);
     static uint32_t       GetRenderThreadID();
     static uint32_t       GetGameThreadID();
     static uint32_t       GetCurrentThreadID();
+    static uint32_t       GetCurrentThreadIndex();
 
 private:
-    void                                ShutDown();
-    RunnableThread*                     GetRunnableThread(uint32_t id);
-    std::map<uint32_t, RunnableThread*> m_threads;
-    std::string                         GetRunnableThreadName(uint32_t id);
+    void                                 ShutDown();
+    RunnableThread*                      GetRunnableThread(uint32_t id);
+    Moer::Map<uint32_t, RunnableThread*> m_threads;
+    Moer::Map<uint32_t, uint32_t>        m_thread_indexs;
+    const char*                          GetRunnableThreadName(uint32_t id);
 };
 
 class RunnableThread {
@@ -103,9 +102,9 @@ class RunnableThread {
     friend class TaskGraph;
 
 public:
-    CORE_API static RunnableThread* Create(Runnable*   runnable,
-                                           std::string name,
-                                           uint64_t    affinity_mask);
+    CORE_API static RunnableThread* Create(Runnable*          runnable,
+                                           const std::string& name,
+                                           uint64_t           affinity_mask);
     virtual ~RunnableThread();
     void Tick();
     void Join() {
@@ -116,18 +115,18 @@ public:
     bool Joinable() { return m_thread->joinable(); }
     void WaitUntilFinished();
 
-    inline const std::string& getName() { return name; }
+    inline const std::string& GetName() { return name; }
 
 protected:
     void Setup(uint64_t affinity);
     RunnableThread(Runnable*,
-                   std::string name);
+                   const std::string& name);
     uint32_t Run();
 
 private:
     Runnable*    m_runnable;
-    Event*       m_createEvent;
-    Event*       m_endEvent;
+    Event*       m_create_event;
+    Event*       m_end_event;
     uint32_t     id;
     std::string  name;
     std::thread* m_thread;

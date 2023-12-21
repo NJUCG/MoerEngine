@@ -9,10 +9,11 @@
 #include "rhi/RHIResource.h"
 #include "rhi/vulkan/misc/VulkanTypeDefs.h"
 
+#include "misc/STL.h"
+
 #include "shader/ShaderCommon.h"
 
-#include <vector>
-#include <vulkan/vulkan.h>
+#include <vulkan/vulkan_core.h>
 
 #include <vk_mem_alloc.h>
 
@@ -95,6 +96,9 @@ public:
 
     static VkDescriptorType   METoVKDescriptorType(EShaderParameterType _type);
     static VkShaderStageFlags METoVKShaderStageFlags(EShaderType _type);
+
+    static uint32_t METoVkQueueFamilyIndex(ECommandQueueType _type, const VulkanDevice* _device);
+    static uint32_t METoVkQueueFamilyIndex(ECommandListType _type, const VulkanDevice* _device);
 };
 
 #pragma endregion
@@ -159,15 +163,16 @@ private:
     uint32_t m_binding_count   = 0;
     uint32_t m_attribute_count = 0;
 
-    std::array<VkVertexInputBindingDescription, MAX_VERTEX_ELEMENT_COUNT>   m_bindings;
-    std::array<VkVertexInputAttributeDescription, MAX_VERTEX_ELEMENT_COUNT> m_attributes;
+    Moer::StaticArray<VkVertexInputBindingDescription, MAX_VERTEX_ELEMENT_COUNT>   m_bindings;
+    Moer::StaticArray<VkVertexInputAttributeDescription, MAX_VERTEX_ELEMENT_COUNT> m_attributes;
 };
 
 class VulkanRHIRasterizationState : public RHIRasterizationState {
     friend VulkanRHIImpl;
 
 public:
-    explicit VulkanRHIRasterizationState() : RHIRasterizationState() {}
+    explicit VulkanRHIRasterizationState() : RHIRasterizationState(),
+                                             m_rasterization_state_create_info{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO} {}
 
     void GenerateRasterizationStateFromInitializer(const RHIRasterizationStateInitializer& _init);
 
@@ -185,7 +190,8 @@ private:
 
 class VulkanRHIDepthStencilState : public RHIDepthStencilState {
 public:
-    explicit VulkanRHIDepthStencilState() : RHIDepthStencilState() {}
+    explicit VulkanRHIDepthStencilState() : RHIDepthStencilState(),
+                                            m_depth_stencil_state_create_info(VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO) {}
 
     void GenerateDepthStencilStateFromInitializer(const RHIDepthStencilStateInitializer& _init);
 
@@ -223,8 +229,11 @@ public:
 
     void GenerateBlendStateFromInitializer(const RHIBlendStateInitializer& _init);
 
-    VkPipelineColorBlendStateCreateInfo GetHandle() const {
-        return m_blend_state_create_info;
+    // VkPipelineColorBlendStateCreateInfo GetHandle() const {
+    //     return m_blend_state_create_info;
+    // }
+    const VkPipelineColorBlendAttachmentState* GetAttachments() const {
+        return m_attachments.data();
     }
 
 private:
@@ -232,7 +241,8 @@ private:
     VkBlendFactor METoVKBlendFactor(EBlendFactor _blend_factor);
 
 private:
-    VkPipelineColorBlendStateCreateInfo m_blend_state_create_info;
+    // VkPipelineColorBlendStateCreateInfo                                        m_blend_state_create_info;
+    Moer::StaticArray<VkPipelineColorBlendAttachmentState, MAX_PASS_ATTACHMENT_COUNT> m_attachments;
 };
 
 #pragma region shader definitions
@@ -309,34 +319,19 @@ public:
         return m_descriptor_sets_layout;
     }
 
-    inline const std::vector<VkDescriptorSet>& GetDescriptorSets() const {
-        return m_descriptor_sets;
-    }
+    void GenerateDescriptorSetLayouts(const VulkanDevice* _device, Moer::Array<TDescriptorSetLayoutInfo>& _layout_mappings);
+    void CreateResourceCache();
 
-    inline const std::vector<VkShaderStageFlags>& GetConstantShaderStages() const {
-        return m_constant_shader_stages;
-    }
-
-    void GenerateDescriptorSetLayouts(const VulkanDevice* _device, std::unordered_map<uint8_t, TDescriptorSetLayout>& _layout_mappings);
-    void CreateDescriptorSets(VulkanDevice* _device);
-    void GenerateResourceCache();
-
-    static std::vector<VkPipelineShaderStageCreateInfo> METoVKShaderStageCreateInfo(const RHIShaderBoundStateInput& _shader_bound_state);
+    static Moer::Array<VkPipelineShaderStageCreateInfo> METoVKShaderStageCreateInfo(const RHIShaderBoundStateInput& _shader_bound_state);
     static VkPipelineVertexInputStateCreateInfo         METoVKVertexInputStateCreateInfo(const RHIVertexInputState* _vertex_input_state);
-    static std::vector<const Shader*>                   GetShaderInfoList(const RHIShaderBoundStateInput& _shader_bound_state);
+    static Moer::Array<const Shader*>                   GetShaderInfoList(const RHIShaderBoundStateInput& _shader_bound_state);
 
 private:
     VkPipeline       m_pipeline;
     VkPipelineLayout m_pipeline_layout;
     // descriptor sets
-    VulkanDescriptorSetsLayout*  m_descriptor_sets_layout;
-    std::vector<VkDescriptorSet> m_descriptor_sets;
-    // push constants
-    std::vector<VkShaderStageFlags> m_constant_shader_stages;
-    // dynamic states
-    std::array<VkViewport, 2> m_viewports;
-    std::array<VkRect2D, 2>   m_scissors;
-
+    VulkanDescriptorSetsLayout* m_descriptor_sets_layout;
+    // resource cache
     VulkanPipelineResourceCache* m_pipeline_state_cache;
 };
 #pragma endregion
@@ -373,10 +368,10 @@ private:
 
 class VulkanDeviceObject {
 public:
-    VulkanDeviceObject(VulkanDevice* device);
+    VulkanDeviceObject(VulkanDevice* _device = nullptr);
 
 protected:
-    VulkanDevice* device;
+    VulkanDevice* m_device;
 };
 class VulkanRHITexture final : public RHITexture, public VulkanDeviceObject {
     friend VulkanRHIImpl;
@@ -421,21 +416,21 @@ private:
 
 class VulkanRHIFence final : public RHIFence {
 public:
-    VulkanRHIFence(VulkanDevice* _device, EFenceUsage _usage);
+    VulkanRHIFence(VulkanDevice* _device, EFenceUsageFlags _usage);
     virtual ~VulkanRHIFence();
 
     uint64_t GetValue() const override;
 
-    void               Wait(uint64_t value) override;
-    inline VkSemaphore GetSemaphoreHandle() { return m_semaphore; }
-    inline VkSemaphore GetBinaryHandle() { return m_binary; }
-    inline EFenceUsage GetUsage() { return usage; }
+    void                    Wait(uint64_t value) override;
+    inline VkSemaphore      GetSemaphoreHandle() { return m_timeline; }
+    inline VkSemaphore      GetBinaryHandle() { return m_binary; }
+    inline EFenceUsageFlags GetUsage() { return usage; }
 
 private:
-    VulkanDevice* m_device;
-    VkSemaphore   m_semaphore;
-    VkSemaphore   m_binary;
-    EFenceUsage   usage;
+    VulkanDevice*    m_device;
+    VkSemaphore      m_timeline;
+    VkSemaphore      m_binary;
+    EFenceUsageFlags usage;
 };
 
 #pragma endregion
@@ -487,7 +482,7 @@ private:
 
 class VulkanViewport final : public RHIViewport {
 public:
-    VulkanViewport(class VulkanSwapChain* _swapchain);
+    VulkanViewport(class VulkanSwapChain* _swapchain, uint32_t _max_frame_in_flight);
     ~VulkanViewport();
     virtual void OnResize(Extent2D _size) override;
 
@@ -511,15 +506,15 @@ private:
 
     class VulkanSwapChain* swapchain;
 
-    std::vector<VulkanRHIFence*> image_aquire_fences;
+    Moer::Array<VulkanRHIFence*> image_aquire_fences;
 
-    std::vector<VulkanRHIUnorderedAccessView*> swapchain_image_uavs;
+    Moer::Array<VulkanRHIUnorderedAccessView*> swapchain_image_uavs;
 
-    std::vector<VulkanRHITexture*> swapchain_images;
+    Moer::Array<VulkanRHITexture*> swapchain_images;
 
     uint32_t frame_offset = 0;
 
-    uint32_t max_frame_in_flight = 3;
+    // uint32_t max_frame_in_flight = 3;
 };
 #pragma endregion
 

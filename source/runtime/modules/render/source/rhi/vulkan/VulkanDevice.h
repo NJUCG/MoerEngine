@@ -5,6 +5,7 @@
 #ifndef VULKAN_DEVICE_H
 #define VULKAN_DEVICE_H
 
+#include "misc/STL.h"
 #include "rhi/vulkan/misc/VulkanTypeDefs.h"
 #include "VulkanDeviceFeature.h"
 #include "VulkanExtension.h"
@@ -13,11 +14,12 @@
 #include <vk_mem_alloc.h>
 
 #include <optional>
-#include <vector>
-#include <map>
 
 class VulkanDescriptorSetsLayout;
-class VulkanDescriptorAllocator;
+class VulkanDescriptorSetAllocator;
+class VulkanDescriptorSetWriter;
+
+union VulkanHashableDescriptorInfo;
 
 struct QueueFamilyIndices {
     std::optional<uint32_t> graphics;
@@ -85,14 +87,8 @@ public:
     inline VkQueue GetTransferQueue() const {
         return m_transfer_queue;
     }
-    inline VkCommandPool GetDefaultCommandPool() const {
-        return m_default_pool;
-    }
-    inline VkCommandPool GetTransferCommandPool() const {
-        return m_transfer_pool;
-    }
-
-    void AllocateDescriptorSets(const VulkanDescriptorSetsLayout& _layouts, std::vector<VkDescriptorSet>& _sets);
+    class VulkanCommandAllocator* GetCurrentCommandAllocator();
+    bool                          GetDescriptorSets(uint32_t _hash_key, const VulkanDescriptorSetsLayout& _layout, Moer::Array<VulkanDescriptorSetWriter>& _writers, Moer::Array<VkDescriptorSet>& _sets);
 
 private:
     VkPhysicalDevice                  m_gpu;
@@ -109,27 +105,26 @@ private:
     VkQueue  m_compute_queue;
     VkQueue  m_transfer_queue;
 
-    VkCommandPool m_default_pool;
-    VkCommandPool m_transfer_pool;
+    VmaAllocator                  m_allocator;
+    VulkanDescriptorSetAllocator* m_descriptor_allocator;
 
-    VmaAllocator               m_allocator;
-    VulkanDescriptorAllocator* m_descriptor_allocator;
+    Moer::Array<class VulkanCommandAllocator*> m_command_allocators;
 
 private:
     VkPhysicalDevice SelectGpu(const DeviceInitializer& _init);
 
     void InitGpu(const DeviceInitializer& _initializer);
     void CreateDevice(const DeviceInitializer& _initializer);
-    void CreateCommandPools();
     void CreateMemoryAllocator();
     void CreateDescriptorAllocator();
+    void CreateCommandAllocators();
 
     TExtensionArray                  GetGpuExtensions(VkPhysicalDevice _gpu) const;
     VkPhysicalDeviceMemoryProperties GetMemoryProperties(VkPhysicalDevice _gpu) const;
     TQueueFamilyPropertiesArray      GetQueueFamilyProperties(VkPhysicalDevice _gpu) const;
 
     //    uint32_t                         GetMemoryType(uint32_t type_bits, VkMemoryPropertyFlags properties, VkBool32* mem_type_found = nullptr) const;
-    int32_t            GetQueueFamilyIndex(const std::vector<VkQueueFamilyProperties>& queue_family_props, VkQueueFlags _queue_flags) const;
+    int32_t            GetQueueFamilyIndex(const Moer::Array<VkQueueFamilyProperties>& queue_family_props, VkQueueFlags _queue_flags) const;
     QueueFamilyIndices QueryQueueFamilyIndices(VkPhysicalDevice _gpu, VkSurfaceKHR _surface) const;
 
     bool CheckEnabledExtensionsSupported(VkPhysicalDevice _gpu, const TVulkanDeviceExtensionArray& _enabled_extensions) const;

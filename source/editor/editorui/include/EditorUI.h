@@ -15,8 +15,6 @@ namespace Moer {
         void ShowInspectorWindow(bool* b_show);
 
     private:
-        WindowContext* main_window_context;
-
         bool m_b_show_editor_menu{true};
         bool m_b_show_main_window{true};
         bool m_b_show_inspector_window{true};

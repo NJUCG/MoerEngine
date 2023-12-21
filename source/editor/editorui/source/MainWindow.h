@@ -4,8 +4,13 @@ class MainWindow {
 
 public:
     // virtual void Init(const UICreateInfo& info);
-    virtual void Tick();
+    void Show();
 
     virtual ~MainWindow(){};
+
+    bool* ShowWindow() { return &b_show; };
+
+private:
+    bool b_show{true};
 };
 #endif

@@ -8,9 +8,10 @@
 #include "VulkanDescriptor.h"
 #include "VulkanRHIResource.h"
 #include "VulkanPipelineResourceCache.h"
-#include "VulkanCommandQueue.h"
+#include "VulkanCommand.h"
 
-#include "rhi/RHICommandQueue.h"
+#include "rhi/RHI.h"
+#include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
@@ -857,6 +858,32 @@ VkShaderStageFlags VulkanEnumTranslator::METoVKShaderStageFlags(EShaderType _typ
     }
 }
 
+uint32_t VulkanEnumTranslator::METoVkQueueFamilyIndex(ECommandQueueType _type, const VulkanDevice* _device) {
+    switch (_type) {
+        case ECommandQueueType::GRAPHICS:
+            return _device->GetQueueFamilyIndices().graphics.value();
+        case ECommandQueueType::COMPUTE:
+            return _device->GetQueueFamilyIndices().compute.value();
+        case ECommandQueueType::COPY:
+            return _device->GetQueueFamilyIndices().transfer.value();
+        default:
+            return VK_QUEUE_FAMILY_IGNORED;
+    }
+}
+
+uint32_t VulkanEnumTranslator::METoVkQueueFamilyIndex(ECommandListType _type, const VulkanDevice* _device) {
+    switch (_type) {
+        case ECommandListType::GRAPHICS:
+            return _device->GetQueueFamilyIndices().graphics.value();
+        case ECommandListType::COMPUTE:
+            return _device->GetQueueFamilyIndices().compute.value();
+        case ECommandListType::COPY:
+            return _device->GetQueueFamilyIndices().transfer.value();
+        default:
+            return _device->GetQueueFamilyIndices().graphics.value();
+    }
+}
+
 #pragma endregion
 
 void VulkanRHISampler::GenerateSamplerFromInitializer(const VulkanDevice* _device, const RHISamplerInitializer& _initializer) {
@@ -1042,7 +1069,7 @@ void VulkanRHIDepthStencilState::GenerateDepthStencilStateFromInitializer(const 
     m_depth_stencil_state_create_info.sType                 = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
     m_depth_stencil_state_create_info.pNext                 = nullptr;
     m_depth_stencil_state_create_info.flags                 = 0;
-    m_depth_stencil_state_create_info.depthTestEnable       = (_init.b_enable_depth_write || _init.depth_test_op != ECompareOption::CO_ALWAYS) ? VK_TRUE : VK_FALSE;
+    m_depth_stencil_state_create_info.depthTestEnable       = (_init.b_enable_depth_write || _init.depth_test_op == ECompareOption::CO_ALWAYS) ? VK_TRUE : VK_FALSE;
     m_depth_stencil_state_create_info.depthWriteEnable      = _init.b_enable_depth_write;
     m_depth_stencil_state_create_info.depthCompareOp        = VulkanRHIDepthStencilState::METoVKCompareOp(_init.depth_test_op);
     m_depth_stencil_state_create_info.depthBoundsTestEnable = VK_FALSE;// MARK...
@@ -1132,38 +1159,37 @@ void VulkanRHIMultisampleState::GenerateMultisampleStateFromInitializer(const RH
 }
 
 void VulkanRHIBlendState::GenerateBlendStateFromInitializer(const RHIBlendStateInitializer& _init) {
-    const auto n = 1;// MARK...
+    // const auto n = 1;// MARK...
 
-    std::vector<VkPipelineColorBlendAttachmentState> attachments(n);
-    for (size_t i = 0; i < n; ++i) {
+    // attachments.resize(MAX_PASS_ATTACHMENT_COUNT);
+    for (size_t i = 0; i < MAX_PASS_ATTACHMENT_COUNT; ++i) {
         auto& attachment_init = _init.attachments[i];
-        auto& attachment      = attachments[i];
 
-        attachment.blendEnable =
+        m_attachments[i].blendEnable =
             (attachment_init.color_blend_op != BO_ADD || attachment_init.color_dst_blend_factor != BF_ZERO || attachment_init.color_src_blend_factor != BF_ONE ||
              attachment_init.alpha_blend_op != BO_ADD || attachment_init.alpha_dst_blend_factor != BF_ZERO || attachment_init.alpha_src_blend_factor != BF_ONE) ?
                 VK_TRUE :
                 VK_FALSE;
-        attachment.srcColorBlendFactor = VulkanRHIBlendState::METoVKBlendFactor(attachment_init.color_src_blend_factor);
-        attachment.dstColorBlendFactor = VulkanRHIBlendState::METoVKBlendFactor(attachment_init.color_dst_blend_factor);
-        attachment.colorBlendOp        = VulkanRHIBlendState::METoVKBlendOp(attachment_init.color_blend_op);
-        attachment.srcAlphaBlendFactor = VulkanRHIBlendState::METoVKBlendFactor(attachment_init.alpha_src_blend_factor);
-        attachment.dstAlphaBlendFactor = VulkanRHIBlendState::METoVKBlendFactor(attachment_init.alpha_dst_blend_factor);
-        attachment.alphaBlendOp        = VulkanRHIBlendState::METoVKBlendOp(attachment_init.alpha_blend_op);
-        attachment.colorWriteMask      = (attachment_init.color_write_mask & CW_RED) ? VK_COLOR_COMPONENT_R_BIT : 0;
-        attachment.colorWriteMask |= (attachment_init.color_write_mask & CW_GREEN) ? VK_COLOR_COMPONENT_G_BIT : 0;
-        attachment.colorWriteMask |= (attachment_init.color_write_mask & CW_BLUE) ? VK_COLOR_COMPONENT_B_BIT : 0;
-        attachment.colorWriteMask |= (attachment_init.color_write_mask & CW_ALPHA) ? VK_COLOR_COMPONENT_A_BIT : 0;
+        m_attachments[i].srcColorBlendFactor = VulkanRHIBlendState::METoVKBlendFactor(attachment_init.color_src_blend_factor);
+        m_attachments[i].dstColorBlendFactor = VulkanRHIBlendState::METoVKBlendFactor(attachment_init.color_dst_blend_factor);
+        m_attachments[i].colorBlendOp        = VulkanRHIBlendState::METoVKBlendOp(attachment_init.color_blend_op);
+        m_attachments[i].srcAlphaBlendFactor = VulkanRHIBlendState::METoVKBlendFactor(attachment_init.alpha_src_blend_factor);
+        m_attachments[i].dstAlphaBlendFactor = VulkanRHIBlendState::METoVKBlendFactor(attachment_init.alpha_dst_blend_factor);
+        m_attachments[i].alphaBlendOp        = VulkanRHIBlendState::METoVKBlendOp(attachment_init.alpha_blend_op);
+        m_attachments[i].colorWriteMask      = (attachment_init.color_write_mask & CW_RED) ? VK_COLOR_COMPONENT_R_BIT : 0;
+        m_attachments[i].colorWriteMask |= (attachment_init.color_write_mask & CW_GREEN) ? VK_COLOR_COMPONENT_G_BIT : 0;
+        m_attachments[i].colorWriteMask |= (attachment_init.color_write_mask & CW_BLUE) ? VK_COLOR_COMPONENT_B_BIT : 0;
+        m_attachments[i].colorWriteMask |= (attachment_init.color_write_mask & CW_ALPHA) ? VK_COLOR_COMPONENT_A_BIT : 0;
     }
 
-    VkPipelineColorBlendStateCreateInfo blend_state_create_info{};
-    blend_state_create_info.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    blend_state_create_info.pNext           = nullptr;
-    blend_state_create_info.flags           = 0;
-    blend_state_create_info.logicOpEnable   = VK_FALSE;
-    blend_state_create_info.logicOp         = VK_LOGIC_OP_COPY;
-    blend_state_create_info.attachmentCount = n;
-    blend_state_create_info.pAttachments    = attachments.data();
+    // // VkPipelineColorBlendStateCreateInfo blend_state_create_info{};
+    // m_blend_state_create_info.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    // m_blend_state_create_info.pNext           = nullptr;
+    // m_blend_state_create_info.flags           = 0;
+    // m_blend_state_create_info.logicOpEnable   = VK_FALSE;
+    // m_blend_state_create_info.logicOp         = VK_LOGIC_OP_COPY;
+    // m_blend_state_create_info.attachmentCount = n;
+    // m_blend_state_create_info.pAttachments    = attachments.data();
 }
 
 VkBlendOp VulkanRHIBlendState::METoVKBlendOp(EBlendOperation _blend_op) {
@@ -1230,8 +1256,30 @@ VkBlendFactor VulkanRHIBlendState::METoVKBlendFactor(EBlendFactor _blend_factor)
 
 #pragma region pipeline states definitions
 
-std::vector<VkPipelineShaderStageCreateInfo> VulkanRHIGraphicsPipelineState::METoVKShaderStageCreateInfo(const RHIShaderBoundStateInput& _shader_bound_state) {
-    std::vector<VkPipelineShaderStageCreateInfo> shader_stage_create_infos;
+void VulkanRHIGraphicsPipelineState::GenerateDescriptorSetLayouts(const VulkanDevice* _device, Moer::Array<TDescriptorSetLayoutInfo>& _layout_mappings) {
+    // create descriptor set layouts
+    for (auto& layout : _layout_mappings) {
+        VkDescriptorSetLayoutCreateInfo layout_create_info{};
+        layout_create_info.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        layout_create_info.pNext        = nullptr;
+        layout_create_info.flags        = 0;
+        layout_create_info.bindingCount = layout.second.size();
+        layout_create_info.pBindings    = layout.second.empty() ? nullptr : layout.second.data();
+
+        VK_CHECK_RESULT(vkCreateDescriptorSetLayout(*_device, &layout_create_info, nullptr, &layout.first));
+    }
+
+    // extract descriptor set layouts
+    m_descriptor_sets_layout = new VulkanDescriptorSetsLayout();
+    m_descriptor_sets_layout->Init(_layout_mappings, m_pipeline_state_cache);
+}
+
+void VulkanRHIGraphicsPipelineState::CreateResourceCache() {
+    m_pipeline_state_cache = new VulkanPipelineResourceCache();
+}
+
+Moer::Array<VkPipelineShaderStageCreateInfo> VulkanRHIGraphicsPipelineState::METoVKShaderStageCreateInfo(const RHIShaderBoundStateInput& _shader_bound_state) {
+    Moer::Array<VkPipelineShaderStageCreateInfo> shader_stage_create_infos;
     // vert-frag pipeline
     VkPipelineShaderStageCreateInfo shader_stage_create_info{};
     shader_stage_create_info.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -1298,8 +1346,8 @@ VkPipelineVertexInputStateCreateInfo VulkanRHIGraphicsPipelineState::METoVKVerte
     return vertex_input_state_create_info;
 }
 
-std::vector<const Shader*> VulkanRHIGraphicsPipelineState::GetShaderInfoList(const RHIShaderBoundStateInput& _shader_bound_state) {
-    std::vector<const Shader*> shader_list;
+Moer::Array<const Shader*> VulkanRHIGraphicsPipelineState::GetShaderInfoList(const RHIShaderBoundStateInput& _shader_bound_state) {
+    Moer::Array<const Shader*> shader_list;
     if (_shader_bound_state.p_vertex_shader->shader_type == EShaderType::ST_VERTEX) {
         shader_list.push_back(_shader_bound_state.p_vertex_shader->GetMetaShader());
     }
@@ -1319,37 +1367,9 @@ std::vector<const Shader*> VulkanRHIGraphicsPipelineState::GetShaderInfoList(con
     return shader_list;
 }
 
-void VulkanRHIGraphicsPipelineState::GenerateDescriptorSetLayouts(const VulkanDevice* _device, std::unordered_map<uint8_t, TDescriptorSetLayout>& _layout_mappings) {
-    // create descriptor set layouts
-    uint8_t max_space = 0;
-    for (auto& [space, layout] : _layout_mappings) {
-        VkDescriptorSetLayoutCreateInfo layout_create_info{};
-        layout_create_info.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        layout_create_info.pNext        = nullptr;
-        layout_create_info.flags        = 0;
-        layout_create_info.bindingCount = layout.second.size();
-        layout_create_info.pBindings    = layout.second.data();
-
-        VK_CHECK_RESULT(vkCreateDescriptorSetLayout(*_device, &layout_create_info, nullptr, &layout.first));
-        max_space = std::max(max_space, space);
-    }
-
-    // extract descriptor set layouts
-    m_descriptor_sets_layout = new VulkanDescriptorSetsLayout();
-    m_descriptor_sets_layout->Init(max_space + 1, _layout_mappings);
-}
-
-void VulkanRHIGraphicsPipelineState::CreateDescriptorSets(VulkanDevice* _device) {
-    _device->AllocateDescriptorSets(*m_descriptor_sets_layout, m_descriptor_sets);
-}
-
-void VulkanRHIGraphicsPipelineState::GenerateResourceCache() {
-    m_pipeline_state_cache = new VulkanPipelineResourceCache(this);
-}
-
 #pragma endregion
 
-VulkanDeviceObject::VulkanDeviceObject(VulkanDevice* _device) : device(_device) {
+VulkanDeviceObject::VulkanDeviceObject(VulkanDevice* _device) : m_device(_device) {
 }
 
 #pragma region global buffer definitions
@@ -1479,39 +1499,55 @@ VkImageUsageFlags VulkanRHITexture::METoVKImageUsageFlags(ETextureUsageFlags _me
 
 #pragma region synchronization
 
-VulkanRHIFence::VulkanRHIFence(VulkanDevice* _device, EFenceUsage _usage) : m_device(_device), m_binary(VK_NULL_HANDLE), m_semaphore(VK_NULL_HANDLE), usage(_usage) {
+VulkanRHIFence::VulkanRHIFence(VulkanDevice* _device, EFenceUsageFlags _usage) : m_device(_device), m_binary(VK_NULL_HANDLE), m_timeline(VK_NULL_HANDLE), usage(_usage) {
     VkSemaphoreCreateInfo create_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
-    if (_usage != EFenceUsage::TIMELINE) {
-        //do nothing
+    if (EnumHasAnyFlag(usage, EFenceUsageFlags::PRESENT)) {
+        VK_CHECK_RESULT(vkCreateSemaphore(m_device->GetDevice(), &create_info, nullptr, &m_binary));
+
+        VkSemaphoreTypeCreateInfo timeline_semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
+        timeline_semaphore_info.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+        timeline_semaphore_info.initialValue  = 0;
+
+        create_info.pNext = &timeline_semaphore_info;
+        VK_CHECK_RESULT(vkCreateSemaphore(m_device->GetDevice(), &create_info, nullptr, &m_timeline));
+        return;
+    }
+    if (EnumHasAnyFlag(usage, EFenceUsageFlags::BINARY)) {
         VK_CHECK_RESULT(vkCreateSemaphore(m_device->GetDevice(), &create_info, nullptr, &m_binary));
     }
+    if (EnumHasAnyFlag(usage, EFenceUsageFlags::TIMELINE)) {
+        VkSemaphoreTypeCreateInfo timeline_semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
+        timeline_semaphore_info.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+        timeline_semaphore_info.initialValue  = 0;
 
-    VkSemaphoreTypeCreateInfo timeline_semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
-    timeline_semaphore_info.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
-    timeline_semaphore_info.initialValue  = 0;
-
-    create_info.pNext = &timeline_semaphore_info;
-    VK_CHECK_RESULT(vkCreateSemaphore(m_device->GetDevice(), &create_info, nullptr, &m_semaphore));
+        create_info.pNext = &timeline_semaphore_info;
+        VK_CHECK_RESULT(vkCreateSemaphore(m_device->GetDevice(), &create_info, nullptr, &m_timeline));
+    }
 }
 
 VulkanRHIFence::~VulkanRHIFence() {
-    if (m_semaphore != VK_NULL_HANDLE) {
-        vkDestroySemaphore(m_device->GetDevice(), m_semaphore, VK_NULL_HANDLE);
-    }
+
+    VkSemaphoreWaitInfo wait_delete_info{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
+    wait_delete_info.pNext          = nullptr;
+    wait_delete_info.flags          = 0;
+    wait_delete_info.semaphoreCount = 1;
     if (m_binary != VK_NULL_HANDLE) {
         vkDestroySemaphore(m_device->GetDevice(), m_binary, VK_NULL_HANDLE);
+    }
+    if (m_timeline != VK_NULL_HANDLE) {
+        vkDestroySemaphore(m_device->GetDevice(), m_timeline, VK_NULL_HANDLE);
     }
 }
 
 uint64_t VulkanRHIFence::GetValue() const {
     uint64_t value;
-    vkGetSemaphoreCounterValue(m_device->GetDevice(), m_semaphore, &value);
+    vkGetSemaphoreCounterValue(m_device->GetDevice(), m_timeline, &value);
     return value;
 }
 
 void VulkanRHIFence::Wait(uint64_t value) {
     VkSemaphoreWaitInfo info{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
-    info.pSemaphores    = &m_semaphore;
+    info.pSemaphores    = &m_timeline;
     info.semaphoreCount = 1;
     info.pValues        = &value;
     vkWaitSemaphores(m_device->GetDevice(), &info, UINT64_MAX);
@@ -1522,15 +1558,16 @@ void VulkanRHIFence::Wait(uint64_t value) {
 #pragma region viewable resources view definitions
 VulkanRHIUnorderedAccessView::~VulkanRHIUnorderedAccessView() {
     if (m_view != VK_NULL_HANDLE) {
-        vkDestroyImageView(device->GetDevice(), m_view, VK_NULL_HANDLE);
+        vkDestroyImageView(m_device->GetDevice(), m_view, VK_NULL_HANDLE);
     }
 }
 
 #pragma endregion
 
 #pragma region viewport
-VulkanViewport::VulkanViewport(VulkanSwapChain* _swapchain) : RHIViewport() {
-    swapchain = _swapchain;
+VulkanViewport::VulkanViewport(VulkanSwapChain* _swapchain, uint32_t _max_frame_in_flight) : RHIViewport() {
+    swapchain                = _swapchain;
+    info.max_frame_in_flight = _max_frame_in_flight;
     InnerCreateResources();
 }
 
@@ -1567,8 +1604,9 @@ VulkanRHIUnorderedAccessView* VulkanViewport::InnerCreateVulkanUnorderedAccessVi
 void VulkanViewport::InnerCreateResources() {
     uint32_t back_buffer_size = swapchain->m_swap_chain_images.size();
 
+    info.max_frame_in_flight = 3;
     swapchain_image_uavs.resize(back_buffer_size);
-    image_aquire_fences.resize(max_frame_in_flight);
+    image_aquire_fences.resize(info.max_frame_in_flight);
     swapchain_images.resize(back_buffer_size);
 
     EPixelFormat swapchain_format = VulkanEnumTranslator::VKToMEFormat(swapchain->image_format);
@@ -1591,9 +1629,13 @@ void VulkanViewport::InnerCreateResources() {
                 .SetMipLevel(0));
     }
     for (uint32_t index = 0; index < image_aquire_fences.size(); index++) {
-        image_aquire_fences[index] = new VulkanRHIFence(swapchain->m_device, EFenceUsage::AQUIRE_NEXT_FRAME);
+        image_aquire_fences[index] = new VulkanRHIFence(swapchain->m_device, EFenceUsageFlags::BINARY);
     }
     frame_offset = 0;
+
+    //init information
+
+    info.backbuffer_format = swapchain_format;
 }
 void VulkanViewport::InnerDestroyResources() {
 
@@ -1601,6 +1643,12 @@ void VulkanViewport::InnerDestroyResources() {
         delete swapchain_image_uavs[index];
     }
     for (uint32_t index = 0; index < image_aquire_fences.size(); index++) {
+        VkSemaphoreWaitInfo wait_info{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
+        VkSemaphore         temp[1] = {image_aquire_fences[index]->GetBinaryHandle()};
+        wait_info.semaphoreCount    = 1;
+        wait_info.pSemaphores       = temp;
+        wait_info.pValues           = 0;
+        // vkWaitSemaphores(swapchain->m_device->GetDevice(), &wait_info, UINT64_MAX);
         delete image_aquire_fences[index];
     }
 }
@@ -1611,7 +1659,7 @@ void VulkanViewport::ResetResources() {
     uint32_t back_buffer_size = swapchain->m_swap_chain_images.size();
 
     swapchain_image_uavs.resize(back_buffer_size);
-    image_aquire_fences.resize(max_frame_in_flight);
+    image_aquire_fences.resize(info.max_frame_in_flight);
     swapchain_images.resize(back_buffer_size);
 
     for (uint32_t index = 0; index < swapchain_image_uavs.size(); index++) {
@@ -1628,9 +1676,10 @@ void VulkanViewport::ResetResources() {
     }
     for (uint32_t index = 0; index < image_aquire_fences.size(); index++) {
         delete image_aquire_fences[index];
-        image_aquire_fences[index] = new VulkanRHIFence(swapchain->m_device, EFenceUsage::PRESENT);
+        image_aquire_fences[index] = new VulkanRHIFence(swapchain->m_device, EFenceUsageFlags::BINARY);
     }
-    frame_offset = 0;
+    info.backbuffer_format = VulkanEnumTranslator::VKToMEFormat(swapchain->image_format);
+    frame_offset           = 0;
 }
 void VulkanViewport::OnResize(Extent2D _size) {
 
@@ -1639,13 +1688,13 @@ void VulkanViewport::OnResize(Extent2D _size) {
 }
 
 VulkanRHIFence* VulkanViewport::GetAcquireNextImageFence() {
-    return image_aquire_fences[frame_offset = (frame_offset - 1) % max_frame_in_flight];
+    return image_aquire_fences[frame_offset = (frame_offset - 1) % info.max_frame_in_flight];
 }
 RHIViewportNextBackBufferInfo VulkanViewport::GetNextFrameBackBufferInfo() {
     uint32_t index = swapchain->AcquireNextImage(image_aquire_fences[frame_offset]->GetBinaryHandle());
     if (index != UINT32_MAX) {
         auto current_frame = frame_offset;
-        frame_offset       = (frame_offset + 1) % max_frame_in_flight;
+        frame_offset       = (frame_offset + 1) % info.max_frame_in_flight;
         return {.backbuffer_index = index, .backbuffer_ready_fence = image_aquire_fences[current_frame]};
     }
     //recreate
@@ -1666,7 +1715,11 @@ void VulkanViewport::Present(RHIFence* _render_finished) {
     VulkanDevice*   device   = swapchain->m_device;
     assert(device != nullptr && "Swapchain not valid");
 
-    swapchain->Present(device->GetPresentQueue(), vk_fence->GetBinaryHandle());
+    VkResult result = swapchain->Present(device->GetPresentQueue(), vk_fence->GetBinaryHandle());
+    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+        swapchain->Recreate();
+        ResetResources();
+    }
     // swapchain->Present();
 }
 
@@ -1676,7 +1729,7 @@ void VulkanViewport::WaitForQueueComplete(RHICommandQueue* _command_queue, RHIFe
     vkQueueWaitIdle(vk_queue->GetHandle());
 }
 ViewPort VulkanViewport::GetViewportExtent() const {
-    return ViewPort{0, 0, (float)swapchain->extent.width, (float)swapchain->extent.height};
+    return ViewPort{0, 0, (float)swapchain->extent.width, (float)swapchain->extent.height, 0.f, 1.f};
 }
 #pragma endregion
 

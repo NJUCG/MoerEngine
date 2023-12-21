@@ -1,19 +1,21 @@
 #include "rhi/RHIResource.h"
-#include "misc/AsyncQueue.h"
 #include "rhi/RHI.h"
-#include "rhi/RHICommandList.h"
 #include "rhi/RHICommon.h"
 #include "shader/Shader.h"
 #include "shader/ShaderCommon.h"
-#include <cstddef>
-#include <vcruntime_string.h>
+#include "shader/ShaderParameterMacros.h"
 
-void RHIResource::Destroy() const {
+//need a mpmc linked list to delete resource
+LockFreeQueueBase<RHIResource> pending_deletings;
+
+void RHIResource::Destroy() {
     //mark resource to be deleted
+    //deferred delete
     if (!flags.MarkToDelete(std::memory_order_release)) {
-        //        pending_deletings.pr
+        //TODO: pending_deletings actual delete on render thread
+        pending_deletings.Push(this);
     }
-    delete this;
+    // delete this;
 }
 
 #pragma region buffer texture initiation
@@ -156,10 +158,6 @@ const RHITextureInfo& RHITextureReference::GetInfo() const {
     return texture_ref->GetInfo();
 }
 
-void RHIUploadBuffer(const uint8_t* data, uint32_t size, RHIBuffer* _target) {
-    //todo: not implemented
-    g_rhi->RHIUploadBuffer(_target, data, size);
-};
 #pragma endregion
 
 #pragma region rende query
@@ -203,8 +201,44 @@ void RHIBatchedShaderParameters::SetParameters(const Shader* shader, size_t _dat
             resource_parameters.emplace_back(RHIShaderResourceParameter(data, param_info.slot, param_info.space));
         }
     }
-
+    Moer::Array<RHIShaderConstantParameter> temp_constant;
     //copy constant parameters to raw data
+
+    //for now only support one constant struct
+    // uint32_t last_offset    = 0;
+    // uint32_t current_offset = 0;
+    // for (uint32_t i = 0; i < param_layout_info.GetConstantsInfos().size(); ++i) {
+    //     const auto& param_info = param_layout_info.GetConstantsInfos()[i];
+    //     if (i == 0) {
+    //         //first const param should have no gap
+    //         current_offset = last_offset = param_info.offset;
+    //     } else {
+    //         current_offset = param_info.offset;
+    //     }
+    //     bool b_last_constant = i == param_layout_info.GetConstantsInfos().size() - 1;
+    //     bool b_gap           = current_offset != last_offset;
+
+    //     last_offset = current_offset;
+    //     //means there's a gap for reserved data
+    //     if (b_gap || b_last_constant) {
+    //         //get reserved word
+    //         uint32_t* reserved = (uint32_t*)&raw_data[b_gap ? last_offset : (current_offset + param_info.stride)];
+    //         if (*reserved | STRUCT_DIRTY_BIT) {
+    //             //actually dirty, clear temp_constant
+    //             temp_constant.clear();
+    //         }
+    //         uint32_t origin_offset = constant_parameters.size();
+    //         temp_constant.resize(origin_offset + current_offset - last_offset);
+    //         memcpy(&temp_constant[origin_offset], data_source + last_offset, current_offset - last_offset);
+    //     }
+    //     //current ptr
+    //     uint8_t* data = data_source + current_offset;
+    //     //const must set
+    //     uint32_t origin_offset = constant_parameters.size();
+    //     raw_data.resize(origin_offset + param_info.stride);
+    //     memcpy(&raw_data[origin_offset], data_source, param_info.stride);
+    //     constant_parameters.emplace_back(shader->GetShaderType(), origin_offset, (param_info.stride + sizeof(uint32_t) - 1) / 4, param_info.slot, param_info.space);
+    // }
     for (const auto& param_info : param_layout_info.GetConstantsInfos()) {
         uint8_t* data = data_source + param_info.offset;
         //const must set

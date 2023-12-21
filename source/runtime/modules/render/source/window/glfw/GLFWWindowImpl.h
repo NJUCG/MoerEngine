@@ -16,6 +16,7 @@ namespace Moer {
         virtual void Tick() override;
         virtual void ShutDown() override;
 
+        virtual void AddFont(const FontDesc& _font_desc) override;
         //for multi-window support
         virtual void  SetFocusMode(WindowHandle*, bool _focused) override;
         virtual void  GetWindowSize(WindowHandle*, int32_t* width, int32_t* height) const override;
@@ -25,7 +26,7 @@ namespace Moer {
 
     private:
         GLFWWindowImpl();
-        virtual void Init(const SurfaceInfo&) override;
+        virtual void Init(const SurfaceInitInfo&) override;
         virtual void OnCharCallbackImpl(WindowType* window, unsigned int codepoint) override;
         virtual void OnCursorEnterCallbackImpl(WindowType* window, int entered) override;
         virtual void OnCursorPosCallbackImpl(WindowType* window, double xpos, double ypos) override;

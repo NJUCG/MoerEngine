@@ -46,4 +46,11 @@ namespace LogSystem {
 #define LOG_WARNING(...)  SPDLOG_WARN(__VA_ARGS__)
 #define LOG_ERROR(...)    SPDLOG_ERROR(__VA_ARGS__)
 #define LOG_CRITICAL(...) SPDLOG_CRITICAL(__VA_ARGS__)
+
+// #define LOG_DEBUG(...)
+
+// #define LOG_INFO(...)
+// #define LOG_WARNING(...)
+// #define LOG_ERROR(...)
+// #define LOG_CRITICAL(...)
 #endif

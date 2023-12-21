@@ -1,7 +1,5 @@
 #pragma once
 
-#include <string>
-#include <memory>
 #include <filesystem>
 
 namespace Moer::Resource {

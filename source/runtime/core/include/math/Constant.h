@@ -5,11 +5,10 @@
 
 #include "Base.h"
 #include "Matrix.h"
-
 namespace Moer {
-    static constexpr int   MAX_INT   = std::numeric_limits<int>::max();
+    static constexpr int   MAX_INT   = (std::numeric_limits<int>::max)();
     static constexpr int   MIN_INT   = std::numeric_limits<int>::lowest();
-    static constexpr float MAX_FLOAT = std::numeric_limits<float>::max();
+    static constexpr float MAX_FLOAT = (std::numeric_limits<float>::max)();
     static constexpr float MIN_FLOAT = std::numeric_limits<float>::lowest();
     static constexpr float EPS       = 1e-5f;
     static constexpr float PI        = 3.14159265358979323846f;

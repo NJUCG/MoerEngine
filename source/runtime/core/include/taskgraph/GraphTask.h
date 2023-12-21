@@ -1,20 +1,18 @@
 #ifndef GRAPH_TASK_H
 #define GRAPH_TASK_H
+#include "API_Macro.h"
 #include "ThreadManager.h"
 #include <utility>
-#include <vector>
 #include <memory>
 #include "misc/CountableRef.h"
 #include "TaskGraph.h"
-#include "misc/AsyncQueue.h"
-
 class BaseGraphTask {
 public:
     BaseGraphTask(int32_t count) : m_prerequests_count{count} {}
     virtual ~BaseGraphTask() {}
-    virtual void ExecuteTasks(std::vector<BaseGraphTask*>& tasks, EThread::Type currentThread) = 0;
+    virtual void ExecuteTasks(Moer::Array<BaseGraphTask*>& tasks, EThread::Type currentThread) = 0;
     virtual void DestroyTask()                                                                 = 0;
-    void         Execute(std::vector<BaseGraphTask*>& newTasks, EThread::Type currentThread) {
+    void         Execute(Moer::Array<BaseGraphTask*>& newTasks, EThread::Type currentThread) {
         ExecuteTasks(newTasks, currentThread);
     }
     void SetPreferredThread(EThread::Type thread) {
@@ -23,9 +21,11 @@ public:
     void SetPriority(ThreadPriority priority) {
         m_preferd_thread = EThread::SetPriority(m_preferd_thread, priority << EThread::PRIORITY_SHEFT);
     }
-    void          QueueTask(EThread::Type currentThread, bool shouldWakeWorker);
+    void QueueTask(EThread::Type currentThread, bool shouldWakeWorker);
+
     CORE_API void PrerequestsComplete(EThread::Type currentThread, int32_t finishedCount, bool unlock = true);
-    bool          ConditionalQueueTask(EThread::Type currentThread, bool shouldWakeWorker) {
+
+    bool ConditionalQueueTask(EThread::Type currentThread, bool shouldWakeWorker) {
         if (m_prerequests_count.fetch_sub(1, std::memory_order_acq_rel) == 1) {
             QueueTask(currentThread, shouldWakeWorker);
             return true;
@@ -56,13 +56,13 @@ public:
     void                          Destroy() override {
         delete this;
     }
-    bool IsComplete();
-    void WaitUntil(GraphEventRef _eventRef) {
+    CORE_API bool IsComplete() const;
+    void          WaitUntil(GraphEventRef _eventRef) {
         assert(!IsComplete());
 
         m_events_to_wait.emplace_back(std::move(_eventRef));
     }
-    CORE_API void TryUnlockSubsequents(std::vector<BaseGraphTask*>& tasks, EThread::Type currentThread = EThread::UNKNOWN_THREAD);
+    CORE_API void TryUnlockSubsequents(Moer::Array<BaseGraphTask*>& tasks, EThread::Type currentThread = EThread::UNKNOWN_THREAD);
     CORE_API void TryUnlockSubsequents(EThread::Type currentThread = EThread::UNKNOWN_THREAD);
 
     CORE_API void Wait(EThread::Type currentThread = EThread::UNKNOWN_THREAD);
@@ -71,8 +71,9 @@ public:
     }
 
 private:
-    StatMPSCQueue<BaseGraphTask*> m_subsequents;
-    GraphEventArray               m_events_to_wait;
+    ClosableLockFreeMpScStack<BaseGraphTask, 0> m_subsequents;
+
+    GraphEventArray m_events_to_wait;
 
     EThread::Type thread_to_wait_on;
 };
@@ -107,7 +108,7 @@ public:
 
 public:
     friend class Constructor;
-    virtual void ExecuteTasks(std::vector<BaseGraphTask*>& tasks, EThread::Type currentThread) override {
+    virtual void ExecuteTasks(Moer::Array<BaseGraphTask*>& tasks, EThread::Type currentThread) override {
 
         TaskType& task = *(TaskType*)&task_slot;
 
@@ -168,7 +169,7 @@ private:
     GraphEventRef               m_subsequents;
 };
 
-class TriggerEventGraphTask {
+class CORE_API TriggerEventGraphTask {
 public:
     TriggerEventGraphTask(Event* _event, EThread::Type _type) : m_event{_event}, m_preferred_thread{_type} {}
     EThread::Type GetPreferredThread() {

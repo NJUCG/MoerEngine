@@ -5,23 +5,22 @@
 #include "RenderCommon.h"
 #include "math/Base.h"
 
+#include "misc/EnumBitOperation.h"
 #include "misc/Hash.h"
 #include "misc/Ptr.h"
 #include "misc/CountableRef.h"
 
+#include "misc/STL.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResourceInitilizer.h"
 
-#include <array>
 #include <cassert>
 #include <atomic>
 #include <cstddef>
 #include <stdint.h>
-#include <unordered_set>
 #include <string>
 #include <optional>
 #include <bitset>
-#include <vector>
 template<typename TStructuredParam>
 concept concept_is_shader_struct = requires(TStructuredParam t) {
     std::is_same<typename TStructuredParam::TypeInfo::TParamPtr, TStructuredParam>();
@@ -141,7 +140,7 @@ struct VertexElement {
 };
 static_assert(sizeof(VertexElement) == 8, "VertexElement doesn't match cache line size");
 
-typedef std::array<VertexElement, MAX_VERTEX_ELEMENT_COUNT> VertexInputStateInitializerList;
+typedef Moer::StaticArray<VertexElement, MAX_VERTEX_ELEMENT_COUNT> VertexInputStateInitializerList;
 
 #pragma endregion
 
@@ -172,7 +171,7 @@ public:
     bool IsValid() const { return flags.IsValid(std::memory_order_relaxed); }
     void Delete() {
         if (flags.MarkToDelete(std::memory_order_acquire)) {
-            delete this;
+            // delete this;
         }
     }
     ERHIResourceType GetResourceType() const {
@@ -181,7 +180,7 @@ public:
 
 protected:
 private:
-    void Destroy() const;
+    void Destroy();
     struct ResourceAtomicFlags {
         std::atomic<uint32_t> packed;
 
@@ -445,15 +444,15 @@ struct RHIBatchedShaderParameters {
         return &raw_data[byte_offset];
     }
 
-    const std::vector<RHIShaderResourceParameter>& GetResourceParameters() const {
+    const Moer::Array<RHIShaderResourceParameter>& GetResourceParameters() const {
         return resource_parameters;
     }
 
-    const std::vector<RHIShaderConstantParameter>& GetConstantParameters() const {
+    const Moer::Array<RHIShaderConstantParameter>& GetConstantParameters() const {
         return constant_parameters;
     }
 
-    const std::vector<uint8_t>& GetRawData() const {
+    const Moer::Array<uint8_t>& GetRawData() const {
         return raw_data;
     }
 
@@ -461,9 +460,9 @@ private:
     void SetParameters(const Shader* shader, size_t _data_size, uint8_t* data_source);
     void SetParameters(RHIShader* shader, size_t _data_size, uint8_t* data_source);
     //offset in raw_data, size, slot and space
-    std::vector<RHIShaderResourceParameter> resource_parameters;
-    std::vector<RHIShaderConstantParameter> constant_parameters;
-    std::vector<uint8_t>                    raw_data;
+    Moer::Array<RHIShaderResourceParameter> resource_parameters;
+    Moer::Array<RHIShaderConstantParameter> constant_parameters;
+    Moer::Array<uint8_t>                    raw_data;
 };
 //todo: may not inherit from RHIResource
 class RHIShaderRootParameterLayout : public RHIResource {
@@ -471,7 +470,7 @@ public:
     RHIShaderRootParameterLayout() : RHIResource(RRT_ROOT_PARAMETER_LAYOUT) {}
     ~RHIShaderRootParameterLayout() {}
 
-    std::vector<RHIResourceParameterLayout> resource_parameters;
+    Moer::Array<RHIResourceParameterLayout> resource_parameters;
 };
 
 #pragma endregion
@@ -568,47 +567,6 @@ protected:
 
 protected:
     RHIBufferInfo info;
-};
-
-/**
- * @brief Actually the same as RHIBuffer, but created with Fix size for shader parameter updates
- * 
- */
-template<concept_is_shader_struct TStructuredParam>
-class RHIStructuredBuffer : public RHIResource {
-public:
-    /**
-     * @brief Construct a new RHIStructureBuffer object with standalone buffer
-     * 
-     * @param _usages Buffer Usage, StructuredBuffer .etc
-     */
-    RHIStructuredBuffer() : RHIResource(RRT_BUFFER) {}
-
-    /**
-     * @brief Construct a new RHIStructureBuffer object from existing RHIBuffer
-     * 
-     * @param _reference existing RHIBuffer
-     * @param offset offset in RHIBuffer
-     */
-    RHIStructuredBuffer(RHIBufferRef _reference, uint32_t _offset = 0) : RHIResource(RRT_BUFFER), reference(_reference), offset(_offset) { assert(_reference != nullptr); };
-
-    /**
-     * @brief Upload Parameters to target RHIBuffer in graphic queue, recommend to use barrier instead
-     * 
-     */
-    void UpLoadParameters() {
-        if (reference->IsValid()) {
-            RHIUploadBuffer((uint8_t*)&param, sizeof(TStructuredParam), reference);
-        }
-    };
-
-    TStructuredParam param;
-
-private:
-    friend void RHIUploadBuffer(const uint8_t* data, uint32_t size, RHIBuffer* _target);
-
-    RHIBufferRef reference;
-    uint32_t     offset;
 };
 
 struct RHITextureInfo {
@@ -870,13 +828,15 @@ struct PipelineParametersBinding {
 
 #pragma region syncronization
 
-enum class EFenceUsage {
-    TIMELINE,
-    PRESENT,
-    AQUIRE_NEXT_FRAME
+enum class EFenceUsageFlags {
+    TIMELINE = 1 << 0,
+    BINARY   = 1 << 1,
+    PRESENT  = 1 << 2,
 };
+ENUM_BIT_OP_IMPL(EFenceUsageFlags, FLAG)
+
 struct RHIFenceCreateInfo {
-    EFenceUsage usage = EFenceUsage::TIMELINE;
+    EFenceUsageFlags usage = EFenceUsageFlags::TIMELINE;
 };
 /* fences in dx12, fence and timeline semaphore in vulkan */
 class RHIFence : public RHIResource {
@@ -932,7 +892,9 @@ struct RHITextureBarrierInfo : public RHIBarrierInfo {
         : RHIBarrierInfo(),
           p_texture(nullptr),
           src_layout(TEXTURE_LAYOUT_UNDEFINED),
-          dst_layout(TEXTURE_LAYOUT_UNDEFINED), sub_resource_range() {}
+          dst_layout(TEXTURE_LAYOUT_UNDEFINED), sub_resource_range(),
+          src_queue_type(ECommandQueueType::UNDEFINED),
+          dst_queue_type(ECommandQueueType::UNDEFINED) {}
     RHITextureBarrierInfo(
         ERHIPipelineStageFlags _src_stage,
         ERHIPipelineStageFlags _dst_stage,
@@ -941,7 +903,9 @@ struct RHITextureBarrierInfo : public RHIBarrierInfo {
         RHITexture*            _p_texture,
         ETextureLayout         _src_layout,
         ETextureLayout         _dst_layout,
-        RHISubresourceRange    _sub_resource_range)
+        RHISubresourceRange    _sub_resource_range,
+        ECommandQueueType      _src_queue_type,
+        ECommandQueueType      _dst_queue_type)
         : RHIBarrierInfo(_src_stage,
                          _dst_stage,
                          _src_access,
@@ -949,7 +913,9 @@ struct RHITextureBarrierInfo : public RHIBarrierInfo {
           p_texture(_p_texture),
           src_layout(_src_layout),
           dst_layout(_dst_layout),
-          sub_resource_range(_sub_resource_range) {}
+          sub_resource_range(_sub_resource_range),
+          src_queue_type(_src_queue_type),
+          dst_queue_type(_dst_queue_type) {}
     static RHITextureBarrierInfo Create() {
         return {};
     }
@@ -958,6 +924,8 @@ struct RHITextureBarrierInfo : public RHIBarrierInfo {
     ETextureLayout      src_layout;
     ETextureLayout      dst_layout;
     RHISubresourceRange sub_resource_range;
+    ECommandQueueType   src_queue_type;
+    ECommandQueueType   dst_queue_type;
 
     RHITextureBarrierInfo& SetTexture(RHITexture* _p_texture) {
         p_texture = _p_texture;
@@ -976,6 +944,16 @@ struct RHITextureBarrierInfo : public RHIBarrierInfo {
         sub_resource_range = _sub_resource_range;
         return *this;
     }
+
+    RHITextureBarrierInfo& SetSrcQueueType(ECommandQueueType _src_queue_type) {
+        src_queue_type = _src_queue_type;
+        return *this;
+    }
+
+    RHITextureBarrierInfo& SetDstQueueType(ECommandQueueType _dst_queue_type) {
+        dst_queue_type = _dst_queue_type;
+        return *this;
+    }
 };
 
 struct RHIBufferBarrierInfo : public RHIBarrierInfo {
@@ -984,6 +962,8 @@ struct RHIBufferBarrierInfo : public RHIBarrierInfo {
         ERHIPipelineStageFlags _dst_stage,
         ERHIAccessFlags        _src_access,
         ERHIAccessFlags        _dst_access,
+        ECommandQueueType      _src_queue_type,
+        ECommandQueueType      _dst_queue_type,
         RHIBuffer*             _p_buffer,
         uint64_t               _offset,
         uint64_t               _size)
@@ -992,12 +972,16 @@ struct RHIBufferBarrierInfo : public RHIBarrierInfo {
                          _src_access,
                          _dst_access),
           p_buffer(_p_buffer),
+          src_queue_type(_src_queue_type),
+          dst_queue_type(_dst_queue_type),
           offset(_offset),
           size(_size) {
     }
     RHIBufferBarrierInfo() : RHIBarrierInfo(),
                              p_buffer(nullptr),
                              offset(0),
+                             src_queue_type(ECommandQueueType::UNDEFINED),
+                             dst_queue_type(ECommandQueueType::UNDEFINED),
                              size(0) {}
 
     static RHIBufferBarrierInfo Create() {
@@ -1015,27 +999,44 @@ struct RHIBufferBarrierInfo : public RHIBarrierInfo {
         size = _size;
         return *this;
     }
-    RHIBuffer* p_buffer;
-    uint64_t   offset;
-    uint64_t   size;
+
+    RHIBufferBarrierInfo& SetSrcQueueType(ECommandQueueType _src_queue_type) {
+        src_queue_type = _src_queue_type;
+        return *this;
+    }
+
+    RHIBufferBarrierInfo& SetDstQueueType(ECommandQueueType _dst_queue_type) {
+        dst_queue_type = _dst_queue_type;
+        return *this;
+    }
+    RHIBuffer*        p_buffer;
+    ECommandQueueType src_queue_type;
+    ECommandQueueType dst_queue_type;
+    uint64_t          offset;
+    uint64_t          size;
 };
 
 using RHIMemeryBarrierInfo = RHIBarrierInfo;
 
 struct RHIBarrierDependencyInfo {
-    EBarrierDependencyScope      scope{};
-    uint32_t                     memory_barrier_count  = 0;
-    const RHIMemeryBarrierInfo*  p_memory_barriers     = nullptr;
-    uint32_t                     buffer_barrier_count  = 0;
-    const RHIBufferBarrierInfo*  p_buffer_barriers     = nullptr;
-    uint32_t                     texture_barrier_count = 0;
-    const RHITextureBarrierInfo* p_texture_barriers    = nullptr;
+    // EBarrierDependencyScope      scope{};
+    // uint32_t                     memory_barrier_count  = 0;
+    // const RHIMemeryBarrierInfo*  p_memory_barriers     = nullptr;
+    // uint32_t                     buffer_barrier_count  = 0;
+    // const RHIBufferBarrierInfo*  p_buffer_barriers     = nullptr;
+    // uint32_t                     texture_barrier_count = 0;
+    // const RHITextureBarrierInfo* p_texture_barriers    = nullptr;
+
+    Moer::Array<RHIMemeryBarrierInfo>  memory_barriers;
+    Moer::Array<RHIBufferBarrierInfo>  buffer_barriers;
+    Moer::Array<RHITextureBarrierInfo> texture_barriers;
 };
 
 #pragma endregion
 
 struct RHIViewportInfo {
-    uint32_t max_frame_in_flight;
+    uint32_t     max_frame_in_flight;
+    EPixelFormat backbuffer_format;
 };
 
 struct RHIViewportNextBackBufferInfo {
@@ -1043,7 +1044,6 @@ struct RHIViewportNextBackBufferInfo {
     RHIFence* backbuffer_ready_fence;
 };
 class RHIViewport : public RHIResource {
-    RHIViewportInfo info;
 
 public:
     RHIViewport() : RHIResource(RRT_VIEWPORT) {}
@@ -1076,6 +1076,9 @@ public:
     virtual const RHIViewportInfo& GetViewportInfo() const { return info; }
 
     virtual ViewPort GetViewportExtent() const = 0;
+
+protected:
+    RHIViewportInfo info;
 };
 
 #pragma region viewable resources view definitions
@@ -1843,9 +1846,9 @@ struct alignas(SHADER_PARAMETER_STRUCTURE_ALIGNMENT) AttachmentBindingSlots {
         return count;
     }
 
-    std::array<ColorAttachmementBinding, MAX_PASS_ATTACHMENT_COUNT> color_attachments_binding;
-    DepthStencilBinding                                             depth_stencil_binding;
-    Rect2D                                                          resolve_rect;
+    Moer::StaticArray<ColorAttachmementBinding, MAX_PASS_ATTACHMENT_COUNT> color_attachments_binding;
+    DepthStencilBinding                                                    depth_stencil_binding;
+    Rect2D                                                                 resolve_rect;
 
     SubpassSettings subpass_settings;
     uint8_t         multi_view_count;
@@ -1858,11 +1861,11 @@ struct GraphicsPipelineAttachmentInfo {
     GraphicsPipelineAttachmentInfo()
         : attachment_formats(CreateArray<MAX_PASS_ATTACHMENT_COUNT, uint8_t>((uint8_t)ETextureUsageFlags::UNDEFINED)),
           attachment_flags(CreateArray<MAX_PASS_ATTACHMENT_COUNT, ETextureUsageFlags>(ETextureUsageFlags::UNDEFINED)) {}
-    uint32_t                                                  attachments_count;
-    std::array<uint8_t, MAX_PASS_ATTACHMENT_COUNT>            attachment_formats;
-    std::array<ETextureUsageFlags, MAX_PASS_ATTACHMENT_COUNT> attachment_flags;
-    EPixelFormat                                              depth_stencil_attachment_format;
-    ETextureUsageFlags                                        depth_stencil_attachment_flag = ETextureUsageFlags::UNDEFINED;
+    uint32_t                                                         attachments_count;
+    Moer::StaticArray<uint8_t, MAX_PASS_ATTACHMENT_COUNT>            attachment_formats;
+    Moer::StaticArray<ETextureUsageFlags, MAX_PASS_ATTACHMENT_COUNT> attachment_flags;
+    EPixelFormat                                                     depth_stencil_attachment_format;
+    ETextureUsageFlags                                               depth_stencil_attachment_flag = ETextureUsageFlags::UNDEFINED;
 
     EAttachmentLoadOp  depth_attachment_load_op    = EAttachmentLoadOp::NONE;
     EAttachmentStoreOp depth_attachment_store_op   = EAttachmentStoreOp::NONE;
@@ -1881,8 +1884,8 @@ struct GraphicsPipelineAttachmentInfo {
 
 class RHIGraphicsPipelineStateInitializer {
 public:
-    using TAttachmentFormats = std::array<uint8_t, MAX_PASS_ATTACHMENT_COUNT>;
-    using TAttachmentFlags   = std::array<ETextureUsageFlags, MAX_PASS_ATTACHMENT_COUNT>;
+    using TAttachmentFormats = Moer::StaticArray<uint8_t, MAX_PASS_ATTACHMENT_COUNT>;
+    using TAttachmentFlags   = Moer::StaticArray<ETextureUsageFlags, MAX_PASS_ATTACHMENT_COUNT>;
 
     RHIGraphicsPipelineStateInitializer()
         : blend_state(nullptr),
@@ -1890,7 +1893,7 @@ public:
           multisample_state(nullptr),
           depth_stencil_state(nullptr),
           color_attachment_count(0),
-          color_attachment_formats(CreateArray<MAX_PASS_ATTACHMENT_COUNT, uint8_t>((uint8_t)ETextureUsageFlags::UNDEFINED)),
+          color_attachment_formats(CreateArray<MAX_PASS_ATTACHMENT_COUNT, uint8_t>((uint8_t)PF_UNDEFINED)),
           color_attachment_flags(CreateArray<MAX_PASS_ATTACHMENT_COUNT, ETextureUsageFlags>(ETextureUsageFlags::UNDEFINED)),
           depth_stencil_format(PF_UNDEFINED),
           depth_stencil_flag(ETextureUsageFlags::UNDEFINED),
@@ -2033,27 +2036,27 @@ class RayTracingPipelineStateInitializer : RayTracingPipelineStateInfo {
 public:
     RayTracingPipelineStateInitializer() = default;
 
-    const std::vector<RHIRayTracingShader*>& GetRayGenTable() const { return ray_gen_table; }
-    const std::vector<RHIRayTracingShader*>& GetRayMissTable() const { return ray_miss_table; }
-    const std::vector<RHIRayTracingShader*>& GetRayHitTable() const { return ray_hit_table; }
-    const std::vector<RHIRayTracingShader*>& GetRayCallableTable() const { return ray_callable_table; }
+    const Moer::Array<RHIRayTracingShader*>& GetRayGenTable() const { return ray_gen_table; }
+    const Moer::Array<RHIRayTracingShader*>& GetRayMissTable() const { return ray_miss_table; }
+    const Moer::Array<RHIRayTracingShader*>& GetRayHitTable() const { return ray_hit_table; }
+    const Moer::Array<RHIRayTracingShader*>& GetRayCallableTable() const { return ray_callable_table; }
 
-    void SetRayGenShaderTable(const std::vector<RHIRayTracingShader*>& _ray_gen_shaders, uint64_t _hash = 0) {
+    void SetRayGenShaderTable(const Moer::Array<RHIRayTracingShader*>& _ray_gen_shaders, uint64_t _hash = 0) {
         ray_gen_table = _ray_gen_shaders;
-        hash_ray_gen  = _hash ? _hash : ComputeHash(std::vector<RHIRayTracingShader*>(_ray_gen_shaders.begin(), _ray_gen_shaders.end()));
+        hash_ray_gen  = _hash ? _hash : ComputeHash(Moer::Array<RHIRayTracingShader*>(_ray_gen_shaders.begin(), _ray_gen_shaders.end()));
     }
 
-    void SetRayMissShaderTable(const std::vector<RHIRayTracingShader*>& _ray_miss_shaders, uint64_t _hash = 0) {
+    void SetRayMissShaderTable(const Moer::Array<RHIRayTracingShader*>& _ray_miss_shaders, uint64_t _hash = 0) {
         ray_miss_table = _ray_miss_shaders;
-        hash_ray_miss  = _hash ? _hash : ComputeHash(std::vector<RHIRayTracingShader*>(_ray_miss_shaders.begin(), _ray_miss_shaders.end()));
+        hash_ray_miss  = _hash ? _hash : ComputeHash(Moer::Array<RHIRayTracingShader*>(_ray_miss_shaders.begin(), _ray_miss_shaders.end()));
     }
-    void SetRayHitShaderTable(const std::vector<RHIRayTracingShader*>& _ray_hit_shaders, uint64_t _hash = 0) {
+    void SetRayHitShaderTable(const Moer::Array<RHIRayTracingShader*>& _ray_hit_shaders, uint64_t _hash = 0) {
         ray_hit_table = _ray_hit_shaders;
-        hash_ray_hit  = _hash ? _hash : ComputeHash(std::vector<RHIRayTracingShader*>(_ray_hit_shaders.begin(), _ray_hit_shaders.end()));
+        hash_ray_hit  = _hash ? _hash : ComputeHash(Moer::Array<RHIRayTracingShader*>(_ray_hit_shaders.begin(), _ray_hit_shaders.end()));
     }
-    void SetRayCallableShaderTable(const std::vector<RHIRayTracingShader*>& _ray_callable_shaders, uint64_t _hash = 0) {
+    void SetRayCallableShaderTable(const Moer::Array<RHIRayTracingShader*>& _ray_callable_shaders, uint64_t _hash = 0) {
         ray_callable_table = _ray_callable_shaders;
-        hash_ray_callable  = _hash ? _hash : ComputeHash(std::vector<RHIRayTracingShader*>(_ray_callable_shaders.begin(), _ray_callable_shaders.end()));
+        hash_ray_callable  = _hash ? _hash : ComputeHash(Moer::Array<RHIRayTracingShader*>(_ray_callable_shaders.begin(), _ray_callable_shaders.end()));
     }
     friend uint32_t GetHash(const RayTracingPipelineStateInitializer& value) {
         uint32_t hash = GetHash(value.max_attribute_byte_size);
@@ -2064,7 +2067,7 @@ public:
     }
 
 protected:
-    uint64_t ComputeHash(const std::vector<RHIRayTracingShader*>& target) {
+    uint64_t ComputeHash(const Moer::Array<RHIRayTracingShader*>& target) {
         for (RHIRayTracingShader* shader : target) {
             //todo: handle sha256 hash combining and convert shader sha256 to uint64_t
             shader->GetHash();
@@ -2073,10 +2076,10 @@ protected:
     }
 
     RHIRayTracingPipelineStateRef     base_pipeline_handle;
-    std::vector<RHIRayTracingShader*> ray_gen_table;
-    std::vector<RHIRayTracingShader*> ray_miss_table;
-    std::vector<RHIRayTracingShader*> ray_hit_table;
-    std::vector<RHIRayTracingShader*> ray_callable_table;
+    Moer::Array<RHIRayTracingShader*> ray_gen_table;
+    Moer::Array<RHIRayTracingShader*> ray_miss_table;
+    Moer::Array<RHIRayTracingShader*> ray_hit_table;
+    Moer::Array<RHIRayTracingShader*> ray_callable_table;
 };
 
 /* struct for RenderPassInfo Only, constructed by texture_view and Pass-Required texture layout */
@@ -2176,8 +2179,8 @@ struct RHIRenderPassInfo {
     };
     static_assert(sizeof(ColorAttachmentInfo) == sizeof(DepthStencilAttachmentInfo));
 
-    std::array<ColorAttachmentInfo, MAX_PASS_ATTACHMENT_COUNT> color_attachments;
-    DepthStencilAttachmentInfo                                 depth_stencil_attachment;
+    Moer::StaticArray<ColorAttachmentInfo, MAX_PASS_ATTACHMENT_COUNT> color_attachments;
+    DepthStencilAttachmentInfo                                        depth_stencil_attachment;
 
     Rect2D render_area;
 
@@ -2451,7 +2454,7 @@ struct RayTracingGeometryElement {
 static_assert(sizeof(RayTracingGeometryElement) == 40);
 
 struct RayTracingGeometryInitializer {
-    std::vector<RayTracingGeometryElement> elements;
+    Moer::Array<RayTracingGeometryElement> elements;
 
     RHIBufferRef index_buffer;
 
@@ -2478,21 +2481,21 @@ struct RayTracingGeometryInstance {
     RHIRayTracingGeometry* p_geometry;
 
     // a mesh may have multiple instances
-    std::vector<Matrix>& transforms;
+    Moer::Array<Matrix>& transforms;
 
-    std::vector<uint32_t> scene_instance_data_offsets;
+    Moer::Array<uint32_t> scene_instance_data_offsets;
 
     RHIShaderResourceViewRef transform_data_srv = nullptr;
     uint32_t                 num_transforms;
 
     uint32_t              default_index = 0;
-    std::vector<uint32_t> custom_index;
+    Moer::Array<uint32_t> custom_index;
 
     //sum of previous geo elements, for calculating offset in sbt(prev_element_count * shader_slot_per_element)
-    std::vector<uint32_t> prev_element_count;
+    Moer::Array<uint32_t> prev_element_count;
 
     //each geo copy have one bit
-    std::vector<std::bitset<32>> activation_masks;
+    Moer::Array<std::bitset<32>> activation_masks;
 
     uint32_t instance_mask : 8;
 
@@ -2500,16 +2503,16 @@ struct RayTracingGeometryInstance {
 };
 
 struct RayTracingSceneInitializer {
-    std::vector<RHIRayTracingGeometryRef> scene_geometries;
+    Moer::Array<RHIRayTracingGeometryRef> scene_geometries;
 
-    std::vector<RHIRayTracingGeometry*> instance_geometries;
+    Moer::Array<RHIRayTracingGeometry*> instance_geometries;
 
-    std::vector<uint32_t> instance_previous_transform_sum;
+    Moer::Array<uint32_t> instance_previous_transform_sum;
 
-    std::vector<uint32_t> instance_previous_element_sum;
+    Moer::Array<uint32_t> instance_previous_element_sum;
 
     // to support multi-layer ray-tracing: certain instance may exist on certain layer/layers
-    std::vector<uint32_t> instance_count_per_layer;
+    Moer::Array<uint32_t> instance_count_per_layer;
     uint32_t              num_total_elements;
 
     uint32_t shader_slots_per_geometry_element;

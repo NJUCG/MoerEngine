@@ -1,4 +1,9 @@
 #include "rhi/RHI.h"
+#include "log/LogSystem.h"
+#include "rhi/RHICommon.h"
+#include "rhi/RHIResource.h"
+#include "Core.h"
+
 // #include "PixelFormat.h"
 // #include "math/Base.h"
 // #include "rhi/RHICommon.h"
@@ -11,8 +16,36 @@
 // #include "taskgraph/ThreadManager.h"
 RHI* g_rhi = nullptr;
 
+extern LockFreeQueueBase<RHIResource, 64> pending_deletings;
 // global shader
+void MTest() {
 
+    EnqueueRenderTask([] {
+        // do something
+        LOG_INFO("Render System Tick");
+    });
+}
+
+void RHI::RHIFlushPendingDeletes() {
+    Moer::Array<RHIResource*> resources_to_delete;
+
+    pending_deletings.PopAll(resources_to_delete);
+
+    uint32_t num_deletes = resources_to_delete.size();
+
+    //test if its ok
+    for (uint32_t i = 0; i < num_deletes; ++i) {
+        // LOG_INFO("deleted resource type:{}", uint32_t(resources_to_delete[i]->GetResourceType()));
+        //resources_to_delete[i]->GetResourceType() == RRT_VIEWPORT ||
+        // if (resources_to_delete[i]->GetResourceType() == RRT_GPU_FENCE) {
+        //     continue;
+        // }
+        delete resources_to_delete[i];
+    }
+    if (num_deletes > 0) {
+        LOG_INFO("{} resources to delete", num_deletes);
+    }
+}
 // #include "rhi/RHICommandList.h"
 // #include "rhi/RHICommandQueue.h"
 // #include "shader/ShaderParameterMacros.h"
@@ -87,7 +120,7 @@ RHI* g_rhi = nullptr;
 //     const float  vertex_data[] = {-1, -1, 0, 1, -1, 0, -1, 1, 0, 1, 1, 1};
 //     RHIBufferRef vertex_buffer = CreateBufferFromData(v_info, sizeof(vertex_data), (void*)vertex_data);
 
-//     std::vector<RHIBufferRef> vertex_buffers = {vertex_buffer};
+//     Moer::Array<RHIBufferRef> vertex_buffers = {vertex_buffer};
 
 //     shader_state.p_vertex_input_state = g_rhi->RHICreateVertexInputState(vertex_init_list);
 
@@ -138,7 +171,6 @@ RHI* g_rhi = nullptr;
 //     params.write_target = test_view;
 //     RHIBatchedShaderParameters batched_params;
 //     batched_params.SetParameters(test_shader_vs, params);
-//     //command_list->SetBatchedShaderParameter();
 //     //VkSetDescriptorWrite()
 
 //     //rootSignature <=> pipelineLayout -> descriptorLayout descriptorLayoutBinding

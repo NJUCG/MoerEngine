@@ -6,6 +6,7 @@
 #define VULKAN_DEBUG_H
 
 #include "math/Base.h"
+#include "vulkan/vulkan_core.h"
 
 #include <vulkan/vulkan.h>
 #include <string>
@@ -33,10 +34,13 @@ namespace Vulkan {
         static PFN_vkCmdBeginDebugUtilsLabelEXT  vkCmdBeginDebugUtilsLabelEXT;
         static PFN_vkCmdEndDebugUtilsLabelEXT    vkCmdEndDebugUtilsLabelEXT;
         static PFN_vkCmdInsertDebugUtilsLabelEXT vkCmdInsertDebugUtilsLabelEXT;
+        static PFN_vkSetDebugUtilsObjectNameEXT  vkSetDebugUtilsObjectNameEXT;
 
         static void Setup(VkInstance instance);
         static void CmdBeginLabel(VkCommandBuffer cmd_buffer, const std::string& caption, Moer::Vector4f color);
+        static void CmdInsertLabel(VkCommandBuffer cmd_buffer, const std::string& caption, Moer::Vector4f color);
         static void CmdEndLabel(VkCommandBuffer cmd_buffer);
+        static void SetObjectName(VkDevice device, uint64_t object, VkObjectType object_type, const std::string& name);
     };
 
 }

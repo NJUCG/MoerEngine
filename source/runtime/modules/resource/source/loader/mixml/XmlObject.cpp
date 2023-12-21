@@ -19,8 +19,8 @@ namespace Moer::Resource::MiXml {
         return nullptr;
     }
 
-    std::vector<Object*> Object::GetSubObjects(std::string_view sub_object_name) const noexcept {
-        std::vector<Object*> ret{};
+    Moer::Array<Object*> Object::GetSubObjects(std::string_view sub_object_name) const noexcept {
+        Moer::Array<Object*> ret{};
         for (auto so : sub_object) {
             if (so->obj_name.compare(sub_object_name) == 0) {
                 ret.emplace_back(so);

@@ -2,142 +2,51 @@
 // Created by 74535 on 2023/10/17.
 //
 
+#include "misc/STL.h"
+#include "rhi/RHICommand.h"
+#include "rhi/RHICommon.h"
+#include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
 #include "rhi/vulkan/misc/VulkanMacroUtils.h"
-#include "VulkanCommandList.h"
+#include "VulkanCommand.h"
 
 #include "VulkanDevice.h"
 #include "VulkanRHIResource.h"
 #include "VulkanDescriptor.h"
 #include "VulkanPipelineResourceCache.h"
+#include "VulkanDebug.h"
 
 #include <vulkan/vulkan_core.h>
 
-VulkanRHIGraphicsCommandList::VulkanRHIGraphicsCommandList(VulkanDevice* _device, VkCommandPool _pool, VkCommandBufferLevel _level) : VulkanDeviceObject(_device) {
+VulkanRHICommandListBase::VulkanRHICommandListBase(VulkanDevice* _device, VkCommandPool _pool, VkCommandBufferLevel _level) : VulkanDeviceObject(_device) {
     VkCommandBufferAllocateInfo buffer_alloc_info{};
+    m_current_command_pool               = _pool;
     buffer_alloc_info.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     buffer_alloc_info.pNext              = nullptr;
-    buffer_alloc_info.commandPool        = _pool;
+    buffer_alloc_info.commandPool        = m_current_command_pool;
     buffer_alloc_info.level              = _level;
     buffer_alloc_info.commandBufferCount = 1;
 
-    VK_CHECK_RESULT(vkAllocateCommandBuffers(*device, &buffer_alloc_info, &m_command_buffer));
+    m_level = _level;
+
+    VK_CHECK_RESULT(vkAllocateCommandBuffers(m_device->GetDevice(), &buffer_alloc_info, &m_command_buffer));
 }
 
-VulkanRHIGraphicsCommandList::~VulkanRHIGraphicsCommandList() {
-    device = nullptr;
-    //destroy command buffer
-    vkFreeCommandBuffers(*device, device->GetDefaultCommandPool(), 1, &m_command_buffer);
+VulkanRHICommandListBase::~VulkanRHICommandListBase() {
+    vkFreeCommandBuffers(m_device->GetDevice(), m_current_command_pool, 1, &m_command_buffer);
 }
 
-void VulkanRHIGraphicsCommandList::SetBatchedShaderParameter(const RHIBatchedShaderParameters& _parameters) {
-    // VK_CHECK_NULLPTR(m_current_pipeline_state, "SetBatchedShaderParameter: graphics pipeline state is nullptr!", return);
-    // const auto* vk_pso = m_current_pipeline_state;
-    // // constants
-    // auto constant_params        = _parameters.GetConstantParameters();
-    // auto constant_shader_stages = vk_pso->GetConstantShaderStages();
-    // for (uint32_t i = 0; i < constant_params.size(); ++i) {
-    //     auto* constant = reinterpret_cast<const uint32_t*>(_parameters.GetConstData(constant_params[i].byte_offset_in_raw_data));
-    //     vkCmdPushConstants(m_command_buffer, vk_pso->GetPipelineLayout(), constant_shader_stages[i], 0, constant_params[i].size_in_32bit, constant);
-    // }
-}
-
-void VulkanRHIGraphicsCommandList::SetPipelineState(RHIGraphicsPipelineState* _graphics_pso) {
-    auto* vk_pso = static_cast<VulkanRHIGraphicsPipelineState*>(_graphics_pso);
-    VK_CHECK_NULLPTR(vk_pso, "SetPipelineState: graphics pipeline state is nullptr!", return);
-
-    // // bind descriptor sets
-    // auto descriptor_sets = vk_pso->GetDescriptorSets();
-    // vkCmdBindDescriptorSets(
-    //     m_command_buffer,
-    //     VK_PIPELINE_BIND_POINT_GRAPHICS,
-    //     vk_pso->GetPipelineLayout(),
-    //     0,
-    //     descriptor_sets.size(),
-    //     descriptor_sets.data(),
-    //     0,
-    //     nullptr);
-
-    vkCmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk_pso->GetHandle());
-    m_current_pipeline_state = vk_pso;
-}
-
-void VulkanRHIGraphicsCommandList::Open() {
-    VkCommandBufferBeginInfo begin_info{};
-    begin_info.sType            = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    begin_info.pNext            = nullptr;
-    begin_info.flags            = 0;
-    begin_info.pInheritanceInfo = nullptr;
-
-    VK_CHECK_RESULT(vkBeginCommandBuffer(m_command_buffer, &begin_info));
-}
-
-void VulkanRHIGraphicsCommandList::Close() {
-    VK_CHECK_RESULT(vkEndCommandBuffer(m_command_buffer));
-}
-
-void VulkanRHIGraphicsCommandList::Reset() {
-    // MARK...
-    // need to implemented
-    // auto* vk_pipelie_state = static_cast<const VulkanRHIGraphicsPipelineState*>(_graphics_pso);
-    // VK_CHECK_NULLPTR(vk_pipelie_state, "Reset: graphics pipeline state is nullptr!", return);
-    vkResetCommandBuffer(m_command_buffer, VK_COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT);
-}
-
-void VulkanRHIGraphicsCommandList::ClearState(RHIGraphicsPipelineState* _graphics_pso) {
-    // MARK...
-    // need to implemented
-    auto* vk_pipelie_state = static_cast<const VulkanRHIGraphicsPipelineState*>(_graphics_pso);
-    VK_CHECK_NULLPTR(vk_pipelie_state, "ClearState: graphics pipeline state is nullptr!", return);
-}
-
-void VulkanRHIGraphicsCommandList::DrawIndexedInstanced(
-    uint32_t _index_count,
-    uint32_t _instance_count,
-    uint32_t _start_index_location,
-    uint32_t _start_vertex_location,
-    uint32_t _start_instance_location) {
-
-    PrepareDrawCommand();
-
-    vkCmdDrawIndexed(
-        m_command_buffer,
-        _index_count,
-        _instance_count,
-        _start_index_location,
-        _start_vertex_location,
-        _start_instance_location);
-
-    PostDrawCommand();
-}
-
-void VulkanRHIGraphicsCommandList::DrawIndexedIndirect(RHIBuffer* _argument_buffer, uint64_t _arg_offset, RHIBuffer* _count_buffer, uint64_t _count_buffer_offset, uint32_t _max_draw_count, uint32_t _stride) {
-    auto* vk_arg_buffer   = static_cast<const VulkanRHIBuffer*>(_argument_buffer);
-    auto* vk_count_buffer = static_cast<const VulkanRHIBuffer*>(_count_buffer);
-    auto* vk_arg_handle   = vk_arg_buffer == nullptr ? nullptr : vk_arg_buffer->GetHandle();
-    auto* vk_count_handle = vk_count_buffer == nullptr ? nullptr : vk_count_buffer->GetHandle();
-
-    vkCmdDrawIndexedIndirectCount(
-        m_command_buffer,
-        vk_arg_handle,
-        _arg_offset,
-        vk_count_handle,
-        _count_buffer_offset,
-        _max_draw_count,
-        _stride);
-}
-
-void VulkanRHIGraphicsCommandList::Dispatch(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z) {
+void VulkanRHICommandListBase::Dispatch(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z) {
     vkCmdDispatch(m_command_buffer, _group_count_x, _group_count_y, _group_count_z);
 }
 
-void VulkanRHIGraphicsCommandList::DispatchIndirect(RHIBuffer* _buffer, uint64_t _offset) {
+void VulkanRHICommandListBase::DispatchIndirect(RHIBuffer* _buffer, uint64_t _offset) {
     auto* vk_buffer        = static_cast<const VulkanRHIBuffer*>(_buffer);
     auto* vk_buffer_handle = vk_buffer == nullptr ? nullptr : vk_buffer->GetHandle();
     vkCmdDispatchIndirect(m_command_buffer, vk_buffer_handle, _offset);
 }
 
-void VulkanRHIGraphicsCommandList::CopyBuffer(const RHICopyBufferInfo& _copy_info, RHIBuffer* _src, RHIBuffer* _dst) {
+void VulkanRHICommandListBase::CopyBuffer(const RHICopyBufferInfo& _copy_info, RHIBuffer* _src, RHIBuffer* _dst) {
     auto* vk_src_buffer = static_cast<const VulkanRHIBuffer*>(_src);
     auto* vk_dst_buffer = static_cast<const VulkanRHIBuffer*>(_dst);
     if (vk_src_buffer == nullptr || vk_dst_buffer == nullptr) {
@@ -145,22 +54,22 @@ void VulkanRHIGraphicsCommandList::CopyBuffer(const RHICopyBufferInfo& _copy_inf
         return;
     }
 
-    std::vector<VkBufferCopy> copy_regions(_copy_info.region_count);
-    for (uint32_t i = 0; i < _copy_info.region_count; ++i) {
-        copy_regions[i].srcOffset = _copy_info.p_regions[i].src_offset;
-        copy_regions[i].dstOffset = _copy_info.p_regions[i].dst_offset;
-        copy_regions[i].size      = _copy_info.p_regions[i].size;
+    Moer::Array<VkBufferCopy> copy_regions(_copy_info.regions.size());
+    for (uint32_t i = 0; i < copy_regions.size(); ++i) {
+        copy_regions[i].srcOffset = _copy_info.regions[i].src_offset;
+        copy_regions[i].dstOffset = _copy_info.regions[i].dst_offset;
+        copy_regions[i].size      = _copy_info.regions[i].size;
     }
 
     vkCmdCopyBuffer(
         m_command_buffer,
         vk_src_buffer->GetHandle(),
         vk_dst_buffer->GetHandle(),
-        _copy_info.region_count,
+        copy_regions.size(),
         copy_regions.data());
 }
 
-void VulkanRHIGraphicsCommandList::CopyTexture(const RHICopyTextureInfo& _copy_info, RHITexture* _src, RHITexture* _dst) {
+void VulkanRHICommandListBase::CopyTexture(const RHICopyTextureInfo& _copy_info, RHITexture* _src, RHITexture* _dst) {
     auto* vk_src_texture = static_cast<const VulkanRHITexture*>(_src);
     auto* vk_dst_texture = static_cast<const VulkanRHITexture*>(_dst);
     if (vk_src_texture == nullptr || vk_dst_texture == nullptr) {
@@ -197,7 +106,9 @@ void VulkanRHIGraphicsCommandList::CopyTexture(const RHICopyTextureInfo& _copy_i
         &copy_region);
 }
 
-void VulkanRHIGraphicsCommandList::CopyBufferToTexture(RHIBuffer* src_buffer, RHITexture* dst_texture, const RHICopyBufferToTextureInfo& _info) {
+void VulkanRHICommandListBase::CopyBufferToTexture(RHIBuffer*                        src_buffer,
+                                                   RHITexture*                       dst_texture,
+                                                   const RHICopyBufferToTextureInfo& _info) {
     auto* vk_src_buffer  = static_cast<const VulkanRHIBuffer*>(src_buffer);
     auto* vk_dst_texture = static_cast<const VulkanRHITexture*>(dst_texture);
 
@@ -225,7 +136,9 @@ void VulkanRHIGraphicsCommandList::CopyBufferToTexture(RHIBuffer* src_buffer, RH
         &copy_region);
 }
 
-void VulkanRHIGraphicsCommandList::CopyTextureToBuffer(RHITexture* src_texture, RHIBuffer* dst_buffer, const RHICopyTextureToBufferInfo& _info) {
+void VulkanRHICommandListBase::CopyTextureToBuffer(RHITexture*                       src_texture,
+                                                   RHIBuffer*                        dst_buffer,
+                                                   const RHICopyTextureToBufferInfo& _info) {
     auto* vk_src_texture = static_cast<const VulkanRHITexture*>(src_texture);
     auto* vk_dst_buffer  = static_cast<const VulkanRHIBuffer*>(dst_buffer);
 
@@ -253,151 +166,279 @@ void VulkanRHIGraphicsCommandList::CopyTextureToBuffer(RHITexture* src_texture, 
         &copy_region);
 }
 
-void VulkanRHIGraphicsCommandList::BlitTexture(RHITexture* _src_texture, ETextureLayout _src_layout, RHITexture* _dst_texture, ETextureLayout _dst_layout, RHISubresourceSlice _src_slice, Offset3D* _src_offsets, RHISubresourceSlice _dst_slice, Offset3D* _dst_offsets, ESamplerFilter _filter) {
-    auto* vk_src_texture = static_cast<const VulkanRHITexture*>(_src_texture);
-    auto* vk_dst_texture = static_cast<const VulkanRHITexture*>(_dst_texture);
+void VulkanRHICommandListBase::BlitTexture(const RHIBlitTextureInfo& _blit_info, RHITexture* _src, RHITexture* _dst) {
+    auto* vk_src_texture = static_cast<const VulkanRHITexture*>(_src);
+    auto* vk_dst_texture = static_cast<const VulkanRHITexture*>(_dst);
     if (vk_src_texture == nullptr || vk_dst_texture == nullptr) {
         LOG_CRITICAL("BlitTexture: src or dst texture is nullptr!");
         return;
     }
+    VkBlitImageInfo2 blit_info{VK_STRUCTURE_TYPE_BLIT_IMAGE_INFO_2};
+    blit_info.srcImage       = vk_src_texture->GetHandle();
+    blit_info.srcImageLayout = VulkanEnumTranslator::METoVKImageLayout(_blit_info.src_layout);
+    blit_info.dstImage       = vk_dst_texture->GetHandle();
+    blit_info.dstImageLayout = VulkanEnumTranslator::METoVKImageLayout(_blit_info.dst_layout);
 
-    VkImageBlit blit_region;
-    blit_region.srcSubresource.aspectMask     = VulkanEnumTranslator::METoVKImageAspectFlags(_src_slice.aspect);
-    blit_region.srcSubresource.mipLevel       = _src_slice.mip_index;
-    blit_region.srcSubresource.baseArrayLayer = _src_slice.array_index;
-    blit_region.srcSubresource.layerCount     = _src_slice.array_count;
-    blit_region.srcOffsets[0].x               = _src_offsets[0].x;
-    blit_region.srcOffsets[0].y               = _src_offsets[0].y;
-    blit_region.srcOffsets[0].z               = _src_offsets[0].z;
-    blit_region.srcOffsets[1].x               = _src_offsets[1].x;
-    blit_region.srcOffsets[1].y               = _src_offsets[1].y;
-    blit_region.srcOffsets[1].z               = _src_offsets[1].z;
-    blit_region.dstSubresource.aspectMask     = VulkanEnumTranslator::METoVKImageAspectFlags(_dst_slice.aspect);
-    blit_region.dstSubresource.mipLevel       = _dst_slice.mip_index;
-    blit_region.dstSubresource.baseArrayLayer = _dst_slice.array_index;
-    blit_region.dstSubresource.layerCount     = _dst_slice.array_count;
-    blit_region.dstOffsets[0].x               = _dst_offsets[0].x;
-    blit_region.dstOffsets[0].y               = _dst_offsets[0].y;
-    blit_region.dstOffsets[0].z               = _dst_offsets[0].z;
-    blit_region.dstOffsets[1].x               = _dst_offsets[1].x;
-    blit_region.dstOffsets[1].y               = _dst_offsets[1].y;
-    blit_region.dstOffsets[1].z               = _dst_offsets[1].z;
+    VkImageBlit2 blit_region{VK_STRUCTURE_TYPE_IMAGE_BLIT_2};
+    blit_region.srcSubresource.aspectMask     = VulkanEnumTranslator::METoVKImageAspectFlags(_blit_info.src_slice.aspect);
+    blit_region.srcSubresource.mipLevel       = _blit_info.src_slice.mip_index;
+    blit_region.srcSubresource.baseArrayLayer = _blit_info.src_slice.array_index;
+    blit_region.srcSubresource.layerCount     = _blit_info.src_slice.array_count;
+    blit_region.srcOffsets[0].x               = _blit_info.src_offsets[0].x;
+    blit_region.srcOffsets[0].y               = _blit_info.src_offsets[0].y;
+    blit_region.srcOffsets[0].z               = _blit_info.src_offsets[0].z;
+    blit_region.srcOffsets[1].x               = _blit_info.src_offsets[1].x;
+    blit_region.srcOffsets[1].y               = _blit_info.src_offsets[1].y;
+    blit_region.srcOffsets[1].z               = _blit_info.src_offsets[1].z;
+    blit_region.dstSubresource.aspectMask     = VulkanEnumTranslator::METoVKImageAspectFlags(_blit_info.dst_slice.aspect);
+    blit_region.dstSubresource.mipLevel       = _blit_info.dst_slice.mip_index;
+    blit_region.dstSubresource.baseArrayLayer = _blit_info.dst_slice.array_index;
+    blit_region.dstSubresource.layerCount     = _blit_info.dst_slice.array_count;
+    blit_region.dstOffsets[0].x               = _blit_info.dst_offsets[0].x;
+    blit_region.dstOffsets[0].y               = _blit_info.dst_offsets[0].y;
+    blit_region.dstOffsets[0].z               = _blit_info.dst_offsets[0].z;
+    blit_region.dstOffsets[1].x               = _blit_info.dst_offsets[1].x;
+    blit_region.dstOffsets[1].y               = _blit_info.dst_offsets[1].y;
+    blit_region.dstOffsets[1].z               = _blit_info.dst_offsets[1].z;
 
-    vkCmdBlitImage(
-        m_command_buffer,
-        vk_src_texture->GetHandle(),
-        VulkanEnumTranslator::METoVKImageLayout(_src_layout),
-        vk_dst_texture->GetHandle(),
-        VulkanEnumTranslator::METoVKImageLayout(_dst_layout),
-        1,
-        &blit_region,
-        VulkanEnumTranslator::METoVKImageFilter(_filter));
+    blit_info.regionCount = 1;
+    blit_info.pRegions    = &blit_region;
+
+    vkCmdBlitImage2(m_command_buffer, &blit_info);
 }
 
-void VulkanRHIGraphicsCommandList::ResolveTexture(RHITexture* _src_texture, ETextureLayout _src_layout, RHITexture* _dst_texture, ETextureLayout _dst_layout, RHISubresourceSlice _src_slice, Offset3D _src_offsets, RHISubresourceSlice _dst_slice, Offset3D _dst_offsets, Extent3D _extent) {
-    auto* vk_src_texture = static_cast<const VulkanRHITexture*>(_src_texture);
-    auto* vk_dst_texture = static_cast<const VulkanRHITexture*>(_dst_texture);
+void VulkanRHICommandListBase::ResolveTexture(const RHIResolveTextureInfo& _resolove_info, RHITexture* _src, RHITexture* _dst) {
+    auto* vk_src_texture = static_cast<const VulkanRHITexture*>(_src);
+    auto* vk_dst_texture = static_cast<const VulkanRHITexture*>(_dst);
     if (vk_src_texture == nullptr || vk_dst_texture == nullptr) {
         LOG_CRITICAL("ResolveTexture: src or dst texture is nullptr!");
         return;
     }
+    VkResolveImageInfo2 resolve_info{VK_STRUCTURE_TYPE_RESOLVE_IMAGE_INFO_2};
 
-    VkImageResolve resolve_region;
-    resolve_region.srcSubresource.aspectMask     = VulkanEnumTranslator::METoVKImageAspectFlags(_src_slice.aspect);
-    resolve_region.srcSubresource.mipLevel       = _src_slice.mip_index;
-    resolve_region.srcSubresource.baseArrayLayer = _src_slice.array_index;
-    resolve_region.srcSubresource.layerCount     = _src_slice.array_count;
-    resolve_region.srcOffset.x                   = _src_offsets.x;
-    resolve_region.srcOffset.y                   = _src_offsets.y;
-    resolve_region.srcOffset.z                   = _src_offsets.z;
-    resolve_region.dstSubresource.aspectMask     = VulkanEnumTranslator::METoVKImageAspectFlags(_dst_slice.aspect);
-    resolve_region.dstSubresource.mipLevel       = _dst_slice.mip_index;
-    resolve_region.dstSubresource.baseArrayLayer = _dst_slice.array_index;
-    resolve_region.dstSubresource.layerCount     = _dst_slice.array_count;
-    resolve_region.dstOffset.x                   = _dst_offsets.x;
-    resolve_region.dstOffset.y                   = _dst_offsets.y;
-    resolve_region.dstOffset.z                   = _dst_offsets.z;
-    resolve_region.extent.width                  = _extent.width;
-    resolve_region.extent.height                 = _extent.height;
-    resolve_region.extent.depth                  = _extent.depth;
+    VkImageResolve2 resolve_region{VK_STRUCTURE_TYPE_IMAGE_RESOLVE_2};
+    resolve_region.srcSubresource.aspectMask     = VulkanEnumTranslator::METoVKImageAspectFlags(_resolove_info.src_slice.aspect);
+    resolve_region.srcSubresource.mipLevel       = _resolove_info.src_slice.mip_index;
+    resolve_region.srcSubresource.baseArrayLayer = _resolove_info.src_slice.array_index;
+    resolve_region.srcSubresource.layerCount     = _resolove_info.src_slice.array_count;
+    resolve_region.srcOffset.x                   = _resolove_info.src_offset.x;
+    resolve_region.srcOffset.y                   = _resolove_info.src_offset.y;
+    resolve_region.srcOffset.z                   = _resolove_info.src_offset.z;
+    resolve_region.dstSubresource.aspectMask     = VulkanEnumTranslator::METoVKImageAspectFlags(_resolove_info.dst_slice.aspect);
+    resolve_region.dstSubresource.mipLevel       = _resolove_info.dst_slice.mip_index;
+    resolve_region.dstSubresource.baseArrayLayer = _resolove_info.dst_slice.array_index;
+    resolve_region.dstSubresource.layerCount     = _resolove_info.dst_slice.array_count;
+    resolve_region.dstOffset.x                   = _resolove_info.dst_offset.x;
+    resolve_region.dstOffset.y                   = _resolove_info.dst_offset.y;
+    resolve_region.dstOffset.z                   = _resolove_info.dst_offset.z;
+    resolve_region.extent.width                  = _resolove_info.extent.width;
+    resolve_region.extent.height                 = _resolove_info.extent.height;
+    resolve_region.extent.depth                  = _resolove_info.extent.depth;
 
-    vkCmdResolveImage(
-        m_command_buffer,
-        vk_src_texture->GetHandle(),
-        VulkanEnumTranslator::METoVKImageLayout(_src_layout),
-        vk_dst_texture->GetHandle(),
-        VulkanEnumTranslator::METoVKImageLayout(_dst_layout),
-        1,
-        &resolve_region);
+    resolve_info.srcImage       = vk_src_texture->GetHandle();
+    resolve_info.srcImageLayout = VulkanEnumTranslator::METoVKImageLayout(_resolove_info.src_layout);
+    resolve_info.dstImage       = vk_dst_texture->GetHandle();
+    resolve_info.dstImageLayout = VulkanEnumTranslator::METoVKImageLayout(_resolove_info.dst_layout);
+    resolve_info.regionCount    = 1;
+    resolve_info.pRegions       = &resolve_region;
+    vkCmdResolveImage2(m_command_buffer, &resolve_info);
 }
 
-void VulkanRHIGraphicsCommandList::SetPipelineBarrier(const RHIBarrierDependencyInfo& _dependency) {
-    std::vector<VkMemoryBarrier2>       memory_barriers(_dependency.memory_barrier_count);
-    std::vector<VkBufferMemoryBarrier2> buffer_barriers(_dependency.buffer_barrier_count);
-    std::vector<VkImageMemoryBarrier2>  image_barriers(_dependency.texture_barrier_count);
+void VulkanRHICommandListBase::SetPipelineBarrier(const RHIBarrierDependencyInfo& _dependency) {
+    Moer::Array<VkMemoryBarrier2>       memory_barriers(_dependency.memory_barriers.size());
+    Moer::Array<VkBufferMemoryBarrier2> buffer_barriers(_dependency.buffer_barriers.size());
+    Moer::Array<VkImageMemoryBarrier2>  image_barriers(_dependency.texture_barriers.size());
 
-    for (uint32_t i = 0; i < _dependency.memory_barrier_count; ++i) {
+    for (uint32_t i = 0; i < memory_barriers.size(); ++i) {
         memory_barriers[i].sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
         memory_barriers[i].pNext         = nullptr;
-        memory_barriers[i].srcStageMask  = VulkanEnumTranslator::METoVkPipelineStageFlags2(_dependency.p_memory_barriers[i].src_stage);
-        memory_barriers[i].srcAccessMask = VulkanEnumTranslator::METoVkAccessFlags2(_dependency.p_memory_barriers[i].src_access);
-        memory_barriers[i].dstStageMask  = VulkanEnumTranslator::METoVkPipelineStageFlags2(_dependency.p_memory_barriers[i].dst_stage);
-        memory_barriers[i].dstAccessMask = VulkanEnumTranslator::METoVkAccessFlags2(_dependency.p_memory_barriers[i].dst_access);
+        memory_barriers[i].srcStageMask  = VulkanEnumTranslator::METoVkPipelineStageFlags2(_dependency.memory_barriers[i].src_stage);
+        memory_barriers[i].srcAccessMask = VulkanEnumTranslator::METoVkAccessFlags2(_dependency.memory_barriers[i].src_access);
+        memory_barriers[i].dstStageMask  = VulkanEnumTranslator::METoVkPipelineStageFlags2(_dependency.memory_barriers[i].dst_stage);
+        memory_barriers[i].dstAccessMask = VulkanEnumTranslator::METoVkAccessFlags2(_dependency.memory_barriers[i].dst_access);
     }
 
     VulkanRHIBuffer* vk_buffer = nullptr;
-    for (uint32_t i = 0; i < _dependency.buffer_barrier_count; ++i) {
-        vk_buffer = static_cast<VulkanRHIBuffer*>(_dependency.p_buffer_barriers[i].p_buffer);
+    for (uint32_t i = 0; i < buffer_barriers.size(); ++i) {
+        vk_buffer = static_cast<VulkanRHIBuffer*>(_dependency.buffer_barriers[i].p_buffer);
         VK_CHECK_NULLPTR(vk_buffer, "SetPipelineBarrier->VkBufferMemoryBarrier2: VulkanRHIBuffer is nullptr!", continue);
 
         buffer_barriers[i].sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
         buffer_barriers[i].pNext               = nullptr;
-        buffer_barriers[i].srcStageMask        = VulkanEnumTranslator::METoVkPipelineStageFlags2(_dependency.p_buffer_barriers[i].src_stage);
-        buffer_barriers[i].srcAccessMask       = VulkanEnumTranslator::METoVkAccessFlags2(_dependency.p_buffer_barriers[i].src_access);
-        buffer_barriers[i].dstStageMask        = VulkanEnumTranslator::METoVkPipelineStageFlags2(_dependency.p_buffer_barriers[i].dst_stage);
-        buffer_barriers[i].dstAccessMask       = VulkanEnumTranslator::METoVkAccessFlags2(_dependency.p_buffer_barriers[i].dst_access);
-        buffer_barriers[i].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;//MARK...
-        buffer_barriers[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        buffer_barriers[i].srcStageMask        = VulkanEnumTranslator::METoVkPipelineStageFlags2(_dependency.buffer_barriers[i].src_stage);
+        buffer_barriers[i].srcAccessMask       = VulkanEnumTranslator::METoVkAccessFlags2(_dependency.buffer_barriers[i].src_access);
+        buffer_barriers[i].dstStageMask        = VulkanEnumTranslator::METoVkPipelineStageFlags2(_dependency.buffer_barriers[i].dst_stage);
+        buffer_barriers[i].dstAccessMask       = VulkanEnumTranslator::METoVkAccessFlags2(_dependency.buffer_barriers[i].dst_access);
+        buffer_barriers[i].srcQueueFamilyIndex = VulkanEnumTranslator::METoVkQueueFamilyIndex(_dependency.buffer_barriers[i].src_queue_type, m_device);
+        buffer_barriers[i].dstQueueFamilyIndex = VulkanEnumTranslator::METoVkQueueFamilyIndex(_dependency.buffer_barriers[i].dst_queue_type, m_device);
         buffer_barriers[i].buffer              = vk_buffer->GetHandle();
-        buffer_barriers[i].offset              = _dependency.p_buffer_barriers[i].offset;
-        buffer_barriers[i].size                = _dependency.p_buffer_barriers[i].size;
+        buffer_barriers[i].offset              = _dependency.buffer_barriers[i].offset;
+        buffer_barriers[i].size                = _dependency.buffer_barriers[i].size;
     }
 
     VulkanRHITexture* vk_texture = nullptr;
-    for (uint32_t i = 0; i < _dependency.texture_barrier_count; ++i) {
-        vk_texture = static_cast<VulkanRHITexture*>(_dependency.p_texture_barriers[i].p_texture);
+    for (uint32_t i = 0; i < image_barriers.size(); ++i) {
+        vk_texture = static_cast<VulkanRHITexture*>(_dependency.texture_barriers[i].p_texture);
         VK_CHECK_NULLPTR(vk_texture, "SetPipelineBarrier->VkImageMemoryBarrier2: VulkanRHITexture is nullptr!", continue);
 
         image_barriers[i].sType                           = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
         image_barriers[i].pNext                           = nullptr;
-        image_barriers[i].srcStageMask                    = VulkanEnumTranslator::METoVkPipelineStageFlags2(_dependency.p_texture_barriers[i].src_stage);
-        image_barriers[i].srcAccessMask                   = VulkanEnumTranslator::METoVkAccessFlags2(_dependency.p_texture_barriers[i].src_access);
-        image_barriers[i].dstStageMask                    = VulkanEnumTranslator::METoVkPipelineStageFlags2(_dependency.p_texture_barriers[i].dst_stage);
-        image_barriers[i].dstAccessMask                   = VulkanEnumTranslator::METoVkAccessFlags2(_dependency.p_texture_barriers[i].dst_access);
-        image_barriers[i].oldLayout                       = VulkanEnumTranslator::METoVKImageLayout(_dependency.p_texture_barriers[i].src_layout);
-        image_barriers[i].newLayout                       = VulkanEnumTranslator::METoVKImageLayout(_dependency.p_texture_barriers[i].dst_layout);
-        image_barriers[i].srcQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
-        image_barriers[i].dstQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
+        image_barriers[i].srcStageMask                    = VulkanEnumTranslator::METoVkPipelineStageFlags2(_dependency.texture_barriers[i].src_stage);
+        image_barriers[i].srcAccessMask                   = VulkanEnumTranslator::METoVkAccessFlags2(_dependency.texture_barriers[i].src_access);
+        image_barriers[i].dstStageMask                    = VulkanEnumTranslator::METoVkPipelineStageFlags2(_dependency.texture_barriers[i].dst_stage);
+        image_barriers[i].dstAccessMask                   = VulkanEnumTranslator::METoVkAccessFlags2(_dependency.texture_barriers[i].dst_access);
+        image_barriers[i].oldLayout                       = VulkanEnumTranslator::METoVKImageLayout(_dependency.texture_barriers[i].src_layout);
+        image_barriers[i].newLayout                       = VulkanEnumTranslator::METoVKImageLayout(_dependency.texture_barriers[i].dst_layout);
+        image_barriers[i].srcQueueFamilyIndex             = VulkanEnumTranslator::METoVkQueueFamilyIndex(_dependency.texture_barriers[i].src_queue_type, m_device);
+        image_barriers[i].dstQueueFamilyIndex             = VulkanEnumTranslator::METoVkQueueFamilyIndex(_dependency.texture_barriers[i].dst_queue_type, m_device);
         image_barriers[i].image                           = vk_texture->GetHandle();// 2. MARK... layout transition need image has 'VK_IMAGE_USAGE_TRANSFER_DST_BIT'
-        image_barriers[i].subresourceRange.aspectMask     = VulkanEnumTranslator::METoVKImageAspectFlags(_dependency.p_texture_barriers[i].sub_resource_range.aspect);
-        image_barriers[i].subresourceRange.baseMipLevel   = _dependency.p_texture_barriers[i].sub_resource_range.mip_index;
-        image_barriers[i].subresourceRange.levelCount     = _dependency.p_texture_barriers[i].sub_resource_range.num_mips == RHISubresourceRange::s_all ? VK_REMAINING_MIP_LEVELS : _dependency.p_texture_barriers[i].sub_resource_range.num_mips;// 1. MARK... levelCount + baseMipLevel must <= image mip levels
-        image_barriers[i].subresourceRange.baseArrayLayer = _dependency.p_texture_barriers[i].sub_resource_range.array_index;
-        image_barriers[i].subresourceRange.layerCount     = _dependency.p_texture_barriers[i].sub_resource_range.array_count == RHISubresourceRange::s_all ? VK_REMAINING_ARRAY_LAYERS : _dependency.p_texture_barriers[i].sub_resource_range.array_count;// 1. MARK... layerCount + baseArrayLayer must <= image array layers
+        image_barriers[i].subresourceRange.aspectMask     = VulkanEnumTranslator::METoVKImageAspectFlags(_dependency.texture_barriers[i].sub_resource_range.aspect);
+        image_barriers[i].subresourceRange.baseMipLevel   = _dependency.texture_barriers[i].sub_resource_range.mip_index;
+        image_barriers[i].subresourceRange.levelCount     = _dependency.texture_barriers[i].sub_resource_range.num_mips == RHISubresourceRange::s_all ? VK_REMAINING_MIP_LEVELS : _dependency.texture_barriers[i].sub_resource_range.num_mips;// 1. MARK... levelCount + baseMipLevel must <= image mip levels
+        image_barriers[i].subresourceRange.baseArrayLayer = _dependency.texture_barriers[i].sub_resource_range.array_index;
+        image_barriers[i].subresourceRange.layerCount     = _dependency.texture_barriers[i].sub_resource_range.array_count == RHISubresourceRange::s_all ? VK_REMAINING_ARRAY_LAYERS : _dependency.texture_barriers[i].sub_resource_range.array_count;// 1. MARK... layerCount + baseArrayLayer must <= image array layers
     }
 
     VkDependencyInfo dependency_info{};
     dependency_info.sType                    = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
     dependency_info.pNext                    = nullptr;
     dependency_info.dependencyFlags          = 0;
-    dependency_info.memoryBarrierCount       = _dependency.memory_barrier_count;
+    dependency_info.memoryBarrierCount       = memory_barriers.size();
     dependency_info.pMemoryBarriers          = memory_barriers.data();
-    dependency_info.bufferMemoryBarrierCount = _dependency.buffer_barrier_count;
+    dependency_info.bufferMemoryBarrierCount = buffer_barriers.size();
     dependency_info.pBufferMemoryBarriers    = buffer_barriers.data();
-    dependency_info.imageMemoryBarrierCount  = _dependency.texture_barrier_count;
+    dependency_info.imageMemoryBarrierCount  = image_barriers.size();
     dependency_info.pImageMemoryBarriers     = image_barriers.data();
 
     vkCmdPipelineBarrier2(m_command_buffer, &dependency_info);
+}
+
+void VulkanRHICommandListBase::Begin() {
+    VkCommandBufferBeginInfo begin_info{};
+    begin_info.sType            = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin_info.pNext            = nullptr;
+    begin_info.flags            = 0;
+    begin_info.pInheritanceInfo = nullptr;
+
+    VK_CHECK_RESULT(vkBeginCommandBuffer(m_command_buffer, &begin_info));
+}
+
+void VulkanRHICommandListBase::End() {
+    VK_CHECK_RESULT(vkEndCommandBuffer(m_command_buffer));
+}
+
+void VulkanRHICommandListBase::Reset() {
+    vkResetCommandBuffer(m_command_buffer, VK_COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT);
+}
+
+VulkanRHIGraphicsCommandList::VulkanRHIGraphicsCommandList(VulkanDevice* _device, VkCommandPool _pool, VkCommandBufferLevel _level) : VulkanRHICommandListBase(_device, _pool, _level) {}
+
+VulkanRHIGraphicsCommandList::~VulkanRHIGraphicsCommandList() {
+}
+
+void VulkanRHIGraphicsCommandList::SetPipelineState(RHIGraphicsPipelineState* _graphics_pso) {
+    auto* vk_pso = static_cast<VulkanRHIGraphicsPipelineState*>(_graphics_pso);
+    VK_CHECK_NULLPTR(vk_pso, "SetPipelineState: graphics pipeline state is nullptr!", return);
+
+    vkCmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk_pso->GetHandle());
+    m_current_pipeline_state = vk_pso;
+}
+
+void VulkanRHIGraphicsCommandList::BeginRecording() {
+    VulkanRHICommandListBase::Begin();
+    m_bound_sets.clear();
+}
+
+void VulkanRHIGraphicsCommandList::EndRecording() {
+    VulkanRHICommandListBase::End();
+}
+
+void VulkanRHIGraphicsCommandList::Reset() {
+    VulkanRHICommandListBase::Reset();
+}
+
+void VulkanRHIGraphicsCommandList::ClearState(RHIGraphicsPipelineState* _graphics_pso) {
+    // MARK...
+    // need to implemented
+    auto* vk_pipelie_state = static_cast<const VulkanRHIGraphicsPipelineState*>(_graphics_pso);
+    VK_CHECK_NULLPTR(vk_pipelie_state, "ClearState: graphics pipeline state is nullptr!", return);
+}
+
+void VulkanRHIGraphicsCommandList::DrawIndexedInstanced(
+    uint32_t _index_count,
+    uint32_t _instance_count,
+    uint32_t _start_index_location,
+    uint32_t _start_vertex_location,
+    uint32_t _start_instance_location) {
+
+    PrepareDrawCommand();
+    Moer::RHI::Vulkan::DebugUtils::CmdInsertLabel(m_command_buffer, "DrawIndexedInstanced", {});
+    vkCmdDrawIndexed(
+        m_command_buffer,
+        _index_count,
+        _instance_count,
+        _start_index_location,
+        _start_vertex_location,
+        _start_instance_location);
+}
+
+void VulkanRHIGraphicsCommandList::DrawIndexedIndirect(RHIBuffer* _argument_buffer, uint64_t _arg_offset, RHIBuffer* _count_buffer, uint64_t _count_buffer_offset, uint32_t _max_draw_count, uint32_t _stride) {
+    auto* vk_arg_buffer   = static_cast<const VulkanRHIBuffer*>(_argument_buffer);
+    auto* vk_count_buffer = static_cast<const VulkanRHIBuffer*>(_count_buffer);
+    auto* vk_arg_handle   = vk_arg_buffer == nullptr ? nullptr : vk_arg_buffer->GetHandle();
+    auto* vk_count_handle = vk_count_buffer == nullptr ? nullptr : vk_count_buffer->GetHandle();
+
+    vkCmdDrawIndexedIndirectCount(
+        m_command_buffer,
+        vk_arg_handle,
+        _arg_offset,
+        vk_count_handle,
+        _count_buffer_offset,
+        _max_draw_count,
+        _stride);
+}
+
+void VulkanRHIGraphicsCommandList::Dispatch(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z) {
+    vkCmdDispatch(m_command_buffer, _group_count_x, _group_count_y, _group_count_z);
+}
+
+void VulkanRHIGraphicsCommandList::DispatchIndirect(RHIBuffer* _buffer, uint64_t _offset) {
+    auto* vk_buffer        = static_cast<const VulkanRHIBuffer*>(_buffer);
+    auto* vk_buffer_handle = vk_buffer == nullptr ? nullptr : vk_buffer->GetHandle();
+    vkCmdDispatchIndirect(m_command_buffer, vk_buffer_handle, _offset);
+}
+
+void VulkanRHIGraphicsCommandList::CopyBuffer(const RHICopyBufferInfo& _copy_info, RHIBuffer* _src, RHIBuffer* _dst) {
+    VulkanRHICommandListBase::CopyBuffer(_copy_info, _src, _dst);
+}
+
+void VulkanRHIGraphicsCommandList::CopyTexture(const RHICopyTextureInfo& _copy_info, RHITexture* _src, RHITexture* _dst) {
+    VulkanRHICommandListBase::CopyTexture(_copy_info, _src, _dst);
+}
+
+void VulkanRHIGraphicsCommandList::CopyBufferToTexture(const RHICopyBufferToTextureInfo& _info, RHIBuffer* src_buffer, RHITexture* dst_texture) {
+    VulkanRHICommandListBase::CopyBufferToTexture(src_buffer, dst_texture, _info);
+}
+
+void VulkanRHIGraphicsCommandList::CopyTextureToBuffer(const RHICopyTextureToBufferInfo& _info, RHITexture* src_texture, RHIBuffer* dst_buffer) {
+    VulkanRHICommandListBase::CopyTextureToBuffer(src_texture, dst_buffer, _info);
+}
+
+void VulkanRHIGraphicsCommandList::BlitTexture(const RHIBlitTextureInfo& _blit_info,
+                                               RHITexture*               _src,
+                                               RHITexture*               _dst) {
+    VulkanRHICommandListBase::BlitTexture(_blit_info, _src, _dst);
+}
+
+void VulkanRHIGraphicsCommandList::ResolveTexture(
+    const RHIResolveTextureInfo& _resolove_info,
+    RHITexture*                  _src,
+    RHITexture*                  _dst) {
+    VulkanRHICommandListBase::ResolveTexture(_resolove_info, _src, _dst);
+}
+
+void VulkanRHIGraphicsCommandList::SetPipelineBarrier(const RHIBarrierDependencyInfo& _dependency) {
+    VulkanRHICommandListBase::SetPipelineBarrier(_dependency);
 }
 
 void VulkanRHIGraphicsCommandList::SetCullMode(ERasterizerCullMode _cull_mode) {
@@ -409,7 +450,7 @@ void VulkanRHIGraphicsCommandList::SetPrimitiveTopology(EPrimitiveTopology _topo
 }
 
 void VulkanRHIGraphicsCommandList::SetViewPorts(uint32_t num_viewports, const ViewPort* p_viewports) {
-    std::vector<VkViewport> vk_viewports(num_viewports);
+    Moer::Array<VkViewport> vk_viewports(num_viewports);
     for (uint32_t i = 0; i < num_viewports; ++i) {
         vk_viewports[i].x        = p_viewports[i].x;
         vk_viewports[i].y        = p_viewports[i].y;
@@ -429,11 +470,14 @@ void VulkanRHIGraphicsCommandList::SetViewPort(const ViewPort& _viewport) {
     vk_viewport.height   = _viewport.height;
     vk_viewport.minDepth = _viewport.min_depth;
     vk_viewport.maxDepth = _viewport.max_depth;
+    vk_viewport.y += vk_viewport.height;
+    vk_viewport.height = -vk_viewport.height;
+
     vkCmdSetViewport(m_command_buffer, 0, 1, &vk_viewport);
 }
 
 void VulkanRHIGraphicsCommandList::SetScissors(uint32_t num_scissors, const Rect2D* p_scissors) {
-    std::vector<VkRect2D> vk_scissors(num_scissors);
+    Moer::Array<VkRect2D> vk_scissors(num_scissors);
     for (uint32_t i = 0; i < num_scissors; ++i) {
         vk_scissors[i].offset.x      = p_scissors[i].offset.x;
         vk_scissors[i].offset.y      = p_scissors[i].offset.y;
@@ -458,8 +502,8 @@ void VulkanRHIGraphicsCommandList::SetBlendFactors(const float* _factors) {
 }
 
 void VulkanRHIGraphicsCommandList::BindVertexBuffers(uint32_t _start_index, uint32_t _num_buffers, const RHIBufferRef* p_vertex_buffers, const uint32_t* _offsets) {
-    std::vector<VkBuffer>     buffers(_num_buffers);
-    std::vector<VkDeviceSize> offsets(_num_buffers);
+    Moer::Array<VkBuffer>     buffers(_num_buffers);
+    Moer::Array<VkDeviceSize> offsets(_num_buffers);
     for (uint32_t i = 0; i < _num_buffers; ++i) {
         auto* vk_buffer = static_cast<const VulkanRHIBuffer*>(p_vertex_buffers[i].Get());
         VK_CHECK_NULLPTR(vk_buffer, "BindVertexBuffers: vertex buffer is nullptr!", continue);
@@ -505,12 +549,12 @@ void VulkanRHIGraphicsCommandList::BeginRenderPass(const RHIRenderPassInfo& _pas
     dynamic_rendering_info.renderArea.offset.y      = _pass_info.render_area.offset.y;
     dynamic_rendering_info.renderArea.extent.width  = _pass_info.render_area.extent.width;
     dynamic_rendering_info.renderArea.extent.height = _pass_info.render_area.extent.height;
-    dynamic_rendering_info.layerCount               = 1;
+    dynamic_rendering_info.layerCount               = _pass_info.multi_view_count == 0 ? 1 : _pass_info.multi_view_count;
     dynamic_rendering_info.viewMask                 = 0;
 
     const uint32_t num_color_attachments = _pass_info.GetNumColorAttachments();
 
-    std::vector<VkRenderingAttachmentInfo> color_attachments(num_color_attachments);
+    Moer::Array<VkRenderingAttachmentInfo> color_attachments(num_color_attachments);
     for (uint32_t i = 0; i < num_color_attachments; ++i) {
         color_attachments[i] = FromColorAttachmentInfo(_pass_info.color_attachments[i]);
     }
@@ -518,13 +562,15 @@ void VulkanRHIGraphicsCommandList::BeginRenderPass(const RHIRenderPassInfo& _pas
 
     dynamic_rendering_info.colorAttachmentCount = num_color_attachments;
     dynamic_rendering_info.pColorAttachments    = color_attachments.data();
-    dynamic_rendering_info.pDepthAttachment     = &depth_stencil_attachment;
-    dynamic_rendering_info.pStencilAttachment   = &depth_stencil_attachment;
+    dynamic_rendering_info.pDepthAttachment     = depth_stencil_attachment.imageLayout == VK_IMAGE_LAYOUT_UNDEFINED ? VK_NULL_HANDLE : &depth_stencil_attachment;
+    dynamic_rendering_info.pStencilAttachment   = depth_stencil_attachment.imageLayout == VK_IMAGE_LAYOUT_UNDEFINED ? VK_NULL_HANDLE : &depth_stencil_attachment;
+    Moer::RHI::Vulkan::DebugUtils::CmdBeginLabel(m_command_buffer, _pass_name, {});
 
     vkCmdBeginRendering(m_command_buffer, &dynamic_rendering_info);
 }
 
 void VulkanRHIGraphicsCommandList::EndRenderPass() {
+    Moer::RHI::Vulkan::DebugUtils::CmdEndLabel(m_command_buffer);
     vkCmdEndRendering(m_command_buffer);
 }
 
@@ -630,37 +676,113 @@ void VulkanRHIGraphicsCommandList::PrepareDrawCommand() {
     auto* vk_resource_cache = vk_pso->GetPipelineResourceCache();
     VK_CHECK_NULLPTR(vk_resource_cache, "PreDrawCommand: graphics pipeline resource cache is nullptr!", return);
 
-    const auto pipeline_layout = vk_pso->GetPipelineLayout();
-    // 1. bind descriptor sets
-    for (const auto& set_info : vk_resource_cache->GetSetsToBind()) {
-        vkCmdBindDescriptorSets(
-            m_command_buffer,
-            VK_PIPELINE_BIND_POINT_GRAPHICS,
-            pipeline_layout,
-            set_info.set,
-            1,
-            &set_info.descriptor_set,
-            0,
-            nullptr);
+    auto pipeline_layout = vk_pso->GetPipelineLayout();
+
+    const auto* vk_sets_layout = vk_pso->GetDescriptorSetsLayout();
+    // 1. update and bind descriptor sets
+    if (vk_resource_cache->HasDescriptorSets()) {
+        vk_resource_cache->UpdateDescriptorSets(m_device, vk_sets_layout);
+        if (m_bound_sets != vk_resource_cache->GetDescriptorSets()) {
+            vk_resource_cache->BindDescriptorSets(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout);
+            m_bound_sets = vk_resource_cache->GetDescriptorSets();
+        }
     }
+
     // 2. push constants
-    for (const auto& constant_info : vk_resource_cache->GetConstantsToPush()) {
-        vkCmdPushConstants(
-            m_command_buffer,
-            pipeline_layout,
-            constant_info.flags,
-            0,
-            constant_info.size,
-            reinterpret_cast<const uint32_t*>(&constant_info.raw_data[constant_info.byte_offset_in_raw_data]));
+    if (vk_resource_cache->HasPushConstants()) {
+        for (const auto& constant_info : vk_resource_cache->GetConstantsToPush()) {
+            vkCmdPushConstants(
+                m_command_buffer,
+                pipeline_layout,
+                constant_info.flags,
+                constant_info.byte_offset_in_raw_data,
+                constant_info.size,
+                constant_info.raw_data.data());
+        }
+        vk_resource_cache->ResetToPush();
     }
 }
 
-void VulkanRHIGraphicsCommandList::PostDrawCommand() {
-    const auto* vk_pso = m_current_pipeline_state;
-    VK_CHECK_NULLPTR(vk_pso, "PostDrawCommand: graphics pipeline state is nullptr!", return);
-    auto* vk_resource_cache = vk_pso->GetPipelineResourceCache();
-    VK_CHECK_NULLPTR(vk_resource_cache, "PostDrawCommand: graphics pipeline resource cache is nullptr!", return);
+VulkanRHIComputeCommandList::VulkanRHIComputeCommandList(VulkanDevice* _device, VkCommandPool _pool, VkCommandBufferLevel _level) : VulkanRHICommandListBase(_device, _pool, _level) {}
 
-    vk_resource_cache->ResetToBind();
-    vk_resource_cache->ResetToPush();
+VulkanRHIComputeCommandList::~VulkanRHIComputeCommandList() {
+}
+
+void VulkanRHIComputeCommandList::BeginRecording() {
+    VulkanRHICommandListBase::Begin();
+}
+
+void VulkanRHIComputeCommandList::EndRecording() {
+    VulkanRHICommandListBase::End();
+}
+
+void VulkanRHIComputeCommandList::Reset() {
+    VulkanRHICommandListBase::Reset();
+}
+
+void VulkanRHIComputeCommandList::Dispatch(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z) {
+    vkCmdDispatch(m_command_buffer, _group_count_x, _group_count_y, _group_count_z);
+}
+
+void VulkanRHIComputeCommandList::DispatchIndirect(RHIBuffer* _buffer, uint64_t _offset) {
+    auto* vk_buffer        = static_cast<const VulkanRHIBuffer*>(_buffer);
+    auto* vk_buffer_handle = vk_buffer == nullptr ? nullptr : vk_buffer->GetHandle();
+    vkCmdDispatchIndirect(m_command_buffer, vk_buffer_handle, _offset);
+}
+
+void VulkanRHIComputeCommandList::CopyBuffer(const RHICopyBufferInfo& _copy_info, RHIBuffer* _src, RHIBuffer* _dst) {
+    VulkanRHICommandListBase::CopyBuffer(_copy_info, _src, _dst);
+}
+
+void VulkanRHIComputeCommandList::CopyTexture(const RHICopyTextureInfo& _copy_info, RHITexture* _src, RHITexture* _dst) {
+    VulkanRHICommandListBase::CopyTexture(_copy_info, _src, _dst);
+}
+
+void VulkanRHIComputeCommandList::CopyBufferToTexture(const RHICopyBufferToTextureInfo& _info, RHIBuffer* src_buffer, RHITexture* dst_texture) {
+    VulkanRHICommandListBase::CopyBufferToTexture(src_buffer, dst_texture, _info);
+}
+
+void VulkanRHIComputeCommandList::CopyTextureToBuffer(const RHICopyTextureToBufferInfo& _info, RHITexture* src_texture, RHIBuffer* dst_buffer) {
+    VulkanRHICommandListBase::CopyTextureToBuffer(src_texture, dst_buffer, _info);
+}
+
+void VulkanRHIComputeCommandList::SetPipelineBarrier(const RHIBarrierDependencyInfo& _dependency) {
+    VulkanRHICommandListBase::SetPipelineBarrier(_dependency);
+}
+
+VulkanRHICopyCommandList::VulkanRHICopyCommandList(VulkanDevice* _device, VkCommandPool _pool, VkCommandBufferLevel _level) : VulkanRHICommandListBase(_device, _pool, _level) {}
+
+VulkanRHICopyCommandList::~VulkanRHICopyCommandList() {
+}
+
+void VulkanRHICopyCommandList::BeginRecording() {
+    VulkanRHICommandListBase::Begin();
+}
+
+void VulkanRHICopyCommandList::EndRecording() {
+    VulkanRHICommandListBase::End();
+}
+
+void VulkanRHICopyCommandList::Reset() {
+    VulkanRHICommandListBase::Reset();
+}
+
+void VulkanRHICopyCommandList::CopyBuffer(const RHICopyBufferInfo& _copy_info, RHIBuffer* _src, RHIBuffer* _dst) {
+    VulkanRHICommandListBase::CopyBuffer(_copy_info, _src, _dst);
+}
+
+void VulkanRHICopyCommandList::CopyTexture(const RHICopyTextureInfo& _copy_info, RHITexture* _src, RHITexture* _dst) {
+    VulkanRHICommandListBase::CopyTexture(_copy_info, _src, _dst);
+}
+
+void VulkanRHICopyCommandList::CopyBufferToTexture(const RHICopyBufferToTextureInfo& _info, RHIBuffer* src_buffer, RHITexture* dst_texture) {
+    VulkanRHICommandListBase::CopyBufferToTexture(src_buffer, dst_texture, _info);
+}
+
+void VulkanRHICopyCommandList::CopyTextureToBuffer(const RHICopyTextureToBufferInfo& _info, RHITexture* src_texture, RHIBuffer* dst_buffer) {
+    VulkanRHICommandListBase::CopyTextureToBuffer(src_texture, dst_buffer, _info);
+}
+
+void VulkanRHICopyCommandList::SetPipelineBarrier(const RHIBarrierDependencyInfo& _dependency) {
+    VulkanRHICommandListBase::SetPipelineBarrier(_dependency);
 }

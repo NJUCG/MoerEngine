@@ -1,4 +1,5 @@
 #include "DirectXShaderCompiler.h"
+#include "config/ConfigManager.h"
 #include "misc/Hash.h"
 
 #include "rhi/RHI.h"
@@ -6,7 +7,6 @@
 #include "dxguids/dxguids.h"
 
 #include "platform/Platform.h"
-#include <cstddef>
 #include <filesystem>
 #include "log/LogSystem.h"
 #include "rhi/RHICommon.h"
@@ -18,6 +18,7 @@
 #include <sstream>
 #include <stdint.h>
 #include <string>
+#include <string_view>
 
 #include "dxc/dxcapi.h"
 #include "shader/ShaderCommon.h"
@@ -93,8 +94,8 @@ void DXCompiler::CompileVulkan(const ShaderCompilerInput& _input, ShaderCompiler
     const std::wstring entry_name  = std::wstring(_input.entry_point.begin(), _input.entry_point.end());
     HRESULT            hres;
 
-    std::filesystem::path file_path    = g_global_shader_resource_root_dir;
-    std::filesystem::path output_path  = g_global_shader_resource_output_dir;
+    std::filesystem::path file_path    = Moer::ConfigManager::GetInstance().GetEngineShaderPath();
+    std::filesystem::path output_path  = file_path;
     std::string           platform_str = ToString(_input.target_info.shader_platform);
     if (platform_str.empty()) {
         on_fail("platform not supported");
@@ -139,7 +140,7 @@ void DXCompiler::CompileVulkan(const ShaderCompilerInput& _input, ShaderCompiler
     }
 
     // Configure the compiler arguments for compiling the HLSL shader to SPIR-V
-    std::vector<LPCWSTR> arguments = {
+    Moer::Array<LPCWSTR> arguments = {
         // (Optional) name of the shader file to be displayed e.g. in an error message
         file_name.c_str(),
         // Shader main entry point
@@ -150,7 +151,8 @@ void DXCompiler::CompileVulkan(const ShaderCompilerInput& _input, ShaderCompiler
         target_profile.c_str(),
         // Compile to SPIRV
         L"-spirv",
-        // L"-fspv-reflect",
+        // L"-fvk-invert-y",
+        // L"-fvk-use-dx-position-w",
         DXC_ARG_ALL_RESOURCES_BOUND,
         DXC_ARG_DEBUG,
         DXC_ARG_SKIP_OPTIMIZATIONS};
@@ -199,10 +201,24 @@ void DXCompiler::CompileVulkan(const ShaderCompilerInput& _input, ShaderCompiler
     _output.shader_code.resize(size);
 
     _output.compiled_hash.FromData(data, size);
-    LOG_INFO("file {} compiled hash: {}", file_path.string(), _output.compiled_hash.ToString());
+    // const auto& file_name_str   = file_path.generic_string();
+    // const auto& output_hash_str = _output.compiled_hash.ToString();
+
+    // std::string new_file_name_str   = file_name_str;
+    // std::string new_output_hash_str = output_hash_str;
+
+    // std::string_view file_name_view(file_name_str);
+    // std::string_view output_hash_view(output_hash_str);
+    // LOG_INFO("file {} compiled hash: {}", file_name_view, output_hash_view);
     memcpy(&_output.shader_code[0], data, size);
 
-    std::unordered_map<std::string, ParameterInfo> param_map;
+    // int32_t* test_mi_override = new int32_t[10];
+    // delete[] test_mi_override;
+
+    // test_mi_override = (int32_t*)malloc(10 * sizeof(int32_t));
+    // free(test_mi_override);
+
+    Moer::UnorderedMap<std::string, ParameterInfo> param_map;
     reflector->ReflectShader(result.Get(), _input.param_meta_data, param_map);
     _output.parameter_map.param_map.swap(param_map);
     _output.target_info = _input.target_info;

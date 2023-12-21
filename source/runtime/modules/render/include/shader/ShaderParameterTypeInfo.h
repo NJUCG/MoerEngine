@@ -9,11 +9,9 @@
 #include "shader/ShaderCommon.h"
 #include "RenderCommon.h"
 #include "misc/Ptr.h"
+#include "misc/STL.h"
 
-#include <array>
 #include <cstdint>
-#include <vcruntime_string.h>
-
 template<uint32_t Alignment>
 concept concept_valid_alignment =
     (Alignment == 2 || Alignment == 4 || Alignment == 8 || Alignment == 16) == true;
@@ -22,6 +20,9 @@ template<typename TargetType, uint32_t Alignment>
     requires concept_valid_alignment<Alignment>
 struct AlignType {
     ALIGNED_TYPE_DEF(TargetType, Type, Alignment);
+    bool operator==(const TargetType& t) {
+        return memcmp(this, &t, sizeof(TargetType)) == 0;
+    }
     AlignType& operator=(const TargetType& t) {
         memcpy(this, &t, sizeof(TargetType));
         return *this;
@@ -52,7 +53,7 @@ struct TShaderResourceParameterTypeInfo<ShaderResourceType[NumElements]> {
     static constexpr int32_t alignment                      = SHADER_PARAMETER_ARRAY_ALIGNMENT;
     static constexpr bool    b_is_stored_in_constant_buffer = false;
 
-    using TParamPtr = std::array<ShaderResourceType, NumElements>;
+    using TParamPtr = Moer::StaticArray<ShaderResourceType, NumElements>;
 
     static const ShaderParametersMetadata* GetStructMetadata() { return nullptr; }
 };
@@ -78,7 +79,7 @@ struct TShaderParameterStructureTypeInfo<StructType[NumElements]> {
     static constexpr int32_t alignment                      = sizeof(StructType);
     static constexpr bool    b_is_stored_in_constant_buffer = true;
 
-    using TParamPtr = std::array<StructType, NumElements>;
+    using TParamPtr = Moer::StaticArray<StructType, NumElements>;
 
     static const ShaderParametersMetadata* GetStructMetadata() { return StructType::GetStructMetadata(); }
 };
@@ -106,7 +107,7 @@ struct TShaderParameterTypeInfo<Type[NumElements]> {
     static constexpr int32_t                alignment                      = SHADER_PARAMETER_ARRAY_ALIGNMENT;
     static constexpr bool                   b_is_stored_in_constant_buffer = TShaderParameterTypeInfo<Type>::b_is_stored_in_constant_buffer;
 
-    using TParamPtr    = std::array<AlignType<Type, alignment>, NumElements>;
+    using TParamPtr    = Moer::StaticArray<AlignType<Type, alignment>, NumElements>;
     using InstanceType = Type;
     static const ShaderParametersMetadata* GetStructMetadata() { return Type::TypeInfo::GetStructMetadata(); }
 };

@@ -4,6 +4,7 @@
 #include "ui/UIBase.h"
 #include "window/WindowContext.h"
 #include <assert.h>
+#include "Core.h"
 
 namespace Moer {
     Editor::Editor() {
@@ -11,7 +12,7 @@ namespace Moer {
     Editor::~Editor() {
     }
     void Editor::Init(Engine* engine) {
-        editor_ui = new EditorUI;
+        editor_ui = MoerNew(EditorUI);
         UICreateInfo info{};
 
         editor_ui->Init(info);
@@ -22,8 +23,8 @@ namespace Moer {
 
     void Editor::ShutDown() {
         engine_runtime->Quit();
-        delete editor_ui;
-        delete engine_runtime;
+        MoerDelete(editor_ui);
+        MoerDelete(engine_runtime);
     }
 
     void Editor::Run() {

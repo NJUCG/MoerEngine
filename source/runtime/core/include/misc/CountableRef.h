@@ -5,7 +5,7 @@
 #ifndef MOERENGINE_COUNTABLEREF_H
 #define MOERENGINE_COUNTABLEREF_H
 #include <atomic>
-#include <assert.h>
+#include <cassert>
 #include <type_traits>
 template<typename TCountable>
 concept concept_is_countable = requires(TCountable t) {

@@ -22,10 +22,10 @@ target_include_directories(
 message("[Engine] runtime dir: ${moer_source_dir}/runtime")
 
 target_compile_options(${target_name} PUBLIC "$<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/WX->")
-
-target_link_libraries(${target_name} 
-PRIVATE MoerEngineRuntime
-PRIVATE MoerEditorUI)
+target_link_libraries(${target_name}
+    PRIVATE MoerEngineRuntime
+    PRIVATE MoerEditorUI
+    )
 
 if( CMAKE_GENERATOR MATCHES "Ninja" OR UNIX AND NOT APPLE) 
     set(output_dir "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}") 
@@ -39,5 +39,6 @@ add_custom_command(
     POST_BUILD 
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/resource" "${output_dir}/resource"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${moer_source_dir}/${moer_config_dir}" "${output_dir}/config"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${moer_root_dir}/shaders" "${output_dir}/resource/shaders"
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/resource ${moer_source_dir}/${moer_config_dir}
 )

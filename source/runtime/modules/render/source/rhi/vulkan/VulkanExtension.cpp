@@ -21,10 +21,9 @@ TExtensionArray VulkanInstanceExtension::GetMESupportedInstanceExtensions() {
     // generic simple extensions
     ADD_EXTENSION(VK_KHR_SURFACE_EXTENSION_NAME);
     ADD_EXTENSION(VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);
-    ADD_EXTENSION(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
-    // debug extensions
+    // ADD_EXTENSION(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
+    // debug utils, contains debug marker and debug report
     ADD_EXTENSION(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-    ADD_EXTENSION(VK_EXT_DEBUG_REPORT_EXTENSION_NAME);
 
     // platform specific extensions
     VulkanPlatform::GetInstanceExtensions(extensions);
@@ -193,8 +192,7 @@ TVulkanDeviceExtensionArray VulkanDeviceExtension::GetMESupportedDeviceExtension
 #define ADD_EXTENSION(ext_name) extensions.emplace_back(std::make_unique<VulkanDeviceExtension>(ext_name))
     // generic simple extensions
     ADD_EXTENSION(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
-    // timeline semaphore extensions
-    // extensions.emplace_back(std::make_unique<VulkanKHRTimelineSemaphoreExtension>());
+
     // raytracing extensions
 
     // vendor extensions

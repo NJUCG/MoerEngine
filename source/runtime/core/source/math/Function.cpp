@@ -327,7 +327,7 @@ namespace Moer {
     }
 
     Matrix4x4f MakePerspectiveMatrixRH(float fov_y, float aspect_ratio, float near_clip, float far_clip) noexcept {
-        float      tan_half_fov = std::tanf(fov_y * 0.5f);
+        float      tan_half_fov = tanf(fov_y * 0.5f);
         float      inv_tan      = 1.f / tan_half_fov;
         float      f_range      = far_clip / (near_clip - far_clip);
         Matrix4x4f perspective;
@@ -335,7 +335,7 @@ namespace Moer {
         perspective[1][1] = inv_tan;
         perspective[2][2] = f_range;
         perspective[3][2] = -1.f;
-        perspective[2][3] = -near_clip * f_range;
+        perspective[2][3] = near_clip * f_range;
 
         return perspective;
     }
@@ -348,7 +348,7 @@ namespace Moer {
         perspective[1][1] = inv_tan;
         perspective[2][2] = f_range;
         perspective[3][2] = -1.f;
-        perspective[2][3] = -near_clip * f_range;
+        perspective[2][3] = near_clip * f_range;
 
         return perspective;
     }

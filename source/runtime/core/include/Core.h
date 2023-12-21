@@ -6,9 +6,13 @@
 #include "taskgraph/GraphTask.h"
 #include "config/ConfigMap.h"
 #include "misc/EnumBitOperation.h"
-#include "misc/AsyncQueue.h"
+#include "misc/LockFree.h"
 #include "misc/Hash.h"
 #include "math/Math.h"
+#include "misc/Crc32.h"
+#include "misc/MMemory.h"
+#include "misc/STL.h"
+#include "misc/Singleton.h"
 
 namespace Moer {
 

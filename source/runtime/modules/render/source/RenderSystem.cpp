@@ -13,8 +13,32 @@
 #include "RenderThread.h"
 
 #include "rhi/RHI.h"
+#include "platform/RenderPlatform.h"
 #include "rhi/vulkan/IVulkanRHI.h"
+#include "config/ConfigManager.h"
+
+#include "renderpass/RenderPassRegistration.h"
+#include <algorithm>
+
+#include <stdexcept>
 namespace Moer {
+    class RenderLoop {
+        RenderLoop()  = default;
+        ~RenderLoop() = default;
+        //singleton
+    public:
+        static RenderLoop& GetInstance() {
+            static RenderLoop loop;
+            return loop;
+        }
+        void Init();
+        void Run();
+        //quiting render loop
+        void AfterLoop();
+
+    private:
+    };
+
     RenderSystem::~RenderSystem() {
     }
 
@@ -28,11 +52,16 @@ namespace Moer {
     }
     void RenderSystem::PostInit() {
         PostInitRHI();
+        RenderLoop::GetInstance().Init();
     }
-    //use in single thread mode
+    //for dispatching task to render thread
     void RenderSystem::Tick() {
+
+        RenderLoop::GetInstance().Run();
     }
     void RenderSystem::ShutDown() {
+
+        RenderLoop::GetInstance().AfterLoop();
 
         StopRenderThread();
 
@@ -50,12 +79,22 @@ namespace Moer {
     };
     void RenderSystem::InitRHI() {
         //todo: init by config
+        const auto& config_data = Moer::ConfigManager::GetInstance().GetInitConfig();
+        if (strcmp(config_data.default_rhi, RHI_VULKAN_NAME) == 0) {
+            g_rhi = new VulkanRHIImpl();
+        } else {
+            //throw unimplemented error
+            throw std::runtime_error("RHI not implemented");
+        }
         g_rhi = new VulkanRHIImpl();
     }
 
     void RenderSystem::PostInitRHI() {
         RHIInitInfo info;
-        info.max_frame_in_flight = 3;
+
+        const auto& config_data = Moer::ConfigManager::GetInstance().GetInitConfig();
+
+        info.max_frame_in_flight = config_data.max_frame_in_flight;
         g_rhi->Initialize(info);
         g_rhi->PostInit();
     }
@@ -66,18 +105,43 @@ namespace Moer {
         EShaderPlatform platform = GetShaderPlatformByRHIType(g_rhi->GetType());
         ShaderResourceManager::Init(platform);
         ShaderResourceManager::GetInstance().PrepareGlobalShaderResources();
-
-        Shader* shader = ShaderResourceManager::GetShader<TestReflectionShader>();
-
-        int i = 1;
     }
 
     void RenderSystem::ShutDownRHI() {
         g_rhi->ShutDown();
+        g_rhi = nullptr;
     }
 
     void RenderSystem::FreeShaderResources() {
         ShaderResourceManager::ShutDown();
     }
 
+    void RenderLoop::Init() {
+        std::for_each(
+            RenderPassRegistration::GetInstance().passes.begin(),
+            RenderPassRegistration::GetInstance().passes.end(),
+            [](RenderPass* pass) {
+                pass->BeforeRenderLoop();
+            });
+    }
+
+    void RenderLoop::Run() {
+        //dispatch render passes to render thread
+
+        std::for_each(
+            RenderPassRegistration::GetInstance().passes.begin(),
+            RenderPassRegistration::GetInstance().passes.end(),
+            [](RenderPass* pass) {
+                pass->Execute();
+            });
+    }
+    void RenderLoop::AfterLoop() {
+
+        std::for_each(
+            RenderPassRegistration::GetInstance().passes.begin(),
+            RenderPassRegistration::GetInstance().passes.end(),
+            [](RenderPass* pass) {
+                pass->AfterRenderLoop();
+            });
+    }
 }// namespace Moer

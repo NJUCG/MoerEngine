@@ -2,13 +2,17 @@
 #define VULKAN_RHI_H
 
 #include "IVulkanRHI.h"
+#include "misc/STL.h"
+#include "rhi/RHI.h"
+#include "rhi/RHICommand.h"
 #include "window/WindowContext.h"
 
 class VulkanDevice;
 class VulkanSwapChain;
 class VulkanViewport;
 class VulkanRHIBuffer;
-class VulkanDescriptorAllocator;
+class VulkanDescriptorSetAllocator;
+class VulkanCommandAllocator;
 
 class VulkanRHIImpl final : public IVulkanRHI {
 public:
@@ -53,8 +57,6 @@ public:
 
     RHIComputePipelineStateRef RHICreateComputePipelineState(RHIComputeShader* _compute_shader) final override;
 
-    void         RHIUploadBuffer(RHIBufferRef _buffer_ref, const uint8_t* _data, uint32_t _size) final override;
-    void         RHICopyBuffer(RHIBuffer* _src, RHIBuffer* _dst) final override;
     RHIBufferRef RHICreateBuffer(const RHIBufferCreateInfo& info) final override;
     void*        RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size) final override;
     void         RHIUnmapBuffer(RHIBuffer* _buffer) final override;
@@ -64,12 +66,16 @@ public:
     RHIShaderResourceViewRef  RHICreateShaderResourceView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) final override;
     RHIUnorderedAccessViewRef RHICreateUnorderedAccessView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) final override;
 
-    RHICommandQueue*        CreateCommandQueue(ECommandQueueType _type) final override;
-    RHIGraphicsCommandList* CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state = nullptr) final override;
-    RHIComputeCommandList*  CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr) final override;
+    RHICommandQueue* RHICreateCommandQueue(ECommandQueueType _type) final override;
+    // RHIGraphicsCommandList* CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state = nullptr) final override;
+    RHIGraphicsCommandList* RHICreateGraphicsCommandList(RHICommandAllocator* _allocator, RHIGraphicsPipelineState* _initial_state = nullptr) final override;
 
-    void RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso, const RHIBatchedShaderParameters& _batched_params) final override;
+    // RHIComputeCommandList* CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr) final override;
+    RHICopyCommandList* RHICreateCopyCommandList(RHICommandAllocator* _allocator) final override;
 
+    void RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) final override;
+
+    RHICommandAllocator* RHIGetCurrentCommandAllocator() final override;
 #pragma endregion
 
 #pragma region viewport
@@ -90,18 +96,18 @@ public:
 
 protected:
     VkInstance               m_instance;
-    std::vector<std::string> m_instance_layers;
+    Moer::Array<std::string> m_instance_layers;
 
-    std::vector<std::string> m_instance_extensions;
-    std::vector<std::string> m_enabled_instance_extensions;
+    Moer::Array<std::string> m_instance_extensions;
+    Moer::Array<std::string> m_enabled_instance_extensions;
 
     VkSurfaceKHR m_surface;
 
     VulkanDevice*   m_device;
     VulkanViewport* m_main_viewport;
     // VulkanSwapChain* m_swap_chain;
-    // std::vector<VulkanViewport*> m_viewports;
-    VulkanViewport* m_current_viewport;
+    // Moer::Array<VulkanViewport*> m_viewports;
+    // VulkanViewport* m_current_viewport;
 
 protected:
     void InitSurface(Moer::WindowHandle* _window);
@@ -115,13 +121,14 @@ private:
 
 #pragma region helper functions
 private:
+    friend VulkanSwapChain;
     bool CheckValidationLayer(const std::string& layer_name);
     bool CheckEnabledExtensions();
 
     VkCommandBuffer BeginSingleTimeCommands(VkCommandPool _pool);
     void            EndSingleTimeCommands(VkCommandBuffer _command_buffer, VkCommandPool _pool, VkQueue _queue);
 
-    void CopyBuffer(VulkanRHIBuffer* _src, VulkanRHIBuffer* _dst);
+    // void CopyBuffer(VulkanRHIBuffer* _src, VulkanRHIBuffer* _dst);
 
 #pragma endregion
 };

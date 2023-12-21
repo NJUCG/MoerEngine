@@ -1,5 +1,6 @@
 #include "Core.h"
 #include "taskgraph/ThreadManager.h"
+
 namespace Moer {
     bool IsCurrentlyGameThread() {
         return GetGameThreadId() == Platform::GetCurrentThreadID();

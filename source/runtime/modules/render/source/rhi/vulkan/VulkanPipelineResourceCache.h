@@ -1,71 +1,60 @@
 #ifndef VULKAN_PIPELINE_STATE_CACHE_H
 #define VULKAN_PIPELINE_STATE_CACHE_H
 
-#include <set>
-#include <array>
-#include <vector>
-#include <unordered_map>
-
-#include <vulkan/vulkan.h>
+#include "VulkanDescriptor.h"
 
 class VulkanRHIGraphicsPipelineState;
-
-class RHIBatchedShaderParameters;
-
-struct DescriptorBindInfo {
-    uint16_t        set;
-    uint16_t        binding;
-    VkDescriptorSet descriptor_set;
-
-    bool operator<(const DescriptorBindInfo& _info) const {
-        return set < _info.set || binding < _info.binding || descriptor_set < _info.descriptor_set;
-    }
-};
+class VulkanDescriptorSetsLayout;
+class VulkanDevice;
 
 struct PushConstantInfo {
     VkShaderStageFlags   flags;
     uint32_t             size;
     uint32_t             byte_offset_in_raw_data;
-    std::vector<uint8_t> raw_data;
-
-    bool operator<(const PushConstantInfo& _info) const {
-        return flags < _info.flags || size < _info.size || byte_offset_in_raw_data < _info.byte_offset_in_raw_data;
-    }
+    Moer::Array<uint8_t> raw_data;
 };
 
 class VulkanPipelineResourceCache {
+    friend VulkanDescriptorSetsLayout;
+    friend VulkanDescriptorSetWriter;
+
 public:
-    friend VulkanRHIGraphicsPipelineState;
+    VulkanPipelineResourceCache() = default;
 
-    VulkanPipelineResourceCache(VulkanRHIGraphicsPipelineState* _graphics_pso = nullptr) : m_pipeline_state(_graphics_pso) {}
-    ~VulkanPipelineResourceCache() { m_pipeline_state = nullptr; }
+    void UpdateDescriptorSetHashInfo(uint32_t _index, const VulkanHashableDescriptorInfo& _info);
 
-    bool BindDescriptorSet(const DescriptorBindInfo& _info);
+    const VkDescriptorImageInfo& UpdateDescriptorImageInfo(uint16_t _set, uint16_t _index_of_binding, const VkDescriptorImageInfo& _info);
 
-    inline const std::vector<DescriptorBindInfo>& GetSetsToBind() const { return m_sets_to_bind; }
+    const VkDescriptorBufferInfo& UpdateDescriptorBufferInfo(uint16_t _set, uint16_t _index_of_binding, const VkDescriptorBufferInfo& _info);
 
-    inline void AddSetToBind(const DescriptorBindInfo&& _info) { m_sets_to_bind.push_back(_info); }
+    bool UpdateDescriptorSets(VulkanDevice* _device, const VulkanDescriptorSetsLayout* _layout);
 
-    inline void ResetToBind() { m_sets_to_bind.clear(); }
+    void BindDescriptorSets(VkCommandBuffer _buffer, VkPipelineBindPoint _bind_point, VkPipelineLayout _layout);
 
-    bool PushConstant(const PushConstantInfo& _info);
+    inline bool HasDescriptorSets() const { return !m_descriptor_sets.empty(); }
 
-    inline const std::vector<PushConstantInfo>& GetConstantsToPush() const { return m_constant_to_push; }
+    inline bool HasPushConstants() const { return !m_push_constants.empty(); }
 
-    inline void AddConstantToPush(const PushConstantInfo&& _info) { m_constant_to_push.push_back(_info); }
+    inline Moer::Array<VulkanDescriptorSetWriter>& GetWriters() { return m_descriptor_set_writers; }
 
-    inline void ResetToPush() { m_constant_to_push.clear(); }
+    inline const Moer::Array<VkDescriptorSet>& GetDescriptorSets() const { return m_descriptor_sets; }
+
+    inline const Moer::Array<PushConstantInfo>& GetConstantsToPush() const { return m_push_constants; }
+
+    inline void AddConstantToPush(const PushConstantInfo& _info) { m_push_constants.push_back(_info); }
+
+    inline void ResetToPush() { m_push_constants.clear(); }
 
 private:
-    // <set, binding> -> descriptor set
-    std::vector<DescriptorBindInfo> m_sets_to_bind;
-    std::set<DescriptorBindInfo>    m_bound_descriptor_sets;
+    VulkanDescriptorSetWriteContainer m_descriptor_resource_container;
 
-    // <start_addr, size> -> constant data
-    std::vector<PushConstantInfo> m_constant_to_push;
-    std::set<PushConstantInfo>    m_pushed_constants;
+    Moer::Array<VulkanDescriptorSetWriter> m_descriptor_set_writers;
 
-    VulkanRHIGraphicsPipelineState* m_pipeline_state;
+    Moer::Array<VkDescriptorSet> m_descriptor_sets;
+
+    Moer::Array<PushConstantInfo> m_push_constants;
+
+    uint32_t GetSetsKey() const;
 };
 
 #endif// VULKAN_PIPELINE_STATE_CACHE_H

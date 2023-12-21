@@ -14,11 +14,22 @@
 #else
 #define PLATFORM_UNKNOWN 1
 #endif
+#define PLATFORM_CACHELINE_SIZE 64
+struct PlatformMemoryInfo {
+    uint64_t total_physical_memory = 0;
+    uint64_t total_virtual_memory  = 0;
 
+    uint64_t page_size              = 0;
+    uint64_t allocation_granularity = 0;
+
+    uint64_t addrress_limit = 0xffffffffffffffff;
+
+    // MB
+    uint32_t total_physical_memory_mb = 0;
+};
 class Platform {
-protected:
-    static class PlatformImplement* GetInstance();
 
+protected:
 public:
     CORE_API static void     SetThreadAffinity(void* current_thread_handle, uint64_t mask);
     CORE_API static void     SetThreadGroupAffinity(void* current_thread_handle, uint16_t group_mask, uint64_t affinity_mask);
@@ -26,5 +37,7 @@ public:
     CORE_API static int32_t  GetProcessorCoreCountInGroup(uint32_t groupID);
     CORE_API static int32_t  GetProcessorCoreCount();
     CORE_API static uint32_t GetCurrentThreadID();
+
+    CORE_API static const PlatformMemoryInfo& GetMemoryInfo();
 };
 #endif// !PLATFORM_H

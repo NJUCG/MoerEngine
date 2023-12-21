@@ -7,17 +7,15 @@
 #include "VulkanExtension.h"
 #include "VulkanDevice.h"
 #include "VulkanUtil.h"
-
-#include <set>
-#include <string>
-#include <vector>
+#include "VulkanCommand.h"
+#include "Core.h"
+#include "taskgraph/ThreadManager.h"
 
 namespace VkUtil = Moer::RHI::Vulkan::Util;
 
 VulkanDevice::VulkanDevice()
     : m_gpu(VK_NULL_HANDLE), m_gpu_props(), m_gpu_features(), m_gpu_mem_props(), m_gpu_extensions(), m_queue_family_props(), m_queue_family_indices(),
       m_device(VK_NULL_HANDLE), m_graphics_queue(VK_NULL_HANDLE), m_present_queue(VK_NULL_HANDLE), m_compute_queue(VK_NULL_HANDLE), m_transfer_queue(VK_NULL_HANDLE),
-      m_default_pool(VK_NULL_HANDLE), m_transfer_pool(VK_NULL_HANDLE),
       m_allocator(VK_NULL_HANDLE), m_descriptor_allocator(nullptr) {}
 
 /**
@@ -49,8 +47,8 @@ void VulkanDevice::Init(const DeviceInitializer& _initializer) {
              m_gpu_props.properties.limits.timestampComputeAndGraphics);
 
     CreateDevice(_initializer);
-    CreateCommandPools();
     CreateDescriptorAllocator();
+    CreateCommandAllocators();
 }
 
 void VulkanDevice::InitMemoryAllocator(VkInstance _instance) {
@@ -76,11 +74,14 @@ void VulkanDevice::InitMemoryAllocator(VkInstance _instance) {
 }
 
 void VulkanDevice::Destroy() {
+    for (auto& pool : m_command_allocators) {
+        MoerDelete(pool);
+    }
     vmaDestroyAllocator(m_allocator);
 }
 
-void VulkanDevice::AllocateDescriptorSets(const VulkanDescriptorSetsLayout& _layout, std::vector<VkDescriptorSet>& _sets) {
-    m_descriptor_allocator->Allocate(_layout, _sets);
+bool VulkanDevice::GetDescriptorSets(uint32_t _hash_key, const VulkanDescriptorSetsLayout& _layout, Moer::Array<VulkanDescriptorSetWriter>& _writers, Moer::Array<VkDescriptorSet>& _sets) {
+    return m_descriptor_allocator->GetDescriptorSets(_hash_key, _layout, _writers, _sets);
 }
 
 /**
@@ -96,7 +97,7 @@ VkPhysicalDevice VulkanDevice::SelectGpu(const DeviceInitializer& _init) {
         LOG_WARNING("No GPU with Vulkan support found!");
         return VK_NULL_HANDLE;
     }
-    std::vector<VkPhysicalDevice> gpu_list(gpu_count);
+    Moer::Array<VkPhysicalDevice> gpu_list(gpu_count);
     VK_CHECK_RESULT(vkEnumeratePhysicalDevices(_init.instance, &gpu_count, gpu_list.data()))
 
     for (const auto& gpu : gpu_list) {
@@ -159,7 +160,7 @@ void VulkanDevice::CreateDevice(const DeviceInitializer& _initializer) {
     std::set<uint32_t> unique_family_indices = {m_queue_family_indices.graphics.value(), m_queue_family_indices.present.value(), m_queue_family_indices.compute.value(), m_queue_family_indices.transfer.value()};
 
     // setup queue info
-    std::vector<VkDeviceQueueCreateInfo> queue_create_infos;
+    Moer::Array<VkDeviceQueueCreateInfo> queue_create_infos;
 
     const float default_queue_priority = 1.0f;
     for (const auto& queue_family_index : unique_family_indices) {
@@ -178,7 +179,7 @@ void VulkanDevice::CreateDevice(const DeviceInitializer& _initializer) {
     device_create_info.pQueueCreateInfos    = queue_create_infos.data();
 
     // setup extension and feature info
-    std::vector<const char*> enabled_extensions;
+    Moer::Array<const char*> enabled_extensions;
     for (const auto& extension : _initializer.enabled_extensions) {
         enabled_extensions.emplace_back(extension->GetExtensionName().c_str());
         extension->PreCreateDevice(device_create_info);
@@ -208,32 +209,24 @@ void VulkanDevice::CreateDevice(const DeviceInitializer& _initializer) {
     vkGetDeviceQueue(m_device, m_queue_family_indices.transfer.value(), 0, &m_transfer_queue);
 }
 
-void VulkanDevice::CreateCommandPools() {
-    VkCommandPoolCreateInfo pool_create_info{};
-    pool_create_info.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-    pool_create_info.flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-    pool_create_info.queueFamilyIndex = m_queue_family_indices.graphics.value();
-
-    VK_CHECK_RESULT(vkCreateCommandPool(m_device, &pool_create_info, nullptr, &m_default_pool));
-
-    pool_create_info.flags            = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
-    pool_create_info.queueFamilyIndex = m_queue_family_indices.transfer.value();
-    VK_CHECK_RESULT(vkCreateCommandPool(m_device, &pool_create_info, nullptr, &m_transfer_pool));
-
-    LOG_INFO("VulkanRHI: Command pools created, graphics: {}, transfer: {}", (void*)m_default_pool, (void*)m_transfer_pool);
-}
-
 void VulkanDevice::CreateDescriptorAllocator() {
-    m_descriptor_allocator = new VulkanDescriptorAllocator();
+    m_descriptor_allocator = new VulkanDescriptorSetAllocator();
     m_descriptor_allocator->Init(this);
     LOG_INFO("VulkanRHI: Descriptor allocator created.");
+}
+
+void VulkanDevice::CreateCommandAllocators() {
+    uint32_t thread_count = ThreadManager::Instance().GetNum();
+    for (uint32_t i = 0; i < thread_count; ++i) {
+        m_command_allocators.push_back(MoerNew(VulkanCommandAllocator)(this));
+    }
 }
 
 TExtensionArray VulkanDevice::GetGpuExtensions(VkPhysicalDevice _gpu) const {
     uint32_t gpu_extension_count;
     // check extensions
     vkEnumerateDeviceExtensionProperties(_gpu, nullptr, &gpu_extension_count, nullptr);
-    std::vector<VkExtensionProperties> gpu_extensions(gpu_extension_count);
+    Moer::Array<VkExtensionProperties> gpu_extensions(gpu_extension_count);
     vkEnumerateDeviceExtensionProperties(_gpu, nullptr, &gpu_extension_count, gpu_extensions.data());
 
     TExtensionArray ret;
@@ -260,11 +253,16 @@ TQueueFamilyPropertiesArray VulkanDevice::GetQueueFamilyProperties(VkPhysicalDev
     return queue_family_props;
 }
 
+VulkanCommandAllocator* VulkanDevice::GetCurrentCommandAllocator() {
+    auto thread_id = ThreadManager::Instance().GetCurrentThreadIndex();
+    return m_command_allocators[thread_id];
+}
+
 //uint32_t VulkanDevice::GetMemoryType(uint32_t type_bits, VkMemoryPropertyFlags properties, VkBool32* mem_type_found) const {
 //    return 0;
 //}
 
-int32_t VulkanDevice::GetQueueFamilyIndex(const std::vector<VkQueueFamilyProperties>& queue_family_props, VkQueueFlags _queue_flags) const {
+int32_t VulkanDevice::GetQueueFamilyIndex(const Moer::Array<VkQueueFamilyProperties>& queue_family_props, VkQueueFlags _queue_flags) const {
     // Dedicated queue for transfer
     if ((_queue_flags & VK_QUEUE_TRANSFER_BIT) == _queue_flags) {
         for (uint32_t i = 0; i < queue_family_props.size(); ++i) {

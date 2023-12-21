@@ -1,51 +1,63 @@
 #ifndef MOER_ENGINE_CONFIG_MANAGER_H
 #define MOER_ENGINE_CONFIG_MANAGER_H
 #include <filesystem>
-#include <fstream>
-#include <string>
-#include <unordered_map>
 
-class ConfigManager {
-public:
-    ConfigManager(const std::filesystem::path& configPath) {
-        LoadConfig(configPath);
-    }
+#include "API_Macro.h"
+#include "misc/STL.h"
 
-    std::string GetValue(const std::string& key) const {
-        auto it = m_config_map.find(key);
-        if (it != m_config_map.end()) {
-            return it->second;
-        }
-        return "";
-    }
+//implement ConfigManager as Singleton
+#define FONTS_DIR  "fonts"
+#define CONFIG_DIR "config"
+namespace Moer {
+    struct MoerInitConfig {
+#if defined(EDITOR_MODE_ON)
+        //EDITOR CONFIGS
+        uint32_t editor_width;
+        uint32_t editor_height;
+        uint32_t editor_fullscreen : 1;
+        uint32_t editor_vsync : 1;
+        uint32_t editor_lock_frame_rate : 1;
+        uint32_t editor_fps : 8;
+        uint32_t editor_max_fps : 8;
 
-private:
-    void LoadConfig(const std::filesystem::path& configPath) {
-        std::ifstream config_file(configPath);
-        if (!config_file.is_open()) {
-            throw std::runtime_error("Failed to open config file");
-        }
+        float editor_font_size{16.f};
+#endif
+        //ENGINE CONFIGS
+        uint32_t max_frame_in_flight : 3;
 
-        std::string line;
-        while (std::getline(config_file, line)) {
-            // Ignore comments and empty lines
-            if (line.empty() || line[0] == '#') {
-                continue;
-            }
+        char default_rhi[32]{"Vulkan"};
+    };
+    class CORE_API ConfigManager {
+    private:
+        static ConfigManager* instance;
 
-            // Split line into key and value
-            size_t equals_pos = line.find('=');
-            if (equals_pos == std::string::npos) {
-                throw std::runtime_error("Invalid config line: " + line);
-            }
-            std::string key   = line.substr(0, equals_pos);
-            std::string value = line.substr(equals_pos + 1);
+        Moer::UnorderedMap<std::string, std::string> configs;
 
-            // Add key-value pair to map
-            m_config_map[key] = value;
-        }
-    }
+        std::filesystem::path workspace_path;
+        std::filesystem::path editor_resource_path;
+        std::filesystem::path engine_shader_path;
+        ConfigManager() {}
 
-    std::unordered_map<std::string, std::string> m_config_map;
-};
+    public:
+        static ConfigManager& GetInstance();
+
+        void Init(const std::filesystem::path& workspacePath);
+
+        // std::string GetConfig(const std::string& key);
+
+        const std::filesystem::path& GetWorkspacePath() const;
+
+        const std::filesystem::path& GetEditorResourcePath() const;
+
+        const std::filesystem::path& GetEngineShaderPath() const;
+
+        //call after config manager init
+        const MoerInitConfig& GetInitConfig() const { return init_config; }
+
+    private:
+        MoerInitConfig init_config;
+    };
+
+}// namespace Moer
+
 #endif//MOER_ENGINE_CONFIG_MANAGER_H

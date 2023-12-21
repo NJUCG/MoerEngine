@@ -1,35 +1,21 @@
 
 set(third_party_folder "3rdParty")
 
-#Vulkan SDK
-if(WIN32)
-    set(vulkan_lib "${moer_third_party_dir}/VulkanSDK/lib/Windows/vulkan-1.lib" PARENT_SCOPE)
-    set(glslangValidator "${moer_third_party_dir}/VulkanSDK/binary/Windows/glslangValidator.exe")
+include(vulkan.cmake)
 
-elseif(APPLE)
-    set(vulkan_lib "${moer_third_party_dir}/VulkanSDK/lib/MacOS/libvulkan.1.dylib" PARENT_SCOPE)
-    set(glslangValidator "${moer_third_party_dir}/VulkanSDK/binary/MacOS/glslangValidator" )
-    add_compile_definitions("VK_LAYER_PATH=${moer_third_party_dir}/VulkanSDK/binary/MacOS")
-    #https://chromium.googlesource.com/external/github.com/KhronosGroup/Vulkan-Loader/+/HEAD/loader/LoaderAndLayerInterface.md#icd-discovery
-    add_compile_definitions("VK_ICD_FILENAMES=${moer_third_party_dir}/VulkanSDK/binary/MacOS/MoltenVK_icd.json")
-    
-
-else()
+if(CMAKE_GENERATOR MATCHES "Ninja" OR UNIX AND NOT APPLE) 
+    set(real_out_put_dir "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}") 
+else() 
+    set(real_out_put_dir "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>") 
 endif()
 
 add_library(dxc SHARED IMPORTED GLOBAL)
-
 add_custom_target(DXC_COPY)
 #DXC
 if(WIN32)
     set(dxc_lib "${moer_third_party_dir}/DirectXShaderCompiler/lib/Windows/dxcompiler.lib" )
     set(dxc_runtime_dir "${moer_third_party_dir}/DirectXShaderCompiler/bin/Windows")
 
-    if(CMAKE_GENERATOR MATCHES "Ninja" OR UNIX AND NOT APPLE) 
-    set(real_out_put_dir "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}") 
-else() 
-    set(real_out_put_dir "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>") 
-endif()
     add_custom_command(
         TARGET DXC_COPY
         POST_BUILD
@@ -45,6 +31,8 @@ endif()
 elseif(LINUX)
 endif()
 
+set(SPDLOG_USE_STD_FORMAT ON)
+set(SPDLOG_BUILD_SHARED ON)
 add_subdirectory(spdlog)
 set_target_properties(spdlog PROPERTIES FOLDER ${third_party_folder})
     
@@ -52,14 +40,24 @@ option(GLFW_BUILD_DOCS OFF)
 option(GLFW_BUILD_EXAMPLES OFF)
 option(GLFW_BUILD_TESTS OFF)
 option(GLFW_INSTALL ON)
-set(GLFW_LIBRARY_TYPE "SHARED")
+set(GLFW_LIBRARY_TYPE "STATIC")
 add_subdirectory(glfw)
 
-set(SPIRV_REFLECT_EXECUTABLE      OFF)
+include(${CMAKE_CURRENT_SOURCE_DIR}/imgui.cmake)
 
-set(SPIRV_REFLECT_STATIC_LIB     ON)
+set(SPIRV_REFLECT_EXECUTABLE OFF)
+set(SPIRV_REFLECT_STATIC_LIB ON)
 add_subdirectory(SPIRV-Reflect)
 
 add_subdirectory(DirectX-Headers)
 
+add_subdirectory(json)
 add_subdirectory(AssetLoad)
+
+set(MI_USE_CXX OFF)
+set(MI_BUILD_STATIC      ON)
+set(MI_BUILD_OBJECT      OFF)
+set(MI_BUILD_TESTS       OFF)
+add_subdirectory(mimalloc)
+
+
