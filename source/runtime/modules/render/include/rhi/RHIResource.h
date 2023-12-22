@@ -65,6 +65,7 @@ class RHIVertexInputState;
 class RHIVertexShader;
 class RHIViewableResource;
 class RHIViewport;
+class RHIRenderPrimitive;
 
 template<concept_is_shader_struct TStructuredType>
 class RHIStructuredBuffer;
@@ -106,6 +107,7 @@ using RHIVertexInputStateRef          = CountableRef<RHIVertexInputState>;
 using RHIVertexShaderRef              = CountableRef<RHIVertexShader>;
 using RHIViewableResourceRef          = CountableRef<RHIViewableResource>;
 using RHIViewportRef                  = CountableRef<RHIViewport>;
+using RHIRenderPrimitiveRef           = CountableRef<RHIRenderPrimitive>;
 #pragma endregion
 
 class Shader;
@@ -2921,6 +2923,28 @@ public:
 
 protected:
     EShaderPlatform platform;
+};
+
+
+class RHIRenderPrimitive : public  RHIResource {
+public:
+    RHIRenderPrimitive(const RHIBufferRef& mVertexBuffer, const RHIBufferRef& mIndexBuffer, EPrimitiveType mType, uint32_t offset, uint32_t count)
+        : m_vertex_buffer(mVertexBuffer),
+          m_index_buffer(mIndexBuffer),
+          m_type(mType),
+          m_offset(offset),
+          m_count(count) {}
+    RHIBufferRef GetVertexBuffer() const;
+    RHIBufferRef GetIndexBuffer() const;
+    EPrimitiveType GetPrimitiveType() const;
+    uint32_t GetOffset() const;
+    uint32_t GetCount() const;
+protected:    
+    RHIBufferRef m_vertex_buffer;
+    RHIBufferRef m_index_buffer;
+    EPrimitiveType m_type{0};
+    uint32_t m_offset{0};
+    uint32_t m_count{0};
 };
 
 #endif// !RHI_RESOURCE_H

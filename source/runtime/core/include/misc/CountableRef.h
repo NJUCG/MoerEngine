@@ -159,4 +159,101 @@ public:
 protected:
     T* ptr;
 };
+
+class CountableResource : Countable {
+public:
+    explicit CountableResource() = default;
+    virtual ~CountableResource() = default;
+
+public:
+    uint32_t AddRef() {
+        //first AddRef() happens before DeRef
+        int32_t ref_count = flags.AddRef(std::memory_order_acquire);
+        assert(ref_count > 0);
+        return ref_count;
+    };
+
+    uint32_t DeRef() {
+        int32_t ref_count = flags.DeRef(std::memory_order_release);
+        assert(ref_count >= 0);
+        if (ref_count == 0) {
+            Destroy();
+        }
+        return (uint32_t)ref_count;
+    };
+    //only for look-up purposes, don't care about sequences
+    uint32_t GetRefCount() const { return (uint32_t)flags.GetRefCount(std::memory_order_relaxed); }
+
+    bool IsValid() const { return flags.IsValid(std::memory_order_relaxed); }
+    void Delete() {
+        if (flags.MarkToDelete(std::memory_order_acquire)) {
+            // delete this;
+        }
+    }
+
+protected:
+private:
+    void Destroy(){}
+    struct ResourceAtomicFlags {
+        std::atomic<uint32_t> packed;
+
+        static constexpr uint32_t s_mark_for_delete_mask = 1 << 31;
+        static constexpr uint32_t s_is_deleting_mask     = 1 << 30;
+        static constexpr uint32_t s_ref_count_mask       = s_is_deleting_mask - 1;
+
+    public:
+        int32_t AddRef(std::memory_order memory_order) {
+            uint32_t current_packed = packed.fetch_add(1, memory_order);
+            assert((current_packed & s_is_deleting_mask) == 0 && "resource is deleting");
+            int32_t num_ref = (current_packed & s_ref_count_mask) + 1;
+            assert(num_ref < s_mark_for_delete_mask);
+            return num_ref;
+        }
+        int32_t DeRef(std::memory_order memory_order) {
+            uint32_t current_packed = packed.fetch_sub(1, memory_order);
+            assert((current_packed & s_is_deleting_mask) == 0 && "resource is deleting");
+            int32_t num_ref = (current_packed & s_ref_count_mask) - 1;
+            assert(num_ref >= 0);
+            return num_ref;
+        }
+        bool MarkToDelete(std::memory_order memory_order) {
+            uint32_t current_packed = packed.fetch_or(s_mark_for_delete_mask, memory_order);
+            assert((current_packed & s_is_deleting_mask) == 0 && "resource is deleting");
+            return (current_packed & s_mark_for_delete_mask) != 0;
+        }
+
+        bool UnMarkToDelete(std::memory_order memory_order) {
+            uint32_t current_packed = packed.fetch_xor(s_mark_for_delete_mask, memory_order);
+            assert((current_packed & s_is_deleting_mask) == 0 && "resource is deleting");
+            bool current_mark_for_delete = (current_packed & s_mark_for_delete_mask) != 0;
+            assert(current_mark_for_delete && "resource is not marked for deleting");
+            return current_mark_for_delete;
+        }
+        bool IsDeleting() {
+            /* make sure packed data processing sequence handled correctly - acquire-rel */
+            uint32_t current_packed = packed.load(std::memory_order_acquire);
+            assert((current_packed & s_mark_for_delete_mask) != 0 && "resource not marked for deleting");
+            assert((current_packed & s_is_deleting_mask) != 0 && "resource is currently deleting");
+            uint32_t num_ref = current_packed & s_ref_count_mask;
+            if (num_ref == 0) {
+                return true;
+            }
+            UnMarkToDelete(std::memory_order_release);
+            return false;
+        }
+        bool IsValid(std::memory_order memory_order) {
+            uint32_t current_packed = packed.load(memory_order);
+            return (current_packed & s_mark_for_delete_mask) == 0 && (current_packed & s_ref_count_mask) > 0;
+        }
+
+        bool IsMarkedForDeleting(std::memory_order memory_order) {
+            return (packed.load(memory_order) & s_mark_for_delete_mask) != 0;
+        }
+        int32_t GetRefCount(std::memory_order memory_order) {
+            return packed.load(memory_order) & s_ref_count_mask;
+        }
+    };
+    //for const resource state change
+    mutable ResourceAtomicFlags flags;
+};
 #endif//MOERENGINE_COUNTABLEREF_H

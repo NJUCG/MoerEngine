@@ -14,6 +14,8 @@
 #include "rhi/RHICommand.h"
 #include "shader/Shader.h"
 #include "shader/ShaderResourceManager.h"
+#include "scene/RenderableManager.h"
+#include "scene/Scene.h"
 #include <algorithm>
 
 class TestDeferredTriangleShaderVert : public Shader {
@@ -198,8 +200,11 @@ namespace Moer {
                  VSR_NONE);
 
         VertexInputStateInitializerList vertex_input_state_init_list{};
-        vertex_input_state_init_list[0] = VertexElement(0, 0, PF_R32G32B32_SFLOAT, 0, sizeof(float) * 5, EVertexInputRate::VIR_VERTEX);
-        vertex_input_state_init_list[1] = VertexElement(0, 3 * sizeof(float), PF_R32G32_SFLOAT, 1, sizeof(float) * 5, EVertexInputRate::VIR_VERTEX);
+        vertex_input_state_init_list[0] = VertexElement(0, 0, PF_R32G32B32_SFLOAT, 0, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX);
+        vertex_input_state_init_list[1] = VertexElement(0, 3 * sizeof(float), PF_R32G32B32_SFLOAT, 1, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX);
+        vertex_input_state_init_list[2] = VertexElement(0, 6 * sizeof(float), PF_R32G32B32_SFLOAT, 2, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX);
+        vertex_input_state_init_list[3] = VertexElement(0, 9 * sizeof(float), PF_R32G32B32_SFLOAT, 3, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX);
+        vertex_input_state_init_list[4] = VertexElement(0, 12 * sizeof(float), PF_R32G32_SFLOAT, 4, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX);
 
         RHIVertexInputStateRef vertex_input_state = g_rhi->RHICreateVertexInputState(vertex_input_state_init_list);
 
@@ -266,9 +271,22 @@ namespace Moer {
         cmd_list->SetScissor({0, 0, uint32_t(viewport_info.extent.x), uint32_t(viewport_info.extent.y)});
 
         cmd_list->SetPipelineState(pipeline_state);
-        cmd_list->BindIndexBuffer(index_buffer, 0, EIndexElementType::IET_UINT32);
-        uint32_t offset = 0;
-        cmd_list->BindVertexBuffers(0, 1, &vertex_buffer, &offset);
+        // cmd_list->BindIndexBuffer(index_buffer, 0, EIndexElementType::IET_UINT32);
+        //  uint32_t offset = 0;
+        //  cmd_list->BindVertexBuffers(0, 1, &vertex_buffer, &offset);
+
+        //  cmd_list->DrawIndexedInstanced(3, 1, 0, 0, 0);
+
+        const auto scene = g_scene;
+        for(auto entity : scene->GetEntities()) {
+            if(auto primitive = RenderableManager::Get().GetRenderPrimitive(entity)) {
+                cmd_list->BindIndexBuffer(primitive->GetIndexBuffer(), 0, EIndexElementType::IET_UINT32);
+                const RHIBufferRef  prim_vertex_buffer = primitive->GetVertexBuffer();
+                uint32_t offset = 0;
+                cmd_list->BindVertexBuffers(0, 1, &prim_vertex_buffer, &offset);
+                cmd_list->DrawIndexedInstanced(primitive->GetCount(), 1, 0, 0, 0);
+            }
+        }
 
         cmd_list->DrawIndexedInstanced(3, 1, 0, 0, 0);
 

@@ -181,8 +181,31 @@ namespace Moer {
      * make the perspective matrix in right-handed system
      * @param fov_y y-axis field of view(radian)
      */ 
-    Matrix4x4f MakePerspectiveMatrixRH(float fov_y, float aspect_ratio, float near_clip, float far_clip) noexcept;
-    Matrix4x4d MakePerspectiveMatrixRH(double fov_y, double aspect_ratio, double near_clip, double far_clip) noexcept;
+    CORE_API Matrix4x4f MakePerspectiveMatrixRH(float fov_y, float aspect_ratio, float near_clip, float far_clip) noexcept;
+    CORE_API Matrix4x4d MakePerspectiveMatrixRH(double fov_y, double aspect_ratio, double near_clip, double far_clip) noexcept;
+
+    template<NumericType T>
+    inline Matrix<T, 4, 4> MakeTranslation(T x, T y, T z) noexcept {
+        Matrix<T, 4, 4> ret;
+        ret[0][3] = x;
+        ret[1][3] = y;
+        ret[2][3] = z;
+        ret[0][0] = (T)1;
+        ret[1][1] = (T)1;
+        ret[2][2] = (T)1;
+        ret[3][3] = (T)1;
+        return ret;
+    }
+
+    template<NumericType T>
+    inline Matrix<T, 4, 4> MakeScaling(T x, T y, T z) noexcept {
+        Matrix<T, 4, 4> ret;
+        ret[0][0] = x;
+        ret[1][1] = y;
+        ret[2][2] = z;
+        ret[3][3] = (T)1;
+        return ret;
+    }
     // clang-format on
 }// namespace Moer
 
