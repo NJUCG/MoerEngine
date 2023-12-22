@@ -220,7 +220,7 @@ namespace Moer {
     void VirtualViewport::Impl::Present(RHIFenceRef _render_fence) {
         // Implementation of Present method
         // ...
-        assert(Moer::IsCurrentlyGameThread() && "Present should be called on main thread");
+        assert(Moer::IsCurrentlyRenderThread() && "Present should be called on main thread");
         uint64_t current_rendered = _render_fence->GetValue();
         frame_index++;
 
@@ -249,14 +249,26 @@ namespace Moer {
                                   .SetSrcTextureLayout(TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
                                   .SetDstTextureLayout(TEXTURE_LAYOUT_TRANSFER_DST)
                                   .SetSubResourceRange({}));
+        barriers[0]
+            .SetSrcAccessFlags(ERHIAccessFlags::SHADER_SAMPLED_READ)
+            .SetDstAccessFlags(ERHIAccessFlags::TRANSFER_WRITE)
+            .SetSrcStage(PS_FRAGMENT_SHADER)
+            .SetDstStage(PS_TRANSFER);
+
         cmd_list->BeginRecording();
         cmd_list->SetPipelineBarrier(barrier_info);
         cmd_list->BlitTexture(blit_info,
                               swapchain_textures[current_rendered % info.back_buffer_count],
                               present_texture);
 
-        barriers[0].SetSrcTextureLayout(TEXTURE_LAYOUT_TRANSFER_DST);
-        barriers[0].SetDstTextureLayout(TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        barriers[0]
+            .SetSrcTextureLayout(TEXTURE_LAYOUT_TRANSFER_DST)
+            .SetDstTextureLayout(TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+            .SetSrcAccessFlags(ERHIAccessFlags::TRANSFER_WRITE)
+            .SetDstAccessFlags(ERHIAccessFlags::SHADER_SAMPLED_READ)
+            .SetDstStage(PS_FRAGMENT_SHADER)
+            .SetSrcStage(PS_TRANSFER);
+        ;
         cmd_list->SetPipelineBarrier(barrier_info);
         cmd_list->EndRecording();
 
@@ -276,7 +288,7 @@ namespace Moer {
     VirtualViewportNextBackBufferInfo VirtualViewport::Impl::GetNextBackBuffer() {
         // Implementation of GetNextBackBuffer method
         // ...
-        assert(Moer::IsCurrentlyGameThread());
+        assert(Moer::IsCurrentlyRenderThread());
         uint32_t backbuffer_index = frame_index % info.back_buffer_count;
 
         return {
@@ -287,7 +299,7 @@ namespace Moer {
     RHIUnorderedAccessViewRef VirtualViewport::Impl::GetNextBackBufferUAV(uint32_t index) {
         // Implementation of GetNextBackBufferUAV method
         // ...
-        assert(Moer::IsCurrentlyGameThread());
+        assert(Moer::IsCurrentlyRenderThread());
 
         return swapchain_uavs[index];
     }
