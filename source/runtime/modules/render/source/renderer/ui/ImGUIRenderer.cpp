@@ -124,6 +124,7 @@ bool CreateDeviceObjects();
 void DestroyRenderBuffers(GuiFrameRenderBuffers* _render_buffers);
 void InvalidateDeviceObjects();
 
+void GUIUploadData(void* _draw_data, RHIGraphicsCommandList* _ui_command_list);
 void GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list);
 
 void GuiRenderWindow(ImGuiViewport* viewport, void*);
@@ -268,10 +269,11 @@ void ImGUIRenderer::Impl::EndRenderFrame() {
         pass_info.render_area.offset.y      = 0;
         pass_info.render_area.extent.width  = viewport_extent.width;
         pass_info.render_area.extent.height = viewport_extent.height;
+        auto* draw_data                     = ImGui::GetDrawData();
+
+        GUIUploadData(draw_data, ui_command_list);
 
         ui_command_list->BeginRenderPass(pass_info, "Imgui Window");
-
-        auto* draw_data = ImGui::GetDrawData();
 
         GUIRender(main_draw_data, ui_command_list);
 
@@ -362,7 +364,7 @@ void CreateFontsTexture();
 
 void SetupRenderState(ImDrawData* draw_data, RHIGraphicsCommandList* commandList, GuiFrameRenderBuffers* render_buffers);
 
-void GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list) {
+void GUIUploadData(void* _draw_data, RHIGraphicsCommandList* _ui_command_list) {
     ImDrawData* draw_data = static_cast<ImDrawData*>(_draw_data);
     if (draw_data->DisplaySize.x <= 0.0f || draw_data->DisplaySize.y <= 0.0f)
         return;
@@ -376,8 +378,6 @@ void GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list) {
 
     GuiFrameRenderBuffers* render_buffers = &viewport_data->render_buffers[viewport_data->frame_index % backend_data->num_frames_in_flight];
 
-    //todo frame_index should not manage here
-    viewport_data->frame_index += 1;
     if (render_buffers->vertex_buffer == nullptr || render_buffers->vertex_buffer->GetSize() < draw_data->TotalVtxCount * sizeof(ImDrawVert)) {
         //delete the old one and create new
         if (render_buffers->vertex_buffer != nullptr) {}
@@ -442,6 +442,21 @@ void GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list) {
                                          render_buffers->staging_index_buffer->GetSize());
 
     _ui_command_list->CopyBuffer(copy_index_info, render_buffers->staging_index_buffer, render_buffers->index_buffer);
+}
+
+void GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list) {
+    ImDrawData* draw_data = static_cast<ImDrawData*>(_draw_data);
+    if (draw_data->DisplaySize.x <= 0.0f || draw_data->DisplaySize.y <= 0.0f)
+        return;
+    Shader* frag_shader = ShaderResourceManager::GetShader<ImGuiShaderFrag>();
+    Shader* vert_shader = ShaderResourceManager::GetShader<ImGuiShaderVert>();
+    // RHIFragmentShaderRef frag_rhi_shader = g_rhi->RHICreateFragmentShader(frag_shader);
+
+    GuiBackendData* backend_data = GetBackendData();
+
+    GuiViewportData* viewport_data = (GuiViewportData*)draw_data->OwnerViewport->RendererUserData;
+
+    GuiFrameRenderBuffers* render_buffers = &viewport_data->render_buffers[viewport_data->frame_index % backend_data->num_frames_in_flight];
 
     ImVec2 clip_off   = draw_data->DisplayPos;      // (0,0) unless using multi-viewports
     ImVec2 clip_scale = draw_data->FramebufferScale;// (1,1) unless using retina display which are often (2,2)
@@ -493,6 +508,9 @@ void GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list) {
         global_index_offset += cmd_list->IdxBuffer.Size;
         global_vertex_offset += cmd_list->VtxBuffer.Size;
     }
+
+    //todo frame_index should not manage here
+    viewport_data->frame_index += 1;
 }
 
 void SetupRenderState(ImDrawData* draw_data, RHIGraphicsCommandList* commandList, GuiFrameRenderBuffers* render_buffers) {
@@ -888,6 +906,8 @@ void GuiRenderWindow(ImGuiViewport* viewport, void*) {
     pass_info.render_area.offset.y      = 0;
     pass_info.render_area.extent.width  = viewport->Size.x;
     pass_info.render_area.extent.height = viewport->Size.y;
+
+    GUIUploadData(viewport->DrawData, viewport_data->comand_list);
 
     viewport_data->comand_list->BeginRenderPass(pass_info, "Imgui Window");
 
