@@ -2,6 +2,7 @@
 #include "IconsFontAwesome6.h"
 #include "RenderThread.h"
 #include "config/ConfigManager.h"
+#include "math/Constant.h"
 #include "misc/MMemory.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
@@ -599,8 +600,51 @@ void GUIUploadData(void* _draw_data, RHIGraphicsCommandList* _ui_command_list, R
                                              0,
                                              staging_index_buffer->GetSize());
 
+        RHIBarrierDependencyInfo dependency_info{};
+        auto&                    buffer_barriers = dependency_info.buffer_barriers;
+        buffer_barriers.resize(2);
+        buffer_barriers[0]
+            .SetBuffer(vertex_buffer)
+            .SetOffset(0)
+            .SetSize(Moer::MAX_INT64)
+            .SetSrcAccessFlags(ERHIAccessFlags::VERTEX_ATTRIBUTE_READ)
+            .SetDstAccessFlags(ERHIAccessFlags::TRANSFER_WRITE)
+            .SetSrcStage(PS_VERTEX_INPUT)
+            .SetDstStage(PS_TRANSFER);
+
+        buffer_barriers[1]
+            .SetBuffer(index_buffer)
+            .SetOffset(0)
+            .SetSize(Moer::MAX_INT64)
+            .SetSrcAccessFlags(ERHIAccessFlags::INDEX_READ)
+            .SetDstAccessFlags(ERHIAccessFlags::TRANSFER_WRITE)
+            .SetSrcStage(PS_VERTEX_INPUT)
+            .SetDstStage(PS_TRANSFER);
+
+        _ui_command_list->SetPipelineBarrier(dependency_info);
+
         _ui_command_list->CopyBuffer(copy_info, staging_vertex_buffer, vertex_buffer);
         _ui_command_list->CopyBuffer(copy_index_info, staging_index_buffer, index_buffer);
+
+        buffer_barriers[0]
+            .SetBuffer(vertex_buffer)
+            .SetOffset(0)
+            .SetSize(Moer::MAX_INT64)
+            .SetSrcAccessFlags(ERHIAccessFlags::TRANSFER_WRITE)
+            .SetDstAccessFlags(ERHIAccessFlags::VERTEX_ATTRIBUTE_READ)
+            .SetSrcStage(PS_TRANSFER)
+            .SetDstStage(PS_VERTEX_INPUT);
+
+        buffer_barriers[1]
+            .SetBuffer(index_buffer)
+            .SetOffset(0)
+            .SetSize(Moer::MAX_INT64)
+            .SetSrcAccessFlags(ERHIAccessFlags::TRANSFER_WRITE)
+            .SetDstAccessFlags(ERHIAccessFlags::INDEX_READ)
+            .SetSrcStage(PS_TRANSFER)
+            .SetDstStage(PS_VERTEX_INPUT);
+
+        _ui_command_list->SetPipelineBarrier(dependency_info);
     });
 }
 void GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list, RHIViewportNextBackBufferInfo* _next_frame_info_render_thread) {
@@ -751,6 +795,7 @@ void SetupRenderState(ImDrawData* draw_data, RHIGraphicsCommandList* commandList
 
         RHIBufferRef vertex_buffer = render_buffers->vertex_buffer;
         RHIBufferRef index_buffer  = render_buffers->index_buffer;
+
         commandList->SetViewPort(view_port);
         // 4. global: bind vertex/index
         uint32_t offsets[] = {0};
