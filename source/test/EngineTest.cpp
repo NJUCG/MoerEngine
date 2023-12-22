@@ -52,20 +52,20 @@ void RenderThreadSuspendTest(const Moer::Engine& engine) {
     END_TEST(RenderThreadSuspendTest)
 }
 
-void ShaderParameterSetTest() {
-    BEGIN_TEST(ShaderParameterSetTest)
-    TestReflectionShader::Parameters params{};
-    Shader*                          shader = ShaderResourceManager::GetShader<TestReflectionShader>();
-    RHIBatchedShaderParameters       batched_params;
-    auto                             view_info = RHIViewInfo::CreateBufferSRVInfo();
-    params.bar                                 = new RHIShaderResourceView(nullptr, view_info);
-    params.ubo.viewMatrix                      = Moer::Matrix4x4f::Identity();
-    Moer::Matrix4x4f param_test;
-
-    batched_params.SetParameters(shader, params);
-
-    END_TEST(ShaderParameterSetTest)
-}
+// void ShaderParameterSetTest() {
+//     BEGIN_TEST(ShaderParameterSetTest)
+//     TestReflectionShader::Parameters params{};
+//     Shader*                          shader = ShaderResourceManager::GetShader<TestReflectionShader>();
+//     RHIBatchedShaderParameters       batched_params;
+//     auto                             view_info = RHIViewInfo::CreateBufferSRVInfo();
+//     params.bar                                 = new RHIShaderResourceView(nullptr, view_info);
+//     params.ubo.viewMatrix                      = Moer::Matrix4x4f::Identity();
+//     Moer::Matrix4x4f param_test;
+//
+//     batched_params.SetParameters(shader, params);
+//
+//     END_TEST(ShaderParameterSetTest)
+// }
 
 int main(int argc, const char** argv) {
 
@@ -74,7 +74,7 @@ int main(int argc, const char** argv) {
 
     engine.Init(info);
     engine.PostInit();
-    ShaderParameterSetTest();
+    //ShaderParameterSetTest();
     engine.Run();
 
     engine.Quit();

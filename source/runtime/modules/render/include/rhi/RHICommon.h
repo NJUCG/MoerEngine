@@ -890,6 +890,15 @@ enum class ECommandListType {
     Num
 };
 
+enum class EPrimitiveType : uint8_t {
+    // don't change the enums values (made to match GL)
+    POINTS         = 0,    //!< points
+    LINES          = 1,    //!< lines
+    LINE_STRIP     = 3,    //!< line strip
+    TRIANGLES      = 4,    //!< triangles
+    TRIANGLE_STRIP = 5     //!< triangle strip
+};
+
 #pragma region utils
 struct Rect2D {
     Offset2D offset;
