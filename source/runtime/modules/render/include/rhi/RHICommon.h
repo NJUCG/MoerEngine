@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <limits>
 #include "RenderCommon.h"
+#include "RenderAPI.h"
 #include "math/Base.h"
 #include "misc/EnumBitOperation.h"
 #pragma region CommonEnums

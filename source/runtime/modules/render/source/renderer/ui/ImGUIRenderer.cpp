@@ -73,7 +73,7 @@ struct GuiBackendData {
 };
 
 class ImGuiShaderVert : public Shader {
-    DEFINE_SHADER_TYPE(ImGuiShaderVert, Global, RHI_API, ...)
+    DEFINE_SHADER_TYPE(ImGuiShaderVert, Global, RENDER_API, ...)
 public:
     BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(UIVertex)
     DEFINE_SHADER_PARAM(Moer::Matrix4x4f, mvp)
@@ -87,7 +87,7 @@ public:
 };
 IMPLEMENT_SHADER_TYPE(ImGuiShaderVert, "GuiVert.vert", "main", ST_VERTEX)
 class ImGuiShaderFrag : public Shader {
-    DEFINE_SHADER_TYPE(ImGuiShaderFrag, Global, RHI_API, ...)
+    DEFINE_SHADER_TYPE(ImGuiShaderFrag, Global, RENDER_API, ...)
 public:
     BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
 

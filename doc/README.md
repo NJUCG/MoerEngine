@@ -44,7 +44,7 @@
 ```cpp
 
 class TestShader : public Shader {
-    DEFINE_SHADER_TYPE(TestShader, Global, RHI_API)
+    DEFINE_SHADER_TYPE(TestShader, Global, RENDER_API)
 public:
     BEGIN_SHADER_PARAMETER_DEFINITION(Parameters)
 

@@ -6,7 +6,7 @@
 #include "shader/ShaderResourceManager.h"
 #include <cstring>
 class TestShaderClass : Shader {
-    DEFINE_SHADER_TYPE(TestShaderClass, Global, RENDER_CORE_API)
+    DEFINE_SHADER_TYPE(TestShaderClass, Global, RENDER_API)
 };
 
 IMPLEMENT_SHADER_TYPE(TestReflectionShader, "TestVert.vert", "main", EShaderType::ST_VERTEX);

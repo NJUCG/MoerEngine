@@ -144,7 +144,7 @@ typedef Moer::StaticArray<VertexElement, MAX_VERTEX_ELEMENT_COUNT> VertexInputSt
 
 #pragma endregion
 
-class RHI_API RHIResource {
+class RENDER_API RHIResource {
 public:
     explicit RHIResource(ERHIResourceType _type = ERHIResourceType::RRT_NONE) : type(_type) {}
     virtual ~RHIResource() = default;
@@ -2849,16 +2849,16 @@ static_assert((1u << uint32_t(ERHITexturePlane::NumBits)) >= uint32_t(ERHITextur
 
 class RHITextureReference final : public RHITexture {
 public:
-    RHI_API RHITextureReference(RHITexture* _texture, RHIShaderResourceView* _bindless_view);
+    RENDER_API RHITextureReference(RHITexture* _texture, RHIShaderResourceView* _bindless_view);
 
-    RHI_API ~RHITextureReference();
+    RENDER_API ~RHITextureReference();
 
-    RHI_API virtual class RHITextureReference* GetTextureRef() override;
-    //    RHI_API virtual RHIDescriptorHandle GetDefaultBindlessHandle() const override;
+    RENDER_API virtual class RHITextureReference* GetTextureRef() override;
+    //    RENDER_API virtual RHIDescriptorHandle GetDefaultBindlessHandle() const override;
 
-    RHI_API virtual void*                 GetNativeResource() const override;
-    RHI_API virtual void*                 GetNativeShaderResourceView() const override;
-    RHI_API virtual const RHITextureInfo& GetInfo() const override;
+    RENDER_API virtual void*                 GetNativeResource() const override;
+    RENDER_API virtual void*                 GetNativeShaderResourceView() const override;
+    RENDER_API virtual const RHITextureInfo& GetInfo() const override;
 
     inline RHITexture*            GetReferencedTexture() const { return texture_ref.Get(); }
     inline RHIShaderResourceView* GetBindlessView() const { return bindless_view.Get(); }
@@ -2874,7 +2874,7 @@ private:
 
     RHIShaderResourceViewRef bindless_view;
 
-    RHI_API static RHITextureRef default_texture;
+    RENDER_API static RHITextureRef default_texture;
 };
 
 class RHIShaderLibrary : public RHIResource {
