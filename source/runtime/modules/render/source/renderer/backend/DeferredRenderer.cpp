@@ -110,21 +110,65 @@ namespace Moer {
         }
         render_fence = g_rhi->RHICreateFence({.usage = EFenceUsageFlags::TIMELINE});
 
+        /**
+        * @brief 
+        float3 pos : POSITION;
+        float3 normal : NORMAL;
+        float3 tangent : TANGENT;
+        float3 binormal : BINORMAL;
+        float2 uv : TEXCOORD0;
+        * 
+        */
         //test draw triangle
         float vertices[] = {
             -0.5f,
             -0.5f,
             0.0f,
+
+            0.f,
+            0.f,
+            1.f,
+            1.f,
+            0.f,
+            0.f,
+            0.f,
+            1.f,
+            0.f,
+
             1.0f,
             0.0f,
+
             0.5f,
             -0.5f,
             0.0f,
+
+            0.f,
+            0.f,
+            1.f,
+            1.f,
+            0.f,
+            0.f,
+            0.f,
+            1.f,
+            0.f,
+
             0.0f,
             1.0f,
+
             0.0f,
             0.5f,
             0.0f,
+
+            0.f,
+            0.f,
+            1.f,
+            1.f,
+            0.f,
+            0.f,
+            0.f,
+            1.f,
+            0.f,
+
             1.0f,
             1.0f,
         };
@@ -133,7 +177,7 @@ namespace Moer {
         vertex_buffer      = g_rhi->RHICreateBuffer(
             RHIBufferCreateInfo::Create()
                 .SetSize(sizeof(vertices))
-                .SetStride(sizeof(float) * 5)
+                .SetStride(sizeof(float) * 14)
                 .SetUsage(EBufferUsageFlags::VERTEX_BUFFER |
                           EBufferUsageFlags::CPU_VISIBLE));
         void* data = g_rhi->RHIMapBuffer(vertex_buffer, 0, sizeof(vertices));
@@ -277,23 +321,25 @@ namespace Moer {
             cmd_list->SetScissor({0, 0, uint32_t(viewport_info.extent.x), uint32_t(viewport_info.extent.y)});
 
             cmd_list->SetPipelineState(pipeline_state);
-            // cmd_list->BindIndexBuffer(index_buffer, 0, EIndexElementType::IET_UINT32);
-            //  uint32_t offset = 0;
-            //  cmd_list->BindVertexBuffers(0, 1, &vertex_buffer, &offset);
 
             //  cmd_list->DrawIndexedInstanced(3, 1, 0, 0, 0);
 
-            const auto scene = g_scene;
-            for (auto entity : scene->GetEntities()) {
-                if (auto primitive = RenderableManager::Get().GetRenderPrimitive(entity)) {
-                    cmd_list->BindIndexBuffer(primitive->GetIndexBuffer(), 0, EIndexElementType::IET_UINT32);
-                    const RHIBufferRef prim_vertex_buffer = primitive->GetVertexBuffer();
-                    uint32_t           offset             = 0;
-                    cmd_list->BindVertexBuffers(0, 1, &prim_vertex_buffer, &offset);
-                    cmd_list->DrawIndexedInstanced(primitive->GetCount(), 1, 0, 0, 0);
+            const auto* scene = g_scene;
+            if (scene) {
+                for (auto entity : scene->GetEntities()) {
+                    if (auto primitive = RenderableManager::Get().GetRenderPrimitive(entity)) {
+                        cmd_list->BindIndexBuffer(primitive->GetIndexBuffer(), 0, EIndexElementType::IET_UINT32);
+                        const RHIBufferRef prim_vertex_buffer = primitive->GetVertexBuffer();
+                        uint32_t           offset             = 0;
+                        cmd_list->BindVertexBuffers(0, 1, &prim_vertex_buffer, &offset);
+                        cmd_list->DrawIndexedInstanced(primitive->GetCount(), 1, 0, 0, 0);
+                    }
                 }
             }
 
+            cmd_list->BindIndexBuffer(index_buffer, 0, EIndexElementType::IET_UINT32);
+            uint32_t offset = 0;
+            cmd_list->BindVertexBuffers(0, 1, &vertex_buffer, &offset);
             cmd_list->DrawIndexedInstanced(3, 1, 0, 0, 0);
 
             cmd_list->EndRenderPass();
