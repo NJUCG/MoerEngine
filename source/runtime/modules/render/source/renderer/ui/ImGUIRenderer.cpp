@@ -1118,6 +1118,9 @@ void GuiSetWindowSize(ImGuiViewport* viewport, ImVec2 size) {
     auto m_viewport = viewport_data->viewport;
 
     EnqueueRenderTask([m_viewport, size] {
+        Extent2D viewport_extent = {(uint32_t)m_viewport->GetViewportExtent().width, (uint32_t)m_viewport->GetViewportExtent().height};
+
+        if (size.x == viewport_extent.width && size.y == viewport_extent.height) return;
         g_rhi->RHIResizeViewport(m_viewport, Extent2D(size.x, size.y), false);
     });
     // g_rhi->RHIResizeViewport(m_viewport, Extent2D(size.x, size.y), false);
