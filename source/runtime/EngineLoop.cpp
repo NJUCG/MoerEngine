@@ -56,8 +56,8 @@ namespace Moer {
         //record and present gui render command on main thread
         UIRenderer::GetRenderer()->EndRenderFrame();
 
-        RendererManager::GetInstance().DrawFrame();
-        RendererManager::GetInstance().Present();
+        // RendererManager::GetInstance().DrawFrame();
+        // RendererManager::GetInstance().Present();
 
         frame_end_sync.Sync(true);
     }
