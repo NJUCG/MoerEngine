@@ -1,5 +1,6 @@
 #include "GLFWWindowImpl.h"
 #include "config/ConfigManager.h"
+#include "misc/MMemory.h"
 #include "rhi/RHI.h"
 #include "rhi/vulkan/VulkanRHI.h"
 #include "window/WindowContext.h"
@@ -59,7 +60,15 @@ namespace Moer {
         return ImGui::GetIO().Fonts->GetGlyphRangesDefault();
     }
 
+    static void* MallocWrapper(size_t size, void* user_data) {
+        return Memory::Malloc(size);
+    }
+    static void FreeWrapper(void* ptr, void* user_data) {
+        Memory::Free(ptr);
+    }
     void GLFWWindowImpl::GuiInit(const GuiWindowInitInfo& _init_info) {
+
+        ImGui::SetAllocatorFunctions(MallocWrapper, FreeWrapper, nullptr);
 
         GuiWindowInit(_init_info);
         ImGuiIO& io = ImGui::GetIO();

@@ -159,7 +159,7 @@ struct GuiViewportData {
 
     GuiViewportData(uint32_t _frame_in_flight) {
         memset((void*)this, 0, sizeof(*this));
-        render_buffers = new GuiFrameRenderBuffers[_frame_in_flight];
+        render_buffers = MoerNew(GuiFrameRenderBuffers[_frame_in_flight]);
         for (uint32_t i = 0; i < _frame_in_flight; ++i) {
             render_buffers[i].vertex_buffer         = nullptr;
             render_buffers[i].index_buffer          = nullptr;
@@ -170,7 +170,7 @@ struct GuiViewportData {
         viewport_count++;
     }
     ~GuiViewportData() {
-        delete[] render_buffers;
+        MoerDelete(render_buffers);
         viewport_count--;
     }
 };
@@ -544,8 +544,8 @@ void GUIUploadData(void* _draw_data, RHIGraphicsCommandList* _ui_command_list, R
         memcpy(indices.data(), cmd_list->IdxBuffer.Data, cmd_list->IdxBuffer.Size * sizeof(ImDrawIdx));
         EnqueueRenderTask([_next_frame_info_render_thread,
                            num_frames_in_flight,
-                           vertices,
-                           indices,
+                           vertices{std::move(vertices)},
+                           indices{std::move(indices)},
                            viewport_data,
                            vertex_offset,
                            index_offset]() {
@@ -574,9 +574,6 @@ void GUIUploadData(void* _draw_data, RHIGraphicsCommandList* _ui_command_list, R
 
         vertex_offset += cmd_list->VtxBuffer.Size;
         index_offset += cmd_list->IdxBuffer.Size;
-
-        vertices.clear();
-        indices.clear();
     }
     // g_rhi->RHIUnmapBuffer(render_buffers->staging_vertex_buffer);
     // g_rhi->RHIUnmapBuffer(render_buffers->staging_index_buffer);
@@ -920,7 +917,7 @@ void CreateFontsTexture() {
         const uint32_t alignment    = 256;
         RHITextureRef  font_texture = nullptr;
 
-        font_texture = g_rhi->RHICreateTexture(RHITextureCreateInfo::Create("FontTexture2D", ETextureDimension::TEX_2D)
+        font_texture = g_rhi->RHICreateTexture(RHITextureCreateInfo::Create("GuiFontTexture2D", ETextureDimension::TEX_2D)
                                                    .SetNumSamples(1)
                                                    .SetExtent({width, height})
                                                    .SetNumMips(1)

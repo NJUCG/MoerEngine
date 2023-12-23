@@ -14,8 +14,8 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" ) # clang-cl
     -Wno-tautological-type-limit-compare 
     -Wno-old-style-cast
     -Wno-sign-conversion
-    -Wno-nonportable-system-include-path)
-
+    -Wno-nonportable-system-include-path
+    -Wno-unused-but-set-variable)
 else() # msvc
 endif()
 endif()

@@ -135,9 +135,9 @@ void MainWindow::Show() {
     }
     ShowStyleSelector("Colors##Default");
     static Extent2D values = {1920, 1080};
-    // ImGui::InputInt2("Resolution", (int*)&values.x);
+
     ShowResolutionSelector("Resolution", values);
-    //set viewport size(image size) of main viewport
+
     auto& render_manager = Moer::RendererManager::GetInstance();
     auto  renderer_id    = render_manager.GetRendererID(MOER_DEFAULT_RENDERER_NAME);
     void* output         = render_manager.GetRendererOutput(renderer_id);
