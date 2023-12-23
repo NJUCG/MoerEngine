@@ -574,6 +574,9 @@ void GUIUploadData(void* _draw_data, RHIGraphicsCommandList* _ui_command_list, R
 
         vertex_offset += cmd_list->VtxBuffer.Size;
         index_offset += cmd_list->IdxBuffer.Size;
+
+        vertices.clear();
+        indices.clear();
     }
     // g_rhi->RHIUnmapBuffer(render_buffers->staging_vertex_buffer);
     // g_rhi->RHIUnmapBuffer(render_buffers->staging_index_buffer);

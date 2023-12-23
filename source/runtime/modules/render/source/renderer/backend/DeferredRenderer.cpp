@@ -298,7 +298,8 @@ namespace Moer {
             render_attachment_view.texture_view     = uav;
             render_attachment_view.clear_attachment = RHIClearAttachment(EClearAttachment::COLOR);
 
-            pass_info.render_area.extent = Extent2D(virtual_viewport->GetInfo().extent);
+            Extent3D extent              = uav->GetTexture()->GetExtent3D();
+            pass_info.render_area.extent = Extent2D(extent.x, extent.y);
             pass_info.render_area.offset = Offset2D(0, 0);
 
             RHIBarrierDependencyInfo barrier_dependency_info;
@@ -375,6 +376,9 @@ namespace Moer {
     }
 
     void DeferredRenderer::Impl::SetPresentResolution(uint32_t _width, uint32_t _height) {
+        EnqueueRenderTask([this, _width, _height]() {
+            virtual_viewport->OnResize(Extent2D(_width, _height));
+        });
     }
 
     RHIShaderResourceViewRef DeferredRenderer::Impl::GetRendererOutput() {

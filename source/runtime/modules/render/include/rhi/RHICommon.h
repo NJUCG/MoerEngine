@@ -141,6 +141,8 @@ struct Extent3D {
         uint32_t depth;
         uint32_t z;
     };
+    Extent3D(Moer::Vector3i _v) : x(_v.x), y(_v.y), z(_v.z) {
+    }
     Extent3D(uint32_t _x, uint32_t _y, uint32_t _z) : x(_x), y(_y), z(_z) {
     }
     Extent3D() : x(0), y(0), z(0) {
@@ -888,11 +890,11 @@ enum class ECommandListType {
 
 enum class EPrimitiveType : uint8_t {
     // don't change the enums values (made to match GL)
-    POINTS         = 0,    //!< points
-    LINES          = 1,    //!< lines
-    LINE_STRIP     = 3,    //!< line strip
-    TRIANGLES      = 4,    //!< triangles
-    TRIANGLE_STRIP = 5     //!< triangle strip
+    POINTS         = 0,//!< points
+    LINES          = 1,//!< lines
+    LINE_STRIP     = 3,//!< line strip
+    TRIANGLES      = 4,//!< triangles
+    TRIANGLE_STRIP = 5 //!< triangle strip
 };
 
 #pragma region utils

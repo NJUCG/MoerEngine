@@ -53,6 +53,9 @@ public:
     void Wait() {
         if (m_event) m_event->Wait();
     }
+    operator Event*() {
+        return m_event;
+    }
 
 private:
     Event* m_event;

@@ -55,6 +55,7 @@ namespace Moer {
     private:
         friend VirtualViewport;
         void InitRenderThread();
+        void CreateResources();
         void ResizeRenderThread(Moer::Vector2i extent);
 
 // in Application mode, Present operations happens on render thread
@@ -156,6 +157,11 @@ namespace Moer {
                                              ETextureUsageFlags::SRGB |
                                              ETextureUsageFlags::SAMPLED);
 
+        CreateResources();
+        copy_queue->WaitForQueueComplete();
+    }
+    void VirtualViewport::Impl::CreateResources() {
+
         auto present_texture_create_info = upload_texture_create_info;
 
         present_texture     = g_rhi->RHICreateTexture(present_texture_create_info.SetUsageFlags(
@@ -169,7 +175,6 @@ namespace Moer {
                                                                      .SetFormat(info.format)
                                                                      .SetDimension(ETextureDimension::TEX_2D));
 
-        auto* texture = g_rhi->RHIGetViewportBackBufferUAV(g_rhi->RHIGetMainViewport(), 0)->GetTexture();
         swapchain_textures.resize(info.back_buffer_count);
         swapchain_uavs.resize(info.back_buffer_count);
         for (int i = 0; i < info.back_buffer_count; ++i) {
@@ -203,11 +208,9 @@ namespace Moer {
         copy_cmd_list->SetPipelineBarrier(barrier_info);
         copy_cmd_list->EndRecording();
         RHISubmitInfo submit_info;
-        submit_info.Signal(fence, 0);
+        submit_info.Signal(fence, 1);
         copy_queue->SubmitCommands(1, copy_cmd_list, &submit_info);
-        copy_queue->WaitForQueueComplete();
     }
-
     void VirtualViewport::Impl::InitRenderThread() {
         // Implementation of InitRenderThread method
         // ...
@@ -215,6 +218,18 @@ namespace Moer {
     }
 
     void VirtualViewport::Impl::OnResize(Moer::Vector2i extent) {
+
+        assert(Moer::IsCurrentlyRenderThread() && "OnResize should be called on main thread");
+
+        if (extent == info.extent) {
+            return;
+        }
+        info.extent = extent;
+        upload_texture_create_info.SetExtent(extent);
+        copy_queue->WaitForQueueComplete();
+        copy_cmd_list->Reset();
+        CreateResources();
+        copy_queue->WaitForQueueComplete();
     }
 
     void VirtualViewport::Impl::Present(RHIFenceRef _render_fence) {
@@ -229,12 +244,15 @@ namespace Moer {
         auto* cmd_list = copy_cmd_list;
         present_fence->Wait(presented_index - 1);
         cmd_list->Reset();
-        Offset3D           zero_offset = {0, 0, 0};
-        Offset2D           extent      = {upload_texture_create_info.extent.x, upload_texture_create_info.extent.y};
+        Offset3D zero_offset = {0, 0, 0};
+
+        Extent3D src_extent = swapchain_textures[current_rendered % info.back_buffer_count]->GetExtent3D();
+
+        Offset2D           extent = {upload_texture_create_info.extent.x, upload_texture_create_info.extent.y};
         RHIBlitTextureInfo blit_info;
         blit_info.filter         = SF_CUBIC;
         blit_info.src_offsets[0] = zero_offset;
-        blit_info.src_offsets[1] = Offset3D(extent.x, extent.y, 1);
+        blit_info.src_offsets[1] = Offset3D(src_extent.x, src_extent.y, 1);
         blit_info.dst_offsets[0] = zero_offset;
         blit_info.dst_offsets[1] = Offset3D(extent.x, extent.y, 1);
         blit_info.src_layout     = TEXTURE_LAYOUT_TRANSFER_SRC;

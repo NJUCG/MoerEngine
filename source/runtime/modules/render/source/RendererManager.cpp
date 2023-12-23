@@ -103,7 +103,7 @@ namespace Moer {
         if (renderer == nullptr) {
             return;
         }
-        renderer->SetOriginResolution(_width, _height);
+        renderer->SetPresentResolution(_width, _height);
     }
 
 }// namespace Moer

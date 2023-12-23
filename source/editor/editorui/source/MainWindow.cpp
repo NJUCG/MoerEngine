@@ -5,6 +5,7 @@
 
 #include "imgui.h"
 #include "misc/Timer.h"
+#include "rhi/RHICommon.h"
 void StyleColorsDark(ImGuiStyle* dst = nullptr) {
     auto& colors = ImGui::GetStyle().Colors;
 
@@ -85,6 +86,20 @@ bool ShowStyleSelector(const char* label) {
     }
     return false;
 }
+
+bool ShowResolutionSelector(const char* label, Extent2D& values) {
+    static int style_idx = 0;
+    if (ImGui::Combo(label, &style_idx, "res_1080p\0res_2k\0res_4k\0")) {
+        switch (style_idx) {
+            case 0: values = {1920, 1080}; break;
+            case 1: values = {2560, 1440}; break;
+            case 2: values = {3840, 2160}; break;
+        }
+        return true;
+    }
+    return false;
+}
+
 Moer::Timer timer;
 
 void MainWindow::Show() {
@@ -119,11 +134,14 @@ void MainWindow::Show() {
         b_first_time = false;
     }
     ShowStyleSelector("Colors##Default");
-
+    static Extent2D values = {1920, 1080};
+    // ImGui::InputInt2("Resolution", (int*)&values.x);
+    ShowResolutionSelector("Resolution", values);
     //set viewport size(image size) of main viewport
     auto& render_manager = Moer::RendererManager::GetInstance();
     auto  renderer_id    = render_manager.GetRendererID(MOER_DEFAULT_RENDERER_NAME);
     void* output         = render_manager.GetRendererOutput(renderer_id);
+    render_manager.SetRendererPresentResolution(renderer_id, values.x, values.y);
     float display_width  = ImGui::GetWindowWidth();
     float display_height = display_width * 9.f / 16.f;
     ImGui::Image(output,
