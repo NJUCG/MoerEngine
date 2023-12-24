@@ -6,6 +6,7 @@
 #include "rhi/RHI.h"
 #include "scene/EntityManager.h"
 #include "resources/GpuScene.h"
+#include "scene/CameraManager.h"
 #include "scene/RenderableManager.h"
 #include "scene/TransformManager.h"
 
@@ -18,10 +19,14 @@ namespace  Moer::Resource::Gltf  {
         std::unique_ptr<Scene> LoadSceneFromFile(const std::filesystem::path &  file_path);
         void loadNode(const aiNode * node,const aiScene * scene);
         void loadTextures(const aiScene *scene);
+        void loadCameras(const aiScene *scene);
         std::vector<CountableRef<RHITexture>> m_textures{};
-        std::vector<CountableRef<RHIRenderPrimitive>> m_primitives{};
         std::unique_ptr<Scene> m_scene{nullptr};
     };
+
+    static Vector3f ToVector3f(const aiVector3D & vec) {
+        return {vec.x,vec.y,vec.z};
+    }
 
     void Parser::Impl::loadTextures(const aiScene* scene) {
         const uint32_t texture_num = scene->mNumTextures;
@@ -34,6 +39,31 @@ namespace  Moer::Resource::Gltf  {
             
         }
         
+    }
+
+    void Parser::Impl::loadCameras(const aiScene* scene) {
+        const uint32_t camera_num = scene->mNumCameras;
+        if(camera_num == 0) {
+            LOG_WARNING("Current Scene has no camera");
+            Entity entity = EntityManager::Get().Create();
+            CameraRef default_camera = CameraManager::Get().Create(entity);
+            m_scene->AddCamera(entity);
+        }
+        else for(uint32_t i = 0; i<camera_num ;i++) {
+            const auto * camera = scene->mCameras[i];
+            Entity entity =  EntityManager::Get().Create();
+            CameraRef camera_ref = CameraManager::Get().Create(entity);
+            Transform & transform = TransformManager::Get().Create(entity);
+            transform = Transform(ToVector3f(camera->mPosition),ToVector3f(camera->mUp),ToVector3f(camera->mLookAt));
+            camera_ref->SetFov(Angle::RadianToDegree(camera->mHorizontalFOV));
+            camera_ref->SetWorldTransform(transform);
+            camera_ref->SetNearClip(camera->mClipPlaneNear);
+            camera_ref->SetFarClip(camera->mClipPlaneFar);
+            camera_ref->SetAspectRatio(camera->mAspect);
+            m_scene->AddCamera(entity);
+            
+        }
+
     }
 
     std::unique_ptr<Scene> Parser::Impl::LoadSceneFromFile(const std::filesystem::path& file_path) {
@@ -52,6 +82,7 @@ namespace  Moer::Resource::Gltf  {
         //Todo Load Materials
         //Todo Load Cameras
         //Todo Load Lights
+        loadCameras(gltf_scene);
         loadNode(gltf_scene->mRootNode,gltf_scene);
         //todo after build all    end build 
        // GpuPrimitiveBuilder::EndBuild();

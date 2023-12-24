@@ -1,10 +1,10 @@
 #pragma once
-#include "math/math.h"
 #include "math/Transform.h"
 #include "misc/CountableRef.h"
+#include "RenderAPI.h"
 
 namespace Moer {
-    class Camera : public  CountableResource{
+    class RENDER_API  Camera : public  CountableResource{
     public:
         static float sensitivity;
         static float sensitivity_scale;

@@ -66,11 +66,17 @@ void RenderThreadSuspendTest(const Moer::Engine& engine) {
 //
 //     END_TEST(ShaderParameterSetTest)
 // }
+//todo config this
+std::filesystem::path GetValidEnginePath(const std::filesystem::path& path) {
+    if (path.filename().string().ends_with("exe"))
+        return path.parent_path();
+    return path;
+}
 
 int main(int argc, const char** argv) {
 
     Moer::Engine         engine;
-    Moer::EngineInitInfo info{std::filesystem::path(argv[0])};
+    Moer::EngineInitInfo info{GetValidEnginePath(argv[0])};
 
     engine.Init(info);
     engine.PostInit();

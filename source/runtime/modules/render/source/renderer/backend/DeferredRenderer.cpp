@@ -16,13 +16,23 @@
 #include "shader/ShaderResourceManager.h"
 #include "scene/RenderableManager.h"
 #include "scene/Scene.h"
+#include "scene/CameraManager.h"
+#include "scene/TransformManager.h"
+
 #include <algorithm>
 
 class TestDeferredTriangleShaderVert : public Shader {
     DEFINE_SHADER_TYPE(TestDeferredTriangleShaderVert, Global, RENDER_API, ...)
 public:
-    BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
+    BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(UBOVertex)
+    DEFINE_SHADER_PARAM(Moer::Matrix4x4f, model)
+    DEFINE_SHADER_PARAM(Moer::Matrix4x4f, view)
+    DEFINE_SHADER_PARAM(Moer::Matrix4x4f, proj)
+    DEFINE_SHADER_PARAM(Moer::Matrix4x4f, mvp)
+    END_SHADER_CONSTANT_STRUCT_DEFINITION()
 
+    BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
+    DEFINE_SHADER_PARAM_STRUCT(UBOVertex, scene_ubo)
     END_ROOT_PARAMETER_DEFINITION(Parameters)
 };
 
@@ -194,7 +204,7 @@ namespace Moer {
                  PF_UNDEFINED,
                  ETextureUsageFlags::UNDEFINED,
                  {},
-                 0,
+                 false,
                  1,
                  false,
                  VSR_NONE);
@@ -271,18 +281,28 @@ namespace Moer {
         cmd_list->SetScissor({0, 0, uint32_t(viewport_info.extent.x), uint32_t(viewport_info.extent.y)});
 
         cmd_list->SetPipelineState(pipeline_state);
-        // cmd_list->BindIndexBuffer(index_buffer, 0, EIndexElementType::IET_UINT32);
-        //  uint32_t offset = 0;
-        //  cmd_list->BindVertexBuffers(0, 1, &vertex_buffer, &offset);
 
-        //  cmd_list->DrawIndexedInstanced(3, 1, 0, 0, 0);
+        const auto scene         = g_scene;
+        const auto camera_entity = scene->GetCameras()[0];
+        const auto camera        = CameraManager::Get().Get(camera_entity);
+        const auto camera_view   = camera->GetViewMatrix();
+        const auto camera_proj   = camera->GetProjectionMatrix();
 
-        const auto scene = g_scene;
-        for(auto entity : scene->GetEntities()) {
-            if(auto primitive = RenderableManager::Get().GetRenderPrimitive(entity)) {
+        Shader* vert_shader = ShaderResourceManager::GetShader<TestDeferredTriangleShaderVert>();
+
+        for (auto entity : scene->GetEntities()) {
+            if (auto primitive = RenderableManager::Get().GetRenderPrimitive(entity)) {
+                const auto                                 prim_model = TransformManager::Get().Get(entity).matrix;
+                TestDeferredTriangleShaderVert::Parameters params;
+                Matrix4x4f                                 ubo[] = {prim_model, camera_view, camera_proj, Transpose(camera_proj * camera_view * prim_model)};
+                memcpy(&params.scene_ubo, &ubo, sizeof(ubo));
+                RHIBatchedShaderParameters batched_params;
+                batched_params.SetParameters(vert_shader, params);
+                g_rhi->RHISetBatchedShaderParameters(pipeline_state, batched_params, true);
+
                 cmd_list->BindIndexBuffer(primitive->GetIndexBuffer(), 0, EIndexElementType::IET_UINT32);
-                const RHIBufferRef  prim_vertex_buffer = primitive->GetVertexBuffer();
-                uint32_t offset = 0;
+                const RHIBufferRef prim_vertex_buffer = primitive->GetVertexBuffer();
+                uint32_t           offset             = 0;
                 cmd_list->BindVertexBuffers(0, 1, &prim_vertex_buffer, &offset);
                 cmd_list->DrawIndexedInstanced(primitive->GetCount(), 1, 0, 0, 0);
             }

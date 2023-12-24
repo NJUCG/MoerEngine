@@ -17,10 +17,10 @@ namespace Moer {
         Quaternion quaternion;
     };
 
-    struct Transform {
+    struct CORE_API Transform {
         Matrix4x4f matrix;
 
-        Transform() noexcept : matrix(Moer::IDENTITY_4X4F) {}
+        Transform() noexcept : matrix(IDENTITY_4X4F) {}
         Transform(const Matrix4x4f& matrix) noexcept : matrix(matrix) {}
         Transform(const Transform& trans) noexcept : matrix(trans.matrix) {}
 
@@ -29,7 +29,7 @@ namespace Moer {
         Transform(const Vector3f& origin, const Vector3f& look_at, const Vector3f& up_dir) noexcept;
 
         // perspective transformation
-        Transform(const Moer::Angle& fov_y, float aspect_ratio, float near_clip, float far_clip) noexcept;
+        Transform(const Angle& fov_y, float aspect_ratio, float near_clip, float far_clip) noexcept;
 
         // this.AppendTransformation(new_transform) == new_transform * this * v => (new_transform * this) * v
         void      AppendTransformation(const Transform& new_transform) noexcept;
