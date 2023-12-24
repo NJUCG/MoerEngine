@@ -1,10 +1,11 @@
 #pragma once
+#include "math/Math.h"
 #include "math/Transform.h"
 #include "misc/CountableRef.h"
 #include "RenderAPI.h"
 
 namespace Moer {
-    class RENDER_API  Camera : public  CountableResource{
+    class RENDER_API Camera : public CountableResource {
     public:
         static float sensitivity;
         static float sensitivity_scale;
@@ -22,8 +23,8 @@ namespace Moer {
         void SetNearClip(float near_clip) noexcept;
         void SetFarClip(float far_clip) noexcept;
 
-        float GetFov() const noexcept;
-        Vector3f GetPosition() const noexcept;
+        float      GetFov() const noexcept;
+        Vector3f   GetPosition() const noexcept;
         Matrix4x4f GetProjectionMatrix() noexcept;
         Matrix4x4f GetToWorldMatrix() noexcept;
         Matrix4x4f GetViewMatrix() noexcept;
@@ -34,7 +35,6 @@ namespace Moer {
         void UpdateRotation(float, float);
 
         bool IsDirty() const;
-
 
     private:
         Matrix4x4f m_view_matrix;
@@ -49,12 +49,12 @@ namespace Moer {
         Matrix4x4f m_rotate;
         Matrix4x4f m_rotate_inv;
 
-        bool m_to_world_dirty = true;
+        bool       m_to_world_dirty = true;
         Matrix4x4f m_to_world;// camera to world
         Matrix4x4f m_view;    // world to camera
 
-        bool m_projection_dirty = true;
+        bool       m_projection_dirty = true;
         Matrix4x4f m_sample_to_camera;// screen to camera
         Matrix4x4f m_proj;            // camera to screen
     };
-}
+}// namespace Moer

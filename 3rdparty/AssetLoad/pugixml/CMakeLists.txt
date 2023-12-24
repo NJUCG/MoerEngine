@@ -103,7 +103,11 @@ if (BUILD_SHARED_LIBS)
   list(APPEND libs pugixml-shared)
   string(CONCAT pugixml.msvc $<OR:
     $<STREQUAL:${CMAKE_CXX_COMPILER_FRONTEND_VARIANT},MSVC>,
-    $<CXX_COMPILER_ID:MSVC>
+    $<CXX_COMPILER_ID:MSVC>,
+    $<AND:
+      $<CXX_COMPILER_ID:Clang>,
+      $<BOOL:WIN32>
+    >
   >)
 
   set_property(TARGET pugixml-shared PROPERTY EXPORT_NAME shared)

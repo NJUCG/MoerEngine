@@ -1,12 +1,12 @@
 #pragma once
-
+#include "ResourceAPI.h"
 #include <filesystem>
 
 namespace Moer::Resource {
 namespace MiXml {
     struct Object;
 
-    class Parser {
+    class RESOURCE_API Parser {
     public:
         Parser() noexcept;
         ~Parser() noexcept;

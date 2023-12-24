@@ -118,7 +118,7 @@ void VulkanSwapChain::Create(uint32_t* width, uint32_t* height, bool vsync) {
 
     rhi_impl->EndSingleTimeCommands(command_buffer, temp_pool, m_device->GetTransferQueue());
 
-    LOG_INFO("Vulkan swapchain initialized with {} images.", image_count);
+    // LOG_INFO("Vulkan swapchain initialized with {} images.", image_count);
 }
 void VulkanSwapChain::Recreate() {
     LOG_DEBUG("Try to recreate swapchain");

@@ -3,20 +3,21 @@
 #include <string>
 #include <memory>
 #include <filesystem>
+#include "ResourceAPI.h"
 
 #include <scene/Scene.h>
 
 namespace Moer::Resource::Gltf {
 
-        class  Parser {
-        public:
-            Parser() noexcept;
-            ~Parser() noexcept;
-            
-            static CORE_API std::unique_ptr<Scene> LoadSceneFromFile(const std::filesystem::path &  file_path) noexcept;
+    class Parser {
+    public:
+        Parser() noexcept;
+        ~Parser() noexcept;
 
-        private:
-            struct Impl;
-            Impl* m_impl = nullptr;
-        };
-}
+        static RESOURCE_API std::unique_ptr<Scene> LoadSceneFromFile(const std::filesystem::path& file_path) noexcept;
+
+    private:
+        struct Impl;
+        Impl* m_impl = nullptr;
+    };
+}// namespace Moer::Resource::Gltf

@@ -8,9 +8,12 @@
 #include <vector>
 #include <array>
 
-#define USE_MIMALLOC 1
-#if USE_MIMALLOC
 #include "MMemory.h"
+#include <memory>
+
+#if USE_MIMALLOC
+// #if 0
+
 #include <mimalloc.h>
 
 template<typename T>

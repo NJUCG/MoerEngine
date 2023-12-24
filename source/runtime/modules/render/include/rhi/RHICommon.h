@@ -141,6 +141,8 @@ struct Extent3D {
         uint32_t depth;
         uint32_t z;
     };
+    Extent3D(Moer::Vector3i _v) : x(_v.x), y(_v.y), z(_v.z) {
+    }
     Extent3D(uint32_t _x, uint32_t _y, uint32_t _z) : x(_x), y(_y), z(_z) {
     }
     Extent3D() : x(0), y(0), z(0) {
@@ -768,34 +770,30 @@ enum EGlobalBufferLifeScope {
 enum class ETextureUsageFlags : uint32_t {
     UNDEFINED = 0ULL,
 
-    ATTACHMENT_RENDER        = 1 << 0,
-    ATTACHMENT_RESOLVE       = 1 << 1,
-    ATTACHMENT_DEPTH_STENCIL = 1 << 2,
+    SHADER_RESOURCE = 1 << 0,
+    CPU_VISIBLE     = 1 << 1,
+    TILLING_NONE    = 1 << 2,
+    DYNAMIC         = 1 << 3,
 
-    SRGB = 1 << 3,
+    INPUT_ATTACHMENT         = 1 << 4,
+    TRANSFER_SRC             = 1 << 5,
+    TRANSFER_DST             = 1 << 6,
+    SAMPLED                  = 1 << 7,
+    UNORDERED_ACCESS         = 1 << 8,
+    COLOR_ATTACHMENT         = 1 << 9,
+    RESOLVE_ATTACHMENT       = 1 << 10,
+    DEPTH_STENCIL_ATTACHMENT = 1 << 11,
+    TRANSIENT_ATTACHMENT     = 1 << 12,
 
-    SHADER_RESOURCE = 1 << 4,
-    CPU_VISIBLE     = 1 << 5,
-    TILLING_NONE    = 1 << 6,
-    DYNAMIC         = 1 << 7,
+    VIDEO_DECODE = 1 << 13,
 
-    INPUT_ATTACHMENT         = 1 << 8,
-    TRANSFER_SRC             = 1 << 9,
-    TRANSFER_DST             = 1 << 10,
-    SAMPLED                  = 1 << 11,
-    UNORDERED_ACCESS         = 1 << 12,
-    COLOR_ATTACHMENT         = 1 << 13,
-    DEPTH_STENCIL_ATTACHMENT = 1 << 14,
-    TRANSIENT_ATTACHMENT     = 1 << 15,
+    FRAGMENT_DENSITY_MAP             = 1 << 14,
+    FRAGMENT_SHADING_RATE_ATTACHMENT = 1 << 15,
 
-    VIDEO_DECODE = 1 << 16,
-
-    FRAGMENT_DENSITY_MAP             = 1 << 17,
-    FRAGMENT_SHADING_RATE_ATTACHMENT = 1 << 18,
-
-    VIDEO_ENCODE             = 1 << 19,
-    ATTACHMENT_FEEDBACK_LOOP = 1 << 20,
-    Num                      = 22
+    VIDEO_ENCODE             = 1 << 16,
+    ATTACHMENT_FEEDBACK_LOOP = 1 << 17,
+    SRGB                     = 1 << 18,
+    Num                      = 19
 };
 ENUM_BIT_OP_IMPL(ETextureUsageFlags, FLAG)
 
@@ -892,11 +890,11 @@ enum class ECommandListType {
 
 enum class EPrimitiveType : uint8_t {
     // don't change the enums values (made to match GL)
-    POINTS         = 0,    //!< points
-    LINES          = 1,    //!< lines
-    LINE_STRIP     = 3,    //!< line strip
-    TRIANGLES      = 4,    //!< triangles
-    TRIANGLE_STRIP = 5     //!< triangle strip
+    POINTS         = 0,//!< points
+    LINES          = 1,//!< lines
+    LINE_STRIP     = 3,//!< line strip
+    TRIANGLES      = 4,//!< triangles
+    TRIANGLE_STRIP = 5 //!< triangle strip
 };
 
 #pragma region utils

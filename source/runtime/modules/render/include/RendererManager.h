@@ -19,9 +19,9 @@ namespace Moer {
         RENDER_API void DrawFrame();
         RENDER_API void Present();
 
-        void SetRendererPresentResolution(TRendererID _renderer_id, uint32_t _width, uint32_t _height);
+        RENDER_API void SetRendererPresentResolution(TRendererID _renderer_id, uint32_t _width, uint32_t _height);
         //call from editor UI
-        void SetRendererOriginResolution(TRendererID _renderer_id, uint32_t _width, uint32_t _height);
+        RENDER_API void SetRendererOriginResolution(TRendererID _renderer_id, uint32_t _width, uint32_t _height);
         //call this function to get the renderer output
         RENDER_API TRendererOutput GetRendererOutput(TRendererID _renderer_id);
 
@@ -36,7 +36,7 @@ namespace Moer {
 
     protected:
         friend class Singleton<RendererManager>;
-                   RendererManager(){};
+        RendererManager(){};
         RendererManagerData* data;
     };
 }// namespace Moer

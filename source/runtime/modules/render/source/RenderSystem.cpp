@@ -17,7 +17,6 @@
 #include "rhi/vulkan/IVulkanRHI.h"
 #include "config/ConfigManager.h"
 
-#include "renderpass/RenderPassRegistration.h"
 #include <algorithm>
 
 #include <stdexcept>
@@ -117,31 +116,11 @@ namespace Moer {
     }
 
     void RenderLoop::Init() {
-        std::for_each(
-            RenderPassRegistration::GetInstance().passes.begin(),
-            RenderPassRegistration::GetInstance().passes.end(),
-            [](RenderPass* pass) {
-                pass->BeforeRenderLoop();
-            });
     }
 
     void RenderLoop::Run() {
         //dispatch render passes to render thread
-
-        std::for_each(
-            RenderPassRegistration::GetInstance().passes.begin(),
-            RenderPassRegistration::GetInstance().passes.end(),
-            [](RenderPass* pass) {
-                pass->Execute();
-            });
     }
     void RenderLoop::AfterLoop() {
-
-        std::for_each(
-            RenderPassRegistration::GetInstance().passes.begin(),
-            RenderPassRegistration::GetInstance().passes.end(),
-            [](RenderPass* pass) {
-                pass->AfterRenderLoop();
-            });
     }
 }// namespace Moer
