@@ -8,7 +8,7 @@ namespace Moer {
     
     using CameraRef = CountableRef<Camera>;
 
-    class CameraManager {
+    class  RENDER_API CameraManager {
         struct Proxy {
             CameraRef camera;
         };

@@ -1,4 +1,6 @@
 #include "scene/Camera.h"
+
+#include "math/Function.h"
 //
 // namespace Moer {
 //     void Camera::SetPerspective(float fov, float aspect, float zNear, float zFar) {

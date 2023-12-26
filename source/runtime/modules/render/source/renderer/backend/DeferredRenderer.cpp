@@ -1,6 +1,5 @@
 #include "DeferredRenderer.h"
 #include "PixelFormat.h"
-#include "RenderThread.h"
 #include "RendererManager.h"
 #include "math/Base.h"
 #include "Core.h"
@@ -13,17 +12,27 @@
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
 #include "rhi/RHICommand.h"
+#include "scene/CameraManager.h"
 #include "shader/Shader.h"
 #include "shader/ShaderResourceManager.h"
 #include "scene/RenderableManager.h"
 #include "scene/Scene.h"
+#include "scene/TransformManager.h"
+
 #include <algorithm>
 
 class TestDeferredTriangleShaderVert : public Shader {
     DEFINE_SHADER_TYPE(TestDeferredTriangleShaderVert, Global, RENDER_API, ...)
 public:
-    BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
+    BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(UBOVertex)
+    DEFINE_SHADER_PARAM(Moer::Matrix4x4f, model)
+    DEFINE_SHADER_PARAM(Moer::Matrix4x4f, view)
+    DEFINE_SHADER_PARAM(Moer::Matrix4x4f, proj)
+    DEFINE_SHADER_PARAM(Moer::Matrix4x4f, mvp)
+    END_SHADER_CONSTANT_STRUCT_DEFINITION()
 
+    BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
+    DEFINE_SHADER_PARAM_STRUCT(UBOVertex, scene_ubo)
     END_ROOT_PARAMETER_DEFINITION(Parameters)
 };
 
@@ -51,7 +60,6 @@ namespace Moer {
         RHIShaderResourceViewRef GetRendererOutput();
 
     private:
-        //all in render thread
         VirtualViewport* virtual_viewport;
         uint64_t         frame_counter = 0;
 
@@ -110,65 +118,21 @@ namespace Moer {
         }
         render_fence = g_rhi->RHICreateFence({.usage = EFenceUsageFlags::TIMELINE});
 
-        /**
-        * @brief 
-        float3 pos : POSITION;
-        float3 normal : NORMAL;
-        float3 tangent : TANGENT;
-        float3 binormal : BINORMAL;
-        float2 uv : TEXCOORD0;
-        * 
-        */
         //test draw triangle
         float vertices[] = {
             -0.5f,
             -0.5f,
             0.0f,
-
-            0.f,
-            0.f,
-            1.f,
-            1.f,
-            0.f,
-            0.f,
-            0.f,
-            1.f,
-            0.f,
-
             1.0f,
             0.0f,
-
             0.5f,
             -0.5f,
             0.0f,
-
-            0.f,
-            0.f,
-            1.f,
-            1.f,
-            0.f,
-            0.f,
-            0.f,
-            1.f,
-            0.f,
-
             0.0f,
             1.0f,
-
             0.0f,
             0.5f,
             0.0f,
-
-            0.f,
-            0.f,
-            1.f,
-            1.f,
-            0.f,
-            0.f,
-            0.f,
-            1.f,
-            0.f,
-
             1.0f,
             1.0f,
         };
@@ -177,7 +141,7 @@ namespace Moer {
         vertex_buffer      = g_rhi->RHICreateBuffer(
             RHIBufferCreateInfo::Create()
                 .SetSize(sizeof(vertices))
-                .SetStride(sizeof(float) * 14)
+                .SetStride(sizeof(float) * 5)
                 .SetUsage(EBufferUsageFlags::VERTEX_BUFFER |
                           EBufferUsageFlags::CPU_VISIBLE));
         void* data = g_rhi->RHIMapBuffer(vertex_buffer, 0, sizeof(vertices));
@@ -267,9 +231,6 @@ namespace Moer {
     }
 
     void DeferredRenderer::Impl::ShutDown() {
-        RenderThreadFence render_thread_fence;
-        render_thread_fence.BeginFence();
-        render_thread_fence.Wait();
         MoerDelete(virtual_viewport);
     }
 
@@ -298,8 +259,7 @@ namespace Moer {
             render_attachment_view.texture_view     = uav;
             render_attachment_view.clear_attachment = RHIClearAttachment(EClearAttachment::COLOR);
 
-            Extent3D extent              = uav->GetTexture()->GetExtent3D();
-            pass_info.render_area.extent = Extent2D(extent.x, extent.y);
+            pass_info.render_area.extent = Extent2D(virtual_viewport->GetInfo().extent);
             pass_info.render_area.offset = Offset2D(0, 0);
 
             RHIBarrierDependencyInfo barrier_dependency_info;
@@ -323,24 +283,32 @@ namespace Moer {
 
             cmd_list->SetPipelineState(pipeline_state);
 
-            //  cmd_list->DrawIndexedInstanced(3, 1, 0, 0, 0);
+            const auto scene         = g_scene;
+            const auto camera_entity = scene->GetCameras()[0];
+            const auto camera        = CameraManager::Get().Get(camera_entity);
+            const auto camera_view   = camera->GetViewMatrix();
+            const auto camera_proj   = camera->GetProjectionMatrix();
 
-            const auto* scene = g_scene;
-            if (scene) {
-                for (auto entity : scene->GetEntities()) {
-                    if (auto primitive = RenderableManager::Get().GetRenderPrimitive(entity)) {
-                        cmd_list->BindIndexBuffer(primitive->GetIndexBuffer(), 0, EIndexElementType::IET_UINT32);
-                        const RHIBufferRef prim_vertex_buffer = primitive->GetVertexBuffer();
-                        uint32_t           offset             = 0;
-                        cmd_list->BindVertexBuffers(0, 1, &prim_vertex_buffer, &offset);
-                        cmd_list->DrawIndexedInstanced(primitive->GetCount(), 1, 0, 0, 0);
-                    }
+            Shader* vert_shader = ShaderResourceManager::GetShader<TestDeferredTriangleShaderVert>();
+
+            for (auto entity : scene->GetEntities()) {
+                if (auto primitive = RenderableManager::Get().GetRenderPrimitive(entity)) {
+                    const auto                                 prim_model = TransformManager::Get().Get(entity).matrix;
+                    TestDeferredTriangleShaderVert::Parameters params;
+                    Matrix4x4f                                 ubo[] = {prim_model, camera_view, camera_proj, Transpose(camera_proj * camera_view * prim_model)};
+                    memcpy(&params.scene_ubo, &ubo, sizeof(ubo));
+                    RHIBatchedShaderParameters batched_params;
+                    batched_params.SetParameters(vert_shader, params);
+                    g_rhi->RHISetBatchedShaderParameters(pipeline_state, batched_params, true);
+
+                    cmd_list->BindIndexBuffer(primitive->GetIndexBuffer(), 0, EIndexElementType::IET_UINT32);
+                    const RHIBufferRef prim_vertex_buffer = primitive->GetVertexBuffer();
+                    uint32_t           offset             = 0;
+                    cmd_list->BindVertexBuffers(0, 1, &prim_vertex_buffer, &offset);
+                    cmd_list->DrawIndexedInstanced(primitive->GetCount(), 1, 0, 0, 0);
                 }
             }
 
-            cmd_list->BindIndexBuffer(index_buffer, 0, EIndexElementType::IET_UINT32);
-            uint32_t offset = 0;
-            cmd_list->BindVertexBuffers(0, 1, &vertex_buffer, &offset);
             cmd_list->DrawIndexedInstanced(3, 1, 0, 0, 0);
 
             cmd_list->EndRenderPass();
