@@ -18,6 +18,12 @@ const VkDescriptorBufferInfo& VulkanPipelineResourceCache::UpdateDescriptorBuffe
     return m_descriptor_resource_container.descriptor_buffer_infos[_set][_index_of_binding];
 }
 
+const VkWriteDescriptorSetAccelerationStructureKHR& VulkanPipelineResourceCache::UpdateDescriptorASInfo(uint16_t _set, uint16_t _index_of_binding, const VkWriteDescriptorSetAccelerationStructureKHR& _info) {
+    m_descriptor_resource_container.descriptor_as_infos[_set][_index_of_binding] = _info;
+    return m_descriptor_resource_container.descriptor_as_infos[_set][_index_of_binding];
+}
+
+
 bool VulkanPipelineResourceCache::UpdateDescriptorSets(VulkanDevice* _device, const VulkanDescriptorSetsLayout* _layout) {
     if (m_descriptor_sets.empty()) {
         return false;

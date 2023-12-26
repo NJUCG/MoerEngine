@@ -29,14 +29,15 @@ void VulkanDescriptorSetsLayout::Init(const Moer::Array<TDescriptorSetLayoutInfo
     auto& hash_infos   = _cache->m_descriptor_resource_container.hashable_descriptor_infos;
     auto& image_infos  = _cache->m_descriptor_resource_container.descriptor_image_infos;
     auto& buffer_infos = _cache->m_descriptor_resource_container.descriptor_buffer_infos;
+    auto& as_infos     = _cache->m_descriptor_resource_container.descriptor_as_infos;
 
-    uint32_t hash_index = 0, binding_index = 0, image_index = 0, buffer_index = 0;
+    uint32_t hash_index = 0, binding_index = 0, image_index = 0, buffer_index = 0, as_index = 0;
     for (uint32_t i = 0; i < _layout_mappings.size(); ++i) {
         binding_index = 0;
         image_index   = 0;
         buffer_index  = 0;
-
-        m_layouts[i] = _layout_mappings[i].first;
+        as_index      = 0;
+        m_layouts[i]  = _layout_mappings[i].first;
 
         writers[i].m_hash_info_head = hash_index;
         writers[i].m_write_set.resize(_layout_mappings[i].second.size());
@@ -46,7 +47,7 @@ void VulkanDescriptorSetsLayout::Init(const Moer::Array<TDescriptorSetLayoutInfo
 
         ++hash_index;// index + 1 for layout
 
-        uint32_t image_count = 0, buffer_count = 0;
+        uint32_t image_count = 0, buffer_count = 0, as_count = 0;
         for (auto& binding : _layout_mappings[i].second) {
             m_sets_binding_count[binding.descriptorType] += binding.descriptorCount;
 
@@ -68,6 +69,10 @@ void VulkanDescriptorSetsLayout::Init(const Moer::Array<TDescriptorSetLayoutInfo
                 case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
                 case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
                     break;
+                case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
+                    as_count += binding.descriptorCount;
+                    writers[i].m_index_of_as[binding.binding] = as_index++;
+                    break;
                 default:
                     LOG_WARNING("Unsupported descriptor type: {}", static_cast<uint32_t>(binding.descriptorType));
             }
@@ -79,6 +84,7 @@ void VulkanDescriptorSetsLayout::Init(const Moer::Array<TDescriptorSetLayoutInfo
         }
         image_infos.emplace_back(Moer::Array<VkDescriptorImageInfo>(image_count));
         buffer_infos.emplace_back(Moer::Array<VkDescriptorBufferInfo>(buffer_count));
+        as_infos.emplace_back(Moer::Array<VkWriteDescriptorSetAccelerationStructureKHR>(as_count));
     }
 }
 
@@ -336,6 +342,28 @@ void VulkanDescriptorSetWriter::WriteBuffer(uint16_t _set, uint16_t _binding, co
     m_write_set[m_index_of_binding[_binding]] = std::move(write);
     VulkanHashableDescriptorInfo info;
     info.resource.buffer = _buffer;
+    m_cache->UpdateDescriptorSetHashInfo(m_hash_info_head + m_index_of_binding[_binding] + 1, info);
+}
+
+void VulkanDescriptorSetWriter::WriteAS(uint16_t _set, uint16_t _binding, const VkWriteDescriptorSetAccelerationStructureKHR& _as, VkDescriptorType _type) {
+    const auto& as = m_cache->UpdateDescriptorASInfo(_set, m_index_of_as[_binding], _as);
+
+    VkWriteDescriptorSet write{};
+
+    write.sType            = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.pNext            = &as;
+    write.dstSet           = VK_NULL_HANDLE;
+    write.dstBinding       = _binding;
+    write.dstArrayElement  = 0;
+    write.descriptorCount  = _as.accelerationStructureCount;
+    write.descriptorType   = _type;
+    write.pImageInfo       = nullptr;
+    write.pBufferInfo      = nullptr;
+    write.pTexelBufferView = nullptr;
+
+    m_write_set[m_index_of_binding[_binding]] = std::move(write);
+    VulkanHashableDescriptorInfo info;
+    info.resource.as = _as;
     m_cache->UpdateDescriptorSetHashInfo(m_hash_info_head + m_index_of_binding[_binding] + 1, info);
 }
 

@@ -376,7 +376,12 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
 RHIComputePipelineStateRef VulkanRHIImpl::RHICreateComputePipelineState(RHIComputeShader* _compute_shader) { return RHIComputePipelineStateRef{}; }
 
 RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(const RHIRayTracingPipelineStateInitializer& _init) {
-    return RHIRayTracingPipelineStateRef();
+
+    VulkanRHIRayTracingPipelineState* vk_pso = new VulkanRHIRayTracingPipelineState();
+
+
+
+    return RHIRayTracingPipelineStateRef(vk_pso);
 }
 
 RHIBufferRef VulkanRHIImpl::RHICreateBuffer(const RHIBufferCreateInfo& info) {
