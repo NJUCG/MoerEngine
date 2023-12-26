@@ -848,10 +848,14 @@ VkShaderStageFlags VulkanEnumTranslator::METoVKShaderStageFlags(EShaderType _typ
             return VK_SHADER_STAGE_RAYGEN_BIT_KHR;
         case EShaderType::ST_RAY_MISS:
             return VK_SHADER_STAGE_MISS_BIT_KHR;
-        case EShaderType::ST_RAY_HIT:
+        case EShaderType::ST_RAY_CLOSESTHIT:
             return VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
         case EShaderType::ST_RAY_CALLABLE:
             return VK_SHADER_STAGE_CALLABLE_BIT_KHR;
+        case EShaderType::ST_RAY_INTERSECTION:
+            return VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
+        case EShaderType::ST_RAY_ANYHIT:
+            return VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
         default:
             LOG_CRITICAL("Unsupported EShaderType: {}", static_cast<uint32_t>(_type));
             return VK_SHADER_STAGE_FLAG_BITS_MAX_ENUM;

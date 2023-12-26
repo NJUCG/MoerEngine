@@ -37,6 +37,13 @@ public:
 
     RHIComputeShaderRef RHICreateComputeShader(const Shader*) override { return RHIComputeShaderRef{}; }
 
+    RHIRayGenShaderRef          RHICreateRayGenShader(const Shader*) override { return RHIRayGenShaderRef{}; }
+    RHIRayMissShaderRef         RHICreateRayMissShader(const Shader*) override { return RHIRayMissShaderRef{}; }
+    RHIRayClosestHitShaderRef   RHICreateRayClosestHitShader(const Shader*) override { return RHIRayClosestHitShaderRef{}; }
+    RHIRayCallableShaderRef     RHICreateRayCallableShader(const Shader*) override { return RHIRayCallableShaderRef{}; }
+    RHIRayIntersectionShaderRef RHICreateRayIntersectionShader(const Shader*) override { return RHIRayIntersectionShaderRef{}; }
+    RHIRayAnyhitShaderRef       RHICreateRayAnyhitShader(const Shader*) override { return RHIRayAnyhitShaderRef{}; }
+
     RHIShaderLibraryRef RHICreateShaderLibrary(EShaderPlatform _platform, const std::string& _file_path, const std::string& name) override { return RHIShaderLibraryRef{}; }
 
     RHIFenceRef RHICreateFence(const RHIFenceCreateInfo&) override { return RHIFenceRef{}; }
@@ -50,6 +57,10 @@ public:
     RHIGraphicsPipelineStateRef RHICreateGraphicsPipelineState(const RHIGraphicsPipelineStateInitializer& _init) override { return RHIGraphicsPipelineStateRef{}; }
 
     RHIComputePipelineStateRef RHICreateComputePipelineState(RHIComputeShader* _compute_shader) override { return RHIComputePipelineStateRef{}; }
+
+    RHIRayTracingPipelineStateRef RHICreateRayTracingPipelineState(const RHIRayTracingPipelineStateInitializer& _init) override {
+        return RHIRayTracingPipelineStateRef{};
+    }
 
     RHIBufferRef RHICreateBuffer(const RHIBufferCreateInfo& info) override { return RHIBufferRef{}; }
     void*        RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size) override { return nullptr; }

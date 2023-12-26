@@ -159,7 +159,7 @@ struct GuiViewportData {
 
     GuiViewportData(uint32_t _frame_in_flight) {
         memset((void*)this, 0, sizeof(*this));
-        render_buffers = MoerNew(GuiFrameRenderBuffers[_frame_in_flight]);
+        render_buffers = MoerNew(GuiFrameRenderBuffers)[_frame_in_flight];
         for (uint32_t i = 0; i < _frame_in_flight; ++i) {
             render_buffers[i].vertex_buffer         = nullptr;
             render_buffers[i].index_buffer          = nullptr;

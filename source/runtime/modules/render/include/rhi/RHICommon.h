@@ -154,7 +154,7 @@ struct Extent3D {
 
 #pragma endregion
 
-#pragma region cross-platform param types
+#pragma region cross -platform param types
 enum ESamplerFilter : uint8_t {
     SF_NEAREST,
     SF_LINEAR,
@@ -624,8 +624,10 @@ enum EShaderType : uint8_t {
     ST_AMPLIFICATION,
     ST_RAY_GEN,
     ST_RAY_MISS,
-    ST_RAY_HIT,
+    ST_RAY_CLOSESTHIT,
     ST_RAY_CALLABLE,
+    ST_RAY_INTERSECTION,
+    ST_RAY_ANYHIT,
     ST_Num,
     ST_NumBits = 4
 };

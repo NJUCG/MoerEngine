@@ -249,8 +249,10 @@ bool DXCompiler::IsSupportTarget(const ShaderTargetInfo& _target_info) {
 
         case ST_RAY_GEN:
         case ST_RAY_MISS:
-        case ST_RAY_HIT:
+        case ST_RAY_CLOSESTHIT:
         case ST_RAY_CALLABLE:
+        case ST_RAY_ANYHIT:
+        case ST_RAY_INTERSECTION:
             b_support_shader_type = true;
             break;
         case ST_Num: break;

@@ -23,9 +23,9 @@
 #include <bitset>
 template<typename TStructuredParam>
 concept concept_is_shader_struct = requires(TStructuredParam t) {
-    std::is_same<typename TStructuredParam::TypeInfo::TParamPtr, TStructuredParam>();
-    t.GetStructMetadata();
-};
+                                       std::is_same<typename TStructuredParam::TypeInfo::TParamPtr, TStructuredParam>();
+                                       t.GetStructMetadata();
+                                   };
 #pragma region forward definitions
 class RHICommandListBase;
 class RHITexture;
@@ -48,6 +48,12 @@ class RHIRayTracingPipelineState;
 class RHIRayTracingScene;
 class RHIRayTracingAccelerationStructure;
 class RHIRayTracingShader;
+class RHIRayGenShader;
+class RHIRayMissShader;
+class RHIRayClosestHitShader;
+class RHIRayCallableShader;
+class RHIRayIntersectionShader;
+class RHIRayAnyhitShader;
 class RHIRenderQuery;
 class RHIRenderQueryPool;
 class RHIResource;
@@ -91,6 +97,12 @@ using RHIRayTracingGeometryRef        = CountableRef<RHIRayTracingGeometry>;
 using RHIRayTracingPipelineStateRef   = CountableRef<RHIRayTracingPipelineState>;
 using RHIRayTracingSceneRef           = CountableRef<RHIRayTracingScene>;
 using RHIRayTracingShaderRef          = CountableRef<RHIRayTracingShader>;
+using RHIRayGenShaderRef              = CountableRef<RHIRayGenShader>;
+using RHIRayMissShaderRef             = CountableRef<RHIRayMissShader>;
+using RHIRayClosestHitShaderRef       = CountableRef<RHIRayClosestHitShader>;
+using RHIRayIntersectionShaderRef     = CountableRef<RHIRayIntersectionShader>;
+using RHIRayAnyhitShaderRef           = CountableRef<RHIRayAnyhitShader>;
+using RHIRayCallableShaderRef         = CountableRef<RHIRayCallableShader>;
 using RHIRenderQueryRef               = CountableRef<RHIRenderQuery>;
 using RHIRenderQueryPoolRef           = CountableRef<RHIRenderQueryPool>;
 using RHIResourceRef                  = CountableRef<RHIResource>;
@@ -352,9 +364,9 @@ class RHIRayGenShader : public RHIRayTracingShader {
 public:
     RHIRayGenShader(const Shader* _meta_shader) : RHIRayTracingShader(ST_RAY_GEN, _meta_shader) {}
 };
-class RHIRayHitShader : public RHIRayTracingShader {
+class RHIRayClosestHitShader : public RHIRayTracingShader {
 public:
-    RHIRayHitShader(const Shader* _meta_shader) : RHIRayTracingShader(ST_RAY_HIT, _meta_shader) {}
+    RHIRayClosestHitShader(const Shader* _meta_shader) : RHIRayTracingShader(ST_RAY_CLOSESTHIT, _meta_shader) {}
 };
 class RHIRayMissShader : public RHIRayTracingShader {
 public:
@@ -364,6 +376,16 @@ public:
 class RHIRayCallableShader : public RHIRayTracingShader {
 public:
     RHIRayCallableShader(const Shader* _meta_shader) : RHIRayTracingShader(ST_RAY_CALLABLE, _meta_shader) {}
+};
+
+class RHIRayIntersectionShader : public RHIRayTracingShader {
+public:
+    RHIRayIntersectionShader(const Shader* _meta_shader) : RHIRayTracingShader(ST_RAY_INTERSECTION, _meta_shader) {}
+};
+
+class RHIRayAnyhitShader : public RHIRayTracingShader {
+public:
+    RHIRayAnyhitShader(const Shader* _meta_shader) : RHIRayTracingShader(ST_RAY_ANYHIT, _meta_shader) {}
 };
 #pragma endregion
 
@@ -393,6 +415,12 @@ private:
 class RHIRayTracingPipelineState : public RHIResource {
 public:
     RHIRayTracingPipelineState() : RHIResource(RRT_RAY_TRACING_PIPELINE_STATE) {}
+
+    bool IsValid() const { return b_valid; }
+    void SetValid(bool _b_valid) { b_valid = _b_valid; }
+
+private:
+    bool b_valid = true;
 };
 
 #pragma endregion
@@ -409,9 +437,9 @@ struct RHIResourceParameterLayout {
 
 template<typename RootParameter>
 concept concept_is_root_parameter_struct = requires(RootParameter t) {
-    RootParameter::TypeInfo::GetStructMetadata();
-    t.GetMembers();
-};
+                                               RootParameter::TypeInfo::GetStructMetadata();
+                                               t.GetMembers();
+                                           };
 
 struct RHIShaderResourceParameter {
     RHIResource* resource;
@@ -545,10 +573,10 @@ struct RHIBufferCreateInfo : public RHIBufferInfo {
 class RHIBuffer : public RHIViewableResource {
 public:
     /**
-     * @brief Construct a new RHIBuffer object
-     * 
-     * @param _info 
-     */
+	 * @brief Construct a new RHIBuffer object
+	 *
+	 * @param _info
+	 */
     RHIBuffer(const RHIBufferInfo& _info) : RHIViewableResource(RRT_BUFFER), info(_info) {}
 
     const RHIBufferInfo& GetInfo() const { return info; }
@@ -561,9 +589,9 @@ public:
 
 protected:
     /**
-     * @brief Create an empty RHIBuffer, do nothing in rhi backend
-     * 
-     */
+	 * @brief Create an empty RHIBuffer, do nothing in rhi backend
+	 *
+	 */
     RHIBuffer() : RHIViewableResource(RRT_BUFFER) {}
     std::string name;
 
@@ -1054,25 +1082,25 @@ public:
     virtual void* GetNativeWindow(void** _params) const { return nullptr; }
 
     /**
-     * @brief resize viewport, must manually wait for queue that write to frame view complete
-     * 
-     * @param _size new size
-     */
+	 * @brief resize viewport, must manually wait for queue that write to frame view complete
+	 *
+	 * @param _size new size
+	 */
     virtual void OnResize(Extent2D _size) = 0;
     virtual void Present(RHIFence* _render_finished) {}
     /**
-     * @brief Get the Next Frame View object
-     * 
-     * @return RHIView* result view
-     */
+	 * @brief Get the Next Frame View object
+	 *
+	 * @return RHIView* result view
+	 */
     virtual RHIViewportNextBackBufferInfo GetNextFrameBackBufferInfo() = 0;
 
     /**
-     * @brief wait for queue tasks complete
-     * 
-     * @param _command_queue target queue
-     * @param _optional_fence for dx12
-     */
+	 * @brief wait for queue tasks complete
+	 *
+	 * @param _command_queue target queue
+	 * @param _optional_fence for dx12
+	 */
     virtual void WaitForQueueComplete(class RHICommandQueue* _command_queue, RHIFence* _optional_fence) = 0;
 
     virtual const RHIViewportInfo& GetViewportInfo() const { return info; }
@@ -1113,8 +1141,8 @@ struct RHIViewInfo {
         EBufferType buffer_type;
         uint8_t     b_is_atomic_counter : 1;
         /* An append and consume buffer is a special type of an unordered resource that
-         * supports adding and removing values from the end of a buffer similar to the way a stack works.
-         * An append and consume buffer must be a structured buffer */
+		 * supports adding and removing values from the end of a buffer similar to the way a stack works.
+		 * An append and consume buffer must be a structured buffer */
         uint8_t b_is_append_buffer : 1;
         uint8_t : 6;
         uint32_t byte_offset;
@@ -1878,9 +1906,9 @@ struct GraphicsPipelineAttachmentInfo {
     uint8_t  multi_view_count = 0;
 
     /* quoted from https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VK_EXT_fragment_density_map.html
-     * allows an application to specify areas of the render target where the fragment shader may be invoked fewer times.
-     * These fragments are broadcasted out to multiple pixels to cover the render target.
-     * */
+	 * allows an application to specify areas of the render target where the fragment shader may be invoked fewer times.
+	 * These fragments are broadcasted out to multiple pixels to cover the render target.
+	 * */
     bool b_has_fragment_density_attachment = false;
 };
 
@@ -2016,7 +2044,7 @@ public:
     uint64_t hash_key;
 };
 
-class RayTracingPipelineStateInfo {
+class RHIRayTracingPipelineStateInfo {
 protected:
     uint64_t hash_ray_gen;
     uint64_t hash_ray_miss;
@@ -2030,58 +2058,25 @@ public:
     uint32_t max_payload_byte_size      = 24;
     bool     b_allow_hit_group_indexing = true;
 
-    bool operator==(const RayTracingPipelineStateInfo& value) const {
+    bool operator==(const RHIRayTracingPipelineStateInfo& value) const {
         return max_attribute_byte_size == value.max_attribute_byte_size && max_payload_byte_size == value.max_payload_byte_size && b_allow_hit_group_indexing == value.b_allow_hit_group_indexing && hash_ray_gen == value.hash_ray_gen && hash_ray_miss == value.hash_ray_miss && hash_ray_hit == value.hash_ray_hit && hash_ray_callable == value.hash_ray_callable;
     }
 };
-class RayTracingPipelineStateInitializer : RayTracingPipelineStateInfo {
+class RHIRayTracingPipelineStateInitializer : RHIRayTracingPipelineStateInfo {
 public:
-    RayTracingPipelineStateInitializer() = default;
-
-    const Moer::Array<RHIRayTracingShader*>& GetRayGenTable() const { return ray_gen_table; }
-    const Moer::Array<RHIRayTracingShader*>& GetRayMissTable() const { return ray_miss_table; }
-    const Moer::Array<RHIRayTracingShader*>& GetRayHitTable() const { return ray_hit_table; }
-    const Moer::Array<RHIRayTracingShader*>& GetRayCallableTable() const { return ray_callable_table; }
-
-    void SetRayGenShaderTable(const Moer::Array<RHIRayTracingShader*>& _ray_gen_shaders, uint64_t _hash = 0) {
-        ray_gen_table = _ray_gen_shaders;
-        hash_ray_gen  = _hash ? _hash : ComputeHash(Moer::Array<RHIRayTracingShader*>(_ray_gen_shaders.begin(), _ray_gen_shaders.end()));
-    }
-
-    void SetRayMissShaderTable(const Moer::Array<RHIRayTracingShader*>& _ray_miss_shaders, uint64_t _hash = 0) {
-        ray_miss_table = _ray_miss_shaders;
-        hash_ray_miss  = _hash ? _hash : ComputeHash(Moer::Array<RHIRayTracingShader*>(_ray_miss_shaders.begin(), _ray_miss_shaders.end()));
-    }
-    void SetRayHitShaderTable(const Moer::Array<RHIRayTracingShader*>& _ray_hit_shaders, uint64_t _hash = 0) {
-        ray_hit_table = _ray_hit_shaders;
-        hash_ray_hit  = _hash ? _hash : ComputeHash(Moer::Array<RHIRayTracingShader*>(_ray_hit_shaders.begin(), _ray_hit_shaders.end()));
-    }
-    void SetRayCallableShaderTable(const Moer::Array<RHIRayTracingShader*>& _ray_callable_shaders, uint64_t _hash = 0) {
-        ray_callable_table = _ray_callable_shaders;
-        hash_ray_callable  = _hash ? _hash : ComputeHash(Moer::Array<RHIRayTracingShader*>(_ray_callable_shaders.begin(), _ray_callable_shaders.end()));
-    }
-    friend uint32_t GetHash(const RayTracingPipelineStateInitializer& value) {
-        uint32_t hash = GetHash(value.max_attribute_byte_size);
-        HashCombine(hash, value.max_payload_byte_size);
-        HashCombine(hash, value.b_allow_hit_group_indexing);
-        //todo: combine shader hashes
-        return hash;
-    }
+    RHIRayTracingPipelineStateInitializer() = default;
 
 protected:
-    uint64_t ComputeHash(const Moer::Array<RHIRayTracingShader*>& target) {
-        for (RHIRayTracingShader* shader : target) {
-            //todo: handle sha256 hash combining and convert shader sha256 to uint64_t
-            shader->GetHash();
-        }
-        return 0;
-    }
+    struct RHIRayTracingHitGroup {
+        RHIRayClosestHitShader* closesthitShader;
+        RHIRayAnyhitShader*     anyhitShader;
+    };
 
-    RHIRayTracingPipelineStateRef     base_pipeline_handle;
-    Moer::Array<RHIRayTracingShader*> ray_gen_table;
-    Moer::Array<RHIRayTracingShader*> ray_miss_table;
-    Moer::Array<RHIRayTracingShader*> ray_hit_table;
-    Moer::Array<RHIRayTracingShader*> ray_callable_table;
+    RHIRayTracingPipelineStateRef base_pipeline_handle;
+
+    RHIRayGenShader*                   ray_gen;
+    Moer::Array<RHIRayMissShader*>     ray_miss_table;
+    Moer::Array<RHIRayCallableShader*> ray_callable_table;
 };
 
 /* struct for RenderPassInfo Only, constructed by texture_view and Pass-Required texture layout */
@@ -2925,8 +2920,7 @@ protected:
     EShaderPlatform platform;
 };
 
-
-class RHIRenderPrimitive : public  RHIResource {
+class RHIRenderPrimitive : public RHIResource {
 public:
     RHIRenderPrimitive(const RHIBufferRef& mVertexBuffer, const RHIBufferRef& mIndexBuffer, EPrimitiveType mType, uint32_t offset, uint32_t count)
         : m_vertex_buffer(mVertexBuffer),
@@ -2934,17 +2928,18 @@ public:
           m_type(mType),
           m_offset(offset),
           m_count(count) {}
-    RHIBufferRef GetVertexBuffer() const;
-    RHIBufferRef GetIndexBuffer() const;
+    RHIBufferRef   GetVertexBuffer() const;
+    RHIBufferRef   GetIndexBuffer() const;
     EPrimitiveType GetPrimitiveType() const;
-    uint32_t GetOffset() const;
-    uint32_t GetCount() const;
-protected:    
-    RHIBufferRef m_vertex_buffer;
-    RHIBufferRef m_index_buffer;
+    uint32_t       GetOffset() const;
+    uint32_t       GetCount() const;
+
+protected:
+    RHIBufferRef   m_vertex_buffer;
+    RHIBufferRef   m_index_buffer;
     EPrimitiveType m_type{0};
-    uint32_t m_offset{0};
-    uint32_t m_count{0};
+    uint32_t       m_offset{0};
+    uint32_t       m_count{0};
 };
 
 #endif// !RHI_RESOURCE_H

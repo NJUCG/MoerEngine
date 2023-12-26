@@ -64,7 +64,7 @@ void VulkanRHIImpl::ShutDown() {
 }
 
 #pragma region resources creation
-RHISamplerRef  VulkanRHIImpl::RHICreateSampler(const RHISamplerInitializer& _initializer) {
+RHISamplerRef            VulkanRHIImpl::RHICreateSampler(const RHISamplerInitializer& _initializer) {
     VulkanRHISampler* vk_sampler = new VulkanRHISampler();
     vk_sampler->GenerateSamplerFromInitializer(m_device, _initializer);
 
@@ -144,6 +144,42 @@ RHIComputeShaderRef VulkanRHIImpl::RHICreateComputeShader(const Shader* shader) 
     auto* vk_shader            = new VulkanRHIComputeShader(shader);
     vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
     return RHIComputeShaderRef(vk_shader);
+}
+
+RHIRayGenShaderRef VulkanRHIImpl::RHICreateRayGenShader(const Shader* shader) {
+    auto* vk_shader            = new VulkanRHIRayGenShader(shader);
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+    return RHIRayGenShaderRef(vk_shader);
+}
+
+RHIRayMissShaderRef VulkanRHIImpl::RHICreateRayMissShader(const Shader* shader) {
+    auto* vk_shader            = new VulkanRHIRayMissShader(shader);
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+    return RHIRayMissShaderRef(vk_shader);
+}
+
+RHIRayClosestHitShaderRef VulkanRHIImpl::RHICreateRayClosestHitShader(const Shader* shader) {
+    auto* vk_shader            = new VulkanRHIRayClosestHitShader(shader);
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+    return RHIRayClosestHitShaderRef(vk_shader);
+}
+
+RHIRayCallableShaderRef VulkanRHIImpl::RHICreateRayCallableShader(const Shader* shader) {
+    auto* vk_shader            = new VulkanRHIRayCallableShader(shader);
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+    return RHIRayCallableShaderRef(vk_shader);
+}
+
+RHIRayIntersectionShaderRef VulkanRHIImpl::RHICreateRayIntersectionShader(const Shader* shader) {
+    auto* vk_shader            = new VulkanRHIRayIntersectionShader(shader);
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+    return RHIRayIntersectionShaderRef(vk_shader);
+}
+
+RHIRayAnyhitShaderRef VulkanRHIImpl::RHICreateRayAnyhitShader(const Shader* shader) {
+    auto* vk_shader            = new VulkanRHIRayAnyhitShader(shader);
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+    return RHIRayAnyhitShaderRef(vk_shader);
 }
 
 RHIShaderLibraryRef VulkanRHIImpl::RHICreateShaderLibrary(EShaderPlatform _platform, const std::string& _file_path, const std::string& name) { return RHIShaderLibraryRef{}; }

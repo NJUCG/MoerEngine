@@ -60,6 +60,13 @@ public:
 
     virtual RHIComputeShaderRef RHICreateComputeShader(const Shader*) = 0;
 
+    virtual RHIRayGenShaderRef          RHICreateRayGenShader(const Shader*)          = 0;
+    virtual RHIRayMissShaderRef         RHICreateRayMissShader(const Shader*)         = 0;
+    virtual RHIRayClosestHitShaderRef   RHICreateRayClosestHitShader(const Shader*)   = 0;
+    virtual RHIRayCallableShaderRef     RHICreateRayCallableShader(const Shader*)     = 0;
+    virtual RHIRayIntersectionShaderRef RHICreateRayIntersectionShader(const Shader*) = 0;
+    virtual RHIRayAnyhitShaderRef       RHICreateRayAnyhitShader(const Shader*)       = 0;
+
     virtual RHIShaderLibraryRef RHICreateShaderLibrary(EShaderPlatform _platform, const std::string& _file_path, const std::string& name) { return nullptr; };
 
     virtual RHIFenceRef RHICreateFence(const RHIFenceCreateInfo&) = 0;
@@ -83,6 +90,14 @@ public:
     virtual RHIComputePipelineStateRef RHICreateComputePipelineState(RHIComputeShader* _compute_shader, RHIPipelineBinaryDataLibrary* _pipeline_library) {
         return RHICreateComputePipelineState(_compute_shader);
     }
+
+    virtual RHIRayTracingPipelineStateRef RHICreateRayTracingPipelineState(const RHIRayTracingPipelineStateInitializer& _init) = 0;
+
+    /* create pso from cache */
+    virtual RHIRayTracingPipelineStateRef RHICreateRayTracingPipelineState(const RHIRayTracingPipelineStateInitializer& _init, RHIPipelineBinaryDataLibrary* _pipeline_library) {
+        return RHICreateRayTracingPipelineState(_init);
+    }
+
     virtual RHIBufferRef RHICreateBuffer(const RHIBufferCreateInfo& info)                   = 0;
     virtual void*        RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size) = 0;
     virtual void         RHIUnmapBuffer(RHIBuffer* _buffer)                                 = 0;

@@ -191,7 +191,7 @@ private:
 class VulkanRHIDepthStencilState : public RHIDepthStencilState {
 public:
     explicit VulkanRHIDepthStencilState() : RHIDepthStencilState(),
-                                            m_depth_stencil_state_create_info(VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO) {}
+                                            m_depth_stencil_state_create_info{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO} {}
 
     void GenerateDepthStencilStateFromInitializer(const RHIDepthStencilStateInitializer& _init);
 
@@ -289,6 +289,36 @@ public:
 class VulkanRHIAmplificationShader : public RHIAmplificationShader, public VulkanRHIGraphicsShader {
 public:
     explicit VulkanRHIAmplificationShader(const Shader* _meta_shader) : RHIAmplificationShader(_meta_shader), VulkanRHIGraphicsShader() {}
+};
+
+class VulkanRHIRayGenShader : public RHIRayGenShader, public VulkanRHIGraphicsShader {
+public:
+    explicit VulkanRHIRayGenShader(const Shader* _meta_shader) : RHIRayGenShader(_meta_shader), VulkanRHIGraphicsShader() {}
+};
+
+class VulkanRHIRayMissShader : public RHIRayMissShader, public VulkanRHIGraphicsShader {
+public:
+    explicit VulkanRHIRayMissShader(const Shader* _meta_shader) : RHIRayMissShader(_meta_shader), VulkanRHIGraphicsShader() {}
+};
+
+class VulkanRHIRayClosestHitShader : public RHIRayClosestHitShader, public VulkanRHIGraphicsShader {
+public:
+    explicit VulkanRHIRayClosestHitShader(const Shader* _meta_shader) : RHIRayClosestHitShader(_meta_shader), VulkanRHIGraphicsShader() {}
+};
+
+class VulkanRHIRayCallableShader : public RHIRayCallableShader, public VulkanRHIGraphicsShader {
+public:
+    explicit VulkanRHIRayCallableShader(const Shader* _meta_shader) : RHIRayCallableShader(_meta_shader), VulkanRHIGraphicsShader() {}
+};
+
+class VulkanRHIRayIntersectionShader : public RHIRayIntersectionShader, public VulkanRHIGraphicsShader {
+public:
+    explicit VulkanRHIRayIntersectionShader(const Shader* _meta_shader) : RHIRayIntersectionShader(_meta_shader), VulkanRHIGraphicsShader() {}
+};
+
+class VulkanRHIRayAnyhitShader : public RHIRayAnyhitShader, public VulkanRHIGraphicsShader {
+public:
+    explicit VulkanRHIRayAnyhitShader(const Shader* _meta_shader) : RHIRayAnyhitShader(_meta_shader), VulkanRHIGraphicsShader() {}
 };
 
 #pragma endregion
