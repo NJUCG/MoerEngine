@@ -1371,6 +1371,26 @@ Moer::Array<const Shader*> VulkanRHIGraphicsPipelineState::GetShaderInfoList(con
     return shader_list;
 }
 
+void VulkanRHIRayTracingPipelineState::GenerateDescriptorSetLayouts(const VulkanDevice* _device, Moer::Array<TDescriptorSetLayoutInfo>& _layout_mappings) {
+    for (auto& layout : _layout_mappings) {
+        VkDescriptorSetLayoutCreateInfo layout_create_info{};
+        layout_create_info.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        layout_create_info.pNext        = nullptr;
+        layout_create_info.flags        = 0;
+        layout_create_info.bindingCount = layout.second.size();
+        layout_create_info.pBindings    = layout.second.empty() ? nullptr : layout.second.data();
+
+        VK_CHECK_RESULT(vkCreateDescriptorSetLayout(*_device, &layout_create_info, nullptr, &layout.first));
+    }
+
+    // extract descriptor set layouts
+    m_descriptor_sets_layout = new VulkanDescriptorSetsLayout();
+    m_descriptor_sets_layout->Init(_layout_mappings, m_pipeline_state_cache);
+}
+void VulkanRHIRayTracingPipelineState::CreateResourceCache() {
+    m_pipeline_state_cache = new VulkanPipelineResourceCache();
+}
+
 #pragma endregion
 
 VulkanDeviceObject::VulkanDeviceObject(VulkanDevice* _device) : m_device(_device) {

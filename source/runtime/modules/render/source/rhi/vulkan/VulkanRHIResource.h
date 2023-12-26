@@ -364,6 +364,49 @@ private:
     // resource cache
     VulkanPipelineResourceCache* m_pipeline_state_cache;
 };
+
+class VulkanRHIRayTracingPipelineState final : public RHIRayTracingPipelineState {
+    friend VulkanRHIImpl;
+
+public:
+    VulkanRHIRayTracingPipelineState()
+        : RHIRayTracingPipelineState(),
+          m_pipeline(VK_NULL_HANDLE), m_pipeline_layout(VK_NULL_HANDLE), m_pipeline_state_cache(nullptr) {}
+
+    inline VkPipeline GetHandle() const {
+        return m_pipeline;
+    }
+
+    inline const VkPipelineLayout GetPipelineLayout() const {
+        return m_pipeline_layout;
+    }
+
+    inline const VulkanDescriptorSetsLayout* GetDescriptorSetsLayout() const {
+        return m_descriptor_sets_layout;
+    }
+
+    inline VulkanPipelineResourceCache* GetPipelineResourceCache() const {
+        return m_pipeline_state_cache;
+    }
+
+    void GenerateDescriptorSetLayouts(const VulkanDevice* _device, Moer::Array<TDescriptorSetLayoutInfo>& _layout_mappings);
+    void CreateResourceCache();
+
+private:
+    VkPipeline       m_pipeline;
+    VkPipelineLayout m_pipeline_layout;
+
+    //SBT
+    VkStridedDeviceAddressRegionKHR m_raygen_sbt;
+    VkStridedDeviceAddressRegionKHR m_miss_sbt;
+    VkStridedDeviceAddressRegionKHR m_hit_sbt;
+    VkStridedDeviceAddressRegionKHR m_callable_sbt;
+
+    // descriptor sets
+    VulkanDescriptorSetsLayout* m_descriptor_sets_layout;
+    // resource cache
+    VulkanPipelineResourceCache* m_pipeline_state_cache;
+};
 #pragma endregion
 
 #pragma region global buffer definitions

@@ -126,6 +126,7 @@ public:
     void WriteSampler(uint16_t _set, uint16_t _binding, const VkDescriptorImageInfo& _sampler, uint32_t _count, VkDescriptorType _type);
     void WriteImage(uint16_t _set, uint16_t _binding, const VkDescriptorImageInfo& _image, uint32_t _count, VkDescriptorType _type);
     void WriteBuffer(uint16_t _set, uint16_t _binding, const VkDescriptorBufferInfo& _buffer, uint32_t _count, VkDescriptorType _type);
+    void WriteAS(uint16_t _set, uint16_t _binding, VkWriteDescriptorSetAccelerationStructureKHR& _as, uint32_t _count, VkDescriptorType _type);
 
     uint32_t GetSetKey() const;
 
