@@ -2925,8 +2925,7 @@ protected:
     EShaderPlatform platform;
 };
 
-
-class RHIRenderPrimitive : public  RHIResource {
+class RHIRenderPrimitive : public RHIResource {
 public:
     RHIRenderPrimitive(const RHIBufferRef& mVertexBuffer, const RHIBufferRef& mIndexBuffer, EPrimitiveType mType, uint32_t offset, uint32_t count)
         : m_vertex_buffer(mVertexBuffer),
@@ -2934,17 +2933,18 @@ public:
           m_type(mType),
           m_offset(offset),
           m_count(count) {}
-    RHIBufferRef GetVertexBuffer() const;
-    RHIBufferRef GetIndexBuffer() const;
+    RHIBufferRef   GetVertexBuffer() const;
+    RHIBufferRef   GetIndexBuffer() const;
     EPrimitiveType GetPrimitiveType() const;
-    uint32_t GetOffset() const;
-    uint32_t GetCount() const;
-protected:    
-    RHIBufferRef m_vertex_buffer;
-    RHIBufferRef m_index_buffer;
+    uint32_t       GetOffset() const;
+    uint32_t       GetCount() const;
+
+protected:
+    RHIBufferRef   m_vertex_buffer;
+    RHIBufferRef   m_index_buffer;
     EPrimitiveType m_type{0};
-    uint32_t m_offset{0};
-    uint32_t m_count{0};
+    uint32_t       m_offset{0};
+    uint32_t       m_count{0};
 };
 
 #endif// !RHI_RESOURCE_H
