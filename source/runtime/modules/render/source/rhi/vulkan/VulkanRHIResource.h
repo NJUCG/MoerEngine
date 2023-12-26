@@ -341,12 +341,12 @@ public:
         return m_pipeline_layout;
     }
 
-    inline const VulkanDescriptorSetsLayout* GetDescriptorSetsLayout() const {
-        return m_descriptor_sets_layout;
-    }
-
     inline VulkanPipelineResourceCache* GetPipelineResourceCache() const {
         return m_pipeline_state_cache;
+    }
+
+    inline const VulkanDescriptorSetsLayout* GetDescriptorSetsLayout() const {
+        return m_descriptor_sets_layout;
     }
 
     void GenerateDescriptorSetLayouts(const VulkanDevice* _device, Moer::Array<TDescriptorSetLayoutInfo>& _layout_mappings);

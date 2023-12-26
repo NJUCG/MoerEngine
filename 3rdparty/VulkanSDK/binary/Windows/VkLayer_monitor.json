@@ -4,7 +4,7 @@
         "name": "VK_LAYER_LUNARG_monitor",
         "type": "GLOBAL",
         "library_path": ".\\VkLayer_monitor.dll",
-        "api_version": "1.3.231",
+        "api_version": "1.3.268",
         "implementation_version": "1",
         "description": "Execution Monitoring Layer",
         "introduction": "The monitor utility layer displays the real-time frame rate in frames-per-second in the application's title bar.",

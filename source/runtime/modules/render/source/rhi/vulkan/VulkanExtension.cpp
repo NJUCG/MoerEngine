@@ -104,10 +104,12 @@ public:
     bool IsOptional() const override { return true; }
 
     void PreGpuFeatures(VkPhysicalDeviceFeatures2& _gpu_features2) override final {
+        m_acceleration_structure_props = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR};
         AddToPNext(_gpu_features2, m_acceleration_structure_features);
     }
 
     void PreGpuProperties(VkPhysicalDeviceProperties2& _gpu_properties2) override final {
+        m_acceleration_structure_props = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR};
         AddToPNext(_gpu_properties2, m_acceleration_structure_props);
     }
 
@@ -129,12 +131,15 @@ public:
     bool IsOptional() const override { return true; }
 
     void PreGpuFeatures(VkPhysicalDeviceFeatures2& _gpu_features2) override final {
+        m_ray_tracing_pipeline_features = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR};
         AddToPNext(_gpu_features2, m_ray_tracing_pipeline_features);
     }
 
     void PreGpuProperties(VkPhysicalDeviceProperties2& _gpu_properties2) override final {
+        m_ray_tracing_pipeline_props = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR};
         AddToPNext(_gpu_properties2, m_ray_tracing_pipeline_props);
     }
+
     void PreCreateDevice(VkDeviceCreateInfo& _device_create_info) override final {
         AddToPNext(_device_create_info, m_ray_tracing_pipeline_features);
     }
@@ -153,6 +158,7 @@ public:
     bool IsOptional() const override { return true; }
 
     void PreGpuFeatures(VkPhysicalDeviceFeatures2& _gpu_features2) override final {
+        m_ray_query_features = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR};
         AddToPNext(_gpu_features2, m_ray_query_features);
     }
 
@@ -164,34 +170,41 @@ private:
     VkPhysicalDeviceRayQueryFeaturesKHR m_ray_query_features;
 };
 
-//class VulkanKHRTimelineSemaphoreExtension : public VulkanDeviceExtension {
-//public:
-//    VulkanKHRTimelineSemaphoreExtension()
-//        : VulkanDeviceExtension(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME),
-//          m_timeline_semaphore_features(
-//              VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES_KHR,
-//              VK_NULL_HANDLE,
-//              VK_TRUE) {}
-//
-//    void PreGpuFeatures(VkPhysicalDeviceFeatures2& _gpu_features2) override final {
-//        AddToPNext(_gpu_features2, m_timeline_semaphore_features);
-//    }
-//    void PreGpuProperties(VkPhysicalDeviceProperties2& _gpu_properties2) override {
-//    }
-//    void PreCreateDevice(VkDeviceCreateInfo& _device_create_info) override final {
-//        AddToPNext(_device_create_info, m_timeline_semaphore_features);
-//    }
-//
-//private:
-//    VkPhysicalDeviceTimelineSemaphoreFeatures m_timeline_semaphore_features;
-//};
+class VulkanEXTDescriptorBufferExtension : public VulkanDeviceExtension {
+public:
+    VulkanEXTDescriptorBufferExtension()
+        : VulkanDeviceExtension(VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME) {}
+
+    void PreGpuFeatures(VkPhysicalDeviceFeatures2& _gpu_features2) override final {
+        m_descriptor_buffer_features = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_BUFFER_FEATURES_EXT};
+        AddToPNext(_gpu_features2, m_descriptor_buffer_features);
+    }
+
+    void PreGpuProperties(VkPhysicalDeviceProperties2& _gpu_properties2) override {
+        m_descriptor_buffer_props = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_BUFFER_PROPERTIES_EXT};
+        AddToPNext(_gpu_properties2, m_descriptor_buffer_props);
+    }
+
+    void PreCreateDevice(VkDeviceCreateInfo& _device_create_info) override final {
+        AddToPNext(_device_create_info, m_descriptor_buffer_features);
+    }
+
+private:
+    VkPhysicalDeviceDescriptorBufferPropertiesEXT m_descriptor_buffer_props;
+    VkPhysicalDeviceDescriptorBufferFeaturesEXT   m_descriptor_buffer_features;
+};
 
 TVulkanDeviceExtensionArray VulkanDeviceExtension::GetMESupportedDeviceExtensions() {
     TVulkanDeviceExtensionArray extensions;
 
 #define ADD_EXTENSION(ext_name) extensions.emplace_back(std::make_unique<VulkanDeviceExtension>(ext_name))
+
+#define ADD_CUSTOM_EXTENSION(ext_class) extensions.emplace_back(std::make_unique<ext_class>())
     // generic simple extensions
     ADD_EXTENSION(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+
+    // bindless extensions
+    ADD_CUSTOM_EXTENSION(VulkanEXTDescriptorBufferExtension);
 
     // raytracing extensions
 
@@ -203,6 +216,7 @@ TVulkanDeviceExtensionArray VulkanDeviceExtension::GetMESupportedDeviceExtension
     VulkanPlatform::GetDeviceExtensions(extensions);
 
 #undef ADD_EXTENSION
+#undef ADD_CUSTOM_EXTENSION
 
     return extensions;
 }

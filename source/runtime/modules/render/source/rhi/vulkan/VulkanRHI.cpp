@@ -377,11 +377,122 @@ RHIComputePipelineStateRef VulkanRHIImpl::RHICreateComputePipelineState(RHICompu
 
 RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(const RHIRayTracingPipelineStateInitializer& _init) {
 
+#define CHECK(ptr, msg)    \
+    if (!ptr) {            \
+        LOG_CRITICAL(msg); \
+    }
+
     VulkanRHIRayTracingPipelineState* vk_pso = new VulkanRHIRayTracingPipelineState();
 
+    // shader stage & shader groups
+    Moer::Array<VkRayTracingShaderGroupCreateInfoKHR> shader_groups;
+    VkRayTracingShaderGroupCreateInfoKHR              shader_group_create_info{VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR};
+    shader_group_create_info.pNext                           = nullptr;
+    shader_group_create_info.pShaderGroupCaptureReplayHandle = nullptr;
+    shader_group_create_info.generalShader                   = VK_SHADER_UNUSED_KHR;
+    shader_group_create_info.closestHitShader                = VK_SHADER_UNUSED_KHR;
+    shader_group_create_info.anyHitShader                    = VK_SHADER_UNUSED_KHR;
+    shader_group_create_info.intersectionShader              = VK_SHADER_UNUSED_KHR;
 
+    Moer::Array<VkPipelineShaderStageCreateInfo> shader_stages;
+    VkPipelineShaderStageCreateInfo              shader_stage_create_info{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    shader_stage_create_info.pNext = nullptr;
+    shader_stage_create_info.flags = 0;
 
-    return RHIRayTracingPipelineStateRef(vk_pso);
+    if (_init.ray_gen_shader) {
+        auto* vk_shader = static_cast<VulkanRHIRayGenShader*>(_init.ray_gen_shader);
+        CHECK(vk_shader, "RHICreateRayTracingPipelineState: bad raygen shader which is not a vulkan shader!");
+        shader_stage_create_info.stage               = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+        shader_stage_create_info.module              = vk_shader->GetHandle();
+        shader_stage_create_info.pName               = "main";
+        shader_stage_create_info.pSpecializationInfo = nullptr;
+        shader_stages.push_back(shader_stage_create_info);
+
+        shader_group_create_info.type          = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+        shader_group_create_info.generalShader = static_cast<uint32_t>(shader_stages.size() - 1);
+        shader_groups.push_back(shader_group_create_info);
+        shader_group_create_info.generalShader = VK_SHADER_UNUSED_KHR;
+    }
+    for (const auto& ray_miss_shader : _init.ray_miss_table) {
+        auto* vk_shader = static_cast<VulkanRHIRayMissShader*>(ray_miss_shader);
+        CHECK(vk_shader, "RHICreateRayTracingPipelineState: bad miss shader which is not a vulkan shader!");
+        shader_stage_create_info.stage               = VK_SHADER_STAGE_MISS_BIT_KHR;
+        shader_stage_create_info.module              = vk_shader->GetHandle();
+        shader_stage_create_info.pName               = "main";
+        shader_stage_create_info.pSpecializationInfo = nullptr;
+        shader_stages.push_back(shader_stage_create_info);
+
+        shader_group_create_info.type          = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+        shader_group_create_info.generalShader = static_cast<uint32_t>(shader_stages.size() - 1);
+        shader_groups.push_back(shader_group_create_info);
+        shader_group_create_info.generalShader = VK_SHADER_UNUSED_KHR;
+    }
+    for (const auto& ray_hit_group : _init.ray_hit_table) {
+        shader_group_create_info.type = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
+        if (ray_hit_group.closesthit_shader) {
+            auto* vk_shader = static_cast<VulkanRHIRayClosestHitShader*>(ray_hit_group.closesthit_shader);
+            CHECK(vk_shader, "RHICreateRayTracingPipelineState: bad closesthit shader which is not a vulkan shader!");
+            shader_stage_create_info.stage               = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+            shader_stage_create_info.pName               = "main";
+            shader_stage_create_info.module              = vk_shader->GetHandle();
+            shader_stage_create_info.pSpecializationInfo = nullptr;
+            shader_stages.push_back(shader_stage_create_info);
+
+            shader_group_create_info.closestHitShader = static_cast<uint32_t>(shader_stages.size() - 1);
+        }
+        if (ray_hit_group.anyhit_shader) {
+            auto* vk_shader = static_cast<VulkanRHIRayAnyhitShader*>(ray_hit_group.anyhit_shader);
+            CHECK(vk_shader, "RHICreateRayTracingPipelineState: bad anyhit shader which is not a vulkan shader!");
+            shader_stage_create_info.stage               = VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
+            shader_stage_create_info.pName               = "main";
+            shader_stage_create_info.module              = vk_shader->GetHandle();
+            shader_stage_create_info.pSpecializationInfo = nullptr;
+            shader_stages.push_back(shader_stage_create_info);
+
+            shader_group_create_info.anyHitShader = static_cast<uint32_t>(shader_stages.size() - 1);
+        }
+        if (ray_hit_group.intersection_shader) {
+            auto* vk_shader = static_cast<VulkanRHIRayIntersectionShader*>(ray_hit_group.intersection_shader);
+            CHECK(vk_shader, "RHICreateRayTracingPipelineState: bad intersection shader which is not a vulkan shader!");
+            shader_stage_create_info.stage               = VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
+            shader_stage_create_info.pName               = "main";
+            shader_stage_create_info.module              = vk_shader->GetHandle();
+            shader_stage_create_info.pSpecializationInfo = nullptr;
+            shader_stages.push_back(shader_stage_create_info);
+
+            shader_group_create_info.type               = VK_RAY_TRACING_SHADER_GROUP_TYPE_PROCEDURAL_HIT_GROUP_KHR;
+            shader_group_create_info.intersectionShader = static_cast<uint32_t>(shader_stages.size() - 1);
+        }
+        shader_groups.push_back(shader_group_create_info);
+        shader_group_create_info.closestHitShader = shader_group_create_info.anyHitShader = shader_group_create_info.intersectionShader = VK_SHADER_UNUSED_KHR;
+    }
+    for (const auto& ray_callable_shader : _init.ray_callable_table) {
+        auto* vk_shader = static_cast<VulkanRHIRayCallableShader*>(ray_callable_shader);
+        CHECK(vk_shader, "RHICreateRayTracingPipelineState: bad miss shader which is not a vulkan shader!");
+        shader_stage_create_info.stage               = VK_SHADER_STAGE_CALLABLE_BIT_KHR;
+        shader_stage_create_info.module              = vk_shader->GetHandle();
+        shader_stage_create_info.pName               = "main";
+        shader_stage_create_info.pSpecializationInfo = nullptr;
+        shader_stages.push_back(shader_stage_create_info);
+
+        shader_group_create_info.type          = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+        shader_group_create_info.generalShader = static_cast<uint32_t>(shader_stages.size() - 1);
+        shader_groups.push_back(shader_group_create_info);
+        shader_group_create_info.generalShader = VK_SHADER_UNUSED_KHR;
+    }
+
+    VkRayTracingPipelineCreateInfoKHR pipeline_create_info{VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR};
+    pipeline_create_info.flags      = 0;
+    pipeline_create_info.stageCount = static_cast<uint32_t>(shader_stages.size());
+    pipeline_create_info.pStages    = shader_stages.data();
+    pipeline_create_info.groupCount = static_cast<uint32_t>(shader_groups.size());
+    pipeline_create_info.pGroups    = shader_groups.data();
+
+    pipeline_create_info.basePipelineHandle = nullptr;
+    pipeline_create_info.basePipelineIndex  = -1;
+
+#undef CHECK
+    // vertex input state
 }
 
 RHIBufferRef VulkanRHIImpl::RHICreateBuffer(const RHIBufferCreateInfo& info) {

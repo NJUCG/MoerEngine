@@ -2067,31 +2067,25 @@ public:
     RHIRayTracingPipelineStateInitializer() = default;
 
     void SetRayGen(RHIRayGenShader* rgen_shader) {
-        ray_gen = rgen_shader;
+        ray_gen_shader = rgen_shader;
     }
     void SetMissGroup(RHIRayMissShader* rmiss_shader) {
         ray_miss_table.push_back(rmiss_shader);
     }
-
     void SetCallableGroup(RHIRayCallableShader* rcall_shader) {
         ray_callable_table.push_back(rcall_shader);
     }
-
-protected:
+    void SetHitGroup(RHIRayClosestHitShader* rchit_shader, RHIRayAnyhitShader* rahit_shader = nullptr, RHIRayIntersectionShader* rint_shader = nullptr) {
+        ray_hit_table.push_back(RHIRayHitGroup{rchit_shader, rahit_shader, rint_shader});
+    }
     struct RHIRayHitGroup {
         RHIRayClosestHitShader*   closesthit_shader;
         RHIRayAnyhitShader*       anyhit_shader;
         RHIRayIntersectionShader* intersection_shader;
     };
 
-public:
-    void SetHitGroup(RHIRayClosestHitShader* rchit_shader, RHIRayAnyhitShader* rahit_shader = nullptr, RHIRayIntersectionShader* rint_shader = nullptr) {
-        ray_hit_table.push_back(RHIRayHitGroup{rchit_shader, rahit_shader, rint_shader});
-    }
-
-protected:
     RHIRayTracingPipelineStateRef      base_pipeline_handle;
-    RHIRayGenShader*                   ray_gen = nullptr;
+    RHIRayGenShader*                   ray_gen_shader;
     Moer::Array<RHIRayMissShader*>     ray_miss_table;
     Moer::Array<RHIRayHitGroup>        ray_hit_table;
     Moer::Array<RHIRayCallableShader*> ray_callable_table;
