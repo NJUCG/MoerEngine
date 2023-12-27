@@ -149,7 +149,7 @@ struct GuiViewportData {
 
     RHIViewportRef viewport;
 
-    GuiFrameRenderBuffers* render_buffers;// Used by all viewports
+    Moer::Array<GuiFrameRenderBuffers> render_buffers;// Used by all viewports
 
     RHIViewportNextBackBufferInfo next_frame_info;
 
@@ -159,7 +159,7 @@ struct GuiViewportData {
 
     GuiViewportData(uint32_t _frame_in_flight) {
         memset((void*)this, 0, sizeof(*this));
-        render_buffers = MoerNew(GuiFrameRenderBuffers)[_frame_in_flight];
+        render_buffers.resize(_frame_in_flight);
         for (uint32_t i = 0; i < _frame_in_flight; ++i) {
             render_buffers[i].vertex_buffer         = nullptr;
             render_buffers[i].index_buffer          = nullptr;
@@ -170,7 +170,6 @@ struct GuiViewportData {
         viewport_count++;
     }
     ~GuiViewportData() {
-        MoerDelete(render_buffers);
         viewport_count--;
     }
 };
@@ -204,7 +203,7 @@ void ImGUIRenderer::Impl::Init() {
     const Moer::ConfigManager& config_manager      = Moer::ConfigManager::GetInstance();
     uint32_t                   max_frame_in_flight = config_manager.GetInitConfig().max_frame_in_flight;
 
-    GuiBackendData* render_backend_data       = IM_NEW(GuiBackendData)();
+    GuiBackendData* render_backend_data       = MoerNew(GuiBackendData)();
     render_backend_data->num_frames_in_flight = max_frame_in_flight;
 
     io.BackendRendererUserData = render_backend_data;
@@ -212,7 +211,7 @@ void ImGUIRenderer::Impl::Init() {
     io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;
     io.BackendFlags |= ImGuiBackendFlags_RendererHasViewports;
     ImGuiViewport*   main_viewport  = ImGui::GetMainViewport();
-    GuiViewportData* viewport_data  = IM_NEW(GuiViewportData)(max_frame_in_flight);
+    GuiViewportData* viewport_data  = MoerNew(GuiViewportData)(max_frame_in_flight);
     main_viewport->RendererUserData = viewport_data;
 
     if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
@@ -436,7 +435,7 @@ void ImGUIRenderer::Impl::ShutDown() {
     io.BackendRendererName     = nullptr;
     io.BackendRendererUserData = nullptr;
     io.BackendFlags &= ~(ImGuiBackendFlags_RendererHasVtxOffset | ImGuiBackendFlags_RendererHasViewports);
-    IM_DELETE(bd);
+    MoerDelete(bd);
 
     EnqueueRenderTask([this] {
         command_queue->WaitForQueueComplete();
@@ -454,7 +453,7 @@ void ImGUIRenderer::Impl::ShutDown() {
         // We could just call ImGui_ImplDX12_DestroyWindow(main_viewport) as a convenience but that would be misleading since we only use data->Resources[]
         for (uint32_t i = 0; i < bd->num_frames_in_flight; i++)
             DestroyRenderBuffers(&viewport_data->render_buffers[i]);
-        IM_DELETE(viewport_data);
+        MoerDelete(viewport_data);
         main_viewport->RendererUserData = nullptr;
     }
 }
@@ -505,6 +504,8 @@ void GUIUploadData(void* _draw_data, RHIGraphicsCommandList* _ui_command_list, R
                     new_size,
                     sizeof(ImDrawVert),
                     EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE));
+
+            render_buffers->staging_vertex_buffer->SetName("staging_vertex_buffer");
         }
         if (render_buffers->index_buffer == nullptr || render_buffers->index_buffer->GetSize() < total_size_idx) {
 
@@ -522,6 +523,7 @@ void GUIUploadData(void* _draw_data, RHIGraphicsCommandList* _ui_command_list, R
                     sizeof(ImDrawIdx),
                     EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE));
         }
+        assert(render_buffers->staging_vertex_buffer->GetUsage() == (EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE));
     });
 
     ImDrawVert* vertex_dst = nullptr;
@@ -1054,7 +1056,7 @@ void DestroyRenderBuffers(GuiFrameRenderBuffers* _render_buffers) {
 
 void GuiCreateWindow(ImGuiViewport* viewport) {
     GuiBackendData*  backend_data  = GetBackendData();
-    GuiViewportData* viewport_data = IM_NEW(GuiViewportData)(backend_data->num_frames_in_flight);
+    GuiViewportData* viewport_data = MoerNew(GuiViewportData)(backend_data->num_frames_in_flight);
 
     viewport->RendererUserData = viewport_data;
 
@@ -1107,7 +1109,7 @@ void GuiDestroyWindow(ImGuiViewport* viewport) {
             // We could just call ImGui_ImplDX12_DestroyWindow(main_viewport) as a convenience but that would be misleading since we only use data->Resources[]
             for (uint32_t i = 0; i < backend_data->num_frames_in_flight; i++)
                 DestroyRenderBuffers(&viewport_data->render_buffers[i]);
-            IM_DELETE(viewport_data);
+            MoerDelete(viewport_data);
         }
     }
     viewport->RendererUserData = nullptr;
