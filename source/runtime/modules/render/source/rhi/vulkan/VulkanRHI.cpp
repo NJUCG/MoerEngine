@@ -381,10 +381,11 @@ RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(co
     if (!ptr) {            \
         LOG_CRITICAL(msg); \
     }
-
     VulkanRHIRayTracingPipelineState* vk_pso = new VulkanRHIRayTracingPipelineState();
+    // shader stage & shader groups & shader infos
 
-    // shader stage & shader groups
+    Moer::Array<const Shader*> shader_info_list;
+
     Moer::Array<VkRayTracingShaderGroupCreateInfoKHR> shader_groups;
     VkRayTracingShaderGroupCreateInfoKHR              shader_group_create_info{VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR};
     shader_group_create_info.pNext                           = nullptr;
@@ -402,6 +403,9 @@ RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(co
     if (_init.ray_gen_shader) {
         auto* vk_shader = static_cast<VulkanRHIRayGenShader*>(_init.ray_gen_shader);
         CHECK(vk_shader, "RHICreateRayTracingPipelineState: bad raygen shader which is not a vulkan shader!");
+
+        shader_info_list.push_back(vk_shader->GetMetaShader());
+
         shader_stage_create_info.stage               = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
         shader_stage_create_info.module              = vk_shader->GetHandle();
         shader_stage_create_info.pName               = "main";
@@ -416,6 +420,9 @@ RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(co
     for (const auto& ray_miss_shader : _init.ray_miss_table) {
         auto* vk_shader = static_cast<VulkanRHIRayMissShader*>(ray_miss_shader);
         CHECK(vk_shader, "RHICreateRayTracingPipelineState: bad miss shader which is not a vulkan shader!");
+
+        shader_info_list.push_back(vk_shader->GetMetaShader());
+
         shader_stage_create_info.stage               = VK_SHADER_STAGE_MISS_BIT_KHR;
         shader_stage_create_info.module              = vk_shader->GetHandle();
         shader_stage_create_info.pName               = "main";
@@ -432,6 +439,9 @@ RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(co
         if (ray_hit_group.closesthit_shader) {
             auto* vk_shader = static_cast<VulkanRHIRayClosestHitShader*>(ray_hit_group.closesthit_shader);
             CHECK(vk_shader, "RHICreateRayTracingPipelineState: bad closesthit shader which is not a vulkan shader!");
+
+            shader_info_list.push_back(vk_shader->GetMetaShader());
+
             shader_stage_create_info.stage               = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
             shader_stage_create_info.pName               = "main";
             shader_stage_create_info.module              = vk_shader->GetHandle();
@@ -443,6 +453,9 @@ RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(co
         if (ray_hit_group.anyhit_shader) {
             auto* vk_shader = static_cast<VulkanRHIRayAnyhitShader*>(ray_hit_group.anyhit_shader);
             CHECK(vk_shader, "RHICreateRayTracingPipelineState: bad anyhit shader which is not a vulkan shader!");
+
+            shader_info_list.push_back(vk_shader->GetMetaShader());
+
             shader_stage_create_info.stage               = VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
             shader_stage_create_info.pName               = "main";
             shader_stage_create_info.module              = vk_shader->GetHandle();
@@ -454,7 +467,10 @@ RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(co
         if (ray_hit_group.intersection_shader) {
             auto* vk_shader = static_cast<VulkanRHIRayIntersectionShader*>(ray_hit_group.intersection_shader);
             CHECK(vk_shader, "RHICreateRayTracingPipelineState: bad intersection shader which is not a vulkan shader!");
-            shader_stage_create_info.stage               = VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
+            shader_stage_create_info.stage = VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
+
+            shader_info_list.push_back(vk_shader->GetMetaShader());
+
             shader_stage_create_info.pName               = "main";
             shader_stage_create_info.module              = vk_shader->GetHandle();
             shader_stage_create_info.pSpecializationInfo = nullptr;
@@ -469,6 +485,9 @@ RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(co
     for (const auto& ray_callable_shader : _init.ray_callable_table) {
         auto* vk_shader = static_cast<VulkanRHIRayCallableShader*>(ray_callable_shader);
         CHECK(vk_shader, "RHICreateRayTracingPipelineState: bad miss shader which is not a vulkan shader!");
+
+        shader_info_list.push_back(vk_shader->GetMetaShader());
+
         shader_stage_create_info.stage               = VK_SHADER_STAGE_CALLABLE_BIT_KHR;
         shader_stage_create_info.module              = vk_shader->GetHandle();
         shader_stage_create_info.pName               = "main";
@@ -481,18 +500,76 @@ RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(co
         shader_group_create_info.generalShader = VK_SHADER_UNUSED_KHR;
     }
 
+    Moer::Array<TDescriptorSetLayoutInfo> layout_mappings;
+    Moer::Array<VkPushConstantRange>      push_constant_ranges;
+    // find max set index
+    int8_t max_set = -1;
+    for (const auto* meta_shader : shader_info_list) {
+        auto layout_infos = meta_shader->GetRootParametersLayoutInfo().GetLayoutInfos();
+        for (const auto& info : layout_infos) {
+            max_set = std::max(max_set, info.space);
+        }
+    }
+    layout_mappings.resize(max_set + 1, {});
+
+    // construct layout mappings
+    for (const auto* meta_shader : shader_info_list) {
+        auto layout_infos   = meta_shader->GetRootParametersLayoutInfo().GetLayoutInfos();
+        auto constant_infos = meta_shader->GetRootParametersLayoutInfo().GetConstantsInfos();
+
+        for (const auto& info : layout_infos) {
+            VkDescriptorSetLayoutBinding binding{};
+            binding.binding         = info.slot;
+            binding.descriptorType  = VulkanEnumTranslator::METoVKDescriptorType(info.type);
+            binding.descriptorCount = 1;
+            binding.stageFlags |= VulkanEnumTranslator::METoVKShaderStageFlags(meta_shader->GetShaderType());
+            binding.pImmutableSamplers = nullptr;
+
+            layout_mappings[info.space].second.push_back(std::move(binding));
+        }
+
+        // constants
+        for (const auto& info : constant_infos) {
+            VkPushConstantRange range{};
+            range.stageFlags |= VulkanEnumTranslator::METoVKShaderStageFlags(meta_shader->GetShaderType());
+            range.offset = info.offset;
+            range.size   = info.stride;
+
+            push_constant_ranges.push_back(range);
+        }
+    }
+
+    // generate descriptor set layouts
+    vk_pso->CreateResourceCache();
+    vk_pso->GenerateDescriptorSetLayouts(m_device, layout_mappings);
+
+    auto layouts = vk_pso->m_descriptor_sets_layout->GetLayouts();
+    // create pipeline layout
+    VkPipelineLayoutCreateInfo pipeline_layout_create_info{};
+    pipeline_layout_create_info.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pipeline_layout_create_info.pNext                  = nullptr;
+    pipeline_layout_create_info.flags                  = 0;
+    pipeline_layout_create_info.setLayoutCount         = layouts.size();
+    pipeline_layout_create_info.pSetLayouts            = layouts.data();
+    pipeline_layout_create_info.pushConstantRangeCount = push_constant_ranges.size();
+    pipeline_layout_create_info.pPushConstantRanges    = push_constant_ranges.data();
+
+    vkCreatePipelineLayout(m_device->GetDevice(), &pipeline_layout_create_info, nullptr, &vk_pso->m_pipeline_layout);
+
     VkRayTracingPipelineCreateInfoKHR pipeline_create_info{VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR};
     pipeline_create_info.flags      = 0;
     pipeline_create_info.stageCount = static_cast<uint32_t>(shader_stages.size());
     pipeline_create_info.pStages    = shader_stages.data();
     pipeline_create_info.groupCount = static_cast<uint32_t>(shader_groups.size());
     pipeline_create_info.pGroups    = shader_groups.data();
+    pipeline_create_info.layout     = vk_pso->m_pipeline_layout;
+
 
     pipeline_create_info.basePipelineHandle = nullptr;
     pipeline_create_info.basePipelineIndex  = -1;
 
+    return RHIRayTracingPipelineStateRef(vk_pso);
 #undef CHECK
-    // vertex input state
 }
 
 RHIBufferRef VulkanRHIImpl::RHICreateBuffer(const RHIBufferCreateInfo& info) {
