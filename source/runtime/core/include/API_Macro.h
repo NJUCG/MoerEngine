@@ -22,8 +22,5 @@
 
 #endif
 
-#define RHI_API         DLLEXPORT
-#define RENDER_CORE_API DLLEXPORT
-
 #pragma endregion
 #endif// !API_MACRO_H

@@ -182,7 +182,7 @@ namespace Moer {
 
         if (!IsFenceComplete()) {
             {
-                Event* event = EventPool::Get()->GetEvent();
+                EventRef event{};
 
                 static uint32_t wait_recursive_counter = 0;
 
@@ -197,7 +197,7 @@ namespace Moer {
                 GraphTask<TriggerEventGraphTask>::CreateTask(&temp_events, EThread::EMainThread)
                     .ConstructAndDispatchWhenReady(event, EThread::AnyThread_NormalPri);
 
-                event->Wait();
+                event.Wait();
             }
         }
     }

@@ -10,14 +10,15 @@
 #include <string>
 #include <cstdint>
 #include "config/ConfigMap.h"
+#include "RenderAPI.h"
 namespace Moer {
-    RHI_API extern const char* RHI_VULKAN_NAME;
-    RHI_API extern const char* RHI_D3D12_NAME;
-    RHI_API extern const char* RHI_OPENGL_NAME;
-    RHI_API extern const char* RHI_METAL_NAME;
+    RENDER_API extern const char* RHI_VULKAN_NAME;
+    RENDER_API extern const char* RHI_D3D12_NAME;
+    RENDER_API extern const char* RHI_OPENGL_NAME;
+    RENDER_API extern const char* RHI_METAL_NAME;
     namespace RHI {
 
-        class RHI_API GenericRenderPlatformInfo {
+        class RENDER_API GenericRenderPlatformInfo {
             std::string rhi_name;
 
             uint32_t b_is_pc : 1;

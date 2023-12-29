@@ -134,5 +134,10 @@ namespace Moer {
 
         float GetDegree() const noexcept { return radian * 180.f / 3.14159265358979323846f; }
         float GetRadian() const noexcept { return radian; }
+
+        static Angle MakeFromRadian(float radian) noexcept { return Angle(radian); }
+        static Angle MakeFromDegree(float degree) noexcept { return Angle(DegreeToRadian(degree)); }
+        static float DegreeToRadian(float degree) noexcept { return degree / 180.f * 3.14159265358979323846f; }
+        static float RadianToDegree(float radian) noexcept { return radian * 180.f / 3.14159265358979323846f; }
     };
 }// namespace Moer

@@ -406,13 +406,14 @@ RHITextureRef VulkanRHIImpl::RHICreateTexture(const RHITextureCreateInfo& info) 
     image_create_info.tiling        = VK_IMAGE_TILING_OPTIMAL;// MARK...
     image_create_info.usage         = VulkanRHITexture::METoVKImageUsageFlags(info.usage);
     image_create_info.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
-    if (uint32_t(info.usage | ETextureUsageFlags::TRANSFER_DST) || uint32_t(info.usage | ETextureUsageFlags::TRANSFER_SRC)) {
-        image_create_info.sharingMode           = VK_SHARING_MODE_CONCURRENT;
-        image_create_info.queueFamilyIndexCount = 2;
-        uint32_t queue_family_indices[]         = {m_device->GetQueueFamilyIndices().graphics.value(),
-                                                   m_device->GetQueueFamilyIndices().transfer.value()};
-        image_create_info.pQueueFamilyIndices   = queue_family_indices;
-    }
+    // if (uint32_t(info.usage | ETextureUsageFlags::TRANSFER_DST) || uint32_t(info.usage | ETextureUsageFlags::TRANSFER_SRC)) {
+    //     image_create_info.sharingMode           = VK_SHARING_MODE_CONCURRENT;
+    //     image_create_info.queueFamilyIndexCount = 3;
+    //     uint32_t queue_family_indices[]         = {m_device->GetQueueFamilyIndices().graphics.value(),
+    //                                                m_device->GetQueueFamilyIndices().compute.value(),
+    //                                                m_device->GetQueueFamilyIndices().transfer.value()};
+    //     image_create_info.pQueueFamilyIndices   = queue_family_indices;
+    // }
 
     image_create_info.initialLayout = VulkanEnumTranslator::METoVKImageLayout(info.layout);
 

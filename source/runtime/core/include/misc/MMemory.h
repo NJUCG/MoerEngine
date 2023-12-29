@@ -3,6 +3,8 @@
 #include "API_Macro.h"
 #include <assert.h>
 #include <cstdint>
+
+#define USE_MIMALLOC 1
 class CORE_API Memory {
 public:
     static void* Malloc(size_t size) noexcept;

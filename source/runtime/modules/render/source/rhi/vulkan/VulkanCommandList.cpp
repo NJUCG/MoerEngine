@@ -2,6 +2,7 @@
 // Created by 74535 on 2023/10/17.
 //
 
+#include "math/Constant.h"
 #include "misc/STL.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
@@ -273,7 +274,7 @@ void VulkanRHICommandListBase::SetPipelineBarrier(const RHIBarrierDependencyInfo
         buffer_barriers[i].dstQueueFamilyIndex = VulkanEnumTranslator::METoVkQueueFamilyIndex(_dependency.buffer_barriers[i].dst_queue_type, m_device);
         buffer_barriers[i].buffer              = vk_buffer->GetHandle();
         buffer_barriers[i].offset              = _dependency.buffer_barriers[i].offset;
-        buffer_barriers[i].size                = _dependency.buffer_barriers[i].size;
+        buffer_barriers[i].size                = _dependency.buffer_barriers[i].size == Moer::MAX_INT64 ? VK_WHOLE_SIZE : _dependency.buffer_barriers[i].size;
     }
 
     VulkanRHITexture* vk_texture = nullptr;

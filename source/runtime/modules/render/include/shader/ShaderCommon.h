@@ -148,15 +148,15 @@ public:
         //            return ElementSize;
         //        }
 
-        //        static RHI_API void GenerateShaderParameterType(
+        //        static RENDER_API void GenerateShaderParameterType(
         //            std::string&             Result,
         //            bool                     bSupportsPrecisionModifier,
         //            EShaderBindingBaseType   BaseType,
         //            EShaderPrecisionModifier PrecisionModifier,
         //            uint32_t                 NumRows,
         //            uint32_t                 NumColumns);
-        //        RHI_API void GenerateShaderParameterType(std::string& Result, bool bSupportsPrecisionModifier) const;
-        //        RHI_API void GenerateShaderParameterType(std::string& Result, EShaderPlatform ShaderPlatform) const;
+        //        RENDER_API void GenerateShaderParameterType(std::string& Result, bool bSupportsPrecisionModifier) const;
+        //        RENDER_API void GenerateShaderParameterType(std::string& Result, EShaderPlatform ShaderPlatform) const;
 
     private:
         const char* name;
@@ -171,14 +171,14 @@ public:
         uint32_t                        stride;
     };
 
-    RHI_API ShaderParametersMetadata(
+    RENDER_API ShaderParametersMetadata(
         EShaderParameterUseCase    _use_case,
         const char*                _struct_name,
         uint32_t                   _size,
         const Moer::Array<Member>& _members,
         bool                       _b_force_complete_initialization = false);
 
-    RHI_API virtual ~ShaderParametersMetadata();
+    RENDER_API virtual ~ShaderParametersMetadata();
 
     const char* GetStructTypeName() const { return struct_name; }
 
@@ -197,7 +197,7 @@ public:
     const Moer::Array<Member>& GetMembers() const { return members; }
 
     /** Returns the full C++ member name from it's byte offset in the structure. */
-    RHI_API std::string GetMemberNameByOffset(uint16_t _member_offset) const;
+    RENDER_API std::string GetMemberNameByOffset(uint16_t _member_offset) const;
 
     inline bool IsLayoutInitialized() const { return layout != nullptr; }
 
@@ -262,7 +262,7 @@ public:
 
     struct Parameters {
     };
-    static RENDER_CORE_API Moer::UnorderedMap<std::string, ShaderMetaType*>& GetNameToTypeMap();
+    static RENDER_API Moer::UnorderedMap<std::string, ShaderMetaType*>& GetNameToTypeMap();
 
     /**
      * @brief Get the Shader Type Enum
@@ -382,8 +382,8 @@ struct ShaderCompiledInitializer {
     const ShaderParametersInfoMap& parameter_map;
     const Hash64City&              compiled_hash;
 
-    uint32_t        code_size;
-    RENDER_CORE_API ShaderCompiledInitializer(
+    uint32_t   code_size;
+    RENDER_API ShaderCompiledInitializer(
         const ShaderMetaType*       _shader_type,
         const ShaderCompilerOutput& _compiled_output
         //        const FVertexFactoryType* InVertexFactoryType

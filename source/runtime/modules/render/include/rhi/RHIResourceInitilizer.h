@@ -50,8 +50,8 @@ struct RHISamplerInitializer {
     uint32_t                            border_color   = 0;
     EnumInByte<ESamplerCompareFunction> compare_op     = SCF_NEVER;
 
-    RHI_API friend uint32_t GetHash(const RHISamplerInitializer& target);
-    RHI_API friend bool     operator==(const RHISamplerInitializer& lhs, const RHISamplerInitializer& rhs);
+    RENDER_API friend uint32_t GetHash(const RHISamplerInitializer& target);
+    RENDER_API friend bool     operator==(const RHISamplerInitializer& lhs, const RHISamplerInitializer& rhs);
 };
 
 struct RHIDepthStencilStateInitializer {
@@ -102,8 +102,8 @@ struct RHIDepthStencilStateInitializer {
           back_face_pass_stencil_op(_back_face_pass_stencil_op),
           stencil_readmask(_stencil_readmask),
           stencil_writemask(_stencil_writemask) {}
-    RHI_API friend uint32_t GetHash(const RHIDepthStencilStateInitializer& target);
-    RHI_API friend bool     operator==(const RHIDepthStencilStateInitializer& lhs, const RHIDepthStencilStateInitializer& rhs);
+    RENDER_API friend uint32_t GetHash(const RHIDepthStencilStateInitializer& target);
+    RENDER_API friend bool     operator==(const RHIDepthStencilStateInitializer& lhs, const RHIDepthStencilStateInitializer& rhs);
 };
 
 struct RHIRasterizationStateInitializer {
@@ -115,8 +115,8 @@ struct RHIRasterizationStateInitializer {
     float                           depth_bias;
     float                           depth_bias_clamp;
     float                           depth_bias_slop_factor;
-    RHI_API friend uint32_t         GetHash(const RHIRasterizationStateInitializer& target);
-    RHI_API friend bool             operator==(const RHIRasterizationStateInitializer& lhs, const RHIRasterizationStateInitializer& rhs);
+    RENDER_API friend uint32_t      GetHash(const RHIRasterizationStateInitializer& target);
+    RENDER_API friend bool          operator==(const RHIRasterizationStateInitializer& lhs, const RHIRasterizationStateInitializer& rhs);
 };
 
 struct RHIMultisampleStateInitializer {
@@ -129,9 +129,9 @@ struct RHIMultisampleStateInitializer {
 
     bool b_alpha_to_one = false;
     /*a minimum fraction of sample shading if sample_shading is enabled, closer to 1 is smoother*/
-    float                   min_sample_shading = 0.2f;
-    RHI_API friend uint32_t GetHash(const RHIMultisampleStateInitializer& target);
-    RHI_API friend bool     operator==(const RHIMultisampleStateInitializer& lhs, const RHIMultisampleStateInitializer& rhs);
+    float                      min_sample_shading = 0.2f;
+    RENDER_API friend uint32_t GetHash(const RHIMultisampleStateInitializer& target);
+    RENDER_API friend bool     operator==(const RHIMultisampleStateInitializer& lhs, const RHIMultisampleStateInitializer& rhs);
 };
 
 struct RHIBlendStateInitializer {
@@ -178,11 +178,11 @@ struct RHIBlendStateInitializer {
 
     Moer::StaticArray<AttachmentInitializer, MAX_PASS_ATTACHMENT_COUNT> attachments;
 
-    RHI_API friend uint32_t GetHash(const RHIBlendStateInitializer::AttachmentInitializer& _attachment_desc);
-    RHI_API friend bool     operator==(const RHIBlendStateInitializer::AttachmentInitializer& lhs, const RHIBlendStateInitializer::AttachmentInitializer& rhs);
+    RENDER_API friend uint32_t GetHash(const RHIBlendStateInitializer::AttachmentInitializer& _attachment_desc);
+    RENDER_API friend bool     operator==(const RHIBlendStateInitializer::AttachmentInitializer& lhs, const RHIBlendStateInitializer::AttachmentInitializer& rhs);
 
-    RHI_API friend uint32_t GetHash(const RHIBlendStateInitializer& Initializer);
-    RHI_API friend bool     operator==(const RHIBlendStateInitializer& lhs, const RHIBlendStateInitializer& rhs);
+    RENDER_API friend uint32_t GetHash(const RHIBlendStateInitializer& Initializer);
+    RENDER_API friend bool     operator==(const RHIBlendStateInitializer& lhs, const RHIBlendStateInitializer& rhs);
 };
 
 /**

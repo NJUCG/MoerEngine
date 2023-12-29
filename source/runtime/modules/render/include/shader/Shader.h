@@ -78,9 +78,9 @@ class Shader {
     friend class ShaderMetaType;
 
 public:
-    RENDER_CORE_API Shader();
+    RENDER_API Shader();
 
-    RENDER_CORE_API Shader(const ShaderCompiledInitializer& intializer);
+    RENDER_API Shader(const ShaderCompiledInitializer& intializer);
 
     ~Shader();
     virtual void Delete() {}

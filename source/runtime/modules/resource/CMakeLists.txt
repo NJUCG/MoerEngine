@@ -6,6 +6,8 @@ file(GLOB_RECURSE RESOURCE_MODULE_SOURCES "source/*.cpp" "source/*.h")
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${RESOURCE_MODULE_HEADERS} ${RESOURCE_MODULE_SOURCES})
 
 add_library(${MODULE_NAME} SHARED ${RESOURCE_MODULE_HEADERS} ${RESOURCE_MODULE_SOURCES})
+target_compile_definitions(${MODULE_NAME} PRIVATE RESOURCE_MODULE_SHARED_LIB)
+
 set_target_properties(${MODULE_NAME} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
 set_target_properties(${MODULE_NAME} PROPERTIES FOLDER "runtime")
@@ -17,4 +19,5 @@ target_include_directories(${MODULE_NAME}
 target_link_libraries(${MODULE_NAME}
     PUBLIC AssetLoad
     PUBLIC MoerRuntimeCore
+    PUBLIC render
 )

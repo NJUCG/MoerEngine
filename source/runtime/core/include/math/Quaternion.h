@@ -5,6 +5,8 @@
 
 #include <utility>
 
+#include "API_Macro.h"
+
 namespace Moer {
     /** 
      * @attention Quaternion vector must be normalized. Length(vec) must be 1.
@@ -33,12 +35,12 @@ namespace Moer {
         Quaternion(float w, float x, float y, float z) noexcept : vec(x, y, z, w) {}
 
         explicit Quaternion(const Vector4f& q) noexcept : vec(q) {}
-        explicit Quaternion(const Vector3f& axis, const Angle& angle) noexcept;
+        CORE_API explicit Quaternion(const Vector3f& axis, const Angle& angle) noexcept;
         explicit Quaternion(const Matrix3x3f& rotation) noexcept;
         // construct from local orthonormal coordinate system
         explicit Quaternion(const Vector3f& x_axis, const Vector3f& y_axis, const Vector3f& z_axis) noexcept;
 
-        Matrix3x3f                 GetRotation() const noexcept;
+        CORE_API Matrix3x3f                 GetRotation() const noexcept;
         std::pair<Vector3f, Angle> GetAxisAngle() const noexcept;
         void                       GetLocalAxes(Vector3f& x_axis, Vector3f& y_axis, Vector3f& z_axis) const noexcept;
 

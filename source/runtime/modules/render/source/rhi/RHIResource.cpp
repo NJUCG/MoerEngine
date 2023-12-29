@@ -257,3 +257,19 @@ void RHIBatchedShaderParameters::SetParameters(const Shader* shader, size_t _dat
         constant_parameters.emplace_back(shader->GetShaderType(), origin_offset, (param_info.stride + sizeof(uint32_t) - 1) / 4, param_info.slot, param_info.space);
     }
 }
+
+RHIBufferRef   RHIRenderPrimitive::GetVertexBuffer() const {
+    return m_vertex_buffer;
+}
+RHIBufferRef   RHIRenderPrimitive::GetIndexBuffer() const {
+    return m_index_buffer;
+}
+EPrimitiveType RHIRenderPrimitive::GetPrimitiveType() const {
+    return m_type;
+}
+uint32_t       RHIRenderPrimitive::GetOffset() const {
+    return m_offset;
+}
+uint32_t       RHIRenderPrimitive::GetCount() const {
+    return m_count;
+}
