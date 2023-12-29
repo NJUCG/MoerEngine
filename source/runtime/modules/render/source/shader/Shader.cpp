@@ -64,17 +64,16 @@ void Shader::ConstructRootParameterLayoutInfo(const ShaderParametersInfoMap& _pa
         step = (num > 0 ? (member.GetStride() / num) : member.GetStride());
         //for root constants
         if (param_type == EShaderParameterType::CONSTANT_STRUCT) {
-            param_layout_info.constant_infos.emplace_back(member.GetOffset(), member.GetStride(), slot, space, param_type);
+            param_layout_info.constant_infos.emplace_back(member.GetOffset(), member.GetStride(), slot, space, num, param_type);
             continue;
         }
         //for resources
-        for (size_t i = 0; i < ((num == 0) ? 1 : num); ++i) {
-            layout_infos.emplace_back(ShaderParameterLayoutInfo(member.GetOffset() + step * i,
-                                                                step,
-                                                                slot++,
-                                                                space,
-                                                                param_type));
-        }
+        layout_infos.emplace_back(ShaderParameterLayoutInfo(member.GetOffset(),
+                                                            member.GetStride(),
+                                                            slot,
+                                                            space,
+                                                            num,
+                                                            param_type));
     }
     param_layout_info.layout_infos.swap(layout_infos);
 }

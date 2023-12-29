@@ -91,7 +91,7 @@ class ImGuiShaderFrag : public Shader {
 public:
     BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
 
-    DEFINE_SHADER_PARAM_SAMPLER(SamplerState, sampler0)
+    DEFINE_SHADER_PARAM_SAMPLER_ARRAY(SamplerState[2], sampler0, 2)
     DEFINE_SHADER_PARAM_SRV(Texture2D, texture0)
 
     END_ROOT_PARAMETER_DEFINITION(Parameters)
@@ -503,7 +503,8 @@ void SetupRenderState(ImDrawData* draw_data, RHIGraphicsCommandList* commandList
     // 2. global: push constants
     ImGuiShaderVert::Parameters vert_param;
     ImGuiShaderFrag::Parameters frag_param;
-    frag_param.sampler0 = backend_data->font_sampler;
+    frag_param.sampler0[0] = backend_data->font_sampler;
+    frag_param.sampler0[1] = backend_data->font_sampler;
     std::memset(&vert_param.vertexBuffer, 0, sizeof(vert_param.vertexBuffer));
     {
         float l         = draw_data->DisplayPos.x;
@@ -728,8 +729,9 @@ void CreateFontsTexture() {
 
         RHIBatchedShaderParameters  batched_params;
         ImGuiShaderFrag::Parameters params;
-        params.sampler0 = backend_data->font_sampler;
-        params.texture0 = backend_data->font_view;
+        params.sampler0[0] = backend_data->font_sampler;
+        params.sampler0[1] = backend_data->font_sampler;
+        params.texture0    = backend_data->font_view;
 
         batched_params.SetParameters(backend_data->shader_module_frag, params);
         g_rhi->RHISetBatchedShaderParameters(backend_data->pipeline, batched_params);
