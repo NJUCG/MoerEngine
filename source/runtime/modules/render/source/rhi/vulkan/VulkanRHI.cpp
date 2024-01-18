@@ -381,6 +381,7 @@ RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(co
     if (!ptr) {            \
         LOG_CRITICAL(msg); \
     }
+
     VulkanRHIRayTracingPipelineState* vk_pso = new VulkanRHIRayTracingPipelineState();
     // shader stage & shader groups & shader infos
 
@@ -557,18 +558,90 @@ RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(co
     vkCreatePipelineLayout(m_device->GetDevice(), &pipeline_layout_create_info, nullptr, &vk_pso->m_pipeline_layout);
 
     VkRayTracingPipelineCreateInfoKHR pipeline_create_info{VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR};
-    pipeline_create_info.flags      = 0;
-    pipeline_create_info.stageCount = static_cast<uint32_t>(shader_stages.size());
-    pipeline_create_info.pStages    = shader_stages.data();
-    pipeline_create_info.groupCount = static_cast<uint32_t>(shader_groups.size());
-    pipeline_create_info.pGroups    = shader_groups.data();
-    pipeline_create_info.layout     = vk_pso->m_pipeline_layout;
+    pipeline_create_info.stageCount                   = static_cast<uint32_t>(shader_stages.size());
+    pipeline_create_info.pStages                      = shader_stages.data();
+    pipeline_create_info.groupCount                   = static_cast<uint32_t>(shader_groups.size());
+    pipeline_create_info.pGroups                      = shader_groups.data();
+    pipeline_create_info.layout                       = vk_pso->m_pipeline_layout;
+    pipeline_create_info.maxPipelineRayRecursionDepth = _init.max_ray_recursion_depth;
 
+    VK_CHECK_RESULT(vkCreateRayTracingPipelinesKHR(m_device->GetDevice(), {}, {}, 1, &pipeline_create_info, nullptr, &vk_pso->m_pipeline));
 
-    pipeline_create_info.basePipelineHandle = nullptr;
-    pipeline_create_info.basePipelineIndex  = -1;
+    //create SBTs
+#define ALIGNUP(x, y) ((x + (y - 1)) & (~(y - 1)))
+
+    uint32_t miss_count     = _init.ray_miss_table.size();
+    uint32_t hit_count      = _init.ray_hit_table.size();
+    uint32_t callable_count = _init.ray_callable_table.size();
+    uint32_t handlecount    = 1 + miss_count + hit_count + callable_count;
+
+    VkPhysicalDeviceRayTracingPipelinePropertiesKHR rt_props           = m_device->GetRayTracingPipelineProperties();
+    uint32_t                                        handlesize         = rt_props.shaderGroupHandleSize;
+    uint32_t                                        handlesize_aligned = ALIGNUP(handlesize, rt_props.shaderGroupHandleAlignment);
+    vk_pso->m_raygen_sbt.size                                          = ALIGNUP(handlesize_aligned, rt_props.shaderGroupBaseAlignment);
+    vk_pso->m_raygen_sbt.stride                                        = vk_pso->m_raygen_sbt.size;
+    vk_pso->m_miss_sbt.size                                            = ALIGNUP(handlesize_aligned * miss_count, rt_props.shaderGroupBaseAlignment);
+    vk_pso->m_miss_sbt.stride                                          = handlesize_aligned;
+    vk_pso->m_hit_sbt.size                                             = ALIGNUP(handlesize_aligned * hit_count, rt_props.shaderGroupBaseAlignment);
+    vk_pso->m_hit_sbt.stride                                           = handlesize_aligned;
+    vk_pso->m_callable_sbt.size                                        = ALIGNUP(handlesize_aligned * callable_count, rt_props.shaderGroupBaseAlignment);
+    vk_pso->m_callable_sbt.stride                                      = handlesize_aligned;
+
+    uint32_t             datasize = handlecount * handlesize;
+    Moer::Array<uint8_t> data(datasize);
+    vkGetRayTracingShaderGroupHandlesKHR(m_device->GetDevice(), vk_pso->m_pipeline, 0, handlecount, datasize, data.data());
+
+    //i need a sbt buffer but do not want that type of buffer exposed
+    RHIBufferInfo bufferinfo{};
+    bufferinfo.size            = vk_pso->m_raygen_sbt.size + vk_pso->m_miss_sbt.size + vk_pso->m_hit_sbt.size + vk_pso->m_callable_sbt.size;
+    VulkanRHIBuffer* vk_buffer = new VulkanRHIBuffer(bufferinfo);
+
+    VkBufferCreateInfo buffer_create_info{};
+    buffer_create_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    buffer_create_info.pNext = nullptr;
+    buffer_create_info.flags = 0;
+    buffer_create_info.size  = bufferinfo.size;
+    // add device address flag for addressing buffer with 64-bit address
+    buffer_create_info.usage                 = VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+    buffer_create_info.sharingMode           = VK_SHARING_MODE_EXCLUSIVE;
+    buffer_create_info.queueFamilyIndexCount = 0;
+    buffer_create_info.pQueueFamilyIndices   = nullptr;
+
+    VmaAllocationCreateInfo alloc_create_info{};
+    alloc_create_info.flags = VmaAllocationCreateFlagBits::VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+    alloc_create_info.usage = VMA_MEMORY_USAGE_AUTO;
+
+    VmaAllocator allocator = m_device->GetVmaAllocator();
+    VK_CHECK_RESULT(vmaCreateBuffer(allocator, &buffer_create_info, &alloc_create_info, &vk_buffer->m_alloc.buffer, &vk_buffer->m_alloc.alloc, nullptr));
+
+    vk_pso->m_sbt_buffer = RHIBufferRef(vk_buffer);
+
+    uint8_t* pSBTbuffer = reinterpret_cast<uint8_t*>(RHIMapBuffer(vk_pso->m_sbt_buffer, 0, bufferinfo.size));
+
+    uint8_t* pData      = pSBTbuffer;
+    auto     getHandle  = [&data, handlesize](int i) { return data.data() + handlesize * i; };
+    uint32_t handle_idx = 0;
+    memcpy(pData, getHandle(handle_idx++), handlesize);
+    pData = pSBTbuffer + vk_pso->m_raygen_sbt.size;
+
+    for (uint32_t i = 0; i < miss_count; ++i) {
+        memcpy(pData, getHandle(handle_idx++), handlesize);
+        pData += vk_pso->m_miss_sbt.stride;
+    }
+    pData = pSBTbuffer + vk_pso->m_raygen_sbt.size + vk_pso->m_miss_sbt.size;
+    for (uint32_t i = 0; i < hit_count; ++i) {
+        memcpy(pData, getHandle(handle_idx++), handlesize);
+        pData += vk_pso->m_hit_sbt.stride;
+    }
+    pData = pSBTbuffer + vk_pso->m_raygen_sbt.size + vk_pso->m_miss_sbt.size + vk_pso->m_hit_sbt.size;
+    for (uint32_t i = 0; i < callable_count; ++i) {
+        memcpy(pData, getHandle(handle_idx++), handlesize);
+        pData += vk_pso->m_callable_sbt.stride;
+    }
+    RHIUnmapBuffer(vk_pso->m_sbt_buffer);
 
     return RHIRayTracingPipelineStateRef(vk_pso);
+#undef ALIGNUP
 #undef CHECK
 }
 

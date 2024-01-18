@@ -2084,11 +2084,12 @@ public:
         RHIRayIntersectionShader* intersection_shader;
     };
 
-    RHIRayTracingPipelineStateRef      base_pipeline_handle;
     RHIRayGenShader*                   ray_gen_shader;
     Moer::Array<RHIRayMissShader*>     ray_miss_table;
     Moer::Array<RHIRayHitGroup>        ray_hit_table;
     Moer::Array<RHIRayCallableShader*> ray_callable_table;
+    
+    uint32_t max_ray_recursion_depth = 2;
 };
 
 /* struct for RenderPassInfo Only, constructed by texture_view and Pass-Required texture layout */

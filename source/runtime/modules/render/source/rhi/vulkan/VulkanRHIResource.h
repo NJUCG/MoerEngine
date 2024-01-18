@@ -397,6 +397,7 @@ private:
     VkPipelineLayout m_pipeline_layout;
 
     //SBT
+    RHIBufferRef                    m_sbt_buffer;
     VkStridedDeviceAddressRegionKHR m_raygen_sbt;
     VkStridedDeviceAddressRegionKHR m_miss_sbt;
     VkStridedDeviceAddressRegionKHR m_hit_sbt;
@@ -406,6 +407,9 @@ private:
     VulkanDescriptorSetsLayout* m_descriptor_sets_layout;
     // resource cache
     VulkanPipelineResourceCache* m_pipeline_state_cache;
+
+
+
 };
 #pragma endregion
 

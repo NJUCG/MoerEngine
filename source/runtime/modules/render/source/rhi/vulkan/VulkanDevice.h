@@ -69,6 +69,9 @@ public:
     inline VkPhysicalDeviceMemoryProperties2 GetMemoryProperties() const {
         return m_gpu_mem_props;
     }
+    inline VkPhysicalDeviceRayTracingPipelinePropertiesKHR GetRayTracingPipelineProperties() const {
+        return m_gpu_rt_props;
+    }
     inline const TExtensionArray& GetGpuExtensions() const {
         return m_gpu_extensions;
     }
@@ -91,13 +94,15 @@ public:
     bool                          GetDescriptorSets(uint32_t _hash_key, const VulkanDescriptorSetsLayout& _layout, Moer::Array<VulkanDescriptorSetWriter>& _writers, Moer::Array<VkDescriptorSet>& _sets);
 
 private:
-    VkPhysicalDevice                  m_gpu;
-    VkPhysicalDeviceProperties2       m_gpu_props;
-    VulkanPhysicalDeviceFeatures      m_gpu_features;
-    VkPhysicalDeviceMemoryProperties2 m_gpu_mem_props;
-    TExtensionArray                   m_gpu_extensions;
-    TQueueFamilyPropertiesArray       m_queue_family_props;
-    QueueFamilyIndices                m_queue_family_indices;
+    VkPhysicalDevice            m_gpu;
+    VkPhysicalDeviceProperties2 m_gpu_props;
+
+    VulkanPhysicalDeviceFeatures                    m_gpu_features;
+    VkPhysicalDeviceMemoryProperties2               m_gpu_mem_props;
+    VkPhysicalDeviceRayTracingPipelinePropertiesKHR m_gpu_rt_props;
+    TExtensionArray                                 m_gpu_extensions;
+    TQueueFamilyPropertiesArray                     m_queue_family_props;
+    QueueFamilyIndices                              m_queue_family_indices;
 
     VkDevice m_device;
     VkQueue  m_graphics_queue;

@@ -149,6 +149,11 @@ void VulkanDevice::InitGpu(const DeviceInitializer& _initializer) {
     m_gpu_mem_props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2;
     vkGetPhysicalDeviceMemoryProperties2(m_gpu, &m_gpu_mem_props);
 
+    VkPhysicalDeviceProperties2 temp_props{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+    m_gpu_rt_props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR;
+    temp_props.pNext     = &m_gpu_rt_props;
+    vkGetPhysicalDeviceProperties2(m_gpu, &temp_props);
+
     m_gpu_extensions       = GetGpuExtensions(m_gpu);
     m_queue_family_indices = QueryQueueFamilyIndices(m_gpu, _initializer.surface);
     m_queue_family_props   = GetQueueFamilyProperties(m_gpu);
