@@ -25,15 +25,13 @@ const VkDescriptorBufferInfo* VulkanPipelineResourceCache::UpdateDescriptorBuffe
     }
     return m_descriptor_resource_container.descriptor_buffer_infos[_set].data() + _index_of_binding;
 }
-#if VULKAN_RHI_RAYTRACING
-const VkWriteDescriptorSetAccelerationStructureKHR& VulkanPipelineResourceCache::UpdateDescriptorASInfo(uint16_t _set, uint16_t _index_of_binding, const Moer::Array < VkWriteDescriptorSetAccelerationStructureKHR> & _infos) {
+const VkAccelerationStructureKHR* VulkanPipelineResourceCache::UpdateDescriptorASInfo(uint16_t _set, uint16_t _index_of_binding, const Moer::Array<VkAccelerationStructureKHR>& _infos) {
+
     for (uint16_t i = 0; i < _infos.size(); ++i) {
         m_descriptor_resource_container.descriptor_as_infos[_set][_index_of_binding + i] = _infos[i];
     }
     return m_descriptor_resource_container.descriptor_as_infos[_set].data() + _index_of_binding;
 }
-#endif
-
 
 bool VulkanPipelineResourceCache::UpdateDescriptorSets(VulkanDevice* _device, const VulkanDescriptorSetsLayout* _layout) {
     if (m_descriptor_sets.empty()) {

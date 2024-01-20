@@ -27,9 +27,7 @@ public:
 
     const VkDescriptorBufferInfo* UpdateDescriptorBufferInfos(uint16_t _set, uint16_t _index_of_binding, const Moer::Array<VkDescriptorBufferInfo>& _infos);
 
-#if VULKAN_RHI_RAYTRACING
-    const VkWriteDescriptorSetAccelerationStructureKHR& UpdateDescriptorASInfo(uint16_t _set, uint16_t _index_of_binding, const Moer::Array<VkWriteDescriptorSetAccelerationStructureKHR>& _infos);
-#endif
+    const VkAccelerationStructureKHR* UpdateDescriptorASInfo(uint16_t _set, uint16_t _index_of_binding, const Moer::Array<VkAccelerationStructureKHR>& _infos);
 
     bool UpdateDescriptorSets(VulkanDevice* _device, const VulkanDescriptorSetsLayout* _layout);
 
