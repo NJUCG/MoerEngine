@@ -340,7 +340,6 @@ public:
     inline const VkPipelineLayout GetPipelineLayout() const {
         return m_pipeline_layout;
     }
-
     inline VulkanPipelineResourceCache* GetPipelineResourceCache() const {
         return m_pipeline_state_cache;
     }
@@ -384,7 +383,6 @@ public:
     inline const VulkanDescriptorSetsLayout* GetDescriptorSetsLayout() const {
         return m_descriptor_sets_layout;
     }
-
     inline VulkanPipelineResourceCache* GetPipelineResourceCache() const {
         return m_pipeline_state_cache;
     }
@@ -407,9 +405,6 @@ private:
     VulkanDescriptorSetsLayout* m_descriptor_sets_layout;
     // resource cache
     VulkanPipelineResourceCache* m_pipeline_state_cache;
-
-
-
 };
 #pragma endregion
 

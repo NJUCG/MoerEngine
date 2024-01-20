@@ -24,7 +24,7 @@ namespace Util {
     std::string ErrorString(VkResult error_code) {
         switch (error_code) {
 #define STR(r) \
-case VK_##r: return #r
+    case VK_##r: return #r
             STR(NOT_READY);
             STR(TIMEOUT);
             STR(EVENT_SET);
@@ -58,7 +58,7 @@ case VK_##r: return #r
     std::string PhysicalDeviceTypeString(VkPhysicalDeviceType type) {
         switch (type) {
 #define STR(r) \
-case VK_PHYSICAL_DEVICE_TYPE_##r: return #r
+    case VK_PHYSICAL_DEVICE_TYPE_##r: return #r
             STR(OTHER);
             STR(INTEGRATED_GPU);
             STR(DISCRETE_GPU);
@@ -89,6 +89,22 @@ case VK_PHYSICAL_DEVICE_TYPE_##r: return #r
         }
 
         return details;
+    }
+
+    const void* QueryPhysicalDeviceExtensionProps(const VkPhysicalDeviceProperties2& props, VkStructureType prop_type) {
+        struct PropertyBase {
+            VkStructureType sType;
+            void*           pNext;
+        };
+        const void* result = props.pNext;
+        while (result) {
+            PropertyBase base = *(static_cast<const PropertyBase*>(result));
+            if (base.sType == prop_type) {
+                return result;
+            }
+            result = base.pNext;
+        }
+        return result;
     }
 
     VkBool32 GetSupportedDepthFormat(VkPhysicalDevice physical_device, VkFormat* depth_format) {

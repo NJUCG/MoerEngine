@@ -194,11 +194,20 @@ void RHIBatchedShaderParameters::SetParameters(const Shader* shader, size_t _dat
 
     if (left_size < resource_param_max_size) resource_parameters.reserve(left_size + resource_parameters.size());
     for (const auto& param_info : param_layout_info.GetLayoutInfos()) {
-        RHIResource* data  = GetResource(data_source, param_info.offset);
-        bool         npt   = data;
-        bool         b_set = param_info.IsValid() && IsParameterResource(param_info.type) && data;
+        uint32_t     stride = param_info.stride;
+        uint32_t     num    = stride / sizeof(RHIResource*);
+
+        bool b_set = false;
+        for (uint32_t i = 0; i < num; ++i) {
+            RHIResource* data = GetResource(data_source, param_info.offset + i * sizeof(RHIResource*));
+            b_set |= param_info.IsValid() && IsParameterResource(param_info.type) && data;
+        }
+
         if (b_set) {
-            resource_parameters.emplace_back(RHIShaderResourceParameter(data, param_info.slot, param_info.space));
+            for (uint32_t i = 0; i < num; ++i) {
+                RHIResource* data = GetResource(data_source, param_info.offset + i * sizeof(RHIResource*));
+                resource_parameters.emplace_back(RHIShaderResourceParameter(data, param_info.slot, param_info.space));
+            }
         }
     }
     Moer::Array<RHIShaderConstantParameter> temp_constant;

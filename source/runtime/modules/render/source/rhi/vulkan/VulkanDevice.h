@@ -69,9 +69,6 @@ public:
     inline VkPhysicalDeviceMemoryProperties2 GetMemoryProperties() const {
         return m_gpu_mem_props;
     }
-    inline VkPhysicalDeviceRayTracingPipelinePropertiesKHR GetRayTracingPipelineProperties() const {
-        return m_gpu_rt_props;
-    }
     inline const TExtensionArray& GetGpuExtensions() const {
         return m_gpu_extensions;
     }
@@ -99,7 +96,6 @@ private:
 
     VulkanPhysicalDeviceFeatures                    m_gpu_features;
     VkPhysicalDeviceMemoryProperties2               m_gpu_mem_props;
-    VkPhysicalDeviceRayTracingPipelinePropertiesKHR m_gpu_rt_props;
     TExtensionArray                                 m_gpu_extensions;
     TQueueFamilyPropertiesArray                     m_queue_family_props;
     QueueFamilyIndices                              m_queue_family_indices;

@@ -32,17 +32,20 @@ struct ShaderParameterLayoutInfo {
                               uint16_t             _stride,
                               int8_t               _slot  = -1,
                               int8_t               _space = -1,
+                              int8_t               _num   = -1,
                               EShaderParameterType _type  = EShaderParameterType::UNKNOWN)
         : offset(_offset),
           stride(_stride),
           slot(_slot),
           space(_space),
+          num(_num),
           type(_type) {}
     uint16_t offset;
     uint16_t stride;
 
     int8_t               slot;
     int8_t               space;
+    int8_t               num;
     EShaderParameterType type;
 };
 

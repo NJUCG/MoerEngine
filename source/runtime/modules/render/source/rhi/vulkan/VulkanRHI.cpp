@@ -312,7 +312,7 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
             VkDescriptorSetLayoutBinding binding{};
             binding.binding         = info.slot;
             binding.descriptorType  = VulkanEnumTranslator::METoVKDescriptorType(info.type);
-            binding.descriptorCount = 1;
+            binding.descriptorCount = info.num;
             binding.stageFlags |= VulkanEnumTranslator::METoVKShaderStageFlags(meta_shader->GetShaderType());
             binding.pImmutableSamplers = nullptr;
 
@@ -555,7 +555,7 @@ RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(co
     pipeline_layout_create_info.pushConstantRangeCount = push_constant_ranges.size();
     pipeline_layout_create_info.pPushConstantRanges    = push_constant_ranges.data();
 
-    vkCreatePipelineLayout(m_device->GetDevice(), &pipeline_layout_create_info, nullptr, &vk_pso->m_pipeline_layout);
+    VK_CHECK_RESULT(vkCreatePipelineLayout(m_device->GetDevice(), &pipeline_layout_create_info, nullptr, &vk_pso->m_pipeline_layout));
 
     VkRayTracingPipelineCreateInfoKHR pipeline_create_info{VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR};
     pipeline_create_info.stageCount                   = static_cast<uint32_t>(shader_stages.size());
@@ -575,21 +575,21 @@ RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(co
     uint32_t callable_count = _init.ray_callable_table.size();
     uint32_t handlecount    = 1 + miss_count + hit_count + callable_count;
 
-    VkPhysicalDeviceRayTracingPipelinePropertiesKHR rt_props           = m_device->GetRayTracingPipelineProperties();
-    uint32_t                                        handlesize         = rt_props.shaderGroupHandleSize;
-    uint32_t                                        handlesize_aligned = ALIGNUP(handlesize, rt_props.shaderGroupHandleAlignment);
-    vk_pso->m_raygen_sbt.size                                          = ALIGNUP(handlesize_aligned, rt_props.shaderGroupBaseAlignment);
-    vk_pso->m_raygen_sbt.stride                                        = vk_pso->m_raygen_sbt.size;
-    vk_pso->m_miss_sbt.size                                            = ALIGNUP(handlesize_aligned * miss_count, rt_props.shaderGroupBaseAlignment);
-    vk_pso->m_miss_sbt.stride                                          = handlesize_aligned;
-    vk_pso->m_hit_sbt.size                                             = ALIGNUP(handlesize_aligned * hit_count, rt_props.shaderGroupBaseAlignment);
-    vk_pso->m_hit_sbt.stride                                           = handlesize_aligned;
-    vk_pso->m_callable_sbt.size                                        = ALIGNUP(handlesize_aligned * callable_count, rt_props.shaderGroupBaseAlignment);
-    vk_pso->m_callable_sbt.stride                                      = handlesize_aligned;
+    const auto* rt_props           = static_cast<const VkPhysicalDeviceRayTracingPipelinePropertiesKHR*>(VkUtil::QueryPhysicalDeviceExtensionProps(m_device->GetProperties(), VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR));
+    uint32_t    handlesize         = rt_props->shaderGroupHandleSize;
+    uint32_t    handlesize_aligned = ALIGNUP(handlesize, rt_props->shaderGroupHandleAlignment);
+    vk_pso->m_raygen_sbt.size      = ALIGNUP(handlesize_aligned, rt_props->shaderGroupBaseAlignment);
+    vk_pso->m_raygen_sbt.stride    = vk_pso->m_raygen_sbt.size;
+    vk_pso->m_miss_sbt.size        = ALIGNUP(handlesize_aligned * miss_count, rt_props->shaderGroupBaseAlignment);
+    vk_pso->m_miss_sbt.stride      = handlesize_aligned;
+    vk_pso->m_hit_sbt.size         = ALIGNUP(handlesize_aligned * hit_count, rt_props->shaderGroupBaseAlignment);
+    vk_pso->m_hit_sbt.stride       = handlesize_aligned;
+    vk_pso->m_callable_sbt.size    = ALIGNUP(handlesize_aligned * callable_count, rt_props->shaderGroupBaseAlignment);
+    vk_pso->m_callable_sbt.stride  = handlesize_aligned;
 
     uint32_t             datasize = handlecount * handlesize;
     Moer::Array<uint8_t> data(datasize);
-    vkGetRayTracingShaderGroupHandlesKHR(m_device->GetDevice(), vk_pso->m_pipeline, 0, handlecount, datasize, data.data());
+    VK_CHECK_RESULT(vkGetRayTracingShaderGroupHandlesKHR(m_device->GetDevice(), vk_pso->m_pipeline, 0, handlecount, datasize, data.data()));
 
     //i need a sbt buffer but do not want that type of buffer exposed
     RHIBufferInfo bufferinfo{};
@@ -824,48 +824,65 @@ void VulkanRHIImpl::RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso
     const auto& descriptor_sets          = resource_cache->GetDescriptorSets();
     auto&       writers                  = resource_cache->GetWriters();
 
-    for (const auto& params : _batched_params.GetResourceParameters()) {
+    const auto& resources = _batched_params.GetResourceParameters();
+    for (uint32_t i = 0; i < resources.size(); ++i) {
+        const auto& params       = resources[i];
         const auto  type         = params.resource->GetResourceType();
         const auto& binding_info = descriptor_binding_infos.at(params.space).at(params.slot);
+
+        bool ready_to_write = true;
         if (type == ERHIResourceType::RRT_SAMPLER) {
             // sampler
-            auto* vk_sampler = static_cast<VulkanRHISampler*>(params.resource);
-            VK_CHECK_NULLPTR(vk_sampler, "SetBatchedShaderParameter: sampler is not supported yet!", continue);
-            writers[params.space].WriteSampler(
-                params.space,
-                params.slot,
-                {vk_sampler->GetHandle(), VK_NULL_HANDLE, vk_sampler->GetImageLayout()},
-                binding_info.count,
-                binding_info.type);
-        } else {
-            // view
-            auto* view = static_cast<RHIView*>(params.resource);
-            VK_CHECK_NULLPTR(view, "SetBatchedShaderParameter: resource view is nullptr!", continue);
-
-            if (view->IsBuffer()) {
-                auto* buffer = static_cast<VulkanRHIBuffer*>(view->GetBuffer());
+            Moer::Array<VkDescriptorImageInfo> samplers(binding_info.count);
+            for (int j = 0; j < binding_info.count; ++j) {
+                auto* vk_sampler = static_cast<VulkanRHISampler*>(resources[i + j].resource);
+                VK_CHECK_NULLPTR(vk_sampler, "SetBatchedShaderParameter: sampler is nullptr!", ready_to_write = false; break);
+                samplers[j].sampler     = vk_sampler->GetHandle();
+                samplers[j].imageView   = VK_NULL_HANDLE;
+                samplers[j].imageLayout = vk_sampler->GetImageLayout();
+            }
+            i += binding_info.count;
+            if (ready_to_write) {
+                writers[params.space].WriteSampler(
+                    params.space,
+                    params.slot,
+                    samplers,
+                    binding_info.type);
+            }
+        } else if (type == ERHIResourceType::RRT_BUFFER) {
+            // buffer
+            Moer::Array<VkDescriptorBufferInfo> buffers(binding_info.count);
+            for (int j = 0; j < binding_info.count; ++j) {
+                auto* vk_buffer = static_cast<VulkanRHIBuffer*>(resources[i + j].resource);
+                VK_CHECK_NULLPTR(vk_buffer, "SetBatchedShaderParameter: buffer is nullptr!", ready_to_write = false; break);
+                buffers[j].buffer = vk_buffer->GetHandle();
+                buffers[j].offset = 0;
+                buffers[j].range  = vk_buffer->GetInfo().size;
+            }
+            i += binding_info.count;
+            if (ready_to_write) {
                 writers[params.space].WriteBuffer(
                     params.space,
                     params.slot,
-                    {buffer->GetHandle(), 0, buffer->GetInfo().size},
-                    binding_info.count,
+                    buffers,
                     binding_info.type);
-            } else if (view->IsSRV()) {
-                // MARK: 如何获取Sampler, 参数填充不足
-                auto* texture_srv = static_cast<VulkanRHIShaderResourceView*>(view)->GetView();
+            }
+        } else if (type == ERHIResourceType::RRT_SHADER_RESOURCE_VIEW || type == ERHIResourceType::RRT_UNORDERED_ACCESS_VIEW) {
+            // srv or uav
+            Moer::Array<VkDescriptorImageInfo> images(binding_info.count);
+            for (int j = 0; j < binding_info.count; ++j) {
+                auto* vk_image = static_cast<RHIView*>(resources[i + j].resource);
+                VK_CHECK_NULLPTR(vk_image, "SetBatchedShaderParameter: image is nullptr!", ready_to_write = false; break);
+                images[j].sampler     = VK_NULL_HANDLE;
+                images[j].imageView   = vk_image->IsSRV() ? static_cast<VulkanRHIShaderResourceView*>(vk_image)->GetView() : static_cast<VulkanRHIUnorderedAccessView*>(vk_image)->GetView();
+                images[j].imageLayout = vk_image->IsSRV() ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_GENERAL;
+            }
+            i += binding_info.count;
+            if (ready_to_write) {
                 writers[params.space].WriteImage(
                     params.space,
                     params.slot,
-                    {VK_NULL_HANDLE, texture_srv, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                    binding_info.count,
-                    binding_info.type);
-            } else if (view->IsUAV()) {
-                auto* texture_uav = static_cast<VulkanRHIUnorderedAccessView*>(view)->GetView();
-                writers[params.space].WriteImage(
-                    params.space,
-                    params.slot,
-                    {VK_NULL_HANDLE, texture_uav, VK_IMAGE_LAYOUT_GENERAL},
-                    binding_info.count,
+                    images,
                     binding_info.type);
             }
         }

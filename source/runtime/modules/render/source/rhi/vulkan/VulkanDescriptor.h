@@ -34,7 +34,6 @@ class VulkanDescriptorSetsLayout {
     struct DescriptorBindingInfo {
         VkDescriptorType type;
         uint32_t         count;
-        uint32_t         hash_info_index;
     };
     using TDescriptorBindingInfo = Moer::UnorderedMap<uint8_t, Moer::UnorderedMap<uint32_t, DescriptorBindingInfo>>;
 
@@ -64,7 +63,7 @@ private:
     Moer::Array<VkDescriptorSetLayout> m_layouts;
     TDescriptorCountMap                m_sets_binding_count;
     TDescriptorBindingInfo             m_descriptor_binding_infos;
-    // infos[space][slot] = {type, count, hash_info_index}
+    // infos[space][slot] = {type, count}
 };
 
 class VulkanDescriptorSetAllocator : public VulkanDeviceObject {
@@ -110,9 +109,9 @@ private:
 };
 
 struct VulkanDescriptorSetWriteContainer {
-    Moer::Array<VulkanHashableDescriptorInfo>                              hashable_descriptor_infos;
-    Moer::Array<Moer::Array<VkDescriptorImageInfo>>                        descriptor_image_infos;
-    Moer::Array<Moer::Array<VkDescriptorBufferInfo>>                       descriptor_buffer_infos;
+    Moer::Array<VulkanHashableDescriptorInfo>        hashable_descriptor_infos;
+    Moer::Array<Moer::Array<VkDescriptorImageInfo>>  descriptor_image_infos;
+    Moer::Array<Moer::Array<VkDescriptorBufferInfo>> descriptor_buffer_infos;
     Moer::Array<Moer::Array<VkWriteDescriptorSetAccelerationStructureKHR>> descriptor_as_infos;
     // Moer::Array<VkWriteDescriptorSet>         descriptor_writes;
 };
@@ -125,10 +124,11 @@ public:
 
     void SetDescriptorSet(VkDescriptorSet _set);
 
-    void WriteSampler(uint16_t _set, uint16_t _binding, const VkDescriptorImageInfo& _sampler, uint32_t _count, VkDescriptorType _type);
-    void WriteImage(uint16_t _set, uint16_t _binding, const VkDescriptorImageInfo& _image, uint32_t _count, VkDescriptorType _type);
-    void WriteBuffer(uint16_t _set, uint16_t _binding, const VkDescriptorBufferInfo& _buffer, uint32_t _count, VkDescriptorType _type);
-    void WriteAS(uint16_t _set, uint16_t _binding, const VkWriteDescriptorSetAccelerationStructureKHR& _as, VkDescriptorType _type);
+    void WriteSampler(uint16_t _set, uint16_t _binding, const Moer::Array<VkDescriptorImageInfo>& _sampler, VkDescriptorType _type);
+    void WriteImage(uint16_t _set, uint16_t _binding, const Moer::Array<VkDescriptorImageInfo>& _image, VkDescriptorType _type);
+    void WriteBuffer(uint16_t _set, uint16_t _binding, const Moer::Array<VkDescriptorBufferInfo>& _buffer, VkDescriptorType _type);
+    void WriteAS(uint16_t _set, uint16_t _binding, const Moer::Array<VkWriteDescriptorSetAccelerationStructureKHR>& _as, VkDescriptorType _type);
+
 
     uint32_t GetSetKey() const;
 
@@ -137,15 +137,18 @@ public:
 
 private:
     uint32_t m_hash_info_head;
+    uint32_t m_hash_info_count;
 
     Moer::Array<VkWriteDescriptorSet> m_write_set;
     // <binding, index of write set>
     Moer::UnorderedMap<uint16_t, uint32_t> m_index_of_binding;
+    // <binding, index of hashable info>
+    Moer::UnorderedMap<uint16_t, uint32_t> m_index_of_hash_info;
     // <binding, index of image>
     Moer::UnorderedMap<uint16_t, uint32_t> m_index_of_image;
     // <binding, index of buffer>
     Moer::UnorderedMap<uint16_t, uint32_t> m_index_of_buffer;
-    //<binding, index of as>
+    // <bining, index of as info>
     Moer::UnorderedMap<uint16_t, uint32_t> m_index_of_as;
 
     VulkanPipelineResourceCache* m_cache;

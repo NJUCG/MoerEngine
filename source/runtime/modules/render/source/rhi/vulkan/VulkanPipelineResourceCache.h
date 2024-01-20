@@ -21,13 +21,15 @@ class VulkanPipelineResourceCache {
 public:
     VulkanPipelineResourceCache() = default;
 
-    void UpdateDescriptorSetHashInfo(uint32_t _index, const VulkanHashableDescriptorInfo& _info);
+    void UpdateDescriptorSetHashInfos(uint32_t _index, const Moer::Array<VulkanHashableDescriptorInfo>& _infos);
 
-    const VkDescriptorImageInfo& UpdateDescriptorImageInfo(uint16_t _set, uint16_t _index_of_binding, const VkDescriptorImageInfo& _info);
+    const VkDescriptorImageInfo* UpdateDescriptorImageInfos(uint16_t _set, uint16_t _index_of_binding, const Moer::Array<VkDescriptorImageInfo>& _infos);
 
-    const VkDescriptorBufferInfo& UpdateDescriptorBufferInfo(uint16_t _set, uint16_t _index_of_binding, const VkDescriptorBufferInfo& _info);
+    const VkDescriptorBufferInfo* UpdateDescriptorBufferInfos(uint16_t _set, uint16_t _index_of_binding, const Moer::Array<VkDescriptorBufferInfo>& _infos);
 
-    const VkWriteDescriptorSetAccelerationStructureKHR& UpdateDescriptorASInfo(uint16_t _set, uint16_t _index_of_binding, const VkWriteDescriptorSetAccelerationStructureKHR& _info);
+#if VULKAN_RHI_RAYTRACING
+    const VkWriteDescriptorSetAccelerationStructureKHR& UpdateDescriptorASInfo(uint16_t _set, uint16_t _index_of_binding, const Moer::Array<VkWriteDescriptorSetAccelerationStructureKHR>& _infos);
+#endif
 
     bool UpdateDescriptorSets(VulkanDevice* _device, const VulkanDescriptorSetsLayout* _layout);
 

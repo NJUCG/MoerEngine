@@ -1430,9 +1430,7 @@ VkBufferUsageFlags VulkanRHIBuffer::METoVKBufferUsageFlags(VulkanDevice* _device
     TranslateFlag(EBufferUsageFlags::INDEX_BUFFER, VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
     TranslateFlag(EBufferUsageFlags::STRUCTURED_BUFFER, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
 
-#if VULKAN_RHI_RAYTRACING
     TranslateFlag(EBufferUsageFlags::ACCELERATION_STRUCTURE, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR);
-#endif
 
     TranslateFlag(EBufferUsageFlags::UNORDERED_ACCESS, VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT);
     TranslateFlag(EBufferUsageFlags::INDIRECT_BUFFER, VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT);
@@ -1441,13 +1439,13 @@ VkBufferUsageFlags VulkanRHIBuffer::METoVKBufferUsageFlags(VulkanDevice* _device
 
     TranslateFlag(EBufferUsageFlags::LIFE_CYCLE_ONE_FRAME, 0, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
 
-#if VULKAN_RHI_RAYTRACING
-    if (_device->GetGpuExtensions().HasRaytracingExtensions()) {
-        vk_flags |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-
-        TranslateFlag(EBufferUsageFlags::ACCELERATION_STRUCTURE, 0, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR);
-    }
-#endif
+//#if VULKAN_RHI_RAYTRACING
+//    if (_device->GetGpuExtensions().HasRaytracingExtensions()) {
+//        vk_flags |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+//
+//        TranslateFlag(EBufferUsageFlags::ACCELERATION_STRUCTURE, 0, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR);
+//    }
+//#endif
     // For descriptors buffers
     // if (_device->GetOptionalExtensions().HasBufferDeviceAddress) {
     //     OutVkUsage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
@@ -1477,7 +1475,7 @@ VulkanRHITexture::VulkanRHITexture(const RHITextureCreateInfo& _info, VulkanDevi
 VulkanRHITexture::VulkanRHITexture(const RHITextureCreateInfo& _info, VkImage _image, VulkanDevice* _device)
     : RHITexture(_info),
       VulkanDeviceObject(_device),
-      m_alloc(_image, VK_NULL_HANDLE) {}
+      m_alloc{_image, VK_NULL_HANDLE} {}
 
 VulkanRHITexture::~VulkanRHITexture() {
     if (m_alloc.alloc && m_alloc.image != VK_NULL_HANDLE) {
