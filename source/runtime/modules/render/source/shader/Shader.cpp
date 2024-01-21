@@ -2,18 +2,20 @@
 #include "misc/Hash.h"
 #include "rhi/RHICommon.h"
 #include "shader/ShaderCommon.h"
+#include "shader/ShaderMutation.h"
 #include "shader/ShaderResource.h"
 #include "shader/ShaderResourceManager.h"
 #include <cstring>
 class TestShaderClass : Shader {
+public:
+    class TestBoolMutation : public ShaderMutationBool {};
+    using TMutationSet = TShaderMutationSet<TestBoolMutation>;
     DEFINE_SHADER_TYPE(TestShaderClass, Global, RENDER_API)
 };
 
 IMPLEMENT_SHADER_TYPE(TestReflectionShader, "TestVert.vert", "main", EShaderType::ST_VERTEX);
 
-Shader::Shader(){
-
-};
+Shader::Shader(){};
 
 Shader::Shader(const ShaderCompiledInitializer& initializer)
     : type(initializer.type_info),

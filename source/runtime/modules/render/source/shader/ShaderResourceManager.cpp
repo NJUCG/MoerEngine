@@ -73,10 +73,6 @@ void ShaderResourceManager::PrepareGlobalShaderResources() {
             output));
 
         self.GetShaderTypeMap().AddShader(input.shader_name.c_str(), shader);
-        //test code
-        const auto& param_map = output.parameter_map;
-
-        auto& map = ShaderResourceManager::GetInstance().GetShaderCodeMap();
     });
 }
 

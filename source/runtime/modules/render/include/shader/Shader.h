@@ -3,11 +3,10 @@
 
 //#include "ShaderProxy.h"
 #include "API_Macro.h"
-#include "ShaderCommon.h"
 #include "math/Base.h"
 #include "math/Matrix.h"
 #include "rhi/RHICommon.h"
-#include "shader/ShaderCommon.h"
+#include "shader/ShaderMutation.h"
 #include "shader/ShaderParameterMacros.h"
 
 #include <cstdint>
@@ -75,6 +74,7 @@ class Shader {
     friend class ShaderMetaType;
 
 public:
+    using TMutationSet = TShaderMutationSetsEmpty;
     RENDER_API Shader();
 
     RENDER_API Shader(const ShaderCompiledInitializer& intializer);
