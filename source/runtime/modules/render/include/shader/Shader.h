@@ -74,7 +74,7 @@ class Shader {
     friend class ShaderMetaType;
 
 public:
-    using TMutationSet = TShaderMutationSetsEmpty;
+    using TMutationSet = TShaderMutationSetEmpty;
     RENDER_API Shader();
 
     RENDER_API Shader(const ShaderCompiledInitializer& intializer);

@@ -120,7 +120,7 @@ namespace Moer {
         render_fence = g_rhi->RHICreateFence({.usage = EFenceUsageFlags::TIMELINE});
 
         //test draw triangle
-        float vertices[] = {
+        static float vertices[] = {
             -0.5f,
             -0.5f,
             0.0f,

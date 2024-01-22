@@ -5,6 +5,7 @@
 #include "rhi/RHIResource.h"
 #include <cstdint>
 #include <functional>
+#include <variant>
 
 #include "misc/MacroUtils.h"
 
@@ -371,6 +372,7 @@ struct ShaderCompilerOutput {
     ShaderCompilerOutput& operator=(ShaderCompilerOutput&&)      = default;
     ShaderCompilerOutput& operator=(const ShaderCompilerOutput&) = default;
 };
+
 /**
  * @brief ALL Compiled information needed for Shader Type Creation
  * 
@@ -390,12 +392,93 @@ struct ShaderCompiledInitializer {
     );
 };
 
-struct ShaderCompilerInput {
+class ShaderCompilerDefines {
+public:
+    ShaderCompilerDefines() {
+        defines.reserve(32);
+    }
 
-    ShaderTargetInfo target_info;
-    std::string      entry_point;
-    std::string      relative_source_file_path;
-    std::string      shader_name;
+    void SetDefine(std::string_view _key, const std::string& _value) {
+        auto& value = defines[_key.data()];
+        value       = _value;
+    }
+
+    void SetDefine(std::string_view _key, const char* _value) {
+        auto& value = defines[_key.data()];
+        value       = _value;
+    }
+
+    void SetDefine(std::string_view _key, const int32_t _value) {
+        auto& value = defines[_key.data()];
+        value       = std::to_string(_value);
+    }
+
+    void SetDefine(std::string_view _key, const uint32_t _value) {
+        auto& value = defines[_key.data()];
+        value       = std::to_string(_value);
+    }
+
+    void SetDefine(std::string_view _key, const float _value) {
+        auto& value = defines[_key.data()];
+        value       = std::to_string(_value);
+    }
+
+    void SetDefine(std::string_view _key, const bool _value) {
+        auto& value = defines[_key.data()];
+        value       = std::to_string(_value);
+    }
+
+    void Merge(const ShaderCompilerDefines& _other) {
+
+        defines.insert(_other.defines.begin(), _other.defines.end());
+    }
+
+private:
+    Moer::UnorderedMap<std::string, std::string> defines;
+};
+
+template<typename TMaroType>
+concept MacroType = requires(TMaroType _type) {
+    std::is_same_v<TMaroType, uint32_t> ||
+        std::is_same_v<TMaroType, int32_t> ||
+        std::is_same_v<TMaroType, bool> ||
+        std::is_same_v<TMaroType, float> ||
+        std::is_same_v<TMaroType, std::string>;
+};
+struct ShaderCompilerEnvironment {
+public:
+    ShaderCompilerEnvironment() {
+        compiler_args.reserve(32);
+    }
+    template<MacroType TValue>
+    void SetDefine(std::string_view _key, const TValue& _value) {
+        macro_defines.SetDefine(_key, _value);
+    }
+    void Merge(const ShaderCompilerEnvironment& _other) {
+        compiler_args.insert(_other.compiler_args.begin(), _other.compiler_args.end());
+        macro_defines.Merge(_other.macro_defines);
+    }
+    template<MacroType TValue>
+    void SetCompileArg(std::string_view _key, const TValue& _value) {
+        compiler_args[_key.data()] = _value;
+    }
+
+    bool HasCompileArg(std::string_view _key) const {
+        return compiler_args.count(_key.data()) > 0;
+    }
+
+private:
+    ShaderCompilerDefines macro_defines;
+
+    Moer::UnorderedMap<std::string, std::variant<uint32_t, int32_t, bool, float, std::string>> compiler_args;
+};
+
+struct ShaderCompilerInput {
+    ShaderCompilerEnvironment compile_environment;
+    ShaderTargetInfo          target_info;
+    std::string               entry_point;
+    std::string               relative_source_file_path;
+    std::string               shader_name;
 
     const ShaderParametersMetadata* param_meta_data;
 };
