@@ -211,7 +211,7 @@ namespace Moer {
     void Camera::Tick(){
         if(wndInput.mouseEnterScreen){
             // update only when is dirty
-            if(this->IsDirty()){
+            if(!this->IsDirty()){
                 // fov & aspect_ratio
                 this->SetFov(wndInput.fov);
                 this->SetAspectRatio(wndInput.aspect_ratio);
