@@ -16,4 +16,6 @@ cmake-build-*/
 .vscode/launch.json
 .vscode/settings.json
 
+./阅读.md
+
 logs/
