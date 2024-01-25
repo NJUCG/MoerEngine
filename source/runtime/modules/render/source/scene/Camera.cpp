@@ -32,12 +32,13 @@
 // }
 
 
-
-
 namespace Moer {
+    extern WindowInput& wndInput;
+
     float Camera::sensitivity       = 0.5f;
     float Camera::sensitivity_scale = 1.f;
 
+    //相机空间下的坐标轴
     Vector3f Camera::X = Vector3f(1.f, 0.f, 0.f);
     Vector3f Camera::Y = Vector3f(0.f, 1.f, 0.f);
     Vector3f Camera::Z = Vector3f(0.f, 0.f, 1.f);
@@ -76,16 +77,16 @@ namespace Moer {
                 m_proj);
             m_projection_dirty = false;
         }
-        return m_proj;
+        return m_proj;    //camera to screen
     }
 
     Matrix4x4f Camera::GetToWorldMatrix() noexcept {
         if (m_to_world_dirty) {
-            m_view           = m_rotate * MakeTranslation(-m_position.x, -m_position.y, -m_position.z);
+            m_view           = m_rotate * MakeTranslation(-m_position.x, -m_position.y, -m_position.z);     //world to camera
             m_to_world       = Inverse(m_view);
             m_to_world_dirty = false;
         }
-        return m_to_world;
+        return m_to_world;  //camera to world
     }
 
     Matrix4x4f Camera::GetViewMatrix() noexcept {
@@ -94,7 +95,7 @@ namespace Moer {
             m_to_world       = Inverse(m_view);
             m_to_world_dirty = false;
         }
-        return m_view;
+        return m_view;  //world to camera
     }
 
     void Camera::SetProjectionFactor(float fov_y, float aspect_ratio, float near_clip, float far_clip) noexcept {
@@ -141,8 +142,9 @@ namespace Moer {
         }
     }
 
+    //为啥不直接用inverse得到m_view？
     void Camera::SetWorldTransform(Transform to_world) noexcept {
-        m_to_world   = to_world.GetMatrix4x4();
+        m_to_world   = to_world.GetMatrix4x4();     //cam 2 world
         m_position.x = m_to_world[0].w;
         m_position.y = m_to_world[1].w;
         m_position.z = m_to_world[2].w;
@@ -155,21 +157,21 @@ namespace Moer {
         m_rotate_inv = Transpose(m_rotate);
 
         m_view = m_rotate *
-                 MakeTranslation(-m_position.x, -m_position.y, -m_position.z);
+                 MakeTranslation(-m_position.x, -m_position.y, -m_position.z);  //world 2 cam
 
         m_to_world_dirty = false;
     }
 
     void Camera::MoveForward(float delta) {
-        Vector3f t           = Z * Vector3f(delta);
-        t                = Vector3f(m_rotate_inv * Vector4f(t * sensitivity * sensitivity_scale, 0.f));
+        Vector3f t       = Z * Vector3f(delta);                                                          //相机空间
+        t                = -Vector3f(m_rotate_inv * Vector4f(t * sensitivity * sensitivity_scale, 0.f)); //变到世界空间(考虑相机z对应的世界空间-z，向右x，上y，前z)
         auto translation = MakeTranslation(t.x, t.y, t.z);
         m_position       = Vector3f(translation * Vector4f(m_position, 1.f));
         m_to_world_dirty = true;
     }
 
     void Camera::MoveRight(float delta) {
-        Vector3f t           = X * Vector3f(delta);
+        Vector3f t       = X * Vector3f(delta);
         t                = Vector3f(m_rotate_inv * Vector4f(t * sensitivity * sensitivity_scale, 0.f));
         auto translation = MakeTranslation(t.x, t.y, t.z);
         m_position       = Vector3f(translation * Vector4f(m_position, 1.f));
@@ -177,7 +179,7 @@ namespace Moer {
     }
 
     void Camera::MoveUp(float delta) {
-        Vector3f t           = Y * Vector3f(delta);
+        Vector3f t       = Y * Vector3f(delta);
         t                = Vector3f(m_rotate_inv * Vector4f(t * sensitivity * sensitivity_scale, 0.f));
         auto translation = MakeTranslation(t.x, t.y, t.z);
         m_position       = Vector3f(translation * Vector4f(m_position, 1.f));
@@ -187,8 +189,9 @@ namespace Moer {
     void Camera::UpdateRotation(float delta_x, float delta_y) {
         // Quaternion pitch(X, Angle::MakeFromDegree(delta_x * sensitivity * sensitivity_scale));
         // Quaternion yaw(Y, Angle::MakeFromDegree(delta_y * sensitivity * sensitivity_scale));
-        Quaternion pitch(X, Angle::MakeFromDegree(delta_x * 0.05f));
-        Quaternion yaw(Y, Angle::MakeFromDegree(delta_y * 0.05f));
+
+        Quaternion pitch(X, Angle::MakeFromDegree(delta_x * 0.15f));
+        Quaternion yaw(Y, Angle::MakeFromDegree(delta_y * 0.15f));
 
         m_rotate =
             FillDiagonal4x4(pitch.GetRotation(), 1.f) *
@@ -198,10 +201,58 @@ namespace Moer {
         m_rotate_inv     = Transpose(m_rotate);
         m_to_world_dirty = true;
     }
-    
 
+    void Camera::SpinZ(float angle) {
+
+        m_to_world_dirty = true;
+    }
+
+    //变换相机的位置以及朝向：m_to_world_dirty变为true
+    //变换fov，远近平面，aspect_ratio：m_projection_dirty变为true
     bool Camera::IsDirty() const {
         return m_projection_dirty | m_to_world_dirty;
+    }
+
+    void Camera::Tick(){
+        if(wndInput.mouseEnterScreen){
+            // fov & aspect_ratio
+            this->SetFov(wndInput.fov);
+            this->SetAspectRatio(wndInput.aspect_ratio);
+
+            // camera speed
+            if(wndInput.speedUp){
+                wndInput.cameraSpeed += 5.0f;
+            }
+            if(wndInput.speedDown){
+                wndInput.cameraSpeed -= 2.5f;
+                if(wndInput.cameraSpeed < 0.f)
+                    wndInput.cameraSpeed = 0.f;
+            }
+            if(wndInput.resetSpeed){
+                wndInput.cameraSpeed = 5000.f;
+            }
+
+            // movement
+            if(wndInput.camera_forward)
+                this->MoveForward(wndInput.cameraSpeed * wndInput.deltaTime);
+            if(wndInput.camera_backward)
+                this->MoveForward(-wndInput.cameraSpeed * wndInput.deltaTime);
+            if(wndInput.camera_left)
+                this->MoveRight(-wndInput.cameraSpeed * wndInput.deltaTime);
+            if(wndInput.camera_right)
+                this->MoveRight(wndInput.cameraSpeed * wndInput.deltaTime);
+            if(wndInput.camera_up)
+                this->MoveUp(wndInput.cameraSpeed * wndInput.deltaTime);
+            if(wndInput.camera_down)
+                this->MoveUp(-wndInput.cameraSpeed * wndInput.deltaTime);
+            
+            // rotation
+            if(wndInput.deltaX || wndInput.deltaY){
+                this->UpdateRotation(wndInput.deltaY, -wndInput.deltaX);
+                wndInput.deltaX = 0;
+                wndInput.deltaY = 0;
+            }
+        }
     }
 
 }// namespace Bee

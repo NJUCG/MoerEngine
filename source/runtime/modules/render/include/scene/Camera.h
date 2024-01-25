@@ -3,6 +3,7 @@
 #include "math/Transform.h"
 #include "misc/CountableRef.h"
 #include "RenderAPI.h"
+#include "window/WindowInput.h"
 
 namespace Moer {
     class RENDER_API Camera : public CountableResource {
@@ -33,11 +34,14 @@ namespace Moer {
         void MoveRight(float);
         void MoveUp(float);
         void UpdateRotation(float, float);
+        void SpinZ(float);
 
-        bool IsDirty() const;
+        bool IsDirty() const;       //脏标记，用于判断是否发生了变化，未变化的话直接使用上一帧缓存的变换
+
+        void Tick();    //动态更新camera
 
     private:
-        Matrix4x4f m_view_matrix;
+        Matrix4x4f m_view_matrix;   //视图变换矩阵
 
         float m_fov_y;//degree
         float m_aspect_ratio;
@@ -46,8 +50,8 @@ namespace Moer {
 
         Vector3f m_position;
 
-        Matrix4x4f m_rotate;
-        Matrix4x4f m_rotate_inv;
+        Matrix4x4f m_rotate;    //world 2 cam 的旋转
+        Matrix4x4f m_rotate_inv;    //cam 2 world
 
         bool       m_to_world_dirty = true;
         Matrix4x4f m_to_world;// camera to world

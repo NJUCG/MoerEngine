@@ -69,6 +69,9 @@ namespace Moer {
     void EngineLoop::ProcessInputEvents() {
         //window io tick
         WindowContext::Tick();
+
+        //update camera (in DrawFrame func)
+        // mainCam->Tick();
     }
 
     bool EngineLoop::ShouldEndLoop() {

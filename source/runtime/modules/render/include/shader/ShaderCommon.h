@@ -474,7 +474,8 @@ private:
 };
 
 struct ShaderCompilerInput {
-    ShaderCompilerEnvironment compile_environment;
+    
+    // ShaderCompilerEnvironment compile_environment;
     ShaderTargetInfo          target_info;
     std::string               entry_point;
     std::string               relative_source_file_path;
