@@ -43,10 +43,10 @@ class RHIMeshShader;
 class RHIPipelineBinaryDataLibrary;
 class RHIFragmentShader;
 class RHIRasterizationState;
-class RHIRayTracingGeometry;
 class RHIRayTracingPipelineState;
-class RHIRayTracingScene;
 class RHIRayTracingAccelerationStructure;
+class RHIRayTracingBLAS;
+class RHIRayTracingTLAS;
 class RHIRayTracingShader;
 class RHIRayGenShader;
 class RHIRayMissShader;
@@ -93,9 +93,9 @@ using RHIMeshShaderRef                = CountableRef<RHIMeshShader>;
 using RHIPipelineBinaryDataLibraryRef = CountableRef<RHIPipelineBinaryDataLibrary>;
 using RHIFragmentShaderRef            = CountableRef<RHIFragmentShader>;
 using RHIRasterizationStateRef        = CountableRef<RHIRasterizationState>;
-using RHIRayTracingGeometryRef        = CountableRef<RHIRayTracingGeometry>;
+using RHIRayTracingBLASRef            = CountableRef<RHIRayTracingBLAS>;
+using RHIRayTracingTLASRef            = CountableRef<RHIRayTracingTLAS>;
 using RHIRayTracingPipelineStateRef   = CountableRef<RHIRayTracingPipelineState>;
-using RHIRayTracingSceneRef           = CountableRef<RHIRayTracingScene>;
 using RHIRayTracingShaderRef          = CountableRef<RHIRayTracingShader>;
 using RHIRayGenShaderRef              = CountableRef<RHIRayGenShader>;
 using RHIRayMissShaderRef             = CountableRef<RHIRayMissShader>;
@@ -2088,7 +2088,7 @@ public:
     Moer::Array<RHIRayMissShader*>     ray_miss_table;
     Moer::Array<RHIRayHitGroup>        ray_hit_table;
     Moer::Array<RHIRayCallableShader*> ray_callable_table;
-    
+
     uint32_t max_ray_recursion_depth = 2;
 };
 
@@ -2397,6 +2397,8 @@ enum class ERayTracingGeometryFlags : uint8_t {
     GEOMETRY_OPAQUE                 = 1 << 0,
     NO_DUPLICATE_ANY_HIT_INVOCATION = 1 << 1
 };
+ENUM_BIT_OP_IMPL(ERayTracingGeometryFlags, FLAG)
+
 enum class ERayTracingInstanceFlags : uint8_t {
     NONE,
     TRIANGLE_CULL_DISABLE = 1 << 0,
@@ -2405,6 +2407,8 @@ enum class ERayTracingInstanceFlags : uint8_t {
     FORCE_OPAQUE                    = 1 << 2,
     FORCE_NO_OPAQUE                 = 1 << 3
 };
+ENUM_BIT_OP_IMPL(ERayTracingInstanceFlags, FLAG)
+
 enum class ERayTracingAccelerationStructureBuildFlags : uint8_t {
     NONE,
     ALLOW_UPDATE      = 1 << 0,
@@ -2414,6 +2418,7 @@ enum class ERayTracingAccelerationStructureBuildFlags : uint8_t {
     MINIMIZE_MEMORY   = 1 << 4
 
 };
+ENUM_BIT_OP_IMPL(ERayTracingAccelerationStructureBuildFlags, FLAG)
 
 enum class ERayTracingAccelerationStructureCopyMode : uint8_t {
     CLONE       = 0,
@@ -2427,16 +2432,20 @@ enum class ERayTracingAccelerationStructureType {
     BOTTOM_LEVEL = 0x1
 };
 
-enum class ERayTracingGeometryInitializerUsage : uint8_t {
-    // create buffer and shader params, ready for later usages
-    FULL_INITIALIZE,
-    // no buffer or shader params, used by streaming system to stream into
-    INTERMEDIATE_DST,
-    // buffer created but not shader params, use for steaming system intermediate data transfer
-    INTERMEDIATE_SRC
-};
+//enum class ERayTracingGeometryInitializerUsage : uint8_t {
+//    // create buffer and shader params, ready for later usages
+//    FULL_INITIALIZE,
+//    // no buffer or shader params, used by streaming system to stream into
+//    INTERMEDIATE_DST,
+//    // buffer created but not shader params, use for steaming system intermediate data transfer
+//    INTERMEDIATE_SRC
+//};
 
 #pragma region ray -tracing
+
+struct RHITransformMatrix {
+    float matrix[3][4];
+};
 
 struct RayTracingAccelerationStructureSizeInfo {
     uint64_t result_size         = 0;
@@ -2444,140 +2453,96 @@ struct RayTracingAccelerationStructureSizeInfo {
     uint64_t update_scratch_size = 0;
 };
 
-struct RayTracingGeometryElement {
+struct RHIRayTracingTrianglesGeometry {
     RHIBufferRef vertex_buffer;
+    uint64_t     vertex_buffer_stride;
+    uint32_t     max_vertex_count;
+    EPixelFormat vertex_element_type = PF_R32G32B32_SFLOAT;
 
-    uint64_t vertex_offset;
+    RHIBufferRef             index_buffer;
+    EIndexElementType        index_element_type = IET_UINT16;
+    ERayTracingGeometryFlags geometry_flags     = ERayTracingGeometryFlags::NONE;
 
-    uint64_t vertex_buffer_stride;
-
-    uint32_t max_vertex_count;
-    uint32_t start_primitive_id;
-
-    uint32_t num_primitives;
-
-    EPixelFormat             vertex_element_type = PF_R32G32B32_SFLOAT;
-    ERayTracingGeometryFlags geometry_flags      = ERayTracingGeometryFlags::NONE;
-    bool                     enabled;
-    uint8_t                  padding_0;
+    RHIBufferRef transform_buffer;
 };
-static_assert(sizeof(RayTracingGeometryElement) == 40);
+struct RHIRayTracingAABBsGeometry {
+    //TODO:implement RHI RayTracing Geometry: AABB
+};
 
-struct RayTracingGeometryInitializer {
-    Moer::Array<RayTracingGeometryElement> elements;
-
-    RHIBufferRef index_buffer;
-
-    uint64_t index_offset;
-
+struct RHIRayTracingBLASGeometry {
+    struct {
+        RHIRayTracingTrianglesGeometry triangles;
+        RHIRayTracingAABBsGeometry     aabbs;
+    } geometry;
     ERayTracingGeometryType  geo_type = ERayTracingGeometryType::RTGT_TRIANGLES;
     ERayTracingGeometryFlags flags;
-
-    ERayTracingGeometryInitializerUsage        usage;
-    ERayTracingAccelerationStructureBuildFlags build_flags;
-
-    uint32_t max_primitive_count = 0;
-
-    // opt: for intermediate usage
-    RHIRayTracingGeometry* src_geometry;
 };
 
-struct Matrix {
-    float matrix[3][4];
+struct RHIRayTracingBLASGeometryRangeInfo {
+    uint32_t first_vertex;
+    uint32_t primtive_offset;
+    uint32_t primitive_count;
+    uint32_t transform_offset;
 };
-struct RayTracingGeometryInstance {
 
-    //BLAS
-    RHIRayTracingGeometry* p_geometry;
+struct RHIRayTracingBLASInitializer {
+    Moer::Array<RHIRayTracingBLASGeometry>          geometries;
+    Moer::Array<RHIRayTracingBLASGeometryRangeInfo> range_infos;
+    ERayTracingAccelerationStructureBuildFlags      build_flags;
+};
 
-    // a mesh may have multiple instances
-    Moer::Array<Matrix>& transforms;
+struct RHIRayTracingInstance {
 
-    Moer::Array<uint32_t> scene_instance_data_offsets;
-
-    RHIShaderResourceViewRef transform_data_srv = nullptr;
-    uint32_t                 num_transforms;
-
-    uint32_t              default_index = 0;
-    Moer::Array<uint32_t> custom_index;
-
-    //sum of previous geo elements, for calculating offset in sbt(prev_element_count * shader_slot_per_element)
-    Moer::Array<uint32_t> prev_element_count;
-
-    //each geo copy have one bit
-    Moer::Array<std::bitset<32>> activation_masks;
-
-    uint32_t instance_mask : 8;
-
+    RHITransformMatrix       transform;
+    uint32_t                 custom_index : 24;
+    uint32_t                 instance_mask : 8;
+    uint32_t                 instance_sbt_offset : 24;
     ERayTracingInstanceFlags flags = ERayTracingInstanceFlags::NONE;
+    RHIRayTracingBLASRef     blas;
 };
-
-struct RayTracingSceneInitializer {
-    Moer::Array<RHIRayTracingGeometryRef> scene_geometries;
-
-    Moer::Array<RHIRayTracingGeometry*> instance_geometries;
-
-    Moer::Array<uint32_t> instance_previous_transform_sum;
-
-    Moer::Array<uint32_t> instance_previous_element_sum;
-
-    // to support multi-layer ray-tracing: certain instance may exist on certain layer/layers
-    Moer::Array<uint32_t> instance_count_per_layer;
-    uint32_t              num_total_elements;
-
-    uint32_t shader_slots_per_geometry_element;
-
-    uint32_t callable_shader_slot_num;
-
-    uint32_t miss_shader_slot_num = 1;
-
-    RayTracingSceneInitializer()                                        = default;
-    RayTracingSceneInitializer(RayTracingSceneInitializer&&)            = default;
-    RayTracingSceneInitializer& operator=(RayTracingSceneInitializer&&) = default;
+struct RHIRayTracingTLASInitializer {
+    Moer::Array<RHIRayTracingInstance>         instances;
+    ERayTracingAccelerationStructureBuildFlags build_flags;
 };
 
 class RHIRayTracingAccelerationStructure : public RHIResource {
 public:
-    RHIRayTracingAccelerationStructure() : RHIResource(RRT_RAYTRACING_ACCELERATION_STRUCTURE) {
+    RHIRayTracingAccelerationStructure(ERayTracingAccelerationStructureType _as_type) : RHIResource(RRT_RAYTRACING_ACCELERATION_STRUCTURE), as_type(_as_type) {
     }
 
-    //create result info
     RayTracingAccelerationStructureSizeInfo GetSize() const {
         return size_info;
     }
+    ERayTracingAccelerationStructureType GetType() const {
+        return as_type;
+    }
+
+private:
+    int x;
 
 protected:
+    ERayTracingAccelerationStructureType    as_type{};
     RayTracingAccelerationStructureSizeInfo size_info{};
 };
 
-class RHIRayTracingGeometry : RHIRayTracingAccelerationStructure {
+class RHIRayTracingBLAS : public RHIRayTracingAccelerationStructure {
 public:
-    RHIRayTracingGeometry() = default;
-    RHIRayTracingGeometry(const RayTracingGeometryInitializer& _init)
-        : initializer(_init),
-          usage(_init.usage) {}
-
-    virtual void SetInitializer(const RayTracingGeometryInitializer& init) {
-        initializer = init;
-    }
-    const RayTracingGeometryInitializer& GetInitializer() { return initializer; }
-
-    uint32_t GetElementCount() {
-        return initializer.elements.size();
-    }
+    RHIRayTracingBLAS(const RHIRayTracingBLASInitializer& _init) : RHIRayTracingAccelerationStructure(ERayTracingAccelerationStructureType::BOTTOM_LEVEL),
+                                                                   initializer(_init) {}
+    const RHIRayTracingBLASInitializer& GetInitializer() const { return initializer; }
 
 protected:
-    RayTracingGeometryInitializer       initializer{};
-    ERayTracingGeometryInitializerUsage usage = ERayTracingGeometryInitializerUsage::FULL_INITIALIZE;
+    RHIRayTracingBLASInitializer initializer{};
 };
 
-class RHIRayTracingScene : RHIResource {
+class RHIRayTracingTLAS : public RHIRayTracingAccelerationStructure {
 public:
-    RHIRayTracingScene() : RHIResource(RRT_RAYTRACING_SCENE) {}
+    RHIRayTracingTLAS(const RHIRayTracingTLASInitializer& _init) : RHIRayTracingAccelerationStructure(ERayTracingAccelerationStructureType::TOP_LEVEL),
+                                                                   initializer(_init) {}
+    const RHIRayTracingTLASInitializer& GetInitializer() const { return initializer; }
 
-    virtual const RayTracingGeometryInitializer& GetInitializer() const = 0;
-    //for multi-layer ray-tracing
-    virtual uint32_t GetLayerBufferOffset(uint32_t LayerIndex) const = 0;
+protected:
+    RHIRayTracingTLASInitializer initializer{};
 };
 
 #pragma endregion

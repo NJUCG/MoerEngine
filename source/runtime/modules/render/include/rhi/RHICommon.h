@@ -389,12 +389,16 @@ enum class EBufferUsageFlags : uint32_t {
     /** Allows buffer to be used as a scratch buffer for building ray tracing acceleration structure,
 	 * which implies unordered access. Only changes the buffer alignment and can be combined with other usage.
 	**/
-    ACCELERATION_STRUCTURE_STORAGE = (1 << 21) | UNORDERED_ACCESS,
+    ACCELERATION_STRUCTURE_SCRATCH = 1 << 21,
 
     TRANSFER_DST = 1 << 22,
 
+    /** Buffer that is used to a store shader binding table which is a series of shader group handles*/
+    SHADER_BINDING_TABLE = 1 << 23,
+
     // Helper bit-masks
     DYNAMIC = (LIFE_CYCLE_DYNAMIC | LIFE_CYCLE_ONE_FRAME),
+
 };
 
 ENUM_BIT_OP_IMPL(EBufferUsageFlags, FLAG)

@@ -377,12 +377,11 @@ RHIComputePipelineStateRef VulkanRHIImpl::RHICreateComputePipelineState(RHICompu
 
 RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(const RHIRayTracingPipelineStateInitializer& _init) {
 
-#define CHECK(ptr, msg)    \
-    if (!ptr) {            \
-        LOG_CRITICAL(msg); \
-    }
+    static auto vkCreateRayTracingPipelinesKHR       = reinterpret_cast<PFN_vkCreateRayTracingPipelinesKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkCreateRayTracingPipelinesKHR"));
+    static auto vkGetRayTracingShaderGroupHandlesKHR = reinterpret_cast<PFN_vkGetRayTracingShaderGroupHandlesKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkGetRayTracingShaderGroupHandlesKHR"));
+    VK_CHECK_NULLPTR(vkCreateRayTracingPipelinesKHR, "RHICreateRayTracingPipelineState: vkCreateRayTracingPipelinesKHR is nullptr", return RHIRayTracingPipelineStateRef{});
+    VK_CHECK_NULLPTR(vkGetRayTracingShaderGroupHandlesKHR, "RHICreateRayTracingPipelineState: vkGetRayTracingShaderGroupHandlesKHR is nullptr", return RHIRayTracingPipelineStateRef{});
 
-    VulkanRHIRayTracingPipelineState* vk_pso = new VulkanRHIRayTracingPipelineState();
     // shader stage & shader groups & shader infos
 
     Moer::Array<const Shader*> shader_info_list;
@@ -403,7 +402,7 @@ RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(co
 
     if (_init.ray_gen_shader) {
         auto* vk_shader = static_cast<VulkanRHIRayGenShader*>(_init.ray_gen_shader);
-        CHECK(vk_shader, "RHICreateRayTracingPipelineState: bad raygen shader which is not a vulkan shader!");
+        VK_CHECK_NULLPTR(vk_shader, "init raytracingpipelinestate with null raygen shader", return RHIRayTracingPipelineStateRef());
 
         shader_info_list.push_back(vk_shader->GetMetaShader());
 
@@ -420,7 +419,7 @@ RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(co
     }
     for (const auto& ray_miss_shader : _init.ray_miss_table) {
         auto* vk_shader = static_cast<VulkanRHIRayMissShader*>(ray_miss_shader);
-        CHECK(vk_shader, "RHICreateRayTracingPipelineState: bad miss shader which is not a vulkan shader!");
+        VK_CHECK_NULLPTR(vk_shader, "init raytracingpipelinestate with null raymiss shader", return RHIRayTracingPipelineStateRef());
 
         shader_info_list.push_back(vk_shader->GetMetaShader());
 
@@ -439,7 +438,7 @@ RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(co
         shader_group_create_info.type = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
         if (ray_hit_group.closesthit_shader) {
             auto* vk_shader = static_cast<VulkanRHIRayClosestHitShader*>(ray_hit_group.closesthit_shader);
-            CHECK(vk_shader, "RHICreateRayTracingPipelineState: bad closesthit shader which is not a vulkan shader!");
+            VK_CHECK_NULLPTR(vk_shader, "init raytracingpipelinestate with null closesthit shader", return RHIRayTracingPipelineStateRef());
 
             shader_info_list.push_back(vk_shader->GetMetaShader());
 
@@ -453,7 +452,7 @@ RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(co
         }
         if (ray_hit_group.anyhit_shader) {
             auto* vk_shader = static_cast<VulkanRHIRayAnyhitShader*>(ray_hit_group.anyhit_shader);
-            CHECK(vk_shader, "RHICreateRayTracingPipelineState: bad anyhit shader which is not a vulkan shader!");
+            VK_CHECK_NULLPTR(vk_shader, "init raytracingpipelinestate with null anyhit shader", return RHIRayTracingPipelineStateRef());
 
             shader_info_list.push_back(vk_shader->GetMetaShader());
 
@@ -467,7 +466,7 @@ RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(co
         }
         if (ray_hit_group.intersection_shader) {
             auto* vk_shader = static_cast<VulkanRHIRayIntersectionShader*>(ray_hit_group.intersection_shader);
-            CHECK(vk_shader, "RHICreateRayTracingPipelineState: bad intersection shader which is not a vulkan shader!");
+            VK_CHECK_NULLPTR(vk_shader, "init raytracingpipelinestate with null intersection shader", return RHIRayTracingPipelineStateRef());
             shader_stage_create_info.stage = VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
 
             shader_info_list.push_back(vk_shader->GetMetaShader());
@@ -485,7 +484,7 @@ RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(co
     }
     for (const auto& ray_callable_shader : _init.ray_callable_table) {
         auto* vk_shader = static_cast<VulkanRHIRayCallableShader*>(ray_callable_shader);
-        CHECK(vk_shader, "RHICreateRayTracingPipelineState: bad miss shader which is not a vulkan shader!");
+        VK_CHECK_NULLPTR(vk_shader, "init raytracingpipelinestate with null raycallable shader", return RHIRayTracingPipelineStateRef());
 
         shader_info_list.push_back(vk_shader->GetMetaShader());
 
@@ -540,6 +539,7 @@ RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(co
         }
     }
 
+    VulkanRHIRayTracingPipelineState* vk_pso = new VulkanRHIRayTracingPipelineState();
     // generate descriptor set layouts
     vk_pso->CreateResourceCache();
     vk_pso->GenerateDescriptorSetLayouts(m_device, layout_mappings);
@@ -591,32 +591,19 @@ RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(co
     Moer::Array<uint8_t> data(datasize);
     VK_CHECK_RESULT(vkGetRayTracingShaderGroupHandlesKHR(m_device->GetDevice(), vk_pso->m_pipeline, 0, handlecount, datasize, data.data()));
 
-    //i need a sbt buffer but do not want that type of buffer exposed
-    RHIBufferInfo bufferinfo{};
-    bufferinfo.size            = vk_pso->m_raygen_sbt.size + vk_pso->m_miss_sbt.size + vk_pso->m_hit_sbt.size + vk_pso->m_callable_sbt.size;
-    VulkanRHIBuffer* vk_buffer = new VulkanRHIBuffer(bufferinfo);
+    RHIBufferCreateInfo sbt_buffer_ci{};
+    sbt_buffer_ci.size   = vk_pso->m_raygen_sbt.size + vk_pso->m_miss_sbt.size + vk_pso->m_hit_sbt.size + vk_pso->m_callable_sbt.size;
+    sbt_buffer_ci.usage  = EBufferUsageFlags::SHADER_BINDING_TABLE;
+    sbt_buffer_ci.stride = sbt_buffer_ci.size;
+    vk_pso->m_sbt_buffer = RHICreateBuffer(sbt_buffer_ci);
 
-    VkBufferCreateInfo buffer_create_info{};
-    buffer_create_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    buffer_create_info.pNext = nullptr;
-    buffer_create_info.flags = 0;
-    buffer_create_info.size  = bufferinfo.size;
-    // add device address flag for addressing buffer with 64-bit address
-    buffer_create_info.usage                 = VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-    buffer_create_info.sharingMode           = VK_SHARING_MODE_EXCLUSIVE;
-    buffer_create_info.queueFamilyIndexCount = 0;
-    buffer_create_info.pQueueFamilyIndices   = nullptr;
+    VkDeviceAddress sbt_buffer_device_address = GetDeviceAddress(vk_pso->m_sbt_buffer);
+    vk_pso->m_raygen_sbt.deviceAddress        = sbt_buffer_device_address;
+    vk_pso->m_miss_sbt.deviceAddress          = sbt_buffer_device_address + vk_pso->m_raygen_sbt.size;
+    vk_pso->m_hit_sbt.deviceAddress           = sbt_buffer_device_address + vk_pso->m_raygen_sbt.size + vk_pso->m_miss_sbt.size;
+    vk_pso->m_callable_sbt.deviceAddress      = sbt_buffer_device_address + vk_pso->m_raygen_sbt.size + vk_pso->m_miss_sbt.size + vk_pso->m_hit_sbt.size;
 
-    VmaAllocationCreateInfo alloc_create_info{};
-    alloc_create_info.flags = VmaAllocationCreateFlagBits::VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
-    alloc_create_info.usage = VMA_MEMORY_USAGE_AUTO;
-
-    VmaAllocator allocator = m_device->GetVmaAllocator();
-    VK_CHECK_RESULT(vmaCreateBuffer(allocator, &buffer_create_info, &alloc_create_info, &vk_buffer->m_alloc.buffer, &vk_buffer->m_alloc.alloc, nullptr));
-
-    vk_pso->m_sbt_buffer = RHIBufferRef(vk_buffer);
-
-    uint8_t* pSBTbuffer = reinterpret_cast<uint8_t*>(RHIMapBuffer(vk_pso->m_sbt_buffer, 0, bufferinfo.size));
+    uint8_t* pSBTbuffer = static_cast<uint8_t*>(RHIMapBuffer(vk_pso->m_sbt_buffer, 0, sbt_buffer_ci.size));
 
     uint8_t* pData      = pSBTbuffer;
     auto     getHandle  = [&data, handlesize](int i) { return data.data() + handlesize * i; };
@@ -642,7 +629,156 @@ RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(co
 
     return RHIRayTracingPipelineStateRef(vk_pso);
 #undef ALIGNUP
-#undef CHECK
+}
+
+Moer::Array<RHIRayTracingBLASRef> VulkanRHIImpl::RHIBuildRayTracingBLAS(const Moer::Array<RHIRayTracingBLASInitializer>& _inits) {
+
+    static auto vkGetAccelerationStructureBuildSizesKHR = reinterpret_cast<PFN_vkGetAccelerationStructureBuildSizesKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkGetAccelerationStructureBuildSizesKHR"));
+    static auto vkCreateAccelerationStructureKHR        = reinterpret_cast<PFN_vkCreateAccelerationStructureKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkCreateAccelerationStructureKHR"));
+    static auto vkCmdBuildAccelerationStructuresKHR     = reinterpret_cast<PFN_vkCmdBuildAccelerationStructuresKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkCmdBuildAccelerationStructuresKHR"));
+    VK_CHECK_NULLPTR(vkGetAccelerationStructureBuildSizesKHR, "RHIBuildRayTracingBLAS: vkGetAccelerationStructureBuildSizesKHR is nullptr", return {});
+    VK_CHECK_NULLPTR(vkCreateAccelerationStructureKHR, "RHIBuildRayTracingBLAS: vkCreateAccelerationStructureKHR is nullptr", return {});
+    VK_CHECK_NULLPTR(vkCmdBuildAccelerationStructuresKHR, "RHIBuildRayTracingBLAS: vkCmdBuildAccelerationStructuresKHR is nullptr", return {});
+
+    int                               blas_count = _inits.size();
+    Moer::Array<RHIRayTracingBLASRef> all_rhi_blas;
+    //building caches
+    Moer::Array<VkAccelerationStructureBuildGeometryInfoKHR>           all_vk_geo_infos;
+    Moer::Array<Moer::Array<VkAccelerationStructureGeometryKHR>>       all_vk_geos;
+    Moer::Array<Moer::Array<VkAccelerationStructureBuildRangeInfoKHR>> all_vk_range_infos;
+    Moer::Array<const VkAccelerationStructureBuildRangeInfoKHR*>       all_p_vk_range_infos;
+    Moer::Array<Moer::Array<uint32_t>>                                 all_primitive_counts;
+    Moer::Array<VkAccelerationStructureBuildSizesInfoKHR>              all_vk_size_infos;
+    all_rhi_blas.reserve(blas_count);
+    all_vk_geo_infos.reserve(blas_count);
+    all_vk_geos.reserve(blas_count);
+    all_vk_range_infos.reserve(blas_count);
+    all_p_vk_range_infos.reserve(blas_count);
+    all_vk_size_infos.reserve(blas_count);
+
+    for (int idx = 0; idx < blas_count; ++idx) {
+        const auto& _init = _inits[idx];
+        //rhi geometries to vulkan geometries
+        Moer::Array<VkAccelerationStructureGeometryKHR> vk_geos;
+        vk_geos.reserve(_init.geometries.size());
+        for (const auto& rhi_geo : _init.geometries) {
+            VkAccelerationStructureGeometryKHR vk_geo{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
+            vk_geo.geometryType = VulkanRHIRayTracingAccelerationStructure::METoVKGeometryTypeKHR(rhi_geo.geo_type);
+            vk_geo.flags        = VulkanRHIRayTracingAccelerationStructure::METoGeometryFlagsKHR(rhi_geo.flags);
+            if (vk_geo.geometryType == VK_GEOMETRY_TYPE_TRIANGLES_KHR) {
+                auto                                            rhi_triangles = rhi_geo.geometry.triangles;
+                VkAccelerationStructureGeometryTrianglesDataKHR vk_triangles{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR};
+                vk_triangles.indexData.deviceAddress = GetDeviceAddress(rhi_triangles.index_buffer);
+                vk_triangles.indexType               = VulkanEnumTranslator::METoVKIndexType(rhi_triangles.index_element_type);
+                vk_triangles.maxVertex               = rhi_triangles.max_vertex_count;
+                if (rhi_triangles.transform_buffer) {
+                    vk_triangles.transformData.deviceAddress = GetDeviceAddress(rhi_triangles.transform_buffer);
+                }
+                vk_triangles.vertexData.deviceAddress = GetDeviceAddress(rhi_triangles.vertex_buffer);
+                vk_triangles.vertexFormat             = VulkanEnumTranslator::METoVKFormat(rhi_triangles.vertex_element_type);
+                vk_triangles.vertexStride             = rhi_triangles.vertex_buffer_stride;
+                vk_geo.geometry.triangles             = vk_triangles;
+
+            } else if (vk_geo.geometryType == VK_GEOMETRY_TYPE_AABBS_KHR) {
+                //TODO:impl geometryType: AABB
+                auto                                        rhi_aabbs = rhi_geo.geometry.aabbs;
+                VkAccelerationStructureGeometryAabbsDataKHR vk_aabbs{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_AABBS_DATA_KHR};
+                vk_geo.geometry.aabbs = vk_aabbs;
+            }
+            vk_geos.emplace_back(vk_geo);
+        }
+        all_vk_geos.emplace_back(vk_geos);
+
+        //rhi range infos to vulkan range infos
+        Moer::Array<VkAccelerationStructureBuildRangeInfoKHR> vk_range_infos;
+        Moer::Array<uint32_t>                                 primtive_count;
+        vk_range_infos.reserve(_init.range_infos.size());
+        primtive_count.reserve(_init.range_infos.size());
+        for (const auto& rhi_range_info : _init.range_infos) {
+            VkAccelerationStructureBuildRangeInfoKHR vk_range_info;
+            vk_range_info.firstVertex     = rhi_range_info.first_vertex;
+            vk_range_info.primitiveCount  = rhi_range_info.primitive_count;
+            vk_range_info.primitiveOffset = rhi_range_info.primtive_offset;
+            vk_range_info.transformOffset = rhi_range_info.transform_offset;
+            vk_range_infos.emplace_back(vk_range_info);
+            primtive_count.emplace_back(vk_range_info.primitiveCount);
+        }
+        all_vk_range_infos.emplace_back(vk_range_infos);
+    }
+
+    VkDeviceAddress max_scratch_size = 0;
+    for (int idx = 0; idx < blas_count; ++idx) {
+        const auto& _init = _inits[idx];
+        all_p_vk_range_infos.emplace_back(all_vk_range_infos[idx].data());
+
+        VkAccelerationStructureBuildGeometryInfoKHR vk_geometry_info{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
+        vk_geometry_info.type          = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+        vk_geometry_info.flags         = VulkanRHIRayTracingAccelerationStructure::METoVKBuildAccelerationStructureFlagsKHR(_init.build_flags);
+        vk_geometry_info.mode          = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+        vk_geometry_info.ppGeometries  = nullptr;
+        vk_geometry_info.geometryCount = static_cast<uint32_t>(all_vk_geos[idx].size());
+        vk_geometry_info.pGeometries   = all_vk_geos[idx].data();
+
+        VkAccelerationStructureBuildSizesInfoKHR vk_size_info{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
+        vkGetAccelerationStructureBuildSizesKHR(m_device->GetDevice(), VK_ACCELERATION_STRUCTURE_BUILD_TYPE_HOST_OR_DEVICE_KHR, &vk_geometry_info, all_primitive_counts[idx].data(), &vk_size_info);
+        all_vk_size_infos.emplace_back(vk_size_info);
+        max_scratch_size = std::max(max_scratch_size, vk_size_info.buildScratchSize);
+
+        auto* rhi_blas                                      = new VulkanRHIRayTracingBLAS(_init);
+        rhi_blas->size_info.build_scratch_size              = vk_size_info.buildScratchSize;
+        rhi_blas->size_info.result_size                     = vk_size_info.accelerationStructureSize;
+        RHIBufferCreateInfo blas_buffer_ci                  = RHIBufferCreateInfo::Create(vk_size_info.accelerationStructureSize, vk_size_info.accelerationStructureSize, EBufferUsageFlags::ACCELERATION_STRUCTURE);
+        rhi_blas->m_buffer                                  = RHICreateBuffer(blas_buffer_ci);
+        VkBuffer                             vk_blas_buffer = static_cast<VulkanRHIBuffer*>(rhi_blas->m_buffer.Get())->m_alloc.buffer;
+        VkAccelerationStructureCreateInfoKHR vk_as_ci{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
+        vk_as_ci.type   = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+        vk_as_ci.buffer = vk_blas_buffer;
+        vk_as_ci.offset = 0;
+        vk_as_ci.size   = vk_size_info.accelerationStructureSize;
+        VK_CHECK_RESULT(vkCreateAccelerationStructureKHR(m_device->GetDevice(), &vk_as_ci, nullptr, &rhi_blas->m_blas));
+        all_rhi_blas.emplace_back(RHIRayTracingBLASRef(rhi_blas));
+
+        vk_geometry_info.dstAccelerationStructure = rhi_blas->m_blas;
+        all_vk_geo_infos.emplace_back(vk_geometry_info);
+    }
+
+    RHIBufferCreateInfo scratch_buffer_info           = RHIBufferCreateInfo::Create(max_scratch_size, max_scratch_size, EBufferUsageFlags::ACCELERATION_STRUCTURE_SCRATCH);
+    RHIBufferRef        scratch_buffer                = RHICreateBuffer(scratch_buffer_info);
+    VkDeviceAddress     scratch_buffer_device_address = GetDeviceAddress(scratch_buffer);
+
+    const auto& vk_graphic_command_pool = m_device->GetCurrentCommandAllocator()->GetHandle(ECommandListType::GRAPHICS);
+    const auto& vk_graphic_queue        = m_device->GetGraphicsQueue();
+    auto        cb                      = BeginSingleTimeCommands(vk_graphic_command_pool);
+
+    //build acceleration structure in batch,but limit the batch size
+    VkDeviceSize batchSize{0};
+    VkDeviceSize batchLimit{256'000'000};// 256 MB
+
+    for (int idx = 0; idx < blas_count; ++idx) {
+        all_vk_geo_infos[idx].scratchData.deviceAddress = scratch_buffer_device_address;
+        vkCmdBuildAccelerationStructuresKHR(cb, 1, &all_vk_geo_infos[idx], &all_p_vk_range_infos[idx]);
+
+        VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        barrier.srcAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+        barrier.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, 0, 1, &barrier, 0, nullptr, 0, nullptr);
+
+        batchSize += all_vk_size_infos[idx].accelerationStructureSize;
+        if (batchSize >= batchLimit || idx == blas_count - 1) {
+            EndSingleTimeCommands(cb, vk_graphic_command_pool, vk_graphic_queue);
+            batchSize = 0;
+            if (idx != blas_count - 1) {
+                cb = BeginSingleTimeCommands(vk_graphic_command_pool);
+            }
+        }
+    }
+    //TODO:compact blas
+    return all_rhi_blas;
+}
+
+RHIRayTracingTLASRef VulkanRHIImpl::RHIBuildRayTracingTLAS(const RHIRayTracingTLASInitializer& _init) {
+    auto* vk_as = new VulkanRHIRayTracingTLAS(_init);
+    return RHIRayTracingTLASRef();
 }
 
 RHIBufferRef VulkanRHIImpl::RHICreateBuffer(const RHIBufferCreateInfo& info) {
@@ -1067,6 +1203,14 @@ void VulkanRHIImpl::EndSingleTimeCommands(VkCommandBuffer _command_buffer, VkCom
     vkQueueWaitIdle(_queue);
 
     vkFreeCommandBuffers(m_device->GetDevice(), _pool, 1, &_command_buffer);
+}
+
+VkDeviceAddress VulkanRHIImpl::GetDeviceAddress(RHIBufferRef _buffer) {
+    auto* vk_buffer = static_cast<VulkanRHIBuffer*>(_buffer.Get());
+    VK_CHECK_NULLPTR(vk_buffer, "GetDeviceAddress:buffer to getaddress is nullptr", return VkDeviceAddress{0});
+    VkBufferDeviceAddressInfo info{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
+    info.buffer = vk_buffer->m_alloc.buffer;
+    return vkGetBufferDeviceAddress(m_device->GetDevice(), &info);
 }
 
 #pragma endregion

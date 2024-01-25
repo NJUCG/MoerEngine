@@ -66,6 +66,9 @@ public:
 
     RHIRayTracingPipelineStateRef RHICreateRayTracingPipelineState(const RHIRayTracingPipelineStateInitializer& _init) final override;
 
+    Moer::Array<RHIRayTracingBLASRef> RHIBuildRayTracingBLAS(const Moer::Array<RHIRayTracingBLASInitializer>& _inits) final override;
+    RHIRayTracingTLASRef RHIBuildRayTracingTLAS(const RHIRayTracingTLASInitializer& _init) final override;
+
     RHIBufferRef RHICreateBuffer(const RHIBufferCreateInfo& info) final override;
     void*        RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size) final override;
     void         RHIUnmapBuffer(RHIBuffer* _buffer) final override;
@@ -137,6 +140,7 @@ private:
     VkCommandBuffer BeginSingleTimeCommands(VkCommandPool _pool);
     void            EndSingleTimeCommands(VkCommandBuffer _command_buffer, VkCommandPool _pool, VkQueue _queue);
 
+    VkDeviceAddress GetDeviceAddress(RHIBufferRef _buffer);
     // void CopyBuffer(VulkanRHIBuffer* _src, VulkanRHIBuffer* _dst);
 
 #pragma endregion

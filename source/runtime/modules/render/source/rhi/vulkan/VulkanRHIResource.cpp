@@ -32,6 +32,22 @@ VmaMemoryUsage VulkanMemoryManager::MEGenerateVmaMemoryUsage() {
     return VMA_MEMORY_USAGE_AUTO;
 }
 
+VkIndexType VulkanEnumTranslator::METoVKIndexType(EIndexElementType _type) {
+    switch (_type) {
+        case IET_NONE:
+            return VK_INDEX_TYPE_NONE_KHR;
+        case IET_UINT8:
+            return VK_INDEX_TYPE_UINT8_EXT;
+        case IET_UINT16:
+            return VK_INDEX_TYPE_UINT16;
+        case IET_UINT32:
+            return VK_INDEX_TYPE_UINT32;
+        default:
+            LOG_CRITICAL("Unsupported index element type: {}", static_cast<uint32_t>(_type));
+            return VK_INDEX_TYPE_MAX_ENUM;
+    }
+}
+
 VkFormat VulkanEnumTranslator::METoVKFormat(EPixelFormat _format) {
     if (_format > 184) {
         LOG_CRITICAL("Unsupported pixel format: {}", static_cast<uint32_t>(_format));
@@ -1431,6 +1447,7 @@ VkBufferUsageFlags VulkanRHIBuffer::METoVKBufferUsageFlags(VulkanDevice* _device
     TranslateFlag(EBufferUsageFlags::STRUCTURED_BUFFER, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
 
     TranslateFlag(EBufferUsageFlags::ACCELERATION_STRUCTURE, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR);
+    TranslateFlag(EBufferUsageFlags::SHADER_BINDING_TABLE, VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR);
 
     TranslateFlag(EBufferUsageFlags::UNORDERED_ACCESS, VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT);
     TranslateFlag(EBufferUsageFlags::INDIRECT_BUFFER, VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT);
@@ -1439,17 +1456,7 @@ VkBufferUsageFlags VulkanRHIBuffer::METoVKBufferUsageFlags(VulkanDevice* _device
 
     TranslateFlag(EBufferUsageFlags::LIFE_CYCLE_ONE_FRAME, 0, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
 
-//#if VULKAN_RHI_RAYTRACING
-//    if (_device->GetGpuExtensions().HasRaytracingExtensions()) {
-//        vk_flags |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-//
-//        TranslateFlag(EBufferUsageFlags::ACCELERATION_STRUCTURE, 0, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR);
-//    }
-//#endif
-    // For descriptors buffers
-    // if (_device->GetOptionalExtensions().HasBufferDeviceAddress) {
-    //     OutVkUsage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-    // }
+    TranslateFlag(EBufferUsageFlags::ACCELERATION_STRUCTURE_SCRATCH, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
 
     return vk_flags;
 }
@@ -1759,7 +1766,46 @@ ViewPort VulkanViewport::GetViewportExtent() const {
 
 #pragma endregion
 
-#pragma region raytracing
+#pragma region    raytracing
+VkGeometryTypeKHR VulkanRHIRayTracingAccelerationStructure::METoVKGeometryTypeKHR(ERayTracingGeometryType _type) {
+    switch (_type) {
+        case RTGT_TRIANGLES:
+            return VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+        case RTGT_AABBS:
+            LOG_CRITICAL("GeometryType AABB is not supported now");
+            return VK_GEOMETRY_TYPE_AABBS_KHR;
+        default:
+            LOG_CRITICAL("Unsupported ERayTracingGeometryType: {}", static_cast<uint32_t>(_type));
+            return VK_GEOMETRY_TYPE_MAX_ENUM_KHR;
+    }
+}
+VkGeometryFlagsKHR VulkanRHIRayTracingAccelerationStructure::METoGeometryFlagsKHR(ERayTracingGeometryFlags _me_flags) {
+    VkGeometryFlagsKHR vk_flags = 0;
+
+    auto TranslateFlag = [&vk_flags, &_me_flags](ERayTracingGeometryFlags _search_me_flags, VkGeometryFlagsKHR _added_if_found, VkGeometryFlagsKHR _added_if_not_found = 0) {
+        const bool has_flag = (_me_flags & _search_me_flags) == _search_me_flags;
+        vk_flags |= has_flag ? _added_if_found : _added_if_not_found;
+    };
+    TranslateFlag(ERayTracingGeometryFlags::GEOMETRY_OPAQUE, VK_GEOMETRY_OPAQUE_BIT_KHR);
+    TranslateFlag(ERayTracingGeometryFlags::NO_DUPLICATE_ANY_HIT_INVOCATION, VK_GEOMETRY_NO_DUPLICATE_ANY_HIT_INVOCATION_BIT_KHR);
+    return vk_flags;
+}
+VkBuildAccelerationStructureFlagsKHR VulkanRHIRayTracingAccelerationStructure::METoVKBuildAccelerationStructureFlagsKHR(ERayTracingAccelerationStructureBuildFlags _me_flags) {
+    VkBuildAccelerationStructureFlagsKHR vk_flags = 0;
+
+    auto TranslateFlag = [&vk_flags, &_me_flags](ERayTracingAccelerationStructureBuildFlags _search_me_flags, VkBuildAccelerationStructureFlagBitsKHR _added_if_found, VkBufferUsageFlags _added_if_not_found = 0) {
+        const bool has_flag = (_me_flags & _search_me_flags) == _search_me_flags;
+        vk_flags |= has_flag ? _added_if_found : _added_if_not_found;
+    };
+
+    TranslateFlag(ERayTracingAccelerationStructureBuildFlags::PREFER_FAST_TRACE, VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR);
+    TranslateFlag(ERayTracingAccelerationStructureBuildFlags::PREFER_FAST_BUILD, VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR);
+    TranslateFlag(ERayTracingAccelerationStructureBuildFlags::ALLOW_COMPACTION, VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR);
+    TranslateFlag(ERayTracingAccelerationStructureBuildFlags::ALLOW_UPDATE, VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR);
+    TranslateFlag(ERayTracingAccelerationStructureBuildFlags::MINIMIZE_MEMORY, VK_BUILD_ACCELERATION_STRUCTURE_LOW_MEMORY_BIT_KHR);
+
+    return vk_flags;
+}
 #pragma endregion
 
 #pragma region render query

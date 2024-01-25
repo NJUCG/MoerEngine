@@ -62,6 +62,13 @@ public:
         return RHIRayTracingPipelineStateRef{};
     }
 
+    Moer::Array<RHIRayTracingBLASRef> RHIBuildRayTracingBLAS(const Moer::Array<RHIRayTracingBLASInitializer>& _inits) override {
+        return {};
+    }
+    RHIRayTracingTLASRef RHIBuildRayTracingTLAS(const RHIRayTracingTLASInitializer& _init) override {
+        return RHIRayTracingTLASRef{};
+    }
+
     RHIBufferRef RHICreateBuffer(const RHIBufferCreateInfo& info) override { return RHIBufferRef{}; }
     void*        RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size) override { return nullptr; }
     void         RHIUnmapBuffer(RHIBuffer* _buffer) override {}

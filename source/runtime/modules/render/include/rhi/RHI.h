@@ -98,6 +98,11 @@ public:
         return RHICreateRayTracingPipelineState(_init);
     }
 
+    /*batching creation and building of blases*/
+    virtual Moer::Array<RHIRayTracingBLASRef> RHIBuildRayTracingBLAS(const Moer::Array<RHIRayTracingBLASInitializer>& _inits) = 0;
+
+    virtual RHIRayTracingTLASRef RHIBuildRayTracingTLAS(const RHIRayTracingTLASInitializer& _init) = 0;
+
     virtual RHIBufferRef RHICreateBuffer(const RHIBufferCreateInfo& info)                   = 0;
     virtual void*        RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size) = 0;
     virtual void         RHIUnmapBuffer(RHIBuffer* _buffer)                                 = 0;

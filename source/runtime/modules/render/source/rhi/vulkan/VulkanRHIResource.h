@@ -39,10 +39,11 @@ class VulkanRHIMeshShader;
 class VulkanRHIPipelineBinaryDataLibrary;
 class VulkanRHIFragmentShader;
 class VulkanRHIRasterizationState;
-class VulkanRHIRayTracingGeometry;
 class VulkanRHIRayTracingPipelineState;
 class VulkanRHIRayTracingScene;
 class VulkanRHIRayTracingAccelerationStructure;
+class VulkanRHIRayTracingBLAS;
+class VulkanRHIRayTracingTLAS;
 class VulkanRHIRayTracingShader;
 class VulkanRHIRenderQuery;
 class VulkanRHIRenderQueryPool;
@@ -76,6 +77,7 @@ public:
 
 class VulkanEnumTranslator final {
 public:
+    static VkIndexType  METoVKIndexType(EIndexElementType _type);
     static VkFormat     METoVKFormat(EPixelFormat _format);
     static EPixelFormat VKToMEFormat(VkFormat _format);
 
@@ -587,6 +589,37 @@ private:
     uint32_t frame_offset = 0;
 
     // uint32_t max_frame_in_flight = 3;
+};
+#pragma endregion
+
+#pragma region acceleration structure          definitions
+class VulkanRHIRayTracingAccelerationStructure final : public RHIRayTracingAccelerationStructure {
+public:
+    static VkGeometryTypeKHR                    METoVKGeometryTypeKHR(ERayTracingGeometryType _type);
+    static VkGeometryFlagsKHR                   METoGeometryFlagsKHR(ERayTracingGeometryFlags _flag);
+    static VkBuildAccelerationStructureFlagsKHR METoVKBuildAccelerationStructureFlagsKHR(ERayTracingAccelerationStructureBuildFlags _me_flags);
+};
+
+class VulkanRHIRayTracingBLAS final : public RHIRayTracingBLAS {
+    friend VulkanRHIImpl;
+
+public:
+    VulkanRHIRayTracingBLAS(const RHIRayTracingBLASInitializer& _init) : RHIRayTracingBLAS(_init) {
+    }
+
+protected:
+    VkAccelerationStructureKHR m_blas;
+    RHIBufferRef               m_buffer;
+};
+class VulkanRHIRayTracingTLAS final : public RHIRayTracingTLAS {
+    friend VulkanRHIImpl;
+
+public:
+    VulkanRHIRayTracingTLAS(const RHIRayTracingTLASInitializer& _init) : RHIRayTracingTLAS(_init) {
+    }
+
+protected:
+    VkAccelerationStructureKHR tlas;
 };
 #pragma endregion
 
