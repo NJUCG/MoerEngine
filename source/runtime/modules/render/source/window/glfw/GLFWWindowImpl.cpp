@@ -23,7 +23,17 @@
 #include "log/LogSystem.h"
 #include <string.h>
 
+#include "window/WindowInput.h"
+
 namespace Moer {
+    WindowInput& wndInput = WindowInput::GetInstance();
+
+    //------------------------call back functions---------------------------
+    void KeyCallbackFunc(GLFWwindow* window, int key, int scancode, int action, int mods);
+    void CursorPosCallbackFunc(GLFWwindow* window, double xpos, double ypos);
+    void FrameBufferSizeCallbackFunc(GLFWwindow* window, int width, int height);
+    void ScrollCallbackFunc(GLFWwindow* window, double xoffset, double yoffset);
+    void MouseButtonCallbackFunc(GLFWwindow* window, int button, int action, int mode);
 
     GLFWWindowImpl::GLFWWindowImpl() {
     }
@@ -112,6 +122,7 @@ namespace Moer {
 
         //register engine io callbacks MARK.. remains problems
         InstallInterface(&main_window_handle);
+
         //install imgui io callbacks
         GuiInit(window_info);
         // ImGui::CreateContext();
@@ -120,69 +131,77 @@ namespace Moer {
 
     void GLFWWindowImpl::InstallInterface(WindowHandle* _handle) {
         GLFWwindow* window = (GLFWwindow*)_handle->window;
+
         {
             if (GLFWcharfun fc = glfwSetCharCallback(window, [](GLFWwindow* window, unsigned int codepoint) { WindowImpl::OnCharCallback((WindowType*)window, codepoint); }))
-                RegisterOnCharFunc(&main_window_handle, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1));
+                RegisterOnCharFunc(window, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1));
         }
         {
             GLFWcursorenterfun fc = glfwSetCursorEnterCallback(window, [](GLFWwindow* window, int entered) { WindowImpl::OnCursorEnterCallback(window, entered); });
             if (fc)
-                RegisterOnCursorEnterFunc(&main_window_handle, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1));
+                RegisterOnCursorEnterFunc(window, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1));
         }
         {
+            //modified
             auto fc = glfwSetCursorPosCallback(window, [](GLFWwindow* window, double xpos, double ypos) { WindowImpl::OnCursorPosCallback(window, xpos, ypos); });
-            if (fc)
-                RegisterOnCursorPosFunc(&main_window_handle, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2));
+            // if(fc)
+                // RegisterOnCursorPosFunc(&main_window_handle, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2));
+                RegisterOnCursorPosFunc(window, std::bind(CursorPosCallbackFunc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2));
         }
         {
             auto fc = glfwSetDropCallback(window, [](GLFWwindow* window, int path_count, const char** paths) { WindowImpl::OnDropCallback(window, path_count, paths); });
             if (fc)
-                RegisterOnDropFunc(&main_window_handle, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2));
+                RegisterOnDropFunc(window, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2));
         }
         {
             auto fc = glfwSetFramebufferSizeCallback(window, [](GLFWwindow* window, int width, int height) { WindowImpl::OnFramebufferSizeCallback(window, width, height); });
-            if (fc)
-                RegisterOnFrameBufferSizeFunc(&main_window_handle, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2));
+            RegisterOnFrameBufferSizeFunc(window, std::bind(FrameBufferSizeCallbackFunc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2));
+            // if (fc)
+                // RegisterOnFrameBufferSizeFunc(&main_window_handle, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2));
         }
         {
+            //modified
             auto fc = glfwSetKeyCallback(window, [](GLFWwindow* window, int key, int scancode, int action, int mods) { WindowImpl::OnKeyCallback(window, key, scancode, action, mods); });
-            if (fc)
-                RegisterOnKeyFunc(&main_window_handle, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4));
+            RegisterOnKeyFunc(window, std::bind(KeyCallbackFunc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4));
+            // if(fc)
+                // RegisterOnKeyFunc(&main_window_handle, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4));
         }
         {
             auto fc = glfwSetMouseButtonCallback(window, [](GLFWwindow* window, int button, int action, int mode) { WindowImpl::OnMouseButtonCallback(window, button, action, mode); });
-            if (fc)
-                RegisterOnMouseButtonFunc(&main_window_handle, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
+            RegisterOnMouseButtonFunc(window, std::bind(MouseButtonCallbackFunc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
+            // if (fc)
+                // RegisterOnMouseButtonFunc(window, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
         }
         {
             auto fc = glfwSetScrollCallback(window, [](GLFWwindow* window, double xoffset, double yoffset) { WindowImpl::OnScrollCallback(window, xoffset, yoffset); });
-            if (fc)
-                RegisterOnScrollFunc(&main_window_handle, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2));
+            RegisterOnScrollFunc(window, std::bind(ScrollCallbackFunc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2));
+            // if (fc)
+                // RegisterOnScrollFunc(window, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2));
         }
         {
             auto fc = glfwSetWindowCloseCallback(window, [](GLFWwindow* window) { WindowImpl::OnWindowCloseCallback(window); });
             if (fc)
-                RegisterOnWindowCloseFunc(&main_window_handle, std::bind(fc, (GLFWwindow*)window));
+                RegisterOnWindowCloseFunc(window, std::bind(fc, (GLFWwindow*)window));
         }
         {
             auto fc = glfwSetWindowContentScaleCallback(window, [](GLFWwindow* window, float xscale, float yscale) { WindowImpl::OnWindowContentScaleCallback(window, xscale, yscale); });
             if (fc)
-                RegisterOnWindowContentScaleFunc(&main_window_handle, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2));
+                RegisterOnWindowContentScaleFunc(window, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2));
         }
         {
             auto fc = glfwSetWindowPosCallback(window, [](GLFWwindow* window, int xpos, int ypos) { WindowImpl::OnWindowPosCallback(window, xpos, ypos); });
             if (fc)
-                RegisterOnWindowPosFunc(&main_window_handle, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2));
+                RegisterOnWindowPosFunc(window, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2));
         }
         {
             auto fc = glfwSetWindowSizeCallback(window, [](GLFWwindow* window, int width, int height) { WindowImpl::OnWindowSizeCallback(window, width, height); });
             if (fc)
-                RegisterOnWindowSizeFunc(&main_window_handle, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2));
+                RegisterOnWindowSizeFunc(window, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2));
         }
         {
             auto fc = glfwSetWindowFocusCallback(window, [](GLFWwindow* window, int focused) { WindowImpl::OnWindowFocusCallback(window, focused); });
             if (fc)
-                RegisterOnWindowFocusFunc(&main_window_handle, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1));
+                RegisterOnWindowFocusFunc(window, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1));
         }
     }
 
@@ -210,6 +229,11 @@ namespace Moer {
     }
 
     void GLFWWindowImpl::Tick() {
+        // per-frame time logic
+        float currentFrame = static_cast<float>(glfwGetTime());
+        wndInput.deltaTime = currentFrame - wndInput.lastFrame;
+        wndInput.lastFrame = currentFrame;
+
         PollEvents();
         GuiUpdate();
     }
@@ -268,7 +292,6 @@ namespace Moer {
     };
 
     void GLFWWindowImpl::OnCharCallbackImpl(WindowType* window, unsigned int codepoint) {
-
         OnChar(window, codepoint);
     }
 
@@ -304,6 +327,127 @@ namespace Moer {
     }
     void GLFWWindowImpl::OnWindowFocusCallbackImpl(WindowType* window, int focused) {
         OnWindowFocus(window, focused);
+    }
+
+
+    void KeyCallbackFunc(GLFWwindow* window, int key, int scancode, int action, int mods) {
+        // if(key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
+            // glfwSetWindowShouldClose(window, GL_TRUE);
+
+        if(key == GLFW_KEY_F && action == GLFW_PRESS){
+            if(!wndInput.mouseEnterScreen){
+                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+                wndInput.mouseEnterScreen = true;
+            } else{
+                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+                wndInput.mouseEnterScreen = false;
+                wndInput.firstMouse       = true;
+            }
+        }
+        if(key == GLFW_KEY_ESCAPE && action == GLFW_PRESS){
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+            wndInput.mouseEnterScreen = false;
+            wndInput.firstMouse       = true;
+        }
+
+
+        if(wndInput.mouseEnterScreen){
+            if (key == GLFW_KEY_W){
+                if(action == GLFW_PRESS)
+                    wndInput.camera_forward = true;
+                if (action == GLFW_RELEASE)
+                    wndInput.camera_forward = false;
+            }
+            if(key == GLFW_KEY_S){
+                if(action == GLFW_PRESS)
+                    wndInput.camera_backward = true;
+                if (action == GLFW_RELEASE)
+                    wndInput.camera_backward = false;
+            }
+            if(key == GLFW_KEY_A){
+                if(action == GLFW_PRESS)
+                    wndInput.camera_left = true;
+                if (action == GLFW_RELEASE)
+                    wndInput.camera_left = false;
+            }
+            if(key == GLFW_KEY_D){
+                if(action == GLFW_PRESS)
+                    wndInput.camera_right = true;
+                if (action == GLFW_RELEASE)
+                    wndInput.camera_right = false;
+            }
+            if(key == GLFW_KEY_SPACE){
+                if(action == GLFW_PRESS)
+                    wndInput.camera_up = true;
+                if (action == GLFW_RELEASE)
+                    wndInput.camera_up = false;
+            }
+            if(key == GLFW_KEY_C){
+                if(action == GLFW_PRESS)
+                    wndInput.camera_down = true;
+                if (action == GLFW_RELEASE)
+                    wndInput.camera_down = false;
+            }
+            if(key == GLFW_KEY_UP){
+                if(action == GLFW_PRESS)
+                    wndInput.speedUp = true;
+                if (action == GLFW_RELEASE)
+                    wndInput.speedUp = false;
+            }
+            if(key == GLFW_KEY_DOWN){
+                if(action == GLFW_PRESS)
+                    wndInput.speedDown = true;
+                if (action == GLFW_RELEASE)
+                    wndInput.speedDown = false;
+            }
+            if(key == GLFW_KEY_KP_0 && mods == GLFW_MOD_CONTROL){
+                if(action == GLFW_PRESS)
+                    wndInput.resetSpeed = true;
+                if (action == GLFW_RELEASE)
+                    wndInput.resetSpeed = false;
+            }
+
+        }
+    }
+
+    void CursorPosCallbackFunc(GLFWwindow* window, double xpos, double ypos){
+        if(wndInput.mouseEnterScreen){
+            float xPos = static_cast<float>(xpos);
+            float yPos = static_cast<float>(ypos);
+            
+            if(wndInput.firstMouse){
+                wndInput.lastX = xPos;
+                wndInput.lastY = yPos;
+                wndInput.firstMouse = false;
+            }
+
+            wndInput.deltaX = xPos - wndInput.lastX;
+            wndInput.deltaY = yPos - wndInput.lastY;
+
+            wndInput.lastX  = xPos;
+            wndInput.lastY  = yPos;
+        }
+    }
+
+    void FrameBufferSizeCallbackFunc(GLFWwindow* window, int width, int height){
+        wndInput.width        = width;
+        wndInput.height       = height;
+        wndInput.aspect_ratio = width / height;
+    }
+
+    void ScrollCallbackFunc(GLFWwindow* window, double xoffset, double yoffset){
+        if(wndInput.mouseEnterScreen){
+            wndInput.fov -= (float)yoffset * 2.f;
+            if (wndInput.fov < 10.0f)
+                wndInput.fov = 10.0f;
+            if (wndInput.fov > 120.0f)
+                wndInput.fov = 120.0f;
+        }
+    }
+
+    void MouseButtonCallbackFunc(GLFWwindow* window, int button, int action, int mode){
+        // todo: drag / rotate objects callback function
+
     }
 
 }// namespace Moer
