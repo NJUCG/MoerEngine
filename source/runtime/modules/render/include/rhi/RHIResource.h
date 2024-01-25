@@ -430,16 +430,18 @@ struct RHIAttachmentBindingParameter {
 };
 struct RHIBatchedShaderParameters {
     //CBV SRV UAV SAMPLER
-    template<concept_is_root_parameter_struct TRootParameter>
-    void SetParameters(const Shader* shader, const TRootParameter& params) {
-        size_t data_size = sizeof(TRootParameter);
-        SetParameters(shader, data_size, (uint8_t*)&params);
-    }
+    // template<typename TShader, concept_is_root_parameter_struct TRootParameter>
+    // void SetParameters(const TRootParameter& params) {
+    //     size_t data_size = sizeof(TRootParameter);
+
+    //     const Shader* shader = TShader::GetMetaType()->GetName();
+    //     SetParameters(shader, data_size, (uint8_t*)&params);
+    // }
 
     template<concept_is_root_parameter_struct TRootParameter>
     void SetParameters(RHIShader* shader, const TRootParameter& params) {
         size_t data_size = sizeof(TRootParameter);
-        SetParameters(shader, data_size, (uint8_t*)&params);
+        SetParameters(shader->GetMetaShader(), data_size, (uint8_t*)&params);
     }
 
     const uint8_t* GetConstData(uint32_t byte_offset) const {
@@ -1695,27 +1697,27 @@ struct RHIShaderBoundStateInput : public RHIResource {
 
     //todo: shader library support for tracking shader stage resources
 
-    RHIVertexShader*   GetVertexShader() const { return p_vertex_shader; }
-    RHIFragmentShader* GetFragmentShader() const { return p_fragment_shader; }
+    RHIVertexShader*   GetVertexShader() const { return dynamic_cast<RHIVertexShader*>(p_vertex_shader); }
+    RHIFragmentShader* GetFragmentShader() const { return dynamic_cast<RHIFragmentShader*>(p_fragment_shader); }
 
-    RHIGeometryShader* GetGeometryShader() const { return p_geometry_shader; }
+    RHIGeometryShader* GetGeometryShader() const { return dynamic_cast<RHIGeometryShader*>(p_geometry_shader); }
     void               SetGeometryShader(RHIGeometryShader* _geometry_shader) { p_geometry_shader = _geometry_shader; }
 
-    RHIMeshShader*          GetMeshShader() const { return p_mesh_shader; }
-    RHIAmplificationShader* GetAmplificationShader() const { return p_amplification_shader; }
+    RHIMeshShader*          GetMeshShader() const { return dynamic_cast<RHIMeshShader*>(p_mesh_shader); }
+    RHIAmplificationShader* GetAmplificationShader() const { return dynamic_cast<RHIAmplificationShader*>(p_amplification_shader); }
 
     void SetMeshShader(RHIMeshShader* _mesh_shader) { p_mesh_shader = _mesh_shader; }
     void SetAmplificationShader(RHIAmplificationShader* _amplification_shader) { p_amplification_shader = _amplification_shader; }
     //fields
 
     RHIVertexInputState* p_vertex_input_state = nullptr;
-    RHIVertexShader*     p_vertex_shader      = nullptr;
-    RHIFragmentShader*   p_fragment_shader    = nullptr;
-    RHIGeometryShader*   p_geometry_shader    = nullptr;
+    RHIShader*           p_vertex_shader      = nullptr;
+    RHIShader*           p_fragment_shader    = nullptr;
+    RHIShader*           p_geometry_shader    = nullptr;
 
     //todo: query support for mesh shaders
-    RHIMeshShader*          p_mesh_shader          = nullptr;
-    RHIAmplificationShader* p_amplification_shader = nullptr;
+    RHIShader* p_mesh_shader          = nullptr;
+    RHIShader* p_amplification_shader = nullptr;
 };
 
 //for shader parameter binding usage

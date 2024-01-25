@@ -253,9 +253,10 @@ namespace Moer {
 
         RHIVertexInputStateRef vertex_input_state = g_rhi->RHICreateVertexInputState(vertex_input_state_init_list);
 
-        RHIVertexShaderRef   vertex_shader = g_rhi->RHICreateVertexShader(ShaderResourceManager::GetShader<TestDeferredTriangleShaderVert>());
-        RHIFragmentShaderRef fragment_shader =
-            g_rhi->RHICreateFragmentShader(ShaderResourceManager::GetShader<TestDeferredTriangleShaderFrag>());
+        auto& shader_resource_manager = ShaderResourceManager::GetInstance();
+
+        RHIShaderRef              vertex_shader      = shader_resource_manager.GetShader<TestDeferredTriangleShaderVert>();
+        RHIShaderRef              fragment_shader    = shader_resource_manager.GetShader<TestDeferredTriangleShaderFrag>();
         RHIShaderBoundStateInput& shader_stage_input = init.shader_stage;
 
         shader_stage_input.p_vertex_input_state = vertex_input_state;
@@ -329,7 +330,7 @@ namespace Moer {
                 const auto camera_view   = camera->GetViewMatrix();
                 const auto camera_proj   = camera->GetProjectionMatrix();
 
-                Shader* vert_shader = ShaderResourceManager::GetShader<TestDeferredTriangleShaderVert>();
+                // Shader* vert_shader = ShaderResourceManager::GetShader<TestDeferredTriangleShaderVert>();
 
                 for (auto entity : scene->GetEntities()) {
                     if (auto primitive = RenderableManager::Get().GetRenderPrimitive(entity)) {
@@ -338,7 +339,7 @@ namespace Moer {
                         Matrix4x4f                                 ubo[] = {prim_model, camera_view, camera_proj, Transpose(camera_proj * camera_view * prim_model)};
                         memcpy(&params.scene_ubo, &ubo, sizeof(ubo));
                         RHIBatchedShaderParameters batched_params;
-                        batched_params.SetParameters(vert_shader, params);
+                        batched_params.SetParameters(ShaderResourceManager::GetInstance().GetShader<TestDeferredTriangleShaderVert>(), params);
                         g_rhi->RHISetBatchedShaderParameters(pipeline_state, batched_params, true);
 
                         cmd_list->BindIndexBuffer(primitive->GetIndexBuffer(), 0, EIndexElementType::IET_UINT32);

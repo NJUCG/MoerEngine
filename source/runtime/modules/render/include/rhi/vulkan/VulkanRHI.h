@@ -34,14 +34,14 @@ public:
     RHIBlendStateRef         RHICreateBlendState(const RHIBlendStateInitializer& _init) final override;
     RHIVertexInputStateRef   RHICreateVertexInputState(const VertexInputStateInitializerList& _init) final override;
 
-    RHIVertexShaderRef   RHICreateVertexShader(const Shader*) final override;
-    RHIFragmentShaderRef RHICreateFragmentShader(const Shader*) final override;
-    RHIGeometryShaderRef RHICreateGeometryShader(const Shader*) final override;
+    RHIVertexShaderRef   RHICreateVertexShader(const class ShaderCodeEntry*, const Shader*) final override;
+    RHIFragmentShaderRef RHICreateFragmentShader(const class ShaderCodeEntry*, const Shader*) final override;
+    RHIGeometryShaderRef RHICreateGeometryShader(const class ShaderCodeEntry*, const Shader*) final override;
 
-    RHIMeshShaderRef          RHICreateMeshShader(const Shader*) final override;
-    RHIAmplificationShaderRef RHICreateAmplificationShader(const Shader*) final override;
+    RHIMeshShaderRef          RHICreateMeshShader(const class ShaderCodeEntry*, const Shader*) final override;
+    RHIAmplificationShaderRef RHICreateAmplificationShader(const class ShaderCodeEntry*, const Shader*) final override;
 
-    RHIComputeShaderRef RHICreateComputeShader(const Shader*) final override;
+    RHIComputeShaderRef RHICreateComputeShader(const class ShaderCodeEntry*, const Shader*) final override;
 
     RHIShaderLibraryRef RHICreateShaderLibrary(EShaderPlatform _platform, const std::string& _file_path, const std::string& name) final override;
 

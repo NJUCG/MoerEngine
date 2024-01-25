@@ -106,43 +106,85 @@ RHIVertexInputStateRef VulkanRHIImpl::RHICreateVertexInputState(const VertexInpu
     return RHIVertexInputStateRef(vk_input_state);
 }
 
-RHIVertexShaderRef VulkanRHIImpl::RHICreateVertexShader(const Shader* shader) {
+// RHIVertexShaderRef VulkanRHIImpl::RHICreateVertexShader(const Shader* shader) {
+//     auto* vk_shader            = new VulkanRHIVertexShader(shader);
+//     vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+
+//     return RHIVertexShaderRef(vk_shader);
+// }
+
+// RHIFragmentShaderRef VulkanRHIImpl::RHICreateFragmentShader(const Shader* shader) {
+//     auto* vk_shader            = new VulkanRHIFragmentShader(shader);
+//     vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+
+//     return RHIFragmentShaderRef(vk_shader);
+// }
+
+// RHIGeometryShaderRef VulkanRHIImpl::RHICreateGeometryShader(const Shader* shader) {
+//     auto* vk_shader            = new VulkanRHIGeometryShader(shader);
+//     vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+
+//     return RHIGeometryShaderRef(vk_shader);
+// }
+
+// RHIMeshShaderRef VulkanRHIImpl::RHICreateMeshShader(const Shader* shader) {
+//     auto* vk_shader            = new VulkanRHIMeshShader(shader);
+//     vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+
+//     return RHIMeshShaderRef(vk_shader);
+// }
+
+// RHIAmplificationShaderRef VulkanRHIImpl::RHICreateAmplificationShader(const Shader* shader) {
+//     auto* vk_shader            = new VulkanRHIAmplificationShader(shader);
+//     vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+//     return RHIAmplificationShaderRef(vk_shader);
+// }
+
+// RHIComputeShaderRef VulkanRHIImpl::RHICreateComputeShader(const Shader* shader) {
+//     auto* vk_shader            = new VulkanRHIComputeShader(shader);
+//     vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+//     return RHIComputeShaderRef(vk_shader);
+// }
+
+RHIVertexShaderRef VulkanRHIImpl::RHICreateVertexShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
     auto* vk_shader            = new VulkanRHIVertexShader(shader);
-    vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
 
     return RHIVertexShaderRef(vk_shader);
 }
 
-RHIFragmentShaderRef VulkanRHIImpl::RHICreateFragmentShader(const Shader* shader) {
+RHIFragmentShaderRef VulkanRHIImpl::RHICreateFragmentShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
     auto* vk_shader            = new VulkanRHIFragmentShader(shader);
-    vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
 
     return RHIFragmentShaderRef(vk_shader);
 }
 
-RHIGeometryShaderRef VulkanRHIImpl::RHICreateGeometryShader(const Shader* shader) {
+RHIGeometryShaderRef VulkanRHIImpl::RHICreateGeometryShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
     auto* vk_shader            = new VulkanRHIGeometryShader(shader);
-    vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
 
     return RHIGeometryShaderRef(vk_shader);
 }
 
-RHIMeshShaderRef VulkanRHIImpl::RHICreateMeshShader(const Shader* shader) {
+RHIMeshShaderRef VulkanRHIImpl::RHICreateMeshShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
     auto* vk_shader            = new VulkanRHIMeshShader(shader);
-    vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
 
     return RHIMeshShaderRef(vk_shader);
 }
 
-RHIAmplificationShaderRef VulkanRHIImpl::RHICreateAmplificationShader(const Shader* shader) {
+RHIAmplificationShaderRef VulkanRHIImpl::RHICreateAmplificationShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
     auto* vk_shader            = new VulkanRHIAmplificationShader(shader);
-    vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
+
     return RHIAmplificationShaderRef(vk_shader);
 }
 
-RHIComputeShaderRef VulkanRHIImpl::RHICreateComputeShader(const Shader* shader) {
+RHIComputeShaderRef VulkanRHIImpl::RHICreateComputeShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
     auto* vk_shader            = new VulkanRHIComputeShader(shader);
-    vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
+
     return RHIComputeShaderRef(vk_shader);
 }
 

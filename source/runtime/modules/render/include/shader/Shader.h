@@ -74,7 +74,8 @@ class Shader {
     friend class ShaderMetaType;
 
 public:
-    using TMutationSet = TShaderMutationSetEmpty;
+    using TMutationSet        = TShaderMutationSetEmpty;
+    using TMutationParameters = ShaderMutationParameters;
     RENDER_API Shader();
 
     RENDER_API Shader(const ShaderCompiledInitializer& intializer);
@@ -109,14 +110,11 @@ public:
 
     static ShaderParametersMetadata* GetParametersMetaData() { return nullptr; }
 
-    /**
-     * @brief Get the Code Entry object, contains compiled code and target platform
-     * 
-     * @return const ShaderCodeEntry* 
-     */
-    const class ShaderCodeEntry* GetCodeEntry() const;
-
     const ShaderRootParametersLayoutInfo& GetRootParametersLayoutInfo() const { return param_layout_info; }
+
+    static bool ShouldCompileMutation(const ShaderMutationParameters&) { return true; }
+
+    static void SetCompileEnvironment(const ShaderMutationParameters&, ShaderCompilerEnvironment&) {}
 
 protected:
     Hash64City compiled_hash;
@@ -135,11 +133,17 @@ private:
     uint32_t hash_key;
 };
 
-#define DEFINE_SHADER_FUNCION_PROC(ShaderClassName) \
-    static Shader* ConstructShaderInstance(const ShaderCompiledInitializer& _initializer) { return new ShaderClassName(_initializer); }
-
-#define ShaderFunctionProc(ShaderClassName) \
-    ShaderClassName::ConstructShaderInstance
+#define DEFINE_SHADER_FUNCION_PROC(ShaderClassName)                                                                                     \
+    static Shader* ConstructShaderInstance(const ShaderCompiledInitializer& _initializer) { return new ShaderClassName(_initializer); } \
+    static void    SetCompileEnvironment(const ShaderMutationParameters& _mutation_params, ShaderCompilerEnvironment& _environment) {   \
+        const typename ShaderClassName::TMutationSet set(_mutation_params.mutation_id);                                              \
+        set.SetCompileEnvironment(_environment);                                                                                     \
+    }
+//vtable for ShaderMetaType
+#define ShaderFunctionProc(ShaderClassName)     \
+    ShaderClassName::ConstructShaderInstance,   \
+        ShaderClassName::ShouldCompileMutation, \
+        ShaderClassName::SetCompileEnvironment
 
 #define DEFINE_SHADER_TYPE(ShaderClassName, ShaderMapScope, API, ...) \
     INTERNAL_DEFINE_SHADER_TYPE(ShaderClassName, ShaderMapScope, API)
@@ -161,6 +165,7 @@ public:                                                                   \
             ShaderType,                                                          \
             sizeof(ShaderClassName),                                             \
             ShaderClassName::GetParametersMetaData(),                            \
+            TMutationSet::mutation_count,                                        \
             ShaderFunctionProc(ShaderClassName));                                \
         return s_meta_type;                                                      \
     }                                                                            \
@@ -168,6 +173,11 @@ public:                                                                   \
 
 class TestReflectionShader : public Shader {
     DEFINE_SHADER_TYPE(TestReflectionShader, Global, )
+public:
+    MUTATION_BOOL(TestBoolMutation);
+    MUTATION_INT(TestUINT, 5, 0);
+    DEFINE_MUTATION_SET(TestBoolMutation, TestUINT);
+
 public:
     BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(Ubo)
     DEFINE_SHADER_PARAM(Moer::Matrix4x4f, projectionMatrix)

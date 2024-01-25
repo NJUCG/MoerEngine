@@ -13,9 +13,10 @@ namespace Moer {
     }
 
     void ConfigManager::Init(const std::filesystem::path& _workspace_path) {
-        workspace_path       = _workspace_path;
-        editor_resource_path = _workspace_path / "resource";
-        engine_shader_path   = _workspace_path / "resource" / "shaders";
+        workspace_path            = _workspace_path;
+        editor_resource_path      = _workspace_path / "resource";
+        engine_shader_path        = _workspace_path / "resource" / "shaders";
+        engine_shader_cached_path = _workspace_path / "resource" / "shader_cache";
 
         std::filesystem::path config_path = _workspace_path / CONFIG_DIR / "MoerEngine.ini";
         if (!std::filesystem::exists(config_path)) {
@@ -58,5 +59,9 @@ namespace Moer {
 
     const std::filesystem::path& ConfigManager::GetEngineShaderPath() const {
         return engine_shader_path;
+    }
+
+    const std::filesystem::path& ConfigManager::GetEngineShaderCachedPath() const {
+        return engine_shader_cached_path;
     }
 }// namespace Moer

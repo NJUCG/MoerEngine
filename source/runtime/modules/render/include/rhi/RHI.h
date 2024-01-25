@@ -51,14 +51,14 @@ public:
     virtual RHIBlendStateRef         RHICreateBlendState(const RHIBlendStateInitializer& _init)                 = 0;
     virtual RHIVertexInputStateRef   RHICreateVertexInputState(const VertexInputStateInitializerList& _init)    = 0;
 
-    virtual RHIVertexShaderRef   RHICreateVertexShader(const Shader*)   = 0;
-    virtual RHIFragmentShaderRef RHICreateFragmentShader(const Shader*) = 0;
-    virtual RHIGeometryShaderRef RHICreateGeometryShader(const Shader*) = 0;
+    virtual RHIComputeShaderRef RHICreateComputeShader(const class ShaderCodeEntry*, const Shader*) = 0;
 
-    virtual RHIMeshShaderRef          RHICreateMeshShader(const Shader*)          = 0;
-    virtual RHIAmplificationShaderRef RHICreateAmplificationShader(const Shader*) = 0;
+    virtual RHIVertexShaderRef   RHICreateVertexShader(const class ShaderCodeEntry*, const Shader*)   = 0;
+    virtual RHIFragmentShaderRef RHICreateFragmentShader(const class ShaderCodeEntry*, const Shader*) = 0;
+    virtual RHIGeometryShaderRef RHICreateGeometryShader(const class ShaderCodeEntry*, const Shader*) = 0;
 
-    virtual RHIComputeShaderRef RHICreateComputeShader(const Shader*) = 0;
+    virtual RHIMeshShaderRef          RHICreateMeshShader(const class ShaderCodeEntry*, const Shader*)          = 0;
+    virtual RHIAmplificationShaderRef RHICreateAmplificationShader(const class ShaderCodeEntry*, const Shader*) = 0;
 
     virtual RHIShaderLibraryRef RHICreateShaderLibrary(EShaderPlatform _platform, const std::string& _file_path, const std::string& name) { return nullptr; };
 
