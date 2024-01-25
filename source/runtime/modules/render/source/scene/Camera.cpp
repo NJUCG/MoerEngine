@@ -38,7 +38,7 @@ namespace Moer {
     float Camera::sensitivity       = 0.5f;
     float Camera::sensitivity_scale = 1.f;
 
-    //相机空间下的坐标轴
+    //camera space axis
     Vector3f Camera::X = Vector3f(1.f, 0.f, 0.f);
     Vector3f Camera::Y = Vector3f(0.f, 1.f, 0.f);
     Vector3f Camera::Z = Vector3f(0.f, 0.f, 1.f);
