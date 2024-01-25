@@ -142,9 +142,8 @@ namespace Moer {
         }
     }
 
-    //为啥不直接用inverse得到m_view？
     void Camera::SetWorldTransform(Transform to_world) noexcept {
-        m_to_world   = to_world.GetMatrix4x4();     //cam 2 world
+        m_to_world   = to_world.GetMatrix4x4();
         m_position.x = m_to_world[0].w;
         m_position.y = m_to_world[1].w;
         m_position.z = m_to_world[2].w;
@@ -157,14 +156,14 @@ namespace Moer {
         m_rotate_inv = Transpose(m_rotate);
 
         m_view = m_rotate *
-                 MakeTranslation(-m_position.x, -m_position.y, -m_position.z);  //world 2 cam
+                 MakeTranslation(-m_position.x, -m_position.y, -m_position.z);  //world to cam
 
         m_to_world_dirty = false;
     }
 
     void Camera::MoveForward(float delta) {
-        Vector3f t       = Z * Vector3f(delta);                                                          //相机空间
-        t                = -Vector3f(m_rotate_inv * Vector4f(t * sensitivity * sensitivity_scale, 0.f)); //变到世界空间(考虑相机z对应的世界空间-z，向右x，上y，前z)
+        Vector3f t       = Z * Vector3f(delta);                                                          //camera space
+        t                = -Vector3f(m_rotate_inv * Vector4f(t * sensitivity * sensitivity_scale, 0.f)); //into world space(considering -z instead of z)
         auto translation = MakeTranslation(t.x, t.y, t.z);
         m_position       = Vector3f(translation * Vector4f(m_position, 1.f));
         m_to_world_dirty = true;
@@ -202,55 +201,54 @@ namespace Moer {
         m_to_world_dirty = true;
     }
 
-    void Camera::SpinZ(float angle) {
 
-        m_to_world_dirty = true;
-    }
-
-    //变换相机的位置以及朝向：m_to_world_dirty变为true
-    //变换fov，远近平面，aspect_ratio：m_projection_dirty变为true
+    //if changed cam_pos / cam_direction : m_to_world_dirty->true
+    //if changed fov, clips, aspect_ratio：m_projection_dirty->true
     bool Camera::IsDirty() const {
         return m_projection_dirty | m_to_world_dirty;
     }
 
     void Camera::Tick(){
         if(wndInput.mouseEnterScreen){
-            // fov & aspect_ratio
-            this->SetFov(wndInput.fov);
-            this->SetAspectRatio(wndInput.aspect_ratio);
+            // update only when is dirty
+            if(this->IsDirty()){
+                // fov & aspect_ratio
+                this->SetFov(wndInput.fov);
+                this->SetAspectRatio(wndInput.aspect_ratio);
 
-            // camera speed
-            if(wndInput.speedUp){
-                wndInput.cameraSpeed += 5.0f;
-            }
-            if(wndInput.speedDown){
-                wndInput.cameraSpeed -= 2.5f;
-                if(wndInput.cameraSpeed < 0.f)
-                    wndInput.cameraSpeed = 0.f;
-            }
-            if(wndInput.resetSpeed){
-                wndInput.cameraSpeed = 5000.f;
-            }
+                // camera speed
+                if(wndInput.speedUp){
+                    wndInput.cameraSpeed += 5.0f;
+                }
+                if(wndInput.speedDown){
+                    wndInput.cameraSpeed -= 2.5f;
+                    if(wndInput.cameraSpeed < 0.f)
+                        wndInput.cameraSpeed = 0.f;
+                }
+                if(wndInput.resetSpeed){
+                    wndInput.cameraSpeed = 5000.f;
+                }
 
-            // movement
-            if(wndInput.camera_forward)
-                this->MoveForward(wndInput.cameraSpeed * wndInput.deltaTime);
-            if(wndInput.camera_backward)
-                this->MoveForward(-wndInput.cameraSpeed * wndInput.deltaTime);
-            if(wndInput.camera_left)
-                this->MoveRight(-wndInput.cameraSpeed * wndInput.deltaTime);
-            if(wndInput.camera_right)
-                this->MoveRight(wndInput.cameraSpeed * wndInput.deltaTime);
-            if(wndInput.camera_up)
-                this->MoveUp(wndInput.cameraSpeed * wndInput.deltaTime);
-            if(wndInput.camera_down)
-                this->MoveUp(-wndInput.cameraSpeed * wndInput.deltaTime);
-            
-            // rotation
-            if(wndInput.deltaX || wndInput.deltaY){
-                this->UpdateRotation(wndInput.deltaY, -wndInput.deltaX);
-                wndInput.deltaX = 0;
-                wndInput.deltaY = 0;
+                // movement
+                if(wndInput.camera_forward)
+                    this->MoveForward(wndInput.cameraSpeed * wndInput.deltaTime);
+                if(wndInput.camera_backward)
+                    this->MoveForward(-wndInput.cameraSpeed * wndInput.deltaTime);
+                if(wndInput.camera_left)
+                    this->MoveRight(-wndInput.cameraSpeed * wndInput.deltaTime);
+                if(wndInput.camera_right)
+                    this->MoveRight(wndInput.cameraSpeed * wndInput.deltaTime);
+                if(wndInput.camera_up)
+                    this->MoveUp(wndInput.cameraSpeed * wndInput.deltaTime);
+                if(wndInput.camera_down)
+                    this->MoveUp(-wndInput.cameraSpeed * wndInput.deltaTime);
+                
+                // rotation
+                if(wndInput.deltaX || wndInput.deltaY){
+                    this->UpdateRotation(wndInput.deltaY, -wndInput.deltaX);
+                    wndInput.deltaX = 0;
+                    wndInput.deltaY = 0;
+                }
             }
         }
     }

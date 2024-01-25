@@ -34,14 +34,13 @@ namespace Moer {
         void MoveRight(float);
         void MoveUp(float);
         void UpdateRotation(float, float);
-        void SpinZ(float);
 
-        bool IsDirty() const;       //脏标记，用于判断是否发生了变化，未变化的话直接使用上一帧缓存的变换
+        bool IsDirty() const;       //judge if camera changed compared to last frame
 
-        void Tick();    //动态更新camera
+        void Tick();                //update camera per frame
 
     private:
-        Matrix4x4f m_view_matrix;   //视图变换矩阵
+        Matrix4x4f m_view_matrix;
 
         float m_fov_y;//degree
         float m_aspect_ratio;
@@ -50,8 +49,8 @@ namespace Moer {
 
         Vector3f m_position;
 
-        Matrix4x4f m_rotate;    //world 2 cam 的旋转
-        Matrix4x4f m_rotate_inv;    //cam 2 world
+        Matrix4x4f m_rotate;    //world to cam
+        Matrix4x4f m_rotate_inv;    //cam to world
 
         bool       m_to_world_dirty = true;
         Matrix4x4f m_to_world;// camera to world
