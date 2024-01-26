@@ -28,14 +28,14 @@ public:
     RHIBlendStateRef         RHICreateBlendState(const RHIBlendStateInitializer& _init) override { return RHIBlendStateRef{}; }
     RHIVertexInputStateRef   RHICreateVertexInputState(const VertexInputStateInitializerList& _init) override { return RHIVertexInputStateRef{}; }
 
-    RHIVertexShaderRef   RHICreateVertexShader(const Shader*) override { return RHIVertexShaderRef{}; }
-    RHIFragmentShaderRef RHICreateFragmentShader(const Shader*) override { return RHIFragmentShaderRef{}; }
-    RHIGeometryShaderRef RHICreateGeometryShader(const Shader*) override { return RHIGeometryShaderRef{}; }
+    RHIVertexShaderRef   RHICreateVertexShader(const class ShaderCodeEntry*, const Shader*) override { return RHIVertexShaderRef{}; }
+    RHIFragmentShaderRef RHICreateFragmentShader(const class ShaderCodeEntry*, const Shader*) override { return RHIFragmentShaderRef{}; }
+    RHIGeometryShaderRef RHICreateGeometryShader(const class ShaderCodeEntry*, const Shader*) override { return RHIGeometryShaderRef{}; }
 
-    RHIMeshShaderRef          RHICreateMeshShader(const Shader*) override { return RHIMeshShaderRef{}; }
-    RHIAmplificationShaderRef RHICreateAmplificationShader(const Shader*) override { return RHIAmplificationShaderRef{}; }
+    RHIMeshShaderRef          RHICreateMeshShader(const class ShaderCodeEntry*, const Shader*) override { return RHIMeshShaderRef{}; }
+    RHIAmplificationShaderRef RHICreateAmplificationShader(const class ShaderCodeEntry*, const Shader*) override { return RHIAmplificationShaderRef{}; }
 
-    RHIComputeShaderRef RHICreateComputeShader(const Shader*) override { return RHIComputeShaderRef{}; }
+    RHIComputeShaderRef RHICreateComputeShader(const class ShaderCodeEntry*, const Shader*) override { return RHIComputeShaderRef{}; }
 
     RHIShaderLibraryRef RHICreateShaderLibrary(EShaderPlatform _platform, const std::string& _file_path, const std::string& name) override { return RHIShaderLibraryRef{}; }
 

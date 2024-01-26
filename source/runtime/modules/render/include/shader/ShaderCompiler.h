@@ -3,6 +3,14 @@
 #include "ShaderCommon.h"
 #include "shader/ShaderCommon.h"
 
+struct ShaderCompiledFile {
+    uint64_t last_write_time;
+    uint64_t source_hash;
+    uint64_t compiled_hash;
+
+    std::string path;
+    std::string content;
+};
 class IShaderCompiler {
 public:
     virtual void Compile(const ShaderCompilerInput& input, ShaderCompilerOutput& output) = 0;
@@ -13,6 +21,16 @@ public:
      * @return false 
      */
     virtual bool IsSupportTarget(const ShaderTargetInfo&) { return false; }
+};
+
+class ShaderCompileJob {
+public:
+    void DispatchAndExecute(const std::function<void(const ShaderCompilerOutput&)>& post_process_func);
+    void Finalize(const ShaderCompileJobInput& input);
+    class Impl;
+
+private:
+    Impl* impl;
 };
 class ShaderCompiler {
 

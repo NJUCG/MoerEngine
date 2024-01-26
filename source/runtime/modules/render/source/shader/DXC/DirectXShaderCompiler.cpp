@@ -84,24 +84,30 @@ void DXCompiler::CompileD3D12(const ShaderCompilerInput& _input, ShaderCompilerO
 }
 
 void DXCompiler::CompileVulkan(const ShaderCompilerInput& _input, ShaderCompilerOutput& _output) {
-    auto on_fail = [&](const char* messsage) {
+    static auto on_fail = [&](const char* messsage) {
         _output.errors.push_back(messsage);
         _output.b_succeeded = false;
         _output.target_info = _input.target_info;
     };
 
-    const char*        file_name_c = _input.relative_source_file_path.c_str();
-    const std::wstring entry_name  = std::wstring(_input.entry_point.begin(), _input.entry_point.end());
-    HRESULT            hres;
+    std::string        file_name_c(_input.relative_source_file_path);
+    std::string        entry_name_c(_input.entry_point);
+    const std::wstring entry_name = std::wstring(entry_name_c.begin(), entry_name_c.end());
 
-    std::filesystem::path file_path    = Moer::ConfigManager::GetInstance().GetEngineShaderPath();
-    std::filesystem::path output_path  = file_path;
+    HRESULT hres;
+
+    std::filesystem::path file_path = Moer::ConfigManager::GetInstance().GetEngineShaderPath();
+
+    std::filesystem::path output_path  = Moer::ConfigManager::GetInstance().GetEngineShaderCachedPath();
     std::string           platform_str = ToString(_input.target_info.shader_platform);
     if (platform_str.empty()) {
         on_fail("platform not supported");
         return;
     }
     auto platform_output_dir = output_path / platform_str;
+    if (!std::filesystem::exists(platform_output_dir)) {
+        std::filesystem::create_directories(platform_output_dir);
+    }
     file_path /= file_name_c;
 
     std::wstring file_name = file_path.generic_wstring();
@@ -139,6 +145,15 @@ void DXCompiler::CompileVulkan(const ShaderCompilerInput& _input, ShaderCompiler
         // todo: check file idx to match target
     }
 
+    const auto&  defines = _input.environment.GetDefines();
+    std::wstring defines_str;
+    for (const auto& define : defines) {
+        std::basic_string<wchar_t, std::char_traits<wchar_t>, m_defualt_allocator<wchar_t>> temp_first(define.first.begin(), define.first.end());
+        std::basic_string<wchar_t, std::char_traits<wchar_t>, m_defualt_allocator<wchar_t>> temp_second(define.second.begin(), define.second.end());
+
+        defines_str.append(std::format(L"-D{}={}\n", temp_first, temp_second));
+    }
+
     // Configure the compiler arguments for compiling the HLSL shader to SPIR-V
     Moer::Array<LPCWSTR> arguments = {
         // (Optional) name of the shader file to be displayed e.g. in an error message
@@ -151,7 +166,7 @@ void DXCompiler::CompileVulkan(const ShaderCompilerInput& _input, ShaderCompiler
         target_profile.c_str(),
         // Compile to SPIRV
         L"-spirv",
-        // L"-fvk-invert-y",
+        defines_str.c_str(),
         // L"-fvk-use-dx-position-w",
         DXC_ARG_ALL_RESOURCES_BOUND,
         DXC_ARG_DEBUG,
@@ -196,27 +211,14 @@ void DXCompiler::CompileVulkan(const ShaderCompilerInput& _input, ShaderCompiler
     result->GetResult(&code);
     const uint8_t* data = (uint8_t*)code->GetBufferPointer();
     uint32_t       size = code->GetBufferSize();
+
     _output.b_succeeded = true;
-
+    _output.shader_name = _input.shader_name;
     _output.shader_code.resize(size);
-
     _output.compiled_hash.FromData(data, size);
-    // const auto& file_name_str   = file_path.generic_string();
-    // const auto& output_hash_str = _output.compiled_hash.ToString();
+    _output.mutation_id = _input.mutation_id;
 
-    // std::string new_file_name_str   = file_name_str;
-    // std::string new_output_hash_str = output_hash_str;
-
-    // std::string_view file_name_view(file_name_str);
-    // std::string_view output_hash_view(output_hash_str);
-    // LOG_INFO("file {} compiled hash: {}", file_name_view, output_hash_view);
     memcpy(&_output.shader_code[0], data, size);
-
-    // int32_t* test_mi_override = new int32_t[10];
-    // delete[] test_mi_override;
-
-    // test_mi_override = (int32_t*)malloc(10 * sizeof(int32_t));
-    // free(test_mi_override);
 
     Moer::UnorderedMap<std::string, ParameterInfo> param_map;
     reflector->ReflectShader(result.Get(), _input.param_meta_data, param_map);

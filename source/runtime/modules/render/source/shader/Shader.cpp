@@ -8,8 +8,8 @@
 #include <cstring>
 class TestShaderClass : Shader {
 public:
-    class TestBoolMutation : public ShaderMutationBool {};
-    using TMutationSet = TShaderMutationSet<TestBoolMutation>;
+    MUTATION_SPARSE_UINT(TestInts, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9);
+    DEFINE_MUTATION_SET(TestInts);
     DEFINE_SHADER_TYPE(TestShaderClass, Global, RENDER_API)
 };
 
@@ -31,13 +31,6 @@ Shader::~Shader(){
 
 };
 
-const ShaderCodeEntry* Shader::GetCodeEntry() const {
-    if (type != nullptr) {
-        return ShaderResourceManager::GetInstance().GetShaderCodeMap().GetCodeEntry(type->GetName());
-    }
-    return nullptr;
-}
-
 const Hash64City& Shader::GetCompiledHash() const {
     return compiled_hash;
 };
@@ -53,9 +46,9 @@ void Shader::ConstructRootParameterLayoutInfo(const ShaderParametersInfoMap& _pa
     for (const auto& member : parameter_meta_data->GetMembers()) {
         int16_t              slot = -1, space = -1, num = 0;
         EShaderParameterType param_type = EShaderParameterType::UNKNOWN;
-        bool                 b_valid    = reflect_map.count(member.GetName()) > 0;
+        bool                 b_valid    = reflect_map.count(member.GetName().data()) > 0;
         if (b_valid) {
-            const auto& iter = reflect_map.find(member.GetName());
+            const auto& iter = reflect_map.find(member.GetName().data());
             slot             = iter->second.slot;
             space            = iter->second.space;
             num              = iter->second.num;

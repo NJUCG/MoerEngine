@@ -36,6 +36,7 @@ namespace Moer {
         std::filesystem::path workspace_path;
         std::filesystem::path editor_resource_path;
         std::filesystem::path engine_shader_path;
+        std::filesystem::path engine_shader_cached_path;
         ConfigManager() {}
 
     public:
@@ -50,6 +51,8 @@ namespace Moer {
         const std::filesystem::path& GetEditorResourcePath() const;
 
         const std::filesystem::path& GetEngineShaderPath() const;
+
+        const std::filesystem::path& GetEngineShaderCachedPath() const;
 
         //call after config manager init
         const MoerInitConfig& GetInitConfig() const { return init_config; }

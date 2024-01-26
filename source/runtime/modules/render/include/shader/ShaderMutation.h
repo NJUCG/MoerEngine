@@ -1,10 +1,18 @@
 #ifndef MOER_ENGINE_SHADER_MUTATION_H
 #define MOER_ENGINE_SHADER_MUTATION_H
 
+#include "rhi/RHICommon.h"
 #include "shader/ShaderCommon.h"
 #include <stdint.h>
 #pragma region shader mutation
 
+struct ShaderMutationParameters {
+
+    const EShaderPlatform platform;
+    const uint32_t        mutation_id;
+
+    ShaderMutationParameters(EShaderPlatform _platform, uint32_t _mutation_id) : platform(_platform), mutation_id(_mutation_id) {}
+};
 //shader mutation basic types
 template<typename T>
 concept TShaderMutationBasicType = requires(T) {
@@ -32,9 +40,9 @@ struct ShaderMutationBool {
     }
 };
 
-template<typename IType, uint32_t MutationCount, uint32_t start_value = 0>
-struct ShaderMutationUInt {
-    using Type                                  = IType;
+template<uint32_t MutationCount, int32_t start_value = 0>
+struct ShaderMutationInt {
+    using Type                                  = int32_t;
     static constexpr uint32_t mutation_count    = MutationCount;
     static constexpr bool     has_multiple_slot = false;
 
@@ -126,6 +134,18 @@ struct TShaderMutationSet {
     void SetMutation(typename TMutationType::Type _value) {
         static_assert(sizeof(typename TMutationType::Type) == 0);
     }
+
+    void SetCompileEnvironment(ShaderCompilerEnvironment& _environment) const {
+        //last set, do nothing
+    }
+
+    uint32_t GetMutationId() const {
+        return 0;
+    }
+
+    static Type GetMutationTypeFromID(uint32_t _id) {
+        return Type(_id);
+    }
 };
 
 template<TShaderMutationBasicType TMutation, typename... Types>
@@ -140,7 +160,7 @@ struct TShaderMutationSet<TMutation, Types...> {
 
     TShaderMutationSet<TMutation, Types...>() : mutation_value(TMutation::GetMutationTypeFromID(0)) {}
     explicit TShaderMutationSet<TMutation, Types...>(uint32_t _mutation_id) : mutation_value(TMutation::GetMutationTypeFromID(_mutation_id % TMutation::mutation_count)), next_set(_mutation_id / TMutation::mutation_count) {
-        assert(_mutation_id == 0 && "invalid mutation id");
+        assert(_mutation_id >= 0 && "invalid mutation id");
     }
 
     template<TShaderMutationBasicType TMutationToGet>
@@ -161,6 +181,19 @@ struct TShaderMutationSet<TMutation, Types...> {
         }
     }
 
+    void SetCompileEnvironment(ShaderCompilerEnvironment& _environment) const {
+        _environment.SetDefine(TMutation::mutation_name, TMutation::GetMutationValueFromType(mutation_value));
+        next_set.SetCompileEnvironment(_environment);
+    }
+
+    uint32_t GetMutationID() const {
+        return TMutation::GetMutationID(mutation_value) + next_set.GetMutationID() * TMutation::mutation_count;
+    }
+
+    static Type GetMutationTypeFromID(uint32_t _id) {
+        return Type(_id);
+    }
+
     TMutation::Type mutation_value;
     TNextSet        next_set;
     //build a static linked list
@@ -168,11 +201,22 @@ struct TShaderMutationSet<TMutation, Types...> {
 
 using TShaderMutationSetEmpty = TShaderMutationSet<>;
 
-#define MUTATION_CLASS_BOOL(ClassName)                                 \
-    struct ClassName : public TShaderMutationSet<ShaderMutationBool> { \
-    public:                                                            \
-        static constexpr char* mutation_name = #ClassName;             \
+#define MUTATION_BOOL(ClassName)                                 \
+    class ClassName : public ShaderMutationBool {                \
+    public:                                                      \
+        static constexpr char const* mutation_name = #ClassName; \
+    }
+#define MUTATION_INT(ClassName, MutationCount, StartValue)                  \
+    class ClassName : public ShaderMutationInt<MutationCount, StartValue> { \
+    public:                                                                 \
+        static constexpr char const* mutation_name = #ClassName;            \
     }
 
+#define MUTATION_SPARSE_UINT(ClassName, ...)                         \
+    class ClassName : public ShaderMutationSparseUInt<__VA_ARGS__> { \
+    public:                                                          \
+        static constexpr char const* mutation_name = #ClassName;     \
+    }
+#define DEFINE_MUTATION_SET(...) using TMutationSet = TShaderMutationSet<__VA_ARGS__>
 #pragma endregion
 #endif

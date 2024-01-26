@@ -13,7 +13,7 @@
 
 ShaderParametersMetadata::ShaderParametersMetadata(
     EShaderParameterUseCase    _use_case,
-    const char*                _struct_name,
+    std::string_view           _struct_name,
     uint32_t                   _size,
     const Moer::Array<Member>& _members,
     bool                       _b_force_complete_initialization)
@@ -30,7 +30,7 @@ ShaderParametersMetadata::~ShaderParametersMetadata() {
     }
 };
 
-std::string ShaderParametersMetadata::GetMemberNameByOffset(uint16_t _member_offset) const {
+std::string_view ShaderParametersMetadata::GetMemberNameByOffset(uint16_t _member_offset) const {
     const auto& members = GetMembers();
 
     const auto& iter = std::lower_bound(members.begin(), members.end(), _member_offset, std::less<ShaderParametersMetadata::Member>());
@@ -103,19 +103,25 @@ void ShaderMetaType::OnRegistration() {
     //worker
 }
 ShaderMetaType::ShaderMetaType(
-    const char*                                 _type_name,
-    const char*                                 _file_name,
-    const char*                                 _entry_point,
+    std::string_view                            _type_name,
+    std::string_view                            _file_name,
+    std::string_view                            _entry_point,
     EShaderType                                 _shader_type,
     uint32_t                                    _type_size,
     const ShaderParametersMetadata*             _parameter_data,
-    ShaderMetaType::ConstructShaderInstanceProc _shader_type_constructor)
+    uint32_t                                    _total_mutation_count,
+    ShaderMetaType::ConstructShaderInstanceProc _shader_type_constructor,
+    ShaderMetaType::ShouldCompileMutationProc   _should_compile_mutation,
+    SetCompileEnvironmentProc                   _set_compile_environment)
     : type_name(_type_name),
       file_name(_file_name),
       entry_point(_entry_point),
       shader_type(_shader_type),
       parameter_meta_data(_parameter_data),
-      construct_shader_instance(_shader_type_constructor) {
+      total_mutation_count(_total_mutation_count),
+      construct_shader_instance(_shader_type_constructor),
+      should_compile_mutation(_should_compile_mutation),
+      set_compile_environment(_set_compile_environment) {
 
     OnRegistration();
 };
@@ -123,8 +129,8 @@ ShaderMetaType::~ShaderMetaType() {
     GetNameToTypeMap().erase(type_name);
 }
 
-Moer::UnorderedMap<std::string, ShaderMetaType*>& ShaderMetaType::GetNameToTypeMap() {
-    static Moer::UnorderedMap<std::string, ShaderMetaType*> name_to_shader_meta_type;
+Moer::UnorderedMap<std::string_view, ShaderMetaType*>& ShaderMetaType::GetNameToTypeMap() {
+    static Moer::UnorderedMap<std::string_view, ShaderMetaType*> name_to_shader_meta_type;
     return name_to_shader_meta_type;
 }
 
@@ -149,7 +155,7 @@ void ShaderTypeRegistration::SubmitRegistrations() {
     temp.swap(GetRegistrations());
 }
 
-Moer::Array<ShaderCompilerInput> g_compiled_inputs;
+Moer::Array<ShaderCompileJobInput> g_compile_job_inputs;
 
 void ShaderCompileRegistration::RegistrateCompileWorkIfNeed(const ShaderMetaType& _shader_type) {
     ShaderTargetInfo target_info;
@@ -160,12 +166,17 @@ void ShaderCompileRegistration::RegistrateCompileWorkIfNeed(const ShaderMetaType
     const ShaderParametersMetadata* param_meta_data;
     assert(g_rhi);
 
-    g_compiled_inputs.emplace_back(
-        ShaderTargetInfo{_shader_type.GetShaderType(), GetShaderPlatformByRHIType(g_rhi->GetType())}, _shader_type.GetEntryPoint(), _shader_type.GetFileName(), _shader_type.GetName(), _shader_type.GetParameterMetaData());
+    g_compile_job_inputs.emplace_back(
+        ShaderTargetInfo{_shader_type.GetShaderType(), GetShaderPlatformByRHIType(g_rhi->GetType())},
+        _shader_type.GetEntryPoint(),
+        _shader_type.GetFileName(),
+        _shader_type.GetName(),
+        _shader_type.GetTotalMutationCount(),
+        _shader_type.GetParameterMetaData());
 }
 
-Moer::Array<ShaderCompilerInput>& ShaderCompileRegistration::RetrieveShaderCompileWorks() {
-    return g_compiled_inputs;
+Moer::Array<ShaderCompileJobInput>& ShaderCompileRegistration::RetrieveShaderCompileWorks() {
+    return g_compile_job_inputs;
 }
 
 ShaderCompiledInitializer::ShaderCompiledInitializer(
