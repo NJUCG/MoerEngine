@@ -2066,16 +2066,16 @@ class RHIRayTracingPipelineStateInitializer : RHIRayTracingPipelineStateInfo {
 public:
     RHIRayTracingPipelineStateInitializer() = default;
 
-    void SetRayGen(RHIRayGenShader* rgen_shader) {
+    void SetRayGenShader(RHIRayGenShader* rgen_shader) {
         ray_gen_shader = rgen_shader;
     }
-    void SetMissGroup(RHIRayMissShader* rmiss_shader) {
+    void AddMissShader(RHIRayMissShader* rmiss_shader) {
         ray_miss_table.push_back(rmiss_shader);
     }
-    void SetCallableGroup(RHIRayCallableShader* rcall_shader) {
+    void AddCallableShader(RHIRayCallableShader* rcall_shader) {
         ray_callable_table.push_back(rcall_shader);
     }
-    void SetHitGroup(RHIRayClosestHitShader* rchit_shader, RHIRayAnyhitShader* rahit_shader = nullptr, RHIRayIntersectionShader* rint_shader = nullptr) {
+    void AddHitShaderGroup(RHIRayClosestHitShader* rchit_shader, RHIRayAnyhitShader* rahit_shader = nullptr, RHIRayIntersectionShader* rint_shader = nullptr) {
         ray_hit_table.push_back(RHIRayHitGroup{rchit_shader, rahit_shader, rint_shader});
     }
     struct RHIRayHitGroup {

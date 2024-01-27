@@ -598,6 +598,7 @@ public:
     static VkGeometryTypeKHR                    METoVKGeometryTypeKHR(ERayTracingGeometryType _type);
     static VkGeometryFlagsKHR                   METoGeometryFlagsKHR(ERayTracingGeometryFlags _flag);
     static VkBuildAccelerationStructureFlagsKHR METoVKBuildAccelerationStructureFlagsKHR(ERayTracingAccelerationStructureBuildFlags _me_flags);
+    static VkGeometryInstanceFlagsKHR           METoVKGeometryInstanceFlagsKHR(ERayTracingInstanceFlags _me_flags);
 };
 
 class VulkanRHIRayTracingBLAS final : public RHIRayTracingBLAS {
@@ -619,7 +620,8 @@ public:
     }
 
 protected:
-    VkAccelerationStructureKHR tlas;
+    VkAccelerationStructureKHR m_tlas;
+    RHIBufferRef               m_buffer;
 };
 #pragma endregion
 

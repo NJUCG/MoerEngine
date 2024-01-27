@@ -777,8 +777,79 @@ Moer::Array<RHIRayTracingBLASRef> VulkanRHIImpl::RHIBuildRayTracingBLAS(const Mo
 }
 
 RHIRayTracingTLASRef VulkanRHIImpl::RHIBuildRayTracingTLAS(const RHIRayTracingTLASInitializer& _init) {
-    auto* vk_as = new VulkanRHIRayTracingTLAS(_init);
-    return RHIRayTracingTLASRef();
+    static auto vkGetAccelerationStructureBuildSizesKHR = reinterpret_cast<PFN_vkGetAccelerationStructureBuildSizesKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkGetAccelerationStructureBuildSizesKHR"));
+    static auto vkCreateAccelerationStructureKHR        = reinterpret_cast<PFN_vkCreateAccelerationStructureKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkCreateAccelerationStructureKHR"));
+    static auto vkCmdBuildAccelerationStructuresKHR     = reinterpret_cast<PFN_vkCmdBuildAccelerationStructuresKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkCmdBuildAccelerationStructuresKHR"));
+    static auto vkGetAccelerationStructureDeviceAddressKHR = reinterpret_cast<PFN_vkGetAccelerationStructureDeviceAddressKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkGetAccelerationStructureDeviceAddressKHR"));
+    VK_CHECK_NULLPTR(vkGetAccelerationStructureBuildSizesKHR, "RHIBuildRayTracingTLAS: vkGetAccelerationStructureBuildSizesKHR is nullptr", return RHIRayTracingTLASRef{});
+    VK_CHECK_NULLPTR(vkCreateAccelerationStructureKHR, "RHIBuildRayTracingTLAS: vkCreateAccelerationStructureKHR is nullptr", return RHIRayTracingTLASRef{});
+    VK_CHECK_NULLPTR(vkCmdBuildAccelerationStructuresKHR, "RHIBuildRayTracingTLAS: vkCmdBuildAccelerationStructuresKHR is nullptr", return RHIRayTracingTLASRef{});
+    VK_CHECK_NULLPTR(vkGetAccelerationStructureDeviceAddressKHR, "RHIBuildRayTracingTLAS: vkGetAccelerationStructureDeviceAddressKHR is nullptr", return RHIRayTracingTLASRef{});
+    uint32_t instance_count = _init.instances.size();
+    Moer::Array<VkAccelerationStructureInstanceKHR> vk_instances;
+    vk_instances.reserve(instance_count);
+    for (const auto& rhi_instance : _init.instances) {
+        VkAccelerationStructureInstanceKHR vk_instance{};
+        vk_instance.transform                              = *reinterpret_cast<const VkTransformMatrixKHR*>(&rhi_instance.transform);
+        vk_instance.instanceCustomIndex                    = rhi_instance.custom_index;
+        vk_instance.mask                                   = rhi_instance.instance_mask;
+        vk_instance.flags                                  = VulkanRHIRayTracingAccelerationStructure::METoVKGeometryInstanceFlagsKHR(rhi_instance.flags);
+        vk_instance.instanceShaderBindingTableRecordOffset = rhi_instance.instance_sbt_offset;
+        VkAccelerationStructureDeviceAddressInfoKHR vk_asda_info{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR};
+        vk_asda_info.accelerationStructure         = static_cast<VulkanRHIRayTracingBLAS*>(rhi_instance.blas.Get())->m_blas;
+        vk_instance.accelerationStructureReference = vkGetAccelerationStructureDeviceAddressKHR(m_device->GetDevice(), &vk_asda_info);
+        vk_instances.emplace_back(vk_instance);
+    }
+    VkAccelerationStructureGeometryInstancesDataKHR vk_insances_data{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR};
+    vk_insances_data.data.hostAddress = vk_instances.data();
+
+    VkAccelerationStructureGeometryKHR vk_geo{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
+    vk_geo.geometryType       = VK_GEOMETRY_TYPE_INSTANCES_KHR;
+    vk_geo.geometry.instances = vk_insances_data;
+
+    VkAccelerationStructureBuildGeometryInfoKHR vk_geo_info{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
+    vk_geo_info.type          = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+    vk_geo_info.flags         = VulkanRHIRayTracingAccelerationStructure::METoVKBuildAccelerationStructureFlagsKHR(_init.build_flags);
+    vk_geo_info.geometryCount = 1;
+    vk_geo_info.mode          = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+    vk_geo_info.pGeometries   = &vk_geo;
+
+    VkAccelerationStructureBuildSizesInfoKHR vk_sizes_info{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
+    vkGetAccelerationStructureBuildSizesKHR(m_device->GetDevice(), VK_ACCELERATION_STRUCTURE_BUILD_TYPE_HOST_OR_DEVICE_KHR, &vk_geo_info, &instance_count, &vk_sizes_info);
+
+    auto* rhi_tlas                                      = new VulkanRHIRayTracingTLAS(_init);
+    rhi_tlas->size_info.build_scratch_size              = vk_sizes_info.buildScratchSize;
+    rhi_tlas->size_info.result_size                     = vk_sizes_info.accelerationStructureSize;
+    RHIBufferCreateInfo tlas_buffer_ci                  = RHIBufferCreateInfo::Create(vk_sizes_info.accelerationStructureSize, vk_sizes_info.accelerationStructureSize, EBufferUsageFlags::ACCELERATION_STRUCTURE);
+    rhi_tlas->m_buffer                                  = RHICreateBuffer(tlas_buffer_ci);
+    VkBuffer                             vk_tlas_buffer = static_cast<VulkanRHIBuffer*>(rhi_tlas->m_buffer.Get())->m_alloc.buffer;
+    VkAccelerationStructureCreateInfoKHR vk_as_ci{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
+    vk_as_ci.type   = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+    vk_as_ci.buffer = vk_tlas_buffer;
+    vk_as_ci.offset = 0;
+    vk_as_ci.size   = vk_sizes_info.accelerationStructureSize;
+    VK_CHECK_RESULT(vkCreateAccelerationStructureKHR(m_device->GetDevice(), &vk_as_ci, nullptr, &rhi_tlas->m_tlas));
+
+    RHIBufferCreateInfo scratch_buffer_info           = RHIBufferCreateInfo::Create(vk_sizes_info.buildScratchSize, vk_sizes_info.buildScratchSize, EBufferUsageFlags::ACCELERATION_STRUCTURE_SCRATCH);
+    RHIBufferRef        scratch_buffer                = RHICreateBuffer(scratch_buffer_info);
+    VkDeviceAddress     scratch_buffer_device_address = GetDeviceAddress(scratch_buffer);
+
+    vk_geo_info.dstAccelerationStructure  = rhi_tlas->m_tlas;
+    vk_geo_info.scratchData.deviceAddress = scratch_buffer_device_address;
+
+    VkAccelerationStructureBuildRangeInfoKHR vk_range_info{};
+    vk_range_info.primitiveCount                                    = instance_count;
+    const VkAccelerationStructureBuildRangeInfoKHR* p_vk_range_info = &vk_range_info;
+
+    const auto& graphics_command_pool = m_device->GetCurrentCommandAllocator()->GetHandle(ECommandListType::GRAPHICS);
+    const auto& graphics_queue        = m_device->GetGraphicsQueue();
+    auto        cb                    = BeginSingleTimeCommands(graphics_command_pool);
+
+    vkCmdBuildAccelerationStructuresKHR(cb, 1, &vk_geo_info, &p_vk_range_info);
+
+    EndSingleTimeCommands(cb, graphics_command_pool, graphics_queue);
+
+    return RHIRayTracingTLASRef(rhi_tlas);
 }
 
 RHIBufferRef VulkanRHIImpl::RHICreateBuffer(const RHIBufferCreateInfo& info) {
