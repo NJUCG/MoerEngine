@@ -3,6 +3,7 @@
 #include "math/Transform.h"
 #include "misc/CountableRef.h"
 #include "RenderAPI.h"
+#include "window/WindowInput.h"
 
 namespace Moer {
     class RENDER_API Camera : public CountableResource {
@@ -34,7 +35,9 @@ namespace Moer {
         void MoveUp(float);
         void UpdateRotation(float, float);
 
-        bool IsDirty() const;
+        bool IsDirty() const;       //judge if camera changed compared to last frame
+
+        void Tick();                //update camera per frame
 
     private:
         Matrix4x4f m_view_matrix;
@@ -46,8 +49,8 @@ namespace Moer {
 
         Vector3f m_position;
 
-        Matrix4x4f m_rotate;
-        Matrix4x4f m_rotate_inv;
+        Matrix4x4f m_rotate;    //world to cam
+        Matrix4x4f m_rotate_inv;    //cam to world
 
         bool       m_to_world_dirty = true;
         Matrix4x4f m_to_world;// camera to world

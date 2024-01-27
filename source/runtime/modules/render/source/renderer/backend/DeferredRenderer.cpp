@@ -325,8 +325,9 @@ namespace Moer {
 
             auto* const scene = g_scene;
             if (scene) {
-                const auto camera_entity = scene->GetCameras()[0];
-                const auto camera        = CameraManager::Get().Get(camera_entity);
+                auto camera_entity = scene->GetCameras()[0];
+                auto camera        = CameraManager::Get().Get(camera_entity);
+                camera->Tick();
                 const auto camera_view   = camera->GetViewMatrix();
                 const auto camera_proj   = camera->GetProjectionMatrix();
 
