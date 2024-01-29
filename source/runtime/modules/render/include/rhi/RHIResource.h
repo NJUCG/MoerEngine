@@ -444,6 +444,8 @@ struct RHIBatchedShaderParameters {
         SetParameters(shader->GetMetaShader(), data_size, (uint8_t*)&params);
     }
 
+    void SetParameters(RHIResource* resource, uint16_t slot, uint16_t space);
+
     const uint8_t* GetConstData(uint32_t byte_offset) const {
         return &raw_data[byte_offset];
     }

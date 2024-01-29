@@ -29,7 +29,7 @@ namespace Moer {
         using Instance = uint16_t;
     private:
         std::unordered_map<Entity,Instance,Entity::Hasher> m_instance_map;
-        std::vector<COMPONENT> m_data;
+        Moer::Array<COMPONENT> m_data;
     };
 
 

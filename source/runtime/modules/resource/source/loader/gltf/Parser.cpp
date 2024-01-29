@@ -4,36 +4,76 @@
 #include "assimp/postprocess.h"
 #include "assimp/scene.h"
 #include "rhi/RHI.h"
-#include "scene/EntityManager.h"
 #include "resources/GpuScene.h"
+#include "scene/EntityManager.h"
 #include "scene/CameraManager.h"
+#include "scene/Material.h"
+#include "scene/MaterialInstance.h"
 #include "scene/RenderableManager.h"
 #include "scene/TransformManager.h"
+
+#include <stb/stb_image.h>
 
 namespace Moer::Resource::Gltf {
 
     struct Parser::Impl {
-        std::unique_ptr<Scene>                        LoadSceneFromFile(const std::filesystem::path& file_path);
-        void                                          LoadNode(const aiNode* node, const aiScene* scene);
-        void                                          LoadTextures(const aiScene* scene);
-        void                                          loadCameras(const aiScene* scene);
-        Moer::Array<CountableRef<RHITexture>>         m_textures{};
-        Moer::Array<CountableRef<RHIRenderPrimitive>> m_primitives{};
-        std::unique_ptr<Scene>                        m_scene{nullptr};
+        std::unique_ptr<Scene>                               LoadSceneFromFile(const std::filesystem::path& file_path);
+        void                                                 LoadNode(const aiNode* node, const aiScene* scene);
+        void                                                 loadCameras(const aiScene* scene);
+        void                                                 loadMaterial(const aiScene* ai_scene, const aiMaterial* ai_material, const std::string& materialName);
+        void                                                 LoadTexture(const aiScene* scene, const aiString& texture_path, MaterialInstanceRef& mat, const std::string& param_name);
+        Moer::Array<RHIRenderPrimitiveRef>                   m_primitives{};
+        Moer::UnorderedMap<std::string, RHITextureRef>       m_textures{};
+        Moer::UnorderedMap<std::string, MaterialInstanceRef> m_materials{};
+        Moer::UnorderedMap<size_t, MaterialRef>              m_material_cache{};
+        std::filesystem::path                                m_file_parent_path{};
+        std::unique_ptr<Scene>                               m_scene{nullptr};
     };
 
-    static Vector3f ToVector3f(const aiVector3D& vec) {
-        return {vec.x, vec.y, vec.z};
+    int32_t GetEmbeddedTextureId(const aiString& path) {
+        const char* pathStr = path.C_Str();
+        if (path.length >= 2 && pathStr[0] == '*') {
+            for (int i = 1; i < path.length; i++) {
+                if (!isdigit(pathStr[i])) {
+                    return -1;
+                }
+            }
+            return std::atoi(pathStr + 1);// NOLINT
+        }
+        return -1;
     }
-    void Parser::Impl::LoadTextures(const aiScene* scene) {
-        const uint32_t texture_num = scene->mNumTextures;
-        if (texture_num == 0) {
-            LOG_INFO("Current Scene has no texture");
+
+    void Parser::Impl::LoadTexture(const aiScene* scene, const aiString& texture_path, MaterialInstanceRef& mat, const std::string& param_name) {
+        if (m_textures.contains(texture_path.C_Str())) {
+            mat->SetParameter(param_name, m_textures[texture_path.C_Str()]);
             return;
         }
-        for (uint32_t i = 0; i < texture_num; i++) {
-            const auto* texture = scene->mTextures[i];
+
+        int32_t         embedded_id = GetEmbeddedTextureId(texture_path);
+        TextureBuilder* builder     = MoerNew(TextureBuilder);
+        int             width, height, channel;
+        void*           data = nullptr;
+        if (embedded_id >= 0) {
+            const aiTexture* texture = scene->mTextures[embedded_id];
+            stbi_load_from_memory(reinterpret_cast<const unsigned char*>(texture->pcData), texture->mWidth, &width, &height, &channel, 4);
+            builder->CallBack(&free);
+            //todo
+        } else {
+            std::filesystem::path texture_file_path = m_file_parent_path / texture_path.C_Str();
+            data                                    = stbi_load(texture_file_path.string().c_str(), &width, &height, &channel, 4);
+            builder->CallBack(stbi_image_free);
+            //todo
         }
+        builder->Width(width).Height(height).Format(EPixelFormat::PF_R8G8B8A8_UNORM).Data(data);
+        EnqueueRenderTask([this, builder, mat, param_name, texture_path]() {
+            RHITextureRef texture = builder->Build();
+            MoerDelete(builder);
+            mat->SetParameter(param_name, texture);
+            m_textures[texture_path.C_Str()] = texture;
+        });
+    }
+    static Vector3f ToVector3f(const aiVector3D& vec) {
+        return {vec.x, vec.y, vec.z};
     }
 
     void Parser::Impl::loadCameras(const aiScene* scene) {
@@ -42,6 +82,12 @@ namespace Moer::Resource::Gltf {
             LOG_WARNING("Current Scene has no camera");
             Entity    entity         = EntityManager::Get().Create();
             CameraRef default_camera = CameraManager::Get().Create(entity);
+            default_camera->SetFov(60.0f);
+            Transform transform = Transform(Vector3f(0.0f, 0.0f, 0.0f), Vector3f(0.0f, 0.0f, 1.0f), Vector3f(0.0f, 1.0f, 0.0f));
+            default_camera->SetWorldTransform(transform);
+            default_camera->SetNearClip(0.1f);
+            default_camera->SetFarClip(1000.0f);
+            default_camera->SetAspectRatio(16.0f / 9.0f);
             m_scene->AddCamera(entity);
         } else
             for (uint32_t i = 0; i < camera_num; i++) {
@@ -49,7 +95,7 @@ namespace Moer::Resource::Gltf {
                 Entity      entity     = EntityManager::Get().Create();
                 CameraRef   camera_ref = CameraManager::Get().Create(entity);
                 Transform&  transform  = TransformManager::Get().Create(entity);
-                transform              = Transform(ToVector3f(camera->mPosition), ToVector3f(camera->mUp), ToVector3f(camera->mLookAt));
+                transform              = Transform(ToVector3f(camera->mPosition), ToVector3f(camera->mLookAt), ToVector3f(camera->mUp));
                 camera_ref->SetFov(Angle::RadianToDegree(camera->mHorizontalFOV));
                 camera_ref->SetWorldTransform(transform);
                 camera_ref->SetNearClip(camera->mClipPlaneNear);
@@ -57,6 +103,34 @@ namespace Moer::Resource::Gltf {
                 camera_ref->SetAspectRatio(camera->mAspect);
                 m_scene->AddCamera(entity);
             }
+    }
+
+    MaterialRef GetDefaultMaterial() {
+        MaterialBuilder materialBuilder{};
+        MaterialRef     default_material = new Material();
+        materialBuilder.parameter("defaultSampler", ESamplerType::SAMPLER_2D);
+        materialBuilder.parameter("baseColorMap", ETextureDimension::TEX_2D);
+        return materialBuilder.Build();
+    }
+
+    void Parser::Impl::loadMaterial(const aiScene* ai_scene, const aiMaterial* ai_material, const std::string& materialName) {
+
+        size_t material_hash = 0;
+        if (!m_material_cache.contains(material_hash)) {
+            m_material_cache[material_hash] = GetDefaultMaterial();
+        }
+        const auto material = m_material_cache[material_hash];
+
+        auto material_instance    = material->CreateInstance();
+        m_materials[materialName] = material->CreateInstance();
+
+        aiString base_color_path;
+        if (ai_material->GetTexture(AI_MATKEY_BASE_COLOR_TEXTURE, &base_color_path) == AI_SUCCESS) {
+            LoadTexture(ai_scene, base_color_path, material_instance, "baseColorMap");
+        }
+        material_instance->SetParameter("defaultSampler", SamplerParams{});
+
+        m_materials[materialName] = material_instance;
     }
 
     std::unique_ptr<Scene> Parser::Impl::LoadSceneFromFile(const std::filesystem::path& file_path) {
@@ -71,9 +145,8 @@ namespace Moer::Resource::Gltf {
         // loadNode()
 
         auto moer_scene = std::make_unique<Scene>();
-        //Todo Load Textures
-        //Todo Load Materials
-        //Todo Load Cameras
+
+        m_file_parent_path = file_path.parent_path();
         //Todo Load Lights
         loadCameras(gltf_scene);
         LoadNode(gltf_scene->mRootNode, gltf_scene);
@@ -82,8 +155,8 @@ namespace Moer::Resource::Gltf {
         return std::move(m_scene);
     }
 
-    std::vector<float> GetVertexData(const aiMesh* mesh) {
-        std::vector<float> data;
+    Moer::Array<float> GetVertexData(const aiMesh* mesh) {
+        Moer::Array<float> data;
         bool               has_position = mesh->HasPositions();
         bool               has_normal   = mesh->HasNormals();
         bool               has_tangent  = mesh->HasTangentsAndBitangents();
@@ -132,8 +205,8 @@ namespace Moer::Resource::Gltf {
         return data;
     }
 
-    std::vector<uint32_t> GetIndexData(const aiMesh* mesh) {
-        std::vector<uint32_t> data;
+    Moer::Array<uint32_t> GetIndexData(const aiMesh* mesh) {
+        Moer::Array<uint32_t> data;
         if (mesh->HasFaces()) {
             for (uint32_t i = 0; i < mesh->mNumFaces; i++) {
                 const auto& face = mesh->mFaces[i];
@@ -230,13 +303,13 @@ namespace Moer::Resource::Gltf {
         if (node->mMeshes) {
             for (uint32_t i = 0; i < node->mNumMeshes; i++) {
                 const auto  mesh_idx = node->mMeshes[i];
-                auto* const mesh     = scene->mMeshes[mesh_idx];
+                auto* const ai_mesh  = scene->mMeshes[mesh_idx];
 
                 auto entity = EntityManager::Get().Create();
-                RenderableManager::Builder().Geometry(EPrimitiveType::TRIANGLES, GetVertexData(mesh), GetIndexData(mesh), 0, mesh->mNumFaces * 3).Build(entity);
+                RenderableManager::Builder().Geometry(EPrimitiveType::TRIANGLES, GetVertexData(ai_mesh), GetIndexData(ai_mesh), 0, ai_mesh->mNumFaces * 3).Build(entity);
                 TransformManager::Get().Set(entity, GetTransform(node));
 
-                VertexAttributeFlags attribute = GetAttribute(mesh);
+                VertexAttributeFlags attribute = GetAttribute(ai_mesh);
                 EnqueueRenderTask([entity, attribute]() {
                     GpuPrimitiveBuilder   gpu_primitive_builder;
                     RHIRenderPrimitiveRef ref = gpu_primitive_builder.Vertex(&RenderableManager::Get().GetVertexData(entity))
@@ -247,6 +320,22 @@ namespace Moer::Resource::Gltf {
                 });
 
                 m_scene->AddEntity(entity);
+
+                uint32_t          materialId = ai_mesh->mMaterialIndex;
+                aiMaterial const* material   = scene->mMaterials[materialId];
+
+                aiString    name;
+                std::string materialName;
+
+                if (material->Get(AI_MATKEY_NAME, name) == AI_SUCCESS) {
+                    materialName = name.C_Str();
+                }
+
+                if (!m_materials.contains(materialName)) {
+                    loadMaterial(scene, material, materialName);
+                }
+                auto material_instance = m_materials[materialName];
+                RenderableManager::Get().SetMaterialInstance(entity, material_instance);
                 //Todo Load Material
             }
         }

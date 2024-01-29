@@ -70,7 +70,8 @@ namespace Moer {
     Matrix4x4f Camera::GetProjectionMatrix() noexcept {
         if (m_projection_dirty) {
             m_proj = MakePerspectiveMatrixRH(
-                m_fov_y / 180.f * 3.14159265358979323846f, m_aspect_ratio, m_near_clip, m_far_clip);
+                //Use Inverse Depth 
+                m_fov_y / 180.f * 3.14159265358979323846f, m_aspect_ratio, m_far_clip,m_near_clip);
             m_sample_to_camera = Inverse(
                 MakeScaling(0.5f, 0.5f, 1.f) *
                 MakeTranslation(1.f, 1.f, 0.f) *
@@ -203,7 +204,7 @@ namespace Moer {
 
 
     //if changed cam_pos / cam_direction : m_to_world_dirty->true
-    //if changed fov, clips, aspect_ratio£ºm_projection_dirty->true
+    //if changed fov, clips, aspect_ratioï¼šm_projection_dirty->true
     //currently not used
     bool Camera::IsDirty() const {
         return m_projection_dirty || m_to_world_dirty;
