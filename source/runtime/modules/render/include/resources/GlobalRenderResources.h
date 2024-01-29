@@ -5,6 +5,12 @@ class RHITexture;
 class RHIGraphicsCommandList;
 class RHICommandQueue;
 class RHIShaderResourceView;
+class RHISampler;
+class RHIShaderResourceView;
+class RHITexture;
+
+struct RHISamplerInitializer;
+
 namespace Moer {
     struct GlobalRenderFrameData {
         // RHITexture* upload_texture;
@@ -36,6 +42,20 @@ namespace Moer {
         static void ShutDown();
 
         GlobalRenderData global_render_data;
+    };
+
+    class SamplerCache {
+    public:
+        static SamplerCache&   Get();
+        RHISampler*            GetSampler(const RHISamplerInitializer& params);
+        RHIShaderResourceView* GetTextureView(RHITexture* texture);
+        ~SamplerCache();
+
+    protected:
+        SamplerCache();
+        inline static SamplerCache* m_instance{nullptr};
+        class Impl;
+        Impl* m_impl;
     };
 }// namespace Moer
 

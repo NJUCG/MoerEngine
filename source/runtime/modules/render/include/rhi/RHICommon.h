@@ -897,6 +897,23 @@ enum class EPrimitiveType : uint8_t {
     TRIANGLE_STRIP = 5 //!< triangle strip
 };
 
+enum class ESamplerType : uint8_t {
+    SAMPLER_2D,           //!< 2D texture
+    SAMPLER_2D_ARRAY,     //!< 2D array texture
+    SAMPLER_CUBEMAP,      //!< Cube map texture
+    SAMPLER_EXTERNAL,     //!< External texture
+    SAMPLER_3D,           //!< 3D texture
+    SAMPLER_CUBEMAP_ARRAY,//!< Cube map array texture (feature level 2)
+};
+
+enum class ESamplerBindingType : uint8_t {
+    UNDEFINED,
+    SAMPLER,
+    TEXTURE,
+    COMBINED,
+};
+
+
 #pragma region utils
 struct Rect2D {
     Offset2D offset;
