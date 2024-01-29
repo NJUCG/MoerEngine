@@ -41,7 +41,8 @@ class TestDeferredTriangleShaderFrag : public Shader {
     DEFINE_SHADER_TYPE(TestDeferredTriangleShaderFrag, Global, RENDER_API, ...)
 public:
     BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
-
+    DEFINE_SHADER_PARAM_SAMPLER(SamplerState, defaultSampler)
+    DEFINE_SHADER_PARAM_SRV(Texture2D, baseColorMap)
     END_ROOT_PARAMETER_DEFINITION(Parameters)
 };
 
@@ -218,8 +219,8 @@ namespace Moer {
         RHIMultisampleStateRef multisample_state = g_rhi->RHICreateMultiSampleState(multisample_init);
 
         RHIDepthStencilStateInitializer depth_stencil_init{};
-        depth_stencil_init.b_enable_depth_write     = false;
-        depth_stencil_init.depth_test_op            = CO_NEVER;
+        depth_stencil_init.b_enable_depth_write     = true;
+        depth_stencil_init.depth_test_op            = CO_GREATER_OR_EQUAL;
         RHIDepthStencilStateRef depth_stencil_state = g_rhi->RHICreateDepthStencilState(depth_stencil_init);
 
         RHIGraphicsPipelineStateInitializer::TAttachmentFormats color_attachment_formats{};
@@ -341,6 +342,10 @@ namespace Moer {
                         memcpy(&params.scene_ubo, &ubo, sizeof(ubo));
                         RHIBatchedShaderParameters batched_params;
                         batched_params.SetParameters(ShaderResourceManager::GetInstance().GetShader<TestDeferredTriangleShaderVert>(), params);
+
+                        auto mi = RenderableManager::Get().GetMaterialInstance(entity);
+                        mi->Use(batched_params);
+                        
                         g_rhi->RHISetBatchedShaderParameters(pipeline_state, batched_params, true);
 
                         cmd_list->BindIndexBuffer(primitive->GetIndexBuffer(), 0, EIndexElementType::IET_UINT32);

@@ -5,8 +5,8 @@
 
 // struct Entry {
 //     EPrimitiveType type;
-//     std::vector<float>  vertex_data;
-//     std::vector<uint32_t> index_data;
+//     Moer::Array<float>  vertex_data;
+//     Moer::Array<uint32_t> index_data;
 //     uint32_t       offset;
 //     uint32_t       count;
 // };
@@ -14,8 +14,8 @@ namespace Moer {
     
     struct RenderableManager::BuilderDetails {
         EPrimitiveType type;
-        std::vector<float>  vertex_data;
-        std::vector<uint32_t> index_data;
+        Moer::Array<float>  vertex_data;
+        Moer::Array<uint32_t> index_data;
         uint32_t       offset;
         uint32_t       count;
         uint16_t       m_instance_count{1};
@@ -30,7 +30,7 @@ namespace Moer {
     RenderableManager::Builder::~Builder() noexcept {}
 
     RenderableManager::Builder& RenderableManager::Builder::operator=(Builder&& rhs) noexcept { return *this; }
-    RenderableManager::Builder& RenderableManager::Builder::Geometry(EPrimitiveType type, const std::vector<float>& vertex_data, const std::vector<uint32_t>& index_data, uint32_t offset, uint32_t count) noexcept {
+    RenderableManager::Builder& RenderableManager::Builder::Geometry(EPrimitiveType type, const Moer::Array<float>& vertex_data, const Moer::Array<uint32_t>& index_data, uint32_t offset, uint32_t count) noexcept {
         m_impl->type = type;
         m_impl->vertex_data = vertex_data;
         m_impl->index_data = index_data;
@@ -63,8 +63,8 @@ namespace Moer {
         SetCulling(entity, builder->m_culling);
         SetCastShadows(entity, builder->m_castShadows);
 
-        m_manager[entity].vertex_data= std::make_unique<std::vector<float>>(std::move(builder->vertex_data));
-        m_manager[entity].index_data = std::make_unique<std::vector<uint32_t>>(std::move(builder->index_data));
+        m_manager[entity].vertex_data= std::make_unique<Moer::Array<float>>(std::move(builder->vertex_data));
+        m_manager[entity].index_data = std::make_unique<Moer::Array<uint32_t>>(std::move(builder->index_data));
     }
 
     void RenderableManager::Create(Entity entity) {
@@ -80,6 +80,12 @@ namespace Moer {
     }
     void RenderableManager::SetCastShadows(Entity entity, bool castShadows) {
         m_manager[entity].cast_shadows = castShadows;
+    }
+    void RenderableManager::SetMaterialInstance(Entity entity, MaterialInstanceRef material_instance) {
+        m_manager[entity].material_instance = material_instance;
+    }
+    MaterialInstanceRef RenderableManager::GetMaterialInstance(Entity entity) {
+        return m_manager[entity].material_instance;
     }
 
     RenderableManager& RenderableManager::Get() {
@@ -100,11 +106,11 @@ namespace Moer {
     bool  RenderableManager::GetCulling(Entity entity) {
         return m_manager[entity].culling;
     }
-    const std::vector<float>&    RenderableManager::GetVertexData(Entity entity) {
+    const Moer::Array<float>&    RenderableManager::GetVertexData(Entity entity) {
         // return m_manager[entity].vertex_data;
         return *m_manager[entity].vertex_data;
     }
-    const std::vector<uint32_t>& RenderableManager::GetIndexData(Entity entity) {
+    const Moer::Array<uint32_t>& RenderableManager::GetIndexData(Entity entity) {
         //   return m_manager[entity].index_data;
         return *m_manager[entity].index_data;
     }
