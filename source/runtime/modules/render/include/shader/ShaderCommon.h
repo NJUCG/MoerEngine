@@ -339,9 +339,9 @@ struct ParameterInfo {
     // source pipeline stage
     ERHIPipelineStageFlags stage{ERHIPipelineStageFlags::PS_NONE};
     // slot in dx12 while binding in Vulkan
-    int16_t slot : 8 = -1;
+    int8_t slot = -1;
     // space in dx12 while set in Vulkan
-    int16_t space : 8 = -1;
+    int8_t space = -1;
     // array size, invalid for root cbv
     int8_t num = 0;
     // parameter type enum
@@ -363,7 +363,7 @@ public:
         return param_map;
     }
 
-private:
+    // private:
     Moer::UnorderedMap<std::string, ParameterInfo> param_map;
 };
 struct ShaderCompilerOutput {
@@ -391,10 +391,10 @@ struct ShaderCompilerOutput {
     bool                 b_succeeded;
     std::string_view     shader_name;
 
-    ShaderCompilerOutput(ShaderCompilerOutput&&)                 = default;
-    ShaderCompilerOutput(const ShaderCompilerOutput&)            = default;
-    ShaderCompilerOutput& operator=(ShaderCompilerOutput&&)      = default;
-    ShaderCompilerOutput& operator=(const ShaderCompilerOutput&) = default;
+    // ShaderCompilerOutput(ShaderCompilerOutput&&)                 = default;
+    // ShaderCompilerOutput(const ShaderCompilerOutput&)            = default;
+    // ShaderCompilerOutput& operator=(ShaderCompilerOutput&&)      = default;
+    // ShaderCompilerOutput& operator=(const ShaderCompilerOutput&) = default;
 };
 
 /**

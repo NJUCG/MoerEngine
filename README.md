@@ -3,23 +3,24 @@ Engine for Realtime Rendering
 
 ## Current Capability
 - Render Hardware Interface(vulkan implemented)
-- Multi-Thread Core
+- Multi-Thread TaskSystem
 - Math
 - RHI implemented ui backend
+- Deferred gui rendering
 - Shader pipeline(compiling, reflection and binding)
 
 ## TODO
 
 ### Critical
 
-- Vulkan descriptor reallocation when encountered new resource binding
-- main window rendering and syncronization
-- engine threading stratagy
-
+- GPUScene management
+- Camera Manager
+- Material System design and implementation
+- Bindless support
+  
 ### Pending
 
-- Resource Management
 - Scene Management
+- Offline mesh clusterize
 - Default pipeline
-- Material System
 - DX12 support
