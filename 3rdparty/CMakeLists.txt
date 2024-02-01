@@ -28,6 +28,8 @@ if(WIN32)
      IMPORTED_IMPLIB  ${dxc_lib}
      IMPORTED_LOCATION  ${dxc_runtime_dir}/dxcompiler.dll)
 
+     add_dependencies(dxc DXC_COPY)
+
 elseif(LINUX)
 endif()
 
@@ -59,5 +61,7 @@ set(MI_BUILD_STATIC      ON)
 set(MI_BUILD_OBJECT      OFF)
 set(MI_BUILD_TESTS       OFF)
 add_subdirectory(mimalloc)
+
+add_subdirectory(MeshProcess)
 
 

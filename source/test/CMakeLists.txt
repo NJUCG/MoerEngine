@@ -47,3 +47,11 @@ target_link_libraries(TaskGraphTest
         PUBLIC MoerRuntimeCore
 )
 set_target_properties(TaskGraphTest PROPERTIES FOLDER ${moer_test_folder})
+
+add_executable(MeshProcessTest "MeshProcessTest.cpp")
+
+target_include_directories(MeshProcessTest 
+        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
+        PRIVATE $<BUILD_INTERFACE:${moer_third_party_dir}/AssetLoad/assimp/include>)
+target_link_libraries(MeshProcessTest PRIVATE render MeshProcess AssetLoad)
+set_target_properties(MeshProcessTest PROPERTIES FOLDER ${moer_test_folder})

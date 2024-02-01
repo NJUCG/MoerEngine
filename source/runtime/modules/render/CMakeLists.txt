@@ -43,8 +43,6 @@ target_link_libraries(${MODULE_NAME}
     PUBLIC ImGui::imgui
 )
 
-add_dependencies(${MODULE_NAME} DXC_COPY)
-
 if(WINDOWS)
 target_compile_definitions(${MODULE_NAME}
     PUBLIC "VK_LAYER_PATH=${moer_third_party_dir}/VulkanSDK/binary/Windows")
