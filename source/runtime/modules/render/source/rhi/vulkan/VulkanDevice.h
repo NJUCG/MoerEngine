@@ -19,8 +19,6 @@ class VulkanDescriptorSetsLayout;
 class VulkanDescriptorSetAllocator;
 class VulkanDescriptorSetWriter;
 
-union VulkanHashableDescriptorInfo;
-
 struct QueueFamilyIndices {
     std::optional<uint32_t> graphics;
     std::optional<uint32_t> present;
@@ -60,8 +58,8 @@ public:
     inline VmaAllocator GetVmaAllocator() const {
         return m_allocator;
     }
-    inline VkPhysicalDeviceProperties2 GetProperties() const {
-        return m_gpu_props;
+    inline const VulkanPhysicalDeviceProperties& GetProperties() const {
+        return m_gpu_properties;
     }
     inline const VulkanPhysicalDeviceFeatures& GetFeatures() const {
         return m_gpu_features;
@@ -92,7 +90,7 @@ public:
 
 private:
     VkPhysicalDevice                  m_gpu;
-    VkPhysicalDeviceProperties2       m_gpu_props;
+    VulkanPhysicalDeviceProperties    m_gpu_properties;
     VulkanPhysicalDeviceFeatures      m_gpu_features;
     VkPhysicalDeviceMemoryProperties2 m_gpu_mem_props;
     TExtensionArray                   m_gpu_extensions;

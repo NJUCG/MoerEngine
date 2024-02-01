@@ -170,6 +170,7 @@ private:
     VkPhysicalDeviceRayQueryFeaturesKHR m_ray_query_features;
 };
 
+// ***** VK_EXT_descriptor_buffer
 class VulkanEXTDescriptorBufferExtension : public VulkanDeviceExtension {
 public:
     VulkanEXTDescriptorBufferExtension()

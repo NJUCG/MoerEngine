@@ -43,4 +43,14 @@ public:
     virtual void PreCreateDevice(VkDeviceCreateInfo& _device_create_info) {}
 };
 
+class VulkanPhysicalDeviceProperties {
+public:
+    // core
+    VkPhysicalDeviceProperties2        properties2;
+    VkPhysicalDeviceVulkan11Properties core_1_1;
+    VkPhysicalDeviceVulkan12Properties core_1_2;
+    // optional
+    VkPhysicalDeviceDescriptorBufferPropertiesEXT descriptor_buffer_properties;
+};
+
 #endif//VULKAN_EXTENSION_H
