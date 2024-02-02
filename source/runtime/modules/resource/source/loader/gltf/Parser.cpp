@@ -17,18 +17,107 @@
 namespace Moer::Resource::Gltf {
 
     struct Parser::Impl {
-        std::unique_ptr<Scene>                               LoadSceneFromFile(const std::filesystem::path& file_path);
-        void                                                 LoadNode(const aiNode* node, const aiScene* scene);
-        void                                                 loadCameras(const aiScene* scene);
-        void                                                 loadMaterial(const aiScene* ai_scene, const aiMaterial* ai_material, const std::string& materialName);
-        void                                                 LoadTexture(const aiScene* scene, const aiString& texture_path, MaterialInstanceRef& mat, const std::string& param_name);
+        std::unique_ptr<Scene> LoadSceneFromFile(const std::filesystem::path& file_path);
+        void                   LoadNode(const aiNode* node, const aiScene* scene);
+        void                   loadCameras(const aiScene* scene);
+        void                   loadMaterial(const aiScene* ai_scene, const aiMaterial* ai_material, const std::string& materialName);
+        void                   LoadTexture(const aiScene* scene, const aiString& texture_path, MaterialInstanceRef& mat, const std::string& param_name);
+        ~Impl() = default;
+
         Moer::Array<RHIRenderPrimitiveRef>                   m_primitives{};
         Moer::UnorderedMap<std::string, RHITextureRef>       m_textures{};
         Moer::UnorderedMap<std::string, MaterialInstanceRef> m_materials{};
         Moer::UnorderedMap<size_t, MaterialRef>              m_material_cache{};
+        Moer::Array<MeshInfo>                                m_mesh_infos{};
         std::filesystem::path                                m_file_parent_path{};
         std::unique_ptr<Scene>                               m_scene{nullptr};
     };
+
+    uint32_t GetVertexData(const aiMesh* mesh, float* data) {
+        //  Moer::Array<float> data;
+        bool   has_position = mesh->HasPositions();
+        bool   has_normal   = mesh->HasNormals();
+        bool   has_tangent  = mesh->HasTangentsAndBitangents();
+        bool   has_uv       = mesh->HasTextureCoords(0);
+        size_t stride       = 0;
+        size_t attr_offset[4];
+        if (has_position) {
+            attr_offset[0] = stride;
+            stride += 3;
+        }
+        if (has_normal) {
+            attr_offset[1] = stride;
+            stride += 3;
+        }
+        if (has_tangent) {
+            attr_offset[2] = stride;
+            stride += 6;
+        }
+        if (has_uv) {
+            attr_offset[3] = stride;
+            stride += 2;
+        }
+
+        uint32_t vertex_num = mesh->mNumVertices;
+        // data.resize(vertex_num * stride);
+        for (uint32_t i = 0; i < vertex_num; i++) {
+            if (has_position) {
+                auto* const copy_src = reinterpret_cast<float*>(mesh->mVertices + i);
+                std::copy(copy_src, copy_src + 3, data + attr_offset[0] + i * stride);
+            }
+            if (has_normal) {
+                auto* const copy_src = reinterpret_cast<float*>(mesh->mNormals + i);
+                std::copy(copy_src, copy_src + 3, data + attr_offset[1] + i * stride);
+            }
+            if (has_tangent) {
+                auto* copy_src = reinterpret_cast<float*>(mesh->mTangents + i);
+                std::copy(copy_src, copy_src + 3, data + attr_offset[2] + i * stride);
+                copy_src = reinterpret_cast<float*>(mesh->mBitangents + i);
+                std::copy(copy_src, copy_src + 3, data + attr_offset[2] + i * stride + 3);
+            }
+            if (has_uv) {
+                auto* const copy_src = reinterpret_cast<float*>(mesh->mTextureCoords[0] + i);
+                std::copy(copy_src, copy_src + 2, data + attr_offset[3] + i * stride);
+            }
+        }
+
+        return vertex_num;
+    }
+
+    uint32_t GetIndexData(const aiMesh* mesh, uint32_t* data) {
+        uint32_t offset = 0;
+        if (mesh->HasFaces()) {
+            for (uint32_t i = 0; i < mesh->mNumFaces; i++) {
+                const auto& face = mesh->mFaces[i];
+                std::copy_n(face.mIndices, face.mNumIndices, data + offset);
+                offset += face.mNumIndices;
+            }
+        }
+        return offset;
+    }
+
+    VertexAttributeFlags GetAttribute(const aiMesh* mesh, uint32_t& stride) {
+        stride                         = 0;
+        VertexAttributeFlags attribute = 0;
+        if (mesh->HasPositions()) {
+            attribute |= E_VERTEX_ATTRIBUTE::E_POSITION;
+            stride += 3;
+        }
+        if (mesh->HasNormals()) {
+            attribute |= E_VERTEX_ATTRIBUTE::E_NORMAL;
+            stride += 3;
+        }
+        if (mesh->HasTangentsAndBitangents()) {
+            attribute |= E_VERTEX_ATTRIBUTE::E_TANGENT;
+            attribute |= E_VERTEX_ATTRIBUTE::E_BITANGENT;
+            stride += 6;
+        }
+        if (mesh->HasTextureCoords(0)) {
+            attribute |= E_VERTEX_ATTRIBUTE::E_UV0;
+            stride += 2;
+        }
+        return attribute;
+    }
 
     int32_t GetEmbeddedTextureId(const aiString& path) {
         const char* pathStr = path.C_Str();
@@ -147,91 +236,55 @@ namespace Moer::Resource::Gltf {
         auto moer_scene = std::make_unique<Scene>();
 
         m_file_parent_path = file_path.parent_path();
+
+        uint32_t stride;
+        //Assume all mesh has same attribute
+        auto attribute = GetAttribute(gltf_scene->mMeshes[0], stride);
+
+        uint32_t vertex_count = 0, index_count = 0;
+        for (uint32_t i = 0; i < gltf_scene->mNumMeshes; i++) {
+            const auto* mesh = gltf_scene->mMeshes[i];
+            vertex_count += mesh->mNumVertices;
+            index_count += mesh->mNumFaces * 3;
+        }
+
+        Moer::Array<float>*    m_vertex_data = new Moer::Array<float>{};
+        Moer::Array<uint32_t>* m_index_data  = new Moer::Array<uint32_t>;
+
+        m_vertex_data->resize(vertex_count * stride);
+        m_index_data->resize(index_count);
+        m_mesh_infos.resize(gltf_scene->mNumMeshes);
+
+        uint32_t vertex_offset = 0, index_offset = 0;
+        //uint32_t cur_vertex_count=0,cur_index_count=0;
+        for (uint32_t i = 0; i < gltf_scene->mNumMeshes; i++) {
+            const auto* mesh             = gltf_scene->mMeshes[i];
+            auto        cur_vertex_count = GetVertexData(mesh, m_vertex_data->data() + vertex_offset * stride);
+            auto        cur_index_count  = GetIndexData(mesh, m_index_data->data() + index_offset);
+            m_mesh_infos[i]              = {.vertex_offset = vertex_offset, .index_offset = index_offset, .vertex_count = cur_vertex_count, .index_count = cur_index_count};
+            vertex_offset += cur_vertex_count;
+            index_offset += cur_index_count;
+        }
+
+        auto gpu_scene = m_scene.get();
+
+        EnqueueRenderTask([m_vertex_data, m_index_data, gpu_scene] {
+            GpuSceneBufferBuilder gpu_scene_buffer_builder;
+            gpu_scene_buffer_builder.Vertex(m_vertex_data);
+            gpu_scene_buffer_builder.Index(m_index_data);
+            auto buffer_pair = gpu_scene_buffer_builder.Build();
+            gpu_scene->SetBuffer("vertex_buffer", buffer_pair.first);
+            gpu_scene->SetBuffer("index_buffer", buffer_pair.second);
+            delete m_vertex_data;
+            delete m_index_data;
+        });
+
         //Todo Load Lights
         loadCameras(gltf_scene);
         LoadNode(gltf_scene->mRootNode, gltf_scene);
         //todo after build all    end build
         // GpuPrimitiveBuilder::EndBuild();
         return std::move(m_scene);
-    }
-
-    Moer::Array<float> GetVertexData(const aiMesh* mesh) {
-        Moer::Array<float> data;
-        bool               has_position = mesh->HasPositions();
-        bool               has_normal   = mesh->HasNormals();
-        bool               has_tangent  = mesh->HasTangentsAndBitangents();
-        bool               has_uv       = mesh->HasTextureCoords(0);
-        size_t             stride       = 0;
-        size_t             attr_offset[4];
-        if (has_position) {
-            attr_offset[0] = stride;
-            stride += 3;
-        }
-        if (has_normal) {
-            attr_offset[1] = stride;
-            stride += 3;
-        }
-        if (has_tangent) {
-            attr_offset[2] = stride;
-            stride += 6;
-        }
-        if (has_uv) {
-            attr_offset[3] = stride;
-            stride += 2;
-        }
-
-        uint32_t vertex_num = mesh->mNumVertices;
-        data.resize(vertex_num * stride);
-        for (uint32_t i = 0; i < vertex_num; i++) {
-            if (has_position) {
-                auto* const copy_src = reinterpret_cast<float*>(mesh->mVertices + i);
-                std::copy(copy_src, copy_src + 3, data.data() + attr_offset[0] + i * stride);
-            }
-            if (has_normal) {
-                auto* const copy_src = reinterpret_cast<float*>(mesh->mNormals + i);
-                std::copy(copy_src, copy_src + 3, data.data() + attr_offset[1] + i * stride);
-            }
-            if (has_tangent) {
-                auto* copy_src = reinterpret_cast<float*>(mesh->mTangents + i);
-                std::copy(copy_src, copy_src + 3, data.data() + attr_offset[2] + i * stride);
-                copy_src = reinterpret_cast<float*>(mesh->mBitangents + i);
-                std::copy(copy_src, copy_src + 3, data.data() + attr_offset[2] + i * stride + 3);
-            }
-            if (has_uv) {
-                auto* const copy_src = reinterpret_cast<float*>(mesh->mTextureCoords[0] + i);
-                std::copy(copy_src, copy_src + 2, data.data() + attr_offset[3] + i * stride);
-            }
-        }
-        return data;
-    }
-
-    Moer::Array<uint32_t> GetIndexData(const aiMesh* mesh) {
-        Moer::Array<uint32_t> data;
-        if (mesh->HasFaces()) {
-            for (uint32_t i = 0; i < mesh->mNumFaces; i++) {
-                const auto& face = mesh->mFaces[i];
-                data.insert(data.end(), face.mIndices, face.mIndices + face.mNumIndices);
-            }
-        }
-        return data;
-    }
-
-    VertexAttributeFlags GetAttribute(const aiMesh* mesh) {
-        VertexAttributeFlags attribute = 0;
-        if (mesh->HasPositions()) {
-            attribute |= E_VERTEX_ATTRIBUTE::E_POSITION;
-        }
-        if (mesh->HasNormals()) {
-            attribute |= E_VERTEX_ATTRIBUTE::E_NORMAL;
-        }
-        if (mesh->HasTangentsAndBitangents()) {
-            attribute |= E_VERTEX_ATTRIBUTE::E_TANGENT;
-            attribute |= E_VERTEX_ATTRIBUTE::E_BITANGENT;
-        }
-        if (mesh->HasTextureCoords(0)) {
-            attribute |= E_VERTEX_ATTRIBUTE::E_UV0;
-        }
-        return attribute;
     }
 
     //Position
@@ -306,18 +359,21 @@ namespace Moer::Resource::Gltf {
                 auto* const ai_mesh  = scene->mMeshes[mesh_idx];
 
                 auto entity = EntityManager::Get().Create();
-                RenderableManager::Builder().Geometry(EPrimitiveType::TRIANGLES, GetVertexData(ai_mesh), GetIndexData(ai_mesh), 0, ai_mesh->mNumFaces * 3).Build(entity);
+
+                RenderableManager::Builder().Geometry(EPrimitiveType::TRIANGLES, m_mesh_infos[mesh_idx].vertex_count, m_mesh_infos[mesh_idx].index_count, m_mesh_infos[mesh_idx].vertex_offset, m_mesh_infos[mesh_idx].index_offset).Build(entity);
+                RenderableManager::Get().SetMeshInfo(entity, m_mesh_infos[mesh_idx]);
                 TransformManager::Get().Set(entity, GetTransform(node));
 
-                VertexAttributeFlags attribute = GetAttribute(ai_mesh);
-                EnqueueRenderTask([entity, attribute]() {
-                    GpuPrimitiveBuilder   gpu_primitive_builder;
-                    RHIRenderPrimitiveRef ref = gpu_primitive_builder.Vertex(&RenderableManager::Get().GetVertexData(entity))
-                                                    .Index(&RenderableManager::Get().GetIndexData(entity))
-                                                    .Attribute(attribute)
-                                                    .Build();
-                    RenderableManager::Get().SetRHIRenderPrimitiveRef(entity, ref);
-                });
+                uint32_t stride = 0;
+                // VertexAttributeFlags attribute = GetAttribute(ai_mesh);
+                // EnqueueRenderTask([entity, attribute]() {
+                //     GpuPrimitiveBuilder   gpu_primitive_builder;
+                //     RHIRenderPrimitiveRef ref = gpu_primitive_builder.Vertex(&RenderableManager::Get().GetVertexData(entity))
+                //                                     .Index(&RenderableManager::Get().GetIndexData(entity))
+                //                                     .Attribute(attribute)
+                //                                     .Build();
+                //     RenderableManager::Get().SetRHIRenderPrimitiveRef(entity, ref);
+                // });
 
                 m_scene->AddEntity(entity);
 

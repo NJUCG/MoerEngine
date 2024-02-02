@@ -59,4 +59,16 @@ namespace Moer {
         Callback     m_callback{nullptr};
         void*        m_data{nullptr};
     };
+
+    class RENDER_API GpuSceneBufferBuilder {
+    public:
+         GpuSceneBufferBuilder& Vertex(const Moer::Array<float>* data);
+         GpuSceneBufferBuilder& Index(const Moer::Array<uint32_t>* data);
+         GpuSceneBufferBuilder();
+         ~GpuSceneBufferBuilder();
+         std::pair<RHIBufferRef,RHIBufferRef> Build();
+    protected:
+        class Impl;
+        Impl* m_impl{nullptr};
+    };
 }

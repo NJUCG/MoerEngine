@@ -169,6 +169,7 @@ namespace Moer {
         if (m_data)
             m_callback(m_data);
     }
+
     RHITextureRef TextureBuilder::Build() noexcept {
         auto           texture      = g_rhi->RHICreateTexture(RHITextureCreateInfo::Create("GuiFontTexture2D", ETextureDimension::TEX_2D)
                                                    .SetNumSamples(1)
@@ -265,6 +266,78 @@ namespace Moer {
         fence->Wait(wait_value);
 
         return texture;
+    }
+
+    class GpuSceneBufferBuilder::Impl {
+        friend GpuSceneBufferBuilder;
+        const Moer::Array<float>*             m_vertex_data{nullptr};
+        const Moer::Array<uint32_t>*          m_index_data{nullptr};
+        std::pair<RHIBufferRef, RHIBufferRef> Build();
+    };
+
+    GpuSceneBufferBuilder& GpuSceneBufferBuilder::Vertex(const Moer::Array<float>* data) {
+        m_impl->m_vertex_data = data;
+        return *this;
+    }
+    GpuSceneBufferBuilder& GpuSceneBufferBuilder::Index(const Moer::Array<uint32_t>* data) {
+        m_impl->m_index_data = data;
+        return *this;
+    }
+    GpuSceneBufferBuilder::GpuSceneBufferBuilder() {
+        m_impl = new Impl();
+    }
+    GpuSceneBufferBuilder::~GpuSceneBufferBuilder() {
+        delete m_impl;
+    }
+    std::pair<RHIBufferRef, RHIBufferRef> GpuSceneBufferBuilder::Build() {
+        return m_impl->Build();
+    }
+
+    std::pair<RHIBufferRef, RHIBufferRef> GpuSceneBufferBuilder::Impl::Build() {
+        auto cmd_list   = g_rhi->RHICreateCopyCommandList(g_rhi->RHIGetCurrentCommandAllocator());
+        auto copy_queue = g_rhi->RHICreateCommandQueue(ECommandQueueType::COPY);
+        cmd_list->BeginRecording();
+
+        uint32_t vertex_buffer_size = m_vertex_data->size() * sizeof(float);
+        uint32_t index_buffer_size  = m_index_data->size() * sizeof(uint32_t);
+
+        RHIBufferCreateInfo vertex_buffer_create_info(vertex_buffer_size, sizeof(float), EBufferUsageFlags::VERTEX_BUFFER);
+        RHIBufferRef        vertex_buffer = g_rhi->RHICreateBuffer(vertex_buffer_create_info);
+        RHIBufferCreateInfo staging_vertex_buffer_create_info(vertex_buffer_size, sizeof(float), EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
+        RHIBufferRef        staging_vertex_buffer = g_rhi->RHICreateBuffer(staging_vertex_buffer_create_info);
+
+        auto* staging_vertex_buffer_mapped_ptr = static_cast<float*>(g_rhi->RHIMapBuffer(staging_vertex_buffer, 0, vertex_buffer_size));
+        memcpy(staging_vertex_buffer_mapped_ptr, m_vertex_data->data(), vertex_buffer_size);
+        g_rhi->RHIUnmapBuffer(staging_vertex_buffer);
+
+        Array<RHIBufferRegion> vertex_buffer_region_array({RHIBufferRegion{.src_offset = 0, .dst_offset = 0, .size = vertex_buffer_size}});
+        RHICopyBufferInfo      vertex_copy_buffer_info{};
+        vertex_copy_buffer_info.regions = vertex_buffer_region_array;
+        cmd_list->CopyBuffer(vertex_copy_buffer_info, staging_vertex_buffer, vertex_buffer);
+
+        RHIBufferCreateInfo index_buffer_create_info(index_buffer_size, sizeof(uint32_t), EBufferUsageFlags::INDEX_BUFFER);
+        RHIBufferRef        index_buffer = g_rhi->RHICreateBuffer(index_buffer_create_info);
+        RHIBufferCreateInfo staging_index_buffer_create_info(index_buffer_size, sizeof(uint32_t), EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
+        RHIBufferRef        staging_index_buffer = g_rhi->RHICreateBuffer(staging_index_buffer_create_info);
+
+        auto* staging_index_buffer_mapped_ptr = static_cast<uint32_t*>(g_rhi->RHIMapBuffer(staging_index_buffer, 0, index_buffer_size));
+        memcpy(staging_index_buffer_mapped_ptr, m_index_data->data(), index_buffer_size);
+        g_rhi->RHIUnmapBuffer(staging_index_buffer);
+
+        Array<RHIBufferRegion> index_buffer_region_array({RHIBufferRegion{.src_offset = 0, .dst_offset = 0, .size = index_buffer_size}});
+        RHICopyBufferInfo      index_copy_buffer_info{};
+        index_copy_buffer_info.regions = index_buffer_region_array;
+        cmd_list->CopyBuffer(index_copy_buffer_info, staging_index_buffer, index_buffer);
+
+        cmd_list->EndRecording();
+
+        RHIFenceRef   fence = g_rhi->RHICreateFence({.usage = EFenceUsageFlags::BINARY});
+        RHISubmitInfo submit_info;
+        submit_info.Signal(fence, 1);
+        copy_queue->SubmitCommands(1, cmd_list, &submit_info);
+        copy_queue->WaitForQueueComplete();
+
+        return {vertex_buffer, index_buffer};
     }
 
 }// namespace Moer
