@@ -24,3 +24,4 @@ Engine for Realtime Rendering
 - Offline mesh clusterize
 - Default pipeline
 - DX12 support
+- dxc and metis on linux

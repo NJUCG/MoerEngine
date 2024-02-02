@@ -110,7 +110,7 @@ void Test() {
 
     RHIGraphicsPipelineStateRef pso = g_rhi->RHICreateGraphicsPipelineState(init);
 
-    RHIGraphicsCommandList* command_list = g_rhi->CreateGraphicsCommandList(pso);
+    RHIGraphicsCommandList* command_list = g_rhi->RHICreateGraphicsCommandList(pso);
 
     RHIRenderPassInfo pass_info;
     pass_info.GeneratePipelineAttachmentInfo();
