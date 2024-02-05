@@ -295,13 +295,10 @@ public:
 
 #pragma region pipeline states definitions
 
-class VulkanRHIGraphicsPipelineState final : public RHIGraphicsPipelineState {
-    friend VulkanRHIImpl;
-
+class VulkanPipelineState {
 public:
-    VulkanRHIGraphicsPipelineState()
-        : RHIGraphicsPipelineState(),
-          m_pipeline(VK_NULL_HANDLE), m_pipeline_layout(VK_NULL_HANDLE), m_pipeline_state_cache(nullptr) {}
+    VulkanPipelineState() : m_pipeline(VK_NULL_HANDLE), m_pipeline_layout(VK_NULL_HANDLE), m_pipeline_state_cache(nullptr){};
+    virtual ~VulkanPipelineState() = default;
 
     inline VkPipeline GetHandle() const {
         return m_pipeline;
@@ -322,17 +319,36 @@ public:
     void GenerateDescriptorSetLayouts(const VulkanDevice* _device, Moer::Array<TDescriptorSetLayoutInfo>& _layout_mappings);
     void CreateResourceCache();
 
-    static Moer::Array<VkPipelineShaderStageCreateInfo> METoVKShaderStageCreateInfo(const RHIShaderBoundStateInput& _shader_bound_state);
-    static VkPipelineVertexInputStateCreateInfo         METoVKVertexInputStateCreateInfo(const RHIVertexInputState* _vertex_input_state);
-    static Moer::Array<const Shader*>                   GetShaderInfoList(const RHIShaderBoundStateInput& _shader_bound_state);
-
-private:
+protected:
     VkPipeline       m_pipeline;
     VkPipelineLayout m_pipeline_layout;
     // descriptor sets
     VulkanDescriptorSetsLayout* m_descriptor_sets_layout;
     // resource cache
     VulkanPipelineResourceCache* m_pipeline_state_cache;
+    // descriptor sets
+};
+
+class VulkanRHIGraphicsPipelineState final : public RHIGraphicsPipelineState, public VulkanPipelineState {
+    friend VulkanRHIImpl;
+
+public:
+    VulkanRHIGraphicsPipelineState()
+        : RHIGraphicsPipelineState(),
+          VulkanPipelineState() {}
+
+    static Moer::Array<VkPipelineShaderStageCreateInfo> METoVKShaderStageCreateInfo(const RHIShaderBoundStateInput& _shader_bound_state);
+    static VkPipelineVertexInputStateCreateInfo         METoVKVertexInputStateCreateInfo(const RHIVertexInputState* _vertex_input_state);
+    static Moer::Array<const Shader*>                   GetShaderInfoList(const RHIShaderBoundStateInput& _shader_bound_state);
+};
+
+class VulkanRHIComputePipelineState final : public RHIComputePipelineState, public VulkanPipelineState {
+    friend VulkanRHIImpl;
+
+public:
+    VulkanRHIComputePipelineState()
+        : RHIComputePipelineState(),
+          VulkanPipelineState() {}
 };
 #pragma endregion
 

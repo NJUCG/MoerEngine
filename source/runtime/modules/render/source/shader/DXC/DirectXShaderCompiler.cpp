@@ -70,6 +70,7 @@ static ComPtr<IDxcCompiler3> compiler  = nullptr;
 static ComPtr<IDxcValidator> validator = nullptr;
 static ComPtr<IDxcLibrary>   library   = nullptr;
 static ComPtr<IDxcUtils>     utils     = nullptr;
+static ComPtr<IDxcIncludeHandler> include_handler = nullptr;
 
 DXCompiler& DXCompiler::GetInstance() {
     static DXCompiler s_compiler;
@@ -89,6 +90,7 @@ DXCompiler::DXCompiler() {
         LOG_ERROR("dxcompiler library load fail.");
         return;
     }
+    library->CreateIncludeHandler(&include_handler);
 
     hres = DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&compiler));
     if (FAILED(hres)) {
@@ -105,6 +107,7 @@ DXCompiler::DXCompiler() {
     utils->AddRef();
     library->AddRef();
     compiler->AddRef();
+    include_handler->AddRef();
 
     s_compiler_func_table[0] = std::bind(&DXCompiler::CompileD3D12, this, std::placeholders::_1, std::placeholders::_2);
     s_compiler_func_table[1] = std::bind(&DXCompiler::CompileVulkan, this, std::placeholders::_1, std::placeholders::_2);
@@ -259,15 +262,28 @@ void DXCompiler::CompileVulkan(const ShaderCompilerInput& _input, ShaderCompiler
 
     const auto&  defines = _input.environment.GetDefines();
     std::wstring defines_str;
+
+    const auto& compile_args = _input.environment.GetCompilerArgs();
+
+    for (const auto& arg : compile_args) {
+        std::basic_string<wchar_t, std::char_traits<wchar_t>, m_defualt_allocator<wchar_t>> temp_first(arg.first.begin(), arg.first.end());
+
+        auto temp_second = ShaderCompilerEnvironment::GetVariantWStr(arg.second);
+
+        defines_str.append(std::format(L"-D{}={}", temp_first, temp_second));
+    }
+
     for (const auto& define : defines) {
         std::basic_string<wchar_t, std::char_traits<wchar_t>, m_defualt_allocator<wchar_t>> temp_first(define.first.begin(), define.first.end());
         std::basic_string<wchar_t, std::char_traits<wchar_t>, m_defualt_allocator<wchar_t>> temp_second(define.second.begin(), define.second.end());
 
-        defines_str.append(std::format(L"-D{}={}\n", temp_first, temp_second));
+        defines_str.append(std::format(L"-D{}={}", temp_first, temp_second));
     }
 
+    std::wstring included_path = Moer::ConfigManager::GetInstance().GetEngineShaderPath().generic_wstring();
+
     // Configure the compiler arguments for compiling the HLSL shader to SPIR-V
-    Moer::Array<LPCWSTR> arguments = {
+    Moer::Array<LPCWSTR> arguments = { 
         // (Optional) name of the shader file to be displayed e.g. in an error message
         file_name.c_str(),
         // Shader main entry point
@@ -276,9 +292,13 @@ void DXCompiler::CompileVulkan(const ShaderCompilerInput& _input, ShaderCompiler
         // Shader target profile
         L"-T",
         target_profile.c_str(),
+        L"-I",
+        included_path.c_str(),
         // Compile to SPIRV
         L"-spirv",
         defines_str.c_str(),
+        L"-fspv-target-env=vulkan1.3",
+
         // L"-fvk-use-dx-position-w",
         DXC_ARG_ALL_RESOURCES_BOUND,
         DXC_ARG_DEBUG,
@@ -295,7 +315,7 @@ void DXCompiler::CompileVulkan(const ShaderCompilerInput& _input, ShaderCompiler
         &buffer,
         arguments.data(),
         (uint32_t)arguments.size(),
-        nullptr,
+        include_handler.Get(),
         IID_PPV_ARGS(&result));
 
     if (SUCCEEDED(hres)) {

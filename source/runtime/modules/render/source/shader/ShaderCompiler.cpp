@@ -114,6 +114,8 @@ public:
           entry_point(input.entry_point),
           relative_source_file_path(input.relative_source_file_path),
           shader_name(input.shader_name) {
+
+        SetBasePlatformEnvironment();
     }
     void DispatchAndExecute(const std::function<void(const ShaderCompilerOutput&)>& post_process_func) {
         //call after registration
@@ -149,6 +151,20 @@ public:
             batch.CompileBatch();
             for_each(batch.outputs.begin(), batch.outputs.end(), [&post_process_func](const ShaderCompilerOutput& output) { post_process_func(output); });
         });
+    }
+
+    void SetBasePlatformEnvironment() {
+        switch (target_info.shader_platform) {
+            case SP_WIN_D3D_SM6:
+                environment.SetCompileArg("DXIL", true);
+                break;
+            case SP_VULKAN_SM6:
+                environment.SetCompileArg("VULKAN_HLSL", true);
+                break;
+            default:
+                break;
+        }
+        //MARK... RHI configuration
     }
 
     std::atomic_uint32_t actual_mutation_count = 0;

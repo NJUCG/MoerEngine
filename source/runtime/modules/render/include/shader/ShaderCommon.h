@@ -495,11 +495,27 @@ public:
         return macro_defines.defines;
     }
 
+    const Moer::UnorderedMap<std::string, std::variant<uint32_t, int32_t, bool, float, std::string>>& GetCompilerArgs() const {
+        return compiler_args;
+    }
+
+    static std::wstring GetVariantWStr(const std::variant<uint32_t, int32_t, bool, float, std::string>& _value) {
+     return std::visit([]<typename T>(const T& e){
+        if constexpr (std::is_same_v<T, std::string>) {
+            return std::wstring(e.begin(), e.end());
+        } else { // float/int
+            return std::to_wstring(e);
+        }
+    }, _value);
+}
+
 private:
     ShaderCompilerDefines macro_defines;
 
     Moer::UnorderedMap<std::string, std::variant<uint32_t, int32_t, bool, float, std::string>> compiler_args;
 };
+
+
 
 struct ShaderCompileJobInput {
     ShaderTargetInfo target_info;

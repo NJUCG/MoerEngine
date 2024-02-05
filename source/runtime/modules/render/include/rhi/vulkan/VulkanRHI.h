@@ -5,6 +5,7 @@
 #include "misc/STL.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
+#include "rhi/RHIResource.h"
 #include "window/WindowContext.h"
 
 class VulkanDevice;
@@ -73,7 +74,8 @@ public:
     // RHIComputeCommandList* CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr) final override;
     RHICopyCommandList* RHICreateCopyCommandList(RHICommandAllocator* _allocator) final override;
 
-    void RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) final override;
+    // void RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) final override;
+
 
     RHICommandAllocator* RHIGetCurrentCommandAllocator() final override;
 #pragma endregion
@@ -93,6 +95,9 @@ public:
     virtual void RHIPresentViewport(RHIViewport* _viewport, RHIFence* _render_end_fence) override;
 
 #pragma endregion
+
+protected:
+     void RHISetBatchedShaderParametersInner(RHIResource* _resource, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) final override;
 
 protected:
     VkInstance               m_instance;
