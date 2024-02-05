@@ -957,6 +957,13 @@ struct ViewPort {
     float min_depth;
     float max_depth;
 };
+
+struct MeshInfo {
+    uint32_t vertex_offset;
+    uint32_t index_offset;
+    uint32_t vertex_count;
+    uint32_t index_count;
+};
 #pragma endregion
 
 #endif// !RHI_PLATFORM_COMMON_H

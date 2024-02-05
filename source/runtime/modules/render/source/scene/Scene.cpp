@@ -15,12 +15,15 @@ namespace Moer {
         void          AddEntity(Entity entity) noexcept { m_entities.emplace(entity); }
         void          AddCamera(Entity entity) noexcept { m_cameras.emplace(entity); }
         void          RemoveEntity(Entity entity) noexcept { m_entities.erase(entity); };
+        void          SetBuffer(const std::string& name, RHIBufferRef buffer) { m_buffers[name] = buffer; }
+        RHIBufferRef  GetBuffer(const std::string& name) const { return m_buffers.at(name); }
         Array<Entity> GetEntities() const noexcept;
         Array<Entity> GetCameras() const noexcept;
 
     protected:
-        EntitySet m_entities;
-        EntitySet m_cameras;
+        Map<std::string, RHIBufferRef> m_buffers;
+        EntitySet                      m_entities;
+        EntitySet                      m_cameras;
     };
 
     Array<Entity> Scene::Impl::GetEntities() const noexcept {
@@ -55,6 +58,12 @@ namespace Moer {
     void Scene::RemoveEntity(Entity entity) noexcept {
         m_impl->RemoveEntity(entity);
     }
+    void Scene::SetBuffer(const std::string& name, RHIBufferRef buffer) noexcept {
+        return m_impl->SetBuffer(name, buffer);
+    }
+    RHIBufferRef Scene::GetBuffer(const std::string& name) const noexcept {
+        return m_impl->GetBuffer(name);
+    }
 
     void Scene::AddCamera(Entity entity) noexcept {
         m_impl->AddCamera(entity);
@@ -75,4 +84,4 @@ namespace Moer {
         g_scene = scene;
     }
 
-}
+}// namespace Moer

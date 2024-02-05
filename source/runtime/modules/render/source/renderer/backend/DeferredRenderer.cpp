@@ -329,13 +329,17 @@ namespace Moer {
                 auto camera_entity = scene->GetCameras()[0];
                 auto camera        = CameraManager::Get().Get(camera_entity);
                 camera->Tick();
-                const auto camera_view   = camera->GetViewMatrix();
-                const auto camera_proj   = camera->GetProjectionMatrix();
+                const auto camera_view = camera->GetViewMatrix();
+                const auto camera_proj = camera->GetProjectionMatrix();
 
                 // Shader* vert_shader = ShaderResourceManager::GetShader<TestDeferredTriangleShaderVert>();
+                cmd_list->BindIndexBuffer(scene->GetBuffer("index_buffer"), 0, IET_UINT32);
+                uint32_t           offset             = 0;
+                const RHIBufferRef prim_vertex_buffer = scene->GetBuffer("vertex_buffer");
+                cmd_list->BindVertexBuffers(0, 1, &prim_vertex_buffer, &offset);
 
                 for (auto entity : scene->GetEntities()) {
-                    if (auto primitive = RenderableManager::Get().GetRenderPrimitive(entity)) {
+                    if (RenderableManager::Get().Contains(entity)) {
                         const auto                                 prim_model = TransformManager::Get().Get(entity).matrix;
                         TestDeferredTriangleShaderVert::Parameters params;
                         Matrix4x4f                                 ubo[] = {prim_model, camera_view, camera_proj, Transpose(camera_proj * camera_view * prim_model)};
@@ -345,14 +349,16 @@ namespace Moer {
 
                         auto mi = RenderableManager::Get().GetMaterialInstance(entity);
                         mi->Use(batched_params);
-                        
+
+                        auto prim_info = RenderableManager::Get().GetMeshInfo(entity);
+
                         g_rhi->RHISetBatchedShaderParameters(pipeline_state, batched_params, true);
 
-                        cmd_list->BindIndexBuffer(primitive->GetIndexBuffer(), 0, EIndexElementType::IET_UINT32);
-                        const RHIBufferRef prim_vertex_buffer = primitive->GetVertexBuffer();
-                        uint32_t           offset             = 0;
-                        cmd_list->BindVertexBuffers(0, 1, &prim_vertex_buffer, &offset);
-                        cmd_list->DrawIndexedInstanced(primitive->GetCount(), 1, 0, 0, 0);
+                        // cmd_list->BindIndexBuffer(primitive->GetIndexBuffer(), 0, EIndexElementType::IET_UINT32);
+                        // const RHIBufferRef prim_vertex_buffer = primitive->GetVertexBuffer();
+                        // uint32_t           offset             = 0;
+                        // cmd_list->BindVertexBuffers(0, 1, &prim_vertex_buffer, &offset);
+                        cmd_list->DrawIndexedInstanced(prim_info.index_count, 1, prim_info.index_offset, prim_info.vertex_offset, 0);
                     }
                 }
             } else {
