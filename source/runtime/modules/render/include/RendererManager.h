@@ -6,6 +6,7 @@
 #include <string>
 
 #define MOER_DEFERRED_RENDERER_NAME "DeferredRenderer"
+#define MOER_MESH_RENDERER_NAME     "MeshRenderer"
 #define MOER_DEFAULT_RENDERER_NAME  MOER_DEFERRED_RENDERER_NAME
 namespace Moer {
     using TRendererOutput = void*;

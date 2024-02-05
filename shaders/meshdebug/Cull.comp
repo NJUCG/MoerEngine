@@ -89,7 +89,7 @@ bool IsMeshletVisible(in uint meshlet_id) {
   if (WaveIsFirstLane()) {
     DrawCounterBuffer.InterlockedAdd(0, meshlet_count, cmd_offset);
   }
-  cmd_offset = WaveReadFirstLane(cmd_offset);
+  cmd_offset = WaveReadLaneFirst(cmd_offset);
   cmd_offset +=lane_offset;
 
   if(visible) {

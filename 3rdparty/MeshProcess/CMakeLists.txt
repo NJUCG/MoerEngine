@@ -48,4 +48,8 @@ endfunction()
 
 add_compiled_lib(metis metis SHARED)
 
+add_subdirectory(meshoptimizer)
+target_link_libraries(${third_lib_for_mesh_process} PUBLIC meshoptimizer)
+target_include_directories(${third_lib_for_mesh_process} PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/meshoptimizer/src")
+
 target_compile_definitions(${third_lib_for_mesh_process} PUBLIC "IDXTYPEWIDTH=32" "REALTYPEWIDTH=64")

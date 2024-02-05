@@ -13,6 +13,8 @@
 #include "math/Constant.h"
 #include "math/Function.h"
 
+#include <meshoptimizer.h>
+
 #include <ranges>
 
 void MetisTest();
