@@ -379,7 +379,84 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
     return RHIGraphicsPipelineStateRef(vk_pso);
 }
 
-RHIComputePipelineStateRef VulkanRHIImpl::RHICreateComputePipelineState(RHIComputeShader* _compute_shader) { return RHIComputePipelineStateRef{}; }
+RHIComputePipelineStateRef VulkanRHIImpl::RHICreateComputePipelineState(RHIComputeShader* _compute_shader) {
+    VulkanRHIComputePipelineState* vk_pso = new VulkanRHIComputePipelineState();
+
+    auto* vk_shader = static_cast<VulkanRHIComputeShader*>(_compute_shader);
+    if (!vk_shader) LOG_CRITICAL("RHICreateComputePipelineState: Compute shader is nullptr!");
+
+    VkPipelineShaderStageCreateInfo shader_stage{};
+    shader_stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    shader_stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+    shader_stage.module = vk_shader->GetHandle();
+    shader_stage.pName  = vk_shader->GetMetaShader()->GetShaderMetaType()->GetEntryPoint().data();
+
+
+    Moer::Array<TDescriptorSetLayoutInfo> layout_mappings;
+    Moer::Array<VkPushConstantRange>      push_constant_ranges;
+
+    auto* meta_shader = vk_shader->GetMetaShader();
+    // find max set index
+    int8_t max_set      = -1;
+    auto   layout_infos = meta_shader->GetRootParametersLayoutInfo().GetLayoutInfos();
+    for (const auto& info : layout_infos) {
+        max_set = std::max(max_set, info.space);
+    }
+    layout_mappings.resize(max_set + 1, {});
+
+    auto constant_infos = meta_shader->GetRootParametersLayoutInfo().GetConstantsInfos();
+
+    for (const auto& info : layout_infos) {
+        VkDescriptorSetLayoutBinding binding{};
+        binding.binding         = info.slot;
+        binding.descriptorType  = VulkanEnumTranslator::METoVKDescriptorType(info.type);
+        binding.descriptorCount = 1;
+        binding.stageFlags |= VulkanEnumTranslator::METoVKShaderStageFlags(meta_shader->GetShaderType());
+        binding.pImmutableSamplers = nullptr;
+
+        layout_mappings[info.space].second.push_back(std::move(binding));
+    }
+
+    // constants
+    for (const auto& info : constant_infos) {
+        VkPushConstantRange range{};
+        range.stageFlags |= VulkanEnumTranslator::METoVKShaderStageFlags(meta_shader->GetShaderType());
+        range.offset = info.offset;
+        range.size   = info.stride;
+
+        push_constant_ranges.push_back(range);
+    }
+
+    vk_pso->CreateResourceCache();
+    vk_pso->GenerateDescriptorSetLayouts(m_device, layout_mappings);
+
+    auto layouts = vk_pso->m_descriptor_sets_layout->GetLayouts();
+
+
+    VkPipelineLayoutCreateInfo pipeline_layout_create_info{};
+    pipeline_layout_create_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pipeline_layout_create_info.pNext = nullptr;
+    pipeline_layout_create_info.flags = 0;
+    pipeline_layout_create_info.setLayoutCount         = layouts.size();
+    pipeline_layout_create_info.pSetLayouts            = layouts.data();
+    pipeline_layout_create_info.pushConstantRangeCount = push_constant_ranges.size();
+    pipeline_layout_create_info.pPushConstantRanges    = push_constant_ranges.data();
+
+    vkCreatePipelineLayout(m_device->GetDevice(), &pipeline_layout_create_info, nullptr, &vk_pso->m_pipeline_layout);
+
+    VkComputePipelineCreateInfo pipeline_create_info{};
+    pipeline_create_info.sType              = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    pipeline_create_info.pNext              = nullptr;
+    pipeline_create_info.flags              = 0;
+    pipeline_create_info.stage              = shader_stage;
+    pipeline_create_info.layout             = vk_pso->m_pipeline_layout;
+    pipeline_create_info.basePipelineHandle = nullptr;
+    pipeline_create_info.basePipelineIndex  = -1;
+
+    VK_CHECK_RESULT(vkCreateComputePipelines(m_device->GetDevice(), nullptr, 1, &pipeline_create_info, nullptr, &vk_pso->m_pipeline));
+
+    return RHIComputePipelineStateRef(vk_pso);
+}
 
 RHIBufferRef VulkanRHIImpl::RHICreateBuffer(const RHIBufferCreateInfo& info) {
     RHIBufferInfo buffer_info{};
@@ -551,7 +628,7 @@ RHICopyCommandList* VulkanRHIImpl::RHICreateCopyCommandList(RHICommandAllocator*
     return MoerNew(VulkanRHICopyCommandList(m_device, vk_allocator->GetHandle(ECommandListType::COPY), VK_COMMAND_BUFFER_LEVEL_PRIMARY));
 }
 
-void VulkanRHIImpl::RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) {
+void VulkanRHIImpl::RHISetBatchedShaderParametersInner(RHIResource* _pso, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) {
     const auto* vk_pso = static_cast<VulkanRHIGraphicsPipelineState*>(_pso);
     VK_CHECK_NULLPTR(vk_pso, "SetBatchedShaderParameter: graphics pipeline state is nullptr!", return);
     // resources

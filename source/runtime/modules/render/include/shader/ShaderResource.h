@@ -15,6 +15,7 @@
 #include "shader/Shader.h"
 #include "shader/ShaderCommon.h"
 
+
 class ShaderResource : Countable {
 public:
 protected:
@@ -32,19 +33,19 @@ struct ShaderCodeEntry {
 };
 
 struct ShaderResourceKey {
-    std::string_view name;
+    uint64_t         shader_name_hash;
     uint32_t         mutation_id;
 };
 
 inline bool operator==(const ShaderResourceKey& lhs, const ShaderResourceKey& rhs) {
-    return lhs.name == rhs.name && lhs.mutation_id == rhs.mutation_id;
+    return lhs.shader_name_hash == rhs.shader_name_hash && lhs.mutation_id == rhs.mutation_id;
 }
 
 namespace std {
     template<>
     struct hash<ShaderResourceKey> {
         size_t operator()(const ShaderResourceKey& key) const {
-            size_t hash = GetHash(key.name.data());
+            size_t hash = key.shader_name_hash;
             HashCombine(hash, key.mutation_id);
             return hash;
         }
@@ -99,16 +100,16 @@ class ShaderTypeResourceMap {
 
 public:
     ~ShaderTypeResourceMap();
-    void AddShader(std::string_view type_name, Shader* shader);
+    void AddShader(ShaderTypeKey type_name, Shader* shader);
 
-    Shader* FindOrAddShader(std::string_view type_name, Shader* shader);
+    Shader* FindOrAddShader(ShaderTypeKey type_name, Shader* shader);
 
 protected:
     friend class ShaderResourceManager;
     ShaderTypeResourceMap(EShaderPlatform platform);
 
 protected:
-    Moer::UnorderedMap<std::string_view, Shader*> shader_type_map;
+    Moer::UnorderedMap<ShaderTypeKey, Shader*> shader_type_map;
 
     EShaderPlatform platform;
 

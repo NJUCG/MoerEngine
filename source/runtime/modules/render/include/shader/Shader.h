@@ -119,10 +119,10 @@ public:
 protected:
     Hash64City compiled_hash;
 
-private:
+protected:
     void ConstructRootParameterLayoutInfo(const ShaderParametersInfoMap& _param_map);
 
-private:
+protected:
     const ShaderMetaType* type;
     ShaderTargetInfo      target_info;
 

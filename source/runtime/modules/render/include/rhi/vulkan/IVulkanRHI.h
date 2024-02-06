@@ -68,7 +68,7 @@ public:
     // RHIComputeCommandList* CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr) override { return nullptr; }
     RHICopyCommandList* RHICreateCopyCommandList(RHICommandAllocator* _allocator) override { return nullptr; }
 
-    void RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) override {}
+    // void RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) override {}
 
     RHICommandAllocator* RHIGetCurrentCommandAllocator() override { return nullptr; }
 #pragma endregion
@@ -88,6 +88,9 @@ public:
     virtual RHIViewport* RHIGetMainViewport() override { return nullptr; }
 
 #pragma endregion
+
+protected:
+    void RHISetBatchedShaderParametersInner(RHIResource* _resource, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) override{};
 };
 
 #endif// IVULKAN_RHI_H

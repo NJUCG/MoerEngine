@@ -6,18 +6,31 @@
 #include "shader/ShaderCommon.h"
 #include "shader/ShaderMutation.h"
 #include "shader/ShaderResource.h"
+class GlobalShaderCache{
+    public:
+    static GlobalShaderCache& GetInstance() {
+        static GlobalShaderCache cache;
+        return cache;
+    }
+    GlobalShaderCache();
+    ~GlobalShaderCache();
 
+    const ShaderCompilerOutput* FindShaderCache(EShaderPlatform platform, const ShaderResourceKey& key) const;
+
+    private:
+    friend class ShaderResourceManager;
+    void Load();
+    void Dump();
+    void UpdateOutput(Moer::Array<ShaderCompilerOutput*>& outputs);
+    private:
+    struct Impl;
+    Impl* impl;
+};
 class ShaderResourceManager {
 public:
     static void                   Init(EShaderPlatform platform);
     static void                   ShutDown();
     static ShaderResourceManager& GetInstance();
-
-    // template<typename ShaderType>
-    // static Shader* GetShader() {
-    //     const ShaderMetaType& meta_type = ShaderType::GetMetaType();
-    //     return GetInstance().GetShader(meta_type);
-    // }
 
     template<typename ShaderType>
     RHIShaderRef GetShader(const typename ShaderType::TMutationSet& _mutation_set) {

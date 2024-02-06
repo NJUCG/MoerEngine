@@ -72,10 +72,12 @@ typedef __int64 int64_t;
 #define PRId64       "I64d"
 #define SCNd32       "ld"
 #define SCNd64       "I64d"
+#ifndef INT32_MIN
 #define INT32_MIN    ((int32_t)_I32_MIN)
 #define INT32_MAX    _I32_MAX
 #define INT64_MIN    ((int64_t)_I64_MIN)
 #define INT64_MAX    _I64_MAX
+#endif
 #else
 #include <inttypes.h>
 #endif

@@ -8,6 +8,7 @@
 #include "Core.h"
 #include "taskgraph/TaskGraph.h"
 #include "taskgraph/ThreadManager.h"
+#include <type_traits>
 
 enum class ERHIType {
     Vulkan,
@@ -22,6 +23,11 @@ class Shader;
 
 struct RHIInitInfo {
     uint32_t max_frame_in_flight = 3;
+};
+
+template<typename T>
+concept TPipelineStateRef = requires(T) {
+    std::convertible_to<T, RHIGraphicsPipelineStateRef> || std::convertible_to<T, RHIComputePipelineStateRef>;
 };
 class RHI {
 public:
@@ -97,8 +103,11 @@ public:
     // virtual RHIGraphicsCommandList* CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state = nullptr)                                     = 0;
     virtual RHIGraphicsCommandList* RHICreateGraphicsCommandList(RHICommandAllocator* _allocator, RHIGraphicsPipelineState* _initial_state = nullptr) = 0;
     // virtual RHIComputeCommandList*  CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr)                                       = 0;
-    virtual RHICopyCommandList* RHICreateCopyCommandList(RHICommandAllocator* _allocator)                                                                                        = 0;
-    virtual void                RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant = false) = 0;
+    virtual RHICopyCommandList* RHICreateCopyCommandList(RHICommandAllocator* _allocator) = 0;
+    template<TPipelineStateRef TPipelineRef>
+    void RHISetBatchedShaderParameters(TPipelineRef _pso, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant = false){
+        RHISetBatchedShaderParametersInner(_pso, _batched_params, b_update_constant);
+    };
 
     virtual RHICommandAllocator* RHIGetCurrentCommandAllocator() = 0;
 #pragma endregion
@@ -130,6 +139,8 @@ public:
 
     void RHIFlushPendingDeletes();
 #pragma endregion
+protected:
+    virtual void RHISetBatchedShaderParametersInner(RHIResource* _resource, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) = 0;
 
 protected:
     ERHIType rhi_type;

@@ -3,6 +3,7 @@
 #include "misc/STL.h"
 #include "renderer/BackendRenderer.h"
 #include "renderer/backend/DeferredRenderer.h"
+#include "renderer/backend/MeshDebugRenderer.h"
 #include <string>
 namespace Moer {
     struct RendererManagerData {
@@ -14,6 +15,7 @@ namespace Moer {
     void RendererManager::Init() {
         data = new RendererManagerData();
         RegisterRenderer(MOER_DEFAULT_RENDERER_NAME, MoerNew(DeferredRenderer));
+        // RegisterRenderer(MOER_MESH_RENDERER_NAME, MoerNew(MeshDebugRenderer));
 
         BackendRendererInitInfo init_info;
         init_info.width  = 1280;

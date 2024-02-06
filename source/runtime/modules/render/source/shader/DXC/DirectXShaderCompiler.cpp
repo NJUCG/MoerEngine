@@ -1,6 +1,8 @@
 #include "DirectXShaderCompiler.h"
 #include "config/ConfigManager.h"
 #include "misc/Hash.h"
+#include "shader/ShaderResource.h"
+#include "shader/ShaderResourceManager.h"
 
 #if PLATFORM_WINDOWS
 #ifndef NOMINMAX
@@ -31,7 +33,7 @@
 #include "shader/ShaderCommon.h"
 #include "DirectXShaderReflectorVulkan.h"
 
-std::function<void(const ShaderCompilerInput& input, ShaderCompilerOutput& output)> DXCompiler::s_compiler_func_table[EShaderPlatform::SP_Num]{};
+std::function<ShaderCompilerOutput*(const ShaderCompilerInput& input)> DXCompiler::s_compiler_func_table[EShaderPlatform::SP_Num]{};
 
 namespace Moer {
     struct ShaderCompiledCacheFile {
@@ -70,6 +72,7 @@ static ComPtr<IDxcCompiler3> compiler  = nullptr;
 static ComPtr<IDxcValidator> validator = nullptr;
 static ComPtr<IDxcLibrary>   library   = nullptr;
 static ComPtr<IDxcUtils>     utils     = nullptr;
+static ComPtr<IDxcIncludeHandler> include_handler = nullptr;
 
 DXCompiler& DXCompiler::GetInstance() {
     static DXCompiler s_compiler;
@@ -89,6 +92,7 @@ DXCompiler::DXCompiler() {
         LOG_ERROR("dxcompiler library load fail.");
         return;
     }
+    library->CreateIncludeHandler(&include_handler);
 
     hres = DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&compiler));
     if (FAILED(hres)) {
@@ -105,92 +109,47 @@ DXCompiler::DXCompiler() {
     utils->AddRef();
     library->AddRef();
     compiler->AddRef();
+    include_handler->AddRef();
 
-    s_compiler_func_table[0] = std::bind(&DXCompiler::CompileD3D12, this, std::placeholders::_1, std::placeholders::_2);
-    s_compiler_func_table[1] = std::bind(&DXCompiler::CompileVulkan, this, std::placeholders::_1, std::placeholders::_2);
+    s_compiler_func_table[SP_WIN_D3D_SM6] = std::bind(&DXCompiler::CompileD3D12, this, std::placeholders::_1);
+    s_compiler_func_table[SP_VULKAN_SM6] = std::bind(&DXCompiler::CompileVulkan, this, std::placeholders::_1);
 
     if (g_rhi->GetType() == ERHIType::Vulkan)
         reflector = new DirectXShaderReflectorVulkan();
 }
 
-void DXCompiler::Compile(const ShaderCompilerInput& _input, ShaderCompilerOutput& _output) {
+ShaderCompilerOutput* DXCompiler::Compile(const ShaderCompilerInput& _input) {
 
-    s_compiler_func_table[_input.target_info.shader_platform](_input, _output);
-    // CompileVulkan(_input, _output);
+    return s_compiler_func_table[_input.target_info.shader_platform](_input);
 }
 
-void DXCompiler::CompileD3D12(const ShaderCompilerInput& _input, ShaderCompilerOutput& _output) {
+ShaderCompilerOutput* DXCompiler::CompileD3D12(const ShaderCompilerInput& _input) {
+    return nullptr;
 }
 
 bool LoadCache(long long _last_write_time, const ShaderCompilerInput& input, ShaderCompilerOutput& output) {
-    std::filesystem::path output_path  = Moer::ConfigManager::GetInstance().GetEngineShaderCachedPath();
-    std::string           platform_str = ToString(input.target_info.shader_platform);
+    uint32_t shader_name_hash = GetHash(input.shader_name);
+    ShaderResourceKey key{shader_name_hash, input.mutation_id};
 
-    output_path /= platform_str;
-    output_path /= input.relative_source_file_path;
-    std::string extension = output_path.extension().generic_string().substr(1);
-    std::string file_name = output_path.filename().generic_string().substr(0, output_path.filename().generic_string().size() - extension.size() - 1);
-    output_path.replace_filename(std::format("{}_{}_mut{}.cache", file_name, extension, input.mutation_id));
+    const ShaderCompilerOutput* temp_output = GlobalShaderCache::GetInstance().FindShaderCache((EShaderPlatform)input.target_info.shader_platform, key);
 
-    if (std::filesystem::exists(output_path)) {
-        Moer::ShaderCompiledCacheFile cache_file;
-        std::ifstream                 ifs(output_path, std::ios::binary);
-        std::stringstream             file_str;
-        file_str << ifs.rdbuf();
+    bool valid_cache = (temp_output != nullptr && temp_output->source_file_last_write_time == _last_write_time);
 
-        std::string_view file_view = file_str.rdbuf()->view();
-        auto             in        = zpp::bits::in(file_view);
-        in(cache_file).or_throw();
-
-        if (cache_file.Equals(input) && cache_file.GetLastWriteTime() == _last_write_time) {
-            output.b_succeeded = true;
-            output.shader_name = input.shader_name;
-            output.shader_code.swap(cache_file.code);
-            output.compiled_hash = *(Hash64City*)&cache_file.hash;
-            output.mutation_id   = input.mutation_id;
-            output.parameter_map.param_map.swap(cache_file.param_map);
-            output.target_info = input.target_info;
-            return true;
-        }
+    if (valid_cache) {
+        output = *temp_output;
+        return true;
     }
+
     return false;
 }
 
-void StoreCache(long long _last_write_time, const ShaderCompilerInput& input, const ShaderCompilerOutput& _output) {
-    std::filesystem::path cache_file_path = Moer::ConfigManager::GetInstance().GetEngineShaderCachedPath();
-    std::string           platform_str    = ToString(input.target_info.shader_platform);
-
-    cache_file_path /= platform_str;
-    cache_file_path /= input.relative_source_file_path;
-    std::string extension = cache_file_path.extension().generic_string().substr(1);
-    std::string file_name = cache_file_path.filename().generic_string().substr(0, cache_file_path.filename().generic_string().size() - extension.size() - 1);
-    cache_file_path.replace_filename(std::format("{}_{}_mut{}.cache", file_name, extension, input.mutation_id));
-    //create cache file
-    Moer::ShaderCompiledCacheFile cache_file;
-    cache_file.hash            = *((uint64_t*)&_output.compiled_hash.hash_code[0]);
-    cache_file.mutation_id     = _output.mutation_id;
-    cache_file.platform        = _output.target_info.shader_platform;
-    cache_file.shader_type     = _output.target_info.shader_type;
-    cache_file.last_write_time = _last_write_time;
-    cache_file.code.resize(_output.shader_code.size());
-    memcpy(&cache_file.code[0], &_output.shader_code[0], _output.shader_code.size());
-    cache_file.param_map = _output.parameter_map.param_map;
-
-    if (!std::filesystem::exists(cache_file_path.parent_path()))
-        std::filesystem::create_directories(cache_file_path.parent_path());
-    std::fstream         ofs(cache_file_path, std::ios::binary | std::ios::out);
-    Moer::Array<uint8_t> out_stream;
-    auto                 out = zpp::bits::out(out_stream);
-    out(cache_file).or_throw();
-
-    ofs.write((const char*)out_stream.data(), out_stream.size());
-}
-
-void DXCompiler::CompileVulkan(const ShaderCompilerInput& _input, ShaderCompilerOutput& _output) {
-    static auto on_fail = [&](const char* messsage) {
-        _output.errors.push_back(messsage);
-        _output.b_succeeded = false;
-        _output.target_info = _input.target_info;
+ShaderCompilerOutput* DXCompiler::CompileVulkan(const ShaderCompilerInput& _input) {
+    ShaderCompilerOutput* output_ptr = MoerNew(ShaderCompilerOutput)();
+    auto& output = *output_ptr;
+    static auto on_fail = [&output, _input](const char* messsage) {
+        output.errors.push_back(messsage);
+        output.b_succeeded = false;
+        output.target_info = _input.target_info;
     };
 
     std::string        file_name_c(_input.relative_source_file_path);
@@ -200,12 +159,10 @@ void DXCompiler::CompileVulkan(const ShaderCompilerInput& _input, ShaderCompiler
     HRESULT hres;
 
     std::filesystem::path file_path = Moer::ConfigManager::GetInstance().GetEngineShaderPath();
-
-    std::filesystem::path output_path  = Moer::ConfigManager::GetInstance().GetEngineShaderCachedPath();
-    std::string           platform_str = ToString(_input.target_info.shader_platform);
+    std::string           platform_str = ToString((EShaderPlatform)_input.target_info.shader_platform);
     if (platform_str.empty()) {
         on_fail("platform not supported");
-        return;
+        return output_ptr;
     }
 
     file_path /= file_name_c;
@@ -215,17 +172,14 @@ void DXCompiler::CompileVulkan(const ShaderCompilerInput& _input, ShaderCompiler
     if (!std::filesystem::exists(file_path)) {
         on_fail(std::format("Could not load shader file: {}", file_path.generic_string()).c_str());
 
-        return;
+        return output_ptr;
     }
-
-    auto platform_output_dir = output_path / platform_str;
-
-    std::filesystem::path cache_file_path = (platform_output_dir / file_name_c).replace_extension(std::format(".cache{}", _input.mutation_id));
 
     std::filesystem::file_time_type last_write_time = std::filesystem::last_write_time(file_path);
 
-    if (LoadCache(last_write_time.time_since_epoch().count(), _input, _output))
-        return;
+    if (LoadCache(last_write_time.time_since_epoch().count(), _input, output)){
+        return output_ptr;
+    }
 
     // Load the HLSL text shader from disk
     uint32_t                 code_page = DXC_CP_ACP;
@@ -239,17 +193,17 @@ void DXCompiler::CompileVulkan(const ShaderCompilerInput& _input, ShaderCompiler
 
     if (file_source_stream.str().empty()) {
         on_fail(std::format("shader file {} is empty", file_path.generic_string()).c_str());
-        return;
+        return output_ptr;
     }
     hres = utils->CreateBlob(file_source_stream.str().data(), file_source_stream.str().size(), CP_UTF8, source_blob.GetAddressOf());
 
     if (FAILED(hres)) {
         on_fail("Could not load shader file");
-        return;
+        return output_ptr;
     }
 
     // Select target profile based on shader file extension
-    auto target_profile = GetPlatform(_input.target_info.shader_type, _input.target_info.shader_platform);
+    auto target_profile = GetPlatform((EShaderType)_input.target_info.shader_type, (EShaderPlatform)_input.target_info.shader_platform);
 
     size_t idx = file_name.rfind('.');
 
@@ -259,15 +213,28 @@ void DXCompiler::CompileVulkan(const ShaderCompilerInput& _input, ShaderCompiler
 
     const auto&  defines = _input.environment.GetDefines();
     std::wstring defines_str;
+
+    const auto& compile_args = _input.environment.GetCompilerArgs();
+
+    for (const auto& arg : compile_args) {
+        std::basic_string<wchar_t, std::char_traits<wchar_t>, m_defualt_allocator<wchar_t>> temp_first(arg.first.begin(), arg.first.end());
+
+        auto temp_second = ShaderCompilerEnvironment::GetVariantWStr(arg.second);
+
+        defines_str.append(std::format(L"-D{}={}", temp_first, temp_second));
+    }
+
     for (const auto& define : defines) {
         std::basic_string<wchar_t, std::char_traits<wchar_t>, m_defualt_allocator<wchar_t>> temp_first(define.first.begin(), define.first.end());
         std::basic_string<wchar_t, std::char_traits<wchar_t>, m_defualt_allocator<wchar_t>> temp_second(define.second.begin(), define.second.end());
 
-        defines_str.append(std::format(L"-D{}={}\n", temp_first, temp_second));
+        defines_str.append(std::format(L"-D{}={}", temp_first, temp_second));
     }
 
+    std::wstring included_path = Moer::ConfigManager::GetInstance().GetEngineShaderPath().generic_wstring();
+
     // Configure the compiler arguments for compiling the HLSL shader to SPIR-V
-    Moer::Array<LPCWSTR> arguments = {
+    Moer::Array<LPCWSTR> arguments = { 
         // (Optional) name of the shader file to be displayed e.g. in an error message
         file_name.c_str(),
         // Shader main entry point
@@ -276,9 +243,13 @@ void DXCompiler::CompileVulkan(const ShaderCompilerInput& _input, ShaderCompiler
         // Shader target profile
         L"-T",
         target_profile.c_str(),
+        L"-I",
+        included_path.c_str(),
         // Compile to SPIRV
         L"-spirv",
         defines_str.c_str(),
+        L"-fspv-target-env=vulkan1.3",
+
         // L"-fvk-use-dx-position-w",
         DXC_ARG_ALL_RESOURCES_BOUND,
         DXC_ARG_DEBUG,
@@ -295,7 +266,7 @@ void DXCompiler::CompileVulkan(const ShaderCompilerInput& _input, ShaderCompiler
         &buffer,
         arguments.data(),
         (uint32_t)arguments.size(),
-        nullptr,
+        include_handler.Get(),
         IID_PPV_ARGS(&result));
 
     if (SUCCEEDED(hres)) {
@@ -312,10 +283,8 @@ void DXCompiler::CompileVulkan(const ShaderCompilerInput& _input, ShaderCompiler
             error_stream << "Shader compilation failed :\n"
                          << (const char*)error_blob->GetBufferPointer();
             on_fail("Shader compilation failed");
-            _output.errors.push_back((const char*)error_blob->GetBufferPointer());
-
-            LOG_INFO(error_stream.str());
-            return;
+            output.errors.push_back((const char*)error_blob->GetBufferPointer());
+            return output_ptr;
         }
     }
     // Get compilation result
@@ -324,20 +293,23 @@ void DXCompiler::CompileVulkan(const ShaderCompilerInput& _input, ShaderCompiler
     const uint8_t* data = (uint8_t*)code->GetBufferPointer();
     uint32_t       size = code->GetBufferSize();
 
-    _output.b_succeeded = true;
-    _output.shader_name = _input.shader_name;
-    _output.shader_code.resize(size);
-    _output.compiled_hash.FromData(data, size);
-    _output.mutation_id = _input.mutation_id;
+    output.b_succeeded = true;
+    output.shader_name_hash = _input.shader_name_hash;
+    output.shader_code.resize(size);
+    output.compiled_hash.FromData(data, size);
+    output.mutation_id = _input.mutation_id;
 
-    memcpy(&_output.shader_code[0], data, size);
+    memcpy(&output.shader_code[0], data, size);
 
     Moer::UnorderedMap<std::string, ParameterInfo> param_map;
     reflector->ReflectShader(result.Get(), _input.param_meta_data, param_map);
-    _output.parameter_map.param_map.swap(param_map);
-    _output.target_info = _input.target_info;
+    output.parameter_map.param_map.swap(param_map);
+    output.target_info = _input.target_info;
+    output.cached = false;
+    output.source_file_last_write_time = last_write_time.time_since_epoch().count();
 
-    StoreCache(last_write_time.time_since_epoch().count(), _input, _output);
+    // StoreCache(last_write_time.time_since_epoch().count(), _input, _output);
+    return output_ptr;
 }
 
 bool DXCompiler::IsSupportTarget(const ShaderTargetInfo& _target_info) {
