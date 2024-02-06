@@ -1,8 +1,10 @@
 #include "shader/ShaderCommon.h"
 #include "misc/Hash.h"
 #include "misc/MacroUtils.h"
+#include "misc/STL.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
+#include "shader/ShaderResource.h"
 #include <algorithm>
 #include <stdexcept>
 
@@ -98,7 +100,7 @@ void ShaderParametersMetadata::InitializeLayout() {
  * 
  */
 void ShaderMetaType::OnRegistration() {
-    GetNameToTypeMap().insert({type_name, this});
+    GetNameToTypeMap().insert({type_name_hash, this});
     ShaderCompileRegistration::RegistrateCompileWorkIfNeed(*this);
     //worker
 }
@@ -121,17 +123,36 @@ ShaderMetaType::ShaderMetaType(
       total_mutation_count(_total_mutation_count),
       construct_shader_instance(_shader_type_constructor),
       should_compile_mutation(_should_compile_mutation),
-      set_compile_environment(_set_compile_environment) {
+      set_compile_environment(_set_compile_environment),
+      type_name_hash(GetHash(_type_name)) {
 
     OnRegistration();
 };
 ShaderMetaType::~ShaderMetaType() {
-    GetNameToTypeMap().erase(type_name);
+    GetNameToTypeMap().erase(type_name_hash);
 }
 
-Moer::UnorderedMap<std::string_view, ShaderMetaType*>& ShaderMetaType::GetNameToTypeMap() {
-    static Moer::UnorderedMap<std::string_view, ShaderMetaType*> name_to_shader_meta_type;
-    return name_to_shader_meta_type;
+Moer::UnorderedMap<ShaderTypeKey, ShaderMetaType*>& ShaderMetaType::GetNameToTypeMap() {
+    // static Moer::UnorderedMap<std::string_view, ShaderMetaType*> name_to_shader_meta_type;
+    static Moer::UnorderedMap<ShaderTypeKey, ShaderMetaType*>   type_to_shader_meta_type;
+    return type_to_shader_meta_type;
+}
+
+ShaderMetaType* ShaderMetaType::GetShaderMetaType(uint32_t _type_name_hash) {
+    auto& name_to_type_map = GetNameToTypeMap();
+    auto  iter             = name_to_type_map.find(_type_name_hash);
+    if (iter != name_to_type_map.end()) {
+        return iter->second;
+    }
+    return nullptr;
+}
+
+ShaderMetaType* ShaderMetaType::GetShaderMetaType(std::string_view _type_name) {
+    return GetShaderMetaType(GetHash(_type_name));
+}
+
+void ShaderMetaType::RegistrateShaderMetaType(ShaderMetaType *type) {
+    GetNameToTypeMap().insert({type->type_name_hash, type});
 }
 
 ShaderTypeRegistration::ShaderTypeRegistration(std::function<ShaderMetaType&()> _callback) {
@@ -171,6 +192,7 @@ void ShaderCompileRegistration::RegistrateCompileWorkIfNeed(const ShaderMetaType
         _shader_type.GetEntryPoint(),
         _shader_type.GetFileName(),
         _shader_type.GetName(),
+        _shader_type.GetNameHash(),
         _shader_type.GetTotalMutationCount(),
         _shader_type.GetParameterMetaData());
 }

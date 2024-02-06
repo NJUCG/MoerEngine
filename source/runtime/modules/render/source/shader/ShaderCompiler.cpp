@@ -53,15 +53,15 @@ public:
  * @param input ShaderCompilerInput: contains all information compiler needs
  * @param output ShaderCompilerOutput: output shader code, error messages and param data bindings
  */
-void ShaderCompiler::Compile(const ShaderCompilerInput& input, ShaderCompilerOutput& output) {
+ShaderCompilerOutput* ShaderCompiler::Compile(const ShaderCompilerInput& input) {
     //todo: need to consider include dependencies
-    compiler->Compile(input, output);
+    return compiler->Compile(input);
 }
 
 struct ShaderCompileBatch {
 
-    Moer::Array<ShaderCompilerInput>  inputs;
-    Moer::Array<ShaderCompilerOutput> outputs;
+    Moer::Array<ShaderCompilerInput>   inputs;
+    Moer::Array<ShaderCompilerOutput*> outputs;
 
     ShaderCompilerEnvironment environment;
 
@@ -76,6 +76,7 @@ struct ShaderCompileBatch {
         std::string_view                entry_point,
         std::string_view                relative_source_file_path,
         std::string_view                shader_name,
+        uint32_t                       shader_name_hash,
         const ShaderParametersMetadata* param_meta_data) {
         inputs.emplace_back(
             ShaderCompilerInput{
@@ -84,21 +85,21 @@ struct ShaderCompileBatch {
                 entry_point,
                 relative_source_file_path,
                 shader_name,
+                shader_name_hash,
                 environment,
                 param_meta_data});
     }
 
-    void AddOutput(const ShaderCompilerOutput& output) {
+    void AddOutput(ShaderCompilerOutput* output) {
         outputs.push_back(output);
     }
 
     void CompileBatch() {
         std::for_each(inputs.begin(), inputs.end(), [this](ShaderCompilerInput& input) {
-            ShaderCompilerOutput output;
-            ShaderMetaType*      meta_type = ShaderMetaType::GetNameToTypeMap().at(input.shader_name);
-            if (meta_type->ShouldCompileMutation({input.target_info.shader_platform, input.mutation_id})) {
-                meta_type->SetCompileEnvironment(ShaderMutationParameters{input.target_info.shader_platform, input.mutation_id}, input.environment);
-                ShaderCompiler::Compile(input, output);
+            ShaderMetaType* meta_type = ShaderMetaType::GetShaderMetaType(input.shader_name_hash);
+            if (meta_type->ShouldCompileMutation({(EShaderPlatform)input.target_info.shader_platform, input.mutation_id})) {
+                meta_type->SetCompileEnvironment(ShaderMutationParameters{(EShaderPlatform)input.target_info.shader_platform, input.mutation_id}, input.environment);
+                auto* output = ShaderCompiler::Compile(input);
                 AddOutput(output);
             }
         });
@@ -113,21 +114,23 @@ public:
           target_info(input.target_info),
           entry_point(input.entry_point),
           relative_source_file_path(input.relative_source_file_path),
-          shader_name(input.shader_name) {
+          shader_name(input.shader_name),
+          shader_name_hash(input.shader_name_hash){
 
         SetBasePlatformEnvironment();
     }
-    void DispatchAndExecute(const std::function<void(const ShaderCompilerOutput&)>& post_process_func) {
+    void DispatchAndExecute(const std::function<void(ShaderCompilerOutput*)>& post_process_func) {
         //call after registration
-        meta_type = ShaderMetaType::GetNameToTypeMap().at(shader_name);
+        meta_type = ShaderMetaType::GetShaderMetaType(shader_name_hash);
         //construct valid mutations
         uint32_t start = 0;
         uint32_t end   = total_mutation_count / max_count_per_batch + 1;
 
-        Moer::Array<uint32_t> indices(end);
+        Moer::Array<uint32_t>                           indices(end);
+        Moer::Array<Moer::Array<ShaderCompilerOutput*>> output_temp_array(end);
 
         //parallel generate batches
-        std::for_each(std::execution::par, indices.begin(), indices.end(), [this, &post_process_func](int i) {
+        std::for_each(std::execution::par, indices.begin(), indices.end(), [this, &post_process_func, &output_temp_array](int i) {
             uint32_t start_index = i * max_count_per_batch;
             uint32_t end_index   = Moer::Min((i + 1) * max_count_per_batch, total_mutation_count);
 
@@ -145,12 +148,22 @@ public:
                     entry_point,
                     relative_source_file_path,
                     shader_name,
+                    shader_name_hash,
                     meta_type->GetParameterMetaData());
             }
 
             batch.CompileBatch();
-            for_each(batch.outputs.begin(), batch.outputs.end(), [&post_process_func](const ShaderCompilerOutput& output) { post_process_func(output); });
+            output_temp_array[i].swap(batch.outputs);
         });
+        for_each(output_temp_array.begin(), output_temp_array.end(), [this](auto& output_array) {
+            outputs.insert(outputs.end(), output_array.begin(), output_array.end());
+        });
+
+        //post process
+        std::for_each(outputs.begin(), outputs.end(), post_process_func);
+    }
+    void ExportOutput(Moer::Array<ShaderCompilerOutput*>& _outputs) {
+        _outputs.swap(this->outputs);
     }
 
     void SetBasePlatformEnvironment() {
@@ -173,12 +186,13 @@ public:
 
     ShaderTargetInfo          target_info;
     ShaderCompilerEnvironment environment;
-    std::string               entry_point;
-    std::string               relative_source_file_path;
-    std::string               shader_name;
+    std::string_view          entry_point;
+    std::string_view          relative_source_file_path;
+    std::string_view          shader_name;
+    uint32_t                  shader_name_hash;
     ShaderMetaType*           meta_type;
 
-    Moer::Array<ShaderCompilerOutput>
+    Moer::Array<ShaderCompilerOutput*>
                                      outputs;
     Moer::Array<ShaderCompilerInput> inputs;
 };
@@ -187,7 +201,17 @@ void ShaderCompileJob::Finalize(const ShaderCompileJobInput& input) {
     impl = new Impl(input);
 }
 
-void ShaderCompileJob::DispatchAndExecute(const std::function<void(const ShaderCompilerOutput&)>& post_process_func) {
+void ShaderCompileJob::ExportOutput(Moer::Array<ShaderCompilerOutput*>& _outputs) {
+    assert(impl && "shader compile job not finalized");
+    impl->ExportOutput(_outputs);
+}
+
+ShaderCompileJob::~ShaderCompileJob() {
+    if (impl) {
+        delete impl;
+    }
+}
+void ShaderCompileJob::DispatchAndExecute(const std::function<void(ShaderCompilerOutput*)>& post_process_func) {
     assert(impl && "shader compile job not finalized");
     impl->DispatchAndExecute(post_process_func);
 }

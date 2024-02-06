@@ -38,7 +38,7 @@ void ShaderResourceMap::AddShaderCompilerOutput(ShaderResourceKey key, const Sha
         std::unique_lock<std::shared_mutex> write_lock(shader_code_entry_mutex);
         code_index = shader_code_entries.size();
 
-        shader_code_entries[code_index] = ShaderCodeEntry{_output.shader_code, _output.target_info.shader_type, _output.parameter_map};
+        shader_code_entries[code_index] = ShaderCodeEntry{_output.shader_code, _output.target_info, _output.parameter_map};
     }
     //add shader resource map
     {
@@ -57,13 +57,13 @@ void ShaderResourceMap::AddShaderCompilerOutput(ShaderResourceKey key, const Sha
  * @param type_name shader type map
  * @param shader constructed shader
  */
-void ShaderTypeResourceMap::AddShader(std::string_view type_name, Shader* shader) {
+void ShaderTypeResourceMap::AddShader(ShaderTypeKey type_name, Shader* shader) {
     // assert()
     std::unique_lock<std::shared_mutex> read_lock(shared_mutex);
     shader_type_map.emplace(type_name, shader);
 }
 
-Shader* ShaderTypeResourceMap::FindOrAddShader(std::string_view type_name, Shader* shader) {
+Shader* ShaderTypeResourceMap::FindOrAddShader(ShaderTypeKey type_name, Shader* shader) {
 
     {
         std::shared_lock<std::shared_mutex> read_lock(shared_mutex);
