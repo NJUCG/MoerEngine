@@ -61,6 +61,7 @@ set(MI_BUILD_STATIC      ON)
 set(MI_BUILD_OBJECT      OFF)
 set(MI_BUILD_TESTS       OFF)
 add_subdirectory(mimalloc)
+target_compile_options(mimalloc-static PRIVATE "$<$<COMPILE_LANG_AND_ID:C,Clang>:-Wno-strict-prototypes>")
 
 add_subdirectory(MeshProcess)
 

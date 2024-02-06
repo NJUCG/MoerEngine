@@ -7,6 +7,7 @@
 #include "misc/Crc32.h"
 
 #include "VulkanUtil.h"
+#include "vulkan/vulkan_core.h"
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -224,6 +225,7 @@ case VK_PHYSICAL_DEVICE_TYPE_##r: return #r
             return shader_module;
         }
         ExitFatal("Could not open shader file \"" + std::string(file_name) + "\"", -1);
+        return VK_NULL_HANDLE;
     }
 
     VkShaderModule CreateShaderModule(const Moer::Array<uint8_t>& _code, VkDevice device) {

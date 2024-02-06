@@ -47,6 +47,11 @@ function(add_compiled_lib target_name folder_name status)
 endfunction()
 
 add_compiled_lib(metis metis SHARED)
+# target_compile_options(metis 
+#     INTERFACE  "$<$<COMPILE_LANG_AND_ID:C,Clang>:-Wno-deprecated-non-prototype>"
+#     INTERFACE  "$<$<COMPILE_LANG_AND_ID:C,Clang>:-Wno-deprecated-declarations>"
+#     INTERFACE  "$<$<COMPILE_LANG_AND_ID:C,Clang>:-Wno-unused-function>"
+#     )
 
 add_subdirectory(meshoptimizer)
 target_link_libraries(${third_lib_for_mesh_process} PUBLIC meshoptimizer)
