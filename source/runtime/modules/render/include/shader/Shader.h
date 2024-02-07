@@ -31,18 +31,23 @@ struct ShaderParameterLayoutInfo {
                               uint16_t             _stride,
                               int8_t               _slot  = -1,
                               int8_t               _space = -1,
-                              EShaderParameterType _type  = EShaderParameterType::UNKNOWN)
+                              EShaderParameterType _type  = EShaderParameterType::UNKNOWN,
+                              EShaderCodeResourceBindingType _resource_type = EShaderCodeResourceBindingType::INVALID)
         : offset(_offset),
           stride(_stride),
           slot(_slot),
           space(_space),
-          type(_type) {}
+          type(_type),
+          resource_type(_resource_type) {}
     uint16_t offset;
     uint16_t stride;
 
     int8_t               slot;
     int8_t               space;
     EShaderParameterType type;
+
+    //only resources defined in shader root parameter struct have valid resource type, like srv, uav, cbv
+    EShaderCodeResourceBindingType resource_type{EShaderCodeResourceBindingType::INVALID};
 };
 
 /**
