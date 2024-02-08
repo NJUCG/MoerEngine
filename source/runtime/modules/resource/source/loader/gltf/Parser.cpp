@@ -3,8 +3,10 @@
 #include "assimp/Importer.hpp"
 #include "assimp/postprocess.h"
 #include "assimp/scene.h"
+#include "misc/STL.h"
 #include "rhi/RHI.h"
 #include "resources/GpuScene.h"
+#include "rhi/RHICommon.h"
 #include "scene/EntityManager.h"
 #include "scene/CameraManager.h"
 #include "scene/Material.h"
@@ -13,6 +15,7 @@
 #include "scene/TransformManager.h"
 
 #include <stb/stb_image.h>
+#include <meshoptimizer.h>
 
 namespace Moer::Resource::Gltf {
 

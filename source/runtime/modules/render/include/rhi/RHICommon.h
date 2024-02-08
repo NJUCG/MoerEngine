@@ -911,7 +911,6 @@ enum class ESamplerBindingType : uint8_t {
     COMBINED,
 };
 
-
 #pragma region utils
 struct Rect2D {
     Offset2D offset;
@@ -962,6 +961,27 @@ struct MeshInfo {
     uint32_t vertex_count;
     uint32_t index_count;
 };
+
+namespace Moer {
+    struct MeshletDesc {
+        uint32_t vertex_offset;
+        uint32_t vertex_count;
+        uint32_t primitive_offset;
+        uint32_t primitive_count;
+    };
+
+    struct MeshletBound {
+        /* bounding sphere, useful for frustum and occlusion culling */
+        Vector3f center;
+        float    radius;
+
+        /* normal cone axis and cutoff, stored in 8-bit SNORM format; decode using x/127.0 */
+        int8_t cone_axis_s8[3];
+        int8_t cone_cutoff; /* = cos(angle/2) */
+
+        /* bool reject = dot(center - camera_position, cone_axis) >= cone_cutoff* length(center - camera_position) + radius; */
+    };
+}// namespace Moer
 #pragma endregion
 
 #endif// !RHI_PLATFORM_COMMON_H

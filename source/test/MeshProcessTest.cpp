@@ -16,6 +16,7 @@
 #include <meshoptimizer.h>
 
 #include <ranges>
+#include <stdint.h>
 
 void MetisTest();
 void InitTestEnv(const std::filesystem::path& workspace_path);
@@ -128,16 +129,17 @@ void MetisTest() {
     Moer::Array<MoerMeshletOutputs> moer_meshes(original_meshes.size());
     for (auto& original_mesh : original_meshes) {
 
-        Moer::Array<uint32_t> remap(original_mesh.indices.size());
+        Moer::Array<uint32_t> remap(original_mesh.vertexs.size());
+
+        size_t target_vertex_size = meshopt_generateVertexRemap(&remap[0],
+                                                                original_mesh.indices.data(),
+                                                                original_mesh.indices.size(),
+                                                                original_mesh.vertexs.data(),
+                                                                original_mesh.vertexs.size(),
+                                                                sizeof(Vertex));
 
         Moer::Array<uint32_t> target_indices(original_mesh.indices.size());
-        Moer::Array<Vertex>   target_vertices(original_mesh.vertexs.size());
-        meshopt_generateVertexRemap(&remap[0],
-                                    original_mesh.indices.data(),
-                                    original_mesh.indices.size(),
-                                    original_mesh.vertexs.data(),
-                                    original_mesh.vertexs.size(),
-                                    sizeof(Vertex));
+        Moer::Array<Vertex>   target_vertices(target_vertex_size);
 
         meshopt_remapIndexBuffer(&target_indices[0],
                                  original_mesh.indices.data(),
@@ -187,9 +189,14 @@ void MetisTest() {
 
         const meshopt_Meshlet& last = meshlets[meshlet_count - 1];
 
+        Moer::Array<Vertex> meshlet_vertices_data(last.vertex_offset + last.vertex_count);
         meshlet_vertices.resize(last.vertex_offset + last.vertex_count);
         meshlet_triangles.resize(last.triangle_offset + ((last.triangle_count * 3 + 3) & ~3));
         meshlets.resize(meshlet_count);
+
+        for (uint32_t i = 0; i < meshlet_vertices.size(); i++) {
+            meshlet_vertices_data[i] = target_vertices[meshlet_vertices[i]];
+        }
 
         Moer::Array<meshopt_Bounds> meshlet_bounds(meshlet_count);
 
