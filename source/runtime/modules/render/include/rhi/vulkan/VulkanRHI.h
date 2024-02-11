@@ -5,6 +5,7 @@
 #include "misc/STL.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
+#include "rhi/RHIResource.h"
 #include "window/WindowContext.h"
 
 class VulkanDevice;
@@ -34,21 +35,21 @@ public:
     RHIBlendStateRef         RHICreateBlendState(const RHIBlendStateInitializer& _init) final override;
     RHIVertexInputStateRef   RHICreateVertexInputState(const VertexInputStateInitializerList& _init) final override;
 
-    RHIVertexShaderRef   RHICreateVertexShader(const Shader*) final override;
-    RHIFragmentShaderRef RHICreateFragmentShader(const Shader*) final override;
-    RHIGeometryShaderRef RHICreateGeometryShader(const Shader*) final override;
+    RHIVertexShaderRef   RHICreateVertexShader(const class ShaderCodeEntry*, const Shader*) final override;
+    RHIFragmentShaderRef RHICreateFragmentShader(const class ShaderCodeEntry*, const Shader*) final override;
+    RHIGeometryShaderRef RHICreateGeometryShader(const class ShaderCodeEntry*, const Shader*) final override;
 
-    RHIMeshShaderRef          RHICreateMeshShader(const Shader*) final override;
-    RHIAmplificationShaderRef RHICreateAmplificationShader(const Shader*) final override;
+    RHIMeshShaderRef          RHICreateMeshShader(const class ShaderCodeEntry*, const Shader*) final override;
+    RHIAmplificationShaderRef RHICreateAmplificationShader(const class ShaderCodeEntry*, const Shader*) final override;
 
-    RHIComputeShaderRef RHICreateComputeShader(const Shader*) final override;
+    RHIComputeShaderRef RHICreateComputeShader(const class ShaderCodeEntry*, const Shader*) final override;
 
-    RHIRayGenShaderRef          RHICreateRayGenShader(const Shader*) final override;
-    RHIRayMissShaderRef         RHICreateRayMissShader(const Shader*) final override;
-    RHIRayClosestHitShaderRef   RHICreateRayClosestHitShader(const Shader*) final override;
-    RHIRayCallableShaderRef     RHICreateRayCallableShader(const Shader*) final override;
-    RHIRayIntersectionShaderRef RHICreateRayIntersectionShader(const Shader*) final override;
-    RHIRayAnyhitShaderRef       RHICreateRayAnyhitShader(const Shader*) final override;
+    RHIRayGenShaderRef          RHICreateRayGenShader(const class ShaderCodeEntry*, const Shader*) final override;
+    RHIRayMissShaderRef         RHICreateRayMissShader(const class ShaderCodeEntry*, const Shader*) final override;
+    RHIRayClosestHitShaderRef   RHICreateRayClosestHitShader(const class ShaderCodeEntry*, const Shader*) final override;
+    RHIRayCallableShaderRef     RHICreateRayCallableShader(const class ShaderCodeEntry*, const Shader*) final override;
+    RHIRayIntersectionShaderRef RHICreateRayIntersectionShader(const class ShaderCodeEntry*, const Shader*) final override;
+    RHIRayAnyhitShaderRef       RHICreateRayAnyhitShader(const class ShaderCodeEntry*, const Shader*) final override;
 
     RHIShaderLibraryRef RHICreateShaderLibrary(EShaderPlatform _platform, const std::string& _file_path, const std::string& name) final override;
 
@@ -85,7 +86,8 @@ public:
     // RHIComputeCommandList* CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr) final override;
     RHICopyCommandList* RHICreateCopyCommandList(RHICommandAllocator* _allocator) final override;
 
-    void RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) final override;
+    // void RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) final override;
+
 
     RHICommandAllocator* RHIGetCurrentCommandAllocator() final override;
 #pragma endregion
@@ -105,6 +107,9 @@ public:
     virtual void RHIPresentViewport(RHIViewport* _viewport, RHIFence* _render_end_fence) override;
 
 #pragma endregion
+
+protected:
+     void RHISetBatchedShaderParametersInner(RHIResource* _resource, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) final override;
 
 protected:
     VkInstance               m_instance;

@@ -8,6 +8,7 @@
 #include "Core.h"
 #include "taskgraph/TaskGraph.h"
 #include "taskgraph/ThreadManager.h"
+#include <type_traits>
 
 enum class ERHIType {
     Vulkan,
@@ -23,6 +24,11 @@ class Shader;
 struct RHIInitInfo {
     uint32_t max_frame_in_flight = 3;
 };
+
+template<typename T>
+concept TPipelineStateRef = requires(T) {
+                                std::convertible_to<T, RHIGraphicsPipelineStateRef> || std::convertible_to<T, RHIComputePipelineStateRef>;
+                            };
 class RHI {
 public:
     RHI(ERHIType _type) : rhi_type(_type) {}
@@ -51,21 +57,21 @@ public:
     virtual RHIBlendStateRef         RHICreateBlendState(const RHIBlendStateInitializer& _init)                 = 0;
     virtual RHIVertexInputStateRef   RHICreateVertexInputState(const VertexInputStateInitializerList& _init)    = 0;
 
-    virtual RHIVertexShaderRef   RHICreateVertexShader(const Shader*)   = 0;
-    virtual RHIFragmentShaderRef RHICreateFragmentShader(const Shader*) = 0;
-    virtual RHIGeometryShaderRef RHICreateGeometryShader(const Shader*) = 0;
+    virtual RHIComputeShaderRef RHICreateComputeShader(const class ShaderCodeEntry*, const Shader*) = 0;
 
-    virtual RHIMeshShaderRef          RHICreateMeshShader(const Shader*)          = 0;
-    virtual RHIAmplificationShaderRef RHICreateAmplificationShader(const Shader*) = 0;
+    virtual RHIVertexShaderRef   RHICreateVertexShader(const class ShaderCodeEntry*, const Shader*)   = 0;
+    virtual RHIFragmentShaderRef RHICreateFragmentShader(const class ShaderCodeEntry*, const Shader*) = 0;
+    virtual RHIGeometryShaderRef RHICreateGeometryShader(const class ShaderCodeEntry*, const Shader*) = 0;
 
-    virtual RHIComputeShaderRef RHICreateComputeShader(const Shader*) = 0;
+    virtual RHIMeshShaderRef          RHICreateMeshShader(const class ShaderCodeEntry*, const Shader*)          = 0;
+    virtual RHIAmplificationShaderRef RHICreateAmplificationShader(const class ShaderCodeEntry*, const Shader*) = 0;
 
-    virtual RHIRayGenShaderRef          RHICreateRayGenShader(const Shader*)          = 0;
-    virtual RHIRayMissShaderRef         RHICreateRayMissShader(const Shader*)         = 0;
-    virtual RHIRayClosestHitShaderRef   RHICreateRayClosestHitShader(const Shader*)   = 0;
-    virtual RHIRayCallableShaderRef     RHICreateRayCallableShader(const Shader*)     = 0;
-    virtual RHIRayIntersectionShaderRef RHICreateRayIntersectionShader(const Shader*) = 0;
-    virtual RHIRayAnyhitShaderRef       RHICreateRayAnyhitShader(const Shader*)       = 0;
+    virtual RHIRayGenShaderRef          RHICreateRayGenShader(const class ShaderCodeEntry*, const Shader*)          = 0;
+    virtual RHIRayMissShaderRef         RHICreateRayMissShader(const class ShaderCodeEntry*, const Shader*)         = 0;
+    virtual RHIRayClosestHitShaderRef   RHICreateRayClosestHitShader(const class ShaderCodeEntry*, const Shader*)   = 0;
+    virtual RHIRayCallableShaderRef     RHICreateRayCallableShader(const class ShaderCodeEntry*, const Shader*)     = 0;
+    virtual RHIRayIntersectionShaderRef RHICreateRayIntersectionShader(const class ShaderCodeEntry*, const Shader*) = 0;
+    virtual RHIRayAnyhitShaderRef       RHICreateRayAnyhitShader(const class ShaderCodeEntry*, const Shader*)       = 0;
 
     virtual RHIShaderLibraryRef RHICreateShaderLibrary(EShaderPlatform _platform, const std::string& _file_path, const std::string& name) { return nullptr; };
 
@@ -117,8 +123,11 @@ public:
     // virtual RHIGraphicsCommandList* CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state = nullptr)                                     = 0;
     virtual RHIGraphicsCommandList* RHICreateGraphicsCommandList(RHICommandAllocator* _allocator, RHIGraphicsPipelineState* _initial_state = nullptr) = 0;
     // virtual RHIComputeCommandList*  CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr)                                       = 0;
-    virtual RHICopyCommandList* RHICreateCopyCommandList(RHICommandAllocator* _allocator)                                                                                        = 0;
-    virtual void                RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant = false) = 0;
+    virtual RHICopyCommandList* RHICreateCopyCommandList(RHICommandAllocator* _allocator) = 0;
+    template<TPipelineStateRef TPipelineRef>
+    void RHISetBatchedShaderParameters(TPipelineRef _pso, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant = false) {
+        RHISetBatchedShaderParametersInner(_pso, _batched_params, b_update_constant);
+    };
 
     virtual RHICommandAllocator* RHIGetCurrentCommandAllocator() = 0;
 #pragma endregion
@@ -150,6 +159,8 @@ public:
 
     void RHIFlushPendingDeletes();
 #pragma endregion
+protected:
+    virtual void RHISetBatchedShaderParametersInner(RHIResource* _resource, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) = 0;
 
 protected:
     ERHIType rhi_type;

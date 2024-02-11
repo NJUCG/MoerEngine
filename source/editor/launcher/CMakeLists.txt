@@ -38,6 +38,7 @@ add_custom_command(
     TARGET ${target_name} 
     POST_BUILD 
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/resource" "${output_dir}/resource"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${moer_root_dir}/asset" "${output_dir}/resource"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${moer_source_dir}/${moer_config_dir}" "${output_dir}/config"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${moer_root_dir}/shaders" "${output_dir}/resource/shaders"
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/resource ${moer_source_dir}/${moer_config_dir}

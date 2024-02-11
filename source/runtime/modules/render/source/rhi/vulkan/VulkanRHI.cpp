@@ -106,79 +106,121 @@ RHIVertexInputStateRef VulkanRHIImpl::RHICreateVertexInputState(const VertexInpu
     return RHIVertexInputStateRef(vk_input_state);
 }
 
-RHIVertexShaderRef VulkanRHIImpl::RHICreateVertexShader(const Shader* shader) {
+// RHIVertexShaderRef VulkanRHIImpl::RHICreateVertexShader(const Shader* shader) {
+//     auto* vk_shader            = new VulkanRHIVertexShader(shader);
+//     vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+
+//     return RHIVertexShaderRef(vk_shader);
+// }
+
+// RHIFragmentShaderRef VulkanRHIImpl::RHICreateFragmentShader(const Shader* shader) {
+//     auto* vk_shader            = new VulkanRHIFragmentShader(shader);
+//     vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+
+//     return RHIFragmentShaderRef(vk_shader);
+// }
+
+// RHIGeometryShaderRef VulkanRHIImpl::RHICreateGeometryShader(const Shader* shader) {
+//     auto* vk_shader            = new VulkanRHIGeometryShader(shader);
+//     vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+
+//     return RHIGeometryShaderRef(vk_shader);
+// }
+
+// RHIMeshShaderRef VulkanRHIImpl::RHICreateMeshShader(const Shader* shader) {
+//     auto* vk_shader            = new VulkanRHIMeshShader(shader);
+//     vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+
+//     return RHIMeshShaderRef(vk_shader);
+// }
+
+// RHIAmplificationShaderRef VulkanRHIImpl::RHICreateAmplificationShader(const Shader* shader) {
+//     auto* vk_shader            = new VulkanRHIAmplificationShader(shader);
+//     vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+//     return RHIAmplificationShaderRef(vk_shader);
+// }
+
+// RHIComputeShaderRef VulkanRHIImpl::RHICreateComputeShader(const Shader* shader) {
+//     auto* vk_shader            = new VulkanRHIComputeShader(shader);
+//     vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+//     return RHIComputeShaderRef(vk_shader);
+// }
+
+RHIVertexShaderRef VulkanRHIImpl::RHICreateVertexShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
     auto* vk_shader            = new VulkanRHIVertexShader(shader);
-    vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
 
     return RHIVertexShaderRef(vk_shader);
 }
 
-RHIFragmentShaderRef VulkanRHIImpl::RHICreateFragmentShader(const Shader* shader) {
+RHIFragmentShaderRef VulkanRHIImpl::RHICreateFragmentShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
     auto* vk_shader            = new VulkanRHIFragmentShader(shader);
-    vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
 
     return RHIFragmentShaderRef(vk_shader);
 }
 
-RHIGeometryShaderRef VulkanRHIImpl::RHICreateGeometryShader(const Shader* shader) {
+RHIGeometryShaderRef VulkanRHIImpl::RHICreateGeometryShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
     auto* vk_shader            = new VulkanRHIGeometryShader(shader);
-    vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
 
     return RHIGeometryShaderRef(vk_shader);
 }
 
-RHIMeshShaderRef VulkanRHIImpl::RHICreateMeshShader(const Shader* shader) {
+RHIMeshShaderRef VulkanRHIImpl::RHICreateMeshShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
     auto* vk_shader            = new VulkanRHIMeshShader(shader);
-    vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
 
     return RHIMeshShaderRef(vk_shader);
 }
 
-RHIAmplificationShaderRef VulkanRHIImpl::RHICreateAmplificationShader(const Shader* shader) {
+RHIAmplificationShaderRef VulkanRHIImpl::RHICreateAmplificationShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
     auto* vk_shader            = new VulkanRHIAmplificationShader(shader);
-    vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
+
     return RHIAmplificationShaderRef(vk_shader);
 }
 
-RHIComputeShaderRef VulkanRHIImpl::RHICreateComputeShader(const Shader* shader) {
+RHIComputeShaderRef VulkanRHIImpl::RHICreateComputeShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
     auto* vk_shader            = new VulkanRHIComputeShader(shader);
-    vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
+
     return RHIComputeShaderRef(vk_shader);
 }
 
-RHIRayGenShaderRef VulkanRHIImpl::RHICreateRayGenShader(const Shader* shader) {
+RHIRayGenShaderRef VulkanRHIImpl::RHICreateRayGenShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
     auto* vk_shader            = new VulkanRHIRayGenShader(shader);
-    vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
     return RHIRayGenShaderRef(vk_shader);
 }
 
-RHIRayMissShaderRef VulkanRHIImpl::RHICreateRayMissShader(const Shader* shader) {
+RHIRayMissShaderRef VulkanRHIImpl::RHICreateRayMissShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
     auto* vk_shader            = new VulkanRHIRayMissShader(shader);
-    vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
     return RHIRayMissShaderRef(vk_shader);
 }
 
-RHIRayClosestHitShaderRef VulkanRHIImpl::RHICreateRayClosestHitShader(const Shader* shader) {
+RHIRayClosestHitShaderRef VulkanRHIImpl::RHICreateRayClosestHitShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
     auto* vk_shader            = new VulkanRHIRayClosestHitShader(shader);
-    vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
     return RHIRayClosestHitShaderRef(vk_shader);
 }
 
-RHIRayCallableShaderRef VulkanRHIImpl::RHICreateRayCallableShader(const Shader* shader) {
+RHIRayCallableShaderRef VulkanRHIImpl::RHICreateRayCallableShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
     auto* vk_shader            = new VulkanRHIRayCallableShader(shader);
-    vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
     return RHIRayCallableShaderRef(vk_shader);
 }
 
-RHIRayIntersectionShaderRef VulkanRHIImpl::RHICreateRayIntersectionShader(const Shader* shader) {
+RHIRayIntersectionShaderRef VulkanRHIImpl::RHICreateRayIntersectionShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
     auto* vk_shader            = new VulkanRHIRayIntersectionShader(shader);
-    vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
     return RHIRayIntersectionShaderRef(vk_shader);
 }
 
-RHIRayAnyhitShaderRef VulkanRHIImpl::RHICreateRayAnyhitShader(const Shader* shader) {
+RHIRayAnyhitShaderRef VulkanRHIImpl::RHICreateRayAnyhitShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
     auto* vk_shader            = new VulkanRHIRayAnyhitShader(shader);
-    vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
     return RHIRayAnyhitShaderRef(vk_shader);
 }
 
@@ -373,7 +415,82 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
     return RHIGraphicsPipelineStateRef(vk_pso);
 }
 
-RHIComputePipelineStateRef VulkanRHIImpl::RHICreateComputePipelineState(RHIComputeShader* _compute_shader) { return RHIComputePipelineStateRef{}; }
+RHIComputePipelineStateRef VulkanRHIImpl::RHICreateComputePipelineState(RHIComputeShader* _compute_shader) {
+    VulkanRHIComputePipelineState* vk_pso = new VulkanRHIComputePipelineState();
+
+    auto* vk_shader = static_cast<VulkanRHIComputeShader*>(_compute_shader);
+    if (!vk_shader) LOG_CRITICAL("RHICreateComputePipelineState: Compute shader is nullptr!");
+
+    VkPipelineShaderStageCreateInfo shader_stage{};
+    shader_stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    shader_stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+    shader_stage.module = vk_shader->GetHandle();
+    shader_stage.pName  = vk_shader->GetMetaShader()->GetShaderMetaType()->GetEntryPoint().data();
+
+    Moer::Array<TDescriptorSetLayoutInfo> layout_mappings;
+    Moer::Array<VkPushConstantRange>      push_constant_ranges;
+
+    auto* meta_shader = vk_shader->GetMetaShader();
+    // find max set index
+    int8_t max_set      = -1;
+    auto   layout_infos = meta_shader->GetRootParametersLayoutInfo().GetLayoutInfos();
+    for (const auto& info : layout_infos) {
+        max_set = std::max(max_set, info.space);
+    }
+    layout_mappings.resize(max_set + 1, {});
+
+    auto constant_infos = meta_shader->GetRootParametersLayoutInfo().GetConstantsInfos();
+
+    for (const auto& info : layout_infos) {
+        VkDescriptorSetLayoutBinding binding{};
+        binding.binding         = info.slot;
+        binding.descriptorType  = VulkanEnumTranslator::METoVKDescriptorType(info.type);
+        binding.descriptorCount = 1;
+        binding.stageFlags |= VulkanEnumTranslator::METoVKShaderStageFlags(meta_shader->GetShaderType());
+        binding.pImmutableSamplers = nullptr;
+
+        layout_mappings[info.space].second.push_back(std::move(binding));
+    }
+
+    // constants
+    for (const auto& info : constant_infos) {
+        VkPushConstantRange range{};
+        range.stageFlags |= VulkanEnumTranslator::METoVKShaderStageFlags(meta_shader->GetShaderType());
+        range.offset = info.offset;
+        range.size   = info.stride;
+
+        push_constant_ranges.push_back(range);
+    }
+
+    vk_pso->CreateResourceCache();
+    vk_pso->GenerateDescriptorSetLayouts(m_device, layout_mappings);
+
+    auto layouts = vk_pso->m_descriptor_sets_layout->GetLayouts();
+
+    VkPipelineLayoutCreateInfo pipeline_layout_create_info{};
+    pipeline_layout_create_info.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pipeline_layout_create_info.pNext                  = nullptr;
+    pipeline_layout_create_info.flags                  = 0;
+    pipeline_layout_create_info.setLayoutCount         = layouts.size();
+    pipeline_layout_create_info.pSetLayouts            = layouts.data();
+    pipeline_layout_create_info.pushConstantRangeCount = push_constant_ranges.size();
+    pipeline_layout_create_info.pPushConstantRanges    = push_constant_ranges.data();
+
+    vkCreatePipelineLayout(m_device->GetDevice(), &pipeline_layout_create_info, nullptr, &vk_pso->m_pipeline_layout);
+
+    VkComputePipelineCreateInfo pipeline_create_info{};
+    pipeline_create_info.sType              = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    pipeline_create_info.pNext              = nullptr;
+    pipeline_create_info.flags              = 0;
+    pipeline_create_info.stage              = shader_stage;
+    pipeline_create_info.layout             = vk_pso->m_pipeline_layout;
+    pipeline_create_info.basePipelineHandle = nullptr;
+    pipeline_create_info.basePipelineIndex  = -1;
+
+    VK_CHECK_RESULT(vkCreateComputePipelines(m_device->GetDevice(), nullptr, 1, &pipeline_create_info, nullptr, &vk_pso->m_pipeline));
+
+    return RHIComputePipelineStateRef(vk_pso);
+}
 
 RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(const RHIRayTracingPipelineStateInitializer& _init) {
 
@@ -777,15 +894,15 @@ Moer::Array<RHIRayTracingBLASRef> VulkanRHIImpl::RHIBuildRayTracingBLAS(const Mo
 }
 
 RHIRayTracingTLASRef VulkanRHIImpl::RHIBuildRayTracingTLAS(const RHIRayTracingTLASInitializer& _init) {
-    static auto vkGetAccelerationStructureBuildSizesKHR = reinterpret_cast<PFN_vkGetAccelerationStructureBuildSizesKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkGetAccelerationStructureBuildSizesKHR"));
-    static auto vkCreateAccelerationStructureKHR        = reinterpret_cast<PFN_vkCreateAccelerationStructureKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkCreateAccelerationStructureKHR"));
-    static auto vkCmdBuildAccelerationStructuresKHR     = reinterpret_cast<PFN_vkCmdBuildAccelerationStructuresKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkCmdBuildAccelerationStructuresKHR"));
+    static auto vkGetAccelerationStructureBuildSizesKHR    = reinterpret_cast<PFN_vkGetAccelerationStructureBuildSizesKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkGetAccelerationStructureBuildSizesKHR"));
+    static auto vkCreateAccelerationStructureKHR           = reinterpret_cast<PFN_vkCreateAccelerationStructureKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkCreateAccelerationStructureKHR"));
+    static auto vkCmdBuildAccelerationStructuresKHR        = reinterpret_cast<PFN_vkCmdBuildAccelerationStructuresKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkCmdBuildAccelerationStructuresKHR"));
     static auto vkGetAccelerationStructureDeviceAddressKHR = reinterpret_cast<PFN_vkGetAccelerationStructureDeviceAddressKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkGetAccelerationStructureDeviceAddressKHR"));
     VK_CHECK_NULLPTR(vkGetAccelerationStructureBuildSizesKHR, "RHIBuildRayTracingTLAS: vkGetAccelerationStructureBuildSizesKHR is nullptr", return RHIRayTracingTLASRef{});
     VK_CHECK_NULLPTR(vkCreateAccelerationStructureKHR, "RHIBuildRayTracingTLAS: vkCreateAccelerationStructureKHR is nullptr", return RHIRayTracingTLASRef{});
     VK_CHECK_NULLPTR(vkCmdBuildAccelerationStructuresKHR, "RHIBuildRayTracingTLAS: vkCmdBuildAccelerationStructuresKHR is nullptr", return RHIRayTracingTLASRef{});
     VK_CHECK_NULLPTR(vkGetAccelerationStructureDeviceAddressKHR, "RHIBuildRayTracingTLAS: vkGetAccelerationStructureDeviceAddressKHR is nullptr", return RHIRayTracingTLASRef{});
-    uint32_t instance_count = _init.instances.size();
+    uint32_t                                        instance_count = _init.instances.size();
     Moer::Array<VkAccelerationStructureInstanceKHR> vk_instances;
     vk_instances.reserve(instance_count);
     for (const auto& rhi_instance : _init.instances) {
@@ -1022,7 +1139,7 @@ RHICopyCommandList* VulkanRHIImpl::RHICreateCopyCommandList(RHICommandAllocator*
     return MoerNew(VulkanRHICopyCommandList(m_device, vk_allocator->GetHandle(ECommandListType::COPY), VK_COMMAND_BUFFER_LEVEL_PRIMARY));
 }
 
-void VulkanRHIImpl::RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) {
+void VulkanRHIImpl::RHISetBatchedShaderParametersInner(RHIResource* _pso, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) {
     const auto* vk_pso = static_cast<VulkanRHIGraphicsPipelineState*>(_pso);
     VK_CHECK_NULLPTR(vk_pso, "SetBatchedShaderParameter: graphics pipeline state is nullptr!", return);
     // resources

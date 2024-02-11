@@ -14,8 +14,8 @@ add_library(${MODULE_NAME} SHARED ${RENDER_MODULE_HEADERS} ${RENDER_MODULE_SOURC
 target_compile_definitions(${MODULE_NAME} PRIVATE RENDER_MODULE_SHARED_LIB)
 
 if (MSVC)
-else()
-    target_compile_options(${MODULE_NAME} PRIVATE "-Wno-nullability-completeness")
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(${MODULE_NAME} PRIVATE "-Wno-nullability-completeness" "-Wno-unknown-attributes")
 endif()
 
 set_target_properties(${MODULE_NAME} PROPERTIES FOLDER "runtime")
@@ -42,8 +42,6 @@ target_link_libraries(${MODULE_NAME}
     PUBLIC glfw
     PUBLIC ImGui::imgui
 )
-
-add_dependencies(${MODULE_NAME} DXC_COPY)
 
 if(WINDOWS)
 target_compile_definitions(${MODULE_NAME}

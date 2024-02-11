@@ -39,6 +39,13 @@ set(ASSIMP_BUILD_ASSIMP_TOOLS OFF CACHE INTERNAL "" FORCE)
 set(ASSIMP_BUILD_TESTS OFF CACHE INTERNAL "" FORCE)
 set(ASSIMP_INSTALL OFF CACHE INTERNAL "" FORCE)
 add_sub_target(assimp assimp ${third_party_folder}/assimp "")
+target_compile_options(zlibstatic 
+    PRIVATE "$<$<COMPILE_LANG_AND_ID:C,Clang>:-Wno-deprecated-non-prototype>"
+    PRIVATE "$<$<COMPILE_LANG_AND_ID:C,Clang>:-Wno-deprecated-declarations>"
+    PRIVATE "$<$<COMPILE_LANG_AND_ID:C,Clang>:-Wno-unused-function>"
+    )
+
+target_compile_options(assimp PRIVATE "$<$<COMPILE_LANG_AND_ID:CXX,Clang>:-Wno-unused-function>")
 set_ide_folder(UpdateAssimpLibsDebugSymbolsAndDLLs ${third_party_folder}/assimp)
 set_ide_folder(zlibstatic ${third_party_folder}/assimp)
 
@@ -46,6 +53,8 @@ target_link_libraries(${third_lib_for_asset_load_target} PUBLIC assimp)
 target_include_directories(${third_lib_for_asset_load_target} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/assimp)
 
 add_sub_target(stb stb ${third_party_folder} ${CMAKE_CURRENT_SOURCE_DIR}/stb)
+target_compile_options(stb 
+    PUBLIC "$<$<COMPILE_LANG_AND_ID:CXX,Clang>:-Wno-unused-function>")
 
 set_property(GLOBAL PROPERTY CTEST_TARGETS_ADDED 1)
 set(BUILD_SHARED_LIBS ON CACHE INTERNAL "" FORCE)

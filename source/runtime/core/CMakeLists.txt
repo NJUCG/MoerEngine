@@ -19,6 +19,7 @@ set_target_properties(${target_name} PROPERTIES FOLDER "runtime" )
 target_include_directories(${target_name}
 	PUBLIC $<BUILD_INTERFACE:${moer_runtime_core_dir}/include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/spdlog/include>
+    PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/zpp_bits>
 )
 
 target_link_libraries(${target_name}

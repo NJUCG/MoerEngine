@@ -61,17 +61,17 @@ void DirectXShaderReflectorVulkan::ReflectShader(const void* _compiled_result, c
     Moer::Array<std::string> not_reflected_members;
     for (const ShaderParametersMetadata::Member& member : members) {
         EShaderBindingBaseType base_type = member.GetBaseType();
-        std::string            name      = member.GetName();
+        std::string_view       name      = member.GetName();
 
-        auto entry = param_map.find(name);
+        auto entry = param_map.find(name.data());
         auto end   = param_map.end();
-        auto count = param_map.count(name);
+        auto count = param_map.count(name.data());
 
         //for vulkan, push constants don't have binding info, so reflect information depends on user defined shader meta data
         if (count <= 0) {
             if (BindingTypeToParameterType(base_type) == EShaderParameterType::CONSTANT_STRUCT) {
                 //push constant
-                param_map[name].type = EShaderParameterType::CONSTANT_STRUCT;
+                param_map[name.data()].type = EShaderParameterType::CONSTANT_STRUCT;
             } else {
                 not_reflected_members.push_back(std::format("param {} not found in shader reflection data", member.GetName()));
             }

@@ -16,6 +16,8 @@ namespace Moer {
         void          AddEntity(Entity entity) noexcept;
         void          AddCamera(Entity entity) noexcept;
         void          RemoveEntity(Entity entity) noexcept;
+        void          SetBuffer(const std::string& name, RHIBufferRef buffer) noexcept;
+        RHIBufferRef  GetBuffer(const std::string& name) const noexcept;
         Array<Entity> GetEntities() const noexcept;
         Array<Entity> GetCameras() const noexcept;
 
@@ -30,4 +32,4 @@ namespace Moer {
 
     extern RENDER_API Scene* g_scene;
 
-}
+}// namespace Moer

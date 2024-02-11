@@ -682,8 +682,8 @@ enum class EShaderCodeResourceBindingType : uint8_t {
     BYTE_ADDRESSED_BUFFER,
     RAYTRACING_ACCELERATION_STRUCTURE,
 
-    RW_TEXTURE2D,
-    RW_TEXTURE2D_ARRAY,
+    RW_TEXTURE_2D,
+    RW_TEXTURE_2D_ARRAY,
     RW_TEXTURE_3D,
     RW_TEXTURE_CUBE,
     RW_TEXTURE_META_DATA,
@@ -691,7 +691,6 @@ enum class EShaderCodeResourceBindingType : uint8_t {
     RW_BUFFER,
     RW_STRUCTURED_BUFFER,
     RW_BYTE_ADDRESSED_BUFFER,
-    CONSTANT_BUFFER
 };
 
 BEGIN_ENUM_STR_DEFINITION(EShaderCodeResourceBindingType)
@@ -709,15 +708,14 @@ ENUM_STR_ELEMENT(BUFFER)
 ENUM_STR_ELEMENT(STRUCTURED_BUFFER)
 ENUM_STR_ELEMENT(BYTE_ADDRESSED_BUFFER)
 ENUM_STR_ELEMENT(RAYTRACING_ACCELERATION_STRUCTURE)
-ENUM_STR_ELEMENT(RW_TEXTURE2D)
-ENUM_STR_ELEMENT(RW_TEXTURE2D_ARRAY)
+ENUM_STR_ELEMENT(RW_TEXTURE_2D)
+ENUM_STR_ELEMENT(RW_TEXTURE_2D_ARRAY)
 ENUM_STR_ELEMENT(RW_TEXTURE_3D)
 ENUM_STR_ELEMENT(RW_TEXTURE_CUBE)
 ENUM_STR_ELEMENT(RW_TEXTURE_META_DATA)
 ENUM_STR_ELEMENT(RW_BUFFER)
 ENUM_STR_ELEMENT(RW_STRUCTURED_BUFFER)
 ENUM_STR_ELEMENT(RW_BYTE_ADDRESSED_BUFFER)
-ENUM_STR_ELEMENT(CONSTANT_BUFFER)
 END_ENUM_STR_DEFINITION(EShaderCodeResourceBindingType)
 
 enum EShaderBindingBaseType : uint8_t {
@@ -903,6 +901,23 @@ enum class EPrimitiveType : uint8_t {
     TRIANGLE_STRIP = 5 //!< triangle strip
 };
 
+enum class ESamplerType : uint8_t {
+    SAMPLER_2D,           //!< 2D texture
+    SAMPLER_2D_ARRAY,     //!< 2D array texture
+    SAMPLER_CUBEMAP,      //!< Cube map texture
+    SAMPLER_EXTERNAL,     //!< External texture
+    SAMPLER_3D,           //!< 3D texture
+    SAMPLER_CUBEMAP_ARRAY,//!< Cube map array texture (feature level 2)
+};
+
+enum class ESamplerBindingType : uint8_t {
+    UNDEFINED,
+    SAMPLER,
+    TEXTURE,
+    COMBINED,
+};
+
+
 #pragma region utils
 struct Rect2D {
     Offset2D offset;
@@ -945,6 +960,13 @@ struct ViewPort {
     float height;
     float min_depth;
     float max_depth;
+};
+
+struct MeshInfo {
+    uint32_t vertex_offset;
+    uint32_t index_offset;
+    uint32_t vertex_count;
+    uint32_t index_count;
 };
 #pragma endregion
 

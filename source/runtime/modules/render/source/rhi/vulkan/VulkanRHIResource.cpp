@@ -1276,7 +1276,7 @@ VkBlendFactor VulkanRHIBlendState::METoVKBlendFactor(EBlendFactor _blend_factor)
 
 #pragma region pipeline states definitions
 
-void VulkanRHIGraphicsPipelineState::GenerateDescriptorSetLayouts(const VulkanDevice* _device, Moer::Array<TDescriptorSetLayoutInfo>& _layout_mappings) {
+void VulkanPipelineState::GenerateDescriptorSetLayouts(const VulkanDevice* _device, Moer::Array<TDescriptorSetLayoutInfo>& _layout_mappings) {
     // create descriptor set layouts
     for (auto& layout : _layout_mappings) {
         VkDescriptorSetLayoutCreateInfo layout_create_info{};
@@ -1294,7 +1294,7 @@ void VulkanRHIGraphicsPipelineState::GenerateDescriptorSetLayouts(const VulkanDe
     m_descriptor_sets_layout->Init(_layout_mappings, m_pipeline_state_cache);
 }
 
-void VulkanRHIGraphicsPipelineState::CreateResourceCache() {
+void VulkanPipelineState::CreateResourceCache() {
     m_pipeline_state_cache = new VulkanPipelineResourceCache();
 }
 

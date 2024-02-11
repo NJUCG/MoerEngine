@@ -28,21 +28,21 @@ public:
     RHIBlendStateRef         RHICreateBlendState(const RHIBlendStateInitializer& _init) override { return RHIBlendStateRef{}; }
     RHIVertexInputStateRef   RHICreateVertexInputState(const VertexInputStateInitializerList& _init) override { return RHIVertexInputStateRef{}; }
 
-    RHIVertexShaderRef   RHICreateVertexShader(const Shader*) override { return RHIVertexShaderRef{}; }
-    RHIFragmentShaderRef RHICreateFragmentShader(const Shader*) override { return RHIFragmentShaderRef{}; }
-    RHIGeometryShaderRef RHICreateGeometryShader(const Shader*) override { return RHIGeometryShaderRef{}; }
+    RHIVertexShaderRef   RHICreateVertexShader(const class ShaderCodeEntry*, const Shader*) override { return RHIVertexShaderRef{}; }
+    RHIFragmentShaderRef RHICreateFragmentShader(const class ShaderCodeEntry*, const Shader*) override { return RHIFragmentShaderRef{}; }
+    RHIGeometryShaderRef RHICreateGeometryShader(const class ShaderCodeEntry*, const Shader*) override { return RHIGeometryShaderRef{}; }
 
-    RHIMeshShaderRef          RHICreateMeshShader(const Shader*) override { return RHIMeshShaderRef{}; }
-    RHIAmplificationShaderRef RHICreateAmplificationShader(const Shader*) override { return RHIAmplificationShaderRef{}; }
+    RHIMeshShaderRef          RHICreateMeshShader(const class ShaderCodeEntry*, const Shader*) override { return RHIMeshShaderRef{}; }
+    RHIAmplificationShaderRef RHICreateAmplificationShader(const class ShaderCodeEntry*, const Shader*) override { return RHIAmplificationShaderRef{}; }
 
-    RHIComputeShaderRef RHICreateComputeShader(const Shader*) override { return RHIComputeShaderRef{}; }
+    RHIComputeShaderRef RHICreateComputeShader(const class ShaderCodeEntry*, const Shader*) override { return RHIComputeShaderRef{}; }
 
-    RHIRayGenShaderRef          RHICreateRayGenShader(const Shader*) override { return RHIRayGenShaderRef{}; }
-    RHIRayMissShaderRef         RHICreateRayMissShader(const Shader*) override { return RHIRayMissShaderRef{}; }
-    RHIRayClosestHitShaderRef   RHICreateRayClosestHitShader(const Shader*) override { return RHIRayClosestHitShaderRef{}; }
-    RHIRayCallableShaderRef     RHICreateRayCallableShader(const Shader*) override { return RHIRayCallableShaderRef{}; }
-    RHIRayIntersectionShaderRef RHICreateRayIntersectionShader(const Shader*) override { return RHIRayIntersectionShaderRef{}; }
-    RHIRayAnyhitShaderRef       RHICreateRayAnyhitShader(const Shader*) override { return RHIRayAnyhitShaderRef{}; }
+    RHIRayGenShaderRef          RHICreateRayGenShader(const class ShaderCodeEntry*, const Shader*) override { return RHIRayGenShaderRef{}; }
+    RHIRayMissShaderRef         RHICreateRayMissShader(const class ShaderCodeEntry*, const Shader*) override { return RHIRayMissShaderRef{}; }
+    RHIRayClosestHitShaderRef   RHICreateRayClosestHitShader(const class ShaderCodeEntry*, const Shader*) override { return RHIRayClosestHitShaderRef{}; }
+    RHIRayCallableShaderRef     RHICreateRayCallableShader(const class ShaderCodeEntry*, const Shader*) override { return RHIRayCallableShaderRef{}; }
+    RHIRayIntersectionShaderRef RHICreateRayIntersectionShader(const class ShaderCodeEntry*, const Shader*) override { return RHIRayIntersectionShaderRef{}; }
+    RHIRayAnyhitShaderRef       RHICreateRayAnyhitShader(const class ShaderCodeEntry*, const Shader*) override { return RHIRayAnyhitShaderRef{}; }
 
     RHIShaderLibraryRef RHICreateShaderLibrary(EShaderPlatform _platform, const std::string& _file_path, const std::string& name) override { return RHIShaderLibraryRef{}; }
 
@@ -86,7 +86,7 @@ public:
     // RHIComputeCommandList* CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr) override { return nullptr; }
     RHICopyCommandList* RHICreateCopyCommandList(RHICommandAllocator* _allocator) override { return nullptr; }
 
-    void RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) override {}
+    // void RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) override {}
 
     RHICommandAllocator* RHIGetCurrentCommandAllocator() override { return nullptr; }
 #pragma endregion
@@ -106,6 +106,9 @@ public:
     virtual RHIViewport* RHIGetMainViewport() override { return nullptr; }
 
 #pragma endregion
+
+protected:
+    void RHISetBatchedShaderParametersInner(RHIResource* _resource, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) override{};
 };
 
 #endif// IVULKAN_RHI_H

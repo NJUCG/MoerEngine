@@ -1,10 +1,14 @@
 #ifndef MOERENGINE_SHADER_COMMON_H
 #define MOERENGINE_SHADER_COMMON_H
 #include "misc/Hash.h"
+#include "misc/STL.h"
 #include "rhi/RHI.h"
+#include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include <cstdint>
 #include <functional>
+#include <string>
+#include <variant>
 
 #include "misc/MacroUtils.h"
 
@@ -12,6 +16,7 @@
 // extern const char* g_global_shader_resource_output_dir;
 
 struct ShaderCompiledInitializer;
+using ShaderTypeKey = uint32_t;
 
 /**
  * @brief Binding Parameter Enum
@@ -84,8 +89,8 @@ public:
     public:
         /** Initialization constructor. */
         Member(
-            const char*                     _name,
-            const char*                     _binding_type,
+            std::string_view                _name,
+            std::string_view                _binding_type,
             uint32_t                        _struct_offset,
             uint32_t                        _stride,
             EShaderBindingBaseType          _base_type,
@@ -108,10 +113,10 @@ public:
             return lhs < rhs.struct_offset;
         }
         /** Returns the string of the name of the element or name of the array of elements. */
-        const char* GetName() const { return name; }
+        std::string_view GetName() const { return name; }
 
         /** Returns the string of the type. */
-        const char* GetShaderBindingTypeStr() const { return binding_type; }
+        std::string_view GetShaderBindingTypeStr() const { return binding_type; }
 
         /** Returns the offset of the element in the shader parameter struct in bytes. */
         uint32_t GetOffset() const { return struct_offset; }
@@ -159,8 +164,8 @@ public:
         //        RENDER_API void GenerateShaderParameterType(std::string& Result, EShaderPlatform ShaderPlatform) const;
 
     private:
-        const char* name;
-        const char* binding_type;
+        std::string_view name;
+        std::string_view binding_type;
 
         EShaderBindingBaseType   base_type;
         EShaderPrecisionModifier type_precision;
@@ -173,14 +178,14 @@ public:
 
     RENDER_API ShaderParametersMetadata(
         EShaderParameterUseCase    _use_case,
-        const char*                _struct_name,
+        std::string_view           _struct_name,
         uint32_t                   _size,
         const Moer::Array<Member>& _members,
         bool                       _b_force_complete_initialization = false);
 
     RENDER_API virtual ~ShaderParametersMetadata();
 
-    const char* GetStructTypeName() const { return struct_name; }
+    std::string_view GetStructTypeName() const { return struct_name; }
 
     uint32_t                GetSize() const { return size; }
     EShaderParameterUseCase GetUseCase() const { return use_case; }
@@ -197,7 +202,7 @@ public:
     const Moer::Array<Member>& GetMembers() const { return members; }
 
     /** Returns the full C++ member name from it's byte offset in the structure. */
-    RENDER_API std::string GetMemberNameByOffset(uint16_t _member_offset) const;
+    RENDER_API std::string_view GetMemberNameByOffset(uint16_t _member_offset) const;
 
     inline bool IsLayoutInitialized() const { return layout != nullptr; }
 
@@ -205,7 +210,7 @@ public:
 
 private:
     /** Name of the structure type in C++ and shader code. */
-    const char* const struct_name;
+    std::string_view struct_name;
 
     /** Size of the entire struct in bytes. */
     const uint32_t size;
@@ -234,13 +239,24 @@ namespace std {
     };
 }// namespace std
 //compiled shader platform and type information
-struct alignas(4) ShaderTargetInfo {
-    EShaderType     shader_type : ST_NumBits;
-    EShaderPlatform shader_platform : SP_NumBits;
+struct ShaderTargetInfo {
+    uint16_t     shader_type;
+    uint16_t shader_platform;
+    operator uint32_t() const { return *(uint32_t*)this; }
+    ShaderTargetInfo(EShaderType _type, EShaderPlatform _platform)
+        : shader_type(_type),
+          shader_platform(_platform) {}
+    ShaderTargetInfo(uint32_t _info):shader_type(_info & 0xffff),shader_platform(static_cast<EShaderPlatform>(_info >> 16)){}
+
+    ShaderTargetInfo() = default;
+
+    operator EShaderType() const { return static_cast<EShaderType>(shader_type); }
+    operator EShaderPlatform() const { return static_cast<EShaderPlatform>(shader_platform); }
 };
 
 typedef uint32_t ShaderTypeIndex;
-
+struct ShaderMutationParameters;
+struct ShaderCompilerEnvironment;
 /**
  * @brief Shader Type Meta Data
  * 
@@ -248,21 +264,32 @@ typedef uint32_t ShaderTypeIndex;
 class ShaderMetaType {
 public:
     using ConstructShaderInstanceProc = std::function<class Shader*(const ShaderCompiledInitializer&)>;
+    using ShouldCompileMutationProc   = std::function<bool(const ShaderMutationParameters&)>;
+    using SetCompileEnvironmentProc   = std::function<void(const ShaderMutationParameters&, ShaderCompilerEnvironment&)>;
 
     ShaderMetaType(
-        const char*                     _type_name,
-        const char*                     _file_name,
-        const char*                     _entry_point,
+        std::string_view                _type_name,
+        std::string_view                _file_name,
+        std::string_view                _entry_point,
         EShaderType                     _shader_type,
         uint32_t                        _type_size,
         const ShaderParametersMetadata* _parameter_data,
-        ConstructShaderInstanceProc     _shader_type_constructor);
+        uint32_t                        _total_mutation_count,
+        ConstructShaderInstanceProc     _shader_type_constructor,
+        ShouldCompileMutationProc       _should_compile_mutation,
+        SetCompileEnvironmentProc       _set_compile_environment);
     ~ShaderMetaType();
     void OnRegistration();
 
     struct Parameters {
     };
-    static RENDER_API Moer::UnorderedMap<std::string, ShaderMetaType*>& GetNameToTypeMap();
+    static RENDER_API void            RegistrateShaderMetaType(ShaderMetaType* type);
+
+    //may lead to unexpected behavior when name hash collision, only use for debug
+    static RENDER_API ShaderMetaType* GetShaderMetaType(std::string_view _type_name);
+
+    //standard function
+    static RENDER_API ShaderMetaType* GetShaderMetaType(uint32_t _type_name_hash);
 
     /**
      * @brief Get the Shader Type Enum
@@ -271,26 +298,44 @@ public:
      */
     EShaderType GetShaderType() const { return shader_type; }
 
-    const char*                     GetName() const { return type_name; }
-    const char*                     GetFileName() const { return file_name; }
-    const char*                     GetEntryPoint() const { return entry_point; }
+    std::string_view                GetName() const { return type_name; }
+    uint32_t                        GetNameHash() const { return type_name_hash; }
+    std::string_view                GetFileName() const { return file_name; }
+    std::string_view                GetEntryPoint() const { return entry_point; }
     const ShaderParametersMetadata* GetParameterMetaData() const { return parameter_meta_data; }
+    uint32_t                        GetTotalMutationCount() const { return total_mutation_count; }
 
     Shader* ConstructShaderInstance(const ShaderCompiledInitializer& _initializer) { return construct_shader_instance(_initializer); }
 
+    bool ShouldCompileMutation(const ShaderMutationParameters& _parameters) const { return should_compile_mutation(_parameters); }
+
+    void SetCompileEnvironment(const ShaderMutationParameters& _parameters, ShaderCompilerEnvironment& _environment) {
+        set_compile_environment(_parameters, _environment);
+    };
+
 private:
+    static RENDER_API Moer::UnorderedMap<ShaderTypeKey, ShaderMetaType*>& GetNameToTypeMap();
+
     // shader type name in cpp
-    const char* type_name;
+    std::string_view type_name;
+    uint32_t         type_name_hash;
     // shader file name/relative path
-    const char* file_name;
+    std::string_view file_name;
     // shader entry point
-    const char* entry_point;
+    std::string_view entry_point;
     // shader type enum, Vertex, Fragment .etc
     EShaderType shader_type;
+
+    uint32_t total_mutation_count;
+
     // shader root parameter meta data
     const ShaderParametersMetadata* parameter_meta_data;
     // shader construct function, for sub class creation
     ConstructShaderInstanceProc construct_shader_instance;
+
+    ShouldCompileMutationProc should_compile_mutation;
+
+    SetCompileEnvironmentProc set_compile_environment;
 };
 /**
  * @brief Registrate All used shader types on launching,
@@ -316,9 +361,9 @@ struct ParameterInfo {
     // source pipeline stage
     ERHIPipelineStageFlags stage{ERHIPipelineStageFlags::PS_NONE};
     // slot in dx12 while binding in Vulkan
-    int16_t slot : 8 = -1;
+    int8_t slot = -1;
     // space in dx12 while set in Vulkan
-    int16_t space : 8 = -1;
+    int8_t space = -1;
     // array size, invalid for root cbv
     int8_t num = 0;
     // parameter type enum
@@ -340,7 +385,7 @@ public:
         return param_map;
     }
 
-private:
+    // private:
     Moer::UnorderedMap<std::string, ParameterInfo> param_map;
 };
 struct ShaderCompilerOutput {
@@ -362,15 +407,21 @@ struct ShaderCompilerOutput {
     Hash64City           compiled_hash;
     uint32_t             num_instructions;
     uint32_t             num_samplers;
+    uint32_t             mutation_id;
     double               compiled_time;
     double               preprocessing_time;
     bool                 b_succeeded;
+    uint32_t             shader_name_hash;
 
-    ShaderCompilerOutput(ShaderCompilerOutput&&)                 = default;
-    ShaderCompilerOutput(const ShaderCompilerOutput&)            = default;
-    ShaderCompilerOutput& operator=(ShaderCompilerOutput&&)      = default;
-    ShaderCompilerOutput& operator=(const ShaderCompilerOutput&) = default;
+    bool      cached                      = false;
+    long long source_file_last_write_time = 0;
+
+    // ShaderCompilerOutput(ShaderCompilerOutput&&)                 = default;
+    // ShaderCompilerOutput(const ShaderCompilerOutput&)            = default;
+    // ShaderCompilerOutput& operator=(ShaderCompilerOutput&&)      = default;
+    // ShaderCompilerOutput& operator=(const ShaderCompilerOutput&) = default;
 };
+
 /**
  * @brief ALL Compiled information needed for Shader Type Creation
  * 
@@ -390,12 +441,125 @@ struct ShaderCompiledInitializer {
     );
 };
 
-struct ShaderCompilerInput {
+class ShaderCompilerDefines {
+public:
+    ShaderCompilerDefines() {
+        defines.reserve(32);
+    }
 
+    void SetDefine(std::string_view _key, const std::string& _value) {
+        auto& value = defines[_key.data()];
+        value       = _value;
+    }
+
+    void SetDefine(std::string_view _key, const char* _value) {
+        auto& value = defines[_key.data()];
+        value       = _value;
+    }
+
+    void SetDefine(std::string_view _key, const int32_t _value) {
+        auto& value = defines[_key.data()];
+        value       = std::to_string(_value);
+    }
+
+    void SetDefine(std::string_view _key, const uint32_t _value) {
+        auto& value = defines[_key.data()];
+        value       = std::to_string(_value);
+    }
+
+    void SetDefine(std::string_view _key, const float _value) {
+        auto& value = defines[_key.data()];
+        value       = std::to_string(_value);
+    }
+
+    void SetDefine(std::string_view _key, const bool _value) {
+        auto& value = defines[_key.data()];
+        value       = std::to_string(_value);
+    }
+
+    void Merge(const ShaderCompilerDefines& _other) {
+
+        defines.insert(_other.defines.begin(), _other.defines.end());
+    }
+
+private:
+    friend class ShaderCompilerEnvironment;
+    Moer::UnorderedMap<std::string, std::string> defines;
+};
+
+template<typename TMaroType>
+concept MacroType = requires(TMaroType _type) {
+    std::is_same_v<TMaroType, uint32_t> ||
+        std::is_same_v<TMaroType, int32_t> ||
+        std::is_same_v<TMaroType, bool> ||
+        std::is_same_v<TMaroType, float> ||
+        std::is_same_v<TMaroType, std::string>;
+};
+struct ShaderCompilerEnvironment {
+public:
+    ShaderCompilerEnvironment() {
+        compiler_args.reserve(32);
+    }
+    template<MacroType TValue>
+    void SetDefine(std::string_view _key, const TValue& _value) {
+        macro_defines.SetDefine(_key, _value);
+    }
+    void Merge(const ShaderCompilerEnvironment& _other) {
+        compiler_args.insert(_other.compiler_args.begin(), _other.compiler_args.end());
+        macro_defines.Merge(_other.macro_defines);
+    }
+    template<MacroType TValue>
+    void SetCompileArg(std::string_view _key, const TValue& _value) {
+        compiler_args[_key.data()] = _value;
+    }
+
+    bool HasCompileArg(std::string_view _key) const {
+        return compiler_args.count(_key.data()) > 0;
+    }
+    const Moer::UnorderedMap<std::string, std::string>& GetDefines() const {
+        return macro_defines.defines;
+    }
+
+    const Moer::UnorderedMap<std::string, std::variant<uint32_t, int32_t, bool, float, std::string>>& GetCompilerArgs() const {
+        return compiler_args;
+    }
+
+    static std::wstring GetVariantWStr(const std::variant<uint32_t, int32_t, bool, float, std::string>& _value) {
+        return std::visit([]<typename T>(const T& e) {
+            if constexpr (std::is_same_v<T, std::string>) {
+                return std::wstring(e.begin(), e.end());
+            } else {// float/int
+                return std::to_wstring(e);
+            }
+        },
+                          _value);
+    }
+
+private:
+    ShaderCompilerDefines macro_defines;
+
+    Moer::UnorderedMap<std::string, std::variant<uint32_t, int32_t, bool, float, std::string>> compiler_args;
+};
+
+struct ShaderCompileJobInput {
     ShaderTargetInfo target_info;
-    std::string      entry_point;
-    std::string      relative_source_file_path;
-    std::string      shader_name;
+    std::string_view entry_point;
+    std::string_view relative_source_file_path;
+    std::string_view shader_name;
+    uint32_t         shader_name_hash;
+    uint32_t         mutation_count;
+
+    const ShaderParametersMetadata* param_meta_data;
+};
+
+struct ShaderCompilerInput {
+    ShaderTargetInfo           target_info;
+    uint32_t                   mutation_id;
+    std::string_view           entry_point;
+    std::string_view           relative_source_file_path;
+    std::string_view           shader_name;
+    uint32_t                   shader_name_hash;
+    ShaderCompilerEnvironment& environment;
 
     const ShaderParametersMetadata* param_meta_data;
 };
@@ -421,6 +585,6 @@ class ShaderCompileRegistration {
 public:
     static void RegistrateCompileWorkIfNeed(const ShaderMetaType& _shader_type);
 
-    static Moer::Array<ShaderCompilerInput>& RetrieveShaderCompileWorks();
+    static Moer::Array<ShaderCompileJobInput>& RetrieveShaderCompileWorks();
 };
 #endif//MOERENGINE_SHADER_COMMON_H

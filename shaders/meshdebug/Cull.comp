@@ -1,0 +1,107 @@
+#include "framework/Common.hlsl"
+
+#define FRUSTUM_CULLING_ENABLED 1
+#define BACKFACE_CULLING_ENABLED 1
+#define OCCULSION_CULLING_ENABLED 1
+
+struct MeshletDesc {
+  uint vertex_offset;
+  uint index_offset;
+  uint instance_id;
+  uint packed_data;
+
+  uint GetPrimitiveCount()  { return packed_data & 0xFF; }
+  uint GetVertexCount()  { return (packed_data >> 8) & 0xFF; }
+  uint GetIndexCount()  { return (packed_data & 0xFF) * 3; }
+};
+
+struct MeshletInfo {
+  float3 center;
+  float radius;
+  float3 cone_axis;
+  float cone_angle;
+};
+
+struct DrawCommandData {
+  uint vertex_count;
+  uint instance_count;
+  uint firstIndex;
+  uint first_vertex;
+  uint first_instance;
+};
+
+[[vk::push_constant]]
+ConstantBuffer<CameraData> camera_data;
+
+StructuredBuffer<InstanceData> InstanceData;
+
+StructuredBuffer<MeshletDesc> MeshletDescBuffer;
+
+StructuredBuffer<MeshletInfo> MeshletInfoBuffer;
+
+RWByteAddressBuffer DrawCounterBuffer;
+
+RWByteAddressBuffer DrawIndirectBuffer;
+
+// Function to check if a vertex is inside the frustum
+bool IsMeshletInsideFrustum(in MeshletInfo meshlet_info) {
+  // Frustum culling logic goes here
+  // Return true if the vertex is inside the frustum, false otherwise
+  return true;
+}
+
+// Function to check if a vertex is facing away from the camera
+bool IsMeshletFacingAwayFromCamera(in MeshletInfo meshlet_info) {
+  // Backface culling logic goes here
+  // Return true if the vertex is facing away from the camera, false otherwise
+  return true;
+}
+
+bool IsMeshletVisible(in uint meshlet_id) {
+  bool visible = true;
+
+  MeshletInfo meshlet_info = MeshletInfoBuffer[meshlet_id];
+
+#if FRUSTUM_CULLING_ENABLED
+  visible &= !IsMeshletInsideFrustum(meshlet_info);
+#endif
+
+  // Check if the vertex is facing away from the camera
+#if BACKFACE_CULLING_ENABLED
+  visible &= !IsMeshletFacingAwayFromCamera(meshlet_info);
+#endif
+  return visible;
+}
+
+// Compute shader entry point
+[numthreads(64, 1, 1)] void main(uint3 dispatchThreadId
+                                 : SV_DispatchThreadID) {
+  // Get the index of the vertex to process
+  uint meshlet_id = dispatchThreadId.x;
+
+  MeshletDesc meshlet_desc = MeshletDescBuffer[meshlet_id];
+
+  bool visible = IsMeshletVisible(meshlet_id);
+  uint meshlet_count = WaveActiveCountBits(visible);
+  uint lane_offset = WavePrefixCountBits(visible);
+
+  uint cmd_offset;
+  if (WaveIsFirstLane()) {
+    DrawCounterBuffer.InterlockedAdd(0, meshlet_count, cmd_offset);
+  }
+  cmd_offset = WaveReadLaneFirst(cmd_offset);
+  cmd_offset +=lane_offset;
+
+  if(visible) {
+    DrawCommandData cmd;
+
+    cmd.vertex_count = meshlet_desc.GetVertexCount();
+    cmd.instance_count = 1;
+    cmd.firstIndex = meshlet_desc.index_offset;
+    cmd.first_vertex = meshlet_desc.vertex_offset;
+    cmd.first_instance = meshlet_desc.instance_id;
+    DrawIndirectBuffer.Store(cmd_offset * sizeof(DrawCommandData), cmd);
+  }
+}
+
+
