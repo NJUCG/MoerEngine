@@ -12,8 +12,6 @@
 #include "shader/ShaderCompiler.h"
 #include "shader/ShaderResourceManager.h"
 
-RHI* g_rhi = nullptr;
-
 // global shader
 
 #include "rhi/RHICommand.h"
@@ -42,6 +40,7 @@ public:
 // IMPLEMENT_SHADER_TYPE(TestShader, "TestVert.vert", "main", EShaderType::ST_VERTEX)
 
 void Test() {
+    
     // glfwInit();
 
     // glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
@@ -49,7 +48,6 @@ void Test() {
 
     // GLFWwindow* window = glfwCreateWindow(800, 800, "VulkanRHITest", nullptr, nullptr);
     g_rhi = new VulkanRHIImpl();
-
     g_rhi->Initialize(RHIInitInfo());
     g_rhi->PostInit();
 
@@ -110,7 +108,7 @@ void Test() {
 
     RHIGraphicsPipelineStateRef pso = g_rhi->RHICreateGraphicsPipelineState(init);
 
-    RHIGraphicsCommandList* command_list = g_rhi->RHICreateGraphicsCommandList(pso);
+    RHIGraphicsCommandList* command_list = g_rhi->RHICreateGraphicsCommandList(g_rhi->RHIGetCurrentCommandAllocator(), pso);
 
     RHIRenderPassInfo pass_info;
     pass_info.GeneratePipelineAttachmentInfo();
@@ -121,21 +119,21 @@ void Test() {
         g_rhi->RHICreateUnorderedAccessView(tex,
                                             RHIViewInfo::CreateTextureUAVInfo()
                                                 .SetFormat((PF_R8G8B8A8_SRGB)));
-    TestShader*            test_shader_vs = (TestShader*)ShaderResourceManager::GetShader<TestShader>();
+    TestShader*            test_shader_vs = (TestShader*)ShaderResourceManager::GetInstance().GetShader<TestShader>().Get();
     TestShader::Parameters params;
 
     auto test_buff = g_rhi->RHICreateBuffer(buffer_info);
 
     params.write_target = test_view;
     RHIBatchedShaderParameters batched_params;
-    batched_params.SetParameters(test_shader_vs, params);
+  
     // command_list->SetBatchedShaderParameter(batched_params);
 
     command_list->DrawIndexedInstanced(1, 1, 0, 0, 0);
 
     command_list->EndRenderPass();
 
-    RHICommandQueue*                                graphics_queue = g_rhi->CreateCommandQueue(ECommandQueueType::GRAPHICS);
+    RHICommandQueue*                                graphics_queue = g_rhi->RHICreateCommandQueue(ECommandQueueType::GRAPHICS);
     const Moer::StaticArray<RHICommandListBase*, 1> command_array{command_list};
     // graphics_queue->SubmitCommands(1, command_array.data());
 
