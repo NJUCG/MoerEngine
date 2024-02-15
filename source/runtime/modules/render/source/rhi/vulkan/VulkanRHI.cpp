@@ -353,7 +353,7 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
         for (const auto& info : layout_infos) {
             VkDescriptorSetLayoutBinding binding{};
             binding.binding         = info.slot;
-            binding.descriptorType  = VulkanEnumTranslator::METoVKDescriptorType(info.type);
+            binding.descriptorType  = VulkanEnumTranslator::METoVKDescriptorType(info.type, info.resource_type);
             binding.descriptorCount = info.num;
             binding.stageFlags |= VulkanEnumTranslator::METoVKShaderStageFlags(meta_shader->GetShaderType());
             binding.pImmutableSamplers = nullptr;
@@ -444,8 +444,8 @@ RHIComputePipelineStateRef VulkanRHIImpl::RHICreateComputePipelineState(RHICompu
     for (const auto& info : layout_infos) {
         VkDescriptorSetLayoutBinding binding{};
         binding.binding         = info.slot;
-        binding.descriptorType  = VulkanEnumTranslator::METoVKDescriptorType(info.type);
-        binding.descriptorCount = 1;
+        binding.descriptorType  = VulkanEnumTranslator::METoVKDescriptorType(info.type, info.resource_type);
+        binding.descriptorCount = info.num;
         binding.stageFlags |= VulkanEnumTranslator::METoVKShaderStageFlags(meta_shader->GetShaderType());
         binding.pImmutableSamplers = nullptr;
 
@@ -637,8 +637,8 @@ RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(co
         for (const auto& info : layout_infos) {
             VkDescriptorSetLayoutBinding binding{};
             binding.binding         = info.slot;
-            binding.descriptorType  = VulkanEnumTranslator::METoVKDescriptorType(info.type);
-            binding.descriptorCount = 1;
+            binding.descriptorType  = VulkanEnumTranslator::METoVKDescriptorType(info.type, info.resource_type);
+            binding.descriptorCount = info.num;
             binding.stageFlags |= VulkanEnumTranslator::METoVKShaderStageFlags(meta_shader->GetShaderType());
             binding.pImmutableSamplers = nullptr;
 
@@ -889,7 +889,7 @@ Moer::Array<RHIRayTracingBLASRef> VulkanRHIImpl::RHIBuildRayTracingBLAS(const Mo
             }
         }
     }
-    //TODO:compact blas
+    //TODO:compact blases
     return all_rhi_blas;
 }
 
@@ -1129,6 +1129,20 @@ RHIGraphicsCommandList* VulkanRHIImpl::RHICreateGraphicsCommandList(RHICommandAl
     return MoerNew(VulkanRHIGraphicsCommandList(m_device, vk_allocator->GetHandle(ECommandListType::GRAPHICS), VK_COMMAND_BUFFER_LEVEL_PRIMARY));
 }
 
+RHIComputeCommandList* VulkanRHIImpl::RHICreateComputeCommandList(RHICommandAllocator* _allocator, RHIComputePipelineState* _initial_state) {
+    auto* vk_allocator = static_cast<VulkanCommandAllocator*>(_allocator);
+    VK_CHECK_NULLPTR(vk_allocator, "RHICreateComputeCommandList: allocator is nullptr!", return nullptr);
+
+    return MoerNew(VulkanRHIComputeCommandList(m_device, vk_allocator->GetHandle(ECommandListType::COMPUTE), VK_COMMAND_BUFFER_LEVEL_PRIMARY));
+}
+
+RHIRayTracingCommandList* VulkanRHIImpl::RHICreateRayTracingCommandList(RHICommandAllocator* _allocator, RHIRayTracingPipelineState* _initial_state) {
+    auto* vk_allocator = static_cast<VulkanCommandAllocator*>(_allocator);
+    VK_CHECK_NULLPTR(vk_allocator, "RHICreateRayTracingCommandList: allocator is nullptr!", return nullptr);
+
+    return MoerNew(VulkanRHIRayTracingCommandList(m_device, vk_allocator->GetHandle(ECommandListType::RAY_TRACING), VK_COMMAND_BUFFER_LEVEL_PRIMARY));
+}
+
 // RHIComputeCommandList* VulkanRHIImpl::CreateComputeCommandList(RHIComputePipelineState* _initial_state) {
 //     return nullptr;
 // }
@@ -1140,8 +1154,23 @@ RHICopyCommandList* VulkanRHIImpl::RHICreateCopyCommandList(RHICommandAllocator*
 }
 
 void VulkanRHIImpl::RHISetBatchedShaderParametersInner(RHIResource* _pso, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) {
-    const auto* vk_pso = static_cast<VulkanRHIGraphicsPipelineState*>(_pso);
-    VK_CHECK_NULLPTR(vk_pso, "SetBatchedShaderParameter: graphics pipeline state is nullptr!", return);
+    const VulkanPipelineState* vk_pso;
+    switch (_pso->GetResourceType()) {
+        case RRT_GRAPHIC_PIPELINE_STATE:
+            vk_pso = static_cast<VulkanRHIGraphicsPipelineState*>(_pso);
+            VK_CHECK_NULLPTR(vk_pso, "SetBatchedShaderParameter: graphics pipeline state is nullptr!", return);
+            break;
+        case RRT_COMPUTE_PIPELINE_STATE:
+            vk_pso = static_cast<VulkanRHIComputePipelineState*>(_pso);
+            VK_CHECK_NULLPTR(vk_pso, "SetBatchedShaderParameter: compute pipeline state is nullptr!", return);
+            break;
+        case RRT_RAY_TRACING_PIPELINE_STATE:
+            vk_pso = static_cast<VulkanRHIRayTracingPipelineState*>(_pso);
+            break;
+        default:
+            LOG_WARNING("RHISetBatchedShaderParameter:_pso is not a pipeline state resource");
+            return;
+    }
     // resources
     const auto& descriptor_binding_infos = vk_pso->GetDescriptorSetsLayout()->GetDescriptorBindingInfos();
     auto*       resource_cache           = vk_pso->GetPipelineResourceCache();
@@ -1207,6 +1236,26 @@ void VulkanRHIImpl::RHISetBatchedShaderParametersInner(RHIResource* _pso, const 
                     params.space,
                     params.slot,
                     images,
+                    binding_info.type);
+            }
+        } else if (type == RRT_RAYTRACING_ACCELERATION_STRUCTURE) {
+            //acceleration structure
+            Moer::Array<VkAccelerationStructureKHR> ases(binding_info.count);
+            for (int j = 0; j < binding_info.count; ++j) {
+                auto* rhi_as = static_cast<RHIRayTracingAccelerationStructure*>(resources[i + j].resource);
+                if (rhi_as->GetType() == ERayTracingAccelerationStructureType::BOTTOM_LEVEL) {
+                    LOG_WARNING("RHISetBatchedShaderParameter:the acceleratio structure for shader parameter must be a TLAS");
+                    continue;
+                }
+                auto* vk_as = static_cast<VulkanRHIRayTracingTLAS*>(rhi_as);
+                ases[j]     = vk_as->m_tlas;
+            }
+            i += binding_info.count;
+            if (ready_to_write) {
+                writers[params.space].WriteAS(
+                    params.space,
+                    params.slot,
+                    ases,
                     binding_info.type);
             }
         }

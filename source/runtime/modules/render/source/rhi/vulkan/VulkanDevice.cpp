@@ -207,6 +207,7 @@ void VulkanDevice::CreateDevice(const DeviceInitializer& _initializer) {
     vkGetDeviceQueue(m_device, m_queue_family_indices.present.value(), 0, &m_present_queue);
     vkGetDeviceQueue(m_device, m_queue_family_indices.compute.value(), 0, &m_compute_queue);
     vkGetDeviceQueue(m_device, m_queue_family_indices.transfer.value(), 0, &m_transfer_queue);
+    vkGetDeviceQueue(m_device, m_queue_family_indices.raytracing.value(), 0, &m_raytracing_queue);
 }
 
 void VulkanDevice::CreateDescriptorAllocator() {
@@ -296,10 +297,11 @@ QueueFamilyIndices VulkanDevice::QueryQueueFamilyIndices(VkPhysicalDevice _gpu, 
     QueueFamilyIndices indices;
 
     auto queue_family_props = GetQueueFamilyProperties(_gpu);
-
+    //todo:what's the best queue for ray tracing operation?how to tell a queue support raytracing operation?
     auto graphics = GetQueueFamilyIndex(queue_family_props, VK_QUEUE_GRAPHICS_BIT);
     if (graphics >= 0) {
-        indices.graphics = graphics;
+        indices.graphics   = graphics;
+        indices.raytracing = graphics;
     }
     auto transfer = GetQueueFamilyIndex(queue_family_props, VK_QUEUE_TRANSFER_BIT);
     if (transfer >= 0) {

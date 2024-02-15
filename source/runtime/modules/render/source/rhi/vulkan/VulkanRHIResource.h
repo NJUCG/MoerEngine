@@ -96,7 +96,7 @@ public:
     static VkPrimitiveTopology METoVKPrimitiveTopology(EPrimitiveTopology _primitive_type);
     static VkPolygonMode       METoVKPolygonMode(ERasterizerFillMode _fill_mode);
 
-    static VkDescriptorType   METoVKDescriptorType(EShaderParameterType _type);
+    static VkDescriptorType   METoVKDescriptorType(EShaderParameterType _type, EShaderCodeResourceBindingType _binding_type);
     static VkShaderStageFlags METoVKShaderStageFlags(EShaderType _type);
 
     static uint32_t METoVkQueueFamilyIndex(ECommandQueueType _type, const VulkanDevice* _device);
@@ -328,6 +328,8 @@ public:
 #pragma region pipeline states definitions
 
 class VulkanPipelineState {
+    friend VulkanRHIImpl;
+
 public:
     VulkanPipelineState() : m_pipeline(VK_NULL_HANDLE), m_pipeline_layout(VK_NULL_HANDLE), m_pipeline_state_cache(nullptr){};
     virtual ~VulkanPipelineState() = default;
@@ -382,47 +384,26 @@ public:
           VulkanPipelineState() {}
 };
 
-class VulkanRHIRayTracingPipelineState final : public RHIRayTracingPipelineState {
+class VulkanRHIRayTracingPipelineState final : public RHIRayTracingPipelineState, public VulkanPipelineState {
     friend VulkanRHIImpl;
 
 public:
     VulkanRHIRayTracingPipelineState()
         : RHIRayTracingPipelineState(),
-          m_pipeline(VK_NULL_HANDLE), m_pipeline_layout(VK_NULL_HANDLE), m_pipeline_state_cache(nullptr) {}
+          VulkanPipelineState() {}
 
-    inline VkPipeline GetHandle() const {
-        return m_pipeline;
-    }
-
-    inline const VkPipelineLayout GetPipelineLayout() const {
-        return m_pipeline_layout;
-    }
-
-    inline const VulkanDescriptorSetsLayout* GetDescriptorSetsLayout() const {
-        return m_descriptor_sets_layout;
-    }
-    inline VulkanPipelineResourceCache* GetPipelineResourceCache() const {
-        return m_pipeline_state_cache;
-    }
-
-    void GenerateDescriptorSetLayouts(const VulkanDevice* _device, Moer::Array<TDescriptorSetLayoutInfo>& _layout_mappings);
-    void CreateResourceCache();
+    const VkStridedDeviceAddressRegionKHR* GetRayGenSBT() { return &m_raygen_sbt; }
+    const VkStridedDeviceAddressRegionKHR* GetRayMissSBT() { return &m_miss_sbt; }
+    const VkStridedDeviceAddressRegionKHR* GetRayHitSBT() { return &m_hit_sbt; }
+    const VkStridedDeviceAddressRegionKHR* GetRayCallableSBT() { return &m_callable_sbt; }
 
 private:
-    VkPipeline       m_pipeline;
-    VkPipelineLayout m_pipeline_layout;
-
     //SBT
     RHIBufferRef                    m_sbt_buffer;
     VkStridedDeviceAddressRegionKHR m_raygen_sbt;
     VkStridedDeviceAddressRegionKHR m_miss_sbt;
     VkStridedDeviceAddressRegionKHR m_hit_sbt;
     VkStridedDeviceAddressRegionKHR m_callable_sbt;
-
-    // descriptor sets
-    VulkanDescriptorSetsLayout* m_descriptor_sets_layout;
-    // resource cache
-    VulkanPipelineResourceCache* m_pipeline_state_cache;
 };
 #pragma endregion
 
@@ -608,8 +589,8 @@ private:
 };
 #pragma endregion
 
-#pragma region acceleration structure          definitions
-class VulkanRHIRayTracingAccelerationStructure final : public RHIRayTracingAccelerationStructure {
+#pragma region acceleration structure definitions
+class VulkanRHIRayTracingAccelerationStructure {
 public:
     static VkGeometryTypeKHR                    METoVKGeometryTypeKHR(ERayTracingGeometryType _type);
     static VkGeometryFlagsKHR                   METoGeometryFlagsKHR(ERayTracingGeometryFlags _flag);
@@ -617,7 +598,7 @@ public:
     static VkGeometryInstanceFlagsKHR           METoVKGeometryInstanceFlagsKHR(ERayTracingInstanceFlags _me_flags);
 };
 
-class VulkanRHIRayTracingBLAS final : public RHIRayTracingBLAS {
+class VulkanRHIRayTracingBLAS final : public RHIRayTracingBLAS, public VulkanRHIRayTracingAccelerationStructure {
     friend VulkanRHIImpl;
 
 public:
@@ -628,7 +609,7 @@ protected:
     VkAccelerationStructureKHR m_blas;
     RHIBufferRef               m_buffer;
 };
-class VulkanRHIRayTracingTLAS final : public RHIRayTracingTLAS {
+class VulkanRHIRayTracingTLAS final : public RHIRayTracingTLAS, public VulkanRHIRayTracingAccelerationStructure {
     friend VulkanRHIImpl;
 
 public:

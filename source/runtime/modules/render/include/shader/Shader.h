@@ -200,10 +200,10 @@ public:
     //Ubo set
     DEFINE_SHADER_PARAM_UAV(RWBuffer, dataLog)
 
-    DEFINE_SHADER_PARAM_SAMPLER_ARRAY(Sampler[2], samp, 2)
+    DEFINE_SHADER_PARAM_SAMPLER_ARRAY(Sampler, samp, 2)
     DEFINE_SHADER_PARAM_SAMPLER(Sampler, aniso)
     //srv set
-    DEFINE_SHADER_PARAM_SRV_ARRAY(Texture2D[5], foo, 5)
+    DEFINE_SHADER_PARAM_SRV_ARRAY(Texture2D, foo, 5)
     //uav se
 
     END_ROOT_PARAMETER_DEFINITION(Parameters)

@@ -878,7 +878,8 @@ enum class ECommandQueueType {
     UNDEFINED,
     GRAPHICS,
     COMPUTE,
-    COPY
+    COPY,
+    RAYTRACING,
 };
 
 enum class ECommandListType {
@@ -889,6 +890,7 @@ enum class ECommandListType {
     VIDEO_ENCODE,
     VIDEO_PROCESS,
     VIDEO_DECODE,
+    RAY_TRACING,
     Num
 };
 

@@ -41,7 +41,7 @@ class TestDeferredTriangleShaderFrag : public Shader {
     DEFINE_SHADER_TYPE(TestDeferredTriangleShaderFrag, Global, RENDER_API, ...)
 public:
     BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
-    DEFINE_SHADER_PARAM_SAMPLER(SamplerState, defaultSampler)
+    DEFINE_SHADER_PARAM_SAMPLER(Sampler, defaultSampler)
     DEFINE_SHADER_PARAM_SRV(Texture2D, baseColorMap)
     END_ROOT_PARAMETER_DEFINITION(Parameters)
 };

@@ -26,8 +26,9 @@ struct QueueFamilyIndices {
     std::optional<uint32_t> present;
     std::optional<uint32_t> transfer;
     std::optional<uint32_t> compute;
+    std::optional<uint32_t> raytracing;
 
-    inline bool IsComplete() const { return graphics.has_value() && present.has_value() && transfer.has_value() && compute.has_value(); }
+    inline bool IsComplete() const { return graphics.has_value() && present.has_value() && transfer.has_value() && compute.has_value() && raytracing.has_value(); }
 };
 
 struct DeviceInitializer {
@@ -87,6 +88,9 @@ public:
     inline VkQueue GetTransferQueue() const {
         return m_transfer_queue;
     }
+    inline VkQueue GetRayTracingQueue() const {
+        return m_raytracing_queue;
+    }
     class VulkanCommandAllocator* GetCurrentCommandAllocator();
     bool                          GetDescriptorSets(uint32_t _hash_key, const VulkanDescriptorSetsLayout& _layout, Moer::Array<VulkanDescriptorSetWriter>& _writers, Moer::Array<VkDescriptorSet>& _sets);
 
@@ -94,16 +98,17 @@ private:
     VkPhysicalDevice            m_gpu;
     VkPhysicalDeviceProperties2 m_gpu_props;
 
-    VulkanPhysicalDeviceFeatures                    m_gpu_features;
-    VkPhysicalDeviceMemoryProperties2               m_gpu_mem_props;
-    TExtensionArray                                 m_gpu_extensions;
-    TQueueFamilyPropertiesArray                     m_queue_family_props;
-    QueueFamilyIndices                              m_queue_family_indices;
+    VulkanPhysicalDeviceFeatures      m_gpu_features;
+    VkPhysicalDeviceMemoryProperties2 m_gpu_mem_props;
+    TExtensionArray                   m_gpu_extensions;
+    TQueueFamilyPropertiesArray       m_queue_family_props;
+    QueueFamilyIndices                m_queue_family_indices;
 
     VkDevice m_device;
     VkQueue  m_graphics_queue;
     VkQueue  m_present_queue;
     VkQueue  m_compute_queue;
+    VkQueue  m_raytracing_queue;
     VkQueue  m_transfer_queue;
 
     VmaAllocator                  m_allocator;

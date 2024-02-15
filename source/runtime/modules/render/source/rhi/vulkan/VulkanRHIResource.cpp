@@ -827,22 +827,32 @@ VkPolygonMode VulkanEnumTranslator::METoVKPolygonMode(ERasterizerFillMode _fill_
     }
 }
 
-VkDescriptorType VulkanEnumTranslator::METoVKDescriptorType(EShaderParameterType _type) {
-    switch (_type) {
-        case EShaderParameterType::CBV:
-            return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        case EShaderParameterType::SAMPLER:
-        case EShaderParameterType::BINDLESS_SAMPLER_INDEX:// MARK...
-            return VK_DESCRIPTOR_TYPE_SAMPLER;
-        case EShaderParameterType::SRV:
-            return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-        case EShaderParameterType::UAV:
-            return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        case EShaderParameterType::BINDLESS_RESOURCE_INDEX:// MARK...
-            return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        default:
-            LOG_CRITICAL("Unsupported EShaderParameterType: {}", static_cast<uint32_t>(_type));
-            return VK_DESCRIPTOR_TYPE_MAX_ENUM;
+VkDescriptorType VulkanEnumTranslator::METoVKDescriptorType(EShaderParameterType _type, EShaderCodeResourceBindingType _binding_type) {
+    if (_type == EShaderParameterType::SAMPLER && _binding_type == EShaderCodeResourceBindingType::SAMPLER) {
+        return VK_DESCRIPTOR_TYPE_SAMPLER;
+    } else if (_type == EShaderParameterType::SRV && _binding_type == EShaderCodeResourceBindingType::BUFFER) {
+        return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    } else if (_type == EShaderParameterType::UAV && _binding_type == EShaderCodeResourceBindingType::RW_BUFFER) {
+        return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    } else if (_type == EShaderParameterType::SRV && _binding_type == EShaderCodeResourceBindingType::TEXTURE_2D) {
+        return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+    } else if (_type == EShaderParameterType::UAV && _binding_type == EShaderCodeResourceBindingType::RW_TEXTURE_2D) {
+        return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+    } else if (_type == EShaderParameterType::CBV) {
+        return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    } else if (_type == EShaderParameterType::SRV && _binding_type == EShaderCodeResourceBindingType::STRUCTURED_BUFFER) {
+        return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    } else if (_type == EShaderParameterType::UAV && _binding_type == EShaderCodeResourceBindingType::RW_STRUCTURED_BUFFER) {
+        return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    } else if (_type == EShaderParameterType::SRV && _binding_type == EShaderCodeResourceBindingType::BYTE_ADDRESSED_BUFFER) {
+        return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    } else if (_type == EShaderParameterType::UAV && _binding_type == EShaderCodeResourceBindingType::RW_BYTE_ADDRESSED_BUFFER) {
+        return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    } else if (_type == EShaderParameterType::SRV && _binding_type == EShaderCodeResourceBindingType::RAYTRACING_ACCELERATION_STRUCTURE) {
+        return VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+    } else {
+        LOG_CRITICAL("Unsupported EShaderParameterType: {} with EShaderCodeResourceBindingType {}", static_cast<uint32_t>(_type), static_cast<uint32_t>(_binding_type));
+        return VK_DESCRIPTOR_TYPE_MAX_ENUM;
     }
 }
 
@@ -886,6 +896,8 @@ uint32_t VulkanEnumTranslator::METoVkQueueFamilyIndex(ECommandQueueType _type, c
             return _device->GetQueueFamilyIndices().compute.value();
         case ECommandQueueType::COPY:
             return _device->GetQueueFamilyIndices().transfer.value();
+        case ECommandQueueType::RAYTRACING:
+            return _device->GetQueueFamilyIndices().raytracing.value();
         default:
             return VK_QUEUE_FAMILY_IGNORED;
     }
@@ -899,6 +911,8 @@ uint32_t VulkanEnumTranslator::METoVkQueueFamilyIndex(ECommandListType _type, co
             return _device->GetQueueFamilyIndices().compute.value();
         case ECommandListType::COPY:
             return _device->GetQueueFamilyIndices().transfer.value();
+        case ECommandListType::RAY_TRACING:
+            return _device->GetQueueFamilyIndices().raytracing.value();
         default:
             return _device->GetQueueFamilyIndices().graphics.value();
     }
@@ -1385,26 +1399,6 @@ Moer::Array<const Shader*> VulkanRHIGraphicsPipelineState::GetShaderInfoList(con
         shader_list.push_back(_shader_bound_state.p_fragment_shader->GetMetaShader());
     }
     return shader_list;
-}
-
-void VulkanRHIRayTracingPipelineState::GenerateDescriptorSetLayouts(const VulkanDevice* _device, Moer::Array<TDescriptorSetLayoutInfo>& _layout_mappings) {
-    for (auto& layout : _layout_mappings) {
-        VkDescriptorSetLayoutCreateInfo layout_create_info{};
-        layout_create_info.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        layout_create_info.pNext        = nullptr;
-        layout_create_info.flags        = 0;
-        layout_create_info.bindingCount = layout.second.size();
-        layout_create_info.pBindings    = layout.second.empty() ? nullptr : layout.second.data();
-
-        VK_CHECK_RESULT(vkCreateDescriptorSetLayout(*_device, &layout_create_info, nullptr, &layout.first));
-    }
-
-    // extract descriptor set layouts
-    m_descriptor_sets_layout = new VulkanDescriptorSetsLayout();
-    m_descriptor_sets_layout->Init(_layout_mappings, m_pipeline_state_cache);
-}
-void VulkanRHIRayTracingPipelineState::CreateResourceCache() {
-    m_pipeline_state_cache = new VulkanPipelineResourceCache();
 }
 
 #pragma endregion

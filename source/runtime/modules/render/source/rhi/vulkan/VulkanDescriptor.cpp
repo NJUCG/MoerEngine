@@ -34,14 +34,13 @@ void VulkanDescriptorSetsLayout::Init(const Moer::Array<TDescriptorSetLayoutInfo
     uint32_t hash_index = 0, image_index = 0, buffer_index = 0, as_index = 0;
     for (uint32_t i = 0; i < _layout_mappings.size(); ++i) {
         // set loop
-
         uint32_t binding_index = 0;
 
         m_layouts[i] = _layout_mappings[i].first;
 
         writers[i].m_hash_info_head = hash_index;
-        writers[i].m_write_set.resize(_layout_mappings[i].second.size(), {});
-        writers[i].m_write_set_as.resize(_layout_mappings[i].second.size(), {});
+        writers[i].m_write_set.resize(_layout_mappings[i].second.size(), {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET});
+        writers[i].m_write_set_as.resize(_layout_mappings[i].second.size(), {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR});
 
         // append new element to hash_infos
         uint32_t info_count_of_set = 1;
@@ -104,9 +103,9 @@ void VulkanDescriptorSetsLayout::Init(const Moer::Array<TDescriptorSetLayoutInfo
             writers[i].m_index_of_binding[binding.binding] = binding_index;
             ++binding_index;
         }
-        if (image_count) { image_infos.emplace_back(Moer::Array<VkDescriptorImageInfo>(image_count)); }
-        if (buffer_count) { buffer_infos.emplace_back(Moer::Array<VkDescriptorBufferInfo>(buffer_count)); }
-        if (as_count) { as_infos.emplace_back(Moer::Array<VkAccelerationStructureKHR>(as_count, VK_NULL_HANDLE)); }
+        image_infos.emplace_back(Moer::Array<VkDescriptorImageInfo>(image_count));
+        buffer_infos.emplace_back(Moer::Array<VkDescriptorBufferInfo>(buffer_count));
+        as_infos.emplace_back(Moer::Array<VkAccelerationStructureKHR>(as_count, VK_NULL_HANDLE));
         ++hash_index;// index + 1 for next set
     }
 }
