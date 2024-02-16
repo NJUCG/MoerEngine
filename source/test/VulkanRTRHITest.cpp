@@ -22,130 +22,68 @@ RHIBufferRef CreateBufferFromData(const RHIBufferCreateInfo& info, uint32_t size
     g_rhi->RHIUnmapBuffer(buffer);
     return buffer;
 }
-BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(UniformStructure)
 
-END_SHADER_CONSTANT_STRUCT_DEFINITION(UniformStructure)
-class TestShader : public Shader {
-    DEFINE_SHADER_TYPE(TestShader, Global, RENDER_API)
-public:
-    BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
+void Test(int argc, char** argv) {
+    g_rhi                           = new VulkanRHIImpl();
+    std::filesystem::path workspace = argv[0];
+    Moer::ConfigManager::GetInstance().Init(workspace.parent_path());
+    Moer::SurfaceInitInfo info{};
+    Moer::WindowContext::Init(info);
 
-    DEFINE_SHADER_PARAM_UAV(RWTexture2D, write_target)
-    DEFINE_SHADER_PARAM_SRV(StructuredBuffer, ubo)
-    DEFINE_SHADER_PARAM_CBV(StructuredBuffer, cbv)
-
-    END_ROOT_PARAMETER_DEFINITION(Parameters)
-};
-
-// IMPLEMENT_SHADER_TYPE(TestShader, "TestVert.vert", "main", EShaderType::ST_VERTEX)
-
-void Test() {
-    
-    // glfwInit();
-
-    // glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    // glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
-
-    // GLFWwindow* window = glfwCreateWindow(800, 800, "VulkanRHITest", nullptr, nullptr);
-    g_rhi = new VulkanRHIImpl();
     g_rhi->Initialize(RHIInitInfo());
     g_rhi->PostInit();
 
-    ShaderCompiler::ShaderCompileTest();
+    uint32_t            index_data[]  = {0, 1, 2};
+    Moer::Vector3f      vertex_data[] = {{0, -0.5, 1},
+                                         {-0.5, 0.5, 1},
+                                         {0.5, 0.5, 1}};
+    RHIBufferCreateInfo index_buffer_info{};
+    index_buffer_info.size    = sizeof(index_data);
+    index_buffer_info.stride  = sizeof(uint32_t);
+    index_buffer_info.usage   = EBufferUsageFlags::INDEX_BUFFER | EBufferUsageFlags::CPU_VISIBLE;
+    RHIBufferRef index_buffer = CreateBufferFromData(index_buffer_info, sizeof(index_data), index_data);
 
-    RHIGraphicsPipelineStateInitializer init;
-    init.multi_view_count            = 1;
-    init.color_attachment_count      = 1;
-    init.color_attachment_formats[0] = EPixelFormat::PF_R8G8B8A8_SRGB;
-    init.color_attachment_flags[0]   = ETextureUsageFlags::COLOR_ATTACHMENT;
-    init.primitive_topology          = EPrimitiveTopology::TRIANGLE_LIST;
+    RHIBufferCreateInfo vertex_buffer_info{};
+    vertex_buffer_info.size    = sizeof(vertex_data);
+    vertex_buffer_info.stride  = sizeof(Moer::Vector3f);
+    vertex_buffer_info.usage   = EBufferUsageFlags::VERTEX_BUFFER | EBufferUsageFlags::CPU_VISIBLE;
+    RHIBufferRef vertex_buffer = CreateBufferFromData(vertex_buffer_info, sizeof(vertex_data), vertex_data);
+    
+    RHIRayTracingTrianglesGeometry simple_triangle;
+    simple_triangle.index_buffer   = index_buffer;
+    simple_triangle.index_element_type = IET_UINT32;
+    simple_triangle.max_vertex_count   = 3;
+    simple_triangle.transform_buffer   = nullptr;
+    simple_triangle.vertex_buffer      = vertex_buffer;
+    simple_triangle.vertex_buffer_stride = sizeof(Moer::Vector3f);
+    simple_triangle.vertex_element_type  = PF_R32G32B32_SFLOAT;
 
-    RHIShaderBoundStateInput& shader_state = init.shader_stage;
+    Moer::Array<RHIRayTracingBLASGeometry> blas_geometries;
+    RHIRayTracingBLASGeometry              blas_geo{};
+    blas_geo.flags = ERayTracingGeometryFlags::GEOMETRY_OPAQUE;
+    blas_geo.geometry.triangles = simple_triangle;
+    blas_geo.geo_type = RTGT_TRIANGLES;
+    blas_geometries.push_back(blas_geo);
 
-    VertexInputStateInitializerList vertex_init_list;
-    for (int i = 0; i < 1; ++i) {
-        vertex_init_list[i].format          = EPixelFormat::PF_R32G32B32_SFLOAT;
-        vertex_init_list[i].offset          = 0;
-        vertex_init_list[i].stride          = sizeof(Moer::Vector3f);
-        vertex_init_list[i].input_rate      = EVertexInputRate::VIR_VERTEX;
-        vertex_init_list[i].attribute_index = 0;
-        vertex_init_list[i].binding_index   = 0;
-    }
+    Moer::Array<RHIRayTracingBLASGeometryRangeInfo> blas_range_infos;
+    RHIRayTracingBLASGeometryRangeInfo blas_range_info{};
+    blas_range_info.first_vertex = 0;
+    blas_range_info.primitive_count = 1;
+    blas_range_info.primtive_offset = 0;
+    blas_range_info.transform_offset = 0;
+    blas_range_infos.push_back(blas_range_info);
 
-    const uint16_t      indices[] = {1, 2, 3};
-    RHIBufferCreateInfo buffer_info;
-    buffer_info.SetUsage(EBufferUsageFlags::INDEX_BUFFER)
-        .SetStride(sizeof(uint16_t))
-        .SetSize(sizeof(indices));
+    RHIRayTracingBLASInitializer init_blas{};
+    init_blas.build_flags = ERayTracingAccelerationStructureBuildFlags::PREFER_FAST_BUILD;
+    init_blas.geometries  = blas_geometries;
+    init_blas.range_infos = blas_range_infos;
 
-    RHIBufferRef index_buffer = CreateBufferFromData(buffer_info, sizeof(indices), (void*)indices);
+    Moer::Array<RHIRayTracingBLASRef> blas = g_rhi->RHIBuildRayTracingBLAS({init_blas});
 
-    RHIBufferCreateInfo v_info;
-    v_info.SetSize(16).SetStride(4).SetUsage(EBufferUsageFlags::VERTEX_BUFFER);
 
-    const float  vertex_data[] = {-1, -1, 0, 1, -1, 0, -1, 1, 0, 1, 1, 1};
-    RHIBufferRef vertex_buffer = CreateBufferFromData(v_info, sizeof(vertex_data), (void*)vertex_data);
-
-    Moer::Array<RHIBufferRef> vertex_buffers = {vertex_buffer};
-
-    shader_state.p_vertex_input_state = g_rhi->RHICreateVertexInputState(vertex_init_list);
-
-    const Moer::Vector2i attachment_size(4, 4);
-    RHITextureCreateInfo tex_info;
-    tex_info.SetDimension(ETextureDimension::TEX_2D)
-        .SetFormat(PF_R8G8B8A8_SRGB)
-        .SetInitialLayout(ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT)
-        .SetExtent(attachment_size)
-        .SetClearAttachment(RHIClearAttachment())
-        .SetDepth(1)
-        .SetArraySize(1)
-        .SetNumMips(1)
-        .SetNumSamples(1)
-        .SetUsageFlags(ETextureUsageFlags::COLOR_ATTACHMENT);
-
-    //out_put texture
-    RHITextureRef tex = g_rhi->RHICreateTexture(tex_info);
-
-    RHIGraphicsPipelineStateRef pso = g_rhi->RHICreateGraphicsPipelineState(init);
-
-    RHIGraphicsCommandList* command_list = g_rhi->RHICreateGraphicsCommandList(g_rhi->RHIGetCurrentCommandAllocator(), pso);
-
-    RHIRenderPassInfo pass_info;
-    pass_info.GeneratePipelineAttachmentInfo();
-    command_list->BeginRenderPass(pass_info, "triangle pass");
-    command_list->BindVertexBuffers(0, 1, vertex_buffers.data(), 0);
-
-    RHIUnorderedAccessViewRef test_view =
-        g_rhi->RHICreateUnorderedAccessView(tex,
-                                            RHIViewInfo::CreateTextureUAVInfo()
-                                                .SetFormat((PF_R8G8B8A8_SRGB)));
-    TestShader*            test_shader_vs = (TestShader*)ShaderResourceManager::GetInstance().GetShader<TestShader>().Get();
-    TestShader::Parameters params;
-
-    auto test_buff = g_rhi->RHICreateBuffer(buffer_info);
-
-    params.write_target = test_view;
-    RHIBatchedShaderParameters batched_params;
-  
-    // command_list->SetBatchedShaderParameter(batched_params);
-
-    command_list->DrawIndexedInstanced(1, 1, 0, 0, 0);
-
-    command_list->EndRenderPass();
-
-    RHICommandQueue*                                graphics_queue = g_rhi->RHICreateCommandQueue(ECommandQueueType::GRAPHICS);
-    const Moer::StaticArray<RHICommandListBase*, 1> command_array{command_list};
-    // graphics_queue->SubmitCommands(1, command_array.data());
-
-    //global buffer
-    // start offset
-    //VkSetDescriptorWrite()
-
-    //rootSignature <=> pipelineLayout -> descriptorLayout descriptorLayoutBinding
 }
 
-int main() {
-    Test();
-
+int main(int argc, char** argv) {
+    Test(argc, argv);
     return 0;
 }

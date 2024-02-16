@@ -2465,7 +2465,6 @@ struct RHIRayTracingTrianglesGeometry {
 
     RHIBufferRef             index_buffer;
     EIndexElementType        index_element_type = IET_UINT16;
-    ERayTracingGeometryFlags geometry_flags     = ERayTracingGeometryFlags::NONE;
 
     RHIBufferRef transform_buffer;
 };

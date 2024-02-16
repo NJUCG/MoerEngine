@@ -30,7 +30,7 @@ template<typename T>
 concept TPipelineStateRef = requires(T) {
                                 std::convertible_to<T, RHIGraphicsPipelineStateRef> || std::convertible_to<T, RHIComputePipelineStateRef>;
                             };
-class RHI {
+class RENDER_API RHI {
 public:
     RHI(ERHIType _type) : rhi_type(_type) {}
 

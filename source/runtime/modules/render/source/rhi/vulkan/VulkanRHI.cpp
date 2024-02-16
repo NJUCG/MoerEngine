@@ -821,6 +821,7 @@ Moer::Array<RHIRayTracingBLASRef> VulkanRHIImpl::RHIBuildRayTracingBLAS(const Mo
             primtive_count.emplace_back(vk_range_info.primitiveCount);
         }
         all_vk_range_infos.emplace_back(vk_range_infos);
+        all_primitive_counts.emplace_back(primtive_count);
     }
 
     VkDeviceAddress max_scratch_size = 0;

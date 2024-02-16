@@ -17,7 +17,7 @@ class VulkanCommandAllocator;
 
 class VulkanRHIImpl final : public IVulkanRHI {
 public:
-    VulkanRHIImpl();
+    RENDER_API VulkanRHIImpl();
 
     void Initialize(const RHIInitInfo& _init) final override;
 
