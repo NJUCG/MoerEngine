@@ -106,7 +106,12 @@ public:
     }
 
     /*batching creation and building of blases*/
-    virtual Moer::Array<RHIRayTracingBLASRef> RHIBuildRayTracingBLAS(const Moer::Array<RHIRayTracingBLASInitializer>& _inits) = 0;
+    virtual RHIRayTracingBLASRef RHIBuildRayTracingBLAS(const RHIRayTracingBLASInitializer& _init) {
+        RHIRayTracingBLASRef result;
+        RHIBatchedBuildRayTracingBLAS(1, &_init, &result);
+        return result;
+    }
+    virtual void RHIBatchedBuildRayTracingBLAS(int batch_size, const RHIRayTracingBLASInitializer* _inits, RHIRayTracingBLASRef* results) = 0;
 
     virtual RHIRayTracingTLASRef RHIBuildRayTracingTLAS(const RHIRayTracingTLASInitializer& _init) = 0;
 
@@ -124,9 +129,9 @@ public:
     // virtual RHIGraphicsCommandList* CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state = nullptr)                                     = 0;
     virtual RHIGraphicsCommandList* RHICreateGraphicsCommandList(RHICommandAllocator* _allocator, RHIGraphicsPipelineState* _initial_state = nullptr) = 0;
     // virtual RHIComputeCommandList*  CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr)   = 0;
-    virtual RHIComputeCommandList* RHICreateComputeCommandList(RHICommandAllocator* _allocator, RHIComputePipelineState* _initial_state = nullptr) = 0; 
+    virtual RHIComputeCommandList*    RHICreateComputeCommandList(RHICommandAllocator* _allocator, RHIComputePipelineState* _initial_state = nullptr)       = 0;
     virtual RHIRayTracingCommandList* RHICreateRayTracingCommandList(RHICommandAllocator* _allocator, RHIRayTracingPipelineState* _initial_state = nullptr) = 0;
-    virtual RHICopyCommandList* RHICreateCopyCommandList(RHICommandAllocator* _allocator) = 0;
+    virtual RHICopyCommandList*       RHICreateCopyCommandList(RHICommandAllocator* _allocator)                                                             = 0;
     template<TPipelineStateRef TPipelineRef>
     void RHISetBatchedShaderParameters(TPipelineRef _pso, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant = false) {
         RHISetBatchedShaderParametersInner(_pso, _batched_params, b_update_constant);

@@ -2448,6 +2448,9 @@ enum class ERayTracingAccelerationStructureType {
 #pragma region ray -tracing
 
 struct RHITransformMatrix {
+    RHITransformMatrix(const Moer::Matrix4x4f& mat = Moer::Matrix4x4f::Identity()) {
+        memcpy(this, &mat, sizeof(RHITransformMatrix));
+    }
     float matrix[3][4];
 };
 
@@ -2463,8 +2466,8 @@ struct RHIRayTracingTrianglesGeometry {
     uint32_t     max_vertex_count;
     EPixelFormat vertex_element_type = PF_R32G32B32_SFLOAT;
 
-    RHIBufferRef             index_buffer;
-    EIndexElementType        index_element_type = IET_UINT16;
+    RHIBufferRef      index_buffer;
+    EIndexElementType index_element_type = IET_UINT16;
 
     RHIBufferRef transform_buffer;
 };

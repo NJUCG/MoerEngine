@@ -7,12 +7,8 @@
 #include "VulkanPlatform.h"
 #include "vulkan/vulkan_core.h"
 
-void VulkanPhysicalDeviceFeatures::Query(VkPhysicalDevice _gpu, uint32_t _api_version) {
-    VkPhysicalDeviceFeatures2 gpu_features_2;
-    gpu_features_2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-    gpu_features_2.pNext = &core_1_1;
-    core_1_1.sType       = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
-
+void VulkanPhysicalDeviceFeatures::Init(uint32_t _api_version) {
+    core_1_1.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
     if (_api_version >= VK_API_VERSION_1_2) {
         core_1_1.pNext = &core_1_2;
         core_1_2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
@@ -22,7 +18,14 @@ void VulkanPhysicalDeviceFeatures::Query(VkPhysicalDevice _gpu, uint32_t _api_ve
         core_1_2.pNext = &core_1_3;
         core_1_3.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
     }
+    core_1_3.pNext = nullptr;
+}
 
+void VulkanPhysicalDeviceFeatures::Query(VkPhysicalDevice _gpu, uint32_t _api_version) {
+    VkPhysicalDeviceFeatures2 gpu_features_2;
+    gpu_features_2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    gpu_features_2.pNext = &core_1_1;
+    Init(_api_version);
     vkGetPhysicalDeviceFeatures2(_gpu, &gpu_features_2);
 
     // Copy features into old struct for convenience
@@ -57,8 +60,7 @@ VulkanPhysicalDeviceFeatures VulkanDeviceFeature::GetMESupportedDeviceFeatures(u
 
     // 1.2 features
     if (_api_version >= VK_API_VERSION_1_2) {
-        enabled_features.core_1_1.pNext               = &enabled_features.core_1_2;
-        enabled_features.core_1_2.sType               = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+
         enabled_features.core_1_2.timelineSemaphore   = VK_TRUE;
         enabled_features.core_1_2.bufferDeviceAddress = VK_TRUE;
         // MARK: need fallback to non-bindless if not supported
@@ -80,8 +82,6 @@ VulkanPhysicalDeviceFeatures VulkanDeviceFeature::GetMESupportedDeviceFeatures(u
 
     // 1.3 features
     if (_api_version >= VK_API_VERSION_1_3) {
-        enabled_features.core_1_2.pNext = &enabled_features.core_1_3;
-        enabled_features.core_1_3.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
 
         enabled_features.core_1_3.synchronization2 = VK_TRUE;
         enabled_features.core_1_3.dynamicRendering = VK_TRUE;

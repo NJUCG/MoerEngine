@@ -748,17 +748,28 @@ RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(co
 #undef ALIGNUP
 }
 
-Moer::Array<RHIRayTracingBLASRef> VulkanRHIImpl::RHIBuildRayTracingBLAS(const Moer::Array<RHIRayTracingBLASInitializer>& _inits) {
+void VulkanRHIImpl::RHIBatchedBuildRayTracingBLAS(int batch_size, const RHIRayTracingBLASInitializer* _inits, RHIRayTracingBLASRef* results) {
 
+    if (batch_size == 0) {
+        LOG_WARNING("RHIBatchedBuildRayTracingBLAS: batch_size == 0");
+    }
+    if (_inits == nullptr) {
+        LOG_WARNING("RHIBatchedBuildRayTracingBLAS: _inits == nullptr");
+    }
+    if (results == nullptr) {
+        LOG_WARNING("RHIBatchedBuildRayTracingBLAS: results == nullptr");
+    }
+    if (!results || !batch_size || !_inits) {
+        return;
+    }
     static auto vkGetAccelerationStructureBuildSizesKHR = reinterpret_cast<PFN_vkGetAccelerationStructureBuildSizesKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkGetAccelerationStructureBuildSizesKHR"));
     static auto vkCreateAccelerationStructureKHR        = reinterpret_cast<PFN_vkCreateAccelerationStructureKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkCreateAccelerationStructureKHR"));
     static auto vkCmdBuildAccelerationStructuresKHR     = reinterpret_cast<PFN_vkCmdBuildAccelerationStructuresKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkCmdBuildAccelerationStructuresKHR"));
-    VK_CHECK_NULLPTR(vkGetAccelerationStructureBuildSizesKHR, "RHIBuildRayTracingBLAS: vkGetAccelerationStructureBuildSizesKHR is nullptr", return {});
-    VK_CHECK_NULLPTR(vkCreateAccelerationStructureKHR, "RHIBuildRayTracingBLAS: vkCreateAccelerationStructureKHR is nullptr", return {});
-    VK_CHECK_NULLPTR(vkCmdBuildAccelerationStructuresKHR, "RHIBuildRayTracingBLAS: vkCmdBuildAccelerationStructuresKHR is nullptr", return {});
+    VK_CHECK_NULLPTR(vkGetAccelerationStructureBuildSizesKHR, "RHIBuildRayTracingBLAS: vkGetAccelerationStructureBuildSizesKHR is nullptr", return);
+    VK_CHECK_NULLPTR(vkCreateAccelerationStructureKHR, "RHIBuildRayTracingBLAS: vkCreateAccelerationStructureKHR is nullptr", return);
+    VK_CHECK_NULLPTR(vkCmdBuildAccelerationStructuresKHR, "RHIBuildRayTracingBLAS: vkCmdBuildAccelerationStructuresKHR is nullptr", return);
 
-    int                               blas_count = _inits.size();
-    Moer::Array<RHIRayTracingBLASRef> all_rhi_blas;
+    int blas_count = batch_size;
     //building caches
     Moer::Array<VkAccelerationStructureBuildGeometryInfoKHR>           all_vk_geo_infos;
     Moer::Array<Moer::Array<VkAccelerationStructureGeometryKHR>>       all_vk_geos;
@@ -766,7 +777,6 @@ Moer::Array<RHIRayTracingBLASRef> VulkanRHIImpl::RHIBuildRayTracingBLAS(const Mo
     Moer::Array<const VkAccelerationStructureBuildRangeInfoKHR*>       all_p_vk_range_infos;
     Moer::Array<Moer::Array<uint32_t>>                                 all_primitive_counts;
     Moer::Array<VkAccelerationStructureBuildSizesInfoKHR>              all_vk_size_infos;
-    all_rhi_blas.reserve(blas_count);
     all_vk_geo_infos.reserve(blas_count);
     all_vk_geos.reserve(blas_count);
     all_vk_range_infos.reserve(blas_count);
@@ -854,7 +864,8 @@ Moer::Array<RHIRayTracingBLASRef> VulkanRHIImpl::RHIBuildRayTracingBLAS(const Mo
         vk_as_ci.offset = 0;
         vk_as_ci.size   = vk_size_info.accelerationStructureSize;
         VK_CHECK_RESULT(vkCreateAccelerationStructureKHR(m_device->GetDevice(), &vk_as_ci, nullptr, &rhi_blas->m_blas));
-        all_rhi_blas.emplace_back(RHIRayTracingBLASRef(rhi_blas));
+
+        results[idx] = RHIRayTracingBLASRef(rhi_blas);
 
         vk_geometry_info.dstAccelerationStructure = rhi_blas->m_blas;
         all_vk_geo_infos.emplace_back(vk_geometry_info);
@@ -891,7 +902,7 @@ Moer::Array<RHIRayTracingBLASRef> VulkanRHIImpl::RHIBuildRayTracingBLAS(const Mo
         }
     }
     //TODO:compact blases
-    return all_rhi_blas;
+    return;
 }
 
 RHIRayTracingTLASRef VulkanRHIImpl::RHIBuildRayTracingTLAS(const RHIRayTracingTLASInitializer& _init) {
@@ -918,8 +929,13 @@ RHIRayTracingTLASRef VulkanRHIImpl::RHIBuildRayTracingTLAS(const RHIRayTracingTL
         vk_instance.accelerationStructureReference = vkGetAccelerationStructureDeviceAddressKHR(m_device->GetDevice(), &vk_asda_info);
         vk_instances.emplace_back(vk_instance);
     }
+    RHIBufferCreateInfo instance_buffer_info{};
+    instance_buffer_info.size                                       = sizeof(vk_instances);
+    instance_buffer_info.stride                                     = sizeof(VkAccelerationStructureInstanceKHR);
+    instance_buffer_info.usage                                      = EBufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT | EBufferUsageFlags::TRANSFER_DST;
+    RHIBufferRef                                    instance_buffer = CreateBufferFromData(instance_buffer_info, sizeof(vk_instances), vk_instances.data());
     VkAccelerationStructureGeometryInstancesDataKHR vk_insances_data{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR};
-    vk_insances_data.data.hostAddress = vk_instances.data();
+    vk_insances_data.data.deviceAddress = GetDeviceAddress(instance_buffer);
 
     VkAccelerationStructureGeometryKHR vk_geo{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
     vk_geo.geometryType       = VK_GEOMETRY_TYPE_INSTANCES_KHR;
@@ -933,14 +949,14 @@ RHIRayTracingTLASRef VulkanRHIImpl::RHIBuildRayTracingTLAS(const RHIRayTracingTL
     vk_geo_info.pGeometries   = &vk_geo;
 
     VkAccelerationStructureBuildSizesInfoKHR vk_sizes_info{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
-    vkGetAccelerationStructureBuildSizesKHR(m_device->GetDevice(), VK_ACCELERATION_STRUCTURE_BUILD_TYPE_HOST_OR_DEVICE_KHR, &vk_geo_info, &instance_count, &vk_sizes_info);
+    vkGetAccelerationStructureBuildSizesKHR(m_device->GetDevice(), VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &vk_geo_info, &instance_count, &vk_sizes_info);
 
     auto* rhi_tlas                                      = new VulkanRHIRayTracingTLAS(_init);
     rhi_tlas->size_info.build_scratch_size              = vk_sizes_info.buildScratchSize;
     rhi_tlas->size_info.result_size                     = vk_sizes_info.accelerationStructureSize;
     RHIBufferCreateInfo tlas_buffer_ci                  = RHIBufferCreateInfo::Create(vk_sizes_info.accelerationStructureSize, vk_sizes_info.accelerationStructureSize, EBufferUsageFlags::ACCELERATION_STRUCTURE);
     rhi_tlas->m_buffer                                  = RHICreateBuffer(tlas_buffer_ci);
-    VkBuffer                             vk_tlas_buffer = static_cast<VulkanRHIBuffer*>(rhi_tlas->m_buffer.Get())->m_alloc.buffer;
+    VkBuffer                             vk_tlas_buffer = static_cast<VulkanRHIBuffer*>(rhi_tlas->m_buffer.Get())->GetHandle();
     VkAccelerationStructureCreateInfoKHR vk_as_ci{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
     vk_as_ci.type   = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
     vk_as_ci.buffer = vk_tlas_buffer;
@@ -1287,10 +1303,11 @@ void VulkanRHIImpl::InitSurface(Moer::WindowHandle* _handle) {
 
 void VulkanRHIImpl::InitVulkan() {
     DeviceInitializer initializer;
-    initializer.instance           = m_instance;
-    initializer.surface            = m_surface;
-    initializer.api_version        = VK_API_VERSION_1_3;
-    initializer.enabled_features   = VulkanDeviceFeature::GetMESupportedDeviceFeatures(initializer.api_version);
+    initializer.instance         = m_instance;
+    initializer.surface          = m_surface;
+    initializer.api_version      = VK_API_VERSION_1_3;
+    initializer.enabled_features = VulkanDeviceFeature::GetMESupportedDeviceFeatures(initializer.api_version);
+    initializer.enabled_features.Init(initializer.api_version);
     initializer.enabled_extensions = VulkanDeviceExtension::GetMESupportedDeviceExtensions();
 
     m_device = new VulkanDevice();
@@ -1385,7 +1402,7 @@ bool VulkanRHIImpl::CheckValidationLayer(const std::string& layer_name) {
         }
     }
 
-    // return validation_layer_present;
+    //return validation_layer_present;
     return false;
     //MARK_TEST
 }
@@ -1400,6 +1417,29 @@ bool VulkanRHIImpl::CheckEnabledExtensions() {
         }
     }
     return true;
+}
+
+RHIBufferRef VulkanRHIImpl::CreateBufferFromData(const RHIBufferCreateInfo& info, uint32_t size, void* data) {
+    RHIBufferCreateInfo staging_buffer_info = info;
+    staging_buffer_info.usage               = EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE;
+    RHIBufferRef staging_buffer             = RHICreateBuffer(staging_buffer_info);
+    void*        mapped_ptr                 = RHIMapBuffer(staging_buffer, 0, size);
+    memcpy(mapped_ptr, data, size);
+    RHIUnmapBuffer(staging_buffer);
+
+    RHIBufferRef buffer = RHICreateBuffer(info);
+
+    const auto& copy_command_pool = m_device->GetCurrentCommandAllocator()->GetHandle(ECommandListType::COPY);
+    const auto& transfer_queue    = m_device->GetTransferQueue();
+    auto        cb                = BeginSingleTimeCommands(copy_command_pool);
+
+    VkBuffer     vk_buffer         = static_cast<VulkanRHIBuffer*>(buffer.Get())->GetHandle();
+    VkBuffer     vk_staging_buffer = static_cast<VulkanRHIBuffer*>(staging_buffer.Get())->GetHandle();
+    VkBufferCopy vk_region{};
+    vk_region.size = info.size;
+    vkCmdCopyBuffer(cb, vk_buffer, vk_staging_buffer, 1, &vk_region);
+    EndSingleTimeCommands(cb, copy_command_pool, transfer_queue);
+    return buffer;
 }
 
 VkCommandBuffer VulkanRHIImpl::BeginSingleTimeCommands(VkCommandPool _pool) {

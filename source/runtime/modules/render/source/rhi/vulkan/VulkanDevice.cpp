@@ -192,6 +192,7 @@ void VulkanDevice::CreateDevice(const DeviceInitializer& _initializer) {
     VkPhysicalDeviceFeatures2 enabled_features;
     if (_initializer.api_version > VK_API_VERSION_1_0) {
         VulkanPhysicalDeviceFeatures features(_initializer.enabled_features);
+        features.Init(_initializer.api_version);
         enabled_features.sType    = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
         enabled_features.features = features.core_1_0;
         enabled_features.pNext    = &features.core_1_1;

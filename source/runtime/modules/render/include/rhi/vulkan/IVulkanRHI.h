@@ -62,8 +62,7 @@ public:
         return RHIRayTracingPipelineStateRef{};
     }
 
-    Moer::Array<RHIRayTracingBLASRef> RHIBuildRayTracingBLAS(const Moer::Array<RHIRayTracingBLASInitializer>& _inits) override {
-        return {};
+    void RHIBatchedBuildRayTracingBLAS(int batch_size, const RHIRayTracingBLASInitializer* _inits, RHIRayTracingBLASRef* results) override {
     }
     RHIRayTracingTLASRef RHIBuildRayTracingTLAS(const RHIRayTracingTLASInitializer& _init) override {
         return RHIRayTracingTLASRef{};

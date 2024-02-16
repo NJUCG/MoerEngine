@@ -393,8 +393,11 @@ enum class EBufferUsageFlags : uint32_t {
 
     TRANSFER_DST = 1 << 22,
 
-    /** Buffer that is used to a store shader binding table which is a series of shader group handles*/
+    /** Buffer that used to a store shader binding table which is a series of shader group handles*/
     SHADER_BINDING_TABLE = 1 << 23,
+
+    /** Buffer used as acceleration structure build input*/
+    ACCELERATION_STRUCTURE_BUILD_INPUT = 1 << 24,
 
     // Helper bit-masks
     DYNAMIC = (LIFE_CYCLE_DYNAMIC | LIFE_CYCLE_ONE_FRAME),
@@ -918,7 +921,6 @@ enum class ESamplerBindingType : uint8_t {
     TEXTURE,
     COMBINED,
 };
-
 
 #pragma region utils
 struct Rect2D {

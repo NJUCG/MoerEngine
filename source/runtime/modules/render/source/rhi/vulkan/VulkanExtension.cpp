@@ -104,7 +104,7 @@ public:
     bool IsOptional() const override { return true; }
 
     void PreGpuFeatures(VkPhysicalDeviceFeatures2& _gpu_features2) override final {
-        m_acceleration_structure_props = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR};
+        m_acceleration_structure_features = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR};
         AddToPNext(_gpu_features2, m_acceleration_structure_features);
     }
 
@@ -210,6 +210,8 @@ TVulkanDeviceExtensionArray VulkanDeviceExtension::GetMESupportedDeviceExtension
     // raytracing extensions
     ADD_CUSTOM_EXTENSION(VulkanKHRAccelerationStructureExtension);
     ADD_CUSTOM_EXTENSION(VulkanKHRRayTracingPipelineExtension);
+    ADD_EXTENSION(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+
     // vendor extensions
 
     // debug extensions
@@ -222,4 +224,3 @@ TVulkanDeviceExtensionArray VulkanDeviceExtension::GetMESupportedDeviceExtension
 
     return extensions;
 }
-

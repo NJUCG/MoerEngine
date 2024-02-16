@@ -12,6 +12,9 @@ public:
     VulkanPhysicalDeviceFeatures() : core_1_0(), core_1_1(), core_1_2(), core_1_3() {}
     VulkanPhysicalDeviceFeatures(const VulkanPhysicalDeviceFeatures& _other) = default;
 
+    //init the pnext chain for core features
+    void Init(uint32_t _api_version);
+
     void Query(VkPhysicalDevice _gpu, uint32_t _api_version);
 
     bool Contains(const VulkanPhysicalDeviceFeatures& _other) const;
