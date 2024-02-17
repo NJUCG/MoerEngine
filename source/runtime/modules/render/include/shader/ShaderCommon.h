@@ -267,7 +267,7 @@ public:
     using ShouldCompileMutationProc   = std::function<bool(const ShaderMutationParameters&)>;
     using SetCompileEnvironmentProc   = std::function<void(const ShaderMutationParameters&, ShaderCompilerEnvironment&)>;
 
-    ShaderMetaType(
+    RENDER_API ShaderMetaType(
         std::string_view                _type_name,
         std::string_view                _file_name,
         std::string_view                _entry_point,
@@ -278,7 +278,7 @@ public:
         ConstructShaderInstanceProc     _shader_type_constructor,
         ShouldCompileMutationProc       _should_compile_mutation,
         SetCompileEnvironmentProc       _set_compile_environment);
-    ~ShaderMetaType();
+    RENDER_API ~ShaderMetaType();
     void OnRegistration();
 
     struct Parameters {
@@ -346,7 +346,7 @@ private:
 class ShaderTypeRegistration {
 
 public:
-    ShaderTypeRegistration(std::function<ShaderMetaType&()>);
+    RENDER_API ShaderTypeRegistration(std::function<ShaderMetaType&()>);
     static Moer::Array<std::function<ShaderMetaType&()>>& GetRegistrations();
     static void                                           CollectRegistration(std::function<ShaderMetaType&()> _registration_func);
 

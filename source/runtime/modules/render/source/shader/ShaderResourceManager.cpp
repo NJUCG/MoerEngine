@@ -208,7 +208,7 @@ void ShaderResourceManager::PrepareGlobalShaderResources() {
 
     GlobalShaderCache::GetInstance().Load();
 
-    static auto post_process = [this](ShaderCompilerOutput* output) {
+    static auto post_process = [this](ShaderCompilerOutput*& output) {
         if (!output->b_succeeded) {
             ShaderMetaType* meta_type = ShaderMetaType::GetShaderMetaType(output->shader_name_hash);
             std::string     error_msg = std::format("Shader {} compilation failed.", meta_type->GetName());
@@ -218,7 +218,8 @@ void ShaderResourceManager::PrepareGlobalShaderResources() {
             });
 
             LOG_ERROR(error_msg);
-            delete output;
+            MoerDelete(output);
+            output = nullptr;
             return;
         }
         auto& resource_map = GetShaderResourceMap();
@@ -234,7 +235,7 @@ void ShaderResourceManager::PrepareGlobalShaderResources() {
         //add shader instance
         GetShaderTypeMap().AddShader(output->shader_name_hash, shader);
     };
-    LOG_INFO("Load Shader Cache Time(ms): {}",timer.ElapsedMilliseconds());
+    LOG_INFO("Load Shader Cache Time(ms): {}", timer.ElapsedMilliseconds());
     //todo: parallel compiling
     std::for_each(works.begin(), works.end(), [](const ShaderCompileJobInput& input) {
         ShaderResourceManager& self = GetInstance();
@@ -246,17 +247,19 @@ void ShaderResourceManager::PrepareGlobalShaderResources() {
         job.ExportOutput(outputs);
 
         for (auto* output : outputs | std::views::filter([](auto* output) {
-                                bool filtered = output->cached == false;
-                                if (!filtered) {
-                                    LOG_INFO("Shader {} is cached.", output->shader_name_hash);
+                                if (!output) {
+                                    return true;
                                 }
-                                return filtered;
+                                if (output->cached) {
+                                    LOG_INFO("Shader {} is cached.", output->shader_name_hash);
+                                    return true;
+                                }
+                                return false;
                             })) {
             g_shader_compile_output_queue.Push(output);
         }
     });
-    LOG_INFO("Process Global Shader Data Time(ms): {}",timer.ElapsedMilliseconds());
-
+    LOG_INFO("Process Global Shader Data Time(ms): {}", timer.ElapsedMilliseconds());
 
     //dump cache bundle
     FunctionGraphTask::ConstructAndDispatchWhenReady([this]() {

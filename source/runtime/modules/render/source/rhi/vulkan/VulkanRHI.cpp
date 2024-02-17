@@ -1402,8 +1402,8 @@ bool VulkanRHIImpl::CheckValidationLayer(const std::string& layer_name) {
         }
     }
 
-    //return validation_layer_present;
-    return false;
+    return validation_layer_present;
+    //return false;
     //MARK_TEST
 }
 

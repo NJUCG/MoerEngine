@@ -11,10 +11,25 @@
 #include "shader/Shader.h"
 #include "shader/ShaderCompiler.h"
 #include "shader/ShaderResourceManager.h"
+#include "shader/ShaderCommon.h"
 
 // global shader
 
 #include "rhi/RHICommand.h"
+
+class TestRayGenShader : public Shader {
+    DEFINE_SHADER_TYPE(TestRayGenShader,Global,)
+public:
+    BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
+
+
+    END_ROOT_PARAMETER_DEFINITION(Parameters)
+};
+IMPLEMENT_SHADER_TYPE(TestRayGenShader, "raytracingbasic/raygen.rgen", "main", EShaderType::ST_RAY_GEN);
+
+
+
+
 RHIBufferRef CreateBufferFromData(const RHIBufferCreateInfo& info, uint32_t size, void* data) {
     RHIBufferRef buffer     = g_rhi->RHICreateBuffer(info);
     void*        mapped_ptr = g_rhi->RHIMapBuffer(buffer, 0, size);
@@ -22,8 +37,7 @@ RHIBufferRef CreateBufferFromData(const RHIBufferCreateInfo& info, uint32_t size
     g_rhi->RHIUnmapBuffer(buffer);
     return buffer;
 }
-
-void Test(int argc, char** argv) {
+void Init(int argc, char** argv) {
     g_rhi                           = new VulkanRHIImpl();
     std::filesystem::path workspace = argv[0];
     Moer::ConfigManager::GetInstance().Init(workspace.parent_path());
@@ -31,9 +45,19 @@ void Test(int argc, char** argv) {
     info.title = "vulkan raytracing rt rhi test";
     Moer::WindowContext::Init(info);
 
+    ShaderCompiler::Init();
+
+    Moer::TaskSystem::Init();
+    Moer::LogSystem::Init();
+
+    EShaderPlatform platform = GetShaderPlatformByRHIType(g_rhi->GetType());
+    ShaderResourceManager::Init(platform);
+    ShaderResourceManager::GetInstance().PrepareGlobalShaderResources();
+
     g_rhi->Initialize(RHIInitInfo());
     g_rhi->PostInit();
-
+}
+void Test() {
     uint32_t            index_data[]  = {0, 1, 2};
     Moer::Vector3f      vertex_data[] = {{0, -0.5, 1},
                                          {-0.5, 0.5, 1},
@@ -98,6 +122,7 @@ void Test(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
-    Test(argc, argv);
+    Init(argc, argv);
+    Test();
     return 0;
 }
