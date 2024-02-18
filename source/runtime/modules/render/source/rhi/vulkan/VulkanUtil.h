@@ -29,9 +29,15 @@ namespace Util {
 
     SwapChainSupportDetails QuerySwapChainSupport(VkPhysicalDevice _gpu, VkSurfaceKHR _surface);
 
-    //Walks through the pNext chain and returns a pointer to wanted extension property structrue
-    //Returns nullptr if extension is not enabled or has no extension properties 
-    const void* QueryPhysicalDeviceExtensionProps(const VkPhysicalDeviceProperties2& props, VkStructureType prop_type);
+    template<typename PropType, VkStructureType sType>
+    PropType QueryPhysicalDeviceExtensionProps(VkPhysicalDevice _gpu) {
+        PropType request_prop{};
+        request_prop.sType = sType;
+        VkPhysicalDeviceProperties2 props{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+        props.pNext = &request_prop;
+        vkGetPhysicalDeviceProperties2(_gpu, &props);
+        return request_prop;
+    }
 
     // Selected a suitable supported depth format starting with 32 bit down to 16 bit
     // Returns false if none of the depth formats in the list is supported by the device

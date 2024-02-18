@@ -210,7 +210,10 @@ TVulkanDeviceExtensionArray VulkanDeviceExtension::GetMESupportedDeviceExtension
     // raytracing extensions
     ADD_CUSTOM_EXTENSION(VulkanKHRAccelerationStructureExtension);
     ADD_CUSTOM_EXTENSION(VulkanKHRRayTracingPipelineExtension);
+    ADD_CUSTOM_EXTENSION(VulkanKHRRayQueryExtension);
     ADD_EXTENSION(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+
+    
 
     // vendor extensions
 

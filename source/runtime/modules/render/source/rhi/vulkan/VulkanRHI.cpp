@@ -663,8 +663,7 @@ RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(co
 
     auto layouts = vk_pso->m_descriptor_sets_layout->GetLayouts();
     // create pipeline layout
-    VkPipelineLayoutCreateInfo pipeline_layout_create_info{};
-    pipeline_layout_create_info.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    VkPipelineLayoutCreateInfo pipeline_layout_create_info{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     pipeline_layout_create_info.pNext                  = nullptr;
     pipeline_layout_create_info.flags                  = 0;
     pipeline_layout_create_info.setLayoutCount         = layouts.size();
@@ -692,17 +691,18 @@ RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(co
     uint32_t callable_count = _init.ray_callable_table.size();
     uint32_t handlecount    = 1 + miss_count + hit_count + callable_count;
 
-    const auto* rt_props           = static_cast<const VkPhysicalDeviceRayTracingPipelinePropertiesKHR*>(VkUtil::QueryPhysicalDeviceExtensionProps(m_device->GetProperties(), VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR));
-    uint32_t    handlesize         = rt_props->shaderGroupHandleSize;
-    uint32_t    handlesize_aligned = ALIGNUP(handlesize, rt_props->shaderGroupHandleAlignment);
-    vk_pso->m_raygen_sbt.size      = ALIGNUP(handlesize_aligned, rt_props->shaderGroupBaseAlignment);
-    vk_pso->m_raygen_sbt.stride    = vk_pso->m_raygen_sbt.size;
-    vk_pso->m_miss_sbt.size        = ALIGNUP(handlesize_aligned * miss_count, rt_props->shaderGroupBaseAlignment);
-    vk_pso->m_miss_sbt.stride      = handlesize_aligned;
-    vk_pso->m_hit_sbt.size         = ALIGNUP(handlesize_aligned * hit_count, rt_props->shaderGroupBaseAlignment);
-    vk_pso->m_hit_sbt.stride       = handlesize_aligned;
-    vk_pso->m_callable_sbt.size    = ALIGNUP(handlesize_aligned * callable_count, rt_props->shaderGroupBaseAlignment);
-    vk_pso->m_callable_sbt.stride  = handlesize_aligned;
+    auto     rt_props             = VkUtil::QueryPhysicalDeviceExtensionProps<VkPhysicalDeviceRayTracingPipelinePropertiesKHR,
+                                                              VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR>(m_device->GetGpu());
+    uint32_t handlesize           = rt_props.shaderGroupHandleSize;
+    uint32_t handlesize_aligned   = ALIGNUP(handlesize, rt_props.shaderGroupHandleAlignment);
+    vk_pso->m_raygen_sbt.size     = ALIGNUP(handlesize_aligned, rt_props.shaderGroupBaseAlignment);
+    vk_pso->m_raygen_sbt.stride   = vk_pso->m_raygen_sbt.size;
+    vk_pso->m_miss_sbt.size       = ALIGNUP(handlesize_aligned * miss_count, rt_props.shaderGroupBaseAlignment);
+    vk_pso->m_miss_sbt.stride     = handlesize_aligned;
+    vk_pso->m_hit_sbt.size        = ALIGNUP(handlesize_aligned * hit_count, rt_props.shaderGroupBaseAlignment);
+    vk_pso->m_hit_sbt.stride      = handlesize_aligned;
+    vk_pso->m_callable_sbt.size   = ALIGNUP(handlesize_aligned * callable_count, rt_props.shaderGroupBaseAlignment);
+    vk_pso->m_callable_sbt.stride = handlesize_aligned;
 
     uint32_t             datasize = handlecount * handlesize;
     Moer::Array<uint8_t> data(datasize);
@@ -710,7 +710,7 @@ RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(co
 
     RHIBufferCreateInfo sbt_buffer_ci{};
     sbt_buffer_ci.size   = vk_pso->m_raygen_sbt.size + vk_pso->m_miss_sbt.size + vk_pso->m_hit_sbt.size + vk_pso->m_callable_sbt.size;
-    sbt_buffer_ci.usage  = EBufferUsageFlags::SHADER_BINDING_TABLE;
+    sbt_buffer_ci.usage  = EBufferUsageFlags::SHADER_BINDING_TABLE | EBufferUsageFlags::CPU_VISIBLE;
     sbt_buffer_ci.stride = sbt_buffer_ci.size;
     vk_pso->m_sbt_buffer = RHICreateBuffer(sbt_buffer_ci);
 
@@ -1195,7 +1195,7 @@ void VulkanRHIImpl::RHISetBatchedShaderParametersInner(RHIResource* _pso, const 
     auto&       writers                  = resource_cache->GetWriters();
 
     const auto& resources = _batched_params.GetResourceParameters();
-    for (uint32_t i = 0; i < resources.size(); ++i) {
+    for (uint32_t i = 0; i < resources.size();) {
         const auto& params       = resources[i];
         const auto  type         = params.resource->GetResourceType();
         const auto& binding_info = descriptor_binding_infos.at(params.space).at(params.slot);

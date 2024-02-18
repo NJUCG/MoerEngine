@@ -772,7 +772,7 @@ void VulkanRHIRayTracingCommandList::SetPipelineState(RHIRayTracingPipelineState
     auto* vk_pso = static_cast<VulkanRHIRayTracingPipelineState*>(_raytracing_pso);
     VK_CHECK_NULLPTR(vk_pso, "SetPipelineState: compute pipeline state is nullptr!", return);
 
-    vkCmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, vk_pso->GetHandle());
+    vkCmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, vk_pso->GetHandle());
     m_current_pipeline_state = vk_pso;
 }
 void VulkanRHIRayTracingCommandList::BeginRecording() {

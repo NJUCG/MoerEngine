@@ -5,11 +5,10 @@ struct Attributes
   float2 bary;
 };
 
-struct Payload
+struct [raypayload] Payload
 {
 [[vk::location(0)]] float3 hitValue;
 };
-
 [shader("closesthit")]
 void main(inout Payload p, in Attributes attribs)
 {

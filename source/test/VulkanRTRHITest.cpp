@@ -18,17 +18,32 @@
 #include "rhi/RHICommand.h"
 
 class TestRayGenShader : public Shader {
-    DEFINE_SHADER_TYPE(TestRayGenShader,Global,)
+    DEFINE_SHADER_TYPE(TestRayGenShader, Global, )
 public:
     BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
-
-
+    DEFINE_SHADER_PARAM_SRV(AccelerationStructure, rs)
+    DEFINE_SHADER_PARAM_UAV(RWTexture2D, image)
     END_ROOT_PARAMETER_DEFINITION(Parameters)
 };
 IMPLEMENT_SHADER_TYPE(TestRayGenShader, "raytracingbasic/raygen.rgen", "main", EShaderType::ST_RAY_GEN);
 
+class TestRayMissShader : public Shader {
+    DEFINE_SHADER_TYPE(TestRayMissShader, Global, )
+public:
+    BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
 
+    END_ROOT_PARAMETER_DEFINITION(Parameters)
+};
+IMPLEMENT_SHADER_TYPE(TestRayMissShader, "raytracingbasic/miss.rmiss", "main", EShaderType::ST_RAY_MISS);
 
+class TestRayClosestHitShader : public Shader {
+    DEFINE_SHADER_TYPE(TestRayClosestHitShader, Global, )
+public:
+    BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
+
+    END_ROOT_PARAMETER_DEFINITION(Parameters)
+};
+IMPLEMENT_SHADER_TYPE(TestRayClosestHitShader, "raytracingbasic/closesthit.rchit", "main", EShaderType::ST_RAY_CLOSESTHIT);
 
 RHIBufferRef CreateBufferFromData(const RHIBufferCreateInfo& info, uint32_t size, void* data) {
     RHIBufferRef buffer     = g_rhi->RHICreateBuffer(info);
@@ -119,6 +134,58 @@ void Test() {
     init_tlas.build_flags     = ERayTracingAccelerationStructureBuildFlags::PREFER_FAST_BUILD;
     init_tlas.instances       = tlas_instances;
     RHIRayTracingTLASRef tlas = g_rhi->RHIBuildRayTracingTLAS(init_tlas);
+
+    RHIRayTracingPipelineStateInitializer init_rt_pipeline{};
+
+    RHIRayGenShader*        test_raygen_shader  = static_cast<RHIRayGenShader*>(ShaderResourceManager::GetInstance().GetShader<TestRayGenShader>().Get());
+    RHIRayMissShader*       test_raymiss_shader = static_cast<RHIRayMissShader*>(ShaderResourceManager::GetInstance().GetShader<TestRayMissShader>().Get());
+    RHIRayClosestHitShader* test_raychit_shader = static_cast<RHIRayClosestHitShader*>(ShaderResourceManager::GetInstance().GetShader<TestRayClosestHitShader>().Get());
+
+    init_rt_pipeline.SetRayGenShader(test_raygen_shader);
+    init_rt_pipeline.AddMissShader(test_raymiss_shader);
+    init_rt_pipeline.AddHitShaderGroup(test_raychit_shader);
+
+    RHIRayTracingPipelineStateRef rt_pipeline = g_rhi->RHICreateRayTracingPipelineState(init_rt_pipeline);
+
+    const Moer::Vector2i attachment_size(1920, 1080);
+    RHITextureCreateInfo tex_info;
+    tex_info.SetDimension(ETextureDimension::TEX_2D)
+        .SetFormat(PF_R8G8B8A8_SRGB)
+        .SetInitialLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED)
+        .SetExtent(attachment_size)
+        .SetClearAttachment(RHIClearAttachment())
+        .SetDepth(1)
+        .SetArraySize(1)
+        .SetNumMips(1)
+        .SetNumSamples(1)
+        .SetUsageFlags(ETextureUsageFlags::SHADER_RESOURCE);
+
+    //out_put texture
+    RHITextureRef             tex = g_rhi->RHICreateTexture(tex_info);
+    RHIUnorderedAccessViewRef tex_view =
+        g_rhi->RHICreateUnorderedAccessView(tex,
+                                            RHIViewInfo::CreateTextureUAVInfo()
+                                                .SetFormat((PF_R8G8B8A8_SRGB))
+                                                .SetArrayRange(0, 1)
+                                                .SetDimension(tex)
+                                                .SetMipLevel(0));
+
+    RHIBatchedShaderParameters batched_parameter{};
+    //hack
+    //overcome vector modifying cross dll problem
+    const_cast<Moer::Array<RHIShaderResourceParameter>&>(batched_parameter.GetResourceParameters()).emplace_back(tlas, 0, 0);
+    const_cast<Moer::Array<RHIShaderResourceParameter>&>(batched_parameter.GetResourceParameters()).emplace_back(tex_view, 1, 0);
+
+    g_rhi->RHISetBatchedShaderParameters(rt_pipeline, batched_parameter);
+
+    RHIRayTracingCommandList* command_list = g_rhi->RHICreateRayTracingCommandList(g_rhi->RHIGetCurrentCommandAllocator());
+    command_list->BeginRecording();
+    command_list->SetPipelineState(rt_pipeline);
+    command_list->TraceRay(1920, 1080, 1);
+    command_list->EndRecording();
+
+    RHICommandQueue* rt_queue = g_rhi->RHICreateCommandQueue(ECommandQueueType::RAYTRACING);
+    
 }
 
 int main(int argc, char** argv) {

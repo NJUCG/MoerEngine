@@ -92,22 +92,6 @@ namespace Util {
         return details;
     }
 
-    const void* QueryPhysicalDeviceExtensionProps(const VkPhysicalDeviceProperties2& props, VkStructureType prop_type) {
-        struct PropertyBase {
-            VkStructureType sType;
-            void*           pNext;
-        };
-        const void* result = props.pNext;
-        while (result) {
-            PropertyBase base = *(static_cast<const PropertyBase*>(result));
-            if (base.sType == prop_type) {
-                return result;
-            }
-            result = base.pNext;
-        }
-        return result;
-    }
-
     VkBool32 GetSupportedDepthFormat(VkPhysicalDevice physical_device, VkFormat* depth_format) {
         // Since all depth formats may be optional, we need to find a suitable depth format to use
         // Start with the highest precision packed format

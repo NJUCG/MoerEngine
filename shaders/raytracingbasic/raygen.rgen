@@ -1,20 +1,19 @@
 // Copyright 2020 Google LLC
 
-RaytracingAccelerationStructure rs : register(t0);
-RWTexture2D<float4> image : register(u1);
+[[vk::binding(0,0)]] RaytracingAccelerationStructure rs;
+[[vk::binding(1,0)]] RWTexture2D<float4> image;
 
 struct CameraProperties
 {
 	float4x4 viewInverse;
 	float4x4 projInverse;
 };
-cbuffer cam : register(b2) { CameraProperties cam; };
+[[vk::binding(2,0)]] cbuffer cam { CameraProperties cam; };
 
-struct Payload
+struct [raypayload] Payload
 {
-[[vk::location(0)]] float3 hitValue;
+    float3 hitValue;
 };
-
 [shader("raygeneration")]
 void main()
 {

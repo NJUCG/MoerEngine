@@ -1,10 +1,9 @@
 // Copyright 2020 Google LLC
 
-struct Payload
+struct [raypayload] Payload
 {
 [[vk::location(0)]] float3 hitValue;
 };
-
 [shader("miss")]
 void main(inout Payload p)
 {

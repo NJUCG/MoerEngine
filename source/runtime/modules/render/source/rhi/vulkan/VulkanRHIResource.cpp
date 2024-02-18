@@ -837,7 +837,7 @@ VkDescriptorType VulkanEnumTranslator::METoVKDescriptorType(EShaderParameterType
     } else if (_type == EShaderParameterType::SRV && _binding_type == EShaderCodeResourceBindingType::TEXTURE_2D) {
         return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
     } else if (_type == EShaderParameterType::UAV && _binding_type == EShaderCodeResourceBindingType::RW_TEXTURE_2D) {
-        return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     } else if (_type == EShaderParameterType::CBV) {
         return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     } else if (_type == EShaderParameterType::SRV && _binding_type == EShaderCodeResourceBindingType::STRUCTURED_BUFFER) {
