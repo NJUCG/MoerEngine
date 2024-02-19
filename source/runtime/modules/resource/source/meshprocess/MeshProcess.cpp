@@ -3,7 +3,7 @@
 #include <meshoptimizer.h>
 
 namespace Moer {
-    void MeshProcessor::GenerateMeshlets(MeshProcessInput& input, MeshProcessOutput& output) {
+    void MeshProcessor::GenerateMeshlets(const MeshProcessInput& input, MeshProcessOutput& output) {
 
         const uint32_t origin_indices_count = input.index_count;
         const uint32_t origin_vertex_count  = input.vertex_count;
@@ -116,5 +116,11 @@ namespace Moer {
 
             meshlet_bounds[index].cone_cutoff = meshlet_bound.cone_cutoff_s8;
         });
+    }
+
+    MeshProcessOutputRef MeshProcessor::GenerateMeshlets(const MeshProcessInput& input) {
+        MeshProcessOutputRef output = new MeshProcessOutput();
+        GenerateMeshlets(input, *output);
+        return output;
     }
 }// namespace Moer

@@ -2,10 +2,22 @@
 #define MORE_MESH_PROCESSOR_H
 #include "ResourceAPI.h"
 #include "math/Base.h"
+#include "misc/CountableRef.h"
 #include "misc/STL.h"
 #include <stdint.h>
 
 namespace Moer {
+
+    class MeshResource : public Countable {
+    public:
+        virtual void Destroy() override {
+            delete this;
+        };
+    };
+    class MeshProcessOutput;
+    using MeshProcessOutputRef = CountableRef<MeshProcessOutput>;
+
+    // using MeshResourceRef = CountableRef<MeshResource>;
     struct MeshletDesc {
         uint32_t vertex_offset;
         uint32_t vertex_count;
@@ -33,21 +45,22 @@ namespace Moer {
         uint32_t  index_count;
     };
 
-    struct MeshProcessOutput {
+    class RESOURCE_API MeshProcessOutput : public MeshResource {
+
+    private:
+        friend class MeshProcessor;
         Array<MeshletDesc>  meshlets;
         Array<MeshletBound> meshlet_bounds;
         Array<float>        meshlet_vertex_data;
         Array<uint8_t>      primitive_indices;
     };
 
-    // struct MeshletInput {
-    //     Array<Vector3f> vertices;
-    //     Array<uint32_t> indices;
-    // };
-
     class RESOURCE_API MeshProcessor {
     public:
-        static void GenerateMeshlets(MeshProcessInput& input, MeshProcessOutput& output);
+        static MeshProcessOutputRef GenerateMeshlets(const MeshProcessInput& input);
+
+    private:
+        static void GenerateMeshlets(const MeshProcessInput& input, MeshProcessOutput& output);
     };
 };// namespace Moer
 #endif
