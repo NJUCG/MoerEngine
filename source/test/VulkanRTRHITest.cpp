@@ -73,13 +73,13 @@ void Init(int argc, char** argv) {
     g_rhi->PostInit();
 }
 void Test() {
-    uint32_t            index_data[]  = {0, 1, 2, 3, 4, 5};
-    Moer::Vector3f      vertex_data[] = {{0, 0, 10},
-                                         {0, 1, 10},
-                                         {1, 0, 10},
-                                         {1, 0, 10},
-                                         {1, 1, 10},
-                                         {1, 0, 10}};
+    uint32_t       index_data[]  = {0, 1, 2};
+    Moer::Vector3f vertex_data[] = {
+        {0, -0.5, 1},
+        {-0.5, 0.5, 1},
+        {0.5, 0.5, 1},
+
+    };
     RHIBufferCreateInfo index_buffer_info{};
     index_buffer_info.size    = sizeof(index_data);
     index_buffer_info.stride  = sizeof(uint32_t);
@@ -92,7 +92,7 @@ void Test() {
     vertex_buffer_info.usage   = EBufferUsageFlags::VERTEX_BUFFER | EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT;
     RHIBufferRef vertex_buffer = CreateBufferFromData(vertex_buffer_info, sizeof(vertex_data), vertex_data);
 
-    Moer::Vector3f      clear_value = {1, 1, 1};
+    Moer::Vector3f      clear_value = {0, 0, 0};
     RHIBufferCreateInfo uniform_buffer_info{};
     uniform_buffer_info.size    = sizeof(clear_value);
     uniform_buffer_info.stride  = sizeof(clear_value);
@@ -102,7 +102,7 @@ void Test() {
     RHIRayTracingTrianglesGeometry simple_triangle;
     simple_triangle.index_buffer         = index_buffer;
     simple_triangle.index_element_type   = IET_UINT32;
-    simple_triangle.max_vertex_count     = 3;
+    simple_triangle.max_vertex_count     = 6;
     simple_triangle.transform_buffer     = nullptr;
     simple_triangle.vertex_buffer        = vertex_buffer;
     simple_triangle.vertex_buffer_stride = sizeof(Moer::Vector3f);
@@ -118,7 +118,7 @@ void Test() {
     Moer::Array<RHIRayTracingBLASGeometryRangeInfo> blas_range_infos;
     RHIRayTracingBLASGeometryRangeInfo              blas_range_info{};
     blas_range_info.first_vertex     = 0;
-    blas_range_info.primitive_count  = 1;
+    blas_range_info.primitive_count  = 2;
     blas_range_info.primtive_offset  = 0;
     blas_range_info.transform_offset = 0;
     blas_range_infos.push_back(blas_range_info);
@@ -134,7 +134,7 @@ void Test() {
     RHIRayTracingInstance              tlas_instance{};
     tlas_instance.blas                = blas;
     tlas_instance.custom_index        = 0;
-    tlas_instance.flags               = ERayTracingInstanceFlags::FORCE_OPAQUE | ERayTracingInstanceFlags::TRIANGLE_CULL_DISABLE;
+    tlas_instance.flags               = ERayTracingInstanceFlags::TRIANGLE_CULL_DISABLE;
     tlas_instance.instance_mask       = 0xFF;
     tlas_instance.instance_sbt_offset = 0;
     tlas_instance.transform           = RHITransformMatrix();
@@ -224,6 +224,8 @@ void Test() {
     RHISubmitInfo transiton_submit_info{};
     copy_queue->SubmitCommands(1, copy_command_list, &transiton_submit_info);
     copy_queue->WaitForQueueComplete();
+
+    void* data = g_rhi->RHIMapBuffer(uniform_buffer, 0, sizeof(Moer::Vector3f));
 
     while (1) {
         command_list->Reset();

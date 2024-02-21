@@ -797,7 +797,7 @@ void VulkanRHIImpl::RHIBatchedBuildRayTracingBLAS(int batch_size, const RHIRayTr
                 VkAccelerationStructureGeometryTrianglesDataKHR vk_triangles{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR};
                 vk_triangles.indexData.deviceAddress = GetDeviceAddress(rhi_triangles.index_buffer);
                 vk_triangles.indexType               = VulkanEnumTranslator::METoVKIndexType(rhi_triangles.index_element_type);
-                vk_triangles.maxVertex               = rhi_triangles.max_vertex_count;
+                vk_triangles.maxVertex               = rhi_triangles.max_vertex_count - 1;
                 if (rhi_triangles.transform_buffer) {
                     vk_triangles.transformData.deviceAddress = GetDeviceAddress(rhi_triangles.transform_buffer);
                 }
@@ -930,10 +930,10 @@ RHIRayTracingTLASRef VulkanRHIImpl::RHIBuildRayTracingTLAS(const RHIRayTracingTL
         vk_instances.emplace_back(vk_instance);
     }
     RHIBufferCreateInfo instance_buffer_info{};
-    instance_buffer_info.size                                       = sizeof(vk_instances);
+    instance_buffer_info.size                                       = vk_instances.size() * sizeof(VkAccelerationStructureInstanceKHR);
     instance_buffer_info.stride                                     = sizeof(VkAccelerationStructureInstanceKHR);
-    instance_buffer_info.usage                                      = EBufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT | EBufferUsageFlags::TRANSFER_DST;
-    RHIBufferRef                                    instance_buffer = CreateBufferFromData(instance_buffer_info, sizeof(vk_instances), vk_instances.data());
+    instance_buffer_info.usage                                      = EBufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT;
+    RHIBufferRef                                    instance_buffer = CreateBufferFromData(instance_buffer_info, vk_instances.size() * sizeof(VkAccelerationStructureInstanceKHR), vk_instances.data());
     VkAccelerationStructureGeometryInstancesDataKHR vk_insances_data{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR};
     vk_insances_data.data.deviceAddress = GetDeviceAddress(instance_buffer);
 
@@ -949,7 +949,7 @@ RHIRayTracingTLASRef VulkanRHIImpl::RHIBuildRayTracingTLAS(const RHIRayTracingTL
     vk_geo_info.pGeometries   = &vk_geo;
 
     VkAccelerationStructureBuildSizesInfoKHR vk_sizes_info{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
-    vkGetAccelerationStructureBuildSizesKHR(m_device->GetDevice(), VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &vk_geo_info, &instance_count, &vk_sizes_info);
+    vkGetAccelerationStructureBuildSizesKHR(m_device->GetDevice(), VK_ACCELERATION_STRUCTURE_BUILD_TYPE_HOST_OR_DEVICE_KHR, &vk_geo_info, &instance_count, &vk_sizes_info);
 
     auto* rhi_tlas                                      = new VulkanRHIRayTracingTLAS(_init);
     rhi_tlas->size_info.build_scratch_size              = vk_sizes_info.buildScratchSize;
@@ -1427,7 +1427,9 @@ RHIBufferRef VulkanRHIImpl::CreateBufferFromData(const RHIBufferCreateInfo& info
     memcpy(mapped_ptr, data, size);
     RHIUnmapBuffer(staging_buffer);
 
-    RHIBufferRef buffer = RHICreateBuffer(info);
+    RHIBufferCreateInfo buffer_info = info;
+    buffer_info.usage |= EBufferUsageFlags::TRANSFER_DST;
+    RHIBufferRef buffer = RHICreateBuffer(buffer_info);
 
     const auto&  copy_command_pool = m_device->GetCurrentCommandAllocator()->GetHandle(ECommandListType::COPY);
     const auto&  transfer_queue    = m_device->GetTransferQueue();
@@ -1436,7 +1438,7 @@ RHIBufferRef VulkanRHIImpl::CreateBufferFromData(const RHIBufferCreateInfo& info
     VkBuffer     vk_staging_buffer = static_cast<VulkanRHIBuffer*>(staging_buffer.Get())->GetHandle();
     VkBufferCopy vk_region{};
     vk_region.size = info.size;
-    vkCmdCopyBuffer(cb, vk_buffer, vk_staging_buffer, 1, &vk_region);
+    vkCmdCopyBuffer(cb, vk_staging_buffer, vk_buffer, 1, &vk_region);
     EndSingleTimeCommands(cb, copy_command_pool, transfer_queue);
     return buffer;
 }
@@ -1486,7 +1488,7 @@ VkDeviceAddress VulkanRHIImpl::GetDeviceAddress(RHIBufferRef _buffer) {
     auto* vk_buffer = static_cast<VulkanRHIBuffer*>(_buffer.Get());
     VK_CHECK_NULLPTR(vk_buffer, "GetDeviceAddress:buffer to getaddress is nullptr", return VkDeviceAddress{0});
     VkBufferDeviceAddressInfo info{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
-    info.buffer = vk_buffer->m_alloc.buffer;
+    info.buffer = vk_buffer->GetHandle();
     return vkGetBufferDeviceAddress(m_device->GetDevice(), &info);
 }
 
