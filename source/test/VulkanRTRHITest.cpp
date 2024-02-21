@@ -31,7 +31,7 @@ class TestRayMissShader : public Shader {
     DEFINE_SHADER_TYPE(TestRayMissShader, Global, )
 public:
     BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
-
+    DEFINE_SHADER_PARAM_CBV(CBuffer, clearValue)
     END_ROOT_PARAMETER_DEFINITION(Parameters)
 };
 IMPLEMENT_SHADER_TYPE(TestRayMissShader, "raytracingbasic/miss.rmiss", "main", EShaderType::ST_RAY_MISS);
@@ -73,10 +73,13 @@ void Init(int argc, char** argv) {
     g_rhi->PostInit();
 }
 void Test() {
-    uint32_t            index_data[]  = {0, 1, 2};
-    Moer::Vector3f      vertex_data[] = {{0, -0.5, 1},
-                                         {-0.5, 0.5, 1},
-                                         {0.5, 0.5, 1}};
+    uint32_t            index_data[]  = {0, 1, 2, 3, 4, 5};
+    Moer::Vector3f      vertex_data[] = {{0, 0, 10},
+                                         {0, 1, 10},
+                                         {1, 0, 10},
+                                         {1, 0, 10},
+                                         {1, 1, 10},
+                                         {1, 0, 10}};
     RHIBufferCreateInfo index_buffer_info{};
     index_buffer_info.size    = sizeof(index_data);
     index_buffer_info.stride  = sizeof(uint32_t);
@@ -88,6 +91,13 @@ void Test() {
     vertex_buffer_info.stride  = sizeof(Moer::Vector3f);
     vertex_buffer_info.usage   = EBufferUsageFlags::VERTEX_BUFFER | EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT;
     RHIBufferRef vertex_buffer = CreateBufferFromData(vertex_buffer_info, sizeof(vertex_data), vertex_data);
+
+    Moer::Vector3f      clear_value = {1, 1, 1};
+    RHIBufferCreateInfo uniform_buffer_info{};
+    uniform_buffer_info.size    = sizeof(clear_value);
+    uniform_buffer_info.stride  = sizeof(clear_value);
+    uniform_buffer_info.usage   = EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::UNIFORM_BUFFER;
+    RHIBufferRef uniform_buffer = CreateBufferFromData(uniform_buffer_info, sizeof(clear_value), &clear_value);
 
     RHIRayTracingTrianglesGeometry simple_triangle;
     simple_triangle.index_buffer         = index_buffer;
@@ -124,7 +134,7 @@ void Test() {
     RHIRayTracingInstance              tlas_instance{};
     tlas_instance.blas                = blas;
     tlas_instance.custom_index        = 0;
-    tlas_instance.flags               = ERayTracingInstanceFlags::TRIANGLE_CULL_DISABLE;
+    tlas_instance.flags               = ERayTracingInstanceFlags::FORCE_OPAQUE | ERayTracingInstanceFlags::TRIANGLE_CULL_DISABLE;
     tlas_instance.instance_mask       = 0xFF;
     tlas_instance.instance_sbt_offset = 0;
     tlas_instance.transform           = RHITransformMatrix();
@@ -150,7 +160,7 @@ void Test() {
     const Moer::Vector2i attachment_size(1920, 1080);
     RHITextureCreateInfo tex_info;
     tex_info.SetDimension(ETextureDimension::TEX_2D)
-        .SetFormat(PF_R8G8B8A8_SRGB)
+        .SetFormat(PF_R8G8B8A8_UNORM)
         .SetInitialLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED)
         .SetExtent(attachment_size)
         .SetClearAttachment(RHIClearAttachment())
@@ -158,14 +168,14 @@ void Test() {
         .SetArraySize(1)
         .SetNumMips(1)
         .SetNumSamples(1)
-        .SetUsageFlags(ETextureUsageFlags::SHADER_RESOURCE);
+        .SetUsageFlags(ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::TRANSFER_SRC);
 
     //out_put texture
     RHITextureRef             tex = g_rhi->RHICreateTexture(tex_info);
     RHIUnorderedAccessViewRef tex_view =
         g_rhi->RHICreateUnorderedAccessView(tex,
                                             RHIViewInfo::CreateTextureUAVInfo()
-                                                .SetFormat((PF_R8G8B8A8_SRGB))
+                                                .SetFormat((PF_R8G8B8A8_UNORM))
                                                 .SetArrayRange(0, 1)
                                                 .SetDimension(tex)
                                                 .SetMipLevel(0));
@@ -175,17 +185,108 @@ void Test() {
     //overcome vector modifying cross dll problem
     const_cast<Moer::Array<RHIShaderResourceParameter>&>(batched_parameter.GetResourceParameters()).emplace_back(tlas, 0, 0);
     const_cast<Moer::Array<RHIShaderResourceParameter>&>(batched_parameter.GetResourceParameters()).emplace_back(tex_view, 1, 0);
+    const_cast<Moer::Array<RHIShaderResourceParameter>&>(batched_parameter.GetResourceParameters()).emplace_back(uniform_buffer, 0, 1);
 
     g_rhi->RHISetBatchedShaderParameters(rt_pipeline, batched_parameter);
 
     RHIRayTracingCommandList* command_list = g_rhi->RHICreateRayTracingCommandList(g_rhi->RHIGetCurrentCommandAllocator());
-    command_list->BeginRecording();
-    command_list->SetPipelineState(rt_pipeline);
-    command_list->TraceRay(1920, 1080, 1);
-    command_list->EndRecording();
 
-    RHICommandQueue* rt_queue = g_rhi->RHICreateCommandQueue(ECommandQueueType::RAYTRACING);
-    
+    RHICopyCommandList* copy_command_list = g_rhi->RHICreateCopyCommandList(g_rhi->RHIGetCurrentCommandAllocator());
+    RHICommandQueue*    rt_queue          = g_rhi->RHICreateCommandQueue(ECommandQueueType::RAYTRACING);
+    RHICommandQueue*    copy_queue        = g_rhi->RHICreateCommandQueue(ECommandQueueType::COPY);
+
+    RHIFence* raytracing_finish_fence = g_rhi->RHICreateFence({EFenceUsageFlags::TIMELINE});
+    RHIFence* copying_finish_fence    = g_rhi->RHICreateFence({EFenceUsageFlags::PRESENT});
+    uint64_t  raytracing_fence_value  = 0;
+    uint64_t  copying_fence_value     = 0;
+
+    RHIViewport* viewport = g_rhi->RHIGetMainViewport();
+
+    copy_command_list->BeginRecording();
+
+    RHITextureBarrierInfo texture_barrier_info{};
+    texture_barrier_info.dst_stage  = PS_ALL_COMMANDS;
+    texture_barrier_info.dst_layout = TEXTURE_LAYOUT_COMMON;
+    texture_barrier_info.src_stage  = PS_ALL_COMMANDS;
+    texture_barrier_info.src_layout = TEXTURE_LAYOUT_UNDEFINED;
+    texture_barrier_info.p_texture  = tex;
+
+    copy_command_list->SetPipelineBarrier({{}, {}, {texture_barrier_info}});
+
+    for (int i = 0; i < viewport->GetViewportInfo().max_frame_in_flight; ++i) {
+        RHIUnorderedAccessView* uav    = g_rhi->RHIGetViewportBackBufferUAV(viewport, i);
+        texture_barrier_info.p_texture = uav->GetTexture();
+        copy_command_list->SetPipelineBarrier({{}, {}, {texture_barrier_info}});
+    }
+
+    copy_command_list->EndRecording();
+
+    RHISubmitInfo transiton_submit_info{};
+    copy_queue->SubmitCommands(1, copy_command_list, &transiton_submit_info);
+    copy_queue->WaitForQueueComplete();
+
+    while (1) {
+        command_list->Reset();
+        command_list->BeginRecording();
+        command_list->SetPipelineState(rt_pipeline);
+        command_list->TraceRay(1920, 1080, 1);
+        command_list->EndRecording();
+
+        RHISubmitInfo raytracing_submit_info{};
+        raytracing_submit_info.Signal(raytracing_finish_fence, ++raytracing_fence_value);
+        raytracing_submit_info.Wait(copying_finish_fence, copying_fence_value);
+        rt_queue->SubmitCommands(1, command_list, &raytracing_submit_info);
+
+        RHIViewportNextBackBufferInfo next_back_buffer_info = g_rhi->RHIGetNextFrameViewportBufferInfo(viewport);
+        RHIUnorderedAccessView*       next_back_buffer      = g_rhi->RHIGetViewportBackBufferUAV(viewport, next_back_buffer_info.backbuffer_index);
+        copy_command_list->Reset();
+        copy_command_list->BeginRecording();
+        RHICopyTextureInfo copyinfo;
+        copyinfo.dst_layout            = TEXTURE_LAYOUT_COMMON;
+        copyinfo.dst_offset            = {0, 0, 0};
+        copyinfo.dst_slice.array_count = 1;
+        copyinfo.dst_slice.array_index = 0;
+        copyinfo.dst_slice.aspect      = ETextureAspectFlags::COLOR;
+        copyinfo.dst_slice.mip_index   = 0;
+
+        copyinfo.src_layout            = TEXTURE_LAYOUT_COMMON;
+        copyinfo.src_offset            = {0, 0, 0};
+        copyinfo.src_slice.array_count = 1;
+        copyinfo.src_slice.array_index = 0;
+        copyinfo.src_slice.aspect      = ETextureAspectFlags::COLOR;
+        copyinfo.src_slice.mip_index   = 0;
+
+        copyinfo.extent                 = {1920, 1080, 1};
+        texture_barrier_info.dst_layout = TEXTURE_LAYOUT_COMMON;
+        texture_barrier_info.dst_access = ERHIAccessFlags::TRANSFER_WRITE;
+        texture_barrier_info.dst_stage  = PS_TRANSFER;
+        texture_barrier_info.src_layout = TEXTURE_LAYOUT_UNDEFINED;
+        texture_barrier_info.src_access = ERHIAccessFlags::UNDEFINED;
+        texture_barrier_info.src_stage  = PS_TOP_OF_PIPE;
+        texture_barrier_info.p_texture  = next_back_buffer->GetTexture();
+        copy_command_list->SetPipelineBarrier({{}, {}, {texture_barrier_info}});
+        copy_command_list->CopyTexture(copyinfo, tex, next_back_buffer->GetTexture());
+        texture_barrier_info.dst_layout = TEXTURE_LAYOUT_PRESENT_SRC;
+        texture_barrier_info.dst_access = ERHIAccessFlags::UNDEFINED;
+        texture_barrier_info.dst_stage  = PS_BOTTOM_OF_PIPE;
+        texture_barrier_info.src_layout = TEXTURE_LAYOUT_COMMON;
+        texture_barrier_info.src_access = ERHIAccessFlags::TRANSFER_WRITE;
+        texture_barrier_info.src_stage  = PS_TRANSFER;
+        texture_barrier_info.p_texture  = next_back_buffer->GetTexture();
+        copy_command_list->SetPipelineBarrier({{}, {}, {texture_barrier_info}});
+        copy_command_list->EndRecording();
+
+        RHISubmitInfo copying_submit_info{};
+        copying_submit_info.Wait(next_back_buffer_info.backbuffer_ready_fence, 0);
+        copying_submit_info.Wait(raytracing_finish_fence, raytracing_fence_value);
+        copying_submit_info.Signal(copying_finish_fence, ++copying_fence_value);
+
+        copy_queue->SubmitCommands(1, copy_command_list, &copying_submit_info);
+
+        g_rhi->RHIPresentViewport(viewport, copying_finish_fence);
+
+        copy_queue->WaitForQueueComplete();
+    }
 }
 
 int main(int argc, char** argv) {

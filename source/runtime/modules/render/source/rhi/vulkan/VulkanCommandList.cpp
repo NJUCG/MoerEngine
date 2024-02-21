@@ -330,7 +330,6 @@ VulkanRHIGraphicsCommandList::~VulkanRHIGraphicsCommandList() {
 void VulkanRHIGraphicsCommandList::SetPipelineState(RHIGraphicsPipelineState* _graphics_pso) {
     auto* vk_pso = static_cast<VulkanRHIGraphicsPipelineState*>(_graphics_pso);
     VK_CHECK_NULLPTR(vk_pso, "SetPipelineState: graphics pipeline state is nullptr!", return);
-
     vkCmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk_pso->GetHandle());
     m_current_pipeline_state = vk_pso;
 }
@@ -346,6 +345,8 @@ void VulkanRHIGraphicsCommandList::EndRecording() {
 
 void VulkanRHIGraphicsCommandList::Reset() {
     VulkanRHICommandListBase::Reset();
+    m_current_pipeline_state = nullptr;
+    m_bound_sets             = {};
 }
 
 void VulkanRHIGraphicsCommandList::ClearState(RHIGraphicsPipelineState* _graphics_pso) {
@@ -698,6 +699,8 @@ void VulkanRHIComputeCommandList::EndRecording() {
 
 void VulkanRHIComputeCommandList::Reset() {
     VulkanRHICommandListBase::Reset();
+    m_current_pipeline_state = nullptr;
+    m_bound_sets             = {};
 }
 
 void VulkanRHIComputeCommandList::Dispatch(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z) {
@@ -770,7 +773,7 @@ VulkanRHIRayTracingCommandList::~VulkanRHIRayTracingCommandList() {
 }
 void VulkanRHIRayTracingCommandList::SetPipelineState(RHIRayTracingPipelineState* _raytracing_pso) {
     auto* vk_pso = static_cast<VulkanRHIRayTracingPipelineState*>(_raytracing_pso);
-    VK_CHECK_NULLPTR(vk_pso, "SetPipelineState: compute pipeline state is nullptr!", return);
+    VK_CHECK_NULLPTR(vk_pso, "SetPipelineState: raytracing pipeline state is nullptr!", return);
 
     vkCmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, vk_pso->GetHandle());
     m_current_pipeline_state = vk_pso;
@@ -785,6 +788,8 @@ void VulkanRHIRayTracingCommandList::EndRecording() {
 
 void VulkanRHIRayTracingCommandList::Reset() {
     VulkanRHICommandListBase::Reset();
+    m_current_pipeline_state = nullptr;
+    m_bound_sets             = {};
 }
 
 void VulkanRHIRayTracingCommandList::TraceRay(uint32_t _width, uint32_t _height, uint32_t _depth) {

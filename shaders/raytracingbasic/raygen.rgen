@@ -3,12 +3,6 @@
 [[vk::binding(0,0)]] RaytracingAccelerationStructure rs;
 [[vk::binding(1,0)]] RWTexture2D<float4> image;
 
-struct CameraProperties
-{
-	float4x4 viewInverse;
-	float4x4 projInverse;
-};
-[[vk::binding(2,0)]] cbuffer cam { CameraProperties cam; };
 
 struct [raypayload] Payload
 {
@@ -23,11 +17,11 @@ void main()
 	const float2 pixelCenter = float2(LaunchID.xy) + float2(0.5, 0.5);
 	const float2 inUV = pixelCenter/float2(LaunchSize.xy);
 	float2 d = inUV * 2.0 - 1.0;
-	float4 target = mul(cam.projInverse, float4(d.x, d.y, 1, 1));
+	float3 target = float3(d,1);
 
 	RayDesc rayDesc;
-	rayDesc.Origin = mul(cam.viewInverse, float4(0,0,0,1)).xyz;
-	rayDesc.Direction = mul(cam.viewInverse, float4(normalize(target.xyz), 0)).xyz;
+	rayDesc.Origin = float3(d,0);
+	rayDesc.Direction = float3(0,0,1);
 	rayDesc.TMin = 0.001;
 	rayDesc.TMax = 10000.0;
 

@@ -106,7 +106,6 @@ void VulkanDescriptorSetsLayout::Init(const Moer::Array<TDescriptorSetLayoutInfo
         image_infos.emplace_back(Moer::Array<VkDescriptorImageInfo>(image_count));
         buffer_infos.emplace_back(Moer::Array<VkDescriptorBufferInfo>(buffer_count));
         as_infos.emplace_back(Moer::Array<VkAccelerationStructureKHR>(as_count, VK_NULL_HANDLE));
-        ++hash_index;// index + 1 for next set
     }
 }
 
@@ -405,7 +404,7 @@ void VulkanDescriptorSetWriter::WriteAS(uint16_t _set, uint16_t _binding, const 
     m_write_set_as[m_index_of_binding[_binding]] = std::move(write_as);
     Moer::Array<VulkanHashableDescriptorInfo> infos;
     for (uint32_t i = 0; i < _as.size(); ++i) {
-        VulkanHashableDescriptorInfo as_info;
+        VulkanHashableDescriptorInfo as_info{};
         as_info.resource.as = _as[i];
         infos.emplace_back(as_info);
     }

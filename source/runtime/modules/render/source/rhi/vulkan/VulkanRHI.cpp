@@ -793,7 +793,7 @@ void VulkanRHIImpl::RHIBatchedBuildRayTracingBLAS(int batch_size, const RHIRayTr
             vk_geo.geometryType = VulkanRHIRayTracingAccelerationStructure::METoVKGeometryTypeKHR(rhi_geo.geo_type);
             vk_geo.flags        = VulkanRHIRayTracingAccelerationStructure::METoGeometryFlagsKHR(rhi_geo.flags);
             if (vk_geo.geometryType == VK_GEOMETRY_TYPE_TRIANGLES_KHR) {
-                auto                                            rhi_triangles = rhi_geo.geometry.triangles;
+                const RHIRayTracingTrianglesGeometry&           rhi_triangles = rhi_geo.geometry.triangles;
                 VkAccelerationStructureGeometryTrianglesDataKHR vk_triangles{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR};
                 vk_triangles.indexData.deviceAddress = GetDeviceAddress(rhi_triangles.index_buffer);
                 vk_triangles.indexType               = VulkanEnumTranslator::METoVKIndexType(rhi_triangles.index_element_type);
@@ -1429,10 +1429,9 @@ RHIBufferRef VulkanRHIImpl::CreateBufferFromData(const RHIBufferCreateInfo& info
 
     RHIBufferRef buffer = RHICreateBuffer(info);
 
-    const auto& copy_command_pool = m_device->GetCurrentCommandAllocator()->GetHandle(ECommandListType::COPY);
-    const auto& transfer_queue    = m_device->GetTransferQueue();
-    auto        cb                = BeginSingleTimeCommands(copy_command_pool);
-
+    const auto&  copy_command_pool = m_device->GetCurrentCommandAllocator()->GetHandle(ECommandListType::COPY);
+    const auto&  transfer_queue    = m_device->GetTransferQueue();
+    auto         cb                = BeginSingleTimeCommands(copy_command_pool);
     VkBuffer     vk_buffer         = static_cast<VulkanRHIBuffer*>(buffer.Get())->GetHandle();
     VkBuffer     vk_staging_buffer = static_cast<VulkanRHIBuffer*>(staging_buffer.Get())->GetHandle();
     VkBufferCopy vk_region{};
