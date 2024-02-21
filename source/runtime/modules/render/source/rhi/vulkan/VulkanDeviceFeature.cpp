@@ -1,17 +1,16 @@
-//
-// Created by 74535 on 2023/10/20.
-//
-
 #include "VulkanDeviceFeature.h"
 
 #include "VulkanPlatform.h"
 #include "vulkan/vulkan_core.h"
 
 void VulkanPhysicalDeviceFeatures::Query(VkPhysicalDevice _gpu, uint32_t _api_version) {
-    VkPhysicalDeviceFeatures2 gpu_features_2;
+    VkPhysicalDeviceFeatures2 gpu_features_2{};
     gpu_features_2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-    gpu_features_2.pNext = &core_1_1;
-    core_1_1.sType       = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+
+    if (_api_version >= VK_API_VERSION_1_1) {
+        gpu_features_2.pNext = &core_1_1;
+        core_1_1.sType       = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+    }
 
     if (_api_version >= VK_API_VERSION_1_2) {
         core_1_1.pNext = &core_1_2;
