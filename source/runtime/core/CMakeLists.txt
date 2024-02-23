@@ -26,4 +26,6 @@ target_link_libraries(${target_name}
     PUBLIC mimalloc-static
     PUBLIC spdlog
 )
-
+target_compile_definitions(${target_name} 
+    PRIVATE "DEVELOP_SHADER_PATH=${moer_root_dir}/shaders"
+)

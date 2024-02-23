@@ -118,9 +118,9 @@ void Test() {
     command_list->BindVertexBuffers(0, 1, vertex_buffers.data(), 0);
 
     RHIUnorderedAccessViewRef test_view =
-        g_rhi->RHICreateUnorderedAccessView(tex,
-                                            RHIViewInfo::CreateTextureUAVInfo()
-                                                .SetFormat((PF_R8G8B8A8_SRGB)));
+        g_rhi->RHICreateUAV(tex,
+                            RHIViewInfo::CreateTextureUAVInfo()
+                                .SetFormat((PF_R8G8B8A8_SRGB)));
     TestShader*            test_shader_vs = (TestShader*)ShaderResourceManager::GetShader<TestShader>();
     TestShader::Parameters params;
 

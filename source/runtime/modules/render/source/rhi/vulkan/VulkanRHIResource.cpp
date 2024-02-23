@@ -811,7 +811,20 @@ VkPolygonMode VulkanEnumTranslator::METoVKPolygonMode(ERasterizerFillMode _fill_
     }
 }
 
-VkDescriptorType VulkanEnumTranslator::METoVKDescriptorType(EShaderParameterType _type) {
+VkDescriptorType VulkanEnumTranslator::METoVKDescriptorType(EShaderParameterType _type, EShaderCodeResourceBindingType _binding_type) {
+
+    auto is_texture = [](EShaderCodeResourceBindingType type) {
+        return type == EShaderCodeResourceBindingType::TEXTURE_2D ||
+               type == EShaderCodeResourceBindingType::TEXTURE_2D_ARRAY ||
+               type == EShaderCodeResourceBindingType::TEXTURE_CUBE ||
+               type == EShaderCodeResourceBindingType::TEXTURE_CUBE_ARRAY ||
+               type == EShaderCodeResourceBindingType::TEXTURE_3D;
+    };
+    auto is_buffer = [](EShaderCodeResourceBindingType type) {
+        return type == EShaderCodeResourceBindingType::CONSTANT_BUFFER ||
+               type == EShaderCodeResourceBindingType::STRUCTURED_BUFFER ||
+               type == EShaderCodeResourceBindingType::BYTE_ADDRESS_BUFFER;
+    };
     switch (_type) {
         case EShaderParameterType::CBV:
             return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -819,8 +832,12 @@ VkDescriptorType VulkanEnumTranslator::METoVKDescriptorType(EShaderParameterType
         case EShaderParameterType::BINDLESS_SAMPLER_INDEX:// MARK...
             return VK_DESCRIPTOR_TYPE_SAMPLER;
         case EShaderParameterType::SRV:
-            return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+            if (is_texture(_binding_type)) return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+            if (is_buffer(_binding_type)) return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            LOG_ERROR("Unsupported SRV type: {}", ToString(_binding_type));
         case EShaderParameterType::UAV:
+            if (is_texture(_binding_type)) return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            if (is_buffer(_binding_type)) return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         case EShaderParameterType::BINDLESS_RESOURCE_INDEX:// MARK...
             return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -1404,7 +1421,7 @@ VkBufferUsageFlags VulkanRHIBuffer::METoVKBufferUsageFlags(VulkanDevice* _device
 
     TranslateFlag(EBufferUsageFlags::VERTEX_BUFFER, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
     TranslateFlag(EBufferUsageFlags::INDEX_BUFFER, VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
-    TranslateFlag(EBufferUsageFlags::STRUCTURED_BUFFER, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    TranslateFlag(EBufferUsageFlags::STORAGE_BUFFER, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
 
 #if VULKAN_RHI_RAYTRACING
     TranslateFlag(EBufferUsageFlags::ACCELERATION_STRUCTURE, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR);
@@ -1556,9 +1573,27 @@ void VulkanRHIFence::Wait(uint64_t value) {
 #pragma endregion
 
 #pragma region viewable resources view definitions
-VulkanRHIUnorderedAccessView::~VulkanRHIUnorderedAccessView() {
+VulkanRHITextureUAV::~VulkanRHITextureUAV() {
     if (m_view != VK_NULL_HANDLE) {
         vkDestroyImageView(m_device->GetDevice(), m_view, VK_NULL_HANDLE);
+    }
+}
+
+VulkanRHITextureSRV::~VulkanRHITextureSRV() {
+    if (m_view != VK_NULL_HANDLE) {
+        vkDestroyImageView(m_device->GetDevice(), m_view, VK_NULL_HANDLE);
+    }
+}
+
+VulkanRHIBufferSRV::~VulkanRHIBufferSRV() {
+    if (m_view != VK_NULL_HANDLE) {
+        vkDestroyBufferView(m_device->GetDevice(), m_view, VK_NULL_HANDLE);
+    }
+}
+
+VulkanRHIBufferUAV::~VulkanRHIBufferUAV() {
+    if (m_view != VK_NULL_HANDLE) {
+        vkDestroyBufferView(m_device->GetDevice(), m_view, VK_NULL_HANDLE);
     }
 }
 
@@ -1578,8 +1613,8 @@ VulkanViewport::~VulkanViewport() {
     swapchain = nullptr;
 }
 
-VulkanRHIUnorderedAccessView* VulkanViewport::InnerCreateVulkanUnorderedAccessView(VulkanDevice* _device, VulkanRHITexture* texture, const RHIViewInfo& _view_info) {
-    auto* view = new VulkanRHIUnorderedAccessView(_device, texture, _view_info);
+VulkanRHITextureUAV* VulkanViewport::InnerCreateVulkanUnorderedAccessView(VulkanDevice* _device, VulkanRHITexture* texture, const RHIViewInfo& _view_info) {
+    auto* view = new VulkanRHITextureUAV(_device, texture, _view_info);
 
     VkImageViewCreateInfo image_view_create_info{};
     image_view_create_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -1702,7 +1737,7 @@ RHIViewportNextBackBufferInfo VulkanViewport::GetNextFrameBackBufferInfo() {
     ResetResources();
     return {.backbuffer_index = UINT32_MAX, .backbuffer_ready_fence = nullptr};
 }
-VulkanRHIUnorderedAccessView* VulkanViewport::GetCurrentBackBuffer(uint32_t index) {
+VulkanRHITextureUAV* VulkanViewport::GetCurrentBackBuffer(uint32_t index) {
     if (index != UINT32_MAX) {
         return swapchain_image_uavs[index];
     }

@@ -292,10 +292,39 @@ namespace Moer {
     std::pair<RHIBufferRef, RHIBufferRef> GpuSceneBufferBuilder::Build() {
         return m_impl->Build();
     }
+    RHIBufferRef GpuSceneBufferBuilder::CopyFrom(const void* data, uint32_t size) {
+        RHIBufferCreateInfo staging_buffer_create_info(size, 0, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
+        RHIBufferRef        staging_buffer            = g_rhi->RHICreateBuffer(staging_buffer_create_info);
+        auto*               staging_buffer_mapped_ptr = static_cast<uint8_t*>(g_rhi->RHIMapBuffer(staging_buffer, 0, size));
+        memcpy(staging_buffer_mapped_ptr, data, size);
+        g_rhi->RHIUnmapBuffer(staging_buffer);
+
+        RHIBufferRef buffer = g_rhi->RHICreateBuffer(RHIBufferCreateInfo(size, 0, EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::STORAGE_BUFFER));
+
+        auto* cmd_list   = g_rhi->RHICreateCopyCommandList(g_rhi->RHIGetCurrentCommandAllocator());
+        auto* copy_queue = g_rhi->RHICreateCommandQueue(ECommandQueueType::COPY);
+        cmd_list->BeginRecording();
+
+        RHICopyBufferInfo copy_buffer_info({RHIBufferRegion{0, 0, size}});
+        cmd_list->CopyBuffer(copy_buffer_info, staging_buffer, buffer);
+
+        cmd_list->EndRecording();
+
+        RHIFenceRef fence = g_rhi->RHICreateFence({.usage = EFenceUsageFlags::BINARY});
+
+        RHISubmitInfo submit_info;
+
+        submit_info.Signal(fence, 1);
+
+        copy_queue->SubmitCommands(1, cmd_list, &submit_info);
+
+        copy_queue->WaitForQueueComplete();
+        return buffer;
+    }
 
     std::pair<RHIBufferRef, RHIBufferRef> GpuSceneBufferBuilder::Impl::Build() {
-        auto cmd_list   = g_rhi->RHICreateCopyCommandList(g_rhi->RHIGetCurrentCommandAllocator());
-        auto copy_queue = g_rhi->RHICreateCommandQueue(ECommandQueueType::COPY);
+        auto* cmd_list   = g_rhi->RHICreateCopyCommandList(g_rhi->RHIGetCurrentCommandAllocator());
+        auto* copy_queue = g_rhi->RHICreateCommandQueue(ECommandQueueType::COPY);
         cmd_list->BeginRecording();
 
         uint32_t vertex_buffer_size = m_vertex_data->size() * sizeof(float);

@@ -95,8 +95,8 @@ public:
 
     virtual RHITextureRef RHICreateTexture(const RHITextureCreateInfo& info) = 0;
 
-    virtual RHIShaderResourceViewRef  RHICreateShaderResourceView(RHIViewableResource* _resource, const RHIViewInfo& _view_info)  = 0;
-    virtual RHIUnorderedAccessViewRef RHICreateUnorderedAccessView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) = 0;
+    virtual RHIShaderResourceViewRef  RHICreateSRV(RHIViewableResource* _resource, const RHIViewInfo& _view_info) = 0;
+    virtual RHIUnorderedAccessViewRef RHICreateUAV(RHIViewableResource* _resource, const RHIViewInfo& _view_info)                = 0;
 
     virtual RHICommandQueue* RHICreateCommandQueue(ECommandQueueType type) = 0;
     // DX12 only: _initial_state
@@ -105,7 +105,7 @@ public:
     // virtual RHIComputeCommandList*  CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr)                                       = 0;
     virtual RHICopyCommandList* RHICreateCopyCommandList(RHICommandAllocator* _allocator) = 0;
     template<TPipelineStateRef TPipelineRef>
-    void RHISetBatchedShaderParameters(TPipelineRef _pso, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant = false){
+    void RHISetBatchedShaderParameters(TPipelineRef _pso, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant = false) {
         RHISetBatchedShaderParametersInner(_pso, _batched_params, b_update_constant);
     };
 

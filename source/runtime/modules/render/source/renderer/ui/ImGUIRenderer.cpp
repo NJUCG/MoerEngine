@@ -1025,7 +1025,7 @@ void CreateFontsTexture() {
                             .SetMipRange(0, 1)
                             .SetArrayRange(0, 1);
 
-        backend_data->font_view    = g_rhi->RHICreateShaderResourceView(font_texture, srv_info);
+        backend_data->font_view    = g_rhi->RHICreateSRV(font_texture, srv_info);
         backend_data->font_texture = font_texture;
     }
     io.Fonts->SetTexID((ImTextureID)backend_data->font_view);

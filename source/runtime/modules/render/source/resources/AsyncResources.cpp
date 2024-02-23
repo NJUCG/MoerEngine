@@ -168,24 +168,24 @@ namespace Moer {
             ETextureUsageFlags::COLOR_ATTACHMENT |
             ETextureUsageFlags::SAMPLED |
             ETextureUsageFlags::TRANSFER_DST));
-        present_texture_srv = g_rhi->RHICreateShaderResourceView(present_texture,
-                                                                 RHIViewInfo::CreateTextureSRVInfo()
-                                                                     .SetArrayRange(0, 1)
-                                                                     .SetMipRange(0, 1)
-                                                                     .SetFormat(info.format)
-                                                                     .SetDimension(ETextureDimension::TEX_2D));
+        present_texture_srv = g_rhi->RHICreateSRV(present_texture,
+                                                  RHIViewInfo::CreateTextureSRVInfo()
+                                                      .SetArrayRange(0, 1)
+                                                      .SetMipRange(0, 1)
+                                                      .SetFormat(info.format)
+                                                      .SetDimension(ETextureDimension::TEX_2D));
 
         swapchain_textures.resize(info.back_buffer_count);
         swapchain_uavs.resize(info.back_buffer_count);
         for (int i = 0; i < info.back_buffer_count; ++i) {
             swapchain_textures[i] = g_rhi->RHICreateTexture(upload_texture_create_info);
             swapchain_uavs[i] =
-                g_rhi->RHICreateUnorderedAccessView(swapchain_textures[i],
-                                                    RHIViewInfo::CreateTextureUAVInfo()
-                                                        .SetArrayRange(0, 1)
-                                                        .SetMipLevel(0)
-                                                        .SetFormat(info.format)
-                                                        .SetDimension(ETextureDimension::TEX_2D));
+                g_rhi->RHICreateUAV(swapchain_textures[i],
+                                    RHIViewInfo::CreateTextureUAVInfo()
+                                        .SetArrayRange(0, 1)
+                                        .SetMipLevel(0)
+                                        .SetFormat(info.format)
+                                        .SetDimension(ETextureDimension::TEX_2D));
         }
         RHIFenceRef fence = g_rhi->RHICreateFence({.usage = EFenceUsageFlags::BINARY});
 

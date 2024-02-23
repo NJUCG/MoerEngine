@@ -10,12 +10,12 @@ struct MeshletDesc {
   uint instance_id;
   uint packed_data;
 
-  uint GetPrimitiveCount()  { return packed_data & 0xFF; }
-  uint GetVertexCount()  { return (packed_data >> 8) & 0xFF; }
-  uint GetIndexCount()  { return (packed_data & 0xFF) * 3; }
+  uint GetPrimitiveCount() { return packed_data & 0xFF; }
+  uint GetVertexCount() { return (packed_data >> 8) & 0xFF; }
+  uint GetIndexCount() { return (packed_data & 0xFF) * 3; }
 };
 
-struct MeshletInfo {
+struct MeshletBound {
   float3 center;
   float radius;
   float3 cone_axis;
@@ -30,28 +30,27 @@ struct DrawCommandData {
   uint first_instance;
 };
 
-[[vk::push_constant]]
-ConstantBuffer<CameraData> camera_data;
+[[vk::push_constant]] ConstantBuffer<CameraData> camera_data;
 
 StructuredBuffer<InstanceData> InstanceData;
 
-StructuredBuffer<MeshletDesc> MeshletDescBuffer;
+StructuredBuffer<MeshletDesc> meshlet_info_buffer : register(t0, space0);
 
-StructuredBuffer<MeshletInfo> MeshletInfoBuffer;
+StructuredBuffer<MeshletBound> meshlet_bound_buffer : register(t1, space0);
 
-RWByteAddressBuffer DrawCounterBuffer;
+RWByteAddressBuffer draw_count_buffer : register(u0, space1);
 
-RWByteAddressBuffer DrawIndirectBuffer;
+RWByteAddressBuffer draw_indirect_buffer : register(u1, space1);
 
 // Function to check if a vertex is inside the frustum
-bool IsMeshletInsideFrustum(in MeshletInfo meshlet_info) {
+bool IsMeshletInsideFrustum(in MeshletBound meshlet_info) {
   // Frustum culling logic goes here
   // Return true if the vertex is inside the frustum, false otherwise
   return true;
 }
 
 // Function to check if a vertex is facing away from the camera
-bool IsMeshletFacingAwayFromCamera(in MeshletInfo meshlet_info) {
+bool IsMeshletFacingAwayFromCamera(in MeshletBound meshlet_info) {
   // Backface culling logic goes here
   // Return true if the vertex is facing away from the camera, false otherwise
   return true;
@@ -60,7 +59,7 @@ bool IsMeshletFacingAwayFromCamera(in MeshletInfo meshlet_info) {
 bool IsMeshletVisible(in uint meshlet_id) {
   bool visible = true;
 
-  MeshletInfo meshlet_info = MeshletInfoBuffer[meshlet_id];
+  MeshletBound meshlet_info = meshlet_bound_buffer[meshlet_id];
 
 #if FRUSTUM_CULLING_ENABLED
   visible &= !IsMeshletInsideFrustum(meshlet_info);
@@ -79,7 +78,7 @@ bool IsMeshletVisible(in uint meshlet_id) {
   // Get the index of the vertex to process
   uint meshlet_id = dispatchThreadId.x;
 
-  MeshletDesc meshlet_desc = MeshletDescBuffer[meshlet_id];
+  MeshletDesc meshlet_desc = meshlet_info_buffer[meshlet_id];
 
   bool visible = IsMeshletVisible(meshlet_id);
   uint meshlet_count = WaveActiveCountBits(visible);
@@ -87,12 +86,12 @@ bool IsMeshletVisible(in uint meshlet_id) {
 
   uint cmd_offset;
   if (WaveIsFirstLane()) {
-    DrawCounterBuffer.InterlockedAdd(0, meshlet_count, cmd_offset);
+    draw_count_buffer.InterlockedAdd(0, meshlet_count, cmd_offset);
   }
   cmd_offset = WaveReadLaneFirst(cmd_offset);
-  cmd_offset +=lane_offset;
+  cmd_offset += lane_offset;
 
-  if(visible) {
+  if (visible) {
     DrawCommandData cmd;
 
     cmd.vertex_count = meshlet_desc.GetVertexCount();
@@ -100,8 +99,6 @@ bool IsMeshletVisible(in uint meshlet_id) {
     cmd.firstIndex = meshlet_desc.index_offset;
     cmd.first_vertex = meshlet_desc.vertex_offset;
     cmd.first_instance = meshlet_desc.instance_id;
-    DrawIndirectBuffer.Store(cmd_offset * sizeof(DrawCommandData), cmd);
+    draw_indirect_buffer.Store(cmd_offset * sizeof(DrawCommandData), cmd);
   }
 }
-
-

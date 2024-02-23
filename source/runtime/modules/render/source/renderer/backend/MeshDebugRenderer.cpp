@@ -32,7 +32,7 @@ public:
     END_ROOT_PARAMETER_DEFINITION(Parameters);
 };
 
-IMPLEMENT_SHADER_TYPE(MeshDebugRendererVertexShader, "meshdebug/MeshDebug.vert", "main", ST_VERTEX);
+IMPLEMENT_SHADER_TYPE(MeshDebugRendererVertexShader, "meshdebug/MeshDebugVert.hlsl", "main", ST_VERTEX);
 
 class MeshDebugRendererFragmentShader : public Shader {
     DEFINE_SHADER_TYPE(MeshDebugRendererFragmentShader, Shader, RENDER_API);
@@ -42,7 +42,7 @@ public:
     END_ROOT_PARAMETER_DEFINITION(Parameters);
 };
 
-IMPLEMENT_SHADER_TYPE(MeshDebugRendererFragmentShader, "meshdebug/MeshDebug.frag", "main", ST_FRAGMENT);
+IMPLEMENT_SHADER_TYPE(MeshDebugRendererFragmentShader, "meshdebug/MeshDebugFrag.hlsl", "main", ST_FRAGMENT);
 
 class MeshletCullShader : public Shader {
     DEFINE_SHADER_TYPE(MeshletCullShader, Shader, RENDER_API);
@@ -52,7 +52,7 @@ public:
     END_ROOT_PARAMETER_DEFINITION(Parameters);
 };
 
-IMPLEMENT_SHADER_TYPE(MeshletCullShader, "meshdebug/Cull.comp", "main", ST_COMPUTE);
+IMPLEMENT_SHADER_TYPE(MeshletCullShader, "meshdebug/Cull.hlsl", "main", ST_COMPUTE);
 
 namespace Moer {
     class MeshDebugRenderer::Impl {
@@ -346,11 +346,9 @@ namespace Moer {
                 params.camera_data.inv_view = Inverse(camera_view);
                 params.camera_data.inv_proj = Inverse(camera_proj);
 
-
                 for (auto entity : scene->GetEntities()) {
                     if (auto primitive = RenderableManager::Get().GetRenderPrimitive(entity)) {
-                        const auto                                prim_model = TransformManager::Get().Get(entity).matrix;
-                        
+                        const auto prim_model = TransformManager::Get().Get(entity).matrix;
 
                         // Matrix4x4f                                 ubo[] = {prim_model, camera_view, camera_proj, Transpose(camera_proj * camera_view * prim_model)};
                         // memcpy(&params.scene_ubo, &ubo, sizeof(ubo));

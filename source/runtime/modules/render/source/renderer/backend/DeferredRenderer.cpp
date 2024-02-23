@@ -21,19 +21,24 @@
 #include "scene/TransformManager.h"
 
 #include <algorithm>
+BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(UBOVertex)
+DEFINE_SHADER_PARAM(Moer::Matrix4x4f, model)
+DEFINE_SHADER_PARAM(Moer::Matrix4x4f, view)
+DEFINE_SHADER_PARAM(Moer::Matrix4x4f, proj)
+DEFINE_SHADER_PARAM(Moer::Matrix4x4f, mvp)
+END_SHADER_CONSTANT_STRUCT_DEFINITION()
 
+BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(CameraData)
+DEFINE_SHADER_PARAM(Moer::Matrix4x4f, view)
+DEFINE_SHADER_PARAM(Moer::Matrix4x4f, proj)
+DEFINE_SHADER_PARAM(Moer::Matrix4x4f, inv_view)
+DEFINE_SHADER_PARAM(Moer::Matrix4x4f, inv_proj)
+END_SHADER_CONSTANT_STRUCT_DEFINITION()
 class TestDeferredTriangleShaderVert : public Shader {
     DEFINE_SHADER_TYPE(TestDeferredTriangleShaderVert, Global, RENDER_API, ...)
 public:
-    BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(UBOVertex)
-    DEFINE_SHADER_PARAM(Moer::Matrix4x4f, model)
-    DEFINE_SHADER_PARAM(Moer::Matrix4x4f, view)
-    DEFINE_SHADER_PARAM(Moer::Matrix4x4f, proj)
-    DEFINE_SHADER_PARAM(Moer::Matrix4x4f, mvp)
-    END_SHADER_CONSTANT_STRUCT_DEFINITION()
-
     BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
-    DEFINE_SHADER_PARAM_STRUCT(UBOVertex, scene_ubo)
+    DEFINE_SHADER_PARAM_STRUCT(CameraData, camera_data)
     END_ROOT_PARAMETER_DEFINITION(Parameters)
 };
 
@@ -46,9 +51,24 @@ public:
     END_ROOT_PARAMETER_DEFINITION(Parameters)
 };
 
-IMPLEMENT_SHADER_TYPE(TestDeferredTriangleShaderVert, "test/Triangle.vert", "main", ST_VERTEX);
-IMPLEMENT_SHADER_TYPE(TestDeferredTriangleShaderFrag, "test/Triangle.frag", "main", ST_FRAGMENT);
+IMPLEMENT_SHADER_TYPE(TestDeferredTriangleShaderVert, "test/TriangleVert.hlsl", "main", ST_VERTEX);
+IMPLEMENT_SHADER_TYPE(TestDeferredTriangleShaderFrag, "test/TriangleFrag.hlsl", "main", ST_FRAGMENT);
 
+class MeshletCullingShader : public Shader {
+    DEFINE_SHADER_TYPE(MeshletCullingShader, Global, RENDER_API, ...)
+public:
+    BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
+    DEFINE_SHADER_PARAM_STRUCT(CameraData, camera_data)//push_constant
+    DEFINE_SHADER_PARAM_SRV(StructuredBuffer<MeshletDesc>, meshlet_info_buffer)
+    DEFINE_SHADER_PARAM_SRV(StructuredBuffer<MeshletBound>, meshlet_bound_buffer)
+
+    DEFINE_SHADER_PARAM_UAV(RWStructuredBuffer<DrawCommand>, draw_indirect_buffer)
+    DEFINE_SHADER_PARAM_UAV(RWByteAddressBuffer, draw_count_buffer)
+
+    END_ROOT_PARAMETER_DEFINITION(Parameters)
+};
+
+IMPLEMENT_SHADER_TYPE(MeshletCullingShader, "meshdebug/Cull.hlsl", "main", ST_COMPUTE);
 namespace Moer {
     class DeferredRenderer::Impl {
     public:
@@ -70,11 +90,20 @@ namespace Moer {
         RHIFenceRef                          render_fence;
 
         //test triangle data
-        RHIBufferRef vertex_buffer;
-        RHIBufferRef index_buffer;
-        RHIBufferRef constant_buffer;
+        // RHIBufferRef vertex_buffer;
+        // RHIBufferRef index_buffer;
 
         RHIGraphicsPipelineStateRef pipeline_state;
+        RHIComputePipelineStateRef  compute_pipeline_state;
+
+        RHIBufferRef             draw_indirect_buffer;
+        RHIBufferRef             draw_count_buffer;
+        RHIBufferRef             zero_buffer;
+        RHIShaderResourceViewRef meshlet_descs_buffer_view;
+        RHIShaderResourceViewRef meshlet_bounds_buffer_view;
+
+        RHIUnorderedAccessViewRef draw_indirect_view;
+        RHIUnorderedAccessViewRef draw_count_view;
     };
     void DeferredRenderer::Init(const BackendRendererInitInfo& _init_info) {
         impl = MoerNew(Impl);
@@ -119,80 +148,6 @@ namespace Moer {
             render_cmd_lists[i] = g_rhi->RHICreateGraphicsCommandList(g_rhi->RHIGetCurrentCommandAllocator());
         }
         render_fence = g_rhi->RHICreateFence({.usage = EFenceUsageFlags::TIMELINE});
-
-        //test draw triangle
-        static float vertices[] = {
-            -0.5f,
-            -0.5f,
-            0.0f,
-
-            0.f,
-            0.f,
-            1.f,
-            1.f,
-            0.f,
-            0.f,
-            0.f,
-            1.f,
-            0.f,
-
-            1.0f,
-            0.0f,
-
-            0.5f,
-            -0.5f,
-            0.0f,
-
-            0.f,
-            0.f,
-            1.f,
-            1.f,
-            0.f,
-            0.f,
-            0.f,
-            1.f,
-            0.f,
-
-            0.0f,
-            1.0f,
-
-            0.0f,
-            0.5f,
-            0.0f,
-
-            0.f,
-            0.f,
-            1.f,
-            1.f,
-            0.f,
-            0.f,
-            0.f,
-            1.f,
-            0.f,
-
-            1.0f,
-            1.0f};
-
-        uint32_t indexes[] = {0, 1, 2};
-        vertex_buffer      = g_rhi->RHICreateBuffer(
-            RHIBufferCreateInfo::Create()
-                .SetSize(sizeof(vertices))
-                .SetStride(sizeof(float) * 14)
-                .SetUsage(EBufferUsageFlags::VERTEX_BUFFER |
-                          EBufferUsageFlags::CPU_VISIBLE));
-        void* data = g_rhi->RHIMapBuffer(vertex_buffer, 0, sizeof(vertices));
-        memcpy(data, vertices, sizeof(vertices));
-        g_rhi->RHIUnmapBuffer(vertex_buffer);
-
-        index_buffer = g_rhi->RHICreateBuffer(
-            RHIBufferCreateInfo::Create()
-                .SetSize(sizeof(indexes))
-                .SetStride(sizeof(uint32_t) * 14)
-                .SetUsage(EBufferUsageFlags::INDEX_BUFFER |
-                          EBufferUsageFlags::CPU_VISIBLE));
-        data = g_rhi->RHIMapBuffer(index_buffer, 0, sizeof(indexes));
-        memcpy(data, indexes, sizeof(indexes));
-        g_rhi->RHIUnmapBuffer(index_buffer);
 
         RHIBlendStateInitializer blend_init;
         blend_init.attachments[0].color_blend_op         = BO_ADD;
@@ -265,6 +220,52 @@ namespace Moer {
         shader_stage_input.p_fragment_shader    = fragment_shader;
 
         pipeline_state = g_rhi->RHICreateGraphicsPipelineState(init);
+
+        auto compute_shader    = shader_resource_manager.GetShader<MeshletCullingShader>();
+        compute_pipeline_state = g_rhi->RHICreateComputePipelineState((RHIComputeShader*)compute_shader.Get());
+
+        //why not implement a counter buffer?
+        {
+            RHIBufferCreateInfo buffer_create_info;
+            draw_indirect_buffer = g_rhi->RHICreateBuffer(RHIBufferCreateInfo::Create(
+                1024 * 1024 * 64,
+                0,
+                EBufferUsageFlags::INDIRECT_BUFFER | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::STORAGE_BUFFER));
+
+            draw_count_buffer = g_rhi->RHICreateBuffer(RHIBufferCreateInfo::Create(
+                sizeof(uint32_t),
+                0,
+                EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::STORAGE_BUFFER));
+
+            zero_buffer = g_rhi->RHICreateBuffer(RHIBufferCreateInfo::Create(
+                sizeof(uint32_t),
+                0,
+                EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::TRANSFER_SRC));
+
+            void* mapped = g_rhi->RHIMapBuffer(zero_buffer, 0, sizeof(uint32_t));
+
+            *(uint32_t*)mapped = 0;
+
+            g_rhi->RHIUnmapBuffer(zero_buffer);
+
+            draw_indirect_view =
+                g_rhi->RHICreateUAV(draw_indirect_buffer, RHIViewInfo::CreateBufferUAVInfo());
+
+            draw_count_view =
+                g_rhi->RHICreateUAV(draw_count_buffer, RHIViewInfo::CreateBufferUAVInfo());
+
+            auto meshlet_descs = g_scene->GetBuffer("meshlet_descs");
+
+            meshlet_descs_buffer_view = g_rhi->RHICreateSRV(g_scene->GetBuffer("meshlet_descs"),
+                                                            RHIViewInfo::CreateBufferSRVInfo()
+                                                                .SetByteOffset(0)
+                                                                .SetNumElements(meshlet_descs->GetSize() / sizeof(MeshletDesc)));
+
+            meshlet_bounds_buffer_view = g_rhi->RHICreateSRV(g_scene->GetBuffer("meshlet_bounds"),
+                                                             RHIViewInfo::CreateBufferSRVInfo()
+                                                                 .SetByteOffset(0)
+                                                                 .SetStride(sizeof(MeshletBound)));
+        }
     }
 
     void DeferredRenderer::Impl::ShutDown() {
@@ -276,119 +277,185 @@ namespace Moer {
 
     void DeferredRenderer::Impl::DrawFrame() {
         //render and copy to backbuffer
-        EnqueueRenderTask([this]() {
-            auto                      info = virtual_viewport->GetNextBackBuffer();
-            RHIUnorderedAccessViewRef uav  = virtual_viewport->GetNextBackBufferUAV(info.backbuffer_index);
+        auto camera_entity = g_scene->GetCameras()[0];
+        auto camera        = CameraManager::Get().Get(camera_entity);
+        camera->Tick();
 
-            RHIGraphicsCommandList* cmd_list = render_cmd_lists[frame_counter % render_cmd_lists.size()];
+        CameraData camera_data;
+        camera_data.view = camera->GetViewMatrix();
+        camera_data.proj = camera->GetProjectionMatrix();
 
-            uint64_t wait_index = frame_counter > render_cmd_lists.size() ? frame_counter - render_cmd_lists.size() : 0;
-            //render
-            render_fence->Wait(wait_index);
+        camera_data.inv_view = Inverse(camera_data.view.t);
+        camera_data.inv_proj = Inverse(camera_data.proj.t);
 
-            cmd_list->Reset();
+        {
+            MeshletCullingShader::Parameters cull_params;
+            cull_params.draw_count_buffer    = draw_count_view;
+            cull_params.draw_indirect_buffer = draw_indirect_view;
+            cull_params.camera_data          = camera_data;
+            cull_params.meshlet_info_buffer  = meshlet_descs_buffer_view;
+            cull_params.meshlet_bound_buffer = meshlet_bounds_buffer_view;
 
-            cmd_list->BeginRecording();
+            RHIBatchedShaderParameters compute_batched_params;
+            compute_batched_params.SetParameters(ShaderResourceManager::GetInstance().GetShader<MeshletCullingShader>(), cull_params);
 
-            RHIRenderPassInfo pass_info{};
+            auto&& sync_command_list = [this]() {
+                int                     i        = render_cmd_lists.size();
+                RHIGraphicsCommandList* cmd_list = render_cmd_lists[frame_counter % render_cmd_lists.size()];
+                cmd_list->Reset();
+                cmd_list->BeginRecording();
+            };
 
-            pass_info.color_attachments[0].color_attachment_action = AC_CLEAR_STORE;
-            RenderAttachmentView& render_attachment_view           = pass_info.color_attachments[0].color_attachment_view;
+            auto&& reset_counter_buffer = [this]() {
+                RHIGraphicsCommandList* cmd_list = render_cmd_lists[frame_counter % render_cmd_lists.size()];
 
-            render_attachment_view.required_layout  = TEXTURE_LAYOUT_COLOR_ATTACHMENT;
-            render_attachment_view.texture_view     = uav;
-            render_attachment_view.clear_attachment = RHIClearAttachment(EClearAttachment::COLOR);
+                RHICopyBufferInfo copy_info{};
+                copy_info.regions.push_back({0, 0, sizeof(uint32_t)});
+                cmd_list->CopyBuffer(copy_info, zero_buffer, draw_count_buffer);
+            };
 
-            Extent3D extent              = uav->GetTexture()->GetExtent3D();
-            pass_info.render_area.extent = Extent2D(extent.x, extent.y);
-            pass_info.render_area.offset = Offset2D(0, 0);
+            auto&& cull_task = [this, compute_param = std::move(compute_batched_params)]() {
+                RHIGraphicsCommandList* cmd_list = render_cmd_lists[frame_counter % render_cmd_lists.size()];
 
-            RHIBarrierDependencyInfo barrier_dependency_info;
-            barrier_dependency_info.texture_barriers.resize(1);
-            auto& texture_barrier_info = barrier_dependency_info.texture_barriers[0];
-            texture_barrier_info
-                .SetTexture(uav->GetTexture())
-                .SetDstTextureLayout(TEXTURE_LAYOUT_COLOR_ATTACHMENT)
-                .SetSrcTextureLayout(TEXTURE_LAYOUT_TRANSFER_SRC)
-                .SetSrcStage(ERHIPipelineStageFlags::PS_TRANSFER)
-                .SetDstStage(ERHIPipelineStageFlags::PS_COLOR_ATTACHMENT_OUTPUT)
-                .SetDstAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
+                RHIBarrierDependencyInfo barrier_dependency_info{};
+                barrier_dependency_info.buffer_barriers.resize(2);
+                auto& buffer_barrier_info = barrier_dependency_info.buffer_barriers[0];
+                buffer_barrier_info
+                    .SetBuffer(draw_count_buffer)
+                    .SetDstAccessFlags(ERHIAccessFlags::SHADER_WRITE)
+                    .SetSrcAccessFlags(ERHIAccessFlags::TRANSFER_WRITE)
+                    .SetSrcStage(ERHIPipelineStageFlags::PS_TRANSFER)
+                    .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
 
-            cmd_list->SetPipelineBarrier(barrier_dependency_info);
-            cmd_list->BeginRenderPass(pass_info, "Test Triangle");
+                auto& buffer_barrier_info_1 = barrier_dependency_info.buffer_barriers[1];
+                buffer_barrier_info_1
+                    .SetBuffer(draw_indirect_buffer)
+                    .SetDstAccessFlags(ERHIAccessFlags::SHADER_WRITE)
+                    .SetSrcAccessFlags(ERHIAccessFlags::TRANSFER_WRITE)
+                    .SetSrcStage(ERHIPipelineStageFlags::PS_TRANSFER)
+                    .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
 
-            const VirtualViewportInfo& viewport_info = virtual_viewport->GetInfo();
-            ViewPort                   viewport{0, 0, float(viewport_info.extent.x), float(viewport_info.extent.y), 0, 1};
-            cmd_list->SetViewPort(viewport);
-            cmd_list->SetScissor({0, 0, uint32_t(viewport_info.extent.x), uint32_t(viewport_info.extent.y)});
+                cmd_list->SetPipelineBarrier(barrier_dependency_info);
 
-            cmd_list->SetPipelineState(pipeline_state);
+                cmd_list->SetPipelineState(compute_pipeline_state);
+                g_rhi->RHISetBatchedShaderParameters(compute_pipeline_state, compute_param);
+                cmd_list->Dispatch(16, 16, 16);
+                {
+                    RHIBarrierDependencyInfo post_compute_barrier{};
+                    post_compute_barrier.buffer_barriers.resize(2);
+                    auto& buffer_barrier_info_0 = post_compute_barrier.buffer_barriers[0];
+                    buffer_barrier_info_0
+                        .SetBuffer(draw_count_buffer)
+                        .SetDstAccessFlags(ERHIAccessFlags::INDIRECT_COMMAND_READ)
+                        .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE)
+                        .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
+                        .SetDstStage(ERHIPipelineStageFlags::PS_DRAW_INDIRECT);
 
-            auto* const scene = g_scene;
-            if (scene) {
-                auto camera_entity = scene->GetCameras()[0];
-                auto camera        = CameraManager::Get().Get(camera_entity);
-                camera->Tick();
-                const auto camera_view = camera->GetViewMatrix();
-                const auto camera_proj = camera->GetProjectionMatrix();
+                    auto& buffer_barrier_info_1 = post_compute_barrier.buffer_barriers[1];
+                    buffer_barrier_info_1
+                        .SetBuffer(draw_indirect_buffer)
+                        .SetDstAccessFlags(ERHIAccessFlags::INDIRECT_COMMAND_READ)
+                        .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE)
+                        .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
+                        .SetDstStage(ERHIPipelineStageFlags::PS_DRAW_INDIRECT);
 
-                // Shader* vert_shader = ShaderResourceManager::GetShader<TestDeferredTriangleShaderVert>();
-                cmd_list->BindIndexBuffer(scene->GetBuffer("index_buffer"), 0, IET_UINT32);
-                uint32_t           offset             = 0;
-                const RHIBufferRef prim_vertex_buffer = scene->GetBuffer("vertex_buffer");
-                cmd_list->BindVertexBuffers(0, 1, &prim_vertex_buffer, &offset);
-
-                for (auto entity : scene->GetEntities()) {
-                    if (RenderableManager::Get().Contains(entity)) {
-                        const auto                                 prim_model = TransformManager::Get().Get(entity).matrix;
-                        TestDeferredTriangleShaderVert::Parameters params;
-                        Matrix4x4f                                 ubo[] = {prim_model, camera_view, camera_proj, Transpose(camera_proj * camera_view * prim_model)};
-                        memcpy(&params.scene_ubo, &ubo, sizeof(ubo));
-                        RHIBatchedShaderParameters batched_params;
-                        batched_params.SetParameters(ShaderResourceManager::GetInstance().GetShader<TestDeferredTriangleShaderVert>(), params);
-
-                        auto mi = RenderableManager::Get().GetMaterialInstance(entity);
-                        mi->Use(batched_params);
-
-                        auto prim_info = RenderableManager::Get().GetMeshInfo(entity);
-
-                        g_rhi->RHISetBatchedShaderParameters(pipeline_state, batched_params, true);
-
-                        // cmd_list->BindIndexBuffer(primitive->GetIndexBuffer(), 0, EIndexElementType::IET_UINT32);
-                        // const RHIBufferRef prim_vertex_buffer = primitive->GetVertexBuffer();
-                        // uint32_t           offset             = 0;
-                        // cmd_list->BindVertexBuffers(0, 1, &prim_vertex_buffer, &offset);
-                        cmd_list->DrawIndexedInstanced(prim_info.index_count, 1, prim_info.index_offset, prim_info.vertex_offset, 0);
-                    }
+                    cmd_list->SetPipelineBarrier(post_compute_barrier);
                 }
-            } else {
-                uint32_t offset = 0;
-                cmd_list->BindIndexBuffer(index_buffer, 0, EIndexElementType::IET_UINT32);
-                cmd_list->BindVertexBuffers(0, 1, &vertex_buffer, &offset);
-                cmd_list->DrawIndexedInstanced(3, 1, 0, 0, 0);
-            }
+            };
 
-            cmd_list->EndRenderPass();
+            EnqueueRenderTask(std::move(sync_command_list));
+            EnqueueRenderTask(std::move(reset_counter_buffer));
+            EnqueueRenderTask(std::move(cull_task));
+        }
 
-            texture_barrier_info
-                .SetDstTextureLayout(TEXTURE_LAYOUT_TRANSFER_SRC)
-                .SetSrcTextureLayout(TEXTURE_LAYOUT_COLOR_ATTACHMENT)
-                .SetSrcStage(ERHIPipelineStageFlags::PS_COLOR_ATTACHMENT_OUTPUT)
-                .SetDstStage(ERHIPipelineStageFlags::PS_TRANSFER)
-                .SetSrcAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE)
-                .SetDstAccessFlags(ERHIAccessFlags::TRANSFER_READ);
+        {
+            TestDeferredTriangleShaderVert::Parameters params;
+            params.camera_data = camera_data;
 
-            cmd_list->SetPipelineBarrier(barrier_dependency_info);
+            RHIBatchedShaderParameters batched_params;
+            batched_params.SetParameters(ShaderResourceManager::GetInstance().GetShader<TestDeferredTriangleShaderVert>(), params);
 
-            cmd_list->EndRecording();
+            EnqueueRenderTask([this, batched_params = std::move(batched_params)]() {
+                auto                      info = virtual_viewport->GetNextBackBuffer();
+                RHIUnorderedAccessViewRef uav  = virtual_viewport->GetNextBackBufferUAV(info.backbuffer_index);
 
-            RHISubmitInfo submit_info;
-            submit_info.Wait(info.backbuffer_ready_fence, frame_counter);
-            submit_info.Wait(render_fence, frame_counter);
-            submit_info.Signal(render_fence, ++frame_counter);
+                RHIGraphicsCommandList* cmd_list = render_cmd_lists[frame_counter % render_cmd_lists.size()];
 
-            render_queue->SubmitCommands(1, cmd_list, &submit_info);
-        });
+                RHIRenderPassInfo pass_info{};
+
+                pass_info.color_attachments[0].color_attachment_action = AC_CLEAR_STORE;
+                RenderAttachmentView& render_attachment_view           = pass_info.color_attachments[0].color_attachment_view;
+
+                render_attachment_view.required_layout  = TEXTURE_LAYOUT_COLOR_ATTACHMENT;
+                render_attachment_view.texture_view     = uav;
+                render_attachment_view.clear_attachment = RHIClearAttachment(EClearAttachment::COLOR);
+
+                Extent3D extent              = uav->GetTexture()->GetExtent3D();
+                pass_info.render_area.extent = Extent2D(extent.x, extent.y);
+                pass_info.render_area.offset = Offset2D(0, 0);
+
+                RHIBarrierDependencyInfo barrier_dependency_info;
+                barrier_dependency_info.texture_barriers.resize(1);
+                auto& texture_barrier_info = barrier_dependency_info.texture_barriers[0];
+                texture_barrier_info
+                    .SetTexture(uav->GetTexture())
+                    .SetDstTextureLayout(TEXTURE_LAYOUT_COLOR_ATTACHMENT)
+                    .SetSrcTextureLayout(TEXTURE_LAYOUT_TRANSFER_SRC)
+                    .SetSrcStage(ERHIPipelineStageFlags::PS_TRANSFER)
+                    .SetDstStage(ERHIPipelineStageFlags::PS_COLOR_ATTACHMENT_OUTPUT)
+                    .SetDstAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
+
+                cmd_list->SetPipelineBarrier(barrier_dependency_info);
+                cmd_list->BeginRenderPass(pass_info, "Test Triangle");
+
+                const VirtualViewportInfo& viewport_info = virtual_viewport->GetInfo();
+                ViewPort                   viewport{0, 0, float(viewport_info.extent.x), float(viewport_info.extent.y), 0, 1};
+                cmd_list->SetViewPort(viewport);
+                cmd_list->SetScissor({0, 0, uint32_t(viewport_info.extent.x), uint32_t(viewport_info.extent.y)});
+
+                cmd_list->SetPipelineState(pipeline_state);
+
+                auto* const scene = g_scene;
+                if (scene) {
+                    auto camera_entity = scene->GetCameras()[0];
+                    auto camera        = CameraManager::Get().Get(camera_entity);
+                    camera->Tick();
+                    const auto camera_view = camera->GetViewMatrix();
+                    const auto camera_proj = camera->GetProjectionMatrix();
+
+                    // Shader* vert_shader = ShaderResourceManager::GetShader<TestDeferredTriangleShaderVert>();
+                    cmd_list->BindIndexBuffer(scene->GetBuffer("index_buffer"), 0, IET_UINT32);
+                    uint32_t           offset             = 0;
+                    const RHIBufferRef prim_vertex_buffer = scene->GetBuffer("vertex_buffer");
+                    cmd_list->BindVertexBuffers(0, 1, &prim_vertex_buffer, &offset);
+
+                    cmd_list->DrawIndexedIndirect(draw_indirect_buffer, 0, draw_count_buffer, 0, 11451, sizeof(uint32_t) * 4);
+                } else {
+                    assert(false);
+                }
+
+                cmd_list->EndRenderPass();
+
+                texture_barrier_info
+                    .SetDstTextureLayout(TEXTURE_LAYOUT_TRANSFER_SRC)
+                    .SetSrcTextureLayout(TEXTURE_LAYOUT_COLOR_ATTACHMENT)
+                    .SetSrcStage(ERHIPipelineStageFlags::PS_COLOR_ATTACHMENT_OUTPUT)
+                    .SetDstStage(ERHIPipelineStageFlags::PS_TRANSFER)
+                    .SetSrcAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE)
+                    .SetDstAccessFlags(ERHIAccessFlags::TRANSFER_READ);
+
+                cmd_list->SetPipelineBarrier(barrier_dependency_info);
+
+                cmd_list->EndRecording();
+
+                RHISubmitInfo submit_info;
+                submit_info.Wait(info.backbuffer_ready_fence, frame_counter);
+                submit_info.Wait(render_fence, frame_counter);
+                submit_info.Signal(render_fence, ++frame_counter);
+
+                render_queue->SubmitCommands(1, cmd_list, &submit_info);
+            });
+        }
     }
 
     void DeferredRenderer::Impl::Present() {

@@ -64,8 +64,8 @@ public:
 
     RHITextureRef RHICreateTexture(const RHITextureCreateInfo& info) final override;
 
-    RHIShaderResourceViewRef  RHICreateShaderResourceView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) final override;
-    RHIUnorderedAccessViewRef RHICreateUnorderedAccessView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) final override;
+    RHIShaderResourceViewRef  RHICreateSRV(RHIViewableResource* _resource, const RHIViewInfo& _view_info) final override;
+    RHIUnorderedAccessViewRef RHICreateUAV(RHIViewableResource* _resource, const RHIViewInfo& _view_info) final override;
 
     RHICommandQueue* RHICreateCommandQueue(ECommandQueueType _type) final override;
     // RHIGraphicsCommandList* CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state = nullptr) final override;
@@ -75,7 +75,6 @@ public:
     RHICopyCommandList* RHICreateCopyCommandList(RHICommandAllocator* _allocator) final override;
 
     // void RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) final override;
-
 
     RHICommandAllocator* RHIGetCurrentCommandAllocator() final override;
 #pragma endregion
@@ -97,7 +96,7 @@ public:
 #pragma endregion
 
 protected:
-     void RHISetBatchedShaderParametersInner(RHIResource* _resource, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) final override;
+    void RHISetBatchedShaderParametersInner(RHIResource* _resource, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) final override;
 
 protected:
     VkInstance               m_instance;

@@ -2,6 +2,7 @@
 
 #include "config/ConfigManager.h"
 // #include "loader/gltf/Parser.h"
+#include "rhi/RHIResource.h"
 #include "scene/EntityManager.h"
 #include "scene/RenderableManager.h"
 #include "rhi/RHI.h"
@@ -12,18 +13,24 @@ namespace Moer {
 
     class RENDER_API Scene::Impl {
     public:
-        void          AddEntity(Entity entity) noexcept { m_entities.emplace(entity); }
-        void          AddCamera(Entity entity) noexcept { m_cameras.emplace(entity); }
-        void          RemoveEntity(Entity entity) noexcept { m_entities.erase(entity); };
-        void          SetBuffer(const std::string& name, RHIBufferRef buffer) { m_buffers[name] = buffer; }
-        RHIBufferRef  GetBuffer(const std::string& name) const { return m_buffers.at(name); }
+        void                      AddEntity(Entity entity) noexcept { m_entities.emplace(entity); }
+        void                      AddCamera(Entity entity) noexcept { m_cameras.emplace(entity); }
+        void                      RemoveEntity(Entity entity) noexcept { m_entities.erase(entity); };
+        void                      SetBuffer(const std::string& name, RHIBufferRef buffer) { m_buffers[name] = buffer; }
+        RHIBufferRef              GetBuffer(const std::string& name) const { return m_buffers.at(name); }
+        RHIUnorderedAccessViewRef GetUAV(const std::string& name) const { return m_uavs.at(name); }
+        RHIShaderResourceViewRef  GetSRV(const std::string& name) const { return m_srvs.at(name); }
+
         Array<Entity> GetEntities() const noexcept;
         Array<Entity> GetCameras() const noexcept;
 
     protected:
-        Map<std::string, RHIBufferRef> m_buffers;
-        EntitySet                      m_entities;
-        EntitySet                      m_cameras;
+        Map<std::string, RHIBufferRef>              m_buffers;
+        Map<std::string, RHIUnorderedAccessViewRef> m_uavs;
+        Map<std::string, RHIShaderResourceViewRef>  m_srvs;
+
+        EntitySet m_entities;
+        EntitySet m_cameras;
     };
 
     Array<Entity> Scene::Impl::GetEntities() const noexcept {

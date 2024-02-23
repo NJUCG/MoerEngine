@@ -53,7 +53,7 @@ namespace Moer {
         ~TextureBuilder() noexcept;
         // static void InitBuild() noexcept;
         // static void EndBuild() noexcept;
-        protected:
+    protected:
         EPixelFormat m_format{EPixelFormat::PF_R8G8B8_UNORM};
         uint32_t     m_width{0}, m_height{0}, m_depth{0}, m_mipLevels{1};
         Callback     m_callback{nullptr};
@@ -62,13 +62,15 @@ namespace Moer {
 
     class RENDER_API GpuSceneBufferBuilder {
     public:
-         GpuSceneBufferBuilder& Vertex(const Moer::Array<float>* data);
-         GpuSceneBufferBuilder& Index(const Moer::Array<uint32_t>* data);
-         GpuSceneBufferBuilder();
-         ~GpuSceneBufferBuilder();
-         std::pair<RHIBufferRef,RHIBufferRef> Build();
+        GpuSceneBufferBuilder& Vertex(const Moer::Array<float>* data);
+        GpuSceneBufferBuilder& Index(const Moer::Array<uint32_t>* data);
+        GpuSceneBufferBuilder();
+        ~GpuSceneBufferBuilder();
+        std::pair<RHIBufferRef, RHIBufferRef> Build();
+        RHIBufferRef                          CopyFrom(const void* data, uint32_t size);
+
     protected:
         class Impl;
         Impl* m_impl{nullptr};
     };
-}
+}// namespace Moer

@@ -52,8 +52,8 @@ public:
     RENDER_API virtual ~RHICommandListBase();
 
     virtual void* GetNativeHandle() const = 0;
-    virtual void  BeginRecording()                  = 0;
-    virtual void  EndRecording()                 = 0;
+    virtual void  BeginRecording()        = 0;
+    virtual void  EndRecording()          = 0;
     virtual void  Reset()                 = 0;
 };
 
@@ -61,6 +61,7 @@ class RHIGraphicsCommandList : public RHICommandListBase {
 public:
     virtual ~RHIGraphicsCommandList(){};
     virtual void SetPipelineState(RHIGraphicsPipelineState* _graphics_pso) = 0;
+    virtual void SetPipelineState(RHIComputePipelineState* _compute_pso)   = 0;
     // virtual void Open()                                                    = 0;
     // virtual void Close()                                                   = 0;
     // virtual void Reset()                                                   = 0;

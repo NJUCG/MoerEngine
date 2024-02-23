@@ -36,7 +36,7 @@ RHIViewInfo::Buffer::ViewInfo RHIViewInfo::Buffer::GetViewInfo(RHIBuffer* target
 
     switch (temp_buffer_type) {
         case EBufferType::STRUCTURED:
-            assert(EnumHasAnyFlag(info.usage, EBufferUsageFlags::STRUCTURED_BUFFER) && "the buffer is not a structured buffer.");
+            assert(EnumHasAnyFlag(info.usage, EBufferUsageFlags::STORAGE_BUFFER) && "the buffer is not a structured buffer.");
             assert(format == PF_UNDEFINED && "structured buffer should not have a pixel format.");
             temp_byte_stride = stride == 0 ? info.stride : stride;
             break;

@@ -77,6 +77,7 @@ public:
     }
 
     void SetPipelineState(RHIGraphicsPipelineState* _graphics_pso) override;
+    void SetPipelineState(RHIComputePipelineState* _compute_pso) override;
     void BeginRecording() override;
     void EndRecording() override;
     void Reset() override;

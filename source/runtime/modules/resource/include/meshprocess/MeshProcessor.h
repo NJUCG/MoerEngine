@@ -6,37 +6,9 @@
 #include "misc/STL.h"
 #include <stdint.h>
 
+#include "rhi/RHICommon.h"
+
 namespace Moer {
-
-    class MeshResource : public Countable {
-    public:
-        virtual void Destroy() override {
-            delete this;
-        };
-    };
-    class MeshProcessOutput;
-    using MeshProcessOutputRef = CountableRef<MeshProcessOutput>;
-
-    // using MeshResourceRef = CountableRef<MeshResource>;
-    struct MeshletDesc {
-        uint32_t vertex_offset;
-        uint32_t vertex_count;
-        uint32_t primitive_offset;
-        uint32_t primitive_count;
-    };
-
-    struct MeshletBound {
-        /* bounding sphere, useful for frustum and occlusion culling */
-        Vector3f center;
-        float    radius;
-
-        /* normal cone axis and cutoff, stored in 8-bit SNORM format; decode using x/127.0 */
-        int8_t cone_axis_s8[3];
-        int8_t cone_cutoff; /* = cos(angle/2) */
-
-        /* bool reject = dot(center - camera_position, cone_axis) >= cone_cutoff* length(center - camera_position) + radius; */
-    };
-
     struct MeshProcessInput {
         void*     vertex_data;
         uint32_t  vertex_count;
@@ -45,19 +17,20 @@ namespace Moer {
         uint32_t  index_count;
     };
 
-    class RESOURCE_API MeshProcessOutput : public MeshResource {
+    class RESOURCE_API MeshProcessOutput {
 
-    private:
+    public:
         friend class MeshProcessor;
         Array<MeshletDesc>  meshlets;
         Array<MeshletBound> meshlet_bounds;
         Array<float>        meshlet_vertex_data;
-        Array<uint8_t>      primitive_indices;
+        Array<uint32_t>     primitive_indices;
     };
 
     class RESOURCE_API MeshProcessor {
     public:
-        static MeshProcessOutputRef GenerateMeshlets(const MeshProcessInput& input);
+        MeshProcessor();
+        static MeshProcessOutput GenerateMeshlets(const MeshProcessInput& input);
 
     private:
         static void GenerateMeshlets(const MeshProcessInput& input, MeshProcessOutput& output);

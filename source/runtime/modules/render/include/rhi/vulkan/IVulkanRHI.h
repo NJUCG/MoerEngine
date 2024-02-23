@@ -57,8 +57,8 @@ public:
 
     RHITextureRef RHICreateTexture(const RHITextureCreateInfo& info) override { return RHITextureRef{}; };
 
-    RHIShaderResourceViewRef  RHICreateShaderResourceView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) override { return RHIShaderResourceViewRef{}; }
-    RHIUnorderedAccessViewRef RHICreateUnorderedAccessView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) override { return RHIUnorderedAccessViewRef{}; }
+    RHIShaderResourceViewRef  RHICreateSRV(RHIViewableResource* _resource, const RHIViewInfo& _view_info) override { return RHIShaderResourceViewRef{}; }
+    RHIUnorderedAccessViewRef RHICreateUAV(RHIViewableResource* _resource, const RHIViewInfo& _view_info) override { return RHIUnorderedAccessViewRef{}; }
 
     RHICommandQueue* RHICreateCommandQueue(ECommandQueueType type) override { return nullptr; }
     // RHIGraphicsCommandList* CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state = nullptr) override { return nullptr; }

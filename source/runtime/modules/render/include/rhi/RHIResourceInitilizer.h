@@ -538,6 +538,8 @@ struct RHIBufferRegion {
 };
 struct RHICopyBufferInfo {
     RHICopyBufferInfo() = default;
+    RHICopyBufferInfo(RHIBufferRegion&& region) : regions({std::move(region)}) {
+    }
 
     Moer::Array<RHIBufferRegion> regions;
 

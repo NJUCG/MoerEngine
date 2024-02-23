@@ -1285,7 +1285,7 @@ public:
     }
     Initializer& SetType(RHIBuffer* _buffer) {
         buffer.srv.buffer_type = EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::BYTE_ADDRESS_BUFFER)    ? EBufferType::RAW :
-                                 EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::STRUCTURED_BUFFER)      ? EBufferType::STRUCTURED :
+                                 EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::STORAGE_BUFFER)         ? EBufferType::STRUCTURED :
                                  EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::ACCELERATION_STRUCTURE) ? EBufferType::ACCELERATION_STRUCTURE :
                                                                                                                   EBufferType::UNDEFINED;
         return *this;
@@ -1326,7 +1326,7 @@ public:
     }
     Initializer& SetType(RHIBuffer* _buffer) {
         buffer.uav.buffer_type = EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::BYTE_ADDRESS_BUFFER)    ? EBufferType::RAW :
-                                 EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::STRUCTURED_BUFFER)      ? EBufferType::STRUCTURED :
+                                 EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::STORAGE_BUFFER)         ? EBufferType::STRUCTURED :
                                  EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::ACCELERATION_STRUCTURE) ? EBufferType::ACCELERATION_STRUCTURE :
                                                                                                                   EBufferType::UNDEFINED;
         return *this;

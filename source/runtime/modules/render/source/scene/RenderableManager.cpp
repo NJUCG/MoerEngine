@@ -32,7 +32,7 @@ namespace Moer {
     RenderableManager::Builder::~Builder() noexcept {}
 
     RenderableManager::Builder& RenderableManager::Builder::operator=(Builder&& rhs) noexcept { return *this; }
-    RenderableManager::Builder&                             RenderableManager::Builder::Geometry(EPrimitiveType type, const Moer::Array<float>& vertex_data, const Moer::Array<uint32_t>& index_data, uint32_t offset, uint32_t count) noexcept {
+    RenderableManager::Builder& RenderableManager::Builder::Geometry(EPrimitiveType type, const Moer::Array<float>& vertex_data, const Moer::Array<uint32_t>& index_data, uint32_t offset, uint32_t count) noexcept {
         m_impl->type          = type;
         m_impl->vertex_data   = vertex_data;
         m_impl->index_data    = index_data;
@@ -61,8 +61,8 @@ namespace Moer {
     void RenderableManager::Builder::Build(Entity entity) noexcept {
         RenderableManager::Get().Create(*this, entity);
 
-        auto& transforManager = TransformManager::Get();
-        if (!transforManager.HasComponent(entity)) { transforManager.Create(entity); }
+        auto& transfor_manager = TransformManager::Get();
+        if (!transfor_manager.HasComponent(entity)) { transfor_manager.Create(entity); }
     }
 
     void RenderableManager::Create(Builder& builder, Entity entity) {

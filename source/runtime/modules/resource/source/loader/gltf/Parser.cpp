@@ -3,6 +3,7 @@
 #include "assimp/Importer.hpp"
 #include "assimp/postprocess.h"
 #include "assimp/scene.h"
+#include "meshprocess/MeshProcessor.h"
 #include "misc/STL.h"
 #include "rhi/RHI.h"
 #include "resources/GpuScene.h"
@@ -14,6 +15,7 @@
 #include "scene/RenderableManager.h"
 #include "scene/TransformManager.h"
 
+#include <filesystem>
 #include <stb/stb_image.h>
 #include <meshoptimizer.h>
 
@@ -32,8 +34,15 @@ namespace Moer::Resource::Gltf {
         Moer::UnorderedMap<std::string, MaterialInstanceRef> m_materials{};
         Moer::UnorderedMap<size_t, MaterialRef>              m_material_cache{};
         Moer::Array<MeshInfo>                                m_mesh_infos{};
-        std::filesystem::path                                m_file_parent_path{};
-        std::unique_ptr<Scene>                               m_scene{nullptr};
+
+        Moer::Array<MeshletDesc>  m_meshlet_descs{};
+        Moer::Array<MeshletBound> m_meshlet_bounds{};
+        //temperaly store vertex and index data
+        Moer::Array<float>    m_vertex_data{};
+        Moer::Array<uint32_t> m_index_data{};
+
+        std::filesystem::path  m_file_parent_path{};
+        std::unique_ptr<Scene> m_scene{nullptr};
     };
 
     uint32_t GetVertexData(const aiMesh* mesh, float* data) {
@@ -148,11 +157,15 @@ namespace Moer::Resource::Gltf {
         if (embedded_id >= 0) {
             const aiTexture* texture = scene->mTextures[embedded_id];
             stbi_load_from_memory(reinterpret_cast<const unsigned char*>(texture->pcData), texture->mWidth, &width, &height, &channel, 4);
+
             builder->CallBack(&free);
             //todo
         } else {
-            std::filesystem::path texture_file_path = m_file_parent_path / texture_path.C_Str();
-            data                                    = stbi_load(texture_file_path.string().c_str(), &width, &height, &channel, 4);
+            std::filesystem::path texture_file_path = std::filesystem::canonical(m_file_parent_path / texture_path.C_Str());
+
+            data = stbi_load(texture_file_path.string().c_str(), &width, &height, &channel, 4);
+            if (!data)
+                return;
             builder->CallBack(stbi_image_free);
             //todo
         }
@@ -244,42 +257,93 @@ namespace Moer::Resource::Gltf {
         //Assume all mesh has same attribute
         auto attribute = GetAttribute(gltf_scene->mMeshes[0], stride);
 
+        stride *= sizeof(float);
+        m_mesh_infos.resize(gltf_scene->mNumMeshes);
+
         uint32_t vertex_count = 0, index_count = 0;
         for (uint32_t i = 0; i < gltf_scene->mNumMeshes; i++) {
             const auto* mesh = gltf_scene->mMeshes[i];
-            vertex_count += mesh->mNumVertices;
-            index_count += mesh->mNumFaces * 3;
+
+            uint32_t temp_stride;
+            GetAttribute(gltf_scene->mMeshes[0], temp_stride);
+            assert(temp_stride == stride / 4 && "Meshes have different attribute");
+            Moer::Array<float> temp_vertex_data(mesh->mNumVertices * stride / sizeof(float));
+            GetVertexData(mesh, temp_vertex_data.data());
+
+            Moer::MeshProcessInput input;
+            input.vertex_data   = temp_vertex_data.data();
+            input.vertex_count  = mesh->mNumVertices;
+            input.vertex_stride = stride;
+
+            Moer::Array<uint32_t> indices;
+            indices.reserve(mesh->mNumFaces * 3);// NOLINT(cppcoreguidelines-pro-bounds-constant-array-index)
+            for (uint32_t i = 0; i < mesh->mNumFaces; i++) {
+                const auto& face = mesh->mFaces[i];
+                indices.push_back(face.mIndices[0]);
+                indices.push_back(face.mIndices[1]);
+                indices.push_back(face.mIndices[2]);
+            }
+
+            input.index_data  = indices.data();
+            input.index_count = indices.size();
+
+            Moer::MeshProcessOutput&& output = Moer::MeshProcessor::GenerateMeshlets(input);
+
+            // vertex_count += mesh->mNumVertices;
+            // index_count += mesh->mNumFaces * 3;
+
+            m_meshlet_bounds.insert(m_meshlet_bounds.end(), output.meshlet_bounds.begin(), output.meshlet_bounds.end());
+            m_meshlet_descs.insert(m_meshlet_descs.end(), output.meshlets.begin(), output.meshlets.end());
+
+            m_mesh_infos[i] = {.vertex_offset = vertex_count,
+                               .index_offset  = index_count,
+                               .vertex_count  = (uint32_t)output.meshlet_vertex_data.size(),
+                               .index_count   = (uint32_t)output.primitive_indices.size()};
+
+            m_vertex_data.insert(m_vertex_data.end(), output.meshlet_vertex_data.begin(), output.meshlet_vertex_data.end());
+            m_index_data.insert(m_index_data.end(), output.primitive_indices.begin(), output.primitive_indices.end());
+
+            vertex_count += output.meshlet_vertex_data.size();
+            index_count += output.primitive_indices.size();
         }
 
-        Moer::Array<float>*    m_vertex_data = new Moer::Array<float>{};
-        Moer::Array<uint32_t>* m_index_data  = new Moer::Array<uint32_t>;
+        // Moer::Array<float>*    m_vertex_data = new Moer::Array<float>{};
+        // Moer::Array<uint32_t>* m_index_data  = new Moer::Array<uint32_t>;
 
-        m_vertex_data->resize(vertex_count * stride);
-        m_index_data->resize(index_count);
-        m_mesh_infos.resize(gltf_scene->mNumMeshes);
+        // m_vertex_data->resize(vertex_count * stride);
+        // m_index_data->resize(index_count);
 
-        uint32_t vertex_offset = 0, index_offset = 0;
-        //uint32_t cur_vertex_count=0,cur_index_count=0;
-        for (uint32_t i = 0; i < gltf_scene->mNumMeshes; i++) {
-            const auto* mesh             = gltf_scene->mMeshes[i];
-            auto        cur_vertex_count = GetVertexData(mesh, m_vertex_data->data() + vertex_offset * stride);
-            auto        cur_index_count  = GetIndexData(mesh, m_index_data->data() + index_offset);
-            m_mesh_infos[i]              = {.vertex_offset = vertex_offset, .index_offset = index_offset, .vertex_count = cur_vertex_count, .index_count = cur_index_count};
-            vertex_offset += cur_vertex_count;
-            index_offset += cur_index_count;
-        }
+        // uint32_t vertex_offset = 0, index_offset = 0;
+        // //uint32_t cur_vertex_count=0,cur_index_count=0;
+        // for (uint32_t i = 0; i < gltf_scene->mNumMeshes; i++) {
+        //     const auto* mesh             = gltf_scene->mMeshes[i];
+        //     auto        cur_vertex_count = GetVertexData(mesh, m_vertex_data->data() + vertex_offset * stride);
+        //     auto        cur_index_count  = GetIndexData(mesh, m_index_data->data() + index_offset);
+        //     m_mesh_infos[i]              = {.vertex_offset = vertex_offset, .index_offset = index_offset, .vertex_count = cur_vertex_count, .index_count = cur_index_count};
+        //     vertex_offset += cur_vertex_count;
+        //     index_offset += cur_index_count;
+        // }
 
         auto gpu_scene = m_scene.get();
 
-        EnqueueRenderTask([m_vertex_data, m_index_data, gpu_scene] {
+        EnqueueRenderTask([vertex_data    = std::move(m_vertex_data),
+                           index_data     = std::move(m_index_data),
+                           meshlet_bounds = std::move(m_meshlet_bounds),
+                           meshlet_descs  = std::move(m_meshlet_descs),
+                           gpu_scene] {
             GpuSceneBufferBuilder gpu_scene_buffer_builder;
-            gpu_scene_buffer_builder.Vertex(m_vertex_data);
-            gpu_scene_buffer_builder.Index(m_index_data);
+            gpu_scene_buffer_builder.Vertex(&vertex_data);
+            gpu_scene_buffer_builder.Index(&index_data);
             auto buffer_pair = gpu_scene_buffer_builder.Build();
+
+            auto meshlet_bounds_buffer = gpu_scene_buffer_builder.CopyFrom(meshlet_bounds.data(), meshlet_bounds.size() * sizeof(MeshletBound));
+
+            auto meshlet_descs_buffer = gpu_scene_buffer_builder.CopyFrom(meshlet_descs.data(), meshlet_descs.size() * sizeof(MeshletDesc));
+
             gpu_scene->SetBuffer("vertex_buffer", buffer_pair.first);
             gpu_scene->SetBuffer("index_buffer", buffer_pair.second);
-            delete m_vertex_data;
-            delete m_index_data;
+            gpu_scene->SetBuffer("meshlet_bounds", meshlet_bounds_buffer);
+            gpu_scene->SetBuffer("meshlet_descs", meshlet_descs_buffer);
         });
 
         //Todo Load Lights

@@ -1,9 +1,10 @@
 #include "scene/TransformManager.h"
+#include <memory>
 namespace Moer {
     const Transform& TransformManager::Get(Entity entity) noexcept {
         return m_manager[entity].transform;
     }
-    Transform & TransformManager::Create(Entity entity) noexcept {
+    Transform& TransformManager::Create(Entity entity) noexcept {
         m_manager.AddComponent(entity);
         return m_manager[entity].transform;
     }
@@ -18,8 +19,8 @@ namespace Moer {
     }
     TransformManager& TransformManager::Get() noexcept {
         if (m_instance == nullptr) {
-            m_instance = std::make_unique<TransformManager>();
+            m_instance = std::unique_ptr<TransformManager, MoerDeleter>(MoerNew(TransformManager)());
         }
         return *m_instance;
     }
-}
+}// namespace Moer

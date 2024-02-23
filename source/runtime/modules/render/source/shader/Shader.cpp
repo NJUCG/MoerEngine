@@ -45,36 +45,57 @@ const Hash64City& Shader::GetCompiledHash() const {
 
 namespace Utils {
     EShaderCodeResourceBindingType BindingTypeStrToEnum(std::string_view _binding_type_str) {
-        std::regex binding_type_regex("(RW)?(Buffer|Texture2D|Texture2DArray|Texture3D|TextureCube|TextureCubeArray|Sampler|AccelerationStructure).*");
+        std::regex binding_type_regex("(RW)?(ConstantBuffer|StructuredBuffer|ByteAddressBuffer|Texture2D|Texture2DArray|Texture3D|TextureCube|TextureCubeArray|Sampler|AccelerationStructure).*");
         using SVMatchResults = std::match_results<std::string_view::const_iterator>;
         SVMatchResults match;
 
         if (std::regex_search(_binding_type_str.begin(), _binding_type_str.end(), match, binding_type_regex)) {
-            if (match[0] == "Buffer") {
-                return EShaderCodeResourceBindingType::BUFFER;
-            } else if (match[0] == "Texture2D") {
+            if (match[0] == "ConstantBuffer") {
+                return EShaderCodeResourceBindingType::CONSTANT_BUFFER;
+            }
+            if (match[0] == "StructuredBuffer") {
+                return EShaderCodeResourceBindingType::STRUCTURED_BUFFER;
+            }
+            if (match[0] == "ByteAddressBuffer") {
+                return EShaderCodeResourceBindingType::BYTE_ADDRESS_BUFFER;
+            }
+            if (match[0] == "Texture2D") {
                 return EShaderCodeResourceBindingType::TEXTURE_2D;
-            } else if (match[0] == "Texture2DArray") {
+            }
+            if (match[0] == "Texture2DArray") {
                 return EShaderCodeResourceBindingType::TEXTURE_2D_ARRAY;
-            } else if (match[0] == "Texture3D") {
+            }
+            if (match[0] == "Texture3D") {
                 return EShaderCodeResourceBindingType::TEXTURE_3D;
-            } else if (match[0] == "TextureCube") {
+            }
+            if (match[0] == "TextureCube") {
                 return EShaderCodeResourceBindingType::TEXTURE_CUBE;
-            } else if (match[0] == "TextureCubeArray") {
+            }
+            if (match[0] == "TextureCubeArray") {
                 return EShaderCodeResourceBindingType::TEXTURE_CUBE_ARRAY;
-            } else if (match[0] == "Sampler") {
+            }
+            if (match[0] == "Sampler") {
                 return EShaderCodeResourceBindingType::SAMPLER;
-            } else if (match[0] == "AccelerationStructure") {
+            }
+            if (match[0] == "AccelerationStructure") {
                 return EShaderCodeResourceBindingType::RAYTRACING_ACCELERATION_STRUCTURE;
-            } else if (match[0] == "RWBuffer") {
-                return EShaderCodeResourceBindingType::RW_BUFFER;
-            } else if (match[0] == "RWTexture2D") {
+            }
+            if (match[0] == "RWStructuredBuffer") {
+                return EShaderCodeResourceBindingType::RW_STRUCTURED_BUFFER;
+            }
+            if (match[0] == "RWByteAddressBuffer") {
+                return EShaderCodeResourceBindingType::RW_BYTE_ADDRESSED_BUFFER;
+            }
+            if (match[0] == "RWTexture2D") {
                 return EShaderCodeResourceBindingType::RW_TEXTURE_2D;
-            } else if (match[0] == "RWTexture2DArray") {
+            }
+            if (match[0] == "RWTexture2DArray") {
                 return EShaderCodeResourceBindingType::RW_TEXTURE_2D_ARRAY;
-            } else if (match[0] == "RWTexture3D") {
+            }
+            if (match[0] == "RWTexture3D") {
                 return EShaderCodeResourceBindingType::RW_TEXTURE_3D;
-            } else if (match[0] == "RWTextureCube") {
+            }
+            if (match[0] == "RWTextureCube") {
                 return EShaderCodeResourceBindingType::RW_TEXTURE_CUBE;
             }
         }

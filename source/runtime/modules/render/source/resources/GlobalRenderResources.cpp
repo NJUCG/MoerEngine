@@ -115,7 +115,7 @@ namespace Moer {
 
             size_t hash = RHITextureViewHash(texture, srv_info);
             if (!m_texture_view_cache.contains(hash)) {
-                RHIShaderResourceViewRef texture_view = g_rhi->RHICreateShaderResourceView(texture, srv_info);
+                RHIShaderResourceViewRef texture_view = g_rhi->RHICreateSRV(texture, srv_info);
                 m_texture_view_cache[hash]            = texture_view;
             }
             return m_texture_view_cache[hash];

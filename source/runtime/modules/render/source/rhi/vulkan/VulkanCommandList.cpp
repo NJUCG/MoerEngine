@@ -345,6 +345,14 @@ void VulkanRHIGraphicsCommandList::SetPipelineState(RHIGraphicsPipelineState* _g
     m_current_pipeline_state = vk_pso;
 }
 
+// MARK... current_pipeline_state_design
+void VulkanRHIGraphicsCommandList::SetPipelineState(RHIComputePipelineState* _compute_pso) {
+    auto* vk_pso = static_cast<VulkanRHIComputePipelineState*>(_compute_pso);
+    VK_CHECK_NULLPTR(vk_pso, "SetPipelineState: compute pipeline state is nullptr!", return);
+
+    vkCmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, vk_pso->GetHandle());
+}
+
 void VulkanRHIGraphicsCommandList::BeginRecording() {
     VulkanRHICommandListBase::Begin();
     m_bound_sets.clear();
@@ -531,13 +539,13 @@ void VulkanRHIGraphicsCommandList::ClearDepthStencil() {
 
 void VulkanRHIGraphicsCommandList::ClearUAVInt(RHIUnorderedAccessView* _uav, const Moer::Vector4i& _values) {
     // MARK...
-    auto* vk_uav = static_cast<VulkanRHIUnorderedAccessView*>(_uav);
+    auto* vk_uav = static_cast<VulkanRHITextureUAV*>(_uav);
     VK_CHECK_NULLPTR(vk_uav, "ClearUAVInt: uav is nullptr!", return);
 }
 
 void VulkanRHIGraphicsCommandList::ClearUAVFloat(RHIUnorderedAccessView* _uav, const Moer::Vector4f& _values) {
     // MARK...
-    auto* vk_uav = static_cast<VulkanRHIUnorderedAccessView*>(_uav);
+    auto* vk_uav = static_cast<VulkanRHITextureUAV*>(_uav);
     VK_CHECK_NULLPTR(vk_uav, "ClearUAVFloat: uav is nullptr!", return);
 }
 
@@ -605,10 +613,10 @@ VkRenderingAttachmentInfo VulkanRHIGraphicsCommandList::FromColorAttachmentInfo(
     auto* texture_view = _color_attachment_info.color_attachment_view.texture_view;
 
     if (texture_view->IsSRV()) {
-        auto* texture_srv         = static_cast<VulkanRHIShaderResourceView*>(texture_view);
+        auto* texture_srv         = static_cast<VulkanRHITextureSRV*>(texture_view);
         attachment_info.imageView = texture_srv->GetView();
     } else if (texture_view->IsUAV()) {
-        auto* texture_uav         = static_cast<VulkanRHIUnorderedAccessView*>(texture_view);
+        auto* texture_uav         = static_cast<VulkanRHITextureUAV*>(texture_view);
         attachment_info.imageView = texture_uav->GetView();
     } else {
         LOG_CRITICAL("Invalid texture view type: {}.", typeid(*texture_view).name());
@@ -626,10 +634,10 @@ VkRenderingAttachmentInfo VulkanRHIGraphicsCommandList::FromColorAttachmentInfo(
     auto* resolve_texture_view = _color_attachment_info.resolve_attachment_view.texture_view;
     if (resolve_texture_view != nullptr) {
         if (resolve_texture_view->IsSRV()) {
-            auto* resolve_texture_srv        = static_cast<VulkanRHIShaderResourceView*>(resolve_texture_view);
+            auto* resolve_texture_srv        = static_cast<VulkanRHITextureSRV*>(resolve_texture_view);
             attachment_info.resolveImageView = resolve_texture_srv->GetView();
         } else if (resolve_texture_view->IsUAV()) {
-            auto* resolve_texture_uav        = static_cast<VulkanRHIUnorderedAccessView*>(resolve_texture_view);
+            auto* resolve_texture_uav        = static_cast<VulkanRHITextureUAV*>(resolve_texture_view);
             attachment_info.resolveImageView = resolve_texture_uav->GetView();
         } else {
             LOG_CRITICAL("Invalid resolve texture view type: {}.", typeid(*resolve_texture_view).name());
@@ -652,10 +660,10 @@ VkRenderingAttachmentInfo VulkanRHIGraphicsCommandList::FromDepthStencilAttachme
         return attachment_info;
     }
     if (depth_stencil_view->IsSRV()) {
-        auto* depth_stencil_srv   = static_cast<VulkanRHIShaderResourceView*>(depth_stencil_view);
+        auto* depth_stencil_srv   = static_cast<VulkanRHITextureSRV*>(depth_stencil_view);
         attachment_info.imageView = depth_stencil_srv->GetView();
     } else if (depth_stencil_view->IsUAV()) {
-        auto* depth_stencil_uav   = static_cast<VulkanRHIUnorderedAccessView*>(depth_stencil_view);
+        auto* depth_stencil_uav   = static_cast<VulkanRHITextureUAV*>(depth_stencil_view);
         attachment_info.imageView = depth_stencil_uav->GetView();
     } else {
         LOG_CRITICAL("Invalid depth view type: {}.", typeid(*depth_stencil_view).name());

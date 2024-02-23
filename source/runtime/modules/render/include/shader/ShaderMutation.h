@@ -80,7 +80,6 @@ struct ShaderMutationSparseUInt {
         assert(false && "no mutation type for given id");
         return 0;
     }
-
 };
 
 template<uint32_t unique_value, uint32_t... values>
@@ -107,7 +106,6 @@ struct ShaderMutationSparseUInt<unique_value, values...> {
         return _value;
     }
 };
-
 
 // };
 
@@ -139,23 +137,23 @@ struct TShaderMutationSet {
             assert(_mutation_id >= 0 && "invalid mutation id");
             uint32_t temp_id = _mutation_id;
 
-           (..., (std::get<GetTypeIndex<Types, TypeSeries>()>(mutation_values) = Types::GetMutationTypeFromID(temp_id % Types::mutation_count), temp_id /= Types::mutation_count));
+            (..., (std::get<GetTypeIndex<Types, TypeSeries>()>(mutation_values) = Types::GetMutationTypeFromID(temp_id % Types::mutation_count), temp_id /= Types::mutation_count));
         }
     }
 
     template<TShaderMutationBasicType TMutationToSet>
     void SetMutation(typename TMutationToSet::Type _value) {
-   
+
         std::get<GetTypeIndex<TMutationToSet, TypeSeries>()>(mutation_values) = _value;
     }
 
     void SetCompileEnvironment(ShaderCompilerEnvironment& _environment) const {
         if constexpr (has_multiple_slot) {
-            (... , (_environment.SetDefine(Types::mutation_name, GetMutationValue<Types>())));
+            (..., (_environment.SetDefine(Types::mutation_name, GetMutationValue<Types>())));
         }
     }
 
-    uint32_t GetMutationID() const { 
+    uint32_t GetMutationID() const {
         uint32_t multiple   = 1;
         uint32_t temp_count = 0;
         (... = (temp_count *= multiple, temp_count += Types::GetMutationID(std::get<GetTypeIndex<Types, TypeSeries>()>(mutation_values)), multiple = Types::mutation_count));
