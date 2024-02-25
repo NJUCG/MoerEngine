@@ -18,8 +18,9 @@ namespace Moer {
         m_manager.RemoveComponent(entity);
     }
     TransformManager& TransformManager::Get() noexcept {
+        static UniquePtr<TransformManager> m_instance = nullptr;
         if (m_instance == nullptr) {
-            m_instance = std::unique_ptr<TransformManager, MoerDeleter>(MoerNew(TransformManager)());
+            m_instance = std::move(UniquePtr<TransformManager>(MoerNew(TransformManager)()));
         }
         return *m_instance;
     }

@@ -21,11 +21,11 @@ public:
     const char* GetName() override { return "VulkanRHI Interface"; }
 
 #pragma region resources creation
-    RHISamplerRef            RHICreateSampler(const RHISamplerInitializer& _initializer) override { return RHISamplerRef{}; }
-    RHIRasterizationStateRef RHICreateRasterizationState(const RHIRasterizationStateInitializer& _init) override { return RHIRasterizationStateRef{}; }
-    RHIDepthStencilStateRef  RHICreateDepthStencilState(const RHIDepthStencilStateInitializer& _init) override { return RHIDepthStencilStateRef{}; }
-    RHIMultisampleStateRef   RHICreateMultiSampleState(const RHIMultisampleStateInitializer& _init) override { return RHIMultisampleStateRef{}; }
-    RHIBlendStateRef         RHICreateBlendState(const RHIBlendStateInitializer& _init) override { return RHIBlendStateRef{}; }
+    RHISamplerRef            RHICreateSampler(const RHISamplerCreateInfo& _initializer) override { return RHISamplerRef{}; }
+    RHIRasterizationStateRef RHICreateRasterizationState(const RHIRasterizeInfo& _init) override { return RHIRasterizationStateRef{}; }
+    RHIDepthStencilStateRef  RHICreateDepthStencilState(const RHIDepthStencilStateInfo& _init) override { return RHIDepthStencilStateRef{}; }
+    RHIMultisampleStateRef   RHICreateMultiSampleState(const RHIMultisampleStateInfo& _init) override { return RHIMultisampleStateRef{}; }
+    RHIBlendStateRef         RHICreateBlendState(const RHIBlendStateInfo& _init) override { return RHIBlendStateRef{}; }
     RHIVertexInputStateRef   RHICreateVertexInputState(const VertexInputStateInitializerList& _init) override { return RHIVertexInputStateRef{}; }
 
     RHIVertexShaderRef   RHICreateVertexShader(const class ShaderCodeEntry*, const Shader*) override { return RHIVertexShaderRef{}; }
@@ -47,7 +47,8 @@ public:
         RHIFragmentShader*   _fragment_shader,
         RHIGeometryShader*   _geometry_shader) override { return RHIShaderBoundStateRef{}; }
 
-    RHIGraphicsPipelineStateRef RHICreateGraphicsPipelineState(const RHIGraphicsPipelineStateInitializer& _init) override { return RHIGraphicsPipelineStateRef{}; }
+    RHIGraphicsPipelineStateRef RHICreateGraphicsPipelineState(const RHIGraphicsPipelineStateInfo& _init) override { return RHIGraphicsPipelineStateRef{}; }
+    RHIGraphicsPipelineStateRef RHICreateGraphicsPSO(RHIGraphicsPSOCreateInfo&& _init) override { return RHIGraphicsPipelineStateRef{}; }
 
     RHIComputePipelineStateRef RHICreateComputePipelineState(RHIComputeShader* _compute_shader) override { return RHIComputePipelineStateRef{}; }
 
@@ -57,8 +58,8 @@ public:
 
     RHITextureRef RHICreateTexture(const RHITextureCreateInfo& info) override { return RHITextureRef{}; };
 
-    RHIShaderResourceViewRef  RHICreateSRV(RHIViewableResource* _resource, const RHIViewInfo& _view_info) override { return RHIShaderResourceViewRef{}; }
-    RHIUnorderedAccessViewRef RHICreateUAV(RHIViewableResource* _resource, const RHIViewInfo& _view_info) override { return RHIUnorderedAccessViewRef{}; }
+    RHISRVRef RHICreateSRV(RHIViewableResource* _resource, const RHIViewInfo& _view_info) override { return RHISRVRef{}; }
+    RHIUAVRef RHICreateUAV(RHIViewableResource* _resource, const RHIViewInfo& _view_info) override { return RHIUAVRef{}; }
 
     RHICommandQueue* RHICreateCommandQueue(ECommandQueueType type) override { return nullptr; }
     // RHIGraphicsCommandList* CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state = nullptr) override { return nullptr; }
@@ -81,7 +82,7 @@ public:
 
     virtual RHIViewportNextBackBufferInfo RHIGetNextFrameViewportBufferInfo(RHIViewport* _viewport) override { return RHIViewportNextBackBufferInfo(); }
 
-    virtual RHIUnorderedAccessView* RHIGetViewportBackBufferUAV(RHIViewport* _viewport, uint32_t index) override { return nullptr; }
+    virtual RHIUAV* RHIGetViewportBackBufferUAV(RHIViewport* _viewport, uint32_t index) override { return nullptr; }
 
     virtual void RHIPresentViewport(RHIViewport* _viewport, RHIFence* _render_end_fence) override {}
 

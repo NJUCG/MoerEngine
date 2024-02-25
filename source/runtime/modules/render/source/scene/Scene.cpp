@@ -18,16 +18,16 @@ namespace Moer {
         void                      RemoveEntity(Entity entity) noexcept { m_entities.erase(entity); };
         void                      SetBuffer(const std::string& name, RHIBufferRef buffer) { m_buffers[name] = buffer; }
         RHIBufferRef              GetBuffer(const std::string& name) const { return m_buffers.at(name); }
-        RHIUnorderedAccessViewRef GetUAV(const std::string& name) const { return m_uavs.at(name); }
-        RHIShaderResourceViewRef  GetSRV(const std::string& name) const { return m_srvs.at(name); }
+        RHIUAVRef                 GetUAV(const std::string& name) const { return m_uavs.at(name); }
+        RHISRVRef                 GetSRV(const std::string& name) const { return m_srvs.at(name); }
 
         Array<Entity> GetEntities() const noexcept;
         Array<Entity> GetCameras() const noexcept;
 
     protected:
         Map<std::string, RHIBufferRef>              m_buffers;
-        Map<std::string, RHIUnorderedAccessViewRef> m_uavs;
-        Map<std::string, RHIShaderResourceViewRef>  m_srvs;
+        Map<std::string, RHIUAVRef> m_uavs;
+        Map<std::string, RHISRVRef>  m_srvs;
 
         EntitySet m_entities;
         EntitySet m_cameras;

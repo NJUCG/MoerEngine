@@ -17,10 +17,13 @@
 #include <cassert>
 #include <atomic>
 #include <cstddef>
+#include <initializer_list>
+#include <span>
 #include <stdint.h>
 #include <string>
 #include <optional>
 #include <bitset>
+#include <variant>
 template<typename TStructuredParam>
 concept concept_is_shader_struct = requires(TStructuredParam t) {
     std::is_same<typename TStructuredParam::TypeInfo::TParamPtr, TStructuredParam>();
@@ -55,12 +58,12 @@ class RHISampler;
 class RHIMultisampleState;
 class RHIShader;
 class RHIShaderLibrary;
-class RHIShaderResourceView;
+class RHISRV;
 class RHIConstantBufferView;
 class RHITexture;
 class RHITextureReference;
 class RHIShaderRootParameterLayout;
-class RHIUnorderedAccessView;
+class RHIUAV;
 class RHIVertexInputState;
 class RHIVertexShader;
 class RHIViewableResource;
@@ -98,11 +101,11 @@ using RHISamplerRef                   = CountableRef<RHISampler>;
 using RHIMultisampleStateRef          = CountableRef<RHIMultisampleState>;
 using RHIShaderRef                    = CountableRef<RHIShader>;
 using RHIShaderLibraryRef             = CountableRef<RHIShaderLibrary>;
-using RHIShaderResourceViewRef        = CountableRef<RHIShaderResourceView>;
+using RHISRVRef                       = CountableRef<RHISRV>;
 using RHITextureRef                   = CountableRef<RHITexture>;
 using RHITextureReferenceRef          = CountableRef<RHITextureReference>;
 using RHIShaderRootParameterLayoutRef = CountableRef<RHIShaderRootParameterLayout>;
-using RHIUnorderedAccessViewRef       = CountableRef<RHIUnorderedAccessView>;
+using RHIUAVRef                       = CountableRef<RHIUAV>;
 using RHIVertexInputStateRef          = CountableRef<RHIVertexInputState>;
 using RHIVertexShaderRef              = CountableRef<RHIVertexShader>;
 using RHIViewableResourceRef          = CountableRef<RHIViewableResource>;
@@ -284,10 +287,10 @@ public:
 //    explicit RHIVertexDescription() : RHIResource(RRT_VERTEX_STATE_INITIALIZER) {}
 //};
 
-class RHIPipelineShaderBindingState : public RHIResource {
-public:
-    explicit RHIPipelineShaderBindingState() : RHIResource(RRT_PIPELINE_BOUND_SHADER_STATE) {}
-};
+// class RHIPipelineShaderBindingState : public RHIResource {
+// public:
+//     explicit RHIPipelineShaderBindingState() : RHIResource(RRT_PIPELINE_BOUND_SHADER_STATE) {}
+// };
 
 #pragma region shader definitions
 class RHIShader : public RHIResource {
@@ -1187,7 +1190,7 @@ struct RHIViewInfo {
     bool IsUAV() const { return base_info.view_type == EViewType::BUFFER_UAV || base_info.view_type == EViewType::TEXTURE_UAV; }
     bool IsCBV() const { return base_info.view_type == EViewType::BUFFER_CBV || base_info.view_type == EViewType::TEXTURE_CBV; }
 
-    bool IsBuffer() const { return base_info.view_type == EViewType::BUFFER_SRV || base_info.view_type == EViewType::BUFFER_UAV; }
+    bool IsBuffer() const { return base_info.view_type == EViewType::BUFFER_SRV || base_info.view_type == EViewType::BUFFER_UAV || base_info.view_type == EViewType::BUFFER_CBV; }
     bool IsTexture() const { return !IsBuffer(); }
 
     bool operator==(const RHIViewInfo& other) {
@@ -1204,7 +1207,7 @@ struct RHIViewInfo {
     static BufferUAV::Initializer  CreateBufferUAVInfo();
     static TextureSRV::Initializer CreateTextureSRVInfo();
     static TextureUAV::Initializer CreateTextureUAVInfo();
-    static BufferCBV::Initializer  CreateBufferUBVInfo();
+    static BufferCBV::Initializer  CreateBufferCBVInfo();
 
 protected:
     RHIViewInfo(EViewType _type) {
@@ -1430,7 +1433,9 @@ struct RHIViewInfo::BufferCBV::Initializer : public RHIViewInfo {
     friend RHICommandListBase;
 
 protected:
-    Initializer() : RHIViewInfo(EViewType::BUFFER_CBV) {}
+    Initializer() : RHIViewInfo(EViewType::BUFFER_CBV) {
+        buffer.cbv.byte_offset = 0;
+    }
 
 public:
     Initializer& SetType(EBufferType _type) {
@@ -1477,7 +1482,7 @@ FORCEINLINE RHIViewInfo::TextureUAV::Initializer RHIViewInfo::CreateTextureUAVIn
     return {};
 }
 
-FORCEINLINE RHIViewInfo::BufferCBV::Initializer RHIViewInfo::CreateBufferUBVInfo() {
+FORCEINLINE RHIViewInfo::BufferCBV::Initializer RHIViewInfo::CreateBufferCBVInfo() {
     return {};
 }
 
@@ -1534,17 +1539,24 @@ public:
     }
 };
 
-class RHIUnorderedAccessView : public RHIView {
+class RHIUAV : public RHIView {
 public:
-    explicit RHIUnorderedAccessView(RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIView(RRT_UNORDERED_ACCESS_VIEW, _resource, _viewInfo) {
+    explicit RHIUAV(RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIView(RRT_UNORDERED_ACCESS_VIEW, _resource, _viewInfo) {
         assert(_viewInfo.IsUAV() && "view must be uav");
     }
 };
 
-class RHIShaderResourceView : public RHIView {
+class RHISRV : public RHIView {
 public:
-    explicit RHIShaderResourceView(RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIView(RRT_SHADER_RESOURCE_VIEW, _resource, _viewInfo) {
+    explicit RHISRV(RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIView(RRT_SHADER_RESOURCE_VIEW, _resource, _viewInfo) {
         assert(_viewInfo.IsSRV() && "view must be srv");
+    }
+};
+
+class RHICBV : public RHIView {
+public:
+    explicit RHICBV(RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIView(RRT_CONSTANT_BUFFER_VIEW, _resource, _viewInfo) {
+        assert(_viewInfo.IsCBV() && "view must be cbv");
     }
 };
 #pragma endregion
@@ -1722,6 +1734,85 @@ struct RHIShaderBoundStateInput : public RHIResource {
     RHIShader* p_amplification_shader = nullptr;
 };
 
+struct RHIGraphicsShaderInputInfo {
+    struct Vertex {
+        RHIVertexInputState* vertex_input_state;
+        RHIVertexShader*     vertex_shader;
+        RHIFragmentShader*   fragment_shader;
+        RHIGeometryShader*   geometry_shader;
+    };
+    struct Mesh {
+        RHIFragmentShader*      fragment_shader;
+        RHIMeshShader*          mesh_shader;
+        RHIAmplificationShader* amplification_shader;
+    };
+
+    static constexpr uint32_t  t_vertex_work_flow = 0;
+    static constexpr uint32_t  t_mesh_work_flow   = 1;
+    std::variant<Vertex, Mesh> work_flow;
+
+    RHIGraphicsShaderInputInfo() {}
+
+    static RHIGraphicsShaderInputInfo Create() {
+        return std::move(RHIGraphicsShaderInputInfo());
+    }
+    RHIGraphicsShaderInputInfo& SetVertexWorkFlow(
+        RHIVertexInputState* _vertex_input_state,
+        RHIShader*           _vertex_shader,
+        RHIShader*           _fragment_shader,
+        RHIShader*           _geometry_shader = nullptr) {
+        work_flow = std::move(Vertex{
+            _vertex_input_state,
+            (RHIVertexShader*)_vertex_shader,
+            (RHIFragmentShader*)_fragment_shader,
+            (RHIGeometryShader*)_geometry_shader});
+        return *this;
+    }
+
+    RHIGraphicsShaderInputInfo& SetMeshShaderWorkFlow(
+        RHIMeshShader*          _mesh_shader,
+        RHIFragmentShader*      _fragment_shader,
+        RHIAmplificationShader* _amplification_shader = nullptr) {
+        work_flow = std::move(Mesh{_fragment_shader, _mesh_shader, _amplification_shader});
+        return *this;
+    }
+
+    bool IsVertexWorkFlow() const { return work_flow.index() == t_vertex_work_flow; }
+
+    bool IsMeshWorkFlow() const { return work_flow.index() == t_mesh_work_flow; }
+
+    bool operator==(const RHIGraphicsShaderInputInfo& other) const {
+        //MARK... this is not a good way to compare variant
+        if (work_flow.index() != other.work_flow.index()) {
+            return false;
+        }
+
+        if (work_flow.index() == t_vertex_work_flow) {
+            const auto& vertex       = std::get<t_vertex_work_flow>(work_flow);
+            const auto& other_vertex = std::get<t_vertex_work_flow>(other.work_flow);
+            return vertex.vertex_input_state == other_vertex.vertex_input_state &&
+                   vertex.vertex_shader == other_vertex.vertex_shader &&
+                   vertex.fragment_shader == other_vertex.fragment_shader &&
+                   vertex.geometry_shader == other_vertex.geometry_shader;
+        }
+
+        const auto& mesh       = std::get<t_mesh_work_flow>(work_flow);
+        const auto& other_mesh = std::get<t_mesh_work_flow>(other.work_flow);
+        return mesh.fragment_shader == other_mesh.fragment_shader &&
+               mesh.mesh_shader == other_mesh.mesh_shader &&
+               mesh.amplification_shader == other_mesh.amplification_shader;
+    }
+
+private:
+    RHIGraphicsShaderInputInfo::Vertex& VertexWorkFlow() {
+        return std::get<t_vertex_work_flow>(work_flow);
+    }
+
+    RHIGraphicsShaderInputInfo::Mesh& MeshWorkFlow() {
+        return std::get<t_mesh_work_flow>(work_flow);
+    }
+};
+
 //for shader parameter binding usage
 struct ColorAttachmementBinding {
     ColorAttachmementBinding() = default;
@@ -1888,12 +1979,12 @@ struct GraphicsPipelineAttachmentInfo {
     bool b_has_fragment_density_attachment = false;
 };
 
-class RHIGraphicsPipelineStateInitializer {
+class RHIGraphicsPipelineStateInfo {
 public:
     using TAttachmentFormats = Moer::StaticArray<uint8_t, MAX_PASS_ATTACHMENT_COUNT>;
     using TAttachmentFlags   = Moer::StaticArray<ETextureUsageFlags, MAX_PASS_ATTACHMENT_COUNT>;
 
-    RHIGraphicsPipelineStateInitializer()
+    RHIGraphicsPipelineStateInfo()
         : blend_state(nullptr),
           rasterizer_state(nullptr),
           multisample_state(nullptr),
@@ -1910,7 +2001,7 @@ public:
           shading_rate(EVariousShadingRate::VSR_1_1x1),
           hash_key(0) {}
 
-    RHIGraphicsPipelineStateInitializer(
+    RHIGraphicsPipelineStateInfo(
         RHIBlendState*            _blend_state,
         RHIRasterizationState*    _rasterizer_state,
         RHIMultisampleState*      _multisample_state,
@@ -1962,7 +2053,7 @@ public:
         return b_same;
     }
 
-    bool operator==(const RHIGraphicsPipelineStateInitializer& other) const {
+    bool operator==(const RHIGraphicsPipelineStateInfo& other) const {
         return shader_stage.p_vertex_input_state == other.shader_stage.p_vertex_input_state && shader_stage.p_vertex_shader == other.shader_stage.p_vertex_shader &&
                shader_stage.p_fragment_shader == other.shader_stage.p_fragment_shader &&
                shader_stage.GetMeshShader() == other.shader_stage.GetMeshShader() &&
@@ -2020,6 +2111,175 @@ public:
     uint64_t hash_key;
 };
 
+//combine blend state, clear color, attachment formats, and attachment flags
+struct RHIColorAttachmentInfo {
+    RHIBlendAttachmentInfo blend_state_info;
+    RHIClearAttachment     clear_attachment;
+    EPixelFormat           pixel_format;
+    ETextureUsageFlags     usage_flags;
+
+    static RHIColorAttachmentInfo Preset(
+        EPixelFormat       _pixel_format,
+        ETextureUsageFlags _usage_flags = ETextureUsageFlags::COLOR_ATTACHMENT) {
+        RHIColorAttachmentInfo info;
+        info.blend_state_info = std::move(RHIBlendAttachmentInfo::Preset());
+        info.clear_attachment = std::move(RHIClearAttachment(EClearAttachment::COLOR));
+        info.pixel_format     = _pixel_format;
+        info.usage_flags      = ETextureUsageFlags::COLOR_ATTACHMENT;
+
+        return std::move(info);
+    }
+
+    RHIColorAttachmentInfo& SetBlendStateInfo(RHIBlendAttachmentInfo&& _blend_state_info) {
+        blend_state_info = _blend_state_info;
+        return *this;
+    }
+
+    bool operator==(const RHIColorAttachmentInfo& other) const {
+        return blend_state_info == other.blend_state_info && clear_attachment == other.clear_attachment && pixel_format == other.pixel_format && usage_flags == other.usage_flags;
+    }
+};
+
+#define test_usage0
+
+class RHIGraphicsPSOCreateInfo {
+public:
+    using RHIColorAttachmentInfoList = Moer::StaticArray<RHIColorAttachmentInfo, MAX_PASS_ATTACHMENT_COUNT>;
+#ifdef test_usage0
+    RHIGraphicsPSOCreateInfo()
+        : rasterizer_info(std::move(RHIRasterizeInfo::Preset())),
+          multisample_info(std::move(RHIMultisampleStateInfo::Preset())),
+          depth_stencil_info(std::move(RHIDepthStencilStateInfo::Preset())),
+          color_attachment_count(0),
+          primitive_topology(EPrimitiveTopology::TRIANGLE_LIST),
+          color_attachments_info{},
+          depth_stencil_format(PF_UNDEFINED),
+          b_depth_bound(false),
+          multi_view_count(1),
+          b_has_fragment_density_attachments(false),
+          shading_rate(EVariousShadingRate::VSR_1_1x1),
+          hash_key(0) {}
+
+    static RHIGraphicsPSOCreateInfo Create() {
+        return std::move(RHIGraphicsPSOCreateInfo());
+    }
+    RHIGraphicsPSOCreateInfo& SetShaderStage(RHIGraphicsShaderInputInfo&& _shader_info) {
+        shader_infos = _shader_info;
+        return *this;
+    }
+    RHIGraphicsPSOCreateInfo& SetRasterizerInfo(RHIRasterizeInfo&& _rasterizer_info) {
+        rasterizer_info = _rasterizer_info;
+        return *this;
+    }
+
+    RHIGraphicsPSOCreateInfo& SetMultisampleInfo(RHIMultisampleStateInfo&& _multisample_info) {
+        multisample_info = _multisample_info;
+        return *this;
+    }
+
+    RHIGraphicsPSOCreateInfo& SetDepthStencilInfo(RHIDepthStencilStateInfo&& _depth_stencil_info) {
+        depth_stencil_info = _depth_stencil_info;
+        return *this;
+    }
+
+    RHIGraphicsPSOCreateInfo& SetPrimitiveTopology(EPrimitiveTopology _primitive_topology) {
+        primitive_topology = _primitive_topology;
+        return *this;
+    }
+
+    RHIGraphicsPSOCreateInfo& SetColorAttachmentInfo(Moer::Array<RHIColorAttachmentInfo>&& _color_attachment_info) {
+
+        color_attachment_count = CalcValidColorAttachmentCount();
+        assert(_color_attachment_info.size() <= MAX_PASS_ATTACHMENT_COUNT && "color attachment count exceeds the limit");
+        for (int i = color_attachment_count; i < _color_attachment_info.size(); i++) {
+            color_attachments_info[i] = _color_attachment_info[i - color_attachment_count];
+        }
+        return *this;
+    }
+
+    RHIGraphicsPSOCreateInfo& SetDepthStencilFormat(EPixelFormat _depth_stencil_format) {
+        depth_stencil_format = _depth_stencil_format;
+        return *this;
+    }
+
+    RHIGraphicsPSOCreateInfo& SetMultiViewCount(uint8_t _multi_view_count) {
+        multi_view_count = _multi_view_count;
+        return *this;
+    }
+
+    RHIGraphicsPSOCreateInfo& Finalize() {
+        color_attachment_count = CalcValidColorAttachmentCount();
+        //compute hash
+        finalized = true;
+        return *this;
+    }
+
+#else
+
+#endif
+
+    static bool IsSameColorAttachmentArray(const RHIColorAttachmentInfoList& lhs, const RHIColorAttachmentInfoList& rhs) {
+        bool b_same = true;
+        for (int i = 0; i < lhs.size(); ++i) {
+            b_same &= (lhs[i] == rhs[i]);
+        }
+        return b_same;
+    }
+
+    bool operator==(const RHIGraphicsPSOCreateInfo& other) const {
+        return shader_infos == other.shader_infos && rasterizer_info == other.rasterizer_info &&
+               depth_stencil_info == other.depth_stencil_info &&
+               primitive_topology == other.primitive_topology &&
+               b_depth_bound == other.b_depth_bound && multi_view_count == other.multi_view_count &&
+               shading_rate == other.shading_rate &&
+               b_has_fragment_density_attachments == other.b_has_fragment_density_attachments &&
+               color_attachment_count == other.color_attachment_count &&
+               IsSameColorAttachmentArray(color_attachments_info, other.color_attachments_info) &&
+               //    IsSameColorAttachmentArray(color_attachment_flags, other.color_attachment_flags) &&
+               depth_stencil_format == other.depth_stencil_format;
+        //    IsSameDepthAttachmentInPSO(depth_stencil_flag, other.depth_stencil_flag);
+    }
+
+    uint32_t CalcValidColorAttachmentCount() const {
+        // if (color_attachment_count > 0) {
+        int32_t last_index = -1;
+        for (int i = (int)MAX_PASS_ATTACHMENT_COUNT - 1; i >= 0; i--) {
+            if (color_attachments_info[i].pixel_format != PF_UNDEFINED) {
+                last_index = i;
+                break;
+            }
+        }
+        return (uint32_t)(last_index + 1);
+        // }
+        // return color_attachment_count;
+    }
+
+    RHIGraphicsShaderInputInfo shader_infos;
+    RHIRasterizeInfo           rasterizer_info;
+
+    RHIMultisampleStateInfo  multisample_info;
+    RHIDepthStencilStateInfo depth_stencil_info;
+
+    EPrimitiveTopology primitive_topology;
+    // TAttachmentFormats color_attachment_formats;
+    // TAttachmentFlags   color_attachment_flags;
+    EPixelFormat depth_stencil_format;
+    // ETextureUsageFlags depth_stencil_flag;
+    RHIColorAttachmentInfoList color_attachments_info;
+
+    uint32_t color_attachment_count;
+
+    bool    b_depth_bound;
+    uint8_t multi_view_count = 1;
+
+    //for VSR
+    bool                b_has_fragment_density_attachments;
+    EVariousShadingRate shading_rate;
+
+    uint64_t hash_key;
+
+    bool finalized = false;
+};
 class RayTracingPipelineStateInfo {
 protected:
     uint64_t hash_ray_gen;
@@ -2491,8 +2751,8 @@ struct RayTracingGeometryInstance {
 
     Moer::Array<uint32_t> scene_instance_data_offsets;
 
-    RHIShaderResourceViewRef transform_data_srv = nullptr;
-    uint32_t                 num_transforms;
+    RHISRVRef transform_data_srv = nullptr;
+    uint32_t  num_transforms;
 
     uint32_t              default_index = 0;
     Moer::Array<uint32_t> custom_index;
@@ -2855,7 +3115,7 @@ static_assert((1u << uint32_t(ERHITexturePlane::NumBits)) >= uint32_t(ERHITextur
 
 class RHITextureReference final : public RHITexture {
 public:
-    RENDER_API RHITextureReference(RHITexture* _texture, RHIShaderResourceView* _bindless_view);
+    RENDER_API RHITextureReference(RHITexture* _texture, RHISRV* _bindless_view);
 
     RENDER_API ~RHITextureReference();
 
@@ -2866,8 +3126,8 @@ public:
     RENDER_API virtual void*                 GetNativeShaderResourceView() const override;
     RENDER_API virtual const RHITextureInfo& GetInfo() const override;
 
-    inline RHITexture*            GetReferencedTexture() const { return texture_ref.Get(); }
-    inline RHIShaderResourceView* GetBindlessView() const { return bindless_view.Get(); }
+    inline RHITexture* GetReferencedTexture() const { return texture_ref.Get(); }
+    inline RHISRV*     GetBindlessView() const { return bindless_view.Get(); }
 
     static inline RHITexture* GetDefaultTexture() { return default_texture; }
 
@@ -2878,7 +3138,7 @@ private:
 
     RHITextureRef texture_ref;
 
-    RHIShaderResourceViewRef bindless_view;
+    RHISRVRef bindless_view;
 
     RENDER_API static RHITextureRef default_texture;
 };

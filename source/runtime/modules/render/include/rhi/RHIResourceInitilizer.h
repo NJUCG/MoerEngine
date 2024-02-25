@@ -12,9 +12,48 @@
 #include <numeric>
 #include <cassert>
 
-struct RHISamplerInitializer {
-    RHISamplerInitializer() = default;
-    explicit RHISamplerInitializer(
+namespace RHIConfig {
+
+    enum class MultiSample {
+        NONE,
+        MSAA_2X,
+        MSAA_4X,
+        MSAA_8X,
+        MSAA_16X
+    };
+    enum class Blend {
+        NONE,
+        ALPHA_BLEND,
+        ADDITIVE_BLEND,
+        PRE_MULTIPLIED_ALPHA_BLEND
+    };
+
+    enum class Rast {
+        NONE,
+        CULL_BACK,
+        CULL_FRONT,
+        CULL_NONE
+    };
+
+    enum class DepthStencil {
+        NONE,
+        DEPTH_WRITE,
+        DEPTH_WRITE_LESS,
+        DEPTH_WRITE_LESS_EQUAL,
+        DEPTH_WRITE_GREATER,
+        DEPTH_WRITE_GREATER_EQUAL
+    };
+
+    enum class Attachment {
+        NONE,
+        COLOR,
+        DEPTH_STENCIL,
+        RESOLVE
+    };
+}// namespace RHIConfig
+struct RHISamplerCreateInfo {
+    RHISamplerCreateInfo() = default;
+    explicit RHISamplerCreateInfo(
         ESamplerFilter                      _filter,
         ETextureLayout                      _texture_layout,
         ESamplerAddressMode                 _address_mode_u = SAM_REPEAT,
@@ -50,11 +89,27 @@ struct RHISamplerInitializer {
     uint32_t                            border_color   = 0;
     EnumInByte<ESamplerCompareFunction> compare_op     = SCF_NEVER;
 
-    RENDER_API friend uint32_t GetHash(const RHISamplerInitializer& target);
-    RENDER_API friend bool     operator==(const RHISamplerInitializer& lhs, const RHISamplerInitializer& rhs);
+    RHISamplerCreateInfo& SetFilter(ESamplerFilter _filter) {
+        filter = _filter;
+        return *this;
+    }
+
+    RHISamplerCreateInfo& SetTextureLayout(ETextureLayout _texture_layout) {
+        texture_layout = _texture_layout;
+        return *this;
+    }
+
+    RHISamplerCreateInfo& SetCompareOp(ESamplerCompareFunction _compare_op) {
+        compare_op = _compare_op;
+        return *this;
+    }
+
+    RENDER_API friend uint32_t
+                           GetHash(const RHISamplerCreateInfo& target);
+    RENDER_API friend bool operator==(const RHISamplerCreateInfo& lhs, const RHISamplerCreateInfo& rhs);
 };
 
-struct RHIDepthStencilStateInitializer {
+struct RHIDepthStencilStateInfo {
     bool                       b_enable_depth_write;
     EnumInByte<ECompareOption> depth_test_op;
 
@@ -73,8 +128,8 @@ struct RHIDepthStencilStateInitializer {
     uint8_t stencil_readmask;
     uint8_t stencil_writemask;
 
-    explicit RHIDepthStencilStateInitializer(
-        bool           _b_enable_depth_write              = true,
+    explicit RHIDepthStencilStateInfo(
+        bool           _b_enable_depth_write              = false,
         ECompareOption _depth_test_op                     = CO_LESS_OR_EQUAL,
         bool           _b_enable_front_face_stencil       = false,
         ECompareOption _front_face_stencil_test           = CO_ALWAYS,
@@ -102,24 +157,87 @@ struct RHIDepthStencilStateInitializer {
           back_face_pass_stencil_op(_back_face_pass_stencil_op),
           stencil_readmask(_stencil_readmask),
           stencil_writemask(_stencil_writemask) {}
-    RENDER_API friend uint32_t GetHash(const RHIDepthStencilStateInitializer& target);
-    RENDER_API friend bool     operator==(const RHIDepthStencilStateInitializer& lhs, const RHIDepthStencilStateInitializer& rhs);
+
+    template<RHIConfig::DepthStencil preset = RHIConfig::
+                 DepthStencil::NONE>
+    static RHIDepthStencilStateInfo Preset() {
+        if constexpr (preset == RHIConfig::DepthStencil::NONE) {
+            return RHIDepthStencilStateInfo();
+        } else if constexpr (preset == RHIConfig::DepthStencil::DEPTH_WRITE) {
+            return RHIDepthStencilStateInfo(true, CO_LESS_OR_EQUAL);
+        } else if constexpr (preset == RHIConfig::DepthStencil::DEPTH_WRITE_LESS) {
+            return RHIDepthStencilStateInfo(true, CO_LESS);
+        } else if constexpr (preset == RHIConfig::DepthStencil::DEPTH_WRITE_LESS_EQUAL) {
+            return RHIDepthStencilStateInfo(true, CO_LESS_OR_EQUAL);
+        } else if constexpr (preset == RHIConfig::DepthStencil::DEPTH_WRITE_GREATER) {
+            return RHIDepthStencilStateInfo(true, CO_GREATER);
+        } else if constexpr (preset == RHIConfig::DepthStencil::DEPTH_WRITE_GREATER_EQUAL) {
+            return RHIDepthStencilStateInfo(true, CO_GREATER_OR_EQUAL);
+        } else {
+            static_assert(preset == RHIConfig::DepthStencil::NONE, "Invalid preset");
+        }
+    }
+    RENDER_API friend uint32_t GetHash(const RHIDepthStencilStateInfo& target);
+    RENDER_API friend bool     operator==(const RHIDepthStencilStateInfo& lhs, const RHIDepthStencilStateInfo& rhs);
 };
 
-struct RHIRasterizationStateInitializer {
-    EnumInByte<ERasterizerFillMode> fill_mode;
-    EnumInByte<ERasterizerCullMode> cull_mode;
-    bool                            b_depth_bias;
-    bool                            b_depth_clamp_enable;
-    bool                            b_enable_msaa;
-    float                           depth_bias;
-    float                           depth_bias_clamp;
-    float                           depth_bias_slop_factor;
-    RENDER_API friend uint32_t      GetHash(const RHIRasterizationStateInitializer& target);
-    RENDER_API friend bool          operator==(const RHIRasterizationStateInitializer& lhs, const RHIRasterizationStateInitializer& rhs);
+struct RHIRasterizeInfo {
+    EnumInByte<ERasterizerFillMode> fill_mode              = FM_FILL;
+    EnumInByte<ERasterizerCullMode> cull_mode              = RCM_NONE;
+    bool                            b_depth_bias           = false;
+    bool                            b_depth_clamp_enable   = false;
+    bool                            b_enable_msaa          = false;
+    float                           depth_bias             = 0;
+    float                           depth_bias_clamp       = 0;
+    float                           depth_bias_slop_factor = 0;
+    template<RHIConfig::Rast preset = RHIConfig::Rast::NONE>
+    static RHIRasterizeInfo Preset() {
+        if constexpr (preset == RHIConfig::Rast::NONE) {
+            return RHIRasterizeInfo();
+        } else if constexpr (preset == RHIConfig::Rast::CULL_BACK) {
+            return RHIRasterizeInfo(FM_FILL, RCM_BACK, false, false, false, 0, 0, 0);
+        } else if constexpr (preset == RHIConfig::Rast::CULL_FRONT) {
+            return RHIRasterizeInfo(FM_FILL, RCM_FRONT, false, false, false, 0, 0, 0);
+        } else if constexpr (preset == RHIConfig::Rast::CULL_NONE) {
+            return RHIRasterizeInfo(FM_FILL, RCM_NONE, false, false, false, 0, 0, 0);
+        } else {
+            static_assert(preset == RHIConfig::Rast::NONE, "Invalid preset");
+        }
+    }
+
+    RHIRasterizeInfo& SetFillMode(ERasterizerFillMode mode) {
+        fill_mode = mode;
+        return *this;
+    }
+
+    RHIRasterizeInfo& SetCullMode(ERasterizerCullMode mode) {
+        cull_mode = mode;
+        return *this;
+    }
+
+    RHIRasterizeInfo& SetDepthBias(float bias, float clamp, float slope) {
+        b_depth_bias           = true;
+        depth_bias             = bias;
+        depth_bias_clamp       = clamp;
+        depth_bias_slop_factor = slope;
+        return *this;
+    }
+
+    RHIRasterizeInfo& SetDepthClampEnable(bool enable) {
+        b_depth_clamp_enable = enable;
+        return *this;
+    }
+
+    RHIRasterizeInfo& SetEnableMSAA(bool enable) {
+        b_enable_msaa = enable;
+        return *this;
+    }
+
+    RENDER_API friend uint32_t GetHash(const RHIRasterizeInfo& target);
+    RENDER_API friend bool     operator==(const RHIRasterizeInfo& lhs, const RHIRasterizeInfo& rhs);
 };
 
-struct RHIMultisampleStateInitializer {
+struct RHIMultisampleStateInfo {
 
     uint32_t sample_count = 1;
     /*enables per-sample shading to avoid shader aliasing */
@@ -129,60 +247,169 @@ struct RHIMultisampleStateInitializer {
 
     bool b_alpha_to_one = false;
     /*a minimum fraction of sample shading if sample_shading is enabled, closer to 1 is smoother*/
-    float                      min_sample_shading = 0.2f;
-    RENDER_API friend uint32_t GetHash(const RHIMultisampleStateInitializer& target);
-    RENDER_API friend bool     operator==(const RHIMultisampleStateInitializer& lhs, const RHIMultisampleStateInitializer& rhs);
+    float min_sample_shading = 0.2f;
+    template<RHIConfig::MultiSample preset = RHIConfig::MultiSample::NONE>
+    static RHIMultisampleStateInfo Preset() {
+        if constexpr (preset == RHIConfig::MultiSample::NONE) {
+            return RHIMultisampleStateInfo();
+        } else if constexpr (preset == RHIConfig::MultiSample::MSAA_2X) {
+            return RHIMultisampleStateInfo(2);
+        } else if constexpr (preset == RHIConfig::MultiSample::MSAA_4X) {
+            return RHIMultisampleStateInfo(4);
+        } else if constexpr (preset == RHIConfig::MultiSample::MSAA_8X) {
+            return RHIMultisampleStateInfo(8);
+        } else if constexpr (preset == RHIConfig::MultiSample::MSAA_16X) {
+            return RHIMultisampleStateInfo(16);
+        } else {
+            static_assert(preset == RHIConfig::MultiSample::NONE, "Invalid preset");
+        }
+    }
+
+    RHIMultisampleStateInfo& SetSampleCount(uint32_t count) {
+        sample_count = count;
+        return *this;
+    }
+
+    RHIMultisampleStateInfo& SetSampleShading(bool enable) {
+        b_sample_shading = enable;
+        return *this;
+    }
+
+    RHIMultisampleStateInfo& SetAlphaToConverge(bool enable) {
+        b_alpha_to_converge = enable;
+        return *this;
+    }
+
+    RHIMultisampleStateInfo& SetAlphaToOne(bool enable) {
+        b_alpha_to_one = enable;
+        return *this;
+    }
+
+    RHIMultisampleStateInfo& SetMinSampleShading(float min) {
+        min_sample_shading = min;
+        return *this;
+    }
+
+    RENDER_API friend uint32_t GetHash(const RHIMultisampleStateInfo& target);
+    RENDER_API friend bool     operator==(const RHIMultisampleStateInfo& lhs, const RHIMultisampleStateInfo& rhs);
 };
 
-struct RHIBlendStateInitializer {
-    /*corresponds to renderTarget in DX12*/
-    struct AttachmentInitializer {
+struct RHIBlendAttachmentInfo {
+    EnumInByte<EBlendOperation> color_blend_op;
+    EnumInByte<EBlendFactor>    color_src_blend_factor;
+    EnumInByte<EBlendFactor>    color_dst_blend_factor;
+    EnumInByte<EBlendOperation> alpha_blend_op;
+    EnumInByte<EBlendFactor>    alpha_src_blend_factor;
+    EnumInByte<EBlendFactor>    alpha_dst_blend_factor;
+    EnumInByte<EColorWriteMask> color_write_mask;
 
-        EnumInByte<EBlendOperation> color_blend_op;
-        EnumInByte<EBlendFactor>    color_src_blend_factor;
-        EnumInByte<EBlendFactor>    color_dst_blend_factor;
-        EnumInByte<EBlendOperation> alpha_blend_op;
-        EnumInByte<EBlendFactor>    alpha_src_blend_factor;
-        EnumInByte<EBlendFactor>    alpha_dst_blend_factor;
-        EnumInByte<EColorWriteMask> color_write_mask;
+    RHIBlendAttachmentInfo(
+        EBlendOperation _color_blend_op         = BO_ADD,
+        EBlendFactor    _color_src_blend_factor = BF_ONE,
+        EBlendFactor    _color_dst_blend_factor = BF_ZERO,
+        EBlendOperation _alpha_blend_op         = BO_ADD,
+        EBlendFactor    _alpha_src_blend_factor = BF_ONE,
+        EBlendFactor    _alpha_dst_blend_factor = BF_ZERO,
+        EColorWriteMask _color_write_mask       = CW_RGBA)
+        : color_blend_op(_color_blend_op),
+          color_src_blend_factor(_color_src_blend_factor),
+          color_dst_blend_factor(_color_dst_blend_factor),
+          alpha_blend_op(_alpha_blend_op),
+          alpha_src_blend_factor(_alpha_src_blend_factor),
+          alpha_dst_blend_factor(_alpha_dst_blend_factor),
+          color_write_mask(_color_write_mask) {}
 
-        explicit AttachmentInitializer(
-            EBlendOperation _color_blend_op         = BO_ADD,
-            EBlendFactor    _color_src_blend_factor = BF_ONE,
-            EBlendFactor    _color_dst_blend_factor = BF_ZERO,
-            EBlendOperation _alpha_blend_op         = BO_ADD,
-            EBlendFactor    _alpha_src_blend_factor = BF_ONE,
-            EBlendFactor    _alpha_dst_blend_factor = BF_ZERO,
-            EColorWriteMask _color_write_mask       = CW_RGBA)
-            : color_blend_op(_color_blend_op),
-              color_src_blend_factor(_color_src_blend_factor),
-              color_dst_blend_factor(_color_dst_blend_factor),
-              alpha_blend_op(_alpha_blend_op),
-              alpha_src_blend_factor(_alpha_src_blend_factor),
-              alpha_dst_blend_factor(_alpha_dst_blend_factor),
-              color_write_mask(_color_write_mask) {}
-    };
+    template<RHIConfig::Blend preset = RHIConfig::Blend::NONE>
+    static RHIBlendAttachmentInfo Preset() {
+        if constexpr (preset == RHIConfig::Blend::NONE) {
+            return RHIBlendAttachmentInfo();
+        } else if constexpr (preset == RHIConfig::Blend::ALPHA_BLEND) {
+            return RHIBlendAttachmentInfo(
+                BO_ADD,
+                BF_SRC_ALPHA,
+                BF_ONE_MINUS_SRC_ALPHA,
+                BO_ADD,
+                BF_ONE,
+                BF_ONE_MINUS_SRC_ALPHA,
+                CW_RGBA);
+        } else if constexpr (preset == RHIConfig::Blend::ADDITIVE_BLEND) {
+            return RHIBlendAttachmentInfo(
+                BO_ADD,
+                BF_ONE,
+                BF_ONE,
+                BO_ADD,
+                BF_ONE,
+                BF_ONE,
+                CW_RGBA);
+        } else if constexpr (preset == RHIConfig::Blend::PRE_MULTIPLIED_ALPHA_BLEND) {
+            return RHIBlendAttachmentInfo(
+                BO_ADD,
+                BF_ONE,
+                BF_ONE_MINUS_SRC_ALPHA,
+                BO_ADD,
+                BF_ONE,
+                BF_ONE_MINUS_SRC_ALPHA,
+                CW_RGBA);
+        } else {
+            static_assert(preset == RHIConfig::Blend::NONE, "Invalid preset");
+        }
+    }
+    RHIBlendAttachmentInfo& SetColorBlendOp(EBlendOperation op) {
+        color_blend_op = op;
+        return *this;
+    }
+    RHIBlendAttachmentInfo& SetColorSrcBlendFactor(EBlendFactor factor) {
+        color_src_blend_factor = factor;
+        return *this;
+    }
 
-    RHIBlendStateInitializer() = default;
-    explicit RHIBlendStateInitializer(const AttachmentInitializer& _attachment_desc) {
+    RHIBlendAttachmentInfo& SetColorDstBlendFactor(EBlendFactor factor) {
+        color_dst_blend_factor = factor;
+        return *this;
+    }
+
+    RHIBlendAttachmentInfo& SetAlphaBlendOp(EBlendOperation op) {
+        alpha_blend_op = op;
+        return *this;
+    }
+
+    RHIBlendAttachmentInfo& SetAlphaSrcBlendFactor(EBlendFactor factor) {
+        alpha_src_blend_factor = factor;
+        return *this;
+    }
+
+    RHIBlendAttachmentInfo& SetAlphaDstBlendFactor(EBlendFactor factor) {
+        alpha_dst_blend_factor = factor;
+        return *this;
+    }
+
+    RHIBlendAttachmentInfo& SetColorWriteMask(EColorWriteMask mask) {
+        color_write_mask = mask;
+        return *this;
+    }
+
+    RENDER_API friend uint32_t GetHash(const RHIBlendAttachmentInfo& _attachment_desc);
+    RENDER_API friend bool     operator==(const RHIBlendAttachmentInfo& lhs, const RHIBlendAttachmentInfo& rhs);
+};
+struct RHIBlendStateInfo {
+
+    RHIBlendStateInfo() = default;
+    explicit RHIBlendStateInfo(const RHIBlendAttachmentInfo& _attachment_desc) {
         attachments[0] = _attachment_desc;
     }
 
     template<uint32_t attachment_num>
-    explicit RHIBlendStateInitializer(const Moer::StaticArray<AttachmentInitializer, attachment_num>& _attachment_descs) {
+    explicit RHIBlendStateInfo(const Moer::StaticArray<RHIBlendAttachmentInfo, attachment_num>& _attachment_descs) {
         static_assert(attachment_num < MAX_PASS_ATTACHMENT_COUNT);
         for (uint32_t i = 0; i < attachment_num; i++) {
             attachments[i] = _attachment_descs[i];
         }
     }
 
-    Moer::StaticArray<AttachmentInitializer, MAX_PASS_ATTACHMENT_COUNT> attachments;
+    Moer::StaticArray<RHIBlendAttachmentInfo, MAX_PASS_ATTACHMENT_COUNT> attachments;
 
-    RENDER_API friend uint32_t GetHash(const RHIBlendStateInitializer::AttachmentInitializer& _attachment_desc);
-    RENDER_API friend bool     operator==(const RHIBlendStateInitializer::AttachmentInitializer& lhs, const RHIBlendStateInitializer::AttachmentInitializer& rhs);
-
-    RENDER_API friend uint32_t GetHash(const RHIBlendStateInitializer& Initializer);
-    RENDER_API friend bool     operator==(const RHIBlendStateInitializer& lhs, const RHIBlendStateInitializer& rhs);
+    RENDER_API friend uint32_t GetHash(const RHIBlendStateInfo& Initializer);
+    RENDER_API friend bool     operator==(const RHIBlendStateInfo& lhs, const RHIBlendStateInfo& rhs);
 };
 
 /**

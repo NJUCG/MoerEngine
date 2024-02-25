@@ -64,7 +64,7 @@ namespace Moer {
         void SetOriginResolution(uint32_t _width, uint32_t _height);
         void SetPresentResolution(uint32_t _width, uint32_t _height);
 
-        RHIShaderResourceViewRef GetRendererOutput();
+        RHISRVRef GetRendererOutput();
 
     private:
         VirtualViewport* virtual_viewport;
@@ -201,7 +201,7 @@ namespace Moer {
         memcpy(data, indexes, sizeof(indexes));
         g_rhi->RHIUnmapBuffer(index_buffer);
 
-        RHIBlendStateInitializer blend_init;
+        RHIBlendStateInfo blend_init;
         blend_init.attachments[0].color_blend_op         = BO_ADD;
         blend_init.attachments[0].color_src_blend_factor = BF_SRC_ALPHA;
         blend_init.attachments[0].color_dst_blend_factor = BF_ONE_MINUS_SRC_ALPHA;
@@ -212,7 +212,7 @@ namespace Moer {
 
         RHIBlendStateRef blend_state = g_rhi->RHICreateBlendState(blend_init);
 
-        RHIRasterizationStateInitializer rasterization_init{};
+        RHIRasterizeInfo rasterization_init{};
         rasterization_init.cull_mode            = RCM_BACK;
         rasterization_init.fill_mode            = FM_FILL;
         rasterization_init.b_depth_clamp_enable = false;
@@ -221,21 +221,21 @@ namespace Moer {
 
         RHIRasterizationStateRef rasterization_state = g_rhi->RHICreateRasterizationState(rasterization_init);
 
-        RHIMultisampleStateInitializer multisample_init{};
+        RHIMultisampleStateInfo multisample_init{};
         multisample_init.sample_count            = 1;
         RHIMultisampleStateRef multisample_state = g_rhi->RHICreateMultiSampleState(multisample_init);
 
-        RHIDepthStencilStateInitializer depth_stencil_init{};
+        RHIDepthStencilStateInfo depth_stencil_init{};
         depth_stencil_init.b_enable_depth_write     = true;
         depth_stencil_init.depth_test_op            = CO_GREATER_OR_EQUAL;
         RHIDepthStencilStateRef depth_stencil_state = g_rhi->RHICreateDepthStencilState(depth_stencil_init);
 
-        RHIGraphicsPipelineStateInitializer::TAttachmentFormats color_attachment_formats{};
+        RHIGraphicsPipelineStateInfo::TAttachmentFormats color_attachment_formats{};
         color_attachment_formats[0] = EPixelFormat::PF_R8G8B8A8_SRGB;
-        RHIGraphicsPipelineStateInitializer::TAttachmentFlags color_attachment_flags{};
+        RHIGraphicsPipelineStateInfo::TAttachmentFlags color_attachment_flags{};
         color_attachment_flags[0] = ETextureUsageFlags::COLOR_ATTACHMENT;
 
-        RHIGraphicsPipelineStateInitializer
+        RHIGraphicsPipelineStateInfo
             init(blend_state,
                  rasterization_state,
                  multisample_state,
@@ -285,7 +285,7 @@ namespace Moer {
         //render and copy to backbuffer
         EnqueueRenderTask([this]() {
             auto                      info = virtual_viewport->GetNextBackBuffer();
-            RHIUnorderedAccessViewRef uav  = virtual_viewport->GetNextBackBufferUAV(info.backbuffer_index);
+            RHIUAVRef                 uav  = virtual_viewport->GetNextBackBufferUAV(info.backbuffer_index);
 
             RHIGraphicsCommandList* cmd_list = render_cmd_lists[frame_counter % render_cmd_lists.size()];
 
@@ -412,7 +412,7 @@ namespace Moer {
         });
     }
 
-    RHIShaderResourceViewRef MeshDebugRenderer::Impl::GetRendererOutput() {
+    RHISRVRef MeshDebugRenderer::Impl::GetRendererOutput() {
         return virtual_viewport->GetPresentTextureSRV();
     }
 

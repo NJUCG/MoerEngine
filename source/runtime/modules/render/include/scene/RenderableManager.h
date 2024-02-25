@@ -3,6 +3,7 @@
 #include "Entity.h"
 #include "MaterialInstance.h"
 #include "rhi/RHIResource.h"
+#include <memory>
 
 namespace Moer {
     class RENDER_API RenderableManager {
@@ -65,7 +66,6 @@ namespace Moer {
         static RenderableManager& Get();
 
     protected:
-        inline static std::unique_ptr<RenderableManager> m_instance = nullptr;
     };
 
 }// namespace Moer

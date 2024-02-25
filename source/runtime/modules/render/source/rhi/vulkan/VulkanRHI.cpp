@@ -6,6 +6,7 @@
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
+#include "rhi/RHIResourceInitilizer.h"
 #include "rhi/vulkan/misc/VulkanMacroUtils.h"
 #include "misc/MacroUtils.h"
 #include "misc/STL.h"
@@ -65,35 +66,35 @@ void VulkanRHIImpl::ShutDown() {
 }
 
 #pragma region resources creation
-RHISamplerRef  VulkanRHIImpl::RHICreateSampler(const RHISamplerInitializer& _initializer) {
+RHISamplerRef  VulkanRHIImpl::RHICreateSampler(const RHISamplerCreateInfo& _initializer) {
     VulkanRHISampler* vk_sampler = new VulkanRHISampler();
     vk_sampler->GenerateSamplerFromInitializer(m_device, _initializer);
 
     return RHISamplerRef(vk_sampler);
 }
 
-RHIRasterizationStateRef VulkanRHIImpl::RHICreateRasterizationState(const RHIRasterizationStateInitializer& _init) {
+RHIRasterizationStateRef VulkanRHIImpl::RHICreateRasterizationState(const RHIRasterizeInfo& _init) {
     VulkanRHIRasterizationState* vk_rasterization_state = new VulkanRHIRasterizationState();
     vk_rasterization_state->GenerateRasterizationStateFromInitializer(_init);
 
     return RHIRasterizationStateRef(vk_rasterization_state);
 }
 
-RHIDepthStencilStateRef VulkanRHIImpl::RHICreateDepthStencilState(const RHIDepthStencilStateInitializer& _init) {
+RHIDepthStencilStateRef VulkanRHIImpl::RHICreateDepthStencilState(const RHIDepthStencilStateInfo& _init) {
     VulkanRHIDepthStencilState* vk_depth_stencil_state = new VulkanRHIDepthStencilState();
     vk_depth_stencil_state->GenerateDepthStencilStateFromInitializer(_init);
 
     return RHIDepthStencilStateRef(vk_depth_stencil_state);
 }
 
-RHIMultisampleStateRef VulkanRHIImpl::RHICreateMultiSampleState(const RHIMultisampleStateInitializer& _init) {
+RHIMultisampleStateRef VulkanRHIImpl::RHICreateMultiSampleState(const RHIMultisampleStateInfo& _init) {
     VulkanRHIMultisampleState* vk_multisample_state = new VulkanRHIMultisampleState();
     vk_multisample_state->GenerateMultisampleStateFromInitializer(_init);
 
     return RHIMultisampleStateRef(vk_multisample_state);
 }
 
-RHIBlendStateRef VulkanRHIImpl::RHICreateBlendState(const RHIBlendStateInitializer& _init) {
+RHIBlendStateRef VulkanRHIImpl::RHICreateBlendState(const RHIBlendStateInfo& _init) {
     VulkanRHIBlendState* vk_blend_state = new VulkanRHIBlendState();
     vk_blend_state->GenerateBlendStateFromInitializer(_init);
 
@@ -209,7 +210,7 @@ RHIShaderBoundStateRef VulkanRHIImpl::RHICreateShaderBoundStage(
     return RHIShaderBoundStateRef(input);
 }
 
-RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const RHIGraphicsPipelineStateInitializer& _init) {
+RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const RHIGraphicsPipelineStateInfo& _init) {
     VulkanRHIGraphicsPipelineState* vk_pso = new VulkanRHIGraphicsPipelineState();
 
     uint32_t attachment_count = _init.CalcValidColorAttachmentCount();
@@ -364,6 +365,362 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
     pipeline_create_info.pTessellationState  = nullptr;
     pipeline_create_info.pViewportState      = &viewport_state;
     pipeline_create_info.pRasterizationState = &rasterization_state;
+    pipeline_create_info.pMultisampleState   = &multisample_state;
+    pipeline_create_info.pDepthStencilState  = &depth_stencil_state;
+    pipeline_create_info.pColorBlendState    = &color_blend_state;
+    pipeline_create_info.pDynamicState       = &dynamic_state;
+    pipeline_create_info.layout              = vk_pso->m_pipeline_layout;
+    pipeline_create_info.renderPass          = nullptr;
+    pipeline_create_info.subpass             = 0;
+    pipeline_create_info.basePipelineHandle  = nullptr;// MARK...
+    pipeline_create_info.basePipelineIndex   = -1;
+
+    VK_CHECK_RESULT(vkCreateGraphicsPipelines(m_device->GetDevice(), nullptr, 1, &pipeline_create_info, nullptr, &vk_pso->m_pipeline));
+
+    return RHIGraphicsPipelineStateRef(vk_pso);
+}
+VkBlendOp METoVKBlendOp(EBlendOperation _blend_op) {
+    switch (_blend_op) {
+        case BO_ADD:
+            return VK_BLEND_OP_ADD;
+        case BO_SUBTRACT:
+            return VK_BLEND_OP_SUBTRACT;
+        case BO_REVERSE_SUBTRACT:
+            return VK_BLEND_OP_REVERSE_SUBTRACT;
+        case BO_MIN:
+            return VK_BLEND_OP_MIN;
+        case BO_MAX:
+            return VK_BLEND_OP_MAX;
+        default:
+            LOG_CRITICAL("Unsupported color blend operation: {}", static_cast<uint32_t>(_blend_op));
+            return VK_BLEND_OP_MAX_ENUM;
+    }
+}
+VkBlendFactor METoVKBlendFactor(EBlendFactor _blend_factor) {
+    switch (_blend_factor) {
+        case BF_ZERO:
+            return VK_BLEND_FACTOR_ZERO;
+        case BF_ONE:
+            return VK_BLEND_FACTOR_ONE;
+        case BF_SRC_COLOR:
+            return VK_BLEND_FACTOR_SRC_COLOR;
+        case BF_ONE_MINUS_SRC_COLOR:
+            return VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR;
+        case BF_DST_COLOR:
+            return VK_BLEND_FACTOR_DST_COLOR;
+        case BF_ONE_MINUS_DST_COLOR:
+            return VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR;
+        case BF_SRC_ALPHA:
+            return VK_BLEND_FACTOR_SRC_ALPHA;
+        case BF_ONE_MINUS_SRC_ALPHA:
+            return VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        case BF_DST_ALPHA:
+            return VK_BLEND_FACTOR_DST_ALPHA;
+        case BF_ONE_MINUS_DST_ALPHA:
+            return VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA;
+        case BF_CONSTANT_ALPHA:
+            return VK_BLEND_FACTOR_CONSTANT_ALPHA;
+        case BF_ONE_MINUS_CONSTANT_ALPHA:
+            return VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA;
+        case BF_SRC1_COLOR:
+            return VK_BLEND_FACTOR_SRC1_COLOR;
+        case BF_ONE_MINUS_SRC1_COLOR:
+            return VK_BLEND_FACTOR_ONE_MINUS_SRC1_COLOR;
+        case BF_SRC1_ALPHA:
+            return VK_BLEND_FACTOR_SRC1_ALPHA;
+        case BF_ONE_MINUS_SRC1_ALPHA:
+            return VK_BLEND_FACTOR_ONE_MINUS_SRC1_ALPHA;
+        default:
+            LOG_CRITICAL("Unsupported color blend factor: {}", static_cast<uint32_t>(_blend_factor));
+            return VK_BLEND_FACTOR_MAX_ENUM;
+    }
+}
+RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPSO(RHIGraphicsPSOCreateInfo&& _init) {
+    VulkanRHIGraphicsPipelineState* vk_pso = new VulkanRHIGraphicsPipelineState();
+
+    assert(_init.finalized && "RHICreateGraphicsPSO: PSO is not finalized!");
+    uint32_t attachment_count = _init.color_attachment_count;
+
+    Moer::Array<VkFormat> color_attachment_formats(attachment_count);
+
+    for (int i = 0; i < attachment_count; ++i) {
+        color_attachment_formats[i] = VkFormat(_init.color_attachments_info[i].pixel_format);
+    }
+    VkPipelineRenderingCreateInfo rendering_create_info{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
+    rendering_create_info.pNext                   = nullptr;
+    rendering_create_info.viewMask                = 0;
+    rendering_create_info.colorAttachmentCount    = attachment_count;
+    rendering_create_info.pColorAttachmentFormats = color_attachment_formats.data();
+
+    auto to_vk_blend_attachment = [](const RHIBlendAttachmentInfo& _info) {
+        VkPipelineColorBlendAttachmentState state{};
+        state.blendEnable =
+            (_info.color_blend_op != BO_ADD || _info.color_dst_blend_factor != BF_ZERO || _info.color_src_blend_factor != BF_ONE ||
+             _info.alpha_blend_op != BO_ADD || _info.alpha_dst_blend_factor != BF_ZERO || _info.alpha_src_blend_factor != BF_ONE) ?
+                VK_TRUE :
+                VK_FALSE;
+        state.srcColorBlendFactor = METoVKBlendFactor(_info.color_src_blend_factor);
+        state.dstColorBlendFactor = METoVKBlendFactor(_info.color_dst_blend_factor);
+        state.colorBlendOp        = METoVKBlendOp(_info.color_blend_op);
+        state.srcAlphaBlendFactor = METoVKBlendFactor(_info.alpha_src_blend_factor);
+        state.dstAlphaBlendFactor = METoVKBlendFactor(_info.alpha_dst_blend_factor);
+        state.alphaBlendOp        = METoVKBlendOp(_info.alpha_blend_op);
+        state.colorWriteMask      = (_info.color_write_mask & CW_RED) ? VK_COLOR_COMPONENT_R_BIT : 0;
+        state.colorWriteMask |= (_info.color_write_mask & CW_GREEN) ? VK_COLOR_COMPONENT_G_BIT : 0;
+        state.colorWriteMask |= (_info.color_write_mask & CW_BLUE) ? VK_COLOR_COMPONENT_B_BIT : 0;
+        state.colorWriteMask |= (_info.color_write_mask & CW_ALPHA) ? VK_COLOR_COMPONENT_A_BIT : 0;
+        return std::move(state);
+    };
+    Moer::Array<VkPipelineColorBlendAttachmentState> color_blend_attachments(attachment_count);
+    for (int i = 0; i < attachment_count; ++i) {
+        color_blend_attachments[i] = to_vk_blend_attachment(_init.color_attachments_info[i].blend_state_info);
+    }
+    // color blend state
+    VkPipelineColorBlendStateCreateInfo color_blend_state{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+
+    color_blend_state.logicOp         = VK_LOGIC_OP_COPY;
+    color_blend_state.logicOpEnable   = VK_FALSE;
+    color_blend_state.attachmentCount = attachment_count;
+    color_blend_state.pAttachments    = color_blend_attachments.data();
+
+    // shader stage
+    auto& shader_info_group = _init.shader_infos.work_flow;
+
+    Moer::Array<VkPipelineShaderStageCreateInfo> shader_stages;
+    Moer::Array<const Shader*>                   shader_info_list;
+
+#define FILL_SHADER_DATA(rhi_shader, target_shader_stage, target_info)                                   \
+    shader_stage_info.stage  = target_shader_stage;                                                      \
+    shader_stage_info.module = rhi_shader->GetHandle();                                                  \
+    shader_stage_info.pName  = rhi_shader->GetMetaShader()->GetShaderMetaType()->GetEntryPoint().data(); \
+    shader_stages.push_back(shader_stage_info);                                                          \
+    shader_info_list.push_back(rhi_shader->GetMetaShader());
+
+    VkPipelineVertexInputStateCreateInfo vertex_input_state{};
+
+    if (_init.shader_infos.IsVertexWorkFlow()) {
+
+        auto work_flow = std::get<RHIGraphicsShaderInputInfo::t_vertex_work_flow>(shader_info_group);
+        assert(work_flow.vertex_shader && work_flow.fragment_shader && "RHICreateGraphicsPSO: vertex shader is nullptr!");
+
+        VkPipelineShaderStageCreateInfo shader_stage_info{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+        shader_stage_info.pSpecializationInfo = VK_NULL_HANDLE;
+        shader_stage_info.pNext               = VK_NULL_HANDLE;
+        shader_stage_info.flags               = 0;
+
+        {
+            auto* vk_vert_shader = static_cast<VulkanRHIVertexShader*>(work_flow.vertex_shader);
+            FILL_SHADER_DATA(vk_vert_shader, VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_VERTEX_BIT);
+        }
+
+        {
+            auto* vk_frag_shader = static_cast<VulkanRHIFragmentShader*>(work_flow.fragment_shader);
+            FILL_SHADER_DATA(vk_frag_shader, VK_SHADER_STAGE_FRAGMENT_BIT, VK_SHADER_STAGE_FRAGMENT_BIT);
+        }
+
+        if (work_flow.geometry_shader) {
+            auto* vk_geom_shader = static_cast<VulkanRHIGeometryShader*>(work_flow.geometry_shader);
+            FILL_SHADER_DATA(vk_geom_shader, VK_SHADER_STAGE_GEOMETRY_BIT, VK_SHADER_STAGE_GEOMETRY_BIT);
+        }
+        vertex_input_state = std::move(VulkanRHIGraphicsPipelineState::METoVKVertexInputStateCreateInfo(work_flow.vertex_input_state));
+
+    } else {
+        auto work_flow = std::get<RHIGraphicsShaderInputInfo::t_mesh_work_flow>(shader_info_group);
+        assert(work_flow.mesh_shader && work_flow.fragment_shader && "RHICreateGraphicsPSO: mesh shader is nullptr!");
+
+        VkPipelineShaderStageCreateInfo shader_stage_info{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+        shader_stage_info.pSpecializationInfo = VK_NULL_HANDLE;
+        shader_stage_info.pNext               = VK_NULL_HANDLE;
+        shader_stage_info.flags               = 0;
+
+        {
+            auto* vk_mesh_shader = static_cast<VulkanRHIMeshShader*>(work_flow.mesh_shader);
+            FILL_SHADER_DATA(vk_mesh_shader, VK_SHADER_STAGE_MESH_BIT_NV, VK_SHADER_STAGE_MESH_BIT_NV);
+        }
+
+        {
+            auto* vk_frag_shader = static_cast<VulkanRHIFragmentShader*>(work_flow.fragment_shader);
+            FILL_SHADER_DATA(vk_frag_shader, VK_SHADER_STAGE_FRAGMENT_BIT, VK_SHADER_STAGE_FRAGMENT_BIT);
+        }
+
+        if (work_flow.amplification_shader) {
+            auto* vk_amp_shader = static_cast<VulkanRHIAmplificationShader*>(work_flow.amplification_shader);
+            FILL_SHADER_DATA(vk_amp_shader, VK_SHADER_STAGE_TASK_BIT_NV, VK_SHADER_STAGE_TASK_BIT_NV);
+        }
+    }
+#undef FILL_SHADER_DATA
+    // vertex input state
+
+    // input assembly
+    VkPipelineInputAssemblyStateCreateInfo input_assembly_state{};
+    input_assembly_state.sType                  = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    input_assembly_state.pNext                  = nullptr;
+    input_assembly_state.flags                  = 0;
+    input_assembly_state.topology               = VulkanEnumTranslator::METoVKPrimitiveTopology(_init.primitive_topology);
+    input_assembly_state.primitiveRestartEnable = VK_FALSE;
+
+    // viewport state
+    VkPipelineViewportStateCreateInfo viewport_state{};
+    viewport_state.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewport_state.pNext         = nullptr;
+    viewport_state.flags         = 0;
+    viewport_state.viewportCount = _init.multi_view_count;
+    viewport_state.scissorCount  = _init.multi_view_count;
+    // rasterization state
+    VkPipelineRasterizationStateCreateInfo vk_rasterization_state{};
+
+    auto to_rasterize_state = [](const RHIRasterizeInfo& info) {
+        VkPipelineRasterizationStateCreateInfo state{};
+        state.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+        state.pNext                   = nullptr;
+        state.flags                   = 0;
+        state.depthClampEnable        = info.b_depth_clamp_enable ? VK_TRUE : VK_FALSE;
+        state.rasterizerDiscardEnable = VK_FALSE;// MARK...
+        state.polygonMode             = VulkanEnumTranslator::METoVKPolygonMode(info.fill_mode);
+        state.cullMode                = VulkanEnumTranslator::METoVKCullModeFlags(info.cull_mode);
+        state.frontFace               = VK_FRONT_FACE_COUNTER_CLOCKWISE;// MARK...
+        state.depthBiasEnable         = info.b_depth_bias ? VK_TRUE : VK_FALSE;
+        state.depthBiasConstantFactor = info.depth_bias;
+        state.depthBiasClamp          = info.depth_bias_clamp;
+        state.depthBiasSlopeFactor    = info.depth_bias_slop_factor;
+        state.lineWidth               = 1.0f;
+        return std::move(state);
+    };
+
+    vk_rasterization_state = to_rasterize_state(_init.rasterizer_info);
+    // multisample state
+    VkPipelineMultisampleStateCreateInfo multisample_state{};
+
+    auto to_multi_sample_state = [](const RHIMultisampleStateInfo& info) {
+        VkPipelineMultisampleStateCreateInfo state{};
+        state.sType                 = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+        state.pNext                 = nullptr;
+        state.flags                 = 0;
+        state.rasterizationSamples  = VulkanEnumTranslator::METoVKSampleCountFlagBits(info.sample_count);
+        state.sampleShadingEnable   = VK_FALSE;
+        state.minSampleShading      = 1.0f;
+        state.pSampleMask           = nullptr;
+        state.alphaToCoverageEnable = VK_FALSE;
+        state.alphaToOneEnable      = VK_FALSE;
+        return std::move(state);
+    };
+    auto vk_multisample_state = to_multi_sample_state(_init.multisample_info);
+
+    // depth stencil state
+    VkPipelineDepthStencilStateCreateInfo depth_stencil_state{};
+
+    auto to_depth_stencil_state = [](const RHIDepthStencilStateInfo& info) {
+        VkPipelineDepthStencilStateCreateInfo state{};
+        state.sType                 = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+        state.pNext                 = nullptr;
+        state.flags                 = 0;
+        state.depthTestEnable       = (info.b_enable_depth_write || info.depth_test_op == ECompareOption::CO_ALWAYS) ? VK_TRUE : VK_FALSE;
+        state.depthWriteEnable      = info.b_enable_depth_write;
+        state.depthCompareOp        = VulkanEnumTranslator::METoVKCompareOp(info.depth_test_op);
+        state.depthBoundsTestEnable = VK_FALSE;// MARK...
+        state.minDepthBounds        = 0.0f;
+        state.maxDepthBounds        = 1.0f;
+
+        state.stencilTestEnable = (info.b_enable_front_face_stencil || info.b_enable_back_face_stencil) ? VK_TRUE : VK_FALSE;
+        state.front.failOp      = VulkanEnumTranslator::METoVKStencilOp(info.front_face_stencil_fail_stencil_op);
+        state.front.passOp      = VulkanEnumTranslator::METoVKStencilOp(info.front_face_pass_stencil_op);
+        state.front.depthFailOp = VulkanEnumTranslator::METoVKStencilOp(info.front_face_depth_fail_stencil_op);
+        state.front.compareOp   = VulkanEnumTranslator::METoVKCompareOp(info.front_face_stencil_test);
+        state.front.compareMask = info.stencil_readmask;
+        state.front.writeMask   = info.stencil_writemask;
+        state.front.reference   = 0;
+
+        if (info.b_enable_back_face_stencil) {
+            state.back.failOp      = VulkanEnumTranslator::METoVKStencilOp(info.back_face_stencil_fail_stencil_op);
+            state.back.passOp      = VulkanEnumTranslator::METoVKStencilOp(info.back_face_pass_stencil_op);
+            state.back.depthFailOp = VulkanEnumTranslator::METoVKStencilOp(info.back_face_depth_fail_stencil_op);
+            state.back.compareOp   = VulkanEnumTranslator::METoVKCompareOp(info.back_face_stencil_test);
+            state.back.compareMask = info.stencil_readmask;
+            state.back.writeMask   = info.stencil_writemask;
+            state.back.reference   = 0;
+        } else {
+            state.front = state.back;
+        }
+        return std::move(state);
+    };
+    auto vk_depth_stencil_state = to_depth_stencil_state(_init.depth_stencil_info);
+
+    // dynamic state
+    Moer::StaticArray<VkDynamicState, 2> states = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo     dynamic_state{};
+    dynamic_state.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamic_state.pNext             = nullptr;
+    dynamic_state.flags             = 0;
+    dynamic_state.dynamicStateCount = states.size();
+    dynamic_state.pDynamicStates    = states.data();
+
+    Moer::Array<TDescriptorSetLayoutInfo> layout_mappings;
+    Moer::Array<VkPushConstantRange>      push_constant_ranges;
+
+    // find max set index
+    int8_t max_set = -1;
+    for (const auto* meta_shader : shader_info_list) {
+        auto layout_infos = meta_shader->GetRootParametersLayoutInfo().GetLayoutInfos();
+        for (const auto& info : layout_infos) {
+            max_set = std::max(max_set, info.space);
+        }
+    }
+    layout_mappings.resize(max_set + 1, {});
+
+    // construct layout mappings
+    for (const auto* meta_shader : shader_info_list) {
+        auto layout_infos   = meta_shader->GetRootParametersLayoutInfo().GetLayoutInfos();
+        auto constant_infos = meta_shader->GetRootParametersLayoutInfo().GetConstantsInfos();
+
+        for (const auto& info : layout_infos) {
+            VkDescriptorSetLayoutBinding binding{};
+            binding.binding         = info.slot;
+            binding.descriptorType  = VulkanEnumTranslator::METoVKDescriptorType(info.type, info.resource_type);
+            binding.descriptorCount = 1;
+            binding.stageFlags |= VulkanEnumTranslator::METoVKShaderStageFlags(meta_shader->GetShaderType());
+            binding.pImmutableSamplers = nullptr;
+
+            layout_mappings[info.space].second.push_back(std::move(binding));
+        }
+
+        // constants
+        for (const auto& info : constant_infos) {
+            VkPushConstantRange range{};
+            range.stageFlags |= VulkanEnumTranslator::METoVKShaderStageFlags(meta_shader->GetShaderType());
+            range.offset = info.offset;
+            range.size   = info.stride;
+            push_constant_ranges.push_back(range);
+        }
+    }
+
+    // generate descriptor set layouts
+    vk_pso->CreateResourceCache();
+    vk_pso->GenerateDescriptorSetLayouts(m_device, layout_mappings);
+
+    auto layouts = vk_pso->m_descriptor_sets_layout->GetLayouts();
+    // create pipeline layout
+    VkPipelineLayoutCreateInfo pipeline_layout_create_info{};
+    pipeline_layout_create_info.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pipeline_layout_create_info.pNext                  = nullptr;
+    pipeline_layout_create_info.flags                  = 0;
+    pipeline_layout_create_info.setLayoutCount         = layouts.size();
+    pipeline_layout_create_info.pSetLayouts            = layouts.data();
+    pipeline_layout_create_info.pushConstantRangeCount = push_constant_ranges.size();
+    pipeline_layout_create_info.pPushConstantRanges    = push_constant_ranges.data();
+
+    vkCreatePipelineLayout(m_device->GetDevice(), &pipeline_layout_create_info, nullptr, &vk_pso->m_pipeline_layout);
+
+    VkGraphicsPipelineCreateInfo pipeline_create_info{};
+    pipeline_create_info.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipeline_create_info.pNext               = &rendering_create_info;
+    pipeline_create_info.flags               = 0;
+    pipeline_create_info.stageCount          = shader_stages.size();
+    pipeline_create_info.pStages             = shader_stages.data();
+    pipeline_create_info.pVertexInputState   = &vertex_input_state;
+    pipeline_create_info.pInputAssemblyState = &input_assembly_state;
+    pipeline_create_info.pTessellationState  = nullptr;
+    pipeline_create_info.pViewportState      = &viewport_state;
+    pipeline_create_info.pRasterizationState = &vk_rasterization_state;
     pipeline_create_info.pMultisampleState   = &multisample_state;
     pipeline_create_info.pDepthStencilState  = &depth_stencil_state;
     pipeline_create_info.pColorBlendState    = &color_blend_state;
@@ -545,7 +902,7 @@ RHITextureRef VulkanRHIImpl::RHICreateTexture(const RHITextureCreateInfo& info) 
     return RHITextureRef(vk_texture);
 };
 
-RHIShaderResourceViewRef VulkanRHIImpl::RHICreateSRV(RHIViewableResource* _resource, const RHIViewInfo& _view_info) {
+RHISRVRef VulkanRHIImpl::RHICreateSRV(RHIViewableResource* _resource, const RHIViewInfo& _view_info) {
 
     auto create_texture_srv = [=]() {
         VulkanRHITextureSRV* vk_srv = new VulkanRHITextureSRV(m_device, _resource, _view_info);
@@ -556,7 +913,7 @@ RHIShaderResourceViewRef VulkanRHIImpl::RHICreateSRV(RHIViewableResource* _resou
         image_view_create_info.flags = 0;
 
         auto* vk_texture = static_cast<VulkanRHITexture*>(_resource);
-        VK_CHECK_NULLPTR(vk_texture, "RHICreateSRV: resource to be viewed is nullptr!", return RHIShaderResourceViewRef{});
+        VK_CHECK_NULLPTR(vk_texture, "RHICreateSRV: resource to be viewed is nullptr!", return RHISRVRef{});
 
         image_view_create_info.image                           = vk_texture->GetHandle();
         image_view_create_info.viewType                        = VulkanEnumTranslator::METoVKImageViewType(_view_info.texture.srv.dimension);
@@ -570,7 +927,7 @@ RHIShaderResourceViewRef VulkanRHIImpl::RHICreateSRV(RHIViewableResource* _resou
 
         VK_CHECK_RESULT(vkCreateImageView(m_device->GetDevice(), &image_view_create_info, nullptr, &vk_srv->m_view));
 
-        return RHIShaderResourceViewRef(vk_srv);
+        return RHISRVRef(vk_srv);
     };
 
     auto create_buffer_srv = [=]() {
@@ -588,7 +945,7 @@ RHIShaderResourceViewRef VulkanRHIImpl::RHICreateSRV(RHIViewableResource* _resou
 
         VK_CHECK_RESULT(vkCreateBufferView(m_device->GetDevice(), &buffer_view_create_info, nullptr, &vk_srv->m_view));
 
-        return RHIShaderResourceViewRef(vk_srv);
+        return RHISRVRef(vk_srv);
     };
 
     if (_view_info.IsBuffer()) {
@@ -597,7 +954,7 @@ RHIShaderResourceViewRef VulkanRHIImpl::RHICreateSRV(RHIViewableResource* _resou
     return create_texture_srv();
 }
 
-RHIUnorderedAccessViewRef VulkanRHIImpl::RHICreateUAV(RHIViewableResource* _resource, const RHIViewInfo& _view_info) {
+RHIUAVRef VulkanRHIImpl::RHICreateUAV(RHIViewableResource* _resource, const RHIViewInfo& _view_info) {
 
     auto create_buffer_uav = [=]() {
         auto*               vk_buffer = static_cast<VulkanRHIBuffer*>(_resource);
@@ -614,13 +971,13 @@ RHIUnorderedAccessViewRef VulkanRHIImpl::RHICreateUAV(RHIViewableResource* _reso
 
         VK_CHECK_RESULT(vkCreateBufferView(m_device->GetDevice(), &buffer_view_create_info, nullptr, &vk_uav->m_view));
 
-        return RHIUnorderedAccessViewRef(vk_uav);
+        return RHIUAVRef(vk_uav);
     };
 
     auto create_texture_uav = [=]() {
         auto* vk_texture = static_cast<VulkanRHITexture*>(_resource);
 
-        VK_CHECK_NULLPTR(vk_texture, "RHICreateUnorderedAccessView: resource to be viewed is nullptr!", return RHIUnorderedAccessViewRef{});
+        VK_CHECK_NULLPTR(vk_texture, "RHICreateUnorderedAccessView: resource to be viewed is nullptr!", return RHIUAVRef{});
 
         VulkanRHITextureUAV* vk_uav = MoerNew(VulkanRHITextureUAV)(m_device, _resource, _view_info);
 
@@ -643,7 +1000,7 @@ RHIUnorderedAccessViewRef VulkanRHIImpl::RHICreateUAV(RHIViewableResource* _reso
 
         VK_CHECK_RESULT(vkCreateImageView(m_device->GetDevice(), &image_view_create_info, nullptr, &vk_uav->m_view));
 
-        return RHIUnorderedAccessViewRef(vk_uav);
+        return RHIUAVRef(vk_uav);
     };
 
     if (_view_info.IsBuffer()) {
@@ -948,7 +1305,7 @@ RHIViewportNextBackBufferInfo VulkanRHIImpl::RHIGetNextFrameViewportBufferInfo(R
 
     return vk_viewport->GetNextFrameBackBufferInfo();
 }
-RHIUnorderedAccessView* VulkanRHIImpl::RHIGetViewportBackBufferUAV(RHIViewport* _viewport, uint32_t index) {
+RHIUAV* VulkanRHIImpl::RHIGetViewportBackBufferUAV(RHIViewport* _viewport, uint32_t index) {
     assert(_viewport != nullptr && "Passing invalid viewport");
     VulkanViewport* vk_viewport = static_cast<VulkanViewport*>(_viewport);
     if (index == UINT32_MAX) {
@@ -956,7 +1313,7 @@ RHIUnorderedAccessView* VulkanRHIImpl::RHIGetViewportBackBufferUAV(RHIViewport* 
         return nullptr;
     }
     VulkanRHITextureUAV* uav = vk_viewport->GetCurrentBackBuffer(index);
-    return static_cast<RHIUnorderedAccessView*>(uav);
+    return static_cast<RHIUAV*>(uav);
 }
 void VulkanRHIImpl::RHIPresentViewport(RHIViewport* _viewport, RHIFence* _render_end_fence) {
     assert(_viewport != nullptr && "Passing invalid viewport");

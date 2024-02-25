@@ -44,13 +44,13 @@ namespace Moer {
         //call from render thread
         VirtualViewportNextBackBufferInfo GetNextBackBuffer();
 
-        RHIUnorderedAccessViewRef GetNextBackBufferUAV(uint32_t index);
+        RHIUAVRef GetNextBackBufferUAV(uint32_t index);
 
         void Present(RHIFenceRef _render_fence);
 
         const VirtualViewportInfo& GetInfo() const { return info; }
 
-        RHIShaderResourceViewRef GetPresentTextureSRV() { return present_texture_srv; }
+        RHISRVRef GetPresentTextureSRV() { return present_texture_srv; }
 
     private:
         friend VirtualViewport;
@@ -70,10 +70,10 @@ namespace Moer {
         RHIFenceRef present_fence;
 
         RHITextureRef            present_texture;
-        RHIShaderResourceViewRef present_texture_srv;
+        RHISRVRef                present_texture_srv;
 
         Moer::Array<RHITextureRef>             swapchain_textures;
-        Moer::Array<RHIUnorderedAccessViewRef> swapchain_uavs;
+        Moer::Array<RHIUAVRef> swapchain_uavs;
         uint64_t                               frame_index     = 0;
         uint64_t                               presented_index = 0;
 
@@ -122,11 +122,11 @@ namespace Moer {
         return impl->GetNextBackBuffer();
     }
 
-    RHIUnorderedAccessViewRef VirtualViewport::GetNextBackBufferUAV(uint32_t index) {
+    RHIUAVRef VirtualViewport::GetNextBackBufferUAV(uint32_t index) {
         return impl->GetNextBackBufferUAV(index);
     }
 
-    RHIShaderResourceView* VirtualViewport::GetPresentTextureSRV() {
+    RHISRV* VirtualViewport::GetPresentTextureSRV() {
         return impl->GetPresentTextureSRV();
     }
 
@@ -314,7 +314,7 @@ namespace Moer {
             .backbuffer_ready_fence = present_fence};
     }
 
-    RHIUnorderedAccessViewRef VirtualViewport::Impl::GetNextBackBufferUAV(uint32_t index) {
+    RHIUAVRef VirtualViewport::Impl::GetNextBackBufferUAV(uint32_t index) {
         // Implementation of GetNextBackBufferUAV method
         // ...
         assert(Moer::IsCurrentlyRenderThread());

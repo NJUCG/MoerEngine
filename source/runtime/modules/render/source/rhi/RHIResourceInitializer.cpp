@@ -1,6 +1,6 @@
 #include "rhi/RHIResourceInitilizer.h"
 #include "misc/Hash.h"
-uint32_t GetHash(const RHISamplerInitializer& target) {
+uint32_t GetHash(const RHISamplerCreateInfo& target) {
     uint32_t hash;
     HashCombine(hash, GetHash(target.filter));
     HashCombine(hash, GetHash(target.address_mode_u));
@@ -14,7 +14,7 @@ uint32_t GetHash(const RHISamplerInitializer& target) {
     HashCombine(hash, GetHash(target.compare_op));
     return hash;
 }
-bool operator==(const RHISamplerInitializer& lhs, const RHISamplerInitializer& rhs) {
+bool operator==(const RHISamplerCreateInfo& lhs, const RHISamplerCreateInfo& rhs) {
     return lhs.filter == rhs.filter &&
            lhs.address_mode_u == rhs.address_mode_u &&
            lhs.address_mode_v == rhs.address_mode_v &&
@@ -27,7 +27,7 @@ bool operator==(const RHISamplerInitializer& lhs, const RHISamplerInitializer& r
            lhs.compare_op == rhs.compare_op;
 }
 
-uint32_t GetHash(const RHIDepthStencilStateInitializer& target) {
+uint32_t GetHash(const RHIDepthStencilStateInfo& target) {
     uint32_t hash = 0;
     HashCombine(hash, GetHash(target.b_enable_depth_write));
     HashCombine(hash, GetHash(target.depth_test_op));
@@ -46,7 +46,7 @@ uint32_t GetHash(const RHIDepthStencilStateInitializer& target) {
     return hash;
 }
 
-bool operator==(const RHIDepthStencilStateInitializer& lhs, const RHIDepthStencilStateInitializer& rhs) {
+bool operator==(const RHIDepthStencilStateInfo& lhs, const RHIDepthStencilStateInfo& rhs) {
     return lhs.b_enable_depth_write == rhs.b_enable_depth_write &&
            lhs.depth_test_op == rhs.depth_test_op &&
            lhs.b_enable_front_face_stencil == rhs.b_enable_front_face_stencil &&
@@ -63,7 +63,7 @@ bool operator==(const RHIDepthStencilStateInitializer& lhs, const RHIDepthStenci
            lhs.stencil_writemask == rhs.stencil_writemask;
 }
 
-uint32_t GetHash(const RHIRasterizationStateInitializer& target) {
+uint32_t GetHash(const RHIRasterizeInfo& target) {
     uint32_t hash = 0;
     HashCombine(hash, GetHash(target.fill_mode));
     HashCombine(hash, GetHash(target.cull_mode));
@@ -75,7 +75,7 @@ uint32_t GetHash(const RHIRasterizationStateInitializer& target) {
     HashCombine(hash, GetHash(target.depth_bias_slop_factor));
     return hash;
 }
-bool operator==(const RHIRasterizationStateInitializer& lhs, const RHIRasterizationStateInitializer& rhs) {
+bool operator==(const RHIRasterizeInfo& lhs, const RHIRasterizeInfo& rhs) {
     return lhs.fill_mode == rhs.fill_mode &&
            lhs.cull_mode == rhs.cull_mode &&
            lhs.b_depth_bias == rhs.b_depth_bias &&
@@ -85,7 +85,7 @@ bool operator==(const RHIRasterizationStateInitializer& lhs, const RHIRasterizat
            lhs.depth_bias_clamp == rhs.depth_bias_clamp &&
            lhs.depth_bias_slop_factor == rhs.depth_bias_slop_factor;
 }
-uint32_t GetHash(const RHIMultisampleStateInitializer& target) {
+uint32_t GetHash(const RHIMultisampleStateInfo& target) {
     uint32_t hash = 0;
     HashCombine(hash, GetHash(target.sample_count));
     HashCombine(hash, GetHash(target.b_sample_shading));
@@ -94,14 +94,14 @@ uint32_t GetHash(const RHIMultisampleStateInitializer& target) {
     HashCombine(hash, GetHash(target.min_sample_shading));
     return hash;
 }
-bool operator==(const RHIMultisampleStateInitializer& lhs, const RHIMultisampleStateInitializer& rhs) {
+bool operator==(const RHIMultisampleStateInfo& lhs, const RHIMultisampleStateInfo& rhs) {
     return lhs.sample_count == rhs.sample_count &&
            lhs.b_sample_shading == rhs.b_sample_shading &&
            lhs.b_alpha_to_converge == rhs.b_alpha_to_converge &&
            lhs.b_alpha_to_one == rhs.b_alpha_to_one &&
            lhs.min_sample_shading == rhs.min_sample_shading;
 }
-uint32_t GetHash(const RHIBlendStateInitializer::AttachmentInitializer& target) {
+uint32_t GetHash(const RHIBlendAttachmentInfo& target) {
     uint32_t hash = 0;
     HashCombine(hash, GetHash(target.color_blend_op));
     HashCombine(hash, GetHash(target.color_src_blend_factor));
@@ -112,7 +112,7 @@ uint32_t GetHash(const RHIBlendStateInitializer::AttachmentInitializer& target) 
     HashCombine(hash, GetHash(target.color_write_mask));
     return 0;
 }
-bool operator==(const RHIBlendStateInitializer::AttachmentInitializer& lhs, const RHIBlendStateInitializer::AttachmentInitializer& rhs) {
+bool operator==(const RHIBlendAttachmentInfo& lhs, const RHIBlendAttachmentInfo& rhs) {
     return lhs.color_blend_op == rhs.color_blend_op &&
            lhs.color_src_blend_factor == rhs.color_src_blend_factor &&
            lhs.color_dst_blend_factor == rhs.color_dst_blend_factor &&
@@ -121,14 +121,14 @@ bool operator==(const RHIBlendStateInitializer::AttachmentInitializer& lhs, cons
            lhs.alpha_dst_blend_factor == rhs.alpha_dst_blend_factor &&
            lhs.color_write_mask == rhs.color_write_mask;
 }
-uint32_t GetHash(const RHIBlendStateInitializer& target) {
+uint32_t GetHash(const RHIBlendStateInfo& target) {
     uint32_t hash = 0;
     for (int i = 0; i < MAX_PASS_ATTACHMENT_COUNT; ++i) {
         HashCombine(hash, GetHash(target.attachments[i]));
     }
     return hash;
 }
-bool operator==(const RHIBlendStateInitializer& lhs, const RHIBlendStateInitializer& rhs) {
+bool operator==(const RHIBlendStateInfo& lhs, const RHIBlendStateInfo& rhs) {
     bool _same = true;
     for (int i = 0; i < MAX_PASS_ATTACHMENT_COUNT; ++i) {
         _same = _same && lhs.attachments[i] == rhs.attachments[i];

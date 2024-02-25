@@ -50,12 +50,12 @@ public:
 
 #pragma region resources creation
 
-    virtual RHISamplerRef            RHICreateSampler(const RHISamplerInitializer& _initializer)                = 0;
-    virtual RHIRasterizationStateRef RHICreateRasterizationState(const RHIRasterizationStateInitializer& _init) = 0;
-    virtual RHIDepthStencilStateRef  RHICreateDepthStencilState(const RHIDepthStencilStateInitializer& _init)   = 0;
-    virtual RHIMultisampleStateRef   RHICreateMultiSampleState(const RHIMultisampleStateInitializer& _init)     = 0;
-    virtual RHIBlendStateRef         RHICreateBlendState(const RHIBlendStateInitializer& _init)                 = 0;
-    virtual RHIVertexInputStateRef   RHICreateVertexInputState(const VertexInputStateInitializerList& _init)    = 0;
+    virtual RHISamplerRef            RHICreateSampler(const RHISamplerCreateInfo& _initializer)              = 0;
+    virtual RHIRasterizationStateRef RHICreateRasterizationState(const RHIRasterizeInfo& _init)              = 0;
+    virtual RHIDepthStencilStateRef  RHICreateDepthStencilState(const RHIDepthStencilStateInfo& _init)       = 0;
+    virtual RHIMultisampleStateRef   RHICreateMultiSampleState(const RHIMultisampleStateInfo& _init)         = 0;
+    virtual RHIBlendStateRef         RHICreateBlendState(const RHIBlendStateInfo& _init)                     = 0;
+    virtual RHIVertexInputStateRef   RHICreateVertexInputState(const VertexInputStateInitializerList& _init) = 0;
 
     virtual RHIComputeShaderRef RHICreateComputeShader(const class ShaderCodeEntry*, const Shader*) = 0;
 
@@ -76,10 +76,11 @@ public:
         RHIFragmentShader*   _fragment_shader,
         RHIGeometryShader*   _geometry_shader) = 0;
 
-    virtual RHIGraphicsPipelineStateRef RHICreateGraphicsPipelineState(const RHIGraphicsPipelineStateInitializer& _init) = 0;
+    virtual RHIGraphicsPipelineStateRef RHICreateGraphicsPipelineState(const RHIGraphicsPipelineStateInfo& _init) = 0;
 
+    virtual RHIGraphicsPipelineStateRef RHICreateGraphicsPSO(RHIGraphicsPSOCreateInfo&& _init) = 0;
     /* create pso from cache */
-    virtual RHIGraphicsPipelineStateRef RHICreateGraphicsPipelineState(const RHIGraphicsPipelineStateInitializer& _init, RHIPipelineBinaryDataLibrary* _pipeline_library) {
+    virtual RHIGraphicsPipelineStateRef RHICreateGraphicsPipelineState(const RHIGraphicsPipelineStateInfo& _init, RHIPipelineBinaryDataLibrary* _pipeline_library) {
         return RHICreateGraphicsPipelineState(_init);
     }
 
@@ -95,8 +96,8 @@ public:
 
     virtual RHITextureRef RHICreateTexture(const RHITextureCreateInfo& info) = 0;
 
-    virtual RHIShaderResourceViewRef  RHICreateSRV(RHIViewableResource* _resource, const RHIViewInfo& _view_info) = 0;
-    virtual RHIUnorderedAccessViewRef RHICreateUAV(RHIViewableResource* _resource, const RHIViewInfo& _view_info)                = 0;
+    virtual RHISRVRef RHICreateSRV(RHIViewableResource* _resource, const RHIViewInfo& _view_info) = 0;
+    virtual RHIUAVRef RHICreateUAV(RHIViewableResource* _resource, const RHIViewInfo& _view_info) = 0;
 
     virtual RHICommandQueue* RHICreateCommandQueue(ECommandQueueType type) = 0;
     // DX12 only: _initial_state
@@ -130,7 +131,7 @@ public:
 
     virtual RHIViewportNextBackBufferInfo RHIGetNextFrameViewportBufferInfo(RHIViewport* _viewport) = 0;
 
-    virtual RHIUnorderedAccessView* RHIGetViewportBackBufferUAV(RHIViewport* _viewport, uint32_t index) = 0;
+    virtual RHIUAV* RHIGetViewportBackBufferUAV(RHIViewport* _viewport, uint32_t index) = 0;
 
     virtual void RHIPresentViewport(RHIViewport* _viewport, RHIFence* _render_end_fence) = 0;
 #pragma endregion

@@ -15,7 +15,10 @@ namespace Moer {
 
         EntityComponentManger(EntityComponentManger&&) noexcept            = default;
         EntityComponentManger& operator=(EntityComponentManger&&) noexcept = default;
-        ~EntityComponentManger() noexcept                                  = default;
+        ~EntityComponentManger() noexcept {
+            m_instance_map.clear();
+            m_data.clear();
+        };
 
         // not copyable
         EntityComponentManger(EntityComponentManger const& rhs)            = delete;

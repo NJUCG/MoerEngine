@@ -37,13 +37,13 @@ namespace Moer {
         //call from render thread
         VirtualViewportNextBackBufferInfo GetNextBackBuffer();
 
-        RHIUnorderedAccessViewRef GetNextBackBufferUAV(uint32_t index);
+        RHIUAVRef GetNextBackBufferUAV(uint32_t index);
 
         void Present(RHIFenceRef _render_fence);
 
         const VirtualViewportInfo& GetInfo() const;
 
-        RHIShaderResourceView* GetPresentTextureSRV();
+        RHISRV* GetPresentTextureSRV();
 
     private:
         void InitRenderThread();

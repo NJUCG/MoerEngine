@@ -79,7 +79,7 @@ namespace Moer {
         void SetOriginResolution(uint32_t _width, uint32_t _height);
         void SetPresentResolution(uint32_t _width, uint32_t _height);
 
-        RHIShaderResourceViewRef GetRendererOutput();
+        RHISRVRef GetRendererOutput();
 
     private:
         VirtualViewport* virtual_viewport;
@@ -96,14 +96,14 @@ namespace Moer {
         RHIGraphicsPipelineStateRef pipeline_state;
         RHIComputePipelineStateRef  compute_pipeline_state;
 
-        RHIBufferRef             draw_indirect_buffer;
-        RHIBufferRef             draw_count_buffer;
-        RHIBufferRef             zero_buffer;
-        RHIShaderResourceViewRef meshlet_descs_buffer_view;
-        RHIShaderResourceViewRef meshlet_bounds_buffer_view;
+        RHIBufferRef draw_indirect_buffer;
+        RHIBufferRef draw_count_buffer;
+        RHIBufferRef zero_buffer;
+        RHISRVRef    meshlet_descs_buffer_view;
+        RHISRVRef    meshlet_bounds_buffer_view;
 
-        RHIUnorderedAccessViewRef draw_indirect_view;
-        RHIUnorderedAccessViewRef draw_count_view;
+        RHIUAVRef draw_indirect_view;
+        RHIUAVRef draw_count_view;
     };
     void DeferredRenderer::Init(const BackendRendererInitInfo& _init_info) {
         impl = MoerNew(Impl);
@@ -149,7 +149,7 @@ namespace Moer {
         }
         render_fence = g_rhi->RHICreateFence({.usage = EFenceUsageFlags::TIMELINE});
 
-        RHIBlendStateInitializer blend_init;
+        RHIBlendStateInfo blend_init;
         blend_init.attachments[0].color_blend_op         = BO_ADD;
         blend_init.attachments[0].color_src_blend_factor = BF_SRC_ALPHA;
         blend_init.attachments[0].color_dst_blend_factor = BF_ONE_MINUS_SRC_ALPHA;
@@ -160,7 +160,7 @@ namespace Moer {
 
         RHIBlendStateRef blend_state = g_rhi->RHICreateBlendState(blend_init);
 
-        RHIRasterizationStateInitializer rasterization_init{};
+        RHIRasterizeInfo rasterization_init{};
         rasterization_init.cull_mode            = RCM_BACK;
         rasterization_init.fill_mode            = FM_FILL;
         rasterization_init.b_depth_clamp_enable = false;
@@ -169,21 +169,21 @@ namespace Moer {
 
         RHIRasterizationStateRef rasterization_state = g_rhi->RHICreateRasterizationState(rasterization_init);
 
-        RHIMultisampleStateInitializer multisample_init{};
+        RHIMultisampleStateInfo multisample_init{};
         multisample_init.sample_count            = 1;
         RHIMultisampleStateRef multisample_state = g_rhi->RHICreateMultiSampleState(multisample_init);
 
-        RHIDepthStencilStateInitializer depth_stencil_init{};
+        RHIDepthStencilStateInfo depth_stencil_init{};
         depth_stencil_init.b_enable_depth_write     = true;
         depth_stencil_init.depth_test_op            = CO_GREATER_OR_EQUAL;
         RHIDepthStencilStateRef depth_stencil_state = g_rhi->RHICreateDepthStencilState(depth_stencil_init);
 
-        RHIGraphicsPipelineStateInitializer::TAttachmentFormats color_attachment_formats{};
+        RHIGraphicsPipelineStateInfo::TAttachmentFormats color_attachment_formats{};
         color_attachment_formats[0] = EPixelFormat::PF_R8G8B8A8_SRGB;
-        RHIGraphicsPipelineStateInitializer::TAttachmentFlags color_attachment_flags{};
+        RHIGraphicsPipelineStateInfo::TAttachmentFlags color_attachment_flags{};
         color_attachment_flags[0] = ETextureUsageFlags::COLOR_ATTACHMENT;
 
-        RHIGraphicsPipelineStateInitializer
+        RHIGraphicsPipelineStateInfo
             init(blend_state,
                  rasterization_state,
                  multisample_state,
@@ -364,8 +364,8 @@ namespace Moer {
             };
 
             EnqueueRenderTask(std::move(sync_command_list));
-            EnqueueRenderTask(std::move(reset_counter_buffer));
-            EnqueueRenderTask(std::move(cull_task));
+            // EnqueueRenderTask(std::move(reset_counter_buffer));
+            // EnqueueRenderTask(std::move(cull_task));
         }
 
         {
@@ -376,8 +376,8 @@ namespace Moer {
             batched_params.SetParameters(ShaderResourceManager::GetInstance().GetShader<TestDeferredTriangleShaderVert>(), params);
 
             EnqueueRenderTask([this, batched_params = std::move(batched_params)]() {
-                auto                      info = virtual_viewport->GetNextBackBuffer();
-                RHIUnorderedAccessViewRef uav  = virtual_viewport->GetNextBackBufferUAV(info.backbuffer_index);
+                auto      info = virtual_viewport->GetNextBackBuffer();
+                RHIUAVRef uav  = virtual_viewport->GetNextBackBufferUAV(info.backbuffer_index);
 
                 RHIGraphicsCommandList* cmd_list = render_cmd_lists[frame_counter % render_cmd_lists.size()];
 
@@ -406,35 +406,35 @@ namespace Moer {
                     .SetDstAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
 
                 cmd_list->SetPipelineBarrier(barrier_dependency_info);
-                cmd_list->BeginRenderPass(pass_info, "Test Triangle");
+                // cmd_list->BeginRenderPass(pass_info, "Test Triangle");
 
-                const VirtualViewportInfo& viewport_info = virtual_viewport->GetInfo();
-                ViewPort                   viewport{0, 0, float(viewport_info.extent.x), float(viewport_info.extent.y), 0, 1};
-                cmd_list->SetViewPort(viewport);
-                cmd_list->SetScissor({0, 0, uint32_t(viewport_info.extent.x), uint32_t(viewport_info.extent.y)});
+                // const VirtualViewportInfo& viewport_info = virtual_viewport->GetInfo();
+                // ViewPort                   viewport{0, 0, float(viewport_info.extent.x), float(viewport_info.extent.y), 0, 1};
+                // cmd_list->SetViewPort(viewport);
+                // cmd_list->SetScissor({0, 0, uint32_t(viewport_info.extent.x), uint32_t(viewport_info.extent.y)});
 
-                cmd_list->SetPipelineState(pipeline_state);
+                // cmd_list->SetPipelineState(pipeline_state);
 
-                auto* const scene = g_scene;
-                if (scene) {
-                    auto camera_entity = scene->GetCameras()[0];
-                    auto camera        = CameraManager::Get().Get(camera_entity);
-                    camera->Tick();
-                    const auto camera_view = camera->GetViewMatrix();
-                    const auto camera_proj = camera->GetProjectionMatrix();
+                // auto* const scene = g_scene;
+                // if (scene) {
+                //     auto camera_entity = scene->GetCameras()[0];
+                //     auto camera        = CameraManager::Get().Get(camera_entity);
+                //     camera->Tick();
+                //     const auto camera_view = camera->GetViewMatrix();
+                //     const auto camera_proj = camera->GetProjectionMatrix();
 
-                    // Shader* vert_shader = ShaderResourceManager::GetShader<TestDeferredTriangleShaderVert>();
-                    cmd_list->BindIndexBuffer(scene->GetBuffer("index_buffer"), 0, IET_UINT32);
-                    uint32_t           offset             = 0;
-                    const RHIBufferRef prim_vertex_buffer = scene->GetBuffer("vertex_buffer");
-                    cmd_list->BindVertexBuffers(0, 1, &prim_vertex_buffer, &offset);
+                //     // Shader* vert_shader = ShaderResourceManager::GetShader<TestDeferredTriangleShaderVert>();
+                //     cmd_list->BindIndexBuffer(scene->GetBuffer("index_buffer"), 0, IET_UINT32);
+                //     uint32_t           offset             = 0;
+                //     const RHIBufferRef prim_vertex_buffer = scene->GetBuffer("vertex_buffer");
+                //     cmd_list->BindVertexBuffers(0, 1, &prim_vertex_buffer, &offset);
 
-                    cmd_list->DrawIndexedIndirect(draw_indirect_buffer, 0, draw_count_buffer, 0, 11451, sizeof(uint32_t) * 4);
-                } else {
-                    assert(false);
-                }
+                //     cmd_list->DrawIndexedIndirect(draw_indirect_buffer, 0, draw_count_buffer, 0, 11451, sizeof(uint32_t) * 4);
+                // } else {
+                //     assert(false);
+                // }
 
-                cmd_list->EndRenderPass();
+                // cmd_list->EndRenderPass();
 
                 texture_barrier_info
                     .SetDstTextureLayout(TEXTURE_LAYOUT_TRANSFER_SRC)
@@ -473,7 +473,7 @@ namespace Moer {
         });
     }
 
-    RHIShaderResourceViewRef DeferredRenderer::Impl::GetRendererOutput() {
+    RHISRVRef DeferredRenderer::Impl::GetRendererOutput() {
         return virtual_viewport->GetPresentTextureSRV();
     }
 

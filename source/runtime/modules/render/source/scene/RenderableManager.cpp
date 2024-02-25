@@ -22,7 +22,7 @@ namespace Moer {
         uint32_t              index_offset;
         uint16_t              m_instance_count{1};
         bool                  m_culling{};
-        bool                  m_castShadows{};
+        bool                  m_cast_shadows{};
     };
 
     RenderableManager::Builder::Builder() noexcept {}
@@ -54,7 +54,7 @@ namespace Moer {
         return *this;
     }
     RenderableManager::Builder& RenderableManager::Builder::CastShadows(bool castShadows) {
-        m_impl->m_castShadows = castShadows;
+        m_impl->m_cast_shadows = castShadows;
         return *this;
     }
 
@@ -69,7 +69,7 @@ namespace Moer {
         m_manager.AddComponent(entity);
 
         SetCulling(entity, builder->m_culling);
-        SetCastShadows(entity, builder->m_castShadows);
+        SetCastShadows(entity, builder->m_cast_shadows);
 
         m_manager[entity].vertex_data = std::make_unique<Moer::Array<float>>(std::move(builder->vertex_data));
         m_manager[entity].index_data  = std::make_unique<Moer::Array<uint32_t>>(std::move(builder->index_data));
@@ -102,8 +102,9 @@ namespace Moer {
     }
 
     RenderableManager& RenderableManager::Get() {
+        static UniquePtr<RenderableManager> m_instance = nullptr;
         if (!m_instance)
-            m_instance = std::make_unique<RenderableManager>();
+            m_instance = std::move(UniquePtr<RenderableManager>(MoerNew(RenderableManager)()));
         return *m_instance;
     }
 

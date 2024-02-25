@@ -13,4 +13,11 @@ struct InstanceData {
   uint material_id;
   uint material_type;
 };
+
+struct InstanceMeshletInfo {
+  uint vertex_offset;
+  uint index_offset;
+  uint meshlet_count;
+  uint meshlet_offset;
+};
 #endif

@@ -7,7 +7,7 @@
 
 namespace Moer {
 
-    using EntitySet = std::unordered_set<Entity, Entity::Hasher>;
+    using EntitySet = Moer::UnorderedSet<Entity, Entity::Hasher>;
 
     class RENDER_API Scene {
     public:

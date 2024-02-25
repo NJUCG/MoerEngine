@@ -135,7 +135,7 @@ RHIViewInfo::TextureUAV::ViewInfo RHIViewInfo::TextureUAV::GetViewInfo(RHITextur
 
 RHITextureReference::RHITextureReference(
     RHITexture*            _texture,
-    RHIShaderResourceView* _bindless_view)
+    RHISRV* _bindless_view)
     : RHITexture(RRT_TEXTURE_REFERENCE),
       texture_ref(_texture),
       bindless_view(_bindless_view){

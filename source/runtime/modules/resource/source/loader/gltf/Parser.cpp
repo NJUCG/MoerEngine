@@ -4,6 +4,7 @@
 #include "assimp/postprocess.h"
 #include "assimp/scene.h"
 #include "meshprocess/MeshProcessor.h"
+#include "misc/MMemory.h"
 #include "misc/STL.h"
 #include "rhi/RHI.h"
 #include "resources/GpuScene.h"
@@ -22,11 +23,11 @@
 namespace Moer::Resource::Gltf {
 
     struct Parser::Impl {
-        std::unique_ptr<Scene> LoadSceneFromFile(const std::filesystem::path& file_path);
-        void                   LoadNode(const aiNode* node, const aiScene* scene);
-        void                   loadCameras(const aiScene* scene);
-        void                   loadMaterial(const aiScene* ai_scene, const aiMaterial* ai_material, const std::string& materialName);
-        void                   LoadTexture(const aiScene* scene, const aiString& texture_path, MaterialInstanceRef& mat, const std::string& param_name);
+        std::unique_ptr<Scene, MoerDeleter> LoadSceneFromFile(const std::filesystem::path& file_path);
+        void                                LoadNode(const aiNode* node, const aiScene* scene);
+        void                                loadCameras(const aiScene* scene);
+        void                                loadMaterial(const aiScene* ai_scene, const aiMaterial* ai_material, const std::string& materialName);
+        void                                LoadTexture(const aiScene* scene, const aiString& texture_path, MaterialInstanceRef& mat, const std::string& param_name);
         ~Impl() = default;
 
         Moer::Array<RHIRenderPrimitiveRef>                   m_primitives{};
@@ -41,8 +42,8 @@ namespace Moer::Resource::Gltf {
         Moer::Array<float>    m_vertex_data{};
         Moer::Array<uint32_t> m_index_data{};
 
-        std::filesystem::path  m_file_parent_path{};
-        std::unique_ptr<Scene> m_scene{nullptr};
+        std::filesystem::path m_file_parent_path{};
+        UniquePtr<Scene>      m_scene{nullptr};
     };
 
     uint32_t GetVertexData(const aiMesh* mesh, float* data) {
@@ -238,9 +239,9 @@ namespace Moer::Resource::Gltf {
         m_materials[materialName] = material_instance;
     }
 
-    std::unique_ptr<Scene> Parser::Impl::LoadSceneFromFile(const std::filesystem::path& file_path) {
+    std::unique_ptr<Scene, MoerDeleter> Parser::Impl::LoadSceneFromFile(const std::filesystem::path& file_path) {
         GpuPrimitiveBuilder::InitBuild();
-        m_scene = std::make_unique<Scene>();
+        m_scene = std::move(UniquePtr<Scene>(MoerNew(Scene)()));
         Assimp::Importer importer;
         const auto*      gltf_scene = importer.ReadFile(file_path.string(), aiProcess_Triangulate | aiProcess_GenNormals | aiProcess_CalcTangentSpace);
         if (!gltf_scene) {
@@ -249,7 +250,7 @@ namespace Moer::Resource::Gltf {
         }
         // loadNode()
 
-        auto moer_scene = std::make_unique<Scene>();
+        // auto moer_scene = std::make_unique<Scene>();
 
         m_file_parent_path = file_path.parent_path();
 
@@ -324,7 +325,7 @@ namespace Moer::Resource::Gltf {
         //     index_offset += cur_index_count;
         // }
 
-        auto gpu_scene = m_scene.get();
+        auto* gpu_scene = m_scene.get();
 
         EnqueueRenderTask([vertex_data    = std::move(m_vertex_data),
                            index_data     = std::move(m_index_data),
@@ -432,32 +433,23 @@ namespace Moer::Resource::Gltf {
                 TransformManager::Get().Set(entity, GetTransform(node));
 
                 uint32_t stride = 0;
-                // VertexAttributeFlags attribute = GetAttribute(ai_mesh);
-                // EnqueueRenderTask([entity, attribute]() {
-                //     GpuPrimitiveBuilder   gpu_primitive_builder;
-                //     RHIRenderPrimitiveRef ref = gpu_primitive_builder.Vertex(&RenderableManager::Get().GetVertexData(entity))
-                //                                     .Index(&RenderableManager::Get().GetIndexData(entity))
-                //                                     .Attribute(attribute)
-                //                                     .Build();
-                //     RenderableManager::Get().SetRHIRenderPrimitiveRef(entity, ref);
-                // });
 
                 m_scene->AddEntity(entity);
 
-                uint32_t          materialId = ai_mesh->mMaterialIndex;
-                aiMaterial const* material   = scene->mMaterials[materialId];
+                uint32_t          material_id = ai_mesh->mMaterialIndex;
+                aiMaterial const* material    = scene->mMaterials[material_id];
 
                 aiString    name;
-                std::string materialName;
+                std::string material_name;
 
                 if (material->Get(AI_MATKEY_NAME, name) == AI_SUCCESS) {
-                    materialName = name.C_Str();
+                    material_name = name.C_Str();
                 }
 
-                if (!m_materials.contains(materialName)) {
-                    loadMaterial(scene, material, materialName);
+                if (!m_materials.contains(material_name)) {
+                    loadMaterial(scene, material, material_name);
                 }
-                auto material_instance = m_materials[materialName];
+                auto material_instance = m_materials[material_name];
                 RenderableManager::Get().SetMaterialInstance(entity, material_instance);
                 //Todo Load Material
             }
@@ -467,7 +459,7 @@ namespace Moer::Resource::Gltf {
         }
     }
 
-    std::unique_ptr<Scene> Parser::LoadSceneFromFile(const std::filesystem::path& file_path) noexcept {
+    UniquePtr<Scene> Parser::LoadSceneFromFile(const std::filesystem::path& file_path) noexcept {
 
         //  auto lights = scene->mLights;
         Impl impl;

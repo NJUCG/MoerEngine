@@ -55,7 +55,7 @@ void Test() {
 
     ShaderCompiler::ShaderCompileTest();
 
-    RHIGraphicsPipelineStateInitializer init;
+    RHIGraphicsPipelineStateInfo init;
     init.multi_view_count            = 1;
     init.color_attachment_count      = 1;
     init.color_attachment_formats[0] = EPixelFormat::PF_R8G8B8A8_SRGB;
@@ -117,7 +117,7 @@ void Test() {
     command_list->BeginRenderPass(pass_info, "triangle pass");
     command_list->BindVertexBuffers(0, 1, vertex_buffers.data(), 0);
 
-    RHIUnorderedAccessViewRef test_view =
+    RHIUAVRef test_view =
         g_rhi->RHICreateUAV(tex,
                             RHIViewInfo::CreateTextureUAVInfo()
                                 .SetFormat((PF_R8G8B8A8_SRGB)));

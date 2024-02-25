@@ -19,7 +19,6 @@ namespace Moer {
         struct Proxy {
             Transform transform;
         };
-        EntityComponentManger<Proxy>                                 m_manager;
-        inline static std::unique_ptr<TransformManager, MoerDeleter> m_instance = nullptr;
+        EntityComponentManger<Proxy> m_manager;
     };
 }// namespace Moer

@@ -537,13 +537,13 @@ void VulkanRHIGraphicsCommandList::ClearDepthStencil() {
     // to-be implemented
 }
 
-void VulkanRHIGraphicsCommandList::ClearUAVInt(RHIUnorderedAccessView* _uav, const Moer::Vector4i& _values) {
+void VulkanRHIGraphicsCommandList::ClearUAVInt(RHIUAV* _uav, const Moer::Vector4i& _values) {
     // MARK...
     auto* vk_uav = static_cast<VulkanRHITextureUAV*>(_uav);
     VK_CHECK_NULLPTR(vk_uav, "ClearUAVInt: uav is nullptr!", return);
 }
 
-void VulkanRHIGraphicsCommandList::ClearUAVFloat(RHIUnorderedAccessView* _uav, const Moer::Vector4f& _values) {
+void VulkanRHIGraphicsCommandList::ClearUAVFloat(RHIUAV* _uav, const Moer::Vector4f& _values) {
     // MARK...
     auto* vk_uav = static_cast<VulkanRHITextureUAV*>(_uav);
     VK_CHECK_NULLPTR(vk_uav, "ClearUAVFloat: uav is nullptr!", return);

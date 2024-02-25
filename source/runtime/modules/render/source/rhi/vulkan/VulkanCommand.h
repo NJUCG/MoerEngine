@@ -140,10 +140,10 @@ public:
 
     void ClearDepthStencil() override;
     void ClearUAVInt(
-        RHIUnorderedAccessView* _uav,
+        RHIUAV* _uav,
         const Moer::Vector4i&   _values) override;
     void ClearUAVFloat(
-        RHIUnorderedAccessView* _uav,
+        RHIUAV* _uav,
         const Moer::Vector4f&   _values) override;
 
     void BeginRenderPass(const RHIRenderPassInfo& _pass_info, const char* _pass_name) override;

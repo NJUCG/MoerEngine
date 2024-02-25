@@ -54,10 +54,10 @@ struct GuiBackendData {
     RHIShaderRef                shader_module_frag;
 
     // Font data
-    RHISamplerRef            font_sampler;
-    RHITextureRef            font_texture;
-    RHIShaderResourceViewRef font_view;
-    RHIBufferRef             upload_buffer;
+    RHISamplerRef font_sampler;
+    RHITextureRef font_texture;
+    RHISRVRef     font_view;
+    RHIBufferRef  upload_buffer;
 
     // Render buffers for main window
     GuiFrameRenderBuffers* main_viewport_render_buffers;
@@ -246,7 +246,7 @@ void ImGUIRenderer::Impl::EndRenderFrame() {
             // if (next_frame_info.backbuffer_index == UINT32_MAX) return;
             EnqueueRenderTask([main_viewport, this] {
                 if (next_frame_info.backbuffer_index == UINT32_MAX) return;
-                RHIUnorderedAccessView*  present_view = g_rhi->RHIGetViewportBackBufferUAV(main_viewport, next_frame_info.backbuffer_index);
+                RHIUAV*                  present_view = g_rhi->RHIGetViewportBackBufferUAV(main_viewport, next_frame_info.backbuffer_index);
                 RHIBarrierDependencyInfo dependency_info;
                 auto&                    texture_barriers = dependency_info.texture_barriers;
                 texture_barriers.resize(1);
@@ -275,7 +275,7 @@ void ImGUIRenderer::Impl::EndRenderFrame() {
 
             EnqueueRenderTask([this, main_viewport] {
                 if (next_frame_info.backbuffer_index == UINT32_MAX) return;
-                RHIUnorderedAccessView* present_view = g_rhi->RHIGetViewportBackBufferUAV(main_viewport, next_frame_info.backbuffer_index);
+                RHIUAV* present_view = g_rhi->RHIGetViewportBackBufferUAV(main_viewport, next_frame_info.backbuffer_index);
 
                 RHIRenderPassInfo pass_info{};
                 pass_info.color_attachments[0].color_attachment_action               = AC_CLEAR_STORE;
@@ -297,7 +297,7 @@ void ImGUIRenderer::Impl::EndRenderFrame() {
 
             EnqueueRenderTask([this, main_viewport] {
                 if (next_frame_info.backbuffer_index == UINT32_MAX) return;
-                RHIUnorderedAccessView* present_view = g_rhi->RHIGetViewportBackBufferUAV(main_viewport, next_frame_info.backbuffer_index);
+                RHIUAV* present_view = g_rhi->RHIGetViewportBackBufferUAV(main_viewport, next_frame_info.backbuffer_index);
 
                 ui_command_list->EndRenderPass();
 
@@ -701,7 +701,7 @@ void GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list, RHIVi
                 // _ui_command_list->SetViewPort(g_rhi->RHIGetMainViewport()->GetViewportExtent());
 
                 // 6. local: set texture
-                RHIShaderResourceView* texture_view = (RHIShaderResourceView*)cmd->GetTexID();
+                RHISRV* texture_view = (RHISRV*)cmd->GetTexID();
 
                 ImGuiShaderFrag::Parameters params;
                 params.texture0 = texture_view;
@@ -820,44 +820,9 @@ bool CreateDeviceObjects() {
     if (backend_data->pipeline)
         InvalidateDeviceObjects();
 
-    RHISamplerInitializer sampler_init(ESamplerFilter::SF_CUBIC, TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    sampler_init.compare_op    = CO_ALWAYS;
-    RHISamplerRef sampler      = g_rhi->RHICreateSampler(sampler_init);
-    backend_data->font_sampler = sampler;
-
-    RHIBlendStateInitializer blend_state_info;
-    blend_state_info.attachments[0].color_blend_op         = BO_ADD;
-    blend_state_info.attachments[0].color_src_blend_factor = BF_SRC_ALPHA;
-    blend_state_info.attachments[0].color_dst_blend_factor = BF_ONE_MINUS_SRC_ALPHA;
-    blend_state_info.attachments[0].alpha_blend_op         = BO_ADD;
-    blend_state_info.attachments[0].alpha_src_blend_factor = BF_ONE;
-    blend_state_info.attachments[0].alpha_dst_blend_factor = BF_ONE_MINUS_SRC_ALPHA;
-    blend_state_info.attachments[0].color_write_mask       = CW_RGBA;
-
-    auto blend_state = g_rhi->RHICreateBlendState(blend_state_info);
-
-    RHIRasterizationStateInitializer rast_init{};
-    rast_init.fill_mode              = FM_FILL;
-    rast_init.cull_mode              = RCM_NONE;
-    rast_init.depth_bias             = 0;
-    rast_init.depth_bias_clamp       = 0.f;
-    rast_init.depth_bias_slop_factor = 0.f;
-    rast_init.b_depth_clamp_enable   = true;
-    rast_init.b_enable_msaa          = false;
-    rast_init.b_depth_bias           = false;
-
-    RHIMultisampleStateInitializer msaa_init{};
-    msaa_init.sample_count = 1;
-
-    RHIDepthStencilStateInitializer depth_stencil_init{};
-    depth_stencil_init.depth_test_op                    = CO_ALWAYS;
-    depth_stencil_init.b_enable_depth_write             = false;
-    depth_stencil_init.b_enable_front_face_stencil      = false;
-    depth_stencil_init.b_enable_back_face_stencil       = false;
-    depth_stencil_init.front_face_depth_fail_stencil_op = SO_KEEP;
-    depth_stencil_init.front_face_pass_stencil_op       = SO_KEEP;
-    depth_stencil_init.front_face_stencil_test          = CO_ALWAYS;
-
+    RHISamplerCreateInfo sampler_init(ESamplerFilter::SF_CUBIC,
+                                      TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    backend_data->font_sampler = g_rhi->RHICreateSampler(sampler_init.SetCompareOp(SCF_ALWAYS));
     // VertexElement
     VertexInputStateInitializerList input_intializer{};
     input_intializer[0] = VertexElement(0, IM_OFFSETOF(ImDrawVert, pos), PF_R32G32_SFLOAT, 0, sizeof(ImDrawVert), EVertexInputRate::VIR_VERTEX);
@@ -869,29 +834,28 @@ bool CreateDeviceObjects() {
     RHIShaderRef           gui_frag                = shader_resource_manager.GetShader<ImGuiShaderFrag>();
     RHIVertexInputStateRef input_state             = g_rhi->RHICreateVertexInputState(input_intializer);
 
-    RHIGraphicsPipelineStateInitializer pso_init(
-        blend_state,
-        g_rhi->RHICreateRasterizationState(rast_init),
-        g_rhi->RHICreateMultiSampleState(msaa_init),
-        g_rhi->RHICreateDepthStencilState(depth_stencil_init),
-        EPrimitiveTopology::TRIANGLE_LIST,
-        1,
-        {g_rhi->RHIGetMainViewport()->GetViewportInfo().backbuffer_format},
-        {ETextureUsageFlags::COLOR_ATTACHMENT},
-        PF_UNDEFINED,
-        ETextureUsageFlags::UNDEFINED,
-        {SubpassSettings::Type::NONE, 0},
-        false,
-        1,
-        false,
-        VSR_1_1x1);
-    pso_init.shader_stage.p_vertex_shader      = gui_vert;
-    pso_init.shader_stage.p_fragment_shader    = gui_frag;
-    pso_init.shader_stage.p_vertex_input_state = input_state;
+    RHIGraphicsPSOCreateInfo pso_create_info =
+        RHIGraphicsPSOCreateInfo::Create()
+            .SetRasterizerInfo(RHIRasterizeInfo::Preset())
+            .SetMultisampleInfo(RHIMultisampleStateInfo::Preset())
+            .SetDepthStencilInfo(RHIDepthStencilStateInfo::Preset())
+            .SetShaderStage(std::move(RHIGraphicsShaderInputInfo::Create()
+                                          .SetVertexWorkFlow(
+                                              input_state,
+                                              gui_vert,
+                                              gui_frag)))
+            .SetColorAttachmentInfo(
+                {RHIColorAttachmentInfo::Preset(g_rhi->RHIGetMainViewport()->GetViewportInfo().backbuffer_format)
+                     .SetBlendStateInfo(RHIBlendAttachmentInfo::Preset<RHIConfig::Blend::ALPHA_BLEND>())})
+            .Finalize();
+    // pso_init.shader_stage.p_vertex_shader      = gui_vert;
+    // pso_init.shader_stage.p_fragment_shader    = gui_frag;
+    // pso_init.shader_stage.p_vertex_input_state = input_state;
 
-    auto c = pso_init.CalcValidColorAttachmentCount();
+    // auto c = pso_init.CalcValidColorAttachmentCount();
 
-    backend_data->pipeline = g_rhi->RHICreateGraphicsPipelineState(pso_init);
+    // backend_data->pipeline = g_rhi->RHICreateGraphicsPipelineState(pso_init);
+    backend_data->pipeline = g_rhi->RHICreateGraphicsPSO(std::move(pso_create_info));
     // setup backend data
     backend_data->shader_module_vert = gui_vert;
     backend_data->shader_module_frag = gui_frag;
@@ -1133,7 +1097,7 @@ void GuiRenderWindow(ImGuiViewport* viewport, void*) {
         viewport_data->next_frame_info = g_rhi->RHIGetNextFrameViewportBufferInfo(rhi_viewport);
         if (viewport_data->next_frame_info.backbuffer_index == UINT32_MAX) return;
 
-        RHIUnorderedAccessView* present_view = g_rhi->RHIGetViewportBackBufferUAV(rhi_viewport, viewport_data->next_frame_info.backbuffer_index);
+        RHIUAV* present_view = g_rhi->RHIGetViewportBackBufferUAV(rhi_viewport, viewport_data->next_frame_info.backbuffer_index);
 
         //transfer present texture layout to color attachment layout
         RHIBarrierDependencyInfo dependency_info;
@@ -1165,7 +1129,7 @@ void GuiRenderWindow(ImGuiViewport* viewport, void*) {
     EnqueueRenderTask([viewport_data] {
         if (viewport_data->next_frame_info.backbuffer_index == UINT32_MAX) return;
 
-        RHIUnorderedAccessView* present_view = g_rhi->RHIGetViewportBackBufferUAV(viewport_data->viewport, viewport_data->next_frame_info.backbuffer_index);
+        RHIUAV* present_view = g_rhi->RHIGetViewportBackBufferUAV(viewport_data->viewport, viewport_data->next_frame_info.backbuffer_index);
 
         RHIRenderPassInfo pass_info;
         pass_info.color_attachments[0].color_attachment_action                = AC_CLEAR_STORE;
@@ -1184,7 +1148,7 @@ void GuiRenderWindow(ImGuiViewport* viewport, void*) {
     GUIRender(viewport->DrawData, viewport_data->comand_list, &viewport_data->next_frame_info);
     EnqueueRenderTask([viewport_data] {
         if (viewport_data->next_frame_info.backbuffer_index == UINT32_MAX) return;
-        RHIUnorderedAccessView* present_view = g_rhi->RHIGetViewportBackBufferUAV(viewport_data->viewport, viewport_data->next_frame_info.backbuffer_index);
+        RHIUAV* present_view = g_rhi->RHIGetViewportBackBufferUAV(viewport_data->viewport, viewport_data->next_frame_info.backbuffer_index);
 
         viewport_data->comand_list->EndRenderPass();
 

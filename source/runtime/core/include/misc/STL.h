@@ -41,5 +41,8 @@ namespace Moer {
     template<typename T, size_t N>
     using StaticArray = std::array<T, N>;
 
+    template<typename T, class Deleter = MoerDeleter>
+    using UniquePtr = std::unique_ptr<T, Deleter>;
+
 }// namespace Moer
 #endif//MOER_ENGINE_STL_H

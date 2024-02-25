@@ -99,6 +99,17 @@ public:
 
     static uint32_t METoVkQueueFamilyIndex(ECommandQueueType _type, const VulkanDevice* _device);
     static uint32_t METoVkQueueFamilyIndex(ECommandListType _type, const VulkanDevice* _device);
+
+    static VkFilter             METoVKMinMagFilterMode(ESamplerFilter _filter);
+    static VkSamplerMipmapMode  METoVKMipmapMode(ESamplerFilter _filter);
+    static VkSamplerAddressMode METoVKWrapMode(ESamplerAddressMode _address_mode);
+    static VkCompareOp          METoVKCompareOpSampler(ESamplerCompareFunction _compare_op);
+
+    static VkCompareOp METoVKCompareOp(ECompareOption _compare_op);
+    static VkStencilOp METoVKStencilOp(EStencilOp _stencil_op);
+
+    static VkBlendOp     METoVKBlendOp(EBlendOperation _blend_op);
+    static VkBlendFactor METoVKBlendFactor(EBlendFactor _blend_factor);
 };
 
 #pragma endregion
@@ -109,7 +120,7 @@ class VulkanRHISampler final : public RHISampler {
 public:
     explicit VulkanRHISampler() : RHISampler() {}
 
-    void GenerateSamplerFromInitializer(const VulkanDevice* _device, const RHISamplerInitializer& _initializer);
+    void GenerateSamplerFromInitializer(const VulkanDevice* _device, const RHISamplerCreateInfo& _initializer);
 
     inline VkSampler GetHandle() const {
         return m_sampler;
@@ -174,16 +185,13 @@ public:
     explicit VulkanRHIRasterizationState() : RHIRasterizationState(),
                                              m_rasterization_state_create_info{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO} {}
 
-    void GenerateRasterizationStateFromInitializer(const RHIRasterizationStateInitializer& _init);
+    void GenerateRasterizationStateFromInitializer(const RHIRasterizeInfo& _init);
 
     VkPipelineRasterizationStateCreateInfo GetHandle() const {
         return m_rasterization_state_create_info;
     }
 
 private:
-    VkPolygonMode   METoVKPolygonMode(ERasterizerFillMode _fill_mode);
-    VkCullModeFlags METoVKCullModeFlags(ERasterizerCullMode _cull_mode);
-
 private:
     VkPipelineRasterizationStateCreateInfo m_rasterization_state_create_info;
 };
@@ -193,16 +201,13 @@ public:
     explicit VulkanRHIDepthStencilState() : RHIDepthStencilState(),
                                             m_depth_stencil_state_create_info(VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO) {}
 
-    void GenerateDepthStencilStateFromInitializer(const RHIDepthStencilStateInitializer& _init);
+    void GenerateDepthStencilStateFromInitializer(const RHIDepthStencilStateInfo& _init);
 
     VkPipelineDepthStencilStateCreateInfo GetHandle() const {
         return m_depth_stencil_state_create_info;
     }
 
 private:
-    VkCompareOp METoVKCompareOp(ECompareOption _compare_op);
-    VkStencilOp METoVKStencilOp(EStencilOp _stencil_op);
-
 private:
     VkPipelineDepthStencilStateCreateInfo m_depth_stencil_state_create_info;
 };
@@ -213,7 +218,7 @@ class VulkanRHIMultisampleState : public RHIMultisampleState {
 public:
     explicit VulkanRHIMultisampleState() : RHIMultisampleState() {}
 
-    void GenerateMultisampleStateFromInitializer(const RHIMultisampleStateInitializer& _init);
+    void GenerateMultisampleStateFromInitializer(const RHIMultisampleStateInfo& _init);
 
     VkPipelineMultisampleStateCreateInfo GetHandle() const {
         return m_multisample_state_create_info;
@@ -227,7 +232,7 @@ class VulkanRHIBlendState : public RHIBlendState {
 public:
     explicit VulkanRHIBlendState() : RHIBlendState() {}
 
-    void GenerateBlendStateFromInitializer(const RHIBlendStateInitializer& _init);
+    void GenerateBlendStateFromInitializer(const RHIBlendStateInfo& _init);
 
     // VkPipelineColorBlendStateCreateInfo GetHandle() const {
     //     return m_blend_state_create_info;
@@ -237,8 +242,8 @@ public:
     }
 
 private:
-    VkBlendOp     METoVKBlendOp(EBlendOperation _blend_op);
-    VkBlendFactor METoVKBlendFactor(EBlendFactor _blend_factor);
+    // VkBlendOp     METoVKBlendOp(EBlendOperation _blend_op);
+    // VkBlendFactor METoVKBlendFactor(EBlendFactor _blend_factor);
 
 private:
     // VkPipelineColorBlendStateCreateInfo                                        m_blend_state_create_info;
@@ -336,6 +341,8 @@ public:
     VulkanRHIGraphicsPipelineState()
         : RHIGraphicsPipelineState(),
           VulkanPipelineState() {}
+
+    virtual ~VulkanRHIGraphicsPipelineState();
 
     static Moer::Array<VkPipelineShaderStageCreateInfo> METoVKShaderStageCreateInfo(const RHIShaderBoundStateInput& _shader_bound_state);
     static VkPipelineVertexInputStateCreateInfo         METoVKVertexInputStateCreateInfo(const RHIVertexInputState* _vertex_input_state);
@@ -453,13 +460,13 @@ private:
 
 #pragma region viewable resources view definitions
 
-class VulkanRHITextureUAV final : public RHIUnorderedAccessView, public VulkanDeviceObject {
+class VulkanRHITextureUAV final : public RHIUAV, public VulkanDeviceObject {
     friend VulkanRHIImpl;
     friend VulkanViewport;
 
 public:
     virtual ~VulkanRHITextureUAV();
-    explicit VulkanRHITextureUAV(VulkanDevice* _device, RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIUnorderedAccessView(_resource, _viewInfo), VulkanDeviceObject(_device) {}
+    explicit VulkanRHITextureUAV(VulkanDevice* _device, RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIUAV(_resource, _viewInfo), VulkanDeviceObject(_device) {}
 
     inline VkImageView GetView() const { return m_view; }
 
@@ -467,12 +474,12 @@ private:
     VkImageView m_view;
 };
 
-class VulkanRHIBufferUAV final : public RHIUnorderedAccessView, public VulkanDeviceObject {
+class VulkanRHIBufferUAV final : public RHIUAV, public VulkanDeviceObject {
     friend VulkanRHIImpl;
 
 public:
     virtual ~VulkanRHIBufferUAV();
-    explicit VulkanRHIBufferUAV(VulkanDevice* _device, RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIUnorderedAccessView(_resource, _viewInfo), VulkanDeviceObject(_device) {}
+    explicit VulkanRHIBufferUAV(VulkanDevice* _device, RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIUAV(_resource, _viewInfo), VulkanDeviceObject(_device) {}
 
     inline VkBufferView GetView() const { return m_view; }
 
@@ -480,24 +487,24 @@ private:
     VkBufferView m_view;
 };
 
-class VulkanRHITextureSRV final : public RHIShaderResourceView, public VulkanDeviceObject {
+class VulkanRHITextureSRV final : public RHISRV, public VulkanDeviceObject {
     friend VulkanRHIImpl;
 
 public:
     virtual ~VulkanRHITextureSRV();
-    explicit VulkanRHITextureSRV(VulkanDevice* _device, RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIShaderResourceView(_resource, _viewInfo), VulkanDeviceObject(_device) {}
+    explicit VulkanRHITextureSRV(VulkanDevice* _device, RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHISRV(_resource, _viewInfo), VulkanDeviceObject(_device) {}
     inline VkImageView GetView() const { return m_view; }
 
 private:
     VkImageView m_view;
 };
 
-class VulkanRHIBufferSRV final : public RHIShaderResourceView, public VulkanDeviceObject {
+class VulkanRHIBufferSRV final : public RHISRV, public VulkanDeviceObject {
     friend VulkanRHIImpl;
 
 public:
     virtual ~VulkanRHIBufferSRV();
-    explicit VulkanRHIBufferSRV(VulkanDevice* _device, RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIShaderResourceView(_resource, _viewInfo), VulkanDeviceObject(_device) {}
+    explicit VulkanRHIBufferSRV(VulkanDevice* _device, RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHISRV(_resource, _viewInfo), VulkanDeviceObject(_device) {}
 
     inline VkBufferView GetView() const { return m_view; }
 

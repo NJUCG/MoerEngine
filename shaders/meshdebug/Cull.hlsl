@@ -7,7 +7,6 @@
 struct MeshletDesc {
   uint vertex_offset;
   uint index_offset;
-  uint instance_id;
   uint packed_data;
 
   uint GetPrimitiveCount() { return packed_data & 0xFF; }
@@ -23,16 +22,16 @@ struct MeshletBound {
 };
 
 struct DrawCommandData {
-  uint vertex_count;
-  uint instance_count;
-  uint firstIndex;
-  uint first_vertex;
-  uint first_instance;
+  uint32_t index_count;
+  uint32_t instance_count;
+  uint32_t first_index;
+  int32_t vertex_offset;
+  uint32_t first_instance;
 };
 
 [[vk::push_constant]] ConstantBuffer<CameraData> camera_data;
 
-StructuredBuffer<InstanceData> InstanceData;
+// StructuredBuffer<InstanceData> InstanceData;
 
 StructuredBuffer<MeshletDesc> meshlet_info_buffer : register(t0, space0);
 
@@ -94,10 +93,10 @@ bool IsMeshletVisible(in uint meshlet_id) {
   if (visible) {
     DrawCommandData cmd;
 
-    cmd.vertex_count = meshlet_desc.GetVertexCount();
+    cmd.index_count = meshlet_desc.GetIndexCount();
     cmd.instance_count = 1;
-    cmd.firstIndex = meshlet_desc.index_offset;
-    cmd.first_vertex = meshlet_desc.vertex_offset;
+    cmd.first_index = meshlet_desc.index_offset;
+    cmd.vertex_offset = meshlet_desc.vertex_offset;
     cmd.first_instance = meshlet_desc.instance_id;
     draw_indirect_buffer.Store(cmd_offset * sizeof(DrawCommandData), cmd);
   }

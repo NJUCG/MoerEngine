@@ -28,11 +28,11 @@ public:
     inline const char* GetName() final override { return "VulkanRHI"; }
 
 #pragma region resources creation
-    RHISamplerRef            RHICreateSampler(const RHISamplerInitializer& _initializer) final override;
-    RHIRasterizationStateRef RHICreateRasterizationState(const RHIRasterizationStateInitializer& _init) final override;
-    RHIDepthStencilStateRef  RHICreateDepthStencilState(const RHIDepthStencilStateInitializer& _init) final override;
-    RHIMultisampleStateRef   RHICreateMultiSampleState(const RHIMultisampleStateInitializer& _init) final override;
-    RHIBlendStateRef         RHICreateBlendState(const RHIBlendStateInitializer& _init) final override;
+    RHISamplerRef            RHICreateSampler(const RHISamplerCreateInfo& _initializer) final override;
+    RHIRasterizationStateRef RHICreateRasterizationState(const RHIRasterizeInfo& _init) final override;
+    RHIDepthStencilStateRef  RHICreateDepthStencilState(const RHIDepthStencilStateInfo& _init) final override;
+    RHIMultisampleStateRef   RHICreateMultiSampleState(const RHIMultisampleStateInfo& _init) final override;
+    RHIBlendStateRef         RHICreateBlendState(const RHIBlendStateInfo& _init) final override;
     RHIVertexInputStateRef   RHICreateVertexInputState(const VertexInputStateInitializerList& _init) final override;
 
     RHIVertexShaderRef   RHICreateVertexShader(const class ShaderCodeEntry*, const Shader*) final override;
@@ -54,9 +54,9 @@ public:
         RHIFragmentShader*   _fragment_shader,
         RHIGeometryShader*   _geometry_shader) final override;
 
-    RHIGraphicsPipelineStateRef RHICreateGraphicsPipelineState(const RHIGraphicsPipelineStateInitializer& _init) final override;
-
-    RHIComputePipelineStateRef RHICreateComputePipelineState(RHIComputeShader* _compute_shader) final override;
+    RHIGraphicsPipelineStateRef RHICreateGraphicsPipelineState(const RHIGraphicsPipelineStateInfo& _init) final override;
+    RHIGraphicsPipelineStateRef RHICreateGraphicsPSO(RHIGraphicsPSOCreateInfo&& _init) final override;
+    RHIComputePipelineStateRef  RHICreateComputePipelineState(RHIComputeShader* _compute_shader) final override;
 
     RHIBufferRef RHICreateBuffer(const RHIBufferCreateInfo& info) final override;
     void*        RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size) final override;
@@ -64,8 +64,8 @@ public:
 
     RHITextureRef RHICreateTexture(const RHITextureCreateInfo& info) final override;
 
-    RHIShaderResourceViewRef  RHICreateSRV(RHIViewableResource* _resource, const RHIViewInfo& _view_info) final override;
-    RHIUnorderedAccessViewRef RHICreateUAV(RHIViewableResource* _resource, const RHIViewInfo& _view_info) final override;
+    RHISRVRef RHICreateSRV(RHIViewableResource* _resource, const RHIViewInfo& _view_info) final override;
+    RHIUAVRef RHICreateUAV(RHIViewableResource* _resource, const RHIViewInfo& _view_info) final override;
 
     RHICommandQueue* RHICreateCommandQueue(ECommandQueueType _type) final override;
     // RHIGraphicsCommandList* CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state = nullptr) final override;
@@ -89,7 +89,7 @@ public:
 
     virtual RHIViewportNextBackBufferInfo RHIGetNextFrameViewportBufferInfo(RHIViewport* _viewport) override;
 
-    virtual RHIUnorderedAccessView* RHIGetViewportBackBufferUAV(RHIViewport* _viewport, uint32_t index) override;
+    virtual RHIUAV* RHIGetViewportBackBufferUAV(RHIViewport* _viewport, uint32_t index) override;
 
     virtual void RHIPresentViewport(RHIViewport* _viewport, RHIFence* _render_end_fence) override;
 

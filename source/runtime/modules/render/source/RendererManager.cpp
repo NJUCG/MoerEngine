@@ -14,7 +14,7 @@ namespace Moer {
 
     void RendererManager::Init() {
         data = new RendererManagerData();
-        RegisterRenderer(MOER_DEFAULT_RENDERER_NAME, MoerNew(DeferredRenderer));
+        // RegisterRenderer(MOER_DEFAULT_RENDERER_NAME, MoerNew(DeferredRenderer));
         // RegisterRenderer(MOER_MESH_RENDERER_NAME, MoerNew(MeshDebugRenderer));
 
         BackendRendererInitInfo init_info;
