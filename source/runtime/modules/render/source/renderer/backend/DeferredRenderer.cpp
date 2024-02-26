@@ -149,77 +149,95 @@ namespace Moer {
         }
         render_fence = g_rhi->RHICreateFence({.usage = EFenceUsageFlags::TIMELINE});
 
-        RHIBlendStateInfo blend_init;
-        blend_init.attachments[0].color_blend_op         = BO_ADD;
-        blend_init.attachments[0].color_src_blend_factor = BF_SRC_ALPHA;
-        blend_init.attachments[0].color_dst_blend_factor = BF_ONE_MINUS_SRC_ALPHA;
-        blend_init.attachments[0].alpha_blend_op         = BO_ADD;
-        blend_init.attachments[0].alpha_src_blend_factor = BF_ONE;
-        blend_init.attachments[0].alpha_dst_blend_factor = BF_ONE_MINUS_SRC_ALPHA;
-        blend_init.attachments[0].color_write_mask       = CW_RGBA;
+        // RHIBlendStateInfo blend_init;
+        // blend_init.attachments[0].color_blend_op         = BO_ADD;
+        // blend_init.attachments[0].color_src_blend_factor = BF_SRC_ALPHA;
+        // blend_init.attachments[0].color_dst_blend_factor = BF_ONE_MINUS_SRC_ALPHA;
+        // blend_init.attachments[0].alpha_blend_op         = BO_ADD;
+        // blend_init.attachments[0].alpha_src_blend_factor = BF_ONE;
+        // blend_init.attachments[0].alpha_dst_blend_factor = BF_ONE_MINUS_SRC_ALPHA;
+        // blend_init.attachments[0].color_write_mask       = CW_RGBA;
 
-        RHIBlendStateRef blend_state = g_rhi->RHICreateBlendState(blend_init);
+        // RHIBlendStateRef blend_state = g_rhi->RHICreateBlendState(blend_init);
 
-        RHIRasterizeInfo rasterization_init{};
-        rasterization_init.cull_mode            = RCM_BACK;
-        rasterization_init.fill_mode            = FM_FILL;
-        rasterization_init.b_depth_clamp_enable = false;
-        rasterization_init.b_depth_bias         = false;
-        rasterization_init.b_enable_msaa        = false;
+        // RHIRasterizeInfo rasterization_init{};
+        // rasterization_init.cull_mode            = RCM_BACK;
+        // rasterization_init.fill_mode            = FM_FILL;
+        // rasterization_init.b_depth_clamp_enable = false;
+        // rasterization_init.b_depth_bias         = false;
+        // rasterization_init.b_enable_msaa        = false;
 
-        RHIRasterizationStateRef rasterization_state = g_rhi->RHICreateRasterizationState(rasterization_init);
+        // RHIRasterizationStateRef rasterization_state = g_rhi->RHICreateRasterizationState(rasterization_init);
 
-        RHIMultisampleStateInfo multisample_init{};
-        multisample_init.sample_count            = 1;
-        RHIMultisampleStateRef multisample_state = g_rhi->RHICreateMultiSampleState(multisample_init);
+        // RHIMultisampleStateInfo multisample_init{};
+        // multisample_init.sample_count            = 1;
+        // RHIMultisampleStateRef multisample_state = g_rhi->RHICreateMultiSampleState(multisample_init);
 
-        RHIDepthStencilStateInfo depth_stencil_init{};
-        depth_stencil_init.b_enable_depth_write     = true;
-        depth_stencil_init.depth_test_op            = CO_GREATER_OR_EQUAL;
-        RHIDepthStencilStateRef depth_stencil_state = g_rhi->RHICreateDepthStencilState(depth_stencil_init);
+        // RHIDepthStencilStateInfo depth_stencil_init{};
+        // depth_stencil_init.b_enable_depth_write     = true;
+        // depth_stencil_init.depth_test_op            = CO_GREATER_OR_EQUAL;
+        // RHIDepthStencilStateRef depth_stencil_state = g_rhi->RHICreateDepthStencilState(depth_stencil_init);
 
-        RHIGraphicsPipelineStateInfo::TAttachmentFormats color_attachment_formats{};
-        color_attachment_formats[0] = EPixelFormat::PF_R8G8B8A8_SRGB;
-        RHIGraphicsPipelineStateInfo::TAttachmentFlags color_attachment_flags{};
-        color_attachment_flags[0] = ETextureUsageFlags::COLOR_ATTACHMENT;
+        // RHIGraphicsPipelineStateInfo::TAttachmentFormats color_attachment_formats{};
+        // color_attachment_formats[0] = EPixelFormat::PF_R8G8B8A8_SRGB;
+        // RHIGraphicsPipelineStateInfo::TAttachmentFlags color_attachment_flags{};
+        // color_attachment_flags[0] = ETextureUsageFlags::COLOR_ATTACHMENT;
 
-        RHIGraphicsPipelineStateInfo
-            init(blend_state,
-                 rasterization_state,
-                 multisample_state,
-                 depth_stencil_state,
-                 EPrimitiveTopology::TRIANGLE_LIST,
-                 1,
-                 color_attachment_formats,
-                 color_attachment_flags,
-                 PF_UNDEFINED,
-                 ETextureUsageFlags::UNDEFINED,
-                 {},
-                 0,
-                 1,
-                 false,
-                 VSR_NONE);
+        // RHIGraphicsPipelineStateInfo
+        //     init(blend_state,
+        //          rasterization_state,
+        //          multisample_state,
+        //          depth_stencil_state,
+        //          EPrimitiveTopology::TRIANGLE_LIST,
+        //          1,
+        //          color_attachment_formats,
+        //          color_attachment_flags,
+        //          PF_UNDEFINED,
+        //          ETextureUsageFlags::UNDEFINED,
+        //          {},
+        //          0,
+        //          1,
+        //          false,
+        //          VSR_NONE);
 
-        VertexInputStateInitializerList vertex_input_state_init_list{};
-        vertex_input_state_init_list[0] = VertexElement(0, 0, PF_R32G32B32_SFLOAT, 0, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX);
-        vertex_input_state_init_list[1] = VertexElement(0, 3 * sizeof(float), PF_R32G32B32_SFLOAT, 1, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX);
-        vertex_input_state_init_list[2] = VertexElement(0, 6 * sizeof(float), PF_R32G32B32_SFLOAT, 2, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX);
-        vertex_input_state_init_list[3] = VertexElement(0, 9 * sizeof(float), PF_R32G32B32_SFLOAT, 3, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX);
-        vertex_input_state_init_list[4] = VertexElement(0, 12 * sizeof(float), PF_R32G32_SFLOAT, 4, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX);
+        // VertexInputStateInitializerList vertex_input_state_init_list{};
+        // vertex_input_state_init_list[0] = VertexElement(0, 0, PF_R32G32B32_SFLOAT, 0, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX);
+        // vertex_input_state_init_list[1] = VertexElement(0, 3 * sizeof(float), PF_R32G32B32_SFLOAT, 1, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX);
+        // vertex_input_state_init_list[2] = VertexElement(0, 6 * sizeof(float), PF_R32G32B32_SFLOAT, 2, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX);
+        // vertex_input_state_init_list[3] = VertexElement(0, 9 * sizeof(float), PF_R32G32B32_SFLOAT, 3, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX);
+        // vertex_input_state_init_list[4] = VertexElement(0, 12 * sizeof(float), PF_R32G32_SFLOAT, 4, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX);
 
-        RHIVertexInputStateRef vertex_input_state = g_rhi->RHICreateVertexInputState(vertex_input_state_init_list);
+        RHIVertexInputInfo vertex_input_info(
+
+            VertexElement(0, 0, PF_R32G32B32_SFLOAT, 0, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX),
+            VertexElement(0, 3 * sizeof(float), PF_R32G32B32_SFLOAT, 1, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX),
+            VertexElement(0, 6 * sizeof(float), PF_R32G32B32_SFLOAT, 2, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX),
+            VertexElement(0, 9 * sizeof(float), PF_R32G32B32_SFLOAT, 3, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX),
+            VertexElement(0, 12 * sizeof(float), PF_R32G32_SFLOAT, 4, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX));
+
+        // RHIVertexInputStateRef vertex_input_state = g_rhi->RHICreateVertexInputState(vertex_input_state_init_list);
 
         auto& shader_resource_manager = ShaderResourceManager::GetInstance();
 
-        RHIShaderRef              vertex_shader      = shader_resource_manager.GetShader<TestDeferredTriangleShaderVert>();
-        RHIShaderRef              fragment_shader    = shader_resource_manager.GetShader<TestDeferredTriangleShaderFrag>();
-        RHIShaderBoundStateInput& shader_stage_input = init.shader_stage;
+        RHIShaderRef vertex_shader   = shader_resource_manager.GetShader<TestDeferredTriangleShaderVert>();
+        RHIShaderRef fragment_shader = shader_resource_manager.GetShader<TestDeferredTriangleShaderFrag>();
+        // RHIShaderBoundStateInput& shader_stage_input = init.shader_stage;
 
-        shader_stage_input.p_vertex_input_state = vertex_input_state;
-        shader_stage_input.p_vertex_shader      = vertex_shader;
-        shader_stage_input.p_fragment_shader    = fragment_shader;
+        RHIGraphicsShaderInputInfo shader_input_info =
+            RHIGraphicsShaderInputInfo::Create()
+                .SetVertexWorkFlow(std::move(vertex_input_info),
+                                   vertex_shader,
+                                   fragment_shader);
 
-        pipeline_state = g_rhi->RHICreateGraphicsPipelineState(init);
+        RHIGraphicsPSOCreateInfo pso_create_info =
+            RHIGraphicsPSOCreateInfo::Create()
+                .SetShaderStage(
+                    std::move(shader_input_info))
+                .SetDepthStencilInfo(RHIDepthStencilStateInfo::Preset<RHIConfig::DepthStencil::DEPTH_WRITE_LESS>())
+                .SetColorAttachmentInfo(
+                    {std::move(RHIColorAttachmentInfo::Preset(EPixelFormat::PF_R8G8B8A8_SRGB))});
+
+        pipeline_state = g_rhi->RHICreateGraphicsPSO(std::move(pso_create_info));
 
         auto compute_shader    = shader_resource_manager.GetShader<MeshletCullingShader>();
         compute_pipeline_state = g_rhi->RHICreateComputePipelineState((RHIComputeShader*)compute_shader.Get());

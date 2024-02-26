@@ -110,6 +110,8 @@ public:
 
     static VkBlendOp     METoVKBlendOp(EBlendOperation _blend_op);
     static VkBlendFactor METoVKBlendFactor(EBlendFactor _blend_factor);
+
+    static VkVertexInputRate METoVKVertexInputRate(EVertexInputRate _me_rate);
 };
 
 #pragma endregion
@@ -139,115 +141,6 @@ private:
 private:
     VkSampler     m_sampler;
     VkImageLayout m_image_layout;
-};
-
-class VulkanRHIVertexInputState final : public RHIVertexInputState {
-    friend VulkanRHIImpl;
-
-public:
-    explicit VulkanRHIVertexInputState() : RHIVertexInputState() {}
-
-    void GenerateVertexInputStateFromInitializer(const VertexInputStateInitializerList& _init);
-
-    inline uint32_t GetBindingCount() const {
-        return m_binding_count;
-    }
-
-    inline const VkVertexInputBindingDescription* GetBindings() const {
-        return m_bindings.data();
-    }
-
-    inline uint32_t GetAttributeCount() const {
-        return m_attribute_count;
-    }
-
-    inline const VkVertexInputAttributeDescription* GetAttributes() const {
-        return m_attributes.data();
-    }
-
-private:
-    VkVertexInputRate METoVKVertexInputRate(EVertexInputRate _me_rate);
-
-private:
-    VkPipelineVertexInputStateCreateInfo m_input_state_create_info;
-
-    uint32_t m_binding_count   = 0;
-    uint32_t m_attribute_count = 0;
-
-    Moer::StaticArray<VkVertexInputBindingDescription, MAX_VERTEX_ELEMENT_COUNT>   m_bindings;
-    Moer::StaticArray<VkVertexInputAttributeDescription, MAX_VERTEX_ELEMENT_COUNT> m_attributes;
-};
-
-class VulkanRHIRasterizationState : public RHIRasterizationState {
-    friend VulkanRHIImpl;
-
-public:
-    explicit VulkanRHIRasterizationState() : RHIRasterizationState(),
-                                             m_rasterization_state_create_info{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO} {}
-
-    void GenerateRasterizationStateFromInitializer(const RHIRasterizeInfo& _init);
-
-    VkPipelineRasterizationStateCreateInfo GetHandle() const {
-        return m_rasterization_state_create_info;
-    }
-
-private:
-private:
-    VkPipelineRasterizationStateCreateInfo m_rasterization_state_create_info;
-};
-
-class VulkanRHIDepthStencilState : public RHIDepthStencilState {
-public:
-    explicit VulkanRHIDepthStencilState() : RHIDepthStencilState(),
-                                            m_depth_stencil_state_create_info(VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO) {}
-
-    void GenerateDepthStencilStateFromInitializer(const RHIDepthStencilStateInfo& _init);
-
-    VkPipelineDepthStencilStateCreateInfo GetHandle() const {
-        return m_depth_stencil_state_create_info;
-    }
-
-private:
-private:
-    VkPipelineDepthStencilStateCreateInfo m_depth_stencil_state_create_info;
-};
-
-class VulkanRHIMultisampleState : public RHIMultisampleState {
-    friend VulkanRHIImpl;
-
-public:
-    explicit VulkanRHIMultisampleState() : RHIMultisampleState() {}
-
-    void GenerateMultisampleStateFromInitializer(const RHIMultisampleStateInfo& _init);
-
-    VkPipelineMultisampleStateCreateInfo GetHandle() const {
-        return m_multisample_state_create_info;
-    }
-
-private:
-    VkPipelineMultisampleStateCreateInfo m_multisample_state_create_info;
-};
-
-class VulkanRHIBlendState : public RHIBlendState {
-public:
-    explicit VulkanRHIBlendState() : RHIBlendState() {}
-
-    void GenerateBlendStateFromInitializer(const RHIBlendStateInfo& _init);
-
-    // VkPipelineColorBlendStateCreateInfo GetHandle() const {
-    //     return m_blend_state_create_info;
-    // }
-    const VkPipelineColorBlendAttachmentState* GetAttachments() const {
-        return m_attachments.data();
-    }
-
-private:
-    // VkBlendOp     METoVKBlendOp(EBlendOperation _blend_op);
-    // VkBlendFactor METoVKBlendFactor(EBlendFactor _blend_factor);
-
-private:
-    // VkPipelineColorBlendStateCreateInfo                                        m_blend_state_create_info;
-    Moer::StaticArray<VkPipelineColorBlendAttachmentState, MAX_PASS_ATTACHMENT_COUNT> m_attachments;
 };
 
 #pragma region shader definitions
@@ -345,7 +238,7 @@ public:
     virtual ~VulkanRHIGraphicsPipelineState();
 
     static Moer::Array<VkPipelineShaderStageCreateInfo> METoVKShaderStageCreateInfo(const RHIShaderBoundStateInput& _shader_bound_state);
-    static VkPipelineVertexInputStateCreateInfo         METoVKVertexInputStateCreateInfo(const RHIVertexInputState* _vertex_input_state);
+    static VkPipelineVertexInputStateCreateInfo         METoVKVertexInputStateCreateInfo(const RHIVertexInputInfo& _vertex_input_state);
     static Moer::Array<const Shader*>                   GetShaderInfoList(const RHIShaderBoundStateInput& _shader_bound_state);
 };
 
@@ -552,7 +445,7 @@ private:
     void InnerDestroyResources();
     void ResetResources();
 
-    VulkanRHITextureUAV* InnerCreateVulkanUnorderedAccessView(VulkanDevice* _device, VulkanRHITexture* texture, const RHIViewInfo& _view_info);
+    VulkanRHITextureUAV* InnerCreateVulkanUAV(VulkanDevice* _device, VulkanRHITexture* texture, const RHIViewInfo& _view_info);
 
     class VulkanSwapChain* swapchain;
 

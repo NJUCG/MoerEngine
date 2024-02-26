@@ -121,7 +121,7 @@ void Test() {
         g_rhi->RHICreateUAV(tex,
                             RHIViewInfo::CreateTextureUAVInfo()
                                 .SetFormat((PF_R8G8B8A8_SRGB)));
-    TestShader*            test_shader_vs = (TestShader*)ShaderResourceManager::GetShader<TestShader>();
+    auto                   test_shader_vs = ShaderResourceManager::GetInstance().GetShader<TestShader>();
     TestShader::Parameters params;
 
     auto test_buff = g_rhi->RHICreateBuffer(buffer_info);
@@ -135,7 +135,7 @@ void Test() {
 
     command_list->EndRenderPass();
 
-    RHICommandQueue*                                graphics_queue = g_rhi->CreateCommandQueue(ECommandQueueType::GRAPHICS);
+    RHICommandQueue*                                graphics_queue = g_rhi->RHICreateCommandQueue(ECommandQueueType::GRAPHICS);
     const Moer::StaticArray<RHICommandListBase*, 1> command_array{command_list};
     // graphics_queue->SubmitCommands(1, command_array.data());
 

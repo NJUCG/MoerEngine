@@ -28,12 +28,7 @@ public:
     inline const char* GetName() final override { return "VulkanRHI"; }
 
 #pragma region resources creation
-    RHISamplerRef            RHICreateSampler(const RHISamplerCreateInfo& _initializer) final override;
-    RHIRasterizationStateRef RHICreateRasterizationState(const RHIRasterizeInfo& _init) final override;
-    RHIDepthStencilStateRef  RHICreateDepthStencilState(const RHIDepthStencilStateInfo& _init) final override;
-    RHIMultisampleStateRef   RHICreateMultiSampleState(const RHIMultisampleStateInfo& _init) final override;
-    RHIBlendStateRef         RHICreateBlendState(const RHIBlendStateInfo& _init) final override;
-    RHIVertexInputStateRef   RHICreateVertexInputState(const VertexInputStateInitializerList& _init) final override;
+    RHISamplerRef RHICreateSampler(const RHISamplerCreateInfo& _initializer) final override;
 
     RHIVertexShaderRef   RHICreateVertexShader(const class ShaderCodeEntry*, const Shader*) final override;
     RHIFragmentShaderRef RHICreateFragmentShader(const class ShaderCodeEntry*, const Shader*) final override;
@@ -54,7 +49,7 @@ public:
         RHIFragmentShader*   _fragment_shader,
         RHIGeometryShader*   _geometry_shader) final override;
 
-    RHIGraphicsPipelineStateRef RHICreateGraphicsPipelineState(const RHIGraphicsPipelineStateInfo& _init) final override;
+    // RHIGraphicsPipelineStateRef RHICreateGraphicsPipelineState(const RHIGraphicsPipelineStateInfo& _init) final override;
     RHIGraphicsPipelineStateRef RHICreateGraphicsPSO(RHIGraphicsPSOCreateInfo&& _init) final override;
     RHIComputePipelineStateRef  RHICreateComputePipelineState(RHIComputeShader* _compute_shader) final override;
 

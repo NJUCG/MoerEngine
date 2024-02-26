@@ -50,12 +50,7 @@ public:
 
 #pragma region resources creation
 
-    virtual RHISamplerRef            RHICreateSampler(const RHISamplerCreateInfo& _initializer)              = 0;
-    virtual RHIRasterizationStateRef RHICreateRasterizationState(const RHIRasterizeInfo& _init)              = 0;
-    virtual RHIDepthStencilStateRef  RHICreateDepthStencilState(const RHIDepthStencilStateInfo& _init)       = 0;
-    virtual RHIMultisampleStateRef   RHICreateMultiSampleState(const RHIMultisampleStateInfo& _init)         = 0;
-    virtual RHIBlendStateRef         RHICreateBlendState(const RHIBlendStateInfo& _init)                     = 0;
-    virtual RHIVertexInputStateRef   RHICreateVertexInputState(const VertexInputStateInitializerList& _init) = 0;
+    virtual RHISamplerRef RHICreateSampler(const RHISamplerCreateInfo& _initializer) = 0;
 
     virtual RHIComputeShaderRef RHICreateComputeShader(const class ShaderCodeEntry*, const Shader*) = 0;
 
@@ -76,13 +71,13 @@ public:
         RHIFragmentShader*   _fragment_shader,
         RHIGeometryShader*   _geometry_shader) = 0;
 
-    virtual RHIGraphicsPipelineStateRef RHICreateGraphicsPipelineState(const RHIGraphicsPipelineStateInfo& _init) = 0;
+    // virtual RHIGraphicsPipelineStateRef RHICreateGraphicsPipelineState(const RHIGraphicsPipelineStateInfo& _init) = 0;
 
     virtual RHIGraphicsPipelineStateRef RHICreateGraphicsPSO(RHIGraphicsPSOCreateInfo&& _init) = 0;
     /* create pso from cache */
-    virtual RHIGraphicsPipelineStateRef RHICreateGraphicsPipelineState(const RHIGraphicsPipelineStateInfo& _init, RHIPipelineBinaryDataLibrary* _pipeline_library) {
-        return RHICreateGraphicsPipelineState(_init);
-    }
+    // virtual RHIGraphicsPipelineStateRef RHICreateGraphicsPipelineState(const RHIGraphicsPipelineStateInfo& _init, RHIPipelineBinaryDataLibrary* _pipeline_library) {
+    //     return RHICreateGraphicsPipelineState(_init);
+    // }
 
     virtual RHIComputePipelineStateRef RHICreateComputePipelineState(RHIComputeShader* _compute_shader) = 0;
 

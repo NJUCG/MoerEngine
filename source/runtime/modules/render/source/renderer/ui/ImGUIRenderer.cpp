@@ -649,6 +649,8 @@ void GUIUploadData(void* _draw_data, RHIGraphicsCommandList* _ui_command_list, R
 }
 void GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list, RHIViewportNextBackBufferInfo* _next_frame_info_render_thread) {
     ImDrawData* draw_data = static_cast<ImDrawData*>(_draw_data);
+    // std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
     if (draw_data->DisplaySize.x <= 0.0f || draw_data->DisplaySize.y <= 0.0f)
         return;
     // RHIFragmentShaderRef frag_rhi_shader = g_rhi->RHICreateFragmentShader(frag_shader);
@@ -823,38 +825,31 @@ bool CreateDeviceObjects() {
     RHISamplerCreateInfo sampler_init(ESamplerFilter::SF_CUBIC,
                                       TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     backend_data->font_sampler = g_rhi->RHICreateSampler(sampler_init.SetCompareOp(SCF_ALWAYS));
-    // VertexElement
-    VertexInputStateInitializerList input_intializer{};
-    input_intializer[0] = VertexElement(0, IM_OFFSETOF(ImDrawVert, pos), PF_R32G32_SFLOAT, 0, sizeof(ImDrawVert), EVertexInputRate::VIR_VERTEX);
-    input_intializer[1] = VertexElement(0, IM_OFFSETOF(ImDrawVert, uv), PF_R32G32_SFLOAT, 1, sizeof(ImDrawVert), EVertexInputRate::VIR_VERTEX);
-    input_intializer[2] = VertexElement(0, IM_OFFSETOF(ImDrawVert, col), PF_R8G8B8A8_UNORM, 2, sizeof(ImDrawVert), EVertexInputRate::VIR_VERTEX);
 
-    auto&                  shader_resource_manager = ShaderResourceManager::GetInstance();
-    RHIShaderRef           gui_vert                = shader_resource_manager.GetShader<ImGuiShaderVert>();
-    RHIShaderRef           gui_frag                = shader_resource_manager.GetShader<ImGuiShaderFrag>();
-    RHIVertexInputStateRef input_state             = g_rhi->RHICreateVertexInputState(input_intializer);
+    auto&        shader_resource_manager = ShaderResourceManager::GetInstance();
+    RHIShaderRef gui_vert                = shader_resource_manager.GetShader<ImGuiShaderVert>();
+    RHIShaderRef gui_frag                = shader_resource_manager.GetShader<ImGuiShaderFrag>();
+
+    RHIVertexInputInfo vertex_input_info(
+        VertexElement(0, IM_OFFSETOF(ImDrawVert, pos), PF_R32G32_SFLOAT, 0, sizeof(ImDrawVert), EVertexInputRate::VIR_VERTEX),
+        VertexElement(0, IM_OFFSETOF(ImDrawVert, uv), PF_R32G32_SFLOAT, 1, sizeof(ImDrawVert), EVertexInputRate::VIR_VERTEX),
+        VertexElement(0, IM_OFFSETOF(ImDrawVert, col), PF_R8G8B8A8_UNORM, 2, sizeof(ImDrawVert), EVertexInputRate::VIR_VERTEX));
 
     RHIGraphicsPSOCreateInfo pso_create_info =
-        RHIGraphicsPSOCreateInfo::Create()
-            .SetRasterizerInfo(RHIRasterizeInfo::Preset())
-            .SetMultisampleInfo(RHIMultisampleStateInfo::Preset())
-            .SetDepthStencilInfo(RHIDepthStencilStateInfo::Preset())
-            .SetShaderStage(std::move(RHIGraphicsShaderInputInfo::Create()
-                                          .SetVertexWorkFlow(
-                                              input_state,
-                                              gui_vert,
-                                              gui_frag)))
-            .SetColorAttachmentInfo(
-                {RHIColorAttachmentInfo::Preset(g_rhi->RHIGetMainViewport()->GetViewportInfo().backbuffer_format)
-                     .SetBlendStateInfo(RHIBlendAttachmentInfo::Preset<RHIConfig::Blend::ALPHA_BLEND>())})
-            .Finalize();
-    // pso_init.shader_stage.p_vertex_shader      = gui_vert;
-    // pso_init.shader_stage.p_fragment_shader    = gui_frag;
-    // pso_init.shader_stage.p_vertex_input_state = input_state;
+        std::move(RHIGraphicsPSOCreateInfo::Create()
+                      .SetRasterizerInfo(RHIRasterizeInfo::Preset())
+                      .SetMultisampleInfo(RHIMultisampleStateInfo::Preset())
+                      .SetDepthStencilInfo(RHIDepthStencilStateInfo::Preset())
+                      .SetShaderStage(std::move(RHIGraphicsShaderInputInfo::Create()
+                                                    .SetVertexWorkFlow(
+                                                        std::move(vertex_input_info),
+                                                        gui_vert,
+                                                        gui_frag)))
+                      .SetColorAttachmentInfo(
+                          {RHIColorAttachmentInfo::Preset(g_rhi->RHIGetMainViewport()->GetViewportInfo().backbuffer_format)
+                               .SetBlendStateInfo(RHIBlendAttachmentInfo::Preset<RHIConfig::Blend::ALPHA_BLEND>())})
+                      .Finalize());
 
-    // auto c = pso_init.CalcValidColorAttachmentCount();
-
-    // backend_data->pipeline = g_rhi->RHICreateGraphicsPipelineState(pso_init);
     backend_data->pipeline = g_rhi->RHICreateGraphicsPSO(std::move(pso_create_info));
     // setup backend data
     backend_data->shader_module_vert = gui_vert;

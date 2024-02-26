@@ -116,6 +116,20 @@ using RHIRenderPrimitiveRef           = CountableRef<RHIRenderPrimitive>;
 class Shader;
 
 #pragma region utils definition
+
+struct VertexAttrb {
+    EPixelFormat format;
+};
+struct VertexBinding {
+    EVertexInputRate input_rate = EVertexInputRate::VIR_VERTEX;
+
+    Moer::Array<VertexAttrb> vertex_elements;
+
+    VertexBinding() = default;
+    template<class... _Valty>
+        requires(std::is_same_v<std::remove_cvref_t<_Valty>, VertexAttrb> && ...)
+    VertexBinding(_Valty&&... _Val) : vertex_elements({std::forward<_Valty>(_Val)...}) {}
+};
 struct VertexElement {
     VertexElement() = default;
     VertexElement(
@@ -146,6 +160,26 @@ struct VertexElement {
 static_assert(sizeof(VertexElement) == 8, "VertexElement doesn't match cache line size");
 
 typedef Moer::StaticArray<VertexElement, MAX_VERTEX_ELEMENT_COUNT> VertexInputStateInitializerList;
+
+struct RHIVertexInputInfo {
+    Moer::Array<VertexElement> vertex_elements;
+
+    // RHIVertexInputInfo(Moer::Array<VertexElement> _vertex_elements) : vertex_elements(std::move(_vertex_elements)) {}
+    RHIVertexInputInfo(std::initializer_list<VertexElement> _vertex_elements) : vertex_elements(_vertex_elements) {}
+
+    template<class... _Valty>
+        requires(std::is_same_v<std::remove_cvref_t<_Valty>, VertexElement> && ...)
+    RHIVertexInputInfo(_Valty&&... _Val) : vertex_elements({std::forward<_Valty>(_Val)...}) {}
+
+    RHIVertexInputInfo() = default;
+
+    bool operator==(const RHIVertexInputInfo& other) const {
+        return vertex_elements == other.vertex_elements;
+    }
+};
+struct RHIVertexInputFactory {
+    static RHIVertexInputInfo Build();
+};
 
 #pragma endregion
 
@@ -254,33 +288,33 @@ class RHISampler : public RHIResource {
 public:
     explicit RHISampler() : RHIResource(RRT_SAMPLER) {}
 };
-class RHIVertexInputState : public RHIResource {
-public:
-    RHIVertexInputState() : RHIResource(RRT_VERTEX_STATE_INITIALIZER) {}
-    //    virtual bool GetInitializer(VertexInputStateInitializerList& _initializer_list) { return false; }
-};
-class RHIRasterizationState : public RHIResource {
-public:
-    explicit RHIRasterizationState() : RHIResource(RRT_RASTERIZE_STATE) {}
-    //    virtual bool GetInitializer(struct RHIRasterizationStateInitializer& _init) { return false; }
-};
+// class RHIVertexInputState : public RHIResource {
+// public:
+//     RHIVertexInputState() : RHIResource(RRT_VERTEX_STATE_INITIALIZER) {}
+//     //    virtual bool GetInitializer(VertexInputStateInitializerList& _initializer_list) { return false; }
+// };
+// class RHIRasterizationState : public RHIResource {
+// public:
+//     explicit RHIRasterizationState() : RHIResource(RRT_RASTERIZE_STATE) {}
+//     //    virtual bool GetInitializer(struct RHIRasterizationStateInitializer& _init) { return false; }
+// };
 
-class RHIDepthStencilState : public RHIResource {
-public:
-    explicit RHIDepthStencilState() : RHIResource(RRT_DEPTH_STENCIL_STATE) {}
-    //    virtual bool GetInitializer(struct RHIDepthStencilStateInitializer& _init) { return false; }
-};
+// class RHIDepthStencilState : public RHIResource {
+// public:
+//     explicit RHIDepthStencilState() : RHIResource(RRT_DEPTH_STENCIL_STATE) {}
+//     //    virtual bool GetInitializer(struct RHIDepthStencilStateInitializer& _init) { return false; }
+// };
 
-class RHIMultisampleState : public RHIResource {
-public:
-    explicit RHIMultisampleState() : RHIResource(RRT_MULTI_SAMPLE_STATE) {}
-    //    virtual bool GetInitializer(RHIDepthStencilStateInitializer& _init) { return false; }
-};
-class RHIBlendState : public RHIResource {
-public:
-    explicit RHIBlendState() : RHIResource(RRT_BLEND_STATE) {}
-    //    virtual bool GetInitializer(struct RHIBlendStateInitializer& _init) { return false; }
-};
+// class RHIMultisampleState : public RHIResource {
+// public:
+//     explicit RHIMultisampleState() : RHIResource(RRT_MULTI_SAMPLE_STATE) {}
+//     //    virtual bool GetInitializer(RHIDepthStencilStateInitializer& _init) { return false; }
+// };
+// class RHIBlendState : public RHIResource {
+// public:
+//     explicit RHIBlendState() : RHIResource(RRT_BLEND_STATE) {}
+//     //    virtual bool GetInitializer(struct RHIBlendStateInitializer& _init) { return false; }
+// };
 
 //class RHIVertexDescription : public RHIResource {
 //public:
@@ -1736,10 +1770,11 @@ struct RHIShaderBoundStateInput : public RHIResource {
 
 struct RHIGraphicsShaderInputInfo {
     struct Vertex {
-        RHIVertexInputState* vertex_input_state;
-        RHIVertexShader*     vertex_shader;
-        RHIFragmentShader*   fragment_shader;
-        RHIGeometryShader*   geometry_shader;
+        // RHIVertexInputState* vertex_input_state;
+        RHIVertexShader*   vertex_shader;
+        RHIFragmentShader* fragment_shader;
+        RHIGeometryShader* geometry_shader;
+        RHIVertexInputInfo vertex_input_info;
     };
     struct Mesh {
         RHIFragmentShader*      fragment_shader;
@@ -1756,16 +1791,29 @@ struct RHIGraphicsShaderInputInfo {
     static RHIGraphicsShaderInputInfo Create() {
         return std::move(RHIGraphicsShaderInputInfo());
     }
+    // RHIGraphicsShaderInputInfo& SetVertexWorkFlow(
+    //     RHIVertexInputState* _vertex_input_state,
+    //     RHIShader*           _vertex_shader,
+    //     RHIShader*           _fragment_shader,
+    //     RHIShader*           _geometry_shader = nullptr) {
+    //     work_flow = std::move(Vertex{
+    //         _vertex_input_state,
+    //         (RHIVertexShader*)_vertex_shader,
+    //         (RHIFragmentShader*)_fragment_shader,
+    //         (RHIGeometryShader*)_geometry_shader});
+    //     return *this;
+    // }
+
     RHIGraphicsShaderInputInfo& SetVertexWorkFlow(
-        RHIVertexInputState* _vertex_input_state,
-        RHIShader*           _vertex_shader,
-        RHIShader*           _fragment_shader,
-        RHIShader*           _geometry_shader = nullptr) {
+        RHIVertexInputInfo _vertex_input_info,
+        RHIShader*         _vertex_shader,
+        RHIShader*         _fragment_shader,
+        RHIShader*         _geometry_shader = nullptr) {
         work_flow = std::move(Vertex{
-            _vertex_input_state,
             (RHIVertexShader*)_vertex_shader,
             (RHIFragmentShader*)_fragment_shader,
-            (RHIGeometryShader*)_geometry_shader});
+            (RHIGeometryShader*)_geometry_shader,
+            std::move(_vertex_input_info)});
         return *this;
     }
 
@@ -1790,7 +1838,7 @@ struct RHIGraphicsShaderInputInfo {
         if (work_flow.index() == t_vertex_work_flow) {
             const auto& vertex       = std::get<t_vertex_work_flow>(work_flow);
             const auto& other_vertex = std::get<t_vertex_work_flow>(other.work_flow);
-            return vertex.vertex_input_state == other_vertex.vertex_input_state &&
+            return vertex.vertex_input_info == other_vertex.vertex_input_info &&
                    vertex.vertex_shader == other_vertex.vertex_shader &&
                    vertex.fragment_shader == other_vertex.fragment_shader &&
                    vertex.geometry_shader == other_vertex.geometry_shader;
@@ -1979,137 +2027,137 @@ struct GraphicsPipelineAttachmentInfo {
     bool b_has_fragment_density_attachment = false;
 };
 
-class RHIGraphicsPipelineStateInfo {
-public:
-    using TAttachmentFormats = Moer::StaticArray<uint8_t, MAX_PASS_ATTACHMENT_COUNT>;
-    using TAttachmentFlags   = Moer::StaticArray<ETextureUsageFlags, MAX_PASS_ATTACHMENT_COUNT>;
+// class RHIGraphicsPipelineStateInfo {
+// public:
+//     using TAttachmentFormats = Moer::StaticArray<uint8_t, MAX_PASS_ATTACHMENT_COUNT>;
+//     using TAttachmentFlags   = Moer::StaticArray<ETextureUsageFlags, MAX_PASS_ATTACHMENT_COUNT>;
 
-    RHIGraphicsPipelineStateInfo()
-        : blend_state(nullptr),
-          rasterizer_state(nullptr),
-          multisample_state(nullptr),
-          depth_stencil_state(nullptr),
-          color_attachment_count(0),
-          color_attachment_formats(CreateArray<MAX_PASS_ATTACHMENT_COUNT, uint8_t>((uint8_t)PF_UNDEFINED)),
-          color_attachment_flags(CreateArray<MAX_PASS_ATTACHMENT_COUNT, ETextureUsageFlags>(ETextureUsageFlags::UNDEFINED)),
-          depth_stencil_format(PF_UNDEFINED),
-          depth_stencil_flag(ETextureUsageFlags::UNDEFINED),
-          subpass_settings({SubpassSettings::Type::NONE, 0}),
-          b_depth_bound(false),
-          multi_view_count(1),
-          b_has_fragment_density_attachments(false),
-          shading_rate(EVariousShadingRate::VSR_1_1x1),
-          hash_key(0) {}
+//     RHIGraphicsPipelineStateInfo()
+//         : blend_state(nullptr),
+//           rasterizer_state(nullptr),
+//           multisample_state(nullptr),
+//           depth_stencil_state(nullptr),
+//           color_attachment_count(0),
+//           color_attachment_formats(CreateArray<MAX_PASS_ATTACHMENT_COUNT, uint8_t>((uint8_t)PF_UNDEFINED)),
+//           color_attachment_flags(CreateArray<MAX_PASS_ATTACHMENT_COUNT, ETextureUsageFlags>(ETextureUsageFlags::UNDEFINED)),
+//           depth_stencil_format(PF_UNDEFINED),
+//           depth_stencil_flag(ETextureUsageFlags::UNDEFINED),
+//           subpass_settings({SubpassSettings::Type::NONE, 0}),
+//           b_depth_bound(false),
+//           multi_view_count(1),
+//           b_has_fragment_density_attachments(false),
+//           shading_rate(EVariousShadingRate::VSR_1_1x1),
+//           hash_key(0) {}
 
-    RHIGraphicsPipelineStateInfo(
-        RHIBlendState*            _blend_state,
-        RHIRasterizationState*    _rasterizer_state,
-        RHIMultisampleState*      _multisample_state,
-        RHIDepthStencilState*     _depth_stencil_state,
-        EPrimitiveTopology        _primitive_topology,
-        uint32_t                  _color_attachment_count,
-        const TAttachmentFormats& _color_attachment_formats,
-        const TAttachmentFlags&   _color_attachment_flags,
-        EPixelFormat              _depth_stencil_format,
-        ETextureUsageFlags        _depth_stencil_flag,
-        const SubpassSettings&    _subpass_settings,
-        bool                      _b_depth_bound,
-        uint8_t                   _multi_view_count,
-        bool                      _b_has_fragment_density_attachments,
-        EVariousShadingRate       _shading_rate)
-        : blend_state(_blend_state),
-          rasterizer_state(_rasterizer_state),
-          multisample_state(_multisample_state),
-          depth_stencil_state(_depth_stencil_state),
-          primitive_topology(_primitive_topology),
-          color_attachment_count(_color_attachment_count),
-          color_attachment_formats(_color_attachment_formats),
-          color_attachment_flags(_color_attachment_flags),
-          depth_stencil_format(_depth_stencil_format),
-          depth_stencil_flag(_depth_stencil_flag),
-          subpass_settings(_subpass_settings),
-          b_depth_bound(_b_depth_bound),
-          multi_view_count(_multi_view_count),
-          b_has_fragment_density_attachments(_b_has_fragment_density_attachments),
-          shading_rate(_shading_rate),
-          hash_key(0) {}
-    static constexpr ETextureUsageFlags relevant_color_attachment_flag_mask = ETextureUsageFlags::SRGB;
-    static constexpr ETextureUsageFlags relevant_depth_stencil_flag_mask    = ETextureUsageFlags::SRGB | ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT;
-    static bool                         IsSameColorAttachmentInPSO(ETextureUsageFlags lhs, ETextureUsageFlags rhs) {
-        auto l = lhs & relevant_color_attachment_flag_mask;
-        auto r = rhs & relevant_color_attachment_flag_mask;
-        return l == r;
-    }
-    static bool IsSameDepthAttachmentInPSO(ETextureUsageFlags lhs, ETextureUsageFlags rhs) {
-        auto l = lhs & relevant_depth_stencil_flag_mask;
-        auto r = rhs & relevant_depth_stencil_flag_mask;
-        return l == r;
-    }
-    static bool IsSameColorAttachmentArray(const TAttachmentFlags& lhs, const TAttachmentFlags& rhs) {
-        bool b_same = true;
-        for (int i = 0; i < lhs.size(); ++i) {
-            b_same &= IsSameColorAttachmentInPSO(lhs[i], rhs[i]);
-        }
-        return b_same;
-    }
+//     RHIGraphicsPipelineStateInfo(
+//         RHIBlendState*            _blend_state,
+//         RHIRasterizationState*    _rasterizer_state,
+//         RHIMultisampleState*      _multisample_state,
+//         RHIDepthStencilState*     _depth_stencil_state,
+//         EPrimitiveTopology        _primitive_topology,
+//         uint32_t                  _color_attachment_count,
+//         const TAttachmentFormats& _color_attachment_formats,
+//         const TAttachmentFlags&   _color_attachment_flags,
+//         EPixelFormat              _depth_stencil_format,
+//         ETextureUsageFlags        _depth_stencil_flag,
+//         const SubpassSettings&    _subpass_settings,
+//         bool                      _b_depth_bound,
+//         uint8_t                   _multi_view_count,
+//         bool                      _b_has_fragment_density_attachments,
+//         EVariousShadingRate       _shading_rate)
+//         : blend_state(_blend_state),
+//           rasterizer_state(_rasterizer_state),
+//           multisample_state(_multisample_state),
+//           depth_stencil_state(_depth_stencil_state),
+//           primitive_topology(_primitive_topology),
+//           color_attachment_count(_color_attachment_count),
+//           color_attachment_formats(_color_attachment_formats),
+//           color_attachment_flags(_color_attachment_flags),
+//           depth_stencil_format(_depth_stencil_format),
+//           depth_stencil_flag(_depth_stencil_flag),
+//           subpass_settings(_subpass_settings),
+//           b_depth_bound(_b_depth_bound),
+//           multi_view_count(_multi_view_count),
+//           b_has_fragment_density_attachments(_b_has_fragment_density_attachments),
+//           shading_rate(_shading_rate),
+//           hash_key(0) {}
+//     static constexpr ETextureUsageFlags relevant_color_attachment_flag_mask = ETextureUsageFlags::SRGB;
+//     static constexpr ETextureUsageFlags relevant_depth_stencil_flag_mask    = ETextureUsageFlags::SRGB | ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT;
+//     static bool                         IsSameColorAttachmentInPSO(ETextureUsageFlags lhs, ETextureUsageFlags rhs) {
+//         auto l = lhs & relevant_color_attachment_flag_mask;
+//         auto r = rhs & relevant_color_attachment_flag_mask;
+//         return l == r;
+//     }
+//     static bool IsSameDepthAttachmentInPSO(ETextureUsageFlags lhs, ETextureUsageFlags rhs) {
+//         auto l = lhs & relevant_depth_stencil_flag_mask;
+//         auto r = rhs & relevant_depth_stencil_flag_mask;
+//         return l == r;
+//     }
+//     static bool IsSameColorAttachmentArray(const TAttachmentFlags& lhs, const TAttachmentFlags& rhs) {
+//         bool b_same = true;
+//         for (int i = 0; i < lhs.size(); ++i) {
+//             b_same &= IsSameColorAttachmentInPSO(lhs[i], rhs[i]);
+//         }
+//         return b_same;
+//     }
 
-    bool operator==(const RHIGraphicsPipelineStateInfo& other) const {
-        return shader_stage.p_vertex_input_state == other.shader_stage.p_vertex_input_state && shader_stage.p_vertex_shader == other.shader_stage.p_vertex_shader &&
-               shader_stage.p_fragment_shader == other.shader_stage.p_fragment_shader &&
-               shader_stage.GetMeshShader() == other.shader_stage.GetMeshShader() &&
-               shader_stage.GetGeometryShader() == other.shader_stage.GetGeometryShader() &&
-               shader_stage.GetAmplificationShader() == other.shader_stage.GetAmplificationShader() &&
-               blend_state == other.blend_state && rasterizer_state == other.rasterizer_state &&
-               depth_stencil_state == other.depth_stencil_state &&
-               primitive_topology == other.primitive_topology &&
-               b_depth_bound == other.b_depth_bound && multi_view_count == other.multi_view_count &&
-               shading_rate == other.shading_rate &&
-               b_has_fragment_density_attachments == other.b_has_fragment_density_attachments &&
-               color_attachment_count == other.color_attachment_count &&
-               color_attachment_formats == other.color_attachment_formats &&
-               IsSameColorAttachmentArray(color_attachment_flags, other.color_attachment_flags) &&
-               depth_stencil_format == other.depth_stencil_format &&
-               IsSameDepthAttachmentInPSO(depth_stencil_flag, other.depth_stencil_flag) && subpass_settings == other.subpass_settings;
-    }
+//     bool operator==(const RHIGraphicsPipelineStateInfo& other) const {
+//         return shader_stage.p_vertex_input_state == other.shader_stage.p_vertex_input_state && shader_stage.p_vertex_shader == other.shader_stage.p_vertex_shader &&
+//                shader_stage.p_fragment_shader == other.shader_stage.p_fragment_shader &&
+//                shader_stage.GetMeshShader() == other.shader_stage.GetMeshShader() &&
+//                shader_stage.GetGeometryShader() == other.shader_stage.GetGeometryShader() &&
+//                shader_stage.GetAmplificationShader() == other.shader_stage.GetAmplificationShader() &&
+//                blend_state == other.blend_state && rasterizer_state == other.rasterizer_state &&
+//                depth_stencil_state == other.depth_stencil_state &&
+//                primitive_topology == other.primitive_topology &&
+//                b_depth_bound == other.b_depth_bound && multi_view_count == other.multi_view_count &&
+//                shading_rate == other.shading_rate &&
+//                b_has_fragment_density_attachments == other.b_has_fragment_density_attachments &&
+//                color_attachment_count == other.color_attachment_count &&
+//                color_attachment_formats == other.color_attachment_formats &&
+//                IsSameColorAttachmentArray(color_attachment_flags, other.color_attachment_flags) &&
+//                depth_stencil_format == other.depth_stencil_format &&
+//                IsSameDepthAttachmentInPSO(depth_stencil_flag, other.depth_stencil_flag) && subpass_settings == other.subpass_settings;
+//     }
 
-    uint32_t CalcValidColorAttachmentCount() const {
-        if (color_attachment_count > 0) {
-            int32_t last_index = -1;
-            for (int i = (int)color_attachment_count; i >= 0; i--) {
-                if (color_attachment_formats[i] != PF_UNDEFINED) {
-                    last_index = i;
-                    break;
-                }
-            }
-            return (uint32_t)(last_index + 1);
-        }
-        return color_attachment_count;
-    }
+//     uint32_t CalcValidColorAttachmentCount() const {
+//         if (color_attachment_count > 0) {
+//             int32_t last_index = -1;
+//             for (int i = (int)color_attachment_count; i >= 0; i--) {
+//                 if (color_attachment_formats[i] != PF_UNDEFINED) {
+//                     last_index = i;
+//                     break;
+//                 }
+//             }
+//             return (uint32_t)(last_index + 1);
+//         }
+//         return color_attachment_count;
+//     }
 
-    RHIShaderBoundStateInput shader_stage;
-    RHIBlendStateRef         blend_state;
-    RHIRasterizationStateRef rasterizer_state;
-    RHIMultisampleStateRef   multisample_state;
-    RHIDepthStencilStateRef  depth_stencil_state;
+//     RHIShaderBoundStateInput shader_stage;
+//     RHIBlendStateRef         blend_state;
+//     RHIRasterizationStateRef rasterizer_state;
+//     RHIMultisampleStateRef   multisample_state;
+//     RHIDepthStencilStateRef  depth_stencil_state;
 
-    EPrimitiveTopology primitive_topology;
-    uint32_t           color_attachment_count;
-    TAttachmentFormats color_attachment_formats;
-    TAttachmentFlags   color_attachment_flags;
-    EPixelFormat       depth_stencil_format;
-    ETextureUsageFlags depth_stencil_flag;
+//     EPrimitiveTopology primitive_topology;
+//     uint32_t           color_attachment_count;
+//     TAttachmentFormats color_attachment_formats;
+//     TAttachmentFlags   color_attachment_flags;
+//     EPixelFormat       depth_stencil_format;
+//     ETextureUsageFlags depth_stencil_flag;
 
-    SubpassSettings subpass_settings;
+//     SubpassSettings subpass_settings;
 
-    bool    b_depth_bound;
-    uint8_t multi_view_count = 1;
+//     bool    b_depth_bound;
+//     uint8_t multi_view_count = 1;
 
-    //for VSR
-    bool                b_has_fragment_density_attachments;
-    EVariousShadingRate shading_rate;
+//     //for VSR
+//     bool                b_has_fragment_density_attachments;
+//     EVariousShadingRate shading_rate;
 
-    uint64_t hash_key;
-};
+//     uint64_t hash_key;
+// };
 
 //combine blend state, clear color, attachment formats, and attachment flags
 struct RHIColorAttachmentInfo {
@@ -2163,36 +2211,36 @@ public:
     static RHIGraphicsPSOCreateInfo Create() {
         return std::move(RHIGraphicsPSOCreateInfo());
     }
-    RHIGraphicsPSOCreateInfo& SetShaderStage(RHIGraphicsShaderInputInfo&& _shader_info) {
-        shader_infos = _shader_info;
+    RHIGraphicsPSOCreateInfo& SetShaderStage(RHIGraphicsShaderInputInfo _shader_info) {
+        shader_infos = std::move(_shader_info);
         return *this;
     }
-    RHIGraphicsPSOCreateInfo& SetRasterizerInfo(RHIRasterizeInfo&& _rasterizer_info) {
-        rasterizer_info = _rasterizer_info;
-        return *this;
-    }
-
-    RHIGraphicsPSOCreateInfo& SetMultisampleInfo(RHIMultisampleStateInfo&& _multisample_info) {
-        multisample_info = _multisample_info;
+    RHIGraphicsPSOCreateInfo& SetRasterizerInfo(RHIRasterizeInfo _rasterizer_info) {
+        rasterizer_info = std::move(_rasterizer_info);
         return *this;
     }
 
-    RHIGraphicsPSOCreateInfo& SetDepthStencilInfo(RHIDepthStencilStateInfo&& _depth_stencil_info) {
-        depth_stencil_info = _depth_stencil_info;
+    RHIGraphicsPSOCreateInfo& SetMultisampleInfo(RHIMultisampleStateInfo _multisample_info) {
+        multisample_info = std::move(_multisample_info);
+        return *this;
+    }
+
+    RHIGraphicsPSOCreateInfo& SetDepthStencilInfo(RHIDepthStencilStateInfo _depth_stencil_info) {
+        depth_stencil_info = std::move(_depth_stencil_info);
         return *this;
     }
 
     RHIGraphicsPSOCreateInfo& SetPrimitiveTopology(EPrimitiveTopology _primitive_topology) {
-        primitive_topology = _primitive_topology;
+        primitive_topology = std::move(_primitive_topology);
         return *this;
     }
 
-    RHIGraphicsPSOCreateInfo& SetColorAttachmentInfo(Moer::Array<RHIColorAttachmentInfo>&& _color_attachment_info) {
+    RHIGraphicsPSOCreateInfo& SetColorAttachmentInfo(Moer::Array<RHIColorAttachmentInfo> _color_attachment_info) {
 
         color_attachment_count = CalcValidColorAttachmentCount();
         assert(_color_attachment_info.size() <= MAX_PASS_ATTACHMENT_COUNT && "color attachment count exceeds the limit");
         for (int i = color_attachment_count; i < _color_attachment_info.size(); i++) {
-            color_attachments_info[i] = _color_attachment_info[i - color_attachment_count];
+            color_attachments_info[i] = std::move(_color_attachment_info[i - color_attachment_count]);
         }
         return *this;
     }
@@ -2355,32 +2403,6 @@ struct RenderAttachmentView {
     ETextureLayout     required_layout = TEXTURE_LAYOUT_UNDEFINED;
     RHIClearAttachment clear_attachment{};
 };
-
-//struct AttachmentAction{
-//    union{
-//        uint8_t value;
-//
-//        struct{
-//            EAttachmentLoadOp  lo_0 : 2;
-//            EAttachmentStoreOp so_0 : 2;
-//            EAttachmentLoadOp  lo_1 : 2;
-//            EAttachmentStoreOp lo_2 : 2;
-//        } depth_stencil_ops;
-//        struct{
-//            EAttachmentLoadOp lo : 4;
-//            EAttachmentStoreOp so : 4;
-//        } color_ops;
-//
-//    };
-//    AttachmentAction(EAttachmentLoadOp _color_load, EAttachmentStoreOp _color_store){
-//        color_ops.lo = _color_load;
-//        color_ops.so = _color_store;
-//    }
-//    AttachmentAction(EAttachmentLoadOp _depth_load, EAttachmentStoreOp _depth_store)
-//    operator uint8_t()const{
-//        return value;
-//    }
-//};
 
 enum EAttachmentAction : uint8_t {
     /* for inner definition use, do not use directly */

@@ -811,6 +811,63 @@ VkPolygonMode VulkanEnumTranslator::METoVKPolygonMode(ERasterizerFillMode _fill_
     }
 }
 
+VkBlendOp VulkanEnumTranslator::METoVKBlendOp(EBlendOperation _blend_op) {
+    switch (_blend_op) {
+        case BO_ADD:
+            return VK_BLEND_OP_ADD;
+        case BO_SUBTRACT:
+            return VK_BLEND_OP_SUBTRACT;
+        case BO_REVERSE_SUBTRACT:
+            return VK_BLEND_OP_REVERSE_SUBTRACT;
+        case BO_MIN:
+            return VK_BLEND_OP_MIN;
+        case BO_MAX:
+            return VK_BLEND_OP_MAX;
+        default:
+            LOG_CRITICAL("Unsupported color blend operation: {}", static_cast<uint32_t>(_blend_op));
+            return VK_BLEND_OP_MAX_ENUM;
+    }
+}
+VkBlendFactor VulkanEnumTranslator::METoVKBlendFactor(EBlendFactor _blend_factor) {
+    switch (_blend_factor) {
+        case BF_ZERO:
+            return VK_BLEND_FACTOR_ZERO;
+        case BF_ONE:
+            return VK_BLEND_FACTOR_ONE;
+        case BF_SRC_COLOR:
+            return VK_BLEND_FACTOR_SRC_COLOR;
+        case BF_ONE_MINUS_SRC_COLOR:
+            return VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR;
+        case BF_DST_COLOR:
+            return VK_BLEND_FACTOR_DST_COLOR;
+        case BF_ONE_MINUS_DST_COLOR:
+            return VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR;
+        case BF_SRC_ALPHA:
+            return VK_BLEND_FACTOR_SRC_ALPHA;
+        case BF_ONE_MINUS_SRC_ALPHA:
+            return VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        case BF_DST_ALPHA:
+            return VK_BLEND_FACTOR_DST_ALPHA;
+        case BF_ONE_MINUS_DST_ALPHA:
+            return VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA;
+        case BF_CONSTANT_ALPHA:
+            return VK_BLEND_FACTOR_CONSTANT_ALPHA;
+        case BF_ONE_MINUS_CONSTANT_ALPHA:
+            return VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA;
+        case BF_SRC1_COLOR:
+            return VK_BLEND_FACTOR_SRC1_COLOR;
+        case BF_ONE_MINUS_SRC1_COLOR:
+            return VK_BLEND_FACTOR_ONE_MINUS_SRC1_COLOR;
+        case BF_SRC1_ALPHA:
+            return VK_BLEND_FACTOR_SRC1_ALPHA;
+        case BF_ONE_MINUS_SRC1_ALPHA:
+            return VK_BLEND_FACTOR_ONE_MINUS_SRC1_ALPHA;
+        default:
+            LOG_CRITICAL("Unsupported color blend factor: {}", static_cast<uint32_t>(_blend_factor));
+            return VK_BLEND_FACTOR_MAX_ENUM;
+    }
+}
+
 VkDescriptorType VulkanEnumTranslator::METoVKDescriptorType(EShaderParameterType _type, EShaderCodeResourceBindingType _binding_type) {
 
     auto is_texture = [](EShaderCodeResourceBindingType type) {
@@ -993,36 +1050,7 @@ VkCompareOp VulkanRHISampler::METoVKCompareOp(ESamplerCompareFunction _compare_o
     }
 }
 
-void VulkanRHIVertexInputState::GenerateVertexInputStateFromInitializer(const VertexInputStateInitializerList& _init) {
-    for (uint32_t i = 0; i < MAX_VERTEX_ELEMENT_COUNT; ++i) {
-        if (_init[i].format == EPixelFormat::PF_UNDEFINED) {
-            break;
-        }
-        m_bindings[i].binding    = _init[i].binding_index;
-        m_bindings[i].stride     = _init[i].stride;
-        m_bindings[i].inputRate  = METoVKVertexInputRate(_init[i].input_rate);
-        m_attributes[i].location = _init[i].attribute_index;
-        m_attributes[i].binding  = _init[i].binding_index;
-        m_attributes[i].format   = VulkanEnumTranslator::METoVKFormat(_init[i].format);
-        m_attributes[i].offset   = _init[i].offset;
-
-        // fallback
-        m_binding_count = std::max(m_binding_count, static_cast<uint32_t>(_init[i].binding_index));
-        ++m_attribute_count;
-    }
-    // count = max_index + 1
-    ++m_binding_count;
-
-    m_input_state_create_info.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    m_input_state_create_info.pNext                           = nullptr;
-    m_input_state_create_info.flags                           = 0;
-    m_input_state_create_info.vertexBindingDescriptionCount   = m_binding_count;
-    m_input_state_create_info.pVertexBindingDescriptions      = m_bindings.data();
-    m_input_state_create_info.vertexAttributeDescriptionCount = m_attribute_count;
-    m_input_state_create_info.pVertexAttributeDescriptions    = m_attributes.data();
-}
-
-VkVertexInputRate VulkanRHIVertexInputState::METoVKVertexInputRate(EVertexInputRate _me_rate) {
+VkVertexInputRate VulkanEnumTranslator::METoVKVertexInputRate(EVertexInputRate _me_rate) {
     switch (_me_rate) {
         case EVertexInputRate::VIR_VERTEX:
             return VK_VERTEX_INPUT_RATE_VERTEX;
@@ -1031,55 +1059,6 @@ VkVertexInputRate VulkanRHIVertexInputState::METoVKVertexInputRate(EVertexInputR
         default:
             LOG_CRITICAL("Unsupported vertex input rate: {}", static_cast<uint32_t>(_me_rate));
             return VK_VERTEX_INPUT_RATE_MAX_ENUM;
-    }
-}
-
-void VulkanRHIRasterizationState::GenerateRasterizationStateFromInitializer(const RHIRasterizeInfo& _init) {
-    m_rasterization_state_create_info.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-    m_rasterization_state_create_info.pNext                   = nullptr;
-    m_rasterization_state_create_info.flags                   = 0;
-    m_rasterization_state_create_info.depthClampEnable        = _init.b_depth_clamp_enable ? VK_TRUE : VK_FALSE;
-    m_rasterization_state_create_info.rasterizerDiscardEnable = VK_FALSE;// MARK...
-    m_rasterization_state_create_info.polygonMode             = VulkanEnumTranslator::METoVKPolygonMode(_init.fill_mode);
-    m_rasterization_state_create_info.cullMode                = VulkanEnumTranslator::METoVKCullModeFlags(_init.cull_mode);
-    m_rasterization_state_create_info.frontFace               = VK_FRONT_FACE_COUNTER_CLOCKWISE;// MARK...
-    m_rasterization_state_create_info.depthBiasEnable         = _init.b_depth_bias ? VK_TRUE : VK_FALSE;
-    m_rasterization_state_create_info.depthBiasConstantFactor = _init.depth_bias;
-    m_rasterization_state_create_info.depthBiasClamp          = _init.depth_bias_clamp;
-    m_rasterization_state_create_info.depthBiasSlopeFactor    = _init.depth_bias_slop_factor;
-    m_rasterization_state_create_info.lineWidth               = 1.0f;
-}
-
-void VulkanRHIDepthStencilState::GenerateDepthStencilStateFromInitializer(const RHIDepthStencilStateInfo& _init) {
-    m_depth_stencil_state_create_info.sType                 = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-    m_depth_stencil_state_create_info.pNext                 = nullptr;
-    m_depth_stencil_state_create_info.flags                 = 0;
-    m_depth_stencil_state_create_info.depthTestEnable       = (_init.b_enable_depth_write || _init.depth_test_op == ECompareOption::CO_ALWAYS) ? VK_TRUE : VK_FALSE;
-    m_depth_stencil_state_create_info.depthWriteEnable      = _init.b_enable_depth_write;
-    m_depth_stencil_state_create_info.depthCompareOp        = VulkanEnumTranslator::METoVKCompareOp(_init.depth_test_op);
-    m_depth_stencil_state_create_info.depthBoundsTestEnable = VK_FALSE;// MARK...
-    m_depth_stencil_state_create_info.minDepthBounds        = 0.0f;
-    m_depth_stencil_state_create_info.maxDepthBounds        = 1.0f;
-
-    m_depth_stencil_state_create_info.stencilTestEnable = (_init.b_enable_front_face_stencil || _init.b_enable_back_face_stencil) ? VK_TRUE : VK_FALSE;
-    m_depth_stencil_state_create_info.front.failOp      = VulkanEnumTranslator::METoVKStencilOp(_init.front_face_stencil_fail_stencil_op);
-    m_depth_stencil_state_create_info.front.passOp      = VulkanEnumTranslator::METoVKStencilOp(_init.front_face_pass_stencil_op);
-    m_depth_stencil_state_create_info.front.depthFailOp = VulkanEnumTranslator::METoVKStencilOp(_init.front_face_depth_fail_stencil_op);
-    m_depth_stencil_state_create_info.front.compareOp   = VulkanEnumTranslator::METoVKCompareOp(_init.front_face_stencil_test);
-    m_depth_stencil_state_create_info.front.compareMask = _init.stencil_readmask;
-    m_depth_stencil_state_create_info.front.writeMask   = _init.stencil_writemask;
-    m_depth_stencil_state_create_info.front.reference   = 0;
-
-    if (_init.b_enable_back_face_stencil) {
-        m_depth_stencil_state_create_info.back.failOp      = VulkanEnumTranslator::METoVKStencilOp(_init.back_face_stencil_fail_stencil_op);
-        m_depth_stencil_state_create_info.back.passOp      = VulkanEnumTranslator::METoVKStencilOp(_init.back_face_pass_stencil_op);
-        m_depth_stencil_state_create_info.back.depthFailOp = VulkanEnumTranslator::METoVKStencilOp(_init.back_face_depth_fail_stencil_op);
-        m_depth_stencil_state_create_info.back.compareOp   = VulkanEnumTranslator::METoVKCompareOp(_init.back_face_stencil_test);
-        m_depth_stencil_state_create_info.back.compareMask = _init.stencil_readmask;
-        m_depth_stencil_state_create_info.back.writeMask   = _init.stencil_writemask;
-        m_depth_stencil_state_create_info.back.reference   = 0;
-    } else {
-        m_depth_stencil_state_create_info.front = m_depth_stencil_state_create_info.back;
     }
 }
 
@@ -1129,110 +1108,6 @@ VkStencilOp VulkanEnumTranslator::METoVKStencilOp(EStencilOp _stencil_op) {
             LOG_CRITICAL("Unsupported depth stencil operation: {}", static_cast<uint32_t>(_stencil_op));
             return VK_STENCIL_OP_MAX_ENUM;
     };
-}
-
-void VulkanRHIMultisampleState::GenerateMultisampleStateFromInitializer(const RHIMultisampleStateInfo& _init) {
-    m_multisample_state_create_info.sType                 = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    m_multisample_state_create_info.pNext                 = nullptr;
-    m_multisample_state_create_info.flags                 = 0;
-    m_multisample_state_create_info.rasterizationSamples  = VulkanEnumTranslator::METoVKSampleCountFlagBits(_init.sample_count);
-    m_multisample_state_create_info.sampleShadingEnable   = _init.b_sample_shading;
-    m_multisample_state_create_info.minSampleShading      = _init.min_sample_shading;
-    m_multisample_state_create_info.pSampleMask           = nullptr;// MARK...
-    m_multisample_state_create_info.alphaToCoverageEnable = _init.b_alpha_to_converge;
-    m_multisample_state_create_info.alphaToOneEnable      = _init.b_alpha_to_one;
-}
-
-void VulkanRHIBlendState::GenerateBlendStateFromInitializer(const RHIBlendStateInfo& _init) {
-    // const auto n = 1;// MARK...
-
-    // attachments.resize(MAX_PASS_ATTACHMENT_COUNT);
-    for (size_t i = 0; i < MAX_PASS_ATTACHMENT_COUNT; ++i) {
-        auto& attachment_init = _init.attachments[i];
-
-        m_attachments[i].blendEnable =
-            (attachment_init.color_blend_op != BO_ADD || attachment_init.color_dst_blend_factor != BF_ZERO || attachment_init.color_src_blend_factor != BF_ONE ||
-             attachment_init.alpha_blend_op != BO_ADD || attachment_init.alpha_dst_blend_factor != BF_ZERO || attachment_init.alpha_src_blend_factor != BF_ONE) ?
-                VK_TRUE :
-                VK_FALSE;
-        m_attachments[i].srcColorBlendFactor = VulkanEnumTranslator::METoVKBlendFactor(attachment_init.color_src_blend_factor);
-        m_attachments[i].dstColorBlendFactor = VulkanEnumTranslator::METoVKBlendFactor(attachment_init.color_dst_blend_factor);
-        m_attachments[i].colorBlendOp        = VulkanEnumTranslator::METoVKBlendOp(attachment_init.color_blend_op);
-        m_attachments[i].srcAlphaBlendFactor = VulkanEnumTranslator::METoVKBlendFactor(attachment_init.alpha_src_blend_factor);
-        m_attachments[i].dstAlphaBlendFactor = VulkanEnumTranslator::METoVKBlendFactor(attachment_init.alpha_dst_blend_factor);
-        m_attachments[i].alphaBlendOp        = VulkanEnumTranslator::METoVKBlendOp(attachment_init.alpha_blend_op);
-        m_attachments[i].colorWriteMask      = (attachment_init.color_write_mask & CW_RED) ? VK_COLOR_COMPONENT_R_BIT : 0;
-        m_attachments[i].colorWriteMask |= (attachment_init.color_write_mask & CW_GREEN) ? VK_COLOR_COMPONENT_G_BIT : 0;
-        m_attachments[i].colorWriteMask |= (attachment_init.color_write_mask & CW_BLUE) ? VK_COLOR_COMPONENT_B_BIT : 0;
-        m_attachments[i].colorWriteMask |= (attachment_init.color_write_mask & CW_ALPHA) ? VK_COLOR_COMPONENT_A_BIT : 0;
-    }
-
-    // // VkPipelineColorBlendStateCreateInfo blend_state_create_info{};
-    // m_blend_state_create_info.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    // m_blend_state_create_info.pNext           = nullptr;
-    // m_blend_state_create_info.flags           = 0;
-    // m_blend_state_create_info.logicOpEnable   = VK_FALSE;
-    // m_blend_state_create_info.logicOp         = VK_LOGIC_OP_COPY;
-    // m_blend_state_create_info.attachmentCount = n;
-    // m_blend_state_create_info.pAttachments    = attachments.data();
-}
-
-VkBlendOp VulkanEnumTranslator::METoVKBlendOp(EBlendOperation _blend_op) {
-    switch (_blend_op) {
-        case BO_ADD:
-            return VK_BLEND_OP_ADD;
-        case BO_SUBTRACT:
-            return VK_BLEND_OP_SUBTRACT;
-        case BO_REVERSE_SUBTRACT:
-            return VK_BLEND_OP_REVERSE_SUBTRACT;
-        case BO_MIN:
-            return VK_BLEND_OP_MIN;
-        case BO_MAX:
-            return VK_BLEND_OP_MAX;
-        default:
-            LOG_CRITICAL("Unsupported color blend operation: {}", static_cast<uint32_t>(_blend_op));
-            return VK_BLEND_OP_MAX_ENUM;
-    }
-}
-
-VkBlendFactor VulkanEnumTranslator::METoVKBlendFactor(EBlendFactor _blend_factor) {
-    switch (_blend_factor) {
-        case BF_ZERO:
-            return VK_BLEND_FACTOR_ZERO;
-        case BF_ONE:
-            return VK_BLEND_FACTOR_ONE;
-        case BF_SRC_COLOR:
-            return VK_BLEND_FACTOR_SRC_COLOR;
-        case BF_ONE_MINUS_SRC_COLOR:
-            return VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR;
-        case BF_DST_COLOR:
-            return VK_BLEND_FACTOR_DST_COLOR;
-        case BF_ONE_MINUS_DST_COLOR:
-            return VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR;
-        case BF_SRC_ALPHA:
-            return VK_BLEND_FACTOR_SRC_ALPHA;
-        case BF_ONE_MINUS_SRC_ALPHA:
-            return VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-        case BF_DST_ALPHA:
-            return VK_BLEND_FACTOR_DST_ALPHA;
-        case BF_ONE_MINUS_DST_ALPHA:
-            return VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA;
-        case BF_CONSTANT_ALPHA:
-            return VK_BLEND_FACTOR_CONSTANT_ALPHA;
-        case BF_ONE_MINUS_CONSTANT_ALPHA:
-            return VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA;
-        case BF_SRC1_COLOR:
-            return VK_BLEND_FACTOR_SRC1_COLOR;
-        case BF_ONE_MINUS_SRC1_COLOR:
-            return VK_BLEND_FACTOR_ONE_MINUS_SRC1_COLOR;
-        case BF_SRC1_ALPHA:
-            return VK_BLEND_FACTOR_SRC1_ALPHA;
-        case BF_ONE_MINUS_SRC1_ALPHA:
-            return VK_BLEND_FACTOR_ONE_MINUS_SRC1_ALPHA;
-        default:
-            LOG_CRITICAL("Unsupported color blend factor: {}", static_cast<uint32_t>(_blend_factor));
-            return VK_BLEND_FACTOR_MAX_ENUM;
-    }
 }
 
 #pragma region shader definitions
@@ -1324,22 +1199,6 @@ Moer::Array<VkPipelineShaderStageCreateInfo> VulkanRHIGraphicsPipelineState::MET
     }
 
     return shader_stage_create_infos;
-}
-
-VkPipelineVertexInputStateCreateInfo VulkanRHIGraphicsPipelineState::METoVKVertexInputStateCreateInfo(const RHIVertexInputState* _vertex_input_state) {
-    auto* vk_vertex_input_state = static_cast<const VulkanRHIVertexInputState*>(_vertex_input_state);
-    VK_CHECK_NULLPTR(vk_vertex_input_state, "RHICreateGraphicsPipelineState: initializer's vertex input state is nullptr!", return {});
-
-    VkPipelineVertexInputStateCreateInfo vertex_input_state_create_info{};
-    vertex_input_state_create_info.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vertex_input_state_create_info.pNext                           = nullptr;
-    vertex_input_state_create_info.flags                           = 0;
-    vertex_input_state_create_info.vertexBindingDescriptionCount   = vk_vertex_input_state->GetBindingCount();
-    vertex_input_state_create_info.pVertexBindingDescriptions      = vk_vertex_input_state->GetBindings();
-    vertex_input_state_create_info.vertexAttributeDescriptionCount = vk_vertex_input_state->GetAttributeCount();
-    vertex_input_state_create_info.pVertexAttributeDescriptions    = vk_vertex_input_state->GetAttributes();
-
-    return vertex_input_state_create_info;
 }
 
 Moer::Array<const Shader*> VulkanRHIGraphicsPipelineState::GetShaderInfoList(const RHIShaderBoundStateInput& _shader_bound_state) {
@@ -1592,7 +1451,7 @@ VulkanViewport::~VulkanViewport() {
     swapchain = nullptr;
 }
 
-VulkanRHITextureUAV* VulkanViewport::InnerCreateVulkanUnorderedAccessView(VulkanDevice* _device, VulkanRHITexture* texture, const RHIViewInfo& _view_info) {
+VulkanRHITextureUAV* VulkanViewport::InnerCreateVulkanUAV(VulkanDevice* _device, VulkanRHITexture* texture, const RHIViewInfo& _view_info) {
     auto* view = new VulkanRHITextureUAV(_device, texture, _view_info);
 
     VkImageViewCreateInfo image_view_create_info{};
@@ -1634,7 +1493,7 @@ void VulkanViewport::InnerCreateResources() {
                                                        swapchain->m_device);
         swapchain_images[index]->AddRef();
 
-        swapchain_image_uavs[index] = InnerCreateVulkanUnorderedAccessView(
+        swapchain_image_uavs[index] = InnerCreateVulkanUAV(
             swapchain->m_device,
             swapchain_images[index],
             RHIViewInfo::CreateTextureUAVInfo()
@@ -1680,7 +1539,7 @@ void VulkanViewport::ResetResources() {
         swapchain_images[index]->SetAttachedImageInner(swapchain->m_swap_chain_images[index]);
 
         delete swapchain_image_uavs[index];
-        swapchain_image_uavs[index] = InnerCreateVulkanUnorderedAccessView(
+        swapchain_image_uavs[index] = InnerCreateVulkanUAV(
             swapchain->m_device,
             swapchain_images[index],
             RHIViewInfo::CreateTextureUAVInfo()

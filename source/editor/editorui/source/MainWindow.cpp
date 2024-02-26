@@ -118,10 +118,19 @@ void MainWindow::Show() {
         ImGui::End();
         return;
     }
+    static uint32_t frame_timer                 = 0;
+    static float    frame_time                  = 0.1f;
+    static float    frame_rate                  = 0.1f;
+    static uint32_t frame_timer_update_interval = 1;
+    if (frame_timer++ % frame_timer_update_interval == 0) {
+        frame_time = timer.ElapsedMilliseconds();
+        frame_rate = 1000.0f / frame_time;
+    }
+    frame_timer_update_interval = std::max(1u, uint32_t(frame_rate / 2.f));
     if (timer.IsRunning()) {
 
         timer.Stop();
-        ImGui::Text("Time: %.3f ms/frame (%.1f FPS)", timer.ElapsedMilliseconds(), 1000.0f / timer.ElapsedMilliseconds());
+        ImGui::Text("Time: %.3f ms/frame (%.1f FPS)", frame_time, frame_rate);
     }
 
     timer.Start();
