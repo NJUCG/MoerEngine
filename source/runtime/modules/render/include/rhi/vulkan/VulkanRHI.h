@@ -51,7 +51,7 @@ public:
 
     // RHIGraphicsPipelineStateRef RHICreateGraphicsPipelineState(const RHIGraphicsPipelineStateInfo& _init) final override;
     RHIGraphicsPipelineStateRef RHICreateGraphicsPSO(RHIGraphicsPSOCreateInfo&& _init) final override;
-    RHIComputePipelineStateRef  RHICreateComputePipelineState(RHIComputeShader* _compute_shader) final override;
+    RHIComputePipelineStateRef  RHICreateComputePipelineState(RHIShader* _compute_shader) final override;
 
     RHIBufferRef RHICreateBuffer(const RHIBufferCreateInfo& info) final override;
     void*        RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size) final override;

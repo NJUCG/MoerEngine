@@ -79,10 +79,10 @@ public:
     //     return RHICreateGraphicsPipelineState(_init);
     // }
 
-    virtual RHIComputePipelineStateRef RHICreateComputePipelineState(RHIComputeShader* _compute_shader) = 0;
+    virtual RHIComputePipelineStateRef RHICreateComputePipelineState(RHIShader* _compute_shader) = 0;
 
     /* create pso from cache */
-    virtual RHIComputePipelineStateRef RHICreateComputePipelineState(RHIComputeShader* _compute_shader, RHIPipelineBinaryDataLibrary* _pipeline_library) {
+    virtual RHIComputePipelineStateRef RHICreateComputePipelineState(RHIShader* _compute_shader, RHIPipelineBinaryDataLibrary* _pipeline_library) {
         return RHICreateComputePipelineState(_compute_shader);
     }
     virtual RHIBufferRef RHICreateBuffer(const RHIBufferCreateInfo& info)                   = 0;

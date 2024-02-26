@@ -677,7 +677,7 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPSO(RHIGraphicsPSOCr
     return RHIGraphicsPipelineStateRef(vk_pso);
 }
 
-RHIComputePipelineStateRef VulkanRHIImpl::RHICreateComputePipelineState(RHIComputeShader* _compute_shader) {
+RHIComputePipelineStateRef VulkanRHIImpl::RHICreateComputePipelineState(RHIShader* _compute_shader) {
     VulkanRHIComputePipelineState* vk_pso = new VulkanRHIComputePipelineState();
 
     auto* vk_shader = static_cast<VulkanRHIComputeShader*>(_compute_shader);

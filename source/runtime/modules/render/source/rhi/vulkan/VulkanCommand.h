@@ -8,6 +8,7 @@
 
 #include "VulkanRHIResource.h"
 
+#include <variant>
 #include <vulkan/vulkan.h>
 
 class VulkanDevice;
@@ -140,11 +141,11 @@ public:
 
     void ClearDepthStencil() override;
     void ClearUAVInt(
-        RHIUAV* _uav,
-        const Moer::Vector4i&   _values) override;
+        RHIUAV*               _uav,
+        const Moer::Vector4i& _values) override;
     void ClearUAVFloat(
-        RHIUAV* _uav,
-        const Moer::Vector4f&   _values) override;
+        RHIUAV*               _uav,
+        const Moer::Vector4f& _values) override;
 
     void BeginRenderPass(const RHIRenderPassInfo& _pass_info, const char* _pass_name) override;
     void EndRenderPass() override;
@@ -178,7 +179,8 @@ protected:
     friend class VulkanRHICommandQueue;
 
 private:
-    VulkanRHIGraphicsPipelineState* m_current_pipeline_state;
+    VulkanRHIGraphicsPipelineState*                                               m_current_pipeline_state;
+    std::variant<VulkanRHIGraphicsPipelineState*, VulkanRHIComputePipelineState*> current_pso;
 
 private:
     VkRenderingAttachmentInfo FromColorAttachmentInfo(const RHIRenderPassInfo::ColorAttachmentInfo& _color_attachment_info) const;

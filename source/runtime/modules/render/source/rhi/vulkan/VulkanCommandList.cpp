@@ -343,6 +343,7 @@ void VulkanRHIGraphicsCommandList::SetPipelineState(RHIGraphicsPipelineState* _g
 
     vkCmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk_pso->GetHandle());
     m_current_pipeline_state = vk_pso;
+    current_pso              = vk_pso;
 }
 
 // MARK... current_pipeline_state_design
@@ -351,6 +352,7 @@ void VulkanRHIGraphicsCommandList::SetPipelineState(RHIComputePipelineState* _co
     VK_CHECK_NULLPTR(vk_pso, "SetPipelineState: compute pipeline state is nullptr!", return);
 
     vkCmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, vk_pso->GetHandle());
+    current_pso = vk_pso;
 }
 
 void VulkanRHIGraphicsCommandList::BeginRecording() {
@@ -680,12 +682,17 @@ VkRenderingAttachmentInfo VulkanRHIGraphicsCommandList::FromDepthStencilAttachme
 }
 
 void VulkanRHIGraphicsCommandList::PrepareDrawCommand() {
-    const auto* vk_pso = m_current_pipeline_state;
+    VulkanPipelineState* vk_pso = nullptr;
+    if (current_pso.index() == 0) {
+        vk_pso = std::get<0>(current_pso);
+    } else {
+        vk_pso = std::get<1>(current_pso);
+    }
     VK_CHECK_NULLPTR(vk_pso, "PreDrawCommand: graphics pipeline state is nullptr!", return);
     auto* vk_resource_cache = vk_pso->GetPipelineResourceCache();
     VK_CHECK_NULLPTR(vk_resource_cache, "PreDrawCommand: graphics pipeline resource cache is nullptr!", return);
 
-    auto pipeline_layout = vk_pso->GetPipelineLayout();
+    auto* pipeline_layout = vk_pso->GetPipelineLayout();
 
     const auto* vk_sets_layout = vk_pso->GetDescriptorSetsLayout();
     // 1. update and bind descriptor sets
