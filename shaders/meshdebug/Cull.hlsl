@@ -97,7 +97,7 @@ bool IsMeshletVisible(in uint meshlet_id) {
     cmd.instance_count = 1;
     cmd.first_index = meshlet_desc.index_offset;
     cmd.vertex_offset = meshlet_desc.vertex_offset;
-    cmd.first_instance = meshlet_desc.instance_id;
+    cmd.first_instance = 0;
     draw_indirect_buffer.Store(cmd_offset * sizeof(DrawCommandData), cmd);
   }
 }

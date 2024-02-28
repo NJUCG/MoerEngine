@@ -101,6 +101,7 @@ namespace Moer {
         RHIBufferRef zero_buffer;
         RHISRVRef    meshlet_descs_buffer_view;
         RHISRVRef    meshlet_bounds_buffer_view;
+        RHISRVRef    instance_buffer_view;
 
         RHIUAVRef draw_indirect_view;
         RHIUAVRef draw_count_view;
@@ -177,7 +178,8 @@ namespace Moer {
                     std::move(shader_input_info))
                 .SetDepthStencilInfo(RHIDepthStencilStateInfo::Preset<RHIConfig::DepthStencil::DEPTH_WRITE_LESS>())
                 .SetColorAttachmentInfo(
-                    {std::move(RHIColorAttachmentInfo::Preset(EPixelFormat::PF_R8G8B8A8_SRGB))});
+                    {std::move(RHIColorAttachmentInfo::Preset(EPixelFormat::PF_R8G8B8A8_SRGB))})
+                .Finalize();
 
         pipeline_state = g_rhi->RHICreateGraphicsPSO(std::move(pso_create_info));
 
@@ -225,6 +227,11 @@ namespace Moer {
                                                              RHIViewInfo::CreateBufferSRVInfo()
                                                                  .SetByteOffset(0)
                                                                  .SetStride(sizeof(MeshletBound)));
+
+            instance_buffer_view = g_rhi->RHICreateSRV(g_scene->GetBuffer("instance_buffer"),
+                                                       RHIViewInfo::CreateBufferSRVInfo()
+                                                           .SetByteOffset(0)
+                                                           .SetStride(sizeof(InstanceData)));
         }
     }
 
