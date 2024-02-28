@@ -1,5 +1,6 @@
 #include "loader/gltf/Parser.h"
 
+#include "RenderThread.h"
 #include "assimp/Importer.hpp"
 #include "assimp/postprocess.h"
 #include "assimp/scene.h"
@@ -14,6 +15,7 @@
 #include "scene/Material.h"
 #include "scene/MaterialInstance.h"
 #include "scene/RenderableManager.h"
+#include "scene/Scene.h"
 #include "scene/TransformManager.h"
 
 #include <filesystem>
@@ -324,9 +326,7 @@ namespace Moer::Resource::Gltf {
         //     vertex_offset += cur_vertex_count;
         //     index_offset += cur_index_count;
         // }
-
         auto* gpu_scene = m_scene.get();
-
         EnqueueRenderTask([vertex_data    = std::move(m_vertex_data),
                            index_data     = std::move(m_index_data),
                            meshlet_bounds = std::move(m_meshlet_bounds),
@@ -340,7 +340,6 @@ namespace Moer::Resource::Gltf {
             auto meshlet_bounds_buffer = gpu_scene_buffer_builder.CopyFrom(meshlet_bounds.data(), meshlet_bounds.size() * sizeof(MeshletBound));
 
             auto meshlet_descs_buffer = gpu_scene_buffer_builder.CopyFrom(meshlet_descs.data(), meshlet_descs.size() * sizeof(MeshletDesc));
-
             gpu_scene->SetBuffer("vertex_buffer", buffer_pair.first);
             gpu_scene->SetBuffer("index_buffer", buffer_pair.second);
             gpu_scene->SetBuffer("meshlet_bounds", meshlet_bounds_buffer);
@@ -350,6 +349,27 @@ namespace Moer::Resource::Gltf {
         //Todo Load Lights
         loadCameras(gltf_scene);
         LoadNode(gltf_scene->mRootNode, gltf_scene);
+
+        auto                      instance_id = 0;
+        Moer::Array<InstanceData> instance_data;
+        // instance_data.reserve(entities.size());
+        m_scene->ForEach([this, &instance_data, &instance_id](Entity entity) {
+            auto material_id   = RenderableManager::Get().GetMaterialInstance(entity);
+            auto transform     = TransformManager::Get().Get(entity);
+            auto model_2_world = transform.GetMatrix4x4();
+            //todo material data not correct
+            instance_data.emplace_back(model_2_world, Inverse(model_2_world), instance_id, 0);
+            instance_id++;
+        });
+
+        EnqueueRenderTask([instance_data = std::move(instance_data), gpu_scene]() {
+            GpuSceneBufferBuilder gpu_scene_buffer_builder;
+
+            auto instance_buffer = gpu_scene_buffer_builder.CopyFrom(instance_data.data(), instance_data.size() * sizeof(InstanceData));
+            gpu_scene->SetBuffer("instance_buffer", instance_buffer);
+        });
+        RenderThreadFence fence;
+        fence.Wait();
         //todo after build all    end build
         // GpuPrimitiveBuilder::EndBuild();
         return std::move(m_scene);

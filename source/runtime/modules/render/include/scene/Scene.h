@@ -4,8 +4,16 @@
 
 #include "API_Macro.h"
 #include "Entity.h"
+#include "math/Matrix.h"
 
 namespace Moer {
+
+    struct InstanceData {
+        Moer::Matrix4x4f model2world;
+        Moer::Matrix4x4f inv_model2world;
+        uint32_t         material_id;
+        uint32_t         material_type;
+    };
 
     using EntitySet = Moer::UnorderedSet<Entity, Entity::Hasher>;
 
@@ -20,6 +28,7 @@ namespace Moer {
         RHIBufferRef  GetBuffer(const std::string& name) const noexcept;
         Array<Entity> GetEntities() const noexcept;
         Array<Entity> GetCameras() const noexcept;
+        void          ForEach(std::function<void(Entity)> func) const noexcept;
 
         static Scene* GetDefaultScene() noexcept;
         static void   SetDefaultScene(Scene* scene) noexcept;
