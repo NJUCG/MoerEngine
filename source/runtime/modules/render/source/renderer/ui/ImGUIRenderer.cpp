@@ -850,7 +850,7 @@ bool CreateDeviceObjects() {
     msaa_init.sample_count = 1;
 
     RHIDepthStencilStateInitializer depth_stencil_init{};
-    depth_stencil_init.depth_test_op                    = CO_ALWAYS;
+    depth_stencil_init.depth_test_op                    = CO_NEVER;
     depth_stencil_init.b_enable_depth_write             = false;
     depth_stencil_init.b_enable_front_face_stencil      = false;
     depth_stencil_init.b_enable_back_face_stencil       = false;
