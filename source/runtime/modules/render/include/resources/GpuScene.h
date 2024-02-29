@@ -40,7 +40,7 @@ namespace Moer {
 
     class RENDER_API TextureBuilder {
     public:
-        using Callback = void (*)(void* buffer);
+        using Callback = std::function<void(void*)>;
 
         TextureBuilder& Width(uint32_t width) noexcept;
         TextureBuilder& Height(uint32_t height) noexcept;
