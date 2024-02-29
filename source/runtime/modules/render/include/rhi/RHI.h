@@ -8,6 +8,7 @@
 #include "Core.h"
 #include "taskgraph/TaskGraph.h"
 #include "taskgraph/ThreadManager.h"
+#include <cstdint>
 #include <type_traits>
 
 enum class ERHIType {
@@ -86,6 +87,12 @@ public:
         return RHICreateComputePipelineState(_compute_shader);
     }
     virtual RHIBufferRef RHICreateBuffer(const RHIBufferCreateInfo& info)                   = 0;
+    template<typename TElement>
+        requires(std::is_trivially_copyable_v<TElement> && std::is_standard_layout_v<TElement>)
+    RHIBufferRef RHICreateBuffer(uint32_t _size, EBufferUsageFlags _usage) {
+        auto create_info = RHIBufferCreateInfo::Create(_size, sizeof(TElement), _usage);
+        return RHICreateBuffer(create_info);
+    }
     virtual void*        RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size) = 0;
     virtual void         RHIUnmapBuffer(RHIBuffer* _buffer)                                 = 0;
 
@@ -93,6 +100,26 @@ public:
 
     virtual RHISRVRef RHICreateSRV(RHIViewableResource* _resource, const RHIViewInfo& _view_info) = 0;
     virtual RHIUAVRef RHICreateUAV(RHIViewableResource* _resource, const RHIViewInfo& _view_info) = 0;
+
+    template<typename TElement>
+        requires(std::is_trivially_copyable_v<TElement> && std::is_standard_layout_v<TElement>)
+    RHISRVRef RHICreateBufferSRV(
+        RHIViewableResource* _resource,
+        uint32_t             _size,
+        uint32_t             _offset = 0) {
+        auto create_info = RHIViewInfo::CreateBufferSRVInfo().SetByteOffset(_offset).SetStride(sizeof(TElement)).SetNumElements(_size);
+        return RHICreateSRV(_resource, create_info);
+    };
+
+    template<typename TElement>
+        requires(std::is_trivially_copyable_v<TElement> && std::is_standard_layout_v<TElement>)
+    RHIUAVRef RHICreateBufferUAV(
+        RHIViewableResource* _resource,
+        uint32_t             _size,
+        uint32_t             _offset = 0) {
+        auto create_info = RHIViewInfo::CreateBufferUAVInfo().SetByteOffset(_offset).SetStride(sizeof(TElement)).SetNumElements(_size);
+        return RHICreateUAV(_resource, create_info);
+    };
 
     virtual RHICommandQueue* RHICreateCommandQueue(ECommandQueueType type) = 0;
     // DX12 only: _initial_state

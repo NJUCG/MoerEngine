@@ -845,7 +845,7 @@ RHITextureRef VulkanRHIImpl::RHICreateTexture(const RHITextureCreateInfo& info) 
 
 RHISRVRef VulkanRHIImpl::RHICreateSRV(RHIViewableResource* _resource, const RHIViewInfo& _view_info) {
 
-    auto create_texture_srv = [=]() {
+    auto create_texture_srv = [this, _resource, &_view_info]() {
         VulkanRHITextureSRV* vk_srv = new VulkanRHITextureSRV(m_device, _resource, _view_info);
 
         VkImageViewCreateInfo image_view_create_info{};
@@ -871,7 +871,7 @@ RHISRVRef VulkanRHIImpl::RHICreateSRV(RHIViewableResource* _resource, const RHIV
         return RHISRVRef(vk_srv);
     };
 
-    auto create_buffer_srv = [=]() {
+    auto create_buffer_srv = [this, _resource, &_view_info]() {
         auto*               vk_buffer = static_cast<VulkanRHIBuffer*>(_resource);
         VulkanRHIBufferSRV* vk_srv    = new VulkanRHIBufferSRV(m_device, _resource, _view_info);
 
@@ -897,7 +897,7 @@ RHISRVRef VulkanRHIImpl::RHICreateSRV(RHIViewableResource* _resource, const RHIV
 
 RHIUAVRef VulkanRHIImpl::RHICreateUAV(RHIViewableResource* _resource, const RHIViewInfo& _view_info) {
 
-    auto create_buffer_uav = [=]() {
+    auto create_buffer_uav = [this, _resource, &_view_info]() {
         auto*               vk_buffer = static_cast<VulkanRHIBuffer*>(_resource);
         VulkanRHIBufferUAV* vk_uav    = MoerNew(VulkanRHIBufferUAV)(m_device, _resource, _view_info);
 
@@ -915,7 +915,7 @@ RHIUAVRef VulkanRHIImpl::RHICreateUAV(RHIViewableResource* _resource, const RHIV
         return RHIUAVRef(vk_uav);
     };
 
-    auto create_texture_uav = [=]() {
+    auto create_texture_uav = [this, _resource, &_view_info]() {
         auto* vk_texture = static_cast<VulkanRHITexture*>(_resource);
 
         VK_CHECK_NULLPTR(vk_texture, "RHICreateUnorderedAccessView: resource to be viewed is nullptr!", return RHIUAVRef{});
