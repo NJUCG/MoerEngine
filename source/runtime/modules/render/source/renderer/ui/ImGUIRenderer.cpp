@@ -22,6 +22,7 @@
 #include "window/WindowContext.h"
 
 #include <atomic>
+#include <cstddef>
 #include <imgui.h>
 #include <imgui_internal.h>
 
@@ -473,7 +474,7 @@ void GUIUploadData(void* _draw_data, RHIGraphicsCommandList* _ui_command_list, R
     if (draw_data->DisplaySize.x <= 0.0f || draw_data->DisplaySize.y <= 0.0f)
         return;
     // RHIFragmentShaderRef frag_rhi_shader = g_rhi->RHICreateFragmentShader(frag_shader);
-    uint32_t total_size_vert = draw_data->TotalVtxCount * sizeof(ImDrawVert);
+    uint32_t total_size_vert = draw_data->TotalVtxCount;
     uint32_t total_size_idx  = draw_data->TotalIdxCount * sizeof(ImDrawIdx);
 
     GuiBackendData* backend_data = GetBackendData();
@@ -486,40 +487,32 @@ void GUIUploadData(void* _draw_data, RHIGraphicsCommandList* _ui_command_list, R
 
         GuiFrameRenderBuffers* render_buffers = &viewport_data->render_buffers[viewport_data->frame_index % num_frames_in_flight];
 
-        if (render_buffers->vertex_buffer == nullptr || render_buffers->vertex_buffer->GetSize() < total_size_vert) {
+        if (render_buffers->vertex_buffer == nullptr || render_buffers->vertex_buffer->GetNumElement() < total_size_vert) {
             //delete the old one and create new
             if (render_buffers->vertex_buffer != nullptr) {}
             // render_buffers->vertex_buffer->DeRef();
-            uint32_t new_size             = 4096 * sizeof(ImDrawVert) + total_size_vert;
-            render_buffers->vertex_buffer = g_rhi->RHICreateBuffer(
-                RHIBufferCreateInfo::Create(
-                    new_size,
-                    sizeof(ImDrawVert),
-                    EBufferUsageFlags::VERTEX_BUFFER | EBufferUsageFlags::TRANSFER_DST));
+            uint32_t new_size             = 4096 + total_size_vert;
+            render_buffers->vertex_buffer = g_rhi->RHICreateBuffer<ImDrawVert>(
+                new_size,
+                EBufferUsageFlags::VERTEX_BUFFER | EBufferUsageFlags::TRANSFER_DST);
 
-            render_buffers->staging_vertex_buffer = g_rhi->RHICreateBuffer(
-                RHIBufferCreateInfo::Create(
-                    new_size,
-                    sizeof(ImDrawVert),
-                    EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE));
+            render_buffers->staging_vertex_buffer = g_rhi->RHICreateBuffer<ImDrawVert>(
+                new_size,
+                EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
 
             render_buffers->staging_vertex_buffer->SetName("staging_vertex_buffer");
         }
-        if (render_buffers->index_buffer == nullptr || render_buffers->index_buffer->GetSize() < total_size_idx) {
+        if (render_buffers->index_buffer == nullptr || render_buffers->index_buffer->GetNumElement() < total_size_idx) {
 
             if (render_buffers->index_buffer != nullptr) {}
-            uint32_t new_size            = 8192 * sizeof(ImDrawIdx) + total_size_idx;
-            render_buffers->index_buffer = g_rhi->RHICreateBuffer(
-                RHIBufferCreateInfo::Create(
-                    new_size,
-                    sizeof(ImDrawIdx),
-                    EBufferUsageFlags::INDEX_BUFFER | EBufferUsageFlags::TRANSFER_DST));
+            uint32_t new_size            = 8192 + total_size_idx;
+            render_buffers->index_buffer = g_rhi->RHICreateBuffer<ImDrawIdx>(
+                new_size,
+                EBufferUsageFlags::INDEX_BUFFER | EBufferUsageFlags::TRANSFER_DST);
 
-            render_buffers->staging_index_buffer = g_rhi->RHICreateBuffer(
-                RHIBufferCreateInfo::Create(
-                    new_size,
-                    sizeof(ImDrawIdx),
-                    EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE));
+            render_buffers->staging_index_buffer = g_rhi->RHICreateBuffer<ImDrawIdx>(
+                new_size,
+                EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
         }
         assert(render_buffers->staging_vertex_buffer->GetUsage() == (EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE));
     });
@@ -594,11 +587,11 @@ void GUIUploadData(void* _draw_data, RHIGraphicsCommandList* _ui_command_list, R
         RHICopyBufferInfo copy_info{};
         copy_info.regions.emplace_back(0,
                                        0,
-                                       staging_vertex_buffer->GetSize());
+                                       staging_vertex_buffer->GetByteSize());
         RHICopyBufferInfo copy_index_info{};
         copy_index_info.regions.emplace_back(0,
                                              0,
-                                             staging_index_buffer->GetSize());
+                                             staging_index_buffer->GetByteSize());
 
         RHIBarrierDependencyInfo dependency_info{};
         auto&                    buffer_barriers = dependency_info.buffer_barriers;
@@ -888,15 +881,13 @@ void CreateFontsTexture() {
         uint32_t upload_pitch = (width * 4 + alignment - 1u) & ~(alignment - 1u);
         uint32_t upload_size  = height * upload_pitch;
 
-        RHIBufferRef staging_buffer = g_rhi->RHICreateBuffer(
-            RHIBufferCreateInfo::Create(upload_size, 0, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE));
+        RHIBufferRef staging_buffer = g_rhi->RHICreateBuffer<std::byte>(
+            upload_size, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
 
         assert(font_texture.Get() && staging_buffer.Get());
 
         void* mapped = g_rhi->RHIMapBuffer(staging_buffer, 0, upload_size);
-        // for (int32_t y = 0; y < height; y++) {
-        //     memcpy((void*)((uint8_t*)mapped + y * upload_pitch), pixels + y * width * 4, width * 4);
-        // }
+
         memcpy(mapped, pixels, upload_size);
 
         g_rhi->RHIUnmapBuffer(staging_buffer);
@@ -984,7 +975,7 @@ void CreateFontsTexture() {
                             .SetMipRange(0, 1)
                             .SetArrayRange(0, 1);
 
-        backend_data->font_view    = g_rhi->RHICreateSRV(font_texture, srv_info);
+        backend_data->font_view    = g_rhi->RHICreateTextureSRV(font_texture);
         backend_data->font_texture = font_texture;
     }
     io.Fonts->SetTexID((ImTextureID)backend_data->font_view);

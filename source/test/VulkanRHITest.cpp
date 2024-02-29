@@ -18,7 +18,7 @@ RHI* g_rhi = nullptr;
 
 #include "rhi/RHICommand.h"
 RHIBufferRef CreateBufferFromData(const RHIBufferCreateInfo& info, uint32_t size, void* data) {
-    RHIBufferRef buffer     = g_rhi->RHICreateBuffer(info);
+    RHIBufferRef buffer     = g_rhi->RHICreateBufferInner(info);
     void*        mapped_ptr = g_rhi->RHIMapBuffer(buffer, 0, size);
     memcpy(mapped_ptr, data, size);
     g_rhi->RHIUnmapBuffer(buffer);
@@ -118,13 +118,13 @@ void Test() {
     command_list->BindVertexBuffers(0, 1, vertex_buffers.data(), 0);
 
     RHIUAVRef test_view =
-        g_rhi->RHICreateUAV(tex,
-                            RHIViewInfo::CreateTextureUAVInfo()
-                                .SetFormat((PF_R8G8B8A8_SRGB)));
+        g_rhi->RHICreateUAVInner(tex,
+                                 RHIViewInfo::CreateTextureUAVInfo()
+                                     .SetFormat((PF_R8G8B8A8_SRGB)));
     auto                   test_shader_vs = ShaderResourceManager::GetInstance().GetShader<TestShader>();
     TestShader::Parameters params;
 
-    auto test_buff = g_rhi->RHICreateBuffer(buffer_info);
+    auto test_buff = g_rhi->RHICreateBufferInner(buffer_info);
 
     params.write_target = test_view;
     RHIBatchedShaderParameters batched_params;

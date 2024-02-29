@@ -73,46 +73,6 @@ RHISamplerRef  VulkanRHIImpl::RHICreateSampler(const RHISamplerCreateInfo& _init
     return RHISamplerRef(vk_sampler);
 }
 
-// RHIVertexShaderRef VulkanRHIImpl::RHICreateVertexShader(const Shader* shader) {
-//     auto* vk_shader            = new VulkanRHIVertexShader(shader);
-//     vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
-
-//     return RHIVertexShaderRef(vk_shader);
-// }
-
-// RHIFragmentShaderRef VulkanRHIImpl::RHICreateFragmentShader(const Shader* shader) {
-//     auto* vk_shader            = new VulkanRHIFragmentShader(shader);
-//     vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
-
-//     return RHIFragmentShaderRef(vk_shader);
-// }
-
-// RHIGeometryShaderRef VulkanRHIImpl::RHICreateGeometryShader(const Shader* shader) {
-//     auto* vk_shader            = new VulkanRHIGeometryShader(shader);
-//     vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
-
-//     return RHIGeometryShaderRef(vk_shader);
-// }
-
-// RHIMeshShaderRef VulkanRHIImpl::RHICreateMeshShader(const Shader* shader) {
-//     auto* vk_shader            = new VulkanRHIMeshShader(shader);
-//     vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
-
-//     return RHIMeshShaderRef(vk_shader);
-// }
-
-// RHIAmplificationShaderRef VulkanRHIImpl::RHICreateAmplificationShader(const Shader* shader) {
-//     auto* vk_shader            = new VulkanRHIAmplificationShader(shader);
-//     vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
-//     return RHIAmplificationShaderRef(vk_shader);
-// }
-
-// RHIComputeShaderRef VulkanRHIImpl::RHICreateComputeShader(const Shader* shader) {
-//     auto* vk_shader            = new VulkanRHIComputeShader(shader);
-//     vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
-//     return RHIComputeShaderRef(vk_shader);
-// }
-
 RHIVertexShaderRef VulkanRHIImpl::RHICreateVertexShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
     auto* vk_shader            = new VulkanRHIVertexShader(shader);
     vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
@@ -162,17 +122,6 @@ RHIFenceRef VulkanRHIImpl::RHICreateFence(const RHIFenceCreateInfo& _info) {
     VulkanRHIFence* vk_fence = new VulkanRHIFence(m_device, _info.usage);
 
     return RHIFenceRef(vk_fence);
-}
-
-RHIShaderBoundStateRef VulkanRHIImpl::RHICreateShaderBoundStage(
-    RHIVertexInputState* _vertex_input,
-    RHIVertexShader*     _vertex_shader,
-    RHIFragmentShader*   _fragment_shader,
-    RHIGeometryShader*   _geometry_shader) {
-
-    auto* input = new RHIShaderBoundStateInput(_vertex_input, _vertex_shader, _fragment_shader, _geometry_shader);
-
-    return RHIShaderBoundStateRef(input);
 }
 
 // RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const RHIGraphicsPipelineStateInfo& _init) {
@@ -754,12 +703,15 @@ RHIComputePipelineStateRef VulkanRHIImpl::RHICreateComputePipelineState(RHIShade
     return RHIComputePipelineStateRef(vk_pso);
 }
 
-RHIBufferRef VulkanRHIImpl::RHICreateBuffer(const RHIBufferCreateInfo& info) {
+RHIBufferRef VulkanRHIImpl::RHICreateBufferInner(const RHIBufferCreateInfo& info) {
     RHIBufferInfo buffer_info{};
-    buffer_info.size   = info.size;
-    buffer_info.stride = info.stride;
-    buffer_info.usage  = info.usage;
+    buffer_info.size  = info.size;
+    buffer_info.usage = info.usage;
 
+    if (info.stride == 0) {
+        LOG_CRITICAL("RHICreateBufferInner: stride is 0! Set stride to sizeof(int)");
+        buffer_info.stride = sizeof(uint32_t);
+    }
     VulkanRHIBuffer* vk_buffer = new VulkanRHIBuffer(buffer_info);
 
     VkBufferCreateInfo buffer_create_info{};
@@ -843,7 +795,7 @@ RHITextureRef VulkanRHIImpl::RHICreateTexture(const RHITextureCreateInfo& info) 
     return RHITextureRef(vk_texture);
 };
 
-RHISRVRef VulkanRHIImpl::RHICreateSRV(RHIViewableResource* _resource, const RHIViewInfo& _view_info) {
+RHISRVRef VulkanRHIImpl::RHICreateSRVInner(RHIViewableResource* _resource, const RHIViewInfo& _view_info) {
 
     auto create_texture_srv = [this, _resource, &_view_info]() {
         VulkanRHITextureSRV* vk_srv = new VulkanRHITextureSRV(m_device, _resource, _view_info);
@@ -854,7 +806,7 @@ RHISRVRef VulkanRHIImpl::RHICreateSRV(RHIViewableResource* _resource, const RHIV
         image_view_create_info.flags = 0;
 
         auto* vk_texture = static_cast<VulkanRHITexture*>(_resource);
-        VK_CHECK_NULLPTR(vk_texture, "RHICreateSRV: resource to be viewed is nullptr!", return RHISRVRef{});
+        VK_CHECK_NULLPTR(vk_texture, "RHICreateSRVInner: resource to be viewed is nullptr!", return RHISRVRef{});
 
         image_view_create_info.image                           = vk_texture->GetHandle();
         image_view_create_info.viewType                        = VulkanEnumTranslator::METoVKImageViewType(_view_info.texture.srv.dimension);
@@ -895,7 +847,7 @@ RHISRVRef VulkanRHIImpl::RHICreateSRV(RHIViewableResource* _resource, const RHIV
     return create_texture_srv();
 }
 
-RHIUAVRef VulkanRHIImpl::RHICreateUAV(RHIViewableResource* _resource, const RHIViewInfo& _view_info) {
+RHIUAVRef VulkanRHIImpl::RHICreateUAVInner(RHIViewableResource* _resource, const RHIViewInfo& _view_info) {
 
     auto create_buffer_uav = [this, _resource, &_view_info]() {
         auto*               vk_buffer = static_cast<VulkanRHIBuffer*>(_resource);

@@ -532,12 +532,12 @@ protected:
 };
 
 struct RHIBufferInfo {
-    uint32_t          size;
+    uint64_t          size;
     uint32_t          stride;
     EBufferUsageFlags usage;
 
     RHIBufferInfo() = default;
-    RHIBufferInfo(uint32_t _size, uint32_t _stride, EBufferUsageFlags _usage)
+    RHIBufferInfo(uint64_t _size, uint32_t _stride, EBufferUsageFlags _usage)
         : size(_size),
           stride(_stride),
           usage(_usage) {}
@@ -556,19 +556,19 @@ struct RHIBufferInfo {
 struct RHIBufferCreateInfo : public RHIBufferInfo {
 
     RHIBufferCreateInfo() = default;
-    RHIBufferCreateInfo(uint32_t _size, uint32_t _stride, EBufferUsageFlags _usage)
+    RHIBufferCreateInfo(uint64_t _size, uint32_t _stride, EBufferUsageFlags _usage)
         : RHIBufferInfo(
               _size,
               _stride,
               _usage) {}
 
-    static RHIBufferCreateInfo Create(uint32_t _size = 0, uint32_t _stride = 0, EBufferUsageFlags _usage = EBufferUsageFlags::NONE) {
+    static RHIBufferCreateInfo Create(uint64_t _size = 0, uint32_t _stride = 1, EBufferUsageFlags _usage = EBufferUsageFlags::NONE) {
         return {
             _size,
             _stride,
             _usage};
     }
-    RHIBufferCreateInfo& SetSize(uint32_t _size) {
+    RHIBufferCreateInfo& SetByteSize(uint64_t _size) {
         size = _size;
         return *this;
     }
@@ -596,7 +596,8 @@ public:
     void                 SetName(const std::string& _name) {
         name = _name;
     }
-    uint32_t          GetSize() const { return info.size; }
+    uint32_t          GetNumElement() const { return info.size / info.stride; }
+    uint64_t          GetByteSize() const { return info.size; }
     uint32_t          GetStride() const { return info.stride; }
     EBufferUsageFlags GetUsage() const { return info.usage; }
 
@@ -817,7 +818,11 @@ public:
         return Moer::Vector3i(0, 0, 0);
     }
 
-    Moer::Vector3i GetMipDimension(uint8_t _mip_index) const {
+    ETextureDimension GetDimension() const {
+        return GetInfo().dimension;
+    }
+
+    Moer::Vector3i GetMipExtent(uint8_t _mip_index) const {
         const RHITextureInfo& info = GetInfo();
         return Moer::Vector3i(std::max(info.extent.x >> _mip_index, 1),
                               std::max(info.extent.y >> _mip_index, 1),

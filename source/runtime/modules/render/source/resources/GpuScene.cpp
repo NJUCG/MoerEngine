@@ -47,10 +47,8 @@ namespace Moer {
         uint32_t vertex_buffer_size = m_vertex_data->size() * sizeof(float);
         uint32_t index_buffer_size  = m_index_data->size() * sizeof(uint32_t);
 
-        RHIBufferCreateInfo vertex_buffer_create_info(vertex_buffer_size, sizeof(float), EBufferUsageFlags::VERTEX_BUFFER);
-        RHIBufferRef        vertex_buffer = g_rhi->RHICreateBuffer(vertex_buffer_create_info);
-        RHIBufferCreateInfo staging_vertex_buffer_create_info(vertex_buffer_size, sizeof(float), EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
-        RHIBufferRef        staging_vertex_buffer = g_rhi->RHICreateBuffer(staging_vertex_buffer_create_info);
+        RHIBufferRef vertex_buffer         = g_rhi->RHICreateBuffer<float>(vertex_buffer_size, EBufferUsageFlags::VERTEX_BUFFER | EBufferUsageFlags::TRANSFER_DST);
+        RHIBufferRef staging_vertex_buffer = g_rhi->RHICreateBuffer<float>(vertex_buffer_size, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
 
         auto* staging_vertex_buffer_mapped_ptr = static_cast<float*>(g_rhi->RHIMapBuffer(staging_vertex_buffer, 0, vertex_buffer_size));
         memcpy(staging_vertex_buffer_mapped_ptr, m_vertex_data->data(), vertex_buffer_size);
@@ -61,10 +59,8 @@ namespace Moer {
         vertex_copy_buffer_info.regions = vertex_buffer_region_array;
         cmd_list->CopyBuffer(vertex_copy_buffer_info, staging_vertex_buffer, vertex_buffer);
 
-        RHIBufferCreateInfo index_buffer_create_info(index_buffer_size, sizeof(uint32_t), EBufferUsageFlags::INDEX_BUFFER);
-        RHIBufferRef        index_buffer = g_rhi->RHICreateBuffer(index_buffer_create_info);
-        RHIBufferCreateInfo staging_index_buffer_create_info(index_buffer_size, sizeof(uint32_t), EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
-        RHIBufferRef        staging_index_buffer = g_rhi->RHICreateBuffer(staging_index_buffer_create_info);
+        RHIBufferRef index_buffer         = g_rhi->RHICreateBuffer<uint32_t>(index_buffer_size, EBufferUsageFlags::INDEX_BUFFER | EBufferUsageFlags::TRANSFER_DST);
+        RHIBufferRef staging_index_buffer = g_rhi->RHICreateBuffer<uint32_t>(index_buffer_size, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
 
         auto* staging_index_buffer_mapped_ptr = static_cast<uint32_t*>(g_rhi->RHIMapBuffer(staging_index_buffer, 0, index_buffer_size));
         memcpy(staging_index_buffer_mapped_ptr, m_index_data->data(), index_buffer_size);
@@ -183,8 +179,8 @@ namespace Moer {
         uint32_t       upload_pitch = (m_width * 4 + alignment - 1u) & ~(alignment - 1u);
         uint32_t       upload_size  = m_height * upload_pitch;
 
-        RHIBufferRef staging_buffer = g_rhi->RHICreateBuffer(
-            RHIBufferCreateInfo::Create(upload_size, 0, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE));
+        RHIBufferRef staging_buffer = g_rhi->RHICreateBuffer<std::byte>(
+            upload_size, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
 
         assert(texture.Get() && staging_buffer.Get());
 
@@ -294,12 +290,12 @@ namespace Moer {
     }
     RHIBufferRef GpuSceneBufferBuilder::CopyFrom(const void* data, uint32_t size) {
         RHIBufferCreateInfo staging_buffer_create_info(size, 0, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
-        RHIBufferRef        staging_buffer            = g_rhi->RHICreateBuffer(staging_buffer_create_info);
+        RHIBufferRef        staging_buffer            = g_rhi->RHICreateBuffer<std::byte>(size, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
         auto*               staging_buffer_mapped_ptr = static_cast<uint8_t*>(g_rhi->RHIMapBuffer(staging_buffer, 0, size));
         memcpy(staging_buffer_mapped_ptr, data, size);
         g_rhi->RHIUnmapBuffer(staging_buffer);
 
-        RHIBufferRef buffer = g_rhi->RHICreateBuffer(RHIBufferCreateInfo(size, 0, EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::STORAGE_BUFFER));
+        RHIBufferRef buffer = g_rhi->RHICreateBuffer<std::byte>(size, EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::STORAGE_BUFFER);
 
         auto* cmd_list   = g_rhi->RHICreateCopyCommandList(g_rhi->RHIGetCurrentCommandAllocator());
         auto* copy_queue = g_rhi->RHICreateCommandQueue(ECommandQueueType::COPY);
@@ -330,10 +326,8 @@ namespace Moer {
         uint32_t vertex_buffer_size = m_vertex_data->size() * sizeof(float);
         uint32_t index_buffer_size  = m_index_data->size() * sizeof(uint32_t);
 
-        RHIBufferCreateInfo vertex_buffer_create_info(vertex_buffer_size, sizeof(float), EBufferUsageFlags::VERTEX_BUFFER);
-        RHIBufferRef        vertex_buffer = g_rhi->RHICreateBuffer(vertex_buffer_create_info);
-        RHIBufferCreateInfo staging_vertex_buffer_create_info(vertex_buffer_size, sizeof(float), EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
-        RHIBufferRef        staging_vertex_buffer = g_rhi->RHICreateBuffer(staging_vertex_buffer_create_info);
+        RHIBufferRef vertex_buffer         = g_rhi->RHICreateBuffer<float>(vertex_buffer_size, EBufferUsageFlags::VERTEX_BUFFER | EBufferUsageFlags::TRANSFER_DST);
+        RHIBufferRef staging_vertex_buffer = g_rhi->RHICreateBuffer<float>(vertex_buffer_size, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
 
         auto* staging_vertex_buffer_mapped_ptr = static_cast<float*>(g_rhi->RHIMapBuffer(staging_vertex_buffer, 0, vertex_buffer_size));
         memcpy(staging_vertex_buffer_mapped_ptr, m_vertex_data->data(), vertex_buffer_size);
@@ -344,10 +338,8 @@ namespace Moer {
         vertex_copy_buffer_info.regions = vertex_buffer_region_array;
         cmd_list->CopyBuffer(vertex_copy_buffer_info, staging_vertex_buffer, vertex_buffer);
 
-        RHIBufferCreateInfo index_buffer_create_info(index_buffer_size, sizeof(uint32_t), EBufferUsageFlags::INDEX_BUFFER);
-        RHIBufferRef        index_buffer = g_rhi->RHICreateBuffer(index_buffer_create_info);
-        RHIBufferCreateInfo staging_index_buffer_create_info(index_buffer_size, sizeof(uint32_t), EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
-        RHIBufferRef        staging_index_buffer = g_rhi->RHICreateBuffer(staging_index_buffer_create_info);
+        RHIBufferRef index_buffer         = g_rhi->RHICreateBuffer<uint32_t>(index_buffer_size, EBufferUsageFlags::INDEX_BUFFER | EBufferUsageFlags::TRANSFER_DST);
+        RHIBufferRef staging_index_buffer = g_rhi->RHICreateBuffer<uint32_t>(index_buffer_size, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
 
         auto* staging_index_buffer_mapped_ptr = static_cast<uint32_t*>(g_rhi->RHIMapBuffer(staging_index_buffer, 0, index_buffer_size));
         memcpy(staging_index_buffer_mapped_ptr, m_index_data->data(), index_buffer_size);

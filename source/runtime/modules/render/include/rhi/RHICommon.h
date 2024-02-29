@@ -980,6 +980,13 @@ namespace Moer {
 
         /* bool reject = dot(center - camera_position, cone_axis) >= cone_cutoff* length(center - camera_position) + radius; */
     };
+    struct DrawInstanceCmd {
+        uint32_t index_count;
+        uint32_t instance_count;
+        uint32_t first_index;
+        uint32_t vertex_offset;
+        uint32_t first_instance;
+    };
 }// namespace Moer
 #pragma endregion
 

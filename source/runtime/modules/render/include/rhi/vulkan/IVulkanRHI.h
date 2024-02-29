@@ -36,25 +36,15 @@ public:
 
     RHIFenceRef RHICreateFence(const RHIFenceCreateInfo&) override { return RHIFenceRef{}; }
 
-    RHIShaderBoundStateRef RHICreateShaderBoundStage(
-        RHIVertexInputState* _vertex_input,
-        RHIVertexShader*     _vertex_shader,
-        RHIFragmentShader*   _fragment_shader,
-        RHIGeometryShader*   _geometry_shader) override { return RHIShaderBoundStateRef{}; }
-
     // RHIGraphicsPipelineStateRef RHICreateGraphicsPipelineState(const RHIGraphicsPipelineStateInfo& _init) override { return RHIGraphicsPipelineStateRef{}; }
     RHIGraphicsPipelineStateRef RHICreateGraphicsPSO(RHIGraphicsPSOCreateInfo&& _init) override { return RHIGraphicsPipelineStateRef{}; }
 
     RHIComputePipelineStateRef RHICreateComputePipelineState(RHIShader* _compute_shader) override { return RHIComputePipelineStateRef{}; }
 
-    RHIBufferRef RHICreateBuffer(const RHIBufferCreateInfo& info) override { return RHIBufferRef{}; }
-    void*        RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size) override { return nullptr; }
-    void         RHIUnmapBuffer(RHIBuffer* _buffer) override {}
+    void* RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size) override { return nullptr; }
+    void  RHIUnmapBuffer(RHIBuffer* _buffer) override {}
 
     RHITextureRef RHICreateTexture(const RHITextureCreateInfo& info) override { return RHITextureRef{}; };
-
-    RHISRVRef RHICreateSRV(RHIViewableResource* _resource, const RHIViewInfo& _view_info) override { return RHISRVRef{}; }
-    RHIUAVRef RHICreateUAV(RHIViewableResource* _resource, const RHIViewInfo& _view_info) override { return RHIUAVRef{}; }
 
     RHICommandQueue* RHICreateCommandQueue(ECommandQueueType type) override { return nullptr; }
     // RHIGraphicsCommandList* CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state = nullptr) override { return nullptr; }
@@ -86,7 +76,10 @@ public:
 #pragma endregion
 
 protected:
-    void RHISetBatchedShaderParametersInner(RHIResource* _resource, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) override{};
+    void         RHISetBatchedShaderParametersInner(RHIResource* _resource, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) override{};
+    RHIBufferRef RHICreateBufferInner(const RHIBufferCreateInfo& info) override { return RHIBufferRef{}; }
+    RHISRVRef    RHICreateSRVInner(RHIViewableResource* _resource, const RHIViewInfo& _view_info) override { return RHISRVRef{}; }
+    RHIUAVRef    RHICreateUAVInner(RHIViewableResource* _resource, const RHIViewInfo& _view_info) override { return RHIUAVRef{}; }
 };
 
 #endif// IVULKAN_RHI_H

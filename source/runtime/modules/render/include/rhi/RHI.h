@@ -66,14 +66,6 @@ public:
 
     virtual RHIFenceRef RHICreateFence(const RHIFenceCreateInfo&) = 0;
 
-    virtual RHIShaderBoundStateRef RHICreateShaderBoundStage(
-        RHIVertexInputState* _vertex_input,
-        RHIVertexShader*     _vertex_shader,
-        RHIFragmentShader*   _fragment_shader,
-        RHIGeometryShader*   _geometry_shader) = 0;
-
-    // virtual RHIGraphicsPipelineStateRef RHICreateGraphicsPipelineState(const RHIGraphicsPipelineStateInfo& _init) = 0;
-
     virtual RHIGraphicsPipelineStateRef RHICreateGraphicsPSO(RHIGraphicsPSOCreateInfo&& _init) = 0;
     /* create pso from cache */
     // virtual RHIGraphicsPipelineStateRef RHICreateGraphicsPipelineState(const RHIGraphicsPipelineStateInfo& _init, RHIPipelineBinaryDataLibrary* _pipeline_library) {
@@ -86,40 +78,61 @@ public:
     virtual RHIComputePipelineStateRef RHICreateComputePipelineState(RHIShader* _compute_shader, RHIPipelineBinaryDataLibrary* _pipeline_library) {
         return RHICreateComputePipelineState(_compute_shader);
     }
-    virtual RHIBufferRef RHICreateBuffer(const RHIBufferCreateInfo& info)                   = 0;
     template<typename TElement>
         requires(std::is_trivially_copyable_v<TElement> && std::is_standard_layout_v<TElement>)
-    RHIBufferRef RHICreateBuffer(uint32_t _size, EBufferUsageFlags _usage) {
-        auto create_info = RHIBufferCreateInfo::Create(_size, sizeof(TElement), _usage);
-        return RHICreateBuffer(create_info);
+    RHIBufferRef RHICreateBuffer(uint64_t _byte_size, EBufferUsageFlags _usage) {
+        auto create_info = RHIBufferCreateInfo::Create(_byte_size, sizeof(TElement), _usage);
+        return RHICreateBufferInner(create_info);
     }
-    virtual void*        RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size) = 0;
-    virtual void         RHIUnmapBuffer(RHIBuffer* _buffer)                                 = 0;
+    virtual void* RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size) = 0;
+    virtual void  RHIUnmapBuffer(RHIBuffer* _buffer)                                 = 0;
 
     virtual RHITextureRef RHICreateTexture(const RHITextureCreateInfo& info) = 0;
-
-    virtual RHISRVRef RHICreateSRV(RHIViewableResource* _resource, const RHIViewInfo& _view_info) = 0;
-    virtual RHIUAVRef RHICreateUAV(RHIViewableResource* _resource, const RHIViewInfo& _view_info) = 0;
 
     template<typename TElement>
         requires(std::is_trivially_copyable_v<TElement> && std::is_standard_layout_v<TElement>)
     RHISRVRef RHICreateBufferSRV(
-        RHIViewableResource* _resource,
-        uint32_t             _size,
-        uint32_t             _offset = 0) {
-        auto create_info = RHIViewInfo::CreateBufferSRVInfo().SetByteOffset(_offset).SetStride(sizeof(TElement)).SetNumElements(_size);
-        return RHICreateSRV(_resource, create_info);
+        RHIBuffer* _resource,
+        uint64_t   _byte_size   = 0,
+        uint64_t   _byte_offset = 0) {
+        return RHICreateBufferSRV(_resource, sizeof(TElement), _byte_size, _byte_offset);
     };
+
+    RHISRVRef RHICreateBufferSRV(
+        RHIBuffer* _resource,
+        uint32_t   stride       = 0,
+        uint64_t   _byte_size   = 0,
+        uint64_t   _byte_offset = 0);
 
     template<typename TElement>
         requires(std::is_trivially_copyable_v<TElement> && std::is_standard_layout_v<TElement>)
     RHIUAVRef RHICreateBufferUAV(
-        RHIViewableResource* _resource,
-        uint32_t             _size,
-        uint32_t             _offset = 0) {
-        auto create_info = RHIViewInfo::CreateBufferUAVInfo().SetByteOffset(_offset).SetStride(sizeof(TElement)).SetNumElements(_size);
-        return RHICreateUAV(_resource, create_info);
+        RHIBuffer* _resource,
+        uint64_t   _byte_size   = 0,
+        uint64_t   _byte_offset = 0) {
+        return RHICreateBufferUAV(_resource, sizeof(TElement), _byte_size, _byte_offset);
     };
+
+    RHIUAVRef RHICreateBufferUAV(
+        RHIBuffer* _resource,
+        uint32_t   stride       = 0,
+        uint64_t   _byte_size   = 0,
+        uint64_t   _byte_offset = 0);
+
+    RHISRVRef RHICreateTextureSRV(
+        RHITexture*  _resource,
+        EPixelFormat _format      = PF_UNDEFINED,
+        uint32_t     _mip_level   = 0,
+        uint32_t     _mip_levels  = 1,
+        uint32_t     _array_index = 0,
+        uint32_t     _array_size  = 1);
+
+    RHIUAVRef RHICreateTextureUAV(
+        RHITexture*  _resource,
+        EPixelFormat _format      = PF_UNDEFINED,
+        uint32_t     _mip_level   = 0,
+        uint32_t     _array_index = 0,
+        uint32_t     _array_size  = 1);
 
     virtual RHICommandQueue* RHICreateCommandQueue(ECommandQueueType type) = 0;
     // DX12 only: _initial_state
@@ -134,14 +147,6 @@ public:
 
     virtual RHICommandAllocator* RHIGetCurrentCommandAllocator() = 0;
 #pragma endregion
-
-    // #pragma region GUI
-
-    // virtual bool GUIInit(uint32_t _num_frames_in_flight);
-    // virtual void GUIShutDown();
-    // virtual void GUINewFrame();
-    // virtual void GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list);
-    // #pragma endregion
 
 #pragma region Viewport
 
@@ -163,7 +168,10 @@ public:
     void RHIFlushPendingDeletes();
 #pragma endregion
 protected:
-    virtual void RHISetBatchedShaderParametersInner(RHIResource* _resource, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) = 0;
+    virtual void                                                                  RHISetBatchedShaderParametersInner(RHIResource* _resource, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) = 0;
+    virtual RHIBufferRef                       RHICreateBufferInner(const RHIBufferCreateInfo& info)                                                                                      = 0;
+    virtual RHISRVRef RHICreateSRVInner(RHIViewableResource* _resource, const RHIViewInfo& _view_info)                                                           = 0;
+    virtual RHIUAVRef RHICreateUAVInner(RHIViewableResource* _resource, const RHIViewInfo& _view_info)                                                           = 0;
 
 protected:
     ERHIType rhi_type;

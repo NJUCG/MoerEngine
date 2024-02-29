@@ -69,13 +69,13 @@ namespace Moer {
 
         RHIFenceRef present_fence;
 
-        RHITextureRef            present_texture;
-        RHISRVRef                present_texture_srv;
+        RHITextureRef present_texture;
+        RHISRVRef     present_texture_srv;
 
-        Moer::Array<RHITextureRef>             swapchain_textures;
-        Moer::Array<RHIUAVRef> swapchain_uavs;
-        uint64_t                               frame_index     = 0;
-        uint64_t                               presented_index = 0;
+        Moer::Array<RHITextureRef> swapchain_textures;
+        Moer::Array<RHIUAVRef>     swapchain_uavs;
+        uint64_t                   frame_index     = 0;
+        uint64_t                   presented_index = 0;
 
         RHICommandQueue* copy_queue;
 
@@ -168,24 +168,15 @@ namespace Moer {
             ETextureUsageFlags::COLOR_ATTACHMENT |
             ETextureUsageFlags::SAMPLED |
             ETextureUsageFlags::TRANSFER_DST));
-        present_texture_srv = g_rhi->RHICreateSRV(present_texture,
-                                                  RHIViewInfo::CreateTextureSRVInfo()
-                                                      .SetArrayRange(0, 1)
-                                                      .SetMipRange(0, 1)
-                                                      .SetFormat(info.format)
-                                                      .SetDimension(ETextureDimension::TEX_2D));
+        present_texture_srv = g_rhi->RHICreateTextureSRV(present_texture, info.format);
 
         swapchain_textures.resize(info.back_buffer_count);
         swapchain_uavs.resize(info.back_buffer_count);
         for (int i = 0; i < info.back_buffer_count; ++i) {
             swapchain_textures[i] = g_rhi->RHICreateTexture(upload_texture_create_info);
             swapchain_uavs[i] =
-                g_rhi->RHICreateUAV(swapchain_textures[i],
-                                    RHIViewInfo::CreateTextureUAVInfo()
-                                        .SetArrayRange(0, 1)
-                                        .SetMipLevel(0)
-                                        .SetFormat(info.format)
-                                        .SetDimension(ETextureDimension::TEX_2D));
+                g_rhi->RHICreateTextureUAV(swapchain_textures[i],
+                                           info.format);
         }
         RHIFenceRef fence = g_rhi->RHICreateFence({.usage = EFenceUsageFlags::BINARY});
 

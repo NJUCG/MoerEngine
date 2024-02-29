@@ -107,23 +107,24 @@ namespace Moer {
             return m_sampler_cache[hash];
         }
         RHISRV* GetTextureView(RHITexture* texture) {
-            auto srv_info = RHIViewInfo::CreateTextureSRVInfo()
-                                .SetFormat(PF_R8G8B8A8_UNORM)
+            auto default_format = PF_R8G8B8A8_UNORM;
+            auto srv_info       = RHIViewInfo::CreateTextureSRVInfo()
+                                .SetFormat(default_format)
                                 .SetDimension(ETextureDimension::TEX_2D)
                                 .SetMipRange(0, 1)
                                 .SetArrayRange(0, 1);
 
             size_t hash = RHITextureViewHash(texture, srv_info);
             if (!m_texture_view_cache.contains(hash)) {
-                RHISRVRef texture_view = g_rhi->RHICreateSRV(texture, srv_info);
-                m_texture_view_cache[hash]            = texture_view;
+                RHISRVRef texture_view     = g_rhi->RHICreateTextureSRV(texture, default_format);
+                m_texture_view_cache[hash] = texture_view;
             }
             return m_texture_view_cache[hash];
         }
 
     protected:
-        UnorderedMap<size_t, RHISamplerRef>            m_sampler_cache;
-        UnorderedMap<size_t, RHISRVRef> m_texture_view_cache;
+        UnorderedMap<size_t, RHISamplerRef> m_sampler_cache;
+        UnorderedMap<size_t, RHISRVRef>     m_texture_view_cache;
     };
 
     SamplerCache& SamplerCache::Get() {

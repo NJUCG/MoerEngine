@@ -189,20 +189,15 @@ namespace Moer {
         //why not implement a counter buffer?
         {
             RHIBufferCreateInfo buffer_create_info;
-            draw_indirect_buffer = g_rhi->RHICreateBuffer(RHIBufferCreateInfo::Create(
-                1024 * 1024 * 64,
-                0,
-                EBufferUsageFlags::INDIRECT_BUFFER | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::STORAGE_BUFFER));
+            draw_indirect_buffer = g_rhi->RHICreateBuffer<DrawInstanceCmd>(
+                1024 * 1024 * 16,
+                EBufferUsageFlags::INDIRECT_BUFFER | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::STORAGE_BUFFER);
 
-            draw_count_buffer = g_rhi->RHICreateBuffer(RHIBufferCreateInfo::Create(
-                sizeof(uint32_t),
-                0,
-                EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::STORAGE_BUFFER));
+            draw_count_buffer = g_rhi->RHICreateBuffer<uint32_t>(32,
+                                                                 EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::STORAGE_BUFFER);
 
-            zero_buffer = g_rhi->RHICreateBuffer(RHIBufferCreateInfo::Create(
-                sizeof(uint32_t),
-                0,
-                EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::TRANSFER_SRC));
+            zero_buffer = g_rhi->RHICreateBuffer<uint32_t>(32,
+                                                           EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::TRANSFER_SRC);
 
             void* mapped = g_rhi->RHIMapBuffer(zero_buffer, 0, sizeof(uint32_t));
 
@@ -211,27 +206,18 @@ namespace Moer {
             g_rhi->RHIUnmapBuffer(zero_buffer);
 
             draw_indirect_view =
-                g_rhi->RHICreateUAV(draw_indirect_buffer, RHIViewInfo::CreateBufferUAVInfo());
+                g_rhi->RHICreateBufferUAV(draw_indirect_buffer);
 
             draw_count_view =
-                g_rhi->RHICreateUAV(draw_count_buffer, RHIViewInfo::CreateBufferUAVInfo());
+                g_rhi->RHICreateBufferUAV(draw_count_buffer);
 
             auto meshlet_descs = g_scene->GetBuffer("meshlet_descs");
 
-            meshlet_descs_buffer_view = g_rhi->RHICreateSRV(g_scene->GetBuffer("meshlet_descs"),
-                                                            RHIViewInfo::CreateBufferSRVInfo()
-                                                                .SetByteOffset(0)
-                                                                .SetNumElements(meshlet_descs->GetSize() / sizeof(MeshletDesc)));
+            meshlet_descs_buffer_view = g_rhi->RHICreateBufferSRV(g_scene->GetBuffer("meshlet_descs"));
 
-            meshlet_bounds_buffer_view = g_rhi->RHICreateSRV(g_scene->GetBuffer("meshlet_bounds"),
-                                                             RHIViewInfo::CreateBufferSRVInfo()
-                                                                 .SetByteOffset(0)
-                                                                 .SetStride(sizeof(MeshletBound)));
+            meshlet_bounds_buffer_view = g_rhi->RHICreateBufferSRV(g_scene->GetBuffer("meshlet_bounds"));
 
-            instance_buffer_view = g_rhi->RHICreateSRV(g_scene->GetBuffer("instance_buffer"),
-                                                       RHIViewInfo::CreateBufferSRVInfo()
-                                                           .SetByteOffset(0)
-                                                           .SetStride(sizeof(InstanceData)));
+            instance_buffer_view = g_rhi->RHICreateBufferSRV(g_scene->GetBuffer("instance_buffer"));
         }
     }
 

@@ -1,19 +1,10 @@
 #include "rhi/RHI.h"
+#include "PixelFormat.h"
 #include "log/LogSystem.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "Core.h"
 
-// #include "PixelFormat.h"
-// #include "math/Base.h"
-// #include "rhi/RHICommon.h"
-// #include "rhi/RHIResource.h"
-// #include "shader/Shader.h"
-// #include "shader/ShaderCompiler.h"
-// #include "shader/ShaderResourceManager.h"
-// #include "taskgraph/GraphTask.h"
-// #include "taskgraph/TaskGraph.h"
-// #include "taskgraph/ThreadManager.h"
 RHI* g_rhi = nullptr;
 
 extern LockFreeQueueBase<RHIResource, 64> pending_deletings;
@@ -46,136 +37,63 @@ void RHI::RHIFlushPendingDeletes() {
         LOG_INFO("{} resources to delete", num_deletes);
     }
 }
-// #include "rhi/RHICommandList.h"
-// #include "rhi/RHICommandQueue.h"
-// #include "shader/ShaderParameterMacros.h"
+RHISRVRef RHI::RHICreateBufferSRV(
+    RHIBuffer* _resource,
+    uint32_t   stride,
+    uint64_t   _byte_size,
+    uint64_t   _byte_offset) {
+#ifdef _DEBUG
+    assert(_resource != nullptr);
+#endif
+    auto true_stride = stride == 0 ? _resource->GetStride() : stride;
+    auto true_size   = _byte_size == 0 ? _resource->GetByteSize() : _byte_size;
+    auto create_info = RHIViewInfo::CreateBufferSRVInfo()
+                           .SetByteOffset(_byte_offset)
+                           .SetStride(true_stride)
+                           .SetNumElements((true_size - _byte_offset) / true_stride);
+    return RHICreateSRVInner(_resource, create_info);
+};
+RHIUAVRef RHI::RHICreateBufferUAV(
+    RHIBuffer* _resource,
+    uint32_t   stride,
+    uint64_t   _byte_size,
+    uint64_t   _byte_offset) {
 
-// RHIBufferRef CreateBufferFromData(const RHIBufferCreateInfo& info, uint32_t size, void* data) {
-//     RHIBufferRef buffer     = g_rhi->RHICreateBuffer(info);
-//     void*        mapped_ptr = g_rhi->RHIMapBuffer(buffer, 0, size);
-//     memcpy(mapped_ptr, data, size);
-//     g_rhi->RHIUnmapBuffer(buffer);
-//     return buffer;
-// }
-// BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(UniformStructure)
+    auto true_stride = stride == 0 ? _resource->GetStride() : stride;
+    auto true_size   = _byte_size == 0 ? _resource->GetByteSize() : _byte_size;
 
-// END_SHADER_CONSTANT_STRUCT_DEFINITION(UniformStructure)
-// class TestShader : public Shader {
-//     DEFINE_SHADER_TYPE(TestShader, Global, RENDER_API)
-// public:
-//     BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
+    auto create_info = RHIViewInfo::CreateBufferUAVInfo()
+                           .SetByteOffset(_byte_offset)
+                           .SetStride(true_stride)
+                           .SetNumElements((true_size - _byte_offset) / true_stride);
+    return RHICreateUAVInner(_resource, create_info);
+};
 
-//     DEFINE_SHADER_PARAM_UAV(RWTexture2D, write_target)
-//     DEFINE_SHADER_PARAM_SRV(StructuredBuffer, ubo)
-//     DEFINE_SHADER_PARAM_CBV(StructuredBuffer, cbv)
+RHISRVRef RHI::RHICreateTextureSRV(RHITexture*  _texture,
+                                   EPixelFormat _format,
+                                   uint32_t     _mip_level,
+                                   uint32_t     _mip_levels,
+                                   uint32_t     _array_index,
+                                   uint32_t     _array_size) {
 
-//     END_ROOT_PARAMETER_DEFINITION(Parameters)
-// };
+    auto true_format = _format == PF_UNDEFINED ? _texture->GetFormat() : _format;
+    return RHICreateSRVInner(_texture,
+                             RHIViewInfo::CreateTextureSRVInfo()
+                                 .SetArrayRange(_array_index, _array_size)
+                                 .SetMipRange(_mip_level, _mip_levels)
+                                 .SetDimension(_texture->GetDimension())
+                                 .SetFormat(true_format));
+}
 
-// IMPLEMENT_SHADER_TYPE(TestShader, "TestVert.vert", "main", EShaderType::ST_VERTEX)
-
-// void RHI::Test() {
-
-//     TestShader::Parameters param;
-// }
-
-// void Test() {
-
-//     RHIInitInfo init_info{3};
-//     g_rhi->Initialize(init_info);
-
-//     g_rhi->PostInit();
-//     ShaderCompiler::ShaderCompileTest();
-
-//     RHIGraphicsPipelineStateInitializer init;
-//     init.multi_view_count            = 1;
-//     init.color_attachment_count      = 1;
-//     init.color_attachment_formats[0] = EPixelFormat::PF_R8G8B8A8_SRGB;
-//     init.color_attachment_flags[0]   = ETextureUsageFlags::COLOR_ATTACHMENT;
-//     init.primitive_topology          = EPrimitiveTopology::TRIANGLE_LIST;
-
-//     RHIShaderBoundStateInput& shader_state = init.shader_stage;
-
-//     VertexInputStateInitializerList vertex_init_list;
-//     for (int i = 0; i < 1; ++i) {
-//         vertex_init_list[i].format          = EPixelFormat::PF_R32G32B32_SFLOAT;
-//         vertex_init_list[i].offset          = 0;
-//         vertex_init_list[i].stride          = sizeof(Moer::Vector3f);
-//         vertex_init_list[i].input_rate      = EVertexInputRate::VIR_VERTEX;
-//         vertex_init_list[i].attribute_index = 0;
-//         vertex_init_list[i].binding_index   = 0;
-//     }
-
-//     const uint16_t      indices[] = {1, 2, 3};
-//     RHIBufferCreateInfo buffer_info;
-//     buffer_info.SetUsage(EBufferUsageFlags::INDEX_BUFFER)
-//         .SetStride(sizeof(uint16_t))
-//         .SetSize(sizeof(indices));
-
-//     RHIBufferRef index_buffer = CreateBufferFromData(buffer_info, sizeof(indices), (void*)indices);
-
-//     RHIBufferCreateInfo v_info;
-//     v_info.SetSize(16).SetStride(4).SetUsage(EBufferUsageFlags::VERTEX_BUFFER);
-
-//     const float  vertex_data[] = {-1, -1, 0, 1, -1, 0, -1, 1, 0, 1, 1, 1};
-//     RHIBufferRef vertex_buffer = CreateBufferFromData(v_info, sizeof(vertex_data), (void*)vertex_data);
-
-//     Moer::Array<RHIBufferRef> vertex_buffers = {vertex_buffer};
-
-//     shader_state.p_vertex_input_state = g_rhi->RHICreateVertexInputState(vertex_init_list);
-
-//     const Moer::Vector2i attachment_size(4, 4);
-//     RHITextureCreateInfo tex_info;
-//     tex_info.SetDimension(ETextureDimension::TEX_2D)
-//         .SetFormat(PF_R8G8B8A8_SRGB)
-//         .SetInitialLayout(ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT)
-//         .SetExtent(attachment_size)
-//         .SetClearAttachment(RHIClearAttachment())
-//         .SetDepth(1)
-//         .SetArraySize(1)
-//         .SetNumMips(1)
-//         .SetNumSamples(1)
-//         .SetUsageFlags(ETextureUsageFlags::COLOR_ATTACHMENT);
-
-//     //out_put texture
-//     RHITextureRef tex = g_rhi->RHICreateTexture(tex_info);
-
-//     RHIGraphicsPipelineStateRef pso = g_rhi->RHICreateGraphicsPipelineState(init);
-
-//     RHIGraphicsCommandList* command_list = g_rhi->CreateGraphicsCommandList(pso);
-
-//     RHIRenderPassInfo pass_info;
-//     pass_info.GeneratePipelineAttachmentInfo();
-//     command_list->BeginRenderPass(pass_info, "triangle pass");
-//     command_list->BindVertexBuffers(0, 1, vertex_buffers.data(), 0);
-
-//     command_list->DrawIndexedInstanced(1, 1, 0, 0, 0);
-
-//     command_list->EndRenderPass();
-
-//     RHICommandQueue* graphics_queue = g_rhi->CreateCommandQueue(ECommandQueueType::GRAPHICS);
-//     graphics_queue->SubmitCommands(1, command_list);
-
-//     //global buffer
-//     // start offset
-
-//     RHIUnorderedAccessViewRef test_view =
-//         g_rhi->RHICreateUnorderedAccessView(tex,
-//                                             RHIViewInfo::CreateTextureUAVInfo()
-//                                                 .SetFormat((PF_R8G8B8A8_SRGB)));
-//     TestShader*            test_shader_vs = (TestShader*)ShaderResourceManager::GetShader<TestShader>();
-//     TestShader::Parameters params;
-
-//     auto test_buff = g_rhi->RHICreateBuffer(buffer_info);
-
-//     params.write_target = test_view;
-//     RHIBatchedShaderParameters batched_params;
-//     batched_params.SetParameters(test_shader_vs, params);
-//     //VkSetDescriptorWrite()
-
-//     //rootSignature <=> pipelineLayout -> descriptorLayout descriptorLayoutBinding
-// }
-
-// // binding point 0
-
-// //
+RHIUAVRef RHI::RHICreateTextureUAV(RHITexture*  _texture,
+                                   EPixelFormat _format,
+                                   uint32_t     _mip_level,
+                                   uint32_t     _array_index,
+                                   uint32_t     _array_size) {
+    return RHICreateUAVInner(_texture,
+                             RHIViewInfo::CreateTextureUAVInfo()
+                                 .SetArrayRange(_array_index, _array_size)
+                                 .SetMipLevel(_mip_level)
+                                 .SetDimension(_texture->GetDimension())
+                                 .SetFormat(_format));
+}
