@@ -352,21 +352,25 @@ namespace Moer::Resource::Gltf {
 
         auto                      instance_id = 0;
         Moer::Array<InstanceData> instance_data;
+        Moer::Array<uint32_t>     instance_ids;
         // instance_data.reserve(entities.size());
-        m_scene->ForEach([this, &instance_data, &instance_id](Entity entity) {
+        m_scene->ForEach([this, &instance_data, &instance_ids, &instance_id](Entity entity) {
             auto material_id   = RenderableManager::Get().GetMaterialInstance(entity);
             auto transform     = TransformManager::Get().Get(entity);
             auto model_2_world = transform.GetMatrix4x4();
             //todo material data not correct
             instance_data.emplace_back(model_2_world, Inverse(model_2_world), instance_id, 0);
+            instance_ids.push_back(instance_id);
             instance_id++;
         });
 
-        EnqueueRenderTask([instance_data = std::move(instance_data), gpu_scene]() {
+        EnqueueRenderTask([instance_data = std::move(instance_data), instance_id(std::move(instance_ids)), gpu_scene]() {
             GpuSceneBufferBuilder gpu_scene_buffer_builder;
 
             auto instance_buffer = gpu_scene_buffer_builder.CopyFrom(instance_data.data(), instance_data.size() * sizeof(InstanceData));
+            auto instance_id_buffer = gpu_scene_buffer_builder.CopyFrom(instance_id.data(), instance_id.size() * sizeof(uint32_t));
             gpu_scene->SetBuffer("instance_buffer", instance_buffer);
+            gpu_scene->SetBuffer("instance_id_buffer", instance_id_buffer);
         });
         RenderThreadFence fence;
         fence.Wait();

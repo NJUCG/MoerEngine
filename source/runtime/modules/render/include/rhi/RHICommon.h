@@ -520,6 +520,8 @@ enum ERHIPipelineStageFlags : uint32_t {
     PS_TASK_SHADER                      = 0x00080000,
     PS_MESH_SHADER                      = 0x00100000,
 };
+
+ENUM_BIT_OP_IMPL(ERHIPipelineStageFlags, FLAG)
 #pragma endregion
 
 #pragma region pixel format

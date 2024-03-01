@@ -707,10 +707,10 @@ RHIBufferRef VulkanRHIImpl::RHICreateBufferInner(const RHIBufferCreateInfo& info
     RHIBufferInfo buffer_info{};
     buffer_info.size  = info.size;
     buffer_info.usage = info.usage;
-
+    buffer_info.stride = info.stride;
     if (info.stride == 0) {
-        LOG_CRITICAL("RHICreateBufferInner: stride is 0! Set stride to sizeof(int)");
-        buffer_info.stride = sizeof(uint32_t);
+        LOG_CRITICAL("RHICreateBufferInner: stride is 0! Set stride to sizeof(std::byte)");
+        buffer_info.stride = sizeof(std::byte);
     }
     VulkanRHIBuffer* vk_buffer = new VulkanRHIBuffer(buffer_info);
 

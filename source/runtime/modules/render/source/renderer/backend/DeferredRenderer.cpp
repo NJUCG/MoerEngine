@@ -51,8 +51,8 @@ public:
     END_ROOT_PARAMETER_DEFINITION(Parameters)
 };
 
-IMPLEMENT_SHADER_TYPE(TestDeferredTriangleShaderVert, "test/TriangleVert.hlsl", "main", ST_VERTEX);
-IMPLEMENT_SHADER_TYPE(TestDeferredTriangleShaderFrag, "test/TriangleFrag.hlsl", "main", ST_FRAGMENT);
+IMPLEMENT_SHADER_TYPE(TestDeferredTriangleShaderVert, "test/TriangleDeferredVert.hlsl", "main", ST_VERTEX);
+IMPLEMENT_SHADER_TYPE(TestDeferredTriangleShaderFrag, "test/TriangleDeferredFrag.hlsl", "main", ST_FRAGMENT);
 
 class MeshletCullingShader : public Shader {
     DEFINE_SHADER_TYPE(MeshletCullingShader, Global, RENDER_API, ...)
@@ -359,35 +359,37 @@ namespace Moer {
                     .SetDstAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
 
                 cmd_list->SetPipelineBarrier(barrier_dependency_info);
-                // cmd_list->BeginRenderPass(pass_info, "Test Triangle");
+                cmd_list->BeginRenderPass(pass_info, "Draw Meshlets");
 
-                // const VirtualViewportInfo& viewport_info = virtual_viewport->GetInfo();
-                // ViewPort                   viewport{0, 0, float(viewport_info.extent.x), float(viewport_info.extent.y), 0, 1};
-                // cmd_list->SetViewPort(viewport);
-                // cmd_list->SetScissor({0, 0, uint32_t(viewport_info.extent.x), uint32_t(viewport_info.extent.y)});
+                const VirtualViewportInfo& viewport_info = virtual_viewport->GetInfo();
+                ViewPort                   viewport{0, 0, float(viewport_info.extent.x), float(viewport_info.extent.y), 0, 1};
+                cmd_list->SetViewPort(viewport);
+                cmd_list->SetScissor({0, 0, uint32_t(viewport_info.extent.x), uint32_t(viewport_info.extent.y)});
 
-                // cmd_list->SetPipelineState(pipeline_state);
+                cmd_list->SetPipelineState(pipeline_state);
 
-                // auto* const scene = g_scene;
-                // if (scene) {
-                //     auto camera_entity = scene->GetCameras()[0];
-                //     auto camera        = CameraManager::Get().Get(camera_entity);
-                //     camera->Tick();
-                //     const auto camera_view = camera->GetViewMatrix();
-                //     const auto camera_proj = camera->GetProjectionMatrix();
+                auto* const scene = g_scene;
+                if (scene) {
+                    auto camera_entity = scene->GetCameras()[0];
+                    auto camera        = CameraManager::Get().Get(camera_entity);
+                    camera->Tick();
+                    const auto camera_view = camera->GetViewMatrix();
+                    const auto camera_proj = camera->GetProjectionMatrix();
 
-                //     // Shader* vert_shader = ShaderResourceManager::GetShader<TestDeferredTriangleShaderVert>();
-                //     cmd_list->BindIndexBuffer(scene->GetBuffer("index_buffer"), 0, IET_UINT32);
-                //     uint32_t           offset             = 0;
-                //     const RHIBufferRef prim_vertex_buffer = scene->GetBuffer("vertex_buffer");
-                //     cmd_list->BindVertexBuffers(0, 1, &prim_vertex_buffer, &offset);
+                    // Shader* vert_shader = ShaderResourceManager::GetShader<TestDeferredTriangleShaderVert>();
+                    cmd_list->BindIndexBuffer(scene->GetBuffer("index_buffer"), 0, IET_UINT32);
+                    uint32_t           offset[]           = {0, 0};
+                    const RHIBufferRef prim_vertex_buffer = scene->GetBuffer("vertex_buffer");
+                    const RHIBufferRef instance_id_buffer = scene->GetBuffer("instance_id_buffer");
+                    RHIBufferRef       vbuffers[]         = {prim_vertex_buffer, instance_id_buffer};
+                    cmd_list->BindVertexBuffers(0, 1, vbuffers, offset);
 
-                //     cmd_list->DrawIndexedIndirect(draw_indirect_buffer, 0, draw_count_buffer, 0, 11451, sizeof(uint32_t) * 4);
-                // } else {
-                //     assert(false);
-                // }
+                    cmd_list->DrawIndexedIndirect(draw_indirect_buffer, 0, draw_count_buffer, 0, 11451, sizeof(uint32_t) * 4);
+                } else {
+                    assert(false);
+                }
 
-                // cmd_list->EndRenderPass();
+                cmd_list->EndRenderPass();
 
                 texture_barrier_info
                     .SetDstTextureLayout(TEXTURE_LAYOUT_TRANSFER_SRC)
