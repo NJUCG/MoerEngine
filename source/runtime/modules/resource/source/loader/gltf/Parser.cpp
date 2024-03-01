@@ -1,5 +1,6 @@
 #include "loader/gltf/Parser.h"
 
+#include "../io/ImageIO.h"
 #include "assimp/Importer.hpp"
 #include "assimp/postprocess.h"
 #include "assimp/scene.h"
@@ -149,9 +150,12 @@ namespace Moer::Resource::Gltf {
             //todo
         } else {
             std::filesystem::path texture_file_path = m_file_parent_path / texture_path.C_Str();
-            data                                    = stbi_load(texture_file_path.string().c_str(), &width, &height, &channel, 4);
-            builder->CallBack(stbi_image_free);
-            //todo
+            auto                  image_desc        = ImageIO::ReadFromFile(texture_file_path);
+            width                                   = image_desc.width;
+            height                                  = image_desc.height;
+            channel                                 = image_desc.channal;
+            data                                    = image_desc.data;
+            builder->CallBack(image_desc.data_callback);
         }
         builder->Width(width).Height(height).Format(EPixelFormat::PF_R8G8B8A8_UNORM).Data(data);
         EnqueueRenderTask([this, builder, mat, param_name, texture_path]() {
