@@ -33,9 +33,12 @@ void RHI::RHIFlushPendingDeletes() {
         // }
         MoerDelete(resources_to_delete[i]);
     }
+#if _DEBUG
     if (num_deletes > 0) {
+
         LOG_INFO("{} resources to delete", num_deletes);
     }
+#endif
 }
 RHISRVRef RHI::RHICreateBufferSRV(
     RHIBuffer* _resource,
