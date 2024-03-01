@@ -875,12 +875,17 @@ VkDescriptorType VulkanEnumTranslator::METoVKDescriptorType(EShaderParameterType
                type == EShaderCodeResourceBindingType::TEXTURE_2D_ARRAY ||
                type == EShaderCodeResourceBindingType::TEXTURE_CUBE ||
                type == EShaderCodeResourceBindingType::TEXTURE_CUBE_ARRAY ||
-               type == EShaderCodeResourceBindingType::TEXTURE_3D;
+               type == EShaderCodeResourceBindingType::TEXTURE_3D ||
+               type == EShaderCodeResourceBindingType::RW_TEXTURE_2D ||
+               type == EShaderCodeResourceBindingType::RW_TEXTURE_2D_ARRAY ||
+               type == EShaderCodeResourceBindingType::RW_TEXTURE_3D;
     };
     auto is_buffer = [](EShaderCodeResourceBindingType type) {
         return type == EShaderCodeResourceBindingType::CONSTANT_BUFFER ||
                type == EShaderCodeResourceBindingType::STRUCTURED_BUFFER ||
-               type == EShaderCodeResourceBindingType::BYTE_ADDRESS_BUFFER;
+               type == EShaderCodeResourceBindingType::BYTE_ADDRESS_BUFFER ||
+               type == EShaderCodeResourceBindingType::RW_BYTE_ADDRESSED_BUFFER ||
+               type == EShaderCodeResourceBindingType::RW_STRUCTURED_BUFFER;
     };
     switch (_type) {
         case EShaderParameterType::CBV:

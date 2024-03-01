@@ -67,49 +67,49 @@ void VulkanRHIImpl::ShutDown() {
 
 #pragma region resources creation
 RHISamplerRef  VulkanRHIImpl::RHICreateSampler(const RHISamplerCreateInfo& _initializer) {
-    VulkanRHISampler* vk_sampler = new VulkanRHISampler();
+    VulkanRHISampler* vk_sampler = MoerNew(VulkanRHISampler)();
     vk_sampler->GenerateSamplerFromInitializer(m_device, _initializer);
 
     return RHISamplerRef(vk_sampler);
 }
 
 RHIVertexShaderRef VulkanRHIImpl::RHICreateVertexShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
-    auto* vk_shader            = new VulkanRHIVertexShader(shader);
+    auto* vk_shader            = MoerNew(VulkanRHIVertexShader)(shader);
     vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
 
     return RHIVertexShaderRef(vk_shader);
 }
 
 RHIFragmentShaderRef VulkanRHIImpl::RHICreateFragmentShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
-    auto* vk_shader            = new VulkanRHIFragmentShader(shader);
+    auto* vk_shader            = MoerNew(VulkanRHIFragmentShader)(shader);
     vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
 
     return RHIFragmentShaderRef(vk_shader);
 }
 
 RHIGeometryShaderRef VulkanRHIImpl::RHICreateGeometryShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
-    auto* vk_shader            = new VulkanRHIGeometryShader(shader);
+    auto* vk_shader            = MoerNew(VulkanRHIGeometryShader)(shader);
     vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
 
     return RHIGeometryShaderRef(vk_shader);
 }
 
 RHIMeshShaderRef VulkanRHIImpl::RHICreateMeshShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
-    auto* vk_shader            = new VulkanRHIMeshShader(shader);
+    auto* vk_shader            = MoerNew(VulkanRHIMeshShader)(shader);
     vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
 
     return RHIMeshShaderRef(vk_shader);
 }
 
 RHIAmplificationShaderRef VulkanRHIImpl::RHICreateAmplificationShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
-    auto* vk_shader            = new VulkanRHIAmplificationShader(shader);
+    auto* vk_shader            = MoerNew(VulkanRHIAmplificationShader)(shader);
     vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
 
     return RHIAmplificationShaderRef(vk_shader);
 }
 
 RHIComputeShaderRef VulkanRHIImpl::RHICreateComputeShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
-    auto* vk_shader            = new VulkanRHIComputeShader(shader);
+    auto* vk_shader            = MoerNew(VulkanRHIComputeShader)(shader);
     vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
 
     return RHIComputeShaderRef(vk_shader);
@@ -119,13 +119,13 @@ RHIShaderLibraryRef VulkanRHIImpl::RHICreateShaderLibrary(EShaderPlatform _platf
 
 RHIFenceRef VulkanRHIImpl::RHICreateFence(const RHIFenceCreateInfo& _info) {
 
-    VulkanRHIFence* vk_fence = new VulkanRHIFence(m_device, _info.usage);
+    VulkanRHIFence* vk_fence = MoerNew(VulkanRHIFence)(m_device, _info.usage);
 
     return RHIFenceRef(vk_fence);
 }
 
 // RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const RHIGraphicsPipelineStateInfo& _init) {
-//     VulkanRHIGraphicsPipelineState* vk_pso = new VulkanRHIGraphicsPipelineState();
+//     VulkanRHIGraphicsPipelineState* vk_pso = MoerNew(VulkanRHIGraphicsPipelineState)();
 
 //     uint32_t attachment_count = _init.CalcValidColorAttachmentCount();
 
@@ -306,20 +306,22 @@ void PopulateVertexAttribute(
         if (element.format == EPixelFormat::PF_UNDEFINED) {
             break;
         }
-        _bindings[i].binding    = element.binding_index;
-        _bindings[i].stride     = element.stride;
+
         _attributes[i].location = element.attribute_index;
         _attributes[i].binding  = element.binding_index;
         _attributes[i].format   = VulkanEnumTranslator::METoVKFormat(element.format);
         _attributes[i].offset   = element.offset;
 
-        max_binding = std::max(max_binding, static_cast<uint32_t>(element.binding_index));
+        max_binding                      = std::max(max_binding, static_cast<uint32_t>(element.binding_index));
+        _bindings[max_binding].binding   = element.binding_index;
+        _bindings[max_binding].stride    = element.stride;
+        _bindings[max_binding].inputRate = VulkanEnumTranslator::METoVKVertexInputRate(element.input_rate);
     }
     _bindings.resize(max_binding + 1);
     _bindings.shrink_to_fit();
 }
 RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPSO(RHIGraphicsPSOCreateInfo&& _init) {
-    VulkanRHIGraphicsPipelineState* vk_pso = new VulkanRHIGraphicsPipelineState();
+    VulkanRHIGraphicsPipelineState* vk_pso = MoerNew(VulkanRHIGraphicsPipelineState)();
 
     assert(_init.finalized && "RHICreateGraphicsPSO: PSO is not finalized!");
     uint32_t attachment_count = _init.color_attachment_count;
@@ -479,8 +481,6 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPSO(RHIGraphicsPSOCr
 
     vk_rasterization_state = to_rasterize_state(_init.rasterizer_info);
     // multisample state
-    VkPipelineMultisampleStateCreateInfo multisample_state{};
-
     auto to_multi_sample_state = [](const RHIMultisampleStateInfo& info) {
         VkPipelineMultisampleStateCreateInfo state{};
         state.sType                 = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
@@ -611,7 +611,7 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPSO(RHIGraphicsPSOCr
     pipeline_create_info.pTessellationState  = nullptr;
     pipeline_create_info.pViewportState      = &viewport_state;
     pipeline_create_info.pRasterizationState = &vk_rasterization_state;
-    pipeline_create_info.pMultisampleState   = &multisample_state;
+    pipeline_create_info.pMultisampleState   = &vk_multisample_state;
     pipeline_create_info.pDepthStencilState  = &depth_stencil_state;
     pipeline_create_info.pColorBlendState    = &color_blend_state;
     pipeline_create_info.pDynamicState       = &dynamic_state;
@@ -627,7 +627,7 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPSO(RHIGraphicsPSOCr
 }
 
 RHIComputePipelineStateRef VulkanRHIImpl::RHICreateComputePipelineState(RHIShader* _compute_shader) {
-    VulkanRHIComputePipelineState* vk_pso = new VulkanRHIComputePipelineState();
+    VulkanRHIComputePipelineState* vk_pso = MoerNew(VulkanRHIComputePipelineState)();
 
     auto* vk_shader = static_cast<VulkanRHIComputeShader*>(_compute_shader);
     if (!vk_shader) LOG_CRITICAL("RHICreateComputePipelineState: Compute shader is nullptr!");
@@ -705,14 +705,14 @@ RHIComputePipelineStateRef VulkanRHIImpl::RHICreateComputePipelineState(RHIShade
 
 RHIBufferRef VulkanRHIImpl::RHICreateBufferInner(const RHIBufferCreateInfo& info) {
     RHIBufferInfo buffer_info{};
-    buffer_info.size  = info.size;
-    buffer_info.usage = info.usage;
+    buffer_info.size   = info.size;
+    buffer_info.usage  = info.usage;
     buffer_info.stride = info.stride;
     if (info.stride == 0) {
         LOG_CRITICAL("RHICreateBufferInner: stride is 0! Set stride to sizeof(std::byte)");
         buffer_info.stride = sizeof(std::byte);
     }
-    VulkanRHIBuffer* vk_buffer = new VulkanRHIBuffer(buffer_info);
+    VulkanRHIBuffer* vk_buffer = MoerNew(VulkanRHIBuffer)(buffer_info);
 
     VkBufferCreateInfo buffer_create_info{};
     buffer_create_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -755,8 +755,18 @@ void VulkanRHIImpl::RHIUnmapBuffer(RHIBuffer* _buffer) {
     // vmaFlushAllocation(allocator, vk_buffer->m_alloc.alloc, 0, VK_WHOLE_SIZE);
 }
 
+RHIBufferRef VulkanRHIImpl::RHICreateStagingBuffer(uint64_t _size) {
+    RHIBufferCreateInfo info{};
+    info.size  = _size;
+    info.usage = EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST;
+
+    auto* staging_buffer = m_device->AquireStagingBuffer(info.size);
+
+    return RHIBufferRef(staging_buffer);
+}
+
 RHITextureRef VulkanRHIImpl::RHICreateTexture(const RHITextureCreateInfo& info) {
-    VulkanRHITexture* vk_texture = new VulkanRHITexture(info, m_device);
+    VulkanRHITexture* vk_texture = MoerNew(VulkanRHITexture)(info, m_device);
 
     VkImageCreateInfo image_create_info{};
     image_create_info.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -794,11 +804,13 @@ RHITextureRef VulkanRHIImpl::RHICreateTexture(const RHITextureCreateInfo& info) 
     // vmaGetAllocationInfo(allocator, vk_texture->GetAllocation(), &temp_info);
     return RHITextureRef(vk_texture);
 };
-
+bool IsTextureBuffer(EBufferUsageFlags _usage) {
+    return uint32_t(_usage & EBufferUsageFlags::TEXTURE_BUFFER) != 0;
+}
 RHISRVRef VulkanRHIImpl::RHICreateSRVInner(RHIViewableResource* _resource, const RHIViewInfo& _view_info) {
 
     auto create_texture_srv = [this, _resource, &_view_info]() {
-        VulkanRHITextureSRV* vk_srv = new VulkanRHITextureSRV(m_device, _resource, _view_info);
+        VulkanRHITextureSRV* vk_srv = MoerNew(VulkanRHITextureSRV)(m_device, _resource, _view_info);
 
         VkImageViewCreateInfo image_view_create_info{};
         image_view_create_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -825,7 +837,10 @@ RHISRVRef VulkanRHIImpl::RHICreateSRVInner(RHIViewableResource* _resource, const
 
     auto create_buffer_srv = [this, _resource, &_view_info]() {
         auto*               vk_buffer = static_cast<VulkanRHIBuffer*>(_resource);
-        VulkanRHIBufferSRV* vk_srv    = new VulkanRHIBufferSRV(m_device, _resource, _view_info);
+        VulkanRHIBufferSRV* vk_srv    = MoerNew(VulkanRHIBufferSRV)(m_device, _resource, _view_info);
+
+        bool b_create_view = IsTextureBuffer(vk_buffer->GetUsage());
+        if (!b_create_view) return RHISRVRef(vk_srv);
 
         VkBufferViewCreateInfo buffer_view_create_info{};
         buffer_view_create_info.sType  = VK_STRUCTURE_TYPE_BUFFER_VIEW_CREATE_INFO;
@@ -852,7 +867,7 @@ RHIUAVRef VulkanRHIImpl::RHICreateUAVInner(RHIViewableResource* _resource, const
     auto create_buffer_uav = [this, _resource, &_view_info]() {
         auto*               vk_buffer = static_cast<VulkanRHIBuffer*>(_resource);
         VulkanRHIBufferUAV* vk_uav    = MoerNew(VulkanRHIBufferUAV)(m_device, _resource, _view_info);
-
+        if (!IsTextureBuffer(vk_buffer->GetUsage())) return RHIUAVRef(vk_uav);
         VkBufferViewCreateInfo buffer_view_create_info{};
         buffer_view_create_info.sType  = VK_STRUCTURE_TYPE_BUFFER_VIEW_CREATE_INFO;
         buffer_view_create_info.pNext  = nullptr;
@@ -1015,7 +1030,7 @@ void VulkanRHIImpl::InitVulkan() {
     initializer.enabled_features   = VulkanDeviceFeature::GetMESupportedDeviceFeatures(initializer.api_version);
     initializer.enabled_extensions = VulkanDeviceExtension::GetMESupportedDeviceExtensions();
 
-    m_device = new VulkanDevice();
+    m_device = MoerNew(VulkanDevice)();
     m_device->Init(initializer);
     m_device->InitMemoryAllocator(m_instance);
     RHIViewportInitializer viewport_init{};
@@ -1024,12 +1039,12 @@ void VulkanRHIImpl::InitVulkan() {
     m_main_viewport             = (VulkanViewport*)viewport.Get();
 
     m_main_viewport->AddRef();
-    // VulkanSwapChain* swap_chain = new VulkanSwapChain();
+    // VulkanSwapChain* swap_chain = MoerNew(VulkanSwapChain();
     // swap_chain->Connect(m_instance, m_surface, m_device);
     // uint32_t width, height;
 
     // swap_chain->Init(&width, &height, Moer::ConfigManager::GetInstance().GetInitConfig().editor_vsync);
-    // m_main_viewport = new VulkanViewport(swap_chain, max_frame_in_flight);
+    // m_main_viewport = MoerNew(VulkanViewport)(swap_chain, max_frame_in_flight);
 
     //init command allocator
 }
@@ -1173,14 +1188,14 @@ RHIViewport*   VulkanRHIImpl::RHIGetMainViewport() {
 }
 //create external viewport
 RHIViewportRef VulkanRHIImpl::RHICreateViewport(const RHIViewportInitializer& _init) {
-    VulkanSwapChain* swapchain = new VulkanSwapChain();
+    VulkanSwapChain* swapchain = MoerNew(VulkanSwapChain)();
     uint32_t         width, height;
     VkSurfaceKHR     surface;
     Moer::WindowContext::CreateVulkanSurface(m_instance, _init.window_handle, nullptr, &surface);
     swapchain->Connect(m_instance, surface, m_device);
     swapchain->Init(&width, &height, _init.b_vsync);
 
-    VulkanViewport* viewport = new VulkanViewport(swapchain, max_frame_in_flight);
+    VulkanViewport* viewport = MoerNew(VulkanViewport)(swapchain, max_frame_in_flight);
 
     return viewport;
 }

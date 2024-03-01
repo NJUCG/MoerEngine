@@ -43,7 +43,7 @@
 
 #define CHECK_AND_DELETE(ptr) \
     if (ptr != nullptr) {     \
-        delete ptr;           \
+        MoerDelete(ptr);      \
         ptr = nullptr;        \
     }
 

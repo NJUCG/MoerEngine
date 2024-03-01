@@ -44,6 +44,8 @@ public:
     void* RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size) override { return nullptr; }
     void  RHIUnmapBuffer(RHIBuffer* _buffer) override {}
 
+    RHIBufferRef RHICreateStagingBuffer(uint64_t _byte_size) override { return RHIBufferRef{}; }
+
     RHITextureRef RHICreateTexture(const RHITextureCreateInfo& info) override { return RHITextureRef{}; };
 
     RHICommandQueue* RHICreateCommandQueue(ECommandQueueType type) override { return nullptr; }

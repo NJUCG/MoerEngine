@@ -47,7 +47,7 @@ namespace Utils {
     EShaderCodeResourceBindingType BindingTypeStrToEnum(std::string_view _binding_type_str) {
         std::regex binding_type_regex("(RW)?(ConstantBuffer"
                                       "|StructuredBuffer(<([a-zA-Z]+)>)?"
-                                      "|ByteAddressBuffer<([a-zA-Z]+)>"
+                                      "|ByteAddressBuffer"
                                       "|Texture2D(<([a-zA-Z]+)>)?"
                                       "|Texture2DArray<([a-zA-Z]+)>"
                                       "|Texture3D<([a-zA-Z]+)>"
@@ -58,24 +58,19 @@ namespace Utils {
         using SVMatchResults = std::match_results<std::string_view::const_iterator>;
         SVMatchResults match;
 
-        static constexpr std::string_view structured_buffer = "StructuredBuffer";
+        static constexpr std::string_view structured_buffer     = "StructuredBuffer";
+        static constexpr std::string_view constant_buffer       = "ConstantBuffer";
+        static constexpr std::string_view byte_addressed_buffer = "ByteAddressBuffer";
 
         if (std::regex_search(_binding_type_str.begin(), _binding_type_str.end(), match, binding_type_regex)) {
-            if (match[0] == "ConstantBuffer") {
-                return EShaderCodeResourceBindingType::CONSTANT_BUFFER;
-            }
-            if (match[0].str().find(structured_buffer) != std::string_view::npos) {
-                return EShaderCodeResourceBindingType::STRUCTURED_BUFFER;
-            }
-            if (match[0] == "ByteAddressBuffer") {
-                return EShaderCodeResourceBindingType::BYTE_ADDRESS_BUFFER;
-            }
+
             if (match[0].str().find("RWStructuredBuffer") != std::string_view::npos) {
                 return EShaderCodeResourceBindingType::RW_STRUCTURED_BUFFER;
             }
             if (match[0].str().find("RWByteAddressBuffer") != std::string_view::npos) {
                 return EShaderCodeResourceBindingType::RW_BYTE_ADDRESSED_BUFFER;
             }
+
             if (match[0].str().find("RWTexture2D") != std::string_view::npos) {
                 return EShaderCodeResourceBindingType::RW_TEXTURE_2D;
             }
@@ -88,6 +83,17 @@ namespace Utils {
             if (match[0].str().find("RWTextureCube") != std::string_view::npos) {
                 return EShaderCodeResourceBindingType::RW_TEXTURE_CUBE;
             }
+            if (match[0].str().find(constant_buffer) != std::string_view::npos) {
+                return EShaderCodeResourceBindingType::CONSTANT_BUFFER;
+            }
+            if (match[0].str().find(structured_buffer) != std::string_view::npos) {
+                return EShaderCodeResourceBindingType::STRUCTURED_BUFFER;
+            }
+
+            if (match[0] == byte_addressed_buffer.data()) {
+                return EShaderCodeResourceBindingType::BYTE_ADDRESS_BUFFER;
+            }
+
             if (match[0].str().find("Texture2D") != std::string_view::npos) {
                 return EShaderCodeResourceBindingType::TEXTURE_2D;
             }

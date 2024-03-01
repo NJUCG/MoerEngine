@@ -84,8 +84,9 @@ public:
         auto create_info = RHIBufferCreateInfo::Create(_byte_size, sizeof(TElement), _usage);
         return RHICreateBufferInner(create_info);
     }
-    virtual void* RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size) = 0;
-    virtual void  RHIUnmapBuffer(RHIBuffer* _buffer)                                 = 0;
+    virtual RHIBufferRef RHICreateStagingBuffer(uint64_t _byte_size)                        = 0;
+    virtual void*        RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size) = 0;
+    virtual void         RHIUnmapBuffer(RHIBuffer* _buffer)                                 = 0;
 
     virtual RHITextureRef RHICreateTexture(const RHITextureCreateInfo& info) = 0;
 
@@ -168,10 +169,10 @@ public:
     void RHIFlushPendingDeletes();
 #pragma endregion
 protected:
-    virtual void                                                                  RHISetBatchedShaderParametersInner(RHIResource* _resource, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) = 0;
-    virtual RHIBufferRef                       RHICreateBufferInner(const RHIBufferCreateInfo& info)                                                                                      = 0;
-    virtual RHISRVRef RHICreateSRVInner(RHIViewableResource* _resource, const RHIViewInfo& _view_info)                                                           = 0;
-    virtual RHIUAVRef RHICreateUAVInner(RHIViewableResource* _resource, const RHIViewInfo& _view_info)                                                           = 0;
+    virtual void         RHISetBatchedShaderParametersInner(RHIResource* _resource, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) = 0;
+    virtual RHIBufferRef RHICreateBufferInner(const RHIBufferCreateInfo& info)                                                                                 = 0;
+    virtual RHISRVRef    RHICreateSRVInner(RHIViewableResource* _resource, const RHIViewInfo& _view_info)                                                      = 0;
+    virtual RHIUAVRef    RHICreateUAVInner(RHIViewableResource* _resource, const RHIViewInfo& _view_info)                                                      = 0;
 
 protected:
     ERHIType rhi_type;

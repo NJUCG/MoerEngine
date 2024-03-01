@@ -257,7 +257,7 @@ public:
 
 #pragma region viewable resources definitions
 
-class VulkanRHIBuffer final : public RHIBuffer {
+class VulkanRHIBuffer : public RHIBuffer {
     friend VulkanRHIImpl;
 
 public:
@@ -282,6 +282,14 @@ private:
     } m_alloc;
 };
 
+class VulkanStagingBuffer : public RHIBuffer {
+    friend VulkanRHIImpl;
+    ~VulkanStagingBuffer();
+
+public:
+    VulkanStagingBuffer() = delete;
+    VulkanStagingBuffer(VulkanRHIBuffer* _buffer);
+};
 class VulkanDeviceObject {
 public:
     VulkanDeviceObject(VulkanDevice* _device = nullptr);
@@ -389,7 +397,7 @@ public:
     inline VkImageView GetView() const { return m_view; }
 
 private:
-    VkImageView m_view;
+    VkImageView m_view = VK_NULL_HANDLE;
 };
 
 class VulkanRHIBufferSRV final : public RHISRV, public VulkanDeviceObject {
@@ -402,7 +410,7 @@ public:
     inline VkBufferView GetView() const { return m_view; }
 
 private:
-    VkBufferView m_view;
+    VkBufferView m_view = VK_NULL_HANDLE;
 };
 
 class VulkanImageView final : public RHIView {
@@ -416,7 +424,7 @@ public:
     inline VkImageView GetView() const { return m_view; }
 
 private:
-    VkImageView m_view;
+    VkImageView m_view = VK_NULL_HANDLE;
 };
 
 #pragma endregion

@@ -31,7 +31,7 @@ void RHI::RHIFlushPendingDeletes() {
         // if (resources_to_delete[i]->GetResourceType() == RRT_GPU_FENCE) {
         //     continue;
         // }
-        delete resources_to_delete[i];
+        MoerDelete(resources_to_delete[i]);
     }
     if (num_deletes > 0) {
         LOG_INFO("{} resources to delete", num_deletes);
