@@ -219,8 +219,9 @@ namespace Moer {
         RHIMultisampleStateRef multisample_state = g_rhi->RHICreateMultiSampleState(multisample_init);
 
         RHIDepthStencilStateInitializer depth_stencil_init{};
-        depth_stencil_init.b_enable_depth_write     = true;
-        depth_stencil_init.depth_test_op            = CO_GREATER_OR_EQUAL;
+        depth_stencil_init.b_enable_depth_write = true;
+        depth_stencil_init.depth_test_op        = CO_GREATER;
+
         RHIDepthStencilStateRef depth_stencil_state = g_rhi->RHICreateDepthStencilState(depth_stencil_init);
 
         RHIGraphicsPipelineStateInitializer::TAttachmentFormats color_attachment_formats{};
@@ -237,8 +238,8 @@ namespace Moer {
                  1,
                  color_attachment_formats,
                  color_attachment_flags,
-                 PF_UNDEFINED,
-                 ETextureUsageFlags::UNDEFINED,
+                 PF_D32_SFLOAT_S8_UINT,
+                 ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT,
                  {},
                  0,
                  1,
@@ -303,8 +304,18 @@ namespace Moer {
             pass_info.render_area.extent = Extent2D(extent.x, extent.y);
             pass_info.render_area.offset = Offset2D(0, 0);
 
+            pass_info.depth_stencil_attachment.depth_stencil_action = AC_CLEAR_STORE;
+
+            RHIUnorderedAccessViewRef depth_uav             = virtual_viewport->GetDepthBufferUAV();
+            RenderAttachmentView&     depth_attachment_view = pass_info.depth_stencil_attachment.depth_stencil_attachment_view;
+
+            depth_attachment_view.required_layout  = TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE;
+            depth_attachment_view.texture_view     = depth_uav;
+            depth_attachment_view.clear_attachment = RHIClearAttachment(EClearAttachment::DEPTH_STENCIL);
+
             RHIBarrierDependencyInfo barrier_dependency_info;
             barrier_dependency_info.texture_barriers.resize(1);
+
             auto& texture_barrier_info = barrier_dependency_info.texture_barriers[0];
             texture_barrier_info
                 .SetTexture(uav->GetTexture())
@@ -358,6 +369,7 @@ namespace Moer {
                         // const RHIBufferRef prim_vertex_buffer = primitive->GetVertexBuffer();
                         // uint32_t           offset             = 0;
                         // cmd_list->BindVertexBuffers(0, 1, &prim_vertex_buffer, &offset);
+
                         cmd_list->DrawIndexedInstanced(prim_info.index_count, 1, prim_info.index_offset, prim_info.vertex_offset, 0);
                     }
                 }
