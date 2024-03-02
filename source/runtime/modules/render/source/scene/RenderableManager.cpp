@@ -20,6 +20,8 @@ namespace Moer {
         uint32_t              index_count;
         uint32_t              vertex_offset;
         uint32_t              index_offset;
+        uint32_t              meshlet_offset;
+        uint32_t              meshlet_count;
         uint16_t              m_instance_count{1};
         bool                  m_culling{};
         bool                  m_cast_shadows{};
@@ -40,12 +42,21 @@ namespace Moer {
         m_impl->index_offset  = count;
         return *this;
     }
-    RenderableManager::Builder& RenderableManager::Builder::Geometry(EPrimitiveType type, uint32_t vertex_count, uint32_t index_count, uint32_t vertex_offset, uint32_t index_offset) noexcept {
-        m_impl->type          = type;
-        m_impl->vertex_count  = vertex_count;
-        m_impl->index_count   = index_count;
-        m_impl->vertex_offset = vertex_offset;
-        m_impl->index_offset  = index_offset;
+    RenderableManager::Builder& RenderableManager::Builder::Geometry(
+        EPrimitiveType type,
+        uint32_t       vertex_count,
+        uint32_t       index_count,
+        uint32_t       vertex_offset,
+        uint32_t       index_offset,
+        uint32_t       meshlet_offset,
+        uint32_t       meshlet_count) noexcept {
+        m_impl->type           = type;
+        m_impl->vertex_count   = vertex_count;
+        m_impl->index_count    = index_count;
+        m_impl->vertex_offset  = vertex_offset;
+        m_impl->index_offset   = index_offset;
+        m_impl->meshlet_offset = meshlet_offset;
+        m_impl->meshlet_count  = meshlet_count;
         return *this;
     }
 

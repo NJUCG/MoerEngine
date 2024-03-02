@@ -1,105 +1,63 @@
 #include "framework/Common.hlsl"
-#define MAX_MESHLET_COUNT uint(1024 * 1024 * 8)
-
-struct TaskInput {
+struct MeshletCullInput {
   CameraData camera_data;
-  uint instance_count;
-  uint meshlet_count;
+  uint counter_buffer_offset;
+  uint draw_cmd_buffer_offset;
 };
-struct InstanceMeshletCullInfo {
-  uint meshlet_id;
-  uint instance_id;
-};
-[[vk::push_constant]] ConstantBuffer<TaskInput> input;
+[[vk::binding(0, 0)]] StructuredBuffer<InstanceData> instance_data
+    : register(t0, space0);
+[[vk::binding(1, 0)]] StructuredBuffer<InstanceMeshletInfo>
+    instance_meshlet_info : register(t1, space0);
 
-StructuredBuffer<InstanceData> instance_data : register(t0, space0);
-StructuredBuffer<InstanceMeshletInfo> instance_meshlet_info
-    : register(t1, space0);
+[[vk::binding(0, 1)]] StructuredBuffer<InstanceMeshletCullInfo>
+    instance_meshlet_cull_info : register(t2, space0);
 
-StructuredBuffer<MeshletDesc> meshlet_info_buffer : register(t0, space1);
-StructuredBuffer<MeshletBound> meshlet_bound_buffer : register(t1, space1);
-
-StructuredBuffer<InstanceMeshletCullInfo> instance_meshlet_cull_info
-    : register(t2, space0);
+[[vk::binding(0, 2)]] StructuredBuffer<MeshletDesc> meshlet_info_buffer
+    : register(t0, space1);
+[[vk::binding(1, 2)]] StructuredBuffer<MeshletBound> meshlet_bound_buffer
+    : register(t1, space1);
 
 // 0 for processed instance, 1 for processed meshlet
-RWByteAddressBuffer counters_buffer : register(u0, space1);
+[[vk::binding(0, 3)]] RWByteAddressBuffer counters_buffer
+    : register(u0, space1);
+[[vk::binding(1, 3)]] RWStructuredBuffer<DrawCommandData> command_buffer
+    : register(u1, space1);
 
-bool IsInstanceVisible(in InstanceData instance) {
-  // Occlusion culling logic goes here
-  // Return true if the instance is visible, false otherwise
-  return true;
-}
+[[vk::push_constant]] ConstantBuffer<MeshletCullInput> input;
 
-[numthreads(64, 1, 1)] void main(uint3 dispatch_thread_id
+bool IsMeshletVisible(in MeshletBound bound) { return true; }
+
+[numthreads(64, 1, 1)] void main(uint3 dtid
                                  : SV_DispatchThreadID) {
-  uint meshlet_cull_instance = dispatch_thread_id.x;
-  InstanceMeshletCullInfo cull_info =
-      instance_meshlet_cull_info[meshlet_cull_instance];
-
-  uint instance_id = cull_info.instance_id;
-  uint meshlet_id = cull_info.meshlet_id;
-
-  MeshletBound meshlet_info = meshlet_bound_buffer[meshlet_id];
-  // fetch and cull instance
-  while (true) {
-    // first process instance
-    uint instance_start_offset;
-
-    uint laneCount = WaveGetLaneCount();
-    if (WaveIsFirstLane()) {
-      counters_buffer.InterlockedAdd(0, laneCount, instance_start_offset);
-    }
-    instance_start_offset =
-        WaveReadFirst(instance_start_offset) + WaveReadLaneIndex();
-
-    if (instance_start_offset >= input.instance_count) {
-      break;
-    }
-
-    InstanceData instance = instance_data[instance_start_offset];
-
-    bool visible = IsInstanceVisible(instance);
-
-    uint instance_count = WaveActiveCountBits(visible);
-    uint lane_offset = WavePrefixCountBits(visible);
-
-    uint culled_meshlet_count =
-        visible ? instance_meshlet_info[instance_start_offset].meshlet_count
-                : 0;
-
-    uint total_culled_meshlet_count = WaveActiveSum(culled_meshlet_count);
-
-    uint cull_meshlet_offset;
-    if (WaveIsFirstLane()) {
-      counters_buffer.InterlockedAdd(8, total_culled_meshlet_count,
-                                     cull_meshlet_offset);
-    }
-    cull_meshlet_offset = WaveReadLaneFirst(cull_meshlet_offset);
-    cull_meshlet_offset += WavePrefixSum(culled_meshlet_count);
-
-    if (visible) {
-      for (uint i = 0; i < culled_meshlet_count; i++) {
-        InstanceMeshletCullInfo cull_info;
-        cull_info.instance_id = instance_start_offset;
-        cull_info.meshlet_id = i;
-        instance_meshlet_cull_info[cull_meshlet_offset + i] = cull_info;
-        // process meshlet
-      }
-    }
+  // process meshlets
+  uint total_meshlet_count =
+      counters_buffer.Load<uint>(input.counter_buffer_offset);
+  if (dtid.x >= total_meshlet_count) {
+    return;
   }
-  // global sync
-  while (true) {
-    // process meshlet
-    uint cull_meshlet_offset = 0;
-    if (WaveIsFirstLane()) {
-      counters_buffer.InterlockedAdd(12, WaveGetLaneCount(),
-                                     cull_meshlet_offset);
-    }
+  InstanceMeshletCullInfo cull_info = instance_meshlet_cull_info[dtid.x];
 
-    cull_meshlet_offset =
-        WaveReadLaneFirst(cull_meshlet_offset) + WaveReadLaneIndex();
+  MeshletBound bound = meshlet_bound_buffer[cull_info.meshlet_id];
+  bool visible = IsMeshletVisible(bound);
+
+  uint wave_meshlet_count = WaveActiveCountBits(visible);
+  uint cmd_offset = 0;
+  if (WaveIsFirstLane()) {
+    counters_buffer.InterlockedAdd(input.draw_cmd_buffer_offset,
+                                   wave_meshlet_count, cmd_offset);
   }
+  uint lane_offset = WavePrefixCountBits(visible);
+  cmd_offset = WaveReadLaneFirst(cmd_offset) + lane_offset;
 
-  // Dispatch meshlet
+  if (visible) {
+    DrawCommandData cmd;
+    MeshletDesc meshlet_desc = meshlet_info_buffer[cull_info.meshlet_id];
+
+    cmd.index_count = meshlet_desc.index_count;
+    cmd.instance_count = 1;
+    cmd.first_index = meshlet_desc.index_offset;
+    cmd.vertex_offset = meshlet_desc.vertex_offset;
+    cmd.first_instance = cull_info.instance_id;
+    command_buffer[cmd_offset] = cmd;
+  }
 }

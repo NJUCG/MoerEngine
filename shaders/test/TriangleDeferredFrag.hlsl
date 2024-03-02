@@ -5,10 +5,4 @@ struct PS_INPUT {
   float2 uv : TEXCOORD0;
 };
 
-[[vk::binding(0, 1)]] SamplerState defaultSampler;
-[[vk::binding(1, 1)]] Texture2D baseColorMap;
-
-float4 main(PS_INPUT input) : SV_Target {
-  float4 out_col = baseColorMap.Sample(defaultSampler, input.uv);
-  return out_col;
-}
+float4 main(PS_INPUT input) : SV_Target { return input.col; }

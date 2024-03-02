@@ -35,7 +35,14 @@ namespace Moer {
 
             // Builder & Geometry(EPrimitiveType type,RHIBufferRef vbh,RHIBufferRef ibh) noexcept;
             Builder& Geometry(EPrimitiveType type, const Moer::Array<float>& vertex_data, const Moer::Array<uint32_t>& index_data, uint32_t offset, uint32_t count) noexcept;
-            Builder& Geometry(EPrimitiveType type, uint32_t vertex_count, uint32_t index_count, uint32_t vertex_offset, uint32_t index_offset) noexcept;
+            Builder& Geometry(
+                EPrimitiveType type,
+                uint32_t       vertex_count,
+                uint32_t       index_count,
+                uint32_t       vertex_offset,
+                uint32_t       index_offset,
+                uint32_t       meshlet_offset,
+                uint32_t       meshlet_count) noexcept;
             Builder& Culling(bool Culling);
             Builder& CastShadows(bool castShadows);
 

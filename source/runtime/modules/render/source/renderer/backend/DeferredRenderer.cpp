@@ -15,6 +15,7 @@
 #include "rhi/RHICommand.h"
 #include "scene/CameraManager.h"
 #include "shader/Shader.h"
+#include "shader/ShaderParameterMacros.h"
 #include "shader/ShaderResourceManager.h"
 #include "scene/RenderableManager.h"
 #include "scene/Scene.h"
@@ -46,8 +47,8 @@ class TestDeferredTriangleShaderFrag : public Shader {
     DEFINE_SHADER_TYPE(TestDeferredTriangleShaderFrag, Global, RENDER_API, ...)
 public:
     BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
-    DEFINE_SHADER_PARAM_SAMPLER(SamplerState, defaultSampler)
-    DEFINE_SHADER_PARAM_SRV(Texture2D, baseColorMap)
+    // DEFINE_SHADER_PARAM_SAMPLER(SamplerState, defaultSampler)
+    // DEFINE_SHADER_PARAM_SRV(Texture2D, baseColorMap)
     END_ROOT_PARAMETER_DEFINITION(Parameters)
 };
 
@@ -69,6 +70,53 @@ public:
 };
 
 IMPLEMENT_SHADER_TYPE(MeshletCullingShader, "meshdebug/Cull.hlsl", "main", ST_COMPUTE);
+
+BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(CullInstanceInput)
+DEFINE_SHADER_PARAM_STRUCT(CameraData, camera_data)
+DEFINE_SHADER_PARAM(uint32_t, instance_count)
+DEFINE_SHADER_PARAM(uint32_t, meshlet_count_offset)
+END_SHADER_CONSTANT_STRUCT_DEFINITION(CullInstanceInput)
+
+class CullInstanceShader : public Shader {
+    DEFINE_SHADER_TYPE(CullInstanceShader, Global, RENDER_API, ...)
+public:
+    BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
+    DEFINE_SHADER_PARAM_STRUCT(CullInstanceInput, input)
+    DEFINE_SHADER_PARAM_SRV(StructuredBuffer<InstanceData>, instance_data)
+
+    DEFINE_SHADER_PARAM_SRV(StructuredBuffer<InstanceMeshInfo>, instance_meshlet_info)
+
+    DEFINE_SHADER_PARAM_UAV(RWStructuredBuffer<uint64_t>, instance_meshlet_cull_info)
+    DEFINE_SHADER_PARAM_UAV(RWByteAddressBuffer, counters_buffer)
+    END_ROOT_PARAMETER_DEFINITION(Parameters)
+};
+
+BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(CullMeshletInput)
+DEFINE_SHADER_PARAM_STRUCT(CameraData, camera_data)
+DEFINE_SHADER_PARAM(uint32_t, meshlet_count_offset)
+DEFINE_SHADER_PARAM(uint32_t, draw_count_offset)
+END_SHADER_CONSTANT_STRUCT_DEFINITION(CullMeshletInput)
+
+class CullMeshletShader : public Shader {
+    DEFINE_SHADER_TYPE(CullMeshletShader, Global, RENDER_API, ...)
+public:
+    BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
+    DEFINE_SHADER_PARAM_STRUCT(CullMeshletInput, input)
+    DEFINE_SHADER_PARAM_SRV(StructuredBuffer<MeshletDesc>, meshlet_info_buffer)
+    DEFINE_SHADER_PARAM_SRV(StructuredBuffer<MeshletBound>, meshlet_bound_buffer)
+    DEFINE_SHADER_PARAM_SRV(StructuredBuffer<InstanceData>, instance_data)
+    DEFINE_SHADER_PARAM_SRV(StructuredBuffer<InstanceMeshInfo>, instance_meshlet_info)
+    DEFINE_SHADER_PARAM_SRV(StructuredBuffer<uint64_t>, instance_meshlet_cull_info)
+
+    DEFINE_SHADER_PARAM_UAV(RWByteAddressBuffer, counters_buffer)
+    DEFINE_SHADER_PARAM_UAV(RWStructuredBuffer<DrawCommand>, command_buffer)
+
+    END_ROOT_PARAMETER_DEFINITION(Parameters)
+};
+
+IMPLEMENT_SHADER_TYPE(CullInstanceShader, "meshdebug/CullInstance.hlsl", "main", ST_COMPUTE);
+IMPLEMENT_SHADER_TYPE(CullMeshletShader, "meshdebug/CullMeshlet.hlsl", "main", ST_COMPUTE);
+
 namespace Moer {
     class DeferredRenderer::Impl {
     public:
@@ -95,16 +143,30 @@ namespace Moer {
 
         RHIGraphicsPipelineStateRef pipeline_state;
         RHIComputePipelineStateRef  compute_pipeline_state;
+        RHIComputePipelineStateRef  cull_instance_pso;
+        RHIComputePipelineStateRef  cull_meshlet_pso;
 
         RHIBufferRef draw_indirect_buffer;
         RHIBufferRef draw_count_buffer;
         RHIBufferRef zero_buffer;
-        RHISRVRef    meshlet_descs_buffer_view;
-        RHISRVRef    meshlet_bounds_buffer_view;
-        RHISRVRef    instance_buffer_view;
+        RHIBufferRef instance_meshlet_cull_info_buffer;
+        RHIBufferRef uniform_buffer;
+
+        RHISRVRef meshlet_descs_buffer_view;
+        RHISRVRef meshlet_bounds_buffer_view;
+        RHISRVRef instance_buffer_view;
+        RHISRVRef instance_meshlet_info_view;
+        RHISRVRef instance_meshlet_cull_info_view;
+
+        RHIUAVRef instance_meshlet_cull_info_uav;
 
         RHIUAVRef draw_indirect_view;
         RHIUAVRef draw_count_view;
+
+        static constexpr uint32_t meshlet_count_offset = 0;
+        static constexpr uint32_t draw_count_offset    = 4;
+        static constexpr uint32_t max_meshlet_count    = 1024 * 1024 * 16;
+        static constexpr uint32_t thread_group_count   = 64;
     };
     void DeferredRenderer::Init(const BackendRendererInitInfo& _init_info) {
         impl = MoerNew(Impl);
@@ -183,25 +245,31 @@ namespace Moer {
 
         pipeline_state = g_rhi->RHICreateGraphicsPSO(std::move(pso_create_info));
 
-        auto compute_shader    = shader_resource_manager.GetShader<MeshletCullingShader>();
-        compute_pipeline_state = g_rhi->RHICreateComputePipelineState(compute_shader.Get());
+        auto compute_shader       = shader_resource_manager.GetShader<MeshletCullingShader>();
+        auto cull_instance_shader = shader_resource_manager.GetShader<CullInstanceShader>();
+        auto cull_meshlet_shader  = shader_resource_manager.GetShader<CullMeshletShader>();
 
+        compute_pipeline_state = g_rhi->RHICreateComputePipelineState(compute_shader.Get());
+        cull_instance_pso      = g_rhi->RHICreateComputePipelineState(cull_instance_shader);
+        cull_meshlet_pso       = g_rhi->RHICreateComputePipelineState(cull_meshlet_shader);
         //why not implement a counter buffer?
         {
             RHIBufferCreateInfo buffer_create_info;
+            uniform_buffer       = g_rhi->RHICreateBuffer<float>(sizeof(CameraData) * 3, EBufferUsageFlags::UNIFORM_BUFFER);
             draw_indirect_buffer = g_rhi->RHICreateBuffer<DrawInstanceCmd>(
                 1024 * 1024 * 16,
                 EBufferUsageFlags::INDIRECT_BUFFER | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::STORAGE_BUFFER);
 
-            draw_count_buffer = g_rhi->RHICreateBuffer<uint32_t>(32,
+            draw_count_buffer = g_rhi->RHICreateBuffer<uint32_t>(32 * sizeof(int),
                                                                  EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::STORAGE_BUFFER);
 
-            zero_buffer = g_rhi->RHICreateBuffer<uint32_t>(32,
+            zero_buffer = g_rhi->RHICreateBuffer<uint32_t>(32 * sizeof(int),
                                                            EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::TRANSFER_SRC);
 
             void* mapped = g_rhi->RHIMapBuffer(zero_buffer, 0, sizeof(uint32_t));
 
-            *(uint32_t*)mapped = 0;
+            std::array<uint32_t, 32> zero_data = {0};
+            std::copy(zero_data.begin(), zero_data.end(), static_cast<uint32_t*>(mapped));
 
             g_rhi->RHIUnmapBuffer(zero_buffer);
 
@@ -218,6 +286,16 @@ namespace Moer {
             meshlet_bounds_buffer_view = g_rhi->RHICreateBufferSRV(g_scene->GetBuffer("meshlet_bounds"));
 
             instance_buffer_view = g_rhi->RHICreateBufferSRV(g_scene->GetBuffer("instance_buffer"));
+
+            instance_meshlet_info_view = g_rhi->RHICreateBufferSRV(g_scene->GetBuffer("instance_meshlet_info_buffer"));
+
+            instance_meshlet_cull_info_buffer = g_rhi->RHICreateBuffer<uint64_t>(
+                1024 * 1024 * sizeof(uint64_t),
+                EBufferUsageFlags::STORAGE_BUFFER | EBufferUsageFlags::UNORDERED_ACCESS);
+
+            instance_meshlet_cull_info_view = g_rhi->RHICreateBufferSRV(instance_meshlet_cull_info_buffer);
+
+            instance_meshlet_cull_info_uav = g_rhi->RHICreateBufferUAV(instance_meshlet_cull_info_buffer);
         }
     }
 
@@ -251,6 +329,36 @@ namespace Moer {
 
             RHIBatchedShaderParameters compute_batched_params;
             compute_batched_params.SetParameters(ShaderResourceManager::GetInstance().GetShader<MeshletCullingShader>(), cull_params);
+            auto instance_count = instance_buffer_view->GetBuffer()->GetNumElement();
+
+            CullInstanceShader::Parameters cull_instance_params;
+            cull_instance_params.input.camera_data          = camera_data;
+            cull_instance_params.input.meshlet_count_offset = meshlet_count_offset;
+            cull_instance_params.input.instance_count       = instance_count;
+            cull_instance_params.instance_data              = instance_buffer_view;
+            cull_instance_params.instance_meshlet_info      = instance_meshlet_info_view;
+            cull_instance_params.instance_meshlet_cull_info = instance_meshlet_cull_info_uav;
+            cull_instance_params.counters_buffer            = draw_count_view;
+
+            CullMeshletShader::Parameters cull_meshlet_params;
+            cull_meshlet_params.input.camera_data          = camera_data;
+            cull_meshlet_params.input.meshlet_count_offset = meshlet_count_offset;
+            cull_meshlet_params.input.draw_count_offset    = draw_count_offset;
+            cull_meshlet_params.meshlet_info_buffer        = meshlet_descs_buffer_view;
+            cull_meshlet_params.meshlet_bound_buffer       = meshlet_bounds_buffer_view;
+            cull_meshlet_params.instance_data              = instance_buffer_view;
+            cull_meshlet_params.instance_meshlet_info      = instance_meshlet_info_view;
+            cull_meshlet_params.instance_meshlet_cull_info = instance_meshlet_cull_info_view;
+            cull_meshlet_params.counters_buffer            = draw_count_view;
+            cull_meshlet_params.command_buffer             = draw_indirect_view;
+
+            RHIBatchedShaderParameters cull_instance_batched_params;
+            cull_instance_batched_params.SetParameters(ShaderResourceManager::GetInstance().GetShader<CullInstanceShader>(), cull_instance_params);
+
+            RHIBatchedShaderParameters cull_meshlet_batched_params;
+            cull_meshlet_batched_params.SetParameters(ShaderResourceManager::GetInstance().GetShader<CullMeshletShader>(), cull_meshlet_params);
+
+            auto* const scene = g_scene;
 
             auto&& sync_command_list = [this]() {
                 int                     i        = render_cmd_lists.size();
@@ -267,7 +375,11 @@ namespace Moer {
                 cmd_list->CopyBuffer(copy_info, zero_buffer, draw_count_buffer);
             };
 
-            auto&& cull_task = [this, compute_param = std::move(compute_batched_params)]() {
+            auto&& cull_task = [this,
+                                compute_param = std::move(compute_batched_params),
+                                instance_params(std::move(cull_instance_batched_params)),
+                                meshlet_params(std::move(cull_meshlet_batched_params)),
+                                instance_count(instance_count)]() mutable {
                 RHIGraphicsCommandList* cmd_list = render_cmd_lists[frame_counter % render_cmd_lists.size()];
 
                 RHIBarrierDependencyInfo barrier_dependency_info{};
@@ -290,9 +402,27 @@ namespace Moer {
 
                 cmd_list->SetPipelineBarrier(barrier_dependency_info);
 
-                cmd_list->SetPipelineState(compute_pipeline_state);
-                g_rhi->RHISetBatchedShaderParameters(compute_pipeline_state, compute_param);
-                cmd_list->Dispatch(16, 16, 16);
+                cmd_list->SetPipelineState(cull_instance_pso);
+                g_rhi->RHISetBatchedShaderParameters(compute_pipeline_state, instance_params);
+                auto dispatch_count = (instance_count + thread_group_count - 1) / thread_group_count;
+                cmd_list->Dispatch(dispatch_count, 1, 1);
+                {
+                    RHIBarrierDependencyInfo instance_cull_barrier{};
+                    instance_cull_barrier.buffer_barriers.resize(1);
+                    auto& buffer_barrier_info = instance_cull_barrier.buffer_barriers[0];
+                    buffer_barrier_info
+                        .SetBuffer(instance_meshlet_cull_info_buffer)
+                        .SetDstAccessFlags(ERHIAccessFlags::SHADER_READ)
+                        .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE)
+                        .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
+                        .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
+
+                    cmd_list->SetPipelineBarrier(instance_cull_barrier);
+                }
+
+                cmd_list->SetPipelineState(cull_meshlet_pso);
+                g_rhi->RHISetBatchedShaderParameters(cull_meshlet_pso, meshlet_params);
+                cmd_list->Dispatch((max_meshlet_count + thread_group_count) / thread_group_count, 1, 1);
                 {
                     RHIBarrierDependencyInfo post_compute_barrier{};
                     post_compute_barrier.buffer_barriers.resize(2);
@@ -318,7 +448,7 @@ namespace Moer {
 
             EnqueueRenderTask(std::move(sync_command_list));
             // EnqueueRenderTask(std::move(reset_counter_buffer));
-            // EnqueueRenderTask(std::move(cull_task));
+            EnqueueRenderTask(std::move(cull_task));
         }
 
         {
@@ -382,9 +512,9 @@ namespace Moer {
                     const RHIBufferRef prim_vertex_buffer = scene->GetBuffer("vertex_buffer");
                     const RHIBufferRef instance_id_buffer = scene->GetBuffer("instance_id_buffer");
                     RHIBufferRef       vbuffers[]         = {prim_vertex_buffer, instance_id_buffer};
-                    cmd_list->BindVertexBuffers(0, 1, vbuffers, offset);
+                    cmd_list->BindVertexBuffers(0, 2, vbuffers, offset);
 
-                    cmd_list->DrawIndexedIndirect(draw_indirect_buffer, 0, draw_count_buffer, 0, 11451, sizeof(uint32_t) * 4);
+                    cmd_list->DrawIndexedIndirect(draw_indirect_buffer, 0, draw_count_buffer, draw_count_offset, 11451, sizeof(DrawInstanceCmd));
                 } else {
                     assert(false);
                 }

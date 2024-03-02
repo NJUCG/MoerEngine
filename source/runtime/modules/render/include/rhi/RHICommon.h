@@ -961,6 +961,8 @@ struct MeshInfo {
     uint32_t index_offset;
     uint32_t vertex_count;
     uint32_t index_count;
+    uint32_t meshlet_offset;
+    uint32_t meshlet_count;
 };
 
 namespace Moer {

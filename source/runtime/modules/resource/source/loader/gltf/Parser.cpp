@@ -37,6 +37,8 @@ namespace Moer::Resource::Gltf {
         Moer::UnorderedMap<std::string, MaterialInstanceRef> m_materials{};
         Moer::UnorderedMap<size_t, MaterialRef>              m_material_cache{};
         Moer::Array<MeshInfo>                                m_mesh_infos{};
+        Moer::Array<InstanceData>                            m_instance_data{};
+        Moer::Array<InstanceMeshInfo>                        m_instance_mesh_info{};
 
         Moer::Array<MeshletDesc>  m_meshlet_descs{};
         Moer::Array<MeshletBound> m_meshlet_bounds{};
@@ -263,7 +265,7 @@ namespace Moer::Resource::Gltf {
         stride *= sizeof(float);
         m_mesh_infos.resize(gltf_scene->mNumMeshes);
 
-        uint32_t vertex_count = 0, index_count = 0;
+        uint32_t vertex_count = 0, index_count = 0, meshlet_count = 0;
         for (uint32_t i = 0; i < gltf_scene->mNumMeshes; i++) {
             const auto* mesh = gltf_scene->mMeshes[i];
 
@@ -298,16 +300,19 @@ namespace Moer::Resource::Gltf {
             m_meshlet_bounds.insert(m_meshlet_bounds.end(), output.meshlet_bounds.begin(), output.meshlet_bounds.end());
             m_meshlet_descs.insert(m_meshlet_descs.end(), output.meshlets.begin(), output.meshlets.end());
 
-            m_mesh_infos[i] = {.vertex_offset = vertex_count,
-                               .index_offset  = index_count,
-                               .vertex_count  = (uint32_t)output.meshlet_vertex_data.size(),
-                               .index_count   = (uint32_t)output.primitive_indices.size()};
+            m_mesh_infos[i] = {.vertex_offset  = vertex_count,
+                               .index_offset   = index_count,
+                               .vertex_count   = (uint32_t)output.meshlet_vertex_data.size(),
+                               .index_count    = (uint32_t)output.primitive_indices.size(),
+                               .meshlet_offset = meshlet_count,
+                               .meshlet_count  = (uint32_t)output.meshlets.size()};
 
             m_vertex_data.insert(m_vertex_data.end(), output.meshlet_vertex_data.begin(), output.meshlet_vertex_data.end());
             m_index_data.insert(m_index_data.end(), output.primitive_indices.begin(), output.primitive_indices.end());
 
             vertex_count += output.meshlet_vertex_data.size();
             index_count += output.primitive_indices.size();
+            meshlet_count += output.meshlets.size();
         }
 
         // Moer::Array<float>*    m_vertex_data = new Moer::Array<float>{};
@@ -350,27 +355,44 @@ namespace Moer::Resource::Gltf {
         loadCameras(gltf_scene);
         LoadNode(gltf_scene->mRootNode, gltf_scene);
 
-        auto                      instance_id = 0;
-        Moer::Array<InstanceData> instance_data;
-        Moer::Array<uint32_t>     instance_ids;
+        auto                          instance_id = 0;
+        Moer::Array<InstanceData>     instance_data;
+        Moer::Array<InstanceMeshInfo> instance_mesh_info;
+        Moer::Array<uint32_t>         instance_ids;
         // instance_data.reserve(entities.size());
-        m_scene->ForEach([this, &instance_data, &instance_ids, &instance_id](Entity entity) {
+        m_scene->ForEach([this, &instance_data, &instance_mesh_info, &instance_ids, &instance_id](Entity entity) {
             auto material_id   = RenderableManager::Get().GetMaterialInstance(entity);
             auto transform     = TransformManager::Get().Get(entity);
+            auto mesh_info     = RenderableManager::Get().GetMeshInfo(entity);
             auto model_2_world = transform.GetMatrix4x4();
             //todo material data not correct
-            instance_data.emplace_back(model_2_world, Inverse(model_2_world), instance_id, 0);
+            instance_data.emplace_back(model_2_world,
+                                       Inverse(model_2_world),
+                                       instance_id,
+                                       0);
+            instance_mesh_info.emplace_back(
+                mesh_info.index_offset,
+                mesh_info.index_count,
+                mesh_info.vertex_offset,
+                mesh_info.vertex_count,
+                mesh_info.meshlet_offset,
+                mesh_info.meshlet_count,
+                0,
+                0);
+
             instance_ids.push_back(instance_id);
             instance_id++;
         });
 
-        EnqueueRenderTask([instance_data = std::move(instance_data), instance_id(std::move(instance_ids)), gpu_scene]() {
+        EnqueueRenderTask([instance_data = std::move(instance_data), instance_mesh_info = std::move(instance_mesh_info), instance_id(std::move(instance_ids)), gpu_scene]() {
             GpuSceneBufferBuilder gpu_scene_buffer_builder;
 
-            auto instance_buffer = gpu_scene_buffer_builder.CopyFrom(instance_data.data(), instance_data.size() * sizeof(InstanceData));
-            auto instance_id_buffer = gpu_scene_buffer_builder.CopyFrom(instance_id.data(), instance_id.size() * sizeof(uint32_t));
+            auto instance_buffer      = gpu_scene_buffer_builder.CopyFrom(instance_data.data(), instance_data.size() * sizeof(InstanceData));
+            auto instance_id_buffer   = gpu_scene_buffer_builder.CopyFrom(instance_id.data(), instance_id.size() * sizeof(uint32_t));
+            auto instance_mesh_buffer = gpu_scene_buffer_builder.CopyFrom(instance_mesh_info.data(), instance_mesh_info.size() * sizeof(InstanceMeshInfo));
             gpu_scene->SetBuffer("instance_buffer", instance_buffer);
             gpu_scene->SetBuffer("instance_id_buffer", instance_id_buffer);
+            gpu_scene->SetBuffer("instance_meshlet_info_buffer", instance_mesh_buffer);
         });
         RenderThreadFence fence;
         fence.Wait();
@@ -452,7 +474,14 @@ namespace Moer::Resource::Gltf {
 
                 auto entity = EntityManager::Get().Create();
 
-                RenderableManager::Builder().Geometry(EPrimitiveType::TRIANGLES, m_mesh_infos[mesh_idx].vertex_count, m_mesh_infos[mesh_idx].index_count, m_mesh_infos[mesh_idx].vertex_offset, m_mesh_infos[mesh_idx].index_offset).Build(entity);
+                RenderableManager::Builder().Geometry(EPrimitiveType::TRIANGLES,
+                                                      m_mesh_infos[mesh_idx].vertex_count,
+                                                      m_mesh_infos[mesh_idx].index_count,
+                                                      m_mesh_infos[mesh_idx].vertex_offset,
+                                                      m_mesh_infos[mesh_idx].index_offset,
+                                                      m_mesh_infos[mesh_idx].meshlet_offset,
+                                                      m_mesh_infos[mesh_idx].meshlet_count)
+                    .Build(entity);
                 RenderableManager::Get().SetMeshInfo(entity, m_mesh_infos[mesh_idx]);
                 TransformManager::Get().Set(entity, GetTransform(node));
 

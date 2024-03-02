@@ -16,8 +16,37 @@ struct InstanceData {
 
 struct InstanceMeshletInfo {
   uint vertex_offset;
+  uint vertex_count;
   uint index_offset;
-  uint meshlet_count;
+  uint index_count;
   uint meshlet_offset;
+  uint meshlet_count;
+  uint padding[2];
+};
+struct InstanceMeshletCullInfo {
+  uint meshlet_id;
+  uint instance_id;
+};
+
+struct DrawCommandData {
+  uint index_count;
+  uint instance_count;
+  uint first_index;
+  uint vertex_offset;
+  uint first_instance;
+};
+
+struct MeshletDesc {
+  uint vertex_offset;
+  uint vertex_count;
+  uint index_offset;
+  uint index_count;
+};
+
+struct MeshletBound {
+  float3 center;
+  float radius;
+  float3 cone_axis;
+  float cone_angle;
 };
 #endif

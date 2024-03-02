@@ -4,31 +4,6 @@
 #define BACKFACE_CULLING_ENABLED 1
 #define OCCULSION_CULLING_ENABLED 1
 
-struct MeshletDesc {
-  uint vertex_offset;
-  uint index_offset;
-  uint packed_data;
-
-  uint GetPrimitiveCount() { return packed_data & 0xFF; }
-  uint GetVertexCount() { return (packed_data >> 8) & 0xFF; }
-  uint GetIndexCount() { return (packed_data & 0xFF) * 3; }
-};
-
-struct MeshletBound {
-  float3 center;
-  float radius;
-  float3 cone_axis;
-  float cone_angle;
-};
-
-struct DrawCommandData {
-  uint32_t index_count;
-  uint32_t instance_count;
-  uint32_t first_index;
-  int32_t vertex_offset;
-  uint32_t first_instance;
-};
-
 [[vk::push_constant]] ConstantBuffer<CameraData> camera_data;
 
 // StructuredBuffer<InstanceData> InstanceData;
@@ -93,7 +68,7 @@ bool IsMeshletVisible(in uint meshlet_id) {
   if (visible) {
     DrawCommandData cmd;
 
-    cmd.index_count = meshlet_desc.GetIndexCount();
+    cmd.index_count = meshlet_desc.index_count;
     cmd.instance_count = 1;
     cmd.first_index = meshlet_desc.index_offset;
     cmd.vertex_offset = meshlet_desc.vertex_offset;
