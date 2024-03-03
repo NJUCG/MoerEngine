@@ -1,14 +1,11 @@
-//
-// Created by 74535 on 2023/10/2.
-//
-
 #ifndef VULKAN_DEVICE_H
 #define VULKAN_DEVICE_H
 
 #include "misc/STL.h"
 #include "rhi/vulkan/misc/VulkanTypeDefs.h"
-#include "VulkanDeviceFeature.h"
 #include "VulkanExtension.h"
+#include "VulkanDeviceFeature.h"
+#include "VulkanDeviceProperty.h"
 
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
@@ -18,8 +15,6 @@
 class VulkanDescriptorSetsLayout;
 class VulkanDescriptorSetAllocator;
 class VulkanDescriptorSetWriter;
-
-union VulkanHashableDescriptorInfo;
 
 struct QueueFamilyIndices {
     std::optional<uint32_t> graphics;
@@ -61,17 +56,20 @@ public:
     inline VmaAllocator GetVmaAllocator() const {
         return m_allocator;
     }
-    inline VkPhysicalDeviceProperties2 GetProperties() const {
-        return m_gpu_props;
+    inline const VulkanOptionalDeviceExtensions& GetOptionalExtensions() const {
+        return m_optional_extensions;
     }
-    inline const VulkanPhysicalDeviceFeatures& GetFeatures() const {
-        return m_gpu_features;
+    inline const VulkanPhysicalDeviceFeatures& GetCoreFeatures() const {
+        return m_core_features;
     }
-    inline VkPhysicalDeviceMemoryProperties2 GetMemoryProperties() const {
-        return m_gpu_mem_props;
+    inline const VulkanPhysicalDeviceProperties& GetCoreProperties() const {
+        return m_core_properties;
     }
-    inline const TExtensionArray& GetGpuExtensions() const {
-        return m_gpu_extensions;
+    inline const VulkanOptionalDeviceProperties& GetOptionalProperties() const {
+        return m_optional_properties;
+    }
+    inline VkPhysicalDeviceMemoryProperties GetMemoryProperties() const {
+        return m_memery_properties;
     }
     inline QueueFamilyIndices GetQueueFamilyIndices() const {
         return m_queue_family_indices;
@@ -95,14 +93,14 @@ public:
     bool                          GetDescriptorSets(uint32_t _hash_key, const VulkanDescriptorSetsLayout& _layout, Moer::Array<VulkanDescriptorSetWriter>& _writers, Moer::Array<VkDescriptorSet>& _sets);
 
 private:
-    VkPhysicalDevice            m_gpu;
-    VkPhysicalDeviceProperties2 m_gpu_props;
-
-    VulkanPhysicalDeviceFeatures      m_gpu_features;
-    VkPhysicalDeviceMemoryProperties2 m_gpu_mem_props;
-    TExtensionArray                   m_gpu_extensions;
-    TQueueFamilyPropertiesArray       m_queue_family_props;
-    QueueFamilyIndices                m_queue_family_indices;
+    VkPhysicalDevice                 m_gpu;
+    VulkanOptionalDeviceExtensions   m_optional_extensions;
+    VulkanPhysicalDeviceFeatures     m_core_features;
+    VulkanPhysicalDeviceProperties   m_core_properties;
+    VulkanOptionalDeviceProperties   m_optional_properties;
+    VkPhysicalDeviceMemoryProperties m_memery_properties;
+    TQueueFamilyPropertiesArray      m_queue_family_props;
+    QueueFamilyIndices               m_queue_family_indices;
 
     VkDevice m_device;
     VkQueue  m_graphics_queue;

@@ -31,4 +31,13 @@
         }                               \
     }
 
+#if defined(_DEBUG) || defined(DEBUG)
+#include <vulkan/vk_enum_string_helper.h>
+#define VK_TYPE_TO_STRING(type, value)  string_##type(value)
+#define VK_FLAGS_TO_STRING(type, value) string_##type(value).c_str()
+#else
+#define VK_TYPE_TO_STRING(type, value)  std::to_string(static_cast<uint32_t>(value)).c_str()
+#define VK_FLAGS_TO_STRING(type, value) std::to_string(static_cast<uint32_t>(value)).c_str()
+#endif
+
 #endif// VULKAN_MACRO_UTILS_H

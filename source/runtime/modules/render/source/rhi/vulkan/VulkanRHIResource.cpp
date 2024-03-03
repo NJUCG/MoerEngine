@@ -935,7 +935,7 @@ void VulkanRHISampler::GenerateSamplerFromInitializer(const VulkanDevice* _devic
 
     sampler_create_info.maxAnisotropy = 1.0f;
     if (_initializer.filter == SF_ANISOTROPIC_NEAREST || _initializer.filter == SF_ANISOTROPIC_LINEAR) {
-        sampler_create_info.maxAnisotropy = std::clamp(static_cast<float>(_initializer.max_anisotropy), 1.0f, _device->GetProperties().properties.limits.maxSamplerAnisotropy);
+        sampler_create_info.maxAnisotropy = std::clamp(static_cast<float>(_initializer.max_anisotropy), 1.0f, _device->GetCoreProperties().core_1_0.limits.maxSamplerAnisotropy);
     }
     sampler_create_info.anisotropyEnable = sampler_create_info.maxAnisotropy > 1.0f ? VK_TRUE : VK_FALSE;
 
