@@ -64,7 +64,7 @@ void VulkanRHIImpl::ShutDown() {
 }
 
 #pragma region resources creation
-RHISamplerRef            VulkanRHIImpl::RHICreateSampler(const RHISamplerInitializer& _initializer) {
+RHISamplerRef  VulkanRHIImpl::RHICreateSampler(const RHISamplerInitializer& _initializer) {
     VulkanRHISampler* vk_sampler = new VulkanRHISampler();
     vk_sampler->GenerateSamplerFromInitializer(m_device, _initializer);
 
@@ -1303,11 +1303,10 @@ void VulkanRHIImpl::InitSurface(Moer::WindowHandle* _handle) {
 
 void VulkanRHIImpl::InitVulkan() {
     DeviceInitializer initializer;
-    initializer.instance         = m_instance;
-    initializer.surface          = m_surface;
-    initializer.api_version      = VK_API_VERSION_1_3;
-    initializer.enabled_features = VulkanDeviceFeature::GetMESupportedDeviceFeatures(initializer.api_version);
-    initializer.enabled_features.Init(initializer.api_version);
+    initializer.instance           = m_instance;
+    initializer.surface            = m_surface;
+    initializer.api_version        = VK_API_VERSION_1_3;
+    initializer.enabled_features   = VulkanDeviceFeature::GetMESupportedDeviceFeatures(initializer.api_version);
     initializer.enabled_extensions = VulkanDeviceExtension::GetMESupportedDeviceExtensions();
 
     m_device = new VulkanDevice();

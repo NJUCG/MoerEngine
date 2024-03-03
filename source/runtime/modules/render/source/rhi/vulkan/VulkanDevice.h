@@ -56,6 +56,9 @@ public:
     inline VmaAllocator GetVmaAllocator() const {
         return m_allocator;
     }
+    inline const VulkanEnabledDeviceExtensions& GetEnabledExtensions() const {
+        return m_enabled_extensions;
+    }
     inline const VulkanOptionalDeviceExtensions& GetOptionalExtensions() const {
         return m_optional_extensions;
     }
@@ -94,6 +97,7 @@ public:
 
 private:
     VkPhysicalDevice                 m_gpu;
+    VulkanEnabledDeviceExtensions    m_enabled_extensions;
     VulkanOptionalDeviceExtensions   m_optional_extensions;
     VulkanPhysicalDeviceFeatures     m_core_features;
     VulkanPhysicalDeviceProperties   m_core_properties;
@@ -118,7 +122,7 @@ private:
     VkPhysicalDevice SelectGpu(const DeviceInitializer& _init);
 
     void InitGpu(const DeviceInitializer& _initializer);
-    void CreateDevice(const DeviceInitializer& _initializer);
+    void CreateDevice(uint32_t _api_version);
     void CreateMemoryAllocator();
     void CreateDescriptorAllocator();
     void CreateCommandAllocators();

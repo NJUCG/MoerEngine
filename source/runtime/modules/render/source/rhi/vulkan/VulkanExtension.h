@@ -69,4 +69,11 @@ public:
     bool m_has_khr_ray_query;
 };
 
+class VulkanEnabledDeviceExtensions final {
+public:
+    void Init(const TVulkanDeviceExtensionArray& _enabled_extensions);
+
+    TVulkanDeviceExtensionArray m_enabled_extensions;
+};
+
 #endif//VULKAN_EXTENSION_H

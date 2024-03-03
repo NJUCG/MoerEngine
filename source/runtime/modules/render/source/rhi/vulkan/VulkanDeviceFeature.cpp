@@ -21,14 +21,7 @@ void VulkanPhysicalDeviceFeatures::Query(VkPhysicalDevice _gpu, uint32_t _api_ve
         core_1_2.pNext = &core_1_3;
         core_1_3.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
     }
-    core_1_3.pNext = nullptr;
-}
 
-void VulkanPhysicalDeviceFeatures::Query(VkPhysicalDevice _gpu, uint32_t _api_version) {
-    VkPhysicalDeviceFeatures2 gpu_features_2;
-    gpu_features_2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-    gpu_features_2.pNext = &core_1_1;
-    Init(_api_version);
     vkGetPhysicalDeviceFeatures2(_gpu, &gpu_features_2);
 
     // Copy features into old struct for convenience

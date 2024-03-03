@@ -11,7 +11,7 @@
 
 class VulkanDeviceExtension;
 
-using TVulkanDeviceExtensionArray = Moer::Array<std::unique_ptr<VulkanDeviceExtension>>;
+using TVulkanDeviceExtensionArray = Moer::Array<std::shared_ptr<VulkanDeviceExtension>>;
 using TExtensionArray             = Moer::Array<std::string>;
 using TExtensionPropsArray        = Moer::Array<VkExtensionProperties>;
 using TLayerArray                 = Moer::Array<std::string>;

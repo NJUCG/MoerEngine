@@ -42,7 +42,7 @@ void VulkanDevice::Init(const DeviceInitializer& _initializer) {
              m_core_properties.core_1_0.limits.maxBoundDescriptorSets,
              m_core_properties.core_1_0.limits.timestampComputeAndGraphics);
 
-    CreateDevice(_initializer);
+    CreateDevice(_initializer.api_version);
     CreateDescriptorAllocator();
     CreateCommandAllocators();
 }
@@ -148,6 +148,9 @@ void VulkanDevice::InitGpu(const DeviceInitializer& _initializer) {
         vkGetPhysicalDeviceProperties2(m_gpu, &props2);
     }
 
+    // Query supported extensions
+    m_enabled_extensions.Init(_initializer.enabled_extensions);
+
     // Query core memory properties
     vkGetPhysicalDeviceMemoryProperties(m_gpu, &m_memery_properties);
 
@@ -158,7 +161,7 @@ void VulkanDevice::InitGpu(const DeviceInitializer& _initializer) {
     LOG_INFO("VulkanRHI: GPU initialized.");
 }
 
-void VulkanDevice::CreateDevice(const DeviceInitializer& _initializer) {
+void VulkanDevice::CreateDevice(uint32_t _api_version) {
     std::set<uint32_t> unique_family_indices = {m_queue_family_indices.graphics.value(), m_queue_family_indices.present.value(), m_queue_family_indices.compute.value(), m_queue_family_indices.transfer.value()};
 
     // setup queue info
@@ -182,7 +185,7 @@ void VulkanDevice::CreateDevice(const DeviceInitializer& _initializer) {
 
     // setup extension and feature info
     Moer::Array<const char*> enabled_extensions;
-    for (const auto& extension : _initializer.enabled_extensions) {
+    for (const auto& extension : m_enabled_extensions.m_enabled_extensions) {
         enabled_extensions.emplace_back(extension->GetExtensionName().c_str());
         extension->PreCreateDevice(device_create_info);
     }
@@ -192,16 +195,14 @@ void VulkanDevice::CreateDevice(const DeviceInitializer& _initializer) {
         device_create_info.ppEnabledExtensionNames = enabled_extensions.data();
     }
     VkPhysicalDeviceFeatures2 enabled_features;
-    if (_initializer.api_version > VK_API_VERSION_1_0) {
-        VulkanPhysicalDeviceFeatures features(_initializer.enabled_features);
-        features.Init(_initializer.api_version);
+    if (_api_version > VK_API_VERSION_1_0) {
         enabled_features.sType    = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-        enabled_features.features = features.core_1_0;
-        enabled_features.pNext    = &features.core_1_1;
-        features.PreCreateDevice(device_create_info, _initializer.api_version);
+        enabled_features.features = m_core_features.core_1_0;
+        enabled_features.pNext    = &m_core_features.core_1_1;
+        m_core_features.PreCreateDevice(device_create_info, _api_version);
         device_create_info.pNext = &enabled_features;
     } else {
-        device_create_info.pEnabledFeatures = &_initializer.enabled_features.core_1_0;
+        device_create_info.pEnabledFeatures = &m_core_features.core_1_0;
     }
 
     VK_CHECK_RESULT(vkCreateDevice(m_gpu, &device_create_info, nullptr, &m_device));
