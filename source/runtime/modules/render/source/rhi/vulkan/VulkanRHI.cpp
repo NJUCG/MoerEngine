@@ -336,6 +336,8 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPSO(RHIGraphicsPSOCr
     rendering_create_info.viewMask                = 0;
     rendering_create_info.colorAttachmentCount    = attachment_count;
     rendering_create_info.pColorAttachmentFormats = color_attachment_formats.data();
+    rendering_create_info.depthAttachmentFormat   = VulkanEnumTranslator::METoVKFormat(_init.depth_stencil_format);
+    rendering_create_info.stencilAttachmentFormat = VulkanEnumTranslator::METoVKFormat(_init.depth_stencil_format);
 
     auto to_vk_blend_attachment = [](const RHIBlendAttachmentInfo& _info) {
         VkPipelineColorBlendAttachmentState state{};
@@ -496,9 +498,6 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPSO(RHIGraphicsPSOCr
     };
     auto vk_multisample_state = to_multi_sample_state(_init.multisample_info);
 
-    // depth stencil state
-    VkPipelineDepthStencilStateCreateInfo depth_stencil_state{};
-
     auto to_depth_stencil_state = [](const RHIDepthStencilStateInfo& info) {
         VkPipelineDepthStencilStateCreateInfo state{};
         state.sType                 = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
@@ -612,7 +611,7 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPSO(RHIGraphicsPSOCr
     pipeline_create_info.pViewportState      = &viewport_state;
     pipeline_create_info.pRasterizationState = &vk_rasterization_state;
     pipeline_create_info.pMultisampleState   = &vk_multisample_state;
-    pipeline_create_info.pDepthStencilState  = &depth_stencil_state;
+    pipeline_create_info.pDepthStencilState  = &vk_depth_stencil_state;
     pipeline_create_info.pColorBlendState    = &color_blend_state;
     pipeline_create_info.pDynamicState       = &dynamic_state;
     pipeline_create_info.layout              = vk_pso->m_pipeline_layout;
@@ -900,7 +899,7 @@ RHIUAVRef VulkanRHIImpl::RHICreateUAVInner(RHIViewableResource* _resource, const
         assert(image_view_create_info.format != VK_FORMAT_UNDEFINED && "RHICreateUnorderedAccessView: format is undefined!");
 
         image_view_create_info.components                      = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
-        image_view_create_info.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;// MARK...
+        image_view_create_info.subresourceRange.aspectMask     = uint32_t(vk_texture->GetUsageFlags() & ETextureUsageFlags::COLOR_ATTACHMENT) != 0 ? VK_IMAGE_ASPECT_COLOR_BIT : (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT);
         image_view_create_info.subresourceRange.baseMipLevel   = _view_info.texture.uav.mip_min;
         image_view_create_info.subresourceRange.levelCount     = _view_info.texture.uav.mip_num;
         image_view_create_info.subresourceRange.baseArrayLayer = _view_info.texture.uav.array_min;
@@ -1001,7 +1000,7 @@ void VulkanRHIImpl::RHISetBatchedShaderParametersInner(RHIResource* _pso, const 
 
     // cache push constants
     const auto& push_constants = _batched_params.GetConstantParameters();
-    if (!b_update_constant) return;
+    // if (!b_update_constant) return;
     for (const auto& params : push_constants) {
         vk_pso->m_pipeline_state_cache->AddConstantToPush({VulkanEnumTranslator::METoVKShaderStageFlags(params.shader_type),
                                                            (uint32_t)params.size_in_32bit * 4,

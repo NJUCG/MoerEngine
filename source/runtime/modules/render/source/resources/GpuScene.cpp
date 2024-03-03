@@ -2,6 +2,7 @@
 
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
+#include "rhi/RHICommon.h"
 #include "rhi/RHIResourceInitilizer.h"
 
 namespace Moer {
@@ -289,9 +290,8 @@ namespace Moer {
         return m_impl->Build();
     }
     RHIBufferRef GpuSceneBufferBuilder::CopyFrom(const void* data, uint32_t size) {
-        RHIBufferCreateInfo staging_buffer_create_info(size, 0, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
-        RHIBufferRef        staging_buffer            = g_rhi->RHICreateBuffer<std::byte>(size, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
-        auto*               staging_buffer_mapped_ptr = static_cast<uint8_t*>(g_rhi->RHIMapBuffer(staging_buffer, 0, size));
+        RHIBufferRef staging_buffer            = g_rhi->RHICreateBuffer<std::byte>(size, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
+        auto*        staging_buffer_mapped_ptr = static_cast<uint8_t*>(g_rhi->RHIMapBuffer(staging_buffer, 0, size));
         memcpy(staging_buffer_mapped_ptr, data, size);
         g_rhi->RHIUnmapBuffer(staging_buffer);
 
@@ -315,6 +315,17 @@ namespace Moer {
         copy_queue->SubmitCommands(1, cmd_list, &submit_info);
 
         copy_queue->WaitForQueueComplete();
+        return buffer;
+    }
+
+    RHIBufferRef GpuSceneBufferBuilder::CreateBufferWithData(EBufferUsageFlags usages, const void* data, uint32_t size) {
+        RHIBufferRef staging_buffer            = g_rhi->RHICreateBuffer<std::byte>(size, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
+        auto*        staging_buffer_mapped_ptr = static_cast<uint8_t*>(g_rhi->RHIMapBuffer(staging_buffer, 0, size));
+        memcpy(staging_buffer_mapped_ptr, data, size);
+        g_rhi->RHIUnmapBuffer(staging_buffer);
+
+        RHIBufferRef buffer = g_rhi->RHICreateBuffer<std::byte>(size, usages | EBufferUsageFlags::TRANSFER_DST);
+
         return buffer;
     }
 

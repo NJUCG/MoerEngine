@@ -18,7 +18,7 @@ struct TaskInput {
     instance_meshlet_cull_info : register(u0, space0);
 
 // 0 for processed instance, 1 for processed meshlet
-[[vk::binding(0, 3)]] RWByteAddressBuffer counters_buffer
+[[vk::binding(0, 2)]] RWByteAddressBuffer counters_buffer
     : register(u1, space1);
 
 bool IsInstanceVisible(in InstanceData instance) {

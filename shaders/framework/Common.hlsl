@@ -2,9 +2,7 @@
 #define FRAMEWORK_COMMON_HLSL
 struct CameraData {
   float4x4 view;
-  float4x4 proj;
-  float4x4 inv_view;
-  float4x4 inv_proj;
+  float4x4 view_proj;
 };
 
 struct InstanceData {
@@ -21,7 +19,6 @@ struct InstanceMeshletInfo {
   uint index_count;
   uint meshlet_offset;
   uint meshlet_count;
-  uint padding[2];
 };
 struct InstanceMeshletCullInfo {
   uint meshlet_id;

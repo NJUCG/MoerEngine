@@ -398,7 +398,8 @@ void VulkanRHIGraphicsCommandList::DrawIndexedIndirect(RHIBuffer* _argument_buff
     auto* vk_count_buffer = static_cast<const VulkanRHIBuffer*>(_count_buffer);
     auto* vk_arg_handle   = vk_arg_buffer == nullptr ? nullptr : vk_arg_buffer->GetHandle();
     auto* vk_count_handle = vk_count_buffer == nullptr ? nullptr : vk_count_buffer->GetHandle();
-
+    PrepareDrawCommand();
+    Moer::RHI::Vulkan::DebugUtils::CmdInsertLabel(m_command_buffer, "DrawIndexedInstancedIndirect", {});
     vkCmdDrawIndexedIndirectCount(
         m_command_buffer,
         vk_arg_handle,
@@ -410,12 +411,16 @@ void VulkanRHIGraphicsCommandList::DrawIndexedIndirect(RHIBuffer* _argument_buff
 }
 
 void VulkanRHIGraphicsCommandList::Dispatch(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z) {
+    PrepareDispatch();
+    Moer::RHI::Vulkan::DebugUtils::CmdInsertLabel(m_command_buffer, "Dispatch", {});
     vkCmdDispatch(m_command_buffer, _group_count_x, _group_count_y, _group_count_z);
 }
 
 void VulkanRHIGraphicsCommandList::DispatchIndirect(RHIBuffer* _buffer, uint64_t _offset) {
     auto* vk_buffer        = static_cast<const VulkanRHIBuffer*>(_buffer);
     auto* vk_buffer_handle = vk_buffer == nullptr ? nullptr : vk_buffer->GetHandle();
+    PrepareDispatch();
+    Moer::RHI::Vulkan::DebugUtils::CmdInsertLabel(m_command_buffer, "DispatchIndirect", {});
     vkCmdDispatchIndirect(m_command_buffer, vk_buffer_handle, _offset);
 }
 
@@ -682,7 +687,8 @@ VkRenderingAttachmentInfo VulkanRHIGraphicsCommandList::FromDepthStencilAttachme
 }
 
 void VulkanRHIGraphicsCommandList::PrepareDrawCommand() {
-    VulkanPipelineState* vk_pso = nullptr;
+    VulkanPipelineState* vk_pso        = nullptr;
+    auto                 binding_point = current_pso.index() == 0 ? VK_PIPELINE_BIND_POINT_GRAPHICS : VK_PIPELINE_BIND_POINT_COMPUTE;
     if (current_pso.index() == 0) {
         vk_pso = std::get<0>(current_pso);
     } else {
@@ -699,7 +705,7 @@ void VulkanRHIGraphicsCommandList::PrepareDrawCommand() {
     if (vk_resource_cache->HasDescriptorSets()) {
         vk_resource_cache->UpdateDescriptorSets(m_device, vk_sets_layout);
         if (m_bound_sets != vk_resource_cache->GetDescriptorSets()) {
-            vk_resource_cache->BindDescriptorSets(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout);
+            vk_resource_cache->BindDescriptorSets(m_command_buffer, binding_point, pipeline_layout);
             m_bound_sets = vk_resource_cache->GetDescriptorSets();
         }
     }
@@ -719,6 +725,10 @@ void VulkanRHIGraphicsCommandList::PrepareDrawCommand() {
     }
 }
 
+void VulkanRHIGraphicsCommandList::PrepareDispatch() {
+    PrepareDrawCommand();
+}
+
 VulkanRHIComputeCommandList::VulkanRHIComputeCommandList(VulkanDevice* _device, VkCommandPool _pool, VkCommandBufferLevel _level) : VulkanRHICommandListBase(_device, _pool, _level) {}
 
 VulkanRHIComputeCommandList::~VulkanRHIComputeCommandList() {
@@ -736,13 +746,21 @@ void VulkanRHIComputeCommandList::Reset() {
     VulkanRHICommandListBase::Reset();
 }
 
+void VulkanRHIComputeCommandList::PrepareDispatch() {
+    //some works to do
+}
+
 void VulkanRHIComputeCommandList::Dispatch(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z) {
+    PrepareDispatch();
+    Moer::RHI::Vulkan::DebugUtils::CmdInsertLabel(m_command_buffer, "DrawIndexedInstanced", {});
     vkCmdDispatch(m_command_buffer, _group_count_x, _group_count_y, _group_count_z);
 }
 
 void VulkanRHIComputeCommandList::DispatchIndirect(RHIBuffer* _buffer, uint64_t _offset) {
     auto* vk_buffer        = static_cast<const VulkanRHIBuffer*>(_buffer);
     auto* vk_buffer_handle = vk_buffer == nullptr ? nullptr : vk_buffer->GetHandle();
+    PrepareDispatch();
+    Moer::RHI::Vulkan::DebugUtils::CmdInsertLabel(m_command_buffer, "DrawIndexedInstanced", {});
     vkCmdDispatchIndirect(m_command_buffer, vk_buffer_handle, _offset);
 }
 

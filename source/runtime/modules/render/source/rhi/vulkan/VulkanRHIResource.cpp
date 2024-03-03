@@ -1452,7 +1452,7 @@ VulkanViewport::VulkanViewport(VulkanSwapChain* _swapchain, uint32_t _max_frame_
 VulkanViewport::~VulkanViewport() {
     InnerDestroyResources();
 
-    delete swapchain;
+    MoerDelete(swapchain);
     swapchain = nullptr;
 }
 

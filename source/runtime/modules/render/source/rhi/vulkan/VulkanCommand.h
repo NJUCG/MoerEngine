@@ -187,6 +187,7 @@ private:
     VkRenderingAttachmentInfo FromDepthStencilAttachmentInfo(const RHIRenderPassInfo::DepthStencilAttachmentInfo& _depth_stencil_attachment_info) const;
 
     void PrepareDrawCommand();
+    void PrepareDispatch();
 
     // MARK: bound sets rely on corresponding command list, it maybe wrong when muti-threading recording.
     Moer::Array<VkDescriptorSet> m_bound_sets;
@@ -234,6 +235,9 @@ public:
     void CopyTextureToBuffer(const RHICopyTextureToBufferInfo& _info, RHITexture* src_texture, RHIBuffer* dst_buffer) override;
 
     void SetPipelineBarrier(const RHIBarrierDependencyInfo& _dependency) override;
+
+protected:
+    void PrepareDispatch();
 };
 
 class VulkanRHICommandQueue final : public RHICommandQueue,

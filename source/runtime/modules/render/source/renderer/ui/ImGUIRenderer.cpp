@@ -493,12 +493,11 @@ void GUIUploadData(void* _draw_data, RHIGraphicsCommandList* _ui_command_list, R
             // render_buffers->vertex_buffer->DeRef();
             uint32_t new_size             = 4096 + total_size_vert;
             render_buffers->vertex_buffer = g_rhi->RHICreateBuffer<ImDrawVert>(
-                new_size,
+                new_size * sizeof(ImDrawVert),
                 EBufferUsageFlags::VERTEX_BUFFER | EBufferUsageFlags::TRANSFER_DST);
 
             render_buffers->staging_vertex_buffer = g_rhi->RHICreateBuffer<ImDrawVert>(
-                new_size,
-                EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
+                new_size * sizeof(ImDrawVert), EBufferUsageFlags::CPU_VISIBLE);
 
             render_buffers->staging_vertex_buffer->SetName("staging_vertex_buffer");
         }
@@ -507,14 +506,12 @@ void GUIUploadData(void* _draw_data, RHIGraphicsCommandList* _ui_command_list, R
             if (render_buffers->index_buffer != nullptr) {}
             uint32_t new_size            = 8192 + total_size_idx;
             render_buffers->index_buffer = g_rhi->RHICreateBuffer<ImDrawIdx>(
-                new_size,
+                new_size * sizeof(ImDrawIdx),
                 EBufferUsageFlags::INDEX_BUFFER | EBufferUsageFlags::TRANSFER_DST);
 
             render_buffers->staging_index_buffer = g_rhi->RHICreateBuffer<ImDrawIdx>(
-                new_size,
-                EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
+                new_size * sizeof(ImDrawIdx), EBufferUsageFlags::CPU_VISIBLE);
         }
-        assert(render_buffers->staging_vertex_buffer->GetUsage() == (EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE));
     });
 
     ImDrawVert* vertex_dst = nullptr;

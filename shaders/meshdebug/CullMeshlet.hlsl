@@ -52,11 +52,15 @@ bool IsMeshletVisible(in MeshletBound bound) { return true; }
   if (visible) {
     DrawCommandData cmd;
     MeshletDesc meshlet_desc = meshlet_info_buffer[cull_info.meshlet_id];
+    InstanceMeshletInfo instance_mesh_info =
+        instance_meshlet_info[cull_info.instance_id];
 
     cmd.index_count = meshlet_desc.index_count;
     cmd.instance_count = 1;
-    cmd.first_index = meshlet_desc.index_offset;
-    cmd.vertex_offset = meshlet_desc.vertex_offset;
+    cmd.first_index =
+        meshlet_desc.index_offset + instance_mesh_info.index_offset;
+    cmd.vertex_offset =
+        meshlet_desc.vertex_offset + instance_mesh_info.vertex_offset;
     cmd.first_instance = cull_info.instance_id;
     command_buffer[cmd_offset] = cmd;
   }

@@ -302,7 +302,7 @@ namespace Moer::Resource::Gltf {
 
             m_mesh_infos[i] = {.vertex_offset  = vertex_count,
                                .index_offset   = index_count,
-                               .vertex_count   = (uint32_t)output.meshlet_vertex_data.size(),
+                               .vertex_count   = (uint32_t)(output.meshlet_vertex_data.size() / (stride / sizeof(float))),
                                .index_count    = (uint32_t)output.primitive_indices.size(),
                                .meshlet_offset = meshlet_count,
                                .meshlet_count  = (uint32_t)output.meshlets.size()};
@@ -310,7 +310,7 @@ namespace Moer::Resource::Gltf {
             m_vertex_data.insert(m_vertex_data.end(), output.meshlet_vertex_data.begin(), output.meshlet_vertex_data.end());
             m_index_data.insert(m_index_data.end(), output.primitive_indices.begin(), output.primitive_indices.end());
 
-            vertex_count += output.meshlet_vertex_data.size();
+            vertex_count += output.meshlet_vertex_data.size() / (stride / sizeof(float));
             index_count += output.primitive_indices.size();
             meshlet_count += output.meshlets.size();
         }
@@ -371,14 +371,12 @@ namespace Moer::Resource::Gltf {
                                        instance_id,
                                        0);
             instance_mesh_info.emplace_back(
-                mesh_info.index_offset,
-                mesh_info.index_count,
                 mesh_info.vertex_offset,
                 mesh_info.vertex_count,
+                mesh_info.index_offset,
+                mesh_info.index_count,
                 mesh_info.meshlet_offset,
-                mesh_info.meshlet_count,
-                0,
-                0);
+                mesh_info.meshlet_count);
 
             instance_ids.push_back(instance_id);
             instance_id++;
@@ -387,10 +385,11 @@ namespace Moer::Resource::Gltf {
         EnqueueRenderTask([instance_data = std::move(instance_data), instance_mesh_info = std::move(instance_mesh_info), instance_id(std::move(instance_ids)), gpu_scene]() {
             GpuSceneBufferBuilder gpu_scene_buffer_builder;
 
-            auto instance_buffer      = gpu_scene_buffer_builder.CopyFrom(instance_data.data(), instance_data.size() * sizeof(InstanceData));
-            auto instance_id_buffer   = gpu_scene_buffer_builder.CopyFrom(instance_id.data(), instance_id.size() * sizeof(uint32_t));
+            auto instance_buffer    = gpu_scene_buffer_builder.CopyFrom(instance_data.data(), instance_data.size() * sizeof(InstanceData));
+            auto instance_id_buffer = gpu_scene_buffer_builder.CreateBufferWithData(
+                EBufferUsageFlags::VERTEX_BUFFER, instance_id.data(), instance_id.size() * sizeof(int));
             auto instance_mesh_buffer = gpu_scene_buffer_builder.CopyFrom(instance_mesh_info.data(), instance_mesh_info.size() * sizeof(InstanceMeshInfo));
-            gpu_scene->SetBuffer("instance_buffer", instance_buffer);
+            gpu_scene->SetBuffer("instance_data", instance_buffer);
             gpu_scene->SetBuffer("instance_id_buffer", instance_id_buffer);
             gpu_scene->SetBuffer("instance_meshlet_info_buffer", instance_mesh_buffer);
         });

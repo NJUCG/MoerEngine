@@ -148,13 +148,13 @@ void MainWindow::Show() {
     ShowResolutionSelector("Resolution", values);
 
     auto& render_manager = Moer::RendererManager::GetInstance();
-    // auto  renderer_id    = render_manager.GetRendererID(MOER_DEFAULT_RENDERER_NAME);
-    // void* output         = render_manager.GetRendererOutput(renderer_id);
-    // render_manager.SetRendererPresentResolution(renderer_id, values.x, values.y);
+    auto  renderer_id    = render_manager.GetRendererID(MOER_DEFAULT_RENDERER_NAME);
+    void* output         = render_manager.GetRendererOutput(renderer_id);
+    render_manager.SetRendererPresentResolution(renderer_id, values.x, values.y);
     float display_width  = ImGui::GetWindowWidth();
     float display_height = display_width * 9.f / 16.f;
-    // ImGui::Image(output,
-    //              {display_width, display_height});
+    ImGui::Image(output,
+                 {display_width, display_height});
     ImGui::ShowStyleEditor();
 
     // ImGui::Image()

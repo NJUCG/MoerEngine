@@ -784,6 +784,8 @@ struct RHITextureCreateInfo : public RHITextureInfo {
     }
     RHITextureCreateInfo& SetFormat(EPixelFormat _format) {
         format = _format;
+        if (uav_format == PF_UNDEFINED)
+            SetUAVFormat(_format);
         return *this;
     }
     RHITextureCreateInfo& SetUAVFormat(EPixelFormat _uav_format) {
@@ -1037,6 +1039,8 @@ struct RHIBufferBarrierInfo : public RHIBarrierInfo {
     }
     RHIBufferBarrierInfo& SetBuffer(RHIBuffer* _buffer) {
         p_buffer = _buffer;
+        size     = _buffer->GetInfo().size;
+
         return *this;
     }
     RHIBufferBarrierInfo& SetOffset(uint64_t _offset) {

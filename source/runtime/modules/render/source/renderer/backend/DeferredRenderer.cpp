@@ -7,6 +7,7 @@
 #include "math/Function.h"
 #include "math/Matrix.h"
 #include "misc/MMemory.h"
+#include "misc/STL.h"
 #include "resources/AsyncResources.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommon.h"
@@ -31,15 +32,21 @@ END_SHADER_CONSTANT_STRUCT_DEFINITION()
 
 BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(CameraData)
 DEFINE_SHADER_PARAM(Moer::Matrix4x4f, view)
-DEFINE_SHADER_PARAM(Moer::Matrix4x4f, proj)
-DEFINE_SHADER_PARAM(Moer::Matrix4x4f, inv_view)
-DEFINE_SHADER_PARAM(Moer::Matrix4x4f, inv_proj)
+DEFINE_SHADER_PARAM(Moer::Matrix4x4f, view_proj)
+END_SHADER_CONSTANT_STRUCT_DEFINITION()
+
+BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(CameraCullData)
+DEFINE_SHADER_PARAM(Moer::Matrix4x4f, view)
+DEFINE_SHADER_PARAM(Moer::Matrix4x4f, view_proj)
+DEFINE_SHADER_PARAM(Moer::Vector4f[6], frustum_planes)
+DEFINE_SHADER_PARAM(Moer::Vector3f, camera_pos)
 END_SHADER_CONSTANT_STRUCT_DEFINITION()
 class TestDeferredTriangleShaderVert : public Shader {
     DEFINE_SHADER_TYPE(TestDeferredTriangleShaderVert, Global, RENDER_API, ...)
 public:
     BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
     DEFINE_SHADER_PARAM_STRUCT(CameraData, camera_data)
+    DEFINE_SHADER_PARAM_SRV(StructuredBuffer<InstanceData>, instance_data)
     END_ROOT_PARAMETER_DEFINITION(Parameters)
 };
 
@@ -146,11 +153,13 @@ namespace Moer {
         RHIComputePipelineStateRef  cull_instance_pso;
         RHIComputePipelineStateRef  cull_meshlet_pso;
 
-        RHIBufferRef draw_indirect_buffer;
-        RHIBufferRef draw_count_buffer;
-        RHIBufferRef zero_buffer;
-        RHIBufferRef instance_meshlet_cull_info_buffer;
-        RHIBufferRef uniform_buffer;
+        Moer::Array<RHITextureRef> depth_buffer;
+        Moer::Array<RHIUAVRef>     depth_buffer_uav;
+        RHIBufferRef               draw_indirect_buffer;
+        RHIBufferRef               draw_count_buffer;
+        RHIBufferRef               zero_buffer;
+        RHIBufferRef               instance_meshlet_cull_info_buffer;
+        RHIBufferRef               uniform_buffer;
 
         RHISRVRef meshlet_descs_buffer_view;
         RHISRVRef meshlet_bounds_buffer_view;
@@ -238,9 +247,10 @@ namespace Moer {
             RHIGraphicsPSOCreateInfo::Create()
                 .SetShaderStage(
                     std::move(shader_input_info))
-                .SetDepthStencilInfo(RHIDepthStencilStateInfo::Preset<RHIConfig::DepthStencil::DEPTH_WRITE_LESS>())
+                .SetDepthStencilInfo(RHIDepthStencilStateInfo::Preset<RHIConfig::DepthStencil::DEPTH_WRITE_GREATER>())
                 .SetColorAttachmentInfo(
                     {std::move(RHIColorAttachmentInfo::Preset(EPixelFormat::PF_R8G8B8A8_SRGB))})
+                .SetDepthStencilFormat(PF_D32_SFLOAT_S8_UINT)
                 .Finalize();
 
         pipeline_state = g_rhi->RHICreateGraphicsPSO(std::move(pso_create_info));
@@ -261,7 +271,8 @@ namespace Moer {
                 EBufferUsageFlags::INDIRECT_BUFFER | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::STORAGE_BUFFER);
 
             draw_count_buffer = g_rhi->RHICreateBuffer<uint32_t>(32 * sizeof(int),
-                                                                 EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::STORAGE_BUFFER);
+                                                                 EBufferUsageFlags::TRANSFER_DST |
+                                                                     EBufferUsageFlags::STORAGE_BUFFER | EBufferUsageFlags::INDIRECT_BUFFER);
 
             zero_buffer = g_rhi->RHICreateBuffer<uint32_t>(32 * sizeof(int),
                                                            EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::TRANSFER_SRC);
@@ -285,7 +296,7 @@ namespace Moer {
 
             meshlet_bounds_buffer_view = g_rhi->RHICreateBufferSRV(g_scene->GetBuffer("meshlet_bounds"));
 
-            instance_buffer_view = g_rhi->RHICreateBufferSRV(g_scene->GetBuffer("instance_buffer"));
+            instance_buffer_view = g_rhi->RHICreateBufferSRV(g_scene->GetBuffer("instance_data"));
 
             instance_meshlet_info_view = g_rhi->RHICreateBufferSRV(g_scene->GetBuffer("instance_meshlet_info_buffer"));
 
@@ -296,6 +307,47 @@ namespace Moer {
             instance_meshlet_cull_info_view = g_rhi->RHICreateBufferSRV(instance_meshlet_cull_info_buffer);
 
             instance_meshlet_cull_info_uav = g_rhi->RHICreateBufferUAV(instance_meshlet_cull_info_buffer);
+        }
+        {
+            //depth buffer
+            auto depth_create_info = RHITextureCreateInfo::Create("deferred_depth", ETextureDimension::TEX_2D)
+                                         .SetExtent(_init_info.width, _init_info.height)
+                                         .SetDepth(1)
+                                         .SetFormat(EPixelFormat::PF_D32_SFLOAT_S8_UINT)
+                                         .SetClearAttachment(RHIClearAttachment(EClearAttachment::DEPTH_STENCIL))
+                                         .SetUsageFlags(ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT);
+            depth_buffer.resize(create_info.back_buffer_count);
+            for (uint32_t i = 0; i < create_info.back_buffer_count; ++i) {
+
+                depth_buffer[i] = g_rhi->RHICreateTexture(depth_create_info);
+                depth_buffer_uav.push_back(g_rhi->RHICreateTextureUAV(depth_buffer[i]));
+            }
+
+            RHIBarrierDependencyInfo barrier_info{};
+            barrier_info.texture_barriers.resize(create_info.back_buffer_count);
+
+            RHISubresourceRange range(ETextureAspectFlags::DEPTH_SLICE | ETextureAspectFlags::STENCIL_SLICE);
+
+            for (uint32_t i = 0; i < create_info.back_buffer_count; ++i) {
+                auto& barrier = barrier_info.texture_barriers[i];
+                barrier
+                    .SetTexture(depth_buffer[i])
+                    .SetDstTextureLayout(ETextureLayout::TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE)
+                    .SetSrcTextureLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED)
+                    .SetSubResourceRange(range)
+                    .SetDstStage(PS_EARLY_FRAGMENT_TESTS)
+                    .SetSrcAccessFlags(ERHIAccessFlags::UNDEFINED)
+                    .SetDstAccessFlags(ERHIAccessFlags::DEPTH_STENCIL_WRITE);
+            }
+            render_cmd_lists[0]->BeginRecording();
+            render_cmd_lists[0]->SetPipelineBarrier(barrier_info);
+            render_cmd_lists[0]->EndRecording();
+            RHISubmitInfo submit_info{};
+            RHIFenceRef   fence = g_rhi->RHICreateFence({.usage = EFenceUsageFlags::TIMELINE});
+            submit_info.Signal(fence, 1);
+            render_queue->SubmitCommands(1, render_cmd_lists[0], &submit_info);
+            fence->Wait(1);
+            int i = 0;
         }
     }
 
@@ -313,11 +365,8 @@ namespace Moer {
         camera->Tick();
 
         CameraData camera_data;
-        camera_data.view = camera->GetViewMatrix();
-        camera_data.proj = camera->GetProjectionMatrix();
-
-        camera_data.inv_view = Inverse(camera_data.view.t);
-        camera_data.inv_proj = Inverse(camera_data.proj.t);
+        camera_data.view      = Transpose(camera->GetViewMatrix());
+        camera_data.view_proj = Transpose(camera->GetProjectionMatrix() * camera->GetViewMatrix());
 
         {
             MeshletCullingShader::Parameters cull_params;
@@ -366,12 +415,11 @@ namespace Moer {
                 cmd_list->Reset();
                 cmd_list->BeginRecording();
             };
-
-            auto&& reset_counter_buffer = [this]() {
+            RHICopyBufferInfo copy_info{};
+            copy_info.regions.push_back({0, 0, sizeof(uint32_t)});
+            auto&& reset_counter_buffer = [this, copy_info = std::move(copy_info)]() {
                 RHIGraphicsCommandList* cmd_list = render_cmd_lists[frame_counter % render_cmd_lists.size()];
 
-                RHICopyBufferInfo copy_info{};
-                copy_info.regions.push_back({0, 0, sizeof(uint32_t)});
                 cmd_list->CopyBuffer(copy_info, zero_buffer, draw_count_buffer);
             };
 
@@ -403,7 +451,7 @@ namespace Moer {
                 cmd_list->SetPipelineBarrier(barrier_dependency_info);
 
                 cmd_list->SetPipelineState(cull_instance_pso);
-                g_rhi->RHISetBatchedShaderParameters(compute_pipeline_state, instance_params);
+                g_rhi->RHISetBatchedShaderParameters(cull_instance_pso, instance_params);
                 auto dispatch_count = (instance_count + thread_group_count - 1) / thread_group_count;
                 cmd_list->Dispatch(dispatch_count, 1, 1);
                 {
@@ -447,13 +495,14 @@ namespace Moer {
             };
 
             EnqueueRenderTask(std::move(sync_command_list));
-            // EnqueueRenderTask(std::move(reset_counter_buffer));
+            EnqueueRenderTask(std::move(reset_counter_buffer));
             EnqueueRenderTask(std::move(cull_task));
         }
 
         {
             TestDeferredTriangleShaderVert::Parameters params;
-            params.camera_data = camera_data;
+            params.camera_data   = camera_data;
+            params.instance_data = instance_buffer_view;
 
             RHIBatchedShaderParameters batched_params;
             batched_params.SetParameters(ShaderResourceManager::GetInstance().GetShader<TestDeferredTriangleShaderVert>(), params);
@@ -472,6 +521,11 @@ namespace Moer {
                 render_attachment_view.required_layout  = TEXTURE_LAYOUT_COLOR_ATTACHMENT;
                 render_attachment_view.texture_view     = uav;
                 render_attachment_view.clear_attachment = RHIClearAttachment(EClearAttachment::COLOR);
+
+                auto& depth_attachment_view            = pass_info.depth_stencil_attachment.depth_stencil_attachment_view;
+                depth_attachment_view.texture_view     = depth_buffer_uav[info.backbuffer_index];
+                depth_attachment_view.required_layout  = TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE;
+                depth_attachment_view.clear_attachment = RHIClearAttachment(EClearAttachment::DEPTH_STENCIL);
 
                 Extent3D extent              = uav->GetTexture()->GetExtent3D();
                 pass_info.render_area.extent = Extent2D(extent.x, extent.y);
@@ -497,15 +551,10 @@ namespace Moer {
                 cmd_list->SetScissor({0, 0, uint32_t(viewport_info.extent.x), uint32_t(viewport_info.extent.y)});
 
                 cmd_list->SetPipelineState(pipeline_state);
+                g_rhi->RHISetBatchedShaderParameters(pipeline_state, batched_params);
 
                 auto* const scene = g_scene;
                 if (scene) {
-                    auto camera_entity = scene->GetCameras()[0];
-                    auto camera        = CameraManager::Get().Get(camera_entity);
-                    camera->Tick();
-                    const auto camera_view = camera->GetViewMatrix();
-                    const auto camera_proj = camera->GetProjectionMatrix();
-
                     // Shader* vert_shader = ShaderResourceManager::GetShader<TestDeferredTriangleShaderVert>();
                     cmd_list->BindIndexBuffer(scene->GetBuffer("index_buffer"), 0, IET_UINT32);
                     uint32_t           offset[]           = {0, 0};
@@ -514,7 +563,7 @@ namespace Moer {
                     RHIBufferRef       vbuffers[]         = {prim_vertex_buffer, instance_id_buffer};
                     cmd_list->BindVertexBuffers(0, 2, vbuffers, offset);
 
-                    cmd_list->DrawIndexedIndirect(draw_indirect_buffer, 0, draw_count_buffer, draw_count_offset, 11451, sizeof(DrawInstanceCmd));
+                    cmd_list->DrawIndexedIndirect(draw_indirect_buffer, 0, draw_count_buffer, draw_count_offset, 114514, sizeof(DrawInstanceCmd));
                 } else {
                     assert(false);
                 }

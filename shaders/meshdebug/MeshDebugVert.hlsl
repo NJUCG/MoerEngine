@@ -21,7 +21,8 @@ struct PS_INPUT {
 
 PS_INPUT main(VS_INPUT input) {
   PS_INPUT output;
-  float4x4 mvp = mul(camera_data.proj, mul(camera_data.view, instance_data_buffer[input.instance_id].model2world));
+  float4x4 mvp = mul(camera_data.view_proj,
+                     instance_data_buffer[input.instance_id].model2world);
   output.pos = mul(mvp, float4(input.pos, 1.f));
   output.uv = input.uv;
   output.col = float4(input.uv, 0.f, 1.f);

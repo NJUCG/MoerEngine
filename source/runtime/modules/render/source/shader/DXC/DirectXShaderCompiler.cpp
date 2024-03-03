@@ -78,10 +78,10 @@ DXCompiler::Impl::Impl() {
 }
 
 DXCompiler::Impl::~Impl() {
-    utils->Release();
-    include_handler->Release();
-    library->Release();
-    compiler->Release();
+    utils           = nullptr;
+    include_handler = nullptr;
+    library         = nullptr;
+    compiler        = nullptr;
 }
 
 // static ComPtr<IDxcCompiler3>      compiler        = nullptr;

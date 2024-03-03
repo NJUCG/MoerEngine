@@ -88,7 +88,7 @@ namespace Moer {
             output.meshlets[index].vertex_offset    = m.vertex_offset;
             output.meshlets[index].vertex_count     = m.vertex_count;
             output.meshlets[index].primitive_offset = m.triangle_offset;
-            output.meshlets[index].primitive_count  = m.triangle_count;
+            output.meshlets[index].primitive_count  = m.triangle_count * 3;
         });
 
         //rebuild original vertices and indices

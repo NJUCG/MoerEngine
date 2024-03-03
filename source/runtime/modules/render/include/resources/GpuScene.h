@@ -1,5 +1,6 @@
 #pragma once
 
+#include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "scene/ECS.h"
 
@@ -68,6 +69,7 @@ namespace Moer {
         ~GpuSceneBufferBuilder();
         std::pair<RHIBufferRef, RHIBufferRef> Build();
         RHIBufferRef                          CopyFrom(const void* data, uint32_t size);
+        RHIBufferRef                          CreateBufferWithData(EBufferUsageFlags usages, const void* data, uint32_t size);
 
     protected:
         class Impl;
