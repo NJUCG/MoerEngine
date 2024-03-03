@@ -182,6 +182,10 @@ AttachmentBindingSlots* GetAttachmentBindings(uint8_t* data, uint32_t offset) {
     return (AttachmentBindingSlots*)(data + offset);
 }
 
+void RHIBatchedShaderParameters::SetParameters(RHIResource* resource, uint16_t slot, uint16_t space) {
+    resource_parameters.emplace_back(RHIShaderResourceParameter(resource, slot, space));
+}
+
 void RHIBatchedShaderParameters::SetParameters(RHIShader* shader, size_t _data_size, uint8_t* data_source) {
     SetParameters(shader->GetMetaShader(), _data_size, data_source);
 }
@@ -258,18 +262,18 @@ void RHIBatchedShaderParameters::SetParameters(const Shader* shader, size_t _dat
     }
 }
 
-RHIBufferRef   RHIRenderPrimitive::GetVertexBuffer() const {
+RHIBufferRef RHIRenderPrimitive::GetVertexBuffer() const {
     return m_vertex_buffer;
 }
-RHIBufferRef   RHIRenderPrimitive::GetIndexBuffer() const {
+RHIBufferRef RHIRenderPrimitive::GetIndexBuffer() const {
     return m_index_buffer;
 }
 EPrimitiveType RHIRenderPrimitive::GetPrimitiveType() const {
     return m_type;
 }
-uint32_t       RHIRenderPrimitive::GetOffset() const {
+uint32_t RHIRenderPrimitive::GetOffset() const {
     return m_offset;
 }
-uint32_t       RHIRenderPrimitive::GetCount() const {
+uint32_t RHIRenderPrimitive::GetCount() const {
     return m_count;
 }

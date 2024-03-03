@@ -41,7 +41,8 @@ class TestDeferredTriangleShaderFrag : public Shader {
     DEFINE_SHADER_TYPE(TestDeferredTriangleShaderFrag, Global, RENDER_API, ...)
 public:
     BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
-
+    DEFINE_SHADER_PARAM_SAMPLER(Sampler, defaultSampler)
+    DEFINE_SHADER_PARAM_SRV(Texture2D, baseColorMap)
     END_ROOT_PARAMETER_DEFINITION(Parameters)
 };
 
@@ -120,7 +121,7 @@ namespace Moer {
         render_fence = g_rhi->RHICreateFence({.usage = EFenceUsageFlags::TIMELINE});
 
         //test draw triangle
-        float vertices[] = {
+        static float vertices[] = {
             -0.5f,
             -0.5f,
             0.0f,
@@ -218,8 +219,8 @@ namespace Moer {
         RHIMultisampleStateRef multisample_state = g_rhi->RHICreateMultiSampleState(multisample_init);
 
         RHIDepthStencilStateInitializer depth_stencil_init{};
-        depth_stencil_init.b_enable_depth_write     = false;
-        depth_stencil_init.depth_test_op            = CO_NEVER;
+        depth_stencil_init.b_enable_depth_write     = true;
+        depth_stencil_init.depth_test_op            = CO_GREATER_OR_EQUAL;
         RHIDepthStencilStateRef depth_stencil_state = g_rhi->RHICreateDepthStencilState(depth_stencil_init);
 
         RHIGraphicsPipelineStateInitializer::TAttachmentFormats color_attachment_formats{};
@@ -253,9 +254,10 @@ namespace Moer {
 
         RHIVertexInputStateRef vertex_input_state = g_rhi->RHICreateVertexInputState(vertex_input_state_init_list);
 
-        RHIVertexShaderRef   vertex_shader = g_rhi->RHICreateVertexShader(ShaderResourceManager::GetShader<TestDeferredTriangleShaderVert>());
-        RHIFragmentShaderRef fragment_shader =
-            g_rhi->RHICreateFragmentShader(ShaderResourceManager::GetShader<TestDeferredTriangleShaderFrag>());
+        auto& shader_resource_manager = ShaderResourceManager::GetInstance();
+
+        RHIShaderRef              vertex_shader      = shader_resource_manager.GetShader<TestDeferredTriangleShaderVert>();
+        RHIShaderRef              fragment_shader    = shader_resource_manager.GetShader<TestDeferredTriangleShaderFrag>();
         RHIShaderBoundStateInput& shader_stage_input = init.shader_stage;
 
         shader_stage_input.p_vertex_input_state = vertex_input_state;
@@ -324,28 +326,39 @@ namespace Moer {
 
             auto* const scene = g_scene;
             if (scene) {
-                const auto camera_entity = scene->GetCameras()[0];
-                const auto camera        = CameraManager::Get().Get(camera_entity);
-                const auto camera_view   = camera->GetViewMatrix();
-                const auto camera_proj   = camera->GetProjectionMatrix();
+                auto camera_entity = scene->GetCameras()[0];
+                auto camera        = CameraManager::Get().Get(camera_entity);
+                camera->Tick();
+                const auto camera_view = camera->GetViewMatrix();
+                const auto camera_proj = camera->GetProjectionMatrix();
 
-                Shader* vert_shader = ShaderResourceManager::GetShader<TestDeferredTriangleShaderVert>();
+                // Shader* vert_shader = ShaderResourceManager::GetShader<TestDeferredTriangleShaderVert>();
+                cmd_list->BindIndexBuffer(scene->GetBuffer("index_buffer"), 0, IET_UINT32);
+                uint32_t           offset             = 0;
+                const RHIBufferRef prim_vertex_buffer = scene->GetBuffer("vertex_buffer");
+                cmd_list->BindVertexBuffers(0, 1, &prim_vertex_buffer, &offset);
 
                 for (auto entity : scene->GetEntities()) {
-                    if (auto primitive = RenderableManager::Get().GetRenderPrimitive(entity)) {
+                    if (RenderableManager::Get().Contains(entity)) {
                         const auto                                 prim_model = TransformManager::Get().Get(entity).matrix;
                         TestDeferredTriangleShaderVert::Parameters params;
                         Matrix4x4f                                 ubo[] = {prim_model, camera_view, camera_proj, Transpose(camera_proj * camera_view * prim_model)};
                         memcpy(&params.scene_ubo, &ubo, sizeof(ubo));
                         RHIBatchedShaderParameters batched_params;
-                        batched_params.SetParameters(vert_shader, params);
+                        batched_params.SetParameters(ShaderResourceManager::GetInstance().GetShader<TestDeferredTriangleShaderVert>(), params);
+
+                        auto mi = RenderableManager::Get().GetMaterialInstance(entity);
+                        mi->Use(batched_params);
+
+                        auto prim_info = RenderableManager::Get().GetMeshInfo(entity);
+
                         g_rhi->RHISetBatchedShaderParameters(pipeline_state, batched_params, true);
 
-                        cmd_list->BindIndexBuffer(primitive->GetIndexBuffer(), 0, EIndexElementType::IET_UINT32);
-                        const RHIBufferRef prim_vertex_buffer = primitive->GetVertexBuffer();
-                        uint32_t           offset             = 0;
-                        cmd_list->BindVertexBuffers(0, 1, &prim_vertex_buffer, &offset);
-                        cmd_list->DrawIndexedInstanced(primitive->GetCount(), 1, 0, 0, 0);
+                        // cmd_list->BindIndexBuffer(primitive->GetIndexBuffer(), 0, EIndexElementType::IET_UINT32);
+                        // const RHIBufferRef prim_vertex_buffer = primitive->GetVertexBuffer();
+                        // uint32_t           offset             = 0;
+                        // cmd_list->BindVertexBuffers(0, 1, &prim_vertex_buffer, &offset);
+                        cmd_list->DrawIndexedInstanced(prim_info.index_count, 1, prim_info.index_offset, prim_info.vertex_offset, 0);
                     }
                 }
             } else {

@@ -1,0 +1,32 @@
+// Copyright 2020 Google LLC
+
+[[vk::binding(0,0)]] RaytracingAccelerationStructure rs;
+[[vk::binding(1,0)]] RWTexture2D<float4> image;
+
+
+struct [raypayload] Payload
+{
+    float3 hitValue;
+};
+[shader("raygeneration")]
+void main()
+{
+	uint3 LaunchID = DispatchRaysIndex();
+	uint3 LaunchSize = DispatchRaysDimensions();
+
+	const float2 pixelCenter = float2(LaunchID.xy) + float2(0.5, 0.5);
+	const float2 inUV = pixelCenter/float2(LaunchSize.xy);
+	float2 d = inUV * 2.0 - 1.0;
+	float3 target = float3(d,1);
+
+	RayDesc rayDesc;
+	rayDesc.Origin = float3(d,0);
+	rayDesc.Direction = float3(0,0,1);
+	rayDesc.TMin = 0.001;
+	rayDesc.TMax = 10000.0;
+
+	Payload payload;
+	TraceRay(rs, RAY_FLAG_FORCE_OPAQUE, 0xff, 0, 0, 0, rayDesc, payload);
+
+	image[int2(LaunchID.xy)] = float4(payload.hitValue, 0.0);
+}

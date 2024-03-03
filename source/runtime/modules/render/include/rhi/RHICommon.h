@@ -154,7 +154,7 @@ struct Extent3D {
 
 #pragma endregion
 
-#pragma region cross-platform param types
+#pragma region cross -platform param types
 enum ESamplerFilter : uint8_t {
     SF_NEAREST,
     SF_LINEAR,
@@ -389,12 +389,19 @@ enum class EBufferUsageFlags : uint32_t {
     /** Allows buffer to be used as a scratch buffer for building ray tracing acceleration structure,
 	 * which implies unordered access. Only changes the buffer alignment and can be combined with other usage.
 	**/
-    ACCELERATION_STRUCTURE_STORAGE = (1 << 21) | UNORDERED_ACCESS,
+    ACCELERATION_STRUCTURE_SCRATCH = 1 << 21,
 
     TRANSFER_DST = 1 << 22,
 
+    /** Buffer that used to a store shader binding table which is a series of shader group handles*/
+    SHADER_BINDING_TABLE = 1 << 23,
+
+    /** Buffer used as acceleration structure build input*/
+    ACCELERATION_STRUCTURE_BUILD_INPUT = 1 << 24,
+
     // Helper bit-masks
     DYNAMIC = (LIFE_CYCLE_DYNAMIC | LIFE_CYCLE_ONE_FRAME),
+
 };
 
 ENUM_BIT_OP_IMPL(EBufferUsageFlags, FLAG)
@@ -624,8 +631,10 @@ enum EShaderType : uint8_t {
     ST_AMPLIFICATION,
     ST_RAY_GEN,
     ST_RAY_MISS,
-    ST_RAY_HIT,
+    ST_RAY_CLOSESTHIT,
     ST_RAY_CALLABLE,
+    ST_RAY_INTERSECTION,
+    ST_RAY_ANYHIT,
     ST_Num,
     ST_NumBits = 4
 };
@@ -676,8 +685,8 @@ enum class EShaderCodeResourceBindingType : uint8_t {
     BYTE_ADDRESSED_BUFFER,
     RAYTRACING_ACCELERATION_STRUCTURE,
 
-    RW_TEXTURE2D,
-    RW_TEXTURE2D_ARRAY,
+    RW_TEXTURE_2D,
+    RW_TEXTURE_2D_ARRAY,
     RW_TEXTURE_3D,
     RW_TEXTURE_CUBE,
     RW_TEXTURE_META_DATA,
@@ -685,7 +694,6 @@ enum class EShaderCodeResourceBindingType : uint8_t {
     RW_BUFFER,
     RW_STRUCTURED_BUFFER,
     RW_BYTE_ADDRESSED_BUFFER,
-    CONSTANT_BUFFER
 };
 
 BEGIN_ENUM_STR_DEFINITION(EShaderCodeResourceBindingType)
@@ -703,15 +711,14 @@ ENUM_STR_ELEMENT(BUFFER)
 ENUM_STR_ELEMENT(STRUCTURED_BUFFER)
 ENUM_STR_ELEMENT(BYTE_ADDRESSED_BUFFER)
 ENUM_STR_ELEMENT(RAYTRACING_ACCELERATION_STRUCTURE)
-ENUM_STR_ELEMENT(RW_TEXTURE2D)
-ENUM_STR_ELEMENT(RW_TEXTURE2D_ARRAY)
+ENUM_STR_ELEMENT(RW_TEXTURE_2D)
+ENUM_STR_ELEMENT(RW_TEXTURE_2D_ARRAY)
 ENUM_STR_ELEMENT(RW_TEXTURE_3D)
 ENUM_STR_ELEMENT(RW_TEXTURE_CUBE)
 ENUM_STR_ELEMENT(RW_TEXTURE_META_DATA)
 ENUM_STR_ELEMENT(RW_BUFFER)
 ENUM_STR_ELEMENT(RW_STRUCTURED_BUFFER)
 ENUM_STR_ELEMENT(RW_BYTE_ADDRESSED_BUFFER)
-ENUM_STR_ELEMENT(CONSTANT_BUFFER)
 END_ENUM_STR_DEFINITION(EShaderCodeResourceBindingType)
 
 enum EShaderBindingBaseType : uint8_t {
@@ -874,7 +881,8 @@ enum class ECommandQueueType {
     UNDEFINED,
     GRAPHICS,
     COMPUTE,
-    COPY
+    COPY,
+    RAYTRACING,
 };
 
 enum class ECommandListType {
@@ -885,6 +893,7 @@ enum class ECommandListType {
     VIDEO_ENCODE,
     VIDEO_PROCESS,
     VIDEO_DECODE,
+    RAY_TRACING,
     Num
 };
 
@@ -895,6 +904,22 @@ enum class EPrimitiveType : uint8_t {
     LINE_STRIP     = 3,//!< line strip
     TRIANGLES      = 4,//!< triangles
     TRIANGLE_STRIP = 5 //!< triangle strip
+};
+
+enum class ESamplerType : uint8_t {
+    SAMPLER_2D,           //!< 2D texture
+    SAMPLER_2D_ARRAY,     //!< 2D array texture
+    SAMPLER_CUBEMAP,      //!< Cube map texture
+    SAMPLER_EXTERNAL,     //!< External texture
+    SAMPLER_3D,           //!< 3D texture
+    SAMPLER_CUBEMAP_ARRAY,//!< Cube map array texture (feature level 2)
+};
+
+enum class ESamplerBindingType : uint8_t {
+    UNDEFINED,
+    SAMPLER,
+    TEXTURE,
+    COMBINED,
 };
 
 #pragma region utils
@@ -939,6 +964,13 @@ struct ViewPort {
     float height;
     float min_depth;
     float max_depth;
+};
+
+struct MeshInfo {
+    uint32_t vertex_offset;
+    uint32_t index_offset;
+    uint32_t vertex_count;
+    uint32_t index_count;
 };
 #pragma endregion
 

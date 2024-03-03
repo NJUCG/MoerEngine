@@ -3,11 +3,10 @@
 
 //#include "ShaderProxy.h"
 #include "API_Macro.h"
-#include "ShaderCommon.h"
 #include "math/Base.h"
 #include "math/Matrix.h"
 #include "rhi/RHICommon.h"
-#include "shader/ShaderCommon.h"
+#include "shader/ShaderMutation.h"
 #include "shader/ShaderParameterMacros.h"
 
 #include <cstdint>
@@ -33,13 +32,15 @@ struct ShaderParameterLayoutInfo {
                               int8_t               _slot  = -1,
                               int8_t               _space = -1,
                               int8_t               _num   = -1,
-                              EShaderParameterType _type  = EShaderParameterType::UNKNOWN)
+                              EShaderParameterType _type  = EShaderParameterType::UNKNOWN,
+                              EShaderCodeResourceBindingType _resource_type = EShaderCodeResourceBindingType::INVALID)
         : offset(_offset),
           stride(_stride),
           slot(_slot),
           space(_space),
           num(_num),
-          type(_type) {}
+          type(_type),
+          resource_type(_resource_type) {}
     uint16_t offset;
     uint16_t stride;
 
@@ -47,6 +48,9 @@ struct ShaderParameterLayoutInfo {
     int8_t               space;
     int8_t               num;
     EShaderParameterType type;
+
+    //only resources defined in shader root parameter struct have valid resource type, like srv, uav, cbv
+    EShaderCodeResourceBindingType resource_type{EShaderCodeResourceBindingType::INVALID};
 };
 
 /**
@@ -78,6 +82,8 @@ class Shader {
     friend class ShaderMetaType;
 
 public:
+    using TMutationSet        = TShaderMutationSetEmpty;
+    using TMutationParameters = ShaderMutationParameters;
     RENDER_API Shader();
 
     RENDER_API Shader(const ShaderCompiledInitializer& intializer);
@@ -112,22 +118,19 @@ public:
 
     static ShaderParametersMetadata* GetParametersMetaData() { return nullptr; }
 
-    /**
-     * @brief Get the Code Entry object, contains compiled code and target platform
-     * 
-     * @return const ShaderCodeEntry* 
-     */
-    const class ShaderCodeEntry* GetCodeEntry() const;
-
     const ShaderRootParametersLayoutInfo& GetRootParametersLayoutInfo() const { return param_layout_info; }
+
+    static bool ShouldCompileMutation(const ShaderMutationParameters&) { return true; }
+
+    static void SetCompileEnvironment(const ShaderMutationParameters&, ShaderCompilerEnvironment&) {}
 
 protected:
     Hash64City compiled_hash;
 
-private:
+protected:
     void ConstructRootParameterLayoutInfo(const ShaderParametersInfoMap& _param_map);
 
-private:
+protected:
     const ShaderMetaType* type;
     ShaderTargetInfo      target_info;
 
@@ -138,11 +141,17 @@ private:
     uint32_t hash_key;
 };
 
-#define DEFINE_SHADER_FUNCION_PROC(ShaderClassName) \
-    static Shader* ConstructShaderInstance(const ShaderCompiledInitializer& _initializer) { return new ShaderClassName(_initializer); }
-
-#define ShaderFunctionProc(ShaderClassName) \
-    ShaderClassName::ConstructShaderInstance
+#define DEFINE_SHADER_FUNCION_PROC(ShaderClassName)                                                                                     \
+    static Shader* ConstructShaderInstance(const ShaderCompiledInitializer& _initializer) { return new ShaderClassName(_initializer); } \
+    static void    SetCompileEnvironment(const ShaderMutationParameters& _mutation_params, ShaderCompilerEnvironment& _environment) {   \
+        const typename ShaderClassName::TMutationSet set(_mutation_params.mutation_id);                                              \
+        set.SetCompileEnvironment(_environment);                                                                                     \
+    }
+//vtable for ShaderMetaType
+#define ShaderFunctionProc(ShaderClassName)     \
+    ShaderClassName::ConstructShaderInstance,   \
+        ShaderClassName::ShouldCompileMutation, \
+        ShaderClassName::SetCompileEnvironment
 
 #define DEFINE_SHADER_TYPE(ShaderClassName, ShaderMapScope, API, ...) \
     INTERNAL_DEFINE_SHADER_TYPE(ShaderClassName, ShaderMapScope, API)
@@ -164,6 +173,7 @@ public:                                                                   \
             ShaderType,                                                          \
             sizeof(ShaderClassName),                                             \
             ShaderClassName::GetParametersMetaData(),                            \
+            TMutationSet::mutation_count,                                        \
             ShaderFunctionProc(ShaderClassName));                                \
         return s_meta_type;                                                      \
     }                                                                            \
@@ -171,6 +181,11 @@ public:                                                                   \
 
 class TestReflectionShader : public Shader {
     DEFINE_SHADER_TYPE(TestReflectionShader, Global, )
+public:
+    MUTATION_BOOL(TestBoolMutation);
+    MUTATION_INT(TestUINT, 5, 0);
+    DEFINE_MUTATION_SET(TestBoolMutation, TestUINT);
+
 public:
     BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(Ubo)
     DEFINE_SHADER_PARAM(Moer::Matrix4x4f, projectionMatrix)
@@ -185,10 +200,10 @@ public:
     //Ubo set
     DEFINE_SHADER_PARAM_UAV(RWBuffer, dataLog)
 
-    DEFINE_SHADER_PARAM_SAMPLER_ARRAY(Sampler[2], samp, 2)
+    DEFINE_SHADER_PARAM_SAMPLER_ARRAY(Sampler, samp, 2)
     DEFINE_SHADER_PARAM_SAMPLER(Sampler, aniso)
     //srv set
-    DEFINE_SHADER_PARAM_SRV_ARRAY(Texture2D[5], foo, 5)
+    DEFINE_SHADER_PARAM_SRV_ARRAY(Texture2D, foo, 5)
     //uav se
 
     END_ROOT_PARAMETER_DEFINITION(Parameters)

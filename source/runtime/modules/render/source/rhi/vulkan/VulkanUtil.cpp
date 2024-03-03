@@ -7,6 +7,7 @@
 #include "misc/Crc32.h"
 
 #include "VulkanUtil.h"
+#include "vulkan/vulkan_core.h"
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -24,7 +25,7 @@ namespace Util {
     std::string ErrorString(VkResult error_code) {
         switch (error_code) {
 #define STR(r) \
-case VK_##r: return #r
+    case VK_##r: return #r
             STR(NOT_READY);
             STR(TIMEOUT);
             STR(EVENT_SET);
@@ -58,7 +59,7 @@ case VK_##r: return #r
     std::string PhysicalDeviceTypeString(VkPhysicalDeviceType type) {
         switch (type) {
 #define STR(r) \
-case VK_PHYSICAL_DEVICE_TYPE_##r: return #r
+    case VK_PHYSICAL_DEVICE_TYPE_##r: return #r
             STR(OTHER);
             STR(INTEGRATED_GPU);
             STR(DISCRETE_GPU);
@@ -224,6 +225,7 @@ case VK_PHYSICAL_DEVICE_TYPE_##r: return #r
             return shader_module;
         }
         ExitFatal("Could not open shader file \"" + std::string(file_name) + "\"", -1);
+        return VK_NULL_HANDLE;
     }
 
     VkShaderModule CreateShaderModule(const Moer::Array<uint8_t>& _code, VkDevice device) {

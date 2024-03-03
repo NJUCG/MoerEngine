@@ -123,7 +123,7 @@ public:
     }
 
     void PreCreateDevice(VkDeviceCreateInfo& _device_create_info) override {
-        if (m_usable) {
+        if (m_usable && m_is_enabled) {
             AddToPNext(_device_create_info, m_acceleration_structure_features);
         }
     }
@@ -159,7 +159,7 @@ public:
     }
 
     void PreCreateDevice(VkDeviceCreateInfo& _device_create_info) override {
-        if (m_usable) {
+        if (m_usable && m_is_enabled) {
             AddToPNext(_device_create_info, m_ray_tracing_pipeline_features);
         }
     }
@@ -188,7 +188,7 @@ public:
     }
 
     void PreCreateDevice(VkDeviceCreateInfo& _device_create_info) override {
-        if (m_usable) {
+        if (m_usable && m_is_enabled) {
             AddToPNext(_device_create_info, m_ray_query_features);
         }
     }
@@ -223,7 +223,7 @@ public:
     }
 
     void PreCreateDevice(VkDeviceCreateInfo& _device_create_info) override {
-        if (m_usable) {
+        if (m_usable && m_is_enabled) {
             AddToPNext(_device_create_info, m_descriptor_buffer_features);
         }
     }
@@ -235,16 +235,21 @@ private:
 TVulkanDeviceExtensionArray VulkanDeviceExtension::GetMESupportedDeviceExtensions() {
     TVulkanDeviceExtensionArray extensions;
 
-#define ADD_EXTENSION(ext_name) extensions.emplace_back(std::make_unique<VulkanDeviceExtension>(ext_name))
+#define ADD_EXTENSION(ext_name) extensions.emplace_back(std::make_shared<VulkanDeviceExtension>(ext_name))
 
 #define ADD_CUSTOM_EXTENSION(ext_class) extensions.emplace_back(std::make_unique<ext_class>())
     // generic simple extensions
     ADD_EXTENSION(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+    ADD_EXTENSION(VK_EXT_INDEX_TYPE_UINT8_EXTENSION_NAME);
 
     // bindless extensions
     ADD_CUSTOM_EXTENSION(VulkanEXTDescriptorBufferExtension);
 
     // raytracing extensions
+    ADD_CUSTOM_EXTENSION(VulkanKHRAccelerationStructureExtension);
+    ADD_CUSTOM_EXTENSION(VulkanKHRRayTracingPipelineExtension);
+    ADD_CUSTOM_EXTENSION(VulkanKHRRayQueryExtension);
+    ADD_EXTENSION(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
 
     // vendor extensions
 
@@ -257,4 +262,12 @@ TVulkanDeviceExtensionArray VulkanDeviceExtension::GetMESupportedDeviceExtension
 #undef ADD_CUSTOM_EXTENSION
 
     return extensions;
+}
+
+void VulkanEnabledDeviceExtensions::Init(const TVulkanDeviceExtensionArray& _enabled_extensions) {
+    for (const auto& ext : _enabled_extensions) {
+        if (ext->IsEnabled()) {
+            m_enabled_extensions.push_back(ext);
+        }
+    }
 }

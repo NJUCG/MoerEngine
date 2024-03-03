@@ -1,0 +1,97 @@
+trigger:
+- main
+
+strategy:
+  matrix:
+    ubuntu-20.04-clang:
+      VM_IMAGE: 'ubuntu-20.04'
+      OPERATING_SYSTEM: 'linux'
+      COMPILER: 'clang'
+      CLANG_VERSION: '13'
+      ASAN_OPTIONS: 'alloc_dealloc_mismatch=0'
+      TEST_AUTODETECT: 1
+    ubuntu-20.04-clang12:
+      VM_IMAGE: 'ubuntu-20.04'
+      OPERATING_SYSTEM: 'linux'
+      COMPILER: 'clang'
+      CLANG_VERSION: '12'
+      ASAN_OPTIONS: 'alloc_dealloc_mismatch=0'
+      TEST_AUTODETECT: 0
+    macOS-11:
+      VM_IMAGE: 'macOS-11'
+      OPERATING_SYSTEM: 'mac-os'
+      COMPILER: 'clang'
+      CLANG_VERSION: '17'
+      ASAN_OPTIONS: 'alloc_dealloc_mismatch=0'
+      TEST_AUTODETECT: 1
+
+pool:
+  vmImage: $(VM_IMAGE)
+
+steps:
+- script: |
+    curl -fLo llvm.sh https://apt.llvm.org/llvm.sh
+    chmod +x ./llvm.sh
+    sudo ./llvm.sh $(CLANG_VERSION) all
+    sudo apt install -y libc++-$(CLANG_VERSION)-dev libc++abi-$(CLANG_VERSION)-dev libunwind-$(CLANG_VERSION)-dev
+    sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-$(CLANG_VERSION) $(CLANG_VERSION)00
+  displayName: 'install (linux)'
+  condition: and(eq(variables['OPERATING_SYSTEM'], 'linux'), eq(variables['COMPILER'], 'clang'))
+
+- script: |
+    sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+    sudo apt install gcc-$(GCC_VERSION) g++-$(GCC_VERSION)
+  displayName: 'install (linux)'
+  condition: and(eq(variables['OPERATING_SYSTEM'], 'linux'), eq(variables['COMPILER'], 'gcc'))
+
+- script: |
+    brew install --force-bottle llvm@$(CLANG_VERSION) make
+  displayName: 'install (mac)'
+  condition: eq(variables['OPERATING_SYSTEM'], 'mac-os')
+
+- script: |
+    git clone https://github.com/eyalz800/zpp_throwing ../zpp_throwing
+  displayName: 'dependencies'
+  condition: eq(variables['COMPILER'], 'clang')
+
+- script: |
+    make -C test -f zpp.mk -j ZPP_BITS_AUTODETECT_MEMBERS_MODE=$(TEST_AUTODETECT)
+  displayName: 'compile-debug (linux)'
+  condition: and(eq(variables['OPERATING_SYSTEM'], 'linux'), eq(variables['COMPILER'], 'clang'))
+
+- script: |
+    make -C test -f zpp.mk -j mode=release ZPP_BITS_AUTODETECT_MEMBERS_MODE=$(TEST_AUTODETECT)
+  displayName: 'compile-release (linux)'
+  condition: and(eq(variables['OPERATING_SYSTEM'], 'linux'), eq(variables['COMPILER'], 'clang'))
+
+- script: |
+    sed -i 's/-stdlib=libc++//g' ./test/zpp_project.mk
+    make -C test -f zpp.mk -j ZPP_CC=gcc-11 ZPP_CXX=g++-11
+  displayName: 'compile-debug (linux)'
+  condition: and(eq(variables['OPERATING_SYSTEM'], 'linux'), eq(variables['COMPILER'], 'gcc'))
+
+- script: |
+    sed -i 's/-stdlib=libc++//g' ./test/zpp_project.mk
+    make -C test -f zpp.mk -j mode=release ZPP_CC=gcc-11 ZPP_CXX=g++-11
+  displayName: 'compile-release (linux)'
+  condition: and(eq(variables['OPERATING_SYSTEM'], 'linux'), eq(variables['COMPILER'], 'gcc'))
+
+- script: |
+    export PATH=/usr/local/opt/llvm@$(CLANG_VERSION)/bin:/usr/local/opt/llvm/bin:$PATH
+    gmake -C test -f zpp.mk -j
+  displayName: 'compile-debug (mac)'
+  condition: eq(variables['OPERATING_SYSTEM'], 'mac-os')
+
+- script: |
+    export PATH=/usr/local/opt/llvm@$(CLANG_VERSION)/bin:/usr/local/opt/llvm/bin:$PATH
+    gmake -C test -f zpp.mk -j mode=release
+  displayName: 'compile-release (mac)'
+  condition: eq(variables['OPERATING_SYSTEM'], 'mac-os')
+
+- script: |
+    ./test/out/debug/default/output
+  displayName: 'test-debug'
+
+- script: |
+    ./test/out/release/default/output
+  displayName: 'test-release'

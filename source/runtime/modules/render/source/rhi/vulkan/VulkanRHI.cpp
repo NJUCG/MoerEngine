@@ -106,44 +106,122 @@ RHIVertexInputStateRef VulkanRHIImpl::RHICreateVertexInputState(const VertexInpu
     return RHIVertexInputStateRef(vk_input_state);
 }
 
-RHIVertexShaderRef VulkanRHIImpl::RHICreateVertexShader(const Shader* shader) {
+// RHIVertexShaderRef VulkanRHIImpl::RHICreateVertexShader(const Shader* shader) {
+//     auto* vk_shader            = new VulkanRHIVertexShader(shader);
+//     vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+
+//     return RHIVertexShaderRef(vk_shader);
+// }
+
+// RHIFragmentShaderRef VulkanRHIImpl::RHICreateFragmentShader(const Shader* shader) {
+//     auto* vk_shader            = new VulkanRHIFragmentShader(shader);
+//     vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+
+//     return RHIFragmentShaderRef(vk_shader);
+// }
+
+// RHIGeometryShaderRef VulkanRHIImpl::RHICreateGeometryShader(const Shader* shader) {
+//     auto* vk_shader            = new VulkanRHIGeometryShader(shader);
+//     vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+
+//     return RHIGeometryShaderRef(vk_shader);
+// }
+
+// RHIMeshShaderRef VulkanRHIImpl::RHICreateMeshShader(const Shader* shader) {
+//     auto* vk_shader            = new VulkanRHIMeshShader(shader);
+//     vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+
+//     return RHIMeshShaderRef(vk_shader);
+// }
+
+// RHIAmplificationShaderRef VulkanRHIImpl::RHICreateAmplificationShader(const Shader* shader) {
+//     auto* vk_shader            = new VulkanRHIAmplificationShader(shader);
+//     vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+//     return RHIAmplificationShaderRef(vk_shader);
+// }
+
+// RHIComputeShaderRef VulkanRHIImpl::RHICreateComputeShader(const Shader* shader) {
+//     auto* vk_shader            = new VulkanRHIComputeShader(shader);
+//     vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+//     return RHIComputeShaderRef(vk_shader);
+// }
+
+RHIVertexShaderRef VulkanRHIImpl::RHICreateVertexShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
     auto* vk_shader            = new VulkanRHIVertexShader(shader);
-    vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
 
     return RHIVertexShaderRef(vk_shader);
 }
 
-RHIFragmentShaderRef VulkanRHIImpl::RHICreateFragmentShader(const Shader* shader) {
+RHIFragmentShaderRef VulkanRHIImpl::RHICreateFragmentShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
     auto* vk_shader            = new VulkanRHIFragmentShader(shader);
-    vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
 
     return RHIFragmentShaderRef(vk_shader);
 }
 
-RHIGeometryShaderRef VulkanRHIImpl::RHICreateGeometryShader(const Shader* shader) {
+RHIGeometryShaderRef VulkanRHIImpl::RHICreateGeometryShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
     auto* vk_shader            = new VulkanRHIGeometryShader(shader);
-    vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
 
     return RHIGeometryShaderRef(vk_shader);
 }
 
-RHIMeshShaderRef VulkanRHIImpl::RHICreateMeshShader(const Shader* shader) {
+RHIMeshShaderRef VulkanRHIImpl::RHICreateMeshShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
     auto* vk_shader            = new VulkanRHIMeshShader(shader);
-    vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
 
     return RHIMeshShaderRef(vk_shader);
 }
 
-RHIAmplificationShaderRef VulkanRHIImpl::RHICreateAmplificationShader(const Shader* shader) {
+RHIAmplificationShaderRef VulkanRHIImpl::RHICreateAmplificationShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
     auto* vk_shader            = new VulkanRHIAmplificationShader(shader);
-    vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
+
     return RHIAmplificationShaderRef(vk_shader);
 }
 
-RHIComputeShaderRef VulkanRHIImpl::RHICreateComputeShader(const Shader* shader) {
+RHIComputeShaderRef VulkanRHIImpl::RHICreateComputeShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
     auto* vk_shader            = new VulkanRHIComputeShader(shader);
-    vk_shader->m_shader_module = VkUtil::CreateShaderModule(shader->GetCodeEntry()->code, m_device->GetDevice());
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
+
     return RHIComputeShaderRef(vk_shader);
+}
+
+RHIRayGenShaderRef VulkanRHIImpl::RHICreateRayGenShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
+    auto* vk_shader            = new VulkanRHIRayGenShader(shader);
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
+    return RHIRayGenShaderRef(vk_shader);
+}
+
+RHIRayMissShaderRef VulkanRHIImpl::RHICreateRayMissShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
+    auto* vk_shader            = new VulkanRHIRayMissShader(shader);
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
+    return RHIRayMissShaderRef(vk_shader);
+}
+
+RHIRayClosestHitShaderRef VulkanRHIImpl::RHICreateRayClosestHitShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
+    auto* vk_shader            = new VulkanRHIRayClosestHitShader(shader);
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
+    return RHIRayClosestHitShaderRef(vk_shader);
+}
+
+RHIRayCallableShaderRef VulkanRHIImpl::RHICreateRayCallableShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
+    auto* vk_shader            = new VulkanRHIRayCallableShader(shader);
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
+    return RHIRayCallableShaderRef(vk_shader);
+}
+
+RHIRayIntersectionShaderRef VulkanRHIImpl::RHICreateRayIntersectionShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
+    auto* vk_shader            = new VulkanRHIRayIntersectionShader(shader);
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
+    return RHIRayIntersectionShaderRef(vk_shader);
+}
+
+RHIRayAnyhitShaderRef VulkanRHIImpl::RHICreateRayAnyhitShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
+    auto* vk_shader            = new VulkanRHIRayAnyhitShader(shader);
+    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
+    return RHIRayAnyhitShaderRef(vk_shader);
 }
 
 RHIShaderLibraryRef VulkanRHIImpl::RHICreateShaderLibrary(EShaderPlatform _platform, const std::string& _file_path, const std::string& name) { return RHIShaderLibraryRef{}; }
@@ -275,7 +353,7 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
         for (const auto& info : layout_infos) {
             VkDescriptorSetLayoutBinding binding{};
             binding.binding         = info.slot;
-            binding.descriptorType  = VulkanEnumTranslator::METoVKDescriptorType(info.type);
+            binding.descriptorType  = VulkanEnumTranslator::METoVKDescriptorType(info.type, info.resource_type);
             binding.descriptorCount = info.num;
             binding.stageFlags |= VulkanEnumTranslator::METoVKShaderStageFlags(meta_shader->GetShaderType());
             binding.pImmutableSamplers = nullptr;
@@ -337,7 +415,576 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPipelineState(const 
     return RHIGraphicsPipelineStateRef(vk_pso);
 }
 
-RHIComputePipelineStateRef VulkanRHIImpl::RHICreateComputePipelineState(RHIComputeShader* _compute_shader) { return RHIComputePipelineStateRef{}; }
+RHIComputePipelineStateRef VulkanRHIImpl::RHICreateComputePipelineState(RHIComputeShader* _compute_shader) {
+    VulkanRHIComputePipelineState* vk_pso = new VulkanRHIComputePipelineState();
+
+    auto* vk_shader = static_cast<VulkanRHIComputeShader*>(_compute_shader);
+    if (!vk_shader) LOG_CRITICAL("RHICreateComputePipelineState: Compute shader is nullptr!");
+
+    VkPipelineShaderStageCreateInfo shader_stage{};
+    shader_stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    shader_stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+    shader_stage.module = vk_shader->GetHandle();
+    shader_stage.pName  = vk_shader->GetMetaShader()->GetShaderMetaType()->GetEntryPoint().data();
+
+    Moer::Array<TDescriptorSetLayoutInfo> layout_mappings;
+    Moer::Array<VkPushConstantRange>      push_constant_ranges;
+
+    auto* meta_shader = vk_shader->GetMetaShader();
+    // find max set index
+    int8_t max_set      = -1;
+    auto   layout_infos = meta_shader->GetRootParametersLayoutInfo().GetLayoutInfos();
+    for (const auto& info : layout_infos) {
+        max_set = std::max(max_set, info.space);
+    }
+    layout_mappings.resize(max_set + 1, {});
+
+    auto constant_infos = meta_shader->GetRootParametersLayoutInfo().GetConstantsInfos();
+
+    for (const auto& info : layout_infos) {
+        VkDescriptorSetLayoutBinding binding{};
+        binding.binding         = info.slot;
+        binding.descriptorType  = VulkanEnumTranslator::METoVKDescriptorType(info.type, info.resource_type);
+        binding.descriptorCount = info.num;
+        binding.stageFlags |= VulkanEnumTranslator::METoVKShaderStageFlags(meta_shader->GetShaderType());
+        binding.pImmutableSamplers = nullptr;
+
+        layout_mappings[info.space].second.push_back(std::move(binding));
+    }
+
+    // constants
+    for (const auto& info : constant_infos) {
+        VkPushConstantRange range{};
+        range.stageFlags |= VulkanEnumTranslator::METoVKShaderStageFlags(meta_shader->GetShaderType());
+        range.offset = info.offset;
+        range.size   = info.stride;
+
+        push_constant_ranges.push_back(range);
+    }
+
+    vk_pso->CreateResourceCache();
+    vk_pso->GenerateDescriptorSetLayouts(m_device, layout_mappings);
+
+    auto layouts = vk_pso->m_descriptor_sets_layout->GetLayouts();
+
+    VkPipelineLayoutCreateInfo pipeline_layout_create_info{};
+    pipeline_layout_create_info.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pipeline_layout_create_info.pNext                  = nullptr;
+    pipeline_layout_create_info.flags                  = 0;
+    pipeline_layout_create_info.setLayoutCount         = layouts.size();
+    pipeline_layout_create_info.pSetLayouts            = layouts.data();
+    pipeline_layout_create_info.pushConstantRangeCount = push_constant_ranges.size();
+    pipeline_layout_create_info.pPushConstantRanges    = push_constant_ranges.data();
+
+    vkCreatePipelineLayout(m_device->GetDevice(), &pipeline_layout_create_info, nullptr, &vk_pso->m_pipeline_layout);
+
+    VkComputePipelineCreateInfo pipeline_create_info{};
+    pipeline_create_info.sType              = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    pipeline_create_info.pNext              = nullptr;
+    pipeline_create_info.flags              = 0;
+    pipeline_create_info.stage              = shader_stage;
+    pipeline_create_info.layout             = vk_pso->m_pipeline_layout;
+    pipeline_create_info.basePipelineHandle = nullptr;
+    pipeline_create_info.basePipelineIndex  = -1;
+
+    VK_CHECK_RESULT(vkCreateComputePipelines(m_device->GetDevice(), nullptr, 1, &pipeline_create_info, nullptr, &vk_pso->m_pipeline));
+
+    return RHIComputePipelineStateRef(vk_pso);
+}
+
+RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(const RHIRayTracingPipelineStateInitializer& _init) {
+
+    static auto vkCreateRayTracingPipelinesKHR       = reinterpret_cast<PFN_vkCreateRayTracingPipelinesKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkCreateRayTracingPipelinesKHR"));
+    static auto vkGetRayTracingShaderGroupHandlesKHR = reinterpret_cast<PFN_vkGetRayTracingShaderGroupHandlesKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkGetRayTracingShaderGroupHandlesKHR"));
+    VK_CHECK_NULLPTR(vkCreateRayTracingPipelinesKHR, "RHICreateRayTracingPipelineState: vkCreateRayTracingPipelinesKHR is nullptr", return RHIRayTracingPipelineStateRef{});
+    VK_CHECK_NULLPTR(vkGetRayTracingShaderGroupHandlesKHR, "RHICreateRayTracingPipelineState: vkGetRayTracingShaderGroupHandlesKHR is nullptr", return RHIRayTracingPipelineStateRef{});
+
+    // shader stage & shader groups & shader infos
+
+    Moer::Array<const Shader*> shader_info_list;
+
+    Moer::Array<VkRayTracingShaderGroupCreateInfoKHR> shader_groups;
+    VkRayTracingShaderGroupCreateInfoKHR              shader_group_create_info{VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR};
+    shader_group_create_info.pNext                           = nullptr;
+    shader_group_create_info.pShaderGroupCaptureReplayHandle = nullptr;
+    shader_group_create_info.generalShader                   = VK_SHADER_UNUSED_KHR;
+    shader_group_create_info.closestHitShader                = VK_SHADER_UNUSED_KHR;
+    shader_group_create_info.anyHitShader                    = VK_SHADER_UNUSED_KHR;
+    shader_group_create_info.intersectionShader              = VK_SHADER_UNUSED_KHR;
+
+    Moer::Array<VkPipelineShaderStageCreateInfo> shader_stages;
+    VkPipelineShaderStageCreateInfo              shader_stage_create_info{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    shader_stage_create_info.pNext = nullptr;
+    shader_stage_create_info.flags = 0;
+
+    if (_init.ray_gen_shader) {
+        auto* vk_shader = static_cast<VulkanRHIRayGenShader*>(_init.ray_gen_shader);
+        VK_CHECK_NULLPTR(vk_shader, "init raytracingpipelinestate with null raygen shader", return RHIRayTracingPipelineStateRef());
+
+        shader_info_list.push_back(vk_shader->GetMetaShader());
+
+        shader_stage_create_info.stage               = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+        shader_stage_create_info.module              = vk_shader->GetHandle();
+        shader_stage_create_info.pName               = "main";
+        shader_stage_create_info.pSpecializationInfo = nullptr;
+        shader_stages.push_back(shader_stage_create_info);
+
+        shader_group_create_info.type          = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+        shader_group_create_info.generalShader = static_cast<uint32_t>(shader_stages.size() - 1);
+        shader_groups.push_back(shader_group_create_info);
+        shader_group_create_info.generalShader = VK_SHADER_UNUSED_KHR;
+    }
+    for (const auto& ray_miss_shader : _init.ray_miss_table) {
+        auto* vk_shader = static_cast<VulkanRHIRayMissShader*>(ray_miss_shader);
+        VK_CHECK_NULLPTR(vk_shader, "init raytracingpipelinestate with null raymiss shader", return RHIRayTracingPipelineStateRef());
+
+        shader_info_list.push_back(vk_shader->GetMetaShader());
+
+        shader_stage_create_info.stage               = VK_SHADER_STAGE_MISS_BIT_KHR;
+        shader_stage_create_info.module              = vk_shader->GetHandle();
+        shader_stage_create_info.pName               = "main";
+        shader_stage_create_info.pSpecializationInfo = nullptr;
+        shader_stages.push_back(shader_stage_create_info);
+
+        shader_group_create_info.type          = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+        shader_group_create_info.generalShader = static_cast<uint32_t>(shader_stages.size() - 1);
+        shader_groups.push_back(shader_group_create_info);
+        shader_group_create_info.generalShader = VK_SHADER_UNUSED_KHR;
+    }
+    for (const auto& ray_hit_group : _init.ray_hit_table) {
+        shader_group_create_info.type = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
+        if (ray_hit_group.closesthit_shader) {
+            auto* vk_shader = static_cast<VulkanRHIRayClosestHitShader*>(ray_hit_group.closesthit_shader);
+            VK_CHECK_NULLPTR(vk_shader, "init raytracingpipelinestate with null closesthit shader", return RHIRayTracingPipelineStateRef());
+
+            shader_info_list.push_back(vk_shader->GetMetaShader());
+
+            shader_stage_create_info.stage               = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+            shader_stage_create_info.pName               = "main";
+            shader_stage_create_info.module              = vk_shader->GetHandle();
+            shader_stage_create_info.pSpecializationInfo = nullptr;
+            shader_stages.push_back(shader_stage_create_info);
+
+            shader_group_create_info.closestHitShader = static_cast<uint32_t>(shader_stages.size() - 1);
+        }
+        if (ray_hit_group.anyhit_shader) {
+            auto* vk_shader = static_cast<VulkanRHIRayAnyhitShader*>(ray_hit_group.anyhit_shader);
+            VK_CHECK_NULLPTR(vk_shader, "init raytracingpipelinestate with null anyhit shader", return RHIRayTracingPipelineStateRef());
+
+            shader_info_list.push_back(vk_shader->GetMetaShader());
+
+            shader_stage_create_info.stage               = VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
+            shader_stage_create_info.pName               = "main";
+            shader_stage_create_info.module              = vk_shader->GetHandle();
+            shader_stage_create_info.pSpecializationInfo = nullptr;
+            shader_stages.push_back(shader_stage_create_info);
+
+            shader_group_create_info.anyHitShader = static_cast<uint32_t>(shader_stages.size() - 1);
+        }
+        if (ray_hit_group.intersection_shader) {
+            auto* vk_shader = static_cast<VulkanRHIRayIntersectionShader*>(ray_hit_group.intersection_shader);
+            VK_CHECK_NULLPTR(vk_shader, "init raytracingpipelinestate with null intersection shader", return RHIRayTracingPipelineStateRef());
+            shader_stage_create_info.stage = VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
+
+            shader_info_list.push_back(vk_shader->GetMetaShader());
+
+            shader_stage_create_info.pName               = "main";
+            shader_stage_create_info.module              = vk_shader->GetHandle();
+            shader_stage_create_info.pSpecializationInfo = nullptr;
+            shader_stages.push_back(shader_stage_create_info);
+
+            shader_group_create_info.type               = VK_RAY_TRACING_SHADER_GROUP_TYPE_PROCEDURAL_HIT_GROUP_KHR;
+            shader_group_create_info.intersectionShader = static_cast<uint32_t>(shader_stages.size() - 1);
+        }
+        shader_groups.push_back(shader_group_create_info);
+        shader_group_create_info.closestHitShader = shader_group_create_info.anyHitShader = shader_group_create_info.intersectionShader = VK_SHADER_UNUSED_KHR;
+    }
+    for (const auto& ray_callable_shader : _init.ray_callable_table) {
+        auto* vk_shader = static_cast<VulkanRHIRayCallableShader*>(ray_callable_shader);
+        VK_CHECK_NULLPTR(vk_shader, "init raytracingpipelinestate with null raycallable shader", return RHIRayTracingPipelineStateRef());
+
+        shader_info_list.push_back(vk_shader->GetMetaShader());
+
+        shader_stage_create_info.stage               = VK_SHADER_STAGE_CALLABLE_BIT_KHR;
+        shader_stage_create_info.module              = vk_shader->GetHandle();
+        shader_stage_create_info.pName               = "main";
+        shader_stage_create_info.pSpecializationInfo = nullptr;
+        shader_stages.push_back(shader_stage_create_info);
+
+        shader_group_create_info.type          = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+        shader_group_create_info.generalShader = static_cast<uint32_t>(shader_stages.size() - 1);
+        shader_groups.push_back(shader_group_create_info);
+        shader_group_create_info.generalShader = VK_SHADER_UNUSED_KHR;
+    }
+
+    Moer::Array<TDescriptorSetLayoutInfo> layout_mappings;
+    Moer::Array<VkPushConstantRange>      push_constant_ranges;
+    // find max set index
+    int8_t max_set = -1;
+    for (const auto* meta_shader : shader_info_list) {
+        auto layout_infos = meta_shader->GetRootParametersLayoutInfo().GetLayoutInfos();
+        for (const auto& info : layout_infos) {
+            max_set = std::max(max_set, info.space);
+        }
+    }
+    layout_mappings.resize(max_set + 1, {});
+
+    // construct layout mappings
+    for (const auto* meta_shader : shader_info_list) {
+        auto layout_infos   = meta_shader->GetRootParametersLayoutInfo().GetLayoutInfos();
+        auto constant_infos = meta_shader->GetRootParametersLayoutInfo().GetConstantsInfos();
+
+        for (const auto& info : layout_infos) {
+            VkDescriptorSetLayoutBinding binding{};
+            binding.binding         = info.slot;
+            binding.descriptorType  = VulkanEnumTranslator::METoVKDescriptorType(info.type, info.resource_type);
+            binding.descriptorCount = info.num;
+            binding.stageFlags |= VulkanEnumTranslator::METoVKShaderStageFlags(meta_shader->GetShaderType());
+            binding.pImmutableSamplers = nullptr;
+
+            layout_mappings[info.space].second.push_back(std::move(binding));
+        }
+
+        // constants
+        for (const auto& info : constant_infos) {
+            VkPushConstantRange range{};
+            range.stageFlags |= VulkanEnumTranslator::METoVKShaderStageFlags(meta_shader->GetShaderType());
+            range.offset = info.offset;
+            range.size   = info.stride;
+
+            push_constant_ranges.push_back(range);
+        }
+    }
+
+    VulkanRHIRayTracingPipelineState* vk_pso = new VulkanRHIRayTracingPipelineState();
+    // generate descriptor set layouts
+    vk_pso->CreateResourceCache();
+    vk_pso->GenerateDescriptorSetLayouts(m_device, layout_mappings);
+
+    auto layouts = vk_pso->m_descriptor_sets_layout->GetLayouts();
+    // create pipeline layout
+    VkPipelineLayoutCreateInfo pipeline_layout_create_info{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    pipeline_layout_create_info.pNext                  = nullptr;
+    pipeline_layout_create_info.flags                  = 0;
+    pipeline_layout_create_info.setLayoutCount         = layouts.size();
+    pipeline_layout_create_info.pSetLayouts            = layouts.data();
+    pipeline_layout_create_info.pushConstantRangeCount = push_constant_ranges.size();
+    pipeline_layout_create_info.pPushConstantRanges    = push_constant_ranges.data();
+
+    VK_CHECK_RESULT(vkCreatePipelineLayout(m_device->GetDevice(), &pipeline_layout_create_info, nullptr, &vk_pso->m_pipeline_layout));
+
+    VkRayTracingPipelineCreateInfoKHR pipeline_create_info{VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR};
+    pipeline_create_info.stageCount                   = static_cast<uint32_t>(shader_stages.size());
+    pipeline_create_info.pStages                      = shader_stages.data();
+    pipeline_create_info.groupCount                   = static_cast<uint32_t>(shader_groups.size());
+    pipeline_create_info.pGroups                      = shader_groups.data();
+    pipeline_create_info.layout                       = vk_pso->m_pipeline_layout;
+    pipeline_create_info.maxPipelineRayRecursionDepth = _init.max_ray_recursion_depth;
+
+    VK_CHECK_RESULT(vkCreateRayTracingPipelinesKHR(m_device->GetDevice(), {}, {}, 1, &pipeline_create_info, nullptr, &vk_pso->m_pipeline));
+
+    //create SBTs
+#define ALIGNUP(x, y) ((x + (y - 1)) & (~(y - 1)))
+
+    uint32_t miss_count     = _init.ray_miss_table.size();
+    uint32_t hit_count      = _init.ray_hit_table.size();
+    uint32_t callable_count = _init.ray_callable_table.size();
+    uint32_t handlecount    = 1 + miss_count + hit_count + callable_count;
+
+    auto     rt_props             = VkUtil::QueryPhysicalDeviceExtensionProps<VkPhysicalDeviceRayTracingPipelinePropertiesKHR,
+                                                              VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR>(m_device->GetGpu());
+    uint32_t handlesize           = rt_props.shaderGroupHandleSize;
+    uint32_t handlesize_aligned   = ALIGNUP(handlesize, rt_props.shaderGroupHandleAlignment);
+    vk_pso->m_raygen_sbt.size     = ALIGNUP(handlesize_aligned, rt_props.shaderGroupBaseAlignment);
+    vk_pso->m_raygen_sbt.stride   = vk_pso->m_raygen_sbt.size;
+    vk_pso->m_miss_sbt.size       = ALIGNUP(handlesize_aligned * miss_count, rt_props.shaderGroupBaseAlignment);
+    vk_pso->m_miss_sbt.stride     = handlesize_aligned;
+    vk_pso->m_hit_sbt.size        = ALIGNUP(handlesize_aligned * hit_count, rt_props.shaderGroupBaseAlignment);
+    vk_pso->m_hit_sbt.stride      = handlesize_aligned;
+    vk_pso->m_callable_sbt.size   = ALIGNUP(handlesize_aligned * callable_count, rt_props.shaderGroupBaseAlignment);
+    vk_pso->m_callable_sbt.stride = handlesize_aligned;
+
+    uint32_t             datasize = handlecount * handlesize;
+    Moer::Array<uint8_t> data(datasize);
+    VK_CHECK_RESULT(vkGetRayTracingShaderGroupHandlesKHR(m_device->GetDevice(), vk_pso->m_pipeline, 0, handlecount, datasize, data.data()));
+
+    RHIBufferCreateInfo sbt_buffer_ci{};
+    sbt_buffer_ci.size   = vk_pso->m_raygen_sbt.size + vk_pso->m_miss_sbt.size + vk_pso->m_hit_sbt.size + vk_pso->m_callable_sbt.size;
+    sbt_buffer_ci.usage  = EBufferUsageFlags::SHADER_BINDING_TABLE | EBufferUsageFlags::CPU_VISIBLE;
+    sbt_buffer_ci.stride = sbt_buffer_ci.size;
+    vk_pso->m_sbt_buffer = RHICreateBuffer(sbt_buffer_ci);
+
+    VkDeviceAddress sbt_buffer_device_address = GetDeviceAddress(vk_pso->m_sbt_buffer);
+    vk_pso->m_raygen_sbt.deviceAddress        = sbt_buffer_device_address;
+    vk_pso->m_miss_sbt.deviceAddress          = sbt_buffer_device_address + vk_pso->m_raygen_sbt.size;
+    vk_pso->m_hit_sbt.deviceAddress           = sbt_buffer_device_address + vk_pso->m_raygen_sbt.size + vk_pso->m_miss_sbt.size;
+    vk_pso->m_callable_sbt.deviceAddress      = sbt_buffer_device_address + vk_pso->m_raygen_sbt.size + vk_pso->m_miss_sbt.size + vk_pso->m_hit_sbt.size;
+
+    uint8_t* pSBTbuffer = static_cast<uint8_t*>(RHIMapBuffer(vk_pso->m_sbt_buffer, 0, sbt_buffer_ci.size));
+
+    uint8_t* pData      = pSBTbuffer;
+    auto     getHandle  = [&data, handlesize](int i) { return data.data() + handlesize * i; };
+    uint32_t handle_idx = 0;
+    memcpy(pData, getHandle(handle_idx++), handlesize);
+    pData = pSBTbuffer + vk_pso->m_raygen_sbt.size;
+
+    for (uint32_t i = 0; i < miss_count; ++i) {
+        memcpy(pData, getHandle(handle_idx++), handlesize);
+        pData += vk_pso->m_miss_sbt.stride;
+    }
+    pData = pSBTbuffer + vk_pso->m_raygen_sbt.size + vk_pso->m_miss_sbt.size;
+    for (uint32_t i = 0; i < hit_count; ++i) {
+        memcpy(pData, getHandle(handle_idx++), handlesize);
+        pData += vk_pso->m_hit_sbt.stride;
+    }
+    pData = pSBTbuffer + vk_pso->m_raygen_sbt.size + vk_pso->m_miss_sbt.size + vk_pso->m_hit_sbt.size;
+    for (uint32_t i = 0; i < callable_count; ++i) {
+        memcpy(pData, getHandle(handle_idx++), handlesize);
+        pData += vk_pso->m_callable_sbt.stride;
+    }
+    RHIUnmapBuffer(vk_pso->m_sbt_buffer);
+
+    return RHIRayTracingPipelineStateRef(vk_pso);
+#undef ALIGNUP
+}
+
+void VulkanRHIImpl::RHIBatchedBuildRayTracingBLAS(int batch_size, const RHIRayTracingBLASInitializer* _inits, RHIRayTracingBLASRef* results) {
+
+    if (batch_size == 0) {
+        LOG_WARNING("RHIBatchedBuildRayTracingBLAS: batch_size == 0");
+    }
+    if (_inits == nullptr) {
+        LOG_WARNING("RHIBatchedBuildRayTracingBLAS: _inits == nullptr");
+    }
+    if (results == nullptr) {
+        LOG_WARNING("RHIBatchedBuildRayTracingBLAS: results == nullptr");
+    }
+    if (!results || !batch_size || !_inits) {
+        return;
+    }
+    static auto vkGetAccelerationStructureBuildSizesKHR = reinterpret_cast<PFN_vkGetAccelerationStructureBuildSizesKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkGetAccelerationStructureBuildSizesKHR"));
+    static auto vkCreateAccelerationStructureKHR        = reinterpret_cast<PFN_vkCreateAccelerationStructureKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkCreateAccelerationStructureKHR"));
+    static auto vkCmdBuildAccelerationStructuresKHR     = reinterpret_cast<PFN_vkCmdBuildAccelerationStructuresKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkCmdBuildAccelerationStructuresKHR"));
+    VK_CHECK_NULLPTR(vkGetAccelerationStructureBuildSizesKHR, "RHIBuildRayTracingBLAS: vkGetAccelerationStructureBuildSizesKHR is nullptr", return);
+    VK_CHECK_NULLPTR(vkCreateAccelerationStructureKHR, "RHIBuildRayTracingBLAS: vkCreateAccelerationStructureKHR is nullptr", return);
+    VK_CHECK_NULLPTR(vkCmdBuildAccelerationStructuresKHR, "RHIBuildRayTracingBLAS: vkCmdBuildAccelerationStructuresKHR is nullptr", return);
+
+    int blas_count = batch_size;
+    //building caches
+    Moer::Array<VkAccelerationStructureBuildGeometryInfoKHR>           all_vk_geo_infos;
+    Moer::Array<Moer::Array<VkAccelerationStructureGeometryKHR>>       all_vk_geos;
+    Moer::Array<Moer::Array<VkAccelerationStructureBuildRangeInfoKHR>> all_vk_range_infos;
+    Moer::Array<const VkAccelerationStructureBuildRangeInfoKHR*>       all_p_vk_range_infos;
+    Moer::Array<Moer::Array<uint32_t>>                                 all_primitive_counts;
+    Moer::Array<VkAccelerationStructureBuildSizesInfoKHR>              all_vk_size_infos;
+    all_vk_geo_infos.reserve(blas_count);
+    all_vk_geos.reserve(blas_count);
+    all_vk_range_infos.reserve(blas_count);
+    all_p_vk_range_infos.reserve(blas_count);
+    all_vk_size_infos.reserve(blas_count);
+
+    for (int idx = 0; idx < blas_count; ++idx) {
+        const auto& _init = _inits[idx];
+        //rhi geometries to vulkan geometries
+        Moer::Array<VkAccelerationStructureGeometryKHR> vk_geos;
+        vk_geos.reserve(_init.geometries.size());
+        for (const auto& rhi_geo : _init.geometries) {
+            VkAccelerationStructureGeometryKHR vk_geo{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
+            vk_geo.geometryType = VulkanRHIRayTracingAccelerationStructure::METoVKGeometryTypeKHR(rhi_geo.geo_type);
+            vk_geo.flags        = VulkanRHIRayTracingAccelerationStructure::METoGeometryFlagsKHR(rhi_geo.flags);
+            if (vk_geo.geometryType == VK_GEOMETRY_TYPE_TRIANGLES_KHR) {
+                const RHIRayTracingTrianglesGeometry&           rhi_triangles = rhi_geo.geometry.triangles;
+                VkAccelerationStructureGeometryTrianglesDataKHR vk_triangles{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR};
+                vk_triangles.indexData.deviceAddress = GetDeviceAddress(rhi_triangles.index_buffer);
+                vk_triangles.indexType               = VulkanEnumTranslator::METoVKIndexType(rhi_triangles.index_element_type);
+                vk_triangles.maxVertex               = rhi_triangles.max_vertex_count - 1;
+                if (rhi_triangles.transform_buffer) {
+                    vk_triangles.transformData.deviceAddress = GetDeviceAddress(rhi_triangles.transform_buffer);
+                }
+                vk_triangles.vertexData.deviceAddress = GetDeviceAddress(rhi_triangles.vertex_buffer);
+                vk_triangles.vertexFormat             = VulkanEnumTranslator::METoVKFormat(rhi_triangles.vertex_element_type);
+                vk_triangles.vertexStride             = rhi_triangles.vertex_buffer_stride;
+                vk_geo.geometry.triangles             = vk_triangles;
+
+            } else if (vk_geo.geometryType == VK_GEOMETRY_TYPE_AABBS_KHR) {
+                //TODO:impl geometryType: AABB
+                auto                                        rhi_aabbs = rhi_geo.geometry.aabbs;
+                VkAccelerationStructureGeometryAabbsDataKHR vk_aabbs{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_AABBS_DATA_KHR};
+                vk_geo.geometry.aabbs = vk_aabbs;
+            }
+            vk_geos.emplace_back(vk_geo);
+        }
+        all_vk_geos.emplace_back(vk_geos);
+
+        //rhi range infos to vulkan range infos
+        Moer::Array<VkAccelerationStructureBuildRangeInfoKHR> vk_range_infos;
+        Moer::Array<uint32_t>                                 primtive_count;
+        vk_range_infos.reserve(_init.range_infos.size());
+        primtive_count.reserve(_init.range_infos.size());
+        for (const auto& rhi_range_info : _init.range_infos) {
+            VkAccelerationStructureBuildRangeInfoKHR vk_range_info;
+            vk_range_info.firstVertex     = rhi_range_info.first_vertex;
+            vk_range_info.primitiveCount  = rhi_range_info.primitive_count;
+            vk_range_info.primitiveOffset = rhi_range_info.primtive_offset;
+            vk_range_info.transformOffset = rhi_range_info.transform_offset;
+            vk_range_infos.emplace_back(vk_range_info);
+            primtive_count.emplace_back(vk_range_info.primitiveCount);
+        }
+        all_vk_range_infos.emplace_back(vk_range_infos);
+        all_primitive_counts.emplace_back(primtive_count);
+    }
+
+    VkDeviceAddress max_scratch_size = 0;
+    for (int idx = 0; idx < blas_count; ++idx) {
+        const auto& _init = _inits[idx];
+        all_p_vk_range_infos.emplace_back(all_vk_range_infos[idx].data());
+
+        VkAccelerationStructureBuildGeometryInfoKHR vk_geometry_info{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
+        vk_geometry_info.type          = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+        vk_geometry_info.flags         = VulkanRHIRayTracingAccelerationStructure::METoVKBuildAccelerationStructureFlagsKHR(_init.build_flags);
+        vk_geometry_info.mode          = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+        vk_geometry_info.ppGeometries  = nullptr;
+        vk_geometry_info.geometryCount = static_cast<uint32_t>(all_vk_geos[idx].size());
+        vk_geometry_info.pGeometries   = all_vk_geos[idx].data();
+
+        VkAccelerationStructureBuildSizesInfoKHR vk_size_info{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
+        vkGetAccelerationStructureBuildSizesKHR(m_device->GetDevice(), VK_ACCELERATION_STRUCTURE_BUILD_TYPE_HOST_OR_DEVICE_KHR, &vk_geometry_info, all_primitive_counts[idx].data(), &vk_size_info);
+        all_vk_size_infos.emplace_back(vk_size_info);
+        max_scratch_size = std::max(max_scratch_size, vk_size_info.buildScratchSize);
+
+        auto* rhi_blas                                      = new VulkanRHIRayTracingBLAS(_init);
+        rhi_blas->size_info.build_scratch_size              = vk_size_info.buildScratchSize;
+        rhi_blas->size_info.result_size                     = vk_size_info.accelerationStructureSize;
+        RHIBufferCreateInfo blas_buffer_ci                  = RHIBufferCreateInfo::Create(vk_size_info.accelerationStructureSize, vk_size_info.accelerationStructureSize, EBufferUsageFlags::ACCELERATION_STRUCTURE);
+        rhi_blas->m_buffer                                  = RHICreateBuffer(blas_buffer_ci);
+        VkBuffer                             vk_blas_buffer = static_cast<VulkanRHIBuffer*>(rhi_blas->m_buffer.Get())->m_alloc.buffer;
+        VkAccelerationStructureCreateInfoKHR vk_as_ci{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
+        vk_as_ci.type   = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+        vk_as_ci.buffer = vk_blas_buffer;
+        vk_as_ci.offset = 0;
+        vk_as_ci.size   = vk_size_info.accelerationStructureSize;
+        VK_CHECK_RESULT(vkCreateAccelerationStructureKHR(m_device->GetDevice(), &vk_as_ci, nullptr, &rhi_blas->m_blas));
+
+        results[idx] = RHIRayTracingBLASRef(rhi_blas);
+
+        vk_geometry_info.dstAccelerationStructure = rhi_blas->m_blas;
+        all_vk_geo_infos.emplace_back(vk_geometry_info);
+    }
+
+    RHIBufferCreateInfo scratch_buffer_info           = RHIBufferCreateInfo::Create(max_scratch_size, max_scratch_size, EBufferUsageFlags::ACCELERATION_STRUCTURE_SCRATCH);
+    RHIBufferRef        scratch_buffer                = RHICreateBuffer(scratch_buffer_info);
+    VkDeviceAddress     scratch_buffer_device_address = GetDeviceAddress(scratch_buffer);
+
+    const auto& vk_graphic_command_pool = m_device->GetCurrentCommandAllocator()->GetHandle(ECommandListType::GRAPHICS);
+    const auto& vk_graphic_queue        = m_device->GetGraphicsQueue();
+    auto        cb                      = BeginSingleTimeCommands(vk_graphic_command_pool);
+
+    //build acceleration structure in batch,but limit the batch size
+    VkDeviceSize batchSize{0};
+    VkDeviceSize batchLimit{256'000'000};// 256 MB
+
+    for (int idx = 0; idx < blas_count; ++idx) {
+        all_vk_geo_infos[idx].scratchData.deviceAddress = scratch_buffer_device_address;
+        vkCmdBuildAccelerationStructuresKHR(cb, 1, &all_vk_geo_infos[idx], &all_p_vk_range_infos[idx]);
+
+        VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        barrier.srcAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+        barrier.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, 0, 1, &barrier, 0, nullptr, 0, nullptr);
+
+        batchSize += all_vk_size_infos[idx].accelerationStructureSize;
+        if (batchSize >= batchLimit || idx == blas_count - 1) {
+            EndSingleTimeCommands(cb, vk_graphic_command_pool, vk_graphic_queue);
+            batchSize = 0;
+            if (idx != blas_count - 1) {
+                cb = BeginSingleTimeCommands(vk_graphic_command_pool);
+            }
+        }
+    }
+    //TODO:compact blases
+    return;
+}
+
+RHIRayTracingTLASRef VulkanRHIImpl::RHIBuildRayTracingTLAS(const RHIRayTracingTLASInitializer& _init) {
+    static auto vkGetAccelerationStructureBuildSizesKHR    = reinterpret_cast<PFN_vkGetAccelerationStructureBuildSizesKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkGetAccelerationStructureBuildSizesKHR"));
+    static auto vkCreateAccelerationStructureKHR           = reinterpret_cast<PFN_vkCreateAccelerationStructureKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkCreateAccelerationStructureKHR"));
+    static auto vkCmdBuildAccelerationStructuresKHR        = reinterpret_cast<PFN_vkCmdBuildAccelerationStructuresKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkCmdBuildAccelerationStructuresKHR"));
+    static auto vkGetAccelerationStructureDeviceAddressKHR = reinterpret_cast<PFN_vkGetAccelerationStructureDeviceAddressKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkGetAccelerationStructureDeviceAddressKHR"));
+    VK_CHECK_NULLPTR(vkGetAccelerationStructureBuildSizesKHR, "RHIBuildRayTracingTLAS: vkGetAccelerationStructureBuildSizesKHR is nullptr", return RHIRayTracingTLASRef{});
+    VK_CHECK_NULLPTR(vkCreateAccelerationStructureKHR, "RHIBuildRayTracingTLAS: vkCreateAccelerationStructureKHR is nullptr", return RHIRayTracingTLASRef{});
+    VK_CHECK_NULLPTR(vkCmdBuildAccelerationStructuresKHR, "RHIBuildRayTracingTLAS: vkCmdBuildAccelerationStructuresKHR is nullptr", return RHIRayTracingTLASRef{});
+    VK_CHECK_NULLPTR(vkGetAccelerationStructureDeviceAddressKHR, "RHIBuildRayTracingTLAS: vkGetAccelerationStructureDeviceAddressKHR is nullptr", return RHIRayTracingTLASRef{});
+    uint32_t                                        instance_count = _init.instances.size();
+    Moer::Array<VkAccelerationStructureInstanceKHR> vk_instances;
+    vk_instances.reserve(instance_count);
+    for (const auto& rhi_instance : _init.instances) {
+        VkAccelerationStructureInstanceKHR vk_instance{};
+        vk_instance.transform                              = *reinterpret_cast<const VkTransformMatrixKHR*>(&rhi_instance.transform);
+        vk_instance.instanceCustomIndex                    = rhi_instance.custom_index;
+        vk_instance.mask                                   = rhi_instance.instance_mask;
+        vk_instance.flags                                  = VulkanRHIRayTracingAccelerationStructure::METoVKGeometryInstanceFlagsKHR(rhi_instance.flags);
+        vk_instance.instanceShaderBindingTableRecordOffset = rhi_instance.instance_sbt_offset;
+        VkAccelerationStructureDeviceAddressInfoKHR vk_asda_info{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR};
+        vk_asda_info.accelerationStructure         = static_cast<VulkanRHIRayTracingBLAS*>(rhi_instance.blas.Get())->m_blas;
+        vk_instance.accelerationStructureReference = vkGetAccelerationStructureDeviceAddressKHR(m_device->GetDevice(), &vk_asda_info);
+        vk_instances.emplace_back(vk_instance);
+    }
+    RHIBufferCreateInfo instance_buffer_info{};
+    instance_buffer_info.size                                       = vk_instances.size() * sizeof(VkAccelerationStructureInstanceKHR);
+    instance_buffer_info.stride                                     = sizeof(VkAccelerationStructureInstanceKHR);
+    instance_buffer_info.usage                                      = EBufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT;
+    RHIBufferRef                                    instance_buffer = CreateBufferFromData(instance_buffer_info, vk_instances.size() * sizeof(VkAccelerationStructureInstanceKHR), vk_instances.data());
+    VkAccelerationStructureGeometryInstancesDataKHR vk_insances_data{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR};
+    vk_insances_data.data.deviceAddress = GetDeviceAddress(instance_buffer);
+
+    VkAccelerationStructureGeometryKHR vk_geo{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
+    vk_geo.geometryType       = VK_GEOMETRY_TYPE_INSTANCES_KHR;
+    vk_geo.geometry.instances = vk_insances_data;
+
+    VkAccelerationStructureBuildGeometryInfoKHR vk_geo_info{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
+    vk_geo_info.type          = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+    vk_geo_info.flags         = VulkanRHIRayTracingAccelerationStructure::METoVKBuildAccelerationStructureFlagsKHR(_init.build_flags);
+    vk_geo_info.geometryCount = 1;
+    vk_geo_info.mode          = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+    vk_geo_info.pGeometries   = &vk_geo;
+
+    VkAccelerationStructureBuildSizesInfoKHR vk_sizes_info{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
+    vkGetAccelerationStructureBuildSizesKHR(m_device->GetDevice(), VK_ACCELERATION_STRUCTURE_BUILD_TYPE_HOST_OR_DEVICE_KHR, &vk_geo_info, &instance_count, &vk_sizes_info);
+
+    auto* rhi_tlas                                      = new VulkanRHIRayTracingTLAS(_init);
+    rhi_tlas->size_info.build_scratch_size              = vk_sizes_info.buildScratchSize;
+    rhi_tlas->size_info.result_size                     = vk_sizes_info.accelerationStructureSize;
+    RHIBufferCreateInfo tlas_buffer_ci                  = RHIBufferCreateInfo::Create(vk_sizes_info.accelerationStructureSize, vk_sizes_info.accelerationStructureSize, EBufferUsageFlags::ACCELERATION_STRUCTURE);
+    rhi_tlas->m_buffer                                  = RHICreateBuffer(tlas_buffer_ci);
+    VkBuffer                             vk_tlas_buffer = static_cast<VulkanRHIBuffer*>(rhi_tlas->m_buffer.Get())->GetHandle();
+    VkAccelerationStructureCreateInfoKHR vk_as_ci{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
+    vk_as_ci.type   = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+    vk_as_ci.buffer = vk_tlas_buffer;
+    vk_as_ci.offset = 0;
+    vk_as_ci.size   = vk_sizes_info.accelerationStructureSize;
+    VK_CHECK_RESULT(vkCreateAccelerationStructureKHR(m_device->GetDevice(), &vk_as_ci, nullptr, &rhi_tlas->m_tlas));
+
+    RHIBufferCreateInfo scratch_buffer_info           = RHIBufferCreateInfo::Create(vk_sizes_info.buildScratchSize, vk_sizes_info.buildScratchSize, EBufferUsageFlags::ACCELERATION_STRUCTURE_SCRATCH);
+    RHIBufferRef        scratch_buffer                = RHICreateBuffer(scratch_buffer_info);
+    VkDeviceAddress     scratch_buffer_device_address = GetDeviceAddress(scratch_buffer);
+
+    vk_geo_info.dstAccelerationStructure  = rhi_tlas->m_tlas;
+    vk_geo_info.scratchData.deviceAddress = scratch_buffer_device_address;
+
+    VkAccelerationStructureBuildRangeInfoKHR vk_range_info{};
+    vk_range_info.primitiveCount                                    = instance_count;
+    const VkAccelerationStructureBuildRangeInfoKHR* p_vk_range_info = &vk_range_info;
+
+    const auto& graphics_command_pool = m_device->GetCurrentCommandAllocator()->GetHandle(ECommandListType::GRAPHICS);
+    const auto& graphics_queue        = m_device->GetGraphicsQueue();
+    auto        cb                    = BeginSingleTimeCommands(graphics_command_pool);
+
+    vkCmdBuildAccelerationStructuresKHR(cb, 1, &vk_geo_info, &p_vk_range_info);
+
+    EndSingleTimeCommands(cb, graphics_command_pool, graphics_queue);
+
+    return RHIRayTracingTLASRef(rhi_tlas);
+}
 
 RHIBufferRef VulkanRHIImpl::RHICreateBuffer(const RHIBufferCreateInfo& info) {
     RHIBufferInfo buffer_info{};
@@ -499,6 +1146,20 @@ RHIGraphicsCommandList* VulkanRHIImpl::RHICreateGraphicsCommandList(RHICommandAl
     return MoerNew(VulkanRHIGraphicsCommandList(m_device, vk_allocator->GetHandle(ECommandListType::GRAPHICS), VK_COMMAND_BUFFER_LEVEL_PRIMARY));
 }
 
+RHIComputeCommandList* VulkanRHIImpl::RHICreateComputeCommandList(RHICommandAllocator* _allocator, RHIComputePipelineState* _initial_state) {
+    auto* vk_allocator = static_cast<VulkanCommandAllocator*>(_allocator);
+    VK_CHECK_NULLPTR(vk_allocator, "RHICreateComputeCommandList: allocator is nullptr!", return nullptr);
+
+    return MoerNew(VulkanRHIComputeCommandList(m_device, vk_allocator->GetHandle(ECommandListType::COMPUTE), VK_COMMAND_BUFFER_LEVEL_PRIMARY));
+}
+
+RHIRayTracingCommandList* VulkanRHIImpl::RHICreateRayTracingCommandList(RHICommandAllocator* _allocator, RHIRayTracingPipelineState* _initial_state) {
+    auto* vk_allocator = static_cast<VulkanCommandAllocator*>(_allocator);
+    VK_CHECK_NULLPTR(vk_allocator, "RHICreateRayTracingCommandList: allocator is nullptr!", return nullptr);
+
+    return MoerNew(VulkanRHIRayTracingCommandList(m_device, vk_allocator->GetHandle(ECommandListType::RAY_TRACING), VK_COMMAND_BUFFER_LEVEL_PRIMARY));
+}
+
 // RHIComputeCommandList* VulkanRHIImpl::CreateComputeCommandList(RHIComputePipelineState* _initial_state) {
 //     return nullptr;
 // }
@@ -509,9 +1170,24 @@ RHICopyCommandList* VulkanRHIImpl::RHICreateCopyCommandList(RHICommandAllocator*
     return MoerNew(VulkanRHICopyCommandList(m_device, vk_allocator->GetHandle(ECommandListType::COPY), VK_COMMAND_BUFFER_LEVEL_PRIMARY));
 }
 
-void VulkanRHIImpl::RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) {
-    const auto* vk_pso = static_cast<VulkanRHIGraphicsPipelineState*>(_pso);
-    VK_CHECK_NULLPTR(vk_pso, "SetBatchedShaderParameter: graphics pipeline state is nullptr!", return);
+void VulkanRHIImpl::RHISetBatchedShaderParametersInner(RHIResource* _pso, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) {
+    const VulkanPipelineState* vk_pso;
+    switch (_pso->GetResourceType()) {
+        case RRT_GRAPHIC_PIPELINE_STATE:
+            vk_pso = static_cast<VulkanRHIGraphicsPipelineState*>(_pso);
+            VK_CHECK_NULLPTR(vk_pso, "SetBatchedShaderParameter: graphics pipeline state is nullptr!", return);
+            break;
+        case RRT_COMPUTE_PIPELINE_STATE:
+            vk_pso = static_cast<VulkanRHIComputePipelineState*>(_pso);
+            VK_CHECK_NULLPTR(vk_pso, "SetBatchedShaderParameter: compute pipeline state is nullptr!", return);
+            break;
+        case RRT_RAY_TRACING_PIPELINE_STATE:
+            vk_pso = static_cast<VulkanRHIRayTracingPipelineState*>(_pso);
+            break;
+        default:
+            LOG_WARNING("RHISetBatchedShaderParameter:_pso is not a pipeline state resource");
+            return;
+    }
     // resources
     const auto& descriptor_binding_infos = vk_pso->GetDescriptorSetsLayout()->GetDescriptorBindingInfos();
     auto*       resource_cache           = vk_pso->GetPipelineResourceCache();
@@ -519,7 +1195,7 @@ void VulkanRHIImpl::RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso
     auto&       writers                  = resource_cache->GetWriters();
 
     const auto& resources = _batched_params.GetResourceParameters();
-    for (uint32_t i = 0; i < resources.size(); ++i) {
+    for (uint32_t i = 0; i < resources.size();) {
         const auto& params       = resources[i];
         const auto  type         = params.resource->GetResourceType();
         const auto& binding_info = descriptor_binding_infos.at(params.space).at(params.slot);
@@ -577,6 +1253,26 @@ void VulkanRHIImpl::RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso
                     params.space,
                     params.slot,
                     images,
+                    binding_info.type);
+            }
+        } else if (type == RRT_RAYTRACING_ACCELERATION_STRUCTURE) {
+            //acceleration structure
+            Moer::Array<VkAccelerationStructureKHR> ases(binding_info.count);
+            for (int j = 0; j < binding_info.count; ++j) {
+                auto* rhi_as = static_cast<RHIRayTracingAccelerationStructure*>(resources[i + j].resource);
+                if (rhi_as->GetType() == ERayTracingAccelerationStructureType::BOTTOM_LEVEL) {
+                    LOG_WARNING("RHISetBatchedShaderParameter:the acceleratio structure for shader parameter must be a TLAS");
+                    continue;
+                }
+                auto* vk_as = static_cast<VulkanRHIRayTracingTLAS*>(rhi_as);
+                ases[j]     = vk_as->m_tlas;
+            }
+            i += binding_info.count;
+            if (ready_to_write) {
+                writers[params.space].WriteAS(
+                    params.space,
+                    params.slot,
+                    ases,
                     binding_info.type);
             }
         }
@@ -705,8 +1401,8 @@ bool VulkanRHIImpl::CheckValidationLayer(const std::string& layer_name) {
         }
     }
 
-    // return validation_layer_present;
-    return false;
+    return validation_layer_present;
+    //return false;
     //MARK_TEST
 }
 
@@ -720,6 +1416,30 @@ bool VulkanRHIImpl::CheckEnabledExtensions() {
         }
     }
     return true;
+}
+
+RHIBufferRef VulkanRHIImpl::CreateBufferFromData(const RHIBufferCreateInfo& info, uint32_t size, void* data) {
+    RHIBufferCreateInfo staging_buffer_info = info;
+    staging_buffer_info.usage               = EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE;
+    RHIBufferRef staging_buffer             = RHICreateBuffer(staging_buffer_info);
+    void*        mapped_ptr                 = RHIMapBuffer(staging_buffer, 0, size);
+    memcpy(mapped_ptr, data, size);
+    RHIUnmapBuffer(staging_buffer);
+
+    RHIBufferCreateInfo buffer_info = info;
+    buffer_info.usage |= EBufferUsageFlags::TRANSFER_DST;
+    RHIBufferRef buffer = RHICreateBuffer(buffer_info);
+
+    const auto&  copy_command_pool = m_device->GetCurrentCommandAllocator()->GetHandle(ECommandListType::COPY);
+    const auto&  transfer_queue    = m_device->GetTransferQueue();
+    auto         cb                = BeginSingleTimeCommands(copy_command_pool);
+    VkBuffer     vk_buffer         = static_cast<VulkanRHIBuffer*>(buffer.Get())->GetHandle();
+    VkBuffer     vk_staging_buffer = static_cast<VulkanRHIBuffer*>(staging_buffer.Get())->GetHandle();
+    VkBufferCopy vk_region{};
+    vk_region.size = info.size;
+    vkCmdCopyBuffer(cb, vk_staging_buffer, vk_buffer, 1, &vk_region);
+    EndSingleTimeCommands(cb, copy_command_pool, transfer_queue);
+    return buffer;
 }
 
 VkCommandBuffer VulkanRHIImpl::BeginSingleTimeCommands(VkCommandPool _pool) {
@@ -761,6 +1481,14 @@ void VulkanRHIImpl::EndSingleTimeCommands(VkCommandBuffer _command_buffer, VkCom
     vkQueueWaitIdle(_queue);
 
     vkFreeCommandBuffers(m_device->GetDevice(), _pool, 1, &_command_buffer);
+}
+
+VkDeviceAddress VulkanRHIImpl::GetDeviceAddress(RHIBufferRef _buffer) {
+    auto* vk_buffer = static_cast<VulkanRHIBuffer*>(_buffer.Get());
+    VK_CHECK_NULLPTR(vk_buffer, "GetDeviceAddress:buffer to getaddress is nullptr", return VkDeviceAddress{0});
+    VkBufferDeviceAddressInfo info{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
+    info.buffer = vk_buffer->GetHandle();
+    return vkGetBufferDeviceAddress(m_device->GetDevice(), &info);
 }
 
 #pragma endregion

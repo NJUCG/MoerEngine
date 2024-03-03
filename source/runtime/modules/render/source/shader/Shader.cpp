@@ -2,18 +2,28 @@
 #include "misc/Hash.h"
 #include "rhi/RHICommon.h"
 #include "shader/ShaderCommon.h"
+#include "shader/ShaderMutation.h"
+#include "shader/ShaderParameterMacros.h"
 #include "shader/ShaderResource.h"
 #include "shader/ShaderResourceManager.h"
+
+#include <regex>
 #include <cstring>
 class TestShaderClass : Shader {
+public:
+    MUTATION_SPARSE_UINT(TestInts, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9);
+    DEFINE_MUTATION_SET(TestInts);
     DEFINE_SHADER_TYPE(TestShaderClass, Global, RENDER_API)
+
+    BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
+    DEFINE_SHADER_PARAM_SRV(Buffer, bar)
+    DEFINE_SHADER_PARAM_SRV(AccelerationStructure, as)
+    END_ROOT_PARAMETER_DEFINITION(Parameters)
 };
 
 IMPLEMENT_SHADER_TYPE(TestReflectionShader, "TestVert.vert", "main", EShaderType::ST_VERTEX);
 
-Shader::Shader(){
-
-};
+Shader::Shader(){};
 
 Shader::Shader(const ShaderCompiledInitializer& initializer)
     : type(initializer.type_info),
@@ -29,17 +39,49 @@ Shader::~Shader(){
 
 };
 
-const ShaderCodeEntry* Shader::GetCodeEntry() const {
-    if (type != nullptr) {
-        return ShaderResourceManager::GetInstance().GetShaderCodeMap().GetCodeEntry(type->GetName());
-    }
-    return nullptr;
-}
-
 const Hash64City& Shader::GetCompiledHash() const {
     return compiled_hash;
 };
 
+namespace Utils {
+    EShaderCodeResourceBindingType BindingTypeStrToEnum(std::string_view _binding_type_str) {
+        std::regex binding_type_regex("(RW)?(Buffer|Texture2D|Texture2DArray|Texture3D|TextureCube|TextureCubeArray|Sampler|AccelerationStructure).*");
+        using SVMatchResults = std::match_results<std::string_view::const_iterator>;
+        SVMatchResults match;
+
+        if (std::regex_search(_binding_type_str.begin(), _binding_type_str.end(), match, binding_type_regex)) {
+            if (match[0] == "Buffer") {
+                return EShaderCodeResourceBindingType::BUFFER;
+            } else if (match[0] == "Texture2D") {
+                return EShaderCodeResourceBindingType::TEXTURE_2D;
+            } else if (match[0] == "Texture2DArray") {
+                return EShaderCodeResourceBindingType::TEXTURE_2D_ARRAY;
+            } else if (match[0] == "Texture3D") {
+                return EShaderCodeResourceBindingType::TEXTURE_3D;
+            } else if (match[0] == "TextureCube") {
+                return EShaderCodeResourceBindingType::TEXTURE_CUBE;
+            } else if (match[0] == "TextureCubeArray") {
+                return EShaderCodeResourceBindingType::TEXTURE_CUBE_ARRAY;
+            } else if (match[0] == "Sampler") {
+                return EShaderCodeResourceBindingType::SAMPLER;
+            } else if (match[0] == "AccelerationStructure") {
+                return EShaderCodeResourceBindingType::RAYTRACING_ACCELERATION_STRUCTURE;
+            } else if (match[0] == "RWBuffer") {
+                return EShaderCodeResourceBindingType::RW_BUFFER;
+            } else if (match[0] == "RWTexture2D") {
+                return EShaderCodeResourceBindingType::RW_TEXTURE_2D;
+            } else if (match[0] == "RWTexture2DArray") {
+                return EShaderCodeResourceBindingType::RW_TEXTURE_2D_ARRAY;
+            } else if (match[0] == "RWTexture3D") {
+                return EShaderCodeResourceBindingType::RW_TEXTURE_3D;
+            } else if (match[0] == "RWTextureCube") {
+                return EShaderCodeResourceBindingType::RW_TEXTURE_CUBE;
+            }
+        }
+        return EShaderCodeResourceBindingType::INVALID;
+    }
+
+}// namespace Utils
 //construct root parameter layout info by reflection and meta_data
 void Shader::ConstructRootParameterLayoutInfo(const ShaderParametersInfoMap& _param_map) {
 
@@ -49,11 +91,17 @@ void Shader::ConstructRootParameterLayoutInfo(const ShaderParametersInfoMap& _pa
 
     const auto& reflect_map = _param_map.GetShaderParameterInfoMap();
     for (const auto& member : parameter_meta_data->GetMembers()) {
-        int16_t              slot = -1, space = -1, num = 0;
-        EShaderParameterType param_type = EShaderParameterType::UNKNOWN;
-        bool                 b_valid    = reflect_map.count(member.GetName()) > 0;
+        int16_t                        slot = -1, space = -1, num = 0;
+        EShaderParameterType           param_type = EShaderParameterType::UNKNOWN;
+        EShaderCodeResourceBindingType resource_type{EShaderCodeResourceBindingType::INVALID};
+
+        bool b_valid = reflect_map.count(member.GetName().data()) > 0;
+
+        auto binding_type_str = member.GetShaderBindingTypeStr();
+        resource_type         = Utils::BindingTypeStrToEnum(binding_type_str);
+
         if (b_valid) {
-            const auto& iter = reflect_map.find(member.GetName());
+            const auto& iter = reflect_map.find(member.GetName().data());
             slot             = iter->second.slot;
             space            = iter->second.space;
             num              = iter->second.num;
@@ -73,7 +121,8 @@ void Shader::ConstructRootParameterLayoutInfo(const ShaderParametersInfoMap& _pa
                                                             slot,
                                                             space,
                                                             num,
-                                                            param_type));
+                                                            param_type,
+                                                            resource_type));
     }
     param_layout_info.layout_infos.swap(layout_infos);
 }

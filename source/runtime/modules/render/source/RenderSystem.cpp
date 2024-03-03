@@ -62,11 +62,11 @@ namespace Moer {
 
         RenderLoop::GetInstance().AfterLoop();
 
-        StopRenderThread();
-
         FreeShaderResources();
 
         ShutDownRHI();
+
+        StopRenderThread();
 
         LOG_INFO("Render System Shut down.");
     }

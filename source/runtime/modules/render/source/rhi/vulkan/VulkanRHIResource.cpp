@@ -32,6 +32,22 @@ VmaMemoryUsage VulkanMemoryManager::MEGenerateVmaMemoryUsage() {
     return VMA_MEMORY_USAGE_AUTO;
 }
 
+VkIndexType VulkanEnumTranslator::METoVKIndexType(EIndexElementType _type) {
+    switch (_type) {
+        case IET_NONE:
+            return VK_INDEX_TYPE_NONE_KHR;
+        case IET_UINT8:
+            return VK_INDEX_TYPE_UINT8_EXT;
+        case IET_UINT16:
+            return VK_INDEX_TYPE_UINT16;
+        case IET_UINT32:
+            return VK_INDEX_TYPE_UINT32;
+        default:
+            LOG_CRITICAL("Unsupported index element type: {}", static_cast<uint32_t>(_type));
+            return VK_INDEX_TYPE_MAX_ENUM;
+    }
+}
+
 VkFormat VulkanEnumTranslator::METoVKFormat(EPixelFormat _format) {
     if (_format > 184) {
         LOG_CRITICAL("Unsupported pixel format: {}", static_cast<uint32_t>(_format));
@@ -811,22 +827,32 @@ VkPolygonMode VulkanEnumTranslator::METoVKPolygonMode(ERasterizerFillMode _fill_
     }
 }
 
-VkDescriptorType VulkanEnumTranslator::METoVKDescriptorType(EShaderParameterType _type) {
-    switch (_type) {
-        case EShaderParameterType::CBV:
-            return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        case EShaderParameterType::SAMPLER:
-        case EShaderParameterType::BINDLESS_SAMPLER_INDEX:// MARK...
-            return VK_DESCRIPTOR_TYPE_SAMPLER;
-        case EShaderParameterType::SRV:
-            return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-        case EShaderParameterType::UAV:
-            return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        case EShaderParameterType::BINDLESS_RESOURCE_INDEX:// MARK...
-            return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        default:
-            LOG_CRITICAL("Unsupported EShaderParameterType: {}", static_cast<uint32_t>(_type));
-            return VK_DESCRIPTOR_TYPE_MAX_ENUM;
+VkDescriptorType VulkanEnumTranslator::METoVKDescriptorType(EShaderParameterType _type, EShaderCodeResourceBindingType _binding_type) {
+    if (_type == EShaderParameterType::SAMPLER && _binding_type == EShaderCodeResourceBindingType::SAMPLER) {
+        return VK_DESCRIPTOR_TYPE_SAMPLER;
+    } else if (_type == EShaderParameterType::SRV && _binding_type == EShaderCodeResourceBindingType::BUFFER) {
+        return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    } else if (_type == EShaderParameterType::UAV && _binding_type == EShaderCodeResourceBindingType::RW_BUFFER) {
+        return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    } else if (_type == EShaderParameterType::SRV && _binding_type == EShaderCodeResourceBindingType::TEXTURE_2D) {
+        return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+    } else if (_type == EShaderParameterType::UAV && _binding_type == EShaderCodeResourceBindingType::RW_TEXTURE_2D) {
+        return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    } else if (_type == EShaderParameterType::CBV) {
+        return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    } else if (_type == EShaderParameterType::SRV && _binding_type == EShaderCodeResourceBindingType::STRUCTURED_BUFFER) {
+        return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    } else if (_type == EShaderParameterType::UAV && _binding_type == EShaderCodeResourceBindingType::RW_STRUCTURED_BUFFER) {
+        return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    } else if (_type == EShaderParameterType::SRV && _binding_type == EShaderCodeResourceBindingType::BYTE_ADDRESSED_BUFFER) {
+        return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    } else if (_type == EShaderParameterType::UAV && _binding_type == EShaderCodeResourceBindingType::RW_BYTE_ADDRESSED_BUFFER) {
+        return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    } else if (_type == EShaderParameterType::SRV && _binding_type == EShaderCodeResourceBindingType::RAYTRACING_ACCELERATION_STRUCTURE) {
+        return VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+    } else {
+        LOG_CRITICAL("Unsupported EShaderParameterType: {} with EShaderCodeResourceBindingType {}", static_cast<uint32_t>(_type), static_cast<uint32_t>(_binding_type));
+        return VK_DESCRIPTOR_TYPE_MAX_ENUM;
     }
 }
 
@@ -848,10 +874,14 @@ VkShaderStageFlags VulkanEnumTranslator::METoVKShaderStageFlags(EShaderType _typ
             return VK_SHADER_STAGE_RAYGEN_BIT_KHR;
         case EShaderType::ST_RAY_MISS:
             return VK_SHADER_STAGE_MISS_BIT_KHR;
-        case EShaderType::ST_RAY_HIT:
+        case EShaderType::ST_RAY_CLOSESTHIT:
             return VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
         case EShaderType::ST_RAY_CALLABLE:
             return VK_SHADER_STAGE_CALLABLE_BIT_KHR;
+        case EShaderType::ST_RAY_INTERSECTION:
+            return VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
+        case EShaderType::ST_RAY_ANYHIT:
+            return VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
         default:
             LOG_CRITICAL("Unsupported EShaderType: {}", static_cast<uint32_t>(_type));
             return VK_SHADER_STAGE_FLAG_BITS_MAX_ENUM;
@@ -866,6 +896,8 @@ uint32_t VulkanEnumTranslator::METoVkQueueFamilyIndex(ECommandQueueType _type, c
             return _device->GetQueueFamilyIndices().compute.value();
         case ECommandQueueType::COPY:
             return _device->GetQueueFamilyIndices().transfer.value();
+        case ECommandQueueType::RAYTRACING:
+            return _device->GetQueueFamilyIndices().raytracing.value();
         default:
             return VK_QUEUE_FAMILY_IGNORED;
     }
@@ -879,6 +911,8 @@ uint32_t VulkanEnumTranslator::METoVkQueueFamilyIndex(ECommandListType _type, co
             return _device->GetQueueFamilyIndices().compute.value();
         case ECommandListType::COPY:
             return _device->GetQueueFamilyIndices().transfer.value();
+        case ECommandListType::RAY_TRACING:
+            return _device->GetQueueFamilyIndices().raytracing.value();
         default:
             return _device->GetQueueFamilyIndices().graphics.value();
     }
@@ -1256,7 +1290,7 @@ VkBlendFactor VulkanRHIBlendState::METoVKBlendFactor(EBlendFactor _blend_factor)
 
 #pragma region pipeline states definitions
 
-void VulkanRHIGraphicsPipelineState::GenerateDescriptorSetLayouts(const VulkanDevice* _device, Moer::Array<TDescriptorSetLayoutInfo>& _layout_mappings) {
+void VulkanPipelineState::GenerateDescriptorSetLayouts(const VulkanDevice* _device, Moer::Array<TDescriptorSetLayoutInfo>& _layout_mappings) {
     // create descriptor set layouts
     for (auto& layout : _layout_mappings) {
         VkDescriptorSetLayoutCreateInfo layout_create_info{};
@@ -1274,7 +1308,7 @@ void VulkanRHIGraphicsPipelineState::GenerateDescriptorSetLayouts(const VulkanDe
     m_descriptor_sets_layout->Init(_layout_mappings, m_pipeline_state_cache);
 }
 
-void VulkanRHIGraphicsPipelineState::CreateResourceCache() {
+void VulkanPipelineState::CreateResourceCache() {
     m_pipeline_state_cache = new VulkanPipelineResourceCache();
 }
 
@@ -1406,28 +1440,21 @@ VkBufferUsageFlags VulkanRHIBuffer::METoVKBufferUsageFlags(VulkanDevice* _device
     TranslateFlag(EBufferUsageFlags::INDEX_BUFFER, VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
     TranslateFlag(EBufferUsageFlags::STRUCTURED_BUFFER, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
 
-#if VULKAN_RHI_RAYTRACING
     TranslateFlag(EBufferUsageFlags::ACCELERATION_STRUCTURE, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR);
-#endif
+    TranslateFlag(EBufferUsageFlags::SHADER_BINDING_TABLE, VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR);
 
     TranslateFlag(EBufferUsageFlags::UNORDERED_ACCESS, VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT);
     TranslateFlag(EBufferUsageFlags::INDIRECT_BUFFER, VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT);
     TranslateFlag(EBufferUsageFlags::CPU_VISIBLE, (VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT));
     TranslateFlag(EBufferUsageFlags::SHADER_RESOURCE, VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT);
 
+    TranslateFlag(EBufferUsageFlags::UNIFORM_BUFFER, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+
     TranslateFlag(EBufferUsageFlags::LIFE_CYCLE_ONE_FRAME, 0, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
 
-#if VULKAN_RHI_RAYTRACING
-    if (_device->GetGpuExtensions().HasRaytracingExtensions()) {
-        vk_flags |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+    TranslateFlag(EBufferUsageFlags::ACCELERATION_STRUCTURE_SCRATCH, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
 
-        TranslateFlag(EBufferUsageFlags::ACCELERATION_STRUCTURE, 0, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR);
-    }
-#endif
-    // For descriptors buffers
-    // if (_device->GetOptionalExtensions().HasBufferDeviceAddress) {
-    //     OutVkUsage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-    // }
+    TranslateFlag(EBufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
 
     return vk_flags;
 }
@@ -1453,7 +1480,7 @@ VulkanRHITexture::VulkanRHITexture(const RHITextureCreateInfo& _info, VulkanDevi
 VulkanRHITexture::VulkanRHITexture(const RHITextureCreateInfo& _info, VkImage _image, VulkanDevice* _device)
     : RHITexture(_info),
       VulkanDeviceObject(_device),
-      m_alloc(_image, VK_NULL_HANDLE) {}
+      m_alloc{_image, VK_NULL_HANDLE} {}
 
 VulkanRHITexture::~VulkanRHITexture() {
     if (m_alloc.alloc && m_alloc.image != VK_NULL_HANDLE) {
@@ -1475,6 +1502,7 @@ VkImageUsageFlags VulkanRHITexture::METoVKImageUsageFlags(ETextureUsageFlags _me
     TranslateFlag(ETextureUsageFlags::TRANSFER_DST, VK_IMAGE_USAGE_TRANSFER_DST_BIT);
     TranslateFlag(ETextureUsageFlags::SAMPLED, VK_IMAGE_USAGE_SAMPLED_BIT);
     TranslateFlag(ETextureUsageFlags::SHADER_RESOURCE, VK_IMAGE_USAGE_STORAGE_BIT);
+    TranslateFlag(ETextureUsageFlags::UNORDERED_ACCESS, VK_IMAGE_USAGE_STORAGE_BIT);
     TranslateFlag(ETextureUsageFlags::COLOR_ATTACHMENT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
     TranslateFlag(ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT);
     TranslateFlag(ETextureUsageFlags::TRANSIENT_ATTACHMENT, VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT);
@@ -1737,7 +1765,61 @@ ViewPort VulkanViewport::GetViewportExtent() const {
 
 #pragma endregion
 
-#pragma region raytracing
+#pragma region    raytracing
+VkGeometryTypeKHR VulkanRHIRayTracingAccelerationStructure::METoVKGeometryTypeKHR(ERayTracingGeometryType _type) {
+    switch (_type) {
+        case RTGT_TRIANGLES:
+            return VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+        case RTGT_AABBS:
+            LOG_CRITICAL("GeometryType AABB is not supported now");
+            return VK_GEOMETRY_TYPE_AABBS_KHR;
+        default:
+            LOG_CRITICAL("Unsupported ERayTracingGeometryType: {}", static_cast<uint32_t>(_type));
+            return VK_GEOMETRY_TYPE_MAX_ENUM_KHR;
+    }
+}
+VkGeometryFlagsKHR VulkanRHIRayTracingAccelerationStructure::METoGeometryFlagsKHR(ERayTracingGeometryFlags _me_flags) {
+    VkGeometryFlagsKHR vk_flags = 0;
+
+    auto TranslateFlag = [&vk_flags, &_me_flags](ERayTracingGeometryFlags _search_me_flags, VkGeometryFlagsKHR _added_if_found, VkGeometryFlagsKHR _added_if_not_found = 0) {
+        const bool has_flag = (_me_flags & _search_me_flags) == _search_me_flags;
+        vk_flags |= has_flag ? _added_if_found : _added_if_not_found;
+    };
+    TranslateFlag(ERayTracingGeometryFlags::GEOMETRY_OPAQUE, VK_GEOMETRY_OPAQUE_BIT_KHR);
+    TranslateFlag(ERayTracingGeometryFlags::NO_DUPLICATE_ANY_HIT_INVOCATION, VK_GEOMETRY_NO_DUPLICATE_ANY_HIT_INVOCATION_BIT_KHR);
+    return vk_flags;
+}
+VkBuildAccelerationStructureFlagsKHR VulkanRHIRayTracingAccelerationStructure::METoVKBuildAccelerationStructureFlagsKHR(ERayTracingAccelerationStructureBuildFlags _me_flags) {
+    VkBuildAccelerationStructureFlagsKHR vk_flags = 0;
+
+    auto TranslateFlag = [&vk_flags, &_me_flags](ERayTracingAccelerationStructureBuildFlags _search_me_flags, VkBuildAccelerationStructureFlagsKHR _added_if_found, VkBuildAccelerationStructureFlagsKHR _added_if_not_found = 0) {
+        const bool has_flag = (_me_flags & _search_me_flags) == _search_me_flags;
+        vk_flags |= has_flag ? _added_if_found : _added_if_not_found;
+    };
+
+    TranslateFlag(ERayTracingAccelerationStructureBuildFlags::PREFER_FAST_TRACE, VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR);
+    TranslateFlag(ERayTracingAccelerationStructureBuildFlags::PREFER_FAST_BUILD, VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR);
+    TranslateFlag(ERayTracingAccelerationStructureBuildFlags::ALLOW_COMPACTION, VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR);
+    TranslateFlag(ERayTracingAccelerationStructureBuildFlags::ALLOW_UPDATE, VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR);
+    TranslateFlag(ERayTracingAccelerationStructureBuildFlags::MINIMIZE_MEMORY, VK_BUILD_ACCELERATION_STRUCTURE_LOW_MEMORY_BIT_KHR);
+
+    return vk_flags;
+}
+VkGeometryInstanceFlagsKHR VulkanRHIRayTracingAccelerationStructure::METoVKGeometryInstanceFlagsKHR(ERayTracingInstanceFlags _me_flags) {
+    VkGeometryInstanceFlagsKHR vk_flags = 0;
+
+    auto TranslateFlag = [&vk_flags, &_me_flags](ERayTracingInstanceFlags _search_me_flags, VkGeometryInstanceFlagsKHR _added_if_found, VkGeometryInstanceFlagsKHR _added_if_not_found = 0) {
+        const bool has_flag = (_me_flags & _search_me_flags) == _search_me_flags;
+        vk_flags |= has_flag ? _added_if_found : _added_if_not_found;
+    };
+
+    TranslateFlag(ERayTracingInstanceFlags::FORCE_OPAQUE, VK_GEOMETRY_INSTANCE_FORCE_OPAQUE_BIT_KHR);
+    TranslateFlag(ERayTracingInstanceFlags::FORCE_NO_OPAQUE, VK_GEOMETRY_INSTANCE_FORCE_NO_OPAQUE_BIT_KHR, VK_GEOMETRY_INSTANCE_FORCE_OPAQUE_BIT_KHR);
+    TranslateFlag(ERayTracingInstanceFlags::TRIANGLE_CULL_DISABLE, VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR);
+    TranslateFlag(ERayTracingInstanceFlags::TRIANGLE_FRONT_COUNTERCLOCKWISE, VK_GEOMETRY_INSTANCE_TRIANGLE_FRONT_COUNTERCLOCKWISE_BIT_KHR);
+
+    return vk_flags;
+}
 #pragma endregion
 
 #pragma region render query

@@ -10,5 +10,5 @@ public:
         // Clean up any dynamically allocated memory or resources
     }
 
-    void ReflectShader(const void* _compiled_result, const ShaderParametersMetadata* _param_meta_data, Moer::UnorderedMap<std::string, ParameterInfo>& _out_parameters) override;
+    virtual void ReflectShader(const void* _compiled_result, const ShaderParametersMetadata* _param_meta_data, Moer::UnorderedMap<std::string, ParameterInfo>& _out_parameters) override;
 };

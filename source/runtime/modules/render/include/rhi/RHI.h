@@ -8,6 +8,7 @@
 #include "Core.h"
 #include "taskgraph/TaskGraph.h"
 #include "taskgraph/ThreadManager.h"
+#include <type_traits>
 
 enum class ERHIType {
     Vulkan,
@@ -15,6 +16,7 @@ enum class ERHIType {
 };
 class RHIGraphicsCommandList;
 class RHIComputeCommandList;
+class RHIRayTracingCommandList;
 class RHICopyCommandList;
 class RHICommandQueue;
 class RHICommandAllocator;
@@ -23,7 +25,12 @@ class Shader;
 struct RHIInitInfo {
     uint32_t max_frame_in_flight = 3;
 };
-class RHI {
+
+template<typename T>
+concept TPipelineStateRef = requires(T) {
+                                std::convertible_to<T, RHIGraphicsPipelineStateRef> || std::convertible_to<T, RHIComputePipelineStateRef>;
+                            };
+class RENDER_API RHI {
 public:
     RHI(ERHIType _type) : rhi_type(_type) {}
 
@@ -51,14 +58,21 @@ public:
     virtual RHIBlendStateRef         RHICreateBlendState(const RHIBlendStateInitializer& _init)                 = 0;
     virtual RHIVertexInputStateRef   RHICreateVertexInputState(const VertexInputStateInitializerList& _init)    = 0;
 
-    virtual RHIVertexShaderRef   RHICreateVertexShader(const Shader*)   = 0;
-    virtual RHIFragmentShaderRef RHICreateFragmentShader(const Shader*) = 0;
-    virtual RHIGeometryShaderRef RHICreateGeometryShader(const Shader*) = 0;
+    virtual RHIComputeShaderRef RHICreateComputeShader(const class ShaderCodeEntry*, const Shader*) = 0;
 
-    virtual RHIMeshShaderRef          RHICreateMeshShader(const Shader*)          = 0;
-    virtual RHIAmplificationShaderRef RHICreateAmplificationShader(const Shader*) = 0;
+    virtual RHIVertexShaderRef   RHICreateVertexShader(const class ShaderCodeEntry*, const Shader*)   = 0;
+    virtual RHIFragmentShaderRef RHICreateFragmentShader(const class ShaderCodeEntry*, const Shader*) = 0;
+    virtual RHIGeometryShaderRef RHICreateGeometryShader(const class ShaderCodeEntry*, const Shader*) = 0;
 
-    virtual RHIComputeShaderRef RHICreateComputeShader(const Shader*) = 0;
+    virtual RHIMeshShaderRef          RHICreateMeshShader(const class ShaderCodeEntry*, const Shader*)          = 0;
+    virtual RHIAmplificationShaderRef RHICreateAmplificationShader(const class ShaderCodeEntry*, const Shader*) = 0;
+
+    virtual RHIRayGenShaderRef          RHICreateRayGenShader(const class ShaderCodeEntry*, const Shader*)          = 0;
+    virtual RHIRayMissShaderRef         RHICreateRayMissShader(const class ShaderCodeEntry*, const Shader*)         = 0;
+    virtual RHIRayClosestHitShaderRef   RHICreateRayClosestHitShader(const class ShaderCodeEntry*, const Shader*)   = 0;
+    virtual RHIRayCallableShaderRef     RHICreateRayCallableShader(const class ShaderCodeEntry*, const Shader*)     = 0;
+    virtual RHIRayIntersectionShaderRef RHICreateRayIntersectionShader(const class ShaderCodeEntry*, const Shader*) = 0;
+    virtual RHIRayAnyhitShaderRef       RHICreateRayAnyhitShader(const class ShaderCodeEntry*, const Shader*)       = 0;
 
     virtual RHIShaderLibraryRef RHICreateShaderLibrary(EShaderPlatform _platform, const std::string& _file_path, const std::string& name) { return nullptr; };
 
@@ -83,6 +97,24 @@ public:
     virtual RHIComputePipelineStateRef RHICreateComputePipelineState(RHIComputeShader* _compute_shader, RHIPipelineBinaryDataLibrary* _pipeline_library) {
         return RHICreateComputePipelineState(_compute_shader);
     }
+
+    virtual RHIRayTracingPipelineStateRef RHICreateRayTracingPipelineState(const RHIRayTracingPipelineStateInitializer& _init) = 0;
+
+    /* create pso from cache */
+    virtual RHIRayTracingPipelineStateRef RHICreateRayTracingPipelineState(const RHIRayTracingPipelineStateInitializer& _init, RHIPipelineBinaryDataLibrary* _pipeline_library) {
+        return RHICreateRayTracingPipelineState(_init);
+    }
+
+    /*batching creation and building of blases*/
+    virtual RHIRayTracingBLASRef RHIBuildRayTracingBLAS(const RHIRayTracingBLASInitializer& _init) {
+        RHIRayTracingBLASRef result;
+        RHIBatchedBuildRayTracingBLAS(1, &_init, &result);
+        return result;
+    }
+    virtual void RHIBatchedBuildRayTracingBLAS(int batch_size, const RHIRayTracingBLASInitializer* _inits, RHIRayTracingBLASRef* results) = 0;
+
+    virtual RHIRayTracingTLASRef RHIBuildRayTracingTLAS(const RHIRayTracingTLASInitializer& _init) = 0;
+
     virtual RHIBufferRef RHICreateBuffer(const RHIBufferCreateInfo& info)                   = 0;
     virtual void*        RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size) = 0;
     virtual void         RHIUnmapBuffer(RHIBuffer* _buffer)                                 = 0;
@@ -96,9 +128,14 @@ public:
     // DX12 only: _initial_state
     // virtual RHIGraphicsCommandList* CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state = nullptr)                                     = 0;
     virtual RHIGraphicsCommandList* RHICreateGraphicsCommandList(RHICommandAllocator* _allocator, RHIGraphicsPipelineState* _initial_state = nullptr) = 0;
-    // virtual RHIComputeCommandList*  CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr)                                       = 0;
-    virtual RHICopyCommandList* RHICreateCopyCommandList(RHICommandAllocator* _allocator)                                                                                        = 0;
-    virtual void                RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant = false) = 0;
+    // virtual RHIComputeCommandList*  CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr)   = 0;
+    virtual RHIComputeCommandList*    RHICreateComputeCommandList(RHICommandAllocator* _allocator, RHIComputePipelineState* _initial_state = nullptr)       = 0;
+    virtual RHIRayTracingCommandList* RHICreateRayTracingCommandList(RHICommandAllocator* _allocator, RHIRayTracingPipelineState* _initial_state = nullptr) = 0;
+    virtual RHICopyCommandList*       RHICreateCopyCommandList(RHICommandAllocator* _allocator)                                                             = 0;
+    template<TPipelineStateRef TPipelineRef>
+    void RHISetBatchedShaderParameters(TPipelineRef _pso, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant = false) {
+        RHISetBatchedShaderParametersInner(_pso, _batched_params, b_update_constant);
+    };
 
     virtual RHICommandAllocator* RHIGetCurrentCommandAllocator() = 0;
 #pragma endregion
@@ -130,6 +167,8 @@ public:
 
     void RHIFlushPendingDeletes();
 #pragma endregion
+protected:
+    virtual void RHISetBatchedShaderParametersInner(RHIResource* _resource, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) = 0;
 
 protected:
     ERHIType rhi_type;

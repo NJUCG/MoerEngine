@@ -50,8 +50,8 @@ struct GuiBackendData {
     size_t buffer_memory_alignment;
 
     RHIGraphicsPipelineStateRef pipeline;
-    RHIVertexShaderRef          shader_module_vert;
-    RHIFragmentShaderRef        shader_module_frag;
+    RHIShaderRef                shader_module_vert;
+    RHIShaderRef                shader_module_frag;
 
     // Font data
     RHISamplerRef            font_sampler;
@@ -92,7 +92,7 @@ class ImGuiShaderFrag : public Shader {
 public:
     BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
 
-    DEFINE_SHADER_PARAM_SAMPLER_ARRAY(SamplerState[2], sampler0, 2)
+    DEFINE_SHADER_PARAM_SAMPLER_ARRAY(Sampler, sampler0, 2)
     DEFINE_SHADER_PARAM_SRV(Texture2D, texture0)
 
     END_ROOT_PARAMETER_DEFINITION(Parameters)
@@ -472,8 +472,6 @@ void GUIUploadData(void* _draw_data, RHIGraphicsCommandList* _ui_command_list, R
     ImDrawData* draw_data = static_cast<ImDrawData*>(_draw_data);
     if (draw_data->DisplaySize.x <= 0.0f || draw_data->DisplaySize.y <= 0.0f)
         return;
-    Shader* frag_shader = ShaderResourceManager::GetShader<ImGuiShaderFrag>();
-    Shader* vert_shader = ShaderResourceManager::GetShader<ImGuiShaderVert>();
     // RHIFragmentShaderRef frag_rhi_shader = g_rhi->RHICreateFragmentShader(frag_shader);
     uint32_t total_size_vert = draw_data->TotalVtxCount * sizeof(ImDrawVert);
     uint32_t total_size_idx  = draw_data->TotalIdxCount * sizeof(ImDrawIdx);
@@ -653,8 +651,6 @@ void GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list, RHIVi
     ImDrawData* draw_data = static_cast<ImDrawData*>(_draw_data);
     if (draw_data->DisplaySize.x <= 0.0f || draw_data->DisplaySize.y <= 0.0f)
         return;
-    Shader* frag_shader = ShaderResourceManager::GetShader<ImGuiShaderFrag>();
-    Shader* vert_shader = ShaderResourceManager::GetShader<ImGuiShaderVert>();
     // RHIFragmentShaderRef frag_rhi_shader = g_rhi->RHICreateFragmentShader(frag_shader);
 
     GuiBackendData* backend_data = GetBackendData();
@@ -710,7 +706,8 @@ void GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list, RHIVi
                 ImGuiShaderFrag::Parameters params;
                 params.texture0 = texture_view;
                 RHIBatchedShaderParameters batched_params;
-                batched_params.SetParameters(frag_shader, params);
+
+                batched_params.SetParameters(backend_data->shader_module_frag, params);
 
                 RHIGraphicsPipelineStateRef pipeline = backend_data->pipeline;
 
@@ -868,9 +865,10 @@ bool CreateDeviceObjects() {
     input_intializer[1] = VertexElement(0, IM_OFFSETOF(ImDrawVert, uv), PF_R32G32_SFLOAT, 1, sizeof(ImDrawVert), EVertexInputRate::VIR_VERTEX);
     input_intializer[2] = VertexElement(0, IM_OFFSETOF(ImDrawVert, col), PF_R8G8B8A8_UNORM, 2, sizeof(ImDrawVert), EVertexInputRate::VIR_VERTEX);
 
-    RHIVertexShaderRef     gui_vert    = g_rhi->RHICreateVertexShader(ShaderResourceManager::GetShader<ImGuiShaderVert>());
-    RHIFragmentShaderRef   gui_frag    = g_rhi->RHICreateFragmentShader(ShaderResourceManager::GetShader<ImGuiShaderFrag>());
-    RHIVertexInputStateRef input_state = g_rhi->RHICreateVertexInputState(input_intializer);
+    auto&                  shader_resource_manager = ShaderResourceManager::GetInstance();
+    RHIShaderRef           gui_vert                = shader_resource_manager.GetShader<ImGuiShaderVert>();
+    RHIShaderRef           gui_frag                = shader_resource_manager.GetShader<ImGuiShaderFrag>();
+    RHIVertexInputStateRef input_state             = g_rhi->RHICreateVertexInputState(input_intializer);
 
     RHIGraphicsPipelineStateInitializer pso_init(
         blend_state,

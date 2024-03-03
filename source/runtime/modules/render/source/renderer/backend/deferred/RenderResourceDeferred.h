@@ -1,0 +1,7 @@
+#ifndef MOER_ENGINE_RENDER_RESOURCE_DEFERRED_H
+#define MOER_ENGINE_RENDER_RESOURCE_DEFERRED_H
+
+namespace Moer {
+
+}
+#endif

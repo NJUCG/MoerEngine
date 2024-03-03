@@ -126,6 +126,10 @@ FORCEINLINE uint32_t GetHash(const std::string& value) {
     return std::hash<std::string>{}(value);
 }
 
+FORCEINLINE uint32_t GetHash(const std::string_view& value) {
+    return std::hash<std::string_view>{}(value);
+}
+
 template<concept_t_enum_underlying_uint8 TEnum>
 class EnumInByte {
 public:

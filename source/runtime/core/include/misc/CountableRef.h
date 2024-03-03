@@ -102,13 +102,11 @@ public:
 
     template<typename MoveType>
     CountableRef& operator=(CountableRef<MoveType>&& _ref_move) {
-        if (this != &_ref_move) {
-            MoveType* old = ptr;
-            ptr           = _ref_move.ptr;
-            _ref_move.ptr = nullptr;
-            if (old != nullptr) {
-                old->DeRef();
-            }
+        T* old        = ptr;
+        ptr           = _ref_move.ptr;
+        _ref_move.ptr = nullptr;
+        if (old != nullptr) {
+            old->DeRef();
         }
         return *this;
     }
@@ -158,6 +156,8 @@ public:
 
 protected:
     T* ptr;
+    template<typename OtherType>
+    friend class CountableRef;
 };
 
 class CountableResource : Countable {
@@ -193,7 +193,7 @@ public:
 
 protected:
 private:
-    void Destroy(){}
+    void Destroy() {}
     struct ResourceAtomicFlags {
         std::atomic<uint32_t> packed;
 

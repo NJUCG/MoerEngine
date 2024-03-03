@@ -21,8 +21,9 @@ struct QueueFamilyIndices {
     std::optional<uint32_t> present;
     std::optional<uint32_t> transfer;
     std::optional<uint32_t> compute;
+    std::optional<uint32_t> raytracing;
 
-    inline bool IsComplete() const { return graphics.has_value() && present.has_value() && transfer.has_value() && compute.has_value(); }
+    inline bool IsComplete() const { return graphics.has_value() && present.has_value() && transfer.has_value() && compute.has_value() && raytracing.has_value(); }
 };
 
 struct DeviceInitializer {
@@ -55,6 +56,9 @@ public:
     inline VmaAllocator GetVmaAllocator() const {
         return m_allocator;
     }
+    inline const VulkanEnabledDeviceExtensions& GetEnabledExtensions() const {
+        return m_enabled_extensions;
+    }
     inline const VulkanOptionalDeviceExtensions& GetOptionalExtensions() const {
         return m_optional_extensions;
     }
@@ -85,11 +89,15 @@ public:
     inline VkQueue GetTransferQueue() const {
         return m_transfer_queue;
     }
+    inline VkQueue GetRayTracingQueue() const {
+        return m_raytracing_queue;
+    }
     class VulkanCommandAllocator* GetCurrentCommandAllocator();
     bool                          GetDescriptorSets(uint32_t _hash_key, const VulkanDescriptorSetsLayout& _layout, Moer::Array<VulkanDescriptorSetWriter>& _writers, Moer::Array<VkDescriptorSet>& _sets);
 
 private:
     VkPhysicalDevice                 m_gpu;
+    VulkanEnabledDeviceExtensions    m_enabled_extensions;
     VulkanOptionalDeviceExtensions   m_optional_extensions;
     VulkanPhysicalDeviceFeatures     m_core_features;
     VulkanPhysicalDeviceProperties   m_core_properties;
@@ -102,6 +110,7 @@ private:
     VkQueue  m_graphics_queue;
     VkQueue  m_present_queue;
     VkQueue  m_compute_queue;
+    VkQueue  m_raytracing_queue;
     VkQueue  m_transfer_queue;
 
     VmaAllocator                  m_allocator;
@@ -113,7 +122,7 @@ private:
     VkPhysicalDevice SelectGpu(const DeviceInitializer& _init);
 
     void InitGpu(const DeviceInitializer& _initializer);
-    void CreateDevice(const DeviceInitializer& _initializer);
+    void CreateDevice(uint32_t _api_version);
     void CreateMemoryAllocator();
     void CreateDescriptorAllocator();
     void CreateCommandAllocators();

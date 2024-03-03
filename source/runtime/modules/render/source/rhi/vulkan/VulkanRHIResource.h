@@ -39,10 +39,11 @@ class VulkanRHIMeshShader;
 class VulkanRHIPipelineBinaryDataLibrary;
 class VulkanRHIFragmentShader;
 class VulkanRHIRasterizationState;
-class VulkanRHIRayTracingGeometry;
 class VulkanRHIRayTracingPipelineState;
 class VulkanRHIRayTracingScene;
 class VulkanRHIRayTracingAccelerationStructure;
+class VulkanRHIRayTracingBLAS;
+class VulkanRHIRayTracingTLAS;
 class VulkanRHIRayTracingShader;
 class VulkanRHIRenderQuery;
 class VulkanRHIRenderQueryPool;
@@ -76,6 +77,7 @@ public:
 
 class VulkanEnumTranslator final {
 public:
+    static VkIndexType  METoVKIndexType(EIndexElementType _type);
     static VkFormat     METoVKFormat(EPixelFormat _format);
     static EPixelFormat VKToMEFormat(VkFormat _format);
 
@@ -94,7 +96,7 @@ public:
     static VkPrimitiveTopology METoVKPrimitiveTopology(EPrimitiveTopology _primitive_type);
     static VkPolygonMode       METoVKPolygonMode(ERasterizerFillMode _fill_mode);
 
-    static VkDescriptorType   METoVKDescriptorType(EShaderParameterType _type);
+    static VkDescriptorType   METoVKDescriptorType(EShaderParameterType _type, EShaderCodeResourceBindingType _binding_type);
     static VkShaderStageFlags METoVKShaderStageFlags(EShaderType _type);
 
     static uint32_t METoVkQueueFamilyIndex(ECommandQueueType _type, const VulkanDevice* _device);
@@ -191,7 +193,7 @@ private:
 class VulkanRHIDepthStencilState : public RHIDepthStencilState {
 public:
     explicit VulkanRHIDepthStencilState() : RHIDepthStencilState(),
-                                            m_depth_stencil_state_create_info(VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO) {}
+                                            m_depth_stencil_state_create_info{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO} {}
 
     void GenerateDepthStencilStateFromInitializer(const RHIDepthStencilStateInitializer& _init);
 
@@ -291,17 +293,46 @@ public:
     explicit VulkanRHIAmplificationShader(const Shader* _meta_shader) : RHIAmplificationShader(_meta_shader), VulkanRHIGraphicsShader() {}
 };
 
+class VulkanRHIRayGenShader : public RHIRayGenShader, public VulkanRHIGraphicsShader {
+public:
+    explicit VulkanRHIRayGenShader(const Shader* _meta_shader) : RHIRayGenShader(_meta_shader), VulkanRHIGraphicsShader() {}
+};
+
+class VulkanRHIRayMissShader : public RHIRayMissShader, public VulkanRHIGraphicsShader {
+public:
+    explicit VulkanRHIRayMissShader(const Shader* _meta_shader) : RHIRayMissShader(_meta_shader), VulkanRHIGraphicsShader() {}
+};
+
+class VulkanRHIRayClosestHitShader : public RHIRayClosestHitShader, public VulkanRHIGraphicsShader {
+public:
+    explicit VulkanRHIRayClosestHitShader(const Shader* _meta_shader) : RHIRayClosestHitShader(_meta_shader), VulkanRHIGraphicsShader() {}
+};
+
+class VulkanRHIRayCallableShader : public RHIRayCallableShader, public VulkanRHIGraphicsShader {
+public:
+    explicit VulkanRHIRayCallableShader(const Shader* _meta_shader) : RHIRayCallableShader(_meta_shader), VulkanRHIGraphicsShader() {}
+};
+
+class VulkanRHIRayIntersectionShader : public RHIRayIntersectionShader, public VulkanRHIGraphicsShader {
+public:
+    explicit VulkanRHIRayIntersectionShader(const Shader* _meta_shader) : RHIRayIntersectionShader(_meta_shader), VulkanRHIGraphicsShader() {}
+};
+
+class VulkanRHIRayAnyhitShader : public RHIRayAnyhitShader, public VulkanRHIGraphicsShader {
+public:
+    explicit VulkanRHIRayAnyhitShader(const Shader* _meta_shader) : RHIRayAnyhitShader(_meta_shader), VulkanRHIGraphicsShader() {}
+};
+
 #pragma endregion
 
 #pragma region pipeline states definitions
 
-class VulkanRHIGraphicsPipelineState final : public RHIGraphicsPipelineState {
+class VulkanPipelineState {
     friend VulkanRHIImpl;
 
 public:
-    VulkanRHIGraphicsPipelineState()
-        : RHIGraphicsPipelineState(),
-          m_pipeline(VK_NULL_HANDLE), m_pipeline_layout(VK_NULL_HANDLE), m_pipeline_state_cache(nullptr) {}
+    VulkanPipelineState() : m_pipeline(VK_NULL_HANDLE), m_pipeline_layout(VK_NULL_HANDLE), m_pipeline_state_cache(nullptr){};
+    virtual ~VulkanPipelineState() = default;
 
     inline VkPipeline GetHandle() const {
         return m_pipeline;
@@ -310,7 +341,6 @@ public:
     inline const VkPipelineLayout GetPipelineLayout() const {
         return m_pipeline_layout;
     }
-
     inline VulkanPipelineResourceCache* GetPipelineResourceCache() const {
         return m_pipeline_state_cache;
     }
@@ -322,17 +352,58 @@ public:
     void GenerateDescriptorSetLayouts(const VulkanDevice* _device, Moer::Array<TDescriptorSetLayoutInfo>& _layout_mappings);
     void CreateResourceCache();
 
-    static Moer::Array<VkPipelineShaderStageCreateInfo> METoVKShaderStageCreateInfo(const RHIShaderBoundStateInput& _shader_bound_state);
-    static VkPipelineVertexInputStateCreateInfo         METoVKVertexInputStateCreateInfo(const RHIVertexInputState* _vertex_input_state);
-    static Moer::Array<const Shader*>                   GetShaderInfoList(const RHIShaderBoundStateInput& _shader_bound_state);
-
-private:
+protected:
     VkPipeline       m_pipeline;
     VkPipelineLayout m_pipeline_layout;
     // descriptor sets
     VulkanDescriptorSetsLayout* m_descriptor_sets_layout;
     // resource cache
     VulkanPipelineResourceCache* m_pipeline_state_cache;
+    // descriptor sets
+};
+
+class VulkanRHIGraphicsPipelineState final : public RHIGraphicsPipelineState, public VulkanPipelineState {
+    friend VulkanRHIImpl;
+
+public:
+    VulkanRHIGraphicsPipelineState()
+        : RHIGraphicsPipelineState(),
+          VulkanPipelineState() {}
+
+    static Moer::Array<VkPipelineShaderStageCreateInfo> METoVKShaderStageCreateInfo(const RHIShaderBoundStateInput& _shader_bound_state);
+    static VkPipelineVertexInputStateCreateInfo         METoVKVertexInputStateCreateInfo(const RHIVertexInputState* _vertex_input_state);
+    static Moer::Array<const Shader*>                   GetShaderInfoList(const RHIShaderBoundStateInput& _shader_bound_state);
+};
+
+class VulkanRHIComputePipelineState final : public RHIComputePipelineState, public VulkanPipelineState {
+    friend VulkanRHIImpl;
+
+public:
+    VulkanRHIComputePipelineState()
+        : RHIComputePipelineState(),
+          VulkanPipelineState() {}
+};
+
+class VulkanRHIRayTracingPipelineState final : public RHIRayTracingPipelineState, public VulkanPipelineState {
+    friend VulkanRHIImpl;
+
+public:
+    VulkanRHIRayTracingPipelineState()
+        : RHIRayTracingPipelineState(),
+          VulkanPipelineState() {}
+
+    const VkStridedDeviceAddressRegionKHR* GetRayGenSBT() { return &m_raygen_sbt; }
+    const VkStridedDeviceAddressRegionKHR* GetRayMissSBT() { return &m_miss_sbt; }
+    const VkStridedDeviceAddressRegionKHR* GetRayHitSBT() { return &m_hit_sbt; }
+    const VkStridedDeviceAddressRegionKHR* GetRayCallableSBT() { return &m_callable_sbt; }
+
+private:
+    //SBT
+    RHIBufferRef                    m_sbt_buffer;
+    VkStridedDeviceAddressRegionKHR m_raygen_sbt;
+    VkStridedDeviceAddressRegionKHR m_miss_sbt;
+    VkStridedDeviceAddressRegionKHR m_hit_sbt;
+    VkStridedDeviceAddressRegionKHR m_callable_sbt;
 };
 #pragma endregion
 
@@ -515,6 +586,39 @@ private:
     uint32_t frame_offset = 0;
 
     // uint32_t max_frame_in_flight = 3;
+};
+#pragma endregion
+
+#pragma region acceleration structure definitions
+class VulkanRHIRayTracingAccelerationStructure {
+public:
+    static VkGeometryTypeKHR                    METoVKGeometryTypeKHR(ERayTracingGeometryType _type);
+    static VkGeometryFlagsKHR                   METoGeometryFlagsKHR(ERayTracingGeometryFlags _flag);
+    static VkBuildAccelerationStructureFlagsKHR METoVKBuildAccelerationStructureFlagsKHR(ERayTracingAccelerationStructureBuildFlags _me_flags);
+    static VkGeometryInstanceFlagsKHR           METoVKGeometryInstanceFlagsKHR(ERayTracingInstanceFlags _me_flags);
+};
+
+class VulkanRHIRayTracingBLAS final : public RHIRayTracingBLAS, public VulkanRHIRayTracingAccelerationStructure {
+    friend VulkanRHIImpl;
+
+public:
+    VulkanRHIRayTracingBLAS(const RHIRayTracingBLASInitializer& _init) : RHIRayTracingBLAS(_init) {
+    }
+
+protected:
+    VkAccelerationStructureKHR m_blas;
+    RHIBufferRef               m_buffer;
+};
+class VulkanRHIRayTracingTLAS final : public RHIRayTracingTLAS, public VulkanRHIRayTracingAccelerationStructure {
+    friend VulkanRHIImpl;
+
+public:
+    VulkanRHIRayTracingTLAS(const RHIRayTracingTLASInitializer& _init) : RHIRayTracingTLAS(_init) {
+    }
+
+protected:
+    VkAccelerationStructureKHR m_tlas;
+    RHIBufferRef               m_buffer;
 };
 #pragma endregion
 

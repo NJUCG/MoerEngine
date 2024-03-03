@@ -37,16 +37,6 @@ VulkanRHICommandListBase::~VulkanRHICommandListBase() {
     vkFreeCommandBuffers(m_device->GetDevice(), m_current_command_pool, 1, &m_command_buffer);
 }
 
-void VulkanRHICommandListBase::Dispatch(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z) {
-    vkCmdDispatch(m_command_buffer, _group_count_x, _group_count_y, _group_count_z);
-}
-
-void VulkanRHICommandListBase::DispatchIndirect(RHIBuffer* _buffer, uint64_t _offset) {
-    auto* vk_buffer        = static_cast<const VulkanRHIBuffer*>(_buffer);
-    auto* vk_buffer_handle = vk_buffer == nullptr ? nullptr : vk_buffer->GetHandle();
-    vkCmdDispatchIndirect(m_command_buffer, vk_buffer_handle, _offset);
-}
-
 void VulkanRHICommandListBase::CopyBuffer(const RHICopyBufferInfo& _copy_info, RHIBuffer* _src, RHIBuffer* _dst) {
     auto* vk_src_buffer = static_cast<const VulkanRHIBuffer*>(_src);
     auto* vk_dst_buffer = static_cast<const VulkanRHIBuffer*>(_dst);
@@ -340,7 +330,6 @@ VulkanRHIGraphicsCommandList::~VulkanRHIGraphicsCommandList() {
 void VulkanRHIGraphicsCommandList::SetPipelineState(RHIGraphicsPipelineState* _graphics_pso) {
     auto* vk_pso = static_cast<VulkanRHIGraphicsPipelineState*>(_graphics_pso);
     VK_CHECK_NULLPTR(vk_pso, "SetPipelineState: graphics pipeline state is nullptr!", return);
-
     vkCmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk_pso->GetHandle());
     m_current_pipeline_state = vk_pso;
 }
@@ -356,6 +345,8 @@ void VulkanRHIGraphicsCommandList::EndRecording() {
 
 void VulkanRHIGraphicsCommandList::Reset() {
     VulkanRHICommandListBase::Reset();
+    m_current_pipeline_state = nullptr;
+    m_bound_sets             = {};
 }
 
 void VulkanRHIGraphicsCommandList::ClearState(RHIGraphicsPipelineState* _graphics_pso) {
@@ -397,16 +388,6 @@ void VulkanRHIGraphicsCommandList::DrawIndexedIndirect(RHIBuffer* _argument_buff
         _count_buffer_offset,
         _max_draw_count,
         _stride);
-}
-
-void VulkanRHIGraphicsCommandList::Dispatch(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z) {
-    vkCmdDispatch(m_command_buffer, _group_count_x, _group_count_y, _group_count_z);
-}
-
-void VulkanRHIGraphicsCommandList::DispatchIndirect(RHIBuffer* _buffer, uint64_t _offset) {
-    auto* vk_buffer        = static_cast<const VulkanRHIBuffer*>(_buffer);
-    auto* vk_buffer_handle = vk_buffer == nullptr ? nullptr : vk_buffer->GetHandle();
-    vkCmdDispatchIndirect(m_command_buffer, vk_buffer_handle, _offset);
 }
 
 void VulkanRHIGraphicsCommandList::CopyBuffer(const RHICopyBufferInfo& _copy_info, RHIBuffer* _src, RHIBuffer* _dst) {
@@ -590,13 +571,6 @@ void VulkanRHIGraphicsCommandList::GetQueryData(ERenderQueryType _query_type, ui
 void VulkanRHIGraphicsCommandList::ExecuteSubCommands(uint32_t _num, RHIGraphicsCommandList* _sub_commands) {
 }
 
-#pragma region ray-tracing
-
-void VulkanRHIGraphicsCommandList::BuildAccelerationStructure(RHIBuffer* _instance_data, uint64_t _instance_offset, bool _b_update, RHIBuffer* _scratch, RHIBuffer* _scratch_offset) {
-}
-
-#pragma endregion
-
 VkRenderingAttachmentInfo VulkanRHIGraphicsCommandList::FromColorAttachmentInfo(const RHIRenderPassInfo::ColorAttachmentInfo& _color_attachment_info) const {
     VkRenderingAttachmentInfo attachment_info{};
     attachment_info.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
@@ -708,7 +682,13 @@ VulkanRHIComputeCommandList::VulkanRHIComputeCommandList(VulkanDevice* _device, 
 
 VulkanRHIComputeCommandList::~VulkanRHIComputeCommandList() {
 }
+void VulkanRHIComputeCommandList::SetPipelineState(RHIComputePipelineState* _compute_pso) {
+    auto* vk_pso = static_cast<VulkanRHIComputePipelineState*>(_compute_pso);
+    VK_CHECK_NULLPTR(vk_pso, "SetPipelineState: compute pipeline state is nullptr!", return);
 
+    vkCmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, vk_pso->GetHandle());
+    m_current_pipeline_state = vk_pso;
+}
 void VulkanRHIComputeCommandList::BeginRecording() {
     VulkanRHICommandListBase::Begin();
 }
@@ -719,13 +699,17 @@ void VulkanRHIComputeCommandList::EndRecording() {
 
 void VulkanRHIComputeCommandList::Reset() {
     VulkanRHICommandListBase::Reset();
+    m_current_pipeline_state = nullptr;
+    m_bound_sets             = {};
 }
 
 void VulkanRHIComputeCommandList::Dispatch(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z) {
+    PrepareDispatchCommand();
     vkCmdDispatch(m_command_buffer, _group_count_x, _group_count_y, _group_count_z);
 }
 
 void VulkanRHIComputeCommandList::DispatchIndirect(RHIBuffer* _buffer, uint64_t _offset) {
+    PrepareDispatchCommand();
     auto* vk_buffer        = static_cast<const VulkanRHIBuffer*>(_buffer);
     auto* vk_buffer_handle = vk_buffer == nullptr ? nullptr : vk_buffer->GetHandle();
     vkCmdDispatchIndirect(m_command_buffer, vk_buffer_handle, _offset);
@@ -749,6 +733,133 @@ void VulkanRHIComputeCommandList::CopyTextureToBuffer(const RHICopyTextureToBuff
 
 void VulkanRHIComputeCommandList::SetPipelineBarrier(const RHIBarrierDependencyInfo& _dependency) {
     VulkanRHICommandListBase::SetPipelineBarrier(_dependency);
+}
+void VulkanRHIComputeCommandList::PrepareDispatchCommand() {
+    const auto* vk_pso = m_current_pipeline_state;
+    VK_CHECK_NULLPTR(vk_pso, "PrepareDispatchCommand: compute pipeline state is nullptr!", return);
+    auto* vk_resource_cache = vk_pso->GetPipelineResourceCache();
+    VK_CHECK_NULLPTR(vk_resource_cache, "PrepareDispatchCommand: compute pipeline resource cache is nullptr!", return);
+
+    auto pipeline_layout = vk_pso->GetPipelineLayout();
+
+    const auto* vk_sets_layout = vk_pso->GetDescriptorSetsLayout();
+    // 1. update and bind descriptor sets
+    if (vk_resource_cache->HasDescriptorSets()) {
+        vk_resource_cache->UpdateDescriptorSets(m_device, vk_sets_layout);
+        if (m_bound_sets != vk_resource_cache->GetDescriptorSets()) {
+            vk_resource_cache->BindDescriptorSets(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_layout);
+            m_bound_sets = vk_resource_cache->GetDescriptorSets();
+        }
+    }
+
+    // 2. push constants
+    if (vk_resource_cache->HasPushConstants()) {
+        for (const auto& constant_info : vk_resource_cache->GetConstantsToPush()) {
+            vkCmdPushConstants(
+                m_command_buffer,
+                pipeline_layout,
+                constant_info.flags,
+                constant_info.byte_offset_in_raw_data,
+                constant_info.size,
+                constant_info.raw_data.data());
+        }
+        vk_resource_cache->ResetToPush();
+    }
+}
+
+VulkanRHIRayTracingCommandList::VulkanRHIRayTracingCommandList(VulkanDevice* _device, VkCommandPool _pool, VkCommandBufferLevel _level) : VulkanRHICommandListBase(_device, _pool, _level) {}
+
+VulkanRHIRayTracingCommandList::~VulkanRHIRayTracingCommandList() {
+}
+void VulkanRHIRayTracingCommandList::SetPipelineState(RHIRayTracingPipelineState* _raytracing_pso) {
+    auto* vk_pso = static_cast<VulkanRHIRayTracingPipelineState*>(_raytracing_pso);
+    VK_CHECK_NULLPTR(vk_pso, "SetPipelineState: raytracing pipeline state is nullptr!", return);
+
+    vkCmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, vk_pso->GetHandle());
+    m_current_pipeline_state = vk_pso;
+}
+void VulkanRHIRayTracingCommandList::BeginRecording() {
+    VulkanRHICommandListBase::Begin();
+}
+
+void VulkanRHIRayTracingCommandList::EndRecording() {
+    VulkanRHICommandListBase::End();
+}
+
+void VulkanRHIRayTracingCommandList::Reset() {
+    VulkanRHICommandListBase::Reset();
+    m_current_pipeline_state = nullptr;
+    m_bound_sets             = {};
+}
+
+void VulkanRHIRayTracingCommandList::TraceRay(uint32_t _width, uint32_t _height, uint32_t _depth) {
+    static PFN_vkCmdTraceRaysKHR vkCmdTraceRaysKHR = reinterpret_cast<PFN_vkCmdTraceRaysKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkCmdTraceRaysKHR"));
+    PrepareTraceRayCommand();
+    vkCmdTraceRaysKHR(m_command_buffer,
+                      m_current_pipeline_state->GetRayGenSBT(),
+                      m_current_pipeline_state->GetRayMissSBT(),
+                      m_current_pipeline_state->GetRayHitSBT(),
+                      m_current_pipeline_state->GetRayCallableSBT(),
+                      _width,
+                      _height,
+                      _depth);
+}
+
+void VulkanRHIRayTracingCommandList::TraceRayIndirect() {
+    //todo:need to impl
+    PrepareTraceRayCommand();
+}
+
+void VulkanRHIRayTracingCommandList::CopyBuffer(const RHICopyBufferInfo& _copy_info, RHIBuffer* _src, RHIBuffer* _dst) {
+    VulkanRHICommandListBase::CopyBuffer(_copy_info, _src, _dst);
+}
+
+void VulkanRHIRayTracingCommandList::CopyTexture(const RHICopyTextureInfo& _copy_info, RHITexture* _src, RHITexture* _dst) {
+    VulkanRHICommandListBase::CopyTexture(_copy_info, _src, _dst);
+}
+
+void VulkanRHIRayTracingCommandList::CopyBufferToTexture(const RHICopyBufferToTextureInfo& _info, RHIBuffer* src_buffer, RHITexture* dst_texture) {
+    VulkanRHICommandListBase::CopyBufferToTexture(src_buffer, dst_texture, _info);
+}
+
+void VulkanRHIRayTracingCommandList::CopyTextureToBuffer(const RHICopyTextureToBufferInfo& _info, RHITexture* src_texture, RHIBuffer* dst_buffer) {
+    VulkanRHICommandListBase::CopyTextureToBuffer(src_texture, dst_buffer, _info);
+}
+
+void VulkanRHIRayTracingCommandList::SetPipelineBarrier(const RHIBarrierDependencyInfo& _dependency) {
+    VulkanRHICommandListBase::SetPipelineBarrier(_dependency);
+}
+void VulkanRHIRayTracingCommandList::PrepareTraceRayCommand() {
+    const auto* vk_pso = m_current_pipeline_state;
+    VK_CHECK_NULLPTR(vk_pso, "PrepareTraceRayCommand: raytracing pipeline state is nullptr!", return);
+    auto* vk_resource_cache = vk_pso->GetPipelineResourceCache();
+    VK_CHECK_NULLPTR(vk_resource_cache, "PrepareTraceRayCommand: raytracing pipeline resource cache is nullptr!", return);
+
+    auto pipeline_layout = vk_pso->GetPipelineLayout();
+
+    const auto* vk_sets_layout = vk_pso->GetDescriptorSetsLayout();
+    // 1. update and bind descriptor sets
+    if (vk_resource_cache->HasDescriptorSets()) {
+        vk_resource_cache->UpdateDescriptorSets(m_device, vk_sets_layout);
+        if (m_bound_sets != vk_resource_cache->GetDescriptorSets()) {
+            vk_resource_cache->BindDescriptorSets(m_command_buffer, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, pipeline_layout);
+            m_bound_sets = vk_resource_cache->GetDescriptorSets();
+        }
+    }
+
+    // 2. push constants
+    if (vk_resource_cache->HasPushConstants()) {
+        for (const auto& constant_info : vk_resource_cache->GetConstantsToPush()) {
+            vkCmdPushConstants(
+                m_command_buffer,
+                pipeline_layout,
+                constant_info.flags,
+                constant_info.byte_offset_in_raw_data,
+                constant_info.size,
+                constant_info.raw_data.data());
+        }
+        vk_resource_cache->ResetToPush();
+    }
 }
 
 VulkanRHICopyCommandList::VulkanRHICopyCommandList(VulkanDevice* _device, VkCommandPool _pool, VkCommandBufferLevel _level) : VulkanRHICommandListBase(_device, _pool, _level) {}

@@ -56,8 +56,7 @@ VulkanPhysicalDeviceFeatures VulkanDeviceFeature::GetMESupportedDeviceFeatures(u
 
     // 1.2 features
     if (_api_version >= VK_API_VERSION_1_2) {
-        enabled_features.core_1_1.pNext               = &enabled_features.core_1_2;
-        enabled_features.core_1_2.sType               = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+
         enabled_features.core_1_2.timelineSemaphore   = VK_TRUE;
         enabled_features.core_1_2.bufferDeviceAddress = VK_TRUE;
         // MARK: need fallback to non-bindless if not supported
@@ -79,8 +78,6 @@ VulkanPhysicalDeviceFeatures VulkanDeviceFeature::GetMESupportedDeviceFeatures(u
 
     // 1.3 features
     if (_api_version >= VK_API_VERSION_1_3) {
-        enabled_features.core_1_2.pNext = &enabled_features.core_1_3;
-        enabled_features.core_1_3.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
 
         enabled_features.core_1_3.synchronization2 = VK_TRUE;
         enabled_features.core_1_3.dynamicRendering = VK_TRUE;

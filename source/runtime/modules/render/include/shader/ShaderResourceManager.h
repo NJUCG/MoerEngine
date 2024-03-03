@@ -4,23 +4,52 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "shader/ShaderCommon.h"
+#include "shader/ShaderMutation.h"
 #include "shader/ShaderResource.h"
+class GlobalShaderCache{
+    public:
+    static GlobalShaderCache& GetInstance() {
+        static GlobalShaderCache cache;
+        return cache;
+    }
+    GlobalShaderCache();
+    ~GlobalShaderCache();
 
-class ShaderResourceManager {
+    const ShaderCompilerOutput* FindShaderCache(EShaderPlatform platform, const ShaderResourceKey& key) const;
+
+    private:
+    friend class ShaderResourceManager;
+    void Load();
+    void Dump();
+    void UpdateOutput(Moer::Array<ShaderCompilerOutput*>& outputs);
+    private:
+    struct Impl;
+    Impl* impl;
+};
+class RENDER_API ShaderResourceManager {
 public:
     static void                   Init(EShaderPlatform platform);
     static void                   ShutDown();
     static ShaderResourceManager& GetInstance();
 
     template<typename ShaderType>
-    static Shader* GetShader() {
+    RHIShaderRef GetShader(const typename ShaderType::TMutationSet& _mutation_set) {
         const ShaderMetaType& meta_type = ShaderType::GetMetaType();
-        return GetInstance().GetShader(meta_type);
+
+        if constexpr (ShaderType::TMutationSet::mutation_count == 0) {
+            GetShader(meta_type, 0);
+        } else
+            return GetShader(meta_type, _mutation_set.GetMutationID());
     }
 
-    ShaderCodeResourceMap& GetShaderCodeMap() {
-        return *code_resources;
+    template<typename ShaderType>
+    RHIShaderRef GetShader() {
+        static_assert(ShaderType::TMutationSet::mutation_count == 1, "ShaderType should not have any mutation");
+        const ShaderMetaType& meta_type = ShaderType::GetMetaType();
+
+        return GetShader(meta_type, 0);
     }
+
     ShaderTypeResourceMap& GetShaderTypeMap() {
         return *type_resources;
     }
@@ -28,10 +57,14 @@ public:
     void PrepareGlobalShaderResources();
 
 private:
-    Shader*          GetShader(const ShaderMetaType& _meta_type);
-    RHIShaderMapRef* GetShaderMapRef(const ShaderMetaType& _meta_type);
+    friend class ShaderCompiler;
+    ShaderResourceMap& GetShaderResourceMap() {
+        return *shader_resources;
+    }
+    RHIShaderRef GetShader(const ShaderMetaType& _meta_type, uint32_t _mutation_id);
+    friend Shader;
     ShaderResourceManager();
-    ShaderCodeResourceMap* code_resources;
     ShaderTypeResourceMap* type_resources;
+    ShaderResourceMap*     shader_resources;
 };
 #endif
