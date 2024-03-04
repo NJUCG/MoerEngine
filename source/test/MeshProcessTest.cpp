@@ -16,6 +16,7 @@
 #include <meshoptimizer.h>
 
 #include <ranges>
+#include <stdint.h>
 
 void MetisTest();
 void InitTestEnv(const std::filesystem::path& workspace_path);
@@ -36,7 +37,7 @@ struct MeshletDesc {
 };
 
 //information for culling
-struct MeshletInfo{
+struct MeshletInfo {
     Moer::Vector3f center;
     Moer::Vector3f extent;
 };
@@ -46,7 +47,7 @@ struct MoerMesh {
 
     Moer::Array<uint8_t> primitive_indices;//local triangle indices
 
-    Moer::Array<uint32_t> vertex_indices;//unique original vertex indices
+    Moer::Array<uint32_t>    vertex_indices;//unique original vertex indices
     Moer::Array<MeshletInfo> meshlet_info;
 };
 
@@ -127,6 +128,89 @@ void MetisTest() {
 
     Moer::Array<MoerMeshletOutputs> moer_meshes(original_meshes.size());
     for (auto& original_mesh : original_meshes) {
+
+        Moer::Array<uint32_t> remap(original_mesh.vertexs.size());
+
+        size_t target_vertex_size = meshopt_generateVertexRemap(&remap[0],
+                                                                original_mesh.indices.data(),
+                                                                original_mesh.indices.size(),
+                                                                original_mesh.vertexs.data(),
+                                                                original_mesh.vertexs.size(),
+                                                                sizeof(Vertex));
+
+        Moer::Array<uint32_t> target_indices(original_mesh.indices.size());
+        Moer::Array<Vertex>   target_vertices(target_vertex_size);
+
+        meshopt_remapIndexBuffer(&target_indices[0],
+                                 original_mesh.indices.data(),
+                                 original_mesh.indices.size(),
+                                 &remap[0]);
+
+        meshopt_remapVertexBuffer(&target_vertices[0],
+                                  original_mesh.vertexs.data(),
+                                  original_mesh.vertexs.size(),
+                                  sizeof(Vertex),
+                                  &remap[0]);
+
+        meshopt_optimizeVertexCache(&target_indices[0],
+                                    &target_indices[0],
+                                    target_indices.size(),
+                                    original_mesh.vertexs.size());
+
+        meshopt_optimizeVertexFetch(&target_vertices[0],
+                                    &target_indices[0],
+                                    target_indices.size(),
+                                    target_vertices.data(),
+                                    target_vertices.size(),
+                                    sizeof(Vertex));
+
+        const size_t max_vertices  = 64;
+        const size_t max_triangles = 124;
+        const float  cone_weight   = 0.0f;
+
+        size_t max_meshlets = meshopt_buildMeshletsBound(target_indices.size(), max_vertices, max_triangles);
+
+        Moer::Array<meshopt_Meshlet> meshlets(max_meshlets);
+
+        Moer::Array<unsigned int>  meshlet_vertices(max_meshlets * max_vertices);
+        Moer::Array<unsigned char> meshlet_triangles(max_meshlets * max_triangles * 3);// meshopt_buildMeshlets(meshlets, )
+
+        size_t meshlet_count = meshopt_buildMeshlets(meshlets.data(),
+                                                     meshlet_vertices.data(),
+                                                     meshlet_triangles.data(),
+                                                     target_indices.data(),
+                                                     target_indices.size(),
+                                                     &target_vertices[0].position.x,
+                                                     target_vertices.size(),
+                                                     sizeof(Vertex),
+                                                     max_vertices,
+                                                     max_triangles,
+                                                     cone_weight);
+
+        const meshopt_Meshlet& last = meshlets[meshlet_count - 1];
+
+        Moer::Array<Vertex> meshlet_vertices_data(last.vertex_offset + last.vertex_count);
+        meshlet_vertices.resize(last.vertex_offset + last.vertex_count);
+        meshlet_triangles.resize(last.triangle_offset + ((last.triangle_count * 3 + 3) & ~3));
+        meshlets.resize(meshlet_count);
+
+        for (uint32_t i = 0; i < meshlet_vertices.size(); i++) {
+            meshlet_vertices_data[i] = target_vertices[meshlet_vertices[i]];
+        }
+
+        Moer::Array<meshopt_Bounds> meshlet_bounds(meshlet_count);
+
+        std::for_each(meshlets.begin(), meshlets.end(), [&](const meshopt_Meshlet& m) {
+            uint32_t index = &m - &meshlets[0];
+
+            meshlet_bounds[index] = meshopt_computeMeshletBounds(&meshlet_vertices[m.vertex_offset],
+                                                                 &meshlet_triangles[m.triangle_offset],
+                                                                 m.triangle_count,
+                                                                 &target_vertices[0].position.x,
+                                                                 target_vertices.size(),
+                                                                 sizeof(Vertex));
+        });
+
         MoerMeshletInputs inputs{original_mesh};
         auto&             output = moer_meshes[&original_mesh - &original_meshes[0]];
         GenerateMoerMeshletMesh(inputs, output);
@@ -278,12 +362,12 @@ void GenerateMoerMeshletMesh(const MoerMeshletInputs& input, MoerMeshletOutputs&
         Moer::Vector3f max_pos(Moer::MIN_FLOAT);
 
         for (int i = 0; i < meshlet.vertex_count; i++) {
-            int vertex_index = moer_mesh.vertex_indices[meshlet.vertex_begin + i];
-            Moer::Vector3f position = original_mesh.vertexs[vertex_index].position;
-            min_pos = Moer::Min(min_pos, position);
-            max_pos = Moer::Max(max_pos, position);
+            int            vertex_index = moer_mesh.vertex_indices[meshlet.vertex_begin + i];
+            Moer::Vector3f position     = original_mesh.vertexs[vertex_index].position;
+            min_pos                     = Moer::Min(min_pos, position);
+            max_pos                     = Moer::Max(max_pos, position);
         }
-        
+
         info.center = (min_pos + max_pos) * 0.5f;
         info.extent = (max_pos - min_pos) * 0.5f;
 

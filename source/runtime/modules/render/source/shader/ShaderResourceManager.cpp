@@ -210,15 +210,15 @@ void ShaderResourceManager::PrepareGlobalShaderResources() {
 
     static auto post_process = [this](ShaderCompilerOutput* output) {
         if (!output->b_succeeded) {
-            ShaderMetaType* meta_type = ShaderMetaType::GetShaderMetaType(output->shader_name_hash);
-            std::string     error_msg = std::format("Shader {} compilation failed.", meta_type->GetName());
+            // ShaderMetaType* meta_type = ShaderMetaType::GetShaderMetaType(output->shader_name_hash);
+            std::string error_msg = std::format("Shader compilation failed.");
 
             std::for_each(output->errors.begin(), output->errors.end(), [&error_msg](const std::string& error) {
                 error_msg += error + "\n";
             });
 
             LOG_ERROR(error_msg);
-            delete output;
+            MoerDelete(output);
             return;
         }
         auto& resource_map = GetShaderResourceMap();
@@ -234,7 +234,7 @@ void ShaderResourceManager::PrepareGlobalShaderResources() {
         //add shader instance
         GetShaderTypeMap().AddShader(output->shader_name_hash, shader);
     };
-    LOG_INFO("Load Shader Cache Time(ms): {}",timer.ElapsedMilliseconds());
+    LOG_INFO("Load Shader Cache Time(ms): {}", timer.ElapsedMilliseconds());
     //todo: parallel compiling
     std::for_each(works.begin(), works.end(), [](const ShaderCompileJobInput& input) {
         ShaderResourceManager& self = GetInstance();
@@ -255,8 +255,7 @@ void ShaderResourceManager::PrepareGlobalShaderResources() {
             g_shader_compile_output_queue.Push(output);
         }
     });
-    LOG_INFO("Process Global Shader Data Time(ms): {}",timer.ElapsedMilliseconds());
-
+    LOG_INFO("Process Global Shader Data Time(ms): {}", timer.ElapsedMilliseconds());
 
     //dump cache bundle
     FunctionGraphTask::ConstructAndDispatchWhenReady([this]() {

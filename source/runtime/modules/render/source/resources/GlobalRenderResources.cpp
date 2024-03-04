@@ -69,7 +69,7 @@ namespace Moer {
         // delete instance.global_render_data.transfer_command_queue;
     }
 
-    size_t RHISamplerHash(const RHISamplerInitializer& params) {
+    size_t RHISamplerHash(const RHISamplerCreateInfo& params) {
         size_t hash = 0;
         //todo
         // HashCombine(hash, params.filter);
@@ -98,7 +98,7 @@ namespace Moer {
     public:
         Impl()  = default;
         ~Impl() = default;
-        RHISampler* GetSampler(const RHISamplerInitializer& params) {
+        RHISampler* GetSampler(const RHISamplerCreateInfo& params) {
             size_t hash = RHISamplerHash(params);
             if (!m_sampler_cache.contains(hash)) {
                 RHISamplerRef sampler = g_rhi->RHICreateSampler(params);
@@ -106,24 +106,25 @@ namespace Moer {
             }
             return m_sampler_cache[hash];
         }
-        RHIShaderResourceView* GetTextureView(RHITexture* texture) {
-            auto srv_info = RHIViewInfo::CreateTextureSRVInfo()
-                                .SetFormat(PF_R8G8B8A8_UNORM)
+        RHISRV* GetTextureView(RHITexture* texture) {
+            auto default_format = PF_R8G8B8A8_UNORM;
+            auto srv_info       = RHIViewInfo::CreateTextureSRVInfo()
+                                .SetFormat(default_format)
                                 .SetDimension(ETextureDimension::TEX_2D)
                                 .SetMipRange(0, 1)
                                 .SetArrayRange(0, 1);
 
             size_t hash = RHITextureViewHash(texture, srv_info);
             if (!m_texture_view_cache.contains(hash)) {
-                RHIShaderResourceViewRef texture_view = g_rhi->RHICreateShaderResourceView(texture, srv_info);
-                m_texture_view_cache[hash]            = texture_view;
+                RHISRVRef texture_view     = g_rhi->RHICreateTextureSRV(texture, default_format);
+                m_texture_view_cache[hash] = texture_view;
             }
             return m_texture_view_cache[hash];
         }
 
     protected:
-        UnorderedMap<size_t, RHISamplerRef>            m_sampler_cache;
-        UnorderedMap<size_t, RHIShaderResourceViewRef> m_texture_view_cache;
+        UnorderedMap<size_t, RHISamplerRef> m_sampler_cache;
+        UnorderedMap<size_t, RHISRVRef>     m_texture_view_cache;
     };
 
     SamplerCache& SamplerCache::Get() {
@@ -132,10 +133,10 @@ namespace Moer {
         }
         return *m_instance;
     }
-    RHISampler* SamplerCache::GetSampler(const RHISamplerInitializer& params) {
+    RHISampler* SamplerCache::GetSampler(const RHISamplerCreateInfo& params) {
         return m_impl->GetSampler(params);
     }
-    RHIShaderResourceView* SamplerCache::GetTextureView(RHITexture* texture) {
+    RHISRV* SamplerCache::GetTextureView(RHITexture* texture) {
         return m_impl->GetTextureView(texture);
     }
 

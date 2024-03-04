@@ -72,7 +72,7 @@ void Example(){
 
     
 
-    RHIGraphicsPipelineStateInitializer init;
+    RHIGraphicsPipelineStateInfo init;
     init.num_samples                 = 1;
     init.multi_view_count            = 1;
     init.stencil_attachment_store_op = EAttachmentStoreOp::NONE;
@@ -121,7 +121,7 @@ void Example(){
     RHIGraphicsPipelineStateRef pso = g_rhi->RHICreateGraphicsPipelineState(init);
 
 
-    RHIUnorderedAccessViewRef test_view =
+    RHIUAVRef test_view =
         g_rhi->RHICreateUnorderedAccessView(tex,
                                             RHIViewInfo::CreateTextureUAVInfo()
                                                 .SetFormat((PF_R8G8B8A8_SRGB)));

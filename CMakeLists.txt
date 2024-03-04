@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.26.0)
 
-project(MoerEngine LANGUAGES CXX)
+project(MoerEngine LANGUAGES CXX C)
 set(PROJECT_VERSION_MAJOR 0)
 set(PROJECT_VERSION_MINOR 1)
 set(PROJECT_VERSION_PATCH 0)

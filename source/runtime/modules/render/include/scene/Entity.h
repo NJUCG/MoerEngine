@@ -10,13 +10,13 @@ namespace Moer {
     public:
         using Type = uint32_t;
 
-        Entity() noexcept { } 
+        Entity() noexcept {}
 
         // Entities can be copied
-        Entity(const Entity& e) noexcept = default;
-        Entity(Entity&& e) noexcept = default;
+        Entity(const Entity& e) noexcept            = default;
+        Entity(Entity&& e) noexcept                 = default;
         Entity& operator=(const Entity& e) noexcept = default;
-        Entity& operator=(Entity&& e) noexcept = default;
+        Entity& operator=(Entity&& e) noexcept      = default;
 
         // Entities can be compared
         bool operator==(Entity e) const { return e.mIdentity == mIdentity; }
@@ -36,24 +36,23 @@ namespace Moer {
 
         explicit operator bool() const noexcept { return !isNull(); }
 
-        void clear() noexcept  { mIdentity = 0; }
-    
+        void clear() noexcept { mIdentity = 0; }
+
         struct Hasher {
             typedef Entity argument_type;
             typedef size_t result_type;
-            result_type operator()(argument_type const& e) const {
+            result_type    operator()(argument_type const& e) const {
                 return e.getId();
             }
         };
 
-    private:
+    public:
         friend class EntityManager;
         friend class EntityManagerImpl;
         using Type = uint32_t;
 
-        explicit Entity(Type identity) noexcept : mIdentity(identity) { }
+        explicit Entity(Type identity) noexcept : mIdentity(identity) {}
 
         Type mIdentity = 0;
     };
-}
-
+}// namespace Moer

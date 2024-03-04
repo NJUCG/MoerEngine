@@ -14,7 +14,7 @@ namespace Moer::Resource::Gltf {
         Parser() noexcept;
         ~Parser() noexcept;
 
-        static RESOURCE_API std::unique_ptr<Scene> LoadSceneFromFile(const std::filesystem::path& file_path) noexcept;
+        static RESOURCE_API UniquePtr<Scene> LoadSceneFromFile(const std::filesystem::path& file_path) noexcept;
 
     private:
         struct Impl;

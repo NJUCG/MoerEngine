@@ -18,7 +18,7 @@ RHI* g_rhi = nullptr;
 
 #include "rhi/RHICommand.h"
 RHIBufferRef CreateBufferFromData(const RHIBufferCreateInfo& info, uint32_t size, void* data) {
-    RHIBufferRef buffer     = g_rhi->RHICreateBuffer(info);
+    RHIBufferRef buffer     = g_rhi->RHICreateBufferInner(info);
     void*        mapped_ptr = g_rhi->RHIMapBuffer(buffer, 0, size);
     memcpy(mapped_ptr, data, size);
     g_rhi->RHIUnmapBuffer(buffer);
@@ -55,7 +55,7 @@ void Test() {
 
     ShaderCompiler::ShaderCompileTest();
 
-    RHIGraphicsPipelineStateInitializer init;
+    RHIGraphicsPipelineStateInfo init;
     init.multi_view_count            = 1;
     init.color_attachment_count      = 1;
     init.color_attachment_formats[0] = EPixelFormat::PF_R8G8B8A8_SRGB;
@@ -117,14 +117,14 @@ void Test() {
     command_list->BeginRenderPass(pass_info, "triangle pass");
     command_list->BindVertexBuffers(0, 1, vertex_buffers.data(), 0);
 
-    RHIUnorderedAccessViewRef test_view =
-        g_rhi->RHICreateUnorderedAccessView(tex,
-                                            RHIViewInfo::CreateTextureUAVInfo()
-                                                .SetFormat((PF_R8G8B8A8_SRGB)));
-    TestShader*            test_shader_vs = (TestShader*)ShaderResourceManager::GetShader<TestShader>();
+    RHIUAVRef test_view =
+        g_rhi->RHICreateUAVInner(tex,
+                                 RHIViewInfo::CreateTextureUAVInfo()
+                                     .SetFormat((PF_R8G8B8A8_SRGB)));
+    auto                   test_shader_vs = ShaderResourceManager::GetInstance().GetShader<TestShader>();
     TestShader::Parameters params;
 
-    auto test_buff = g_rhi->RHICreateBuffer(buffer_info);
+    auto test_buff = g_rhi->RHICreateBufferInner(buffer_info);
 
     params.write_target = test_view;
     RHIBatchedShaderParameters batched_params;
@@ -135,7 +135,7 @@ void Test() {
 
     command_list->EndRenderPass();
 
-    RHICommandQueue*                                graphics_queue = g_rhi->CreateCommandQueue(ECommandQueueType::GRAPHICS);
+    RHICommandQueue*                                graphics_queue = g_rhi->RHICreateCommandQueue(ECommandQueueType::GRAPHICS);
     const Moer::StaticArray<RHICommandListBase*, 1> command_array{command_list};
     // graphics_queue->SubmitCommands(1, command_array.data());
 
