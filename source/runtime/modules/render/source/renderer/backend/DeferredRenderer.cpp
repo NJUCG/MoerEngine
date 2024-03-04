@@ -346,7 +346,7 @@ namespace Moer {
 
             void* mapped = g_rhi->RHIMapBuffer(zero_buffer, 0, sizeof(uint32_t));
 
-            std::array<uint32_t, 32> zero_data = {0};
+            std::array<uint32_t, 32> zero_data{};
             std::copy(zero_data.begin(), zero_data.end(), static_cast<uint32_t*>(mapped));
 
             g_rhi->RHIUnmapBuffer(zero_buffer);
