@@ -24,17 +24,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#ifndef WIN32
-	#include <sys/time.h>
-	#include <pthread.h>
-	#include <unistd.h>
+#ifndef _WIN32
+#include <sys/time.h>
+#include <pthread.h>
+#include <unistd.h>
 
-	double get_time()
-	{
-		timeval tv;
-		gettimeofday(&tv, 0);
+double get_time() {
+    timeval tv;
+    gettimeofday(&tv, 0);
 
-		return (double)tv.tv_sec + (double)tv.tv_usec * 1.0e-6;
+    return (double)tv.tv_sec + (double)tv.tv_usec * 1.0e-6;
 	}
 
 
