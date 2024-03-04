@@ -62,3 +62,6 @@ add_sub_target(pugixml pugixml-shared ${third_party_folder} "")
 
 add_sub_target(exr tinyexr ${third_party_folder}/tinyexr "")
 set_ide_folder(miniz ${third_party_folder}/tinyexr)
+
+add_sub_target(ktx ktx ${third_party_folder}/ktx "")
+add_sub_target(astc astc ${third_party_folder}/astc "")

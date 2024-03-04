@@ -66,6 +66,7 @@ namespace Moer {
 
     private:
         RHITextureCreateInfo upload_texture_create_info;
+        RHITextureCreateInfo depth_texture_create_info;
 
         RHIFenceRef present_fence;
 
@@ -157,6 +158,16 @@ namespace Moer {
                                              ETextureUsageFlags::SRGB |
                                              ETextureUsageFlags::SAMPLED);
 
+        depth_texture_create_info = RHITextureCreateInfo::Create2D("virtual viewport depth",
+                                                                   create_info.extent,
+                                                                   EPixelFormat::PF_D32_SFLOAT_S8_UINT)
+                                        .SetArraySize(1)
+                                        .SetNumMips(1)
+                                        .SetClearAttachment({})
+                                        .SetInitialLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED)
+                                        .SetUsageFlags(
+                                            ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT);
+
         CreateResources();
         copy_queue->WaitForQueueComplete();
     }
@@ -217,6 +228,7 @@ namespace Moer {
         }
         info.extent = extent;
         upload_texture_create_info.SetExtent(extent);
+        depth_texture_create_info.SetExtent(extent);
         copy_queue->WaitForQueueComplete();
         copy_cmd_list->Reset();
         CreateResources();

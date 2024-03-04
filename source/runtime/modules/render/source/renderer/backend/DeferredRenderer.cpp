@@ -562,10 +562,10 @@ namespace Moer {
                 render_attachment_view.texture_view     = uav;
                 render_attachment_view.clear_attachment = RHIClearAttachment(EClearAttachment::COLOR);
 
-                auto& depth_attachment_view            = pass_info.depth_stencil_attachment.depth_stencil_attachment_view;
-                depth_attachment_view.texture_view     = depth_buffer_uav[info.backbuffer_index];
+                auto& depth_attachment_view        = pass_info.depth_stencil_attachment.depth_stencil_attachment_view;
+                depth_attachment_view.texture_view = depth_buffer_uav[info.backbuffer_index];
 
-                depth_attachment_view.required_layout  = TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE;
+                depth_attachment_view.required_layout                   = TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE;
                 depth_attachment_view.clear_attachment                  = RHIClearAttachment::Preset<RHIConfig::ClearMode::DEPTH_STENCIL>();
                 pass_info.depth_stencil_attachment.depth_stencil_action = AC_CLEAR_STORE;
 
