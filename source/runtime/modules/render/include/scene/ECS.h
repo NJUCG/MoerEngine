@@ -11,6 +11,7 @@ namespace Moer {
             // at index = 0, is guaranteed to be default-initialized.
             // Sub-classes can use this to their advantage.
             m_data.push_back(MoerNew(COMPONENT));
+            m_data.push_back(MoerNew(COMPONENT));
         }
 
         EntityComponentManger(EntityComponentManger&&) noexcept            = default;
@@ -50,12 +51,14 @@ namespace Moer {
     template<typename COMPONENT>
     void EntityComponentManger<COMPONENT>::RemoveComponent(Entity entity) {
         MoerDelete(m_data[m_instance_map[entity]]);
+        MoerDelete(m_data[m_instance_map[entity]]);
         m_data[m_instance_map[entity]] = std::move(m_data.back());
         m_data.pop_back();
     }
 
     template<typename COMPONENT>
     COMPONENT& EntityComponentManger<COMPONENT>::operator[](Entity entity) {
+        return *m_data[m_instance_map[entity]];
         return *m_data[m_instance_map[entity]];
     }
 

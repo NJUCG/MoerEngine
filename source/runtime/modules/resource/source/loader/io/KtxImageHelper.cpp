@@ -440,4 +440,4 @@ namespace Moer {
         destroy_image(astc_image);
     }
 
-}
+}// namespace Moer

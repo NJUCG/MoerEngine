@@ -67,6 +67,7 @@ namespace Moer {
     private:
         RHITextureCreateInfo upload_texture_create_info;
         RHITextureCreateInfo depth_texture_create_info;
+        RHITextureCreateInfo depth_texture_create_info;
 
         RHIFenceRef present_fence;
 
@@ -168,6 +169,16 @@ namespace Moer {
                                         .SetUsageFlags(
                                             ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT);
 
+        depth_texture_create_info = RHITextureCreateInfo::Create2D("virtual viewport depth",
+                                                                   create_info.extent,
+                                                                   EPixelFormat::PF_D32_SFLOAT_S8_UINT)
+                                        .SetArraySize(1)
+                                        .SetNumMips(1)
+                                        .SetClearAttachment({})
+                                        .SetInitialLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED)
+                                        .SetUsageFlags(
+                                            ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT);
+
         CreateResources();
         copy_queue->WaitForQueueComplete();
     }
@@ -193,7 +204,7 @@ namespace Moer {
 
         RHIBarrierDependencyInfo barrier_info;
         auto&                    barriers = barrier_info.texture_barriers;
-        barriers.resize(info.back_buffer_count + 1);
+        barriers.resize(info.back_buffer_count + 2);
 
         for (uint32_t i = 0; i < info.back_buffer_count; ++i) {
             barriers[i].SetDstTextureLayout(TEXTURE_LAYOUT_TRANSFER_SRC);
@@ -205,6 +216,11 @@ namespace Moer {
         barriers[info.back_buffer_count].SetSrcTextureLayout(TEXTURE_LAYOUT_UNDEFINED);
         barriers[info.back_buffer_count].SetTexture(present_texture);
         barriers[info.back_buffer_count].SetSubResourceRange({});
+
+        barriers[info.back_buffer_count + 1].SetDstTextureLayout(TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE);
+        barriers[info.back_buffer_count + 1].SetSrcTextureLayout(TEXTURE_LAYOUT_UNDEFINED);
+        barriers[info.back_buffer_count + 1].SetTexture(depth_texture);
+        barriers[info.back_buffer_count + 1].SetSubResourceRange({});
 
         copy_cmd_list->BeginRecording();
         copy_cmd_list->SetPipelineBarrier(barrier_info);
@@ -228,6 +244,7 @@ namespace Moer {
         }
         info.extent = extent;
         upload_texture_create_info.SetExtent(extent);
+        depth_texture_create_info.SetExtent(extent);
         depth_texture_create_info.SetExtent(extent);
         copy_queue->WaitForQueueComplete();
         copy_cmd_list->Reset();
@@ -323,6 +340,14 @@ namespace Moer {
         assert(Moer::IsCurrentlyRenderThread());
 
         return swapchain_uavs[index];
+    }
+
+    RHIUnorderedAccessViewRef VirtualViewport::Impl::GetDepthBufferUAV() {
+        // Implementation of GetDepthBufferUAV method
+        // ...
+        assert(Moer::IsCurrentlyRenderThread());
+
+        return depth_texture_uav;
     }
 
 }// namespace Moer
