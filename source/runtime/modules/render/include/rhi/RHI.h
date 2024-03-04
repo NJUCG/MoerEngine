@@ -24,15 +24,22 @@ class Shader;
 
 struct RHIInitInfo {
     uint32_t max_frame_in_flight = 3;
+    bool     ray_tracing         = false;
+};
+
+struct RHIInfo {
+    ERHIType rhi_type;
+    uint32_t max_frame_in_flight;
+    bool     ray_tracing;
 };
 
 template<typename T>
 concept TPipelineStateRef = requires(T) {
-                                std::convertible_to<T, RHIGraphicsPipelineStateRef> || std::convertible_to<T, RHIComputePipelineStateRef>;
-                            };
+    std::convertible_to<T, RHIGraphicsPipelineStateRef> || std::convertible_to<T, RHIComputePipelineStateRef>;
+};
 class RENDER_API RHI {
 public:
-    RHI(ERHIType _type) : rhi_type(_type) {}
+    RHI(ERHIType _type) : m_rhi_info(_type) {}
 
     virtual ~RHI() = default;
 
@@ -44,7 +51,7 @@ public:
 
     virtual const char* GetName() = 0;
 
-    ERHIType GetType() const { return rhi_type; }
+    ERHIType GetType() const { return m_rhi_info.rhi_type; }
 
     //todo: test usage, delete later
     static void Test();
@@ -171,8 +178,7 @@ protected:
     virtual void RHISetBatchedShaderParametersInner(RHIResource* _resource, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) = 0;
 
 protected:
-    ERHIType rhi_type;
-    uint32_t max_frame_in_flight;
+    RHIInfo m_rhi_info;
 };
 
 extern RENDER_API RHI* g_rhi;

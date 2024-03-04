@@ -44,7 +44,7 @@ void             ShaderCompiler::Init() {
 class FakeRHI : public IVulkanRHI {
 public:
     FakeRHI() {
-        rhi_type = ERHIType::Vulkan;
+        m_rhi_info.rhi_type = ERHIType::Vulkan;
     }
 };
 /**

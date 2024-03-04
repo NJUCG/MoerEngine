@@ -2,6 +2,8 @@
 // Created by 74535 on 2023/10/11.
 //
 
+#include "rhi/RHI.h"
+
 #include "VulkanDevice.h"
 #include "VulkanPlatform.h"
 #include "VulkanExtension.h"
@@ -100,8 +102,8 @@ TExtensionArray VulkanDeviceExtension::GetDriverSupportedDeviceExtensionNames(Vk
 // ***** VK_KHR_acceleration_structure
 class VulkanKHRAccelerationStructureExtension final : public VulkanDeviceExtension {
 public:
-    VulkanKHRAccelerationStructureExtension()
-        : VulkanDeviceExtension(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME), m_acceleration_structure_features() {}
+    VulkanKHRAccelerationStructureExtension(bool _is_enabled)
+        : VulkanDeviceExtension(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME, _is_enabled), m_acceleration_structure_features() {}
 
     bool IsOptional() const override { return true; }
 
@@ -135,8 +137,8 @@ private:
 // ***** VK_KHR_ray_tracing_pipeline
 class VulkanKHRRayTracingPipelineExtension final : public VulkanDeviceExtension {
 public:
-    VulkanKHRRayTracingPipelineExtension()
-        : VulkanDeviceExtension(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME), m_ray_tracing_pipeline_features() {}
+    VulkanKHRRayTracingPipelineExtension(bool _is_enabled)
+        : VulkanDeviceExtension(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME, _is_enabled), m_ray_tracing_pipeline_features() {}
 
     bool IsOptional() const override { return true; }
 
@@ -171,8 +173,8 @@ private:
 // ***** VK_KHR_ray_query
 class VulkanKHRRayQueryExtension final : public VulkanDeviceExtension {
 public:
-    VulkanKHRRayQueryExtension()
-        : VulkanDeviceExtension(VK_KHR_RAY_QUERY_EXTENSION_NAME), m_ray_query_features() {}
+    VulkanKHRRayQueryExtension(bool _is_enabled)
+        : VulkanDeviceExtension(VK_KHR_RAY_QUERY_EXTENSION_NAME, _is_enabled), m_ray_query_features() {}
 
     bool IsOptional() const override { return true; }
 
@@ -200,8 +202,8 @@ private:
 // ***** VK_EXT_descriptor_buffer
 class VulkanEXTDescriptorBufferExtension final : public VulkanDeviceExtension {
 public:
-    VulkanEXTDescriptorBufferExtension()
-        : VulkanDeviceExtension(VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME), m_descriptor_buffer_features() {}
+    VulkanEXTDescriptorBufferExtension(bool _is_enabled = true)
+        : VulkanDeviceExtension(VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME, _is_enabled), m_descriptor_buffer_features() {}
 
     bool IsOptional() const override { return true; }
 
@@ -232,24 +234,24 @@ private:
     VkPhysicalDeviceDescriptorBufferFeaturesEXT m_descriptor_buffer_features;
 };
 
-TVulkanDeviceExtensionArray VulkanDeviceExtension::GetMESupportedDeviceExtensions() {
+TVulkanDeviceExtensionArray VulkanDeviceExtension::GetMESupportedDeviceExtensions(const RHIInfo& _rhi_info) {
     TVulkanDeviceExtensionArray extensions;
 
-#define ADD_EXTENSION(ext_name) extensions.emplace_back(std::make_shared<VulkanDeviceExtension>(ext_name))
+#define ADD_EXTENSION(ext_name, ...) extensions.emplace_back(std::make_shared<VulkanDeviceExtension>(ext_name, __VA_ARGS__))
 
-#define ADD_CUSTOM_EXTENSION(ext_class) extensions.emplace_back(std::make_unique<ext_class>())
+#define ADD_CUSTOM_EXTENSION(ext_class, ...) extensions.emplace_back(std::make_shared<ext_class>(__VA_ARGS__))
     // generic simple extensions
-    ADD_EXTENSION(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
-    ADD_EXTENSION(VK_EXT_INDEX_TYPE_UINT8_EXTENSION_NAME);
+    ADD_EXTENSION(VK_KHR_SWAPCHAIN_EXTENSION_NAME, true);
+    ADD_EXTENSION(VK_EXT_INDEX_TYPE_UINT8_EXTENSION_NAME, true);
+
+    // raytracing extensions
+    ADD_EXTENSION(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME, _rhi_info.ray_tracing);
+    ADD_CUSTOM_EXTENSION(VulkanKHRAccelerationStructureExtension, _rhi_info.ray_tracing);
+    ADD_CUSTOM_EXTENSION(VulkanKHRRayTracingPipelineExtension, _rhi_info.ray_tracing);
+    ADD_CUSTOM_EXTENSION(VulkanKHRRayQueryExtension, _rhi_info.ray_tracing);
 
     // bindless extensions
     ADD_CUSTOM_EXTENSION(VulkanEXTDescriptorBufferExtension);
-
-    // raytracing extensions
-    ADD_CUSTOM_EXTENSION(VulkanKHRAccelerationStructureExtension);
-    ADD_CUSTOM_EXTENSION(VulkanKHRRayTracingPipelineExtension);
-    ADD_CUSTOM_EXTENSION(VulkanKHRRayQueryExtension);
-    ADD_EXTENSION(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
 
     // vendor extensions
 

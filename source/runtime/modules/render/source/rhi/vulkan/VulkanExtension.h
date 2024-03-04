@@ -7,12 +7,14 @@
 
 #include "rhi/vulkan/misc/VulkanTypeDefs.h"
 
+struct RHIInfo;
+
 class VulkanDevice;
 class VulkanOptionalDeviceExtensions;
 
 class VulkanExtensionBase {
 public:
-    VulkanExtensionBase(const std::string& _ext_name) : m_extension_name(_ext_name), m_is_enabled(true) {}
+    VulkanExtensionBase(const std::string& _ext_name, bool _is_enabled) : m_extension_name(_ext_name), m_is_enabled(_is_enabled) {}
     virtual ~VulkanExtensionBase() = default;
 
     inline const std::string& GetExtensionName() const { return m_extension_name; }
@@ -28,7 +30,7 @@ protected:
 
 class VulkanInstanceExtension : public VulkanExtensionBase {
 public:
-    VulkanInstanceExtension(const std::string& _ext_name) : VulkanExtensionBase(_ext_name) {}
+    VulkanInstanceExtension(const std::string& _ext_name, bool _is_enabled = true) : VulkanExtensionBase(_ext_name, _is_enabled) {}
     virtual ~VulkanInstanceExtension() = default;
 
     static TExtensionArray      GetMESupportedInstanceExtensions();
@@ -38,10 +40,10 @@ public:
 
 class VulkanDeviceExtension : public VulkanExtensionBase {
 public:
-    VulkanDeviceExtension(const std::string& _ext_name) : VulkanExtensionBase(_ext_name), m_usable(true) {}
+    VulkanDeviceExtension(const std::string& _ext_name, bool _is_enabled = true) : VulkanExtensionBase(_ext_name, _is_enabled), m_usable(true) {}
     virtual ~VulkanDeviceExtension() = default;
 
-    static TVulkanDeviceExtensionArray GetMESupportedDeviceExtensions();
+    static TVulkanDeviceExtensionArray GetMESupportedDeviceExtensions(const RHIInfo& _rhi_info);
     static TExtensionPropsArray        GetDriverSupportedDeviceExtensions(VkPhysicalDevice _gpu, const char* _layer_name = nullptr);
     static TExtensionArray             GetDriverSupportedDeviceExtensionNames(VkPhysicalDevice _gpu, const char* _layer_name = nullptr);
 

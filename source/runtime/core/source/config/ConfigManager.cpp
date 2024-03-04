@@ -39,6 +39,7 @@ namespace Moer {
         init_config.editor_font_size       = r.Get<float>("editor", "editor_font_size", 16.f);
 #endif
         init_config.max_frame_in_flight = r.Get<int>("engine", "max_frame_in_flight", 3);
+        init_config.ray_tracing         = r.Get<int>("engine", "ray_tracing", 0);
 
         auto default_rhi = r.Get<std::string>("engine", "default_rhi", "Vulkan");
 

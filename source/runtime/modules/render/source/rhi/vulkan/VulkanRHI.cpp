@@ -41,12 +41,13 @@ VulkanRHIImpl::VulkanRHIImpl()
     : m_instance(VK_NULL_HANDLE), m_surface(VK_NULL_HANDLE),
       m_device(nullptr), m_main_viewport(nullptr) {
     LOG_INFO("Built with Vulkan header version {0:d}.{1:d}.{2:d}", VK_API_VERSION_MAJOR(VK_HEADER_VERSION_COMPLETE), VK_API_VERSION_MINOR(VK_HEADER_VERSION_COMPLETE), VK_API_VERSION_PATCH(VK_HEADER_VERSION_COMPLETE));
-    rhi_type = ERHIType::Vulkan;
+    m_rhi_info.rhi_type = ERHIType::Vulkan;
 }
 
 void VulkanRHIImpl::Initialize(const RHIInitInfo& _init) {
     //todo: need more elegant way
-    max_frame_in_flight = _init.max_frame_in_flight;
+    m_rhi_info.max_frame_in_flight = _init.max_frame_in_flight;
+    m_rhi_info.ray_tracing         = _init.ray_tracing;
 
     CreateInstance();
     InitSurface(Moer::WindowContext::GetMainWindow());
@@ -1307,7 +1308,7 @@ void VulkanRHIImpl::InitVulkan() {
     initializer.surface            = m_surface;
     initializer.api_version        = VK_API_VERSION_1_3;
     initializer.enabled_features   = VulkanDeviceFeature::GetMESupportedDeviceFeatures(initializer.api_version);
-    initializer.enabled_extensions = VulkanDeviceExtension::GetMESupportedDeviceExtensions();
+    initializer.enabled_extensions = VulkanDeviceExtension::GetMESupportedDeviceExtensions(m_rhi_info);
 
     m_device = new VulkanDevice();
     m_device->Init(initializer);
@@ -1506,7 +1507,7 @@ RHIViewportRef VulkanRHIImpl::RHICreateViewport(const RHIViewportInitializer& _i
     swapchain->Connect(m_instance, surface, m_device);
     swapchain->Init(&width, &height, _init.b_vsync);
 
-    VulkanViewport* viewport = new VulkanViewport(swapchain, max_frame_in_flight);
+    VulkanViewport* viewport = new VulkanViewport(swapchain, m_rhi_info.max_frame_in_flight);
 
     return viewport;
 }
