@@ -247,6 +247,7 @@ namespace Moer::Resource::Gltf {
         GpuPrimitiveBuilder::InitBuild();
         m_scene = std::move(UniquePtr<Scene>(MoerNew(Scene)()));
         Assimp::Importer importer;
+        auto             real_path  = std::filesystem::canonical(file_path);
         const auto*      gltf_scene = importer.ReadFile(file_path.string(), aiProcess_Triangulate | aiProcess_GenNormals | aiProcess_CalcTangentSpace);
         if (!gltf_scene) {
             LOG_WARNING("Failed to load gltf file: {} ", file_path.string());

@@ -2174,13 +2174,13 @@ struct RHIColorAttachmentInfo {
     RHIClearAttachment     clear_attachment;
     EPixelFormat           pixel_format;
     ETextureUsageFlags     usage_flags;
-
+    template<RHIConfig::Blend blend_mode = RHIConfig::Blend::NONE, RHIConfig::ClearMode clear_mode = RHIConfig::ClearMode::COLOR>
     static RHIColorAttachmentInfo Preset(
         EPixelFormat       _pixel_format,
         ETextureUsageFlags _usage_flags = ETextureUsageFlags::COLOR_ATTACHMENT) {
         RHIColorAttachmentInfo info;
-        info.blend_state_info = std::move(RHIBlendAttachmentInfo::Preset());
-        info.clear_attachment = std::move(RHIClearAttachment(EClearAttachment::COLOR));
+        info.blend_state_info = std::move(RHIBlendAttachmentInfo::Preset<blend_mode>());
+        info.clear_attachment = std::move(RHIClearAttachment::Preset<clear_mode>());
         info.pixel_format     = _pixel_format;
         info.usage_flags      = ETextureUsageFlags::COLOR_ATTACHMENT;
 

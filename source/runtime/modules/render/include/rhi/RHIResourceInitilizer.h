@@ -44,11 +44,9 @@ namespace RHIConfig {
         DEPTH_WRITE_GREATER_EQUAL
     };
 
-    enum class Attachment {
-        NONE,
+    enum class ClearMode {
         COLOR,
-        DEPTH_STENCIL,
-        RESOLVE
+        DEPTH_STENCIL
     };
 }// namespace RHIConfig
 struct RHISamplerCreateInfo {
@@ -447,6 +445,16 @@ enum class EClearAttachment {
     DEPTH_STENCIL
 };
 struct RHIClearAttachment {
+    template<RHIConfig::ClearMode preset = RHIConfig::ClearMode::COLOR>
+    static RHIClearAttachment Preset() {
+        if constexpr (preset == RHIConfig::ClearMode::COLOR) {
+            return RHIClearAttachment(EClearAttachment::COLOR);
+        } else if constexpr (preset == RHIConfig::ClearMode::DEPTH_STENCIL) {
+            return RHIClearAttachment(EClearAttachment::DEPTH_STENCIL);
+        } else {
+            static_assert(preset == RHIConfig::ClearMode::COLOR, "Invalid preset");
+        }
+    }
     struct ClearDepthStencilValue {
         float    depth;
         uint32_t stencil;

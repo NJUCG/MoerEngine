@@ -798,7 +798,7 @@ RHITextureRef VulkanRHIImpl::RHICreateTexture(const RHITextureCreateInfo& info) 
     alloc_create_info.usage = VulkanMemoryManager::MEGenerateVmaMemoryUsage();
 
     VmaAllocator allocator = m_device->GetVmaAllocator();
-    VK_CHECK_RESULT(vmaCreateImage(allocator, &image_create_info, &alloc_create_info, &vk_texture->m_alloc.image, &vk_texture->m_alloc.alloc, nullptr));
+    auto         res       = (vmaCreateImage(allocator, &image_create_info, &alloc_create_info, &vk_texture->m_alloc.image, &vk_texture->m_alloc.alloc, nullptr));
     // VmaAllocationInfo temp_info;
     // vmaGetAllocationInfo(allocator, vk_texture->GetAllocation(), &temp_info);
     return RHITextureRef(vk_texture);

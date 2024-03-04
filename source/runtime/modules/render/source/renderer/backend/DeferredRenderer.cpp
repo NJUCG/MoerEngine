@@ -137,6 +137,10 @@ namespace Moer {
         RHISRVRef GetRendererOutput();
 
     private:
+        void CreateDepthBuffer();
+        void OnResizeVSwapChain();
+
+    private:
         VirtualViewport* virtual_viewport;
         uint64_t         frame_counter = 0;
 
@@ -176,6 +180,8 @@ namespace Moer {
         static constexpr uint32_t draw_count_offset    = 4;
         static constexpr uint32_t max_meshlet_count    = 1024 * 1024 * 16;
         static constexpr uint32_t thread_group_count   = 64;
+
+        Vector2i source_resolution;
     };
     void DeferredRenderer::Init(const BackendRendererInitInfo& _init_info) {
         impl = MoerNew(Impl);
@@ -206,10 +212,71 @@ namespace Moer {
         return impl->GetRendererOutput();
     }
 
+    void DeferredRenderer::Impl::CreateDepthBuffer() {
+        //depth buffer
+        auto back_buffer_cnt   = virtual_viewport->GetInfo().back_buffer_count;
+        auto depth_create_info = RHITextureCreateInfo::Create("deferred_depth", ETextureDimension::TEX_2D)
+                                     .SetExtent(source_resolution)
+                                     .SetDepth(1)
+                                     .SetFormat(EPixelFormat::PF_D32_SFLOAT_S8_UINT)
+                                     .SetClearAttachment(RHIClearAttachment(EClearAttachment::DEPTH_STENCIL))
+                                     .SetUsageFlags(ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT);
+        depth_buffer.resize(back_buffer_cnt);
+        depth_buffer_uav.resize(back_buffer_cnt);
+        for (uint32_t i = 0; i < back_buffer_cnt; ++i) {
+
+            depth_buffer[i]     = g_rhi->RHICreateTexture(depth_create_info);
+            depth_buffer_uav[i] = g_rhi->RHICreateTextureUAV(depth_buffer[i]);
+        }
+
+        RHIBarrierDependencyInfo barrier_info{};
+        barrier_info.texture_barriers.resize(back_buffer_cnt);
+
+        RHISubresourceRange range(ETextureAspectFlags::DEPTH_SLICE | ETextureAspectFlags::STENCIL_SLICE);
+
+        for (uint32_t i = 0; i < back_buffer_cnt; ++i) {
+            auto& barrier = barrier_info.texture_barriers[i];
+            barrier
+                .SetTexture(depth_buffer[i])
+                .SetDstTextureLayout(ETextureLayout::TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE)
+                .SetSrcTextureLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED)
+                .SetSubResourceRange(range)
+                .SetDstStage(PS_EARLY_FRAGMENT_TESTS)
+                .SetSrcAccessFlags(ERHIAccessFlags::UNDEFINED)
+                .SetDstAccessFlags(ERHIAccessFlags::DEPTH_STENCIL_WRITE);
+        }
+        auto* cmd_list = render_cmd_lists[0];
+        cmd_list->BeginRecording();
+        cmd_list->SetPipelineBarrier(barrier_info);
+        cmd_list->EndRecording();
+        RHISubmitInfo submit_info{};
+        RHIFenceRef   fence = g_rhi->RHICreateFence({.usage = EFenceUsageFlags::TIMELINE});
+        submit_info.Signal(fence, 1);
+        render_queue->SubmitCommands(1, render_cmd_lists[0], &submit_info);
+        fence->Wait(1);
+    }
+
+    void DeferredRenderer::Impl::OnResizeVSwapChain() {
+        EnqueueRenderTask([res(this->source_resolution),
+                           view_port(this->virtual_viewport),
+                           &depth_buffers(this->depth_buffer),
+                           &depth_buffer_views(this->depth_buffer_uav),
+                           this]() {
+            view_port->OnResize(Extent2D(res.x, res.y));
+
+            CreateDepthBuffer();
+        });
+    }
+
     void DeferredRenderer::Impl::Init(const BackendRendererInitInfo& _init_info) {
+        //wait for g_scene
+        RenderThreadFence render_thread_fence;
+        render_thread_fence.BeginFence();
+        render_thread_fence.Wait();
         VirtualViewportCreateInfo create_info;
+        source_resolution             = Vector2i(_init_info.width, _init_info.height);
         create_info.name              = "DeferredRendererViewport";
-        create_info.extent            = Moer::Vector2i(_init_info.width, _init_info.height);
+        create_info.extent            = source_resolution;
         create_info.format            = _init_info.format;
         create_info.back_buffer_count = 3;
         virtual_viewport              = MoerNew(VirtualViewport)(create_info);
@@ -249,7 +316,7 @@ namespace Moer {
                     std::move(shader_input_info))
                 .SetDepthStencilInfo(RHIDepthStencilStateInfo::Preset<RHIConfig::DepthStencil::DEPTH_WRITE_GREATER>())
                 .SetColorAttachmentInfo(
-                    {std::move(RHIColorAttachmentInfo::Preset(EPixelFormat::PF_R8G8B8A8_SRGB))})
+                    {std::move(RHIColorAttachmentInfo::Preset<RHIConfig::Blend::ALPHA_BLEND>(EPixelFormat::PF_R8G8B8A8_SRGB))})
                 .SetDepthStencilFormat(PF_D32_SFLOAT_S8_UINT)
                 .Finalize();
 
@@ -309,45 +376,7 @@ namespace Moer {
             instance_meshlet_cull_info_uav = g_rhi->RHICreateBufferUAV(instance_meshlet_cull_info_buffer);
         }
         {
-            //depth buffer
-            auto depth_create_info = RHITextureCreateInfo::Create("deferred_depth", ETextureDimension::TEX_2D)
-                                         .SetExtent(_init_info.width, _init_info.height)
-                                         .SetDepth(1)
-                                         .SetFormat(EPixelFormat::PF_D32_SFLOAT_S8_UINT)
-                                         .SetClearAttachment(RHIClearAttachment(EClearAttachment::DEPTH_STENCIL))
-                                         .SetUsageFlags(ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT);
-            depth_buffer.resize(create_info.back_buffer_count);
-            for (uint32_t i = 0; i < create_info.back_buffer_count; ++i) {
-
-                depth_buffer[i] = g_rhi->RHICreateTexture(depth_create_info);
-                depth_buffer_uav.push_back(g_rhi->RHICreateTextureUAV(depth_buffer[i]));
-            }
-
-            RHIBarrierDependencyInfo barrier_info{};
-            barrier_info.texture_barriers.resize(create_info.back_buffer_count);
-
-            RHISubresourceRange range(ETextureAspectFlags::DEPTH_SLICE | ETextureAspectFlags::STENCIL_SLICE);
-
-            for (uint32_t i = 0; i < create_info.back_buffer_count; ++i) {
-                auto& barrier = barrier_info.texture_barriers[i];
-                barrier
-                    .SetTexture(depth_buffer[i])
-                    .SetDstTextureLayout(ETextureLayout::TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE)
-                    .SetSrcTextureLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED)
-                    .SetSubResourceRange(range)
-                    .SetDstStage(PS_EARLY_FRAGMENT_TESTS)
-                    .SetSrcAccessFlags(ERHIAccessFlags::UNDEFINED)
-                    .SetDstAccessFlags(ERHIAccessFlags::DEPTH_STENCIL_WRITE);
-            }
-            render_cmd_lists[0]->BeginRecording();
-            render_cmd_lists[0]->SetPipelineBarrier(barrier_info);
-            render_cmd_lists[0]->EndRecording();
-            RHISubmitInfo submit_info{};
-            RHIFenceRef   fence = g_rhi->RHICreateFence({.usage = EFenceUsageFlags::TIMELINE});
-            submit_info.Signal(fence, 1);
-            render_queue->SubmitCommands(1, render_cmd_lists[0], &submit_info);
-            fence->Wait(1);
-            int i = 0;
+            CreateDepthBuffer();
         }
     }
 
@@ -417,9 +446,20 @@ namespace Moer {
             };
             RHICopyBufferInfo copy_info{};
             copy_info.regions.push_back({0, 0, sizeof(uint32_t)});
-            auto&& reset_counter_buffer = [this, copy_info = std::move(copy_info)]() {
-                RHIGraphicsCommandList* cmd_list = render_cmd_lists[frame_counter % render_cmd_lists.size()];
 
+            RHIBarrierDependencyInfo counters_barrier{};
+            counters_barrier.buffer_barriers.resize(1);
+            auto& buffer_barrier_info = counters_barrier.buffer_barriers[0];
+            buffer_barrier_info
+                .SetBuffer(draw_count_buffer)
+                .SetDstAccessFlags(ERHIAccessFlags::TRANSFER_WRITE)
+                .SetSrcAccessFlags(ERHIAccessFlags::INDIRECT_COMMAND_READ)
+                .SetSrcStage(ERHIPipelineStageFlags::PS_DRAW_INDIRECT)
+                .SetDstStage(ERHIPipelineStageFlags::PS_TRANSFER);
+
+            auto&& reset_counter_buffer = [this, copy_info = std::move(copy_info), buffer_barrier(std::move(counters_barrier))]() {
+                RHIGraphicsCommandList* cmd_list = render_cmd_lists[frame_counter % render_cmd_lists.size()];
+                cmd_list->SetPipelineBarrier(buffer_barrier);
                 cmd_list->CopyBuffer(copy_info, zero_buffer, draw_count_buffer);
             };
 
@@ -435,7 +475,7 @@ namespace Moer {
                 auto& buffer_barrier_info = barrier_dependency_info.buffer_barriers[0];
                 buffer_barrier_info
                     .SetBuffer(draw_count_buffer)
-                    .SetDstAccessFlags(ERHIAccessFlags::SHADER_WRITE)
+                    .SetDstAccessFlags(ERHIAccessFlags::SHADER_WRITE | ERHIAccessFlags::SHADER_READ)
                     .SetSrcAccessFlags(ERHIAccessFlags::TRANSFER_WRITE)
                     .SetSrcStage(ERHIPipelineStageFlags::PS_TRANSFER)
                     .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
@@ -443,9 +483,9 @@ namespace Moer {
                 auto& buffer_barrier_info_1 = barrier_dependency_info.buffer_barriers[1];
                 buffer_barrier_info_1
                     .SetBuffer(draw_indirect_buffer)
-                    .SetDstAccessFlags(ERHIAccessFlags::SHADER_WRITE)
-                    .SetSrcAccessFlags(ERHIAccessFlags::TRANSFER_WRITE)
-                    .SetSrcStage(ERHIPipelineStageFlags::PS_TRANSFER)
+                    .SetDstAccessFlags(ERHIAccessFlags::SHADER_WRITE | ERHIAccessFlags::SHADER_READ)
+                    .SetSrcAccessFlags(ERHIAccessFlags::INDIRECT_COMMAND_READ)
+                    .SetSrcStage(ERHIPipelineStageFlags::PS_DRAW_INDIRECT)
                     .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
 
                 cmd_list->SetPipelineBarrier(barrier_dependency_info);
@@ -460,8 +500,8 @@ namespace Moer {
                     auto& buffer_barrier_info = instance_cull_barrier.buffer_barriers[0];
                     buffer_barrier_info
                         .SetBuffer(instance_meshlet_cull_info_buffer)
-                        .SetDstAccessFlags(ERHIAccessFlags::SHADER_READ)
-                        .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE)
+                        .SetDstAccessFlags(ERHIAccessFlags::SHADER_READ | ERHIAccessFlags::SHADER_WRITE)
+                        .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE | ERHIAccessFlags::SHADER_READ)
                         .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
                         .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
 
@@ -524,15 +564,17 @@ namespace Moer {
 
                 auto& depth_attachment_view            = pass_info.depth_stencil_attachment.depth_stencil_attachment_view;
                 depth_attachment_view.texture_view     = depth_buffer_uav[info.backbuffer_index];
+
                 depth_attachment_view.required_layout  = TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE;
-                depth_attachment_view.clear_attachment = RHIClearAttachment(EClearAttachment::DEPTH_STENCIL);
+                depth_attachment_view.clear_attachment                  = RHIClearAttachment::Preset<RHIConfig::ClearMode::DEPTH_STENCIL>();
+                pass_info.depth_stencil_attachment.depth_stencil_action = AC_CLEAR_STORE;
 
                 Extent3D extent              = uav->GetTexture()->GetExtent3D();
                 pass_info.render_area.extent = Extent2D(extent.x, extent.y);
                 pass_info.render_area.offset = Offset2D(0, 0);
 
                 RHIBarrierDependencyInfo barrier_dependency_info;
-                barrier_dependency_info.texture_barriers.resize(1);
+                barrier_dependency_info.texture_barriers.resize(2);
                 auto& texture_barrier_info = barrier_dependency_info.texture_barriers[0];
                 texture_barrier_info
                     .SetTexture(uav->GetTexture())
@@ -541,6 +583,16 @@ namespace Moer {
                     .SetSrcStage(ERHIPipelineStageFlags::PS_TRANSFER)
                     .SetDstStage(ERHIPipelineStageFlags::PS_COLOR_ATTACHMENT_OUTPUT)
                     .SetDstAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
+
+                auto& depth_barrier = barrier_dependency_info.texture_barriers[1];
+                depth_barrier
+                    .SetTexture(depth_buffer[info.backbuffer_index])
+                    .SetDstTextureLayout(TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE)
+                    .SetSrcTextureLayout(TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE)
+                    .SetSrcStage(ERHIPipelineStageFlags::PS_LATE_FRAGMENT_TESTS)
+                    .SetDstStage(ERHIPipelineStageFlags::PS_EARLY_FRAGMENT_TESTS)
+                    .SetSrcAccessFlags(ERHIAccessFlags::DEPTH_STENCIL_READ | ERHIAccessFlags::DEPTH_STENCIL_WRITE)
+                    .SetDstAccessFlags(ERHIAccessFlags::DEPTH_STENCIL_READ | ERHIAccessFlags::DEPTH_STENCIL_WRITE);
 
                 cmd_list->SetPipelineBarrier(barrier_dependency_info);
                 cmd_list->BeginRenderPass(pass_info, "Draw Meshlets");
@@ -602,9 +654,11 @@ namespace Moer {
     }
 
     void DeferredRenderer::Impl::SetPresentResolution(uint32_t _width, uint32_t _height) {
-        EnqueueRenderTask([this, _width, _height]() {
-            virtual_viewport->OnResize(Extent2D(_width, _height));
-        });
+        if (_width == source_resolution.x && _height == source_resolution.y) {
+            return;
+        }
+        source_resolution = Vector2i(_width, _height);
+        OnResizeVSwapChain();
     }
 
     RHISRVRef DeferredRenderer::Impl::GetRendererOutput() {

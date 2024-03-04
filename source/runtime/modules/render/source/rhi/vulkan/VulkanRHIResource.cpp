@@ -657,102 +657,79 @@ VkFilter VulkanEnumTranslator::METoVKImageFilter(ESamplerFilter _filter) {
 }
 
 VkPipelineStageFlags2 VulkanEnumTranslator::METoVkPipelineStageFlags2(ERHIPipelineStageFlags _flags) {
-    // translate flags
-    switch (_flags) {
-        case PS_NONE:
-            return VK_PIPELINE_STAGE_2_NONE;
-        case PS_TOP_OF_PIPE:
-            return VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-        case PS_DRAW_INDIRECT:
-            return VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
-        case PS_VERTEX_INPUT:
-            return VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT;
-        case PS_VERTEX_SHADER:
-            return VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
-        case PS_TESSELLATION_CONTROL_SHADER:
-            return VK_PIPELINE_STAGE_2_TESSELLATION_CONTROL_SHADER_BIT;
-        case PS_TESSELLATION_EVALUATION_SHADER:
-            return VK_PIPELINE_STAGE_2_TESSELLATION_EVALUATION_SHADER_BIT;
-        case PS_GEOMETRY_SHADER:
-            return VK_PIPELINE_STAGE_2_GEOMETRY_SHADER_BIT;
-        case PS_FRAGMENT_SHADER:
-            return VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-        case PS_EARLY_FRAGMENT_TESTS:
-            return VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT;
-        case PS_LATE_FRAGMENT_TESTS:
-            return VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
-        case PS_COLOR_ATTACHMENT_OUTPUT:
-            return VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-        case PS_COMPUTE_SHADER:
-            return VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        case PS_TRANSFER:
-            return VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-        case PS_BOTTOM_OF_PIPE:
-            return VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT;
-        case PS_HOST:
-            return VK_PIPELINE_STAGE_2_HOST_BIT;
-        case PS_ALL_GRAPHICS:
-            return VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT;
-        case PS_ALL_COMMANDS:
-            return VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-        case PS_CONDITIONAL_RENDERING:
-            return VK_PIPELINE_STAGE_2_CONDITIONAL_RENDERING_BIT_EXT;
-        case PS_ACCELERATION_STRUCTURE_BUILD:
-            return VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
-        case PS_RAY_TRACING_SHADER:
-            return VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
-        case PS_FRAGMENT_DENSITY_PROCESS:
-            return VK_PIPELINE_STAGE_2_FRAGMENT_DENSITY_PROCESS_BIT_EXT;
-        case PS_TASK_SHADER:
-            return VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_NV;
-        case PS_MESH_SHADER:
-            return VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_NV;
-        case PS_COMMAND_PREPROCESS_BIT_NV:
-            return VK_PIPELINE_STAGE_2_COMMAND_PREPROCESS_BIT_NV;
-        default:
-            return VkPipelineStageFlags2(_flags);// MARK...
-    }
+    VkPipelineStageFlags2 vk_flags = VK_PIPELINE_STAGE_2_NONE;
+
+    auto translate_flag = [&vk_flags, &_flags](ERHIPipelineStageFlags _search_me_flags, VkPipelineStageFlags2 _added_if_found, VkPipelineStageFlags2 _added_if_not_found = 0) {
+        const bool has_flag = (_flags & _search_me_flags) == _search_me_flags;
+        vk_flags |= has_flag ? _added_if_found : _added_if_not_found;
+    };
+
+    translate_flag(PS_TOP_OF_PIPE, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT);
+    translate_flag(PS_DRAW_INDIRECT, VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT);
+    translate_flag(PS_VERTEX_INPUT, VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT);
+    translate_flag(PS_VERTEX_SHADER, VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT);
+    translate_flag(PS_TESSELLATION_CONTROL_SHADER, VK_PIPELINE_STAGE_2_TESSELLATION_CONTROL_SHADER_BIT);
+    translate_flag(PS_TESSELLATION_EVALUATION_SHADER, VK_PIPELINE_STAGE_2_TESSELLATION_EVALUATION_SHADER_BIT);
+    translate_flag(PS_GEOMETRY_SHADER, VK_PIPELINE_STAGE_2_GEOMETRY_SHADER_BIT);
+    translate_flag(PS_FRAGMENT_SHADER, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
+    translate_flag(PS_EARLY_FRAGMENT_TESTS, VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT);
+    translate_flag(PS_LATE_FRAGMENT_TESTS, VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT);
+    translate_flag(PS_COLOR_ATTACHMENT_OUTPUT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT);
+    translate_flag(PS_COMPUTE_SHADER, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
+    translate_flag(PS_TRANSFER, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
+    translate_flag(PS_BOTTOM_OF_PIPE, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
+    translate_flag(PS_HOST, VK_PIPELINE_STAGE_2_HOST_BIT);
+    translate_flag(PS_ALL_GRAPHICS, VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT);
+    translate_flag(PS_ALL_COMMANDS, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+    translate_flag(PS_CONDITIONAL_RENDERING, VK_PIPELINE_STAGE_2_CONDITIONAL_RENDERING_BIT_EXT);
+    translate_flag(PS_ACCELERATION_STRUCTURE_BUILD, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR);
+    translate_flag(PS_RAY_TRACING_SHADER, VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR);
+    translate_flag(PS_FRAGMENT_DENSITY_PROCESS, VK_PIPELINE_STAGE_2_FRAGMENT_DENSITY_PROCESS_BIT_EXT);
+    translate_flag(PS_TASK_SHADER, VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_NV);
+    translate_flag(PS_MESH_SHADER, VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_NV);
+    translate_flag(PS_COMMAND_PREPROCESS_BIT_NV, VK_PIPELINE_STAGE_2_COMMAND_PREPROCESS_BIT_NV);
+    return vk_flags;
 }
 
 VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) {
+
+    VkAccessFlags2 vk_flags       = VK_ACCESS_2_NONE;
+    auto           translate_flag = [&vk_flags, &_flags](ERHIAccessFlags _search_me_flags, VkAccessFlags2 _added_if_found, VkAccessFlags2 _added_if_not_found = 0) {
+        const bool has_flag = (_flags & _search_me_flags) == _search_me_flags;
+        vk_flags |= has_flag ? _added_if_found : _added_if_not_found;
+    };
     // clang-format off
-    switch (_flags) {
-        case ERHIAccessFlags::UNDEFINED:                                    return VK_ACCESS_2_NONE;
-        case ERHIAccessFlags::INDIRECT_COMMAND_READ:                        return VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
-        case ERHIAccessFlags::INDEX_READ:                                   return VK_ACCESS_2_INDEX_READ_BIT;
-        case ERHIAccessFlags::VERTEX_ATTRIBUTE_READ:                        return VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT;
-        case ERHIAccessFlags::UNIFORM_READ:                                 return VK_ACCESS_2_UNIFORM_READ_BIT;
-        case ERHIAccessFlags::INPUT_ATTACHMENT_READ:                        return VK_ACCESS_2_INPUT_ATTACHMENT_READ_BIT;
-        case ERHIAccessFlags::SHADER_READ:                                  return VK_ACCESS_2_SHADER_READ_BIT;
-        case ERHIAccessFlags::SHADER_WRITE:                                 return VK_ACCESS_2_SHADER_WRITE_BIT;
-        case ERHIAccessFlags::COLOR_ATTACHMENT_READ:                        return VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT;
-        case ERHIAccessFlags::COLOR_ATTACHMENT_WRITE:                       return VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-        case ERHIAccessFlags::DEPTH_STENCIL_READ:                           return VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
-        case ERHIAccessFlags::DEPTH_STENCIL_WRITE:                          return VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-        case ERHIAccessFlags::TRANSFER_READ:                                return VK_ACCESS_2_TRANSFER_READ_BIT;
-        case ERHIAccessFlags::TRANSFER_WRITE:                               return VK_ACCESS_2_TRANSFER_WRITE_BIT;
-        case ERHIAccessFlags::CPU_READ_BIT:                                 return VK_ACCESS_2_HOST_READ_BIT;
-        case ERHIAccessFlags::CPU_WRITE_BIT:                                return VK_ACCESS_2_HOST_WRITE_BIT;
-        case ERHIAccessFlags::MEMORY_READ:                                  return VK_ACCESS_2_MEMORY_READ_BIT;
-        case ERHIAccessFlags::MEMORY_WRITE:                                 return VK_ACCESS_2_MEMORY_WRITE_BIT;
-        case ERHIAccessFlags::SHADER_SAMPLED_READ:                          return VK_ACCESS_2_SHADER_READ_BIT;
-        case ERHIAccessFlags::SHADER_RESOURCE_VIEW:                         return VK_ACCESS_2_SHADER_READ_BIT;
-        case ERHIAccessFlags::UNORDERED_ACCESS_VIEW:                        return VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-        case ERHIAccessFlags::TRANSFORM_FEEDBACK_WRITE_BIT_EXT:             return VK_ACCESS_2_TRANSFORM_FEEDBACK_WRITE_BIT_EXT;
-        case ERHIAccessFlags::TRANSFORM_FEEDBACK_COUNTER_READ_BIT_EXT:      return VK_ACCESS_2_TRANSFORM_FEEDBACK_COUNTER_READ_BIT_EXT;
-        case ERHIAccessFlags::TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT:     return VK_ACCESS_2_TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT;
-        case ERHIAccessFlags::CONDITIONAL_RENDERING_READ_BIT_EXT:           return VK_ACCESS_2_CONDITIONAL_RENDERING_READ_BIT_EXT;
-        case ERHIAccessFlags::COMMAND_PREPROCESS_READ_BIT_NV:               return VK_ACCESS_2_COMMAND_PREPROCESS_READ_BIT_NV;
-        case ERHIAccessFlags::COMMAND_PREPROCESS_WRITE_BIT_NV:              return VK_ACCESS_2_COMMAND_PREPROCESS_WRITE_BIT_NV;
-        case ERHIAccessFlags::FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT:    return VK_ACCESS_2_FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT_KHR;
-        case ERHIAccessFlags::ACCELERATION_STRUCTURE_READ_BIT:              return VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-        case ERHIAccessFlags::ACCELERATION_STRUCTURE_WRITE_BIT:             return VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
-        case ERHIAccessFlags::FRAGMENT_DENSITY_MAP_READ_BIT_EXT:            return VK_ACCESS_2_FRAGMENT_DENSITY_MAP_READ_BIT_EXT;
-        default:
-            LOG_CRITICAL("Unsupported ERHIAccessFlags: {}", static_cast<uint32_t>(_flags));
-            return VK_ACCESS_FLAG_BITS_MAX_ENUM;
-    }
-    // clang-format on
+    translate_flag(ERHIAccessFlags::INDIRECT_COMMAND_READ, VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
+    translate_flag(ERHIAccessFlags::INDEX_READ, VK_ACCESS_2_INDEX_READ_BIT);
+    translate_flag(ERHIAccessFlags::VERTEX_ATTRIBUTE_READ, VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT);
+    translate_flag(ERHIAccessFlags::UNIFORM_READ, VK_ACCESS_2_UNIFORM_READ_BIT);
+    translate_flag(ERHIAccessFlags::INPUT_ATTACHMENT_READ, VK_ACCESS_2_INPUT_ATTACHMENT_READ_BIT);
+    translate_flag(ERHIAccessFlags::SHADER_READ, VK_ACCESS_2_SHADER_READ_BIT);
+    translate_flag(ERHIAccessFlags::SHADER_WRITE, VK_ACCESS_2_SHADER_WRITE_BIT);
+    translate_flag(ERHIAccessFlags::COLOR_ATTACHMENT_READ, VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT);
+    translate_flag(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+    translate_flag(ERHIAccessFlags::DEPTH_STENCIL_READ, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT);
+    translate_flag(ERHIAccessFlags::DEPTH_STENCIL_WRITE, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+    translate_flag(ERHIAccessFlags::TRANSFER_READ, VK_ACCESS_2_TRANSFER_READ_BIT);
+    translate_flag(ERHIAccessFlags::TRANSFER_WRITE, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+    translate_flag(ERHIAccessFlags::CPU_READ_BIT, VK_ACCESS_2_HOST_READ_BIT);
+    translate_flag(ERHIAccessFlags::CPU_WRITE_BIT, VK_ACCESS_2_HOST_WRITE_BIT);
+    translate_flag(ERHIAccessFlags::MEMORY_READ, VK_ACCESS_2_MEMORY_READ_BIT);
+    translate_flag(ERHIAccessFlags::MEMORY_WRITE, VK_ACCESS_2_MEMORY_WRITE_BIT);
+    translate_flag(ERHIAccessFlags::COMMAND_PREPROCESS_READ_BIT_NV, VK_ACCESS_2_COMMAND_PREPROCESS_READ_BIT_NV);
+    translate_flag(ERHIAccessFlags::COMMAND_PREPROCESS_WRITE_BIT_NV, VK_ACCESS_2_COMMAND_PREPROCESS_WRITE_BIT_NV);
+    translate_flag(ERHIAccessFlags::FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT, VK_ACCESS_2_FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT_KHR);
+    translate_flag(ERHIAccessFlags::FRAGMENT_DENSITY_MAP_READ_BIT_EXT, VK_ACCESS_2_FRAGMENT_DENSITY_MAP_READ_BIT_EXT);
+    translate_flag(ERHIAccessFlags::ACCELERATION_STRUCTURE_READ_BIT, VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+    translate_flag(ERHIAccessFlags::ACCELERATION_STRUCTURE_WRITE_BIT, VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR);
+    translate_flag(ERHIAccessFlags::SHADER_SAMPLED_READ, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+    translate_flag(ERHIAccessFlags::SHADER_RESOURCE_VIEW, VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
+    translate_flag(ERHIAccessFlags::UNORDERED_ACCESS_VIEW, VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+    translate_flag(ERHIAccessFlags::TRANSFORM_FEEDBACK_COUNTER_READ_BIT_EXT, VK_ACCESS_2_TRANSFORM_FEEDBACK_COUNTER_READ_BIT_EXT);
+    translate_flag(ERHIAccessFlags::TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT, VK_ACCESS_2_TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT);
+    translate_flag(ERHIAccessFlags::TRANSFORM_FEEDBACK_WRITE_BIT_EXT,   VK_ACCESS_2_TRANSFORM_FEEDBACK_WRITE_BIT_EXT);
+    translate_flag(ERHIAccessFlags::CONDITIONAL_RENDERING_READ_BIT_EXT, VK_ACCESS_2_CONDITIONAL_RENDERING_READ_BIT_EXT);
+    return vk_flags;
 }
 
 VkCullModeFlags VulkanEnumTranslator::METoVKCullModeFlags(ERasterizerCullMode _cull_mode) {
