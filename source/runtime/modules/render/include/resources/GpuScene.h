@@ -47,18 +47,20 @@ namespace Moer {
         TextureBuilder& Height(uint32_t height) noexcept;
         TextureBuilder& Depth(uint32_t depth) noexcept;
         TextureBuilder& Format(EPixelFormat format) noexcept;
-        TextureBuilder& MipLevels(uint32_t mipLevels) noexcept;
+        TextureBuilder& MipAndLayers(uint32_t mip_levels, uint32_t layer_levels, uint32_t* offsets) noexcept;
         TextureBuilder& CallBack(Callback callback) noexcept;
-        TextureBuilder& Data(void* data) noexcept;
+        TextureBuilder& Data(void* data, uint32_t data_size) noexcept;
         RHITextureRef   Build() noexcept;
         ~TextureBuilder() noexcept;
         // static void InitBuild() noexcept;
         // static void EndBuild() noexcept;
     protected:
         EPixelFormat m_format{EPixelFormat::PF_R8G8B8_UNORM};
-        uint32_t     m_width{0}, m_height{0}, m_depth{0}, m_mipLevels{1};
+        uint32_t     m_width{0}, m_height{0}, m_depth{0}, m_mip_levels{1}, m_layer_levels{1}, m_data_size{0};
         Callback     m_callback{nullptr};
-        void*        m_data{nullptr};
+        // uint32_t*    m_mip_offsets{nullptr};
+        uint32_t* m_offsets{nullptr};
+        void*     m_data{nullptr};
     };
 
     class RENDER_API GpuSceneBufferBuilder {

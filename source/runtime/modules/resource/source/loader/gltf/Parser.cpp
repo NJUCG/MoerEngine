@@ -152,34 +152,41 @@ namespace Moer::Resource::Gltf {
 
     void Parser::Impl::LoadTexture(const aiScene* scene, const aiString& texture_path, MaterialInstanceRef& mat, const std::string& param_name) {
         if (m_textures.contains(texture_path.C_Str())) {
-            mat->SetParameter(param_name, m_textures[texture_path.C_Str()]);
+            auto texture = m_textures[texture_path.C_Str()];
+            mat->SetParameter(param_name,texture );
+            SamplerParams params{};
+            params.max_mip_level = texture->GetNumMips();
+            mat->SetParameter("defaultSampler", params);
             return;
         }
 
         int32_t         embedded_id = GetEmbeddedTextureId(texture_path);
         TextureBuilder* builder     = MoerNew(TextureBuilder);
-        int             width, height, channel;
-        void*           data = nullptr;
+        ImageReadDesc   image_desc;
+        
         if (embedded_id >= 0) {
             const aiTexture* texture = scene->mTextures[embedded_id];
-            stbi_load_from_memory(reinterpret_cast<const unsigned char*>(texture->pcData), texture->mWidth, &width, &height, &channel, 4);
-
-            builder->CallBack(&free);
+            image_desc               = ImageIO::ReadFromMemory(reinterpret_cast<unsigned char*>(texture->pcData), texture->mWidth * texture->mHeight * 4);
             //todo
         } else {
             std::filesystem::path texture_file_path = m_file_parent_path / texture_path.C_Str();
-            auto                  image_desc        = ImageIO::ReadFromFile(texture_file_path);
-            width                                   = image_desc.width;
-            height                                  = image_desc.height;
-            channel                                 = image_desc.channal;
-            data                                    = image_desc.data;
-            builder->CallBack(image_desc.data_callback);
+            image_desc                              = ImageIO::ReadFromFile(texture_file_path);
         }
-        builder->Width(width).Height(height).Format(EPixelFormat::PF_R8G8B8A8_UNORM).Data(data);
+        image_desc.CheckValid();
+        builder->Width(image_desc.width)
+            .Height(image_desc.height)
+            .Format(EPixelFormat::PF_R8G8B8A8_UNORM)
+            .Data(image_desc.data, image_desc.data_size)
+            .CallBack(image_desc.data_callback)
+            .MipAndLayers(image_desc.mips, image_desc.layers, image_desc.offsets.data());
+
         EnqueueRenderTask([this, builder, mat, param_name, texture_path]() {
             RHITextureRef texture = builder->Build();
             MoerDelete(builder);
+            SamplerParams params{};
+            params.max_mip_level = texture->GetNumMips();
             mat->SetParameter(param_name, texture);
+            mat->SetParameter("defaultSampler", params);
             m_textures[texture_path.C_Str()] = texture;
         });
     }
@@ -239,7 +246,6 @@ namespace Moer::Resource::Gltf {
         if (ai_material->GetTexture(AI_MATKEY_BASE_COLOR_TEXTURE, &base_color_path) == AI_SUCCESS) {
             LoadTexture(ai_scene, base_color_path, material_instance, "baseColorMap");
         }
-        material_instance->SetParameter("defaultSampler", SamplerParams{});
 
         m_materials[materialName] = material_instance;
     }
