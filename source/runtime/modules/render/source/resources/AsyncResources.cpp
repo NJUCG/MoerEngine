@@ -222,8 +222,9 @@ namespace Moer {
 
         barriers[info.back_buffer_count + 1].SetDstTextureLayout(TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE);
         barriers[info.back_buffer_count + 1].SetSrcTextureLayout(TEXTURE_LAYOUT_UNDEFINED);
+        barriers[info.back_buffer_count + 1].SetDstStage(PS_EARLY_FRAGMENT_TESTS);
         barriers[info.back_buffer_count + 1].SetTexture(depth_texture);
-        barriers[info.back_buffer_count + 1].SetSubResourceRange({});
+        barriers[info.back_buffer_count + 1].SetSubResourceRange(RHISubresourceRange(ETextureAspectFlags::DEPTH_SLICE));
 
         copy_cmd_list->BeginRecording();
         copy_cmd_list->SetPipelineBarrier(barrier_info);

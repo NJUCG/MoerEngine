@@ -916,6 +916,18 @@ RHIUAVRef VulkanRHIImpl::RHICreateUAVInner(RHIViewableResource* _resource, const
     return create_texture_uav();
 }
 
+RHICBVRef VulkanRHIImpl::RHICreateCBV(RHIBuffer* _buffer, uint64_t _byte_size, uint64_t _offset) {
+    auto* vk_buffer = static_cast<VulkanRHIBuffer*>(_buffer);
+    VK_CHECK_NULLPTR(vk_buffer, "RHICreateCBV: buffer to be viewed is nullptr!", return RHICBVRef{});
+    auto create_info = RHIViewInfo::CreateBufferCBVInfo()
+                           .SetByteOffset(_offset)
+                           .SetStride(_buffer->GetStride())
+                           .SetNumElements(_byte_size / _buffer->GetStride());
+
+    VulkanRHICBV* vk_cbv = MoerNew(VulkanRHICBV)(m_device, _buffer, std::move(create_info));
+    return RHICBVRef(vk_cbv);
+}
+
 RHICommandQueue* VulkanRHIImpl::RHICreateCommandQueue(ECommandQueueType _type) {
     return MoerNew(VulkanRHICommandQueue(m_device, _type));
 }
@@ -971,10 +983,13 @@ void VulkanRHIImpl::RHISetBatchedShaderParametersInner(RHIResource* _pso, const 
 
             if (view->IsBuffer()) {
                 auto* buffer = static_cast<VulkanRHIBuffer*>(view->GetBuffer());
+
+                const auto& buffer_view_info = view->GetInfo().buffer;
+                auto        offset           = view->IsCBV() ? buffer_view_info.cbv.byte_offset : (view->IsSRV() ? buffer_view_info.srv.byte_offset : buffer_view_info.uav.byte_offset);
                 writers[params.space].WriteBuffer(
                     params.space,
                     params.slot,
-                    {buffer->GetHandle(), 0, buffer->GetInfo().size},
+                    {buffer->GetHandle(), offset, buffer->GetInfo().size},
                     binding_info.count,
                     binding_info.type);
             } else if (view->IsSRV()) {

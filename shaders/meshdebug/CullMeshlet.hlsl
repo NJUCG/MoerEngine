@@ -1,9 +1,16 @@
 #include "framework/Common.hlsl"
 struct MeshletCullInput {
-  CameraData camera_data;
   uint counter_buffer_offset;
   uint draw_cmd_buffer_offset;
 };
+
+struct CameraCullData {
+  CameraData camera_data;
+  float4 planes[6]; // world space planes
+};
+
+[[vk::binding(0, 0)]] ConstantBuffer<CameraCullData> cull_data : register(b0);
+
 [[vk::binding(0, 0)]] StructuredBuffer<InstanceData> instance_data
     : register(t0, space0);
 [[vk::binding(1, 0)]] StructuredBuffer<InstanceMeshletInfo>
@@ -25,7 +32,21 @@ struct MeshletCullInput {
 
 [[vk::push_constant]] ConstantBuffer<MeshletCullInput> input;
 
-bool IsMeshletVisible(in MeshletBound bound) { return true; }
+bool IsMeshletVisible(in MeshletBound bound, in float4x4 world,
+                      in float scale) {
+  float4 center = mul(float4(bound.center, 1.0f), world);
+  float radius = bound.radius * scale;
+
+  for (uint i = 0; i < 6; i++) {
+    if (dot(center, cull_data.planes[i]) < -radius) {
+      return false;
+    }
+  }
+  // not do back face cull now
+
+  // occclusion cull
+  return true;
+}
 
 [numthreads(64, 1, 1)] void main(uint3 dtid
                                  : SV_DispatchThreadID) {
@@ -37,8 +58,10 @@ bool IsMeshletVisible(in MeshletBound bound) { return true; }
   }
   InstanceMeshletCullInfo cull_info = instance_meshlet_cull_info[dtid.x];
 
+  InstanceData data = instance_data[cull_info.instance_id];
   MeshletBound bound = meshlet_bound_buffer[cull_info.meshlet_id];
-  bool visible = IsMeshletVisible(bound);
+
+  bool visible = IsMeshletVisible(bound, data.model2world, data.scale);
 
   uint wave_meshlet_count = WaveActiveCountBits(visible);
   uint cmd_offset = 0;

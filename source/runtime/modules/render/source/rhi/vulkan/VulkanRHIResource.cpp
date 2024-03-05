@@ -1393,6 +1393,11 @@ void VulkanRHIFence::Wait(uint64_t value) {
 #pragma endregion
 
 #pragma region viewable resources view definitions
+VulkanRHICBV::~VulkanRHICBV() {
+ 
+}
+
+
 VulkanRHITextureUAV::~VulkanRHITextureUAV() {
     if (m_view != VK_NULL_HANDLE) {
         vkDestroyImageView(m_device->GetDevice(), m_view, VK_NULL_HANDLE);

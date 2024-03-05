@@ -3,17 +3,22 @@
 struct CameraData {
   float4x4 view;
   float4x4 view_proj;
+  float4x4 prev_view_proj;
 };
 
 struct InstanceData {
   float4x4 model2world;
   float4x4 inv_model2world;
+  float scale;
+  float padding;
   uint material_id;
   uint material_type;
 };
 
 struct InstanceMeshletInfo {
+  float3 center;
   uint vertex_offset;
+  float3 extent;
   uint vertex_count;
   uint index_offset;
   uint index_count;

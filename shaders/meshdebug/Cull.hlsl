@@ -12,14 +12,28 @@ StructuredBuffer<MeshletDesc> meshlet_info_buffer : register(t0, space0);
 
 StructuredBuffer<MeshletBound> meshlet_bound_buffer : register(t1, space0);
 
+StructuredBuffer<InstanceMeshletInfo> instance_meshlet_cull_info_buffer
+    : register(t2, space0);
+
 RWByteAddressBuffer draw_count_buffer : register(u0, space1);
 
 RWByteAddressBuffer draw_indirect_buffer : register(u1, space1);
 
+bool IsInstanceInsideFrustum(in InstanceMeshletInfo instance_info) {
+  // Frustum culling logic goes here
+  // Return true if the instance is inside the frustum, false otherwise
+  float4 frustum_planes[6];
+
+  return true;
+}
 // Function to check if a vertex is inside the frustum
 bool IsMeshletInsideFrustum(in MeshletBound meshlet_info) {
   // Frustum culling logic goes here
   // Return true if the vertex is inside the frustum, false otherwise
+  float4 frustum_planes[6];
+
+  // Extract the frustum planes from the view-projection matrix
+
   return true;
 }
 

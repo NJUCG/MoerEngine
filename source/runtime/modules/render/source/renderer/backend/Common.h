@@ -8,6 +8,7 @@ namespace Moer {
         RenderResources*        render_resources;
         uint64_t                frame_index;
         uint32_t                frame_offset;
+        RHIUAVRef               target_attachment;
     };
 }// namespace Moer
 
