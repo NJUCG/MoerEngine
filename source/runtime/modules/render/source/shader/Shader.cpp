@@ -45,37 +45,75 @@ const Hash64City& Shader::GetCompiledHash() const {
 
 namespace Utils {
     EShaderCodeResourceBindingType BindingTypeStrToEnum(std::string_view _binding_type_str) {
-        std::regex binding_type_regex("(RW)?(Buffer|Texture2D|Texture2DArray|Texture3D|TextureCube|TextureCubeArray|Sampler|AccelerationStructure).*");
+        std::regex binding_type_regex("(RW)?(ConstantBuffer"
+                                      "|StructuredBuffer(<([a-zA-Z]+)>)?"
+                                      "|ByteAddressBuffer"
+                                      "|Texture2D(<([a-zA-Z]+)>)?"
+                                      "|Texture2DArray<([a-zA-Z]+)>"
+                                      "|Texture3D<([a-zA-Z]+)>"
+                                      "|TextureCube<([a-zA-Z]+)>"
+                                      "|TextureCubeArray<([a-zA-Z]+)>"
+                                      "|SamplerState"
+                                      "|AccelerationStructure)");
         using SVMatchResults = std::match_results<std::string_view::const_iterator>;
         SVMatchResults match;
 
+        static constexpr std::string_view structured_buffer     = "StructuredBuffer";
+        static constexpr std::string_view constant_buffer       = "ConstantBuffer";
+        static constexpr std::string_view byte_addressed_buffer = "ByteAddressBuffer";
+
         if (std::regex_search(_binding_type_str.begin(), _binding_type_str.end(), match, binding_type_regex)) {
-            if (match[0] == "Buffer") {
-                return EShaderCodeResourceBindingType::BUFFER;
-            } else if (match[0] == "Texture2D") {
-                return EShaderCodeResourceBindingType::TEXTURE_2D;
-            } else if (match[0] == "Texture2DArray") {
-                return EShaderCodeResourceBindingType::TEXTURE_2D_ARRAY;
-            } else if (match[0] == "Texture3D") {
-                return EShaderCodeResourceBindingType::TEXTURE_3D;
-            } else if (match[0] == "TextureCube") {
-                return EShaderCodeResourceBindingType::TEXTURE_CUBE;
-            } else if (match[0] == "TextureCubeArray") {
-                return EShaderCodeResourceBindingType::TEXTURE_CUBE_ARRAY;
-            } else if (match[0] == "Sampler") {
-                return EShaderCodeResourceBindingType::SAMPLER;
-            } else if (match[0] == "AccelerationStructure") {
-                return EShaderCodeResourceBindingType::RAYTRACING_ACCELERATION_STRUCTURE;
-            } else if (match[0] == "RWBuffer") {
-                return EShaderCodeResourceBindingType::RW_BUFFER;
-            } else if (match[0] == "RWTexture2D") {
+
+            if (match[0].str().find("RWStructuredBuffer") != std::string_view::npos) {
+                return EShaderCodeResourceBindingType::RW_STRUCTURED_BUFFER;
+            }
+            if (match[0].str().find("RWByteAddressBuffer") != std::string_view::npos) {
+                return EShaderCodeResourceBindingType::RW_BYTE_ADDRESSED_BUFFER;
+            }
+
+            if (match[0].str().find("RWTexture2D") != std::string_view::npos) {
                 return EShaderCodeResourceBindingType::RW_TEXTURE_2D;
-            } else if (match[0] == "RWTexture2DArray") {
+            }
+            if (match[0].str().find("RWTexture2DArray") != std::string_view::npos) {
                 return EShaderCodeResourceBindingType::RW_TEXTURE_2D_ARRAY;
-            } else if (match[0] == "RWTexture3D") {
+            }
+            if (match[0].str().find("RWTexture3D") != std::string_view::npos) {
                 return EShaderCodeResourceBindingType::RW_TEXTURE_3D;
-            } else if (match[0] == "RWTextureCube") {
+            }
+            if (match[0].str().find("RWTextureCube") != std::string_view::npos) {
                 return EShaderCodeResourceBindingType::RW_TEXTURE_CUBE;
+            }
+            if (match[0].str().find(constant_buffer) != std::string_view::npos) {
+                return EShaderCodeResourceBindingType::CONSTANT_BUFFER;
+            }
+            if (match[0].str().find(structured_buffer) != std::string_view::npos) {
+                return EShaderCodeResourceBindingType::STRUCTURED_BUFFER;
+            }
+
+            if (match[0] == byte_addressed_buffer.data()) {
+                return EShaderCodeResourceBindingType::BYTE_ADDRESS_BUFFER;
+            }
+
+            if (match[0].str().find("Texture2D") != std::string_view::npos) {
+                return EShaderCodeResourceBindingType::TEXTURE_2D;
+            }
+            if (match[0].str().find("Texture2DArray") != std::string_view::npos) {
+                return EShaderCodeResourceBindingType::TEXTURE_2D_ARRAY;
+            }
+            if (match[0].str().find("Texture3D") != std::string_view::npos) {
+                return EShaderCodeResourceBindingType::TEXTURE_3D;
+            }
+            if (match[0] == "TextureCube") {
+                return EShaderCodeResourceBindingType::TEXTURE_CUBE;
+            }
+            if (match[0] == "TextureCubeArray") {
+                return EShaderCodeResourceBindingType::TEXTURE_CUBE_ARRAY;
+            }
+            if (match[0] == "Sampler") {
+                return EShaderCodeResourceBindingType::SAMPLER;
+            }
+            if (match[0] == "AccelerationStructure") {
+                return EShaderCodeResourceBindingType::RAYTRACING_ACCELERATION_STRUCTURE;
             }
         }
         return EShaderCodeResourceBindingType::INVALID;

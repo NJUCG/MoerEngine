@@ -8,6 +8,7 @@
 #include "Core.h"
 #include "taskgraph/TaskGraph.h"
 #include "taskgraph/ThreadManager.h"
+#include <cstdint>
 #include <type_traits>
 
 enum class ERHIType {
@@ -58,12 +59,7 @@ public:
 
 #pragma region resources creation
 
-    virtual RHISamplerRef            RHICreateSampler(const RHISamplerInitializer& _initializer)                = 0;
-    virtual RHIRasterizationStateRef RHICreateRasterizationState(const RHIRasterizationStateInitializer& _init) = 0;
-    virtual RHIDepthStencilStateRef  RHICreateDepthStencilState(const RHIDepthStencilStateInitializer& _init)   = 0;
-    virtual RHIMultisampleStateRef   RHICreateMultiSampleState(const RHIMultisampleStateInitializer& _init)     = 0;
-    virtual RHIBlendStateRef         RHICreateBlendState(const RHIBlendStateInitializer& _init)                 = 0;
-    virtual RHIVertexInputStateRef   RHICreateVertexInputState(const VertexInputStateInitializerList& _init)    = 0;
+    virtual RHISamplerRef RHICreateSampler(const RHISamplerCreateInfo& _initializer) = 0;
 
     virtual RHIComputeShaderRef RHICreateComputeShader(const class ShaderCodeEntry*, const Shader*) = 0;
 
@@ -85,23 +81,16 @@ public:
 
     virtual RHIFenceRef RHICreateFence(const RHIFenceCreateInfo&) = 0;
 
-    virtual RHIShaderBoundStateRef RHICreateShaderBoundStage(
-        RHIVertexInputState* _vertex_input,
-        RHIVertexShader*     _vertex_shader,
-        RHIFragmentShader*   _fragment_shader,
-        RHIGeometryShader*   _geometry_shader) = 0;
+    virtual RHIGraphicsPipelineStateRef RHICreateGraphicsPSO(RHIGraphicsPSOCreateInfo&& _init) = 0;
+    /* create pso from cache */
+    // virtual RHIGraphicsPipelineStateRef RHICreateGraphicsPipelineState(const RHIGraphicsPipelineStateInfo& _init, RHIPipelineBinaryDataLibrary* _pipeline_library) {
+    //     return RHICreateGraphicsPipelineState(_init);
+    // }
 
-    virtual RHIGraphicsPipelineStateRef RHICreateGraphicsPipelineState(const RHIGraphicsPipelineStateInitializer& _init) = 0;
+    virtual RHIComputePipelineStateRef RHICreateComputePipelineState(RHIShader* _compute_shader) = 0;
 
     /* create pso from cache */
-    virtual RHIGraphicsPipelineStateRef RHICreateGraphicsPipelineState(const RHIGraphicsPipelineStateInitializer& _init, RHIPipelineBinaryDataLibrary* _pipeline_library) {
-        return RHICreateGraphicsPipelineState(_init);
-    }
-
-    virtual RHIComputePipelineStateRef RHICreateComputePipelineState(RHIComputeShader* _compute_shader) = 0;
-
-    /* create pso from cache */
-    virtual RHIComputePipelineStateRef RHICreateComputePipelineState(RHIComputeShader* _compute_shader, RHIPipelineBinaryDataLibrary* _pipeline_library) {
+    virtual RHIComputePipelineStateRef RHICreateComputePipelineState(RHIShader* _compute_shader, RHIPipelineBinaryDataLibrary* _pipeline_library) {
         return RHICreateComputePipelineState(_compute_shader);
     }
 
@@ -122,14 +111,62 @@ public:
 
     virtual RHIRayTracingTLASRef RHIBuildRayTracingTLAS(const RHIRayTracingTLASInitializer& _init) = 0;
 
-    virtual RHIBufferRef RHICreateBuffer(const RHIBufferCreateInfo& info)                   = 0;
+    template<typename TElement>
+        requires(std::is_trivially_copyable_v<TElement> && std::is_standard_layout_v<TElement>)
+    RHIBufferRef RHICreateBuffer(uint64_t _byte_size, EBufferUsageFlags _usage) {
+        auto create_info = RHIBufferCreateInfo::Create(_byte_size, sizeof(TElement), _usage);
+        return RHICreateBufferInner(create_info);
+    }
+    virtual RHIBufferRef RHICreateStagingBuffer(uint64_t _byte_size)                        = 0;
     virtual void*        RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size) = 0;
     virtual void         RHIUnmapBuffer(RHIBuffer* _buffer)                                 = 0;
 
     virtual RHITextureRef RHICreateTexture(const RHITextureCreateInfo& info) = 0;
 
-    virtual RHIShaderResourceViewRef  RHICreateShaderResourceView(RHIViewableResource* _resource, const RHIViewInfo& _view_info)  = 0;
-    virtual RHIUnorderedAccessViewRef RHICreateUnorderedAccessView(RHIViewableResource* _resource, const RHIViewInfo& _view_info) = 0;
+    template<typename TElement>
+        requires(std::is_trivially_copyable_v<TElement> && std::is_standard_layout_v<TElement>)
+    RHISRVRef RHICreateBufferSRV(
+        RHIBuffer* _resource,
+        uint64_t   _byte_size   = 0,
+        uint64_t   _byte_offset = 0) {
+        return RHICreateBufferSRV(_resource, sizeof(TElement), _byte_size, _byte_offset);
+    };
+
+    RHISRVRef RHICreateBufferSRV(
+        RHIBuffer* _resource,
+        uint32_t   stride       = 0,
+        uint64_t   _byte_size   = 0,
+        uint64_t   _byte_offset = 0);
+
+    template<typename TElement>
+        requires(std::is_trivially_copyable_v<TElement> && std::is_standard_layout_v<TElement>)
+    RHIUAVRef RHICreateBufferUAV(
+        RHIBuffer* _resource,
+        uint64_t   _byte_size   = 0,
+        uint64_t   _byte_offset = 0) {
+        return RHICreateBufferUAV(_resource, sizeof(TElement), _byte_size, _byte_offset);
+    };
+
+    RHIUAVRef RHICreateBufferUAV(
+        RHIBuffer* _resource,
+        uint32_t   stride       = 0,
+        uint64_t   _byte_size   = 0,
+        uint64_t   _byte_offset = 0);
+
+    RHISRVRef RHICreateTextureSRV(
+        RHITexture*  _resource,
+        EPixelFormat _format      = PF_UNDEFINED,
+        uint32_t     _mip_level   = 0,
+        uint32_t     _mip_levels  = 1,
+        uint32_t     _array_index = 0,
+        uint32_t     _array_size  = 1);
+
+    RHIUAVRef RHICreateTextureUAV(
+        RHITexture*  _resource,
+        EPixelFormat _format      = PF_UNDEFINED,
+        uint32_t     _mip_level   = 0,
+        uint32_t     _array_index = 0,
+        uint32_t     _array_size  = 1);
 
     virtual RHICommandQueue* RHICreateCommandQueue(ECommandQueueType type) = 0;
     // DX12 only: _initial_state
@@ -147,14 +184,6 @@ public:
     virtual RHICommandAllocator* RHIGetCurrentCommandAllocator() = 0;
 #pragma endregion
 
-    // #pragma region GUI
-
-    // virtual bool GUIInit(uint32_t _num_frames_in_flight);
-    // virtual void GUIShutDown();
-    // virtual void GUINewFrame();
-    // virtual void GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list);
-    // #pragma endregion
-
 #pragma region Viewport
 
     virtual RHIViewport* RHIGetMainViewport() = 0;
@@ -165,7 +194,7 @@ public:
 
     virtual RHIViewportNextBackBufferInfo RHIGetNextFrameViewportBufferInfo(RHIViewport* _viewport) = 0;
 
-    virtual RHIUnorderedAccessView* RHIGetViewportBackBufferUAV(RHIViewport* _viewport, uint32_t index) = 0;
+    virtual RHIUAV* RHIGetViewportBackBufferUAV(RHIViewport* _viewport, uint32_t index) = 0;
 
     virtual void RHIPresentViewport(RHIViewport* _viewport, RHIFence* _render_end_fence) = 0;
 #pragma endregion
@@ -175,7 +204,10 @@ public:
     void RHIFlushPendingDeletes();
 #pragma endregion
 protected:
-    virtual void RHISetBatchedShaderParametersInner(RHIResource* _resource, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) = 0;
+    virtual void         RHISetBatchedShaderParametersInner(RHIResource* _resource, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) = 0;
+    virtual RHIBufferRef RHICreateBufferInner(const RHIBufferCreateInfo& info)                                                                                 = 0;
+    virtual RHISRVRef    RHICreateSRVInner(RHIViewableResource* _resource, const RHIViewInfo& _view_info)                                                      = 0;
+    virtual RHIUAVRef    RHICreateUAVInner(RHIViewableResource* _resource, const RHIViewInfo& _view_info)                                                      = 0;
 
 protected:
     RHIInfo m_rhi_info;

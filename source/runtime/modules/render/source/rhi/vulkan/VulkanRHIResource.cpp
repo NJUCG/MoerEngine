@@ -673,102 +673,79 @@ VkFilter VulkanEnumTranslator::METoVKImageFilter(ESamplerFilter _filter) {
 }
 
 VkPipelineStageFlags2 VulkanEnumTranslator::METoVkPipelineStageFlags2(ERHIPipelineStageFlags _flags) {
-    // translate flags
-    switch (_flags) {
-        case PS_NONE:
-            return VK_PIPELINE_STAGE_2_NONE;
-        case PS_TOP_OF_PIPE:
-            return VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-        case PS_DRAW_INDIRECT:
-            return VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
-        case PS_VERTEX_INPUT:
-            return VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT;
-        case PS_VERTEX_SHADER:
-            return VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
-        case PS_TESSELLATION_CONTROL_SHADER:
-            return VK_PIPELINE_STAGE_2_TESSELLATION_CONTROL_SHADER_BIT;
-        case PS_TESSELLATION_EVALUATION_SHADER:
-            return VK_PIPELINE_STAGE_2_TESSELLATION_EVALUATION_SHADER_BIT;
-        case PS_GEOMETRY_SHADER:
-            return VK_PIPELINE_STAGE_2_GEOMETRY_SHADER_BIT;
-        case PS_FRAGMENT_SHADER:
-            return VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-        case PS_EARLY_FRAGMENT_TESTS:
-            return VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT;
-        case PS_LATE_FRAGMENT_TESTS:
-            return VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
-        case PS_COLOR_ATTACHMENT_OUTPUT:
-            return VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-        case PS_COMPUTE_SHADER:
-            return VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        case PS_TRANSFER:
-            return VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-        case PS_BOTTOM_OF_PIPE:
-            return VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT;
-        case PS_HOST:
-            return VK_PIPELINE_STAGE_2_HOST_BIT;
-        case PS_ALL_GRAPHICS:
-            return VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT;
-        case PS_ALL_COMMANDS:
-            return VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-        case PS_CONDITIONAL_RENDERING:
-            return VK_PIPELINE_STAGE_2_CONDITIONAL_RENDERING_BIT_EXT;
-        case PS_ACCELERATION_STRUCTURE_BUILD:
-            return VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
-        case PS_RAY_TRACING_SHADER:
-            return VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
-        case PS_FRAGMENT_DENSITY_PROCESS:
-            return VK_PIPELINE_STAGE_2_FRAGMENT_DENSITY_PROCESS_BIT_EXT;
-        case PS_TASK_SHADER:
-            return VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_NV;
-        case PS_MESH_SHADER:
-            return VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_NV;
-        case PS_COMMAND_PREPROCESS_BIT_NV:
-            return VK_PIPELINE_STAGE_2_COMMAND_PREPROCESS_BIT_NV;
-        default:
-            return VkPipelineStageFlags2(_flags);// MARK...
-    }
+    VkPipelineStageFlags2 vk_flags = VK_PIPELINE_STAGE_2_NONE;
+
+    auto translate_flag = [&vk_flags, &_flags](ERHIPipelineStageFlags _search_me_flags, VkPipelineStageFlags2 _added_if_found, VkPipelineStageFlags2 _added_if_not_found = 0) {
+        const bool has_flag = (_flags & _search_me_flags) == _search_me_flags;
+        vk_flags |= has_flag ? _added_if_found : _added_if_not_found;
+    };
+
+    translate_flag(PS_TOP_OF_PIPE, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT);
+    translate_flag(PS_DRAW_INDIRECT, VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT);
+    translate_flag(PS_VERTEX_INPUT, VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT);
+    translate_flag(PS_VERTEX_SHADER, VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT);
+    translate_flag(PS_TESSELLATION_CONTROL_SHADER, VK_PIPELINE_STAGE_2_TESSELLATION_CONTROL_SHADER_BIT);
+    translate_flag(PS_TESSELLATION_EVALUATION_SHADER, VK_PIPELINE_STAGE_2_TESSELLATION_EVALUATION_SHADER_BIT);
+    translate_flag(PS_GEOMETRY_SHADER, VK_PIPELINE_STAGE_2_GEOMETRY_SHADER_BIT);
+    translate_flag(PS_FRAGMENT_SHADER, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
+    translate_flag(PS_EARLY_FRAGMENT_TESTS, VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT);
+    translate_flag(PS_LATE_FRAGMENT_TESTS, VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT);
+    translate_flag(PS_COLOR_ATTACHMENT_OUTPUT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT);
+    translate_flag(PS_COMPUTE_SHADER, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
+    translate_flag(PS_TRANSFER, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
+    translate_flag(PS_BOTTOM_OF_PIPE, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
+    translate_flag(PS_HOST, VK_PIPELINE_STAGE_2_HOST_BIT);
+    translate_flag(PS_ALL_GRAPHICS, VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT);
+    translate_flag(PS_ALL_COMMANDS, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+    translate_flag(PS_CONDITIONAL_RENDERING, VK_PIPELINE_STAGE_2_CONDITIONAL_RENDERING_BIT_EXT);
+    translate_flag(PS_ACCELERATION_STRUCTURE_BUILD, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR);
+    translate_flag(PS_RAY_TRACING_SHADER, VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR);
+    translate_flag(PS_FRAGMENT_DENSITY_PROCESS, VK_PIPELINE_STAGE_2_FRAGMENT_DENSITY_PROCESS_BIT_EXT);
+    translate_flag(PS_TASK_SHADER, VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_NV);
+    translate_flag(PS_MESH_SHADER, VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_NV);
+    translate_flag(PS_COMMAND_PREPROCESS_BIT_NV, VK_PIPELINE_STAGE_2_COMMAND_PREPROCESS_BIT_NV);
+    return vk_flags;
 }
 
 VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) {
+
+    VkAccessFlags2 vk_flags       = VK_ACCESS_2_NONE;
+    auto           translate_flag = [&vk_flags, &_flags](ERHIAccessFlags _search_me_flags, VkAccessFlags2 _added_if_found, VkAccessFlags2 _added_if_not_found = 0) {
+        const bool has_flag = (_flags & _search_me_flags) == _search_me_flags;
+        vk_flags |= has_flag ? _added_if_found : _added_if_not_found;
+    };
     // clang-format off
-    switch (_flags) {
-        case ERHIAccessFlags::UNDEFINED:                                    return VK_ACCESS_2_NONE;
-        case ERHIAccessFlags::INDIRECT_COMMAND_READ:                        return VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
-        case ERHIAccessFlags::INDEX_READ:                                   return VK_ACCESS_2_INDEX_READ_BIT;
-        case ERHIAccessFlags::VERTEX_ATTRIBUTE_READ:                        return VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT;
-        case ERHIAccessFlags::UNIFORM_READ:                                 return VK_ACCESS_2_UNIFORM_READ_BIT;
-        case ERHIAccessFlags::INPUT_ATTACHMENT_READ:                        return VK_ACCESS_2_INPUT_ATTACHMENT_READ_BIT;
-        case ERHIAccessFlags::SHADER_READ:                                  return VK_ACCESS_2_SHADER_READ_BIT;
-        case ERHIAccessFlags::SHADER_WRITE:                                 return VK_ACCESS_2_SHADER_WRITE_BIT;
-        case ERHIAccessFlags::COLOR_ATTACHMENT_READ:                        return VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT;
-        case ERHIAccessFlags::COLOR_ATTACHMENT_WRITE:                       return VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-        case ERHIAccessFlags::DEPTH_STENCIL_READ:                           return VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
-        case ERHIAccessFlags::DEPTH_STENCIL_WRITE:                          return VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-        case ERHIAccessFlags::TRANSFER_READ:                                return VK_ACCESS_2_TRANSFER_READ_BIT;
-        case ERHIAccessFlags::TRANSFER_WRITE:                               return VK_ACCESS_2_TRANSFER_WRITE_BIT;
-        case ERHIAccessFlags::CPU_READ_BIT:                                 return VK_ACCESS_2_HOST_READ_BIT;
-        case ERHIAccessFlags::CPU_WRITE_BIT:                                return VK_ACCESS_2_HOST_WRITE_BIT;
-        case ERHIAccessFlags::MEMORY_READ:                                  return VK_ACCESS_2_MEMORY_READ_BIT;
-        case ERHIAccessFlags::MEMORY_WRITE:                                 return VK_ACCESS_2_MEMORY_WRITE_BIT;
-        case ERHIAccessFlags::SHADER_SAMPLED_READ:                          return VK_ACCESS_2_SHADER_READ_BIT;
-        case ERHIAccessFlags::SHADER_RESOURCE_VIEW:                         return VK_ACCESS_2_SHADER_READ_BIT;
-        case ERHIAccessFlags::UNORDERED_ACCESS_VIEW:                        return VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-        case ERHIAccessFlags::TRANSFORM_FEEDBACK_WRITE_BIT_EXT:             return VK_ACCESS_2_TRANSFORM_FEEDBACK_WRITE_BIT_EXT;
-        case ERHIAccessFlags::TRANSFORM_FEEDBACK_COUNTER_READ_BIT_EXT:      return VK_ACCESS_2_TRANSFORM_FEEDBACK_COUNTER_READ_BIT_EXT;
-        case ERHIAccessFlags::TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT:     return VK_ACCESS_2_TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT;
-        case ERHIAccessFlags::CONDITIONAL_RENDERING_READ_BIT_EXT:           return VK_ACCESS_2_CONDITIONAL_RENDERING_READ_BIT_EXT;
-        case ERHIAccessFlags::COMMAND_PREPROCESS_READ_BIT_NV:               return VK_ACCESS_2_COMMAND_PREPROCESS_READ_BIT_NV;
-        case ERHIAccessFlags::COMMAND_PREPROCESS_WRITE_BIT_NV:              return VK_ACCESS_2_COMMAND_PREPROCESS_WRITE_BIT_NV;
-        case ERHIAccessFlags::FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT:    return VK_ACCESS_2_FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT_KHR;
-        case ERHIAccessFlags::ACCELERATION_STRUCTURE_READ_BIT:              return VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-        case ERHIAccessFlags::ACCELERATION_STRUCTURE_WRITE_BIT:             return VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
-        case ERHIAccessFlags::FRAGMENT_DENSITY_MAP_READ_BIT_EXT:            return VK_ACCESS_2_FRAGMENT_DENSITY_MAP_READ_BIT_EXT;
-        default:
-            LOG_CRITICAL("Unsupported ERHIAccessFlags: {}", static_cast<uint32_t>(_flags));
-            return VK_ACCESS_FLAG_BITS_MAX_ENUM;
-    }
-    // clang-format on
+    translate_flag(ERHIAccessFlags::INDIRECT_COMMAND_READ, VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
+    translate_flag(ERHIAccessFlags::INDEX_READ, VK_ACCESS_2_INDEX_READ_BIT);
+    translate_flag(ERHIAccessFlags::VERTEX_ATTRIBUTE_READ, VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT);
+    translate_flag(ERHIAccessFlags::UNIFORM_READ, VK_ACCESS_2_UNIFORM_READ_BIT);
+    translate_flag(ERHIAccessFlags::INPUT_ATTACHMENT_READ, VK_ACCESS_2_INPUT_ATTACHMENT_READ_BIT);
+    translate_flag(ERHIAccessFlags::SHADER_READ, VK_ACCESS_2_SHADER_READ_BIT);
+    translate_flag(ERHIAccessFlags::SHADER_WRITE, VK_ACCESS_2_SHADER_WRITE_BIT);
+    translate_flag(ERHIAccessFlags::COLOR_ATTACHMENT_READ, VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT);
+    translate_flag(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+    translate_flag(ERHIAccessFlags::DEPTH_STENCIL_READ, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT);
+    translate_flag(ERHIAccessFlags::DEPTH_STENCIL_WRITE, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+    translate_flag(ERHIAccessFlags::TRANSFER_READ, VK_ACCESS_2_TRANSFER_READ_BIT);
+    translate_flag(ERHIAccessFlags::TRANSFER_WRITE, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+    translate_flag(ERHIAccessFlags::CPU_READ_BIT, VK_ACCESS_2_HOST_READ_BIT);
+    translate_flag(ERHIAccessFlags::CPU_WRITE_BIT, VK_ACCESS_2_HOST_WRITE_BIT);
+    translate_flag(ERHIAccessFlags::MEMORY_READ, VK_ACCESS_2_MEMORY_READ_BIT);
+    translate_flag(ERHIAccessFlags::MEMORY_WRITE, VK_ACCESS_2_MEMORY_WRITE_BIT);
+    translate_flag(ERHIAccessFlags::COMMAND_PREPROCESS_READ_BIT_NV, VK_ACCESS_2_COMMAND_PREPROCESS_READ_BIT_NV);
+    translate_flag(ERHIAccessFlags::COMMAND_PREPROCESS_WRITE_BIT_NV, VK_ACCESS_2_COMMAND_PREPROCESS_WRITE_BIT_NV);
+    translate_flag(ERHIAccessFlags::FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT, VK_ACCESS_2_FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT_KHR);
+    translate_flag(ERHIAccessFlags::FRAGMENT_DENSITY_MAP_READ_BIT_EXT, VK_ACCESS_2_FRAGMENT_DENSITY_MAP_READ_BIT_EXT);
+    translate_flag(ERHIAccessFlags::ACCELERATION_STRUCTURE_READ_BIT, VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+    translate_flag(ERHIAccessFlags::ACCELERATION_STRUCTURE_WRITE_BIT, VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR);
+    translate_flag(ERHIAccessFlags::SHADER_SAMPLED_READ, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+    translate_flag(ERHIAccessFlags::SHADER_RESOURCE_VIEW, VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
+    translate_flag(ERHIAccessFlags::UNORDERED_ACCESS_VIEW, VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+    translate_flag(ERHIAccessFlags::TRANSFORM_FEEDBACK_COUNTER_READ_BIT_EXT, VK_ACCESS_2_TRANSFORM_FEEDBACK_COUNTER_READ_BIT_EXT);
+    translate_flag(ERHIAccessFlags::TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT, VK_ACCESS_2_TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT);
+    translate_flag(ERHIAccessFlags::TRANSFORM_FEEDBACK_WRITE_BIT_EXT,   VK_ACCESS_2_TRANSFORM_FEEDBACK_WRITE_BIT_EXT);
+    translate_flag(ERHIAccessFlags::CONDITIONAL_RENDERING_READ_BIT_EXT, VK_ACCESS_2_CONDITIONAL_RENDERING_READ_BIT_EXT);
+    return vk_flags;
 }
 
 VkCullModeFlags VulkanEnumTranslator::METoVKCullModeFlags(ERasterizerCullMode _cull_mode) {
@@ -827,32 +804,101 @@ VkPolygonMode VulkanEnumTranslator::METoVKPolygonMode(ERasterizerFillMode _fill_
     }
 }
 
+VkBlendOp VulkanEnumTranslator::METoVKBlendOp(EBlendOperation _blend_op) {
+    switch (_blend_op) {
+        case BO_ADD:
+            return VK_BLEND_OP_ADD;
+        case BO_SUBTRACT:
+            return VK_BLEND_OP_SUBTRACT;
+        case BO_REVERSE_SUBTRACT:
+            return VK_BLEND_OP_REVERSE_SUBTRACT;
+        case BO_MIN:
+            return VK_BLEND_OP_MIN;
+        case BO_MAX:
+            return VK_BLEND_OP_MAX;
+        default:
+            LOG_CRITICAL("Unsupported color blend operation: {}", static_cast<uint32_t>(_blend_op));
+            return VK_BLEND_OP_MAX_ENUM;
+    }
+}
+VkBlendFactor VulkanEnumTranslator::METoVKBlendFactor(EBlendFactor _blend_factor) {
+    switch (_blend_factor) {
+        case BF_ZERO:
+            return VK_BLEND_FACTOR_ZERO;
+        case BF_ONE:
+            return VK_BLEND_FACTOR_ONE;
+        case BF_SRC_COLOR:
+            return VK_BLEND_FACTOR_SRC_COLOR;
+        case BF_ONE_MINUS_SRC_COLOR:
+            return VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR;
+        case BF_DST_COLOR:
+            return VK_BLEND_FACTOR_DST_COLOR;
+        case BF_ONE_MINUS_DST_COLOR:
+            return VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR;
+        case BF_SRC_ALPHA:
+            return VK_BLEND_FACTOR_SRC_ALPHA;
+        case BF_ONE_MINUS_SRC_ALPHA:
+            return VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        case BF_DST_ALPHA:
+            return VK_BLEND_FACTOR_DST_ALPHA;
+        case BF_ONE_MINUS_DST_ALPHA:
+            return VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA;
+        case BF_CONSTANT_ALPHA:
+            return VK_BLEND_FACTOR_CONSTANT_ALPHA;
+        case BF_ONE_MINUS_CONSTANT_ALPHA:
+            return VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA;
+        case BF_SRC1_COLOR:
+            return VK_BLEND_FACTOR_SRC1_COLOR;
+        case BF_ONE_MINUS_SRC1_COLOR:
+            return VK_BLEND_FACTOR_ONE_MINUS_SRC1_COLOR;
+        case BF_SRC1_ALPHA:
+            return VK_BLEND_FACTOR_SRC1_ALPHA;
+        case BF_ONE_MINUS_SRC1_ALPHA:
+            return VK_BLEND_FACTOR_ONE_MINUS_SRC1_ALPHA;
+        default:
+            LOG_CRITICAL("Unsupported color blend factor: {}", static_cast<uint32_t>(_blend_factor));
+            return VK_BLEND_FACTOR_MAX_ENUM;
+    }
+}
+
 VkDescriptorType VulkanEnumTranslator::METoVKDescriptorType(EShaderParameterType _type, EShaderCodeResourceBindingType _binding_type) {
-    if (_type == EShaderParameterType::SAMPLER && _binding_type == EShaderCodeResourceBindingType::SAMPLER) {
-        return VK_DESCRIPTOR_TYPE_SAMPLER;
-    } else if (_type == EShaderParameterType::SRV && _binding_type == EShaderCodeResourceBindingType::BUFFER) {
-        return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    } else if (_type == EShaderParameterType::UAV && _binding_type == EShaderCodeResourceBindingType::RW_BUFFER) {
-        return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    } else if (_type == EShaderParameterType::SRV && _binding_type == EShaderCodeResourceBindingType::TEXTURE_2D) {
-        return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-    } else if (_type == EShaderParameterType::UAV && _binding_type == EShaderCodeResourceBindingType::RW_TEXTURE_2D) {
-        return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    } else if (_type == EShaderParameterType::CBV) {
-        return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    } else if (_type == EShaderParameterType::SRV && _binding_type == EShaderCodeResourceBindingType::STRUCTURED_BUFFER) {
-        return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    } else if (_type == EShaderParameterType::UAV && _binding_type == EShaderCodeResourceBindingType::RW_STRUCTURED_BUFFER) {
-        return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    } else if (_type == EShaderParameterType::SRV && _binding_type == EShaderCodeResourceBindingType::BYTE_ADDRESSED_BUFFER) {
-        return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    } else if (_type == EShaderParameterType::UAV && _binding_type == EShaderCodeResourceBindingType::RW_BYTE_ADDRESSED_BUFFER) {
-        return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    } else if (_type == EShaderParameterType::SRV && _binding_type == EShaderCodeResourceBindingType::RAYTRACING_ACCELERATION_STRUCTURE) {
-        return VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-    } else {
-        LOG_CRITICAL("Unsupported EShaderParameterType: {} with EShaderCodeResourceBindingType {}", static_cast<uint32_t>(_type), static_cast<uint32_t>(_binding_type));
-        return VK_DESCRIPTOR_TYPE_MAX_ENUM;
+
+    auto is_texture = [](EShaderCodeResourceBindingType type) {
+        return type == EShaderCodeResourceBindingType::TEXTURE_2D ||
+               type == EShaderCodeResourceBindingType::TEXTURE_2D_ARRAY ||
+               type == EShaderCodeResourceBindingType::TEXTURE_CUBE ||
+               type == EShaderCodeResourceBindingType::TEXTURE_CUBE_ARRAY ||
+               type == EShaderCodeResourceBindingType::TEXTURE_3D ||
+               type == EShaderCodeResourceBindingType::RW_TEXTURE_2D ||
+               type == EShaderCodeResourceBindingType::RW_TEXTURE_2D_ARRAY ||
+               type == EShaderCodeResourceBindingType::RW_TEXTURE_3D;
+    };
+    auto is_buffer = [](EShaderCodeResourceBindingType type) {
+        return type == EShaderCodeResourceBindingType::CONSTANT_BUFFER ||
+               type == EShaderCodeResourceBindingType::STRUCTURED_BUFFER ||
+               type == EShaderCodeResourceBindingType::BYTE_ADDRESS_BUFFER ||
+               type == EShaderCodeResourceBindingType::RW_BYTE_ADDRESSED_BUFFER ||
+               type == EShaderCodeResourceBindingType::RW_STRUCTURED_BUFFER;
+    };
+    switch (_type) {
+        case EShaderParameterType::CBV:
+            return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        case EShaderParameterType::SAMPLER:
+        case EShaderParameterType::BINDLESS_SAMPLER_INDEX:// MARK...
+            return VK_DESCRIPTOR_TYPE_SAMPLER;
+        case EShaderParameterType::SRV:
+            if (is_texture(_binding_type)) return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+            if (is_buffer(_binding_type)) return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            LOG_ERROR("Unsupported SRV type: {}", ToString(_binding_type));
+        case EShaderParameterType::UAV:
+            if (is_texture(_binding_type)) return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            if (is_buffer(_binding_type)) return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        case EShaderParameterType::BINDLESS_RESOURCE_INDEX:// MARK...
+            return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        default:
+            LOG_CRITICAL("Unsupported EShaderParameterType: {}", static_cast<uint32_t>(_type));
+            return VK_DESCRIPTOR_TYPE_MAX_ENUM;
     }
 }
 
@@ -920,7 +966,7 @@ uint32_t VulkanEnumTranslator::METoVkQueueFamilyIndex(ECommandListType _type, co
 
 #pragma endregion
 
-void VulkanRHISampler::GenerateSamplerFromInitializer(const VulkanDevice* _device, const RHISamplerInitializer& _initializer) {
+void VulkanRHISampler::GenerateSamplerFromInitializer(const VulkanDevice* _device, const RHISamplerCreateInfo& _initializer) {
     VkSamplerCreateInfo sampler_create_info{};
 
     sampler_create_info.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -1010,36 +1056,7 @@ VkCompareOp VulkanRHISampler::METoVKCompareOp(ESamplerCompareFunction _compare_o
     }
 }
 
-void VulkanRHIVertexInputState::GenerateVertexInputStateFromInitializer(const VertexInputStateInitializerList& _init) {
-    for (uint32_t i = 0; i < MAX_VERTEX_ELEMENT_COUNT; ++i) {
-        if (_init[i].format == EPixelFormat::PF_UNDEFINED) {
-            break;
-        }
-        m_bindings[i].binding    = _init[i].binding_index;
-        m_bindings[i].stride     = _init[i].stride;
-        m_bindings[i].inputRate  = METoVKVertexInputRate(_init[i].input_rate);
-        m_attributes[i].location = _init[i].attribute_index;
-        m_attributes[i].binding  = _init[i].binding_index;
-        m_attributes[i].format   = VulkanEnumTranslator::METoVKFormat(_init[i].format);
-        m_attributes[i].offset   = _init[i].offset;
-
-        // fallback
-        m_binding_count = std::max(m_binding_count, static_cast<uint32_t>(_init[i].binding_index));
-        ++m_attribute_count;
-    }
-    // count = max_index + 1
-    ++m_binding_count;
-
-    m_input_state_create_info.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    m_input_state_create_info.pNext                           = nullptr;
-    m_input_state_create_info.flags                           = 0;
-    m_input_state_create_info.vertexBindingDescriptionCount   = m_binding_count;
-    m_input_state_create_info.pVertexBindingDescriptions      = m_bindings.data();
-    m_input_state_create_info.vertexAttributeDescriptionCount = m_attribute_count;
-    m_input_state_create_info.pVertexAttributeDescriptions    = m_attributes.data();
-}
-
-VkVertexInputRate VulkanRHIVertexInputState::METoVKVertexInputRate(EVertexInputRate _me_rate) {
+VkVertexInputRate VulkanEnumTranslator::METoVKVertexInputRate(EVertexInputRate _me_rate) {
     switch (_me_rate) {
         case EVertexInputRate::VIR_VERTEX:
             return VK_VERTEX_INPUT_RATE_VERTEX;
@@ -1051,88 +1068,7 @@ VkVertexInputRate VulkanRHIVertexInputState::METoVKVertexInputRate(EVertexInputR
     }
 }
 
-void VulkanRHIRasterizationState::GenerateRasterizationStateFromInitializer(const RHIRasterizationStateInitializer& _init) {
-    m_rasterization_state_create_info.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-    m_rasterization_state_create_info.pNext                   = nullptr;
-    m_rasterization_state_create_info.flags                   = 0;
-    m_rasterization_state_create_info.depthClampEnable        = _init.b_depth_clamp_enable ? VK_TRUE : VK_FALSE;
-    m_rasterization_state_create_info.rasterizerDiscardEnable = VK_FALSE;// MARK...
-    m_rasterization_state_create_info.polygonMode             = METoVKPolygonMode(_init.fill_mode);
-    m_rasterization_state_create_info.cullMode                = METoVKCullModeFlags(_init.cull_mode);
-    m_rasterization_state_create_info.frontFace               = VK_FRONT_FACE_COUNTER_CLOCKWISE;// MARK...
-    m_rasterization_state_create_info.depthBiasEnable         = _init.b_depth_bias ? VK_TRUE : VK_FALSE;
-    m_rasterization_state_create_info.depthBiasConstantFactor = _init.depth_bias;
-    m_rasterization_state_create_info.depthBiasClamp          = _init.depth_bias_clamp;
-    m_rasterization_state_create_info.depthBiasSlopeFactor    = _init.depth_bias_slop_factor;
-    m_rasterization_state_create_info.lineWidth               = 1.0f;
-}
-
-VkPolygonMode VulkanRHIRasterizationState::METoVKPolygonMode(ERasterizerFillMode _fill_mode) {
-    switch (_fill_mode) {
-        case ERasterizerFillMode::FM_FILL:
-            return VK_POLYGON_MODE_FILL;
-        case ERasterizerFillMode::FM_LINE:
-            return VK_POLYGON_MODE_LINE;
-        case ERasterizerFillMode::FM_POINT:
-            return VK_POLYGON_MODE_POINT;
-        case ERasterizerFillMode::FM_FILL_RECTANGLE_NV:
-            return VK_POLYGON_MODE_FILL_RECTANGLE_NV;
-        default:
-            LOG_CRITICAL("Unsupported rasterizer fill mode: {}", static_cast<uint32_t>(_fill_mode));
-            return VK_POLYGON_MODE_MAX_ENUM;
-    }
-}
-
-VkCullModeFlags VulkanRHIRasterizationState::METoVKCullModeFlags(ERasterizerCullMode _cull_mode) {
-    switch (_cull_mode) {
-        case ERasterizerCullMode::RCM_NONE:
-            return VK_CULL_MODE_NONE;
-        case ERasterizerCullMode::RCM_FRONT:
-            return VK_CULL_MODE_FRONT_BIT;
-        case ERasterizerCullMode::RCM_BACK:
-            return VK_CULL_MODE_BACK_BIT;
-        case ERasterizerCullMode::RCM_FRONT_AND_BACK:
-            return VK_CULL_MODE_FRONT_AND_BACK;
-        default:
-            LOG_CRITICAL("Unsupported rasterizer cull mode: {}", static_cast<uint32_t>(_cull_mode));
-            return VK_CULL_MODE_FLAG_BITS_MAX_ENUM;
-    }
-}
-
-void VulkanRHIDepthStencilState::GenerateDepthStencilStateFromInitializer(const RHIDepthStencilStateInitializer& _init) {
-    m_depth_stencil_state_create_info.sType                 = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-    m_depth_stencil_state_create_info.pNext                 = nullptr;
-    m_depth_stencil_state_create_info.flags                 = 0;
-    m_depth_stencil_state_create_info.depthTestEnable       = (_init.b_enable_depth_write || _init.depth_test_op == ECompareOption::CO_ALWAYS) ? VK_TRUE : VK_FALSE;
-    m_depth_stencil_state_create_info.depthWriteEnable      = _init.b_enable_depth_write;
-    m_depth_stencil_state_create_info.depthCompareOp        = VulkanRHIDepthStencilState::METoVKCompareOp(_init.depth_test_op);
-    m_depth_stencil_state_create_info.depthBoundsTestEnable = VK_FALSE;// MARK...
-    m_depth_stencil_state_create_info.minDepthBounds        = 0.0f;
-    m_depth_stencil_state_create_info.maxDepthBounds        = 1.0f;
-
-    m_depth_stencil_state_create_info.stencilTestEnable = (_init.b_enable_front_face_stencil || _init.b_enable_back_face_stencil) ? VK_TRUE : VK_FALSE;
-    m_depth_stencil_state_create_info.front.failOp      = METoVKStencilOp(_init.front_face_stencil_fail_stencil_op);
-    m_depth_stencil_state_create_info.front.passOp      = METoVKStencilOp(_init.front_face_pass_stencil_op);
-    m_depth_stencil_state_create_info.front.depthFailOp = METoVKStencilOp(_init.front_face_depth_fail_stencil_op);
-    m_depth_stencil_state_create_info.front.compareOp   = METoVKCompareOp(_init.front_face_stencil_test);
-    m_depth_stencil_state_create_info.front.compareMask = _init.stencil_readmask;
-    m_depth_stencil_state_create_info.front.writeMask   = _init.stencil_writemask;
-    m_depth_stencil_state_create_info.front.reference   = 0;
-
-    if (_init.b_enable_back_face_stencil) {
-        m_depth_stencil_state_create_info.back.failOp      = METoVKStencilOp(_init.back_face_stencil_fail_stencil_op);
-        m_depth_stencil_state_create_info.back.passOp      = METoVKStencilOp(_init.back_face_pass_stencil_op);
-        m_depth_stencil_state_create_info.back.depthFailOp = METoVKStencilOp(_init.back_face_depth_fail_stencil_op);
-        m_depth_stencil_state_create_info.back.compareOp   = METoVKCompareOp(_init.back_face_stencil_test);
-        m_depth_stencil_state_create_info.back.compareMask = _init.stencil_readmask;
-        m_depth_stencil_state_create_info.back.writeMask   = _init.stencil_writemask;
-        m_depth_stencil_state_create_info.back.reference   = 0;
-    } else {
-        m_depth_stencil_state_create_info.front = m_depth_stencil_state_create_info.back;
-    }
-}
-
-VkCompareOp VulkanRHIDepthStencilState::METoVKCompareOp(ECompareOption _compare_op) {
+VkCompareOp VulkanEnumTranslator::METoVKCompareOp(ECompareOption _compare_op) {
     switch (_compare_op) {
         case ECompareOption::CO_NEVER:
             return VK_COMPARE_OP_NEVER;
@@ -1156,7 +1092,7 @@ VkCompareOp VulkanRHIDepthStencilState::METoVKCompareOp(ECompareOption _compare_
     }
 }
 
-VkStencilOp VulkanRHIDepthStencilState::METoVKStencilOp(EStencilOp _stencil_op) {
+VkStencilOp VulkanEnumTranslator::METoVKStencilOp(EStencilOp _stencil_op) {
     switch (_stencil_op) {
         case SO_KEEP:
             return VK_STENCIL_OP_KEEP;
@@ -1178,110 +1114,6 @@ VkStencilOp VulkanRHIDepthStencilState::METoVKStencilOp(EStencilOp _stencil_op) 
             LOG_CRITICAL("Unsupported depth stencil operation: {}", static_cast<uint32_t>(_stencil_op));
             return VK_STENCIL_OP_MAX_ENUM;
     };
-}
-
-void VulkanRHIMultisampleState::GenerateMultisampleStateFromInitializer(const RHIMultisampleStateInitializer& _init) {
-    m_multisample_state_create_info.sType                 = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    m_multisample_state_create_info.pNext                 = nullptr;
-    m_multisample_state_create_info.flags                 = 0;
-    m_multisample_state_create_info.rasterizationSamples  = VulkanEnumTranslator::METoVKSampleCountFlagBits(_init.sample_count);
-    m_multisample_state_create_info.sampleShadingEnable   = _init.b_sample_shading;
-    m_multisample_state_create_info.minSampleShading      = _init.min_sample_shading;
-    m_multisample_state_create_info.pSampleMask           = nullptr;// MARK...
-    m_multisample_state_create_info.alphaToCoverageEnable = _init.b_alpha_to_converge;
-    m_multisample_state_create_info.alphaToOneEnable      = _init.b_alpha_to_one;
-}
-
-void VulkanRHIBlendState::GenerateBlendStateFromInitializer(const RHIBlendStateInitializer& _init) {
-    // const auto n = 1;// MARK...
-
-    // attachments.resize(MAX_PASS_ATTACHMENT_COUNT);
-    for (size_t i = 0; i < MAX_PASS_ATTACHMENT_COUNT; ++i) {
-        auto& attachment_init = _init.attachments[i];
-
-        m_attachments[i].blendEnable =
-            (attachment_init.color_blend_op != BO_ADD || attachment_init.color_dst_blend_factor != BF_ZERO || attachment_init.color_src_blend_factor != BF_ONE ||
-             attachment_init.alpha_blend_op != BO_ADD || attachment_init.alpha_dst_blend_factor != BF_ZERO || attachment_init.alpha_src_blend_factor != BF_ONE) ?
-                VK_TRUE :
-                VK_FALSE;
-        m_attachments[i].srcColorBlendFactor = VulkanRHIBlendState::METoVKBlendFactor(attachment_init.color_src_blend_factor);
-        m_attachments[i].dstColorBlendFactor = VulkanRHIBlendState::METoVKBlendFactor(attachment_init.color_dst_blend_factor);
-        m_attachments[i].colorBlendOp        = VulkanRHIBlendState::METoVKBlendOp(attachment_init.color_blend_op);
-        m_attachments[i].srcAlphaBlendFactor = VulkanRHIBlendState::METoVKBlendFactor(attachment_init.alpha_src_blend_factor);
-        m_attachments[i].dstAlphaBlendFactor = VulkanRHIBlendState::METoVKBlendFactor(attachment_init.alpha_dst_blend_factor);
-        m_attachments[i].alphaBlendOp        = VulkanRHIBlendState::METoVKBlendOp(attachment_init.alpha_blend_op);
-        m_attachments[i].colorWriteMask      = (attachment_init.color_write_mask & CW_RED) ? VK_COLOR_COMPONENT_R_BIT : 0;
-        m_attachments[i].colorWriteMask |= (attachment_init.color_write_mask & CW_GREEN) ? VK_COLOR_COMPONENT_G_BIT : 0;
-        m_attachments[i].colorWriteMask |= (attachment_init.color_write_mask & CW_BLUE) ? VK_COLOR_COMPONENT_B_BIT : 0;
-        m_attachments[i].colorWriteMask |= (attachment_init.color_write_mask & CW_ALPHA) ? VK_COLOR_COMPONENT_A_BIT : 0;
-    }
-
-    // // VkPipelineColorBlendStateCreateInfo blend_state_create_info{};
-    // m_blend_state_create_info.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    // m_blend_state_create_info.pNext           = nullptr;
-    // m_blend_state_create_info.flags           = 0;
-    // m_blend_state_create_info.logicOpEnable   = VK_FALSE;
-    // m_blend_state_create_info.logicOp         = VK_LOGIC_OP_COPY;
-    // m_blend_state_create_info.attachmentCount = n;
-    // m_blend_state_create_info.pAttachments    = attachments.data();
-}
-
-VkBlendOp VulkanRHIBlendState::METoVKBlendOp(EBlendOperation _blend_op) {
-    switch (_blend_op) {
-        case BO_ADD:
-            return VK_BLEND_OP_ADD;
-        case BO_SUBTRACT:
-            return VK_BLEND_OP_SUBTRACT;
-        case BO_REVERSE_SUBTRACT:
-            return VK_BLEND_OP_REVERSE_SUBTRACT;
-        case BO_MIN:
-            return VK_BLEND_OP_MIN;
-        case BO_MAX:
-            return VK_BLEND_OP_MAX;
-        default:
-            LOG_CRITICAL("Unsupported color blend operation: {}", static_cast<uint32_t>(_blend_op));
-            return VK_BLEND_OP_MAX_ENUM;
-    }
-}
-
-VkBlendFactor VulkanRHIBlendState::METoVKBlendFactor(EBlendFactor _blend_factor) {
-    switch (_blend_factor) {
-        case BF_ZERO:
-            return VK_BLEND_FACTOR_ZERO;
-        case BF_ONE:
-            return VK_BLEND_FACTOR_ONE;
-        case BF_SRC_COLOR:
-            return VK_BLEND_FACTOR_SRC_COLOR;
-        case BF_ONE_MINUS_SRC_COLOR:
-            return VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR;
-        case BF_DST_COLOR:
-            return VK_BLEND_FACTOR_DST_COLOR;
-        case BF_ONE_MINUS_DST_COLOR:
-            return VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR;
-        case BF_SRC_ALPHA:
-            return VK_BLEND_FACTOR_SRC_ALPHA;
-        case BF_ONE_MINUS_SRC_ALPHA:
-            return VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-        case BF_DST_ALPHA:
-            return VK_BLEND_FACTOR_DST_ALPHA;
-        case BF_ONE_MINUS_DST_ALPHA:
-            return VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA;
-        case BF_CONSTANT_ALPHA:
-            return VK_BLEND_FACTOR_CONSTANT_ALPHA;
-        case BF_ONE_MINUS_CONSTANT_ALPHA:
-            return VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA;
-        case BF_SRC1_COLOR:
-            return VK_BLEND_FACTOR_SRC1_COLOR;
-        case BF_ONE_MINUS_SRC1_COLOR:
-            return VK_BLEND_FACTOR_ONE_MINUS_SRC1_COLOR;
-        case BF_SRC1_ALPHA:
-            return VK_BLEND_FACTOR_SRC1_ALPHA;
-        case BF_ONE_MINUS_SRC1_ALPHA:
-            return VK_BLEND_FACTOR_ONE_MINUS_SRC1_ALPHA;
-        default:
-            LOG_CRITICAL("Unsupported color blend factor: {}", static_cast<uint32_t>(_blend_factor));
-            return VK_BLEND_FACTOR_MAX_ENUM;
-    }
 }
 
 #pragma region shader definitions
@@ -1310,6 +1142,17 @@ void VulkanPipelineState::GenerateDescriptorSetLayouts(const VulkanDevice* _devi
 
 void VulkanPipelineState::CreateResourceCache() {
     m_pipeline_state_cache = new VulkanPipelineResourceCache();
+}
+
+VulkanRHIGraphicsPipelineState::~VulkanRHIGraphicsPipelineState() {
+    // if (m_pipeline_state_cache) {
+    //     delete m_pipeline_state_cache;
+    //     m_pipeline_state_cache = nullptr;
+    // }
+    // if (m_descriptor_sets_layout) {
+    //     delete m_descriptor_sets_layout;
+    //     m_descriptor_sets_layout = nullptr;
+    // }
 }
 
 Moer::Array<VkPipelineShaderStageCreateInfo> VulkanRHIGraphicsPipelineState::METoVKShaderStageCreateInfo(const RHIShaderBoundStateInput& _shader_bound_state) {
@@ -1362,22 +1205,6 @@ Moer::Array<VkPipelineShaderStageCreateInfo> VulkanRHIGraphicsPipelineState::MET
     }
 
     return shader_stage_create_infos;
-}
-
-VkPipelineVertexInputStateCreateInfo VulkanRHIGraphicsPipelineState::METoVKVertexInputStateCreateInfo(const RHIVertexInputState* _vertex_input_state) {
-    auto* vk_vertex_input_state = static_cast<const VulkanRHIVertexInputState*>(_vertex_input_state);
-    VK_CHECK_NULLPTR(vk_vertex_input_state, "RHICreateGraphicsPipelineState: initializer's vertex input state is nullptr!", return {});
-
-    VkPipelineVertexInputStateCreateInfo vertex_input_state_create_info{};
-    vertex_input_state_create_info.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vertex_input_state_create_info.pNext                           = nullptr;
-    vertex_input_state_create_info.flags                           = 0;
-    vertex_input_state_create_info.vertexBindingDescriptionCount   = vk_vertex_input_state->GetBindingCount();
-    vertex_input_state_create_info.pVertexBindingDescriptions      = vk_vertex_input_state->GetBindings();
-    vertex_input_state_create_info.vertexAttributeDescriptionCount = vk_vertex_input_state->GetAttributeCount();
-    vertex_input_state_create_info.pVertexAttributeDescriptions    = vk_vertex_input_state->GetAttributes();
-
-    return vertex_input_state_create_info;
 }
 
 Moer::Array<const Shader*> VulkanRHIGraphicsPipelineState::GetShaderInfoList(const RHIShaderBoundStateInput& _shader_bound_state) {
@@ -1438,7 +1265,7 @@ VkBufferUsageFlags VulkanRHIBuffer::METoVKBufferUsageFlags(VulkanDevice* _device
 
     TranslateFlag(EBufferUsageFlags::VERTEX_BUFFER, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
     TranslateFlag(EBufferUsageFlags::INDEX_BUFFER, VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
-    TranslateFlag(EBufferUsageFlags::STRUCTURED_BUFFER, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    TranslateFlag(EBufferUsageFlags::STORAGE_BUFFER, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
 
     TranslateFlag(EBufferUsageFlags::ACCELERATION_STRUCTURE, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR);
     TranslateFlag(EBufferUsageFlags::SHADER_BINDING_TABLE, VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR);
@@ -1584,9 +1411,27 @@ void VulkanRHIFence::Wait(uint64_t value) {
 #pragma endregion
 
 #pragma region viewable resources view definitions
-VulkanRHIUnorderedAccessView::~VulkanRHIUnorderedAccessView() {
+VulkanRHITextureUAV::~VulkanRHITextureUAV() {
     if (m_view != VK_NULL_HANDLE) {
         vkDestroyImageView(m_device->GetDevice(), m_view, VK_NULL_HANDLE);
+    }
+}
+
+VulkanRHITextureSRV::~VulkanRHITextureSRV() {
+    if (m_view != VK_NULL_HANDLE) {
+        vkDestroyImageView(m_device->GetDevice(), m_view, VK_NULL_HANDLE);
+    }
+}
+
+VulkanRHIBufferSRV::~VulkanRHIBufferSRV() {
+    if (m_view != VK_NULL_HANDLE) {
+        vkDestroyBufferView(m_device->GetDevice(), m_view, VK_NULL_HANDLE);
+    }
+}
+
+VulkanRHIBufferUAV::~VulkanRHIBufferUAV() {
+    if (m_view != VK_NULL_HANDLE) {
+        vkDestroyBufferView(m_device->GetDevice(), m_view, VK_NULL_HANDLE);
     }
 }
 
@@ -1602,12 +1447,12 @@ VulkanViewport::VulkanViewport(VulkanSwapChain* _swapchain, uint32_t _max_frame_
 VulkanViewport::~VulkanViewport() {
     InnerDestroyResources();
 
-    delete swapchain;
+    MoerDelete(swapchain);
     swapchain = nullptr;
 }
 
-VulkanRHIUnorderedAccessView* VulkanViewport::InnerCreateVulkanUnorderedAccessView(VulkanDevice* _device, VulkanRHITexture* texture, const RHIViewInfo& _view_info) {
-    auto* view = new VulkanRHIUnorderedAccessView(_device, texture, _view_info);
+VulkanRHITextureUAV* VulkanViewport::InnerCreateVulkanUAV(VulkanDevice* _device, VulkanRHITexture* texture, const RHIViewInfo& _view_info) {
+    auto* view = new VulkanRHITextureUAV(_device, texture, _view_info);
 
     VkImageViewCreateInfo image_view_create_info{};
     image_view_create_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -1648,7 +1493,7 @@ void VulkanViewport::InnerCreateResources() {
                                                        swapchain->m_device);
         swapchain_images[index]->AddRef();
 
-        swapchain_image_uavs[index] = InnerCreateVulkanUnorderedAccessView(
+        swapchain_image_uavs[index] = InnerCreateVulkanUAV(
             swapchain->m_device,
             swapchain_images[index],
             RHIViewInfo::CreateTextureUAVInfo()
@@ -1694,7 +1539,7 @@ void VulkanViewport::ResetResources() {
         swapchain_images[index]->SetAttachedImageInner(swapchain->m_swap_chain_images[index]);
 
         delete swapchain_image_uavs[index];
-        swapchain_image_uavs[index] = InnerCreateVulkanUnorderedAccessView(
+        swapchain_image_uavs[index] = InnerCreateVulkanUAV(
             swapchain->m_device,
             swapchain_images[index],
             RHIViewInfo::CreateTextureUAVInfo()
@@ -1730,7 +1575,7 @@ RHIViewportNextBackBufferInfo VulkanViewport::GetNextFrameBackBufferInfo() {
     ResetResources();
     return {.backbuffer_index = UINT32_MAX, .backbuffer_ready_fence = nullptr};
 }
-VulkanRHIUnorderedAccessView* VulkanViewport::GetCurrentBackBuffer(uint32_t index) {
+VulkanRHITextureUAV* VulkanViewport::GetCurrentBackBuffer(uint32_t index) {
     if (index != UINT32_MAX) {
         return swapchain_image_uavs[index];
     }

@@ -5,6 +5,7 @@
 #include "VulkanDevice.h"
 
 #include "misc/Crc32.h"
+#include "vulkan/vulkan_core.h"
 
 const float default_pool_size[VK_DESCRIPTOR_TYPE_RANGE_SIZE] = {
     2,// VK_DESCRIPTOR_TYPE_SAMPLER
@@ -119,7 +120,7 @@ VulkanDescriptorSetAllocator::~VulkanDescriptorSetAllocator() {
 void VulkanDescriptorSetAllocator::Init(VulkanDevice* device) {
     this->m_device = device;
     // add default pool
-    const uint32_t default_set_count = 1;
+    const uint32_t default_set_count = 4096;
     m_cache_pools.emplace_front(std::make_unique<VulkanDescriptorSetCachePool>(m_device, default_pool_size, default_set_count));
 }
 
@@ -161,6 +162,8 @@ VulkanDescriptorSetAllocator::VulkanDescriptorSetCachePool::VulkanDescriptorSetC
         pool_sizes[i].type            = static_cast<VkDescriptorType>(VK_DESCRIPTOR_TYPE_BEGIN_RANGE + i);
         pool_sizes[i].descriptorCount = static_cast<uint32_t>(_default_pool_size[i] * max_sets);
     }
+    pool_sizes.push_back({VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4096});
+    pool_sizes.push_back({VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 4096});
 
     VkDescriptorPoolCreateInfo pool_info{};
     pool_info.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;

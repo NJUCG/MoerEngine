@@ -6,6 +6,11 @@
 #include "config/ConfigManager.h"
 
 #include "config/ini.h"
+#include "misc/MacroUtils.h"
+
+#ifndef DEVELOP_SHADER_PATH
+#define DEVELOP_SHADER_PATH resource / shaders
+#endif
 namespace Moer {
     ConfigManager& ConfigManager::GetInstance() {
         static ConfigManager instance;
@@ -15,7 +20,7 @@ namespace Moer {
     void ConfigManager::Init(const std::filesystem::path& _workspace_path) {
         workspace_path            = _workspace_path;
         editor_resource_path      = _workspace_path / "resource";
-        engine_shader_path        = _workspace_path / "resource" / "shaders";
+        engine_shader_path        = MACRO_STR(DEVELOP_SHADER_PATH);
         engine_shader_cached_path = _workspace_path / "resource" / "shader_cache";
 
         std::filesystem::path config_path = _workspace_path / CONFIG_DIR / "MoerEngine.ini";

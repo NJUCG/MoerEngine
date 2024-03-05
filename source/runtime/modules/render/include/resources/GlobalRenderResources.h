@@ -4,12 +4,12 @@
 class RHITexture;
 class RHIGraphicsCommandList;
 class RHICommandQueue;
-class RHIShaderResourceView;
+class RHISRV;
 class RHISampler;
-class RHIShaderResourceView;
+class RHISRV;
 class RHITexture;
 
-struct RHISamplerInitializer;
+struct RHISamplerCreateInfo;
 
 namespace Moer {
     struct GlobalRenderFrameData {
@@ -47,8 +47,8 @@ namespace Moer {
     class SamplerCache {
     public:
         static SamplerCache&   Get();
-        RHISampler*            GetSampler(const RHISamplerInitializer& params);
-        RHIShaderResourceView* GetTextureView(RHITexture* texture);
+        RHISampler*            GetSampler(const RHISamplerCreateInfo& params);
+        RHISRV* GetTextureView(RHITexture* texture);
         ~SamplerCache();
 
     protected:

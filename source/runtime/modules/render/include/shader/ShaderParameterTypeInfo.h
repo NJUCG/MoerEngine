@@ -98,6 +98,23 @@ struct TShaderParameterTypeInfo {
     static const ShaderParametersMetadata* GetStructMetadata() { return Type::TypeInfo::GetStructMetadata(); }
 };
 
+template<typename Type>
+static constexpr bool IsBasicType() {
+    return std::is_floating_point_v<Type> || std::is_integral_v<Type> ||
+           std::is_same_v<Type, bool> ||
+           std::is_same_v<Type, Moer::Vector2f> ||
+           std::is_same_v<Type, Moer::Vector3f> ||
+           std::is_same_v<Type, Moer::Vector4f> ||
+           std::is_same_v<Type, Moer::Vector2i> ||
+           std::is_same_v<Type, Moer::Vector2ui> ||
+           std::is_same_v<Type, Moer::Vector3i> ||
+           std::is_same_v<Type, Moer::Vector3ui> ||
+           std::is_same_v<Type, Moer::Vector4i> ||
+           std::is_same_v<Type, Moer::Vector4ui> ||
+           std::is_same_v<Type, Moer::Matrix4x4f> ||
+           std::is_same_v<Type, Moer::Matrix3x4f> ||
+           std::is_same_v<Type, Moer::Quaternion>;
+}
 template<typename Type, uint32_t NumElements>
 struct TShaderParameterTypeInfo<Type[NumElements]> {
     static constexpr EShaderBindingBaseType BaseType                       = TShaderParameterTypeInfo<Type>::BaseType;
@@ -109,7 +126,13 @@ struct TShaderParameterTypeInfo<Type[NumElements]> {
 
     using TParamPtr    = Moer::StaticArray<AlignType<Type, alignment>, NumElements>;
     using InstanceType = Type;
-    static const ShaderParametersMetadata* GetStructMetadata() { return Type::TypeInfo::GetStructMetadata(); }
+    static const ShaderParametersMetadata* GetStructMetadata() {
+        if constexpr (IsBasicType<Type>()) {
+            return nullptr;
+        } else {
+            return Type::TypeInfo::GetStructMetadata();
+        }
+    }
 };
 
 template<>

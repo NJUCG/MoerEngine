@@ -20,9 +20,11 @@ namespace Moer {
         uint32_t              index_count;
         uint32_t              vertex_offset;
         uint32_t              index_offset;
+        uint32_t              meshlet_offset;
+        uint32_t              meshlet_count;
         uint16_t              m_instance_count{1};
         bool                  m_culling{};
-        bool                  m_castShadows{};
+        bool                  m_cast_shadows{};
     };
 
     RenderableManager::Builder::Builder() noexcept {}
@@ -32,7 +34,7 @@ namespace Moer {
     RenderableManager::Builder::~Builder() noexcept {}
 
     RenderableManager::Builder& RenderableManager::Builder::operator=(Builder&& rhs) noexcept { return *this; }
-    RenderableManager::Builder&                             RenderableManager::Builder::Geometry(EPrimitiveType type, const Moer::Array<float>& vertex_data, const Moer::Array<uint32_t>& index_data, uint32_t offset, uint32_t count) noexcept {
+    RenderableManager::Builder& RenderableManager::Builder::Geometry(EPrimitiveType type, const Moer::Array<float>& vertex_data, const Moer::Array<uint32_t>& index_data, uint32_t offset, uint32_t count) noexcept {
         m_impl->type          = type;
         m_impl->vertex_data   = vertex_data;
         m_impl->index_data    = index_data;
@@ -40,12 +42,21 @@ namespace Moer {
         m_impl->index_offset  = count;
         return *this;
     }
-    RenderableManager::Builder& RenderableManager::Builder::Geometry(EPrimitiveType type, uint32_t vertex_count, uint32_t index_count, uint32_t vertex_offset, uint32_t index_offset) noexcept {
-        m_impl->type          = type;
-        m_impl->vertex_count  = vertex_count;
-        m_impl->index_count   = index_count;
-        m_impl->vertex_offset = vertex_offset;
-        m_impl->index_offset  = index_offset;
+    RenderableManager::Builder& RenderableManager::Builder::Geometry(
+        EPrimitiveType type,
+        uint32_t       vertex_count,
+        uint32_t       index_count,
+        uint32_t       vertex_offset,
+        uint32_t       index_offset,
+        uint32_t       meshlet_offset,
+        uint32_t       meshlet_count) noexcept {
+        m_impl->type           = type;
+        m_impl->vertex_count   = vertex_count;
+        m_impl->index_count    = index_count;
+        m_impl->vertex_offset  = vertex_offset;
+        m_impl->index_offset   = index_offset;
+        m_impl->meshlet_offset = meshlet_offset;
+        m_impl->meshlet_count  = meshlet_count;
         return *this;
     }
 
@@ -54,22 +65,22 @@ namespace Moer {
         return *this;
     }
     RenderableManager::Builder& RenderableManager::Builder::CastShadows(bool castShadows) {
-        m_impl->m_castShadows = castShadows;
+        m_impl->m_cast_shadows = castShadows;
         return *this;
     }
 
     void RenderableManager::Builder::Build(Entity entity) noexcept {
         RenderableManager::Get().Create(*this, entity);
 
-        auto& transforManager = TransformManager::Get();
-        if (!transforManager.HasComponent(entity)) { transforManager.Create(entity); }
+        auto& transfor_manager = TransformManager::Get();
+        if (!transfor_manager.HasComponent(entity)) { transfor_manager.Create(entity); }
     }
 
     void RenderableManager::Create(Builder& builder, Entity entity) {
         m_manager.AddComponent(entity);
 
         SetCulling(entity, builder->m_culling);
-        SetCastShadows(entity, builder->m_castShadows);
+        SetCastShadows(entity, builder->m_cast_shadows);
 
         m_manager[entity].vertex_data = std::make_unique<Moer::Array<float>>(std::move(builder->vertex_data));
         m_manager[entity].index_data  = std::make_unique<Moer::Array<uint32_t>>(std::move(builder->index_data));
@@ -102,8 +113,9 @@ namespace Moer {
     }
 
     RenderableManager& RenderableManager::Get() {
+        static UniquePtr<RenderableManager> m_instance = nullptr;
         if (!m_instance)
-            m_instance = std::make_unique<RenderableManager>();
+            m_instance = std::move(UniquePtr<RenderableManager>(MoerNew(RenderableManager)()));
         return *m_instance;
     }
 

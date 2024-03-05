@@ -2,6 +2,7 @@
 
 #include "config/ConfigManager.h"
 // #include "loader/gltf/Parser.h"
+#include "rhi/RHIResource.h"
 #include "scene/EntityManager.h"
 #include "scene/RenderableManager.h"
 #include "rhi/RHI.h"
@@ -12,24 +13,35 @@ namespace Moer {
 
     class RENDER_API Scene::Impl {
     public:
-        void          AddEntity(Entity entity) noexcept { m_entities.emplace(entity); }
-        void          AddCamera(Entity entity) noexcept { m_cameras.emplace(entity); }
-        void          RemoveEntity(Entity entity) noexcept { m_entities.erase(entity); };
-        void          SetBuffer(const std::string& name, RHIBufferRef buffer) { m_buffers[name] = buffer; }
-        RHIBufferRef  GetBuffer(const std::string& name) const { return m_buffers.at(name); }
+        void         AddEntity(Entity entity) noexcept { m_entities.emplace(entity); }
+        void         AddCamera(Entity entity) noexcept { m_cameras.emplace(entity); }
+        void         RemoveEntity(Entity entity) noexcept { m_entities.erase(entity); };
+        void         SetBuffer(const std::string& name, RHIBufferRef buffer) { m_buffers[name] = buffer; }
+        RHIBufferRef GetBuffer(const std::string& name) const { return m_buffers.at(name); }
+        RHIUAVRef    GetUAV(const std::string& name) const { return m_uavs.at(name); }
+        RHISRVRef    GetSRV(const std::string& name) const { return m_srvs.at(name); }
+        void         ForEach(std::function<void(Entity)> func) const noexcept {
+            for (auto& entity : m_entities) {
+                func(entity);
+            }
+        }
         Array<Entity> GetEntities() const noexcept;
         Array<Entity> GetCameras() const noexcept;
 
     protected:
         Map<std::string, RHIBufferRef> m_buffers;
-        EntitySet                      m_entities;
-        EntitySet                      m_cameras;
+        Map<std::string, RHIUAVRef>    m_uavs;
+        Map<std::string, RHISRVRef>    m_srvs;
+
+        EntitySet m_entities;
+        EntitySet m_cameras;
     };
 
     Array<Entity> Scene::Impl::GetEntities() const noexcept {
         Array<Entity> result;
-        result.reserve(m_entities.size());
-        for (auto& entity : m_entities) {
+        // result.reserve(m_entities.size());
+        for (const Entity& entity : m_entities) {
+
             result.push_back(entity);
         }
         return result;
@@ -75,6 +87,10 @@ namespace Moer {
 
     Array<Entity> Scene::GetCameras() const noexcept {
         return m_impl->GetCameras();
+    }
+
+    void Scene::ForEach(std::function<void(Entity)> func) const noexcept {
+        m_impl->ForEach(std::move(func));
     }
 
     Scene* Scene::GetDefaultScene() noexcept {

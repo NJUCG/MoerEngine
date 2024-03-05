@@ -74,6 +74,7 @@ VulkanPhysicalDeviceFeatures VulkanDeviceFeature::GetMESupportedDeviceFeatures(u
         // buffer
         enabled_features.core_1_2.shaderStorageBufferArrayNonUniformIndexing    = VK_TRUE;
         enabled_features.core_1_2.descriptorBindingStorageBufferUpdateAfterBind = VK_TRUE;
+        enabled_features.core_1_2.drawIndirectCount                             = VK_TRUE;
     }
 
     // 1.3 features

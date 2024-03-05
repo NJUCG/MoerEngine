@@ -61,6 +61,7 @@ class RHIGraphicsCommandList : public RHICommandListBase {
 public:
     virtual ~RHIGraphicsCommandList(){};
     virtual void SetPipelineState(RHIGraphicsPipelineState* _graphics_pso) = 0;
+    virtual void SetPipelineState(RHIComputePipelineState* _compute_pso)   = 0;
     // virtual void Open()                                                    = 0;
     // virtual void Close()                                                   = 0;
     // virtual void Reset()                                                   = 0;
@@ -120,10 +121,10 @@ public:
 
     virtual void ClearDepthStencil() = 0;
     virtual void ClearUAVInt(
-        RHIUnorderedAccessView* _uav,
+        RHIUAV* _uav,
         const Moer::Vector4i&   _values) = 0;
     virtual void ClearUAVFloat(
-        RHIUnorderedAccessView* _uav,
+        RHIUAV* _uav,
         const Moer::Vector4f&   _values) = 0;
 
     virtual void BeginRenderPass(const RHIRenderPassInfo& _pass_info, const char* _pass_name) = 0;

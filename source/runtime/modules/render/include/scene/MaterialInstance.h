@@ -6,7 +6,7 @@
 
 namespace Moer {
 
-    using SamplerParams = RHISamplerInitializer;
+    using SamplerParams = RHISamplerCreateInfo;
     class Material;
     using MaterialRef = CountableRef<Material>;
 
