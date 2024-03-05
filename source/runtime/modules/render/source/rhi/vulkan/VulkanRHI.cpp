@@ -49,6 +49,8 @@ void VulkanRHIImpl::Initialize(const RHIInitInfo& _init) {
     m_rhi_info.max_frame_in_flight = _init.max_frame_in_flight;
     m_rhi_info.ray_tracing         = _init.ray_tracing;
 
+    LOG_INFO("raytraing: {}", _init.ray_tracing);
+
     CreateInstance();
     InitSurface(Moer::WindowContext::GetMainWindow());
     InitVulkan();

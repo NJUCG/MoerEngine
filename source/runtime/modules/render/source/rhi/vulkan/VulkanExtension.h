@@ -5,7 +5,13 @@
 #ifndef VULKAN_EXTENSION_H
 #define VULKAN_EXTENSION_H
 
+#define VULKAN_EXTENSION_ENABLED  1
+#define VULKAN_EXTENSION_DISABLED 0
+#define VULKAN_EXTENSION_OPTIONAL 1
+#define VULKAN_EXTENSION_REQUIRED 0
+
 #include "rhi/vulkan/misc/VulkanTypeDefs.h"
+#include "log/LogSystem.h"
 
 struct RHIInfo;
 
@@ -40,21 +46,24 @@ public:
 
 class VulkanDeviceExtension : public VulkanExtensionBase {
 public:
-    VulkanDeviceExtension(const std::string& _ext_name, bool _is_enabled = true) : VulkanExtensionBase(_ext_name, _is_enabled), m_usable(true) {}
+    VulkanDeviceExtension(const std::string& _ext_name, bool _is_enabled = true, bool _is_optional = false) : VulkanExtensionBase(_ext_name, _is_enabled), m_is_optional(_is_optional), m_is_usable(true) {
+        LOG_INFO("VulkanDeviceExtension::VulkanDeviceExtension: {}, {}", _ext_name.c_str(), m_is_enabled);
+    }
     virtual ~VulkanDeviceExtension() = default;
 
     static TVulkanDeviceExtensionArray GetMESupportedDeviceExtensions(const RHIInfo& _rhi_info);
     static TExtensionPropsArray        GetDriverSupportedDeviceExtensions(VkPhysicalDevice _gpu, const char* _layer_name = nullptr);
     static TExtensionArray             GetDriverSupportedDeviceExtensionNames(VkPhysicalDevice _gpu, const char* _layer_name = nullptr);
 
-    virtual bool IsOptional() const { return false; }
+    virtual bool IsOptional() const final { return m_is_optional; }
     virtual void PreGpuFeatures(VkPhysicalDeviceFeatures2& _gpu_features2) {}
     virtual void PostGpuFeatures(VulkanOptionalDeviceExtensions& _gpu_extensions) {}
     virtual void PreGpuProperties(const VulkanDevice* _device, VkPhysicalDeviceProperties2& _gpu_properties2) {}
     virtual void PreCreateDevice(VkDeviceCreateInfo& _device_create_info) {}
 
 protected:
-    bool m_usable;
+    bool m_is_optional;
+    bool m_is_usable;
 };
 
 class VulkanOptionalDeviceExtensions final {
