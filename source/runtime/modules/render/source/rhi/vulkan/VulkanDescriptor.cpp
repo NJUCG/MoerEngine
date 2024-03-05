@@ -6,6 +6,7 @@
 
 #include "misc/Crc32.h"
 #include "vulkan/vulkan_core.h"
+#include <cassert>
 
 const float default_pool_size[VK_DESCRIPTOR_TYPE_RANGE_SIZE] = {
     2,// VK_DESCRIPTOR_TYPE_SAMPLER
@@ -137,6 +138,7 @@ VulkanDescriptorSetAllocator::VulkanDescriptorSetCachePool::VulkanDescriptorSetC
     }
     pool_sizes.push_back({VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4096});
     pool_sizes.push_back({VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 4096});
+    pool_sizes.push_back({VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4096});
 
     VkDescriptorPoolCreateInfo pool_info{};
     pool_info.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -232,7 +234,9 @@ bool VulkanDescriptorSetAllocator::VulkanDescriptorSetCachePool::AllocateDescrip
     alloc_info.descriptorSetCount = 1;
     alloc_info.pSetLayouts        = &_layout;
 
-    return vkAllocateDescriptorSets(m_device->GetDevice(), &alloc_info, &_set) == VK_SUCCESS;
+    auto result = vkAllocateDescriptorSets(m_device->GetDevice(), &alloc_info, &_set) == VK_SUCCESS;
+    assert(result);
+    return result;
 }
 
 void VulkanDescriptorSetAllocator::VulkanDescriptorSetCachePool::Reset() {
