@@ -395,7 +395,7 @@ namespace Moer {
 
         int xsize = desc.width;
         int ysize = desc.height;
-        int zsize = desc.depth;
+        int zsize = desc.layers;
 
         if (xsize == 0 || ysize == 0 || zsize == 0) {
             throw std::runtime_error{"Error reading astc: invalid size"};
@@ -435,7 +435,7 @@ namespace Moer {
         desc.format = EPixelFormat::PF_R8G8B8A8_SRGB;
         desc.width  = astc_image->xsize;
         desc.height = astc_image->ysize;
-        desc.depth  = astc_image->zsize;
+        desc.layers = astc_image->zsize;
 
         destroy_image(astc_image);
     }

@@ -110,7 +110,7 @@ namespace Moer {
             auto srv_info = RHIViewInfo::CreateTextureSRVInfo()
                                 .SetFormat(PF_R8G8B8A8_UNORM)
                                 .SetDimension(ETextureDimension::TEX_2D)
-                                .SetMipRange(0, 1)
+                                .SetMipRange(0, texture->GetNumMips())
                                 .SetArrayRange(0, 1);
 
             size_t hash = RHITextureViewHash(texture, srv_info);
