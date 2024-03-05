@@ -11,37 +11,37 @@ struct CameraCullData {
 
 [[vk::binding(0, 0)]] ConstantBuffer<CameraCullData> cull_data : register(b0);
 
-[[vk::binding(0, 0)]] StructuredBuffer<InstanceData> instance_data
+[[vk::binding(0, 1)]] StructuredBuffer<InstanceData> instance_data
     : register(t0, space0);
-[[vk::binding(1, 0)]] StructuredBuffer<InstanceMeshletInfo>
+[[vk::binding(1, 1)]] StructuredBuffer<InstanceMeshletInfo>
     instance_meshlet_info : register(t1, space0);
 
-[[vk::binding(0, 1)]] StructuredBuffer<InstanceMeshletCullInfo>
+[[vk::binding(0, 2)]] StructuredBuffer<InstanceMeshletCullInfo>
     instance_meshlet_cull_info : register(t2, space0);
 
-[[vk::binding(0, 2)]] StructuredBuffer<MeshletDesc> meshlet_info_buffer
+[[vk::binding(0, 3)]] StructuredBuffer<MeshletDesc> meshlet_info_buffer
     : register(t0, space1);
-[[vk::binding(1, 2)]] StructuredBuffer<MeshletBound> meshlet_bound_buffer
+[[vk::binding(1, 3)]] StructuredBuffer<MeshletBound> meshlet_bound_buffer
     : register(t1, space1);
 
 // 0 for processed instance, 1 for processed meshlet
-[[vk::binding(0, 3)]] RWByteAddressBuffer counters_buffer
+[[vk::binding(0, 4)]] RWByteAddressBuffer counters_buffer
     : register(u0, space1);
-[[vk::binding(1, 3)]] RWStructuredBuffer<DrawCommandData> command_buffer
+[[vk::binding(1, 4)]] RWStructuredBuffer<DrawCommandData> command_buffer
     : register(u1, space1);
 
 [[vk::push_constant]] ConstantBuffer<MeshletCullInput> input;
 
 bool IsMeshletVisible(in MeshletBound bound, in float4x4 world,
                       in float scale) {
-  float4 center = mul(float4(bound.center, 1.0f), world);
-  float radius = bound.radius * scale;
+  //   float4 center = mul(float4(bound.center, 1.0f), world);
+  //   float radius = bound.radius * scale;
 
-  for (uint i = 0; i < 6; i++) {
-    if (dot(center, cull_data.planes[i]) < -radius) {
-      return false;
-    }
-  }
+  //   for (uint i = 0; i < 6; i++) {
+  //     if (dot(center, cull_data.planes[i]) < -radius) {
+  //       return false;
+  //     }
+  //   }
   // not do back face cull now
 
   // occclusion cull

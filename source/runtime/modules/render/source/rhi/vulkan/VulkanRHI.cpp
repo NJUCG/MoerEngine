@@ -743,7 +743,7 @@ void* VulkanRHIImpl::RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t
     void* p_data;
     VK_CHECK_RESULT(vmaMapMemory(allocator, vk_buffer->m_alloc.alloc, &p_data));
 
-    return p_data;
+    return (std::byte*)p_data + _offset;
 }
 void VulkanRHIImpl::RHIUnmapBuffer(RHIBuffer* _buffer) {
     auto* vk_buffer = static_cast<VulkanRHIBuffer*>(_buffer);

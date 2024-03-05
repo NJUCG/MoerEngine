@@ -313,8 +313,8 @@ namespace Moer {
         auto cull_instance_shader = shader_resource_manager.GetShader<CullInstanceShader>();
         auto cull_meshlet_shader  = shader_resource_manager.GetShader<CullMeshletShader>();
 
-        cull_instance_pso      = g_rhi->RHICreateComputePipelineState(cull_instance_shader);
-        cull_meshlet_pso       = g_rhi->RHICreateComputePipelineState(cull_meshlet_shader);
+        cull_instance_pso = g_rhi->RHICreateComputePipelineState(cull_instance_shader);
+        cull_meshlet_pso  = g_rhi->RHICreateComputePipelineState(cull_meshlet_shader);
         //why not implement a counter buffer?
         {
             RHIBufferCreateInfo buffer_create_info;
@@ -383,25 +383,33 @@ namespace Moer {
         //render and copy to backbuffer
         auto camera_entity = g_scene->GetCameras()[0];
         auto camera        = CameraManager::Get().Get(camera_entity);
-        camera->Tick();
 
         CameraData camera_data;
-        camera_data.prev_view_proj = Transpose(camera->GetProjectionMatrix() * camera->GetViewMatrix());
-        camera_data.view      = Transpose(camera->GetViewMatrix());
-        camera_data.view_proj = Transpose(camera->GetProjectionMatrix() * camera->GetViewMatrix());
-        camera_data.camera_pos     = Vector4f(camera->GetPosition(), 1.f);
+        auto       vp              = camera->GetProjectionMatrix() * camera->GetViewMatrix();
+        camera_data.prev_view_proj = Transpose(vp);
+
+        camera->Tick();
+
+        camera_data.view       = Transpose(camera->GetViewMatrix());
+        camera_data.view_proj  = Transpose(camera->GetProjectionMatrix() * camera->GetViewMatrix());
+        camera_data.camera_pos = Vector4f(camera->GetPosition(), 1.f);
 
         CameraCullData cull_data;
         cull_data.camera_data = camera_data;
         auto& frustum_planes  = cull_data.frustum_planes;
         //calculate world space frustum planes
         {
-            frustum_planes[0] = camera_data.view_proj.t.r3 + camera_data.view_proj.t.r0;
-            frustum_planes[1] = camera_data.view_proj.t.r3 - camera_data.view_proj.t.r0;
-            frustum_planes[2] = camera_data.view_proj.t.r3 + camera_data.view_proj.t.r1;
-            frustum_planes[3] = camera_data.view_proj.t.r3 - camera_data.view_proj.t.r1;
-            frustum_planes[4] = camera_data.view_proj.t.r3 + camera_data.view_proj.t.r2;
-            frustum_planes[5] = camera_data.view_proj.t.r3 - camera_data.view_proj.t.r2;
+            auto inv_vp       = Transpose(vp);
+            frustum_planes[0] = inv_vp.r3 + inv_vp.r0;//left
+            frustum_planes[1] = inv_vp.r3 - inv_vp.r0;//right
+            frustum_planes[2] = inv_vp.r3 + inv_vp.r1;//top
+            frustum_planes[3] = inv_vp.r3 - inv_vp.r1;//bottom
+            frustum_planes[4] = inv_vp.r3 + inv_vp.r2;//near
+            frustum_planes[5] = inv_vp.r3 - inv_vp.r2;//far
+            //normalize
+            for (int i = 0; i < 6; i++) {
+                frustum_planes[i] /= Length(Vector3f(frustum_planes[i]));
+            }
         }
 
         auto frame_offset = frame_counter % render_cmd_lists.size();

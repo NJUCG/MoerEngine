@@ -27,25 +27,55 @@ struct CameraCullData {
 [[vk::binding(0, 3)]] RWByteAddressBuffer counters_buffer
     : register(u1, space1);
 
+uint IsInsideFrustum(in float4 planes[6], in float3 pos) {
+  bool inside = true;
+  [unroll] for (uint i = 0; i < 6; i++) {
+    // if (dot(float4(pos, 1.0f), planes[i]) < 0) {
+    //   return 0;
+    // }
+    inside &= (dot(float4(pos, 1.0f), planes[i]) > 0);
+  }
+  return inside ? 1 : 0;
+}
 bool IsInstanceVisible(in InstanceMeshletInfo instance) {
   // frustum cull use aabb
 
   float3 min_pos = instance.center - instance.extent;
   float3 max_pos = instance.center + instance.extent;
 
+  // float3 corners[8] = {
+  //     float3(min_pos.x, min_pos.y, min_pos.z),
+  //     float3(min_pos.x, min_pos.y, max_pos.z),
+  //     float3(min_pos.x, max_pos.y, min_pos.z),
+  //     float3(min_pos.x, max_pos.y, max_pos.z),
+  //     float3(max_pos.x, min_pos.y, min_pos.z),
+  //     float3(max_pos.x, min_pos.y, max_pos.z),
+  //     float3(max_pos.x, max_pos.y, min_pos.z),
+  //     float3(max_pos.x, max_pos.y, max_pos.z),
+  // };
+
+  // uint inside_count = IsInsideFrustum(cull_data.planes, corners[0]);
+  // inside_count += IsInsideFrustum(cull_data.planes, corners[1]);
+  // inside_count += IsInsideFrustum(cull_data.planes, corners[2]);
+  // inside_count += IsInsideFrustum(cull_data.planes, corners[3]);
+  // inside_count += IsInsideFrustum(cull_data.planes, corners[4]);
+  // inside_count += IsInsideFrustum(cull_data.planes, corners[5]);
+  // inside_count += IsInsideFrustum(cull_data.planes, corners[6]);
+  // inside_count += IsInsideFrustum(cull_data.planes, corners[7]);
+
+  // return inside_count > 0;
   for (uint i = 0; i < 6; i++) {
-    float3 normal = cull_data.planes[i].xyz;
-    float3 pos = normal * cull_data.planes[i].w;
-    float3 n = float3(normal.x > 0 ? min_pos.x : max_pos.x,
-                      normal.y > 0 ? min_pos.y : max_pos.y,
-                      normal.z > 0 ? min_pos.z : max_pos.z);
-    float3 p = float3(normal.x > 0 ? max_pos.x : min_pos.x,
-                      normal.y > 0 ? max_pos.y : min_pos.y,
-                      normal.z > 0 ? max_pos.z : min_pos.z);
-    float d = dot(n, normal);
-    float d1 = dot(p, normal);
-    float d2 = dot(pos, normal);
-    if (d2 + d < 0) {
+    float3 p = min_pos;
+    if (cull_data.planes[i].x > 0) {
+      p.x = max_pos.x;
+    }
+    if (cull_data.planes[i].y > 0) {
+      p.y = max_pos.y;
+    }
+    if (cull_data.planes[i].z > 0) {
+      p.z = max_pos.z;
+    }
+    if (dot(float4(p, 1.0f), cull_data.planes[i]) < 0) {
       return false;
     }
   }
@@ -66,7 +96,6 @@ bool IsInstanceVisible(in InstanceMeshletInfo instance) {
 
   uint instance_count = WaveActiveCountBits(visible);
   uint lane_offset = WavePrefixCountBits(visible);
-
 
   uint culled_meshlet_count = visible ? instance_mesh_info.meshlet_count : 0;
 

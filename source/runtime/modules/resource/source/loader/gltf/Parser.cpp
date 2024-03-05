@@ -250,7 +250,7 @@ namespace Moer::Resource::Gltf {
         m_scene = std::move(UniquePtr<Scene>(MoerNew(Scene)()));
         Assimp::Importer importer;
         auto             real_path  = std::filesystem::canonical(file_path);
-        const auto*      gltf_scene = importer.ReadFile(file_path.string(), aiProcess_Triangulate | aiProcess_GenNormals | aiProcess_CalcTangentSpace);
+        const auto*      gltf_scene = importer.ReadFile(file_path.string(), aiProcess_Triangulate | aiProcess_GenBoundingBoxes | aiProcess_GenNormals | aiProcess_CalcTangentSpace);
         if (!gltf_scene) {
             LOG_WARNING("Failed to load gltf file: {} ", file_path.string());
             return nullptr;
@@ -272,6 +272,8 @@ namespace Moer::Resource::Gltf {
         for (uint32_t i = 0; i < gltf_scene->mNumMeshes; i++) {
             const auto* mesh = gltf_scene->mMeshes[i];
 
+            auto aabb_min    = mesh->mAABB.mMin;
+            auto aabb_max    = mesh->mAABB.mMax;
             auto aabb_center = (mesh->mAABB.mMin + mesh->mAABB.mMax) * 0.5f;
             auto aabb_extent = mesh->mAABB.mMax - aabb_center;
 
@@ -491,7 +493,7 @@ namespace Moer::Resource::Gltf {
                 const auto  mesh_idx = node->mMeshes[i];
                 auto* const ai_mesh  = scene->mMeshes[mesh_idx];
                 const auto& aabb     = ai_mesh->mAABB;
-                auto entity = EntityManager::Get().Create();
+                auto        entity   = EntityManager::Get().Create();
 
                 RenderableManager::Builder().Geometry(EPrimitiveType::TRIANGLES,
                                                       m_mesh_infos[mesh_idx].vertex_count,
