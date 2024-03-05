@@ -63,6 +63,7 @@ VulkanPhysicalDeviceFeatures VulkanDeviceFeature::GetMESupportedDeviceFeatures(u
         enabled_features.core_1_2.timelineSemaphore   = VK_TRUE;
         enabled_features.core_1_2.bufferDeviceAddress = VK_TRUE;
         enabled_features.core_1_2.descriptorIndexing  = VK_TRUE;
+        enabled_features.core_1_2.drawIndirectCount   = VK_TRUE;
     }
 
     // 1.3 features

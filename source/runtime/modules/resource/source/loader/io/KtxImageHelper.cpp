@@ -1,7 +1,7 @@
 #include "KtxImageHelper.h"
 
 #include "math/Base.h"
-
+#include <mutex>
 #include <gl_format.h>
 #include <ktx.h>
 #include <astc_codec_internals.h>
@@ -440,4 +440,4 @@ namespace Moer {
         destroy_image(astc_image);
     }
 
-}
+}// namespace Moer

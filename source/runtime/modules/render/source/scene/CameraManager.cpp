@@ -16,9 +16,11 @@ namespace Moer {
         m_manager.RemoveComponent(entity);
     }
     CameraManager& CameraManager::Get() noexcept {
+        static UniquePtr<CameraManager> m_instance = nullptr;
+
         if (m_instance == nullptr) {
-            m_instance = std::make_unique<CameraManager>();
+            m_instance = std::move(UniquePtr<CameraManager>(MoerNew(CameraManager)()));
         }
         return *m_instance;
     }
-}
+}// namespace Moer

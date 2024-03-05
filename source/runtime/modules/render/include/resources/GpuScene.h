@@ -1,5 +1,6 @@
 #pragma once
 
+#include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "scene/ECS.h"
 
@@ -64,8 +65,16 @@ namespace Moer {
 
     class RENDER_API GpuSceneBufferBuilder {
     public:
+        GpuSceneBufferBuilder& Vertex(const Moer::Array<float>* data);
+        GpuSceneBufferBuilder& Index(const Moer::Array<uint32_t>* data);
+        GpuSceneBufferBuilder();
+        ~GpuSceneBufferBuilder();
+        std::pair<RHIBufferRef, RHIBufferRef> Build();
+        RHIBufferRef                          CopyFrom(const void* data, uint32_t size);
+        RHIBufferRef                          CreateBufferWithData(EBufferUsageFlags usages, const void* data, uint32_t size);
+
     protected:
         class Impl;
         Impl* m_impl{nullptr};
     };
-}
+}// namespace Moer

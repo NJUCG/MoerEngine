@@ -89,6 +89,8 @@ public:
     }
     class VulkanCommandAllocator* GetCurrentCommandAllocator();
     bool                          GetDescriptorSets(uint32_t _hash_key, const VulkanDescriptorSetsLayout& _layout, Moer::Array<VulkanDescriptorSetWriter>& _writers, Moer::Array<VkDescriptorSet>& _sets);
+    class VulkanStagingBuffer*    AquireStagingBuffer(uint64_t _byte_size);
+    void                          ReleaseStagingBuffer(class VulkanStagingBuffer*);
 
 private:
     VkPhysicalDevice                  m_gpu;
@@ -110,6 +112,9 @@ private:
 
     Moer::Array<class VulkanCommandAllocator*> m_command_allocators;
 
+    struct StagingBufferPool;
+    StagingBufferPool* m_staging_buffer_pool;
+
 private:
     VkPhysicalDevice SelectGpu(const DeviceInitializer& _init);
 
@@ -129,6 +134,10 @@ private:
 
     bool CheckEnabledExtensionsSupported(VkPhysicalDevice _gpu, const TVulkanDeviceExtensionArray& _enabled_extensions) const;
     bool CheckEnabledFeaturesSupported(VkPhysicalDevice _gpu, const VulkanPhysicalDeviceFeatures& _enabled_features, uint32_t _api_version);
+
+    void CreateStagingBufferPool();
+
+    void DestroyStagingBufferPool();
 };
 
 #endif// VULKAN_DEVICE_H

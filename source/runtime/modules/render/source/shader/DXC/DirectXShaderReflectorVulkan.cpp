@@ -78,8 +78,10 @@ void DirectXShaderReflectorVulkan::ReflectShader(const void* _compiled_result, c
             continue;
         }
         const auto& param = entry->second;
+
+        auto cpp_binding_type = BindingTypeToParameterType(base_type);
         //check type
-        if (BindingTypeToParameterType(base_type) != param.type) {
+        if (cpp_binding_type != param.type) {
             //type mismatch
             if (base_type == SBT_CONST_STRUCT) {
                 LOG_CRITICAL("push constant member define error, should be writen as\n[[vk::push_constant]]\nConstantBuffer<YourConstantStruct> {};", member.GetName());

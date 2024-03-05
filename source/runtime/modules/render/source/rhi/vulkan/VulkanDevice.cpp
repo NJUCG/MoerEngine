@@ -2,6 +2,9 @@
 // Created by 74535 on 2023/10/2.
 //
 
+#include "misc/STL.h"
+#include "rhi/RHICommon.h"
+#include "rhi/RHIResource.h"
 #include "rhi/vulkan/misc/VulkanMacroUtils.h"
 #include "VulkanDescriptor.h"
 #include "VulkanExtension.h"
@@ -10,6 +13,10 @@
 #include "VulkanCommand.h"
 #include "Core.h"
 #include "taskgraph/ThreadManager.h"
+#include "vk_mem_alloc.h"
+#include "vulkan/vulkan_core.h"
+#include <algorithm>
+#include <shared_mutex>
 
 namespace VkUtil = Moer::RHI::Vulkan::Util;
 
@@ -346,4 +353,88 @@ bool VulkanDevice::CheckEnabledFeaturesSupported(VkPhysicalDevice _gpu, const Vu
     m_gpu_features.Query(_gpu, _api_version);
 
     return m_gpu_features.Contains(_enabled_features);
+}
+struct VulkanDevice::StagingBufferPool {
+    static constexpr uint64_t max_total_size = 1024 * 1024 * 1024;// 1GB
+    static constexpr uint64_t chunk_sizes[]  = {
+        256,
+        4 * 1024,
+        32 * 1024,
+        128 * 1024,
+        1024 * 1024,
+        16 * 1024 * 1024,
+        64 * 1024 * 1024,
+        128 * 1024 * 1024,
+    };
+    //total size 1 GB
+    static constexpr uint32_t chunk_count[]{
+        1024,
+        256,
+        32,
+        8,
+        1,
+        1,
+        1,
+    };
+    std::shared_mutex m_mutex;
+
+    Moer::Map<uint64_t, Moer::Array<VulkanRHIBuffer*>> m_size_map;
+};
+void VulkanDevice::CreateStagingBufferPool() {
+    // m_staging_buffer_pool = MoerNew(StagingBufferPool)();
+
+    // int size_size = _array(StagingBufferPool::chunk_sizes);
+
+    // uint32_t queue_families[] = {m_queue_family_indices.compute.value(), m_queue_family_indices.graphics.value(), m_queue_family_indices.transfer.value()};
+
+    // VmaAllocationCreateInfo alloc_create_info{
+    //     .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+    //     .usage = VMA_MEMORY_USAGE_CPU_TO_GPU};
+
+    // for (uint32_t i = 0; i < size_size; ++i) {
+    //     auto               chunk_size = StagingBufferPool::chunk_sizes[i];
+    //     VkBufferCreateInfo buffer_create_info{};
+    //     buffer_create_info.sType                 = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    //     buffer_create_info.size                  = StagingBufferPool::chunk_sizes[i];
+    //     buffer_create_info.usage                 = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    //     buffer_create_info.sharingMode           = VK_SHARING_MODE_CONCURRENT;
+    //     buffer_create_info.queueFamilyIndexCount = 3;
+    //     buffer_create_info.pQueueFamilyIndices   = queue_families;
+
+    //     RHIBufferCreateInfo create_info = RHIBufferCreateInfo::Create()
+    //                                           .SetByteSize(chunk_size)
+    //                                           .SetUsage(EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST)
+    //                                           .SetStride(1);
+    //     for (uint32_t j = 0; j < StagingBufferPool::chunk_count[i]; ++j) {
+    //         VulkanRHIBuffer* buffer = MoerNew(VulkanRHIBuffer)(create_info);
+    //         VkBuffer         handle = buffer->GetHandle();
+    //         vmaCreateBuffer(m_allocator, &buffer_create_info, &alloc_create_info, &handle, &buffer->m_allocation, VK_NULL_HANDLE);
+    //     }
+    // }
+}
+
+VulkanStagingBuffer* VulkanDevice::AquireStagingBuffer(uint64_t _byte_size) {
+    std::shared_lock lock(m_staging_buffer_pool->m_mutex);
+
+    auto it = m_staging_buffer_pool->m_size_map.lower_bound(_byte_size);
+    return nullptr;
+}
+
+void VulkanDevice::ReleaseStagingBuffer(VulkanStagingBuffer* _buffer) {
+    std::unique_lock lock(m_staging_buffer_pool->m_mutex);
+    // auto             it = m_staging_buffer_pool->m_size_map.find(_buffer->GetByteSize());
+    // if (it != m_staging_buffer_pool->m_size_map.end()) {
+    //     it->second.push_back(_buffer);
+    // } else {
+    //     m_staging_buffer_pool->m_size_map.insert(std::make_pair(_buffer->GetByteSize(), Moer::Array<VulkanRHIBuffer*>{_buffer}));
+    // }
+}
+
+void VulkanDevice::DestroyStagingBufferPool() {
+    // for (auto& it : m_staging_buffer_pool->m_size_map) {
+    //     for (auto& buffer : it.second) {
+    //         MoerDelete(buffer);
+    //     }
+    // }
+    // MoerDelete(m_staging_buffer_pool);
 }

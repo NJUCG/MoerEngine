@@ -36,7 +36,7 @@ RHIViewInfo::Buffer::ViewInfo RHIViewInfo::Buffer::GetViewInfo(RHIBuffer* target
 
     switch (temp_buffer_type) {
         case EBufferType::STRUCTURED:
-            assert(EnumHasAnyFlag(info.usage, EBufferUsageFlags::STRUCTURED_BUFFER) && "the buffer is not a structured buffer.");
+            assert(EnumHasAnyFlag(info.usage, EBufferUsageFlags::STORAGE_BUFFER) && "the buffer is not a structured buffer.");
             assert(format == PF_UNDEFINED && "structured buffer should not have a pixel format.");
             temp_byte_stride = stride == 0 ? info.stride : stride;
             break;
@@ -134,8 +134,8 @@ RHIViewInfo::TextureUAV::ViewInfo RHIViewInfo::TextureUAV::GetViewInfo(RHITextur
 }
 
 RHITextureReference::RHITextureReference(
-    RHITexture*            _texture,
-    RHIShaderResourceView* _bindless_view)
+    RHITexture* _texture,
+    RHISRV*     _bindless_view)
     : RHITexture(RRT_TEXTURE_REFERENCE),
       texture_ref(_texture),
       bindless_view(_bindless_view){

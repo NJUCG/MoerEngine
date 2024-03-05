@@ -8,6 +8,7 @@
 
 #include "VulkanRHIResource.h"
 
+#include <variant>
 #include <vulkan/vulkan.h>
 
 class VulkanDevice;
@@ -77,6 +78,7 @@ public:
     }
 
     void SetPipelineState(RHIGraphicsPipelineState* _graphics_pso) override;
+    void SetPipelineState(RHIComputePipelineState* _compute_pso) override;
     void BeginRecording() override;
     void EndRecording() override;
     void Reset() override;
@@ -139,11 +141,11 @@ public:
 
     void ClearDepthStencil() override;
     void ClearUAVInt(
-        RHIUnorderedAccessView* _uav,
-        const Moer::Vector4i&   _values) override;
+        RHIUAV*               _uav,
+        const Moer::Vector4i& _values) override;
     void ClearUAVFloat(
-        RHIUnorderedAccessView* _uav,
-        const Moer::Vector4f&   _values) override;
+        RHIUAV*               _uav,
+        const Moer::Vector4f& _values) override;
 
     void BeginRenderPass(const RHIRenderPassInfo& _pass_info, const char* _pass_name) override;
     void EndRenderPass() override;
@@ -177,13 +179,15 @@ protected:
     friend class VulkanRHICommandQueue;
 
 private:
-    VulkanRHIGraphicsPipelineState* m_current_pipeline_state;
+    VulkanRHIGraphicsPipelineState*                                               m_current_pipeline_state;
+    std::variant<VulkanRHIGraphicsPipelineState*, VulkanRHIComputePipelineState*> current_pso;
 
 private:
     VkRenderingAttachmentInfo FromColorAttachmentInfo(const RHIRenderPassInfo::ColorAttachmentInfo& _color_attachment_info) const;
     VkRenderingAttachmentInfo FromDepthStencilAttachmentInfo(const RHIRenderPassInfo::DepthStencilAttachmentInfo& _depth_stencil_attachment_info) const;
 
     void PrepareDrawCommand();
+    void PrepareDispatch();
 
     // MARK: bound sets rely on corresponding command list, it maybe wrong when muti-threading recording.
     Moer::Array<VkDescriptorSet> m_bound_sets;
@@ -231,6 +235,9 @@ public:
     void CopyTextureToBuffer(const RHICopyTextureToBufferInfo& _info, RHITexture* src_texture, RHIBuffer* dst_buffer) override;
 
     void SetPipelineBarrier(const RHIBarrierDependencyInfo& _dependency) override;
+
+protected:
+    void PrepareDispatch();
 };
 
 class VulkanRHICommandQueue final : public RHICommandQueue,

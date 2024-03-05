@@ -134,14 +134,14 @@ ShaderMetaType::~ShaderMetaType() {
 
 Moer::UnorderedMap<ShaderTypeKey, ShaderMetaType*>& ShaderMetaType::GetNameToTypeMap() {
     // static Moer::UnorderedMap<std::string_view, ShaderMetaType*> name_to_shader_meta_type;
-    static Moer::UnorderedMap<ShaderTypeKey, ShaderMetaType*>   type_to_shader_meta_type;
+    static Moer::UnorderedMap<ShaderTypeKey, ShaderMetaType*> type_to_shader_meta_type;
     return type_to_shader_meta_type;
 }
 
 ShaderMetaType* ShaderMetaType::GetShaderMetaType(uint32_t _type_name_hash) {
     auto& name_to_type_map = GetNameToTypeMap();
     auto  iter             = name_to_type_map.find(_type_name_hash);
-    if (iter != name_to_type_map.end()) {
+    if (iter != name_to_type_map.end() && name_to_type_map.count(_type_name_hash) > 0) {
         return iter->second;
     }
     return nullptr;
@@ -151,7 +151,7 @@ ShaderMetaType* ShaderMetaType::GetShaderMetaType(std::string_view _type_name) {
     return GetShaderMetaType(GetHash(_type_name));
 }
 
-void ShaderMetaType::RegistrateShaderMetaType(ShaderMetaType *type) {
+void ShaderMetaType::RegistrateShaderMetaType(ShaderMetaType* type) {
     GetNameToTypeMap().insert({type->type_name_hash, type});
 }
 
