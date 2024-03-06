@@ -43,43 +43,37 @@ bool IsInstanceVisible(in InstanceMeshletInfo instance) {
   float3 min_pos = instance.center - instance.extent;
   float3 max_pos = instance.center + instance.extent;
 
-  // float3 corners[8] = {
-  //     float3(min_pos.x, min_pos.y, min_pos.z),
-  //     float3(min_pos.x, min_pos.y, max_pos.z),
-  //     float3(min_pos.x, max_pos.y, min_pos.z),
-  //     float3(min_pos.x, max_pos.y, max_pos.z),
-  //     float3(max_pos.x, min_pos.y, min_pos.z),
-  //     float3(max_pos.x, min_pos.y, max_pos.z),
-  //     float3(max_pos.x, max_pos.y, min_pos.z),
-  //     float3(max_pos.x, max_pos.y, max_pos.z),
-  // };
+  float3 corners[8] = {
+      float3(min_pos.x, min_pos.y, min_pos.z),
+      float3(min_pos.x, min_pos.y, max_pos.z),
+      float3(min_pos.x, max_pos.y, min_pos.z),
+      float3(min_pos.x, max_pos.y, max_pos.z),
+      float3(max_pos.x, min_pos.y, min_pos.z),
+      float3(max_pos.x, min_pos.y, max_pos.z),
+      float3(max_pos.x, max_pos.y, min_pos.z),
+      float3(max_pos.x, max_pos.y, max_pos.z),
+  };
 
-  // uint inside_count = IsInsideFrustum(cull_data.planes, corners[0]);
-  // inside_count += IsInsideFrustum(cull_data.planes, corners[1]);
-  // inside_count += IsInsideFrustum(cull_data.planes, corners[2]);
-  // inside_count += IsInsideFrustum(cull_data.planes, corners[3]);
-  // inside_count += IsInsideFrustum(cull_data.planes, corners[4]);
-  // inside_count += IsInsideFrustum(cull_data.planes, corners[5]);
-  // inside_count += IsInsideFrustum(cull_data.planes, corners[6]);
-  // inside_count += IsInsideFrustum(cull_data.planes, corners[7]);
-
-  // return inside_count > 0;
-  for (uint i = 0; i < 6; i++) {
-    float3 p = min_pos;
-    if (cull_data.planes[i].x > 0) {
-      p.x = max_pos.x;
-    }
-    if (cull_data.planes[i].y > 0) {
-      p.y = max_pos.y;
-    }
-    if (cull_data.planes[i].z > 0) {
-      p.z = max_pos.z;
-    }
-    if (dot(float4(p, 1.0f), cull_data.planes[i]) < 0) {
-      return false;
-    }
+  // convert to vp space
+  float4x4 vp = cull_data.camera_data.view_proj;
+  [unroll] for (uint i = 0; i < 8; i++) {
+    float4 clip = mul(vp, float4(corners[i], 1.0f));
+    corners[i] = clip.xyz / clip.w;
   }
-  return true;
+
+  // build new aabbz
+  float3 new_min = corners[0];
+  float3 new_max = corners[0];
+  [unroll] for (uint i = 0; i < 8; i++) {
+    new_min = min(new_min, corners[i]);
+    new_max = max(new_max, corners[i]);
+  }
+
+  bool culled = new_max.x < -1 || new_min.x > 1 || new_max.y < -1 ||
+                new_min.y > 1 || new_max.z < 0 || new_min.z > 1;
+  if (culled)
+    printf("instance_culled");
+  return !culled;
 }
 
 [numthreads(64, 1, 1)] void main(uint3 dtid

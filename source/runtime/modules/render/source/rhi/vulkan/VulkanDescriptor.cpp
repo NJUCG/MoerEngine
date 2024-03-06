@@ -235,7 +235,7 @@ bool VulkanDescriptorSetAllocator::VulkanDescriptorSetCachePool::AllocateDescrip
     alloc_info.pSetLayouts        = &_layout;
 
     auto result = vkAllocateDescriptorSets(m_device->GetDevice(), &alloc_info, &_set) == VK_SUCCESS;
-    assert(result);
+    // assert(result);
     return result;
 }
 

@@ -383,17 +383,26 @@ namespace Moer::Resource::Gltf {
                                        0,
                                        instance_id,
                                        0);
-
-            auto new_min = model_2_world * Vector4f(mesh_info.center - mesh_info.extent, 1.0f);
-            auto new_max = model_2_world * Vector4f(mesh_info.center + mesh_info.extent, 1.0f);
-
-            auto min = Min(Vector3f(new_min), Vector3f(new_max));
-            auto max = Max(Vector3f(new_min), Vector3f(new_max));
+            Vector4f corner[8];
+            corner[0]    = model_2_world * Vector4f(mesh_info.center + mesh_info.extent, 1.0f);
+            corner[1]    = model_2_world * Vector4f(mesh_info.center - Vector3f(mesh_info.extent.x, mesh_info.extent.y, -mesh_info.extent.z), 1.0f);
+            corner[2]    = model_2_world * Vector4f(mesh_info.center - Vector3f(mesh_info.extent.x, -mesh_info.extent.y, mesh_info.extent.z), 1.0f);
+            corner[3]    = model_2_world * Vector4f(mesh_info.center - Vector3f(mesh_info.extent.x, -mesh_info.extent.y, -mesh_info.extent.z), 1.0f);
+            corner[4]    = model_2_world * Vector4f(mesh_info.center - Vector3f(-mesh_info.extent.x, mesh_info.extent.y, mesh_info.extent.z), 1.0f);
+            corner[5]    = model_2_world * Vector4f(mesh_info.center - Vector3f(-mesh_info.extent.x, mesh_info.extent.y, -mesh_info.extent.z), 1.0f);
+            corner[6]    = model_2_world * Vector4f(mesh_info.center - Vector3f(-mesh_info.extent.x, -mesh_info.extent.y, mesh_info.extent.z), 1.0f);
+            corner[7]    = model_2_world * Vector4f(mesh_info.center - mesh_info.extent, 1.0f);
+            auto new_min = corner[0];
+            auto new_max = corner[0];
+            for (int i = 1; i < 8; i++) {
+                new_min = Min(new_min, corner[i]);
+                new_max = Max(new_max, corner[i]);
+            }
 
             instance_mesh_info.emplace_back(
-                Vector3f(min + max) * 0.5f,
+                Vector3f(new_min + new_max) * 0.5f,
                 mesh_info.vertex_offset,
-                Vector3f(max - min) * 0.5f,
+                Vector3f(new_max - new_min) * 0.5f,
                 mesh_info.vertex_count,
                 mesh_info.index_offset,
                 mesh_info.index_count,

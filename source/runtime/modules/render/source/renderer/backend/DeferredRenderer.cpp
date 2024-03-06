@@ -2,6 +2,7 @@
 #include "PixelFormat.h"
 #include "RenderThread.h"
 #include "RendererManager.h"
+#include "log/LogSystem.h"
 #include "math/Base.h"
 #include "Core.h"
 #include "math/Function.h"
@@ -404,7 +405,7 @@ namespace Moer {
             frustum_planes[1] = inv_vp.r3 - inv_vp.r0;//right
             frustum_planes[2] = inv_vp.r3 + inv_vp.r1;//top
             frustum_planes[3] = inv_vp.r3 - inv_vp.r1;//bottom
-            frustum_planes[4] = inv_vp.r3 + inv_vp.r2;//near
+            frustum_planes[4] = inv_vp.r2;            //near
             frustum_planes[5] = inv_vp.r3 - inv_vp.r2;//far
             //normalize
             for (int i = 0; i < 6; i++) {
