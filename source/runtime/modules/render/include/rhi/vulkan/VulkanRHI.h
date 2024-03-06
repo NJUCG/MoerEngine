@@ -61,6 +61,8 @@ public:
     RHICopyCommandList* RHICreateCopyCommandList(RHICommandAllocator* _allocator) final override;
 
     RHICommandAllocator* RHIGetCurrentCommandAllocator() final override;
+
+    RHICBVRef RHICreateCBV(RHIBuffer* _resource, uint64_t _size, uint64_t _byte_offset) final override;
 #pragma endregion
 
 #pragma region viewport

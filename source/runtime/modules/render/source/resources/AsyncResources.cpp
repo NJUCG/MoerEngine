@@ -73,14 +73,14 @@ namespace Moer {
 
         RHITextureRef present_texture;
         RHISRVRef     present_texture_srv;
-        
+
         Moer::Array<RHITextureRef> swapchain_textures;
         Moer::Array<RHIUAVRef>     swapchain_uavs;
         uint64_t                   frame_index     = 0;
         uint64_t                   presented_index = 0;
 
-        RHITextureRef             depth_texture;
-        RHIUAVRef depth_texture_uav;
+        RHITextureRef depth_texture;
+        RHIUAVRef     depth_texture_uav;
 
         RHICommandQueue* copy_queue;
 
@@ -134,7 +134,7 @@ namespace Moer {
     RHIUAVRef VirtualViewport::GetDepthBufferUAV() {
         return impl->GetDepthBufferUav();
     }
-    
+
     RHISRV* VirtualViewport::GetPresentTextureSRV() {
         return impl->GetPresentTextureSRV();
     }
@@ -175,7 +175,6 @@ namespace Moer {
                                         .SetInitialLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED)
                                         .SetUsageFlags(
                                             ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT);
-        
 
         CreateResources();
         copy_queue->WaitForQueueComplete();
@@ -200,9 +199,8 @@ namespace Moer {
         }
 
         depth_texture     = g_rhi->RHICreateTexture(depth_texture_create_info);
-        depth_texture_uav = g_rhi->RHICreateTextureUAV(depth_texture,depth_texture_create_info.format);
+        depth_texture_uav = g_rhi->RHICreateTextureUAV(depth_texture, depth_texture_create_info.format);
 
-        
         RHIFenceRef fence = g_rhi->RHICreateFence({.usage = EFenceUsageFlags::BINARY});
 
         RHIBarrierDependencyInfo barrier_info;
@@ -222,8 +220,9 @@ namespace Moer {
 
         barriers[info.back_buffer_count + 1].SetDstTextureLayout(TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE);
         barriers[info.back_buffer_count + 1].SetSrcTextureLayout(TEXTURE_LAYOUT_UNDEFINED);
+        barriers[info.back_buffer_count + 1].SetDstStage(PS_EARLY_FRAGMENT_TESTS);
         barriers[info.back_buffer_count + 1].SetTexture(depth_texture);
-        barriers[info.back_buffer_count + 1].SetSubResourceRange({});
+        barriers[info.back_buffer_count + 1].SetSubResourceRange(RHISubresourceRange(ETextureAspectFlags::DEPTH_SLICE | ETextureAspectFlags::STENCIL_SLICE));
 
         copy_cmd_list->BeginRecording();
         copy_cmd_list->SetPipelineBarrier(barrier_info);
