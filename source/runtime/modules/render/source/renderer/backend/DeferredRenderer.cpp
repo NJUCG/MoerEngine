@@ -387,8 +387,26 @@ namespace Moer {
 
         CameraData camera_data;
         auto       camera_proj = camera->GetProjectionMatrix();
+        Vector3f   near_plane_pos{0, 0, -0.01f};
+        Vector3f   far_plane_pos{0, 0, -4000.f};
+        Vector3f   center_pos{0, 0, -1000.f};
+        auto       near_plane_pos_proj = camera_proj * Vector4f(near_plane_pos, 1.f);
+        auto       far_plane_pos_proj  = camera_proj * Vector4f(far_plane_pos, 1.f);
+        auto       center_pos_proj     = camera_proj * Vector4f(center_pos, 1.f);
         // LOG_INFO("camera proj: {} {} {} {}", camera_proj.r0, camera_proj.r1, camera_proj.r2, camera_proj.r3);
         auto vp = camera->GetProjectionMatrix() * camera->GetViewMatrix();
+
+        Vector4f clip_planes[6];
+        clip_planes[0] = camera_proj.r3 + camera_proj.r0;//left
+        clip_planes[1] = camera_proj.r3 - camera_proj.r0;//right
+        clip_planes[2] = camera_proj.r3 + camera_proj.r1;//bottom
+        clip_planes[3] = camera_proj.r3 - camera_proj.r1;//top
+        clip_planes[4] = camera_proj.r2;                 //near plane is projected to zero, depth[0,1], so the fomula is changed to z^ > 0
+        clip_planes[5] = camera_proj.r3 - camera_proj.r2;
+
+        for (int i = 0; i < 6; i++) {
+            clip_planes[i] = clip_planes[i] / Length(Vector3f(clip_planes[i]));
+        }
 
         camera_data.prev_view_proj = Transpose(vp);
 
@@ -405,12 +423,12 @@ namespace Moer {
         std::string_view plane_names[] = {"left", "right", "bottom", "top", "near", "far"};
 
         {
-            auto target_vp    = Transpose(vp);
+            auto target_vp    = vp;
             frustum_planes[0] = target_vp.r3 + target_vp.r0;//left
             frustum_planes[1] = target_vp.r3 - target_vp.r0;//right
             frustum_planes[2] = target_vp.r3 + target_vp.r1;//top
             frustum_planes[3] = target_vp.r3 - target_vp.r1;//bottom
-            frustum_planes[4] = target_vp.r3 + target_vp.r2;//near
+            frustum_planes[4] = target_vp.r2;               //near
             frustum_planes[5] = target_vp.r3 - target_vp.r2;//far
             //normalize
             for (int i = 0; i < 6; i++) {
@@ -438,16 +456,38 @@ namespace Moer {
                 LOG_INFO("inside frustum");
             return out_frustum;
         };
-        frustum_point_test(zero_point, &(frustum_planes[0]));
-        frustum_point_test(Vector3f(0, 0, -1.f), &(frustum_planes[0]));
-        frustum_point_test(Vector3f(0, 0, 1.f), &(frustum_planes[0]));
-        frustum_point_test(Vector3f(0, 0, -50000.f), &(frustum_planes[0]));
+
+        auto proj_plane_test = [&](Vector3f point, const Vector4f* planes) {
+            LOG_INFO("test point: {} {} {}", point.x, point.y, point.z);
+            auto world_pos   = point;
+            bool out_frustum = false;
+            for (int i = 0; i < 6; i++) {
+                auto result = Dot(planes[i], Vector4f(world_pos, 1.f));
+                if (result < 0.f) {
+                    LOG_INFO("outside {} plane", plane_names[i]);
+                }
+                out_frustum |= (result < 0.f);
+            }
+            if (out_frustum)
+                LOG_INFO("outside frustum");
+            else
+                LOG_INFO("inside frustum");
+            return out_frustum;
+        };
+        // frustum_point_test(zero_point, &(frustum_planes[0]));
+        // frustum_point_test(Vector3f(0, 0, -1.f), &(frustum_planes[0]));
+        // frustum_point_test(Vector3f(0, 0, 1.f), &(frustum_planes[0]));
+        // frustum_point_test(Vector3f(0, 0, -50000.f), &(frustum_planes[0]));
+
+        // proj_plane_test(Vector3f(0, 0, -1.f), &(clip_planes[0]));
+        // proj_plane_test(Vector3f(0, 0, 1.f), &(clip_planes[0]));
+        // proj_plane_test(Vector3f(0, 0, -50000.f), &(clip_planes[0]));
 
         auto frame_offset = frame_counter % render_cmd_lists.size();
         {
             auto fill_uniform_data = [this, frame_offset, data(cull_data)]() {
                 auto  c_data = data;
-                auto* ptr = g_rhi->RHIMapBuffer(uniform_buffer, frame_offset * sizeof(CameraCullData), sizeof(CameraCullData));
+                auto* ptr    = g_rhi->RHIMapBuffer(uniform_buffer, frame_offset * sizeof(CameraCullData), sizeof(CameraCullData));
 
                 std::memcpy(ptr, &data, sizeof(CameraCullData));
                 g_rhi->RHIUnmapBuffer(uniform_buffer);

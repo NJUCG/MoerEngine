@@ -49,7 +49,18 @@ struct MeshletDesc {
 struct MeshletBound {
   float3 center;
   float radius;
-  float3 cone_axis;
-  float cone_angle;
+  /* normal cone axis and cutoff, stored in 8-bit SNORM format; decode using
+   * x/127.0 */
+  uint packed_cut_off;
+  /* dot(center - camera_position, cone_axis) >= cone_cutoff * length(center -
+   * camera_position) + radius
+   */
+  void DecodeCutOff(out float3 cone_axis, out float cut_off) {
+    cone_axis =
+        float3(float(packed_cut_off & 0x000000FF) * 0.0078740157,
+               float((packed_cut_off & 0x0000FF00) >> 8) * 0.0078740157,
+               float((packed_cut_off & 0x00FF0000) >> 16) * 0.0078740157);
+    cut_off = float((packed_cut_off & 0xFF000000) >> 24) * 0.0078740157;
+  }
 };
 #endif
