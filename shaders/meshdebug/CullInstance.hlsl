@@ -43,35 +43,46 @@ bool IsInstanceVisible(in InstanceMeshletInfo instance) {
   float3 min_pos = instance.center - instance.extent;
   float3 max_pos = instance.center + instance.extent;
 
-  float3 corners[8] = {
-      float3(min_pos.x, min_pos.y, min_pos.z),
-      float3(min_pos.x, min_pos.y, max_pos.z),
-      float3(min_pos.x, max_pos.y, min_pos.z),
-      float3(min_pos.x, max_pos.y, max_pos.z),
-      float3(max_pos.x, min_pos.y, min_pos.z),
-      float3(max_pos.x, min_pos.y, max_pos.z),
-      float3(max_pos.x, max_pos.y, min_pos.z),
-      float3(max_pos.x, max_pos.y, max_pos.z),
-  };
+  // float3 corners[8] = {
+  //     float3(min_pos.x, min_pos.y, min_pos.z),
+  //     float3(min_pos.x, min_pos.y, max_pos.z),
+  //     float3(min_pos.x, max_pos.y, min_pos.z),
+  //     float3(min_pos.x, max_pos.y, max_pos.z),
+  //     float3(max_pos.x, min_pos.y, min_pos.z),
+  //     float3(max_pos.x, min_pos.y, max_pos.z),
+  //     float3(max_pos.x, max_pos.y, min_pos.z),
+  //     float3(max_pos.x, max_pos.y, max_pos.z),
+  // };
 
-  // convert to vp space
-  float4x4 vp = cull_data.camera_data.view_proj;
-  [unroll] for (uint i = 0; i < 8; i++) {
-    float4 clip = mul(vp, float4(corners[i], 1.0f));
-    corners[i] = clip.xyz / clip.w;
+  // // convert to vp space
+  // float4x4 vp = cull_data.camera_data.view_proj;
+  // [unroll] for (uint i = 0; i < 8; i++) {
+  //   float4 clip = mul(vp, float4(corners[i], 1.0f));
+  //   corners[i] = clip.xyz / clip.w;
+  // }
+
+  // // build new aabb, which can also be use for occlusion cull
+  // float3 new_min = corners[0];
+  // float3 new_max = corners[0];
+  // [unroll] for (uint i = 0; i < 8; i++) {
+  //   new_min = min(new_min, corners[i]);
+  //   new_max = max(new_max, corners[i]);
+  // }
+
+  // bool culled = new_max.x < -1 || new_min.x > 1 || new_max.y < -1 ||
+  //               new_min.y > 1 || new_max.z < 0 || new_min.z > 1;
+  bool b_outside = false;
+  // plane tests
+  for (uint i = 0; i < 6; i++) {
+    float3 plane_normal = cull_data.planes[i].xyz;
+    float3 candidate_point = float3(plane_normal.x > 0 ? max_pos.x : min_pos.x,
+                                    plane_normal.y > 0 ? max_pos.y : min_pos.y,
+                                    plane_normal.z > 0 ? max_pos.z : min_pos.z);
+
+    b_outside |= dot(float4(candidate_point, 1.0f), cull_data.planes[i]) < 0;
   }
 
-  // build new aabb, which can also be use for occlusion cull
-  float3 new_min = corners[0];
-  float3 new_max = corners[0];
-  [unroll] for (uint i = 0; i < 8; i++) {
-    new_min = min(new_min, corners[i]);
-    new_max = max(new_max, corners[i]);
-  }
-
-  bool culled = new_max.x < -1 || new_min.x > 1 || new_max.y < -1 ||
-                new_min.y > 1 || new_max.z < 0 || new_min.z > 1;
-  return !culled;
+  return !b_outside;
 }
 
 [numthreads(64, 1, 1)] void main(uint3 dtid

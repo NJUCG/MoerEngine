@@ -34,17 +34,18 @@ struct CameraCullData {
 
 bool IsMeshletVisible(in MeshletBound bound, in float4x4 world,
                       in float scale) {
-  float4 center = mul(float4(bound.center, 1.0f), world);
+  float4 center = mul(world, float4(bound.center, 1.0f));
   float radius = bound.radius * scale;
 
   [unroll] for (uint i = 0; i < 6; i++) {
-    float3 abs_normal = abs(cull_data.planes[i].xyz);
-    if (dot(center, cull_data.planes[i]) < -radius) {
+    if (dot(center, cull_data.planes[i]) + radius < 0) {
       return false;
     }
     // printf("planes[%d] = %f %f %f %f\n", i, cull_data.planes[i].x,
     //        cull_data.planes[i].y, cull_data.planes[i].z,
     //        cull_data.planes[i].w);
+
+    printf("scale = %f\n", scale);
   }
   //   for (uint i = 0; i < 6; i++) {
   //     if (dot(center, cull_data.planes[i]) < -radius) {

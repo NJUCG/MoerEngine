@@ -385,7 +385,7 @@ namespace Moer::Resource::Gltf {
             auto scale = transform.AffineDecomposition().scaling;
             instance_data.emplace_back(Transpose(model_2_world),
                                        Transpose(Inverse(model_2_world)),
-                                       std::min(scale.x, std::min(scale.y, scale.z)),
+                                       std::max(scale.x, std::max(scale.y, scale.z)),
                                        0,
                                        instance_id,
                                        0);
