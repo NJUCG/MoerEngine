@@ -71,8 +71,7 @@ bool IsInstanceVisible(in InstanceMeshletInfo instance) {
 
   bool culled = new_max.x < -1 || new_min.x > 1 || new_max.y < -1 ||
                 new_min.y > 1 || new_max.z < 0 || new_min.z > 1;
-  if (culled)
-    printf("instance_culled");
+
   return !culled;
 }
 
