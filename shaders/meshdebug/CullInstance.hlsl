@@ -61,7 +61,7 @@ bool IsInstanceVisible(in InstanceMeshletInfo instance) {
     corners[i] = clip.xyz / clip.w;
   }
 
-  // build new aabbz
+  // build new aabb, which can also be use for occlusion cull
   float3 new_min = corners[0];
   float3 new_max = corners[0];
   [unroll] for (uint i = 0; i < 8; i++) {
@@ -71,8 +71,6 @@ bool IsInstanceVisible(in InstanceMeshletInfo instance) {
 
   bool culled = new_max.x < -1 || new_min.x > 1 || new_max.y < -1 ||
                 new_min.y > 1 || new_max.z < 0 || new_min.z > 1;
-  if (culled)
-    printf("instance_culled");
   return !culled;
 }
 

@@ -386,7 +386,10 @@ namespace Moer {
         auto camera        = CameraManager::Get().Get(camera_entity);
 
         CameraData camera_data;
-        auto       vp              = camera->GetProjectionMatrix() * camera->GetViewMatrix();
+        auto       camera_proj = camera->GetProjectionMatrix();
+        // LOG_INFO("camera proj: {} {} {} {}", camera_proj.r0, camera_proj.r1, camera_proj.r2, camera_proj.r3);
+        auto vp = camera->GetProjectionMatrix() * camera->GetViewMatrix();
+
         camera_data.prev_view_proj = Transpose(vp);
 
         camera->Tick();
@@ -399,23 +402,51 @@ namespace Moer {
         cull_data.camera_data = camera_data;
         auto& frustum_planes  = cull_data.frustum_planes;
         //calculate world space frustum planes
+        std::string_view plane_names[] = {"left", "right", "bottom", "top", "near", "far"};
+
         {
-            auto inv_vp       = Transpose(vp);
-            frustum_planes[0] = inv_vp.r3 + inv_vp.r0;//left
-            frustum_planes[1] = inv_vp.r3 - inv_vp.r0;//right
-            frustum_planes[2] = inv_vp.r3 + inv_vp.r1;//top
-            frustum_planes[3] = inv_vp.r3 - inv_vp.r1;//bottom
-            frustum_planes[4] = inv_vp.r2;            //near
-            frustum_planes[5] = inv_vp.r3 - inv_vp.r2;//far
+            auto target_vp    = Transpose(vp);
+            frustum_planes[0] = target_vp.r3 + target_vp.r0;//left
+            frustum_planes[1] = target_vp.r3 - target_vp.r0;//right
+            frustum_planes[2] = target_vp.r3 + target_vp.r1;//top
+            frustum_planes[3] = target_vp.r3 - target_vp.r1;//bottom
+            frustum_planes[4] = target_vp.r3 + target_vp.r2;//near
+            frustum_planes[5] = target_vp.r3 - target_vp.r2;//far
             //normalize
             for (int i = 0; i < 6; i++) {
-                frustum_planes[i] /= Length(Vector3f(frustum_planes[i]));
+                auto length       = Length(Vector3f(frustum_planes[i]));
+                frustum_planes[i] = Vector4f(Normalizef(Vector3f(frustum_planes[i])), frustum_planes[i].w / length);
             }
         }
+        auto     inv_view           = Inverse(camera->GetViewMatrix());
+        Vector3f zero_point         = Vector3f(0, 0, 0);
+        auto     frustum_point_test = [&](Vector3f point, const Vector4f* planes) {
+            LOG_INFO("test point: {} {} {}", point.x, point.y, point.z);
+            auto world_pos   = inv_view * Vector4f(point, 1.f);
+            world_pos        = world_pos / world_pos.w;
+            bool out_frustum = false;
+            for (int i = 0; i < 6; i++) {
+                auto result = Dot(planes[i], world_pos);
+                if (result < 0.f) {
+                    LOG_INFO("outside {} plane", plane_names[i]);
+                }
+                out_frustum |= (result < 0.f);
+            }
+            if (out_frustum)
+                LOG_INFO("outside frustum");
+            else
+                LOG_INFO("inside frustum");
+            return out_frustum;
+        };
+        frustum_point_test(zero_point, &(frustum_planes[0]));
+        frustum_point_test(Vector3f(0, 0, -1.f), &(frustum_planes[0]));
+        frustum_point_test(Vector3f(0, 0, 1.f), &(frustum_planes[0]));
+        frustum_point_test(Vector3f(0, 0, -50000.f), &(frustum_planes[0]));
 
         auto frame_offset = frame_counter % render_cmd_lists.size();
         {
             auto fill_uniform_data = [this, frame_offset, data(cull_data)]() {
+                auto  c_data = data;
                 auto* ptr = g_rhi->RHIMapBuffer(uniform_buffer, frame_offset * sizeof(CameraCullData), sizeof(CameraCullData));
 
                 std::memcpy(ptr, &data, sizeof(CameraCullData));
