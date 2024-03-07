@@ -479,6 +479,14 @@ private:
     VkBufferView m_view = VK_NULL_HANDLE;
 };
 
+class VulkanRHIAccelerationStructureSRV final : public RHISRV, public VulkanDeviceObject {
+    friend VulkanRHIImpl;
+
+public:
+    virtual ~VulkanRHIAccelerationStructureSRV();
+    explicit VulkanRHIAccelerationStructureSRV(VulkanDevice* _device, RHIViewableResource* _resource, const RHIViewInfo& _viewinfo) : RHISRV(_resource, _viewinfo), VulkanDeviceObject(_device){};
+};
+
 class VulkanImageView final : public RHIView {
     friend VulkanRHIImpl;
 
@@ -557,7 +565,7 @@ protected:
 };
 class VulkanRHIRayTracingTLAS final : public RHIRayTracingTLAS, public VulkanRHIRayTracingAccelerationStructure {
     friend VulkanRHIImpl;
-
+    friend VulkanPipelineResourceCache;
 public:
     VulkanRHIRayTracingTLAS(const RHIRayTracingTLASInitializer& _init) : RHIRayTracingTLAS(_init) {
     }

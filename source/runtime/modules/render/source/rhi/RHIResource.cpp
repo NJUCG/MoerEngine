@@ -40,11 +40,6 @@ RHIViewInfo::Buffer::ViewInfo RHIViewInfo::Buffer::GetViewInfo(RHIBuffer* target
             assert(format == PF_UNDEFINED && "structured buffer should not have a pixel format.");
             temp_byte_stride = stride == 0 ? info.stride : stride;
             break;
-        case EBufferType::ACCELERATION_STRUCTURE:
-            assert(EnumHasAnyFlag(info.usage, EBufferUsageFlags::ACCELERATION_STRUCTURE) && "the buffer is not a ray-tracing acceleration buffer");
-            assert(format == PF_UNDEFINED && "acceleration structure views should not specify pixel format.");
-            temp_byte_stride = 1;
-            break;
         case EBufferType::RAW:
             break;
             //todo: query support for byte address buffer
@@ -58,7 +53,7 @@ RHIViewInfo::Buffer::ViewInfo RHIViewInfo::Buffer::GetViewInfo(RHIBuffer* target
     assert(byte_offset < info.size && "offset out of bounds of buffer size");
     assert(byte_offset % temp_byte_stride == 0 && "offset must be a multiple of stride");
     temp_byte_offset = byte_offset;
-    assert(temp_buffer_type == EBufferType::ACCELERATION_STRUCTURE || (byte_offset == 0 || num_elements > 0) && "");
+    assert(byte_offset == 0 || num_elements > 0 && "");
     temp_num_elements = num_elements == 0 ? (info.size - byte_offset) / temp_byte_stride : num_elements;
     temp_byte_size    = temp_num_elements * temp_byte_stride;
 
@@ -133,6 +128,10 @@ RHIViewInfo::TextureUAV::ViewInfo RHIViewInfo::TextureUAV::GetViewInfo(RHITextur
     return info;
 }
 
+RHIViewInfo::AccelerationStructure::ViewInfo RHIViewInfo::AccelerationStructure::GetViewInfo(RHIRayTracingTLAS* target) const {
+    return {};
+}
+
 RHITextureReference::RHITextureReference(
     RHITexture* _texture,
     RHISRV*     _bindless_view)
@@ -188,6 +187,8 @@ void RHIBatchedShaderParameters::SetParameters(RHIResource* resource, uint16_t s
 
 void RHIBatchedShaderParameters::SetParameters(RHIShader* shader, size_t _data_size, uint8_t* data_source) {
     SetParameters(shader->GetMetaShader(), _data_size, data_source);
+}
+RHIBatchedShaderParameters::~RHIBatchedShaderParameters() {
 }
 void RHIBatchedShaderParameters::SetParameters(const Shader* shader, size_t _data_size, uint8_t* data_source) {
     const auto& param_layout_info = shader->GetRootParametersLayoutInfo();
