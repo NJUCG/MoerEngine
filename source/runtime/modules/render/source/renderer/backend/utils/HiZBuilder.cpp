@@ -75,18 +75,52 @@ namespace Moer {
             RHISubresourceRange range(ETextureAspectFlags::COLOR);
             range.num_mips  = 1;
             range.mip_index = 0;
+            RHIBarrierDependencyInfo depth_barrier_info;
+            depth_barrier_info.texture_barriers.resize(2);
+            auto& depth_barrier = depth_barrier_info.texture_barriers[0];
+            depth_barrier.SetTexture(depth_buffer->GetTexture())
+                .SetSrcTextureLayout(TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE)
+                .SetDstTextureLayout(TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                .SetSubResourceRange(RHISubresourceRange(ETextureAspectFlags::DEPTH_SLICE | ETextureAspectFlags::STENCIL_SLICE))
+                .SetSrcStage(PS_LATE_FRAGMENT_TESTS)
+                .SetDstStage(PS_COMPUTE_SHADER)
+                .SetDstAccessFlags(ERHIAccessFlags::SHADER_READ)
+                .SetSrcAccessFlags(ERHIAccessFlags::DEPTH_STENCIL_WRITE | ERHIAccessFlags::DEPTH_STENCIL_READ);
+
+            auto& hiz_barrier = depth_barrier_info.texture_barriers[1];
+            hiz_barrier.SetTexture(hiz_buffer.texture)
+                .SetSrcTextureLayout(TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                .SetDstTextureLayout(TEXTURE_LAYOUT_WRITE)
+                .SetSubResourceRange(range)
+                .SetSrcStage(PS_COMPUTE_SHADER)
+                .SetDstStage(PS_COMPUTE_SHADER)
+                .SetDstAccessFlags(ERHIAccessFlags::SHADER_WRITE)
+                .SetSrcAccessFlags(ERHIAccessFlags::SHADER_READ);
+
+            graphics_cmd_list->SetPipelineBarrier(depth_barrier_info);//set depth buffer to shader read only
+
             RHIBarrierDependencyInfo barrier_info;
-            barrier_info.texture_barriers.resize(1);
+            barrier_info.texture_barriers.resize(2);
             auto& barrier = barrier_info.texture_barriers[0];
 
             barrier.SetTexture(hiz_buffer.texture)
-                .SetSrcTextureLayout(TEXTURE_LAYOUT_WRITE)
-                .SetDstTextureLayout(TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                // .SetSrcTextureLayout(TEXTURE_LAYOUT_WRITE)
+                // .SetDstTextureLayout(TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
                 .SetSubResourceRange(range)
                 .SetSrcStage(PS_COMPUTE_SHADER)
                 .SetDstStage(PS_COMPUTE_SHADER)
                 .SetDstAccessFlags(ERHIAccessFlags::SHADER_READ)
                 .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE);
+
+            auto& barrier2 = barrier_info.texture_barriers[1];
+            barrier2.SetTexture(hiz_buffer.texture)
+                // .SetSrcTextureLayout(TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                // .SetDstTextureLayout(TEXTURE_LAYOUT_WRITE)
+                .SetSubResourceRange(range)
+                .SetSrcStage(PS_COMPUTE_SHADER)
+                .SetDstStage(PS_COMPUTE_SHADER)
+                .SetDstAccessFlags(ERHIAccessFlags::SHADER_WRITE)
+                .SetSrcAccessFlags(ERHIAccessFlags::SHADER_READ);
 
             for (uint32_t i = 0; i < mip_count; ++i) {
                 params.target = hiz_buffer.uavs[i];
@@ -99,21 +133,17 @@ namespace Moer {
                     config.target_level = i;
 
                     params.depth_buffer = hiz_buffer.srv;
-
-                    barrier.sub_resource_range.mip_index = i;
                 }
+                barrier.sub_resource_range.mip_index  = i;
+                barrier2.sub_resource_range.mip_index = i + 1;
                 batched_params.SetParameters(builder_shader, params);
 
-                // EnqueueRenderTask([config(config),
-                //                    param(batched_params),
-                //                    this,
-                //                    cmd_list(graphics_cmd_list),
-                //                    barrier(barrier_info)]() {
                 g_rhi->RHISetBatchedShaderParameters(pso, batched_params);
-                Vector3i group_count = Vector3i((config.size.t.x) >> 3u, config.size.t.y >> 3u, 1);
+                Vector3i group_count = Vector3i((config.size.t.x + 7) >> 3u, (config.size.t.y + 7) >> 3u, 1);
                 graphics_cmd_list->Dispatch(group_count);
-                graphics_cmd_list->SetPipelineBarrier(barrier_info);//set current mip level to shader read only
-                // });
+                if (i != mip_count - 1) {
+                    graphics_cmd_list->SetPipelineBarrier(barrier_info);//set current mip level to shader read only
+                }
             }
         }
 
