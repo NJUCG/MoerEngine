@@ -75,11 +75,12 @@ void Init(int argc, char** argv) {
     g_rhi->PostInit();
 }
 void Test() {
-    uint32_t       index_data[]  = {0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2};
+    uint32_t       index_data[]  = {0, 1, 2};
     Moer::Vector3f vertex_data[] = {
         {0, -0.5, 1},
         {-0.5, 0.5, 1},
         {0.5, 0.5, 1},
+
     };
     RHIBufferCreateInfo index_buffer_info{};
     index_buffer_info.size    = sizeof(index_data);
