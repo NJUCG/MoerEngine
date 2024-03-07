@@ -75,12 +75,11 @@ void Init(int argc, char** argv) {
     g_rhi->PostInit();
 }
 void Test() {
-    uint32_t       index_data[]  = {0, 1, 2};
+    uint32_t       index_data[]  = {0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2};
     Moer::Vector3f vertex_data[] = {
         {0, -0.5, 1},
         {-0.5, 0.5, 1},
         {0.5, 0.5, 1},
-
     };
     RHIBufferCreateInfo index_buffer_info{};
     index_buffer_info.size    = sizeof(index_data);
@@ -126,7 +125,7 @@ void Test() {
     blas_range_infos.push_back(blas_range_info);
 
     RHIRayTracingBLASInitializer init_blas{};
-    init_blas.build_flags = ERayTracingAccelerationStructureBuildFlags::PREFER_FAST_BUILD;
+    init_blas.build_flags = ERayTracingAccelerationStructureBuildFlags::PREFER_FAST_BUILD | ERayTracingAccelerationStructureBuildFlags::ALLOW_COMPACTION;
     init_blas.geometries  = blas_geometries;
     init_blas.range_infos = blas_range_infos;
 
