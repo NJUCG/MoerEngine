@@ -147,11 +147,11 @@ namespace Moer {
 
         HiZBuffer hiz_buffer;
 
-        RHIBufferRef               draw_indirect_buffer;
-        RHIBufferRef               draw_count_buffer;
-        RHIBufferRef               zero_buffer;
-        RHIBufferRef               instance_meshlet_cull_info_buffer;
-        RHIBufferRef               uniform_buffer;
+        RHIBufferRef draw_indirect_buffer;
+        RHIBufferRef draw_count_buffer;
+        RHIBufferRef zero_buffer;
+        RHIBufferRef instance_meshlet_cull_info_buffer;
+        RHIBufferRef uniform_buffer;
 
         Array<RHICBVRef> uniform_buffer_view;
 
@@ -210,7 +210,7 @@ namespace Moer {
                                      .SetDepth(1)
                                      .SetFormat(EPixelFormat::PF_D32_SFLOAT_S8_UINT)
                                      .SetClearAttachment(RHIClearAttachment(EClearAttachment::DEPTH_STENCIL))
-                                     .SetUsageFlags(ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT);
+                                     .SetUsageFlags(ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT | ETextureUsageFlags::SHADER_RESOURCE);
         depth_buffer.resize(back_buffer_cnt);
         depth_buffer_srv.resize(back_buffer_cnt);
         depth_buffer_uav.resize(back_buffer_cnt);
