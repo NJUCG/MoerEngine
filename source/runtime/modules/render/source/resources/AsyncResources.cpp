@@ -42,9 +42,8 @@ namespace Moer {
         void OnResize(Moer::Vector2i extent);
 
         //call from render thread
-        VirtualViewportNextBackBufferInfo GetNextBackBuffer();
+        VirtualViewportBackBufferInfo GetBackBufferInfo();
 
-        RHIUAVRef GetNextBackBufferUAV(uint32_t index);
         RHIUAVRef GetDepthBufferUav();
 
         void Present(RHIFenceRef _render_fence);
@@ -123,12 +122,8 @@ namespace Moer {
         return impl->GetInfo();
     }
 
-    VirtualViewportNextBackBufferInfo VirtualViewport::GetNextBackBuffer() {
-        return impl->GetNextBackBuffer();
-    }
-
-    RHIUAVRef VirtualViewport::GetNextBackBufferUAV(uint32_t index) {
-        return impl->GetNextBackBufferUAV(index);
+    VirtualViewportBackBufferInfo VirtualViewport::GetBackBufferInfo() {
+        return impl->GetBackBufferInfo();
     }
 
     RHIUAVRef VirtualViewport::GetDepthBufferUAV() {
@@ -325,30 +320,23 @@ namespace Moer {
         assert(Moer::IsCurrentlyRenderThread());
     }
 
-    VirtualViewportNextBackBufferInfo VirtualViewport::Impl::GetNextBackBuffer() {
+    VirtualViewportBackBufferInfo VirtualViewport::Impl::GetBackBufferInfo() {
         // Implementation of GetNextBackBuffer method
         // ...
         assert(Moer::IsCurrentlyRenderThread());
         uint32_t backbuffer_index = frame_index % info.back_buffer_count;
 
         return {
-            .backbuffer_index       = backbuffer_index,
-            .backbuffer_ready_fence = present_fence};
-    }
-
-    RHIUAVRef VirtualViewport::Impl::GetNextBackBufferUAV(uint32_t index) {
-        // Implementation of GetNextBackBufferUAV method
-        // ...
-        assert(Moer::IsCurrentlyRenderThread());
-
-        return swapchain_uavs[index];
+            .back_buffer_index      = backbuffer_index,
+            .backbuffer_ready_fence = present_fence,
+            .backbuffer_uav         = swapchain_uavs[backbuffer_index],
+        };
     }
 
     RHIUAVRef VirtualViewport::Impl::GetDepthBufferUav() {
         // Implementation of GetDepthBufferUAV method
         // ...
         assert(Moer::IsCurrentlyRenderThread());
-
         return depth_texture_uav;
     }
 

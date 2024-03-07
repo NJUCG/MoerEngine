@@ -657,7 +657,20 @@ void GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list, RHIVi
     SetupRenderState(draw_data, _ui_command_list, viewport_data, _next_frame_info_render_thread);
     int32_t global_vertex_offset = 0,
             global_index_offset  = 0;
-
+    ImGuiShaderVert::Parameters vert_param;
+    {
+        float l         = draw_data->DisplayPos.x;
+        float r         = draw_data->DisplayPos.x + draw_data->DisplaySize.x;
+        float t         = draw_data->DisplayPos.y;
+        float b         = draw_data->DisplayPos.y + draw_data->DisplaySize.y;
+        float mvp[4][4] = {
+            {2.0f / (r - l), 0.0f, 0.0f, 0.0f},
+            {0.0f, 2.0f / (t - b), 0.0f, 0.0f},
+            {0.0f, 0.0f, 0.5f, 0.0f},
+            {(r + l) / (l - r), (t + b) / (b - t), 0.5f, 1.0f},
+        };
+        memcpy(&vert_param.vertexBuffer.mvp, mvp, sizeof(mvp));
+    }
     // ImVec2 clip_off = draw_data->DisplayPos;
     for (int32_t n = 0; n < draw_data->CmdListsCount; n++) {
         const ImDrawList* cmd_list = draw_data->CmdLists[n];
@@ -697,9 +710,11 @@ void GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list, RHIVi
 
                 ImGuiShaderFrag::Parameters params;
                 params.texture0 = texture_view;
+
                 RHIBatchedShaderParameters batched_params;
 
                 batched_params.SetParameters(backend_data->shader_module_frag, params);
+                batched_params.SetParameters(backend_data->shader_module_vert, vert_param);
 
                 RHIGraphicsPipelineStateRef pipeline = backend_data->pipeline;
 

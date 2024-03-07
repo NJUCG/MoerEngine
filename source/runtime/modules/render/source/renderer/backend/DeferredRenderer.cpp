@@ -1,10 +1,8 @@
 #include "DeferredRenderer.h"
 #include "PixelFormat.h"
 #include "RenderThread.h"
-#include "RendererManager.h"
 #include "log/LogSystem.h"
 #include "math/Base.h"
-#include "Core.h"
 #include "math/Function.h"
 #include "math/Matrix.h"
 #include "misc/MMemory.h"
@@ -19,10 +17,9 @@
 #include "shader/Shader.h"
 #include "shader/ShaderParameterMacros.h"
 #include "shader/ShaderResourceManager.h"
-#include "scene/RenderableManager.h"
 #include "scene/Scene.h"
-#include "scene/TransformManager.h"
 #include "deferred/BasePass.h"
+#include "utils/HiZBuilder.h"
 
 #include <algorithm>
 BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(UBOVertex)
@@ -146,6 +143,10 @@ namespace Moer {
 
         Moer::Array<RHITextureRef> depth_buffer;
         Moer::Array<RHIUAVRef>     depth_buffer_uav;
+        Moer::Array<RHISRVRef>     depth_buffer_srv;
+
+        HiZBuffer hiz_buffer;
+
         RHIBufferRef               draw_indirect_buffer;
         RHIBufferRef               draw_count_buffer;
         RHIBufferRef               zero_buffer;
@@ -211,12 +212,16 @@ namespace Moer {
                                      .SetClearAttachment(RHIClearAttachment(EClearAttachment::DEPTH_STENCIL))
                                      .SetUsageFlags(ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT);
         depth_buffer.resize(back_buffer_cnt);
+        depth_buffer_srv.resize(back_buffer_cnt);
         depth_buffer_uav.resize(back_buffer_cnt);
         for (uint32_t i = 0; i < back_buffer_cnt; ++i) {
 
             depth_buffer[i]     = g_rhi->RHICreateTexture(depth_create_info);
             depth_buffer_uav[i] = g_rhi->RHICreateTextureUAV(depth_buffer[i]);
+            depth_buffer_srv[i] = g_rhi->RHICreateTextureSRV(depth_buffer[i]);
         }
+
+        hiz_buffer.InitFromDepthExtent(depth_buffer[0]->GetExtent2D());
 
         RHIBarrierDependencyInfo barrier_info{};
         barrier_info.texture_barriers.resize(back_buffer_cnt);
@@ -636,9 +641,9 @@ namespace Moer {
             RHIBatchedShaderParameters batched_params;
             batched_params.SetParameters(ShaderResourceManager::GetInstance().GetShader<TestDeferredTriangleShaderVert>(), params);
 
-            EnqueueRenderTask([this, batched_params = std::move(batched_params)]() {
-                auto      info = virtual_viewport->GetNextBackBuffer();
-                RHIUAVRef uav  = virtual_viewport->GetNextBackBufferUAV(info.backbuffer_index);
+            auto draw_indirect = [this, batched_params = std::move(batched_params)]() {
+                auto      info = virtual_viewport->GetBackBufferInfo();
+                RHIUAVRef uav  = info.backbuffer_uav;
 
                 RHIGraphicsCommandList* cmd_list = render_cmd_lists[frame_counter % render_cmd_lists.size()];
 
@@ -652,7 +657,7 @@ namespace Moer {
                 render_attachment_view.clear_attachment = RHIClearAttachment(EClearAttachment::COLOR);
 
                 auto& depth_attachment_view        = pass_info.depth_stencil_attachment.depth_stencil_attachment_view;
-                depth_attachment_view.texture_view = depth_buffer_uav[info.backbuffer_index];
+                depth_attachment_view.texture_view = depth_buffer_uav[info.back_buffer_index];
 
                 depth_attachment_view.required_layout                   = TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE;
                 depth_attachment_view.clear_attachment                  = RHIClearAttachment::Preset<RHIConfig::ClearMode::DEPTH_STENCIL>();
@@ -675,7 +680,7 @@ namespace Moer {
 
                 auto& depth_barrier = barrier_dependency_info.texture_barriers[1];
                 depth_barrier
-                    .SetTexture(depth_buffer[info.backbuffer_index])
+                    .SetTexture(depth_buffer[info.back_buffer_index])
                     .SetDstTextureLayout(TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE)
                     .SetSrcTextureLayout(TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE)
                     .SetSrcStage(ERHIPipelineStageFlags::PS_LATE_FRAGMENT_TESTS)
@@ -721,15 +726,25 @@ namespace Moer {
 
                 cmd_list->SetPipelineBarrier(barrier_dependency_info);
 
+                HiZBuilder::GetInstance().DispatchBuildHiZ(cmd_list, depth_buffer_srv[info.back_buffer_index], hiz_buffer);
+            };
+
+            auto submit_rendering = [this]() {
+                auto* cmd_list = render_cmd_lists[frame_counter % render_cmd_lists.size()];
                 cmd_list->EndRecording();
 
+                auto          back_buffer_info = virtual_viewport->GetBackBufferInfo();
                 RHISubmitInfo submit_info;
-                submit_info.Wait(info.backbuffer_ready_fence, frame_counter);
+                submit_info.Wait(back_buffer_info.backbuffer_ready_fence, frame_counter);
                 submit_info.Wait(render_fence, frame_counter);
                 submit_info.Signal(render_fence, ++frame_counter);
 
                 render_queue->SubmitCommands(1, cmd_list, &submit_info);
-            });
+            };
+
+            EnqueueRenderTask(std::move(draw_indirect));
+
+            EnqueueRenderTask(std::move(submit_rendering));
         }
     }
 

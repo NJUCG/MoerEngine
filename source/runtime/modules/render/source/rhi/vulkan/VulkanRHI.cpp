@@ -1435,8 +1435,16 @@ RHIUAVRef VulkanRHIImpl::RHICreateUAVInner(RHIViewableResource* _resource, const
         image_view_create_info.format   = _view_info.texture.uav.format == PF_UNDEFINED ? VulkanEnumTranslator::METoVKFormat(vk_texture->GetUAVFormat()) : VulkanEnumTranslator::METoVKFormat(_view_info.texture.uav.format);
         assert(image_view_create_info.format != VK_FORMAT_UNDEFINED && "RHICreateUnorderedAccessView: format is undefined!");
 
-        image_view_create_info.components                      = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
-        image_view_create_info.subresourceRange.aspectMask     = uint32_t(vk_texture->GetUsageFlags() & ETextureUsageFlags::COLOR_ATTACHMENT) != 0 ? VK_IMAGE_ASPECT_COLOR_BIT : (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT);
+        image_view_create_info.components = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
+        VkImageAspectFlags flags;
+        if (uint32_t(vk_texture->GetUsageFlags() & ETextureUsageFlags::COLOR_ATTACHMENT) != 0) {
+            flags = VK_IMAGE_ASPECT_COLOR_BIT;
+        } else if (uint32_t(vk_texture->GetUsageFlags() & ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT) != 0) {
+            flags = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+        } else {
+            flags = VK_IMAGE_ASPECT_COLOR_BIT;
+        }
+        image_view_create_info.subresourceRange.aspectMask     = flags;
         image_view_create_info.subresourceRange.baseMipLevel   = _view_info.texture.uav.mip_min;
         image_view_create_info.subresourceRange.levelCount     = _view_info.texture.uav.mip_num;
         image_view_create_info.subresourceRange.baseArrayLayer = _view_info.texture.uav.array_min;
