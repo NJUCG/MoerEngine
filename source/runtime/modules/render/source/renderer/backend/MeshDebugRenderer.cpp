@@ -172,8 +172,8 @@ namespace Moer {
     void MeshDebugRenderer::Impl::DrawFrame() {
         //render and copy to backbuffer
         EnqueueRenderTask([this]() {
-            auto      info = virtual_viewport->GetNextBackBuffer();
-            RHIUAVRef uav  = virtual_viewport->GetNextBackBufferUAV(info.backbuffer_index);
+            auto      info = virtual_viewport->GetBackBufferInfo();
+            RHIUAVRef uav  = info.backbuffer_uav;
 
             RHIGraphicsCommandList* cmd_list = render_cmd_lists[frame_counter % render_cmd_lists.size()];
 
