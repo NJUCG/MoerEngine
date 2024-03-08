@@ -27,12 +27,12 @@ struct ShaderParameterLayoutInfo {
     bool IsValid() const {
         return !(slot == -1 || space == -1 || type == EShaderParameterType::UNKNOWN);
     }
-    ShaderParameterLayoutInfo(uint16_t             _offset,
-                              uint16_t             _stride,
-                              int8_t               _slot  = -1,
-                              int8_t               _space = -1,
-                              int8_t               _num   = -1,
-                              EShaderParameterType _type  = EShaderParameterType::UNKNOWN,
+    ShaderParameterLayoutInfo(uint16_t                       _offset,
+                              uint16_t                       _stride,
+                              int8_t                         _slot          = -1,
+                              int8_t                         _space         = -1,
+                              int8_t                         _num           = -1,
+                              EShaderParameterType           _type          = EShaderParameterType::UNKNOWN,
                               EShaderCodeResourceBindingType _resource_type = EShaderCodeResourceBindingType::INVALID)
         : offset(_offset),
           stride(_stride),
@@ -62,12 +62,12 @@ struct ShaderParameterLayoutInfo {
 struct ShaderRootParametersLayoutInfo {
 
 public:
-    const Moer::Array<ShaderParameterLayoutInfo>& GetLayoutInfos() const { return layout_infos; }
-    const Moer::Array<ShaderParameterLayoutInfo>& GetConstantsInfos() const { return constant_infos; }
+    const Moer::Array<ShaderParameterLayoutInfo>& GetBindingInfo() const { return binding_infos; }
+    const Moer::Array<ShaderParameterLayoutInfo>& GetConstantsInfo() const { return constant_infos; }
 
 private:
     friend class Shader;
-    Moer::Array<ShaderParameterLayoutInfo> layout_infos;
+    Moer::Array<ShaderParameterLayoutInfo> binding_infos;
     Moer::Array<ShaderParameterLayoutInfo> constant_infos;
 };
 /**

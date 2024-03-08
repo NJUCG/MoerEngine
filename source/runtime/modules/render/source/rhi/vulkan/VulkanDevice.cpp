@@ -23,7 +23,11 @@ namespace VkUtil = Moer::RHI::Vulkan::Util;
 VulkanDevice::VulkanDevice()
     : m_gpu(VK_NULL_HANDLE), m_optional_extensions(), m_core_features(), m_core_properties(), m_optional_properties(), m_memery_properties(), m_queue_family_props(), m_queue_family_indices(),
       m_device(VK_NULL_HANDLE), m_graphics_queue(VK_NULL_HANDLE), m_present_queue(VK_NULL_HANDLE), m_compute_queue(VK_NULL_HANDLE), m_transfer_queue(VK_NULL_HANDLE),
-      m_allocator(VK_NULL_HANDLE), m_descriptor_allocator(nullptr) {}
+      m_allocator(VK_NULL_HANDLE), m_descriptor_allocator(nullptr), m_staging_buffer_pool(nullptr) {}
+
+VulkanDevice::~VulkanDevice() {
+    Destroy();
+}
 
 /**
  * Initialize GPU, GPU related resources, create the logical device, etc.
@@ -81,14 +85,13 @@ void VulkanDevice::InitMemoryAllocator(VkInstance _instance) {
 }
 
 void VulkanDevice::Destroy() {
-    for (auto& pool : m_command_allocators) {
-        MoerDelete(pool);
+    for (auto& cmd_allocator : m_command_allocators) {
+        CHECK_AND_DELETE(cmd_allocator);
     }
-    vmaDestroyAllocator(m_allocator);
-}
-
-bool VulkanDevice::GetDescriptorSets(uint32_t _hash_key, const VulkanDescriptorSetsLayout& _layout, Moer::Array<VulkanDescriptorSetWriter>& _writers, Moer::Array<VkDescriptorSet>& _sets) {
-    return m_descriptor_allocator->GetDescriptorSets(_hash_key, _layout, _writers, _sets);
+    CHECK_AND_DELETE(m_descriptor_allocator);
+    CHECK_AND_DELETE(m_staging_buffer_pool);
+    // vmaDestroyAllocator(m_allocator);
+    // Assertion failed: m_pMetadata->IsEmpty() && "Some allocations were not freed before destruction of this memory block!"
 }
 
 /**
@@ -226,9 +229,8 @@ void VulkanDevice::CreateDevice(uint32_t _api_version) {
 }
 
 void VulkanDevice::CreateDescriptorAllocator() {
-    m_descriptor_allocator = new VulkanDescriptorSetAllocator();
-    m_descriptor_allocator->Init(this);
-    LOG_INFO("VulkanRHI: Descriptor allocator created.");
+    m_descriptor_allocator = MoerNew(VulkanDescriptorSetAllocator)(this);
+    LOG_INFO("VulkanRHI: Descriptor set allocator is created.");
 }
 
 void VulkanDevice::CreateCommandAllocators() {

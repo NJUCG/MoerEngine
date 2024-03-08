@@ -82,6 +82,10 @@ public:
         uint32_t   _max_draw_count,
         uint32_t   _stride) = 0;
 
+    virtual void Dispatch(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z) = 0;
+
+    virtual void DispatchIndirect(RHIBuffer* _buffer, uint64_t _offset) = 0;
+
     virtual void CopyBuffer(const RHICopyBufferInfo& _copy_info, RHIBuffer* _src, RHIBuffer* _dst)                            = 0;
     virtual void CopyTexture(const RHICopyTextureInfo& _copy_info, RHITexture* _src, RHITexture* _dst)                        = 0;
     virtual void CopyBufferToTexture(const RHICopyBufferToTextureInfo& _info, RHIBuffer* src_buffer, RHITexture* dst_texture) = 0;
@@ -121,11 +125,11 @@ public:
 
     virtual void ClearDepthStencil() = 0;
     virtual void ClearUAVInt(
-        RHIUAV* _uav,
-        const Moer::Vector4i&   _values) = 0;
+        RHIUAV*               _uav,
+        const Moer::Vector4i& _values) = 0;
     virtual void ClearUAVFloat(
-        RHIUAV* _uav,
-        const Moer::Vector4f&   _values) = 0;
+        RHIUAV*               _uav,
+        const Moer::Vector4f& _values) = 0;
 
     virtual void BeginRenderPass(const RHIRenderPassInfo& _pass_info, const char* _pass_name) = 0;
     virtual void EndRenderPass()                                                              = 0;

@@ -38,6 +38,7 @@ struct DeviceInitializer {
 class VulkanDevice {
 public:
     VulkanDevice();
+    ~VulkanDevice();
 
     void Init(const DeviceInitializer& _initializer);
     void InitMemoryAllocator(VkInstance _instance);
@@ -55,6 +56,9 @@ public:
     }
     inline VmaAllocator GetVmaAllocator() const {
         return m_allocator;
+    }
+    inline VulkanDescriptorSetAllocator* GetDescriptorAllocator() const {
+        return m_descriptor_allocator;
     }
     inline const VulkanEnabledDeviceExtensions& GetEnabledExtensions() const {
         return m_enabled_extensions;
@@ -93,7 +97,6 @@ public:
         return m_raytracing_queue;
     }
     class VulkanCommandAllocator* GetCurrentCommandAllocator();
-    bool                          GetDescriptorSets(uint32_t _hash_key, const VulkanDescriptorSetsLayout& _layout, Moer::Array<VulkanDescriptorSetWriter>& _writers, Moer::Array<VkDescriptorSet>& _sets);
     class VulkanStagingBuffer*    AquireStagingBuffer(uint64_t _byte_size);
     void                          ReleaseStagingBuffer(class VulkanStagingBuffer*);
 

@@ -1122,26 +1122,37 @@ VkStencilOp VulkanEnumTranslator::METoVKStencilOp(EStencilOp _stencil_op) {
 
 #pragma region pipeline states definitions
 
-void VulkanPipelineState::GenerateDescriptorSetLayouts(const VulkanDevice* _device, Moer::Array<TDescriptorSetLayoutInfo>& _layout_mappings) {
-    // create descriptor set layouts
-    for (auto& layout : _layout_mappings) {
-        VkDescriptorSetLayoutCreateInfo layout_create_info{};
-        layout_create_info.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        layout_create_info.pNext        = nullptr;
-        layout_create_info.flags        = 0;
-        layout_create_info.bindingCount = layout.second.size();
-        layout_create_info.pBindings    = layout.second.empty() ? nullptr : layout.second.data();
-
-        VK_CHECK_RESULT(vkCreateDescriptorSetLayout(*_device, &layout_create_info, nullptr, &layout.first));
+VulkanPipelineState::~VulkanPipelineState() {
+    if (m_pipeline_layout) {
+        vkDestroyPipelineLayout(m_device->GetDevice(), m_pipeline_layout, nullptr);
+        m_pipeline_layout = VK_NULL_HANDLE;
     }
-
-    // extract descriptor set layouts
-    m_descriptor_sets_layout = new VulkanDescriptorSetsLayout();
-    m_descriptor_sets_layout->Init(_layout_mappings, m_pipeline_state_cache);
+    if (m_pipeline) {
+        vkDestroyPipeline(m_device->GetDevice(), m_pipeline, nullptr);
+        m_pipeline = VK_NULL_HANDLE;
+    }
+    CHECK_AND_DELETE(m_descriptor_sets_layout);
+    CHECK_AND_DELETE(m_pipeline_state_cache);
 }
 
-void VulkanPipelineState::CreateResourceCache() {
-    m_pipeline_state_cache = new VulkanPipelineResourceCache();
+void VulkanPipelineState::InitDescriptorSetLayouts(Moer::Array<TDescriptorSetLayoutBindingArray>& _descriptor_bindings) {
+    if (_descriptor_bindings.empty()) {
+        return;
+    }
+
+    m_descriptor_sets_layout = MoerNew(VulkanDescriptorSetsLayout)(m_device, _descriptor_bindings);
+}
+
+void VulkanPipelineState::InitPipelineResourceCache(const Moer::Array<TDescriptorSetLayoutBindingArray>& _descriptor_bindings) {
+    if (_descriptor_bindings.empty()) {
+        return;
+    }
+
+    m_pipeline_state_cache = MoerNew(VulkanPipelineResourceCache)(m_descriptor_sets_layout, _descriptor_bindings);
+}
+
+void VulkanPipelineState::CreatePipelineLayout(const VkPipelineLayoutCreateInfo& _pipeline_layout_ci) {
+    VK_CHECK_RESULT(vkCreatePipelineLayout(m_device->GetDevice(), &_pipeline_layout_ci, nullptr, &m_pipeline_layout));
 }
 
 VulkanRHIGraphicsPipelineState::~VulkanRHIGraphicsPipelineState() {
@@ -1228,6 +1239,21 @@ Moer::Array<const Shader*> VulkanRHIGraphicsPipelineState::GetShaderInfoList(con
     return shader_list;
 }
 
+void VulkanRHIGraphicsPipelineState::CreateGraphicsPipeline(const VkGraphicsPipelineCreateInfo& _info) {
+    VK_CHECK_RESULT(vkCreateGraphicsPipelines(m_device->GetDevice(), VK_NULL_HANDLE, 1, &_info, nullptr, &m_pipeline));
+}
+
+void VulkanRHIComputePipelineState::CreateComputePipeline(const VkComputePipelineCreateInfo& _info) {
+    VK_CHECK_RESULT(vkCreateComputePipelines(m_device->GetDevice(), VK_NULL_HANDLE, 1, &_info, nullptr, &m_pipeline));
+}
+
+void VulkanRHIRayTracingPipelineState::CreateRayTracingPipeline(const VkRayTracingPipelineCreateInfoKHR& _info) {
+    // NOLINTNEXTLINE
+    static auto vkCreateRayTracingPipelinesKHR       = reinterpret_cast<PFN_vkCreateRayTracingPipelinesKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkCreateRayTracingPipelinesKHR"));
+    
+    VK_CHECK_RESULT(vkCreateRayTracingPipelinesKHR(m_device->GetDevice(), VK_NULL_HANDLE, VK_NULL_HANDLE, 1, &_info, nullptr, &m_pipeline));
+}
+
 #pragma endregion
 
 VulkanDeviceObject::VulkanDeviceObject(VulkanDevice* _device) : m_device(_device) {
@@ -1258,6 +1284,7 @@ VkBufferUsageFlags VulkanRHIBuffer::METoVKBufferUsageFlags(VulkanDevice* _device
     // Always include TRANSFER_SRC since hardware vendors confirmed it wouldn't have any performance cost and we need it for some debug functionalities.
     VkBufferUsageFlags vk_flags = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 
+    // NOLINTNEXTLINE
     auto TranslateFlag = [&vk_flags, &_me_flags](EBufferUsageFlags _search_me_flags, VkBufferUsageFlags _added_if_found, VkBufferUsageFlags _added_if_not_found = 0) {
         const bool has_flag = (_me_flags & _search_me_flags) == _search_me_flags;
         vk_flags |= has_flag ? _added_if_found : _added_if_not_found;
@@ -1320,6 +1347,7 @@ VkImageUsageFlags VulkanRHITexture::METoVKImageUsageFlags(ETextureUsageFlags _me
     // Always include TRANSFER_SRC since hardware vendors confirmed it wouldn't have any performance cost and we need it for some debug functionalities.
     VkImageUsageFlags vk_flags = 0;
 
+    // NOLINTNEXTLINE
     auto TranslateFlag = [&vk_flags, &_me_flags](ETextureUsageFlags _search_me_flags, VkImageUsageFlags _added_if_found, VkImageUsageFlags _added_if_not_found = 0) {
         const bool has_flag = (_me_flags & _search_me_flags) == _search_me_flags;
         vk_flags |= has_flag ? _added_if_found : _added_if_not_found;

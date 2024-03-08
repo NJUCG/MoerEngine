@@ -1,11 +1,12 @@
-#include "rhi/vulkan/misc/VulkanMacroUtils.h"
-#include "misc/MacroUtils.h"
 #include "VulkanDescriptor.h"
 #include "VulkanPipelineResourceCache.h"
 #include "VulkanDevice.h"
+#include "VulkanUtil.h"
 
-#include "misc/Crc32.h"
-#include "vulkan/vulkan_core.h"
+#include "misc/MacroUtils.h"
+#include "rhi/vulkan/misc/VulkanMacroUtils.h"
+
+#include <vulkan/vulkan_core.h>
 
 const float default_pool_size[VK_DESCRIPTOR_TYPE_RANGE_SIZE] = {
     2,// VK_DESCRIPTOR_TYPE_SAMPLER
@@ -21,107 +22,35 @@ const float default_pool_size[VK_DESCRIPTOR_TYPE_RANGE_SIZE] = {
     //1 / 8.0 // VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT
 };
 
-void VulkanDescriptorSetsLayout::Init(const Moer::Array<TDescriptorSetLayoutInfo>& _layout_mappings, VulkanPipelineResourceCache* _cache) {
-    m_layouts.resize(_layout_mappings.size(), VK_NULL_HANDLE);
-    auto& writers = _cache->m_descriptor_set_writers;
-    writers.resize(_layout_mappings.size(), {_cache});
-    _cache->m_descriptor_sets.resize(_layout_mappings.size(), VK_NULL_HANDLE);
-
-    auto& hash_infos   = _cache->m_descriptor_resource_container.hashable_descriptor_infos;
-    auto& image_infos  = _cache->m_descriptor_resource_container.descriptor_image_infos;
-    auto& buffer_infos = _cache->m_descriptor_resource_container.descriptor_buffer_infos;
-    auto& as_infos     = _cache->m_descriptor_resource_container.descriptor_as_infos;
-
-    uint32_t hash_index = 0, image_index = 0, buffer_index = 0, as_index = 0;
-    for (uint32_t i = 0; i < _layout_mappings.size(); ++i) {
-        // set loop
-        uint32_t binding_index = 0;
-
-        m_layouts[i] = _layout_mappings[i].first;
-
-        writers[i].m_hash_info_head = hash_index;
-        writers[i].m_write_set.resize(_layout_mappings[i].second.size(), {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET});
-        writers[i].m_write_set_as.resize(_layout_mappings[i].second.size(), {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR});
-
-        // append new element to hash_infos
-        uint32_t info_count_of_set = 1;
-        for (const auto& binding : _layout_mappings[i].second) {
-            info_count_of_set += binding.descriptorCount;
+VulkanDescriptorSetsLayout::VulkanDescriptorSetsLayout(VulkanDevice* _device, const Moer::Array<TDescriptorSetLayoutBindingArray>& _descriptor_bindings) : VulkanDeviceObject(_device) {
+    m_layouts.resize(_descriptor_bindings.size(), VK_NULL_HANDLE);
+    for (uint32_t set_idx = 0; set_idx < _descriptor_bindings.size(); ++set_idx) {
+        for (const auto& binding : _descriptor_bindings[set_idx]) {
+            m_descriptor_type_count[binding.descriptorType] += binding.descriptorCount;
         }
-        hash_infos.insert(hash_infos.end(), info_count_of_set, {});
-        hash_infos[hash_index].layout = {UINT64_MAX, UINT64_MAX, m_layouts[i]};
-        ++hash_index;// index + 1 for layout info
-
-        writers[i].m_hash_info_count = info_count_of_set;
-
-        uint32_t image_count = 0, buffer_count = 0, as_count = 0;
-        for (auto& binding : _layout_mappings[i].second) {
-            // binding loop
-            m_sets_binding_count[binding.descriptorType] += binding.descriptorCount;
-
-            switch (binding.descriptorType) {
-                case VK_DESCRIPTOR_TYPE_SAMPLER:
-                case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
-                case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
-                case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
-                case VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
-                    /* Critical: binding.descriptorCount always equals 1, should change some code, change '+ descriptorCount' --> '+ 1' */
-                    writers[i].m_index_of_image[binding.binding]     = image_index;
-                    writers[i].m_index_of_hash_info[binding.binding] = hash_index;
-                    image_index += binding.descriptorCount;
-                    hash_index += binding.descriptorCount;
-
-                    image_count += binding.descriptorCount;
-                    break;
-                case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
-                case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
-                case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:
-                    writers[i].m_index_of_buffer[binding.binding]    = buffer_index;
-                    writers[i].m_index_of_hash_info[binding.binding] = hash_index;
-                    buffer_index += binding.descriptorCount;
-                    hash_index += binding.descriptorCount;
-
-                    buffer_count += binding.descriptorCount;
-                    break;
-                case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
-                case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
-                    break;
-
-                case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
-                    writers[i].m_index_of_as[binding.binding]        = as_index;
-                    writers[i].m_index_of_hash_info[binding.binding] = hash_index;
-                    as_index += binding.descriptorCount;
-                    hash_index += binding.descriptorCount;
-
-                    as_count += binding.descriptorCount;
-                    break;
-
-                default:
-                    LOG_WARNING("Unsupported descriptor type: {}", static_cast<uint32_t>(binding.descriptorType));
-            }
-            m_descriptor_binding_infos[i][binding.binding] = {binding.descriptorType, binding.descriptorCount};
-
-            writers[i].m_index_of_binding[binding.binding] = binding_index;
-            ++binding_index;
-        }
-        image_infos.emplace_back(Moer::Array<VkDescriptorImageInfo>(image_count));
-        buffer_infos.emplace_back(Moer::Array<VkDescriptorBufferInfo>(buffer_count));
-        as_infos.emplace_back(Moer::Array<VkAccelerationStructureKHR>(as_count, VK_NULL_HANDLE));
+        VkDescriptorSetLayoutCreateInfo set_layout_ci{};
+        set_layout_ci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        set_layout_ci.bindingCount = _descriptor_bindings[set_idx].size();
+        set_layout_ci.pBindings    = _descriptor_bindings[set_idx].data();
+        VK_CHECK_RESULT(vkCreateDescriptorSetLayout(m_device->GetDevice(), &set_layout_ci, nullptr, &m_layouts[set_idx]));
     }
 }
 
-VulkanDescriptorSetAllocator::VulkanDescriptorSetAllocator() : VulkanDeviceObject(nullptr) {}
+VulkanDescriptorSetsLayout::~VulkanDescriptorSetsLayout() {
+    for (const auto& layout : m_layouts) {
+        vkDestroyDescriptorSetLayout(m_device->GetDevice(), layout, nullptr);
+    }
+}
+
+VulkanDescriptorSetAllocator::VulkanDescriptorSetAllocator(VulkanDevice* _device) : VulkanDeviceObject(_device) {
+    // add default pool
+    const uint32_t default_set_count = 4096;
+    m_cache_pools.emplace_front(std::make_unique<VulkanDescriptorSetCachePool>(m_device, default_pool_size, default_set_count));
+}
 
 VulkanDescriptorSetAllocator::~VulkanDescriptorSetAllocator() {
     // Destructor implementation
     CleanUp();
-}
-
-void VulkanDescriptorSetAllocator::Init(VulkanDevice* device) {
-    this->m_device = device;
-    // add default pool
-    const uint32_t default_set_count = 4096;
-    m_cache_pools.emplace_front(std::make_unique<VulkanDescriptorSetCachePool>(m_device, default_pool_size, default_set_count));
 }
 
 bool VulkanDescriptorSetAllocator::GetDescriptorSets(uint32_t _hash_key, const VulkanDescriptorSetsLayout& _layout, Moer::Array<VulkanDescriptorSetWriter>& _writers, Moer::Array<VkDescriptorSet>& _sets) {
@@ -180,7 +109,7 @@ VulkanDescriptorSetAllocator::VulkanDescriptorSetCachePool::VulkanDescriptorSetC
     TDescriptorCountMap pool_size_info;
     const uint32_t      set_count = _layout.GetDescriptorSetCount();
 
-    for (const auto& [type, count] : _layout.GetSetsBindingCount()) {
+    for (const auto& [type, count] : _layout.GetDescriptorTypeCount()) {
         pool_size_info[type] = count / set_count + 1;
     }
 
@@ -297,125 +226,125 @@ uint32_t VulkanDescriptorSetAllocator::VulkanDescriptorSetCachePool::GetMaxSets(
     */
 }
 
+void VulkanDescriptorSetWriter::Init(const Moer::Array<VkDescriptorType>& _types, VulkanHashableDescriptorInfo* _hash_info_head, VkWriteDescriptorSet* _descriptor_write_head, VkDescriptorImageInfo* _image_info_head, VkDescriptorBufferInfo* _buffer_info_head, VkWriteDescriptorSetAccelerationStructureKHR* _as_write_head, VulkanDescriptorASInfo* _as_info_head) {
+    m_hash_info_head        = _hash_info_head;
+    m_descriptor_write_head = _descriptor_write_head;
+    m_write_count           = _types.size();
+
+    for (uint32_t idx = 0; idx < _types.size(); ++idx) {
+        _descriptor_write_head->sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        _descriptor_write_head->pNext           = nullptr;
+        _descriptor_write_head->dstBinding      = idx;
+        _descriptor_write_head->descriptorCount = 1;
+        _descriptor_write_head->descriptorType  = _types[idx];
+
+        switch (_types[idx]) {
+            case VK_DESCRIPTOR_TYPE_SAMPLER:
+            case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
+            case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
+            case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
+            case VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
+                _descriptor_write_head->pImageInfo = _image_info_head++;
+                break;
+            // case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
+            // case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
+            //     break;
+            case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
+            case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+                _descriptor_write_head->pBufferInfo = _buffer_info_head++;
+                break;
+            case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
+                _as_write_head->sType                      = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
+                _as_write_head->pNext                      = nullptr;
+                _as_write_head->accelerationStructureCount = 1;
+                _as_write_head->pAccelerationStructures    = &_as_info_head->as;
+                ++_as_info_head;
+                _descriptor_write_head->pNext = _as_write_head++;
+                break;
+            default:
+                LOG_ERROR("Unsupported descriptor type: {}", VK_TYPE_TO_STRING(VkDescriptorType, _types[idx]));
+                break;
+        }
+        ++_descriptor_write_head;
+    }
+}
+
 void VulkanDescriptorSetWriter::SetDescriptorSet(VkDescriptorSet _set) {
-    for (auto& write : m_write_set) {
-        write.dstSet = _set;
+    for (uint32_t i = 0; i < m_write_count; ++i) {
+        m_descriptor_write_head[i].dstSet = _set;
     }
 }
 
-void VulkanDescriptorSetWriter::WriteSampler(uint16_t _set, uint16_t _binding, const Moer::Array<VkDescriptorImageInfo>& _sampler, VkDescriptorType _type) {
-    const auto* sampler_info = m_cache->UpdateDescriptorImageInfos(_set, m_index_of_image[_binding], _sampler);
-
-    VkWriteDescriptorSet write{};
-    write.sType            = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    write.pNext            = nullptr;
-    write.dstSet           = VK_NULL_HANDLE;
-    write.dstBinding       = _binding;
-    write.dstArrayElement  = 0;
-    write.descriptorCount  = _sampler.size();
-    write.descriptorType   = _type;
-    write.pImageInfo       = sampler_info;
-    write.pBufferInfo      = nullptr;
-    write.pTexelBufferView = nullptr;
-
-    // update some vkDescriptorWrite info
-    m_write_set[m_index_of_binding[_binding]] = std::move(write);
-    Moer::Array<VulkanHashableDescriptorInfo> infos;
-    for (uint32_t i = 0; i < _sampler.size(); ++i) {
-        VulkanHashableDescriptorInfo sampler_info;
-        sampler_info.resource.sampler = _sampler[i];
-        infos.emplace_back(sampler_info);
-    }
-    m_cache->UpdateDescriptorSetHashInfos(m_index_of_hash_info[_binding], infos);
+void VulkanDescriptorSetWriter::WriteSampler(uint32_t _write_index, VkSampler _sampler, VkImageView _image_view, VkImageLayout _image_layout) {
+    WriteImageInner<VK_DESCRIPTOR_TYPE_SAMPLER>(_write_index, _sampler, _image_view, _image_layout);
 }
 
-void VulkanDescriptorSetWriter::WriteImage(uint16_t _set, uint16_t _binding, const Moer::Array<VkDescriptorImageInfo>& _image, VkDescriptorType _type) {
-    const auto* image_info = m_cache->UpdateDescriptorImageInfos(_set, m_index_of_image[_binding], _image);
-
-    VkWriteDescriptorSet write{};
-    write.sType            = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    write.pNext            = nullptr;
-    write.dstSet           = VK_NULL_HANDLE;
-    write.dstBinding       = _binding;
-    write.dstArrayElement  = 0;
-    write.descriptorCount  = _image.size();
-    write.descriptorType   = _type;
-    write.pImageInfo       = image_info;
-    write.pBufferInfo      = nullptr;
-    write.pTexelBufferView = nullptr;
-
-    // update some vkDescriptorWrite info
-    m_write_set[m_index_of_binding[_binding]] = std::move(write);
-    Moer::Array<VulkanHashableDescriptorInfo> infos;
-    for (uint32_t i = 0; i < _image.size(); ++i) {
-        VulkanHashableDescriptorInfo image_info;
-        image_info.resource.image_view = _image[i];
-        infos.emplace_back(image_info);
-    }
-    m_cache->UpdateDescriptorSetHashInfos(m_index_of_hash_info[_binding], infos);
+void VulkanDescriptorSetWriter::WriteSampledImage(uint32_t _write_index, VkSampler _sampler, VkImageView _image_view, VkImageLayout _image_layout) {
+    WriteImageInner<VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE>(_write_index, _sampler, _image_view, _image_layout);
 }
 
-void VulkanDescriptorSetWriter::WriteBuffer(uint16_t _set, uint16_t _binding, const Moer::Array<VkDescriptorBufferInfo>& _buffer, VkDescriptorType _type) {
-    const auto* buffer_info = m_cache->UpdateDescriptorBufferInfos(_set, m_index_of_buffer[_binding], _buffer);
-
-    VkWriteDescriptorSet write{};
-    write.sType            = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    write.pNext            = nullptr;
-    write.dstSet           = VK_NULL_HANDLE;
-    write.dstBinding       = _binding;
-    write.dstArrayElement  = 0;
-    write.descriptorCount  = _buffer.size();
-    write.descriptorType   = _type;
-    write.pImageInfo       = nullptr;
-    write.pBufferInfo      = buffer_info;
-    write.pTexelBufferView = nullptr;
-
-    // update some vkDescriptorWrite info
-    m_write_set[m_index_of_binding[_binding]] = std::move(write);
-    Moer::Array<VulkanHashableDescriptorInfo> infos;
-    for (uint32_t i = 0; i < _buffer.size(); ++i) {
-        VulkanHashableDescriptorInfo buffer_info;
-        buffer_info.resource.buffer = _buffer[i];
-        infos.emplace_back(buffer_info);
-    }
-    m_cache->UpdateDescriptorSetHashInfos(m_index_of_hash_info[_binding], infos);
+void VulkanDescriptorSetWriter::WriteStorageImage(uint32_t _write_index, VkImageView _image_view, VkImageLayout _image_layout) {
+    WriteImageInner<VK_DESCRIPTOR_TYPE_STORAGE_IMAGE>(_write_index, VK_NULL_HANDLE, _image_view, _image_layout);
 }
 
-void VulkanDescriptorSetWriter::WriteAS(uint16_t _set, uint16_t _binding, const Moer::Array<VkAccelerationStructureKHR>& _as, VkDescriptorType _type) {
-    const auto* as_infos = m_cache->UpdateDescriptorASInfo(_set, m_index_of_as[_binding], _as);
+void VulkanDescriptorSetWriter::WriteUniformBuffer(uint32_t _write_index, VkBuffer _buffer, VkDeviceSize _offset, VkDeviceSize _range) {
+    WriteBufferInner<VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER>(_write_index, _buffer, _offset, _range);
+}
 
-    VkWriteDescriptorSet write{};
-    write.sType            = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    write.pNext            = &m_write_set_as[m_index_of_binding[_binding]];
-    write.dstSet           = VK_NULL_HANDLE;
-    write.dstBinding       = _binding;
-    write.dstArrayElement  = 0;
-    write.descriptorCount  = _as.size();
-    write.descriptorType   = _type;
-    write.pImageInfo       = nullptr;
-    write.pBufferInfo      = nullptr;
-    write.pTexelBufferView = nullptr;
+void VulkanDescriptorSetWriter::WriteStorageBuffer(uint32_t _write_index, VkBuffer _buffer, VkDeviceSize _offset, VkDeviceSize _range) {
+    WriteBufferInner<VK_DESCRIPTOR_TYPE_STORAGE_BUFFER>(_write_index, _buffer, _offset, _range);
+}
 
-    VkWriteDescriptorSetAccelerationStructureKHR write_as{};
-    write_as.sType                      = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
-    write_as.pNext                      = nullptr;
-    write_as.accelerationStructureCount = _as.size();
-    write_as.pAccelerationStructures    = as_infos;
+void VulkanDescriptorSetWriter::WriteAccelerationStructure(uint32_t _write_index, VkAccelerationStructureKHR _as, uint64_t _update_bit) {
+    VulkanDescriptorASInfo as_info{_as, _update_bit, UINT64_MAX};
 
-    // update some vkDescriptorWrite info
-    m_write_set[m_index_of_binding[_binding]]    = std::move(write);
-    m_write_set_as[m_index_of_binding[_binding]] = std::move(write_as);
-    Moer::Array<VulkanHashableDescriptorInfo> infos;
-    for (uint32_t i = 0; i < _as.size(); ++i) {
-        VulkanHashableDescriptorInfo as_info{};
-        as_info.resource.as = _as[i];
-        infos.emplace_back(as_info);
+    const VkWriteDescriptorSetAccelerationStructureKHR* write_as = nullptr;
+
+    const auto* cursor = reinterpret_cast<const VkBaseInStructure*>(m_descriptor_write_head[_write_index].pNext);
+    while (cursor) {
+        if (cursor->sType == VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR) {
+            write_as = (reinterpret_cast<const VkWriteDescriptorSetAccelerationStructureKHR*>(cursor));
+            break;
+        }
+        cursor = cursor->pNext;
     }
-    m_cache->UpdateDescriptorSetHashInfos(m_index_of_hash_info[_binding], infos);
+
+    VK_CHECK_NULLPTR(write_as, "AccelerationStructure descriptor set write is nullptr!", return);
+    CHECK_ASSERT((write_as->accelerationStructureCount == 1), "AccelerationStructure descriptor set write count is not 1!");
+
+    const_cast<VkWriteDescriptorSetAccelerationStructureKHR*>(write_as)->pAccelerationStructures = &as_info.as;
+
+    m_hash_info_head[_write_index].resource.as = as_info;
+}
+
+template<VkDescriptorType DescriptorType>
+void VulkanDescriptorSetWriter::WriteImageInner(uint32_t _write_index, VkSampler _sampler, VkImageView _image_view, VkImageLayout _image_layout) {
+    CHECK_ASSERT((m_descriptor_write_head[_write_index].descriptorType == DescriptorType), "WriteImageInner: Descriptor type mismatch at index {}: write {} which was expecting {}!", _write_index, VK_TYPE_TO_STRING(VkDescriptorType, m_descriptor_write_head[_write_index].descriptorType), VK_TYPE_TO_STRING(VkDescriptorType, DescriptorType));
+
+    auto* image_info = const_cast<VkDescriptorImageInfo*>(m_descriptor_write_head[_write_index].pImageInfo);
+
+    image_info->sampler     = _sampler;
+    image_info->imageView   = _image_view;
+    image_info->imageLayout = _image_layout;
+
+    m_hash_info_head[_write_index].resource.image = *image_info;
+}
+
+template<VkDescriptorType DescriptorType>
+void VulkanDescriptorSetWriter::WriteBufferInner(uint32_t _write_index, VkBuffer _buffer, VkDeviceSize _offset, VkDeviceSize _range) {
+    CHECK_ASSERT((m_descriptor_write_head[_write_index].descriptorType == DescriptorType), "WriteBufferInner: Descriptor type mismatch at index {}: write {} which was expecting {}!", _write_index, VK_TYPE_TO_STRING(VkDescriptorType, m_descriptor_write_head[_write_index].descriptorType), VK_TYPE_TO_STRING(VkDescriptorType, DescriptorType));
+
+    auto* buffer_info = const_cast<VkDescriptorBufferInfo*>(m_descriptor_write_head[_write_index].pBufferInfo);
+
+    buffer_info->buffer = _buffer;
+    buffer_info->offset = _offset;
+    buffer_info->range  = _range;
+
+    m_hash_info_head[_write_index].resource.buffer = *buffer_info;
 }
 
 uint32_t VulkanDescriptorSetWriter::GetSetKey() const {
-    return crc32_8bytes(
-        &m_cache->m_descriptor_resource_container.hashable_descriptor_infos[m_hash_info_head],
-        sizeof(VulkanHashableDescriptorInfo) * (m_hash_info_count));
+    return Moer::RHI::Vulkan::Util::MemCrc32(
+        m_hash_info_head,
+        sizeof(VulkanHashableDescriptorInfo) * (m_write_count + 1));
 }

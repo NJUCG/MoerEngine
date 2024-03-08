@@ -740,10 +740,6 @@ void VulkanRHIComputeCommandList::PrepareDispatch() {
     //some works to do
 }
 
-void VulkanRHIComputeCommandList::PrepareDispatch() {
-    //some works to do
-}
-
 void VulkanRHIComputeCommandList::Dispatch(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z) {
     PrepareDispatch();
     Moer::RHI::Vulkan::DebugUtils::CmdInsertLabel(m_command_buffer, "DrawIndexedInstanced", {});

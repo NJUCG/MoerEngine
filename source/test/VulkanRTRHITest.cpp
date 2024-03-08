@@ -31,7 +31,7 @@ class TestRayMissShader : public Shader {
     DEFINE_SHADER_TYPE(TestRayMissShader, Global, )
 public:
     BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
-    DEFINE_SHADER_PARAM_CBV(CBuffer, clearValue)
+    DEFINE_SHADER_PARAM_CBV(ConstantBuffer, clearValue)
     END_ROOT_PARAMETER_DEFINITION(Parameters)
 };
 IMPLEMENT_SHADER_TYPE(TestRayMissShader, "raytracingbasic/miss.rmiss", "main", EShaderType::ST_RAY_MISS);
@@ -45,13 +45,6 @@ public:
 };
 IMPLEMENT_SHADER_TYPE(TestRayClosestHitShader, "raytracingbasic/closesthit.rchit", "main", EShaderType::ST_RAY_CLOSESTHIT);
 
-RHIBufferRef CreateBufferFromData(const RHIBufferCreateInfo& info, uint32_t size, void* data) {
-    RHIBufferRef buffer     = g_rhi->RHICreateBuffer(info);
-    void*        mapped_ptr = g_rhi->RHIMapBuffer(buffer, 0, size);
-    memcpy(mapped_ptr, data, size);
-    g_rhi->RHIUnmapBuffer(buffer);
-    return buffer;
-}
 void Init(int argc, char** argv) {
     g_rhi                           = new VulkanRHIImpl();
     std::filesystem::path workspace = argv[0];
@@ -82,17 +75,8 @@ void Test() {
         {0.5, 0.5, 1},
 
     };
-    RHIBufferCreateInfo index_buffer_info{};
-    index_buffer_info.size    = sizeof(index_data);
-    index_buffer_info.stride  = sizeof(uint32_t);
-    index_buffer_info.usage   = EBufferUsageFlags::INDEX_BUFFER | EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT;
-    RHIBufferRef index_buffer = CreateBufferFromData(index_buffer_info, sizeof(index_data), index_data);
-
-    RHIBufferCreateInfo vertex_buffer_info{};
-    vertex_buffer_info.size    = sizeof(vertex_data);
-    vertex_buffer_info.stride  = sizeof(Moer::Vector3f);
-    vertex_buffer_info.usage   = EBufferUsageFlags::VERTEX_BUFFER | EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT;
-    RHIBufferRef vertex_buffer = CreateBufferFromData(vertex_buffer_info, sizeof(vertex_data), vertex_data);
+    RHIBufferRef index_buffer  = g_rhi->RHICreateBuffer<uint32_t>(sizeof(index_data), EBufferUsageFlags::INDEX_BUFFER | EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT);
+    RHIBufferRef vertex_buffer = g_rhi->RHICreateBuffer<Moer::Vector3f>(sizeof(vertex_data), EBufferUsageFlags::VERTEX_BUFFER | EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT);
 
     Moer::Vector3f      clear_value = {0, 0, 0};
     RHIBufferCreateInfo uniform_buffer_info{};
@@ -173,14 +157,8 @@ void Test() {
         .SetUsageFlags(ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::TRANSFER_SRC);
 
     //out_put texture
-    RHITextureRef             tex = g_rhi->RHICreateTexture(tex_info);
-    RHIUnorderedAccessViewRef tex_view =
-        g_rhi->RHICreateUnorderedAccessView(tex,
-                                            RHIViewInfo::CreateTextureUAVInfo()
-                                                .SetFormat((PF_R8G8B8A8_UNORM))
-                                                .SetArrayRange(0, 1)
-                                                .SetDimension(tex)
-                                                .SetMipLevel(0));
+    RHITextureRef tex      = g_rhi->RHICreateTexture(tex_info);
+    RHIUAVRef     tex_view = g_rhi->RHICreateTextureUAV(tex, PF_R8G8B8A8_UNORM, 0, 0, 1);
 
     RHIBatchedShaderParameters batched_parameter{};
     //hack
@@ -216,7 +194,7 @@ void Test() {
     copy_command_list->SetPipelineBarrier({{}, {}, {texture_barrier_info}});
 
     for (int i = 0; i < viewport->GetViewportInfo().max_frame_in_flight; ++i) {
-        RHIUnorderedAccessView* uav    = g_rhi->RHIGetViewportBackBufferUAV(viewport, i);
+        RHIUAVRef uav                  = g_rhi->RHIGetViewportBackBufferUAV(viewport, i);
         texture_barrier_info.p_texture = uav->GetTexture();
         copy_command_list->SetPipelineBarrier({{}, {}, {texture_barrier_info}});
     }
@@ -242,7 +220,7 @@ void Test() {
         rt_queue->SubmitCommands(1, command_list, &raytracing_submit_info);
 
         RHIViewportNextBackBufferInfo next_back_buffer_info = g_rhi->RHIGetNextFrameViewportBufferInfo(viewport);
-        RHIUnorderedAccessView*       next_back_buffer      = g_rhi->RHIGetViewportBackBufferUAV(viewport, next_back_buffer_info.backbuffer_index);
+        RHIUAVRef                     next_back_buffer      = g_rhi->RHIGetViewportBackBufferUAV(viewport, next_back_buffer_info.backbuffer_index);
         copy_command_list->Reset();
         copy_command_list->BeginRecording();
         RHICopyTextureInfo copyinfo;

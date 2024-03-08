@@ -98,6 +98,10 @@ public:
         uint32_t   _max_draw_count,
         uint32_t   _stride) override;
 
+    void Dispatch(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z) override;
+
+    void DispatchIndirect(RHIBuffer* _buffer, uint64_t _offset) override;
+
     void CopyBuffer(const RHICopyBufferInfo& _copy_info, RHIBuffer* _src, RHIBuffer* _dst) override;
     void CopyTexture(const RHICopyTextureInfo& _copy_info, RHITexture* _src, RHITexture* _dst) override;
     void CopyBufferToTexture(const RHICopyBufferToTextureInfo& _info, RHIBuffer* src_buffer, RHITexture* dst_texture) override;

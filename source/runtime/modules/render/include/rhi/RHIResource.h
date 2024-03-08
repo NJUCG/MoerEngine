@@ -1576,6 +1576,10 @@ public:
         return info.IsTexture() ? dynamic_cast<RHITexture*>(resource.Get()) : nullptr;
     }
 
+    bool IsAccelerationStructure() const {
+        return info.buffer.srv.buffer_type == RHIViewInfo::EBufferType::ACCELERATION_STRUCTURE;
+    }
+
     bool IsBuffer() const {
         return info.IsBuffer();
     }

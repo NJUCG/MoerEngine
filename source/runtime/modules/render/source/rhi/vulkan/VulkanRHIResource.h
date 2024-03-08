@@ -97,7 +97,6 @@ public:
     static VkPolygonMode       METoVKPolygonMode(ERasterizerFillMode _fill_mode);
 
     static VkDescriptorType   METoVKDescriptorType(EShaderParameterType _type, EShaderCodeResourceBindingType _binding_type);
-    static VkDescriptorType   METoVKDescriptorType(EShaderParameterType _type, EShaderCodeResourceBindingType _binding_type);
     static VkShaderStageFlags METoVKShaderStageFlags(EShaderType _type);
 
     static uint32_t METoVkQueueFamilyIndex(ECommandQueueType _type, const VulkanDevice* _device);
@@ -120,8 +119,6 @@ public:
 #pragma endregion
 
 class VulkanRHISampler final : public RHISampler {
-    friend VulkanRHIImpl;
-
 public:
     explicit VulkanRHISampler() : RHISampler() {}
 
@@ -226,12 +223,18 @@ public:
 
 #pragma region pipeline states definitions
 
-class VulkanPipelineState {
-    friend VulkanRHIImpl;
-
+class VulkanDeviceObject {
 public:
-    VulkanPipelineState() : m_pipeline(VK_NULL_HANDLE), m_pipeline_layout(VK_NULL_HANDLE), m_pipeline_state_cache(nullptr){};
-    virtual ~VulkanPipelineState() = default;
+    VulkanDeviceObject(VulkanDevice* _device = nullptr);
+
+protected:
+    VulkanDevice* m_device;
+};
+
+class VulkanPipelineState : public VulkanDeviceObject {
+public:
+    VulkanPipelineState(VulkanDevice* _device) : VulkanDeviceObject(_device), m_pipeline(VK_NULL_HANDLE), m_pipeline_layout(VK_NULL_HANDLE), m_pipeline_state_cache(nullptr){};
+    virtual ~VulkanPipelineState();
 
     inline VkPipeline GetHandle() const {
         return m_pipeline;
@@ -240,6 +243,7 @@ public:
     inline const VkPipelineLayout GetPipelineLayout() const {
         return m_pipeline_layout;
     }
+
     inline VulkanPipelineResourceCache* GetPipelineResourceCache() const {
         return m_pipeline_state_cache;
     }
@@ -248,8 +252,9 @@ public:
         return m_descriptor_sets_layout;
     }
 
-    void GenerateDescriptorSetLayouts(const VulkanDevice* _device, Moer::Array<TDescriptorSetLayoutInfo>& _layout_mappings);
-    void CreateResourceCache();
+    void InitDescriptorSetLayouts(Moer::Array<TDescriptorSetLayoutBindingArray>& _descriptor_bindings);
+    void InitPipelineResourceCache(const Moer::Array<TDescriptorSetLayoutBindingArray>& _descriptor_bindings);
+    void CreatePipelineLayout(const VkPipelineLayoutCreateInfo& _pipeline_layout_ci);
 
 protected:
     VkPipeline       m_pipeline;
@@ -258,49 +263,50 @@ protected:
     VulkanDescriptorSetsLayout* m_descriptor_sets_layout;
     // resource cache
     VulkanPipelineResourceCache* m_pipeline_state_cache;
-    // descriptor sets
 };
 
 class VulkanRHIGraphicsPipelineState final : public RHIGraphicsPipelineState, public VulkanPipelineState {
-    friend VulkanRHIImpl;
-
 public:
-    VulkanRHIGraphicsPipelineState()
+    VulkanRHIGraphicsPipelineState(VulkanDevice* _device)
         : RHIGraphicsPipelineState(),
-          VulkanPipelineState() {}
+          VulkanPipelineState(_device) {}
 
     virtual ~VulkanRHIGraphicsPipelineState();
 
     static Moer::Array<VkPipelineShaderStageCreateInfo> METoVKShaderStageCreateInfo(const RHIShaderBoundStateInput& _shader_bound_state);
     static VkPipelineVertexInputStateCreateInfo         METoVKVertexInputStateCreateInfo(const RHIVertexInputInfo& _vertex_input_state);
     static Moer::Array<const Shader*>                   GetShaderInfoList(const RHIShaderBoundStateInput& _shader_bound_state);
+
+    void CreateGraphicsPipeline(const VkGraphicsPipelineCreateInfo& _info);
 };
 
 class VulkanRHIComputePipelineState final : public RHIComputePipelineState, public VulkanPipelineState {
-    friend VulkanRHIImpl;
-
 public:
-    VulkanRHIComputePipelineState()
+    VulkanRHIComputePipelineState(VulkanDevice* _device)
         : RHIComputePipelineState(),
-          VulkanPipelineState() {}
+          VulkanPipelineState(_device) {}
+
+    void CreateComputePipeline(const VkComputePipelineCreateInfo& _info);
 };
 
 class VulkanRHIRayTracingPipelineState final : public RHIRayTracingPipelineState, public VulkanPipelineState {
     friend VulkanRHIImpl;
 
 public:
-    VulkanRHIRayTracingPipelineState()
+    VulkanRHIRayTracingPipelineState(VulkanDevice* _device)
         : RHIRayTracingPipelineState(),
-          VulkanPipelineState() {}
+          VulkanPipelineState(_device) {}
 
     const VkStridedDeviceAddressRegionKHR* GetRayGenSBT() { return &m_raygen_sbt; }
     const VkStridedDeviceAddressRegionKHR* GetRayMissSBT() { return &m_miss_sbt; }
     const VkStridedDeviceAddressRegionKHR* GetRayHitSBT() { return &m_hit_sbt; }
     const VkStridedDeviceAddressRegionKHR* GetRayCallableSBT() { return &m_callable_sbt; }
 
+    void CreateRayTracingPipeline(const VkRayTracingPipelineCreateInfoKHR& _info);
+
 private:
     //SBT
-    RHIBufferRef                    m_sbt_buffer;
+    RHIBufferRef                    m_sbt_buffer;// MARK: should use RHIBufferRef instead of VkBuffer?
     VkStridedDeviceAddressRegionKHR m_raygen_sbt;
     VkStridedDeviceAddressRegionKHR m_miss_sbt;
     VkStridedDeviceAddressRegionKHR m_hit_sbt;
@@ -346,13 +352,7 @@ public:
     VulkanStagingBuffer() = delete;
     VulkanStagingBuffer(VulkanRHIBuffer* _buffer);
 };
-class VulkanDeviceObject {
-public:
-    VulkanDeviceObject(VulkanDevice* _device = nullptr);
 
-protected:
-    VulkanDevice* m_device;
-};
 class VulkanRHITexture final : public RHITexture, public VulkanDeviceObject {
     friend VulkanRHIImpl;
 

@@ -125,7 +125,7 @@ void Shader::ConstructRootParameterLayoutInfo(const ShaderParametersInfoMap& _pa
 
     const auto& parameter_meta_data = type->GetParameterMetaData();
 
-    Moer::Array<ShaderParameterLayoutInfo> layout_infos;
+    Moer::Array<ShaderParameterLayoutInfo> binding_infos;
 
     const auto& reflect_map = _param_map.GetShaderParameterInfoMap();
     for (const auto& member : parameter_meta_data->GetMembers()) {
@@ -154,15 +154,15 @@ void Shader::ConstructRootParameterLayoutInfo(const ShaderParametersInfoMap& _pa
             continue;
         }
         //for resources
-        layout_infos.emplace_back(ShaderParameterLayoutInfo(member.GetOffset(),
-                                                            member.GetStride(),
-                                                            slot,
-                                                            space,
-                                                            num,
-                                                            param_type,
-                                                            resource_type));
+        binding_infos.emplace_back(ShaderParameterLayoutInfo(member.GetOffset(),
+                                                             member.GetStride(),
+                                                             slot,
+                                                             space,
+                                                             num,
+                                                             param_type,
+                                                             resource_type));
     }
-    param_layout_info.layout_infos.swap(layout_infos);
+    param_layout_info.binding_infos.swap(binding_infos);
 }
 
 // class TestReflectionShad : public Shader {

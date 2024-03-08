@@ -7,6 +7,13 @@ class VulkanRHIGraphicsPipelineState;
 class VulkanDescriptorSetsLayout;
 class VulkanDevice;
 
+struct DescriptorSetInfo {
+    Moer::Array<VkDescriptorType> types;
+    uint32_t                      image_count;
+    uint32_t                      buffer_count;
+    uint32_t                      as_count;
+};
+
 struct PushConstantInfo {
     VkShaderStageFlags   flags;
     uint32_t             size;
@@ -19,15 +26,15 @@ class VulkanPipelineResourceCache {
     friend VulkanDescriptorSetWriter;
 
 public:
-    VulkanPipelineResourceCache() = default;
+    VulkanPipelineResourceCache(const VulkanDescriptorSetsLayout* _layout, const Moer::Array<TDescriptorSetLayoutBindingArray>& _descriptor_bindings);
 
-    void UpdateDescriptorSetHashInfos(uint32_t _index, const Moer::Array<VulkanHashableDescriptorInfo>& _infos);
+    void SetSamplerState(uint32_t _set, uint32_t _binding, VulkanRHISampler* _sampler);
 
-    const VkDescriptorImageInfo* UpdateDescriptorImageInfos(uint16_t _set, uint16_t _index_of_binding, const Moer::Array<VkDescriptorImageInfo>& _infos);
+    void SetCBV(uint32_t _set, uint32_t _binding, RHICBV* _cbv);
 
-    const VkDescriptorBufferInfo* UpdateDescriptorBufferInfos(uint16_t _set, uint16_t _index_of_binding, const Moer::Array<VkDescriptorBufferInfo>& _infos);
+    void SetSRV(uint32_t _set, uint32_t _binding, RHISRV* _srv);
 
-    const VkAccelerationStructureKHR* UpdateDescriptorASInfo(uint16_t _set, uint16_t _index_of_binding, const Moer::Array<VkAccelerationStructureKHR>& _infos);
+    void SetUAV(uint32_t _set, uint32_t _binding, RHIUAV* _uav);
 
     bool UpdateDescriptorSets(VulkanDevice* _device, const VulkanDescriptorSetsLayout* _layout);
 
@@ -37,7 +44,7 @@ public:
 
     inline bool HasPushConstants() const { return !m_push_constants.empty(); }
 
-    inline Moer::Array<VulkanDescriptorSetWriter>& GetWriters() { return m_descriptor_set_writers; }
+    inline const Moer::Array<DescriptorSetInfo>& GetDescriptorSetInfos() const { return m_set_infos; }
 
     inline const Moer::Array<VkDescriptorSet>& GetDescriptorSets() const { return m_descriptor_sets; }
 
@@ -57,6 +64,10 @@ private:
     Moer::Array<PushConstantInfo> m_push_constants;
 
     uint32_t GetSetsKey() const;
+
+    void InitDescriptorSetWriteContainer(const Moer::Array<TDescriptorSetLayoutBindingArray>& _descriptor_bindings);
+
+    Moer::Array<DescriptorSetInfo> m_set_infos;
 };
 
 #endif// VULKAN_PIPELINE_STATE_CACHE_H
