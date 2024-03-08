@@ -49,7 +49,7 @@ void VulkanPipelineResourceCache::SetCBV(uint32_t _set, uint32_t _binding, RHICB
     auto* buffer = static_cast<VulkanRHIBuffer*>(_cbv->GetBuffer());
     if (_cbv->IsBuffer()) {
         // ConstantBuffer
-        m_descriptor_set_writers[_set].WriteUniformBuffer(_binding, buffer->GetHandle(), 0, buffer->GetInfo().size);
+        m_descriptor_set_writers[_set].WriteUniformBuffer(_binding, buffer->GetHandle(), _cbv->GetInfo().buffer.cbv.byte_offset, buffer->GetInfo().size);
     } else {
         // TextureBuffer
         LOG_CRITICAL("Texture CBV is not implemented yet.");
@@ -63,7 +63,7 @@ void VulkanPipelineResourceCache::SetSRV(uint32_t _set, uint32_t _binding, RHISR
             // MARK: acceleration structure is not implemented yet
         } else {
             auto* buffer = static_cast<VulkanRHIBuffer*>(_srv->GetBuffer());
-            m_descriptor_set_writers[_set].WriteStorageBuffer(_binding, buffer->GetHandle(), 0, buffer->GetInfo().size);
+            m_descriptor_set_writers[_set].WriteStorageBuffer(_binding, buffer->GetHandle(), _srv->GetInfo().buffer.srv.byte_offset, buffer->GetInfo().size);
         }
     } else {
         auto* tex_view = static_cast<VulkanRHITextureSRV*>(_srv);
@@ -79,7 +79,7 @@ void VulkanPipelineResourceCache::SetUAV(uint32_t _set, uint32_t _binding, RHIUA
             // MARK: acceleration structure is not implemented yet
         } else {
             auto* buffer = static_cast<VulkanRHIBuffer*>(_uav->GetBuffer());
-            m_descriptor_set_writers[_set].WriteStorageBuffer(_binding, buffer->GetHandle(), 0, buffer->GetInfo().size);
+            m_descriptor_set_writers[_set].WriteStorageBuffer(_binding, buffer->GetHandle(), _uav->GetInfo().buffer.uav.byte_offset, buffer->GetInfo().size);
         }
     } else {
         auto* tex_view = static_cast<VulkanRHITextureUAV*>(_uav);
