@@ -4,6 +4,10 @@
 #include "misc/STL.h"
 #include "rhi/RHIResource.h"
 namespace Moer {
+    struct ViewportResources {
+        Moer::Array<RHITextureRef> g_buffer_depth;
+        Moer::Array<RHIUAVRef>     g_buffer_depth_uav;
+    };
     struct RenderResourceDeferred {
         RHIBufferRef packed_vertex_buffer;
         RHIBufferRef packed_index_buffer;
@@ -17,8 +21,7 @@ namespace Moer {
         RHITextureRef g_buffer_normal;
         RHITextureRef g_buffer_material;
 
-        Moer::Array<RHITextureRef> g_buffer_depth;
-        Moer::Array<RHIUAVRef>     g_buffer_depth_uav;
+        Moer::Array<ViewportResources> viewports;
     };
 }
 #endif

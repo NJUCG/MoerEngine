@@ -970,12 +970,20 @@ struct ViewPort {
 };
 
 struct MeshInfo {
+    Moer::Vector3f center;
     uint32_t vertex_offset;
+    Moer::Vector3f extent;
     uint32_t index_offset;
     uint32_t vertex_count;
     uint32_t index_count;
     uint32_t meshlet_offset;
     uint32_t meshlet_count;
+};
+struct MeshBoundInfo {
+    Moer::Vector3f center;
+    float          padding;
+    Moer::Vector3f extent;
+    float          padding2;
 };
 
 namespace Moer {

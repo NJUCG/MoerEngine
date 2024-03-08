@@ -123,6 +123,12 @@ public:
 
     virtual RHITextureRef RHICreateTexture(const RHITextureCreateInfo& info) = 0;
 
+    virtual RHICBVRef RHICreateCBV(RHIBuffer* _resource, uint64_t _size, uint64_t _byte_offset = 0) = 0;
+
+    RHICBVRef RHICreateCBV(RHIBuffer* _resource, uint64_t _byte_offset = 0) {
+        return RHICreateCBV(_resource, _resource->GetByteSize(), _byte_offset);
+    }
+
     template<typename TElement>
         requires(std::is_trivially_copyable_v<TElement> && std::is_standard_layout_v<TElement>)
     RHISRVRef RHICreateBufferSRV(

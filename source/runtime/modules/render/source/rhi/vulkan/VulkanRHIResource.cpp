@@ -1293,6 +1293,7 @@ VkBufferUsageFlags VulkanRHIBuffer::METoVKBufferUsageFlags(VulkanDevice* _device
     TranslateFlag(EBufferUsageFlags::VERTEX_BUFFER, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
     TranslateFlag(EBufferUsageFlags::INDEX_BUFFER, VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
     TranslateFlag(EBufferUsageFlags::STORAGE_BUFFER, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    TranslateFlag(EBufferUsageFlags::UNIFORM_BUFFER, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
 
     TranslateFlag(EBufferUsageFlags::ACCELERATION_STRUCTURE, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR);
     TranslateFlag(EBufferUsageFlags::SHADER_BINDING_TABLE, VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR);
@@ -1439,6 +1440,11 @@ void VulkanRHIFence::Wait(uint64_t value) {
 #pragma endregion
 
 #pragma region viewable resources view definitions
+VulkanRHICBV::~VulkanRHICBV() {
+ 
+}
+
+
 VulkanRHITextureUAV::~VulkanRHITextureUAV() {
     if (m_view != VK_NULL_HANDLE) {
         vkDestroyImageView(m_device->GetDevice(), m_view, VK_NULL_HANDLE);

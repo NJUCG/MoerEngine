@@ -138,7 +138,7 @@ public:                                                                         
     __VA_OPT__(INNER_IMPLEMENT_GET_ROOT_PARAMETER(StructureName, __VA_ARGS__))
 
 #define DEFINE_SHADER_PARAM_CBV(HLSLType, MemberName) \
-    INTERNAL_DEFINE_SHADER_PARAM_IMPL(TShaderResourceParameterTypeInfo<RHIUnorderedAccessView*>, RHIConstantBufferView*, MemberName, HLSLType, EShaderPrecisionModifier::FLOAT, SBT_CBV, public, )
+    INTERNAL_DEFINE_SHADER_PARAM_IMPL(TShaderResourceParameterTypeInfo<RHICBV*>, RHICBV*, MemberName, HLSLType, EShaderPrecisionModifier::FLOAT, SBT_CBV, public, )
 
 #define DEFINE_SHADER_PARAM_UAV(HLSLType, MemberName) \
     INTERNAL_DEFINE_SHADER_PARAM_IMPL(TShaderResourceParameterTypeInfo<RHIUAV*>, RHIUAV*, MemberName, HLSLType, EShaderPrecisionModifier::FLOAT, SBT_UAV, public, )

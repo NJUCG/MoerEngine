@@ -1,5 +1,6 @@
 #ifndef MOER_ENGINE_STL_H
 #define MOER_ENGINE_STL_H
+#include <cstring>
 #include <map>
 #include <set>
 #include <unordered_map>
@@ -43,6 +44,11 @@ namespace Moer {
 
     template<typename T, class Deleter = MoerDeleter>
     using UniquePtr = std::unique_ptr<T, Deleter>;
+
+    template<typename T>
+    constexpr bool StringEqual(const T& a, const T& b) {
+        return std::strcmp(a.c_str(), b.c_str()) == 0;
+    }
 
 }// namespace Moer
 #endif//MOER_ENGINE_STL_H

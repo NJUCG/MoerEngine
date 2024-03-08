@@ -80,6 +80,8 @@ public:
     // void RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) override {}
 
     RHICommandAllocator* RHIGetCurrentCommandAllocator() override { return nullptr; }
+
+    RHICBVRef RHICreateCBV(RHIBuffer* _resource, uint64_t _size, uint64_t _byte_offset) override { return RHICBVRef{}; }
 #pragma endregion
 
 #pragma region Viewport

@@ -65,6 +65,7 @@ class RHIMultisampleState;
 class RHIShader;
 class RHIShaderLibrary;
 class RHISRV;
+class RHICBV;
 class RHIConstantBufferView;
 class RHITexture;
 class RHITextureReference;
@@ -114,6 +115,7 @@ using RHIMultisampleStateRef          = CountableRef<RHIMultisampleState>;
 using RHIShaderRef                    = CountableRef<RHIShader>;
 using RHIShaderLibraryRef             = CountableRef<RHIShaderLibrary>;
 using RHISRVRef                       = CountableRef<RHISRV>;
+using RHICBVRef                       = CountableRef<RHICBV>;
 using RHITextureRef                   = CountableRef<RHITexture>;
 using RHITextureReferenceRef          = CountableRef<RHITextureReference>;
 using RHIShaderRootParameterLayoutRef = CountableRef<RHIShaderRootParameterLayout>;
@@ -1600,18 +1602,15 @@ public:
         return info.IsCBV();
     }
 
+    const RHIViewInfo& GetInfo() const {
+        return info;
+    }
+
 protected:
     const RHIViewInfo info;
 
 private:
     CountableRef<RHIViewableResource> resource;
-};
-
-class RHIConstantBufferView : public RHIView {
-public:
-    explicit RHIConstantBufferView(RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIView(RRT_UNORDERED_ACCESS_VIEW, _resource, _viewInfo) {
-        assert(_viewInfo.IsUAV() && "view must be uav");
-    }
 };
 
 class RHIUAV : public RHIView {
@@ -2283,6 +2282,12 @@ public:
         for (int i = color_attachment_count; i < _color_attachment_info.size(); i++) {
             color_attachments_info[i] = std::move(_color_attachment_info[i - color_attachment_count]);
         }
+        return *this;
+    }
+
+    RHIGraphicsPSOCreateInfo& SetColorAttachmentInfo(RHIColorAttachmentInfo _color_attachment_info) {
+        color_attachment_count                         = CalcValidColorAttachmentCount();
+        color_attachments_info[color_attachment_count] = std::move(_color_attachment_info);
         return *this;
     }
 

@@ -431,6 +431,16 @@ private:
     VkImageView m_view;
 };
 
+class VulkanRHICBV final : public RHICBV, public VulkanDeviceObject {
+    friend VulkanRHIImpl;
+
+public:
+    virtual ~VulkanRHICBV();
+    explicit VulkanRHICBV(
+        VulkanDevice*      _device,
+        RHIBuffer*         _resource,
+        const RHIViewInfo& _viewInfo) : RHICBV(_resource, _viewInfo), VulkanDeviceObject(_device) {}
+};
 class VulkanRHIBufferUAV final : public RHIUAV, public VulkanDeviceObject {
     friend VulkanRHIImpl;
 

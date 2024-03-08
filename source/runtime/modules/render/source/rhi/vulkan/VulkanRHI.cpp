@@ -1280,7 +1280,7 @@ void* VulkanRHIImpl::RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t
     void* p_data;
     VK_CHECK_RESULT(vmaMapMemory(allocator, vk_buffer->m_alloc.alloc, &p_data));
 
-    return p_data;
+    return (std::byte*)p_data + _offset;
 }
 void VulkanRHIImpl::RHIUnmapBuffer(RHIBuffer* _buffer) {
     auto* vk_buffer = static_cast<VulkanRHIBuffer*>(_buffer);
@@ -1451,6 +1451,18 @@ RHIUAVRef VulkanRHIImpl::RHICreateUAVInner(RHIViewableResource* _resource, const
         return create_buffer_uav();
     }
     return create_texture_uav();
+}
+
+RHICBVRef VulkanRHIImpl::RHICreateCBV(RHIBuffer* _buffer, uint64_t _byte_size, uint64_t _offset) {
+    auto* vk_buffer = static_cast<VulkanRHIBuffer*>(_buffer);
+    VK_CHECK_NULLPTR(vk_buffer, "RHICreateCBV: buffer to be viewed is nullptr!", return RHICBVRef{});
+    auto create_info = RHIViewInfo::CreateBufferCBVInfo()
+                           .SetByteOffset(_offset)
+                           .SetStride(_buffer->GetStride())
+                           .SetNumElements(_byte_size / _buffer->GetStride());
+
+    VulkanRHICBV* vk_cbv = MoerNew(VulkanRHICBV)(m_device, _buffer, std::move(create_info));
+    return RHICBVRef(vk_cbv);
 }
 
 RHICommandQueue* VulkanRHIImpl::RHICreateCommandQueue(ECommandQueueType _type) {
