@@ -37,6 +37,11 @@ namespace Moer {
         for (uint32_t i = 0; i < texture->GetNumMips(); ++i) {
             uavs[i] = g_rhi->RHICreateTextureUAV(texture, PF_R16_SFLOAT, i);
         }
+        if (sampler == nullptr) {
+            RHISamplerCreateInfo create_info(SF_NEAREST, TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            create_info.SetCompareOp(SCF_NEVER);
+            sampler = g_rhi->RHICreateSampler(create_info);
+        }
     }
 
     struct HiZBuilder::Impl {
@@ -46,7 +51,7 @@ namespace Moer {
             assert(builder_shader && "Failed to load HiZ builder shader");
 #endif
             pso = g_rhi->RHICreateComputePipelineState(builder_shader);
-            RHISamplerCreateInfo create_info(SF_CUBIC, TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            RHISamplerCreateInfo create_info(SF_NEAREST, TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             create_info.SetCompareOp(SCF_NEVER);
             depth_sampler = g_rhi->RHICreateSampler(create_info);
         }
