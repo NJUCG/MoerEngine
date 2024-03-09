@@ -119,6 +119,7 @@ bool IsFrustumVisible(in InstanceMeshletInfo instance) {
   bool vis_occluded = IsVisibleOccluded(instance_mesh_info,
                                         cull_data.camera_data.prev_view_proj);
 
+  bool visible = vis_frustum && vis_occluded;
   uint instance_count = WaveActiveCountBits(visible);
   uint lane_offset = WavePrefixCountBits(visible);
 
@@ -135,7 +136,7 @@ bool IsFrustumVisible(in InstanceMeshletInfo instance) {
   cull_meshlet_offset = WaveReadLaneFirst(cull_meshlet_offset);
   cull_meshlet_offset += WavePrefixSum(culled_meshlet_count);
 
-  if (vis_frustum && vis_occluded) {
+  if (visible) {
     for (uint i = 0; i < culled_meshlet_count; i++) {
       InstanceMeshletCullInfo cull_info;
       uint meshlet_id = instance_mesh_info.meshlet_offset + i;

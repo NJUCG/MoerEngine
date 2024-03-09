@@ -61,6 +61,7 @@ bool IsOcclusionVisible(in MeshletBound bound, in float4x4 world,
   center /= center.w;
   // get center relative radius
   float world_radius = bound.radius * scale;
+  return true;
 }
 
 [numthreads(64, 1, 1)] void prepass(uint3 dtid
@@ -76,6 +77,69 @@ bool IsOcclusionVisible(in MeshletBound bound, in float4x4 world,
   InstanceData data = instance_data[cull_info.instance_id];
   MeshletBound bound = meshlet_bound_buffer[cull_info.meshlet_id];
 
+  bool frustum_visible = IsFrustumVisible(bound, data.model2world, data.scale);
+  bool occlude_visible =
+      IsOcclusionVisible(bound, data.model2world, data.scale,
+                         cull_data.camera_data.prev_view_proj);
+
+  bool need_recheck = frustum_visible && !occlude_visible;
+  uint need_recheck_count = WaveActiveCountBits(need_recheck);
+  uint recheck_id_offset = 0;
+  if (WaveIsFirstLane()) {
+    counters_buffer.InterlockedAdd(input.recheck_counter_buffer_offset,
+                                   need_recheck_count, recheck_id_offset);
+  }
+
+  uint recheck_lane_offset = WavePrefixCountBits(need_recheck);
+  recheck_id_offset =
+      WaveReadLaneFirst(recheck_id_offset) + recheck_lane_offset;
+
+  if (need_recheck) {
+    recheck_cull_info[recheck_id_offset] = cull_info;
+    return;
+  }
+
+  bool visible = frustum_visible && occlude_visible;
+  uint wave_meshlet_count = WaveActiveCountBits(visible);
+  uint cmd_offset = 0;
+  if (WaveIsFirstLane()) {
+    counters_buffer.InterlockedAdd(input.draw_cmd_buffer_offset,
+                                   wave_meshlet_count, cmd_offset);
+  }
+  uint lane_offset = WavePrefixCountBits(visible);
+  cmd_offset = WaveReadLaneFirst(cmd_offset) + lane_offset;
+
+  if (visible) {
+    DrawCommandData cmd;
+    MeshletDesc meshlet_desc = meshlet_info_buffer[cull_info.meshlet_id];
+    InstanceMeshletInfo instance_mesh_info =
+        instance_meshlet_info[cull_info.instance_id];
+
+    cmd.index_count = meshlet_desc.index_count;
+    cmd.instance_count = 1;
+    cmd.first_index =
+        meshlet_desc.index_offset + instance_mesh_info.index_offset;
+    cmd.vertex_offset =
+        meshlet_desc.vertex_offset + instance_mesh_info.vertex_offset;
+    cmd.first_instance = cull_info.instance_id;
+    command_buffer[cmd_offset] = cmd;
+  }
+}
+
+    [numthreads(64, 1, 1)] void recheck_pass(uint3 dtid
+                                             : SV_DispatchThreadID) {
+
+  uint total_count =
+      counters_buffer.Load<uint>(input.recheck_counter_buffer_offset);
+  if (dtid.x >= total_count) {
+    return;
+  }
+
+  uint instance_start_offset = instance_meshlet_cull_info[dtid.x].instance_id;
+  InstanceData data = instance_data[instance_start_offset];
+  InstanceMeshletInfo instance_mesh_info =
+      instance_meshlet_info[instance_start_offset];
+
   bool visible = IsFrustumVisible(bound, data.model2world, data.scale);
 
   uint wave_meshlet_count = WaveActiveCountBits(visible);
@@ -84,6 +148,7 @@ bool IsOcclusionVisible(in MeshletBound bound, in float4x4 world,
     counters_buffer.InterlockedAdd(input.draw_cmd_buffer_offset,
                                    wave_meshlet_count, cmd_offset);
   }
+
   uint lane_offset = WavePrefixCountBits(visible);
   cmd_offset = WaveReadLaneFirst(cmd_offset) + lane_offset;
 
