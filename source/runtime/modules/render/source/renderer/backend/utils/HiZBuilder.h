@@ -9,6 +9,7 @@ namespace Moer {
         RHITextureRef          texture = nullptr;
         RHISRVRef              srv     = nullptr;
         Moer::Array<RHIUAVRef> uavs{};
+        RHISamplerRef          sampler = nullptr;
 
         void InitFromDepthExtent(Vector2i extent);
     };

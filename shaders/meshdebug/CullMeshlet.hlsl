@@ -2,6 +2,9 @@
 struct MeshletCullInput {
   uint counter_buffer_offset;
   uint draw_cmd_buffer_offset;
+  float2 hiz_factor;
+  float hiz_depth;
+  uint recheck_counter_buffer_offset;
 };
 
 struct CameraCullData {
@@ -19,6 +22,9 @@ struct CameraCullData {
 [[vk::binding(0, 2)]] StructuredBuffer<InstanceMeshletCullInfo>
     instance_meshlet_cull_info : register(t2, space0);
 
+[[vk::binding(1, 2)]] RWStructuredBuffer<InstanceMeshletCullInfo>
+    recheck_cull_info : register(t3, space0);
+
 [[vk::binding(0, 3)]] StructuredBuffer<MeshletDesc> meshlet_info_buffer
     : register(t0, space1);
 [[vk::binding(1, 3)]] StructuredBuffer<MeshletBound> meshlet_bound_buffer
@@ -30,9 +36,12 @@ struct CameraCullData {
 [[vk::binding(1, 4)]] RWStructuredBuffer<DrawCommandData> command_buffer
     : register(u1, space1);
 
+[[vk::binding(0, 5)]] Texture2D<float> hiz_depth : register(t0, space2);
+[[vk::binding(1, 5)]] SamplerState depth_sampler : register(s0, space0);
+
 [[vk::push_constant]] ConstantBuffer<MeshletCullInput> input;
 
-bool IsMeshletVisible(in MeshletBound bound, in float4x4 world,
+bool IsFrustumVisible(in MeshletBound bound, in float4x4 world,
                       in float scale) {
   float4 center = mul(world, float4(bound.center, 1.0f));
   float radius = bound.radius * scale;
@@ -41,25 +50,21 @@ bool IsMeshletVisible(in MeshletBound bound, in float4x4 world,
     if (dot(center, cull_data.planes[i]) + radius < 0) {
       return false;
     }
-    // printf("planes[%d] = %f %f %f %f\n", i, cull_data.planes[i].x,
-    //        cull_data.planes[i].y, cull_data.planes[i].z,
-    //        cull_data.planes[i].w);
-
-    printf("scale = %f\n", scale);
   }
-  //   for (uint i = 0; i < 6; i++) {
-  //     if (dot(center, cull_data.planes[i]) < -radius) {
-  //       return false;
-  //     }
-  //   }
-  // not do back face cull now
-
-  // occclusion cull
   return true;
 }
 
-[numthreads(64, 1, 1)] void main(uint3 dtid
-                                 : SV_DispatchThreadID) {
+bool IsOcclusionVisible(in MeshletBound bound, in float4x4 world,
+                        in float scale, in float4x4 vp) {
+  float4 center = mul(vp, mul(world, float4(bound.center, 1.0f)));
+  float cam_dist = center.w;
+  center /= center.w;
+  // get center relative radius
+  float world_radius = bound.radius * scale;
+}
+
+[numthreads(64, 1, 1)] void prepass(uint3 dtid
+                                    : SV_DispatchThreadID) {
   // process meshlets
   uint total_meshlet_count =
       counters_buffer.Load<uint>(input.counter_buffer_offset);
@@ -71,7 +76,7 @@ bool IsMeshletVisible(in MeshletBound bound, in float4x4 world,
   InstanceData data = instance_data[cull_info.instance_id];
   MeshletBound bound = meshlet_bound_buffer[cull_info.meshlet_id];
 
-  bool visible = IsMeshletVisible(bound, data.model2world, data.scale);
+  bool visible = IsFrustumVisible(bound, data.model2world, data.scale);
 
   uint wave_meshlet_count = WaveActiveCountBits(visible);
   uint cmd_offset = 0;
