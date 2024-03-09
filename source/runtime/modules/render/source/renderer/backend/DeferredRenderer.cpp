@@ -508,7 +508,7 @@ namespace Moer {
         cull_meshlet_params.input.draw_count_offset             = draw_count_offset;
         cull_meshlet_params.input.hiz_factor                    = Vector2f(hiz_buffer.texture->GetExtent2D());
         cull_meshlet_params.input.hiz_depth                     = hiz_buffer.texture->GetNumMips();
-        cull_meshlet_params.input.recheck_counter_buffer_offset = check_instance_count_offset;
+        cull_meshlet_params.input.recheck_counter_buffer_offset = check_meshlet_count_offset;
         cull_meshlet_params.meshlet_info_buffer                 = meshlet_descs_buffer_view;
         cull_meshlet_params.meshlet_bound_buffer                = meshlet_bounds_buffer_view;
         cull_meshlet_params.instance_data                       = instance_buffer_view;
@@ -558,12 +558,20 @@ namespace Moer {
             cmd_list->Dispatch(dispatch_count, 1, 1);
             {
                 RHIBarrierDependencyInfo instance_cull_barrier{};
-                instance_cull_barrier.buffer_barriers.resize(1);
+                instance_cull_barrier.buffer_barriers.resize(2);
                 auto& buffer_barrier_info = instance_cull_barrier.buffer_barriers[0];
                 buffer_barrier_info
                     .SetBuffer(instance_meshlet_cull_info_buffer)
                     .SetDstAccessFlags(ERHIAccessFlags::SHADER_READ | ERHIAccessFlags::SHADER_WRITE)
                     .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE | ERHIAccessFlags::SHADER_READ)
+                    .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
+                    .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
+
+                auto& buffer_barrier_info_1 = instance_cull_barrier.buffer_barriers[1];
+                buffer_barrier_info_1
+                    .SetBuffer(recheck_instance_id_buffer)
+                    .SetDstAccessFlags(ERHIAccessFlags::SHADER_READ)
+                    .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE)
                     .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
                     .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
 
@@ -575,7 +583,7 @@ namespace Moer {
             cmd_list->Dispatch((max_meshlet_count + thread_group_count) / thread_group_count, 1, 1);
             {
                 RHIBarrierDependencyInfo post_compute_barrier{};
-                post_compute_barrier.buffer_barriers.resize(2);
+                post_compute_barrier.buffer_barriers.resize(3);
                 auto& buffer_barrier_info_0 = post_compute_barrier.buffer_barriers[0];
                 buffer_barrier_info_0
                     .SetBuffer(draw_count_buffer)
@@ -591,6 +599,14 @@ namespace Moer {
                     .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE)
                     .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
                     .SetDstStage(ERHIPipelineStageFlags::PS_DRAW_INDIRECT);
+
+                auto& buffer_barrier_info_2 = post_compute_barrier.buffer_barriers[2];
+                buffer_barrier_info_2
+                    .SetBuffer(recheck_cull_info_buffer)
+                    .SetDstAccessFlags(ERHIAccessFlags::SHADER_WRITE)
+                    .SetSrcAccessFlags(ERHIAccessFlags::SHADER_READ)
+                    .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
+                    .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
 
                 cmd_list->SetPipelineBarrier(post_compute_barrier);
             }
@@ -647,7 +663,7 @@ namespace Moer {
             RHIGraphicsCommandList* cmd_list = render_cmd_lists[frame_counter % render_cmd_lists.size()];
 
             RHIBarrierDependencyInfo barrier_dependency_info{};
-            barrier_dependency_info.buffer_barriers.resize(2);
+            barrier_dependency_info.buffer_barriers.resize(3);
             auto& buffer_barrier_info = barrier_dependency_info.buffer_barriers[0];
             buffer_barrier_info
                 .SetBuffer(draw_count_buffer)
@@ -664,16 +680,24 @@ namespace Moer {
                 .SetSrcStage(ERHIPipelineStageFlags::PS_DRAW_INDIRECT)
                 .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
 
+            auto& buffer_barrier_info_2 = barrier_dependency_info.buffer_barriers[2];
+            buffer_barrier_info_2
+                .SetBuffer(recheck_instance_id_buffer)
+                .SetDstAccessFlags(ERHIAccessFlags::SHADER_READ)
+                .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE)
+                .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
+                .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
+
             cmd_list->SetPipelineBarrier(barrier_dependency_info);
 
-            cmd_list->SetPipelineState(cull_instance_prepass_pso);
-            g_rhi->RHISetBatchedShaderParameters(cull_instance_prepass_pso, instance_params);
+            cmd_list->SetPipelineState(cull_instance_recheck_pso);
+            g_rhi->RHISetBatchedShaderParameters(cull_instance_recheck_pso, instance_params);
             auto dispatch_count = (instance_count + thread_group_count - 1) / thread_group_count;
             cmd_list->Dispatch(dispatch_count, 1, 1);
             {
-                RHIBarrierDependencyInfo instance_cull_barrier{};
-                instance_cull_barrier.buffer_barriers.resize(1);
-                auto& buffer_barrier_info = instance_cull_barrier.buffer_barriers[0];
+                RHIBarrierDependencyInfo meshlet_cull_barrier{};
+                meshlet_cull_barrier.buffer_barriers.resize(2);
+                auto& buffer_barrier_info = meshlet_cull_barrier.buffer_barriers[0];
                 buffer_barrier_info
                     .SetBuffer(instance_meshlet_cull_info_buffer)
                     .SetDstAccessFlags(ERHIAccessFlags::SHADER_READ | ERHIAccessFlags::SHADER_WRITE)
@@ -682,7 +706,15 @@ namespace Moer {
 
                     .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
 
-                cmd_list->SetPipelineBarrier(instance_cull_barrier);
+                auto& buffer_barrier_info_1 = meshlet_cull_barrier.buffer_barriers[1];
+                buffer_barrier_info_1
+                    .SetBuffer(recheck_cull_info_buffer)
+                    .SetDstAccessFlags(ERHIAccessFlags::SHADER_READ)
+                    .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE)
+                    .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
+                    .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
+
+                cmd_list->SetPipelineBarrier(meshlet_cull_barrier);
             }
 
             cmd_list->SetPipelineState(cull_meshlet_prepass_pso);
