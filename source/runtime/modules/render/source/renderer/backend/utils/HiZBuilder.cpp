@@ -146,9 +146,10 @@ namespace Moer {
                 g_rhi->RHISetBatchedShaderParameters(pso, batched_params);
                 Vector3i group_count = Vector3i((config.size.t.x + 7) >> 3u, (config.size.t.y + 7) >> 3u, 1);
                 graphics_cmd_list->Dispatch(group_count);
-                if (i != mip_count - 1) {
-                    graphics_cmd_list->SetPipelineBarrier(barrier_info);//set current mip level to shader read only
+                if (i == mip_count - 1) {
+                    barrier_info.texture_barriers.resize(1);
                 }
+                graphics_cmd_list->SetPipelineBarrier(barrier_info);//set current mip level to shader read only
             }
         }
 

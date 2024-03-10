@@ -109,13 +109,14 @@ namespace Moer {
         RHIUAVRef draw_indirect_view;
         RHIUAVRef draw_count_view;
 
-        static constexpr uint32_t meshlet_count_offset        = 0;
-        static constexpr uint32_t draw_count_offset           = 4;
-        static constexpr uint32_t first_cull_count_offset     = 8;
-        static constexpr uint32_t check_instance_count_offset = 12;
-        static constexpr uint32_t check_meshlet_count_offset  = 16;
-        static constexpr uint32_t max_meshlet_count           = 1024 * 1024 * 16;
-        static constexpr uint32_t thread_group_count          = 64;
+        static constexpr uint32_t meshlet_count_offset              = 0;
+        static constexpr uint32_t draw_count_offset                 = 4;
+        static constexpr uint32_t meshlet_dispatch_indirect_offset  = 8;
+        static constexpr uint32_t check_instance_count_offset       = 12;
+        static constexpr uint32_t check_meshlet_count_offset        = 16;
+        static constexpr uint32_t instance_dispatch_indirect_offset = 20;
+        static constexpr uint32_t max_meshlet_count                 = 1024 * 1024 * 16;
+        static constexpr uint32_t thread_group_count                = 64;
 
         Vector2i source_resolution;
     };
@@ -156,7 +157,7 @@ namespace Moer {
                                      .SetDepth(1)
                                      .SetFormat(EPixelFormat::PF_D32_SFLOAT_S8_UINT)
                                      .SetClearAttachment(RHIClearAttachment(EClearAttachment::DEPTH_STENCIL))
-                                     .SetUsageFlags(ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT | ETextureUsageFlags::SHADER_RESOURCE);
+                                     .SetUsageFlags(ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT | ETextureUsageFlags::SAMPLED);
         depth_buffer.resize(back_buffer_cnt);
         depth_buffer_srv.resize(back_buffer_cnt);
         depth_buffer_uav.resize(back_buffer_cnt);
@@ -271,6 +272,7 @@ namespace Moer {
         cull_instance_prepass_shader = shader_resource_manager.GetShader<CullInstancePrePassShader>();
         cull_meshlet_prepass_shader  = shader_resource_manager.GetShader<CullMeshletPrepassShader>();
         cull_instance_prepass_pso    = g_rhi->RHICreateComputePipelineState(cull_instance_prepass_shader);
+        cull_meshlet_prepass_pso     = g_rhi->RHICreateComputePipelineState(cull_meshlet_prepass_shader);
         //why not implement a counter buffer?
         {
             RHIBufferCreateInfo buffer_create_info;
@@ -382,9 +384,10 @@ namespace Moer {
             }
         }
 
-        auto frame_offset = frame_counter % render_cmd_lists.size();
         {
-            auto fill_uniform_data = [this, frame_offset, data(cull_data)]() {
+            auto fill_uniform_data = [this, data(cull_data)]() {
+                auto frame_offset = frame_counter % render_cmd_lists.size();
+
                 auto  c_data = data;
                 auto* ptr    = g_rhi->RHIMapBuffer(uniform_buffer, frame_offset * sizeof(CameraCullData), sizeof(CameraCullData));
 
@@ -428,15 +431,80 @@ namespace Moer {
         // EnqueueRenderTask(std::move(prepass_cull_task));
 
         PrePass();
+
+        EnqueueRenderTask([this]() {
+            auto                    info         = virtual_viewport->GetBackBufferInfo();
+            RHIUAVRef               uav          = info.backbuffer_uav;
+            uint32_t                frame_offset = frame_counter % render_cmd_lists.size();
+            RHIGraphicsCommandList* cmd_list     = render_cmd_lists[frame_offset];
+
+            RHIBarrierDependencyInfo barrier_dependency_info;
+            barrier_dependency_info.texture_barriers.resize(2);
+            auto& texture_barrier_info = barrier_dependency_info.texture_barriers[0];
+            texture_barrier_info
+                .SetTexture(uav->GetTexture())
+                .SetDstTextureLayout(TEXTURE_LAYOUT_COLOR_ATTACHMENT)
+                .SetSrcTextureLayout(TEXTURE_LAYOUT_TRANSFER_SRC)
+                .SetSrcStage(ERHIPipelineStageFlags::PS_TRANSFER)
+                .SetDstStage(ERHIPipelineStageFlags::PS_COLOR_ATTACHMENT_OUTPUT)
+                .SetDstAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
+
+            auto& depth_barrier = barrier_dependency_info.texture_barriers[1];
+            depth_barrier
+                .SetTexture(depth_buffer[frame_offset])
+                .SetDstTextureLayout(TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE)
+                .SetSrcTextureLayout(TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                .SetSubResourceRange(RHISubresourceRange(ETextureAspectFlags::DEPTH_SLICE | ETextureAspectFlags::STENCIL_SLICE))
+                .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
+                .SetDstStage(ERHIPipelineStageFlags::PS_EARLY_FRAGMENT_TESTS)
+                .SetSrcAccessFlags(ERHIAccessFlags::DEPTH_STENCIL_READ | ERHIAccessFlags::DEPTH_STENCIL_WRITE)
+                .SetDstAccessFlags(ERHIAccessFlags::DEPTH_STENCIL_READ);
+
+            cmd_list->SetPipelineBarrier(barrier_dependency_info);
+        });
+
         DispatchDrawScene(camera_data);
+
         //hzb build
-        EnqueueRenderTask([this, frame_offset]() {
+        EnqueueRenderTask([this]() {
+            auto frame_offset = frame_counter % render_cmd_lists.size();
             HiZBuilder::GetInstance().DispatchBuildHiZ(render_cmd_lists[frame_offset], depth_buffer_srv[frame_offset], hiz_buffer);
         });
         RecheckPass();
+        EnqueueRenderTask([this]() {
+            auto                    info         = virtual_viewport->GetBackBufferInfo();
+            RHIUAVRef               uav          = info.backbuffer_uav;
+            uint32_t                frame_offset = frame_counter % render_cmd_lists.size();
+            RHIGraphicsCommandList* cmd_list     = render_cmd_lists[frame_offset];
 
+            RHIBarrierDependencyInfo barrier_dependency_info;
+            barrier_dependency_info.texture_barriers.resize(2);
+            auto& texture_barrier_info = barrier_dependency_info.texture_barriers[0];
+            texture_barrier_info
+                .SetTexture(uav->GetTexture())
+                .SetDstTextureLayout(TEXTURE_LAYOUT_COLOR_ATTACHMENT)
+                .SetSrcTextureLayout(TEXTURE_LAYOUT_COLOR_ATTACHMENT)
+                .SetSrcStage(ERHIPipelineStageFlags::PS_COLOR_ATTACHMENT_OUTPUT)
+                .SetDstStage(ERHIPipelineStageFlags::PS_COLOR_ATTACHMENT_OUTPUT)
+                .SetDstAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE)
+                .SetSrcAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
+
+            auto& depth_barrier = barrier_dependency_info.texture_barriers[1];
+            depth_barrier
+                .SetTexture(depth_buffer[frame_offset])
+                .SetDstTextureLayout(TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE)
+                .SetSrcTextureLayout(TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                .SetSubResourceRange(RHISubresourceRange(ETextureAspectFlags::DEPTH_SLICE | ETextureAspectFlags::STENCIL_SLICE))
+                .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
+                .SetDstStage(ERHIPipelineStageFlags::PS_EARLY_FRAGMENT_TESTS)
+                .SetSrcAccessFlags(ERHIAccessFlags::DEPTH_STENCIL_READ | ERHIAccessFlags::DEPTH_STENCIL_WRITE)
+                .SetDstAccessFlags(ERHIAccessFlags::DEPTH_STENCIL_READ);
+
+            cmd_list->SetPipelineBarrier(barrier_dependency_info);
+        });
         DispatchDrawScene(camera_data);
-        EnqueueRenderTask([this, frame_offset]() {
+        EnqueueRenderTask([this]() {
+            auto frame_offset = frame_counter % render_cmd_lists.size();
             HiZBuilder::GetInstance().DispatchBuildHiZ(render_cmd_lists[frame_offset], depth_buffer_srv[frame_offset], hiz_buffer);
         });
         //instance cull, output instance recheck buffer and instance-meshlet mapping
@@ -444,6 +512,23 @@ namespace Moer {
         //draw indirect
         //instance recheck, append instance-meshlet recheck mapping
         //meshlet recheck
+        EnqueueRenderTask([this]() {
+            RHIGraphicsCommandList* cmd_list = render_cmd_lists[frame_counter % render_cmd_lists.size()];
+
+            RHIBarrierDependencyInfo barrier_dependency_info{};
+            barrier_dependency_info.texture_barriers.resize(1);
+            auto& attachment_info = barrier_dependency_info.texture_barriers[0];
+            attachment_info
+                .SetTexture(virtual_viewport->GetBackBufferInfo().backbuffer_uav->GetTexture())
+                .SetDstTextureLayout(TEXTURE_LAYOUT_TRANSFER_SRC)
+                .SetSrcTextureLayout(TEXTURE_LAYOUT_COLOR_ATTACHMENT)
+                .SetSrcStage(ERHIPipelineStageFlags::PS_COLOR_ATTACHMENT_OUTPUT)
+                .SetDstStage(ERHIPipelineStageFlags::PS_TRANSFER)
+                .SetSrcAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE)
+                .SetDstAccessFlags(ERHIAccessFlags::TRANSFER_READ);
+
+            cmd_list->SetPipelineBarrier(barrier_dependency_info);
+        });
         {
 
             auto submit_rendering = [this]() {
@@ -619,14 +704,15 @@ namespace Moer {
         auto     instance_count = instance_buffer_view->GetBuffer()->GetNumElement();
 
         CullInstanceRecheckShader::Parameters cull_instance_params;
-        cull_instance_params.input.meshlet_count_offset          = meshlet_count_offset;
+        cull_instance_params.input.meshlet_count_offset          = check_meshlet_count_offset;
         cull_instance_params.input.instance_count                = instance_count;
         cull_instance_params.input.hiz_factor                    = Vector2f(hiz_buffer.texture->GetExtent2D());
         cull_instance_params.input.hiz_depth                     = hiz_buffer.texture->GetNumMips();
         cull_instance_params.input.recheck_counter_buffer_offset = check_instance_count_offset;
+        cull_instance_params.input.draw_count_offset             = draw_count_offset;
         cull_instance_params.instance_data                       = instance_buffer_view;
         cull_instance_params.instance_meshlet_info               = instance_meshlet_info_view;
-        cull_instance_params.instance_meshlet_cull_info          = instance_meshlet_cull_info_uav;
+        cull_instance_params.instance_meshlet_cull_info          = recheck_cull_info_uav;
         cull_instance_params.recheck_instances                   = recheck_instance_id_srv;
         cull_instance_params.counters_buffer                     = draw_count_view;
         cull_instance_params.cull_data                           = uniform_buffer_view[frame_offset];
@@ -638,7 +724,7 @@ namespace Moer {
         cull_meshlet_params.input.draw_count_offset             = draw_count_offset;
         cull_meshlet_params.input.hiz_factor                    = Vector2f(hiz_buffer.texture->GetExtent2D());
         cull_meshlet_params.input.hiz_depth                     = hiz_buffer.texture->GetNumMips();
-        cull_meshlet_params.input.recheck_counter_buffer_offset = check_instance_count_offset;
+        cull_meshlet_params.input.recheck_counter_buffer_offset = check_meshlet_count_offset;
         cull_meshlet_params.meshlet_info_buffer                 = meshlet_descs_buffer_view;
         cull_meshlet_params.meshlet_bound_buffer                = meshlet_bounds_buffer_view;
         cull_meshlet_params.instance_data                       = instance_buffer_view;
@@ -668,14 +754,14 @@ namespace Moer {
             buffer_barrier_info
                 .SetBuffer(draw_count_buffer)
                 .SetDstAccessFlags(ERHIAccessFlags::SHADER_WRITE | ERHIAccessFlags::SHADER_READ)
-                .SetSrcAccessFlags(ERHIAccessFlags::TRANSFER_WRITE)
-                .SetSrcStage(ERHIPipelineStageFlags::PS_TRANSFER)
+                .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE | ERHIAccessFlags::SHADER_READ)
+                .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
                 .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
 
             auto& buffer_barrier_info_1 = barrier_dependency_info.buffer_barriers[1];
             buffer_barrier_info_1
                 .SetBuffer(draw_indirect_buffer)
-                .SetDstAccessFlags(ERHIAccessFlags::SHADER_WRITE | ERHIAccessFlags::SHADER_READ)
+                .SetDstAccessFlags(ERHIAccessFlags::SHADER_WRITE)
                 .SetSrcAccessFlags(ERHIAccessFlags::INDIRECT_COMMAND_READ)
                 .SetSrcStage(ERHIPipelineStageFlags::PS_DRAW_INDIRECT)
                 .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
@@ -696,7 +782,7 @@ namespace Moer {
             cmd_list->Dispatch(dispatch_count, 1, 1);
             {
                 RHIBarrierDependencyInfo meshlet_cull_barrier{};
-                meshlet_cull_barrier.buffer_barriers.resize(2);
+                meshlet_cull_barrier.buffer_barriers.resize(3);
                 auto& buffer_barrier_info = meshlet_cull_barrier.buffer_barriers[0];
                 buffer_barrier_info
                     .SetBuffer(instance_meshlet_cull_info_buffer)
@@ -714,11 +800,19 @@ namespace Moer {
                     .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
                     .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
 
+                auto& buffer_barrier_info_2 = meshlet_cull_barrier.buffer_barriers[2];
+                buffer_barrier_info_2
+                    .SetBuffer(draw_count_buffer)
+                    .SetDstAccessFlags(ERHIAccessFlags::SHADER_WRITE | ERHIAccessFlags::SHADER_READ)
+                    .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE | ERHIAccessFlags::SHADER_READ)
+                    .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
+                    .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
+
                 cmd_list->SetPipelineBarrier(meshlet_cull_barrier);
             }
 
-            cmd_list->SetPipelineState(cull_meshlet_prepass_pso);
-            g_rhi->RHISetBatchedShaderParameters(cull_meshlet_prepass_pso, meshlet_params);
+            cmd_list->SetPipelineState(cull_meshlet_recheck_pso);
+            g_rhi->RHISetBatchedShaderParameters(cull_meshlet_recheck_pso, meshlet_params);
 
             cmd_list->Dispatch((max_meshlet_count + thread_group_count) / thread_group_count, 1, 1);
             {
@@ -743,6 +837,7 @@ namespace Moer {
                 cmd_list->SetPipelineBarrier(post_compute_barrier);
             }
         };
+        EnqueueRenderTask(std::move(recheck_pass_cull_task));
     }
 
     void DeferredRenderer::Impl::DispatchDrawScene(const CameraData& _camera_data) {
@@ -758,7 +853,8 @@ namespace Moer {
             auto      info = virtual_viewport->GetBackBufferInfo();
             RHIUAVRef uav  = info.backbuffer_uav;
 
-            RHIGraphicsCommandList* cmd_list = render_cmd_lists[frame_counter % render_cmd_lists.size()];
+            uint32_t                frame_offset = frame_counter % render_cmd_lists.size();
+            RHIGraphicsCommandList* cmd_list     = render_cmd_lists[frame_counter % render_cmd_lists.size()];
 
             RHIRenderPassInfo pass_info{};
 
@@ -770,7 +866,7 @@ namespace Moer {
             render_attachment_view.clear_attachment = RHIClearAttachment(EClearAttachment::COLOR);
 
             auto& depth_attachment_view        = pass_info.depth_stencil_attachment.depth_stencil_attachment_view;
-            depth_attachment_view.texture_view = depth_buffer_uav[info.back_buffer_index];
+            depth_attachment_view.texture_view = depth_buffer_uav[frame_offset];
 
             depth_attachment_view.required_layout                   = TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE;
             depth_attachment_view.clear_attachment                  = RHIClearAttachment::Preset<RHIConfig::ClearMode::DEPTH_STENCIL>();
@@ -780,28 +876,6 @@ namespace Moer {
             pass_info.render_area.extent = Extent2D(extent.x, extent.y);
             pass_info.render_area.offset = Offset2D(0, 0);
 
-            RHIBarrierDependencyInfo barrier_dependency_info;
-            barrier_dependency_info.texture_barriers.resize(2);
-            auto& texture_barrier_info = barrier_dependency_info.texture_barriers[0];
-            texture_barrier_info
-                .SetTexture(uav->GetTexture())
-                .SetDstTextureLayout(TEXTURE_LAYOUT_COLOR_ATTACHMENT)
-                .SetSrcTextureLayout(TEXTURE_LAYOUT_TRANSFER_SRC)
-                .SetSrcStage(ERHIPipelineStageFlags::PS_TRANSFER)
-                .SetDstStage(ERHIPipelineStageFlags::PS_COLOR_ATTACHMENT_OUTPUT)
-                .SetDstAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
-
-            auto& depth_barrier = barrier_dependency_info.texture_barriers[1];
-            depth_barrier
-                .SetTexture(depth_buffer[info.back_buffer_index])
-                .SetDstTextureLayout(TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE)
-                .SetSrcTextureLayout(TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE)
-                .SetSrcStage(ERHIPipelineStageFlags::PS_LATE_FRAGMENT_TESTS)
-                .SetDstStage(ERHIPipelineStageFlags::PS_EARLY_FRAGMENT_TESTS)
-                .SetSrcAccessFlags(ERHIAccessFlags::DEPTH_STENCIL_READ | ERHIAccessFlags::DEPTH_STENCIL_WRITE)
-                .SetDstAccessFlags(ERHIAccessFlags::DEPTH_STENCIL_READ | ERHIAccessFlags::DEPTH_STENCIL_WRITE);
-
-            cmd_list->SetPipelineBarrier(barrier_dependency_info);
             cmd_list->BeginRenderPass(pass_info, "Draw Meshlets");
 
             const VirtualViewportInfo& viewport_info = virtual_viewport->GetInfo();
@@ -828,19 +902,9 @@ namespace Moer {
             }
 
             cmd_list->EndRenderPass();
-
-            texture_barrier_info
-                .SetDstTextureLayout(TEXTURE_LAYOUT_TRANSFER_SRC)
-                .SetSrcTextureLayout(TEXTURE_LAYOUT_COLOR_ATTACHMENT)
-                .SetSrcStage(ERHIPipelineStageFlags::PS_COLOR_ATTACHMENT_OUTPUT)
-                .SetDstStage(ERHIPipelineStageFlags::PS_TRANSFER)
-                .SetSrcAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE)
-                .SetDstAccessFlags(ERHIAccessFlags::TRANSFER_READ);
-
-            cmd_list->SetPipelineBarrier(barrier_dependency_info);
-
-            HiZBuilder::GetInstance().DispatchBuildHiZ(cmd_list, depth_buffer_srv[info.back_buffer_index], hiz_buffer);
         };
+
+        EnqueueRenderTask(std::move(draw_indirect));
     }
 
 }// namespace Moer
