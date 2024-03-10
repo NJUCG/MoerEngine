@@ -7,6 +7,7 @@ struct TaskInput {
   float2 hiz_factor;
   float hiz_depth;
   uint recheck_counter_buffer_offset;
+  uint draw_cnt_buffer_offset;
 };
 
 struct CameraCullData {
@@ -28,7 +29,7 @@ struct CameraCullData {
 [[vk::binding(1, 2)]] RWStructuredBuffer<uint> recheck_instance_id
     : register(u1, space0);
 [[vk::binding(1, 2)]] StructuredBuffer<uint> recheck_instances
-    : register(u1, space0);
+    : register(t1, space0);
 // 0 for processed instance, 1 for processed meshlet
 [[vk::binding(0, 3)]] RWByteAddressBuffer counters_buffer
     : register(u1, space1);
@@ -51,7 +52,7 @@ bool IsVisibleOccluded(in InstanceMeshletInfo instance, in float4x4 vp) {
   [unroll] for (uint i = 0; i < 8; i++) {
     float4 clip =
         mul(vp, float4(corners[i] * instance.extent + instance.center, 1.0f));
-    float4 clip_pos = clip.xyz / clip.w;
+    float4 clip_pos = clip / clip.w;
     min_xy = min(min_xy, clip_pos.xy);
     max_xy = max(max_xy, clip_pos.xy);
     min_z = max(min_z, clip_pos.z); // get front z
@@ -62,28 +63,29 @@ bool IsVisibleOccluded(in InstanceMeshletInfo instance, in float4x4 vp) {
   float2 hiz_size = (rect.zw - rect.xy) * input.hiz_factor; // rect size in hiz
   float hiz_mip = log2(max(hiz_size.x, hiz_size.y));        // mip level
 
-  if (hiz_map > input.hiz_depth) {
+  if (hiz_mip > input.hiz_depth) {
     return true;
   }
 
-  mip = ceil(mip);
+  hiz_mip = ceil(hiz_mip);
   // sample lower level if it cross less than 2 pixel rect
-  float lower_level = max(0.f, mip - 1.f);
+  float lower_level = max(0.f, hiz_mip - 1.f);
   float2 scale = exp2(-lower_level) * input.hiz_factor;
   float2 lower_min_xy = floor(rect.xy * scale);
   float2 lower_max_xy = ceil(rect.zw * scale);
 
   float2 lower_extent = (lower_max_xy - lower_min_xy);
-  mip = max(lower_extent.x, lower_extent.y) <= 2.f ? lower_level : mip;
+  hiz_mip = max(lower_extent.x, lower_extent.y) <= 2.f ? lower_level : hiz_mip;
 
   float4 depth_quad =
-      float4(hiz_depth.SampleLevel(depth_sampler, rect.xy, mip),
-             hiz_depth.SampleLevel(depth_sampler, rect.zy, mip),
-             hiz_depth.SampleLevel(depth_sampler, rect.xw, mip),
-             hiz_depth.SampleLevel(depth_sampler, rect.zw, mip));
+      float4(hiz_depth.SampleLevel(depth_sampler, rect.xy, hiz_mip),
+             hiz_depth.SampleLevel(depth_sampler, rect.zy, hiz_mip),
+             hiz_depth.SampleLevel(depth_sampler, rect.xw, hiz_mip),
+             hiz_depth.SampleLevel(depth_sampler, rect.zw, hiz_mip));
   depth_quad.xy = min(depth_quad.xy, depth_quad.zw);
-  depth_quad.x = min(depth_min2.x, depth_min2.y);
-  return min_z > depth_quad.x;
+  depth_quad.x = min(depth_quad.x, depth_quad.y);
+  // return min_z > depth_quad.x;
+  return false;
 }
 bool IsFrustumVisible(in InstanceMeshletInfo instance) {
   // frustum cull use aabb
@@ -107,7 +109,7 @@ bool IsFrustumVisible(in InstanceMeshletInfo instance) {
 
 [numthreads(64, 1, 1)] void prepass(uint3 dtid
                                     : SV_DispatchThreadID) {
-  uint instance_start_offset = dtid;
+  uint instance_start_offset = dtid.x;
   if (instance_start_offset >= input.instance_count) {
     return;
   }
@@ -128,6 +130,7 @@ bool IsFrustumVisible(in InstanceMeshletInfo instance) {
   uint total_culled_meshlet_count = WaveActiveSum(culled_meshlet_count);
 
   uint cull_meshlet_offset;
+
   if (WaveIsFirstLane()) {
     counters_buffer.InterlockedAdd(input.counter_buffer_offset,
                                    total_culled_meshlet_count,
@@ -167,26 +170,27 @@ bool IsFrustumVisible(in InstanceMeshletInfo instance) {
 
     [numthreads(64, 1, 1)] void recheck_pass(uint3 dtid
                                              : SV_DispatchThreadID) {
-
+  if (dtid.x == 0) {
+    counters_buffer.Store<uint>(input.draw_cnt_buffer_offset, 0);
+  }
   uint total_count =
       counters_buffer.Load<uint>(input.recheck_counter_buffer_offset);
   if (dtid.x >= total_count) {
     return;
   }
-  uint instance_id = recheck_instances[dtid];
-
+  uint instance_start_offset = recheck_instances[dtid.x];
   InstanceMeshletInfo instance_mesh_info =
       instance_meshlet_info[instance_start_offset];
 
-  bool vis_occluded =
-      IsVisibleOccluded(instance_mesh_info, cull_data.camera_data.view_proj);
-
+  // bool vis_occluded =
+  //     IsVisibleOccluded(instance_mesh_info, cull_data.camera_data.view_proj);
+  bool vis_occluded = true;
   uint culled_meshlet_count =
       vis_occluded ? instance_mesh_info.meshlet_count : 0;
 
   // remember to reset counter before this pass
   uint total_culled_meshlet_count = WaveActiveSum(culled_meshlet_count);
-
+  // printf("total_culled_meshlet_count %d\n", total_culled_meshlet_count);
   uint cull_meshlet_offset;
   if (WaveIsFirstLane()) {
     counters_buffer.InterlockedAdd(input.counter_buffer_offset,

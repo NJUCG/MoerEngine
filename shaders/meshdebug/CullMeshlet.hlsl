@@ -23,7 +23,7 @@ struct CameraCullData {
     instance_meshlet_cull_info : register(t2, space0);
 
 [[vk::binding(1, 2)]] RWStructuredBuffer<InstanceMeshletCullInfo>
-    recheck_cull_info : register(t3, space0);
+    recheck_cull_info : register(u0, space0);
 
 [[vk::binding(0, 3)]] StructuredBuffer<MeshletDesc> meshlet_info_buffer
     : register(t0, space1);
@@ -69,6 +69,8 @@ bool IsOcclusionVisible(in MeshletBound bound, in float4x4 world,
   // process meshlets
   uint total_meshlet_count =
       counters_buffer.Load<uint>(input.counter_buffer_offset);
+  //   printf("total count %d\n", total_meshlet_count);
+
   if (dtid.x >= total_meshlet_count) {
     return;
   }
@@ -129,18 +131,18 @@ bool IsOcclusionVisible(in MeshletBound bound, in float4x4 world,
     [numthreads(64, 1, 1)] void recheck_pass(uint3 dtid
                                              : SV_DispatchThreadID) {
 
-  uint total_count =
-      counters_buffer.Load<uint>(input.recheck_counter_buffer_offset);
+  //   printf("recheck? %d\n", 1);
+
+  uint total_count = counters_buffer.Load<uint>(input.counter_buffer_offset);
   if (dtid.x >= total_count) {
     return;
   }
 
-  uint instance_start_offset = instance_meshlet_cull_info[dtid.x].instance_id;
-  InstanceData data = instance_data[instance_start_offset];
-  InstanceMeshletInfo instance_mesh_info =
-      instance_meshlet_info[instance_start_offset];
+  InstanceMeshletCullInfo cull_info = instance_meshlet_cull_info[dtid.x];
+  InstanceData data = instance_data[cull_info.instance_id];
 
-  bool visible = IsFrustumVisible(bound, data.model2world, data.scale);
+  MeshletBound bound = meshlet_bound_buffer[cull_info.meshlet_id];
+  bool visible = true;
 
   uint wave_meshlet_count = WaveActiveCountBits(visible);
   uint cmd_offset = 0;
