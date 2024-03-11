@@ -48,7 +48,7 @@ namespace Moer {
         void PrePass();
         void RecheckPass();
 
-        void DispatchDrawScene(const CameraData& _camera_data);
+        void DispatchDrawScene(const CameraData& _camera_data, bool _first_pass = true);
 
     private:
         VirtualViewport* virtual_viewport;
@@ -284,7 +284,7 @@ namespace Moer {
             }
 
             draw_indirect_buffer = g_rhi->RHICreateBuffer<DrawInstanceCmd>(
-                1024 * 1024 * 16,
+                1024 * 1024,
                 EBufferUsageFlags::INDIRECT_BUFFER | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::STORAGE_BUFFER);
 
             draw_count_buffer = g_rhi->RHICreateBuffer<uint32_t>(32 * sizeof(int),
@@ -457,7 +457,7 @@ namespace Moer {
                 .SetSubResourceRange(RHISubresourceRange(ETextureAspectFlags::DEPTH_SLICE | ETextureAspectFlags::STENCIL_SLICE))
                 .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
                 .SetDstStage(ERHIPipelineStageFlags::PS_EARLY_FRAGMENT_TESTS)
-                .SetSrcAccessFlags(ERHIAccessFlags::DEPTH_STENCIL_READ | ERHIAccessFlags::DEPTH_STENCIL_WRITE)
+                .SetSrcAccessFlags(ERHIAccessFlags::SHADER_READ)
                 .SetDstAccessFlags(ERHIAccessFlags::DEPTH_STENCIL_READ);
 
             cmd_list->SetPipelineBarrier(barrier_dependency_info);
@@ -497,12 +497,12 @@ namespace Moer {
                 .SetSubResourceRange(RHISubresourceRange(ETextureAspectFlags::DEPTH_SLICE | ETextureAspectFlags::STENCIL_SLICE))
                 .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
                 .SetDstStage(ERHIPipelineStageFlags::PS_EARLY_FRAGMENT_TESTS)
-                .SetSrcAccessFlags(ERHIAccessFlags::DEPTH_STENCIL_READ | ERHIAccessFlags::DEPTH_STENCIL_WRITE)
+                .SetSrcAccessFlags(ERHIAccessFlags::SHADER_READ)
                 .SetDstAccessFlags(ERHIAccessFlags::DEPTH_STENCIL_READ);
 
             cmd_list->SetPipelineBarrier(barrier_dependency_info);
         });
-        DispatchDrawScene(camera_data);
+        DispatchDrawScene(camera_data, false);
         EnqueueRenderTask([this]() {
             auto frame_offset = frame_counter % render_cmd_lists.size();
             HiZBuilder::GetInstance().DispatchBuildHiZ(render_cmd_lists[frame_offset], depth_buffer_srv[frame_offset], hiz_buffer);
@@ -840,7 +840,7 @@ namespace Moer {
         EnqueueRenderTask(std::move(recheck_pass_cull_task));
     }
 
-    void DeferredRenderer::Impl::DispatchDrawScene(const CameraData& _camera_data) {
+    void DeferredRenderer::Impl::DispatchDrawScene(const CameraData& _camera_data, bool _first_pass) {
 
         TestDeferredTriangleShaderVert::Parameters params;
         params.camera_data   = _camera_data;
@@ -849,7 +849,7 @@ namespace Moer {
         RHIBatchedShaderParameters batched_params;
         batched_params.SetParameters(ShaderResourceManager::GetInstance().GetShader<TestDeferredTriangleShaderVert>(), params);
 
-        auto draw_indirect = [this, batched_params = (batched_params)]() {
+        auto draw_indirect = [this, batched_params = (batched_params), first_pass(_first_pass)]() {
             auto      info = virtual_viewport->GetBackBufferInfo();
             RHIUAVRef uav  = info.backbuffer_uav;
 
@@ -858,7 +858,7 @@ namespace Moer {
 
             RHIRenderPassInfo pass_info{};
 
-            pass_info.color_attachments[0].color_attachment_action = AC_CLEAR_STORE;
+            pass_info.color_attachments[0].color_attachment_action = first_pass ? AC_CLEAR_STORE : AC_LOAD_STORE;
             RenderAttachmentView& render_attachment_view           = pass_info.color_attachments[0].color_attachment_view;
 
             render_attachment_view.required_layout  = TEXTURE_LAYOUT_COLOR_ATTACHMENT;
@@ -870,7 +870,7 @@ namespace Moer {
 
             depth_attachment_view.required_layout                   = TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE;
             depth_attachment_view.clear_attachment                  = RHIClearAttachment::Preset<RHIConfig::ClearMode::DEPTH_STENCIL>();
-            pass_info.depth_stencil_attachment.depth_stencil_action = AC_CLEAR_STORE;
+            pass_info.depth_stencil_attachment.depth_stencil_action = first_pass ? AC_CLEAR_STORE : AC_LOAD_STORE;
 
             Extent3D extent              = uav->GetTexture()->GetExtent3D();
             pass_info.render_area.extent = Extent2D(extent.x, extent.y);

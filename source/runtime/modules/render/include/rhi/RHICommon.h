@@ -971,13 +971,13 @@ struct ViewPort {
 
 struct MeshInfo {
     Moer::Vector3f center;
-    uint32_t vertex_offset;
+    uint32_t       vertex_offset;
     Moer::Vector3f extent;
-    uint32_t index_offset;
-    uint32_t vertex_count;
-    uint32_t index_count;
-    uint32_t meshlet_offset;
-    uint32_t meshlet_count;
+    uint32_t       index_offset;
+    uint32_t       vertex_count;
+    uint32_t       index_count;
+    uint32_t       meshlet_offset;
+    uint32_t       meshlet_count;
 };
 struct MeshBoundInfo {
     Moer::Vector3f center;
@@ -1004,6 +1004,7 @@ namespace Moer {
         int8_t cone_cutoff; /* = cos(angle/2) */
 
         /* bool reject = dot(center - camera_position, cone_axis) >= cone_cutoff* length(center - camera_position) + radius; */
+        uint32_t padding[3];
     };
     struct DrawInstanceCmd {
         uint32_t index_count;
@@ -1011,6 +1012,7 @@ namespace Moer {
         uint32_t first_index;
         uint32_t vertex_offset;
         uint32_t first_instance;
+        uint32_t padding[3];
     };
 }// namespace Moer
 #pragma endregion

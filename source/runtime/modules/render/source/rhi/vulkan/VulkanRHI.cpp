@@ -33,6 +33,7 @@
 #include "vulkan/vulkan_core.h"
 #include "window/WindowContext.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <type_traits>
@@ -1364,7 +1365,7 @@ RHISRVRef VulkanRHIImpl::RHICreateSRVInner(RHIViewableResource* _resource, const
         if (uint32_t(vk_texture->GetUsageFlags() & ETextureUsageFlags::COLOR_ATTACHMENT) != 0) {
             flags = VK_IMAGE_ASPECT_COLOR_BIT;
         } else if (uint32_t(vk_texture->GetUsageFlags() & ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT) != 0) {
-            flags = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+            flags = VK_IMAGE_ASPECT_DEPTH_BIT;
         } else {
             flags = VK_IMAGE_ASPECT_COLOR_BIT;
         }
@@ -1450,7 +1451,7 @@ RHIUAVRef VulkanRHIImpl::RHICreateUAVInner(RHIViewableResource* _resource, const
         if (uint32_t(vk_texture->GetUsageFlags() & ETextureUsageFlags::COLOR_ATTACHMENT) != 0) {
             flags = VK_IMAGE_ASPECT_COLOR_BIT;
         } else if (uint32_t(vk_texture->GetUsageFlags() & ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT) != 0) {
-            flags = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+            flags = VK_IMAGE_ASPECT_DEPTH_BIT;
         } else {
             flags = VK_IMAGE_ASPECT_COLOR_BIT;
         }

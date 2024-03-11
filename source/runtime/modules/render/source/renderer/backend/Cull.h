@@ -39,6 +39,7 @@ IMPLEMENT_SHADER_TYPE(TestDeferredTriangleShaderFrag, "test/TriangleDeferredFrag
 struct CameraCullData {
     CameraData     camera_data;
     Moer::Vector4f frustum_planes[6];
+    Moer::Vector4f padding;
 };
 BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(CullInstanceInput)
 DEFINE_SHADER_PARAM(uint32_t, instance_count)

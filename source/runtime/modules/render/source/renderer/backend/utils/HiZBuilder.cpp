@@ -94,8 +94,6 @@ namespace Moer {
 
             auto& hiz_barrier = depth_barrier_info.texture_barriers[1];
             hiz_barrier.SetTexture(hiz_buffer.texture)
-                .SetSrcTextureLayout(TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
-                .SetDstTextureLayout(TEXTURE_LAYOUT_WRITE)
                 .SetSubResourceRange(range)
                 .SetSrcStage(PS_COMPUTE_SHADER)
                 .SetDstStage(PS_COMPUTE_SHADER)

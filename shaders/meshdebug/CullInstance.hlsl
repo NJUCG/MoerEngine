@@ -13,6 +13,7 @@ struct TaskInput {
 struct CameraCullData {
   CameraData camera_data;
   float4 planes[6]; // world space planes
+  float4 padding;
 };
 
 [[vk::push_constant]] ConstantBuffer<TaskInput> input;
@@ -85,7 +86,7 @@ bool IsVisibleOccluded(in InstanceMeshletInfo instance, in float4x4 vp) {
   depth_quad.xy = min(depth_quad.xy, depth_quad.zw);
   depth_quad.x = min(depth_quad.x, depth_quad.y);
   // return min_z > depth_quad.x;
-  return false;
+  return true;
 }
 bool IsFrustumVisible(in InstanceMeshletInfo instance) {
   // frustum cull use aabb
@@ -138,6 +139,7 @@ bool IsFrustumVisible(in InstanceMeshletInfo instance) {
   }
   cull_meshlet_offset = WaveReadLaneFirst(cull_meshlet_offset);
   cull_meshlet_offset += WavePrefixSum(culled_meshlet_count);
+  // printf("total count %d\n", vis_frustum ? 1 : culled_meshlet_count);
 
   if (visible) {
     for (uint i = 0; i < culled_meshlet_count; i++) {
@@ -190,7 +192,6 @@ bool IsFrustumVisible(in InstanceMeshletInfo instance) {
 
   // remember to reset counter before this pass
   uint total_culled_meshlet_count = WaveActiveSum(culled_meshlet_count);
-  // printf("total_culled_meshlet_count %d\n", total_culled_meshlet_count);
   uint cull_meshlet_offset;
   if (WaveIsFirstLane()) {
     counters_buffer.InterlockedAdd(input.counter_buffer_offset,

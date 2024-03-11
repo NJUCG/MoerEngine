@@ -48,8 +48,10 @@ void VulkanPipelineResourceCache::SetCBV(uint32_t _set, uint32_t _binding, RHICB
     // MARK: offset should be set manually
     auto* buffer = static_cast<VulkanRHIBuffer*>(_cbv->GetBuffer());
     if (_cbv->IsBuffer()) {
+        auto range = _cbv->GetInfo().buffer.cbv.stride * _cbv->GetInfo().buffer.cbv.num_elements;
+        range      = std::min(uint64_t(range), buffer->GetInfo().size - _cbv->GetInfo().buffer.cbv.byte_offset);
         // ConstantBuffer
-        m_descriptor_set_writers[_set].WriteUniformBuffer(_binding, buffer->GetHandle(), _cbv->GetInfo().buffer.cbv.byte_offset, buffer->GetInfo().size);
+        m_descriptor_set_writers[_set].WriteUniformBuffer(_binding, buffer->GetHandle(), _cbv->GetInfo().buffer.cbv.byte_offset, range);
     } else {
         // TextureBuffer
         LOG_CRITICAL("Texture CBV is not implemented yet.");
