@@ -29,6 +29,7 @@ struct InstanceMeshletInfo {
 struct InstanceMeshletCullInfo {
   uint meshlet_id;
   uint instance_id;
+  uint padding[2];
 };
 
 struct DrawCommandData {
@@ -37,6 +38,7 @@ struct DrawCommandData {
   uint first_index;
   uint vertex_offset;
   uint first_instance;
+  uint3 padding;
 };
 
 struct MeshletDesc {
@@ -62,5 +64,6 @@ struct MeshletBound {
                float((packed_cut_off & 0x00FF0000) >> 16) * 0.0078740157);
     cut_off = float((packed_cut_off & 0xFF000000) >> 24) * 0.0078740157;
   }
+  uint padding[3];
 };
 #endif

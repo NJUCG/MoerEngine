@@ -33,6 +33,7 @@
 #include "vulkan/vulkan_core.h"
 #include "window/WindowContext.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <type_traits>
@@ -827,7 +828,7 @@ RHISRVRef VulkanRHIImpl::RHICreateSRVInner(RHIViewableResource* _resource, const
         if (uint32_t(vk_texture->GetUsageFlags() & ETextureUsageFlags::COLOR_ATTACHMENT) != 0) {
             flags = VK_IMAGE_ASPECT_COLOR_BIT;
         } else if (uint32_t(vk_texture->GetUsageFlags() & ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT) != 0) {
-            flags = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+            flags = VK_IMAGE_ASPECT_DEPTH_BIT;
         } else {
             flags = VK_IMAGE_ASPECT_COLOR_BIT;
         }
@@ -913,7 +914,7 @@ RHIUAVRef VulkanRHIImpl::RHICreateUAVInner(RHIViewableResource* _resource, const
         if (uint32_t(vk_texture->GetUsageFlags() & ETextureUsageFlags::COLOR_ATTACHMENT) != 0) {
             flags = VK_IMAGE_ASPECT_COLOR_BIT;
         } else if (uint32_t(vk_texture->GetUsageFlags() & ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT) != 0) {
-            flags = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+            flags = VK_IMAGE_ASPECT_DEPTH_BIT;
         } else {
             flags = VK_IMAGE_ASPECT_COLOR_BIT;
         }
@@ -1006,10 +1007,15 @@ void VulkanRHIImpl::RHISetBatchedShaderParametersInner(RHIResource* _pso, const 
 
                 const auto& buffer_view_info = view->GetInfo().buffer;
                 auto        offset           = view->IsCBV() ? buffer_view_info.cbv.byte_offset : (view->IsSRV() ? buffer_view_info.srv.byte_offset : buffer_view_info.uav.byte_offset);
+                auto        size             = view->IsCBV() ?
+                                                   buffer_view_info.cbv.num_elements * buffer_view_info.cbv.stride :
+                                                   (view->IsSRV() ? buffer_view_info.srv.num_elements * buffer_view_info.srv.stride : buffer_view_info.uav.num_elements * buffer_view_info.uav.stride);
+                uint32_t    whole_size       = buffer->GetInfo().size;
+                uint32_t    range            = std::min(size, whole_size - offset);
                 writers[params.space].WriteBuffer(
                     params.space,
                     params.slot,
-                    {buffer->GetHandle(), offset, buffer->GetInfo().size},
+                    {buffer->GetHandle(), offset, range},
                     binding_info.count,
                     binding_info.type);
             } else if (view->IsSRV()) {

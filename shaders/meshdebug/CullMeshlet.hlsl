@@ -10,6 +10,7 @@ struct MeshletCullInput {
 struct CameraCullData {
   CameraData camera_data;
   float4 planes[6]; // world space planes
+  float4 padding;
 };
 
 [[vk::binding(0, 0)]] ConstantBuffer<CameraCullData> cull_data : register(b0);
@@ -69,8 +70,6 @@ bool IsOcclusionVisible(in MeshletBound bound, in float4x4 world,
   // process meshlets
   uint total_meshlet_count =
       counters_buffer.Load<uint>(input.counter_buffer_offset);
-  //   printf("total count %d\n", total_meshlet_count);
-
   if (dtid.x >= total_meshlet_count) {
     return;
   }
@@ -102,14 +101,17 @@ bool IsOcclusionVisible(in MeshletBound bound, in float4x4 world,
   }
 
   bool visible = frustum_visible && occlude_visible;
+
   uint wave_meshlet_count = WaveActiveCountBits(visible);
   uint cmd_offset = 0;
   if (WaveIsFirstLane()) {
     counters_buffer.InterlockedAdd(input.draw_cmd_buffer_offset,
                                    wave_meshlet_count, cmd_offset);
   }
+  //   printf("cmd offset %d\n", cmd_offset);
+  cmd_offset = WaveReadLaneFirst(cmd_offset);
   uint lane_offset = WavePrefixCountBits(visible);
-  cmd_offset = WaveReadLaneFirst(cmd_offset) + lane_offset;
+  cmd_offset += lane_offset;
 
   if (visible) {
     DrawCommandData cmd;
@@ -133,7 +135,8 @@ bool IsOcclusionVisible(in MeshletBound bound, in float4x4 world,
 
   //   printf("recheck? %d\n", 1);
 
-  uint total_count = counters_buffer.Load<uint>(input.counter_buffer_offset);
+  uint total_count =
+      counters_buffer.Load<uint>(input.recheck_counter_buffer_offset);
   if (dtid.x >= total_count) {
     return;
   }
