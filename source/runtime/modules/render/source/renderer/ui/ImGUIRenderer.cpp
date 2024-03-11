@@ -251,13 +251,13 @@ void ImGUIRenderer::Impl::EndRenderFrame() {
                 RHIBarrierDependencyInfo dependency_info;
                 auto&                    texture_barriers = dependency_info.texture_barriers;
                 texture_barriers.resize(1);
-
+                
                 texture_barriers[0].SetDstTextureLayout(ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT);
                 texture_barriers[0].SetSrcTextureLayout(ETextureLayout::TEXTURE_LAYOUT_PRESENT_SRC);
                 texture_barriers[0].SetTexture(present_view->GetTexture());
                 texture_barriers[0].SetSrcStage(PS_COLOR_ATTACHMENT_OUTPUT);
                 texture_barriers[0].SetDstStage(PS_COLOR_ATTACHMENT_OUTPUT);
-                texture_barriers[0].SetSrcAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
+                // texture_barriers[0].SetSrcAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
                 texture_barriers[0].SetDstAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
 
                 //wait for last frame gui_command_list submission
@@ -310,7 +310,8 @@ void ImGUIRenderer::Impl::EndRenderFrame() {
                 texture_barriers_present[0].SetSrcTextureLayout(ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT);
                 texture_barriers_present[0].SetTexture(present_view->GetTexture());
                 texture_barriers_present[0].SetSrcStage(PS_COLOR_ATTACHMENT_OUTPUT);
-                texture_barriers_present[0].SetDstStage(PS_COLOR_ATTACHMENT_OUTPUT);
+                texture_barriers_present[0].SetDstStage(PS_BOTTOM_OF_PIPE);
+                texture_barriers_present[0].SetSrcAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
 
                 ui_command_list->SetPipelineBarrier(texture_dependency_info);
 
