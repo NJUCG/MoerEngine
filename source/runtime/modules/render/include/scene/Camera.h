@@ -49,15 +49,19 @@ namespace Moer {
 
         Vector3f m_position;
 
-        Matrix4x4f m_rotate;    //world to cam
-        Matrix4x4f m_rotate_inv;    //cam to world
+        Matrix4x4f m_rotate;                //world to cam
+        Matrix4x4f m_rotate_inv;            //cam to world
 
         bool       m_to_world_dirty = true;
-        Matrix4x4f m_to_world;// camera to world
-        Matrix4x4f m_view;    // world to camera
+        Matrix4x4f m_to_world;              // camera to world
+        Matrix4x4f m_view;                  // world to camera
 
         bool       m_projection_dirty = true;
-        Matrix4x4f m_sample_to_camera;// screen to camera
-        Matrix4x4f m_proj;            // camera to screen
+        Matrix4x4f m_sample_to_camera;      // screen to camera
+        Matrix4x4f m_proj;                  // camera to screen
+
+        // bool pitchLock = true;
+        float totalPitch = 0.f;             //limited within (0, 360)
+        float yawReverse = false;           //reverse left and right
     };
 }// namespace Moer
