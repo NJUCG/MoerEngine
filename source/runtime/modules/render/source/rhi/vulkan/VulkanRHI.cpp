@@ -1021,18 +1021,30 @@ void VulkanRHIImpl::RHISetBatchedShaderParametersInner(RHIResource* _pso, const 
             } else if (view->IsSRV()) {
                 // MARK: 如何获取Sampler, 参数填充不足
                 auto* texture_srv = static_cast<VulkanRHITextureSRV*>(view)->GetView();
+                VkImageLayout target_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                if (uint32_t(view->GetTexture()->GetUsageFlags() & ETextureUsageFlags::UNORDERED_ACCESS) != 0) {
+                    target_layout = VK_IMAGE_LAYOUT_GENERAL;
+                }
                 writers[params.space].WriteImage(
                     params.space,
                     params.slot,
-                    {VK_NULL_HANDLE, texture_srv, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                    {VK_NULL_HANDLE, texture_srv, target_layout},
                     binding_info.count,
                     binding_info.type);
             } else if (view->IsUAV()) {
                 auto* texture_uav = static_cast<VulkanRHITextureUAV*>(view)->GetView();
+                VkImageLayout target_layout;
+                if (uint32_t(view->GetTexture()->GetUsageFlags() & ETextureUsageFlags::COLOR_ATTACHMENT) != 0) {
+                    target_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                } else if (uint32_t(view->GetTexture()->GetUsageFlags() & ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT) != 0) {
+                    target_layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+                } else {
+                    target_layout = VK_IMAGE_LAYOUT_GENERAL;
+                }
                 writers[params.space].WriteImage(
                     params.space,
                     params.slot,
-                    {VK_NULL_HANDLE, texture_uav, VK_IMAGE_LAYOUT_GENERAL},
+                    {VK_NULL_HANDLE, texture_uav, target_layout},
                     binding_info.count,
                     binding_info.type);
             }

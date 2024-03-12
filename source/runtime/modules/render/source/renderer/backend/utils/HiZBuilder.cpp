@@ -37,6 +37,26 @@ namespace Moer {
         for (uint32_t i = 0; i < texture->GetNumMips(); ++i) {
             uavs[i] = g_rhi->RHICreateTextureUAV(texture, PF_R16_SFLOAT, i);
         }
+        auto*                    cmd_list = g_rhi->RHICreateCopyCommandList(g_rhi->RHIGetCurrentCommandAllocator());
+        RHIBarrierDependencyInfo barrier_info;
+        barrier_info.texture_barriers.resize(1);
+        auto& barrier = barrier_info.texture_barriers[0];
+        barrier.SetTexture(texture)
+            .SetSrcTextureLayout(TEXTURE_LAYOUT_UNDEFINED)
+            .SetDstTextureLayout(TEXTURE_LAYOUT_COMMON)
+            .SetSubResourceRange(RHISubresourceRange(ETextureAspectFlags::COLOR, 0, texture->GetNumMips(), 0, 1, 0, 1));
+        cmd_list->BeginRecording();
+        cmd_list->SetPipelineBarrier(barrier_info);
+        cmd_list->EndRecording();
+        RHIFenceRef fence = g_rhi->RHICreateFence(RHIFenceCreateInfo{EFenceUsageFlags::TIMELINE});
+
+        RHISubmitInfo submit_info;
+        submit_info.Signal(fence, 1);
+
+        RHICommandQueue* queue = g_rhi->RHICreateCommandQueue(ECommandQueueType::COPY);
+        queue->SubmitCommands(1, cmd_list, &submit_info);
+        fence->Wait(1);
+        MoerDelete(queue);
         if (sampler == nullptr) {
             RHISamplerCreateInfo create_info(SF_NEAREST, TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             create_info.SetCompareOp(SCF_NEVER);
@@ -97,8 +117,16 @@ namespace Moer {
                 .SetSubResourceRange(range)
                 .SetSrcStage(PS_COMPUTE_SHADER)
                 .SetDstStage(PS_COMPUTE_SHADER)
-                .SetDstAccessFlags(ERHIAccessFlags::SHADER_WRITE)
-                .SetSrcAccessFlags(ERHIAccessFlags::SHADER_READ);
+                .SetDstAccessFlags(ERHIAccessFlags::SHADER_WRITE);
+            // .SetSrcAccessFlags(ERHIAccessFlags::SHADER_READ);
+
+            // auto& hiz_barrier2 = depth_barrier_info.texture_barriers[2];
+            // hiz_barrier2.SetTexture(hiz_buffer.texture)
+            //     .SetSubResourceRange(RHISubresourceRange(ETextureAspectFlags::COLOR, 1, 1, 0, 1, 0, 1))
+            //     .SetSrcStage(PS_COMPUTE_SHADER)
+            //     .SetDstStage(PS_COMPUTE_SHADER)
+            //     .SetDstAccessFlags(ERHIAccessFlags::SHADER_READ)
+            //     .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE);
 
             graphics_cmd_list->SetPipelineBarrier(depth_barrier_info);//set depth buffer to shader read only
 
@@ -112,8 +140,8 @@ namespace Moer {
                 .SetSubResourceRange(range)
                 .SetSrcStage(PS_COMPUTE_SHADER)
                 .SetDstStage(PS_COMPUTE_SHADER)
-                .SetDstAccessFlags(ERHIAccessFlags::SHADER_READ)
-                .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE);
+                .SetDstAccessFlags(ERHIAccessFlags::SHADER_READ);
+            // .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE);
 
             auto& barrier2 = barrier_info.texture_barriers[1];
             barrier2.SetTexture(hiz_buffer.texture)
@@ -122,8 +150,8 @@ namespace Moer {
                 .SetSubResourceRange(range)
                 .SetSrcStage(PS_COMPUTE_SHADER)
                 .SetDstStage(PS_COMPUTE_SHADER)
-                .SetDstAccessFlags(ERHIAccessFlags::SHADER_WRITE)
-                .SetSrcAccessFlags(ERHIAccessFlags::SHADER_READ);
+                .SetDstAccessFlags(ERHIAccessFlags::SHADER_WRITE);
+            // .SetSrcAccessFlags(ERHIAccessFlags::SHADER_READ);
 
             for (uint32_t i = 0; i < mip_count; ++i) {
                 params.target = hiz_buffer.uavs[i];

@@ -453,12 +453,12 @@ namespace Moer {
             depth_barrier
                 .SetTexture(depth_buffer[frame_offset])
                 .SetDstTextureLayout(TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE)
-                .SetSrcTextureLayout(TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                .SetSrcTextureLayout(TEXTURE_LAYOUT_UNDEFINED)
                 .SetSubResourceRange(RHISubresourceRange(ETextureAspectFlags::DEPTH_SLICE | ETextureAspectFlags::STENCIL_SLICE))
                 .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
                 .SetDstStage(ERHIPipelineStageFlags::PS_EARLY_FRAGMENT_TESTS)
                 .SetSrcAccessFlags(ERHIAccessFlags::SHADER_READ)
-                .SetDstAccessFlags(ERHIAccessFlags::DEPTH_STENCIL_READ);
+                .SetDstAccessFlags(ERHIAccessFlags::DEPTH_STENCIL_READ | ERHIAccessFlags::DEPTH_STENCIL_WRITE);
 
             cmd_list->SetPipelineBarrier(barrier_dependency_info);
         });
@@ -498,7 +498,7 @@ namespace Moer {
                 .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
                 .SetDstStage(ERHIPipelineStageFlags::PS_EARLY_FRAGMENT_TESTS)
                 .SetSrcAccessFlags(ERHIAccessFlags::SHADER_READ)
-                .SetDstAccessFlags(ERHIAccessFlags::DEPTH_STENCIL_READ);
+                .SetDstAccessFlags(ERHIAccessFlags::DEPTH_STENCIL_READ | ERHIAccessFlags::DEPTH_STENCIL_WRITE);
 
             cmd_list->SetPipelineBarrier(barrier_dependency_info);
         });
@@ -896,7 +896,7 @@ namespace Moer {
                 RHIBufferRef       vbuffers[]         = {prim_vertex_buffer, instance_id_buffer};
                 cmd_list->BindVertexBuffers(0, 2, vbuffers, offset);
 
-                cmd_list->DrawIndexedIndirect(draw_indirect_buffer, 0, draw_count_buffer, draw_count_offset, 114514, sizeof(DrawInstanceCmd));
+                cmd_list->DrawIndexedIndirect(draw_indirect_buffer, 0, draw_count_buffer, draw_count_offset, draw_indirect_buffer->GetNumElement(), sizeof(DrawInstanceCmd));
             } else {
                 assert(false);
             }
