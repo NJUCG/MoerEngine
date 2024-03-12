@@ -251,7 +251,7 @@ void ImGUIRenderer::Impl::EndRenderFrame() {
                 RHIBarrierDependencyInfo dependency_info;
                 auto&                    texture_barriers = dependency_info.texture_barriers;
                 texture_barriers.resize(1);
-                
+
                 texture_barriers[0].SetDstTextureLayout(ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT);
                 texture_barriers[0].SetSrcTextureLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED);
                 texture_barriers[0].SetTexture(present_view->GetTexture());
@@ -263,7 +263,7 @@ void ImGUIRenderer::Impl::EndRenderFrame() {
                 //wait for last frame gui_command_list submission
 
                 present_fence->Wait(timeline_index);
-
+                //there should be a resource timeline signal here
                 ui_command_list->Reset();
 
                 ui_command_list->BeginRecording();
@@ -1109,7 +1109,8 @@ void GuiRenderWindow(ImGuiViewport* viewport, void*) {
             .SetTexture(present_view->GetTexture())
             .SetSrcStage(PS_COLOR_ATTACHMENT_OUTPUT)
             .SetDstStage(PS_COLOR_ATTACHMENT_OUTPUT)
-            .SetDstAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
+            .SetDstAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE)
+            .SetSrcAccessFlags(ERHIAccessFlags::MEMORY_READ);
 
         //transfer present texture layout to present src
 
