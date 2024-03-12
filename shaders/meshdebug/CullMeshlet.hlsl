@@ -58,10 +58,12 @@ bool IsFrustumVisible(in MeshletBound bound, in float4x4 world,
 bool IsOcclusionVisible(in MeshletBound bound, in float4x4 world,
                         in float scale, in float4x4 vp) {
   float4 center = mul(vp, mul(world, float4(bound.center, 1.0f)));
-  float cam_dist = center.w;
+  float z = center.w;
   center /= center.w;
   // get center relative radius
-  float world_radius = bound.radius * scale;
+  float world_radius =
+      bound.radius * scale; // assume this is view space radius too
+  // should estamate the radius in clip space
   return true;
 }
 

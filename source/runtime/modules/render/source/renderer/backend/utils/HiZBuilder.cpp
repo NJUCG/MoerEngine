@@ -67,9 +67,7 @@ namespace Moer {
     struct HiZBuilder::Impl {
         Impl() {
             builder_shader = ShaderResourceManager::GetInstance().GetShader<BuildHiZShader>();
-#if _DEBUG
             assert(builder_shader && "Failed to load HiZ builder shader");
-#endif
             pso = g_rhi->RHICreateComputePipelineState(builder_shader);
             RHISamplerCreateInfo create_info(SF_NEAREST, TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             create_info.SetCompareOp(SCF_NEVER);
@@ -120,14 +118,6 @@ namespace Moer {
                 .SetDstAccessFlags(ERHIAccessFlags::SHADER_WRITE);
             // .SetSrcAccessFlags(ERHIAccessFlags::SHADER_READ);
 
-            // auto& hiz_barrier2 = depth_barrier_info.texture_barriers[2];
-            // hiz_barrier2.SetTexture(hiz_buffer.texture)
-            //     .SetSubResourceRange(RHISubresourceRange(ETextureAspectFlags::COLOR, 1, 1, 0, 1, 0, 1))
-            //     .SetSrcStage(PS_COMPUTE_SHADER)
-            //     .SetDstStage(PS_COMPUTE_SHADER)
-            //     .SetDstAccessFlags(ERHIAccessFlags::SHADER_READ)
-            //     .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE);
-
             graphics_cmd_list->SetPipelineBarrier(depth_barrier_info);//set depth buffer to shader read only
 
             RHIBarrierDependencyInfo barrier_info;
@@ -140,8 +130,8 @@ namespace Moer {
                 .SetSubResourceRange(range)
                 .SetSrcStage(PS_COMPUTE_SHADER)
                 .SetDstStage(PS_COMPUTE_SHADER)
-                .SetDstAccessFlags(ERHIAccessFlags::SHADER_READ);
-            // .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE);
+                .SetDstAccessFlags(ERHIAccessFlags::SHADER_READ)
+                .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE);
 
             auto& barrier2 = barrier_info.texture_barriers[1];
             barrier2.SetTexture(hiz_buffer.texture)
@@ -150,8 +140,8 @@ namespace Moer {
                 .SetSubResourceRange(range)
                 .SetSrcStage(PS_COMPUTE_SHADER)
                 .SetDstStage(PS_COMPUTE_SHADER)
-                .SetDstAccessFlags(ERHIAccessFlags::SHADER_WRITE);
-            // .SetSrcAccessFlags(ERHIAccessFlags::SHADER_READ);
+                .SetDstAccessFlags(ERHIAccessFlags::SHADER_WRITE)
+                .SetSrcAccessFlags(ERHIAccessFlags::SHADER_READ);
 
             for (uint32_t i = 0; i < mip_count; ++i) {
                 params.target = hiz_buffer.uavs[i];

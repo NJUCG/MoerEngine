@@ -63,7 +63,7 @@ bool IsVisibleOccluded(in InstanceMeshletInfo instance, in float4x4 vp) {
 
   float2 hiz_size = (rect.zw - rect.xy) * input.hiz_factor; // rect size in hiz
   float hiz_mip = log2(max(hiz_size.x, hiz_size.y));        // mip level
-
+  // printf("hiz_size %f %f\n", hiz_size.x, hiz_size.y);
   if (hiz_mip > input.hiz_depth) {
     return true;
   }
@@ -85,8 +85,8 @@ bool IsVisibleOccluded(in InstanceMeshletInfo instance, in float4x4 vp) {
              hiz_depth.SampleLevel(depth_sampler, rect.zw, hiz_mip));
   depth_quad.xy = min(depth_quad.xy, depth_quad.zw);
   depth_quad.x = min(depth_quad.x, depth_quad.y);
-  // return min_z > depth_quad.x;
-  return true;
+  return min_z > depth_quad.x;
+  // return true;
 }
 bool IsFrustumVisible(in InstanceMeshletInfo instance) {
   // frustum cull use aabb
@@ -184,9 +184,9 @@ bool IsFrustumVisible(in InstanceMeshletInfo instance) {
   InstanceMeshletInfo instance_mesh_info =
       instance_meshlet_info[instance_start_offset];
 
-  // bool vis_occluded =
-  //     IsVisibleOccluded(instance_mesh_info, cull_data.camera_data.view_proj);
-  bool vis_occluded = true;
+  bool vis_occluded =
+      IsVisibleOccluded(instance_mesh_info, cull_data.camera_data.view_proj);
+  // bool vis_occluded = true;
   uint culled_meshlet_count =
       vis_occluded ? instance_mesh_info.meshlet_count : 0;
 
