@@ -3,6 +3,7 @@
 
 #include "math/Base.h"
 #include "misc/STL.h"
+#include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "RenderAPI.h"
 
@@ -220,20 +221,22 @@ public:
 struct RHIFenceWaitInfo {
     uint64_t  wait_value;
     RHIFence* wait_fence;
+    ERHIPipelineStageFlags wait_stage;
 };
 
 struct RHIFenceSignalInfo {
     uint64_t  signal_value;
     RHIFence* signal_fence;
+    ERHIPipelineStageFlags signal_stage;
 };
 struct RHISubmitInfo {
 
-    void Wait(RHIFence* _fence, uint64_t _wait_value) {
-        wait_infos.emplace_back(_wait_value, _fence);
+    void Wait(RHIFence* _fence, uint64_t _wait_value, ERHIPipelineStageFlags _stage = ERHIPipelineStageFlags::PS_NONE) {
+        wait_infos.emplace_back(_wait_value, _fence, _stage);
     };
 
-    void Signal(RHIFence* _fence, uint64_t _signal_value) {
-        signal_infos.emplace_back(_signal_value, _fence);
+    void Signal(RHIFence* _fence, uint64_t _signal_value, ERHIPipelineStageFlags _stage = ERHIPipelineStageFlags::PS_NONE) {
+        signal_infos.emplace_back(_signal_value, _fence, _stage);
     };
 
     const Moer::Array<RHIFenceWaitInfo>&   GetWaitInfos() const { return wait_infos; }

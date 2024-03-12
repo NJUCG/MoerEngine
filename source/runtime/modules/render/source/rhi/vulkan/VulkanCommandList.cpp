@@ -280,8 +280,10 @@ void VulkanRHICommandListBase::SetPipelineBarrier(const RHIBarrierDependencyInfo
         image_barriers[i].dstAccessMask                   = VulkanEnumTranslator::METoVkAccessFlags2(_dependency.texture_barriers[i].dst_access);
         image_barriers[i].oldLayout                       = VulkanEnumTranslator::METoVKImageLayout(_dependency.texture_barriers[i].src_layout);
         image_barriers[i].newLayout                       = VulkanEnumTranslator::METoVKImageLayout(_dependency.texture_barriers[i].dst_layout);
-        image_barriers[i].srcQueueFamilyIndex             = VulkanEnumTranslator::METoVkQueueFamilyIndex(_dependency.texture_barriers[i].src_queue_type, m_device);
-        image_barriers[i].dstQueueFamilyIndex             = VulkanEnumTranslator::METoVkQueueFamilyIndex(_dependency.texture_barriers[i].dst_queue_type, m_device);
+        bool dst_present                                  = (image_barriers[i].newLayout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR || image_barriers[i].newLayout == VK_IMAGE_LAYOUT_SHARED_PRESENT_KHR);
+        bool src_present                                  = (image_barriers[i].oldLayout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR || image_barriers[i].oldLayout == VK_IMAGE_LAYOUT_SHARED_PRESENT_KHR);
+        image_barriers[i].srcQueueFamilyIndex             = src_present ? m_device->GetQueueFamilyIndices().present.value() : VulkanEnumTranslator::METoVkQueueFamilyIndex(_dependency.texture_barriers[i].src_queue_type, m_device);
+        image_barriers[i].dstQueueFamilyIndex             = dst_present ? m_device->GetQueueFamilyIndices().present.value() : VulkanEnumTranslator::METoVkQueueFamilyIndex(_dependency.texture_barriers[i].dst_queue_type, m_device);
         image_barriers[i].image                           = vk_texture->GetHandle();// 2. MARK... layout transition need image has 'VK_IMAGE_USAGE_TRANSFER_DST_BIT'
         image_barriers[i].subresourceRange.aspectMask     = VulkanEnumTranslator::METoVKImageAspectFlags(_dependency.texture_barriers[i].sub_resource_range.aspect);
         image_barriers[i].subresourceRange.baseMipLevel   = _dependency.texture_barriers[i].sub_resource_range.mip_index;

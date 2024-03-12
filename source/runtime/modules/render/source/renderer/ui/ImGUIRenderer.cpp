@@ -253,11 +253,11 @@ void ImGUIRenderer::Impl::EndRenderFrame() {
                 texture_barriers.resize(1);
                 
                 texture_barriers[0].SetDstTextureLayout(ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT);
-                texture_barriers[0].SetSrcTextureLayout(ETextureLayout::TEXTURE_LAYOUT_PRESENT_SRC);
+                texture_barriers[0].SetSrcTextureLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED);
                 texture_barriers[0].SetTexture(present_view->GetTexture());
                 texture_barriers[0].SetSrcStage(PS_COLOR_ATTACHMENT_OUTPUT);
                 texture_barriers[0].SetDstStage(PS_COLOR_ATTACHMENT_OUTPUT);
-                // texture_barriers[0].SetSrcAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
+                texture_barriers[0].SetSrcAccessFlags(ERHIAccessFlags::MEMORY_READ);
                 texture_barriers[0].SetDstAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
 
                 //wait for last frame gui_command_list submission
@@ -310,8 +310,9 @@ void ImGUIRenderer::Impl::EndRenderFrame() {
                 texture_barriers_present[0].SetSrcTextureLayout(ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT);
                 texture_barriers_present[0].SetTexture(present_view->GetTexture());
                 texture_barriers_present[0].SetSrcStage(PS_COLOR_ATTACHMENT_OUTPUT);
-                texture_barriers_present[0].SetDstStage(PS_BOTTOM_OF_PIPE);
+                texture_barriers_present[0].SetDstStage(PS_COLOR_ATTACHMENT_OUTPUT);
                 texture_barriers_present[0].SetSrcAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
+                texture_barriers_present[0].SetSrcQueueType(ECommandQueueType::GRAPHICS);
 
                 ui_command_list->SetPipelineBarrier(texture_dependency_info);
 
@@ -320,11 +321,11 @@ void ImGUIRenderer::Impl::EndRenderFrame() {
                 RHISubmitInfo submit_info{};
 
                 //wait for last frame recording(don't need if wait before reseting command list)
-                submit_info.Wait(present_fence, timeline_index);
+                // submit_info.Wait(present_fence, timeline_index, PS_BOTTOM_OF_PIPE);
                 //wait for back_buffer ready
-                submit_info.Wait(next_frame_info.backbuffer_ready_fence, 0);
+                submit_info.Wait(next_frame_info.backbuffer_ready_fence, 0, PS_COLOR_ATTACHMENT_OUTPUT);
                 //signal this frame present fence
-                submit_info.Signal(present_fence, ++timeline_index);
+                submit_info.Signal(present_fence, ++timeline_index, PS_COLOR_ATTACHMENT_OUTPUT);
 
                 command_queue->SubmitCommands(1, ui_command_list, &submit_info);
 
@@ -1106,9 +1107,8 @@ void GuiRenderWindow(ImGuiViewport* viewport, void*) {
             .SetDstTextureLayout(ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT)
             .SetSrcTextureLayout(ETextureLayout::TEXTURE_LAYOUT_PRESENT_SRC)
             .SetTexture(present_view->GetTexture())
-            .SetSrcStage(PS_BOTTOM_OF_PIPE)
+            .SetSrcStage(PS_COLOR_ATTACHMENT_OUTPUT)
             .SetDstStage(PS_COLOR_ATTACHMENT_OUTPUT)
-            .SetSrcAccessFlags(ERHIAccessFlags::UNDEFINED)
             .SetDstAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
 
         //transfer present texture layout to present src
@@ -1158,7 +1158,8 @@ void GuiRenderWindow(ImGuiViewport* viewport, void*) {
             .SetSrcTextureLayout(ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT)
             .SetTexture(present_view->GetTexture())
             .SetSrcAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE)
-            .SetSrcStage(PS_COLOR_ATTACHMENT_OUTPUT);
+            .SetSrcStage(PS_COLOR_ATTACHMENT_OUTPUT)
+            .SetDstStage(PS_COLOR_ATTACHMENT_OUTPUT);
         viewport_data->comand_list->SetPipelineBarrier(texture_dependency_info);
 
         viewport_data->comand_list->EndRecording();
