@@ -37,7 +37,7 @@ namespace Moer {
         float aspect_ratio = width / height;
 
         //fov
-        float fov = 100.f;
+        float fov = 60.f;
 
         //mouse right button setting
         bool mouseEnterScreen = false;
