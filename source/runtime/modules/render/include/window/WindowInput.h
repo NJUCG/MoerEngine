@@ -26,7 +26,7 @@ namespace Moer {
         float deltaY = 0.0f;
 
         //camera speed(default)
-        float cameraSpeed = 5000.0f;    //to be optimized
+        float cameraSpeed = 25.0f;    //to be optimized
         bool  speedUp     = false;
         bool  speedDown   = false;
         bool  resetSpeed  = false;
@@ -37,7 +37,7 @@ namespace Moer {
         float aspect_ratio = width / height;
 
         //fov
-        float fov = 100.f;
+        float fov = 60.f;
 
         //mouse right button setting
         bool mouseEnterScreen = false;

@@ -189,9 +189,19 @@ namespace Moer {
     void Camera::UpdateRotation(float delta_x, float delta_y) {
         // Quaternion pitch(X, Angle::MakeFromDegree(delta_x * sensitivity * sensitivity_scale));
         // Quaternion yaw(Y, Angle::MakeFromDegree(delta_y * sensitivity * sensitivity_scale));
+        totalPitch += delta_y * 0.15f;
+        if(totalPitch < 0.f)
+            totalPitch += 360.f;
+        if(totalPitch > 360.f)
+            totalPitch = fmodf(totalPitch, 360.f);
 
-        Quaternion pitch(X, Angle::MakeFromDegree(delta_x * 0.15f));
-        Quaternion yaw(Y, Angle::MakeFromDegree(delta_y * 0.15f));
+        if(totalPitch < 90.f || totalPitch > 270.f)
+            yawReverse = false;
+        else
+            yawReverse = true;
+
+        Quaternion pitch(X, Angle::MakeFromDegree(delta_y * 0.15f));                                //rotate around x-axis
+        Quaternion yaw(Y, Angle::MakeFromDegree((yawReverse ? -1.f : 1.f) * delta_x * 0.15f));      //rotate around y-axis
 
         m_rotate =
             FillDiagonal4x4(pitch.GetRotation(), 1.f) *
@@ -201,6 +211,7 @@ namespace Moer {
         m_rotate_inv     = Transpose(m_rotate);
         m_to_world_dirty = true;
     }
+
 
 
     //if changed cam_pos / cam_direction : m_to_world_dirty->true
@@ -226,7 +237,7 @@ namespace Moer {
                     wndInput.cameraSpeed = 0.f;
             }
             if(wndInput.resetSpeed){
-                wndInput.cameraSpeed = 5000.f;
+                wndInput.cameraSpeed = 25.f;
             }
 
             // movement
@@ -245,7 +256,8 @@ namespace Moer {
             
             // rotation
             if(wndInput.deltaX || wndInput.deltaY){
-                this->UpdateRotation(wndInput.deltaY, -wndInput.deltaX);
+
+                this->UpdateRotation(wndInput.deltaX, wndInput.deltaY);    
                 wndInput.deltaX = 0;
                 wndInput.deltaY = 0;
             }
