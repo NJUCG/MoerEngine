@@ -366,9 +366,15 @@ namespace Moer {
         camera_data.view       = Transpose(camera->GetViewMatrix());
         camera_data.view_proj  = Transpose(camera->GetProjectionMatrix() * camera->GetViewMatrix());
         camera_data.camera_pos = Vector4f(camera->GetPosition(), 1.f);
+        camera_data.proj       = Transpose(camera->GetProjectionMatrix());
         CameraCullData cull_data;
-        cull_data.camera_data = camera_data;
-        auto& frustum_planes  = cull_data.frustum_planes;
+        cull_data.camera_data  = camera_data;
+        cull_data.aspect_ratio = camera->GetAspectRatio();
+        cull_data.far_plane    = camera->GetFarClip();
+        cull_data.near_plane   = camera->GetNearClip();
+        cull_data.tan_half_fov = camera->GetTanHalfFov();
+
+        auto& frustum_planes = cull_data.frustum_planes;
         {
             auto target_vp    = vp;
             frustum_planes[0] = target_vp.r3 + target_vp.r0;//left

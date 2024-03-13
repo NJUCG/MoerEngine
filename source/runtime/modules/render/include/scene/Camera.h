@@ -29,15 +29,19 @@ namespace Moer {
         Matrix4x4f GetProjectionMatrix() noexcept;
         Matrix4x4f GetToWorldMatrix() noexcept;
         Matrix4x4f GetViewMatrix() noexcept;
+        float      GetNearClip() const noexcept;
+        float      GetFarClip() const noexcept;
+        float      GetTanHalfFov() const noexcept;
+        float      GetAspectRatio() const noexcept;
 
         void MoveForward(float);
         void MoveRight(float);
         void MoveUp(float);
         void UpdateRotation(float, float);
 
-        bool IsDirty() const;       //judge if camera changed compared to last frame
+        bool IsDirty() const;//judge if camera changed compared to last frame
 
-        void Tick();                //update camera per frame
+        void Tick();//update camera per frame
 
     private:
         Matrix4x4f m_view_matrix;
@@ -50,7 +54,7 @@ namespace Moer {
         Vector3f m_position;
 
         Matrix4x4f m_rotate;    //world to cam
-        Matrix4x4f m_rotate_inv;    //cam to world
+        Matrix4x4f m_rotate_inv;//cam to world
 
         bool       m_to_world_dirty = true;
         Matrix4x4f m_to_world;// camera to world
