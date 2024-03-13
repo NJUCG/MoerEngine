@@ -46,6 +46,7 @@ namespace Moer {
 
         RHIUAVRef GetNextBackBufferUAV(uint32_t index);
         RHIUAVRef GetDepthBufferUav();
+        RHITextureRef getDepthTexture();
 
         void Present(RHIFenceRef _render_fence);
 
@@ -133,7 +134,9 @@ namespace Moer {
 
     RHIUAVRef VirtualViewport::GetDepthBufferUAV() {
         return impl->GetDepthBufferUav();
-    }
+    }RHITextureRef VirtualViewport::getDepthTexture(){
+        return impl->getDepthTexture();
+}
     
     RHISRV* VirtualViewport::GetPresentTextureSRV() {
         return impl->GetPresentTextureSRV();
@@ -351,6 +354,14 @@ namespace Moer {
         assert(Moer::IsCurrentlyRenderThread());
 
         return depth_texture_uav;
+    }
+
+    RHITextureRef VirtualViewport::Impl::getDepthTexture() {
+        // Implementation of getDepthTexture method
+        // ...
+        assert(Moer::IsCurrentlyRenderThread());
+
+        return depth_texture;
     }
 
 }// namespace Moer

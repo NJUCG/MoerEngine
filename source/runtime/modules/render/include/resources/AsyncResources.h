@@ -40,6 +40,7 @@ namespace Moer {
         RHIUAVRef GetNextBackBufferUAV(uint32_t index);
 
         RHIUAVRef GetDepthBufferUAV();
+        RHITextureRef getDepthTexture();
 
         void Present(RHIFenceRef _render_fence);
 
