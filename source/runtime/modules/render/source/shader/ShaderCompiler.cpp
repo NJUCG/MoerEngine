@@ -155,7 +155,7 @@ public:
             batch.CompileBatch();
             output_temp_array[i].swap(batch.outputs);
         });
-        for_each(output_temp_array.begin(), output_temp_array.end(), [this](auto& output_array) {
+        std::for_each(output_temp_array.begin(), output_temp_array.end(), [this](auto& output_array) {
             outputs.insert(outputs.end(), output_array.begin(), output_array.end());
         });
 
