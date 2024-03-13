@@ -10,7 +10,10 @@ struct MeshletCullInput {
 struct CameraCullData {
   CameraData camera_data;
   float4 planes[6]; // world space planes
-  float4 padding;
+  float near_plane;
+  float far_plane;
+  float tan_half_fov;
+  float aspect_ratio;
 };
 
 [[vk::binding(0, 0)]] ConstantBuffer<CameraCullData> cull_data : register(b0);
@@ -56,15 +59,60 @@ bool IsFrustumVisible(in MeshletBound bound, in float4x4 world,
 }
 
 bool IsOcclusionVisible(in MeshletBound bound, in float4x4 world,
-                        in float scale, in float4x4 vp) {
+                        in float r_scale, in float4x4 vp) {
   float4 center = mul(vp, mul(world, float4(bound.center, 1.0f)));
   float z = center.w;
   center /= center.w;
+  center.xy = center.xy * 0.5f + 0.5f;
   // get center relative radius
   float world_radius =
-      bound.radius * scale; // assume this is view space radius too
+      bound.radius * r_scale; // assume this is view space radius too
   // should estamate the radius in clip space
-  return true;
+  // printf("center %f %f %f %f bound radius %f\n", center.x, center.y,
+  // center.z,
+  //        center.w, bound.radius);
+  if (z - world_radius < cull_data.near_plane) {
+    return true;
+  }
+  // printf("tan_half_fov %f\n", cull_data.tan_half_fov);
+  float tan_half_fov = cull_data.tan_half_fov;
+  float clip_y = sqrt(tan_half_fov * tan_half_fov + 1.f) * 0.5f / z;
+  float clip_x = clip_y * cull_data.aspect_ratio;
+  float4 rect = float4(center.xy - float2(clip_x, clip_y),
+                       center.xy + float2(clip_x, clip_y));
+  // printf("rect %f %f %f %f\n", rect.x, rect.y, rect.z, rect.w);
+  float min_z =
+      mul(cull_data.camera_data.proj, float4(0, 0, z + world_radius, 1.f)).w /
+      (z + world_radius);
+  rect = saturate(rect * 0.5f + 0.5f); // to [0, 1]
+  // printf("min_z_clip %f origin_z %f \n", min_z, z);
+  float2 hiz_size = (rect.zw - rect.xy) * input.hiz_factor; // rect size in hiz
+  float hiz_mip = log2(max(hiz_size.x, hiz_size.y));        // mip level
+  if (hiz_mip > input.hiz_depth) {
+    return true;
+  }
+  // printf("rect %f %f %f %f\n", rect.x, rect.y, rect.z, rect.w);
+  hiz_mip = ceil(hiz_mip);
+  // sample lower level if it cross less than 2 pixel rect
+  float lower_level = max(0.f, hiz_mip - 1.f);
+  float2 scale = exp2(-lower_level) * input.hiz_factor;
+  float2 lower_min_xy = floor(rect.xy * scale);
+  float2 lower_max_xy = ceil(rect.zw * scale);
+
+  float2 lower_extent = (lower_max_xy - lower_min_xy);
+  hiz_mip = max(lower_extent.x, lower_extent.y) <= 2.f ? lower_level : hiz_mip;
+
+  float4 depth_quad =
+      float4(hiz_depth.SampleLevel(depth_sampler, rect.xy, hiz_mip),
+             hiz_depth.SampleLevel(depth_sampler, rect.zy, hiz_mip),
+             hiz_depth.SampleLevel(depth_sampler, rect.xw, hiz_mip),
+             hiz_depth.SampleLevel(depth_sampler, rect.zw, hiz_mip));
+  depth_quad.xy = min(depth_quad.xy, depth_quad.zw);
+  depth_quad.x = min(depth_quad.x, depth_quad.y);
+  // printf("min_z %f depth_quad.x %f\n", min_z, depth_quad.x);
+  return min_z > depth_quad.x;
+
+  // return true;
 }
 
 [numthreads(64, 1, 1)] void prepass(uint3 dtid
@@ -81,9 +129,12 @@ bool IsOcclusionVisible(in MeshletBound bound, in float4x4 world,
   MeshletBound bound = meshlet_bound_buffer[cull_info.meshlet_id];
 
   bool frustum_visible = IsFrustumVisible(bound, data.model2world, data.scale);
-  bool occlude_visible =
-      IsOcclusionVisible(bound, data.model2world, data.scale,
-                         cull_data.camera_data.prev_view_proj);
+  bool occlude_visible = true;
+
+  // if (frustum_visible) {
+  //   occlude_visible = IsOcclusionVisible(bound, data.model2world, data.scale,
+  //                                        cull_data.camera_data.prev_view_proj);
+  // }
 
   bool need_recheck = frustum_visible && !occlude_visible;
   uint need_recheck_count = WaveActiveCountBits(need_recheck);

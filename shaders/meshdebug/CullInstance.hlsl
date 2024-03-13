@@ -13,7 +13,10 @@ struct TaskInput {
 struct CameraCullData {
   CameraData camera_data;
   float4 planes[6]; // world space planes
-  float4 padding;
+  float near_plane;
+  float far_plane;
+  float tan_half_fov;
+  float aspect_ratio;
 };
 
 [[vk::push_constant]] ConstantBuffer<TaskInput> input;
