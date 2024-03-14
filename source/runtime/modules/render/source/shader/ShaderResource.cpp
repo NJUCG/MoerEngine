@@ -140,9 +140,23 @@ RHIShaderRef ShaderResourceMap::GetRHIShader(const ShaderResourceKey& key, const
                 result = g_rhi->RHICreateAmplificationShader(code_entry, shader);
                 break;
             case ST_RAY_GEN:
+                result = g_rhi->RHICreateRayGenShader(code_entry, shader);
+                break;
             case ST_RAY_MISS:
-            case ST_RAY_HIT:
+                result = g_rhi->RHICreateRayMissShader(code_entry, shader);
+                break;
+            case ST_RAY_CLOSESTHIT:
+                result = g_rhi->RHICreateRayClosestHitShader(code_entry, shader);
+                break;
             case ST_RAY_CALLABLE:
+                result = g_rhi->RHICreateRayCallableShader(code_entry, shader);
+                break;
+            case ST_RAY_INTERSECTION:
+                result = g_rhi->RHICreateRayIntersectionShader(code_entry, shader);
+                break;
+            case ST_RAY_ANYHIT:
+                result = g_rhi->RHICreateRayAnyhitShader(code_entry, shader);
+                break;
             default:
                 throw std::runtime_error("not implemented");
         }

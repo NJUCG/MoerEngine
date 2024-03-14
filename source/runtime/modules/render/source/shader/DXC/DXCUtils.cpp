@@ -95,9 +95,13 @@ const WCHAR* GetShaderTypeWChar(EShaderType _type) {
             return L"lib";
         case ST_RAY_MISS:
             return L"lib";
-        case ST_RAY_HIT:
+        case ST_RAY_CLOSESTHIT:
             return L"lib";
         case ST_RAY_CALLABLE:
+            return L"lib";
+        case ST_RAY_INTERSECTION:
+            return L"lib";
+        case ST_RAY_ANYHIT:
             return L"lib";
         case ST_Num: break;
         default: break;

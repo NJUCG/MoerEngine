@@ -93,7 +93,7 @@ class ImGuiShaderFrag : public Shader {
 public:
     BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
 
-    DEFINE_SHADER_PARAM_SAMPLER(SamplerState, sampler0)
+    DEFINE_SHADER_PARAM_SAMPLER(Sampler, sampler0)
     DEFINE_SHADER_PARAM_SRV(Texture2D, texture0)
 
     END_ROOT_PARAMETER_DEFINITION(Parameters)

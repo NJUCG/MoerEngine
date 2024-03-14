@@ -208,7 +208,7 @@ void ShaderResourceManager::PrepareGlobalShaderResources() {
 
     GlobalShaderCache::GetInstance().Load();
 
-    static auto post_process = [this](ShaderCompilerOutput* output) {
+    static auto post_process = [this](ShaderCompilerOutput*& output) {
         if (!output->b_succeeded) {
             // ShaderMetaType* meta_type = ShaderMetaType::GetShaderMetaType(output->shader_name_hash);
             std::string error_msg = std::format("Shader compilation failed.");
@@ -219,6 +219,7 @@ void ShaderResourceManager::PrepareGlobalShaderResources() {
 
             LOG_ERROR(error_msg);
             MoerDelete(output);
+            output = nullptr;
             return;
         }
         auto& resource_map = GetShaderResourceMap();
@@ -246,11 +247,14 @@ void ShaderResourceManager::PrepareGlobalShaderResources() {
         job.ExportOutput(outputs);
 
         for (auto* output : outputs | std::views::filter([](auto* output) {
-                                bool filtered = output->cached == false;
-                                if (!filtered) {
-                                    LOG_INFO("Shader {} is cached.", output->shader_name_hash);
+                                if (!output) {
+                                    return true;
                                 }
-                                return filtered;
+                                if (output->cached) {
+                                    LOG_INFO("Shader {} is cached.", output->shader_name_hash);
+                                    return true;
+                                }
+                                return false;
                             })) {
             g_shader_compile_output_queue.Push(output);
         }

@@ -18,6 +18,9 @@ VulkanRHICommandQueue::VulkanRHICommandQueue(VulkanDevice* _device, ECommandQueu
         case ECommandQueueType::COPY:
             queue = _device->GetTransferQueue();
             break;
+        case ECommandQueueType::RAYTRACING:
+            queue = _device->GetRayTracingQueue();
+            break;
         default:
             queue = _device->GetGraphicsQueue();
             break;

@@ -661,6 +661,8 @@ struct RHICopyTextureInfo {
     Offset3D dst_offset;
     Extent3D extent;
 
+    RHICopyTextureInfo() = default;
+
     RHICopyTextureInfo(ETextureLayout      _src_layout,
                        RHISubresourceSlice _src_slice,
                        ETextureLayout      _dst_layout,

@@ -12,7 +12,7 @@ void VulkanWindowsPlatform::GetInstanceExtensions(TExtensionArray& _extensions) 
 }
 
 void VulkanWindowsPlatform::GetDeviceExtensions(TVulkanDeviceExtensionArray& _extensions) {
-    _extensions.emplace_back(std::make_unique<VulkanDeviceExtension>(VK_EXT_FULL_SCREEN_EXCLUSIVE_EXTENSION_NAME));
+    // _extensions.emplace_back(std::make_unique<VulkanDeviceExtension>(VK_EXT_FULL_SCREEN_EXCLUSIVE_EXTENSION_NAME));
     // _extensions.push_back(VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME);
 }
 

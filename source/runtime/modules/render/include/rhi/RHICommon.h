@@ -154,7 +154,7 @@ struct Extent3D {
 
 #pragma endregion
 
-#pragma region cross-platform param types
+#pragma region cross -platform param types
 enum ESamplerFilter : uint8_t {
     SF_NEAREST,
     SF_LINEAR,
@@ -389,12 +389,19 @@ enum class EBufferUsageFlags : uint32_t {
     /** Allows buffer to be used as a scratch buffer for building ray tracing acceleration structure,
 	 * which implies unordered access. Only changes the buffer alignment and can be combined with other usage.
 	**/
-    ACCELERATION_STRUCTURE_STORAGE = (1 << 21) | UNORDERED_ACCESS,
+    ACCELERATION_STRUCTURE_SCRATCH = 1 << 21,
 
     TRANSFER_DST = 1 << 22,
 
+    /** Buffer that used to a store shader binding table which is a series of shader group handles*/
+    SHADER_BINDING_TABLE = 1 << 23,
+
+    /** Buffer used as acceleration structure build input*/
+    ACCELERATION_STRUCTURE_BUILD_INPUT = 1 << 24,
+
     // Helper bit-masks
     DYNAMIC = (LIFE_CYCLE_DYNAMIC | LIFE_CYCLE_ONE_FRAME),
+
 };
 
 ENUM_BIT_OP_IMPL(EBufferUsageFlags, FLAG)
@@ -627,8 +634,10 @@ enum EShaderType : uint8_t {
     ST_AMPLIFICATION,
     ST_RAY_GEN,
     ST_RAY_MISS,
-    ST_RAY_HIT,
+    ST_RAY_CLOSESTHIT,
     ST_RAY_CALLABLE,
+    ST_RAY_INTERSECTION,
+    ST_RAY_ANYHIT,
     ST_Num,
     ST_NumBits = 4
 };
@@ -875,7 +884,8 @@ enum class ECommandQueueType {
     UNDEFINED,
     GRAPHICS,
     COMPUTE,
-    COPY
+    COPY,
+    RAYTRACING,
 };
 
 enum class ECommandListType {
@@ -886,6 +896,7 @@ enum class ECommandListType {
     VIDEO_ENCODE,
     VIDEO_PROCESS,
     VIDEO_DECODE,
+    RAY_TRACING,
     Num
 };
 

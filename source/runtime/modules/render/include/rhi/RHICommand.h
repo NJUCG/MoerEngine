@@ -125,11 +125,11 @@ public:
 
     virtual void ClearDepthStencil() = 0;
     virtual void ClearUAVInt(
-        RHIUAV* _uav,
-        const Moer::Vector4i&   _values) = 0;
+        RHIUAV*               _uav,
+        const Moer::Vector4i& _values) = 0;
     virtual void ClearUAVFloat(
-        RHIUAV* _uav,
-        const Moer::Vector4f&   _values) = 0;
+        RHIUAV*               _uav,
+        const Moer::Vector4f& _values) = 0;
 
     virtual void BeginRenderPass(const RHIRenderPassInfo& _pass_info, const char* _pass_name) = 0;
     virtual void EndRenderPass()                                                              = 0;
@@ -151,22 +151,30 @@ public:
                                     RHIGraphicsCommandList* _sub_commands) = 0;
 
     virtual void BindParameters(Shader* shader, RHIBatchedShaderParameters* batched_params){};
-#pragma region ray-tracing
-    virtual void BuildAccelerationStructure(
-        RHIBuffer* _instance_data,
-        uint64_t   _instance_offset,
-        bool       _b_update,
-        RHIBuffer* _scratch,
-        RHIBuffer* _scratch_offset) = 0;
-
-#pragma endregion
 };
 
 class RHIComputeCommandList : public RHICommandListBase {
 public:
     virtual ~RHIComputeCommandList(){};
+    virtual void SetPipelineState(RHIComputePipelineState* _compute_pso)                             = 0;
     virtual void Dispatch(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z) = 0;
     virtual void DispatchIndirect(RHIBuffer* _buffer, uint64_t _offset)                              = 0;
+
+    virtual void CopyBuffer(const RHICopyBufferInfo& _copy_info, RHIBuffer* _src, RHIBuffer* _dst)                            = 0;
+    virtual void CopyTexture(const RHICopyTextureInfo& _copy_info, RHITexture* _src, RHITexture* _dst)                        = 0;
+    virtual void CopyBufferToTexture(const RHICopyBufferToTextureInfo& _info, RHIBuffer* src_buffer, RHITexture* dst_texture) = 0;
+
+    virtual void CopyTextureToBuffer(const RHICopyTextureToBufferInfo& _info, RHITexture* src_texture, RHIBuffer* dst_buffer) = 0;
+
+    virtual void SetPipelineBarrier(const RHIBarrierDependencyInfo& _dependency) = 0;
+};
+
+class RHIRayTracingCommandList : public RHICommandListBase {
+public:
+    virtual ~RHIRayTracingCommandList(){};
+    virtual void SetPipelineState(RHIRayTracingPipelineState* _raytracing_pso) = 0;
+    virtual void TraceRay(uint32_t _width, uint32_t _height, uint32_t _depth)  = 0;
+    virtual void TraceRayIndirect()                                            = 0;
 
     virtual void CopyBuffer(const RHICopyBufferInfo& _copy_info, RHIBuffer* _src, RHIBuffer* _dst)                            = 0;
     virtual void CopyTexture(const RHICopyTextureInfo& _copy_info, RHITexture* _src, RHITexture* _dst)                        = 0;
