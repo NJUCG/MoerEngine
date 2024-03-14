@@ -14,6 +14,8 @@
 #include "rhi/RHIResourceInitilizer.h"
 #include "rhi/RHICommand.h"
 #include "scene/CameraManager.h"
+#include "scene/RenderableManager.h"
+#include "scene/TransformManager.h"
 #include "shader/Shader.h"
 #include "shader/ShaderMutation.h"
 #include "shader/ShaderParameterMacros.h"
@@ -366,14 +368,39 @@ namespace Moer {
         camera_data.view       = Transpose(camera->GetViewMatrix());
         camera_data.view_proj  = Transpose(camera->GetProjectionMatrix() * camera->GetViewMatrix());
         camera_data.camera_pos = Vector4f(camera->GetPosition(), 1.f);
-        camera_data.proj       = Transpose(camera->GetProjectionMatrix());
         CameraCullData cull_data;
         cull_data.camera_data  = camera_data;
+        cull_data.proj         = Transpose(camera->GetProjectionMatrix());
         cull_data.aspect_ratio = camera->GetAspectRatio();
         cull_data.far_plane    = camera->GetFarClip();
         cull_data.near_plane   = camera->GetNearClip();
         cull_data.tan_half_fov = camera->GetTanHalfFov();
 
+        // const auto& entities     = g_scene->GetEntities();
+        // auto        first_entity = entities.front();
+        // auto        transform    = TransformManager::Get().Get(first_entity);
+        // auto        mesh_info    = RenderableManager::Get().GetMeshInfo(first_entity);
+        // Vector2f    min_xy       = Vector2f(1.f);
+        // Vector2f    max_xy       = Vector2f(-1.f);
+        // float       min_z        = 0.f;
+        // Vector3f    corners[8];
+        // corners[0] = Vector3f(-1.f, -1.f, -1.f);
+        // corners[1] = Vector3f(1.f, -1.f, -1.f);
+        // corners[2] = Vector3f(-1.f, 1.f, -1.f);
+        // corners[3] = Vector3f(1.f, 1.f, -1.f);
+        // corners[4] = Vector3f(-1.f, -1.f, 1.f);
+        // corners[5] = Vector3f(1.f, -1.f, 1.f);
+        // corners[6] = Vector3f(-1.f, 1.f, 1.f);
+        // corners[7] = Vector3f(1.f, 1.f, 1.f);
+        // for (int i = 0; i < 8; i++) {
+        //     auto clip = camera->GetProjectionMatrix() * camera->GetViewMatrix() * transform.GetMatrix4x4() * Vector4f(mesh_info.center + mesh_info.extent * corners[i], 1.f);
+        //     clip /= clip.w;
+        //     min_xy = Min(min_xy, Vector2f(clip.x, clip.y));
+        //     max_xy = Max(max_xy, Vector2f(clip.x, clip.y));
+        //     min_z  = Max(min_z, clip.z);
+        // }
+
+        // Vector4f center         = Vector4f(mesh_info.center, 1.f);
         auto& frustum_planes = cull_data.frustum_planes;
         {
             auto target_vp    = vp;

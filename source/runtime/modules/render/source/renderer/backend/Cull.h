@@ -1,5 +1,6 @@
 #ifndef MOER_DEFERRED_CULL_H
 #define MOER_DEFERRED_CULL_H
+#include "math/Matrix.h"
 #include "shader/Shader.h"
 BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(UBOVertex)
 DEFINE_SHADER_PARAM(Moer::Matrix4x4f, model)
@@ -12,7 +13,6 @@ BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(CameraData)
 DEFINE_SHADER_PARAM(Moer::Matrix4x4f, view)
 DEFINE_SHADER_PARAM(Moer::Matrix4x4f, view_proj)
 DEFINE_SHADER_PARAM(Moer::Matrix4x4f, prev_view_proj)
-DEFINE_SHADER_PARAM(Moer::Matrix4x4f, proj)
 DEFINE_SHADER_PARAM(Moer::Vector4f, camera_pos)
 END_SHADER_CONSTANT_STRUCT_DEFINITION()
 
@@ -37,14 +37,15 @@ public:
 IMPLEMENT_SHADER_TYPE(TestDeferredTriangleShaderVert, "test/TriangleDeferredVert.hlsl", "main", ST_VERTEX);
 IMPLEMENT_SHADER_TYPE(TestDeferredTriangleShaderFrag, "test/TriangleDeferredFrag.hlsl", "main", ST_FRAGMENT);
 
-struct CameraCullData {
+struct ALIGN_BEGIN(256) CameraCullData {
     CameraData     camera_data;
+    Moer::Matrix4x4f proj;
     Moer::Vector4f frustum_planes[6];
     float          near_plane;
     float          far_plane;
     float          tan_half_fov;
     float          aspect_ratio;
-};
+} ALIGN_END(256);
 BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(CullInstanceInput)
 DEFINE_SHADER_PARAM(uint32_t, instance_count)
 DEFINE_SHADER_PARAM(uint32_t, meshlet_count_offset)
