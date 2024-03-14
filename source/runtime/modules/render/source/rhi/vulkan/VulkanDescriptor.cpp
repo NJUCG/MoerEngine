@@ -230,19 +230,21 @@ uint32_t VulkanDescriptorSetAllocator::VulkanDescriptorSetCachePool::GetMaxSets(
     */
 }
 
-void VulkanDescriptorSetWriter::Init(const Moer::Array<VkDescriptorType>& _types, VulkanHashableDescriptorInfo* _hash_info_head, VkWriteDescriptorSet* _descriptor_write_head, VkDescriptorImageInfo* _image_info_head, VkDescriptorBufferInfo* _buffer_info_head, VkWriteDescriptorSetAccelerationStructureKHR* _as_write_head, VulkanDescriptorASInfo* _as_info_head) {
+void VulkanDescriptorSetWriter::Init(const Moer::Array<DescriptorSetBindingInfo>& _binding_info, VulkanHashableDescriptorInfo* _hash_info_head, VkWriteDescriptorSet* _descriptor_write_head, VkDescriptorImageInfo* _image_info_head, VkDescriptorBufferInfo* _buffer_info_head, VkWriteDescriptorSetAccelerationStructureKHR* _as_write_head, VulkanDescriptorASInfo* _as_info_head) {
     m_hash_info_head        = _hash_info_head;
     m_descriptor_write_head = _descriptor_write_head;
-    m_write_count           = _types.size();
+    m_write_count           = _binding_info.size();
 
-    for (uint32_t idx = 0; idx < _types.size(); ++idx) {
+    uint32_t write_index = 0;
+
+    for (const auto& binding : _binding_info) {
         _descriptor_write_head->sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         _descriptor_write_head->pNext           = nullptr;
-        _descriptor_write_head->dstBinding      = idx;
+        _descriptor_write_head->dstBinding      = binding.binding;
         _descriptor_write_head->descriptorCount = 1;
-        _descriptor_write_head->descriptorType  = _types[idx];
+        _descriptor_write_head->descriptorType  = binding.type;
 
-        switch (_types[idx]) {
+        switch (binding.type) {
             case VK_DESCRIPTOR_TYPE_SAMPLER:
             case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
             case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
@@ -266,10 +268,12 @@ void VulkanDescriptorSetWriter::Init(const Moer::Array<VkDescriptorType>& _types
                 _descriptor_write_head->pNext = _as_write_head++;
                 break;
             default:
-                LOG_ERROR("Unsupported descriptor type: {}", VK_TYPE_TO_STRING(VkDescriptorType, _types[idx]));
+                LOG_ERROR("Unsupported descriptor type: {}", VK_TYPE_TO_STRING(VkDescriptorType, binding.type));
+                // MARK: it maybe not robust enough
                 break;
         }
         ++_descriptor_write_head;
+        m_write_index_map[binding.binding] = write_index++;
     }
 }
 
@@ -279,32 +283,34 @@ void VulkanDescriptorSetWriter::SetDescriptorSet(VkDescriptorSet _set) {
     }
 }
 
-void VulkanDescriptorSetWriter::WriteSampler(uint32_t _write_index, VkSampler _sampler, VkImageView _image_view, VkImageLayout _image_layout) {
-    WriteImageInner<VK_DESCRIPTOR_TYPE_SAMPLER>(_write_index, _sampler, _image_view, _image_layout);
+void VulkanDescriptorSetWriter::WriteSampler(uint32_t _binding, VkSampler _sampler, VkImageView _image_view, VkImageLayout _image_layout) {
+    WriteImageInner<VK_DESCRIPTOR_TYPE_SAMPLER>(m_write_index_map[_binding], _sampler, _image_view, _image_layout);
 }
 
-void VulkanDescriptorSetWriter::WriteSampledImage(uint32_t _write_index, VkSampler _sampler, VkImageView _image_view, VkImageLayout _image_layout) {
-    WriteImageInner<VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE>(_write_index, _sampler, _image_view, _image_layout);
+void VulkanDescriptorSetWriter::WriteSampledImage(uint32_t _binding, VkSampler _sampler, VkImageView _image_view, VkImageLayout _image_layout) {
+    WriteImageInner<VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE>(m_write_index_map[_binding], _sampler, _image_view, _image_layout);
 }
 
-void VulkanDescriptorSetWriter::WriteStorageImage(uint32_t _write_index, VkImageView _image_view, VkImageLayout _image_layout) {
-    WriteImageInner<VK_DESCRIPTOR_TYPE_STORAGE_IMAGE>(_write_index, VK_NULL_HANDLE, _image_view, _image_layout);
+void VulkanDescriptorSetWriter::WriteStorageImage(uint32_t _binding, VkImageView _image_view, VkImageLayout _image_layout) {
+    WriteImageInner<VK_DESCRIPTOR_TYPE_STORAGE_IMAGE>(m_write_index_map[_binding], VK_NULL_HANDLE, _image_view, _image_layout);
 }
 
-void VulkanDescriptorSetWriter::WriteUniformBuffer(uint32_t _write_index, VkBuffer _buffer, VkDeviceSize _offset, VkDeviceSize _range) {
-    WriteBufferInner<VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER>(_write_index, _buffer, _offset, _range);
+void VulkanDescriptorSetWriter::WriteUniformBuffer(uint32_t _binding, VkBuffer _buffer, VkDeviceSize _offset, VkDeviceSize _range) {
+    WriteBufferInner<VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER>(m_write_index_map[_binding], _buffer, _offset, _range);
 }
 
-void VulkanDescriptorSetWriter::WriteStorageBuffer(uint32_t _write_index, VkBuffer _buffer, VkDeviceSize _offset, VkDeviceSize _range) {
-    WriteBufferInner<VK_DESCRIPTOR_TYPE_STORAGE_BUFFER>(_write_index, _buffer, _offset, _range);
+void VulkanDescriptorSetWriter::WriteStorageBuffer(uint32_t _binding, VkBuffer _buffer, VkDeviceSize _offset, VkDeviceSize _range) {
+    WriteBufferInner<VK_DESCRIPTOR_TYPE_STORAGE_BUFFER>(m_write_index_map[_binding], _buffer, _offset, _range);
 }
 
-void VulkanDescriptorSetWriter::WriteAccelerationStructure(uint32_t _write_index, VkAccelerationStructureKHR _as, uint64_t _update_bit) {
+void VulkanDescriptorSetWriter::WriteAccelerationStructure(uint32_t _binding, VkAccelerationStructureKHR _as, uint64_t _update_bit) {
+    const auto write_index = m_write_index_map[_binding];
+
     VulkanDescriptorASInfo as_info{_as, _update_bit, UINT64_MAX};
 
     const VkWriteDescriptorSetAccelerationStructureKHR* write_as = nullptr;
 
-    const auto* cursor = reinterpret_cast<const VkBaseInStructure*>(m_descriptor_write_head[_write_index].pNext);
+    const auto* cursor = reinterpret_cast<const VkBaseInStructure*>(m_descriptor_write_head[write_index].pNext);
     while (cursor) {
         if (cursor->sType == VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR) {
             write_as = (reinterpret_cast<const VkWriteDescriptorSetAccelerationStructureKHR*>(cursor));
@@ -318,7 +324,7 @@ void VulkanDescriptorSetWriter::WriteAccelerationStructure(uint32_t _write_index
 
     const_cast<VkWriteDescriptorSetAccelerationStructureKHR*>(write_as)->pAccelerationStructures = &as_info.as;
 
-    m_hash_info_head[_write_index].resource.as = as_info;
+    m_hash_info_head[write_index].resource.as = as_info;
 }
 
 template<VkDescriptorType DescriptorType>

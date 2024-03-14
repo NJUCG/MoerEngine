@@ -7,11 +7,16 @@ class VulkanRHIGraphicsPipelineState;
 class VulkanDescriptorSetsLayout;
 class VulkanDevice;
 
+struct DescriptorSetBindingInfo {
+    uint32_t         binding;
+    VkDescriptorType type;
+};
+
 struct DescriptorSetInfo {
-    Moer::Array<VkDescriptorType> types;
-    uint32_t                      image_count;
-    uint32_t                      buffer_count;
-    uint32_t                      as_count;
+    Moer::Array<DescriptorSetBindingInfo> bindings;
+    uint32_t                              image_count;
+    uint32_t                              buffer_count;
+    uint32_t                              as_count;
 };
 
 struct PushConstantInfo {

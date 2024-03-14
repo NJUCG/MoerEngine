@@ -25,9 +25,9 @@ VulkanPipelineResourceCache::VulkanPipelineResourceCache(const VulkanDescriptorS
     for (uint32_t set_idx = 0; set_idx < set_count; ++set_idx) {
         const auto& set_info = m_set_infos[set_idx];
 
-        m_descriptor_set_writers[set_idx].Init(set_info.types, hash_info, write_head, image_info, buffer_info, as_write_head, as_info);
+        m_descriptor_set_writers[set_idx].Init(set_info.bindings, hash_info, write_head, image_info, buffer_info, as_write_head, as_info);
 
-        hash_info += set_info.types.size();
+        hash_info += set_info.bindings.size();
         hash_info->layout = {UINT64_MAX, UINT64_MAX, layouts[set_idx]};
         ++hash_info;
 
@@ -35,7 +35,7 @@ VulkanPipelineResourceCache::VulkanPipelineResourceCache(const VulkanDescriptorS
         buffer_info += set_info.buffer_count;
         as_info += set_info.as_count;
 
-        write_head += set_info.types.size();
+        write_head += set_info.bindings.size();
         as_write_head += set_info.as_count;
     }
 }
@@ -125,7 +125,7 @@ void VulkanPipelineResourceCache::InitDescriptorSetWriteContainer(const Moer::Ar
 
     for (uint32_t set_idx = 0; set_idx < _descriptor_bindings.size(); ++set_idx) {
         for (const auto& binding : _descriptor_bindings[set_idx]) {
-            m_set_infos[set_idx].types.push_back(binding.descriptorType);
+            m_set_infos[set_idx].bindings.push_back({binding.binding, binding.descriptorType});
             switch (binding.descriptorType) {
                 case VK_DESCRIPTOR_TYPE_SAMPLER:
                 case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
@@ -149,11 +149,11 @@ void VulkanPipelineResourceCache::InitDescriptorSetWriteContainer(const Moer::Ar
                     LOG_ERROR("Unsupported descriptor type: {}", VK_TYPE_TO_STRING(VkDescriptorType, binding.descriptorType));
             }
         }
-        hash_info.insert(hash_info.end(), 1 + m_set_infos[set_idx].types.size(), {});
+        hash_info.insert(hash_info.end(), 1 + m_set_infos[set_idx].bindings.size(), {});
         image_info.insert(image_info.end(), m_set_infos[set_idx].image_count, {});
         buffer_info.insert(buffer_info.end(), m_set_infos[set_idx].buffer_count, {});
         as_info.insert(as_info.end(), m_set_infos[set_idx].as_count, {});
-        writes.insert(writes.end(), m_set_infos[set_idx].types.size(), {});
+        writes.insert(writes.end(), m_set_infos[set_idx].bindings.size(), {});
         as_writes.insert(as_writes.end(), m_set_infos[set_idx].as_count, {});
     }
 }
