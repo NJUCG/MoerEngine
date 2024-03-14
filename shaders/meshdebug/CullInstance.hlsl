@@ -12,6 +12,7 @@ struct TaskInput {
 
 struct CameraCullData {
   CameraData camera_data;
+  float4x4 proj;
   float4 planes[6]; // world space planes
   float near_plane;
   float far_plane;
@@ -42,8 +43,8 @@ struct CameraCullData {
 [[vk::binding(1, 4)]] SamplerState depth_sampler : register(s0, space1);
 
 static const float3 corners[8] = {
-    float3(-1, -1, 0), float3(-1, 1, 0), float3(1, 1, 0), float3(1, -1, 0),
-    float3(-1, -1, 1), float3(-1, 1, 1), float3(1, 1, 1), float3(1, -1, 1),
+    float3(-1, -1, -1), float3(-1, 1, -1), float3(1, 1, -1), float3(1, -1, -1),
+    float3(-1, -1, 1),  float3(-1, 1, 1),  float3(1, 1, 1),  float3(1, -1, 1),
 };
 
 bool IsVisibleOccluded(in InstanceMeshletInfo instance, in float4x4 vp) {
@@ -67,7 +68,7 @@ bool IsVisibleOccluded(in InstanceMeshletInfo instance, in float4x4 vp) {
   float2 hiz_size = (rect.zw - rect.xy) * input.hiz_factor; // rect size in hiz
   float hiz_mip = log2(max(hiz_size.x, hiz_size.y));        // mip level
   // printf("hiz_size %f %f\n", hiz_size.x, hiz_size.y);
-  if (hiz_mip > input.hiz_depth) {
+  if (hiz_mip > input.hiz_depth || min_z >= 1.f) {
     return true;
   }
 
@@ -86,8 +87,11 @@ bool IsVisibleOccluded(in InstanceMeshletInfo instance, in float4x4 vp) {
              hiz_depth.SampleLevel(depth_sampler, rect.zy, hiz_mip),
              hiz_depth.SampleLevel(depth_sampler, rect.xw, hiz_mip),
              hiz_depth.SampleLevel(depth_sampler, rect.zw, hiz_mip));
+  // printf("depth_quad %f %f %f %f mip %f\n", depth_quad.x, depth_quad.y,
+  //  depth_quad.z, depth_quad.w, hiz_mip);
   depth_quad.xy = min(depth_quad.xy, depth_quad.zw);
   depth_quad.x = min(depth_quad.x, depth_quad.y);
+
   return min_z > depth_quad.x;
   // return true;
 }
@@ -121,9 +125,10 @@ bool IsFrustumVisible(in InstanceMeshletInfo instance) {
       instance_meshlet_info[instance_start_offset];
 
   bool vis_frustum = IsFrustumVisible(instance_mesh_info);
-
-  bool vis_occluded = IsVisibleOccluded(instance_mesh_info,
-                                        cull_data.camera_data.prev_view_proj);
+  bool vis_occluded = true;
+  vis_frustum ? IsVisibleOccluded(instance_mesh_info,
+                                  cull_data.camera_data.prev_view_proj)
+              : false;
 
   bool visible = vis_frustum && vis_occluded;
   uint instance_count = WaveActiveCountBits(visible);

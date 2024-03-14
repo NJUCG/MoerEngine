@@ -1,14 +1,42 @@
 //
 // Created by 17152 on 2023/9/21.
 //
+#include "misc/STL.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIResource.h"
 RHICommandListBase::RHICommandListBase() {
 }
 RHICommandListBase::~RHICommandListBase() {
 }
+
 namespace Moer {
+    struct SubmitBundleInfo {
+        RHICommandListBase* cmd_list;
+        RHISubmitInfo       submit_info;
+    };
     class CommandListManager {
+        friend class RHICommandList;
+
+    public:
+        struct FrameCommandContext {
+            Moer::Array<SubmitBundleInfo> submit_bundles;
+            void                          ExecuteCommandLists() {
+            }
+        };
+        CommandListManager() {
+        }
+        ~CommandListManager() {
+        }
+
+    private:
+        //do they need to be thread local?
+        Moer::Array<RHIGraphicsCommandList*> graphics_cmd_lists;
+        Moer::Array<RHIComputeCommandList*>  compute_cmd_lists;
+        Moer::Array<RHICopyCommandList*>     copy_cmd_lists;
+
+        RHICommandQueue* graphics_queue;
+        RHICommandQueue* compute_queue;
+        RHICommandQueue* copy_queue;
     };
     RHICommandList::RHICommandList() {
     }

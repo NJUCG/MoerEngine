@@ -12,7 +12,7 @@
 #include "shader/ShaderResourceManager.h"
 
 namespace Moer {
-    static constexpr uint32_t max_mip_levels = 10;
+    static constexpr uint32_t max_mip_levels = 12;
     IMPLEMENT_SHADER_TYPE(BuildHiZShader, "utils/BuildHiZ.hlsl", "main", ST_COMPUTE);
 
     void HiZBuffer::InitFromDepthExtent(Vector2i extent) {
@@ -27,7 +27,7 @@ namespace Moer {
             RHITextureCreateInfo::Create2D(
                 "Hi-Z Buffer")
                 .SetExtent(target_extent)
-                .SetNumMips(std::min(uint32_t(std::log2(std::min(extent.x, extent.y))), max_mip_levels))
+                .SetNumMips(std::min(uint32_t(std::log2(std::min(target_extent.x, target_extent.y))), max_mip_levels))
                 .SetFormat(PF_R16_SFLOAT)
                 .SetClearAttachment(RHIClearAttachment(EClearAttachment::COLOR))
                 .SetUsageFlags(ETextureUsageFlags::SHADER_RESOURCE | ETextureUsageFlags::UNORDERED_ACCESS));
@@ -81,7 +81,7 @@ namespace Moer {
 
             Vector2i depth_size = Vector2i(depth_buffer->GetTexture()->GetExtent3D());
             //calculate power of two
-            Vector2i                   mip0_size = Vector2i(RoundDownToPowerOf2(uint32_t(depth_size.x)), RoundDownToPowerOf2(uint32_t(depth_size.y)));
+            Vector2i                   mip0_size = Vector2i(hiz_buffer.texture->GetExtent3D());
             BuildHiZShader::Parameters params;
 
             HiZConfig& config   = params.config;
@@ -89,7 +89,7 @@ namespace Moer {
             config.size         = mip0_size;
             config.target_level = 0;
 
-            uint32_t mip_count   = std::min(uint32_t(std::log2(std::min(depth_size.x, depth_size.y))), max_mip_levels);
+            uint32_t mip_count   = std::min(uint32_t(std::log2(std::min(mip0_size.x, mip0_size.y))), max_mip_levels);
             params.depth_buffer  = depth_buffer;
             params.depth_sampler = depth_sampler;
 

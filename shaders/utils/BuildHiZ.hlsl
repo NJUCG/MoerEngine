@@ -32,12 +32,12 @@ void GenerateMipN(uint level, uint3 dtid) {
   }
 
   float depth = depth_buffer.Load(int3(gid, last_level));
-  float depth_x = QuadReadAcrossX(depth);
-  float depth_y = QuadReadAcrossY(depth);
-  float depth_diag = QuadReadAcrossDiagonal(depth);
-  // float depth_x = depth_buffer.Load(int3(gid + int2(1, 0), last_level));
-  // float depth_y = depth_buffer.Load(int3(gid + int2(0, 1), last_level));
-  // float depth_diag = depth_buffer.Load(int3(gid + int2(1, 1), last_level));
+  // float depth_x = QuadReadAcrossX(depth);
+  // float depth_y = QuadReadAcrossY(depth);
+  // float depth_diag = QuadReadAcrossDiagonal(depth);
+  float depth_x = depth_buffer.Load(int3(gid + int2(1, 0), last_level));
+  float depth_y = depth_buffer.Load(int3(gid + int2(0, 1), last_level));
+  float depth_diag = depth_buffer.Load(int3(gid + int2(1, 1), last_level));
   if (all(gid % 2 == 0)) {
     uint2 target_coord = uint2(gid.x >> 1, gid.y >> 1);
     float min_depth = min(min(depth, depth_x), min(depth_y, depth_diag));
