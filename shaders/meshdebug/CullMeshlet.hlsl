@@ -126,12 +126,12 @@ bool IsOcclusionVisible(in MeshletBound bound, in float4x4 world,
   MeshletBound bound = meshlet_bound_buffer[cull_info.meshlet_id];
 
   bool frustum_visible = IsFrustumVisible(bound, data.model2world, data.scale);
-  bool occlude_visible = false;
+  bool occlude_visible = true;
 
-  if (frustum_visible) {
-    occlude_visible = IsOcclusionVisible(bound, data.model2world, data.scale,
-                                         cull_data.camera_data.prev_view_proj);
-  }
+  // if (frustum_visible) {
+  //   occlude_visible = IsOcclusionVisible(bound, data.model2world, data.scale,
+  //                                        cull_data.camera_data.prev_view_proj);
+  // }
 
   bool need_recheck = frustum_visible && !occlude_visible;
   uint need_recheck_count = WaveActiveCountBits(need_recheck);
@@ -195,8 +195,9 @@ bool IsOcclusionVisible(in MeshletBound bound, in float4x4 world,
   InstanceData data = instance_data[cull_info.instance_id];
 
   MeshletBound bound = meshlet_bound_buffer[cull_info.meshlet_id];
-  bool visible = IsOcclusionVisible(bound, data.model2world, data.scale,
-                                    cull_data.camera_data.view_proj);
+  // bool visible = IsOcclusionVisible(bound, data.model2world, data.scale,
+  //                                   cull_data.camera_data.view_proj);
+  bool visible = true;
 
   uint wave_meshlet_count = WaveActiveCountBits(visible);
   uint cmd_offset = 0;

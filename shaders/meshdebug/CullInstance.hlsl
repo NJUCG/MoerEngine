@@ -50,7 +50,7 @@ static const float3 corners[8] = {
 bool IsVisibleOccluded(in InstanceMeshletInfo instance, in float4x4 vp) {
 
   // occulusion test
-  float2 min_xy = 0.f, max_xy = 0.f;
+  float2 min_xy = 1.f, max_xy = -1.f;
   float min_z = 0.f; // use reverse depth, 0 is far
                      // convert to vp space
 
@@ -71,7 +71,6 @@ bool IsVisibleOccluded(in InstanceMeshletInfo instance, in float4x4 vp) {
   if (hiz_mip > input.hiz_depth || min_z >= 1.f) {
     return true;
   }
-
   hiz_mip = ceil(hiz_mip);
   // sample lower level if it cross less than 2 pixel rect
   float lower_level = max(0.f, hiz_mip - 1.f);
@@ -80,6 +79,8 @@ bool IsVisibleOccluded(in InstanceMeshletInfo instance, in float4x4 vp) {
   float2 lower_max_xy = ceil(rect.zw * scale);
 
   float2 lower_extent = (lower_max_xy - lower_min_xy);
+  // printf("lower_extent %f %f scale %f %f hiz_mip %f\n", lower_extent.x,
+  //        lower_extent.y, scale.x, scale.y, hiz_mip);
   hiz_mip = max(lower_extent.x, lower_extent.y) <= 2.f ? lower_level : hiz_mip;
 
   float4 depth_quad =
@@ -125,10 +126,10 @@ bool IsFrustumVisible(in InstanceMeshletInfo instance) {
       instance_meshlet_info[instance_start_offset];
 
   bool vis_frustum = IsFrustumVisible(instance_mesh_info);
-  bool vis_occluded = true;
-  vis_frustum ? IsVisibleOccluded(instance_mesh_info,
-                                  cull_data.camera_data.prev_view_proj)
-              : false;
+  bool vis_occluded =
+      vis_frustum ? IsVisibleOccluded(instance_mesh_info,
+                                      cull_data.camera_data.prev_view_proj)
+                  : false;
 
   bool visible = vis_frustum && vis_occluded;
   uint instance_count = WaveActiveCountBits(visible);
@@ -174,6 +175,7 @@ bool IsFrustumVisible(in InstanceMeshletInfo instance) {
   recheck_offset = WaveReadLaneFirst(recheck_offset);
   recheck_offset += WavePrefixCountBits(recheck);
   if (recheck) {
+    // printf("recheck %d\n", instance_start_offset);
     recheck_instance_id[recheck_offset] = instance_start_offset;
   }
 }
