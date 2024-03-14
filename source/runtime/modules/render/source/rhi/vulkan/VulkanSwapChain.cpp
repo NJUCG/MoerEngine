@@ -64,7 +64,7 @@ void VulkanSwapChain::Create(uint32_t* width, uint32_t* height, bool vsync) {
     create_info.imageColorSpace  = surface_format.colorSpace;
     create_info.imageExtent      = extent;
     create_info.imageArrayLayers = 1;
-    create_info.imageUsage       = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    create_info.imageUsage       = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 
     auto indices = device->GetQueueFamilyIndices();
 

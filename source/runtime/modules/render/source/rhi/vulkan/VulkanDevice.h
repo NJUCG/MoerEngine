@@ -1,14 +1,11 @@
-//
-// Created by 74535 on 2023/10/2.
-//
-
 #ifndef VULKAN_DEVICE_H
 #define VULKAN_DEVICE_H
 
 #include "misc/STL.h"
 #include "rhi/vulkan/misc/VulkanTypeDefs.h"
-#include "VulkanDeviceFeature.h"
 #include "VulkanExtension.h"
+#include "VulkanDeviceFeature.h"
+#include "VulkanDeviceProperty.h"
 
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
@@ -19,15 +16,14 @@ class VulkanDescriptorSetsLayout;
 class VulkanDescriptorSetAllocator;
 class VulkanDescriptorSetWriter;
 
-union VulkanHashableDescriptorInfo;
-
 struct QueueFamilyIndices {
     std::optional<uint32_t> graphics;
     std::optional<uint32_t> present;
     std::optional<uint32_t> transfer;
     std::optional<uint32_t> compute;
+    std::optional<uint32_t> raytracing;
 
-    inline bool IsComplete() const { return graphics.has_value() && present.has_value() && transfer.has_value() && compute.has_value(); }
+    inline bool IsComplete() const { return graphics.has_value() && present.has_value() && transfer.has_value() && compute.has_value() && raytracing.has_value(); }
 };
 
 struct DeviceInitializer {
@@ -42,6 +38,7 @@ struct DeviceInitializer {
 class VulkanDevice {
 public:
     VulkanDevice();
+    ~VulkanDevice();
 
     void Init(const DeviceInitializer& _initializer);
     void InitMemoryAllocator(VkInstance _instance);
@@ -60,17 +57,26 @@ public:
     inline VmaAllocator GetVmaAllocator() const {
         return m_allocator;
     }
-    inline VkPhysicalDeviceProperties2 GetProperties() const {
-        return m_gpu_props;
+    inline VulkanDescriptorSetAllocator* GetDescriptorAllocator() const {
+        return m_descriptor_allocator;
     }
-    inline const VulkanPhysicalDeviceFeatures& GetFeatures() const {
-        return m_gpu_features;
+    inline const VulkanEnabledDeviceExtensions& GetEnabledExtensions() const {
+        return m_enabled_extensions;
     }
-    inline VkPhysicalDeviceMemoryProperties2 GetMemoryProperties() const {
-        return m_gpu_mem_props;
+    inline const VulkanOptionalDeviceExtensions& GetOptionalExtensions() const {
+        return m_optional_extensions;
     }
-    inline const TExtensionArray& GetGpuExtensions() const {
-        return m_gpu_extensions;
+    inline const VulkanPhysicalDeviceFeatures& GetCoreFeatures() const {
+        return m_core_features;
+    }
+    inline const VulkanPhysicalDeviceProperties& GetCoreProperties() const {
+        return m_core_properties;
+    }
+    inline const VulkanOptionalDeviceProperties& GetOptionalProperties() const {
+        return m_optional_properties;
+    }
+    inline VkPhysicalDeviceMemoryProperties GetMemoryProperties() const {
+        return m_memery_properties;
     }
     inline QueueFamilyIndices GetQueueFamilyIndices() const {
         return m_queue_family_indices;
@@ -87,24 +93,29 @@ public:
     inline VkQueue GetTransferQueue() const {
         return m_transfer_queue;
     }
+    inline VkQueue GetRayTracingQueue() const {
+        return m_raytracing_queue;
+    }
     class VulkanCommandAllocator* GetCurrentCommandAllocator();
-    bool                          GetDescriptorSets(uint32_t _hash_key, const VulkanDescriptorSetsLayout& _layout, Moer::Array<VulkanDescriptorSetWriter>& _writers, Moer::Array<VkDescriptorSet>& _sets);
     class VulkanStagingBuffer*    AquireStagingBuffer(uint64_t _byte_size);
     void                          ReleaseStagingBuffer(class VulkanStagingBuffer*);
 
 private:
-    VkPhysicalDevice                  m_gpu;
-    VkPhysicalDeviceProperties2       m_gpu_props;
-    VulkanPhysicalDeviceFeatures      m_gpu_features;
-    VkPhysicalDeviceMemoryProperties2 m_gpu_mem_props;
-    TExtensionArray                   m_gpu_extensions;
-    TQueueFamilyPropertiesArray       m_queue_family_props;
-    QueueFamilyIndices                m_queue_family_indices;
+    VkPhysicalDevice                 m_gpu;
+    VulkanEnabledDeviceExtensions    m_enabled_extensions;
+    VulkanOptionalDeviceExtensions   m_optional_extensions;
+    VulkanPhysicalDeviceFeatures     m_core_features;
+    VulkanPhysicalDeviceProperties   m_core_properties;
+    VulkanOptionalDeviceProperties   m_optional_properties;
+    VkPhysicalDeviceMemoryProperties m_memery_properties;
+    TQueueFamilyPropertiesArray      m_queue_family_props;
+    QueueFamilyIndices               m_queue_family_indices;
 
     VkDevice m_device;
     VkQueue  m_graphics_queue;
     VkQueue  m_present_queue;
     VkQueue  m_compute_queue;
+    VkQueue  m_raytracing_queue;
     VkQueue  m_transfer_queue;
 
     VmaAllocator                  m_allocator;
@@ -119,7 +130,7 @@ private:
     VkPhysicalDevice SelectGpu(const DeviceInitializer& _init);
 
     void InitGpu(const DeviceInitializer& _initializer);
-    void CreateDevice(const DeviceInitializer& _initializer);
+    void CreateDevice(uint32_t _api_version);
     void CreateMemoryAllocator();
     void CreateDescriptorAllocator();
     void CreateCommandAllocators();

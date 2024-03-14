@@ -166,15 +166,6 @@ public:
     void ExecuteSubCommands(uint32_t                _num,
                             RHIGraphicsCommandList* _sub_commands) override;
 
-#pragma region ray-tracing
-    void BuildAccelerationStructure(
-        RHIBuffer* _instance_data,
-        uint64_t   _instance_offset,
-        bool       _b_update,
-        RHIBuffer* _scratch,
-        RHIBuffer* _scratch_offset) override;
-
-#pragma endregion
 protected:
     friend class VulkanRHICommandQueue;
 
@@ -221,6 +212,7 @@ public:
     void* GetNativeHandle() const override {
         return m_command_buffer;
     }
+    void SetPipelineState(RHIComputePipelineState* _compute_pso) override;
     void BeginRecording() override;
     void EndRecording() override;
     void Reset() override;
@@ -238,6 +230,47 @@ public:
 
 protected:
     void PrepareDispatch();
+
+private:
+    void PrepareDispatchCommand();
+    // MARK: bound sets rely on corresponding command list, it maybe wrong when muti-threading recording.
+    Moer::Array<VkDescriptorSet> m_bound_sets;
+
+private:
+    VulkanRHIComputePipelineState* m_current_pipeline_state = nullptr;
+};
+class VulkanRHIRayTracingCommandList final : public RHIRayTracingCommandList, public VulkanRHICommandListBase {
+public:
+    VulkanRHIRayTracingCommandList(VulkanDevice* _device, VkCommandPool _pool, VkCommandBufferLevel _level = VK_COMMAND_BUFFER_LEVEL_PRIMARY);
+
+    virtual ~VulkanRHIRayTracingCommandList();
+
+    void* GetNativeHandle() const override {
+        return m_command_buffer;
+    }
+    void SetPipelineState(RHIRayTracingPipelineState* _raytracing_pso) override;
+    void BeginRecording() override;
+    void EndRecording() override;
+    void Reset() override;
+
+    void TraceRay(uint32_t _width, uint32_t _height, uint32_t _depth) override;
+    void TraceRayIndirect() override;
+
+    void CopyBuffer(const RHICopyBufferInfo& _copy_info, RHIBuffer* _src, RHIBuffer* _dst) override;
+    void CopyTexture(const RHICopyTextureInfo& _copy_info, RHITexture* _src, RHITexture* _dst) override;
+    void CopyBufferToTexture(const RHICopyBufferToTextureInfo& _info, RHIBuffer* src_buffer, RHITexture* dst_texture) override;
+
+    void CopyTextureToBuffer(const RHICopyTextureToBufferInfo& _info, RHITexture* src_texture, RHIBuffer* dst_buffer) override;
+
+    void SetPipelineBarrier(const RHIBarrierDependencyInfo& _dependency) override;
+
+private:
+    void PrepareTraceRayCommand();
+    // MARK: bound sets rely on corresponding command list, it maybe wrong when muti-threading recording.
+    Moer::Array<VkDescriptorSet> m_bound_sets;
+
+private:
+    VulkanRHIRayTracingPipelineState* m_current_pipeline_state = nullptr;
 };
 
 class VulkanRHICommandQueue final : public RHICommandQueue,

@@ -1,7 +1,3 @@
-//
-// Created by 74535 on 2023/10/20.
-//
-
 #ifndef VULKAN_DEVICE_FEATURE_H
 #define VULKAN_DEVICE_FEATURE_H
 

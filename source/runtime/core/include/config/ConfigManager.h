@@ -24,6 +24,7 @@ namespace Moer {
 #endif
         //ENGINE CONFIGS
         uint32_t max_frame_in_flight : 3;
+        bool     ray_tracing : 1;
 
         char default_rhi[32]{"Vulkan"};
     };

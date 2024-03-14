@@ -27,16 +27,18 @@ struct ShaderParameterLayoutInfo {
     bool IsValid() const {
         return !(slot == -1 || space == -1 || type == EShaderParameterType::UNKNOWN);
     }
-    ShaderParameterLayoutInfo(uint16_t             _offset,
-                              uint16_t             _stride,
-                              int8_t               _slot  = -1,
-                              int8_t               _space = -1,
-                              EShaderParameterType _type  = EShaderParameterType::UNKNOWN,
+    ShaderParameterLayoutInfo(uint16_t                       _offset,
+                              uint16_t                       _stride,
+                              int8_t                         _slot          = -1,
+                              int8_t                         _space         = -1,
+                              int8_t                         _num           = -1,
+                              EShaderParameterType           _type          = EShaderParameterType::UNKNOWN,
                               EShaderCodeResourceBindingType _resource_type = EShaderCodeResourceBindingType::INVALID)
         : offset(_offset),
           stride(_stride),
           slot(_slot),
           space(_space),
+          num(_num),
           type(_type),
           resource_type(_resource_type) {}
     uint16_t offset;
@@ -44,6 +46,7 @@ struct ShaderParameterLayoutInfo {
 
     int8_t               slot;
     int8_t               space;
+    int8_t               num;
     EShaderParameterType type;
 
     //only resources defined in shader root parameter struct have valid resource type, like srv, uav, cbv
@@ -59,12 +62,12 @@ struct ShaderParameterLayoutInfo {
 struct ShaderRootParametersLayoutInfo {
 
 public:
-    const Moer::Array<ShaderParameterLayoutInfo>& GetLayoutInfos() const { return layout_infos; }
-    const Moer::Array<ShaderParameterLayoutInfo>& GetConstantsInfos() const { return constant_infos; }
+    const Moer::Array<ShaderParameterLayoutInfo>& GetBindingInfo() const { return binding_infos; }
+    const Moer::Array<ShaderParameterLayoutInfo>& GetConstantsInfo() const { return constant_infos; }
 
 private:
     friend class Shader;
-    Moer::Array<ShaderParameterLayoutInfo> layout_infos;
+    Moer::Array<ShaderParameterLayoutInfo> binding_infos;
     Moer::Array<ShaderParameterLayoutInfo> constant_infos;
 };
 /**
@@ -197,10 +200,10 @@ public:
     //Ubo set
     DEFINE_SHADER_PARAM_UAV(RWBuffer, dataLog)
 
-    DEFINE_SHADER_PARAM_SAMPLER_ARRAY(Sampler[2], samp, 2)
+    DEFINE_SHADER_PARAM_SAMPLER_ARRAY(Sampler, samp, 2)
     DEFINE_SHADER_PARAM_SAMPLER(Sampler, aniso)
     //srv set
-    DEFINE_SHADER_PARAM_SRV_ARRAY(Texture2D[5], foo, 5)
+    DEFINE_SHADER_PARAM_SRV_ARRAY(Texture2D, foo, 5)
     //uav se
 
     END_ROOT_PARAMETER_DEFINITION(Parameters)

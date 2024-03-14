@@ -25,7 +25,7 @@ namespace Util {
     std::string ErrorString(VkResult error_code) {
         switch (error_code) {
 #define STR(r) \
-case VK_##r: return #r
+    case VK_##r: return #r
             STR(NOT_READY);
             STR(TIMEOUT);
             STR(EVENT_SET);
@@ -59,7 +59,7 @@ case VK_##r: return #r
     std::string PhysicalDeviceTypeString(VkPhysicalDeviceType type) {
         switch (type) {
 #define STR(r) \
-case VK_PHYSICAL_DEVICE_TYPE_##r: return #r
+    case VK_PHYSICAL_DEVICE_TYPE_##r: return #r
             STR(OTHER);
             STR(INTEGRATED_GPU);
             STR(DISCRETE_GPU);
