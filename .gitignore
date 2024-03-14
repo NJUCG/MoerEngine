@@ -15,5 +15,5 @@ cmake-build-*/
 /.cache/
 .vscode/launch.json
 .vscode/settings.json
-
+/.idea
 logs/
