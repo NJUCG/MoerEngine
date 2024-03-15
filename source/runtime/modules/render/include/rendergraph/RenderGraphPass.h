@@ -3,7 +3,7 @@
 #include "rhi/RHICommand.h"
 
 namespace Moer {
-
+    class RenderGraph;
     enum class RENDER_GRAPH_PASS_TYPE : uint8_t {
         UNDEFINED  = 0,
         GRAPHICS   = 1,
@@ -12,43 +12,43 @@ namespace Moer {
         ALL        = GRAPHICS | COMPUTE | RAYTRACING,
     };
 
-    struct RenderPassSettings {
-        RENDER_GRAPH_PASS_TYPE type = RENDER_GRAPH_PASS_TYPE::UNDEFINED;
-    };
+    // struct RenderPassSettings {
+    //     RENDER_GRAPH_PASS_TYPE type = RENDER_GRAPH_PASS_TYPE::UNDEFINED;
+    // };
 
     struct RenderPassContext {
-        RHIGraphicsCommandList * cmd_list;
+        RenderGraph&            graph;
+        RHIGraphicsCommandList* cmd_list;
     };
 
     // class RENDER_API {
     //
     // };
 
-    using GraphicsExecute   = std::function<void(RenderPassContext& context)>;
-    using ComputeExecute    = std::function<void(RenderPassContext& context)>;
-    using RaytracingExecute = std::function<void(RenderPassContext& context)>;
+    using GraphicsExecute   = std::function<void(const RenderPassContext& context)>;
+    using ComputeExecute    = std::function<void(const RenderPassContext& context)>;
+    using RaytracingExecute = std::function<void(const RenderPassContext& context)>;
 
-    class RenderGraphPassBase {
+    class RenderGraphPass {
     public:
-       // virtual void execute() = 0;
-        
-        virtual ~RenderGraphPassBase() = default;
+        // virtual void execute() = 0;
 
-        
+        virtual ~RenderGraphPass() = default;
 
     public:
-        explicit RenderGraphPassBase(GraphicsExecute&& execute) noexcept
+        explicit RenderGraphPass(GraphicsExecute&& execute) noexcept
             : mExecute(std::move(execute)) {
         }
 
-        void Execute() {
+        void Execute(const RenderPassContext& data) {
             mExecute(data);
         }
 
-        RenderPassContext & getData() { return data; }
+        // RenderPassContext& getData() { return data; }
+
     protected:
-        RenderPassContext    data;
-        GraphicsExecute mExecute;
+        // RenderPassContext data;
+        GraphicsExecute   mExecute;
     };
 
     // template<typename Data, typename Execute>

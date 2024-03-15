@@ -7,11 +7,11 @@ namespace Moer {
     class TextureInterfaceBlock {
     public:
         struct TextureInfo {
-            std::string         name{};
-            uint32_t            offset{0};
-            ESamplerType        samplerType{ESamplerType::SAMPLER_2D};
-            ETextureDimension   textureType{ETextureDimension::TEX_2D};
-            ESamplerBindingType type{ESamplerBindingType::UNDEFINED};
+            std::string       name{};
+            uint32_t          offset{0};
+            ESamplerType      samplerType{ESamplerType::SAMPLER_2D};
+            ETextureDimension textureType{ETextureDimension::TEX_2D};
+            EParamaterType    type{EParamaterType::UNDEFINED};
         };
         class Builder {
         public:
@@ -36,4 +36,5 @@ namespace Moer {
         UnorderedMap<std::string, uint8_t> m_info_map;
         std::string                        m_name;
     };
+
 }

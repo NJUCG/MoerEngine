@@ -41,8 +41,8 @@ DEFINE_SHADER_PARAM(Moer::Matrix4x4f, view_proj)
 DEFINE_SHADER_PARAM(Moer::Vector4f[6], frustum_planes)
 DEFINE_SHADER_PARAM(Moer::Vector3f, camera_pos)
 END_SHADER_CONSTANT_STRUCT_DEFINITION()
-class TestDeferredTriangleShaderVert : public Shader {
-    DEFINE_SHADER_TYPE(TestDeferredTriangleShaderVert, Global, RENDER_API, ...)
+class GBufferShaderVert : public Shader {
+    DEFINE_SHADER_TYPE(GBufferShaderVert, Global, RENDER_API, ...)
 public:
     BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
     DEFINE_SHADER_PARAM_STRUCT(CameraData, camera_data)
@@ -50,8 +50,8 @@ public:
     END_ROOT_PARAMETER_DEFINITION(Parameters)
 };
 
-class TestDeferredTriangleShaderFrag : public Shader {
-    DEFINE_SHADER_TYPE(TestDeferredTriangleShaderFrag, Global, RENDER_API, ...)
+class GBufferShaderFrag : public Shader {
+    DEFINE_SHADER_TYPE(GBufferShaderFrag, Global, RENDER_API, ...)
 public:
     BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
     // DEFINE_SHADER_PARAM_SAMPLER(SamplerState, defaultSampler)
@@ -59,8 +59,8 @@ public:
     END_ROOT_PARAMETER_DEFINITION(Parameters)
 };
 
-IMPLEMENT_SHADER_TYPE(TestDeferredTriangleShaderVert, "test/TriangleDeferredVert.hlsl", "main", ST_VERTEX);
-IMPLEMENT_SHADER_TYPE(TestDeferredTriangleShaderFrag, "test/TriangleDeferredFrag.hlsl", "main", ST_FRAGMENT);
+IMPLEMENT_SHADER_TYPE(GBufferShaderVert, "test/TriangleDeferredVert.hlsl", "main", ST_VERTEX);
+IMPLEMENT_SHADER_TYPE(GBufferShaderFrag, "test/TriangleDeferredFrag.hlsl", "main", ST_FRAGMENT);
 
 class MeshletCullingShader : public Shader {
     DEFINE_SHADER_TYPE(MeshletCullingShader, Global, RENDER_API, ...)
@@ -300,8 +300,8 @@ namespace Moer {
 
         auto& shader_resource_manager = ShaderResourceManager::GetInstance();
 
-        RHIShaderRef vertex_shader   = shader_resource_manager.GetShader<TestDeferredTriangleShaderVert>();
-        RHIShaderRef fragment_shader = shader_resource_manager.GetShader<TestDeferredTriangleShaderFrag>();
+        RHIShaderRef vertex_shader   = shader_resource_manager.GetShader<GBufferShaderVert>();
+        RHIShaderRef fragment_shader = shader_resource_manager.GetShader<GBufferShaderFrag>();
         // RHIShaderBoundStateInput& shader_stage_input = init.shader_stage;
 
         RHIGraphicsShaderInputInfo shader_input_info =
@@ -540,12 +540,12 @@ namespace Moer {
         }
 
         {
-            TestDeferredTriangleShaderVert::Parameters params;
+            GBufferShaderVert::Parameters params;
             params.camera_data   = camera_data;
             params.instance_data = instance_buffer_view;
 
             RHIBatchedShaderParameters batched_params;
-            batched_params.SetParameters(ShaderResourceManager::GetInstance().GetShader<TestDeferredTriangleShaderVert>(), params);
+            batched_params.SetParameters(ShaderResourceManager::GetInstance().GetShader<GBufferShaderVert>(), params);
 
             EnqueueRenderTask([this, batched_params = std::move(batched_params)]() {
                 auto      info = virtual_viewport->GetNextBackBuffer();

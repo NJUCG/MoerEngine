@@ -44,8 +44,8 @@ namespace Moer {
         //call from render thread
         VirtualViewportNextBackBufferInfo GetNextBackBuffer();
 
-        RHIUAVRef GetNextBackBufferUAV(uint32_t index);
-        RHIUAVRef GetDepthBufferUav();
+        RHIUAVRef     GetNextBackBufferUAV(uint32_t index);
+        RHIUAVRef     GetDepthBufferUav();
         RHITextureRef getDepthTexture();
 
         void Present(RHIFenceRef _render_fence);
@@ -74,14 +74,14 @@ namespace Moer {
 
         RHITextureRef present_texture;
         RHISRVRef     present_texture_srv;
-        
+
         Moer::Array<RHITextureRef> swapchain_textures;
         Moer::Array<RHIUAVRef>     swapchain_uavs;
         uint64_t                   frame_index     = 0;
         uint64_t                   presented_index = 0;
 
-        RHITextureRef             depth_texture;
-        RHIUAVRef depth_texture_uav;
+        RHITextureRef depth_texture;
+        RHIUAVRef     depth_texture_uav;
 
         RHICommandQueue* copy_queue;
 
@@ -134,10 +134,11 @@ namespace Moer {
 
     RHIUAVRef VirtualViewport::GetDepthBufferUAV() {
         return impl->GetDepthBufferUav();
-    }RHITextureRef VirtualViewport::getDepthTexture(){
+    }
+    RHITextureRef VirtualViewport::getDepthTexture() {
         return impl->getDepthTexture();
-}
-    
+    }
+
     RHISRV* VirtualViewport::GetPresentTextureSRV() {
         return impl->GetPresentTextureSRV();
     }
@@ -178,7 +179,6 @@ namespace Moer {
                                         .SetInitialLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED)
                                         .SetUsageFlags(
                                             ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT);
-        
 
         CreateResources();
         copy_queue->WaitForQueueComplete();
@@ -203,9 +203,8 @@ namespace Moer {
         }
 
         depth_texture     = g_rhi->RHICreateTexture(depth_texture_create_info);
-        depth_texture_uav = g_rhi->RHICreateTextureUAV(depth_texture,depth_texture_create_info.format);
+        depth_texture_uav = g_rhi->RHICreateTextureUAV(depth_texture, depth_texture_create_info.format);
 
-        
         RHIFenceRef fence = g_rhi->RHICreateFence({.usage = EFenceUsageFlags::BINARY});
 
         RHIBarrierDependencyInfo barrier_info;

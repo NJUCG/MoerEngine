@@ -9,19 +9,20 @@ namespace Moer {
 
     struct RenderGraphPassDescriptor {
         Moer::Array<RenderGraphHandle> color_attachments;
-        RenderGraphHandle             depth_stencil_attachment;
+        RenderGraphHandle              depth_stencil_attachment;
     };
 
-    
     class PassNode : public DepdencyGraph::Node {
     public:
-        virtual void Execute(RenderGraph & render_graph) = 0;
-        void ResloveResourceUsage();
-        void AddResourceUsage(RenderGraphResource* resource, uint32_t usage);
-        void AddResourceToCreate(RenderGraphResource* resource);
-        void AddResourceToDestroy(RenderGraphResource* resource);
-        Moer::Array<RenderGraphResource*> & GetResourcesToCreate();
-        Moer::Array<RenderGraphResource*> & GetResourcesToDestroy();
+        virtual void                       Execute(const RenderPassContext& pass_context) = 0;
+        void                               ResloveResourceUsage();
+        void                               AddResourceUsage(RenderGraphResource* resource, uint32_t usage);
+        void                               AddResourceToCreate(RenderGraphResource* resource);
+        void                               AddResourceToDestroy(RenderGraphResource* resource);
+        Moer::Array<RenderGraphResource*>& GetResourcesToCreate();
+        Moer::Array<RenderGraphResource*>& GetResourcesToDestroy();
+        PassNode(const std::string& name) : Node(name) {}
+
     protected:
         Moer::Map<RenderGraphResource*, uint32_t> m_resourceUsage;
         Moer::Array<RenderGraphResource*>         m_resources_to_create;
@@ -30,13 +31,16 @@ namespace Moer {
 
     class GraphicsPassNode : public PassNode {
     public:
-        GraphicsPassNode(const std::string_view& passName, RenderGraphPassBase* pass);
-        void Execute(RenderGraph & render_graph) override;
+        GraphicsPassNode(const std::string& passName, RenderGraphPass* pass);
+        void Execute(const RenderPassContext& pass_context) override;
+        void DeclareRenderPass(const RenderGraphPassDescriptor& descriptor);
+        ~GraphicsPassNode();
+
     protected:
-        RenderGraphPassBase * m_pass;
+        RenderGraphPass* m_pass;
         class RenderPassData {
             RenderGraphPassDescriptor m_descriptor;
-            friend  class GraphicsPassNode;    
+            friend class GraphicsPassNode;
         };
         RenderPassData m_renderPassData;
     };

@@ -1,0 +1,183 @@
+#pragma once
+#include "misc/STL.h"
+
+#include <string_view>
+
+namespace Moer {
+
+    enum class UniformType : uint8_t {
+        BOOL,
+        BOOL2,
+        BOOL3,
+        BOOL4,
+        FLOAT,
+        FLOAT2,
+        FLOAT3,
+        FLOAT4,
+        INT,
+        INT2,
+        INT3,
+        INT4,
+        UINT,
+        UINT2,
+        UINT3,
+        UINT4,
+        MAT3,//!< a 3x3 float matrix
+        MAT4,//!< a 4x4 float matrix
+        STRUCT
+    };
+
+    class BufferInterfaceBlock {
+    public:
+        struct InterfaceBlockEntry {
+            std::string name;
+            uint32_t    size;
+            UniformType type;
+            std::string structName{};
+            uint32_t    stride{};
+            std::string sizeName{};
+        };
+
+        BufferInterfaceBlock() = default;
+
+        BufferInterfaceBlock(const BufferInterfaceBlock& rhs)            = delete;
+        BufferInterfaceBlock& operator=(const BufferInterfaceBlock& rhs) = delete;
+
+        BufferInterfaceBlock(BufferInterfaceBlock&& rhs) noexcept            = default;
+        BufferInterfaceBlock& operator=(BufferInterfaceBlock&& rhs) noexcept = default;
+
+        ~BufferInterfaceBlock() noexcept = default;
+
+        using Type = UniformType;
+        struct FieldInfo {
+            std::string name;  // name of this field
+            uint16_t    offset;// offset in "uint32_t" of this field in the buffer
+            uint8_t     stride;// stride in "uint32_t" to the next element
+            Type        type;
+            bool        isArray;   // true if the field is an array
+            uint32_t    size;      // size of the array in elements, or 0 if not an array
+            std::string structName;// name of this field structure if type is STRUCT
+            std::string sizeName;  // name of the size parameter in the shader
+            // returns offset in bytes of this field (at index if an array)
+            inline size_t getBufferOffset(size_t index = 0) const {
+                return (offset + stride * index) * sizeof(uint32_t);
+            }
+        };
+
+        enum class Alignment : uint8_t {
+            std140,
+            std430
+        };
+
+        enum class Target : uint8_t {
+            UNIFORM,
+            SSBO
+        };
+
+        enum class Qualifier : uint8_t {
+            COHERENT  = 0x01,
+            WRITEONLY = 0x02,
+            READONLY  = 0x04,
+            VOLATILE  = 0x08,
+            RESTRICT  = 0x10
+        };
+
+        class Builder {
+        public:
+            Builder() noexcept  = default;
+            ~Builder() noexcept = default;
+
+            Builder(Builder const& rhs)                = default;
+            Builder(Builder&& rhs) noexcept            = default;
+            Builder& operator=(Builder const& rhs)     = default;
+            Builder& operator=(Builder&& rhs) noexcept = default;
+
+            // Give a name to this buffer interface block
+            Builder& name(std::string_view interfaceBlockName);
+
+            // Buffer target
+            Builder& target(Target target);
+
+            // build and return the BufferInterfaceBlock
+            Builder& alignment(Alignment alignment);
+
+            // add a qualifier
+            Builder& qualifier(Qualifier qualifier);
+
+            // a list of this buffer's fields
+            Builder& add(std::initializer_list<InterfaceBlockEntry> list);
+            Builder& add(const InterfaceBlockEntry& list);
+
+            // add a variable-sized array. must be the last entry.
+            Builder& addVariableSizedArray(InterfaceBlockEntry const& item);
+
+            BufferInterfaceBlock Build();
+
+            bool hasVariableSizeArray() const;
+
+        private:
+            friend class BufferInterfaceBlock;
+            std::string            mName;
+            Moer::Array<FieldInfo> mEntries;
+            Alignment              mAlignment            = Alignment::std140;
+            Target                 mTarget               = Target::UNIFORM;
+            uint8_t                mQualifiers           = 0;
+            bool                   mHasVariableSizeArray = false;
+        };
+
+        // name of this BufferInterfaceBlock interface block
+        std::string_view getName() const noexcept { return {mName.data(), mName.size()}; }
+
+        // size needed for the buffer in bytes
+        size_t getSize() const noexcept { return mSize; }
+
+        // list of information records for each field
+        Moer::Array<FieldInfo> const& getFieldInfoList() const noexcept {
+            return mFieldInfoList;
+        }
+
+        // negative value if name doesn't exist or Panic if exceptions are enabled
+        size_t getFieldOffset(std::string_view name, size_t index) const;
+
+        FieldInfo const* getFieldInfo(std::string_view name) const;
+
+        bool hasField(std::string_view name) const noexcept {
+            return mInfoMap.find(name) != mInfoMap.end();
+        }
+
+        bool isEmpty() const noexcept { return mFieldInfoList.empty(); }
+
+        Alignment getAlignment() const noexcept { return mAlignment; }
+
+        Target getTarget() const noexcept { return mTarget; }
+
+        uint8_t getQualifier() const noexcept { return mQualifiers; }
+
+    private:
+        friend class Builder;
+
+        explicit BufferInterfaceBlock(Builder const& builder) noexcept;
+
+        static uint8_t baseAlignmentForType(Type type) noexcept;
+        static uint8_t strideForType(Type type, uint32_t stride) noexcept;
+
+        std::string                                    mName;
+        Moer::Array<FieldInfo>                         mFieldInfoList;
+        Moer::UnorderedMap<std::string_view, uint32_t> mInfoMap;
+        uint32_t                                       mSize       = 0;// size in bytes rounded to multiple of 4
+        Alignment                                      mAlignment  = Alignment::std140;
+        Target                                         mTarget     = Target::UNIFORM;
+        uint8_t                                        mQualifiers = 0;
+    };
+
+    class UniformBuffer {
+    public:
+        void        SetData(const void* data, size_t size, size_t offset);
+        const void* GetData() const;
+        UniformBuffer(uint32_t size);
+        ~UniformBuffer();
+
+    protected:
+        void* m_buffer;
+    };
+}

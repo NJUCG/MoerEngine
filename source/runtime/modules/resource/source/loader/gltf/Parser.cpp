@@ -3,6 +3,7 @@
 #include "RenderThread.h"
 #include "../io/ImageIO.h"
 #include "assimp/Importer.hpp"
+#include "assimp/pbrmaterial.h"
 #include "assimp/postprocess.h"
 #include "assimp/scene.h"
 #include "meshprocess/MeshProcessor.h"
@@ -11,6 +12,7 @@
 #include "rhi/RHI.h"
 #include "resources/GpuScene.h"
 #include "rhi/RHICommon.h"
+#include "scene/BufferInterfaceBlock.h"
 #include "scene/EntityManager.h"
 #include "scene/CameraManager.h"
 #include "scene/Material.h"
@@ -153,17 +155,16 @@ namespace Moer::Resource::Gltf {
     void Parser::Impl::LoadTexture(const aiScene* scene, const aiString& texture_path, MaterialInstanceRef& mat, const std::string& param_name) {
         if (m_textures.contains(texture_path.C_Str())) {
             auto texture = m_textures[texture_path.C_Str()];
-            mat->SetParameter(param_name,texture );
+            mat->SetParameter(param_name, texture);
             SamplerParams params{};
             params.max_mip_level = texture->GetNumMips();
-            mat->SetParameter("defaultSampler", params);
             return;
         }
 
         int32_t         embedded_id = GetEmbeddedTextureId(texture_path);
         TextureBuilder* builder     = MoerNew(TextureBuilder);
         ImageReadDesc   image_desc;
-        
+
         if (embedded_id >= 0) {
             const aiTexture* texture = scene->mTextures[embedded_id];
             image_desc               = ImageIO::ReadFromMemory(reinterpret_cast<unsigned char*>(texture->pcData), texture->mWidth * texture->mHeight * 4);
@@ -186,7 +187,6 @@ namespace Moer::Resource::Gltf {
             SamplerParams params{};
             params.max_mip_level = texture->GetNumMips();
             mat->SetParameter(param_name, texture);
-            mat->SetParameter("defaultSampler", params);
             m_textures[texture_path.C_Str()] = texture;
         });
     }
@@ -226,8 +226,17 @@ namespace Moer::Resource::Gltf {
     MaterialRef GetDefaultMaterial() {
         MaterialBuilder materialBuilder{};
         MaterialRef     default_material = new Material();
-        materialBuilder.parameter("defaultSampler", ESamplerType::SAMPLER_2D);
-        materialBuilder.parameter("baseColorMap", ETextureDimension::TEX_2D);
+        materialBuilder.SetParameter("albedo_map", ETextureDimension::TEX_2D);
+        materialBuilder.SetParameter("normal_map", ETextureDimension::TEX_2D);
+        materialBuilder.SetParameter("metallic_roughness_map", ETextureDimension::TEX_2D);
+        materialBuilder.SetParameter("ao_map", ETextureDimension::TEX_2D);
+        materialBuilder.SetParameter("emissive_map", ETextureDimension::TEX_2D);
+        materialBuilder.SetParameter("base_color_factor", UniformType::FLOAT4);
+        materialBuilder.SetParameter("emissive_factor", UniformType::FLOAT3);
+        materialBuilder.SetParameter("metalic_factor", UniformType::FLOAT);
+        materialBuilder.SetParameter("roughness_factor", UniformType::FLOAT);
+        materialBuilder.SetParameter("ao", UniformType::FLOAT);
+
         return materialBuilder.Build();
     }
 
@@ -241,12 +250,49 @@ namespace Moer::Resource::Gltf {
 
         auto material_instance    = material->CreateInstance();
         m_materials[materialName] = material->CreateInstance();
+        MaterialInstanceRef mi    = m_materials[materialName];
 
-        aiString base_color_path;
+        aiString base_color_path, normal_path, metallic_roughness_path, ao_path, emissive_path;
         if (ai_material->GetTexture(AI_MATKEY_BASE_COLOR_TEXTURE, &base_color_path) == AI_SUCCESS) {
-            LoadTexture(ai_scene, base_color_path, material_instance, "baseColorMap");
+            LoadTexture(ai_scene, base_color_path, material_instance, "albedo_map");
+        }
+        if (ai_material->GetTexture(aiTextureType_NORMALS, 0, &normal_path) == AI_SUCCESS) {
+            LoadTexture(ai_scene, normal_path, material_instance, "normal_map");
+        }
+        if (ai_material->GetTexture(AI_MATKEY_GLTF_PBRMETALLICROUGHNESS_METALLICROUGHNESS_TEXTURE, &metallic_roughness_path) == AI_SUCCESS) {
+            LoadTexture(ai_scene, metallic_roughness_path, material_instance, "metallic_roughness_map");
+        }
+        if (ai_material->GetTexture(aiTextureType_LIGHTMAP, 0, &ao_path) == AI_SUCCESS) {
+            LoadTexture(ai_scene, ao_path, material_instance, "ao_map");
+        }
+        if (ai_material->GetTexture(aiTextureType_EMISSIVE, 0, &emissive_path) == AI_SUCCESS) {
+            LoadTexture(ai_scene, emissive_path, material_instance, "emissive_map");
         }
 
+        aiColor4D baseColorFactor;
+        aiColor3D emissiveFactor;
+        float     metallicFactor  = 1.0;
+        float     roughnessFactor = 1.0;
+
+        if (ai_material->Get(AI_MATKEY_COLOR_DIFFUSE, baseColorFactor) == AI_SUCCESS) {
+            Vector4f base_color_factor_cast = *reinterpret_cast<Vector4f*>(&baseColorFactor);
+            mi->SetParameter("base_color_factor", base_color_factor_cast);
+        }
+
+        if (ai_material->Get(AI_MATKEY_COLOR_EMISSIVE, emissiveFactor) == AI_SUCCESS) {
+            Vector3f emissive_factor_cast = *reinterpret_cast<Vector3f*>(&emissiveFactor);
+            mi->SetParameter("emissive_factor", emissive_factor_cast);
+        }
+
+        if (ai_material->Get(AI_MATKEY_GLTF_PBRMETALLICROUGHNESS_METALLIC_FACTOR, metallicFactor) == AI_SUCCESS) {
+            mi->SetParameter("metalic_factor", metallicFactor);
+        }
+
+        if (ai_material->Get(AI_MATKEY_GLTF_PBRMETALLICROUGHNESS_ROUGHNESS_FACTOR, roughnessFactor) == AI_SUCCESS) {
+            mi->SetParameter("roughness_factor", roughnessFactor);
+        }
+
+        mi->SetParameter("ao", 1.0f);
         m_materials[materialName] = material_instance;
     }
 

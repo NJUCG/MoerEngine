@@ -1,11 +1,11 @@
-#ifndef MOER_ENGINE_DEFERRED_RENDERER_H
-#define MOER_ENGINE_DEFERRED_RENDERER_H
+#pragma once
+
 #include "renderer/BackendRenderer.h"
 namespace Moer {
 
     class RenderGraph;
     class DeferedRenderingRenderGraphRender;
-    
+
     class RenderGraphRender : public BackendRenderer {
     public:
         RenderGraphRender()          = default;
@@ -13,7 +13,6 @@ namespace Moer {
         virtual void Init(const BackendRendererInitInfo& _init_info) override;
         virtual void ShutDown() override;
         virtual void DrawFrame() override;
-        virtual void SetUpRenderGraph() = 0;
         virtual void Present() override;
         virtual void SetOriginResolution(uint32_t _width, uint32_t _height) override;
         virtual void SetPresentResolution(uint32_t _width, uint32_t _height) override;
@@ -25,13 +24,14 @@ namespace Moer {
         Impl* impl;
     };
 
-    class DeferedRenderingRenderGraphRender : public  RenderGraphRender {
+    class DeferedRenderingRenderGraphRender : public RenderGraphRender {
     public:
+        DeferedRenderingRenderGraphRender();
+        ~DeferedRenderingRenderGraphRender();
         void Init(const BackendRendererInitInfo& _init_info) override;
+
     private:
         class Impl;
-        Impl * impl;
+        //  Impl* m_impl;
     };
 }// namespace Moer
-
-#endif//MOER_ENGINE_DEFERRED_RENDERER_H
