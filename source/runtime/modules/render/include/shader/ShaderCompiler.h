@@ -26,7 +26,7 @@ public:
 class ShaderCompileJob {
 public:
     ~ShaderCompileJob();
-    void DispatchAndExecute(const std::function<void(ShaderCompilerOutput*)>& post_process_func);
+    void DispatchAndExecute(const std::function<void(ShaderCompilerOutput*&)>& post_process_func);
     void Finalize(const ShaderCompileJobInput& input);
     void ExportOutput(Moer::Array<ShaderCompilerOutput*>& _outputs);
     class Impl;
@@ -34,7 +34,7 @@ public:
 private:
     Impl* impl;
 };
-class ShaderCompiler {
+class RENDER_API ShaderCompiler {
 
 public:
     static void Init();

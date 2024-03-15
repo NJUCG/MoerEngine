@@ -4,6 +4,7 @@
 
 #include "API_Macro.h"
 #include "Entity.h"
+#include "math/Base.h"
 #include "math/Matrix.h"
 
 namespace Moer {
@@ -11,12 +12,16 @@ namespace Moer {
     struct InstanceData {
         Moer::Matrix4x4f model2world;
         Moer::Matrix4x4f inv_model2world;
+        float            scale;
+        uint32_t         padding;
         uint32_t         material_id;
         uint32_t         material_type;
     };
 
     struct InstanceMeshInfo {
+        Vector3f center;
         uint32_t vertex_offset;
+        Vector3f extent;
         uint32_t vertex_count;
         uint32_t index_offset;
         uint32_t index_count;

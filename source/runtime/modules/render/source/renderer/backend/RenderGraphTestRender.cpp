@@ -123,8 +123,10 @@ namespace Moer {
             builder.writeTexture(depth,RenderGraphTexture::Usage::DEPTH_STENCIL_ATTACHMENT);
             builder.DeclareRenderPass({.color_attachments =  {normal,mat,position},.depth_stencil_attachment =  depth}); }, [&](const RenderPassContext& context) {
             cmd_list->SetPipelineState(gbuffer_pipeline_state);
+           // cmd_list->BindVertexBuffers()    
             g_scene->ForEach([](Entity entity) {
-                
+                auto mesh_info = RenderableManager::Get().GetMeshInfo(entity);
+                cmd_list->DrawIndexedInstanced()
             }); });
 
         render_graph.AddGraphicPass(

@@ -26,7 +26,7 @@ class GlobalShaderCache{
     struct Impl;
     Impl* impl;
 };
-class ShaderResourceManager {
+class RENDER_API ShaderResourceManager {
 public:
     static void                   Init(EShaderPlatform platform);
     static void                   ShutDown();

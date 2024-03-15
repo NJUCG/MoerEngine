@@ -73,7 +73,7 @@ namespace Moer {
     class FakeRHI : public IVulkanRHI {
     public:
         FakeRHI() {
-            rhi_type = ERHIType::Vulkan;
+            m_rhi_info.rhi_type = ERHIType::Vulkan;
         }
     };
     void RenderSystem::InitRHI() {
@@ -94,6 +94,7 @@ namespace Moer {
         const auto& config_data = Moer::ConfigManager::GetInstance().GetInitConfig();
 
         info.max_frame_in_flight = config_data.max_frame_in_flight;
+        info.ray_tracing         = config_data.ray_tracing;
         g_rhi->Initialize(info);
         g_rhi->PostInit();
     }

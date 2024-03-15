@@ -197,12 +197,21 @@ void RHIBatchedShaderParameters::SetParameters(const Shader* shader, size_t _dat
     size_t   left_size               = resource_parameters.capacity() - resource_parameters.size();
 
     if (left_size < resource_param_max_size) resource_parameters.reserve(left_size + resource_parameters.size());
-    for (const auto& param_info : param_layout_info.GetLayoutInfos()) {
-        RHIResource* data  = GetResource(data_source, param_info.offset);
-        bool         npt   = data;
-        bool         b_set = param_info.IsValid() && IsParameterResource(param_info.type) && data;
+    for (const auto& param_info : param_layout_info.GetBindingInfo()) {
+        uint32_t stride = param_info.stride;
+        uint32_t num    = stride / sizeof(RHIResource*);
+
+        bool b_set = false;
+        for (uint32_t i = 0; i < num; ++i) {
+            RHIResource* data = GetResource(data_source, param_info.offset + i * sizeof(RHIResource*));
+            b_set |= param_info.IsValid() && IsParameterResource(param_info.type) && data;
+        }
+
         if (b_set) {
-            resource_parameters.emplace_back(RHIShaderResourceParameter(data, param_info.slot, param_info.space));
+            for (uint32_t i = 0; i < num; ++i) {
+                RHIResource* data = GetResource(data_source, param_info.offset + i * sizeof(RHIResource*));
+                resource_parameters.emplace_back(RHIShaderResourceParameter(data, param_info.slot, param_info.space));
+            }
         }
     }
     Moer::Array<RHIShaderConstantParameter> temp_constant;
@@ -211,15 +220,15 @@ void RHIBatchedShaderParameters::SetParameters(const Shader* shader, size_t _dat
     //for now only support one constant struct
     // uint32_t last_offset    = 0;
     // uint32_t current_offset = 0;
-    // for (uint32_t i = 0; i < param_layout_info.GetConstantsInfos().size(); ++i) {
-    //     const auto& param_info = param_layout_info.GetConstantsInfos()[i];
+    // for (uint32_t i = 0; i < param_layout_info.GetConstantsInfo().size(); ++i) {
+    //     const auto& param_info = param_layout_info.GetConstantsInfo()[i];
     //     if (i == 0) {
     //         //first const param should have no gap
     //         current_offset = last_offset = param_info.offset;
     //     } else {
     //         current_offset = param_info.offset;
     //     }
-    //     bool b_last_constant = i == param_layout_info.GetConstantsInfos().size() - 1;
+    //     bool b_last_constant = i == param_layout_info.GetConstantsInfo().size() - 1;
     //     bool b_gap           = current_offset != last_offset;
 
     //     last_offset = current_offset;
@@ -243,7 +252,7 @@ void RHIBatchedShaderParameters::SetParameters(const Shader* shader, size_t _dat
     //     memcpy(&raw_data[origin_offset], data_source, param_info.stride);
     //     constant_parameters.emplace_back(shader->GetShaderType(), origin_offset, (param_info.stride + sizeof(uint32_t) - 1) / 4, param_info.slot, param_info.space);
     // }
-    for (const auto& param_info : param_layout_info.GetConstantsInfos()) {
+    for (const auto& param_info : param_layout_info.GetConstantsInfo()) {
         uint8_t* data = data_source + param_info.offset;
         //const must set
         uint32_t origin_offset = raw_data.size();

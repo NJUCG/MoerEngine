@@ -17,7 +17,7 @@ class VulkanCommandAllocator;
 
 class VulkanRHIImpl final : public IVulkanRHI {
 public:
-    VulkanRHIImpl();
+    RENDER_API VulkanRHIImpl();
 
     void Initialize(const RHIInitInfo& _init) final override;
 
@@ -39,12 +39,24 @@ public:
 
     RHIComputeShaderRef RHICreateComputeShader(const class ShaderCodeEntry*, const Shader*) final override;
 
+    RHIRayGenShaderRef          RHICreateRayGenShader(const class ShaderCodeEntry*, const Shader*) final override;
+    RHIRayMissShaderRef         RHICreateRayMissShader(const class ShaderCodeEntry*, const Shader*) final override;
+    RHIRayClosestHitShaderRef   RHICreateRayClosestHitShader(const class ShaderCodeEntry*, const Shader*) final override;
+    RHIRayCallableShaderRef     RHICreateRayCallableShader(const class ShaderCodeEntry*, const Shader*) final override;
+    RHIRayIntersectionShaderRef RHICreateRayIntersectionShader(const class ShaderCodeEntry*, const Shader*) final override;
+    RHIRayAnyhitShaderRef       RHICreateRayAnyhitShader(const class ShaderCodeEntry*, const Shader*) final override;
+
     RHIShaderLibraryRef RHICreateShaderLibrary(EShaderPlatform _platform, const std::string& _file_path, const std::string& name) final override;
 
     RHIFenceRef RHICreateFence(const RHIFenceCreateInfo&) final override;
     // RHIGraphicsPipelineStateRef RHICreateGraphicsPipelineState(const RHIGraphicsPipelineStateInfo& _init) final override;
     RHIGraphicsPipelineStateRef RHICreateGraphicsPSO(RHIGraphicsPSOCreateInfo&& _init) final override;
     RHIComputePipelineStateRef  RHICreateComputePipelineState(RHIShader* _compute_shader) final override;
+
+    RHIRayTracingPipelineStateRef RHICreateRayTracingPipelineState(const RHIRayTracingPipelineStateInitializer& _init) final override;
+
+    void                 RHIBatchedBuildRayTracingBLAS(int batch_size, const RHIRayTracingBLASInitializer* _inits, RHIRayTracingBLASRef* results) final override;
+    RHIRayTracingTLASRef RHIBuildRayTracingTLAS(const RHIRayTracingTLASInitializer& _init) final override;
 
     void* RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size) final override;
     void  RHIUnmapBuffer(RHIBuffer* _buffer) final override;
@@ -55,12 +67,15 @@ public:
 
     RHICommandQueue* RHICreateCommandQueue(ECommandQueueType _type) final override;
     // RHIGraphicsCommandList* CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state = nullptr) final override;
-    RHIGraphicsCommandList* RHICreateGraphicsCommandList(RHICommandAllocator* _allocator, RHIGraphicsPipelineState* _initial_state = nullptr) final override;
-
+    RHIGraphicsCommandList*   RHICreateGraphicsCommandList(RHICommandAllocator* _allocator, RHIGraphicsPipelineState* _initial_state = nullptr) final override;
+    RHIComputeCommandList*    RHICreateComputeCommandList(RHICommandAllocator* _allocator, RHIComputePipelineState* _initial_state = nullptr) final override;
+    RHIRayTracingCommandList* RHICreateRayTracingCommandList(RHICommandAllocator* _allocator, RHIRayTracingPipelineState* _initial_state = nullptr) final override;
     // RHIComputeCommandList* CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr) final override;
     RHICopyCommandList* RHICreateCopyCommandList(RHICommandAllocator* _allocator) final override;
 
     RHICommandAllocator* RHIGetCurrentCommandAllocator() final override;
+
+    RHICBVRef RHICreateCBV(RHIBuffer* _resource, uint64_t _size, uint64_t _byte_offset) final override;
 #pragma endregion
 
 #pragma region viewport
@@ -116,8 +131,12 @@ private:
     bool CheckValidationLayer(const std::string& layer_name);
     bool CheckEnabledExtensions();
 
+    RHIBufferRef CreateBufferFromData(const RHIBufferCreateInfo& info, uint32_t size, void* data);
+
     VkCommandBuffer BeginSingleTimeCommands(VkCommandPool _pool);
     void            EndSingleTimeCommands(VkCommandBuffer _command_buffer, VkCommandPool _pool, VkQueue _queue);
+
+    VkDeviceAddress GetDeviceAddress(RHIBufferRef _buffer);
 
     // void CopyBuffer(VulkanRHIBuffer* _src, VulkanRHIBuffer* _dst);
 

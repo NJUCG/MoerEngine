@@ -2,6 +2,7 @@
 #include "PixelFormat.h"
 #include "RenderThread.h"
 #include "RendererManager.h"
+#include "log/LogSystem.h"
 #include "math/Base.h"
 #include "Core.h"
 #include "math/Function.h"
@@ -21,6 +22,7 @@
 #include "scene/RenderableManager.h"
 #include "scene/Scene.h"
 #include "scene/TransformManager.h"
+#include "deferred/BasePass.h"
 
 #include <algorithm>
 BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(UBOVertex)
@@ -33,16 +35,12 @@ END_SHADER_CONSTANT_STRUCT_DEFINITION()
 BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(CameraData)
 DEFINE_SHADER_PARAM(Moer::Matrix4x4f, view)
 DEFINE_SHADER_PARAM(Moer::Matrix4x4f, view_proj)
+DEFINE_SHADER_PARAM(Moer::Matrix4x4f, prev_view_proj)
+DEFINE_SHADER_PARAM(Moer::Vector4f, camera_pos)
 END_SHADER_CONSTANT_STRUCT_DEFINITION()
 
-BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(CameraCullData)
-DEFINE_SHADER_PARAM(Moer::Matrix4x4f, view)
-DEFINE_SHADER_PARAM(Moer::Matrix4x4f, view_proj)
-DEFINE_SHADER_PARAM(Moer::Vector4f[6], frustum_planes)
-DEFINE_SHADER_PARAM(Moer::Vector3f, camera_pos)
-END_SHADER_CONSTANT_STRUCT_DEFINITION()
-class GBufferShaderVert : public Shader {
-    DEFINE_SHADER_TYPE(GBufferShaderVert, Global, RENDER_API, ...)
+class TestDeferredTriangleShaderVert : public Shader {
+    DEFINE_SHADER_TYPE(TestDeferredTriangleShaderVert, Global, RENDER_API, ...)
 public:
     BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
     DEFINE_SHADER_PARAM_STRUCT(CameraData, camera_data)
@@ -50,8 +48,8 @@ public:
     END_ROOT_PARAMETER_DEFINITION(Parameters)
 };
 
-class GBufferShaderFrag : public Shader {
-    DEFINE_SHADER_TYPE(GBufferShaderFrag, Global, RENDER_API, ...)
+class TestDeferredTriangleShaderFrag : public Shader {
+    DEFINE_SHADER_TYPE(TestDeferredTriangleShaderFrag, Global, RENDER_API, ...)
 public:
     BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
     // DEFINE_SHADER_PARAM_SAMPLER(SamplerState, defaultSampler)
@@ -59,36 +57,27 @@ public:
     END_ROOT_PARAMETER_DEFINITION(Parameters)
 };
 
-IMPLEMENT_SHADER_TYPE(GBufferShaderVert, "test/TriangleDeferredVert.hlsl", "main", ST_VERTEX);
-IMPLEMENT_SHADER_TYPE(GBufferShaderFrag, "test/TriangleDeferredFrag.hlsl", "main", ST_FRAGMENT);
+IMPLEMENT_SHADER_TYPE(TestDeferredTriangleShaderVert, "test/TriangleDeferredVert.hlsl", "main", ST_VERTEX);
+IMPLEMENT_SHADER_TYPE(TestDeferredTriangleShaderFrag, "test/TriangleDeferredFrag.hlsl", "main", ST_FRAGMENT);
 
-class MeshletCullingShader : public Shader {
-    DEFINE_SHADER_TYPE(MeshletCullingShader, Global, RENDER_API, ...)
-public:
-    BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
-    DEFINE_SHADER_PARAM_STRUCT(CameraData, camera_data)//push_constant
-    DEFINE_SHADER_PARAM_SRV(StructuredBuffer<MeshletDesc>, meshlet_info_buffer)
-    DEFINE_SHADER_PARAM_SRV(StructuredBuffer<MeshletBound>, meshlet_bound_buffer)
-
-    DEFINE_SHADER_PARAM_UAV(RWStructuredBuffer<DrawCommand>, draw_indirect_buffer)
-    DEFINE_SHADER_PARAM_UAV(RWByteAddressBuffer, draw_count_buffer)
-
-    END_ROOT_PARAMETER_DEFINITION(Parameters)
+struct CameraCullData {
+    CameraData     camera_data;
+    Moer::Vector4f frustum_planes[6];
 };
-
-IMPLEMENT_SHADER_TYPE(MeshletCullingShader, "meshdebug/Cull.hlsl", "main", ST_COMPUTE);
-
 BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(CullInstanceInput)
-DEFINE_SHADER_PARAM_STRUCT(CameraData, camera_data)
 DEFINE_SHADER_PARAM(uint32_t, instance_count)
 DEFINE_SHADER_PARAM(uint32_t, meshlet_count_offset)
 END_SHADER_CONSTANT_STRUCT_DEFINITION(CullInstanceInput)
-
+BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(CullMeshletInput)
+DEFINE_SHADER_PARAM(uint32_t, meshlet_count_offset)
+DEFINE_SHADER_PARAM(uint32_t, draw_count_offset)
+END_SHADER_CONSTANT_STRUCT_DEFINITION(CullMeshletInput)
 class CullInstanceShader : public Shader {
     DEFINE_SHADER_TYPE(CullInstanceShader, Global, RENDER_API, ...)
 public:
     BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
     DEFINE_SHADER_PARAM_STRUCT(CullInstanceInput, input)
+    DEFINE_SHADER_PARAM_CBV(ConstantBuffer<CameraCullData>, cull_data)
     DEFINE_SHADER_PARAM_SRV(StructuredBuffer<InstanceData>, instance_data)
 
     DEFINE_SHADER_PARAM_SRV(StructuredBuffer<InstanceMeshInfo>, instance_meshlet_info)
@@ -98,17 +87,13 @@ public:
     END_ROOT_PARAMETER_DEFINITION(Parameters)
 };
 
-BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(CullMeshletInput)
-DEFINE_SHADER_PARAM_STRUCT(CameraData, camera_data)
-DEFINE_SHADER_PARAM(uint32_t, meshlet_count_offset)
-DEFINE_SHADER_PARAM(uint32_t, draw_count_offset)
-END_SHADER_CONSTANT_STRUCT_DEFINITION(CullMeshletInput)
-
 class CullMeshletShader : public Shader {
     DEFINE_SHADER_TYPE(CullMeshletShader, Global, RENDER_API, ...)
 public:
     BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
     DEFINE_SHADER_PARAM_STRUCT(CullMeshletInput, input)
+
+    DEFINE_SHADER_PARAM_CBV(ConstantBuffer<CameraCullData>, cull_data)
     DEFINE_SHADER_PARAM_SRV(StructuredBuffer<MeshletDesc>, meshlet_info_buffer)
     DEFINE_SHADER_PARAM_SRV(StructuredBuffer<MeshletBound>, meshlet_bound_buffer)
     DEFINE_SHADER_PARAM_SRV(StructuredBuffer<InstanceData>, instance_data)
@@ -148,6 +133,8 @@ namespace Moer {
         RHICommandQueue*                     render_queue;
         RHIFenceRef                          render_fence;
 
+        UniquePtr<BasePass> base_pass;
+
         //test triangle data
         // RHIBufferRef vertex_buffer;
         // RHIBufferRef index_buffer;
@@ -164,6 +151,8 @@ namespace Moer {
         RHIBufferRef               zero_buffer;
         RHIBufferRef               instance_meshlet_cull_info_buffer;
         RHIBufferRef               uniform_buffer;
+
+        Array<RHICBVRef> uniform_buffer_view;
 
         RHISRVRef meshlet_descs_buffer_view;
         RHISRVRef meshlet_bounds_buffer_view;
@@ -300,8 +289,8 @@ namespace Moer {
 
         auto& shader_resource_manager = ShaderResourceManager::GetInstance();
 
-        RHIShaderRef vertex_shader   = shader_resource_manager.GetShader<GBufferShaderVert>();
-        RHIShaderRef fragment_shader = shader_resource_manager.GetShader<GBufferShaderFrag>();
+        RHIShaderRef vertex_shader   = shader_resource_manager.GetShader<TestDeferredTriangleShaderVert>();
+        RHIShaderRef fragment_shader = shader_resource_manager.GetShader<TestDeferredTriangleShaderFrag>();
         // RHIShaderBoundStateInput& shader_stage_input = init.shader_stage;
 
         RHIGraphicsShaderInputInfo shader_input_info =
@@ -322,17 +311,21 @@ namespace Moer {
 
         pipeline_state = g_rhi->RHICreateGraphicsPSO(std::move(pso_create_info));
 
-        auto compute_shader       = shader_resource_manager.GetShader<MeshletCullingShader>();
         auto cull_instance_shader = shader_resource_manager.GetShader<CullInstanceShader>();
         auto cull_meshlet_shader  = shader_resource_manager.GetShader<CullMeshletShader>();
 
-        compute_pipeline_state = g_rhi->RHICreateComputePipelineState(compute_shader.Get());
-        cull_instance_pso      = g_rhi->RHICreateComputePipelineState(cull_instance_shader);
-        cull_meshlet_pso       = g_rhi->RHICreateComputePipelineState(cull_meshlet_shader);
+        cull_instance_pso = g_rhi->RHICreateComputePipelineState(cull_instance_shader);
+        cull_meshlet_pso  = g_rhi->RHICreateComputePipelineState(cull_meshlet_shader);
         //why not implement a counter buffer?
         {
             RHIBufferCreateInfo buffer_create_info;
-            uniform_buffer       = g_rhi->RHICreateBuffer<float>(sizeof(CameraData) * 3, EBufferUsageFlags::UNIFORM_BUFFER);
+            uniform_buffer = g_rhi->RHICreateBuffer<float>(sizeof(CameraCullData) * 3, EBufferUsageFlags::UNIFORM_BUFFER | EBufferUsageFlags::CPU_VISIBLE);
+
+            for (int i = 0; i < 3; i++) {
+                uniform_buffer_view.push_back(
+                    g_rhi->RHICreateCBV(uniform_buffer, sizeof(CameraCullData), sizeof(CameraCullData) * i));
+            }
+
             draw_indirect_buffer = g_rhi->RHICreateBuffer<DrawInstanceCmd>(
                 1024 * 1024 * 16,
                 EBufferUsageFlags::INDIRECT_BUFFER | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::STORAGE_BUFFER);
@@ -391,35 +384,60 @@ namespace Moer {
         //render and copy to backbuffer
         auto camera_entity = g_scene->GetCameras()[0];
         auto camera        = CameraManager::Get().Get(camera_entity);
-        camera->Tick();
 
         CameraData camera_data;
-        camera_data.view      = Transpose(camera->GetViewMatrix());
-        camera_data.view_proj = Transpose(camera->GetProjectionMatrix() * camera->GetViewMatrix());
+        auto       vp              = camera->GetProjectionMatrix() * camera->GetViewMatrix();
+        camera_data.prev_view_proj = Transpose(vp);
+
+        camera->Tick();
+
+        camera_data.view       = Transpose(camera->GetViewMatrix());
+        camera_data.view_proj  = Transpose(camera->GetProjectionMatrix() * camera->GetViewMatrix());
+        camera_data.camera_pos = Vector4f(camera->GetPosition(), 1.f);
+
+        CameraCullData cull_data;
+        cull_data.camera_data = camera_data;
+        auto& frustum_planes  = cull_data.frustum_planes;
+        //calculate world space frustum planes
+        {
+            auto inv_vp       = Transpose(vp);
+            frustum_planes[0] = inv_vp.r3 + inv_vp.r0;//left
+            frustum_planes[1] = inv_vp.r3 - inv_vp.r0;//right
+            frustum_planes[2] = inv_vp.r3 + inv_vp.r1;//top
+            frustum_planes[3] = inv_vp.r3 - inv_vp.r1;//bottom
+            frustum_planes[4] = inv_vp.r2;            //near
+            frustum_planes[5] = inv_vp.r3 - inv_vp.r2;//far
+            //normalize
+            for (int i = 0; i < 6; i++) {
+                frustum_planes[i] /= Length(Vector3f(frustum_planes[i]));
+            }
+        }
+
+        auto frame_offset = frame_counter % render_cmd_lists.size();
+        {
+            auto fill_uniform_data = [this, frame_offset, data(cull_data)]() {
+                auto* ptr = g_rhi->RHIMapBuffer(uniform_buffer, frame_offset * sizeof(CameraCullData), sizeof(CameraCullData));
+
+                std::memcpy(ptr, &data, sizeof(CameraCullData));
+                g_rhi->RHIUnmapBuffer(uniform_buffer);
+            };
+            EnqueueRenderTask(std::move(fill_uniform_data));
+        }
 
         {
-            MeshletCullingShader::Parameters cull_params;
-            cull_params.draw_count_buffer    = draw_count_view;
-            cull_params.draw_indirect_buffer = draw_indirect_view;
-            cull_params.camera_data          = camera_data;
-            cull_params.meshlet_info_buffer  = meshlet_descs_buffer_view;
-            cull_params.meshlet_bound_buffer = meshlet_bounds_buffer_view;
 
-            RHIBatchedShaderParameters compute_batched_params;
-            compute_batched_params.SetParameters(ShaderResourceManager::GetInstance().GetShader<MeshletCullingShader>(), cull_params);
             auto instance_count = instance_buffer_view->GetBuffer()->GetNumElement();
 
             CullInstanceShader::Parameters cull_instance_params;
-            cull_instance_params.input.camera_data          = camera_data;
             cull_instance_params.input.meshlet_count_offset = meshlet_count_offset;
             cull_instance_params.input.instance_count       = instance_count;
             cull_instance_params.instance_data              = instance_buffer_view;
             cull_instance_params.instance_meshlet_info      = instance_meshlet_info_view;
             cull_instance_params.instance_meshlet_cull_info = instance_meshlet_cull_info_uav;
             cull_instance_params.counters_buffer            = draw_count_view;
+            cull_instance_params.cull_data                  = uniform_buffer_view[frame_offset];
 
             CullMeshletShader::Parameters cull_meshlet_params;
-            cull_meshlet_params.input.camera_data          = camera_data;
             cull_meshlet_params.input.meshlet_count_offset = meshlet_count_offset;
             cull_meshlet_params.input.draw_count_offset    = draw_count_offset;
             cull_meshlet_params.meshlet_info_buffer        = meshlet_descs_buffer_view;
@@ -429,6 +447,7 @@ namespace Moer {
             cull_meshlet_params.instance_meshlet_cull_info = instance_meshlet_cull_info_view;
             cull_meshlet_params.counters_buffer            = draw_count_view;
             cull_meshlet_params.command_buffer             = draw_indirect_view;
+            cull_meshlet_params.cull_data                  = uniform_buffer_view[frame_offset];
 
             RHIBatchedShaderParameters cull_instance_batched_params;
             cull_instance_batched_params.SetParameters(ShaderResourceManager::GetInstance().GetShader<CullInstanceShader>(), cull_instance_params);
@@ -445,7 +464,7 @@ namespace Moer {
                 cmd_list->BeginRecording();
             };
             RHICopyBufferInfo copy_info{};
-            copy_info.regions.push_back({0, 0, sizeof(uint32_t)});
+            copy_info.regions.push_back({0, 0, sizeof(uint32_t) * 32});
 
             RHIBarrierDependencyInfo counters_barrier{};
             counters_barrier.buffer_barriers.resize(1);
@@ -464,7 +483,6 @@ namespace Moer {
             };
 
             auto&& cull_task = [this,
-                                compute_param = std::move(compute_batched_params),
                                 instance_params(std::move(cull_instance_batched_params)),
                                 meshlet_params(std::move(cull_meshlet_batched_params)),
                                 instance_count(instance_count)]() mutable {
@@ -540,12 +558,12 @@ namespace Moer {
         }
 
         {
-            GBufferShaderVert::Parameters params;
+            TestDeferredTriangleShaderVert::Parameters params;
             params.camera_data   = camera_data;
             params.instance_data = instance_buffer_view;
 
             RHIBatchedShaderParameters batched_params;
-            batched_params.SetParameters(ShaderResourceManager::GetInstance().GetShader<GBufferShaderVert>(), params);
+            batched_params.SetParameters(ShaderResourceManager::GetInstance().GetShader<TestDeferredTriangleShaderVert>(), params);
 
             EnqueueRenderTask([this, batched_params = std::move(batched_params)]() {
                 auto      info = virtual_viewport->GetNextBackBuffer();

@@ -32,6 +32,13 @@ public:
 
     RHIComputeShaderRef RHICreateComputeShader(const class ShaderCodeEntry*, const Shader*) override { return RHIComputeShaderRef{}; }
 
+    RHIRayGenShaderRef          RHICreateRayGenShader(const class ShaderCodeEntry*, const Shader*) override { return RHIRayGenShaderRef{}; }
+    RHIRayMissShaderRef         RHICreateRayMissShader(const class ShaderCodeEntry*, const Shader*) override { return RHIRayMissShaderRef{}; }
+    RHIRayClosestHitShaderRef   RHICreateRayClosestHitShader(const class ShaderCodeEntry*, const Shader*) override { return RHIRayClosestHitShaderRef{}; }
+    RHIRayCallableShaderRef     RHICreateRayCallableShader(const class ShaderCodeEntry*, const Shader*) override { return RHIRayCallableShaderRef{}; }
+    RHIRayIntersectionShaderRef RHICreateRayIntersectionShader(const class ShaderCodeEntry*, const Shader*) override { return RHIRayIntersectionShaderRef{}; }
+    RHIRayAnyhitShaderRef       RHICreateRayAnyhitShader(const class ShaderCodeEntry*, const Shader*) override { return RHIRayAnyhitShaderRef{}; }
+
     RHIShaderLibraryRef RHICreateShaderLibrary(EShaderPlatform _platform, const std::string& _file_path, const std::string& name) override { return RHIShaderLibraryRef{}; }
 
     RHIFenceRef RHICreateFence(const RHIFenceCreateInfo&) override { return RHIFenceRef{}; }
@@ -40,6 +47,16 @@ public:
     RHIGraphicsPipelineStateRef RHICreateGraphicsPSO(RHIGraphicsPSOCreateInfo&& _init) override { return RHIGraphicsPipelineStateRef{}; }
 
     RHIComputePipelineStateRef RHICreateComputePipelineState(RHIShader* _compute_shader) override { return RHIComputePipelineStateRef{}; }
+
+    RHIRayTracingPipelineStateRef RHICreateRayTracingPipelineState(const RHIRayTracingPipelineStateInitializer& _init) override {
+        return RHIRayTracingPipelineStateRef{};
+    }
+
+    void RHIBatchedBuildRayTracingBLAS(int batch_size, const RHIRayTracingBLASInitializer* _inits, RHIRayTracingBLASRef* results) override {
+    }
+    RHIRayTracingTLASRef RHIBuildRayTracingTLAS(const RHIRayTracingTLASInitializer& _init) override {
+        return RHIRayTracingTLASRef{};
+    }
 
     void* RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size) override { return nullptr; }
     void  RHIUnmapBuffer(RHIBuffer* _buffer) override {}
@@ -51,14 +68,20 @@ public:
     RHICommandQueue* RHICreateCommandQueue(ECommandQueueType type) override { return nullptr; }
     // RHIGraphicsCommandList* CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state = nullptr) override { return nullptr; }
 
-    RHIGraphicsCommandList* RHICreateGraphicsCommandList(RHICommandAllocator* _allocator, RHIGraphicsPipelineState* _initial_state = nullptr) override { return nullptr; };
+    RHIGraphicsCommandList* RHICreateGraphicsCommandList(RHICommandAllocator* _allocator, RHIGraphicsPipelineState* _initial_state = nullptr) override { return nullptr; }
 
     // RHIComputeCommandList* CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr) override { return nullptr; }
+    RHIComputeCommandList* RHICreateComputeCommandList(RHICommandAllocator* _allocator, RHIComputePipelineState* _initial_state = nullptr) override { return nullptr; };
+
+    RHIRayTracingCommandList* RHICreateRayTracingCommandList(RHICommandAllocator* _allocator, RHIRayTracingPipelineState* _initial_state = nullptr) override { return nullptr; }
+
     RHICopyCommandList* RHICreateCopyCommandList(RHICommandAllocator* _allocator) override { return nullptr; }
 
     // void RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) override {}
 
     RHICommandAllocator* RHIGetCurrentCommandAllocator() override { return nullptr; }
+
+    RHICBVRef RHICreateCBV(RHIBuffer* _resource, uint64_t _size, uint64_t _byte_offset) override { return RHICBVRef{}; }
 #pragma endregion
 
 #pragma region Viewport

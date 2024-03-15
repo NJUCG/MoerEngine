@@ -6,6 +6,7 @@
 #include "assimp/pbrmaterial.h"
 #include "assimp/postprocess.h"
 #include "assimp/scene.h"
+#include "math/Base.h"
 #include "meshprocess/MeshProcessor.h"
 #include "misc/MMemory.h"
 #include "misc/STL.h"
@@ -301,7 +302,7 @@ namespace Moer::Resource::Gltf {
         m_scene = std::move(UniquePtr<Scene>(MoerNew(Scene)()));
         Assimp::Importer importer;
         auto             real_path  = std::filesystem::canonical(file_path);
-        const auto*      gltf_scene = importer.ReadFile(file_path.string(), aiProcess_Triangulate | aiProcess_GenNormals | aiProcess_CalcTangentSpace);
+        const auto*      gltf_scene = importer.ReadFile(file_path.string(), aiProcess_Triangulate | aiProcess_GenBoundingBoxes | aiProcess_GenNormals | aiProcess_CalcTangentSpace);
         if (!gltf_scene) {
             LOG_WARNING("Failed to load gltf file: {} ", file_path.string());
             return nullptr;
@@ -322,6 +323,11 @@ namespace Moer::Resource::Gltf {
         uint32_t vertex_count = 0, index_count = 0, meshlet_count = 0;
         for (uint32_t i = 0; i < gltf_scene->mNumMeshes; i++) {
             const auto* mesh = gltf_scene->mMeshes[i];
+
+            auto aabb_min    = mesh->mAABB.mMin;
+            auto aabb_max    = mesh->mAABB.mMax;
+            auto aabb_center = (mesh->mAABB.mMin + mesh->mAABB.mMax) * 0.5f;
+            auto aabb_extent = mesh->mAABB.mMax - aabb_center;
 
             uint32_t temp_stride;
             GetAttribute(gltf_scene->mMeshes[0], temp_stride);
@@ -354,7 +360,9 @@ namespace Moer::Resource::Gltf {
             m_meshlet_bounds.insert(m_meshlet_bounds.end(), output.meshlet_bounds.begin(), output.meshlet_bounds.end());
             m_meshlet_descs.insert(m_meshlet_descs.end(), output.meshlets.begin(), output.meshlets.end());
 
-            m_mesh_infos[i] = {.vertex_offset  = vertex_count,
+            m_mesh_infos[i] = {.center         = {aabb_center.x, aabb_center.y, aabb_center.z},
+                               .vertex_offset  = vertex_count,
+                               .extent         = {aabb_extent.x, aabb_extent.y, aabb_extent.z},
                                .index_offset   = index_count,
                                .vertex_count   = (uint32_t)(output.meshlet_vertex_data.size() / (stride / sizeof(float))),
                                .index_count    = (uint32_t)output.primitive_indices.size(),
@@ -420,12 +428,33 @@ namespace Moer::Resource::Gltf {
             auto mesh_info     = RenderableManager::Get().GetMeshInfo(entity);
             auto model_2_world = transform.GetMatrix4x4();
             //todo material data not correct
+            auto scale = transform.AffineDecomposition().scaling;
             instance_data.emplace_back(model_2_world,
                                        Inverse(model_2_world),
+                                       std::min(scale.x, std::min(scale.y, scale.z)),
+                                       0,
                                        instance_id,
                                        0);
+            Vector4f corner[8];
+            corner[0]    = model_2_world * Vector4f(mesh_info.center + mesh_info.extent, 1.0f);
+            corner[1]    = model_2_world * Vector4f(mesh_info.center - Vector3f(mesh_info.extent.x, mesh_info.extent.y, -mesh_info.extent.z), 1.0f);
+            corner[2]    = model_2_world * Vector4f(mesh_info.center - Vector3f(mesh_info.extent.x, -mesh_info.extent.y, mesh_info.extent.z), 1.0f);
+            corner[3]    = model_2_world * Vector4f(mesh_info.center - Vector3f(mesh_info.extent.x, -mesh_info.extent.y, -mesh_info.extent.z), 1.0f);
+            corner[4]    = model_2_world * Vector4f(mesh_info.center - Vector3f(-mesh_info.extent.x, mesh_info.extent.y, mesh_info.extent.z), 1.0f);
+            corner[5]    = model_2_world * Vector4f(mesh_info.center - Vector3f(-mesh_info.extent.x, mesh_info.extent.y, -mesh_info.extent.z), 1.0f);
+            corner[6]    = model_2_world * Vector4f(mesh_info.center - Vector3f(-mesh_info.extent.x, -mesh_info.extent.y, mesh_info.extent.z), 1.0f);
+            corner[7]    = model_2_world * Vector4f(mesh_info.center - mesh_info.extent, 1.0f);
+            auto new_min = corner[0];
+            auto new_max = corner[0];
+            for (int i = 1; i < 8; i++) {
+                new_min = Min(new_min, corner[i]);
+                new_max = Max(new_max, corner[i]);
+            }
+
             instance_mesh_info.emplace_back(
+                Vector3f(new_min + new_max) * 0.5f,
                 mesh_info.vertex_offset,
+                Vector3f(new_max - new_min) * 0.5f,
                 mesh_info.vertex_count,
                 mesh_info.index_offset,
                 mesh_info.index_count,
@@ -524,8 +553,8 @@ namespace Moer::Resource::Gltf {
             for (uint32_t i = 0; i < node->mNumMeshes; i++) {
                 const auto  mesh_idx = node->mMeshes[i];
                 auto* const ai_mesh  = scene->mMeshes[mesh_idx];
-
-                auto entity = EntityManager::Get().Create();
+                const auto& aabb     = ai_mesh->mAABB;
+                auto        entity   = EntityManager::Get().Create();
 
                 RenderableManager::Builder().Geometry(EPrimitiveType::TRIANGLES,
                                                       m_mesh_infos[mesh_idx].vertex_count,

@@ -44,7 +44,7 @@ void             ShaderCompiler::Init() {
 class FakeRHI : public IVulkanRHI {
 public:
     FakeRHI() {
-        rhi_type = ERHIType::Vulkan;
+        m_rhi_info.rhi_type = ERHIType::Vulkan;
     }
 };
 /**
@@ -76,7 +76,7 @@ struct ShaderCompileBatch {
         std::string_view                entry_point,
         std::string_view                relative_source_file_path,
         std::string_view                shader_name,
-        uint32_t                       shader_name_hash,
+        uint32_t                        shader_name_hash,
         const ShaderParametersMetadata* param_meta_data) {
         inputs.emplace_back(
             ShaderCompilerInput{
@@ -115,11 +115,11 @@ public:
           entry_point(input.entry_point),
           relative_source_file_path(input.relative_source_file_path),
           shader_name(input.shader_name),
-          shader_name_hash(input.shader_name_hash){
+          shader_name_hash(input.shader_name_hash) {
 
         SetBasePlatformEnvironment();
     }
-    void DispatchAndExecute(const std::function<void(ShaderCompilerOutput*)>& post_process_func) {
+    void DispatchAndExecute(const std::function<void(ShaderCompilerOutput*&)>& post_process_func) {
         //call after registration
         meta_type = ShaderMetaType::GetShaderMetaType(shader_name_hash);
         //construct valid mutations
@@ -155,7 +155,7 @@ public:
             batch.CompileBatch();
             output_temp_array[i].swap(batch.outputs);
         });
-        for_each(output_temp_array.begin(), output_temp_array.end(), [this](auto& output_array) {
+        std::for_each(output_temp_array.begin(), output_temp_array.end(), [this](auto& output_array) {
             outputs.insert(outputs.end(), output_array.begin(), output_array.end());
         });
 
@@ -192,9 +192,8 @@ public:
     uint32_t                  shader_name_hash;
     ShaderMetaType*           meta_type;
 
-    Moer::Array<ShaderCompilerOutput*>
-                                     outputs;
-    Moer::Array<ShaderCompilerInput> inputs;
+    Moer::Array<ShaderCompilerOutput*> outputs;
+    Moer::Array<ShaderCompilerInput>   inputs;
 };
 
 void ShaderCompileJob::Finalize(const ShaderCompileJobInput& input) {
@@ -211,7 +210,7 @@ ShaderCompileJob::~ShaderCompileJob() {
         delete impl;
     }
 }
-void ShaderCompileJob::DispatchAndExecute(const std::function<void(ShaderCompilerOutput*)>& post_process_func) {
+void ShaderCompileJob::DispatchAndExecute(const std::function<void(ShaderCompilerOutput*&)>& post_process_func) {
     assert(impl && "shader compile job not finalized");
     impl->DispatchAndExecute(post_process_func);
 }
