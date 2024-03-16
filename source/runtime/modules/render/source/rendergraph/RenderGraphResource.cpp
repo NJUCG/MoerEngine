@@ -10,7 +10,7 @@ namespace Moer {
     void RenderGraphResource::ConnectForWrite(DepdencyGraph& graph, PassNode* pass_node, uint32_t usage) {
         auto edge = MoerNew(DepdencyGraph::Edge)(graph, pass_node, this, usage);
     }
-    RenderGraphResource::RenderGraphResource(const std::string& name, Type type, bool imported) : Node(name), m_type(type),m_imported(imported) {
+    RenderGraphResource::RenderGraphResource(const std::string& name, Type type, bool imported) : Node(name), m_type(type), m_imported(imported) {
     }
     RenderGraphBuffer::RenderGraphBuffer(const std::string& name, Descriptor desc) : RenderGraphResource(name, Type::Buffer, false) {
     }
@@ -18,6 +18,8 @@ namespace Moer {
     }
     void RenderGraphBuffer::Create() {
         //  m_buffer = RenderGraphResourceCache::Get().GetBuffer(name, m_desc);
+    }
+    void RenderGraphBuffer::ResloveResourceUsage(RHIGraphicsCommandList* cmd_list, uint32_t usage) {
     }
 
     // template<typename ViewClass>
@@ -96,6 +98,54 @@ namespace Moer {
     RenderGraphTexture::RenderGraphTexture(const std::string& name, Descriptor desc) : RenderGraphResource(name, Type::Texture2D, false), m_desc(desc) {
     }
     RenderGraphTexture::RenderGraphTexture(const std::string& name, RHITextureRef texture) : RenderGraphResource(name, Type::Texture2D, true), m_texture(texture) {
+    }
+
+    static inline ETextureLayout GetTextureLayout(RenderGraphTexture::Usage usage) {
+
+        if (EnumHasAnyFlag(usage, RenderGraphTexture::Usage::COLOR_ATTACHMENT)) {
+            return TEXTURE_LAYOUT_COLOR_ATTACHMENT;
+        }
+        if (EnumHasAnyFlag(usage, RenderGraphTexture::Usage::DEPTH_STENCIL_ATTACHMENT)) {
+            if (EnumHasAnyFlag(usage, ETextureUsageFlags::SAMPLED)) {
+                return TEXTURE_LAYOUT_STENCIL_READ;
+            }
+            return TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE;
+        }
+        if (EnumHasAnyFlag(usage, RenderGraphTexture::Usage::SAMPLED)) {
+            return TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        }
+        if (EnumHasAnyFlag(usage, RenderGraphTexture::Usage::TRANSFER_SRC)) {
+            return TEXTURE_LAYOUT_TRANSFER_SRC;
+        }
+        if (EnumHasAnyFlag(usage, RenderGraphTexture::Usage::TRANSFER_DST)) {
+            return TEXTURE_LAYOUT_TRANSFER_DST;
+        }
+
+        return TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    }
+
+    void RenderGraphTexture::ResloveResourceUsage(RHIGraphicsCommandList* cmd_list, uint32_t usage) {
+        Usage                    usage_flags = static_cast<Usage>(usage);
+        RHIBarrierDependencyInfo barrier_dependency_info;
+        barrier_dependency_info.texture_barriers.resize(1);
+        auto& texture_barrier_info = barrier_dependency_info.texture_barriers[0];
+
+        //Todo is this correct?
+        bool                is_depth_stencil = EnumHasAnyFlag(usage_flags, RenderGraphTexture::Usage::DEPTH_STENCIL_ATTACHMENT);
+        RHISubresourceRange subresource_range(is_depth_stencil ? ETextureAspectFlags::DEPTH_SLICE : ETextureAspectFlags::COLOR, 0, 1, 0, 1, 0, 1);
+        auto                src_layout = m_texture->GetLayout(subresource_range);
+        auto                dst_layout = GetTextureLayout(static_cast<RenderGraphTexture::Usage>(usage));
+        if (src_layout == dst_layout)
+            return;
+        texture_barrier_info
+            .SetTexture(m_texture)
+            .SetSrcTextureLayout(src_layout)
+            .SetDstTextureLayout(dst_layout)
+            .SetSrcStage(ERHIPipelineStageFlags::PS_TRANSFER)
+            .SetDstStage(ERHIPipelineStageFlags::PS_COLOR_ATTACHMENT_OUTPUT)
+            .SetDstAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
+        cmd_list->SetPipelineBarrier(barrier_dependency_info);
+        m_texture->SetLayout(subresource_range, dst_layout);
     }
 
 }

@@ -47,7 +47,7 @@ namespace Moer {
         TextureBuilder& Height(uint32_t height) noexcept;
         TextureBuilder& Depth(uint32_t depth) noexcept;
         TextureBuilder& Format(EPixelFormat format) noexcept;
-        TextureBuilder& MipAndLayers(uint32_t mip_levels, uint32_t layer_levels, uint32_t* offsets) noexcept;
+        TextureBuilder& MipAndLayers(uint32_t mip_levels, uint32_t layer_levels, const uint32_t* offsets, const Extent3D* extents) noexcept;
         TextureBuilder& CallBack(Callback callback) noexcept;
         TextureBuilder& Data(void* data, uint32_t data_size) noexcept;
         RHITextureRef   Build() noexcept;
@@ -60,6 +60,7 @@ namespace Moer {
         Callback     m_callback{nullptr};
         // uint32_t*    m_mip_offsets{nullptr};
         uint32_t* m_offsets{nullptr};
+        Extent3D* m_mip_extents{nullptr};
         void*     m_data{nullptr};
     };
 

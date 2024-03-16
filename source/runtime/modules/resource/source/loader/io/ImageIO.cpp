@@ -21,7 +21,7 @@ namespace Moer {
 
     //
     static void Generatemipmaps(ImageReadDesc& desc) {
-        if (desc.offsets.size() > 1)
+        if (desc.mip_offsets.size() > 1)
             return;
 
         Extent3D                extent         = {desc.width, desc.height, desc.layers};
@@ -34,7 +34,8 @@ namespace Moer {
 
         //  auto& mipmaps = desc.mip_map_descs;
         uint32_t old_size = one_image_size;
-        desc.offsets      = {0};
+        desc.mip_offsets  = {0};
+        desc.mip_extents  = {extent};
         mipmaps           = {{0, extent}};
         while (true) {
             auto& prev_mipmap = mipmaps.back();
@@ -48,7 +49,8 @@ namespace Moer {
             next_mipmap.extent = {next_width, next_height, 1u};
             mipmaps.emplace_back(next_mipmap);
 
-            desc.offsets.emplace_back(old_size);
+            desc.mip_offsets.emplace_back(old_size);
+            desc.mip_extents.push_back(next_mipmap.extent);
 
             old_size += next_size;
             if (next_width == 1 && next_height == 1) {
@@ -58,7 +60,7 @@ namespace Moer {
         uint32_t layer_offset = old_size;
         for (uint32_t layer = 1; layer < desc.layers; layer++) {
             for (int i = 0; i < mipmaps.size(); i++) {
-                desc.offsets.push_back(desc.offsets[desc.offsets.size() - desc.mips] + layer_offset);
+                desc.mip_offsets.push_back(desc.mip_offsets[desc.mip_offsets.size() - desc.mips] + layer_offset);
             }
         }
         old_size             = desc.layers * old_size;
@@ -66,17 +68,17 @@ namespace Moer {
         auto mip_mapped_data = new uint8_t[old_size];
 
         for (uint32_t layer = 0; layer < desc.layers; layer++) {
-            memcpy(mip_mapped_data + desc.offsets[layer * desc.mips], static_cast<uint8_t const*>(desc.data) + layer * one_image_size, one_image_size);
+            memcpy(mip_mapped_data + desc.mip_offsets[layer * desc.mips], static_cast<uint8_t const*>(desc.data) + layer * one_image_size, one_image_size);
             // auto & cur_layer_mipmaps = mipmaps[layer];
             for (int mip = 1; mip < desc.mips; mip++) {
                 auto&    prev_mipmap         = mipmaps[mip - 1];
                 auto&    next_mipmap         = mipmaps[mip];
-                uint32_t prev_mip_map_offset = desc.offsets[layer * desc.mips + mip - 1];
-                uint32_t next_mip_map_offset = desc.offsets[layer * desc.mips + mip];
+                uint32_t prev_mip_map_offset = desc.mip_offsets[layer * desc.mips + mip - 1];
+                uint32_t next_mip_map_offset = desc.mip_offsets[layer * desc.mips + mip];
                 stbir_resize_uint8(mip_mapped_data + prev_mip_map_offset, prev_mipmap.extent.width, prev_mipmap.extent.height, 0, mip_mapped_data + next_mip_map_offset, next_mipmap.extent.width, next_mipmap.extent.height, 0, channels);
             }
         }
-        desc.data_size = old_size;    
+        desc.data_size = old_size;
         desc.data_callback(desc.data);
         desc.data          = mip_mapped_data;
         desc.data_callback = free;
@@ -145,7 +147,7 @@ namespace Moer {
                     ktx_size_t layer_offset = 0;
                     result                  = ktxTexture_GetImageOffset(ktx_texture, 0, i, 0, &layer_offset);
                     assert(result == KTX_SUCCESS);
-                    desc.offsets.push_back(layer_offset);
+                    desc.mip_offsets.push_back(layer_offset);
                 }
             }
 
@@ -157,13 +159,13 @@ namespace Moer {
                     Generatemipmaps(desc);
                 }
             } else {
-                desc.mips    = ktx_texture->numLevels;
-                desc.offsets = std::vector<uint32_t>(ktx_texture->numLevels);
+                desc.mips        = ktx_texture->numLevels;
+                desc.mip_offsets = std::vector<uint32_t>(ktx_texture->numLevels);
                 for (uint32_t layer = 0; layer < desc.layers; layer++) {
                     for (uint32_t miplevel = 0; miplevel < desc.mips; ++miplevel) {
                         ktx_size_t offset;
                         ktxTexture_GetImageOffset(ktx_texture, miplevel, layer, 0, &offset);
-                        desc.offsets.push_back(offset);
+                        desc.mip_offsets.push_back(offset);
                     }
                 }
             }

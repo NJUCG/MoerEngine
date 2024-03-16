@@ -40,6 +40,8 @@ namespace Moer {
         TextureInterfaceBlock    m_sampler_interface_block;
         BufferInterfaceBlock     m_buffer_interface_block;
         EMaterialType            m_type;
+        RHIBufferRef             m_material_data_buffer{nullptr};
+        RHICBVRef                m_material_data_cbv{nullptr};
     };
 
     Material::Material() {
@@ -163,6 +165,19 @@ namespace Moer {
             }
             default_sampler = SamplerCache::Get().GetSampler(SamplerParams());
 
+            if (!m_material_data_buffer || m_material_data_buffer->GetByteSize() != sizeof(MaterialData) * instances.size()) {
+                m_material_data_buffer = g_rhi->RHICreateBuffer<float>(sizeof(MaterialData) * instances.size(), EBufferUsageFlags::UNIFORM_BUFFER | EBufferUsageFlags::CPU_VISIBLE);
+                m_material_data_cbv    = g_rhi->RHICreateCBV(m_material_data_buffer);
+            }
+
+            uint32_t offset = 0;
+            for (size_t i = 0; i < textures.size(); i++) {
+                RHISRVRef srv = RenderGraphResourceCache::Get().GetSRV(textures[i], 0, 1, 0, 1);
+                parameters.SetParameters(srv, i + offset, 2);
+            }
+            default_sampler = RenderGraphResourceCache::Get().GetSampler({});
+            parameters.SetParameters(default_sampler, 0, 0);
+            parameters.SetParameters(m_material_data_cbv, 1, 0);
             //Bind these resources
         } else {
             //todo
@@ -180,4 +195,4 @@ namespace Moer {
     void Material::Impl::SetType(EMaterialType type) noexcept {
         m_type = type;
     }
-}
+}// namespace Moer

@@ -14,8 +14,8 @@ namespace Moer {
 
     class PassNode : public DepdencyGraph::Node {
     public:
-        virtual void                       Execute(const RenderPassContext& pass_context) = 0;
-        void                               ResloveResourceUsage();
+        virtual void                       Execute(RenderPassContext& pass_context) = 0;
+        void                               ResloveResourceUsage(RHIGraphicsCommandList* cmd_list);
         void                               AddResourceUsage(RenderGraphResource* resource, uint32_t usage);
         void                               AddResourceToCreate(RenderGraphResource* resource);
         void                               AddResourceToDestroy(RenderGraphResource* resource);
@@ -32,7 +32,7 @@ namespace Moer {
     class GraphicsPassNode : public PassNode {
     public:
         GraphicsPassNode(const std::string& passName, RenderGraphPass* pass);
-        void Execute(const RenderPassContext& pass_context) override;
+        void Execute(RenderPassContext& pass_context) override;
         void DeclareRenderPass(const RenderGraphPassDescriptor& descriptor);
         ~GraphicsPassNode();
 

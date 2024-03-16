@@ -2,8 +2,11 @@
 #include "DepdencyGraph.h"
 #include "rhi/RHICommand.h"
 
+#include <functional>
+
 namespace Moer {
     class RenderGraph;
+    // class RHIGraphicsCommandList;
     enum class RENDER_GRAPH_PASS_TYPE : uint8_t {
         UNDEFINED  = 0,
         GRAPHICS   = 1,
@@ -25,9 +28,9 @@ namespace Moer {
     //
     // };
 
-    using GraphicsExecute   = std::function<void(const RenderPassContext& context)>;
-    using ComputeExecute    = std::function<void(const RenderPassContext& context)>;
-    using RaytracingExecute = std::function<void(const RenderPassContext& context)>;
+    using GraphicsExecute   = std::function<void(RenderPassContext& context)>;
+    using ComputeExecute    = std::function<void(RenderPassContext& context)>;
+    using RaytracingExecute = std::function<void(RenderPassContext& context)>;
 
     class RenderGraphPass {
     public:
@@ -40,7 +43,7 @@ namespace Moer {
             : mExecute(std::move(execute)) {
         }
 
-        void Execute(const RenderPassContext& data) {
+        void Execute(RenderPassContext& data) {
             mExecute(data);
         }
 
@@ -48,7 +51,7 @@ namespace Moer {
 
     protected:
         // RenderPassContext data;
-        GraphicsExecute   mExecute;
+        GraphicsExecute mExecute;
     };
 
     // template<typename Data, typename Execute>

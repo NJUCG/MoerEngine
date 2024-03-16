@@ -180,7 +180,7 @@ namespace Moer::Resource::Gltf {
             .Format(EPixelFormat::PF_R8G8B8A8_UNORM)
             .Data(image_desc.data, image_desc.data_size)
             .CallBack(image_desc.data_callback)
-            .MipAndLayers(image_desc.mips, image_desc.layers, image_desc.offsets.data());
+            .MipAndLayers(image_desc.mips, image_desc.layers, image_desc.mip_offsets.data(), image_desc.mip_extents.data());
 
         EnqueueRenderTask([this, builder, mat, param_name, texture_path]() {
             RHITextureRef texture = builder->Build();

@@ -1,9 +1,11 @@
 #pragma once
 #include "DepdencyGraph.h"
+#include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 namespace Moer {
     class PassNode;
+    // class RHIGraphicsCommandList;
     class RENDER_API RenderGraphResource : public DepdencyGraph::Node {
     public:
         enum class Type {
@@ -17,6 +19,7 @@ namespace Moer {
         void ConnectForRead(DepdencyGraph& graph, PassNode*, uint32_t usage);
         void ConnectForWrite(DepdencyGraph& graph, PassNode*, uint32_t usage);
         RenderGraphResource(const std::string& name, Type type, bool imported = false);
+        virtual void ResloveResourceUsage(RHIGraphicsCommandList* cmd_list, uint32_t usage) = 0;
         //Pass to create this resource
         PassNode* create_pass{nullptr};
         // Pass to destroy this resource
@@ -42,6 +45,7 @@ namespace Moer {
         RenderGraphBuffer(const std::string& name, Descriptor desc);
         RenderGraphBuffer(const std::string& name, RHIBufferRef);
         void Create() override;
+        void ResloveResourceUsage(RHIGraphicsCommandList* cmd_list, uint32_t usage) override;
 
     protected:
         RHIBufferRef m_buffer{nullptr};
@@ -67,6 +71,7 @@ namespace Moer {
         void      Create() override;
         RenderGraphTexture(const std::string& name, Descriptor desc);
         RenderGraphTexture(const std::string& name, RHITextureRef tex);
+        void ResloveResourceUsage(RHIGraphicsCommandList* cmd_list, uint32_t usage) override;
 
     protected:
         RHITextureRef m_texture;

@@ -2,7 +2,10 @@
 #include "rendergraph/RenderGraph.h"
 #include "rhi/RHICommand.h"
 namespace Moer {
-    void PassNode::ResloveResourceUsage() {
+    void PassNode::ResloveResourceUsage(RHIGraphicsCommandList* cmd_list) {
+        for (auto& resource : m_resourceUsage) {
+            resource.first->ResloveResourceUsage(cmd_list, resource.second);
+        }
         //Todo Handle  resource transition
     }
     void PassNode::AddResourceUsage(RenderGraphResource* resource, uint32_t usage) {
@@ -26,7 +29,7 @@ namespace Moer {
     }
     GraphicsPassNode::GraphicsPassNode(const std::string& passName, RenderGraphPass* pass) : PassNode(passName), m_pass(pass) {
     }
-    void GraphicsPassNode::Execute(const RenderPassContext& pass_context) {
+    void GraphicsPassNode::Execute(RenderPassContext& pass_context) {
         RHIGraphicsCommandList* cmd_list     = pass_context.cmd_list;
         auto&                   render_graph = pass_context.graph;
 
@@ -53,8 +56,7 @@ namespace Moer {
             color_attachment_idx++;
         }
 
-        if(m_renderPassData.m_descriptor.depth_stencil_attachment.isInitialized())
-        {
+        if (m_renderPassData.m_descriptor.depth_stencil_attachment.isInitialized()) {
             auto& depth_attachment_view            = pass_info.depth_stencil_attachment.depth_stencil_attachment_view;
             auto  depth_texture                    = render_graph.GetTexture(m_renderPassData.m_descriptor.depth_stencil_attachment);
             depth_attachment_view.texture_view     = depth_texture->GetUAV();

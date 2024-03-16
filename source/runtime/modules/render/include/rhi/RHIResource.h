@@ -887,6 +887,16 @@ public:
     EPixelFormat GetUAVFormat() const {
         return GetInfo().uav_format;
     }
+    void SetLayout(const RHISubresourceRange& _subresource_range, ETextureLayout _layout) {
+        subresource_layouts[_subresource_range] = _layout;
+    }
+    ETextureLayout GetLayout(const RHISubresourceRange& _subresource_range) const {
+        auto it = subresource_layouts.find(_subresource_range);
+        if (it != subresource_layouts.end()) {
+            return it->second;
+        }
+        return TEXTURE_LAYOUT_UNDEFINED;
+    }
     RHIClearAttachment GetClearAttachment() const { return GetInfo().clear_attachment; }
 
 protected:
@@ -896,6 +906,18 @@ private:
     friend class RHITextureReference;
     explicit RHITexture(ERHIResourceType _type) : RHIViewableResource(_type) {}
     RHITextureInfo texture_info;
+    struct RHISubresourceRangeHash {
+        size_t operator()(const RHISubresourceRange& range) const {
+            size_t hash = 0;
+            HashCombine(hash, range.aspect);
+            HashCombine(hash, range.mip_index);
+            HashCombine(hash, range.num_mips);
+            HashCombine(hash, range.array_index);
+            HashCombine(hash, range.array_count);
+            return hash;
+        }
+    };
+    Moer::UnorderedMap<RHISubresourceRange, ETextureLayout, RHISubresourceRangeHash> subresource_layouts;
 };
 
 #pragma endregion

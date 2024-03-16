@@ -98,6 +98,8 @@ namespace Moer {
         RHIBufferRef index_buffer;
         RHIBufferRef constant_buffer;
 
+        RHISRVRef instance_buffer_view;
+
         RHIGraphicsPipelineStateRef gbuffer_pipeline_state;
         RHIGraphicsPipelineStateRef lighting_pipeline_state;
         // RHIGraphicsPipelineStateRef pipeline_state;
@@ -121,12 +123,31 @@ namespace Moer {
             auto depth = render_graph.ImportTexture("depth",virtual_viewport->getDepthTexture());
             builder.writeTextures({normal,mat,position},RenderGraphTexture::Usage::COLOR_ATTACHMENT);
             builder.writeTexture(depth,RenderGraphTexture::Usage::DEPTH_STENCIL_ATTACHMENT);
-            builder.DeclareRenderPass({.color_attachments =  {normal,mat,position},.depth_stencil_attachment =  depth}); }, [&](const RenderPassContext& context) {
+            builder.DeclareRenderPass({.color_attachments =  {normal,mat,position},.depth_stencil_attachment =  depth}); }, [&](RenderPassContext& context) {
             cmd_list->SetPipelineState(gbuffer_pipeline_state);
-           // cmd_list->BindVertexBuffers()    
-            g_scene->ForEach([](Entity entity) {
+           // cmd_list->BindVertexBuffers()
+                auto scene = g_scene;
+                cmd_list->BindIndexBuffer(scene->GetBuffer("index_buffer"), 0, IET_UINT32);
+                         uint32_t           offset[]           = {0, 0};
+                         const RHIBufferRef prim_vertex_buffer = scene->GetBuffer("vertex_buffer");
+                         const RHIBufferRef instance_id_buffer = scene->GetBuffer("instance_id_buffer");
+                         RHIBufferRef       vbuffers[]         = {prim_vertex_buffer, instance_id_buffer};
+                         cmd_list->BindVertexBuffers(0, 2, vbuffers, offset);
+
+                auto camera_entity = g_scene->GetCameras()[0];
+        auto camera        = CameraManager::Get().Get(camera_entity);
+
+        CameraData camera_data;
+        auto       vp              = camera->GetProjectionMatrix() * camera->GetViewMatrix();
+                TestGBufferShaderVert::Parameters params;
+            params.camera_data   = camera_data;
+            params.instance_data = instance_buffer_view;
+
+            RHIBatchedShaderParameters batched_params;
+            batched_params.SetParameters(ShaderResourceManager::GetInstance().GetShader<TestGBufferShaderVert>(), params);
+            scene->ForEach([cmd_list](Entity entity) {
                 auto mesh_info = RenderableManager::Get().GetMeshInfo(entity);
-                cmd_list->DrawIndexedInstanced()
+                cmd_list->DrawIndexedInstanced(mesh_info.index_count, 1, mesh_info.index_offset, mesh_info.vertex_offset, 0);
             }); });
 
         render_graph.AddGraphicPass(
@@ -136,29 +157,39 @@ namespace Moer {
             auto position = render_graph.GetBlackBoard().GetHandle("position");
             auto output = render_graph.ImportTexture("swapchain_output",virtual_viewport->GetPresentTextureSRV()->GetTexture());
             builder.readTextures({normal,mat,position},RenderGraphTexture::Usage::SAMPLED).writeTexture(output);
-            builder.DeclareRenderPass({.color_attachments =  {output}}); }, [&](const RenderPassContext& context) {
+            builder.DeclareRenderPass({.color_attachments =  {output}}); }, [&](RenderPassContext& context) {
             auto cmd_list = context.cmd_list;
             cmd_list->SetPipelineState(lighting_pipeline_state);
 
             //First Get all material instances
-            //Material organize this materials
+            //Material organize this materials 
             //Material bind all resources for it's pass
             //Draw a full screen quad pass for each material type 
-            Moer::UnorderedSet<EMaterialType> material_types = {};
+            Moer::UnorderedSet<EMaterialType> material_types = {}; 
             Moer::UnorderedMap<EMaterialType,Moer::Array<MaterialInstanceRef>> material_instances;
             g_scene->ForEach([&](Entity entity) {
                 if (RenderableManager::Get().Contains(entity)) {
-                    auto mi = RenderableManager::Get().GetMaterialInstance(entity);
+                    
+                     auto mi = RenderableManager::Get().GetMaterialInstance(entity);
                     material_types.insert(mi->GetMaterial()->GetType());
                     material_instances[mi->GetMaterial()->GetType()].push_back(mi);
                 }
-            });
+            }); 
+
+             auto mat_srv = render_graph.GetBlackBoard().GetTexture("mat")->GetSRV();
+             auto normal_srv = render_graph.GetBlackBoard().GetTexture("normal")->GetSRV();
+                auto position_srv = render_graph.GetBlackBoard().GetTexture("position")->GetSRV();
+               
             for(auto type : material_types){
-                auto& instances = material_instances[type];
-                MaterialRef material = instances[0]->GetMaterial();
                 RHIBatchedShaderParameters parameters;
-                material->OrganizeInstancesAndBind(parameters,instances);
-                //
+                parameters.SetParameters(mat_srv,0,1);
+                parameters.SetParameters(position_srv,0,2);
+                parameters.SetParameters(normal_srv,0,3);
+                auto& mat_instances = material_instances[type];
+                MaterialRef material = mat_instances[0]->GetMaterial();
+                material->OrganizeInstancesAndBind(parameters,mat_instances);
+                g_rhi->RHISetBatchedShaderParameters(lighting_pipeline_state,parameters);
+
                 cmd_list->DrawIndexedInstanced(3, 1, 0, 0, 0);
             } });
 
@@ -254,6 +285,8 @@ namespace Moer {
                     std::move(lighting_shader_input_info))
                 .Finalize();
         lighting_pipeline_state = g_rhi->RHICreateGraphicsPSO(std::move(lighting_pso_create_info));
+
+        instance_buffer_view = g_rhi->RHICreateBufferSRV(g_scene->GetBuffer("instance_data"));
     }
 
     void RenderGraphRender::Impl::ShutDown() {

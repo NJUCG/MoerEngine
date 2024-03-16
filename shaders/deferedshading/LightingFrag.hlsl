@@ -1,10 +1,10 @@
 #include "framework/Material.hlsl"
 
-[[vk::binding(1, 1)]] Texture2D scene_textures[25];
+[[vk::binding(2,0)]] Texture2D scene_textures[25];
 
 static const uint CUR_MATERIAL_TYPE = 0;
 
-StructuredBuffer<MaterialData> material_data : register(t0, space0);
+[[vk::binding(0,1)]] StructuredBuffer<MaterialData> material_data : register(t0, space0);
 
 // [[vk::input_attachment_index(0), vk::binding(1,0)]] SubpassInput mat_attach;
 // [[vk::input_attachment_index(1), vk::binding(1,1)]] SubpassInput normal_attach;
@@ -14,7 +14,7 @@ StructuredBuffer<MaterialData> material_data : register(t0, space0);
 [[ vk::binding(1,1)]] Texture2D normal_attach;
 [[, vk::binding(1,2)]] Texture2D pos_attach;
 
-[[vk::binding(0, 1)]] SamplerState defaultSampler;
+[[vk::binding(0, 0)]] SamplerState defaultSampler;
 
 // [[vk::input_attachment_index(1), vk::binding(1)]] SubpassInput depthAttach;
 

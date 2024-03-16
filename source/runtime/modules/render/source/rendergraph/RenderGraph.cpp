@@ -87,14 +87,15 @@ namespace Moer {
     void RenderGraph::AddRayTracingPass(const std::string& name, const RayTracingSetup& setup, RaytracingExecute&& execute) {
         //TODO
     }
-    void RenderGraph::Execute(RHIGraphicsCommandList* list) {
+    void RenderGraph::Execute(RHIGraphicsCommandList* cmd_list) {
         Compile();
         for (auto& pass : m_passes) {
             for (auto& resource : pass->GetResourcesToCreate()) {
                 resource->Create();
             }
-            pass->ResloveResourceUsage();
-            pass->Execute({.graph = *this, .cmd_list = list});
+            pass->ResloveResourceUsage(cmd_list);
+            RenderPassContext pass_context{.graph = *this, .cmd_list = cmd_list};
+            pass->Execute(pass_context);
             for (auto& resource : pass->GetResourcesToDestroy()) {
                 resource->Destroy();
             }

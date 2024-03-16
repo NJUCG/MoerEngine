@@ -191,6 +191,29 @@ namespace Moer {
             return texture;
         }
 
+        RHISampler* GetSampler(const RHISamplerCreateInfo& params) {
+            size_t hash;
+
+            HashCombine(hash, params.filter.GetValue());
+            HashCombine(hash, params.texture_layout);
+            HashCombine(hash, params.address_mode_u.GetValue());
+            HashCombine(hash, params.address_mode_v.GetValue());
+            HashCombine(hash, params.address_mode_w.GetValue());
+            HashCombine(hash, params.mip_lod_bias);
+            HashCombine(hash, params.min_mip_level);
+            HashCombine(hash, params.max_mip_level);
+            HashCombine(hash, params.max_anisotropy);
+            HashCombine(hash, params.border_color);
+            HashCombine(hash, params.compare_op.GetValue());
+            auto it = mSamplers.find(hash);
+            if (it != mSamplers.end()) {
+                return it->second;
+            }
+            RHISamplerRef sampler = g_rhi->RHICreateSampler(params);
+            mSamplers.insert({hash, sampler});
+            return sampler;
+        }
+
         // RHIBufferRef GetBuffer(const std::string& name, RenderGraphBuffer::Descriptor desc) {
         //     size_t hash;
         //     HashCombine(hash, name);
@@ -242,6 +265,7 @@ namespace Moer {
         mutable Moer::UnorderedMap<size_t, RHIBufferRef>  m_buffers;
         mutable Moer::UnorderedMap<size_t, RHISRVRef>     mSrvs;
         mutable Moer::UnorderedMap<size_t, RHIUAVRef>     mUavs;
+        mutable Moer::UnorderedMap<size_t, RHISamplerRef> mSamplers;
     };
 
     RHITextureRef RenderGraphResourceCache::GetTexture(const std::string& name, Extent2D size, EPixelFormat format, ETextureUsageFlags usage, uint32_t mipLevels, uint32_t arrayLayers) {
@@ -251,8 +275,11 @@ namespace Moer {
     RHIUAVRef RenderGraphResourceCache::GetUAV(RHITextureRef texture, uint32_t mip_num, uint32_t array_min, uint32_t array_num) {
         return m_impl->GetUAV(texture, mip_num, array_min, array_num);
     }
-    RHISRVRef RenderGraphResourceCache::GetSRV(RHITextureRef texture, uint32_t mip_num, uint32_t mip_min, uint32_t array_min, uint32_t array_num) {
+    RHISRVRef RenderGraphResourceCache::GetSRV(RHITextureRef texture, uint32_t mip_min, uint32_t mip_num, uint32_t array_min, uint32_t array_num) {
         return m_impl->GetSRV(texture, mip_num, mip_min, array_min, array_num);
+    }
+    RHISampler* RenderGraphResourceCache::GetSampler(const RHISamplerCreateInfo& params) {
+        return m_impl->GetSampler(params);
     }
     RenderGraphResourceCache::~RenderGraphResourceCache() {
         MoerDelete(m_impl);

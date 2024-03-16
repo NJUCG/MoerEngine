@@ -65,8 +65,9 @@ namespace Moer {
         RHITextureRef                    GetTexture(const std::string& name, Extent2D size, EPixelFormat format, ETextureUsageFlags usage, uint32_t mipLevels = 1, uint32_t arrayLayers = 1);
         //   RHITextureRef GetBuffer()
         // RHIBufferRef GetBuffer(const std::string & name,RenderGraphBuffer::Descriptor);
-        RHIUAVRef GetUAV(RHITextureRef texture, uint32_t mip_num = 0, uint32_t array_min = 0, uint32_t array_num = 1);
-        RHISRVRef GetSRV(RHITextureRef texture, uint32_t mip_num = 0, uint32_t mip_min = 0, uint32_t array_min = 0, uint32_t array_num = 1);
+        RHIUAVRef   GetUAV(RHITextureRef texture, uint32_t mip_num = 0, uint32_t array_min = 0, uint32_t array_num = 1);
+        RHISRVRef   GetSRV(RHITextureRef texture, uint32_t mip_min = 0, uint32_t mip_num = 0, uint32_t array_min = 0, uint32_t array_num = 1);
+        RHISampler* GetSampler(const RHISamplerCreateInfo& params);
         ~RenderGraphResourceCache();
 
     protected:
