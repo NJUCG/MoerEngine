@@ -778,10 +778,8 @@ enum EGlobalBufferLifeScope {
 enum class ETextureUsageFlags : uint32_t {
     UNDEFINED = 0ULL,
 
-    SHADER_RESOURCE = 1 << 0,
-    CPU_VISIBLE     = 1 << 1,
-    TILLING_NONE    = 1 << 2,
-    DYNAMIC         = 1 << 3,
+    CPU_VISIBLE  = 1 << 1,
+    TILLING_NONE = 1 << 2,
 
     INPUT_ATTACHMENT         = 1 << 4,
     TRANSFER_SRC             = 1 << 5,
@@ -798,10 +796,10 @@ enum class ETextureUsageFlags : uint32_t {
     FRAGMENT_DENSITY_MAP             = 1 << 14,
     FRAGMENT_SHADING_RATE_ATTACHMENT = 1 << 15,
 
-    VIDEO_ENCODE             = 1 << 16,
-    ATTACHMENT_FEEDBACK_LOOP = 1 << 17,
-    SRGB                     = 1 << 18,
-    Num                      = 19
+    VIDEO_ENCODE = 1 << 16,
+    // ATTACHMENT_FEEDBACK_LOOP = 1 << 17,
+    SRGB = 1 << 18,
+    Num  = 19
 };
 ENUM_BIT_OP_IMPL(ETextureUsageFlags, FLAG)
 
@@ -971,13 +969,13 @@ struct ViewPort {
 
 struct MeshInfo {
     Moer::Vector3f center;
-    uint32_t vertex_offset;
+    uint32_t       vertex_offset;
     Moer::Vector3f extent;
-    uint32_t index_offset;
-    uint32_t vertex_count;
-    uint32_t index_count;
-    uint32_t meshlet_offset;
-    uint32_t meshlet_count;
+    uint32_t       index_offset;
+    uint32_t       vertex_count;
+    uint32_t       index_count;
+    uint32_t       meshlet_offset;
+    uint32_t       meshlet_count;
 };
 struct MeshBoundInfo {
     Moer::Vector3f center;
@@ -1004,6 +1002,7 @@ namespace Moer {
         int8_t cone_cutoff; /* = cos(angle/2) */
 
         /* bool reject = dot(center - camera_position, cone_axis) >= cone_cutoff* length(center - camera_position) + radius; */
+        uint32_t padding[3];
     };
     struct DrawInstanceCmd {
         uint32_t index_count;
@@ -1011,6 +1010,7 @@ namespace Moer {
         uint32_t first_index;
         uint32_t vertex_offset;
         uint32_t first_instance;
+        uint32_t padding[3];
     };
 }// namespace Moer
 #pragma endregion

@@ -33,6 +33,7 @@
 #include "vulkan/vulkan_core.h"
 #include "window/WindowContext.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <type_traits>
@@ -615,14 +616,15 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPSO(RHIGraphicsPSOCr
 
             descriptor_bindings[info.space].push_back(std::move(binding));
         }
-
+        uint32_t constant_offset = 0;
         // constants
         for (const auto& info : constant_infos) {
             VkPushConstantRange range{};
             range.stageFlags |= VulkanEnumTranslator::METoVKShaderStageFlags(meta_shader->GetShaderType());
-            range.offset = info.offset;
+            range.offset = constant_offset;
             range.size   = info.stride;
             push_constant_ranges.push_back(range);
+            constant_offset += info.stride;
         }
     }
 
@@ -1328,7 +1330,7 @@ RHITextureRef VulkanRHIImpl::RHICreateTexture(const RHITextureCreateInfo& info) 
     //     image_create_info.pQueueFamilyIndices   = queue_family_indices;
     // }
 
-    image_create_info.initialLayout = VulkanEnumTranslator::METoVKImageLayout(info.layout);
+    image_create_info.initialLayout = VulkanEnumTranslator::METoVKImageLayout(info.layout) == VK_IMAGE_LAYOUT_PREINITIALIZED ? VK_IMAGE_LAYOUT_PREINITIALIZED : VK_IMAGE_LAYOUT_UNDEFINED;
 
     VmaAllocationCreateInfo alloc_create_info{};
     alloc_create_info.flags = 0;
@@ -1356,15 +1358,25 @@ RHISRVRef VulkanRHIImpl::RHICreateSRVInner(RHIViewableResource* _resource, const
         auto* vk_texture = static_cast<VulkanRHITexture*>(_resource);
         VK_CHECK_NULLPTR(vk_texture, "RHICreateSRVInner: resource to be viewed is nullptr!", return RHISRVRef{});
 
-        image_view_create_info.image                           = vk_texture->GetHandle();
-        image_view_create_info.viewType                        = VulkanEnumTranslator::METoVKImageViewType(_view_info.texture.srv.dimension);
-        image_view_create_info.format                          = _view_info.texture.srv.format == PF_UNDEFINED ? VulkanEnumTranslator::METoVKFormat(vk_texture->GetUAVFormat()) : VulkanEnumTranslator::METoVKFormat(_view_info.texture.srv.format);
-        image_view_create_info.components                      = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
-        image_view_create_info.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;// MARK...
+        image_view_create_info.image      = vk_texture->GetHandle();
+        image_view_create_info.viewType   = VulkanEnumTranslator::METoVKImageViewType(_view_info.texture.srv.dimension);
+        image_view_create_info.format     = _view_info.texture.srv.format == PF_UNDEFINED ? VulkanEnumTranslator::METoVKFormat(vk_texture->GetUAVFormat()) : VulkanEnumTranslator::METoVKFormat(_view_info.texture.srv.format);
+        image_view_create_info.components = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
+        VkImageAspectFlags flags;
+        if (uint32_t(vk_texture->GetUsageFlags() & ETextureUsageFlags::COLOR_ATTACHMENT) != 0) {
+            flags = VK_IMAGE_ASPECT_COLOR_BIT;
+        } else if (uint32_t(vk_texture->GetUsageFlags() & ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT) != 0) {
+            flags = VK_IMAGE_ASPECT_DEPTH_BIT;
+        } else {
+            flags = VK_IMAGE_ASPECT_COLOR_BIT;
+        }
+        image_view_create_info.subresourceRange.aspectMask     = flags;// MARK...
         image_view_create_info.subresourceRange.baseMipLevel   = _view_info.texture.srv.mip_min;
         image_view_create_info.subresourceRange.levelCount     = _view_info.texture.srv.mip_num;
         image_view_create_info.subresourceRange.baseArrayLayer = _view_info.texture.srv.array_min;
         image_view_create_info.subresourceRange.layerCount     = _view_info.texture.srv.array_num;
+
+        // image_view_create_info.components = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
 
         VK_CHECK_RESULT(vkCreateImageView(m_device->GetDevice(), &image_view_create_info, nullptr, &vk_srv->m_view));
 
@@ -1435,8 +1447,16 @@ RHIUAVRef VulkanRHIImpl::RHICreateUAVInner(RHIViewableResource* _resource, const
         image_view_create_info.format   = _view_info.texture.uav.format == PF_UNDEFINED ? VulkanEnumTranslator::METoVKFormat(vk_texture->GetUAVFormat()) : VulkanEnumTranslator::METoVKFormat(_view_info.texture.uav.format);
         assert(image_view_create_info.format != VK_FORMAT_UNDEFINED && "RHICreateUnorderedAccessView: format is undefined!");
 
-        image_view_create_info.components                      = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
-        image_view_create_info.subresourceRange.aspectMask     = uint32_t(vk_texture->GetUsageFlags() & ETextureUsageFlags::COLOR_ATTACHMENT) != 0 ? VK_IMAGE_ASPECT_COLOR_BIT : (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT);
+        image_view_create_info.components = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
+        VkImageAspectFlags flags;
+        if (uint32_t(vk_texture->GetUsageFlags() & ETextureUsageFlags::COLOR_ATTACHMENT) != 0) {
+            flags = VK_IMAGE_ASPECT_COLOR_BIT;
+        } else if (uint32_t(vk_texture->GetUsageFlags() & ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT) != 0) {
+            flags = VK_IMAGE_ASPECT_DEPTH_BIT;
+        } else {
+            flags = VK_IMAGE_ASPECT_COLOR_BIT;
+        }
+        image_view_create_info.subresourceRange.aspectMask     = flags;
         image_view_create_info.subresourceRange.baseMipLevel   = _view_info.texture.uav.mip_min;
         image_view_create_info.subresourceRange.levelCount     = _view_info.texture.uav.mip_num;
         image_view_create_info.subresourceRange.baseArrayLayer = _view_info.texture.uav.array_min;

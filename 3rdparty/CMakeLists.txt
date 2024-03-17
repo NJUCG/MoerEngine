@@ -35,6 +35,7 @@ endif()
 
 set(SPDLOG_USE_STD_FORMAT ON)
 set(SPDLOG_BUILD_SHARED ON)
+set(SPDLOG_SANITIZE_ADDRESS ON)
 add_subdirectory(spdlog)
 set_target_properties(spdlog PROPERTIES FOLDER ${third_party_folder})
     

@@ -838,6 +838,11 @@ public:
         return nullptr;
     }
 
+    Moer::Vector2i GetExtent2D() const {
+        const RHITextureInfo& info = GetInfo();
+        return Moer::Vector2i(info.extent.x, info.extent.y);
+    }
+
     Moer::Vector3i GetExtent3D() const {
         const RHITextureInfo& info = GetInfo();
         switch (info.dimension) {

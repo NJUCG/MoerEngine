@@ -2,9 +2,9 @@ cmake_minimum_required(VERSION 3.1)
 
 project(spirv-reflect)
 
-OPTION(SPIRV_REFLECT_EXECUTABLE     "Build spirv-reflect executable" ON)
+# OPTION(SPIRV_REFLECT_EXECUTABLE     "Build spirv-reflect executable" ON)
 
-OPTION(SPIRV_REFLECT_STATIC_LIB     "Build a SPIRV-Reflect static library" OFF)
+# OPTION(SPIRV_REFLECT_STATIC_LIB     "Build a SPIRV-Reflect static library" OFF)
 OPTION(SPIRV_REFLECT_BUILD_TESTS    "Build the SPIRV-Reflect test suite" OFF)
 OPTION(SPIRV_REFLECT_ENABLE_ASSERTS "Enable asserts for debugging" OFF)
 OPTION(SPIRV_REFLECT_ENABLE_ASAN    "Use address sanitization" OFF)

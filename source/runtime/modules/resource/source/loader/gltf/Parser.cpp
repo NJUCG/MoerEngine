@@ -154,7 +154,7 @@ namespace Moer::Resource::Gltf {
     void Parser::Impl::LoadTexture(const aiScene* scene, const aiString& texture_path, MaterialInstanceRef& mat, const std::string& param_name) {
         if (m_textures.contains(texture_path.C_Str())) {
             auto texture = m_textures[texture_path.C_Str()];
-            mat->SetParameter(param_name,texture );
+            mat->SetParameter(param_name, texture);
             SamplerParams params{};
             params.max_mip_level = texture->GetNumMips();
             mat->SetParameter("defaultSampler", params);
@@ -164,7 +164,7 @@ namespace Moer::Resource::Gltf {
         int32_t         embedded_id = GetEmbeddedTextureId(texture_path);
         TextureBuilder* builder     = MoerNew(TextureBuilder);
         ImageReadDesc   image_desc;
-        
+
         if (embedded_id >= 0) {
             const aiTexture* texture = scene->mTextures[embedded_id];
             image_desc               = ImageIO::ReadFromMemory(reinterpret_cast<unsigned char*>(texture->pcData), texture->mWidth * texture->mHeight * 4);
@@ -201,7 +201,7 @@ namespace Moer::Resource::Gltf {
             LOG_WARNING("Current Scene has no camera");
             Entity    entity         = EntityManager::Get().Create();
             CameraRef default_camera = CameraManager::Get().Create(entity);
-            default_camera->SetFov(60.0f);
+            default_camera->SetFov(36.f);
             Transform transform = Transform(Vector3f(0.0f, 0.0f, 0.0f), Vector3f(0.0f, 0.0f, 1.0f), Vector3f(0.0f, 1.0f, 0.0f));
             default_camera->SetWorldTransform(transform);
             default_camera->SetNearClip(0.1f);
@@ -385,7 +385,7 @@ namespace Moer::Resource::Gltf {
             auto scale = transform.AffineDecomposition().scaling;
             instance_data.emplace_back(model_2_world,
                                        Inverse(model_2_world),
-                                       std::min(scale.x, std::min(scale.y, scale.z)),
+                                       std::max(scale.x, std::max(scale.y, scale.z)),
                                        0,
                                        instance_id,
                                        0);
