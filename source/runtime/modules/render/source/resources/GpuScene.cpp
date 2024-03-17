@@ -184,7 +184,6 @@ namespace Moer {
                                                    .SetInitialLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED));
         const uint32_t alignment = 256;
 
-        
         RHIBufferRef staging_buffer = g_rhi->RHICreateBuffer<std::byte>(
             m_data_size, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
 
@@ -198,13 +197,7 @@ namespace Moer {
 
         g_rhi->RHIUnmapBuffer(staging_buffer);
 
-        RHISubresourceRange range{ETextureAspectFlags::COLOR,
-                                  0,
-                                  1,
-                                  0,
-                                  1,
-                                  0,
-                                  1};
+        RHISubresourceRange range{ETextureAspectFlags::COLOR};
 
         RHITextureBarrierInfo tex_barriers[2];
 

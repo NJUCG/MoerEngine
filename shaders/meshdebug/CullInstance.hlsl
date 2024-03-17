@@ -7,7 +7,8 @@ struct TaskInput {
   float2 hiz_factor;
   float hiz_depth;
   uint recheck_counter_buffer_offset;
-  uint draw_cnt_buffer_offset;
+  uint instance_dispatch_offset;
+  uint meshlet_dispatch_count_offset;
 };
 
 struct CameraCullData {
@@ -24,9 +25,7 @@ struct CameraCullData {
 
 [[vk::binding(0, 0)]] ConstantBuffer<CameraCullData> cull_data : register(b0);
 
-[[vk::binding(0, 1)]] StructuredBuffer<InstanceData> instance_data
-    : register(t0, space0);
-[[vk::binding(1, 1)]] StructuredBuffer<InstanceMeshletInfo>
+[[vk::binding(0, 1)]] StructuredBuffer<InstanceMeshletInfo>
     instance_meshlet_info : register(t1, space0);
 
 [[vk::binding(0, 2)]] RWStructuredBuffer<InstanceMeshletCullInfo>
@@ -47,12 +46,14 @@ static const float3 corners[8] = {
     float3(-1, -1, 1),  float3(-1, 1, 1),  float3(1, 1, 1),  float3(1, -1, 1),
 };
 
-bool IsVisibleOccluded(in InstanceMeshletInfo instance, in float4x4 vp) {
+bool IsVisibleOccluded(in InstanceMeshletInfo instance, in float4x4 vp,
+                       uint instance_id) {
 
   // occulusion test
-  float2 min_xy = 1.f, max_xy = -1.f;
+  float2 min_xy = 1.f, max_xy = 0.f;
   float min_z = 0.f; // use reverse depth, 0 is far
-                     // convert to vp space
+  // convert to vp space
+  bool cross_near_plane = false;
 
   [unroll] for (uint i = 0; i < 8; i++) {
     float4 clip =
@@ -61,14 +62,13 @@ bool IsVisibleOccluded(in InstanceMeshletInfo instance, in float4x4 vp) {
     min_xy = min(min_xy, clip_pos.xy);
     max_xy = max(max_xy, clip_pos.xy);
     min_z = max(min_z, clip_pos.z); // get front z
+    cross_near_plane |= clip_pos.z < 0;
   }
   float4 rect = float4(min_xy, max_xy);
-  rect = saturate(rect * 0.5f + 0.5f); // to [0, 1]
-
+  rect = saturate(rect * 0.5f + 0.5f);                      // to [0, 1]
   float2 hiz_size = (rect.zw - rect.xy) * input.hiz_factor; // rect size in hiz
   float hiz_mip = log2(max(hiz_size.x, hiz_size.y));        // mip level
-  // printf("hiz_size %f %f\n", hiz_size.x, hiz_size.y);
-  if (hiz_mip > input.hiz_depth || min_z >= 1.f) {
+  if (hiz_mip > input.hiz_depth || min_z >= 1.f || cross_near_plane) {
     return true;
   }
   hiz_mip = ceil(hiz_mip);
@@ -79,21 +79,19 @@ bool IsVisibleOccluded(in InstanceMeshletInfo instance, in float4x4 vp) {
   float2 lower_max_xy = ceil(rect.zw * scale);
 
   float2 lower_extent = (lower_max_xy - lower_min_xy);
-  // printf("lower_extent %f %f scale %f %f hiz_mip %f\n", lower_extent.x,
-  //        lower_extent.y, scale.x, scale.y, hiz_mip);
-  hiz_mip = max(lower_extent.x, lower_extent.y) <= 2.f ? lower_level : hiz_mip;
+  hiz_mip =
+      max(lower_extent.x, lower_extent.y) <= 2.01f ? lower_level : hiz_mip;
 
   float4 depth_quad =
       float4(hiz_depth.SampleLevel(depth_sampler, rect.xy, hiz_mip),
              hiz_depth.SampleLevel(depth_sampler, rect.zy, hiz_mip),
              hiz_depth.SampleLevel(depth_sampler, rect.xw, hiz_mip),
              hiz_depth.SampleLevel(depth_sampler, rect.zw, hiz_mip));
-  // printf("depth_quad %f %f %f %f mip %f\n", depth_quad.x, depth_quad.y,
-  //  depth_quad.z, depth_quad.w, hiz_mip);
+
   depth_quad.xy = min(depth_quad.xy, depth_quad.zw);
   depth_quad.x = min(depth_quad.x, depth_quad.y);
 
-  return min_z > depth_quad.x;
+  return min_z >= depth_quad.x;
   // return true;
 }
 bool IsFrustumVisible(in InstanceMeshletInfo instance) {
@@ -128,7 +126,8 @@ bool IsFrustumVisible(in InstanceMeshletInfo instance) {
   bool vis_frustum = IsFrustumVisible(instance_mesh_info);
   bool vis_occluded =
       vis_frustum ? IsVisibleOccluded(instance_mesh_info,
-                                      cull_data.camera_data.prev_view_proj)
+                                      cull_data.camera_data.prev_view_proj,
+                                      instance_start_offset)
                   : false;
 
   bool visible = vis_frustum && vis_occluded;
@@ -145,6 +144,9 @@ bool IsFrustumVisible(in InstanceMeshletInfo instance) {
     counters_buffer.InterlockedAdd(input.counter_buffer_offset,
                                    total_culled_meshlet_count,
                                    cull_meshlet_offset);
+    IncrementDispatchCounter(counters_buffer,
+                             input.meshlet_dispatch_count_offset,
+                             total_culled_meshlet_count, cull_meshlet_offset);
   }
   cull_meshlet_offset = WaveReadLaneFirst(cull_meshlet_offset);
   cull_meshlet_offset += WavePrefixSum(culled_meshlet_count);
@@ -171,6 +173,9 @@ bool IsFrustumVisible(in InstanceMeshletInfo instance) {
   if (WaveIsFirstLane()) {
     counters_buffer.InterlockedAdd(input.recheck_counter_buffer_offset,
                                    recheck_instance_count, recheck_offset);
+
+    IncrementDispatchCounter(counters_buffer, input.instance_dispatch_offset,
+                             recheck_offset, recheck_instance_count);
   }
   recheck_offset = WaveReadLaneFirst(recheck_offset);
   recheck_offset += WavePrefixCountBits(recheck);
@@ -182,9 +187,7 @@ bool IsFrustumVisible(in InstanceMeshletInfo instance) {
 
     [numthreads(64, 1, 1)] void recheck_pass(uint3 dtid
                                              : SV_DispatchThreadID) {
-  if (dtid.x == 0) {
-    counters_buffer.Store<uint>(input.draw_cnt_buffer_offset, 0);
-  }
+
   uint total_count =
       counters_buffer.Load<uint>(input.recheck_counter_buffer_offset);
   if (dtid.x >= total_count) {
@@ -195,7 +198,8 @@ bool IsFrustumVisible(in InstanceMeshletInfo instance) {
       instance_meshlet_info[instance_start_offset];
 
   bool vis_occluded =
-      IsVisibleOccluded(instance_mesh_info, cull_data.camera_data.view_proj);
+      IsVisibleOccluded(instance_mesh_info, cull_data.camera_data.view_proj,
+                        instance_start_offset);
   // bool vis_occluded = true;
   uint culled_meshlet_count =
       vis_occluded ? instance_mesh_info.meshlet_count : 0;
@@ -207,6 +211,10 @@ bool IsFrustumVisible(in InstanceMeshletInfo instance) {
     counters_buffer.InterlockedAdd(input.counter_buffer_offset,
                                    total_culled_meshlet_count,
                                    cull_meshlet_offset);
+
+    IncrementDispatchCounter(counters_buffer,
+                             input.meshlet_dispatch_count_offset,
+                             total_culled_meshlet_count, cull_meshlet_offset);
   }
   cull_meshlet_offset = WaveReadLaneFirst(cull_meshlet_offset);
   cull_meshlet_offset += WavePrefixSum(culled_meshlet_count);

@@ -214,13 +214,11 @@ void RHIBatchedShaderParameters::SetParameters(const Shader* shader, size_t _dat
             }
         }
     }
-    Moer::Array<RHIShaderConstantParameter> temp_constant;
-
-    if (param_layout_info.GetConstantsInfos().size() > 0) {
+    if (param_layout_info.GetConstantsInfo().size() > 0) {
         raw_data.clear();
         constant_parameters.clear();
     }
-    for (const auto& param_info : param_layout_info.GetConstantsInfos()) {
+    for (const auto& param_info : param_layout_info.GetConstantsInfo()) {
         uint8_t* data = data_source + param_info.offset;
         //const must set
         uint32_t origin_offset = raw_data.size();

@@ -196,10 +196,6 @@ public:
 public:
     BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
     DEFINE_SHADER_PARAM_STRUCT(Ubo, ubo)
-    DEFINE_SHADER_PARAM_SRV(Buffer, bar)
-    //Ubo set
-    DEFINE_SHADER_PARAM_UAV(RWBuffer, dataLog)
-
     DEFINE_SHADER_PARAM_SAMPLER_ARRAY(Sampler, samp, 2)
     DEFINE_SHADER_PARAM_SAMPLER(Sampler, aniso)
     //srv set

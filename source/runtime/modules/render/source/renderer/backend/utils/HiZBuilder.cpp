@@ -30,7 +30,8 @@ namespace Moer {
                 .SetNumMips(std::min(uint32_t(std::log2(std::min(target_extent.x, target_extent.y))), max_mip_levels))
                 .SetFormat(PF_R16_SFLOAT)
                 .SetClearAttachment(RHIClearAttachment(EClearAttachment::COLOR))
-                .SetUsageFlags(ETextureUsageFlags::SHADER_RESOURCE | ETextureUsageFlags::UNORDERED_ACCESS));
+                .SetInitialLayout(ETextureLayout::TEXTURE_LAYOUT_COMMON)
+                .SetUsageFlags(ETextureUsageFlags::SAMPLED | ETextureUsageFlags::UNORDERED_ACCESS));
 
         srv = g_rhi->RHICreateTextureSRV(texture, PF_R16_SFLOAT, 0, texture->GetNumMips());
         uavs.resize(texture->GetNumMips());
@@ -44,7 +45,8 @@ namespace Moer {
         barrier.SetTexture(texture)
             .SetSrcTextureLayout(TEXTURE_LAYOUT_UNDEFINED)
             .SetDstTextureLayout(TEXTURE_LAYOUT_COMMON)
-            .SetSubResourceRange(RHISubresourceRange(ETextureAspectFlags::COLOR, 0, texture->GetNumMips(), 0, 1, 0, 1));
+            .SetSubResourceRange(RHISubresourceRange(ETextureAspectFlags::COLOR));
+
         cmd_list->BeginRecording();
         cmd_list->SetPipelineBarrier(barrier_info);
         cmd_list->EndRecording();
@@ -58,8 +60,9 @@ namespace Moer {
         fence->Wait(1);
         MoerDelete(queue);
         if (sampler == nullptr) {
-            RHISamplerCreateInfo create_info(SF_NEAREST, TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-            create_info.SetCompareOp(SCF_NEVER);
+            RHISamplerCreateInfo create_info(SF_NEAREST, TEXTURE_LAYOUT_COMMON);
+            create_info.SetCompareOp(SCF_NEVER)
+                .SetAddressMode(ESamplerAddressMode::SAM_CLAMP_TO_EDGE);
             sampler = g_rhi->RHICreateSampler(create_info);
         }
     }
@@ -113,6 +116,7 @@ namespace Moer {
             auto& hiz_barrier = depth_barrier_info.texture_barriers[1];
             hiz_barrier.SetTexture(hiz_buffer.texture)
                 .SetSubResourceRange(range)
+                .SetDstTextureLayout(TEXTURE_LAYOUT_COMMON)
                 .SetSrcStage(PS_COMPUTE_SHADER)
                 .SetDstStage(PS_COMPUTE_SHADER)
                 .SetDstAccessFlags(ERHIAccessFlags::SHADER_WRITE);
@@ -125,8 +129,6 @@ namespace Moer {
             auto& barrier = barrier_info.texture_barriers[0];
 
             barrier.SetTexture(hiz_buffer.texture)
-                // .SetSrcTextureLayout(TEXTURE_LAYOUT_WRITE)
-                // .SetDstTextureLayout(TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
                 .SetSubResourceRange(range)
                 .SetSrcStage(PS_COMPUTE_SHADER)
                 .SetDstStage(PS_COMPUTE_SHADER)
@@ -135,8 +137,6 @@ namespace Moer {
 
             auto& barrier2 = barrier_info.texture_barriers[1];
             barrier2.SetTexture(hiz_buffer.texture)
-                // .SetSrcTextureLayout(TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
-                // .SetDstTextureLayout(TEXTURE_LAYOUT_WRITE)
                 .SetSubResourceRange(range)
                 .SetSrcStage(PS_COMPUTE_SHADER)
                 .SetDstStage(PS_COMPUTE_SHADER)
@@ -149,7 +149,7 @@ namespace Moer {
 
                 } else {
                     //set target mip
-                    config.size         = Vector2i(std::max(1, mip0_size.x >> (i - 1)), std::max(1, mip0_size.y >> (i - 1)));
+                    config.size         = Vector2i(std::max(1, mip0_size.x >> (i)), std::max(1, mip0_size.y >> (i)));
                     config.b_mip0       = false;
                     config.target_level = i;
 

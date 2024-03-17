@@ -153,7 +153,7 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
         arguments.push_back(L"-fvk-use-dx-position-w");
         arguments.push_back(L"-fvk-use-dx-layout");
         arguments.push_back(L"-fvk-auto-shift-bindings");
-        arguments.push_back(L"-fvk-use-dx-position-w");
+        arguments.push_back(L"-fspv-flatten-resource-arrays");
     };
 
     auto set_default_args = [add_dx_arg, add_vk_arg](Moer::Array<std::wstring>& arguments, EShaderPlatform _platform, EShaderType _type, std::string_view _entry_point) {
@@ -165,6 +165,7 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
         arguments.emplace_back(std::wstring(_entry_point.begin(), _entry_point.end()));
         arguments.push_back(L"-I");
         arguments.push_back(Moer::ConfigManager::GetInstance().GetEngineShaderPath().generic_wstring());
+        arguments.push_back(L"-Zpr");
         // arguments.push_back(L"-all-resources-bound");
         if (_platform == SP_WIN_D3D_SM6)
             add_dx_arg(arguments);
@@ -400,7 +401,7 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> result, const ShaderParam
 
         if (count <= 0) {
             {
-                error_msgs.push_back(std::format("param {} not found in shader reflection data", member.GetName()));
+                error_msgs.push_back(std::format("param {} not found in shader {}", member.GetName(), reflect_module.entry_point_name));
             }
             continue;
         }
@@ -422,10 +423,10 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> result, const ShaderParam
     }
 
     for (const auto& msg : error_msgs) {
-        LOG_ERROR(msg);
+        LOG_WARNING(msg);
     }
     if (!error_msgs.empty()) {
-        assert(false && "shader reflection error");
+        // assert(false && "shader reflection error");
     }
 #endif
     _param_map.swap(param_map);

@@ -1,5 +1,6 @@
 #include "scene/Camera.h"
 
+#include "math/Constant.h"
 #include "math/Function.h"
 //
 // namespace Moer {
@@ -68,7 +69,7 @@ namespace Moer {
         if (m_projection_dirty) {
             m_proj = MakePerspectiveMatrixRH(
                 //Use Inverse Depth
-                m_fov_y / 180.f * 3.14159265358979323846f,
+                m_fov_y / 180.f * PI,
                 m_aspect_ratio,
                 m_far_clip,
                 m_near_clip);
@@ -83,7 +84,7 @@ namespace Moer {
 
     float Camera::GetNearClip() const noexcept { return m_near_clip; }
     float Camera::GetFarClip() const noexcept { return m_far_clip; }
-    float Camera::GetTanHalfFov() const noexcept { return tan(m_fov_y / 2.f); }
+    float Camera::GetTanHalfFov() const noexcept { return tan(m_fov_y / 180.f * HALF_PI); }
     float Camera::GetAspectRatio() const noexcept { return m_aspect_ratio; }
 
     Matrix4x4f Camera::GetToWorldMatrix() noexcept {
@@ -227,8 +228,8 @@ namespace Moer {
     void Camera::Tick() {
         if (wndInput.mouseEnterScreen) {
             // fov & aspect_ratio
-            this->SetFov(wndInput.fov);
-            this->SetAspectRatio(wndInput.aspect_ratio);
+            // this->SetFov(wndInput.fov);
+            // this->SetAspectRatio(wndInput.aspect_ratio);
 
             // camera speed
             if (wndInput.speedUp) {

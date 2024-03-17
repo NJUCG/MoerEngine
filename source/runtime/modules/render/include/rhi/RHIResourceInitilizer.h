@@ -102,6 +102,20 @@ struct RHISamplerCreateInfo {
         return *this;
     }
 
+    RHISamplerCreateInfo& SetAddressMode(ESamplerAddressMode _address_mode_u, ESamplerAddressMode _address_mode_v, ESamplerAddressMode _address_mode_w) {
+        address_mode_u = _address_mode_u;
+        address_mode_v = _address_mode_v;
+        address_mode_w = _address_mode_w;
+        return *this;
+    }
+
+    RHISamplerCreateInfo& SetAddressMode(ESamplerAddressMode _address_mode) {
+        address_mode_u = _address_mode;
+        address_mode_v = _address_mode;
+        address_mode_w = _address_mode;
+        return *this;
+    }
+
     RENDER_API friend uint32_t
                            GetHash(const RHISamplerCreateInfo& target);
     RENDER_API friend bool operator==(const RHISamplerCreateInfo& lhs, const RHISamplerCreateInfo& rhs);

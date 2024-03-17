@@ -145,8 +145,8 @@ namespace Moer {
             //modified
             auto fc = glfwSetCursorPosCallback(window, [](GLFWwindow* window, double xpos, double ypos) { WindowImpl::OnCursorPosCallback(window, xpos, ypos); });
             // if(fc)
-                // RegisterOnCursorPosFunc(&main_window_handle, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2));
-                RegisterOnCursorPosFunc(window, std::bind(CursorPosCallbackFunc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2));
+            // RegisterOnCursorPosFunc(&main_window_handle, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2));
+            RegisterOnCursorPosFunc(window, std::bind(CursorPosCallbackFunc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2));
         }
         {
             auto fc = glfwSetDropCallback(window, [](GLFWwindow* window, int path_count, const char** paths) { WindowImpl::OnDropCallback(window, path_count, paths); });
@@ -157,26 +157,26 @@ namespace Moer {
             auto fc = glfwSetFramebufferSizeCallback(window, [](GLFWwindow* window, int width, int height) { WindowImpl::OnFramebufferSizeCallback(window, width, height); });
             RegisterOnFrameBufferSizeFunc(window, std::bind(FrameBufferSizeCallbackFunc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2));
             // if (fc)
-                // RegisterOnFrameBufferSizeFunc(&main_window_handle, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2));
+            // RegisterOnFrameBufferSizeFunc(&main_window_handle, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2));
         }
         {
             //modified
             auto fc = glfwSetKeyCallback(window, [](GLFWwindow* window, int key, int scancode, int action, int mods) { WindowImpl::OnKeyCallback(window, key, scancode, action, mods); });
             RegisterOnKeyFunc(window, std::bind(KeyCallbackFunc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4));
             // if(fc)
-                // RegisterOnKeyFunc(&main_window_handle, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4));
+            // RegisterOnKeyFunc(&main_window_handle, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4));
         }
         {
             auto fc = glfwSetMouseButtonCallback(window, [](GLFWwindow* window, int button, int action, int mode) { WindowImpl::OnMouseButtonCallback(window, button, action, mode); });
             RegisterOnMouseButtonFunc(window, std::bind(MouseButtonCallbackFunc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
             // if (fc)
-                // RegisterOnMouseButtonFunc(window, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
+            // RegisterOnMouseButtonFunc(window, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
         }
         {
             auto fc = glfwSetScrollCallback(window, [](GLFWwindow* window, double xoffset, double yoffset) { WindowImpl::OnScrollCallback(window, xoffset, yoffset); });
             RegisterOnScrollFunc(window, std::bind(ScrollCallbackFunc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2));
             // if (fc)
-                // RegisterOnScrollFunc(window, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2));
+            // RegisterOnScrollFunc(window, std::bind(fc, (GLFWwindow*)window, std::placeholders::_1, std::placeholders::_2));
         }
         {
             auto fc = glfwSetWindowCloseCallback(window, [](GLFWwindow* window) { WindowImpl::OnWindowCloseCallback(window); });
@@ -329,114 +329,111 @@ namespace Moer {
         OnWindowFocus(window, focused);
     }
 
-
     void KeyCallbackFunc(GLFWwindow* window, int key, int scancode, int action, int mods) {
         // if(key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
-            // glfwSetWindowShouldClose(window, GL_TRUE);
+        // glfwSetWindowShouldClose(window, GL_TRUE);
 
-        if(key == GLFW_KEY_F && action == GLFW_PRESS){
-            if(!wndInput.mouseEnterScreen){
+        if (key == GLFW_KEY_F && action == GLFW_PRESS) {
+            if (!wndInput.mouseEnterScreen) {
                 glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
                 wndInput.mouseEnterScreen = true;
-            } else{
+            } else {
                 glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
                 wndInput.mouseEnterScreen = false;
                 wndInput.firstMouse       = true;
             }
         }
-        if(key == GLFW_KEY_ESCAPE && action == GLFW_PRESS){
+        if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
             glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
             wndInput.mouseEnterScreen = false;
             wndInput.firstMouse       = true;
         }
 
-
-        if(wndInput.mouseEnterScreen){
-            if (key == GLFW_KEY_W){
-                if(action == GLFW_PRESS)
+        if (wndInput.mouseEnterScreen) {
+            if (key == GLFW_KEY_W) {
+                if (action == GLFW_PRESS)
                     wndInput.camera_forward = true;
                 if (action == GLFW_RELEASE)
                     wndInput.camera_forward = false;
             }
-            if(key == GLFW_KEY_S){
-                if(action == GLFW_PRESS)
+            if (key == GLFW_KEY_S) {
+                if (action == GLFW_PRESS)
                     wndInput.camera_backward = true;
                 if (action == GLFW_RELEASE)
                     wndInput.camera_backward = false;
             }
-            if(key == GLFW_KEY_A){
-                if(action == GLFW_PRESS)
+            if (key == GLFW_KEY_A) {
+                if (action == GLFW_PRESS)
                     wndInput.camera_left = true;
                 if (action == GLFW_RELEASE)
                     wndInput.camera_left = false;
             }
-            if(key == GLFW_KEY_D){
-                if(action == GLFW_PRESS)
+            if (key == GLFW_KEY_D) {
+                if (action == GLFW_PRESS)
                     wndInput.camera_right = true;
                 if (action == GLFW_RELEASE)
                     wndInput.camera_right = false;
             }
-            if(key == GLFW_KEY_SPACE){
-                if(action == GLFW_PRESS)
+            if (key == GLFW_KEY_SPACE) {
+                if (action == GLFW_PRESS)
                     wndInput.camera_up = true;
                 if (action == GLFW_RELEASE)
                     wndInput.camera_up = false;
             }
-            if(key == GLFW_KEY_C){
-                if(action == GLFW_PRESS)
+            if (key == GLFW_KEY_C) {
+                if (action == GLFW_PRESS)
                     wndInput.camera_down = true;
                 if (action == GLFW_RELEASE)
                     wndInput.camera_down = false;
             }
-            if(key == GLFW_KEY_UP){
-                if(action == GLFW_PRESS)
+            if (key == GLFW_KEY_UP) {
+                if (action == GLFW_PRESS)
                     wndInput.speedUp = true;
                 if (action == GLFW_RELEASE)
                     wndInput.speedUp = false;
             }
-            if(key == GLFW_KEY_DOWN){
-                if(action == GLFW_PRESS)
+            if (key == GLFW_KEY_DOWN) {
+                if (action == GLFW_PRESS)
                     wndInput.speedDown = true;
                 if (action == GLFW_RELEASE)
                     wndInput.speedDown = false;
             }
-            if(key == GLFW_KEY_KP_0 && mods == GLFW_MOD_CONTROL){
-                if(action == GLFW_PRESS)
+            if (key == GLFW_KEY_KP_0 && mods == GLFW_MOD_CONTROL) {
+                if (action == GLFW_PRESS)
                     wndInput.resetSpeed = true;
                 if (action == GLFW_RELEASE)
                     wndInput.resetSpeed = false;
             }
-
         }
     }
 
-    void CursorPosCallbackFunc(GLFWwindow* window, double xpos, double ypos){
-        if(wndInput.mouseEnterScreen){
+    void CursorPosCallbackFunc(GLFWwindow* window, double xpos, double ypos) {
+        if (wndInput.mouseEnterScreen) {
             float xPos = static_cast<float>(xpos);
             float yPos = static_cast<float>(ypos);
-            
-            if(wndInput.firstMouse){
-                wndInput.lastX = xPos;
-                wndInput.lastY = yPos;
+
+            if (wndInput.firstMouse) {
+                wndInput.lastX      = xPos;
+                wndInput.lastY      = yPos;
                 wndInput.firstMouse = false;
             }
 
             wndInput.deltaX = xPos - wndInput.lastX;
             wndInput.deltaY = yPos - wndInput.lastY;
 
-            wndInput.lastX  = xPos;
-            wndInput.lastY  = yPos;
+            wndInput.lastX = xPos;
+            wndInput.lastY = yPos;
         }
     }
 
-    void FrameBufferSizeCallbackFunc(GLFWwindow* window, int width, int height){
+    void FrameBufferSizeCallbackFunc(GLFWwindow* window, int width, int height) {
         wndInput.width        = width;
         wndInput.height       = height;
-        wndInput.aspect_ratio = width / height;
+        wndInput.aspect_ratio = height == 0 ? 0 : width / height;
     }
 
-    void ScrollCallbackFunc(GLFWwindow* window, double xoffset, double yoffset){
-        if(wndInput.mouseEnterScreen){
+    void ScrollCallbackFunc(GLFWwindow* window, double xoffset, double yoffset) {
+        if (wndInput.mouseEnterScreen) {
             wndInput.fov -= (float)yoffset * 2.f;
             if (wndInput.fov < 10.0f)
                 wndInput.fov = 10.0f;
@@ -445,9 +442,8 @@ namespace Moer {
         }
     }
 
-    void MouseButtonCallbackFunc(GLFWwindow* window, int button, int action, int mode){
+    void MouseButtonCallbackFunc(GLFWwindow* window, int button, int action, int mode) {
         // todo: drag / rotate objects callback function
-
     }
 
 }// namespace Moer

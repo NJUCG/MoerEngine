@@ -87,7 +87,7 @@ public:
 
     END_ROOT_PARAMETER_DEFINITION(Parameters)
 };
-IMPLEMENT_SHADER_TYPE(ImGuiShaderVert, "GuiVert.vert", "main", ST_VERTEX)
+IMPLEMENT_SHADER_TYPE(ImGuiShaderVert, "GuiVert.hlsl", "main", ST_VERTEX)
 class ImGuiShaderFrag : public Shader {
     DEFINE_SHADER_TYPE(ImGuiShaderFrag, Global, RENDER_API, ...)
 public:
@@ -99,7 +99,7 @@ public:
     END_ROOT_PARAMETER_DEFINITION(Parameters)
 };
 
-IMPLEMENT_SHADER_TYPE(ImGuiShaderFrag, "GuiFrag.frag", "main", ST_FRAGMENT)
+IMPLEMENT_SHADER_TYPE(ImGuiShaderFrag, "GuiFrag.hlsl", "main", ST_FRAGMENT)
 
 class ImGUIRenderer::Impl {
 public:
@@ -332,80 +332,6 @@ void ImGUIRenderer::Impl::EndRenderFrame() {
                 g_rhi->RHIPresentViewport(main_viewport, present_fence);
             });
         }
-        // auto next_frame_info = g_rhi->RHIGetNextFrameViewportBufferInfo(main_viewport);
-
-        // if (next_frame_info.backbuffer_index == UINT32_MAX) return;
-
-        // RHIUnorderedAccessView*  present_view = g_rhi->RHIGetViewportBackBufferUAV(main_viewport, next_frame_info.backbuffer_index);
-        // RHIBarrierDependencyInfo dependency_info;
-        // auto&                    texture_barriers = dependency_info.texture_barriers;
-        // texture_barriers.resize(1);
-
-        // texture_barriers[0].SetDstTextureLayout(ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT);
-        // texture_barriers[0].SetSrcTextureLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED);
-        // texture_barriers[0].SetTexture(present_view->GetTexture());
-        // texture_barriers[0].SetSrcStage(PS_BOTTOM_OF_PIPE);
-        // texture_barriers[0].SetDstStage(PS_COLOR_ATTACHMENT_OUTPUT);
-        // texture_barriers[0].SetSrcAccessFlags(ERHIAccessFlags::UNDEFINED);
-        // texture_barriers[0].SetDstAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
-
-        // //wait for last frame gui_command_list submission
-
-        // present_fence->Wait(timeline_index);
-
-        // ui_command_list->Reset();
-
-        // ui_command_list->BeginRecording();
-        // ui_command_list->SetPipelineBarrier(dependency_info);
-
-        // RHIRenderPassInfo pass_info{};
-        // pass_info.color_attachments[0].color_attachment_action               = AC_CLEAR_STORE;
-        // pass_info.color_attachments[0].color_attachment_view.texture_view    = present_view;
-        // pass_info.color_attachments[0].color_attachment_view.required_layout = ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT;
-
-        // pass_info.color_attachments[0].color_attachment_view.clear_attachment = RHIClearAttachment();
-
-        // auto viewport_extent                = main_viewport->GetViewportExtent();
-        // pass_info.render_area.offset.x      = 0;
-        // pass_info.render_area.offset.y      = 0;
-        // pass_info.render_area.extent.width  = viewport_extent.width;
-        // pass_info.render_area.extent.height = viewport_extent.height;
-        // auto* draw_data                     = ImGui::GetDrawData();
-
-        // GUIUploadData(draw_data, ui_command_list);
-        // ui_command_list->BeginRenderPass(pass_info, "Imgui Window");
-
-        // GUIRender(main_draw_data, ui_command_list);
-
-        // ui_command_list->EndRenderPass();
-
-        // RHIBarrierDependencyInfo texture_dependency_info;
-        // auto&                    texture_barriers_present = texture_dependency_info.texture_barriers;
-        // texture_barriers_present.resize(1);
-
-        // texture_barriers_present[0].SetDstTextureLayout(ETextureLayout::TEXTURE_LAYOUT_PRESENT_SRC);
-        // texture_barriers_present[0].SetSrcTextureLayout(ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT);
-        // texture_barriers_present[0].SetTexture(present_view->GetTexture());
-        // texture_barriers_present[0].SetSrcAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
-        // texture_barriers_present[0].SetSrcStage(PS_COLOR_ATTACHMENT_OUTPUT);
-        // texture_barriers_present[0].SetDstStage(PS_NONE);
-
-        // ui_command_list->SetPipelineBarrier(texture_dependency_info);
-
-        // ui_command_list->EndRecording();
-
-        // RHISubmitInfo submit_info{};
-
-        // //wait for last frame recording(don't need if wait before reseting command list)
-        // submit_info.Wait(present_fence, timeline_index);
-        // //wait for back_buffer ready
-        // submit_info.Wait(next_frame_info.backbuffer_ready_fence, 0);
-        // //signal this frame present fence
-        // submit_info.Signal(present_fence, ++timeline_index);
-
-        // command_queue->SubmitCommands(1, ui_command_list, &submit_info);
-
-        // g_rhi->RHIPresentViewport(main_viewport, present_fence);
     }
     {
         auto& io = ImGui::GetIO();
@@ -557,11 +483,6 @@ void GUIUploadData(void* _draw_data, RHIGraphicsCommandList* _ui_command_list, R
             g_rhi->RHIUnmapBuffer(staging_vertex_buffer);
             g_rhi->RHIUnmapBuffer(staging_index_buffer);
         });
-        // memcpy(vertex_dst, cmd_list->VtxBuffer.Data, cmd_list->VtxBuffer.Size * sizeof(ImDrawVert));
-        // memcpy(index_dst, cmd_list->IdxBuffer.Data, cmd_list->IdxBuffer.Size * sizeof(ImDrawIdx));
-
-        // vertex_dst += cmd_list->VtxBuffer.Size;
-        // index_dst += cmd_list->IdxBuffer.Size;
 
         vertex_offset += cmd_list->VtxBuffer.Size;
         index_offset += cmd_list->IdxBuffer.Size;
@@ -665,10 +586,10 @@ void GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list, RHIVi
         float t         = draw_data->DisplayPos.y;
         float b         = draw_data->DisplayPos.y + draw_data->DisplaySize.y;
         float mvp[4][4] = {
-            {2.0f / (r - l), 0.0f, 0.0f, 0.0f},
-            {0.0f, 2.0f / (t - b), 0.0f, 0.0f},
-            {0.0f, 0.0f, 0.5f, 0.0f},
-            {(r + l) / (l - r), (t + b) / (b - t), 0.5f, 1.0f},
+            {2.0f / (r - l), 0.0f, 0.0f, (r + l) / (l - r)},
+            {0.0f, 2.0f / (t - b), 0.5f, (t + b) / (b - t)},
+            {0.0f, 0.0f, 0.f, 0.5f},
+            {0.f, 0.0f, 0.0f, 1.0f},
         };
         memcpy(&vert_param.vertexBuffer.mvp, mvp, sizeof(mvp));
     }

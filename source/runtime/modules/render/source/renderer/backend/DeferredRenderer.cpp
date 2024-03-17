@@ -31,6 +31,10 @@ IMPLEMENT_SHADER_TYPE(CullMeshletPrepassShader, "meshdebug/CullMeshlet.hlsl", "p
 
 IMPLEMENT_SHADER_TYPE(CullInstanceRecheckShader, "meshdebug/CullInstance.hlsl", "recheck_pass", ST_COMPUTE)
 IMPLEMENT_SHADER_TYPE(CullMeshletRecheckShader, "meshdebug/CullMeshlet.hlsl", "recheck_pass", ST_COMPUTE)
+
+IMPLEMENT_SHADER_TYPE(TestDeferredTriangleShaderVert, "test/TriangleDeferredVert.hlsl", "main", ST_VERTEX);
+IMPLEMENT_SHADER_TYPE(TestDeferredTriangleShaderFrag, "test/TriangleDeferredFrag.hlsl", "main", ST_FRAGMENT);
+
 namespace Moer {
     class DeferredRenderer::Impl {
     public:
@@ -44,6 +48,7 @@ namespace Moer {
         RHISRVRef GetRendererOutput();
 
     private:
+        void BasePass();
         void CreateDepthBuffer();
         void OnResizeVSwapChain();
 
@@ -111,12 +116,15 @@ namespace Moer {
         RHIUAVRef draw_indirect_view;
         RHIUAVRef draw_count_view;
 
-        static constexpr uint32_t meshlet_count_offset              = 0;
-        static constexpr uint32_t draw_count_offset                 = 4;
-        static constexpr uint32_t meshlet_dispatch_indirect_offset  = 8;
+        static constexpr uint32_t meshlet_count_offset      = 0;
+        static constexpr uint32_t draw_count_offset         = 4;
+        static constexpr uint32_t recheck_draw_count_offset = 8;
+        // static constexpr uint32_t meshlet_dispatch_indirect_offset  = 8;
         static constexpr uint32_t check_instance_count_offset       = 12;
         static constexpr uint32_t check_meshlet_count_offset        = 16;
         static constexpr uint32_t instance_dispatch_indirect_offset = 20;
+        static constexpr uint32_t meshlet_dispatch_offset           = 24;
+        static constexpr uint32_t recheck_meshlet_dispatch_offset   = 36;
         static constexpr uint32_t max_meshlet_count                 = 1024 * 1024 * 16;
         static constexpr uint32_t thread_group_count                = 64;
 
@@ -289,11 +297,11 @@ namespace Moer {
                 1024 * 1024,
                 EBufferUsageFlags::INDIRECT_BUFFER | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::STORAGE_BUFFER);
 
-            draw_count_buffer = g_rhi->RHICreateBuffer<uint32_t>(32 * sizeof(int),
+            draw_count_buffer = g_rhi->RHICreateBuffer<uint32_t>(64 * sizeof(int),
                                                                  EBufferUsageFlags::TRANSFER_DST |
                                                                      EBufferUsageFlags::STORAGE_BUFFER | EBufferUsageFlags::INDIRECT_BUFFER);
 
-            zero_buffer = g_rhi->RHICreateBuffer<uint32_t>(32 * sizeof(int),
+            zero_buffer = g_rhi->RHICreateBuffer<uint32_t>(64 * sizeof(int),
                                                            EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::TRANSFER_SRC);
 
             void* mapped = g_rhi->RHIMapBuffer(zero_buffer, 0, sizeof(uint32_t));
@@ -361,46 +369,30 @@ namespace Moer {
         // LOG_INFO("camera proj: {} {} {} {}", camera_proj.r0, camera_proj.r1, camera_proj.r2, camera_proj.r3);
         auto vp = camera->GetProjectionMatrix() * camera->GetViewMatrix();
 
-        camera_data.prev_view_proj = Transpose(vp);
-
+        camera_data.prev_view_proj = vp;
+        Matrix4x4f  transform{{-0.126363948, -0.289807469, 0.948684514, -49.9675217},
+                              {0.259712189, 0.913335443, 0.313601822, 13.8385649},
+                              {-0.957374394, 0.286012888, -0.0401463173, -85.6168518},
+                              {-0.00000000, -0.00000000, -0.00000000, 1.f}};
+        static bool first = true;
+        if (first) {
+            camera->SetWorldTransform(transform);
+            first = false;
+        }
+        // camera->SetWorldTransform(Transform to_world)
         camera->Tick();
 
-        camera_data.view       = Transpose(camera->GetViewMatrix());
-        camera_data.view_proj  = Transpose(camera->GetProjectionMatrix() * camera->GetViewMatrix());
+        camera_data.view       = camera->GetViewMatrix();
+        camera_data.view_proj  = camera->GetProjectionMatrix() * camera->GetViewMatrix();
         camera_data.camera_pos = Vector4f(camera->GetPosition(), 1.f);
         CameraCullData cull_data;
-        cull_data.camera_data  = camera_data;
-        cull_data.proj         = Transpose(camera->GetProjectionMatrix());
-        cull_data.aspect_ratio = camera->GetAspectRatio();
-        cull_data.far_plane    = camera->GetFarClip();
-        cull_data.near_plane   = camera->GetNearClip();
-        cull_data.tan_half_fov = camera->GetTanHalfFov();
+        cull_data.camera_data      = camera_data;
+        cull_data.proj             = camera->GetProjectionMatrix();
+        cull_data.aspect_ratio     = camera->GetAspectRatio();
+        cull_data.far_plane        = camera->GetFarClip();
+        cull_data.near_plane       = camera->GetNearClip();
+        cull_data.inv_tan_half_fov = 1.f / camera->GetTanHalfFov();
 
-        // const auto& entities     = g_scene->GetEntities();
-        // auto        first_entity = entities.front();
-        // auto        transform    = TransformManager::Get().Get(first_entity);
-        // auto        mesh_info    = RenderableManager::Get().GetMeshInfo(first_entity);
-        // Vector2f    min_xy       = Vector2f(1.f);
-        // Vector2f    max_xy       = Vector2f(-1.f);
-        // float       min_z        = 0.f;
-        // Vector3f    corners[8];
-        // corners[0] = Vector3f(-1.f, -1.f, -1.f);
-        // corners[1] = Vector3f(1.f, -1.f, -1.f);
-        // corners[2] = Vector3f(-1.f, 1.f, -1.f);
-        // corners[3] = Vector3f(1.f, 1.f, -1.f);
-        // corners[4] = Vector3f(-1.f, -1.f, 1.f);
-        // corners[5] = Vector3f(1.f, -1.f, 1.f);
-        // corners[6] = Vector3f(-1.f, 1.f, 1.f);
-        // corners[7] = Vector3f(1.f, 1.f, 1.f);
-        // for (int i = 0; i < 8; i++) {
-        //     auto clip = camera->GetProjectionMatrix() * camera->GetViewMatrix() * transform.GetMatrix4x4() * Vector4f(mesh_info.center + mesh_info.extent * corners[i], 1.f);
-        //     clip /= clip.w;
-        //     min_xy = Min(min_xy, Vector2f(clip.x, clip.y));
-        //     max_xy = Max(max_xy, Vector2f(clip.x, clip.y));
-        //     min_z  = Max(min_z, clip.z);
-        // }
-
-        // Vector4f center         = Vector4f(mesh_info.center, 1.f);
         auto& frustum_planes = cull_data.frustum_planes;
         {
             auto target_vp    = vp;
@@ -612,14 +604,16 @@ namespace Moer {
         cull_instance_params.input.hiz_factor                    = Vector2f(hiz_buffer.texture->GetExtent2D());
         cull_instance_params.input.hiz_depth                     = hiz_buffer.texture->GetNumMips();
         cull_instance_params.input.recheck_counter_buffer_offset = check_instance_count_offset;
-        cull_instance_params.instance_data                       = instance_buffer_view;
-        cull_instance_params.instance_meshlet_info               = instance_meshlet_info_view;
-        cull_instance_params.instance_meshlet_cull_info          = instance_meshlet_cull_info_uav;
-        cull_instance_params.recheck_instance_id                 = recheck_instance_id_uav;
-        cull_instance_params.counters_buffer                     = draw_count_view;
-        cull_instance_params.cull_data                           = uniform_buffer_view[frame_offset];
-        cull_instance_params.hiz_depth                           = hiz_buffer.srv;
-        cull_instance_params.depth_sampler                       = hiz_buffer.sampler;
+        cull_instance_params.input.instance_dispatch_offset      = instance_dispatch_indirect_offset;
+        cull_instance_params.input.meshlet_dispatch_offset       = meshlet_dispatch_offset;
+
+        cull_instance_params.instance_meshlet_info      = instance_meshlet_info_view;
+        cull_instance_params.instance_meshlet_cull_info = instance_meshlet_cull_info_uav;
+        cull_instance_params.recheck_instance_id        = recheck_instance_id_uav;
+        cull_instance_params.counters_buffer            = draw_count_view;
+        cull_instance_params.cull_data                  = uniform_buffer_view[frame_offset];
+        cull_instance_params.hiz_depth                  = hiz_buffer.srv;
+        cull_instance_params.depth_sampler              = hiz_buffer.sampler;
 
         CullMeshletPrepassShader::Parameters cull_meshlet_params;
         cull_meshlet_params.input.meshlet_count_offset          = meshlet_count_offset;
@@ -698,7 +692,8 @@ namespace Moer {
 
             cmd_list->SetPipelineState(cull_meshlet_prepass_pso);
             g_rhi->RHISetBatchedShaderParameters(cull_meshlet_prepass_pso, meshlet_params);
-            cmd_list->Dispatch((max_meshlet_count + thread_group_count) / thread_group_count, 1, 1);
+            // cmd_list->Dispatch((max_meshlet_count + thread_group_count) / thread_group_count, 1, 1);
+            cmd_list->DispatchIndirect(draw_count_buffer, meshlet_dispatch_offset);
             {
                 RHIBarrierDependencyInfo post_compute_barrier{};
                 post_compute_barrier.buffer_barriers.resize(3);
@@ -742,19 +737,20 @@ namespace Moer {
         cull_instance_params.input.hiz_factor                    = Vector2f(hiz_buffer.texture->GetExtent2D());
         cull_instance_params.input.hiz_depth                     = hiz_buffer.texture->GetNumMips();
         cull_instance_params.input.recheck_counter_buffer_offset = check_instance_count_offset;
-        cull_instance_params.input.draw_count_offset             = draw_count_offset;
-        cull_instance_params.instance_data                       = instance_buffer_view;
-        cull_instance_params.instance_meshlet_info               = instance_meshlet_info_view;
-        cull_instance_params.instance_meshlet_cull_info          = recheck_cull_info_uav;
-        cull_instance_params.recheck_instances                   = recheck_instance_id_srv;
-        cull_instance_params.counters_buffer                     = draw_count_view;
-        cull_instance_params.cull_data                           = uniform_buffer_view[frame_offset];
-        cull_instance_params.hiz_depth                           = hiz_buffer.srv;
-        cull_instance_params.depth_sampler                       = hiz_buffer.sampler;
+        cull_instance_params.input.instance_dispatch_offset      = instance_dispatch_indirect_offset;
+        cull_instance_params.input.meshlet_dispatch_offset       = recheck_meshlet_dispatch_offset;
+        // cull_instance_params.instance_data                       = instance_buffer_view;
+        cull_instance_params.instance_meshlet_info      = instance_meshlet_info_view;
+        cull_instance_params.instance_meshlet_cull_info = recheck_cull_info_uav;
+        cull_instance_params.recheck_instances          = recheck_instance_id_srv;
+        cull_instance_params.counters_buffer            = draw_count_view;
+        cull_instance_params.cull_data                  = uniform_buffer_view[frame_offset];
+        cull_instance_params.hiz_depth                  = hiz_buffer.srv;
+        cull_instance_params.depth_sampler              = hiz_buffer.sampler;
 
         CullMeshletRecheckShader::Parameters cull_meshlet_params;
         cull_meshlet_params.input.meshlet_count_offset          = meshlet_count_offset;
-        cull_meshlet_params.input.draw_count_offset             = draw_count_offset;
+        cull_meshlet_params.input.draw_count_offset             = recheck_draw_count_offset;
         cull_meshlet_params.input.hiz_factor                    = Vector2f(hiz_buffer.texture->GetExtent2D());
         cull_meshlet_params.input.hiz_depth                     = hiz_buffer.texture->GetNumMips();
         cull_meshlet_params.input.recheck_counter_buffer_offset = check_meshlet_count_offset;
@@ -812,7 +808,8 @@ namespace Moer {
             cmd_list->SetPipelineState(cull_instance_recheck_pso);
             g_rhi->RHISetBatchedShaderParameters(cull_instance_recheck_pso, instance_params);
             auto dispatch_count = (instance_count + thread_group_count - 1) / thread_group_count;
-            cmd_list->Dispatch(dispatch_count, 1, 1);
+            // cmd_list->Dispatch(dispatch_count, 1, 1);
+            cmd_list->DispatchIndirect(draw_count_buffer, instance_dispatch_indirect_offset);
             {
                 RHIBarrierDependencyInfo meshlet_cull_barrier{};
                 meshlet_cull_barrier.buffer_barriers.resize(3);
@@ -847,7 +844,8 @@ namespace Moer {
             cmd_list->SetPipelineState(cull_meshlet_recheck_pso);
             g_rhi->RHISetBatchedShaderParameters(cull_meshlet_recheck_pso, meshlet_params);
 
-            cmd_list->Dispatch((max_meshlet_count + thread_group_count) / thread_group_count, 1, 1);
+            // cmd_list->Dispatch((max_meshlet_count + thread_group_count) / thread_group_count, 1, 1);
+            cmd_list->DispatchIndirect(draw_count_buffer, recheck_meshlet_dispatch_offset);
             {
                 RHIBarrierDependencyInfo post_compute_barrier{};
                 post_compute_barrier.buffer_barriers.resize(2);
@@ -928,8 +926,8 @@ namespace Moer {
                 const RHIBufferRef instance_id_buffer = scene->GetBuffer("instance_id_buffer");
                 RHIBufferRef       vbuffers[]         = {prim_vertex_buffer, instance_id_buffer};
                 cmd_list->BindVertexBuffers(0, 2, vbuffers, offset);
-
-                cmd_list->DrawIndexedIndirect(draw_indirect_buffer, 0, draw_count_buffer, draw_count_offset, draw_indirect_buffer->GetNumElement(), sizeof(DrawInstanceCmd));
+                auto draw_cnt_offset = first_pass ? draw_count_offset : recheck_draw_count_offset;
+                cmd_list->DrawIndexedIndirect(draw_indirect_buffer, 0, draw_count_buffer, draw_cnt_offset, draw_indirect_buffer->GetNumElement(), sizeof(DrawInstanceCmd));
             } else {
                 assert(false);
             }
@@ -938,6 +936,9 @@ namespace Moer {
         };
 
         EnqueueRenderTask(std::move(draw_indirect));
+    }
+
+    void DeferredRenderer::Impl::BasePass() {
     }
 
 }// namespace Moer

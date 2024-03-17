@@ -21,7 +21,7 @@ public:
     END_ROOT_PARAMETER_DEFINITION(Parameters)
 };
 
-IMPLEMENT_SHADER_TYPE(TestReflectionShader, "TestVert.vert", "main", EShaderType::ST_VERTEX);
+IMPLEMENT_SHADER_TYPE(TestReflectionShader, "TestVert.hlsl", "main", EShaderType::ST_VERTEX);
 
 Shader::Shader(){};
 
@@ -154,13 +154,22 @@ void Shader::ConstructRootParameterLayoutInfo(const ShaderParametersInfoMap& _pa
             continue;
         }
         //for resources
-        binding_infos.emplace_back(ShaderParameterLayoutInfo(member.GetOffset(),
-                                                             member.GetStride(),
-                                                             slot,
-                                                             space,
-                                                             num,
-                                                             param_type,
-                                                             resource_type));
+        for (uint32_t i = 0; i < num; i++) {
+            binding_infos.emplace_back(ShaderParameterLayoutInfo(member.GetOffset() + step * i,
+                                                                 step,
+                                                                 slot++,
+                                                                 space,
+                                                                 1,
+                                                                 param_type,
+                                                                 resource_type));
+        }
+        // binding_infos.emplace_back(ShaderParameterLayoutInfo(member.GetOffset(),
+        //                                                      member.GetStride(),
+        //                                                      slot,
+        //                                                      space,
+        //                                                      num,
+        //                                                      param_type,
+        //                                                      resource_type));
     }
     param_layout_info.binding_infos.swap(binding_infos);
 }

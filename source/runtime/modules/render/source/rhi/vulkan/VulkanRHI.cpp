@@ -616,14 +616,15 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPSO(RHIGraphicsPSOCr
 
             descriptor_bindings[info.space].push_back(std::move(binding));
         }
-
+        uint32_t constant_offset = 0;
         // constants
         for (const auto& info : constant_infos) {
             VkPushConstantRange range{};
             range.stageFlags |= VulkanEnumTranslator::METoVKShaderStageFlags(meta_shader->GetShaderType());
-            range.offset = info.offset;
+            range.offset = constant_offset;
             range.size   = info.stride;
             push_constant_ranges.push_back(range);
+            constant_offset += info.stride;
         }
     }
 
@@ -1329,7 +1330,7 @@ RHITextureRef VulkanRHIImpl::RHICreateTexture(const RHITextureCreateInfo& info) 
     //     image_create_info.pQueueFamilyIndices   = queue_family_indices;
     // }
 
-    image_create_info.initialLayout = VulkanEnumTranslator::METoVKImageLayout(info.layout);
+    image_create_info.initialLayout = VulkanEnumTranslator::METoVKImageLayout(info.layout) == VK_IMAGE_LAYOUT_PREINITIALIZED ? VK_IMAGE_LAYOUT_PREINITIALIZED : VK_IMAGE_LAYOUT_UNDEFINED;
 
     VmaAllocationCreateInfo alloc_create_info{};
     alloc_create_info.flags = 0;
@@ -1454,8 +1455,6 @@ RHIUAVRef VulkanRHIImpl::RHICreateUAVInner(RHIViewableResource* _resource, const
             flags = VK_IMAGE_ASPECT_DEPTH_BIT;
         } else {
             flags = VK_IMAGE_ASPECT_COLOR_BIT;
-        }
-        if (uint8_t(vk_texture->GetUsageFlags() | ETextureUsageFlags::SHADER_RESOURCE) != 0 && uint8_t(vk_texture->GetUsageFlags() | ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT) != 0) {
         }
         image_view_create_info.subresourceRange.aspectMask     = flags;
         image_view_create_info.subresourceRange.baseMipLevel   = _view_info.texture.uav.mip_min;
