@@ -127,14 +127,14 @@ namespace Moer {
         };
 
         // name of this BufferInterfaceBlock interface block
-        std::string_view getName() const noexcept { return {mName.data(), mName.size()}; }
+        std::string_view getName() const noexcept { return {m_name.data(), m_name.size()}; }
 
         // size needed for the buffer in bytes
-        size_t getSize() const noexcept { return mSize; }
+        size_t getSize() const noexcept { return m_size; }
 
         // list of information records for each field
         Moer::Array<FieldInfo> const& getFieldInfoList() const noexcept {
-            return mFieldInfoList;
+            return m_field_info_list;
         }
 
         // negative value if name doesn't exist or Panic if exceptions are enabled
@@ -143,16 +143,16 @@ namespace Moer {
         FieldInfo const* getFieldInfo(std::string_view name) const;
 
         bool hasField(std::string_view name) const noexcept {
-            return mInfoMap.find(name) != mInfoMap.end();
+            return m_info_map.find(name) != m_info_map.end();
         }
 
-        bool isEmpty() const noexcept { return mFieldInfoList.empty(); }
+        bool isEmpty() const noexcept { return m_field_info_list.empty(); }
 
-        Alignment getAlignment() const noexcept { return mAlignment; }
+        Alignment getAlignment() const noexcept { return m_alignment; }
 
-        Target getTarget() const noexcept { return mTarget; }
+        Target getTarget() const noexcept { return m_target; }
 
-        uint8_t getQualifier() const noexcept { return mQualifiers; }
+        uint8_t getQualifier() const noexcept { return m_qualifiers; }
 
     private:
         friend class Builder;
@@ -162,26 +162,13 @@ namespace Moer {
         static uint8_t baseAlignmentForType(Type type) noexcept;
         static uint8_t strideForType(Type type, uint32_t stride) noexcept;
 
-        std::string                                    mName;
-        Moer::Array<FieldInfo>                         mFieldInfoList;
-        Moer::UnorderedMap<std::string_view, uint32_t> mInfoMap;
-        uint32_t                                       mSize       = 0;// size in bytes rounded to multiple of 4
-        Alignment                                      mAlignment  = Alignment::std140;
-        Target                                         mTarget     = Target::UNIFORM;
-        uint8_t                                        mQualifiers = 0;
-    };
-    struct MaterialData1 {
-        Vector4f base_color_factor;
-        Vector3f emissive_factor;
-        float    metallic_factor;
-        float    roughness_factor;
-        float    ao;
-        int      albedo_map{-1};
-        int      normal_map{-1};
-        int      metallic_roughness_map{-1};
-        int      ao_map{-1};
-        int      emissive_map{-1};
-        int      padding;
+        std::string                                    m_name;
+        Moer::Array<FieldInfo>                         m_field_info_list;
+        Moer::UnorderedMap<std::string_view, uint32_t> m_info_map;
+        uint32_t                                       m_size       = 0;// size in bytes rounded to multiple of 4
+        Alignment                                      m_alignment  = Alignment::std140;
+        Target                                         m_target     = Target::UNIFORM;
+        uint8_t                                        m_qualifiers = 0;
     };
 
     class UniformBuffer {
@@ -196,6 +183,5 @@ namespace Moer {
         UniformBuffer& operator=(UniformBuffer&& rhs) = delete;
     protected:
         void * m_buffer;
-        MaterialData1 m_data_struct;
     };
 }

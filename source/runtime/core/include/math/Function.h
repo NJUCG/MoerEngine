@@ -516,6 +516,25 @@ namespace Moer {
         v++;
         return v;
     }
+
+    inline uint32_t RoundDownToPowerOf2(uint32_t v) noexcept {
+        v |= v >> 1u;
+        v |= v >> 2u;
+        v |= v >> 4u;
+        v |= v >> 8u;
+        v |= v >> 16u;
+        return v ^ (v >> 1u);
+    }
+
+    inline uint64_t RoundDownToPowerOf2(uint64_t v) noexcept {
+        v |= v >> 1u;
+        v |= v >> 2u;
+        v |= v >> 4u;
+        v |= v >> 8u;
+        v |= v >> 16u;
+        v |= v >> 32u;
+        return v ^ (v >> 1u);
+    }
 }// namespace Moer
 
 namespace Moer {

@@ -188,6 +188,7 @@ namespace Moer {
                                                    .SetInitialLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED));
         const uint32_t alignment = 256;
 
+        
         RHIBufferRef staging_buffer = g_rhi->RHICreateBuffer<std::byte>(
             m_data_size, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
 
@@ -216,17 +217,14 @@ namespace Moer {
         tex_barriers[0].src_access = ERHIAccessFlags::UNDEFINED;
         tex_barriers[0].dst_access = ERHIAccessFlags::TRANSFER_WRITE;
         tex_barriers[0].dst_stage  = PS_TRANSFER;
-        // tex_barriers[0].src_queue_type = ECommandQueueType::GRAPHICS;
-        // tex_barriers[0].dst_queue_type = ECommandQueueType::GRAPHICS;
+
         tex_barriers[0].p_texture          = texture;
         tex_barriers[0].sub_resource_range = range;
 
-        tex_barriers[1].src_layout = TEXTURE_LAYOUT_TRANSFER_DST;
-        tex_barriers[1].dst_layout = TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        tex_barriers[1].src_access = ERHIAccessFlags::TRANSFER_WRITE;
-        tex_barriers[1].dst_access = ERHIAccessFlags::SHADER_READ;
-        // tex_barriers[1].src_queue_type = ECommandQueueType::GRAPHICS;
-        // tex_barriers[1].dst_queue_type = ECommandQueueType::GRAPHICS;
+        tex_barriers[1].src_layout         = TEXTURE_LAYOUT_TRANSFER_DST;
+        tex_barriers[1].dst_layout         = TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        tex_barriers[1].src_access         = ERHIAccessFlags::TRANSFER_WRITE;
+        tex_barriers[1].dst_access         = ERHIAccessFlags::SHADER_READ;
         tex_barriers[1].src_stage          = PS_TRANSFER;
         tex_barriers[1].dst_stage          = PS_FRAGMENT_SHADER;
         tex_barriers[1].p_texture          = texture;
@@ -342,6 +340,7 @@ namespace Moer {
         g_rhi->RHIUnmapBuffer(staging_buffer);
 
         RHIBufferRef buffer = g_rhi->RHICreateBuffer<std::byte>(size, usages | EBufferUsageFlags::TRANSFER_DST);
+
         return buffer;
     }
 

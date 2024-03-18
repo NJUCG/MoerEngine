@@ -16,6 +16,7 @@ struct PS_INPUT {
   float3 pos_w : POSITION;
   float3 normal : NORMAL;
   float3 tangent : TANGENT;
+  float3 binormal : BINORMAL;
   float2 uv : TEXCOORD0;
   uint instance_id : INSTANCE_ID;
 };
@@ -30,6 +31,7 @@ PS_INPUT main(VS_INPUT input) {
       float3x3(modelInv[0].xyz, modelInv[1].xyz, modelInv[2].xyz);
 
   output.normal = normalize(mul(input.normal, world2model));
+  output.binormal = normalize(mul(input.binormal, world2model));  
 
   float4x4 mvp = mul(camera_data.view_proj, model);
   output.pos = mul(mvp, float4(input.pos, 1.f));

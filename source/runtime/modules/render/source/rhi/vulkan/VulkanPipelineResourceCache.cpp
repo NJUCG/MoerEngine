@@ -3,7 +3,9 @@
 #include "VulkanDevice.h"
 #include "VulkanUtil.h"
 
+#include "rhi/RHICommon.h"
 #include "rhi/vulkan/misc/VulkanMacroUtils.h"
+#include "vulkan/vulkan_core.h"
 
 VulkanPipelineResourceCache::VulkanPipelineResourceCache(const VulkanDescriptorSetsLayout* _layout, const Moer::Array<TDescriptorSetLayoutBindingArray>& _descriptor_bindings) {
     const uint32_t set_count = _layout->GetDescriptorSetCount();
@@ -48,8 +50,10 @@ void VulkanPipelineResourceCache::SetCBV(uint32_t _set, uint32_t _binding, RHICB
     // MARK: offset should be set manually
     auto* buffer = static_cast<VulkanRHIBuffer*>(_cbv->GetBuffer());
     if (_cbv->IsBuffer()) {
+        auto range = _cbv->GetInfo().buffer.cbv.stride * _cbv->GetInfo().buffer.cbv.num_elements;
+        range      = std::min(uint64_t(range), buffer->GetInfo().size - _cbv->GetInfo().buffer.cbv.byte_offset);
         // ConstantBuffer
-        m_descriptor_set_writers[_set].WriteUniformBuffer(_binding, buffer->GetHandle(), _cbv->GetInfo().buffer.cbv.byte_offset, buffer->GetInfo().size);
+        m_descriptor_set_writers[_set].WriteUniformBuffer(_binding, buffer->GetHandle(), _cbv->GetInfo().buffer.cbv.byte_offset, range);
     } else {
         // TextureBuffer
         LOG_CRITICAL("Texture CBV is not implemented yet.");
@@ -68,7 +72,10 @@ void VulkanPipelineResourceCache::SetSRV(uint32_t _set, uint32_t _binding, RHISR
     } else {
         auto* tex_view = static_cast<VulkanRHITextureSRV*>(_srv);
         // MARK: layout is fixed
-        m_descriptor_set_writers[_set].WriteSampledImage(_binding, VK_NULL_HANDLE, tex_view->GetView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        ETextureLayout default_layout = tex_view->GetTexture()->GetInfo().layout;
+        auto           final_layout   = (default_layout == ETextureLayout::TEXTURE_LAYOUT_COMMON) ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        m_descriptor_set_writers[_set].WriteSampledImage(_binding, VK_NULL_HANDLE, tex_view->GetView(), final_layout);
     }
 }
 

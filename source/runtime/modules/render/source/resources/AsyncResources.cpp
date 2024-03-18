@@ -42,11 +42,10 @@ namespace Moer {
         void OnResize(Moer::Vector2i extent);
 
         //call from render thread
-        VirtualViewportNextBackBufferInfo GetNextBackBuffer();
+        VirtualViewportBackBufferInfo GetBackBufferInfo();
         Extent3D                          GetNextBackBufferExtent();
-        RHIUAVRef                         GetNextBackBufferUAV(uint32_t index);
         RHIUAVRef                         GetDepthBufferUav();
-        RHITextureRef                     getDepthTexture();
+        RHITextureRef                     GetDepthTexture();
 
         void Present(RHIFenceRef _render_fence);
 
@@ -123,24 +122,15 @@ namespace Moer {
     const VirtualViewportInfo& VirtualViewport::GetInfo() const {
         return impl->GetInfo();
     }
-
-    VirtualViewportNextBackBufferInfo VirtualViewport::GetNextBackBuffer() {
-        return impl->GetNextBackBuffer();
-    }
+    
     Extent3D VirtualViewport::GetNextBackBufferExtent() {
         return impl->GetNextBackBufferExtent();
     }
-
-    RHIUAVRef VirtualViewport::GetNextBackBufferUAV(uint32_t index) {
-        return impl->GetNextBackBufferUAV(index);
+    
+    VirtualViewportBackBufferInfo VirtualViewport::GetBackBufferInfo() {
+        return impl->GetBackBufferInfo();
     }
 
-    RHIUAVRef VirtualViewport::GetDepthBufferUAV() {
-        return impl->GetDepthBufferUav();
-    }
-    RHITextureRef VirtualViewport::getDepthTexture() {
-        return impl->getDepthTexture();
-    }
 
     RHISRV* VirtualViewport::GetPresentTextureSRV() {
         return impl->GetPresentTextureSRV();
@@ -349,39 +339,34 @@ namespace Moer {
         assert(Moer::IsCurrentlyRenderThread());
     }
 
-    VirtualViewportNextBackBufferInfo VirtualViewport::Impl::GetNextBackBuffer() {
+    VirtualViewportBackBufferInfo VirtualViewport::Impl::GetBackBufferInfo() {
         // Implementation of GetNextBackBuffer method
         // ...
         assert(Moer::IsCurrentlyRenderThread());
         uint32_t backbuffer_index = frame_index % info.back_buffer_count;
 
         return {
-            .backbuffer_index       = backbuffer_index,
-            .backbuffer_ready_fence = present_fence};
+            .back_buffer_index      = backbuffer_index,
+            .backbuffer_ready_fence = present_fence,
+            .backbuffer_uav         = swapchain_uavs[backbuffer_index],
+        };
     }
     Extent3D VirtualViewport::Impl::GetNextBackBufferExtent() {
-        auto      info = GetNextBackBuffer();
-        RHIUAVRef uav  = GetNextBackBufferUAV(info.backbuffer_index);
+        auto      info = GetBackBufferInfo();
+        RHIUAVRef uav  = GetBackBufferInfo().backbuffer_uav;
         return uav->GetTexture()->GetExtent3D();
     }
-
-    RHIUAVRef VirtualViewport::Impl::GetNextBackBufferUAV(uint32_t index) {
-        // Implementation of GetNextBackBufferUAV method
-        // ...
-        assert(Moer::IsCurrentlyRenderThread());
-
-        return swapchain_uavs[index];
-    }
+    
+    
 
     RHIUAVRef VirtualViewport::Impl::GetDepthBufferUav() {
         // Implementation of GetDepthBufferUAV method
         // ...
         assert(Moer::IsCurrentlyRenderThread());
-
         return depth_texture_uav;
     }
 
-    RHITextureRef VirtualViewport::Impl::getDepthTexture() {
+    RHITextureRef VirtualViewport::Impl::GetDepthTexture() {
         // Implementation of getDepthTexture method
         // ...
         assert(Moer::IsCurrentlyRenderThread());

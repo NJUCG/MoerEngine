@@ -1,7 +1,9 @@
 #ifndef MOER_ENGINE_RHI_COMMAND_H
 #define MOER_ENGINE_RHI_COMMAND_H
 
+#include "math/Base.h"
 #include "misc/STL.h"
+#include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "RenderAPI.h"
 
@@ -88,6 +90,9 @@ public:
         uint32_t _start_vertex_location,
         uint32_t _start_instance_location) = 0;
 
+    void Dispatch(Moer::Vector3i _group_count) {
+        Dispatch(_group_count.x, _group_count.y, _group_count.z);
+    }
     virtual void Dispatch(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z) = 0;
 
     virtual void DispatchIndirect(RHIBuffer* _buffer, uint64_t _offset) = 0;
@@ -203,6 +208,10 @@ public:
     virtual void SetPipelineBarrier(const RHIBarrierDependencyInfo& _dependency) = 0;
 };
 
+enum class ECmdListType {
+
+};
+
 struct RHISubmitInfo;
 
 class RHICommandQueue {
@@ -218,20 +227,22 @@ public:
 struct RHIFenceWaitInfo {
     uint64_t  wait_value;
     RHIFence* wait_fence;
+    ERHIPipelineStageFlags wait_stage;
 };
 
 struct RHIFenceSignalInfo {
     uint64_t  signal_value;
     RHIFence* signal_fence;
+    ERHIPipelineStageFlags signal_stage;
 };
 struct RHISubmitInfo {
 
-    void Wait(RHIFence* _fence, uint64_t _wait_value) {
-        wait_infos.emplace_back(_wait_value, _fence);
+    void Wait(RHIFence* _fence, uint64_t _wait_value, ERHIPipelineStageFlags _stage = ERHIPipelineStageFlags::PS_NONE) {
+        wait_infos.emplace_back(_wait_value, _fence, _stage);
     };
 
-    void Signal(RHIFence* _fence, uint64_t _signal_value) {
-        signal_infos.emplace_back(_signal_value, _fence);
+    void Signal(RHIFence* _fence, uint64_t _signal_value, ERHIPipelineStageFlags _stage = ERHIPipelineStageFlags::PS_NONE) {
+        signal_infos.emplace_back(_signal_value, _fence, _stage);
     };
 
     const Moer::Array<RHIFenceWaitInfo>&   GetWaitInfos() const { return wait_infos; }
@@ -241,4 +252,16 @@ private:
     Moer::Array<RHIFenceWaitInfo>   wait_infos;
     Moer::Array<RHIFenceSignalInfo> signal_infos;
 };
+
+namespace Moer {
+    //used for main thread recording cmds
+    class RHICommandList {
+    public:
+        RHICommandList();
+        struct Impl;
+
+    private:
+        Moer::UniquePtr<Impl> impl;
+    };
+}// namespace Moer
 #endif

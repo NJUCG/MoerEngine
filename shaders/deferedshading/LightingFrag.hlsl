@@ -26,13 +26,14 @@ static const uint CUR_MATERIAL_TYPE = 0;
 // [[vk::input_attachment_index(1), vk::binding(1)]] SubpassInput depthAttach;
 float3  worldPosFromDepth    (float depth,float2 in_uv){
     float4  clip         = float4(in_uv * 2.0 - 1.0, depth, 1.0);
-    float4 world_w = mul(clip, lighting_data.inv_view_proj);
+    float4 world_w = mul(lighting_data.inv_view_proj,clip);
     float3 pos     = world_w.xyz / world_w.w;
     return pos;
 }
-float4 main([[vk::location(0)]] float2 in_uv : TEXCOORD0) : SV_TARGET
+float4 main([[vk::location(0)]] float2 in_uv : TEXCOORD0,float4 position : SV_POSITION) : SV_TARGET
 {
     uint gbuffer_mat = mat_attach.Sample(default_sampler, in_uv);
+  //  printf("uv %f %f svposition %f %f %f \n", in_uv.x, in_uv.y, position.x, position.y, position.z);
     uint mat_type = gbuffer_mat & 0x000000FF;
 
     // if(mat_type != CUR_MATERIAL_TYPE)
@@ -45,7 +46,7 @@ float4 main([[vk::location(0)]] float2 in_uv : TEXCOORD0) : SV_TARGET
     uint mat_id = (gbuffer_mat & 0xFFFFFF00) >> 8;
     MaterialData mat = material_data[mat_id];
     float4 base_color;
-    if(mat.albedo_map == -1 && false)
+    if(mat.albedo_map == -1)
     {
         base_color = mat.base_color_factor;
     }
@@ -64,6 +65,6 @@ float4 main([[vk::location(0)]] float2 in_uv : TEXCOORD0) : SV_TARGET
         result += base_color.xyz * apply_light(light, world_pos, normal);
     }
     //return float4(in_uv, 0.0f, 1.0f);
-  //return float4(base_color);   
+  // return float4(base_color);   
    return float4(result, 1.0f);
 }

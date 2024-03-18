@@ -91,32 +91,32 @@ void VulkanSwapChain::Create(uint32_t* width, uint32_t* height, bool vsync) {
     vkGetSwapchainImagesKHR(*device, m_swap_chain, &image_count, m_swap_chain_images.data());
     current_image_index = 0;
 
-    VulkanRHIImpl*  rhi_impl       = (VulkanRHIImpl*)g_rhi;
-    VkCommandPool   temp_pool      = m_device->GetCurrentCommandAllocator()->GetHandle(ECommandListType::COPY);
-    VkCommandBuffer command_buffer = rhi_impl->BeginSingleTimeCommands(temp_pool);
+    // VulkanRHIImpl*  rhi_impl       = (VulkanRHIImpl*)g_rhi;
+    // VkCommandPool   temp_pool      = m_device->GetCurrentCommandAllocator()->GetHandle(ECommandListType::COPY);
+    // VkCommandBuffer command_buffer = rhi_impl->BeginSingleTimeCommands(temp_pool);
 
-    VkDependencyInfoKHR dependency_info{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    // VkDependencyInfoKHR dependency_info{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
 
-    Moer::Array<VkImageMemoryBarrier2> barriers(m_swap_chain_images.size());
-    for (int i = 0; i < barriers.size(); i++) {
-        barriers[i].sType                           = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-        barriers[i].pNext                           = nullptr;
-        barriers[i].oldLayout                       = VK_IMAGE_LAYOUT_UNDEFINED;
-        barriers[i].newLayout                       = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-        barriers[i].srcQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
-        barriers[i].dstQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
-        barriers[i].image                           = m_swap_chain_images[i];
-        barriers[i].subresourceRange.baseMipLevel   = 0;
-        barriers[i].subresourceRange.levelCount     = 1;
-        barriers[i].subresourceRange.baseArrayLayer = 0;
-        barriers[i].subresourceRange.layerCount     = 1;
-        barriers[i].subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
-    }
-    dependency_info.imageMemoryBarrierCount = m_swap_chain_images.size();
-    dependency_info.pImageMemoryBarriers    = barriers.data();
-    vkCmdPipelineBarrier2(command_buffer, &dependency_info);
+    // Moer::Array<VkImageMemoryBarrier2> barriers(m_swap_chain_images.size());
+    // for (int i = 0; i < barriers.size(); i++) {
+    //     barriers[i].sType                           = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+    //     barriers[i].pNext                           = nullptr;
+    //     barriers[i].oldLayout                       = VK_IMAGE_LAYOUT_UNDEFINED;
+    //     barriers[i].newLayout                       = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    //     barriers[i].srcQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
+    //     barriers[i].dstQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
+    //     barriers[i].image                           = m_swap_chain_images[i];
+    //     barriers[i].subresourceRange.baseMipLevel   = 0;
+    //     barriers[i].subresourceRange.levelCount     = 1;
+    //     barriers[i].subresourceRange.baseArrayLayer = 0;
+    //     barriers[i].subresourceRange.layerCount     = 1;
+    //     barriers[i].subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+    // }
+    // dependency_info.imageMemoryBarrierCount = m_swap_chain_images.size();
+    // dependency_info.pImageMemoryBarriers    = barriers.data();
+    // vkCmdPipelineBarrier2(command_buffer, &dependency_info);
 
-    rhi_impl->EndSingleTimeCommands(command_buffer, temp_pool, m_device->GetTransferQueue());
+    // rhi_impl->EndSingleTimeCommands(command_buffer, temp_pool, m_device->GetTransferQueue());
 
     // LOG_INFO("Vulkan swapchain initialized with {} images.", image_count);
 }

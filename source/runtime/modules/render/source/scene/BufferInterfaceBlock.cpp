@@ -72,14 +72,14 @@ namespace Moer {
     }
 
     BufferInterfaceBlock::FieldInfo const* BufferInterfaceBlock::getFieldInfo(std::string_view name) const {
-        auto pos = mInfoMap.find(name);
-        return &mFieldInfoList[pos->second];
+        auto pos = m_info_map.find(name);
+        return &m_field_info_list[pos->second];
     }
-    BufferInterfaceBlock::BufferInterfaceBlock(Builder const& builder) noexcept : mName(builder.mName), mFieldInfoList(builder.mEntries.size()) {
-        auto& infoMap = mInfoMap;
+    BufferInterfaceBlock::BufferInterfaceBlock(Builder const& builder) noexcept : m_name(builder.mName), m_field_info_list(builder.mEntries.size()) {
+        auto& infoMap = m_info_map;
         infoMap.reserve(builder.mEntries.size());
 
-        auto& uniformsInfoList = mFieldInfoList;
+        auto& uniformsInfoList = m_field_info_list;
 
         uint32_t i      = 0;
         uint16_t offset = 0;
@@ -112,13 +112,12 @@ namespace Moer {
         }
 
         // round size to the next multiple of 4 and convert to bytes
-        mSize =  sizeof(uint32_t) * ((offset/sizeof(uint32_t) + 3) & ~3);
+        m_size =  sizeof(uint32_t) * ((offset/sizeof(uint32_t) + 3) & ~3);
     }
 
    
     void UniformBuffer::SetData(const void* data, size_t size, size_t offset) {
         memcpy(static_cast<char *>(m_buffer)+offset, data, size);
-        m_data_struct.albedo_map = 5;
     }
     const void* UniformBuffer::GetData() const {
         return m_buffer;
@@ -128,7 +127,6 @@ namespace Moer {
         memset(m_buffer, 0, size);
     } 
     UniformBuffer::~UniformBuffer() {
-        // delete static_cast<uint8_t*>(m_buffer);
         Memory::Free(m_buffer);
     }
 

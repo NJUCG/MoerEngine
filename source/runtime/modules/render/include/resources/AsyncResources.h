@@ -21,9 +21,10 @@ namespace Moer {
         uint32_t       back_buffer_count = 2;
     };
 
-    struct VirtualViewportNextBackBufferInfo {
-        uint32_t  backbuffer_index;
+    struct VirtualViewportBackBufferInfo {
+        uint32_t  back_buffer_index;
         RHIFence* backbuffer_ready_fence;
+        RHIUAVRef backbuffer_uav;
     };
     //In Editor mode, UI runs and renders on main thread, but in application mode,
     //everything runs on render thread, so we need to create a virtual swap chain
@@ -35,13 +36,10 @@ namespace Moer {
         void OnResize(Moer::Vector2i extent);
 
         //call from render thread
-        VirtualViewportNextBackBufferInfo GetNextBackBuffer();
         Extent3D                          GetNextBackBufferExtent();
 
-        RHIUAVRef GetNextBackBufferUAV(uint32_t index);
+        VirtualViewportBackBufferInfo GetBackBufferInfo();
 
-        RHIUAVRef     GetDepthBufferUAV();
-        RHITextureRef getDepthTexture();
 
         void Present(RHIFenceRef _render_fence);
 
@@ -60,7 +58,6 @@ namespace Moer {
         class Impl;
         Impl* impl;
     };
-
 }// namespace Moer
 
 #endif//MOER_ENGINE_ASYNC_RESOURCES_H

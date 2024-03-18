@@ -5,99 +5,10 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "../Common.h"
+#include "../Cull.h"
 #include "RenderResourceDeferred.h"
 #include "rhi/RHIResourceInitilizer.h"
 #include "shader/ShaderResourceManager.h"
-
-namespace Moer {
-    BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(CameraData)
-    DEFINE_SHADER_PARAM(Moer::Matrix4x4f, view)
-    DEFINE_SHADER_PARAM(Moer::Matrix4x4f, view_proj)
-    END_SHADER_CONSTANT_STRUCT_DEFINITION()
-
-    BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(CameraCullData)
-    DEFINE_SHADER_PARAM(Moer::Matrix4x4f, view)
-    DEFINE_SHADER_PARAM(Moer::Matrix4x4f, view_proj)
-    DEFINE_SHADER_PARAM(Moer::Vector4f[6], frustum_planes)
-    DEFINE_SHADER_PARAM(Moer::Vector3f, camera_pos)
-    END_SHADER_CONSTANT_STRUCT_DEFINITION()
-    class BasePassDeferredVert : public Shader {
-        DEFINE_SHADER_TYPE(BasePassDeferredVert, Global, RENDER_API, ...)
-    public:
-        BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
-        DEFINE_SHADER_PARAM_STRUCT(CameraData, camera_data)
-        DEFINE_SHADER_PARAM_SRV(StructuredBuffer<InstanceData>, instance_data)
-        END_ROOT_PARAMETER_DEFINITION(Parameters)
-    };
-
-    class BasePassDeferredFrag : public Shader {
-        DEFINE_SHADER_TYPE(BasePassDeferredFrag, Global, RENDER_API, ...)
-    public:
-        BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
-        // DEFINE_SHADER_PARAM_SAMPLER(SamplerState, defaultSampler)
-        // DEFINE_SHADER_PARAM_SRV(Texture2D, baseColorMap)
-        END_ROOT_PARAMETER_DEFINITION(Parameters)
-    };
-
-    IMPLEMENT_SHADER_TYPE(BasePassDeferredVert, "test/TriangleDeferredVert.hlsl", "main", ST_VERTEX);
-    IMPLEMENT_SHADER_TYPE(BasePassDeferredFrag, "test/TriangleDeferredFrag.hlsl", "main", ST_FRAGMENT);
-
-    BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(CullInstanceInput)
-    DEFINE_SHADER_PARAM_STRUCT(CameraData, camera_data)
-    DEFINE_SHADER_PARAM(uint32_t, instance_count)
-    DEFINE_SHADER_PARAM(uint32_t, meshlet_count_offset)
-    END_SHADER_CONSTANT_STRUCT_DEFINITION(CullInstanceInput)
-
-    class BasePassCullInstanceShader : public Shader {
-        DEFINE_SHADER_TYPE(BasePassCullInstanceShader, Global, RENDER_API, ...)
-    public:
-        BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
-        DEFINE_SHADER_PARAM_STRUCT(CullInstanceInput, input)
-        DEFINE_SHADER_PARAM_SRV(StructuredBuffer<InstanceData>, instance_data)
-
-        DEFINE_SHADER_PARAM_SRV(StructuredBuffer<InstanceMeshInfo>, instance_meshlet_info)
-
-        DEFINE_SHADER_PARAM_UAV(RWStructuredBuffer<uint64_t>, instance_meshlet_cull_info)
-        DEFINE_SHADER_PARAM_UAV(RWByteAddressBuffer, counters_buffer)
-        END_ROOT_PARAMETER_DEFINITION(Parameters)
-    };
-
-    BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(CullMeshletInput)
-    DEFINE_SHADER_PARAM_STRUCT(CameraData, camera_data)
-    DEFINE_SHADER_PARAM(uint32_t, meshlet_count_offset)
-    DEFINE_SHADER_PARAM(uint32_t, draw_count_offset)
-    END_SHADER_CONSTANT_STRUCT_DEFINITION(CullMeshletInput)
-
-    class BasePassCullMeshletShader : public Shader {
-        DEFINE_SHADER_TYPE(BasePassCullMeshletShader, Global, RENDER_API, ...)
-    public:
-        BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
-        DEFINE_SHADER_PARAM_STRUCT(CullMeshletInput, input)
-        DEFINE_SHADER_PARAM_SRV(StructuredBuffer<MeshletDesc>, meshlet_info_buffer)
-        DEFINE_SHADER_PARAM_SRV(StructuredBuffer<MeshletBound>, meshlet_bound_buffer)
-        DEFINE_SHADER_PARAM_SRV(StructuredBuffer<InstanceData>, instance_data)
-        DEFINE_SHADER_PARAM_SRV(StructuredBuffer<InstanceMeshInfo>, instance_meshlet_info)
-        DEFINE_SHADER_PARAM_SRV(StructuredBuffer<uint64_t>, instance_meshlet_cull_info)
-
-        DEFINE_SHADER_PARAM_UAV(RWByteAddressBuffer, counters_buffer)
-        DEFINE_SHADER_PARAM_UAV(RWStructuredBuffer<DrawCommand>, command_buffer)
-
-        END_ROOT_PARAMETER_DEFINITION(Parameters)
-    };
-
-    IMPLEMENT_SHADER_TYPE(BasePassCullInstanceShader, "meshdebug/CullInstance.hlsl", "main", ST_COMPUTE);
-    IMPLEMENT_SHADER_TYPE(BasePassCullMeshletShader, "meshdebug/CullMeshlet.hlsl", "main", ST_COMPUTE);
-
-    class BuildHZBShader : public Shader {
-        DEFINE_SHADER_TYPE(BuildHZBShader, Global, RENDER_API, ...)
-    public:
-        BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
-        DEFINE_SHADER_PARAM_SRV(Texture2D, depth)
-        DEFINE_SHADER_PARAM_UAV(RWTexture2D, hzb)
-        END_ROOT_PARAMETER_DEFINITION(Parameters)
-    };
-
-}// namespace Moer
 
 namespace Moer {
     struct BasePass::Impl {
@@ -155,8 +66,8 @@ namespace Moer {
     BasePass::Impl::~Impl() {
     }
 
-    void BasePass::Impl::InitResources(RenderResourceDeferred& resources) {
-        render_resources = &resources;
+    void BasePass::Impl::InitResources(RenderResourceDeferred& _resources) {
+        render_resources = &_resources;
 
         RHIVertexInputInfo vertex_input_info(
 
@@ -167,8 +78,8 @@ namespace Moer {
             VertexElement(0, 12 * sizeof(float), PF_R32G32_SFLOAT, 4, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX),
             VertexElement(1, 14 * sizeof(float), PF_R32_UINT, 5, sizeof(uint32_t), EVertexInputRate::VIR_INSTANCE));
 
-        RHIShaderRef vertex_shader = ShaderResourceManager::GetInstance().GetShader<BasePassDeferredVert>();
-        RHIShaderRef frag_shader   = ShaderResourceManager::GetInstance().GetShader<BasePassDeferredFrag>();
+        RHIShaderRef vertex_shader = ShaderResourceManager::GetInstance().GetShader<TestDeferredTriangleShaderVert>();
+        RHIShaderRef frag_shader   = ShaderResourceManager::GetInstance().GetShader<TestDeferredTriangleShaderFrag>();
 
         RHIGraphicsPSOCreateInfo pso_info = RHIGraphicsPSOCreateInfo::Create()
                                                 .SetColorAttachmentInfo(RHIColorAttachmentInfo::Preset<RHIConfig::Blend::ALPHA_BLEND>(PF_R8G8B8A8_SRGB))
@@ -178,15 +89,16 @@ namespace Moer {
                                                 .Finalize();
         pipeline_state = g_rhi->RHICreateGraphicsPSO(std::move(pso_info));
 
-        RHIShaderRef cull_instance_shader = ShaderResourceManager::GetInstance().GetShader<BasePassCullInstanceShader>();
-        RHIShaderRef cull_meshlet_shader  = ShaderResourceManager::GetInstance().GetShader<BasePassCullMeshletShader>();
-        cull_instance_pso                 = g_rhi->RHICreateComputePipelineState(cull_instance_shader);
-        cull_meshlet_pso                  = g_rhi->RHICreateComputePipelineState(cull_meshlet_shader);
+        RHIShaderRef cull_instance_shader = ShaderResourceManager::GetInstance().GetShader<CullInstancePrePassShader>();
+        RHIShaderRef cull_meshlet_shader  = ShaderResourceManager::GetInstance().GetShader<CullMeshletPrepassShader>();
 
-        meshlet_descs_buffer_view  = g_rhi->RHICreateBufferSRV(resources.meshlet_info_buffer);
-        meshlet_bounds_buffer_view = g_rhi->RHICreateBufferSRV(resources.meshlet_bounds_buffer);
-        instance_buffer_view       = g_rhi->RHICreateBufferSRV(resources.instance_buffer);
-        instance_meshlet_info_view = g_rhi->RHICreateBufferSRV(resources.instance_mesh_info_buffer);
+        cull_instance_pso = g_rhi->RHICreateComputePipelineState(cull_instance_shader);
+        cull_meshlet_pso  = g_rhi->RHICreateComputePipelineState(cull_meshlet_shader);
+
+        meshlet_descs_buffer_view  = g_rhi->RHICreateBufferSRV(_resources.meshlet_info_buffer);
+        meshlet_bounds_buffer_view = g_rhi->RHICreateBufferSRV(_resources.meshlet_bounds_buffer);
+        instance_buffer_view       = g_rhi->RHICreateBufferSRV(_resources.instance_buffer);
+        instance_meshlet_info_view = g_rhi->RHICreateBufferSRV(_resources.instance_mesh_info_buffer);
 
         {
             //self resources
@@ -202,7 +114,7 @@ namespace Moer {
         }
     }
 
-    void BasePass::Impl::DrawFrame(PassInput& input) {
+    void BasePass::Impl::DrawFrame(PassInput& _input) {
         //clear counter buffer
         //do instance culling (frustum + prev_hzb)
         //do meshlet culling (frustum + prev_hzb)
@@ -211,7 +123,7 @@ namespace Moer {
         //do instance culling (hzb)
         //do meshlet culling (hzb)
 
-        RHIGraphicsCommandList* cmd_list = input.cmd_list;
+        RHIGraphicsCommandList* cmd_list = _input.cmd_list;
         PrePass(cmd_list);
 
         cmd_list->CopyBuffer(
@@ -240,7 +152,7 @@ namespace Moer {
         auto&             out_color       = render_pass_info.color_attachments[0];
         out_color.color_attachment_action = EAttachmentAction::AC_CLEAR_STORE;
         out_color.color_attachment_view   = RenderAttachmentView(
-            input.target_attachment,
+            _input.target_attachment,
             ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT,
             RHIClearAttachment(EClearAttachment::COLOR));
 
