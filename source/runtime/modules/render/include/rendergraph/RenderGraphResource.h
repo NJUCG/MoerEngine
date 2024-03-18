@@ -19,7 +19,7 @@ namespace Moer {
         void ConnectForRead(DepdencyGraph& graph, PassNode*, uint32_t usage);
         void ConnectForWrite(DepdencyGraph& graph, PassNode*, uint32_t usage);
         RenderGraphResource(const std::string& name, Type type, bool imported = false);
-        virtual void ResloveResourceUsage(RHIGraphicsCommandList* cmd_list, uint32_t usage) = 0;
+        virtual uint32_t ResloveResourceUsage(RHIGraphicsCommandList* cmd_list, uint32_t usage) = 0;
         //Pass to create this resource
         PassNode* create_pass{nullptr};
         // Pass to destroy this resource
@@ -44,8 +44,8 @@ namespace Moer {
         };
         RenderGraphBuffer(const std::string& name, Descriptor desc);
         RenderGraphBuffer(const std::string& name, RHIBufferRef);
-        void Create() override;
-        void ResloveResourceUsage(RHIGraphicsCommandList* cmd_list, uint32_t usage) override;
+        void     Create() override;
+        uint32_t ResloveResourceUsage(RHIGraphicsCommandList* cmd_list, uint32_t usage) override;
 
     protected:
         RHIBufferRef m_buffer{nullptr};
@@ -66,12 +66,13 @@ namespace Moer {
             uint32_t     mipLevels{1};
             uint32_t     arrayLayers{1};
         };
-        RHIUAVRef GetUAV();
-        RHISRVRef GetSRV();
-        void      Create() override;
+        RHIUAVRef    GetUAV(EPixelFormat format = PF_UNDEFINED, uint32_t mip_num = 1, uint32_t array_min = 0, uint32_t array_num = 1);
+        RHISRVRef    GetSRV(EPixelFormat format = PF_UNDEFINED, uint32_t mip_min = 0, uint32_t mip_num = 1, uint32_t array_min = 0, uint32_t array_num = 1);
+        EPixelFormat GetFormat() const;
+        void         Create() override;
         RenderGraphTexture(const std::string& name, Descriptor desc);
         RenderGraphTexture(const std::string& name, RHITextureRef tex);
-        void ResloveResourceUsage(RHIGraphicsCommandList* cmd_list, uint32_t usage) override;
+        uint32_t ResloveResourceUsage(RHIGraphicsCommandList* cmd_list, uint32_t usage) override;
 
     protected:
         RHITextureRef m_texture;

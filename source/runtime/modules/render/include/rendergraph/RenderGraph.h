@@ -33,6 +33,11 @@ namespace Moer {
         Moer::UnorderedMap<std::string, RenderGraphHandle> m_handles;
     };
 
+    struct RenderGraphExecuteConfig {
+        RHIGraphicsCommandList* cmd_list{nullptr};
+        Extent3D                render_extent{};
+    };
+
     class RENDER_API RenderGraph {
 
     public:
@@ -82,7 +87,7 @@ namespace Moer {
         void AddComputePass(const std::string& name, const ComputeSetUp& setup, ComputeExecute&& execute);
         void AddRayTracingPass(const std::string& name, const RayTracingSetup& setup, RaytracingExecute&& execute);
         // void AddPass();
-        void Execute(RHIGraphicsCommandList* cmd_list);
+        void Execute(const RenderGraphExecuteConfig& config);
         void Compile();
 
         BlackBoard&         GetBlackBoard();
@@ -91,6 +96,7 @@ namespace Moer {
         RenderGraphTexture* GetTexture(RenderGraphHandle handle) const;
         RenderGraphBuffer*  GetBuffer(RenderGraphHandle handle) const;
         void                SetGraphOutput(RenderGraphHandle handle);
+        Extent3D            GetRenderExtent() const;
         ~RenderGraph();
 
     protected:
@@ -104,6 +110,7 @@ namespace Moer {
         Moer::Array<PassNode*>            m_passes;
         DepdencyGraph                     m_dependency_graph;
         BlackBoard                        m_black_board;
+        //Extent3D                         m_render_extent;
         friend class Builder;
     };
 }// namespace Moer

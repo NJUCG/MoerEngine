@@ -606,10 +606,24 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPSO(RHIGraphicsPSOCr
         auto constant_infos = meta_shader->GetRootParametersLayoutInfo().GetConstantsInfo();
 
         for (const auto& info : binding_infos) {
+            auto& bindings     = descriptor_bindings[info.space];
+            auto  prev_binding = std::find_if(bindings.begin(), bindings.end(), [info](VkDescriptorSetLayoutBinding& binding) {
+                return binding.binding == info.slot;
+            });
+
             VkDescriptorSetLayoutBinding binding{};
             binding.binding         = info.slot;
             binding.descriptorType  = VulkanEnumTranslator::METoVKDescriptorType(info.type, info.resource_type);
             binding.descriptorCount = 1;// always descriptorCount = 1
+
+            if (prev_binding != bindings.end()) {
+                if (prev_binding->descriptorType != binding.descriptorType || prev_binding->descriptorCount != binding.descriptorCount) {
+                    LOG_CRITICAL("RHICreateGraphicsPSO: descriptor type conflict!");
+                }
+                prev_binding->stageFlags |= VulkanEnumTranslator::METoVKShaderStageFlags(meta_shader->GetShaderType());
+                continue;
+            }
+
             binding.stageFlags |= VulkanEnumTranslator::METoVKShaderStageFlags(meta_shader->GetShaderType());
             binding.pImmutableSamplers = nullptr;
 
@@ -1360,12 +1374,13 @@ RHISRVRef VulkanRHIImpl::RHICreateSRVInner(RHIViewableResource* _resource, const
         image_view_create_info.viewType                        = VulkanEnumTranslator::METoVKImageViewType(_view_info.texture.srv.dimension);
         image_view_create_info.format                          = _view_info.texture.srv.format == PF_UNDEFINED ? VulkanEnumTranslator::METoVKFormat(vk_texture->GetUAVFormat()) : VulkanEnumTranslator::METoVKFormat(_view_info.texture.srv.format);
         image_view_create_info.components                      = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
-        image_view_create_info.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;// MARK...
+        image_view_create_info.subresourceRange.aspectMask     = image_view_create_info.format == VK_FORMAT_D32_SFLOAT_S8_UINT?VK_IMAGE_ASPECT_DEPTH_BIT: VK_IMAGE_ASPECT_COLOR_BIT ;// MARK...
         image_view_create_info.subresourceRange.baseMipLevel   = _view_info.texture.srv.mip_min;
         image_view_create_info.subresourceRange.levelCount     = _view_info.texture.srv.mip_num;
         image_view_create_info.subresourceRange.baseArrayLayer = _view_info.texture.srv.array_min;
         image_view_create_info.subresourceRange.layerCount     = _view_info.texture.srv.array_num;
 
+        
         VK_CHECK_RESULT(vkCreateImageView(m_device->GetDevice(), &image_view_create_info, nullptr, &vk_srv->m_view));
 
         return RHISRVRef(vk_srv);

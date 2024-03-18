@@ -51,4 +51,5 @@ struct MeshletBound {
   float3 cone_axis;
   float cone_angle;
 };
+
 #endif

@@ -71,7 +71,7 @@ namespace Moer {
         GpuSceneBufferBuilder();
         ~GpuSceneBufferBuilder();
         std::pair<RHIBufferRef, RHIBufferRef> Build();
-        RHIBufferRef                          CopyFrom(const void* data, uint32_t size);
+        static RHIBufferRef                   CopyFrom(EBufferUsageFlags usages, const void* data, uint32_t size);
         RHIBufferRef                          CreateBufferWithData(EBufferUsageFlags usages, const void* data, uint32_t size);
 
     protected:

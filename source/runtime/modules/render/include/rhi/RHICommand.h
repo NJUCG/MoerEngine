@@ -82,6 +82,12 @@ public:
         uint32_t   _max_draw_count,
         uint32_t   _stride) = 0;
 
+    virtual void  Draw(
+        uint32_t _vertex_count,
+        uint32_t _instance_count,
+        uint32_t _start_vertex_location,
+        uint32_t _start_instance_location) = 0;
+
     virtual void Dispatch(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z) = 0;
 
     virtual void DispatchIndirect(RHIBuffer* _buffer, uint64_t _offset) = 0;

@@ -3,16 +3,16 @@
 #include "rhi/RHICommand.h"
 namespace Moer {
     void PassNode::ResloveResourceUsage(RHIGraphicsCommandList* cmd_list) {
-        for (auto& resource : m_resourceUsage) {
-            resource.first->ResloveResourceUsage(cmd_list, resource.second);
+        for (auto& resource : m_resource_usage) {
+            m_resource_layout.emplace(resource.first, resource.first->ResloveResourceUsage(cmd_list, resource.second));
         }
         //Todo Handle  resource transition
     }
     void PassNode::AddResourceUsage(RenderGraphResource* resource, uint32_t usage) {
-        if (m_resourceUsage.find(resource) != m_resourceUsage.end()) {
-            m_resourceUsage[resource] |= usage;
+        if (m_resource_usage.find(resource) != m_resource_usage.end()) {
+            m_resource_usage[resource] |= usage;
         } else {
-            m_resourceUsage[resource] = usage;
+            m_resource_usage[resource] = usage;
         }
     }
     void PassNode::AddResourceToCreate(RenderGraphResource* resource) {
@@ -35,36 +35,47 @@ namespace Moer {
 
         RHIRenderPassInfo pass_info;
 
-        uint32_t color_attachment_idx = 0;
-        for (auto& pass_attachment : m_renderPassData.m_descriptor.color_attachments) {
+        {
+            uint32_t color_attachment_idx = 0;
+            // pass_info.color_attachments.resize(m_renderPassData.m_descriptor.color_attachments.size());
+            for (auto& pass_attachment : m_renderPassData.m_descriptor.color_attachments) {
 
-            auto& color_attachment = pass_info.color_attachments[color_attachment_idx];
-            auto  is_write         = render_graph.IsWriteResource(pass_attachment, this);
-            auto  is_read          = render_graph.IsReadResource(pass_attachment, this);
+                auto& color_attachment = pass_info.color_attachments[color_attachment_idx];
+                auto  is_write         = render_graph.IsWriteResource(pass_attachment, this);
+                auto  is_read          = render_graph.IsReadResource(pass_attachment, this);
 
-            EAttachmentAction action = EAttachmentAction::AC_LOAD_STORE;
-            if (is_write && !is_read) action = AC_CLEAR_STORE;
-            pass_info.color_attachments[color_attachment_idx].color_attachment_action = action;
+                EAttachmentAction action = EAttachmentAction::AC_LOAD_STORE;
+                if (is_write && !is_read) action = AC_CLEAR_STORE;
+                pass_info.color_attachments[color_attachment_idx].color_attachment_action = action;
 
-            RenderGraphTexture* texture                         = render_graph.GetTexture(pass_attachment);
-            color_attachment.color_attachment_view.texture_view = texture->GetUAV();
+                RenderGraphTexture* texture                         = render_graph.GetTexture(pass_attachment);
+                color_attachment.color_attachment_view.texture_view = texture->GetUAV();
 
-            //todo resolve layout
-            color_attachment.color_attachment_view.required_layout  = TEXTURE_LAYOUT_COLOR_ATTACHMENT;
-            color_attachment.color_attachment_view.clear_attachment = RHIClearAttachment(EClearAttachment::COLOR);
+                //todo resolve layout
+                color_attachment.color_attachment_view.required_layout  = m_resource_layout.contains(texture) ? static_cast<ETextureLayout>(m_resource_layout[texture]) : TEXTURE_LAYOUT_COLOR_ATTACHMENT;
+                color_attachment.color_attachment_view.clear_attachment = RHIClearAttachment(EClearAttachment::COLOR);
 
-            color_attachment_idx++;
+                color_attachment_idx++;
+            }
         }
 
         if (m_renderPassData.m_descriptor.depth_stencil_attachment.isInitialized()) {
+            auto  depth_attachment                 = m_renderPassData.m_descriptor.depth_stencil_attachment;
             auto& depth_attachment_view            = pass_info.depth_stencil_attachment.depth_stencil_attachment_view;
             auto  depth_texture                    = render_graph.GetTexture(m_renderPassData.m_descriptor.depth_stencil_attachment);
             depth_attachment_view.texture_view     = depth_texture->GetUAV();
             depth_attachment_view.required_layout  = TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE;
             depth_attachment_view.clear_attachment = RHIClearAttachment(EClearAttachment::DEPTH_STENCIL);
+            auto is_write                          = render_graph.IsWriteResource(depth_attachment, this);
+            auto is_read                           = render_graph.IsReadResource(depth_attachment, this);
+            depth_attachment_view.required_layout  = m_resource_layout.contains(depth_texture) ? static_cast<ETextureLayout>(m_resource_layout[depth_texture]) : TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE;
+            depth_attachment_view.clear_attachment = RHIClearAttachment(EClearAttachment::DEPTH_STENCIL);
+            EAttachmentAction action               = EAttachmentAction::AC_LOAD_STORE;
+            if (is_write && !is_read) action = AC_CLEAR_STORE;
+            pass_info.depth_stencil_attachment.depth_stencil_action = action;
         }
 
-        Extent3D extent              = {0, 0, 0};
+        Extent3D extent              = pass_context.render_extent;
         pass_info.render_area.extent = {extent.width, extent.height};
         pass_info.render_area.offset = {0, 0};
 

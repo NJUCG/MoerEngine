@@ -42,6 +42,7 @@ namespace Moer {
         RHIBufferRef  GetBuffer(const std::string& name) const noexcept;
         Array<Entity> GetEntities() const noexcept;
         Array<Entity> GetCameras() const noexcept;
+        Entity        GetMainCamera() const noexcept;
         void          ForEach(std::function<void(Entity)> func) const noexcept;
 
         static Scene* GetDefaultScene() noexcept;

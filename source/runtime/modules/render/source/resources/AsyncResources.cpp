@@ -43,10 +43,10 @@ namespace Moer {
 
         //call from render thread
         VirtualViewportNextBackBufferInfo GetNextBackBuffer();
-
-        RHIUAVRef     GetNextBackBufferUAV(uint32_t index);
-        RHIUAVRef     GetDepthBufferUav();
-        RHITextureRef getDepthTexture();
+        Extent3D                          GetNextBackBufferExtent();
+        RHIUAVRef                         GetNextBackBufferUAV(uint32_t index);
+        RHIUAVRef                         GetDepthBufferUav();
+        RHITextureRef                     getDepthTexture();
 
         void Present(RHIFenceRef _render_fence);
 
@@ -127,6 +127,9 @@ namespace Moer {
     VirtualViewportNextBackBufferInfo VirtualViewport::GetNextBackBuffer() {
         return impl->GetNextBackBuffer();
     }
+    Extent3D VirtualViewport::GetNextBackBufferExtent() {
+        return impl->GetNextBackBufferExtent();
+    }
 
     RHIUAVRef VirtualViewport::GetNextBackBufferUAV(uint32_t index) {
         return impl->GetNextBackBufferUAV(index);
@@ -138,7 +141,6 @@ namespace Moer {
     RHITextureRef VirtualViewport::getDepthTexture() {
         return impl->getDepthTexture();
     }
-
 
     RHISRV* VirtualViewport::GetPresentTextureSRV() {
         return impl->GetPresentTextureSRV();
@@ -179,7 +181,7 @@ namespace Moer {
                                         .SetClearAttachment({})
                                         .SetInitialLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED)
                                         .SetUsageFlags(
-                                            ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT);
+                                            ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT | ETextureUsageFlags::SAMPLED );
 
         CreateResources();
         copy_queue->WaitForQueueComplete();
@@ -291,10 +293,26 @@ namespace Moer {
         auto&                    barriers = barrier_info.texture_barriers;
         barriers.emplace_back(RHITextureBarrierInfo::Create()
                                   .SetTexture(present_texture)
-                                  .SetSrcTextureLayout(TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                                  .SetSrcTextureLayout(present_texture->GetLayout({ETextureAspectFlags::COLOR, 0, 1, 0, 1, 0, 1}))
                                   .SetDstTextureLayout(TEXTURE_LAYOUT_TRANSFER_DST)
-                                  .SetSubResourceRange({}));
+                                  .SetSubResourceRange({}))
+            .SetSrcQueueType(ECommandQueueType::GRAPHICS)
+            .SetDstQueueType(ECommandQueueType::GRAPHICS);
+        present_texture->SetLayout({ETextureAspectFlags::COLOR, 0, 1, 0, 1, 0, 1}, TEXTURE_LAYOUT_TRANSFER_DST);
+        barriers.emplace_back(RHITextureBarrierInfo::Create()
+                                  .SetTexture(swapchain_textures[current_rendered % info.back_buffer_count])
+                                  .SetSrcTextureLayout(swapchain_textures[current_rendered % info.back_buffer_count]->GetLayout({ETextureAspectFlags::COLOR, 0, 1, 0, 1, 0, 1}))
+                                  .SetDstTextureLayout(TEXTURE_LAYOUT_TRANSFER_SRC)
+                                  .SetSubResourceRange({}))
+            .SetSrcQueueType(ECommandQueueType::GRAPHICS)
+            .SetDstQueueType(ECommandQueueType::GRAPHICS);
+        swapchain_textures[current_rendered % info.back_buffer_count]->SetLayout({ETextureAspectFlags::COLOR, 0, 1, 0, 1, 0, 1}, TEXTURE_LAYOUT_TRANSFER_SRC);
         barriers[0]
+            .SetSrcAccessFlags(ERHIAccessFlags::SHADER_SAMPLED_READ)
+            .SetDstAccessFlags(ERHIAccessFlags::TRANSFER_WRITE)
+            .SetSrcStage(PS_FRAGMENT_SHADER)
+            .SetDstStage(PS_TRANSFER);
+        barriers[1]
             .SetSrcAccessFlags(ERHIAccessFlags::SHADER_SAMPLED_READ)
             .SetDstAccessFlags(ERHIAccessFlags::TRANSFER_WRITE)
             .SetSrcStage(PS_FRAGMENT_SHADER)
@@ -313,7 +331,8 @@ namespace Moer {
             .SetDstAccessFlags(ERHIAccessFlags::SHADER_SAMPLED_READ)
             .SetDstStage(PS_FRAGMENT_SHADER)
             .SetSrcStage(PS_TRANSFER);
-        ;
+        barrier_info.texture_barriers.resize(1);
+        present_texture->SetLayout({ETextureAspectFlags::COLOR, 0, 1, 0, 1, 0, 1}, TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         cmd_list->SetPipelineBarrier(barrier_info);
         cmd_list->EndRecording();
 
@@ -339,6 +358,11 @@ namespace Moer {
         return {
             .backbuffer_index       = backbuffer_index,
             .backbuffer_ready_fence = present_fence};
+    }
+    Extent3D VirtualViewport::Impl::GetNextBackBufferExtent() {
+        auto      info = GetNextBackBuffer();
+        RHIUAVRef uav  = GetNextBackBufferUAV(info.backbuffer_index);
+        return uav->GetTexture()->GetExtent3D();
     }
 
     RHIUAVRef VirtualViewport::Impl::GetNextBackBufferUAV(uint32_t index) {

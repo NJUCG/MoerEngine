@@ -36,5 +36,6 @@ PS_INPUT main(VS_INPUT input) {
   output.pos_w = mul(model, float4(input.pos, 1.f)).xyz;
   output.uv = input.uv;
   output.tangent = mul(model2world, input.tangent);
+    output.instance_id = input.instance_id;
   return output;
 }

@@ -1,4 +1,8 @@
 #include "scene/BufferInterfaceBlock.h"
+
+
+#include "log/LogSystem.h"
+#include "math/Base.h"
 namespace Moer {
 
     BufferInterfaceBlock::Builder& BufferInterfaceBlock::Builder::name(std::string_view interfaceBlockName) {
@@ -103,24 +107,29 @@ namespace Moer {
             infoMap[{info.name.data(), info.name.size()}] = i;
 
             // advance offset to next slot
-            offset += stride * std::max(1u, e.size);
+            offset += sizeof(uint32_t) * stride * std::max(1u, e.size);
             ++i;
         }
 
         // round size to the next multiple of 4 and convert to bytes
-        mSize = sizeof(uint32_t) * ((offset + 3) & ~3);
+        mSize =  sizeof(uint32_t) * ((offset/sizeof(uint32_t) + 3) & ~3);
     }
+
+   
     void UniformBuffer::SetData(const void* data, size_t size, size_t offset) {
-        memcpy(m_buffer, data, size);
+        memcpy(static_cast<char *>(m_buffer)+offset, data, size);
+        m_data_struct.albedo_map = 5;
     }
     const void* UniformBuffer::GetData() const {
         return m_buffer;
     }
     UniformBuffer::UniformBuffer(uint32_t size) {
-        m_buffer = new uint8_t[size];
-    }
+        m_buffer = Memory::Malloc(size);
+        memset(m_buffer, 0, size);
+    } 
     UniformBuffer::~UniformBuffer() {
-        delete static_cast<uint8_t*>(m_buffer);
+        // delete static_cast<uint8_t*>(m_buffer);
+        Memory::Free(m_buffer);
     }
 
     uint8_t BufferInterfaceBlock::baseAlignmentForType(BufferInterfaceBlock::Type type) noexcept {

@@ -13,6 +13,8 @@ namespace Moer {
 
     class RENDER_API MaterialInstance : public CountableResource {
     public:
+        MaterialInstance(const MaterialInstance& rhs) = delete;
+        MaterialInstance& operator=(const MaterialInstance& rhs) = delete;
         MaterialInstance(MaterialRef material);
         template<typename T>
         using is_supported_parameter_t = typename std::enable_if<

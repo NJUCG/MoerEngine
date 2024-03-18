@@ -186,7 +186,12 @@ namespace Moer {
             if (it != m_textures.end()) {
                 return it->second;
             }
-            RHITextureRef texture = g_rhi->RHICreateTexture(RHITextureCreateInfo::Create2D(name.c_str(), size, format).SetArraySize(arrayLayers).SetNumMips(mipLevels).SetClearAttachment({}).SetInitialLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED));
+            RHITextureRef texture = g_rhi->RHICreateTexture(RHITextureCreateInfo::Create2D(name.c_str(), size, format)
+                                                                .SetArraySize(arrayLayers)
+                                                                .SetNumMips(mipLevels)
+                                                                .SetClearAttachment({})
+                                                                .SetInitialLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED)
+                                                                .SetUsageFlags(usage));
             m_textures.insert({hash, texture});
             return texture;
         }
@@ -228,22 +233,23 @@ namespace Moer {
         //     m_buffers.insert({hash, buffer});
         //     return buffer;
         // }
-        RHIUAVRef GetUAV(RHITextureRef texture, uint32_t mip_num, uint32_t array_min, uint32_t array_num) {
+        RHIUAVRef GetUAV(RHITextureRef texture, EPixelFormat format, uint32_t mip_num, uint32_t array_min, uint32_t array_num) {
             size_t hash;
             //    HashCombine(hash,texture->GetName());
             HashCombine(hash, texture.Get());
             HashCombine(hash, mip_num);
             HashCombine(hash, array_min);
             HashCombine(hash, array_num);
+            HashCombine(hash, format);
             auto it = mUavs.find(hash);
             if (it != mUavs.end()) {
                 return it->second;
             }
-            RHIUAVRef uav = g_rhi->RHICreateTextureUAV(texture, PF_UNDEFINED, 0, array_min, array_num);
+            RHIUAVRef uav = g_rhi->RHICreateTextureUAV(texture, format, 0, array_min, array_num);
             mUavs.insert({hash, uav});
             return uav;
         }
-        RHISRVRef GetSRV(RHITextureRef texture, uint32_t mip_num, uint32_t mip_min, uint32_t array_min, uint32_t array_num) {
+        RHISRVRef GetSRV(RHITextureRef texture, EPixelFormat format, uint32_t mip_num, uint32_t mip_min, uint32_t array_min, uint32_t array_num) {
             size_t hash;
             //    HashCombine(hash,texture->GetName());
             HashCombine(hash, texture.Get());
@@ -251,11 +257,12 @@ namespace Moer {
             HashCombine(hash, mip_min);
             HashCombine(hash, array_min);
             HashCombine(hash, array_num);
+            HashCombine(hash, format);
             auto it = mSrvs.find(hash);
             if (it != mSrvs.end()) {
                 return it->second;
             }
-            RHISRVRef srv = g_rhi->RHICreateTextureSRV(texture, PF_UNDEFINED, mip_min, mip_num, array_min, array_num);
+            RHISRVRef srv = g_rhi->RHICreateTextureSRV(texture, format, mip_min, mip_num, array_min, array_num);
             mSrvs.insert({hash, srv});
             return srv;
         }
@@ -272,11 +279,15 @@ namespace Moer {
         return m_impl->GetTexture(name, size, format, usage, mipLevels, arrayLayers);
     }
 
-    RHIUAVRef RenderGraphResourceCache::GetUAV(RHITextureRef texture, uint32_t mip_num, uint32_t array_min, uint32_t array_num) {
-        return m_impl->GetUAV(texture, mip_num, array_min, array_num);
+    RHIUAVRef RenderGraphResourceCache::GetUAV(RHITextureRef texture, EPixelFormat format, uint32_t mip_num, uint32_t array_min, uint32_t array_num) {
+        if (format == PF_UNDEFINED)
+            return m_impl->GetUAV(texture, texture->GetFormat(), mip_num, array_min, array_num);
+        return m_impl->GetUAV(texture, format, mip_num, array_min, array_num);
     }
-    RHISRVRef RenderGraphResourceCache::GetSRV(RHITextureRef texture, uint32_t mip_min, uint32_t mip_num, uint32_t array_min, uint32_t array_num) {
-        return m_impl->GetSRV(texture, mip_num, mip_min, array_min, array_num);
+    RHISRVRef RenderGraphResourceCache::GetSRV(RHITextureRef texture, EPixelFormat format, uint32_t mip_min, uint32_t mip_num, uint32_t array_min, uint32_t array_num) {
+        if (format == PF_UNDEFINED)
+            return m_impl->GetSRV(texture, texture->GetFormat(), mip_num, mip_min, array_min, array_num);
+        return m_impl->GetSRV(texture, format, mip_num, mip_min, array_min, array_num);
     }
     RHISampler* RenderGraphResourceCache::GetSampler(const RHISamplerCreateInfo& params) {
         return m_impl->GetSampler(params);

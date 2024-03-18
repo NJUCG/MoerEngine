@@ -1,4 +1,5 @@
 #pragma once
+#include "math/Base.h"
 #include "misc/STL.h"
 
 #include <string_view>
@@ -169,6 +170,19 @@ namespace Moer {
         Target                                         mTarget     = Target::UNIFORM;
         uint8_t                                        mQualifiers = 0;
     };
+    struct MaterialData1 {
+        Vector4f base_color_factor;
+        Vector3f emissive_factor;
+        float    metallic_factor;
+        float    roughness_factor;
+        float    ao;
+        int      albedo_map{-1};
+        int      normal_map{-1};
+        int      metallic_roughness_map{-1};
+        int      ao_map{-1};
+        int      emissive_map{-1};
+        int      padding;
+    };
 
     class UniformBuffer {
     public:
@@ -176,8 +190,12 @@ namespace Moer {
         const void* GetData() const;
         UniformBuffer(uint32_t size);
         ~UniformBuffer();
-
+        UniformBuffer(const UniformBuffer& rhs)            = delete;
+        UniformBuffer& operator=(const UniformBuffer& rhs) = delete;
+        UniformBuffer(UniformBuffer&& rhs) = delete;
+        UniformBuffer& operator=(UniformBuffer&& rhs) = delete;
     protected:
-        void* m_buffer;
+        void * m_buffer;
+        MaterialData1 m_data_struct;
     };
 }

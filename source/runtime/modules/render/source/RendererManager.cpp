@@ -16,9 +16,10 @@ namespace Moer {
 
     void RendererManager::Init() {
         data = new RendererManagerData();
-        // RegisterRenderer(MOER_DEFAULT_RENDERER_NAME, MoerNew(DeferedRender));
+
+        RegisterRenderer(MOER_DEFAULT_RENDERER_NAME, MoerNew(DeferredRenderer));
         // RegisterRenderer(MOER_MESH_RENDERER_NAME, MoerNew(MeshDebugRenderer));
-        RegisterRenderer(MOER_RENDER_GRAPH_DEFERED_RENDERER_NAME, MoerNew(DeferedRenderingRenderGraphRender));
+        //  RegisterRenderer(MOER_RENDER_GRAPH_DEFERED_RENDERER_NAME, MoerNew(DeferedRenderingRenderGraphRender));
         BackendRendererInitInfo init_info;
         init_info.width  = 1280;
         init_info.height = 720;

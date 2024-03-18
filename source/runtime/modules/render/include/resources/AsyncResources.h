@@ -36,6 +36,7 @@ namespace Moer {
 
         //call from render thread
         VirtualViewportNextBackBufferInfo GetNextBackBuffer();
+        Extent3D                          GetNextBackBufferExtent();
 
         RHIUAVRef GetNextBackBufferUAV(uint32_t index);
 

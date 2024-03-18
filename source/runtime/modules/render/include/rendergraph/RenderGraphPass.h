@@ -22,6 +22,7 @@ namespace Moer {
     struct RenderPassContext {
         RenderGraph&            graph;
         RHIGraphicsCommandList* cmd_list;
+        Extent3D                render_extent;
     };
 
     // class RENDER_API {

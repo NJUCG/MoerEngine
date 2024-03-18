@@ -86,6 +86,7 @@ namespace Moer {
                 return true;
             }
         }
+        return false;
     }
     bool DepdencyGraph::IsReadResource(Node* pass_node, Node* resource_node) const {
         for (auto& edge : m_edges) {
@@ -93,6 +94,7 @@ namespace Moer {
                 return true;
             }
         }
+        return false;
     }
     DepdencyGraph::~DepdencyGraph() {
         for (auto& edge : m_edges) {
