@@ -1390,6 +1390,8 @@ RHISRVRef VulkanRHIImpl::RHICreateSRVInner(RHIViewableResource* _resource, const
         image_view_create_info.subresourceRange.baseArrayLayer = _view_info.texture.srv.array_min;
         image_view_create_info.subresourceRange.layerCount     = _view_info.texture.srv.array_num;
 
+        // image_view_create_info.components = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
+
         VK_CHECK_RESULT(vkCreateImageView(m_device->GetDevice(), &image_view_create_info, nullptr, &vk_srv->m_view));
 
         return RHISRVRef(vk_srv);
