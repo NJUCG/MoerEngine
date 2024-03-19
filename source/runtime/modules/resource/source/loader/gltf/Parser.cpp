@@ -82,7 +82,7 @@ namespace Moer::Resource::Gltf {
         }
         if (has_tangent) {
             attr_offset[2] = stride;
-            stride += 6;
+            stride += 3;
         }
         if (has_uv) {
             attr_offset[3] = stride;
@@ -103,8 +103,8 @@ namespace Moer::Resource::Gltf {
             if (has_tangent) {
                 auto* copy_src = reinterpret_cast<float*>(mesh->mTangents + i);
                 std::copy(copy_src, copy_src + 3, data + attr_offset[2] + i * stride);
-                copy_src = reinterpret_cast<float*>(mesh->mBitangents + i);
-                std::copy(copy_src, copy_src + 3, data + attr_offset[2] + i * stride + 3);
+                // copy_src = reinterpret_cast<float*>(mesh->mBitangents + i);
+                // std::copy(copy_src, copy_src + 3, data + attr_offset[2] + i * stride + 3);
             }
             if (has_uv) {
                 auto* const copy_src = reinterpret_cast<float*>(mesh->mTextureCoords[0] + i);
@@ -140,8 +140,8 @@ namespace Moer::Resource::Gltf {
         }
         if (mesh->HasTangentsAndBitangents()) {
             attribute |= E_VERTEX_ATTRIBUTE::E_TANGENT;
-            attribute |= E_VERTEX_ATTRIBUTE::E_BITANGENT;
-            stride += 6;
+            // attribute |= E_VERTEX_ATTRIBUTE::E_BITANGENT;
+            stride += 3;
         }
         if (mesh->HasTextureCoords(0)) {
             attribute |= E_VERTEX_ATTRIBUTE::E_UV0;
@@ -243,15 +243,11 @@ namespace Moer::Resource::Gltf {
         materialBuilder.SetParameter("roughness_factor", UniformType::FLOAT);
         materialBuilder.SetParameter("ao", UniformType::FLOAT);
 
-        
         materialBuilder.SetParameter("albedo_map", ETextureDimension::TEX_2D);
         materialBuilder.SetParameter("normal_map", ETextureDimension::TEX_2D);
         materialBuilder.SetParameter("metallic_roughness_map", ETextureDimension::TEX_2D);
         materialBuilder.SetParameter("ao_map", ETextureDimension::TEX_2D);
         materialBuilder.SetParameter("emissive_map", ETextureDimension::TEX_2D);
-        
-       
-        
 
         return materialBuilder.Build();
     }

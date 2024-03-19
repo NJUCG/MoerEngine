@@ -8,20 +8,22 @@ struct PS_INPUT {
   float3 pos_w : POSITION;
   float3 normal : NORMAL;
   float3 tangent : TANGENT;
-    float3 binormal : BINORMAL;
+  // float3 binormal : BINORMAL;
   float2 uv : TEXCOORD0;
   uint instance_id : INSTANCE_ID;
 };
 
-
 struct PS_OUTPUT {
-    uint mat : SV_TARGET0;
-    float4 normal : SV_TARGET1;
+  uint mat : SV_TARGET0;
+  float4 normal : SV_TARGET1;
+  float2 uv : SV_TARGET2;
 };
 
-PS_OUTPUT main(PS_INPUT input) : SV_Target { 
-    PS_OUTPUT output;
-    output.mat = instance_data[input.instance_id].material_id << 8 | instance_data[input.instance_id].material_type;
-    output.normal = float4(input.normal *0.5f +0.5f, 0.0f);
-    return output;
- }
+PS_OUTPUT main(PS_INPUT input) : SV_Target {
+  PS_OUTPUT output;
+  output.mat = instance_data[input.instance_id].material_id << 8 |
+               instance_data[input.instance_id].material_type;
+  output.normal = float4(input.normal * 0.5f + 0.5f, 0.0f);
+  output.uv = input.uv;
+  return output;
+}

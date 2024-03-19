@@ -130,7 +130,7 @@ public:
         Moer::Array<Moer::Array<ShaderCompilerOutput*>> output_temp_array(end);
 
         //parallel generate batches
-        std::for_each(std::execution::par, indices.begin(), indices.end(), [this, &post_process_func, &output_temp_array](int i) {
+        std::for_each(indices.begin(), indices.end(), [this, &post_process_func, &output_temp_array](int i) {
             uint32_t start_index = i * max_count_per_batch;
             uint32_t end_index   = Moer::Min((i + 1) * max_count_per_batch, total_mutation_count);
 

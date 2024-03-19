@@ -1,5 +1,6 @@
 #include "scene/Material.h"
 
+#include "rhi/RHIResourceInitilizer.h"
 #include "scene/MaterialInstance.h"
 #include "misc/MMemory.h"
 #include "resources/GlobalRenderResources.h"
@@ -73,7 +74,7 @@ namespace Moer {
     void Material::SetType(EMaterialType type) noexcept {
         return m_impl->SetType(type);
     }
-    void Material:: OrganizeInstancesAndBind(RHIBatchedShaderParameters& parameters, Moer::Array<MaterialInstanceRef> instances) {
+    void Material::OrganizeInstancesAndBind(RHIBatchedShaderParameters& parameters, Moer::Array<MaterialInstanceRef> instances) {
         return m_impl->OrganizeInstancesAndBind(parameters, instances);
     }
     // const RHIShaderBoundStateInput& Material::getShaderBoundStateInput() const noexcept {
@@ -90,7 +91,11 @@ namespace Moer {
             } else if (param.IsTexture()) {
                 sampler_interface_block_builder.AddTexture(param.name.c_str(), param.textureType);
             } else if (param.IsUniform()) {
-                buffer_interface_block_builder.add({.name = param.name,  .type = param.uniformType,.stride = param.size,});
+                buffer_interface_block_builder.add({
+                    .name   = param.name,
+                    .type   = param.uniformType,
+                    .stride = param.size,
+                });
             }
         }
 
@@ -108,8 +113,8 @@ namespace Moer {
 
     MaterialBuilder& MaterialBuilder::SetParameter(const std::string& name, ETextureDimension textureType) noexcept {
         this->mParameters[this->mParameterCount++] = Parameter(name, textureType);
-        //For every texture, we add a  same name index uniform attribute 
-        SetParameter(name,UniformType::INT);
+        //For every texture, we add a  same name index uniform attribute
+        SetParameter(name, UniformType::INT);
         return *this;
     }
     MaterialBuilder& MaterialBuilder::SetParameter(const std::string& name, UniformType type) noexcept {
@@ -147,8 +152,8 @@ namespace Moer {
                 RHITexture* metallic_roughness_map = mi->GetTexture("metallic_roughness_map");
                 RHITexture* ao_map                 = mi->GetTexture("ao_map");
                 RHITexture* emissive_map           = mi->GetTexture("emissive_map");
-                
-                static auto find_or_insert = [&](RHITexture* texture, int * idx) {
+
+                static auto find_or_insert = [&](RHITexture* texture, int* idx) {
                     if (!texture) {
                         *idx = -1;
                         return;
@@ -166,10 +171,11 @@ namespace Moer {
                 find_or_insert(ao_map, &mat_data.ao_map);
                 find_or_insert(emissive_map, &mat_data.emissive_map);
             }
+
             default_sampler = SamplerCache::Get().GetSampler(SamplerParams());
 
             if (!m_material_data_buffer || m_material_data_buffer->GetByteSize() != sizeof(MaterialData) * instances.size()) {
-                m_material_data_buffer = GpuSceneBufferBuilder::CopyFrom(EBufferUsageFlags::STORAGE_BUFFER,material_data.data(), sizeof(MaterialData) * instances.size());
+                m_material_data_buffer = GpuSceneBufferBuilder::CopyFrom(EBufferUsageFlags::STORAGE_BUFFER, material_data.data(), sizeof(MaterialData) * instances.size());
                 // void* mapped_data      = g_rhi->RHIMapBuffer(m_material_data_buffer, 0, sizeof(MaterialData) * instances.size());
                 // memcpy(mapped_data, material_data.data(), sizeof(MaterialData) * instances.size());
                 m_material_data_srv = g_rhi->RHICreateBufferSRV(m_material_data_buffer);
@@ -179,10 +185,10 @@ namespace Moer {
             for (size_t i = 0; i < textures.size(); i++) {
                 RHISRVRef srv = RenderGraphResourceCache::Get().GetSRV(textures[i], textures[i]->GetFormat(), 0, textures[i]->GetNumMips(), 0, textures[i]->GetInfo().array_size);
                 parameters.SetParameters(srv, i + offset, 2);
-                break;
+                // break;
             }
             default_sampler = RenderGraphResourceCache::Get().GetSampler({});
-            parameters.SetParameters(default_sampler, 3, 1);
+            parameters.SetParameters(default_sampler, 4, 1);
             parameters.SetParameters(m_material_data_srv, 0, 0);
             //Bind these resources
         } else {

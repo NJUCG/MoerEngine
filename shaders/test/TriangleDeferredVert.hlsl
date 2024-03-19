@@ -9,6 +9,7 @@ struct VS_INPUT {
   float3 binormal : BINORMAL;
   float2 uv : TEXCOORD0;
   uint instance_id : INSTANCE_ID;
+  uint iid : SV_INSTANCEID;
 };
 
 struct PS_INPUT {

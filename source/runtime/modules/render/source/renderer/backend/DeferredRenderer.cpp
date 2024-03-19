@@ -38,7 +38,6 @@ IMPLEMENT_SHADER_TYPE(CullMeshletRecheckShader, "meshdebug/CullMeshlet.hlsl", "r
 IMPLEMENT_SHADER_TYPE(TestDeferredTriangleShaderVert, "test/TriangleDeferredVert.hlsl", "main", ST_VERTEX);
 IMPLEMENT_SHADER_TYPE(TestDeferredTriangleShaderFrag, "test/TriangleDeferredFrag.hlsl", "main", ST_FRAGMENT);
 
-
 BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(LightingData)
 DEFINE_SHADER_PARAM(Moer::Matrix4x4f, inv_view_proj)
 DEFINE_SHADER_PARAM(uint32_t, light_count)
@@ -51,9 +50,6 @@ DEFINE_SHADER_PARAM(Moer::Vector4f, position)
 DEFINE_SHADER_PARAM(Moer::Vector4f, direction)
 DEFINE_SHADER_PARAM(Moer::Vector4f, info)
 END_SHADER_CONSTANT_STRUCT_DEFINITION()
-
-
-
 
 class TestGBufferShaderVert : public Shader {
     DEFINE_SHADER_TYPE(TestGBufferShaderVert, Global, RENDER_API, ...)
@@ -77,7 +73,6 @@ public:
 IMPLEMENT_SHADER_TYPE(TestGBufferShaderVert, "deferedshading/GBufferVert.hlsl", "main", ST_VERTEX);
 IMPLEMENT_SHADER_TYPE(TestGBufferShaderFrag, "deferedshading/GBufferFrag.hlsl", "main", ST_FRAGMENT);
 
-
 class LightingShaderVert : public Shader {
     DEFINE_SHADER_TYPE(LightingShaderVert, Global, RENDER_API, ...)
     BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
@@ -91,11 +86,11 @@ public:
     DEFINE_SHADER_PARAM_STRUCT(LightingData, lighting_data)
     DEFINE_SHADER_PARAM_SRV(StructuredBuffer<MaterialData>, material_data)
     DEFINE_SHADER_PARAM_SRV(StructuredBuffer<Light>, light_data)
-    //  DEFINE_SHADER_PARAM_SRV_ARRAY(Texture2D, scene_textures, 25)
+    DEFINE_SHADER_PARAM_SRV_ARRAY(Texture2D, scene_textures, 25)
     DEFINE_SHADER_PARAM_SRV(Texture2D, mat_attach)
     DEFINE_SHADER_PARAM_SRV(Texture2D, normal_attach)
+    DEFINE_SHADER_PARAM_SRV(Texture2D, gbuffer_uv)
     DEFINE_SHADER_PARAM_SRV(Texture2D, depth_attach)
-    DEFINE_SHADER_PARAM_SRV(Texture2D, scene_texture)
     DEFINE_SHADER_PARAM_SAMPLER(SamplerState, default_sampler)
     END_ROOT_PARAMETER_DEFINITION(Parameters)
 };
@@ -144,10 +139,9 @@ namespace Moer {
         RHIGraphicsPipelineStateRef gbuffer_pipeline_state;
         RHIGraphicsPipelineStateRef lighting_pipeline_state;
 
-        RHIBufferRef               light_buffer;
-        RHISRVRef light_buffer_view;
+        RHIBufferRef           light_buffer;
+        RHISRVRef              light_buffer_view;
         Moer::Array<LightData> lights;
-
 
         RHIComputePipelineStateRef cull_instance_recheck_pso;
         RHIComputePipelineStateRef cull_meshlet_recheck_pso;
@@ -317,12 +311,11 @@ namespace Moer {
 
         RHIVertexInputInfo vertex_input_info(
 
-            VertexElement(0, 0, PF_R32G32B32_SFLOAT, 0, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX),
-            VertexElement(0, 3 * sizeof(float), PF_R32G32B32_SFLOAT, 1, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX),
-            VertexElement(0, 6 * sizeof(float), PF_R32G32B32_SFLOAT, 2, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX),
-            VertexElement(0, 9 * sizeof(float), PF_R32G32B32_SFLOAT, 3, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX),
-            VertexElement(0, 12 * sizeof(float), PF_R32G32_SFLOAT, 4, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX),
-            VertexElement(1, 14 * sizeof(float), PF_R32_UINT, 5, sizeof(uint32_t), EVertexInputRate::VIR_INSTANCE));
+            VertexElement(0, 0, PF_R32G32B32_SFLOAT, 0, sizeof(float) * 11, EVertexInputRate::VIR_VERTEX),
+            VertexElement(0, 3 * sizeof(float), PF_R32G32B32_SFLOAT, 1, sizeof(float) * 11, EVertexInputRate::VIR_VERTEX),
+            VertexElement(0, 6 * sizeof(float), PF_R32G32B32_SFLOAT, 2, sizeof(float) * 11, EVertexInputRate::VIR_VERTEX),
+            VertexElement(0, 9 * sizeof(float), PF_R32G32_SFLOAT, 3, sizeof(float) * 11, EVertexInputRate::VIR_VERTEX),
+            VertexElement(1, 0 * sizeof(float), PF_R32_UINT, 4, sizeof(uint32_t), EVertexInputRate::VIR_INSTANCE));
         // RHIVertexInputStateRef vertex_input_state = g_rhi->RHICreateVertexInputState(vertex_input_state_init_list);
 
         auto& shader_resource_manager = ShaderResourceManager::GetInstance();
@@ -433,12 +426,11 @@ namespace Moer {
 
             RHIVertexInputInfo vertex_input_info(
 
-                VertexElement(0, 0, PF_R32G32B32_SFLOAT, 0, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX),
-                VertexElement(0, 3 * sizeof(float), PF_R32G32B32_SFLOAT, 1, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX),
-                VertexElement(0, 6 * sizeof(float), PF_R32G32B32_SFLOAT, 2, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX),
-                VertexElement(0, 9 * sizeof(float), PF_R32G32B32_SFLOAT, 3, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX),
-                VertexElement(0, 12 * sizeof(float), PF_R32G32_SFLOAT, 4, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX),
-                VertexElement(1, 14 * sizeof(float), PF_R32_UINT, 5, sizeof(uint32_t), EVertexInputRate::VIR_INSTANCE));
+                VertexElement(0, 0, PF_R32G32B32_SFLOAT, 0, sizeof(float) * 11, EVertexInputRate::VIR_VERTEX),
+                VertexElement(0, 3 * sizeof(float), PF_R32G32B32_SFLOAT, 1, sizeof(float) * 11, EVertexInputRate::VIR_VERTEX),
+                VertexElement(0, 6 * sizeof(float), PF_R32G32B32_SFLOAT, 2, sizeof(float) * 11, EVertexInputRate::VIR_VERTEX),
+                VertexElement(0, 9 * sizeof(float), PF_R32G32_SFLOAT, 3, sizeof(float) * 11, EVertexInputRate::VIR_VERTEX),
+                VertexElement(1, 0 * sizeof(float), PF_R32_UINT, 4, sizeof(uint32_t), EVertexInputRate::VIR_INSTANCE));
             // RHIVertexInputStateRef vertex_input_state = g_rhi->RHICreateVertexInputState(vertex_input_state_init_list);
 
             RHIGraphicsShaderInputInfo gbuffer_shader_input_info = RHIGraphicsShaderInputInfo::Create().SetVertexWorkFlow(vertex_input_info, gbuffer_vert_shader, gbuffer_frag_shader);
@@ -453,11 +445,12 @@ namespace Moer {
                     .Finalize();
 
             //ToDo: this may be can read and cached from render pass
-            pso_create_info.color_attachment_count = 2;
+            pso_create_info.color_attachment_count = 3;
             auto& color_attachments_info           = pso_create_info.color_attachments_info;
             color_attachments_info[0]              = RHIColorAttachmentInfo::Preset(EPixelFormat::PF_R32_UINT);
             // color_attachments_info[1]              = RHIColorAttachmentInfo::Preset(EPixelFormat::PF_R8G8B8A8_UNORM);
             color_attachments_info[1] = RHIColorAttachmentInfo::Preset(EPixelFormat::PF_R8G8B8A8_UNORM);
+            color_attachments_info[2] = RHIColorAttachmentInfo::Preset(EPixelFormat::PF_R8G8_UNORM);
 
             gbuffer_pipeline_state = g_rhi->RHICreateGraphicsPSO(std::move(pso_create_info));
 
@@ -468,7 +461,10 @@ namespace Moer {
             RHIGraphicsPSOCreateInfo   lighting_pso_create_info =
                 RHIGraphicsPSOCreateInfo::Create()
                     .SetShaderStage(
-                        std::move(lighting_shader_input_info)).SetRasterizerInfo({.cull_mode = RCM_NONE, })
+                        std::move(lighting_shader_input_info))
+                    .SetRasterizerInfo({
+                        .cull_mode = RCM_NONE,
+                    })
                     .Finalize();
             lighting_pipeline_state = g_rhi->RHICreateGraphicsPSO(std::move(lighting_pso_create_info));
 
@@ -643,7 +639,7 @@ namespace Moer {
                 .SetSrcAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE)
                 .SetDstAccessFlags(ERHIAccessFlags::TRANSFER_READ);
 
-         //   cmd_list->SetPipelineBarrier(barrier_dependency_info);
+            //   cmd_list->SetPipelineBarrier(barrier_dependency_info);
         });
         {
 
@@ -975,14 +971,19 @@ namespace Moer {
                     [&](RenderGraph::Builder& builder) {
                         auto normal = render_graph.CreateTexture("normal", {.extent2D = Extent2D(extent.x, extent.y), .format = EPixelFormat::PF_R8G8B8A8_UNORM, .usage = ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED});
                         auto mat    = render_graph.CreateTexture("mat", {.extent2D = Extent2D(extent.x, extent.y), .format = EPixelFormat::PF_R32_UINT, .usage = ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED});
-                        auto depth  = render_graph.ImportTexture("depth",depth_buffer[frame_counter % render_cmd_lists.size()] );
+                        auto uv     = render_graph.CreateTexture("uv", {.extent2D = Extent2D(extent.x, extent.y), .format = EPixelFormat::PF_R8G8_UNORM, .usage = ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED});
+                        auto depth  = render_graph.ImportTexture("depth", depth_buffer[frame_counter % render_cmd_lists.size()]);
                         if (!b_first_pass) {
-                            builder.readTextures({normal, mat}, RenderGraphTexture::Usage::COLOR_ATTACHMENT);
+                            builder.readTextures({normal, uv, mat}, RenderGraphTexture::Usage::COLOR_ATTACHMENT);
                             builder.readTexture(depth, RenderGraphTexture::Usage::DEPTH_STENCIL_ATTACHMENT);
                         }
-                        builder.writeTextures({normal, mat}, RenderGraphTexture::Usage::COLOR_ATTACHMENT);
+                        builder.writeTextures({normal, uv, mat}, RenderGraphTexture::Usage::COLOR_ATTACHMENT);
                         builder.writeTexture(depth, RenderGraphTexture::Usage::DEPTH_STENCIL_ATTACHMENT);
-                        builder.DeclareRenderPass({.color_attachments = {mat, normal}, .depth_stencil_attachment = depth});
+                        builder.DeclareRenderPass({.color_attachments = {
+                                                       mat,
+                                                       normal,
+                                                       uv},
+                                                   .depth_stencil_attachment = depth});
                     },
                     [this, b_first_pass](RenderPassContext& context) {
                         auto cmd_list = context.cmd_list;
@@ -990,11 +991,10 @@ namespace Moer {
                         // cmd_list->BindVertexBuffers()
                         auto scene = g_scene;
                         cmd_list->BindIndexBuffer(scene->GetBuffer("index_buffer"), 0, IET_UINT32);
-                        uint32_t              offset[]           = {0, 0};
-                        const RHIBufferRef    prim_vertex_buffer = scene->GetBuffer("vertex_buffer");
-                        std::vector<uint32_t> data(25);
-                        const RHIBufferRef    instance_id_buffer = scene->GetBuffer("instance_id_buffer");
-                        RHIBufferRef          vbuffers[]         = {prim_vertex_buffer, instance_id_buffer};
+                        uint32_t           offset[]           = {0, 0};
+                        const RHIBufferRef prim_vertex_buffer = scene->GetBuffer("vertex_buffer");
+                        const RHIBufferRef instance_id_buffer = scene->GetBuffer("instance_id_buffer");
+                        RHIBufferRef       vbuffers[]         = {prim_vertex_buffer, instance_id_buffer};
                         cmd_list->BindVertexBuffers(0, 2, vbuffers, offset);
 
                         auto camera_entity = g_scene->GetMainCamera();
@@ -1031,12 +1031,14 @@ namespace Moer {
 
                 render_graph.AddGraphicPass(
                     "Lighting Pass", [&](RenderGraph::Builder& builder) {
+
             auto normal = render_graph.GetBlackBoard().GetHandle("normal");
             auto mat = render_graph.GetBlackBoard().GetHandle("mat");
-                        auto depth = render_graph.GetBlackBoard().GetHandle("depth");
+            auto uv = render_graph.GetBlackBoard().GetHandle("uv");
+            auto depth = render_graph.GetBlackBoard().GetHandle("depth");
             // auto position = render_graph.GetBlackBoard().GetHandle("position");
             auto output = render_graph.ImportTexture("swapchain_output",virtual_viewport->GetBackBufferInfo().backbuffer_uav->GetTexture());
-            builder.readTextures({normal,mat,depth},RenderGraphTexture::Usage::SAMPLED).writeTexture(output);
+            builder.readTextures({normal,uv,mat,depth},RenderGraphTexture::Usage::SAMPLED).writeTexture(output);
             builder.DeclareRenderPass({.color_attachments =  {output}}); }, [&](RenderPassContext& context) {
             auto cmd_list = context.cmd_list;
             cmd_list->SetPipelineState(lighting_pipeline_state);
@@ -1057,7 +1059,8 @@ namespace Moer {
             }); 
 
              auto mat_srv = render_graph.GetBlackBoard().GetTexture("mat")->GetSRV();
-             auto normal_srv = render_graph.GetBlackBoard().GetTexture("normal")->GetSRV();
+            auto normal_srv = render_graph.GetBlackBoard().GetTexture("normal")->GetSRV();
+           auto uv_srv = render_graph.GetBlackBoard().GetTexture("uv")->GetSRV();
            auto depth_srv = render_graph.GetBlackBoard().GetTexture("depth")->GetSRV();
 
            Camera * camera = CameraManager::Get().Get(g_scene->GetMainCamera());     
@@ -1071,6 +1074,7 @@ namespace Moer {
                 frag_params.lighting_data = lighting_data;
                 frag_params.light_data = light_buffer_view;
                 frag_params.depth_attach = depth_srv;
+                frag_params.gbuffer_uv = uv_srv;
                 frag_params.normal_attach = normal_srv;
                 frag_params.mat_attach = mat_srv;
                 parameters.SetParameters(ShaderResourceManager::GetInstance().GetShader<LightingShaderFrag>(),frag_params);
@@ -1095,67 +1099,67 @@ namespace Moer {
     void DeferredRenderer::Impl::BasePass() {
     }
     void DeferredRenderer::Impl::LightingPass() {
-        auto dispatch_rdg = [&]() {
-            RenderGraph render_graph;
-            auto*       cmd_list = render_cmd_lists[frame_counter % render_cmd_lists.size()];
-            render_graph.AddGraphicPass(
-                "Lighting Pass", [&](RenderGraph::Builder& builder) {
-            auto normal = render_graph.GetBlackBoard().GetHandle("normal");
-            auto mat = render_graph.GetBlackBoard().GetHandle("mat");
-                        auto depth = render_graph.GetBlackBoard().GetHandle("depth");
-            // auto position = render_graph.GetBlackBoard().GetHandle("position");
-            auto output = render_graph.ImportTexture("swapchain_output",virtual_viewport->GetBackBufferInfo().backbuffer_uav->GetTexture());
-            builder.readTextures({normal,mat,depth},RenderGraphTexture::Usage::SAMPLED).writeTexture(output);
-            builder.DeclareRenderPass({.color_attachments =  {output}}); }, [&](RenderPassContext& context) {
-            auto* cmd_list = context.cmd_list;
-            cmd_list->SetPipelineState(lighting_pipeline_state);
+        // auto dispatch_rdg = [&]() {
+        //     RenderGraph render_graph;
+        //     auto*       cmd_list = render_cmd_lists[frame_counter % render_cmd_lists.size()];
+        //     render_graph.AddGraphicPass(
+        //         "Lighting Pass", [&](RenderGraph::Builder& builder) {
+        //     auto normal = render_graph.GetBlackBoard().GetHandle("normal");
+        //     auto mat = render_graph.GetBlackBoard().GetHandle("mat");
+        //                 auto depth = render_graph.GetBlackBoard().GetHandle("depth");
+        //     // auto position = render_graph.GetBlackBoard().GetHandle("position");
+        //     auto output = render_graph.ImportTexture("swapchain_output",virtual_viewport->GetBackBufferInfo().backbuffer_uav->GetTexture());
+        //     builder.readTextures({normal,mat,depth},RenderGraphTexture::Usage::SAMPLED).writeTexture(output);
+        //     builder.DeclareRenderPass({.color_attachments =  {output}}); }, [&](RenderPassContext& context) {
+        //     auto* cmd_list = context.cmd_list;
+        //     cmd_list->SetPipelineState(lighting_pipeline_state);
 
-            //First Get all material instances
-            //Material organize this materials 
-            //Material bind all resources for it's pass
-            //Draw a full screen quad pass for each material type 
-            Moer::UnorderedSet<EMaterialType> material_types = {}; 
-            Moer::UnorderedMap<EMaterialType,Moer::Array<MaterialInstanceRef>> material_instances;
-            g_scene->ForEach([&](Entity entity) {
-                if (RenderableManager::Get().Contains(entity)) {
+        //     //First Get all material instances
+        //     //Material organize this materials
+        //     //Material bind all resources for it's pass
+        //     //Draw a full screen quad pass for each material type
+        //     Moer::UnorderedSet<EMaterialType> material_types = {};
+        //     Moer::UnorderedMap<EMaterialType,Moer::Array<MaterialInstanceRef>> material_instances;
+        //     g_scene->ForEach([&](Entity entity) {
+        //         if (RenderableManager::Get().Contains(entity)) {
 
-                    auto mi = RenderableManager::Get().GetMaterialInstance(entity);
-                    material_types.insert(mi->GetMaterial()->GetType());
-                    material_instances[mi->GetMaterial()->GetType()].push_back(mi);
-                }
-            });
+        //             auto mi = RenderableManager::Get().GetMaterialInstance(entity);
+        //             material_types.insert(mi->GetMaterial()->GetType());
+        //             material_instances[mi->GetMaterial()->GetType()].push_back(mi);
+        //         }
+        //     });
 
-            auto mat_srv    = render_graph.GetBlackBoard().GetTexture("mat")->GetSRV();
-            auto normal_srv = render_graph.GetBlackBoard().GetTexture("normal")->GetSRV();
-            auto depth_srv  = render_graph.GetBlackBoard().GetTexture("depth")->GetSRV();
+        //     auto mat_srv    = render_graph.GetBlackBoard().GetTexture("mat")->GetSRV();
+        //     auto normal_srv = render_graph.GetBlackBoard().GetTexture("normal")->GetSRV();
+        //     auto depth_srv  = render_graph.GetBlackBoard().GetTexture("depth")->GetSRV();
 
-            Camera*      camera = CameraManager::Get().Get(g_scene->GetMainCamera());
-            LightingData lighting_data;
-            lighting_data.inv_view_proj = Inverse(camera->GetProjectionMatrix() * camera->GetViewMatrix());
-            lighting_data.light_count   = lights.size();
-               
-            for(auto type : material_types){
-                RHIBatchedShaderParameters parameters;
-                LightingShaderFrag::Parameters frag_params;
-                frag_params.lighting_data = lighting_data;
-                frag_params.light_data = light_buffer_view;
-                frag_params.depth_attach = depth_srv;
-                frag_params.normal_attach = normal_srv;
-                frag_params.mat_attach = mat_srv;
-                parameters.SetParameters(ShaderResourceManager::GetInstance().GetShader<LightingShaderFrag>(),frag_params);
-                
-                auto& mat_instances = material_instances[type];
-                MaterialRef material = mat_instances[0]->GetMaterial();
-                material->OrganizeInstancesAndBind(parameters,mat_instances);
-                g_rhi->RHISetBatchedShaderParameters(lighting_pipeline_state,parameters);
+        //     Camera*      camera = CameraManager::Get().Get(g_scene->GetMainCamera());
+        //     LightingData lighting_data;
+        //     lighting_data.inv_view_proj = Inverse(camera->GetProjectionMatrix() * camera->GetViewMatrix());
+        //     lighting_data.light_count   = lights.size();
 
-                cmd_list->Draw(3, 1,0,0);
-                
-            } });
+        //     for(auto type : material_types){
+        //         RHIBatchedShaderParameters parameters;
+        //         LightingShaderFrag::Parameters frag_params;
+        //         frag_params.lighting_data = lighting_data;
+        //         frag_params.light_data = light_buffer_view;
+        //         frag_params.depth_attach = depth_srv;
+        //         frag_params.normal_attach = normal_srv;
+        //         frag_params.mat_attach = mat_srv;
+        //         parameters.SetParameters(ShaderResourceManager::GetInstance().GetShader<LightingShaderFrag>(),frag_params);
 
-            render_graph.SetGraphOutput(render_graph.GetBlackBoard().GetHandle("swapchain_output"));
-            render_graph.Execute({cmd_list, virtual_viewport->GetNextBackBufferExtent()});
-        };
+        //         auto& mat_instances = material_instances[type];
+        //         MaterialRef material = mat_instances[0]->GetMaterial();
+        //         material->OrganizeInstancesAndBind(parameters,mat_instances);
+        //         g_rhi->RHISetBatchedShaderParameters(lighting_pipeline_state,parameters);
+
+        //         cmd_list->Draw(3, 1,0,0);
+
+        //     } });
+
+        //     render_graph.SetGraphOutput(render_graph.GetBlackBoard().GetHandle("swapchain_output"));
+        //     render_graph.Execute({cmd_list, virtual_viewport->GetNextBackBufferExtent()});
+        // };
 
         // EnqueueRenderTask(std::move(dispatch_rdg)); //not ready yet
     }

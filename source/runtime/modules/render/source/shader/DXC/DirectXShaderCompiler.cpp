@@ -153,7 +153,7 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
         arguments.push_back(L"-fvk-use-dx-position-w");
         arguments.push_back(L"-fvk-use-dx-layout");
         arguments.push_back(L"-fvk-auto-shift-bindings");
-        arguments.push_back(L"-fspv-flatten-resource-arrays");
+        // arguments.push_back(L"-fspv-flatten-resource-arrays");
     };
 
     auto set_default_args = [add_dx_arg, add_vk_arg](Moer::Array<std::wstring>& arguments, EShaderPlatform _platform, EShaderType _type, std::string_view _entry_point) {
