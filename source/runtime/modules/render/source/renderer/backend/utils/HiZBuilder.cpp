@@ -105,7 +105,7 @@ namespace Moer {
             depth_barrier_info.texture_barriers.resize(2);
             auto& depth_barrier = depth_barrier_info.texture_barriers[0];
             depth_barrier.SetTexture(depth_buffer->GetTexture())
-                .SetSrcTextureLayout(TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE)
+                .SetSrcTextureLayout(TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
                 .SetDstTextureLayout(TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
                 .SetSubResourceRange(RHISubresourceRange(ETextureAspectFlags::DEPTH_SLICE | ETextureAspectFlags::STENCIL_SLICE))
                 .SetSrcStage(PS_LATE_FRAGMENT_TESTS)

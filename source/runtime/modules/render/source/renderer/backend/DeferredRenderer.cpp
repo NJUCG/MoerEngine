@@ -26,6 +26,9 @@
 
 #include <algorithm>
 #include "Cull.h"
+#include "rendergraph/RenderGraph.h"
+#include "resources/GpuScene.h"
+#include "scene/Material.h"
 IMPLEMENT_SHADER_TYPE(CullInstancePrePassShader, "meshdebug/CullInstance.hlsl", "prepass", ST_COMPUTE)
 IMPLEMENT_SHADER_TYPE(CullMeshletPrepassShader, "meshdebug/CullMeshlet.hlsl", "prepass", ST_COMPUTE)
 
@@ -34,6 +37,71 @@ IMPLEMENT_SHADER_TYPE(CullMeshletRecheckShader, "meshdebug/CullMeshlet.hlsl", "r
 
 IMPLEMENT_SHADER_TYPE(TestDeferredTriangleShaderVert, "test/TriangleDeferredVert.hlsl", "main", ST_VERTEX);
 IMPLEMENT_SHADER_TYPE(TestDeferredTriangleShaderFrag, "test/TriangleDeferredFrag.hlsl", "main", ST_FRAGMENT);
+
+
+BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(LightingData)
+DEFINE_SHADER_PARAM(Moer::Matrix4x4f, inv_view_proj)
+DEFINE_SHADER_PARAM(uint32_t, light_count)
+DEFINE_SHADER_PARAM(Moer::Vector3ui, padding)
+END_SHADER_CONSTANT_STRUCT_DEFINITION()
+
+BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(LightData)
+DEFINE_SHADER_PARAM(Moer::Vector4f, color)
+DEFINE_SHADER_PARAM(Moer::Vector4f, position)
+DEFINE_SHADER_PARAM(Moer::Vector4f, direction)
+DEFINE_SHADER_PARAM(Moer::Vector4f, info)
+END_SHADER_CONSTANT_STRUCT_DEFINITION()
+
+
+
+
+class TestGBufferShaderVert : public Shader {
+    DEFINE_SHADER_TYPE(TestGBufferShaderVert, Global, RENDER_API, ...)
+public:
+    BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
+    DEFINE_SHADER_PARAM_STRUCT(CameraData, camera_data)
+    DEFINE_SHADER_PARAM_SRV(StructuredBuffer<InstanceData>, instance_data)
+    END_ROOT_PARAMETER_DEFINITION(Parameters)
+};
+
+class TestGBufferShaderFrag : public Shader {
+    DEFINE_SHADER_TYPE(TestGBufferShaderFrag, Global, RENDER_API, ...)
+public:
+    BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
+    DEFINE_SHADER_PARAM_SRV(StructuredBuffer<InstanceData>, instance_data)
+    // DEFINE_SHADER_PARAM_SAMPLER(SamplerState, defaultSampler)
+    // DEFINE_SHADER_PARAM_SRV(Texture2D, baseColorMap)
+    END_ROOT_PARAMETER_DEFINITION(Parameters)
+};
+
+IMPLEMENT_SHADER_TYPE(TestGBufferShaderVert, "deferedshading/GBufferVert.hlsl", "main", ST_VERTEX);
+IMPLEMENT_SHADER_TYPE(TestGBufferShaderFrag, "deferedshading/GBufferFrag.hlsl", "main", ST_FRAGMENT);
+
+
+class LightingShaderVert : public Shader {
+    DEFINE_SHADER_TYPE(LightingShaderVert, Global, RENDER_API, ...)
+    BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
+    END_ROOT_PARAMETER_DEFINITION(Parameters)
+};
+
+class LightingShaderFrag : public Shader {
+    DEFINE_SHADER_TYPE(LightingShaderFrag, Global, RENDER_API, ...)
+public:
+    BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
+    DEFINE_SHADER_PARAM_STRUCT(LightingData, lighting_data)
+    DEFINE_SHADER_PARAM_SRV(StructuredBuffer<MaterialData>, material_data)
+    DEFINE_SHADER_PARAM_SRV(StructuredBuffer<Light>, light_data)
+    //  DEFINE_SHADER_PARAM_SRV_ARRAY(Texture2D, scene_textures, 25)
+    DEFINE_SHADER_PARAM_SRV(Texture2D, mat_attach)
+    DEFINE_SHADER_PARAM_SRV(Texture2D, normal_attach)
+    DEFINE_SHADER_PARAM_SRV(Texture2D, depth_attach)
+    DEFINE_SHADER_PARAM_SRV(Texture2D, scene_texture)
+    DEFINE_SHADER_PARAM_SAMPLER(SamplerState, default_sampler)
+    END_ROOT_PARAMETER_DEFINITION(Parameters)
+};
+
+IMPLEMENT_SHADER_TYPE(LightingShaderVert, "deferedshading/LightingVert.hlsl", "main", ST_VERTEX);
+IMPLEMENT_SHADER_TYPE(LightingShaderFrag, "deferedshading/LightingFrag.hlsl", "main", ST_FRAGMENT);
 
 namespace Moer {
     class DeferredRenderer::Impl {
@@ -72,6 +140,13 @@ namespace Moer {
         // RHIBufferRef index_buffer;
 
         RHIGraphicsPipelineStateRef pipeline_state;
+        RHIGraphicsPipelineStateRef gbuffer_pipeline_state;
+        RHIGraphicsPipelineStateRef lighting_pipeline_state;
+
+        RHIBufferRef               light_buffer;
+        RHISRVRef light_buffer_view;
+        Moer::Array<LightData> lights;
+
 
         RHIComputePipelineStateRef cull_instance_recheck_pso;
         RHIComputePipelineStateRef cull_meshlet_recheck_pso;
@@ -350,6 +425,85 @@ namespace Moer {
         {
             CreateDepthBuffer();
         }
+
+        {
+            RHIShaderRef gbuffer_vert_shader = ShaderResourceManager::GetInstance().GetShader<TestGBufferShaderVert>();
+            RHIShaderRef gbuffer_frag_shader = ShaderResourceManager::GetInstance().GetShader<TestGBufferShaderFrag>();
+
+            RHIVertexInputInfo vertex_input_info(
+
+                VertexElement(0, 0, PF_R32G32B32_SFLOAT, 0, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX),
+                VertexElement(0, 3 * sizeof(float), PF_R32G32B32_SFLOAT, 1, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX),
+                VertexElement(0, 6 * sizeof(float), PF_R32G32B32_SFLOAT, 2, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX),
+                VertexElement(0, 9 * sizeof(float), PF_R32G32B32_SFLOAT, 3, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX),
+                VertexElement(0, 12 * sizeof(float), PF_R32G32_SFLOAT, 4, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX),
+                VertexElement(1, 14 * sizeof(float), PF_R32_UINT, 5, sizeof(uint32_t), EVertexInputRate::VIR_INSTANCE));
+            // RHIVertexInputStateRef vertex_input_state = g_rhi->RHICreateVertexInputState(vertex_input_state_init_list);
+
+            RHIGraphicsShaderInputInfo gbuffer_shader_input_info = RHIGraphicsShaderInputInfo::Create().SetVertexWorkFlow(vertex_input_info, gbuffer_vert_shader, gbuffer_frag_shader);
+            RHIGraphicsPSOCreateInfo   pso_create_info =
+                RHIGraphicsPSOCreateInfo::Create()
+                    .SetShaderStage(
+                        std::move(gbuffer_shader_input_info))
+                    .SetDepthStencilInfo(RHIDepthStencilStateInfo::Preset<RHIConfig::DepthStencil::DEPTH_WRITE_GREATER>())
+                    .SetColorAttachmentInfo(
+                        {std::move(RHIColorAttachmentInfo::Preset<RHIConfig::Blend::ALPHA_BLEND>(EPixelFormat::PF_R8G8B8A8_SRGB))})
+                    .SetDepthStencilFormat(PF_D32_SFLOAT_S8_UINT)
+                    .Finalize();
+
+            //ToDo: this may be can read and cached from render pass
+            pso_create_info.color_attachment_count = 2;
+            auto& color_attachments_info           = pso_create_info.color_attachments_info;
+            color_attachments_info[0]              = RHIColorAttachmentInfo::Preset(EPixelFormat::PF_R32_UINT);
+            // color_attachments_info[1]              = RHIColorAttachmentInfo::Preset(EPixelFormat::PF_R8G8B8A8_UNORM);
+            color_attachments_info[1] = RHIColorAttachmentInfo::Preset(EPixelFormat::PF_R8G8B8A8_UNORM);
+
+            gbuffer_pipeline_state = g_rhi->RHICreateGraphicsPSO(std::move(pso_create_info));
+
+            RHIShaderRef               lighting_vert_shader       = ShaderResourceManager::GetInstance().GetShader<LightingShaderVert>();
+            RHIShaderRef               lighting_frag_shader       = ShaderResourceManager::GetInstance().GetShader<LightingShaderFrag>();
+            RHIVertexInputInfo         lighting_vertex_input_info = {};
+            RHIGraphicsShaderInputInfo lighting_shader_input_info = RHIGraphicsShaderInputInfo::Create().SetVertexWorkFlow(lighting_vertex_input_info, lighting_vert_shader, lighting_frag_shader);
+            RHIGraphicsPSOCreateInfo   lighting_pso_create_info =
+                RHIGraphicsPSOCreateInfo::Create()
+                    .SetShaderStage(
+                        std::move(lighting_shader_input_info)).SetRasterizerInfo({.cull_mode = RCM_NONE, })
+                    .Finalize();
+            lighting_pipeline_state = g_rhi->RHICreateGraphicsPSO(std::move(lighting_pso_create_info));
+
+            instance_buffer_view = g_rhi->RHICreateBufferSRV(g_scene->GetBuffer("instance_data"));
+
+            //HarCode lights
+            auto light_pos   = Moer::Vector3f(0.0f, 128.0f, -225.0f);
+            auto light_color = Moer::Vector3f(1.0, 1.0, 1.0);
+
+            // Magic numbers used to offset lights in the Sponza scene
+            for (int i = -4; i < 4; ++i) {
+                for (int j = 0; j < 2; ++j) {
+                    Moer::Vector3f pos = light_pos;
+                    pos.x += i * 400;
+                    pos.z += j * (225 + 140);
+                    pos.y = 8;
+
+                    for (int k = 0; k < 3; ++k) {
+                        pos.y = pos.y + (k * 100);
+
+                        light_color.x = static_cast<float>(rand()) / (RAND_MAX);
+                        light_color.y = static_cast<float>(rand()) / (RAND_MAX);
+                        light_color.z = static_cast<float>(rand()) / (RAND_MAX);
+
+                        LightData light;
+                        light.color     = Moer::Vector4f(light_color, 1.0f);
+                        light.position  = Moer::Vector4f(pos, 1.0f);
+                        light.direction = Moer::Vector4f(0.0f, 0.0f, 0.0f, 2);
+                        lights.push_back(light);
+                    }
+                }
+            }
+
+            light_buffer      = GpuSceneBufferBuilder::CopyFrom(EBufferUsageFlags::STORAGE_BUFFER, lights.data(), lights.size() * sizeof(LightData));
+            light_buffer_view = g_rhi->RHICreateBufferSRV(light_buffer);
+        }
     }
 
     void DeferredRenderer::Impl::ShutDown() {
@@ -457,36 +611,36 @@ namespace Moer {
 
         PrePass();
 
-        EnqueueRenderTask([this]() {
-            auto                    info         = virtual_viewport->GetBackBufferInfo();
-            RHIUAVRef               uav          = info.backbuffer_uav;
-            uint32_t                frame_offset = frame_counter % render_cmd_lists.size();
-            RHIGraphicsCommandList* cmd_list     = render_cmd_lists[frame_offset];
-
-            RHIBarrierDependencyInfo barrier_dependency_info;
-            barrier_dependency_info.texture_barriers.resize(2);
-            auto& texture_barrier_info = barrier_dependency_info.texture_barriers[0];
-            texture_barrier_info
-                .SetTexture(uav->GetTexture())
-                .SetDstTextureLayout(TEXTURE_LAYOUT_COLOR_ATTACHMENT)
-                .SetSrcTextureLayout(TEXTURE_LAYOUT_TRANSFER_SRC)
-                .SetSrcStage(ERHIPipelineStageFlags::PS_TRANSFER)
-                .SetDstStage(ERHIPipelineStageFlags::PS_COLOR_ATTACHMENT_OUTPUT)
-                .SetDstAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
-
-            auto& depth_barrier = barrier_dependency_info.texture_barriers[1];
-            depth_barrier
-                .SetTexture(depth_buffer[frame_offset])
-                .SetDstTextureLayout(TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE)
-                .SetSrcTextureLayout(TEXTURE_LAYOUT_UNDEFINED)
-                .SetSubResourceRange(RHISubresourceRange(ETextureAspectFlags::DEPTH_SLICE | ETextureAspectFlags::STENCIL_SLICE))
-                .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
-                .SetDstStage(ERHIPipelineStageFlags::PS_EARLY_FRAGMENT_TESTS)
-                .SetSrcAccessFlags(ERHIAccessFlags::SHADER_READ)
-                .SetDstAccessFlags(ERHIAccessFlags::DEPTH_STENCIL_READ | ERHIAccessFlags::DEPTH_STENCIL_WRITE);
-
-            cmd_list->SetPipelineBarrier(barrier_dependency_info);
-        });
+        // EnqueueRenderTask([this]() {
+        //     auto                    info         = virtual_viewport->GetBackBufferInfo();
+        //     RHIUAVRef               uav          = info.backbuffer_uav;
+        //     uint32_t                frame_offset = frame_counter % render_cmd_lists.size();
+        //     RHIGraphicsCommandList* cmd_list     = render_cmd_lists[frame_offset];
+        //
+        //     RHIBarrierDependencyInfo barrier_dependency_info;
+        //     barrier_dependency_info.texture_barriers.resize(2);
+        //     auto& texture_barrier_info = barrier_dependency_info.texture_barriers[0];
+        //     texture_barrier_info
+        //         .SetTexture(uav->GetTexture())
+        //         .SetDstTextureLayout(TEXTURE_LAYOUT_COLOR_ATTACHMENT)
+        //         .SetSrcTextureLayout(TEXTURE_LAYOUT_TRANSFER_SRC)
+        //         .SetSrcStage(ERHIPipelineStageFlags::PS_TRANSFER)
+        //         .SetDstStage(ERHIPipelineStageFlags::PS_COLOR_ATTACHMENT_OUTPUT)
+        //         .SetDstAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
+        //
+        //     auto& depth_barrier = barrier_dependency_info.texture_barriers[1];
+        //     depth_barrier
+        //         .SetTexture(depth_buffer[frame_offset])
+        //         .SetDstTextureLayout(TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE)
+        //         .SetSrcTextureLayout(TEXTURE_LAYOUT_UNDEFINED)
+        //         .SetSubResourceRange(RHISubresourceRange(ETextureAspectFlags::DEPTH_SLICE | ETextureAspectFlags::STENCIL_SLICE))
+        //         .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
+        //         .SetDstStage(ERHIPipelineStageFlags::PS_EARLY_FRAGMENT_TESTS)
+        //         .SetSrcAccessFlags(ERHIAccessFlags::SHADER_READ)
+        //         .SetDstAccessFlags(ERHIAccessFlags::DEPTH_STENCIL_READ | ERHIAccessFlags::DEPTH_STENCIL_WRITE);
+        //
+        //     cmd_list->SetPipelineBarrier(barrier_dependency_info);
+        // });
 
         DispatchDrawScene(camera_data);
 
@@ -496,37 +650,37 @@ namespace Moer {
             HiZBuilder::GetInstance().DispatchBuildHiZ(render_cmd_lists[frame_offset], depth_buffer_srv[frame_offset], hiz_buffer);
         });
         RecheckPass();
-        EnqueueRenderTask([this]() {
-            auto                    info         = virtual_viewport->GetBackBufferInfo();
-            RHIUAVRef               uav          = info.backbuffer_uav;
-            uint32_t                frame_offset = frame_counter % render_cmd_lists.size();
-            RHIGraphicsCommandList* cmd_list     = render_cmd_lists[frame_offset];
-
-            RHIBarrierDependencyInfo barrier_dependency_info;
-            barrier_dependency_info.texture_barriers.resize(2);
-            auto& texture_barrier_info = barrier_dependency_info.texture_barriers[0];
-            texture_barrier_info
-                .SetTexture(uav->GetTexture())
-                .SetDstTextureLayout(TEXTURE_LAYOUT_COLOR_ATTACHMENT)
-                .SetSrcTextureLayout(TEXTURE_LAYOUT_COLOR_ATTACHMENT)
-                .SetSrcStage(ERHIPipelineStageFlags::PS_COLOR_ATTACHMENT_OUTPUT)
-                .SetDstStage(ERHIPipelineStageFlags::PS_COLOR_ATTACHMENT_OUTPUT)
-                .SetDstAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE)
-                .SetSrcAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
-
-            auto& depth_barrier = barrier_dependency_info.texture_barriers[1];
-            depth_barrier
-                .SetTexture(depth_buffer[frame_offset])
-                .SetDstTextureLayout(TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE)
-                .SetSrcTextureLayout(TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
-                .SetSubResourceRange(RHISubresourceRange(ETextureAspectFlags::DEPTH_SLICE | ETextureAspectFlags::STENCIL_SLICE))
-                .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
-                .SetDstStage(ERHIPipelineStageFlags::PS_EARLY_FRAGMENT_TESTS)
-                .SetSrcAccessFlags(ERHIAccessFlags::SHADER_READ)
-                .SetDstAccessFlags(ERHIAccessFlags::DEPTH_STENCIL_READ | ERHIAccessFlags::DEPTH_STENCIL_WRITE);
-
-            cmd_list->SetPipelineBarrier(barrier_dependency_info);
-        });
+        // EnqueueRenderTask([this]() {
+        //     auto                    info         = virtual_viewport->GetBackBufferInfo();
+        //     RHIUAVRef               uav          = info.backbuffer_uav;
+        //     uint32_t                frame_offset = frame_counter % render_cmd_lists.size();
+        //     RHIGraphicsCommandList* cmd_list     = render_cmd_lists[frame_offset];
+        //
+        //     RHIBarrierDependencyInfo barrier_dependency_info;
+        //     barrier_dependency_info.texture_barriers.resize(2);
+        //     auto& texture_barrier_info = barrier_dependency_info.texture_barriers[0];
+        //     texture_barrier_info
+        //         .SetTexture(uav->GetTexture())
+        //         .SetDstTextureLayout(TEXTURE_LAYOUT_COLOR_ATTACHMENT)
+        //         .SetSrcTextureLayout(TEXTURE_LAYOUT_COLOR_ATTACHMENT)
+        //         .SetSrcStage(ERHIPipelineStageFlags::PS_COLOR_ATTACHMENT_OUTPUT)
+        //         .SetDstStage(ERHIPipelineStageFlags::PS_COLOR_ATTACHMENT_OUTPUT)
+        //         .SetDstAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE)
+        //         .SetSrcAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
+        //
+        //     auto& depth_barrier = barrier_dependency_info.texture_barriers[1];
+        //     depth_barrier
+        //         .SetTexture(depth_buffer[frame_offset])
+        //         .SetDstTextureLayout(TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE)
+        //         .SetSrcTextureLayout(TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+        //         .SetSubResourceRange(RHISubresourceRange(ETextureAspectFlags::DEPTH_SLICE | ETextureAspectFlags::STENCIL_SLICE))
+        //         .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
+        //         .SetDstStage(ERHIPipelineStageFlags::PS_EARLY_FRAGMENT_TESTS)
+        //         .SetSrcAccessFlags(ERHIAccessFlags::SHADER_READ)
+        //         .SetDstAccessFlags(ERHIAccessFlags::DEPTH_STENCIL_READ | ERHIAccessFlags::DEPTH_STENCIL_WRITE);
+        //
+        //     cmd_list->SetPipelineBarrier(barrier_dependency_info);
+        // });
         DispatchDrawScene(camera_data, false);
         EnqueueRenderTask([this]() {
             auto frame_offset = frame_counter % render_cmd_lists.size();
@@ -552,7 +706,7 @@ namespace Moer {
                 .SetSrcAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE)
                 .SetDstAccessFlags(ERHIAccessFlags::TRANSFER_READ);
 
-            cmd_list->SetPipelineBarrier(barrier_dependency_info);
+         //   cmd_list->SetPipelineBarrier(barrier_dependency_info);
         });
         {
 
@@ -873,69 +1027,196 @@ namespace Moer {
 
     void DeferredRenderer::Impl::DispatchDrawScene(const CameraData& _camera_data, bool _first_pass) {
 
-        TestDeferredTriangleShaderVert::Parameters params;
-        params.camera_data   = _camera_data;
-        params.instance_data = instance_buffer_view;
+        // TestDeferredTriangleShaderVert::Parameters params;
+        // params.camera_data   = _camera_data;
+        // params.instance_data = instance_buffer_view;
+        //
+        // RHIBatchedShaderParameters batched_params;
+        // batched_params.SetParameters(ShaderResourceManager::GetInstance().GetShader<TestDeferredTriangleShaderVert>(), params);
+        //
+        // auto draw_indirect = [this, batched_params = (batched_params), first_pass(_first_pass)]() {
+        //     auto      info = virtual_viewport->GetBackBufferInfo();
+        //     RHIUAVRef uav  = info.backbuffer_uav;
+        //
+        //     uint32_t                frame_offset = frame_counter % render_cmd_lists.size();
+        //     RHIGraphicsCommandList* cmd_list     = render_cmd_lists[frame_counter % render_cmd_lists.size()];
+        //
+        //     RHIRenderPassInfo pass_info{};
+        //
+        //     pass_info.color_attachments[0].color_attachment_action = first_pass ? AC_CLEAR_STORE : AC_LOAD_STORE;
+        //     RenderAttachmentView& render_attachment_view           = pass_info.color_attachments[0].color_attachment_view;
+        //
+        //     render_attachment_view.required_layout  = TEXTURE_LAYOUT_COLOR_ATTACHMENT;
+        //     render_attachment_view.texture_view     = uav;
+        //     render_attachment_view.clear_attachment = RHIClearAttachment(EClearAttachment::COLOR);
+        //
+        //     auto& depth_attachment_view        = pass_info.depth_stencil_attachment.depth_stencil_attachment_view;
+        //     depth_attachment_view.texture_view = depth_buffer_uav[frame_offset];
+        //
+        //     depth_attachment_view.required_layout                   = TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE;
+        //     depth_attachment_view.clear_attachment                  = RHIClearAttachment::Preset<RHIConfig::ClearMode::DEPTH_STENCIL>();
+        //     pass_info.depth_stencil_attachment.depth_stencil_action = first_pass ? AC_CLEAR_STORE : AC_LOAD_STORE;
+        //
+        //     Extent3D extent              = uav->GetTexture()->GetExtent3D();
+        //     pass_info.render_area.extent = Extent2D(extent.x, extent.y);
+        //     pass_info.render_area.offset = Offset2D(0, 0);
+        //
+        //     cmd_list->BeginRenderPass(pass_info, "Draw Meshlets");
+        //
+        //     const VirtualViewportInfo& viewport_info = virtual_viewport->GetInfo();
+        //     ViewPort                   viewport{0, 0, float(viewport_info.extent.x), float(viewport_info.extent.y), 0, 1};
+        //     cmd_list->SetViewPort(viewport);
+        //     cmd_list->SetScissor({0, 0, uint32_t(viewport_info.extent.x), uint32_t(viewport_info.extent.y)});
+        //
+        //     cmd_list->SetPipelineState(pipeline_state);
+        //     g_rhi->RHISetBatchedShaderParameters(pipeline_state, batched_params);
+        //
+        //     auto* const scene = g_scene;
+        //     if (scene) {
+        //         // Shader* vert_shader = ShaderResourceManager::GetShader<TestDeferredTriangleShaderVert>();
+        //         cmd_list->BindIndexBuffer(scene->GetBuffer("index_buffer"), 0, IET_UINT32);
+        //         uint32_t           offset[]           = {0, 0};
+        //         const RHIBufferRef prim_vertex_buffer = scene->GetBuffer("vertex_buffer");
+        //         const RHIBufferRef instance_id_buffer = scene->GetBuffer("instance_id_buffer");
+        //         RHIBufferRef       vbuffers[]         = {prim_vertex_buffer, instance_id_buffer};
+        //         cmd_list->BindVertexBuffers(0, 2, vbuffers, offset);
+        //         auto draw_cnt_offset = first_pass ? draw_count_offset : recheck_draw_count_offset;
+        //         cmd_list->DrawIndexedIndirect(draw_indirect_buffer, 0, draw_count_buffer, draw_cnt_offset, draw_indirect_buffer->GetNumElement(), sizeof(DrawInstanceCmd));
+        //     } else {
+        //         assert(false);
+        //     }
+        //
+        //     cmd_list->EndRenderPass();
+        // };
+        //
+        // EnqueueRenderTask(std::move(draw_indirect));
+        
+         EnqueueRenderTask([&] {
+            RenderGraph render_graph;
+            auto        cmd_list = render_cmd_lists[frame_counter % render_cmd_lists.size()];
+            //  cmd_list->Reset();
 
-        RHIBatchedShaderParameters batched_params;
-        batched_params.SetParameters(ShaderResourceManager::GetInstance().GetShader<TestDeferredTriangleShaderVert>(), params);
+            //  cmd_list->BeginRecording();
 
-        auto draw_indirect = [this, batched_params = (batched_params), first_pass(_first_pass)]() {
-            auto      info = virtual_viewport->GetBackBufferInfo();
-            RHIUAVRef uav  = info.backbuffer_uav;
+            {
+                Extent3D extent = virtual_viewport->GetNextBackBufferExtent();
 
-            uint32_t                frame_offset = frame_counter % render_cmd_lists.size();
-            RHIGraphicsCommandList* cmd_list     = render_cmd_lists[frame_counter % render_cmd_lists.size()];
+                render_graph.AddGraphicPass(
+                    "GBuffer Pass",
+                    [&](RenderGraph::Builder& builder) {
+                        auto normal = render_graph.CreateTexture("normal", {.extent2D = Extent2D(extent.x, extent.y), .format = EPixelFormat::PF_R8G8B8A8_UNORM, .usage = ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED});
+                        auto mat    = render_graph.CreateTexture("mat", {.extent2D = Extent2D(extent.x, extent.y), .format = EPixelFormat::PF_R32_UINT, .usage = ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED});
+                        auto depth  = render_graph.ImportTexture("depth",depth_buffer[frame_counter % render_cmd_lists.size()] );
+                        builder.writeTextures({normal, mat}, RenderGraphTexture::Usage::COLOR_ATTACHMENT);
+                        builder.writeTexture(depth, RenderGraphTexture::Usage::DEPTH_STENCIL_ATTACHMENT);
+                        builder.DeclareRenderPass({.color_attachments = {mat, normal}, .depth_stencil_attachment = depth});
+                    },
+                    [this](RenderPassContext& context) {
+                        auto cmd_list = context.cmd_list;
+                        cmd_list->SetPipelineState(gbuffer_pipeline_state);
+                        // cmd_list->BindVertexBuffers()
+                        auto scene = g_scene;
+                        cmd_list->BindIndexBuffer(scene->GetBuffer("index_buffer"), 0, IET_UINT32);
+                        uint32_t              offset[]           = {0, 0};
+                        const RHIBufferRef    prim_vertex_buffer = scene->GetBuffer("vertex_buffer");
+                        std::vector<uint32_t> data(25);
+                        const RHIBufferRef    instance_id_buffer = scene->GetBuffer("instance_id_buffer");
+                        RHIBufferRef          vbuffers[]         = {prim_vertex_buffer, instance_id_buffer};
+                        cmd_list->BindVertexBuffers(0, 2, vbuffers, offset);
 
-            RHIRenderPassInfo pass_info{};
+                        auto camera_entity = g_scene->GetMainCamera();
+                        auto camera        = CameraManager::Get().Get(camera_entity);
 
-            pass_info.color_attachments[0].color_attachment_action = first_pass ? AC_CLEAR_STORE : AC_LOAD_STORE;
-            RenderAttachmentView& render_attachment_view           = pass_info.color_attachments[0].color_attachment_view;
+                        CameraData camera_data;
+                        camera_data.view           = camera->GetViewMatrix();
+                        camera_data.view_proj      = camera->GetProjectionMatrix() * camera->GetViewMatrix();
+                        camera_data.camera_pos     = Vector4f(camera->GetPosition(), 1.f);
+                        auto vp                    = camera->GetProjectionMatrix() * camera->GetViewMatrix();
+                        camera_data.prev_view_proj = vp;
 
-            render_attachment_view.required_layout  = TEXTURE_LAYOUT_COLOR_ATTACHMENT;
-            render_attachment_view.texture_view     = uav;
-            render_attachment_view.clear_attachment = RHIClearAttachment(EClearAttachment::COLOR);
+                        TestGBufferShaderVert::Parameters vert_params;
+                        vert_params.camera_data   = camera_data;
+                        vert_params.instance_data = instance_buffer_view;
 
-            auto& depth_attachment_view        = pass_info.depth_stencil_attachment.depth_stencil_attachment_view;
-            depth_attachment_view.texture_view = depth_buffer_uav[frame_offset];
+                        TestGBufferShaderFrag::Parameters frag_params;
+                        frag_params.instance_data = instance_buffer_view;
 
-            depth_attachment_view.required_layout                   = TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE;
-            depth_attachment_view.clear_attachment                  = RHIClearAttachment::Preset<RHIConfig::ClearMode::DEPTH_STENCIL>();
-            pass_info.depth_stencil_attachment.depth_stencil_action = first_pass ? AC_CLEAR_STORE : AC_LOAD_STORE;
+                        RHIBatchedShaderParameters batched_params;
+                        batched_params.SetParameters(ShaderResourceManager::GetInstance().GetShader<TestGBufferShaderVert>(), vert_params);
+                        batched_params.SetParameters(ShaderResourceManager::GetInstance().GetShader<TestGBufferShaderFrag>(), frag_params);
 
-            Extent3D extent              = uav->GetTexture()->GetExtent3D();
-            pass_info.render_area.extent = Extent2D(extent.x, extent.y);
-            pass_info.render_area.offset = Offset2D(0, 0);
+                        g_rhi->RHISetBatchedShaderParameters(gbuffer_pipeline_state, batched_params);
 
-            cmd_list->BeginRenderPass(pass_info, "Draw Meshlets");
+                        auto instance_idx = 0;
+                        // scene->ForEach([cmd_list, &instance_idx](Entity entity) {
+                        //     auto mesh_info = RenderableManager::Get().GetMeshInfo(entity);
+                        //     cmd_list->DrawIndexedInstanced(mesh_info.index_count, 1, mesh_info.index_offset, mesh_info.vertex_offset, instance_idx++);
+                        // });
+                        
+                        cmd_list->DrawIndexedIndirect(draw_indirect_buffer, 0, draw_count_buffer, draw_count_offset, 5000, sizeof(DrawInstanceCmd));
+                    });
 
-            const VirtualViewportInfo& viewport_info = virtual_viewport->GetInfo();
-            ViewPort                   viewport{0, 0, float(viewport_info.extent.x), float(viewport_info.extent.y), 0, 1};
-            cmd_list->SetViewPort(viewport);
-            cmd_list->SetScissor({0, 0, uint32_t(viewport_info.extent.x), uint32_t(viewport_info.extent.y)});
+                render_graph.AddGraphicPass(
+                    "Lighting Pass", [&](RenderGraph::Builder& builder) {
+            auto normal = render_graph.GetBlackBoard().GetHandle("normal");
+            auto mat = render_graph.GetBlackBoard().GetHandle("mat");
+                        auto depth = render_graph.GetBlackBoard().GetHandle("depth");
+            // auto position = render_graph.GetBlackBoard().GetHandle("position");
+            auto output = render_graph.ImportTexture("swapchain_output",virtual_viewport->GetBackBufferInfo().backbuffer_uav->GetTexture());
+            builder.readTextures({normal,mat,depth},RenderGraphTexture::Usage::SAMPLED).writeTexture(output);
+            builder.DeclareRenderPass({.color_attachments =  {output}}); }, [&](RenderPassContext& context) {
+            auto cmd_list = context.cmd_list;
+            cmd_list->SetPipelineState(lighting_pipeline_state);
 
-            cmd_list->SetPipelineState(pipeline_state);
-            g_rhi->RHISetBatchedShaderParameters(pipeline_state, batched_params);
+            //First Get all material instances
+            //Material organize this materials 
+            //Material bind all resources for it's pass
+            //Draw a full screen quad pass for each material type 
+            Moer::UnorderedSet<EMaterialType> material_types = {}; 
+            Moer::UnorderedMap<EMaterialType,Moer::Array<MaterialInstanceRef>> material_instances;
+            g_scene->ForEach([&](Entity entity) {
+                if (RenderableManager::Get().Contains(entity)) {
+                    
+                     auto mi = RenderableManager::Get().GetMaterialInstance(entity);
+                    material_types.insert(mi->GetMaterial()->GetType());
+                    material_instances[mi->GetMaterial()->GetType()].push_back(mi);
+                }
+            }); 
 
-            auto* const scene = g_scene;
-            if (scene) {
-                // Shader* vert_shader = ShaderResourceManager::GetShader<TestDeferredTriangleShaderVert>();
-                cmd_list->BindIndexBuffer(scene->GetBuffer("index_buffer"), 0, IET_UINT32);
-                uint32_t           offset[]           = {0, 0};
-                const RHIBufferRef prim_vertex_buffer = scene->GetBuffer("vertex_buffer");
-                const RHIBufferRef instance_id_buffer = scene->GetBuffer("instance_id_buffer");
-                RHIBufferRef       vbuffers[]         = {prim_vertex_buffer, instance_id_buffer};
-                cmd_list->BindVertexBuffers(0, 2, vbuffers, offset);
-                auto draw_cnt_offset = first_pass ? draw_count_offset : recheck_draw_count_offset;
-                cmd_list->DrawIndexedIndirect(draw_indirect_buffer, 0, draw_count_buffer, draw_cnt_offset, draw_indirect_buffer->GetNumElement(), sizeof(DrawInstanceCmd));
-            } else {
-                assert(false);
+             auto mat_srv = render_graph.GetBlackBoard().GetTexture("mat")->GetSRV();
+             auto normal_srv = render_graph.GetBlackBoard().GetTexture("normal")->GetSRV();
+           auto depth_srv = render_graph.GetBlackBoard().GetTexture("depth")->GetSRV();
+
+           Camera * camera = CameraManager::Get().Get(g_scene->GetMainCamera());     
+           LightingData lighting_data;
+           lighting_data.inv_view_proj = Inverse(camera->GetProjectionMatrix() * camera->GetViewMatrix());     
+           lighting_data.light_count = lights.size();
+               
+            for(auto type : material_types){
+                RHIBatchedShaderParameters parameters;
+                LightingShaderFrag::Parameters frag_params;
+                frag_params.lighting_data = lighting_data;
+                frag_params.light_data = light_buffer_view;
+                frag_params.depth_attach = depth_srv;
+                frag_params.normal_attach = normal_srv;
+                frag_params.mat_attach = mat_srv;
+                parameters.SetParameters(ShaderResourceManager::GetInstance().GetShader<LightingShaderFrag>(),frag_params);
+                
+                auto& mat_instances = material_instances[type];
+                MaterialRef material = mat_instances[0]->GetMaterial();
+                material->OrganizeInstancesAndBind(parameters,mat_instances);
+                g_rhi->RHISetBatchedShaderParameters(lighting_pipeline_state,parameters);
+
+                cmd_list->Draw(3, 1,0,0);
+                
+            } });
+
+                render_graph.SetGraphOutput(render_graph.GetBlackBoard().GetHandle("swapchain_output"));
             }
 
-            cmd_list->EndRenderPass();
-        };
+            render_graph.Execute({cmd_list, virtual_viewport->GetNextBackBufferExtent()});
+    });
 
-        EnqueueRenderTask(std::move(draw_indirect));
     }
 
     void DeferredRenderer::Impl::BasePass() {

@@ -415,6 +415,14 @@ enum class ETextureDimension : uint8_t {
     NumBits = 3
 };
 
+enum class EParamaterType : uint8_t {
+    UNDEFINED,
+    SAMPLER,
+    TEXTURE,
+    UNIFORM,
+    COMBINED,
+};
+
 /*from UE*/
 enum class EGPUVenderId {
     Unknown    = -1,
@@ -914,13 +922,6 @@ enum class ESamplerType : uint8_t {
     SAMPLER_EXTERNAL,     //!< External texture
     SAMPLER_3D,           //!< 3D texture
     SAMPLER_CUBEMAP_ARRAY,//!< Cube map array texture (feature level 2)
-};
-
-enum class ESamplerBindingType : uint8_t {
-    UNDEFINED,
-    SAMPLER,
-    TEXTURE,
-    COMBINED,
 };
 
 #pragma region utils

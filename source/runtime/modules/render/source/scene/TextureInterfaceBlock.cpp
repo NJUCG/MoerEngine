@@ -12,12 +12,12 @@ namespace Moer {
     }
 
     TextureInterfaceBlock::Builder& TextureInterfaceBlock::Builder::AddTexture(const std::string& texture_name, ETextureDimension type) noexcept {
-        m_entries.emplace_back(TextureInfo{.name = texture_name, .offset = static_cast<uint8_t>(m_entries.size()), .textureType = type, .type = ESamplerBindingType::TEXTURE});
+        m_entries.emplace_back(TextureInfo{.name = texture_name, .offset = static_cast<uint8_t>(m_entries.size()), .textureType = type, .type = EParamaterType::TEXTURE});
         return *this;
     }
 
     TextureInterfaceBlock::Builder& TextureInterfaceBlock::Builder::AddSampler(const std::string& sampler_name, ESamplerType type) noexcept {
-        m_entries.emplace_back(TextureInfo{.name = sampler_name, .offset = static_cast<uint8_t>(m_entries.size()), .samplerType = type, .type = ESamplerBindingType::SAMPLER});
+        m_entries.emplace_back(TextureInfo{.name = sampler_name, .offset = static_cast<uint8_t>(m_entries.size()), .samplerType = type, .type = EParamaterType::SAMPLER});
         return *this;
     }
 

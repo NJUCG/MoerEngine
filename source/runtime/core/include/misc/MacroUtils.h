@@ -51,12 +51,12 @@
         ptr = nullptr;        \
     }
 
-#define CHECK_ASSERT(value, msg, ...)       \
-    {                                       \
-        if (!value) {                       \
-            LOG_CRITICAL(msg, __VA_ARGS__); \
-            assert(false);                  \
-        }                                   \
+#define CHECK_ASSERT(value, msg, ...)         \
+    {                                         \
+        if (!value) {                         \
+            LOG_CRITICAL(msg, ##__VA_ARGS__); \
+            assert(false);                    \
+        }                                     \
     }
 
 #endif// !MACRO_H

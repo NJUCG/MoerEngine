@@ -6,11 +6,11 @@ struct MaterialData {
   float metallic_factor;
   float roughness_factor;
   float ao;
-  uint albedo_map;
-  uint normal_map;
-  uint metallic_roughness_map;
-  uint ao_map;
-  uint emissive_map;
-  uint padding;
+  int albedo_map;
+  int normal_map;
+  int metallic_roughness_map;
+  int ao_map;
+  int emissive_map;
+  int padding;
 };
 #endif

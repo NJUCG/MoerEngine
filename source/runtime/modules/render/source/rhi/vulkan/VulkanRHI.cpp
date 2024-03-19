@@ -607,10 +607,24 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPSO(RHIGraphicsPSOCr
         auto constant_infos = meta_shader->GetRootParametersLayoutInfo().GetConstantsInfo();
 
         for (const auto& info : binding_infos) {
+            auto& bindings     = descriptor_bindings[info.space];
+            auto  prev_binding = std::find_if(bindings.begin(), bindings.end(), [info](VkDescriptorSetLayoutBinding& binding) {
+                return binding.binding == info.slot;
+            });
+
             VkDescriptorSetLayoutBinding binding{};
             binding.binding         = info.slot;
             binding.descriptorType  = VulkanEnumTranslator::METoVKDescriptorType(info.type, info.resource_type);
             binding.descriptorCount = 1;// always descriptorCount = 1
+
+            if (prev_binding != bindings.end()) {
+                if (prev_binding->descriptorType != binding.descriptorType || prev_binding->descriptorCount != binding.descriptorCount) {
+                    LOG_CRITICAL("RHICreateGraphicsPSO: descriptor type conflict!");
+                }
+                prev_binding->stageFlags |= VulkanEnumTranslator::METoVKShaderStageFlags(meta_shader->GetShaderType());
+                continue;
+            }
+
             binding.stageFlags |= VulkanEnumTranslator::METoVKShaderStageFlags(meta_shader->GetShaderType());
             binding.pImmutableSamplers = nullptr;
 

@@ -98,6 +98,8 @@ public:
         uint32_t   _max_draw_count,
         uint32_t   _stride) override;
 
+    void Draw(uint32_t _vertex_count, uint32_t _instance_count, uint32_t _start_vertex_location, uint32_t _start_instance_location) override;
+
     void Dispatch(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z) override;
 
     void DispatchIndirect(RHIBuffer* _buffer, uint64_t _offset) override;

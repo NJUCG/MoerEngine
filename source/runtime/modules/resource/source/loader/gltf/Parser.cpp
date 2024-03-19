@@ -3,6 +3,7 @@
 #include "RenderThread.h"
 #include "../io/ImageIO.h"
 #include "assimp/Importer.hpp"
+#include "assimp/pbrmaterial.h"
 #include "assimp/postprocess.h"
 #include "assimp/scene.h"
 #include "math/Base.h"
@@ -12,6 +13,7 @@
 #include "rhi/RHI.h"
 #include "resources/GpuScene.h"
 #include "rhi/RHICommon.h"
+#include "scene/BufferInterfaceBlock.h"
 #include "scene/EntityManager.h"
 #include "scene/CameraManager.h"
 #include "scene/Material.h"
@@ -26,12 +28,20 @@
 
 namespace Moer::Resource::Gltf {
 
+    struct Light {
+        Vector4f color;
+        Vector4f position;
+        Vector4f direction;
+        Vector4f info;
+    };
+
     struct Parser::Impl {
         std::unique_ptr<Scene, MoerDeleter> LoadSceneFromFile(const std::filesystem::path& file_path);
         void                                LoadNode(const aiNode* node, const aiScene* scene);
         void                                loadCameras(const aiScene* scene);
         void                                loadMaterial(const aiScene* ai_scene, const aiMaterial* ai_material, const std::string& materialName);
         void                                LoadTexture(const aiScene* scene, const aiString& texture_path, MaterialInstanceRef& mat, const std::string& param_name);
+        void                                LoadLights(const aiScene* scene);
         ~Impl() = default;
 
         Moer::Array<RHIRenderPrimitiveRef>                   m_primitives{};
@@ -52,6 +62,8 @@ namespace Moer::Resource::Gltf {
         UniquePtr<Scene>      m_scene{nullptr};
     };
 
+    void Parser::Impl::LoadLights(const aiScene* scene) {
+    }
     uint32_t GetVertexData(const aiMesh* mesh, float* data) {
         //  Moer::Array<float> data;
         bool   has_position = mesh->HasPositions();
@@ -157,7 +169,6 @@ namespace Moer::Resource::Gltf {
             mat->SetParameter(param_name, texture);
             SamplerParams params{};
             params.max_mip_level = texture->GetNumMips();
-            mat->SetParameter("defaultSampler", params);
             return;
         }
 
@@ -179,7 +190,7 @@ namespace Moer::Resource::Gltf {
             .Format(EPixelFormat::PF_R8G8B8A8_UNORM)
             .Data(image_desc.data, image_desc.data_size)
             .CallBack(image_desc.data_callback)
-            .MipAndLayers(image_desc.mips, image_desc.layers, image_desc.offsets.data());
+            .MipAndLayers(image_desc.mips, image_desc.layers, image_desc.mip_offsets.data(), image_desc.mip_extents.data());
 
         EnqueueRenderTask([this, builder, mat, param_name, texture_path]() {
             RHITextureRef texture = builder->Build();
@@ -187,7 +198,6 @@ namespace Moer::Resource::Gltf {
             SamplerParams params{};
             params.max_mip_level = texture->GetNumMips();
             mat->SetParameter(param_name, texture);
-            mat->SetParameter("defaultSampler", params);
             m_textures[texture_path.C_Str()] = texture;
         });
     }
@@ -227,8 +237,22 @@ namespace Moer::Resource::Gltf {
     MaterialRef GetDefaultMaterial() {
         MaterialBuilder materialBuilder{};
         MaterialRef     default_material = new Material();
-        materialBuilder.parameter("defaultSampler", ESamplerType::SAMPLER_2D);
-        materialBuilder.parameter("baseColorMap", ETextureDimension::TEX_2D);
+        materialBuilder.SetParameter("base_color_factor", UniformType::FLOAT4);
+        materialBuilder.SetParameter("emissive_factor", UniformType::FLOAT3);
+        materialBuilder.SetParameter("metalic_factor", UniformType::FLOAT);
+        materialBuilder.SetParameter("roughness_factor", UniformType::FLOAT);
+        materialBuilder.SetParameter("ao", UniformType::FLOAT);
+
+        
+        materialBuilder.SetParameter("albedo_map", ETextureDimension::TEX_2D);
+        materialBuilder.SetParameter("normal_map", ETextureDimension::TEX_2D);
+        materialBuilder.SetParameter("metallic_roughness_map", ETextureDimension::TEX_2D);
+        materialBuilder.SetParameter("ao_map", ETextureDimension::TEX_2D);
+        materialBuilder.SetParameter("emissive_map", ETextureDimension::TEX_2D);
+        
+       
+        
+
         return materialBuilder.Build();
     }
 
@@ -240,15 +264,50 @@ namespace Moer::Resource::Gltf {
         }
         const auto material = m_material_cache[material_hash];
 
-        auto material_instance    = material->CreateInstance();
         m_materials[materialName] = material->CreateInstance();
+        MaterialInstanceRef mi    = m_materials[materialName];
 
-        aiString base_color_path;
+        aiString base_color_path, normal_path, metallic_roughness_path, ao_path, emissive_path;
         if (ai_material->GetTexture(AI_MATKEY_BASE_COLOR_TEXTURE, &base_color_path) == AI_SUCCESS) {
-            LoadTexture(ai_scene, base_color_path, material_instance, "baseColorMap");
+            LoadTexture(ai_scene, base_color_path, mi, "albedo_map");
+        }
+        if (ai_material->GetTexture(aiTextureType_NORMALS, 0, &normal_path) == AI_SUCCESS) {
+            LoadTexture(ai_scene, normal_path, mi, "normal_map");
+        }
+        if (ai_material->GetTexture(AI_MATKEY_GLTF_PBRMETALLICROUGHNESS_METALLICROUGHNESS_TEXTURE, &metallic_roughness_path) == AI_SUCCESS) {
+            LoadTexture(ai_scene, metallic_roughness_path, mi, "metallic_roughness_map");
+        }
+        if (ai_material->GetTexture(aiTextureType_LIGHTMAP, 0, &ao_path) == AI_SUCCESS) {
+            LoadTexture(ai_scene, ao_path, mi, "ao_map");
+        }
+        if (ai_material->GetTexture(aiTextureType_EMISSIVE, 0, &emissive_path) == AI_SUCCESS) {
+            LoadTexture(ai_scene, emissive_path, mi, "emissive_map");
         }
 
-        m_materials[materialName] = material_instance;
+        aiColor4D baseColorFactor;
+        aiColor3D emissiveFactor;
+        float     metallicFactor  = 1.0;
+        float     roughnessFactor = 1.0;
+
+        if (ai_material->Get(AI_MATKEY_COLOR_DIFFUSE, baseColorFactor) == AI_SUCCESS) {
+            Vector4f base_color_factor_cast = *reinterpret_cast<Vector4f*>(&baseColorFactor);
+            mi->SetParameter("base_color_factor", base_color_factor_cast);
+        }
+
+        if (ai_material->Get(AI_MATKEY_COLOR_EMISSIVE, emissiveFactor) == AI_SUCCESS) {
+            Vector3f emissive_factor_cast = *reinterpret_cast<Vector3f*>(&emissiveFactor);
+            mi->SetParameter("emissive_factor", emissive_factor_cast);
+        }
+
+        if (ai_material->Get(AI_MATKEY_GLTF_PBRMETALLICROUGHNESS_METALLIC_FACTOR, metallicFactor) == AI_SUCCESS) {
+            mi->SetParameter("metalic_factor", metallicFactor);
+        }
+
+        if (ai_material->Get(AI_MATKEY_GLTF_PBRMETALLICROUGHNESS_ROUGHNESS_FACTOR, roughnessFactor) == AI_SUCCESS) {
+            mi->SetParameter("roughness_factor", roughnessFactor);
+        }
+
+        mi->SetParameter("ao", 1.0f);
     }
 
     std::unique_ptr<Scene, MoerDeleter> Parser::Impl::LoadSceneFromFile(const std::filesystem::path& file_path) {
@@ -358,9 +417,9 @@ namespace Moer::Resource::Gltf {
             gpu_scene_buffer_builder.Index(&index_data);
             auto buffer_pair = gpu_scene_buffer_builder.Build();
 
-            auto meshlet_bounds_buffer = gpu_scene_buffer_builder.CopyFrom(meshlet_bounds.data(), meshlet_bounds.size() * sizeof(MeshletBound));
+            auto meshlet_bounds_buffer = gpu_scene_buffer_builder.CopyFrom(EBufferUsageFlags::STORAGE_BUFFER, meshlet_bounds.data(), meshlet_bounds.size() * sizeof(MeshletBound));
 
-            auto meshlet_descs_buffer = gpu_scene_buffer_builder.CopyFrom(meshlet_descs.data(), meshlet_descs.size() * sizeof(MeshletDesc));
+            auto meshlet_descs_buffer = gpu_scene_buffer_builder.CopyFrom(EBufferUsageFlags::STORAGE_BUFFER, meshlet_descs.data(), meshlet_descs.size() * sizeof(MeshletDesc));
             gpu_scene->SetBuffer("vertex_buffer", buffer_pair.first);
             gpu_scene->SetBuffer("index_buffer", buffer_pair.second);
             gpu_scene->SetBuffer("meshlet_bounds", meshlet_bounds_buffer);
@@ -370,6 +429,7 @@ namespace Moer::Resource::Gltf {
         //Todo Load Lights
         loadCameras(gltf_scene);
         LoadNode(gltf_scene->mRootNode, gltf_scene);
+        LoadLights(gltf_scene);
 
         auto                          instance_id = 0;
         Moer::Array<InstanceData>     instance_data;
@@ -422,10 +482,9 @@ namespace Moer::Resource::Gltf {
         EnqueueRenderTask([instance_data = std::move(instance_data), instance_mesh_info = std::move(instance_mesh_info), instance_id(std::move(instance_ids)), gpu_scene]() {
             GpuSceneBufferBuilder gpu_scene_buffer_builder;
 
-            auto instance_buffer    = gpu_scene_buffer_builder.CopyFrom(instance_data.data(), instance_data.size() * sizeof(InstanceData));
-            auto instance_id_buffer = gpu_scene_buffer_builder.CreateBufferWithData(
-                EBufferUsageFlags::VERTEX_BUFFER, instance_id.data(), instance_id.size() * sizeof(int));
-            auto instance_mesh_buffer = gpu_scene_buffer_builder.CopyFrom(instance_mesh_info.data(), instance_mesh_info.size() * sizeof(InstanceMeshInfo));
+            auto instance_buffer      = gpu_scene_buffer_builder.CopyFrom(EBufferUsageFlags::STORAGE_BUFFER, instance_data.data(), instance_data.size() * sizeof(InstanceData));
+            auto instance_id_buffer   = gpu_scene_buffer_builder.CopyFrom(EBufferUsageFlags::VERTEX_BUFFER, instance_id.data(), instance_id.size() * sizeof(int));
+            auto instance_mesh_buffer = gpu_scene_buffer_builder.CopyFrom(EBufferUsageFlags::STORAGE_BUFFER, instance_mesh_info.data(), instance_mesh_info.size() * sizeof(InstanceMeshInfo));
             gpu_scene->SetBuffer("instance_data", instance_buffer);
             gpu_scene->SetBuffer("instance_id_buffer", instance_id_buffer);
             gpu_scene->SetBuffer("instance_meshlet_info_buffer", instance_mesh_buffer);

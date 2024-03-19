@@ -94,4 +94,5 @@ struct MeshletBound {
   uint padding1;
   uint padding2;
 };
+
 #endif

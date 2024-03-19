@@ -1,5 +1,6 @@
 #pragma once
 #include "PixelFormat.h"
+#include "rhi/RHICommon.h"
 
 #include <filesystem>
 #include <functional>
@@ -11,8 +12,9 @@ namespace Moer {
         void*                      data{nullptr};
         std::function<void(void*)> data_callback{free};
         //size = layer * mips
-        std::vector<uint32_t> offsets = {0};
-        void CheckValid();
+        std::vector<uint32_t> mip_offsets = {0};
+        std::vector<Extent3D> mip_extents;
+        void                  CheckValid();
     };
 
     class ImageIO {
