@@ -311,7 +311,7 @@ namespace Moer::Resource::Gltf {
         m_scene = std::move(UniquePtr<Scene>(MoerNew(Scene)()));
         Assimp::Importer importer;
         auto             real_path  = std::filesystem::canonical(file_path);
-        const auto*      gltf_scene = importer.ReadFile(file_path.string(), aiProcess_Triangulate | aiProcess_GenBoundingBoxes | aiProcess_GenNormals | aiProcess_CalcTangentSpace);
+        const auto*      gltf_scene = importer.ReadFile(file_path.string(), aiProcess_Triangulate | aiProcess_FlipUVs | aiProcess_GenBoundingBoxes | aiProcess_GenNormals | aiProcess_CalcTangentSpace);
         if (!gltf_scene) {
             LOG_WARNING("Failed to load gltf file: {} ", file_path.string());
             return nullptr;
@@ -339,7 +339,8 @@ namespace Moer::Resource::Gltf {
             auto aabb_extent = mesh->mAABB.mMax - aabb_center;
 
             uint32_t temp_stride;
-            GetAttribute(gltf_scene->mMeshes[0], temp_stride);
+            auto     flags = GetAttribute(gltf_scene->mMeshes[i], temp_stride);
+            assert(attribute == flags && "Meshes have different attribute");
             assert(temp_stride == stride / 4 && "Meshes have different attribute");
             Moer::Array<float> temp_vertex_data(mesh->mNumVertices * stride / sizeof(float));
             GetVertexData(mesh, temp_vertex_data.data());

@@ -450,7 +450,7 @@ namespace Moer {
             color_attachments_info[0]              = RHIColorAttachmentInfo::Preset(EPixelFormat::PF_R32_UINT);
             // color_attachments_info[1]              = RHIColorAttachmentInfo::Preset(EPixelFormat::PF_R8G8B8A8_UNORM);
             color_attachments_info[1] = RHIColorAttachmentInfo::Preset(EPixelFormat::PF_R8G8B8A8_UNORM);
-            color_attachments_info[2] = RHIColorAttachmentInfo::Preset(EPixelFormat::PF_R8G8_UNORM);
+            color_attachments_info[2] = RHIColorAttachmentInfo::Preset(EPixelFormat::PF_R16G16_SFLOAT);
 
             gbuffer_pipeline_state = g_rhi->RHICreateGraphicsPSO(std::move(pso_create_info));
 
@@ -971,7 +971,7 @@ namespace Moer {
                     [&](RenderGraph::Builder& builder) {
                         auto normal = render_graph.CreateTexture("normal", {.extent2D = Extent2D(extent.x, extent.y), .format = EPixelFormat::PF_R8G8B8A8_UNORM, .usage = ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED});
                         auto mat    = render_graph.CreateTexture("mat", {.extent2D = Extent2D(extent.x, extent.y), .format = EPixelFormat::PF_R32_UINT, .usage = ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED});
-                        auto uv     = render_graph.CreateTexture("uv", {.extent2D = Extent2D(extent.x, extent.y), .format = EPixelFormat::PF_R8G8_UNORM, .usage = ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED});
+                        auto uv     = render_graph.CreateTexture("uv", {.extent2D = Extent2D(extent.x, extent.y), .format = EPixelFormat::PF_R16G16_SFLOAT, .usage = ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED});
                         auto depth  = render_graph.ImportTexture("depth", depth_buffer[frame_counter % render_cmd_lists.size()]);
                         if (!b_first_pass) {
                             builder.readTextures({normal, uv, mat}, RenderGraphTexture::Usage::COLOR_ATTACHMENT);

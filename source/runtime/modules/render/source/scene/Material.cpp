@@ -1,5 +1,6 @@
 #include "scene/Material.h"
 
+#include "rhi/RHICommon.h"
 #include "rhi/RHIResourceInitilizer.h"
 #include "scene/MaterialInstance.h"
 #include "misc/MMemory.h"
@@ -172,7 +173,7 @@ namespace Moer {
                 find_or_insert(emissive_map, &mat_data.emissive_map);
             }
 
-            default_sampler = SamplerCache::Get().GetSampler(SamplerParams());
+            default_sampler = SamplerCache::Get().GetSampler(SamplerParams(SF_CUBIC, TEXTURE_LAYOUT_UNDEFINED));
 
             if (!m_material_data_buffer || m_material_data_buffer->GetByteSize() != sizeof(MaterialData) * instances.size()) {
                 m_material_data_buffer = GpuSceneBufferBuilder::CopyFrom(EBufferUsageFlags::STORAGE_BUFFER, material_data.data(), sizeof(MaterialData) * instances.size());
