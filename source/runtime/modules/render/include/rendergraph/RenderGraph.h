@@ -27,6 +27,8 @@ namespace Moer {
         RenderGraphHandle   GetHandle(const std::string& name) const;
         void                PutHandle(const std::string& name, RenderGraphHandle handle);
         BlackBoard(RenderGraph& renderGraph);
+        ~BlackBoard() = default;
+        void Reset();
 
     protected:
         RenderGraph&                                       m_renderGraph;
@@ -43,26 +45,26 @@ namespace Moer {
     public:
         class Builder {
         public:
-            Builder& readTexture(RenderGraphHandle         input,
+            Builder& ReadTexture(RenderGraphHandle         input,
                                  RenderGraphTexture::Usage usage =
                                      RenderGraphTexture::Usage::INPUT_ATTACHMENT);
 
-            Builder& writeTexture(RenderGraphHandle         output,
+            Builder& WriteTexture(RenderGraphHandle         output,
                                   RenderGraphTexture::Usage usage =
                                       RenderGraphTexture::Usage::COLOR_ATTACHMENT);
 
-            Builder& readTextures(const std::vector<RenderGraphHandle>& inputs,
+            Builder& ReadTextures(const std::vector<RenderGraphHandle>& inputs,
                                   RenderGraphTexture::Usage             usage = RenderGraphTexture::Usage::INPUT_ATTACHMENT);
 
-            Builder& writeTextures(const std::vector<RenderGraphHandle>& output,
+            Builder& WriteTextures(const std::vector<RenderGraphHandle>& output,
                                    RenderGraphTexture::Usage             usage =
                                        RenderGraphTexture::Usage::COLOR_ATTACHMENT);
 
-            Builder& readBuffer(RenderGraphHandle        input,
+            Builder& ReadBuffer(RenderGraphHandle        input,
                                 RenderGraphBuffer::Usage usage =
                                     RenderGraphBuffer::Usage::SHADER_RESOURCE);
 
-            Builder& writeBuffer(RenderGraphHandle        output,
+            Builder& WriteBuffer(RenderGraphHandle        output,
                                  RenderGraphBuffer::Usage usage =
                                      RenderGraphBuffer::Usage::STORAGE_BUFFER);
 
@@ -74,6 +76,7 @@ namespace Moer {
             RenderGraph& m_renderGraph;
         };
         RenderGraph();
+        void              Reset();
         RenderGraphHandle CreateTexture(const std::string& name, const RenderGraphTexture::Descriptor& descriptor);
         RenderGraphHandle ImportTexture(const std::string& name, RHITextureRef texture);
         RenderGraphHandle CreateBuffer(const std::string& name, const RenderGraphBuffer::Descriptor& descriptor);

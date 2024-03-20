@@ -26,7 +26,7 @@ static const uint CUR_MATERIAL_TYPE = 0;
 
 // [[vk::input_attachment_index(1), vk::binding(1)]] SubpassInput depthAttach;
 float3 worldPosFromDepth(float depth, float2 in_uv) {
-  float4 clip = float4(in_uv * 2.0 - 1.0, depth, 1.0);
+  float4 clip = float4(in_uv.x * 2.f - 1.f, 1.f - in_uv.y * 2.f, depth, 1.0);
   float4 world_w = mul(lighting_data.inv_view_proj, clip);
   float3 pos = world_w.xyz / world_w.w;
   return pos;

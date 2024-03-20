@@ -17,31 +17,31 @@ namespace Moer {
     RenderGraphBuffer* BlackBoard::GetBuffer(const std::string& name) const {
         return m_renderGraph.GetBuffer(GetHandle(name));
     }
-    RenderGraph::Builder& RenderGraph::Builder::readTexture(RenderGraphHandle input, RenderGraphTexture::Usage usage) {
+    RenderGraph::Builder& RenderGraph::Builder::ReadTexture(RenderGraphHandle input, RenderGraphTexture::Usage usage) {
         m_renderGraph.ReadInternal(m_pass, input, static_cast<uint32_t>(usage));
         return *this;
     }
-    RenderGraph::Builder& RenderGraph::Builder::writeTexture(RenderGraphHandle output, RenderGraphTexture::Usage usage) {
+    RenderGraph::Builder& RenderGraph::Builder::WriteTexture(RenderGraphHandle output, RenderGraphTexture::Usage usage) {
         m_renderGraph.WriteInternal(m_pass, output, static_cast<uint32_t>(usage));
         return *this;
     }
-    RenderGraph::Builder& RenderGraph::Builder::readTextures(const std::vector<RenderGraphHandle>& inputs, RenderGraphTexture::Usage usage) {
+    RenderGraph::Builder& RenderGraph::Builder::ReadTextures(const std::vector<RenderGraphHandle>& inputs, RenderGraphTexture::Usage usage) {
         for (auto input : inputs) {
             m_renderGraph.ReadInternal(m_pass, input, static_cast<uint32_t>(usage));
         }
         return *this;
     }
-    RenderGraph::Builder& RenderGraph::Builder::writeTextures(const std::vector<RenderGraphHandle>& output, RenderGraphTexture::Usage usage) {
+    RenderGraph::Builder& RenderGraph::Builder::WriteTextures(const std::vector<RenderGraphHandle>& output, RenderGraphTexture::Usage usage) {
         for (auto out : output) {
             m_renderGraph.WriteInternal(m_pass, out, static_cast<uint32_t>(usage));
         }
         return *this;
     }
-    RenderGraph::Builder& RenderGraph::Builder::readBuffer(RenderGraphHandle input, RenderGraphBuffer::Usage usage) {
+    RenderGraph::Builder& RenderGraph::Builder::ReadBuffer(RenderGraphHandle input, RenderGraphBuffer::Usage usage) {
         m_renderGraph.ReadInternal(m_pass, input, static_cast<uint32_t>(usage));
         return *this;
     }
-    RenderGraph::Builder& RenderGraph::Builder::writeBuffer(RenderGraphHandle output, RenderGraphBuffer::Usage usage) {
+    RenderGraph::Builder& RenderGraph::Builder::WriteBuffer(RenderGraphHandle output, RenderGraphBuffer::Usage usage) {
         m_renderGraph.WriteInternal(m_pass, output, static_cast<uint32_t>(usage));
         return *this;
     }
@@ -57,6 +57,18 @@ namespace Moer {
     RenderGraph::Builder::Builder(PassNode* pass, RenderGraph& renderGraph) : m_pass(pass), m_renderGraph(renderGraph) {
     }
     RenderGraph::RenderGraph() : m_black_board(*this) {
+    }
+    void RenderGraph::Reset() {
+        m_dependency_graph.Reset();
+        m_black_board.Reset();
+        for (auto& resource : m_resources) {
+            MoerDelete(resource);
+        }
+        for (auto& pass : m_passes) {
+            MoerDelete(pass);
+        }
+        m_resources.clear();
+        m_passes.clear();
     }
     RenderGraphHandle RenderGraph::CreateTexture(const std::string& name, const RenderGraphTexture::Descriptor& descriptor) {
         RenderGraphTexture* texture = MoerNew(RenderGraphTexture)(name, descriptor);
@@ -89,7 +101,7 @@ namespace Moer {
     }
     void RenderGraph::Execute(const RenderGraphExecuteConfig& config) {
         Compile();
-        auto cmd_list = config.cmd_list;
+        auto* cmd_list = config.cmd_list;
         for (auto& pass : m_passes) {
             for (auto& resource : pass->GetResourcesToCreate()) {
                 resource->Create();
@@ -158,6 +170,9 @@ namespace Moer {
     BlackBoard& RenderGraph::GetBlackBoard() {
         return m_black_board;
     }
+    void BlackBoard::Reset() {
+        m_handles.clear();
+    }
     bool RenderGraph::IsWriteResource(RenderGraphHandle handle, PassNode* node) const {
         auto* resource = GetResource(handle);
         return m_dependency_graph.IsWriteResource(node, resource);
@@ -206,4 +221,4 @@ namespace Moer {
     RenderGraphResource* RenderGraph::GetResource(RenderGraphHandle handle) const {
         return m_resources[handle.index];
     }
-}
+}// namespace Moer

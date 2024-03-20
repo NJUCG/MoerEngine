@@ -7,6 +7,7 @@
 #include "math/Matrix.h"
 #include "misc/MMemory.h"
 #include "misc/STL.h"
+#include "rendergraph/RenderGraphPass.h"
 #include "resources/AsyncResources.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommon.h"
@@ -119,7 +120,17 @@ namespace Moer {
         void RecheckPass();
         void LightingPass();
 
-        void DispatchDrawScene(const CameraData& _camera_data, bool _first_pass = true);
+        void                    DispatchDrawScene(const CameraData& _camera_data, bool _first_pass = true);
+        RHIGraphicsCommandList* GetCurrentCmdList() {
+            return render_cmd_lists[frame_counter % render_cmd_lists.size()];
+        }
+        RenderGraph& GetCurrentRenderGraph() {
+            return render_graphs[frame_counter % render_cmd_lists.size()];
+        }
+
+        void ResetRenderGraph() {
+            render_graphs[frame_counter % render_cmd_lists.size()].Reset();
+        }
 
     private:
         VirtualViewport* virtual_viewport;
@@ -186,10 +197,9 @@ namespace Moer {
         RHIUAVRef draw_indirect_view;
         RHIUAVRef draw_count_view;
 
-        static constexpr uint32_t meshlet_count_offset      = 0;
-        static constexpr uint32_t draw_count_offset         = 4;
-        static constexpr uint32_t recheck_draw_count_offset = 8;
-        // static constexpr uint32_t meshlet_dispatch_indirect_offset  = 8;
+        static constexpr uint32_t meshlet_count_offset              = 0;
+        static constexpr uint32_t draw_count_offset                 = 4;
+        static constexpr uint32_t recheck_draw_count_offset         = 8;
         static constexpr uint32_t check_instance_count_offset       = 12;
         static constexpr uint32_t check_meshlet_count_offset        = 16;
         static constexpr uint32_t instance_dispatch_indirect_offset = 20;
@@ -199,6 +209,8 @@ namespace Moer {
         static constexpr uint32_t thread_group_count                = 64;
 
         Vector2i source_resolution;
+
+        Array<RenderGraph> render_graphs;
     };
     void DeferredRenderer::Init(const BackendRendererInitInfo& _init_info) {
         impl = MoerNew(Impl);
@@ -501,6 +513,9 @@ namespace Moer {
             light_buffer      = GpuSceneBufferBuilder::CopyFrom(EBufferUsageFlags::STORAGE_BUFFER, lights.data(), lights.size() * sizeof(LightData));
             light_buffer_view = g_rhi->RHICreateBufferSRV(light_buffer);
         }
+        {
+            render_graphs.resize(render_cmd_lists.size());
+        }
     }
 
     void DeferredRenderer::Impl::ShutDown() {
@@ -579,9 +594,10 @@ namespace Moer {
 
         auto&& sync_command_list = [this]() {
             int                     i        = render_cmd_lists.size();
-            RHIGraphicsCommandList* cmd_list = render_cmd_lists[frame_counter % render_cmd_lists.size()];
+            RHIGraphicsCommandList* cmd_list = GetCurrentCmdList();
             cmd_list->Reset();
             cmd_list->BeginRecording();
+            ResetRenderGraph();
         };
         RHICopyBufferInfo copy_info{};
         copy_info.regions.push_back({0, 0, sizeof(uint32_t) * 32});
@@ -610,18 +626,31 @@ namespace Moer {
         DispatchDrawScene(camera_data);
 
         //hzb build
-        EnqueueRenderTask([this]() {
-            auto frame_offset = frame_counter % render_cmd_lists.size();
-            HiZBuilder::GetInstance().DispatchBuildHiZ(render_cmd_lists[frame_offset], depth_buffer_srv[frame_offset], hiz_buffer);
-        });
+        EnqueueRenderTask(
+            [this]() {
+                GetCurrentRenderGraph().AddGraphicPass(
+                    "Build HZB",
+                    [&](RenderGraph::Builder& _builder) {
+                    },
+                    [&](RenderPassContext& _context) {
+                        auto frame_offset = frame_counter % render_cmd_lists.size();
+                        HiZBuilder::GetInstance().DispatchBuildHiZ(render_cmd_lists[frame_offset], depth_buffer_srv[frame_offset], hiz_buffer);
+                    });
+            });
         RecheckPass();
 
         DispatchDrawScene(camera_data, false);
-        EnqueueRenderTask([this]() {
-            auto frame_offset = frame_counter % render_cmd_lists.size();
-            HiZBuilder::GetInstance().DispatchBuildHiZ(render_cmd_lists[frame_offset], depth_buffer_srv[frame_offset], hiz_buffer);
-        });
-
+        EnqueueRenderTask(
+            [this]() {
+                GetCurrentRenderGraph().AddGraphicPass(
+                    "Post Build HZB",
+                    [&](RenderGraph::Builder& _builder) {
+                    },
+                    [&](RenderPassContext& _context) {
+                        auto frame_offset = frame_counter % render_cmd_lists.size();
+                        HiZBuilder::GetInstance().DispatchBuildHiZ(render_cmd_lists[frame_offset], depth_buffer_srv[frame_offset], hiz_buffer);
+                    });
+            });
         LightingPass();
 
         EnqueueRenderTask([this]() {
@@ -639,10 +668,9 @@ namespace Moer {
                 .SetSrcAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE)
                 .SetDstAccessFlags(ERHIAccessFlags::TRANSFER_READ);
 
-            //   cmd_list->SetPipelineBarrier(barrier_dependency_info);
+            cmd_list->SetPipelineBarrier(barrier_dependency_info);
         });
         {
-
             auto submit_rendering = [this]() {
                 auto* cmd_list = render_cmd_lists[frame_counter % render_cmd_lists.size()];
                 cmd_list->EndRecording();
@@ -681,7 +709,6 @@ namespace Moer {
     }
 
     void DeferredRenderer::Impl::PrePass() {
-
         uint32_t frame_offset   = frame_counter % render_cmd_lists.size();
         auto     instance_count = instance_buffer_view->GetBuffer()->GetNumElement();
 
@@ -725,11 +752,12 @@ namespace Moer {
 
         RHIBatchedShaderParameters cull_meshlet_batched_params;
         cull_meshlet_batched_params.SetParameters(cull_meshlet_prepass_shader, cull_meshlet_params);
-        auto&& prepass_cull_task = [this,
-                                    instance_params(std::move(cull_instance_batched_params)),
-                                    meshlet_params(std::move(cull_meshlet_batched_params)),
-                                    instance_count(instance_count)]() mutable {
-            RHIGraphicsCommandList* cmd_list = render_cmd_lists[frame_counter % render_cmd_lists.size()];
+        auto prepass_cull_task = [this,
+                                  instance_params(std::move(cull_instance_batched_params)),
+                                  meshlet_params(std::move(cull_meshlet_batched_params)),
+                                  instance_count(instance_count)](
+                                     RenderPassContext& _context) mutable {
+            RHIGraphicsCommandList* cmd_list = _context.cmd_list;
 
             RHIBarrierDependencyInfo barrier_dependency_info{};
             barrier_dependency_info.buffer_barriers.resize(2);
@@ -757,7 +785,7 @@ namespace Moer {
             cmd_list->Dispatch(dispatch_count, 1, 1);
             {
                 RHIBarrierDependencyInfo instance_cull_barrier{};
-                instance_cull_barrier.buffer_barriers.resize(2);
+                instance_cull_barrier.buffer_barriers.resize(3);
                 auto& buffer_barrier_info = instance_cull_barrier.buffer_barriers[0];
                 buffer_barrier_info
                     .SetBuffer(instance_meshlet_cull_info_buffer)
@@ -771,6 +799,13 @@ namespace Moer {
                     .SetBuffer(recheck_instance_id_buffer)
                     .SetDstAccessFlags(ERHIAccessFlags::SHADER_READ)
                     .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE)
+                    .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
+                    .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
+
+                auto& buffer_barrier_info_2 = instance_cull_barrier.buffer_barriers[2];
+                buffer_barrier_info_2
+                    .SetBuffer(draw_count_buffer)
+                    .SetDstAccessFlags(ERHIAccessFlags::INDIRECT_COMMAND_READ)
                     .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
                     .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
 
@@ -788,7 +823,7 @@ namespace Moer {
                 buffer_barrier_info_0
                     .SetBuffer(draw_count_buffer)
                     .SetDstAccessFlags(ERHIAccessFlags::INDIRECT_COMMAND_READ)
-                    .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE)
+                    .SetSrcAccessFlags(ERHIAccessFlags::INDIRECT_COMMAND_READ)
                     .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
                     .SetDstStage(ERHIPipelineStageFlags::PS_DRAW_INDIRECT);
 
@@ -811,7 +846,14 @@ namespace Moer {
                 cmd_list->SetPipelineBarrier(post_compute_barrier);
             }
         };
-        EnqueueRenderTask(std::move(prepass_cull_task));
+
+        EnqueueRenderTask([&, prepass_cull(std::move(prepass_cull_task))]() {
+            GetCurrentRenderGraph().AddGraphicPass(
+                "Prepass Cull Instance",
+                [&](RenderGraph::Builder& _builder) {
+                },
+                std::move(prepass_cull));
+        });
     }
 
     void DeferredRenderer::Impl::RecheckPass() {
@@ -861,7 +903,8 @@ namespace Moer {
         auto recheck_pass_cull_task = [this,
                                        instance_params(std::move(cull_instance_batched_params)),
                                        meshlet_params(std::move(cull_meshlet_batched_params)),
-                                       instance_count(instance_count)]() mutable {
+                                       instance_count(instance_count)](
+                                          RenderPassContext& _context) mutable {
             RHIGraphicsCommandList* cmd_list = render_cmd_lists[frame_counter % render_cmd_lists.size()];
 
             RHIBarrierDependencyInfo barrier_dependency_info{};
@@ -869,9 +912,9 @@ namespace Moer {
             auto& buffer_barrier_info = barrier_dependency_info.buffer_barriers[0];
             buffer_barrier_info
                 .SetBuffer(draw_count_buffer)
-                .SetDstAccessFlags(ERHIAccessFlags::SHADER_WRITE | ERHIAccessFlags::SHADER_READ)
-                .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE | ERHIAccessFlags::SHADER_READ)
-                .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
+                .SetDstAccessFlags(ERHIAccessFlags::INDIRECT_COMMAND_READ)
+                .SetSrcAccessFlags(ERHIAccessFlags::INDIRECT_COMMAND_READ)
+                .SetSrcStage(ERHIPipelineStageFlags::PS_DRAW_INDIRECT)
                 .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
 
             auto& buffer_barrier_info_1 = barrier_dependency_info.buffer_barriers[1];
@@ -920,7 +963,7 @@ namespace Moer {
                 auto& buffer_barrier_info_2 = meshlet_cull_barrier.buffer_barriers[2];
                 buffer_barrier_info_2
                     .SetBuffer(draw_count_buffer)
-                    .SetDstAccessFlags(ERHIAccessFlags::SHADER_WRITE | ERHIAccessFlags::SHADER_READ)
+                    .SetDstAccessFlags(ERHIAccessFlags::INDIRECT_COMMAND_READ)
                     .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE | ERHIAccessFlags::SHADER_READ)
                     .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
                     .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
@@ -955,92 +998,168 @@ namespace Moer {
                 cmd_list->SetPipelineBarrier(post_compute_barrier);
             }
         };
-        EnqueueRenderTask(std::move(recheck_pass_cull_task));
+
+        EnqueueRenderTask([&, recheck_pass(std::move(recheck_pass_cull_task))]() {
+            GetCurrentRenderGraph().AddGraphicPass(
+                "Recheck Cull Instance",
+                [&](RenderGraph::Builder& _builder) {
+                },
+                std::move(recheck_pass));
+        });
+        // EnqueueRenderTask(std::move(recheck_pass_cull_task));
     }
 
     void DeferredRenderer::Impl::DispatchDrawScene(const CameraData& _camera_data, bool _first_pass) {
         auto dispatch_gbuffer_pass = [&, b_first_pass(_first_pass)]() {
-            RenderGraph render_graph;
-            auto*       cmd_list = render_cmd_lists[frame_counter % render_cmd_lists.size()];
+            auto* cmd_list = render_cmd_lists[frame_counter % render_cmd_lists.size()];
 
-            {
-                Extent3D extent = virtual_viewport->GetNextBackBufferExtent();
+            Extent3D     extent = virtual_viewport->GetNextBackBufferExtent();
+            RenderGraph& rg     = GetCurrentRenderGraph();
+            rg.AddGraphicPass(
+                "GBuffer Pass",
+                [&](RenderGraph::Builder& builder) {
+                    auto normal = rg.CreateTexture("normal", {.extent2D = Extent2D(extent.x, extent.y), .format = EPixelFormat::PF_R8G8B8A8_UNORM, .usage = ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED});
+                    auto mat    = rg.CreateTexture("mat", {.extent2D = Extent2D(extent.x, extent.y), .format = EPixelFormat::PF_R32_UINT, .usage = ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED});
+                    auto uv     = rg.CreateTexture("uv", {.extent2D = Extent2D(extent.x, extent.y), .format = EPixelFormat::PF_R16G16_SFLOAT, .usage = ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED});
+                    auto depth  = rg.ImportTexture("depth", depth_buffer[frame_counter % render_cmd_lists.size()]);
+                    if (!b_first_pass) {
+                        builder.ReadTextures({normal, uv, mat}, RenderGraphTexture::Usage::COLOR_ATTACHMENT);
+                        builder.ReadTexture(depth, RenderGraphTexture::Usage::DEPTH_STENCIL_ATTACHMENT);
+                    }
+                    builder.WriteTextures({normal, uv, mat}, RenderGraphTexture::Usage::COLOR_ATTACHMENT);
+                    builder.WriteTexture(depth, RenderGraphTexture::Usage::DEPTH_STENCIL_ATTACHMENT);
+                    builder.DeclareRenderPass({.color_attachments = {
+                                                   mat,
+                                                   normal,
+                                                   uv},
+                                               .depth_stencil_attachment = depth});
+                },
+                [this, b_first_pass](RenderPassContext& context) {
+                    auto* cmd_list = context.cmd_list;
+                    cmd_list->SetPipelineState(gbuffer_pipeline_state);
+                    // cmd_list->BindVertexBuffers()
+                    auto* scene = g_scene;
+                    cmd_list->BindIndexBuffer(scene->GetBuffer("index_buffer"), 0, IET_UINT32);
+                    uint32_t           offset[]           = {0, 0};
+                    const RHIBufferRef prim_vertex_buffer = scene->GetBuffer("vertex_buffer");
+                    const RHIBufferRef instance_id_buffer = scene->GetBuffer("instance_id_buffer");
+                    RHIBufferRef       vbuffers[]         = {prim_vertex_buffer, instance_id_buffer};
+                    cmd_list->BindVertexBuffers(0, 2, vbuffers, offset);
 
-                render_graph.AddGraphicPass(
-                    "GBuffer Pass",
-                    [&](RenderGraph::Builder& builder) {
-                        auto normal = render_graph.CreateTexture("normal", {.extent2D = Extent2D(extent.x, extent.y), .format = EPixelFormat::PF_R8G8B8A8_UNORM, .usage = ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED});
-                        auto mat    = render_graph.CreateTexture("mat", {.extent2D = Extent2D(extent.x, extent.y), .format = EPixelFormat::PF_R32_UINT, .usage = ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED});
-                        auto uv     = render_graph.CreateTexture("uv", {.extent2D = Extent2D(extent.x, extent.y), .format = EPixelFormat::PF_R16G16_SFLOAT, .usage = ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED});
-                        auto depth  = render_graph.ImportTexture("depth", depth_buffer[frame_counter % render_cmd_lists.size()]);
-                        if (!b_first_pass) {
-                            builder.readTextures({normal, uv, mat}, RenderGraphTexture::Usage::COLOR_ATTACHMENT);
-                            builder.readTexture(depth, RenderGraphTexture::Usage::DEPTH_STENCIL_ATTACHMENT);
-                        }
-                        builder.writeTextures({normal, uv, mat}, RenderGraphTexture::Usage::COLOR_ATTACHMENT);
-                        builder.writeTexture(depth, RenderGraphTexture::Usage::DEPTH_STENCIL_ATTACHMENT);
-                        builder.DeclareRenderPass({.color_attachments = {
-                                                       mat,
-                                                       normal,
-                                                       uv},
-                                                   .depth_stencil_attachment = depth});
-                    },
-                    [this, b_first_pass](RenderPassContext& context) {
-                        auto cmd_list = context.cmd_list;
-                        cmd_list->SetPipelineState(gbuffer_pipeline_state);
-                        // cmd_list->BindVertexBuffers()
-                        auto scene = g_scene;
-                        cmd_list->BindIndexBuffer(scene->GetBuffer("index_buffer"), 0, IET_UINT32);
-                        uint32_t           offset[]           = {0, 0};
-                        const RHIBufferRef prim_vertex_buffer = scene->GetBuffer("vertex_buffer");
-                        const RHIBufferRef instance_id_buffer = scene->GetBuffer("instance_id_buffer");
-                        RHIBufferRef       vbuffers[]         = {prim_vertex_buffer, instance_id_buffer};
-                        cmd_list->BindVertexBuffers(0, 2, vbuffers, offset);
+                    auto camera_entity = g_scene->GetMainCamera();
+                    auto camera        = CameraManager::Get().Get(camera_entity);
 
-                        auto camera_entity = g_scene->GetMainCamera();
-                        auto camera        = CameraManager::Get().Get(camera_entity);
+                    CameraData camera_data;
+                    camera_data.view           = camera->GetViewMatrix();
+                    camera_data.view_proj      = camera->GetProjectionMatrix() * camera->GetViewMatrix();
+                    camera_data.camera_pos     = Vector4f(camera->GetPosition(), 1.f);
+                    auto vp                    = camera->GetProjectionMatrix() * camera->GetViewMatrix();
+                    camera_data.prev_view_proj = vp;
 
-                        CameraData camera_data;
-                        camera_data.view           = camera->GetViewMatrix();
-                        camera_data.view_proj      = camera->GetProjectionMatrix() * camera->GetViewMatrix();
-                        camera_data.camera_pos     = Vector4f(camera->GetPosition(), 1.f);
-                        auto vp                    = camera->GetProjectionMatrix() * camera->GetViewMatrix();
-                        camera_data.prev_view_proj = vp;
+                    TestGBufferShaderVert::Parameters vert_params;
+                    vert_params.camera_data   = camera_data;
+                    vert_params.instance_data = instance_buffer_view;
 
-                        TestGBufferShaderVert::Parameters vert_params;
-                        vert_params.camera_data   = camera_data;
-                        vert_params.instance_data = instance_buffer_view;
+                    TestGBufferShaderFrag::Parameters frag_params;
+                    frag_params.instance_data = instance_buffer_view;
 
-                        TestGBufferShaderFrag::Parameters frag_params;
-                        frag_params.instance_data = instance_buffer_view;
+                    RHIBatchedShaderParameters batched_params;
+                    batched_params.SetParameters(ShaderResourceManager::GetInstance().GetShader<TestGBufferShaderVert>(), vert_params);
+                    batched_params.SetParameters(ShaderResourceManager::GetInstance().GetShader<TestGBufferShaderFrag>(), frag_params);
 
-                        RHIBatchedShaderParameters batched_params;
-                        batched_params.SetParameters(ShaderResourceManager::GetInstance().GetShader<TestGBufferShaderVert>(), vert_params);
-                        batched_params.SetParameters(ShaderResourceManager::GetInstance().GetShader<TestGBufferShaderFrag>(), frag_params);
+                    g_rhi->RHISetBatchedShaderParameters(gbuffer_pipeline_state, batched_params);
 
-                        g_rhi->RHISetBatchedShaderParameters(gbuffer_pipeline_state, batched_params);
+                    auto instance_idx = 0;
+                    // scene->ForEach([cmd_list, &instance_idx](Entity entity) {
+                    //     auto mesh_info = RenderableManager::Get().GetMeshInfo(entity);
+                    //     cmd_list->DrawIndexedInstanced(mesh_info.index_count, 1, mesh_info.index_offset, mesh_info.vertex_offset, instance_idx++);
+                    // });
+                    auto draw_cnt_offset = b_first_pass ? draw_count_offset : recheck_draw_count_offset;
+                    cmd_list->DrawIndexedIndirect(draw_indirect_buffer, 0, draw_count_buffer, draw_cnt_offset, draw_indirect_buffer->GetNumElement(), sizeof(DrawInstanceCmd));
+                });
 
-                        auto instance_idx = 0;
-                        // scene->ForEach([cmd_list, &instance_idx](Entity entity) {
-                        //     auto mesh_info = RenderableManager::Get().GetMeshInfo(entity);
-                        //     cmd_list->DrawIndexedInstanced(mesh_info.index_count, 1, mesh_info.index_offset, mesh_info.vertex_offset, instance_idx++);
-                        // });
-                        auto draw_cnt_offset = b_first_pass ? draw_count_offset : recheck_draw_count_offset;
-                        cmd_list->DrawIndexedIndirect(draw_indirect_buffer, 0, draw_count_buffer, draw_cnt_offset, draw_indirect_buffer->GetNumElement(), sizeof(DrawInstanceCmd));
-                    });
+            //     _rg.AddGraphicPass(
+            //         "Lighting Pass", [&](RenderGraph::Builder& builder) {
 
-                render_graph.AddGraphicPass(
-                    "Lighting Pass", [&](RenderGraph::Builder& builder) {
+            // auto normal = _rg.GetBlackBoard().GetHandle("normal");
+            // auto mat    = _rg.GetBlackBoard().GetHandle("mat");
+            // auto uv     = _rg.GetBlackBoard().GetHandle("uv");
+            // auto depth  = _rg.GetBlackBoard().GetHandle("depth");
+            // // auto position = render_graph.GetBlackBoard().GetHandle("position");
+            // auto output = _rg.ImportTexture("swapchain_output", virtual_viewport->GetBackBufferInfo().backbuffer_uav->GetTexture());
+            // builder.ReadTextures({normal,uv,mat,depth},RenderGraphTexture::Usage::SAMPLED).WriteTexture(output);
+            // builder.DeclareRenderPass({.color_attachments =  {output}}); }, [&](RenderPassContext& context) {
+            // auto* cmd_list = context.cmd_list;
+            // cmd_list->SetPipelineState(lighting_pipeline_state);
 
-            auto normal = render_graph.GetBlackBoard().GetHandle("normal");
-            auto mat = render_graph.GetBlackBoard().GetHandle("mat");
-            auto uv = render_graph.GetBlackBoard().GetHandle("uv");
-            auto depth = render_graph.GetBlackBoard().GetHandle("depth");
+            // //First Get all material instances
+            // //Material organize this materials
+            // //Material bind all resources for it's pass
+            // //Draw a full screen quad pass for each material type
+            // Moer::UnorderedSet<EMaterialType> material_types = {};
+            // Moer::UnorderedMap<EMaterialType,Moer::Array<MaterialInstanceRef>> material_instances;
+            // g_scene->ForEach([&](Entity entity) {
+            //     if (RenderableManager::Get().Contains(entity)) {
+
+            //          auto mi = RenderableManager::Get().GetMaterialInstance(entity);
+            //         material_types.insert(mi->GetMaterial()->GetType());
+            //         material_instances[mi->GetMaterial()->GetType()].push_back(mi);
+            //     }
+            // });
+
+            // auto mat_srv    = _rg.GetBlackBoard().GetTexture("mat")->GetSRV();
+            // auto normal_srv = _rg.GetBlackBoard().GetTexture("normal")->GetSRV();
+            // auto uv_srv     = _rg.GetBlackBoard().GetTexture("uv")->GetSRV();
+            // auto depth_srv  = _rg.GetBlackBoard().GetTexture("depth")->GetSRV();
+
+            // Camera*      camera = CameraManager::Get().Get(g_scene->GetMainCamera());
+            // LightingData lighting_data;
+            // lighting_data.inv_view_proj = Inverse(camera->GetProjectionMatrix() * camera->GetViewMatrix());
+            // lighting_data.light_count   = lights.size();
+
+            // for(auto type : material_types){
+            //     RHIBatchedShaderParameters parameters;
+            //     LightingShaderFrag::Parameters frag_params;
+            //     frag_params.lighting_data = lighting_data;
+            //     frag_params.light_data = light_buffer_view;
+            //     frag_params.depth_attach = depth_srv;
+            //     frag_params.gbuffer_uv = uv_srv;
+            //     frag_params.normal_attach = normal_srv;
+            //     frag_params.mat_attach = mat_srv;
+            //     parameters.SetParameters(ShaderResourceManager::GetInstance().GetShader<LightingShaderFrag>(),frag_params);
+
+            //     auto& mat_instances = material_instances[type];
+            //     MaterialRef material = mat_instances[0]->GetMaterial();
+            //     material->OrganizeInstancesAndBind(parameters,mat_instances);
+            //     g_rhi->RHISetBatchedShaderParameters(lighting_pipeline_state,parameters);
+
+            //     cmd_list->Draw(3, 1,0,0);
+            // } });
+
+            //     _rg.SetGraphOutput(_rg.GetBlackBoard().GetHandle("swapchain_output"));
+
+            // _rg.Execute({cmd_list, virtual_viewport->GetNextBackBufferExtent()});
+        };
+        EnqueueRenderTask(std::move(dispatch_gbuffer_pass));
+    }
+
+    void
+    DeferredRenderer::Impl::BasePass() {
+    }
+    void DeferredRenderer::Impl::LightingPass() {
+        auto dispatch_rdg = [&]() {
+            RenderGraph& rg = GetCurrentRenderGraph();
+            rg.AddGraphicPass(
+                "Lighting Pass", [&rg, this](RenderGraph::Builder& builder) {
+            auto normal = rg.GetBlackBoard().GetHandle("normal");
+            auto mat    = rg.GetBlackBoard().GetHandle("mat");
+            auto uv     = rg.GetBlackBoard().GetHandle("uv");
+            auto depth  = rg.GetBlackBoard().GetHandle("depth");
             // auto position = render_graph.GetBlackBoard().GetHandle("position");
-            auto output = render_graph.ImportTexture("swapchain_output",virtual_viewport->GetBackBufferInfo().backbuffer_uav->GetTexture());
-            builder.readTextures({normal,uv,mat,depth},RenderGraphTexture::Usage::SAMPLED).writeTexture(output);
-            builder.DeclareRenderPass({.color_attachments =  {output}}); }, [&](RenderPassContext& context) {
-            auto cmd_list = context.cmd_list;
+            auto output = rg.ImportTexture("swapchain_output", virtual_viewport->GetBackBufferInfo().backbuffer_uav->GetTexture());
+            builder.ReadTextures({normal,uv,mat,depth},RenderGraphTexture::Usage::SAMPLED).WriteTexture(output);
+            builder.DeclareRenderPass({.color_attachments =  {output}}); }, [&rg, this](RenderPassContext& context) {
+            auto* cmd_list = context.cmd_list;
             cmd_list->SetPipelineState(lighting_pipeline_state);
 
             //First Get all material instances
@@ -1056,17 +1175,17 @@ namespace Moer {
                     material_types.insert(mi->GetMaterial()->GetType());
                     material_instances[mi->GetMaterial()->GetType()].push_back(mi);
                 }
-            }); 
+            });
 
-             auto mat_srv = render_graph.GetBlackBoard().GetTexture("mat")->GetSRV();
-            auto normal_srv = render_graph.GetBlackBoard().GetTexture("normal")->GetSRV();
-           auto uv_srv = render_graph.GetBlackBoard().GetTexture("uv")->GetSRV();
-           auto depth_srv = render_graph.GetBlackBoard().GetTexture("depth")->GetSRV();
+            auto mat_srv    = rg.GetBlackBoard().GetTexture("mat")->GetSRV();
+            auto normal_srv = rg.GetBlackBoard().GetTexture("normal")->GetSRV();
+            auto uv_srv     = rg.GetBlackBoard().GetTexture("uv")->GetSRV();
+            auto depth_srv  = rg.GetBlackBoard().GetTexture("depth")->GetSRV();
 
-           Camera * camera = CameraManager::Get().Get(g_scene->GetMainCamera());     
-           LightingData lighting_data;
-           lighting_data.inv_view_proj = Inverse(camera->GetProjectionMatrix() * camera->GetViewMatrix());     
-           lighting_data.light_count = lights.size();
+            Camera*      camera = CameraManager::Get().Get(g_scene->GetMainCamera());
+            LightingData lighting_data;
+            lighting_data.inv_view_proj = Inverse(camera->GetProjectionMatrix() * camera->GetViewMatrix());
+            lighting_data.light_count   = lights.size();
                
             for(auto type : material_types){
                 RHIBatchedShaderParameters parameters;
@@ -1085,83 +1204,13 @@ namespace Moer {
                 g_rhi->RHISetBatchedShaderParameters(lighting_pipeline_state,parameters);
 
                 cmd_list->Draw(3, 1,0,0);
-                
             } });
 
-                render_graph.SetGraphOutput(render_graph.GetBlackBoard().GetHandle("swapchain_output"));
-            }
-
-            render_graph.Execute({cmd_list, virtual_viewport->GetNextBackBufferExtent()});
+            rg.SetGraphOutput(rg.GetBlackBoard().GetHandle("swapchain_output"));
+            rg.Execute({GetCurrentCmdList(), virtual_viewport->GetNextBackBufferExtent()});
         };
-        EnqueueRenderTask(std::move(dispatch_gbuffer_pass));
-    }
 
-    void DeferredRenderer::Impl::BasePass() {
-    }
-    void DeferredRenderer::Impl::LightingPass() {
-        // auto dispatch_rdg = [&]() {
-        //     RenderGraph render_graph;
-        //     auto*       cmd_list = render_cmd_lists[frame_counter % render_cmd_lists.size()];
-        //     render_graph.AddGraphicPass(
-        //         "Lighting Pass", [&](RenderGraph::Builder& builder) {
-        //     auto normal = render_graph.GetBlackBoard().GetHandle("normal");
-        //     auto mat = render_graph.GetBlackBoard().GetHandle("mat");
-        //                 auto depth = render_graph.GetBlackBoard().GetHandle("depth");
-        //     // auto position = render_graph.GetBlackBoard().GetHandle("position");
-        //     auto output = render_graph.ImportTexture("swapchain_output",virtual_viewport->GetBackBufferInfo().backbuffer_uav->GetTexture());
-        //     builder.readTextures({normal,mat,depth},RenderGraphTexture::Usage::SAMPLED).writeTexture(output);
-        //     builder.DeclareRenderPass({.color_attachments =  {output}}); }, [&](RenderPassContext& context) {
-        //     auto* cmd_list = context.cmd_list;
-        //     cmd_list->SetPipelineState(lighting_pipeline_state);
-
-        //     //First Get all material instances
-        //     //Material organize this materials
-        //     //Material bind all resources for it's pass
-        //     //Draw a full screen quad pass for each material type
-        //     Moer::UnorderedSet<EMaterialType> material_types = {};
-        //     Moer::UnorderedMap<EMaterialType,Moer::Array<MaterialInstanceRef>> material_instances;
-        //     g_scene->ForEach([&](Entity entity) {
-        //         if (RenderableManager::Get().Contains(entity)) {
-
-        //             auto mi = RenderableManager::Get().GetMaterialInstance(entity);
-        //             material_types.insert(mi->GetMaterial()->GetType());
-        //             material_instances[mi->GetMaterial()->GetType()].push_back(mi);
-        //         }
-        //     });
-
-        //     auto mat_srv    = render_graph.GetBlackBoard().GetTexture("mat")->GetSRV();
-        //     auto normal_srv = render_graph.GetBlackBoard().GetTexture("normal")->GetSRV();
-        //     auto depth_srv  = render_graph.GetBlackBoard().GetTexture("depth")->GetSRV();
-
-        //     Camera*      camera = CameraManager::Get().Get(g_scene->GetMainCamera());
-        //     LightingData lighting_data;
-        //     lighting_data.inv_view_proj = Inverse(camera->GetProjectionMatrix() * camera->GetViewMatrix());
-        //     lighting_data.light_count   = lights.size();
-
-        //     for(auto type : material_types){
-        //         RHIBatchedShaderParameters parameters;
-        //         LightingShaderFrag::Parameters frag_params;
-        //         frag_params.lighting_data = lighting_data;
-        //         frag_params.light_data = light_buffer_view;
-        //         frag_params.depth_attach = depth_srv;
-        //         frag_params.normal_attach = normal_srv;
-        //         frag_params.mat_attach = mat_srv;
-        //         parameters.SetParameters(ShaderResourceManager::GetInstance().GetShader<LightingShaderFrag>(),frag_params);
-
-        //         auto& mat_instances = material_instances[type];
-        //         MaterialRef material = mat_instances[0]->GetMaterial();
-        //         material->OrganizeInstancesAndBind(parameters,mat_instances);
-        //         g_rhi->RHISetBatchedShaderParameters(lighting_pipeline_state,parameters);
-
-        //         cmd_list->Draw(3, 1,0,0);
-
-        //     } });
-
-        //     render_graph.SetGraphOutput(render_graph.GetBlackBoard().GetHandle("swapchain_output"));
-        //     render_graph.Execute({cmd_list, virtual_viewport->GetNextBackBufferExtent()});
-        // };
-
-        // EnqueueRenderTask(std::move(dispatch_rdg)); //not ready yet
+        EnqueueRenderTask(std::move(dispatch_rdg));//not ready yet
     }
 
 }// namespace Moer

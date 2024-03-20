@@ -46,7 +46,8 @@ namespace Moer {
         bool          IsWriteResource(Node* pass_node, Node* resource_node) const;
         bool          IsReadResource(Node* pass_node, Node* resource_node) const;
         ~DepdencyGraph();
+        void          Reset();
         NodeContainer m_nodes;
         EdgeContainer m_edges;
     };
-}
+}// namespace Moer

@@ -101,4 +101,12 @@ namespace Moer {
             MoerDelete(edge);
         }
     }
+
+    void DepdencyGraph::Reset() {
+        for (auto& edge : m_edges) {
+            MoerDelete(edge);
+        }
+        m_edges.clear();
+        m_nodes.clear();
+    }
 }// namespace Moer
