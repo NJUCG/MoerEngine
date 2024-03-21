@@ -189,6 +189,8 @@ void RHIBatchedShaderParameters::SetParameters(RHIResource* resource, uint16_t s
 void RHIBatchedShaderParameters::SetParameters(RHIShader* shader, size_t _data_size, uint8_t* data_source) {
     SetParameters(shader->GetMetaShader(), _data_size, data_source);
 }
+RHIBatchedShaderParameters::~RHIBatchedShaderParameters() {
+}
 void RHIBatchedShaderParameters::SetParameters(const Shader* shader, size_t _data_size, uint8_t* data_source) {
     const auto& param_layout_info = shader->GetRootParametersLayoutInfo();
 

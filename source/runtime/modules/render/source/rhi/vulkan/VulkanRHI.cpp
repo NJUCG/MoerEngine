@@ -1561,24 +1561,25 @@ void VulkanRHIImpl::RHISetBatchedShaderParametersInner(RHIResource* _pso, const 
     auto* resource_cache = vk_pso->GetPipelineResourceCache();
 
     for (const auto& params : _batched_params.GetResourceParameters()) {
-        auto type = params.resource->GetResourceType();
+        auto  type     = params.resource->GetResourceType();
+        auto* resource = params.resource.Get();
         if (type == ERHIResourceType::RRT_SAMPLER) {
             // sampler
-            auto* vk_sampler = static_cast<VulkanRHISampler*>(params.resource);
+            auto* vk_sampler = static_cast<VulkanRHISampler*>(resource);
             VK_CHECK_NULLPTR(vk_sampler, "SetBatchedShaderParameter: sampler is nullptr!", break);
             resource_cache->SetSamplerState(params.space, params.slot, vk_sampler);
         } else {
             // view
-            auto* view = static_cast<RHIView*>(params.resource);
+            auto* view = static_cast<RHIView*>(resource);
             VK_CHECK_NULLPTR(view, "SetBatchedShaderParameter: resource view is nullptr!", break);
             if (view->IsCBV()) {
-                auto* vk_buffer = static_cast<RHICBV*>(params.resource);
+                auto* vk_buffer = static_cast<RHICBV*>(resource);
                 resource_cache->SetCBV(params.space, params.slot, vk_buffer);
             } else if (view->IsSRV()) {
-                auto* vk_srv = static_cast<RHISRV*>(params.resource);
+                auto* vk_srv = static_cast<RHISRV*>(resource);
                 resource_cache->SetSRV(params.space, params.slot, vk_srv);
             } else if (view->IsUAV()) {
-                auto* vk_uav = static_cast<RHIUAV*>(params.resource);
+                auto* vk_uav = static_cast<RHIUAV*>(resource);
                 resource_cache->SetUAV(params.space, params.slot, vk_uav);
             } else {
                 LOG_ERROR("RHISetBatchedShaderParameter: resource view is not a CBV, SRV or UAV!");

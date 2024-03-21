@@ -11,14 +11,14 @@ class ShaderParameterPtr : public AlignedPtr<TParamType, SHADER_PARAMETER_PTR_AL
 public:
     ShaderParameterPtr() {}
 
-    ShaderParameterPtr(const TParamType& Other)
-        : AlignedPtr<TParamType, SHADER_PARAMETER_PTR_ALIGNMENT>(Other) {}
+    ShaderParameterPtr(const TParamType& _other)
+        : AlignedPtr<TParamType, SHADER_PARAMETER_PTR_ALIGNMENT>(_other) {}
 
-    ShaderParameterPtr(const ShaderParameterPtr<TParamType>& Other)
-        : AlignedPtr<TParamType, SHADER_PARAMETER_PTR_ALIGNMENT>(Other) {}
+    ShaderParameterPtr(const ShaderParameterPtr<TParamType>& _other)
+        : AlignedPtr<TParamType, SHADER_PARAMETER_PTR_ALIGNMENT>(_other) {}
 
-    inline void operator=(const TParamType& Other) {
-        AlignedPtr<TParamType, SHADER_PARAMETER_PTR_ALIGNMENT>::ref = Other;
+    inline void operator=(const TParamType& _other) {
+        AlignedPtr<TParamType, SHADER_PARAMETER_PTR_ALIGNMENT>::ref = _other;
     }
 };
 
