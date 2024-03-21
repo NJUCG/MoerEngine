@@ -371,11 +371,11 @@ enum class EBufferUsageFlags : uint32_t {
 	*/
     ACCELERATION_STRUCTURE = 1 << 13,
 
-    VERTEX_BUFFER     = 1 << 14,
-    INDEX_BUFFER      = 1 << 15,
-    STRUCTURED_BUFFER = 1 << 16,
-    UNIFORM_BUFFER    = 1 << 17,
-    TEXTURE_BUFFER    = 1 << 18,
+    VERTEX_BUFFER  = 1 << 14,
+    INDEX_BUFFER   = 1 << 15,
+    STORAGE_BUFFER = 1 << 16,
+    UNIFORM_BUFFER = 1 << 17,
+    TEXTURE_BUFFER = 1 << 18,
     /** Buffer memory is allocated independently for multiple GPUs, rather than shared via driver aliasing */
     MULTI_GPU_ALLOCATION = 1 << 19,
 
@@ -470,6 +470,7 @@ enum ERHIResourceType {
     RRT_VIEWPORT,
     RRT_UNORDERED_ACCESS_VIEW,
     RRT_SHADER_RESOURCE_VIEW,
+    RRT_CONSTANT_BUFFER_VIEW,
     RRT_RAYTRACING_ACCELERATION_STRUCTURE,
     RRT_RAYTRACING_SCENE,
     RRT_STAGING_BUFFER,
@@ -526,6 +527,8 @@ enum ERHIPipelineStageFlags : uint32_t {
     PS_TASK_SHADER                      = 0x00080000,
     PS_MESH_SHADER                      = 0x00100000,
 };
+
+ENUM_BIT_OP_IMPL(ERHIPipelineStageFlags, FLAG)
 #pragma endregion
 
 #pragma region pixel format
@@ -680,9 +683,9 @@ enum class EShaderCodeResourceBindingType : uint8_t {
     TEXTURE_CUBE_ARRAY,
     TEXTURE_META_DATA,
 
-    BUFFER,
+    CONSTANT_BUFFER,
     STRUCTURED_BUFFER,
-    BYTE_ADDRESSED_BUFFER,
+    BYTE_ADDRESS_BUFFER,
     RAYTRACING_ACCELERATION_STRUCTURE,
 
     RW_TEXTURE_2D,
@@ -691,7 +694,6 @@ enum class EShaderCodeResourceBindingType : uint8_t {
     RW_TEXTURE_CUBE,
     RW_TEXTURE_META_DATA,
 
-    RW_BUFFER,
     RW_STRUCTURED_BUFFER,
     RW_BYTE_ADDRESSED_BUFFER,
 };
@@ -707,16 +709,15 @@ ENUM_STR_ELEMENT(TEXTURE_3D)
 ENUM_STR_ELEMENT(TEXTURE_CUBE)
 ENUM_STR_ELEMENT(TEXTURE_CUBE_ARRAY)
 ENUM_STR_ELEMENT(TEXTURE_META_DATA)
-ENUM_STR_ELEMENT(BUFFER)
+ENUM_STR_ELEMENT(CONSTANT_BUFFER)
 ENUM_STR_ELEMENT(STRUCTURED_BUFFER)
-ENUM_STR_ELEMENT(BYTE_ADDRESSED_BUFFER)
+ENUM_STR_ELEMENT(BYTE_ADDRESS_BUFFER)
 ENUM_STR_ELEMENT(RAYTRACING_ACCELERATION_STRUCTURE)
 ENUM_STR_ELEMENT(RW_TEXTURE_2D)
 ENUM_STR_ELEMENT(RW_TEXTURE_2D_ARRAY)
 ENUM_STR_ELEMENT(RW_TEXTURE_3D)
 ENUM_STR_ELEMENT(RW_TEXTURE_CUBE)
 ENUM_STR_ELEMENT(RW_TEXTURE_META_DATA)
-ENUM_STR_ELEMENT(RW_BUFFER)
 ENUM_STR_ELEMENT(RW_STRUCTURED_BUFFER)
 ENUM_STR_ELEMENT(RW_BYTE_ADDRESSED_BUFFER)
 END_ENUM_STR_DEFINITION(EShaderCodeResourceBindingType)
@@ -777,10 +778,8 @@ enum EGlobalBufferLifeScope {
 enum class ETextureUsageFlags : uint32_t {
     UNDEFINED = 0ULL,
 
-    SHADER_RESOURCE = 1 << 0,
-    CPU_VISIBLE     = 1 << 1,
-    TILLING_NONE    = 1 << 2,
-    DYNAMIC         = 1 << 3,
+    CPU_VISIBLE  = 1 << 1,
+    TILLING_NONE = 1 << 2,
 
     INPUT_ATTACHMENT         = 1 << 4,
     TRANSFER_SRC             = 1 << 5,
@@ -790,17 +789,17 @@ enum class ETextureUsageFlags : uint32_t {
     COLOR_ATTACHMENT         = 1 << 9,
     RESOLVE_ATTACHMENT       = 1 << 10,
     DEPTH_STENCIL_ATTACHMENT = 1 << 11,
-    TRANSIENT_ATTACHMENT     = 1 << 12,
+    TRANSIENT_ATTACHMENT     = 1 << 12,//MARK... not supportted yet
 
     VIDEO_DECODE = 1 << 13,
 
     FRAGMENT_DENSITY_MAP             = 1 << 14,
     FRAGMENT_SHADING_RATE_ATTACHMENT = 1 << 15,
 
-    VIDEO_ENCODE             = 1 << 16,
-    ATTACHMENT_FEEDBACK_LOOP = 1 << 17,
-    SRGB                     = 1 << 18,
-    Num                      = 19
+    VIDEO_ENCODE = 1 << 16,
+    // ATTACHMENT_FEEDBACK_LOOP = 1 << 17,
+    SRGB = 1 << 18,
+    Num  = 19
 };
 ENUM_BIT_OP_IMPL(ETextureUsageFlags, FLAG)
 
@@ -823,6 +822,8 @@ enum class ETextureAspectFlags : uint32_t {
     MEMORY_PLANE_2 = 1 << 9,
     MEMORY_PLANE_3 = 1 << 10
 };
+
+ENUM_BIT_OP_IMPL(ETextureAspectFlags, FLAG)
 
 /* various shading rate palette, VSR_{fragment_invocation_count}_{region_size}
  * @fragment_invocation_count means fragment shading invocation per region
@@ -967,11 +968,51 @@ struct ViewPort {
 };
 
 struct MeshInfo {
-    uint32_t vertex_offset;
-    uint32_t index_offset;
-    uint32_t vertex_count;
-    uint32_t index_count;
+    Moer::Vector3f center;
+    uint32_t       vertex_offset;
+    Moer::Vector3f extent;
+    uint32_t       index_offset;
+    uint32_t       vertex_count;
+    uint32_t       index_count;
+    uint32_t       meshlet_offset;
+    uint32_t       meshlet_count;
 };
+struct MeshBoundInfo {
+    Moer::Vector3f center;
+    float          padding;
+    Moer::Vector3f extent;
+    float          padding2;
+};
+
+namespace Moer {
+    struct MeshletDesc {
+        uint32_t vertex_offset;
+        uint32_t vertex_count;
+        uint32_t primitive_offset;
+        uint32_t primitive_count;
+    };
+
+    struct MeshletBound {
+        /* bounding sphere, useful for frustum and occlusion culling */
+        Vector3f center;
+        float    radius;
+
+        /* normal cone axis and cutoff, stored in 8-bit SNORM format; decode using x/127.0 */
+        int8_t cone_axis_s8[3];
+        int8_t cone_cutoff; /* = cos(angle/2) */
+
+        /* bool reject = dot(center - camera_position, cone_axis) >= cone_cutoff* length(center - camera_position) + radius; */
+        uint32_t padding[3];
+    };
+    struct DrawInstanceCmd {
+        uint32_t index_count;
+        uint32_t instance_count;
+        uint32_t first_index;
+        uint32_t vertex_offset;
+        uint32_t first_instance;
+        uint32_t padding[3];
+    };
+}// namespace Moer
 #pragma endregion
 
 #endif// !RHI_PLATFORM_COMMON_H

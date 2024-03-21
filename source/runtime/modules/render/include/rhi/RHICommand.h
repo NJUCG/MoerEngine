@@ -1,7 +1,9 @@
 #ifndef MOER_ENGINE_RHI_COMMAND_H
 #define MOER_ENGINE_RHI_COMMAND_H
 
+#include "math/Base.h"
 #include "misc/STL.h"
+#include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "RenderAPI.h"
 
@@ -61,6 +63,7 @@ class RHIGraphicsCommandList : public RHICommandListBase {
 public:
     virtual ~RHIGraphicsCommandList(){};
     virtual void SetPipelineState(RHIGraphicsPipelineState* _graphics_pso) = 0;
+    virtual void SetPipelineState(RHIComputePipelineState* _compute_pso)   = 0;
     // virtual void Open()                                                    = 0;
     // virtual void Close()                                                   = 0;
     // virtual void Reset()                                                   = 0;
@@ -80,6 +83,13 @@ public:
         uint64_t   _count_buffer_offset,
         uint32_t   _max_draw_count,
         uint32_t   _stride) = 0;
+
+    void Dispatch(Moer::Vector3i _group_count) {
+        Dispatch(_group_count.x, _group_count.y, _group_count.z);
+    }
+    virtual void Dispatch(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z) = 0;
+
+    virtual void DispatchIndirect(RHIBuffer* _buffer, uint64_t _offset) = 0;
 
     virtual void CopyBuffer(const RHICopyBufferInfo& _copy_info, RHIBuffer* _src, RHIBuffer* _dst)                            = 0;
     virtual void CopyTexture(const RHICopyTextureInfo& _copy_info, RHITexture* _src, RHITexture* _dst)                        = 0;
@@ -120,11 +130,11 @@ public:
 
     virtual void ClearDepthStencil() = 0;
     virtual void ClearUAVInt(
-        RHIUnorderedAccessView* _uav,
-        const Moer::Vector4i&   _values) = 0;
+        RHIUAV*               _uav,
+        const Moer::Vector4i& _values) = 0;
     virtual void ClearUAVFloat(
-        RHIUnorderedAccessView* _uav,
-        const Moer::Vector4f&   _values) = 0;
+        RHIUAV*               _uav,
+        const Moer::Vector4f& _values) = 0;
 
     virtual void BeginRenderPass(const RHIRenderPassInfo& _pass_info, const char* _pass_name) = 0;
     virtual void EndRenderPass()                                                              = 0;
@@ -192,6 +202,10 @@ public:
     virtual void SetPipelineBarrier(const RHIBarrierDependencyInfo& _dependency) = 0;
 };
 
+enum class ECmdListType {
+
+};
+
 struct RHISubmitInfo;
 
 class RHICommandQueue {
@@ -207,20 +221,22 @@ public:
 struct RHIFenceWaitInfo {
     uint64_t  wait_value;
     RHIFence* wait_fence;
+    ERHIPipelineStageFlags wait_stage;
 };
 
 struct RHIFenceSignalInfo {
     uint64_t  signal_value;
     RHIFence* signal_fence;
+    ERHIPipelineStageFlags signal_stage;
 };
 struct RHISubmitInfo {
 
-    void Wait(RHIFence* _fence, uint64_t _wait_value) {
-        wait_infos.emplace_back(_wait_value, _fence);
+    void Wait(RHIFence* _fence, uint64_t _wait_value, ERHIPipelineStageFlags _stage = ERHIPipelineStageFlags::PS_NONE) {
+        wait_infos.emplace_back(_wait_value, _fence, _stage);
     };
 
-    void Signal(RHIFence* _fence, uint64_t _signal_value) {
-        signal_infos.emplace_back(_signal_value, _fence);
+    void Signal(RHIFence* _fence, uint64_t _signal_value, ERHIPipelineStageFlags _stage = ERHIPipelineStageFlags::PS_NONE) {
+        signal_infos.emplace_back(_signal_value, _fence, _stage);
     };
 
     const Moer::Array<RHIFenceWaitInfo>&   GetWaitInfos() const { return wait_infos; }
@@ -230,4 +246,16 @@ private:
     Moer::Array<RHIFenceWaitInfo>   wait_infos;
     Moer::Array<RHIFenceSignalInfo> signal_infos;
 };
+
+namespace Moer {
+    //used for main thread recording cmds
+    class RHICommandList {
+    public:
+        RHICommandList();
+        struct Impl;
+
+    private:
+        Moer::UniquePtr<Impl> impl;
+    };
+}// namespace Moer
 #endif

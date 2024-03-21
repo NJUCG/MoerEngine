@@ -1,5 +1,6 @@
 #ifndef MOER_ENGINE_STL_H
 #define MOER_ENGINE_STL_H
+#include <cstring>
 #include <map>
 #include <set>
 #include <unordered_map>
@@ -10,6 +11,7 @@
 
 #include "MMemory.h"
 #include <memory>
+#include "m_vector/m_vector.h"
 
 #if USE_MIMALLOC
 // #if 0
@@ -23,9 +25,12 @@ template<typename T>
 using m_defualt_allocator = std::allocator<T>;
 #endif
 namespace Moer {
-    template<typename T, class allocator = m_defualt_allocator<T>>
-    using Array = std::vector<T, allocator>;
+    // template<typename T, class allocator = m_defualt_allocator<T>>
+    // using Array = std::vector<T, allocator>;
 
+    template<typename T, class allocator = m_defualt_allocator<T>>
+    using Array = m_vector<T, allocator>;
+    
     template<typename K, typename V, class Pr = std::less<K>, class allocator = m_defualt_allocator<std::pair<const K, V>>>
     using Map = std::map<K, V, Pr, allocator>;
 
@@ -40,6 +45,14 @@ namespace Moer {
 
     template<typename T, size_t N>
     using StaticArray = std::array<T, N>;
+
+    template<typename T, class Deleter = MoerDeleter>
+    using UniquePtr = std::unique_ptr<T, Deleter>;
+
+    template<typename T>
+    constexpr bool StringEqual(const T& a, const T& b) {
+        return std::strcmp(a.c_str(), b.c_str()) == 0;
+    }
 
 }// namespace Moer
 #endif//MOER_ENGINE_STL_H

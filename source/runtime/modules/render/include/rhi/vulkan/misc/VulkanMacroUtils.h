@@ -19,7 +19,7 @@
                << " at line " << __LINE__  \
                << "\n";                    \
             LOG_CRITICAL(ss.str());        \
-            assert(res == VK_SUCCESS);     \
+            assert(false);                 \
         }                                  \
     }
 

@@ -37,12 +37,9 @@ namespace Moer {
         PostInitRenderSystem();
         LOG_INFO("Engine Post Init Finished");
 
-        
-        //todo : in now we need to move scene file to bin/Debug/resource/scenes 
-        auto sponza_scene_path = ConfigManager::GetInstance().GetEditorResourcePath() /"scenes/sponza/Sponza01.gltf";
-        //之前用的场景的texture是ktx格式的 目前还不支持 所以要渲染带纹理的用这个场景 文件传到moerengine scenes仓库里了
-        //todo config this
-        sponza_scene_path = "E:/code/DirectX-Graphics-Samples/Samples/Desktop/D3D12Raytracing/src/D3D12RaytracingMiniEngineSample/Sponza/pbr/sponza2.gltf";
+        //todo : in now we need to move scene file to bin/Debug/resource/scenes
+        auto sponza_scene_path = ConfigManager::GetInstance().GetEditorResourcePath() / "scenes/sponza/Sponza01.gltf";
+        // auto sponza_scene_path = ConfigManager::GetInstance().GetEditorResourcePath() /"scenes/sponza/pbr/sponza2.gltf";
         Scene::SetDefaultScene(Resource::Gltf::Parser::LoadSceneFromFile(sponza_scene_path).release());
     }
     void Engine::Run() {

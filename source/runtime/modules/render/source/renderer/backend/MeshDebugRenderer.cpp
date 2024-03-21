@@ -32,7 +32,7 @@ public:
     END_ROOT_PARAMETER_DEFINITION(Parameters);
 };
 
-IMPLEMENT_SHADER_TYPE(MeshDebugRendererVertexShader, "meshdebug/MeshDebug.vert", "main", ST_VERTEX);
+IMPLEMENT_SHADER_TYPE(MeshDebugRendererVertexShader, "meshdebug/MeshDebugVert.hlsl", "main", ST_VERTEX);
 
 class MeshDebugRendererFragmentShader : public Shader {
     DEFINE_SHADER_TYPE(MeshDebugRendererFragmentShader, Shader, RENDER_API);
@@ -42,7 +42,7 @@ public:
     END_ROOT_PARAMETER_DEFINITION(Parameters);
 };
 
-IMPLEMENT_SHADER_TYPE(MeshDebugRendererFragmentShader, "meshdebug/MeshDebug.frag", "main", ST_FRAGMENT);
+IMPLEMENT_SHADER_TYPE(MeshDebugRendererFragmentShader, "meshdebug/MeshDebugFrag.hlsl", "main", ST_FRAGMENT);
 
 class MeshletCullShader : public Shader {
     DEFINE_SHADER_TYPE(MeshletCullShader, Shader, RENDER_API);
@@ -52,7 +52,7 @@ public:
     END_ROOT_PARAMETER_DEFINITION(Parameters);
 };
 
-IMPLEMENT_SHADER_TYPE(MeshletCullShader, "meshdebug/Cull.comp", "main", ST_COMPUTE);
+IMPLEMENT_SHADER_TYPE(MeshletCullShader, "meshdebug/Cull.hlsl", "main", ST_COMPUTE);
 
 namespace Moer {
     class MeshDebugRenderer::Impl {
@@ -64,7 +64,7 @@ namespace Moer {
         void SetOriginResolution(uint32_t _width, uint32_t _height);
         void SetPresentResolution(uint32_t _width, uint32_t _height);
 
-        RHIShaderResourceViewRef GetRendererOutput();
+        RHISRVRef GetRendererOutput();
 
     private:
         VirtualViewport* virtual_viewport;
@@ -127,151 +127,39 @@ namespace Moer {
         }
         render_fence = g_rhi->RHICreateFence({.usage = EFenceUsageFlags::TIMELINE});
 
-        //test draw triangle
-        static float vertices[] = {
-            -0.5f,
-            -0.5f,
-            0.0f,
-
-            0.f,
-            0.f,
-            1.f,
-            1.f,
-            0.f,
-            0.f,
-            0.f,
-            1.f,
-            0.f,
-
-            1.0f,
-            0.0f,
-
-            0.5f,
-            -0.5f,
-            0.0f,
-
-            0.f,
-            0.f,
-            1.f,
-            1.f,
-            0.f,
-            0.f,
-            0.f,
-            1.f,
-            0.f,
-
-            0.0f,
-            1.0f,
-
-            0.0f,
-            0.5f,
-            0.0f,
-
-            0.f,
-            0.f,
-            1.f,
-            1.f,
-            0.f,
-            0.f,
-            0.f,
-            1.f,
-            0.f,
-
-            1.0f,
-            1.0f};
-
-        uint32_t indexes[] = {0, 1, 2};
-        vertex_buffer      = g_rhi->RHICreateBuffer(
-            RHIBufferCreateInfo::Create()
-                .SetSize(sizeof(vertices))
-                .SetStride(sizeof(float) * 14)
-                .SetUsage(EBufferUsageFlags::VERTEX_BUFFER |
-                          EBufferUsageFlags::CPU_VISIBLE));
-        void* data = g_rhi->RHIMapBuffer(vertex_buffer, 0, sizeof(vertices));
-        memcpy(data, vertices, sizeof(vertices));
-        g_rhi->RHIUnmapBuffer(vertex_buffer);
-
-        index_buffer = g_rhi->RHICreateBuffer(
-            RHIBufferCreateInfo::Create()
-                .SetSize(sizeof(indexes))
-                .SetStride(sizeof(uint32_t) * 14)
-                .SetUsage(EBufferUsageFlags::INDEX_BUFFER |
-                          EBufferUsageFlags::CPU_VISIBLE));
-        data = g_rhi->RHIMapBuffer(index_buffer, 0, sizeof(indexes));
-        memcpy(data, indexes, sizeof(indexes));
-        g_rhi->RHIUnmapBuffer(index_buffer);
-
-        RHIBlendStateInitializer blend_init;
-        blend_init.attachments[0].color_blend_op         = BO_ADD;
-        blend_init.attachments[0].color_src_blend_factor = BF_SRC_ALPHA;
-        blend_init.attachments[0].color_dst_blend_factor = BF_ONE_MINUS_SRC_ALPHA;
-        blend_init.attachments[0].alpha_blend_op         = BO_ADD;
-        blend_init.attachments[0].alpha_src_blend_factor = BF_ONE;
-        blend_init.attachments[0].alpha_dst_blend_factor = BF_ONE_MINUS_SRC_ALPHA;
-        blend_init.attachments[0].color_write_mask       = CW_RGBA;
-
-        RHIBlendStateRef blend_state = g_rhi->RHICreateBlendState(blend_init);
-
-        RHIRasterizationStateInitializer rasterization_init{};
-        rasterization_init.cull_mode            = RCM_BACK;
-        rasterization_init.fill_mode            = FM_FILL;
-        rasterization_init.b_depth_clamp_enable = false;
-        rasterization_init.b_depth_bias         = false;
-        rasterization_init.b_enable_msaa        = false;
-
-        RHIRasterizationStateRef rasterization_state = g_rhi->RHICreateRasterizationState(rasterization_init);
-
-        RHIMultisampleStateInitializer multisample_init{};
-        multisample_init.sample_count            = 1;
-        RHIMultisampleStateRef multisample_state = g_rhi->RHICreateMultiSampleState(multisample_init);
-
-        RHIDepthStencilStateInitializer depth_stencil_init{};
-        depth_stencil_init.b_enable_depth_write     = true;
-        depth_stencil_init.depth_test_op            = CO_GREATER_OR_EQUAL;
-        RHIDepthStencilStateRef depth_stencil_state = g_rhi->RHICreateDepthStencilState(depth_stencil_init);
-
-        RHIGraphicsPipelineStateInitializer::TAttachmentFormats color_attachment_formats{};
-        color_attachment_formats[0] = EPixelFormat::PF_R8G8B8A8_SRGB;
-        RHIGraphicsPipelineStateInitializer::TAttachmentFlags color_attachment_flags{};
-        color_attachment_flags[0] = ETextureUsageFlags::COLOR_ATTACHMENT;
-
-        RHIGraphicsPipelineStateInitializer
-            init(blend_state,
-                 rasterization_state,
-                 multisample_state,
-                 depth_stencil_state,
-                 EPrimitiveTopology::TRIANGLE_LIST,
-                 1,
-                 color_attachment_formats,
-                 color_attachment_flags,
-                 PF_UNDEFINED,
-                 ETextureUsageFlags::UNDEFINED,
-                 {},
-                 0,
-                 1,
-                 false,
-                 VSR_NONE);
-
-        VertexInputStateInitializerList vertex_input_state_init_list{};
-        vertex_input_state_init_list[0] = VertexElement(0, 0, PF_R32G32B32_SFLOAT, 0, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX);
-        vertex_input_state_init_list[1] = VertexElement(0, 3 * sizeof(float), PF_R32G32B32_SFLOAT, 1, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX);
-        vertex_input_state_init_list[2] = VertexElement(0, 6 * sizeof(float), PF_R32G32B32_SFLOAT, 2, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX);
-        vertex_input_state_init_list[3] = VertexElement(0, 9 * sizeof(float), PF_R32G32B32_SFLOAT, 3, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX);
-        vertex_input_state_init_list[4] = VertexElement(0, 12 * sizeof(float), PF_R32G32_SFLOAT, 4, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX);
-
-        RHIVertexInputStateRef vertex_input_state = g_rhi->RHICreateVertexInputState(vertex_input_state_init_list);
-
         auto& shader_resource_manager = ShaderResourceManager::GetInstance();
 
-        RHIShaderRef              vertex_shader      = shader_resource_manager.GetShader<MeshDebugRendererVertexShader>();
-        RHIShaderRef              fragment_shader    = shader_resource_manager.GetShader<MeshDebugRendererFragmentShader>();
-        RHIShaderBoundStateInput& shader_stage_input = init.shader_stage;
+        RHIShaderRef vertex_shader   = shader_resource_manager.GetShader<MeshDebugRendererVertexShader>();
+        RHIShaderRef fragment_shader = shader_resource_manager.GetShader<MeshDebugRendererFragmentShader>();
 
-        shader_stage_input.p_vertex_input_state = vertex_input_state;
-        shader_stage_input.p_vertex_shader      = vertex_shader;
-        shader_stage_input.p_fragment_shader    = fragment_shader;
+        RHIVertexInputInfo vertex_input_info(
+            {
+                VertexElement(0, 0, PF_R32G32B32_SFLOAT, 0, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX),
+                VertexElement(0, 3 * sizeof(float), PF_R32G32B32_SFLOAT, 1, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX),
+                VertexElement(0, 6 * sizeof(float), PF_R32G32B32_SFLOAT, 2, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX),
+                VertexElement(0, 9 * sizeof(float), PF_R32G32B32_SFLOAT, 3, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX),
+                VertexElement(0, 12 * sizeof(float), PF_R32G32_SFLOAT, 4, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX),
+            });
 
-        pipeline_state = g_rhi->RHICreateGraphicsPipelineState(init);
+        // RHIVertexInputStateRef vertex_input_state = g_rhi->RHICreateVertexInputState(vertex_input_state_init_list);
+
+        // RHIShaderBoundStateInput& shader_stage_input = init.shader_stage;
+
+        RHIGraphicsShaderInputInfo shader_input_info =
+            RHIGraphicsShaderInputInfo::Create()
+                .SetVertexWorkFlow(std::move(vertex_input_info),
+                                   vertex_shader,
+                                   fragment_shader);
+
+        RHIGraphicsPSOCreateInfo pso_create_info =
+            RHIGraphicsPSOCreateInfo::Create()
+                .SetShaderStage(
+                    std::move(shader_input_info))
+                .SetDepthStencilInfo(RHIDepthStencilStateInfo::Preset<RHIConfig::DepthStencil::DEPTH_WRITE_LESS>())
+                .SetColorAttachmentInfo(
+                    {std::move(RHIColorAttachmentInfo::Preset(EPixelFormat::PF_R8G8B8A8_SRGB))});
+
+        pipeline_state = g_rhi->RHICreateGraphicsPSO(std::move(pso_create_info));
     }
 
     void MeshDebugRenderer::Impl::ShutDown() {
@@ -284,8 +172,8 @@ namespace Moer {
     void MeshDebugRenderer::Impl::DrawFrame() {
         //render and copy to backbuffer
         EnqueueRenderTask([this]() {
-            auto                      info = virtual_viewport->GetNextBackBuffer();
-            RHIUnorderedAccessViewRef uav  = virtual_viewport->GetNextBackBufferUAV(info.backbuffer_index);
+            auto      info = virtual_viewport->GetBackBufferInfo();
+            RHIUAVRef uav  = info.backbuffer_uav;
 
             RHIGraphicsCommandList* cmd_list = render_cmd_lists[frame_counter % render_cmd_lists.size()];
 
@@ -346,11 +234,9 @@ namespace Moer {
                 params.camera_data.inv_view = Inverse(camera_view);
                 params.camera_data.inv_proj = Inverse(camera_proj);
 
-
                 for (auto entity : scene->GetEntities()) {
                     if (auto primitive = RenderableManager::Get().GetRenderPrimitive(entity)) {
-                        const auto                                prim_model = TransformManager::Get().Get(entity).matrix;
-                        
+                        const auto prim_model = TransformManager::Get().Get(entity).matrix;
 
                         // Matrix4x4f                                 ubo[] = {prim_model, camera_view, camera_proj, Transpose(camera_proj * camera_view * prim_model)};
                         // memcpy(&params.scene_ubo, &ubo, sizeof(ubo));
@@ -414,7 +300,7 @@ namespace Moer {
         });
     }
 
-    RHIShaderResourceViewRef MeshDebugRenderer::Impl::GetRendererOutput() {
+    RHISRVRef MeshDebugRenderer::Impl::GetRendererOutput() {
         return virtual_viewport->GetPresentTextureSRV();
     }
 

@@ -2,6 +2,7 @@
 
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
+#include "rhi/RHICommon.h"
 #include "rhi/RHIResourceInitilizer.h"
 
 namespace Moer {
@@ -47,10 +48,8 @@ namespace Moer {
         uint32_t vertex_buffer_size = m_vertex_data->size() * sizeof(float);
         uint32_t index_buffer_size  = m_index_data->size() * sizeof(uint32_t);
 
-        RHIBufferCreateInfo vertex_buffer_create_info(vertex_buffer_size, sizeof(float), EBufferUsageFlags::VERTEX_BUFFER);
-        RHIBufferRef        vertex_buffer = g_rhi->RHICreateBuffer(vertex_buffer_create_info);
-        RHIBufferCreateInfo staging_vertex_buffer_create_info(vertex_buffer_size, sizeof(float), EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
-        RHIBufferRef        staging_vertex_buffer = g_rhi->RHICreateBuffer(staging_vertex_buffer_create_info);
+        RHIBufferRef vertex_buffer         = g_rhi->RHICreateBuffer<float>(vertex_buffer_size, EBufferUsageFlags::VERTEX_BUFFER | EBufferUsageFlags::TRANSFER_DST);
+        RHIBufferRef staging_vertex_buffer = g_rhi->RHICreateBuffer<float>(vertex_buffer_size, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
 
         auto* staging_vertex_buffer_mapped_ptr = static_cast<float*>(g_rhi->RHIMapBuffer(staging_vertex_buffer, 0, vertex_buffer_size));
         memcpy(staging_vertex_buffer_mapped_ptr, m_vertex_data->data(), vertex_buffer_size);
@@ -61,10 +60,8 @@ namespace Moer {
         vertex_copy_buffer_info.regions = vertex_buffer_region_array;
         cmd_list->CopyBuffer(vertex_copy_buffer_info, staging_vertex_buffer, vertex_buffer);
 
-        RHIBufferCreateInfo index_buffer_create_info(index_buffer_size, sizeof(uint32_t), EBufferUsageFlags::INDEX_BUFFER);
-        RHIBufferRef        index_buffer = g_rhi->RHICreateBuffer(index_buffer_create_info);
-        RHIBufferCreateInfo staging_index_buffer_create_info(index_buffer_size, sizeof(uint32_t), EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
-        RHIBufferRef        staging_index_buffer = g_rhi->RHICreateBuffer(staging_index_buffer_create_info);
+        RHIBufferRef index_buffer         = g_rhi->RHICreateBuffer<uint32_t>(index_buffer_size, EBufferUsageFlags::INDEX_BUFFER | EBufferUsageFlags::TRANSFER_DST);
+        RHIBufferRef staging_index_buffer = g_rhi->RHICreateBuffer<uint32_t>(index_buffer_size, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
 
         auto* staging_index_buffer_mapped_ptr = static_cast<uint32_t*>(g_rhi->RHIMapBuffer(staging_index_buffer, 0, index_buffer_size));
         memcpy(staging_index_buffer_mapped_ptr, m_index_data->data(), index_buffer_size);
@@ -153,56 +150,54 @@ namespace Moer {
         m_format = format;
         return *this;
     }
-    TextureBuilder& TextureBuilder::MipLevels(uint32_t mipLevels) noexcept {
-        m_mipLevels = mipLevels;
+    TextureBuilder& TextureBuilder::MipAndLayers(uint32_t mip_levels, uint32_t layer_levels, uint32_t* offsets) noexcept {
+        m_mip_levels   = mip_levels;
+        m_layer_levels = layer_levels;
+        m_offsets      = new uint32_t[mip_levels * layer_levels];
+        memcpy(m_offsets, offsets, mip_levels * layer_levels * sizeof(uint32_t));
         return *this;
     }
     TextureBuilder& TextureBuilder::CallBack(Callback callback) noexcept {
         m_callback = callback;
         return *this;
     }
-    TextureBuilder& TextureBuilder::Data(void* data) noexcept {
-        m_data = data;
+    TextureBuilder& TextureBuilder::Data(void* data, uint32_t data_size) noexcept {
+        m_data_size = data_size;
+        m_data      = data;
         return *this;
     }
     TextureBuilder::~TextureBuilder() noexcept {
         if (m_data)
             m_callback(m_data);
+        if (m_offsets)
+            delete[] m_offsets;
     }
 
     RHITextureRef TextureBuilder::Build() noexcept {
-        auto           texture      = g_rhi->RHICreateTexture(RHITextureCreateInfo::Create("GuiFontTexture2D", ETextureDimension::TEX_2D)
+        auto           texture   = g_rhi->RHICreateTexture(RHITextureCreateInfo::Create("GuiFontTexture2D", ETextureDimension::TEX_2D)
                                                    .SetNumSamples(1)
                                                    .SetExtent({static_cast<int>(m_width), static_cast<int>(m_height)})
-                                                   .SetNumMips(1)
-                                                   .SetArraySize(1)
+                                                   .SetNumMips(m_mip_levels)
+                                                   .SetArraySize(m_layer_levels)
                                                    .SetFormat(m_format)
                                                    .SetUsageFlags(ETextureUsageFlags::SAMPLED | ETextureUsageFlags::SRGB | ETextureUsageFlags::TRANSFER_DST)
                                                    .SetInitialLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED));
-        const uint32_t alignment    = 256;
-        uint32_t       upload_pitch = (m_width * 4 + alignment - 1u) & ~(alignment - 1u);
-        uint32_t       upload_size  = m_height * upload_pitch;
+        const uint32_t alignment = 256;
 
-        RHIBufferRef staging_buffer = g_rhi->RHICreateBuffer(
-            RHIBufferCreateInfo::Create(upload_size, 0, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE));
+        RHIBufferRef staging_buffer = g_rhi->RHICreateBuffer<std::byte>(
+            m_data_size, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
 
         assert(texture.Get() && staging_buffer.Get());
 
-        void* mapped = g_rhi->RHIMapBuffer(staging_buffer, 0, upload_size);
+        void* mapped = g_rhi->RHIMapBuffer(staging_buffer, 0, m_data_size);
         // for (int32_t y = 0; y < height; y++) {
         //     memcpy((void*)((uint8_t*)mapped + y * upload_pitch), pixels + y * width * 4, width * 4);
         // }
-        memcpy(mapped, m_data, upload_size);
+        memcpy(mapped, m_data, m_data_size);
 
         g_rhi->RHIUnmapBuffer(staging_buffer);
 
-        RHISubresourceRange range{ETextureAspectFlags::COLOR,
-                                  0,
-                                  1,
-                                  0,
-                                  1,
-                                  0,
-                                  1};
+        RHISubresourceRange range{ETextureAspectFlags::COLOR};
 
         RHITextureBarrierInfo tex_barriers[2];
 
@@ -233,16 +228,22 @@ namespace Moer {
         command_list->BeginRecording();
         command_list->SetPipelineBarrier(font_create_barriers);
 
-        RHISubresourceSlice        resource_slice(ETextureAspectFlags::COLOR, 0, 0, 1, 0, 1);
-        RHICopyBufferToTextureInfo copy_info(
-            ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST,
-            {0, 0, 0},
-            {(uint32_t)m_width, m_height, 1},
-            resource_slice,
-            0);
+        RHISubresourceSlice resource_slice(ETextureAspectFlags::COLOR, 0, 0, 1, 0, 1);
+        for (uint32_t layer = 0; layer < m_layer_levels; layer++) {
+            for (uint32_t mip = 0; mip < m_mip_levels; mip++) {
+                RHISubresourceSlice        resource_slice(ETextureAspectFlags::COLOR, mip, layer, m_layer_levels, 0, 1);
+                RHICopyBufferToTextureInfo copy_info(
+                    ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST,
+                    {0, 0, 0},
+                    {(uint32_t)m_width >> mip, m_height >> mip, 1},
+                    resource_slice,
+                    m_offsets[layer * m_mip_levels + mip]);
+                command_list->CopyBufferToTexture(copy_info, staging_buffer, texture);
+            }
+        }
 
         // 3. MARK: pRegion[0] is trying to copy 518144 bytes plus 0 offset to/from the VkBuffer (VkBuffer 0xcb1c7c000000001b[]) which exceeds the VkBuffer total size of 131072 bytes.
-        command_list->CopyBufferToTexture(copy_info, staging_buffer, texture);
+        // command_list->CopyBufferToTexture(copy_info, staging_buffer, texture);
 
         RHIBarrierDependencyInfo font_copy_barriers{};
         font_copy_barriers.texture_barriers.resize(1);
@@ -292,19 +293,56 @@ namespace Moer {
     std::pair<RHIBufferRef, RHIBufferRef> GpuSceneBufferBuilder::Build() {
         return m_impl->Build();
     }
+    RHIBufferRef GpuSceneBufferBuilder::CopyFrom(const void* data, uint32_t size) {
+        RHIBufferRef staging_buffer            = g_rhi->RHICreateBuffer<std::byte>(size, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
+        auto*        staging_buffer_mapped_ptr = static_cast<uint8_t*>(g_rhi->RHIMapBuffer(staging_buffer, 0, size));
+        memcpy(staging_buffer_mapped_ptr, data, size);
+        g_rhi->RHIUnmapBuffer(staging_buffer);
+
+        RHIBufferRef buffer = g_rhi->RHICreateBuffer<std::byte>(size, EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::STORAGE_BUFFER);
+
+        auto* cmd_list   = g_rhi->RHICreateCopyCommandList(g_rhi->RHIGetCurrentCommandAllocator());
+        auto* copy_queue = g_rhi->RHICreateCommandQueue(ECommandQueueType::COPY);
+        cmd_list->BeginRecording();
+
+        RHICopyBufferInfo copy_buffer_info({RHIBufferRegion{0, 0, size}});
+        cmd_list->CopyBuffer(copy_buffer_info, staging_buffer, buffer);
+
+        cmd_list->EndRecording();
+
+        RHIFenceRef fence = g_rhi->RHICreateFence({.usage = EFenceUsageFlags::BINARY});
+
+        RHISubmitInfo submit_info;
+
+        submit_info.Signal(fence, 1);
+
+        copy_queue->SubmitCommands(1, cmd_list, &submit_info);
+
+        copy_queue->WaitForQueueComplete();
+        return buffer;
+    }
+
+    RHIBufferRef GpuSceneBufferBuilder::CreateBufferWithData(EBufferUsageFlags usages, const void* data, uint32_t size) {
+        RHIBufferRef staging_buffer            = g_rhi->RHICreateBuffer<std::byte>(size, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
+        auto*        staging_buffer_mapped_ptr = static_cast<uint8_t*>(g_rhi->RHIMapBuffer(staging_buffer, 0, size));
+        memcpy(staging_buffer_mapped_ptr, data, size);
+        g_rhi->RHIUnmapBuffer(staging_buffer);
+
+        RHIBufferRef buffer = g_rhi->RHICreateBuffer<std::byte>(size, usages | EBufferUsageFlags::TRANSFER_DST);
+
+        return buffer;
+    }
 
     std::pair<RHIBufferRef, RHIBufferRef> GpuSceneBufferBuilder::Impl::Build() {
-        auto cmd_list   = g_rhi->RHICreateCopyCommandList(g_rhi->RHIGetCurrentCommandAllocator());
-        auto copy_queue = g_rhi->RHICreateCommandQueue(ECommandQueueType::COPY);
+        auto* cmd_list   = g_rhi->RHICreateCopyCommandList(g_rhi->RHIGetCurrentCommandAllocator());
+        auto* copy_queue = g_rhi->RHICreateCommandQueue(ECommandQueueType::COPY);
         cmd_list->BeginRecording();
 
         uint32_t vertex_buffer_size = m_vertex_data->size() * sizeof(float);
         uint32_t index_buffer_size  = m_index_data->size() * sizeof(uint32_t);
 
-        RHIBufferCreateInfo vertex_buffer_create_info(vertex_buffer_size, sizeof(float), EBufferUsageFlags::VERTEX_BUFFER);
-        RHIBufferRef        vertex_buffer = g_rhi->RHICreateBuffer(vertex_buffer_create_info);
-        RHIBufferCreateInfo staging_vertex_buffer_create_info(vertex_buffer_size, sizeof(float), EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
-        RHIBufferRef        staging_vertex_buffer = g_rhi->RHICreateBuffer(staging_vertex_buffer_create_info);
+        RHIBufferRef vertex_buffer         = g_rhi->RHICreateBuffer<float>(vertex_buffer_size, EBufferUsageFlags::VERTEX_BUFFER | EBufferUsageFlags::TRANSFER_DST);
+        RHIBufferRef staging_vertex_buffer = g_rhi->RHICreateBuffer<float>(vertex_buffer_size, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
 
         auto* staging_vertex_buffer_mapped_ptr = static_cast<float*>(g_rhi->RHIMapBuffer(staging_vertex_buffer, 0, vertex_buffer_size));
         memcpy(staging_vertex_buffer_mapped_ptr, m_vertex_data->data(), vertex_buffer_size);
@@ -315,10 +353,8 @@ namespace Moer {
         vertex_copy_buffer_info.regions = vertex_buffer_region_array;
         cmd_list->CopyBuffer(vertex_copy_buffer_info, staging_vertex_buffer, vertex_buffer);
 
-        RHIBufferCreateInfo index_buffer_create_info(index_buffer_size, sizeof(uint32_t), EBufferUsageFlags::INDEX_BUFFER);
-        RHIBufferRef        index_buffer = g_rhi->RHICreateBuffer(index_buffer_create_info);
-        RHIBufferCreateInfo staging_index_buffer_create_info(index_buffer_size, sizeof(uint32_t), EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
-        RHIBufferRef        staging_index_buffer = g_rhi->RHICreateBuffer(staging_index_buffer_create_info);
+        RHIBufferRef index_buffer         = g_rhi->RHICreateBuffer<uint32_t>(index_buffer_size, EBufferUsageFlags::INDEX_BUFFER | EBufferUsageFlags::TRANSFER_DST);
+        RHIBufferRef staging_index_buffer = g_rhi->RHICreateBuffer<uint32_t>(index_buffer_size, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
 
         auto* staging_index_buffer_mapped_ptr = static_cast<uint32_t*>(g_rhi->RHIMapBuffer(staging_index_buffer, 0, index_buffer_size));
         memcpy(staging_index_buffer_mapped_ptr, m_index_data->data(), index_buffer_size);

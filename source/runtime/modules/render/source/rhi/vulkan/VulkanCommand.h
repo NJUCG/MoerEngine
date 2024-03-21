@@ -8,6 +8,7 @@
 
 #include "VulkanRHIResource.h"
 
+#include <variant>
 #include <vulkan/vulkan.h>
 
 class VulkanDevice;
@@ -77,6 +78,7 @@ public:
     }
 
     void SetPipelineState(RHIGraphicsPipelineState* _graphics_pso) override;
+    void SetPipelineState(RHIComputePipelineState* _compute_pso) override;
     void BeginRecording() override;
     void EndRecording() override;
     void Reset() override;
@@ -95,6 +97,10 @@ public:
         uint64_t   _count_buffer_offset,
         uint32_t   _max_draw_count,
         uint32_t   _stride) override;
+
+    void Dispatch(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z) override;
+
+    void DispatchIndirect(RHIBuffer* _buffer, uint64_t _offset) override;
 
     void CopyBuffer(const RHICopyBufferInfo& _copy_info, RHIBuffer* _src, RHIBuffer* _dst) override;
     void CopyTexture(const RHICopyTextureInfo& _copy_info, RHITexture* _src, RHITexture* _dst) override;
@@ -135,11 +141,11 @@ public:
 
     void ClearDepthStencil() override;
     void ClearUAVInt(
-        RHIUnorderedAccessView* _uav,
-        const Moer::Vector4i&   _values) override;
+        RHIUAV*               _uav,
+        const Moer::Vector4i& _values) override;
     void ClearUAVFloat(
-        RHIUnorderedAccessView* _uav,
-        const Moer::Vector4f&   _values) override;
+        RHIUAV*               _uav,
+        const Moer::Vector4f& _values) override;
 
     void BeginRenderPass(const RHIRenderPassInfo& _pass_info, const char* _pass_name) override;
     void EndRenderPass() override;
@@ -164,13 +170,15 @@ protected:
     friend class VulkanRHICommandQueue;
 
 private:
-    VulkanRHIGraphicsPipelineState* m_current_pipeline_state = nullptr;
+    VulkanRHIGraphicsPipelineState*                                               m_current_pipeline_state;
+    std::variant<VulkanRHIGraphicsPipelineState*, VulkanRHIComputePipelineState*> current_pso;
 
 private:
     VkRenderingAttachmentInfo FromColorAttachmentInfo(const RHIRenderPassInfo::ColorAttachmentInfo& _color_attachment_info) const;
     VkRenderingAttachmentInfo FromDepthStencilAttachmentInfo(const RHIRenderPassInfo::DepthStencilAttachmentInfo& _depth_stencil_attachment_info) const;
 
     void PrepareDrawCommand();
+    void PrepareDispatch();
 
     // MARK: bound sets rely on corresponding command list, it maybe wrong when muti-threading recording.
     Moer::Array<VkDescriptorSet> m_bound_sets;
@@ -220,10 +228,14 @@ public:
 
     void SetPipelineBarrier(const RHIBarrierDependencyInfo& _dependency) override;
 
+protected:
+    void PrepareDispatch();
+
 private:
     void PrepareDispatchCommand();
     // MARK: bound sets rely on corresponding command list, it maybe wrong when muti-threading recording.
     Moer::Array<VkDescriptorSet> m_bound_sets;
+
 private:
     VulkanRHIComputePipelineState* m_current_pipeline_state = nullptr;
 };
@@ -241,7 +253,7 @@ public:
     void EndRecording() override;
     void Reset() override;
 
-    void TraceRay(uint32_t _width,uint32_t _height,uint32_t _depth) override;
+    void TraceRay(uint32_t _width, uint32_t _height, uint32_t _depth) override;
     void TraceRayIndirect() override;
 
     void CopyBuffer(const RHICopyBufferInfo& _copy_info, RHIBuffer* _src, RHIBuffer* _dst) override;

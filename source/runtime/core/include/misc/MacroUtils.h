@@ -25,9 +25,13 @@
 
 #if defined(_MSC_VER)
 #define ALIGNED_TYPE_DEF(Origin, Type, x) typedef __declspec(align(x)) Origin Type
+#define ALIGN_BEGIN(x)                    __declspec(align(x))
+#define ALIGN_END(x)
 #else
 #if defined(__GNUC__)
 #define ALIGNED_TYPE_DEF(Origin, Type, x) typedef Origin Type __attribute__((aligned(x)))
+#define ALIGN_BEGIN(x)
+#define ALIGN_END(x) __attribute__((aligned(x)))
 #endif
 #endif
 
@@ -43,8 +47,16 @@
 
 #define CHECK_AND_DELETE(ptr) \
     if (ptr != nullptr) {     \
-        delete ptr;           \
+        MoerDelete(ptr);      \
         ptr = nullptr;        \
+    }
+
+#define CHECK_ASSERT(value, msg, ...)       \
+    {                                       \
+        if (!value) {                       \
+            LOG_CRITICAL(msg, __VA_ARGS__); \
+            assert(false);                  \
+        }                                   \
     }
 
 #endif// !MACRO_H

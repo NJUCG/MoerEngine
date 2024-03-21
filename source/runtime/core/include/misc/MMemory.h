@@ -27,6 +27,13 @@ void MoerDelete(T* p) {
         Memory::Free(p);
     }
 }
+
+struct MoerDeleter {
+    template<typename T>
+    void operator()(T* p) {
+        MoerDelete(p);
+    }
+};
 namespace Moer {
     static inline bool IsAligned(void* p, size_t alignment) {
         assert(alignment != 0);

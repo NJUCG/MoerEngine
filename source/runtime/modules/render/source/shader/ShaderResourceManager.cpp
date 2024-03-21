@@ -210,8 +210,8 @@ void ShaderResourceManager::PrepareGlobalShaderResources() {
 
     static auto post_process = [this](ShaderCompilerOutput*& output) {
         if (!output->b_succeeded) {
-            ShaderMetaType* meta_type = ShaderMetaType::GetShaderMetaType(output->shader_name_hash);
-            std::string     error_msg = std::format("Shader {} compilation failed.", meta_type->GetName());
+            // ShaderMetaType* meta_type = ShaderMetaType::GetShaderMetaType(output->shader_name_hash);
+            std::string error_msg = std::format("Shader compilation failed.");
 
             std::for_each(output->errors.begin(), output->errors.end(), [&error_msg](const std::string& error) {
                 error_msg += error + "\n";

@@ -88,6 +88,6 @@ Vulkan封装后的RHI架构图暂时如下：
 - VulkanRHIGraphicsPipelineState
 - VulkanRHIComputePipelineState
 - VulkanRHITexture
-- VulkanRHIShaderResourceView
-- VulkanRHIUnorderedAccessView
+- VulkanRHITextureSRV
+- VulkanRHITextureUAV
 - VulkanRHIShader

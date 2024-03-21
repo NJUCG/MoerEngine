@@ -4,6 +4,7 @@
 #include "rhi/RHICommon.h"
 #include "shader/ShaderCommon.h"
 #include <stdint.h>
+#include <utility>
 #pragma region shader mutation
 
 struct ShaderMutationParameters {
@@ -79,11 +80,6 @@ struct ShaderMutationSparseUInt {
         assert(false && "no mutation type for given id");
         return 0;
     }
-
-    // static uint32_t GetMutationValueFromType(Type _value) {
-    //     assert(false && "no mutation value for given type");
-    //     return 0;
-    // }
 };
 
 template<uint32_t unique_value, uint32_t... values>
@@ -111,16 +107,86 @@ struct ShaderMutationSparseUInt<unique_value, values...> {
     }
 };
 
-template<typename... Types>
+// };
+
+template<class TTarget, typename TTuple, uint32_t index = 0>
+consteval uint32_t GetTypeIndex() {
+    if constexpr (std::is_same_v<TTarget, std::tuple_element_t<index, TTuple>>) {
+        return index;
+    } else {
+        return GetTypeIndex<TTarget, TTuple, index + 1>();
+    }
+    return index;
+}
+
+template<TShaderMutationBasicType... Types>
 struct TShaderMutationSet {
-    using Type = TShaderMutationSet<Types...>;
+    using Type       = TShaderMutationSet<Types...>;
+    using TypeSeries = std::tuple<Types...>;
+
+    static constexpr uint32_t mutation_count = std::tuple_size_v<TypeSeries> == 0 ? 1 : (1 * ... * Types::mutation_count);
+
+    constexpr static bool has_multiple_slot = mutation_count > 1;
+
+    TShaderMutationSet<Types...>() {
+        (... = (std::get<GetTypeIndex<Types, TypeSeries>()>(mutation_values) = Types::GetMutationTypeFromID(0), false));
+    }
+    explicit TShaderMutationSet(uint32_t _mutation_id)// mutation_value(TMutation::GetMutationTypeFromID(_mutation_id % TMutation::mutation_count)), next_set(_mutation_id / TMutation::mutation_count)
+    {
+        if constexpr (mutation_count > 1) {
+            assert(_mutation_id >= 0 && "invalid mutation id");
+            uint32_t temp_id = _mutation_id;
+
+            (..., (std::get<GetTypeIndex<Types, TypeSeries>()>(mutation_values) = Types::GetMutationTypeFromID(temp_id % Types::mutation_count), temp_id /= Types::mutation_count));
+        }
+    }
+
+    template<TShaderMutationBasicType TMutationToSet>
+    void SetMutation(typename TMutationToSet::Type _value) {
+
+        std::get<GetTypeIndex<TMutationToSet, TypeSeries>()>(mutation_values) = _value;
+    }
+
+    void SetCompileEnvironment(ShaderCompilerEnvironment& _environment) const {
+        if constexpr (has_multiple_slot) {
+            (..., (_environment.SetDefine(Types::mutation_name, GetMutationValue<Types>())));
+        }
+    }
+
+    uint32_t GetMutationID() const {
+        uint32_t multiple   = 1;
+        uint32_t temp_count = 0;
+        (... = (temp_count *= multiple, temp_count += Types::GetMutationID(std::get<GetTypeIndex<Types, TypeSeries>()>(mutation_values)), multiple = Types::mutation_count));
+
+        return temp_count;
+    }
+
+    static Type GetMutationTypeFromID(uint32_t _id) {
+        return Type(_id);
+    }
+
+    template<TShaderMutationBasicType TMutationToGet>
+    typename TMutationToGet::Type GetMutationValue() const {
+        return std::get<GetTypeIndex<TMutationToGet, TypeSeries>()>(mutation_values);
+    }
+
+    // TMutation::Type mutation_value;
+
+    std::tuple<typename Types::Type...> mutation_values;
+    // TNextSet        next_set;
+    //build a static linked list
+};
+
+template<>
+struct TShaderMutationSet<> {
+    using Type = TShaderMutationSet<>;
 
     constexpr static bool has_multiple_slot = true;
 
     constexpr static uint32_t mutation_count = 1;
 
-    TShaderMutationSet<Types...>() {}
-    explicit TShaderMutationSet<Types...>(uint32_t _mutation_id) {
+    TShaderMutationSet<>() {}
+    explicit TShaderMutationSet<>(uint32_t _mutation_id) {
         assert(_mutation_id == 0 && "invalid mutation id");
     }
 
@@ -146,57 +212,6 @@ struct TShaderMutationSet {
     static Type GetMutationTypeFromID(uint32_t _id) {
         return Type(_id);
     }
-};
-
-template<TShaderMutationBasicType TMutation, typename... Types>
-struct TShaderMutationSet<TMutation, Types...> {
-    using Type = TShaderMutationSet<TMutation, Types...>;
-
-    using TNextSet = TShaderMutationSet<Types...>;
-
-    static constexpr uint32_t mutation_count = TNextSet::mutation_count * TMutation::mutation_count;
-
-    constexpr static bool has_multiple_slot = true;
-
-    TShaderMutationSet<TMutation, Types...>() : mutation_value(TMutation::GetMutationTypeFromID(0)) {}
-    explicit TShaderMutationSet<TMutation, Types...>(uint32_t _mutation_id) : mutation_value(TMutation::GetMutationTypeFromID(_mutation_id % TMutation::mutation_count)), next_set(_mutation_id / TMutation::mutation_count) {
-        assert(_mutation_id >= 0 && "invalid mutation id");
-    }
-
-    template<TShaderMutationBasicType TMutationToGet>
-    typename TMutationToGet::Type GetMutationValue() const {
-        if constexpr (std::is_same_v<TMutationToGet, TMutation>) {
-            return TMutationToGet::GetMutationValueFromType(mutation_value);
-        } else {
-            return next_set.template GetMutationValue<TMutationToGet>();
-        }
-    }
-
-    template<TShaderMutationBasicType TMutationToSet>
-    void SetMutation(typename TMutationToSet::Type _value) {
-        if constexpr (std::is_same_v<TMutationToSet, TMutation>) {
-            mutation_value = TMutationToSet::GetMutationValueFromType(_value);
-        } else {
-            next_set.template SetMutation<TMutationToSet>(_value);
-        }
-    }
-
-    void SetCompileEnvironment(ShaderCompilerEnvironment& _environment) const {
-        _environment.SetDefine(TMutation::mutation_name, TMutation::GetMutationValueFromType(mutation_value));
-        next_set.SetCompileEnvironment(_environment);
-    }
-
-    uint32_t GetMutationID() const {
-        return TMutation::GetMutationID(mutation_value) + next_set.GetMutationID() * TMutation::mutation_count;
-    }
-
-    static Type GetMutationTypeFromID(uint32_t _id) {
-        return Type(_id);
-    }
-
-    TMutation::Type mutation_value;
-    TNextSet        next_set;
-    //build a static linked list
 };
 
 using TShaderMutationSetEmpty = TShaderMutationSet<>;
