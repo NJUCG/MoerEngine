@@ -45,8 +45,6 @@ public:
 };
 IMPLEMENT_SHADER_TYPE(TestRayClosestHitShader, "raytracingbasic/closesthit.rchit", "main", EShaderType::ST_RAY_CLOSESTHIT);
 
-
-
 void Init(int argc, char** argv) {
     g_rhi                           = new VulkanRHIImpl();
     std::filesystem::path workspace = argv[0];
@@ -72,7 +70,7 @@ void Init(int argc, char** argv) {
 
 RHIBufferRef CreateBufferFromData(uint64_t size, EBufferUsageFlags usage, void* data) {
     RHIBufferRef buffer = g_rhi->RHICreateBuffer<std::byte>(size, usage);
-    void* dst = g_rhi->RHIMapBuffer(buffer, 0, size);
+    void*        dst    = g_rhi->RHIMapBuffer(buffer, 0, size);
     std::memcpy(dst, data, size);
     g_rhi->RHIUnmapBuffer(buffer);
     return buffer;
@@ -89,8 +87,8 @@ void Test() {
     RHIBufferRef index_buffer  = g_rhi->RHICreateBuffer<uint32_t>(sizeof(index_data), EBufferUsageFlags::INDEX_BUFFER | EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT);
     RHIBufferRef vertex_buffer = g_rhi->RHICreateBuffer<float>(sizeof(vertex_data), EBufferUsageFlags::VERTEX_BUFFER | EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT);
 
-    Moer::Vector3f      clear_value = {0, 0, 0};
-    RHIBufferRef uniform_buffer = CreateBufferFromData(sizeof(clear_value), EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::UNIFORM_BUFFER,&clear_value);
+    Moer::Vector3f clear_value    = {0, 0, 0};
+    RHIBufferRef   uniform_buffer = CreateBufferFromData(sizeof(clear_value), EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::UNIFORM_BUFFER, &clear_value);
 
     RHIRayTracingTrianglesGeometry simple_triangle;
     simple_triangle.index_buffer         = index_buffer;
@@ -164,10 +162,10 @@ void Test() {
         .SetUsageFlags(ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::TRANSFER_SRC);
 
     //out_put texture
-    RHITextureRef tex      = g_rhi->RHICreateTexture(tex_info);
-    RHIUAVRef     tex_view = g_rhi->RHICreateTextureUAV(tex, PF_R8G8B8A8_UNORM, 0, 0, 1);
-    RHISRVRef     as_view  = g_rhi->RHICreateAccelerationStructureSRV(tlas);
-    RHICBVRef     buffer_view = g_rhi->RHICreateCBV(uniform_buffer,sizeof(clear_value), 0);
+    RHITextureRef tex         = g_rhi->RHICreateTexture(tex_info);
+    RHIUAVRef     tex_view    = g_rhi->RHICreateTextureUAV(tex, PF_R8G8B8A8_UNORM, 0, 0, 1);
+    RHISRVRef     as_view     = g_rhi->RHICreateAccelerationStructureSRV(tlas);
+    RHICBVRef     buffer_view = g_rhi->RHICreateCBV(uniform_buffer, sizeof(clear_value), 0);
 
     RHIBatchedShaderParameters batched_parameter{};
     batched_parameter.SetParameters(as_view, 0, 0);
@@ -216,6 +214,8 @@ void Test() {
 
     while (1) {
         command_list->Reset();
+        uint32_t ref_cnt = as_view->GetRefCount();
+        LOG_INFO("ref count: {}", ref_cnt);
         command_list->BeginRecording();
         command_list->SetPipelineState(rt_pipeline);
         command_list->TraceRay(1920, 1080, 1);

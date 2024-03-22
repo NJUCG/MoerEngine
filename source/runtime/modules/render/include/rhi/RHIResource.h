@@ -495,7 +495,7 @@ struct RHIShaderConstantParameter {
 };
 struct RHIAttachmentBindingParameter {
 };
-struct RHIBatchedShaderParameters {
+struct RENDER_API RHIBatchedShaderParameters {
     //CBV SRV UAV SAMPLER
     // template<typename TShader, concept_is_root_parameter_struct TRootParameter>
     // void SetParameters(const TRootParameter& params) {

@@ -227,7 +227,7 @@ private:
 };
 
 TVulkanDeviceExtensionArray VulkanDeviceExtension::GetMESupportedDeviceExtensions(const RHIInfo& _rhi_info) {
-    LOG_INFO("ray tracing = {}", _rhi_info.ray_tracing);
+    LOG_INFO("VulkanDeviceExtension: raytracing support, {}", _rhi_info.ray_tracing);
     TVulkanDeviceExtensionArray extensions;
 
 #define ADD_EXTENSION(ext_name, enabled, optional) extensions.emplace_back(std::make_shared<VulkanDeviceExtension>(ext_name, enabled, optional))
@@ -239,9 +239,9 @@ TVulkanDeviceExtensionArray VulkanDeviceExtension::GetMESupportedDeviceExtension
 
     // raytracing extensions
     ADD_EXTENSION(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME, _rhi_info.ray_tracing, VULKAN_EXTENSION_OPTIONAL);
-    // ADD_CUSTOM_EXTENSION(VulkanKHRAccelerationStructureExtension, _rhi_info.ray_tracing, VULKAN_EXTENSION_OPTIONAL);
-    // ADD_CUSTOM_EXTENSION(VulkanKHRRayTracingPipelineExtension, _rhi_info.ray_tracing, VULKAN_EXTENSION_OPTIONAL);
-    // ADD_CUSTOM_EXTENSION(VulkanKHRRayQueryExtension, _rhi_info.ray_tracing, VULKAN_EXTENSION_OPTIONAL);
+    ADD_CUSTOM_EXTENSION(VulkanKHRAccelerationStructureExtension, _rhi_info.ray_tracing, VULKAN_EXTENSION_OPTIONAL);
+    ADD_CUSTOM_EXTENSION(VulkanKHRRayTracingPipelineExtension, _rhi_info.ray_tracing, VULKAN_EXTENSION_OPTIONAL);
+    ADD_CUSTOM_EXTENSION(VulkanKHRRayQueryExtension, _rhi_info.ray_tracing, VULKAN_EXTENSION_OPTIONAL);
 
     // bindless extensions
     ADD_CUSTOM_EXTENSION(VulkanEXTDescriptorBufferExtension, VULKAN_EXTENSION_ENABLED, VULKAN_EXTENSION_OPTIONAL);
