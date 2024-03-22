@@ -1,5 +1,6 @@
 #ifndef MOER_ENGINE_GLOBAL_RENDER_RESOURCES_H
 #define MOER_ENGINE_GLOBAL_RENDER_RESOURCES_H
+#include "rhi/RHIResource.h"
 
 class RHITexture;
 class RHIGraphicsCommandList;
@@ -46,9 +47,9 @@ namespace Moer {
 
     class SamplerCache {
     public:
-        static SamplerCache&   Get();
-        RHISampler*            GetSampler(const RHISamplerCreateInfo& params);
-        RHISRV* GetTextureView(RHITexture* texture);
+        static SamplerCache& Get();
+        RHISampler*          GetSampler(const RHISamplerCreateInfo& params);
+        RHISRV*              GetTextureView(RHITexture* texture);
         ~SamplerCache();
 
     protected:
@@ -57,6 +58,24 @@ namespace Moer {
         class Impl;
         Impl* m_impl;
     };
+
+    class RenderGraphResourceCache {
+    public:
+        static RenderGraphResourceCache& Get();
+        RHITextureRef                    GetTexture(const std::string& name, Extent2D size, EPixelFormat format, ETextureUsageFlags usage, uint32_t mipLevels = 1, uint32_t arrayLayers = 1);
+        //   RHITextureRef GetBuffer()
+        // RHIBufferRef GetBuffer(const std::string & name,RenderGraphBuffer::Descriptor);
+        RHIUAVRef   GetUAV(RHITextureRef texture, EPixelFormat format = PF_UNDEFINED, uint32_t mip_num = 1, uint32_t array_min = 0, uint32_t array_num = 1);
+        RHISRVRef   GetSRV(RHITextureRef texture, EPixelFormat format = PF_UNDEFINED, uint32_t mip_min = 0, uint32_t mip_num = 1, uint32_t array_min = 0, uint32_t array_num = 1);
+        RHISampler* GetSampler(const RHISamplerCreateInfo& params);
+        ~RenderGraphResourceCache();
+
+    protected:
+        RenderGraphResourceCache();
+        class Impl;
+        Impl* m_impl{nullptr};
+    };
+
 }// namespace Moer
 
 #endif//MOER_ENGINE_GLOBAL_RENDER_RESOURCES_H

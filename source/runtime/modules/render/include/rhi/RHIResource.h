@@ -481,9 +481,9 @@ concept concept_is_root_parameter_struct = requires(RootParameter t) {
 };
 
 struct RHIShaderResourceParameter {
-    RHIResource* resource;
-    uint16_t     slot;
-    uint16_t     space;
+    RHIResourceRef resource;
+    uint16_t       slot;
+    uint16_t       space;
 };
 
 struct RHIShaderConstantParameter {
@@ -510,7 +510,8 @@ struct RHIBatchedShaderParameters {
         size_t data_size = sizeof(TRootParameter);
         SetParameters(shader->GetMetaShader(), data_size, (uint8_t*)&params);
     }
-    
+    RENDER_API ~RHIBatchedShaderParameters();
+
     RENDER_API void SetParameters(RHIResource* resource, uint16_t slot, uint16_t space);
 
     const uint8_t* GetConstData(uint32_t byte_offset) const {
@@ -536,6 +537,7 @@ private:
     Moer::Array<RHIShaderResourceParameter> resource_parameters;
     Moer::Array<RHIShaderConstantParameter> constant_parameters;
     Moer::Array<uint8_t>                    raw_data;
+    Moer::Array<RHIResource*>               resources_to_release;
 };
 //todo: may not inherit from RHIResource
 class RHIShaderRootParameterLayout : public RHIResource {
@@ -892,6 +894,16 @@ public:
     EPixelFormat GetUAVFormat() const {
         return GetInfo().uav_format;
     }
+    void SetLayout(const RHISubresourceRange& _subresource_range, ETextureLayout _layout) {
+        subresource_layouts[_subresource_range] = _layout;
+    }
+    ETextureLayout GetLayout(const RHISubresourceRange& _subresource_range) const {
+        auto it = subresource_layouts.find(_subresource_range);
+        if (it != subresource_layouts.end()) {
+            return it->second;
+        }
+        return TEXTURE_LAYOUT_UNDEFINED;
+    }
     RHIClearAttachment GetClearAttachment() const { return GetInfo().clear_attachment; }
 
 protected:
@@ -901,6 +913,18 @@ private:
     friend class RHITextureReference;
     explicit RHITexture(ERHIResourceType _type) : RHIViewableResource(_type) {}
     RHITextureInfo texture_info;
+    struct RHISubresourceRangeHash {
+        size_t operator()(const RHISubresourceRange& range) const {
+            size_t hash = 0;
+            HashCombine(hash, range.aspect);
+            HashCombine(hash, range.mip_index);
+            HashCombine(hash, range.num_mips);
+            HashCombine(hash, range.array_index);
+            HashCombine(hash, range.array_count);
+            return hash;
+        }
+    };
+    Moer::UnorderedMap<RHISubresourceRange, ETextureLayout, RHISubresourceRangeHash> subresource_layouts;
 };
 
 #pragma region acceleration structures
@@ -2136,10 +2160,10 @@ struct ColorAttachmementBinding {
           load_op(_load_op),
           mip_index(_mip_index),
           array_index(_array_index) {}
-    RHITexture* GetTexture() const {
+    RHITextureRef GetTexture() const {
         return texture;
     }
-    RHITexture* GetResolveTexture() const {
+    RHITextureRef GetResolveTexture() const {
         return resolve_texture;
     }
     EAttachmentLoadOp GetLoadOp() const {
@@ -2169,11 +2193,11 @@ struct ColorAttachmementBinding {
     }
 
 private:
-    ShaderParameterPtr<RHITexture*> texture         = nullptr;
-    ShaderParameterPtr<RHITexture*> resolve_texture = nullptr;
-    EAttachmentLoadOp               load_op         = EAttachmentLoadOp::NONE;
-    uint8_t                         mip_index       = 0;
-    uint16_t                        array_index     = 0;
+    ShaderParameterPtr<RHITextureRef> texture;
+    ShaderParameterPtr<RHITextureRef> resolve_texture;
+    EAttachmentLoadOp                 load_op     = EAttachmentLoadOp::NONE;
+    uint8_t                           mip_index   = 0;
+    uint16_t                          array_index = 0;
 };
 // static_assert(sizeof(ColorAttachmementBinding) == 16);
 
@@ -2187,7 +2211,7 @@ struct DepthStencilBinding {
           depth_load_op(_depth_load_op),
           stencil_load_op(_stencil_load_op) {}
 
-    RHITexture* GetTexture() const {
+    RHITextureRef GetTexture() const {
         return texture;
     }
     EAttachmentLoadOp GetDepthLoadOp() const {
@@ -2208,11 +2232,11 @@ struct DepthStencilBinding {
     }
 
 private:
-    ShaderParameterPtr<RHITexture*> texture         = nullptr;
-    EAttachmentLoadOp               depth_load_op   = EAttachmentLoadOp::NONE;
-    EAttachmentLoadOp               stencil_load_op = EAttachmentLoadOp::NONE;
+    ShaderParameterPtr<RHITextureRef> texture;
+    EAttachmentLoadOp                 depth_load_op   = EAttachmentLoadOp::NONE;
+    EAttachmentLoadOp                 stencil_load_op = EAttachmentLoadOp::NONE;
 };
-static_assert(sizeof(ShaderParameterPtr<RHITexture*>) % SHADER_PARAMETER_PTR_ALIGNMENT == 0);
+static_assert(sizeof(ShaderParameterPtr<RHITextureRef>) % SHADER_PARAMETER_PTR_ALIGNMENT == 0);
 
 struct alignas(SHADER_PARAMETER_STRUCTURE_ALIGNMENT) AttachmentBindingSlots {
 

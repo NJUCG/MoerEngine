@@ -307,7 +307,7 @@ void ImGUIRenderer::Impl::EndRenderFrame() {
                 texture_barriers_present.resize(1);
 
                 texture_barriers_present[0].SetDstTextureLayout(ETextureLayout::TEXTURE_LAYOUT_PRESENT_SRC);
-                texture_barriers_present[0].SetSrcTextureLayout(ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT);
+                texture_barriers_present[0].SetSrcTextureLayout(present_view->GetTexture()->GetLayout({ETextureAspectFlags::COLOR}));
                 texture_barriers_present[0].SetTexture(present_view->GetTexture());
                 texture_barriers_present[0].SetSrcStage(PS_COLOR_ATTACHMENT_OUTPUT);
                 texture_barriers_present[0].SetDstStage(PS_COLOR_ATTACHMENT_OUTPUT);
@@ -1026,7 +1026,7 @@ void GuiRenderWindow(ImGuiViewport* viewport, void*) {
 
         texture_barriers[0]
             .SetDstTextureLayout(ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT)
-            .SetSrcTextureLayout(ETextureLayout::TEXTURE_LAYOUT_PRESENT_SRC)
+            .SetSrcTextureLayout(present_view->GetTexture()->GetLayout({ETextureAspectFlags::COLOR}))
             .SetTexture(present_view->GetTexture())
             .SetSrcStage(PS_COLOR_ATTACHMENT_OUTPUT)
             .SetDstStage(PS_COLOR_ATTACHMENT_OUTPUT)
@@ -1078,6 +1078,7 @@ void GuiRenderWindow(ImGuiViewport* viewport, void*) {
         texture_barriers_present[0]
             .SetDstTextureLayout(ETextureLayout::TEXTURE_LAYOUT_PRESENT_SRC)
             .SetSrcTextureLayout(ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT)
+            .SetSrcQueueType(ECommandQueueType::GRAPHICS)
             .SetTexture(present_view->GetTexture())
             .SetSrcAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE)
             .SetSrcStage(PS_COLOR_ATTACHMENT_OUTPUT)

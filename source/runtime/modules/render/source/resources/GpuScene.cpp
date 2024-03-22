@@ -150,11 +150,13 @@ namespace Moer {
         m_format = format;
         return *this;
     }
-    TextureBuilder& TextureBuilder::MipAndLayers(uint32_t mip_levels, uint32_t layer_levels, uint32_t* offsets) noexcept {
+    TextureBuilder& TextureBuilder::MipAndLayers(uint32_t mip_levels, uint32_t layer_levels, const uint32_t* offsets, const Extent3D* extents) noexcept {
         m_mip_levels   = mip_levels;
         m_layer_levels = layer_levels;
         m_offsets      = new uint32_t[mip_levels * layer_levels];
+        m_mip_extents  = new Extent3D[mip_levels * layer_levels];
         memcpy(m_offsets, offsets, mip_levels * layer_levels * sizeof(uint32_t));
+        memcpy(m_mip_extents, extents, mip_levels * layer_levels * sizeof(Extent3D));
         return *this;
     }
     TextureBuilder& TextureBuilder::CallBack(Callback callback) noexcept {
@@ -171,6 +173,8 @@ namespace Moer {
             m_callback(m_data);
         if (m_offsets)
             delete[] m_offsets;
+        if (m_mip_extents)
+            delete[] m_mip_extents;
     }
 
     RHITextureRef TextureBuilder::Build() noexcept {
@@ -184,6 +188,7 @@ namespace Moer {
                                                    .SetInitialLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED));
         const uint32_t alignment = 256;
 
+        
         RHIBufferRef staging_buffer = g_rhi->RHICreateBuffer<std::byte>(
             m_data_size, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
 
@@ -197,7 +202,13 @@ namespace Moer {
 
         g_rhi->RHIUnmapBuffer(staging_buffer);
 
-        RHISubresourceRange range{ETextureAspectFlags::COLOR};
+        RHISubresourceRange range{ETextureAspectFlags::COLOR,
+                                  0,
+                                  m_mip_levels,
+                                  0,
+                                  m_layer_levels,
+                                  0,
+                                  1};
 
         RHITextureBarrierInfo tex_barriers[2];
 
@@ -221,21 +232,21 @@ namespace Moer {
 
         RHIGraphicsCommandList* command_list = g_rhi->RHICreateGraphicsCommandList(g_rhi->RHIGetCurrentCommandAllocator());
 
-        RHIBarrierDependencyInfo font_create_barriers{};
-        font_create_barriers.texture_barriers.resize(1);
-        font_create_barriers.texture_barriers[0] = tex_barriers[0];
+        RHIBarrierDependencyInfo texture_create_barrier{};
+        texture_create_barrier.texture_barriers.resize(1);
+        texture_create_barrier.texture_barriers[0] = tex_barriers[0];
 
         command_list->BeginRecording();
-        command_list->SetPipelineBarrier(font_create_barriers);
+        command_list->SetPipelineBarrier(texture_create_barrier);
 
-        RHISubresourceSlice resource_slice(ETextureAspectFlags::COLOR, 0, 0, 1, 0, 1);
+        // RHISubresourceSlice resource_slice(ETextureAspectFlags::COLOR, 0, 0, 1, 0, 1);
         for (uint32_t layer = 0; layer < m_layer_levels; layer++) {
             for (uint32_t mip = 0; mip < m_mip_levels; mip++) {
                 RHISubresourceSlice        resource_slice(ETextureAspectFlags::COLOR, mip, layer, m_layer_levels, 0, 1);
                 RHICopyBufferToTextureInfo copy_info(
                     ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST,
                     {0, 0, 0},
-                    {(uint32_t)m_width >> mip, m_height >> mip, 1},
+                    m_mip_extents[layer * m_mip_levels + mip],
                     resource_slice,
                     m_offsets[layer * m_mip_levels + mip]);
                 command_list->CopyBufferToTexture(copy_info, staging_buffer, texture);
@@ -245,11 +256,11 @@ namespace Moer {
         // 3. MARK: pRegion[0] is trying to copy 518144 bytes plus 0 offset to/from the VkBuffer (VkBuffer 0xcb1c7c000000001b[]) which exceeds the VkBuffer total size of 131072 bytes.
         // command_list->CopyBufferToTexture(copy_info, staging_buffer, texture);
 
-        RHIBarrierDependencyInfo font_copy_barriers{};
-        font_copy_barriers.texture_barriers.resize(1);
-        font_copy_barriers.texture_barriers[0] = tex_barriers[1];
+        RHIBarrierDependencyInfo texture_copy_barrier{};
+        texture_copy_barrier.texture_barriers.resize(1);
+        texture_copy_barrier.texture_barriers[0] = tex_barriers[1];
 
-        command_list->SetPipelineBarrier(font_copy_barriers);
+        command_list->SetPipelineBarrier(texture_copy_barrier);
 
         command_list->EndRecording();
 
@@ -293,13 +304,13 @@ namespace Moer {
     std::pair<RHIBufferRef, RHIBufferRef> GpuSceneBufferBuilder::Build() {
         return m_impl->Build();
     }
-    RHIBufferRef GpuSceneBufferBuilder::CopyFrom(const void* data, uint32_t size) {
+    RHIBufferRef GpuSceneBufferBuilder::CopyFrom(EBufferUsageFlags buffer_usage, const void* data, uint32_t size) {
         RHIBufferRef staging_buffer            = g_rhi->RHICreateBuffer<std::byte>(size, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
         auto*        staging_buffer_mapped_ptr = static_cast<uint8_t*>(g_rhi->RHIMapBuffer(staging_buffer, 0, size));
         memcpy(staging_buffer_mapped_ptr, data, size);
         g_rhi->RHIUnmapBuffer(staging_buffer);
 
-        RHIBufferRef buffer = g_rhi->RHICreateBuffer<std::byte>(size, EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::STORAGE_BUFFER);
+        RHIBufferRef buffer = g_rhi->RHICreateBuffer<std::byte>(size, EBufferUsageFlags::TRANSFER_DST | buffer_usage);
 
         auto* cmd_list   = g_rhi->RHICreateCopyCommandList(g_rhi->RHIGetCurrentCommandAllocator());
         auto* copy_queue = g_rhi->RHICreateCommandQueue(ECommandQueueType::COPY);

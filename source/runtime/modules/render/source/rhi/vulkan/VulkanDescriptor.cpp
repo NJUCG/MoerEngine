@@ -323,9 +323,9 @@ void VulkanDescriptorSetWriter::WriteAccelerationStructure(uint32_t _binding, Vk
     VK_CHECK_NULLPTR(write_as, "AccelerationStructure descriptor set write is nullptr!", return);
     CHECK_ASSERT((write_as->accelerationStructureCount == 1), "AccelerationStructure descriptor set write count is not 1!");
 
-    const_cast<VkWriteDescriptorSetAccelerationStructureKHR*>(write_as)->pAccelerationStructures = &as_info.as;
-
     m_hash_info_head[write_index].resource.as = as_info;
+
+    const_cast<VkWriteDescriptorSetAccelerationStructureKHR*>(write_as)->pAccelerationStructures = &m_hash_info_head[write_index].resource.as.as;
 }
 
 template<VkDescriptorType DescriptorType>

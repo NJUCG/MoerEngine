@@ -25,12 +25,12 @@ template<typename T>
 using m_defualt_allocator = std::allocator<T>;
 #endif
 namespace Moer {
-    // template<typename T, class allocator = m_defualt_allocator<T>>
-    // using Array = std::vector<T, allocator>;
-
     template<typename T, class allocator = m_defualt_allocator<T>>
-    using Array = m_vector<T, allocator>;
-    
+    using Array = std::vector<T, allocator>;
+
+    //template<typename T, class allocator = m_defualt_allocator<T>>
+    //using Array = m_vector<T, allocator>;
+
     template<typename K, typename V, class Pr = std::less<K>, class allocator = m_defualt_allocator<std::pair<const K, V>>>
     using Map = std::map<K, V, Pr, allocator>;
 

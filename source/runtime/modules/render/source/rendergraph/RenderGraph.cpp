@@ -1,1 +1,224 @@
 #include "rendergraph/RenderGraph.h"
+
+#include "log/LogSystem.h"
+#include "rendergraph/PassNode.h"
+namespace Moer {
+    RenderGraphTexture* BlackBoard::GetTexture(const std::string& name) const {
+        return m_renderGraph.GetTexture(GetHandle(name));
+    }
+    RenderGraphHandle BlackBoard::GetHandle(const std::string& name) const {
+        return m_handles.at(name);
+    }
+    void BlackBoard::PutHandle(const std::string& name, RenderGraphHandle handle) {
+        m_handles.emplace(name, handle);
+    }
+    BlackBoard::BlackBoard(RenderGraph& renderGraph) : m_renderGraph(renderGraph) {
+    }
+    RenderGraphBuffer* BlackBoard::GetBuffer(const std::string& name) const {
+        return m_renderGraph.GetBuffer(GetHandle(name));
+    }
+    RenderGraph::Builder& RenderGraph::Builder::ReadTexture(RenderGraphHandle input, RenderGraphTexture::Usage usage) {
+        m_renderGraph.ReadInternal(m_pass, input, static_cast<uint32_t>(usage));
+        return *this;
+    }
+    RenderGraph::Builder& RenderGraph::Builder::WriteTexture(RenderGraphHandle output, RenderGraphTexture::Usage usage) {
+        m_renderGraph.WriteInternal(m_pass, output, static_cast<uint32_t>(usage));
+        return *this;
+    }
+    RenderGraph::Builder& RenderGraph::Builder::ReadTextures(const std::vector<RenderGraphHandle>& inputs, RenderGraphTexture::Usage usage) {
+        for (auto input : inputs) {
+            m_renderGraph.ReadInternal(m_pass, input, static_cast<uint32_t>(usage));
+        }
+        return *this;
+    }
+    RenderGraph::Builder& RenderGraph::Builder::WriteTextures(const std::vector<RenderGraphHandle>& output, RenderGraphTexture::Usage usage) {
+        for (auto out : output) {
+            m_renderGraph.WriteInternal(m_pass, out, static_cast<uint32_t>(usage));
+        }
+        return *this;
+    }
+    RenderGraph::Builder& RenderGraph::Builder::ReadBuffer(RenderGraphHandle input, RenderGraphBuffer::Usage usage) {
+        m_renderGraph.ReadInternal(m_pass, input, static_cast<uint32_t>(usage));
+        return *this;
+    }
+    RenderGraph::Builder& RenderGraph::Builder::WriteBuffer(RenderGraphHandle output, RenderGraphBuffer::Usage usage) {
+        m_renderGraph.WriteInternal(m_pass, output, static_cast<uint32_t>(usage));
+        return *this;
+    }
+    void RenderGraph::Builder::DeclareRenderPass(const RenderGraphPassDescriptor& descriptor) {
+        if (descriptor.depth_stencil_attachment.isInitialized()) {
+            //Depth Attachment may be used in this pass,but not used in later pass
+            //to avoid cull depth attachment, we need to add a ref
+            m_renderGraph.GetResource(descriptor.depth_stencil_attachment)->AddRef();
+        }
+        auto pass = static_cast<GraphicsPassNode*>(m_pass);
+        pass->DeclareRenderPass(descriptor);
+    }
+    RenderGraph::Builder::Builder(PassNode* pass, RenderGraph& renderGraph) : m_pass(pass), m_renderGraph(renderGraph) {
+    }
+    RenderGraph::RenderGraph() : m_black_board(*this) {
+    }
+    void RenderGraph::Reset() {
+        m_dependency_graph.Reset();
+        m_black_board.Reset();
+        for (auto& resource : m_resources) {
+            MoerDelete(resource);
+        }
+        for (auto& pass : m_passes) {
+            MoerDelete(pass);
+        }
+        m_resources.clear();
+        m_passes.clear();
+    }
+    RenderGraphHandle RenderGraph::CreateTexture(const std::string& name, const RenderGraphTexture::Descriptor& descriptor) {
+        RenderGraphTexture* texture = MoerNew(RenderGraphTexture)(name, descriptor);
+        return AddTextureInternal(texture);
+    }
+    RenderGraphHandle RenderGraph::ImportTexture(const std::string& name, RHITextureRef rhi_texture) {
+        RenderGraphTexture* texture = MoerNew(RenderGraphTexture)(name, rhi_texture);
+        return AddTextureInternal(texture);
+    }
+    RenderGraphHandle RenderGraph::CreateBuffer(const std::string& name, const RenderGraphBuffer::Descriptor& descriptor) {
+        RenderGraphBuffer* buffer = MoerNew(RenderGraphBuffer)(name, descriptor);
+        return AddBufferInternal(buffer);
+    }
+    RenderGraphHandle RenderGraph::ImportBuffer(const std::string& name, RHIBufferRef rhi_buffer) {
+        RenderGraphBuffer* buffer = MoerNew(RenderGraphBuffer)(name, rhi_buffer);
+        return AddBufferInternal(buffer);
+    }
+    void RenderGraph::AddGraphicPass(const std::string& name, const GraphicSetup& setup, GraphicsExecute&& execute) {
+        RenderGraphPass* pass = MoerNew(RenderGraphPass)(std::move(execute));
+        auto             node = MoerNew(GraphicsPassNode)(name, pass);
+        m_passes.emplace_back(node);
+        Builder builder(node, *this);
+        setup(builder);
+    }
+    void RenderGraph::AddComputePass(const std::string& name, const ComputeSetUp& setup, ComputeExecute&& execute) {
+        //TODO
+    }
+    void RenderGraph::AddRayTracingPass(const std::string& name, const RayTracingSetup& setup, RaytracingExecute&& execute) {
+        //TODO
+    }
+    void RenderGraph::Execute(const RenderGraphExecuteConfig& config) {
+        Compile();
+        auto* cmd_list = config.cmd_list;
+        for (auto& pass : m_passes) {
+            for (auto& resource : pass->GetResourcesToCreate()) {
+                resource->Create();
+            }
+            pass->ResloveResourceUsage(cmd_list);
+            RenderPassContext pass_context{.graph = *this, .cmd_list = cmd_list, .render_extent = config.render_extent};
+            pass->Execute(pass_context);
+            for (auto& resource : pass->GetResourcesToDestroy()) {
+                resource->Destroy();
+            }
+        }
+    }
+    void RenderGraph::Compile() {
+        m_dependency_graph.Cull();
+
+        Moer::Array<PassNode*> available_passes;
+        for (auto& pass : m_passes) {
+            if (!pass->IsCulled()) {
+                available_passes.emplace_back(pass);
+            }
+        }
+
+        auto       first = available_passes.begin();
+        const auto last  = available_passes.end();
+
+        while (first != last) {
+            PassNode* const passNode = *first;
+            first++;
+            auto inResources  = m_dependency_graph.GetInComingNodes(passNode);
+            auto outResources = m_dependency_graph.GetOutGoingNodes(passNode);
+
+            for (const auto inResource : inResources) {
+                const auto resource = dynamic_cast<RenderGraphResource*>(inResource);
+                //Currently not suupport pass connect
+                assert(resource);
+
+                resource->create_pass  = resource->create_pass ? resource->create_pass : passNode;
+                resource->destroy_pass = passNode;
+                //   passNode->addTextureUsage(static_cast<const RenderGraphTexture*>(inResource), );
+            }
+            for (const auto outResource : outResources) {
+                const auto resource = dynamic_cast<RenderGraphResource*>(outResource);
+                assert(resource);
+                resource->create_pass  = resource->create_pass ? resource->create_pass : passNode;
+                resource->destroy_pass = passNode;
+                //passNode->addTextureUsage(static_cast<const RenderGraphTexture*>(inResource), texture->usage);
+            }
+
+            for (const auto edge : m_dependency_graph.getEdges(passNode)) {
+                auto resource = dynamic_cast<RenderGraphResource*>(edge->src == passNode ? edge->dst : edge->src);
+                passNode->AddResourceUsage(resource, edge->usage);
+            }
+        }
+
+        for (const auto& resource : m_resources) {
+            if (resource->GetRefCount() != 0) {
+                if (resource->create_pass)
+                    resource->create_pass->AddResourceToCreate(resource);
+                if (resource->destroy_pass)
+                    resource->destroy_pass->AddResourceToDestroy(resource);
+            } else {
+                LOG_INFO("Resource {0} is not used", resource->GetName());
+            }
+        }
+    }
+    BlackBoard& RenderGraph::GetBlackBoard() {
+        return m_black_board;
+    }
+    void BlackBoard::Reset() {
+        m_handles.clear();
+    }
+    bool RenderGraph::IsWriteResource(RenderGraphHandle handle, PassNode* node) const {
+        auto* resource = GetResource(handle);
+        return m_dependency_graph.IsWriteResource(node, resource);
+    }
+    bool RenderGraph::IsReadResource(RenderGraphHandle handle, PassNode* node) const {
+        auto* resource = GetResource(handle);
+        return m_dependency_graph.IsReadResource(node, resource);
+    }
+    RenderGraphTexture* RenderGraph::GetTexture(RenderGraphHandle handle) const {
+        return dynamic_cast<RenderGraphTexture*>(GetResource(handle));
+    }
+    RenderGraphBuffer* RenderGraph::GetBuffer(RenderGraphHandle handle) const {
+        return dynamic_cast<RenderGraphBuffer*>(GetResource(handle));
+    }
+    void RenderGraph::SetGraphOutput(RenderGraphHandle handle) {
+        GetResource(handle)->AddRef();
+    }
+    RenderGraph::~RenderGraph() {
+        for (auto& resource : m_resources) {
+            MoerDelete(resource);
+        }
+        for (auto& pass : m_passes) {
+            MoerDelete(pass);
+        }
+    }
+    void RenderGraph::WriteInternal(PassNode* pass, RenderGraphHandle output, uint32_t usage) {
+        GetResource(output)->ConnectForWrite(m_dependency_graph, pass, static_cast<uint32_t>(usage));
+    }
+    void RenderGraph::ReadInternal(PassNode* pass, RenderGraphHandle input, uint32_t usage) {
+        GetResource(input)->ConnectForRead(m_dependency_graph, pass, static_cast<uint32_t>(usage));
+    }
+    RenderGraphHandle RenderGraph::AddTextureInternal(RenderGraphTexture* texture) {
+        m_dependency_graph.RegisterNode(texture);
+        const RenderGraphHandle handle(static_cast<RenderGraphHandle::Index>(m_resources.size()));
+        m_black_board.PutHandle(texture->GetName(), handle);
+        m_resources.emplace_back(texture);
+        return handle;
+    }
+    RenderGraphHandle RenderGraph::AddBufferInternal(RenderGraphBuffer* buffer) {
+        m_dependency_graph.RegisterNode(buffer);
+        const RenderGraphHandle handle(static_cast<RenderGraphHandle::Index>(m_resources.size()));
+        m_black_board.PutHandle(buffer->GetName(), handle);
+        m_resources.emplace_back(buffer);
+        return handle;
+    }
+    RenderGraphResource* RenderGraph::GetResource(RenderGraphHandle handle) const {
+        return m_resources[handle.index];
+    }
+}// namespace Moer

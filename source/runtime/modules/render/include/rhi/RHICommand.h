@@ -84,6 +84,12 @@ public:
         uint32_t   _max_draw_count,
         uint32_t   _stride) = 0;
 
+    virtual void  Draw(
+        uint32_t _vertex_count,
+        uint32_t _instance_count,
+        uint32_t _start_vertex_location,
+        uint32_t _start_instance_location) = 0;
+
     void Dispatch(Moer::Vector3i _group_count) {
         Dispatch(_group_count.x, _group_count.y, _group_count.z);
     }

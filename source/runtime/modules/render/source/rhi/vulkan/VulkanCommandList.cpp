@@ -290,6 +290,7 @@ void VulkanRHICommandListBase::SetPipelineBarrier(const RHIBarrierDependencyInfo
         image_barriers[i].subresourceRange.levelCount     = _dependency.texture_barriers[i].sub_resource_range.num_mips == RHISubresourceRange::s_all ? VK_REMAINING_MIP_LEVELS : _dependency.texture_barriers[i].sub_resource_range.num_mips;// 1. MARK... levelCount + baseMipLevel must <= image mip levels
         image_barriers[i].subresourceRange.baseArrayLayer = _dependency.texture_barriers[i].sub_resource_range.array_index;
         image_barriers[i].subresourceRange.layerCount     = _dependency.texture_barriers[i].sub_resource_range.array_count == RHISubresourceRange::s_all ? VK_REMAINING_ARRAY_LAYERS : _dependency.texture_barriers[i].sub_resource_range.array_count;// 1. MARK... layerCount + baseArrayLayer must <= image array layers
+        _dependency.texture_barriers[i].p_texture->SetLayout(_dependency.texture_barriers[i].sub_resource_range,_dependency.texture_barriers[i].dst_layout);
     }
 
     VkDependencyInfo dependency_info{};
@@ -401,6 +402,12 @@ void VulkanRHIGraphicsCommandList::DrawIndexedIndirect(RHIBuffer* _argument_buff
         _count_buffer_offset,
         _max_draw_count,
         _stride);
+}
+
+void VulkanRHIGraphicsCommandList::Draw(uint32_t _vertex_count, uint32_t _instance_count, uint32_t _start_vertex_location, uint32_t _start_instance_location){
+    PrepareDrawCommand();
+    Moer::RHI::Vulkan::DebugUtils::CmdInsertLabel(m_command_buffer, "Draw", {});
+    vkCmdDraw(m_command_buffer, _vertex_count, _instance_count, _start_vertex_location, _start_instance_location);
 }
 
 void VulkanRHIGraphicsCommandList::Dispatch(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z) {

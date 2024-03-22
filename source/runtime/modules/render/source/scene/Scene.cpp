@@ -88,6 +88,9 @@ namespace Moer {
     Array<Entity> Scene::GetCameras() const noexcept {
         return m_impl->GetCameras();
     }
+    Entity Scene::GetMainCamera() const noexcept {
+        return GetCameras()[0];
+    }
 
     void Scene::ForEach(std::function<void(Entity)> func) const noexcept {
         m_impl->ForEach(std::move(func));

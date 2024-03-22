@@ -35,9 +35,11 @@ namespace Moer {
         //call on main thread
         void OnResize(Moer::Vector2i extent);
 
+        //call from render thread
+        Extent3D                          GetNextBackBufferExtent();
+
         VirtualViewportBackBufferInfo GetBackBufferInfo();
 
-        RHIUAVRef GetDepthBufferUAV();
 
         void Present(RHIFenceRef _render_fence);
 
