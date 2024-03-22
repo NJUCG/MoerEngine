@@ -876,6 +876,7 @@ RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(co
     Moer::Array<VkPushConstantRange>              push_constant_ranges;
     // find max set index
     int8_t max_set = -1;
+    int    sz      = shader_info_list.size();
     for (const auto* meta_shader : shader_info_list) {
         auto layout_infos = meta_shader->GetRootParametersLayoutInfo().GetBindingInfo();
         for (const auto& info : layout_infos) {
@@ -888,7 +889,7 @@ RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(co
     for (const auto* meta_shader : shader_info_list) {
         auto binding_infos  = meta_shader->GetRootParametersLayoutInfo().GetBindingInfo();
         auto constant_infos = meta_shader->GetRootParametersLayoutInfo().GetConstantsInfo();
-
+        
         for (const auto& info : binding_infos) {
             VkDescriptorSetLayoutBinding binding{};
             binding.binding         = info.slot;
@@ -1203,7 +1204,6 @@ void VulkanRHIImpl::RHIBatchedBuildRayTracingBLAS(int batch_size, const RHIRayTr
             batchSize = 0;
             //we need compaction
             if (query_pool) {
-                cb = BeginSingleTimeCommands(vk_graphic_command_pool);
                 Moer::Array<VkDeviceSize> compacted_sizes(indices.size());
                 vkGetQueryPoolResults(m_device->GetDevice(),
                                       query_pool,
@@ -1213,12 +1213,12 @@ void VulkanRHIImpl::RHIBatchedBuildRayTracingBLAS(int batch_size, const RHIRayTr
                                       compacted_sizes.data(),
                                       sizeof(VkDeviceSize),
                                       VK_QUERY_RESULT_WAIT_BIT);
+                cb = BeginSingleTimeCommands(vk_graphic_command_pool);
                 Moer::Array<VkAccelerationStructureKHR> vk_compacted_ases(indices.size(), VK_NULL_HANDLE);
                 Moer::Array<RHIBufferRef>               compacted_buffers(indices.size(), nullptr);
                 for (int i = 0; i < indices.size(); ++i) {
-                    RHIBufferCreateInfo bf_ci{};
-                    bf_ci.SetSize(compacted_sizes[i]).SetStride(compacted_sizes[i]).SetUsage(EBufferUsageFlags::ACCELERATION_STRUCTURE);
-                    compacted_buffers[i] = RHICreateBuffer(bf_ci);
+                    RHIBufferCreateInfo bf_ci = RHIBufferCreateInfo::Create(compacted_sizes[i], compacted_sizes[i], EBufferUsageFlags::ACCELERATION_STRUCTURE);
+                    compacted_buffers[i]      = RHICreateBufferInner(bf_ci);
                     VkAccelerationStructureCreateInfoKHR as_ci{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
                     as_ci.type   = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
                     as_ci.buffer = static_cast<VulkanRHIBuffer*>(compacted_buffers[i].Get())->GetHandle();
@@ -1495,11 +1495,17 @@ RHISRVRef VulkanRHIImpl::RHICreateSRVInner(RHIViewableResource* _resource, const
 
         return RHISRVRef(vk_srv);
     };
-
+    auto create_acceleration_structure_srv = [this, _resource, &_view_info]() {
+        VulkanRHIAccelerationStructureSRV* vk_srv = MoerNew(VulkanRHIAccelerationStructureSRV)(m_device, _resource, _view_info);
+        return RHISRVRef(vk_srv);
+    };
     if (_view_info.IsBuffer()) {
         return create_buffer_srv();
     }
-    return create_texture_srv();
+    if (_view_info.IsTexture()) {
+        return create_texture_srv();
+    }
+    return create_acceleration_structure_srv();
 }
 
 RHIUAVRef VulkanRHIImpl::RHICreateUAVInner(RHIViewableResource* _resource, const RHIViewInfo& _view_info) {
@@ -1562,7 +1568,11 @@ RHIUAVRef VulkanRHIImpl::RHICreateUAVInner(RHIViewableResource* _resource, const
     if (_view_info.IsBuffer()) {
         return create_buffer_uav();
     }
-    return create_texture_uav();
+    if (_view_info.IsTexture()) {
+        return create_texture_uav();
+    }
+    LOG_CRITICAL("Acceleration Structure UAV is not implemented yet");
+    return nullptr;
 }
 
 RHICBVRef VulkanRHIImpl::RHICreateCBV(RHIBuffer* _buffer, uint64_t _byte_size, uint64_t _offset) {

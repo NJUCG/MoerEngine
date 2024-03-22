@@ -100,3 +100,7 @@ RHIUAVRef RHI::RHICreateTextureUAV(RHITexture*  _texture,
                                  .SetDimension(_texture->GetDimension())
                                  .SetFormat(_format));
 }
+
+RHISRVRef RHI::RHICreateAccelerationStructureSRV(RHIRayTracingTLAS* _as) {
+    return RHICreateSRVInner(_as, RHIViewInfo::CreateAcclerationStructureSRVInfo());
+}

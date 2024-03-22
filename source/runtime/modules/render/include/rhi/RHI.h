@@ -174,6 +174,9 @@ public:
         uint32_t     _array_index = 0,
         uint32_t     _array_size  = 1);
 
+    RHISRVRef RHICreateAccelerationStructureSRV(
+        RHIRayTracingTLAS* _resource);
+
     virtual RHICommandQueue* RHICreateCommandQueue(ECommandQueueType type) = 0;
     // DX12 only: _initial_state
     // virtual RHIGraphicsCommandList* CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state = nullptr)                                     = 0;

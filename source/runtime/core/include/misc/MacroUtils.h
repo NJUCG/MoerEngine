@@ -54,7 +54,7 @@
 #define CHECK_ASSERT(value, msg, ...)       \
     {                                       \
         if (!value) {                       \
-            LOG_CRITICAL(msg, __VA_ARGS__); \
+            LOG_CRITICAL(msg,##__VA_ARGS__); \
             assert(false);                  \
         }                                   \
     }
