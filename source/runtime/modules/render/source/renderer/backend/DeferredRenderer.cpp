@@ -327,7 +327,7 @@ namespace Moer {
             VertexElement(0, 3 * sizeof(float), PF_R32G32B32_SFLOAT, 1, sizeof(float) * 11, EVertexInputRate::VIR_VERTEX),
             VertexElement(0, 6 * sizeof(float), PF_R32G32B32_SFLOAT, 2, sizeof(float) * 11, EVertexInputRate::VIR_VERTEX),
             VertexElement(0, 9 * sizeof(float), PF_R32G32_SFLOAT, 3, sizeof(float) * 11, EVertexInputRate::VIR_VERTEX),
-            VertexElement(1, 0 * sizeof(float), PF_R32_UINT, 4, sizeof(uint32_t), EVertexInputRate::VIR_INSTANCE));
+            VertexElement(1, 11 * sizeof(float), PF_R32_UINT, 4, sizeof(uint32_t), EVertexInputRate::VIR_INSTANCE));
         // RHIVertexInputStateRef vertex_input_state = g_rhi->RHICreateVertexInputState(vertex_input_state_init_list);
 
         auto& shader_resource_manager = ShaderResourceManager::GetInstance();
@@ -442,7 +442,7 @@ namespace Moer {
                 VertexElement(0, 3 * sizeof(float), PF_R32G32B32_SFLOAT, 1, sizeof(float) * 11, EVertexInputRate::VIR_VERTEX),
                 VertexElement(0, 6 * sizeof(float), PF_R32G32B32_SFLOAT, 2, sizeof(float) * 11, EVertexInputRate::VIR_VERTEX),
                 VertexElement(0, 9 * sizeof(float), PF_R32G32_SFLOAT, 3, sizeof(float) * 11, EVertexInputRate::VIR_VERTEX),
-                VertexElement(1, 0 * sizeof(float), PF_R32_UINT, 4, sizeof(uint32_t), EVertexInputRate::VIR_INSTANCE));
+                VertexElement(1, 11 * sizeof(float), PF_R32_UINT, 4, sizeof(uint32_t), EVertexInputRate::VIR_INSTANCE));
             // RHIVertexInputStateRef vertex_input_state = g_rhi->RHICreateVertexInputState(vertex_input_state_init_list);
 
             RHIGraphicsShaderInputInfo gbuffer_shader_input_info = RHIGraphicsShaderInputInfo::Create().SetVertexWorkFlow(vertex_input_info, gbuffer_vert_shader, gbuffer_frag_shader);
@@ -593,7 +593,6 @@ namespace Moer {
         auto* const scene = g_scene;
 
         auto&& sync_command_list = [this]() {
-            int                     i        = render_cmd_lists.size();
             RHIGraphicsCommandList* cmd_list = GetCurrentCmdList();
             cmd_list->Reset();
             cmd_list->BeginRecording();
@@ -613,9 +612,20 @@ namespace Moer {
             .SetDstStage(ERHIPipelineStageFlags::PS_TRANSFER);
 
         auto&& reset_counter_buffer = [this, copy_info = std::move(copy_info), buffer_barrier(std::move(counters_barrier))]() {
-            RHIGraphicsCommandList* cmd_list = render_cmd_lists[frame_counter % render_cmd_lists.size()];
-            cmd_list->SetPipelineBarrier(buffer_barrier);
-            cmd_list->CopyBuffer(copy_info, zero_buffer, draw_count_buffer);
+            auto& rg = GetCurrentRenderGraph();
+            rg.AddComputePass(
+                "Reset Counter",
+                [&](RenderGraph::Builder& _builder) {
+                    // auto counter_buffer = rg.ImportBuffer("counter_buffer", draw_count_buffer);
+                    // auto src_buffer     = rg.ImportBuffer("zero_buffer", zero_buffer);
+                    // _builder.WriteBuffer(counter_buffer, EBufferUsageFlags::TRANSFER_DST);
+                    // _builder.ReadBuffer(src_buffer, EBufferUsageFlags::TRANSFER_SRC);
+                },
+                [&, info(std::move(copy_info))](RenderPassContext& _context) {
+                    auto* cmd_list = _context.cmd_list;
+                    cmd_list->SetPipelineBarrier(buffer_barrier);
+                    cmd_list->CopyBuffer(info, zero_buffer, draw_count_buffer);
+                });
         };
 
         EnqueueRenderTask(std::move(sync_command_list));
@@ -628,9 +638,14 @@ namespace Moer {
         //hzb build
         EnqueueRenderTask(
             [this]() {
-                GetCurrentRenderGraph().AddGraphicPass(
+                GetCurrentRenderGraph().AddComputePass(
                     "Build HZB",
                     [&](RenderGraph::Builder& _builder) {
+                        // auto frame_offset = frame_counter % render_cmd_lists.size();
+                        // auto depth        = GetCurrentRenderGraph().ImportTexture("depth", depth_buffer[frame_offset]);
+                        // auto hiz_buffer   = GetCurrentRenderGraph().ImportTexture("hiz_buffer", this->hiz_buffer.texture);
+                        // _builder.ReadTexture(depth, ETextureUsageFlags::SAMPLED);
+                        // _builder.WriteTexture(hiz_buffer, ETextureUsageFlags::UNORDERED_ACCESS);
                     },
                     [&](RenderPassContext& _context) {
                         auto frame_offset = frame_counter % render_cmd_lists.size();
@@ -642,9 +657,13 @@ namespace Moer {
         DispatchDrawScene(camera_data, false);
         EnqueueRenderTask(
             [this]() {
-                GetCurrentRenderGraph().AddGraphicPass(
+                GetCurrentRenderGraph().AddComputePass(
                     "Post Build HZB",
                     [&](RenderGraph::Builder& _builder) {
+                        // auto depth      = GetCurrentRenderGraph().ImportTexture("depth", depth_buffer[frame_offset]);
+                        // auto hiz_buffer = GetCurrentRenderGraph().ImportTexture("hiz_buffer", this->hiz_buffer.texture);
+                        // _builder.ReadTexture(depth, ETextureUsageFlags::SAMPLED);
+                        // _builder.WriteTexture(hiz_buffer, ETextureUsageFlags::UNORDERED_ACCESS);
                     },
                     [&](RenderPassContext& _context) {
                         auto frame_offset = frame_counter % render_cmd_lists.size();
@@ -805,9 +824,10 @@ namespace Moer {
                 auto& buffer_barrier_info_2 = instance_cull_barrier.buffer_barriers[2];
                 buffer_barrier_info_2
                     .SetBuffer(draw_count_buffer)
+                    .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE | ERHIAccessFlags::SHADER_READ)
                     .SetDstAccessFlags(ERHIAccessFlags::INDIRECT_COMMAND_READ)
                     .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
-                    .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
+                    .SetDstStage(ERHIPipelineStageFlags::PS_DRAW_INDIRECT);
 
                 cmd_list->SetPipelineBarrier(instance_cull_barrier);
             }
@@ -823,7 +843,7 @@ namespace Moer {
                 buffer_barrier_info_0
                     .SetBuffer(draw_count_buffer)
                     .SetDstAccessFlags(ERHIAccessFlags::INDIRECT_COMMAND_READ)
-                    .SetSrcAccessFlags(ERHIAccessFlags::INDIRECT_COMMAND_READ)
+                    .SetSrcAccessFlags(ERHIAccessFlags::SHADER_READ | ERHIAccessFlags::SHADER_WRITE)
                     .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
                     .SetDstStage(ERHIPipelineStageFlags::PS_DRAW_INDIRECT);
 
@@ -848,9 +868,15 @@ namespace Moer {
         };
 
         EnqueueRenderTask([&, prepass_cull(std::move(prepass_cull_task))]() {
-            GetCurrentRenderGraph().AddGraphicPass(
+            GetCurrentRenderGraph().AddComputePass(
                 "Prepass Cull Instance",
                 [&](RenderGraph::Builder& _builder) {
+                    // auto& rg  = GetCurrentRenderGraph();
+                    // auto  hiz = rg.GetBlackBoard().GetHandle("hiz_buffer");
+                    // if (!hiz.IsInitialized()) {
+                    //     hiz = rg.ImportTexture("hiz_buffer", hiz_buffer.texture);
+                    // }
+                    // _builder.ReadTexture(hiz, ETextureUsageFlags::SAMPLED);
                 },
                 std::move(prepass_cull));
         });
@@ -915,7 +941,7 @@ namespace Moer {
                 .SetDstAccessFlags(ERHIAccessFlags::INDIRECT_COMMAND_READ)
                 .SetSrcAccessFlags(ERHIAccessFlags::INDIRECT_COMMAND_READ)
                 .SetSrcStage(ERHIPipelineStageFlags::PS_DRAW_INDIRECT)
-                .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
+                .SetDstStage(ERHIPipelineStageFlags::PS_DRAW_INDIRECT);
 
             auto& buffer_barrier_info_1 = barrier_dependency_info.buffer_barriers[1];
             buffer_barrier_info_1
@@ -966,7 +992,7 @@ namespace Moer {
                     .SetDstAccessFlags(ERHIAccessFlags::INDIRECT_COMMAND_READ)
                     .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE | ERHIAccessFlags::SHADER_READ)
                     .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
-                    .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
+                    .SetDstStage(ERHIPipelineStageFlags::PS_DRAW_INDIRECT);
 
                 cmd_list->SetPipelineBarrier(meshlet_cull_barrier);
             }
@@ -1000,7 +1026,7 @@ namespace Moer {
         };
 
         EnqueueRenderTask([&, recheck_pass(std::move(recheck_pass_cull_task))]() {
-            GetCurrentRenderGraph().AddGraphicPass(
+            GetCurrentRenderGraph().AddComputePass(
                 "Recheck Cull Instance",
                 [&](RenderGraph::Builder& _builder) {
                 },
@@ -1017,25 +1043,25 @@ namespace Moer {
             RenderGraph& rg     = GetCurrentRenderGraph();
             rg.AddGraphicPass(
                 "GBuffer Pass",
-                [&](RenderGraph::Builder& builder) {
+                [&](RenderGraph::Builder& _builder) {
                     auto normal = rg.CreateTexture("normal", {.extent2D = Extent2D(extent.x, extent.y), .format = EPixelFormat::PF_R8G8B8A8_UNORM, .usage = ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED});
                     auto mat    = rg.CreateTexture("mat", {.extent2D = Extent2D(extent.x, extent.y), .format = EPixelFormat::PF_R32_UINT, .usage = ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED});
                     auto uv     = rg.CreateTexture("uv", {.extent2D = Extent2D(extent.x, extent.y), .format = EPixelFormat::PF_R16G16_SFLOAT, .usage = ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED});
                     auto depth  = rg.ImportTexture("depth", depth_buffer[frame_counter % render_cmd_lists.size()]);
                     if (!b_first_pass) {
-                        builder.ReadTextures({normal, uv, mat}, RenderGraphTexture::Usage::COLOR_ATTACHMENT);
-                        builder.ReadTexture(depth, RenderGraphTexture::Usage::DEPTH_STENCIL_ATTACHMENT);
+                        _builder.ReadTextures({normal, uv, mat}, RenderGraphTexture::Usage::COLOR_ATTACHMENT);
+                        _builder.ReadTexture(depth, RenderGraphTexture::Usage::DEPTH_STENCIL_ATTACHMENT);
                     }
-                    builder.WriteTextures({normal, uv, mat}, RenderGraphTexture::Usage::COLOR_ATTACHMENT);
-                    builder.WriteTexture(depth, RenderGraphTexture::Usage::DEPTH_STENCIL_ATTACHMENT);
-                    builder.DeclareRenderPass({.color_attachments = {
-                                                   mat,
-                                                   normal,
-                                                   uv},
-                                               .depth_stencil_attachment = depth});
+                    _builder.WriteTextures({normal, uv, mat}, RenderGraphTexture::Usage::COLOR_ATTACHMENT);
+                    _builder.WriteTexture(depth, RenderGraphTexture::Usage::DEPTH_STENCIL_ATTACHMENT);
+                    _builder.DeclareRenderPass({.color_attachments = {
+                                                    mat,
+                                                    normal,
+                                                    uv},
+                                                .depth_stencil_attachment = depth});
                 },
-                [this, b_first_pass](RenderPassContext& context) {
-                    auto* cmd_list = context.cmd_list;
+                [this, b_first_pass](RenderPassContext& _context) {
+                    auto* cmd_list = _context.cmd_list;
                     cmd_list->SetPipelineState(gbuffer_pipeline_state);
                     // cmd_list->BindVertexBuffers()
                     auto* scene = g_scene;
