@@ -7,6 +7,7 @@
 #include "math/Matrix.h"
 #include "misc/MMemory.h"
 #include "misc/STL.h"
+#include "renderer/BackendRenderer.h"
 #include "rendergraph/RenderGraphPass.h"
 #include "resources/AsyncResources.h"
 #include "rhi/RHI.h"
@@ -24,6 +25,7 @@
 #include "scene/Scene.h"
 #include "deferred/BasePass.h"
 #include "utils/HiZBuilder.h"
+#include "Common.h"
 
 #include <algorithm>
 #include "Cull.h"
@@ -103,9 +105,11 @@ namespace Moer {
     class DeferredRenderer::Impl {
     public:
         void Init(const BackendRendererInitInfo& _init_info);
+        void InitSceneResources();
         void ShutDown();
         void DrawFrame();
         void Present();
+        void FallBackDraw();
         void SetOriginResolution(uint32_t _width, uint32_t _height);
         void SetPresentResolution(uint32_t _width, uint32_t _height);
 
@@ -146,7 +150,7 @@ namespace Moer {
         // RHIBufferRef vertex_buffer;
         // RHIBufferRef index_buffer;
 
-        RHIGraphicsPipelineStateRef pipeline_state;
+        // RHIGraphicsPipelineStateRef pipeline_state;
         RHIGraphicsPipelineStateRef gbuffer_pipeline_state;
         RHIGraphicsPipelineStateRef lighting_pipeline_state;
 
@@ -211,6 +215,8 @@ namespace Moer {
         Vector2i source_resolution;
 
         Array<RenderGraph> render_graphs;
+
+        bool b_need_update = true;
     };
     void DeferredRenderer::Init(const BackendRendererInitInfo& _init_info) {
         impl = MoerNew(Impl);
@@ -237,7 +243,7 @@ namespace Moer {
         impl->SetPresentResolution(_width, _height);
     }
 
-    void* DeferredRenderer::GetRendererOutput() {
+    RHISRVRef DeferredRenderer::GetRendererOutput() {
         return impl->GetRendererOutput();
     }
 
@@ -321,41 +327,9 @@ namespace Moer {
         }
         render_fence = g_rhi->RHICreateFence({.usage = EFenceUsageFlags::TIMELINE});
 
-        RHIVertexInputInfo vertex_input_info(
-
-            VertexElement(0, 0, PF_R32G32B32_SFLOAT, 0, sizeof(float) * 11, EVertexInputRate::VIR_VERTEX),
-            VertexElement(0, 3 * sizeof(float), PF_R32G32B32_SFLOAT, 1, sizeof(float) * 11, EVertexInputRate::VIR_VERTEX),
-            VertexElement(0, 6 * sizeof(float), PF_R32G32B32_SFLOAT, 2, sizeof(float) * 11, EVertexInputRate::VIR_VERTEX),
-            VertexElement(0, 9 * sizeof(float), PF_R32G32_SFLOAT, 3, sizeof(float) * 11, EVertexInputRate::VIR_VERTEX),
-            VertexElement(1, 11 * sizeof(float), PF_R32_UINT, 4, sizeof(uint32_t), EVertexInputRate::VIR_INSTANCE));
-        // RHIVertexInputStateRef vertex_input_state = g_rhi->RHICreateVertexInputState(vertex_input_state_init_list);
-
         auto& shader_resource_manager = ShaderResourceManager::GetInstance();
-
-        RHIShaderRef vertex_shader   = shader_resource_manager.GetShader<TestDeferredTriangleShaderVert>();
-        RHIShaderRef fragment_shader = shader_resource_manager.GetShader<TestDeferredTriangleShaderFrag>();
-        // RHIShaderBoundStateInput& shader_stage_input = init.shader_stage;
-
-        RHIGraphicsShaderInputInfo shader_input_info =
-            RHIGraphicsShaderInputInfo::Create()
-                .SetVertexWorkFlow(std::move(vertex_input_info),
-                                   vertex_shader,
-                                   fragment_shader);
-
-        RHIGraphicsPSOCreateInfo pso_create_info =
-            RHIGraphicsPSOCreateInfo::Create()
-                .SetShaderStage(
-                    std::move(shader_input_info))
-                .SetDepthStencilInfo(RHIDepthStencilStateInfo::Preset<RHIConfig::DepthStencil::DEPTH_WRITE_GREATER>())
-                .SetColorAttachmentInfo(
-                    {std::move(RHIColorAttachmentInfo::Preset<RHIConfig::Blend::ALPHA_BLEND>(EPixelFormat::PF_R8G8B8A8_SRGB))})
-                .SetDepthStencilFormat(PF_D32_SFLOAT_S8_UINT)
-                .Finalize();
-
-        pipeline_state = g_rhi->RHICreateGraphicsPSO(std::move(pso_create_info));
-
-        cull_instance_recheck_shader = shader_resource_manager.GetShader<CullInstanceRecheckShader>();
-        cull_meshlet_recheck_shader  = shader_resource_manager.GetShader<CullMeshletRecheckShader>();
+        cull_instance_recheck_shader  = shader_resource_manager.GetShader<CullInstanceRecheckShader>();
+        cull_meshlet_recheck_shader   = shader_resource_manager.GetShader<CullMeshletRecheckShader>();
 
         cull_instance_recheck_pso = g_rhi->RHICreateComputePipelineState(cull_instance_recheck_shader);
         cull_meshlet_recheck_pso  = g_rhi->RHICreateComputePipelineState(cull_meshlet_recheck_shader);
@@ -397,36 +371,6 @@ namespace Moer {
 
             draw_count_view =
                 g_rhi->RHICreateBufferUAV(draw_count_buffer);
-
-            auto meshlet_descs = g_scene->GetBuffer("meshlet_descs");
-
-            meshlet_descs_buffer_view = g_rhi->RHICreateBufferSRV(g_scene->GetBuffer("meshlet_descs"));
-
-            meshlet_bounds_buffer_view = g_rhi->RHICreateBufferSRV(g_scene->GetBuffer("meshlet_bounds"));
-
-            instance_buffer_view = g_rhi->RHICreateBufferSRV(g_scene->GetBuffer("instance_data"));
-
-            instance_meshlet_info_view = g_rhi->RHICreateBufferSRV(g_scene->GetBuffer("instance_meshlet_info_buffer"));
-
-            instance_meshlet_cull_info_buffer = g_rhi->RHICreateBuffer<uint64_t>(
-                1024 * 512 * sizeof(uint64_t),
-                EBufferUsageFlags::STORAGE_BUFFER | EBufferUsageFlags::UNORDERED_ACCESS);
-
-            recheck_cull_info_buffer = g_rhi->RHICreateBuffer<uint64_t>(
-                1024 * 512 * sizeof(uint64_t),
-                EBufferUsageFlags::STORAGE_BUFFER | EBufferUsageFlags::UNORDERED_ACCESS);
-            recheck_instance_id_buffer = g_rhi->RHICreateBuffer<uint32_t>(
-                64 * 512 * sizeof(uint32_t),
-                EBufferUsageFlags::STORAGE_BUFFER | EBufferUsageFlags::UNORDERED_ACCESS);
-            instance_meshlet_cull_info_view = g_rhi->RHICreateBufferSRV(instance_meshlet_cull_info_buffer);
-
-            instance_meshlet_cull_info_uav = g_rhi->RHICreateBufferUAV(instance_meshlet_cull_info_buffer);
-
-            recheck_cull_info_view = g_rhi->RHICreateBufferSRV(recheck_cull_info_buffer);
-            recheck_cull_info_uav  = g_rhi->RHICreateBufferUAV(recheck_cull_info_buffer);
-
-            recheck_instance_id_srv = g_rhi->RHICreateBufferSRV(recheck_instance_id_buffer);
-            recheck_instance_id_uav = g_rhi->RHICreateBufferUAV(recheck_instance_id_buffer);
         }
         {
             CreateDepthBuffer();
@@ -479,43 +423,73 @@ namespace Moer {
                     })
                     .Finalize();
             lighting_pipeline_state = g_rhi->RHICreateGraphicsPSO(std::move(lighting_pso_create_info));
-
-            instance_buffer_view = g_rhi->RHICreateBufferSRV(g_scene->GetBuffer("instance_data"));
-
-            //HarCode lights
-            auto light_pos   = Moer::Vector3f(0.0f, 128.0f, -225.0f);
-            auto light_color = Moer::Vector3f(1.0, 1.0, 1.0);
-
-            // Magic numbers used to offset lights in the Sponza scene
-            for (int i = -4; i < 4; ++i) {
-                for (int j = 0; j < 2; ++j) {
-                    Moer::Vector3f pos = light_pos;
-                    pos.x += i * 400;
-                    pos.z += j * (225 + 140);
-                    pos.y = 8;
-
-                    for (int k = 0; k < 3; ++k) {
-                        pos.y = pos.y + (k * 100);
-
-                        light_color.x = static_cast<float>(rand()) / (RAND_MAX);
-                        light_color.y = static_cast<float>(rand()) / (RAND_MAX);
-                        light_color.z = static_cast<float>(rand()) / (RAND_MAX);
-
-                        LightData light;
-                        light.color     = Moer::Vector4f(light_color, 1.0f);
-                        light.position  = Moer::Vector4f(pos, 1.0f);
-                        light.direction = Moer::Vector4f(0.0f, 0.0f, 0.0f, 2);
-                        lights.push_back(light);
-                    }
-                }
-            }
-
-            light_buffer      = GpuSceneBufferBuilder::CopyFrom(EBufferUsageFlags::STORAGE_BUFFER, lights.data(), lights.size() * sizeof(LightData));
-            light_buffer_view = g_rhi->RHICreateBufferSRV(light_buffer);
         }
         {
             render_graphs.resize(render_cmd_lists.size());
         }
+    }
+    void DeferredRenderer::Impl::InitSceneResources() {
+
+        auto meshlet_descs = g_scene->GetBuffer("meshlet_descs");
+
+        meshlet_descs_buffer_view = g_rhi->RHICreateBufferSRV(g_scene->GetBuffer("meshlet_descs"));
+
+        meshlet_bounds_buffer_view = g_rhi->RHICreateBufferSRV(g_scene->GetBuffer("meshlet_bounds"));
+
+        instance_buffer_view = g_rhi->RHICreateBufferSRV(g_scene->GetBuffer("instance_data"));
+
+        instance_meshlet_info_view = g_rhi->RHICreateBufferSRV(g_scene->GetBuffer("instance_meshlet_info_buffer"));
+
+        instance_meshlet_cull_info_buffer = g_rhi->RHICreateBuffer<uint64_t>(
+            1024 * 512 * sizeof(uint64_t),
+            EBufferUsageFlags::STORAGE_BUFFER | EBufferUsageFlags::UNORDERED_ACCESS);
+
+        recheck_cull_info_buffer = g_rhi->RHICreateBuffer<uint64_t>(
+            1024 * 512 * sizeof(uint64_t),
+            EBufferUsageFlags::STORAGE_BUFFER | EBufferUsageFlags::UNORDERED_ACCESS);
+        recheck_instance_id_buffer = g_rhi->RHICreateBuffer<uint32_t>(
+            64 * 512 * sizeof(uint32_t),
+            EBufferUsageFlags::STORAGE_BUFFER | EBufferUsageFlags::UNORDERED_ACCESS);
+        instance_meshlet_cull_info_view = g_rhi->RHICreateBufferSRV(instance_meshlet_cull_info_buffer);
+
+        instance_meshlet_cull_info_uav = g_rhi->RHICreateBufferUAV(instance_meshlet_cull_info_buffer);
+
+        recheck_cull_info_view = g_rhi->RHICreateBufferSRV(recheck_cull_info_buffer);
+        recheck_cull_info_uav  = g_rhi->RHICreateBufferUAV(recheck_cull_info_buffer);
+
+        recheck_instance_id_srv = g_rhi->RHICreateBufferSRV(recheck_instance_id_buffer);
+        recheck_instance_id_uav = g_rhi->RHICreateBufferUAV(recheck_instance_id_buffer);
+
+        //HarCode lights
+        auto light_pos   = Moer::Vector3f(0.0f, 128.0f, -225.0f);
+        auto light_color = Moer::Vector3f(1.0, 1.0, 1.0);
+
+        // Magic numbers used to offset lights in the Sponza scene
+        for (int i = -4; i < 4; ++i) {
+            for (int j = 0; j < 2; ++j) {
+                Moer::Vector3f pos = light_pos;
+                pos.x += i * 400;
+                pos.z += j * (225 + 140);
+                pos.y = 8;
+
+                for (int k = 0; k < 3; ++k) {
+                    pos.y = pos.y + (k * 100);
+
+                    light_color.x = static_cast<float>(rand()) / (RAND_MAX);
+                    light_color.y = static_cast<float>(rand()) / (RAND_MAX);
+                    light_color.z = static_cast<float>(rand()) / (RAND_MAX);
+
+                    LightData light;
+                    light.color     = Moer::Vector4f(light_color, 1.0f);
+                    light.position  = Moer::Vector4f(pos, 1.0f);
+                    light.direction = Moer::Vector4f(0.0f, 0.0f, 0.0f, 2);
+                    lights.push_back(light);
+                }
+            }
+        }
+
+        light_buffer      = GpuSceneBufferBuilder::CopyFrom(EBufferUsageFlags::STORAGE_BUFFER, lights.data(), lights.size() * sizeof(LightData));
+        light_buffer_view = g_rhi->RHICreateBufferSRV(light_buffer);
     }
 
     void DeferredRenderer::Impl::ShutDown() {
@@ -526,6 +500,17 @@ namespace Moer {
     }
 
     void DeferredRenderer::Impl::DrawFrame() {
+        if (!Scene::GetCurrentSceneLoadInfo()->IsReady()) {
+            //should draw default instead of return
+            EnqueueRenderTask([this]() {
+                FallBackDraw();
+            });
+            return;
+        }
+        if (b_need_update) {
+            InitSceneResources();
+            b_need_update = false;
+        }
         //render and copy to backbuffer
         auto camera_entity = g_scene->GetCameras()[0];
         auto camera        = CameraManager::Get().Get(camera_entity);
@@ -542,7 +527,7 @@ namespace Moer {
                               {-0.00000000, -0.00000000, -0.00000000, 1.f}};
         static bool first = true;
         if (first) {
-            camera->SetWorldTransform(transform);
+            // camera->SetWorldTransform(transform);
             first = false;
         }
         // camera->SetWorldTransform(Transform to_world)
@@ -621,9 +606,9 @@ namespace Moer {
                     // _builder.WriteBuffer(counter_buffer, EBufferUsageFlags::TRANSFER_DST);
                     // _builder.ReadBuffer(src_buffer, EBufferUsageFlags::TRANSFER_SRC);
                 },
-                [&, info(std::move(copy_info))](RenderPassContext& _context) {
+                [&, info(std::move(copy_info)), barrier(std::move(buffer_barrier))](RenderPassContext& _context) {
                     auto* cmd_list = _context.cmd_list;
-                    cmd_list->SetPipelineBarrier(buffer_barrier);
+                    cmd_list->SetPipelineBarrier(barrier);
                     cmd_list->CopyBuffer(info, zero_buffer, draw_count_buffer);
                 });
         };
@@ -704,6 +689,20 @@ namespace Moer {
             };
             EnqueueRenderTask(std::move(submit_rendering));
         }
+    }
+    void DeferredRenderer::Impl::FallBackDraw() {
+        RHIGraphicsCommandList* cmd_list = GetCurrentCmdList();
+        cmd_list->Reset();
+        cmd_list->BeginRecording();
+        auto info = virtual_viewport->GetBackBufferInfo();
+        cmd_list->EndRecording();
+
+        RHISubmitInfo submit_info;
+        submit_info.Wait(info.backbuffer_ready_fence, frame_counter);
+        submit_info.Wait(render_fence, frame_counter);
+        submit_info.Signal(render_fence, ++frame_counter);
+
+        render_queue->SubmitCommands(1, cmd_list, &submit_info);
     }
 
     void DeferredRenderer::Impl::Present() {

@@ -1,7 +1,8 @@
 #include "EditorUI.h"
 #include "math/Base.h"
 #include "ui/UIBase.h"
-
+#define ImTextureID RHISRVRef
+#include "rhi/RHIResource.h"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include "window/WindowContext.h"

@@ -14,25 +14,6 @@
 #include <atomic>
 #include <cstdint>
 namespace Moer {
-    // struct VirtualViewport::VirtualViewportData {
-    //     VirtualViewportData()  = default;
-    //     ~VirtualViewportData() = default;
-
-    //     RHITextureCreateInfo upload_texture_create_info;
-
-    //     RHIFenceRef present_fence;
-
-    //     RHITextureRef present_texture;
-
-    //     Moer::Array<RHITextureRef>             swapchain_textures;
-    //     Moer::Array<RHIUnorderedAccessViewRef> swapchain_uavs;
-    //     std::atomic_uint64_t                   frame_index = 0;
-
-    //     RHICommandQueue* copy_queue;
-
-    //     RHIGraphicsCommandList* copy_cmd_list;
-    // };
-
     class VirtualViewport::Impl {
 
     public:
@@ -155,7 +136,6 @@ namespace Moer {
                                          .SetArraySize(1)
                                          .SetNumMips(1)
                                          .SetClearAttachment({})
-                                         .SetInitialLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED)
                                          .SetUsageFlags(
                                              ETextureUsageFlags::COLOR_ATTACHMENT |
                                              ETextureUsageFlags::TRANSFER_SRC |
@@ -168,7 +148,6 @@ namespace Moer {
                                         .SetArraySize(1)
                                         .SetNumMips(1)
                                         .SetClearAttachment({})
-                                        .SetInitialLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED)
                                         .SetUsageFlags(
                                             ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT | ETextureUsageFlags::SAMPLED);
 

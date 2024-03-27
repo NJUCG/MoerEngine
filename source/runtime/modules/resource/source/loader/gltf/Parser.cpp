@@ -1,5 +1,6 @@
 #include "loader/gltf/Parser.h"
 
+#include "Core.h"
 #include "RenderThread.h"
 #include "../io/ImageIO.h"
 #include "assimp/Importer.hpp"
@@ -7,7 +8,9 @@
 #include "assimp/postprocess.h"
 #include "assimp/scene.h"
 #include "math/Base.h"
+#include "math/Function.h"
 #include "meshprocess/MeshProcessor.h"
+#include "misc/CountableRef.h"
 #include "misc/MMemory.h"
 #include "misc/STL.h"
 #include "rhi/RHI.h"
@@ -21,8 +24,12 @@
 #include "scene/RenderableManager.h"
 #include "scene/Scene.h"
 #include "scene/TransformManager.h"
+#include "taskgraph/Event.h"
+#include "taskgraph/GraphTask.h"
 
+#include <atomic>
 #include <filesystem>
+#include <future>
 #include <stb/stb_image.h>
 #include <meshoptimizer.h>
 
@@ -36,15 +43,16 @@ namespace Moer::Resource::Gltf {
     };
 
     struct Parser::Impl {
-        std::unique_ptr<Scene, MoerDeleter> LoadSceneFromFile(const std::filesystem::path& file_path);
-        void                                LoadNode(const aiNode* node, const aiScene* scene);
-        void                                loadCameras(const aiScene* scene);
-        void                                loadMaterial(const aiScene* ai_scene, const aiMaterial* ai_material, const std::string& materialName);
-        void                                LoadTexture(const aiScene* scene, const aiString& texture_path, MaterialInstanceRef& mat, const std::string& param_name);
-        void                                LoadLights(const aiScene* scene);
+        Scene* LoadSceneFromFile(const std::filesystem::path& file_path, bool _delete_after_load = false);
+        void   LoadSceneFromFileAsync(const std::filesystem::path& file_path);
+        void   LoadNode(const aiNode* node, const aiScene* scene);
+        void   loadCameras(const aiScene* scene);
+        void   loadMaterial(const aiScene* ai_scene, const aiMaterial* ai_material, const std::string& materialName);
+        void   LoadTexture(const aiScene* scene, const aiString& texture_path, MaterialInstanceRef& mat, const std::string& param_name);
+        void   LoadLights(const aiScene* scene);
         ~Impl() = default;
 
-        Moer::Array<RHIRenderPrimitiveRef>                   m_primitives{};
+        // Moer::Array<RHIRenderPrimitiveRef>                   m_primitives{};
         Moer::UnorderedMap<std::string, RHITextureRef>       m_textures{};
         Moer::UnorderedMap<std::string, MaterialInstanceRef> m_materials{};
         Moer::UnorderedMap<size_t, MaterialRef>              m_material_cache{};
@@ -59,7 +67,7 @@ namespace Moer::Resource::Gltf {
         Moer::Array<uint32_t> m_index_data{};
 
         std::filesystem::path m_file_parent_path{};
-        UniquePtr<Scene>      m_scene{nullptr};
+        Scene*                m_scene{nullptr};
     };
 
     void Parser::Impl::LoadLights(const aiScene* scene) {
@@ -220,12 +228,14 @@ namespace Moer::Resource::Gltf {
             m_scene->AddCamera(entity);
         } else
             for (uint32_t i = 0; i < camera_num; i++) {
-                const auto* camera     = scene->mCameras[i];
-                Entity      entity     = EntityManager::Get().Create();
-                CameraRef   camera_ref = CameraManager::Get().Create(entity);
-                Transform&  transform  = TransformManager::Get().Create(entity);
-                transform              = Transform(ToVector3f(camera->mPosition), ToVector3f(camera->mLookAt), ToVector3f(camera->mUp));
-                camera_ref->SetFov(Angle::RadianToDegree(camera->mHorizontalFOV));
+                const auto* camera      = scene->mCameras[i];
+                Entity      entity      = EntityManager::Get().Create();
+                CameraRef   camera_ref  = CameraManager::Get().Create(entity);
+                Transform&  transform   = TransformManager::Get().Create(entity);
+                auto        world_2_cam = Transform(ToVector3f(camera->mPosition), ToVector3f(camera->mLookAt), ToVector3f(camera->mUp));
+
+                transform.matrix = Inverse(world_2_cam.GetMatrix4x4());
+                camera_ref->SetFov(Angle::RadianToDegree(camera->mHorizontalFOV / camera->mAspect));
                 camera_ref->SetWorldTransform(transform);
                 camera_ref->SetNearClip(camera->mClipPlaneNear);
                 camera_ref->SetFarClip(camera->mClipPlaneFar);
@@ -306,21 +316,21 @@ namespace Moer::Resource::Gltf {
         mi->SetParameter("ao", 1.0f);
     }
 
-    std::unique_ptr<Scene, MoerDeleter> Parser::Impl::LoadSceneFromFile(const std::filesystem::path& file_path) {
+    Scene* Parser::Impl::LoadSceneFromFile(const std::filesystem::path& _file_path, bool _delete_after_load) {
+
         GpuPrimitiveBuilder::InitBuild();
-        m_scene = std::move(UniquePtr<Scene>(MoerNew(Scene)()));
+        m_scene = MoerNew(Scene)();
         Assimp::Importer importer;
-        auto             real_path  = std::filesystem::canonical(file_path);
-        const auto*      gltf_scene = importer.ReadFile(file_path.string(), aiProcess_Triangulate | aiProcess_FlipUVs | aiProcess_GenBoundingBoxes | aiProcess_GenNormals | aiProcess_CalcTangentSpace);
+        auto             real_path  = std::filesystem::canonical(_file_path);
+        const auto*      gltf_scene = importer.ReadFile(_file_path.string(), aiProcess_Triangulate | aiProcess_FlipUVs | aiProcess_GenBoundingBoxes | aiProcess_GenNormals | aiProcess_CalcTangentSpace);
         if (!gltf_scene) {
-            LOG_WARNING("Failed to load gltf file: {} ", file_path.string());
+            LOG_WARNING("Failed to load gltf file: {} ", _file_path.string());
             return nullptr;
         }
         // loadNode()
 
         // auto moer_scene = std::make_unique<Scene>();
-
-        m_file_parent_path = file_path.parent_path();
+        m_file_parent_path = _file_path.parent_path();
 
         uint32_t stride;
         //Assume all mesh has same attribute
@@ -403,7 +413,7 @@ namespace Moer::Resource::Gltf {
         //     vertex_offset += cur_vertex_count;
         //     index_offset += cur_index_count;
         // }
-        auto* gpu_scene = m_scene.get();
+        auto* gpu_scene = m_scene;
         EnqueueRenderTask([vertex_data    = std::move(m_vertex_data),
                            index_data     = std::move(m_index_data),
                            meshlet_bounds = std::move(m_meshlet_bounds),
@@ -486,67 +496,65 @@ namespace Moer::Resource::Gltf {
             gpu_scene->SetBuffer("instance_id_buffer", instance_id_buffer);
             gpu_scene->SetBuffer("instance_meshlet_info_buffer", instance_mesh_buffer);
         });
-        RenderThreadFence fence;
-        fence.Wait();
+        if (IsCurrentlyGameThread()) {
+            RenderThreadFence fence;
+            fence.Wait();
+        }
+        if (!IsCurrentlyRenderThread()) {
+            ScopeEventRef event;
+            EnqueueRenderTask([&event]() {
+                event.Trigger();
+            });
+        }
+
         //todo after build all    end build
         // GpuPrimitiveBuilder::EndBuild();
-        return std::move(m_scene);
+        auto* out_scene = m_scene;
+        m_scene         = nullptr;
+        if (_delete_after_load) {
+            MoerDelete(this);
+        }
+        return out_scene;
     }
+    using TPromise = std::promise<std::unique_ptr<Scene, MoerDeleter>>;
+    using TScene   = std::unique_ptr<Scene, MoerDeleter>;
 
-    //Position
-    // CountableRef<RHIBuffer> GetVertexBuffer(const aiMesh * mesh) {
-    //     uint32_t size;
-    //
-    //     const uint32_t one_attr_size = mesh->mNumVertices * sizeof(float) * 3;
-    //     if(mesh->HasPositions())
-    //         size += one_attr_size;
-    //     if(mesh->HasNormals())
-    //         size += one_attr_size;
-    //     if(mesh->HasTangentsAndBitangents())
-    //         size += 2 * one_attr_size;
-    //
-    //
-    //   //  builder.Attribute().
-    //
-    //     RHIBufferCreateInfo  info(size,sizeof(float),EBufferUsageFlags::VERTEX_BUFFER);
-    //     RHIBufferRef buffer = g_rhi->RHICreateBuffer(info);
-    //
-    //     auto  mapped_ptr = static_cast<float * >(g_rhi->RHIMapBuffer(buffer,0,size));
-    //     uint32_t offset = 0;
-    //
-    //
-    //     if(mesh->HasPositions()) {
-    //         memcpy(mapped_ptr+offset,mesh->mVertices,one_attr_size);
-    //         offset += one_attr_size;
-    //     }
-    //     if(mesh->HasNormals()) {
-    //         memcpy(mapped_ptr+offset,mesh->mNormals,one_attr_size);
-    //         offset+= one_attr_size;
-    //     }
-    //     if(mesh->HasTangentsAndBitangents()) {
-    //         memcpy(mapped_ptr+offset,mesh->mTangents,one_attr_size);
-    //         offset+= one_attr_size;
-    //         memcpy(mapped_ptr+offset,mesh->mTangents,one_attr_size);
-    //     }
-    //     g_rhi->RHIUnmapBuffer(buffer);
-    //
-    //     return buffer;
-    // }
-    // CountableRef<RHIBuffer> GetIndexBuffer(const aiMesh * mesh) {
-    //     if(!mesh->HasFaces())
-    //         return nullptr;
-    //     //currently only support triangles
-    //     uint32_t size = mesh->mNumFaces * sizeof(uint32_t) * 3;
-    //     RHIBufferCreateInfo  info(size,sizeof(uint32_t),EBufferUsageFlags::INDEX_BUFFER);
-    //     RHIBufferRef buffer = g_rhi->RHICreateBuffer(info);
-    //     auto mapped_ptr = static_cast<uint32_t *>(g_rhi->RHIMapBuffer(buffer,0,size));
-    //     for(uint32_t i = 0 ;i<mesh->mNumFaces;i++) {
-    //         const auto face = mesh->mFaces[i];
-    //         memcpy(mapped_ptr+i*3,face.mIndices,sizeof(uint32_t)*3);
-    //     }
-    //     g_rhi->RHIUnmapBuffer(buffer);
-    //     return buffer;
-    // }
+    struct PromiseWrapper : public Countable {
+        TPromise m_promise;
+        explicit PromiseWrapper() {
+        }
+        ~PromiseWrapper() {
+        }
+        void Destroy() override {
+            delete this;
+        }
+        void SetValue(TScene&& _scene) {
+            m_promise.set_value(std::move(_scene));
+        }
+        auto GetFuture() {
+            return m_promise.get_future();
+        }
+    };
+
+    void
+    Parser::Impl::LoadSceneFromFileAsync(const std::filesystem::path& file_path) {
+        AsyncSceneLoadInfoRef load_info = MoerNew(AsyncSceneLoadInfo)();
+        load_info->b_valid              = true;
+        load_info->progress.store(0);
+        Scene::RegisterAsyncLoadInfo(load_info);
+        // auto future      = promise->GetFuture();
+
+        FunctionGraphTask::ConstructAndDispatchWhenReady(
+            [this, path(file_path), info(load_info)]() {
+                auto        load_info = Scene::GetCurrentSceneLoadInfo();
+                std::string path_str  = path.generic_string();
+
+                load_info->scene = this->LoadSceneFromFile(path, true);
+                Scene::SetCurrentScene(load_info->scene);
+                load_info->progress.store(1);
+            },
+            nullptr);
+    }
 
     Transform GetTransform(const aiNode* node) {
         Matrix4x4f matrix;
@@ -608,7 +616,12 @@ namespace Moer::Resource::Gltf {
 
         //  auto lights = scene->mLights;
         Impl impl;
-        return impl.LoadSceneFromFile(file_path);
+        return std::move(UniquePtr<Scene>(impl.LoadSceneFromFile(file_path.generic_string().data())));
+    }
+
+    void Parser::LoadSceneFromFileAsync(const std::filesystem::path& file_path) noexcept {
+        Impl* impl = MoerNew(Impl)();
+        impl->LoadSceneFromFileAsync(file_path);
     }
 
 }// namespace Moer::Resource::Gltf

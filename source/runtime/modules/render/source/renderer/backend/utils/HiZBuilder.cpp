@@ -30,7 +30,7 @@ namespace Moer {
                 .SetNumMips(std::min(uint32_t(std::log2(std::min(target_extent.x, target_extent.y))), max_mip_levels))
                 .SetFormat(PF_R16_SFLOAT)
                 .SetClearAttachment(RHIClearAttachment(EClearAttachment::COLOR))
-                .SetInitialLayout(ETextureLayout::TEXTURE_LAYOUT_COMMON)
+                .SetPreferredLayout(ETextureLayout::TEXTURE_LAYOUT_COMMON)
                 .SetUsageFlags(ETextureUsageFlags::SAMPLED | ETextureUsageFlags::UNORDERED_ACCESS));
 
         srv = g_rhi->RHICreateTextureSRV(texture, PF_R16_SFLOAT, 0, texture->GetNumMips());

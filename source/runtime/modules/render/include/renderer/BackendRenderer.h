@@ -1,6 +1,7 @@
 #ifndef MOER_BACKEND_RENDERER_H
 #define MOER_BACKEND_RENDERER_H
 #include "PixelFormat.h"
+#include "rhi/RHIResource.h"
 #include <cstdint>
 namespace Moer {
     struct BackendRendererInitInfo {
@@ -17,9 +18,9 @@ namespace Moer {
  */
     class BackendRenderer {
     public:
-         BackendRenderer() = default;
+        BackendRenderer() = default;
 
-         virtual ~BackendRenderer() = default;
+        virtual ~BackendRenderer() = default;
 
         RENDER_API virtual void Init(const BackendRendererInitInfo& _init_info) = 0;
 
@@ -33,7 +34,7 @@ namespace Moer {
 
         RENDER_API virtual void SetPresentResolution(uint32_t _width, uint32_t _height) = 0;
 
-        RENDER_API virtual void* GetRendererOutput() = 0;
+        RENDER_API virtual RHISRVRef GetRendererOutput() = 0;
     };
 }// namespace Moer
 #endif

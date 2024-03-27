@@ -663,7 +663,7 @@ struct RHITextureInfo {
         uint8_t            _num_samples)
         : dimension(_dimension),
           usage(_usage),
-          layout(_layout),
+          preferred_layout(_layout),
           format(_format),
           clear_attachment(_clear_attachment),
           extent(_extent),
@@ -672,7 +672,7 @@ struct RHITextureInfo {
 
     ETextureUsageFlags usage = ETextureUsageFlags::UNDEFINED;
 
-    ETextureLayout layout = TEXTURE_LAYOUT_UNDEFINED;
+    ETextureLayout preferred_layout = TEXTURE_LAYOUT_UNDEFINED;
 
     Moer::Vector2i extent = Moer::Vector2i(1, 1);
 
@@ -707,7 +707,7 @@ struct RHITextureInfo {
         HashCombine(hash, GetHash(target.format));
         HashCombine(hash, GetHash(target.array_size));
         HashCombine(hash, GetHash(target.usage));
-        HashCombine(hash, GetHash(target.layout));
+        HashCombine(hash, GetHash(target.preferred_layout));
         HashCombine(hash, GetHash(target.extent));
         HashCombine(hash, GetHash(target.depth));
         HashCombine(hash, GetHash(target.uav_format));
@@ -717,7 +717,7 @@ struct RHITextureInfo {
         return hash;
     }
     bool operator==(const RHITextureInfo& other) const {
-        return dimension == other.dimension && usage == other.usage && format == other.format && layout == other.layout && uav_format == other.uav_format && extent == other.extent && depth == other.depth && array_size == other.array_size && num_mips == other.num_mips && num_samples == other.num_samples && clear_attachment == other.clear_attachment;
+        return dimension == other.dimension && usage == other.usage && format == other.format && preferred_layout == other.preferred_layout && uav_format == other.uav_format && extent == other.extent && depth == other.depth && array_size == other.array_size && num_mips == other.num_mips && num_samples == other.num_samples && clear_attachment == other.clear_attachment;
     }
 
     bool operator!=(const RHITextureInfo& other) const {
@@ -810,8 +810,8 @@ struct RHITextureCreateInfo : public RHITextureInfo {
         dimension = _dimension;
         return *this;
     }
-    RHITextureCreateInfo& SetInitialLayout(ETextureLayout _texture_layout) {
-        layout = _texture_layout;
+    RHITextureCreateInfo& SetPreferredLayout(ETextureLayout _texture_layout) {
+        preferred_layout = _texture_layout;
         return *this;
     }
     RHITextureCreateInfo& SetFormat(EPixelFormat _format) {
@@ -1138,9 +1138,9 @@ struct RHIBarrierDependencyInfo {
     // uint32_t                     texture_barrier_count = 0;
     // const RHITextureBarrierInfo* p_texture_barriers    = nullptr;
 
-    Moer::Array<RHIMemeryBarrierInfo>  memory_barriers;
-    Moer::Array<RHIBufferBarrierInfo>  buffer_barriers;
-    Moer::Array<RHITextureBarrierInfo> texture_barriers;
+    Moer::Array<RHIMemeryBarrierInfo>  memory_barriers{};
+    Moer::Array<RHIBufferBarrierInfo>  buffer_barriers{};
+    Moer::Array<RHITextureBarrierInfo> texture_barriers{};
 };
 
 #pragma endregion

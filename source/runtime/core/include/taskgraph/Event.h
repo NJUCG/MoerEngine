@@ -6,8 +6,6 @@
 #include <condition_variable>
 class Event;
 
-template<class T>
-class LockQueue;
 class EventPool {
 public:
     ~EventPool();

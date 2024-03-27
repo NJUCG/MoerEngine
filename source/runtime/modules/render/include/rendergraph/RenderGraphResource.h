@@ -72,7 +72,8 @@ namespace Moer {
         void         Create() override;
         RenderGraphTexture(const std::string& name, Descriptor desc);
         RenderGraphTexture(const std::string& name, RHITextureRef tex);
-        uint32_t ResloveResourceUsage(RHIGraphicsCommandList* cmd_list, uint32_t usage) override;
+        uint32_t              ResloveResourceUsage(RHIGraphicsCommandList* cmd_list, uint32_t usage) override;
+        RHITextureBarrierInfo ResolveBarrierInfo(uint32_t _dst_usage) const;
 
     protected:
         RHITextureRef m_texture;
@@ -106,4 +107,4 @@ namespace Moer {
         // mutable std::unordered_map<RHIViewInfo, RHIUAVRef, ViewInfoHashFunc> mUavs;
     };
 
-}
+}// namespace Moer

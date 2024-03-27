@@ -10,7 +10,7 @@
 #define MOER_RENDER_GRAPH_DEFERED_RENDERER_NAME "DeferredRenderer"
 #define MOER_DEFAULT_RENDERER_NAME              MOER_DEFERRED_RENDERER_NAME
 namespace Moer {
-    using TRendererOutput = void*;
+    using TRendererOutput = RHISRVRef;
     using TRendererID     = int32_t;
     struct RendererManagerData;
     class RendererManager : public Singleton<RendererManager> {

@@ -190,7 +190,6 @@ namespace Moer {
                                                                 .SetArraySize(arrayLayers)
                                                                 .SetNumMips(mipLevels)
                                                                 .SetClearAttachment({})
-                                                                .SetInitialLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED)
                                                                 .SetUsageFlags(usage));
             m_textures.insert({hash, texture});
             return texture;
