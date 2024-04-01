@@ -495,7 +495,7 @@ struct RHIShaderConstantParameter {
 };
 struct RHIAttachmentBindingParameter {
 };
-struct RHIBatchedShaderParameters {
+struct RENDER_API RHIBatchedShaderParameters {
     //CBV SRV UAV SAMPLER
     // template<typename TShader, concept_is_root_parameter_struct TRootParameter>
     // void SetParameters(const TRootParameter& params) {
@@ -510,9 +510,9 @@ struct RHIBatchedShaderParameters {
         size_t data_size = sizeof(TRootParameter);
         SetParameters(shader->GetMetaShader(), data_size, (uint8_t*)&params);
     }
-    RENDER_API ~RHIBatchedShaderParameters();
+    ~RHIBatchedShaderParameters();
 
-    RENDER_API void SetParameters(RHIResource* resource, uint16_t slot, uint16_t space);
+    void SetParameters(RHIResource* resource, uint16_t slot, uint16_t space);
 
     const uint8_t* GetConstData(uint32_t byte_offset) const {
         return &raw_data[byte_offset];
@@ -981,7 +981,6 @@ enum class ERayTracingAccelerationStructureType {
 //    // buffer created but not shader params, use for steaming system intermediate data transfer
 //    INTERMEDIATE_SRC
 //};
-
 
 struct RHITransformMatrix {
     RHITransformMatrix(const Moer::Matrix4x4f& mat = Moer::Matrix4x4f::Identity()) {

@@ -227,7 +227,7 @@ private:
 };
 
 TVulkanDeviceExtensionArray VulkanDeviceExtension::GetMESupportedDeviceExtensions(const RHIInfo& _rhi_info) {
-    LOG_INFO("ray tracing = {}", _rhi_info.ray_tracing);
+    LOG_INFO("VulkanDeviceExtension: raytracing support, {}", _rhi_info.ray_tracing);
     TVulkanDeviceExtensionArray extensions;
 
 #define ADD_EXTENSION(ext_name, enabled, optional) extensions.emplace_back(std::make_shared<VulkanDeviceExtension>(ext_name, enabled, optional))

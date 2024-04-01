@@ -903,7 +903,7 @@ RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(co
     for (const auto* meta_shader : shader_info_list) {
         auto binding_infos  = meta_shader->GetRootParametersLayoutInfo().GetBindingInfo();
         auto constant_infos = meta_shader->GetRootParametersLayoutInfo().GetConstantsInfo();
-
+        
         for (const auto& info : binding_infos) {
             VkDescriptorSetLayoutBinding binding{};
             binding.binding         = info.slot;
