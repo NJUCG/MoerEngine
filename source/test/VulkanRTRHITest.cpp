@@ -160,7 +160,7 @@ void Test() {
     RHITextureCreateInfo tex_info;
     tex_info.SetDimension(ETextureDimension::TEX_2D)
         .SetFormat(PF_R8G8B8A8_UNORM)
-        .SetInitialLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED)
+        .SetPreferredLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED)
         .SetExtent(attachment_size)
         .SetClearAttachment(RHIClearAttachment())
         .SetDepth(1)
