@@ -47,6 +47,14 @@ namespace Moer {
     };
 
     class ComputePassNode : public PassNode {
+    public:
+        ComputePassNode(const std::string& _pass_name, RenderGraphPass* _pass);
+        void Execute(RenderPassContext& _pass_context) override;
+        void DeclareComputePass();
+        ~ComputePassNode();
+
+    private:
+        RenderGraphPass* m_pass;
     };
 
     class RaytracingPassNode : public PassNode {

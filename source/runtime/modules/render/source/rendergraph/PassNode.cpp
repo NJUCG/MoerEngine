@@ -59,7 +59,7 @@ namespace Moer {
             }
         }
 
-        if (m_renderPassData.m_descriptor.depth_stencil_attachment.isInitialized()) {
+        if (m_renderPassData.m_descriptor.depth_stencil_attachment.IsInitialized()) {
             auto  depth_attachment                 = m_renderPassData.m_descriptor.depth_stencil_attachment;
             auto& depth_attachment_view            = pass_info.depth_stencil_attachment.depth_stencil_attachment_view;
             auto  depth_texture                    = render_graph.GetTexture(m_renderPassData.m_descriptor.depth_stencil_attachment);
@@ -96,4 +96,18 @@ namespace Moer {
     GraphicsPassNode::~GraphicsPassNode() {
         MoerDelete(m_pass);
     }
-}
+
+#pragma region ComputePass
+    ComputePassNode::ComputePassNode(const std::string& _pass_name, RenderGraphPass* _pass) : PassNode(_pass_name), m_pass(_pass) {
+    }
+    void ComputePassNode::Execute(RenderPassContext& _pass_context) {
+        RHIGraphicsCommandList* cmd_list = _pass_context.cmd_list;
+        m_pass->Execute(_pass_context);
+    }
+    void ComputePassNode::DeclareComputePass() {
+    }
+    ComputePassNode::~ComputePassNode() {
+        MoerDelete(m_pass);
+    }
+#pragma endregion
+}// namespace Moer

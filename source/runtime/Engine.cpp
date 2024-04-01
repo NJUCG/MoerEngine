@@ -40,7 +40,8 @@ namespace Moer {
         //todo : in now we need to move scene file to bin/Debug/resource/scenes
         auto sponza_scene_path = ConfigManager::GetInstance().GetEditorResourcePath() / "default/scenes/sponza/Sponza01.gltf";
         // auto sponza_scene_path = ConfigManager::GetInstance().GetEditorResourcePath() /"scenes/sponza/pbr/sponza2.gltf";
-        Scene::SetDefaultScene(Resource::Gltf::Parser::LoadSceneFromFile(sponza_scene_path).release());
+        // Scene::SetCurrentScene(Resource::Gltf::Parser::LoadSceneFromFile(sponza_scene_path).release());
+        Resource::Gltf::Parser::LoadSceneFromFileAsync(sponza_scene_path);
     }
     void Engine::Run() {
         LOG_INFO("Engine Start Running");

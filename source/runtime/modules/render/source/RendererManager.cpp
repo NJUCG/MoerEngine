@@ -6,7 +6,9 @@
 #include "renderer/backend/MeshDebugRenderer.h"
 #include "renderer/backend/RenderGraphTestRender.h"
 #include "renderer/backend/RenderGraphTestRender.h"
+#include "rhi/RHIResource.h"
 #include <string>
+#include "renderer/backend/Common.h"
 namespace Moer {
     struct RendererManagerData {
         Moer::UnorderedMap<std::string, TRendererID> renderer_ids;
@@ -63,7 +65,7 @@ namespace Moer {
     TRendererOutput RendererManager::GetRendererOutput(TRendererID _renderer_id) {
         BackendRenderer* renderer = GetRenderer(_renderer_id);
         if (renderer == nullptr) {
-            return nullptr;
+            return {};
         }
         return renderer->GetRendererOutput();
     }

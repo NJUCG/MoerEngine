@@ -1527,8 +1527,7 @@ void VulkanViewport::InnerCreateResources() {
         swapchain_images[index] = new VulkanRHITexture(RHITextureCreateInfo::Create2D("swapchain")
                                                            .SetExtent(swapchain->extent.width, swapchain->extent.height)
                                                            .SetFormat(swapchain_format)
-                                                           .SetUAVFormat(swapchain_format)
-                                                           .SetInitialLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED),
+                                                           .SetUAVFormat(swapchain_format),
                                                        swapchain->m_swap_chain_images[index],
                                                        swapchain->m_device);
         swapchain_images[index]->AddRef();

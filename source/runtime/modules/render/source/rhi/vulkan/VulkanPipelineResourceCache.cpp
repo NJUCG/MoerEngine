@@ -68,7 +68,7 @@ void VulkanPipelineResourceCache::SetSRV(uint32_t _set, uint32_t _binding, RHISR
     } else if (_srv->IsTexture()) {
         auto* tex_view = static_cast<VulkanRHITextureSRV*>(_srv);
         // MARK: layout is fixed
-        ETextureLayout default_layout = tex_view->GetTexture()->GetInfo().layout;
+        ETextureLayout default_layout = tex_view->GetTexture()->GetInfo().preferred_layout;
         auto           final_layout   = (default_layout == ETextureLayout::TEXTURE_LAYOUT_COMMON) ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
         m_descriptor_set_writers[_set].WriteSampledImage(_binding, VK_NULL_HANDLE, tex_view->GetView(), final_layout);

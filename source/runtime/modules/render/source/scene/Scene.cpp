@@ -2,31 +2,36 @@
 
 #include "config/ConfigManager.h"
 // #include "loader/gltf/Parser.h"
+#include "log/LogSystem.h"
 #include "rhi/RHIResource.h"
 #include "scene/EntityManager.h"
 #include "scene/RenderableManager.h"
 #include "rhi/RHI.h"
+#include <atomic>
 
 namespace Moer {
     // Scene * Scene::default_scene = nullptr;
     Scene* g_scene = nullptr;
 
     class RENDER_API Scene::Impl {
+        friend class Scene;
+
     public:
-        void         AddEntity(Entity entity) noexcept { m_entities.emplace(entity); }
-        void         AddCamera(Entity entity) noexcept { m_cameras.emplace(entity); }
-        void         RemoveEntity(Entity entity) noexcept { m_entities.erase(entity); };
-        void         SetBuffer(const std::string& name, RHIBufferRef buffer) { m_buffers[name] = buffer; }
-        RHIBufferRef GetBuffer(const std::string& name) const { return m_buffers.at(name); }
-        RHIUAVRef    GetUAV(const std::string& name) const { return m_uavs.at(name); }
-        RHISRVRef    GetSRV(const std::string& name) const { return m_srvs.at(name); }
-        void         ForEach(std::function<void(Entity)> func) const noexcept {
+        void         AddEntity(Entity _entity) noexcept { m_entities.emplace(_entity); }
+        void         AddCamera(Entity _entity) noexcept { m_cameras.emplace(_entity); }
+        void         RemoveEntity(Entity _entity) noexcept { m_entities.erase(_entity); };
+        void         SetBuffer(const std::string& _name, RHIBufferRef _buffer) { m_buffers[_name] = _buffer; }
+        RHIBufferRef GetBuffer(const std::string& _name) const { return m_buffers.at(_name); }
+        RHIUAVRef    GetUAV(const std::string& _name) const { return m_uavs.at(_name); }
+        RHISRVRef    GetSRV(const std::string& _name) const { return m_srvs.at(_name); }
+        void         ForEach(std::function<void(Entity)> _func) const noexcept {
             for (auto& entity : m_entities) {
-                func(entity);
+                _func(entity);
             }
         }
-        Array<Entity> GetEntities() const noexcept;
-        Array<Entity> GetCameras() const noexcept;
+        Array<Entity>                GetEntities() const noexcept;
+        Array<Entity>                GetCameras() const noexcept;
+        static AsyncSceneLoadInfoRef GetCurrentSceneLoadInfo() noexcept { return m_load_info; }
 
     protected:
         Map<std::string, RHIBufferRef> m_buffers;
@@ -35,7 +40,10 @@ namespace Moer {
 
         EntitySet m_entities;
         EntitySet m_cameras;
+
+        static AsyncSceneLoadInfoRef m_load_info;
     };
+    AsyncSceneLoadInfoRef Scene::Impl::m_load_info{nullptr};
 
     Array<Entity> Scene::Impl::GetEntities() const noexcept {
         Array<Entity> result;
@@ -96,11 +104,39 @@ namespace Moer {
         m_impl->ForEach(std::move(func));
     }
 
-    Scene* Scene::GetDefaultScene() noexcept {
+    Scene* Scene::GetCurrentScene() noexcept {
         return g_scene;
     }
-    void Scene::SetDefaultScene(Scene* scene) noexcept {
+    void Scene::SetCurrentScene(Scene* scene) noexcept {
         g_scene = scene;
+    }
+
+    bool Scene::IsReady() const noexcept {
+        return true;
+    }
+
+    AsyncSceneLoadInfoRef Scene::GetCurrentSceneLoadInfo() noexcept {
+
+        return Impl::GetCurrentSceneLoadInfo();
+    }
+
+    bool Scene::RegisterAsyncLoadInfo(AsyncSceneLoadInfoRef _load_info) {
+        if (Impl::m_load_info) {
+            if (Impl::m_load_info.IsValid() && !Impl::m_load_info->IsReady()) {
+                LOG_ERROR("Scene is already loading");
+                return false;
+            }
+            //TODO: release current_scene
+        }
+        Impl::m_load_info = _load_info;
+        return true;
+    }
+
+    Scene* AsyncSceneLoadInfo::TryGetScene() {
+        if (progress.load(std::memory_order_acq_rel) == 1) {
+            return scene;
+        }
+        return nullptr;
     }
 
 }// namespace Moer

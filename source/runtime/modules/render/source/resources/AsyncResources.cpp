@@ -14,25 +14,6 @@
 #include <atomic>
 #include <cstdint>
 namespace Moer {
-    // struct VirtualViewport::VirtualViewportData {
-    //     VirtualViewportData()  = default;
-    //     ~VirtualViewportData() = default;
-
-    //     RHITextureCreateInfo upload_texture_create_info;
-
-    //     RHIFenceRef present_fence;
-
-    //     RHITextureRef present_texture;
-
-    //     Moer::Array<RHITextureRef>             swapchain_textures;
-    //     Moer::Array<RHIUnorderedAccessViewRef> swapchain_uavs;
-    //     std::atomic_uint64_t                   frame_index = 0;
-
-    //     RHICommandQueue* copy_queue;
-
-    //     RHIGraphicsCommandList* copy_cmd_list;
-    // };
-
     class VirtualViewport::Impl {
 
     public:
@@ -43,9 +24,9 @@ namespace Moer {
 
         //call from render thread
         VirtualViewportBackBufferInfo GetBackBufferInfo();
-        Extent3D                          GetNextBackBufferExtent();
-        RHIUAVRef                         GetDepthBufferUav();
-        RHITextureRef                     GetDepthTexture();
+        Extent3D                      GetNextBackBufferExtent();
+        RHIUAVRef                     GetDepthBufferUav();
+        RHITextureRef                 GetDepthTexture();
 
         void Present(RHIFenceRef _render_fence);
 
@@ -122,15 +103,14 @@ namespace Moer {
     const VirtualViewportInfo& VirtualViewport::GetInfo() const {
         return impl->GetInfo();
     }
-    
+
     Extent3D VirtualViewport::GetNextBackBufferExtent() {
         return impl->GetNextBackBufferExtent();
     }
-    
+
     VirtualViewportBackBufferInfo VirtualViewport::GetBackBufferInfo() {
         return impl->GetBackBufferInfo();
     }
-
 
     RHISRV* VirtualViewport::GetPresentTextureSRV() {
         return impl->GetPresentTextureSRV();
@@ -156,7 +136,6 @@ namespace Moer {
                                          .SetArraySize(1)
                                          .SetNumMips(1)
                                          .SetClearAttachment({})
-                                         .SetInitialLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED)
                                          .SetUsageFlags(
                                              ETextureUsageFlags::COLOR_ATTACHMENT |
                                              ETextureUsageFlags::TRANSFER_SRC |
@@ -169,9 +148,8 @@ namespace Moer {
                                         .SetArraySize(1)
                                         .SetNumMips(1)
                                         .SetClearAttachment({})
-                                        .SetInitialLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED)
                                         .SetUsageFlags(
-                                            ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT | ETextureUsageFlags::SAMPLED );
+                                            ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT | ETextureUsageFlags::SAMPLED);
 
         CreateResources();
         copy_queue->WaitForQueueComplete();
@@ -280,7 +258,8 @@ namespace Moer {
         blit_info.dst_slice      = {};
 
         RHIBarrierDependencyInfo barrier_info{};
-        auto&                    barriers = barrier_info.texture_barriers;
+        auto&                    barriers      = barrier_info.texture_barriers;
+        uint32_t                 present_index = presented_index % info.back_buffer_count;
         barriers.emplace_back(RHITextureBarrierInfo::Create()
                                   .SetTexture(present_texture)
                                   .SetSrcTextureLayout(present_texture->GetLayout({ETextureAspectFlags::COLOR, 0, 1, 0, 1, 0, 1}))
@@ -289,29 +268,27 @@ namespace Moer {
             .SetSrcQueueType(ECommandQueueType::GRAPHICS)
             .SetDstQueueType(ECommandQueueType::GRAPHICS);
         present_texture->SetLayout({ETextureAspectFlags::COLOR, 0, 1, 0, 1, 0, 1}, TEXTURE_LAYOUT_TRANSFER_DST);
-        barriers.emplace_back(RHITextureBarrierInfo::Create()
-                                  .SetTexture(swapchain_textures[current_rendered % info.back_buffer_count])
-                                  .SetSrcTextureLayout(swapchain_textures[current_rendered % info.back_buffer_count]->GetLayout({ETextureAspectFlags::COLOR, 0, 1, 0, 1, 0, 1}))
-                                  .SetDstTextureLayout(TEXTURE_LAYOUT_TRANSFER_SRC)
-                                  .SetSubResourceRange({}))
-            .SetSrcQueueType(ECommandQueueType::GRAPHICS)
-            .SetDstQueueType(ECommandQueueType::GRAPHICS);
-        swapchain_textures[current_rendered % info.back_buffer_count]->SetLayout({ETextureAspectFlags::COLOR, 0, 1, 0, 1, 0, 1}, TEXTURE_LAYOUT_TRANSFER_SRC);
+        // barriers.emplace_back(RHITextureBarrierInfo::Create()
+        //                           .SetTexture(swapchain_textures[present_index])
+        //                           .SetSrcTextureLayout(swapchain_textures[present_index]->GetLayout({ETextureAspectFlags::COLOR, 0, 1, 0, 1, 0, 1}))
+        //                           .SetDstTextureLayout(TEXTURE_LAYOUT_TRANSFER_SRC));
+
+        swapchain_textures[present_index]->SetLayout({ETextureAspectFlags::COLOR, 0, 1, 0, 1, 0, 1}, TEXTURE_LAYOUT_TRANSFER_SRC);
         barriers[0]
             .SetSrcAccessFlags(ERHIAccessFlags::SHADER_SAMPLED_READ)
             .SetDstAccessFlags(ERHIAccessFlags::TRANSFER_WRITE)
             .SetSrcStage(PS_FRAGMENT_SHADER)
             .SetDstStage(PS_TRANSFER);
-        barriers[1]
-            .SetSrcAccessFlags(ERHIAccessFlags::SHADER_SAMPLED_READ)
-            .SetDstAccessFlags(ERHIAccessFlags::TRANSFER_WRITE)
-            .SetSrcStage(PS_FRAGMENT_SHADER)
-            .SetDstStage(PS_TRANSFER);
+        // barriers[1]
+        //     .SetSrcAccessFlags(ERHIAccessFlags::SHADER_SAMPLED_READ)
+        //     .SetDstAccessFlags(ERHIAccessFlags::TRANSFER_WRITE)
+        //     .SetSrcStage(PS_COLOR_ATTACHMENT_OUTPUT)
+        //     .SetDstStage(PS_TRANSFER);
 
         cmd_list->BeginRecording();
         cmd_list->SetPipelineBarrier(barrier_info);
         cmd_list->BlitTexture(blit_info,
-                              swapchain_textures[current_rendered % info.back_buffer_count],
+                              swapchain_textures[present_index],
                               present_texture);
 
         barriers[0]
@@ -356,8 +333,6 @@ namespace Moer {
         RHIUAVRef uav  = GetBackBufferInfo().backbuffer_uav;
         return uav->GetTexture()->GetExtent3D();
     }
-    
-    
 
     RHIUAVRef VirtualViewport::Impl::GetDepthBufferUav() {
         // Implementation of GetDepthBufferUAV method

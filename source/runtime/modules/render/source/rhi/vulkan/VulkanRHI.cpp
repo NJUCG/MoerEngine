@@ -1436,7 +1436,7 @@ RHITextureRef VulkanRHIImpl::RHICreateTexture(const RHITextureCreateInfo& info) 
     //     image_create_info.pQueueFamilyIndices   = queue_family_indices;
     // }
 
-    image_create_info.initialLayout = VulkanEnumTranslator::METoVKImageLayout(info.layout) == VK_IMAGE_LAYOUT_PREINITIALIZED ? VK_IMAGE_LAYOUT_PREINITIALIZED : VK_IMAGE_LAYOUT_UNDEFINED;
+    image_create_info.initialLayout = VulkanEnumTranslator::METoVKImageLayout(info.preferred_layout) == VK_IMAGE_LAYOUT_PREINITIALIZED ? VK_IMAGE_LAYOUT_PREINITIALIZED : VK_IMAGE_LAYOUT_UNDEFINED;
 
     VmaAllocationCreateInfo alloc_create_info{};
     alloc_create_info.flags = 0;
