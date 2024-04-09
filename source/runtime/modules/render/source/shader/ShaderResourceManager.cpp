@@ -278,5 +278,13 @@ RHIShaderRef ShaderResourceManager::GetShader(const ShaderMetaType& _meta_type, 
     if (shader == nullptr) return nullptr;
 
     ShaderResourceKey key{shader->GetShaderMetaType()->GetNameHash(), _mutation_id};
+    // if(_meta_type.GetName())
     return shader_resources->GetRHIShader(key, shader);
+}
+
+Shader* ShaderResourceManager::GetShader(const ShaderMetaType& _meta_type) {
+    assert(type_resources != nullptr);
+    Shader* shader = type_resources->FindOrAddShader(_meta_type.GetNameHash(), nullptr);
+    if (shader == nullptr) return nullptr;
+    return shader;
 }

@@ -84,7 +84,7 @@ public:
         uint32_t   _max_draw_count,
         uint32_t   _stride) = 0;
 
-    virtual void  Draw(
+    virtual void Draw(
         uint32_t _vertex_count,
         uint32_t _instance_count,
         uint32_t _start_vertex_location,
@@ -119,6 +119,8 @@ public:
     virtual void SetScissors(uint32_t num_scissors, const Rect2D* p_scissors)      = 0;
     virtual void SetScissor(const Rect2D& _scissor)                                = 0;
     virtual void SetBlendFactors(const float _factors[4])                          = 0;
+    virtual void BeginLabel(const char* _label)                                    = 0;
+    virtual void EndLabel()                                                        = 0;
 
     virtual void BindVertexBuffers(
         uint32_t            _start_index,
@@ -225,14 +227,14 @@ public:
     virtual void WaitForQueueComplete() = 0;
 };
 struct RHIFenceWaitInfo {
-    uint64_t  wait_value;
-    RHIFence* wait_fence;
+    uint64_t               wait_value;
+    RHIFence*              wait_fence;
     ERHIPipelineStageFlags wait_stage;
 };
 
 struct RHIFenceSignalInfo {
-    uint64_t  signal_value;
-    RHIFence* signal_fence;
+    uint64_t               signal_value;
+    RHIFence*              signal_fence;
     ERHIPipelineStageFlags signal_stage;
 };
 struct RHISubmitInfo {

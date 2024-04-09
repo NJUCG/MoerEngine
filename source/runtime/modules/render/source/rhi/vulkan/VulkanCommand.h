@@ -168,6 +168,9 @@ public:
     void ExecuteSubCommands(uint32_t                _num,
                             RHIGraphicsCommandList* _sub_commands) override;
 
+    void BeginLabel(const char* _label) override;
+    void EndLabel() override;
+
 protected:
     friend class VulkanRHICommandQueue;
 

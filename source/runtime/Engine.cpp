@@ -19,6 +19,7 @@
 #include <stdint.h>
 
 #include "modules/resource/include/loader/gltf/Parser.h"
+#include "modules/resource/include/loader/ply/Ply.h"
 
 namespace Moer {
 
@@ -39,8 +40,9 @@ namespace Moer {
 
         //todo : in now we need to move scene file to bin/Debug/resource/scenes
         auto sponza_scene_path = ConfigManager::GetInstance().GetEditorResourcePath() / "default/scenes/sponza/Sponza01.gltf";
-        // auto sponza_scene_path = ConfigManager::GetInstance().GetEditorResourcePath() /"scenes/sponza/pbr/sponza2.gltf";
-        Scene::SetDefaultScene(Resource::Gltf::Parser::LoadSceneFromFile(sponza_scene_path).release());
+        auto gs_scene          = "C:/Users/pc/Downloads/banana_2000.ply";
+        Scene::SetDefaultScene(Resource::PlyLoader::LoadSceneFromFile(gs_scene).release());
+      //  Scene::SetDefaultScene(Resource::Gltf::Parser::LoadSceneFromFile(sponza_scene_path).release());
     }
     void Engine::Run() {
         LOG_INFO("Engine Start Running");

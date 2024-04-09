@@ -26,9 +26,9 @@
 #include <variant>
 template<typename TStructuredParam>
 concept concept_is_shader_struct = requires(TStructuredParam t) {
-    std::is_same<typename TStructuredParam::TypeInfo::TParamPtr, TStructuredParam>();
-    t.GetStructMetadata();
-};
+                                       std::is_same<typename TStructuredParam::TypeInfo::TParamPtr, TStructuredParam>();
+                                       t.GetStructMetadata();
+                                   };
 #pragma region forward definitions
 class RHICommandListBase;
 class RHITexture;
@@ -476,9 +476,9 @@ struct RHIResourceParameterLayout {
 
 template<typename RootParameter>
 concept concept_is_root_parameter_struct = requires(RootParameter t) {
-    RootParameter::TypeInfo::GetStructMetadata();
-    t.GetMembers();
-};
+                                               RootParameter::TypeInfo::GetStructMetadata();
+                                               t.GetMembers();
+                                           };
 
 struct RHIShaderResourceParameter {
     RHIResourceRef resource;
@@ -628,10 +628,14 @@ public:
     void                 SetName(const std::string& _name) {
         name = _name;
     }
+    void              SetLayout(EBufferLayout _layout) {
+        layout = _layout;
+    }
     uint32_t          GetNumElement() const { return info.size / info.stride; }
     uint64_t          GetByteSize() const { return info.size; }
     uint32_t          GetStride() const { return info.stride; }
     EBufferUsageFlags GetUsage() const { return info.usage; }
+    EBufferLayout     GetLayout() const { return layout; }
 
 protected:
     /**
@@ -643,6 +647,7 @@ protected:
 
 protected:
     RHIBufferInfo info;
+    EBufferLayout layout = EBufferLayout::UNDEFINED_LAYOUT;
 };
 
 struct RHITextureInfo {

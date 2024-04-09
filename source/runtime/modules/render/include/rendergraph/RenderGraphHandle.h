@@ -63,4 +63,10 @@ namespace Moer {
             return !operator==(rhs);
         }
     };
-}
+}// namespace Moer
+
+enum class EPassType {
+    Graphics,
+    Compute,
+    Raytracing,
+};

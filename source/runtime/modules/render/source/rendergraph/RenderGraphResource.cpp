@@ -14,67 +14,67 @@ namespace Moer {
     }
     RenderGraphBuffer::RenderGraphBuffer(const std::string& name, Descriptor desc) : RenderGraphResource(name, Type::Buffer, false) {
     }
-    RenderGraphBuffer::RenderGraphBuffer(const std::string& name, RHIBufferRef buffer) : RenderGraphResource(buffer->GetName(), Type::Buffer, true) {
+    RenderGraphBuffer::RenderGraphBuffer(const std::string& name, RHIBufferRef buffer) : RenderGraphResource(name, Type::Buffer, true), m_buffer(buffer) {
     }
     void RenderGraphBuffer::Create() {
         //  m_buffer = RenderGraphResourceCache::Get().GetBuffer(name, m_desc);
     }
-    uint32_t RenderGraphBuffer::ResloveResourceUsage(RHIGraphicsCommandList* cmd_list, uint32_t usage) {
-        return 0;
+
+    static std::tuple<ERHIAccessFlags, ERHIPipelineStageFlags>
+    GetBufferTransitation(EBufferLayout layout, EPassType pass_type) {
+        if (layout == EBufferLayout::INDIRECT_COMMAND_READ) {
+            return {ERHIAccessFlags::INDIRECT_COMMAND_READ, ERHIPipelineStageFlags::PS_DRAW_INDIRECT};
+        }
+        if (EnumHasAnyFlag(layout, EBufferLayout::WRITE)) {
+            return {ERHIAccessFlags::SHADER_WRITE, ERHIPipelineStageFlags::PS_COMPUTE_SHADER};
+        }
+        if (EnumHasAnyFlag(layout, EBufferLayout::READ)) {
+            return {ERHIAccessFlags::SHADER_READ, ERHIPipelineStageFlags::PS_COMPUTE_SHADER};
+        }
+        return {};
     }
 
-    // template<typename ViewClass>
-    // using CreateFuncType = std::function<
-    //     CountableRef<ViewClass>(RHITextureRef pTexture, uint32_t mip_min, uint32_t mip_num, uint32_t firstArraySlice, uint32_t arraySize)>;
-    //
-    // template<typename ViewClass, typename ViewMapType>
-    // CountableRef<ViewClass> findViewCommon(
-    //     RHITextureRef             pTexture,
-    //     uint32_t                  mip_level,
-    //     uint32_t                  mip_num,
-    //     uint32_t                  array_level,
-    //     uint32_t                  array_num,
-    //     ViewMapType&              view_map,
-    //     RHIViewInfo::EViewType    view_type,
-    //     CreateFuncType<ViewClass> createFunc) {
-    //     uint32_t resMipCount  = 1;
-    //     uint32_t resArraySize = 1;
-    //
-    //     resArraySize = pTexture->GetInfo().array_size;
-    //     resMipCount  = pTexture->GetNumMips();
-    //
-    //     if (array_level >= resArraySize) {
-    //         LOG_WARNING("First array slice is OOB when creating resource view. Clamping");
-    //         array_level = resArraySize - 1;
-    //     }
-    //
-    //     if (mip_level >= resMipCount) {
-    //         LOG_WARNING("Most detailed mip is OOB when creating resource view. Clamping");
-    //         mip_level = resMipCount - 1;
-    //     }
-    //
-    //     RHIViewInfo view         = RHIViewInfo{};
-    //     view.base_info.view_type = view_type;
-    //     if (view.IsUAV()) {
-    //         view.texture.uav.array_min = array_level;
-    //         view.texture.uav.array_num = array_num;
-    //         view.texture.uav.mip_min   = mip_level;
-    //         view.texture.uav.mip_num   = mip_num;
-    //     } else if (view.IsSRV()) {
-    //         view.texture.srv.array_min = array_level;
-    //         view.texture.srv.array_num = array_num;
-    //         view.texture.srv.mip_min   = mip_level;
-    //         view.texture.srv.mip_num   = mip_num;
-    //     }
-    //     if (view_map.find(view) == view_map.end()) {
-    //         view_map[view] = createFunc(pTexture, mip_level, mip_num, array_level, array_num);
-    //     }
-    //
-    //     return view_map[view];
-    // }
+    static std::tuple<ERHIAccessFlags, ERHIAccessFlags, ERHIPipelineStageFlags, ERHIPipelineStageFlags>
+    GetBufferTransitation(EBufferLayout src, EBufferLayout dst, EPassType pass_type) {
+        // ERHIAccessFlags src_access_flags, dst_access_flags;
+        // ERHIPipelineStageFlags src_stage, dst_stage;
+        // if(src == EBufferLayout::INDIRECT_COMMAND_READ) {
+        //
+        // }
+        return {};
+    }
+
+    uint32_t RenderGraphBuffer::ResloveResourceUsage(uint32_t usage, RHIBarrierDependencyInfo& barrier_info, EPassType pass_type) {
+        if (usage == NO_CHAGNE)
+            return usage;
+        barrier_info.buffer_barriers.push_back(RHIBufferBarrierInfo{});
+        auto& buffer_barrier_info          = barrier_info.buffer_barriers.back();
+        auto [src_access_flags, src_stage] = GetBufferTransitation(m_buffer->GetLayout(), pass_type);
+        auto [dst_access_flags, dst_stage] = GetBufferTransitation(static_cast<RenderGraphBuffer::Usage>(usage), pass_type);
+        buffer_barrier_info.SetBuffer(m_buffer).SetSrcAccessFlags(src_access_flags).SetDstAccessFlags(dst_access_flags).SetSrcStage(src_stage).SetDstStage(dst_stage);
+        m_buffer->SetLayout(static_cast<RenderGraphBuffer::Usage>(usage));
+        m_usage = static_cast<RenderGraphBuffer::Usage>(usage);
+        return usage;
+    }
+    RHIBufferRef RenderGraphBuffer::GetBuffer() const {
+        assert(m_buffer);
+        return m_buffer;
+    }
+    RHISRVRef RenderGraphBuffer::GetSRV() const {
+        assert(m_buffer);
+        return RenderGraphResourceCache::Get().GetSRV(m_buffer);
+    }
+
+    RHIUAVRef RenderGraphBuffer::GetUAV() const {
+        assert(m_buffer);
+        return RenderGraphResourceCache::Get().GetUAV(m_buffer);
+    }
 
     RHISRVRef RenderGraphTexture::GetSRV(EPixelFormat format, uint32_t mip_min, uint32_t mip_num, uint32_t array_min, uint32_t array_num) {
         return RenderGraphResourceCache::Get().GetSRV(m_texture, format == PF_UNDEFINED ? GetFormat() : format, mip_min, mip_num, array_min, array_num);
+    }
+    RHITextureRef RenderGraphTexture::GetTexture() const {
+        return m_texture;
     }
     RHIUAVRef RenderGraphTexture::GetUAV(EPixelFormat format, uint32_t mip_num, uint32_t array_min, uint32_t array_num) {
         return RenderGraphResourceCache::Get().GetUAV(m_texture, format == PF_UNDEFINED ? GetFormat() : format, mip_num, array_min, array_num);
@@ -98,7 +98,9 @@ namespace Moer {
     }
 
     static inline ETextureLayout GetTextureLayout(RenderGraphTexture::Usage usage) {
-
+        if (EnumHasAnyFlag(usage, RenderGraphTexture::Usage::UNORDERED_ACCESS)) {
+            return ETextureLayout::TEXTURE_LAYOUT_COMMON;
+        }
         if (EnumHasAnyFlag(usage, RenderGraphTexture::Usage::COLOR_ATTACHMENT)) {
             return TEXTURE_LAYOUT_COLOR_ATTACHMENT;
         }
@@ -212,12 +214,8 @@ namespace Moer {
         return std::make_tuple(src_access_flags, dst_access_flags, src_stage, dst_stage);
     }
 
-    uint32_t RenderGraphTexture::ResloveResourceUsage(RHIGraphicsCommandList* cmd_list, uint32_t usage) {
-        Usage                    usage_flags = static_cast<Usage>(usage);
-        RHIBarrierDependencyInfo barrier_dependency_info;
-        barrier_dependency_info.texture_barriers.resize(1);
-        auto& texture_barrier_info = barrier_dependency_info.texture_barriers[0];
-
+    uint32_t RenderGraphTexture::ResloveResourceUsage(uint32_t usage, RHIBarrierDependencyInfo& barrier_info, EPassType pass_type) {
+        Usage usage_flags = static_cast<Usage>(usage);
         //Todo is this correct?
         bool                is_depth_stencil = EnumHasAnyFlag(usage_flags, RenderGraphTexture::Usage::DEPTH_STENCIL_ATTACHMENT) || GetFormat() == EPixelFormat::PF_D32_SFLOAT_S8_UINT;
         RHISubresourceRange subresource_range(is_depth_stencil ? ETextureAspectFlags::DEPTH_SLICE : ETextureAspectFlags::COLOR, 0, 1, 0, 1, 0, 1);
@@ -225,6 +223,8 @@ namespace Moer {
         auto                dst_layout = GetTextureLayout(static_cast<RenderGraphTexture::Usage>(usage));
         if (src_layout == dst_layout)
             return src_layout;
+        barrier_info.texture_barriers.push_back(RHITextureBarrierInfo{});
+        auto& texture_barrier_info                                      = barrier_info.texture_barriers.back();
         auto [src_access_flags, dst_access_flags, src_stage, dst_stage] = GetImageTransition(src_layout, dst_layout);
         texture_barrier_info
             .SetSubResourceRange(subresource_range)
@@ -235,7 +235,6 @@ namespace Moer {
             .SetDstAccessFlags(dst_access_flags)
             .SetSrcStage(src_stage)
             .SetDstStage(dst_stage);
-        cmd_list->SetPipelineBarrier(barrier_dependency_info);
         m_texture->SetLayout(subresource_range, dst_layout);
         return dst_layout;
     }

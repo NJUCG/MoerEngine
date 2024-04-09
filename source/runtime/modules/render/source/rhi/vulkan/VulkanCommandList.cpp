@@ -290,7 +290,7 @@ void VulkanRHICommandListBase::SetPipelineBarrier(const RHIBarrierDependencyInfo
         image_barriers[i].subresourceRange.levelCount     = _dependency.texture_barriers[i].sub_resource_range.num_mips == RHISubresourceRange::s_all ? VK_REMAINING_MIP_LEVELS : _dependency.texture_barriers[i].sub_resource_range.num_mips;// 1. MARK... levelCount + baseMipLevel must <= image mip levels
         image_barriers[i].subresourceRange.baseArrayLayer = _dependency.texture_barriers[i].sub_resource_range.array_index;
         image_barriers[i].subresourceRange.layerCount     = _dependency.texture_barriers[i].sub_resource_range.array_count == RHISubresourceRange::s_all ? VK_REMAINING_ARRAY_LAYERS : _dependency.texture_barriers[i].sub_resource_range.array_count;// 1. MARK... layerCount + baseArrayLayer must <= image array layers
-        _dependency.texture_barriers[i].p_texture->SetLayout(_dependency.texture_barriers[i].sub_resource_range,_dependency.texture_barriers[i].dst_layout);
+        _dependency.texture_barriers[i].p_texture->SetLayout(_dependency.texture_barriers[i].sub_resource_range, _dependency.texture_barriers[i].dst_layout);
     }
 
     VkDependencyInfo dependency_info{};
@@ -404,7 +404,7 @@ void VulkanRHIGraphicsCommandList::DrawIndexedIndirect(RHIBuffer* _argument_buff
         _stride);
 }
 
-void VulkanRHIGraphicsCommandList::Draw(uint32_t _vertex_count, uint32_t _instance_count, uint32_t _start_vertex_location, uint32_t _start_instance_location){
+void VulkanRHIGraphicsCommandList::Draw(uint32_t _vertex_count, uint32_t _instance_count, uint32_t _start_vertex_location, uint32_t _start_instance_location) {
     PrepareDrawCommand();
     Moer::RHI::Vulkan::DebugUtils::CmdInsertLabel(m_command_buffer, "Draw", {});
     vkCmdDraw(m_command_buffer, _vertex_count, _instance_count, _start_vertex_location, _start_instance_location);
@@ -412,7 +412,7 @@ void VulkanRHIGraphicsCommandList::Draw(uint32_t _vertex_count, uint32_t _instan
 
 void VulkanRHIGraphicsCommandList::Dispatch(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z) {
     PrepareDispatch();
-    Moer::RHI::Vulkan::DebugUtils::CmdInsertLabel(m_command_buffer, "Dispatch", {});
+    // Moer::RHI::Vulkan::DebugUtils::CmdInsertLabel(m_command_buffer, "Dispatch", {});
     vkCmdDispatch(m_command_buffer, _group_count_x, _group_count_y, _group_count_z);
 }
 
@@ -603,6 +603,14 @@ void VulkanRHIGraphicsCommandList::GetQueryData(ERenderQueryType _query_type, ui
 }
 
 void VulkanRHIGraphicsCommandList::ExecuteSubCommands(uint32_t _num, RHIGraphicsCommandList* _sub_commands) {
+}
+
+void VulkanRHIGraphicsCommandList::BeginLabel(const char* _label) {
+    Moer::RHI::Vulkan::DebugUtils::CmdInsertLabel(m_command_buffer, _label, {});
+}
+
+void VulkanRHIGraphicsCommandList::EndLabel() {
+    Moer::RHI::Vulkan::DebugUtils::CmdEndLabel(m_command_buffer);
 }
 
 VkRenderingAttachmentInfo VulkanRHIGraphicsCommandList::FromColorAttachmentInfo(const RHIRenderPassInfo::ColorAttachmentInfo& _color_attachment_info) const {

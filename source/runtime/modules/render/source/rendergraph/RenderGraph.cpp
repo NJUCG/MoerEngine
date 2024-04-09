@@ -9,6 +9,13 @@ namespace Moer {
     RenderGraphHandle BlackBoard::GetHandle(const std::string& name) const {
         return m_handles.at(name);
     }
+    Moer::Array<RenderGraphHandle> BlackBoard::GetHandles(const Moer::Array<std::string>& names) const {
+        Moer::Array<RenderGraphHandle> handles;
+        for (const auto& name : names) {
+            handles.emplace_back(GetHandle(name));
+        }
+        return handles;
+    }
     void BlackBoard::PutHandle(const std::string& name, RenderGraphHandle handle) {
         m_handles.emplace(name, handle);
     }
@@ -25,13 +32,13 @@ namespace Moer {
         m_renderGraph.WriteInternal(m_pass, output, static_cast<uint32_t>(usage));
         return *this;
     }
-    RenderGraph::Builder& RenderGraph::Builder::ReadTextures(const std::vector<RenderGraphHandle>& inputs, RenderGraphTexture::Usage usage) {
+    RenderGraph::Builder& RenderGraph::Builder::ReadTextures(const Moer::Array<RenderGraphHandle>& inputs, RenderGraphTexture::Usage usage) {
         for (auto input : inputs) {
             m_renderGraph.ReadInternal(m_pass, input, static_cast<uint32_t>(usage));
         }
         return *this;
     }
-    RenderGraph::Builder& RenderGraph::Builder::WriteTextures(const std::vector<RenderGraphHandle>& output, RenderGraphTexture::Usage usage) {
+    RenderGraph::Builder& RenderGraph::Builder::WriteTextures(const Moer::Array<RenderGraphHandle>& output, RenderGraphTexture::Usage usage) {
         for (auto out : output) {
             m_renderGraph.WriteInternal(m_pass, out, static_cast<uint32_t>(usage));
         }
@@ -45,6 +52,18 @@ namespace Moer {
         m_renderGraph.WriteInternal(m_pass, output, static_cast<uint32_t>(usage));
         return *this;
     }
+    RenderGraph::Builder& RenderGraph::Builder::WriteBuffers(const Moer::Array<RenderGraphHandle>& output, RenderGraphBuffer::Usage usage) {
+        for (auto out : output) {
+            m_renderGraph.WriteInternal(m_pass, out, static_cast<uint32_t>(usage));
+        }
+        return *this;
+    }
+    RenderGraph::Builder& RenderGraph::Builder::ReadBuffers(const Moer::Array<RenderGraphHandle>& inputs, RenderGraphBuffer::Usage usage) {
+        for (auto input : inputs) {
+            m_renderGraph.ReadInternal(m_pass, input, static_cast<uint32_t>(usage));
+        }
+        return *this;
+    }
     void RenderGraph::Builder::DeclareRenderPass(const RenderGraphPassDescriptor& descriptor) {
         if (descriptor.depth_stencil_attachment.isInitialized()) {
             //Depth Attachment may be used in this pass,but not used in later pass
@@ -54,9 +73,16 @@ namespace Moer {
         auto pass = static_cast<GraphicsPassNode*>(m_pass);
         pass->DeclareRenderPass(descriptor);
     }
+    void RenderGraph::Builder::DeclareComputePass(const ComputePassDescriptor& descriptor) {
+        auto pass = static_cast<ComputePassNode*>(m_pass);
+        pass->DeclareComputePass(descriptor);
+    }
     RenderGraph::Builder::Builder(PassNode* pass, RenderGraph& renderGraph) : m_pass(pass), m_renderGraph(renderGraph) {
     }
     RenderGraph::RenderGraph() : m_black_board(*this) {
+    }
+    RenderGraph::RenderGraph(const RenderGraph& other) : m_black_board(*this) {
+        int k = 1;
     }
     void RenderGraph::Reset() {
         m_dependency_graph.Reset();
@@ -94,7 +120,11 @@ namespace Moer {
         setup(builder);
     }
     void RenderGraph::AddComputePass(const std::string& name, const ComputeSetUp& setup, ComputeExecute&& execute) {
-        //TODO
+        RenderGraphPass* pass = MoerNew(RenderGraphPass)(std::move(execute));
+        auto             node = MoerNew(ComputePassNode)(name, pass);
+        m_passes.emplace_back(node);
+        Builder builder(node, *this);
+        setup(builder);
     }
     void RenderGraph::AddRayTracingPass(const std::string& name, const RayTracingSetup& setup, RaytracingExecute&& execute) {
         //TODO
