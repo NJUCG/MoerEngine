@@ -104,6 +104,9 @@ namespace Moer {
         }
         return m_view;//world to camera
     }
+    Matrix4x4f Camera::GetRotateMatrix() noexcept {
+        return m_rotate;
+    }
 
     void Camera::SetProjectionFactor(float fov_y, float aspect_ratio, float near_clip, float far_clip) noexcept {
         if (fov_y < fov_min)

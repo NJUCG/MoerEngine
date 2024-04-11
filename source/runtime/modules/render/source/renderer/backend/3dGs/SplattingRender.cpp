@@ -14,11 +14,12 @@
 #include <fstream>
 
 IMPLEMENT_SHADER_TYPE(SortHistShader, "3dgs_splatting/hist_temp.hlsl", "main", ST_COMPUTE);
+IMPLEMENT_SHADER_TYPE(SortCheckShader, "3dgs_splatting/check.hlsl", "main", ST_COMPUTE);
 IMPLEMENT_SHADER_TYPE(PrecompCov3dShader, "3dgs_splatting/precomp_cov3d.hlsl", "main", ST_COMPUTE)
 IMPLEMENT_SHADER_TYPE(PreprocessShader, "3dgs_splatting/preprocess.hlsl", "main", ST_COMPUTE)
 IMPLEMENT_SHADER_TYPE(PrefixSumShader, "3dgs_splatting/prefix_sum.hlsl", "main", ST_COMPUTE)
 IMPLEMENT_SHADER_TYPE(PreprocessSortShader, "3dgs_splatting/preprocess_sort.hlsl", "main", ST_COMPUTE)
-IMPLEMENT_SHADER_TYPE(SortShader, "3dgs_splatting/sort.hlsl", "main", ST_COMPUTE);
+IMPLEMENT_SHADER_TYPE(RadixSortShader, "3dgs_splatting/sort.hlsl", "main", ST_COMPUTE);
 IMPLEMENT_SHADER_TYPE(TileBoundaryShader, "3dgs_splatting/tile_boundary.hlsl", "main", ST_COMPUTE);
 IMPLEMENT_SHADER_TYPE(RenderShader, "3dgs_splatting/render.hlsl", "main", ST_COMPUTE);
 
@@ -53,6 +54,7 @@ protected:
     RHIComputePipelineStateRef m_preprocess_sort_pipeline;
     RHIComputePipelineStateRef m_tile_boundary_pipeline;
     RHIComputePipelineStateRef m_sort_hist_pipeline;
+    RHIComputePipelineStateRef m_sort_check_pipeline;
     RHIComputePipelineStateRef m_render_pipeline;
 
     RHIBufferRef vertexAttributeBuffer;
@@ -85,6 +87,7 @@ protected:
     RHIShaderRef preprocess_sort_shader;
     RHIShaderRef sort_shader;
     RHIShaderRef sort_hist_shader;
+    RHIShaderRef sort_check_shader;
     RHIShaderRef tile_boundary_shader;
     RHIShaderRef render_shader;
 
@@ -196,17 +199,34 @@ void Moer::SplattingRender::Impl::Init(const BackendRendererInitInfo& _init_info
 
     prefix_sum_shader      = shader_resource_manager.GetShader<PrefixSumShader>();
     preprocess_sort_shader = shader_resource_manager.GetShader<PreprocessSortShader>();
-    sort_shader            = shader_resource_manager.GetShader<SortShader>();
+    sort_shader            = shader_resource_manager.GetShader<RadixSortShader>();
 
- 
-    sort_hist_shader     = shader_resource_manager.GetShader<SortHistShader>();
+    auto spv = read_binary_file("E:/code/3DGS.cpp/build/shaders/sort.spv", 0);
+    // spv         = read_binary_file("E:/code/moerengine2/shaders/3dgs_splatting/radix_sort.spv", 0);
+    entry = {spv};
+    //sort_shader = g_rhi->RHICreateComputeShader(&entry, sort_shader->GetMetaShader());
+
+    spv   = read_binary_file("E:/code/3DGS.cpp/build/shaders/prefix_sum.spv", 0);
+    entry = {spv};
+    // prefix_sum_shader = g_rhi->RHICreateComputeShader(&entry, prefix_sum_shader->GetMetaShader());
+
+    spv   = read_binary_file("E:/code/3DGS.cpp/build/shaders/preprocess.spv", 0);
+    entry = {spv};
+    // preprocess_shader = g_rhi->RHICreateComputeShader(&entry, preprocess_shader->GetMetaShader());
+
+    spv              = read_binary_file("E:/code/3DGS.cpp/build/shaders/hist.spv", 0);
+    entry            = {spv};
+    sort_hist_shader = shader_resource_manager.GetShader<SortHistShader>();
+    // sort_check_shader = shader_resource_manager.GetShader<SortCheckShader>();
+    //  sort_hist_shader     = g_rhi->RHICreateComputeShader(&entry, sort_hist_shader->GetMetaShader());
     tile_boundary_shader = shader_resource_manager.GetShader<TileBoundaryShader>();
 
     render_shader = shader_resource_manager.GetShader<RenderShader>();
-    
+    spv           = read_binary_file("E:/code/3DGS.cpp/build/shaders/render.spv", 0);
+    entry         = {spv};
+    //  render_shader = g_rhi->RHICreateComputeShader(&entry, render_shader->GetMetaShader());
 
     precomp_cov3d_shader = shader_resource_manager.GetShader<PrecompCov3dShader>();
-    
 
     m_precomp_cov3d_pipeline   = g_rhi->RHICreateComputePipelineState(precomp_cov3d_shader);
     auto t                     = preprocess_shader->GetMetaShader()->GetShaderMetaType();
@@ -217,6 +237,7 @@ void Moer::SplattingRender::Impl::Init(const BackendRendererInitInfo& _init_info
     m_tile_boundary_pipeline   = g_rhi->RHICreateComputePipelineState(tile_boundary_shader);
     m_render_pipeline          = g_rhi->RHICreateComputePipelineState(render_shader);
     m_sort_hist_pipeline       = g_rhi->RHICreateComputePipelineState(sort_hist_shader);
+    //   m_sort_check_pipeline      = g_rhi->RHICreateComputePipelineState(sort_check_shader);
     InitBuffers();
 }
 
@@ -531,17 +552,20 @@ void Moer::SplattingRender::Impl::DispatchRadixSort(RenderGraph& render_graph) {
             auto handles = render_graph.GetBlackBoard().GetHandles({ "sort_k_even", "sort_k_odd", "sort_v_even", "sort_v_odd", "sort_hist_buffer" });
             _builder.ReadBuffers(handles).WriteBuffers(handles).DeclareComputePass({m_sort_hist_pipeline}); }, [&](RenderPassContext& _context) {
             for (auto i = 0; i < 8; i++) {
-                _context.cmd_list->SetPipelineState(m_sort_hist_pipeline);
                 auto invocationSize = (num_instances + numRadixSortBlocksPerWorkgroup - 1) / numRadixSortBlocksPerWorkgroup;
                  invocationSize = (invocationSize + 255) / 256;
                  RHIBatchedShaderParameters batched_params;
-                
                 SortParameters sort_constants;
-                sort_constants.g_num_instances = num_instances;
-                sort_constants.g_num_blocks_per_workgroup = numRadixSortBlocksPerWorkgroup;
-                sort_constants.g_shift = i * 8;
-                sort_constants.g_num_workgroups = invocationSize;
-                
+            sort_constants.g_num_instances = num_instances;
+            sort_constants.g_num_blocks_per_workgroup = numRadixSortBlocksPerWorkgroup;
+            sort_constants.g_shift = i * 8;
+            sort_constants.g_num_workgroups = invocationSize;
+
+              
+
+                _context.cmd_list->SetPipelineState(m_sort_hist_pipeline);
+
+            
                 SortHistShader::Parameters hist_params;
                 hist_params.params = sort_constants;
                 hist_params.g_elements_in =  render_graph.GetBlackBoard().GetBuffer(i%2==0? "sort_k_even":"sort_k_odd")->GetSRV();
@@ -551,9 +575,10 @@ void Moer::SplattingRender::Impl::DispatchRadixSort(RenderGraph& render_graph) {
                 _context.cmd_list->Dispatch(invocationSize, 1, 1);
 
                 WriteReadBarrier(render_graph.GetBlackBoard().GetBuffer("sort_hist_buffer")->GetBuffer(), _context.cmd_list);
+                
 
                 _context.cmd_list->SetPipelineState(m_radix_sort_pipeline);
-                SortShader::Parameters sort_params;
+                RadixSortShader::Parameters sort_params;
                 sort_params.params = sort_constants;
                 sort_params.g_elements_in = render_graph.GetBlackBoard().GetBuffer(i % 2 == 0 ? "sort_k_even" : "sort_k_odd")->GetSRV();
                 sort_params.g_elements_out = render_graph.GetBlackBoard().GetBuffer(i % 2 == 0 ? "sort_k_odd" : "sort_k_even")->GetUAV();
@@ -564,13 +589,18 @@ void Moer::SplattingRender::Impl::DispatchRadixSort(RenderGraph& render_graph) {
                 g_rhi->RHISetBatchedShaderParameters(m_radix_sort_pipeline, batched_params);
                 _context.cmd_list->Dispatch(invocationSize, 1, 1);
 
+                
                 if(i%2==0) {
-                    ReadWriteBarrier(render_graph.GetBlackBoard().GetBuffer("sort_k_odd")->GetBuffer(), _context.cmd_list);
-                    ReadWriteBarrier(render_graph.GetBlackBoard().GetBuffer("sort_v_odd")->GetBuffer(), _context.cmd_list);
-                }
-                else {
+                    WriteReadBarrier(render_graph.GetBlackBoard().GetBuffer("sort_k_odd")->GetBuffer(), _context.cmd_list);
+                    WriteReadBarrier(render_graph.GetBlackBoard().GetBuffer("sort_v_odd")->GetBuffer(), _context.cmd_list);
                     ReadWriteBarrier(render_graph.GetBlackBoard().GetBuffer("sort_k_even")->GetBuffer(), _context.cmd_list);
                     ReadWriteBarrier(render_graph.GetBlackBoard().GetBuffer("sort_v_even")->GetBuffer(), _context.cmd_list);
+                }
+                else {
+                    WriteReadBarrier(render_graph.GetBlackBoard().GetBuffer("sort_k_even")->GetBuffer(), _context.cmd_list);
+                    WriteReadBarrier(render_graph.GetBlackBoard().GetBuffer("sort_v_even")->GetBuffer(), _context.cmd_list);
+                    ReadWriteBarrier(render_graph.GetBlackBoard().GetBuffer("sort_k_odd")->GetBuffer(), _context.cmd_list);
+                    ReadWriteBarrier(render_graph.GetBlackBoard().GetBuffer("sort_v_odd")->GetBuffer(), _context.cmd_list);
                 }
                 
               } });
@@ -581,6 +611,7 @@ void Moer::SplattingRender::Impl::DispatchTileBoundary(RenderGraph& render_graph
             auto sort_k_buffer_even = render_graph.GetBlackBoard().GetHandle("sort_k_even");
             auto tile_boundary_buffer = render_graph.GetBlackBoard().GetHandle("tile_boundary_buffer");
             _builder.ReadBuffers({sort_k_buffer_even}).WriteBuffers({tile_boundary_buffer}).DeclareComputePass({m_tile_boundary_pipeline}); }, [&](RenderPassContext& _context) {
+                _context.cmd_list->FillBuffer(render_graph.GetBlackBoard().GetBuffer("tile_boundary_buffer")->GetBuffer(), 0,(~0ULL),0);
                 RHIBatchedShaderParameters batched_params;
                 TileBoundaryShader::Parameters params;
                 params.params.num_instances = num_instances;
@@ -611,7 +642,7 @@ void Moer::SplattingRender::Impl::DispatchTileRender(RenderGraph& render_graph) 
             batched_params.SetParameters(render_shader, params);
             g_rhi->RHISetBatchedShaderParameters(m_render_pipeline, batched_params);
 
-            _context.cmd_list->Dispatch((source_resolution.x + 15) / 16, (source_resolution.y + 15) / 16, 1); });
+            _context.cmd_list->Dispatch((source_resolution.x + 15) / 16, (source_resolution.y + 15) / 16,1); });
 }
 
 Moer::Matrix4x4f FromGlmMatrix(const glm::mat4& _mat) {
@@ -623,9 +654,20 @@ Moer::Matrix4x4f FromGlmMatrix(const glm::mat4& _mat) {
     return mat;
 }
 
+glm::mat4 FromMoerMatrix(const Moer::Matrix4x4f& _mat) {
+    glm::mat4 mat;
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++)
+            mat[i][j] = _mat[i][j];
+    }
+    return mat;
+}
+
 void Moer::SplattingRender::Impl::UpdateUniform() {
-    auto camera_entity            = g_scene->GetMainCamera();
-    auto camera                   = CameraManager::Get().Get(camera_entity);
+    auto camera_entity = g_scene->GetMainCamera();
+    auto camera        = CameraManager::Get().Get(camera_entity);
+    camera->Tick();
+
     uniformParams.camera_position = Vector4f(camera->GetPosition(), 1.0f);
     uniformParams.proj_mat        = camera->GetProjectionMatrix() * camera->GetViewMatrix();
     uniformParams.view_mat        = camera->GetViewMatrix();
@@ -634,8 +676,8 @@ void Moer::SplattingRender::Impl::UpdateUniform() {
     uniformParams.tan_fovx        = camera->GetTanHalfFov();
     uniformParams.tan_fovy        = camera->GetTanHalfFov() * static_cast<float>(source_resolution.y) / static_cast<float>(source_resolution.x);
 
-    auto rotation    = glm::mat4_cast(glm::quat());
-    auto translation = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 5.0f));
+    auto rotation    = FromMoerMatrix(camera->GetRotateMatrix());
+    auto translation = glm::translate(glm::mat4(1.0f), glm::vec3(uniformParams.camera_position.t.x, uniformParams.camera_position.t.y, uniformParams.camera_position.t.z));
     auto view        = glm::inverse(translation * rotation);
     // auto inverse_translation = glm::inverse(translation);
     // auto inverse_rotation = glm::inverse(rotation);

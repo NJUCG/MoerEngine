@@ -1,14 +1,14 @@
-struct Params {
-    uint g_num_instances;
-    uint g_shift;
-    uint g_num_workgroups;
-    uint g_num_blocks_per_workgroup;
-};
-
+// struct Params {
+//     uint g_num_instances;
+//     uint g_shift;
+//     uint g_num_workgroups;
+//     uint g_num_blocks_per_workgroup;
+// };
+//
 typedef uint64_t key_t;
 
 #define WORKGROUP_SIZE  256
-#define RADIX_SORT_BINS 256U
+#define RADIX_SORT_BINS 256
 #define SUBGROUP_SIZE   32
 #define BITS            64
 
@@ -17,22 +17,23 @@ typedef uint64_t key_t;
 [[vk::binding(2, 0)]] StructuredBuffer<uint>   g_payload_in : register(t1, space0);
 [[vk::binding(3, 0)]] RWStructuredBuffer<uint> g_payload_out : register(u1, space0);
 [[vk::binding(4, 0)]] StructuredBuffer<uint>   g_histograms : register(t2, space0);
+//
+// [[vk::push_constant]] ConstantBuffer<Params> params;
+//
+// groupshared uint sums[RADIX_SORT_BINS / SUBGROUP_SIZE];
+// groupshared uint global_offsets[RADIX_SORT_BINS]; 
+//
+// struct BinFlags {
+//     uint flags1[WORKGROUP_SIZE / BITS];
+//     uint flags2[WORKGROUP_SIZE / BITS];
+// };
+//
+// groupshared BinFlags bin_flags[RADIX_SORT_BINS];
 
-[[vk::push_constant]] ConstantBuffer<Params> params;
-
-groupshared uint sums[RADIX_SORT_BINS / SUBGROUP_SIZE];// 子组约简
-groupshared uint global_offsets[RADIX_SORT_BINS];      // 全局排他扫描（前缀和）
-
-struct BinFlags {
-    uint flags1[WORKGROUP_SIZE / BITS];
-    uint flags2[WORKGROUP_SIZE / BITS];
-};
-
-groupshared BinFlags bin_flags[RADIX_SORT_BINS];
-
-[numthreads(256, 1, 1)] void main(uint3 group_id
-                                  : SV_GroupIndex, uint3 dispatch_id
-                                  : SV_GroupThreadID) {
+// [numthreads(256, 1, 1)] void main(uint3 group_id
+//                                   : SV_GroupIndex, uint3 dispatch_id
+//                                   : SV_GroupThreadID) {
+    // key_t element = g_payload_in[0];
     // uint block_id   = group_id.x * g_params.g_num_blocks_per_workgroup + dispatch_id.x;
     // uint element_id = block_id * 256 + dispatch_id.y;
     // if (element_id >= g_params.g_num_instances) {
@@ -46,26 +47,26 @@ groupshared BinFlags bin_flags[RADIX_SORT_BINS];
     // }
     // elements_out[element_id] = count;
     // payload_out[element_id]  = payload;
-    uint t = g_histograms[RADIX_SORT_BINS * group_id.x + dispatch_id.x];
-    g_elements_out[RADIX_SORT_BINS * group_id.x + dispatch_id.x] = t + g_elements_in[RADIX_SORT_BINS * group_id.x + dispatch_id.x];
-    g_payload_out[RADIX_SORT_BINS * group_id.x + dispatch_id.x]  = g_payload_in[RADIX_SORT_BINS * group_id.x + dispatch_id.x];
-    
-
-    uint lID  = dispatch_id.x;
-    uint wID  = group_id.x;
-    uint sID  = lID / SUBGROUP_SIZE;
-    uint lsID = WaveGetLaneIndex();
-
-    uint local_histogram = 0;
-    uint prefix_sum      = 0;
-    uint histogram_count = 0;
-
-    uint g_num_workgroups           = params.g_num_workgroups;
-    uint g_num_blocks_per_workgroup = params.g_num_blocks_per_workgroup;
-    uint g_num_instances            = params.g_num_instances;
-    uint g_shift                    = params.g_shift;
+    // uint t = g_histograms[RADIX_SORT_BINS * group_id.x + dispatch_id.x] + params.g_shift;
+    // g_elements_out[RADIX_SORT_BINS * group_id.x + dispatch_id.x] = t + g_elements_in[RADIX_SORT_BINS * group_id.x + dispatch_id.x];
+    // g_payload_out[RADIX_SORT_BINS * group_id.x + dispatch_id.x]  = g_payload_in[RADIX_SORT_BINS * group_id.x + dispatch_id.x];
+    //
+    //
+    // uint lID  = dispatch_id.x;
+    // uint wID  = group_id.x;
+    // uint sID  = lID / SUBGROUP_SIZE;
+    // uint lsID = WaveGetLaneIndex();
+    //
+    // uint local_histogram = 0;
+    // uint prefix_sum      = 0;
+    // uint histogram_count = 0;
+    //
+    // uint g_num_workgroups           = params.g_num_workgroups;
+    // uint g_num_blocks_per_workgroup = params.g_num_blocks_per_workgroup;
+    // uint g_num_instances            = params.g_num_instances;
+    // uint g_shift                    = params.g_shift;
  //   GroupMemoryBarrierWithGroupSync();
-    {
+//    {
         // uint count = 0;
         // for (uint j = 0; j < g_num_workgroups; j++) {
         //      uint t    = g_histograms[RADIX_SORT_BINS * j + lID];
@@ -78,7 +79,7 @@ groupshared BinFlags bin_flags[RADIX_SORT_BINS];
         // if (WaveIsFirstLane()) {
         //     sums[wID] = sum;
         // }
-    }
+ //   }
   //  GroupMemoryBarrierWithGroupSync();
 
     // if (lID < RADIX_SORT_BINS) {
@@ -145,5 +146,54 @@ groupshared BinFlags bin_flags[RADIX_SORT_BINS];
     //     }
     //
     //     GroupMemoryBarrierWithGroupSync();
+    // }
+//}
+
+// [[vk::binding(0, 0)]] RWStructuredBuffer<uint> src : register(u0, space0);
+// [[vk::binding(1, 0)]] RWStructuredBuffer<uint> dst : register(u1, space0);
+//
+// struct Params {
+//     uint timestep;
+// };
+//
+// [[vk::push_constant]] ConstantBuffer<Params> params : register(b0);
+
+uint power(uint base, uint exponent) {
+    uint result = 1;
+    for (uint i = 0; i < exponent; i++) {
+        result *= base;
+    }
+    return result;
+}
+
+uint3 group_id
+//                                   : SV_GroupIndex, uint3 dispatch_id
+//                                   : SV_GroupThreadID
+
+[numthreads(256, 1, 1)] void main(uint3 dispatchThreadId
+                                  : SV_DispatchThreadID,uint3 dispatch_id
+                                   : SV_GroupThreadID) {
+    // uint index = dispatchThreadId.x;
+    // uint timestep = params.timestep;
+    // uint length, stride;
+    // src.GetDimensions(length, stride);
+    // if (index >= length) {
+    //     return;
+    // }
+    //
+    // if (timestep % 2 == 0) {
+    //     if (index < pow(2, timestep)) {
+    //         dst[index] = src[index];
+    //     } else {
+    //         uint index2 = index - power(2, timestep);
+    //         dst[index]  = src[index] + src[index2];
+    //     }
+    // } else {
+    //     if (index < pow(2, timestep)) {
+    //         src[index] = dst[index];
+    //     } else {
+    //         uint index2 = index - power(2, timestep);
+    //         src[index]  = dst[index] + dst[index2];
+    //     }
     // }
 }

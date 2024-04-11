@@ -133,6 +133,8 @@ public:
         uint32_t          _offset,
         EIndexElementType _type) = 0;
 
+    virtual void FillBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size, uint32_t _data) = 0;
+
     virtual void SetAttachments() {
     }
 

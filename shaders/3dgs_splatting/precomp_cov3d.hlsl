@@ -36,14 +36,14 @@ struct RenderParams {
     cov3ds_buffer[index * 6 + 4] = cov3d[1][2];
     cov3ds_buffer[index * 6 + 5] = cov3d[2][2];
 
-    if (index == 0) {
-        printf("rotation: %f %f %f %f\n", vertex_buffer[index].rotation.x, vertex_buffer[index].rotation.y, vertex_buffer[index].rotation.z, vertex_buffer[index].rotation.w);
-        printf("S: %f %f %f %f %f %f %f %f %f\n", S[0][0], S[0][1], S[0][2], S[1][0], S[1][1], S[1][2], S[2][0], S[2][1], S[2][2]);
-        printf("R: %f %f %f %f %f %f %f %f %f\n", R[0][0], R[0][1], R[0][2], R[1][0], R[1][1], R[1][2], R[2][0], R[2][1], R[2][2]);
-        printf("scale: %f %f %f\n", vertex_buffer[index].scale_opacity.x, vertex_buffer[index].scale_opacity.y, vertex_buffer[index].scale_opacity.z);
-        printf("cov3d: %f %f %f %f %f %f\n", cov3d[0][0], cov3d[0][1], cov3d[0][2], cov3d[1][1], cov3d[1][2], cov3d[2][2]);
-        float3x3 trm = transpose(M);
-        printf("trm: %f %f %f %f %f %f %f %f %f\n", trm[0][0], trm[0][1], trm[0][2], trm[1][0],trm[1][1],trm[1][2],trm[2][0],trm[2][1],trm[2][2]);
-        printf("M: %f %f %f %f %f %f %f %f %f\n", M[0][0], M[0][1], M[0][2], M[1][0],M[1][1],M[1][2],M[2][0],M[2][1],M[2][2]);
-    }
+    // if (index == 0) {
+    //     printf("rotation: %f %f %f %f\n", vertex_buffer[index].rotation.x, vertex_buffer[index].rotation.y, vertex_buffer[index].rotation.z, vertex_buffer[index].rotation.w);
+    //     printf("S: %f %f %f %f %f %f %f %f %f\n", S[0][0], S[0][1], S[0][2], S[1][0], S[1][1], S[1][2], S[2][0], S[2][1], S[2][2]);
+    //     printf("R: %f %f %f %f %f %f %f %f %f\n", R[0][0], R[0][1], R[0][2], R[1][0], R[1][1], R[1][2], R[2][0], R[2][1], R[2][2]);
+    //     printf("scale: %f %f %f\n", vertex_buffer[index].scale_opacity.x, vertex_buffer[index].scale_opacity.y, vertex_buffer[index].scale_opacity.z);
+    //     printf("cov3d: %f %f %f %f %f %f\n", cov3d[0][0], cov3d[0][1], cov3d[0][2], cov3d[1][1], cov3d[1][2], cov3d[2][2]);
+    //     float3x3 trm = transpose(M);
+    //     printf("trm: %f %f %f %f %f %f %f %f %f\n", trm[0][0], trm[0][1], trm[0][2], trm[1][0],trm[1][1],trm[1][2],trm[2][0],trm[2][1],trm[2][2]);
+    //     printf("M: %f %f %f %f %f %f %f %f %f\n", M[0][0], M[0][1], M[0][2], M[1][0],M[1][1],M[1][2],M[2][0],M[2][1],M[2][2]);
+    // }
 }

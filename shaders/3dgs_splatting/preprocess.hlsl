@@ -107,7 +107,7 @@ float ndc2Pix(float v, int S) {
     }
     
 
-    uint2 tile_shape = uint2((params.width + TILE_WIDTH - 1) / TILE_WIDTH, (params.height + TILE_HEIGHT - 1) / TILE_HEIGHT);
+    int2 tile_shape = uint2((params.width + TILE_WIDTH - 1) / TILE_WIDTH, (params.height + TILE_HEIGHT - 1) / TILE_HEIGHT);
 
     vertex_attribute_buffer[index].color_radii.w = 0.0;
     tile_overlap_buffer[index]                   = 0;
@@ -144,16 +144,18 @@ float ndc2Pix(float v, int S) {
 
     float2 uv = float2(ndc2Pix(ndc.x, int(params.width)), ndc2Pix(ndc.y, int(params.height)));
 
+
+
+        
     uint4 bounding_box = uint4(
         uint(clamp(int((uv.x - radii) / TILE_WIDTH), 0, tile_shape.x)),
         uint(clamp(int((uv.y - radii) / TILE_HEIGHT), 0, tile_shape.y)),
         uint(clamp(int((uv.x + radii + TILE_WIDTH - 1) / TILE_WIDTH), 0, tile_shape.x)),
         uint(clamp(int((uv.y + radii + TILE_HEIGHT - 1) / TILE_HEIGHT), 0, tile_shape.y)));
 
+
     uint num_tiles_overlap = (bounding_box.z - bounding_box.x) * (bounding_box.w - bounding_box.y);
-    if (num_tiles_overlap == 0) {
-        return;
-    }
+
     vertex_attribute_buffer[index].aabb            = bounding_box;
     tile_overlap_buffer[index]                     = num_tiles_overlap;
     vertex_attribute_buffer[index].depth           = p_view.z;

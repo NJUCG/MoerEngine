@@ -538,6 +538,9 @@ void VulkanRHIGraphicsCommandList::BindIndexBuffer(const RHIBuffer* p_index_buff
         _offset,
         VulkanRHIBuffer::METoVKIndexType(_type));
 }
+void VulkanRHIGraphicsCommandList::FillBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size, uint32_t _data) {
+    vkCmdFillBuffer(m_command_buffer, static_cast<VulkanRHIBuffer*>(_buffer)->GetHandle(), _offset, _size, _data);
+}
 
 void VulkanRHIGraphicsCommandList::ClearDepthStencil() {
     // MARK...

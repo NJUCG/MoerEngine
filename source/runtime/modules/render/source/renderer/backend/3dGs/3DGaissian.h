@@ -92,8 +92,8 @@ DEFINE_SHADER_PARAM(uint32_t, g_num_workgroups)
 DEFINE_SHADER_PARAM(uint32_t, g_num_blocks_per_workgroup)
 END_SHADER_CONSTANT_STRUCT_DEFINITION(SortParameters)
 
-class SortShader : public Shader {
-    DEFINE_SHADER_TYPE(SortShader, Global, RENDER_API, ...)
+class RadixSortShader : public Shader {
+    DEFINE_SHADER_TYPE(RadixSortShader, Global, RENDER_API, ...)
 public:
     BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
     DEFINE_SHADER_PARAM_STRUCT(SortParameters, params)
@@ -112,6 +112,16 @@ public:
     DEFINE_SHADER_PARAM_STRUCT(SortParameters, params)
     DEFINE_SHADER_PARAM_SRV(StructuredBuffer<uint64_t>, g_elements_in)
     DEFINE_SHADER_PARAM_UAV(RWStructuredBuffer<uint>, g_histograms)
+    END_ROOT_PARAMETER_DEFINITION(Parameters)
+};
+
+class SortCheckShader : public Shader {
+    DEFINE_SHADER_TYPE(SortCheckShader, Global, RENDER_API, ...)
+public:
+    BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
+    DEFINE_SHADER_PARAM_STRUCT(SortParameters, params)
+    DEFINE_SHADER_PARAM_SRV(StructuredBuffer<uint64_t>, g_elements_in)
+    DEFINE_SHADER_PARAM_SRV(RWStructuredBuffer<uint>, g_histograms)
     END_ROOT_PARAMETER_DEFINITION(Parameters)
 };
 

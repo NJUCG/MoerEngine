@@ -39,10 +39,13 @@ namespace Moer {
         LOG_INFO("Engine Post Init Finished");
 
         //todo : in now we need to move scene file to bin/Debug/resource/scenes
-        auto sponza_scene_path = ConfigManager::GetInstance().GetEditorResourcePath() / "default/scenes/sponza/Sponza01.gltf";
-        auto gs_scene          = "C:/Users/pc/Downloads/banana_2000.ply";
+        auto        sponza_scene_path = ConfigManager::GetInstance().GetEditorResourcePath() / "default/scenes/sponza/Sponza01.gltf";
+        std::string gs_scene;
+        gs_scene = "C:/Users/pc/Downloads/banana_2000.ply";
+        gs_scene = "E:/code/3dgs_renderer/point_cloud.ply";
+        gs_scene = "C:/Users/pc/Documents/WeChat Files/wxid_n8pl0urij8qz22/FileStorage/File/2024-04/lego/point_cloud/iteration_30000/point_cloud.ply";
         Scene::SetDefaultScene(Resource::PlyLoader::LoadSceneFromFile(gs_scene).release());
-      //  Scene::SetDefaultScene(Resource::Gltf::Parser::LoadSceneFromFile(sponza_scene_path).release());
+        //    Scene::SetDefaultScene(Resource::Gltf::Parser::LoadSceneFromFile(sponza_scene_path).release());
     }
     void Engine::Run() {
         LOG_INFO("Engine Start Running");

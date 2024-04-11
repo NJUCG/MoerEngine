@@ -36,6 +36,7 @@ struct params {
     }
 
 
+    
 
     uint tiles_width = (width + TILE_WIDTH - 1) / TILE_WIDTH;
 
@@ -47,7 +48,7 @@ struct params {
     // }
     if(start >= end) {
 		//output_image[curr_uv] = float4(0,1,0, 1.0f);
-		return ;    //    return;
+		//return ;    //    return;
     }
     //printf("start end %d %d\n", start, end);
 
@@ -89,9 +90,9 @@ struct params {
     //    printf("color %f %f %f alpha T %f %f\n", c.x, c.y, c.z, alpha, T);
 
         T = test_T;
+        //break;
     }
 		//printf("save value %f %f %f at %d %d start %d end %d \n", c.x, c.y, c.z, curr_uv.x, curr_uv.y, start, end);
 	
   	output_image[curr_uv] = float4(c, 1.0f);
-	return ;
 }
