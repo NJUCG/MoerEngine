@@ -69,30 +69,19 @@ struct params {
 
         float alpha = min(0.99f, co.w * exp(power));
 
-
-     //  	alpha = 0.5f;
-
         if (alpha < 1.0f / 255.0f) {
             continue;
         }
-
-   //   printf("cow power alpha %f %f %f %f %f %f %f %f cox coy coz %f %f %f\n", co.w, power, alpha, T,uv.x, uv.y, curr_uv.x, curr_uv.y, co.x, co.y, co.z);
-
-        
+  
         float test_T = T * (1 - alpha);
-       // printf("test_T %f\n", test_T);
         if (test_T < 0.0001f) {
             break;
         }
 
         c += vertex_attribute_buffer[vertex_key].color_radii.xyz * alpha * T;
 
-    //    printf("color %f %f %f alpha T %f %f\n", c.x, c.y, c.z, alpha, T);
-
         T = test_T;
-        //break;
     }
-		//printf("save value %f %f %f at %d %d start %d end %d \n", c.x, c.y, c.z, curr_uv.x, curr_uv.y, start, end);
-	
+
   	output_image[curr_uv] = float4(c, 1.0f);
 }

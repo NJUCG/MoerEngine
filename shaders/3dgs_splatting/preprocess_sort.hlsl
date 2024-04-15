@@ -27,7 +27,6 @@ struct Params {
     }
 
     uint ind = index == 0 ? 0 : prefix_sum[index - 1];
- 	//printf("index length ind %d %d %d\n", index, length, ind);
 
     for (uint i = attr[index].aabb.x; i < attr[index].aabb.z; i++) {
         for (uint j = attr[index].aabb.y; j < attr[index].aabb.w; j++) {
@@ -37,10 +36,6 @@ struct Params {
             uint64_t k         = (uint64_t(tileIndex) << 32) | uint(depthBits);
 
             keys[ind]      = k;
-			//uint64_t key = 1<<32;
-			//printf("key %llu %llu\n",k, key);
-      
-		//	printf("tileindex %d key %llu %llu\n",tileIndex, k,tileIndex << 32);
             payloads[ind]  = index;
             ind++;
         }

@@ -34,7 +34,6 @@ float3x3 get_projection_jacobian_approx(float3 t) {
         focal_x / t.z, 0, -(focal_x * t.x) / (t.z * t.z), 0, focal_y / t.z, -(focal_y * t.y) / (t.z * t.z), 0, 0, 0);
 }
 
-//计算投影得2D协方差矩阵
 float2x2 compute_cov2d(float3 cam, uint index) {
     float3x3 J     = get_projection_jacobian_approx(cam);
     float3x3 W     = transpose((float3x3)params.view_mat);
@@ -87,7 +86,7 @@ float3 compute_sh(uint index) {
 }
 
 float ndc2Pix(float v, int S) {
-    return ((v + 1.0) * S - 1.0) * 0.5;
+    return ((v + 1.0) * float(S) - 1.0) * 0.5;
 }
 
 [numthreads(TILE_WIDTH * TILE_HEIGHT, 1, 1)] void main(uint3 dispatchThreadId
@@ -107,7 +106,7 @@ float ndc2Pix(float v, int S) {
     }
     
 
-    int2 tile_shape = uint2((params.width + TILE_WIDTH - 1) / TILE_WIDTH, (params.height + TILE_HEIGHT - 1) / TILE_HEIGHT);
+    int2 tile_shape = int2((params.width + TILE_WIDTH - 1) / TILE_WIDTH, (params.height + TILE_HEIGHT - 1) / TILE_HEIGHT);
 
     vertex_attribute_buffer[index].color_radii.w = 0.0;
     tile_overlap_buffer[index]                   = 0;
@@ -155,6 +154,10 @@ float ndc2Pix(float v, int S) {
 
 
     uint num_tiles_overlap = (bounding_box.z - bounding_box.x) * (bounding_box.w - bounding_box.y);
+    if(num_tiles_overlap > 1000){
+     //   printf(" uv bouding_box x y z w %f %f %d %d %d %d\n", uv.x, uv.y, bounding_box.x, bounding_box.y, bounding_box.z, bounding_box.w);
+     //   return;
+    }
 
     vertex_attribute_buffer[index].aabb            = bounding_box;
     tile_overlap_buffer[index]                     = num_tiles_overlap;

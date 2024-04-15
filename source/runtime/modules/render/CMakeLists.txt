@@ -5,12 +5,10 @@ configure_file(${MODULE_DIR}/include/config.h.in ${MODULE_DIR}/include/config.h)
 
 file(GLOB_RECURSE RENDER_MODULE_HEADERS "include/*.h")
 file(GLOB_RECURSE RENDER_MODULE_SOURCES "source/*.cpp" "source/*.h")
-file(GLOB_RECURSE SHADER_FILES "E:/code/moerengine2/shaders/*.hlsl")
 
 
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${RENDER_MODULE_HEADERS} ${RENDER_MODULE_SOURCES} )
 
-#add_library(${MODULE_NAME} SHARED ${RENDER_MODULE_HEADERS} ${RENDER_MODULE_SOURCES} ${SHADER_FILES})
 add_library(${MODULE_NAME} SHARED ${RENDER_MODULE_HEADERS} ${RENDER_MODULE_SOURCES})
 
 target_compile_definitions(${MODULE_NAME} PRIVATE RENDER_MODULE_SHARED_LIB)
@@ -29,7 +27,6 @@ target_include_directories(${MODULE_NAME}
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/DirectX-Headers/include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/spdlog/include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/glfw/include>
-    PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/glm>
 	PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/VulkanSDK/include>
 	PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/DirectXShaderCompiler/include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/VulkanMemoryAllocator>
@@ -44,7 +41,6 @@ target_link_libraries(${MODULE_NAME}
     PUBLIC Microsoft::DirectX-Headers
     PUBLIC glfw
     PUBLIC ImGui::imgui
-    PUBLIC glm
 )
 # function(enable_sanitizer target_name)
 #     if(NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")

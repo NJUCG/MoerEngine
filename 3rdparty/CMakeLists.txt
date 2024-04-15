@@ -65,6 +65,5 @@ add_subdirectory(mimalloc)
 target_compile_options(mimalloc-static PRIVATE "$<$<COMPILE_LANG_AND_ID:C,Clang>:-Wno-strict-prototypes>")
 
 add_subdirectory(MeshProcess)
-add_subdirectory(glm)
 
 

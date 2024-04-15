@@ -41,7 +41,7 @@ groupshared BinFlags bin_flags[RADIX_SORT_BINS];
     uint local_histogram = 0;
     uint prefix_sum      = 0;
     uint histogram_count = 0;
-    //
+
     uint g_num_workgroups           = params.g_num_workgroups;
     uint g_num_blocks_per_workgroup = params.g_num_blocks_per_workgroup;
     uint g_num_instances            = params.g_num_instances;
@@ -73,7 +73,6 @@ groupshared BinFlags bin_flags[RADIX_SORT_BINS];
     }
 
     GroupMemoryBarrierWithGroupSync();
-    GroupMemoryBarrier();
     
     const uint flags_bin = lID / BITS;
     
@@ -127,20 +126,10 @@ groupshared BinFlags bin_flags[RADIX_SORT_BINS];
                 count += full_count;
             }
             uint out_idx = binOffset + prefix;
-            // if(elementId == 220860) {
-            //     for(int i = 0; i < 256; i++) 
-            //         printf("bin offset %d %d\n", i, global_offsets[i]);
-            // }
+
             uint low_32 = uint(g_elements_in[elementId]);
             uint high_32 = uint(g_elements_in[elementId] >> 32);
-        //    if( ((low_32>>8) & 255) == 0 && out_idx /256 < 80){
-      //          printf("elementId: %d prefix %d binOffset %d low_32 %d high_32 %d out_idx %d %d\n", elementId, prefix, binOffset, low_32, high_32,out_idx,binID);
-  
-//}
-           // if(out_idx == 8032){
-                
-          //  printf("elementId: %d prefix %d binOffset %d low_32 %d high_32 %d out_idx %d %d\n", elementId, prefix, binOffset, low_32, high_32,out_idx,binID);
-         //   }
+
             g_elements_out[binOffset + prefix] = element_in;
             g_payload_out[binOffset + prefix]  = payload_in;
             if (prefix == count - 1) {

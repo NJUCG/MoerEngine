@@ -131,13 +131,7 @@ static std::ofstream OpenOrCreateFile(const std::string& path) {
 }
 
 RHIComputeShaderRef VulkanRHIImpl::RHICreateComputeShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
-    auto* vk_shader = MoerNew(VulkanRHIComputeShader)(shader);
-    if (shader->GetShaderMetaType()->GetName() == "RadixSortShader") {
-        auto&         spirvCode = code_entry->code;
-        std::ofstream file      = OpenOrCreateFile("E:/code/moerengine2/shaders/3dgs_splatting/radix_sort.spv");
-        file.write(reinterpret_cast<const char*>(spirvCode.data()), spirvCode.size() * sizeof(unsigned char));
-        file.close();
-    }
+    auto* vk_shader            = MoerNew(VulkanRHIComputeShader)(shader);
     vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
 
     return RHIComputeShaderRef(vk_shader);

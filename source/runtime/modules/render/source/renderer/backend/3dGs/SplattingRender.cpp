@@ -6,15 +6,11 @@
 #include "resources/AsyncResources.h"
 #include "scene/CameraManager.h"
 #include "scene/Scene.h"
-#include <glm.hpp>
-#include <gtc/matrix_transform.hpp>
-#include <gtc/quaternion.hpp>
 
 #include "shader/ShaderResourceManager.h"
 #include <fstream>
 
 IMPLEMENT_SHADER_TYPE(SortHistShader, "3dgs_splatting/hist_temp.hlsl", "main", ST_COMPUTE);
-IMPLEMENT_SHADER_TYPE(SortCheckShader, "3dgs_splatting/check.hlsl", "main", ST_COMPUTE);
 IMPLEMENT_SHADER_TYPE(PrecompCov3dShader, "3dgs_splatting/precomp_cov3d.hlsl", "main", ST_COMPUTE)
 IMPLEMENT_SHADER_TYPE(PreprocessShader, "3dgs_splatting/preprocess.hlsl", "main", ST_COMPUTE)
 IMPLEMENT_SHADER_TYPE(PrefixSumShader, "3dgs_splatting/prefix_sum.hlsl", "main", ST_COMPUTE)
@@ -156,7 +152,8 @@ Moer::Array<uint8_t> read_binary_file(const std::string& filename, const uint32_
     file.open(filename, std::ios::in | std::ios::binary);
 
     if (!file.is_open()) {
-        throw std::runtime_error("Failed to open file: " + filename);
+        return {};
+        //throw std::runtime_error("Failed to open file: " + filename);
     }
 
     uint64_t read_count = count;
@@ -195,41 +192,17 @@ void Moer::SplattingRender::Impl::Init(const BackendRendererInitInfo& _init_info
 
     auto& shader_resource_manager = ShaderResourceManager::GetInstance();
     preprocess_shader             = shader_resource_manager.GetShader<PreprocessShader>();
-    ShaderCodeEntry entry{};
+    //ShaderCodeEntry entry{};
 
     prefix_sum_shader      = shader_resource_manager.GetShader<PrefixSumShader>();
     preprocess_sort_shader = shader_resource_manager.GetShader<PreprocessSortShader>();
     sort_shader            = shader_resource_manager.GetShader<RadixSortShader>();
 
-    auto spv = read_binary_file("E:/code/3DGS.cpp/build/shaders/sort.spv", 0);
-    // spv         = read_binary_file("E:/code/moerengine2/shaders/3dgs_splatting/radix_sort.spv", 0);
-    entry = {spv};
-    //sort_shader = g_rhi->RHICreateComputeShader(&entry, sort_shader->GetMetaShader());
-
-    spv   = read_binary_file("E:/code/3DGS.cpp/build/shaders/prefix_sum.spv", 0);
-    entry = {spv};
-    // prefix_sum_shader = g_rhi->RHICreateComputeShader(&entry, prefix_sum_shader->GetMetaShader());
-
-    spv   = read_binary_file("E:/code/3DGS.cpp/build/shaders/preprocess.spv", 0);
-    entry = {spv};
-    // preprocess_shader = g_rhi->RHICreateComputeShader(&entry, preprocess_shader->GetMetaShader());
-
-    spv              = read_binary_file("E:/code/3DGS.cpp/build/shaders/hist.spv", 0);
-    entry            = {spv};
-    sort_hist_shader = shader_resource_manager.GetShader<SortHistShader>();
-    // sort_check_shader = shader_resource_manager.GetShader<SortCheckShader>();
-    //  sort_hist_shader     = g_rhi->RHICreateComputeShader(&entry, sort_hist_shader->GetMetaShader());
-    tile_boundary_shader = shader_resource_manager.GetShader<TileBoundaryShader>();
-
-    render_shader = shader_resource_manager.GetShader<RenderShader>();
-    spv           = read_binary_file("E:/code/3DGS.cpp/build/shaders/render.spv", 0);
-    entry         = {spv};
-    //  render_shader = g_rhi->RHICreateComputeShader(&entry, render_shader->GetMetaShader());
-
-    precomp_cov3d_shader = shader_resource_manager.GetShader<PrecompCov3dShader>();
-
+    sort_hist_shader           = shader_resource_manager.GetShader<SortHistShader>();
+    tile_boundary_shader       = shader_resource_manager.GetShader<TileBoundaryShader>();
+    render_shader              = shader_resource_manager.GetShader<RenderShader>();
+    precomp_cov3d_shader       = shader_resource_manager.GetShader<PrecompCov3dShader>();
     m_precomp_cov3d_pipeline   = g_rhi->RHICreateComputePipelineState(precomp_cov3d_shader);
-    auto t                     = preprocess_shader->GetMetaShader()->GetShaderMetaType();
     m_preprocess_pipeline      = g_rhi->RHICreateComputePipelineState(preprocess_shader);
     m_pre_fix_sum_pipeline     = g_rhi->RHICreateComputePipelineState(prefix_sum_shader);
     m_radix_sort_pipeline      = g_rhi->RHICreateComputePipelineState(sort_shader);
@@ -237,7 +210,6 @@ void Moer::SplattingRender::Impl::Init(const BackendRendererInitInfo& _init_info
     m_tile_boundary_pipeline   = g_rhi->RHICreateComputePipelineState(tile_boundary_shader);
     m_render_pipeline          = g_rhi->RHICreateComputePipelineState(render_shader);
     m_sort_hist_pipeline       = g_rhi->RHICreateComputePipelineState(sort_hist_shader);
-    //   m_sort_check_pipeline      = g_rhi->RHICreateComputePipelineState(sort_check_shader);
     InitBuffers();
 }
 
@@ -476,14 +448,15 @@ void Moer::SplattingRender::Impl::DispatchPrefixSum(RenderGraph& render_graph) {
 
         RHIBatchedShaderParameters batched_params;
         PrefixSumShader::Parameters params;
-        params.src = render_graph.GetBlackBoard().GetBuffer("prefix_sum_ping")->GetUAV();
-        params.dst = render_graph.GetBlackBoard().GetBuffer("prefix_sum_pong")->GetUAV();
+       
 
         const auto iters = static_cast<uint32_t>(std::ceil(std::log2(static_cast<float>(numVertices))));
         auto numGroups = (numVertices + 255) / 256;
 
         for (uint32_t timestep = 0; timestep <= iters; timestep++) {
             params.params.timestamp = timestep;
+            params.src = render_graph.GetBlackBoard().GetBuffer("prefix_sum_ping")->GetUAV();
+       params.dst = render_graph.GetBlackBoard().GetBuffer("prefix_sum_pong")->GetUAV();
             batched_params.SetParameters(prefix_sum_shader, params);
             g_rhi->RHISetBatchedShaderParameters(m_pre_fix_sum_pipeline, batched_params);
 
@@ -645,70 +618,27 @@ void Moer::SplattingRender::Impl::DispatchTileRender(RenderGraph& render_graph) 
             _context.cmd_list->Dispatch((source_resolution.x + 15) / 16, (source_resolution.y + 15) / 16,1); });
 }
 
-Moer::Matrix4x4f FromGlmMatrix(const glm::mat4& _mat) {
-    Moer::Matrix4x4f mat;
-    for (int i = 0; i < 4; i++) {
-        for (int j = 0; j < 4; j++)
-            mat[i][j] = _mat[i][j];
-    }
-    return mat;
-}
-
-glm::mat4 FromMoerMatrix(const Moer::Matrix4x4f& _mat) {
-    glm::mat4 mat;
-    for (int i = 0; i < 4; i++) {
-        for (int j = 0; j < 4; j++)
-            mat[i][j] = _mat[i][j];
-    }
-    return mat;
-}
-
 void Moer::SplattingRender::Impl::UpdateUniform() {
     auto camera_entity = g_scene->GetMainCamera();
     auto camera        = CameraManager::Get().Get(camera_entity);
     camera->Tick();
 
     uniformParams.camera_position = Vector4f(camera->GetPosition(), 1.0f);
-    uniformParams.proj_mat        = camera->GetProjectionMatrix() * camera->GetViewMatrix();
-    uniformParams.view_mat        = camera->GetViewMatrix();
     uniformParams.width           = source_resolution.x;
     uniformParams.height          = source_resolution.y;
     uniformParams.tan_fovx        = camera->GetTanHalfFov();
     uniformParams.tan_fovy        = camera->GetTanHalfFov() * static_cast<float>(source_resolution.y) / static_cast<float>(source_resolution.x);
 
-    auto rotation    = FromMoerMatrix(camera->GetRotateMatrix());
-    auto translation = glm::translate(glm::mat4(1.0f), glm::vec3(uniformParams.camera_position.t.x, uniformParams.camera_position.t.y, uniformParams.camera_position.t.z));
-    auto view        = glm::inverse(translation * rotation);
-    // auto inverse_translation = glm::inverse(translation);
-    // auto inverse_rotation = glm::inverse(rotation);
+    auto  view_matrix = Inverse(camera->GetTranslateMatrix() * camera->GetRotateMatrix());
+    auto  width       = source_resolution.x;
+    auto  height      = source_resolution.y;
+    float tan_fovx    = std::tan(Angle::DegreeToRadian(45.f) / 2.0);
+    float tan_fovy    = tan_fovx * static_cast<float>(source_resolution.y) / static_cast<float>(source_resolution.x);
 
-    auto width  = source_resolution.x;
-    auto height = source_resolution.y;
+    auto proj_matrix = camera->GetProjectionMatrix() * Inverse(camera->GetTranslateMatrix() * camera->GetRotateMatrix());
 
-    float tan_fovx = std::tan(glm::radians(45.f) / 2.0);
-    float tan_fovy = tan_fovx * static_cast<float>(source_resolution.y) / static_cast<float>(source_resolution.x);
-
-    auto proj = glm::perspective(std::atan(tan_fovy) * 2.0f,
-                                 static_cast<float>(width) / static_cast<float>(height),
-                                 0.1f,
-                                 1000.f) *
-                view;
-    // view[0][1] *= -1.0f;
-    // view[1][1] *= -1.0f;
-    // view[2][1] *= -1.0f;
-    // view[3][1] *= -1.0f;
-    // view[0][2] *= -1.0f;
-    // view[1][2] *= -1.0f;
-    // view[2][2] *= -1.0f;
-    // view[3][2] *= -1.0f;
-    //
-    // proj[0][1] *= -1.0f;
-    // proj[1][1] *= -1.0f;
-    // proj[2][1] *= -1.0f;
-    // proj[3][1] *= -1.0f;
-
-    uniformParams.view_mat = FromGlmMatrix(view);
-    uniformParams.proj_mat = FromGlmMatrix(proj);
+    uniformParams.view_mat = Transpose(view_matrix);
+    uniformParams.proj_mat = Transpose(proj_matrix);
     uniformParams.tan_fovx = tan_fovx;
     uniformParams.tan_fovy = tan_fovy;
 
@@ -720,15 +650,6 @@ void Moer::SplattingRender::Impl::UpdateUniform() {
     uniformParams.view_mat.t[1][2] *= -1.0f;
     uniformParams.view_mat.t[2][2] *= -1.0f;
     uniformParams.view_mat.t[3][2] *= -1.0f;
-    uniformParams.proj_mat.t[0][1] *= -1.0f;
-    uniformParams.proj_mat.t[1][1] *= -1.0f;
-    uniformParams.proj_mat.t[2][1] *= -1.0f;
-    uniformParams.proj_mat.t[3][1] *= -1.0f;
-
-    // uniformParams.view_mat[1][1] *= -1.0f;
-    // uniformParams.view_mat[2][1] *= -1.0f;
-    // uniformParams.view_mat[3][1] *= -1.0f;
-    // uniformParams.view_mat[0][2] *= -1.0f;
 
     auto buffer_mapped = g_rhi->RHIMapBuffer(uniformBuffer, 0, sizeof(UniformBuffer));
     memcpy(buffer_mapped, &uniformParams, sizeof(UniformBuffer));
