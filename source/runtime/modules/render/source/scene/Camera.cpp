@@ -105,6 +105,12 @@ namespace Moer {
         }
         return m_view;//world to camera
     }
+    Matrix4x4f Camera::GetRotateMatrix() noexcept {
+        return m_rotate;
+    }
+    Matrix4x4f Camera::GetTranslateMatrix() noexcept {
+        return MakeTranslation(m_position.x, m_position.y, m_position.z);
+    }
 
     void Camera::SetProjectionFactor(float fov_y, float aspect_ratio, float near_clip, float far_clip) noexcept {
         if (fov_y < fov_min)
@@ -163,9 +169,9 @@ namespace Moer {
 
         m_rotate_inv = Transpose(m_rotate);
 
-        m_view = m_rotate *
-                 MakeTranslation(-m_position.x, -m_position.y, -m_position.z);//world to cam
-
+        m_view = MakeTranslation(-m_position.x, -m_position.y, -m_position.z) * m_rotate;
+        //world to cam
+        m_to_world       = Inverse(m_view);
         m_to_world_dirty = false;
     }
 

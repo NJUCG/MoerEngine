@@ -45,6 +45,7 @@ namespace Moer {
 #endif
         init_config.max_frame_in_flight = r.Get<int>("engine", "max_frame_in_flight", 3);
         init_config.ray_tracing         = r.Get<int>("engine", "ray_tracing", 0);
+        scene_path                      = r.Get<std::string>("engine", "scene_path", "resource/scenes");
 
         auto default_rhi = r.Get<std::string>("engine", "default_rhi", "Vulkan");
 
@@ -69,5 +70,8 @@ namespace Moer {
 
     const std::filesystem::path& ConfigManager::GetEngineShaderCachedPath() const {
         return engine_shader_cached_path;
+    }
+    const std::filesystem::path& ConfigManager::GetScenePath() const {
+        return scene_path;
     }
 }// namespace Moer

@@ -209,6 +209,7 @@ void VulkanDevice::CreateDevice(uint32_t _api_version) {
         device_create_info.ppEnabledExtensionNames = enabled_extensions.data();
     }
     VkPhysicalDeviceFeatures2 enabled_features;
+
     if (_api_version > VK_API_VERSION_1_0) {
         enabled_features.sType    = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
         enabled_features.features = m_core_features.core_1_0;
@@ -218,7 +219,6 @@ void VulkanDevice::CreateDevice(uint32_t _api_version) {
     } else {
         device_create_info.pEnabledFeatures = &m_core_features.core_1_0;
     }
-
     VK_CHECK_RESULT(vkCreateDevice(m_gpu, &device_create_info, nullptr, &m_device));
 
     vkGetDeviceQueue(m_device, m_queue_family_indices.graphics.value(), 0, &m_graphics_queue);

@@ -11,7 +11,7 @@
 namespace Moer::Resource::Gltf {
 
     class Parser {
-    public:
+    public: 
         Parser() noexcept;
         ~Parser() noexcept;
 
@@ -22,4 +22,4 @@ namespace Moer::Resource::Gltf {
         struct Impl;
         Impl* m_impl = nullptr;
     };
-}// namespace Moer::Resource::Gltf
+}// namespace Moer::Resource::Gltf 

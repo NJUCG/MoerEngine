@@ -631,6 +631,18 @@ enum ETextureLayout : uint32_t {
     TEXTURE_LAYOUT_QUEUE_TYPE_COMPUTE  = 1 << 30,
     TEXTURE_LAYOUT_Num
 };
+
+enum EBufferLayout : uint32_t {
+    UNDEFINED_LAYOUT = 1 << 0,
+    NO_CHAGNE,
+    READ,
+    WRITE,
+    COMMON,
+    INDIRECT_COMMAND_READ
+};
+
+ENUM_BIT_OP_IMPL(EBufferLayout, FLAG)
+
 #pragma endregion
 enum EShaderType : uint8_t {
     ST_NONE,

@@ -132,15 +132,18 @@ namespace Moer {
 
         upload_texture_create_info = RHITextureCreateInfo::Create2D("virtual viewport",
                                                                     create_info.extent,
-                                                                    create_info.format)
+                                                                    EPixelFormat::PF_B8G8R8A8_UNORM)
                                          .SetArraySize(1)
                                          .SetNumMips(1)
                                          .SetClearAttachment({})
                                          .SetUsageFlags(
-                                             ETextureUsageFlags::COLOR_ATTACHMENT |
+                                             //   ETextureUsageFlags::COLOR_ATTACHMENT |
                                              ETextureUsageFlags::TRANSFER_SRC |
-                                             ETextureUsageFlags::SRGB |
-                                             ETextureUsageFlags::SAMPLED);
+                                             ETextureUsageFlags::UNORDERED_ACCESS
+                                             //|
+                                             //     ETextureUsageFlags::SRGB |
+                                             //    ETextureUsageFlags::SAMPLED
+                                         );
 
         depth_texture_create_info = RHITextureCreateInfo::Create2D("virtual viewport depth",
                                                                    create_info.extent,
@@ -160,9 +163,10 @@ namespace Moer {
 
         present_texture     = g_rhi->RHICreateTexture(present_texture_create_info.SetUsageFlags(
             ETextureUsageFlags::COLOR_ATTACHMENT |
+            //  ETextureUsageFlags::UNORDERED_ACCESS |
             ETextureUsageFlags::SAMPLED |
             ETextureUsageFlags::TRANSFER_DST));
-        present_texture_srv = g_rhi->RHICreateTextureSRV(present_texture, info.format);
+        present_texture_srv = g_rhi->RHICreateTextureSRV(present_texture, EPixelFormat::PF_B8G8R8A8_UNORM);
 
         swapchain_textures.resize(info.back_buffer_count);
         swapchain_uavs.resize(info.back_buffer_count);
@@ -170,7 +174,7 @@ namespace Moer {
             swapchain_textures[i] = g_rhi->RHICreateTexture(upload_texture_create_info);
             swapchain_uavs[i] =
                 g_rhi->RHICreateTextureUAV(swapchain_textures[i],
-                                           info.format);
+                                           EPixelFormat::PF_B8G8R8A8_UNORM);
         }
 
         depth_texture     = g_rhi->RHICreateTexture(depth_texture_create_info);

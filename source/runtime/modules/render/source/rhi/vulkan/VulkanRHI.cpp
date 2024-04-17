@@ -37,6 +37,7 @@
 #include <cstdint>
 #include <string>
 #include <type_traits>
+#include <fstream>
 
 namespace VkUtil = Moer::RHI::Vulkan::Util;
 
@@ -75,7 +76,7 @@ void VulkanRHIImpl::ShutDown() {
 }
 
 #pragma region resources creation
-RHISamplerRef  VulkanRHIImpl::RHICreateSampler(const RHISamplerCreateInfo& _initializer) {
+RHISamplerRef            VulkanRHIImpl::RHICreateSampler(const RHISamplerCreateInfo& _initializer) {
     VulkanRHISampler* vk_sampler = MoerNew(VulkanRHISampler)();
     vk_sampler->GenerateSamplerFromInitializer(m_device, _initializer);
 
@@ -115,6 +116,18 @@ RHIAmplificationShaderRef VulkanRHIImpl::RHICreateAmplificationShader(const clas
     vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
 
     return RHIAmplificationShaderRef(vk_shader);
+}
+
+static std::ofstream OpenOrCreateFile(const std::string& path) {
+    std::filesystem::path folder = std::filesystem::path(path).parent_path();
+    while (true) {
+        if (std::filesystem::exists(folder)) {
+            break;
+        }
+        std::filesystem::create_directory(folder);
+        folder = folder.parent_path();
+    }
+    return std::ofstream(path, std::ios::binary);
 }
 
 RHIComputeShaderRef VulkanRHIImpl::RHICreateComputeShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
@@ -691,10 +704,11 @@ RHIComputePipelineStateRef VulkanRHIImpl::RHICreateComputePipelineState(RHIShade
     if (!vk_shader) LOG_CRITICAL("RHICreateComputePipelineState: Compute shader is nullptr!");
 
     VkPipelineShaderStageCreateInfo shader_stage{};
-    shader_stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    shader_stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-    shader_stage.module = vk_shader->GetHandle();
-    shader_stage.pName  = vk_shader->GetMetaShader()->GetShaderMetaType()->GetEntryPoint().data();
+    shader_stage.sType               = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    shader_stage.stage               = VK_SHADER_STAGE_COMPUTE_BIT;
+    shader_stage.module              = vk_shader->GetHandle();
+    shader_stage.pName               = vk_shader->GetMetaShader()->GetShaderMetaType()->GetEntryPoint().data();
+    shader_stage.pSpecializationInfo = VK_NULL_HANDLE;
 
     Moer::Array<TDescriptorSetLayoutBindingArray> descriptor_bindings;
     Moer::Array<VkPushConstantRange>              push_constant_ranges;

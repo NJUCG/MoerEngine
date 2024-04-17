@@ -22,10 +22,11 @@ namespace Moer {
     //A BlackBoard is a place to store data that is shared between passes
     class RENDER_API BlackBoard {
     public:
-        RenderGraphTexture* GetTexture(const std::string& name) const;
-        RenderGraphBuffer*  GetBuffer(const std::string& name) const;
-        RenderGraphHandle   GetHandle(const std::string& name) const;
-        void                PutHandle(const std::string& name, RenderGraphHandle handle);
+        RenderGraphTexture*            GetTexture(const std::string& name) const;
+        RenderGraphBuffer*             GetBuffer(const std::string& name) const;
+        RenderGraphHandle              GetHandle(const std::string& name) const;
+        Moer::Array<RenderGraphHandle> GetHandles(const Moer::Array<std::string>& names) const;
+        void                           PutHandle(const std::string& name, RenderGraphHandle handle);
         BlackBoard(RenderGraph& renderGraph);
         ~BlackBoard() = default;
         void Reset();
@@ -53,22 +54,29 @@ namespace Moer {
                                   RenderGraphTexture::Usage usage =
                                       RenderGraphTexture::Usage::COLOR_ATTACHMENT);
 
-            Builder& ReadTextures(const std::vector<RenderGraphHandle>& inputs,
+            Builder& ReadTextures(const Moer::Array<RenderGraphHandle>& inputs,
                                   RenderGraphTexture::Usage             usage = RenderGraphTexture::Usage::INPUT_ATTACHMENT);
 
-            Builder& WriteTextures(const std::vector<RenderGraphHandle>& output,
+            Builder& WriteTextures(const Moer::Array<RenderGraphHandle>& output,
                                    RenderGraphTexture::Usage             usage =
                                        RenderGraphTexture::Usage::COLOR_ATTACHMENT);
 
             Builder& ReadBuffer(RenderGraphHandle        input,
                                 RenderGraphBuffer::Usage usage =
-                                    RenderGraphBuffer::Usage::SHADER_RESOURCE);
+                                    RenderGraphBuffer::Usage::READ);
 
             Builder& WriteBuffer(RenderGraphHandle        output,
                                  RenderGraphBuffer::Usage usage =
-                                     RenderGraphBuffer::Usage::STORAGE_BUFFER);
+                                     RenderGraphBuffer::Usage::WRITE);
+
+            Builder& ReadBuffers(const Moer::Array<RenderGraphHandle>& inputs,
+                                 RenderGraphBuffer::Usage              usage = RenderGraphBuffer::Usage::READ);
+
+            Builder& WriteBuffers(const Moer::Array<RenderGraphHandle>& output,
+                                  RenderGraphBuffer::Usage              usage = RenderGraphBuffer::Usage::WRITE);
 
             void DeclareRenderPass(const RenderGraphPassDescriptor& descriptor);
+            void DeclareComputePass(const ComputePassDescriptor& descriptor);
             Builder(PassNode* pass, RenderGraph& renderGraph);
 
         protected:
@@ -76,6 +84,8 @@ namespace Moer {
             RenderGraph& m_renderGraph;
         };
         RenderGraph();
+
+        RenderGraph&      operator=(const RenderGraph& other) = delete;
         void              Reset();
         RenderGraphHandle CreateTexture(const std::string& name, const RenderGraphTexture::Descriptor& descriptor);
         RenderGraphHandle ImportTexture(const std::string& name, RHITextureRef texture);

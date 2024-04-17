@@ -29,6 +29,8 @@ namespace Moer {
         Matrix4x4f GetProjectionMatrix() noexcept;
         Matrix4x4f GetToWorldMatrix() noexcept;
         Matrix4x4f GetViewMatrix() noexcept;
+        Matrix4x4f GetRotateMatrix() noexcept;
+        Matrix4x4f GetTranslateMatrix() noexcept;
         float      GetNearClip() const noexcept;
         float      GetFarClip() const noexcept;
         float      GetTanHalfFov() const noexcept;

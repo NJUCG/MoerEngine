@@ -6,8 +6,8 @@
 #include "shader/ShaderCommon.h"
 #include "shader/ShaderMutation.h"
 #include "shader/ShaderResource.h"
-class GlobalShaderCache{
-    public:
+class GlobalShaderCache {
+public:
     static GlobalShaderCache& GetInstance() {
         static GlobalShaderCache cache;
         return cache;
@@ -17,12 +17,13 @@ class GlobalShaderCache{
 
     const ShaderCompilerOutput* FindShaderCache(EShaderPlatform platform, const ShaderResourceKey& key) const;
 
-    private:
+private:
     friend class ShaderResourceManager;
     void Load();
     void Dump();
     void UpdateOutput(Moer::Array<ShaderCompilerOutput*>& outputs);
-    private:
+
+private:
     struct Impl;
     Impl* impl;
 };
@@ -54,7 +55,8 @@ public:
         return *type_resources;
     }
 
-    void PrepareGlobalShaderResources();
+    void    PrepareGlobalShaderResources();
+    Shader* GetShader(const ShaderMetaType& _meta_type);
 
 private:
     friend class ShaderCompiler;
