@@ -84,7 +84,6 @@ namespace Moer {
             RenderGraph& m_renderGraph;
         };
         RenderGraph();
-        RenderGraph(const RenderGraph& other);
 
         RenderGraph&      operator=(const RenderGraph& other) = delete;
         void              Reset();

@@ -1,7 +1,7 @@
 #ifndef MOER_ENGINE_IMGUI_RENDERER_H
 #define MOER_ENGINE_IMGUI_RENDERER_H
 #include "renderer/UIRenderer.h"
-
+#define ImTextureID RHISRVRef
 struct UIFrameData;
 
 class ImGUIRenderer : public UIRenderer {

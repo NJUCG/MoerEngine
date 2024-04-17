@@ -14,12 +14,13 @@
 #include "ui/UIBase.h"
 #include "window/WindowContext.h"
 #include "EngineLoop.h"
+#include "loader/LoaderInterface.h"
+#include "loader/ply/Ply.h"
 
 #include <filesystem>
 #include <stdint.h>
 
 #include "modules/resource/include/loader/gltf/Parser.h"
-#include "modules/resource/include/loader/ply/Ply.h"
 
 namespace Moer {
 
@@ -38,8 +39,12 @@ namespace Moer {
         PostInitRenderSystem();
         LOG_INFO("Engine Post Init Finished");
 
-        //load scene from ini cofig
-        Scene::SetDefaultScene(Resource::PlyLoader::LoadSceneFromFile(ConfigManager::GetInstance().GetScenePath()).release());
+        //todo : in now we need to move scene file to bin/Debug/resource/scenes
+        auto sponza_scene_path = ConfigManager::GetInstance().GetEditorResourcePath() / "default/scenes/sponza/Sponza01.gltf";
+        // auto sponza_scene_path = ConfigManager::GetInstance().GetEditorResourcePath() /"scenes/sponza/pbr/sponza2.gltf";
+        // Scene::SetCurrentScene(Resource::Gltf::Parser::LoadSceneFromFile(sponza_scene_path).release());
+        // Resource::Gltf::Parser::LoadSceneFromFileAsync(sponza_scene_path);
+        Moer::Resource::LoaderInterface::LoadSceneFromFileAsync(sponza_scene_path);
     }
     void Engine::Run() {
         LOG_INFO("Engine Start Running");
@@ -56,12 +61,12 @@ namespace Moer {
     }
 
     void Engine::InitCore(const std::filesystem::path& workspace_path) {
-        Moer::ConfigManager::GetInstance().Init(workspace_path);
-        Moer::TaskSystem::Init();
-        Moer::LogSystem::Init();
+        ConfigManager::GetInstance().Init(workspace_path);
+        TaskSystem::Init();
+        LogSystem::Init();
     }
     void Engine::ShutDownCore() {
-        Moer::TaskSystem::ShutDown();
+        TaskSystem::ShutDown();
     }
 
     void Engine::InitRenderSystem() {

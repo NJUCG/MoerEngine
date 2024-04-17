@@ -111,4 +111,4 @@ namespace Moer {
         // mutable std::unordered_map<RHIViewInfo, RHIUAVRef, ViewInfoHashFunc> mUavs;
     };
 
-}
+}// namespace Moer

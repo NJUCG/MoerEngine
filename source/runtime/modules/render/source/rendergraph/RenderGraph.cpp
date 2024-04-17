@@ -7,6 +7,9 @@ namespace Moer {
         return m_renderGraph.GetTexture(GetHandle(name));
     }
     RenderGraphHandle BlackBoard::GetHandle(const std::string& name) const {
+        if (m_handles.find(name) == m_handles.end()) {
+            return RenderGraphHandle();
+        }
         return m_handles.at(name);
     }
     Moer::Array<RenderGraphHandle> BlackBoard::GetHandles(const Moer::Array<std::string>& names) const {
@@ -65,7 +68,7 @@ namespace Moer {
         return *this;
     }
     void RenderGraph::Builder::DeclareRenderPass(const RenderGraphPassDescriptor& descriptor) {
-        if (descriptor.depth_stencil_attachment.isInitialized()) {
+        if (descriptor.depth_stencil_attachment.IsInitialized()) {
             //Depth Attachment may be used in this pass,but not used in later pass
             //to avoid cull depth attachment, we need to add a ref
             m_renderGraph.GetResource(descriptor.depth_stencil_attachment)->AddRef();
@@ -80,9 +83,6 @@ namespace Moer {
     RenderGraph::Builder::Builder(PassNode* pass, RenderGraph& renderGraph) : m_pass(pass), m_renderGraph(renderGraph) {
     }
     RenderGraph::RenderGraph() : m_black_board(*this) {
-    }
-    RenderGraph::RenderGraph(const RenderGraph& other) : m_black_board(*this) {
-        int k = 1;
     }
     void RenderGraph::Reset() {
         m_dependency_graph.Reset();
@@ -114,7 +114,7 @@ namespace Moer {
     }
     void RenderGraph::AddGraphicPass(const std::string& name, const GraphicSetup& setup, GraphicsExecute&& execute) {
         RenderGraphPass* pass = MoerNew(RenderGraphPass)(std::move(execute));
-        auto             node = MoerNew(GraphicsPassNode)(name, pass);
+        auto*            node = MoerNew(GraphicsPassNode)(name, pass);
         m_passes.emplace_back(node);
         Builder builder(node, *this);
         setup(builder);
@@ -158,31 +158,31 @@ namespace Moer {
         const auto last  = available_passes.end();
 
         while (first != last) {
-            PassNode* const passNode = *first;
+            PassNode* const pass_node = *first;
             first++;
-            auto inResources  = m_dependency_graph.GetInComingNodes(passNode);
-            auto outResources = m_dependency_graph.GetOutGoingNodes(passNode);
+            auto in_resources  = m_dependency_graph.GetInComingNodes(pass_node);
+            auto out_resources = m_dependency_graph.GetOutGoingNodes(pass_node);
 
-            for (const auto inResource : inResources) {
-                const auto resource = dynamic_cast<RenderGraphResource*>(inResource);
+            for (auto* const in_resource : in_resources) {
+                auto* const resource = dynamic_cast<RenderGraphResource*>(in_resource);
                 //Currently not suupport pass connect
                 assert(resource);
 
-                resource->create_pass  = resource->create_pass ? resource->create_pass : passNode;
-                resource->destroy_pass = passNode;
+                resource->create_pass  = resource->create_pass ? resource->create_pass : pass_node;
+                resource->destroy_pass = pass_node;
                 //   passNode->addTextureUsage(static_cast<const RenderGraphTexture*>(inResource), );
             }
-            for (const auto outResource : outResources) {
-                const auto resource = dynamic_cast<RenderGraphResource*>(outResource);
+            for (auto* const out_resource : out_resources) {
+                auto* const resource = dynamic_cast<RenderGraphResource*>(out_resource);
                 assert(resource);
-                resource->create_pass  = resource->create_pass ? resource->create_pass : passNode;
-                resource->destroy_pass = passNode;
+                resource->create_pass  = resource->create_pass ? resource->create_pass : pass_node;
+                resource->destroy_pass = pass_node;
                 //passNode->addTextureUsage(static_cast<const RenderGraphTexture*>(inResource), texture->usage);
             }
 
-            for (const auto edge : m_dependency_graph.getEdges(passNode)) {
-                auto resource = dynamic_cast<RenderGraphResource*>(edge->src == passNode ? edge->dst : edge->src);
-                passNode->AddResourceUsage(resource, edge->usage);
+            for (auto* const edge : m_dependency_graph.getEdges(pass_node)) {
+                auto* resource = dynamic_cast<RenderGraphResource*>(edge->src == pass_node ? edge->dst : edge->src);
+                pass_node->AddResourceUsage(resource, edge->usage);
             }
         }
 

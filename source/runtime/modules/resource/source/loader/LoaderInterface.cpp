@@ -10,9 +10,10 @@ namespace Resource {
     public:
         static RESOURCE_API UniquePtr<Scene> LoadSceneFromFile(const std::filesystem::path& file_path) noexcept {
             if (file_path.string().ends_with(".ply")) {
-                return PlyLoader::LoadSceneFromFile(file_path);
+                auto scene = PlyLoader::LoadSceneFromFile(file_path);
+                Scene::SetCurrentScene(scene.release());
             } else if (file_path.string().ends_with(".gltf")) {
-                return Gltf::Parser::LoadSceneFromFile(file_path);
+                Gltf::Parser::LoadSceneFromFileAsync(file_path);
             } else {
                 return nullptr;
             }

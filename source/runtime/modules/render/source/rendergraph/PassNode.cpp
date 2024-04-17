@@ -62,7 +62,7 @@ namespace Moer {
             }
         }
 
-        if (m_renderPassData.m_descriptor.depth_stencil_attachment.isInitialized()) {
+        if (m_renderPassData.m_descriptor.depth_stencil_attachment.IsInitialized()) {
             auto  depth_attachment                 = m_renderPassData.m_descriptor.depth_stencil_attachment;
             auto& depth_attachment_view            = pass_info.depth_stencil_attachment.depth_stencil_attachment_view;
             auto  depth_texture                    = render_graph.GetTexture(m_renderPassData.m_descriptor.depth_stencil_attachment);

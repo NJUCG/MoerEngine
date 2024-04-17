@@ -11,14 +11,15 @@ namespace Moer {
     */
     class SplattingRender : public BackendRenderer {
     public:
-        void Init(const BackendRendererInitInfo& _init_info) override;
-        void  DrawFrame() override;
-        void  ShutDown() override;
-        void  Present() override;
-        void  SetOriginResolution(uint32_t _width, uint32_t _height) override;
-        void  SetPresentResolution(uint32_t _width, uint32_t _height) override;
-        void* GetRendererOutput() override;
+        void      Init(const BackendRendererInitInfo& _init_info) override;
+        void      DrawFrame() override;
+        void      ShutDown() override;
+        void      Present() override;
+        void      SetOriginResolution(uint32_t _width, uint32_t _height) override;
+        void      SetPresentResolution(uint32_t _width, uint32_t _height) override;
+        RHISRVRef GetRendererOutput() override;
         ~SplattingRender();
+
     protected:
         class Impl;
         Impl* impl{nullptr};

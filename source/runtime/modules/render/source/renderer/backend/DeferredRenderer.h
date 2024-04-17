@@ -14,7 +14,7 @@ namespace Moer {
         virtual void SetOriginResolution(uint32_t _width, uint32_t _height) override;
         virtual void SetPresentResolution(uint32_t _width, uint32_t _height) override;
 
-        virtual void* GetRendererOutput() override;
+        virtual RHISRVRef GetRendererOutput() override;
 
     private:
         class Impl;

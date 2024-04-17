@@ -157,6 +157,9 @@ struct GuiViewportData {
     uint64_t        frame_index;
     uint32_t        viewport_index;
     static uint32_t viewport_count;
+    bool            IsBackBufferReady() {
+        return next_frame_info.backbuffer_index != UINT32_MAX;
+    }
 
     GuiViewportData(uint32_t _frame_in_flight) {
         memset((void*)this, 0, sizeof(*this));
@@ -253,7 +256,7 @@ void ImGUIRenderer::Impl::EndRenderFrame() {
                 texture_barriers.resize(1);
 
                 texture_barriers[0].SetDstTextureLayout(ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT);
-                texture_barriers[0].SetSrcTextureLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED);
+                texture_barriers[0].SetSrcTextureLayout(present_view->GetTexture()->GetLayout({ETextureAspectFlags::COLOR}));
                 texture_barriers[0].SetTexture(present_view->GetTexture());
                 texture_barriers[0].SetSrcStage(PS_COLOR_ATTACHMENT_OUTPUT);
                 texture_barriers[0].SetDstStage(PS_COLOR_ATTACHMENT_OUTPUT);
@@ -628,7 +631,7 @@ void GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list, RHIVi
                 // _ui_command_list->SetViewPort(g_rhi->RHIGetMainViewport()->GetViewportExtent());
 
                 // 6. local: set texture
-                RHISRV* texture_view = (RHISRV*)cmd->GetTexID();
+                RHISRVRef texture_view = (RHISRVRef)cmd->GetTexID();
 
                 ImGuiShaderFrag::Parameters params;
                 params.texture0 = texture_view;
@@ -803,15 +806,13 @@ void CreateFontsTexture() {
         const uint32_t alignment    = 256;
         RHITextureRef  font_texture = nullptr;
 
-        font_texture = g_rhi->RHICreateTexture(RHITextureCreateInfo::Create("GuiFontTexture2D", ETextureDimension::TEX_2D)
+        font_texture          = g_rhi->RHICreateTexture(RHITextureCreateInfo::Create("GuiFontTexture2D", ETextureDimension::TEX_2D)
                                                    .SetNumSamples(1)
                                                    .SetExtent({width, height})
                                                    .SetNumMips(1)
                                                    .SetArraySize(1)
                                                    .SetFormat(PF_R8G8B8A8_UNORM)
-                                                   .SetUsageFlags(ETextureUsageFlags::SAMPLED | ETextureUsageFlags::SRGB | ETextureUsageFlags::TRANSFER_DST)
-                                                   .SetInitialLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED));
-
+                                                   .SetUsageFlags(ETextureUsageFlags::SAMPLED | ETextureUsageFlags::SRGB | ETextureUsageFlags::TRANSFER_DST));
         uint32_t upload_pitch = (width * 4 + alignment - 1u) & ~(alignment - 1u);
         uint32_t upload_size  = height * upload_pitch;
 
@@ -1015,7 +1016,7 @@ void GuiRenderWindow(ImGuiViewport* viewport, void*) {
     RHIViewport*     rhi_viewport  = viewport_data->viewport;
     EnqueueRenderTask([rhi_viewport, viewport_data] {
         viewport_data->next_frame_info = g_rhi->RHIGetNextFrameViewportBufferInfo(rhi_viewport);
-        if (viewport_data->next_frame_info.backbuffer_index == UINT32_MAX) return;
+        if (!viewport_data->IsBackBufferReady()) return;
 
         RHIUAV* present_view = g_rhi->RHIGetViewportBackBufferUAV(rhi_viewport, viewport_data->next_frame_info.backbuffer_index);
 
@@ -1030,8 +1031,7 @@ void GuiRenderWindow(ImGuiViewport* viewport, void*) {
             .SetTexture(present_view->GetTexture())
             .SetSrcStage(PS_COLOR_ATTACHMENT_OUTPUT)
             .SetDstStage(PS_COLOR_ATTACHMENT_OUTPUT)
-            .SetDstAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE)
-            .SetSrcAccessFlags(ERHIAccessFlags::MEMORY_READ);
+            .SetDstAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
 
         //transfer present texture layout to present src
 
@@ -1047,7 +1047,7 @@ void GuiRenderWindow(ImGuiViewport* viewport, void*) {
     GUIUploadData(viewport->DrawData, viewport_data->comand_list, &viewport_data->next_frame_info);
 
     EnqueueRenderTask([viewport_data] {
-        if (viewport_data->next_frame_info.backbuffer_index == UINT32_MAX) return;
+        if (!viewport_data->IsBackBufferReady()) return;
 
         RHIUAV* present_view = g_rhi->RHIGetViewportBackBufferUAV(viewport_data->viewport, viewport_data->next_frame_info.backbuffer_index);
 
@@ -1067,7 +1067,7 @@ void GuiRenderWindow(ImGuiViewport* viewport, void*) {
 
     GUIRender(viewport->DrawData, viewport_data->comand_list, &viewport_data->next_frame_info);
     EnqueueRenderTask([viewport_data] {
-        if (viewport_data->next_frame_info.backbuffer_index == UINT32_MAX) return;
+        if (!viewport_data->IsBackBufferReady()) return;
         RHIUAV* present_view = g_rhi->RHIGetViewportBackBufferUAV(viewport_data->viewport, viewport_data->next_frame_info.backbuffer_index);
 
         viewport_data->comand_list->EndRenderPass();
@@ -1077,8 +1077,8 @@ void GuiRenderWindow(ImGuiViewport* viewport, void*) {
         auto& texture_barriers_present = texture_dependency_info.texture_barriers;
         texture_barriers_present[0]
             .SetDstTextureLayout(ETextureLayout::TEXTURE_LAYOUT_PRESENT_SRC)
-            .SetSrcTextureLayout(ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT)
-            .SetSrcQueueType(ECommandQueueType::GRAPHICS)
+            .SetSrcTextureLayout(present_view->GetTexture()->GetLayout({ETextureAspectFlags::COLOR}))
+            // .SetSrcQueueType(ECommandQueueType::GRAPHICS)
             .SetTexture(present_view->GetTexture())
             .SetSrcAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE)
             .SetSrcStage(PS_COLOR_ATTACHMENT_OUTPUT)
@@ -1107,7 +1107,7 @@ void GuiSwapbuffer(ImGuiViewport* viewport, void*) {
     //present wait for this frame rendering end fence
     // viewport_data->viewport->Present(viewport_data->present_fence);
     EnqueueRenderTask([viewport_data] {
-        if (viewport_data->next_frame_info.backbuffer_index == UINT32_MAX) return;
+        if (!viewport_data->IsBackBufferReady()) return;
         // viewport_data->viewport->Present(viewport_data->present_fence);
         g_rhi->RHIPresentViewport(viewport_data->viewport, viewport_data->present_fence);
     });

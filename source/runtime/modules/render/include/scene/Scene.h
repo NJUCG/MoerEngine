@@ -1,4 +1,5 @@
 #pragma once
+#include <future>
 #include <unordered_set>
 #include <vector>
 
@@ -6,6 +7,7 @@
 #include "Entity.h"
 #include "math/Base.h"
 #include "math/Matrix.h"
+#include "misc/CountableRef.h"
 
 namespace Moer {
 
@@ -31,25 +33,43 @@ namespace Moer {
 
     using EntitySet = Moer::UnorderedSet<Entity, Entity::Hasher>;
 
+    struct AsyncSceneLoadInfo : public Countable {
+
+        bool         IsValid() const noexcept { return b_valid; };
+        bool         IsReady() const noexcept { return b_valid && progress == 1.f; };
+        float        GetProgress() const noexcept { return progress.load(); };
+        class Scene* TryGetScene();
+        void         Destroy() override { MoerDelete(this); };
+        // private:
+        class Scene*     scene;
+        std::atomic_uint progress = 0u;
+        bool             b_valid  = false;
+    };
+    using AsyncSceneLoadInfoRef = CountableRef<AsyncSceneLoadInfo>;
+#define DEFAULT_SCENE_NAME "Sponza"
     class RENDER_API Scene {
     public:
         Scene() noexcept;
         ~Scene() noexcept;
-        void          AddEntity(Entity entity) noexcept;
-        void          AddCamera(Entity entity) noexcept;
-        void          RemoveEntity(Entity entity) noexcept;
-        void          SetBuffer(const std::string& name, RHIBufferRef buffer) noexcept;
-        RHIBufferRef  GetBuffer(const std::string& name) const noexcept;
+        void          AddEntity(Entity _entity) noexcept;
+        void          AddCamera(Entity _entity) noexcept;
+        void          RemoveEntity(Entity _entity) noexcept;
+        void          SetBuffer(const std::string& _name, RHIBufferRef _buffer) noexcept;
+        RHIBufferRef  GetBuffer(const std::string& _name) const noexcept;
         Array<Entity> GetEntities() const noexcept;
         Array<Entity> GetCameras() const noexcept;
         Entity        GetMainCamera() const noexcept;
-        void          ForEach(std::function<void(Entity)> func) const noexcept;
+        void          ForEach(std::function<void(Entity)> _func) const noexcept;
+        bool          IsReady() const noexcept;
 
-        static Scene* GetDefaultScene() noexcept;
-        static void   SetDefaultScene(Scene* scene) noexcept;
+        static Scene* GetCurrentScene() noexcept;
+        static void   SetCurrentScene(Scene* _scene) noexcept;
+
+        static AsyncSceneLoadInfoRef GetCurrentSceneLoadInfo() noexcept;
+
+        static bool RegisterAsyncLoadInfo(AsyncSceneLoadInfoRef _load_info);
 
     protected:
-        inline static Scene* m_default_scene = nullptr;
         class Impl;
         Impl* m_impl = nullptr;
     };

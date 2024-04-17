@@ -3,6 +3,7 @@
 #include "rendergraph/RenderGraph.h"
 #include "resources/GlobalRenderResources.h"
 #include "rhi/RHI.h"
+#include "rhi/RHIResource.h"
 namespace Moer {
     void RenderGraphResource::ConnectForRead(DepdencyGraph& graph, PassNode* pass_node, uint32_t usage) {
         auto edge = MoerNew(DepdencyGraph::Edge)(graph, this, pass_node, usage);
@@ -239,4 +240,4 @@ namespace Moer {
         return dst_layout;
     }
 
-}
+}// namespace Moer

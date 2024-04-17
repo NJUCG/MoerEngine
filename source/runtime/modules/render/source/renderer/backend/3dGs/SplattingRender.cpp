@@ -675,7 +675,7 @@ void Moer::SplattingRender::SetOriginResolution(uint32_t _width, uint32_t _heigh
 void Moer::SplattingRender::SetPresentResolution(uint32_t _width, uint32_t _height) {
     impl->SetPresentResolution(_width, _height);
 }
-void* Moer::SplattingRender::GetRendererOutput() {
+RHISRVRef Moer::SplattingRender::GetRendererOutput() {
     return impl->GetRendererOutput();
 }
 Moer::SplattingRender::~SplattingRender() {

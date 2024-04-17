@@ -30,7 +30,7 @@ namespace Moer {
                 .SetNumMips(std::min(uint32_t(std::log2(std::min(target_extent.x, target_extent.y))), max_mip_levels))
                 .SetFormat(PF_R16_SFLOAT)
                 .SetClearAttachment(RHIClearAttachment(EClearAttachment::COLOR))
-                .SetInitialLayout(ETextureLayout::TEXTURE_LAYOUT_COMMON)
+                .SetPreferredLayout(ETextureLayout::TEXTURE_LAYOUT_COMMON)
                 .SetUsageFlags(ETextureUsageFlags::SAMPLED | ETextureUsageFlags::UNORDERED_ACCESS));
 
         srv = g_rhi->RHICreateTextureSRV(texture, PF_R16_SFLOAT, 0, texture->GetNumMips());
@@ -77,14 +77,14 @@ namespace Moer {
             depth_sampler = g_rhi->RHICreateSampler(create_info);
         }
 
-        void Dispatch(RHICommandListBase* cmd_list, RHISRVRef depth_buffer, HiZBuffer& hiz_buffer) {
+        void Dispatch(RHICommandListBase* _cmd_list, RHISRVRef _depth_buffer, HiZBuffer& _hiz_buffer) {
             //currently just support graphics cmd list
-            RHIGraphicsCommandList* graphics_cmd_list = static_cast<RHIGraphicsCommandList*>(cmd_list);
+            RHIGraphicsCommandList* graphics_cmd_list = static_cast<RHIGraphicsCommandList*>(_cmd_list);
             graphics_cmd_list->SetPipelineState(pso);
 
-            Vector2i depth_size = Vector2i(depth_buffer->GetTexture()->GetExtent3D());
+            Vector2i depth_size = Vector2i(_depth_buffer->GetTexture()->GetExtent3D());
             //calculate power of two
-            Vector2i                   mip0_size = Vector2i(hiz_buffer.texture->GetExtent3D());
+            Vector2i                   mip0_size = Vector2i(_hiz_buffer.texture->GetExtent3D());
             BuildHiZShader::Parameters params;
 
             HiZConfig& config   = params.config;
@@ -93,7 +93,7 @@ namespace Moer {
             config.target_level = 0;
 
             uint32_t mip_count   = std::min(uint32_t(std::log2(std::min(mip0_size.x, mip0_size.y))), max_mip_levels);
-            params.depth_buffer  = depth_buffer;
+            params.depth_buffer  = _depth_buffer;
             params.depth_sampler = depth_sampler;
 
             RHIBatchedShaderParameters batched_params;
@@ -104,17 +104,17 @@ namespace Moer {
             RHIBarrierDependencyInfo depth_barrier_info;
             depth_barrier_info.texture_barriers.resize(2);
             auto& depth_barrier = depth_barrier_info.texture_barriers[0];
-            depth_barrier.SetTexture(depth_buffer->GetTexture())
-                .SetSrcTextureLayout(TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+            depth_barrier.SetTexture(_depth_buffer->GetTexture())
+                .SetSrcTextureLayout(TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE)
                 .SetDstTextureLayout(TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
                 .SetSubResourceRange(RHISubresourceRange(ETextureAspectFlags::DEPTH_SLICE | ETextureAspectFlags::STENCIL_SLICE))
-                .SetSrcStage(PS_LATE_FRAGMENT_TESTS)
+                .SetSrcStage(PS_ALL_GRAPHICS)
                 .SetDstStage(PS_COMPUTE_SHADER)
                 .SetDstAccessFlags(ERHIAccessFlags::SHADER_READ)
                 .SetSrcAccessFlags(ERHIAccessFlags::DEPTH_STENCIL_WRITE | ERHIAccessFlags::DEPTH_STENCIL_READ);
 
             auto& hiz_barrier = depth_barrier_info.texture_barriers[1];
-            hiz_barrier.SetTexture(hiz_buffer.texture)
+            hiz_barrier.SetTexture(_hiz_buffer.texture)
                 .SetSubResourceRange(range)
                 .SetDstTextureLayout(TEXTURE_LAYOUT_COMMON)
                 .SetSrcStage(PS_COMPUTE_SHADER)
@@ -128,7 +128,7 @@ namespace Moer {
             barrier_info.texture_barriers.resize(2);
             auto& barrier = barrier_info.texture_barriers[0];
 
-            barrier.SetTexture(hiz_buffer.texture)
+            barrier.SetTexture(_hiz_buffer.texture)
                 .SetSubResourceRange(range)
                 .SetSrcStage(PS_COMPUTE_SHADER)
                 .SetDstStage(PS_COMPUTE_SHADER)
@@ -136,7 +136,7 @@ namespace Moer {
                 .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE);
 
             auto& barrier2 = barrier_info.texture_barriers[1];
-            barrier2.SetTexture(hiz_buffer.texture)
+            barrier2.SetTexture(_hiz_buffer.texture)
                 .SetSubResourceRange(range)
                 .SetSrcStage(PS_COMPUTE_SHADER)
                 .SetDstStage(PS_COMPUTE_SHADER)
@@ -144,7 +144,7 @@ namespace Moer {
                 .SetSrcAccessFlags(ERHIAccessFlags::SHADER_READ);
 
             for (uint32_t i = 0; i < mip_count; ++i) {
-                params.target = hiz_buffer.uavs[i];
+                params.target = _hiz_buffer.uavs[i];
                 if (i == 0) {
 
                 } else {
@@ -153,7 +153,7 @@ namespace Moer {
                     config.b_mip0       = false;
                     config.target_level = i;
 
-                    params.depth_buffer = hiz_buffer.srv;
+                    params.depth_buffer = _hiz_buffer.srv;
                 }
                 barrier.sub_resource_range.mip_index  = i;
                 barrier2.sub_resource_range.mip_index = i + 1;
@@ -163,7 +163,16 @@ namespace Moer {
                 Vector3i group_count = Vector3i((config.size.t.x + 7) >> 3u, (config.size.t.y + 7) >> 3u, 1);
                 graphics_cmd_list->Dispatch(group_count);
                 if (i == mip_count - 1) {
-                    barrier_info.texture_barriers.resize(1);
+                    barrier_info
+                        .texture_barriers[1]
+                        .SetTexture(_depth_buffer->GetTexture())
+                        .SetDstTextureLayout(TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE)
+                        .SetSrcTextureLayout(TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                        .SetSubResourceRange(RHISubresourceRange(ETextureAspectFlags::DEPTH_SLICE | ETextureAspectFlags::STENCIL_SLICE))
+                        .SetSrcStage(PS_COMPUTE_SHADER)
+                        .SetDstStage(PS_EARLY_FRAGMENT_TESTS)
+                        .SetDstAccessFlags(ERHIAccessFlags::DEPTH_STENCIL_WRITE | ERHIAccessFlags::DEPTH_STENCIL_READ)
+                        .SetSrcAccessFlags(ERHIAccessFlags::SHADER_READ);
                 }
                 graphics_cmd_list->SetPipelineBarrier(barrier_info);//set current mip level to shader read only
             }
@@ -185,7 +194,7 @@ namespace Moer {
         static HiZBuilder instance;
         return instance;
     }
-    void HiZBuilder::DispatchBuildHiZ(RHIGraphicsCommandList* cmd_list, RHISRVRef depth_buffer, HiZBuffer& hiz_buffer) {
-        impl->Dispatch(cmd_list, depth_buffer, hiz_buffer);
+    void HiZBuilder::DispatchBuildHiZ(RHIGraphicsCommandList* _cmd_list, RHISRVRef _depth_buffer, HiZBuffer& _hiz_buffer) {
+        impl->Dispatch(_cmd_list, _depth_buffer, _hiz_buffer);
     }
 }// namespace Moer

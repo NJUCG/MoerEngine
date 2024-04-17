@@ -1,5 +1,6 @@
 #include "resources/GpuScene.h"
 
+#include "misc/MMemory.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
@@ -184,11 +185,9 @@ namespace Moer {
                                                    .SetNumMips(m_mip_levels)
                                                    .SetArraySize(m_layer_levels)
                                                    .SetFormat(m_format)
-                                                   .SetUsageFlags(ETextureUsageFlags::SAMPLED | ETextureUsageFlags::SRGB | ETextureUsageFlags::TRANSFER_DST)
-                                                   .SetInitialLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED));
+                                                   .SetUsageFlags(ETextureUsageFlags::SAMPLED | ETextureUsageFlags::SRGB | ETextureUsageFlags::TRANSFER_DST));
         const uint32_t alignment = 256;
 
-        
         RHIBufferRef staging_buffer = g_rhi->RHICreateBuffer<std::byte>(
             m_data_size, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
 
@@ -276,6 +275,8 @@ namespace Moer {
         queue->SubmitCommands(1, command_list, &submit_info);
 
         fence->Wait(wait_value);
+        MoerDelete(command_list);
+        MoerDelete(queue);
 
         return texture;
     }

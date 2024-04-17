@@ -1,5 +1,6 @@
 #pragma once
 
+#include <future>
 #include <string>
 #include <memory>
 #include <filesystem>
@@ -15,6 +16,7 @@ namespace Moer::Resource::Gltf {
         ~Parser() noexcept;
 
         static RESOURCE_API UniquePtr<Scene> LoadSceneFromFile(const std::filesystem::path& file_path) noexcept;
+        static RESOURCE_API void             LoadSceneFromFileAsync(const std::filesystem::path& file_path) noexcept;
 
     private:
         struct Impl;

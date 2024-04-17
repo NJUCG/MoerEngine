@@ -42,11 +42,11 @@ namespace Moer {
             return *this;
         }
 
-        bool isInitialized() const noexcept { return index != UNINITIALIZED; }
+        bool IsInitialized() const noexcept { return index != UNINITIALIZED; }
 
-        operator bool() const noexcept { return isInitialized(); }
+        operator bool() const noexcept { return IsInitialized(); }
 
-        void clear() noexcept {
+        void Clear() noexcept {
             index   = UNINITIALIZED;
             version = 0;
         }

@@ -1,6 +1,7 @@
 #include "MeshDebugRenderer.h"
 #include "RenderAPI.h"
 #include "RenderThread.h"
+#include "renderer/BackendRenderer.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "resources/AsyncResources.h"
@@ -11,6 +12,7 @@
 #include "shader/ShaderParameterMacros.h"
 #include "shader/ShaderResourceManager.h"
 #include "resources/GpuScene.h"
+#include "Common.h"
 
 #include "scene/CameraManager.h"
 #include "scene/RenderableManager.h"
@@ -108,7 +110,7 @@ namespace Moer {
         impl->SetPresentResolution(_width, _height);
     }
 
-    void* MeshDebugRenderer::GetRendererOutput() {
+    RHISRVRef MeshDebugRenderer::GetRendererOutput() {
         return impl->GetRendererOutput();
     }
 

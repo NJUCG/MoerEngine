@@ -69,7 +69,7 @@ namespace Moer {
         if (m_projection_dirty) {
             m_proj = MakePerspectiveMatrixRH(
                 //Use Inverse Depth
-                m_fov_y / 180.f * PI,
+                Angle::DegreeToRadian(m_fov_y),
                 m_aspect_ratio,
                 m_far_clip,
                 m_near_clip);
