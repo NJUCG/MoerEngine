@@ -42,18 +42,20 @@ void RHI::RHIFlushPendingDeletes() {
 }
 RHISRVRef RHI::RHICreateBufferSRV(
     RHIBuffer* _resource,
-    uint32_t   stride,
+    uint32_t   _stride,
     uint64_t   _byte_size,
     uint64_t   _byte_offset) {
 #ifdef _DEBUG
     assert(_resource != nullptr);
 #endif
-    auto true_stride = stride == 0 ? _resource->GetStride() : stride;
+    auto true_stride = _stride == 0 ? _resource->GetStride() : _stride;
     auto true_size   = _byte_size == 0 ? _resource->GetByteSize() : _byte_size;
     auto create_info = RHIViewInfo::CreateBufferSRVInfo()
                            .SetByteOffset(_byte_offset)
                            .SetStride(true_stride)
-                           .SetNumElements((true_size - _byte_offset) / true_stride);
+                           .SetNumElements((true_size - _byte_offset) / true_stride)
+                           .SetType(RHIViewInfo::GetBufferType(_resource));
+
     return RHICreateSRVInner(_resource, create_info);
 };
 RHIUAVRef RHI::RHICreateBufferUAV(
@@ -68,7 +70,8 @@ RHIUAVRef RHI::RHICreateBufferUAV(
     auto create_info = RHIViewInfo::CreateBufferUAVInfo()
                            .SetByteOffset(_byte_offset)
                            .SetStride(true_stride)
-                           .SetNumElements((true_size - _byte_offset) / true_stride);
+                           .SetNumElements((true_size - _byte_offset) / true_stride)
+                           .SetType(RHIViewInfo::GetBufferType(_resource));
     return RHICreateUAVInner(_resource, create_info);
 };
 

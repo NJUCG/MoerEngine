@@ -1,6 +1,7 @@
 #ifndef MOER_DEFERRED_CULL_H
 #define MOER_DEFERRED_CULL_H
 #include "math/Matrix.h"
+#include "misc/MacroUtils.h"
 #include "shader/Shader.h"
 
 BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(CameraData)
@@ -37,6 +38,20 @@ struct ALIGN_BEGIN(256) CameraCullData {
     float            inv_tan_half_fov;
     float            aspect_ratio;
 } ALIGN_END(256);
+
+struct ALIGN_BEGIN(256) VirtualView {
+    Moer::Matrix4x4f view;
+    Moer::Matrix4x4f view_proj;
+    Moer::Matrix4x4f prev_view_proj;
+    Moer::Matrix4x4f proj;
+    Moer::Vector4f   planes[6];
+    Moer::Vector3f   pos;
+    float            nearz;
+    Moer::Vector3f   bound_center;
+    float            aspect_ratio;
+    Moer::Vector3f   bound_extent;
+    float            inv_tan_half_fov;
+} ALIGN_END(256);
 BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(CullInstanceInput)
 DEFINE_SHADER_PARAM(uint32_t, instance_count)
 DEFINE_SHADER_PARAM(uint32_t, meshlet_count_offset)
@@ -62,7 +77,7 @@ public:
     DEFINE_SHADER_TYPE(CullInstancePrePassShader, Global, RENDER_API, ...)
     BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
     DEFINE_SHADER_PARAM_STRUCT(CullInstanceInput, input)
-    DEFINE_SHADER_PARAM_CBV(ConstantBuffer<CameraCullData>, cull_data)
+    DEFINE_SHADER_PARAM_CBV(ConstantBuffer<VirtualView>, views)
     // DEFINE_SHADER_PARAM_SRV(StructuredBuffer<InstanceData>, instance_data)
 
     DEFINE_SHADER_PARAM_SRV(StructuredBuffer<InstanceMeshInfo>, instance_meshlet_info)
@@ -81,7 +96,7 @@ public:
     DEFINE_SHADER_TYPE(CullInstanceRecheckShader, Global, RENDER_API, ...)
     BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
     DEFINE_SHADER_PARAM_STRUCT(CullInstanceInput, input)
-    DEFINE_SHADER_PARAM_CBV(ConstantBuffer<CameraCullData>, cull_data)
+    DEFINE_SHADER_PARAM_CBV(ConstantBuffer<VirtualView>, views)
     // DEFINE_SHADER_PARAM_SRV(StructuredBuffer<InstanceData>, instance_data)
 
     DEFINE_SHADER_PARAM_SRV(StructuredBuffer<InstanceMeshInfo>, instance_meshlet_info)
@@ -102,7 +117,7 @@ public:
     BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
     DEFINE_SHADER_PARAM_STRUCT(CullMeshletInput, input)
 
-    DEFINE_SHADER_PARAM_CBV(ConstantBuffer<CameraCullData>, cull_data)
+    DEFINE_SHADER_PARAM_CBV(ConstantBuffer<VirtualView>, views)
     DEFINE_SHADER_PARAM_SRV(StructuredBuffer<MeshletDesc>, meshlet_info_buffer)
     DEFINE_SHADER_PARAM_SRV(StructuredBuffer<MeshletBound>, meshlet_bound_buffer)
     DEFINE_SHADER_PARAM_SRV(StructuredBuffer<InstanceData>, instance_data)
@@ -125,7 +140,7 @@ public:
     BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
     DEFINE_SHADER_PARAM_STRUCT(CullMeshletInput, input)
 
-    DEFINE_SHADER_PARAM_CBV(ConstantBuffer<CameraCullData>, cull_data)
+    DEFINE_SHADER_PARAM_CBV(ConstantBuffer<VirtualView>, views)
     DEFINE_SHADER_PARAM_SRV(StructuredBuffer<MeshletDesc>, meshlet_info_buffer)
     DEFINE_SHADER_PARAM_SRV(StructuredBuffer<MeshletBound>, meshlet_bound_buffer)
     DEFINE_SHADER_PARAM_SRV(StructuredBuffer<InstanceData>, instance_data)

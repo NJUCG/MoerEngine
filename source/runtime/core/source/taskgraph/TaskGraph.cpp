@@ -13,7 +13,13 @@ TaskGraph& TaskGraph::GetInterface() {
 
 void TaskGraph::Init() {
     if (instance == nullptr) {
-        instance = new TaskGraph();
+        instance = MoerNew(TaskGraph)();
+    }
+}
+void TaskGraph::Shutdown() {
+    if (instance != nullptr) {
+        MoerDelete(instance);
+        instance = nullptr;
     }
 }
 void TaskGraph::AttachToNameThread(EThread::Type type) {
@@ -64,7 +70,7 @@ TaskGraph::TaskGraph() {
     for (int32_t i = m_named_thread_count; i < m_thread_count; i++) {
         int32_t     priority       = GetThreadPriorityFromIndex(i);
         std::string name           = "WorkerThread_" + GetPriorityStr(priority) + "_" + std::to_string((i - m_named_thread_count) % m_worker_per_priority);
-        m_workers[i].actual_thread = RunnableThread::Create(&GetThread(i), name, 1ull << i);
+        m_workers[i].actual_thread = RunnableThread::Create(&GetThread(i), ThreadAttributes{.affinity = Affinity::AnyOf(i, std::move(Affinity::All())), .name = name});
         m_workers[i].attached      = true;
     }
 }
@@ -100,7 +106,7 @@ EThread::Type TaskGraph::GetCurrentThread(bool localQueue) {
 bool TaskGraph::IsThreadProcessingTask(EThread::Type index) {
     return m_workers[EThread::GetThreadIndex(index)].task_thread->IsProcessingTask(EThread::GetQueueIndex(index));
 }
-void TaskGraph::ProcessThreadUntilIdle(EThread::Type index){};
+void TaskGraph::ProcessThreadUntilIdle(EThread::Type index) {};
 void TaskGraph::ProcessThreadUntilReturn(EThread::Type index) {
     m_workers[EThread::GetThreadIndex(index)].task_thread->ProcessTaskUntilQuit(EThread::GetQueueIndex(index));
 };
@@ -142,7 +148,8 @@ void TaskGraph::WaitUntilTasksComplete(const GraphEventArray& task_events, EThre
         // because named thread won't flush its task queue until waiting operation
         //check dependency ?
 
-        GraphTask<ReturnGraphTask>::CreateTask(&task_events, current_thread_type).ConstructAndDispatchWhenReady(current_thread_type);
+        // GraphTask<ReturnGraphTask>::CreateTask(&task_events, current_thread_type).ConstructAndDispatchWhenReady(current_thread_type);
+        GraphTask<ReturnGraphTask>::Create(current_thread_type).Wait(task_events).Dispatch();
         ProcessThreadUntilReturn(current_thread_type);
     } else {
         ScopeEventRef scope_event;
@@ -157,7 +164,7 @@ void TaskGraph::TriggerEventWhenTasksComplete(Event* event, const GraphEventArra
     {
         bool pending = false;
         for (int32_t index = 0; index < task_events.size(); index++) {
-            GraphEvent* task = reinterpret_cast<GraphEvent*>(task_events[index].Get());
+            GraphEventRef task = task_events[index];
             if (task != nullptr && !task->IsComplete()) {
                 pending = true;
                 break;
@@ -168,12 +175,14 @@ void TaskGraph::TriggerEventWhenTasksComplete(Event* event, const GraphEventArra
         event->Trigger();
         return;
     }
-    GraphTask<TriggerEventGraphTask>::CreateTask(&task_events, currentThread).ConstructAndDispatchWhenReady(event, triggerThread);
+    // GraphTask<TriggerEventGraphTask>::CreateTask(&task_events, currentThread).ConstructAndDispatchWhenReady(event, triggerThread);
+
+    GraphTask<TriggerEventGraphTask>::Create(event, triggerThread).Wait(task_events).Dispatch();
 }
-void TaskGraph::QueueTask(BaseGraphTask* task, EThread::Type prefered_thread, EThread::Type current_thread, bool wake_worker) {
-    if (EThread::GetThreadIndex(prefered_thread) == EThread::UNKNOWN_THREAD) {//any thread is ok
+void TaskGraph::QueueTask(BaseGraphTask* task, EThread::Type _prefered_thread, EThread::Type _current_thread, bool wake_worker) {
+    if (EThread::GetThreadIndex(_prefered_thread) == EThread::UNKNOWN_THREAD) {//any thread is ok
         ThreadPriority priority                = task->GetPriority();
-        int32_t        possible_thread_to_wake = m_task_queue[priority].Push(task, 1);
+        int32_t        possible_thread_to_wake = m_task_queue[priority].Push(task, 0);
         if (possible_thread_to_wake >= 0) {
             //start task thread
             possible_thread_to_wake = possible_thread_to_wake + priority * m_worker_per_priority + m_named_thread_count;
@@ -183,14 +192,10 @@ void TaskGraph::QueueTask(BaseGraphTask* task, EThread::Type prefered_thread, ET
     }
     //named thread
     EThread::Type temp_current_thread;
-    if (EThread::GetThreadIndex(current_thread) == EThread::UNKNOWN_THREAD) {
-        temp_current_thread = GetCurrentThread();
+    temp_current_thread = GetCurrentThread();
 
-    } else {
-        temp_current_thread = current_thread;
-    }
-    ThreadIndex index       = EThread::GetThreadIndex(prefered_thread);
-    QueueIndex  queue_index = EThread::GetQueueIndex(prefered_thread);
+    ThreadIndex index       = EThread::GetThreadIndex(_prefered_thread);
+    QueueIndex  queue_index = EThread::GetQueueIndex(_prefered_thread);
     if (EThread::GetThreadIndex(temp_current_thread) == index) {
         m_workers[index].task_thread->EnqueueFromCurrentThread(queue_index, task);
     } else {

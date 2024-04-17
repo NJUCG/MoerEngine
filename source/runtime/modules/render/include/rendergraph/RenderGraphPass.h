@@ -85,4 +85,4 @@ namespace Moer {
     //
     // class RENDER_API RayTracingPass : public PassNode {
     // };
-}
+}// namespace Moer

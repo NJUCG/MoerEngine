@@ -2,18 +2,20 @@
 #define GRAPH_TASK_H
 #include "API_Macro.h"
 #include "ThreadManager.h"
+#include <functional>
 #include <utility>
 #include <memory>
 #include "misc/CountableRef.h"
 #include "TaskGraph.h"
+#include "misc/MacroUtils.h"
 class BaseGraphTask {
 public:
     BaseGraphTask(int32_t count) : m_prerequests_count{count} {}
     virtual ~BaseGraphTask() {}
-    virtual void ExecuteTasks(Moer::Array<BaseGraphTask*>& tasks, EThread::Type currentThread) = 0;
-    virtual void DestroyTask()                                                                 = 0;
-    void         Execute(Moer::Array<BaseGraphTask*>& newTasks, EThread::Type currentThread) {
-        ExecuteTasks(newTasks, currentThread);
+    virtual void ExecuteTasks(EThread::Type currentThread) = 0;
+    virtual void DestroyTask()                             = 0;
+    void         Execute(EThread::Type currentThread) {
+        ExecuteTasks(currentThread);
     }
     void SetPreferredThread(EThread::Type thread) {
         m_preferd_thread = thread;
@@ -36,7 +38,7 @@ public:
     EThread::Type  GetPreferredThread() { return m_preferd_thread; }
 
 protected:
-    EThread::Type        m_preferd_thread{EThread::UNKNOWN_THREAD};
+    EThread::Type        m_preferd_thread{EThread::Invalid};
     std::atomic<int32_t> m_prerequests_count;
 };
 
@@ -62,7 +64,6 @@ public:
 
         m_events_to_wait.emplace_back(std::move(_eventRef));
     }
-    CORE_API void TryUnlockSubsequents(Moer::Array<BaseGraphTask*>& tasks, EThread::Type currentThread = EThread::UNKNOWN_THREAD);
     CORE_API void TryUnlockSubsequents(EThread::Type currentThread = EThread::UNKNOWN_THREAD);
 
     CORE_API void Wait(EThread::Type currentThread = EThread::UNKNOWN_THREAD);
@@ -104,11 +105,85 @@ class GraphTask final : public BaseGraphTask {
     };
 
 public:
+    class CreateInfo {
+    public:
+        CreateInfo() = default;
+        CreateInfo(GraphTask* _task_holder) : task_holder{_task_holder} {}
+        CreateInfo& Wait(const GraphEventArray& _waits) {
+            task_holder->m_prerequests_count.fetch_add(_waits.size());
+
+            waits.insert(waits.end(), _waits.begin(), _waits.end());
+            return *this;
+        }
+        // CreateInfo& Wait(const GraphEventArray* _waits) {
+        //     // task_holder->m_prerequests_count.fetch_add(_waits.size());
+        //     waits = _waits;
+        //     // waits.insert(waits.end(), _waits.begin(), _waits.end());
+        //     return *this;
+        // }
+        CreateInfo& Wait(GraphEventArray&& _waits) {
+            task_holder->m_prerequests_count.fetch_add(_waits.size());
+            if (waits.empty()) {
+                waits = std::move(_waits);
+            } else {
+                waits.insert(waits.end(), _waits.begin(), _waits.end());
+            }
+            return *this;
+        }
+        CreateInfo& Wait(GraphEventRef _event_to_wait) {
+            task_holder->m_prerequests_count.fetch_add(1);
+            waits.emplace_back(_event_to_wait);
+            return *this;
+        }
+        CreateInfo& Next(GraphEventRef _subsequent) {
+            task_holder->m_subsequents = _subsequent;
+            return *this;
+        }
+        GraphEventRef Dispatch(EThread::Type _target_thread = EThread::Invalid) {
+            assert(task_holder != nullptr);
+            if (_target_thread != EThread::Invalid) {
+                task_holder->SetPreferredThread(_target_thread);
+            }
+            if (task_holder->GetPreferredThread() == EThread::Invalid) {
+                task_holder->SetPreferredThread(EThread::AnyThread_NormalPri);
+            }
+            if (task_holder->m_subsequents == nullptr) {
+                task_holder->m_subsequents = GraphEvent::CreateGraphEvent();
+            }
+            return task_holder->Setup(&waits);
+        }
+
+        GraphEventRef GetCompletionEvent() {
+            if (task_holder->m_subsequents == nullptr) {
+                task_holder->m_subsequents = GraphEvent::CreateGraphEvent();
+            }
+            return task_holder->m_subsequents;
+        }
+
+    private:
+        friend class GraphTask;
+        GraphEventArray waits;
+        EThread::Type   current_thread;
+        GraphTask*      task_holder;
+    };
+
+public:
     ~GraphTask() {}
 
 public:
     friend class Constructor;
-    virtual void ExecuteTasks(Moer::Array<BaseGraphTask*>& tasks, EThread::Type currentThread) override {
+    template<typename... Ts>
+        requires std::is_constructible_v<TaskType, Ts...>
+    static CreateInfo Create(Ts&&... _args) {
+        auto* task_holder = MoerNew(GraphTask)();
+        new ((void*)&task_holder->task_slot) TaskType(std::forward<Ts>(_args)...);
+        TaskType& task = *(TaskType*)&task_holder->task_slot;
+        if (task.GetPreferredThread() != EThread::Invalid) {
+            task_holder->SetPreferredThread(task.GetPreferredThread());
+        }
+        return std::move(CreateInfo(task_holder));
+    }
+    virtual void ExecuteTasks(EThread::Type currentThread) override {
 
         TaskType& task = *(TaskType*)&task_slot;
 
@@ -117,7 +192,7 @@ public:
 
         {
             std::atomic_thread_fence(std::memory_order_acq_rel);
-            m_subsequents->TryUnlockSubsequents(tasks, currentThread);
+            m_subsequents->TryUnlockSubsequents(currentThread);
         }
 
         DestroyTask();
@@ -126,15 +201,15 @@ public:
         ConditionalQueueTask(currentThread, true);
     }
     virtual void DestroyTask() override {
-        delete this;
+        MoerDelete(this);
     }
     static Constructor CreateTask(GraphEventRef subsequents, const GraphEventArray* preRequests = nullptr, EThread::Type currentThread = EThread::UNKNOWN_THREAD) {
         int event_count = preRequests == nullptr ? 0 : preRequests->size();
-        return Constructor(new GraphTask(subsequents, event_count), preRequests, currentThread);
+        return Constructor(MoerNew(GraphTask)(subsequents, event_count), preRequests, currentThread);
     }
     static Constructor CreateTask(const GraphEventArray* preRequests = nullptr, EThread::Type currentThread = EThread::UNKNOWN_THREAD) {
         int event_count = preRequests == nullptr ? 0 : preRequests->size();
-        return Constructor(new GraphTask(GraphEvent::CreateGraphEvent(), event_count), preRequests, currentThread);
+        return Constructor(MoerNew(GraphTask)(GraphEvent::CreateGraphEvent(), event_count), preRequests, currentThread);
     }
     GraphEventRef GetCompletionEvent() { return m_subsequents; };
 
@@ -142,12 +217,16 @@ private:
     GraphTask(GraphEventRef _subsequents, int32_t initialCount) : BaseGraphTask(initialCount + 1) {
         m_subsequents.Swap(_subsequents);
     }
+    GraphTask() : BaseGraphTask(1) {}
 
-    GraphEventRef Setup(const GraphEventArray* prerequests = nullptr, EThread::Type currentThread = EThread::UNKNOWN_THREAD, bool unlock = true) {
+    GraphEventRef
+    Setup(const GraphEventArray* prerequests = nullptr, EThread::Type currentThread = EThread::UNKNOWN_THREAD, bool unlock = true) {
         GraphEventRef prevent_deconstruct = m_subsequents;
         TaskType&     task                = *(TaskType*)&task_slot;
-        BaseGraphTask::SetPreferredThread(task.GetPreferredThread());
-        int32_t completed_prerequest_count{0};
+        int32_t       completed_prerequest_count{0};
+        if (m_preferd_thread == EThread::Invalid) {
+            BaseGraphTask::SetPreferredThread(task.GetPreferredThread());
+        }
         if (prerequests != nullptr) {
             for (int32_t i = 0; i < prerequests->size(); i++) {
                 GraphEvent* event = (*prerequests)[i].Get();
@@ -157,6 +236,24 @@ private:
             }
         }
         PrerequestsComplete(currentThread, completed_prerequest_count, unlock);
+        return prevent_deconstruct;
+    }
+
+    GraphEventRef TryDispatch(GraphEventArray& _events_to_wait) {
+        GraphEventRef prevent_deconstruct = m_subsequents;
+        TaskType&     task                = *(TaskType*)&task_slot;
+        if (m_preferd_thread == EThread::Invalid) {
+            BaseGraphTask::SetPreferredThread(task.GetPreferredThread());
+        }
+        uint32_t completed_prerequest_count{0};
+        for (int32_t i = 0; i < _events_to_wait.size(); i++) {
+            GraphEvent* event = _events_to_wait[i].Get();
+            if (event == nullptr || !event->AddSubsequent(this)) {
+                completed_prerequest_count++;
+            }
+        }
+        EThread::Type current_thread = GetCurrentThreadId();
+        PrerequestsComplete(EThread::UNKNOWN_THREAD, completed_prerequest_count, false);
         return prevent_deconstruct;
     }
 
@@ -217,22 +314,22 @@ public:
     EThread::Type GetPreferredThread() {
         return m_preferred_thread;
     }
-    void Fire(EThread::Type currentThread, const GraphEventRef& _event) {
-        FireInner(currentThread, _event, *m_function);
+    void Fire(EThread::Type _current_thread, const GraphEventRef& _event) {
+        FireInner(_current_thread, _event, *m_function);
     }
 
 private:
-    __forceinline static void FireInner(EThread::Type currentThread, const GraphEventRef& _event, std::function<void(EThread::Type, const GraphEventRef&)>& func) {
+    FORCEINLINE static void FireInner(EThread::Type currentThread, const GraphEventRef& _event, std::function<void(EThread::Type, const GraphEventRef&)>& func) {
         func(currentThread, _event);
     }
-    __forceinline static void FireInner(EThread::Type currentThread, const GraphEventRef& _event, std::function<void()>& func) {
+    FORCEINLINE static void FireInner(EThread::Type currentThread, const GraphEventRef& _event, std::function<void()>& func) {
         func();
     }
     EThread::Type                                m_preferred_thread;
     std::unique_ptr<std::function<FunctionType>> m_function;
 };
 
-class FunctionGraphTask {
+class [[deprecated("will not be supported in the future")]] FunctionGraphTask {
 public:
     static GraphEventRef ConstructAndDispatchWhenReady(std::function<void()>& func, const GraphEventArray* prerequest = nullptr, EThread::Type preferred_thread = EThread::AnyThread_NormalPri) {
         return ConstructAndDispatchWhenReady(std::move(func), prerequest, preferred_thread);
@@ -254,9 +351,9 @@ public:
 
         return ConstructAndDispatchWhenReady(std::move(func), prerequest, preferred_thread);
     }
-    static GraphEventRef ConstructAndDispatchWhenReady(std::function<void()>&& func, const GraphEventRef& prerequest, EThread::Type preferred_thread = EThread::AnyThread_NormalPri) {
-        GraphEventArray prerequests{prerequest};
-        return GraphTask<FunctionGraphTaskInner<void()>>::CreateTask(&prerequests).ConstructAndDispatchWhenReady(func, preferred_thread);
+    static GraphEventRef ConstructAndDispatchWhenReady(std::function<void()>&& _func, const GraphEventRef& _prerequest, EThread::Type preferred_thread = EThread::AnyThread_NormalPri) {
+        GraphEventArray prerequests{_prerequest};
+        return GraphTask<FunctionGraphTaskInner<void()>>::CreateTask(&prerequests).ConstructAndDispatchWhenReady(_func, preferred_thread);
     }
 
     static GraphEventRef ConstructAndDispatchWhenReady(std::function<void(EThread::Type, const GraphEventRef&)>& func, const GraphEventRef& prerequest, EThread::Type preferred_thread = EThread::AnyThread_NormalPri) {
@@ -267,6 +364,33 @@ public:
     static GraphEventRef ConstructAndDispatchWhenReady(std::function<void(EThread::Type, const GraphEventRef&)>&& func, const GraphEventRef& prerequest, EThread::Type preferred_thread = EThread::AnyThread_NormalPri) {
         GraphEventArray prerequests{prerequest};
         return GraphTask<FunctionGraphTaskInner<void(EThread::Type, const GraphEventRef&)>>::CreateTask(&prerequests).ConstructAndDispatchWhenReady(func, preferred_thread);
+    }
+};
+class LambdaTask {
+public:
+    using TGraphTask          = GraphTask<FunctionGraphTaskInner<void()>>;
+    using TGraphTaskWithParam = GraphTask<FunctionGraphTaskInner<void(EThread::Type, const GraphEventRef&)>>;
+
+    static GraphEventRef Dispatch(std::function<void()>& _func, EThread::Type _thread = EThread::AnyThread_NormalPri) {
+        return TGraphTask::Create(_func, _thread).Dispatch();
+    }
+
+    static GraphEventRef Dispatch(std::function<void()>&& _func, EThread::Type _thread = EThread::AnyThread_NormalPri) {
+        return TGraphTask::Create(std::forward<std::function<void()>>(_func), _thread).Dispatch();
+    }
+
+    static GraphEventRef Dispatch(std::function<void(EThread::Type, const GraphEventRef&)>&& _func, EThread::Type _thread = EThread::AnyThread_NormalPri) {
+        return TGraphTaskWithParam::Create(std::forward<std::function<void(EThread::Type, const GraphEventRef&)>>(_func), _thread).Dispatch();
+    }
+
+    static GraphEventRef Dispatch(std::function<void(EThread::Type, const GraphEventRef&)>& _func, EThread::Type _thread = EThread::AnyThread_NormalPri) {
+        return TGraphTaskWithParam::Create(_func, _thread).Dispatch();
+    }
+    static TGraphTask::CreateInfo Create(std::function<void()>& _func, EThread::Type _thread = EThread::AnyThread_NormalPri) {
+        return TGraphTask::Create(_func, _thread);
+    }
+    static TGraphTask::CreateInfo Create(std::function<void()>&& _func, EThread::Type _thread = EThread::AnyThread_NormalPri) {
+        return TGraphTask::Create(std::forward<std::function<void()>>(_func), _thread);
     }
 };
 #endif// !GRAPH_TASK_H

@@ -7,6 +7,7 @@
 #include "math/Matrix.h"
 #include "misc/MMemory.h"
 #include "misc/STL.h"
+#include "misc/Timer.h"
 #include "renderer/BackendRenderer.h"
 #include "rendergraph/RenderGraphPass.h"
 #include "resources/AsyncResources.h"
@@ -32,6 +33,8 @@
 #include "rendergraph/RenderGraph.h"
 #include "resources/GpuScene.h"
 #include "scene/Material.h"
+#include "deferred/RenderResourceDeferred.h"
+#include "deferred/BasePass.h"
 IMPLEMENT_SHADER_TYPE(CullInstancePrePassShader, "meshdebug/CullInstance.hlsl", "prepass", ST_COMPUTE)
 IMPLEMENT_SHADER_TYPE(CullMeshletPrepassShader, "meshdebug/CullMeshlet.hlsl", "prepass", ST_COMPUTE)
 
@@ -101,6 +104,7 @@ public:
 IMPLEMENT_SHADER_TYPE(LightingShaderVert, "deferedshading/LightingVert.hlsl", "main", ST_VERTEX);
 IMPLEMENT_SHADER_TYPE(LightingShaderFrag, "deferedshading/LightingFrag.hlsl", "main", ST_FRAGMENT);
 
+constexpr uint32_t uniform_buffer_size = sizeof(VirtualView);
 namespace Moer {
     class DeferredRenderer::Impl {
     public:
@@ -116,7 +120,6 @@ namespace Moer {
         RHISRVRef GetRendererOutput();
 
     private:
-        void BasePass();
         void CreateDepthBuffer();
         void OnResizeVSwapChain();
 
@@ -124,33 +127,11 @@ namespace Moer {
         void RecheckPass();
         void LightingPass();
 
-        void                    DispatchDrawScene(const CameraData& _camera_data, bool _first_pass = true);
-        RHIGraphicsCommandList* GetCurrentCmdList() {
-            return render_cmd_lists[frame_counter % render_cmd_lists.size()];
-        }
-        RenderGraph& GetCurrentRenderGraph() {
-            return render_graphs[frame_counter % render_cmd_lists.size()];
-        }
-
-        void ResetRenderGraph() {
-            render_graphs[frame_counter % render_cmd_lists.size()].Reset();
-        }
+        void DispatchDrawScene(const CameraData& _camera_data, bool _first_pass = true);
 
     private:
         VirtualViewport* virtual_viewport;
-        uint64_t         frame_counter = 0;
 
-        Moer::Array<RHIGraphicsCommandList*> render_cmd_lists;
-        RHICommandQueue*                     render_queue;
-        RHIFenceRef                          render_fence;
-
-        // UniquePtr<BasePass> base_pass;
-
-        //test triangle data
-        // RHIBufferRef vertex_buffer;
-        // RHIBufferRef index_buffer;
-
-        // RHIGraphicsPipelineStateRef pipeline_state;
         RHIGraphicsPipelineStateRef gbuffer_pipeline_state;
         RHIGraphicsPipelineStateRef lighting_pipeline_state;
 
@@ -214,7 +195,9 @@ namespace Moer {
 
         Vector2i source_resolution;
 
-        Array<RenderGraph> render_graphs;
+        RenderContext render_context;
+
+        UniquePtr<BasePass> base_pass;
 
         bool b_need_update = true;
     };
@@ -284,14 +267,14 @@ namespace Moer {
                 .SetSrcAccessFlags(ERHIAccessFlags::UNDEFINED)
                 .SetDstAccessFlags(ERHIAccessFlags::DEPTH_STENCIL_WRITE);
         }
-        auto* cmd_list = render_cmd_lists[0];
-        cmd_list->BeginRecording();
-        cmd_list->SetPipelineBarrier(barrier_info);
-        cmd_list->EndRecording();
+        auto& cmd_list = render_context.GetCommandList();
+        cmd_list.BeginRecording();
+        cmd_list.SetPipelineBarrier(barrier_info);
+        cmd_list.EndRecording();
         RHISubmitInfo submit_info{};
         RHIFenceRef   fence = g_rhi->RHICreateFence({.usage = EFenceUsageFlags::TIMELINE});
         submit_info.Signal(fence, 1);
-        render_queue->SubmitCommands(1, render_cmd_lists[0], &submit_info);
+        render_context.GetCommandQueue()->SubmitCommands(1, &cmd_list, &submit_info);
         fence->Wait(1);
     }
 
@@ -308,10 +291,6 @@ namespace Moer {
     }
 
     void DeferredRenderer::Impl::Init(const BackendRendererInitInfo& _init_info) {
-        //wait for g_scene
-        RenderThreadFence render_thread_fence;
-        render_thread_fence.BeginFence();
-        render_thread_fence.Wait();
         VirtualViewportCreateInfo create_info;
         source_resolution             = Vector2i(_init_info.width, _init_info.height);
         create_info.name              = "DeferredRendererViewport";
@@ -319,13 +298,10 @@ namespace Moer {
         create_info.format            = _init_info.format;
         create_info.back_buffer_count = 3;
         virtual_viewport              = MoerNew(VirtualViewport)(create_info);
-        render_queue                  = g_rhi->RHICreateCommandQueue(ECommandQueueType::GRAPHICS);
 
-        render_cmd_lists.resize(create_info.back_buffer_count);
-        for (uint32_t i = 0; i < create_info.back_buffer_count; ++i) {
-            render_cmd_lists[i] = g_rhi->RHICreateGraphicsCommandList(g_rhi->RHIGetCurrentCommandAllocator());
-        }
-        render_fence = g_rhi->RHICreateFence({.usage = EFenceUsageFlags::TIMELINE});
+        render_context.Init({.back_buffer_cnt = create_info.back_buffer_count});
+
+        base_pass = std::move(UniquePtr<BasePass>(MoerNew(BasePass)));
 
         auto& shader_resource_manager = ShaderResourceManager::GetInstance();
         cull_instance_recheck_shader  = shader_resource_manager.GetShader<CullInstanceRecheckShader>();
@@ -341,11 +317,11 @@ namespace Moer {
         //why not implement a counter buffer?
         {
             RHIBufferCreateInfo buffer_create_info;
-            uniform_buffer = g_rhi->RHICreateBuffer<float>(sizeof(CameraCullData) * 3, EBufferUsageFlags::UNIFORM_BUFFER | EBufferUsageFlags::CPU_VISIBLE);
+            uniform_buffer = g_rhi->RHICreateBuffer<float>(uniform_buffer_size * 3, EBufferUsageFlags::UNIFORM_BUFFER | EBufferUsageFlags::CPU_VISIBLE);
 
             for (int i = 0; i < 3; i++) {
                 uniform_buffer_view.push_back(
-                    g_rhi->RHICreateCBV(uniform_buffer, sizeof(CameraCullData), sizeof(CameraCullData) * i));
+                    g_rhi->RHICreateCBV(uniform_buffer, uniform_buffer_size, uniform_buffer_size * i));
             }
 
             draw_indirect_buffer = g_rhi->RHICreateBuffer<DrawInstanceCmd>(
@@ -425,7 +401,7 @@ namespace Moer {
             lighting_pipeline_state = g_rhi->RHICreateGraphicsPSO(std::move(lighting_pso_create_info));
         }
         {
-            render_graphs.resize(render_cmd_lists.size());
+            // render_graphs.resize(render_cmd_lists.size());
         }
     }
     void DeferredRenderer::Impl::InitSceneResources() {
@@ -507,6 +483,7 @@ namespace Moer {
             });
             return;
         }
+
         if (b_need_update) {
             InitSceneResources();
             b_need_update = false;
@@ -517,20 +494,11 @@ namespace Moer {
 
         CameraData camera_data;
 
-        // LOG_INFO("camera proj: {} {} {} {}", camera_proj.r0, camera_proj.r1, camera_proj.r2, camera_proj.r3);
         auto vp = camera->GetProjectionMatrix() * camera->GetViewMatrix();
 
         camera_data.prev_view_proj = vp;
-        Matrix4x4f  transform{{-0.126363948, -0.289807469, 0.948684514, -49.9675217},
-                              {0.259712189, 0.913335443, 0.313601822, 13.8385649},
-                              {-0.957374394, 0.286012888, -0.0401463173, -85.6168518},
-                              {-0.00000000, -0.00000000, -0.00000000, 1.f}};
-        static bool first = true;
-        if (first) {
-            // camera->SetWorldTransform(transform);
-            first = false;
-        }
-        // camera->SetWorldTransform(Transform to_world)
+        auto prev_view_proj        = vp;
+
         camera->Tick();
 
         camera_data.view       = camera->GetViewMatrix();
@@ -543,6 +511,21 @@ namespace Moer {
         cull_data.far_plane        = camera->GetFarClip();
         cull_data.near_plane       = camera->GetNearClip();
         cull_data.inv_tan_half_fov = 1.f / camera->GetTanHalfFov();
+
+        VirtualView view_data;
+        view_data.view             = camera->GetViewMatrix();
+        view_data.view_proj        = camera->GetProjectionMatrix() * camera->GetViewMatrix();
+        view_data.prev_view_proj   = prev_view_proj;
+        view_data.proj             = camera->GetProjectionMatrix();
+        view_data.pos              = camera->GetPosition();
+        view_data.aspect_ratio     = camera->GetAspectRatio();
+        view_data.nearz            = camera->GetNearClip();
+        view_data.inv_tan_half_fov = 1.f / camera->GetTanHalfFov();
+        camera->GetPlanes(view_data.planes);
+        Vector3f aabb_min, aabb_max;
+        camera->GetAABB(aabb_min, aabb_max);
+        view_data.bound_center = (aabb_min + aabb_max) * 0.5f;
+        view_data.bound_extent = (aabb_max - aabb_min) * 0.5f;
 
         auto& frustum_planes = cull_data.frustum_planes;
         {
@@ -561,27 +544,22 @@ namespace Moer {
         }
 
         {
-            auto fill_uniform_data = [this, data(cull_data)]() {
-                auto frame_offset = frame_counter % render_cmd_lists.size();
+            auto fill_uniform_data = [this, data(view_data)]() {
+                auto frame_offset = render_context.GetFrameOffset();
 
                 auto  c_data = data;
-                auto* ptr    = g_rhi->RHIMapBuffer(uniform_buffer, frame_offset * sizeof(CameraCullData), sizeof(CameraCullData));
+                auto* ptr    = g_rhi->RHIMapBuffer(uniform_buffer, frame_offset * uniform_buffer_size, uniform_buffer_size);
 
-                std::memcpy(ptr, &data, sizeof(CameraCullData));
+                std::memcpy(ptr, &data, sizeof(VirtualView));
                 g_rhi->RHIUnmapBuffer(uniform_buffer);
             };
             EnqueueRenderTask(std::move(fill_uniform_data));
         }
 
-        auto instance_count = instance_buffer_view->GetBuffer()->GetNumElement();
-
         auto* const scene = g_scene;
 
         auto&& sync_command_list = [this]() {
-            RHIGraphicsCommandList* cmd_list = GetCurrentCmdList();
-            cmd_list->Reset();
-            cmd_list->BeginRecording();
-            ResetRenderGraph();
+            render_context.BeginFrame();
         };
         RHICopyBufferInfo copy_info{};
         copy_info.regions.push_back({0, 0, sizeof(uint32_t) * 32});
@@ -597,7 +575,7 @@ namespace Moer {
             .SetDstStage(ERHIPipelineStageFlags::PS_TRANSFER);
 
         auto&& reset_counter_buffer = [this, copy_info = std::move(copy_info), buffer_barrier(std::move(counters_barrier))]() {
-            auto& rg = GetCurrentRenderGraph();
+            auto& rg = render_context.GetRenderGraph();
             rg.AddComputePass(
                 "Reset Counter",
                 [&](RenderGraph::Builder& _builder) {
@@ -623,7 +601,7 @@ namespace Moer {
         //hzb build
         EnqueueRenderTask(
             [this]() {
-                GetCurrentRenderGraph().AddComputePass(
+                render_context.GetRenderGraph().AddComputePass(
                     "Build HZB",
                     [&](RenderGraph::Builder& _builder) {
                         // auto frame_offset = frame_counter % render_cmd_lists.size();
@@ -633,8 +611,8 @@ namespace Moer {
                         // _builder.WriteTexture(hiz_buffer, ETextureUsageFlags::UNORDERED_ACCESS);
                     },
                     [&](RenderPassContext& _context) {
-                        auto frame_offset = frame_counter % render_cmd_lists.size();
-                        HiZBuilder::GetInstance().DispatchBuildHiZ(render_cmd_lists[frame_offset], depth_buffer_srv[frame_offset], hiz_buffer);
+                        auto frame_offset = render_context.GetFrameOffset();
+                        HiZBuilder::GetInstance().DispatchBuildHiZ(&render_context.GetCommandList(), depth_buffer_srv[frame_offset], hiz_buffer);
                     });
             });
         RecheckPass();
@@ -642,7 +620,7 @@ namespace Moer {
         DispatchDrawScene(camera_data, false);
         EnqueueRenderTask(
             [this]() {
-                GetCurrentRenderGraph().AddComputePass(
+                render_context.GetRenderGraph().AddComputePass(
                     "Post Build HZB",
                     [&](RenderGraph::Builder& _builder) {
                         // auto depth      = GetCurrentRenderGraph().ImportTexture("depth", depth_buffer[frame_offset]);
@@ -651,15 +629,13 @@ namespace Moer {
                         // _builder.WriteTexture(hiz_buffer, ETextureUsageFlags::UNORDERED_ACCESS);
                     },
                     [&](RenderPassContext& _context) {
-                        auto frame_offset = frame_counter % render_cmd_lists.size();
-                        HiZBuilder::GetInstance().DispatchBuildHiZ(render_cmd_lists[frame_offset], depth_buffer_srv[frame_offset], hiz_buffer);
+                        HiZBuilder::GetInstance().DispatchBuildHiZ(&render_context.GetCommandList(), depth_buffer_srv[render_context.GetFrameOffset()], hiz_buffer);
                     });
             });
         LightingPass();
 
         EnqueueRenderTask([this]() {
-            RHIGraphicsCommandList* cmd_list = render_cmd_lists[frame_counter % render_cmd_lists.size()];
-
+            auto&                    cmd_list = render_context.GetCommandList();
             RHIBarrierDependencyInfo barrier_dependency_info{};
             barrier_dependency_info.texture_barriers.resize(1);
             auto& attachment_info = barrier_dependency_info.texture_barriers[0];
@@ -672,42 +648,23 @@ namespace Moer {
                 .SetSrcAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE)
                 .SetDstAccessFlags(ERHIAccessFlags::TRANSFER_READ);
 
-            cmd_list->SetPipelineBarrier(barrier_dependency_info);
+            cmd_list.SetPipelineBarrier(barrier_dependency_info);
         });
         {
             auto submit_rendering = [this]() {
-                auto* cmd_list = render_cmd_lists[frame_counter % render_cmd_lists.size()];
-                cmd_list->EndRecording();
-
-                auto          back_buffer_info = virtual_viewport->GetBackBufferInfo();
-                RHISubmitInfo submit_info;
-                submit_info.Wait(back_buffer_info.backbuffer_ready_fence, frame_counter);
-                submit_info.Wait(render_fence, frame_counter);
-                submit_info.Signal(render_fence, ++frame_counter);
-
-                render_queue->SubmitCommands(1, cmd_list, &submit_info);
+                render_context.EndFrame(virtual_viewport);
             };
             EnqueueRenderTask(std::move(submit_rendering));
         }
     }
     void DeferredRenderer::Impl::FallBackDraw() {
-        RHIGraphicsCommandList* cmd_list = GetCurrentCmdList();
-        cmd_list->Reset();
-        cmd_list->BeginRecording();
-        auto info = virtual_viewport->GetBackBufferInfo();
-        cmd_list->EndRecording();
-
-        RHISubmitInfo submit_info;
-        submit_info.Wait(info.backbuffer_ready_fence, frame_counter);
-        submit_info.Wait(render_fence, frame_counter);
-        submit_info.Signal(render_fence, ++frame_counter);
-
-        render_queue->SubmitCommands(1, cmd_list, &submit_info);
+        render_context.BeginFrame();
+        render_context.EndFrame(virtual_viewport);
     }
 
     void DeferredRenderer::Impl::Present() {
         EnqueueRenderTask([this]() {
-            virtual_viewport->Present(render_fence);
+            render_context.Present(virtual_viewport);
         });
     }
 
@@ -727,8 +684,8 @@ namespace Moer {
     }
 
     void DeferredRenderer::Impl::PrePass() {
-        uint32_t frame_offset   = frame_counter % render_cmd_lists.size();
-        auto     instance_count = instance_buffer_view->GetBuffer()->GetNumElement();
+        uint32_t frame_offset   = render_context.GetFrameOffset();
+        auto     instance_count = instance_buffer_view->GetBuffer()->GetNumElement() / sizeof(InstanceData);
 
         CullInstancePrePassShader::Parameters cull_instance_params;
         cull_instance_params.input.meshlet_count_offset          = meshlet_count_offset;
@@ -743,7 +700,7 @@ namespace Moer {
         cull_instance_params.instance_meshlet_cull_info = instance_meshlet_cull_info_uav;
         cull_instance_params.recheck_instance_id        = recheck_instance_id_uav;
         cull_instance_params.counters_buffer            = draw_count_view;
-        cull_instance_params.cull_data                  = uniform_buffer_view[frame_offset];
+        cull_instance_params.views                      = uniform_buffer_view[frame_offset];
         cull_instance_params.hiz_depth                  = hiz_buffer.srv;
         cull_instance_params.depth_sampler              = hiz_buffer.sampler;
 
@@ -761,7 +718,7 @@ namespace Moer {
         cull_meshlet_params.recheck_cull_info                   = recheck_cull_info_uav;
         cull_meshlet_params.counters_buffer                     = draw_count_view;
         cull_meshlet_params.command_buffer                      = draw_indirect_view;
-        cull_meshlet_params.cull_data                           = uniform_buffer_view[frame_offset];
+        cull_meshlet_params.views                               = uniform_buffer_view[frame_offset];
         cull_meshlet_params.hiz_depth                           = hiz_buffer.srv;
         cull_meshlet_params.depth_sampler                       = hiz_buffer.sampler;
 
@@ -867,7 +824,7 @@ namespace Moer {
         };
 
         EnqueueRenderTask([&, prepass_cull(std::move(prepass_cull_task))]() {
-            GetCurrentRenderGraph().AddComputePass(
+            render_context.GetRenderGraph().AddComputePass(
                 "Prepass Cull Instance",
                 [&](RenderGraph::Builder& _builder) {
                     // auto& rg  = GetCurrentRenderGraph();
@@ -882,7 +839,7 @@ namespace Moer {
     }
 
     void DeferredRenderer::Impl::RecheckPass() {
-        uint32_t frame_offset   = frame_counter % render_cmd_lists.size();
+        uint32_t frame_offset   = render_context.GetFrameOffset();
         auto     instance_count = instance_buffer_view->GetBuffer()->GetNumElement();
 
         CullInstanceRecheckShader::Parameters cull_instance_params;
@@ -898,7 +855,7 @@ namespace Moer {
         cull_instance_params.instance_meshlet_cull_info = recheck_cull_info_uav;
         cull_instance_params.recheck_instances          = recheck_instance_id_srv;
         cull_instance_params.counters_buffer            = draw_count_view;
-        cull_instance_params.cull_data                  = uniform_buffer_view[frame_offset];
+        cull_instance_params.views                      = uniform_buffer_view[frame_offset];
         cull_instance_params.hiz_depth                  = hiz_buffer.srv;
         cull_instance_params.depth_sampler              = hiz_buffer.sampler;
 
@@ -915,7 +872,7 @@ namespace Moer {
         cull_meshlet_params.instance_meshlet_cull_info          = recheck_cull_info_view;
         cull_meshlet_params.counters_buffer                     = draw_count_view;
         cull_meshlet_params.command_buffer                      = draw_indirect_view;
-        cull_meshlet_params.cull_data                           = uniform_buffer_view[frame_offset];
+        cull_meshlet_params.views                               = uniform_buffer_view[frame_offset];
         cull_meshlet_params.hiz_depth                           = hiz_buffer.srv;
         cull_meshlet_params.depth_sampler                       = hiz_buffer.sampler;
 
@@ -930,7 +887,7 @@ namespace Moer {
                                        meshlet_params(std::move(cull_meshlet_batched_params)),
                                        instance_count(instance_count)](
                                           RenderPassContext& _context) mutable {
-            RHIGraphicsCommandList* cmd_list = render_cmd_lists[frame_counter % render_cmd_lists.size()];
+            auto& cmd_list = render_context.GetCommandList();
 
             RHIBarrierDependencyInfo barrier_dependency_info{};
             barrier_dependency_info.buffer_barriers.resize(3);
@@ -958,13 +915,13 @@ namespace Moer {
                 .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
                 .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
 
-            cmd_list->SetPipelineBarrier(barrier_dependency_info);
+            cmd_list.SetPipelineBarrier(barrier_dependency_info);
 
-            cmd_list->SetPipelineState(cull_instance_recheck_pso);
+            cmd_list.SetPipelineState(cull_instance_recheck_pso);
             g_rhi->RHISetBatchedShaderParameters(cull_instance_recheck_pso, instance_params);
             auto dispatch_count = (instance_count + thread_group_count - 1) / thread_group_count;
             // cmd_list->Dispatch(dispatch_count, 1, 1);
-            cmd_list->DispatchIndirect(draw_count_buffer, instance_dispatch_indirect_offset);
+            cmd_list.DispatchIndirect(draw_count_buffer, instance_dispatch_indirect_offset);
             {
                 RHIBarrierDependencyInfo meshlet_cull_barrier{};
                 meshlet_cull_barrier.buffer_barriers.resize(3);
@@ -993,14 +950,14 @@ namespace Moer {
                     .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
                     .SetDstStage(ERHIPipelineStageFlags::PS_DRAW_INDIRECT);
 
-                cmd_list->SetPipelineBarrier(meshlet_cull_barrier);
+                cmd_list.SetPipelineBarrier(meshlet_cull_barrier);
             }
 
-            cmd_list->SetPipelineState(cull_meshlet_recheck_pso);
+            cmd_list.SetPipelineState(cull_meshlet_recheck_pso);
             g_rhi->RHISetBatchedShaderParameters(cull_meshlet_recheck_pso, meshlet_params);
 
             // cmd_list->Dispatch((max_meshlet_count + thread_group_count) / thread_group_count, 1, 1);
-            cmd_list->DispatchIndirect(draw_count_buffer, recheck_meshlet_dispatch_offset);
+            cmd_list.DispatchIndirect(draw_count_buffer, recheck_meshlet_dispatch_offset);
             {
                 RHIBarrierDependencyInfo post_compute_barrier{};
                 post_compute_barrier.buffer_barriers.resize(2);
@@ -1020,12 +977,12 @@ namespace Moer {
                     .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
                     .SetDstStage(ERHIPipelineStageFlags::PS_DRAW_INDIRECT);
 
-                cmd_list->SetPipelineBarrier(post_compute_barrier);
+                cmd_list.SetPipelineBarrier(post_compute_barrier);
             }
         };
 
         EnqueueRenderTask([&, recheck_pass(std::move(recheck_pass_cull_task))]() {
-            GetCurrentRenderGraph().AddComputePass(
+            render_context.GetRenderGraph().AddComputePass(
                 "Recheck Cull Instance",
                 [&](RenderGraph::Builder& _builder) {
                 },
@@ -1036,17 +993,17 @@ namespace Moer {
 
     void DeferredRenderer::Impl::DispatchDrawScene(const CameraData& _camera_data, bool _first_pass) {
         auto dispatch_gbuffer_pass = [&, b_first_pass(_first_pass)]() {
-            auto* cmd_list = render_cmd_lists[frame_counter % render_cmd_lists.size()];
+            auto& cmd_list = render_context.GetCommandList();
 
-            Extent3D     extent = virtual_viewport->GetNextBackBufferExtent();
-            RenderGraph& rg     = GetCurrentRenderGraph();
+            Extent3D     extent = virtual_viewport->GetBackBufferExtent();
+            RenderGraph& rg     = render_context.GetRenderGraph();
             rg.AddGraphicPass(
                 "GBuffer Pass",
                 [&](RenderGraph::Builder& _builder) {
                     auto normal = rg.CreateTexture("normal", {.extent2D = Extent2D(extent.x, extent.y), .format = EPixelFormat::PF_R8G8B8A8_UNORM, .usage = ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED});
                     auto mat    = rg.CreateTexture("mat", {.extent2D = Extent2D(extent.x, extent.y), .format = EPixelFormat::PF_R32_UINT, .usage = ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED});
                     auto uv     = rg.CreateTexture("uv", {.extent2D = Extent2D(extent.x, extent.y), .format = EPixelFormat::PF_R16G16_SFLOAT, .usage = ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED});
-                    auto depth  = rg.ImportTexture("depth", depth_buffer[frame_counter % render_cmd_lists.size()]);
+                    auto depth  = rg.ImportTexture("depth", depth_buffer[render_context.GetFrameOffset()]);
                     if (!b_first_pass) {
                         _builder.ReadTextures({normal, uv, mat}, RenderGraphTexture::Usage::COLOR_ATTACHMENT);
                         _builder.ReadTexture(depth, RenderGraphTexture::Usage::DEPTH_STENCIL_ATTACHMENT);
@@ -1102,78 +1059,12 @@ namespace Moer {
                     auto draw_cnt_offset = b_first_pass ? draw_count_offset : recheck_draw_count_offset;
                     cmd_list->DrawIndexedIndirect(draw_indirect_buffer, 0, draw_count_buffer, draw_cnt_offset, draw_indirect_buffer->GetNumElement(), sizeof(DrawInstanceCmd));
                 });
-
-            //     _rg.AddGraphicPass(
-            //         "Lighting Pass", [&](RenderGraph::Builder& builder) {
-
-            // auto normal = _rg.GetBlackBoard().GetHandle("normal");
-            // auto mat    = _rg.GetBlackBoard().GetHandle("mat");
-            // auto uv     = _rg.GetBlackBoard().GetHandle("uv");
-            // auto depth  = _rg.GetBlackBoard().GetHandle("depth");
-            // // auto position = render_graph.GetBlackBoard().GetHandle("position");
-            // auto output = _rg.ImportTexture("swapchain_output", virtual_viewport->GetBackBufferInfo().backbuffer_uav->GetTexture());
-            // builder.ReadTextures({normal,uv,mat,depth},RenderGraphTexture::Usage::SAMPLED).WriteTexture(output);
-            // builder.DeclareRenderPass({.color_attachments =  {output}}); }, [&](RenderPassContext& context) {
-            // auto* cmd_list = context.cmd_list;
-            // cmd_list->SetPipelineState(lighting_pipeline_state);
-
-            // //First Get all material instances
-            // //Material organize this materials
-            // //Material bind all resources for it's pass
-            // //Draw a full screen quad pass for each material type
-            // Moer::UnorderedSet<EMaterialType> material_types = {};
-            // Moer::UnorderedMap<EMaterialType,Moer::Array<MaterialInstanceRef>> material_instances;
-            // g_scene->ForEach([&](Entity entity) {
-            //     if (RenderableManager::Get().Contains(entity)) {
-
-            //          auto mi = RenderableManager::Get().GetMaterialInstance(entity);
-            //         material_types.insert(mi->GetMaterial()->GetType());
-            //         material_instances[mi->GetMaterial()->GetType()].push_back(mi);
-            //     }
-            // });
-
-            // auto mat_srv    = _rg.GetBlackBoard().GetTexture("mat")->GetSRV();
-            // auto normal_srv = _rg.GetBlackBoard().GetTexture("normal")->GetSRV();
-            // auto uv_srv     = _rg.GetBlackBoard().GetTexture("uv")->GetSRV();
-            // auto depth_srv  = _rg.GetBlackBoard().GetTexture("depth")->GetSRV();
-
-            // Camera*      camera = CameraManager::Get().Get(g_scene->GetMainCamera());
-            // LightingData lighting_data;
-            // lighting_data.inv_view_proj = Inverse(camera->GetProjectionMatrix() * camera->GetViewMatrix());
-            // lighting_data.light_count   = lights.size();
-
-            // for(auto type : material_types){
-            //     RHIBatchedShaderParameters parameters;
-            //     LightingShaderFrag::Parameters frag_params;
-            //     frag_params.lighting_data = lighting_data;
-            //     frag_params.light_data = light_buffer_view;
-            //     frag_params.depth_attach = depth_srv;
-            //     frag_params.gbuffer_uv = uv_srv;
-            //     frag_params.normal_attach = normal_srv;
-            //     frag_params.mat_attach = mat_srv;
-            //     parameters.SetParameters(ShaderResourceManager::GetInstance().GetShader<LightingShaderFrag>(),frag_params);
-
-            //     auto& mat_instances = material_instances[type];
-            //     MaterialRef material = mat_instances[0]->GetMaterial();
-            //     material->OrganizeInstancesAndBind(parameters,mat_instances);
-            //     g_rhi->RHISetBatchedShaderParameters(lighting_pipeline_state,parameters);
-
-            //     cmd_list->Draw(3, 1,0,0);
-            // } });
-
-            //     _rg.SetGraphOutput(_rg.GetBlackBoard().GetHandle("swapchain_output"));
-
-            // _rg.Execute({cmd_list, virtual_viewport->GetNextBackBufferExtent()});
         };
         EnqueueRenderTask(std::move(dispatch_gbuffer_pass));
     }
-
-    void
-    DeferredRenderer::Impl::BasePass() {
-    }
     void DeferredRenderer::Impl::LightingPass() {
         auto dispatch_rdg = [&]() {
-            RenderGraph& rg = GetCurrentRenderGraph();
+            RenderGraph& rg = render_context.GetRenderGraph();
             rg.AddGraphicPass(
                 "Lighting Pass", [&rg, this](RenderGraph::Builder& builder) {
             auto normal = rg.GetBlackBoard().GetHandle("normal");
@@ -1216,6 +1107,7 @@ namespace Moer {
                 RHIBatchedShaderParameters parameters;
                 LightingShaderFrag::Parameters frag_params;
                 frag_params.lighting_data = lighting_data;
+                // frag_params.material_data = g_scene->GetB;
                 frag_params.light_data = light_buffer_view;
                 frag_params.depth_attach = depth_srv;
                 frag_params.gbuffer_uv = uv_srv;
@@ -1232,7 +1124,7 @@ namespace Moer {
             } });
 
             rg.SetGraphOutput(rg.GetBlackBoard().GetHandle("swapchain_output"));
-            rg.Execute({GetCurrentCmdList(), virtual_viewport->GetNextBackBufferExtent()});
+            rg.Execute({&render_context.GetCommandList(), virtual_viewport->GetBackBufferExtent()});
         };
 
         EnqueueRenderTask(std::move(dispatch_rdg));//not ready yet

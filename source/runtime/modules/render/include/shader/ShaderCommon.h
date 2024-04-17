@@ -240,13 +240,13 @@ namespace std {
 }// namespace std
 //compiled shader platform and type information
 struct ShaderTargetInfo {
-    uint16_t     shader_type;
+    uint16_t shader_type;
     uint16_t shader_platform;
     operator uint32_t() const { return *(uint32_t*)this; }
     ShaderTargetInfo(EShaderType _type, EShaderPlatform _platform)
         : shader_type(_type),
           shader_platform(_platform) {}
-    ShaderTargetInfo(uint32_t _info):shader_type(_info & 0xffff),shader_platform(static_cast<EShaderPlatform>(_info >> 16)){}
+    ShaderTargetInfo(uint32_t _info) : shader_type(_info & 0xffff), shader_platform(static_cast<EShaderPlatform>(_info >> 16)) {}
 
     ShaderTargetInfo() = default;
 
@@ -283,7 +283,7 @@ public:
 
     struct Parameters {
     };
-    static RENDER_API void            RegistrateShaderMetaType(ShaderMetaType* type);
+    static RENDER_API void RegistrateShaderMetaType(ShaderMetaType* type);
 
     //may lead to unexpected behavior when name hash collision, only use for debug
     static RENDER_API ShaderMetaType* GetShaderMetaType(std::string_view _type_name);
@@ -346,7 +346,7 @@ private:
 class ShaderTypeRegistration {
 
 public:
-    RENDER_API ShaderTypeRegistration(std::function<ShaderMetaType&()>);
+    RENDER_API                                            ShaderTypeRegistration(std::function<ShaderMetaType&()>);
     static Moer::Array<std::function<ShaderMetaType&()>>& GetRegistrations();
     static void                                           CollectRegistration(std::function<ShaderMetaType&()> _registration_func);
 
@@ -370,6 +370,11 @@ struct ParameterInfo {
     EShaderParameterType type{EShaderParameterType::Num};
 };
 static_assert(sizeof(ParameterInfo) == 8);
+
+struct ShaderReflectInfo {
+    Moer::UnorderedMap<std::string, ParameterInfo> param_map;
+    Moer::Array<RHIVertexInputInfo>                vertex_input_info;
+};
 
 /**
  * @brief Shader Reflected ParameterInfo Container,

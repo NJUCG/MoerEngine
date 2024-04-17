@@ -2,14 +2,15 @@
 #define MOER_DEFERRED_BASE_PASS_H
 #include "math/Base.h"
 #include "misc/STL.h"
+#include "RenderResourceDeferred.h"
 namespace Moer {
     class BasePass {
     public:
         BasePass();
         ~BasePass();
         struct Impl;
-        void InitResources(class RenderResourceDeferred& resources);
-        void Draw(const struct PassInput& input);
+        void InitResources(RenderContext& resources);
+        void Draw(RenderContext& _input);
         void OnResizeViewport(Moer::Vector2i extent);
 
     private:

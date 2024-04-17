@@ -18,7 +18,7 @@ uint32_t TaskThreadAnyThread::ProcessTasks() {
             if (m_queue.m_close) break;
             continue;
         }
-        task->Execute(m_graph_tasks, m_thread_type);
+        task->Execute(m_thread_type);
     }
     assert(--m_queue.call_amount == 0);
     return 0;
@@ -38,7 +38,7 @@ uint32_t NamedThread::ProcessTasks(QueueIndex queueIndex, bool allowHang) {
                 break;
             }
         } else {
-            task->Execute(m_graph_tasks, m_thread_type);
+            task->Execute(m_thread_type);
         }
     }
     assert(--m_queue[queueIndex].call_amount == 0);

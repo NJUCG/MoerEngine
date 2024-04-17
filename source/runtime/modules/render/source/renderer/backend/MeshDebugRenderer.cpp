@@ -54,7 +54,7 @@ public:
     END_ROOT_PARAMETER_DEFINITION(Parameters);
 };
 
-IMPLEMENT_SHADER_TYPE(MeshletCullShader, "meshdebug/Cull.hlsl", "main", ST_COMPUTE);
+// IMPLEMENT_SHADER_TYPE(MeshletCullShader, "meshdebug/Cull.hlsl", "main", ST_COMPUTE);
 
 namespace Moer {
     class MeshDebugRenderer::Impl {

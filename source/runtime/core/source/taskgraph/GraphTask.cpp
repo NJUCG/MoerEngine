@@ -36,7 +36,7 @@ void BaseGraphTask::PrerequestsComplete(EThread::Type currentThread, int32_t fin
     }
 }
 
-void GraphEvent::TryUnlockSubsequents(Moer::Array<BaseGraphTask*>& tasks, EThread::Type currentThread) {
+void GraphEvent::TryUnlockSubsequents(EThread::Type currentThread) {
     if (m_events_to_wait.size() > 0) {
         GraphEventArray temp_events;
         std::swap(m_events_to_wait, temp_events);// m_events removed
@@ -53,7 +53,12 @@ void GraphEvent::TryUnlockSubsequents(Moer::Array<BaseGraphTask*>& tasks, EThrea
 
         if (generate_empty_task) {
             EThread::Type collection_thread = EThread::SetPriority(EThread::UNKNOWN_THREAD, EThread::HIGH_PRI);
-            GraphTask<EmptyGraphTask>::CreateTask(GraphEventRef(this), &temp_events, currentThread).ConstructAndDispatchWhenReady(collection_thread);
+            // GraphTask<EmptyGraphTask>::CreateTask(GraphEventRef(this), &temp_events, currentThread).ConstructAndDispatchWhenReady(collection_thread);
+            GraphTask<EmptyGraphTask>::Create(collection_thread)
+                .Wait(std::move(temp_events))
+                .Next(GraphEventRef(this))
+                .Dispatch();
+
             return;
         }
     }
@@ -66,11 +71,6 @@ void GraphEvent::TryUnlockSubsequents(Moer::Array<BaseGraphTask*>& tasks, EThrea
         should_wake_up_worker = task->ConditionalQueueTask(currentThread, should_wake_up_worker);
     }
 }
-void GraphEvent::TryUnlockSubsequents(EThread::Type currentThread) {
-    Moer::Array<BaseGraphTask*> tasks;
-    TryUnlockSubsequents(tasks, currentThread);
-}
-
 void GraphEvent::Wait(EThread::Type currentThread) {
 
     TaskGraph::GetInterface().WaitUntilTaskComplete(this, currentThread);

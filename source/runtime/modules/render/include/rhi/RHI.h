@@ -268,13 +268,15 @@ FORCEINLINE void EnqueueRenderTask(Funtion&& _func) {
         task.Fire(EThread::EMainThread, nullptr);
     }
     if (Moer::IsCurrentlyGameThread()) {
-        GraphTask<TRenderTaskType>::CreateTask().ConstructAndDispatchWhenReady(std::forward<Funtion>(_func));
+        // GraphTask<TRenderTaskType>::CreateTask().ConstructAndDispatchWhenReady(std::forward<Funtion>(_func));
+        GraphTask<TRenderTaskType>::Create(std::forward<Funtion>(_func)).Dispatch(EThread::ERenderThread);
     } else {
         // Any Thread maybe
         // immediately execute on render thread
         // TRenderTaskType task(std::forward<Funtion>(_func));
         // task.Fire(EThread::EMainThread, nullptr);
-        GraphTask<TRenderTaskType>::CreateTask().ConstructAndDispatchWhenReady(std::forward<Funtion>(_func));
+        // GraphTask<TRenderTaskType>::CreateTask().ConstructAndDispatchWhenReady(std::forward<Funtion>(_func));
+        GraphTask<TRenderTaskType>::Create(std::forward<Funtion>(_func)).Dispatch(EThread::ERenderThread);
     }
 }
 #endif

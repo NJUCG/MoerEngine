@@ -544,7 +544,7 @@ namespace Moer::Resource::Gltf {
         Scene::RegisterAsyncLoadInfo(load_info);
         // auto future      = promise->GetFuture();
 
-        FunctionGraphTask::ConstructAndDispatchWhenReady(
+        LambdaTask::Dispatch(
             [this, path(file_path), info(load_info)]() {
                 auto        load_info = Scene::GetCurrentSceneLoadInfo();
                 std::string path_str  = path.generic_string();
@@ -552,8 +552,7 @@ namespace Moer::Resource::Gltf {
                 load_info->scene = this->LoadSceneFromFile(path, true);
                 Scene::SetCurrentScene(load_info->scene);
                 load_info->progress.store(1);
-            },
-            nullptr);
+            });
     }
 
     Transform GetTransform(const aiNode* node) {

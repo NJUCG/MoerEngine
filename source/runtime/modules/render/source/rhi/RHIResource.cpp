@@ -22,7 +22,13 @@ void RHIResource::Destroy() {
 RHITexture::RHITexture(const RHITextureCreateInfo& _info) : RHIViewableResource(RRT_TEXTURE), texture_info(_info) {
     SetName(_info.name);
 }
-
+RHIViewInfo::EBufferType RHIViewInfo::GetBufferType(RHIBuffer* buffer) {
+    const auto& info = buffer->GetInfo();
+    if (info.IsNull()) return EBufferType::RAW;
+    if (EnumHasAnyFlag(info.usage, EBufferUsageFlags::STORAGE_BUFFER)) return EBufferType::STRUCTURED;
+    if (EnumHasAnyFlag(info.usage, EBufferUsageFlags::ACCELERATION_STRUCTURE)) return EBufferType::ACCELERATION_STRUCTURE;
+    return EBufferType::RAW;
+}
 RHIViewInfo::Buffer::ViewInfo RHIViewInfo::Buffer::GetViewInfo(RHIBuffer* target) const {
     assert(target && "invalid buffer.");
     const auto& info = target->GetInfo();

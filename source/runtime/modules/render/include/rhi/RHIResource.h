@@ -1211,6 +1211,7 @@ struct RHIViewInfo {
         /* a raw buffer can also be called a byte address buffer */
         RAW
     };
+    static EBufferType GetBufferType(RHIBuffer* _buffer);
 
     struct BaseViewInfo {
         EViewType    view_type;
@@ -3214,7 +3215,7 @@ public:
     virtual void ReleasePreloadedShader(int32_t ShaderIndex) {}
 
     virtual CountableRef<RHIShader> CreateShader(int32_t ShaderIndex) { return nullptr; }
-    virtual void                    Teardown(){};
+    virtual void                    Teardown() {};
 
 protected:
     EShaderPlatform platform;

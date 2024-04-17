@@ -1,13 +1,21 @@
 #include "taskgraph/ThreadManager.h"
 #include <assert.h>
+#include <string>
 #include <thread>
 #include <functional>
 #include <algorithm>
 #include <iostream>
-#include "spdlog/details/os.h"
 #include "spdlog/spdlog.h"
 #include "platform/Platform.h"
 #include "taskgraph/Event.h"
+
+#if defined(PLATFORM_WINDOWS)
+#include <windows.h>
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#else
+#endif
 
 #define MAIN_THREAD_NAME    "MainThread"
 #define RENDER_THREAD_NAME  "RenderThread"
@@ -66,6 +74,7 @@ void ThreadManager::Tick() {
 
 void ThreadManager::Initialize() {
     g_game_thread_id = Platform::GetCurrentThreadID();
+    Platform::SetCurrentThreadName(MAIN_THREAD_NAME);
     AddThread(g_game_thread_id, nullptr);
 }
 uint32_t ThreadManager::GetCurrentThreadID() {
@@ -108,8 +117,17 @@ RunnableThread* ThreadManager::GetRunnableThread(uint32_t id) {
     return thread;
 }
 
-void RunnableThread::Setup(uint64_t affinity) {
-    Platform::SetThreadAffinity((void*)m_thread->native_handle(), affinity);
+void RunnableThread::Setup(uint64_t _affinity) {
+    Platform::SetThreadAffinity((void*)m_thread->native_handle(), _affinity);
+}
+
+void RunnableThread::SetAffinity(Affinity&& _affinity) {
+    Platform::SetCurrentThreadAffinity(std::move(_affinity));
+}
+
+void RunnableThread::SetName(std::string_view _name) {
+    Platform::SetCurrentThreadName(_name);
+    name = _name;
 }
 
 RunnableThread::~RunnableThread() {
@@ -117,12 +135,9 @@ RunnableThread::~RunnableThread() {
     Join();
 }
 
-RunnableThread* RunnableThread::Create(Runnable* runnable, const std::string& name, uint64_t affinity_mask) {
-
+RunnableThread* RunnableThread::Create(Runnable* _runnable, ThreadAttributes _attributes) {
     RunnableThread* created_thread = nullptr;
-
-    created_thread = new RunnableThread(runnable, name);
-    created_thread->Setup(affinity_mask);
+    created_thread                 = MoerNew(RunnableThread)(_runnable, _attributes);
     ThreadManager::Instance().AddThread(created_thread->id, created_thread);
     return created_thread;
 }
@@ -130,15 +145,21 @@ RunnableThread* RunnableThread::Create(Runnable* runnable, const std::string& na
 void RunnableThread::Tick() {
 }
 
-RunnableThread::RunnableThread(Runnable* inRunnable, const std::string& name) {
-    assert(inRunnable != nullptr);
-    m_runnable     = inRunnable;
+RunnableThread::RunnableThread(Runnable* _in_runnable, ThreadAttributes _attributes) {
+    assert(_in_runnable != nullptr);
+    m_runnable     = _in_runnable;
     m_create_event = EventPool::Get()->GetEvent(false);
     m_end_event    = EventPool::Get()->GetEvent(false);
     EventRef create_event(m_create_event);
-    m_thread = new std::thread(&RunnableThread::Run, this);
+    m_thread = MoerNew(std::jthread)([_in_runnable, name(_attributes.name), affinity(std::move(_attributes.affinity)), this]() {
+        SetName(name);
+        auto tmp_affinity = affinity;
+        SetAffinity(std::move(tmp_affinity));
+        Run();
+    });
     create_event.Wait();
     this->name = name;
+
     SPDLOG_INFO("[{}] {} thread created", name, this->id);
 }
 

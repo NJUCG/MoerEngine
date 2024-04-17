@@ -39,23 +39,15 @@ float4 main(float2 in_uv
   //  printf("uv %f %f svposition %f %f %f \n", in_uv.x, in_uv.y, position.x,
   //  position.y, position.z);
   uint mat_type = gbuffer_mat & 0x000000FF;
-
-  // if(mat_type != CUR_MATERIAL_TYPE)
-  // {
-  //     discard;
-  // }
-
-  //  return float4(in_uv, 0.0f, 1.0f);
   float2 uv = gbuffer_uv.Sample(default_sampler, in_uv);
   uint mat_id = (gbuffer_mat & 0xFFFFFF00) >> 8;
-  MaterialData mat = material_data[mat_id];
+  MaterialData mat = material_data[NonUniformResourceIndex(mat_id)];
   float4 base_color;
   if (mat.albedo_map == -1) {
     base_color = 0.f;
   } else {
-    base_color =
-        scene_textures[mat.albedo_map].SampleLevel(default_sampler, uv, 0.0f);
-    // base_color = scene_texture.Sample(default_sampler, in_uv);
+    base_color = scene_textures[NonUniformResourceIndex(mat.albedo_map)].Sample(
+        default_sampler, uv);
   }
   float3 result = float3(0.0f, 0.0f, 0.0f);
   float3 normal = (normal_attach.Sample(default_sampler, in_uv).xyz - 0.5f) * 2;
@@ -65,7 +57,5 @@ float4 main(float2 in_uv
     Light light = light_data[i];
     result += base_color.xyz * apply_light(light, world_pos, normal);
   }
-  // return float4(in_uv, 0.0f, 1.0f);
-  // return float4(base_color);
   return float4(result, 1.0f);
 }
