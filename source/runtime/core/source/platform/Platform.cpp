@@ -38,8 +38,8 @@ namespace Moer {
         KAFFINITY mask;
     };
     struct ProcessorGroups {
-        StaticArray<ProcessorGroup, max_group_cnt> groups;
-        size_t                                     cnt;
+        StaticArray<ProcessorGroup, max_group_cnt> groups{};
+        size_t                                     cnt = 0;
     };
 
     const ProcessorGroups& GetProcessorGroups() {
