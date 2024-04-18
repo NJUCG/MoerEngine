@@ -44,7 +44,7 @@ namespace Moer {
         // auto sponza_scene_path = ConfigManager::GetInstance().GetEditorResourcePath() /"scenes/sponza/pbr/sponza2.gltf";
         // Scene::SetCurrentScene(Resource::Gltf::Parser::LoadSceneFromFile(sponza_scene_path).release());
         // Resource::Gltf::Parser::LoadSceneFromFileAsync(sponza_scene_path);
-        Moer::Resource::LoaderInterface::LoadSceneFromFileAsync(sponza_scene_path);
+        Resource::LoaderInterface::LoadSceneFromFileAsync(sponza_scene_path);
     }
     void Engine::Run() {
         LOG_INFO("Engine Start Running");

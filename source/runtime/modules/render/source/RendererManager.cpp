@@ -19,8 +19,8 @@ namespace Moer {
 
     void RendererManager::Init() {
         data = new RendererManagerData();
-        RegisterRenderer(MOER_3D_GAUSSIAN_SPLATTING_RENDERER_NAME, MoerNew(SplattingRender));
-        // RegisterRenderer(MOER_DEFAULT_RENDERER_NAME, MoerNew(DeferredRenderer));
+        // RegisterRenderer(MOER_3D_GAUSSIAN_SPLATTING_RENDERER_NAME, MoerNew(SplattingRender));
+        RegisterRenderer(MOER_DEFAULT_RENDERER_NAME, MoerNew(DeferredRenderer));
         // RegisterRenderer(MOER_MESH_RENDERER_NAME, MoerNew(MeshDebugRenderer));
         //  RegisterRenderer(MOER_RENDER_GRAPH_DEFERED_RENDERER_NAME, MoerNew(DeferedRenderingRenderGraphRender));
         BackendRendererInitInfo init_info;

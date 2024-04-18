@@ -4,13 +4,10 @@
 #include "scene/Scene.h"
 
 #include <filesystem>
-namespace Moer {
 
 namespace Moer::Resource {
     class LoaderInterface {
     public:
-        static RESOURCE_API void LoadSceneFromFileAsync(const std::filesystem::path& file_path) noexcept;
+        static RESOURCE_API void LoadSceneFromFileAsync(const std::filesystem::path& _file_path) noexcept;
     };
-}
-
-}
+}// namespace Moer::Resource

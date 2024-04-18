@@ -103,6 +103,7 @@ protected:
     RHIFenceRef                          render_fence;
 
     uint32_t num_instances{0};
+    bool     b_scene_loaded{false};
 };
 
 struct alignas(16) UniformBuffer {
@@ -122,7 +123,7 @@ struct VertexAttributeBuffer {
     Moer::Vector4ui aabb;
     Moer::Vector2f  uv;
     float           depth;
-    uint32_t        __padding[1];
+    uint32_t        padding[1];
 };
 
 // struct Camera {
@@ -177,7 +178,7 @@ void Moer::SplattingRender::Impl::Init(const BackendRendererInitInfo& _init_info
     render_thread_fence.Wait();
     VirtualViewportCreateInfo create_info;
     source_resolution             = Vector2i(_init_info.width, _init_info.height);
-    create_info.name              = "DeferredRendererViewport";
+    create_info.name              = "3dGsRendererViewport";
     create_info.extent            = source_resolution;
     create_info.format            = _init_info.format;
     create_info.back_buffer_count = 3;
@@ -214,6 +215,10 @@ void Moer::SplattingRender::Impl::Init(const BackendRendererInitInfo& _init_info
 }
 
 void Moer::SplattingRender::Impl::InitBuffers() {
+    b_scene_loaded = g_scene && g_scene->GetBuffer("gs_scene_buffer") != nullptr;
+    if (!b_scene_loaded) {
+        return;
+    }
     numVertices           = g_scene->GetBuffer("gs_scene_buffer")->GetByteSize() / sizeof(Vertex);
     sceneCov3DBuffer      = g_rhi->RHICreateBuffer<float>(numVertices * sizeof(float) * 6, EBufferUsageFlags::STORAGE_BUFFER | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC);
     vertexAttributeBuffer = g_rhi->RHICreateBuffer<float>(numVertices * sizeof(VertexAttributeBuffer), EBufferUsageFlags::STORAGE_BUFFER | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC);
@@ -258,6 +263,9 @@ void Moer::SplattingRender::Impl::ShutDown() {
     MoerDelete(virtual_viewport);
 }
 void Moer::SplattingRender::Impl::DrawFrame() {
+    if (!b_scene_loaded) {
+        return;
+    }
     UpdateUniform();
 
     EnqueueRenderTask([this]() {
@@ -364,7 +372,7 @@ void Moer::SplattingRender::Impl::DrawFrame() {
         DispatchTileRender(render_graph);
 
         render_graph.SetGraphOutput(render_graph.GetBlackBoard().GetHandle("swapchain_output"));
-        render_graph.Execute({render_cmd_lists[frame_counter % render_cmd_lists.size()], virtual_viewport->GetNextBackBufferExtent()});
+        render_graph.Execute({render_cmd_lists[frame_counter % render_cmd_lists.size()], virtual_viewport->GetBackBufferExtent()});
     });
 
     // EnqueueRenderTask([this]() {
@@ -402,6 +410,9 @@ void Moer::SplattingRender::Impl::DrawFrame() {
     }
 }
 void Moer::SplattingRender::Impl::Present() {
+    if (!b_scene_loaded) {
+        return;
+    }
     EnqueueRenderTask([this]() {
         virtual_viewport->Present(render_fence);
     });

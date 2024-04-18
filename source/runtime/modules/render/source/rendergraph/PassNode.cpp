@@ -111,8 +111,9 @@ namespace Moer {
     }
     void ComputePassNode::Execute(RenderPassContext& pass_context) {
         pass_context.cmd_list->BeginLabel(GetName().data());
-        pass_context.cmd_list->SetPipelineState(m_descriptor.compute_pipeline);
+        if (m_descriptor.compute_pipeline)
+            pass_context.cmd_list->SetPipelineState(m_descriptor.compute_pipeline);
         m_pass->Execute(pass_context);
         pass_context.cmd_list->EndLabel();
     }
-}
+}// namespace Moer

@@ -169,7 +169,7 @@ namespace Moer {
 
         m_rotate_inv = Transpose(m_rotate);
 
-        m_view = MakeTranslation(-m_position.x, -m_position.y, -m_position.z) * m_rotate;
+        m_view = m_rotate * MakeTranslation(-m_position.x, -m_position.y, -m_position.z);
         //world to cam
         m_to_world       = Inverse(m_view);
         m_to_world_dirty = false;

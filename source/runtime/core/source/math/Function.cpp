@@ -329,24 +329,24 @@ namespace Moer {
     Matrix4x4f MakePerspectiveMatrixRH(float fov_y, float aspect_ratio, float near_clip, float far_clip) noexcept {
         float tan_half_fov = tanf(fov_y * 0.5f);
 
-        // float      inv_tan      = 1.f / tan_half_fov;
-        // float      f_range      = far_clip / (near_clip - far_clip);
-        // Matrix4x4f perspective;
-        // perspective[0][0] = inv_tan / aspect_ratio;
-        // perspective[1][1] = inv_tan;
-        // perspective[2][2] = f_range;
-        // perspective[3][2] = -1.f;
-        // perspective[2][3] = near_clip * f_range;
-        // return perspective;
+        float      inv_tan = 1.f / tan_half_fov;
+        float      f_range = far_clip / (near_clip - far_clip);
+        Matrix4x4f perspective;
+        perspective[0][0] = inv_tan / aspect_ratio;
+        perspective[1][1] = inv_tan;
+        perspective[2][2] = f_range;
+        perspective[3][2] = -1.f;
+        perspective[2][3] = near_clip * f_range;
+        return perspective;
 
         //is this maybe better?
-        Matrix4x4f Result;
-        Result[0][0] = 1 / (aspect_ratio * tan_half_fov);
-        Result[1][1] = 1 / (tan_half_fov);
-        Result[2][2] = -(far_clip + near_clip) / (far_clip - near_clip);
-        Result[3][2] = -1;
-        Result[2][3] = -(2 * far_clip * near_clip) / (far_clip - near_clip);
-        return Result;
+        // Matrix4x4f Result;
+        // Result[0][0] = 1 / (aspect_ratio * tan_half_fov);
+        // Result[1][1] = 1 / (tan_half_fov);
+        // Result[2][2] = -(far_clip + near_clip) / (far_clip - near_clip);
+        // Result[3][2] = -1;
+        // Result[2][3] = -(2 * far_clip * near_clip) / (far_clip - near_clip);
+        // return Result;
     }
     Matrix4x4d MakePerspectiveMatrixRH(double fov_y, double aspect_ratio, double near_clip, double far_clip) noexcept {
         double     tan_half_fov = std::tan(fov_y * 0.5f);
