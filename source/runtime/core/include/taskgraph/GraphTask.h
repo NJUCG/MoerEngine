@@ -252,7 +252,6 @@ private:
                 completed_prerequest_count++;
             }
         }
-        EThread::Type current_thread = GetCurrentThreadId();
         PrerequestsComplete(EThread::UNKNOWN_THREAD, completed_prerequest_count, false);
         return prevent_deconstruct;
     }
@@ -329,43 +328,44 @@ private:
     std::unique_ptr<std::function<FunctionType>> m_function;
 };
 
-class [[deprecated("will not be supported in the future")]] FunctionGraphTask {
-public:
-    static GraphEventRef ConstructAndDispatchWhenReady(std::function<void()>& func, const GraphEventArray* prerequest = nullptr, EThread::Type preferred_thread = EThread::AnyThread_NormalPri) {
-        return ConstructAndDispatchWhenReady(std::move(func), prerequest, preferred_thread);
-    }
+class [[deprecated("will not be supported in the future")]] FunctionGraphTask{
+    public:
+        static GraphEventRef ConstructAndDispatchWhenReady(std::function<void()> & func, const GraphEventArray* prerequest = nullptr, EThread::Type preferred_thread = EThread::AnyThread_NormalPri){
+            return ConstructAndDispatchWhenReady(std::move(func), prerequest, preferred_thread);
+}
 
-    static GraphEventRef ConstructAndDispatchWhenReady(std::function<void()>&& func, const GraphEventArray* prerequest = nullptr, EThread::Type preferred_thread = EThread::AnyThread_NormalPri) {
-        return GraphTask<FunctionGraphTaskInner<void()>>::CreateTask(prerequest).ConstructAndDispatchWhenReady(func, preferred_thread);
-    }
+static GraphEventRef ConstructAndDispatchWhenReady(std::function<void()>&& func, const GraphEventArray* prerequest = nullptr, EThread::Type preferred_thread = EThread::AnyThread_NormalPri) {
+    return GraphTask<FunctionGraphTaskInner<void()>>::CreateTask(prerequest).ConstructAndDispatchWhenReady(func, preferred_thread);
+}
 
-    static GraphEventRef ConstructAndDispatchWhenReady(std::function<void(EThread::Type, const GraphEventRef&)>& func, const GraphEventArray* prerequest = nullptr, EThread::Type preferred_thread = EThread::AnyThread_NormalPri) {
-        return ConstructAndDispatchWhenReady(std::move(func), prerequest, preferred_thread);
-    }
+static GraphEventRef ConstructAndDispatchWhenReady(std::function<void(EThread::Type, const GraphEventRef&)>& func, const GraphEventArray* prerequest = nullptr, EThread::Type preferred_thread = EThread::AnyThread_NormalPri) {
+    return ConstructAndDispatchWhenReady(std::move(func), prerequest, preferred_thread);
+}
 
-    static GraphEventRef ConstructAndDispatchWhenReady(std::function<void(EThread::Type, const GraphEventRef&)>&& func, const GraphEventArray* prerequest = nullptr, EThread::Type preferred_thread = EThread::AnyThread_NormalPri) {
-        return GraphTask<FunctionGraphTaskInner<void(EThread::Type, const GraphEventRef&)>>::CreateTask(prerequest).ConstructAndDispatchWhenReady(func, preferred_thread);
-    }
+static GraphEventRef ConstructAndDispatchWhenReady(std::function<void(EThread::Type, const GraphEventRef&)>&& func, const GraphEventArray* prerequest = nullptr, EThread::Type preferred_thread = EThread::AnyThread_NormalPri) {
+    return GraphTask<FunctionGraphTaskInner<void(EThread::Type, const GraphEventRef&)>>::CreateTask(prerequest).ConstructAndDispatchWhenReady(func, preferred_thread);
+}
 
-    static GraphEventRef ConstructAndDispatchWhenReady(std::function<void()>& func, const GraphEventRef& prerequest, EThread::Type preferred_thread = EThread::AnyThread_NormalPri) {
+static GraphEventRef ConstructAndDispatchWhenReady(std::function<void()>& func, const GraphEventRef& prerequest, EThread::Type preferred_thread = EThread::AnyThread_NormalPri) {
 
-        return ConstructAndDispatchWhenReady(std::move(func), prerequest, preferred_thread);
-    }
-    static GraphEventRef ConstructAndDispatchWhenReady(std::function<void()>&& _func, const GraphEventRef& _prerequest, EThread::Type preferred_thread = EThread::AnyThread_NormalPri) {
-        GraphEventArray prerequests{_prerequest};
-        return GraphTask<FunctionGraphTaskInner<void()>>::CreateTask(&prerequests).ConstructAndDispatchWhenReady(_func, preferred_thread);
-    }
+    return ConstructAndDispatchWhenReady(std::move(func), prerequest, preferred_thread);
+}
+static GraphEventRef ConstructAndDispatchWhenReady(std::function<void()>&& _func, const GraphEventRef& _prerequest, EThread::Type preferred_thread = EThread::AnyThread_NormalPri) {
+    GraphEventArray prerequests{_prerequest};
+    return GraphTask<FunctionGraphTaskInner<void()>>::CreateTask(&prerequests).ConstructAndDispatchWhenReady(_func, preferred_thread);
+}
 
-    static GraphEventRef ConstructAndDispatchWhenReady(std::function<void(EThread::Type, const GraphEventRef&)>& func, const GraphEventRef& prerequest, EThread::Type preferred_thread = EThread::AnyThread_NormalPri) {
+static GraphEventRef ConstructAndDispatchWhenReady(std::function<void(EThread::Type, const GraphEventRef&)>& func, const GraphEventRef& prerequest, EThread::Type preferred_thread = EThread::AnyThread_NormalPri) {
 
-        return ConstructAndDispatchWhenReady(std::move(func), prerequest, preferred_thread);
-    }
+    return ConstructAndDispatchWhenReady(std::move(func), prerequest, preferred_thread);
+}
 
-    static GraphEventRef ConstructAndDispatchWhenReady(std::function<void(EThread::Type, const GraphEventRef&)>&& func, const GraphEventRef& prerequest, EThread::Type preferred_thread = EThread::AnyThread_NormalPri) {
-        GraphEventArray prerequests{prerequest};
-        return GraphTask<FunctionGraphTaskInner<void(EThread::Type, const GraphEventRef&)>>::CreateTask(&prerequests).ConstructAndDispatchWhenReady(func, preferred_thread);
-    }
-};
+static GraphEventRef ConstructAndDispatchWhenReady(std::function<void(EThread::Type, const GraphEventRef&)>&& func, const GraphEventRef& prerequest, EThread::Type preferred_thread = EThread::AnyThread_NormalPri) {
+    GraphEventArray prerequests{prerequest};
+    return GraphTask<FunctionGraphTaskInner<void(EThread::Type, const GraphEventRef&)>>::CreateTask(&prerequests).ConstructAndDispatchWhenReady(func, preferred_thread);
+}
+}
+;
 class LambdaTask {
 public:
     using TGraphTask          = GraphTask<FunctionGraphTaskInner<void()>>;

@@ -1078,7 +1078,7 @@ void GuiRenderWindow(ImGuiViewport* viewport, void*) {
         texture_barriers_present[0]
             .SetDstTextureLayout(ETextureLayout::TEXTURE_LAYOUT_PRESENT_SRC)
             .SetSrcTextureLayout(present_view->GetTexture()->GetLayout({ETextureAspectFlags::COLOR}))
-            // .SetSrcQueueType(ECommandQueueType::GRAPHICS)
+            .SetSrcQueueType(ECommandQueueType::GRAPHICS)
             .SetTexture(present_view->GetTexture())
             .SetSrcAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE)
             .SetSrcStage(PS_COLOR_ATTACHMENT_OUTPUT)
