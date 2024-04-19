@@ -137,7 +137,7 @@ namespace Moer {
                                          .SetNumMips(1)
                                          .SetClearAttachment({})
                                          .SetUsageFlags(
-                                             //   ETextureUsageFlags::COLOR_ATTACHMENT |
+                                             ETextureUsageFlags::COLOR_ATTACHMENT |
                                              ETextureUsageFlags::TRANSFER_SRC |
                                              ETextureUsageFlags::UNORDERED_ACCESS
                                              //|
