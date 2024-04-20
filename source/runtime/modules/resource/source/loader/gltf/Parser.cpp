@@ -46,8 +46,8 @@ namespace Moer::Resource::Gltf {
         Scene* LoadSceneFromFile(const std::filesystem::path& file_path, bool _delete_after_load = false);
         void   LoadSceneFromFileAsync(const std::filesystem::path& file_path);
         void   LoadNode(const aiNode* node, const aiScene* scene);
-        void   loadCameras(const aiScene* scene);
-        void   loadMaterial(const aiScene* ai_scene, const aiMaterial* ai_material, const std::string& materialName);
+        void   LoadCameras(const aiScene* scene);
+        void   LoadMaterial(const aiScene* ai_scene, const aiMaterial* ai_material, const std::string& materialName);
         void   LoadTexture(const aiScene* scene, const aiString& texture_path, MaterialInstanceRef& mat, const std::string& param_name);
         void   LoadLights(const aiScene* scene);
         ~Impl() = default;
@@ -213,7 +213,7 @@ namespace Moer::Resource::Gltf {
         return {vec.x, vec.y, vec.z};
     }
 
-    void Parser::Impl::loadCameras(const aiScene* scene) {
+    void Parser::Impl::LoadCameras(const aiScene* scene) {
         const uint32_t camera_num = scene->mNumCameras;
         if (camera_num == 0) {
             LOG_WARNING("Current Scene has no camera");
@@ -262,7 +262,7 @@ namespace Moer::Resource::Gltf {
         return materialBuilder.Build();
     }
 
-    void Parser::Impl::loadMaterial(const aiScene* ai_scene, const aiMaterial* ai_material, const std::string& materialName) {
+    void Parser::Impl::LoadMaterial(const aiScene* ai_scene, const aiMaterial* ai_material, const std::string& materialName) {
 
         size_t material_hash = 0;
         if (!m_material_cache.contains(material_hash)) {
@@ -321,8 +321,12 @@ namespace Moer::Resource::Gltf {
         GpuPrimitiveBuilder::InitBuild();
         m_scene = MoerNew(Scene)();
         Assimp::Importer importer;
-        auto             real_path  = std::filesystem::canonical(_file_path);
-        const auto*      gltf_scene = importer.ReadFile(_file_path.string(), aiProcess_Triangulate | aiProcess_FlipUVs | aiProcess_GenBoundingBoxes | aiProcess_GenNormals | aiProcess_CalcTangentSpace);
+        auto             real_path = std::filesystem::weakly_canonical(_file_path);
+        if (!std::filesystem::exists(real_path)) {
+            LOG_WARNING("File not exist: {}", real_path.string());
+            return nullptr;
+        }
+        const auto* gltf_scene = importer.ReadFile(_file_path.string(), aiProcess_Triangulate | aiProcess_FlipUVs | aiProcess_GenBoundingBoxes | aiProcess_GenNormals | aiProcess_CalcTangentSpace);
         if (!gltf_scene) {
             LOG_WARNING("Failed to load gltf file: {} ", _file_path.string());
             return nullptr;
@@ -434,7 +438,7 @@ namespace Moer::Resource::Gltf {
         });
 
         //Todo Load Lights
-        loadCameras(gltf_scene);
+        LoadCameras(gltf_scene);
         LoadNode(gltf_scene->mRootNode, gltf_scene);
         LoadLights(gltf_scene);
 
@@ -599,7 +603,7 @@ namespace Moer::Resource::Gltf {
                 }
 
                 if (!m_materials.contains(material_name)) {
-                    loadMaterial(scene, material, material_name);
+                    LoadMaterial(scene, material, material_name);
                 }
                 auto material_instance = m_materials[material_name];
                 RenderableManager::Get().SetMaterialInstance(entity, material_instance);

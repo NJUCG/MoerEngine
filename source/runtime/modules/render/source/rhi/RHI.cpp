@@ -4,6 +4,7 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "Core.h"
+#include <cassert>
 
 RHI* g_rhi = nullptr;
 
@@ -45,18 +46,9 @@ RHISRVRef RHI::RHICreateBufferSRV(
     uint32_t   _stride,
     uint64_t   _byte_size,
     uint64_t   _byte_offset) {
-#ifdef _DEBUG
     assert(_resource != nullptr);
-#endif
-    auto true_stride = _stride == 0 ? _resource->GetStride() : _stride;
-    auto true_size   = _byte_size == 0 ? _resource->GetByteSize() : _byte_size;
-    auto create_info = RHIViewInfo::CreateBufferSRVInfo()
-                           .SetByteOffset(_byte_offset)
-                           .SetStride(true_stride)
-                           .SetNumElements((true_size - _byte_offset) / true_stride)
-                           .SetType(RHIViewInfo::GetBufferType(_resource));
-
-    return RHICreateSRVInner(_resource, create_info);
+    RHIViewRef view = RHICreateBufferView<v_type_buffer_srv>(_resource, _stride, _byte_size, _byte_offset);
+    return RHISRVRef(static_cast<RHISRV*>(view.Get()));
 };
 RHIUAVRef RHI::RHICreateBufferUAV(
     RHIBuffer* _resource,
@@ -64,15 +56,9 @@ RHIUAVRef RHI::RHICreateBufferUAV(
     uint64_t   _byte_size,
     uint64_t   _byte_offset) {
 
-    auto true_stride = stride == 0 ? _resource->GetStride() : stride;
-    auto true_size   = _byte_size == 0 ? _resource->GetByteSize() : _byte_size;
-
-    auto create_info = RHIViewInfo::CreateBufferUAVInfo()
-                           .SetByteOffset(_byte_offset)
-                           .SetStride(true_stride)
-                           .SetNumElements((true_size - _byte_offset) / true_stride)
-                           .SetType(RHIViewInfo::GetBufferType(_resource));
-    return RHICreateUAVInner(_resource, create_info);
+    assert(_resource != nullptr);
+    RHIViewRef view = RHICreateBufferView<v_type_buffer_uav>(_resource, stride, _byte_size, _byte_offset);
+    return RHIUAVRef(static_cast<RHIUAV*>(view.Get()));
 };
 
 RHISRVRef RHI::RHICreateTextureSRV(RHITexture*  _texture,
@@ -82,13 +68,10 @@ RHISRVRef RHI::RHICreateTextureSRV(RHITexture*  _texture,
                                    uint32_t     _array_index,
                                    uint32_t     _array_size) {
 
-    auto true_format = _format == PF_UNDEFINED ? _texture->GetFormat() : _format;
-    return RHICreateSRVInner(_texture,
-                             RHIViewInfo::CreateTextureSRVInfo()
-                                 .SetArrayRange(_array_index, _array_size)
-                                 .SetMipRange(_mip_level, _mip_levels)
-                                 .SetDimension(_texture->GetDimension())
-                                 .SetFormat(true_format));
+    assert(_texture != nullptr);
+    RHIViewRef view = RHICreateViewInner(
+        _texture, GetTextureSRVInfo(_texture, _format, _mip_level, _mip_levels, _array_index, _array_size));
+    return RHISRVRef(static_cast<RHISRV*>(view.Get()));
 }
 
 RHIUAVRef RHI::RHICreateTextureUAV(RHITexture*  _texture,
@@ -96,10 +79,8 @@ RHIUAVRef RHI::RHICreateTextureUAV(RHITexture*  _texture,
                                    uint32_t     _mip_level,
                                    uint32_t     _array_index,
                                    uint32_t     _array_size) {
-    return RHICreateUAVInner(_texture,
-                             RHIViewInfo::CreateTextureUAVInfo()
-                                 .SetArrayRange(_array_index, _array_size)
-                                 .SetMipLevel(_mip_level)
-                                 .SetDimension(_texture->GetDimension())
-                                 .SetFormat(_format));
+    assert(_texture != nullptr);
+    RHIViewRef view = RHICreateViewInner(
+        _texture, GetTextureUAVInfo(_texture, _format, _mip_level, _array_index, _array_size));
+    return RHIUAVRef(static_cast<RHIUAV*>(view.Get()));
 }

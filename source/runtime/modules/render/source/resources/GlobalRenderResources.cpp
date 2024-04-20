@@ -86,9 +86,9 @@ namespace Moer {
         return hash;
     }
 
-    size_t RHITextureViewHash(RHITexture const* texture, const RHIViewInfo::TextureSRV::Initializer& params) {
+    size_t RHITextureViewHash(RHITexture const* _texture, const RHIViewInfo& _view_info) {
         //todo
-        return reinterpret_cast<size_t>(texture);
+        return reinterpret_cast<size_t>(_texture);
         size_t hash = 0;
         // HashCombine(hash, params.texture);
         return hash;
@@ -106,17 +106,17 @@ namespace Moer {
             }
             return m_sampler_cache[hash];
         }
-        RHISRV* GetTextureView(RHITexture* texture) {
-            auto default_format = PF_R8G8B8A8_UNORM;
-            auto srv_info       = RHIViewInfo::CreateTextureSRVInfo()
-                                .SetFormat(default_format)
-                                .SetDimension(ETextureDimension::TEX_2D)
-                                .SetMipRange(0, texture->GetNumMips())
-                                .SetArrayRange(0, 1);
-
-            size_t hash = RHITextureViewHash(texture, srv_info);
+        RHISRV* GetTextureView(RHITexture* _texture) {
+            auto   default_format = PF_R8G8B8A8_UNORM;
+            auto   view_info      = GetTextureSRVInfo(_texture,
+                                               default_format,
+                                               0,
+                                               _texture->GetNumMips(),
+                                               0,
+                                               1);
+            size_t hash           = RHITextureViewHash(_texture, view_info);
             if (!m_texture_view_cache.contains(hash)) {
-                RHISRVRef texture_view     = g_rhi->RHICreateTextureSRV(texture, default_format);
+                RHISRVRef texture_view     = g_rhi->RHICreateTextureSRV(_texture, default_format);
                 m_texture_view_cache[hash] = texture_view;
             }
             return m_texture_view_cache[hash];

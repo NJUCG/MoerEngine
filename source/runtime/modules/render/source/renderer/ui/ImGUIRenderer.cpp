@@ -903,13 +903,6 @@ void CreateFontsTexture() {
         queue->SubmitCommands(1, command_list, &submit_info);
 
         fence->Wait(wait_value);
-
-        auto srv_info = RHIViewInfo::CreateTextureSRVInfo()
-                            .SetFormat(PF_R8G8B8A8_UNORM)
-                            .SetDimension(ETextureDimension::TEX_2D)
-                            .SetMipRange(0, 1)
-                            .SetArrayRange(0, 1);
-
         backend_data->font_view    = g_rhi->RHICreateTextureSRV(font_texture);
         backend_data->font_texture = font_texture;
     }

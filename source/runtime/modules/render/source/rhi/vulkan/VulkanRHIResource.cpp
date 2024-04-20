@@ -1485,22 +1485,24 @@ VulkanViewport::~VulkanViewport() {
 }
 
 VulkanRHITextureUAV* VulkanViewport::InnerCreateVulkanUAV(VulkanDevice* _device, VulkanRHITexture* texture, const RHIViewInfo& _view_info) {
-    auto* view = new VulkanRHITextureUAV(_device, texture, _view_info);
+    auto* view = MoerNew(VulkanRHITextureUAV)(_device, texture, _view_info);
 
     VkImageViewCreateInfo image_view_create_info{};
     image_view_create_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     image_view_create_info.pNext = nullptr;
     image_view_create_info.flags = 0;
 
+    auto& uav_info = std::get<v_type_texture_uav>(_view_info.info);
+
     image_view_create_info.image                           = texture->GetHandle();
-    image_view_create_info.viewType                        = VulkanEnumTranslator::METoVKImageViewType(_view_info.texture.srv.dimension);
-    image_view_create_info.format                          = _view_info.texture.uav.format == PF_UNDEFINED ? VulkanEnumTranslator::METoVKFormat(texture->GetUAVFormat()) : VulkanEnumTranslator::METoVKFormat(_view_info.texture.uav.format);
+    image_view_create_info.viewType                        = VulkanEnumTranslator::METoVKImageViewType(uav_info.dimension);
+    image_view_create_info.format                          =  VulkanEnumTranslator::METoVKFormat(texture->GetFormat());
     image_view_create_info.components                      = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
     image_view_create_info.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;// MARK...
-    image_view_create_info.subresourceRange.baseMipLevel   = _view_info.texture.uav.mip_min;
-    image_view_create_info.subresourceRange.levelCount     = _view_info.texture.uav.mip_num;
-    image_view_create_info.subresourceRange.baseArrayLayer = _view_info.texture.uav.array_min;
-    image_view_create_info.subresourceRange.layerCount     = _view_info.texture.uav.array_num;
+    image_view_create_info.subresourceRange.baseMipLevel   = uav_info.mip;
+    image_view_create_info.subresourceRange.levelCount     = 1;
+    image_view_create_info.subresourceRange.baseArrayLayer = uav_info.array_min ;
+    image_view_create_info.subresourceRange.layerCount     = uav_info.array_num;
 
     VK_CHECK_RESULT(vkCreateImageView(_device->GetDevice(), &image_view_create_info, nullptr, &view->m_view));
 
@@ -1517,24 +1519,29 @@ void VulkanViewport::InnerCreateResources() {
 
     EPixelFormat swapchain_format = VulkanEnumTranslator::VKToMEFormat(swapchain->image_format);
     for (uint32_t index = 0; index < swapchain_image_uavs.size(); index++) {
-        swapchain_images[index] = new VulkanRHITexture(RHITextureCreateInfo::Create2D("swapchain")
+        swapchain_images[index] = MoerNew(VulkanRHITexture)(RHITextureCreateInfo::Create2D("swapchain")
                                                            .SetExtent(swapchain->extent.width, swapchain->extent.height)
                                                            .SetFormat(swapchain_format)
                                                            .SetUAVFormat(swapchain_format),
                                                        swapchain->m_swap_chain_images[index],
                                                        swapchain->m_device);
         swapchain_images[index]->AddRef();
+        RHITextureUAVInfo uav_info;
+        uav_info.dimension = ETextureDimension::TEX_2D;
+        uav_info.format    = swapchain_format;
+        uav_info.array_min = 0;
+        uav_info.array_num = 1;
+        uav_info.mip       = 0;
 
+
+        RHIViewInfo view_info(std::move(uav_info));
         swapchain_image_uavs[index] = InnerCreateVulkanUAV(
             swapchain->m_device,
             swapchain_images[index],
-            RHIViewInfo::CreateTextureUAVInfo()
-                .SetArrayRange(0, 1)
-                .SetDimension(ETextureDimension::TEX_2D)
-                .SetMipLevel(0));
+            std::move(view_info));
     }
     for (uint32_t index = 0; index < image_aquire_fences.size(); index++) {
-        image_aquire_fences[index] = new VulkanRHIFence(swapchain->m_device, EFenceUsageFlags::BINARY);
+        image_aquire_fences[index] = MoerNew( VulkanRHIFence)(swapchain->m_device, EFenceUsageFlags::BINARY);
     }
     frame_offset = 0;
 
@@ -1545,7 +1552,7 @@ void VulkanViewport::InnerCreateResources() {
 void VulkanViewport::InnerDestroyResources() {
 
     for (uint32_t index = 0; index < swapchain_image_uavs.size(); index++) {
-        delete swapchain_image_uavs[index];
+        MoerDelete( swapchain_image_uavs[index]);
     }
     for (uint32_t index = 0; index < image_aquire_fences.size(); index++) {
         VkSemaphoreWaitInfo wait_info{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
@@ -1554,7 +1561,7 @@ void VulkanViewport::InnerDestroyResources() {
         wait_info.pSemaphores       = temp;
         wait_info.pValues           = 0;
         // vkWaitSemaphores(swapchain->m_device->GetDevice(), &wait_info, UINT64_MAX);
-        delete image_aquire_fences[index];
+        MoerDelete( image_aquire_fences[index]);
     }
 }
 
@@ -1569,19 +1576,27 @@ void VulkanViewport::ResetResources() {
 
     for (uint32_t index = 0; index < swapchain_image_uavs.size(); index++) {
         swapchain_images[index]->SetAttachedImageInner(swapchain->m_swap_chain_images[index]);
+        EPixelFormat swapchain_format = VulkanEnumTranslator::VKToMEFormat(swapchain->image_format);
 
-        delete swapchain_image_uavs[index];
+        MoerDelete( swapchain_image_uavs[index]);
+
+        RHITextureUAVInfo uav_info;
+        uav_info.dimension = ETextureDimension::TEX_2D;
+        uav_info.format    = swapchain_format;
+        uav_info.array_min = 0;
+        uav_info.array_num = 1;
+        uav_info.mip       = 0;
+
+
+        RHIViewInfo view_info(std::move(uav_info));
         swapchain_image_uavs[index] = InnerCreateVulkanUAV(
             swapchain->m_device,
             swapchain_images[index],
-            RHIViewInfo::CreateTextureUAVInfo()
-                .SetArrayRange(0, 1)
-                .SetDimension(ETextureDimension::TEX_2D)
-                .SetMipLevel(0));
+             std::move(view_info));
     }
     for (uint32_t index = 0; index < image_aquire_fences.size(); index++) {
-        delete image_aquire_fences[index];
-        image_aquire_fences[index] = new VulkanRHIFence(swapchain->m_device, EFenceUsageFlags::BINARY);
+        MoerDelete( image_aquire_fences[index]);
+        image_aquire_fences[index] = MoerNew( VulkanRHIFence)(swapchain->m_device, EFenceUsageFlags::BINARY);
     }
     info.backbuffer_format = VulkanEnumTranslator::VKToMEFormat(swapchain->image_format);
     frame_offset           = 0;

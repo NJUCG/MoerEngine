@@ -50,6 +50,14 @@ public:
             ptr->AddRef();
         }
     }
+    template<typename TOther>
+        requires std::is_convertible_v<TOther, T>
+    CountableRef(TOther* _countable, bool _add_ref = true) {
+        ptr = (T*)_countable;
+        if (ptr != nullptr && _add_ref) {
+            ptr->AddRef();
+        }
+    }
 
     CountableRef(const CountableRef& copy) {
         ptr = copy.ptr;
@@ -58,13 +66,15 @@ public:
         }
     }
     template<typename CopyType>
+        requires std::is_convertible_v<CopyType, T>
     CountableRef(const CountableRef<CopyType>& copy) {
-        ptr = copy.ptr;
+        ptr = (T*)(copy.ptr);
         if (ptr != nullptr) {
             ptr->AddRef();
         }
     }
     template<typename MoveType>
+        requires std::is_convertible_v<MoveType, T>
     CountableRef(CountableRef<MoveType>&& move) {
         ptr      = move.ptr;
         move.ptr = nullptr;

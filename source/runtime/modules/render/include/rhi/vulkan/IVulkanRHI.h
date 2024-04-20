@@ -81,7 +81,6 @@ public:
 
     RHICommandAllocator* RHIGetCurrentCommandAllocator() override { return nullptr; }
 
-    RHICBVRef RHICreateCBV(RHIBuffer* _resource, uint64_t _size, uint64_t _byte_offset) override { return RHICBVRef{}; }
 #pragma endregion
 
 #pragma region Viewport
@@ -101,10 +100,9 @@ public:
 #pragma endregion
 
 protected:
-    void         RHISetBatchedShaderParametersInner(RHIResource* _resource, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) override{};
+    void         RHISetBatchedShaderParametersInner(RHIResource* _resource, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) override {};
     RHIBufferRef RHICreateBufferInner(const RHIBufferCreateInfo& info) override { return RHIBufferRef{}; }
-    RHISRVRef    RHICreateSRVInner(RHIViewableResource* _resource, const RHIViewInfo& _view_info) override { return RHISRVRef{}; }
-    RHIUAVRef    RHICreateUAVInner(RHIViewableResource* _resource, const RHIViewInfo& _view_info) override { return RHIUAVRef{}; }
+    RHIViewRef   RHICreateViewInner(RHIViewableResource* _resource, const RHIViewInfo& _view_info) override { return RHIViewRef{}; }
 };
 
 #endif// IVULKAN_RHI_H
