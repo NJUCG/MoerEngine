@@ -428,9 +428,9 @@ namespace Moer::Resource::Gltf {
             gpu_scene_buffer_builder.Index(&index_data);
             auto buffer_pair = gpu_scene_buffer_builder.Build();
 
-            auto meshlet_bounds_buffer = gpu_scene_buffer_builder.CopyFrom(EBufferUsageFlags::STORAGE_BUFFER, meshlet_bounds.data(), meshlet_bounds.size() * sizeof(MeshletBound));
+            auto meshlet_bounds_buffer = gpu_scene_buffer_builder.CopyFrom(EBufferUsageFlags::UNORDERED_ACCESS, meshlet_bounds.data(), meshlet_bounds.size() * sizeof(MeshletBound));
 
-            auto meshlet_descs_buffer = gpu_scene_buffer_builder.CopyFrom(EBufferUsageFlags::STORAGE_BUFFER, meshlet_descs.data(), meshlet_descs.size() * sizeof(MeshletDesc));
+            auto meshlet_descs_buffer = gpu_scene_buffer_builder.CopyFrom(EBufferUsageFlags::UNORDERED_ACCESS, meshlet_descs.data(), meshlet_descs.size() * sizeof(MeshletDesc));
             gpu_scene->SetBuffer("vertex_buffer", buffer_pair.first);
             gpu_scene->SetBuffer("index_buffer", buffer_pair.second);
             gpu_scene->SetBuffer("meshlet_bounds", meshlet_bounds_buffer);
@@ -493,9 +493,9 @@ namespace Moer::Resource::Gltf {
         EnqueueRenderTask([instance_data = std::move(instance_data), instance_mesh_info = std::move(instance_mesh_info), instance_id(std::move(instance_ids)), gpu_scene]() {
             GpuSceneBufferBuilder gpu_scene_buffer_builder;
 
-            auto instance_buffer      = gpu_scene_buffer_builder.CopyFrom(EBufferUsageFlags::STORAGE_BUFFER, instance_data.data(), instance_data.size() * sizeof(InstanceData));
+            auto instance_buffer      = gpu_scene_buffer_builder.CopyFrom(EBufferUsageFlags::UNORDERED_ACCESS, instance_data.data(), instance_data.size() * sizeof(InstanceData));
             auto instance_id_buffer   = gpu_scene_buffer_builder.CopyFrom(EBufferUsageFlags::VERTEX_BUFFER, instance_id.data(), instance_id.size() * sizeof(int));
-            auto instance_mesh_buffer = gpu_scene_buffer_builder.CopyFrom(EBufferUsageFlags::STORAGE_BUFFER, instance_mesh_info.data(), instance_mesh_info.size() * sizeof(InstanceMeshInfo));
+            auto instance_mesh_buffer = gpu_scene_buffer_builder.CopyFrom(EBufferUsageFlags::UNORDERED_ACCESS, instance_mesh_info.data(), instance_mesh_info.size() * sizeof(InstanceMeshInfo));
             gpu_scene->SetBuffer("instance_data", instance_buffer);
             gpu_scene->SetBuffer("instance_id_buffer", instance_id_buffer);
             gpu_scene->SetBuffer("instance_meshlet_info_buffer", instance_mesh_buffer);

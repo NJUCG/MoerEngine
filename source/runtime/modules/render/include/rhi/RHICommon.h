@@ -322,20 +322,8 @@ static_assert((uint32_t)EPrimitiveTopology::Num <= (1 << (uint32_t)EPrimitiveTop
 enum class EBufferUsageFlags : uint32_t {
     NONE = 0,
 
-    /** The buffer will be written to once. */
-    LIFE_CYCLE_STATIC = 1 << 0,
-
-    /** The buffer will be written to occasionally, GPU read only, CPU write only.  The data lifetime is until the next update, or the buffer is destroyed. */
-    LIFE_CYCLE_DYNAMIC = 1 << 1,
-
-    /** The buffer's data will have a lifetime of one frame.  It MUST be written to each frame, or a new one created each frame. */
-    LIFE_CYCLE_ONE_FRAME = 1 << 2,
-
     /** Allows an unordered access view to be created for the buffer. */
     UNORDERED_ACCESS = 1 << 3,
-
-    /** Create a byte address buffer, which is basically a structured buffer with a uint32 type. */
-    BYTE_ADDRESS_BUFFER = 1 << 4,
 
     /** Buffer that the GPU will use as a source for a copy. */
     TRANSFER_SRC = 1 << 5,
@@ -346,17 +334,8 @@ enum class EBufferUsageFlags : uint32_t {
     /** Create a buffer which contains the arguments used by DispatchIndirect or DrawIndirect. */
     INDIRECT_BUFFER = 1 << 7,
 
-    /** 
-	 * Create a buffer that can be bound as a shader resource.
-	 * This is only needed for buffer types which wouldn't ordinarily be used as a texel buffer, like a vertex buffer.
-	 */
-    SHADER_RESOURCE = 1 << 8,
-
     /** Request that this buffer is directly CPU accessible. */
     CPU_VISIBLE = 1 << 9,
-
-    /** Buffer should go in fast vram (hint only). Requires TRANSIENT */
-    FAST_VRAM = 1 << 10,
 
     /** Buffer should be allocated from transient memory. */
     TRANSIENT = 1 << 11,
@@ -371,11 +350,10 @@ enum class EBufferUsageFlags : uint32_t {
 	*/
     ACCELERATION_STRUCTURE = 1 << 13,
 
-    VERTEX_BUFFER  = 1 << 14,
-    INDEX_BUFFER   = 1 << 15,
-    STORAGE_BUFFER = 1 << 16,
-    UNIFORM_BUFFER = 1 << 17,
-    TEXTURE_BUFFER = 1 << 18,
+    VERTEX_BUFFER   = 1 << 14,
+    INDEX_BUFFER    = 1 << 15,
+    CONSTANT_BUFFER = 1 << 17,
+    TEXTURE_BUFFER  = 1 << 18,
     /** Buffer memory is allocated independently for multiple GPUs, rather than shared via driver aliasing */
     MULTI_GPU_ALLOCATION = 1 << 19,
 
@@ -397,10 +375,7 @@ enum class EBufferUsageFlags : uint32_t {
     SHADER_BINDING_TABLE = 1 << 23,
 
     /** Buffer used as acceleration structure build input*/
-    ACCELERATION_STRUCTURE_BUILD_INPUT = 1 << 24,
-
-    // Helper bit-masks
-    DYNAMIC = (LIFE_CYCLE_DYNAMIC | LIFE_CYCLE_ONE_FRAME),
+    ACCELERATION_STRUCTURE_BUILD_INPUT = 1 << 24
 
 };
 

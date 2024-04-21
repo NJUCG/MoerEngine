@@ -220,20 +220,20 @@ void Moer::SplattingRender::Impl::InitBuffers() {
         return;
     }
     numVertices           = g_scene->GetBuffer("gs_scene_buffer")->GetByteSize() / sizeof(Vertex);
-    sceneCov3DBuffer      = g_rhi->RHICreateBuffer<float>(numVertices * sizeof(float) * 6, EBufferUsageFlags::STORAGE_BUFFER | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC);
-    vertexAttributeBuffer = g_rhi->RHICreateBuffer<float>(numVertices * sizeof(VertexAttributeBuffer), EBufferUsageFlags::STORAGE_BUFFER | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC);
-    tileOverlapBuffer     = g_rhi->RHICreateBuffer<float>(numVertices * sizeof(uint32_t), EBufferUsageFlags::STORAGE_BUFFER | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC);
-    uniformBuffer         = g_rhi->RHICreateBuffer<float>(sizeof(UniformBuffer), EBufferUsageFlags::UNIFORM_BUFFER | EBufferUsageFlags::CPU_VISIBLE);
+    sceneCov3DBuffer      = g_rhi->RHICreateBuffer<float>(numVertices * sizeof(float) * 6, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC);
+    vertexAttributeBuffer = g_rhi->RHICreateBuffer<float>(numVertices * sizeof(VertexAttributeBuffer), EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC);
+    tileOverlapBuffer     = g_rhi->RHICreateBuffer<float>(numVertices * sizeof(uint32_t), EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC);
+    uniformBuffer         = g_rhi->RHICreateBuffer<float>(sizeof(UniformBuffer), EBufferUsageFlags::CONSTANT_BUFFER | EBufferUsageFlags::CPU_VISIBLE);
     uniformBufferView     = g_rhi->RHICreateCBV(uniformBuffer);
-    prefixSumPingBuffer   = g_rhi->RHICreateBuffer<float>(numVertices * sizeof(uint32_t), EBufferUsageFlags::STORAGE_BUFFER | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC);
-    prefixSumPongBuffer   = g_rhi->RHICreateBuffer<float>(numVertices * sizeof(uint32_t), EBufferUsageFlags::STORAGE_BUFFER | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC);
+    prefixSumPingBuffer   = g_rhi->RHICreateBuffer<float>(numVertices * sizeof(uint32_t), EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC);
+    prefixSumPongBuffer   = g_rhi->RHICreateBuffer<float>(numVertices * sizeof(uint32_t), EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC);
     totalSumBufferHost    = g_rhi->RHICreateBuffer<float>(sizeof(uint32_t), EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::CPU_VISIBLE);
 
     auto width         = source_resolution.x;
     auto height        = source_resolution.y;
     auto tileX         = (width + 16 - 1) / 16;
     auto tileY         = (height + 16 - 1) / 16;
-    tileBoundaryBuffer = g_rhi->RHICreateBuffer<float>(tileX * tileY * sizeof(uint32_t) * 2, EBufferUsageFlags::STORAGE_BUFFER | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC);
+    tileBoundaryBuffer = g_rhi->RHICreateBuffer<float>(tileX * tileY * sizeof(uint32_t) * 2, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC);
     ReallocateBuffers();
 }
 void Moer::SplattingRender::Impl::ReallocateBuffers() {
@@ -241,11 +241,11 @@ void Moer::SplattingRender::Impl::ReallocateBuffers() {
     LOG_INFO("ReallocateBuffers {} {}", num_instances, sortBufferSizeMultiplier);
 
     uint32_t sort_k_buffer_size = numVertices * sortBufferSizeMultiplier * sizeof(uint64_t);
-    sortKBufferEven             = g_rhi->RHICreateBuffer<float>(sort_k_buffer_size, EBufferUsageFlags::STORAGE_BUFFER | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC);
-    sortKBufferOdd              = g_rhi->RHICreateBuffer<float>(sort_k_buffer_size, EBufferUsageFlags::STORAGE_BUFFER | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC);
+    sortKBufferEven             = g_rhi->RHICreateBuffer<float>(sort_k_buffer_size, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC);
+    sortKBufferOdd              = g_rhi->RHICreateBuffer<float>(sort_k_buffer_size, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC);
     uint32_t sort_v_buffer_size = numVertices * sortBufferSizeMultiplier * sizeof(uint32_t);
-    sortVBufferEven             = g_rhi->RHICreateBuffer<float>(sort_v_buffer_size, EBufferUsageFlags::STORAGE_BUFFER | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC);
-    sortVBufferOdd              = g_rhi->RHICreateBuffer<float>(sort_v_buffer_size, EBufferUsageFlags::STORAGE_BUFFER | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC);
+    sortVBufferEven             = g_rhi->RHICreateBuffer<float>(sort_v_buffer_size, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC);
+    sortVBufferOdd              = g_rhi->RHICreateBuffer<float>(sort_v_buffer_size, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC);
 
     uint32_t globalInvocationSize = numVertices * sortBufferSizeMultiplier / numRadixSortBlocksPerWorkgroup;
     uint32_t remainder            = numVertices * sortBufferSizeMultiplier % numRadixSortBlocksPerWorkgroup;
@@ -253,7 +253,7 @@ void Moer::SplattingRender::Impl::ReallocateBuffers() {
 
     auto     numWorkgroups         = (globalInvocationSize + 256 - 1) / 256;
     uint32_t sort_hist_buffer_size = numWorkgroups * 256 * sizeof(uint32_t);
-    sortHistBuffer                 = g_rhi->RHICreateBuffer<float>(sort_hist_buffer_size, EBufferUsageFlags::STORAGE_BUFFER | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC);
+    sortHistBuffer                 = g_rhi->RHICreateBuffer<float>(sort_hist_buffer_size, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC);
 }
 
 void Moer::SplattingRender::Impl::ShutDown() {
@@ -424,7 +424,7 @@ void Moer::SplattingRender::Impl::OnResizeVSwapChain() {
     auto height        = source_resolution.y;
     auto tileX         = (width + 16 - 1) / 16;
     auto tileY         = (height + 16 - 1) / 16;
-    tileBoundaryBuffer = g_rhi->RHICreateBuffer<float>(tileX * tileY * sizeof(uint32_t) * 2, EBufferUsageFlags::STORAGE_BUFFER | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC);
+    tileBoundaryBuffer = g_rhi->RHICreateBuffer<float>(tileX * tileY * sizeof(uint32_t) * 2, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC);
 
     EnqueueRenderTask([res(this->source_resolution),
                        view_port(this->virtual_viewport),

@@ -1318,7 +1318,6 @@ struct RHIViewInfo {
         /* a raw buffer can also be called a byte address buffer */
         RAW
     };
-    static EBufferType GetBufferType(RHIBuffer* _buffer);
 
     struct BaseViewInfo {
         EViewType    view_type;

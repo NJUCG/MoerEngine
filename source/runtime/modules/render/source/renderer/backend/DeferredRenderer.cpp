@@ -317,7 +317,7 @@ namespace Moer {
         //why not implement a counter buffer?
         {
             RHIBufferCreateInfo buffer_create_info;
-            uniform_buffer = g_rhi->RHICreateBuffer<float>(uniform_buffer_size * 3, EBufferUsageFlags::UNIFORM_BUFFER | EBufferUsageFlags::CPU_VISIBLE);
+            uniform_buffer = g_rhi->RHICreateBuffer<float>(uniform_buffer_size * 3, EBufferUsageFlags::CONSTANT_BUFFER | EBufferUsageFlags::CPU_VISIBLE);
 
             for (int i = 0; i < 3; i++) {
                 uniform_buffer_view.push_back(
@@ -326,11 +326,11 @@ namespace Moer {
 
             draw_indirect_buffer = g_rhi->RHICreateBuffer<DrawInstanceCmd>(
                 1024 * 1024,
-                EBufferUsageFlags::INDIRECT_BUFFER | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::STORAGE_BUFFER);
+                EBufferUsageFlags::INDIRECT_BUFFER | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::UNORDERED_ACCESS);
 
             draw_count_buffer = g_rhi->RHICreateBuffer<uint32_t>(64 * sizeof(int),
                                                                  EBufferUsageFlags::TRANSFER_DST |
-                                                                     EBufferUsageFlags::STORAGE_BUFFER | EBufferUsageFlags::INDIRECT_BUFFER);
+                                                                     EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::INDIRECT_BUFFER);
 
             zero_buffer = g_rhi->RHICreateBuffer<uint32_t>(64 * sizeof(int),
                                                            EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::TRANSFER_SRC);
@@ -418,14 +418,14 @@ namespace Moer {
 
         instance_meshlet_cull_info_buffer = g_rhi->RHICreateBuffer<uint64_t>(
             1024 * 512 * sizeof(uint64_t),
-            EBufferUsageFlags::STORAGE_BUFFER | EBufferUsageFlags::UNORDERED_ACCESS);
+            EBufferUsageFlags::UNORDERED_ACCESS);
 
         recheck_cull_info_buffer = g_rhi->RHICreateBuffer<uint64_t>(
             1024 * 512 * sizeof(uint64_t),
-            EBufferUsageFlags::STORAGE_BUFFER | EBufferUsageFlags::UNORDERED_ACCESS);
+            EBufferUsageFlags::UNORDERED_ACCESS);
         recheck_instance_id_buffer = g_rhi->RHICreateBuffer<uint32_t>(
             64 * 512 * sizeof(uint32_t),
-            EBufferUsageFlags::STORAGE_BUFFER | EBufferUsageFlags::UNORDERED_ACCESS);
+            EBufferUsageFlags::UNORDERED_ACCESS);
         instance_meshlet_cull_info_view = g_rhi->RHICreateBufferSRV(instance_meshlet_cull_info_buffer);
 
         instance_meshlet_cull_info_uav = g_rhi->RHICreateBufferUAV(instance_meshlet_cull_info_buffer);
@@ -464,7 +464,7 @@ namespace Moer {
             }
         }
 
-        light_buffer      = GpuSceneBufferBuilder::CopyFrom(EBufferUsageFlags::STORAGE_BUFFER, lights.data(), lights.size() * sizeof(LightData));
+        light_buffer      = GpuSceneBufferBuilder::CopyFrom(EBufferUsageFlags::UNORDERED_ACCESS, lights.data(), lights.size() * sizeof(LightData));
         light_buffer_view = g_rhi->RHICreateBufferSRV(light_buffer);
     }
 
