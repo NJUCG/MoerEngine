@@ -2,6 +2,7 @@
 // #include "RenderGraph.h"
 #include "RenderGraphHandle.h"
 #include "misc/STL.h"
+#include "misc/CountableRef.h"
 namespace Moer {
 
     class DepdencyGraph {
@@ -14,10 +15,9 @@ namespace Moer {
         public:
             Node(const std::string& name) : name(name) {}
             Node() = default;
-            bool               IsCulled() const { return refcount == 0; }
-            void               AddRef() { refcount++; }
-            uint32_t           GetRefCount() const { return refcount; }
-            void               DecRef() { refcount--; }
+            void Destroy() {}
+            COUNTABLE_IMPLEMENTATION
+            bool               IsCulled() const { return GetRefCount() == 0; }
             const std::string& GetName() const { return name; }
             virtual ~Node() = default;
         };

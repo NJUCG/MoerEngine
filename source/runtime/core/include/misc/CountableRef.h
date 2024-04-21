@@ -9,12 +9,9 @@
 #include <type_traits>
 template<typename TCountable>
 concept concept_is_countable = requires(TCountable t) {
-    //    t.m_counter;
-    //    std::is_same_v<typeof(t.m_counter), std::atomic<int32_t>>;
     t.AddRef() + (uint32_t)1;
     t.DeRef() + (uint32_t)1;
     t.GetRefCount() + (uint32_t)1;
-    //    t.Destroy();
 };
 
 class Countable {
@@ -37,6 +34,23 @@ protected:
     std::atomic<int32_t> m_counter;
 };
 
+#define COUNTABLE_IMPLEMENTATION                                         \
+    std::atomic<int32_t> m_counter{0};                                   \
+    inline int32_t       AddRef() { return m_counter.fetch_add(1) + 1; } \
+    inline uint32_t      DeRef() {                                       \
+        assert(m_counter >= 0);                                     \
+        int32_t current = m_counter.fetch_sub(1);                   \
+        if (current == 1) {                                         \
+            Destroy();                                              \
+        }                                                           \
+        return current - 1;                                         \
+    }                                                                    \
+    inline uint32_t GetRefCount() const { return m_counter.load(); }
+
+#define COUNTABLE_IMPLEMENTATION_AUTO_DESTROY \
+    COUNTABLE_IMPLEMENTATION                  \
+    inline void Destroy() { delete this; }
+
 template<typename T>
 class CountableRef {
 public:
@@ -44,9 +58,13 @@ public:
         //if(std::is_convertible<T, Countable>::value) return;
         //assert(false);
     }
-    CountableRef(T* countable, bool AddRef = true) {
-        ptr = countable;
-        if (ptr != nullptr && AddRef) {
+
+    CountableRef(T* _countable, bool _add_ref = true) {
+        if constexpr (!concept_is_countable<T>) {
+            static_assert(false, "T must be a Countable type");
+        }
+        ptr = _countable;
+        if (ptr != nullptr && _add_ref) {
             ptr->AddRef();
         }
     }
@@ -59,30 +77,30 @@ public:
         }
     }
 
-    CountableRef(const CountableRef& copy) {
-        ptr = copy.ptr;
+    CountableRef(const CountableRef& _copy) {
+        ptr = _copy.ptr;
         if (ptr != nullptr) {
             ptr->AddRef();
         }
     }
     template<typename CopyType>
         requires std::is_convertible_v<CopyType, T>
-    CountableRef(const CountableRef<CopyType>& copy) {
-        ptr = (T*)(copy.ptr);
+    CountableRef(const CountableRef<CopyType>& _copy) {
+        ptr = (T*)(_copy.ptr);
         if (ptr != nullptr) {
             ptr->AddRef();
         }
     }
     template<typename MoveType>
         requires std::is_convertible_v<MoveType, T>
-    CountableRef(CountableRef<MoveType>&& move) {
-        ptr      = move.ptr;
-        move.ptr = nullptr;
+    CountableRef(CountableRef<MoveType>&& _move) {
+        ptr       = _move.ptr;
+        _move.ptr = nullptr;
     }
 
-    CountableRef(CountableRef&& move) {
-        ptr      = move.ptr;
-        move.ptr = nullptr;
+    CountableRef(CountableRef&& _move) {
+        ptr       = _move.ptr;
+        _move.ptr = nullptr;
     }
     ~CountableRef() {
         if (ptr != nullptr) {
@@ -143,22 +161,22 @@ public:
         return ptr != nullptr;
     }
 
-    void Swap(CountableRef& other) {
-        T* old    = ptr;
-        ptr       = other.ptr;
-        other.ptr = old;
+    void Swap(CountableRef& _other) {
+        T* old     = ptr;
+        ptr        = _other.ptr;
+        _other.ptr = old;
     }
     template<typename Other>
-    inline bool operator==(const CountableRef<Other>& other) {
-        return ptr == other.ptr;
+    inline bool operator==(const CountableRef<Other>& _other) {
+        return ptr == _other.ptr;
     }
 
-    inline bool operator==(const CountableRef& other) {
-        return ptr == other.ptr;
+    inline bool operator==(const CountableRef& _other) {
+        return ptr == _other.ptr;
     }
 
-    inline bool operator==(const T* other) {
-        return ptr == other;
+    inline bool operator==(const T* _other) {
+        return ptr == _other;
     }
     int32_t GetRefCount() {
         return ptr->GetRefCount();

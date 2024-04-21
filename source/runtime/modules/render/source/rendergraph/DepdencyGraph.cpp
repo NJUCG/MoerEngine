@@ -28,7 +28,7 @@ namespace Moer {
 
             auto in_coming_edges = GetInComingEdges(node);
             for (auto& edge : in_coming_edges) {
-                edge->src->DecRef();
+                edge->src->DeRef();
                 if (edge->src->IsCulled()) {
                     stack.emplace(edge->src);
                 }

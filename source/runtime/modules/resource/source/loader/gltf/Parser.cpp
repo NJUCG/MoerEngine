@@ -246,7 +246,7 @@ namespace Moer::Resource::Gltf {
 
     MaterialRef GetDefaultMaterial() {
         MaterialBuilder materialBuilder{};
-        MaterialRef     default_material = new Material();
+        MaterialRef     default_material = MoerNew(Material)();
         materialBuilder.SetParameter("base_color_factor", UniformType::FLOAT4);
         materialBuilder.SetParameter("emissive_factor", UniformType::FLOAT3);
         materialBuilder.SetParameter("metalic_factor", UniformType::FLOAT);
