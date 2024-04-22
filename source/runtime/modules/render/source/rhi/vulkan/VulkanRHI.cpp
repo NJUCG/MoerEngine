@@ -38,6 +38,7 @@
 #include <string>
 #include <type_traits>
 #include <fstream>
+#include <variant>
 
 namespace VkUtil = Moer::RHI::Vulkan::Util;
 
@@ -76,7 +77,7 @@ void VulkanRHIImpl::ShutDown() {
 }
 
 #pragma region resources creation
-RHISamplerRef            VulkanRHIImpl::RHICreateSampler(const RHISamplerCreateInfo& _initializer) {
+RHISamplerRef VulkanRHIImpl::RHICreateSampler(const RHISamplerCreateInfo& _initializer) {
     VulkanRHISampler* vk_sampler = MoerNew(VulkanRHISampler)();
     vk_sampler->GenerateSamplerFromInitializer(m_device, _initializer);
 
@@ -975,7 +976,7 @@ RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(co
     uint32_t handlecount    = 1 + miss_count + hit_count + callable_count;
 
     auto     rt_props             = VkUtil::QueryPhysicalDeviceExtensionProps<VkPhysicalDeviceRayTracingPipelinePropertiesKHR,
-                                                              VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR>(m_device->GetGpu());
+                                                                              VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR>(m_device->GetGpu());
     uint32_t handlesize           = rt_props.shaderGroupHandleSize;
     uint32_t handlesize_aligned   = ALIGNUP(handlesize, rt_props.shaderGroupHandleAlignment);
     vk_pso->m_raygen_sbt.size     = ALIGNUP(handlesize_aligned, rt_props.shaderGroupBaseAlignment);
@@ -1373,145 +1374,263 @@ RHITextureRef VulkanRHIImpl::RHICreateTexture(const RHITextureCreateInfo& info) 
 bool IsTextureBuffer(EBufferUsageFlags _usage) {
     return uint32_t(_usage & EBufferUsageFlags::TEXTURE_BUFFER) != 0;
 }
-RHISRVRef VulkanRHIImpl::RHICreateSRVInner(RHIViewableResource* _resource, const RHIViewInfo& _view_info) {
+// RHISRVRef VulkanRHIImpl::RHICreateSRVInner(RHIViewableResource* _resource, const RHIViewInfo& _view_info) {
 
-    auto create_texture_srv = [this, _resource, &_view_info]() {
-        VulkanRHITextureSRV* vk_srv = MoerNew(VulkanRHITextureSRV)(m_device, _resource, _view_info);
+//     auto create_texture_srv = [this, _resource, &_view_info]() {
+//         VulkanRHITextureSRV* vk_srv = MoerNew(VulkanRHITextureSRV)(m_device, _resource, _view_info);
 
-        VkImageViewCreateInfo image_view_create_info{};
-        image_view_create_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        image_view_create_info.pNext = nullptr;
-        image_view_create_info.flags = 0;
+//         VkImageViewCreateInfo image_view_create_info{};
+//         image_view_create_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+//         image_view_create_info.pNext = nullptr;
+//         image_view_create_info.flags = 0;
 
-        auto* vk_texture = static_cast<VulkanRHITexture*>(_resource);
-        VK_CHECK_NULLPTR(vk_texture, "RHICreateSRVInner: resource to be viewed is nullptr!", return RHISRVRef{});
+//         auto* vk_texture = static_cast<VulkanRHITexture*>(_resource);
+//         VK_CHECK_NULLPTR(vk_texture, "RHICreateSRVInner: resource to be viewed is nullptr!", return RHISRVRef{});
 
-        image_view_create_info.image      = vk_texture->GetHandle();
-        image_view_create_info.viewType   = VulkanEnumTranslator::METoVKImageViewType(_view_info.texture.srv.dimension);
-        image_view_create_info.format     = _view_info.texture.srv.format == PF_UNDEFINED ? VulkanEnumTranslator::METoVKFormat(vk_texture->GetUAVFormat()) : VulkanEnumTranslator::METoVKFormat(_view_info.texture.srv.format);
-        image_view_create_info.components = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
-        VkImageAspectFlags flags;
-        if (uint32_t(vk_texture->GetUsageFlags() & ETextureUsageFlags::COLOR_ATTACHMENT) != 0) {
-            flags = VK_IMAGE_ASPECT_COLOR_BIT;
-        } else if (uint32_t(vk_texture->GetUsageFlags() & ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT) != 0) {
-            flags = VK_IMAGE_ASPECT_DEPTH_BIT;
-        } else {
-            flags = VK_IMAGE_ASPECT_COLOR_BIT;
-        }
-        image_view_create_info.subresourceRange.aspectMask     = flags;// MARK...
-        image_view_create_info.subresourceRange.baseMipLevel   = _view_info.texture.srv.mip_min;
-        image_view_create_info.subresourceRange.levelCount     = _view_info.texture.srv.mip_num;
-        image_view_create_info.subresourceRange.baseArrayLayer = _view_info.texture.srv.array_min;
-        image_view_create_info.subresourceRange.layerCount     = _view_info.texture.srv.array_num;
+//         image_view_create_info.image      = vk_texture->GetHandle();
+//         image_view_create_info.viewType   = VulkanEnumTranslator::METoVKImageViewType(_view_info.texture.srv.dimension);
+//         image_view_create_info.format     = _view_info.texture.srv.format == PF_UNDEFINED ? VulkanEnumTranslator::METoVKFormat(vk_texture->GetUAVFormat()) : VulkanEnumTranslator::METoVKFormat(_view_info.texture.srv.format);
+//         image_view_create_info.components = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
+//         VkImageAspectFlags flags;
+//         if (uint32_t(vk_texture->GetUsageFlags() & ETextureUsageFlags::COLOR_ATTACHMENT) != 0) {
+//             flags = VK_IMAGE_ASPECT_COLOR_BIT;
+//         } else if (uint32_t(vk_texture->GetUsageFlags() & ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT) != 0) {
+//             flags = VK_IMAGE_ASPECT_DEPTH_BIT;
+//         } else {
+//             flags = VK_IMAGE_ASPECT_COLOR_BIT;
+//         }
+//         image_view_create_info.subresourceRange.aspectMask     = flags;// MARK...
+//         image_view_create_info.subresourceRange.baseMipLevel   = _view_info.texture.srv.mip_min;
+//         image_view_create_info.subresourceRange.levelCount     = _view_info.texture.srv.mip_num;
+//         image_view_create_info.subresourceRange.baseArrayLayer = _view_info.texture.srv.array_min;
+//         image_view_create_info.subresourceRange.layerCount     = _view_info.texture.srv.array_num;
 
-        // image_view_create_info.components = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
+//         // image_view_create_info.components = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
 
-        VK_CHECK_RESULT(vkCreateImageView(m_device->GetDevice(), &image_view_create_info, nullptr, &vk_srv->m_view));
+//         VK_CHECK_RESULT(vkCreateImageView(m_device->GetDevice(), &image_view_create_info, nullptr, &vk_srv->m_view));
 
-        return RHISRVRef(vk_srv);
-    };
+//         return RHISRVRef(vk_srv);
+//     };
 
-    auto create_buffer_srv = [this, _resource, &_view_info]() {
-        auto*               vk_buffer = static_cast<VulkanRHIBuffer*>(_resource);
-        VulkanRHIBufferSRV* vk_srv    = MoerNew(VulkanRHIBufferSRV)(m_device, _resource, _view_info);
+//     auto create_buffer_srv = [this, _resource, &_view_info]() {
+//         auto*               vk_buffer = static_cast<VulkanRHIBuffer*>(_resource);
+//         VulkanRHIBufferSRV* vk_srv    = MoerNew(VulkanRHIBufferSRV)(m_device, _resource, _view_info);
 
-        bool b_create_view = IsTextureBuffer(vk_buffer->GetUsage());
-        if (!b_create_view) return RHISRVRef(vk_srv);
+//         bool b_create_view = IsTextureBuffer(vk_buffer->GetUsage());
+//         if (!b_create_view) return RHISRVRef(vk_srv);
 
-        VkBufferViewCreateInfo buffer_view_create_info{};
-        buffer_view_create_info.sType  = VK_STRUCTURE_TYPE_BUFFER_VIEW_CREATE_INFO;
-        buffer_view_create_info.pNext  = nullptr;
-        buffer_view_create_info.flags  = 0;
-        buffer_view_create_info.buffer = vk_buffer->GetHandle();
-        buffer_view_create_info.format = VulkanEnumTranslator::METoVKFormat(_view_info.buffer.srv.format);
-        buffer_view_create_info.offset = _view_info.buffer.srv.byte_offset;
-        buffer_view_create_info.range  = _view_info.buffer.srv.stride * _view_info.buffer.srv.num_elements;
+//         VkBufferViewCreateInfo buffer_view_create_info{};
+//         buffer_view_create_info.sType  = VK_STRUCTURE_TYPE_BUFFER_VIEW_CREATE_INFO;
+//         buffer_view_create_info.pNext  = nullptr;
+//         buffer_view_create_info.flags  = 0;
+//         buffer_view_create_info.buffer = vk_buffer->GetHandle();
+//         buffer_view_create_info.format = VulkanEnumTranslator::METoVKFormat(_view_info.buffer.srv.format);
+//         buffer_view_create_info.offset = _view_info.buffer.srv.byte_offset;
+//         buffer_view_create_info.range  = _view_info.buffer.srv.stride * _view_info.buffer.srv.num_elements;
 
-        VK_CHECK_RESULT(vkCreateBufferView(m_device->GetDevice(), &buffer_view_create_info, nullptr, &vk_srv->m_view));
+//         VK_CHECK_RESULT(vkCreateBufferView(m_device->GetDevice(), &buffer_view_create_info, nullptr, &vk_srv->m_view));
 
-        return RHISRVRef(vk_srv);
-    };
+//         return RHISRVRef(vk_srv);
+//     };
 
-    if (_view_info.IsBuffer()) {
-        return create_buffer_srv();
-    }
-    return create_texture_srv();
+//     if (_view_info.IsBuffer()) {
+//         return create_buffer_srv();
+//     }
+//     return create_texture_srv();
+// }
+
+// RHIUAVRef VulkanRHIImpl::RHICreateUAVInner(RHIViewableResource* _resource, const RHIViewInfo& _view_info) {
+
+//     auto create_buffer_uav = [this, _resource, &_view_info]() {
+//         auto*               vk_buffer = static_cast<VulkanRHIBuffer*>(_resource);
+//         VulkanRHIBufferUAV* vk_uav    = MoerNew(VulkanRHIBufferUAV)(m_device, _resource, _view_info);
+//         if (!IsTextureBuffer(vk_buffer->GetUsage())) return RHIUAVRef(vk_uav);
+//         VkBufferViewCreateInfo buffer_view_create_info{};
+//         buffer_view_create_info.sType  = VK_STRUCTURE_TYPE_BUFFER_VIEW_CREATE_INFO;
+//         buffer_view_create_info.pNext  = nullptr;
+//         buffer_view_create_info.flags  = 0;
+//         buffer_view_create_info.buffer = vk_buffer->GetHandle();
+//         buffer_view_create_info.format = VulkanEnumTranslator::METoVKFormat(_view_info.buffer.uav.format);
+//         buffer_view_create_info.offset = _view_info.buffer.uav.byte_offset;
+//         buffer_view_create_info.range  = _view_info.buffer.uav.stride * _view_info.buffer.uav.num_elements;
+
+//         VK_CHECK_RESULT(vkCreateBufferView(m_device->GetDevice(), &buffer_view_create_info, nullptr, &vk_uav->m_view));
+
+//         return RHIUAVRef(vk_uav);
+//     };
+
+//     auto create_texture_uav = [this, _resource, &_view_info]() {
+//         auto* vk_texture = static_cast<VulkanRHITexture*>(_resource);
+
+//         VK_CHECK_NULLPTR(vk_texture, "RHICreateUnorderedAccessView: resource to be viewed is nullptr!", return RHIUAVRef{});
+
+//         VulkanRHITextureUAV* vk_uav = MoerNew(VulkanRHITextureUAV)(m_device, _resource, _view_info);
+
+//         VkImageViewCreateInfo image_view_create_info{};
+//         image_view_create_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+//         image_view_create_info.pNext = nullptr;
+//         image_view_create_info.flags = 0;
+
+//         image_view_create_info.image    = vk_texture->GetHandle();
+//         image_view_create_info.viewType = VulkanEnumTranslator::METoVKImageViewType(_view_info.texture.uav.dimension);
+//         image_view_create_info.format   = _view_info.texture.uav.format == PF_UNDEFINED ? VulkanEnumTranslator::METoVKFormat(vk_texture->GetUAVFormat()) : VulkanEnumTranslator::METoVKFormat(_view_info.texture.uav.format);
+//         assert(image_view_create_info.format != VK_FORMAT_UNDEFINED && "RHICreateUnorderedAccessView: format is undefined!");
+
+//         image_view_create_info.components = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
+//         VkImageAspectFlags flags;
+//         if (uint32_t(vk_texture->GetUsageFlags() & ETextureUsageFlags::COLOR_ATTACHMENT) != 0) {
+//             flags = VK_IMAGE_ASPECT_COLOR_BIT;
+//         } else if (uint32_t(vk_texture->GetUsageFlags() & ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT) != 0) {
+//             flags = VK_IMAGE_ASPECT_DEPTH_BIT;
+//         } else {
+//             flags = VK_IMAGE_ASPECT_COLOR_BIT;
+//         }
+//         image_view_create_info.subresourceRange.aspectMask     = flags;
+//         image_view_create_info.subresourceRange.baseMipLevel   = _view_info.texture.uav.mip_min;
+//         image_view_create_info.subresourceRange.levelCount     = _view_info.texture.uav.mip_num;
+//         image_view_create_info.subresourceRange.baseArrayLayer = _view_info.texture.uav.array_min;
+//         image_view_create_info.subresourceRange.layerCount     = _view_info.texture.uav.array_num;
+
+//         VK_CHECK_RESULT(vkCreateImageView(m_device->GetDevice(), &image_view_create_info, nullptr, &vk_uav->m_view));
+
+//         return RHIUAVRef(vk_uav);
+//     };
+
+//     if (_view_info.IsBuffer()) {
+//         return create_buffer_uav();
+//     }
+//     return create_texture_uav();
+// }
+
+template<typename T>
+    requires std::is_same_v<T, RHITextureSRVInfo> || std::is_same_v<T, RHITextureUAVInfo>
+void FillImageViewInfo(const T& _target, VkFormat& _format, VkImageViewType& _view_type, uint32_t& _array_min, uint32_t& _array_num) {
+    _format    = VulkanEnumTranslator::METoVKFormat(_target.format);
+    _view_type = VulkanEnumTranslator::METoVKImageViewType(_target.dimension);
+    _array_min = _target.array_min;
+    _array_num = _target.array_num;
 }
 
-RHIUAVRef VulkanRHIImpl::RHICreateUAVInner(RHIViewableResource* _resource, const RHIViewInfo& _view_info) {
-
-    auto create_buffer_uav = [this, _resource, &_view_info]() {
-        auto*               vk_buffer = static_cast<VulkanRHIBuffer*>(_resource);
-        VulkanRHIBufferUAV* vk_uav    = MoerNew(VulkanRHIBufferUAV)(m_device, _resource, _view_info);
-        if (!IsTextureBuffer(vk_buffer->GetUsage())) return RHIUAVRef(vk_uav);
-        VkBufferViewCreateInfo buffer_view_create_info{};
-        buffer_view_create_info.sType  = VK_STRUCTURE_TYPE_BUFFER_VIEW_CREATE_INFO;
-        buffer_view_create_info.pNext  = nullptr;
-        buffer_view_create_info.flags  = 0;
-        buffer_view_create_info.buffer = vk_buffer->GetHandle();
-        buffer_view_create_info.format = VulkanEnumTranslator::METoVKFormat(_view_info.buffer.uav.format);
-        buffer_view_create_info.offset = _view_info.buffer.uav.byte_offset;
-        buffer_view_create_info.range  = _view_info.buffer.uav.stride * _view_info.buffer.uav.num_elements;
-
-        VK_CHECK_RESULT(vkCreateBufferView(m_device->GetDevice(), &buffer_view_create_info, nullptr, &vk_uav->m_view));
-
-        return RHIUAVRef(vk_uav);
-    };
-
-    auto create_texture_uav = [this, _resource, &_view_info]() {
-        auto* vk_texture = static_cast<VulkanRHITexture*>(_resource);
-
-        VK_CHECK_NULLPTR(vk_texture, "RHICreateUnorderedAccessView: resource to be viewed is nullptr!", return RHIUAVRef{});
-
-        VulkanRHITextureUAV* vk_uav = MoerNew(VulkanRHITextureUAV)(m_device, _resource, _view_info);
-
-        VkImageViewCreateInfo image_view_create_info{};
-        image_view_create_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        image_view_create_info.pNext = nullptr;
-        image_view_create_info.flags = 0;
-
-        image_view_create_info.image    = vk_texture->GetHandle();
-        image_view_create_info.viewType = VulkanEnumTranslator::METoVKImageViewType(_view_info.texture.uav.dimension);
-        image_view_create_info.format   = _view_info.texture.uav.format == PF_UNDEFINED ? VulkanEnumTranslator::METoVKFormat(vk_texture->GetUAVFormat()) : VulkanEnumTranslator::METoVKFormat(_view_info.texture.uav.format);
-        assert(image_view_create_info.format != VK_FORMAT_UNDEFINED && "RHICreateUnorderedAccessView: format is undefined!");
-
-        image_view_create_info.components = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
-        VkImageAspectFlags flags;
-        if (uint32_t(vk_texture->GetUsageFlags() & ETextureUsageFlags::COLOR_ATTACHMENT) != 0) {
-            flags = VK_IMAGE_ASPECT_COLOR_BIT;
-        } else if (uint32_t(vk_texture->GetUsageFlags() & ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT) != 0) {
-            flags = VK_IMAGE_ASPECT_DEPTH_BIT;
-        } else {
-            flags = VK_IMAGE_ASPECT_COLOR_BIT;
-        }
-        image_view_create_info.subresourceRange.aspectMask     = flags;
-        image_view_create_info.subresourceRange.baseMipLevel   = _view_info.texture.uav.mip_min;
-        image_view_create_info.subresourceRange.levelCount     = _view_info.texture.uav.mip_num;
-        image_view_create_info.subresourceRange.baseArrayLayer = _view_info.texture.uav.array_min;
-        image_view_create_info.subresourceRange.layerCount     = _view_info.texture.uav.array_num;
-
-        VK_CHECK_RESULT(vkCreateImageView(m_device->GetDevice(), &image_view_create_info, nullptr, &vk_uav->m_view));
-
-        return RHIUAVRef(vk_uav);
-    };
-
-    if (_view_info.IsBuffer()) {
-        return create_buffer_uav();
-    }
-    return create_texture_uav();
+template<typename T>
+    requires std::is_same_v<T, RHIBufferViewInfo>
+void FillBufferViewInfo(const T& _target, VkBufferViewCreateInfo& _buffer_view_create_info) {
+    _buffer_view_create_info.sType  = VK_STRUCTURE_TYPE_BUFFER_VIEW_CREATE_INFO;
+    _buffer_view_create_info.pNext  = nullptr;
+    _buffer_view_create_info.flags  = 0;
+    _buffer_view_create_info.offset = _target.byte_offset;
+    _buffer_view_create_info.range  = _target.stride * _target.num_elements;
+    _buffer_view_create_info.format = VulkanEnumTranslator::METoVKFormat(_target.format);
 }
 
-RHICBVRef VulkanRHIImpl::RHICreateCBV(RHIBuffer* _buffer, uint64_t _byte_size, uint64_t _offset) {
-    auto* vk_buffer = static_cast<VulkanRHIBuffer*>(_buffer);
-    VK_CHECK_NULLPTR(vk_buffer, "RHICreateCBV: buffer to be viewed is nullptr!", return RHICBVRef{});
-    auto create_info = RHIViewInfo::CreateBufferCBVInfo()
-                           .SetByteOffset(_offset)
-                           .SetStride(_buffer->GetStride())
-                           .SetNumElements(_byte_size / _buffer->GetStride());
+RHIViewRef VulkanRHIImpl::RHICreateViewInner(RHIViewableResource* _resource, const RHIViewInfo& _view_info) {
+    return std::visit(
+        [this, _resource, &_view_info](auto&& _arg) {
+            using T = std::decay_t<decltype(_arg)>;
+            if constexpr (std::is_same_v<T, RHIBufferViewInfo>) {
+                auto&         buffer_view_info = std::get<v_type_buffer_view>(_view_info.info);
+                auto*         vk_buffer        = static_cast<VulkanRHIBuffer*>(_resource);
+                RHIViewRef    view             = nullptr;
+                VkBufferView* vk_view          = VK_NULL_HANDLE;
+                if (buffer_view_info.view_type == EViewType::BUFFER_CBV) {
+                    view = MoerNew(VulkanRHICBV)(m_device, vk_buffer, _view_info);
+                }
+                if (buffer_view_info.view_type == EViewType::BUFFER_SRV) {
+                    view    = MoerNew(VulkanRHIBufferSRV)(m_device, vk_buffer, _view_info);
+                    vk_view = &(static_cast<VulkanRHIBufferSRV*>(view.Get())->m_view);
+                }
+                if (buffer_view_info.view_type == EViewType::BUFFER_UAV) {
+                    view    = MoerNew(VulkanRHIBufferUAV)(m_device, vk_buffer, _view_info);
+                    vk_view = &(static_cast<VulkanRHIBufferUAV*>(view.Get())->m_view);
+                }
+                if (view == nullptr) {
+                    LOG_ERROR("RHICreateView: buffer view type is not supported!");
+                    return RHIViewRef{};
+                }
+                if (IsTextureBuffer(vk_buffer->GetUsage()) && vk_view != VK_NULL_HANDLE) {
+                    VkBufferViewCreateInfo buffer_view_create_info{};
+                    buffer_view_create_info.sType = VK_STRUCTURE_TYPE_BUFFER_VIEW_CREATE_INFO;
+                    buffer_view_create_info.pNext = nullptr;
+                    FillBufferViewInfo(buffer_view_info, buffer_view_create_info);
 
-    VulkanRHICBV* vk_cbv = MoerNew(VulkanRHICBV)(m_device, _buffer, std::move(create_info));
-    return RHICBVRef(vk_cbv);
+                    VK_CHECK_RESULT(vkCreateBufferView(m_device->GetDevice(), &buffer_view_create_info, nullptr, vk_view));
+                }
+
+                return view;
+
+            } else if constexpr (std::is_same_v<T, RHITextureSRVInfo> || std::is_same_v<T, RHITextureUAVInfo>) {
+                RHIViewRef view       = nullptr;
+                auto*      vk_texture = static_cast<VulkanRHITexture*>(_resource);
+                VK_CHECK_NULLPTR(vk_texture, "RHICreateView: texture to be viewed is nullptr!", return RHIViewRef{});
+
+                VkImageView*    vk_view   = VK_NULL_HANDLE;
+                uint32_t        mip_num   = 0;
+                uint32_t        mip_min   = 0;
+                uint32_t        array_min = 0;
+                uint32_t        array_num = 0;
+                VkFormat        format    = VK_FORMAT_UNDEFINED;
+                VkImageViewType view_type;
+                if constexpr (std::is_same_v<T, RHITextureSRVInfo>) {
+                    view           = MoerNew(VulkanRHITextureSRV)(m_device, _resource, _view_info);
+                    vk_view        = &(static_cast<VulkanRHITextureSRV*>(view.Get()))->m_view;
+                    auto& srv_info = std::get<v_type_texture_srv>(_view_info.info);
+                    mip_num        = srv_info.mip_num;
+                    mip_min        = srv_info.mip_min;
+                    FillImageViewInfo(srv_info, format, view_type, array_min, array_num);
+
+                } else if constexpr (std::is_same_v<T, RHITextureUAVInfo>) {
+                    view           = MoerNew(VulkanRHITextureUAV)(m_device, _resource, _view_info);
+                    vk_view        = &(static_cast<VulkanRHITextureUAV*>(view.Get()))->m_view;
+                    auto& uav_info = std::get<v_type_texture_uav>(_view_info.info);
+                    mip_num        = 1;
+                    mip_min        = uav_info.mip;
+                    FillImageViewInfo(uav_info, format, view_type, array_min, array_num);
+                }
+                VK_CHECK_NULLPTR(vk_view, "RHICreateView: view is nullptr!", return RHIViewRef{});
+                VkImageAspectFlags flags;
+                if (uint32_t(vk_texture->GetUsageFlags() & ETextureUsageFlags::COLOR_ATTACHMENT) != 0) {
+                    flags = VK_IMAGE_ASPECT_COLOR_BIT;
+                } else if (uint32_t(vk_texture->GetUsageFlags() & ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT) != 0) {
+                    flags = VK_IMAGE_ASPECT_DEPTH_BIT;
+                } else {
+                    flags = VK_IMAGE_ASPECT_COLOR_BIT;
+                }
+                VkImageViewCreateInfo image_view_create_info{
+                    .sType            = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                    .pNext            = nullptr,
+                    .flags            = 0,
+                    .image            = vk_texture->GetHandle(),
+                    .viewType         = view_type,
+                    .format           = format,
+                    .components       = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY},
+                    .subresourceRange = {
+                        .aspectMask     = flags,
+                        .baseMipLevel   = mip_min,
+                        .levelCount     = mip_num,
+                        .baseArrayLayer = array_min,
+                        .layerCount     = array_num},
+                };
+
+                VK_CHECK_RESULT(vkCreateImageView(m_device->GetDevice(), &image_view_create_info, nullptr, vk_view));
+
+                return view;
+            } else {
+                static_assert(std::_Always_false<T>, "non-exhaustive visitor!");
+            }
+        },
+        _view_info.info);
 }
+
+// RHICBVRef VulkanRHIImpl::RHICreateCBV(RHIBuffer* _buffer, uint64_t _byte_size, uint64_t _offset) {
+//     auto* vk_buffer = static_cast<VulkanRHIBuffer*>(_buffer);
+//     VK_CHECK_NULLPTR(vk_buffer, "RHICreateCBV: buffer to be viewed is nullptr!", return RHICBVRef{});
+//     auto create_info = RHIViewInfo::CreateBufferCBVInfo()
+//                            .SetByteOffset(_offset)
+//                            .SetStride(_buffer->GetStride())
+//                            .SetNumElements(_byte_size / _buffer->GetStride());
+
+//     VulkanRHICBV* vk_cbv = MoerNew(VulkanRHICBV)(m_device, _buffer, std::move(create_info));
+//     return RHICBVRef(vk_cbv);
+// }
 
 RHICommandQueue* VulkanRHIImpl::RHICreateCommandQueue(ECommandQueueType _type) {
     return MoerNew(VulkanRHICommandQueue(m_device, _type));
@@ -1818,7 +1937,7 @@ VkDeviceAddress VulkanRHIImpl::GetDeviceAddress(RHIBufferRef _buffer) {
 #pragma endregion
 
 #pragma region viewport
-RHIViewport*   VulkanRHIImpl::RHIGetMainViewport() {
+RHIViewport* VulkanRHIImpl::RHIGetMainViewport() {
     return static_cast<RHIViewport*>(m_main_viewport);
 }
 //create external viewport

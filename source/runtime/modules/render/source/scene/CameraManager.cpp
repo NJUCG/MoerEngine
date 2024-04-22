@@ -6,7 +6,7 @@ namespace Moer {
     }
     CameraRef CameraManager::Create(Entity entity) noexcept {
         m_manager.AddComponent(entity);
-        m_manager[entity].camera = new Camera();
+        m_manager[entity].camera = MoerNew(Camera)();
         return m_manager[entity].camera;
     }
     bool CameraManager::HasComponent(Entity entity) const noexcept {

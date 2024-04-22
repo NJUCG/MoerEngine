@@ -176,7 +176,7 @@ namespace Moer {
             default_sampler = SamplerCache::Get().GetSampler(SamplerParams(SF_CUBIC, TEXTURE_LAYOUT_UNDEFINED));
 
             if (!m_material_data_buffer || m_material_data_buffer->GetByteSize() != sizeof(MaterialData) * instances.size()) {
-                m_material_data_buffer = GpuSceneBufferBuilder::CopyFrom(EBufferUsageFlags::STORAGE_BUFFER, material_data.data(), sizeof(MaterialData) * instances.size());
+                m_material_data_buffer = GpuSceneBufferBuilder::CopyFrom(EBufferUsageFlags::UNORDERED_ACCESS, material_data.data(), sizeof(MaterialData) * instances.size());
                 // void* mapped_data      = g_rhi->RHIMapBuffer(m_material_data_buffer, 0, sizeof(MaterialData) * instances.size());
                 // memcpy(mapped_data, material_data.data(), sizeof(MaterialData) * instances.size());
                 m_material_data_srv = g_rhi->RHICreateBufferSRV(m_material_data_buffer);

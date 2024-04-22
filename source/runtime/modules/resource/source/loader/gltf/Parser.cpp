@@ -46,8 +46,8 @@ namespace Moer::Resource::Gltf {
         Scene* LoadSceneFromFile(const std::filesystem::path& file_path, bool _delete_after_load = false);
         void   LoadSceneFromFileAsync(const std::filesystem::path& file_path);
         void   LoadNode(const aiNode* node, const aiScene* scene);
-        void   loadCameras(const aiScene* scene);
-        void   loadMaterial(const aiScene* ai_scene, const aiMaterial* ai_material, const std::string& materialName);
+        void   LoadCameras(const aiScene* scene);
+        void   LoadMaterial(const aiScene* ai_scene, const aiMaterial* ai_material, const std::string& materialName);
         void   LoadTexture(const aiScene* scene, const aiString& texture_path, MaterialInstanceRef& mat, const std::string& param_name);
         void   LoadLights(const aiScene* scene);
         ~Impl() = default;
@@ -213,7 +213,7 @@ namespace Moer::Resource::Gltf {
         return {vec.x, vec.y, vec.z};
     }
 
-    void Parser::Impl::loadCameras(const aiScene* scene) {
+    void Parser::Impl::LoadCameras(const aiScene* scene) {
         const uint32_t camera_num = scene->mNumCameras;
         if (camera_num == 0) {
             LOG_WARNING("Current Scene has no camera");
@@ -246,7 +246,7 @@ namespace Moer::Resource::Gltf {
 
     MaterialRef GetDefaultMaterial() {
         MaterialBuilder materialBuilder{};
-        MaterialRef     default_material = new Material();
+        MaterialRef     default_material = MoerNew(Material)();
         materialBuilder.SetParameter("base_color_factor", UniformType::FLOAT4);
         materialBuilder.SetParameter("emissive_factor", UniformType::FLOAT3);
         materialBuilder.SetParameter("metalic_factor", UniformType::FLOAT);
@@ -262,7 +262,7 @@ namespace Moer::Resource::Gltf {
         return materialBuilder.Build();
     }
 
-    void Parser::Impl::loadMaterial(const aiScene* ai_scene, const aiMaterial* ai_material, const std::string& materialName) {
+    void Parser::Impl::LoadMaterial(const aiScene* ai_scene, const aiMaterial* ai_material, const std::string& materialName) {
 
         size_t material_hash = 0;
         if (!m_material_cache.contains(material_hash)) {
@@ -321,8 +321,12 @@ namespace Moer::Resource::Gltf {
         GpuPrimitiveBuilder::InitBuild();
         m_scene = MoerNew(Scene)();
         Assimp::Importer importer;
-        auto             real_path  = std::filesystem::canonical(_file_path);
-        const auto*      gltf_scene = importer.ReadFile(_file_path.string(), aiProcess_Triangulate | aiProcess_FlipUVs | aiProcess_GenBoundingBoxes | aiProcess_GenNormals | aiProcess_CalcTangentSpace);
+        auto             real_path = std::filesystem::weakly_canonical(_file_path);
+        if (!std::filesystem::exists(real_path)) {
+            LOG_WARNING("File not exist: {}", real_path.string());
+            return nullptr;
+        }
+        const auto* gltf_scene = importer.ReadFile(_file_path.string(), aiProcess_Triangulate | aiProcess_FlipUVs | aiProcess_GenBoundingBoxes | aiProcess_GenNormals | aiProcess_CalcTangentSpace);
         if (!gltf_scene) {
             LOG_WARNING("Failed to load gltf file: {} ", _file_path.string());
             return nullptr;
@@ -424,9 +428,9 @@ namespace Moer::Resource::Gltf {
             gpu_scene_buffer_builder.Index(&index_data);
             auto buffer_pair = gpu_scene_buffer_builder.Build();
 
-            auto meshlet_bounds_buffer = gpu_scene_buffer_builder.CopyFrom(EBufferUsageFlags::STORAGE_BUFFER, meshlet_bounds.data(), meshlet_bounds.size() * sizeof(MeshletBound));
+            auto meshlet_bounds_buffer = gpu_scene_buffer_builder.CopyFrom(EBufferUsageFlags::UNORDERED_ACCESS, meshlet_bounds.data(), meshlet_bounds.size() * sizeof(MeshletBound));
 
-            auto meshlet_descs_buffer = gpu_scene_buffer_builder.CopyFrom(EBufferUsageFlags::STORAGE_BUFFER, meshlet_descs.data(), meshlet_descs.size() * sizeof(MeshletDesc));
+            auto meshlet_descs_buffer = gpu_scene_buffer_builder.CopyFrom(EBufferUsageFlags::UNORDERED_ACCESS, meshlet_descs.data(), meshlet_descs.size() * sizeof(MeshletDesc));
             gpu_scene->SetBuffer("vertex_buffer", buffer_pair.first);
             gpu_scene->SetBuffer("index_buffer", buffer_pair.second);
             gpu_scene->SetBuffer("meshlet_bounds", meshlet_bounds_buffer);
@@ -434,7 +438,7 @@ namespace Moer::Resource::Gltf {
         });
 
         //Todo Load Lights
-        loadCameras(gltf_scene);
+        LoadCameras(gltf_scene);
         LoadNode(gltf_scene->mRootNode, gltf_scene);
         LoadLights(gltf_scene);
 
@@ -489,9 +493,9 @@ namespace Moer::Resource::Gltf {
         EnqueueRenderTask([instance_data = std::move(instance_data), instance_mesh_info = std::move(instance_mesh_info), instance_id(std::move(instance_ids)), gpu_scene]() {
             GpuSceneBufferBuilder gpu_scene_buffer_builder;
 
-            auto instance_buffer      = gpu_scene_buffer_builder.CopyFrom(EBufferUsageFlags::STORAGE_BUFFER, instance_data.data(), instance_data.size() * sizeof(InstanceData));
+            auto instance_buffer      = gpu_scene_buffer_builder.CopyFrom(EBufferUsageFlags::UNORDERED_ACCESS, instance_data.data(), instance_data.size() * sizeof(InstanceData));
             auto instance_id_buffer   = gpu_scene_buffer_builder.CopyFrom(EBufferUsageFlags::VERTEX_BUFFER, instance_id.data(), instance_id.size() * sizeof(int));
-            auto instance_mesh_buffer = gpu_scene_buffer_builder.CopyFrom(EBufferUsageFlags::STORAGE_BUFFER, instance_mesh_info.data(), instance_mesh_info.size() * sizeof(InstanceMeshInfo));
+            auto instance_mesh_buffer = gpu_scene_buffer_builder.CopyFrom(EBufferUsageFlags::UNORDERED_ACCESS, instance_mesh_info.data(), instance_mesh_info.size() * sizeof(InstanceMeshInfo));
             gpu_scene->SetBuffer("instance_data", instance_buffer);
             gpu_scene->SetBuffer("instance_id_buffer", instance_id_buffer);
             gpu_scene->SetBuffer("instance_meshlet_info_buffer", instance_mesh_buffer);
@@ -599,7 +603,7 @@ namespace Moer::Resource::Gltf {
                 }
 
                 if (!m_materials.contains(material_name)) {
-                    loadMaterial(scene, material, material_name);
+                    LoadMaterial(scene, material, material_name);
                 }
                 auto material_instance = m_materials[material_name];
                 RenderableManager::Get().SetMaterialInstance(entity, material_instance);
