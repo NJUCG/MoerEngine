@@ -27,6 +27,7 @@ namespace Moer {
         bool     ray_tracing : 1;
 
         char default_rhi[32]{"Vulkan"};
+        char default_render_name[32]{"DeferredRenderer"};
     };
     class CORE_API ConfigManager {
     private:
