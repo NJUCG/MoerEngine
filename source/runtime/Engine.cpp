@@ -39,12 +39,8 @@ namespace Moer {
         PostInitRenderSystem();
         LOG_INFO("Engine Post Init Finished");
 
-        //todo : in now we need to move scene file to bin/Debug/resource/scenes
-        auto sponza_scene_path = ConfigManager::GetInstance().GetEditorResourcePath() / "default/scenes/sponza/Sponza01.gltf";
-        // auto sponza_scene_path = ConfigManager::GetInstance().GetEditorResourcePath() /"scenes/sponza/pbr/sponza2.gltf";
-        // Scene::SetCurrentScene(Resource::Gltf::Parser::LoadSceneFromFile(sponza_scene_path).release());
-        // Resource::Gltf::Parser::LoadSceneFromFileAsync(sponza_scene_path);
-        Resource::LoaderInterface::LoadSceneFromFileAsync(sponza_scene_path);
+        //Config this in MoerEngine.ini
+        Resource::LoaderInterface::LoadSceneFromFileAsync(ConfigManager::GetInstance().GetScenePath());
     }
     void Engine::Run() {
         LOG_INFO("Engine Start Running");

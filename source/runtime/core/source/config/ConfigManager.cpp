@@ -46,10 +46,10 @@ namespace Moer {
         init_config.max_frame_in_flight = r.Get<int>("engine", "max_frame_in_flight", 3);
         init_config.ray_tracing         = r.Get<int>("engine", "ray_tracing", 0);
         scene_path                      = r.Get<std::string>("engine", "scene_path", "resource/scenes");
-
-        auto default_rhi = r.Get<std::string>("engine", "default_rhi", "Vulkan");
-
+        auto default_rhi                = r.Get<std::string>("engine", "default_rhi", "Vulkan");
         strcpy_s(init_config.default_rhi, default_rhi.c_str());
+        auto defulat_render_name = r.Get<std::string>("engine", "render", "DeferredRenderer");
+        strcpy_s(init_config.default_render_name, defulat_render_name.c_str());
     }
 
     // std::string ConfigManager::GetConfig(const std::string& key) {
