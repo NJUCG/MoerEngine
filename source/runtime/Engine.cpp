@@ -38,9 +38,13 @@ namespace Moer {
         LOG_INFO("Engine Begin Post Init");
         PostInitRenderSystem();
         LOG_INFO("Engine Post Init Finished");
-
+        auto scene_path = std::filesystem::weakly_canonical(ConfigManager::GetInstance().GetScenePath());
+        if (!std::filesystem::exists(scene_path)) {
+            LOG_ERROR("Scene path in Config is empty, Load Default Scene");
+            scene_path = std::filesystem::canonical(ConfigManager::GetInstance().GetEditorResourcePath() / "default" / "scenes" / "sponza" / "Sponza01.gltf");
+        }
         //Config this in MoerEngine.ini
-        Resource::LoaderInterface::LoadSceneFromFileAsync(ConfigManager::GetInstance().GetScenePath());
+        Resource::LoaderInterface::LoadSceneFromFileAsync(scene_path);
     }
     void Engine::Run() {
         LOG_INFO("Engine Start Running");

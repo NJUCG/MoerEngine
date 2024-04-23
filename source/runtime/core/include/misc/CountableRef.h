@@ -49,7 +49,7 @@ protected:
 
 #define COUNTABLE_IMPLEMENTATION_AUTO_DESTROY \
     COUNTABLE_IMPLEMENTATION                  \
-    inline void Destroy() { delete this; }
+    inline void Destroy() { MoerDelete(this); }
 
 template<typename T>
 class CountableRef {
