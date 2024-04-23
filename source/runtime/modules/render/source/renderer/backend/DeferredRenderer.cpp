@@ -634,22 +634,22 @@ namespace Moer {
             });
         LightingPass();
 
-        EnqueueRenderTask([this]() {
-            auto&                    cmd_list = render_context.GetCommandList();
-            RHIBarrierDependencyInfo barrier_dependency_info{};
-            barrier_dependency_info.texture_barriers.resize(1);
-            auto& attachment_info = barrier_dependency_info.texture_barriers[0];
-            attachment_info
-                .SetTexture(virtual_viewport->GetBackBufferInfo().backbuffer_uav->GetTexture())
-                .SetDstTextureLayout(TEXTURE_LAYOUT_TRANSFER_SRC)
-                .SetSrcTextureLayout(TEXTURE_LAYOUT_COLOR_ATTACHMENT)
-                .SetSrcStage(ERHIPipelineStageFlags::PS_COLOR_ATTACHMENT_OUTPUT)
-                .SetDstStage(ERHIPipelineStageFlags::PS_TRANSFER)
-                .SetSrcAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE)
-                .SetDstAccessFlags(ERHIAccessFlags::TRANSFER_READ);
-
-            cmd_list.SetPipelineBarrier(barrier_dependency_info);
-        });
+        //   EnqueueRenderTask([this]() {
+        // auto&                    cmd_list = render_context.GetCommandList();
+        // RHIBarrierDependencyInfo barrier_dependency_info{};
+        // barrier_dependency_info.texture_barriers.resize(1);
+        // auto& attachment_info = barrier_dependency_info.texture_barriers[0];
+        // attachment_info
+        //     .SetTexture(virtual_viewport->GetBackBufferInfo().backbuffer_uav->GetTexture())
+        //     .SetDstTextureLayout(TEXTURE_LAYOUT_TRANSFER_SRC)
+        //     .SetSrcTextureLayout(TEXTURE_LAYOUT_COLOR_ATTACHMENT)
+        //     .SetSrcStage(ERHIPipelineStageFlags::PS_COLOR_ATTACHMENT_OUTPUT)
+        //     .SetDstStage(ERHIPipelineStageFlags::PS_TRANSFER)
+        //     .SetSrcAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE)
+        //     .SetDstAccessFlags(ERHIAccessFlags::TRANSFER_READ);
+        //
+        // cmd_list.SetPipelineBarrier(barrier_dependency_info);
+        //  });
         {
             auto submit_rendering = [this]() {
                 render_context.EndFrame(virtual_viewport);

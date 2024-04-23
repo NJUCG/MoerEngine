@@ -61,7 +61,7 @@ public:
 
     CountableRef(T* _countable, bool _add_ref = true) {
         if constexpr (!concept_is_countable<T>) {
-          //  static_assert(false, "T must be a Countable type");
+            static_assert(false, "T must be a Countable type");
         }
         ptr = _countable;
         if (ptr != nullptr && _add_ref) {

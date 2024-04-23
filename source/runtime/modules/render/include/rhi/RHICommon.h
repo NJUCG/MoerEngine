@@ -616,6 +616,12 @@ enum EBufferLayout : uint32_t {
     INDIRECT_COMMAND_READ
 };
 
+enum class EPassType {
+    Graphics,
+    Compute,
+    Raytracing,
+};
+
 ENUM_BIT_OP_IMPL(EBufferLayout, FLAG)
 
 #pragma endregion

@@ -1,4 +1,5 @@
 #include "rhi/RHIResource.h"
+#include "resources/ResourceTransition.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommon.h"
 #include "shader/Shader.h"
@@ -19,6 +20,21 @@ void RHIResource::Destroy() {
 }
 
 #pragma region buffer texture initiation
+void                          RHITexture::SetLayout(const RHISubresourceRange& _subresource_range, ETextureLayout _layout, RHITextureBarrierInfo* barrier_info) {
+    auto old_layout = this->GetLayout(_subresource_range);
+    if (barrier_info) {
+        auto [src_access_flags, dst_access_flags, src_stage, dst_stage] = Moer::ResourceTransition::GetImageTransition(old_layout, _layout);
+        barrier_info->SetSubResourceRange(_subresource_range)
+            .SetTexture(this)
+            .SetSrcTextureLayout(old_layout)
+            .SetDstTextureLayout(_layout)
+            .SetSrcAccessFlags(src_access_flags)
+            .SetDstAccessFlags(dst_access_flags)
+            .SetSrcStage(src_stage)
+            .SetDstStage(dst_stage);
+    }
+    subresource_layouts[_subresource_range] = _layout;
+}
 RHITexture::RHITexture(const RHITextureCreateInfo& _info) : RHIViewableResource(RRT_TEXTURE), texture_info(_info) {
     SetName(_info.name);
 }
