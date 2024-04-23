@@ -37,8 +37,8 @@ struct RHIInfo {
 
 template<typename T>
 concept TPipelineStateRef = requires(T) {
-    std::convertible_to<T, RHIGraphicsPipelineStateRef> || std::convertible_to<T, RHIComputePipelineStateRef>;
-};
+                                std::convertible_to<T, RHIGraphicsPipelineStateRef> || std::convertible_to<T, RHIComputePipelineStateRef>;
+                            };
 class RENDER_API RHI {
 public:
     RHI(ERHIType _type) : m_rhi_info(_type) {}
@@ -131,7 +131,7 @@ public:
     }
 
     RHICBVRef RHICreateCBV(RHIBuffer* _resource, uint64_t _size, uint64_t _byte_offset = 0) {
-        RHIViewRef view = RHICreateBufferView<v_type_buffer_cbv>(_resource, _byte_offset, _size, 0);
+        RHIViewRef view = RHICreateBufferView<v_type_buffer_cbv>(_resource, 0, _size, _byte_offset);
         return RHICBVRef(static_cast<RHICBV*>(view.Get()));
     }
 
@@ -220,7 +220,7 @@ protected:
     virtual RHIBufferRef RHICreateBufferInner(const RHIBufferCreateInfo& info)                                                                                 = 0;
     virtual RHIViewRef   RHICreateViewInner(RHIViewableResource* _resource, const RHIViewInfo& _view_info)                                                     = 0;
     template<uint32_t _type>
-    RHIViewRef RHICreateBufferView(RHIBuffer* _resource, uint64_t _byte_offset, uint64_t _byte_size, uint64_t _stride) {
+    RHIViewRef RHICreateBufferView(RHIBuffer* _resource, uint64_t _stride, uint64_t _byte_size, uint64_t _byte_offset) {
         auto true_stride = _stride == 0 ? _resource->GetStride() : _stride;
 
         auto true_size = _byte_size == 0 ? _resource->GetByteSize() : _byte_size;

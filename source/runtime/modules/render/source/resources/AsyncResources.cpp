@@ -245,6 +245,8 @@ namespace Moer {
         auto* cmd_list = copy_cmd_list;
         present_fence->Wait(presented_index - 1);
         cmd_list->Reset();
+        cmd_list->BeginRecording();
+
         Offset3D zero_offset = {0, 0, 0};
 
         Extent3D src_extent = swapchain_textures[current_rendered % info.back_buffer_count]->GetExtent3D();
@@ -264,6 +266,15 @@ namespace Moer {
         RHIBarrierDependencyInfo barrier_info{};
         auto&                    barriers      = barrier_info.texture_barriers;
         uint32_t                 present_index = presented_index % info.back_buffer_count;
+
+        {
+            RHIBarrierDependencyInfo transfer_barrier_info;
+            auto&                    barriers = transfer_barrier_info.texture_barriers;
+            barriers.push_back({});
+            swapchain_textures[present_index]->SetLayout({ETextureAspectFlags::COLOR, 0, 1, 0, 1, 0, 1}, TEXTURE_LAYOUT_TRANSFER_SRC, &barriers.back());
+            cmd_list->SetPipelineBarrier(transfer_barrier_info);
+        }
+
         barriers.emplace_back(RHITextureBarrierInfo::Create()
                                   .SetTexture(present_texture)
                                   .SetSrcTextureLayout(present_texture->GetLayout({ETextureAspectFlags::COLOR, 0, 1, 0, 1, 0, 1}))
@@ -289,7 +300,6 @@ namespace Moer {
         //     .SetSrcStage(PS_COLOR_ATTACHMENT_OUTPUT)
         //     .SetDstStage(PS_TRANSFER);
 
-        cmd_list->BeginRecording();
         cmd_list->SetPipelineBarrier(barrier_info);
         cmd_list->BlitTexture(blit_info,
                               swapchain_textures[present_index],

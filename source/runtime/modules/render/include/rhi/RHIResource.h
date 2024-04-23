@@ -26,9 +26,9 @@
 #include <variant>
 template<typename TStructuredParam>
 concept concept_is_shader_struct = requires(TStructuredParam t) {
-    std::is_same<typename TStructuredParam::TypeInfo::TParamPtr, TStructuredParam>();
-    t.GetStructMetadata();
-};
+                                       std::is_same<typename TStructuredParam::TypeInfo::TParamPtr, TStructuredParam>();
+                                       t.GetStructMetadata();
+                                   };
 #pragma region forward definitions
 class RHICommandListBase;
 class RHITexture;
@@ -130,6 +130,7 @@ using RHIRenderPrimitiveRef           = CountableRef<RHIRenderPrimitive>;
 #pragma endregion
 
 class Shader;
+class RHITextureBarrierInfo;
 
 #pragma region utils definition
 
@@ -478,9 +479,9 @@ struct RHIResourceParameterLayout {
 
 template<typename RootParameter>
 concept concept_is_root_parameter_struct = requires(RootParameter t) {
-    RootParameter::TypeInfo::GetStructMetadata();
-    t.GetMembers();
-};
+                                               RootParameter::TypeInfo::GetStructMetadata();
+                                               t.GetMembers();
+                                           };
 
 struct RHIShaderResourceParameter {
     RHIResourceRef resource;
@@ -901,9 +902,8 @@ public:
     EPixelFormat GetUAVFormat() const {
         return GetInfo().uav_format;
     }
-    void SetLayout(const RHISubresourceRange& _subresource_range, ETextureLayout _layout) {
-        subresource_layouts[_subresource_range] = _layout;
-    }
+    void SetLayout(const RHISubresourceRange& _subresource_range, ETextureLayout _layout, RHITextureBarrierInfo* barrier_info = nullptr);
+
     ETextureLayout GetLayout(const RHISubresourceRange& _subresource_range) const {
         auto it = subresource_layouts.find(_subresource_range);
         if (it != subresource_layouts.end()) {
@@ -3174,7 +3174,7 @@ public:
     virtual void ReleasePreloadedShader(int32_t ShaderIndex) {}
 
     virtual CountableRef<RHIShader> CreateShader(int32_t ShaderIndex) { return nullptr; }
-    virtual void                    Teardown() {};
+    virtual void                    Teardown(){};
 
 protected:
     EShaderPlatform platform;
