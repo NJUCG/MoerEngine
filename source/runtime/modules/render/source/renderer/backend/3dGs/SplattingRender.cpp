@@ -126,50 +126,12 @@ struct VertexAttributeBuffer {
     uint32_t        padding[1];
 };
 
-// struct Camera {
-//     Moer::Vector3f position;
-//     Moer::Quaternion rotation;
-//     float fov;
-//     float nearPlane;
-//     float farPlane;
-//
-//     void translate(Moer::Vector3f translation) {
-//         position += rotation * translation;
-//     }
-// };
-
 struct RadixSortPushConstants {
     uint32_t g_num_elements;            // == NUM_ELEMENTS
     uint32_t g_shift;                   // (*)
     uint32_t g_num_workgroups;          // == NUMBER_OF_WORKGROUPS as defined in the section above
     uint32_t g_num_blocks_per_workgroup;// == NUM_BLOCKS_PER_WORKGROUP
 };
-
-Moer::Array<uint8_t> read_binary_file(const std::string& filename, const uint32_t count) {
-    Moer::Array<uint8_t> data;
-
-    std::ifstream file;
-
-    file.open(filename, std::ios::in | std::ios::binary);
-
-    if (!file.is_open()) {
-        return {};
-        //throw std::runtime_error("Failed to open file: " + filename);
-    }
-
-    uint64_t read_count = count;
-    if (count == 0) {
-        file.seekg(0, std::ios::end);
-        read_count = static_cast<uint64_t>(file.tellg());
-        file.seekg(0, std::ios::beg);
-    }
-
-    data.resize(static_cast<size_t>(read_count));
-    file.read(reinterpret_cast<char*>(data.data()), read_count);
-    file.close();
-
-    return data;
-}
 
 void Moer::SplattingRender::Impl::Init(const BackendRendererInitInfo& _init_info) {
 

@@ -512,29 +512,18 @@ namespace Moer {
         RHICopyBufferInfo copy_info{};
         copy_info.regions.push_back({0, 0, sizeof(uint32_t) * 32});
 
-        RHIBarrierDependencyInfo counters_barrier{};
-        counters_barrier.buffer_barriers.resize(1);
-        auto& buffer_barrier_info = counters_barrier.buffer_barriers[0];
-        buffer_barrier_info
-            .SetBuffer(draw_count_buffer)
-            .SetDstAccessFlags(ERHIAccessFlags::TRANSFER_WRITE)
-            .SetSrcAccessFlags(ERHIAccessFlags::INDIRECT_COMMAND_READ)
-            .SetSrcStage(ERHIPipelineStageFlags::PS_DRAW_INDIRECT)
-            .SetDstStage(ERHIPipelineStageFlags::PS_TRANSFER);
-
-        auto&& reset_counter_buffer = [this, copy_info = std::move(copy_info), buffer_barrier(std::move(counters_barrier))]() {
+        auto&& reset_counter_buffer = [this, copy_info = std::move(copy_info)]() {
             auto& rg = render_context.GetRenderGraph();
             rg.AddComputePass(
                 "Reset Counter",
                 [&](RenderGraph::Builder& _builder) {
-                    // auto counter_buffer = rg.ImportBuffer("counter_buffer", draw_count_buffer);
-                    // auto src_buffer     = rg.ImportBuffer("zero_buffer", zero_buffer);
-                    // _builder.WriteBuffer(counter_buffer, EBufferUsageFlags::TRANSFER_DST);
-                    // _builder.ReadBuffer(src_buffer, EBufferUsageFlags::TRANSFER_SRC);
+                    auto counter_buffer = rg.ImportBuffer("count_buffer", draw_count_buffer);
+                    auto src_buffer     = rg.ImportBuffer("zero_buffer", zero_buffer);
+                    _builder.WriteBuffer(counter_buffer, EBufferLayout::TRANSFER_WRITE);
+                    _builder.ReadBuffer(src_buffer, EBufferLayout::TRANSFER_READ);
                 },
-                [&, info(std::move(copy_info)), barrier(std::move(buffer_barrier))](RenderPassContext& _context) {
+                [&, info(std::move(copy_info))](RenderPassContext& _context) {
                     auto* cmd_list = _context.cmd_list;
-                    cmd_list->SetPipelineBarrier(barrier);
                     cmd_list->CopyBuffer(info, zero_buffer, draw_count_buffer);
                 });
         };
@@ -685,22 +674,10 @@ namespace Moer {
             RHIGraphicsCommandList* cmd_list = _context.cmd_list;
 
             RHIBarrierDependencyInfo barrier_dependency_info{};
-            barrier_dependency_info.buffer_barriers.resize(2);
-            auto& buffer_barrier_info = barrier_dependency_info.buffer_barriers[0];
-            buffer_barrier_info
-                .SetBuffer(draw_count_buffer)
-                .SetDstAccessFlags(ERHIAccessFlags::SHADER_WRITE | ERHIAccessFlags::SHADER_READ)
-                .SetSrcAccessFlags(ERHIAccessFlags::TRANSFER_WRITE)
-                .SetSrcStage(ERHIPipelineStageFlags::PS_TRANSFER)
-                .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
-
-            auto& buffer_barrier_info_1 = barrier_dependency_info.buffer_barriers[1];
-            buffer_barrier_info_1
-                .SetBuffer(draw_indirect_buffer)
-                .SetDstAccessFlags(ERHIAccessFlags::SHADER_WRITE | ERHIAccessFlags::SHADER_READ)
-                .SetSrcAccessFlags(ERHIAccessFlags::INDIRECT_COMMAND_READ)
-                .SetSrcStage(ERHIPipelineStageFlags::PS_DRAW_INDIRECT)
-                .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
+            auto                     draw_count_buffer_rdg = _context.graph.GetBlackBoard().GetBuffer("count_buffer");
+            draw_count_buffer_rdg->ResloveResourceUsage(EBufferLayout::COMMON, barrier_dependency_info, _context.pass_type);
+            auto draw_indirect_buffer_rdg = _context.graph.GetBlackBoard().GetBuffer("draw_indirect");
+            draw_indirect_buffer_rdg->ResloveResourceUsage(EBufferLayout::COMMON, barrier_dependency_info, _context.pass_type);
 
             cmd_list->SetPipelineBarrier(barrier_dependency_info);
 
@@ -710,31 +687,12 @@ namespace Moer {
             cmd_list->Dispatch(dispatch_count, 1, 1);
             {
                 RHIBarrierDependencyInfo instance_cull_barrier{};
-                instance_cull_barrier.buffer_barriers.resize(3);
-                auto& buffer_barrier_info = instance_cull_barrier.buffer_barriers[0];
-                buffer_barrier_info
-                    .SetBuffer(instance_meshlet_cull_info_buffer)
-                    .SetDstAccessFlags(ERHIAccessFlags::SHADER_READ | ERHIAccessFlags::SHADER_WRITE)
-                    .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE | ERHIAccessFlags::SHADER_READ)
-                    .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
-                    .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
-
-                auto& buffer_barrier_info_1 = instance_cull_barrier.buffer_barriers[1];
-                buffer_barrier_info_1
-                    .SetBuffer(recheck_instance_id_buffer)
-                    .SetDstAccessFlags(ERHIAccessFlags::SHADER_READ)
-                    .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE)
-                    .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
-                    .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
-
-                auto& buffer_barrier_info_2 = instance_cull_barrier.buffer_barriers[2];
-                buffer_barrier_info_2
-                    .SetBuffer(draw_count_buffer)
-                    .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE | ERHIAccessFlags::SHADER_READ)
-                    .SetDstAccessFlags(ERHIAccessFlags::INDIRECT_COMMAND_READ)
-                    .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
-                    .SetDstStage(ERHIPipelineStageFlags::PS_DRAW_INDIRECT);
-
+                auto                     instance_meshlet_cull_info_buffer_rdg = _context.graph.GetBlackBoard().GetBuffer("instance_meshlet_cull_info");
+                instance_meshlet_cull_info_buffer_rdg->ResloveResourceUsage(EBufferLayout::COMMON, instance_cull_barrier, _context.pass_type);
+                auto recheck_instance_id_buffer_rdg = _context.graph.GetBlackBoard().GetBuffer("recheck_instance_id");
+                recheck_instance_id_buffer_rdg->ResloveResourceUsage(EBufferLayout::WRITE, instance_cull_barrier, _context.pass_type);
+                auto draw_count_buffer_rdg = _context.graph.GetBlackBoard().GetBuffer("count_buffer");
+                draw_count_buffer_rdg->ResloveResourceUsage(EBufferLayout::INDIRECT_COMMAND_READ, instance_cull_barrier, _context.pass_type);
                 cmd_list->SetPipelineBarrier(instance_cull_barrier);
             }
 
@@ -744,31 +702,12 @@ namespace Moer {
             cmd_list->DispatchIndirect(draw_count_buffer, meshlet_dispatch_offset);
             {
                 RHIBarrierDependencyInfo post_compute_barrier{};
-                post_compute_barrier.buffer_barriers.resize(3);
-                auto& buffer_barrier_info_0 = post_compute_barrier.buffer_barriers[0];
-                buffer_barrier_info_0
-                    .SetBuffer(draw_count_buffer)
-                    .SetDstAccessFlags(ERHIAccessFlags::INDIRECT_COMMAND_READ)
-                    .SetSrcAccessFlags(ERHIAccessFlags::SHADER_READ | ERHIAccessFlags::SHADER_WRITE)
-                    .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
-                    .SetDstStage(ERHIPipelineStageFlags::PS_DRAW_INDIRECT);
-
-                auto& buffer_barrier_info_1 = post_compute_barrier.buffer_barriers[1];
-                buffer_barrier_info_1
-                    .SetBuffer(draw_indirect_buffer)
-                    .SetDstAccessFlags(ERHIAccessFlags::INDIRECT_COMMAND_READ)
-                    .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE)
-                    .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
-                    .SetDstStage(ERHIPipelineStageFlags::PS_DRAW_INDIRECT);
-
-                auto& buffer_barrier_info_2 = post_compute_barrier.buffer_barriers[2];
-                buffer_barrier_info_2
-                    .SetBuffer(recheck_cull_info_buffer)
-                    .SetDstAccessFlags(ERHIAccessFlags::SHADER_WRITE)
-                    .SetSrcAccessFlags(ERHIAccessFlags::SHADER_READ)
-                    .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
-                    .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
-
+                auto                     draw_count_rdg_buffer = _context.graph.GetBlackBoard().GetBuffer("count_buffer");
+                draw_count_rdg_buffer->ResloveResourceUsage(EBufferLayout::INDIRECT_COMMAND_READ, post_compute_barrier, _context.pass_type);
+                auto draw_indirect_rdg_buffer = _context.graph.GetBlackBoard().GetBuffer("draw_indirect");
+                draw_indirect_rdg_buffer->ResloveResourceUsage(EBufferLayout::INDIRECT_COMMAND_READ, post_compute_barrier, _context.pass_type);
+                auto recheck_cull_info_rdg_buffer = _context.graph.GetBlackBoard().GetBuffer("recheck_cull_info");
+                recheck_cull_info_rdg_buffer->ResloveResourceUsage(EBufferLayout::READ, post_compute_barrier, _context.pass_type);
                 cmd_list->SetPipelineBarrier(post_compute_barrier);
             }
         };
@@ -777,12 +716,17 @@ namespace Moer {
             render_context.GetRenderGraph().AddComputePass(
                 "Prepass Cull Instance",
                 [&](RenderGraph::Builder& _builder) {
-                    // auto& rg  = GetCurrentRenderGraph();
-                    // auto  hiz = rg.GetBlackBoard().GetHandle("hiz_buffer");
-                    // if (!hiz.IsInitialized()) {
-                    //     hiz = rg.ImportTexture("hiz_buffer", hiz_buffer.texture);
-                    // }
-                    // _builder.ReadTexture(hiz, ETextureUsageFlags::SAMPLED);
+                    auto counter_buffer      = render_context.GetRenderGraph().GetBlackBoard().GetHandle("count_buffer");
+                    auto draw_indirect       = render_context.GetRenderGraph().ImportBuffer("draw_indirect", draw_indirect_buffer);
+                    auto recheck_instance_id = render_context.GetRenderGraph().ImportBuffer("recheck_instance_id", recheck_instance_id_buffer);
+                    auto instance_meshlet_cull_info =
+                        render_context.GetRenderGraph().ImportBuffer("instance_meshlet_cull_info", instance_meshlet_cull_info_buffer);
+                    auto recheck_cull_info = render_context.GetRenderGraph().ImportBuffer("recheck_cull_info", recheck_cull_info_buffer);
+
+                    auto zero_buffer_rdg = render_context.GetRenderGraph().GetBlackBoard().GetHandle("zero_buffer");
+                    //Avoid cutting these buffers. The logic for reading and writing these buffers in different passes is not set correctly. Currently, it can only be handled in this way.
+                    render_context.GetRenderGraph().SetGraphOutput(counter_buffer).SetGraphOutput(draw_indirect).SetGraphOutput(recheck_cull_info).SetGraphOutput(recheck_instance_id).SetGraphOutput(instance_meshlet_cull_info).SetGraphOutput(zero_buffer_rdg);
+                    _builder.ReadBuffer(draw_indirect, EBufferLayout::COMMON).ReadBuffer(counter_buffer, EBufferLayout::COMMON).ReadBuffer(recheck_cull_info, READ);
                 },
                 std::move(prepass_cull));
         });
@@ -839,34 +783,6 @@ namespace Moer {
                                           RenderPassContext& _context) mutable {
             auto& cmd_list = render_context.GetCommandList();
 
-            RHIBarrierDependencyInfo barrier_dependency_info{};
-            barrier_dependency_info.buffer_barriers.resize(3);
-            auto& buffer_barrier_info = barrier_dependency_info.buffer_barriers[0];
-            buffer_barrier_info
-                .SetBuffer(draw_count_buffer)
-                .SetDstAccessFlags(ERHIAccessFlags::INDIRECT_COMMAND_READ)
-                .SetSrcAccessFlags(ERHIAccessFlags::INDIRECT_COMMAND_READ)
-                .SetSrcStage(ERHIPipelineStageFlags::PS_DRAW_INDIRECT)
-                .SetDstStage(ERHIPipelineStageFlags::PS_DRAW_INDIRECT);
-
-            auto& buffer_barrier_info_1 = barrier_dependency_info.buffer_barriers[1];
-            buffer_barrier_info_1
-                .SetBuffer(draw_indirect_buffer)
-                .SetDstAccessFlags(ERHIAccessFlags::SHADER_WRITE)
-                .SetSrcAccessFlags(ERHIAccessFlags::INDIRECT_COMMAND_READ)
-                .SetSrcStage(ERHIPipelineStageFlags::PS_DRAW_INDIRECT)
-                .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
-
-            auto& buffer_barrier_info_2 = barrier_dependency_info.buffer_barriers[2];
-            buffer_barrier_info_2
-                .SetBuffer(recheck_instance_id_buffer)
-                .SetDstAccessFlags(ERHIAccessFlags::SHADER_READ)
-                .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE)
-                .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
-                .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
-
-            cmd_list.SetPipelineBarrier(barrier_dependency_info);
-
             cmd_list.SetPipelineState(cull_instance_recheck_pso);
             g_rhi->RHISetBatchedShaderParameters(cull_instance_recheck_pso, instance_params);
             auto dispatch_count = (instance_count + thread_group_count - 1) / thread_group_count;
@@ -874,32 +790,12 @@ namespace Moer {
             cmd_list.DispatchIndirect(draw_count_buffer, instance_dispatch_indirect_offset);
             {
                 RHIBarrierDependencyInfo meshlet_cull_barrier{};
-                meshlet_cull_barrier.buffer_barriers.resize(3);
-                auto& buffer_barrier_info = meshlet_cull_barrier.buffer_barriers[0];
-                buffer_barrier_info
-                    .SetBuffer(instance_meshlet_cull_info_buffer)
-                    .SetDstAccessFlags(ERHIAccessFlags::SHADER_READ | ERHIAccessFlags::SHADER_WRITE)
-                    .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE | ERHIAccessFlags::SHADER_READ)
-                    .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
-
-                    .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
-
-                auto& buffer_barrier_info_1 = meshlet_cull_barrier.buffer_barriers[1];
-                buffer_barrier_info_1
-                    .SetBuffer(recheck_cull_info_buffer)
-                    .SetDstAccessFlags(ERHIAccessFlags::SHADER_READ)
-                    .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE)
-                    .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
-                    .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
-
-                auto& buffer_barrier_info_2 = meshlet_cull_barrier.buffer_barriers[2];
-                buffer_barrier_info_2
-                    .SetBuffer(draw_count_buffer)
-                    .SetDstAccessFlags(ERHIAccessFlags::INDIRECT_COMMAND_READ)
-                    .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE | ERHIAccessFlags::SHADER_READ)
-                    .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
-                    .SetDstStage(ERHIPipelineStageFlags::PS_DRAW_INDIRECT);
-
+                auto                     instance_meshlet_cull_info_buffer_rdg = _context.graph.GetBlackBoard().GetBuffer("instance_meshlet_cull_info");
+                instance_meshlet_cull_info_buffer_rdg->ResloveResourceUsage(EBufferLayout::COMMON, meshlet_cull_barrier, _context.pass_type);
+                auto recheck_cull_info_rdg_buffer = _context.graph.GetBlackBoard().GetBuffer("recheck_cull_info");
+                recheck_cull_info_rdg_buffer->ResloveResourceUsage(EBufferLayout::READ, meshlet_cull_barrier, _context.pass_type);
+                auto draw_count_buffer_rdg = _context.graph.GetBlackBoard().GetBuffer("count_buffer");
+                draw_count_buffer_rdg->ResloveResourceUsage(EBufferLayout::INDIRECT_COMMAND_READ, meshlet_cull_barrier, _context.pass_type);
                 cmd_list.SetPipelineBarrier(meshlet_cull_barrier);
             }
 
@@ -910,23 +806,10 @@ namespace Moer {
             cmd_list.DispatchIndirect(draw_count_buffer, recheck_meshlet_dispatch_offset);
             {
                 RHIBarrierDependencyInfo post_compute_barrier{};
-                post_compute_barrier.buffer_barriers.resize(2);
-                auto& buffer_barrier_info_0 = post_compute_barrier.buffer_barriers[0];
-                buffer_barrier_info_0
-                    .SetBuffer(draw_count_buffer)
-                    .SetDstAccessFlags(ERHIAccessFlags::INDIRECT_COMMAND_READ)
-                    .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE)
-                    .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
-                    .SetDstStage(ERHIPipelineStageFlags::PS_DRAW_INDIRECT);
-
-                auto& buffer_barrier_info_1 = post_compute_barrier.buffer_barriers[1];
-                buffer_barrier_info_1
-                    .SetBuffer(draw_indirect_buffer)
-                    .SetDstAccessFlags(ERHIAccessFlags::INDIRECT_COMMAND_READ)
-                    .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE)
-                    .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
-                    .SetDstStage(ERHIPipelineStageFlags::PS_DRAW_INDIRECT);
-
+                auto                     draw_count_rdg_buffer = _context.graph.GetBlackBoard().GetBuffer("count_buffer");
+                draw_count_rdg_buffer->ResloveResourceUsage(EBufferLayout::INDIRECT_COMMAND_READ, post_compute_barrier, _context.pass_type);
+                auto draw_indirect_rdg_buffer = _context.graph.GetBlackBoard().GetBuffer("draw_indirect");
+                draw_indirect_rdg_buffer->ResloveResourceUsage(EBufferLayout::INDIRECT_COMMAND_READ, post_compute_barrier, _context.pass_type);
                 cmd_list.SetPipelineBarrier(post_compute_barrier);
             }
         };
@@ -935,6 +818,12 @@ namespace Moer {
             render_context.GetRenderGraph().AddComputePass(
                 "Recheck Cull Instance",
                 [&](RenderGraph::Builder& _builder) {
+                    auto draw_count_rdg_buffer = render_context.GetRenderGraph().GetBlackBoard().GetHandle("count_buffer");
+                    _builder.WriteBuffer(draw_count_rdg_buffer, COMMON);
+                    auto draw_indirect_rdg_buffer = render_context.GetRenderGraph().GetBlackBoard().GetHandle("draw_indirect");
+                    _builder.WriteBuffer(draw_indirect_rdg_buffer, COMMON);
+                    auto recheck_instance_id_rdg_buffer = render_context.GetRenderGraph().GetBlackBoard().GetHandle("recheck_instance_id");
+                    _builder.ReadBuffer(recheck_instance_id_rdg_buffer, READ);
                 },
                 std::move(recheck_pass));
         });

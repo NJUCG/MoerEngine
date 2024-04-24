@@ -108,7 +108,7 @@ namespace Moer {
         bool                IsReadResource(RenderGraphHandle handle, PassNode* node) const;
         RenderGraphTexture* GetTexture(RenderGraphHandle handle) const;
         RenderGraphBuffer*  GetBuffer(RenderGraphHandle handle) const;
-        void                SetGraphOutput(RenderGraphHandle handle);
+        RenderGraph&        SetGraphOutput(RenderGraphHandle handle);
         Extent3D            GetRenderExtent() const;
         ~RenderGraph();
 

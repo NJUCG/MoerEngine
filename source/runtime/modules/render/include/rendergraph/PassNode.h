@@ -26,6 +26,7 @@ namespace Moer {
         Moer::Array<RenderGraphResource*>& GetResourcesToCreate();
         Moer::Array<RenderGraphResource*>& GetResourcesToDestroy();
         PassNode(const std::string& name) : Node(name) {}
+        EPassType GetPassType() const { return m_pass_type; }
 
     protected:
         Moer::Map<RenderGraphResource*, uint32_t> m_resource_usage;
