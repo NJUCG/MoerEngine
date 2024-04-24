@@ -103,6 +103,9 @@ namespace Moer {
     uint32_t RenderContext::GetFrameOffset() const {
         return impl->GetFrameOffset();
     }
+    uint32_t RenderContext::GetMaxFrameInFlight() const {
+        return impl->cmd_lists.size();
+    }
 
     RenderGraph& RenderContext::GetRenderGraph() {
         return impl->GetRenderGraph();

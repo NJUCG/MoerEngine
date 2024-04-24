@@ -151,10 +151,6 @@ namespace Moer {
         RHIShaderRef cull_instance_prepass_shader;
         RHIShaderRef cull_meshlet_prepass_shader;
 
-        Moer::Array<RHITextureRef> depth_buffer;
-        Moer::Array<RHIUAVRef>     depth_buffer_uav;
-        Moer::Array<RHISRVRef>     depth_buffer_srv;
-
         HiZBuffer hiz_buffer;
 
         RHIBufferRef draw_indirect_buffer;
@@ -231,62 +227,14 @@ namespace Moer {
     }
 
     void DeferredRenderer::Impl::CreateDepthBuffer() {
-        //depth buffer
-        auto back_buffer_cnt   = virtual_viewport->GetInfo().back_buffer_count;
-        auto depth_create_info = RHITextureCreateInfo::Create("deferred_depth", ETextureDimension::TEX_2D)
-                                     .SetExtent(source_resolution)
-                                     .SetDepth(1)
-                                     .SetFormat(EPixelFormat::PF_D32_SFLOAT_S8_UINT)
-                                     .SetClearAttachment(RHIClearAttachment(EClearAttachment::DEPTH_STENCIL))
-                                     .SetUsageFlags(ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT | ETextureUsageFlags::SAMPLED);
-        depth_buffer.resize(back_buffer_cnt);
-        depth_buffer_srv.resize(back_buffer_cnt);
-        depth_buffer_uav.resize(back_buffer_cnt);
-        for (uint32_t i = 0; i < back_buffer_cnt; ++i) {
-
-            depth_buffer[i]     = g_rhi->RHICreateTexture(depth_create_info);
-            depth_buffer_uav[i] = g_rhi->RHICreateTextureUAV(depth_buffer[i]);
-            depth_buffer_srv[i] = g_rhi->RHICreateTextureSRV(depth_buffer[i]);
-        }
-
-        hiz_buffer.InitFromDepthExtent(depth_buffer[0]->GetExtent2D());
-
-        RHIBarrierDependencyInfo barrier_info{};
-        barrier_info.texture_barriers.resize(back_buffer_cnt);
-
-        RHISubresourceRange range(ETextureAspectFlags::DEPTH_SLICE | ETextureAspectFlags::STENCIL_SLICE);
-
-        for (uint32_t i = 0; i < back_buffer_cnt; ++i) {
-            auto& barrier = barrier_info.texture_barriers[i];
-            barrier
-                .SetTexture(depth_buffer[i])
-                .SetDstTextureLayout(ETextureLayout::TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE)
-                .SetSrcTextureLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED)
-                .SetSubResourceRange(range)
-                .SetDstStage(PS_EARLY_FRAGMENT_TESTS)
-                .SetSrcAccessFlags(ERHIAccessFlags::UNDEFINED)
-                .SetDstAccessFlags(ERHIAccessFlags::DEPTH_STENCIL_WRITE);
-        }
-        auto& cmd_list = render_context.GetCommandList();
-        cmd_list.BeginRecording();
-        cmd_list.SetPipelineBarrier(barrier_info);
-        cmd_list.EndRecording();
-        RHISubmitInfo submit_info{};
-        RHIFenceRef   fence = g_rhi->RHICreateFence({.usage = EFenceUsageFlags::TIMELINE});
-        submit_info.Signal(fence, 1);
-        render_context.GetCommandQueue()->SubmitCommands(1, &cmd_list, &submit_info);
-        fence->Wait(1);
     }
 
     void DeferredRenderer::Impl::OnResizeVSwapChain() {
         EnqueueRenderTask([res(this->source_resolution),
                            view_port(this->virtual_viewport),
-                           &depth_buffers(this->depth_buffer),
-                           &depth_buffer_views(this->depth_buffer_uav),
                            this]() {
             view_port->OnResize(Extent2D(res.x, res.y));
-
-            CreateDepthBuffer();
+            hiz_buffer.InitFromDepthExtent(virtual_viewport->GetDepthSRV()->GetTexture()->GetExtent2D());
         });
     }
 
@@ -612,7 +560,8 @@ namespace Moer {
                     },
                     [&](RenderPassContext& _context) {
                         auto frame_offset = render_context.GetFrameOffset();
-                        HiZBuilder::GetInstance().DispatchBuildHiZ(&render_context.GetCommandList(), depth_buffer_srv[frame_offset], hiz_buffer);
+                        auto depth_buffer = virtual_viewport->GetDepthSRV();
+                        HiZBuilder::GetInstance().DispatchBuildHiZ(&render_context.GetCommandList(), depth_buffer, hiz_buffer);
                     });
             });
         RecheckPass();
@@ -629,7 +578,8 @@ namespace Moer {
                         // _builder.WriteTexture(hiz_buffer, ETextureUsageFlags::UNORDERED_ACCESS);
                     },
                     [&](RenderPassContext& _context) {
-                        HiZBuilder::GetInstance().DispatchBuildHiZ(&render_context.GetCommandList(), depth_buffer_srv[render_context.GetFrameOffset()], hiz_buffer);
+                        auto depth_buffer = virtual_viewport->GetDepthSRV();
+                        HiZBuilder::GetInstance().DispatchBuildHiZ(&render_context.GetCommandList(), depth_buffer, hiz_buffer);
                     });
             });
         LightingPass();
@@ -1003,7 +953,7 @@ namespace Moer {
                     auto normal = rg.CreateTexture("normal", {.extent2D = Extent2D(extent.x, extent.y), .format = EPixelFormat::PF_R8G8B8A8_UNORM, .usage = ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED});
                     auto mat    = rg.CreateTexture("mat", {.extent2D = Extent2D(extent.x, extent.y), .format = EPixelFormat::PF_R32_UINT, .usage = ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED});
                     auto uv     = rg.CreateTexture("uv", {.extent2D = Extent2D(extent.x, extent.y), .format = EPixelFormat::PF_R16G16_SFLOAT, .usage = ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED});
-                    auto depth  = rg.ImportTexture("depth", depth_buffer[render_context.GetFrameOffset()]);
+                    auto depth  = rg.ImportTexture("depth", virtual_viewport->GetDepthSRV()->GetTexture());
                     if (!b_first_pass) {
                         _builder.ReadTextures({normal, uv, mat}, RenderGraphTexture::Usage::COLOR_ATTACHMENT);
                         _builder.ReadTexture(depth, RenderGraphTexture::Usage::DEPTH_STENCIL_ATTACHMENT);

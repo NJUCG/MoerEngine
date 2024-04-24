@@ -26,6 +26,7 @@ namespace Moer {
         VirtualViewportBackBufferInfo GetBackBufferInfo() const;
         Extent3D                      GetBackBufferExtent();
         RHIUAVRef                     GetDepthBufferUav();
+        RHISRVRef                     GetDepthBufferSRV();
         RHITextureRef                 GetDepthTexture();
 
         void Present(RHIFenceRef _render_fence);
@@ -62,6 +63,7 @@ namespace Moer {
 
         RHITextureRef depth_texture;
         RHIUAVRef     depth_texture_uav;
+        RHISRVRef     depth_texture_srv;
 
         RHICommandQueue* copy_queue;
 
@@ -79,10 +81,6 @@ namespace Moer {
         MoerDelete(impl);
     }
 
-    void VirtualViewport::InitRenderThread() {
-        impl->InitRenderThread();
-    }
-
     void VirtualViewport::OnResize(Moer::Vector2i extent) {
         // Implementation of OnResize method
         // ...
@@ -91,13 +89,6 @@ namespace Moer {
 
     void VirtualViewport::Present(RHIFenceRef _render_fence) {
         impl->Present(_render_fence);
-    }
-
-    void VirtualViewport::ResizeRenderThread(Moer::Vector2i extent) {
-        // Implementation of ResizeRenderThread method
-        // ...
-        assert(Moer::IsCurrentlyRenderThread());
-        impl->ResizeRenderThread(extent);
     }
 
     const VirtualViewportInfo& VirtualViewport::GetInfo() const {
@@ -114,6 +105,14 @@ namespace Moer {
 
     RHISRV* VirtualViewport::GetPresentTextureSRV() {
         return impl->GetPresentTextureSRV();
+    }
+
+    RHISRVRef VirtualViewport::GetDepthSRV() {
+        return impl->GetDepthBufferSRV();
+    }
+
+    RHIUAVRef VirtualViewport::GetDepthUAV() {
+        return impl->GetDepthBufferUav();
     }
 
     VirtualViewport::Impl::~Impl() {
@@ -179,7 +178,7 @@ namespace Moer {
 
         depth_texture     = g_rhi->RHICreateTexture(depth_texture_create_info);
         depth_texture_uav = g_rhi->RHICreateTextureUAV(depth_texture, depth_texture_create_info.format);
-
+        depth_texture_srv = g_rhi->RHICreateTextureSRV(depth_texture, depth_texture_create_info.format);
         RHIFenceRef fence = g_rhi->RHICreateFence({.usage = EFenceUsageFlags::BINARY});
 
         RHIBarrierDependencyInfo barrier_info;
@@ -351,14 +350,18 @@ namespace Moer {
     RHIUAVRef VirtualViewport::Impl::GetDepthBufferUav() {
         // Implementation of GetDepthBufferUAV method
         // ...
-        assert(Moer::IsCurrentlyRenderThread());
         return depth_texture_uav;
+    }
+
+    RHISRVRef VirtualViewport::Impl::GetDepthBufferSRV() {
+        // Implementation of GetDepthBufferSRV method
+        // ...
+        return depth_texture_srv;
     }
 
     RHITextureRef VirtualViewport::Impl::GetDepthTexture() {
         // Implementation of getDepthTexture method
         // ...
-        assert(Moer::IsCurrentlyRenderThread());
 
         return depth_texture;
     }

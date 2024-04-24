@@ -41,6 +41,7 @@ namespace Moer {
         void BeginFrame();
 
         uint32_t                GetFrameOffset() const;
+        uint32_t                GetMaxFrameInFlight() const;
         RenderGraph&            GetRenderGraph();
         RHIGraphicsCommandList& GetCommandList();
         RHICommandQueue*        GetCommandQueue();

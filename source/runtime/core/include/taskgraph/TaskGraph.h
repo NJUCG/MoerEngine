@@ -30,6 +30,7 @@ public:
     CORE_API virtual void  ProcessThreadUntilIdle(EThread::Type index);
     CORE_API virtual void  ProcessThreadUntilReturn(EThread::Type index);
     CORE_API bool          IsThreadProcessingTask(EThread::Type index);
+    inline uint32_t        GetWorkerThreadCount() const { return m_worker_thread_count; }
 
 protected:
     EThread::Type GetCurrentThread(bool localQueue = false);

@@ -2,11 +2,14 @@
 #define GRAPH_TASK_H
 #include "API_Macro.h"
 #include "ThreadManager.h"
+#include <atomic>
 #include <functional>
+#include <type_traits>
 #include <utility>
 #include <memory>
 #include "misc/CountableRef.h"
 #include "TaskGraph.h"
+#include "misc/MMemory.h"
 #include "misc/MacroUtils.h"
 class BaseGraphTask {
 public:
@@ -393,4 +396,198 @@ public:
         return TGraphTask::Create(std::forward<std::function<void()>>(_func), _thread);
     }
 };
+
+template<typename ReturnType, typename... Args>
+struct SharedFunctor {
+    struct SharedFunctorStruct {
+        void (*destroy_func)(void*) = nullptr;
+        uint32_t             size   = 0;
+        std::atomic_uint32_t ref_count{1};
+    };
+    SharedFunctorStruct* m_functor = nullptr;
+    ReturnType (*m_func)(void*, Args...);
+    void Destroy() {
+        if (!m_functor) {
+            return;
+        }
+        if (m_functor->ref_count.fetch_sub(1) == 1) {
+            if (m_functor->destroy_func) {
+                m_functor->destroy_func(m_functor);
+            }
+            Memory::Free(m_functor, m_functor->size);
+        }
+
+        m_functor = nullptr;
+    }
+    ReturnType operator()(Args... _args) const noexcept {
+        assert(m_functor != nullptr);
+        if constexpr (std::is_same_v<ReturnType, void>) {
+            m_func(m_functor, _args...);
+            return;
+        }
+        return m_func(m_functor, _args...);
+    }
+
+    template<typename T>
+        requires((!std::is_same_v<std::remove_cvref_t<T>, SharedFunctor>) && (std::is_invocable_r_v<ReturnType, T, Args && ...>))
+    SharedFunctor(T&& _func) {
+        struct ConcreteFunctor : SharedFunctorStruct {
+            Container<sizeof(T)> storage;
+        };
+        using Func            = std::remove_cvref_t<T>;
+        auto concrete_functor = MoerPlacementNew(Memory::Malloc(sizeof(ConcreteFunctor))) ConcreteFunctor();
+        m_functor             = concrete_functor;
+        m_functor->size       = sizeof(ConcreteFunctor);
+        MoerPlacementNew(&concrete_functor->storage) Func(std::forward<T>(_func));
+
+        if constexpr (std::is_trivially_destructible_v<Func>) {
+            m_functor->destroy_func = nullptr;
+        } else {
+            m_functor->destroy_func = [](void* _ptr) -> void {
+                return ((Func*)&((ConcreteFunctor*)_ptr)->storage)->~Func();
+            };
+        }
+        m_func = [](void* _ptr, Args... _args) -> ReturnType {
+            auto&& func = reinterpret_cast<Func&>(((ConcreteFunctor*)_ptr)->storage);
+            if constexpr (std::is_same_v<ReturnType, void>) {
+                func(std::forward<Args>(_args)...);
+                return;
+            } else {
+                return func(std::forward<Args>(_args)...);
+            }
+        };
+    }
+    SharedFunctor() noexcept : m_functor{nullptr} {}
+    ~SharedFunctor() noexcept {
+        Destroy();
+    }
+
+    template<typename Functor>
+        requires std::is_invocable_r_v<ReturnType, Functor, Args&&...>
+    SharedFunctor& operator=(Functor&& _f) noexcept {
+        Destroy();
+        MoerPlacementNew(std::launder(this)) SharedFunctor(std::forward<Functor>(_f));
+        return *this;
+    }
+
+    template<typename Ret, typename... FuncArgs>
+        requires std::is_invocable_r_v<ReturnType, Ret (*)(FuncArgs...), Args&&...>
+    SharedFunctor(Ret (*_other_ptr)(FuncArgs...)) noexcept {
+        using OtherFuncType = decltype(_other_ptr);
+        struct ConcreteFunctor : SharedFunctorStruct {
+            OtherFuncType other_ptr;
+        };
+        auto concrete_functor       = MoerPlacementNew(Memory::Malloc(sizeof(ConcreteFunctor))) ConcreteFunctor();
+        m_functor                   = concrete_functor;
+        m_functor->size             = sizeof(ConcreteFunctor);
+        concrete_functor->other_ptr = _other_ptr;
+        m_functor->destroy_func     = nullptr;
+
+        m_func = [](void* _ptr, Args... _args) -> ReturnType {
+            auto func = (&((ConcreteFunctor*)_ptr)->other_ptr);
+            if constexpr (std::is_same_v<ReturnType, void>) {
+                func(std::forward<Args>(_args)...);
+                return;
+            } else {
+                return func(std::forward<Args>(_args)...);
+            }
+        };
+    }
+
+    template<typename Ret, typename... FuncArgs>
+        requires std::is_invocable_r_v<ReturnType, Ret (*)(FuncArgs...), Args&&...>
+    SharedFunctor& operator=(Ret (*_other_ptr)(FuncArgs...)) noexcept {
+        Destroy();
+        MoerPlacementNew(std::launder(this)) SharedFunctor(_other_ptr);
+        return *this;
+    }
+
+    SharedFunctor(const SharedFunctor& _other) noexcept {
+        if (!_other.m_functor) {
+            m_functor = nullptr;
+            return;
+        }
+        m_functor = _other.m_functor;
+        m_func    = _other.m_func;
+        m_functor->ref_count.fetch_add(1);
+    }
+
+    SharedFunctor(SharedFunctor&& _other) noexcept {
+        m_functor        = _other.m_functor;
+        m_func           = _other.m_func;
+        _other.m_functor = nullptr;
+    }
+
+    SharedFunctor& operator=(const SharedFunctor& _other) noexcept {
+        if (this == &_other) {
+            return *this;
+        }
+        Destroy();
+        MoerPlacementNew(std::launder(this)) SharedFunctor(_other);
+        return *this;
+    }
+};
+
+template<typename FunctionType>
+    requires std::is_invocable_v<FunctionType, uint32_t>
+inline static void ParallelFor(uint32_t _size, FunctionType&& _func) {
+    uint32_t worker_cnt = TaskGraph::GetInterface().GetWorkerThreadCount();
+    if (worker_cnt == 0) {
+        worker_cnt = 1;
+    }
+    uint32_t chunk_size = (_size + worker_cnt - 1) / worker_cnt;
+    if (chunk_size == 0) {
+        chunk_size = 1;
+    }
+    uint32_t        chunk_count = (_size + chunk_size - 1) / chunk_size;
+    GraphEventArray events;
+    events.reserve(chunk_count);
+
+    SharedFunctor<void, int> func([lambda = std::forward<FunctionType>(_func)](int _i) mutable {
+        lambda(_i);
+    });
+
+    for (uint32_t i = 0; i < chunk_count; i++) {
+        uint32_t start = i * chunk_size;
+        uint32_t end   = std::min(start + chunk_size, _size);
+        events.push_back(LambdaTask::Dispatch([=](EThread::Type, const GraphEventRef&) {
+            for (uint32_t j = start; j < end; j++) {
+                func(j);
+            }
+        }));
+    }
+    TaskGraph::GetInterface().WaitUntilTasksComplete(events, EThread::UNKNOWN_THREAD);
+}
+
+template<typename FunctionType>
+    requires std::is_invocable_v<FunctionType, uint32_t>
+GraphEventRef ParallelForAsync(uint32_t _size, FunctionType&& _func) {
+    uint32_t worker_cnt = TaskGraph::GetInterface().GetWorkerThreadCount();
+    if (worker_cnt == 0) {
+        worker_cnt = 1;
+    }
+    uint32_t chunk_size = (_size + worker_cnt - 1) / worker_cnt;
+    if (chunk_size == 0) {
+        chunk_size = 1;
+    }
+    uint32_t        chunk_count = (_size + chunk_size - 1) / chunk_size;
+    GraphEventArray events;
+    events.reserve(chunk_count);
+
+    SharedFunctor<void, int> func([lambda = std::forward<FunctionType>(_func)](int _i) mutable {
+        lambda(_i);
+    });
+
+    for (uint32_t i = 0; i < chunk_count; i++) {
+        uint32_t start = i * chunk_size;
+        uint32_t end   = std::min(start + chunk_size, _size);
+        events.push_back(LambdaTask::Dispatch([=](EThread::Type, const GraphEventRef&) mutable {
+            for (uint32_t j = start; j < end; j++) {
+                func(j);
+            }
+        }));
+    }
+
+    return GraphTask<EmptyGraphTask>::Create(EThread::AnyThread_HighPri).Wait(std::move(events)).Dispatch();
+}
 #endif// !GRAPH_TASK_H

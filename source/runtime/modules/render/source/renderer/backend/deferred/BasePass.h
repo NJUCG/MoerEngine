@@ -9,9 +9,10 @@ namespace Moer {
         BasePass();
         ~BasePass();
         struct Impl;
-        void InitResources(RenderContext& resources);
+        void InitResources(RenderContext& _resources);
+        void UpdateSceneData(RenderContext& _resources);
         void Draw(RenderContext& _input);
-        void OnResizeViewport(Moer::Vector2i extent);
+        void OnResizeViewport(Moer::Vector2i _extent);
 
     private:
         UniquePtr<Impl> impl;

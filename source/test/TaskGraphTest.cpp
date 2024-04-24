@@ -1,8 +1,12 @@
+#include "taskgraph/TaskGraph.h"
 #include "Core.h"
 #include "misc/LockFree.h"
 #include "misc/MMemory.h"
 #include "misc/STL.h"
+#include "taskgraph/GraphTask.h"
+#include "taskgraph/TaskSystem.h"
 #include <atomic>
+#include <cassert>
 #include <chrono>
 #include <thread>
 
@@ -169,6 +173,17 @@ int main() {
     Moer::TaskSystem::Init();
 
     Moer::TaskGraphTest();
+    std::atomic<int> k = 0;
+    ParallelFor(10, [&](int _idx) {
+        k += 60;
+    });
+    assert(k == 600);
+
+    auto finished = ParallelForAsync(10, [&](int _idx) {
+        k += 60;
+    });
+    TaskGraph::GetInterface().WaitUntilTaskComplete(finished, EThread::EMainThread);
+    assert(k == 1200);
 
     return 0;
 }
