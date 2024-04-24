@@ -137,7 +137,7 @@ namespace Moer {
                 resource->Create();
             }
             pass->ResloveResourceUsage(cmd_list);
-            RenderPassContext pass_context{.graph = *this, .cmd_list = cmd_list, .render_extent = config.render_extent};
+            RenderPassContext pass_context{.graph = *this, .cmd_list = cmd_list, .render_extent = config.render_extent, .pass_type = pass->GetPassType()};
             pass->Execute(pass_context);
             for (auto& resource : pass->GetResourcesToDestroy()) {
                 resource->Destroy();
@@ -217,8 +217,9 @@ namespace Moer {
     RenderGraphBuffer* RenderGraph::GetBuffer(RenderGraphHandle handle) const {
         return dynamic_cast<RenderGraphBuffer*>(GetResource(handle));
     }
-    void RenderGraph::SetGraphOutput(RenderGraphHandle handle) {
+    RenderGraph& RenderGraph::SetGraphOutput(RenderGraphHandle handle) {
         GetResource(handle)->AddRef();
+        return *this;
     }
     RenderGraph::~RenderGraph() {
         for (auto& resource : m_resources) {

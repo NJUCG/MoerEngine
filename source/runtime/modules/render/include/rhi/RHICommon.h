@@ -613,7 +613,10 @@ enum EBufferLayout : uint32_t {
     READ,
     WRITE,
     COMMON,
-    INDIRECT_COMMAND_READ
+    INDIRECT_COMMAND_READ,
+    INDIRECT_COMMAND_WRITE,
+    TRANSFER_READ,
+    TRANSFER_WRITE,
 };
 
 enum class EPassType {
