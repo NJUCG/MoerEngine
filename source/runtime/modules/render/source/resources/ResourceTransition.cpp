@@ -91,16 +91,36 @@ namespace Moer {
 
         return std::make_tuple(src_access_flags, dst_access_flags, src_stage, dst_stage);
     }
+
+    ERHIPipelineStageFlags GetPipelineStageFromPassType(EPassType pass_type) {
+        switch (pass_type) {
+            case EPassType::Compute:
+                return PS_COMPUTE_SHADER;
+            case EPassType::Graphics:
+                return PS_FRAGMENT_SHADER;
+            case EPassType::Raytracing:
+                return PS_RAY_TRACING_SHADER;
+            default:
+                return PS_TOP_OF_PIPE;
+        }
+    }
+
     std::tuple<ERHIAccessFlags, ERHIPipelineStageFlags>
     ResourceTransition::GetBufferTransitation(EBufferLayout layout, EPassType pass_type) {
+        if (layout == EBufferLayout::UNDEFINED_LAYOUT) {
+            return {ERHIAccessFlags::UNDEFINED, ERHIPipelineStageFlags::PS_TOP_OF_PIPE};
+        }
         if (layout == EBufferLayout::INDIRECT_COMMAND_READ) {
             return {ERHIAccessFlags::INDIRECT_COMMAND_READ, ERHIPipelineStageFlags::PS_DRAW_INDIRECT};
         }
+        if (layout == EBufferLayout::COMMON) {
+            return {ERHIAccessFlags::SHADER_READ | ERHIAccessFlags::SHADER_WRITE, GetPipelineStageFromPassType(pass_type)};
+        }
         if (EnumHasAnyFlag(layout, EBufferLayout::WRITE)) {
-            return {ERHIAccessFlags::SHADER_WRITE, ERHIPipelineStageFlags::PS_COMPUTE_SHADER};
+            return {ERHIAccessFlags::SHADER_WRITE, GetPipelineStageFromPassType(pass_type)};
         }
         if (EnumHasAnyFlag(layout, EBufferLayout::READ)) {
-            return {ERHIAccessFlags::SHADER_READ, ERHIPipelineStageFlags::PS_COMPUTE_SHADER};
+            return {ERHIAccessFlags::SHADER_READ, GetPipelineStageFromPassType(pass_type)};
         }
         return {};
     }
