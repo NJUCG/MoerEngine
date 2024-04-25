@@ -131,7 +131,7 @@ void RHIBatchedShaderParameters::SetParameters(const Shader* shader, size_t _dat
         //const must set
         uint32_t origin_offset = raw_data.size();
         raw_data.resize(origin_offset + param_info.stride);
-        memcpy(&raw_data[origin_offset], data_source, param_info.stride);
+        memcpy(&raw_data[origin_offset], data, param_info.stride);
         constant_parameters.emplace_back(shader->GetShaderType(), origin_offset, (param_info.stride + sizeof(uint32_t) - 1) / 4, param_info.slot, param_info.space);
     }
 }

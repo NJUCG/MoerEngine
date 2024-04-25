@@ -32,7 +32,7 @@ namespace Moer {
     }
 
     void RendererManager::Init() {
-        data = new RendererManagerData();
+        data = MoerNew(RendererManagerData)();
 
         std::string render_name = ConfigManager::GetInstance().GetInitConfig().default_render_name;
         RegisterRenderer(render_name, GetRender(render_name));
@@ -97,9 +97,9 @@ namespace Moer {
     void RendererManager::ShutDown() {
         for (auto& it : data->backend_renderers) {
             it.second->ShutDown();
-            delete it.second;
+            MoerDelete(it.second);
         }
-        delete data;
+        MoerDelete(data);
     }
 
     void RendererManager::DrawFrame() {
