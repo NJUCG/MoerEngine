@@ -880,6 +880,9 @@ VkDescriptorType VulkanEnumTranslator::METoVKDescriptorType(EShaderParameterType
                type == EShaderCodeResourceBindingType::RW_BYTE_ADDRESSED_BUFFER ||
                type == EShaderCodeResourceBindingType::RW_STRUCTURED_BUFFER;
     };
+    auto is_acceleration_structure = [](EShaderCodeResourceBindingType type) {
+      return type == EShaderCodeResourceBindingType::RAYTRACING_ACCELERATION_STRUCTURE;  
+    };
     switch (_type) {
         case EShaderParameterType::CBV:
             return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -889,6 +892,7 @@ VkDescriptorType VulkanEnumTranslator::METoVKDescriptorType(EShaderParameterType
         case EShaderParameterType::SRV:
             if (is_texture(_binding_type)) return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
             if (is_buffer(_binding_type)) return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            if (is_acceleration_structure(_binding_type)) return VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
             LOG_ERROR("Unsupported SRV type: {}", ToString(_binding_type));
         case EShaderParameterType::UAV:
             if (is_texture(_binding_type)) return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -1463,6 +1467,9 @@ VulkanRHIBufferUAV::~VulkanRHIBufferUAV() {
         vkDestroyBufferView(m_device->GetDevice(), m_view, VK_NULL_HANDLE);
     }
 }
+VulkanRHIAccelerationStructureSRV::~VulkanRHIAccelerationStructureSRV() {
+
+}
 
 #pragma endregion
 
@@ -1715,3 +1722,4 @@ VkGeometryInstanceFlagsKHR VulkanRHIRayTracingAccelerationStructure::METoVKGeome
 
 #pragma region RDG resource creater
 #pragma endregion
+

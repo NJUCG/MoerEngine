@@ -77,7 +77,7 @@ void VulkanRHIImpl::ShutDown() {
 }
 
 #pragma region resources creation
-RHISamplerRef VulkanRHIImpl::RHICreateSampler(const RHISamplerCreateInfo& _initializer) {
+RHISamplerRef  VulkanRHIImpl::RHICreateSampler(const RHISamplerCreateInfo& _initializer) {
     VulkanRHISampler* vk_sampler = MoerNew(VulkanRHISampler)();
     vk_sampler->GenerateSamplerFromInitializer(m_device, _initializer);
 
@@ -905,6 +905,7 @@ RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(co
     Moer::Array<VkPushConstantRange>              push_constant_ranges;
     // find max set index
     int8_t max_set = -1;
+    int    sz      = shader_info_list.size();
     for (const auto* meta_shader : shader_info_list) {
         auto layout_infos = meta_shader->GetRootParametersLayoutInfo().GetBindingInfo();
         for (const auto& info : layout_infos) {
@@ -976,7 +977,7 @@ RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(co
     uint32_t handlecount    = 1 + miss_count + hit_count + callable_count;
 
     auto     rt_props             = VkUtil::QueryPhysicalDeviceExtensionProps<VkPhysicalDeviceRayTracingPipelinePropertiesKHR,
-                                                                              VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR>(m_device->GetGpu());
+                                                              VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR>(m_device->GetGpu());
     uint32_t handlesize           = rt_props.shaderGroupHandleSize;
     uint32_t handlesize_aligned   = ALIGNUP(handlesize, rt_props.shaderGroupHandleAlignment);
     vk_pso->m_raygen_sbt.size     = ALIGNUP(handlesize_aligned, rt_props.shaderGroupBaseAlignment);
@@ -1046,12 +1047,18 @@ void VulkanRHIImpl::RHIBatchedBuildRayTracingBLAS(int batch_size, const RHIRayTr
     if (!results || !batch_size || !_inits) {
         return;
     }
-    static auto vkGetAccelerationStructureBuildSizesKHR = reinterpret_cast<PFN_vkGetAccelerationStructureBuildSizesKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkGetAccelerationStructureBuildSizesKHR"));
-    static auto vkCreateAccelerationStructureKHR        = reinterpret_cast<PFN_vkCreateAccelerationStructureKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkCreateAccelerationStructureKHR"));
-    static auto vkCmdBuildAccelerationStructuresKHR     = reinterpret_cast<PFN_vkCmdBuildAccelerationStructuresKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkCmdBuildAccelerationStructuresKHR"));
+    static auto vkGetAccelerationStructureBuildSizesKHR       = reinterpret_cast<PFN_vkGetAccelerationStructureBuildSizesKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkGetAccelerationStructureBuildSizesKHR"));
+    static auto vkCreateAccelerationStructureKHR              = reinterpret_cast<PFN_vkCreateAccelerationStructureKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkCreateAccelerationStructureKHR"));
+    static auto vkCmdBuildAccelerationStructuresKHR           = reinterpret_cast<PFN_vkCmdBuildAccelerationStructuresKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkCmdBuildAccelerationStructuresKHR"));
+    static auto vkDestroyAccelerationStructureKHR             = reinterpret_cast<PFN_vkDestroyAccelerationStructureKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkDestroyAccelerationStructureKHR"));
+    static auto vkCmdCopyAccelerationStructureKHR             = reinterpret_cast<PFN_vkCmdCopyAccelerationStructureKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkCmdCopyAccelerationStructureKHR"));
+    static auto vkCmdWriteAccelerationStructuresPropertiesKHR = reinterpret_cast<PFN_vkCmdWriteAccelerationStructuresPropertiesKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkCmdWriteAccelerationStructuresPropertiesKHR"));
     VK_CHECK_NULLPTR(vkGetAccelerationStructureBuildSizesKHR, "RHIBuildRayTracingBLAS: vkGetAccelerationStructureBuildSizesKHR is nullptr", return);
     VK_CHECK_NULLPTR(vkCreateAccelerationStructureKHR, "RHIBuildRayTracingBLAS: vkCreateAccelerationStructureKHR is nullptr", return);
     VK_CHECK_NULLPTR(vkCmdBuildAccelerationStructuresKHR, "RHIBuildRayTracingBLAS: vkCmdBuildAccelerationStructuresKHR is nullptr", return);
+    VK_CHECK_NULLPTR(vkDestroyAccelerationStructureKHR, "RHIBuildRayTracingBLAS: vkDestroyAccelerationStructureKHR is nullptr", return);
+    VK_CHECK_NULLPTR(vkCmdCopyAccelerationStructureKHR, "RHIBuildRayTracingBLAS: vkCmdCopyAccelerationStructureKHR is nullptr", return);
+    VK_CHECK_NULLPTR(vkCmdWriteAccelerationStructuresPropertiesKHR, "RHIBuildRayTracingBLAS: vkCmdWriteAccelerationStructuresPropertiesKHR is nullptr", return);
 
     int blas_count = batch_size;
     //building caches
@@ -1118,14 +1125,18 @@ void VulkanRHIImpl::RHIBatchedBuildRayTracingBLAS(int batch_size, const RHIRayTr
         all_primitive_counts.emplace_back(primtive_count);
     }
 
-    VkDeviceAddress max_scratch_size = 0;
+    int             count_allow_compaction = 0;
+    VkDeviceAddress max_scratch_size       = 0;
     for (int idx = 0; idx < blas_count; ++idx) {
         const auto& _init = _inits[idx];
         all_p_vk_range_infos.emplace_back(all_vk_range_infos[idx].data());
 
         VkAccelerationStructureBuildGeometryInfoKHR vk_geometry_info{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
-        vk_geometry_info.type          = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-        vk_geometry_info.flags         = VulkanRHIRayTracingAccelerationStructure::METoVKBuildAccelerationStructureFlagsKHR(_init.build_flags);
+        vk_geometry_info.type  = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+        vk_geometry_info.flags = VulkanRHIRayTracingAccelerationStructure::METoVKBuildAccelerationStructureFlagsKHR(_init.build_flags);
+        if (vk_geometry_info.flags | VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR) {
+            ++count_allow_compaction;
+        }
         vk_geometry_info.mode          = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
         vk_geometry_info.ppGeometries  = nullptr;
         vk_geometry_info.geometryCount = static_cast<uint32_t>(all_vk_geos[idx].size());
@@ -1161,12 +1172,21 @@ void VulkanRHIImpl::RHIBatchedBuildRayTracingBLAS(int batch_size, const RHIRayTr
 
     const auto& vk_graphic_command_pool = m_device->GetCurrentCommandAllocator()->GetHandle(ECommandListType::GRAPHICS);
     const auto& vk_graphic_queue        = m_device->GetGraphicsQueue();
-    auto        cb                      = BeginSingleTimeCommands(vk_graphic_command_pool);
 
     //build acceleration structure in batch,but limit the batch size
+    Moer::Array<int> indices;
+    indices.reserve(blas_count);
     VkDeviceSize batchSize{0};
     VkDeviceSize batchLimit{256'000'000};// 256 MB
 
+    VkQueryPool query_pool = VK_NULL_HANDLE;
+    if (count_allow_compaction == blas_count) {
+        VkQueryPoolCreateInfo qp_info{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+        qp_info.queryCount = blas_count;
+        qp_info.queryType  = VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR;
+        vkCreateQueryPool(m_device->GetDevice(), &qp_info, nullptr, &query_pool);
+    }
+    auto cb = BeginSingleTimeCommands(vk_graphic_command_pool);
     for (int idx = 0; idx < blas_count; ++idx) {
         all_vk_geo_infos[idx].scratchData.deviceAddress = scratch_buffer_device_address;
         vkCmdBuildAccelerationStructuresKHR(cb, 1, &all_vk_geo_infos[idx], &all_p_vk_range_infos[idx]);
@@ -1174,18 +1194,90 @@ void VulkanRHIImpl::RHIBatchedBuildRayTracingBLAS(int batch_size, const RHIRayTr
         VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
         barrier.srcAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
         barrier.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, 0, 1, &barrier, 0, nullptr, 0, nullptr);
-
+        vkCmdPipelineBarrier(cb,
+                             VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                             VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                             0,
+                             1,
+                             &barrier,
+                             0,
+                             nullptr,
+                             0,
+                             nullptr);
         batchSize += all_vk_size_infos[idx].accelerationStructureSize;
+        //we need compaction
+        if (query_pool) {
+            vkCmdPipelineBarrier(cb,
+                                 VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                 0,
+                                 1,
+                                 &barrier,
+                                 0,
+                                 nullptr,
+                                 0,
+                                 nullptr);
+            vkCmdWriteAccelerationStructuresPropertiesKHR(cb,
+                                                          1,
+                                                          &(static_cast<VulkanRHIRayTracingBLAS*>(results[idx].Get())->m_blas),
+                                                          VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR,
+                                                          query_pool,
+                                                          indices.size());
+            indices.emplace_back(idx);
+        }
         if (batchSize >= batchLimit || idx == blas_count - 1) {
+            if (query_pool) {
+                vkResetQueryPool(m_device->GetDevice(), query_pool, 0, indices.size());
+            }
             EndSingleTimeCommands(cb, vk_graphic_command_pool, vk_graphic_queue);
             batchSize = 0;
+            //we need compaction
+            if (query_pool) {
+                Moer::Array<VkDeviceSize> compacted_sizes(indices.size());
+                vkGetQueryPoolResults(m_device->GetDevice(),
+                                      query_pool,
+                                      0,
+                                      indices.size(),
+                                      sizeof(VkDeviceSize) * compacted_sizes.size(),
+                                      compacted_sizes.data(),
+                                      sizeof(VkDeviceSize),
+                                      VK_QUERY_RESULT_WAIT_BIT);
+                cb = BeginSingleTimeCommands(vk_graphic_command_pool);
+                Moer::Array<VkAccelerationStructureKHR> vk_compacted_ases(indices.size(), VK_NULL_HANDLE);
+                Moer::Array<RHIBufferRef>               compacted_buffers(indices.size(), nullptr);
+                for (int i = 0; i < indices.size(); ++i) {
+                    RHIBufferCreateInfo bf_ci = RHIBufferCreateInfo::Create(compacted_sizes[i], compacted_sizes[i], EBufferUsageFlags::ACCELERATION_STRUCTURE);
+                    compacted_buffers[i]      = RHICreateBufferInner(bf_ci);
+                    VkAccelerationStructureCreateInfoKHR as_ci{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
+                    as_ci.type   = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+                    as_ci.buffer = static_cast<VulkanRHIBuffer*>(compacted_buffers[i].Get())->GetHandle();
+                    as_ci.offset = 0;
+                    as_ci.size   = compacted_sizes[i];
+                    VK_CHECK_RESULT(vkCreateAccelerationStructureKHR(m_device->GetDevice(), &as_ci, nullptr, &vk_compacted_ases[i]));
+
+                    VkCopyAccelerationStructureInfoKHR as_copy_info{VK_STRUCTURE_TYPE_COPY_ACCELERATION_STRUCTURE_INFO_KHR};
+                    as_copy_info.src  = static_cast<VulkanRHIRayTracingBLAS*>(results[indices[i]].Get())->m_blas;
+                    as_copy_info.dst  = vk_compacted_ases[i];
+                    as_copy_info.mode = VK_COPY_ACCELERATION_STRUCTURE_MODE_COMPACT_KHR;
+                    vkCmdCopyAccelerationStructureKHR(cb, &as_copy_info);
+                }
+                EndSingleTimeCommands(cb, vk_graphic_command_pool, vk_graphic_queue);
+                for (int i = 0; i < indices.size(); ++i) {
+                    VulkanRHIRayTracingBLAS* rhi_blas = static_cast<VulkanRHIRayTracingBLAS*>(results[indices[i]].Get());
+                    vkDestroyAccelerationStructureKHR(m_device->GetDevice(), rhi_blas->m_blas, nullptr);
+                    rhi_blas->size_info.result_size = compacted_sizes[i];
+                    rhi_blas->m_blas                = vk_compacted_ases[i];
+                    rhi_blas->m_buffer              = compacted_buffers[i];
+                }
+                indices.clear();
+            }
             if (idx != blas_count - 1) {
                 cb = BeginSingleTimeCommands(vk_graphic_command_pool);
             }
         }
     }
-    //TODO:compact blases
+    vkDestroyQueryPool(m_device->GetDevice(), query_pool, nullptr);
+
     return;
 }
 
@@ -1613,6 +1705,9 @@ RHIViewRef VulkanRHIImpl::RHICreateViewInner(RHIViewableResource* _resource, con
                 VK_CHECK_RESULT(vkCreateImageView(m_device->GetDevice(), &image_view_create_info, nullptr, vk_view));
 
                 return view;
+            } else if constexpr (std::is_same_v<T, RHIAccelerationStructureSRVInfo>) {
+                RHIViewRef view = MoerNew(VulkanRHIBufferSRV)(m_device, _resource, _view_info);
+                return view;
             } else {
                 static_assert(std::_Always_false<T>, "non-exhaustive visitor!");
             }
@@ -1937,7 +2032,7 @@ VkDeviceAddress VulkanRHIImpl::GetDeviceAddress(RHIBufferRef _buffer) {
 #pragma endregion
 
 #pragma region viewport
-RHIViewport* VulkanRHIImpl::RHIGetMainViewport() {
+RHIViewport*   VulkanRHIImpl::RHIGetMainViewport() {
     return static_cast<RHIViewport*>(m_main_viewport);
 }
 //create external viewport

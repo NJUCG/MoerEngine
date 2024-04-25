@@ -67,6 +67,15 @@ void Init(int argc, char** argv) {
     g_rhi->Initialize({config_data.max_frame_in_flight, config_data.ray_tracing});
     g_rhi->PostInit();
 }
+
+RHIBufferRef CreateBufferFromData(uint64_t size, EBufferUsageFlags usage, void* data) {
+    RHIBufferRef buffer = g_rhi->RHICreateBuffer<std::byte>(size, usage);
+    void*        dst    = g_rhi->RHIMapBuffer(buffer, 0, size);
+    std::memcpy(dst, data, size);
+    g_rhi->RHIUnmapBuffer(buffer);
+    return buffer;
+}
+
 void Test() {
     uint32_t       index_data[]  = {0, 1, 2};
     Moer::Vector3f vertex_data[] = {
@@ -75,15 +84,18 @@ void Test() {
         {0.5, 0.5, 1},
 
     };
-    RHIBufferRef index_buffer  = g_rhi->RHICreateBuffer<uint32_t>(sizeof(index_data), EBufferUsageFlags::INDEX_BUFFER | EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT);
-    RHIBufferRef vertex_buffer = g_rhi->RHICreateBuffer<Moer::Vector3f>(sizeof(vertex_data), EBufferUsageFlags::VERTEX_BUFFER | EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT);
+    RHIBufferRef index_buffer = g_rhi->RHICreateBuffer<uint32_t>(sizeof(index_data), EBufferUsageFlags::INDEX_BUFFER | EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT);
+    void*        index_dst    = g_rhi->RHIMapBuffer(index_buffer, 0, sizeof(index_data));
+    memcpy(index_dst, index_data, sizeof(index_data));
+    g_rhi->RHIUnmapBuffer(index_buffer);
 
-    Moer::Vector3f      clear_value = {0, 0, 0};
-    RHIBufferCreateInfo uniform_buffer_info{};
-    uniform_buffer_info.size    = sizeof(clear_value);
-    uniform_buffer_info.stride  = sizeof(clear_value);
-    uniform_buffer_info.usage   = EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::UNIFORM_BUFFER;
-    RHIBufferRef uniform_buffer = CreateBufferFromData(uniform_buffer_info, sizeof(clear_value), &clear_value);
+    RHIBufferRef vertex_buffer = g_rhi->RHICreateBuffer<float>(sizeof(vertex_data), EBufferUsageFlags::VERTEX_BUFFER | EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT);
+    void*        vertex_dst    = g_rhi->RHIMapBuffer(vertex_buffer, 0, sizeof(vertex_data));
+    memcpy(vertex_dst, vertex_data, sizeof(vertex_data));
+    g_rhi->RHIUnmapBuffer(vertex_buffer);
+
+    Moer::Vector3f clear_value    = {0, 0, 0.2};
+    RHIBufferRef   uniform_buffer = CreateBufferFromData(sizeof(clear_value), EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::CONSTANT_BUFFER, &clear_value);
 
     RHIRayTracingTrianglesGeometry simple_triangle;
     simple_triangle.index_buffer         = index_buffer;
@@ -110,7 +122,7 @@ void Test() {
     blas_range_infos.push_back(blas_range_info);
 
     RHIRayTracingBLASInitializer init_blas{};
-    init_blas.build_flags = ERayTracingAccelerationStructureBuildFlags::PREFER_FAST_BUILD;
+    init_blas.build_flags = ERayTracingAccelerationStructureBuildFlags::PREFER_FAST_BUILD | ERayTracingAccelerationStructureBuildFlags::ALLOW_COMPACTION;
     init_blas.geometries  = blas_geometries;
     init_blas.range_infos = blas_range_infos;
 
@@ -147,7 +159,7 @@ void Test() {
     RHITextureCreateInfo tex_info;
     tex_info.SetDimension(ETextureDimension::TEX_2D)
         .SetFormat(PF_R8G8B8A8_UNORM)
-        .SetInitialLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED)
+        .SetPreferredLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED)
         .SetExtent(attachment_size)
         .SetClearAttachment(RHIClearAttachment())
         .SetDepth(1)
@@ -157,15 +169,15 @@ void Test() {
         .SetUsageFlags(ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::TRANSFER_SRC);
 
     //out_put texture
-    RHITextureRef tex      = g_rhi->RHICreateTexture(tex_info);
-    RHIUAVRef     tex_view = g_rhi->RHICreateTextureUAV(tex, PF_R8G8B8A8_UNORM, 0, 0, 1);
+    RHITextureRef tex         = g_rhi->RHICreateTexture(tex_info);
+    RHIUAVRef     tex_view    = g_rhi->RHICreateTextureUAV(tex, PF_R8G8B8A8_UNORM, 0, 0, 1);
+    RHISRVRef     as_view     = g_rhi->RHICreateAccelerationStructureSRV(tlas);
+    RHICBVRef     buffer_view = g_rhi->RHICreateCBV(uniform_buffer, sizeof(clear_value), 0);
 
     RHIBatchedShaderParameters batched_parameter{};
-    //hack
-    //overcome vector modifying cross dll problem
-    const_cast<Moer::Array<RHIShaderResourceParameter>&>(batched_parameter.GetResourceParameters()).emplace_back(tlas, 0, 0);
-    const_cast<Moer::Array<RHIShaderResourceParameter>&>(batched_parameter.GetResourceParameters()).emplace_back(tex_view, 1, 0);
-    const_cast<Moer::Array<RHIShaderResourceParameter>&>(batched_parameter.GetResourceParameters()).emplace_back(uniform_buffer, 0, 1);
+    const_cast<Moer::Array<RHIShaderResourceParameter>&>(batched_parameter.GetResourceParameters()).push_back(RHIShaderResourceParameter{as_view.Get(), 0, 0});
+    const_cast<Moer::Array<RHIShaderResourceParameter>&>(batched_parameter.GetResourceParameters()).push_back({tex_view.Get(), 1, 0});
+    const_cast<Moer::Array<RHIShaderResourceParameter>&>(batched_parameter.GetResourceParameters()).push_back({buffer_view.Get(), 0, 1});
 
     g_rhi->RHISetBatchedShaderParameters(rt_pipeline, batched_parameter);
 
@@ -209,6 +221,8 @@ void Test() {
 
     while (1) {
         command_list->Reset();
+        uint32_t ref_cnt = as_view->GetRefCount();
+        LOG_INFO("ref count: {}", ref_cnt);
         command_list->BeginRecording();
         command_list->SetPipelineState(rt_pipeline);
         command_list->TraceRay(1920, 1080, 1);

@@ -84,3 +84,9 @@ RHIUAVRef RHI::RHICreateTextureUAV(RHITexture*  _texture,
         _texture, GetTextureUAVInfo(_texture, _format, _mip_level, _array_index, _array_size));
     return RHIUAVRef(static_cast<RHIUAV*>(view.Get()));
 }
+
+RHISRVRef RHI::RHICreateAccelerationStructureSRV(RHIRayTracingTLAS* _tlas) {
+    assert(_tlas != nullptr);
+    RHIViewRef view = RHICreateViewInner(_tlas, GetAccelerationStructureSRVInfo(_tlas));
+    return RHISRVRef(static_cast<RHISRV*>(view.Get()));
+}

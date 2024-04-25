@@ -26,9 +26,9 @@
 #include <variant>
 template<typename TStructuredParam>
 concept concept_is_shader_struct = requires(TStructuredParam t) {
-                                       std::is_same<typename TStructuredParam::TypeInfo::TParamPtr, TStructuredParam>();
-                                       t.GetStructMetadata();
-                                   };
+    std::is_same<typename TStructuredParam::TypeInfo::TParamPtr, TStructuredParam>();
+    t.GetStructMetadata();
+};
 #pragma region forward definitions
 class RHICommandListBase;
 class RHITexture;
@@ -479,9 +479,9 @@ struct RHIResourceParameterLayout {
 
 template<typename RootParameter>
 concept concept_is_root_parameter_struct = requires(RootParameter t) {
-                                               RootParameter::TypeInfo::GetStructMetadata();
-                                               t.GetMembers();
-                                           };
+    RootParameter::TypeInfo::GetStructMetadata();
+    t.GetMembers();
+};
 
 struct RHIShaderResourceParameter {
     RHIResourceRef resource;
@@ -498,7 +498,7 @@ struct RHIShaderConstantParameter {
 };
 struct RHIAttachmentBindingParameter {
 };
-struct RHIBatchedShaderParameters {
+struct RENDER_API RHIBatchedShaderParameters {
     //CBV SRV UAV SAMPLER
     // template<typename TShader, concept_is_root_parameter_struct TRootParameter>
     // void SetParameters(const TRootParameter& params) {
@@ -934,6 +934,164 @@ private:
     Moer::UnorderedMap<RHISubresourceRange, ETextureLayout, RHISubresourceRangeHash> subresource_layouts;
 };
 
+#pragma region acceleration structures
+
+enum ERayTracingGeometryType : uint8_t {
+    RTGT_TRIANGLES,
+    RTGT_AABBS
+};
+enum class ERayTracingGeometryFlags : uint8_t {
+    NONE,
+    GEOMETRY_OPAQUE                 = 1 << 0,
+    NO_DUPLICATE_ANY_HIT_INVOCATION = 1 << 1
+};
+ENUM_BIT_OP_IMPL(ERayTracingGeometryFlags, FLAG)
+
+enum class ERayTracingInstanceFlags : uint8_t {
+    NONE,
+    TRIANGLE_CULL_DISABLE = 1 << 0,
+    //triangle flip face
+    TRIANGLE_FRONT_COUNTERCLOCKWISE = 1 << 1,
+    FORCE_OPAQUE                    = 1 << 2,
+    FORCE_NO_OPAQUE                 = 1 << 3
+};
+ENUM_BIT_OP_IMPL(ERayTracingInstanceFlags, FLAG)
+
+enum class ERayTracingAccelerationStructureBuildFlags : uint8_t {
+    NONE,
+    ALLOW_UPDATE      = 1 << 0,
+    ALLOW_COMPACTION  = 1 << 1,
+    PREFER_FAST_TRACE = 1 << 2,
+    PREFER_FAST_BUILD = 1 << 3,
+    MINIMIZE_MEMORY   = 1 << 4
+
+};
+ENUM_BIT_OP_IMPL(ERayTracingAccelerationStructureBuildFlags, FLAG)
+
+enum class ERayTracingAccelerationStructureCopyMode : uint8_t {
+    CLONE       = 0,
+    COMPACT     = 0x1,
+    SERIALIZE   = 0x2,
+    DESERIALIZE = 0x3
+};
+
+enum class ERayTracingAccelerationStructureType {
+    TOP_LEVEL    = 0,
+    BOTTOM_LEVEL = 0x1
+};
+
+//enum class ERayTracingGeometryInitializerUsage : uint8_t {
+//    // create buffer and shader params, ready for later usages
+//    FULL_INITIALIZE,
+//    // no buffer or shader params, used by streaming system to stream into
+//    INTERMEDIATE_DST,
+//    // buffer created but not shader params, use for steaming system intermediate data transfer
+//    INTERMEDIATE_SRC
+//};
+
+struct RHITransformMatrix {
+    RHITransformMatrix(const Moer::Matrix4x4f& mat = Moer::Matrix4x4f::Identity()) {
+        memcpy(this, &mat, sizeof(RHITransformMatrix));
+    }
+    float matrix[3][4];
+};
+
+struct RayTracingAccelerationStructureSizeInfo {
+    uint64_t result_size         = 0;
+    uint64_t build_scratch_size  = 0;
+    uint64_t update_scratch_size = 0;
+};
+
+struct RHIRayTracingTrianglesGeometry {
+    RHIBufferRef vertex_buffer;
+    uint64_t     vertex_buffer_stride;
+    uint32_t     max_vertex_count;
+    EPixelFormat vertex_element_type = PF_R32G32B32_SFLOAT;
+
+    RHIBufferRef      index_buffer;
+    EIndexElementType index_element_type = IET_UINT16;
+
+    RHIBufferRef transform_buffer;
+};
+struct RHIRayTracingAABBsGeometry {
+    //TODO:implement RHI RayTracing Geometry: AABB
+};
+
+struct RHIRayTracingBLASGeometry {
+    struct {
+        RHIRayTracingTrianglesGeometry triangles;
+        RHIRayTracingAABBsGeometry     aabbs;
+    } geometry;
+    ERayTracingGeometryType  geo_type = ERayTracingGeometryType::RTGT_TRIANGLES;
+    ERayTracingGeometryFlags flags;
+};
+
+struct RHIRayTracingBLASGeometryRangeInfo {
+    uint32_t first_vertex;
+    uint32_t primtive_offset;
+    uint32_t primitive_count;
+    uint32_t transform_offset;
+};
+
+struct RHIRayTracingBLASInitializer {
+    Moer::Array<RHIRayTracingBLASGeometry>          geometries;
+    Moer::Array<RHIRayTracingBLASGeometryRangeInfo> range_infos;
+    ERayTracingAccelerationStructureBuildFlags      build_flags;
+};
+
+struct RHIRayTracingInstance {
+
+    RHITransformMatrix       transform;
+    uint32_t                 custom_index : 24;
+    uint32_t                 instance_mask : 8;
+    uint32_t                 instance_sbt_offset : 24;
+    ERayTracingInstanceFlags flags = ERayTracingInstanceFlags::NONE;
+    RHIRayTracingBLASRef     blas;
+};
+struct RHIRayTracingTLASInitializer {
+    Moer::Array<RHIRayTracingInstance>         instances;
+    ERayTracingAccelerationStructureBuildFlags build_flags;
+};
+
+class RHIRayTracingAccelerationStructure : public RHIViewableResource {
+public:
+    RHIRayTracingAccelerationStructure(ERayTracingAccelerationStructureType _as_type) : RHIViewableResource(RRT_RAYTRACING_ACCELERATION_STRUCTURE), as_type(_as_type) {
+    }
+
+    RayTracingAccelerationStructureSizeInfo GetSize() const {
+        return size_info;
+    }
+    ERayTracingAccelerationStructureType GetType() const {
+        return as_type;
+    }
+
+protected:
+    ERayTracingAccelerationStructureType    as_type{};
+    RayTracingAccelerationStructureSizeInfo size_info{};
+};
+
+class RHIRayTracingBLAS : public RHIRayTracingAccelerationStructure {
+public:
+    RHIRayTracingBLAS(const RHIRayTracingBLASInitializer& _init) : RHIRayTracingAccelerationStructure(ERayTracingAccelerationStructureType::BOTTOM_LEVEL),
+                                                                   initializer(_init) {}
+    const RHIRayTracingBLASInitializer& GetInitializer() const { return initializer; }
+
+protected:
+    RHIRayTracingBLASInitializer initializer{};
+};
+
+class RHIRayTracingTLAS : public RHIRayTracingAccelerationStructure {
+public:
+    RHIRayTracingTLAS(const RHIRayTracingTLASInitializer& _init) : RHIRayTracingAccelerationStructure(ERayTracingAccelerationStructureType::TOP_LEVEL),
+                                                                   initializer(_init) {}
+    const RHIRayTracingTLASInitializer& GetInitializer() const { return initializer; }
+
+protected:
+    RHIRayTracingTLASInitializer initializer{};
+};
+
+#pragma endregion
+
 #pragma endregion
 
 #pragma region shader param
@@ -1213,15 +1371,18 @@ enum class EViewType : uint8_t {
     BUFFER_UAV,
     TEXTURE_SRV,
     TEXTURE_UAV,
-    BUFFER_CBV
+    BUFFER_CBV,
+
+    ACCELERATION_STRUCTURE_SRV,
+
+    ACCELERATION_STRUCTURE_UAV,
+    ACCELERATION_STRUCTURE_CBV,
 };
 enum class EBufferViewType : uint8_t {
     STRUCTURED,
     CONSTANT,
     TEXTURE,
-    ACCELERATION_STRUCTURE,
     RAW
-
 };
 struct RHIBufferViewInfo {
     EViewType    view_type;
@@ -1238,6 +1399,9 @@ struct RHITextureViewInfo {
     uint8_t /*padding*/ : 7 - uint32_t(ETextureDimension::NumBits);
     uint16_t array_min;
     uint16_t array_num;
+};
+struct RHIAccelerationStructureViewInfo {
+    EViewType view_type;
 };
 
 struct RHITextureSRVInfo : public RHITextureViewInfo {
@@ -1264,6 +1428,12 @@ struct RHIBufferUAVInfo : public RHIBufferViewInfo {
 struct RHIBufferCBVInfo : public RHIBufferViewInfo {
     RHIBufferCBVInfo() {
         view_type = EViewType::BUFFER_CBV;
+    }
+};
+
+struct RHIAccelerationStructureSRVInfo : public RHIAccelerationStructureViewInfo {
+    RHIAccelerationStructureSRVInfo() {
+        view_type = EViewType::ACCELERATION_STRUCTURE_SRV;
     }
 };
 
@@ -1307,12 +1477,17 @@ static RHITextureUAVInfo GetTextureUAVInfo(RHITexture* _texture, EPixelFormat _f
     return std::move(info);
 }
 
+static RHIAccelerationStructureSRVInfo GetAccelerationStructureSRVInfo(RHIRayTracingTLAS* _tlas) {
+    RHIAccelerationStructureSRVInfo info{};
+    info.view_type = EViewType::ACCELERATION_STRUCTURE_SRV;
+    return std::move(info);
+}
+
 struct RHIViewInfo {
 
     enum class EBufferType : uint8_t {
         UNDEFINED,
         STRUCTURED,
-        ACCELERATION_STRUCTURE,
         UNIFROM,
         TEXTURE,
         /* a raw buffer can also be called a byte address buffer */
@@ -1355,6 +1530,13 @@ struct RHIViewInfo {
         ViewInfo GetViewInfo(RHITexture* target) const;
     };
 
+    struct AccelerationStructure : public BaseViewInfo {
+        struct ViewInfo;
+
+    protected:
+        ViewInfo GetViewInfo(RHIRayTracingTLAS* target) const;
+    };
+
     struct BufferSRV : public Buffer {
         struct Initializer;
         struct ViewInfo;
@@ -1382,20 +1564,30 @@ struct RHIViewInfo {
         struct ViewInfo;
         ViewInfo GetViewInfo(RHIBuffer*) const;
     };
-    // union {
-    //     BaseViewInfo base_info;
-    //     union {
-    //         BufferSRV srv;
-    //         BufferUAV uav;
-    //         BufferCBV cbv;
-    //     } buffer;
-    //     union {
-    //         TextureSRV srv;
-    //         TextureUAV uav;
-    //     } texture;
-    // };
 
-    std::variant<RHIBufferViewInfo, RHITextureSRVInfo, RHITextureUAVInfo> info;
+    struct AccelerationStructureSRV : public AccelerationStructure {
+        struct Initializer;
+        struct ViewInfo;
+        ViewInfo GetViewInfo(RHIRayTracingTLAS*) const;
+    };
+
+    /*union {
+        BaseViewInfo base_info;
+        union {
+            BufferSRV srv;
+            BufferUAV uav;
+            BufferCBV cbv;
+        } buffer;
+        union {
+            TextureSRV srv;
+            TextureUAV uav;
+        } texture;
+        union {
+            AccelerationStructureSRV srv;
+        } acceleration_structure;
+    };*/
+
+    std::variant<RHIBufferViewInfo, RHITextureSRVInfo, RHITextureUAVInfo, RHIAccelerationStructureSRVInfo> info;
 
     bool IsSRV() const {
         return std::visit(
@@ -1404,6 +1596,8 @@ struct RHIViewInfo {
                 if constexpr (std::is_same_v<T, RHIBufferViewInfo>) {
                     return _arg.view_type == EViewType::BUFFER_SRV;
                 } else if constexpr (std::is_same_v<T, RHITextureSRVInfo>) {
+                    return true;
+                } else if constexpr (std::is_same_v<T, RHIAccelerationStructureSRVInfo>) {
                     return true;
                 } else {
                     return false;
@@ -1451,7 +1645,19 @@ struct RHIViewInfo {
             },
             info);
     }
-    bool IsTexture() const { return !IsBuffer(); }
+    bool IsAccelerationStructure() const {
+        return std::visit(
+            [](auto&& _arg) {
+                using T = std::decay_t<decltype(_arg)>;
+                if constexpr (std::is_same_v<T, RHIAccelerationStructureSRVInfo>) {
+                    return true;
+                } else {
+                    return false;
+                }
+            },
+            info);
+    }
+    bool IsTexture() const { return !IsBuffer() && !IsAccelerationStructure(); }
 
     bool operator==(const RHIViewInfo& _other) {
         return memcmp(this, &_other, sizeof(*this)) == 0;
@@ -1465,12 +1671,14 @@ struct RHIViewInfo {
     RHIViewInfo(RHIBufferViewInfo _info) : info(_info) {}
     RHIViewInfo(RHITextureSRVInfo _info) : info(_info) {}
     RHIViewInfo(RHITextureUAVInfo _info) : info(_info) {}
+    RHIViewInfo(RHIAccelerationStructureSRVInfo _info) : info(_info) {}
 
-    static BufferSRV::Initializer  CreateBufferSRVInfo();
-    static BufferUAV::Initializer  CreateBufferUAVInfo();
-    static TextureSRV::Initializer CreateTextureSRVInfo();
-    static TextureUAV::Initializer CreateTextureUAVInfo();
-    static BufferCBV::Initializer  CreateBufferCBVInfo();
+    static BufferSRV::Initializer                CreateBufferSRVInfo();
+    static BufferUAV::Initializer                CreateBufferUAVInfo();
+    static TextureSRV::Initializer               CreateTextureSRVInfo();
+    static TextureUAV::Initializer               CreateTextureUAVInfo();
+    static BufferCBV::Initializer                CreateBufferCBVInfo();
+    static AccelerationStructureSRV::Initializer CreateAcclerationStructureSRVInfo();
 
 protected:
     // RHIViewInfo(EViewType _type) {
@@ -1722,9 +1930,48 @@ protected:
 //     }
 // };
 
-// FORCEINLINE RHIViewInfo::BufferSRV::Initializer RHIViewInfo::CreateBufferSRVInfo() {
-//     return {};
-// }
+//public:
+//Initializer& SetType(EBufferType _type) {
+//    assert(_type != EBufferType::UNDEFINED);
+//    buffer.cbv.buffer_type = _type;
+//    return *this;
+//}
+//Initializer& SetType(RHIBuffer* _buffer) {
+//    buffer.cbv.buffer_type = EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::UNIFORM_BUFFER) ? EBufferType::UNIFROM :
+//                             EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::TEXTURE_BUFFER) ? EBufferType::TEXTURE :
+//                                                                                                      EBufferType::UNDEFINED;
+//    return *this;
+//}
+//// Initializer& SetFormat(EPixelFormat _format) {
+////     buffer.ubv.format = _format;
+////     return *this;
+//// }
+//Initializer& SetByteOffset(uint32_t _byte_offset) {
+//    buffer.cbv.byte_offset = _byte_offset;
+//    return *this;
+//}
+//Initializer& SetStride(uint32_t _stride) {
+//    buffer.cbv.stride = _stride;
+//    return *this;
+//}
+//Initializer& SetNumElements(uint32_t _num_elements) {
+//    buffer.cbv.num_elements = _num_elements;
+//    return *this;
+//}
+//}
+//;
+//struct RHIViewInfo::AccelerationStructureSRV::Initializer : public RHIViewInfo {
+//    friend RHIViewInfo;
+//    friend RHICommandListBase;
+//
+//protected:
+//    Initializer() : RHIViewInfo(EViewType::ACCELERATION_STRUCTURE_SRV) {
+//    }
+//};
+
+//FORCEINLINE RHIViewInfo::BufferSRV::Initializer RHIViewInfo::CreateBufferSRVInfo() {
+//    return {};
+//}
 
 // FORCEINLINE RHIViewInfo::BufferUAV::Initializer RHIViewInfo::CreateBufferUAVInfo() {
 //     return {};
@@ -1745,6 +1992,7 @@ class RHIView : public RHIResource {
 public:
     RHIView(ERHIResourceType _type, RHIViewableResource* _viewable_resource, const RHIViewInfo& _info)
         : RHIResource(_type), resource(_viewable_resource), info(_info) {
+
         // assert(_viewable_resource != nullptr && "ViewableResource is invalid");
     }
 
@@ -1760,19 +2008,18 @@ public:
         return info.IsTexture() ? dynamic_cast<RHITexture*>(resource.Get()) : nullptr;
     }
 
-    bool IsAccelerationStructure() const {
-        return info.IsBuffer() ? (resource && EnumHasAnyFlag(
-                                                  dynamic_cast<RHIBuffer*>(resource.Get())->GetInfo().usage,
-                                                  EBufferUsageFlags::ACCELERATION_STRUCTURE)) :
-                                 false;
+    RHIRayTracingTLAS* GetAccelerationStructure() const {
+        return info.IsAccelerationStructure() ? dynamic_cast<RHIRayTracingTLAS*>(resource.Get()) : nullptr;
     }
-
     bool IsBuffer() const {
         return info.IsBuffer();
     }
 
     bool IsTexture() const {
         return info.IsTexture();
+    }
+    bool IsAccelerationStructure() const {
+        return info.IsAccelerationStructure();
     }
 
     bool IsSRV() const {
@@ -2873,167 +3120,6 @@ struct RHIRenderPassInfo {
 
         return target;
     };
-};
-
-#pragma endregion
-
-enum ERayTracingGeometryType : uint8_t {
-    RTGT_TRIANGLES,
-    RTGT_AABBS
-};
-enum class ERayTracingGeometryFlags : uint8_t {
-    NONE,
-    GEOMETRY_OPAQUE                 = 1 << 0,
-    NO_DUPLICATE_ANY_HIT_INVOCATION = 1 << 1
-};
-ENUM_BIT_OP_IMPL(ERayTracingGeometryFlags, FLAG)
-
-enum class ERayTracingInstanceFlags : uint8_t {
-    NONE,
-    TRIANGLE_CULL_DISABLE = 1 << 0,
-    //triangle flip face
-    TRIANGLE_FRONT_COUNTERCLOCKWISE = 1 << 1,
-    FORCE_OPAQUE                    = 1 << 2,
-    FORCE_NO_OPAQUE                 = 1 << 3
-};
-ENUM_BIT_OP_IMPL(ERayTracingInstanceFlags, FLAG)
-
-enum class ERayTracingAccelerationStructureBuildFlags : uint8_t {
-    NONE,
-    ALLOW_UPDATE      = 1 << 0,
-    ALLOW_COMPACTION  = 1 << 1,
-    PREFER_FAST_TRACE = 1 << 2,
-    PREFER_FAST_BUILD = 1 << 3,
-    MINIMIZE_MEMORY   = 1 << 4
-
-};
-ENUM_BIT_OP_IMPL(ERayTracingAccelerationStructureBuildFlags, FLAG)
-
-enum class ERayTracingAccelerationStructureCopyMode : uint8_t {
-    CLONE       = 0,
-    COMPACT     = 0x1,
-    SERIALIZE   = 0x2,
-    DESERIALIZE = 0x3
-};
-
-enum class ERayTracingAccelerationStructureType {
-    TOP_LEVEL    = 0,
-    BOTTOM_LEVEL = 0x1
-};
-
-//enum class ERayTracingGeometryInitializerUsage : uint8_t {
-//    // create buffer and shader params, ready for later usages
-//    FULL_INITIALIZE,
-//    // no buffer or shader params, used by streaming system to stream into
-//    INTERMEDIATE_DST,
-//    // buffer created but not shader params, use for steaming system intermediate data transfer
-//    INTERMEDIATE_SRC
-//};
-
-#pragma region ray -tracing
-
-struct RHITransformMatrix {
-    RHITransformMatrix(const Moer::Matrix4x4f& mat = Moer::Matrix4x4f::Identity()) {
-        memcpy(this, &mat, sizeof(RHITransformMatrix));
-    }
-    float matrix[3][4];
-};
-
-struct RayTracingAccelerationStructureSizeInfo {
-    uint64_t result_size         = 0;
-    uint64_t build_scratch_size  = 0;
-    uint64_t update_scratch_size = 0;
-};
-
-struct RHIRayTracingTrianglesGeometry {
-    RHIBufferRef vertex_buffer;
-    uint64_t     vertex_buffer_stride;
-    uint32_t     max_vertex_count;
-    EPixelFormat vertex_element_type = PF_R32G32B32_SFLOAT;
-
-    RHIBufferRef      index_buffer;
-    EIndexElementType index_element_type = IET_UINT16;
-
-    RHIBufferRef transform_buffer;
-};
-struct RHIRayTracingAABBsGeometry {
-    //TODO:implement RHI RayTracing Geometry: AABB
-};
-
-struct RHIRayTracingBLASGeometry {
-    struct {
-        RHIRayTracingTrianglesGeometry triangles;
-        RHIRayTracingAABBsGeometry     aabbs;
-    } geometry;
-    ERayTracingGeometryType  geo_type = ERayTracingGeometryType::RTGT_TRIANGLES;
-    ERayTracingGeometryFlags flags;
-};
-
-struct RHIRayTracingBLASGeometryRangeInfo {
-    uint32_t first_vertex;
-    uint32_t primtive_offset;
-    uint32_t primitive_count;
-    uint32_t transform_offset;
-};
-
-struct RHIRayTracingBLASInitializer {
-    Moer::Array<RHIRayTracingBLASGeometry>          geometries;
-    Moer::Array<RHIRayTracingBLASGeometryRangeInfo> range_infos;
-    ERayTracingAccelerationStructureBuildFlags      build_flags;
-};
-
-struct RHIRayTracingInstance {
-
-    RHITransformMatrix       transform;
-    uint32_t                 custom_index : 24;
-    uint32_t                 instance_mask : 8;
-    uint32_t                 instance_sbt_offset : 24;
-    ERayTracingInstanceFlags flags = ERayTracingInstanceFlags::NONE;
-    RHIRayTracingBLASRef     blas;
-};
-struct RHIRayTracingTLASInitializer {
-    Moer::Array<RHIRayTracingInstance>         instances;
-    ERayTracingAccelerationStructureBuildFlags build_flags;
-};
-
-class RHIRayTracingAccelerationStructure : public RHIResource {
-public:
-    RHIRayTracingAccelerationStructure(ERayTracingAccelerationStructureType _as_type) : RHIResource(RRT_RAYTRACING_ACCELERATION_STRUCTURE), as_type(_as_type) {
-    }
-
-    RayTracingAccelerationStructureSizeInfo GetSize() const {
-        return size_info;
-    }
-    ERayTracingAccelerationStructureType GetType() const {
-        return as_type;
-    }
-
-private:
-    int x;
-
-protected:
-    ERayTracingAccelerationStructureType    as_type{};
-    RayTracingAccelerationStructureSizeInfo size_info{};
-};
-
-class RHIRayTracingBLAS : public RHIRayTracingAccelerationStructure {
-public:
-    RHIRayTracingBLAS(const RHIRayTracingBLASInitializer& _init) : RHIRayTracingAccelerationStructure(ERayTracingAccelerationStructureType::BOTTOM_LEVEL),
-                                                                   initializer(_init) {}
-    const RHIRayTracingBLASInitializer& GetInitializer() const { return initializer; }
-
-protected:
-    RHIRayTracingBLASInitializer initializer{};
-};
-
-class RHIRayTracingTLAS : public RHIRayTracingAccelerationStructure {
-public:
-    RHIRayTracingTLAS(const RHIRayTracingTLASInitializer& _init) : RHIRayTracingAccelerationStructure(ERayTracingAccelerationStructureType::TOP_LEVEL),
-                                                                   initializer(_init) {}
-    const RHIRayTracingTLASInitializer& GetInitializer() const { return initializer; }
-
-protected:
-    RHIRayTracingTLASInitializer initializer{};
 };
 
 #pragma endregion

@@ -64,39 +64,38 @@ void VulkanPipelineResourceCache::SetCBV(uint32_t _set, uint32_t _binding, RHICB
 void VulkanPipelineResourceCache::SetSRV(uint32_t _set, uint32_t _binding, RHISRV* _srv) {
     // MARK: buffer view is not implemented yet
     if (_srv->IsBuffer()) {
-        if (_srv->IsAccelerationStructure()) {
-            // MARK: acceleration structure is not implemented yet
-        } else {
-            auto* buffer    = static_cast<VulkanRHIBuffer*>(_srv->GetBuffer());
-            auto& view_info = std::get<v_type_buffer_view>(_srv->GetInfo().info);
-            auto  range     = view_info.stride * view_info.num_elements;
-            m_descriptor_set_writers[_set].WriteStorageBuffer(_binding, buffer->GetHandle(), view_info.byte_offset, range);
-        }
-    } else {
+        auto* buffer    = static_cast<VulkanRHIBuffer*>(_srv->GetBuffer());
+        auto& view_info = std::get<v_type_buffer_view>(_srv->GetInfo().info);
+        auto  range     = view_info.stride * view_info.num_elements;
+        m_descriptor_set_writers[_set].WriteStorageBuffer(_binding, buffer->GetHandle(), view_info.byte_offset, range);
+    } else if (_srv->IsTexture()) {
         auto* tex_view = static_cast<VulkanRHITextureSRV*>(_srv);
         // MARK: layout is fixed
         ETextureLayout default_layout = tex_view->GetTexture()->GetInfo().preferred_layout;
         auto           final_layout   = (default_layout == ETextureLayout::TEXTURE_LAYOUT_COMMON) ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
         m_descriptor_set_writers[_set].WriteSampledImage(_binding, VK_NULL_HANDLE, tex_view->GetView(), final_layout);
+    } else {
+        VulkanRHIRayTracingTLAS* as = static_cast<VulkanRHIRayTracingTLAS*>(_srv->GetAccelerationStructure());
+        //MARK: accleration structure updated is not implemented,remaining updated_bit 0
+        m_descriptor_set_writers[_set].WriteAccelerationStructure(_binding, as->m_tlas, 0);
     }
 }
 
 void VulkanPipelineResourceCache::SetUAV(uint32_t _set, uint32_t _binding, RHIUAV* _uav) {
     // MARK: buffer view is not implemented yet
     if (_uav->IsBuffer()) {
-        if (_uav->IsAccelerationStructure()) {
-            // MARK: acceleration structure is not implemented yet
-        } else {
             auto* buffer    = static_cast<VulkanRHIBuffer*>(_uav->GetBuffer());
             auto& view_info = std::get<v_type_buffer_view>(_uav->GetInfo().info);
             auto  range     = view_info.stride * view_info.num_elements;
             m_descriptor_set_writers[_set].WriteStorageBuffer(_binding, buffer->GetHandle(), view_info.byte_offset, range);
-        }
-    } else {
+        
+    } else if (_uav->IsTexture()) {
         auto* tex_view = static_cast<VulkanRHITextureUAV*>(_uav);
         // MARK: layout is fixed
         m_descriptor_set_writers[_set].WriteStorageImage(_binding, tex_view->GetView(), VK_IMAGE_LAYOUT_GENERAL);
+    } else {
+        //MARK: accleration structure UAV is not implemented yet
     }
 }
 

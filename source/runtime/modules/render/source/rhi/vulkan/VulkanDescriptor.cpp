@@ -95,6 +95,7 @@ VulkanDescriptorSetAllocator::VulkanDescriptorSetCachePool::VulkanDescriptorSetC
     pool_sizes.push_back({VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4096});
     pool_sizes.push_back({VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 4096});
     pool_sizes.push_back({VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4096});
+    pool_sizes.push_back({VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 4096});
 
     VkDescriptorPoolCreateInfo pool_info{};
     pool_info.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -322,9 +323,9 @@ void VulkanDescriptorSetWriter::WriteAccelerationStructure(uint32_t _binding, Vk
     VK_CHECK_NULLPTR(write_as, "AccelerationStructure descriptor set write is nullptr!", return);
     CHECK_ASSERT((write_as->accelerationStructureCount == 1), "AccelerationStructure descriptor set write count is not 1!");
 
-    const_cast<VkWriteDescriptorSetAccelerationStructureKHR*>(write_as)->pAccelerationStructures = &as_info.as;
-
     m_hash_info_head[write_index].resource.as = as_info;
+
+    const_cast<VkWriteDescriptorSetAccelerationStructureKHR*>(write_as)->pAccelerationStructures = &m_hash_info_head[write_index].resource.as.as;
 }
 
 template<VkDescriptorType DescriptorType>

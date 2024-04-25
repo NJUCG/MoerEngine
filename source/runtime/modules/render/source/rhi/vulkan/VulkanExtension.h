@@ -47,7 +47,7 @@ public:
 class VulkanDeviceExtension : public VulkanExtensionBase {
 public:
     VulkanDeviceExtension(const std::string& _ext_name, bool _is_enabled = true, bool _is_optional = false) : VulkanExtensionBase(_ext_name, _is_enabled), m_is_optional(_is_optional), m_is_usable(true) {
-        LOG_INFO("VulkanDeviceExtension::VulkanDeviceExtension: {}, {}", _ext_name.c_str(), m_is_enabled);
+        LOG_INFO("VulkanDeviceExtension: {}, {}", _ext_name.c_str(), m_is_enabled);
     }
     virtual ~VulkanDeviceExtension() = default;
 

@@ -37,8 +37,8 @@ struct RHIInfo {
 
 template<typename T>
 concept TPipelineStateRef = requires(T) {
-                                std::convertible_to<T, RHIGraphicsPipelineStateRef> || std::convertible_to<T, RHIComputePipelineStateRef>;
-                            };
+    std::convertible_to<T, RHIGraphicsPipelineStateRef> || std::convertible_to<T, RHIComputePipelineStateRef>;
+};
 class RENDER_API RHI {
 public:
     RHI(ERHIType _type) : m_rhi_info(_type) {}
@@ -179,6 +179,9 @@ public:
         uint32_t     _mip_level   = 0,
         uint32_t     _array_index = 0,
         uint32_t     _array_size  = 1);
+
+    RHISRVRef RHICreateAccelerationStructureSRV(
+        RHIRayTracingTLAS* _tlas);
 
     virtual RHICommandQueue* RHICreateCommandQueue(ECommandQueueType type) = 0;
     // DX12 only: _initial_state
