@@ -86,9 +86,9 @@ namespace Moer {
         return hash;
     }
 
-    size_t RHITextureViewHash(RHITexture const* texture, const RHIViewInfo::TextureSRV::Initializer& params) {
+    size_t RHITextureViewHash(RHITexture const* _texture, const RHIViewInfo& _view_info) {
         //todo
-        return reinterpret_cast<size_t>(texture);
+        return reinterpret_cast<size_t>(_texture);
         size_t hash = 0;
         // HashCombine(hash, params.texture);
         return hash;
@@ -106,17 +106,17 @@ namespace Moer {
             }
             return m_sampler_cache[hash];
         }
-        RHISRV* GetTextureView(RHITexture* texture) {
-            auto default_format = PF_R8G8B8A8_UNORM;
-            auto srv_info       = RHIViewInfo::CreateTextureSRVInfo()
-                                .SetFormat(default_format)
-                                .SetDimension(ETextureDimension::TEX_2D)
-                                .SetMipRange(0, texture->GetNumMips())
-                                .SetArrayRange(0, 1);
-
-            size_t hash = RHITextureViewHash(texture, srv_info);
+        RHISRV* GetTextureView(RHITexture* _texture) {
+            auto   default_format = PF_R8G8B8A8_UNORM;
+            auto   view_info      = GetTextureSRVInfo(_texture,
+                                               default_format,
+                                               0,
+                                               _texture->GetNumMips(),
+                                               0,
+                                               1);
+            size_t hash           = RHITextureViewHash(_texture, view_info);
             if (!m_texture_view_cache.contains(hash)) {
-                RHISRVRef texture_view     = g_rhi->RHICreateTextureSRV(texture, default_format);
+                RHISRVRef texture_view     = g_rhi->RHICreateTextureSRV(_texture, default_format);
                 m_texture_view_cache[hash] = texture_view;
             }
             return m_texture_view_cache[hash];
@@ -266,6 +266,36 @@ namespace Moer {
             return srv;
         }
 
+        RHISRVRef GetSrv(RHIBufferRef buffer, uint32_t stride, uint64_t _byte_size, uint64_t _byte_offset) {
+            size_t hash;
+            HashCombine(hash, buffer.Get());
+            HashCombine(hash, stride);
+            HashCombine(hash, _byte_size);
+            HashCombine(hash, _byte_offset);
+            auto it = mSrvs.find(hash);
+            if (it != mSrvs.end()) {
+                return it->second;
+            }
+            RHISRVRef srv = g_rhi->RHICreateBufferSRV(buffer, stride, _byte_size, _byte_offset);
+            mSrvs.insert({hash, srv});
+            return srv;
+        }
+
+        RHIUAVRef GetUav(RHIBufferRef buffer, uint32_t stride, uint64_t _byte_size, uint64_t _byte_offset) {
+            size_t hash;
+            HashCombine(hash, buffer.Get());
+            HashCombine(hash, stride);
+            HashCombine(hash, _byte_size);
+            HashCombine(hash, _byte_offset);
+            auto it = mUavs.find(hash);
+            if (it != mUavs.end()) {
+                return it->second;
+            }
+            RHIUAVRef uav = g_rhi->RHICreateBufferUAV(buffer, stride, _byte_size, _byte_offset);
+            mUavs.insert({hash, uav});
+            return uav;
+        }
+
     private:
         mutable Moer::UnorderedMap<size_t, RHITextureRef> m_textures;
         mutable Moer::UnorderedMap<size_t, RHIBufferRef>  m_buffers;
@@ -288,6 +318,18 @@ namespace Moer {
             return m_impl->GetSRV(texture, texture->GetFormat(), mip_num, mip_min, array_min, array_num);
         return m_impl->GetSRV(texture, format, mip_num, mip_min, array_min, array_num);
     }
+    RHIUAVRef RenderGraphResourceCache::GetUAV(RHIBufferRef buffer, uint32_t stride, uint64_t byte_size, uint64_t byte_offset) {
+        if (stride == 0) stride = buffer->GetStride();
+        if (byte_size == 0) byte_size = buffer->GetByteSize();
+        return m_impl->GetUav(buffer, stride, byte_size, byte_offset);
+    }
+
+    RHISRVRef RenderGraphResourceCache::GetSRV(RHIBufferRef buffer, uint32_t stride, uint64_t byte_size, uint64_t byte_offset) {
+        if (stride == 0) stride = buffer->GetStride();
+        if (byte_size == 0) byte_size = buffer->GetByteSize();
+        return m_impl->GetSrv(buffer, stride, byte_size, byte_offset);
+    }
+
     RHISampler* RenderGraphResourceCache::GetSampler(const RHISamplerCreateInfo& params) {
         return m_impl->GetSampler(params);
     }

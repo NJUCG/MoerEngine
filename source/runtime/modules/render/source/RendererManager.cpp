@@ -1,5 +1,6 @@
 #include "RendererManager.h"
 
+#include "config/ConfigManager.h"
 #include "misc/STL.h"
 #include "renderer/BackendRenderer.h"
 #include "renderer/backend/DeferredRenderer.h"
@@ -7,6 +8,7 @@
 #include "renderer/backend/RenderGraphTestRender.h"
 #include "renderer/backend/RenderGraphTestRender.h"
 #include "rhi/RHIResource.h"
+#include "renderer/backend/3dGs/SplattingRender.h"
 #include <string>
 #include "renderer/backend/Common.h"
 namespace Moer {
@@ -16,10 +18,25 @@ namespace Moer {
         Moer::UnorderedMap<TRendererID, BackendRenderer*> backend_renderers;
     };
 
+    BackendRenderer* GetRender(std::string renderer_name) {
+        if (renderer_name == MOER_3D_GAUSSIAN_SPLATTING_RENDERER_NAME) {
+            return MoerNew(SplattingRender);
+        }
+        if (renderer_name == MOER_DEFERRED_RENDERER_NAME) {
+            return MoerNew(DeferredRenderer);
+        }
+        if (renderer_name == MOER_MESH_RENDERER_NAME) {
+            return MoerNew(MeshDebugRenderer);
+        }
+        return nullptr;
+    }
+
     void RendererManager::Init() {
         data = new RendererManagerData();
 
-        RegisterRenderer(MOER_DEFAULT_RENDERER_NAME, MoerNew(DeferredRenderer));
+        std::string render_name = ConfigManager::GetInstance().GetInitConfig().default_render_name;
+        RegisterRenderer(render_name, GetRender(render_name));
+        //  RegisterRenderer(MOER_DEFAULT_RENDERER_NAME, MoerNew(DeferredRenderer));
         // RegisterRenderer(MOER_MESH_RENDERER_NAME, MoerNew(MeshDebugRenderer));
         //  RegisterRenderer(MOER_RENDER_GRAPH_DEFERED_RENDERER_NAME, MoerNew(DeferedRenderingRenderGraphRender));
         BackendRendererInitInfo init_info;

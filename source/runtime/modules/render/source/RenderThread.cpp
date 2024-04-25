@@ -35,8 +35,6 @@ namespace Moer {
 
         RenderThread() {
             is_bound_to_taskgraph_event = EventPool::Get()->GetEvent(false);
-            int i                       = 1;
-            //todo: flush
         }
 
         virtual ~RenderThread() {
@@ -52,7 +50,7 @@ namespace Moer {
 
             return 0;
         }
-        virtual void Stop() override{};
+        virtual void Stop() override {};
         virtual void Exit() override {
             ThreadManager::SetRenderThreadID(0);
         };
@@ -62,9 +60,9 @@ namespace Moer {
     };
 
     void StartRenderThread() {
-        g_render_thread_runnable = new RenderThread();
+        g_render_thread_runnable = MoerNew(RenderThread)();
 
-        g_render_thread = RunnableThread::Create(g_render_thread_runnable, "RenderingThread", 0xFFFFFFFFFFFFFFFF);
+        g_render_thread = RunnableThread::Create(g_render_thread_runnable, ThreadAttributes{.affinity = Affinity::AnyOf(EThread::GetThreadIndex(EThread::ERenderThread), Affinity::All()), .name = "RenderThread"});
 
         static_cast<RenderThread*>(g_render_thread_runnable)->is_bound_to_taskgraph_event->Wait();
     };
@@ -73,16 +71,16 @@ namespace Moer {
 
         LOG_INFO("Wait for Rendering Thread To Stop.");
         //wait for thread to finish executing
-        GraphEventRef return_task = GraphTask<ReturnGraphTask>::CreateTask(nullptr, EThread::EMainThread)
-                                        .ConstructAndDispatchWhenReady(EThread::ERenderThread);
-
+        // GraphEventRef return_task = GraphTask<ReturnGraphTask>::CreateTask(nullptr, EThread::EMainThread)
+        //                                 .ConstructAndDispatchWhenReady(EThread::ERenderThread);
+        auto return_event = GraphTask<ReturnGraphTask>::Create(EThread::ERenderThread).Dispatch();
         //not sure, game thread tasks should not be executing, because we are currently on Game Thread
         assert(!TaskGraph::GetInterface().IsThreadProcessingTask(EThread::EMainThread) && "On Game Thread while Game Thread Tasks are being executing");
-        TaskGraph::GetInterface().WaitUntilTaskComplete(return_task, EThread::EGameThread_local);
+        TaskGraph::GetInterface().WaitUntilTaskComplete(return_event, EThread::EMainThread);
 
-        delete g_render_thread;
+        MoerDelete(g_render_thread);
         g_render_thread = nullptr;
-        delete (RenderThread*)g_render_thread_runnable;
+        MoerDelete((RenderThread*)g_render_thread_runnable);
         g_render_thread_runnable = nullptr;
 
         LOG_INFO("Rendering Thread Stopped.");
@@ -109,24 +107,25 @@ namespace Moer {
 
         } else {
             if (g_render_thread_suspending.load(std::memory_order_relaxed)) {
-                GraphEventRef suspend_complete_event = FunctionGraphTask::ConstructAndDispatchWhenReady(
+                GraphEventRef suspend_complete_event = LambdaTask::Dispatch(
                     []() {
                         g_render_thread_suspending++;
                     },
-                    nullptr,
                     EThread::ERenderThread);
                 TaskGraph::GetInterface().WaitUntilTaskComplete(suspend_complete_event, EThread::EMainThread);
                 //now all works on task render thread has finished
                 //start a waiting task on render thread
-                g_render_suspend_end_event = EventPool::Get()->GetEvent();
-                FunctionGraphTask::ConstructAndDispatchWhenReady(
+                if (g_render_suspend_end_event == nullptr)
+                    g_render_suspend_end_event = EventPool::Get()->GetEvent();
+
+                LambdaTask::Dispatch(
                     []() {
                         LOG_INFO("Render Thread Suspending.");
                         g_render_suspend_end_event->Wait();
                         LOG_INFO("Render Thread End Suspending.");
                     },
-                    nullptr,
                     EThread::ERenderThread);
+
             } else {
                 //render thread already suspended
                 g_render_thread_suspending++;
@@ -194,9 +193,10 @@ namespace Moer {
                 GraphEventArray temp_events;
                 temp_events.push_back(complete_event);
 
-                GraphTask<TriggerEventGraphTask>::CreateTask(&temp_events, EThread::EMainThread)
-                    .ConstructAndDispatchWhenReady(event, EThread::AnyThread_NormalPri);
+                // GraphTask<TriggerEventGraphTask>::CreateTask(&temp_events, EThread::EMainThread)
+                //     .ConstructAndDispatchWhenReady(event, EThread::AnyThread_NormalPri);
 
+                GraphTask<TriggerEventGraphTask>::Create(event, EThread::AnyThread_NormalPri).Wait(std::move(temp_events)).Dispatch();
                 event.Wait();
             }
         }

@@ -3,6 +3,7 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "scene/ECS.h"
+#include <cstddef>
 
 namespace Moer {
     enum E_VERTEX_ATTRIBUTE {
@@ -71,8 +72,13 @@ namespace Moer {
         GpuSceneBufferBuilder();
         ~GpuSceneBufferBuilder();
         std::pair<RHIBufferRef, RHIBufferRef> Build();
-        static RHIBufferRef                   CopyFrom(EBufferUsageFlags usages, const void* data, uint32_t size);
-        RHIBufferRef                          CreateBufferWithData(EBufferUsageFlags usages, const void* data, uint32_t size);
+        static RHIBufferRef                   CopyFrom(EBufferUsageFlags usages, const void* data, uint32_t size, uint32_t _stride = sizeof(std::byte));
+        template<typename T>
+            requires std::is_trivially_copyable_v<T>
+        static RHIBufferRef CopyFrom(EBufferUsageFlags _usages, const std::span<T> _data) {
+            return CopyFrom(_usages, _data->data(), _data->size() * sizeof(T), sizeof(T));
+        }
+        RHIBufferRef CreateBufferWithData(EBufferUsageFlags usages, const void* data, uint32_t size);
 
     protected:
         class Impl;

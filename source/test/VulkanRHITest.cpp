@@ -108,9 +108,9 @@ void Test() {
     //out_put texture
     RHITextureRef tex = g_rhi->RHICreateTexture(tex_info);
 
-    RHIGraphicsPipelineStateRef pso = g_rhi->RHICreateGraphicsPipelineState(init);
+    RHIGraphicsPipelineStateRef pso = g_rhi->RHICreateGraphicsPSO(init);
 
-    RHIGraphicsCommandList* command_list = g_rhi->RHICreateGraphicsCommandList(pso);
+    RHIGraphicsCommandList* command_list = g_rhi->RHICreateGraphicsCommandList()
 
     RHIRenderPassInfo pass_info;
     pass_info.GeneratePipelineAttachmentInfo();

@@ -1,10 +1,46 @@
 #include "PlatformWindows.h"
-#include "Windows.h"
-#include "math/Math.h"
+#include "math/Function.h"
+#include "misc/STL.h"
+#include <winbase.h>
+#include <windows.h>
+#include <processthreadsapi.h>
+#include <winnt.h>
 
 void WindowsPlatform::SetThreadAffinityMask(void* current_thread_handle, uint64_t mask) {
 
     ::SetThreadAffinityMask(current_thread_handle, mask);
+}
+void WindowsPlatform::SetCurrentThreadAffinity(Affinity&& _affinity) {
+    SIZE_T size = 0;
+    ::InitializeProcThreadAttributeList(nullptr, 1, 0, &size);
+    assert(size > 0 && "InitializeProcThreadAttributeList failed");
+    Moer::Array<uint8_t> buffer(size);
+    auto*                attr_list = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(buffer.data());
+    auto                 res       = ::InitializeProcThreadAttributeList(attr_list, 1, 0, &size);
+    assert(res && "InitializeProcThreadAttributeList failed");
+    GROUP_AFFINITY group_affinity{};
+    auto           cnt = _affinity.GetSize();
+    if (cnt > 0) {
+        group_affinity.Group = _affinity[0].windows.group;
+        for (auto i = 0; i < cnt; ++i) {
+            auto core = _affinity[i];
+            assert(core.windows.group == group_affinity.Group && "Group must be the same");
+            group_affinity.Mask |= 1ull << core.windows.idx;
+        }
+        ::UpdateProcThreadAttribute(attr_list, 0, PROC_THREAD_ATTRIBUTE_GROUP_AFFINITY, &group_affinity, sizeof(group_affinity), nullptr, nullptr);
+    }
+
+    ::DeleteProcThreadAttributeList(attr_list);
+}
+void WindowsPlatform::SetCurrentThreadName(std::string_view _name) {
+    static auto set_thread_description =
+        reinterpret_cast<HRESULT(WINAPI*)(HANDLE, PCWSTR)>(GetProcAddress(
+            GetModuleHandleA("kernelbase.dll"), "SetThreadDescription"));
+    if (set_thread_description == nullptr) {
+        return;
+    }
+    std::wstring wname(_name.begin(), _name.end());
+    set_thread_description(GetCurrentThread(), wname.data());
 }
 void WindowsPlatform::SetThreadGroupAffinity(void* current_thread_handle, uint16_t group_mask, uint64_t affinity_mask) {
     GROUP_AFFINITY group_affinity{affinity_mask, group_mask, {0, 0, 0}};

@@ -246,29 +246,32 @@ void ShaderResourceManager::PrepareGlobalShaderResources() {
         Moer::Array<ShaderCompilerOutput*> outputs;
         job.ExportOutput(outputs);
 
-        for (auto* output : outputs | std::views::filter([](auto* output) {
-                                if (!output) {
+        for (auto* output : outputs | std::views::filter([](auto* _output) {
+                                if (!_output) {
+                                    return false;
+                                }
+                                if (_output->cached) {
+                                    LOG_INFO("Shader {} is cached.", _output->shader_name_hash);
                                     return true;
                                 }
-                                if (output->cached) {
-                                    LOG_INFO("Shader {} is cached.", output->shader_name_hash);
-                                    return true;
-                                }
-                                return false;
+                                return true;
                             })) {
             g_shader_compile_output_queue.Push(output);
         }
     });
     LOG_INFO("Process Global Shader Data Time(ms): {}", timer.ElapsedMilliseconds());
 
-    //dump cache bundle
-    FunctionGraphTask::ConstructAndDispatchWhenReady([this]() {
+    //dump cache bundle, TODO: do it on IO thread
+
+#ifndef _DEBUG
+    LambdaTask::Dispatch([this]() {
         Moer::Array<ShaderCompilerOutput*> outputs;
         g_shader_compile_output_queue.PopAll(outputs);
         GlobalShaderCache::GetInstance().UpdateOutput(outputs);
 
         GlobalShaderCache::GetInstance().Dump();
     });
+#endif
 }
 
 RHIShaderRef ShaderResourceManager::GetShader(const ShaderMetaType& _meta_type, uint32_t _mutation_id) {
@@ -278,5 +281,13 @@ RHIShaderRef ShaderResourceManager::GetShader(const ShaderMetaType& _meta_type, 
     if (shader == nullptr) return nullptr;
 
     ShaderResourceKey key{shader->GetShaderMetaType()->GetNameHash(), _mutation_id};
+    // if(_meta_type.GetName())
     return shader_resources->GetRHIShader(key, shader);
+}
+
+Shader* ShaderResourceManager::GetShader(const ShaderMetaType& _meta_type) {
+    assert(type_resources != nullptr);
+    Shader* shader = type_resources->FindOrAddShader(_meta_type.GetNameHash(), nullptr);
+    if (shader == nullptr) return nullptr;
+    return shader;
 }

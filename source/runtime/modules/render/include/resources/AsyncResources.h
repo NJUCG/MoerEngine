@@ -36,10 +36,9 @@ namespace Moer {
         void OnResize(Moer::Vector2i extent);
 
         //call from render thread
-        Extent3D                          GetNextBackBufferExtent();
+        Extent3D GetBackBufferExtent();
 
-        VirtualViewportBackBufferInfo GetBackBufferInfo();
-
+        VirtualViewportBackBufferInfo GetBackBufferInfo() const;
 
         void Present(RHIFenceRef _render_fence);
 
@@ -47,10 +46,10 @@ namespace Moer {
 
         RHISRV* GetPresentTextureSRV();
 
-    private:
-        void InitRenderThread();
-        void ResizeRenderThread(Moer::Vector2i extent);
+        RHISRVRef GetDepthSRV();
+        RHIUAVRef GetDepthUAV();
 
+    private:
 // in Application mode, Present operations happens on render thread
 #if !defined(EDITOR_MODE_ON)
         RHIViewportRef viewport;

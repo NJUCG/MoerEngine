@@ -33,13 +33,13 @@ namespace Moer {
 
     using EntitySet = Moer::UnorderedSet<Entity, Entity::Hasher>;
 
-    struct AsyncSceneLoadInfo : public Countable {
+    struct AsyncSceneLoadInfo {
 
         bool         IsValid() const noexcept { return b_valid; };
         bool         IsReady() const noexcept { return b_valid && progress == 1.f; };
         float        GetProgress() const noexcept { return progress.load(); };
         class Scene* TryGetScene();
-        void         Destroy() override { MoerDelete(this); };
+        COUNTABLE_IMPLEMENTATION_AUTO_DESTROY
         // private:
         class Scene*     scene;
         std::atomic_uint progress = 0u;

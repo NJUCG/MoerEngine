@@ -1,10 +1,13 @@
 ﻿#ifndef THREAD_MANAGER_H
 #define THREAD_MANAGER_H
 #include "API_Macro.h"
+#include "misc/MMemory.h"
 #include "misc/STL.h"
+#include "platform/Platform.h"
 #include <string>
 #include <thread>
 #include <assert.h>
+#include <variant>
 typedef int32_t ThreadIndex;
 typedef int32_t QueueIndex;
 typedef int32_t ThreadPriority;
@@ -32,7 +35,8 @@ public:
         PriorityCount       = 3,
         AnyThread_HighPri   = UNKNOWN_THREAD | HIGH_PRI,
         AnyThread_NormalPri = UNKNOWN_THREAD | NORMAL_PRI,
-        AnyThread_LowPri    = UNKNOWN_THREAD | LOW_PRI
+        AnyThread_LowPri    = UNKNOWN_THREAD | LOW_PRI,
+        Invalid             = 0x7fffffff
     };
     static ThreadIndex GetThreadIndex(EThread::Type type) {
         return type & INDEX_MASK;
@@ -97,19 +101,23 @@ private:
     const char*                          GetRunnableThreadName(uint32_t id);
 };
 
+struct ThreadAttributes {
+    Affinity         affinity;
+    std::string_view name;
+};
+
 class RunnableThread {
     friend class ThreadManager;
     friend class TaskGraph;
 
 public:
-    CORE_API static RunnableThread* Create(Runnable*          runnable,
-                                           const std::string& name,
-                                           uint64_t           affinity_mask);
+    CORE_API static RunnableThread* Create(Runnable*        _runnable,
+                                           ThreadAttributes _attributes);
     virtual ~RunnableThread();
     void Tick();
     void Join() {
-        if (m_thread->joinable()) m_thread->join();
-        m_thread = nullptr;
+        if (m_thread->joinable())
+            MoerDelete(m_thread);
     }
     void Detach() { m_thread->detach(); }
     bool Joinable() { return m_thread->joinable(); }
@@ -119,17 +127,19 @@ public:
 
 protected:
     void Setup(uint64_t affinity);
+    void SetAffinity(Affinity&& _affinity);
+    void SetName(std::string_view _name);
     RunnableThread(Runnable*,
-                   const std::string& name);
+                   ThreadAttributes _attributes);
     uint32_t Run();
 
 private:
-    Runnable*    m_runnable;
-    Event*       m_create_event;
-    Event*       m_end_event;
-    uint32_t     id;
-    std::string  name;
-    std::thread* m_thread;
+    Runnable*     m_runnable;
+    Event*        m_create_event;
+    Event*        m_end_event;
+    uint32_t      id;
+    std::string   name;
+    std::jthread* m_thread;
 };
 
 class Runnable {

@@ -1,5 +1,6 @@
 #include "scene/Camera.h"
 
+#include "math/Base.h"
 #include "math/Constant.h"
 #include "math/Function.h"
 //
@@ -104,6 +105,12 @@ namespace Moer {
         }
         return m_view;//world to camera
     }
+    Matrix4x4f Camera::GetRotateMatrix() noexcept {
+        return m_rotate;
+    }
+    Matrix4x4f Camera::GetTranslateMatrix() noexcept {
+        return MakeTranslation(m_position.x, m_position.y, m_position.z);
+    }
 
     void Camera::SetProjectionFactor(float fov_y, float aspect_ratio, float near_clip, float far_clip) noexcept {
         if (fov_y < fov_min)
@@ -162,9 +169,9 @@ namespace Moer {
 
         m_rotate_inv = Transpose(m_rotate);
 
-        m_view = m_rotate *
-                 MakeTranslation(-m_position.x, -m_position.y, -m_position.z);//world to cam
-
+        m_view = m_rotate * MakeTranslation(-m_position.x, -m_position.y, -m_position.z);
+        //world to cam
+        m_to_world       = Inverse(m_view);
         m_to_world_dirty = false;
     }
 
@@ -216,6 +223,40 @@ namespace Moer {
 
         m_rotate_inv     = Transpose(m_rotate);
         m_to_world_dirty = true;
+    }
+
+    void Camera::GetAABB(Vector3f& _out_min, Vector3f& _out_max) {
+        // if (IsDirty()) {
+        //far plane points and near plane points
+        Vector3f far_points[4];
+        Vector3f near_points[4];
+        Vector3f cam_pos = this->GetPosition();
+        for (int i = 0; i < 4; i++) {
+            far_points[i]  = cam_pos + Z * m_far_clip + X * (i % 2 == 0 ? 1.f : -1.f) * m_far_clip * m_aspect_ratio + Y * (i / 2 == 0 ? 1.f : -1.f) * m_far_clip;
+            near_points[i] = cam_pos + Z * m_near_clip + X * (i % 2 == 0 ? 1.f : -1.f) * m_near_clip * m_aspect_ratio + Y * (i / 2 == 0 ? 1.f : -1.f) * m_near_clip;
+        }
+        for (int i = 0; i < 4; i++) {
+            p_min = Min(p_min, far_points[i]);
+            p_min = Min(p_min, near_points[i]);
+        }
+        // }
+        _out_min = p_min;
+        _out_max = p_max;
+    }
+
+    void Camera::GetPlanes(Vector4f _out_planes[6]) {
+        auto vp        = GetProjectionMatrix() * GetViewMatrix();
+        _out_planes[0] = vp.r3 + vp.r0;//left
+        _out_planes[1] = vp.r3 - vp.r0;//right
+        _out_planes[2] = vp.r3 + vp.r1;//top
+        _out_planes[3] = vp.r3 - vp.r1;//bottom
+        _out_planes[4] = vp.r2;        //near
+        _out_planes[5] = vp.r3 - vp.r2;//far
+        //normalize
+        for (int i = 0; i < 6; i++) {
+            auto length    = Length(Vector3f(_out_planes[i]));
+            _out_planes[i] = Vector4f(Normalizef(Vector3f(_out_planes[i])), _out_planes[i].w / length);
+        }
     }
 
     //if changed cam_pos / cam_direction : m_to_world_dirty->true

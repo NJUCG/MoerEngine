@@ -66,6 +66,7 @@ class RHIShader;
 class RHIShaderLibrary;
 class RHISRV;
 class RHICBV;
+class RHIView;
 class RHIConstantBufferView;
 class RHITexture;
 class RHITextureReference;
@@ -116,6 +117,7 @@ using RHIShaderRef                    = CountableRef<RHIShader>;
 using RHIShaderLibraryRef             = CountableRef<RHIShaderLibrary>;
 using RHISRVRef                       = CountableRef<RHISRV>;
 using RHICBVRef                       = CountableRef<RHICBV>;
+using RHIViewRef                      = CountableRef<RHIView>;
 using RHITextureRef                   = CountableRef<RHITexture>;
 using RHITextureReferenceRef          = CountableRef<RHITextureReference>;
 using RHIShaderRootParameterLayoutRef = CountableRef<RHIShaderRootParameterLayout>;
@@ -128,6 +130,7 @@ using RHIRenderPrimitiveRef           = CountableRef<RHIRenderPrimitive>;
 #pragma endregion
 
 class Shader;
+class RHITextureBarrierInfo;
 
 #pragma region utils definition
 
@@ -628,10 +631,14 @@ public:
     void                 SetName(const std::string& _name) {
         name = _name;
     }
+    void SetLayout(EBufferLayout _layout) {
+        layout = _layout;
+    }
     uint32_t          GetNumElement() const { return info.size / info.stride; }
     uint64_t          GetByteSize() const { return info.size; }
     uint32_t          GetStride() const { return info.stride; }
     EBufferUsageFlags GetUsage() const { return info.usage; }
+    EBufferLayout     GetLayout() const { return layout; }
 
 protected:
     /**
@@ -643,6 +650,7 @@ protected:
 
 protected:
     RHIBufferInfo info;
+    EBufferLayout layout = EBufferLayout::UNDEFINED_LAYOUT;
 };
 
 struct RHITextureInfo {
@@ -894,9 +902,8 @@ public:
     EPixelFormat GetUAVFormat() const {
         return GetInfo().uav_format;
     }
-    void SetLayout(const RHISubresourceRange& _subresource_range, ETextureLayout _layout) {
-        subresource_layouts[_subresource_range] = _layout;
-    }
+    void SetLayout(const RHISubresourceRange& _subresource_range, ETextureLayout _layout, RHITextureBarrierInfo* barrier_info = nullptr);
+
     ETextureLayout GetLayout(const RHISubresourceRange& _subresource_range) const {
         auto it = subresource_layouts.find(_subresource_range);
         if (it != subresource_layouts.end()) {
@@ -1351,19 +1358,133 @@ protected:
 };
 
 #pragma region viewable resources view definitions
-struct RHIViewInfo {
-    enum class EViewType : uint8_t {
-        BUFFER_SRV,
-        BUFFER_UAV,
-        TEXTURE_SRV,
-        TEXTURE_UAV,
-        BUFFER_CBV,
-        TEXTURE_CBV,
 
-        ACCELERATION_STRUCTURE_SRV,
-        ACCELERATION_STRUCTURE_UAV,
-        ACCELERATION_STRUCTURE_CBV,
-    };
+uint32_t constexpr v_type_buffer_srv  = 0;
+uint32_t constexpr v_type_buffer_uav  = 1;
+uint32_t constexpr v_type_buffer_cbv  = 2;
+uint32_t constexpr v_type_buffer_view = 0;
+uint32_t constexpr v_type_texture_srv = 1;
+uint32_t constexpr v_type_texture_uav = 2;
+
+enum class EViewType : uint8_t {
+    BUFFER_SRV,
+    BUFFER_UAV,
+    TEXTURE_SRV,
+    TEXTURE_UAV,
+    BUFFER_CBV,
+
+    ACCELERATION_STRUCTURE_SRV,
+
+    ACCELERATION_STRUCTURE_UAV,
+    ACCELERATION_STRUCTURE_CBV,
+};
+enum class EBufferViewType : uint8_t {
+    STRUCTURED,
+    CONSTANT,
+    TEXTURE,
+    RAW
+};
+struct RHIBufferViewInfo {
+    EViewType    view_type;
+    EPixelFormat format{PF_UNDEFINED};
+    uint32_t     byte_offset;
+    uint32_t     num_elements;
+    uint32_t     stride;
+};
+struct RHITextureViewInfo {
+    EViewType         view_type;
+    EPixelFormat      format{PF_UNDEFINED};
+    uint8_t           b_disable_srgb : 1;
+    ETextureDimension dimension : uint32_t(ETextureDimension::NumBits);
+    uint8_t /*padding*/ : 7 - uint32_t(ETextureDimension::NumBits);
+    uint16_t array_min;
+    uint16_t array_num;
+};
+struct RHIAccelerationStructureViewInfo {
+    EViewType view_type;
+};
+
+struct RHITextureSRVInfo : public RHITextureViewInfo {
+    uint8_t mip_min;
+    uint8_t mip_num;
+};
+
+struct RHITextureUAVInfo : public RHITextureViewInfo {
+    uint8_t mip;
+};
+
+struct RHIBufferSRVInfo : public RHIBufferViewInfo {
+    RHIBufferSRVInfo() {
+        view_type = EViewType::BUFFER_SRV;
+    }
+};
+
+struct RHIBufferUAVInfo : public RHIBufferViewInfo {
+    RHIBufferUAVInfo() {
+        view_type = EViewType::BUFFER_UAV;
+    }
+};
+
+struct RHIBufferCBVInfo : public RHIBufferViewInfo {
+    RHIBufferCBVInfo() {
+        view_type = EViewType::BUFFER_CBV;
+    }
+};
+
+struct RHIAccelerationStructureSRVInfo : public RHIAccelerationStructureViewInfo {
+    RHIAccelerationStructureSRVInfo() {
+        view_type = EViewType::ACCELERATION_STRUCTURE_SRV;
+    }
+};
+
+template<uint32_t _type>
+static RHIBufferViewInfo GetBufferInfo(RHIBuffer* _buffer, uint32_t _byte_offset, uint32_t _num_elements, uint32_t _stride) {
+    RHIBufferViewInfo info{
+        .byte_offset  = _byte_offset,
+        .num_elements = _num_elements,
+        .stride       = _stride};
+    if constexpr (_type == v_type_buffer_srv) {
+        info.view_type = EViewType::BUFFER_SRV;
+    } else if constexpr (_type == v_type_buffer_uav) {
+        info.view_type = EViewType::BUFFER_UAV;
+    } else if constexpr (_type == v_type_buffer_cbv) {
+        info.view_type = EViewType::BUFFER_CBV;
+    }
+    return std::move(info);
+}
+
+static RHITextureSRVInfo GetTextureSRVInfo(RHITexture* _texture, EPixelFormat _format, uint8_t _mip_min, uint8_t _mip_num, uint16_t _array_min, uint16_t _array_num) {
+    RHITextureSRVInfo info{
+        .mip_min = _mip_min,
+        .mip_num = _mip_num};
+    info.view_type = EViewType::TEXTURE_SRV;
+    info.format    = _format == PF_UNDEFINED ? _texture->GetInfo().format : _format;
+    info.dimension = _texture->GetInfo().dimension;
+    info.array_min = _array_min;
+    info.array_num = _array_num;
+
+    return std::move(info);
+}
+
+static RHITextureUAVInfo GetTextureUAVInfo(RHITexture* _texture, EPixelFormat _format, uint8_t _mip, uint16_t _array_min, uint16_t _array_num) {
+    RHITextureUAVInfo info{
+        .mip = _mip};
+    info.view_type = EViewType::TEXTURE_UAV;
+    info.format    = _format == PF_UNDEFINED ? _texture->GetInfo().format : _format;
+    info.dimension = _texture->GetInfo().dimension;
+    info.array_min = _array_min;
+    info.array_num = _array_num;
+    return std::move(info);
+}
+
+static RHIAccelerationStructureSRVInfo GetAccelerationStructureSRVInfo(RHIRayTracingTLAS* _tlas) {
+    RHIAccelerationStructureSRVInfo info{};
+    info.view_type = EViewType::ACCELERATION_STRUCTURE_SRV;
+    return std::move(info);
+}
+
+struct RHIViewInfo {
+
     enum class EBufferType : uint8_t {
         UNDEFINED,
         STRUCTURED,
@@ -1450,19 +1571,7 @@ struct RHIViewInfo {
         ViewInfo GetViewInfo(RHIRayTracingTLAS*) const;
     };
 
-    struct AccelerationStructureUAV : public AccelerationStructure {
-        struct Initializer;
-        struct ViewInfo;
-        ViewInfo GetViewInfo(RHIRayTracingTLAS*) const;
-    };
-
-    struct AccelerationStructureCBV : public AccelerationStructure {
-        struct Initializer;
-        struct ViewInfo;
-        ViewInfo GetViewInfo(RHIRayTracingTLAS*) const;
-    };
-
-    union {
+    /*union {
         BaseViewInfo base_info;
         union {
             BufferSRV srv;
@@ -1476,332 +1585,414 @@ struct RHIViewInfo {
         union {
             AccelerationStructureSRV srv;
         } acceleration_structure;
-    };
+    };*/
 
-    bool IsSRV() const { return base_info.view_type == EViewType::BUFFER_SRV || base_info.view_type == EViewType::TEXTURE_SRV || base_info.view_type == EViewType::ACCELERATION_STRUCTURE_SRV; }
-    bool IsUAV() const { return base_info.view_type == EViewType::BUFFER_UAV || base_info.view_type == EViewType::TEXTURE_UAV || base_info.view_type == EViewType::ACCELERATION_STRUCTURE_UAV; }
-    bool IsCBV() const { return base_info.view_type == EViewType::BUFFER_CBV || base_info.view_type == EViewType::TEXTURE_CBV || base_info.view_type == EViewType::ACCELERATION_STRUCTURE_CBV; }
+    std::variant<RHIBufferViewInfo, RHITextureSRVInfo, RHITextureUAVInfo, RHIAccelerationStructureSRVInfo> info;
 
-    bool IsBuffer() const { return base_info.view_type == EViewType::BUFFER_SRV || base_info.view_type == EViewType::BUFFER_UAV || base_info.view_type == EViewType::BUFFER_CBV; }
-    bool IsTexture() const { return base_info.view_type == EViewType::TEXTURE_SRV || base_info.view_type == EViewType::TEXTURE_UAV || base_info.view_type == EViewType::TEXTURE_CBV; }
-    bool IsAccelerationStructure() const { return base_info.view_type == EViewType::ACCELERATION_STRUCTURE_SRV || base_info.view_type == EViewType::ACCELERATION_STRUCTURE_UAV || base_info.view_type == EViewType::ACCELERATION_STRUCTURE_CBV; }
-
-    bool operator==(const RHIViewInfo& other) {
-        return memcmp(this, &other, sizeof(*this)) == 0;
+    bool IsSRV() const {
+        return std::visit(
+            [](auto&& _arg) {
+                using T = std::decay_t<decltype(_arg)>;
+                if constexpr (std::is_same_v<T, RHIBufferViewInfo>) {
+                    return _arg.view_type == EViewType::BUFFER_SRV;
+                } else if constexpr (std::is_same_v<T, RHITextureSRVInfo>) {
+                    return true;
+                } else if constexpr (std::is_same_v<T, RHIAccelerationStructureSRVInfo>) {
+                    return true;
+                } else {
+                    return false;
+                }
+            },
+            info);
+    }
+    bool IsUAV() const {
+        return std::visit(
+            [](auto&& _arg) {
+                using T = std::decay_t<decltype(_arg)>;
+                if constexpr (std::is_same_v<T, RHIBufferViewInfo>) {
+                    return _arg.view_type == EViewType::BUFFER_UAV;
+                } else if constexpr (std::is_same_v<T, RHITextureUAVInfo>) {
+                    return true;
+                } else {
+                    return false;
+                }
+            },
+            info);
     }
 
-    bool operator!=(const RHIViewInfo& other) {
-        return !(*this == other);
+    bool IsCBV() const {
+        return std::visit(
+            [](auto&& _arg) {
+                using T = std::decay_t<decltype(_arg)>;
+                if constexpr (std::is_same_v<T, RHIBufferViewInfo>) {
+                    return _arg.view_type == EViewType::BUFFER_CBV;
+                } else {
+                    return false;
+                }
+            },
+            info);
     }
 
-    RHIViewInfo() : RHIViewInfo(EViewType::BUFFER_SRV) {}
+    bool IsBuffer() const {
+        return std::visit(
+            [](auto&& _arg) {
+                using T = std::decay_t<decltype(_arg)>;
+                if constexpr (std::is_same_v<T, RHIBufferViewInfo>) {
+                    return true;
+                } else {
+                    return false;
+                }
+            },
+            info);
+    }
+    bool IsAccelerationStructure() const {
+        return std::visit(
+            [](auto&& _arg) {
+                using T = std::decay_t<decltype(_arg)>;
+                if constexpr (std::is_same_v<T, RHIAccelerationStructureSRVInfo>) {
+                    return true;
+                } else {
+                    return false;
+                }
+            },
+            info);
+    }
+    bool IsTexture() const { return !IsBuffer() && !IsAccelerationStructure(); }
 
-    static BufferSRV::Initializer  CreateBufferSRVInfo();
-    static BufferUAV::Initializer  CreateBufferUAVInfo();
-    static TextureSRV::Initializer CreateTextureSRVInfo();
-    static TextureUAV::Initializer CreateTextureUAVInfo();
-    static BufferCBV::Initializer  CreateBufferCBVInfo();
+    bool operator==(const RHIViewInfo& _other) {
+        return memcmp(this, &_other, sizeof(*this)) == 0;
+    }
 
+    bool operator!=(const RHIViewInfo& _other) {
+        return !(*this == _other);
+    }
+
+    // RHIViewInfo() : RHIViewInfo(EViewType::BUFFER_SRV) {}
+    RHIViewInfo(RHIBufferViewInfo _info) : info(_info) {}
+    RHIViewInfo(RHITextureSRVInfo _info) : info(_info) {}
+    RHIViewInfo(RHITextureUAVInfo _info) : info(_info) {}
+    RHIViewInfo(RHIAccelerationStructureSRVInfo _info) : info(_info) {}
+
+    static BufferSRV::Initializer                CreateBufferSRVInfo();
+    static BufferUAV::Initializer                CreateBufferUAVInfo();
+    static TextureSRV::Initializer               CreateTextureSRVInfo();
+    static TextureUAV::Initializer               CreateTextureUAVInfo();
+    static BufferCBV::Initializer                CreateBufferCBVInfo();
     static AccelerationStructureSRV::Initializer CreateAcclerationStructureSRVInfo();
 
 protected:
-    RHIViewInfo(EViewType _type) {
-        base_info.view_type = _type;
-    }
-};
-using RHITextureUAVCreateInfo = RHIViewInfo::TextureUAV::Initializer;
-
-using RHITextureSRVCreateInfo               = RHIViewInfo::TextureSRV::Initializer;
-using RHIBufferUAVCreateInfo                = RHIViewInfo::BufferUAV::Initializer;
-using RHIBufferSRVCreateInfo                = RHIViewInfo::BufferSRV::Initializer;
-using RHIBufferUBVCreateInfo                = RHIViewInfo::BufferCBV::Initializer;
-using RHIAccelerationStructureSRVCreateInfo = RHIViewInfo::AccelerationStructureSRV::Initializer;
-
-struct RHIViewInfo::Buffer::ViewInfo {
-    uint32_t     byte_offset;
-    uint32_t     byte_stride;
-    uint32_t     num_elements;
-    uint32_t     byte_size;
-    EBufferType  type;
-    EPixelFormat format;
-
-    //empty buffer view resource
-    bool b_null_view;
-};
-
-struct RHIViewInfo::Texture::ViewInfo {
-    uint16_t array_min;
-    uint16_t array_size;
-
-    EPixelFormat format;
-
-    ETextureDimension dimension;
-    uint8_t           b_all_mips;
-    uint8_t           b_all_array_slices;
-};
-
-struct RHIViewInfo::AccelerationStructure::ViewInfo {
-};
-
-struct RHIViewInfo::BufferUAV::ViewInfo : public RHIViewInfo::Buffer::ViewInfo {
-
-    //hlsl usage
-    bool b_atomic_counter;
-
-    //append buffer must be unordered access structured buffer
-    bool b_append_buffer;
-};
-
-struct RHIViewInfo::BufferSRV::ViewInfo : public RHIViewInfo::Buffer::ViewInfo {
-};
-
-struct RHIViewInfo::TextureSRV::ViewInfo : public RHIViewInfo::Texture::ViewInfo {
-    uint8_t mip_min;
-    uint8_t mip_num;
-};
-
-struct RHIViewInfo::TextureUAV::ViewInfo : public RHIViewInfo::Texture::ViewInfo {
-    //texture uav support one mip level
-    uint8_t mip_level;
-};
-
-struct RHIViewInfo::BufferCBV::ViewInfo : public RHIViewInfo::Buffer::ViewInfo {
-};
-
-struct RHIViewInfo::AccelerationStructureSRV::ViewInfo : public RHIViewInfo::AccelerationStructure::ViewInfo {
-};
-
-static_assert(sizeof(RHIViewInfo) == 16, "Packing of RHIViewInfo is unexpected.");
-
-//for rhi CommandList to create BufferSRV
-struct RHIViewInfo::BufferSRV::Initializer : public RHIViewInfo {
-    friend RHIViewInfo;
-    friend RHICommandListBase;
-
-protected:
-    Initializer() : RHIViewInfo(EViewType::BUFFER_SRV) {
-        buffer.srv.format = PF_UNDEFINED;
-    }
-
-public:
-    Initializer& SetType(EBufferType _type) {
-        assert(_type != EBufferType::UNDEFINED);
-        buffer.srv.buffer_type = _type;
-        return *this;
-    }
-    Initializer& SetType(RHIBuffer* _buffer) {
-        buffer.srv.buffer_type = EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::BYTE_ADDRESS_BUFFER) ? EBufferType::RAW :
-                                 EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::STORAGE_BUFFER)      ? EBufferType::STRUCTURED :
-                                                                                                               EBufferType::UNDEFINED;
-        return *this;
-    }
-    Initializer& SetFormat(EPixelFormat _format) {
-        buffer.srv.format = _format;
-        return *this;
-    }
-    Initializer& SetByteOffset(uint32_t _byte_offset) {
-        buffer.srv.byte_offset = _byte_offset;
-        return *this;
-    }
-    Initializer& SetStride(uint32_t _stride) {
-        buffer.srv.stride = _stride;
-        return *this;
-    }
-    Initializer& SetNumElements(uint32_t _num_elements) {
-        buffer.srv.num_elements = _num_elements;
-        return *this;
-    }
-};
-
-//for rhi CommandList to create BufferUAV
-struct RHIViewInfo::BufferUAV::Initializer : public RHIViewInfo {
-    friend RHIViewInfo;
-    friend RHICommandListBase;
-
-protected:
-    Initializer() : RHIViewInfo(EViewType::BUFFER_UAV) {
-        buffer.uav.format = PF_UNDEFINED;
-    }
-
-public:
-    Initializer& SetType(EBufferType _type) {
-        assert(_type != EBufferType::UNDEFINED);
-        buffer.uav.buffer_type = _type;
-        return *this;
-    }
-    Initializer& SetType(RHIBuffer* _buffer) {
-        buffer.uav.buffer_type = EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::BYTE_ADDRESS_BUFFER) ? EBufferType::RAW :
-                                 EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::STORAGE_BUFFER)      ? EBufferType::STRUCTURED :
-                                                                                                               EBufferType::UNDEFINED;
-        return *this;
-    }
-    Initializer& SetFormat(EPixelFormat _format) {
-        buffer.uav.format = _format;
-        return *this;
-    }
-    Initializer& SetByteOffset(uint32_t _byte_offset) {
-        buffer.uav.byte_offset = _byte_offset;
-        return *this;
-    }
-    Initializer& SetStride(uint32_t _stride) {
-        buffer.uav.stride = _stride;
-        return *this;
-    }
-    Initializer& SetNumElements(uint32_t _num_elements) {
-        buffer.uav.num_elements = _num_elements;
-        return *this;
-    }
-};
-
-//for rhi CommandList to create TextureSRV
-struct RHIViewInfo::TextureSRV::Initializer : public RHIViewInfo {
-    friend RHIViewInfo;
-    friend RHICommandListBase;
-
-protected:
-    Initializer() : RHIViewInfo(EViewType::TEXTURE_SRV) {
-        texture.srv.format = PF_UNDEFINED;
-    }
-
-public:
-    Initializer& SetDimension(ETextureDimension _dimension) {
-        texture.srv.dimension = _dimension;
-        return *this;
-    }
-    Initializer& SetDimension(RHITexture* _texture) {
-        return SetDimension(_texture->GetInfo().dimension);
-    }
-    Initializer& SetFormat(EPixelFormat _format) {
-        texture.srv.format = _format;
-        return *this;
-    }
-    Initializer& SetMipRange(uint8_t _mip_min, uint8_t _mip_num) {
-        texture.srv.mip_min = _mip_min;
-        texture.srv.mip_num = _mip_num;
-        return *this;
-    }
-    Initializer& SetArrayRange(uint16_t _array_min, uint16_t _array_num) {
-        texture.srv.array_min = _array_min;
-        texture.srv.array_num = _array_num;
-        return *this;
-    }
-    Initializer& SetDisableSRGB(bool _b_disable_srgb) {
-        texture.srv.b_disable_srgb = _b_disable_srgb;
-        return *this;
-    }
-};
-
-//for rhi CommandList to create TextureUAV
-struct RHIViewInfo::TextureUAV::Initializer : public RHIViewInfo {
-    friend RHIViewInfo;
-    friend RHICommandListBase;
-
-protected:
-    Initializer() : RHIViewInfo(EViewType::TEXTURE_UAV) {
-        texture.uav.mip_num = 1;
-        texture.uav.format  = PF_UNDEFINED;
-    }
-
-public:
-    Initializer& SetDimension(ETextureDimension _dimension) {
-        texture.uav.dimension = _dimension;
-        return *this;
-    }
-    Initializer& SetDimension(RHITexture* _texture) {
-        return SetDimension(_texture->GetInfo().dimension);
-    }
-    Initializer& SetFormat(EPixelFormat _format) {
-        texture.uav.format = _format;
-        return *this;
-    }
-    Initializer& SetMipLevel(uint8_t _mip_min) {
-        texture.uav.mip_min = _mip_min;
-        return *this;
-    }
-    Initializer& SetArrayRange(uint16_t _array_min, uint16_t _array_num) {
-        texture.uav.array_min = _array_min;
-        texture.uav.array_num = _array_num;
-        return *this;
-    }
-    Initializer& SetDisableSRGB(bool _b_disable_srgb) {
-        texture.uav.b_disable_srgb = _b_disable_srgb;
-        return *this;
-    }
-};
-
-struct RHIViewInfo::BufferCBV::Initializer : public RHIViewInfo {
-    friend RHIViewInfo;
-    friend RHICommandListBase;
-
-protected:
-    Initializer() : RHIViewInfo(EViewType::BUFFER_CBV) {
-        buffer.cbv.byte_offset = 0;
-    }
-
-public:
-    Initializer& SetType(EBufferType _type) {
-        assert(_type != EBufferType::UNDEFINED);
-        buffer.cbv.buffer_type = _type;
-        return *this;
-    }
-    Initializer& SetType(RHIBuffer* _buffer) {
-        buffer.cbv.buffer_type = EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::UNIFORM_BUFFER) ? EBufferType::UNIFROM :
-                                 EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::TEXTURE_BUFFER) ? EBufferType::TEXTURE :
-                                                                                                          EBufferType::UNDEFINED;
-        return *this;
-    }
-    // Initializer& SetFormat(EPixelFormat _format) {
-    //     buffer.ubv.format = _format;
-    //     return *this;
+    // RHIViewInfo(EViewType _type) {
+    //     base_info.view_type = _type;
     // }
-    Initializer& SetByteOffset(uint32_t _byte_offset) {
-        buffer.cbv.byte_offset = _byte_offset;
-        return *this;
-    }
-    Initializer& SetStride(uint32_t _stride) {
-        buffer.cbv.stride = _stride;
-        return *this;
-    }
-    Initializer& SetNumElements(uint32_t _num_elements) {
-        buffer.cbv.num_elements = _num_elements;
-        return *this;
-    }
 };
-struct RHIViewInfo::AccelerationStructureSRV::Initializer : public RHIViewInfo {
-    friend RHIViewInfo;
-    friend RHICommandListBase;
+// struct RHIViewInfo::Buffer::ViewInfo {
+//     uint32_t    byte_offset;
+//     uint32_t    byte_stride;
+//     uint32_t    num_elements;
+//     uint32_t    byte_size;
+//     EBufferType type : 4;
 
-protected:
-    Initializer() : RHIViewInfo(EViewType::ACCELERATION_STRUCTURE_SRV) {
-    }
-};
+//     //empty buffer view resource
+//     bool         b_null_view : 4;
+//     EPixelFormat format;
+// };
 
-FORCEINLINE RHIViewInfo::BufferSRV::Initializer RHIViewInfo::CreateBufferSRVInfo() {
-    return {};
-}
+// struct RHIViewInfo::Texture::ViewInfo {
+//     uint16_t array_min;
+//     uint16_t array_size;
 
-FORCEINLINE RHIViewInfo::BufferUAV::Initializer RHIViewInfo::CreateBufferUAVInfo() {
-    return {};
-}
+//     EPixelFormat format;
 
-FORCEINLINE RHIViewInfo::TextureSRV::Initializer RHIViewInfo::CreateTextureSRVInfo() {
-    return {};
-}
-FORCEINLINE RHIViewInfo::TextureUAV::Initializer RHIViewInfo::CreateTextureUAVInfo() {
-    return {};
-}
+//     ETextureDimension dimension;
+//     uint8_t           b_all_mips;
+//     uint8_t           b_all_array_slices;
+// };
 
-FORCEINLINE RHIViewInfo::BufferCBV::Initializer RHIViewInfo::CreateBufferCBVInfo() {
-    return {};
-}
-FORCEINLINE RHIViewInfo::AccelerationStructureSRV::Initializer RHIViewInfo::CreateAcclerationStructureSRVInfo() {
-    return {};
-}
+// struct RHIViewInfo::BufferUAV::ViewInfo : public RHIViewInfo::Buffer::ViewInfo {
+
+//     //hlsl usage
+//     bool b_atomic_counter;
+
+//     //append buffer must be unordered access structured buffer
+//     bool b_append_buffer;
+// };
+
+// struct RHIViewInfo::BufferSRV::ViewInfo : public RHIViewInfo::Buffer::ViewInfo {
+// };
+
+// struct RHIViewInfo::TextureSRV::ViewInfo : public RHIViewInfo::Texture::ViewInfo {
+//     uint8_t mip_min;
+//     uint8_t mip_num;
+// };
+
+// struct RHIViewInfo::TextureUAV::ViewInfo : public RHIViewInfo::Texture::ViewInfo {
+//     //texture uav support one mip level
+//     uint8_t mip_level;
+// };
+
+// struct RHIViewInfo::BufferCBV::ViewInfo : public RHIViewInfo::Buffer::ViewInfo {
+// };
+
+// //for rhi CommandList to create BufferSRV
+// struct RHIViewInfo::BufferSRV::Initializer : public RHIViewInfo {
+//     friend RHIViewInfo;
+//     friend RHICommandListBase;
+
+// protected:
+//     Initializer() : RHIViewInfo(EViewType::BUFFER_SRV) {
+//         buffer.srv.format = PF_UNDEFINED;
+//     }
+
+// public:
+//     Initializer& SetType(EBufferType _type) {
+//         assert(_type != EBufferType::UNDEFINED);
+//         buffer.srv.buffer_type = _type;
+//         return *this;
+//     }
+//     Initializer& SetType(RHIBuffer* _buffer) {
+//         buffer.srv.buffer_type = EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::BYTE_ADDRESS_BUFFER)    ? EBufferType::RAW :
+//                                  EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::STORAGE_BUFFER)         ? EBufferType::STRUCTURED :
+//                                  EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::ACCELERATION_STRUCTURE) ? EBufferType::ACCELERATION_STRUCTURE :
+//                                                                                                                   EBufferType::UNDEFINED;
+//         return *this;
+//     }
+//     Initializer& SetFormat(EPixelFormat _format) {
+//         buffer.srv.format = _format;
+//         return *this;
+//     }
+//     Initializer& SetByteOffset(uint32_t _byte_offset) {
+//         buffer.srv.byte_offset = _byte_offset;
+//         return *this;
+//     }
+//     Initializer& SetStride(uint32_t _stride) {
+//         buffer.srv.stride = _stride;
+//         return *this;
+//     }
+//     Initializer& SetNumElements(uint32_t _num_elements) {
+//         buffer.srv.num_elements = _num_elements;
+//         return *this;
+//     }
+// };
+
+// //for rhi CommandList to create BufferUAV
+// struct RHIViewInfo::BufferUAV::Initializer : public RHIViewInfo {
+//     friend RHIViewInfo;
+//     friend RHICommandListBase;
+
+// protected:
+//     Initializer() : RHIViewInfo(EViewType::BUFFER_UAV) {
+//         buffer.uav.format = PF_UNDEFINED;
+//     }
+
+// public:
+//     Initializer& SetType(EBufferType _type) {
+//         assert(_type != EBufferType::UNDEFINED);
+//         buffer.uav.buffer_type = _type;
+//         return *this;
+//     }
+//     Initializer& SetType(RHIBuffer* _buffer) {
+//         buffer.uav.buffer_type = EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::BYTE_ADDRESS_BUFFER)    ? EBufferType::RAW :
+//                                  EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::STORAGE_BUFFER)         ? EBufferType::STRUCTURED :
+//                                  EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::ACCELERATION_STRUCTURE) ? EBufferType::ACCELERATION_STRUCTURE :
+//                                                                                                                   EBufferType::UNDEFINED;
+//         return *this;
+//     }
+//     Initializer& SetFormat(EPixelFormat _format) {
+//         buffer.uav.format = _format;
+//         return *this;
+//     }
+//     Initializer& SetByteOffset(uint32_t _byte_offset) {
+//         buffer.uav.byte_offset = _byte_offset;
+//         return *this;
+//     }
+//     Initializer& SetStride(uint32_t _stride) {
+//         buffer.uav.stride = _stride;
+//         return *this;
+//     }
+//     Initializer& SetNumElements(uint32_t _num_elements) {
+//         buffer.uav.num_elements = _num_elements;
+//         return *this;
+//     }
+// };
+
+// //for rhi CommandList to create TextureSRV
+// struct RHIViewInfo::TextureSRV::Initializer : public RHIViewInfo {
+//     friend RHIViewInfo;
+//     friend RHICommandListBase;
+
+// protected:
+//     Initializer() : RHIViewInfo(EViewType::TEXTURE_SRV) {
+//         texture.srv.format = PF_UNDEFINED;
+//     }
+
+// public:
+//     Initializer& SetDimension(ETextureDimension _dimension) {
+//         texture.srv.dimension = _dimension;
+//         return *this;
+//     }
+//     Initializer& SetDimension(RHITexture* _texture) {
+//         return SetDimension(_texture->GetInfo().dimension);
+//     }
+//     Initializer& SetFormat(EPixelFormat _format) {
+//         texture.srv.format = _format;
+//         return *this;
+//     }
+//     Initializer& SetMipRange(uint8_t _mip_min, uint8_t _mip_num) {
+//         texture.srv.mip_min = _mip_min;
+//         texture.srv.mip_num = _mip_num;
+//         return *this;
+//     }
+//     Initializer& SetArrayRange(uint16_t _array_min, uint16_t _array_num) {
+//         texture.srv.array_min = _array_min;
+//         texture.srv.array_num = _array_num;
+//         return *this;
+//     }
+//     Initializer& SetDisableSRGB(bool _b_disable_srgb) {
+//         texture.srv.b_disable_srgb = _b_disable_srgb;
+//         return *this;
+//     }
+// };
+
+// //for rhi CommandList to create TextureUAV
+// struct RHIViewInfo::TextureUAV::Initializer : public RHIViewInfo {
+//     friend RHIViewInfo;
+//     friend RHICommandListBase;
+
+// protected:
+//     Initializer() : RHIViewInfo(EViewType::TEXTURE_UAV) {
+//         texture.uav.mip_num = 1;
+//         texture.uav.format  = PF_UNDEFINED;
+//     }
+
+// public:
+//     Initializer& SetDimension(ETextureDimension _dimension) {
+//         texture.uav.dimension = _dimension;
+//         return *this;
+//     }
+//     Initializer& SetDimension(RHITexture* _texture) {
+//         return SetDimension(_texture->GetInfo().dimension);
+//     }
+//     Initializer& SetFormat(EPixelFormat _format) {
+//         texture.uav.format = _format;
+//         return *this;
+//     }
+//     Initializer& SetMipLevel(uint8_t _mip_min) {
+//         texture.uav.mip_min = _mip_min;
+//         return *this;
+//     }
+//     Initializer& SetArrayRange(uint16_t _array_min, uint16_t _array_num) {
+//         texture.uav.array_min = _array_min;
+//         texture.uav.array_num = _array_num;
+//         return *this;
+//     }
+//     Initializer& SetDisableSRGB(bool _b_disable_srgb) {
+//         texture.uav.b_disable_srgb = _b_disable_srgb;
+//         return *this;
+//     }
+// };
+
+// struct RHIViewInfo::BufferCBV::Initializer : public RHIViewInfo {
+//     friend RHIViewInfo;
+//     friend RHICommandListBase;
+
+// protected:
+//     Initializer() : RHIViewInfo(EViewType::BUFFER_CBV) {
+//         buffer.cbv.byte_offset = 0;
+//     }
+
+// public:
+//     Initializer& SetType(EBufferType _type) {
+//         assert(_type != EBufferType::UNDEFINED);
+//         buffer.cbv.buffer_type = _type;
+//         return *this;
+//     }
+//     Initializer& SetType(RHIBuffer* _buffer) {
+//         buffer.cbv.buffer_type = EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::UNIFORM_BUFFER) ? EBufferType::UNIFROM :
+//                                  EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::TEXTURE_BUFFER) ? EBufferType::TEXTURE :
+//                                                                                                           EBufferType::UNDEFINED;
+//         return *this;
+//     }
+//     // Initializer& SetFormat(EPixelFormat _format) {
+//     //     buffer.ubv.format = _format;
+//     //     return *this;
+//     // }
+//     Initializer& SetByteOffset(uint32_t _byte_offset) {
+//         buffer.cbv.byte_offset = _byte_offset;
+//         return *this;
+//     }
+//     Initializer& SetStride(uint32_t _stride) {
+//         buffer.cbv.stride = _stride;
+//         return *this;
+//     }
+//     Initializer& SetNumElements(uint32_t _num_elements) {
+//         buffer.cbv.num_elements = _num_elements;
+//         return *this;
+//     }
+// };
+
+//public:
+//Initializer& SetType(EBufferType _type) {
+//    assert(_type != EBufferType::UNDEFINED);
+//    buffer.cbv.buffer_type = _type;
+//    return *this;
+//}
+//Initializer& SetType(RHIBuffer* _buffer) {
+//    buffer.cbv.buffer_type = EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::UNIFORM_BUFFER) ? EBufferType::UNIFROM :
+//                             EnumHasAnyFlag(_buffer->GetUsage(), EBufferUsageFlags::TEXTURE_BUFFER) ? EBufferType::TEXTURE :
+//                                                                                                      EBufferType::UNDEFINED;
+//    return *this;
+//}
+//// Initializer& SetFormat(EPixelFormat _format) {
+////     buffer.ubv.format = _format;
+////     return *this;
+//// }
+//Initializer& SetByteOffset(uint32_t _byte_offset) {
+//    buffer.cbv.byte_offset = _byte_offset;
+//    return *this;
+//}
+//Initializer& SetStride(uint32_t _stride) {
+//    buffer.cbv.stride = _stride;
+//    return *this;
+//}
+//Initializer& SetNumElements(uint32_t _num_elements) {
+//    buffer.cbv.num_elements = _num_elements;
+//    return *this;
+//}
+//}
+//;
+//struct RHIViewInfo::AccelerationStructureSRV::Initializer : public RHIViewInfo {
+//    friend RHIViewInfo;
+//    friend RHICommandListBase;
+//
+//protected:
+//    Initializer() : RHIViewInfo(EViewType::ACCELERATION_STRUCTURE_SRV) {
+//    }
+//};
+
+//FORCEINLINE RHIViewInfo::BufferSRV::Initializer RHIViewInfo::CreateBufferSRVInfo() {
+//    return {};
+//}
+
+// FORCEINLINE RHIViewInfo::BufferUAV::Initializer RHIViewInfo::CreateBufferUAVInfo() {
+//     return {};
+// }
+
+// FORCEINLINE RHIViewInfo::TextureSRV::Initializer RHIViewInfo::CreateTextureSRVInfo() {
+//     return {};
+// }
+// FORCEINLINE RHIViewInfo::TextureUAV::Initializer RHIViewInfo::CreateTextureUAVInfo() {
+//     return {};
+// }
+
+// FORCEINLINE RHIViewInfo::BufferCBV::Initializer RHIViewInfo::CreateBufferCBVInfo() {
+//     return {};
+// }
 
 class RHIView : public RHIResource {
 public:
     RHIView(ERHIResourceType _type, RHIViewableResource* _viewable_resource, const RHIViewInfo& _info)
         : RHIResource(_type), resource(_viewable_resource), info(_info) {
+
         // assert(_viewable_resource != nullptr && "ViewableResource is invalid");
     }
 
@@ -1817,10 +2008,9 @@ public:
         return info.IsTexture() ? dynamic_cast<RHITexture*>(resource.Get()) : nullptr;
     }
 
-    RHIRayTracingTLAS* GetAcclerationStructure() const {
+    RHIRayTracingTLAS* GetAccelerationStructure() const {
         return info.IsAccelerationStructure() ? dynamic_cast<RHIRayTracingTLAS*>(resource.Get()) : nullptr;
     }
-
     bool IsBuffer() const {
         return info.IsBuffer();
     }
@@ -3010,203 +3200,7 @@ enum class ERHITexturePlane : uint8_t {
     CompressedSurface = PRIMARY_COMPRESSED,
 };
 static_assert((1u << uint32_t(ERHITexturePlane::NumBits)) >= uint32_t(ERHITexturePlane::Num), "Not enough bits in the ERHITexturePlane enum");
-//
-//struct RHITextureSRVInfo {
-//    explicit RHITextureSRVInfo(uint8_t _mip_level = 0, uint8_t _num_mips = 0, EPixelFormat _format = PF_UNDEFINED)
-//        : format(_format),
-//          mip_level(_mip_level),
-//          num_mips(_num_mips),
-//          array_index(0),
-//          array_size(0) {}
-//
-//    explicit RHITextureSRVInfo(uint8_t _mip_level, uint8_t _num_mips, uint16_t _array_index, uint16_t _array_size, EPixelFormat _format = PF_UNDEFINED)
-//        : format(_format),
-//          mip_level(_mip_level),
-//          num_mips(_num_mips),
-//          array_index(_array_index),
-//          array_size(_array_size) {}
-//
-//    EPixelFormat format;
-//    uint8_t      mip_level;
-//    uint8_t      num_mips;
-//
-//    uint8_t array_index;
-//    uint8_t array_size;
-//
-//    bool disable_srgb;
-//    ERHITexturePlane                 meta_plane = ERHITexturePlane::Primary;
-//    std::optional<ETextureDimension> dimension_override;
-//
-//    FORCEINLINE bool operator==(const RHITextureSRVInfo& other) const {
-//        return format == other.format && mip_level == other.mip_level && num_mips == other.num_mips && array_index == other.array_index && array_size == other.array_size && meta_plane == other.meta_plane && dimension_override == other.dimension_override;
-//    }
-//    FORCEINLINE bool operator!=(const RHITextureSRVInfo& other) const {
-//        return !(*this == other);
-//    }
-//    friend uint32_t GetHash(const RHITextureSRVInfo& value){
-//        uint32_t hash = (uint32_t)value.format | (uint32_t)value.mip_level << 8 | (uint32_t)value.num_mips << 16| (uint32_t)value.disable_srgb << 24;
-//        hash_combine(hash, (uint32_t)value.array_index | (uint32_t)value.array_size << 16);
-//        hash_combine(hash, value.dimension_override.has_value() ? (uint32_t)(value.dimension_override.value()) : std::numeric_limits<uint32_t>::max());
-//        hash_combine(hash, (uint32_t)value.meta_plane);
-//        return hash;
-//    }
-//};
-//
-//struct RHITextureSRVCreateInfo : RHITextureSRVInfo {
-//    RHITextureSRVCreateInfo() = default;
-//    RHITextureSRVCreateInfo(uint8_t _mip_level = 0, uint8_t _num_mips = 0, EPixelFormat _format = PF_UNDEFINED)
-//        : RHITextureSRVInfo(_mip_level, _num_mips, _format) {}
-//
-//    static RHITextureSRVCreateInfo Create(uint8_t _mip_level = 0, uint8_t _num_mips = 0, EPixelFormat _format = PF_UNDEFINED) {
-//        return {_mip_level, _num_mips, _format};
-//    }
-//    RHITextureSRVCreateInfo& SetFormat(EPixelFormat _format) {
-//        format = _format;
-//        return *this;
-//    }
-//    RHITextureSRVCreateInfo& SetMipLevel(uint8_t _mip_level) {
-//        mip_level = _mip_level;
-//        return *this;
-//    }
-//    RHITextureSRVCreateInfo& SetNumMips(uint8_t _num_mips) {
-//        num_mips = _num_mips;
-//        return *this;
-//    }
-//    RHITextureSRVCreateInfo& SetArrayIndex(uint8_t _array_index) {
-//        array_index = _array_index;
-//        return *this;
-//    }
-//
-//    RHITextureSRVCreateInfo& SetArrayCount(uint8_t _array_count) {
-//        _array_count = _array_count;
-//        return *this;
-//    }
-//
-//    RHITextureSRVCreateInfo& SetDisableSRGB(bool _disable_srgb){
-//        disable_srgb = _disable_srgb;
-//        return *this;
-//    }
-//    RHITextureSRVCreateInfo& SetMetaTexturePlane(ERHITexturePlane _meta_plane){
-//        meta_plane = _meta_plane;
-//        return *this;
-//    }
-//    RHITextureSRVCreateInfo& SetDimensionOverride(ETextureDimension _dimension_override){
-//        dimension_override = _dimension_override;
-//        return *this;
-//    }
-//
-//};
-//struct RHITextureUAVInfo {
-//public:
-//    RHITextureUAVInfo() = default;
-//
-//    explicit RHITextureUAVInfo(uint8_t _mip_level = 0, EPixelFormat _format = PF_UNDEFINED, uint16_t _array_index = 0, uint16_t _array_size = 0)
-//        : format(_format),
-//          mip_level(_mip_level),
-//          array_index(_array_index),
-//          array_size(_array_size) {}
-//
-//    explicit RHITextureUAVInfo(ERHITexturePlane _meta_plane)
-//        : meta_plane(_meta_plane) {}
-//
-//    EPixelFormat format;
-//    uint8_t      mip_level;
-//
-//    uint8_t array_index;
-//    uint8_t array_size;
-//
-//    ERHITexturePlane                 meta_plane = ERHITexturePlane::Primary;
-//    std::optional<ETextureDimension> dimension_override;
-//    FORCEINLINE bool                 operator==(const RHITextureUAVInfo& other) const {
-//        return format == other.format && mip_level == other.mip_level && array_index == other.array_index && array_size == other.array_size && meta_plane == other.meta_plane && dimension_override == other.dimension_override;
-//    }
-//    FORCEINLINE bool operator!=(const RHITextureUAVInfo& other) const {
-//        return !(*this == other);
-//    }
-//    friend uint32_t GetHash(const RHITextureUAVInfo& value){
-//        uint32_t hash = (uint32_t)value.format | (uint32_t)value.mip_level << 8 | (uint32_t)value.array_index << 16;
-//        hash_combine(hash, value.dimension_override.has_value() ? (uint32_t)(value.dimension_override.value()) : std::numeric_limits<uint32_t>::max());
-//        hash_combine(hash, (uint32_t)value.array_size | (uint32_t)value.meta_plane << 16);
-//        return hash;
-//    }
-//};
-//
-//struct RHITextureUAVCreateInfo : public RHITextureUAVInfo{
-//    RHITextureUAVCreateInfo(uint8_t _mip_level = 0, EPixelFormat _format = PF_UNDEFINED, uint16_t _array_index = 0, uint16_t _array_size = 0):
-//                                    RHITextureUAVInfo(_mip_level, _format, _array_index, _array_size){}
-//    RHITextureUAVCreateInfo Create(uint8_t _mip_level = 0, EPixelFormat _format = PF_UNDEFINED, uint16_t _array_index = 0, uint16_t _array_size = 0){
-//        return {_mip_level, _format, _array_index, _array_size};
-//    }
-//
-//    RHITextureUAVCreateInfo& SetFormat(EPixelFormat _format) {
-//        format = _format;
-//        return *this;
-//    }
-//    RHITextureUAVCreateInfo& SetMipLevel(uint8_t _mip_level) {
-//        mip_level = _mip_level;
-//        return *this;
-//    }
-//    RHITextureUAVCreateInfo& SetArrayIndex(uint8_t _array_index) {
-//        array_index = _array_index;
-//        return *this;
-//    }
-//
-//    RHITextureUAVCreateInfo& SetArrayCount(uint8_t _array_count) {
-//        _array_count = _array_count;
-//        return *this;
-//    }
-//
-//    RHITextureUAVCreateInfo& SetMetaTexturePlane(ERHITexturePlane _meta_plane){
-//        meta_plane = _meta_plane;
-//        return *this;
-//    }
-//    RHITextureUAVCreateInfo& SetDimensionOverride(ETextureDimension _dimension_override){
-//        dimension_override = _dimension_override;
-//        return *this;
-//    }
-//};
-//
-//struct RHIBufferSRVInfo {
-//    explicit RHIBufferSRVInfo() = default;
-//    explicit RHIBufferSRVInfo(EPixelFormat _format) : format(_format) {}
-//    explicit RHIBufferSRVInfo(uint32_t _byte_offset, uint32_t _num_elements) : byte_offset(_byte_offset), num_elements(_num_elements) {}
-//    bool operator==(const RHIBufferSRVInfo& other) const {
-//        return format == other.format && byte_offset == other.byte_offset && num_elements == other.num_elements;
-//    }
-//    bool operator!=(const RHIBufferSRVInfo& other) const {
-//        return !(*this == other);
-//    }
-//    EPixelFormat format;
-//    uint32_t     byte_offset;
-//    uint32_t     num_elements;
-//};
-//struct RHIBufferUAVInfo{
-//    explicit RHIBufferUAVInfo(EPixelFormat _format): format(_format){}
-//    EPixelFormat format;
-//    uint32_t byte_offset;
-//    uint32_t num_elements;
-//
-//};
-//struct RHIBufferSRVCreateInfo : RHIBufferSRVInfo {
-//    RHIBufferSRVCreateInfo() = default;
-//    RHIBufferSRVCreateInfo(EPixelFormat _format) : RHIBufferSRVInfo(_format) {}
-//
-//    static RHIBufferSRVCreateInfo Create(EPixelFormat _format){
-//        return {_format};
-//    }
-//    RHIBufferSRVCreateInfo& SetFormat(EPixelFormat _format) {
-//        format = _format;
-//        return *this;
-//    }
-//    RHIBufferSRVCreateInfo& SetByteOffset(uint32_t _byte_offset) {
-//        byte_offset = _byte_offset;
-//        return *this;
-//    }
-//    RHIBufferSRVCreateInfo& SetNumElements(uint32_t _num_elements) {
-//        num_elements = _num_elements;
-//        return *this;
-//    }
-//};
+
 #pragma endregion
 
 class RHITextureReference final : public RHITexture {

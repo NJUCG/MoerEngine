@@ -84,6 +84,8 @@ namespace Moer {
 
     template<VectorType T> inline T Reflect(const T& v, const T& n) noexcept;
 
+    template<VectorType T> inline T Exp(const T& v) noexcept;
+
     // clang-format on
 }// namespace Moer
 
@@ -492,6 +494,13 @@ namespace Moer {
     template<VectorType T>
     inline T Reflect(const T& v, const T& n) noexcept {
         return v - 2. * n * Dot(n, v);
+    }
+
+    template<VectorType T>
+    inline T Exp(const T& v) noexcept {
+        T ret;
+        for (int i = 0; i < T::size; i++) ret[i] = std::exp(v[i]);
+        return ret;
     }
 
     inline uint64_t RoundUpToPowerOf2(uint64_t v) noexcept {

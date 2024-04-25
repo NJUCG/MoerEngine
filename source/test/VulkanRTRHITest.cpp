@@ -84,11 +84,10 @@ void Test() {
         {0.5, 0.5, 1},
 
     };
-    RHIBufferRef index_buffer  = g_rhi->RHICreateBuffer<uint32_t>(sizeof(index_data), EBufferUsageFlags::INDEX_BUFFER | EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT);
-    void*        index_dst     = g_rhi->RHIMapBuffer(index_buffer,0,sizeof(index_data));
+    RHIBufferRef index_buffer = g_rhi->RHICreateBuffer<uint32_t>(sizeof(index_data), EBufferUsageFlags::INDEX_BUFFER | EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT);
+    void*        index_dst    = g_rhi->RHIMapBuffer(index_buffer, 0, sizeof(index_data));
     memcpy(index_dst, index_data, sizeof(index_data));
     g_rhi->RHIUnmapBuffer(index_buffer);
-
 
     RHIBufferRef vertex_buffer = g_rhi->RHICreateBuffer<float>(sizeof(vertex_data), EBufferUsageFlags::VERTEX_BUFFER | EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT);
     void*        vertex_dst    = g_rhi->RHIMapBuffer(vertex_buffer, 0, sizeof(vertex_data));
@@ -96,7 +95,7 @@ void Test() {
     g_rhi->RHIUnmapBuffer(vertex_buffer);
 
     Moer::Vector3f clear_value    = {0, 0, 0.2};
-    RHIBufferRef   uniform_buffer = CreateBufferFromData(sizeof(clear_value), EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::UNIFORM_BUFFER, &clear_value);
+    RHIBufferRef   uniform_buffer = CreateBufferFromData(sizeof(clear_value), EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::CONSTANT_BUFFER, &clear_value);
 
     RHIRayTracingTrianglesGeometry simple_triangle;
     simple_triangle.index_buffer         = index_buffer;
@@ -176,10 +175,9 @@ void Test() {
     RHICBVRef     buffer_view = g_rhi->RHICreateCBV(uniform_buffer, sizeof(clear_value), 0);
 
     RHIBatchedShaderParameters batched_parameter{};
-
-    const_cast<Moer::Array<RHIShaderResourceParameter>&>(batched_parameter.GetResourceParameters()).push_back({as_view, 0, 0});
-    const_cast<Moer::Array<RHIShaderResourceParameter>&>(batched_parameter.GetResourceParameters()).push_back({tex_view, 1, 0});
-    const_cast<Moer::Array<RHIShaderResourceParameter>&>(batched_parameter.GetResourceParameters()).push_back({buffer_view, 0, 1});
+    const_cast<Moer::Array<RHIShaderResourceParameter>&>(batched_parameter.GetResourceParameters()).push_back(RHIShaderResourceParameter{as_view.Get(), 0, 0});
+    const_cast<Moer::Array<RHIShaderResourceParameter>&>(batched_parameter.GetResourceParameters()).push_back({tex_view.Get(), 1, 0});
+    const_cast<Moer::Array<RHIShaderResourceParameter>&>(batched_parameter.GetResourceParameters()).push_back({buffer_view.Get(), 0, 1});
 
     g_rhi->RHISetBatchedShaderParameters(rt_pipeline, batched_parameter);
 

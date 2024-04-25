@@ -16,6 +16,24 @@ struct InstanceData {
   uint material_type;
 };
 
+static const float3 corners[8] = {
+    float3(-1, -1, -1), float3(-1, 1, -1), float3(1, 1, -1), float3(1, -1, -1),
+    float3(-1, -1, 1),  float3(-1, 1, 1),  float3(1, 1, 1),  float3(1, -1, 1),
+};
+struct VirtualView {
+  float4x4 view;
+  float4x4 view_proj;
+  float4x4 prev_view_proj;
+  float4x4 proj;
+  float4 planes[6];
+  float3 pos;
+  float nearz;
+  float3 bound_center;
+  float aspect_ratio;
+  float3 bound_extent;
+  float inv_tan_half_fov;
+};
+
 struct InstanceMeshletInfo {
   float3 center;
   uint vertex_offset;

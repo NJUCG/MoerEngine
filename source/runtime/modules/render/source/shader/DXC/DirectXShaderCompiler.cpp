@@ -2,6 +2,7 @@
 #include "config/ConfigManager.h"
 #include "misc/Hash.h"
 #include "misc/STL.h"
+#include "rhi/RHIResource.h"
 #include "shader/ShaderResource.h"
 #include "shader/ShaderResourceManager.h"
 #include <cassert>
@@ -360,16 +361,15 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> result, const ShaderParam
     SpvReflectResult       ref_result = spvReflectCreateShaderModule(size, data, &reflect_module);
     assert(ref_result == SPV_REFLECT_RESULT_SUCCESS);
 
-    // Enumerate and extract shader's input variables
-    uint32_t var_count = 0;
-    ref_result         = spvReflectEnumerateInputVariables(&reflect_module, &var_count, NULL);
-    assert(ref_result == SPV_REFLECT_RESULT_SUCCESS);
-    Moer::Array<SpvReflectInterfaceVariable*> input_vars(var_count);
-    ref_result = spvReflectEnumerateInputVariables(&reflect_module, &var_count, input_vars.data());
-    assert(ref_result == SPV_REFLECT_RESULT_SUCCESS);
+    Moer::Array<SpvReflectInterfaceVariable*> input_vars(reflect_module.input_variable_count);
+    spvReflectEnumerateInputVariables(&reflect_module, &reflect_module.input_variable_count, input_vars.data());
 
-    Moer::UnorderedMap<std::string, ParameterInfo> param_map;
-    const ShaderParametersMetadata*                meta_data = _meta_param;
+    ShaderReflectInfo reflect_info;
+    auto&             vertex_inputs = reflect_info.vertex_input_info;
+
+    Moer::UnorderedMap<std::string, ParameterInfo>
+                                    param_map;
+    const ShaderParametersMetadata* meta_data = _meta_param;
     for (uint32_t binding_index = 0; binding_index < reflect_module.descriptor_binding_count; ++binding_index) {
         auto& binding = reflect_module.descriptor_bindings[binding_index];
         auto& param   = param_map[binding.name];

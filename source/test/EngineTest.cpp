@@ -8,6 +8,7 @@
 #include "shader/ShaderResourceManager.h"
 #include "log/LogSystem.h"
 #include "RenderThread.h"
+#include "taskgraph/GraphTask.h"
 #define BEGIN_TEST(TestName)                          \
     LOG_INFO("===================================="); \
     LOG_INFO("Begin Test: {}", #TestName);            \
@@ -22,22 +23,41 @@ void RenderThreadSuspendTest(const Moer::Engine& engine) {
     BEGIN_TEST(RenderThreadSuspendTest)
 
     {
-        FunctionGraphTask::ConstructAndDispatchWhenReady(
-            [&engine]() {
-                for (uint32_t i = 0; i < 300 && !engine.IsRequestQuiting(); i++) {
+        LambdaTask::Dispatch([&engine] {
+            for (uint32_t i = 0; i < 300 && !engine.IsRequestQuiting(); i++) {
 
-                    FunctionGraphTask::ConstructAndDispatchWhenReady(
-                        []() {
-                            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                            LOG_WARNING("Render Thread Ticking");
-                        },
-                        nullptr,
-                        EThread::ERenderThread);
-                    std::this_thread::sleep_for(std::chrono::milliseconds(200));
-                }
-            },
-            nullptr,
-            EThread::AnyThread_HighPri);
+                // FunctionGraphTask::ConstructAndDispatchWhenReady(
+                //     []() {
+                //         std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                //         LOG_WARNING("Render Thread Ticking");
+                //     },
+                //     nullptr,
+                //     EThread::ERenderThread);
+
+                LambdaTask::Dispatch([]() {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    LOG_WARNING("Render Thread Ticking");
+                },
+                                     EThread::ERenderThread);
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            }
+        });
+        // FunctionGraphTask::ConstructAndDispatchWhenReady(
+        //     [&engine]() {
+        //         for (uint32_t i = 0; i < 300 && !engine.IsRequestQuiting(); i++) {
+
+        //             FunctionGraphTask::ConstructAndDispatchWhenReady(
+        //                 []() {
+        //                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        //                     LOG_WARNING("Render Thread Ticking");
+        //                 },
+        //                 nullptr,
+        //                 EThread::ERenderThread);
+        //             std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        //         }
+        //     },
+        //     nullptr,
+        //     EThread::AnyThread_HighPri);
 
         std::this_thread::sleep_for(std::chrono::milliseconds(2000));
 

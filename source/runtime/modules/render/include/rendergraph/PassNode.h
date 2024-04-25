@@ -12,6 +12,10 @@ namespace Moer {
         RenderGraphHandle              depth_stencil_attachment;
     };
 
+    struct ComputePassDescriptor {
+        RHIComputePipelineStateRef compute_pipeline;
+    };
+
     class PassNode : public DepdencyGraph::Node {
     public:
         virtual void                       Execute(RenderPassContext& pass_context) = 0;
@@ -22,12 +26,14 @@ namespace Moer {
         Moer::Array<RenderGraphResource*>& GetResourcesToCreate();
         Moer::Array<RenderGraphResource*>& GetResourcesToDestroy();
         PassNode(const std::string& name) : Node(name) {}
+        EPassType GetPassType() const { return m_pass_type; }
 
     protected:
         Moer::Map<RenderGraphResource*, uint32_t> m_resource_usage;
         Moer::Map<RenderGraphResource*, uint32_t> m_resource_layout;
         Moer::Array<RenderGraphResource*>         m_resources_to_create;
         Array<RenderGraphResource*>               m_resources_to_destroy;
+        EPassType                                 m_pass_type;
     };
 
     class GraphicsPassNode : public PassNode {
@@ -48,13 +54,14 @@ namespace Moer {
 
     class ComputePassNode : public PassNode {
     public:
-        ComputePassNode(const std::string& _pass_name, RenderGraphPass* _pass);
-        void Execute(RenderPassContext& _pass_context) override;
-        void DeclareComputePass();
+        ComputePassNode(const std::string& passName, RenderGraphPass* pass);
+        void Execute(RenderPassContext& pass_context) override;
         ~ComputePassNode();
+        void DeclareComputePass(const ComputePassDescriptor& descriptor);
 
-    private:
-        RenderGraphPass* m_pass;
+    protected:
+        RenderGraphPass*      m_pass;
+        ComputePassDescriptor m_descriptor;
     };
 
     class RaytracingPassNode : public PassNode {

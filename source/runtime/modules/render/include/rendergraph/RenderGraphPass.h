@@ -23,6 +23,7 @@ namespace Moer {
         RenderGraph&            graph;
         RHIGraphicsCommandList* cmd_list;
         Extent3D                render_extent;
+        EPassType               pass_type;
     };
 
     // class RENDER_API {
@@ -85,4 +86,4 @@ namespace Moer {
     //
     // class RENDER_API RayTracingPass : public PassNode {
     // };
-}
+}// namespace Moer

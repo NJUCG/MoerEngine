@@ -414,7 +414,7 @@ void VulkanRHIGraphicsCommandList::Draw(uint32_t _vertex_count, uint32_t _instan
 
 void VulkanRHIGraphicsCommandList::Dispatch(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z) {
     PrepareDispatch();
-    Moer::RHI::Vulkan::DebugUtils::CmdInsertLabel(m_command_buffer, "Dispatch", {});
+    // Moer::RHI::Vulkan::DebugUtils::CmdInsertLabel(m_command_buffer, "Dispatch", {});
     vkCmdDispatch(m_command_buffer, _group_count_x, _group_count_y, _group_count_z);
 }
 
@@ -540,6 +540,9 @@ void VulkanRHIGraphicsCommandList::BindIndexBuffer(const RHIBuffer* p_index_buff
         _offset,
         VulkanRHIBuffer::METoVKIndexType(_type));
 }
+void VulkanRHIGraphicsCommandList::FillBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size, uint32_t _data) {
+    vkCmdFillBuffer(m_command_buffer, static_cast<VulkanRHIBuffer*>(_buffer)->GetHandle(), _offset, _size, _data);
+}
 
 void VulkanRHIGraphicsCommandList::ClearDepthStencil() {
     // MARK...
@@ -605,6 +608,14 @@ void VulkanRHIGraphicsCommandList::GetQueryData(ERenderQueryType _query_type, ui
 }
 
 void VulkanRHIGraphicsCommandList::ExecuteSubCommands(uint32_t _num, RHIGraphicsCommandList* _sub_commands) {
+}
+
+void VulkanRHIGraphicsCommandList::BeginLabel(const char* _label) {
+    Moer::RHI::Vulkan::DebugUtils::CmdInsertLabel(m_command_buffer, _label, {});
+}
+
+void VulkanRHIGraphicsCommandList::EndLabel() {
+    Moer::RHI::Vulkan::DebugUtils::CmdEndLabel(m_command_buffer);
 }
 
 VkRenderingAttachmentInfo VulkanRHIGraphicsCommandList::FromColorAttachmentInfo(const RHIRenderPassInfo::ColorAttachmentInfo& _color_attachment_info) const {

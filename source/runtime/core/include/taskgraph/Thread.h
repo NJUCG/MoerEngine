@@ -24,7 +24,7 @@ class TaskThreadBase : public Runnable {
 
 public:
     TaskThreadBase() : m_worker{nullptr}, m_thread_type{EThread::UNKNOWN_THREAD} {
-        m_graph_tasks.reserve(128);
+        // m_graph_tasks.reserve(128);
     }
 
     void SetAttributes(EThread::Type _threadIndex, WorkerThread* worker) {
@@ -69,10 +69,10 @@ public:
     }
 
 protected:
-    WorkerThread*               m_worker;
-    EThread::Type               m_thread_type;
-    Moer::Array<BaseGraphTask*> m_graph_tasks;
-    std::atomic<uint32_t>       m_hanged;
+    WorkerThread* m_worker;
+    EThread::Type m_thread_type;
+    // Moer::Array<BaseGraphTask*> m_graph_tasks;
+    std::atomic<uint32_t> m_hanged;
 };
 
 class TaskThreadAnyThread : public TaskThreadBase {

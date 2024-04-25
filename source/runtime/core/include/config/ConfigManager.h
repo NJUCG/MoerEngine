@@ -27,6 +27,7 @@ namespace Moer {
         bool     ray_tracing : 1;
 
         char default_rhi[32]{"Vulkan"};
+        char default_render_name[32]{"DeferredRenderer"};
     };
     class CORE_API ConfigManager {
     private:
@@ -38,6 +39,7 @@ namespace Moer {
         std::filesystem::path editor_resource_path;
         std::filesystem::path engine_shader_path;
         std::filesystem::path engine_shader_cached_path;
+        std::filesystem::path scene_path;
         ConfigManager() {}
 
     public:
@@ -54,6 +56,8 @@ namespace Moer {
         const std::filesystem::path& GetEngineShaderPath() const;
 
         const std::filesystem::path& GetEngineShaderCachedPath() const;
+
+        const std::filesystem::path& GetScenePath() const;
 
         //call after config manager init
         const MoerInitConfig& GetInitConfig() const { return init_config; }

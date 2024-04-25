@@ -1,5 +1,7 @@
 #include "rendergraph/DepdencyGraph.h"
 
+#include "log/LogSystem.h"
+
 #include <stack>
 namespace Moer {
     void DepdencyGraph::Link(DepdencyGraph::Edge* edge) {
@@ -26,9 +28,11 @@ namespace Moer {
             auto node = stack.top();
             stack.pop();
 
+            LOG_INFO("Culling node: {}", node->GetName());
+
             auto in_coming_edges = GetInComingEdges(node);
             for (auto& edge : in_coming_edges) {
-                edge->src->DecRef();
+                edge->src->DeRef();
                 if (edge->src->IsCulled()) {
                     stack.emplace(edge->src);
                 }

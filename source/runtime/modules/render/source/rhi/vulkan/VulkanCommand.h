@@ -138,6 +138,8 @@ public:
         uint32_t          _offset,
         EIndexElementType _type) override;
 
+    void FillBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size, uint32_t _data) override;
+
     void SetAttachments() override {
     }
 
@@ -167,6 +169,9 @@ public:
 
     void ExecuteSubCommands(uint32_t                _num,
                             RHIGraphicsCommandList* _sub_commands) override;
+
+    void BeginLabel(const char* _label) override;
+    void EndLabel() override;
 
 protected:
     friend class VulkanRHICommandQueue;

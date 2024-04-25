@@ -2,6 +2,7 @@
 #define RHI_H
 #include "PixelFormat.h"
 #include "RHIResource.h"
+#include "log/LogSystem.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "RenderAPI.h"
@@ -123,10 +124,15 @@ public:
 
     virtual RHITextureRef RHICreateTexture(const RHITextureCreateInfo& info) = 0;
 
-    virtual RHICBVRef RHICreateCBV(RHIBuffer* _resource, uint64_t _size, uint64_t _byte_offset = 0) = 0;
+    // virtual RHICBVRef RHICreateCBV(RHIBuffer* _resource, uint64_t _size, uint64_t _byte_offset = 0) = 0;
 
     RHICBVRef RHICreateCBV(RHIBuffer* _resource, uint64_t _byte_offset = 0) {
         return RHICreateCBV(_resource, _resource->GetByteSize(), _byte_offset);
+    }
+
+    RHICBVRef RHICreateCBV(RHIBuffer* _resource, uint64_t _size, uint64_t _byte_offset = 0) {
+        RHIViewRef view = RHICreateBufferView<v_type_buffer_cbv>(_resource, 0, _size, _byte_offset);
+        return RHICBVRef(static_cast<RHICBV*>(view.Get()));
     }
 
     template<typename TElement>
@@ -140,7 +146,7 @@ public:
 
     RHISRVRef RHICreateBufferSRV(
         RHIBuffer* _resource,
-        uint32_t   stride       = 0,
+        uint32_t   _stride      = 0,
         uint64_t   _byte_size   = 0,
         uint64_t   _byte_offset = 0);
 
@@ -155,7 +161,7 @@ public:
 
     RHIUAVRef RHICreateBufferUAV(
         RHIBuffer* _resource,
-        uint32_t   stride       = 0,
+        uint32_t   _stride      = 0,
         uint64_t   _byte_size   = 0,
         uint64_t   _byte_offset = 0);
 
@@ -175,7 +181,7 @@ public:
         uint32_t     _array_size  = 1);
 
     RHISRVRef RHICreateAccelerationStructureSRV(
-        RHIRayTracingTLAS* _resource);
+        RHIRayTracingTLAS* _tlas);
 
     virtual RHICommandQueue* RHICreateCommandQueue(ECommandQueueType type) = 0;
     // DX12 only: _initial_state
@@ -215,8 +221,20 @@ public:
 protected:
     virtual void         RHISetBatchedShaderParametersInner(RHIResource* _resource, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) = 0;
     virtual RHIBufferRef RHICreateBufferInner(const RHIBufferCreateInfo& info)                                                                                 = 0;
-    virtual RHISRVRef    RHICreateSRVInner(RHIViewableResource* _resource, const RHIViewInfo& _view_info)                                                      = 0;
-    virtual RHIUAVRef    RHICreateUAVInner(RHIViewableResource* _resource, const RHIViewInfo& _view_info)                                                      = 0;
+    virtual RHIViewRef   RHICreateViewInner(RHIViewableResource* _resource, const RHIViewInfo& _view_info)                                                     = 0;
+    template<uint32_t _type>
+    RHIViewRef RHICreateBufferView(RHIBuffer* _resource, uint64_t _stride, uint64_t _byte_size, uint64_t _byte_offset) {
+        auto true_stride = _stride == 0 ? _resource->GetStride() : _stride;
+
+        auto true_size = _byte_size == 0 ? _resource->GetByteSize() : _byte_size;
+        true_size      = (true_size + _byte_offset) > _resource->GetByteSize() ? (_resource->GetByteSize() - _byte_offset) : true_size;
+        if (_byte_offset >= _resource->GetByteSize()) {
+            LOG_ERROR("Invalid byte offset: {} for buffer: {}", _byte_offset, _resource->GetName());
+            return nullptr;
+        }
+        RHIViewInfo view_info(GetBufferInfo<_type>(_resource, _byte_offset, true_size / true_stride, true_stride));
+        return RHICreateViewInner(_resource, std::move(view_info));
+    }
 
 protected:
     RHIInfo m_rhi_info;
@@ -271,13 +289,15 @@ FORCEINLINE void EnqueueRenderTask(Funtion&& _func) {
         task.Fire(EThread::EMainThread, nullptr);
     }
     if (Moer::IsCurrentlyGameThread()) {
-        GraphTask<TRenderTaskType>::CreateTask().ConstructAndDispatchWhenReady(std::forward<Funtion>(_func));
+        // GraphTask<TRenderTaskType>::CreateTask().ConstructAndDispatchWhenReady(std::forward<Funtion>(_func));
+        GraphTask<TRenderTaskType>::Create(std::forward<Funtion>(_func)).Dispatch(EThread::ERenderThread);
     } else {
         // Any Thread maybe
         // immediately execute on render thread
         // TRenderTaskType task(std::forward<Funtion>(_func));
         // task.Fire(EThread::EMainThread, nullptr);
-        GraphTask<TRenderTaskType>::CreateTask().ConstructAndDispatchWhenReady(std::forward<Funtion>(_func));
+        // GraphTask<TRenderTaskType>::CreateTask().ConstructAndDispatchWhenReady(std::forward<Funtion>(_func));
+        GraphTask<TRenderTaskType>::Create(std::forward<Funtion>(_func)).Dispatch(EThread::ERenderThread);
     }
 }
 #endif

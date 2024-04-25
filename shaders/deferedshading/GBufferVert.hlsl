@@ -24,8 +24,8 @@ struct PS_INPUT {
 
 PS_INPUT main(VS_INPUT input) {
   PS_INPUT output;
-  float4x4 model = instance_data[input.instance_id].model2world;
-  float4x4 modelInv = instance_data[input.instance_id].inv_model2world;
+  float4x4 model = instance_data[input.iid].model2world;
+  float4x4 modelInv = instance_data[input.iid].inv_model2world;
 
   float3x3 model2world = float3x3(model[0].xyz, model[1].xyz, model[2].xyz);
   float3x3 world2model =

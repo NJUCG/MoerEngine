@@ -3,9 +3,11 @@
 #include "rhi/RHICommand.h"
 namespace Moer {
     void PassNode::ResloveResourceUsage(RHIGraphicsCommandList* cmd_list) {
+        RHIBarrierDependencyInfo barrier_info;
         for (auto& resource : m_resource_usage) {
-            m_resource_layout.emplace(resource.first, resource.first->ResloveResourceUsage(cmd_list, resource.second));
+            m_resource_layout.emplace(resource.first, resource.first->ResloveResourceUsage(resource.second, barrier_info, m_pass_type));
         }
+        cmd_list->SetPipelineBarrier(barrier_info);
         //Todo Handle  resource transition
     }
     void PassNode::AddResourceUsage(RenderGraphResource* resource, uint32_t usage) {
@@ -28,6 +30,7 @@ namespace Moer {
         return m_resources_to_destroy;
     }
     GraphicsPassNode::GraphicsPassNode(const std::string& passName, RenderGraphPass* pass) : PassNode(passName), m_pass(pass) {
+        m_pass_type = EPassType::Graphics;
     }
     void GraphicsPassNode::Execute(RenderPassContext& pass_context) {
         RHIGraphicsCommandList* cmd_list     = pass_context.cmd_list;
@@ -96,18 +99,21 @@ namespace Moer {
     GraphicsPassNode::~GraphicsPassNode() {
         MoerDelete(m_pass);
     }
-
-#pragma region ComputePass
-    ComputePassNode::ComputePassNode(const std::string& _pass_name, RenderGraphPass* _pass) : PassNode(_pass_name), m_pass(_pass) {
-    }
-    void ComputePassNode::Execute(RenderPassContext& _pass_context) {
-        RHIGraphicsCommandList* cmd_list = _pass_context.cmd_list;
-        m_pass->Execute(_pass_context);
-    }
-    void ComputePassNode::DeclareComputePass() {
-    }
     ComputePassNode::~ComputePassNode() {
         MoerDelete(m_pass);
     }
-#pragma endregion
+    void ComputePassNode::DeclareComputePass(const ComputePassDescriptor& descriptor) {
+        m_descriptor = descriptor;
+    }
+
+    ComputePassNode::ComputePassNode(const std::string& passName, RenderGraphPass* pass) : PassNode(passName), m_pass(pass) {
+        m_pass_type = EPassType::Compute;
+    }
+    void ComputePassNode::Execute(RenderPassContext& pass_context) {
+        pass_context.cmd_list->BeginLabel(GetName().data());
+        if (m_descriptor.compute_pipeline)
+            pass_context.cmd_list->SetPipelineState(m_descriptor.compute_pipeline);
+        m_pass->Execute(pass_context);
+        pass_context.cmd_list->EndLabel();
+    }
 }// namespace Moer

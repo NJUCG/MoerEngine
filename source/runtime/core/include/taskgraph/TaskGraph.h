@@ -17,6 +17,7 @@ private:
 public:
     CORE_API static TaskGraph& GetInterface();
     static void                Init();
+    static void                Shutdown();
     TaskGraph();
     ~TaskGraph();
     CORE_API void          WaitUntilTasksComplete(const GraphEventArray& task_events, EThread::Type currentThread);
@@ -29,6 +30,7 @@ public:
     CORE_API virtual void  ProcessThreadUntilIdle(EThread::Type index);
     CORE_API virtual void  ProcessThreadUntilReturn(EThread::Type index);
     CORE_API bool          IsThreadProcessingTask(EThread::Type index);
+    inline uint32_t        GetWorkerThreadCount() const { return m_worker_thread_count; }
 
 protected:
     EThread::Type GetCurrentThread(bool localQueue = false);
@@ -47,7 +49,7 @@ private:
     int32_t      m_worker_per_priority;
     int32_t      m_worker_thread_count;
 
-    TaskFIFOQueue<BaseGraphTask, 2> m_task_queue[EThread::PriorityCount];
+    TaskFIFOQueue<BaseGraphTask, 1> m_task_queue[EThread::PriorityCount];
     TaskFIFOQueue<BaseGraphTask, 1> m_global_queue;//
 };
 #endif// !TASK_GRAPH_H

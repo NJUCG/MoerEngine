@@ -75,7 +75,6 @@ public:
 
     RHICommandAllocator* RHIGetCurrentCommandAllocator() final override;
 
-    RHICBVRef RHICreateCBV(RHIBuffer* _resource, uint64_t _size, uint64_t _byte_offset) final override;
 #pragma endregion
 
 #pragma region viewport
@@ -97,8 +96,7 @@ public:
 protected:
     void         RHISetBatchedShaderParametersInner(RHIResource* _resource, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) final override;
     RHIBufferRef RHICreateBufferInner(const RHIBufferCreateInfo& info) final override;
-    RHISRVRef    RHICreateSRVInner(RHIViewableResource* _resource, const RHIViewInfo& _view_info) final override;
-    RHIUAVRef    RHICreateUAVInner(RHIViewableResource* _resource, const RHIViewInfo& _view_info) final override;
+    RHIViewRef   RHICreateViewInner(RHIViewableResource* _resource, const RHIViewInfo& _view_info) final override;
 
 protected:
     VkInstance               m_instance;
