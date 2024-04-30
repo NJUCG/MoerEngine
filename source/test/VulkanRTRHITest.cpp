@@ -145,13 +145,13 @@ void Test() {
 
     RHIRayTracingPipelineStateInitializer init_rt_pipeline{};
 
-    RHIRayGenShader*        test_raygen_shader  = static_cast<RHIRayGenShader*>(ShaderResourceManager::GetInstance().GetShader<TestRayGenShader>().Get());
-    RHIRayMissShader*       test_raymiss_shader = static_cast<RHIRayMissShader*>(ShaderResourceManager::GetInstance().GetShader<TestRayMissShader>().Get());
-    RHIRayClosestHitShader* test_raychit_shader = static_cast<RHIRayClosestHitShader*>(ShaderResourceManager::GetInstance().GetShader<TestRayClosestHitShader>().Get());
+    RHIShaderRef test_raygen_shader  = ShaderResourceManager::GetInstance().GetShader<TestRayGenShader>();
+    RHIShaderRef test_raymiss_shader = ShaderResourceManager::GetInstance().GetShader<TestRayMissShader>();
+    RHIShaderRef test_raychit_shader = ShaderResourceManager::GetInstance().GetShader<TestRayClosestHitShader>();
 
-    init_rt_pipeline.SetRayGenShader(test_raygen_shader);
-    init_rt_pipeline.AddMissShader(test_raymiss_shader);
-    init_rt_pipeline.AddHitShaderGroup(test_raychit_shader);
+    init_rt_pipeline.SetRayGenShader(dynamic_cast<RHIRayGenShader*>(test_raygen_shader.Get()));
+    init_rt_pipeline.AddMissShader(dynamic_cast<RHIRayMissShader*>(test_raymiss_shader.Get()));
+    init_rt_pipeline.AddHitShaderGroup(dynamic_cast<RHIRayClosestHitShader*>(test_raychit_shader.Get()));
 
     RHIRayTracingPipelineStateRef rt_pipeline = g_rhi->RHICreateRayTracingPipelineState(init_rt_pipeline);
 
@@ -187,12 +187,12 @@ void Test() {
     RHICommandQueue*    rt_queue          = g_rhi->RHICreateCommandQueue(ECommandQueueType::RAYTRACING);
     RHICommandQueue*    copy_queue        = g_rhi->RHICreateCommandQueue(ECommandQueueType::COPY);
 
-    RHIFence* raytracing_finish_fence = g_rhi->RHICreateFence({EFenceUsageFlags::TIMELINE});
-    RHIFence* copying_finish_fence    = g_rhi->RHICreateFence({EFenceUsageFlags::PRESENT});
-    uint64_t  raytracing_fence_value  = 0;
-    uint64_t  copying_fence_value     = 0;
+    RHIFenceRef raytracing_finish_fence = g_rhi->RHICreateFence({EFenceUsageFlags::TIMELINE});
+    RHIFenceRef copying_finish_fence    = g_rhi->RHICreateFence({EFenceUsageFlags::PRESENT});
+    uint64_t    raytracing_fence_value  = 0;
+    uint64_t    copying_fence_value     = 0;
 
-    RHIViewport* viewport = g_rhi->RHIGetMainViewport();
+    RHIViewportRef viewport = g_rhi->RHIGetMainViewport();
 
     copy_command_list->BeginRecording();
 

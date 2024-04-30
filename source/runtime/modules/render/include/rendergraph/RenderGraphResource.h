@@ -26,8 +26,8 @@ namespace Moer {
         PassNode* destroy_pass{nullptr};
 
         //Create Real Resource Before Execute
-        virtual void Create(){};
-        virtual void Destroy(){};
+        virtual void Create() {};
+        virtual void Destroy() {};
         virtual ~RenderGraphResource() = default;
 
     protected:
@@ -71,7 +71,9 @@ namespace Moer {
             uint32_t     arrayLayers{1};
         };
         RHIUAVRef     GetUAV(EPixelFormat format = PF_UNDEFINED, uint32_t mip_num = 1, uint32_t array_min = 0, uint32_t array_num = 1);
+        RHIUAVRef     GetUAV(uint32_t _mip_level, uint32_t _array_min = 0, uint32_t _array_num = 1);
         RHISRVRef     GetSRV(EPixelFormat format = PF_UNDEFINED, uint32_t mip_min = 0, uint32_t mip_num = 1, uint32_t array_min = 0, uint32_t array_num = 1);
+        RHISRVRef     GetSRV(uint32_t _mip_min, uint32_t _mip_num = 1, uint32_t _array_min = 0, uint32_t _array_num = 1);
         RHITextureRef GetTexture() const;
         EPixelFormat  GetFormat() const;
         void          Create() override;

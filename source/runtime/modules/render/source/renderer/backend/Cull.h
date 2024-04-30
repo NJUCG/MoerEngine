@@ -155,6 +155,25 @@ public:
     END_ROOT_PARAMETER_DEFINITION(Parameters)
 };
 
+class TestGBufferShaderVert : public Shader {
+    DEFINE_SHADER_TYPE(TestGBufferShaderVert, Global, RENDER_API, ...)
+public:
+    BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
+    DEFINE_SHADER_PARAM_STRUCT(CameraData, camera_data)
+    DEFINE_SHADER_PARAM_SRV(StructuredBuffer<InstanceData>, instance_data)
+    END_ROOT_PARAMETER_DEFINITION(Parameters)
+};
+
+class TestGBufferShaderFrag : public Shader {
+    DEFINE_SHADER_TYPE(TestGBufferShaderFrag, Global, RENDER_API, ...)
+public:
+    BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
+    DEFINE_SHADER_PARAM_SRV(StructuredBuffer<InstanceData>, instance_data)
+    // DEFINE_SHADER_PARAM_SAMPLER(SamplerState, defaultSampler)
+    // DEFINE_SHADER_PARAM_SRV(Texture2D, baseColorMap)
+    END_ROOT_PARAMETER_DEFINITION(Parameters)
+};
+
 // IMPLEMENT_SHADER_TYPE(CullInstanceShader, "meshdebug/CullInstance.hlsl", "main", ST_COMPUTE);
 // IMPLEMENT_SHADER_TYPE(CullMeshletShader, "meshdebug/CullMeshlet.hlsl", "main", ST_COMPUTE);
 

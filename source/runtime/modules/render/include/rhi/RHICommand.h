@@ -165,7 +165,7 @@ public:
     virtual void ExecuteSubCommands(uint32_t                _num,
                                     RHIGraphicsCommandList* _sub_commands) = 0;
 
-    virtual void BindParameters(Shader* shader, RHIBatchedShaderParameters* batched_params){};
+    virtual void BindParameters(Shader* shader, RHIBatchedShaderParameters* batched_params) {};
 };
 
 class RHIComputeCommandList : public RHICommandListBase {
@@ -255,6 +255,12 @@ struct RHISubmitInfo {
 private:
     Moer::Array<RHIFenceWaitInfo>   wait_infos;
     Moer::Array<RHIFenceSignalInfo> signal_infos;
+};
+
+//a unified commandlist for all usage?
+class RHICmdList {
+public:
+    struct Impl;
 };
 
 namespace Moer {

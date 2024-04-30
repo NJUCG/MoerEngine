@@ -3,6 +3,7 @@
 #include "math/Base.h"
 #include "math/Function.h"
 #include "misc/STL.h"
+#include "rendergraph/RenderGraphPass.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
@@ -10,7 +11,7 @@
 #include "rhi/RHIResourceInitilizer.h"
 #include "shader/Shader.h"
 #include "shader/ShaderResourceManager.h"
-
+#include "../deferred/RenderResourceDeferred.h"
 namespace Moer {
     static constexpr uint32_t max_mip_levels = 12;
     IMPLEMENT_SHADER_TYPE(BuildHiZShader, "utils/BuildHiZ.hlsl", "main", ST_COMPUTE);
@@ -178,6 +179,56 @@ namespace Moer {
             }
         }
 
+        void Dispatch(RenderContext& _context, RHISRVRef _depth_buffer, HiZBuffer& _hiz_buffer) {
+
+            auto& rg      = _context.GetRenderGraph();
+            auto  mip_cnt = std::min(uint32_t(std::log2(std::min(_hiz_buffer.texture->GetExtent3D().x, _hiz_buffer.texture->GetExtent3D().y))), max_mip_levels);
+
+            rg.AddComputePass("Build HiZ", [&, depth_buffer(_depth_buffer)](RenderGraph::Builder& _builder) {
+                auto depth = rg.ImportTexture("Depth Buffer", depth_buffer->GetTexture());
+
+                 auto hiz = rg.ImportTexture("HiZ Buffer", _hiz_buffer.texture);
+                _builder.ReadTexture(depth);
+                rg.GetTexture(hiz)->GetUAV(0);
+                _builder.WriteTexture(hiz); }, [&, mip_cnt](RenderPassContext& _pass_context) {
+                BuildHiZShader::Parameters params;
+                Vector2i                   mip0_size = Vector2i(_hiz_buffer.texture->GetExtent3D());
+
+                HiZConfig& config   = params.config;
+                config.b_mip0       = true;
+                config.size         = mip0_size;
+                config.target_level = 0;
+                params.target       = _hiz_buffer.uavs[0];
+                params.depth_buffer = _depth_buffer;
+                RHIBatchedShaderParameters batched_params;
+                auto&                      cmd_list = _context.GetCommandList();
+                cmd_list.SetPipelineState(pso);
+                
+                batched_params.SetParameters(builder_shader, params); });
+
+            for (uint i = 1; i < mip_cnt; ++i) {
+                rg.AddComputePass("Build HiZ", [&, i](RenderGraph::Builder& _builder) mutable {
+                        auto hiz = rg.ImportTexture("HiZ Buffer", _hiz_buffer.texture);
+                        rg.GetTexture(hiz)->GetUAV(i);
+                        _builder.ReadTexture(hiz);
+                        _builder.WriteTexture(hiz); }, [&, i](RenderPassContext& _pass_context) {
+                                      BuildHiZShader::Parameters params;
+                                      Vector2i                   mip0_size = Vector2i(_hiz_buffer.texture->GetExtent3D());
+
+                                      HiZConfig& config   = params.config;
+                                      config.b_mip0       = false;
+                                      config.size         = Vector2i(std::max(1, mip0_size.x >> i), std::max(1, mip0_size.y >> i));
+                                      config.target_level = i;
+                                      params.target       = _hiz_buffer.uavs[i];
+                                      params.depth_buffer = _hiz_buffer.srv;
+                                      RHIBatchedShaderParameters batched_params;
+                                      auto&                      cmd_list = _context.GetCommandList();
+                                      batched_params.SetParameters(builder_shader, params);
+
+                                      cmd_list.Dispatch(Vector3i((config.size.t.x + 7) >> 3u, (config.size.t.y + 7) >> 3u, 1)); });
+            }
+        }
+
         RHIShaderRef builder_shader;
 
         RHIComputePipelineStateRef pso;
@@ -196,5 +247,9 @@ namespace Moer {
     }
     void HiZBuilder::DispatchBuildHiZ(RHIGraphicsCommandList* _cmd_list, RHISRVRef _depth_buffer, HiZBuffer& _hiz_buffer) {
         impl->Dispatch(_cmd_list, _depth_buffer, _hiz_buffer);
+    }
+
+    void HiZBuilder::DispatchBuildHiZ(RenderContext& _context, RHISRVRef _depth_buffer, HiZBuffer& _hiz_buffer) {
+        impl->Dispatch(_context, _depth_buffer, _hiz_buffer);
     }
 }// namespace Moer

@@ -1,5 +1,6 @@
 #include "BasePass.h"
 #include "PixelFormat.h"
+#include "rendergraph/RenderGraphPass.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
@@ -8,9 +9,19 @@
 #include "../Cull.h"
 #include "RenderResourceDeferred.h"
 #include "rhi/RHIResourceInitilizer.h"
+#include "scene/CameraManager.h"
 #include "scene/Scene.h"
 #include "shader/ShaderResourceManager.h"
 #include "../utils/HiZBuilder.h"
+
+constexpr std::string_view instance_meshlet_cull_info_name = "BasePass::instance_meshlet_cull_info_buffer";
+constexpr std::string_view recheck_instance_id_name        = "BasePass::recheck_instance_id_buffer";
+constexpr std::string_view recheck_cull_info_name          = "BasePass::recheck_cull_info_buffer";
+constexpr std::string_view counter_buffer_name             = "BasePass::counter_buffer";
+constexpr std::string_view zero_buffer_name                = "BasePass::zero_buffer";
+constexpr std::string_view uniform_buffer_name             = "BasePass::uniform_buffer";
+constexpr std::string_view hzb_name                        = "BasePass::hzb_buffer";
+constexpr std::string_view draw_indirect_name              = "BasePass::draw_indirect_buffer";
 
 namespace Moer {
     struct BasePass::Impl {
@@ -21,18 +32,20 @@ namespace Moer {
         ~Impl();
 
     private:
-        void InitResources(RenderContext& _context);
-        void UpdateSceneData(RenderContext& _context);
+        void Init(RenderContext& _context);
+        void InitSceneResources(RenderContext& _context);
         void DrawFrame(RenderContext& _input);
+        void ResetCounter(RenderContext& _context);
         void PrePass(RenderContext& _context);
+        template<bool is_prepass>
+        void DrawScene(RenderContext& _context);
         void BuildHZB(RenderContext& _context);
         void PostPass(RenderContext& _context);
         void OnResizeViewport(Vector2i _extent);
 
     private:
-        RHIGraphicsPipelineStateRef pipeline_state;
-        RHIComputePipelineStateRef  cull_instance_recheck_pso;
-        RHIComputePipelineStateRef  cull_meshlet_recheck_pso;
+        RHIComputePipelineStateRef cull_instance_recheck_pso;
+        RHIComputePipelineStateRef cull_meshlet_recheck_pso;
 
         RHIShaderRef cull_instance_recheck_shader;
         RHIShaderRef cull_meshlet_recheck_shader;
@@ -40,8 +53,13 @@ namespace Moer {
         RHIComputePipelineStateRef cull_instance_prepass_pso;
         RHIComputePipelineStateRef cull_meshlet_prepass_pso;
 
+        RHIGraphicsPipelineStateRef gbuffer_pso;
+
         RHIShaderRef cull_instance_prepass_shader;
         RHIShaderRef cull_meshlet_prepass_shader;
+
+        RHIShaderRef gbuffer_vert_shader;
+        RHIShaderRef gbuffer_frag_shader;
 
         RHITextureRef          hzb;
         RHISRVRef              hzb_srv;
@@ -75,7 +93,7 @@ namespace Moer {
         RHIUAVRef recheck_cull_info_uav;
         RHIUAVRef recheck_instance_id_uav;
 
-        static constexpr uint32_t counter_buffer_size  = 32 * sizeof(uint32_t);
+        static constexpr uint32_t counter_buffer_size               = 32 * sizeof(uint32_t);
         static constexpr uint32_t meshlet_count_offset              = 0;
         static constexpr uint32_t draw_count_offset                 = 4;
         static constexpr uint32_t recheck_draw_count_offset         = 8;
@@ -87,7 +105,7 @@ namespace Moer {
         static constexpr uint32_t max_meshlet_count                 = 1024 * 1024 * 16;
         static constexpr uint32_t thread_group_count                = 64;
         static constexpr uint32_t uniform_buffer_size               = sizeof(VirtualView);
-        RenderResourceDeferred* render_resources;
+        RenderResourceDeferred*   render_resources;
     };
 
     BasePass::Impl::Impl() {
@@ -96,27 +114,35 @@ namespace Moer {
     BasePass::Impl::~Impl() {
     }
 
-    void BasePass::Impl::InitResources(RenderContext& _context) {
+    void BasePass::Impl::Init(RenderContext& _context) {
+
+        gbuffer_vert_shader = ShaderResourceManager::GetInstance().GetShader<TestGBufferShaderVert>();
+        gbuffer_frag_shader = ShaderResourceManager::GetInstance().GetShader<TestGBufferShaderFrag>();
 
         RHIVertexInputInfo vertex_input_info(
 
-            VertexElement(0, 0, PF_R32G32B32_SFLOAT, 0, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX),
-            VertexElement(0, 3 * sizeof(float), PF_R32G32B32_SFLOAT, 1, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX),
-            VertexElement(0, 6 * sizeof(float), PF_R32G32B32_SFLOAT, 2, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX),
-            VertexElement(0, 9 * sizeof(float), PF_R32G32B32_SFLOAT, 3, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX),
-            VertexElement(0, 12 * sizeof(float), PF_R32G32_SFLOAT, 4, sizeof(float) * 14, EVertexInputRate::VIR_VERTEX),
-            VertexElement(1, 14 * sizeof(float), PF_R32_UINT, 5, sizeof(uint32_t), EVertexInputRate::VIR_INSTANCE));
+            VertexElement(0, 0, PF_R32G32B32_SFLOAT, 0, sizeof(float) * 11, EVertexInputRate::VIR_VERTEX),
+            VertexElement(0, 3 * sizeof(float), PF_R32G32B32_SFLOAT, 1, sizeof(float) * 11, EVertexInputRate::VIR_VERTEX),
+            VertexElement(0, 6 * sizeof(float), PF_R32G32B32_SFLOAT, 2, sizeof(float) * 11, EVertexInputRate::VIR_VERTEX),
+            VertexElement(0, 9 * sizeof(float), PF_R32G32_SFLOAT, 3, sizeof(float) * 11, EVertexInputRate::VIR_VERTEX),
+            VertexElement(1, 11 * sizeof(float), PF_R32_UINT, 4, sizeof(uint32_t), EVertexInputRate::VIR_INSTANCE));
+        // RHIVertexInputStateRef vertex_input_state = g_rhi->RHICreateVertexInputState(vertex_input_state_init_list);
 
-        RHIShaderRef vertex_shader = ShaderResourceManager::GetInstance().GetShader<TestDeferredTriangleShaderVert>();
-        RHIShaderRef frag_shader   = ShaderResourceManager::GetInstance().GetShader<TestDeferredTriangleShaderFrag>();
+        RHIGraphicsShaderInputInfo gbuffer_shader_input_info = RHIGraphicsShaderInputInfo::Create().SetVertexWorkFlow(vertex_input_info, gbuffer_vert_shader, gbuffer_frag_shader);
+        RHIGraphicsPSOCreateInfo   pso_create_info =
+            RHIGraphicsPSOCreateInfo::Create()
+                .SetShaderStage(
+                    std::move(gbuffer_shader_input_info))
+                .SetDepthStencilInfo(RHIDepthStencilStateInfo::Preset<RHIConfig::DepthStencil::DEPTH_WRITE_GREATER>())
+                .SetColorAttachmentInfo(
+                    {RHIColorAttachmentInfo::Preset(EPixelFormat::PF_R32_UINT),
+                     RHIColorAttachmentInfo::Preset(EPixelFormat::PF_R8G8B8A8_UNORM),
+                     RHIColorAttachmentInfo::Preset(EPixelFormat::PF_R16G16_SFLOAT)})
+                .SetDepthStencilFormat(PF_D32_SFLOAT_S8_UINT)
+                .Finalize();
 
-        RHIGraphicsPSOCreateInfo pso_info = RHIGraphicsPSOCreateInfo::Create()
-                                                .SetColorAttachmentInfo(RHIColorAttachmentInfo::Preset<RHIConfig::Blend::ALPHA_BLEND>(PF_R8G8B8A8_SRGB))
-                                                .SetDepthStencilInfo(RHIDepthStencilStateInfo::Preset<RHIConfig::DepthStencil::DEPTH_WRITE_GREATER>())
-                                                .SetDepthStencilFormat(EPixelFormat::PF_D32_SFLOAT_S8_UINT)
-                                                .SetShaderStage(RHIGraphicsShaderInputInfo::Create().SetVertexWorkFlow(vertex_input_info, vertex_shader, frag_shader))
-                                                .Finalize();
-        pipeline_state = g_rhi->RHICreateGraphicsPSO(std::move(pso_info));
+        //ToDo: this may be can read and cached from render pass
+        gbuffer_pso = g_rhi->RHICreateGraphicsPSO(std::move(pso_create_info));
 
         cull_instance_prepass_shader = ShaderResourceManager::GetInstance().GetShader<CullInstancePrePassShader>();
         cull_meshlet_prepass_shader  = ShaderResourceManager::GetInstance().GetShader<CullMeshletPrepassShader>();
@@ -158,11 +184,11 @@ namespace Moer {
         }
     }
 
-    void BasePass::Impl::UpdateSceneData(RenderContext& _context) {
-        auto meshlet_info_buffer       = g_scene->GetBuffer("meshlet_info_buffer");
-        auto meshlet_bound_buffer      = g_scene->GetBuffer("meshlet_bounds_buffer");
-        auto instance_buffer           = g_scene->GetBuffer("instance_buffer");
-        auto instance_mesh_info_buffer = g_scene->GetBuffer("instance_mesh_info_buffer");
+    void BasePass::Impl::InitSceneResources(RenderContext& _context) {
+        auto meshlet_info_buffer       = g_scene->GetBuffer("meshlet_descs");
+        auto meshlet_bound_buffer      = g_scene->GetBuffer("meshlet_bounds");
+        auto instance_buffer           = g_scene->GetBuffer("instance_data");
+        auto instance_mesh_info_buffer = g_scene->GetBuffer("instance_meshlet_info_buffer");
 
         meshlet_descs_buffer_view  = g_rhi->RHICreateBufferSRV(meshlet_info_buffer);
         meshlet_bounds_buffer_view = g_rhi->RHICreateBufferSRV(meshlet_bound_buffer);
@@ -171,8 +197,30 @@ namespace Moer {
     }
 
     void BasePass::Impl::DrawFrame(RenderContext& _input) {
-        auto& cmd_list = _input.GetCommandList();
+        ResetCounter(_input);
         PrePass(_input);
+        DrawScene<true>(_input);
+        BuildHZB(_input);
+        PostPass(_input);
+        DrawScene<false>(_input);
+        BuildHZB(_input);
+    }
+
+    void BasePass::Impl::ResetCounter(RenderContext& _context) {
+        _context.GetRenderGraph().AddComputePass(
+            "Reset Counter",
+            [&, this](RenderGraph::Builder& _builder) {
+                auto tp_counter_buffer = _context.GetRenderGraph().ImportBuffer("count_buffer", counter_buffer);
+                auto src_buffer        = _context.GetRenderGraph().ImportBuffer("zero_buffer", zero_buffer);
+                _builder.WriteBuffer(tp_counter_buffer, EBufferLayout::TRANSFER_WRITE);
+                _builder.ReadBuffer(src_buffer, EBufferLayout::TRANSFER_READ);
+            },
+            [&](RenderPassContext& _context) {
+                auto*             cmd_list = _context.cmd_list;
+                RHICopyBufferInfo copy_info{};
+                copy_info.regions.push_back({0, 0, sizeof(uint32_t) * 32});
+                cmd_list->CopyBuffer(std::move(copy_info), zero_buffer, counter_buffer);
+            });
     }
 
     void BasePass::Impl::PrePass(RenderContext& _context) {
@@ -219,120 +267,55 @@ namespace Moer {
 
         RHIBatchedShaderParameters cull_meshlet_batched_params;
         cull_meshlet_batched_params.SetParameters(cull_meshlet_prepass_shader, cull_meshlet_params);
-        auto prepass_cull_task = [this,
-                                  instance_params(std::move(cull_instance_batched_params)),
-                                  meshlet_params(std::move(cull_meshlet_batched_params)),
-                                  instance_count(instance_count)](
-                                     RenderPassContext& _context) mutable {
-            RHIGraphicsCommandList* cmd_list = _context.cmd_list;
 
-            RHIBarrierDependencyInfo barrier_dependency_info{};
-            barrier_dependency_info.buffer_barriers.resize(2);
-            auto& buffer_barrier_info = barrier_dependency_info.buffer_barriers[0];
-            buffer_barrier_info
-                .SetBuffer(counter_buffer)
-                .SetDstAccessFlags(ERHIAccessFlags::SHADER_WRITE | ERHIAccessFlags::SHADER_READ)
-                .SetSrcAccessFlags(ERHIAccessFlags::TRANSFER_WRITE)
-                .SetSrcStage(ERHIPipelineStageFlags::PS_TRANSFER)
-                .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
-
-            auto& buffer_barrier_info_1 = barrier_dependency_info.buffer_barriers[1];
-            buffer_barrier_info_1
-                .SetBuffer(draw_indirect_buffer)
-                .SetDstAccessFlags(ERHIAccessFlags::SHADER_WRITE | ERHIAccessFlags::SHADER_READ)
-                .SetSrcAccessFlags(ERHIAccessFlags::INDIRECT_COMMAND_READ)
-                .SetSrcStage(ERHIPipelineStageFlags::PS_DRAW_INDIRECT)
-                .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
-
-            cmd_list->SetPipelineBarrier(barrier_dependency_info);
-
-            cmd_list->SetPipelineState(cull_instance_prepass_pso);
+        auto prepass_cull_instance = [this,
+                                      instance_params(std::move(cull_instance_batched_params)),
+                                      instance_count(instance_count)](RenderPassContext& _context) mutable {
+            auto& cmd_list = *_context.cmd_list;
+            cmd_list.SetPipelineState(cull_instance_prepass_pso);
             g_rhi->RHISetBatchedShaderParameters(cull_instance_prepass_pso, instance_params);
             auto dispatch_count = (instance_count + thread_group_count - 1) / thread_group_count;
-            cmd_list->Dispatch(dispatch_count, 1, 1);
-            {
-                RHIBarrierDependencyInfo instance_cull_barrier{};
-                instance_cull_barrier.buffer_barriers.resize(3);
-                auto& buffer_barrier_info = instance_cull_barrier.buffer_barriers[0];
-                buffer_barrier_info
-                    .SetBuffer(instance_meshlet_cull_info_buffer)
-                    .SetDstAccessFlags(ERHIAccessFlags::SHADER_READ | ERHIAccessFlags::SHADER_WRITE)
-                    .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE | ERHIAccessFlags::SHADER_READ)
-                    .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
-                    .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
-
-                auto& buffer_barrier_info_1 = instance_cull_barrier.buffer_barriers[1];
-                buffer_barrier_info_1
-                    .SetBuffer(recheck_instance_id_buffer)
-                    .SetDstAccessFlags(ERHIAccessFlags::SHADER_READ)
-                    .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE)
-                    .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
-                    .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
-
-                auto& buffer_barrier_info_2 = instance_cull_barrier.buffer_barriers[2];
-                buffer_barrier_info_2
-                    .SetBuffer(counter_buffer)
-                    .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE | ERHIAccessFlags::SHADER_READ)
-                    .SetDstAccessFlags(ERHIAccessFlags::INDIRECT_COMMAND_READ)
-                    .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
-                    .SetDstStage(ERHIPipelineStageFlags::PS_DRAW_INDIRECT);
-
-                cmd_list->SetPipelineBarrier(instance_cull_barrier);
-            }
-
-            cmd_list->SetPipelineState(cull_meshlet_prepass_pso);
-            g_rhi->RHISetBatchedShaderParameters(cull_meshlet_prepass_pso, meshlet_params);
-            // cmd_list->Dispatch((max_meshlet_count + thread_group_count) / thread_group_count, 1, 1);
-            cmd_list->DispatchIndirect(counter_buffer, meshlet_dispatch_offset);
-            {
-                RHIBarrierDependencyInfo post_compute_barrier{};
-                post_compute_barrier.buffer_barriers.resize(3);
-                auto& buffer_barrier_info_0 = post_compute_barrier.buffer_barriers[0];
-                buffer_barrier_info_0
-                    .SetBuffer(counter_buffer)
-                    .SetDstAccessFlags(ERHIAccessFlags::INDIRECT_COMMAND_READ)
-                    .SetSrcAccessFlags(ERHIAccessFlags::SHADER_READ | ERHIAccessFlags::SHADER_WRITE)
-                    .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
-                    .SetDstStage(ERHIPipelineStageFlags::PS_DRAW_INDIRECT);
-
-                auto& buffer_barrier_info_1 = post_compute_barrier.buffer_barriers[1];
-                buffer_barrier_info_1
-                    .SetBuffer(draw_indirect_buffer)
-                    .SetDstAccessFlags(ERHIAccessFlags::INDIRECT_COMMAND_READ)
-                    .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE)
-                    .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
-                    .SetDstStage(ERHIPipelineStageFlags::PS_DRAW_INDIRECT);
-
-                auto& buffer_barrier_info_2 = post_compute_barrier.buffer_barriers[2];
-                buffer_barrier_info_2
-                    .SetBuffer(recheck_cull_info_buffer)
-                    .SetDstAccessFlags(ERHIAccessFlags::SHADER_WRITE)
-                    .SetSrcAccessFlags(ERHIAccessFlags::SHADER_READ)
-                    .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
-                    .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
-
-                cmd_list->SetPipelineBarrier(post_compute_barrier);
-            }
+            cmd_list.Dispatch(dispatch_count, 1, 1);
         };
 
-        EnqueueRenderTask([&, prepass_cull(std::move(prepass_cull_task))]() {
-            _context.GetRenderGraph().AddComputePass(
-                "Prepass Cull Instance",
-                [&](RenderGraph::Builder& _builder) {
-                    // auto& rg  = GetCurrentRenderGraph();
-                    // auto  hiz = rg.GetBlackBoard().GetHandle("hiz_buffer");
-                    // if (!hiz.IsInitialized()) {
-                    //     hiz = rg.ImportTexture("hiz_buffer", hiz_buffer.texture);
-                    // }
-                    // _builder.ReadTexture(hiz, ETextureUsageFlags::SAMPLED);
-                },
-                std::move(prepass_cull));
-        });
+        auto prepass_cull_meshlet = [this,
+                                     meshlet_params(std::move(cull_meshlet_batched_params))](RenderPassContext& _context) mutable {
+            auto& cmd_list = *_context.cmd_list;
+            cmd_list.SetPipelineState(cull_meshlet_prepass_pso);
+            g_rhi->RHISetBatchedShaderParameters(cull_meshlet_prepass_pso, meshlet_params);
+            cmd_list.DispatchIndirect(counter_buffer, meshlet_dispatch_offset);
+        };
+        _context.GetRenderGraph().AddComputePass(
+            "Prepass Cull Instance",
+            [&](RenderGraph::Builder& _builder) {
+                // auto& rg  = GetCurrentRenderGraph();
+                auto hiz = _context.GetRenderGraph().GetBlackBoard().GetHandle("hiz_buffer");
+                // if (!hiz.IsInitialized()) {
+                //     hiz = rg.ImportTexture("hiz_buffer", hiz_buffer.texture);
+                // }
+                // _builder.ReadTexture(hiz, ETextureUsageFlags::SAMPLED);
+                _builder.ReadTexture(hiz, ETextureUsageFlags::SAMPLED);
+                _builder.WriteBuffer(_context.GetRenderGraph().ImportBuffer(instance_meshlet_cull_info_name.data(), instance_meshlet_cull_info_buffer), EBufferLayout::WRITE);
+                _builder.WriteBuffer(_context.GetRenderGraph().ImportBuffer(recheck_instance_id_name.data(), recheck_instance_id_buffer), EBufferLayout::WRITE);
+                _builder.WriteBuffer(_context.GetRenderGraph().ImportBuffer(counter_buffer_name.data(), counter_buffer), EBufferLayout::INDIRECT_COMMAND_READ);
+            },
+            std::move(prepass_cull_instance));
+
+        _context.GetRenderGraph().AddComputePass(
+            "Prepass Cull Meshlet",
+            [&](RenderGraph::Builder& _builder) {
+                auto hiz = _context.GetRenderGraph().GetBlackBoard().GetHandle("hiz_buffer");
+                _builder.ReadTexture(hiz, ETextureUsageFlags::SAMPLED);
+                _builder.ReadBuffer(_context.GetRenderGraph().ImportBuffer(instance_meshlet_cull_info_name.data(), instance_meshlet_cull_info_buffer), EBufferLayout::READ);
+                _builder.ReadBuffer(_context.GetRenderGraph().ImportBuffer(recheck_instance_id_name.data(), recheck_instance_id_buffer), EBufferLayout::READ);
+                _builder.ReadBuffer(_context.GetRenderGraph().ImportBuffer(counter_buffer_name.data(), counter_buffer), EBufferLayout::INDIRECT_COMMAND_READ);
+                _builder.WriteBuffer(_context.GetRenderGraph().ImportBuffer(recheck_cull_info_name.data(), recheck_cull_info_buffer), EBufferLayout::WRITE);
+            },
+            std::move(prepass_cull_meshlet));
     }
 
     void BasePass::Impl::BuildHZB(RenderContext& _context) {
-        auto frame_offset = _context.GetFrameOffset();
-        // HiZBuilder::GetInstance().DispatchBuildHiZ(&_context.GetCommandList(), depth_buffer_srv[frame_offset], hiz_buffer);
+        HiZBuilder::GetInstance().DispatchBuildHiZ(_context, _context.GetMainViewport().GetDepthSRV(), hiz_buffer);
     }
 
     void BasePass::Impl::PostPass(RenderContext& _context) {
@@ -380,116 +363,119 @@ namespace Moer {
         RHIBatchedShaderParameters cull_meshlet_batched_params;
         cull_meshlet_batched_params.SetParameters(cull_meshlet_recheck_shader, cull_meshlet_params);
 
-        auto recheck_pass_cull_task = [this,
-                                       instance_params(std::move(cull_instance_batched_params)),
-                                       meshlet_params(std::move(cull_meshlet_batched_params)),
-                                       instance_count(instance_count),
-                                       &_context](
-                                          RenderPassContext& _pass_context) mutable {
+        auto recheck_pass_cull_instance = [this,
+                                           &_context,
+                                           instance_params(std::move(cull_instance_batched_params))](RenderPassContext& _pass_context) mutable {
             auto& cmd_list = _context.GetCommandList();
-
-            RHIBarrierDependencyInfo barrier_dependency_info{};
-            barrier_dependency_info.buffer_barriers.resize(3);
-            auto& buffer_barrier_info = barrier_dependency_info.buffer_barriers[0];
-            buffer_barrier_info
-                .SetBuffer(counter_buffer)
-                .SetDstAccessFlags(ERHIAccessFlags::INDIRECT_COMMAND_READ)
-                .SetSrcAccessFlags(ERHIAccessFlags::INDIRECT_COMMAND_READ)
-                .SetSrcStage(ERHIPipelineStageFlags::PS_DRAW_INDIRECT)
-                .SetDstStage(ERHIPipelineStageFlags::PS_DRAW_INDIRECT);
-
-            auto& buffer_barrier_info_1 = barrier_dependency_info.buffer_barriers[1];
-            buffer_barrier_info_1
-                .SetBuffer(draw_indirect_buffer)
-                .SetDstAccessFlags(ERHIAccessFlags::SHADER_WRITE)
-                .SetSrcAccessFlags(ERHIAccessFlags::INDIRECT_COMMAND_READ)
-                .SetSrcStage(ERHIPipelineStageFlags::PS_DRAW_INDIRECT)
-                .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
-
-            auto& buffer_barrier_info_2 = barrier_dependency_info.buffer_barriers[2];
-            buffer_barrier_info_2
-                .SetBuffer(recheck_instance_id_buffer)
-                .SetDstAccessFlags(ERHIAccessFlags::SHADER_READ)
-                .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE)
-                .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
-                .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
-
-            cmd_list.SetPipelineBarrier(barrier_dependency_info);
-
             cmd_list.SetPipelineState(cull_instance_recheck_pso);
             g_rhi->RHISetBatchedShaderParameters(cull_instance_recheck_pso, instance_params);
-            auto dispatch_count = (instance_count + thread_group_count - 1) / thread_group_count;
             // cmd_list->Dispatch(dispatch_count, 1, 1);
             cmd_list.DispatchIndirect(counter_buffer, instance_dispatch_indirect_offset);
-            {
-                RHIBarrierDependencyInfo meshlet_cull_barrier{};
-                meshlet_cull_barrier.buffer_barriers.resize(3);
-                auto& buffer_barrier_info = meshlet_cull_barrier.buffer_barriers[0];
-                buffer_barrier_info
-                    .SetBuffer(instance_meshlet_cull_info_buffer)
-                    .SetDstAccessFlags(ERHIAccessFlags::SHADER_READ | ERHIAccessFlags::SHADER_WRITE)
-                    .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE | ERHIAccessFlags::SHADER_READ)
-                    .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
-
-                    .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
-
-                auto& buffer_barrier_info_1 = meshlet_cull_barrier.buffer_barriers[1];
-                buffer_barrier_info_1
-                    .SetBuffer(recheck_cull_info_buffer)
-                    .SetDstAccessFlags(ERHIAccessFlags::SHADER_READ)
-                    .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE)
-                    .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
-                    .SetDstStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER);
-
-                auto& buffer_barrier_info_2 = meshlet_cull_barrier.buffer_barriers[2];
-                buffer_barrier_info_2
-                    .SetBuffer(counter_buffer)
-                    .SetDstAccessFlags(ERHIAccessFlags::INDIRECT_COMMAND_READ)
-                    .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE | ERHIAccessFlags::SHADER_READ)
-                    .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
-                    .SetDstStage(ERHIPipelineStageFlags::PS_DRAW_INDIRECT);
-
-                cmd_list.SetPipelineBarrier(meshlet_cull_barrier);
-            }
-
-            cmd_list.SetPipelineState(cull_meshlet_recheck_pso);
-            g_rhi->RHISetBatchedShaderParameters(cull_meshlet_recheck_pso, meshlet_params);
-
-            // cmd_list->Dispatch((max_meshlet_count + thread_group_count) / thread_group_count, 1, 1);
-            cmd_list.DispatchIndirect(counter_buffer, recheck_meshlet_dispatch_offset);
-            {
-                RHIBarrierDependencyInfo post_compute_barrier{};
-                post_compute_barrier.buffer_barriers.resize(2);
-                auto& buffer_barrier_info_0 = post_compute_barrier.buffer_barriers[0];
-                buffer_barrier_info_0
-                    .SetBuffer(counter_buffer)
-                    .SetDstAccessFlags(ERHIAccessFlags::INDIRECT_COMMAND_READ)
-                    .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE)
-                    .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
-                    .SetDstStage(ERHIPipelineStageFlags::PS_DRAW_INDIRECT);
-
-                auto& buffer_barrier_info_1 = post_compute_barrier.buffer_barriers[1];
-                buffer_barrier_info_1
-                    .SetBuffer(draw_indirect_buffer)
-                    .SetDstAccessFlags(ERHIAccessFlags::INDIRECT_COMMAND_READ)
-                    .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE)
-                    .SetSrcStage(ERHIPipelineStageFlags::PS_COMPUTE_SHADER)
-                    .SetDstStage(ERHIPipelineStageFlags::PS_DRAW_INDIRECT);
-
-                cmd_list.SetPipelineBarrier(post_compute_barrier);
-            }
         };
 
-        EnqueueRenderTask([&, recheck_pass(std::move(recheck_pass_cull_task))]() {
-            _context.GetRenderGraph().AddComputePass(
-                "Recheck Cull Instance",
-                [&](RenderGraph::Builder& _builder) {
-                },
-                std::move(recheck_pass));
-        });
+        auto recheck_pass_cull_meshlet = [this, &_context, meshlet_params(std::move(cull_meshlet_batched_params))](RenderPassContext& _pass_context) mutable {
+            auto& cmd_list = _context.GetCommandList();
+            cmd_list.SetPipelineState(cull_meshlet_recheck_pso);
+            g_rhi->RHISetBatchedShaderParameters(cull_meshlet_recheck_pso, meshlet_params);
+            // cmd_list->Dispatch((max_meshlet_count + thread_group_count) / thread_group_count, 1, 1);
+            cmd_list.DispatchIndirect(counter_buffer, recheck_meshlet_dispatch_offset);
+        };
+        _context.GetRenderGraph().AddComputePass(
+            "Recheck Cull Instance",
+            [&](RenderGraph::Builder& _builder) {
+                _builder.ReadBuffer(_context.GetRenderGraph().ImportBuffer(recheck_instance_id_name.data(), recheck_instance_id_buffer), EBufferLayout::READ);
+                _builder.ReadBuffer(_context.GetRenderGraph().ImportBuffer(counter_buffer_name.data(), counter_buffer), EBufferLayout::INDIRECT_COMMAND_READ);
+                _builder.WriteBuffer(_context.GetRenderGraph().ImportBuffer(recheck_cull_info_name.data(), recheck_cull_info_buffer), EBufferLayout::WRITE);
+            },
+            std::move(recheck_pass_cull_instance));
+
+        _context.GetRenderGraph().AddComputePass(
+            "Recheck Cull Meshlet",
+            [&](RenderGraph::Builder& _builder) {
+                _builder.ReadBuffer(_context.GetRenderGraph().ImportBuffer(recheck_cull_info_name.data(), recheck_cull_info_buffer), EBufferLayout::READ);
+                _builder.ReadBuffer(_context.GetRenderGraph().ImportBuffer(counter_buffer_name.data(), counter_buffer), EBufferLayout::INDIRECT_COMMAND_READ);
+                _builder.WriteBuffer(_context.GetRenderGraph().ImportBuffer(draw_indirect_name.data(), draw_indirect_buffer), EBufferLayout::WRITE);
+            },
+            std::move(recheck_pass_cull_meshlet));
+    }
+    template<bool is_prepass>
+    void BasePass::Impl::DrawScene(RenderContext& _context) {
+
+        auto& cmd_list = _context.GetCommandList();
+
+        auto&        virtual_viewport = _context.GetMainViewport();
+        Extent3D     extent           = virtual_viewport.GetBackBufferExtent();
+        RenderGraph& rg               = _context.GetRenderGraph();
+        rg.AddGraphicPass(
+            "GBuffer Pass",
+            [&](RenderGraph::Builder& _builder) {
+                auto normal = rg.CreateTexture("normal", {.extent2D = Extent2D(extent.x, extent.y), .format = EPixelFormat::PF_R8G8B8A8_UNORM, .usage = ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED});
+                auto mat    = rg.CreateTexture("mat", {.extent2D = Extent2D(extent.x, extent.y), .format = EPixelFormat::PF_R32_UINT, .usage = ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED});
+                auto uv     = rg.CreateTexture("uv", {.extent2D = Extent2D(extent.x, extent.y), .format = EPixelFormat::PF_R16G16_SFLOAT, .usage = ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED});
+                auto depth  = rg.ImportTexture("depth", virtual_viewport.GetDepthSRV()->GetTexture());
+                if constexpr (!is_prepass) {
+                    _builder.ReadTextures({normal, uv, mat}, RenderGraphTexture::Usage::COLOR_ATTACHMENT);
+                    _builder.ReadTexture(depth, RenderGraphTexture::Usage::DEPTH_STENCIL_ATTACHMENT);
+                }
+                auto indirect = rg.GetBlackBoard().GetHandle(draw_indirect_name.data());
+                _builder.ReadBuffer(indirect, EBufferLayout::INDIRECT_COMMAND_READ);
+                _builder.WriteTextures({normal, uv, mat}, RenderGraphTexture::Usage::COLOR_ATTACHMENT);
+                _builder.WriteTexture(depth, RenderGraphTexture::Usage::DEPTH_STENCIL_ATTACHMENT);
+                _builder.DeclareRenderPass({.color_attachments = {
+                                                mat,
+                                                normal,
+                                                uv},
+                                            .depth_stencil_attachment = depth});
+            },
+            [this](RenderPassContext& _context) {
+                auto* cmd_list = _context.cmd_list;
+                cmd_list->SetPipelineState(gbuffer_pso);
+                // cmd_list->BindVertexBuffers()
+                auto* scene = g_scene;
+                cmd_list->BindIndexBuffer(scene->GetBuffer("index_buffer"), 0, IET_UINT32);
+                uint32_t           offset[]           = {0, 0};
+                const RHIBufferRef prim_vertex_buffer = scene->GetBuffer("vertex_buffer");
+                const RHIBufferRef instance_id_buffer = scene->GetBuffer("instance_id_buffer");
+                RHIBufferRef       vbuffers[]         = {prim_vertex_buffer, instance_id_buffer};
+                cmd_list->BindVertexBuffers(0, 2, vbuffers, offset);
+
+                auto camera_entity = g_scene->GetMainCamera();
+                auto camera        = CameraManager::Get().Get(camera_entity);
+
+                CameraData camera_data;
+                camera_data.view           = camera->GetViewMatrix();
+                camera_data.view_proj      = camera->GetProjectionMatrix() * camera->GetViewMatrix();
+                camera_data.camera_pos     = Vector4f(camera->GetPosition(), 1.f);
+                auto vp                    = camera->GetProjectionMatrix() * camera->GetViewMatrix();
+                camera_data.prev_view_proj = vp;
+
+                TestGBufferShaderVert::Parameters vert_params;
+                vert_params.camera_data   = camera_data;
+                vert_params.instance_data = instance_buffer_view;
+
+                TestGBufferShaderFrag::Parameters frag_params;
+                frag_params.instance_data = instance_buffer_view;
+
+                RHIBatchedShaderParameters batched_params;
+                batched_params.SetParameters(ShaderResourceManager::GetInstance().GetShader<TestGBufferShaderVert>(), vert_params);
+                batched_params.SetParameters(ShaderResourceManager::GetInstance().GetShader<TestGBufferShaderFrag>(), frag_params);
+
+                g_rhi->RHISetBatchedShaderParameters(gbuffer_pso, batched_params);
+
+                auto instance_idx    = 0;
+                uint draw_cnt_offset = 0;
+                if constexpr (is_prepass) {
+                    draw_cnt_offset = draw_count_offset;
+                } else {
+                    draw_cnt_offset = recheck_draw_count_offset;
+                }
+                cmd_list->DrawIndexedIndirect(draw_indirect_buffer, 0, counter_buffer, draw_cnt_offset, draw_indirect_buffer->GetNumElement(), sizeof(DrawInstanceCmd));
+            });
     }
 
-    void BasePass::Impl::OnResizeViewport(Vector2i extent) {
+    void
+    BasePass::Impl::OnResizeViewport(Vector2i _extent) {
+        hiz_buffer.InitFromDepthExtent(_extent);
     }
 
     BasePass::BasePass() : impl(MoerNew(Impl)) {
@@ -500,11 +486,11 @@ namespace Moer {
     }
 
     void BasePass::InitResources(RenderContext& _context) {
-        impl->InitResources(_context);
+        impl->Init(_context);
     }
 
     void BasePass::UpdateSceneData(RenderContext& _context) {
-        impl->UpdateSceneData(_context);
+        impl->InitSceneResources(_context);
     }
 
     void BasePass::Draw(RenderContext& _input) {

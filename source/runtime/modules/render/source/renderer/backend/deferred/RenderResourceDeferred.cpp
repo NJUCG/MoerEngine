@@ -14,8 +14,9 @@ namespace Moer {
         uint32_t                       frame_idx;
         RHICommandQueue*               gfx_queue;
         RHIFenceRef                    render_fence;
+        VirtualViewport&               main_viewport;
 
-        Impl(RenderContextInitInfo _info) : frame_idx(0) {
+        Impl(RenderContextInitInfo _info) : frame_idx(0), main_viewport(_info.main_viewport) {
             render_graphs.resize(_info.back_buffer_cnt);
             cmd_lists.resize(_info.back_buffer_cnt);
 
@@ -69,8 +70,11 @@ namespace Moer {
             _viewport->Present(render_fence);
         }
 
-        RHICommandQueue* GetCommandQueue() {
-            return gfx_queue;
+        RHICommandQueue& GetCommandQueue() {
+            return *gfx_queue;
+        }
+        VirtualViewport& GetMainViewport() {
+            return main_viewport;
         }
     };
 
@@ -123,8 +127,12 @@ namespace Moer {
         impl->Present(_viewport);
     }
 
-    RHICommandQueue* RenderContext::GetCommandQueue() {
+    RHICommandQueue& RenderContext::GetCommandQueue() {
         return impl->GetCommandQueue();
+    }
+
+    VirtualViewport& RenderContext::GetMainViewport() {
+        return impl->GetMainViewport();
     }
 
 }// namespace Moer

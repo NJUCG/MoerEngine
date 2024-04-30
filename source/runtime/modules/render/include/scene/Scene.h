@@ -8,9 +8,17 @@
 #include "math/Base.h"
 #include "math/Matrix.h"
 #include "misc/CountableRef.h"
+#include "rhi/RHIResource.h"
 
 namespace Moer {
-
+    enum class EGpuSceneResource {
+        MeshInfo,
+        InstanceInfo,
+        MaterialInfo,
+        LightInfo,
+        CameraInfo,
+        Num
+    };
     struct InstanceData {
         Moer::Matrix4x4f model2world;
         Moer::Matrix4x4f inv_model2world;
@@ -47,6 +55,7 @@ namespace Moer {
     };
     using AsyncSceneLoadInfoRef = CountableRef<AsyncSceneLoadInfo>;
 #define DEFAULT_SCENE_NAME "Sponza"
+    struct GpuScene;
     class RENDER_API Scene {
     public:
         Scene() noexcept;
@@ -68,6 +77,8 @@ namespace Moer {
         static AsyncSceneLoadInfoRef GetCurrentSceneLoadInfo() noexcept;
 
         static bool RegisterAsyncLoadInfo(AsyncSceneLoadInfoRef _load_info);
+
+        GpuScene& GetGpuScene() noexcept;
 
     protected:
         class Impl;

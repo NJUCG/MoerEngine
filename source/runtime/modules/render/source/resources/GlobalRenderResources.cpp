@@ -232,19 +232,19 @@ namespace Moer {
         //     m_buffers.insert({hash, buffer});
         //     return buffer;
         // }
-        RHIUAVRef GetUAV(RHITextureRef texture, EPixelFormat format, uint32_t mip_num, uint32_t array_min, uint32_t array_num) {
+        RHIUAVRef GetUAV(RHITextureRef texture, EPixelFormat format, uint32_t _mip_level, uint32_t _array_min, uint32_t _array_num) {
             size_t hash;
             //    HashCombine(hash,texture->GetName());
             HashCombine(hash, texture.Get());
-            HashCombine(hash, mip_num);
-            HashCombine(hash, array_min);
-            HashCombine(hash, array_num);
+            HashCombine(hash, _mip_level);
+            HashCombine(hash, _array_min);
+            HashCombine(hash, _array_num);
             HashCombine(hash, format);
             auto it = mUavs.find(hash);
             if (it != mUavs.end()) {
                 return it->second;
             }
-            RHIUAVRef uav = g_rhi->RHICreateTextureUAV(texture, format, 0, array_min, array_num);
+            RHIUAVRef uav = g_rhi->RHICreateTextureUAV(texture, format, _mip_level, _array_min, _array_num);
             mUavs.insert({hash, uav});
             return uav;
         }

@@ -12,7 +12,14 @@
 namespace Moer {
     // Scene * Scene::default_scene = nullptr;
     Scene* g_scene = nullptr;
+    struct GpuScene {
+        RHIBufferRef GetGpuBuffer(EGpuSceneResource _resource) const { return global_resources.buffers[(uint32_t)_resource]; }
 
+    private:
+        struct GResource {
+            StaticArray<RHIBufferRef, (uint32_t)EGpuSceneResource::Num> buffers;
+        } global_resources;
+    };
     class RENDER_API Scene::Impl {
         friend class Scene;
 
@@ -33,6 +40,8 @@ namespace Moer {
         Array<Entity>                GetCameras() const noexcept;
         static AsyncSceneLoadInfoRef GetCurrentSceneLoadInfo() noexcept { return m_load_info; }
 
+        GpuScene& GetGpuScene() noexcept { return gpu_scene; }
+
     protected:
         Map<std::string, RHIBufferRef> m_buffers;
         Map<std::string, RHIUAVRef>    m_uavs;
@@ -42,6 +51,7 @@ namespace Moer {
         EntitySet m_cameras;
 
         static AsyncSceneLoadInfoRef m_load_info;
+        GpuScene                     gpu_scene;
     };
     AsyncSceneLoadInfoRef Scene::Impl::m_load_info{nullptr};
 
@@ -100,19 +110,23 @@ namespace Moer {
         return GetCameras()[0];
     }
 
-    void Scene::ForEach(std::function<void(Entity)> func) const noexcept {
-        m_impl->ForEach(std::move(func));
+    void Scene::ForEach(std::function<void(Entity)> _func) const noexcept {
+        m_impl->ForEach(std::move(_func));
     }
 
     Scene* Scene::GetCurrentScene() noexcept {
         return g_scene;
     }
-    void Scene::SetCurrentScene(Scene* scene) noexcept {
-        g_scene = scene;
+    void Scene::SetCurrentScene(Scene* _scene) noexcept {
+        g_scene = _scene;
     }
 
     bool Scene::IsReady() const noexcept {
         return true;
+    }
+
+    GpuScene& Scene::GetGpuScene() noexcept {
+        return m_impl->GetGpuScene();
     }
 
     AsyncSceneLoadInfoRef Scene::GetCurrentSceneLoadInfo() noexcept {

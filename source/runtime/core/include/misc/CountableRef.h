@@ -14,6 +14,17 @@ concept concept_is_countable = requires(TCountable t) {
     t.GetRefCount() + (uint32_t)1;
 };
 
+template<typename T>
+class CountableRef;
+
+template<typename T>
+struct IsCountableRef : std::false_type {};
+
+template<typename T>
+constexpr bool is_countable_ref_v = IsCountableRef<T>::value;
+
+template<typename T>
+struct IsCountableRef<CountableRef<T>> : std::true_type {};
 class Countable {
 public:
     int32_t AddRef() {
@@ -61,7 +72,7 @@ public:
 
     CountableRef(T* _countable, bool _add_ref = true) {
         if constexpr (!concept_is_countable<T>) {
-          //  static_assert(false, "T must be a Countable type");
+            //  static_assert(false, "T must be a Countable type");
         }
         ptr = _countable;
         if (ptr != nullptr && _add_ref) {

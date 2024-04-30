@@ -13,6 +13,7 @@ namespace Moer {
 
         void InitFromDepthExtent(Vector2i extent);
     };
+    class RenderContext;
 
     BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(HiZConfig)
     DEFINE_SHADER_PARAM(bool, b_mip0)
@@ -41,6 +42,7 @@ namespace Moer {
         ~HiZBuilder();
         static HiZBuilder& GetInstance();
         void               DispatchBuildHiZ(RHIGraphicsCommandList* cmd_list, RHISRVRef depth_buffer, HiZBuffer& hiz_buffer);
+        void               DispatchBuildHiZ(RenderContext& _context, RHISRVRef depth_buffer, HiZBuffer& hiz_buffer);
 
     private:
         UniquePtr<Impl> impl;

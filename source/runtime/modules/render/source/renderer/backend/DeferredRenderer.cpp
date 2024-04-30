@@ -1,4 +1,5 @@
 #include "DeferredRenderer.h"
+#include "Core.h"
 #include "PixelFormat.h"
 #include "RenderThread.h"
 #include "log/LogSystem.h"
@@ -56,25 +57,6 @@ DEFINE_SHADER_PARAM(Moer::Vector4f, position)
 DEFINE_SHADER_PARAM(Moer::Vector4f, direction)
 DEFINE_SHADER_PARAM(Moer::Vector4f, info)
 END_SHADER_CONSTANT_STRUCT_DEFINITION()
-
-class TestGBufferShaderVert : public Shader {
-    DEFINE_SHADER_TYPE(TestGBufferShaderVert, Global, RENDER_API, ...)
-public:
-    BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
-    DEFINE_SHADER_PARAM_STRUCT(CameraData, camera_data)
-    DEFINE_SHADER_PARAM_SRV(StructuredBuffer<InstanceData>, instance_data)
-    END_ROOT_PARAMETER_DEFINITION(Parameters)
-};
-
-class TestGBufferShaderFrag : public Shader {
-    DEFINE_SHADER_TYPE(TestGBufferShaderFrag, Global, RENDER_API, ...)
-public:
-    BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
-    DEFINE_SHADER_PARAM_SRV(StructuredBuffer<InstanceData>, instance_data)
-    // DEFINE_SHADER_PARAM_SAMPLER(SamplerState, defaultSampler)
-    // DEFINE_SHADER_PARAM_SRV(Texture2D, baseColorMap)
-    END_ROOT_PARAMETER_DEFINITION(Parameters)
-};
 
 IMPLEMENT_SHADER_TYPE(TestGBufferShaderVert, "deferedshading/GBufferVert.hlsl", "main", ST_VERTEX);
 IMPLEMENT_SHADER_TYPE(TestGBufferShaderFrag, "deferedshading/GBufferFrag.hlsl", "main", ST_FRAGMENT);
@@ -230,12 +212,9 @@ namespace Moer {
     }
 
     void DeferredRenderer::Impl::OnResizeVSwapChain() {
-        EnqueueRenderTask([res(this->source_resolution),
-                           view_port(this->virtual_viewport),
-                           this]() {
-            view_port->OnResize(Extent2D(res.x, res.y));
-            hiz_buffer.InitFromDepthExtent(virtual_viewport->GetDepthSRV()->GetTexture()->GetExtent2D());
-        });
+        assert(IsCurrentlyRenderThread());
+        virtual_viewport->OnResize(source_resolution);
+        hiz_buffer.InitFromDepthExtent(virtual_viewport->GetDepthSRV()->GetTexture()->GetExtent2D());
     }
 
     void DeferredRenderer::Impl::Init(const BackendRendererInitInfo& _init_info) {
@@ -247,7 +226,8 @@ namespace Moer {
         create_info.back_buffer_count = 3;
         virtual_viewport              = MoerNew(VirtualViewport)(create_info);
 
-        render_context.Init({.back_buffer_cnt = create_info.back_buffer_count});
+        render_context.Init({.back_buffer_cnt = create_info.back_buffer_count,
+                             .main_viewport   = *virtual_viewport});
 
         base_pass = std::move(UniquePtr<BasePass>(MoerNew(BasePass)));
 
@@ -351,6 +331,7 @@ namespace Moer {
         {
             // render_graphs.resize(render_cmd_lists.size());
         }
+        base_pass->InitResources(render_context);
     }
     void DeferredRenderer::Impl::InitSceneResources() {
 
@@ -414,6 +395,8 @@ namespace Moer {
 
         light_buffer      = GpuSceneBufferBuilder::CopyFrom(EBufferUsageFlags::UNORDERED_ACCESS, lights.data(), lights.size() * sizeof(LightData));
         light_buffer_view = g_rhi->RHICreateBufferSRV(light_buffer);
+
+        base_pass->UpdateSceneData(render_context);
     }
 
     void DeferredRenderer::Impl::ShutDown() {
@@ -504,73 +487,58 @@ namespace Moer {
             EnqueueRenderTask(std::move(fill_uniform_data));
         }
 
-        auto* const scene = g_scene;
-
-        auto&& sync_command_list = [this]() {
-            render_context.BeginFrame();
-        };
         RHICopyBufferInfo copy_info{};
         copy_info.regions.push_back({0, 0, sizeof(uint32_t) * 32});
 
-        auto&& reset_counter_buffer = [this, copy_info = std::move(copy_info)]() {
-            auto& rg = render_context.GetRenderGraph();
-            rg.AddComputePass(
-                "Reset Counter",
-                [&](RenderGraph::Builder& _builder) {
-                    auto counter_buffer = rg.ImportBuffer("count_buffer", draw_count_buffer);
-                    auto src_buffer     = rg.ImportBuffer("zero_buffer", zero_buffer);
-                    _builder.WriteBuffer(counter_buffer, EBufferLayout::TRANSFER_WRITE);
-                    _builder.ReadBuffer(src_buffer, EBufferLayout::TRANSFER_READ);
-                },
-                [&, info(std::move(copy_info))](RenderPassContext& _context) {
-                    auto* cmd_list = _context.cmd_list;
-                    cmd_list->CopyBuffer(info, zero_buffer, draw_count_buffer);
-                });
+        auto&& begin_frame = [this, copy_info = std::move(copy_info)]() {
+            render_context.BeginFrame();
         };
 
-        EnqueueRenderTask(std::move(sync_command_list));
-        EnqueueRenderTask(std::move(reset_counter_buffer));
+        EnqueueRenderTask(std::move(begin_frame));
+        EnqueueRenderTask([this]() {
+            base_pass->Draw(render_context);
+        });
 
-        PrePass();
+        // PrePass();
 
-        DispatchDrawScene(camera_data);
+        // DispatchDrawScene(camera_data);
 
-        //hzb build
-        EnqueueRenderTask(
-            [this]() {
-                render_context.GetRenderGraph().AddComputePass(
-                    "Build HZB",
-                    [&](RenderGraph::Builder& _builder) {
-                        // auto frame_offset = frame_counter % render_cmd_lists.size();
-                        // auto depth        = GetCurrentRenderGraph().ImportTexture("depth", depth_buffer[frame_offset]);
-                        // auto hiz_buffer   = GetCurrentRenderGraph().ImportTexture("hiz_buffer", this->hiz_buffer.texture);
-                        // _builder.ReadTexture(depth, ETextureUsageFlags::SAMPLED);
-                        // _builder.WriteTexture(hiz_buffer, ETextureUsageFlags::UNORDERED_ACCESS);
-                    },
-                    [&](RenderPassContext& _context) {
-                        auto frame_offset = render_context.GetFrameOffset();
-                        auto depth_buffer = virtual_viewport->GetDepthSRV();
-                        HiZBuilder::GetInstance().DispatchBuildHiZ(&render_context.GetCommandList(), depth_buffer, hiz_buffer);
-                    });
-            });
-        RecheckPass();
+        // //hzb build
+        // EnqueueRenderTask(
+        //     [this]() {
+        //         render_context.GetRenderGraph().AddComputePass(
+        //             "Build HZB",
+        //             [&](RenderGraph::Builder& _builder) {
+        //                 // auto frame_offset = frame_counter % render_cmd_lists.size();
+        //                 // auto depth        = GetCurrentRenderGraph().ImportTexture("depth", depth_buffer[frame_offset]);
+        //                 // auto hiz_buffer   = GetCurrentRenderGraph().ImportTexture("hiz_buffer", this->hiz_buffer.texture);
+        //                 // _builder.ReadTexture(depth, ETextureUsageFlags::SAMPLED);
+        //                 // _builder.WriteTexture(hiz_buffer, ETextureUsageFlags::UNORDERED_ACCESS);
+        //             },
+        //             [&](RenderPassContext& _context) {
+        //                 auto frame_offset = render_context.GetFrameOffset();
+        //                 auto depth_buffer = virtual_viewport->GetDepthSRV();
+        //                 HiZBuilder::GetInstance().DispatchBuildHiZ(&render_context.GetCommandList(), depth_buffer, hiz_buffer);
+        //             });
+        //     });
+        // RecheckPass();
 
-        DispatchDrawScene(camera_data, false);
-        EnqueueRenderTask(
-            [this]() {
-                render_context.GetRenderGraph().AddComputePass(
-                    "Post Build HZB",
-                    [&](RenderGraph::Builder& _builder) {
-                        // auto depth      = GetCurrentRenderGraph().ImportTexture("depth", depth_buffer[frame_offset]);
-                        // auto hiz_buffer = GetCurrentRenderGraph().ImportTexture("hiz_buffer", this->hiz_buffer.texture);
-                        // _builder.ReadTexture(depth, ETextureUsageFlags::SAMPLED);
-                        // _builder.WriteTexture(hiz_buffer, ETextureUsageFlags::UNORDERED_ACCESS);
-                    },
-                    [&](RenderPassContext& _context) {
-                        auto depth_buffer = virtual_viewport->GetDepthSRV();
-                        HiZBuilder::GetInstance().DispatchBuildHiZ(&render_context.GetCommandList(), depth_buffer, hiz_buffer);
-                    });
-            });
+        // DispatchDrawScene(camera_data, false);
+        // EnqueueRenderTask(
+        //     [this]() {
+        //         render_context.GetRenderGraph().AddComputePass(
+        //             "Post Build HZB",
+        //             [&](RenderGraph::Builder& _builder) {
+        //                 // auto depth      = GetCurrentRenderGraph().ImportTexture("depth", depth_buffer[frame_offset]);
+        //                 // auto hiz_buffer = GetCurrentRenderGraph().ImportTexture("hiz_buffer", this->hiz_buffer.texture);
+        //                 // _builder.ReadTexture(depth, ETextureUsageFlags::SAMPLED);
+        //                 // _builder.WriteTexture(hiz_buffer, ETextureUsageFlags::UNORDERED_ACCESS);
+        //             },
+        //             [&](RenderPassContext& _context) {
+        //                 auto depth_buffer = virtual_viewport->GetDepthSRV();
+        //                 HiZBuilder::GetInstance().DispatchBuildHiZ(&render_context.GetCommandList(), depth_buffer, hiz_buffer);
+        //             });
+        //     });
         LightingPass();
 
         //   EnqueueRenderTask([this]() {
@@ -615,7 +583,10 @@ namespace Moer {
             return;
         }
         source_resolution = Vector2i(_width, _height);
-        OnResizeVSwapChain();
+        EnqueueRenderTask([this]() {
+            OnResizeVSwapChain();
+            base_pass->OnResizeViewport(source_resolution);
+        });
     }
 
     RHISRVRef DeferredRenderer::Impl::GetRendererOutput() {

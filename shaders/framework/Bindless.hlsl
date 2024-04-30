@@ -7,27 +7,27 @@ struct RenderResourceHandle {
   // 23 bits for index, 2 bits to indicate resource type, 1 bit for writability,
   // 6 bits for version
   uint index;
-  bool IsValid() { return this.index != ~0; }
-  uint ResourceTag() { return (this.index >> 23) & ((1 << 2) - 1); }
-  bool IsWritable() { return (this.index >> 25) && 1; }
-  uint Version() { return (this.index >> 26) & ((1 << 6) - 1); }
+  bool IsValid() { return index != ~0; }
+  uint ResourceTag() { return (index >> 23) & ((1 << 2) - 1); }
+  bool IsWritable() { return (index >> 25) && 1; }
+  uint Version() { return (index >> 26) & ((1 << 6) - 1); }
   uint ReadIndex() {
 #if DEBUG_MODE
-    return this.index & ((1 << 23) - 1);
+    return index & ((1 << 23) - 1);
 #else
-    return this.index;
+    return index;
 #endif
   }
 #if VULKAN_HLSL
-  uint WriteIndex() { return this.ReadIndex(); }
+  uint WriteIndex() { return ReadIndex(); }
 #else
-  uint WriteIndex() { return this.ReadIndex() + 1; }
+  uint WriteIndex() { return ReadIndex() + 1; }
 #endif
   void LogInfo() {
     printf("[hlsl] index: %d, ResourceTag: %d, IsWritable: %d, Version: %d, "
            "ReadIndex: %d, WriteIndex: %d\n",
-           this.index, this.ResourceTag(), this.IsWritable() ? 1 : 0,
-           this.Version(), this.ReadIndex(), this.WriteIndex());
+           index, ResourceTag(), IsWritable() ? 1 : 0,
+           Version(), ReadIndex(), WriteIndex());
   }
 };
 
@@ -168,11 +168,11 @@ struct ArrayBuffer {
   RenderResourceHandle handle;
 
   ByteAddressBuffer GetByteAddressBuffer() {
-    return DESCRIPTOR_HEAP(ByteBufferHandle, this.handle.ReadIndex());
+    return DESCRIPTOR_HEAP(ByteBufferHandle, handle.ReadIndex());
   }
 
   template <typename ReadStructure> ReadStructure Load(uint index) {
-    return DESCRIPTOR_HEAP(ByteBufferHandle, this.handle.ReadIndex())
+    return DESCRIPTOR_HEAP(ByteBufferHandle, handle.ReadIndex())
         .Load<ReadStructure>(sizeof(ReadStructure) * index);
   }
 
@@ -180,7 +180,7 @@ struct ArrayBuffer {
     // UNIFORM access here means that we’re internally not accessing the
     // descriptorheap with NURI.
     ByteAddressBuffer buffer =
-        DESCRIPTOR_HEAP_UNIFORM(ByteBufferHandle, this.handle.ReadIndex());
+        DESCRIPTOR_HEAP_UNIFORM(ByteBufferHandle, handle.ReadIndex());
     ReadStructure result =
         buffer.Load<ReadStructure>(sizeof(ReadStructure) * index);
     return result;
@@ -191,12 +191,12 @@ struct RWArrayBuffer {
   RenderResourceHandle handle;
 
   RWByteAddressBuffer GetRWByteAddressBuffer() {
-    return DESCRIPTOR_HEAP(RWByteBufferHandle, this.handle.WriteIndex());
+    return DESCRIPTOR_HEAP(RWByteBufferHandle, handle.WriteIndex());
   }
 
   template <typename ReadStructure> ReadStructure Load(uint index) {
     ByteAddressBuffer buffer =
-        DESCRIPTOR_HEAP(ByteBufferHandle, this.handle.WriteIndex());
+        DESCRIPTOR_HEAP(ByteBufferHandle, handle.WriteIndex());
     ReadStructure result =
         buffer.Load<ReadStructure>(sizeof(ReadStructure) * index);
     return result;
@@ -206,7 +206,7 @@ struct RWArrayBuffer {
     // UNIFORM access here means that we’re internally not accessing the
     // descriptorheap with NURI.
     ByteAddressBuffer buffer =
-        DESCRIPTOR_HEAP_UNIFORM(ByteBufferHandle, this.handle.WriteIndex());
+        DESCRIPTOR_HEAP_UNIFORM(ByteBufferHandle, handle.WriteIndex());
     ReadStructure result =
         buffer.Load<ReadStructure>(sizeof(ReadStructure) * index);
     return result;
@@ -215,13 +215,13 @@ struct RWArrayBuffer {
   template <typename WriteStructure>
   void Store(uint index, WriteStructure value) {
 
-    DESCRIPTOR_HEAP(RWByteBufferHandle, this.handle.WriteIndex())
+    DESCRIPTOR_HEAP(RWByteBufferHandle, handle.WriteIndex())
         .Store<WriteStructure>(sizeof(WriteStructure) * index, value);
   }
   // template <typename WriteStructure>
   // void operator[](in uint index, in WriteStructure value) {
   //   RWByteAddressBuffer buffer =
-  //       DESCRIPTOR_HEAP(RWByteBufferHandle, this.handle.WriteIndex());
+  //       DESCRIPTOR_HEAP(RWByteBufferHandle, handle.WriteIndex());
   //   buffer.Store<WriteStructure>(sizeof(WriteStructure) * index, value);
   // }
 };
@@ -231,51 +231,51 @@ struct Texture {
 
   template <typename TextureValue> Texture1D<TextureValue> GetTexture1D() {
     Texture1D<TextureValue> texture =
-        DESCRIPTOR_HEAP(Texture1DHandle<TextureValue>, this.handle.ReadIndex());
+        DESCRIPTOR_HEAP(Texture1DHandle<TextureValue>, handle.ReadIndex());
     return texture;
   }
 
   template <typename TextureValue> Texture2D<TextureValue> GetTexture2D() {
     Texture2D<TextureValue> texture =
-        DESCRIPTOR_HEAP(Texture2DHandle<TextureValue>, this.handle.ReadIndex());
+        DESCRIPTOR_HEAP(Texture2DHandle<TextureValue>, handle.ReadIndex());
     return texture;
   }
 
   template <typename TextureValue> Texture3D<TextureValue> GetTexture3D() {
     Texture3D<TextureValue> texture =
-        DESCRIPTOR_HEAP(Texture3DHandle<TextureValue>, this.handle.ReadIndex());
+        DESCRIPTOR_HEAP(Texture3DHandle<TextureValue>, handle.ReadIndex());
     return texture;
   }
 
   template <typename TextureValue> TextureValue Load1D(uint pos) {
     Texture1D<TextureValue> texture =
-        DESCRIPTOR_HEAP(Texture1DHandle<TextureValue>, this.handle.ReadIndex());
+        DESCRIPTOR_HEAP(Texture1DHandle<TextureValue>, handle.ReadIndex());
     return texture.load(pos);
   }
 
   template <typename TextureValue> TextureValue Load2D(uint2 pos) {
     Texture2D<TextureValue> texture =
-        DESCRIPTOR_HEAP(Texture2DHandle<TextureValue>, this.handle.ReadIndex());
+        DESCRIPTOR_HEAP(Texture2DHandle<TextureValue>, handle.ReadIndex());
     return texture.load(uint2(pos));
   }
 
   template <typename TextureValue> TextureValue Load3D(uint3 pos) {
     Texture3D<TextureValue> texture =
-        DESCRIPTOR_HEAP(Texture3DHandle<TextureValue>, this.handle.ReadIndex());
+        DESCRIPTOR_HEAP(Texture3DHandle<TextureValue>, handle.ReadIndex());
     return texture.load(uint3(pos));
   }
 
   template <typename TextureValue>
   TextureValue SampleLevel2D(SamplerState s, float2 uv, float mip) {
     Texture2D<TextureValue> texture =
-        DESCRIPTOR_HEAP(Texture2DHandle<TextureValue>, this.handle.ReadIndex());
+        DESCRIPTOR_HEAP(Texture2DHandle<TextureValue>, handle.ReadIndex());
     return texture.SampleLevel(s, uv, mip);
   }
 
   template <typename TextureValue>
   TextureValue SampleLevel3D(SamplerState s, float3 uv, float mip) {
     Texture3D<TextureValue> texture =
-        DESCRIPTOR_HEAP(Texture3DHandle<TextureValue>, this.handle.ReadIndex());
+        DESCRIPTOR_HEAP(Texture3DHandle<TextureValue>, handle.ReadIndex());
     return texture.SampleLevel(s, uv, mip);
   }
 };
@@ -287,47 +287,47 @@ struct RWTexture {
   template <typename RWTextureValue>
   RWTexture1D<RWTextureValue> GetRWTexture1D() {
     RWTexture1D<RWTextureValue> texture = DESCRIPTOR_HEAP(
-        RWTexture1DHandle<RWTextureValue>, this.handle.WriteIndex());
+        RWTexture1DHandle<RWTextureValue>, handle.WriteIndex());
     return texture;
   }
 
   template <typename RWTextureValue>
   RWTexture2D<RWTextureValue> GetRWTexture2D() {
     RWTexture2D<RWTextureValue> texture = DESCRIPTOR_HEAP(
-        RWTexture2DHandle<RWTextureValue>, this.handle.WriteIndex());
+        RWTexture2DHandle<RWTextureValue>, handle.WriteIndex());
     return texture;
   }
 
   template <typename RWTextureValue>
   RWTexture3D<RWTextureValue> GetRWTexture3D() {
     RWTexture3D<RWTextureValue> texture = DESCRIPTOR_HEAP(
-        RWTexture3DHandle<RWTextureValue>, this.handle.WriteIndex());
+        RWTexture3DHandle<RWTextureValue>, handle.WriteIndex());
     return texture;
   }
 
   template <typename RWTextureValue> RWTextureValue Load2D(uint2 pos) {
     RWTexture2D<RWTextureValue> texture = DESCRIPTOR_HEAP(
-        RWTexture2DHandle<RWTextureValue>, this.handle.WriteIndex());
+        RWTexture2DHandle<RWTextureValue>, handle.WriteIndex());
     return texture[pos];
   }
 
   template <typename RWTextureValue> RWTextureValue Load3D(uint3 pos) {
     RWTexture3D<RWTextureValue> texture = DESCRIPTOR_HEAP(
-        RWTexture3DHandle<RWTextureValue>, this.handle.WriteIndex());
+        RWTexture3DHandle<RWTextureValue>, handle.WriteIndex());
     return texture[pos];
   }
 
   template <typename RWTextureValue>
   void Store2D(uint2 pos, RWTextureValue value) {
     RWTexture2D<RWTextureValue> texture = DESCRIPTOR_HEAP(
-        RWTexture2DHandle<RWTextureValue>, this.handle.WriteIndex());
+        RWTexture2DHandle<RWTextureValue>, handle.WriteIndex());
     texture[pos] = value;
   }
 
   template <typename RWTextureValue>
   void Store3D(uint3 pos, RWTextureValue value) {
     RWTexture3D<RWTextureValue> texture = DESCRIPTOR_HEAP(
-        RWTexture3DHandle<RWTextureValue>, this.handle.WriteIndex());
+        RWTexture3DHandle<RWTextureValue>, handle.WriteIndex());
     texture[pos] = value;
   }
 };
@@ -337,13 +337,13 @@ struct TypeBuffer {
 
   ByteAddressBuffer GetByteAddressBuffer() {
     ByteAddressBuffer buffer =
-        DESCRIPTOR_HEAP(ByteBufferHandle, this.handle.ReadIndex());
+        DESCRIPTOR_HEAP(ByteBufferHandle, handle.ReadIndex());
     return buffer;
   }
 
   template <typename Type> Type Load() {
     ByteAddressBuffer buffer =
-        DESCRIPTOR_HEAP(ByteBufferHandle, this.handle.ReadIndex());
+        DESCRIPTOR_HEAP(ByteBufferHandle, handle.ReadIndex());
     Type result = buffer.Load<Type>(0);
     return result;
   }
@@ -354,19 +354,19 @@ struct RWTypeBuffer {
 
   template <typename Type> RWByteAddressBuffer GetRWByteAddressBuffer() {
     RWByteAddressBuffer buffer =
-        DESCRIPTOR_HEAP(RWByteBufferHandle, this.handle.WriteIndex());
+        DESCRIPTOR_HEAP(RWByteBufferHandle, handle.WriteIndex());
     return buffer;
   }
 
   template <typename Type> Type Load() {
     RWByteAddressBuffer buffer =
-        DESCRIPTOR_HEAP(RWByteBufferHandle, this.handle.WriteIndex());
+        DESCRIPTOR_HEAP(RWByteBufferHandle, handle.WriteIndex());
     Type result = buffer.Load<Type>(0);
     return result;
   }
   template <typename Type> void Store(Type value) {
     RWByteAddressBuffer buffer =
-        DESCRIPTOR_HEAP(RWByteBufferHandle, this.handle.WriteIndex());
+        DESCRIPTOR_HEAP(RWByteBufferHandle, handle.WriteIndex());
     buffer.Store<Type>(0);
   }
 };
@@ -375,7 +375,7 @@ struct Tlas {
   RenderResourceHandle handle;
   RaytracingAccelerationStructure GetAccelerationStructure() {
     RaytracingAccelerationStructure result =
-        DESCRIPTOR_HEAP(TlasHandle, this.handle.ReadIndex());
+        DESCRIPTOR_HEAP(TlasHandle, handle.ReadIndex());
     return result;
   }
 };

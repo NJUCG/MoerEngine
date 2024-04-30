@@ -1,6 +1,7 @@
 #ifndef MOERENGINE_SHADER_RESOURCE_MANAGER_H
 #define MOERENGINE_SHADER_RESOURCE_MANAGER_H
 
+#include "misc/CountableRef.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "shader/ShaderCommon.h"
@@ -34,16 +35,17 @@ public:
     static ShaderResourceManager& GetInstance();
 
     template<typename ShaderType>
+        requires std::is_base_of_v<Shader, ShaderType>
     RHIShaderRef GetShader(const typename ShaderType::TMutationSet& _mutation_set) {
         const ShaderMetaType& meta_type = ShaderType::GetMetaType();
 
         if constexpr (ShaderType::TMutationSet::mutation_count == 0) {
-            GetShader(meta_type, 0);
+            return GetShader(meta_type, 0);
         } else
             return GetShader(meta_type, _mutation_set.GetMutationID());
     }
-
     template<typename ShaderType>
+        requires std::is_base_of_v<Shader, ShaderType>
     RHIShaderRef GetShader() {
         static_assert(ShaderType::TMutationSet::mutation_count == 1, "ShaderType should not have any mutation");
         const ShaderMetaType& meta_type = ShaderType::GetMetaType();

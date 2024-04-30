@@ -58,6 +58,14 @@ namespace Moer {
         return RenderGraphResourceCache::Get().GetUAV(m_texture, format == PF_UNDEFINED ? GetFormat() : format, mip_num, array_min, array_num);
     }
 
+    RHIUAVRef RenderGraphTexture::GetUAV(uint32_t _mip_level, uint32_t _array_min, uint32_t _array_num) {
+        return RenderGraphResourceCache::Get().GetUAV(m_texture, GetFormat(), _mip_level, _array_min, _array_num);
+    }
+
+    RHISRVRef RenderGraphTexture::GetSRV(uint32_t _mip_min, uint32_t _mip_num, uint32_t _array_min, uint32_t _array_num) {
+        return RenderGraphResourceCache::Get().GetSRV(m_texture, GetFormat(), _mip_min, _mip_num, _array_min, _array_num);
+    }
+
     EPixelFormat RenderGraphTexture::GetFormat() const {
         return m_imported ? m_texture->GetFormat() : m_desc.format;
     }

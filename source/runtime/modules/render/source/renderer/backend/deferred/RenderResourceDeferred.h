@@ -28,7 +28,8 @@ namespace Moer {
         Moer::Array<ViewportResources> viewports;
     };
     struct RenderContextInitInfo {
-        uint32_t back_buffer_cnt;
+        uint32_t         back_buffer_cnt;
+        VirtualViewport& main_viewport;
     };
     struct RenderContext {
         struct Impl;
@@ -44,7 +45,8 @@ namespace Moer {
         uint32_t                GetMaxFrameInFlight() const;
         RenderGraph&            GetRenderGraph();
         RHIGraphicsCommandList& GetCommandList();
-        RHICommandQueue*        GetCommandQueue();
+        RHICommandQueue&        GetCommandQueue();
+        VirtualViewport&        GetMainViewport();
         void                    EndFrame(const VirtualViewport* _viewport);
         void                    Present(VirtualViewport* _viewport);
 

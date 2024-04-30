@@ -14,7 +14,7 @@
 #include "misc/MMemory.h"
 #include "misc/STL.h"
 #include "misc/Singleton.h"
-
+#include "misc/Traits.h"
 namespace Moer {
 
     CORE_API extern bool IsCurrentlyGameThread();
