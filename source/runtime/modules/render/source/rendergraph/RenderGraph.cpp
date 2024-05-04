@@ -115,6 +115,11 @@ namespace Moer {
         RenderGraphBuffer* buffer = MoerNew(RenderGraphBuffer)(name, rhi_buffer);
         return AddBufferInternal(buffer);
     }
+    RenderGraphHandle RenderGraph::CreateTextureSubResource(RenderGraphHandle parent, const std::string& name, const RHISubresourceRange& sub_resource) {
+        RenderGraphTexture* parent_texture = GetTexture(parent);
+        RenderGraphTexture* texture        = MoerNew(RenderGraphTexture)(name, parent_texture, sub_resource);
+        return AddTextureInternal(texture);
+    }
     void RenderGraph::AddGraphicPass(const std::string& name, const GraphicSetup& setup, GraphicsExecute&& execute) {
         RenderGraphPass* pass = MoerNew(RenderGraphPass)(std::move(execute));
         auto*            node = MoerNew(GraphicsPassNode)(name, pass);

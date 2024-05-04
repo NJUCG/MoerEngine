@@ -26,8 +26,8 @@ namespace Moer {
         PassNode* destroy_pass{nullptr};
 
         //Create Real Resource Before Execute
-        virtual void Create() {};
-        virtual void Destroy() {};
+        virtual void Create(){};
+        virtual void Destroy(){};
         virtual ~RenderGraphResource() = default;
 
     protected:
@@ -70,20 +70,25 @@ namespace Moer {
             uint32_t     mipLevels{1};
             uint32_t     arrayLayers{1};
         };
-        RHIUAVRef     GetUAV(EPixelFormat format = PF_UNDEFINED, uint32_t mip_num = 1, uint32_t array_min = 0, uint32_t array_num = 1);
-        RHIUAVRef     GetUAV(uint32_t _mip_level, uint32_t _array_min = 0, uint32_t _array_num = 1);
-        RHISRVRef     GetSRV(EPixelFormat format = PF_UNDEFINED, uint32_t mip_min = 0, uint32_t mip_num = 1, uint32_t array_min = 0, uint32_t array_num = 1);
-        RHISRVRef     GetSRV(uint32_t _mip_min, uint32_t _mip_num = 1, uint32_t _array_min = 0, uint32_t _array_num = 1);
+        RHIUAVRef     GetUAV(EPixelFormat format = PF_UNDEFINED, uint32_t mip_num = -1, uint32_t array_min = -1, uint32_t array_num = -1);
+        RHISRVRef     GetSRV(EPixelFormat format = PF_UNDEFINED, uint32_t mip_min = -1, uint32_t mip_num = -1, uint32_t array_min = -1, uint32_t array_num = -1);
         RHITextureRef GetTexture() const;
         EPixelFormat  GetFormat() const;
         void          Create() override;
         RenderGraphTexture(const std::string& name, Descriptor desc);
         RenderGraphTexture(const std::string& name, RHITextureRef tex);
+        RenderGraphTexture(const std::string& name, RenderGraphTexture* parent, RHISubresourceRange sub_res);
         uint32_t ResloveResourceUsage(uint32_t usage, RHIBarrierDependencyInfo& barrier_info, EPassType type) override;
 
     protected:
         RHITextureRef m_texture;
         Descriptor    m_desc;
+
+        RHISubresourceRange GetSubResource() const;
+
+        RenderGraphTexture* m_parent{nullptr};
+        bool                m_is_sub_resource{false};
+        RHISubresourceRange m_sub_res{};
 
         // struct ViewInfoHashFunc
         // {
@@ -111,6 +116,17 @@ namespace Moer {
         //
         // mutable std::unordered_map<RHIViewInfo, RHISRVRef, ViewInfoHashFunc> mSrvs;
         // mutable std::unordered_map<RHIViewInfo, RHIUAVRef, ViewInfoHashFunc> mUavs;
+    };
+
+    struct TextureSubResource {
+        uint32_t mip_min{0};
+        uint32_t mip_num{1};
+        uint32_t array_min{0};
+        uint32_t array_num{1};
+    };
+
+    class RENDER_API RenderGraphSubResource : public RenderGraphTexture {
+        RenderGraphSubResource(const std::string& name, RenderGraphTexture* parent, TextureSubResource sub_res);
     };
 
 }// namespace Moer

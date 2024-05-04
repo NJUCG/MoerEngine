@@ -49,21 +49,34 @@ namespace Moer {
     }
 
     RHISRVRef RenderGraphTexture::GetSRV(EPixelFormat format, uint32_t mip_min, uint32_t mip_num, uint32_t array_min, uint32_t array_num) {
+        if (mip_num == -1) {
+            mip_num = m_is_sub_resource ? m_sub_res.num_mips : 1;
+        }
+        if (array_min == -1) {
+            array_min = m_is_sub_resource ? m_sub_res.array_index : 0;
+        }
+        if (array_num == -1) {
+            array_num = m_is_sub_resource ? m_sub_res.array_count : 1;
+        }
+        if (mip_min == -1) {
+            mip_min = 0;
+        }
         return RenderGraphResourceCache::Get().GetSRV(m_texture, format == PF_UNDEFINED ? GetFormat() : format, mip_min, mip_num, array_min, array_num);
     }
     RHITextureRef RenderGraphTexture::GetTexture() const {
         return m_texture;
     }
     RHIUAVRef RenderGraphTexture::GetUAV(EPixelFormat format, uint32_t mip_num, uint32_t array_min, uint32_t array_num) {
+        if (mip_num == -1) {
+            mip_num = m_is_sub_resource ? m_sub_res.num_mips : 1;
+        }
+        if (array_min == -1) {
+            array_min = m_is_sub_resource ? m_sub_res.array_index : 0;
+        }
+        if (array_num == -1) {
+            array_num = m_is_sub_resource ? m_sub_res.array_count : 1;
+        }
         return RenderGraphResourceCache::Get().GetUAV(m_texture, format == PF_UNDEFINED ? GetFormat() : format, mip_num, array_min, array_num);
-    }
-
-    RHIUAVRef RenderGraphTexture::GetUAV(uint32_t _mip_level, uint32_t _array_min, uint32_t _array_num) {
-        return RenderGraphResourceCache::Get().GetUAV(m_texture, GetFormat(), _mip_level, _array_min, _array_num);
-    }
-
-    RHISRVRef RenderGraphTexture::GetSRV(uint32_t _mip_min, uint32_t _mip_num, uint32_t _array_min, uint32_t _array_num) {
-        return RenderGraphResourceCache::Get().GetSRV(m_texture, GetFormat(), _mip_min, _mip_num, _array_min, _array_num);
     }
 
     EPixelFormat RenderGraphTexture::GetFormat() const {
@@ -74,6 +87,10 @@ namespace Moer {
             return;
         if (m_texture) {
             LOG_ERROR("Texture already created");
+            return;
+        }
+        if (m_is_sub_resource) {
+            m_texture = m_parent->GetTexture();
             return;
         }
         m_texture = RenderGraphResourceCache::Get().GetTexture(name, m_desc.extent2D, m_desc.format, m_desc.usage, m_desc.mipLevels, m_desc.arrayLayers);
@@ -114,8 +131,11 @@ namespace Moer {
         //Todo is this correct?
         bool                is_depth_stencil = EnumHasAnyFlag(usage_flags, RenderGraphTexture::Usage::DEPTH_STENCIL_ATTACHMENT) || GetFormat() == EPixelFormat::PF_D32_SFLOAT_S8_UINT;
         RHISubresourceRange subresource_range(is_depth_stencil ? ETextureAspectFlags::DEPTH_SLICE : ETextureAspectFlags::COLOR, 0, 1, 0, 1, 0, 1);
-        auto                src_layout = m_texture->GetLayout(subresource_range);
-        auto                dst_layout = GetTextureLayout(static_cast<RenderGraphTexture::Usage>(usage));
+        if (m_is_sub_resource) {
+            subresource_range = m_sub_res;
+        }
+        auto src_layout = m_texture->GetLayout(subresource_range);
+        auto dst_layout = GetTextureLayout(static_cast<RenderGraphTexture::Usage>(usage));
         if (src_layout == dst_layout)
             return src_layout;
         barrier_info.texture_barriers.push_back(RHITextureBarrierInfo{});

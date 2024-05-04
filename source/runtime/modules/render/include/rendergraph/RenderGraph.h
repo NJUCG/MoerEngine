@@ -91,6 +91,7 @@ namespace Moer {
         RenderGraphHandle ImportTexture(const std::string& name, RHITextureRef texture);
         RenderGraphHandle CreateBuffer(const std::string& name, const RenderGraphBuffer::Descriptor& descriptor);
         RenderGraphHandle ImportBuffer(const std::string& name, RHIBufferRef buffer);
+        RenderGraphHandle CreateTextureSubResource(RenderGraphHandle parent, const std::string& name, const RHISubresourceRange& sub_resource);
 
         using GraphicSetup    = std::function<void(Builder& builder)>;
         using ComputeSetUp    = std::function<void(Builder& builder)>;
