@@ -185,12 +185,13 @@ namespace Moer {
             auto  mip_cnt = std::min(uint32_t(std::log2(std::min(_hiz_buffer.texture->GetExtent3D().x, _hiz_buffer.texture->GetExtent3D().y))), max_mip_levels);
 
             rg.AddComputePass("Build HiZ", [&, depth_buffer(_depth_buffer)](RenderGraph::Builder& _builder) {
-                auto depth = rg.ImportTexture("Depth Buffer", depth_buffer->GetTexture());
+                auto& black_board = rg.GetBlackBoard();
+                auto depth       = black_board.GetHandle("depth");
+                auto           hiz         = black_board.GetHandle("HiZ Buffer");
 
-                 auto hiz = rg.ImportTexture("HiZ Buffer", _hiz_buffer.texture);
-                _builder.ReadTexture(depth);
-                rg.GetTexture(hiz)->GetUAV(0);
-                _builder.WriteTexture(hiz); }, [&, mip_cnt](RenderPassContext& _pass_context) {
+                               _builder.ReadTexture(depth);
+                auto hiz_mip = rg.CreateTextureSubResource(hiz, "HiZ Buffer Mip 0", RHISubresourceRange(ETextureAspectFlags::COLOR, 0, 0, 0));
+                _builder.WriteTexture(hiz_mip); }, [&, mip_cnt](RenderPassContext& _pass_context) {
                 BuildHiZShader::Parameters params;
                 Vector2i                   mip0_size = Vector2i(_hiz_buffer.texture->GetExtent3D());
 
@@ -208,10 +209,18 @@ namespace Moer {
 
             for (uint i = 1; i < mip_cnt; ++i) {
                 rg.AddComputePass("Build HiZ", [&, i](RenderGraph::Builder& _builder) mutable {
-                        auto hiz = rg.ImportTexture("HiZ Buffer", _hiz_buffer.texture);
-                        rg.GetTexture(hiz)->GetUAV(i);
-                        _builder.ReadTexture(hiz);
-                        _builder.WriteTexture(hiz); }, [&, i](RenderPassContext& _pass_context) {
+                    auto& black_board = rg.GetBlackBoard();
+                    auto           hiz         = black_board.GetHandle("HiZ Buffer");
+                    // auto sub_resource_mip_i_m = rg.CreateTextureSubResource(
+                    //     hiz, std::format("HiZ Buffer Mip {}", i - 1), RHISubresourceRange(ETextureAspectFlags::COLOR, i - 1, 0, 0));
+                    auto sub_resource_mip_i_m  = rg.CreateTextureSubResource(
+                            hiz, std::format("HiZ Buffer Mip {}", i - 1), RHISubresourceRange(ETextureAspectFlags::COLOR, i - 1, 0, 0));
+                    
+                    auto sub_resource_mip_i = rg.CreateTextureSubResource(
+                            hiz, std::format("HiZ Buffer Mip {}", i), RHISubresourceRange(ETextureAspectFlags::COLOR, i, 0, 0));
+                    
+                    _builder.WriteTexture(sub_resource_mip_i, ETextureUsageFlags::UNORDERED_ACCESS);
+                    _builder.ReadTexture(sub_resource_mip_i_m); }, [&, i](RenderPassContext& _pass_context) {
                                       BuildHiZShader::Parameters params;
                                       Vector2i                   mip0_size = Vector2i(_hiz_buffer.texture->GetExtent3D());
 

@@ -876,15 +876,15 @@ namespace Moer {
         auto dispatch_rdg = [&]() {
             RenderGraph& rg = render_context.GetRenderGraph();
             rg.AddGraphicPass(
-                "Lighting Pass", [&rg, this](RenderGraph::Builder& builder) {
+                "Lighting Pass", [&rg, this](RenderGraph::Builder& _builder) {
             auto normal = rg.GetBlackBoard().GetHandle("normal");
             auto mat    = rg.GetBlackBoard().GetHandle("mat");
             auto uv     = rg.GetBlackBoard().GetHandle("uv");
             auto depth  = rg.GetBlackBoard().GetHandle("depth");
             // auto position = render_graph.GetBlackBoard().GetHandle("position");
             auto output = rg.ImportTexture("swapchain_output", virtual_viewport->GetBackBufferInfo().backbuffer_uav->GetTexture());
-            builder.ReadTextures({normal,uv,mat,depth},RenderGraphTexture::Usage::SAMPLED).WriteTexture(output);
-            builder.DeclareRenderPass({.color_attachments =  {output}}); }, [&rg, this](RenderPassContext& context) {
+            _builder.ReadTextures({normal,uv,mat,depth},RenderGraphTexture::Usage::SAMPLED).WriteTexture(output);
+            _builder.DeclareRenderPass({.color_attachments =  {output}}); }, [&rg, this](RenderPassContext& context) {
             auto* cmd_list = context.cmd_list;
             cmd_list->SetPipelineState(lighting_pipeline_state);
 

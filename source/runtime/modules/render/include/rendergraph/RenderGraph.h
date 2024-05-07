@@ -19,14 +19,15 @@ namespace Moer {
 
     class RenderGraph;
 
-    //A BlackBoard is a place to store data that is shared between passes
+    // A BlackBoard is a place to store data that is shared between passes
     class RENDER_API BlackBoard {
     public:
-        RenderGraphTexture*            GetTexture(const std::string& name) const;
-        RenderGraphBuffer*             GetBuffer(const std::string& name) const;
-        RenderGraphHandle              GetHandle(const std::string& name) const;
-        Moer::Array<RenderGraphHandle> GetHandles(const Moer::Array<std::string>& names) const;
-        void                           PutHandle(const std::string& name, RenderGraphHandle handle);
+        RenderGraphTexture* GetTexture(const std::string& name) const;
+        RenderGraphBuffer*  GetBuffer(const std::string& name) const;
+        RenderGraphHandle   GetHandle(const std::string& _name) const;
+        Moer::Array<RenderGraphHandle>
+             GetHandles(const Moer::Array<std::string>& names) const;
+        void PutHandle(const std::string& name, RenderGraphHandle handle);
         BlackBoard(RenderGraph& renderGraph);
         ~BlackBoard() = default;
         void Reset();
@@ -55,25 +56,28 @@ namespace Moer {
                                       RenderGraphTexture::Usage::COLOR_ATTACHMENT);
 
             Builder& ReadTextures(const Moer::Array<RenderGraphHandle>& inputs,
-                                  RenderGraphTexture::Usage             usage = RenderGraphTexture::Usage::INPUT_ATTACHMENT);
+                                  RenderGraphTexture::Usage             usage =
+                                      RenderGraphTexture::Usage::INPUT_ATTACHMENT);
 
             Builder& WriteTextures(const Moer::Array<RenderGraphHandle>& output,
                                    RenderGraphTexture::Usage             usage =
                                        RenderGraphTexture::Usage::COLOR_ATTACHMENT);
 
-            Builder& ReadBuffer(RenderGraphHandle        input,
-                                RenderGraphBuffer::Usage usage =
-                                    RenderGraphBuffer::Usage::READ);
+            Builder&
+            ReadBuffer(RenderGraphHandle        input,
+                       RenderGraphBuffer::Usage usage = RenderGraphBuffer::Usage::READ);
 
-            Builder& WriteBuffer(RenderGraphHandle        output,
-                                 RenderGraphBuffer::Usage usage =
-                                     RenderGraphBuffer::Usage::WRITE);
+            Builder& WriteBuffer(
+                RenderGraphHandle        output,
+                RenderGraphBuffer::Usage usage = RenderGraphBuffer::Usage::WRITE);
 
-            Builder& ReadBuffers(const Moer::Array<RenderGraphHandle>& inputs,
-                                 RenderGraphBuffer::Usage              usage = RenderGraphBuffer::Usage::READ);
+            Builder& ReadBuffers(
+                const Moer::Array<RenderGraphHandle>& inputs,
+                RenderGraphBuffer::Usage              usage = RenderGraphBuffer::Usage::READ);
 
-            Builder& WriteBuffers(const Moer::Array<RenderGraphHandle>& output,
-                                  RenderGraphBuffer::Usage              usage = RenderGraphBuffer::Usage::WRITE);
+            Builder& WriteBuffers(
+                const Moer::Array<RenderGraphHandle>& output,
+                RenderGraphBuffer::Usage              usage = RenderGraphBuffer::Usage::WRITE);
 
             void DeclareRenderPass(const RenderGraphPassDescriptor& descriptor);
             void DeclareComputePass(const ComputePassDescriptor& descriptor);
@@ -85,13 +89,41 @@ namespace Moer {
         };
         RenderGraph();
 
-        RenderGraph&      operator=(const RenderGraph& other) = delete;
-        void              Reset();
-        RenderGraphHandle CreateTexture(const std::string& name, const RenderGraphTexture::Descriptor& descriptor);
-        RenderGraphHandle ImportTexture(const std::string& name, RHITextureRef texture);
-        RenderGraphHandle CreateBuffer(const std::string& name, const RenderGraphBuffer::Descriptor& descriptor);
+        RenderGraph& operator=(const RenderGraph& other) = delete;
+        void         Reset();
+        RenderGraphHandle
+                          CreateTexture(const std::string&                    name,
+                                        const RenderGraphTexture::Descriptor& descriptor);
+        RenderGraphHandle ImportTexture(const std::string& name,
+                                        RHITextureRef      texture);
+        template<typename TResourceRef>
+            requires std::is_same_v<TResourceRef, RHITextureRef> ||
+                     std::is_same_v<TResourceRef, RHIBufferRef> ||
+                     std::is_constructible_v<RHITextureRef, TResourceRef> ||
+                     std::is_constructible_v<RHIBufferRef, TResourceRef>
+        RenderGraphHandle ImportIfNotExist(const std::string& _name,
+                                           TResourceRef       _resource) {
+            if (auto handle = GetBlackBoard().GetHandle(_name);
+                handle.IsInitialized()) {
+                return handle;
+            }
+            RenderGraphHandle handle;
+
+            using T = std::decay_t<decltype(_resource)>;
+            if constexpr (std::is_constructible_v<RHITextureRef, T>) {
+                handle = ImportTexture(_name, RHITextureRef(_resource));
+            } else if constexpr (std::is_constructible_v<RHIBufferRef, T>) {
+                handle = ImportBuffer(_name, RHIBufferRef(_resource));
+            }
+
+            return handle;
+        }
+        RenderGraphHandle
+                          CreateBuffer(const std::string&                   name,
+                                       const RenderGraphBuffer::Descriptor& descriptor);
         RenderGraphHandle ImportBuffer(const std::string& name, RHIBufferRef buffer);
-        RenderGraphHandle CreateTextureSubResource(RenderGraphHandle parent, const std::string& name, const RHISubresourceRange& sub_resource);
+        RenderGraphHandle
+        CreateTextureSubResource(RenderGraphHandle parent, const std::string& name, const RHISubresourceRange& sub_resource);
 
         using GraphicSetup    = std::function<void(Builder& builder)>;
         using ComputeSetUp    = std::function<void(Builder& builder)>;

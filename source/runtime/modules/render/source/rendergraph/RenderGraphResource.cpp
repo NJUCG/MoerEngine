@@ -100,6 +100,9 @@ namespace Moer {
     RenderGraphTexture::RenderGraphTexture(const std::string& name, RHITextureRef texture) : RenderGraphResource(name, Type::Texture2D, true), m_texture(texture) {
     }
 
+    RenderGraphTexture::RenderGraphTexture(const std::string& _name, RenderGraphTexture* _parent, RHISubresourceRange _sub_res) : RenderGraphResource(name, Type::Texture2D, false), m_parent(_parent), m_sub_res(_sub_res), m_is_sub_resource(true) {
+    }
+
     static inline ETextureLayout GetTextureLayout(RenderGraphTexture::Usage usage) {
         if (EnumHasAnyFlag(usage, RenderGraphTexture::Usage::UNORDERED_ACCESS)) {
             return ETextureLayout::TEXTURE_LAYOUT_COMMON;

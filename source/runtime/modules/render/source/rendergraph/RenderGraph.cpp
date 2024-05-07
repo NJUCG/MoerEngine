@@ -111,11 +111,14 @@ namespace Moer {
         RenderGraphBuffer* buffer = MoerNew(RenderGraphBuffer)(name, descriptor);
         return AddBufferInternal(buffer);
     }
-    RenderGraphHandle RenderGraph::ImportBuffer(const std::string& name, RHIBufferRef rhi_buffer) {
-        RenderGraphBuffer* buffer = MoerNew(RenderGraphBuffer)(name, rhi_buffer);
+    RenderGraphHandle RenderGraph::ImportBuffer(const std::string& _name, RHIBufferRef _rhi_buffer) {
+        RenderGraphBuffer* buffer = MoerNew(RenderGraphBuffer)(_name, _rhi_buffer);
         return AddBufferInternal(buffer);
     }
     RenderGraphHandle RenderGraph::CreateTextureSubResource(RenderGraphHandle parent, const std::string& name, const RHISubresourceRange& sub_resource) {
+        if (auto handle = m_black_board.GetHandle(name); handle.IsInitialized()) {
+            return handle;
+        }
         RenderGraphTexture* parent_texture = GetTexture(parent);
         RenderGraphTexture* texture        = MoerNew(RenderGraphTexture)(name, parent_texture, sub_resource);
         return AddTextureInternal(texture);
