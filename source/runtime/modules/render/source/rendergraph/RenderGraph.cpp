@@ -82,6 +82,9 @@ namespace Moer {
     }
     RenderGraph::Builder::Builder(PassNode* pass, RenderGraph& renderGraph) : m_pass(pass), m_renderGraph(renderGraph) {
     }
+    void RenderGraph::SetCutUnUsedResources(bool cut) {
+        m_cut = cut;
+    }
     RenderGraph::RenderGraph() : m_black_board(*this) {
     }
     void RenderGraph::Reset() {
@@ -149,7 +152,7 @@ namespace Moer {
 
         Moer::Array<PassNode*> available_passes;
         for (auto& pass : m_passes) {
-            if (!pass->IsCulled()) {
+            if (!m_cut | !pass->IsCulled()) {
                 available_passes.emplace_back(pass);
             }
         }
@@ -187,7 +190,7 @@ namespace Moer {
         }
 
         for (const auto& resource : m_resources) {
-            if (resource->GetRefCount() != 0) {
+            if (!m_cut | !resource->IsCulled()) {
                 if (resource->create_pass)
                     resource->create_pass->AddResourceToCreate(resource);
                 if (resource->destroy_pass)
