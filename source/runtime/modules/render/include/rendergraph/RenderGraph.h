@@ -102,6 +102,7 @@ namespace Moer {
         // void AddPass();
         void Execute(const RenderGraphExecuteConfig& config);
         void Compile();
+        void SetCutUnUsedResources(bool cut);
 
         BlackBoard&         GetBlackBoard();
         bool                IsWriteResource(RenderGraphHandle handle, PassNode* node) const;
@@ -123,6 +124,8 @@ namespace Moer {
         Moer::Array<PassNode*>            m_passes;
         DepdencyGraph                     m_dependency_graph;
         BlackBoard                        m_black_board;
+
+        bool m_cut{true};
         //Extent3D                         m_render_extent;
         friend class Builder;
     };
