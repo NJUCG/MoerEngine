@@ -30,9 +30,10 @@ namespace Moer {
     //
     // };
 
-    using GraphicsExecute   = std::function<void(RenderPassContext& context)>;
-    using ComputeExecute    = std::function<void(RenderPassContext& context)>;
-    using RaytracingExecute = std::function<void(RenderPassContext& context)>;
+    using GraphicsExecute   = std::function<void(RenderPassContext& _context)>;
+    using ComputeExecute    = std::function<void(RenderPassContext& _context)>;
+    using RaytracingExecute = std::function<void(RenderPassContext& _context)>;
+    using CopyExecute       = std::function<void(RenderPassContext& _context)>;
 
     class RenderGraphPass {
     public:
@@ -41,19 +42,19 @@ namespace Moer {
         virtual ~RenderGraphPass() = default;
 
     public:
-        explicit RenderGraphPass(GraphicsExecute&& execute) noexcept
-            : mExecute(std::move(execute)) {
+        explicit RenderGraphPass(GraphicsExecute&& _execute) noexcept
+            : m_execute(std::move(_execute)) {
         }
 
-        void Execute(RenderPassContext& data) {
-            mExecute(data);
+        void Execute(RenderPassContext& _data) {
+            m_execute(_data);
         }
 
         // RenderPassContext& getData() { return data; }
 
     protected:
         // RenderPassContext data;
-        GraphicsExecute mExecute;
+        GraphicsExecute m_execute;
     };
 
     // template<typename Data, typename Execute>

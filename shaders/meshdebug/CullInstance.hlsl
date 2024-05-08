@@ -41,6 +41,8 @@ struct CameraCullData {
 // 0 for processed instance, 1 for processed meshlet
 [[vk::binding(0, 3)]] RWByteAddressBuffer counters_buffer
     : register(u1, space1);
+[[vk::binding(1, 3)]] RWStructuredBuffer<uint> indirect_args
+    : register(u2, space1);
 
 [[vk::binding(0, 4)]] Texture2D<float> hiz_depth : register(t2, space1);
 [[vk::binding(1, 4)]] SamplerState depth_sampler : register(s0, space1);
@@ -76,8 +78,7 @@ struct CameraCullData {
     counters_buffer.InterlockedAdd(input.counter_buffer_offset,
                                    total_culled_meshlet_count,
                                    cull_meshlet_offset);
-    IncrementDispatchCounter(counters_buffer,
-                             input.meshlet_dispatch_count_offset,
+    IncrementDispatchCounter(indirect_args, input.meshlet_dispatch_count_offset,
                              total_culled_meshlet_count, cull_meshlet_offset);
   }
   cull_meshlet_offset = WaveReadLaneFirst(cull_meshlet_offset);
@@ -106,7 +107,7 @@ struct CameraCullData {
     counters_buffer.InterlockedAdd(input.recheck_counter_buffer_offset,
                                    recheck_instance_count, recheck_offset);
 
-    IncrementDispatchCounter(counters_buffer, input.instance_dispatch_offset,
+    IncrementDispatchCounter(indirect_args, input.instance_dispatch_offset,
                              recheck_offset, recheck_instance_count);
   }
   recheck_offset = WaveReadLaneFirst(recheck_offset);
@@ -146,8 +147,7 @@ struct CameraCullData {
                                    total_culled_meshlet_count,
                                    cull_meshlet_offset);
 
-    IncrementDispatchCounter(counters_buffer,
-                             input.meshlet_dispatch_count_offset,
+    IncrementDispatchCounter(indirect_args, input.meshlet_dispatch_count_offset,
                              total_culled_meshlet_count, cull_meshlet_offset);
   }
   cull_meshlet_offset = WaveReadLaneFirst(cull_meshlet_offset);

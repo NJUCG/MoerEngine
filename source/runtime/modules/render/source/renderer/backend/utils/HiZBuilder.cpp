@@ -192,20 +192,23 @@ namespace Moer {
 
                                _builder.ReadTexture(depth, ETextureUsageFlags::SAMPLED);
                 _builder.WriteTexture(hiz, ETextureUsageFlags::UNORDERED_ACCESS); }, [&, mip_cnt](RenderPassContext& _pass_context) {
-                BuildHiZShader::Parameters params;
-                Vector2i                   mip0_size = Vector2i(_hiz_buffer.texture->GetExtent3D());
+                    BuildHiZShader::Parameters params;
+                    Vector2i                   mip0_size = Vector2i(_hiz_buffer.texture->GetExtent3D());
 
-                HiZConfig& config   = params.config;
-                config.b_mip0       = true;
-                config.size         = mip0_size;
-                config.target_level = 0;
-                params.target       = _hiz_buffer.uavs[0];
-                params.depth_buffer = _depth_buffer;
-                RHIBatchedShaderParameters batched_params;
-                auto&                      cmd_list = _context.GetCommandList();
-                cmd_list.SetPipelineState(pso);
-                
-                batched_params.SetParameters(builder_shader, params); });
+                    HiZConfig& config   = params.config;
+                    config.b_mip0       = true;
+                    config.size         = mip0_size;
+                    config.target_level = 0;
+                    params.target       = _hiz_buffer.uavs[0];
+                    params.depth_buffer = _depth_buffer;
+                    params.depth_sampler = depth_sampler;
+                    RHIBatchedShaderParameters batched_params;
+                    auto&                      cmd_list = _context.GetCommandList();
+                    cmd_list.SetPipelineState(pso);
+
+                    batched_params.SetParameters(builder_shader, params);
+                    g_rhi->RHISetBatchedShaderParameters(pso, batched_params);
+                    cmd_list.Dispatch(Vector3i((config.size.t.x + 7) >> 3u, (config.size.t.y + 7) >> 3u, 1)); });
 
             for (uint i = 1; i < mip_cnt; ++i) {
                 rg.AddComputePass(

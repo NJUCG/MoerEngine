@@ -85,7 +85,7 @@ public:
     DEFINE_SHADER_PARAM_UAV(RWStructuredBuffer<uint32_t>, recheck_instance_id)
 
     DEFINE_SHADER_PARAM_UAV(RWByteAddressBuffer, counters_buffer)
-
+    DEFINE_SHADER_PARAM_UAV(RWStructuredBuffer<uint32_t>, indirect_args)
     DEFINE_SHADER_PARAM_SRV(Texture2D<float>, hiz_depth)
     DEFINE_SHADER_PARAM_SAMPLER(SamplerState, depth_sampler)
     END_ROOT_PARAMETER_DEFINITION(Parameters)
@@ -104,6 +104,7 @@ public:
     DEFINE_SHADER_PARAM_SRV(StructuredBuffer<uint32_t>, recheck_instances)
 
     DEFINE_SHADER_PARAM_UAV(RWByteAddressBuffer, counters_buffer)
+    DEFINE_SHADER_PARAM_UAV(RWStructuredBuffer<uint32_t>, indirect_args)
 
     DEFINE_SHADER_PARAM_SRV(Texture2D<float>, hiz_depth)
     DEFINE_SHADER_PARAM_SAMPLER(SamplerState, depth_sampler)

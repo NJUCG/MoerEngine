@@ -4,6 +4,7 @@
 #include "RenderGraphResource.h"
 #include "misc/STL.h"
 #include "rhi/RHICommon.h"
+#include <string_view>
 #include <variant>
 
 namespace Moer {
@@ -27,7 +28,7 @@ namespace Moer {
         void                               AddResourceToDestroy(RenderGraphResource* resource);
         Moer::Array<RenderGraphResource*>& GetResourcesToCreate();
         Moer::Array<RenderGraphResource*>& GetResourcesToDestroy();
-        PassNode(const std::string& name) : Node(name) {}
+        PassNode(const std::string& _name, EPassType _pass_type) : Node(_name), m_pass_type(_pass_type) {}
         EPassType GetPassType() const { return m_pass_type; }
 
     protected:
@@ -35,9 +36,9 @@ namespace Moer {
         Moer::Map<RenderGraphResource*, uint32_t> m_resource_layout;
 
         Moer::Map<RenderGraphResource*, Array<DepdencyGraph::ResourceDesc>> m_resource_desc;
-        Moer::Array<RenderGraphResource*>         m_resources_to_create;
-        Array<RenderGraphResource*>               m_resources_to_destroy;
-        EPassType                                 m_pass_type;
+        Moer::Array<RenderGraphResource*>                                   m_resources_to_create;
+        Array<RenderGraphResource*>                                         m_resources_to_destroy;
+        EPassType                                                           m_pass_type;
     };
 
     class GraphicsPassNode : public PassNode {
@@ -68,31 +69,17 @@ namespace Moer {
         ComputePassDescriptor m_descriptor;
     };
 
-    class RaytracingPassNode : public PassNode {
-    };
-
     class CopyPassNode : public PassNode {
     public:
-        struct BufferCopy {
-            uint32_t src_offset{0};
-            uint32_t dst_offset{0};
-            uint32_t size{0};
-        };
-
-        struct ImageCopy {
-            uint32_t src_offset[3];
-            uint32_t dst_offset[3];
-            uint32_t size[3];
-        };
-        
-        CopyPassNode(const std::string& _pass_name, RenderGraphHandle _src, RenderGraphHandle _dst,BufferCopy info = {});
-        CopyPassNode(const std::string& _pass_name, RenderGraphHandle _src, RenderGraphHandle _dst,ImageCopy info = {});
+        CopyPassNode(std::string_view _pass_name, RenderGraphPass* _pass);
         void Execute(RenderPassContext& _pass_context) override;
-        
-        
+        ~CopyPassNode();
+        void DeclareCopyPass(const CopyPassNode& descriptor);
+
     protected:
-        RenderGraphHandle src;
-        RenderGraphHandle dst;
-        std::variant<BufferCopy,ImageCopy> copy_info;
+        RenderGraphPass* m_pass;
+    };
+
+    class RaytracingPassNode : public PassNode {
     };
 }// namespace Moer

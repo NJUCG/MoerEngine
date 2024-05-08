@@ -84,7 +84,7 @@ namespace Moer {
             void DeclareRenderPass(const RenderGraphPassDescriptor& descriptor);
             void DeclareComputePass(const ComputePassDescriptor& descriptor);
             Builder(PassNode* pass, RenderGraph& renderGraph);
-            
+
         protected:
             PassNode*    m_pass{nullptr};
             RenderGraph& m_renderGraph;
@@ -130,24 +130,24 @@ namespace Moer {
         using GraphicSetup    = std::function<void(Builder& builder)>;
         using ComputeSetUp    = std::function<void(Builder& builder)>;
         using RayTracingSetup = std::function<void(Builder& builder)>;
+        using CopySetup       = std::function<void(Builder& _builder)>;
 
         void AddGraphicPass(const std::string& name, const GraphicSetup& setup, GraphicsExecute&& execute);
         void AddComputePass(const std::string& name, const ComputeSetUp& setup, ComputeExecute&& execute);
         void AddRayTracingPass(const std::string& name, const RayTracingSetup& setup, RaytracingExecute&& execute);
-        void AddBufferCopyPass(const std::string& name, RenderGraphHandle src, RenderGraphHandle dst,CopyPassNode::BufferCopy info = {});
-        void AddImageCopyPass(const std::string& name, RenderGraphHandle src, RenderGraphHandle dst,CopyPassNode::ImageCopy info = {});
+        void AddCopyPass(std::string_view _name, const CopySetup& _setup, CopyExecute&& _execute);
         void Execute(const RenderGraphExecuteConfig& config);
         void Compile();
         void SetCutUnUsedResources(bool cut);
 
-        BlackBoard&         GetBlackBoard();
-        bool                IsWriteResource(RenderGraphHandle handle, PassNode* node) const;
-        bool                IsReadResource(RenderGraphHandle handle, PassNode* node) const;
-        RenderGraphTexture* GetTexture(RenderGraphHandle handle) const;
-        RenderGraphBuffer*  GetBuffer(RenderGraphHandle handle) const;
+        BlackBoard&               GetBlackBoard();
+        bool                      IsWriteResource(RenderGraphHandle handle, PassNode* node) const;
+        bool                      IsReadResource(RenderGraphHandle handle, PassNode* node) const;
+        RenderGraphTexture*       GetTexture(RenderGraphHandle handle) const;
+        RenderGraphBuffer*        GetBuffer(RenderGraphHandle handle) const;
         RenderGraphResource::Type GetResourceType(RenderGraphHandle handle) const;
-        RenderGraph&        SetGraphOutput(RenderGraphHandle handle);
-        Extent3D            GetRenderExtent() const;
+        RenderGraph&              SetGraphOutput(RenderGraphHandle handle);
+        Extent3D                  GetRenderExtent() const;
         ~RenderGraph();
 
     protected:
@@ -156,7 +156,6 @@ namespace Moer {
         RenderGraphHandle    AddTextureInternal(RenderGraphTexture* texture);
         RenderGraphHandle    AddBufferInternal(RenderGraphBuffer* buffer);
         RenderGraphResource* GetResource(RenderGraphHandle handle) const;
-        
 
         Moer::Array<RenderGraphResource*> m_resources;
         Moer::Array<PassNode*>            m_passes;

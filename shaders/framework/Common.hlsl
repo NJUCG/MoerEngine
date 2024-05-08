@@ -92,6 +92,28 @@ uint IncrementDispatchCounter(in RWByteAddressBuffer target, uint offset,
   }
   return result;
 }
+
+uint IncrementDispatchCounter(in StructuredBuffer<uint> target, uint offset,
+                              uint cnt, uint prev_cnt) {
+  uint result = 0;
+  uint sum_cnt = prev_cnt + cnt;
+  uint dispatch_cnt_inc =
+      ((sum_cnt + cull_thread_size - 1) >> cull_thread_bits) -
+      ((prev_cnt + cull_thread_size - 1) >> cull_thread_bits);
+
+  bool b_inc = prev_cnt == 0 || dispatch_cnt_inc > 0;
+  bool first_inc = prev_cnt == 0 && dispatch_cnt_inc > 0;
+  dispatch_cnt_inc = first_inc ? dispatch_cnt_inc + 1 : dispatch_cnt_inc;
+  if (b_inc) {
+    target.InterlockedAdd(offset, dispatch_cnt_inc, result);
+    if (first_inc) {
+      uint temp = 0;
+      target.InterlockedAdd(offset + 4, 1, temp);
+      target.InterlockedAdd(offset + 8, 1, temp);
+    }
+  }
+  return result;
+}
 struct MeshletBound {
   float3 center;
   float radius;

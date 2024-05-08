@@ -150,24 +150,13 @@ namespace Moer {
     void RenderGraph::AddRayTracingPass(const std::string& name, const RayTracingSetup& setup, RaytracingExecute&& execute) {
         //TODO
     }
-    void RenderGraph::AddBufferCopyPass(const std::string& name, RenderGraphHandle src, RenderGraphHandle dst, CopyPassNode::BufferCopy info) {
-        if(src == dst){
-            return;
-        }
-        auto * node = MoerNew(CopyPassNode)(name,src,dst,info);
-        m_passes.emplace_back(node);
-        Builder builder(node, *this);
-        builder.ReadBuffer(src, RenderGraphBuffer::Usage::TRANSFER_READ).WriteBuffer(dst, RenderGraphBuffer::Usage::TRANSFER_WRITE);
-    }
 
-    void RenderGraph::AddImageCopyPass(const std::string& name, RenderGraphHandle src, RenderGraphHandle dst, CopyPassNode::ImageCopy info) {
-        if(src == dst){
-            return;
-        }
-        auto * node = MoerNew(CopyPassNode)(name,src,dst,info);
+    void RenderGraph::AddCopyPass(std::string_view _name, const CopySetup& _setup, CopyExecute&& _execute) {
+        RenderGraphPass* pass = MoerNew(RenderGraphPass)(std::move(_execute));
+        auto*            node = MoerNew(CopyPassNode)(_name, pass);
         m_passes.emplace_back(node);
         Builder builder(node, *this);
-        builder.ReadTexture(src, RenderGraphTexture::Usage::TRANSFER_SRC).WriteTexture(dst, RenderGraphTexture::Usage::TRANSFER_DST);
+        _setup(builder);
     }
 
     void RenderGraph::Execute(const RenderGraphExecuteConfig& config) {

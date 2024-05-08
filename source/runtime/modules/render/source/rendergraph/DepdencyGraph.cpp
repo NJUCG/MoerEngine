@@ -4,11 +4,11 @@
 
 #include <stack>
 namespace Moer {
-    void DepdencyGraph::Link(DepdencyGraph::Edge* edge) {
-        m_edges.emplace_back(edge);
+    void DepdencyGraph::Link(DepdencyGraph::Edge* _edge) {
+        m_edges.emplace_back(_edge);
     }
-    void DepdencyGraph::RegisterNode(Node* node) {
-        m_nodes.emplace_back(node);
+    void DepdencyGraph::RegisterNode(Node* _node) {
+        m_nodes.emplace_back(_node);
     }
     void DepdencyGraph::Cull() {
         auto& nodes = m_nodes;

@@ -608,21 +608,22 @@ enum ETextureLayout : uint32_t {
 };
 
 enum EBufferLayout : uint32_t {
-    UNDEFINED_LAYOUT = 1 << 0,
-    NO_CHAGNE,
-    READ,
-    WRITE,
-    COMMON,
-    INDIRECT_COMMAND_READ,
-    INDIRECT_COMMAND_WRITE,
-    TRANSFER_READ,
-    TRANSFER_WRITE,
+    UNDEFINED_LAYOUT       = 0,
+    NO_CHAGNE              = 1 << 0,
+    READ                   = 1 << 1,
+    WRITE                  = 1 << 2,
+    COMMON                 = 1 << 3,
+    INDIRECT_COMMAND_READ  = 1 << 4,
+    INDIRECT_COMMAND_WRITE = 1 << 5,
+    TRANSFER_READ          = 1 << 6,
+    TRANSFER_WRITE         = 1 << 7,
 };
 
 enum class EPassType {
     Graphics,
     Compute,
     Raytracing,
+    Copy
 };
 
 ENUM_BIT_OP_IMPL(EBufferLayout, FLAG)

@@ -1,5 +1,6 @@
 #include "BasePass.h"
 #include "PixelFormat.h"
+#include "math/Base.h"
 #include "rendergraph/RenderGraphPass.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
@@ -13,6 +14,7 @@
 #include "scene/Scene.h"
 #include "shader/ShaderResourceManager.h"
 #include "../utils/HiZBuilder.h"
+#include <string_view>
 
 constexpr std::string_view instance_meshlet_cull_info_name = "BasePass::instance_meshlet_cull_info_buffer";
 constexpr std::string_view recheck_instance_id_name        = "BasePass::recheck_instance_id_buffer";
@@ -22,6 +24,7 @@ constexpr std::string_view zero_buffer_name                = "BasePass::zero_buf
 constexpr std::string_view uniform_buffer_name             = "BasePass::uniform_buffer";
 constexpr std::string_view hzb_name                        = "BasePass::hzb_buffer";
 constexpr std::string_view draw_indirect_name              = "BasePass::draw_indirect_buffer";
+constexpr std::string_view indirect_args_name              = "BasePass::indirect_args_buffer";
 
 namespace Moer {
     struct BasePass::Impl {
@@ -69,6 +72,7 @@ namespace Moer {
         HiZBuffer hiz_buffer;
 
         RHIBufferRef draw_indirect_buffer;
+        RHIBufferRef indirect_buffer;
         RHIBufferRef counter_buffer;
         RHIBufferRef zero_buffer;
         RHIBufferRef instance_meshlet_cull_info_buffer;
@@ -89,6 +93,7 @@ namespace Moer {
         RHIUAVRef instance_meshlet_cull_info_uav;
         RHIUAVRef draw_indirect_view;
         RHIUAVRef draw_count_view;
+        RHIUAVRef indirect_args_view;
 
         RHIUAVRef recheck_cull_info_uav;
         RHIUAVRef recheck_instance_id_uav;
@@ -99,9 +104,9 @@ namespace Moer {
         static constexpr uint32_t recheck_draw_count_offset         = 8;
         static constexpr uint32_t check_instance_count_offset       = 12;
         static constexpr uint32_t check_meshlet_count_offset        = 16;
-        static constexpr uint32_t instance_dispatch_indirect_offset = 20;
-        static constexpr uint32_t meshlet_dispatch_offset           = 24;
-        static constexpr uint32_t recheck_meshlet_dispatch_offset   = 36;
+        static constexpr uint32_t instance_dispatch_indirect_offset = 0;
+        static constexpr uint32_t meshlet_dispatch_offset           = 12;
+        static constexpr uint32_t recheck_meshlet_dispatch_offset   = 24;
         static constexpr uint32_t max_meshlet_count                 = 1024 * 1024 * 16;
         static constexpr uint32_t thread_group_count                = 64;
         static constexpr uint32_t uniform_buffer_size               = sizeof(VirtualView);
@@ -159,8 +164,9 @@ namespace Moer {
         {
             //self resources
             instance_meshlet_cull_info_buffer = g_rhi->RHICreateBuffer<uint64_t>(max_meshlet_count, EBufferUsageFlags::UNORDERED_ACCESS);
-            draw_indirect_buffer              = g_rhi->RHICreateBuffer<DrawInstanceCmd>(max_meshlet_count, EBufferUsageFlags::UNORDERED_ACCESS);
-            counter_buffer                    = g_rhi->RHICreateBuffer<uint32_t>(counter_buffer_size, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST);
+            draw_indirect_buffer              = g_rhi->RHICreateBuffer<DrawInstanceCmd>(max_meshlet_count, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::INDIRECT_BUFFER);
+            indirect_buffer                   = g_rhi->RHICreateBuffer<uint32_t>(counter_buffer_size, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::INDIRECT_BUFFER);
+            counter_buffer                    = g_rhi->RHICreateBuffer<uint32_t>(counter_buffer_size, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::INDIRECT_BUFFER);
             zero_buffer                       = g_rhi->RHICreateBuffer<uint32_t>(counter_buffer_size, EBufferUsageFlags::CPU_VISIBLE);
             recheck_cull_info_buffer          = g_rhi->RHICreateBuffer<uint32_t>(max_meshlet_count, EBufferUsageFlags::UNORDERED_ACCESS);
             recheck_instance_id_buffer        = g_rhi->RHICreateBuffer<uint32_t>(max_meshlet_count, EBufferUsageFlags::UNORDERED_ACCESS);
@@ -207,19 +213,22 @@ namespace Moer {
     }
 
     void BasePass::Impl::ResetCounter(RenderContext& _context) {
-        _context.GetRenderGraph().AddComputePass(
+        _context.GetRenderGraph().AddCopyPass(
             "Reset Counter",
             [&, this](RenderGraph::Builder& _builder) {
                 auto tp_counter_buffer = _context.GetRenderGraph().ImportIfNotExist(counter_buffer_name.data(), counter_buffer);
+                auto tp_indirect_args  = _context.GetRenderGraph().ImportIfNotExist(indirect_args_name.data(), indirect_buffer);
                 auto src_buffer        = _context.GetRenderGraph().ImportIfNotExist(zero_buffer_name.data(), zero_buffer);
                 _builder.WriteBuffer(tp_counter_buffer, EBufferLayout::TRANSFER_WRITE);
+                _builder.WriteBuffer(tp_indirect_args, EBufferLayout::TRANSFER_WRITE);
                 _builder.ReadBuffer(src_buffer, EBufferLayout::TRANSFER_READ);
             },
             [&](RenderPassContext& _context) {
                 auto*             cmd_list = _context.cmd_list;
                 RHICopyBufferInfo copy_info{};
                 copy_info.regions.push_back({0, 0, sizeof(uint32_t) * 32});
-                cmd_list->CopyBuffer(std::move(copy_info), zero_buffer, counter_buffer);
+                cmd_list->CopyBuffer(copy_info, zero_buffer, counter_buffer);
+                cmd_list->CopyBuffer(copy_info, zero_buffer, indirect_buffer);
             });
     }
 
@@ -240,6 +249,7 @@ namespace Moer {
         cull_instance_params.instance_meshlet_cull_info = instance_meshlet_cull_info_uav;
         cull_instance_params.recheck_instance_id        = recheck_instance_id_uav;
         cull_instance_params.counters_buffer            = draw_count_view;
+        cull_instance_params.indirect_args              = indirect_args_view;
         cull_instance_params.views                      = uniform_buffer_view[frame_offset];
         cull_instance_params.hiz_depth                  = hiz_buffer.srv;
         cull_instance_params.depth_sampler              = hiz_buffer.sampler;
@@ -283,7 +293,7 @@ namespace Moer {
             auto& cmd_list = *_context.cmd_list;
             cmd_list.SetPipelineState(cull_meshlet_prepass_pso);
             g_rhi->RHISetBatchedShaderParameters(cull_meshlet_prepass_pso, meshlet_params);
-            cmd_list.DispatchIndirect(counter_buffer, meshlet_dispatch_offset);
+            cmd_list.DispatchIndirect(indirect_buffer, meshlet_dispatch_offset);
         };
         _context.GetRenderGraph().AddComputePass(
             "Prepass Cull Instance",
@@ -294,10 +304,12 @@ namespace Moer {
                 //     hiz = rg.ImportTexture("hiz_buffer", hiz_buffer.texture);
                 // }
                 // _builder.ReadTexture(hiz, ETextureUsageFlags::SAMPLED);
+                auto& black_board = _context.GetRenderGraph().GetBlackBoard();
                 _builder.ReadTexture(hiz, ETextureUsageFlags::SAMPLED, 0, MAX_TEXTURE_MIP_COUNT);
                 _builder.WriteBuffer(_context.GetRenderGraph().ImportIfNotExist(instance_meshlet_cull_info_name.data(), instance_meshlet_cull_info_buffer), EBufferLayout::WRITE);
                 _builder.WriteBuffer(_context.GetRenderGraph().ImportIfNotExist(recheck_instance_id_name.data(), recheck_instance_id_buffer), EBufferLayout::WRITE);
                 _builder.WriteBuffer(_context.GetRenderGraph().ImportIfNotExist(counter_buffer_name.data(), counter_buffer), EBufferLayout::WRITE);
+                _builder.WriteBuffer(black_board.GetHandle(indirect_args_name.data()), EBufferLayout::WRITE);
             },
             std::move(prepass_cull_instance));
 
@@ -310,10 +322,11 @@ namespace Moer {
                 auto  instance_meshlet_cull_info = black_board.GetHandle(instance_meshlet_cull_info_name.data());
                 auto  recheck_instance_id_hd     = black_board.GetHandle(recheck_instance_id_name.data());
                 auto  counter_buffer_hd          = black_board.GetHandle(counter_buffer_name.data());
-
+                auto  indirect_buffer_hd         = black_board.GetHandle(indirect_args_name.data());
                 _builder.ReadBuffer(instance_meshlet_cull_info, EBufferLayout::READ);
                 _builder.ReadBuffer(recheck_instance_id_hd, EBufferLayout::READ);
-                _builder.ReadBuffer(counter_buffer_hd, EBufferLayout::INDIRECT_COMMAND_READ);
+                _builder.ReadBuffer(indirect_buffer_hd, EBufferLayout::INDIRECT_COMMAND_READ);
+                _builder.WriteBuffer(counter_buffer_hd, EBufferLayout::WRITE);
                 _builder.WriteBuffer(_context.GetRenderGraph().ImportIfNotExist(recheck_cull_info_name.data(), recheck_cull_info_buffer), EBufferLayout::WRITE);
             },
             std::move(prepass_cull_meshlet));
@@ -341,6 +354,7 @@ namespace Moer {
         cull_instance_params.instance_meshlet_cull_info = recheck_cull_info_uav;
         cull_instance_params.recheck_instances          = recheck_instance_id_srv;
         cull_instance_params.counters_buffer            = draw_count_view;
+        cull_instance_params.indirect_args              = indirect_args_view;
         cull_instance_params.views                      = uniform_buffer_view[frame_offset];
         cull_instance_params.hiz_depth                  = hiz_buffer.srv;
         cull_instance_params.depth_sampler              = hiz_buffer.sampler;
@@ -375,7 +389,7 @@ namespace Moer {
             cmd_list.SetPipelineState(cull_instance_recheck_pso);
             g_rhi->RHISetBatchedShaderParameters(cull_instance_recheck_pso, instance_params);
             // cmd_list->Dispatch(dispatch_count, 1, 1);
-            cmd_list.DispatchIndirect(counter_buffer, instance_dispatch_indirect_offset);
+            cmd_list.DispatchIndirect(indirect_buffer, instance_dispatch_indirect_offset);
         };
 
         auto recheck_pass_cull_meshlet = [this, &_context, meshlet_params(std::move(cull_meshlet_batched_params))](RenderPassContext& _pass_context) mutable {
@@ -383,7 +397,7 @@ namespace Moer {
             cmd_list.SetPipelineState(cull_meshlet_recheck_pso);
             g_rhi->RHISetBatchedShaderParameters(cull_meshlet_recheck_pso, meshlet_params);
             // cmd_list->Dispatch((max_meshlet_count + thread_group_count) / thread_group_count, 1, 1);
-            cmd_list.DispatchIndirect(counter_buffer, recheck_meshlet_dispatch_offset);
+            cmd_list.DispatchIndirect(indirect_buffer, recheck_meshlet_dispatch_offset);
         };
         _context.GetRenderGraph().AddComputePass(
             "Recheck Cull Instance",
@@ -393,11 +407,12 @@ namespace Moer {
                 auto  recheck_cull_instance_hd = black_board.GetHandle(recheck_instance_id_name.data());
                 auto  counter_buffer_hd        = black_board.GetHandle(counter_buffer_name.data());
                 auto  recheck_cull_info_hd     = black_board.GetHandle(recheck_cull_info_name.data());
+                auto  indirect_args_hd         = black_board.GetHandle(indirect_args_name.data());
 
                 _builder.ReadTexture(hiz, ETextureUsageFlags::SAMPLED, 0, MAX_TEXTURE_MIP_COUNT);
-
+                _builder.ReadBuffer(indirect_args_hd, EBufferLayout::INDIRECT_COMMAND_READ);
                 _builder.ReadBuffer(recheck_cull_instance_hd, EBufferLayout::READ);
-                _builder.ReadBuffer(counter_buffer_hd, EBufferLayout::INDIRECT_COMMAND_READ);
+                _builder.ReadBuffer(counter_buffer_hd, EBufferLayout::WRITE);
                 _builder.WriteBuffer(recheck_cull_info_hd, EBufferLayout::WRITE);
             },
             std::move(recheck_pass_cull_instance));
@@ -410,10 +425,12 @@ namespace Moer {
                 auto  recheck_cull_info_hd = black_board.GetHandle(recheck_cull_info_name.data());
                 auto  counter_buffer_hd    = black_board.GetHandle(counter_buffer_name.data());
                 auto  draw_indirect_hd     = black_board.GetHandle(draw_indirect_name.data());
+                auto  indirect_args_hd     = black_board.GetHandle(indirect_args_name.data());
 
                 _builder.ReadTexture(hiz, ETextureUsageFlags::SAMPLED, 0, MAX_TEXTURE_MIP_COUNT);
                 _builder.ReadBuffer(recheck_cull_info_hd, EBufferLayout::READ);
-                _builder.ReadBuffer(counter_buffer_hd, EBufferLayout::INDIRECT_COMMAND_READ);
+                _builder.ReadBuffer(indirect_args_hd, EBufferLayout::INDIRECT_COMMAND_READ);
+                _builder.WriteBuffer(counter_buffer_hd, EBufferLayout::WRITE);
                 _builder.WriteBuffer(draw_indirect_hd, EBufferLayout::WRITE);
             },
             std::move(recheck_pass_cull_meshlet));
