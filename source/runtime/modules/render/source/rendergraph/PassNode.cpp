@@ -117,4 +117,44 @@ namespace Moer {
         m_pass->Execute(pass_context);
         pass_context.cmd_list->EndLabel();
     }
+
+    void CopyPassNode::Execute(RenderPassContext& _pass_context) {
+        if (_pass_context.graph.GetResourceType(src) == RenderGraphResource::Type::Buffer) {
+            const auto &buffer_info = std::get<BufferCopy>(copy_info);
+            auto              src_rhi_buffer = _pass_context.graph.GetBuffer(src)->GetBuffer();
+            auto              dst_rhi_buffer = _pass_context.graph.GetBuffer(dst)->GetBuffer();
+            RHICopyBufferInfo copy_info;
+            copy_info.regions.resize(1);
+            RHIBufferRegion& region = copy_info.regions[0];
+            region.src_offset       = buffer_info.src_offset;
+            region.dst_offset       = buffer_info.dst_offset;
+            region.size             = buffer_info.size == 0 ? src_rhi_buffer->GetByteSize() : buffer_info.size;
+            _pass_context.cmd_list->CopyBuffer(copy_info, src_rhi_buffer, dst_rhi_buffer);
+        } else {
+            auto                src_rhi_texture = _pass_context.graph.GetTexture(src)->GetTexture();
+            auto                dst_rhi_texture = _pass_context.graph.GetTexture(dst)->GetTexture();
+            RHIBlitTextureInfo  blit_info;
+            //todo form imageinfo
+            RHISubresourceRange src_range(ETextureAspectFlags::COLOR, 0, 1, 0, 1, 0, 1);
+            RHISubresourceRange dst_range(ETextureAspectFlags::COLOR, 0, 1, 0, 1, 0, 1);
+            blit_info.src_slice  = RHISubresourceSlice(ETextureAspectFlags::COLOR, 0, 0, 1, 0, 1);
+            blit_info.dst_slice  = RHISubresourceSlice(ETextureAspectFlags::COLOR, 0, 0, 1, 0, 1);
+            blit_info.src_layout = src_rhi_texture->GetLayout(src_range);
+            blit_info.dst_layout = dst_rhi_texture->GetLayout(dst_range);
+            auto     dst_extent  = dst_rhi_texture->GetExtent3D();
+            auto     src_extent  = src_rhi_texture->GetExtent3D();
+            Offset3D zero_offset(0, 0, 0);
+            blit_info.src_offsets[0] = zero_offset;
+            blit_info.src_offsets[1] = Offset3D(src_extent.x, src_extent.y, 1);
+            blit_info.dst_offsets[0] = zero_offset;
+            blit_info.dst_offsets[1] = Offset3D(dst_extent.x, dst_extent.y, 1);
+
+            _pass_context.cmd_list->BlitTexture(blit_info, src_rhi_texture, dst_rhi_texture);
+        }
+    }
+
+    CopyPassNode::CopyPassNode(const std::string& _pass_name, RenderGraphHandle _src, RenderGraphHandle _dst, BufferCopy info):PassNode(_pass_name),src(_src),dst(_dst),copy_info(info) {
+    }
+    CopyPassNode::CopyPassNode(const std::string& _pass_name, RenderGraphHandle _src, RenderGraphHandle _dst, ImageCopy info):PassNode(_pass_name),src(_src),dst(_dst),copy_info(info) {
+    }
 }// namespace Moer

@@ -19,6 +19,8 @@ namespace Moer {
         void ConnectForRead(DepdencyGraph& graph, PassNode*, DepdencyGraph::ResourceDesc _desc);
         void ConnectForWrite(DepdencyGraph& graph, PassNode*, DepdencyGraph::ResourceDesc _desc);
         RenderGraphResource(const std::string& name, Type type, bool imported = false);
+        Type GetType() const { return m_type; }
+        
         virtual uint32_t ResloveResourceUsage(const DepdencyGraph::ResourceDesc&, RHIBarrierDependencyInfo& barrier_info, EPassType pass_type) = 0;
         //Pass to create this resource
         PassNode* create_pass{nullptr};

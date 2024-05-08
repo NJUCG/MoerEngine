@@ -84,7 +84,7 @@ namespace Moer {
             void DeclareRenderPass(const RenderGraphPassDescriptor& descriptor);
             void DeclareComputePass(const ComputePassDescriptor& descriptor);
             Builder(PassNode* pass, RenderGraph& renderGraph);
-
+            
         protected:
             PassNode*    m_pass{nullptr};
             RenderGraph& m_renderGraph;
@@ -134,7 +134,8 @@ namespace Moer {
         void AddGraphicPass(const std::string& name, const GraphicSetup& setup, GraphicsExecute&& execute);
         void AddComputePass(const std::string& name, const ComputeSetUp& setup, ComputeExecute&& execute);
         void AddRayTracingPass(const std::string& name, const RayTracingSetup& setup, RaytracingExecute&& execute);
-        // void AddPass();
+        void AddBufferCopyPass(const std::string& name, RenderGraphHandle src, RenderGraphHandle dst,CopyPassNode::BufferCopy info = {});
+        void AddImageCopyPass(const std::string& name, RenderGraphHandle src, RenderGraphHandle dst,CopyPassNode::ImageCopy info = {});
         void Execute(const RenderGraphExecuteConfig& config);
         void Compile();
         void SetCutUnUsedResources(bool cut);
@@ -144,6 +145,7 @@ namespace Moer {
         bool                IsReadResource(RenderGraphHandle handle, PassNode* node) const;
         RenderGraphTexture* GetTexture(RenderGraphHandle handle) const;
         RenderGraphBuffer*  GetBuffer(RenderGraphHandle handle) const;
+        RenderGraphResource::Type GetResourceType(RenderGraphHandle handle) const;
         RenderGraph&        SetGraphOutput(RenderGraphHandle handle);
         Extent3D            GetRenderExtent() const;
         ~RenderGraph();
@@ -154,6 +156,7 @@ namespace Moer {
         RenderGraphHandle    AddTextureInternal(RenderGraphTexture* texture);
         RenderGraphHandle    AddBufferInternal(RenderGraphBuffer* buffer);
         RenderGraphResource* GetResource(RenderGraphHandle handle) const;
+        
 
         Moer::Array<RenderGraphResource*> m_resources;
         Moer::Array<PassNode*>            m_passes;

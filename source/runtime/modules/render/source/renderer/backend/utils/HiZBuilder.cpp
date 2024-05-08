@@ -224,10 +224,11 @@ namespace Moer {
                                       config.target_level = i;
                                       params.target       = _hiz_buffer.uavs[i];
                                       params.depth_buffer = _hiz_buffer.srv;
+                                      params.depth_sampler = depth_sampler;
                                       RHIBatchedShaderParameters batched_params;
                                       auto&                      cmd_list = _context.GetCommandList();
                                       batched_params.SetParameters(builder_shader, params);
-
+                                      g_rhi->RHISetBatchedShaderParameters(pso, batched_params);
                                       cmd_list.Dispatch(Vector3i((config.size.t.x + 7) >> 3u, (config.size.t.y + 7) >> 3u, 1)); });
             }
         }

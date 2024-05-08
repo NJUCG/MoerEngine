@@ -70,4 +70,29 @@ namespace Moer {
 
     class RaytracingPassNode : public PassNode {
     };
+
+    class CopyPassNode : public PassNode {
+    public:
+        struct BufferCopy {
+            uint32_t src_offset{0};
+            uint32_t dst_offset{0};
+            uint32_t size{0};
+        };
+
+        struct ImageCopy {
+            uint32_t src_offset[3];
+            uint32_t dst_offset[3];
+            uint32_t size[3];
+        };
+        
+        CopyPassNode(const std::string& _pass_name, RenderGraphHandle _src, RenderGraphHandle _dst,BufferCopy info = {});
+        CopyPassNode(const std::string& _pass_name, RenderGraphHandle _src, RenderGraphHandle _dst,ImageCopy info = {});
+        void Execute(RenderPassContext& _pass_context) override;
+        
+        
+    protected:
+        RenderGraphHandle src;
+        RenderGraphHandle dst;
+        std::variant<BufferCopy,ImageCopy> copy_info;
+    };
 }// namespace Moer

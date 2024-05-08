@@ -150,6 +150,26 @@ namespace Moer {
     void RenderGraph::AddRayTracingPass(const std::string& name, const RayTracingSetup& setup, RaytracingExecute&& execute) {
         //TODO
     }
+    void RenderGraph::AddBufferCopyPass(const std::string& name, RenderGraphHandle src, RenderGraphHandle dst, CopyPassNode::BufferCopy info) {
+        if(src == dst){
+            return;
+        }
+        auto * node = MoerNew(CopyPassNode)(name,src,dst,info);
+        m_passes.emplace_back(node);
+        Builder builder(node, *this);
+        builder.ReadBuffer(src, RenderGraphBuffer::Usage::TRANSFER_READ).WriteBuffer(dst, RenderGraphBuffer::Usage::TRANSFER_WRITE);
+    }
+
+    void RenderGraph::AddImageCopyPass(const std::string& name, RenderGraphHandle src, RenderGraphHandle dst, CopyPassNode::ImageCopy info) {
+        if(src == dst){
+            return;
+        }
+        auto * node = MoerNew(CopyPassNode)(name,src,dst,info);
+        m_passes.emplace_back(node);
+        Builder builder(node, *this);
+        builder.ReadTexture(src, RenderGraphTexture::Usage::TRANSFER_SRC).WriteTexture(dst, RenderGraphTexture::Usage::TRANSFER_DST);
+    }
+
     void RenderGraph::Execute(const RenderGraphExecuteConfig& config) {
         Compile();
         auto* cmd_list = config.cmd_list;
@@ -237,6 +257,9 @@ namespace Moer {
     }
     RenderGraphBuffer* RenderGraph::GetBuffer(RenderGraphHandle handle) const {
         return dynamic_cast<RenderGraphBuffer*>(GetResource(handle));
+    }
+    RenderGraphResource::Type RenderGraph::GetResourceType(RenderGraphHandle handle) const {
+        return GetResource(handle)->GetType();
     }
     RenderGraph& RenderGraph::SetGraphOutput(RenderGraphHandle handle) {
         GetResource(handle)->AddRef();
