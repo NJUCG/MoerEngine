@@ -535,7 +535,7 @@ struct RHIClearAttachment {
 };
 //contains one mip subresource data
 struct RHISubresourceSlice {
-    const static uint8_t s_all = std::numeric_limits<uint8_t>::max();
+    const static uint8_t s_all = MAX_TEXTURE_MIP_COUNT;
 
     ETextureAspectFlags aspect = ETextureAspectFlags::NONE;
     uint8_t             mip_index;
@@ -603,7 +603,7 @@ struct RHISubresourceSlice {
 };
 struct RHISubresourceRange : public RHISubresourceSlice {
 
-    uint8_t num_mips = s_all;
+    uint8_t num_mips = MAX_TEXTURE_MIP_COUNT;
 
     RHISubresourceRange(ETextureAspectFlags _aspect) : RHISubresourceSlice(
                                                            _aspect,

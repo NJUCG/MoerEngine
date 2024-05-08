@@ -3,6 +3,8 @@
 #include "RenderGraphPass.h"
 #include "RenderGraphResource.h"
 #include "misc/STL.h"
+#include "rhi/RHICommon.h"
+#include <variant>
 
 namespace Moer {
     class RenderGraph;
@@ -20,7 +22,7 @@ namespace Moer {
     public:
         virtual void                       Execute(RenderPassContext& pass_context) = 0;
         void                               ResloveResourceUsage(RHIGraphicsCommandList* cmd_list);
-        void                               AddResourceUsage(RenderGraphResource* resource, uint32_t usage);
+        void                               AddResourceUsage(RenderGraphResource* resource, DepdencyGraph::ResourceDesc);
         void                               AddResourceToCreate(RenderGraphResource* resource);
         void                               AddResourceToDestroy(RenderGraphResource* resource);
         Moer::Array<RenderGraphResource*>& GetResourcesToCreate();
@@ -31,6 +33,8 @@ namespace Moer {
     protected:
         Moer::Map<RenderGraphResource*, uint32_t> m_resource_usage;
         Moer::Map<RenderGraphResource*, uint32_t> m_resource_layout;
+
+        Moer::Map<RenderGraphResource*, Array<DepdencyGraph::ResourceDesc>> m_resource_desc;
         Moer::Array<RenderGraphResource*>         m_resources_to_create;
         Array<RenderGraphResource*>               m_resources_to_destroy;
         EPassType                                 m_pass_type;

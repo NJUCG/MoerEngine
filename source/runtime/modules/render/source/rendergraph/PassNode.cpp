@@ -1,21 +1,22 @@
 #include "rendergraph/PassNode.h"
+#include "rendergraph/DepdencyGraph.h"
 #include "rendergraph/RenderGraph.h"
 #include "rhi/RHICommand.h"
+#include <algorithm>
 namespace Moer {
     void PassNode::ResloveResourceUsage(RHIGraphicsCommandList* cmd_list) {
         RHIBarrierDependencyInfo barrier_info;
-        for (auto& resource : m_resource_usage) {
-            m_resource_layout.emplace(resource.first, resource.first->ResloveResourceUsage(resource.second, barrier_info, m_pass_type));
+        for (auto& resource_usages : m_resource_desc) {
+
+            for (auto& desc : resource_usages.second) {
+                resource_usages.first->ResloveResourceUsage(desc, barrier_info, m_pass_type);
+            }
         }
         cmd_list->SetPipelineBarrier(barrier_info);
         //Todo Handle  resource transition
     }
-    void PassNode::AddResourceUsage(RenderGraphResource* resource, uint32_t usage) {
-        if (m_resource_usage.find(resource) != m_resource_usage.end()) {
-            m_resource_usage[resource] |= usage;
-        } else {
-            m_resource_usage[resource] = usage;
-        }
+    void PassNode::AddResourceUsage(RenderGraphResource* _resource, DepdencyGraph::ResourceDesc _desc) {
+        m_resource_desc[_resource].emplace_back(_desc);
     }
     void PassNode::AddResourceToCreate(RenderGraphResource* resource) {
         m_resources_to_create.push_back(resource);

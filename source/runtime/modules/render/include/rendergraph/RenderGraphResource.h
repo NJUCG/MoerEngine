@@ -16,10 +16,10 @@ namespace Moer {
             TextureCube,
             Texture2DMultisample,
         };
-        void ConnectForRead(DepdencyGraph& graph, PassNode*, uint32_t usage);
-        void ConnectForWrite(DepdencyGraph& graph, PassNode*, uint32_t usage);
+        void ConnectForRead(DepdencyGraph& graph, PassNode*, DepdencyGraph::ResourceDesc _desc);
+        void ConnectForWrite(DepdencyGraph& graph, PassNode*, DepdencyGraph::ResourceDesc _desc);
         RenderGraphResource(const std::string& name, Type type, bool imported = false);
-        virtual uint32_t ResloveResourceUsage(uint32_t usage, RHIBarrierDependencyInfo& barrier_info, EPassType pass_type) = 0;
+        virtual uint32_t ResloveResourceUsage(const DepdencyGraph::ResourceDesc&, RHIBarrierDependencyInfo& barrier_info, EPassType pass_type) = 0;
         //Pass to create this resource
         PassNode* create_pass{nullptr};
         // Pass to destroy this resource
@@ -45,7 +45,7 @@ namespace Moer {
         RenderGraphBuffer(const std::string& name, Descriptor desc);
         RenderGraphBuffer(const std::string& name, RHIBufferRef);
         void         Create() override;
-        uint32_t     ResloveResourceUsage(uint32_t usage, RHIBarrierDependencyInfo& barrier_info, EPassType pass_type) override;
+        uint32_t     ResloveResourceUsage(const DepdencyGraph::ResourceDesc&, RHIBarrierDependencyInfo& barrier_info, EPassType pass_type) override;
         RHISRVRef    GetSRV() const;
         RHIUAVRef    GetUAV() const;
         RHIBufferRef GetBuffer() const;
@@ -78,7 +78,7 @@ namespace Moer {
         RenderGraphTexture(const std::string& name, Descriptor desc);
         RenderGraphTexture(const std::string& name, RHITextureRef tex);
         RenderGraphTexture(const std::string& name, RenderGraphTexture* parent, RHISubresourceRange sub_res);
-        uint32_t ResloveResourceUsage(uint32_t usage, RHIBarrierDependencyInfo& barrier_info, EPassType type) override;
+        uint32_t ResloveResourceUsage(const DepdencyGraph::ResourceDesc&, RHIBarrierDependencyInfo& barrier_info, EPassType type) override;
 
     protected:
         RHITextureRef m_texture;

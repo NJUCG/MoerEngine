@@ -3,6 +3,8 @@
 #include "RenderGraphHandle.h"
 #include "misc/STL.h"
 #include "misc/CountableRef.h"
+#include "rhi/RHICommon.h"
+#include <variant>
 namespace Moer {
 
     class DepdencyGraph {
@@ -22,12 +24,25 @@ namespace Moer {
             virtual ~Node() = default;
         };
         using NodeId = Node*;
+        struct TextureSubDesc {
+            uint32_t           mip_level : 16   = 0;
+            uint32_t           num_mips : 16    = 1;
+            uint32_t           array_index : 16 = 0;
+            uint32_t           array_count : 16 = 1;
+            ETextureUsageFlags usage;
+        };
+        struct BufferSubDesc {
+            uint32_t      offset = 0;
+            uint32_t      size   = 0;
+            EBufferLayout layout;
+        };
+        using ResourceDesc = std::variant<TextureSubDesc, BufferSubDesc>;
         struct Edge {
             // may be texture usage or buffer usage
-            uint32_t usage{0};
             NodeId   src;
             NodeId   dst;
-            Edge(DepdencyGraph& graph, NodeId src, NodeId dst, uint32_t usage) : usage(usage), src(src), dst(dst) {
+            ResourceDesc desc;
+            Edge(DepdencyGraph& graph, NodeId src, NodeId dst, ResourceDesc _desc) : src(src), dst(dst), desc(_desc) {
                 graph.Link(this);
             }
         };

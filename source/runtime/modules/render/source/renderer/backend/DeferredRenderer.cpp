@@ -593,213 +593,213 @@ namespace Moer {
         return virtual_viewport->GetPresentTextureSRV();
     }
 
-    void DeferredRenderer::Impl::PrePass() {
-        uint32_t frame_offset   = render_context.GetFrameOffset();
-        auto     instance_count = instance_buffer_view->GetBuffer()->GetNumElement() / sizeof(InstanceData);
+    // void DeferredRenderer::Impl::PrePass() {
+    //     uint32_t frame_offset   = render_context.GetFrameOffset();
+    //     auto     instance_count = instance_buffer_view->GetBuffer()->GetNumElement() / sizeof(InstanceData);
 
-        CullInstancePrePassShader::Parameters cull_instance_params;
-        cull_instance_params.input.meshlet_count_offset          = meshlet_count_offset;
-        cull_instance_params.input.instance_count                = instance_count;
-        cull_instance_params.input.hiz_factor                    = Vector2f(hiz_buffer.texture->GetExtent2D());
-        cull_instance_params.input.hiz_depth                     = hiz_buffer.texture->GetNumMips();
-        cull_instance_params.input.recheck_counter_buffer_offset = check_instance_count_offset;
-        cull_instance_params.input.instance_dispatch_offset      = instance_dispatch_indirect_offset;
-        cull_instance_params.input.meshlet_dispatch_offset       = meshlet_dispatch_offset;
+    //     CullInstancePrePassShader::Parameters cull_instance_params;
+    //     cull_instance_params.input.meshlet_count_offset          = meshlet_count_offset;
+    //     cull_instance_params.input.instance_count                = instance_count;
+    //     cull_instance_params.input.hiz_factor                    = Vector2f(hiz_buffer.texture->GetExtent2D());
+    //     cull_instance_params.input.hiz_depth                     = hiz_buffer.texture->GetNumMips();
+    //     cull_instance_params.input.recheck_counter_buffer_offset = check_instance_count_offset;
+    //     cull_instance_params.input.instance_dispatch_offset      = instance_dispatch_indirect_offset;
+    //     cull_instance_params.input.meshlet_dispatch_offset       = meshlet_dispatch_offset;
 
-        cull_instance_params.instance_meshlet_info      = instance_meshlet_info_view;
-        cull_instance_params.instance_meshlet_cull_info = instance_meshlet_cull_info_uav;
-        cull_instance_params.recheck_instance_id        = recheck_instance_id_uav;
-        cull_instance_params.counters_buffer            = draw_count_view;
-        cull_instance_params.views                      = uniform_buffer_view[frame_offset];
-        cull_instance_params.hiz_depth                  = hiz_buffer.srv;
-        cull_instance_params.depth_sampler              = hiz_buffer.sampler;
+    //     cull_instance_params.instance_meshlet_info      = instance_meshlet_info_view;
+    //     cull_instance_params.instance_meshlet_cull_info = instance_meshlet_cull_info_uav;
+    //     cull_instance_params.recheck_instance_id        = recheck_instance_id_uav;
+    //     cull_instance_params.counters_buffer            = draw_count_view;
+    //     cull_instance_params.views                      = uniform_buffer_view[frame_offset];
+    //     cull_instance_params.hiz_depth                  = hiz_buffer.srv;
+    //     cull_instance_params.depth_sampler              = hiz_buffer.sampler;
 
-        CullMeshletPrepassShader::Parameters cull_meshlet_params;
-        cull_meshlet_params.input.meshlet_count_offset          = meshlet_count_offset;
-        cull_meshlet_params.input.draw_count_offset             = draw_count_offset;
-        cull_meshlet_params.input.hiz_factor                    = Vector2f(hiz_buffer.texture->GetExtent2D());
-        cull_meshlet_params.input.hiz_depth                     = hiz_buffer.texture->GetNumMips();
-        cull_meshlet_params.input.recheck_counter_buffer_offset = check_meshlet_count_offset;
-        cull_meshlet_params.meshlet_info_buffer                 = meshlet_descs_buffer_view;
-        cull_meshlet_params.meshlet_bound_buffer                = meshlet_bounds_buffer_view;
-        cull_meshlet_params.instance_data                       = instance_buffer_view;
-        cull_meshlet_params.instance_meshlet_info               = instance_meshlet_info_view;
-        cull_meshlet_params.instance_meshlet_cull_info          = instance_meshlet_cull_info_view;
-        cull_meshlet_params.recheck_cull_info                   = recheck_cull_info_uav;
-        cull_meshlet_params.counters_buffer                     = draw_count_view;
-        cull_meshlet_params.command_buffer                      = draw_indirect_view;
-        cull_meshlet_params.views                               = uniform_buffer_view[frame_offset];
-        cull_meshlet_params.hiz_depth                           = hiz_buffer.srv;
-        cull_meshlet_params.depth_sampler                       = hiz_buffer.sampler;
+    //     CullMeshletPrepassShader::Parameters cull_meshlet_params;
+    //     cull_meshlet_params.input.meshlet_count_offset          = meshlet_count_offset;
+    //     cull_meshlet_params.input.draw_count_offset             = draw_count_offset;
+    //     cull_meshlet_params.input.hiz_factor                    = Vector2f(hiz_buffer.texture->GetExtent2D());
+    //     cull_meshlet_params.input.hiz_depth                     = hiz_buffer.texture->GetNumMips();
+    //     cull_meshlet_params.input.recheck_counter_buffer_offset = check_meshlet_count_offset;
+    //     cull_meshlet_params.meshlet_info_buffer                 = meshlet_descs_buffer_view;
+    //     cull_meshlet_params.meshlet_bound_buffer                = meshlet_bounds_buffer_view;
+    //     cull_meshlet_params.instance_data                       = instance_buffer_view;
+    //     cull_meshlet_params.instance_meshlet_info               = instance_meshlet_info_view;
+    //     cull_meshlet_params.instance_meshlet_cull_info          = instance_meshlet_cull_info_view;
+    //     cull_meshlet_params.recheck_cull_info                   = recheck_cull_info_uav;
+    //     cull_meshlet_params.counters_buffer                     = draw_count_view;
+    //     cull_meshlet_params.command_buffer                      = draw_indirect_view;
+    //     cull_meshlet_params.views                               = uniform_buffer_view[frame_offset];
+    //     cull_meshlet_params.hiz_depth                           = hiz_buffer.srv;
+    //     cull_meshlet_params.depth_sampler                       = hiz_buffer.sampler;
 
-        RHIBatchedShaderParameters cull_instance_batched_params;
-        cull_instance_batched_params.SetParameters(cull_instance_prepass_shader, cull_instance_params);
+    //     RHIBatchedShaderParameters cull_instance_batched_params;
+    //     cull_instance_batched_params.SetParameters(cull_instance_prepass_shader, cull_instance_params);
 
-        RHIBatchedShaderParameters cull_meshlet_batched_params;
-        cull_meshlet_batched_params.SetParameters(cull_meshlet_prepass_shader, cull_meshlet_params);
-        auto prepass_cull_task = [this,
-                                  instance_params(std::move(cull_instance_batched_params)),
-                                  meshlet_params(std::move(cull_meshlet_batched_params)),
-                                  instance_count(instance_count)](
-                                     RenderPassContext& _context) mutable {
-            RHIGraphicsCommandList* cmd_list = _context.cmd_list;
+    //     RHIBatchedShaderParameters cull_meshlet_batched_params;
+    //     cull_meshlet_batched_params.SetParameters(cull_meshlet_prepass_shader, cull_meshlet_params);
+    //     auto prepass_cull_task = [this,
+    //                               instance_params(std::move(cull_instance_batched_params)),
+    //                               meshlet_params(std::move(cull_meshlet_batched_params)),
+    //                               instance_count(instance_count)](
+    //                                  RenderPassContext& _context) mutable {
+    //         RHIGraphicsCommandList* cmd_list = _context.cmd_list;
 
-            RHIBarrierDependencyInfo barrier_dependency_info{};
-            auto                     draw_count_buffer_rdg = _context.graph.GetBlackBoard().GetBuffer("count_buffer");
-            draw_count_buffer_rdg->ResloveResourceUsage(EBufferLayout::COMMON, barrier_dependency_info, _context.pass_type);
-            auto draw_indirect_buffer_rdg = _context.graph.GetBlackBoard().GetBuffer("draw_indirect");
-            draw_indirect_buffer_rdg->ResloveResourceUsage(EBufferLayout::COMMON, barrier_dependency_info, _context.pass_type);
+    //         RHIBarrierDependencyInfo barrier_dependency_info{};
+    //         auto                     draw_count_buffer_rdg = _context.graph.GetBlackBoard().GetBuffer("count_buffer");
+    //         draw_count_buffer_rdg->ResloveResourceUsage(EBufferLayout::COMMON, barrier_dependency_info, _context.pass_type);
+    //         auto draw_indirect_buffer_rdg = _context.graph.GetBlackBoard().GetBuffer("draw_indirect");
+    //         draw_indirect_buffer_rdg->ResloveResourceUsage(EBufferLayout::COMMON, barrier_dependency_info, _context.pass_type);
 
-            cmd_list->SetPipelineBarrier(barrier_dependency_info);
+    //         cmd_list->SetPipelineBarrier(barrier_dependency_info);
 
-            cmd_list->SetPipelineState(cull_instance_prepass_pso);
-            g_rhi->RHISetBatchedShaderParameters(cull_instance_prepass_pso, instance_params);
-            auto dispatch_count = (instance_count + thread_group_count - 1) / thread_group_count;
-            cmd_list->Dispatch(dispatch_count, 1, 1);
-            {
-                RHIBarrierDependencyInfo instance_cull_barrier{};
-                auto                     instance_meshlet_cull_info_buffer_rdg = _context.graph.GetBlackBoard().GetBuffer("instance_meshlet_cull_info");
-                instance_meshlet_cull_info_buffer_rdg->ResloveResourceUsage(EBufferLayout::COMMON, instance_cull_barrier, _context.pass_type);
-                auto recheck_instance_id_buffer_rdg = _context.graph.GetBlackBoard().GetBuffer("recheck_instance_id");
-                recheck_instance_id_buffer_rdg->ResloveResourceUsage(EBufferLayout::WRITE, instance_cull_barrier, _context.pass_type);
-                auto draw_count_buffer_rdg = _context.graph.GetBlackBoard().GetBuffer("count_buffer");
-                draw_count_buffer_rdg->ResloveResourceUsage(EBufferLayout::INDIRECT_COMMAND_READ, instance_cull_barrier, _context.pass_type);
-                cmd_list->SetPipelineBarrier(instance_cull_barrier);
-            }
+    //         cmd_list->SetPipelineState(cull_instance_prepass_pso);
+    //         g_rhi->RHISetBatchedShaderParameters(cull_instance_prepass_pso, instance_params);
+    //         auto dispatch_count = (instance_count + thread_group_count - 1) / thread_group_count;
+    //         cmd_list->Dispatch(dispatch_count, 1, 1);
+    //         {
+    //             RHIBarrierDependencyInfo instance_cull_barrier{};
+    //             auto                     instance_meshlet_cull_info_buffer_rdg = _context.graph.GetBlackBoard().GetBuffer("instance_meshlet_cull_info");
+    //             instance_meshlet_cull_info_buffer_rdg->ResloveResourceUsage(EBufferLayout::COMMON, instance_cull_barrier, _context.pass_type, {});
+    //             auto recheck_instance_id_buffer_rdg = _context.graph.GetBlackBoard().GetBuffer("recheck_instance_id");
+    //             recheck_instance_id_buffer_rdg->ResloveResourceUsage(EBufferLayout::WRITE, instance_cull_barrier, _context.pass_type, {});
+    //             auto draw_count_buffer_rdg = _context.graph.GetBlackBoard().GetBuffer("count_buffer");
+    //             draw_count_buffer_rdg->ResloveResourceUsage(EBufferLayout::INDIRECT_COMMAND_READ, instance_cull_barrier, _context.pass_type, {});
+    //             cmd_list->SetPipelineBarrier(instance_cull_barrier);
+    //         }
 
-            cmd_list->SetPipelineState(cull_meshlet_prepass_pso);
-            g_rhi->RHISetBatchedShaderParameters(cull_meshlet_prepass_pso, meshlet_params);
-            // cmd_list->Dispatch((max_meshlet_count + thread_group_count) / thread_group_count, 1, 1);
-            cmd_list->DispatchIndirect(draw_count_buffer, meshlet_dispatch_offset);
-            {
-                RHIBarrierDependencyInfo post_compute_barrier{};
-                auto                     draw_count_rdg_buffer = _context.graph.GetBlackBoard().GetBuffer("count_buffer");
-                draw_count_rdg_buffer->ResloveResourceUsage(EBufferLayout::INDIRECT_COMMAND_READ, post_compute_barrier, _context.pass_type);
-                auto draw_indirect_rdg_buffer = _context.graph.GetBlackBoard().GetBuffer("draw_indirect");
-                draw_indirect_rdg_buffer->ResloveResourceUsage(EBufferLayout::INDIRECT_COMMAND_READ, post_compute_barrier, _context.pass_type);
-                auto recheck_cull_info_rdg_buffer = _context.graph.GetBlackBoard().GetBuffer("recheck_cull_info");
-                recheck_cull_info_rdg_buffer->ResloveResourceUsage(EBufferLayout::READ, post_compute_barrier, _context.pass_type);
-                cmd_list->SetPipelineBarrier(post_compute_barrier);
-            }
-        };
+    //         cmd_list->SetPipelineState(cull_meshlet_prepass_pso);
+    //         g_rhi->RHISetBatchedShaderParameters(cull_meshlet_prepass_pso, meshlet_params);
+    //         // cmd_list->Dispatch((max_meshlet_count + thread_group_count) / thread_group_count, 1, 1);
+    //         cmd_list->DispatchIndirect(draw_count_buffer, meshlet_dispatch_offset);
+    //         {
+    //             RHIBarrierDependencyInfo post_compute_barrier{};
+    //             auto                     draw_count_rdg_buffer = _context.graph.GetBlackBoard().GetBuffer("count_buffer");
+    //             draw_count_rdg_buffer->ResloveResourceUsage(EBufferLayout::INDIRECT_COMMAND_READ, post_compute_barrier, _context.pass_type, {});
+    //             auto draw_indirect_rdg_buffer = _context.graph.GetBlackBoard().GetBuffer("draw_indirect");
+    //             draw_indirect_rdg_buffer->ResloveResourceUsage(EBufferLayout::INDIRECT_COMMAND_READ, post_compute_barrier, _context.pass_type, {});
+    //             auto recheck_cull_info_rdg_buffer = _context.graph.GetBlackBoard().GetBuffer("recheck_cull_info");
+    //             recheck_cull_info_rdg_buffer->ResloveResourceUsage(EBufferLayout::READ, post_compute_barrier, _context.pass_type, {});
+    //             cmd_list->SetPipelineBarrier(post_compute_barrier);
+    //         }
+    //     };
 
-        EnqueueRenderTask([&, prepass_cull(std::move(prepass_cull_task))]() {
-            render_context.GetRenderGraph().AddComputePass(
-                "Prepass Cull Instance",
-                [&](RenderGraph::Builder& _builder) {
-                    auto counter_buffer      = render_context.GetRenderGraph().GetBlackBoard().GetHandle("count_buffer");
-                    auto draw_indirect       = render_context.GetRenderGraph().ImportBuffer("draw_indirect", draw_indirect_buffer);
-                    auto recheck_instance_id = render_context.GetRenderGraph().ImportBuffer("recheck_instance_id", recheck_instance_id_buffer);
-                    auto instance_meshlet_cull_info =
-                        render_context.GetRenderGraph().ImportBuffer("instance_meshlet_cull_info", instance_meshlet_cull_info_buffer);
-                    auto recheck_cull_info = render_context.GetRenderGraph().ImportBuffer("recheck_cull_info", recheck_cull_info_buffer);
+    //     EnqueueRenderTask([&, prepass_cull(std::move(prepass_cull_task))]() {
+    //         render_context.GetRenderGraph().AddComputePass(
+    //             "Prepass Cull Instance",
+    //             [&](RenderGraph::Builder& _builder) {
+    //                 auto counter_buffer      = render_context.GetRenderGraph().GetBlackBoard().GetHandle("count_buffer");
+    //                 auto draw_indirect       = render_context.GetRenderGraph().ImportBuffer("draw_indirect", draw_indirect_buffer);
+    //                 auto recheck_instance_id = render_context.GetRenderGraph().ImportBuffer("recheck_instance_id", recheck_instance_id_buffer);
+    //                 auto instance_meshlet_cull_info =
+    //                     render_context.GetRenderGraph().ImportBuffer("instance_meshlet_cull_info", instance_meshlet_cull_info_buffer);
+    //                 auto recheck_cull_info = render_context.GetRenderGraph().ImportBuffer("recheck_cull_info", recheck_cull_info_buffer);
 
-                    auto zero_buffer_rdg = render_context.GetRenderGraph().GetBlackBoard().GetHandle("zero_buffer");
-                    //Avoid cutting these buffers. The logic for reading and writing these buffers in different passes is not set correctly. Currently, it can only be handled in this way.
-                    render_context.GetRenderGraph().SetGraphOutput(counter_buffer).SetGraphOutput(draw_indirect).SetGraphOutput(recheck_cull_info).SetGraphOutput(recheck_instance_id).SetGraphOutput(instance_meshlet_cull_info).SetGraphOutput(zero_buffer_rdg);
-                    _builder.ReadBuffer(draw_indirect, EBufferLayout::COMMON).ReadBuffer(counter_buffer, EBufferLayout::COMMON).ReadBuffer(recheck_cull_info, READ);
-                },
-                std::move(prepass_cull));
-        });
-    }
+    //                 auto zero_buffer_rdg = render_context.GetRenderGraph().GetBlackBoard().GetHandle("zero_buffer");
+    //                 //Avoid cutting these buffers. The logic for reading and writing these buffers in different passes is not set correctly. Currently, it can only be handled in this way.
+    //                 render_context.GetRenderGraph().SetGraphOutput(counter_buffer).SetGraphOutput(draw_indirect).SetGraphOutput(recheck_cull_info).SetGraphOutput(recheck_instance_id).SetGraphOutput(instance_meshlet_cull_info).SetGraphOutput(zero_buffer_rdg);
+    //                 _builder.ReadBuffer(draw_indirect, EBufferLayout::COMMON).ReadBuffer(counter_buffer, EBufferLayout::COMMON).ReadBuffer(recheck_cull_info, READ);
+    //             },
+    //             std::move(prepass_cull));
+    //     });
+    // }
 
-    void DeferredRenderer::Impl::RecheckPass() {
-        uint32_t frame_offset   = render_context.GetFrameOffset();
-        auto     instance_count = instance_buffer_view->GetBuffer()->GetNumElement();
+    // void DeferredRenderer::Impl::RecheckPass() {
+    //     uint32_t frame_offset   = render_context.GetFrameOffset();
+    //     auto     instance_count = instance_buffer_view->GetBuffer()->GetNumElement();
 
-        CullInstanceRecheckShader::Parameters cull_instance_params;
-        cull_instance_params.input.meshlet_count_offset          = check_meshlet_count_offset;
-        cull_instance_params.input.instance_count                = instance_count;
-        cull_instance_params.input.hiz_factor                    = Vector2f(hiz_buffer.texture->GetExtent2D());
-        cull_instance_params.input.hiz_depth                     = hiz_buffer.texture->GetNumMips();
-        cull_instance_params.input.recheck_counter_buffer_offset = check_instance_count_offset;
-        cull_instance_params.input.instance_dispatch_offset      = instance_dispatch_indirect_offset;
-        cull_instance_params.input.meshlet_dispatch_offset       = recheck_meshlet_dispatch_offset;
-        // cull_instance_params.instance_data                       = instance_buffer_view;
-        cull_instance_params.instance_meshlet_info      = instance_meshlet_info_view;
-        cull_instance_params.instance_meshlet_cull_info = recheck_cull_info_uav;
-        cull_instance_params.recheck_instances          = recheck_instance_id_srv;
-        cull_instance_params.counters_buffer            = draw_count_view;
-        cull_instance_params.views                      = uniform_buffer_view[frame_offset];
-        cull_instance_params.hiz_depth                  = hiz_buffer.srv;
-        cull_instance_params.depth_sampler              = hiz_buffer.sampler;
+    //     CullInstanceRecheckShader::Parameters cull_instance_params;
+    //     cull_instance_params.input.meshlet_count_offset          = check_meshlet_count_offset;
+    //     cull_instance_params.input.instance_count                = instance_count;
+    //     cull_instance_params.input.hiz_factor                    = Vector2f(hiz_buffer.texture->GetExtent2D());
+    //     cull_instance_params.input.hiz_depth                     = hiz_buffer.texture->GetNumMips();
+    //     cull_instance_params.input.recheck_counter_buffer_offset = check_instance_count_offset;
+    //     cull_instance_params.input.instance_dispatch_offset      = instance_dispatch_indirect_offset;
+    //     cull_instance_params.input.meshlet_dispatch_offset       = recheck_meshlet_dispatch_offset;
+    //     // cull_instance_params.instance_data                       = instance_buffer_view;
+    //     cull_instance_params.instance_meshlet_info      = instance_meshlet_info_view;
+    //     cull_instance_params.instance_meshlet_cull_info = recheck_cull_info_uav;
+    //     cull_instance_params.recheck_instances          = recheck_instance_id_srv;
+    //     cull_instance_params.counters_buffer            = draw_count_view;
+    //     cull_instance_params.views                      = uniform_buffer_view[frame_offset];
+    //     cull_instance_params.hiz_depth                  = hiz_buffer.srv;
+    //     cull_instance_params.depth_sampler              = hiz_buffer.sampler;
 
-        CullMeshletRecheckShader::Parameters cull_meshlet_params;
-        cull_meshlet_params.input.meshlet_count_offset          = meshlet_count_offset;
-        cull_meshlet_params.input.draw_count_offset             = recheck_draw_count_offset;
-        cull_meshlet_params.input.hiz_factor                    = Vector2f(hiz_buffer.texture->GetExtent2D());
-        cull_meshlet_params.input.hiz_depth                     = hiz_buffer.texture->GetNumMips();
-        cull_meshlet_params.input.recheck_counter_buffer_offset = check_meshlet_count_offset;
-        cull_meshlet_params.meshlet_info_buffer                 = meshlet_descs_buffer_view;
-        cull_meshlet_params.meshlet_bound_buffer                = meshlet_bounds_buffer_view;
-        cull_meshlet_params.instance_data                       = instance_buffer_view;
-        cull_meshlet_params.instance_meshlet_info               = instance_meshlet_info_view;
-        cull_meshlet_params.instance_meshlet_cull_info          = recheck_cull_info_view;
-        cull_meshlet_params.counters_buffer                     = draw_count_view;
-        cull_meshlet_params.command_buffer                      = draw_indirect_view;
-        cull_meshlet_params.views                               = uniform_buffer_view[frame_offset];
-        cull_meshlet_params.hiz_depth                           = hiz_buffer.srv;
-        cull_meshlet_params.depth_sampler                       = hiz_buffer.sampler;
+    //     CullMeshletRecheckShader::Parameters cull_meshlet_params;
+    //     cull_meshlet_params.input.meshlet_count_offset          = meshlet_count_offset;
+    //     cull_meshlet_params.input.draw_count_offset             = recheck_draw_count_offset;
+    //     cull_meshlet_params.input.hiz_factor                    = Vector2f(hiz_buffer.texture->GetExtent2D());
+    //     cull_meshlet_params.input.hiz_depth                     = hiz_buffer.texture->GetNumMips();
+    //     cull_meshlet_params.input.recheck_counter_buffer_offset = check_meshlet_count_offset;
+    //     cull_meshlet_params.meshlet_info_buffer                 = meshlet_descs_buffer_view;
+    //     cull_meshlet_params.meshlet_bound_buffer                = meshlet_bounds_buffer_view;
+    //     cull_meshlet_params.instance_data                       = instance_buffer_view;
+    //     cull_meshlet_params.instance_meshlet_info               = instance_meshlet_info_view;
+    //     cull_meshlet_params.instance_meshlet_cull_info          = recheck_cull_info_view;
+    //     cull_meshlet_params.counters_buffer                     = draw_count_view;
+    //     cull_meshlet_params.command_buffer                      = draw_indirect_view;
+    //     cull_meshlet_params.views                               = uniform_buffer_view[frame_offset];
+    //     cull_meshlet_params.hiz_depth                           = hiz_buffer.srv;
+    //     cull_meshlet_params.depth_sampler                       = hiz_buffer.sampler;
 
-        RHIBatchedShaderParameters cull_instance_batched_params;
-        cull_instance_batched_params.SetParameters(cull_instance_recheck_shader, cull_instance_params);
+    //     RHIBatchedShaderParameters cull_instance_batched_params;
+    //     cull_instance_batched_params.SetParameters(cull_instance_recheck_shader, cull_instance_params);
 
-        RHIBatchedShaderParameters cull_meshlet_batched_params;
-        cull_meshlet_batched_params.SetParameters(cull_meshlet_recheck_shader, cull_meshlet_params);
+    //     RHIBatchedShaderParameters cull_meshlet_batched_params;
+    //     cull_meshlet_batched_params.SetParameters(cull_meshlet_recheck_shader, cull_meshlet_params);
 
-        auto recheck_pass_cull_task = [this,
-                                       instance_params(std::move(cull_instance_batched_params)),
-                                       meshlet_params(std::move(cull_meshlet_batched_params)),
-                                       instance_count(instance_count)](
-                                          RenderPassContext& _context) mutable {
-            auto& cmd_list = render_context.GetCommandList();
+    //     auto recheck_pass_cull_task = [this,
+    //                                    instance_params(std::move(cull_instance_batched_params)),
+    //                                    meshlet_params(std::move(cull_meshlet_batched_params)),
+    //                                    instance_count(instance_count)](
+    //                                       RenderPassContext& _context) mutable {
+    //         auto& cmd_list = render_context.GetCommandList();
 
-            cmd_list.SetPipelineState(cull_instance_recheck_pso);
-            g_rhi->RHISetBatchedShaderParameters(cull_instance_recheck_pso, instance_params);
-            auto dispatch_count = (instance_count + thread_group_count - 1) / thread_group_count;
-            // cmd_list->Dispatch(dispatch_count, 1, 1);
-            cmd_list.DispatchIndirect(draw_count_buffer, instance_dispatch_indirect_offset);
-            {
-                RHIBarrierDependencyInfo meshlet_cull_barrier{};
-                auto                     instance_meshlet_cull_info_buffer_rdg = _context.graph.GetBlackBoard().GetBuffer("instance_meshlet_cull_info");
-                instance_meshlet_cull_info_buffer_rdg->ResloveResourceUsage(EBufferLayout::COMMON, meshlet_cull_barrier, _context.pass_type);
-                auto recheck_cull_info_rdg_buffer = _context.graph.GetBlackBoard().GetBuffer("recheck_cull_info");
-                recheck_cull_info_rdg_buffer->ResloveResourceUsage(EBufferLayout::READ, meshlet_cull_barrier, _context.pass_type);
-                auto draw_count_buffer_rdg = _context.graph.GetBlackBoard().GetBuffer("count_buffer");
-                draw_count_buffer_rdg->ResloveResourceUsage(EBufferLayout::INDIRECT_COMMAND_READ, meshlet_cull_barrier, _context.pass_type);
-                cmd_list.SetPipelineBarrier(meshlet_cull_barrier);
-            }
+    //         cmd_list.SetPipelineState(cull_instance_recheck_pso);
+    //         g_rhi->RHISetBatchedShaderParameters(cull_instance_recheck_pso, instance_params);
+    //         auto dispatch_count = (instance_count + thread_group_count - 1) / thread_group_count;
+    //         // cmd_list->Dispatch(dispatch_count, 1, 1);
+    //         cmd_list.DispatchIndirect(draw_count_buffer, instance_dispatch_indirect_offset);
+    //         {
+    //             RHIBarrierDependencyInfo meshlet_cull_barrier{};
+    //             auto                     instance_meshlet_cull_info_buffer_rdg = _context.graph.GetBlackBoard().GetBuffer("instance_meshlet_cull_info");
+    //             instance_meshlet_cull_info_buffer_rdg->ResloveResourceUsage(EBufferLayout::COMMON, meshlet_cull_barrier, _context.pass_type, {});
+    //             auto recheck_cull_info_rdg_buffer = _context.graph.GetBlackBoard().GetBuffer("recheck_cull_info");
+    //             recheck_cull_info_rdg_buffer->ResloveResourceUsage(EBufferLayout::READ, meshlet_cull_barrier, _context.pass_type, {});
+    //             auto draw_count_buffer_rdg = _context.graph.GetBlackBoard().GetBuffer("count_buffer");
+    //             draw_count_buffer_rdg->ResloveResourceUsage(EBufferLayout::INDIRECT_COMMAND_READ, meshlet_cull_barrier, _context.pass_type, {});
+    //             cmd_list.SetPipelineBarrier(meshlet_cull_barrier);
+    //         }
 
-            cmd_list.SetPipelineState(cull_meshlet_recheck_pso);
-            g_rhi->RHISetBatchedShaderParameters(cull_meshlet_recheck_pso, meshlet_params);
+    //         cmd_list.SetPipelineState(cull_meshlet_recheck_pso);
+    //         g_rhi->RHISetBatchedShaderParameters(cull_meshlet_recheck_pso, meshlet_params);
 
-            // cmd_list->Dispatch((max_meshlet_count + thread_group_count) / thread_group_count, 1, 1);
-            cmd_list.DispatchIndirect(draw_count_buffer, recheck_meshlet_dispatch_offset);
-            {
-                RHIBarrierDependencyInfo post_compute_barrier{};
-                auto                     draw_count_rdg_buffer = _context.graph.GetBlackBoard().GetBuffer("count_buffer");
-                draw_count_rdg_buffer->ResloveResourceUsage(EBufferLayout::INDIRECT_COMMAND_READ, post_compute_barrier, _context.pass_type);
-                auto draw_indirect_rdg_buffer = _context.graph.GetBlackBoard().GetBuffer("draw_indirect");
-                draw_indirect_rdg_buffer->ResloveResourceUsage(EBufferLayout::INDIRECT_COMMAND_READ, post_compute_barrier, _context.pass_type);
-                cmd_list.SetPipelineBarrier(post_compute_barrier);
-            }
-        };
+    //         // cmd_list->Dispatch((max_meshlet_count + thread_group_count) / thread_group_count, 1, 1);
+    //         cmd_list.DispatchIndirect(draw_count_buffer, recheck_meshlet_dispatch_offset);
+    //         {
+    //             RHIBarrierDependencyInfo post_compute_barrier{};
+    //             auto                     draw_count_rdg_buffer = _context.graph.GetBlackBoard().GetBuffer("count_buffer");
+    //             draw_count_rdg_buffer->ResloveResourceUsage(EBufferLayout::INDIRECT_COMMAND_READ, post_compute_barrier, _context.pass_type, {});
+    //             auto draw_indirect_rdg_buffer = _context.graph.GetBlackBoard().GetBuffer("draw_indirect");
+    //             draw_indirect_rdg_buffer->ResloveResourceUsage(EBufferLayout::INDIRECT_COMMAND_READ, post_compute_barrier, _context.pass_type, {});
+    //             cmd_list.SetPipelineBarrier(post_compute_barrier);
+    //         }
+    //     };
 
-        EnqueueRenderTask([&, recheck_pass(std::move(recheck_pass_cull_task))]() {
-            render_context.GetRenderGraph().AddComputePass(
-                "Recheck Cull Instance",
-                [&](RenderGraph::Builder& _builder) {
-                    auto draw_count_rdg_buffer = render_context.GetRenderGraph().GetBlackBoard().GetHandle("count_buffer");
-                    _builder.WriteBuffer(draw_count_rdg_buffer, COMMON);
-                    auto draw_indirect_rdg_buffer = render_context.GetRenderGraph().GetBlackBoard().GetHandle("draw_indirect");
-                    _builder.WriteBuffer(draw_indirect_rdg_buffer, COMMON);
-                    auto recheck_instance_id_rdg_buffer = render_context.GetRenderGraph().GetBlackBoard().GetHandle("recheck_instance_id");
-                    _builder.ReadBuffer(recheck_instance_id_rdg_buffer, READ);
-                },
-                std::move(recheck_pass));
-        });
-        // EnqueueRenderTask(std::move(recheck_pass_cull_task));
-    }
+    //     EnqueueRenderTask([&, recheck_pass(std::move(recheck_pass_cull_task))]() {
+    //         render_context.GetRenderGraph().AddComputePass(
+    //             "Recheck Cull Instance",
+    //             [&](RenderGraph::Builder& _builder) {
+    //                 auto draw_count_rdg_buffer = render_context.GetRenderGraph().GetBlackBoard().GetHandle("count_buffer");
+    //                 _builder.WriteBuffer(draw_count_rdg_buffer, COMMON);
+    //                 auto draw_indirect_rdg_buffer = render_context.GetRenderGraph().GetBlackBoard().GetHandle("draw_indirect");
+    //                 _builder.WriteBuffer(draw_indirect_rdg_buffer, COMMON);
+    //                 auto recheck_instance_id_rdg_buffer = render_context.GetRenderGraph().GetBlackBoard().GetHandle("recheck_instance_id");
+    //                 _builder.ReadBuffer(recheck_instance_id_rdg_buffer, READ);
+    //             },
+    //             std::move(recheck_pass));
+    //     });
+    //     // EnqueueRenderTask(std::move(recheck_pass_cull_task));
+    // }
 
     void DeferredRenderer::Impl::DispatchDrawScene(const CameraData& _camera_data, bool _first_pass) {
         auto dispatch_gbuffer_pass = [&, b_first_pass(_first_pass)]() {

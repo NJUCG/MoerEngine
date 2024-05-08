@@ -9,7 +9,7 @@
 #include "misc/EnumBitOperation.h"
 #pragma region CommonEnums
 /** Maximum number of miplevels in a texture. */
-enum { MAX_TEXTURE_MIP_COUNT = 15 };
+enum { MAX_TEXTURE_MIP_COUNT = 0xff };
 
 /** Maximum number of static/skeletal mesh LODs */
 enum { MAX_MESH_LOD_COUNT = 8 };

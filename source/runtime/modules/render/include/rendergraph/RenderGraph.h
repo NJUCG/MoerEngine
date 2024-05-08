@@ -10,7 +10,7 @@
 #include "misc/STL.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
-
+#include "DepdencyGraph.h"
 #include <cstdint>
 #include <limits>
 namespace Moer {
@@ -47,13 +47,15 @@ namespace Moer {
     public:
         class Builder {
         public:
-            Builder& ReadTexture(RenderGraphHandle         input,
-                                 RenderGraphTexture::Usage usage =
-                                     RenderGraphTexture::Usage::INPUT_ATTACHMENT);
+            Builder& ReadTexture(RenderGraphHandle         _input,
+                                 RenderGraphTexture::Usage _usage =
+                                     RenderGraphTexture::Usage::INPUT_ATTACHMENT,
+                                 uint32_t _mip_level = 0,
+                                 uint32_t _mip_cnt   = 1);
 
-            Builder& WriteTexture(RenderGraphHandle         output,
-                                  RenderGraphTexture::Usage usage =
-                                      RenderGraphTexture::Usage::COLOR_ATTACHMENT);
+            Builder& WriteTexture(RenderGraphHandle         _output,
+                                  RenderGraphTexture::Usage _usage     = RenderGraphTexture::Usage::COLOR_ATTACHMENT,
+                                  uint32_t                  _mip_level = 0);
 
             Builder& ReadTextures(const Moer::Array<RenderGraphHandle>& inputs,
                                   RenderGraphTexture::Usage             usage =
@@ -147,8 +149,8 @@ namespace Moer {
         ~RenderGraph();
 
     protected:
-        void                 WriteInternal(PassNode* pass, RenderGraphHandle output, uint32_t usage);
-        void                 ReadInternal(PassNode* pass, RenderGraphHandle input, uint32_t usage);
+        void                 WriteInternal(PassNode* pass, RenderGraphHandle output, DepdencyGraph::ResourceDesc&& _desc);
+        void                 ReadInternal(PassNode* pass, RenderGraphHandle input, DepdencyGraph::ResourceDesc&& _desc);
         RenderGraphHandle    AddTextureInternal(RenderGraphTexture* texture);
         RenderGraphHandle    AddBufferInternal(RenderGraphBuffer* buffer);
         RenderGraphResource* GetResource(RenderGraphHandle handle) const;

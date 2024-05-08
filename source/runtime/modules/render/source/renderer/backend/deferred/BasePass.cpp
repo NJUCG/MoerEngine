@@ -294,7 +294,7 @@ namespace Moer {
                 //     hiz = rg.ImportTexture("hiz_buffer", hiz_buffer.texture);
                 // }
                 // _builder.ReadTexture(hiz, ETextureUsageFlags::SAMPLED);
-                _builder.ReadTexture(hiz, ETextureUsageFlags::SAMPLED);
+                _builder.ReadTexture(hiz, ETextureUsageFlags::SAMPLED, 0, MAX_TEXTURE_MIP_COUNT);
                 _builder.WriteBuffer(_context.GetRenderGraph().ImportIfNotExist(instance_meshlet_cull_info_name.data(), instance_meshlet_cull_info_buffer), EBufferLayout::WRITE);
                 _builder.WriteBuffer(_context.GetRenderGraph().ImportIfNotExist(recheck_instance_id_name.data(), recheck_instance_id_buffer), EBufferLayout::WRITE);
                 _builder.WriteBuffer(_context.GetRenderGraph().ImportIfNotExist(counter_buffer_name.data(), counter_buffer), EBufferLayout::WRITE);
@@ -305,7 +305,7 @@ namespace Moer {
             "Prepass Cull Meshlet",
             [&](RenderGraph::Builder& _builder) {
                 auto hiz = _context.GetRenderGraph().GetBlackBoard().GetHandle("HiZ Buffer");
-                _builder.ReadTexture(hiz, ETextureUsageFlags::SAMPLED);
+                _builder.ReadTexture(hiz, ETextureUsageFlags::SAMPLED, 0, MAX_TEXTURE_MIP_COUNT);
                 auto& black_board                = _context.GetRenderGraph().GetBlackBoard();
                 auto  instance_meshlet_cull_info = black_board.GetHandle(instance_meshlet_cull_info_name.data());
                 auto  recheck_instance_id_hd     = black_board.GetHandle(recheck_instance_id_name.data());
@@ -394,7 +394,7 @@ namespace Moer {
                 auto  counter_buffer_hd        = black_board.GetHandle(counter_buffer_name.data());
                 auto  recheck_cull_info_hd     = black_board.GetHandle(recheck_cull_info_name.data());
 
-                _builder.ReadTexture(hiz, ETextureUsageFlags::SAMPLED);
+                _builder.ReadTexture(hiz, ETextureUsageFlags::SAMPLED, 0, MAX_TEXTURE_MIP_COUNT);
 
                 _builder.ReadBuffer(recheck_cull_instance_hd, EBufferLayout::READ);
                 _builder.ReadBuffer(counter_buffer_hd, EBufferLayout::INDIRECT_COMMAND_READ);
@@ -411,7 +411,7 @@ namespace Moer {
                 auto  counter_buffer_hd    = black_board.GetHandle(counter_buffer_name.data());
                 auto  draw_indirect_hd     = black_board.GetHandle(draw_indirect_name.data());
 
-                _builder.ReadTexture(hiz, ETextureUsageFlags::SAMPLED);
+                _builder.ReadTexture(hiz, ETextureUsageFlags::SAMPLED, 0, MAX_TEXTURE_MIP_COUNT);
                 _builder.ReadBuffer(recheck_cull_info_hd, EBufferLayout::READ);
                 _builder.ReadBuffer(counter_buffer_hd, EBufferLayout::INDIRECT_COMMAND_READ);
                 _builder.WriteBuffer(draw_indirect_hd, EBufferLayout::WRITE);

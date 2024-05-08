@@ -1,4 +1,5 @@
 #include "resources/ResourceTransition.h"
+#include "rhi/RHICommon.h"
 
 namespace Moer {
     std::tuple<ERHIAccessFlags, ERHIAccessFlags, ERHIPipelineStageFlags, ERHIPipelineStageFlags>
@@ -121,6 +122,12 @@ namespace Moer {
         }
         if (EnumHasAnyFlag(layout, EBufferLayout::READ)) {
             return {ERHIAccessFlags::SHADER_READ, GetPipelineStageFromPassType(pass_type)};
+        }
+        if (EnumHasAnyFlag(layout, EBufferLayout::TRANSFER_READ)) {
+            return {ERHIAccessFlags::TRANSFER_READ, ERHIPipelineStageFlags::PS_TRANSFER};
+        }
+        if (EnumHasAnyFlag(layout, EBufferLayout::TRANSFER_WRITE)) {
+            return {ERHIAccessFlags::TRANSFER_WRITE, ERHIPipelineStageFlags::PS_TRANSFER};
         }
         return {};
     }

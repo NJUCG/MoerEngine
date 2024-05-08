@@ -1,6 +1,7 @@
 #include "rendergraph/RenderGraph.h"
 
 #include "log/LogSystem.h"
+#include "rendergraph/DepdencyGraph.h"
 #include "rendergraph/PassNode.h"
 namespace Moer {
     RenderGraphTexture* BlackBoard::GetTexture(const std::string& name) const {
@@ -27,43 +28,52 @@ namespace Moer {
     RenderGraphBuffer* BlackBoard::GetBuffer(const std::string& name) const {
         return m_renderGraph.GetBuffer(GetHandle(name));
     }
-    RenderGraph::Builder& RenderGraph::Builder::ReadTexture(RenderGraphHandle input, RenderGraphTexture::Usage usage) {
-        m_renderGraph.ReadInternal(m_pass, input, static_cast<uint32_t>(usage));
+    RenderGraph::Builder& RenderGraph::Builder::ReadTexture(RenderGraphHandle _input, RenderGraphTexture::Usage _usage, uint32_t _mip_level, uint32_t _mip_cnt) {
+        DepdencyGraph::ResourceDesc desc = DepdencyGraph::TextureSubDesc{.mip_level = _mip_level, .num_mips = _mip_cnt, .array_index = 0, .array_count = 1, .usage = _usage};
+        m_renderGraph.ReadInternal(m_pass, _input, std::move(desc));
         return *this;
     }
-    RenderGraph::Builder& RenderGraph::Builder::WriteTexture(RenderGraphHandle output, RenderGraphTexture::Usage usage) {
-        m_renderGraph.WriteInternal(m_pass, output, static_cast<uint32_t>(usage));
+    RenderGraph::Builder& RenderGraph::Builder::WriteTexture(RenderGraphHandle _output, RenderGraphTexture::Usage _usage, uint32_t _mip_level) {
+
+        DepdencyGraph::ResourceDesc desc = DepdencyGraph::TextureSubDesc{.mip_level = _mip_level, .num_mips = 1, .array_index = 0, .array_count = 1, .usage = _usage};
+        m_renderGraph.WriteInternal(m_pass, _output, std::move(desc));
         return *this;
     }
     RenderGraph::Builder& RenderGraph::Builder::ReadTextures(const Moer::Array<RenderGraphHandle>& inputs, RenderGraphTexture::Usage usage) {
         for (auto input : inputs) {
-            m_renderGraph.ReadInternal(m_pass, input, static_cast<uint32_t>(usage));
+            DepdencyGraph::ResourceDesc desc = DepdencyGraph::TextureSubDesc{.mip_level = 0, .num_mips = 1, .array_index = 0, .array_count = 1, .usage = usage};
+            m_renderGraph.ReadInternal(m_pass, input, std::move(desc));
         }
         return *this;
     }
     RenderGraph::Builder& RenderGraph::Builder::WriteTextures(const Moer::Array<RenderGraphHandle>& output, RenderGraphTexture::Usage usage) {
         for (auto out : output) {
-            m_renderGraph.WriteInternal(m_pass, out, static_cast<uint32_t>(usage));
+            DepdencyGraph::ResourceDesc desc = DepdencyGraph::TextureSubDesc{.mip_level = 0, .num_mips = 1, .array_index = 0, .array_count = 1, .usage = usage};
+            m_renderGraph.WriteInternal(m_pass, out, std::move(desc));
         }
         return *this;
     }
     RenderGraph::Builder& RenderGraph::Builder::ReadBuffer(RenderGraphHandle input, RenderGraphBuffer::Usage usage) {
-        m_renderGraph.ReadInternal(m_pass, input, static_cast<uint32_t>(usage));
+        DepdencyGraph::ResourceDesc desc = DepdencyGraph::BufferSubDesc{.offset = 0, .size = 0, .layout = usage};
+        m_renderGraph.ReadInternal(m_pass, input, std::move(desc));
         return *this;
     }
     RenderGraph::Builder& RenderGraph::Builder::WriteBuffer(RenderGraphHandle output, RenderGraphBuffer::Usage usage) {
-        m_renderGraph.WriteInternal(m_pass, output, static_cast<uint32_t>(usage));
+        DepdencyGraph::ResourceDesc desc = DepdencyGraph::BufferSubDesc{.offset = 0, .size = 0, .layout = usage};
+        m_renderGraph.WriteInternal(m_pass, output, std::move(desc));
         return *this;
     }
     RenderGraph::Builder& RenderGraph::Builder::WriteBuffers(const Moer::Array<RenderGraphHandle>& output, RenderGraphBuffer::Usage usage) {
         for (auto out : output) {
-            m_renderGraph.WriteInternal(m_pass, out, static_cast<uint32_t>(usage));
+            DepdencyGraph::ResourceDesc desc = DepdencyGraph::BufferSubDesc{.offset = 0, .size = 0, .layout = usage};
+            m_renderGraph.WriteInternal(m_pass, out, std::move(desc));
         }
         return *this;
     }
-    RenderGraph::Builder& RenderGraph::Builder::ReadBuffers(const Moer::Array<RenderGraphHandle>& inputs, RenderGraphBuffer::Usage usage) {
-        for (auto input : inputs) {
-            m_renderGraph.ReadInternal(m_pass, input, static_cast<uint32_t>(usage));
+    RenderGraph::Builder& RenderGraph::Builder::ReadBuffers(const Moer::Array<RenderGraphHandle>& _inputs, RenderGraphBuffer::Usage _usage) {
+        for (auto input : _inputs) {
+            DepdencyGraph::ResourceDesc desc = DepdencyGraph::BufferSubDesc{.offset = 0, .size = 0, .layout = _usage};
+            m_renderGraph.ReadInternal(m_pass, input, std::move(desc));
         }
         return *this;
     }
@@ -193,7 +203,7 @@ namespace Moer {
 
             for (auto* const edge : m_dependency_graph.getEdges(pass_node)) {
                 auto* resource = dynamic_cast<RenderGraphResource*>(edge->src == pass_node ? edge->dst : edge->src);
-                pass_node->AddResourceUsage(resource, edge->usage);
+                pass_node->AddResourceUsage(resource, edge->desc);
             }
         }
 
@@ -240,11 +250,11 @@ namespace Moer {
             MoerDelete(pass);
         }
     }
-    void RenderGraph::WriteInternal(PassNode* pass, RenderGraphHandle output, uint32_t usage) {
-        GetResource(output)->ConnectForWrite(m_dependency_graph, pass, static_cast<uint32_t>(usage));
+    void RenderGraph::WriteInternal(PassNode* pass, RenderGraphHandle output, DepdencyGraph::ResourceDesc&& _desc) {
+        GetResource(output)->ConnectForWrite(m_dependency_graph, pass, std::move(_desc));
     }
-    void RenderGraph::ReadInternal(PassNode* pass, RenderGraphHandle input, uint32_t usage) {
-        GetResource(input)->ConnectForRead(m_dependency_graph, pass, static_cast<uint32_t>(usage));
+    void RenderGraph::ReadInternal(PassNode* pass, RenderGraphHandle input, DepdencyGraph::ResourceDesc&& _desc) {
+        GetResource(input)->ConnectForRead(m_dependency_graph, pass, std::move(_desc));
     }
     RenderGraphHandle RenderGraph::AddTextureInternal(RenderGraphTexture* texture) {
         m_dependency_graph.RegisterNode(texture);
