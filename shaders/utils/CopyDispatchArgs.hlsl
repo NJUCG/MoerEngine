@@ -8,7 +8,7 @@ struct Args {
 [[vk::push_constant]] ConstantBuffer<Args> config : register(b0);
 
 [[vk::binding(0, 0)]] RWStructuredBuffer<uint> target : register(u0);
-[[vk::binding(0, 2)]] StructuredBuffer<uint> src_buffer : register(t0);
+[[vk::binding(1, 0)]] StructuredBuffer<uint> src_buffer : register(t0);
 
 [numthreads(1, 1, 1)] void main(uint3 dtid
                                 : SV_DispatchThreadID) {

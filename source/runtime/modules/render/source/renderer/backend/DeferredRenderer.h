@@ -2,6 +2,7 @@
 #define MOER_ENGINE_DEFERRED_RENDERER_H
 #include "renderer/BackendRenderer.h"
 namespace Moer {
+    constexpr std::string_view view_buffer_name = "Deferred::VirtualView";
 
     class DeferredRenderer : public BackendRenderer {
     public:

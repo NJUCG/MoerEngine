@@ -15,6 +15,7 @@
 #include "misc/STL.h"
 #include "misc/Singleton.h"
 #include "misc/Traits.h"
+#include "misc/RAII.h"
 namespace Moer {
 
     CORE_API extern bool IsCurrentlyGameThread();

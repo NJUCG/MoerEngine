@@ -834,7 +834,9 @@ struct RHITextureCreateInfo : public RHITextureInfo {
     }
     std::string name;
 };
-
+namespace Moer {
+    class RenderGraphTexture;
+};
 class RHITexture : public RHIViewableResource {
 public:
     virtual const RHITextureInfo& GetInfo() const { return texture_info; }
@@ -903,6 +905,7 @@ public:
         return GetInfo().uav_format;
     }
     void SetLayout(const RHISubresourceRange& _subresource_range, ETextureLayout _layout, RHITextureBarrierInfo* barrier_info = nullptr);
+    void SetTrackInfo(uint64_t _subresource_hash, ETextureUsageFlags _usage, EPassType _pass_type);
 
     ETextureLayout GetLayout(const RHISubresourceRange& _subresource_range) const {
         auto it = subresource_layouts.find(_subresource_range);
@@ -918,6 +921,15 @@ protected:
 
 private:
     friend class RHITextureReference;
+    friend Moer::RenderGraphTexture;
+    friend class VulkanPipelineResourceCache;
+    ETextureUsageFlags GetTrackedUsage(uint64_t _subresource_hash) const {
+        auto it = subresource_usages.find(_subresource_hash);
+        if (it != subresource_usages.end()) {
+            return it->second;
+        }
+        return ETextureUsageFlags::UNDEFINED;
+    }
     explicit RHITexture(ERHIResourceType _type) : RHIViewableResource(_type) {}
     RHITextureInfo texture_info;
     struct RHISubresourceRangeHash {
@@ -932,6 +944,9 @@ private:
         }
     };
     Moer::UnorderedMap<RHISubresourceRange, ETextureLayout, RHISubresourceRangeHash> subresource_layouts;
+    Moer::UnorderedMap<uint64_t, ETextureUsageFlags>                                 subresource_usages;
+
+    EPassType prev_pass_type = EPassType::Compute;
 };
 
 #pragma region acceleration structures

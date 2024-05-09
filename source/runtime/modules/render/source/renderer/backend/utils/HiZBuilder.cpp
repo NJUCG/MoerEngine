@@ -31,7 +31,7 @@ namespace Moer {
                 .SetNumMips(std::min(uint32_t(std::log2(std::min(target_extent.x, target_extent.y))), max_mip_levels))
                 .SetFormat(PF_R16_SFLOAT)
                 .SetClearAttachment(RHIClearAttachment(EClearAttachment::COLOR))
-                .SetPreferredLayout(ETextureLayout::TEXTURE_LAYOUT_COMMON)
+                .SetPreferredLayout(ETextureLayout::TEXTURE_LAYOUT_UNDEFINED)
                 .SetUsageFlags(ETextureUsageFlags::SAMPLED | ETextureUsageFlags::UNORDERED_ACCESS));
 
         srv = g_rhi->RHICreateTextureSRV(texture, PF_R16_SFLOAT, 0, texture->GetNumMips());
@@ -39,29 +39,29 @@ namespace Moer {
         for (uint32_t i = 0; i < texture->GetNumMips(); ++i) {
             uavs[i] = g_rhi->RHICreateTextureUAV(texture, PF_R16_SFLOAT, i);
         }
-        auto*                    cmd_list = g_rhi->RHICreateCopyCommandList(g_rhi->RHIGetCurrentCommandAllocator());
-        RHIBarrierDependencyInfo barrier_info;
-        barrier_info.texture_barriers.resize(1);
-        auto& barrier = barrier_info.texture_barriers[0];
-        barrier.SetTexture(texture)
-            .SetSrcTextureLayout(TEXTURE_LAYOUT_UNDEFINED)
-            .SetDstTextureLayout(TEXTURE_LAYOUT_COMMON)
-            .SetSubResourceRange(RHISubresourceRange(ETextureAspectFlags::COLOR));
+        // auto*                    cmd_list = g_rhi->RHICreateCopyCommandList(g_rhi->RHIGetCurrentCommandAllocator());
+        // RHIBarrierDependencyInfo barrier_info;
+        // barrier_info.texture_barriers.resize(1);
+        // auto& barrier = barrier_info.texture_barriers[0];
+        // barrier.SetTexture(texture)
+        //     .SetSrcTextureLayout(TEXTURE_LAYOUT_UNDEFINED)
+        //     .SetDstTextureLayout(TEXTURE_LAYOUT_COMMON)
+        //     .SetSubResourceRange(RHISubresourceRange(ETextureAspectFlags::COLOR));
 
-        cmd_list->BeginRecording();
-        cmd_list->SetPipelineBarrier(barrier_info);
-        cmd_list->EndRecording();
-        RHIFenceRef fence = g_rhi->RHICreateFence(RHIFenceCreateInfo{EFenceUsageFlags::TIMELINE});
+        // cmd_list->BeginRecording();
+        // cmd_list->SetPipelineBarrier(barrier_info);
+        // cmd_list->EndRecording();
+        // RHIFenceRef fence = g_rhi->RHICreateFence(RHIFenceCreateInfo{EFenceUsageFlags::TIMELINE});
 
-        RHISubmitInfo submit_info;
-        submit_info.Signal(fence, 1);
+        // RHISubmitInfo submit_info;
+        // submit_info.Signal(fence, 1);
 
-        RHICommandQueue* queue = g_rhi->RHICreateCommandQueue(ECommandQueueType::COPY);
-        queue->SubmitCommands(1, cmd_list, &submit_info);
-        fence->Wait(1);
-        MoerDelete(queue);
+        // RHICommandQueue* queue = g_rhi->RHICreateCommandQueue(ECommandQueueType::COPY);
+        // queue->SubmitCommands(1, cmd_list, &submit_info);
+        // fence->Wait(1);
+        // MoerDelete(queue);
         if (sampler == nullptr) {
-            RHISamplerCreateInfo create_info(SF_NEAREST, TEXTURE_LAYOUT_COMMON);
+            RHISamplerCreateInfo create_info(SF_NEAREST, TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             create_info.SetCompareOp(SCF_NEVER)
                 .SetAddressMode(ESamplerAddressMode::SAM_CLAMP_TO_EDGE);
             sampler = g_rhi->RHICreateSampler(create_info);
@@ -191,16 +191,17 @@ namespace Moer {
                 auto           hiz         = black_board.GetHandle("HiZ Buffer");
 
                                _builder.ReadTexture(depth, ETextureUsageFlags::SAMPLED);
-                _builder.WriteTexture(hiz, ETextureUsageFlags::UNORDERED_ACCESS); }, [&, mip_cnt](RenderPassContext& _pass_context) {
+                _builder.WriteTexture(hiz, ETextureUsageFlags::UNORDERED_ACCESS); 
+                _builder.ReadTexture(hiz, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED, 1, mip_cnt - 1); }, [this, mip_cnt, hiz_texture(_hiz_buffer.texture), uav(_hiz_buffer.uavs[0]), depth_buffer(_depth_buffer), &_context](RenderPassContext& _pass_context) {
                     BuildHiZShader::Parameters params;
-                    Vector2i                   mip0_size = Vector2i(_hiz_buffer.texture->GetExtent3D());
+                    Vector2i                   mip0_size = Vector2i(hiz_texture->GetExtent3D());
 
                     HiZConfig& config   = params.config;
                     config.b_mip0       = true;
                     config.size         = mip0_size;
                     config.target_level = 0;
-                    params.target       = _hiz_buffer.uavs[0];
-                    params.depth_buffer = _depth_buffer;
+                    params.target        = uav;
+                    params.depth_buffer  = depth_buffer;
                     params.depth_sampler = depth_sampler;
                     RHIBatchedShaderParameters batched_params;
                     auto&                      cmd_list = _context.GetCommandList();
@@ -212,27 +213,32 @@ namespace Moer {
 
             for (uint i = 1; i < mip_cnt; ++i) {
                 rg.AddComputePass(
-                    "Build HiZ", [&, i](RenderGraph::Builder& _builder) mutable {
-                    auto& black_board = rg.GetBlackBoard();
+                    "Build HiZ", [depth_buffer(_depth_buffer), &_context, i](RenderGraph::Builder& _builder) mutable {
+                    auto& black_board = _context.GetRenderGraph().GetBlackBoard();
                     auto  hiz         = black_board.GetHandle("HiZ Buffer");
 
                     _builder.WriteTexture(hiz, ETextureUsageFlags::UNORDERED_ACCESS, i);
-                    _builder.ReadTexture(hiz, ETextureUsageFlags::SAMPLED, i-1, 1); }, [&, i](RenderPassContext& _pass_context) {
+                    _builder.ReadTexture(hiz, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED, i-1, 1); }, [this, &_context, mip_cnt, hiz_texture(_hiz_buffer.texture), uav(_hiz_buffer.uavs[i]), srv(_hiz_buffer.srv), i](RenderPassContext& _pass_context) mutable {
                                       BuildHiZShader::Parameters params;
-                                      Vector2i                   mip0_size = Vector2i(_hiz_buffer.texture->GetExtent3D());
+                                      Vector2i                   mip0_size = Vector2i(hiz_texture->GetExtent3D());
 
                                       HiZConfig& config   = params.config;
                                       config.b_mip0       = false;
                                       config.size         = Vector2i(std::max(1, mip0_size.x >> i), std::max(1, mip0_size.y >> i));
                                       config.target_level = i;
-                                      params.target       = _hiz_buffer.uavs[i];
-                                      params.depth_buffer = _hiz_buffer.srv;
+                                      params.target        = uav;
+                                      params.depth_buffer  = srv;
                                       params.depth_sampler = depth_sampler;
                                       RHIBatchedShaderParameters batched_params;
                                       auto&                      cmd_list = _context.GetCommandList();
                                       batched_params.SetParameters(builder_shader, params);
                                       g_rhi->RHISetBatchedShaderParameters(pso, batched_params);
-                                      cmd_list.Dispatch(Vector3i((config.size.t.x + 7) >> 3u, (config.size.t.y + 7) >> 3u, 1)); });
+                                      cmd_list.Dispatch(Vector3i((config.size.t.x + 7) >> 3u, (config.size.t.y + 7) >> 3u, 1)); 
+                                      
+                                      if(i == mip_cnt - 1){
+                                            RHISubresourceRange range(ETextureAspectFlags::COLOR, 0, MAX_TEXTURE_MIP_COUNT, 0, 1, 0, 1);
+                                            srv->GetTexture()->SetTrackInfo(range.GetHash(), ETextureUsageFlags::UNORDERED_ACCESS, EPassType::Compute);
+                                      } });
             }
         }
 

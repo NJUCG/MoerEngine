@@ -68,9 +68,9 @@ namespace Moer {
     RHITextureRef RenderGraphTexture::GetTexture() const {
         return m_texture;
     }
-    RHIUAVRef RenderGraphTexture::GetUAV(EPixelFormat format, uint32_t mip_num, uint32_t array_min, uint32_t array_num) {
-        if (mip_num == -1) {
-            mip_num = m_is_sub_resource ? m_sub_res.num_mips : 1;
+    RHIUAVRef RenderGraphTexture::GetUAV(EPixelFormat format, uint32_t _mip_level, uint32_t array_min, uint32_t array_num) {
+        if (_mip_level == -1) {
+            _mip_level = m_is_sub_resource ? m_sub_res.mip_index : 0;
         }
         if (array_min == -1) {
             array_min = m_is_sub_resource ? m_sub_res.array_index : 0;
@@ -78,7 +78,7 @@ namespace Moer {
         if (array_num == -1) {
             array_num = m_is_sub_resource ? m_sub_res.array_count : 1;
         }
-        return RenderGraphResourceCache::Get().GetUAV(m_texture, format == PF_UNDEFINED ? GetFormat() : format, mip_num, array_min, array_num);
+        return RenderGraphResourceCache::Get().GetUAV(m_texture, format == PF_UNDEFINED ? GetFormat() : format, _mip_level, array_min, array_num);
     }
 
     EPixelFormat RenderGraphTexture::GetFormat() const {
@@ -106,8 +106,10 @@ namespace Moer {
     }
 
     static inline ETextureLayout GetTextureLayout(RenderGraphTexture::Usage usage) {
+        if (usage == RenderGraphTexture::Usage::UNDEFINED)
+            return TEXTURE_LAYOUT_UNDEFINED;
         if (EnumHasAnyFlag(usage, RenderGraphTexture::Usage::UNORDERED_ACCESS)) {
-            return ETextureLayout::TEXTURE_LAYOUT_COMMON;
+            return TEXTURE_LAYOUT_COMMON;
         }
         if (EnumHasAnyFlag(usage, RenderGraphTexture::Usage::COLOR_ATTACHMENT)) {
             return TEXTURE_LAYOUT_COLOR_ATTACHMENT;
@@ -141,13 +143,25 @@ namespace Moer {
                                 GetFormat() == EPixelFormat::PF_D16_UNORM_S8_UINT;
 
         RHISubresourceRange subresource_range(is_depth_stencil ? ETextureAspectFlags::DEPTH_SLICE : ETextureAspectFlags::COLOR, desc.mip_level, desc.num_mips, desc.array_index, desc.array_count, 0, 1);
-        auto src_layout = m_texture->GetLayout(subresource_range);
+        auto                res_hash = subresource_range.GetHash();
+
+        auto                src_usage  = m_texture->GetTrackedUsage(res_hash);
+        auto                src_layout = GetTextureLayout(src_usage);
         auto                dst_layout = GetTextureLayout(static_cast<RenderGraphTexture::Usage>(desc.usage));
-        if (src_layout == dst_layout)
-            return src_layout;
         _barrier_info.texture_barriers.push_back(RHITextureBarrierInfo{});
         auto& texture_barrier_info = _barrier_info.texture_barriers.back();
-        m_texture->SetLayout(subresource_range, dst_layout, &texture_barrier_info);
+        auto [src_access_flags, dst_access_flags, src_stage, dst_stage] = ResourceTransition::GetTextureTransition(src_usage, usage_flags, m_texture->prev_pass_type, _pass_type);
+        texture_barrier_info.SetTexture(
+                                m_texture)
+            .SetSubResourceRange(subresource_range)
+            .SetSrcTextureLayout(src_layout)
+            .SetDstTextureLayout(dst_layout)
+            .SetSrcAccessFlags(src_access_flags)
+            .SetDstAccessFlags(dst_access_flags)
+            .SetSrcStage(src_stage)
+            .SetDstStage(dst_stage);
+
+        m_texture->SetTrackInfo(res_hash, desc.usage, _pass_type);
         return dst_layout;
     }
 

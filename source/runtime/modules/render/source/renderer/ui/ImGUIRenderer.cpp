@@ -315,7 +315,6 @@ void ImGUIRenderer::Impl::EndRenderFrame() {
                 texture_barriers_present[0].SetSrcStage(PS_COLOR_ATTACHMENT_OUTPUT);
                 texture_barriers_present[0].SetDstStage(PS_COLOR_ATTACHMENT_OUTPUT);
                 texture_barriers_present[0].SetSrcAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
-                texture_barriers_present[0].SetSrcQueueType(ECommandQueueType::GRAPHICS);
 
                 ui_command_list->SetPipelineBarrier(texture_dependency_info);
 

@@ -662,6 +662,15 @@ struct RHISubresourceRange : public RHISubresourceSlice {
     inline bool operator!=(RHISubresourceRange const& rhs) const {
         return !(*this == rhs);
     }
+    uint64_t GetHash() {
+        uint64_t hash = 0;
+        HashCombine(hash, aspect);
+        HashCombine(hash, mip_index);
+        HashCombine(hash, num_mips);
+        HashCombine(hash, array_index);
+        HashCombine(hash, array_count);
+        return hash;
+    }
 };
 
 struct RHICopyTextureInfo {

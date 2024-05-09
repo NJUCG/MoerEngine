@@ -65,7 +65,7 @@ namespace Moer {
         RHITextureRef                    GetTexture(const std::string& name, Extent2D size, EPixelFormat format, ETextureUsageFlags usage, uint32_t mipLevels = 1, uint32_t arrayLayers = 1);
         //   RHITextureRef GetBuffer()
         // RHIBufferRef GetBuffer(const std::string & name,RenderGraphBuffer::Descriptor);
-        RHIUAVRef   GetUAV(RHITextureRef texture, EPixelFormat format = PF_UNDEFINED, uint32_t mip_num = 1, uint32_t array_min = 0, uint32_t array_num = 1);
+        RHIUAVRef   GetUAV(RHITextureRef texture, EPixelFormat format = PF_UNDEFINED, uint32_t mip_level = 0, uint32_t array_min = 0, uint32_t array_num = 1);
         RHISRVRef   GetSRV(RHITextureRef texture, EPixelFormat format = PF_UNDEFINED, uint32_t mip_min = 0, uint32_t mip_num = 1, uint32_t array_min = 0, uint32_t array_num = 1);
         RHISRVRef   GetSRV(RHIBufferRef buffer, uint32_t stride = 0, uint64_t byte_size = 0, uint64_t byte_offset = 0);
         RHIUAVRef   GetUAV(RHIBufferRef buffer, uint32_t stride = 0, uint64_t byte_size = 0, uint64_t byte_offset = 0);

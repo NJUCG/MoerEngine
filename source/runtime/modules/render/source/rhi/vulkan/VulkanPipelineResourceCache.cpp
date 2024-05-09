@@ -5,6 +5,7 @@
 
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
+#include "rhi/RHIResourceInitilizer.h"
 #include "rhi/vulkan/misc/VulkanMacroUtils.h"
 #include "vulkan/vulkan_core.h"
 
@@ -69,10 +70,18 @@ void VulkanPipelineResourceCache::SetSRV(uint32_t _set, uint32_t _binding, RHISR
         auto  range     = view_info.stride * view_info.num_elements;
         m_descriptor_set_writers[_set].WriteStorageBuffer(_binding, buffer->GetHandle(), view_info.byte_offset, range);
     } else if (_srv->IsTexture()) {
-        auto* tex_view = static_cast<VulkanRHITextureSRV*>(_srv);
-        // MARK: layout is fixed
+        auto*          tex_view       = static_cast<VulkanRHITextureSRV*>(_srv);
         ETextureLayout default_layout = tex_view->GetTexture()->GetInfo().preferred_layout;
-        auto           final_layout   = (default_layout == ETextureLayout::TEXTURE_LAYOUT_COMMON) ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        const auto&    view_info      = std::get<v_type_texture_srv>(_srv->GetInfo().info);
+        // MARK... this is not correct, need to re-implement view design
+        RHISubresourceRange subresource_range{ETextureAspectFlags::COLOR, view_info.mip_min, 1, view_info.array_min, view_info.array_num, 0, 1};
+        auto                hash         = subresource_range.GetHash();
+        auto                prev_usage   = tex_view->GetTexture()->subresource_usages.find(hash);
+        auto                final_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        if (prev_usage != tex_view->GetTexture()->subresource_usages.end()) {
+            final_layout = EnumHasAnyFlag(prev_usage->second, ETextureUsageFlags::UNORDERED_ACCESS) ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        }
 
         m_descriptor_set_writers[_set].WriteSampledImage(_binding, VK_NULL_HANDLE, tex_view->GetView(), final_layout);
     } else {

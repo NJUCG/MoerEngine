@@ -606,8 +606,6 @@ VkImageLayout VulkanEnumTranslator::METoVKImageLayout(ETextureLayout _layout) {
 #endif
         case ETextureLayout::TEXTURE_LAYOUT_READ:
             return VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL;
-        case ETextureLayout::TEXTURE_LAYOUT_WRITE:
-            return VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL;
         case ETextureLayout::TEXTURE_LAYOUT_PRESENT_SRC:
             return VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
         case ETextureLayout::TEXTURE_LAYOUT_SHARED_PRESENT:

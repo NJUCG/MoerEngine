@@ -308,10 +308,10 @@ namespace Moer {
         return m_impl->GetTexture(name, size, format, usage, mipLevels, arrayLayers);
     }
 
-    RHIUAVRef RenderGraphResourceCache::GetUAV(RHITextureRef texture, EPixelFormat format, uint32_t mip_num, uint32_t array_min, uint32_t array_num) {
+    RHIUAVRef RenderGraphResourceCache::GetUAV(RHITextureRef texture, EPixelFormat format, uint32_t _mip_level, uint32_t array_min, uint32_t array_num) {
         if (format == PF_UNDEFINED)
-            return m_impl->GetUAV(texture, texture->GetFormat(), mip_num, array_min, array_num);
-        return m_impl->GetUAV(texture, format, mip_num, array_min, array_num);
+            return m_impl->GetUAV(texture, texture->GetFormat(), _mip_level, array_min, array_num);
+        return m_impl->GetUAV(texture, format, _mip_level, array_min, array_num);
     }
     RHISRVRef RenderGraphResourceCache::GetSRV(RHITextureRef texture, EPixelFormat format, uint32_t mip_min, uint32_t mip_num, uint32_t array_min, uint32_t array_num) {
         if (format == PF_UNDEFINED)

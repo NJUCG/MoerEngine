@@ -27,6 +27,7 @@
 #include "scene/Scene.h"
 #include "deferred/BasePass.h"
 #include "utils/HiZBuilder.h"
+#include "utils/CopyDispatchArgs.h"
 #include "Common.h"
 
 #include <algorithm>
@@ -142,6 +143,7 @@ namespace Moer {
         RHIBufferRef recheck_cull_info_buffer;
         RHIBufferRef recheck_instance_id_buffer;
         RHIBufferRef uniform_buffer;
+        RHIBufferRef view_buffer;
 
         Array<RHICBVRef> uniform_buffer_view;
 
@@ -246,7 +248,7 @@ namespace Moer {
         {
             RHIBufferCreateInfo buffer_create_info;
             uniform_buffer = g_rhi->RHICreateBuffer<float>(uniform_buffer_size * 3, EBufferUsageFlags::CONSTANT_BUFFER | EBufferUsageFlags::CPU_VISIBLE);
-
+            view_buffer    = g_rhi->RHICreateBuffer<float>(uniform_buffer_size, EBufferUsageFlags::CONSTANT_BUFFER | EBufferUsageFlags::TRANSFER_DST);
             for (int i = 0; i < 3; i++) {
                 uniform_buffer_view.push_back(
                     g_rhi->RHICreateCBV(uniform_buffer, uniform_buffer_size, uniform_buffer_size * i));
@@ -331,6 +333,7 @@ namespace Moer {
         {
             // render_graphs.resize(render_cmd_lists.size());
         }
+        CopyDispatchArgs::Init(render_context);
         base_pass->InitResources(render_context);
     }
     void DeferredRenderer::Impl::InitSceneResources() {
@@ -404,6 +407,7 @@ namespace Moer {
         render_thread_fence.BeginFence();
         render_thread_fence.Wait();
         MoerDelete(virtual_viewport);
+        CopyDispatchArgs::Dispose();
     }
 
     void DeferredRenderer::Impl::DrawFrame() {
@@ -492,6 +496,23 @@ namespace Moer {
 
         auto&& begin_frame = [this, copy_info = std::move(copy_info)]() {
             render_context.BeginFrame();
+
+            render_context.GetRenderGraph().AddCopyPass(
+                "Copy Uniform Buffer",
+                [this](RenderGraph::Builder& _builder) {
+                    auto& rg          = render_context.GetRenderGraph();
+                    auto  uni_handle  = rg.ImportIfNotExist("Deferred::UniformView", uniform_buffer);
+                    auto  view_handle = rg.ImportIfNotExist(view_buffer_name.data(), view_buffer);
+                    _builder.ReadBuffer(uni_handle, EBufferLayout::TRANSFER_READ);
+                    _builder.WriteBuffer(view_handle, EBufferLayout::TRANSFER_WRITE);
+                },
+                [this](RenderPassContext& _context) {
+                    auto              src_offset = render_context.GetFrameOffset() * uniform_buffer_size;
+                    RHICopyBufferInfo copy_info{
+                        {src_offset, 0, uniform_buffer_size}};
+
+                    render_context.GetCommandList().CopyBuffer(copy_info, uniform_buffer, view_buffer);
+                });
         };
 
         EnqueueRenderTask(std::move(begin_frame));

@@ -2,6 +2,7 @@
 #include "resources/ResourceTransition.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommon.h"
+#include "rhi/RHIResourceInitilizer.h"
 #include "shader/Shader.h"
 #include "shader/ShaderCommon.h"
 #include "shader/ShaderParameterMacros.h"
@@ -34,6 +35,11 @@ void                          RHITexture::SetLayout(const RHISubresourceRange& _
             .SetDstStage(dst_stage);
     }
     subresource_layouts[_subresource_range] = _layout;
+}
+void RHITexture::SetTrackInfo(uint64_t _subresource_hash, ETextureUsageFlags _usage, EPassType _pass_type) {
+
+    subresource_usages[_subresource_hash] = _usage;
+    prev_pass_type                        = _pass_type;
 }
 RHITexture::RHITexture(const RHITextureCreateInfo& _info) : RHIViewableResource(RRT_TEXTURE), texture_info(_info) {
     SetName(_info.name);

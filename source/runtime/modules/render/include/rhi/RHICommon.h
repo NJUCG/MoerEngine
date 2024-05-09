@@ -595,7 +595,6 @@ enum ETextureLayout : uint32_t {
     TEXTURE_LAYOUT_VIDEO_ENCODE                     = 1 << 15,
     TEXTURE_LAYOUT_VIDEO_DECODE                     = 1 << 16,
     TEXTURE_LAYOUT_READ                             = 1 << 17,
-    TEXTURE_LAYOUT_WRITE                            = 1 << 18,
     TEXTURE_LAYOUT_PRESENT_SRC                      = 1 << 19,
     TEXTURE_LAYOUT_SHARED_PRESENT                   = 1 << 20,
     TEXTURE_LAYOUT_FRAGMENT_DENSITY_MAP             = 1 << 21,
