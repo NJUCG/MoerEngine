@@ -6,6 +6,9 @@
 #include "shader/Shader.h"
 #include "shader/ShaderCommon.h"
 #include "shader/ShaderParameterMacros.h"
+#include <algorithm>
+#include <misc/Traits.h>
+#include <tuple>
 
 //need a mpmc linked list to delete resource
 LockFreeQueueBase<RHIResource> pending_deletings;
@@ -21,7 +24,7 @@ void RHIResource::Destroy() {
 }
 
 #pragma region buffer texture initiation
-void                          RHITexture::SetLayout(const RHISubresourceRange& _subresource_range, ETextureLayout _layout, RHITextureBarrierInfo* barrier_info) {
+void RHITexture::SetLayout(const RHISubresourceRange& _subresource_range, ETextureLayout _layout, RHITextureBarrierInfo* barrier_info) {
     auto old_layout = this->GetLayout(_subresource_range);
     if (barrier_info) {
         auto [src_access_flags, dst_access_flags, src_stage, dst_stage] = Moer::ResourceTransition::GetImageTransition(old_layout, _layout);
@@ -36,10 +39,14 @@ void                          RHITexture::SetLayout(const RHISubresourceRange& _
     }
     subresource_layouts[_subresource_range] = _layout;
 }
-void RHITexture::SetTrackInfo(uint64_t _subresource_hash, ETextureUsageFlags _usage, EPassType _pass_type) {
 
-    subresource_usages[_subresource_hash] = _usage;
-    prev_pass_type                        = _pass_type;
+void RHITexture::SetTrackInfo(const RHISubresourceRange& _subresource_range, ETextureUsageFlags _usage, EPassType _pass_type) {
+    using namespace Moer;
+    uint mip_cnt = std::min(texture_info.num_mips, _subresource_range.num_mips);
+    for (uint i = 0; i < mip_cnt; ++i) {
+        uint cur_mip        = _subresource_range.mip_index + i;
+        mip_usages[cur_mip] = std::make_tuple(_usage, _pass_type);
+    }
 }
 RHITexture::RHITexture(const RHITextureCreateInfo& _info) : RHIViewableResource(RRT_TEXTURE), texture_info(_info) {
     SetName(_info.name);

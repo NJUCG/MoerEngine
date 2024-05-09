@@ -74,13 +74,13 @@ void VulkanPipelineResourceCache::SetSRV(uint32_t _set, uint32_t _binding, RHISR
         ETextureLayout default_layout = tex_view->GetTexture()->GetInfo().preferred_layout;
         const auto&    view_info      = std::get<v_type_texture_srv>(_srv->GetInfo().info);
         // MARK... this is not correct, need to re-implement view design
-        RHISubresourceRange subresource_range{ETextureAspectFlags::COLOR, view_info.mip_min, 1, view_info.array_min, view_info.array_num, 0, 1};
-        auto                hash         = subresource_range.GetHash();
-        auto                prev_usage   = tex_view->GetTexture()->subresource_usages.find(hash);
-        auto                final_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        auto min_mip      = view_info.mip_min;
+        auto prev_usage   = tex_view->GetTexture()->mip_usages.find(Moer::uint(min_mip));
+        auto final_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-        if (prev_usage != tex_view->GetTexture()->subresource_usages.end()) {
-            final_layout = EnumHasAnyFlag(prev_usage->second, ETextureUsageFlags::UNORDERED_ACCESS) ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        if (prev_usage != tex_view->GetTexture()->mip_usages.end()) {
+            auto usage   = std::get<ETextureUsageFlags>(prev_usage->second);
+            final_layout = EnumHasAnyFlag(usage, ETextureUsageFlags::UNORDERED_ACCESS) ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         }
 
         m_descriptor_set_writers[_set].WriteSampledImage(_binding, VK_NULL_HANDLE, tex_view->GetView(), final_layout);
@@ -94,11 +94,11 @@ void VulkanPipelineResourceCache::SetSRV(uint32_t _set, uint32_t _binding, RHISR
 void VulkanPipelineResourceCache::SetUAV(uint32_t _set, uint32_t _binding, RHIUAV* _uav) {
     // MARK: buffer view is not implemented yet
     if (_uav->IsBuffer()) {
-            auto* buffer    = static_cast<VulkanRHIBuffer*>(_uav->GetBuffer());
-            auto& view_info = std::get<v_type_buffer_view>(_uav->GetInfo().info);
-            auto  range     = view_info.stride * view_info.num_elements;
-            m_descriptor_set_writers[_set].WriteStorageBuffer(_binding, buffer->GetHandle(), view_info.byte_offset, range);
-        
+        auto* buffer    = static_cast<VulkanRHIBuffer*>(_uav->GetBuffer());
+        auto& view_info = std::get<v_type_buffer_view>(_uav->GetInfo().info);
+        auto  range     = view_info.stride * view_info.num_elements;
+        m_descriptor_set_writers[_set].WriteStorageBuffer(_binding, buffer->GetHandle(), view_info.byte_offset, range);
+
     } else if (_uav->IsTexture()) {
         auto* tex_view = static_cast<VulkanRHITextureUAV*>(_uav);
         // MARK: layout is fixed

@@ -1,5 +1,6 @@
 #pragma once
 #include "DepdencyGraph.h"
+#include "misc/STL.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
@@ -20,7 +21,7 @@ namespace Moer {
         void ConnectForWrite(DepdencyGraph& graph, PassNode*, DepdencyGraph::ResourceDesc _desc);
         RenderGraphResource(const std::string& name, Type type, bool imported = false);
         Type GetType() const { return m_type; }
-        
+
         virtual uint32_t ResloveResourceUsage(const DepdencyGraph::ResourceDesc&, RHIBarrierDependencyInfo& barrier_info, EPassType pass_type) = 0;
         //Pass to create this resource
         PassNode* create_pass{nullptr};
@@ -28,8 +29,8 @@ namespace Moer {
         PassNode* destroy_pass{nullptr};
 
         //Create Real Resource Before Execute
-        virtual void Create(){};
-        virtual void Destroy(){};
+        virtual void Create() {};
+        virtual void Destroy() {};
         virtual ~RenderGraphResource() = default;
 
     protected:
@@ -91,6 +92,15 @@ namespace Moer {
         RenderGraphTexture* m_parent{nullptr};
         bool                m_is_sub_resource{false};
         RHISubresourceRange m_sub_res{};
+
+        struct MipRange {
+            uint32_t mip_min : 16 {0};
+            uint32_t mip_num : 16 {1};
+        };
+        struct ArrayRange {
+            uint32_t array_min : 16 {0};
+            uint32_t array_num : 16 {1};
+        };
 
         // struct ViewInfoHashFunc
         // {

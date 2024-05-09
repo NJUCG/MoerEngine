@@ -105,8 +105,8 @@ namespace Moer {
                 return PS_TOP_OF_PIPE;
         }
     }
-    std::tuple<ERHIAccessFlags, ERHIAccessFlags, ERHIPipelineStageFlags, ERHIPipelineStageFlags>
-    ResourceTransition::GetTextureTransition(ETextureUsageFlags _src_usage, ETextureUsageFlags _dst_usage, EPassType _src_pass, EPassType _dst_pass) {
+    std::tuple<ERHIAccessFlags, ERHIPipelineStageFlags>
+    ResourceTransition::GetTextureTransition(ETextureUsageFlags _src_usage, EPassType _src_pass) {
         ERHIAccessFlags        src_access_flags, dst_access_flags;
         ERHIPipelineStageFlags src_stage, dst_stage;
         if (EnumHasAnyFlag(_src_usage, ETextureUsageFlags::UNORDERED_ACCESS) && EnumHasAnyFlag(_src_usage, ETextureUsageFlags::SAMPLED)) {
@@ -149,47 +149,8 @@ namespace Moer {
                 default:
                     assert(false && "Invalid texture usage");
             }
-        if (EnumHasAnyFlag(_dst_usage, ETextureUsageFlags::UNORDERED_ACCESS) && EnumHasAnyFlag(_dst_usage, ETextureUsageFlags::SAMPLED)) {
-            dst_access_flags = ERHIAccessFlags::SHADER_READ;
-            dst_stage        = GetPipelineStageFromPassType(_src_pass);
-        } else
-            switch (_dst_usage) {
-                case ETextureUsageFlags::UNDEFINED:
-                    dst_access_flags = ERHIAccessFlags::UNDEFINED;
-                    dst_stage        = PS_BOTTOM_OF_PIPE;
-                    break;
-                case ETextureUsageFlags::TRANSFER_SRC:
-                    dst_access_flags = ERHIAccessFlags::TRANSFER_READ;
-                    dst_stage        = PS_TRANSFER;
-                    break;
-                case ETextureUsageFlags::TRANSFER_DST:
-                    dst_access_flags = ERHIAccessFlags::TRANSFER_WRITE;
-                    dst_stage        = PS_TRANSFER;
-                    break;
-                case ETextureUsageFlags::SAMPLED:
-                    dst_access_flags = ERHIAccessFlags::SHADER_READ;
-                    dst_stage        = GetPipelineStageFromPassType(_dst_pass);
-                    break;
-                case ETextureUsageFlags::UNORDERED_ACCESS:
-                    dst_access_flags = ERHIAccessFlags::SHADER_WRITE;
-                    dst_stage        = GetPipelineStageFromPassType(_dst_pass);
-                    break;
-                case ETextureUsageFlags::COLOR_ATTACHMENT:
-                    dst_access_flags = ERHIAccessFlags::COLOR_ATTACHMENT_WRITE;
-                    dst_stage        = PS_COLOR_ATTACHMENT_OUTPUT;
-                    break;
-                case ETextureUsageFlags::RESOLVE_ATTACHMENT:
-                    dst_access_flags = ERHIAccessFlags::COLOR_ATTACHMENT_WRITE;
-                    dst_stage        = PS_COLOR_ATTACHMENT_OUTPUT;
-                    break;
-                case ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT:
-                    dst_access_flags = ERHIAccessFlags::DEPTH_STENCIL_WRITE;
-                    dst_stage        = PS_EARLY_FRAGMENT_TESTS;
-                    break;
-                default:
-                    assert(false && "Invalid texture usage");
-            }
-        return std::make_tuple(src_access_flags, dst_access_flags, src_stage, dst_stage);
+
+        return std::make_tuple(src_access_flags, src_stage);
     }
 
     std::tuple<ERHIAccessFlags, ERHIPipelineStageFlags>

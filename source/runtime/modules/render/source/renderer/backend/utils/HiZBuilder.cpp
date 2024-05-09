@@ -188,11 +188,11 @@ namespace Moer {
                 "Build HiZ", [&, depth_buffer(_depth_buffer)](RenderGraph::Builder& _builder) {
                 auto& black_board = rg.GetBlackBoard();
                 auto depth       = black_board.GetHandle("depth");
-                auto           hiz         = black_board.GetHandle("HiZ Buffer");
 
-                               _builder.ReadTexture(depth, ETextureUsageFlags::SAMPLED);
-                _builder.WriteTexture(hiz, ETextureUsageFlags::UNORDERED_ACCESS); 
-                _builder.ReadTexture(hiz, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED, 1, mip_cnt - 1); }, [this, mip_cnt, hiz_texture(_hiz_buffer.texture), uav(_hiz_buffer.uavs[0]), depth_buffer(_depth_buffer), &_context](RenderPassContext& _pass_context) {
+                auto hiz = black_board.GetHandle("HiZ Buffer");
+
+                _builder.ReadTexture(depth, ETextureUsageFlags::SAMPLED);
+                _builder.WriteTexture(hiz, ETextureUsageFlags::UNORDERED_ACCESS); }, [this, mip_cnt, hiz_texture(_hiz_buffer.texture), uav(_hiz_buffer.uavs[0]), depth_buffer(_depth_buffer), &_context](RenderPassContext& _pass_context) {
                     BuildHiZShader::Parameters params;
                     Vector2i                   mip0_size = Vector2i(hiz_texture->GetExtent3D());
 
@@ -233,12 +233,7 @@ namespace Moer {
                                       auto&                      cmd_list = _context.GetCommandList();
                                       batched_params.SetParameters(builder_shader, params);
                                       g_rhi->RHISetBatchedShaderParameters(pso, batched_params);
-                                      cmd_list.Dispatch(Vector3i((config.size.t.x + 7) >> 3u, (config.size.t.y + 7) >> 3u, 1)); 
-                                      
-                                      if(i == mip_cnt - 1){
-                                            RHISubresourceRange range(ETextureAspectFlags::COLOR, 0, MAX_TEXTURE_MIP_COUNT, 0, 1, 0, 1);
-                                            srv->GetTexture()->SetTrackInfo(range.GetHash(), ETextureUsageFlags::UNORDERED_ACCESS, EPassType::Compute);
-                                      } });
+                                      cmd_list.Dispatch(Vector3i((config.size.t.x + 7) >> 3u, (config.size.t.y + 7) >> 3u, 1)); });
             }
         }
 

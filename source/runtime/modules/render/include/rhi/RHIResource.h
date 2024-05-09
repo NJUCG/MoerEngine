@@ -11,6 +11,7 @@
 #include "misc/CountableRef.h"
 
 #include "misc/STL.h"
+#include "misc/Traits.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResourceInitilizer.h"
 
@@ -23,6 +24,7 @@
 #include <string>
 #include <optional>
 #include <bitset>
+#include <tuple>
 #include <variant>
 template<typename TStructuredParam>
 concept concept_is_shader_struct = requires(TStructuredParam t) {
@@ -905,7 +907,8 @@ public:
         return GetInfo().uav_format;
     }
     void SetLayout(const RHISubresourceRange& _subresource_range, ETextureLayout _layout, RHITextureBarrierInfo* barrier_info = nullptr);
-    void SetTrackInfo(uint64_t _subresource_hash, ETextureUsageFlags _usage, EPassType _pass_type);
+
+    void SetTrackInfo(const RHISubresourceRange& _range, ETextureUsageFlags _usage, EPassType _pass_type);
 
     ETextureLayout GetLayout(const RHISubresourceRange& _subresource_range) const {
         auto it = subresource_layouts.find(_subresource_range);
@@ -923,12 +926,12 @@ private:
     friend class RHITextureReference;
     friend Moer::RenderGraphTexture;
     friend class VulkanPipelineResourceCache;
-    ETextureUsageFlags GetTrackedUsage(uint64_t _subresource_hash) const {
-        auto it = subresource_usages.find(_subresource_hash);
-        if (it != subresource_usages.end()) {
+    auto GetTrackedUsage(Moer::uint _mip_index) const {
+        auto it = mip_usages.find(_mip_index);
+        if (it != mip_usages.end()) {
             return it->second;
         }
-        return ETextureUsageFlags::UNDEFINED;
+        return std::make_tuple(ETextureUsageFlags::UNDEFINED, EPassType::Compute);
     }
     explicit RHITexture(ERHIResourceType _type) : RHIViewableResource(_type) {}
     RHITextureInfo texture_info;
@@ -944,9 +947,7 @@ private:
         }
     };
     Moer::UnorderedMap<RHISubresourceRange, ETextureLayout, RHISubresourceRangeHash> subresource_layouts;
-    Moer::UnorderedMap<uint64_t, ETextureUsageFlags>                                 subresource_usages;
-
-    EPassType prev_pass_type = EPassType::Compute;
+    Moer::UnorderedMap<Moer::uint, std::tuple<ETextureUsageFlags, EPassType>>        mip_usages;
 };
 
 #pragma region acceleration structures
@@ -3275,7 +3276,7 @@ public:
     virtual void ReleasePreloadedShader(int32_t ShaderIndex) {}
 
     virtual CountableRef<RHIShader> CreateShader(int32_t ShaderIndex) { return nullptr; }
-    virtual void                    Teardown(){};
+    virtual void                    Teardown() {};
 
 protected:
     EShaderPlatform platform;
