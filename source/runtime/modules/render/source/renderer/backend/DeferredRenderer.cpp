@@ -136,12 +136,12 @@ namespace Moer {
 
         HiZBuffer hiz_buffer;
 
-        RHIBufferRef draw_indirect_buffer;
-        RHIBufferRef draw_count_buffer;
-        RHIBufferRef zero_buffer;
-        RHIBufferRef instance_meshlet_cull_info_buffer;
-        RHIBufferRef recheck_cull_info_buffer;
-        RHIBufferRef recheck_instance_id_buffer;
+        // RHIBufferRef draw_indirect_buffer;
+        // RHIBufferRef draw_count_buffer;
+        // RHIBufferRef zero_buffer;
+        // RHIBufferRef instance_meshlet_cull_info_buffer;
+        // RHIBufferRef recheck_cull_info_buffer;
+        // RHIBufferRef recheck_instance_id_buffer;
         RHIBufferRef uniform_buffer;
         RHIBufferRef view_buffer;
 
@@ -234,49 +234,49 @@ namespace Moer {
         base_pass = std::move(UniquePtr<BasePass>(MoerNew(BasePass)));
 
         auto& shader_resource_manager = ShaderResourceManager::GetInstance();
-        cull_instance_recheck_shader  = shader_resource_manager.GetShader<CullInstanceRecheckShader>();
-        cull_meshlet_recheck_shader   = shader_resource_manager.GetShader<CullMeshletRecheckShader>();
+        // cull_instance_recheck_shader  = shader_resource_manager.GetShader<CullInstanceRecheckShader>();
+        // cull_meshlet_recheck_shader   = shader_resource_manager.GetShader<CullMeshletRecheckShader>();
 
-        cull_instance_recheck_pso = g_rhi->RHICreateComputePipelineState(cull_instance_recheck_shader);
-        cull_meshlet_recheck_pso  = g_rhi->RHICreateComputePipelineState(cull_meshlet_recheck_shader);
+        // cull_instance_recheck_pso = g_rhi->RHICreateComputePipelineState(cull_instance_recheck_shader);
+        // cull_meshlet_recheck_pso  = g_rhi->RHICreateComputePipelineState(cull_meshlet_recheck_shader);
 
-        cull_instance_prepass_shader = shader_resource_manager.GetShader<CullInstancePrePassShader>();
-        cull_meshlet_prepass_shader  = shader_resource_manager.GetShader<CullMeshletPrepassShader>();
-        cull_instance_prepass_pso    = g_rhi->RHICreateComputePipelineState(cull_instance_prepass_shader);
-        cull_meshlet_prepass_pso     = g_rhi->RHICreateComputePipelineState(cull_meshlet_prepass_shader);
+        // cull_instance_prepass_shader = shader_resource_manager.GetShader<CullInstancePrePassShader>();
+        // cull_meshlet_prepass_shader  = shader_resource_manager.GetShader<CullMeshletPrepassShader>();
+        // cull_instance_prepass_pso    = g_rhi->RHICreateComputePipelineState(cull_instance_prepass_shader);
+        // cull_meshlet_prepass_pso     = g_rhi->RHICreateComputePipelineState(cull_meshlet_prepass_shader);
         //why not implement a counter buffer?
         {
             RHIBufferCreateInfo buffer_create_info;
             uniform_buffer = g_rhi->RHICreateBuffer<float>(uniform_buffer_size * 3, EBufferUsageFlags::CONSTANT_BUFFER | EBufferUsageFlags::CPU_VISIBLE);
             view_buffer    = g_rhi->RHICreateBuffer<float>(uniform_buffer_size, EBufferUsageFlags::CONSTANT_BUFFER | EBufferUsageFlags::TRANSFER_DST);
-            for (int i = 0; i < 3; i++) {
-                uniform_buffer_view.push_back(
-                    g_rhi->RHICreateCBV(uniform_buffer, uniform_buffer_size, uniform_buffer_size * i));
-            }
+            // for (int i = 0; i < 3; i++) {
+            //     uniform_buffer_view.push_back(
+            //         g_rhi->RHICreateCBV(uniform_buffer, uniform_buffer_size, uniform_buffer_size * i));
+            // }
 
-            draw_indirect_buffer = g_rhi->RHICreateBuffer<DrawInstanceCmd>(
-                1024 * 1024,
-                EBufferUsageFlags::INDIRECT_BUFFER | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::UNORDERED_ACCESS);
+            // draw_indirect_buffer = g_rhi->RHICreateBuffer<DrawInstanceCmd>(
+            //     1024 * 1024,
+            //     EBufferUsageFlags::INDIRECT_BUFFER | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::UNORDERED_ACCESS);
 
-            draw_count_buffer = g_rhi->RHICreateBuffer<uint32_t>(64 * sizeof(int),
-                                                                 EBufferUsageFlags::TRANSFER_DST |
-                                                                     EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::INDIRECT_BUFFER);
+            // draw_count_buffer = g_rhi->RHICreateBuffer<uint32_t>(64 * sizeof(int),
+            //                                                      EBufferUsageFlags::TRANSFER_DST |
+            //                                                          EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::INDIRECT_BUFFER);
 
-            zero_buffer = g_rhi->RHICreateBuffer<uint32_t>(64 * sizeof(int),
-                                                           EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::TRANSFER_SRC);
+            // zero_buffer = g_rhi->RHICreateBuffer<uint32_t>(64 * sizeof(int),
+            //                                                EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::TRANSFER_SRC);
 
-            void* mapped = g_rhi->RHIMapBuffer(zero_buffer, 0, sizeof(uint32_t));
+            // void* mapped = g_rhi->RHIMapBuffer(zero_buffer, 0, sizeof(uint32_t));
 
-            std::array<uint32_t, 32> zero_data{};
-            std::copy(zero_data.begin(), zero_data.end(), static_cast<uint32_t*>(mapped));
+            // std::array<uint32_t, 32> zero_data{};
+            // std::copy(zero_data.begin(), zero_data.end(), static_cast<uint32_t*>(mapped));
 
-            g_rhi->RHIUnmapBuffer(zero_buffer);
+            // g_rhi->RHIUnmapBuffer(zero_buffer);
 
-            draw_indirect_view =
-                g_rhi->RHICreateBufferUAV(draw_indirect_buffer);
+            // draw_indirect_view =
+            //     g_rhi->RHICreateBufferUAV(draw_indirect_buffer);
 
-            draw_count_view =
-                g_rhi->RHICreateBufferUAV(draw_count_buffer);
+            // draw_count_view =
+            //     g_rhi->RHICreateBufferUAV(draw_count_buffer);
         }
         {
             CreateDepthBuffer();
@@ -348,25 +348,25 @@ namespace Moer {
 
         instance_meshlet_info_view = g_rhi->RHICreateBufferSRV(g_scene->GetBuffer("instance_meshlet_info_buffer"));
 
-        instance_meshlet_cull_info_buffer = g_rhi->RHICreateBuffer<uint64_t>(
-            1024 * 512 * sizeof(uint64_t),
-            EBufferUsageFlags::UNORDERED_ACCESS);
+        // instance_meshlet_cull_info_buffer = g_rhi->RHICreateBuffer<uint64_t>(
+        //     1024 * 512 * sizeof(uint64_t),
+        //     EBufferUsageFlags::UNORDERED_ACCESS);
 
-        recheck_cull_info_buffer = g_rhi->RHICreateBuffer<uint64_t>(
-            1024 * 512 * sizeof(uint64_t),
-            EBufferUsageFlags::UNORDERED_ACCESS);
-        recheck_instance_id_buffer = g_rhi->RHICreateBuffer<uint32_t>(
-            64 * 512 * sizeof(uint32_t),
-            EBufferUsageFlags::UNORDERED_ACCESS);
-        instance_meshlet_cull_info_view = g_rhi->RHICreateBufferSRV(instance_meshlet_cull_info_buffer);
+        // recheck_cull_info_buffer = g_rhi->RHICreateBuffer<uint64_t>(
+        //     1024 * 512 * sizeof(uint64_t),
+        //     EBufferUsageFlags::UNORDERED_ACCESS);
+        // recheck_instance_id_buffer = g_rhi->RHICreateBuffer<uint32_t>(
+        //     64 * 512 * sizeof(uint32_t),
+        //     EBufferUsageFlags::UNORDERED_ACCESS);
+        // instance_meshlet_cull_info_view = g_rhi->RHICreateBufferSRV(instance_meshlet_cull_info_buffer);
 
-        instance_meshlet_cull_info_uav = g_rhi->RHICreateBufferUAV(instance_meshlet_cull_info_buffer);
+        // instance_meshlet_cull_info_uav = g_rhi->RHICreateBufferUAV(instance_meshlet_cull_info_buffer);
 
-        recheck_cull_info_view = g_rhi->RHICreateBufferSRV(recheck_cull_info_buffer);
-        recheck_cull_info_uav  = g_rhi->RHICreateBufferUAV(recheck_cull_info_buffer);
+        // recheck_cull_info_view = g_rhi->RHICreateBufferSRV(recheck_cull_info_buffer);
+        // recheck_cull_info_uav  = g_rhi->RHICreateBufferUAV(recheck_cull_info_buffer);
 
-        recheck_instance_id_srv = g_rhi->RHICreateBufferSRV(recheck_instance_id_buffer);
-        recheck_instance_id_uav = g_rhi->RHICreateBufferUAV(recheck_instance_id_buffer);
+        // recheck_instance_id_srv = g_rhi->RHICreateBufferSRV(recheck_instance_id_buffer);
+        // recheck_instance_id_uav = g_rhi->RHICreateBufferUAV(recheck_instance_id_buffer);
 
         //HarCode lights
         auto light_pos   = Moer::Vector3f(0.0f, 128.0f, -225.0f);
@@ -822,77 +822,77 @@ namespace Moer {
     //     // EnqueueRenderTask(std::move(recheck_pass_cull_task));
     // }
 
-    void DeferredRenderer::Impl::DispatchDrawScene(const CameraData& _camera_data, bool _first_pass) {
-        auto dispatch_gbuffer_pass = [&, b_first_pass(_first_pass)]() {
-            auto& cmd_list = render_context.GetCommandList();
+    // void DeferredRenderer::Impl::DispatchDrawScene(const CameraData& _camera_data, bool _first_pass) {
+    //     auto dispatch_gbuffer_pass = [&, b_first_pass(_first_pass)]() {
+    //         auto& cmd_list = render_context.GetCommandList();
 
-            Extent3D     extent = virtual_viewport->GetBackBufferExtent();
-            RenderGraph& rg     = render_context.GetRenderGraph();
-            rg.AddGraphicPass(
-                "GBuffer Pass",
-                [&](RenderGraph::Builder& _builder) {
-                    auto normal = rg.CreateTexture("normal", {.extent2D = Extent2D(extent.x, extent.y), .format = EPixelFormat::PF_R8G8B8A8_UNORM, .usage = ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED});
-                    auto mat    = rg.CreateTexture("mat", {.extent2D = Extent2D(extent.x, extent.y), .format = EPixelFormat::PF_R32_UINT, .usage = ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED});
-                    auto uv     = rg.CreateTexture("uv", {.extent2D = Extent2D(extent.x, extent.y), .format = EPixelFormat::PF_R16G16_SFLOAT, .usage = ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED});
-                    auto depth  = rg.ImportTexture("depth", virtual_viewport->GetDepthSRV()->GetTexture());
-                    if (!b_first_pass) {
-                        _builder.ReadTextures({normal, uv, mat}, RenderGraphTexture::Usage::COLOR_ATTACHMENT);
-                        _builder.ReadTexture(depth, RenderGraphTexture::Usage::DEPTH_STENCIL_ATTACHMENT);
-                    }
-                    _builder.WriteTextures({normal, uv, mat}, RenderGraphTexture::Usage::COLOR_ATTACHMENT);
-                    _builder.WriteTexture(depth, RenderGraphTexture::Usage::DEPTH_STENCIL_ATTACHMENT);
-                    _builder.DeclareRenderPass({.color_attachments = {
-                                                    mat,
-                                                    normal,
-                                                    uv},
-                                                .depth_stencil_attachment = depth});
-                },
-                [this, b_first_pass](RenderPassContext& _context) {
-                    auto* cmd_list = _context.cmd_list;
-                    cmd_list->SetPipelineState(gbuffer_pipeline_state);
-                    // cmd_list->BindVertexBuffers()
-                    auto* scene = g_scene;
-                    cmd_list->BindIndexBuffer(scene->GetBuffer("index_buffer"), 0, IET_UINT32);
-                    uint32_t           offset[]           = {0, 0};
-                    const RHIBufferRef prim_vertex_buffer = scene->GetBuffer("vertex_buffer");
-                    const RHIBufferRef instance_id_buffer = scene->GetBuffer("instance_id_buffer");
-                    RHIBufferRef       vbuffers[]         = {prim_vertex_buffer, instance_id_buffer};
-                    cmd_list->BindVertexBuffers(0, 2, vbuffers, offset);
+    //         Extent3D     extent = virtual_viewport->GetBackBufferExtent();
+    //         RenderGraph& rg     = render_context.GetRenderGraph();
+    //         rg.AddGraphicPass(
+    //             "GBuffer Pass",
+    //             [&](RenderGraph::Builder& _builder) {
+    //                 auto normal = rg.CreateTexture("normal", {.extent2D = Extent2D(extent.x, extent.y), .format = EPixelFormat::PF_R8G8B8A8_UNORM, .usage = ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED});
+    //                 auto mat    = rg.CreateTexture("mat", {.extent2D = Extent2D(extent.x, extent.y), .format = EPixelFormat::PF_R32_UINT, .usage = ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED});
+    //                 auto uv     = rg.CreateTexture("uv", {.extent2D = Extent2D(extent.x, extent.y), .format = EPixelFormat::PF_R16G16_SFLOAT, .usage = ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED});
+    //                 auto depth  = rg.ImportTexture("depth", virtual_viewport->GetDepthSRV()->GetTexture());
+    //                 if (!b_first_pass) {
+    //                     _builder.ReadTextures({normal, uv, mat}, RenderGraphTexture::Usage::COLOR_ATTACHMENT);
+    //                     _builder.ReadTexture(depth, RenderGraphTexture::Usage::DEPTH_STENCIL_ATTACHMENT);
+    //                 }
+    //                 _builder.WriteTextures({normal, uv, mat}, RenderGraphTexture::Usage::COLOR_ATTACHMENT);
+    //                 _builder.WriteTexture(depth, RenderGraphTexture::Usage::DEPTH_STENCIL_ATTACHMENT);
+    //                 _builder.DeclareRenderPass({.color_attachments = {
+    //                                                 mat,
+    //                                                 normal,
+    //                                                 uv},
+    //                                             .depth_stencil_attachment = depth});
+    //             },
+    //             [this, b_first_pass](RenderPassContext& _context) {
+    //                 auto* cmd_list = _context.cmd_list;
+    //                 cmd_list->SetPipelineState(gbuffer_pipeline_state);
+    //                 // cmd_list->BindVertexBuffers()
+    //                 auto* scene = g_scene;
+    //                 cmd_list->BindIndexBuffer(scene->GetBuffer("index_buffer"), 0, IET_UINT32);
+    //                 uint32_t           offset[]           = {0, 0};
+    //                 const RHIBufferRef prim_vertex_buffer = scene->GetBuffer("vertex_buffer");
+    //                 const RHIBufferRef instance_id_buffer = scene->GetBuffer("instance_id_buffer");
+    //                 RHIBufferRef       vbuffers[]         = {prim_vertex_buffer, instance_id_buffer};
+    //                 cmd_list->BindVertexBuffers(0, 2, vbuffers, offset);
 
-                    auto camera_entity = g_scene->GetMainCamera();
-                    auto camera        = CameraManager::Get().Get(camera_entity);
+    //                 auto camera_entity = g_scene->GetMainCamera();
+    //                 auto camera        = CameraManager::Get().Get(camera_entity);
 
-                    CameraData camera_data;
-                    camera_data.view           = camera->GetViewMatrix();
-                    camera_data.view_proj      = camera->GetProjectionMatrix() * camera->GetViewMatrix();
-                    camera_data.camera_pos     = Vector4f(camera->GetPosition(), 1.f);
-                    auto vp                    = camera->GetProjectionMatrix() * camera->GetViewMatrix();
-                    camera_data.prev_view_proj = vp;
+    //                 CameraData camera_data;
+    //                 camera_data.view           = camera->GetViewMatrix();
+    //                 camera_data.view_proj      = camera->GetProjectionMatrix() * camera->GetViewMatrix();
+    //                 camera_data.camera_pos     = Vector4f(camera->GetPosition(), 1.f);
+    //                 auto vp                    = camera->GetProjectionMatrix() * camera->GetViewMatrix();
+    //                 camera_data.prev_view_proj = vp;
 
-                    TestGBufferShaderVert::Parameters vert_params;
-                    vert_params.camera_data   = camera_data;
-                    vert_params.instance_data = instance_buffer_view;
+    //                 TestGBufferShaderVert::Parameters vert_params;
+    //                 vert_params.camera_data   = camera_data;
+    //                 vert_params.instance_data = instance_buffer_view;
 
-                    TestGBufferShaderFrag::Parameters frag_params;
-                    frag_params.instance_data = instance_buffer_view;
+    //                 TestGBufferShaderFrag::Parameters frag_params;
+    //                 frag_params.instance_data = instance_buffer_view;
 
-                    RHIBatchedShaderParameters batched_params;
-                    batched_params.SetParameters(ShaderResourceManager::GetInstance().GetShader<TestGBufferShaderVert>(), vert_params);
-                    batched_params.SetParameters(ShaderResourceManager::GetInstance().GetShader<TestGBufferShaderFrag>(), frag_params);
+    //                 RHIBatchedShaderParameters batched_params;
+    //                 batched_params.SetParameters(ShaderResourceManager::GetInstance().GetShader<TestGBufferShaderVert>(), vert_params);
+    //                 batched_params.SetParameters(ShaderResourceManager::GetInstance().GetShader<TestGBufferShaderFrag>(), frag_params);
 
-                    g_rhi->RHISetBatchedShaderParameters(gbuffer_pipeline_state, batched_params);
+    //                 g_rhi->RHISetBatchedShaderParameters(gbuffer_pipeline_state, batched_params);
 
-                    auto instance_idx = 0;
-                    // scene->ForEach([cmd_list, &instance_idx](Entity entity) {
-                    //     auto mesh_info = RenderableManager::Get().GetMeshInfo(entity);
-                    //     cmd_list->DrawIndexedInstanced(mesh_info.index_count, 1, mesh_info.index_offset, mesh_info.vertex_offset, instance_idx++);
-                    // });
-                    auto draw_cnt_offset = b_first_pass ? draw_count_offset : recheck_draw_count_offset;
-                    cmd_list->DrawIndexedIndirect(draw_indirect_buffer, 0, draw_count_buffer, draw_cnt_offset, draw_indirect_buffer->GetNumElement(), sizeof(DrawInstanceCmd));
-                });
-        };
-        EnqueueRenderTask(std::move(dispatch_gbuffer_pass));
-    }
+    //                 auto instance_idx = 0;
+    //                 // scene->ForEach([cmd_list, &instance_idx](Entity entity) {
+    //                 //     auto mesh_info = RenderableManager::Get().GetMeshInfo(entity);
+    //                 //     cmd_list->DrawIndexedInstanced(mesh_info.index_count, 1, mesh_info.index_offset, mesh_info.vertex_offset, instance_idx++);
+    //                 // });
+    //                 auto draw_cnt_offset = b_first_pass ? draw_count_offset : recheck_draw_count_offset;
+    //                 cmd_list->DrawIndexedIndirect(draw_indirect_buffer, 0, draw_count_buffer, draw_cnt_offset, draw_indirect_buffer->GetNumElement(), sizeof(DrawInstanceCmd));
+    //             });
+    //     };
+    //     EnqueueRenderTask(std::move(dispatch_gbuffer_pass));
+    // }
     void DeferredRenderer::Impl::LightingPass() {
         auto dispatch_rdg = [&]() {
             RenderGraph& rg = render_context.GetRenderGraph();
@@ -915,10 +915,10 @@ namespace Moer {
             //Draw a full screen quad pass for each material type 
             Moer::UnorderedSet<EMaterialType> material_types = {}; 
             Moer::UnorderedMap<EMaterialType,Moer::Array<MaterialInstanceRef>> material_instances;
-            g_scene->ForEach([&](Entity entity) {
-                if (RenderableManager::Get().Contains(entity)) {
-                    
-                     auto mi = RenderableManager::Get().GetMaterialInstance(entity);
+            g_scene->ForEach([&](Entity _entity) {
+                if (RenderableManager::Get().Contains(_entity)) {
+
+                    auto mi = RenderableManager::Get().GetMaterialInstance(_entity);
                     material_types.insert(mi->GetMaterial()->GetType());
                     material_instances[mi->GetMaterial()->GetType()].push_back(mi);
                 }

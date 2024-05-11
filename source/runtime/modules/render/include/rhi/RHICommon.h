@@ -619,6 +619,7 @@ enum EBufferLayout : uint32_t {
 };
 
 enum class EPassType {
+    None,
     Graphics,
     Compute,
     Raytracing,

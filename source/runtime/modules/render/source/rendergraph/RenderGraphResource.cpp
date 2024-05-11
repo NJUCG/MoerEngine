@@ -25,17 +25,18 @@ namespace Moer {
         //  m_buffer = RenderGraphResourceCache::Get().GetBuffer(name, m_desc);
     }
 
-    uint32_t RenderGraphBuffer::ResloveResourceUsage(const DepdencyGraph::ResourceDesc& _desc, RHIBarrierDependencyInfo& barrier_info, EPassType pass_type) {
+    uint32_t RenderGraphBuffer::ResloveResourceUsage(const DepdencyGraph::ResourceDesc& _desc, RHIBarrierDependencyInfo& _barrier_info, EPassType _pass_type) {
         const auto& desc = std::get<DepdencyGraph::BufferSubDesc>(_desc);
         if (desc.layout == NO_CHAGNE)
             return desc.layout;
-        barrier_info.buffer_barriers.push_back(RHIBufferBarrierInfo{});
-        auto& buffer_barrier_info          = barrier_info.buffer_barriers.back();
-        auto [src_access_flags, src_stage] = ResourceTransition::GetBufferTransitation(m_buffer->GetLayout(), pass_type);
-        auto [dst_access_flags, dst_stage] = ResourceTransition::GetBufferTransitation(static_cast<RenderGraphBuffer::Usage>(desc.layout), pass_type);
+        _barrier_info.buffer_barriers.push_back(RHIBufferBarrierInfo{});
+        auto& buffer_barrier_info          = _barrier_info.buffer_barriers.back();
+        auto [src_layout, src_pass_type]   = m_buffer->GetTrackedInfo();
+        auto [src_access_flags, src_stage] = ResourceTransition::GetBufferTransitation(src_layout, src_pass_type);
+        auto [dst_access_flags, dst_stage] = ResourceTransition::GetBufferTransitation(desc.layout, _pass_type);
         buffer_barrier_info.SetBuffer(m_buffer).SetSrcAccessFlags(src_access_flags).SetDstAccessFlags(dst_access_flags).SetSrcStage(src_stage).SetDstStage(dst_stage);
-        m_buffer->SetLayout(static_cast<RenderGraphBuffer::Usage>(desc.layout));
-        m_usage = static_cast<RenderGraphBuffer::Usage>(desc.layout);
+        m_buffer->SetTrackedInfo(desc.layout, _pass_type);
+        m_usage = desc.layout;
         return desc.layout;
     }
     RHIBufferRef RenderGraphBuffer::GetBuffer() const {
@@ -169,16 +170,19 @@ namespace Moer {
             m_texture->SetTrackInfo(subresource_range, desc.usage, _pass_type);
         };
         uint num_mips      = std::min(m_texture->GetNumMips() - desc.mip_level, desc.num_mips);
+        uint cur_mip       = 0;
         bool different_src = false;
         for (uint mip_idx = 0; mip_idx < num_mips; ++mip_idx) {
-            uint cur_mip               = desc.mip_level + mip_idx;
+            cur_mip                    = desc.mip_level + mip_idx;
             auto [src_usage, src_pass] = m_texture->GetTrackedUsage(cur_mip);
             auto src_layout            = GetTextureLayout(src_usage);
-            if (src_layout == dst_layout && src_usage == desc.usage && src_pass == _pass_type)
+            bool b_produce_barrier     = src_layout != dst_layout || src_usage != desc.usage || src_pass != _pass_type;
+            if (!b_produce_barrier && current_mip_size == 0) {
                 continue;
-            current_mip_size++;
+            }
+
             bool b_first_mip = cur_mip == desc.mip_level;
-            if (b_first_mip || different_src) {
+            if (b_first_mip) {
                 cur_src_usage  = src_usage;
                 cur_src_layout = src_layout;
                 cur_pass_type  = src_pass;
@@ -186,12 +190,19 @@ namespace Moer {
             different_src = src_layout != cur_src_layout || src_usage != cur_src_usage || src_pass != cur_pass_type;
 
             if (different_src) {
+
                 setup_new_barrier(cur_src_usage, cur_src_layout, src_pass, cur_mip - current_mip_size, current_mip_size);
+                cur_src_usage    = src_usage;
+                cur_src_layout   = src_layout;
+                cur_pass_type    = src_pass;
                 current_mip_size = 0;
+            }
+            if (b_produce_barrier) {
+                ++current_mip_size;
             }
         }
         if (current_mip_size > 0) {
-            setup_new_barrier(cur_src_usage, cur_src_layout, cur_pass_type, desc.mip_level + num_mips - current_mip_size, current_mip_size);
+            setup_new_barrier(cur_src_usage, cur_src_layout, cur_pass_type, cur_mip + 1 - current_mip_size, current_mip_size);
         }
 
         return dst_layout;

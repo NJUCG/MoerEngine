@@ -36,8 +36,12 @@ namespace Moer {
 
         srv = g_rhi->RHICreateTextureSRV(texture, PF_R16_SFLOAT, 0, texture->GetNumMips());
         uavs.resize(texture->GetNumMips());
+        srvs.resize(texture->GetNumMips() - 1);
         for (uint32_t i = 0; i < texture->GetNumMips(); ++i) {
             uavs[i] = g_rhi->RHICreateTextureUAV(texture, PF_R16_SFLOAT, i);
+            if (i < texture->GetNumMips() - 1) {
+                srvs[i] = g_rhi->RHICreateTextureSRV(texture, PF_R16_SFLOAT, i, 1);
+            }
         }
         // auto*                    cmd_list = g_rhi->RHICreateCopyCommandList(g_rhi->RHIGetCurrentCommandAllocator());
         // RHIBarrierDependencyInfo barrier_info;
@@ -218,7 +222,7 @@ namespace Moer {
                     auto  hiz         = black_board.GetHandle("HiZ Buffer");
 
                     _builder.WriteTexture(hiz, ETextureUsageFlags::UNORDERED_ACCESS, i);
-                    _builder.ReadTexture(hiz, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED, i-1, 1); }, [this, &_context, mip_cnt, hiz_texture(_hiz_buffer.texture), uav(_hiz_buffer.uavs[i]), srv(_hiz_buffer.srv), i](RenderPassContext& _pass_context) mutable {
+                    _builder.ReadTexture(hiz, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED, i-1, 1); }, [this, &_context, mip_cnt, hiz_texture(_hiz_buffer.texture), uav(_hiz_buffer.uavs[i]), srv(_hiz_buffer.srvs[i - 1]), i](RenderPassContext& _pass_context) mutable {
                                       BuildHiZShader::Parameters params;
                                       Vector2i                   mip0_size = Vector2i(hiz_texture->GetExtent3D());
 

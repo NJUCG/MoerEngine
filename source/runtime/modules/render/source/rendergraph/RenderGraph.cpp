@@ -1,6 +1,7 @@
 #include "rendergraph/RenderGraph.h"
 
 #include "log/LogSystem.h"
+#include "misc/Timer.h"
 #include "rendergraph/DepdencyGraph.h"
 #include "rendergraph/PassNode.h"
 namespace Moer {
@@ -160,8 +161,13 @@ namespace Moer {
     }
 
     void RenderGraph::Execute(const RenderGraphExecuteConfig& config) {
+        static Timer timer;
+        timer.Start();
         Compile();
+        timer.Stop();
+        // LOG_INFO("Compile Time: {0}ms", timer.ElapsedMilliseconds());
         auto* cmd_list = config.cmd_list;
+        timer.Start();
         for (auto& pass : m_passes) {
             for (auto& resource : pass->GetResourcesToCreate()) {
                 resource->Create();
@@ -173,6 +179,8 @@ namespace Moer {
                 resource->Destroy();
             }
         }
+        timer.Stop();
+        // LOG_INFO("Execute Time: {0}ms", timer.ElapsedMilliseconds());
     }
     void RenderGraph::Compile() {
         m_dependency_graph.Cull();

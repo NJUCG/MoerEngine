@@ -640,7 +640,14 @@ public:
     uint64_t          GetByteSize() const { return info.size; }
     uint32_t          GetStride() const { return info.stride; }
     EBufferUsageFlags GetUsage() const { return info.usage; }
-    EBufferLayout     GetLayout() const { return layout; }
+    void              SetTrackedInfo(EBufferLayout _layout, EPassType _pass) {
+        layout    = _layout;
+        prev_pass = _pass;
+    }
+
+    auto GetTrackedInfo() const {
+        return std::make_tuple(layout, prev_pass);
+    }
 
 protected:
     /**
@@ -653,6 +660,7 @@ protected:
 protected:
     RHIBufferInfo info;
     EBufferLayout layout = EBufferLayout::UNDEFINED_LAYOUT;
+    EPassType     prev_pass = EPassType::None;
 };
 
 struct RHITextureInfo {
@@ -931,7 +939,7 @@ private:
         if (it != mip_usages.end()) {
             return it->second;
         }
-        return std::make_tuple(ETextureUsageFlags::UNDEFINED, EPassType::Compute);
+        return std::make_tuple(ETextureUsageFlags::UNDEFINED, EPassType::None);
     }
     explicit RHITexture(ERHIResourceType _type) : RHIViewableResource(_type) {}
     RHITextureInfo texture_info;

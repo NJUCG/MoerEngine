@@ -95,6 +95,8 @@ namespace Moer {
     }
     ERHIPipelineStageFlags GetPipelineStageFromPassType(EPassType pass_type) {
         switch (pass_type) {
+            case EPassType::None:
+                return PS_NONE;
             case EPassType::Compute:
                 return PS_COMPUTE_SHADER;
             case EPassType::Graphics:
@@ -156,7 +158,7 @@ namespace Moer {
     std::tuple<ERHIAccessFlags, ERHIPipelineStageFlags>
     ResourceTransition::GetBufferTransitation(EBufferLayout layout, EPassType pass_type) {
         if (layout == EBufferLayout::UNDEFINED_LAYOUT) {
-            return {ERHIAccessFlags::UNDEFINED, ERHIPipelineStageFlags::PS_TOP_OF_PIPE};
+            return {ERHIAccessFlags::UNDEFINED, ERHIPipelineStageFlags::PS_NONE};
         }
         if (layout == EBufferLayout::INDIRECT_COMMAND_READ) {
             return {ERHIAccessFlags::INDIRECT_COMMAND_READ, ERHIPipelineStageFlags::PS_DRAW_INDIRECT};

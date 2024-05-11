@@ -110,7 +110,7 @@ namespace Moer {
         static constexpr uint32_t instance_dispatch_indirect_offset = 0;
         static constexpr uint32_t meshlet_dispatch_offset           = 12;
         static constexpr uint32_t recheck_meshlet_dispatch_offset   = 24;
-        static constexpr uint32_t max_meshlet_count                 = 1024 * 1024 * 16;
+        static constexpr uint32_t max_meshlet_count                 = 1024 * 512;
         static constexpr uint32_t thread_group_count                = 64;
         static constexpr uint32_t uniform_buffer_size               = sizeof(VirtualView);
         RenderResourceDeferred*   render_resources;
@@ -166,13 +166,13 @@ namespace Moer {
 
         {
             //self resources
-            instance_meshlet_cull_info_buffer = g_rhi->RHICreateBuffer<uint64_t>(max_meshlet_count, EBufferUsageFlags::UNORDERED_ACCESS);
-            draw_indirect_buffer              = g_rhi->RHICreateBuffer<DrawInstanceCmd>(max_meshlet_count, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::INDIRECT_BUFFER);
+            instance_meshlet_cull_info_buffer      = g_rhi->RHICreateBuffer<uint>(max_meshlet_count * sizeof(int64), EBufferUsageFlags::UNORDERED_ACCESS);
+            draw_indirect_buffer                   = g_rhi->RHICreateBuffer<DrawInstanceCmd>(max_meshlet_count * sizeof(DrawInstanceCmd), EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::INDIRECT_BUFFER);
             indirect_args_buffer                   = g_rhi->RHICreateBuffer<uint32_t>(counter_buffer_size, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::INDIRECT_BUFFER);
-            counter_buffer                    = g_rhi->RHICreateBuffer<uint32_t>(counter_buffer_size, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::INDIRECT_BUFFER);
-            zero_buffer                       = g_rhi->RHICreateBuffer<uint32_t>(counter_buffer_size, EBufferUsageFlags::CPU_VISIBLE);
-            recheck_cull_info_buffer          = g_rhi->RHICreateBuffer<uint32_t>(max_meshlet_count, EBufferUsageFlags::UNORDERED_ACCESS);
-            recheck_instance_id_buffer        = g_rhi->RHICreateBuffer<uint32_t>(max_meshlet_count, EBufferUsageFlags::UNORDERED_ACCESS);
+            counter_buffer                         = g_rhi->RHICreateBuffer<uint>(counter_buffer_size, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::INDIRECT_BUFFER);
+            zero_buffer                            = g_rhi->RHICreateBuffer<uint>(counter_buffer_size, EBufferUsageFlags::CPU_VISIBLE);
+            recheck_cull_info_buffer               = g_rhi->RHICreateBuffer<uint>(max_meshlet_count * sizeof(int64), EBufferUsageFlags::UNORDERED_ACCESS);
+            recheck_instance_id_buffer             = g_rhi->RHICreateBuffer<uint>(max_meshlet_count * sizeof(uint), EBufferUsageFlags::UNORDERED_ACCESS);
 
             instance_meshlet_cull_info_view = g_rhi->RHICreateBufferSRV(instance_meshlet_cull_info_buffer);
 

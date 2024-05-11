@@ -8,6 +8,7 @@ namespace Moer {
     struct RENDER_API HiZBuffer {
         RHITextureRef          texture = nullptr;
         RHISRVRef              srv     = nullptr;
+        Moer::Array<RHISRVRef> srvs{};
         Moer::Array<RHIUAVRef> uavs{};
         RHISamplerRef          sampler = nullptr;
 
