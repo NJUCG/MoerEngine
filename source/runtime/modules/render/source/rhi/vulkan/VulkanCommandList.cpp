@@ -4,6 +4,7 @@
 
 #include "math/Constant.h"
 #include "misc/STL.h"
+#include "resources/ResourceTransition.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
@@ -17,6 +18,7 @@
 #include "VulkanPipelineResourceCache.h"
 #include "VulkanDebug.h"
 
+#include <cstdint>
 #include <vulkan/vulkan_core.h>
 
 VulkanRHICommandListBase::VulkanRHICommandListBase(VulkanDevice* _device, VkCommandPool _pool, VkCommandBufferLevel _level) : VulkanDeviceObject(_device) {
@@ -95,6 +97,123 @@ void VulkanRHICommandListBase::CopyTexture(const RHICopyTextureInfo& _copy_info,
         VulkanEnumTranslator::METoVKImageLayout(_copy_info.dst_layout),
         1,
         &copy_region);
+}
+VkPipelineStageFlagBits2 GetPipelineStageFromPassType(EPassType _pass) {
+    switch (_pass) {
+        case EPassType::Graphics:
+            return PS_FRAGMENT_SHADER;
+        case EPassType::Compute:
+            return PS_COMPUTE_SHADER;
+        case EPassType::Copy:
+            return PS_TRANSFER;
+        case EPassType::None:
+            return VK_PIPELINE_STAGE_2_NONE;
+        default:
+            assert(false && "Invalid pass type");
+            return VK_PIPELINE_STAGE_2_NONE;
+    }
+}
+template<bool _is_src>
+void ResolveTextureBarrierInfo(VkImageMemoryBarrier2& _barrier, ETextureUsageFlags _src_usage, EPassType _pass) {
+
+    auto& src_access_flags = _is_src ? _barrier.srcAccessMask : _barrier.dstAccessMask;
+    auto& src_stage        = _is_src ? _barrier.srcStageMask : _barrier.dstStageMask;
+    auto& layout           = _is_src ? _barrier.oldLayout : _barrier.newLayout;
+    if (EnumHasAnyFlag(_src_usage, ETextureUsageFlags::UNORDERED_ACCESS) && EnumHasAnyFlag(_src_usage, ETextureUsageFlags::SAMPLED)) {
+        src_access_flags = VK_ACCESS_SHADER_READ_BIT;
+        src_stage        = GetPipelineStageFromPassType(_pass);
+        layout           = VK_IMAGE_LAYOUT_GENERAL;
+    } else
+        switch (_src_usage) {
+            case ETextureUsageFlags::UNDEFINED:
+                src_access_flags = VK_ACCESS_2_NONE;
+                src_stage        = VK_PIPELINE_STAGE_2_NONE;
+                layout           = VK_IMAGE_LAYOUT_UNDEFINED;
+                break;
+            case ETextureUsageFlags::TRANSFER_SRC:
+                src_access_flags = VK_ACCESS_TRANSFER_READ_BIT;
+                src_stage        = PS_TRANSFER;
+                layout           = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                break;
+            case ETextureUsageFlags::TRANSFER_DST:
+                src_access_flags = VK_ACCESS_TRANSFER_WRITE_BIT;
+                src_stage        = PS_TRANSFER;
+                layout           = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                break;
+            case ETextureUsageFlags::SAMPLED:
+                src_access_flags = VK_ACCESS_SHADER_READ_BIT;
+                src_stage        = GetPipelineStageFromPassType(_pass);
+                layout           = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                break;
+            case ETextureUsageFlags::UNORDERED_ACCESS:
+                src_access_flags = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
+                src_stage        = GetPipelineStageFromPassType(_pass);
+                layout           = VK_IMAGE_LAYOUT_GENERAL;
+                break;
+            case ETextureUsageFlags::COLOR_ATTACHMENT:
+                src_access_flags = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+                src_stage        = PS_COLOR_ATTACHMENT_OUTPUT;
+                layout           = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                break;
+            case ETextureUsageFlags::RESOLVE_ATTACHMENT:
+                src_access_flags = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+                src_stage        = PS_COLOR_ATTACHMENT_OUTPUT;
+                layout           = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                break;
+            case ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT:
+                src_access_flags = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                src_stage        = PS_LATE_FRAGMENT_TESTS;
+                layout           = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+                break;
+            default:
+                assert(false && "Invalid texture usage");
+        }
+}
+void VulkanRHICommandListBase::TransitionTextureBase(RHITexture* _texture, ETextureUsageFlags _target_usage, EPassType _pass_type, uint8_t _mip_level, uint8_t _mip_cnt) {
+    auto* vk_texture = static_cast<VulkanRHITexture*>(_texture);
+    if (vk_texture == nullptr) {
+        LOG_CRITICAL("TransitionTexture: texture is nullptr!");
+        return;
+    }
+
+    auto [src_usage, src_pass] = _texture->GetTrackedUsage(_mip_level);
+    auto aspect                = EnumHasAnyFlag(_target_usage, ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT) ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
+
+    if (++m_image_barrier_count > m_image_barriers.size()) {
+        m_image_barriers.resize(m_image_barrier_count);
+    }
+
+    auto& image_barrier               = m_image_barriers[m_image_barrier_count - 1];
+    image_barrier.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    image_barrier.pNext               = nullptr;
+    image_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    image_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    image_barrier.image               = vk_texture->GetHandle();
+    ResolveTextureBarrierInfo<true>(image_barrier, src_usage, src_pass);
+    ResolveTextureBarrierInfo<false>(image_barrier, _target_usage, _pass_type);
+    VkImageSubresourceRange& subresource_range = image_barrier.subresourceRange;
+    subresource_range.aspectMask               = aspect;
+    subresource_range.baseMipLevel             = _mip_level;
+    subresource_range.levelCount               = _mip_cnt == RHISubresourceRange::s_all ? VK_REMAINING_MIP_LEVELS : _mip_cnt;
+    subresource_range.baseArrayLayer           = 0;
+    subresource_range.layerCount               = 1;
+
+    RHISubresourceRange range(ETextureAspectFlags(aspect), _mip_level, _mip_cnt, 0, 1, 0, 1);
+    _texture->SetTrackInfo(range, _target_usage, _pass_type);
+}
+
+void VulkanRHICommandListBase::ExecuteTransitionBase() {
+    m_dependency_info.bufferMemoryBarrierCount = m_buffer_barrier_count;
+    m_dependency_info.pBufferMemoryBarriers    = m_buffer_barriers.data();
+    m_dependency_info.imageMemoryBarrierCount  = m_image_barrier_count;
+    m_dependency_info.pImageMemoryBarriers     = m_image_barriers.data();
+    m_dependency_info.memoryBarrierCount       = m_memory_barrier_count;
+    m_dependency_info.pMemoryBarriers          = m_memory_barriers.data();
+
+    vkCmdPipelineBarrier2(m_command_buffer, &m_dependency_info);
+    m_buffer_barrier_count = 0;
+    m_image_barrier_count  = 0;
+    m_memory_barrier_count = 0;
 }
 
 void VulkanRHICommandListBase::CopyBufferToTexture(RHIBuffer*                        src_buffer,
@@ -426,6 +545,14 @@ void VulkanRHIGraphicsCommandList::DispatchIndirect(RHIBuffer* _buffer, uint64_t
     vkCmdDispatchIndirect(m_command_buffer, vk_buffer_handle, _offset);
 }
 
+void VulkanRHIGraphicsCommandList::TransitionTexture(RHITexture* _texture, ETextureUsageFlags _target_usage, EPassType _pass_type, uint8_t _mip_level, uint8_t _mip_cnt) {
+    VulkanRHICommandListBase::TransitionTextureBase(_texture, _target_usage, _pass_type, _mip_level, _mip_cnt);
+}
+
+void VulkanRHIGraphicsCommandList::ExecuteTransition() {
+    VulkanRHICommandListBase::ExecuteTransitionBase();
+}
+
 void VulkanRHIGraphicsCommandList::CopyBuffer(const RHICopyBufferInfo& _copy_info, RHIBuffer* _src, RHIBuffer* _dst) {
     VulkanRHICommandListBase::CopyBuffer(_copy_info, _src, _dst);
 }
@@ -611,7 +738,7 @@ void VulkanRHIGraphicsCommandList::ExecuteSubCommands(uint32_t _num, RHIGraphics
 }
 
 void VulkanRHIGraphicsCommandList::BeginLabel(const char* _label) {
-    Moer::RHI::Vulkan::DebugUtils::CmdInsertLabel(m_command_buffer, _label, {});
+    Moer::RHI::Vulkan::DebugUtils::CmdBeginLabel(m_command_buffer, _label, {});
 }
 
 void VulkanRHIGraphicsCommandList::EndLabel() {

@@ -34,9 +34,9 @@ namespace Moer {
         m_renderGraph.ReadInternal(m_pass, _input, std::move(desc));
         return *this;
     }
-    RenderGraph::Builder& RenderGraph::Builder::WriteTexture(RenderGraphHandle _output, RenderGraphTexture::Usage _usage, uint32_t _mip_level) {
+    RenderGraph::Builder& RenderGraph::Builder::WriteTexture(RenderGraphHandle _output, RenderGraphTexture::Usage _usage, uint32_t _mip_level, uint32_t _mip_cnt) {
 
-        DepdencyGraph::ResourceDesc desc = DepdencyGraph::TextureSubDesc{.mip_level = _mip_level, .num_mips = 1, .array_index = 0, .array_count = 1, .usage = _usage};
+        DepdencyGraph::ResourceDesc desc = DepdencyGraph::TextureSubDesc{.mip_level = _mip_level, .num_mips = _mip_cnt, .array_index = 0, .array_count = 1, .usage = _usage};
         m_renderGraph.WriteInternal(m_pass, _output, std::move(desc));
         return *this;
     }
@@ -164,13 +164,10 @@ namespace Moer {
     }
 
     void RenderGraph::Execute(const RenderGraphExecuteConfig& config) {
-        static Timer timer;
-        timer.Start();
         Compile();
-        timer.Stop();
         // LOG_INFO("Compile Time: {0}ms", timer.ElapsedMilliseconds());
+
         auto* cmd_list = config.cmd_list;
-        timer.Start();
         for (auto& pass : m_passes) {
             for (auto& resource : pass->GetResourcesToCreate()) {
                 resource->Create();
@@ -182,8 +179,6 @@ namespace Moer {
                 resource->Destroy();
             }
         }
-        timer.Stop();
-        // LOG_INFO("Execute Time: {0}ms", timer.ElapsedMilliseconds());
     }
     void RenderGraph::Compile() {
         bool need_compile = IsNeedCompile();

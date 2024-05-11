@@ -55,7 +55,8 @@ namespace Moer {
 
             Builder& WriteTexture(RenderGraphHandle         _output,
                                   RenderGraphTexture::Usage _usage     = RenderGraphTexture::Usage::COLOR_ATTACHMENT,
-                                  uint32_t                  _mip_level = 0);
+                                  uint32_t                  _mip_level = 0,
+                                  uint32_t                  _mip_cnt   = 1);
 
             Builder& ReadTextures(const Moer::Array<RenderGraphHandle>& inputs,
                                   RenderGraphTexture::Usage             usage =

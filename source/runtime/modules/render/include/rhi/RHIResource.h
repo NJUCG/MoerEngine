@@ -659,7 +659,7 @@ protected:
 
 protected:
     RHIBufferInfo info;
-    EBufferLayout layout = EBufferLayout::UNDEFINED_LAYOUT;
+    EBufferLayout layout    = EBufferLayout::UNDEFINED_LAYOUT;
     EPassType     prev_pass = EPassType::None;
 };
 
@@ -926,6 +926,13 @@ public:
         return TEXTURE_LAYOUT_UNDEFINED;
     }
     RHIClearAttachment GetClearAttachment() const { return GetInfo().clear_attachment; }
+    auto               GetTrackedUsage(Moer::uint _mip_index) const {
+        auto it = mip_usages.find(_mip_index);
+        if (it != mip_usages.end()) {
+            return it->second;
+        }
+        return std::make_tuple(ETextureUsageFlags::UNDEFINED, EPassType::None);
+    }
 
 protected:
     RHITexture(const RHITextureCreateInfo& _info);
@@ -934,13 +941,7 @@ private:
     friend class RHITextureReference;
     friend Moer::RenderGraphTexture;
     friend class VulkanPipelineResourceCache;
-    auto GetTrackedUsage(Moer::uint _mip_index) const {
-        auto it = mip_usages.find(_mip_index);
-        if (it != mip_usages.end()) {
-            return it->second;
-        }
-        return std::make_tuple(ETextureUsageFlags::UNDEFINED, EPassType::None);
-    }
+
     explicit RHITexture(ERHIResourceType _type) : RHIViewableResource(_type) {}
     RHITextureInfo texture_info;
     struct RHISubresourceRangeHash {

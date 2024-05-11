@@ -166,20 +166,20 @@ namespace Moer {
 
         {
             //self resources
-            instance_meshlet_cull_info_buffer      = g_rhi->RHICreateBuffer<uint>(max_meshlet_count * sizeof(int64), EBufferUsageFlags::UNORDERED_ACCESS);
-            draw_indirect_buffer                   = g_rhi->RHICreateBuffer<DrawInstanceCmd>(max_meshlet_count * sizeof(DrawInstanceCmd), EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::INDIRECT_BUFFER);
-            indirect_args_buffer                   = g_rhi->RHICreateBuffer<uint32_t>(counter_buffer_size, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::INDIRECT_BUFFER);
-            counter_buffer                         = g_rhi->RHICreateBuffer<uint>(counter_buffer_size, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::INDIRECT_BUFFER);
-            zero_buffer                            = g_rhi->RHICreateBuffer<uint>(counter_buffer_size, EBufferUsageFlags::CPU_VISIBLE);
-            recheck_cull_info_buffer               = g_rhi->RHICreateBuffer<uint>(max_meshlet_count * sizeof(int64), EBufferUsageFlags::UNORDERED_ACCESS);
-            recheck_instance_id_buffer             = g_rhi->RHICreateBuffer<uint>(max_meshlet_count * sizeof(uint), EBufferUsageFlags::UNORDERED_ACCESS);
+            instance_meshlet_cull_info_buffer = g_rhi->RHICreateBuffer<uint>(max_meshlet_count * sizeof(int64), EBufferUsageFlags::UNORDERED_ACCESS);
+            draw_indirect_buffer              = g_rhi->RHICreateBuffer<DrawInstanceCmd>(max_meshlet_count * sizeof(DrawInstanceCmd), EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::INDIRECT_BUFFER);
+            indirect_args_buffer              = g_rhi->RHICreateBuffer<uint32_t>(counter_buffer_size, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::INDIRECT_BUFFER);
+            counter_buffer                    = g_rhi->RHICreateBuffer<uint>(counter_buffer_size, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::INDIRECT_BUFFER);
+            zero_buffer                       = g_rhi->RHICreateBuffer<uint>(counter_buffer_size, EBufferUsageFlags::CPU_VISIBLE);
+            recheck_cull_info_buffer          = g_rhi->RHICreateBuffer<uint>(max_meshlet_count * sizeof(int64), EBufferUsageFlags::UNORDERED_ACCESS);
+            recheck_instance_id_buffer        = g_rhi->RHICreateBuffer<uint>(max_meshlet_count * sizeof(uint), EBufferUsageFlags::UNORDERED_ACCESS);
 
             instance_meshlet_cull_info_view = g_rhi->RHICreateBufferSRV(instance_meshlet_cull_info_buffer);
 
             instance_meshlet_cull_info_uav = g_rhi->RHICreateBufferUAV(instance_meshlet_cull_info_buffer);
             draw_indirect_view             = g_rhi->RHICreateBufferUAV(draw_indirect_buffer);
 
-            counter_view           = g_rhi->RHICreateBufferUAV(counter_buffer, sizeof(uint32_t), 4);
+            counter_view           = g_rhi->RHICreateBufferUAV(counter_buffer);
             counter_srv            = g_rhi->RHICreateBufferSRV(counter_buffer);
             recheck_cull_info_view = g_rhi->RHICreateBufferSRV(recheck_cull_info_buffer);
             recheck_cull_info_uav  = g_rhi->RHICreateBufferUAV(recheck_cull_info_buffer);
@@ -253,9 +253,9 @@ namespace Moer {
             auto* view_handle = _context.GetRenderGraph().GetBlackBoard().GetBuffer(view_buffer_name.data());
             view_buffer_view  = g_rhi->RHICreateCBV(view_handle->GetBuffer());
         }
-        cull_instance_params.views                      = view_buffer_view;
-        cull_instance_params.hiz_depth                  = hiz_buffer.srv;
-        cull_instance_params.depth_sampler              = hiz_buffer.sampler;
+        cull_instance_params.views         = view_buffer_view;
+        cull_instance_params.hiz_depth     = hiz_buffer.srv;
+        cull_instance_params.depth_sampler = hiz_buffer.sampler;
 
         CullMeshletPrepassShader::Parameters cull_meshlet_params;
         cull_meshlet_params.input.meshlet_count_offset          = meshlet_count_offset;

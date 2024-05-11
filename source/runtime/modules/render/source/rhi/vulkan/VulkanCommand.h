@@ -7,6 +7,7 @@
 #include "misc/STL.h"
 
 #include "VulkanRHIResource.h"
+#include "vulkan/vulkan_core.h"
 
 #include <variant>
 #include <vulkan/vulkan.h>
@@ -48,10 +49,22 @@ public:
     void                   SetPipelineBarrier(const RHIBarrierDependencyInfo& _dependency);
     inline VkCommandBuffer GetHandle() const { return m_command_buffer; }
 
+    void TransitionTextureBase(RHITexture* _target, ETextureUsageFlags _target_usage, EPassType _pass_type, uint8_t _mip_level, uint8_t _mip_cnt);
+    void ExecuteTransitionBase();
+
 protected:
     VkCommandPool        m_current_command_pool;
     VkCommandBuffer      m_command_buffer;
     VkCommandBufferLevel m_level;
+
+    VkDependencyInfo m_dependency_info{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    using uint = Moer::uint;
+    Moer::Array<VkImageMemoryBarrier2>  m_image_barriers;
+    Moer::Array<VkBufferMemoryBarrier2> m_buffer_barriers;
+    Moer::Array<VkMemoryBarrier2>       m_memory_barriers;
+    uint                                m_image_barrier_count  = 0;
+    uint                                m_buffer_barrier_count = 0;
+    uint                                m_memory_barrier_count = 0;
 };
 
 class VulkanCommandAllocator final : public RHICommandAllocator, public VulkanDeviceObject {
@@ -172,6 +185,9 @@ public:
 
     void BeginLabel(const char* _label) override;
     void EndLabel() override;
+
+    void TransitionTexture(RHITexture* _target, ETextureUsageFlags _target_usage, EPassType _pass_type, uint8_t _mip_level, uint8_t _mip_cnt) override;
+    void ExecuteTransition() override;
 
 protected:
     friend class VulkanRHICommandQueue;
