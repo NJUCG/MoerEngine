@@ -36,13 +36,13 @@ public:
 
     template<typename ShaderType>
         requires std::is_base_of_v<Shader, ShaderType>
-    RHIShaderRef GetShader(const typename ShaderType::TMutationSet& _mutation_set) {
+    RHIShaderRef GetShader(const uint32_t _mutation_id) {
         const ShaderMetaType& meta_type = ShaderType::GetMetaType();
 
         if constexpr (ShaderType::TMutationSet::mutation_count == 0) {
             return GetShader(meta_type, 0);
         } else
-            return GetShader(meta_type, _mutation_set.GetMutationID());
+            return GetShader(meta_type, _mutation_id);
     }
     template<typename ShaderType>
         requires std::is_base_of_v<Shader, ShaderType>

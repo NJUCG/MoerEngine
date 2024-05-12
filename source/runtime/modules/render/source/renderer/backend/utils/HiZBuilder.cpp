@@ -74,114 +74,120 @@ namespace Moer {
 
     struct HiZBuilder::Impl {
         Impl() {
-            builder_shader = ShaderResourceManager::GetInstance().GetShader<BuildHiZShader>();
-            assert(builder_shader && "Failed to load HiZ builder shader");
-            pso = g_rhi->RHICreateComputePipelineState(builder_shader);
+            for (uint32_t i = 0; i < BuildHiZShader::MipCount::mutation_count; ++i) {
+                builder_shaders[i] = ShaderResourceManager::GetInstance().GetShader<BuildHiZShader>(BuildHiZShader::MipCount::GetMutationID(i + 1));
+                assert(builder_shaders[i] && "Failed to load HiZ builder shader");
+
+                psos[i] = g_rhi->RHICreateComputePipelineState(builder_shaders[i]);
+            }
+            // builder_shader = ShaderResourceManager::GetInstance().GetShader<BuildHiZShader>();
+            // assert(builder_shader && "Failed to load HiZ builder shader");
+            // pso = g_rhi->RHICreateComputePipelineState(builder_shader);
             RHISamplerCreateInfo create_info(SF_NEAREST, TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             create_info.SetCompareOp(SCF_NEVER);
             depth_sampler = g_rhi->RHICreateSampler(create_info);
         }
 
-        void Dispatch(RHICommandListBase* _cmd_list, RHISRVRef _depth_buffer, HiZBuffer& _hiz_buffer) {
-            //currently just support graphics cmd list
-            RHIGraphicsCommandList* graphics_cmd_list = static_cast<RHIGraphicsCommandList*>(_cmd_list);
-            graphics_cmd_list->SetPipelineState(pso);
+        // void Dispatch(RHICommandListBase* _cmd_list, RHISRVRef _depth_buffer, HiZBuffer& _hiz_buffer) {
+        //     //currently just support graphics cmd list
+        //     RHIGraphicsCommandList* graphics_cmd_list = static_cast<RHIGraphicsCommandList*>(_cmd_list);
+        //     graphics_cmd_list->SetPipelineState(pso);
 
-            Vector2i depth_size = Vector2i(_depth_buffer->GetTexture()->GetExtent3D());
-            //calculate power of two
-            Vector2i                   mip0_size = Vector2i(_hiz_buffer.texture->GetExtent3D());
-            BuildHiZShader::Parameters params;
+        //     Vector2i depth_size = Vector2i(_depth_buffer->GetTexture()->GetExtent3D());
+        //     //calculate power of two
+        //     Vector2i                   mip0_size = Vector2i(_hiz_buffer.texture->GetExtent3D());
+        //     BuildHiZShader::Parameters params;
 
-            HiZConfig& config   = params.config;
-            config.b_mip0       = true;
-            config.size         = mip0_size;
-            config.target_level = 0;
+        //     HiZConfig& config   = params.config;
+        //     config.b_mip0       = true;
+        //     config.size         = mip0_size;
+        //     config.target_level = 0;
 
-            uint32_t mip_count   = std::min(uint32_t(std::log2(std::min(mip0_size.x, mip0_size.y))), max_mip_levels);
-            params.depth_buffer  = _depth_buffer;
-            params.depth_sampler = depth_sampler;
+        //     uint32_t mip_count   = std::min(uint32_t(std::log2(std::min(mip0_size.x, mip0_size.y))), max_mip_levels);
+        //     params.depth_buffer  = _depth_buffer;
+        //     params.depth_sampler = depth_sampler;
 
-            RHIBatchedShaderParameters batched_params;
+        //     RHIBatchedShaderParameters batched_params;
 
-            RHISubresourceRange range(ETextureAspectFlags::COLOR);
-            range.num_mips  = 1;
-            range.mip_index = 0;
-            RHIBarrierDependencyInfo depth_barrier_info;
-            depth_barrier_info.texture_barriers.resize(2);
-            auto& depth_barrier = depth_barrier_info.texture_barriers[0];
-            depth_barrier.SetTexture(_depth_buffer->GetTexture())
-                .SetSrcTextureLayout(TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE)
-                .SetDstTextureLayout(TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
-                .SetSubResourceRange(RHISubresourceRange(ETextureAspectFlags::DEPTH_SLICE | ETextureAspectFlags::STENCIL_SLICE))
-                .SetSrcStage(PS_ALL_GRAPHICS)
-                .SetDstStage(PS_COMPUTE_SHADER)
-                .SetDstAccessFlags(ERHIAccessFlags::SHADER_READ)
-                .SetSrcAccessFlags(ERHIAccessFlags::DEPTH_STENCIL_WRITE | ERHIAccessFlags::DEPTH_STENCIL_READ);
+        //     RHISubresourceRange range(ETextureAspectFlags::COLOR);
+        //     range.num_mips  = 1;
+        //     range.mip_index = 0;
+        //     RHIBarrierDependencyInfo depth_barrier_info;
+        //     depth_barrier_info.texture_barriers.resize(2);
+        //     auto& depth_barrier = depth_barrier_info.texture_barriers[0];
+        //     depth_barrier.SetTexture(_depth_buffer->GetTexture())
+        //         .SetSrcTextureLayout(TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE)
+        //         .SetDstTextureLayout(TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+        //         .SetSubResourceRange(RHISubresourceRange(ETextureAspectFlags::DEPTH_SLICE | ETextureAspectFlags::STENCIL_SLICE))
+        //         .SetSrcStage(PS_ALL_GRAPHICS)
+        //         .SetDstStage(PS_COMPUTE_SHADER)
+        //         .SetDstAccessFlags(ERHIAccessFlags::SHADER_READ)
+        //         .SetSrcAccessFlags(ERHIAccessFlags::DEPTH_STENCIL_WRITE | ERHIAccessFlags::DEPTH_STENCIL_READ);
 
-            auto& hiz_barrier = depth_barrier_info.texture_barriers[1];
-            hiz_barrier.SetTexture(_hiz_buffer.texture)
-                .SetSubResourceRange(range)
-                .SetDstTextureLayout(TEXTURE_LAYOUT_COMMON)
-                .SetSrcStage(PS_COMPUTE_SHADER)
-                .SetDstStage(PS_COMPUTE_SHADER)
-                .SetDstAccessFlags(ERHIAccessFlags::SHADER_WRITE);
-            // .SetSrcAccessFlags(ERHIAccessFlags::SHADER_READ);
+        //     auto& hiz_barrier = depth_barrier_info.texture_barriers[1];
+        //     hiz_barrier.SetTexture(_hiz_buffer.texture)
+        //         .SetSubResourceRange(range)
+        //         .SetDstTextureLayout(TEXTURE_LAYOUT_COMMON)
+        //         .SetSrcStage(PS_COMPUTE_SHADER)
+        //         .SetDstStage(PS_COMPUTE_SHADER)
+        //         .SetDstAccessFlags(ERHIAccessFlags::SHADER_WRITE);
+        //     // .SetSrcAccessFlags(ERHIAccessFlags::SHADER_READ);
 
-            graphics_cmd_list->SetPipelineBarrier(depth_barrier_info);//set depth buffer to shader read only
+        //     graphics_cmd_list->SetPipelineBarrier(depth_barrier_info);//set depth buffer to shader read only
 
-            RHIBarrierDependencyInfo barrier_info;
-            barrier_info.texture_barriers.resize(2);
-            auto& barrier = barrier_info.texture_barriers[0];
+        //     RHIBarrierDependencyInfo barrier_info;
+        //     barrier_info.texture_barriers.resize(2);
+        //     auto& barrier = barrier_info.texture_barriers[0];
 
-            barrier.SetTexture(_hiz_buffer.texture)
-                .SetSubResourceRange(range)
-                .SetSrcStage(PS_COMPUTE_SHADER)
-                .SetDstStage(PS_COMPUTE_SHADER)
-                .SetDstAccessFlags(ERHIAccessFlags::SHADER_READ)
-                .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE);
+        //     barrier.SetTexture(_hiz_buffer.texture)
+        //         .SetSubResourceRange(range)
+        //         .SetSrcStage(PS_COMPUTE_SHADER)
+        //         .SetDstStage(PS_COMPUTE_SHADER)
+        //         .SetDstAccessFlags(ERHIAccessFlags::SHADER_READ)
+        //         .SetSrcAccessFlags(ERHIAccessFlags::SHADER_WRITE);
 
-            auto& barrier2 = barrier_info.texture_barriers[1];
-            barrier2.SetTexture(_hiz_buffer.texture)
-                .SetSubResourceRange(range)
-                .SetSrcStage(PS_COMPUTE_SHADER)
-                .SetDstStage(PS_COMPUTE_SHADER)
-                .SetDstAccessFlags(ERHIAccessFlags::SHADER_WRITE)
-                .SetSrcAccessFlags(ERHIAccessFlags::SHADER_READ);
+        //     auto& barrier2 = barrier_info.texture_barriers[1];
+        //     barrier2.SetTexture(_hiz_buffer.texture)
+        //         .SetSubResourceRange(range)
+        //         .SetSrcStage(PS_COMPUTE_SHADER)
+        //         .SetDstStage(PS_COMPUTE_SHADER)
+        //         .SetDstAccessFlags(ERHIAccessFlags::SHADER_WRITE)
+        //         .SetSrcAccessFlags(ERHIAccessFlags::SHADER_READ);
 
-            for (uint32_t i = 0; i < mip_count; ++i) {
-                params.target = _hiz_buffer.uavs[i];
-                if (i == 0) {
+        //     for (uint32_t i = 0; i < mip_count; ++i) {
+        //         params.target = _hiz_buffer.uavs[i];
+        //         if (i == 0) {
 
-                } else {
-                    //set target mip
-                    config.size         = Vector2i(std::max(1, mip0_size.x >> (i)), std::max(1, mip0_size.y >> (i)));
-                    config.b_mip0       = false;
-                    config.target_level = i;
+        //         } else {
+        //             //set target mip
+        //             config.size         = Vector2i(std::max(1, mip0_size.x >> (i)), std::max(1, mip0_size.y >> (i)));
+        //             config.b_mip0       = false;
+        //             config.target_level = i;
 
-                    params.depth_buffer = _hiz_buffer.srv;
-                }
-                barrier.sub_resource_range.mip_index  = i;
-                barrier2.sub_resource_range.mip_index = i + 1;
-                batched_params.SetParameters(builder_shader, params);
+        //             params.depth_buffer = _hiz_buffer.srv;
+        //         }
+        //         barrier.sub_resource_range.mip_index  = i;
+        //         barrier2.sub_resource_range.mip_index = i + 1;
+        //         batched_params.SetParameters(builder_shader, params);
 
-                g_rhi->RHISetBatchedShaderParameters(pso, batched_params);
-                Vector3i group_count = Vector3i((config.size.t.x + 7) >> 3u, (config.size.t.y + 7) >> 3u, 1);
-                graphics_cmd_list->Dispatch(group_count);
-                if (i == mip_count - 1) {
-                    barrier_info
-                        .texture_barriers[1]
-                        .SetTexture(_depth_buffer->GetTexture())
-                        .SetDstTextureLayout(TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE)
-                        .SetSrcTextureLayout(TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
-                        .SetSubResourceRange(RHISubresourceRange(ETextureAspectFlags::DEPTH_SLICE | ETextureAspectFlags::STENCIL_SLICE))
-                        .SetSrcStage(PS_COMPUTE_SHADER)
-                        .SetDstStage(PS_EARLY_FRAGMENT_TESTS)
-                        .SetDstAccessFlags(ERHIAccessFlags::DEPTH_STENCIL_WRITE | ERHIAccessFlags::DEPTH_STENCIL_READ)
-                        .SetSrcAccessFlags(ERHIAccessFlags::SHADER_READ);
-                }
-                graphics_cmd_list->SetPipelineBarrier(barrier_info);//set current mip level to shader read only
-            }
-        }
+        //         g_rhi->RHISetBatchedShaderParameters(pso, batched_params);
+        //         Vector3i group_count = Vector3i((config.size.t.x + 7) >> 3u, (config.size.t.y + 7) >> 3u, 1);
+        //         graphics_cmd_list->Dispatch(group_count);
+        //         if (i == mip_count - 1) {
+        //             barrier_info
+        //                 .texture_barriers[1]
+        //                 .SetTexture(_depth_buffer->GetTexture())
+        //                 .SetDstTextureLayout(TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE)
+        //                 .SetSrcTextureLayout(TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+        //                 .SetSubResourceRange(RHISubresourceRange(ETextureAspectFlags::DEPTH_SLICE | ETextureAspectFlags::STENCIL_SLICE))
+        //                 .SetSrcStage(PS_COMPUTE_SHADER)
+        //                 .SetDstStage(PS_EARLY_FRAGMENT_TESTS)
+        //                 .SetDstAccessFlags(ERHIAccessFlags::DEPTH_STENCIL_WRITE | ERHIAccessFlags::DEPTH_STENCIL_READ)
+        //                 .SetSrcAccessFlags(ERHIAccessFlags::SHADER_READ);
+        //         }
+        //         graphics_cmd_list->SetPipelineBarrier(barrier_info);//set current mip level to shader read only
+        //     }
+        // }
 
         void Dispatch(RenderContext& _context, RHISRVRef _depth_buffer, HiZBuffer& _hiz_buffer) {
 
@@ -210,15 +216,17 @@ namespace Moer {
                     params.depth_sampler = depth_sampler;
                     RHIBatchedShaderParameters batched_params;
                     auto&                      cmd_list = _context.GetCommandList();
-                    cmd_list.SetPipelineState(pso);
+                    cmd_list.SetPipelineState(psos[0]);
 
                     batched_params.SetParameters(builder_shader, params);
-                    g_rhi->RHISetBatchedShaderParameters(pso, batched_params);
+                    g_rhi->RHISetBatchedShaderParameters(psos[0], batched_params);
                     cmd_list.Dispatch(Vector3i((config.size.t.x + 7) >> 3u, (config.size.t.y + 7) >> 3u, 1));
 
-                    for (uint i = 1; i < mip_cnt; ++i) {
-                        cmd_list.TransitionTexture(hiz_tex, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED, EPassType::Compute);
-                        cmd_list.TransitionTexture(hiz_tex, ETextureUsageFlags::UNORDERED_ACCESS, EPassType::Compute, i);
+                    for (uint i = 1; i < mip_cnt;) {
+
+                        uint batch_cnt = std::min(mip_batch_cnt, mip_cnt - i);
+                        cmd_list.TransitionTexture(hiz_tex, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED, EPassType::Compute, i - 1);
+                        cmd_list.TransitionTexture(hiz_tex, ETextureUsageFlags::UNORDERED_ACCESS, EPassType::Compute, i, batch_cnt);
                         cmd_list.ExecuteTransition();
 
                         config.b_mip0       = false;
@@ -227,15 +235,20 @@ namespace Moer {
                         params.target       = _hiz_buffer.uavs[i];
                         params.depth_buffer = _hiz_buffer.srvs[i - 1];
                         batched_params.SetParameters(builder_shader, params);
-                        g_rhi->RHISetBatchedShaderParameters(pso, batched_params);
+                        g_rhi->RHISetBatchedShaderParameters(psos[batch_cnt-1], batched_params);
                         cmd_list.Dispatch(Vector3i((config.size.t.x + 7) >> 3u, (config.size.t.y + 7) >> 3u, 1));
+
+                        i+= batch_cnt;
                     } });
         }
 
-        RHIShaderRef builder_shader;
+        RHIShaderRef                             builder_shader;
+        constexpr static uint32_t                mip_batch_cnt = BuildHiZShader::MipCount::mutation_count;
+        StaticArray<RHIShaderRef, mip_batch_cnt> builder_shaders;
 
-        RHIComputePipelineStateRef pso;
-        RHISamplerRef              depth_sampler;
+        // RHIComputePipelineStateRef                             pso;
+        StaticArray<RHIComputePipelineStateRef, mip_batch_cnt> psos;
+        RHISamplerRef                                          depth_sampler;
     };
     HiZBuilder::HiZBuilder() {
         impl = UniquePtr<Impl>(MoerNew(Impl)());
@@ -248,9 +261,9 @@ namespace Moer {
         static HiZBuilder instance;
         return instance;
     }
-    void HiZBuilder::DispatchBuildHiZ(RHIGraphicsCommandList* _cmd_list, RHISRVRef _depth_buffer, HiZBuffer& _hiz_buffer) {
-        impl->Dispatch(_cmd_list, _depth_buffer, _hiz_buffer);
-    }
+    // void HiZBuilder::DispatchBuildHiZ(RHIGraphicsCommandList* _cmd_list, RHISRVRef _depth_buffer, HiZBuffer& _hiz_buffer) {
+    //     impl->Dispatch(_cmd_list, _depth_buffer, _hiz_buffer);
+    // }
 
     void HiZBuilder::DispatchBuildHiZ(RenderContext& _context, RHISRVRef _depth_buffer, HiZBuffer& _hiz_buffer) {
         impl->Dispatch(_context, _depth_buffer, _hiz_buffer);

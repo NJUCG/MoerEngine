@@ -99,12 +99,11 @@ public:
 
     virtual void DispatchIndirect(RHIBuffer* _buffer, uint64_t _offset) = 0;
 
-    virtual void CopyBuffer(const RHICopyBufferInfo& _copy_info, RHIBuffer* _src, RHIBuffer* _dst)                            = 0;
-    virtual void CopyTexture(const RHICopyTextureInfo& _copy_info, RHITexture* _src, RHITexture* _dst)                        = 0;
-    virtual void CopyBufferToTexture(const RHICopyBufferToTextureInfo& _info, RHIBuffer* src_buffer, RHITexture* dst_texture) = 0;
+    virtual void CopyBuffer(const RHICopyBufferInfo& _copy_info, RHIBuffer* _src, RHIBuffer* _dst)                              = 0;
+    virtual void CopyTexture(const RHICopyTextureInfo& _copy_info, RHITexture* _src, RHITexture* _dst)                          = 0;
+    virtual void CopyBufferToTexture(const RHICopyBufferToTextureInfo& _info, RHIBuffer* _src_buffer, RHITexture* _dst_texture) = 0;
 
-    virtual void CopyTextureToBuffer(const RHICopyTextureToBufferInfo& _info, RHITexture* src_texture, RHIBuffer* dst_buffer) = 0;
-
+    virtual void CopyTextureToBuffer(const RHICopyTextureToBufferInfo& _info, RHITexture* _src_texture, RHIBuffer* _dst_buffer) = 0;
     //To copy regions of a source texture into a destination texture, potentially performing format conversion, arbitrary scaling, and filtering.
     //must not be used for multi-sampled source or destination textures, use resolve instead
     virtual void BlitTexture(const RHIBlitTextureInfo& _blit_info, RHITexture* _src, RHITexture* _dst) = 0;
@@ -114,24 +113,24 @@ public:
 
     virtual void SetPipelineBarrier(const RHIBarrierDependencyInfo& _dependency) = 0;
 
-    virtual void SetCullMode(ERasterizerCullMode _cull_mode)                       = 0;
-    virtual void SetPrimitiveTopology(EPrimitiveTopology _topology)                = 0;
-    virtual void SetViewPorts(uint32_t num_viewports, const ViewPort* p_viewports) = 0;
-    virtual void SetViewPort(const ViewPort& _viewport)                            = 0;
-    virtual void SetScissors(uint32_t num_scissors, const Rect2D* p_scissors)      = 0;
-    virtual void SetScissor(const Rect2D& _scissor)                                = 0;
-    virtual void SetBlendFactors(const float _factors[4])                          = 0;
-    virtual void BeginLabel(const char* _label)                                    = 0;
-    virtual void EndLabel()                                                        = 0;
+    virtual void SetCullMode(ERasterizerCullMode _cull_mode)                         = 0;
+    virtual void SetPrimitiveTopology(EPrimitiveTopology _topology)                  = 0;
+    virtual void SetViewPorts(uint32_t _num_viewports, const ViewPort* _p_viewports) = 0;
+    virtual void SetViewPort(const ViewPort& _viewport)                              = 0;
+    virtual void SetScissors(uint32_t _num_scissors, const Rect2D* _p_scissors)      = 0;
+    virtual void SetScissor(const Rect2D& _scissor)                                  = 0;
+    virtual void SetBlendFactors(const float _factors[4])                            = 0;
+    virtual void BeginLabel(const char* _label)                                      = 0;
+    virtual void EndLabel()                                                          = 0;
 
     virtual void BindVertexBuffers(
         uint32_t            _start_index,
         uint32_t            _num_buffers,
-        const RHIBufferRef* p_vertex_buffers,
+        const RHIBufferRef* _p_vertex_buffers,
         const uint32_t*     _offsets) = 0;
 
     virtual void BindIndexBuffer(
-        const RHIBuffer*  p_index_buffer,
+        const RHIBuffer*  _p_index_buffer,
         uint32_t          _offset,
         EIndexElementType _type) = 0;
 
@@ -167,7 +166,7 @@ public:
     virtual void ExecuteSubCommands(uint32_t                _num,
                                     RHIGraphicsCommandList* _sub_commands) = 0;
 
-    virtual void BindParameters(Shader* shader, RHIBatchedShaderParameters* batched_params) {};
+    virtual void BindParameters(Shader* _shader, RHIBatchedShaderParameters* _batched_params) {};
 };
 
 class RHIComputeCommandList : public RHICommandListBase {
@@ -177,11 +176,11 @@ public:
     virtual void Dispatch(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z) = 0;
     virtual void DispatchIndirect(RHIBuffer* _buffer, uint64_t _offset)                              = 0;
 
-    virtual void CopyBuffer(const RHICopyBufferInfo& _copy_info, RHIBuffer* _src, RHIBuffer* _dst)                            = 0;
-    virtual void CopyTexture(const RHICopyTextureInfo& _copy_info, RHITexture* _src, RHITexture* _dst)                        = 0;
-    virtual void CopyBufferToTexture(const RHICopyBufferToTextureInfo& _info, RHIBuffer* src_buffer, RHITexture* dst_texture) = 0;
+    virtual void CopyBuffer(const RHICopyBufferInfo& _copy_info, RHIBuffer* _src, RHIBuffer* _dst)                              = 0;
+    virtual void CopyTexture(const RHICopyTextureInfo& _copy_info, RHITexture* _src, RHITexture* _dst)                          = 0;
+    virtual void CopyBufferToTexture(const RHICopyBufferToTextureInfo& _info, RHIBuffer* _src_buffer, RHITexture* _dst_texture) = 0;
 
-    virtual void CopyTextureToBuffer(const RHICopyTextureToBufferInfo& _info, RHITexture* src_texture, RHIBuffer* dst_buffer) = 0;
+    virtual void CopyTextureToBuffer(const RHICopyTextureToBufferInfo& _info, RHITexture* _src_texture, RHIBuffer* _dst_buffer) = 0;
 
     virtual void SetPipelineBarrier(const RHIBarrierDependencyInfo& _dependency) = 0;
 };
@@ -193,11 +192,11 @@ public:
     virtual void TraceRay(uint32_t _width, uint32_t _height, uint32_t _depth)  = 0;
     virtual void TraceRayIndirect()                                            = 0;
 
-    virtual void CopyBuffer(const RHICopyBufferInfo& _copy_info, RHIBuffer* _src, RHIBuffer* _dst)                            = 0;
-    virtual void CopyTexture(const RHICopyTextureInfo& _copy_info, RHITexture* _src, RHITexture* _dst)                        = 0;
-    virtual void CopyBufferToTexture(const RHICopyBufferToTextureInfo& _info, RHIBuffer* src_buffer, RHITexture* dst_texture) = 0;
+    virtual void CopyBuffer(const RHICopyBufferInfo& _copy_info, RHIBuffer* _src, RHIBuffer* _dst)                              = 0;
+    virtual void CopyTexture(const RHICopyTextureInfo& _copy_info, RHITexture* _src, RHITexture* _dst)                          = 0;
+    virtual void CopyBufferToTexture(const RHICopyBufferToTextureInfo& _info, RHIBuffer* _src_buffer, RHITexture* _dst_texture) = 0;
 
-    virtual void CopyTextureToBuffer(const RHICopyTextureToBufferInfo& _info, RHITexture* src_texture, RHIBuffer* dst_buffer) = 0;
+    virtual void CopyTextureToBuffer(const RHICopyTextureToBufferInfo& _info, RHITexture* _src_texture, RHIBuffer* _dst_buffer) = 0;
 
     virtual void SetPipelineBarrier(const RHIBarrierDependencyInfo& _dependency) = 0;
 };
@@ -205,11 +204,11 @@ public:
 class RHICopyCommandList : public RHICommandListBase {
 public:
     virtual ~RHICopyCommandList(){};
-    virtual void CopyBuffer(const RHICopyBufferInfo& _copy_info, RHIBuffer* _src, RHIBuffer* _dst)                            = 0;
-    virtual void CopyTexture(const RHICopyTextureInfo& _copy_info, RHITexture* _src, RHITexture* _dst)                        = 0;
-    virtual void CopyBufferToTexture(const RHICopyBufferToTextureInfo& _info, RHIBuffer* src_buffer, RHITexture* dst_texture) = 0;
+    virtual void CopyBuffer(const RHICopyBufferInfo& _copy_info, RHIBuffer* _src, RHIBuffer* _dst)                              = 0;
+    virtual void CopyTexture(const RHICopyTextureInfo& _copy_info, RHITexture* _src, RHITexture* _dst)                          = 0;
+    virtual void CopyBufferToTexture(const RHICopyBufferToTextureInfo& _info, RHIBuffer* _src_buffer, RHITexture* _dst_texture) = 0;
 
-    virtual void CopyTextureToBuffer(const RHICopyTextureToBufferInfo& _info, RHITexture* src_texture, RHIBuffer* dst_buffer) = 0;
+    virtual void CopyTextureToBuffer(const RHICopyTextureToBufferInfo& _info, RHITexture* _src_texture, RHIBuffer* _dst_buffer) = 0;
 
     virtual void SetPipelineBarrier(const RHIBarrierDependencyInfo& _dependency) = 0;
 };

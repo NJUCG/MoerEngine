@@ -914,17 +914,8 @@ public:
     EPixelFormat GetUAVFormat() const {
         return GetInfo().uav_format;
     }
-    void SetLayout(const RHISubresourceRange& _subresource_range, ETextureLayout _layout, RHITextureBarrierInfo* barrier_info = nullptr);
-
     void SetTrackInfo(const RHISubresourceRange& _range, ETextureUsageFlags _usage, EPassType _pass_type);
 
-    ETextureLayout GetLayout(const RHISubresourceRange& _subresource_range) const {
-        auto it = subresource_layouts.find(_subresource_range);
-        if (it != subresource_layouts.end()) {
-            return it->second;
-        }
-        return TEXTURE_LAYOUT_UNDEFINED;
-    }
     RHIClearAttachment GetClearAttachment() const { return GetInfo().clear_attachment; }
     auto               GetTrackedUsage(Moer::uint _mip_index) const {
         auto it = mip_usages.find(_mip_index);
@@ -955,8 +946,8 @@ private:
             return hash;
         }
     };
-    Moer::UnorderedMap<RHISubresourceRange, ETextureLayout, RHISubresourceRangeHash> subresource_layouts;
-    Moer::UnorderedMap<Moer::uint, std::tuple<ETextureUsageFlags, EPassType>>        mip_usages;
+    // Moer::UnorderedMap<RHISubresourceRange, ETextureLayout, RHISubresourceRangeHash> subresource_layouts;
+    Moer::UnorderedMap<Moer::uint, std::tuple<ETextureUsageFlags, EPassType>> mip_usages;
 };
 
 #pragma region acceleration structures

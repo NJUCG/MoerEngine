@@ -165,6 +165,11 @@ void ResolveTextureBarrierInfo(VkImageMemoryBarrier2& _barrier, ETextureUsageFla
                 src_stage        = PS_LATE_FRAGMENT_TESTS;
                 layout           = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
                 break;
+            case ETextureUsageFlags::PRESENT:
+                src_access_flags = VK_ACCESS_2_NONE;
+                src_stage        = PS_COLOR_ATTACHMENT_OUTPUT;
+                layout           = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+                break;
             default:
                 assert(false && "Invalid texture usage");
         }
@@ -411,7 +416,7 @@ void VulkanRHICommandListBase::SetPipelineBarrier(const RHIBarrierDependencyInfo
         image_barriers[i].subresourceRange.levelCount     = _dependency.texture_barriers[i].sub_resource_range.num_mips == RHISubresourceRange::s_all ? VK_REMAINING_MIP_LEVELS : _dependency.texture_barriers[i].sub_resource_range.num_mips;// 1. MARK... levelCount + baseMipLevel must <= image mip levels
         image_barriers[i].subresourceRange.baseArrayLayer = _dependency.texture_barriers[i].sub_resource_range.array_index;
         image_barriers[i].subresourceRange.layerCount     = _dependency.texture_barriers[i].sub_resource_range.array_count == RHISubresourceRange::s_all ? VK_REMAINING_ARRAY_LAYERS : _dependency.texture_barriers[i].sub_resource_range.array_count;// 1. MARK... layerCount + baseArrayLayer must <= image array layers
-        _dependency.texture_barriers[i].p_texture->SetLayout(_dependency.texture_barriers[i].sub_resource_range, _dependency.texture_barriers[i].dst_layout);
+        // _dependency.texture_barriers[i].p_texture->SetLayout(_dependency.texture_barriers[i].sub_resource_range, _dependency.texture_barriers[i].dst_layout);
     }
 
     VkDependencyInfo dependency_info{};

@@ -3,6 +3,7 @@
 #include "RenderAPI.h"
 #include "rhi/RHIResource.h"
 #include "shader/Shader.h"
+#include "shader/ShaderMutation.h"
 #include "shader/ShaderParameterMacros.h"
 namespace Moer {
     struct RENDER_API HiZBuffer {
@@ -24,6 +25,8 @@ namespace Moer {
 
     class BuildHiZShader : public Shader {
         DEFINE_SHADER_TYPE(BuildHiZShader, Global, RENDER_API);
+        MUTATION_SPARSE_UINT(MipCount, 1, 2, 3, 4);
+        DEFINE_MUTATION_SET(MipCount);
 
     public:
         BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
@@ -42,8 +45,8 @@ namespace Moer {
         HiZBuilder();
         ~HiZBuilder();
         static HiZBuilder& GetInstance();
-        void               DispatchBuildHiZ(RHIGraphicsCommandList* cmd_list, RHISRVRef depth_buffer, HiZBuffer& hiz_buffer);
-        void               DispatchBuildHiZ(RenderContext& _context, RHISRVRef depth_buffer, HiZBuffer& hiz_buffer);
+        // void               DispatchBuildHiZ(RHIGraphicsCommandList* cmd_list, RHISRVRef depth_buffer, HiZBuffer& hiz_buffer);
+        void DispatchBuildHiZ(RenderContext& _context, RHISRVRef depth_buffer, HiZBuffer& hiz_buffer);
 
     private:
         UniquePtr<Impl> impl;

@@ -262,58 +262,26 @@ namespace Moer {
         blit_info.src_slice      = {};
         blit_info.dst_slice      = {};
 
-        RHIBarrierDependencyInfo barrier_info{};
-        auto&                    barriers      = barrier_info.texture_barriers;
-        uint32_t                 present_index = presented_index % info.back_buffer_count;
+        uint32_t present_index = presented_index % info.back_buffer_count;
 
-        {
-            RHIBarrierDependencyInfo transfer_barrier_info;
-            auto&                    barriers = transfer_barrier_info.texture_barriers;
-            barriers.push_back({});
-            swapchain_textures[present_index]->SetLayout({ETextureAspectFlags::COLOR, 0, 1, 0, 1, 0, 1}, TEXTURE_LAYOUT_TRANSFER_SRC, &barriers.back());
-            cmd_list->SetPipelineBarrier(transfer_barrier_info);
-        }
+        cmd_list->TransitionTexture(swapchain_textures[present_index], ETextureUsageFlags::TRANSFER_SRC, EPassType::Copy);
 
-        barriers.emplace_back(RHITextureBarrierInfo::Create()
-                                  .SetTexture(present_texture)
-                                  .SetSrcTextureLayout(present_texture->GetLayout({ETextureAspectFlags::COLOR, 0, 1, 0, 1, 0, 1}))
-                                  .SetDstTextureLayout(TEXTURE_LAYOUT_TRANSFER_DST)
-                                  .SetSubResourceRange({}))
-            .SetSrcQueueType(ECommandQueueType::GRAPHICS)
-            .SetDstQueueType(ECommandQueueType::GRAPHICS);
-        present_texture->SetLayout({ETextureAspectFlags::COLOR, 0, 1, 0, 1, 0, 1}, TEXTURE_LAYOUT_TRANSFER_DST);
-        // barriers.emplace_back(RHITextureBarrierInfo::Create()
-        //                           .SetTexture(swapchain_textures[present_index])
-        //                           .SetSrcTextureLayout(swapchain_textures[present_index]->GetLayout({ETextureAspectFlags::COLOR, 0, 1, 0, 1, 0, 1}))
-        //                           .SetDstTextureLayout(TEXTURE_LAYOUT_TRANSFER_SRC));
+        cmd_list->TransitionTexture(present_texture, ETextureUsageFlags::TRANSFER_DST, EPassType::Copy);
 
-        swapchain_textures[present_index]->SetLayout({ETextureAspectFlags::COLOR, 0, 1, 0, 1, 0, 1}, TEXTURE_LAYOUT_TRANSFER_SRC);
-        barriers[0]
-            .SetSrcAccessFlags(ERHIAccessFlags::SHADER_SAMPLED_READ)
-            .SetDstAccessFlags(ERHIAccessFlags::TRANSFER_WRITE)
-            .SetSrcStage(PS_FRAGMENT_SHADER)
-            .SetDstStage(PS_TRANSFER);
-        // barriers[1]
-        //     .SetSrcAccessFlags(ERHIAccessFlags::SHADER_SAMPLED_READ)
-        //     .SetDstAccessFlags(ERHIAccessFlags::TRANSFER_WRITE)
-        //     .SetSrcStage(PS_COLOR_ATTACHMENT_OUTPUT)
-        //     .SetDstStage(PS_TRANSFER);
+        RHICopyTextureInfo copy_info(TEXTURE_LAYOUT_TRANSFER_SRC,
+                                     {},
+                                     TEXTURE_LAYOUT_TRANSFER_DST,
+                                     {},
+                                     zero_offset,
+                                     zero_offset,
+                                     Extent3D(extent.x, extent.y, 1));
 
-        cmd_list->SetPipelineBarrier(barrier_info);
-        cmd_list->BlitTexture(blit_info,
+        cmd_list->ExecuteTransition();
+
+        cmd_list->CopyTexture(copy_info,
                               swapchain_textures[present_index],
                               present_texture);
 
-        barriers[0]
-            .SetSrcTextureLayout(TEXTURE_LAYOUT_TRANSFER_DST)
-            .SetDstTextureLayout(TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
-            .SetSrcAccessFlags(ERHIAccessFlags::TRANSFER_WRITE)
-            .SetDstAccessFlags(ERHIAccessFlags::SHADER_SAMPLED_READ)
-            .SetDstStage(PS_FRAGMENT_SHADER)
-            .SetSrcStage(PS_TRANSFER);
-        barrier_info.texture_barriers.resize(1);
-        present_texture->SetLayout({ETextureAspectFlags::COLOR, 0, 1, 0, 1, 0, 1}, TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-        cmd_list->SetPipelineBarrier(barrier_info);
         cmd_list->EndRecording();
 
         RHISubmitInfo submit_info;

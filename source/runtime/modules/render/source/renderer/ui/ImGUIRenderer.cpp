@@ -250,19 +250,7 @@ void ImGUIRenderer::Impl::EndRenderFrame() {
             // if (next_frame_info.backbuffer_index == UINT32_MAX) return;
             EnqueueRenderTask([main_viewport, this] {
                 if (next_frame_info.backbuffer_index == UINT32_MAX) return;
-                RHIUAV*                  present_view = g_rhi->RHIGetViewportBackBufferUAV(main_viewport, next_frame_info.backbuffer_index);
-                RHIBarrierDependencyInfo dependency_info;
-                auto&                    texture_barriers = dependency_info.texture_barriers;
-                texture_barriers.resize(1);
-
-                texture_barriers[0].SetDstTextureLayout(ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT);
-                texture_barriers[0].SetSrcTextureLayout(present_view->GetTexture()->GetLayout({ETextureAspectFlags::COLOR}));
-                texture_barriers[0].SetTexture(present_view->GetTexture());
-                texture_barriers[0].SetSrcStage(PS_COLOR_ATTACHMENT_OUTPUT);
-                texture_barriers[0].SetDstStage(PS_COLOR_ATTACHMENT_OUTPUT);
-                texture_barriers[0].SetSrcAccessFlags(ERHIAccessFlags::MEMORY_READ);
-                texture_barriers[0].SetDstAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
-
+                RHIUAV* present_view = g_rhi->RHIGetViewportBackBufferUAV(main_viewport, next_frame_info.backbuffer_index);
                 //wait for last frame gui_command_list submission
 
                 present_fence->Wait(timeline_index);
@@ -270,7 +258,8 @@ void ImGUIRenderer::Impl::EndRenderFrame() {
                 ui_command_list->Reset();
 
                 ui_command_list->BeginRecording();
-                ui_command_list->SetPipelineBarrier(dependency_info);
+                ui_command_list->TransitionTexture(present_view->GetTexture(), ETextureUsageFlags::COLOR_ATTACHMENT, EPassType::Graphics);
+                ui_command_list->ExecuteTransition();
             });
 
             auto* draw_data = ImGui::GetDrawData();
@@ -305,18 +294,9 @@ void ImGUIRenderer::Impl::EndRenderFrame() {
 
                 ui_command_list->EndRenderPass();
 
-                RHIBarrierDependencyInfo texture_dependency_info;
-                auto&                    texture_barriers_present = texture_dependency_info.texture_barriers;
-                texture_barriers_present.resize(1);
+                ui_command_list->TransitionTexture(present_view->GetTexture(), ETextureUsageFlags::PRESENT, EPassType::Graphics);
 
-                texture_barriers_present[0].SetDstTextureLayout(ETextureLayout::TEXTURE_LAYOUT_PRESENT_SRC);
-                texture_barriers_present[0].SetSrcTextureLayout(present_view->GetTexture()->GetLayout({ETextureAspectFlags::COLOR}));
-                texture_barriers_present[0].SetTexture(present_view->GetTexture());
-                texture_barriers_present[0].SetSrcStage(PS_COLOR_ATTACHMENT_OUTPUT);
-                texture_barriers_present[0].SetDstStage(PS_COLOR_ATTACHMENT_OUTPUT);
-                texture_barriers_present[0].SetSrcAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
-
-                ui_command_list->SetPipelineBarrier(texture_dependency_info);
+                ui_command_list->ExecuteTransition();
 
                 ui_command_list->EndRecording();
 
@@ -826,42 +806,11 @@ void CreateFontsTexture() {
 
         g_rhi->RHIUnmapBuffer(staging_buffer);
 
-        RHISubresourceRange range{ETextureAspectFlags::COLOR,
-                                  0,
-                                  1,
-                                  0,
-                                  1,
-                                  0,
-                                  1};
-
-        RHITextureBarrierInfo tex_barriers[2];
-
-        tex_barriers[0].src_layout = TEXTURE_LAYOUT_UNDEFINED;
-        tex_barriers[0].dst_layout = TEXTURE_LAYOUT_TRANSFER_DST;
-        tex_barriers[0].src_access = ERHIAccessFlags::UNDEFINED;
-        tex_barriers[0].dst_access = ERHIAccessFlags::TRANSFER_WRITE;
-        tex_barriers[0].dst_stage  = PS_TRANSFER;
-
-        tex_barriers[0].p_texture          = font_texture;
-        tex_barriers[0].sub_resource_range = range;
-
-        tex_barriers[1].src_layout         = TEXTURE_LAYOUT_TRANSFER_DST;
-        tex_barriers[1].dst_layout         = TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        tex_barriers[1].src_access         = ERHIAccessFlags::TRANSFER_WRITE;
-        tex_barriers[1].dst_access         = ERHIAccessFlags::SHADER_READ;
-        tex_barriers[1].src_stage          = PS_TRANSFER;
-        tex_barriers[1].dst_stage          = PS_FRAGMENT_SHADER;
-        tex_barriers[1].p_texture          = font_texture;
-        tex_barriers[1].sub_resource_range = range;
-
         RHIGraphicsCommandList* command_list = g_rhi->RHICreateGraphicsCommandList(g_rhi->RHIGetCurrentCommandAllocator());
 
-        RHIBarrierDependencyInfo font_create_barriers{};
-        font_create_barriers.texture_barriers.resize(1);
-        font_create_barriers.texture_barriers[0] = tex_barriers[0];
-
         command_list->BeginRecording();
-        command_list->SetPipelineBarrier(font_create_barriers);
+        command_list->TransitionTexture(font_texture, ETextureUsageFlags::TRANSFER_DST, EPassType::Copy);
+        command_list->ExecuteTransition();
 
         RHISubresourceSlice        resource_slice(ETextureAspectFlags::COLOR, 0, 0, 1, 0, 1);
         RHICopyBufferToTextureInfo copy_info(
@@ -874,11 +823,8 @@ void CreateFontsTexture() {
         // 3. MARK: pRegion[0] is trying to copy 518144 bytes plus 0 offset to/from the VkBuffer (VkBuffer 0xcb1c7c000000001b[]) which exceeds the VkBuffer total size of 131072 bytes.
         command_list->CopyBufferToTexture(copy_info, staging_buffer, font_texture);
 
-        RHIBarrierDependencyInfo font_copy_barriers{};
-        font_copy_barriers.texture_barriers.resize(1);
-        font_copy_barriers.texture_barriers[0] = tex_barriers[1];
-
-        command_list->SetPipelineBarrier(font_copy_barriers);
+        command_list->TransitionTexture(font_texture, ETextureUsageFlags::SAMPLED, EPassType::Graphics);
+        command_list->ExecuteTransition();
 
         RHIBatchedShaderParameters  batched_params;
         ImGuiShaderFrag::Parameters params;
@@ -908,10 +854,10 @@ void CreateFontsTexture() {
     io.Fonts->SetTexID((ImTextureID)backend_data->font_view);
 }
 
-void GuiCreateWindow(ImGuiViewport* viewport);
-void GuiDestroyWindow(ImGuiViewport* viewport);
-void GuiSetWindowSize(ImGuiViewport* viewport, ImVec2 size);
-void GuiRenderWindow(ImGuiViewport* viewport, void*);
+void GuiCreateWindow(ImGuiViewport* _viewport);
+void GuiDestroyWindow(ImGuiViewport* _viewport);
+void GuiSetWindowSize(ImGuiViewport* _viewport, ImVec2 _size);
+void GuiRenderWindow(ImGuiViewport* _viewport, void*);
 
 void GuiInitPlatformInterface() {
     ImGuiPlatformIO& platform_io       = ImGui::GetPlatformIO();
@@ -1011,28 +957,15 @@ void GuiRenderWindow(ImGuiViewport* viewport, void*) {
         if (!viewport_data->IsBackBufferReady()) return;
 
         RHIUAV* present_view = g_rhi->RHIGetViewportBackBufferUAV(rhi_viewport, viewport_data->next_frame_info.backbuffer_index);
-
-        //transfer present texture layout to color attachment layout
-        RHIBarrierDependencyInfo dependency_info;
-        dependency_info.texture_barriers.resize(1);
-        auto& texture_barriers = dependency_info.texture_barriers;
-
-        texture_barriers[0]
-            .SetDstTextureLayout(ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT)
-            .SetSrcTextureLayout(present_view->GetTexture()->GetLayout({ETextureAspectFlags::COLOR}))
-            .SetTexture(present_view->GetTexture())
-            .SetSrcStage(PS_COLOR_ATTACHMENT_OUTPUT)
-            .SetDstStage(PS_COLOR_ATTACHMENT_OUTPUT)
-            .SetDstAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
-
         //transfer present texture layout to present src
-
+        auto& cmd_list = *viewport_data->comand_list;
         viewport_data->present_fence->Wait(viewport_data->frame_index);
-        viewport_data->comand_list->Reset();
+        cmd_list.Reset();
 
-        viewport_data->comand_list->BeginRecording();
+        cmd_list.BeginRecording();
 
-        viewport_data->comand_list->SetPipelineBarrier(dependency_info);
+        cmd_list.TransitionTexture(present_view->GetTexture(), ETextureUsageFlags::COLOR_ATTACHMENT, EPassType::Graphics);
+        cmd_list.ExecuteTransition();
     });
     // RHIViewportNextBackBufferInfo info = g_rhi->RHIGetNextFrameViewportBufferInfo(rhi_viewport);
 
@@ -1061,23 +994,11 @@ void GuiRenderWindow(ImGuiViewport* viewport, void*) {
     EnqueueRenderTask([viewport_data] {
         if (!viewport_data->IsBackBufferReady()) return;
         RHIUAV* present_view = g_rhi->RHIGetViewportBackBufferUAV(viewport_data->viewport, viewport_data->next_frame_info.backbuffer_index);
-
-        viewport_data->comand_list->EndRenderPass();
-
-        RHIBarrierDependencyInfo texture_dependency_info;
-        texture_dependency_info.texture_barriers.resize(1);
-        auto& texture_barriers_present = texture_dependency_info.texture_barriers;
-        texture_barriers_present[0]
-            .SetDstTextureLayout(ETextureLayout::TEXTURE_LAYOUT_PRESENT_SRC)
-            .SetSrcTextureLayout(present_view->GetTexture()->GetLayout({ETextureAspectFlags::COLOR}))
-            .SetSrcQueueType(ECommandQueueType::GRAPHICS)
-            .SetTexture(present_view->GetTexture())
-            .SetSrcAccessFlags(ERHIAccessFlags::COLOR_ATTACHMENT_WRITE)
-            .SetSrcStage(PS_COLOR_ATTACHMENT_OUTPUT)
-            .SetDstStage(PS_COLOR_ATTACHMENT_OUTPUT);
-        viewport_data->comand_list->SetPipelineBarrier(texture_dependency_info);
-
-        viewport_data->comand_list->EndRecording();
+        auto&   cmd_list     = *viewport_data->comand_list;
+        cmd_list.EndRenderPass();
+        cmd_list.TransitionTexture(present_view->GetTexture(), ETextureUsageFlags::PRESENT, EPassType::Graphics);
+        cmd_list.ExecuteTransition();
+        cmd_list.EndRecording();
 
         RHISubmitInfo submit_info{};
 

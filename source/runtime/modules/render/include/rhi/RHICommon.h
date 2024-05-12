@@ -147,6 +147,8 @@ struct Extent3D {
     }
     Extent3D() : x(0), y(0), z(0) {
     }
+    Extent3D(const Extent2D& _v, uint32_t _z = 0) : x(_v.x), y(_v.y), z(_z) {
+    }
     bool operator==(const Extent3D& other) const {
         return x == other.x && y == other.y && z == other.z;
     };
@@ -803,8 +805,9 @@ enum class ETextureUsageFlags : uint32_t {
 
     VIDEO_ENCODE = 1 << 16,
     // ATTACHMENT_FEEDBACK_LOOP = 1 << 17,
-    SRGB = 1 << 18,
-    Num  = 19
+    SRGB    = 1 << 18,
+    PRESENT = 1 << 19,
+    Num     = 20
 };
 ENUM_BIT_OP_IMPL(ETextureUsageFlags, FLAG)
 
