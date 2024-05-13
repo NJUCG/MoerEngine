@@ -12,9 +12,12 @@
 #include "shader/Shader.h"
 #include "shader/ShaderResourceManager.h"
 #include "../deferred/RenderResourceDeferred.h"
+#include <utility>
+#include <variant>
 namespace Moer {
-    static constexpr uint32_t max_mip_levels = 12;
     IMPLEMENT_SHADER_TYPE(BuildHiZShader, "utils/BuildHiZ.hlsl", "main", ST_COMPUTE);
+
+    static constexpr uint32_t max_mip_levels = 12;
 
     void HiZBuffer::InitFromDepthExtent(Vector2i extent) {
         Vector2i target_extent = Vector2i(RoundDownToPowerOf2(uint32_t(extent.x)), RoundDownToPowerOf2(uint32_t(extent.y)));
@@ -71,15 +74,28 @@ namespace Moer {
             sampler = g_rhi->RHICreateSampler(create_info);
         }
     }
-
+    template<uint N>
+    struct Num {
+        static const constexpr auto value = N;
+    };
+    template<class F, uint... Is>
+    void For(F _func, std::integer_sequence<uint, Is...>) {
+        (_func(Num<Is>{}), ...);
+    }
     struct HiZBuilder::Impl {
+        static constexpr uint max_mip_batch_cnt = 4;
         Impl() {
-            for (uint32_t i = 0; i < BuildHiZShader::MipCount::mutation_count; ++i) {
-                builder_shaders[i] = ShaderResourceManager::GetInstance().GetShader<BuildHiZShader>(BuildHiZShader::MipCount::GetMutationID(i + 1));
-                assert(builder_shaders[i] && "Failed to load HiZ builder shader");
 
-                psos[i] = g_rhi->RHICreateComputePipelineState(builder_shaders[i]);
-            }
+            For([this](auto _i) {
+                constexpr uint               idx = _i.value;
+                BuildHiZShader::TMutationSet set;
+                set.SetMutation<BuildHiZShader::HIZ_BATCH_CNT>(idx + 1);
+                builder_shaders[idx] = ShaderResourceManager::GetInstance().GetShader<BuildHiZShader>(set.GetMutationID());
+                assert(builder_shaders[idx] && "Failed to load HiZ builder shader");
+
+                psos[idx] = g_rhi->RHICreateComputePipelineState(builder_shaders[idx]);
+            },
+                std::make_integer_sequence<uint, max_mip_batch_cnt>{});
             // builder_shader = ShaderResourceManager::GetInstance().GetShader<BuildHiZShader>();
             // assert(builder_shader && "Failed to load HiZ builder shader");
             // pso = g_rhi->RHICreateComputePipelineState(builder_shader);
@@ -203,7 +219,7 @@ namespace Moer {
 
                 _builder.ReadTexture(depth, ETextureUsageFlags::SAMPLED);
                 _builder.WriteTexture(hiz, ETextureUsageFlags::UNORDERED_ACCESS, 0, mip_cnt); }, [this, mip_cnt, &_hiz_buffer, depth_buffer(_depth_buffer), &_context](RenderPassContext& _pass_context) {
-                    BuildHiZShader::Parameters params;
+                    BuildHiZShader::Parameters params{};
                     auto&                      hiz_tex   = _hiz_buffer.texture;
                     Vector2i                   mip0_size = Vector2i(hiz_tex->GetExtent3D());
 
@@ -211,43 +227,67 @@ namespace Moer {
                     config.b_mip0        = true;
                     config.size          = mip0_size;
                     config.target_level  = 0;
-                    params.target        = _hiz_buffer.uavs[0];
+                    params.target0       = _hiz_buffer.uavs[0];
+                    params.target1       = _hiz_buffer.uavs[0];
+                    params.target2       = _hiz_buffer.uavs[0];
+                    params.target3       = _hiz_buffer.uavs[0];
                     params.depth_buffer  = depth_buffer;
                     params.depth_sampler = depth_sampler;
                     RHIBatchedShaderParameters batched_params;
                     auto&                      cmd_list = _context.GetCommandList();
                     cmd_list.SetPipelineState(psos[0]);
 
-                    batched_params.SetParameters(builder_shader, params);
+                    batched_params.SetParameters(builder_shaders[0], params);
                     g_rhi->RHISetBatchedShaderParameters(psos[0], batched_params);
                     cmd_list.Dispatch(Vector3i((config.size.t.x + 7) >> 3u, (config.size.t.y + 7) >> 3u, 1));
 
-                    for (uint i = 1; i < mip_cnt;) {
+                    uint current_mip = 1;
+                    cmd_list.SetPipelineState(psos[max_mip_batch_cnt - 1]);
 
-                        uint batch_cnt = std::min(mip_batch_cnt, mip_cnt - i);
-                        cmd_list.TransitionTexture(hiz_tex, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED, EPassType::Compute, i - 1);
-                        cmd_list.TransitionTexture(hiz_tex, ETextureUsageFlags::UNORDERED_ACCESS, EPassType::Compute, i, batch_cnt);
+                    for (; current_mip < mip_cnt - 4; current_mip += max_mip_batch_cnt) {
+                        config.b_mip0       = false;
+                        config.size         = Vector2i(std::max(1, mip0_size.x >> (current_mip - 1)), std::max(1, mip0_size.y >> (current_mip - 1)));
+                        config.target_level = current_mip;
+                        params.target0      = _hiz_buffer.uavs[current_mip];
+                        params.target1      = _hiz_buffer.uavs[current_mip + 1];
+                        params.target2      = _hiz_buffer.uavs[current_mip + 2];
+                        params.target3      = _hiz_buffer.uavs[current_mip + 3];
+
+                        cmd_list.TransitionTexture(hiz_tex, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED, EPassType::Compute, current_mip - 1);
+                        cmd_list.TransitionTexture(hiz_tex, ETextureUsageFlags::UNORDERED_ACCESS, EPassType::Compute, current_mip, 4);
                         cmd_list.ExecuteTransition();
 
-                        config.b_mip0       = false;
-                        config.size         = Vector2i(std::max(1, mip0_size.x >> (i - 1)), std::max(1, mip0_size.y >> i));
-                        config.target_level = i;
-                        params.target       = _hiz_buffer.uavs[i];
-                        params.depth_buffer = _hiz_buffer.srvs[i - 1];
-                        batched_params.SetParameters(builder_shader, params);
-                        g_rhi->RHISetBatchedShaderParameters(psos[batch_cnt-1], batched_params);
+                        batched_params.SetParameters(builder_shaders[max_mip_batch_cnt - 1], params);
+                        g_rhi->RHISetBatchedShaderParameters(psos[max_mip_batch_cnt - 1], batched_params);
                         cmd_list.Dispatch(Vector3i((config.size.t.x + 7) >> 3u, (config.size.t.y + 7) >> 3u, 1));
+                    }
 
-                        i+= batch_cnt;
+                    if (current_mip < mip_cnt) {
+                        uint start_mip = current_mip;
+                        uint batch_cnt = mip_cnt - start_mip;
+                        cmd_list.SetPipelineState(psos[batch_cnt - 1]);
+                        config.b_mip0       = false;
+                        config.size         = Vector2i(std::max(1, mip0_size.x >> (start_mip - 1)), std::max(1, mip0_size.y >> (start_mip - 1)));
+                        config.target_level = start_mip;
+                        params.depth_buffer = _hiz_buffer.srvs[start_mip - 1];
+                        params.target0      = _hiz_buffer.uavs[start_mip];
+                        params.target1      = _hiz_buffer.uavs[std::min(mip_cnt - 1, start_mip + 1)];
+                        params.target2      = _hiz_buffer.uavs[std::min(mip_cnt - 1, start_mip + 2)];
+                        cmd_list.TransitionTexture(hiz_tex, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED, EPassType::Compute, start_mip - 1);
+                        cmd_list.TransitionTexture(hiz_tex, ETextureUsageFlags::UNORDERED_ACCESS, EPassType::Compute, start_mip, batch_cnt);
+                        cmd_list.ExecuteTransition();
+                        batched_params.SetParameters(builder_shaders[batch_cnt - 1], params);
+                        g_rhi->RHISetBatchedShaderParameters(psos[batch_cnt - 1], batched_params);
+
+                        cmd_list.Dispatch(Vector3i((config.size.t.x + 7) >> 3u, (config.size.t.y + 7) >> 3u, 1));
                     } });
         }
 
         RHIShaderRef                             builder_shader;
-        constexpr static uint32_t                mip_batch_cnt = BuildHiZShader::MipCount::mutation_count;
-        StaticArray<RHIShaderRef, mip_batch_cnt> builder_shaders;
+        StaticArray<RHIShaderRef, max_mip_batch_cnt> builder_shaders;
 
         // RHIComputePipelineStateRef                             pso;
-        StaticArray<RHIComputePipelineStateRef, mip_batch_cnt> psos;
+        StaticArray<RHIComputePipelineStateRef, max_mip_batch_cnt> psos;
         RHISamplerRef                                          depth_sampler;
     };
     HiZBuilder::HiZBuilder() {

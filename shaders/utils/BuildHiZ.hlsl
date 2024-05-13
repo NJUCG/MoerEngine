@@ -8,24 +8,18 @@ struct HiZConfig {
 };
 
 groupshared float group_depth[8][8];
-// size should be power of 2
-#define StoreMip(N)                                                            \
-  void set_mip_##N(uint target_mip, uint2 coord, float val) {                  \
-    target##N[target_mip][coord] = value;                                      \
-  }
 
-#define TargetBinding(N)                                                       \
-  [[vk::binding(0, 0)]] RWTexture2D<float> target##N[N] : register(u0);        \
-  StoreMip(N)
+[[vk::binding(0, 0)]] RWTexture2D<float> target0 : register(u0);
+[[vk::binding(1, 0)]] RWTexture2D<float> target1 : register(u1);
+[[vk::binding(2, 0)]] RWTexture2D<float> target2 : register(u2);
+[[vk::binding(3, 0)]] RWTexture2D<float> target3 : register(u3);
 
 [[vk::push_constant]] ConstantBuffer<HiZConfig> config : register(b0);
 
-TargetBinding(1) TargetBinding(2) TargetBinding(3) TargetBinding(4)
-
-    [[vk::binding(0, 1)]] SamplerState depth_sampler : register(t0);
+[[vk::binding(0, 1)]] SamplerState depth_sampler : register(t0);
 [[vk::binding(0, 2)]] Texture2D<float> depth_buffer : register(t1);
 
-#define SetMip(level, coord, val) set_mip_##HIZ_BATCH_CNT(level, coord, val);
+#define SetMip(level, coord, val) target##level[coord] = val;
 
 void GenerateMip0(uint3 dtid) {
   uint2 size = config.size;
@@ -37,7 +31,7 @@ void GenerateMip0(uint3 dtid) {
   float depth = depth_buffer.SampleLevel(depth_sampler, uv, 0);
   // reverse y coord
   gid.y = size.y - gid.y - 1;
-  target[gid] = depth;
+  SetMip(0, gid, depth);
 }
 
 // void GenerateMipN(uint level, uint3 dtid) {
@@ -83,7 +77,7 @@ void GenerateMipNBatch(uint start_level, uint3 dtid, uint2 thread_id) {
     depth.xy = min(depth.xy, depth.zw);
     depth.x = min(depth.x, depth.y);
     group_depth[thread_id.x][thread_id.y] = depth.x;
-    SetMip(start_level, gid >> 1, depth.x);
+    SetMip(0, gid >> 1, depth.x);
   }
 
 #if HIZ_BATCH_CNT > 1
@@ -97,7 +91,7 @@ void GenerateMipNBatch(uint start_level, uint3 dtid, uint2 thread_id) {
     depth.xy = min(depth.xy, depth.zw);
     depth.x = min(depth.x, depth.y);
     group_depth[thread_id.x][thread_id.y] = depth.x;
-    SetMip(start_level + 1, gid >> 2, depth.x);
+    SetMip(1, gid >> 2, depth.x);
   }
 
 #endif
@@ -113,7 +107,7 @@ void GenerateMipNBatch(uint start_level, uint3 dtid, uint2 thread_id) {
     depth.xy = min(depth.xy, depth.zw);
     depth.x = min(depth.x, depth.y);
     group_depth[thread_id.x][thread_id.y] = depth.x;
-    SetMip(start_level + 2, gid >> 3, depth.x);
+    SetMip(2, gid >> 3, depth.x);
   }
 
 #endif
@@ -129,7 +123,7 @@ void GenerateMipNBatch(uint start_level, uint3 dtid, uint2 thread_id) {
     depth.xy = min(depth.xy, depth.zw);
     depth.x = min(depth.x, depth.y);
     group_depth[thread_id.x][thread_id.y] = depth.x;
-    SetMip(start_level + 3, gid >> 4, depth.x);
+    SetMip(3, gid >> 4, depth.x);
   }
 
 #endif

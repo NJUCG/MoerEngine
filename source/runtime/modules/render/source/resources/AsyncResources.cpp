@@ -281,6 +281,8 @@ namespace Moer {
         cmd_list->CopyTexture(copy_info,
                               swapchain_textures[present_index],
                               present_texture);
+        cmd_list->TransitionTexture(present_texture, ETextureUsageFlags::SAMPLED, EPassType::Graphics);
+        cmd_list->ExecuteTransition();
 
         cmd_list->EndRecording();
 

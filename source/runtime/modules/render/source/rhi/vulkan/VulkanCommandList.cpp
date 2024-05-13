@@ -151,7 +151,7 @@ void ResolveTextureBarrierInfo(VkImageMemoryBarrier2& _barrier, ETextureUsageFla
                 layout           = VK_IMAGE_LAYOUT_GENERAL;
                 break;
             case ETextureUsageFlags::COLOR_ATTACHMENT:
-                src_access_flags = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+                src_access_flags = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
                 src_stage        = PS_COLOR_ATTACHMENT_OUTPUT;
                 layout           = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
                 break;
@@ -189,7 +189,7 @@ void VulkanRHICommandListBase::TransitionTextureBase(RHITexture* _texture, EText
     }
 
     auto& image_barrier               = m_image_barriers[m_image_barrier_count - 1];
-    image_barrier.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    image_barrier.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
     image_barrier.pNext               = nullptr;
     image_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     image_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;

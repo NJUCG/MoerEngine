@@ -25,14 +25,17 @@ namespace Moer {
 
     class BuildHiZShader : public Shader {
         DEFINE_SHADER_TYPE(BuildHiZShader, Global, RENDER_API);
-        MUTATION_SPARSE_UINT(MipCount, 1, 2, 3, 4);
-        DEFINE_MUTATION_SET(MipCount);
+        MUTATION_SPARSE_UINT(HIZ_BATCH_CNT, 1, 2, 3, 4);
+        DEFINE_MUTATION_SET(HIZ_BATCH_CNT);
 
     public:
         BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
         DEFINE_SHADER_PARAM_STRUCT(HiZConfig, config)
 
-        DEFINE_SHADER_PARAM_UAV(RWTexture2D<float>, target)
+        DEFINE_SHADER_PARAM_UAV(RWTexture2D<float>, target0)
+        DEFINE_SHADER_PARAM_UAV(RWTexture2D<float>, target1)
+        DEFINE_SHADER_PARAM_UAV(RWTexture2D<float>, target2)
+        DEFINE_SHADER_PARAM_UAV(RWTexture2D<float>, target3)
         DEFINE_SHADER_PARAM_SAMPLER(SamplerState, depth_sampler)
         DEFINE_SHADER_PARAM_SRV(Texture2D<float>, depth_buffer)
 

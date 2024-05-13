@@ -142,6 +142,8 @@ public:                                                                         
 
 #define DEFINE_SHADER_PARAM_UAV(HLSLType, MemberName) \
     INTERNAL_DEFINE_SHADER_PARAM_IMPL(TShaderResourceParameterTypeInfo<RHIUAV*>, RHIUAV*, MemberName, HLSLType, EShaderPrecisionModifier::FLOAT, SBT_UAV, public, )
+#define DEFINE_SHADER_PARAM_UAV_ARRAY(HLSLType, MemberName, NumElements) \
+    INTERNAL_DEFINE_SHADER_PARAM_IMPL(TShaderResourceParameterTypeInfo<RHIUAV* [NumElements]>, RHIUAV*, MemberName, HLSLType, EShaderPrecisionModifier::FLOAT, SBT_UAV, public, )
 
 #define DEFINE_SHADER_PARAM_SRV(HLSLType, MemberName) \
     INTERNAL_DEFINE_SHADER_PARAM_IMPL(TShaderResourceParameterTypeInfo<RHISRV*>, RHISRV*, MemberName, HLSLType, EShaderPrecisionModifier::FLOAT, SBT_SRV, public, )

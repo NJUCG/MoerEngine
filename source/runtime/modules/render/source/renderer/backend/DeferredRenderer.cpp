@@ -587,6 +587,7 @@ namespace Moer {
     }
     void DeferredRenderer::Impl::FallBackDraw() {
         render_context.BeginFrame();
+        auto& cmd_list = render_context.GetCommandList();
         render_context.EndFrame(virtual_viewport);
     }
 

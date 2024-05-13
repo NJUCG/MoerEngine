@@ -179,6 +179,22 @@ public:                                                                   \
     }                                                                            \
     ShaderTypeRegistration ShaderClassName::s_registration(ShaderClassName::GetMetaType);
 
+#define IMPLEMENT_SHADER_TYPE_TEMPLATE(ShaderClassName, FileName, EntryPoint, ShaderType) \
+    template<>                                                                            \
+    ShaderMetaType& ShaderClassName::GetMetaType() {                                      \
+        static ShaderMetaType s_meta_type(                                                \
+            #ShaderClassName,                                                             \
+            FileName,                                                                     \
+            EntryPoint,                                                                   \
+            ShaderType,                                                                   \
+            sizeof(ShaderClassName),                                                      \
+            ShaderClassName::GetParametersMetaData(),                                     \
+            TMutationSet::mutation_count,                                                 \
+            ShaderFunctionProc(ShaderClassName));                                         \
+        return s_meta_type;                                                               \
+    }                                                                                     \
+    template<>                                                                            \
+    ShaderTypeRegistration ShaderClassName::s_registration(ShaderClassName::GetMetaType);
 class TestReflectionShader : public Shader {
     DEFINE_SHADER_TYPE(TestReflectionShader, Global, )
 public:
