@@ -30,7 +30,7 @@ namespace Moer {
     //everything runs on render thread, so we need to create a virtual swap chain
     class VirtualViewport {
     public:
-        VirtualViewport(const VirtualViewportCreateInfo& create_info);
+        VirtualViewport(const VirtualViewportCreateInfo& _create_info);
         ~VirtualViewport();
         //call on main thread
         void OnResize(Moer::Vector2i extent);

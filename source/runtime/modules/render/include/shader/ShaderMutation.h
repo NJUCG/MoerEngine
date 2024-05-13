@@ -129,7 +129,7 @@ struct TShaderMutationSet {
     constexpr static bool has_multiple_slot = mutation_count > 1;
 
     TShaderMutationSet<Types...>() {
-        (... = (std::get<GetTypeIndex<Types, TypeSeries>()>(mutation_values) = Types::GetMutationTypeFromID(0), false));
+        (... = (std::get<GetTypeIndex<Types, TypeSeries>()>(mutation_values) = Types::GetMutationTypeFromID(0)));
     }
     explicit TShaderMutationSet(uint32_t _mutation_id)// mutation_value(TMutation::GetMutationTypeFromID(_mutation_id % TMutation::mutation_count)), next_set(_mutation_id / TMutation::mutation_count)
     {

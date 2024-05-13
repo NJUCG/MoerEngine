@@ -1,5 +1,6 @@
 #include "resources/AsyncResources.h"
 #include "Core.h"
+#include "log/LogSystem.h"
 #include "misc/MMemory.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
@@ -58,6 +59,7 @@ namespace Moer {
 
         Moer::Array<RHITextureRef> swapchain_textures;
         Moer::Array<RHIUAVRef>     swapchain_uavs;
+        Moer::Array<uint>          swapchain_status;
         uint64_t                   frame_index     = 0;
         uint64_t                   presented_index = 0;
 
@@ -117,20 +119,20 @@ namespace Moer {
 
     VirtualViewport::Impl::~Impl() {
     }
-    VirtualViewport::Impl::Impl(const VirtualViewportCreateInfo& create_info) {
+    VirtualViewport::Impl::Impl(const VirtualViewportCreateInfo& _create_info) {
 
         present_fence = g_rhi->RHICreateFence({.usage = EFenceUsageFlags::TIMELINE});
 
         copy_queue    = g_rhi->RHICreateCommandQueue(ECommandQueueType::GRAPHICS);
         copy_cmd_list = g_rhi->RHICreateGraphicsCommandList(g_rhi->RHIGetCurrentCommandAllocator());
 
-        info.back_buffer_count = create_info.back_buffer_count;
-        info.extent            = create_info.extent;
-        info.format            = create_info.format;
-        info.name              = create_info.name;
+        info.back_buffer_count = _create_info.back_buffer_count;
+        info.extent            = _create_info.extent;
+        info.format            = _create_info.format;
+        info.name              = _create_info.name;
 
         upload_texture_create_info = RHITextureCreateInfo::Create2D("virtual viewport",
-                                                                    create_info.extent,
+                                                                    _create_info.extent,
                                                                     EPixelFormat::PF_B8G8R8A8_UNORM)
                                          .SetArraySize(1)
                                          .SetNumMips(1)
@@ -145,7 +147,7 @@ namespace Moer {
                                          );
 
         depth_texture_create_info = RHITextureCreateInfo::Create2D("virtual viewport depth",
-                                                                   create_info.extent,
+                                                                   _create_info.extent,
                                                                    EPixelFormat::PF_D32_SFLOAT_S8_UINT)
                                         .SetArraySize(1)
                                         .SetNumMips(1)
@@ -250,22 +252,11 @@ namespace Moer {
 
         Extent3D src_extent = swapchain_textures[current_rendered % info.back_buffer_count]->GetExtent3D();
 
-        Offset2D           extent = {upload_texture_create_info.extent.x, upload_texture_create_info.extent.y};
-        RHIBlitTextureInfo blit_info;
-        blit_info.filter         = SF_CUBIC;
-        blit_info.src_offsets[0] = zero_offset;
-        blit_info.src_offsets[1] = Offset3D(src_extent.x, src_extent.y, 1);
-        blit_info.dst_offsets[0] = zero_offset;
-        blit_info.dst_offsets[1] = Offset3D(extent.x, extent.y, 1);
-        blit_info.src_layout     = TEXTURE_LAYOUT_TRANSFER_SRC;
-        blit_info.dst_layout     = TEXTURE_LAYOUT_TRANSFER_DST;
-        blit_info.src_slice      = {};
-        blit_info.dst_slice      = {};
+        Offset2D extent = {upload_texture_create_info.extent.x, upload_texture_create_info.extent.y};
 
         uint32_t present_index = presented_index % info.back_buffer_count;
 
         cmd_list->TransitionTexture(swapchain_textures[present_index], ETextureUsageFlags::TRANSFER_SRC, EPassType::Copy);
-
         cmd_list->TransitionTexture(present_texture, ETextureUsageFlags::TRANSFER_DST, EPassType::Copy);
 
         RHICopyTextureInfo copy_info(TEXTURE_LAYOUT_TRANSFER_SRC,

@@ -166,7 +166,11 @@ void ResolveTextureBarrierInfo(VkImageMemoryBarrier2& _barrier, ETextureUsageFla
                 layout           = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
                 break;
             case ETextureUsageFlags::PRESENT:
-                src_access_flags = VK_ACCESS_2_NONE;
+                if constexpr (_is_src) {
+                    src_access_flags = VK_ACCESS_MEMORY_READ_BIT;
+                } else {
+                    src_access_flags = VK_ACCESS_2_NONE;
+                }
                 src_stage        = PS_COLOR_ATTACHMENT_OUTPUT;
                 layout           = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
                 break;

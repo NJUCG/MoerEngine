@@ -225,7 +225,7 @@ namespace Moer {
         create_info.name              = "DeferredRendererViewport";
         create_info.extent            = source_resolution;
         create_info.format            = _init_info.format;
-        create_info.back_buffer_count = 3;
+        create_info.back_buffer_count = 2;
         virtual_viewport              = MoerNew(VirtualViewport)(create_info);
 
         render_context.Init({.back_buffer_cnt = create_info.back_buffer_count,
