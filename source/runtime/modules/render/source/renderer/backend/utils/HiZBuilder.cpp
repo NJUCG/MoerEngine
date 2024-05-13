@@ -239,7 +239,7 @@ namespace Moer {
 
                     batched_params.SetParameters(builder_shaders[0], params);
                     g_rhi->RHISetBatchedShaderParameters(psos[0], batched_params);
-                    cmd_list.Dispatch(Vector3i((config.size.t.x + 7) >> 3u, (config.size.t.y + 7) >> 3u, 1));
+                    cmd_list.Dispatch(Vector3i((config.size.t.x + 15) >> 4u, (config.size.t.y + 15) >> 4u, 1));
 
                     uint current_mip = 1;
                     cmd_list.SetPipelineState(psos[max_mip_batch_cnt - 1]);
@@ -252,6 +252,7 @@ namespace Moer {
                         params.target1      = _hiz_buffer.uavs[current_mip + 1];
                         params.target2      = _hiz_buffer.uavs[current_mip + 2];
                         params.target3      = _hiz_buffer.uavs[current_mip + 3];
+                        params.depth_buffer = _hiz_buffer.srvs[current_mip - 1];
 
                         cmd_list.TransitionTexture(hiz_tex, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED, EPassType::Compute, current_mip - 1);
                         cmd_list.TransitionTexture(hiz_tex, ETextureUsageFlags::UNORDERED_ACCESS, EPassType::Compute, current_mip, 4);
@@ -259,7 +260,7 @@ namespace Moer {
 
                         batched_params.SetParameters(builder_shaders[max_mip_batch_cnt - 1], params);
                         g_rhi->RHISetBatchedShaderParameters(psos[max_mip_batch_cnt - 1], batched_params);
-                        cmd_list.Dispatch(Vector3i((config.size.t.x + 7) >> 3u, (config.size.t.y + 7) >> 3u, 1));
+                        cmd_list.Dispatch(Vector3i((config.size.t.x + 15) >> 4u, (config.size.t.y + 15) >> 4u, 1));
                     }
 
                     if (current_mip < mip_cnt) {
@@ -273,13 +274,14 @@ namespace Moer {
                         params.target0      = _hiz_buffer.uavs[start_mip];
                         params.target1      = _hiz_buffer.uavs[std::min(mip_cnt - 1, start_mip + 1)];
                         params.target2      = _hiz_buffer.uavs[std::min(mip_cnt - 1, start_mip + 2)];
+
                         cmd_list.TransitionTexture(hiz_tex, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED, EPassType::Compute, start_mip - 1);
                         cmd_list.TransitionTexture(hiz_tex, ETextureUsageFlags::UNORDERED_ACCESS, EPassType::Compute, start_mip, batch_cnt);
                         cmd_list.ExecuteTransition();
                         batched_params.SetParameters(builder_shaders[batch_cnt - 1], params);
                         g_rhi->RHISetBatchedShaderParameters(psos[batch_cnt - 1], batched_params);
 
-                        cmd_list.Dispatch(Vector3i((config.size.t.x + 7) >> 3u, (config.size.t.y + 7) >> 3u, 1));
+                        cmd_list.Dispatch(Vector3i((config.size.t.x + 15) >> 4u, (config.size.t.y + 15) >> 4u, 1));
                     } });
         }
 

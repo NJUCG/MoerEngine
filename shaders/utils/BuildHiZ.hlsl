@@ -7,7 +7,7 @@ struct HiZConfig {
   uint2 size;
 };
 
-groupshared float group_depth[8][8];
+groupshared float group_depth[16][16];
 
 [[vk::binding(0, 0)]] RWTexture2D<float> target0 : register(u0);
 [[vk::binding(1, 0)]] RWTexture2D<float> target1 : register(u1);
@@ -129,9 +129,9 @@ void GenerateMipNBatch(uint start_level, uint3 dtid, uint2 thread_id) {
 #endif
 }
 
-[numthreads(8, 8, 1)] void main(uint3 dtid
-                                : SV_DispatchThreadID, uint2 thread_id
-                                : SV_GroupThreadID) {
+[numthreads(16, 16, 1)] void main(uint3 dtid
+                                  : SV_DispatchThreadID, uint2 thread_id
+                                  : SV_GroupThreadID) {
   [branch] if (config.b_mip0) { GenerateMip0(dtid); }
   else {
     // GenerateMipN(config.target_level, dtid);
