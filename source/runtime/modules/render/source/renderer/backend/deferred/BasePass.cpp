@@ -217,9 +217,9 @@ namespace Moer {
         _context.GetRenderGraph().AddCopyPass(
             "Reset Counter",
             [&, this](RenderGraph::Builder& _builder) {
-                auto tp_counter_buffer = _context.GetRenderGraph().ImportIfNotExist(counter_buffer_name.data(), counter_buffer);
-                auto tp_indirect_args  = _context.GetRenderGraph().ImportIfNotExist(indirect_args_name.data(), indirect_args_buffer);
-                auto src_buffer        = _context.GetRenderGraph().ImportIfNotExist(zero_buffer_name.data(), zero_buffer);
+                auto tp_counter_buffer = _context.GetRenderGraph().ImportIfNotExist(counter_buffer_name, counter_buffer);
+                auto tp_indirect_args  = _context.GetRenderGraph().ImportIfNotExist(indirect_args_name, indirect_args_buffer);
+                auto src_buffer        = _context.GetRenderGraph().ImportIfNotExist(zero_buffer_name, zero_buffer);
                 _builder.WriteBuffer(tp_counter_buffer, EBufferLayout::TRANSFER_WRITE);
                 _builder.WriteBuffer(tp_indirect_args, EBufferLayout::TRANSFER_WRITE);
                 _builder.ReadBuffer(src_buffer, EBufferLayout::TRANSFER_READ);
@@ -308,12 +308,12 @@ namespace Moer {
                 // }
                 // _builder.ReadTexture(hiz, ETextureUsageFlags::SAMPLED);
                 auto& black_board = _context.GetRenderGraph().GetBlackBoard();
-                _builder.ReadTexture(hiz, ETextureUsageFlags::SAMPLED, 0, MAX_TEXTURE_MIP_COUNT);
-                _builder.WriteBuffer(_context.GetRenderGraph().ImportIfNotExist(instance_meshlet_cull_info_name.data(), instance_meshlet_cull_info_buffer), EBufferLayout::WRITE);
-                _builder.WriteBuffer(_context.GetRenderGraph().ImportIfNotExist(recheck_instance_id_name.data(), recheck_instance_id_buffer), EBufferLayout::WRITE);
-                _builder.WriteBuffer(_context.GetRenderGraph().ImportIfNotExist(counter_buffer_name.data(), counter_buffer), EBufferLayout::WRITE);
-                _builder.WriteBuffer(black_board.GetHandle(indirect_args_name.data()), EBufferLayout::WRITE);
-                _builder.ReadBuffer(black_board.GetHandle(view_buffer_name.data()));
+                _builder.ReadTexture(hiz, TS_SAMPLED, 0, MAX_TEXTURE_MIP_COUNT);
+                _builder.WriteBuffer(_context.GetRenderGraph().ImportIfNotExist(instance_meshlet_cull_info_name, instance_meshlet_cull_info_buffer), EBufferLayout::WRITE);
+                _builder.WriteBuffer(_context.GetRenderGraph().ImportIfNotExist(recheck_instance_id_name, recheck_instance_id_buffer), EBufferLayout::WRITE);
+                _builder.WriteBuffer(_context.GetRenderGraph().ImportIfNotExist(counter_buffer_name, counter_buffer), EBufferLayout::WRITE);
+                _builder.WriteBuffer(black_board.GetHandle(indirect_args_name), EBufferLayout::WRITE);
+                _builder.ReadBuffer(black_board.GetHandle(view_buffer_name));
             },
             std::move(prepass_cull_instance));
         CopyDispatchArgs::Dispatch<64>(_context, counter_buffer_name, counter_srv, indirect_args_name, indirect_args_view, meshlet_count_offset, meshlet_dispatch_offset);
@@ -322,7 +322,7 @@ namespace Moer {
                 "Prepass Cull Meshlet",
                 [&](RenderGraph::Builder& _builder) {
                     auto hiz = _context.GetRenderGraph().GetBlackBoard().GetHandle("HiZ Buffer");
-                    _builder.ReadTexture(hiz, ETextureUsageFlags::SAMPLED, 0, MAX_TEXTURE_MIP_COUNT);
+                    _builder.ReadTexture(hiz, TS_SAMPLED, 0, MAX_TEXTURE_MIP_COUNT);
                     auto& black_board                = _context.GetRenderGraph().GetBlackBoard();
                     auto  instance_meshlet_cull_info = black_board.GetHandle(instance_meshlet_cull_info_name.data());
                     auto  recheck_instance_id_hd     = black_board.GetHandle(recheck_instance_id_name.data());
@@ -331,7 +331,7 @@ namespace Moer {
                     _builder.ReadBuffer(instance_meshlet_cull_info, EBufferLayout::READ);
                     _builder.ReadBuffer(recheck_instance_id_hd, EBufferLayout::READ);
                     _builder.WriteBuffer(counter_buffer_hd, EBufferLayout::WRITE);
-                    _builder.WriteBuffer(_context.GetRenderGraph().ImportIfNotExist(recheck_cull_info_name.data(), recheck_cull_info_buffer), EBufferLayout::WRITE);
+                    _builder.WriteBuffer(_context.GetRenderGraph().ImportIfNotExist(recheck_cull_info_name, recheck_cull_info_buffer), EBufferLayout::WRITE);
                 },
                 std::move(prepass_cull_meshlet));
     }
@@ -413,7 +413,7 @@ namespace Moer {
                 auto  recheck_cull_info_hd     = black_board.GetHandle(recheck_cull_info_name.data());
                 auto  indirect_args_hd         = black_board.GetHandle(indirect_args_name.data());
 
-                _builder.ReadTexture(hiz, ETextureUsageFlags::SAMPLED, 0, MAX_TEXTURE_MIP_COUNT);
+                _builder.ReadTexture(hiz, TS_SAMPLED, 0, MAX_TEXTURE_MIP_COUNT);
                 _builder.ReadBuffer(indirect_args_hd, EBufferLayout::INDIRECT_COMMAND_READ);
                 _builder.ReadBuffer(recheck_cull_instance_hd, EBufferLayout::READ);
                 _builder.ReadBuffer(counter_buffer_hd, EBufferLayout::WRITE);
@@ -433,7 +433,7 @@ namespace Moer {
                 auto  draw_indirect_hd     = black_board.GetHandle(draw_indirect_name.data());
                 auto  indirect_args_hd     = black_board.GetHandle(indirect_args_name.data());
 
-                _builder.ReadTexture(hiz, ETextureUsageFlags::SAMPLED, 0, MAX_TEXTURE_MIP_COUNT);
+                _builder.ReadTexture(hiz, TS_SAMPLED, 0, MAX_TEXTURE_MIP_COUNT);
                 _builder.ReadBuffer(recheck_cull_info_hd, EBufferLayout::READ);
                 _builder.ReadBuffer(indirect_args_hd, EBufferLayout::INDIRECT_COMMAND_READ);
                 _builder.WriteBuffer(counter_buffer_hd, EBufferLayout::WRITE);
@@ -457,12 +457,14 @@ namespace Moer {
                 auto uv     = rg.CreateTexture("uv", {.extent2D = Extent2D(extent.x, extent.y), .format = EPixelFormat::PF_R16G16_SFLOAT, .usage = ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED});
                 auto depth  = rg.ImportIfNotExist("depth", virtual_viewport.GetDepthSRV()->GetTexture());
                 if constexpr (!is_prepass) {
-                    _builder.ReadTextures({normal, uv, mat}, RenderGraphTexture::Usage::COLOR_ATTACHMENT);
-                    _builder.ReadTexture(depth, RenderGraphTexture::Usage::DEPTH_STENCIL_ATTACHMENT);
+                    _builder.ReadWriteTextures({normal, uv, mat}, TS_COLOR_ATTACHMENT);
+                    _builder.ReadWriteTexture(depth, TS_DEPTH_STENCIL);
+                } else {
+                    _builder.WriteTextures({normal, uv, mat}, TS_COLOR_ATTACHMENT);
+                    _builder.WriteTexture(depth, TS_DEPTH_STENCIL);
                 }
-                _builder.ReadBuffer(_context.GetRenderGraph().ImportIfNotExist(draw_indirect_name.data(), draw_indirect_buffer), EBufferLayout::INDIRECT_COMMAND_READ);
-                _builder.WriteTextures({normal, uv, mat}, RenderGraphTexture::Usage::COLOR_ATTACHMENT);
-                _builder.WriteTexture(depth, RenderGraphTexture::Usage::DEPTH_STENCIL_ATTACHMENT);
+                _builder.ReadBuffer(_context.GetRenderGraph().ImportIfNotExist(draw_indirect_name, draw_indirect_buffer), EBufferLayout::INDIRECT_COMMAND_READ);
+
                 _builder.DeclareRenderPass({.color_attachments = {
                                                 mat,
                                                 normal,

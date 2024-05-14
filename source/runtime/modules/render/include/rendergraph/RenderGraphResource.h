@@ -19,7 +19,7 @@ namespace Moer {
         };
         void ConnectForRead(DepdencyGraph& graph, PassNode*, DepdencyGraph::ResourceDesc _desc);
         void ConnectForWrite(DepdencyGraph& graph, PassNode*, DepdencyGraph::ResourceDesc _desc);
-        RenderGraphResource(const std::string& name, Type type, bool imported = false);
+        RenderGraphResource(std::string_view name, Type type, bool imported = false);
         Type GetType() const { return m_type; }
 
         virtual uint32_t ResloveResourceUsage(const DepdencyGraph::ResourceDesc&, RHIBarrierDependencyInfo& barrier_info, EPassType pass_type) = 0;
@@ -45,8 +45,8 @@ namespace Moer {
             uint32_t size;
             Usage    usage;
         };
-        RenderGraphBuffer(const std::string& name, Descriptor desc);
-        RenderGraphBuffer(const std::string& name, RHIBufferRef);
+        RenderGraphBuffer(std::string_view name, Descriptor desc);
+        RenderGraphBuffer(std::string_view name, RHIBufferRef);
         void         Create() override;
         uint32_t     ResloveResourceUsage(const DepdencyGraph::ResourceDesc&, RHIBarrierDependencyInfo& barrier_info, EPassType pass_type) override;
         RHISRVRef    GetSRV() const;
@@ -64,12 +64,12 @@ namespace Moer {
 
     class RENDER_API RenderGraphTexture : public RenderGraphResource {
     public:
-        using Usage = ETextureUsageFlags;
+        using Usage = ETextureStateFlags;
         struct Descriptor {
             Extent2D     extent2D;
             uint16_t     depth;
             EPixelFormat format;
-            Usage        usage;
+            ETextureUsageFlags usage;
             uint32_t     mipLevels{1};
             uint32_t     arrayLayers{1};
         };
@@ -78,9 +78,9 @@ namespace Moer {
         RHITextureRef GetTexture() const;
         EPixelFormat  GetFormat() const;
         void          Create() override;
-        RenderGraphTexture(const std::string& name, Descriptor desc);
-        RenderGraphTexture(const std::string& name, RHITextureRef tex);
-        RenderGraphTexture(const std::string& name, RenderGraphTexture* parent, RHISubresourceRange sub_res);
+        RenderGraphTexture(std::string_view name, Descriptor desc);
+        RenderGraphTexture(std::string_view name, RHITextureRef tex);
+        RenderGraphTexture(std::string_view name, RenderGraphTexture* parent, RHISubresourceRange sub_res);
         uint32_t ResloveResourceUsage(const DepdencyGraph::ResourceDesc&, RHIBarrierDependencyInfo& barrier_info, EPassType type) override;
 
     protected:
@@ -138,7 +138,7 @@ namespace Moer {
     };
 
     class RENDER_API RenderGraphSubResource : public RenderGraphTexture {
-        RenderGraphSubResource(const std::string& name, RenderGraphTexture* parent, TextureSubResource sub_res);
+        RenderGraphSubResource(std::string_view _name, RenderGraphTexture* _parent, TextureSubResource _sub_res);
     };
 
 }// namespace Moer

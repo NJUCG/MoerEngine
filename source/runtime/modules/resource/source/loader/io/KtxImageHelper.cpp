@@ -5,6 +5,7 @@
 #include <gl_format.h>
 #include <ktx.h>
 #include <astc_codec_internals.h>
+#include "misc/MMemory.h"
 
 namespace Moer {
     EPixelFormat KtxImageHelper::GetFormatFromOpenGLInternalFormat(const GLenum intername_foramt) {
@@ -425,11 +426,9 @@ namespace Moer {
                 }
             }
         }
-
-        desc.data_callback(desc.data);
-
-        desc.data          = new uint8_t[astc_image->xsize * astc_image->ysize * astc_image->zsize * 4];
-        desc.data_callback = free;
+        free(desc.data);
+        desc.data          = Memory::Malloc(astc_image->xsize * astc_image->ysize * astc_image->zsize * 4);
+        desc.data_callback = [](void* _data) { Memory::Free(_data); };
         memcpy(desc.data, astc_image->imagedata8[0][0], astc_image->xsize * astc_image->ysize * astc_image->zsize * 4);
 
         desc.format = EPixelFormat::PF_R8G8B8A8_SRGB;

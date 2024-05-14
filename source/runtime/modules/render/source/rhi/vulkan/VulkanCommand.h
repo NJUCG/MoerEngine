@@ -49,7 +49,7 @@ public:
     void                   SetPipelineBarrier(const RHIBarrierDependencyInfo& _dependency);
     inline VkCommandBuffer GetHandle() const { return m_command_buffer; }
 
-    void TransitionTextureBase(RHITexture* _target, ETextureUsageFlags _target_usage, EPassType _pass_type, uint8_t _mip_level, uint8_t _mip_cnt);
+    void TransitionTextureBase(RHITexture* _target, ETextureStateFlags _target_state, EPassType _pass_type, uint8_t _mip_level, uint8_t _mip_cnt);
     void ExecuteTransitionBase();
 
 protected:
@@ -186,7 +186,7 @@ public:
     void BeginLabel(const char* _label) override;
     void EndLabel() override;
 
-    void TransitionTexture(RHITexture* _target, ETextureUsageFlags _target_usage, EPassType _pass_type, uint8_t _mip_level, uint8_t _mip_cnt) override;
+    void TransitionTexture(RHITexture* _target, ETextureStateFlags _target_usage, EPassType _pass_type, uint8_t _mip_level, uint8_t _mip_cnt) override;
     void ExecuteTransition() override;
 
 protected:

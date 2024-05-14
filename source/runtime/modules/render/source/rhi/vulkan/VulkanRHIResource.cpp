@@ -1577,6 +1577,11 @@ void VulkanViewport::ResetResources() {
 
     for (uint32_t index = 0; index < swapchain_image_uavs.size(); index++) {
         swapchain_images[index]->SetAttachedImageInner(swapchain->m_swap_chain_images[index]);
+        swapchain_images[index]->SetTrackInfo(
+            {},
+            TS_UNDEFINED,
+            EPassType::None
+        );
         EPixelFormat swapchain_format = VulkanEnumTranslator::VKToMEFormat(swapchain->image_format);
 
         MoerDelete( swapchain_image_uavs[index]);

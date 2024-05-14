@@ -19,7 +19,9 @@ namespace Moer {
         //Todo Handle  resource transition
     }
     void PassNode::AddResourceUsage(RenderGraphResource* _resource, DepdencyGraph::ResourceDesc _desc) {
-        m_resource_desc[_resource].emplace_back(_desc);
+        auto& set = m_resource_desc[_resource];
+        if (set.find(_desc) == set.end())
+            set.insert(_desc);
     }
     void PassNode::AddResourceToCreate(RenderGraphResource* resource) {
         m_resources_to_create.push_back(resource);
@@ -27,13 +29,16 @@ namespace Moer {
     void PassNode::AddResourceToDestroy(RenderGraphResource* resource) {
         m_resources_to_destroy.push_back(resource);
     }
+    void PassNode::FinalizeUsage() {
+        //merge resource usage with same mip level
+    }
     Moer::Array<RenderGraphResource*>& PassNode::GetResourcesToCreate() {
         return m_resources_to_create;
     }
     Moer::Array<RenderGraphResource*>& PassNode::GetResourcesToDestroy() {
         return m_resources_to_destroy;
     }
-    GraphicsPassNode::GraphicsPassNode(const std::string& passName, RenderGraphPass* pass) : PassNode(passName, EPassType::Graphics), m_pass(pass) {
+    GraphicsPassNode::GraphicsPassNode(std::string_view passName, RenderGraphPass* pass) : PassNode(passName, EPassType::Graphics), m_pass(pass) {
         m_pass_type = EPassType::Graphics;
     }
     void GraphicsPassNode::Execute(RenderPassContext& pass_context) {
@@ -59,7 +64,7 @@ namespace Moer {
                 color_attachment.color_attachment_view.texture_view = texture->GetUAV();
 
                 //todo resolve layout
-                color_attachment.color_attachment_view.required_layout  = m_resource_layout.contains(texture) ? static_cast<ETextureLayout>(m_resource_layout[texture]) : TEXTURE_LAYOUT_COLOR_ATTACHMENT;
+                color_attachment.color_attachment_view.required_layout  = TEXTURE_LAYOUT_COLOR_ATTACHMENT;
                 color_attachment.color_attachment_view.clear_attachment = RHIClearAttachment(EClearAttachment::COLOR);
 
                 color_attachment_idx++;
@@ -75,7 +80,7 @@ namespace Moer {
             depth_attachment_view.clear_attachment = RHIClearAttachment(EClearAttachment::DEPTH_STENCIL);
             auto is_write                          = render_graph.IsWriteResource(depth_attachment, this);
             auto is_read                           = render_graph.IsReadResource(depth_attachment, this);
-            depth_attachment_view.required_layout  = m_resource_layout.contains(depth_texture) ? static_cast<ETextureLayout>(m_resource_layout[depth_texture]) : TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE;
+            depth_attachment_view.required_layout  = TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE;
             depth_attachment_view.clear_attachment = RHIClearAttachment(EClearAttachment::DEPTH_STENCIL);
             EAttachmentAction action               = EAttachmentAction::AC_LOAD_STORE;
             if (is_write && !is_read) action = AC_CLEAR_STORE;
@@ -113,8 +118,8 @@ namespace Moer {
         m_descriptor = descriptor;
     }
 
-    ComputePassNode::ComputePassNode(const std::string& passName, RenderGraphPass* pass) : PassNode(passName, EPassType::Compute),
-                                                                                           m_pass(pass) {
+    ComputePassNode::ComputePassNode(std::string_view passName, RenderGraphPass* pass) : PassNode(passName, EPassType::Compute),
+                                                                                         m_pass(pass) {
         m_pass_type = EPassType::Compute;
     }
     void ComputePassNode::Execute(RenderPassContext& _pass_context) {

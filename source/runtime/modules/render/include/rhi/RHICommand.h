@@ -93,7 +93,7 @@ public:
     void Dispatch(Moer::Vector3i _group_count) {
         Dispatch(_group_count.x, _group_count.y, _group_count.z);
     }
-    virtual void TransitionTexture(RHITexture* _texture, ETextureUsageFlags _usage, EPassType _dst_pass, uint8_t _mip_idx = 0, uint8_t _mip_cnt = 1) = 0;
+    virtual void TransitionTexture(RHITexture* _texture, ETextureStateFlags _usage, EPassType _dst_pass, uint8_t _mip_idx = 0, uint8_t _mip_cnt = 1) = 0;
     virtual void ExecuteTransition()                                                                                                                 = 0;
     virtual void Dispatch(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z)                                                 = 0;
 

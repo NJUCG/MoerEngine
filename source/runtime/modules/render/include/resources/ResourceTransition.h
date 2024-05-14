@@ -9,7 +9,7 @@ namespace Moer {
         RENDER_API static std::tuple<ERHIAccessFlags, ERHIAccessFlags, ERHIPipelineStageFlags, ERHIPipelineStageFlags>
         GetImageTransition(ETextureLayout oldLayout, ETextureLayout new_layout);
         RENDER_API static std::tuple<ERHIAccessFlags, ERHIPipelineStageFlags>
-        GetTextureTransition(ETextureUsageFlags _src_usage, EPassType _pass_type);
+        GetTextureTransition(ETextureStateFlags _src_state, EPassType _pass_type, bool _is_src = true);
         RENDER_API static std::tuple<ERHIAccessFlags, ERHIPipelineStageFlags>
         GetBufferTransitation(EBufferLayout layout, EPassType pass_type);
     };

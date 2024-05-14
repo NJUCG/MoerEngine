@@ -1,4 +1,5 @@
 #include "rendergraph/RenderGraphResource.h"
+#include "PixelFormat.h"
 #include "rendergraph/DepdencyGraph.h"
 #include "rendergraph/PassNode.h"
 #include "rendergraph/RenderGraph.h"
@@ -15,11 +16,11 @@ namespace Moer {
     void RenderGraphResource::ConnectForWrite(DepdencyGraph& graph, PassNode* pass_node, DepdencyGraph::ResourceDesc _desc) {
         auto edge = MoerNew(DepdencyGraph::Edge)(graph, pass_node, this, _desc);
     }
-    RenderGraphResource::RenderGraphResource(const std::string& name, Type type, bool imported) : Node(name), m_type(type), m_imported(imported) {
+    RenderGraphResource::RenderGraphResource(std::string_view name, Type type, bool imported) : Node(name), m_type(type), m_imported(imported) {
     }
-    RenderGraphBuffer::RenderGraphBuffer(const std::string& name, Descriptor desc) : RenderGraphResource(name, Type::Buffer, false) {
+    RenderGraphBuffer::RenderGraphBuffer(std::string_view name, Descriptor desc) : RenderGraphResource(name, Type::Buffer, false) {
     }
-    RenderGraphBuffer::RenderGraphBuffer(const std::string& name, RHIBufferRef buffer) : RenderGraphResource(name, Type::Buffer, true), m_buffer(buffer) {
+    RenderGraphBuffer::RenderGraphBuffer(std::string_view name, RHIBufferRef buffer) : RenderGraphResource(name, Type::Buffer, true), m_buffer(buffer) {
     }
     void RenderGraphBuffer::Create() {
         //  m_buffer = RenderGraphResourceCache::Get().GetBuffer(name, m_desc);
@@ -100,36 +101,33 @@ namespace Moer {
         }
         m_texture = RenderGraphResourceCache::Get().GetTexture(name, m_desc.extent2D, m_desc.format, m_desc.usage, m_desc.mipLevels, m_desc.arrayLayers);
     }
-    RenderGraphTexture::RenderGraphTexture(const std::string& name, Descriptor desc) : RenderGraphResource(name, Type::Texture2D, false), m_desc(desc) {
+    RenderGraphTexture::RenderGraphTexture(std::string_view name, Descriptor desc) : RenderGraphResource(name, Type::Texture2D, false), m_desc(desc) {
     }
-    RenderGraphTexture::RenderGraphTexture(const std::string& name, RHITextureRef texture) : RenderGraphResource(name, Type::Texture2D, true), m_texture(texture) {
-    }
-
-    RenderGraphTexture::RenderGraphTexture(const std::string& _name, RenderGraphTexture* _parent, RHISubresourceRange _sub_res) : RenderGraphResource(name, Type::Texture2D, true), m_parent(_parent), m_sub_res(_sub_res), m_is_sub_resource(true) {
+    RenderGraphTexture::RenderGraphTexture(std::string_view name, RHITextureRef texture) : RenderGraphResource(name, Type::Texture2D, true), m_texture(texture) {
     }
 
-    static inline ETextureLayout GetTextureLayout(RenderGraphTexture::Usage usage) {
-        if (usage == RenderGraphTexture::Usage::UNDEFINED)
+    RenderGraphTexture::RenderGraphTexture(std::string_view _name, RenderGraphTexture* _parent, RHISubresourceRange _sub_res) : RenderGraphResource(name, Type::Texture2D, true), m_parent(_parent), m_sub_res(_sub_res), m_is_sub_resource(true) {
+    }
+
+    static inline ETextureLayout GetTextureLayout(RenderGraphTexture::Usage _state) {
+        if (_state == TS_UNDEFINED)
             return TEXTURE_LAYOUT_UNDEFINED;
-        if (EnumHasAnyFlag(usage, RenderGraphTexture::Usage::UNORDERED_ACCESS)) {
+        if (EnumHasAnyFlag(_state, TS_UNORDERED_READ) || EnumHasAnyFlag(_state, TS_UNORDERED_WRITE)) {
             return TEXTURE_LAYOUT_COMMON;
         }
-        if (EnumHasAnyFlag(usage, RenderGraphTexture::Usage::COLOR_ATTACHMENT)) {
+        if (EnumHasAnyFlag(_state, TS_COLOR_ATTACHMENT)) {
             return TEXTURE_LAYOUT_COLOR_ATTACHMENT;
         }
-        if (EnumHasAnyFlag(usage, RenderGraphTexture::Usage::DEPTH_STENCIL_ATTACHMENT)) {
-            if (EnumHasAnyFlag(usage, ETextureUsageFlags::SAMPLED)) {
-                return TEXTURE_LAYOUT_STENCIL_READ;
-            }
+        if (EnumHasAnyFlag(_state, TS_DEPTH_STENCIL)) {
             return TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE;
         }
-        if (EnumHasAnyFlag(usage, RenderGraphTexture::Usage::SAMPLED)) {
+        if (EnumHasAnyFlag(_state, TS_SAMPLED)) {
             return TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         }
-        if (EnumHasAnyFlag(usage, RenderGraphTexture::Usage::TRANSFER_SRC)) {
+        if (EnumHasAnyFlag(_state, TS_TRANSFER_SRC)) {
             return TEXTURE_LAYOUT_TRANSFER_SRC;
         }
-        if (EnumHasAnyFlag(usage, RenderGraphTexture::Usage::TRANSFER_DST)) {
+        if (EnumHasAnyFlag(_state, TS_TRANSFER_SRC)) {
             return TEXTURE_LAYOUT_TRANSFER_DST;
         }
 
@@ -140,21 +138,21 @@ namespace Moer {
         const auto& desc        = std::get<DepdencyGraph::TextureSubDesc>(_desc);
         Usage       usage_flags = static_cast<Usage>(desc.usage);
         //Todo is this correct?
-        bool is_depth_stencil = EnumHasAnyFlag(usage_flags, RenderGraphTexture::Usage::DEPTH_STENCIL_ATTACHMENT) ||
-                                GetFormat() == EPixelFormat::PF_D32_SFLOAT_S8_UINT ||
-                                GetFormat() == EPixelFormat::PF_D24_UNORM_S8_UINT ||
-                                GetFormat() == EPixelFormat::PF_D16_UNORM_S8_UINT;
+        bool is_depth_stencil = EnumHasAnyFlag(usage_flags, TS_DEPTH_STENCIL) ||
+                                m_texture->GetFormat() == PF_D32_SFLOAT_S8_UINT ||
+                                m_texture->GetFormat() == PF_D24_UNORM_S8_UINT ||
+                                m_texture->GetFormat() == PF_D16_UNORM_S8_UINT;
 
         auto aspect_flags                  = is_depth_stencil ? ETextureAspectFlags::DEPTH_SLICE : ETextureAspectFlags::COLOR;
         auto dst_layout                    = GetTextureLayout(static_cast<RenderGraphTexture::Usage>(desc.usage));
-        auto [dst_access_flags, dst_stage] = ResourceTransition::GetTextureTransition(usage_flags, _pass_type);
+        auto [dst_access_flags, dst_stage] = ResourceTransition::GetTextureTransition(usage_flags, _pass_type, false);
 
-        ETextureUsageFlags cur_src_usage    = ETextureUsageFlags::UNDEFINED;
+        ETextureStateFlags cur_src_usage    = TS_UNDEFINED;
         ETextureLayout     cur_src_layout   = TEXTURE_LAYOUT_UNDEFINED;
         EPassType          cur_pass_type    = _pass_type;
         uint               current_mip_size = 0;
 
-        auto setup_new_barrier = [&](ETextureUsageFlags _src_usage, ETextureLayout _src_layout, EPassType _src_pass_type, uint _mip_idx, uint _mip_size) {
+        auto setup_new_barrier = [&](ETextureStateFlags _src_usage, ETextureLayout _src_layout, EPassType _src_pass_type, uint _mip_idx, uint _mip_size) {
             RHITextureBarrierInfo barrier_info;
             RHISubresourceRange   subresource_range(aspect_flags, _mip_idx, _mip_size, desc.array_index, desc.array_count, 0, 1);
             auto [src_access_flags, src_stage] = ResourceTransition::GetTextureTransition(_src_usage, _src_pass_type);

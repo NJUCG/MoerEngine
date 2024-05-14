@@ -811,6 +811,23 @@ enum class ETextureUsageFlags : uint32_t {
 };
 ENUM_BIT_OP_IMPL(ETextureUsageFlags, FLAG)
 
+enum ETextureStateFlags : uint32_t {
+    TS_UNDEFINED = 0ULL,
+    // TS_ATTACHMENT_LOAD    = 1 << 0,
+    // TS_ATTACHMENT_CLEAR   = 1 << 1,
+    // TS_ATTACHMENT_STORE   = 1 << 2,
+    TS_TRANSFER_SRC       = 1 << 5,
+    TS_TRANSFER_DST       = 1 << 6,
+    TS_SAMPLED            = 1 << 7,
+    TS_UNORDERED_READ     = 1 << 8,
+    TS_UNORDERED_WRITE    = 1 << 9,
+    TS_COLOR_ATTACHMENT   = 1 << 10,
+    TS_RESOLVE_ATTACHMENT = 1 << 11,
+    TS_DEPTH_STENCIL      = 1 << 12,
+    TS_PRESENT            = 1 << 13
+};
+ENUM_BIT_OP_IMPL(ETextureStateFlags, FLAG)
+
 //for barriers
 enum class ETextureAspectFlags : uint32_t {
     // no

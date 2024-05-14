@@ -1,5 +1,6 @@
 #include "ImGUIRenderer.h"
 #include "IconsFontAwesome6.h"
+#include "PixelFormat.h"
 #include "RenderThread.h"
 #include "config/ConfigManager.h"
 #include "math/Constant.h"
@@ -79,6 +80,7 @@ class ImGuiShaderVert : public Shader {
 public:
     BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(UIVertex)
     DEFINE_SHADER_PARAM(Moer::Matrix4x4f, mvp)
+    DEFINE_SHADER_PARAM(bool, need_correction)
     END_SHADER_CONSTANT_STRUCT_DEFINITION()
     BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
 
@@ -91,8 +93,12 @@ IMPLEMENT_SHADER_TYPE(ImGuiShaderVert, "GuiVert.hlsl", "main", ST_VERTEX)
 class ImGuiShaderFrag : public Shader {
     DEFINE_SHADER_TYPE(ImGuiShaderFrag, Global, RENDER_API, ...)
 public:
+    BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(UIVertex)
+    DEFINE_SHADER_PARAM(Moer::Matrix4x4f, mvp)
+    DEFINE_SHADER_PARAM(bool, need_correction)
+    END_SHADER_CONSTANT_STRUCT_DEFINITION()
     BEGIN_ROOT_PARAMETER_DEFINITION(Parameters)
-
+    DEFINE_SHADER_PARAM_STRUCT(UIVertex, vertexBuffer)
     DEFINE_SHADER_PARAM_SAMPLER(Sampler, sampler0)
     DEFINE_SHADER_PARAM_SRV(Texture2D, texture0)
 
@@ -258,7 +264,7 @@ void ImGUIRenderer::Impl::EndRenderFrame() {
                 ui_command_list->Reset();
 
                 ui_command_list->BeginRecording();
-                ui_command_list->TransitionTexture(present_view->GetTexture(), ETextureUsageFlags::COLOR_ATTACHMENT, EPassType::Graphics);
+                ui_command_list->TransitionTexture(present_view->GetTexture(), TS_COLOR_ATTACHMENT, EPassType::Graphics);
                 ui_command_list->ExecuteTransition();
             });
 
@@ -294,7 +300,7 @@ void ImGUIRenderer::Impl::EndRenderFrame() {
 
                 ui_command_list->EndRenderPass();
 
-                ui_command_list->TransitionTexture(present_view->GetTexture(), ETextureUsageFlags::PRESENT, EPassType::Graphics);
+                ui_command_list->TransitionTexture(present_view->GetTexture(), TS_PRESENT, EPassType::Graphics);
 
                 ui_command_list->ExecuteTransition();
 
@@ -614,10 +620,14 @@ void GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list, RHIVi
 
                 ImGuiShaderFrag::Parameters params;
                 params.texture0 = texture_view;
-
+                if (texture_view.Get() == backend_data->font_view.Get()) {
+                    vert_param.vertexBuffer.need_correction = false;
+                } else {
+                    vert_param.vertexBuffer.need_correction = true;
+                }
                 RHIBatchedShaderParameters batched_params;
 
-                batched_params.SetParameters(backend_data->shader_module_frag, params);
+                batched_params.SetParameters(backend_data->shader_module_frag, params, false);
                 batched_params.SetParameters(backend_data->shader_module_vert, vert_param);
 
                 RHIGraphicsPipelineStateRef pipeline = backend_data->pipeline;
@@ -667,32 +677,32 @@ void SetupRenderState(ImDrawData* draw_data, RHIGraphicsCommandList* commandList
     });
     // commandList->SetPipelineState(backend_data->pipeline);
 
-    // 2. global: push constants
-    ImGuiShaderVert::Parameters vert_param;
-    ImGuiShaderFrag::Parameters frag_param;
-    frag_param.sampler0 = backend_data->font_sampler;
-    std::memset(&vert_param.vertexBuffer, 0, sizeof(vert_param.vertexBuffer));
-    {
-        float l         = draw_data->DisplayPos.x;
-        float r         = draw_data->DisplayPos.x + draw_data->DisplaySize.x;
-        float t         = draw_data->DisplayPos.y;
-        float b         = draw_data->DisplayPos.y + draw_data->DisplaySize.y;
-        float mvp[4][4] = {
-            {2.0f / (r - l), 0.0f, 0.0f, 0.0f},
-            {0.0f, 2.0f / (t - b), 0.0f, 0.0f},
-            {0.0f, 0.0f, 0.5f, 0.0f},
-            {(r + l) / (l - r), (t + b) / (b - t), 0.5f, 1.0f},
-        };
-        memcpy(&vert_param.vertexBuffer.mvp, mvp, sizeof(mvp));
-    }
-    RHIBatchedShaderParameters batched_params;
-    batched_params.SetParameters(backend_data->shader_module_vert, vert_param);
-    batched_params.SetParameters(backend_data->shader_module_frag, frag_param);
-    // should internally allocate descriptor set for vulkan if not allocated
-    EnqueueRenderTask([commandList, batched_params, pipeline, _next_frame_info_render_thread] {
-        if (_next_frame_info_render_thread->backbuffer_index == UINT32_MAX) return;
-        g_rhi->RHISetBatchedShaderParameters(pipeline, batched_params, true);
-    });
+    // // 2. global: push constants
+    // ImGuiShaderVert::Parameters vert_param;
+    // ImGuiShaderFrag::Parameters frag_param;
+    // frag_param.sampler0 = backend_data->font_sampler;
+    // std::memset(&vert_param.vertexBuffer, 0, sizeof(vert_param.vertexBuffer));
+    // {
+    //     float l         = draw_data->DisplayPos.x;
+    //     float r         = draw_data->DisplayPos.x + draw_data->DisplaySize.x;
+    //     float t         = draw_data->DisplayPos.y;
+    //     float b         = draw_data->DisplayPos.y + draw_data->DisplaySize.y;
+    //     float mvp[4][4] = {
+    //         {2.0f / (r - l), 0.0f, 0.0f, 0.0f},
+    //         {0.0f, 2.0f / (t - b), 0.0f, 0.0f},
+    //         {0.0f, 0.0f, 0.5f, 0.0f},
+    //         {(r + l) / (l - r), (t + b) / (b - t), 0.5f, 1.0f},
+    //     };
+    //     memcpy(&vert_param.vertexBuffer.mvp, mvp, sizeof(mvp));
+    // }
+    // RHIBatchedShaderParameters batched_params;
+    // batched_params.SetParameters(backend_data->shader_module_vert, vert_param);
+    // batched_params.SetParameters(backend_data->shader_module_frag, frag_param);
+    // // should internally allocate descriptor set for vulkan if not allocated
+    // EnqueueRenderTask([commandList, batched_params, pipeline, _next_frame_info_render_thread] {
+    //     if (_next_frame_info_render_thread->backbuffer_index == UINT32_MAX) return;
+    //     g_rhi->RHISetBatchedShaderParameters(pipeline, batched_params, true);
+    // });
     // g_rhi->RHISetBatchedShaderParameters(backend_data->pipeline, batched_params, true);
 
     // 3. global: set viewport, MARK: does it work ?
@@ -809,7 +819,7 @@ void CreateFontsTexture() {
         RHIGraphicsCommandList* command_list = g_rhi->RHICreateGraphicsCommandList(g_rhi->RHIGetCurrentCommandAllocator());
 
         command_list->BeginRecording();
-        command_list->TransitionTexture(font_texture, ETextureUsageFlags::TRANSFER_DST, EPassType::Copy);
+        command_list->TransitionTexture(font_texture, TS_TRANSFER_DST, EPassType::Copy);
         command_list->ExecuteTransition();
 
         RHISubresourceSlice        resource_slice(ETextureAspectFlags::COLOR, 0, 0, 1, 0, 1);
@@ -823,7 +833,7 @@ void CreateFontsTexture() {
         // 3. MARK: pRegion[0] is trying to copy 518144 bytes plus 0 offset to/from the VkBuffer (VkBuffer 0xcb1c7c000000001b[]) which exceeds the VkBuffer total size of 131072 bytes.
         command_list->CopyBufferToTexture(copy_info, staging_buffer, font_texture);
 
-        command_list->TransitionTexture(font_texture, ETextureUsageFlags::SAMPLED, EPassType::Graphics);
+        command_list->TransitionTexture(font_texture, TS_SAMPLED, EPassType::Graphics);
         command_list->ExecuteTransition();
 
         RHIBatchedShaderParameters  batched_params;
@@ -935,16 +945,16 @@ void GuiDestroyWindow(ImGuiViewport* viewport) {
     }
     viewport->RendererUserData = nullptr;
 }
-void GuiSetWindowSize(ImGuiViewport* viewport, ImVec2 size) {
-    GuiViewportData* viewport_data = (GuiViewportData*)viewport->RendererUserData;
+void GuiSetWindowSize(ImGuiViewport* _viewport, ImVec2 _size) {
+    GuiViewportData* viewport_data = (GuiViewportData*)_viewport->RendererUserData;
 
     auto m_viewport = viewport_data->viewport;
 
-    EnqueueRenderTask([m_viewport, size] {
+    EnqueueRenderTask([m_viewport, _size] {
         Extent2D viewport_extent = {(uint32_t)m_viewport->GetViewportExtent().width, (uint32_t)m_viewport->GetViewportExtent().height};
 
-        if (size.x == viewport_extent.width && size.y == viewport_extent.height) return;
-        g_rhi->RHIResizeViewport(m_viewport, Extent2D(size.x, size.y), false);
+        if (_size.x == viewport_extent.width && _size.y == viewport_extent.height) return;
+        g_rhi->RHIResizeViewport(m_viewport, Extent2D(_size.x, _size.y), false);
     });
     // g_rhi->RHIResizeViewport(m_viewport, Extent2D(size.x, size.y), false);
 }
@@ -964,7 +974,7 @@ void GuiRenderWindow(ImGuiViewport* viewport, void*) {
 
         cmd_list.BeginRecording();
 
-        cmd_list.TransitionTexture(present_view->GetTexture(), ETextureUsageFlags::COLOR_ATTACHMENT, EPassType::Graphics);
+        cmd_list.TransitionTexture(present_view->GetTexture(), TS_COLOR_ATTACHMENT, EPassType::Graphics);
         cmd_list.ExecuteTransition();
     });
     // RHIViewportNextBackBufferInfo info = g_rhi->RHIGetNextFrameViewportBufferInfo(rhi_viewport);
@@ -996,7 +1006,7 @@ void GuiRenderWindow(ImGuiViewport* viewport, void*) {
         RHIUAV* present_view = g_rhi->RHIGetViewportBackBufferUAV(viewport_data->viewport, viewport_data->next_frame_info.backbuffer_index);
         auto&   cmd_list     = *viewport_data->comand_list;
         cmd_list.EndRenderPass();
-        cmd_list.TransitionTexture(present_view->GetTexture(), ETextureUsageFlags::PRESENT, EPassType::Graphics);
+        cmd_list.TransitionTexture(present_view->GetTexture(), TS_PRESENT, EPassType::Graphics);
         cmd_list.ExecuteTransition();
         cmd_list.EndRecording();
 
@@ -1013,9 +1023,9 @@ void GuiRenderWindow(ImGuiViewport* viewport, void*) {
     });
 }
 
-void GuiSwapbuffer(ImGuiViewport* viewport, void*) {
+void GuiSwapbuffer(ImGuiViewport* _viewport, void*) {
     GuiBackendData*  backend_data  = GetBackendData();
-    GuiViewportData* viewport_data = (GuiViewportData*)viewport->RendererUserData;
+    GuiViewportData* viewport_data = (GuiViewportData*)_viewport->RendererUserData;
 
     //present wait for this frame rendering end fence
     // viewport_data->viewport->Present(viewport_data->present_fence);

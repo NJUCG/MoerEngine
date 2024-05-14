@@ -181,35 +181,35 @@ namespace Moer {
         depth_texture     = g_rhi->RHICreateTexture(depth_texture_create_info);
         depth_texture_uav = g_rhi->RHICreateTextureUAV(depth_texture, depth_texture_create_info.format);
         depth_texture_srv = g_rhi->RHICreateTextureSRV(depth_texture, depth_texture_create_info.format);
-        RHIFenceRef fence = g_rhi->RHICreateFence({.usage = EFenceUsageFlags::BINARY});
+        // RHIFenceRef fence = g_rhi->RHICreateFence({.usage = EFenceUsageFlags::BINARY});
 
-        RHIBarrierDependencyInfo barrier_info;
-        auto&                    barriers = barrier_info.texture_barriers;
-        barriers.resize(info.back_buffer_count + 2);
+        // RHIBarrierDependencyInfo barrier_info;
+        // auto&                    barriers = barrier_info.texture_barriers;
+        // barriers.resize(info.back_buffer_count + 2);
 
-        for (uint32_t i = 0; i < info.back_buffer_count; ++i) {
-            barriers[i].SetDstTextureLayout(TEXTURE_LAYOUT_TRANSFER_SRC);
-            barriers[i].SetTexture(swapchain_textures[i]);
-            barriers[i].SetSubResourceRange({});
-            barriers[i].SetSrcTextureLayout(TEXTURE_LAYOUT_UNDEFINED);
-        }
-        barriers[info.back_buffer_count].SetDstTextureLayout(TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-        barriers[info.back_buffer_count].SetSrcTextureLayout(TEXTURE_LAYOUT_UNDEFINED);
-        barriers[info.back_buffer_count].SetTexture(present_texture);
-        barriers[info.back_buffer_count].SetSubResourceRange({});
+        // for (uint32_t i = 0; i < info.back_buffer_count; ++i) {
+        //     barriers[i].SetDstTextureLayout(TEXTURE_LAYOUT_TRANSFER_SRC);
+        //     barriers[i].SetTexture(swapchain_textures[i]);
+        //     barriers[i].SetSubResourceRange({});
+        //     barriers[i].SetSrcTextureLayout(TEXTURE_LAYOUT_UNDEFINED);
+        // }
+        // barriers[info.back_buffer_count].SetDstTextureLayout(TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        // barriers[info.back_buffer_count].SetSrcTextureLayout(TEXTURE_LAYOUT_UNDEFINED);
+        // barriers[info.back_buffer_count].SetTexture(present_texture);
+        // barriers[info.back_buffer_count].SetSubResourceRange({});
 
-        barriers[info.back_buffer_count + 1].SetDstTextureLayout(TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE);
-        barriers[info.back_buffer_count + 1].SetSrcTextureLayout(TEXTURE_LAYOUT_UNDEFINED);
-        barriers[info.back_buffer_count + 1].SetDstStage(PS_EARLY_FRAGMENT_TESTS);
-        barriers[info.back_buffer_count + 1].SetTexture(depth_texture);
-        barriers[info.back_buffer_count + 1].SetSubResourceRange(RHISubresourceRange(ETextureAspectFlags::DEPTH_SLICE | ETextureAspectFlags::STENCIL_SLICE));
+        // barriers[info.back_buffer_count + 1].SetDstTextureLayout(TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE);
+        // barriers[info.back_buffer_count + 1].SetSrcTextureLayout(TEXTURE_LAYOUT_UNDEFINED);
+        // barriers[info.back_buffer_count + 1].SetDstStage(PS_EARLY_FRAGMENT_TESTS);
+        // barriers[info.back_buffer_count + 1].SetTexture(depth_texture);
+        // barriers[info.back_buffer_count + 1].SetSubResourceRange(RHISubresourceRange(ETextureAspectFlags::DEPTH_SLICE | ETextureAspectFlags::STENCIL_SLICE));
 
-        copy_cmd_list->BeginRecording();
-        copy_cmd_list->SetPipelineBarrier(barrier_info);
-        copy_cmd_list->EndRecording();
-        RHISubmitInfo submit_info;
-        submit_info.Signal(fence, 1);
-        copy_queue->SubmitCommands(1, copy_cmd_list, &submit_info);
+        // copy_cmd_list->BeginRecording();
+        // copy_cmd_list->SetPipelineBarrier(barrier_info);
+        // copy_cmd_list->EndRecording();
+        // RHISubmitInfo submit_info;
+        // submit_info.Signal(fence, 1);
+        // copy_queue->SubmitCommands(1, copy_cmd_list, &submit_info);
     }
     void VirtualViewport::Impl::InitRenderThread() {
         // Implementation of InitRenderThread method
@@ -256,8 +256,8 @@ namespace Moer {
 
         uint32_t present_index = presented_index % info.back_buffer_count;
 
-        cmd_list->TransitionTexture(swapchain_textures[present_index], ETextureUsageFlags::TRANSFER_SRC, EPassType::Copy);
-        cmd_list->TransitionTexture(present_texture, ETextureUsageFlags::TRANSFER_DST, EPassType::Copy);
+        cmd_list->TransitionTexture(swapchain_textures[present_index], TS_TRANSFER_SRC, EPassType::Copy);
+        cmd_list->TransitionTexture(present_texture, TS_TRANSFER_DST, EPassType::Copy);
 
         RHICopyTextureInfo copy_info(TEXTURE_LAYOUT_TRANSFER_SRC,
                                      {},
@@ -272,7 +272,7 @@ namespace Moer {
         cmd_list->CopyTexture(copy_info,
                               swapchain_textures[present_index],
                               present_texture);
-        cmd_list->TransitionTexture(present_texture, ETextureUsageFlags::SAMPLED, EPassType::Graphics);
+        cmd_list->TransitionTexture(present_texture, TS_SAMPLED, EPassType::Graphics);
         cmd_list->ExecuteTransition();
 
         cmd_list->EndRecording();

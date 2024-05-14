@@ -2,6 +2,7 @@
 // Created by 74535 on 2023/10/17.
 //
 
+#include "PixelFormat.h"
 #include "math/Constant.h"
 #include "misc/STL.h"
 #include "resources/ResourceTransition.h"
@@ -101,11 +102,11 @@ void VulkanRHICommandListBase::CopyTexture(const RHICopyTextureInfo& _copy_info,
 VkPipelineStageFlagBits2 GetPipelineStageFromPassType(EPassType _pass) {
     switch (_pass) {
         case EPassType::Graphics:
-            return PS_FRAGMENT_SHADER;
+            return VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
         case EPassType::Compute:
-            return PS_COMPUTE_SHADER;
+            return VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
         case EPassType::Copy:
-            return PS_TRANSFER;
+            return VK_PIPELINE_STAGE_2_TRANSFER_BIT;
         case EPassType::None:
             return VK_PIPELINE_STAGE_2_NONE;
         default:
@@ -114,71 +115,71 @@ VkPipelineStageFlagBits2 GetPipelineStageFromPassType(EPassType _pass) {
     }
 }
 template<bool _is_src>
-void ResolveTextureBarrierInfo(VkImageMemoryBarrier2& _barrier, ETextureUsageFlags _src_usage, EPassType _pass) {
+void ResolveTextureBarrierInfo(VkImageMemoryBarrier2& _barrier, ETextureStateFlags _state, EPassType _pass) {
 
     auto& src_access_flags = _is_src ? _barrier.srcAccessMask : _barrier.dstAccessMask;
     auto& src_stage        = _is_src ? _barrier.srcStageMask : _barrier.dstStageMask;
     auto& layout           = _is_src ? _barrier.oldLayout : _barrier.newLayout;
-    if (EnumHasAnyFlag(_src_usage, ETextureUsageFlags::UNORDERED_ACCESS) && EnumHasAnyFlag(_src_usage, ETextureUsageFlags::SAMPLED)) {
-        src_access_flags = VK_ACCESS_SHADER_READ_BIT;
-        src_stage        = GetPipelineStageFromPassType(_pass);
-        layout           = VK_IMAGE_LAYOUT_GENERAL;
-    } else
-        switch (_src_usage) {
-            case ETextureUsageFlags::UNDEFINED:
-                src_access_flags = VK_ACCESS_2_NONE;
-                src_stage        = VK_PIPELINE_STAGE_2_NONE;
-                layout           = VK_IMAGE_LAYOUT_UNDEFINED;
-                break;
-            case ETextureUsageFlags::TRANSFER_SRC:
-                src_access_flags = VK_ACCESS_TRANSFER_READ_BIT;
-                src_stage        = PS_TRANSFER;
-                layout           = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-                break;
-            case ETextureUsageFlags::TRANSFER_DST:
-                src_access_flags = VK_ACCESS_TRANSFER_WRITE_BIT;
-                src_stage        = PS_TRANSFER;
-                layout           = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-                break;
-            case ETextureUsageFlags::SAMPLED:
-                src_access_flags = VK_ACCESS_SHADER_READ_BIT;
-                src_stage        = GetPipelineStageFromPassType(_pass);
-                layout           = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                break;
-            case ETextureUsageFlags::UNORDERED_ACCESS:
-                src_access_flags = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
-                src_stage        = GetPipelineStageFromPassType(_pass);
-                layout           = VK_IMAGE_LAYOUT_GENERAL;
-                break;
-            case ETextureUsageFlags::COLOR_ATTACHMENT:
-                src_access_flags = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-                src_stage        = PS_COLOR_ATTACHMENT_OUTPUT;
-                layout           = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-                break;
-            case ETextureUsageFlags::RESOLVE_ATTACHMENT:
-                src_access_flags = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-                src_stage        = PS_COLOR_ATTACHMENT_OUTPUT;
-                layout           = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-                break;
-            case ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT:
-                src_access_flags = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-                src_stage        = PS_LATE_FRAGMENT_TESTS;
-                layout           = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-                break;
-            case ETextureUsageFlags::PRESENT:
-                if constexpr (_is_src) {
-                    src_access_flags = VK_ACCESS_MEMORY_READ_BIT;
-                } else {
-                    src_access_flags = VK_ACCESS_2_NONE;
-                }
-                src_stage        = PS_COLOR_ATTACHMENT_OUTPUT;
-                layout           = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-                break;
-            default:
-                assert(false && "Invalid texture usage");
+
+    auto transfer_state_any_or = [&](ETextureStateFlags _tmp_state, VkAccessFlags2 _access, VkPipelineStageFlags2 _stage, VkImageLayout _layout) {
+        if (EnumHasAnyFlag(_state, _tmp_state)) {
+            src_access_flags |= _access;
+            src_stage = _stage;
+            layout    = _layout;
         }
+    };
+    src_stage        = VK_PIPELINE_STAGE_2_NONE;
+    src_access_flags = VK_ACCESS_2_NONE;
+    transfer_state_any_or(TS_UNORDERED_READ, VK_ACCESS_2_SHADER_READ_BIT, GetPipelineStageFromPassType(_pass), VK_IMAGE_LAYOUT_GENERAL);
+    transfer_state_any_or(TS_UNORDERED_WRITE, VK_ACCESS_2_SHADER_WRITE_BIT, GetPipelineStageFromPassType(_pass), VK_IMAGE_LAYOUT_GENERAL);
+    transfer_state_any_or(TS_COLOR_ATTACHMENT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, PS_COLOR_ATTACHMENT_OUTPUT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+
+    transfer_state_any_or(TS_RESOLVE_ATTACHMENT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, PS_COLOR_ATTACHMENT_OUTPUT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    if (src_stage != VK_PIPELINE_STAGE_2_NONE) {
+        return;
+    }
+    switch (_state) {
+        case TS_UNDEFINED:
+            src_access_flags = VK_ACCESS_2_NONE;
+            src_stage        = VK_PIPELINE_STAGE_2_NONE;
+            layout           = VK_IMAGE_LAYOUT_UNDEFINED;
+            break;
+        case TS_TRANSFER_SRC:
+            src_access_flags = VK_ACCESS_TRANSFER_READ_BIT;
+            src_stage        = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+            layout           = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            break;
+        case TS_TRANSFER_DST:
+            src_access_flags = VK_ACCESS_TRANSFER_WRITE_BIT;
+            src_stage        = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+            layout           = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            break;
+        case TS_SAMPLED:
+            src_access_flags = VK_ACCESS_SHADER_READ_BIT;
+            src_stage        = GetPipelineStageFromPassType(_pass);
+            layout           = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            break;
+        case TS_DEPTH_STENCIL:
+            src_access_flags = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            if (_is_src)
+                src_stage = VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+            else
+                src_stage = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT;
+            layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            break;
+        case TS_PRESENT:
+            if constexpr (_is_src) {
+                src_access_flags = VK_ACCESS_MEMORY_READ_BIT;
+            } else {
+                src_access_flags = VK_ACCESS_2_NONE;
+            }
+            layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            break;
+        default:
+            assert(false && "Invalid texture usage");
+    }
 }
-void VulkanRHICommandListBase::TransitionTextureBase(RHITexture* _texture, ETextureUsageFlags _target_usage, EPassType _pass_type, uint8_t _mip_level, uint8_t _mip_cnt) {
+void VulkanRHICommandListBase::TransitionTextureBase(RHITexture* _texture, ETextureStateFlags _state, EPassType _pass_type, uint8_t _mip_level, uint8_t _mip_cnt) {
     auto* vk_texture = static_cast<VulkanRHITexture*>(_texture);
     if (vk_texture == nullptr) {
         LOG_CRITICAL("TransitionTexture: texture is nullptr!");
@@ -186,7 +187,8 @@ void VulkanRHICommandListBase::TransitionTextureBase(RHITexture* _texture, EText
     }
 
     auto [src_usage, src_pass] = _texture->GetTrackedUsage(_mip_level);
-    auto aspect                = EnumHasAnyFlag(_target_usage, ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT) ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
+    auto is_depth_stencil      = EnumHasAnyFlag(_state, TS_DEPTH_STENCIL) || _texture->GetFormat() == PF_D32_SFLOAT_S8_UINT || _texture->GetFormat() == PF_D24_UNORM_S8_UINT || _texture->GetFormat() == PF_D16_UNORM_S8_UINT;
+    auto aspect                = is_depth_stencil ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
 
     if (++m_image_barrier_count > m_image_barriers.size()) {
         m_image_barriers.resize(m_image_barrier_count);
@@ -199,7 +201,7 @@ void VulkanRHICommandListBase::TransitionTextureBase(RHITexture* _texture, EText
     image_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     image_barrier.image               = vk_texture->GetHandle();
     ResolveTextureBarrierInfo<true>(image_barrier, src_usage, src_pass);
-    ResolveTextureBarrierInfo<false>(image_barrier, _target_usage, _pass_type);
+    ResolveTextureBarrierInfo<false>(image_barrier, _state, _pass_type);
     VkImageSubresourceRange& subresource_range = image_barrier.subresourceRange;
     subresource_range.aspectMask               = aspect;
     subresource_range.baseMipLevel             = _mip_level;
@@ -208,7 +210,7 @@ void VulkanRHICommandListBase::TransitionTextureBase(RHITexture* _texture, EText
     subresource_range.layerCount               = 1;
 
     RHISubresourceRange range(ETextureAspectFlags(aspect), _mip_level, _mip_cnt, 0, 1, 0, 1);
-    _texture->SetTrackInfo(range, _target_usage, _pass_type);
+    _texture->SetTrackInfo(range, _state, _pass_type);
 }
 
 void VulkanRHICommandListBase::ExecuteTransitionBase() {
@@ -554,8 +556,8 @@ void VulkanRHIGraphicsCommandList::DispatchIndirect(RHIBuffer* _buffer, uint64_t
     vkCmdDispatchIndirect(m_command_buffer, vk_buffer_handle, _offset);
 }
 
-void VulkanRHIGraphicsCommandList::TransitionTexture(RHITexture* _texture, ETextureUsageFlags _target_usage, EPassType _pass_type, uint8_t _mip_level, uint8_t _mip_cnt) {
-    VulkanRHICommandListBase::TransitionTextureBase(_texture, _target_usage, _pass_type, _mip_level, _mip_cnt);
+void VulkanRHIGraphicsCommandList::TransitionTexture(RHITexture* _texture, ETextureStateFlags _target_state, EPassType _pass_type, uint8_t _mip_level, uint8_t _mip_cnt) {
+    VulkanRHICommandListBase::TransitionTextureBase(_texture, _target_state, _pass_type, _mip_level, _mip_cnt);
 }
 
 void VulkanRHIGraphicsCommandList::ExecuteTransition() {

@@ -22,19 +22,19 @@ namespace Moer {
     // A BlackBoard is a place to store data that is shared between passes
     class RENDER_API BlackBoard {
     public:
-        RenderGraphTexture* GetTexture(const std::string& name) const;
-        RenderGraphBuffer*  GetBuffer(const std::string& name) const;
-        RenderGraphHandle   GetHandle(const std::string& _name) const;
+        RenderGraphTexture* GetTexture(std::string_view name) const;
+        RenderGraphBuffer*  GetBuffer(std::string_view name) const;
+        RenderGraphHandle   GetHandle(std::string_view _name) const;
         Moer::Array<RenderGraphHandle>
              GetHandles(const Moer::Array<std::string>& names) const;
-        void PutHandle(const std::string& name, RenderGraphHandle handle);
+        void PutHandle(std::string_view name, RenderGraphHandle handle);
         BlackBoard(RenderGraph& renderGraph);
         ~BlackBoard() = default;
         void Reset();
 
     protected:
         RenderGraph&                                       m_renderGraph;
-        Moer::UnorderedMap<std::string, RenderGraphHandle> m_handles;
+        Moer::UnorderedMap<std::string_view, RenderGraphHandle> m_handles;
     };
 
     struct RenderGraphExecuteConfig {
@@ -49,22 +49,30 @@ namespace Moer {
         public:
             Builder& ReadTexture(RenderGraphHandle         _input,
                                  RenderGraphTexture::Usage _usage =
-                                     RenderGraphTexture::Usage::INPUT_ATTACHMENT,
+                                     TS_SAMPLED,
                                  uint32_t _mip_level = 0,
                                  uint32_t _mip_cnt   = 1);
 
             Builder& WriteTexture(RenderGraphHandle         _output,
-                                  RenderGraphTexture::Usage _usage     = RenderGraphTexture::Usage::COLOR_ATTACHMENT,
+                                  RenderGraphTexture::Usage _usage     = TS_COLOR_ATTACHMENT,
                                   uint32_t                  _mip_level = 0,
                                   uint32_t                  _mip_cnt   = 1);
 
+            Builder& ReadWriteTexture(RenderGraphHandle         _input,
+                                      RenderGraphTexture::Usage _usage =
+                                          TS_COLOR_ATTACHMENT,
+                                      uint32_t _mip_level = 0,
+                                      uint32_t _mip_cnt   = 1);
+            Builder& ReadWriteTextures(const Moer::Array<RenderGraphHandle>& inputs,
+                                       RenderGraphTexture::Usage             usage =
+                                           TS_COLOR_ATTACHMENT);
             Builder& ReadTextures(const Moer::Array<RenderGraphHandle>& inputs,
                                   RenderGraphTexture::Usage             usage =
-                                      RenderGraphTexture::Usage::INPUT_ATTACHMENT);
+                                      TS_SAMPLED);
 
             Builder& WriteTextures(const Moer::Array<RenderGraphHandle>& output,
                                    RenderGraphTexture::Usage             usage =
-                                       RenderGraphTexture::Usage::COLOR_ATTACHMENT);
+                                       TS_COLOR_ATTACHMENT);
 
             Builder&
             ReadBuffer(RenderGraphHandle        input,
@@ -95,17 +103,17 @@ namespace Moer {
         RenderGraph& operator=(const RenderGraph& other) = delete;
         void         Reset();
         RenderGraphHandle
-                          CreateTexture(const std::string&                    name,
+                          CreateTexture(std::string_view                      name,
                                         const RenderGraphTexture::Descriptor& descriptor);
-        RenderGraphHandle ImportTexture(const std::string& name,
-                                        RHITextureRef      texture);
+        RenderGraphHandle ImportTexture(std::string_view name,
+                                        RHITextureRef    texture);
         template<typename TResourceRef>
             requires std::is_same_v<TResourceRef, RHITextureRef> ||
                      std::is_same_v<TResourceRef, RHIBufferRef> ||
                      std::is_constructible_v<RHITextureRef, TResourceRef> ||
                      std::is_constructible_v<RHIBufferRef, TResourceRef>
-        RenderGraphHandle ImportIfNotExist(const std::string& _name,
-                                           TResourceRef       _resource) {
+        RenderGraphHandle ImportIfNotExist(std::string_view _name,
+                                           TResourceRef     _resource) {
             if (auto handle = GetBlackBoard().GetHandle(_name);
                 handle.IsInitialized()) {
                 return handle;
@@ -122,20 +130,18 @@ namespace Moer {
             return handle;
         }
         RenderGraphHandle
-                          CreateBuffer(const std::string&                   name,
+                          CreateBuffer(std::string_view                     name,
                                        const RenderGraphBuffer::Descriptor& descriptor);
-        RenderGraphHandle ImportBuffer(const std::string& name, RHIBufferRef buffer);
-        RenderGraphHandle
-        CreateTextureSubResource(RenderGraphHandle parent, const std::string& name, const RHISubresourceRange& sub_resource);
+        RenderGraphHandle ImportBuffer(std::string_view name, RHIBufferRef buffer);
 
         using GraphicSetup    = std::function<void(Builder& builder)>;
         using ComputeSetUp    = std::function<void(Builder& builder)>;
         using RayTracingSetup = std::function<void(Builder& builder)>;
         using CopySetup       = std::function<void(Builder& _builder)>;
 
-        void AddGraphicPass(const std::string& name, const GraphicSetup& setup, GraphicsExecute&& execute);
-        void AddComputePass(const std::string& name, const ComputeSetUp& setup, ComputeExecute&& execute);
-        void AddRayTracingPass(const std::string& name, const RayTracingSetup& setup, RaytracingExecute&& execute);
+        void AddGraphicPass(std::string_view name, const GraphicSetup& setup, GraphicsExecute&& execute);
+        void AddComputePass(std::string_view name, const ComputeSetUp& setup, ComputeExecute&& execute);
+        void AddRayTracingPass(std::string_view name, const RayTracingSetup& setup, RaytracingExecute&& execute);
         void AddCopyPass(std::string_view _name, const CopySetup& _setup, CopyExecute&& _execute);
         void Execute(const RenderGraphExecuteConfig& config);
         void Compile();

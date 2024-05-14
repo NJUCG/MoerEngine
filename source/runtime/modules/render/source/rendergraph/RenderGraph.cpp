@@ -4,11 +4,12 @@
 #include "misc/Timer.h"
 #include "rendergraph/DepdencyGraph.h"
 #include "rendergraph/PassNode.h"
+#include "rendergraph/RenderGraphHandle.h"
 namespace Moer {
-    RenderGraphTexture* BlackBoard::GetTexture(const std::string& name) const {
+    RenderGraphTexture* BlackBoard::GetTexture(std::string_view name) const {
         return m_renderGraph.GetTexture(GetHandle(name));
     }
-    RenderGraphHandle BlackBoard::GetHandle(const std::string& name) const {
+    RenderGraphHandle BlackBoard::GetHandle(std::string_view name) const {
         if (m_handles.find(name) == m_handles.end()) {
             return RenderGraphHandle();
         }
@@ -21,12 +22,12 @@ namespace Moer {
         }
         return handles;
     }
-    void BlackBoard::PutHandle(const std::string& name, RenderGraphHandle handle) {
+    void BlackBoard::PutHandle(std::string_view name, RenderGraphHandle handle) {
         m_handles.emplace(name, handle);
     }
     BlackBoard::BlackBoard(RenderGraph& renderGraph) : m_renderGraph(renderGraph) {
     }
-    RenderGraphBuffer* BlackBoard::GetBuffer(const std::string& name) const {
+    RenderGraphBuffer* BlackBoard::GetBuffer(std::string_view name) const {
         return m_renderGraph.GetBuffer(GetHandle(name));
     }
     RenderGraph::Builder& RenderGraph::Builder::ReadTexture(RenderGraphHandle _input, RenderGraphTexture::Usage _usage, uint32_t _mip_level, uint32_t _mip_cnt) {
@@ -38,6 +39,21 @@ namespace Moer {
 
         DepdencyGraph::ResourceDesc desc = DepdencyGraph::TextureSubDesc{.mip_level = _mip_level, .num_mips = _mip_cnt, .array_index = 0, .array_count = 1, .usage = _usage};
         m_renderGraph.WriteInternal(m_pass, _output, std::move(desc));
+        return *this;
+    }
+    RenderGraph::Builder& RenderGraph::Builder::ReadWriteTexture(RenderGraphHandle _inout, RenderGraphTexture::Usage _usage, uint32_t _mip_level, uint32_t _mip_cnt) {
+        DepdencyGraph::ResourceDesc desc = DepdencyGraph::TextureSubDesc{.mip_level = _mip_level, .num_mips = _mip_cnt, .array_index = 0, .array_count = 1, .usage = _usage};
+        m_renderGraph.ReadInternal(m_pass, _inout, std::move(desc));
+        m_renderGraph.WriteInternal(m_pass, _inout, std::move(desc));
+        return *this;
+    }
+
+    RenderGraph::Builder& RenderGraph::Builder::ReadWriteTextures(const Moer::Array<RenderGraphHandle>& inputs, RenderGraphTexture::Usage usage) {
+        for (auto input : inputs) {
+            DepdencyGraph::ResourceDesc desc = DepdencyGraph::TextureSubDesc{.mip_level = 0, .num_mips = 1, .array_index = 0, .array_count = 1, .usage = usage};
+            m_renderGraph.ReadInternal(m_pass, input, std::move(desc));
+            m_renderGraph.WriteInternal(m_pass, input, std::move(desc));
+        }
         return *this;
     }
     RenderGraph::Builder& RenderGraph::Builder::ReadTextures(const Moer::Array<RenderGraphHandle>& inputs, RenderGraphTexture::Usage usage) {
@@ -113,45 +129,45 @@ namespace Moer {
         m_resources = {};
         m_passes    = {};
     }
-    RenderGraphHandle RenderGraph::CreateTexture(const std::string& name, const RenderGraphTexture::Descriptor& descriptor) {
+    RenderGraphHandle RenderGraph::CreateTexture(std::string_view name, const RenderGraphTexture::Descriptor& descriptor) {
         RenderGraphTexture* texture = MoerNew(RenderGraphTexture)(name, descriptor);
         return AddTextureInternal(texture);
     }
-    RenderGraphHandle RenderGraph::ImportTexture(const std::string& name, RHITextureRef rhi_texture) {
+    RenderGraphHandle RenderGraph::ImportTexture(std::string_view name, RHITextureRef rhi_texture) {
         RenderGraphTexture* texture = MoerNew(RenderGraphTexture)(name, rhi_texture);
         return AddTextureInternal(texture);
     }
-    RenderGraphHandle RenderGraph::CreateBuffer(const std::string& name, const RenderGraphBuffer::Descriptor& descriptor) {
-        RenderGraphBuffer* buffer = MoerNew(RenderGraphBuffer)(name, descriptor);
+    RenderGraphHandle RenderGraph::CreateBuffer(std::string_view _name, const RenderGraphBuffer::Descriptor& descriptor) {
+        RenderGraphBuffer* buffer = MoerNew(RenderGraphBuffer)(_name, descriptor);
         return AddBufferInternal(buffer);
     }
-    RenderGraphHandle RenderGraph::ImportBuffer(const std::string& _name, RHIBufferRef _rhi_buffer) {
+    RenderGraphHandle RenderGraph::ImportBuffer(std::string_view _name, RHIBufferRef _rhi_buffer) {
         RenderGraphBuffer* buffer = MoerNew(RenderGraphBuffer)(_name, _rhi_buffer);
         return AddBufferInternal(buffer);
     }
-    RenderGraphHandle RenderGraph::CreateTextureSubResource(RenderGraphHandle parent, const std::string& name, const RHISubresourceRange& sub_resource) {
-        if (auto handle = m_black_board.GetHandle(name); handle.IsInitialized()) {
-            return handle;
-        }
-        RenderGraphTexture* parent_texture = GetTexture(parent);
-        RenderGraphTexture* texture        = MoerNew(RenderGraphTexture)(name, parent_texture, sub_resource);
-        return AddTextureInternal(texture);
-    }
-    void RenderGraph::AddGraphicPass(const std::string& name, const GraphicSetup& setup, GraphicsExecute&& execute) {
+    // RenderGraphHandle RenderGraph::CreateTextureSubResource(RenderGraphHandle parent, std::string_view name, const RHISubresourceRange& sub_resource) {
+    //     if (auto handle = m_black_board.GetHandle(name); handle.IsInitialized()) {
+    //         return handle;
+    //     }
+    //     RenderGraphTexture* parent_texture = GetTexture(parent);
+    //     RenderGraphTexture* texture        = MoerNew(RenderGraphTexture)(name, parent_texture, sub_resource);
+    //     return AddTextureInternal(texture);
+    // }
+    void RenderGraph::AddGraphicPass(std::string_view name, const GraphicSetup& setup, GraphicsExecute&& execute) {
         RenderGraphPass* pass = MoerNew(RenderGraphPass)(std::move(execute));
         auto*            node = MoerNew(GraphicsPassNode)(name, pass);
         m_passes.emplace_back(node);
         Builder builder(node, *this);
         setup(builder);
     }
-    void RenderGraph::AddComputePass(const std::string& name, const ComputeSetUp& setup, ComputeExecute&& execute) {
+    void RenderGraph::AddComputePass(std::string_view name, const ComputeSetUp& setup, ComputeExecute&& execute) {
         RenderGraphPass* pass = MoerNew(RenderGraphPass)(std::move(execute));
         auto             node = MoerNew(ComputePassNode)(name, pass);
         m_passes.emplace_back(node);
         Builder builder(node, *this);
         setup(builder);
     }
-    void RenderGraph::AddRayTracingPass(const std::string& name, const RayTracingSetup& setup, RaytracingExecute&& execute) {
+    void RenderGraph::AddRayTracingPass(std::string_view name, const RayTracingSetup& setup, RaytracingExecute&& execute) {
         //TODO
     }
 
@@ -248,6 +264,7 @@ namespace Moer {
                     pass_node->AddResourceUsage(resource, edge->desc);
                 }
             }
+            // pass_node->FinalizeUsage();
         }
 
         for (const auto& resource : m_resources) {

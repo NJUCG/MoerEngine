@@ -1,4 +1,5 @@
 #include "SplattingRender.h"
+#include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "3DGaissian.h"
 #include "RenderThread.h"
@@ -575,8 +576,9 @@ void Moer::SplattingRender::Impl::DispatchTileRender(RenderGraph& render_graph) 
             auto vertex_attribute_buffer = render_graph.GetBlackBoard().GetHandle("vertex_attribute_buffer");
             auto sort_v_even = render_graph.GetBlackBoard().GetHandle("sort_v_even");
             _builder
-          .WriteTexture({output},ETextureUsageFlags::UNORDERED_ACCESS)
-            .ReadBuffers({vertex_attribute_buffer,tile_boundary_buffer,sort_v_even}).DeclareComputePass({m_render_pipeline}); }, [&](RenderPassContext& _context) {
+                .WriteTexture({output}, TS_UNORDERED_WRITE)
+                .ReadBuffers({vertex_attribute_buffer, tile_boundary_buffer, sort_v_even})
+                .DeclareComputePass({m_render_pipeline}); }, [&](RenderPassContext& _context) {
             RHIBatchedShaderParameters batched_params;
             RenderShader::Parameters   params;
             params.params.width            = source_resolution.x;

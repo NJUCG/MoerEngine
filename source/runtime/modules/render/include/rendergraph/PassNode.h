@@ -28,29 +28,22 @@ namespace Moer {
         void                               AddResourceToDestroy(RenderGraphResource* resource);
         Moer::Array<RenderGraphResource*>& GetResourcesToCreate();
         Moer::Array<RenderGraphResource*>& GetResourcesToDestroy();
-        PassNode(const std::string& _name, EPassType _pass_type) : Node(_name), m_pass_type(_pass_type) {}
-        EPassType                 GetPassType() const { return m_pass_type; }
-        RHIBarrierDependencyInfo& GetBarrierInfo() { return m_barrier_info; }
-        void                      SetBarrierInfo(const RHIBarrierDependencyInfo& barrier_info) {
-            m_barrier_info           = barrier_info;
-            m_use_last_frame_barrier = true;
-        }
+        void                               FinalizeUsage();
+        PassNode(std::string_view _name, EPassType _pass_type) : Node(_name), m_pass_type(_pass_type) {}
+        EPassType GetPassType() const { return m_pass_type; }
 
     protected:
-        Moer::Map<RenderGraphResource*, uint32_t> m_resource_usage;
-        Moer::Map<RenderGraphResource*, uint32_t> m_resource_layout;
-
-        Moer::Map<RenderGraphResource*, Array<DepdencyGraph::ResourceDesc>> m_resource_desc;
-        Moer::Array<RenderGraphResource*>                                   m_resources_to_create;
-        Array<RenderGraphResource*>                                         m_resources_to_destroy;
-        EPassType                                                           m_pass_type;
-        RHIBarrierDependencyInfo                                            m_barrier_info;
-        bool                                                                m_use_last_frame_barrier{false};
+        Moer::Map<RenderGraphResource*, UnorderedSet<DepdencyGraph::ResourceDesc>> m_resource_desc;
+        Moer::Array<RenderGraphResource*>                                          m_resources_to_create;
+        Array<RenderGraphResource*>                                                m_resources_to_destroy;
+        EPassType                                                                  m_pass_type;
+        RHIBarrierDependencyInfo                                                   m_barrier_info;
+        bool                                                                       m_use_last_frame_barrier{false};
     };
 
     class GraphicsPassNode : public PassNode {
     public:
-        GraphicsPassNode(const std::string& passName, RenderGraphPass* pass);
+        GraphicsPassNode(std::string_view passName, RenderGraphPass* pass);
         void Execute(RenderPassContext& pass_context) override;
         void DeclareRenderPass(const RenderGraphPassDescriptor& descriptor);
         ~GraphicsPassNode();
@@ -66,7 +59,7 @@ namespace Moer {
 
     class ComputePassNode : public PassNode {
     public:
-        ComputePassNode(const std::string& passName, RenderGraphPass* pass);
+        ComputePassNode(std::string_view passName, RenderGraphPass* pass);
         void Execute(RenderPassContext& pass_context) override;
         ~ComputePassNode();
         void DeclareComputePass(const ComputePassDescriptor& descriptor);

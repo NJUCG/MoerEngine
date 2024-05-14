@@ -1769,16 +1769,20 @@ RHICopyCommandList* VulkanRHIImpl::RHICreateCopyCommandList(RHICommandAllocator*
 
 void VulkanRHIImpl::RHISetBatchedShaderParametersInner(RHIResource* _pso, const RHIBatchedShaderParameters& _batched_params, bool _b_update_constant) {
     const VulkanPipelineState* vk_pso;
+    VkShaderStageFlags         stage = 0u;
     switch (_pso->GetResourceType()) {
         case RRT_GRAPHIC_PIPELINE_STATE:
             vk_pso = static_cast<VulkanRHIGraphicsPipelineState*>(_pso);
+            stage  = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
             VK_CHECK_NULLPTR(vk_pso, "SetBatchedShaderParameter: graphics pipeline state is nullptr!", return);
             break;
         case RRT_COMPUTE_PIPELINE_STATE:
             vk_pso = static_cast<VulkanRHIComputePipelineState*>(_pso);
+            stage  = VK_SHADER_STAGE_COMPUTE_BIT;
             VK_CHECK_NULLPTR(vk_pso, "SetBatchedShaderParameter: compute pipeline state is nullptr!", return);
             break;
         case RRT_RAY_TRACING_PIPELINE_STATE:
+            stage  = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR | VK_SHADER_STAGE_INTERSECTION_BIT_KHR | VK_SHADER_STAGE_CALLABLE_BIT_KHR | VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_ALL_GRAPHICS;
             vk_pso = static_cast<VulkanRHIRayTracingPipelineState*>(_pso);
             break;
         default:
@@ -1820,7 +1824,7 @@ void VulkanRHIImpl::RHISetBatchedShaderParametersInner(RHIResource* _pso, const 
     const auto& push_constants = _batched_params.GetConstantParameters();
     // if (!b_update_constant) return;
     for (const auto& params : push_constants) {
-        vk_pso->GetPipelineResourceCache()->AddConstantToPush({VulkanEnumTranslator::METoVKShaderStageFlags(params.shader_type),
+        vk_pso->GetPipelineResourceCache()->AddConstantToPush({stage,
                                                                (uint32_t)params.size_in_32bit * 4,
                                                                params.byte_offset_in_raw_data,
                                                                std::move(_batched_params.GetRawData())});

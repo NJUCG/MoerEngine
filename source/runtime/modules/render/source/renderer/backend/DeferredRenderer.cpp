@@ -502,7 +502,7 @@ namespace Moer {
                 [this](RenderGraph::Builder& _builder) {
                     auto& rg          = render_context.GetRenderGraph();
                     auto  uni_handle  = rg.ImportIfNotExist("Deferred::UniformView", uniform_buffer);
-                    auto  view_handle = rg.ImportIfNotExist(view_buffer_name.data(), view_buffer);
+                    auto  view_handle = rg.ImportIfNotExist(view_buffer_name, view_buffer);
                     _builder.ReadBuffer(uni_handle, EBufferLayout::TRANSFER_READ);
                     _builder.WriteBuffer(view_handle, EBufferLayout::TRANSFER_WRITE);
                 },
@@ -905,7 +905,7 @@ namespace Moer {
             auto depth  = rg.GetBlackBoard().GetHandle("depth");
             // auto position = render_graph.GetBlackBoard().GetHandle("position");
             auto output = rg.ImportTexture("swapchain_output", virtual_viewport->GetBackBufferInfo().backbuffer_uav->GetTexture());
-            _builder.ReadTextures({normal,uv,mat,depth},RenderGraphTexture::Usage::SAMPLED).WriteTexture(output);
+            _builder.ReadTextures({normal, uv, mat, depth}, TS_SAMPLED).WriteTexture(output);
             _builder.DeclareRenderPass({.color_attachments =  {output}}); }, [&rg, this](RenderPassContext& context) {
             auto* cmd_list = context.cmd_list;
             cmd_list->SetPipelineState(lighting_pipeline_state);

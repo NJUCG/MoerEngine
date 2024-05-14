@@ -1,5 +1,6 @@
 #ifndef MOER_ENGINE_GLOBAL_RENDER_RESOURCES_H
 #define MOER_ENGINE_GLOBAL_RENDER_RESOURCES_H
+#include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 
 class RHITexture;

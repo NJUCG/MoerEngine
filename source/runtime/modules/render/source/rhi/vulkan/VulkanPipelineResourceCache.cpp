@@ -79,8 +79,8 @@ void VulkanPipelineResourceCache::SetSRV(uint32_t _set, uint32_t _binding, RHISR
         auto final_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
         if (prev_usage != tex_view->GetTexture()->mip_usages.end()) {
-            auto usage   = std::get<ETextureUsageFlags>(prev_usage->second);
-            final_layout = EnumHasAnyFlag(usage, ETextureUsageFlags::UNORDERED_ACCESS) ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            auto usage   = std::get<ETextureStateFlags>(prev_usage->second);
+            final_layout = EnumHasAnyFlag(usage, TS_UNORDERED_READ) ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         }
 
         m_descriptor_set_writers[_set].WriteSampledImage(_binding, VK_NULL_HANDLE, tex_view->GetView(), final_layout);

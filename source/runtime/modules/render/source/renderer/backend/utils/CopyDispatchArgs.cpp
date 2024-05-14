@@ -49,8 +49,8 @@ namespace Moer {
             "Copy Dispatch Args", [&](RenderGraph::Builder& _builder) {
                 auto& blackboard = rg.GetBlackBoard();
 
-                auto src_handle    = rg.ImportIfNotExist(_src_name.data(), _src_buffer->GetBuffer());
-                auto target_handle = rg.ImportIfNotExist(_target_name.data(), _target->GetBuffer());
+                auto src_handle    = rg.ImportIfNotExist(_src_name, _src_buffer->GetBuffer());
+                auto target_handle = rg.ImportIfNotExist(_target_name, _target->GetBuffer());
                 _builder.ReadBuffer(src_handle, EBufferLayout::READ);
                 _builder.WriteBuffer(target_handle, EBufferLayout::WRITE); }, [&_context, _src_buffer, _target, _src_offset, _dst_offset, _group_size](RenderPassContext& _pass_context) {
                 auto& cmd_list = *_pass_context.cmd_list;

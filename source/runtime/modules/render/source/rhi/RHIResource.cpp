@@ -40,12 +40,12 @@ void RHIResource::Destroy() {
 //     subresource_layouts[_subresource_range] = _layout;
 // }
 
-void RHITexture::SetTrackInfo(const RHISubresourceRange& _subresource_range, ETextureUsageFlags _usage, EPassType _pass_type) {
+void RHITexture::SetTrackInfo(const RHISubresourceRange& _subresource_range, ETextureStateFlags _state, EPassType _pass_type) {
     using namespace Moer;
     uint mip_cnt = std::min(texture_info.num_mips, _subresource_range.num_mips);
     for (uint i = 0; i < mip_cnt; ++i) {
         uint cur_mip        = _subresource_range.mip_index + i;
-        mip_usages[cur_mip] = std::make_tuple(_usage, _pass_type);
+        mip_usages[cur_mip] = std::make_tuple(_state, _pass_type);
     }
 }
 RHITexture::RHITexture(const RHITextureCreateInfo& _info) : RHIViewableResource(RRT_TEXTURE), texture_info(_info) {
@@ -105,12 +105,12 @@ void RHIBatchedShaderParameters::SetParameters(RHIResource* resource, uint16_t s
     resource_parameters.emplace_back(RHIShaderResourceParameter(resource, slot, space));
 }
 
-void RHIBatchedShaderParameters::SetParameters(RHIShader* shader, size_t _data_size, uint8_t* data_source) {
-    SetParameters(shader->GetMetaShader(), _data_size, data_source);
+void RHIBatchedShaderParameters::SetParameters(RHIShader* shader, size_t _data_size, uint8_t* data_source, bool _set_constants) {
+    SetParameters(shader->GetMetaShader(), _data_size, data_source, _set_constants);
 }
 RHIBatchedShaderParameters::~RHIBatchedShaderParameters() {
 }
-void RHIBatchedShaderParameters::SetParameters(const Shader* shader, size_t _data_size, uint8_t* data_source) {
+void RHIBatchedShaderParameters::SetParameters(const Shader* shader, size_t _data_size, uint8_t* data_source, bool _set_constants) {
     const auto& param_layout_info = shader->GetRootParametersLayoutInfo();
 
     //not presices since it may contains const data
@@ -134,6 +134,9 @@ void RHIBatchedShaderParameters::SetParameters(const Shader* shader, size_t _dat
                 resource_parameters.emplace_back(RHIShaderResourceParameter(data, param_info.slot, param_info.space));
             }
         }
+    }
+    if (!_set_constants) {
+        return;
     }
     if (param_layout_info.GetConstantsInfo().size() > 0) {
         raw_data.clear();

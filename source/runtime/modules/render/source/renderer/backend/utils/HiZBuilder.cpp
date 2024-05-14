@@ -217,8 +217,8 @@ namespace Moer {
 
                 auto hiz = black_board.GetHandle("HiZ Buffer");
 
-                _builder.ReadTexture(depth, ETextureUsageFlags::SAMPLED);
-                _builder.WriteTexture(hiz, ETextureUsageFlags::UNORDERED_ACCESS, 0, mip_cnt); }, [this, mip_cnt, &_hiz_buffer, depth_buffer(_depth_buffer), &_context](RenderPassContext& _pass_context) {
+                _builder.ReadTexture(depth, TS_SAMPLED);
+                _builder.WriteTexture(hiz, TS_UNORDERED_WRITE, 0, mip_cnt); }, [this, mip_cnt, &_hiz_buffer, depth_buffer(_depth_buffer), &_context](RenderPassContext& _pass_context) {
                     BuildHiZShader::Parameters params{};
                     auto&                      hiz_tex   = _hiz_buffer.texture;
                     Vector2i                   mip0_size = Vector2i(hiz_tex->GetExtent3D());
@@ -254,8 +254,8 @@ namespace Moer {
                         params.target3      = _hiz_buffer.uavs[current_mip + 3];
                         params.depth_buffer = _hiz_buffer.srvs[current_mip - 1];
 
-                        cmd_list.TransitionTexture(hiz_tex, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED, EPassType::Compute, current_mip - 1);
-                        cmd_list.TransitionTexture(hiz_tex, ETextureUsageFlags::UNORDERED_ACCESS, EPassType::Compute, current_mip, 4);
+                        cmd_list.TransitionTexture(hiz_tex, TS_UNORDERED_READ, EPassType::Compute, current_mip - 1);
+                        cmd_list.TransitionTexture(hiz_tex, TS_UNORDERED_WRITE, EPassType::Compute, current_mip, 4);
                         cmd_list.ExecuteTransition();
 
                         batched_params.SetParameters(builder_shaders[max_mip_batch_cnt - 1], params);
@@ -275,8 +275,8 @@ namespace Moer {
                         params.target1      = _hiz_buffer.uavs[std::min(mip_cnt - 1, start_mip + 1)];
                         params.target2      = _hiz_buffer.uavs[std::min(mip_cnt - 1, start_mip + 2)];
 
-                        cmd_list.TransitionTexture(hiz_tex, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED, EPassType::Compute, start_mip - 1);
-                        cmd_list.TransitionTexture(hiz_tex, ETextureUsageFlags::UNORDERED_ACCESS, EPassType::Compute, start_mip, batch_cnt);
+                        cmd_list.TransitionTexture(hiz_tex, TS_UNORDERED_READ, EPassType::Compute, start_mip - 1);
+                        cmd_list.TransitionTexture(hiz_tex, TS_UNORDERED_WRITE, EPassType::Compute, start_mip, batch_cnt);
                         cmd_list.ExecuteTransition();
                         batched_params.SetParameters(builder_shaders[batch_cnt - 1], params);
                         g_rhi->RHISetBatchedShaderParameters(psos[batch_cnt - 1], batched_params);

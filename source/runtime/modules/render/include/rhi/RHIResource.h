@@ -511,9 +511,9 @@ struct RENDER_API RHIBatchedShaderParameters {
     // }
 
     template<concept_is_root_parameter_struct TRootParameter>
-    void SetParameters(RHIShader* shader, const TRootParameter& params) {
+    void SetParameters(RHIShader* shader, const TRootParameter& params, bool _set_constant = true) {
         size_t data_size = sizeof(TRootParameter);
-        SetParameters(shader->GetMetaShader(), data_size, (uint8_t*)&params);
+        SetParameters(shader->GetMetaShader(), data_size, (uint8_t*)&params, _set_constant);
     }
     ~RHIBatchedShaderParameters();
 
@@ -536,8 +536,8 @@ struct RENDER_API RHIBatchedShaderParameters {
     }
 
 private:
-    void SetParameters(const Shader* shader, size_t _data_size, uint8_t* data_source);
-    void SetParameters(RHIShader* shader, size_t _data_size, uint8_t* data_source);
+    void SetParameters(const Shader* shader, size_t _data_size, uint8_t* data_source, bool _set_constants);
+    void SetParameters(RHIShader* shader, size_t _data_size, uint8_t* data_source, bool _set_constants);
     //offset in raw_data, size, slot and space
     Moer::Array<RHIShaderResourceParameter> resource_parameters;
     Moer::Array<RHIShaderConstantParameter> constant_parameters;
@@ -914,7 +914,7 @@ public:
     EPixelFormat GetUAVFormat() const {
         return GetInfo().uav_format;
     }
-    void SetTrackInfo(const RHISubresourceRange& _range, ETextureUsageFlags _usage, EPassType _pass_type);
+    void SetTrackInfo(const RHISubresourceRange& _range, ETextureStateFlags _usage, EPassType _pass_type);
 
     RHIClearAttachment GetClearAttachment() const { return GetInfo().clear_attachment; }
     auto               GetTrackedUsage(Moer::uint _mip_index) const {
@@ -922,7 +922,7 @@ public:
         if (it != mip_usages.end()) {
             return it->second;
         }
-        return std::make_tuple(ETextureUsageFlags::UNDEFINED, EPassType::None);
+        return std::make_tuple(TS_UNDEFINED, EPassType::None);
     }
 
 protected:
@@ -947,7 +947,7 @@ private:
         }
     };
     // Moer::UnorderedMap<RHISubresourceRange, ETextureLayout, RHISubresourceRangeHash> subresource_layouts;
-    Moer::UnorderedMap<Moer::uint, std::tuple<ETextureUsageFlags, EPassType>> mip_usages;
+    Moer::UnorderedMap<Moer::uint, std::tuple<ETextureStateFlags, EPassType>> mip_usages;
 };
 
 #pragma region acceleration structures
