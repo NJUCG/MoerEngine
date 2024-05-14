@@ -115,21 +115,21 @@ namespace Moer {
     private:
         VirtualViewport* virtual_viewport;
 
-        RHIGraphicsPipelineStateRef gbuffer_pipeline_state;
-        RHIGraphicsPipelineStateRef lighting_pipeline_state;
+        RHIGfxPsoRef gbuffer_pipeline_state;
+        RHIGfxPsoRef lighting_pipeline_state;
 
         RHIBufferRef           light_buffer;
         RHISRVRef              light_buffer_view;
         Moer::Array<LightData> lights;
 
-        RHIComputePipelineStateRef cull_instance_recheck_pso;
-        RHIComputePipelineStateRef cull_meshlet_recheck_pso;
+        RHIComputePsoRef cull_instance_recheck_pso;
+        RHIComputePsoRef cull_meshlet_recheck_pso;
 
         RHIShaderRef cull_instance_recheck_shader;
         RHIShaderRef cull_meshlet_recheck_shader;
 
-        RHIComputePipelineStateRef cull_instance_prepass_pso;
-        RHIComputePipelineStateRef cull_meshlet_prepass_pso;
+        RHIComputePsoRef cull_instance_prepass_pso;
+        RHIComputePsoRef cull_meshlet_prepass_pso;
 
         RHIShaderRef cull_instance_prepass_shader;
         RHIShaderRef cull_meshlet_prepass_shader;

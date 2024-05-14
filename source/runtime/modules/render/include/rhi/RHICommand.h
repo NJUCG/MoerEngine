@@ -62,12 +62,12 @@ public:
 class RHIGraphicsCommandList : public RHICommandListBase {
 public:
     virtual ~RHIGraphicsCommandList(){};
-    virtual void SetPipelineState(RHIGraphicsPipelineState* _graphics_pso) = 0;
-    virtual void SetPipelineState(RHIComputePipelineState* _compute_pso)   = 0;
+    virtual void SetPipelineState(RHIGfxPso* _graphics_pso)    = 0;
+    virtual void SetPipelineState(RHIComputePso* _compute_pso) = 0;
     // virtual void Open()                                                    = 0;
     // virtual void Close()                                                   = 0;
     // virtual void Reset()                                                   = 0;
-    virtual void ClearState(RHIGraphicsPipelineState* _graphics_pso) = 0;
+    virtual void ClearState(RHIGfxPso* _graphics_pso) = 0;
 
     virtual void DrawIndexedInstanced(
         uint32_t _index_count,
@@ -172,7 +172,7 @@ public:
 class RHIComputeCommandList : public RHICommandListBase {
 public:
     virtual ~RHIComputeCommandList(){};
-    virtual void SetPipelineState(RHIComputePipelineState* _compute_pso)                             = 0;
+    virtual void SetPipelineState(RHIComputePso* _compute_pso)                                       = 0;
     virtual void Dispatch(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z) = 0;
     virtual void DispatchIndirect(RHIBuffer* _buffer, uint64_t _offset)                              = 0;
 
@@ -188,7 +188,7 @@ public:
 class RHIRayTracingCommandList : public RHICommandListBase {
 public:
     virtual ~RHIRayTracingCommandList(){};
-    virtual void SetPipelineState(RHIRayTracingPipelineState* _raytracing_pso) = 0;
+    virtual void SetPipelineState(RHIRTPso* _raytracing_pso)                   = 0;
     virtual void TraceRay(uint32_t _width, uint32_t _height, uint32_t _depth)  = 0;
     virtual void TraceRayIndirect()                                            = 0;
 

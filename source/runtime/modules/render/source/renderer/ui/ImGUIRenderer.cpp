@@ -51,7 +51,7 @@ struct GuiFrameRenderBuffers {
 struct GuiBackendData {
     size_t buffer_memory_alignment;
 
-    RHIGraphicsPipelineStateRef pipeline;
+    RHIGfxPsoRef                pipeline;
     RHIShaderRef                shader_module_vert;
     RHIShaderRef                shader_module_frag;
 
@@ -630,7 +630,7 @@ void GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list, RHIVi
                 batched_params.SetParameters(backend_data->shader_module_frag, params, false);
                 batched_params.SetParameters(backend_data->shader_module_vert, vert_param);
 
-                RHIGraphicsPipelineStateRef pipeline = backend_data->pipeline;
+                RHIGfxPsoRef pipeline = backend_data->pipeline;
 
                 uint32_t elem_count = cmd->ElemCount;
                 uint32_t vtx_offset = cmd->VtxOffset + global_vertex_offset;
@@ -670,7 +670,7 @@ void SetupRenderState(ImDrawData* draw_data, RHIGraphicsCommandList* commandList
 
     uint32_t num_frames_in_flight = backend_data->num_frames_in_flight;
     // 1. bind pipeline
-    RHIGraphicsPipelineStateRef pipeline = backend_data->pipeline;
+    RHIGfxPsoRef pipeline = backend_data->pipeline;
     EnqueueRenderTask([commandList, pipeline, _next_frame_info_render_thread] {
         if (_next_frame_info_render_thread->backbuffer_index == UINT32_MAX) return;
         commandList->SetPipelineState(pipeline);

@@ -16,7 +16,7 @@ namespace Moer {
     };
 
     struct ComputePassDescriptor {
-        RHIComputePipelineStateRef compute_pipeline;
+        RHIComputePsoRef compute_pipeline;
     };
 
     class PassNode : public DepdencyGraph::Node {

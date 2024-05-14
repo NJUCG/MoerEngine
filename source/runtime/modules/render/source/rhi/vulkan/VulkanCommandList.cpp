@@ -462,7 +462,7 @@ VulkanRHIGraphicsCommandList::VulkanRHIGraphicsCommandList(VulkanDevice* _device
 VulkanRHIGraphicsCommandList::~VulkanRHIGraphicsCommandList() {
 }
 
-void VulkanRHIGraphicsCommandList::SetPipelineState(RHIGraphicsPipelineState* _graphics_pso) {
+void VulkanRHIGraphicsCommandList::SetPipelineState(RHIGfxPso* _graphics_pso) {
     auto* vk_pso = static_cast<VulkanRHIGraphicsPipelineState*>(_graphics_pso);
     VK_CHECK_NULLPTR(vk_pso, "SetPipelineState: graphics pipeline state is nullptr!", return);
     vkCmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk_pso->GetHandle());
@@ -471,7 +471,7 @@ void VulkanRHIGraphicsCommandList::SetPipelineState(RHIGraphicsPipelineState* _g
 }
 
 // MARK... current_pipeline_state_design
-void VulkanRHIGraphicsCommandList::SetPipelineState(RHIComputePipelineState* _compute_pso) {
+void VulkanRHIGraphicsCommandList::SetPipelineState(RHIComputePso* _compute_pso) {
     auto* vk_pso = static_cast<VulkanRHIComputePipelineState*>(_compute_pso);
     VK_CHECK_NULLPTR(vk_pso, "SetPipelineState: compute pipeline state is nullptr!", return);
 
@@ -494,7 +494,7 @@ void VulkanRHIGraphicsCommandList::Reset() {
     m_bound_sets             = {};
 }
 
-void VulkanRHIGraphicsCommandList::ClearState(RHIGraphicsPipelineState* _graphics_pso) {
+void VulkanRHIGraphicsCommandList::ClearState(RHIGfxPso* _graphics_pso) {
     // MARK...
     // need to implemented
     auto* vk_pipelie_state = static_cast<const VulkanRHIGraphicsPipelineState*>(_graphics_pso);
@@ -877,7 +877,7 @@ VulkanRHIComputeCommandList::VulkanRHIComputeCommandList(VulkanDevice* _device, 
 
 VulkanRHIComputeCommandList::~VulkanRHIComputeCommandList() {
 }
-void VulkanRHIComputeCommandList::SetPipelineState(RHIComputePipelineState* _compute_pso) {
+void VulkanRHIComputeCommandList::SetPipelineState(RHIComputePso* _compute_pso) {
     auto* vk_pso = static_cast<VulkanRHIComputePipelineState*>(_compute_pso);
     VK_CHECK_NULLPTR(vk_pso, "SetPipelineState: compute pipeline state is nullptr!", return);
 
@@ -971,7 +971,7 @@ VulkanRHIRayTracingCommandList::VulkanRHIRayTracingCommandList(VulkanDevice* _de
 
 VulkanRHIRayTracingCommandList::~VulkanRHIRayTracingCommandList() {
 }
-void VulkanRHIRayTracingCommandList::SetPipelineState(RHIRayTracingPipelineState* _raytracing_pso) {
+void VulkanRHIRayTracingCommandList::SetPipelineState(RHIRTPso* _raytracing_pso) {
     auto* vk_pso = static_cast<VulkanRHIRayTracingPipelineState*>(_raytracing_pso);
     VK_CHECK_NULLPTR(vk_pso, "SetPipelineState: raytracing pipeline state is nullptr!", return);
 

@@ -289,7 +289,7 @@ namespace Moer {
         StaticArray<RHIShaderRef, max_mip_batch_cnt> builder_shaders;
 
         // RHIComputePipelineStateRef                             pso;
-        StaticArray<RHIComputePipelineStateRef, max_mip_batch_cnt> psos;
+        StaticArray<RHIComputePsoRef, max_mip_batch_cnt>       psos;
         RHISamplerRef                                          depth_sampler;
     };
     HiZBuilder::HiZBuilder() {

@@ -38,7 +38,8 @@ class RHIAmplificationShader;
 class RHIBlendState;
 class RHIShaderBoundStateInput;
 class RHIBuffer;
-class RHIComputePipelineState;
+class RHIGfxPso;
+class RHIComputePso;
 class RHIComputeShader;
 class RHIDepthStencilState;
 class RHIGeometryShader;
@@ -48,7 +49,7 @@ class RHIMeshShader;
 class RHIPipelineBinaryDataLibrary;
 class RHIFragmentShader;
 class RHIRasterizationState;
-class RHIRayTracingPipelineState;
+class RHIRTPso;
 class RHIRayTracingAccelerationStructure;
 class RHIRayTracingBLAS;
 class RHIRayTracingTLAS;
@@ -90,19 +91,19 @@ using RHIBufferRef              = CountableRef<RHIBuffer>;
 
 template<concept_is_shader_struct TStructuredType>
 using RHIStructuredBufferRef          = CountableRef<RHIStructuredBuffer<TStructuredType>>;
-using RHIComputePipelineStateRef      = CountableRef<RHIComputePipelineState>;
+using RHIComputePsoRef                = CountableRef<RHIComputePso>;
 using RHIComputeShaderRef             = CountableRef<RHIComputeShader>;
 using RHIDepthStencilStateRef         = CountableRef<RHIDepthStencilState>;
 using RHIGeometryShaderRef            = CountableRef<RHIGeometryShader>;
 using RHIFenceRef                     = CountableRef<RHIFence>;
-using RHIGraphicsPipelineStateRef     = CountableRef<RHIGraphicsPipelineState>;
+using RHIGfxPsoRef                    = CountableRef<RHIGfxPso>;
 using RHIMeshShaderRef                = CountableRef<RHIMeshShader>;
 using RHIPipelineBinaryDataLibraryRef = CountableRef<RHIPipelineBinaryDataLibrary>;
 using RHIFragmentShaderRef            = CountableRef<RHIFragmentShader>;
 using RHIRasterizationStateRef        = CountableRef<RHIRasterizationState>;
 using RHIRayTracingBLASRef            = CountableRef<RHIRayTracingBLAS>;
 using RHIRayTracingTLASRef            = CountableRef<RHIRayTracingTLAS>;
-using RHIRayTracingPipelineStateRef   = CountableRef<RHIRayTracingPipelineState>;
+using RHIRTPsoRef                     = CountableRef<RHIRTPso>;
 using RHIRayTracingShaderRef          = CountableRef<RHIRayTracingShader>;
 using RHIRayGenShaderRef              = CountableRef<RHIRayGenShader>;
 using RHIRayMissShaderRef             = CountableRef<RHIRayMissShader>;
@@ -435,9 +436,9 @@ public:
 
 #pragma region pipeline states definitions
 
-class RHIGraphicsPipelineState : public RHIResource {
+class RHIGfxPso : public RHIResource {
 public:
-    RHIGraphicsPipelineState() : RHIResource(RRT_GRAPHIC_PIPELINE_STATE) {}
+    RHIGfxPso() : RHIResource(RRT_GRAPHIC_PIPELINE_STATE) {}
 
     bool IsValid() const { return b_valid; }
     void SetValid(bool _b_valid) { b_valid = _b_valid; }
@@ -446,9 +447,9 @@ private:
     bool b_valid = true;
 };
 
-class RHIComputePipelineState : public RHIResource {
+class RHIComputePso : public RHIResource {
 public:
-    RHIComputePipelineState() : RHIResource(RRT_COMPUTE_PIPELINE_STATE) {}
+    RHIComputePso() : RHIResource(RRT_COMPUTE_PIPELINE_STATE) {}
     bool IsValid() const { return b_valid; }
     void SetValid(bool _b_valid) { b_valid = _b_valid; }
 
@@ -456,9 +457,9 @@ private:
     bool b_valid = true;
 };
 
-class RHIRayTracingPipelineState : public RHIResource {
+class RHIRTPso : public RHIResource {
 public:
-    RHIRayTracingPipelineState() : RHIResource(RRT_RAY_TRACING_PIPELINE_STATE) {}
+    RHIRTPso() : RHIResource(RRT_RAY_TRACING_PIPELINE_STATE) {}
 
     bool IsValid() const { return b_valid; }
     void SetValid(bool _b_valid) { b_valid = _b_valid; }
@@ -2822,7 +2823,7 @@ public:
 
     bool finalized = false;
 };
-class RHIRayTracingPipelineStateInfo {
+class RHIRTPsoInfo {
 protected:
     uint64_t hash_ray_gen;
     uint64_t hash_ray_miss;
@@ -2836,11 +2837,11 @@ public:
     uint32_t max_payload_byte_size      = 24;
     bool     b_allow_hit_group_indexing = true;
 
-    bool operator==(const RHIRayTracingPipelineStateInfo& value) const {
+    bool operator==(const RHIRTPsoInfo& value) const {
         return max_attribute_byte_size == value.max_attribute_byte_size && max_payload_byte_size == value.max_payload_byte_size && b_allow_hit_group_indexing == value.b_allow_hit_group_indexing && hash_ray_gen == value.hash_ray_gen && hash_ray_miss == value.hash_ray_miss && hash_ray_hit == value.hash_ray_hit && hash_ray_callable == value.hash_ray_callable;
     }
 };
-class RHIRayTracingPipelineStateInitializer : RHIRayTracingPipelineStateInfo {
+class RHIRayTracingPipelineStateInitializer : RHIRTPsoInfo {
 public:
     RHIRayTracingPipelineStateInitializer() = default;
 

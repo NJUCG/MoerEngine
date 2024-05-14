@@ -49,16 +49,16 @@ namespace Moer {
         void OnResizeViewport(Vector2i _extent);
 
     private:
-        RHIComputePipelineStateRef cull_instance_recheck_pso;
-        RHIComputePipelineStateRef cull_meshlet_recheck_pso;
+        RHIComputePsoRef cull_instance_recheck_pso;
+        RHIComputePsoRef cull_meshlet_recheck_pso;
 
         RHIShaderRef cull_instance_recheck_shader;
         RHIShaderRef cull_meshlet_recheck_shader;
 
-        RHIComputePipelineStateRef cull_instance_prepass_pso;
-        RHIComputePipelineStateRef cull_meshlet_prepass_pso;
+        RHIComputePsoRef cull_instance_prepass_pso;
+        RHIComputePsoRef cull_meshlet_prepass_pso;
 
-        RHIGraphicsPipelineStateRef gbuffer_pso;
+        RHIGfxPsoRef gbuffer_pso;
 
         RHIShaderRef cull_instance_prepass_shader;
         RHIShaderRef cull_meshlet_prepass_shader;

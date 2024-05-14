@@ -55,7 +55,7 @@ namespace Moer {
 
         };
 
-        void SetPSO(RHIComputePipelineState* _compute_pso){
+        void SetPSO(RHIComputePso* _compute_pso){
 
         };
 

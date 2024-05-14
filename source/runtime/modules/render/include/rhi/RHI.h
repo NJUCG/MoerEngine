@@ -37,7 +37,7 @@ struct RHIInfo {
 
 template<typename T>
 concept TPipelineStateRef = requires(T) {
-    std::convertible_to<T, RHIGraphicsPipelineStateRef> || std::convertible_to<T, RHIComputePipelineStateRef>;
+    std::convertible_to<T, RHIGfxPsoRef> || std::convertible_to<T, RHIComputePsoRef>;
 };
 class RENDER_API RHI {
 public:
@@ -82,23 +82,23 @@ public:
 
     virtual RHIFenceRef RHICreateFence(const RHIFenceCreateInfo&) = 0;
 
-    virtual RHIGraphicsPipelineStateRef RHICreateGraphicsPSO(RHIGraphicsPSOCreateInfo&& _init) = 0;
+    virtual RHIGfxPsoRef RHICreateGraphicsPSO(RHIGraphicsPSOCreateInfo&& _init) = 0;
     /* create pso from cache */
     // virtual RHIGraphicsPipelineStateRef RHICreateGraphicsPipelineState(const RHIGraphicsPipelineStateInfo& _init, RHIPipelineBinaryDataLibrary* _pipeline_library) {
     //     return RHICreateGraphicsPipelineState(_init);
     // }
 
-    virtual RHIComputePipelineStateRef RHICreateComputePipelineState(RHIShader* _compute_shader) = 0;
+    virtual RHIComputePsoRef RHICreateComputePipelineState(RHIShader* _compute_shader) = 0;
 
     /* create pso from cache */
-    virtual RHIComputePipelineStateRef RHICreateComputePipelineState(RHIShader* _compute_shader, RHIPipelineBinaryDataLibrary* _pipeline_library) {
+    virtual RHIComputePsoRef RHICreateComputePipelineState(RHIShader* _compute_shader, RHIPipelineBinaryDataLibrary* _pipeline_library) {
         return RHICreateComputePipelineState(_compute_shader);
     }
 
-    virtual RHIRayTracingPipelineStateRef RHICreateRayTracingPipelineState(const RHIRayTracingPipelineStateInitializer& _init) = 0;
+    virtual RHIRTPsoRef RHICreateRayTracingPipelineState(const RHIRayTracingPipelineStateInitializer& _init) = 0;
 
     /* create pso from cache */
-    virtual RHIRayTracingPipelineStateRef RHICreateRayTracingPipelineState(const RHIRayTracingPipelineStateInitializer& _init, RHIPipelineBinaryDataLibrary* _pipeline_library) {
+    virtual RHIRTPsoRef RHICreateRayTracingPipelineState(const RHIRayTracingPipelineStateInitializer& _init, RHIPipelineBinaryDataLibrary* _pipeline_library) {
         return RHICreateRayTracingPipelineState(_init);
     }
 
@@ -186,10 +186,10 @@ public:
     virtual RHICommandQueue* RHICreateCommandQueue(ECommandQueueType type) = 0;
     // DX12 only: _initial_state
     // virtual RHIGraphicsCommandList* CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state = nullptr)                                     = 0;
-    virtual RHIGraphicsCommandList* RHICreateGraphicsCommandList(RHICommandAllocator* _allocator, RHIGraphicsPipelineState* _initial_state = nullptr) = 0;
+    virtual RHIGraphicsCommandList* RHICreateGraphicsCommandList(RHICommandAllocator* _allocator, RHIGfxPso* _initial_state = nullptr) = 0;
     // virtual RHIComputeCommandList*  CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr)   = 0;
-    virtual RHIComputeCommandList*    RHICreateComputeCommandList(RHICommandAllocator* _allocator, RHIComputePipelineState* _initial_state = nullptr)       = 0;
-    virtual RHIRayTracingCommandList* RHICreateRayTracingCommandList(RHICommandAllocator* _allocator, RHIRayTracingPipelineState* _initial_state = nullptr) = 0;
+    virtual RHIComputeCommandList*    RHICreateComputeCommandList(RHICommandAllocator* _allocator, RHIComputePso* _initial_state = nullptr)                 = 0;
+    virtual RHIRayTracingCommandList* RHICreateRayTracingCommandList(RHICommandAllocator* _allocator, RHIRTPso* _initial_state = nullptr)                   = 0;
     virtual RHICopyCommandList*       RHICreateCopyCommandList(RHICommandAllocator* _allocator)                                                             = 0;
     template<TPipelineStateRef TPipelineRef>
     void RHISetBatchedShaderParameters(TPipelineRef _pso, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant = false) {

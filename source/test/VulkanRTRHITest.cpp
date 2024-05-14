@@ -153,7 +153,7 @@ void Test() {
     init_rt_pipeline.AddMissShader(dynamic_cast<RHIRayMissShader*>(test_raymiss_shader.Get()));
     init_rt_pipeline.AddHitShaderGroup(dynamic_cast<RHIRayClosestHitShader*>(test_raychit_shader.Get()));
 
-    RHIRayTracingPipelineStateRef rt_pipeline = g_rhi->RHICreateRayTracingPipelineState(init_rt_pipeline);
+    RHIRTPsoRef rt_pipeline = g_rhi->RHICreateRayTracingPipelineState(init_rt_pipeline);
 
     const Moer::Vector2i attachment_size(1920, 1080);
     RHITextureCreateInfo tex_info;

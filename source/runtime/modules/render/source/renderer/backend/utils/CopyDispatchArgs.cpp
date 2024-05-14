@@ -10,7 +10,7 @@ IMPLEMENT_SHADER_TYPE(CopyDispatchArgsShader, "utils/CopyDispatchArgs.hlsl", "ma
 namespace Moer {
 
     struct CopyDispatchArgs::Impl {
-        RHIComputePipelineStateRef pipeline_state;
+        RHIComputePsoRef           pipeline_state;
         RHIShaderRef               shader;
         static void                Init(RenderContext& _context) {
             Get().InitInternal(_context);

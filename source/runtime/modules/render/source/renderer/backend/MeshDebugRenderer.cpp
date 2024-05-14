@@ -81,7 +81,7 @@ namespace Moer {
         RHIBufferRef index_buffer;
         RHIBufferRef constant_buffer;
 
-        RHIGraphicsPipelineStateRef pipeline_state;
+        RHIGfxPsoRef pipeline_state;
 
         Scene* g_scene = nullptr;
     };

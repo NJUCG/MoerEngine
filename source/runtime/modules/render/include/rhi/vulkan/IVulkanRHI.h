@@ -44,12 +44,12 @@ public:
     RHIFenceRef RHICreateFence(const RHIFenceCreateInfo&) override { return RHIFenceRef{}; }
 
     // RHIGraphicsPipelineStateRef RHICreateGraphicsPipelineState(const RHIGraphicsPipelineStateInfo& _init) override { return RHIGraphicsPipelineStateRef{}; }
-    RHIGraphicsPipelineStateRef RHICreateGraphicsPSO(RHIGraphicsPSOCreateInfo&& _init) override { return RHIGraphicsPipelineStateRef{}; }
+    RHIGfxPsoRef RHICreateGraphicsPSO(RHIGraphicsPSOCreateInfo&& _init) override { return RHIGfxPsoRef{}; }
 
-    RHIComputePipelineStateRef RHICreateComputePipelineState(RHIShader* _compute_shader) override { return RHIComputePipelineStateRef{}; }
+    RHIComputePsoRef RHICreateComputePipelineState(RHIShader* _compute_shader) override { return RHIComputePsoRef{}; }
 
-    RHIRayTracingPipelineStateRef RHICreateRayTracingPipelineState(const RHIRayTracingPipelineStateInitializer& _init) override {
-        return RHIRayTracingPipelineStateRef{};
+    RHIRTPsoRef RHICreateRayTracingPipelineState(const RHIRayTracingPipelineStateInitializer& _init) override {
+        return RHIRTPsoRef{};
     }
 
     void RHIBatchedBuildRayTracingBLAS(int batch_size, const RHIRayTracingBLASInitializer* _inits, RHIRayTracingBLASRef* results) override {
@@ -68,12 +68,12 @@ public:
     RHICommandQueue* RHICreateCommandQueue(ECommandQueueType type) override { return nullptr; }
     // RHIGraphicsCommandList* CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state = nullptr) override { return nullptr; }
 
-    RHIGraphicsCommandList* RHICreateGraphicsCommandList(RHICommandAllocator* _allocator, RHIGraphicsPipelineState* _initial_state = nullptr) override { return nullptr; }
+    RHIGraphicsCommandList* RHICreateGraphicsCommandList(RHICommandAllocator* _allocator, RHIGfxPso* _initial_state = nullptr) override { return nullptr; }
 
     // RHIComputeCommandList* CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr) override { return nullptr; }
-    RHIComputeCommandList* RHICreateComputeCommandList(RHICommandAllocator* _allocator, RHIComputePipelineState* _initial_state = nullptr) override { return nullptr; };
+    RHIComputeCommandList* RHICreateComputeCommandList(RHICommandAllocator* _allocator, RHIComputePso* _initial_state = nullptr) override { return nullptr; };
 
-    RHIRayTracingCommandList* RHICreateRayTracingCommandList(RHICommandAllocator* _allocator, RHIRayTracingPipelineState* _initial_state = nullptr) override { return nullptr; }
+    RHIRayTracingCommandList* RHICreateRayTracingCommandList(RHICommandAllocator* _allocator, RHIRTPso* _initial_state = nullptr) override { return nullptr; }
 
     RHICopyCommandList* RHICreateCopyCommandList(RHICommandAllocator* _allocator) override { return nullptr; }
 

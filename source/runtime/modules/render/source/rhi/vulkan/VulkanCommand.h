@@ -7,6 +7,7 @@
 #include "misc/STL.h"
 
 #include "VulkanRHIResource.h"
+#include "rhi/RHIResource.h"
 #include "vulkan/vulkan_core.h"
 
 #include <variant>
@@ -90,12 +91,12 @@ public:
         return m_command_buffer;
     }
 
-    void SetPipelineState(RHIGraphicsPipelineState* _graphics_pso) override;
-    void SetPipelineState(RHIComputePipelineState* _compute_pso) override;
+    void SetPipelineState(RHIGfxPso* _graphics_pso) override;
+    void SetPipelineState(RHIComputePso* _compute_pso) override;
     void BeginRecording() override;
     void EndRecording() override;
     void Reset() override;
-    void ClearState(RHIGraphicsPipelineState* _graphics_pso) override;
+    void ClearState(RHIGfxPso* _graphics_pso) override;
 
     void DrawIndexedInstanced(uint32_t _index_count,
                               uint32_t _instance_count,
@@ -235,7 +236,7 @@ public:
     void* GetNativeHandle() const override {
         return m_command_buffer;
     }
-    void SetPipelineState(RHIComputePipelineState* _compute_pso) override;
+    void SetPipelineState(RHIComputePso* _compute_pso) override;
     void BeginRecording() override;
     void EndRecording() override;
     void Reset() override;
@@ -271,7 +272,7 @@ public:
     void* GetNativeHandle() const override {
         return m_command_buffer;
     }
-    void SetPipelineState(RHIRayTracingPipelineState* _raytracing_pso) override;
+    void SetPipelineState(RHIRTPso* _raytracing_pso) override;
     void BeginRecording() override;
     void EndRecording() override;
     void Reset() override;

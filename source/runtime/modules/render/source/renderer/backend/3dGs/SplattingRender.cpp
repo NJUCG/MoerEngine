@@ -44,15 +44,15 @@ public:
     }
 
 protected:
-    RHIComputePipelineStateRef m_precomp_cov3d_pipeline;
-    RHIComputePipelineStateRef m_preprocess_pipeline;
-    RHIComputePipelineStateRef m_pre_fix_sum_pipeline;
-    RHIComputePipelineStateRef m_radix_sort_pipeline;
-    RHIComputePipelineStateRef m_preprocess_sort_pipeline;
-    RHIComputePipelineStateRef m_tile_boundary_pipeline;
-    RHIComputePipelineStateRef m_sort_hist_pipeline;
-    RHIComputePipelineStateRef m_sort_check_pipeline;
-    RHIComputePipelineStateRef m_render_pipeline;
+    RHIComputePsoRef m_precomp_cov3d_pipeline;
+    RHIComputePsoRef m_preprocess_pipeline;
+    RHIComputePsoRef m_pre_fix_sum_pipeline;
+    RHIComputePsoRef m_radix_sort_pipeline;
+    RHIComputePsoRef m_preprocess_sort_pipeline;
+    RHIComputePsoRef m_tile_boundary_pipeline;
+    RHIComputePsoRef m_sort_hist_pipeline;
+    RHIComputePsoRef m_sort_check_pipeline;
+    RHIComputePsoRef m_render_pipeline;
 
     RHIBufferRef vertexAttributeBuffer;
     RHIBufferRef tileOverlapBuffer;

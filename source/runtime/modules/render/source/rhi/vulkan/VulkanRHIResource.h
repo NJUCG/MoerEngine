@@ -265,10 +265,10 @@ protected:
     VulkanPipelineResourceCache* m_pipeline_state_cache;
 };
 
-class VulkanRHIGraphicsPipelineState final : public RHIGraphicsPipelineState, public VulkanPipelineState {
+class VulkanRHIGraphicsPipelineState final : public RHIGfxPso, public VulkanPipelineState {
 public:
     VulkanRHIGraphicsPipelineState(VulkanDevice* _device)
-        : RHIGraphicsPipelineState(),
+        : RHIGfxPso(),
           VulkanPipelineState(_device) {}
 
     virtual ~VulkanRHIGraphicsPipelineState();
@@ -280,21 +280,21 @@ public:
     void CreateGraphicsPipeline(const VkGraphicsPipelineCreateInfo& _info);
 };
 
-class VulkanRHIComputePipelineState final : public RHIComputePipelineState, public VulkanPipelineState {
+class VulkanRHIComputePipelineState final : public RHIComputePso, public VulkanPipelineState {
 public:
     VulkanRHIComputePipelineState(VulkanDevice* _device)
-        : RHIComputePipelineState(),
+        : RHIComputePso(),
           VulkanPipelineState(_device) {}
 
     void CreateComputePipeline(const VkComputePipelineCreateInfo& _info);
 };
 
-class VulkanRHIRayTracingPipelineState final : public RHIRayTracingPipelineState, public VulkanPipelineState {
+class VulkanRHIRayTracingPipelineState final : public RHIRTPso, public VulkanPipelineState {
     friend VulkanRHIImpl;
 
 public:
     VulkanRHIRayTracingPipelineState(VulkanDevice* _device)
-        : RHIRayTracingPipelineState(),
+        : RHIRTPso(),
           VulkanPipelineState(_device) {}
 
     const VkStridedDeviceAddressRegionKHR* GetRayGenSBT() { return &m_raygen_sbt; }

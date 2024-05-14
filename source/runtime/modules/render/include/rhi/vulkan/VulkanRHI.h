@@ -50,10 +50,10 @@ public:
 
     RHIFenceRef RHICreateFence(const RHIFenceCreateInfo&) final override;
     // RHIGraphicsPipelineStateRef RHICreateGraphicsPipelineState(const RHIGraphicsPipelineStateInfo& _init) final override;
-    RHIGraphicsPipelineStateRef RHICreateGraphicsPSO(RHIGraphicsPSOCreateInfo&& _init) final override;
-    RHIComputePipelineStateRef  RHICreateComputePipelineState(RHIShader* _compute_shader) final override;
+    RHIGfxPsoRef     RHICreateGraphicsPSO(RHIGraphicsPSOCreateInfo&& _init) final override;
+    RHIComputePsoRef RHICreateComputePipelineState(RHIShader* _compute_shader) final override;
 
-    RHIRayTracingPipelineStateRef RHICreateRayTracingPipelineState(const RHIRayTracingPipelineStateInitializer& _init) final override;
+    RHIRTPsoRef RHICreateRayTracingPipelineState(const RHIRayTracingPipelineStateInitializer& _init) final override;
 
     void                 RHIBatchedBuildRayTracingBLAS(int batch_size, const RHIRayTracingBLASInitializer* _inits, RHIRayTracingBLASRef* results) final override;
     RHIRayTracingTLASRef RHIBuildRayTracingTLAS(const RHIRayTracingTLASInitializer& _init) final override;
@@ -67,9 +67,9 @@ public:
 
     RHICommandQueue* RHICreateCommandQueue(ECommandQueueType _type) final override;
     // RHIGraphicsCommandList* CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state = nullptr) final override;
-    RHIGraphicsCommandList*   RHICreateGraphicsCommandList(RHICommandAllocator* _allocator, RHIGraphicsPipelineState* _initial_state = nullptr) final override;
-    RHIComputeCommandList*    RHICreateComputeCommandList(RHICommandAllocator* _allocator, RHIComputePipelineState* _initial_state = nullptr) final override;
-    RHIRayTracingCommandList* RHICreateRayTracingCommandList(RHICommandAllocator* _allocator, RHIRayTracingPipelineState* _initial_state = nullptr) final override;
+    RHIGraphicsCommandList*   RHICreateGraphicsCommandList(RHICommandAllocator* _allocator, RHIGfxPso* _initial_state = nullptr) final override;
+    RHIComputeCommandList*    RHICreateComputeCommandList(RHICommandAllocator* _allocator, RHIComputePso* _initial_state = nullptr) final override;
+    RHIRayTracingCommandList* RHICreateRayTracingCommandList(RHICommandAllocator* _allocator, RHIRTPso* _initial_state = nullptr) final override;
     // RHIComputeCommandList* CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr) final override;
     RHICopyCommandList* RHICreateCopyCommandList(RHICommandAllocator* _allocator) final override;
 

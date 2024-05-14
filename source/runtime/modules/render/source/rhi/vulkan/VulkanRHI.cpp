@@ -379,7 +379,7 @@ void PopulateVertexAttribute(
     _bindings.resize(max_binding + 1);
     _bindings.shrink_to_fit();
 }
-RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPSO(RHIGraphicsPSOCreateInfo&& _init) {
+RHIGfxPsoRef VulkanRHIImpl::RHICreateGraphicsPSO(RHIGraphicsPSOCreateInfo&& _init) {
     VulkanRHIGraphicsPipelineState* vk_pso = MoerNew(VulkanRHIGraphicsPipelineState)(m_device);
 
     assert(_init.finalized && "RHICreateGraphicsPSO: PSO is not finalized!");
@@ -695,10 +695,10 @@ RHIGraphicsPipelineStateRef VulkanRHIImpl::RHICreateGraphicsPSO(RHIGraphicsPSOCr
 
     vk_pso->CreateGraphicsPipeline(pipeline_create_info);
 
-    return RHIGraphicsPipelineStateRef(vk_pso);
+    return RHIGfxPsoRef(vk_pso);
 }
 
-RHIComputePipelineStateRef VulkanRHIImpl::RHICreateComputePipelineState(RHIShader* _compute_shader) {
+RHIComputePsoRef VulkanRHIImpl::RHICreateComputePipelineState(RHIShader* _compute_shader) {
     VulkanRHIComputePipelineState* vk_pso = MoerNew(VulkanRHIComputePipelineState)(m_device);
 
     auto* vk_shader = static_cast<VulkanRHIComputeShader*>(_compute_shader);
@@ -773,15 +773,15 @@ RHIComputePipelineStateRef VulkanRHIImpl::RHICreateComputePipelineState(RHIShade
 
     vk_pso->CreateComputePipeline(pipeline_create_info);
 
-    return RHIComputePipelineStateRef(vk_pso);
+    return RHIComputePsoRef(vk_pso);
 }
 
-RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(const RHIRayTracingPipelineStateInitializer& _init) {
+RHIRTPsoRef VulkanRHIImpl::RHICreateRayTracingPipelineState(const RHIRayTracingPipelineStateInitializer& _init) {
 
     static auto vkCreateRayTracingPipelinesKHR       = reinterpret_cast<PFN_vkCreateRayTracingPipelinesKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkCreateRayTracingPipelinesKHR"));
     static auto vkGetRayTracingShaderGroupHandlesKHR = reinterpret_cast<PFN_vkGetRayTracingShaderGroupHandlesKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkGetRayTracingShaderGroupHandlesKHR"));
-    VK_CHECK_NULLPTR(vkCreateRayTracingPipelinesKHR, "RHICreateRayTracingPipelineState: vkCreateRayTracingPipelinesKHR is nullptr", return RHIRayTracingPipelineStateRef{});
-    VK_CHECK_NULLPTR(vkGetRayTracingShaderGroupHandlesKHR, "RHICreateRayTracingPipelineState: vkGetRayTracingShaderGroupHandlesKHR is nullptr", return RHIRayTracingPipelineStateRef{});
+    VK_CHECK_NULLPTR(vkCreateRayTracingPipelinesKHR, "RHICreateRayTracingPipelineState: vkCreateRayTracingPipelinesKHR is nullptr", return RHIRTPsoRef{});
+    VK_CHECK_NULLPTR(vkGetRayTracingShaderGroupHandlesKHR, "RHICreateRayTracingPipelineState: vkGetRayTracingShaderGroupHandlesKHR is nullptr", return RHIRTPsoRef{});
 
     // shader stage & shader groups & shader infos
 
@@ -803,7 +803,7 @@ RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(co
 
     if (_init.ray_gen_shader) {
         auto* vk_shader = static_cast<VulkanRHIRayGenShader*>(_init.ray_gen_shader);
-        VK_CHECK_NULLPTR(vk_shader, "init raytracingpipelinestate with null raygen shader", return RHIRayTracingPipelineStateRef());
+        VK_CHECK_NULLPTR(vk_shader, "init raytracingpipelinestate with null raygen shader", return RHIRTPsoRef());
 
         shader_info_list.push_back(vk_shader->GetMetaShader());
 
@@ -820,7 +820,7 @@ RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(co
     }
     for (const auto& ray_miss_shader : _init.ray_miss_table) {
         auto* vk_shader = static_cast<VulkanRHIRayMissShader*>(ray_miss_shader);
-        VK_CHECK_NULLPTR(vk_shader, "init raytracingpipelinestate with null raymiss shader", return RHIRayTracingPipelineStateRef());
+        VK_CHECK_NULLPTR(vk_shader, "init raytracingpipelinestate with null raymiss shader", return RHIRTPsoRef());
 
         shader_info_list.push_back(vk_shader->GetMetaShader());
 
@@ -839,7 +839,7 @@ RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(co
         shader_group_create_info.type = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
         if (ray_hit_group.closesthit_shader) {
             auto* vk_shader = static_cast<VulkanRHIRayClosestHitShader*>(ray_hit_group.closesthit_shader);
-            VK_CHECK_NULLPTR(vk_shader, "init raytracingpipelinestate with null closesthit shader", return RHIRayTracingPipelineStateRef());
+            VK_CHECK_NULLPTR(vk_shader, "init raytracingpipelinestate with null closesthit shader", return RHIRTPsoRef());
 
             shader_info_list.push_back(vk_shader->GetMetaShader());
 
@@ -853,7 +853,7 @@ RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(co
         }
         if (ray_hit_group.anyhit_shader) {
             auto* vk_shader = static_cast<VulkanRHIRayAnyhitShader*>(ray_hit_group.anyhit_shader);
-            VK_CHECK_NULLPTR(vk_shader, "init raytracingpipelinestate with null anyhit shader", return RHIRayTracingPipelineStateRef());
+            VK_CHECK_NULLPTR(vk_shader, "init raytracingpipelinestate with null anyhit shader", return RHIRTPsoRef());
 
             shader_info_list.push_back(vk_shader->GetMetaShader());
 
@@ -867,7 +867,7 @@ RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(co
         }
         if (ray_hit_group.intersection_shader) {
             auto* vk_shader = static_cast<VulkanRHIRayIntersectionShader*>(ray_hit_group.intersection_shader);
-            VK_CHECK_NULLPTR(vk_shader, "init raytracingpipelinestate with null intersection shader", return RHIRayTracingPipelineStateRef());
+            VK_CHECK_NULLPTR(vk_shader, "init raytracingpipelinestate with null intersection shader", return RHIRTPsoRef());
             shader_stage_create_info.stage = VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
 
             shader_info_list.push_back(vk_shader->GetMetaShader());
@@ -885,7 +885,7 @@ RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(co
     }
     for (const auto& ray_callable_shader : _init.ray_callable_table) {
         auto* vk_shader = static_cast<VulkanRHIRayCallableShader*>(ray_callable_shader);
-        VK_CHECK_NULLPTR(vk_shader, "init raytracingpipelinestate with null raycallable shader", return RHIRayTracingPipelineStateRef());
+        VK_CHECK_NULLPTR(vk_shader, "init raytracingpipelinestate with null raycallable shader", return RHIRTPsoRef());
 
         shader_info_list.push_back(vk_shader->GetMetaShader());
 
@@ -1029,7 +1029,7 @@ RHIRayTracingPipelineStateRef VulkanRHIImpl::RHICreateRayTracingPipelineState(co
     }
     RHIUnmapBuffer(vk_pso->m_sbt_buffer);
 
-    return RHIRayTracingPipelineStateRef(vk_pso);
+    return RHIRTPsoRef(vk_pso);
 #undef ALIGNUP
 }
 
@@ -1736,21 +1736,21 @@ RHICommandQueue* VulkanRHIImpl::RHICreateCommandQueue(ECommandQueueType _type) {
 //     return MoerNew(VulkanRHIGraphicsCommandList(m_device, m_device->GetDefaultCommandPool(), VK_COMMAND_BUFFER_LEVEL_PRIMARY));
 // }
 
-RHIGraphicsCommandList* VulkanRHIImpl::RHICreateGraphicsCommandList(RHICommandAllocator* _allocator, RHIGraphicsPipelineState* _initial_state) {
+RHIGraphicsCommandList* VulkanRHIImpl::RHICreateGraphicsCommandList(RHICommandAllocator* _allocator, RHIGfxPso* _initial_state) {
     auto* vk_allocator = static_cast<VulkanCommandAllocator*>(_allocator);
     VK_CHECK_NULLPTR(vk_allocator, "RHICreateGraphicsCommandList: allocator is nullptr!", return nullptr);
 
     return MoerNew(VulkanRHIGraphicsCommandList(m_device, vk_allocator->GetHandle(ECommandListType::GRAPHICS), VK_COMMAND_BUFFER_LEVEL_PRIMARY));
 }
 
-RHIComputeCommandList* VulkanRHIImpl::RHICreateComputeCommandList(RHICommandAllocator* _allocator, RHIComputePipelineState* _initial_state) {
+RHIComputeCommandList* VulkanRHIImpl::RHICreateComputeCommandList(RHICommandAllocator* _allocator, RHIComputePso* _initial_state) {
     auto* vk_allocator = static_cast<VulkanCommandAllocator*>(_allocator);
     VK_CHECK_NULLPTR(vk_allocator, "RHICreateComputeCommandList: allocator is nullptr!", return nullptr);
 
     return MoerNew(VulkanRHIComputeCommandList(m_device, vk_allocator->GetHandle(ECommandListType::COMPUTE), VK_COMMAND_BUFFER_LEVEL_PRIMARY));
 }
 
-RHIRayTracingCommandList* VulkanRHIImpl::RHICreateRayTracingCommandList(RHICommandAllocator* _allocator, RHIRayTracingPipelineState* _initial_state) {
+RHIRayTracingCommandList* VulkanRHIImpl::RHICreateRayTracingCommandList(RHICommandAllocator* _allocator, RHIRTPso* _initial_state) {
     auto* vk_allocator = static_cast<VulkanCommandAllocator*>(_allocator);
     VK_CHECK_NULLPTR(vk_allocator, "RHICreateRayTracingCommandList: allocator is nullptr!", return nullptr);
 
