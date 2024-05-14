@@ -101,14 +101,17 @@ namespace Moer {
     void RenderGraph::Reset() {
         m_dependency_graph.Reset();
         m_black_board.Reset();
-        for (auto& resource : m_resources) {
+        for (auto& resource : m_last_resources) {
             MoerDelete(resource);
         }
-        for (auto& pass : m_passes) {
+        for (auto& pass : m_last_passes) {
             MoerDelete(pass);
         }
-        m_resources.clear();
-        m_passes.clear();
+        m_last_resources = std::move(m_resources);
+        m_last_passes    = std::move(m_passes);
+
+        m_resources = {};
+        m_passes    = {};
     }
     RenderGraphHandle RenderGraph::CreateTexture(const std::string& name, const RenderGraphTexture::Descriptor& descriptor) {
         RenderGraphTexture* texture = MoerNew(RenderGraphTexture)(name, descriptor);
@@ -183,44 +186,72 @@ namespace Moer {
         // LOG_INFO("Execute Time: {0}ms", timer.ElapsedMilliseconds());
     }
     void RenderGraph::Compile() {
-        m_dependency_graph.Cull();
+        bool need_compile = IsNeedCompile();
 
-        Moer::Array<PassNode*> available_passes;
-        for (auto& pass : m_passes) {
-            if (!m_cut | !pass->IsCulled()) {
-                available_passes.emplace_back(pass);
+        if (!need_compile) {
+            std::unordered_map<PassNode*, uint32_t> pass_idxes;
+            for (size_t i = 0; i < m_last_passes.size(); i++) {
+                pass_idxes.emplace(m_last_passes[i], i);
             }
+            for (int i = 0; i < m_resources.size(); i++) {
+                auto* resource      = m_resources[i];
+                auto* last_resource = m_last_resources[i];
+                resource->SetRefCount(last_resource->GetRefCount());
+                if (last_resource->create_pass) {
+                    uint32_t create_pass_idx = pass_idxes[last_resource->create_pass];
+                    resource->create_pass    = m_passes[create_pass_idx];
+                }
+                if (last_resource->destroy_pass) {
+                    uint32_t destroy_pass_idx = pass_idxes[last_resource->destroy_pass];
+                    resource->destroy_pass    = m_passes[destroy_pass_idx];
+                }
+            }
+            for (int i = 0; i < m_passes.size(); i++) {
+                auto* pass      = m_passes[i];
+                auto* last_pass = m_last_passes[i];
+                pass->SetBarrierInfo(last_pass->GetBarrierInfo());
+            }
+
         }
 
-        auto       first = available_passes.begin();
-        const auto last  = available_passes.end();
+        else {
+            m_dependency_graph.Cull();
 
-        while (first != last) {
-            PassNode* const pass_node = *first;
-            first++;
-            auto in_resources  = m_dependency_graph.GetInComingNodes(pass_node);
-            auto out_resources = m_dependency_graph.GetOutGoingNodes(pass_node);
-
-            for (auto* const in_resource : in_resources) {
-                auto* const resource = dynamic_cast<RenderGraphResource*>(in_resource);
-                //Currently not suupport pass connect
-                assert(resource);
-
-                resource->create_pass  = resource->create_pass ? resource->create_pass : pass_node;
-                resource->destroy_pass = pass_node;
-                //   passNode->addTextureUsage(static_cast<const RenderGraphTexture*>(inResource), );
-            }
-            for (auto* const out_resource : out_resources) {
-                auto* const resource = dynamic_cast<RenderGraphResource*>(out_resource);
-                assert(resource);
-                resource->create_pass  = resource->create_pass ? resource->create_pass : pass_node;
-                resource->destroy_pass = pass_node;
-                //passNode->addTextureUsage(static_cast<const RenderGraphTexture*>(inResource), texture->usage);
+            Moer::Array<PassNode*> available_passes;
+            for (auto& pass : m_passes) {
+                if (!pass->IsCulled()) {
+                    available_passes.emplace_back(pass);
+                }
             }
 
-            for (auto* const edge : m_dependency_graph.getEdges(pass_node)) {
-                auto* resource = dynamic_cast<RenderGraphResource*>(edge->src == pass_node ? edge->dst : edge->src);
-                pass_node->AddResourceUsage(resource, edge->desc);
+            auto       first = available_passes.begin();
+            const auto last  = available_passes.end();
+
+            while (first != last) {
+                PassNode* const pass_node = *first;
+                first++;
+                auto in_resources  = m_dependency_graph.GetInComingNodes(pass_node);
+                auto out_resources = m_dependency_graph.GetOutGoingNodes(pass_node);
+
+                for (auto* const in_resource : in_resources) {
+                    auto* const resource = dynamic_cast<RenderGraphResource*>(in_resource);
+                    //Currently not suupport pass connect
+                    assert(resource);
+
+                    resource->create_pass  = resource->create_pass ? resource->create_pass : pass_node;
+                    resource->destroy_pass = pass_node;
+                }
+                for (auto* const out_resource : out_resources) {
+                    auto* const resource = dynamic_cast<RenderGraphResource*>(out_resource);
+                    assert(resource);
+                    resource->create_pass  = resource->create_pass ? resource->create_pass : pass_node;
+                    resource->destroy_pass = pass_node;
+                }
+
+                for (auto* const edge : m_dependency_graph.GetEdges(pass_node)) {
+                    auto* resource = dynamic_cast<RenderGraphResource*>(edge->src == pass_node ? edge->dst : edge->src);
+                    pass_node->AddResourceUsage(resource, edge->desc);
+                }
             }
         }
 
@@ -269,6 +300,31 @@ namespace Moer {
         for (auto& pass : m_passes) {
             MoerDelete(pass);
         }
+    }
+    bool RenderGraph::IsNeedCompile() const {
+        if (m_last_passes.size() != m_passes.size() || m_last_resources.size() != m_resources.size()) {
+            return true;
+        }
+        static auto check_pass_is_same = [](const PassNode* a, const PassNode* b) {
+            if (a->GetName() != b->GetName()) {
+                return false;
+            }
+            if (a->GetPassType() != b->GetPassType()) {
+                return false;
+            }
+            return true;
+        };
+        for (size_t i = 0; i < m_passes.size(); i++) {
+            if (!check_pass_is_same(m_passes[i], m_last_passes[i])) {
+                return true;
+            }
+        }
+        for (size_t i = 0; i < m_resources.size(); i++) {
+            if (m_resources[i]->GetName() != m_last_resources[i]->GetName()) {
+                return true;
+            }
+        }
+        return false;
     }
     void RenderGraph::WriteInternal(PassNode* pass, RenderGraphHandle output, DepdencyGraph::ResourceDesc&& _desc) {
         GetResource(output)->ConnectForWrite(m_dependency_graph, pass, std::move(_desc));

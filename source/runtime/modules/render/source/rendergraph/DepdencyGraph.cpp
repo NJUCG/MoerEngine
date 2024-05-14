@@ -57,7 +57,7 @@ namespace Moer {
         }
         return out_going_edges;
     }
-    DepdencyGraph::EdgeContainer DepdencyGraph::getEdges(Node const* node) const {
+    DepdencyGraph::EdgeContainer DepdencyGraph::GetEdges(Node const* node) const {
         EdgeContainer edges;
         for (auto& edge : m_edges) {
             if (edge->src == node || edge->dst == node) {

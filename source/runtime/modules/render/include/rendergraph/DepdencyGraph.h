@@ -39,8 +39,8 @@ namespace Moer {
         using ResourceDesc = std::variant<TextureSubDesc, BufferSubDesc>;
         struct Edge {
             // may be texture usage or buffer usage
-            NodeId   src;
-            NodeId   dst;
+            NodeId       src;
+            NodeId       dst;
             ResourceDesc desc;
             Edge(DepdencyGraph& graph, NodeId src, NodeId dst, ResourceDesc _desc) : src(src), dst(dst), desc(_desc) {
                 graph.Link(this);
@@ -55,7 +55,7 @@ namespace Moer {
         void          Cull();
         EdgeContainer GetInComingEdges(Node const* node) const;
         EdgeContainer GetOutGoingEdges(Node const* node) const;
-        EdgeContainer getEdges(Node const* node) const;
+        EdgeContainer GetEdges(Node const* node) const;
         NodeContainer GetInComingNodes(Node const* node) const;
         NodeContainer GetOutGoingNodes(Node const* node) const;
         bool          IsWriteResource(Node* pass_node, Node* resource_node) const;

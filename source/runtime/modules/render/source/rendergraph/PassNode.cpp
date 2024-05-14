@@ -5,14 +5,17 @@
 #include <algorithm>
 namespace Moer {
     void PassNode::ResloveResourceUsage(RHIGraphicsCommandList* cmd_list) {
-        RHIBarrierDependencyInfo barrier_info;
+        if (m_use_last_frame_barrier) {
+            cmd_list->SetPipelineBarrier(m_barrier_info);
+            return;
+        }
         for (auto& resource_usages : m_resource_desc) {
 
             for (auto& desc : resource_usages.second) {
-                resource_usages.first->ResloveResourceUsage(desc, barrier_info, m_pass_type);
+                resource_usages.first->ResloveResourceUsage(desc, m_barrier_info, m_pass_type);
             }
         }
-        cmd_list->SetPipelineBarrier(barrier_info);
+        cmd_list->SetPipelineBarrier(m_barrier_info);
         //Todo Handle  resource transition
     }
     void PassNode::AddResourceUsage(RenderGraphResource* _resource, DepdencyGraph::ResourceDesc _desc) {

@@ -9,10 +9,10 @@
 #include <type_traits>
 template<typename TCountable>
 concept concept_is_countable = requires(TCountable t) {
-    t.AddRef() + (uint32_t)1;
-    t.DeRef() + (uint32_t)1;
-    t.GetRefCount() + (uint32_t)1;
-};
+                                   t.AddRef() + (uint32_t)1;
+                                   t.DeRef() + (uint32_t)1;
+                                   t.GetRefCount() + (uint32_t)1;
+                               };
 
 template<typename T>
 class CountableRef;
@@ -56,7 +56,8 @@ protected:
         }                                                           \
         return current - 1;                                         \
     }                                                                    \
-    inline uint32_t GetRefCount() const { return m_counter.load(); }
+    inline uint32_t GetRefCount() const { return m_counter.load(); }     \
+    inline void     SetRefCount(uint32_t _count) { m_counter.store(_count); }
 
 #define COUNTABLE_IMPLEMENTATION_AUTO_DESTROY \
     COUNTABLE_IMPLEMENTATION                  \

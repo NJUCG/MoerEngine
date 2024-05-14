@@ -151,6 +151,7 @@ namespace Moer {
         ~RenderGraph();
 
     protected:
+        bool                 IsNeedCompile() const;
         void                 WriteInternal(PassNode* pass, RenderGraphHandle output, DepdencyGraph::ResourceDesc&& _desc);
         void                 ReadInternal(PassNode* pass, RenderGraphHandle input, DepdencyGraph::ResourceDesc&& _desc);
         RenderGraphHandle    AddTextureInternal(RenderGraphTexture* texture);
@@ -159,11 +160,13 @@ namespace Moer {
 
         Moer::Array<RenderGraphResource*> m_resources;
         Moer::Array<PassNode*>            m_passes;
-        DepdencyGraph                     m_dependency_graph;
-        BlackBoard                        m_black_board;
 
-        bool m_cut{true};
-        //Extent3D                         m_render_extent;
+        Moer::Array<RenderGraphResource*> m_last_resources;
+        Moer::Array<PassNode*>            m_last_passes;
+
+        DepdencyGraph m_dependency_graph;
+        BlackBoard    m_black_board;
+        // Extent3D                         m_render_extent;
         friend class Builder;
     };
 }// namespace Moer

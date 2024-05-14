@@ -29,7 +29,12 @@ namespace Moer {
         Moer::Array<RenderGraphResource*>& GetResourcesToCreate();
         Moer::Array<RenderGraphResource*>& GetResourcesToDestroy();
         PassNode(const std::string& _name, EPassType _pass_type) : Node(_name), m_pass_type(_pass_type) {}
-        EPassType GetPassType() const { return m_pass_type; }
+        EPassType                 GetPassType() const { return m_pass_type; }
+        RHIBarrierDependencyInfo& GetBarrierInfo() { return m_barrier_info; }
+        void                      SetBarrierInfo(const RHIBarrierDependencyInfo& barrier_info) {
+            m_barrier_info           = barrier_info;
+            m_use_last_frame_barrier = true;
+        }
 
     protected:
         Moer::Map<RenderGraphResource*, uint32_t> m_resource_usage;
@@ -39,6 +44,8 @@ namespace Moer {
         Moer::Array<RenderGraphResource*>                                   m_resources_to_create;
         Array<RenderGraphResource*>                                         m_resources_to_destroy;
         EPassType                                                           m_pass_type;
+        RHIBarrierDependencyInfo                                            m_barrier_info;
+        bool                                                                m_use_last_frame_barrier{false};
     };
 
     class GraphicsPassNode : public PassNode {
