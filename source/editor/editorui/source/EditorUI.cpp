@@ -20,7 +20,7 @@ namespace Moer {
         ShowEditorMenu(&m_b_show_editor_menu);
         g_main_window.Show();
         ShowInspectorWindow(&m_b_show_inspector_window);
-        ImGui::ShowDemoWindow(&show_demo_window);
+        // ImGui::ShowDemoWindow(&show_demo_window);
     }
     EditorUI::~EditorUI() {
     }
@@ -76,10 +76,10 @@ namespace Moer {
         }
         if (ImGui::BeginMenuBar()) {
             if (ImGui::BeginMenu("Menu")) {
-                if (ImGui::MenuItem("Reload Current Level")) {
-                }
-                if (ImGui::MenuItem("Save Current Level")) {
-                }
+                // if (ImGui::MenuItem("Reload Current Level")) {
+                // }
+                // if (ImGui::MenuItem("Save Current Level")) {
+                // }
                 if (ImGui::MenuItem("Exit")) {
                     exit(0);
                 }
@@ -88,8 +88,8 @@ namespace Moer {
             if (ImGui::BeginMenu("Window")) {
 
                 ImGui::MenuItem("Moer Engine", nullptr, g_main_window.ShowWindow());
-                ImGui::MenuItem("Inspector", nullptr, &m_b_show_inspector_window);
-                ImGui::MenuItem("Demo", nullptr, &show_demo_window);
+                // ImGui::MenuItem("Inspector", nullptr, &m_b_show_inspector_window);
+                // ImGui::MenuItem("Demo", nullptr, &show_demo_window);
                 ImGui::EndMenu();
             }
             ImGui::EndMenuBar();

@@ -55,7 +55,7 @@ namespace Moer {
         RHIFenceRef present_fence;
 
         RHITextureRef present_texture;
-        RHISRVRef     present_texture_srv;
+        RHISRVRef     present_texture_srv = nullptr;
 
         Moer::Array<RHITextureRef> swapchain_textures;
         Moer::Array<RHIUAVRef>     swapchain_uavs;

@@ -82,7 +82,7 @@ namespace Moer {
     TRendererOutput RendererManager::GetRendererOutput(TRendererID _renderer_id) {
         BackendRenderer* renderer = GetRenderer(_renderer_id);
         if (renderer == nullptr) {
-            return {};
+            return nullptr;
         }
         return renderer->GetRendererOutput();
     }

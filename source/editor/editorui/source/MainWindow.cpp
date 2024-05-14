@@ -100,8 +100,25 @@ bool ShowResolutionSelector(const char* label, Extent2D& values) {
     return false;
 }
 
-Moer::Timer timer;
+Moer::Timer     timer;
+static uint32_t frame_timer                 = 0;
+static float    frame_time                  = 0.1f;
+static float    frame_rate                  = 0.1f;
+static uint32_t frame_timer_update_interval = 1;
+static Extent2D values                      = {1920, 1080};
 
+void ShowInspectorWindow(bool* _b_show) {
+    ImGuiWindowFlags window_flags = ImGuiWindowFlags_None;
+    if (!ImGui::Begin("Inspector", _b_show, window_flags)) {
+        ImGui::End();
+        return;
+    }
+    ImGui::Text("Inspector");
+    ImGui::Text("Time: %.3f ms/frame (%.1f FPS)", frame_time, frame_rate);
+    ShowStyleSelector("Colors##Default");
+    ShowResolutionSelector("Resolution", values);
+    ImGui::End();
+}
 void MainWindow::Show() {
 
     ImGuiIO& io = ImGui::GetIO();
@@ -118,10 +135,7 @@ void MainWindow::Show() {
         ImGui::End();
         return;
     }
-    static uint32_t frame_timer                 = 0;
-    static float    frame_time                  = 0.1f;
-    static float    frame_rate                  = 0.1f;
-    static uint32_t frame_timer_update_interval = 1;
+
     if (frame_timer++ % frame_timer_update_interval == 0) {
         frame_time = timer.ElapsedMilliseconds();
         frame_rate = 1000.0f / frame_time;
@@ -130,7 +144,6 @@ void MainWindow::Show() {
     if (timer.IsRunning()) {
 
         timer.Stop();
-        ImGui::Text("Time: %.3f ms/frame (%.1f FPS)", frame_time, frame_rate);
     }
 
     timer.Start();
@@ -142,10 +155,6 @@ void MainWindow::Show() {
         StyleColorsDark();
         b_first_time = false;
     }
-    ShowStyleSelector("Colors##Default");
-    static Extent2D values = {1920, 1080};
-
-    ShowResolutionSelector("Resolution", values);
 
     auto& render_manager = Moer::RendererManager::GetInstance();
     auto  renderer_id    = render_manager.GetRendererID(Moer::ConfigManager::GetInstance().GetInitConfig().default_render_name);
@@ -155,8 +164,7 @@ void MainWindow::Show() {
     float display_height = display_width * 9.f / 16.f;
     ImGui::Image(output,
                  {display_width, display_height});
-    ImGui::ShowStyleEditor();
-
-    // ImGui::Image()
     ImGui::End();
+
+    ShowInspectorWindow(&b_show);
 }
