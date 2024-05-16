@@ -20,7 +20,7 @@ target_include_directories(ShaderReflectionTest
         PUBLIC $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
 )
 target_link_libraries(ShaderReflectionTest 
-    PRIVATE render
+    PRIVATE MoerRender
     PRIVATE dxc
     )
 set_target_properties(ShaderReflectionTest PROPERTIES FOLDER ${moer_test_folder})
@@ -31,7 +31,7 @@ target_include_directories(VulkanRHITest
         PUBLIC $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
 )
 target_link_libraries(VulkanRHITest
-        PRIVATE render
+        PRIVATE MoerRender
         PRIVATE glfw
 )
 
@@ -62,7 +62,7 @@ target_include_directories(VulkanRTRHITest
         PUBLIC $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
 )
 target_link_libraries(VulkanRTRHITest
-        PRIVATE render
+        PRIVATE MoerRender
         PRIVATE glfw
 )
 set_target_properties(VulkanRTRHITest PROPERTIES FOLDER ${moer_test_folder})

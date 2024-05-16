@@ -14,7 +14,13 @@ set(moer_root_dir ${CMAKE_CURRENT_SOURCE_DIR})
 set(moer_source_dir ${moer_root_dir}/source) 
 set(moer_third_party_dir "${moer_root_dir}/3rdparty")
 
-set(CMAKE_INSTALL_PREFIX "${moer_root_dir}/target")
+# set(CMAKE_INSTALL_PREFIX "${moer_root_dir}/target/$<$<CXX_COMPILER_ID:MSVC>:>$<$<NOT:$<CXX_COMPILER_ID:MSVC>>:$<CMAKE_BUILD_TYPE>>")
+if(MSVC)
+    set(CMAKE_INSTALL_PREFIX "${moer_root_dir}/target")
+else()
+    set(CMAKE_INSTALL_PREFIX "${moer_root_dir}/target/${CMAKE_BUILD_TYPE}")
+    endif()
+
 set(BINARY_ROOT_DIR "${CMAKE_INSTALL_PREFIX}")
 
 # set ouput folder

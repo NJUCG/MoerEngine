@@ -49,7 +49,7 @@ endif()
 
 target_compile_options(assimp PRIVATE "$<$<COMPILE_LANG_AND_ID:CXX,Clang>:-Wno-unused-function>")
 set_ide_folder(UpdateAssimpLibsDebugSymbolsAndDLLs ${third_party_folder}/assimp)
-set_ide_folder(ZLIB_LIBRARIES ${third_party_folder}/assimp)
+set_target_folder(zlibstatic "${third_party_folder}/assimp")
 
 target_link_libraries(${third_lib_for_asset_load_target} PUBLIC assimp)
 target_include_directories(${third_lib_for_asset_load_target} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/assimp)

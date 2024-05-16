@@ -23,7 +23,7 @@ function(copy_dll target_name dll_name type src_root )
     if(WIN32 AND ${type} STREQUAL "SHARED")
         set(lib "${src_root}/lib/Windows/${dll_name}.lib" )
         set(dll "${src_root}/bin/Windows/${dll_name}.dll")
-
+        message(STATUS "copy ${dll} to ${real_out_put_dir}")
         add_custom_command(
             TARGET copy_dll_${target_name}
             POST_BUILD
