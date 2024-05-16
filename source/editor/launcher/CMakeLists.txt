@@ -10,7 +10,7 @@ add_executable(${target_name} ${EDITOR_HEADERS} ${EDITOR_SOURCES})
 add_compile_definitions("moer_root_dir=${BINARY_ROOT_DIR}")
 
 set_target_properties(${target_name} PROPERTIES CXX_STANDARD 20 OUTPUT_NAME "MoerEditor")
-set_target_properties(${target_name} PROPERTIES FOLDER "engine")
+set_target_properties(${target_name} PROPERTIES FOLDER "editor")
 target_include_directories(
   ${target_name}
   PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

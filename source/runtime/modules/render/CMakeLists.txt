@@ -1,5 +1,5 @@
-set(MODULE_NAME render)
-set(MODULE_DIR ${moer_runtime_module_root_dir}/${MODULE_NAME})
+set(MODULE_NAME MoerRender)
+set(MODULE_DIR ${moer_runtime_module_root_dir}/render)
 
 configure_file(${MODULE_DIR}/include/config.h.in ${MODULE_DIR}/include/config.h)
 

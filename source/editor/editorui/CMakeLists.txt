@@ -8,7 +8,7 @@ source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}" FILES ${UI_HEADERS} ${UI_SOURCES
 add_library(${target_name} STATIC ${UI_HEADERS} ${UI_SOURCES})
 
 set_target_properties(${target_name} PROPERTIES CXX_STANDARD 20 OUTPUT_NAME "MoerEditorUI")
-set_target_properties(${target_name} PROPERTIES FOLDER "engine")
+set_target_properties(${target_name} PROPERTIES FOLDER "editor")
 target_include_directories(
   ${target_name}
   PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
