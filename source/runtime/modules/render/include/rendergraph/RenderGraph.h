@@ -33,7 +33,7 @@ namespace Moer {
         void Reset();
 
     protected:
-        RenderGraph&                                       m_renderGraph;
+        RenderGraph&                                            m_renderGraph;
         Moer::UnorderedMap<std::string_view, RenderGraphHandle> m_handles;
     };
 
@@ -173,6 +173,8 @@ namespace Moer {
 
         DepdencyGraph m_dependency_graph;
         BlackBoard    m_black_board;
+        bool          m_cut{false};
+
         // Extent3D                         m_render_extent;
         friend class Builder;
     };

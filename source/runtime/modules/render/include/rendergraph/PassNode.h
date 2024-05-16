@@ -4,6 +4,7 @@
 #include "RenderGraphResource.h"
 #include "misc/STL.h"
 #include "rhi/RHICommon.h"
+#include "rhi/RHIResource.h"
 #include <string_view>
 #include <variant>
 
@@ -28,9 +29,14 @@ namespace Moer {
         void                               AddResourceToDestroy(RenderGraphResource* resource);
         Moer::Array<RenderGraphResource*>& GetResourcesToCreate();
         Moer::Array<RenderGraphResource*>& GetResourcesToDestroy();
-        void                               FinalizeUsage();
+        EPassType                          GetPassType() const { return m_pass_type; }
+        RHIBarrierDependencyInfo&          GetBarrierInfo() { return m_barrier_info; }
+        void                               SetBarrierInfo(const RHIBarrierDependencyInfo& barrier_info) {
+            m_barrier_info           = barrier_info;
+            m_use_last_frame_barrier = true;
+        }
+        void FinalizeUsage();
         PassNode(std::string_view _name, EPassType _pass_type) : Node(_name), m_pass_type(_pass_type) {}
-        EPassType GetPassType() const { return m_pass_type; }
 
     protected:
         Moer::Map<RenderGraphResource*, UnorderedSet<DepdencyGraph::ResourceDesc>> m_resource_desc;
