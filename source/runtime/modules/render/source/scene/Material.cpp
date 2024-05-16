@@ -182,8 +182,15 @@ namespace Moer {
                 m_material_data_srv = g_rhi->RHICreateBufferSRV(m_material_data_buffer);
             }
 
-            uint32_t offset = 0;
-            for (size_t i = 0; i < textures.size(); i++) {
+            uint32_t       offset          = 0;
+            constexpr uint max_binding_cnt = 25;
+            uint           binding_size    = std::max(uint(textures.size()), max_binding_cnt);
+            auto           last_srv        = RenderGraphResourceCache::Get().GetSRV(textures[0], textures[0]->GetFormat(), 0, textures[0]->GetNumMips(), 0, textures[0]->GetInfo().array_size);
+            for (size_t i = 0; i < binding_size; i++) {
+                if (i >= textures.size()) {
+                    parameters.SetParameters(last_srv, i + offset, 2);
+                    continue;
+                }
                 RHISRVRef srv = RenderGraphResourceCache::Get().GetSRV(textures[i], textures[i]->GetFormat(), 0, textures[i]->GetNumMips(), 0, textures[i]->GetInfo().array_size);
                 parameters.SetParameters(srv, i + offset, 2);
                 // break;
