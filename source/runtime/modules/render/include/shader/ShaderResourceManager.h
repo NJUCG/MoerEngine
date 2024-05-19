@@ -2,6 +2,7 @@
 #define MOERENGINE_SHADER_RESOURCE_MANAGER_H
 
 #include "misc/CountableRef.h"
+#include "misc/STL.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "shader/ShaderCommon.h"
@@ -28,6 +29,30 @@ private:
     struct Impl;
     Impl* impl;
 };
+
+namespace Moer {
+    struct ShaderBlob {
+        EShaderType     type;
+        EShaderPlatform platform;
+        Array<uint8_t>  blob_data;
+    };
+    struct ShaderEntry {
+        // shader may have mutations
+        Array<ShaderBlob> blobs;
+    };
+    struct ShaderEntryKey {
+        uint64 hash;
+    };
+};// namespace Moer
+namespace std {
+    template<>
+    struct hash<Moer::ShaderEntryKey> {
+        size_t operator()(const Moer::ShaderEntryKey& _key) const {
+            return _key.hash;
+        }
+    };
+}// namespace std
+
 class RENDER_API ShaderResourceManager {
 public:
     static void                   Init(EShaderPlatform platform);
@@ -60,6 +85,8 @@ public:
     void    PrepareGlobalShaderResources();
     Shader* GetShader(const ShaderMetaType& _meta_type);
 
+    Moer::ShaderBlob GetShaderBlob(std::string_view _path, EShaderType _type);
+
 private:
     friend class ShaderCompiler;
     ShaderResourceMap& GetShaderResourceMap() {
@@ -70,5 +97,7 @@ private:
     ShaderResourceManager();
     ShaderTypeResourceMap* type_resources;
     ShaderResourceMap*     shader_resources;
+
+    Moer::UnorderedMap<Moer::ShaderEntryKey, Moer::ShaderBlob> shader_cache;
 };
 #endif

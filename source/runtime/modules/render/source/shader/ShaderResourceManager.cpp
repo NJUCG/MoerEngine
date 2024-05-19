@@ -291,3 +291,11 @@ Shader* ShaderResourceManager::GetShader(const ShaderMetaType& _meta_type) {
     if (shader == nullptr) return nullptr;
     return shader;
 }
+
+Moer::ShaderBlob ShaderResourceManager::GetShaderBlob(std::string_view _name, EShaderType _type) {
+    if (auto res = shader_cache.find({std::hash<std::string_view>{}(_name)}); res != shader_cache.end()) {
+        return res->second;
+    }
+    //compile
+    return Moer::ShaderBlob{};
+}

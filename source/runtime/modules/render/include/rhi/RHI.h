@@ -188,9 +188,9 @@ public:
     // virtual RHIGraphicsCommandList* CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state = nullptr)                                     = 0;
     virtual RHIGraphicsCommandList* RHICreateGraphicsCommandList(RHICommandAllocator* _allocator, RHIGfxPso* _initial_state = nullptr) = 0;
     // virtual RHIComputeCommandList*  CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr)   = 0;
-    virtual RHIComputeCommandList*    RHICreateComputeCommandList(RHICommandAllocator* _allocator, RHIComputePso* _initial_state = nullptr)                 = 0;
-    virtual RHIRayTracingCommandList* RHICreateRayTracingCommandList(RHICommandAllocator* _allocator, RHIRTPso* _initial_state = nullptr)                   = 0;
-    virtual RHICopyCommandList*       RHICreateCopyCommandList(RHICommandAllocator* _allocator)                                                             = 0;
+    virtual RHIComputeCommandList*    RHICreateComputeCommandList(RHICommandAllocator* _allocator, RHIComputePso* _initial_state = nullptr) = 0;
+    virtual RHIRayTracingCommandList* RHICreateRayTracingCommandList(RHICommandAllocator* _allocator, RHIRTPso* _initial_state = nullptr)   = 0;
+    virtual RHICopyCommandList*       RHICreateCopyCommandList(RHICommandAllocator* _allocator)                                             = 0;
     template<TPipelineStateRef TPipelineRef>
     void RHISetBatchedShaderParameters(TPipelineRef _pso, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant = false) {
         RHISetBatchedShaderParametersInner(_pso, _batched_params, b_update_constant);

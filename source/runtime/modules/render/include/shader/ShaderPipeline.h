@@ -20,8 +20,13 @@ struct TDummy {};
 #define DEFINE_SHADER_BUFFER(name) \
     StringType(name) using name = ShaderArg<RHIBufferRef, GetStringType(name)>
 
-#define DEFINE_SHADER_ARGS(...) \
-    using InnerArgs = ShaderArgs<__VA_ARGS__>
+#define DEFINE_SHADER_ARGS(...)                                                              \
+    using InnerArgs = ShaderArgs<__VA_ARGS__>;                                               \
+    template<typename... T>                                                                  \
+    void SetArgs(T&&... _args) {                                                             \
+        InnerArgs args;                                                                      \
+        args.SetParams(std::make_index_sequence<sizeof...(T)>(), std::forward<T>(_args)...); \
+    }
 
 #define StringType(in_name)                                \
     struct String##in_name {                               \
@@ -94,22 +99,15 @@ namespace Moer {
     };
 
     class ShaderPipeline {
-
-        DEFINE_SHADER_BUFFER(Buffer0);
-        DEFINE_SHADER_TEX(Texture0);
-
-        DEFINE_SHADER_ARGS(Buffer0, Texture0);
-
+    protected:
         template<typename T>
         void SetParam(T&& _param) {
         }
-
-        template<typename... T>
-        void SetArgs(T&&... _args) {
-            //need to make sure the args are in the right order with InnerShaderArgs
-            InnerArgs args;
-            args.SetParams(std::make_index_sequence<sizeof...(T)>(), std::forward<T>(_args)...);
-        }
+        struct InnerArgs {
+            using tuple_helper             = std::tuple<>;
+            static constexpr uint arg_size = 0;
+            void                  SetParams() {}
+        };
 
         template<size_t... idx>
         void InitHashArray(std::index_sequence<idx...>) {
@@ -121,6 +119,22 @@ namespace Moer {
             InitHashArray(std::make_index_sequence<InnerArgs::arg_size>());
         }
         StaticArray<uint64_t, InnerArgs::arg_size> hash_array;
+    };
+
+    class GBufferRenderPipeline : public ShaderPipeline {
+
+        DEFINE_SHADER_BUFFER(PositionBuffer);
+        DEFINE_SHADER_BUFFER(NormalBuffer);
+        DEFINE_SHADER_BUFFER(DiffuseBuffer);
+        DEFINE_SHADER_BUFFER(SpecularBuffer);
+        DEFINE_SHADER_TEX(DiffuseTexture);
+        DEFINE_SHADER_TEX(SpecularTexture);
+
+        DEFINE_SHADER_ARGS(PositionBuffer, NormalBuffer, DiffuseBuffer, SpecularBuffer, DiffuseTexture, SpecularTexture);
+
+        void Test() {
+            SetArgs(RHIBufferRef(), RHIBufferRef(), RHIBufferRef(), RHIBufferRef(), RHITextureRef(), RHITextureRef());
+        }
     };
 };// namespace Moer
 #endif

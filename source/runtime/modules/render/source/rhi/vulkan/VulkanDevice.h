@@ -149,6 +149,8 @@ private:
     void CreateStagingBufferPool();
 
     void DestroyStagingBufferPool();
+
+    void CreateDescritporSetLayout();
 };
 
 #endif// VULKAN_DEVICE_H

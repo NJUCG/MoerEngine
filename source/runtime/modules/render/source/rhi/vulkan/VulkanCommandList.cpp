@@ -20,6 +20,8 @@
 #include "VulkanDebug.h"
 
 #include <cstdint>
+#include <string>
+#include <vector>
 #include <vulkan/vulkan_core.h>
 
 VulkanRHICommandListBase::VulkanRHICommandListBase(VulkanDevice* _device, VkCommandPool _pool, VkCommandBufferLevel _level) : VulkanDeviceObject(_device) {
@@ -1098,3 +1100,52 @@ void VulkanRHICopyCommandList::CopyTextureToBuffer(const RHICopyTextureToBufferI
 void VulkanRHICopyCommandList::SetPipelineBarrier(const RHIBarrierDependencyInfo& _dependency) {
     VulkanRHICommandListBase::SetPipelineBarrier(_dependency);
 }
+#include <shader/ShaderPipeline.h>
+namespace Moer {
+    struct VulkanPipelineReflection {
+        struct Bindings {
+            VkShaderStageFlags                        stage;
+            std::vector<VkDescriptorSetLayoutBinding> bindings;
+        };
+        struct ShaderStage {
+            VkShaderStageFlagBits stage;
+            std::string           entry_point;
+            VkShaderModule        module;
+        };
+        std::vector<Bindings>              bindings;
+        std::vector<ShaderStage>           stages;
+        std::vector<VkDescriptorSetLayout> descriptor_set_layouts;
+        std::vector<VkPushConstantRange>   push_constant_ranges;
+    };
+    class VulkanGfxPso : VulkanDeviceObject {
+    public:
+        template<typename T>
+        void SetParam() {
+        }
+        VulkanGfxPso(VulkanDevice* _device, VulkanPipelineReflection&& _reflection, RHIGraphicsPSOCreateInfo&& _init) : VulkanDeviceObject(_device) {
+            auto                       reflect = std::move(_reflection);
+            VkPipelineLayoutCreateInfo pipeline_layout_info{};
+            pipeline_layout_info.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+            pipeline_layout_info.pNext                  = nullptr;
+            pipeline_layout_info.flags                  = 0;
+            pipeline_layout_info.setLayoutCount         = reflect.descriptor_set_layouts.size();
+            pipeline_layout_info.pSetLayouts            = reflect.descriptor_set_layouts.data();
+            pipeline_layout_info.pushConstantRangeCount = reflect.push_constant_ranges.size();
+            pipeline_layout_info.pPushConstantRanges    = reflect.push_constant_ranges.data();
+            vkCreatePipelineLayout(m_device->GetDevice(), &pipeline_layout_info, nullptr, &m_pipeline_layout);
+
+            Array<VkPipelineShaderStageCreateInfo> shader_stage_infos(reflect.stages.size());
+            for (size_t i = 0; i < reflect.stages.size(); ++i) {
+                shader_stage_infos[i].sType               = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+                shader_stage_infos[i].pNext               = nullptr;
+                shader_stage_infos[i].flags               = 0;
+                shader_stage_infos[i].stage               = reflect.stages[i].stage;
+                shader_stage_infos[i].module              = reflect.stages[i].module;
+                shader_stage_infos[i].pName               = reflect.stages[i].entry_point.c_str();
+                shader_stage_infos[i].pSpecializationInfo = nullptr;
+            }
+        }
+        VkPipeline       pipeline;
+        VkPipelineLayout m_pipeline_layout;
+    };
+}// namespace Moer
