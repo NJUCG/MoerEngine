@@ -30,6 +30,8 @@ namespace Moer {
 
         RENDER_API TRendererID GetRendererID(const std::string& _renderer_name);
 
+        RENDER_API void UpdateGUI(TRendererID _renderer_id);
+
     private:
         friend BackendRenderer;
         void RegisterRenderer(const std::string& _name, BackendRenderer* _renderer);

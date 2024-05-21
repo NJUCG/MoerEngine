@@ -16,6 +16,7 @@ namespace Moer {
             Texture3D,
             TextureCube,
             Texture2DMultisample,
+            ALL
         };
         void ConnectForRead(DepdencyGraph& graph, PassNode*, DepdencyGraph::ResourceDesc _desc);
         void ConnectForWrite(DepdencyGraph& graph, PassNode*, DepdencyGraph::ResourceDesc _desc);
@@ -29,8 +30,8 @@ namespace Moer {
         PassNode* destroy_pass{nullptr};
 
         //Create Real Resource Before Execute
-        virtual void Create() {};
-        virtual void Destroy() {};
+        virtual void Create(){};
+        virtual void Destroy(){};
         virtual ~RenderGraphResource() = default;
 
     protected:
@@ -66,18 +67,19 @@ namespace Moer {
     public:
         using Usage = ETextureStateFlags;
         struct Descriptor {
-            Extent2D     extent2D;
-            uint16_t     depth;
-            EPixelFormat format;
+            Extent2D           extent2D;
+            uint16_t           depth;
+            EPixelFormat       format;
             ETextureUsageFlags usage;
-            uint32_t     mipLevels{1};
-            uint32_t     arrayLayers{1};
+            uint32_t           mipLevels{1};
+            uint32_t           arrayLayers{1};
         };
-        RHIUAVRef     GetUAV(EPixelFormat format = PF_UNDEFINED, uint32_t mip_num = -1, uint32_t array_min = -1, uint32_t array_num = -1);
-        RHISRVRef     GetSRV(EPixelFormat format = PF_UNDEFINED, uint32_t mip_min = -1, uint32_t mip_num = -1, uint32_t array_min = -1, uint32_t array_num = -1);
-        RHITextureRef GetTexture() const;
-        EPixelFormat  GetFormat() const;
-        void          Create() override;
+        RHIUAVRef             GetUAV(EPixelFormat format = PF_UNDEFINED, uint32_t mip_num = -1, uint32_t array_min = -1, uint32_t array_num = -1);
+        RHISRVRef             GetSRV(EPixelFormat format = PF_UNDEFINED, uint32_t mip_min = -1, uint32_t mip_num = -1, uint32_t array_min = -1, uint32_t array_num = -1);
+        static ETextureLayout GetTextureLayout(Usage _state);
+        RHITextureRef         GetTexture() const;
+        EPixelFormat          GetFormat() const;
+        void                  Create() override;
         RenderGraphTexture(std::string_view name, Descriptor desc);
         RenderGraphTexture(std::string_view name, RHITextureRef tex);
         RenderGraphTexture(std::string_view name, RenderGraphTexture* parent, RHISubresourceRange sub_res);

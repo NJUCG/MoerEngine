@@ -32,6 +32,7 @@
 
 #include <algorithm>
 #include "Cull.h"
+#include "imgui.h"
 #include "rendergraph/RenderGraph.h"
 #include "resources/GpuScene.h"
 #include "scene/Material.h"
@@ -99,6 +100,7 @@ namespace Moer {
         void FallBackDraw();
         void SetOriginResolution(uint32_t _width, uint32_t _height);
         void SetPresentResolution(uint32_t _width, uint32_t _height);
+        void UpdateGui();
 
         RHISRVRef GetRendererOutput();
 
@@ -180,6 +182,9 @@ namespace Moer {
         UniquePtr<BasePass> base_pass;
 
         bool b_need_update = true;
+
+        std::string_view              m_present_texture = "swapchain_output";
+        std::vector<std::string_view> m_current_textures{"swapchain_output"};
     };
     void DeferredRenderer::Init(const BackendRendererInitInfo& _init_info) {
         impl = MoerNew(Impl);
@@ -204,6 +209,10 @@ namespace Moer {
 
     void DeferredRenderer::SetPresentResolution(uint32_t _width, uint32_t _height) {
         impl->SetPresentResolution(_width, _height);
+    }
+    void DeferredRenderer::UpdateGUI() {
+        BackendRenderer::UpdateGUI();
+        impl->UpdateGui();
     }
 
     RHISRVRef DeferredRenderer::GetRendererOutput() {
@@ -610,6 +619,28 @@ namespace Moer {
             base_pass->OnResizeViewport(source_resolution);
         });
     }
+    void DeferredRenderer::Impl::UpdateGui() {
+        // return;
+        int item_current = -1;
+        for (size_t i = 0; i < m_current_textures.size(); i++) {
+            if (m_current_textures[i] == m_present_texture) {
+                item_current = i;
+                break;
+            }
+        }
+        uint32_t size = m_current_textures.size();
+        auto     t    = m_current_textures;
+        if (size > 50) {
+            m_current_textures.push_back("test");
+        }
+        std::vector<const char*> current_texture_cstr(m_current_textures.size());
+        for (size_t i = 0; i < m_current_textures.size(); i++) {
+            current_texture_cstr[i] = m_current_textures[i].data();
+        }
+        ImGui::Combo("RenderGraphTextures", &item_current, current_texture_cstr.data(), current_texture_cstr.size());
+        if (item_current > 0 && item_current < m_current_textures.size())
+            m_present_texture = m_current_textures[item_current];
+    }
 
     RHISRVRef DeferredRenderer::Impl::GetRendererOutput() {
         return virtual_viewport->GetPresentTextureSRV();
@@ -956,6 +987,8 @@ namespace Moer {
             } });
 
             rg.SetGraphOutput(rg.GetBlackBoard().GetHandle("swapchain_output"));
+            m_current_textures = rg.GetResourceNames(RenderGraphResource::Type::Texture2D);
+            rg.AddImageCopyPass("Copy to BackBuffer", rg.GetBlackBoard().GetHandle(m_present_texture), rg.GetBlackBoard().GetHandle("swapchain_output"));
             rg.Execute({&render_context.GetCommandList(), virtual_viewport->GetBackBufferExtent()});
         };
 
