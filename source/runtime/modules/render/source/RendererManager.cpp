@@ -78,6 +78,13 @@ namespace Moer {
         }
         return data->renderer_ids[_renderer_name];
     }
+    void RendererManager::UpdateGUI(TRendererID _renderer_id) {
+        BackendRenderer* renderer = GetRenderer(_renderer_id);
+        if (renderer == nullptr) {
+            return;
+        }
+        renderer->UpdateGUI();
+    }
 
     TRendererOutput RendererManager::GetRendererOutput(TRendererID _renderer_id) {
         BackendRenderer* renderer = GetRenderer(_renderer_id);
