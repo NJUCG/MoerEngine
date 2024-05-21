@@ -23,7 +23,7 @@ PS_OUTPUT main(PS_INPUT input) : SV_Target {
   PS_OUTPUT output;
   output.mat = instance_data[input.instance_id].material_id << 8 |
                instance_data[input.instance_id].material_type;
-  output.normal = float4(input.normal * 0.5f + 0.5f, 0.0f);
+  output.normal = float4(input.normal * 0.5f + 0.5f, 1.0f);
   output.uv = input.uv;
   return output;
 }

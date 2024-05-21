@@ -69,6 +69,30 @@ namespace Moer {
         }
         return RenderGraphResourceCache::Get().GetSRV(m_texture, format == PF_UNDEFINED ? GetFormat() : format, mip_min, mip_num, array_min, array_num);
     }
+    ETextureLayout RenderGraphTexture::GetTextureLayout(Usage _state) {
+        if (_state == TS_UNDEFINED)
+            return TEXTURE_LAYOUT_UNDEFINED;
+        if (EnumHasAnyFlag(_state, TS_UNORDERED_READ) || EnumHasAnyFlag(_state, TS_UNORDERED_WRITE)) {
+            return TEXTURE_LAYOUT_COMMON;
+        }
+        if (EnumHasAnyFlag(_state, TS_COLOR_ATTACHMENT)) {
+            return TEXTURE_LAYOUT_COLOR_ATTACHMENT;
+        }
+        if (EnumHasAnyFlag(_state, TS_DEPTH_STENCIL)) {
+            return TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE;
+        }
+        if (EnumHasAnyFlag(_state, TS_SAMPLED)) {
+            return TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        }
+        if (EnumHasAnyFlag(_state, TS_TRANSFER_SRC)) {
+            return TEXTURE_LAYOUT_TRANSFER_SRC;
+        }
+        if (EnumHasAnyFlag(_state, TS_TRANSFER_SRC)) {
+            return TEXTURE_LAYOUT_TRANSFER_DST;
+        }
+
+        return TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    }
     RHITextureRef RenderGraphTexture::GetTexture() const {
         return m_texture;
     }
@@ -107,31 +131,6 @@ namespace Moer {
     }
 
     RenderGraphTexture::RenderGraphTexture(std::string_view _name, RenderGraphTexture* _parent, RHISubresourceRange _sub_res) : RenderGraphResource(name, Type::Texture2D, true), m_parent(_parent), m_sub_res(_sub_res), m_is_sub_resource(true) {
-    }
-
-    static inline ETextureLayout GetTextureLayout(RenderGraphTexture::Usage _state) {
-        if (_state == TS_UNDEFINED)
-            return TEXTURE_LAYOUT_UNDEFINED;
-        if (EnumHasAnyFlag(_state, TS_UNORDERED_READ) || EnumHasAnyFlag(_state, TS_UNORDERED_WRITE)) {
-            return TEXTURE_LAYOUT_COMMON;
-        }
-        if (EnumHasAnyFlag(_state, TS_COLOR_ATTACHMENT)) {
-            return TEXTURE_LAYOUT_COLOR_ATTACHMENT;
-        }
-        if (EnumHasAnyFlag(_state, TS_DEPTH_STENCIL)) {
-            return TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE;
-        }
-        if (EnumHasAnyFlag(_state, TS_SAMPLED)) {
-            return TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        }
-        if (EnumHasAnyFlag(_state, TS_TRANSFER_SRC)) {
-            return TEXTURE_LAYOUT_TRANSFER_SRC;
-        }
-        if (EnumHasAnyFlag(_state, TS_TRANSFER_SRC)) {
-            return TEXTURE_LAYOUT_TRANSFER_DST;
-        }
-
-        return TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     }
 
     uint32_t RenderGraphTexture::ResloveResourceUsage(const DepdencyGraph::ResourceDesc& _desc, RHIBarrierDependencyInfo& _barrier_info, EPassType _pass_type) {

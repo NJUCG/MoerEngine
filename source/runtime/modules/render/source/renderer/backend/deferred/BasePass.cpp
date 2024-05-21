@@ -452,9 +452,9 @@ namespace Moer {
         rg.AddGraphicPass(
             "GBuffer Pass",
             [&](RenderGraph::Builder& _builder) {
-                auto normal = rg.CreateTexture("normal", {.extent2D = Extent2D(extent.x, extent.y), .format = EPixelFormat::PF_R8G8B8A8_UNORM, .usage = ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED});
-                auto mat    = rg.CreateTexture("mat", {.extent2D = Extent2D(extent.x, extent.y), .format = EPixelFormat::PF_R32_UINT, .usage = ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED});
-                auto uv     = rg.CreateTexture("uv", {.extent2D = Extent2D(extent.x, extent.y), .format = EPixelFormat::PF_R16G16_SFLOAT, .usage = ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED});
+                auto normal = rg.CreateIfNotExist("normal", RenderGraphTexture::Descriptor{.extent2D = Extent2D(extent.x, extent.y), .format = EPixelFormat::PF_R8G8B8A8_UNORM, .usage = ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED});
+                auto mat    = rg.CreateIfNotExist("mat", RenderGraphTexture::Descriptor{.extent2D = Extent2D(extent.x, extent.y), .format = EPixelFormat::PF_R32_UINT, .usage = ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED});
+                auto uv     = rg.CreateIfNotExist("uv", RenderGraphTexture::Descriptor{.extent2D = Extent2D(extent.x, extent.y), .format = EPixelFormat::PF_R16G16_SFLOAT, .usage = ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED});
                 auto depth  = rg.ImportIfNotExist("depth", virtual_viewport.GetDepthSRV()->GetTexture());
                 if constexpr (!is_prepass) {
                     _builder.ReadWriteTextures({normal, uv, mat}, TS_COLOR_ATTACHMENT);
