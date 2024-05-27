@@ -7,7 +7,7 @@ struct LightingData {
   uint3 padding;
 };
 
-[[vk::binding(0, 2)]] Texture2D scene_textures[25];
+// [[vk::binding(0, 2)]] Texture2D scene_textures[25];
 // [[vk::binding(0, 2)]] Texture2D scene_texture;
 
 static const uint CUR_MATERIAL_TYPE = 0;
@@ -44,10 +44,11 @@ float4 main(float2 in_uv
   MaterialData mat = material_data[NonUniformResourceIndex(mat_id)];
   float4 base_color;
   if (mat.albedo_map == -1) {
-    base_color = 0.f;
+    base_color = mat.base_color_factor;
   } else {
-    base_color = scene_textures[NonUniformResourceIndex(mat.albedo_map)].Sample(
-        default_sampler, uv);
+    // base_color = scene_textures[NonUniformResourceIndex(mat.albedo_map)].Sample(
+    //     default_sampler, uv);
+base_color = float4(uv, 0.0f, 1.0f);
   }
   float3 result = float3(0.0f, 0.0f, 0.0f);
   float3 normal = (normal_attach.Sample(default_sampler, in_uv).xyz - 0.5f) * 2;

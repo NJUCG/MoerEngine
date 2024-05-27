@@ -185,6 +185,8 @@ namespace Moer {
 
         std::string_view              m_present_texture = "swapchain_output";
         std::vector<std::string_view> m_current_textures{"swapchain_output"};
+
+        RHISamplerRef sampler;
     };
     void DeferredRenderer::Init(const BackendRendererInitInfo& _init_info) {
         impl = MoerNew(Impl);
@@ -344,6 +346,13 @@ namespace Moer {
         }
         CopyDispatchArgs::Init(render_context);
         base_pass->InitResources(render_context);
+
+        if (sampler == nullptr) {
+            RHISamplerCreateInfo create_info(SF_NEAREST, TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            create_info.SetCompareOp(SCF_NEVER)
+                .SetAddressMode(ESamplerAddressMode::SAM_CLAMP_TO_EDGE);
+            sampler = g_rhi->RHICreateSampler(create_info);
+        }
     }
     void DeferredRenderer::Impl::InitSceneResources() {
 
@@ -976,6 +985,7 @@ namespace Moer {
                 frag_params.gbuffer_uv = uv_srv;
                 frag_params.normal_attach = normal_srv;
                 frag_params.mat_attach = mat_srv;
+                frag_params.default_sampler = sampler;
                 parameters.SetParameters(ShaderResourceManager::GetInstance().GetShader<LightingShaderFrag>(),frag_params);
                 
                 auto& mat_instances = material_instances[type];

@@ -181,7 +181,8 @@ namespace Moer {
                 // memcpy(mapped_data, material_data.data(), sizeof(MaterialData) * instances.size());
                 m_material_data_srv = g_rhi->RHICreateBufferSRV(m_material_data_buffer);
             }
-
+            if (textures.empty())
+                return;
             uint32_t       offset          = 0;
             constexpr uint max_binding_cnt = 25;
             uint           binding_size    = std::max(uint(textures.size()), max_binding_cnt);
