@@ -218,8 +218,7 @@ namespace Moer {
 
         m_rotate =
             FillDiagonal4x4(pitch.GetRotation(), 1.f) *
-            m_rotate *
-            FillDiagonal4x4(yaw.GetRotation(), 1.f);
+            FillDiagonal4x4(yaw.GetRotation(), 1.f) * m_rotate;
 
         m_rotate_inv     = Transpose(m_rotate);
         m_to_world_dirty = true;
@@ -300,7 +299,7 @@ namespace Moer {
                 this->MoveUp(-wndInput.cameraSpeed * wndInput.deltaTime);
 
             // rotation
-            if (wndInput.deltaX || wndInput.deltaY) {
+            if ((wndInput.deltaX || wndInput.deltaY) && wndInput.mouseButtonState[MouseButtons::Left]) {
 
                 this->UpdateRotation(wndInput.deltaX, wndInput.deltaY);
                 wndInput.deltaX = 0;

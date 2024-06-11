@@ -275,19 +275,19 @@ namespace Moer::Resource::Gltf {
 
         aiString base_color_path, normal_path, metallic_roughness_path, ao_path, emissive_path;
         if (ai_material->GetTexture(AI_MATKEY_BASE_COLOR_TEXTURE, &base_color_path) == AI_SUCCESS) {
-            //  LoadTexture(ai_scene, base_color_path, mi, "albedo_map");
+            LoadTexture(ai_scene, base_color_path, mi, "albedo_map");
         }
         if (ai_material->GetTexture(aiTextureType_NORMALS, 0, &normal_path) == AI_SUCCESS) {
-            // LoadTexture(ai_scene, normal_path, mi, "normal_map");
+            LoadTexture(ai_scene, normal_path, mi, "normal_map");
         }
         if (ai_material->GetTexture(AI_MATKEY_GLTF_PBRMETALLICROUGHNESS_METALLICROUGHNESS_TEXTURE, &metallic_roughness_path) == AI_SUCCESS) {
-            //   LoadTexture(ai_scene, metallic_roughness_path, mi, "metallic_roughness_map");
+            LoadTexture(ai_scene, metallic_roughness_path, mi, "metallic_roughness_map");
         }
         if (ai_material->GetTexture(aiTextureType_LIGHTMAP, 0, &ao_path) == AI_SUCCESS) {
-            //   LoadTexture(ai_scene, ao_path, mi, "ao_map");
+            LoadTexture(ai_scene, ao_path, mi, "ao_map");
         }
         if (ai_material->GetTexture(aiTextureType_EMISSIVE, 0, &emissive_path) == AI_SUCCESS) {
-            //   LoadTexture(ai_scene, emissive_path, mi, "emissive_map");
+            LoadTexture(ai_scene, emissive_path, mi, "emissive_map");
         }
 
         aiColor4D baseColorFactor;
