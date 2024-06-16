@@ -10,10 +10,11 @@ namespace Moer {
     using SamplerParams = RHISamplerCreateInfo;
     class Material;
     using MaterialRef = CountableRef<Material>;
+    using MaterialID  = uint32_t;
 
     class RENDER_API MaterialInstance : public CountableResource {
     public:
-        MaterialInstance(const MaterialInstance& rhs) = delete;
+        MaterialInstance(const MaterialInstance& rhs)            = delete;
         MaterialInstance& operator=(const MaterialInstance& rhs) = delete;
         MaterialInstance(MaterialRef material);
         template<typename T>
@@ -40,11 +41,15 @@ namespace Moer {
         void        SetParameter(const std::string& name, const void* value, size_t size);
         void        SetParameter(const std::string& name, const RHITextureRef& texture);
         void        SetParameter(const std::string& name, const SamplerParams& params);
+        void        SetUnifomBuffer(const void* data, size_t size);
         RHITexture* GetTexture(const std::string& name) const;
 
-        void                 Use(RHIBatchedShaderParameters& parameters);
-        MaterialRef          GetMaterial() const;
+        void        Use(RHIBatchedShaderParameters& parameters);
+        MaterialRef GetMaterial() const;
+
         const UniformBuffer& GetUniformBuffer() const;
+        const std::string&   GetName() const;
+        void                 SetName(const std::string& name);
 
     protected:
         class Impl;

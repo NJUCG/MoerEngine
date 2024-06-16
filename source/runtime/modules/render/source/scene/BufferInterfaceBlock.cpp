@@ -1,6 +1,5 @@
 #include "scene/BufferInterfaceBlock.h"
 
-
 #include "log/LogSystem.h"
 #include "math/Base.h"
 namespace Moer {
@@ -66,12 +65,12 @@ namespace Moer {
     bool BufferInterfaceBlock::Builder::hasVariableSizeArray() const {
         return mHasVariableSizeArray;
     }
-    size_t BufferInterfaceBlock::getFieldOffset(std::string_view name, size_t index) const {
-        auto const* info = getFieldInfo(name);
+    size_t BufferInterfaceBlock::GetFieldOffset(std::string_view name, size_t index) const {
+        auto const* info = GetFieldInfo(name);
         return info->getBufferOffset(index);
     }
 
-    BufferInterfaceBlock::FieldInfo const* BufferInterfaceBlock::getFieldInfo(std::string_view name) const {
+    BufferInterfaceBlock::FieldInfo const* BufferInterfaceBlock::GetFieldInfo(std::string_view name) const {
         auto pos = m_info_map.find(name);
         return &m_field_info_list[pos->second];
     }
@@ -112,20 +111,23 @@ namespace Moer {
         }
 
         // round size to the next multiple of 4 and convert to bytes
-        m_size =  sizeof(uint32_t) * ((offset/sizeof(uint32_t) + 3) & ~3);
+        m_size = sizeof(uint32_t) * ((offset / sizeof(uint32_t) + 3) & ~3);
     }
 
-   
     void UniformBuffer::SetData(const void* data, size_t size, size_t offset) {
-        memcpy(static_cast<char *>(m_buffer)+offset, data, size);
+        memcpy(static_cast<char*>(m_buffer) + offset, data, size);
     }
     const void* UniformBuffer::GetData() const {
         return m_buffer;
     }
+    uint32_t UniformBuffer::GetSize() const {
+        return m_size;
+    }
     UniformBuffer::UniformBuffer(uint32_t size) {
+        m_size   = size;
         m_buffer = Memory::Malloc(size);
         memset(m_buffer, 0, size);
-    } 
+    }
     UniformBuffer::~UniformBuffer() {
         Memory::Free(m_buffer);
     }

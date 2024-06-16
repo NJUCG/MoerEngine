@@ -3,6 +3,7 @@
 #include "loader/gltf/Parser.h"
 #include "loader/ply/Ply.h"
 #include "log/LogSystem.h"
+#include "sceneCache/SceneCache.h"
 
 #include <filesystem>
 namespace Moer {
@@ -17,7 +18,11 @@ namespace Resource {
                 Scene::SetCurrentScene(scene.release());
             }
         } else if (_file_path.string().ends_with(".gltf") || _file_path.string().ends_with(".fbx")) {
-            Gltf::Parser::LoadSceneFromFileAsync(_file_path);
+            if (SceneCache::HasValidCache(_file_path)) {
+                SceneCache::LoadSceneFromCacheAsync(_file_path);
+            } else {
+                Gltf::Parser::LoadSceneFromFileAsync(_file_path);
+            }
         } else {
             LOG_ERROR("Unsupported file format: {}", file_path_str);
         }

@@ -2,11 +2,15 @@
 #include "KtxImageHelper.h"
 
 #include "contrib/stb/stb_image.h"
+#include "log/LogSystem.h"
 #include "rhi/RHICommon.h"
 
 #include <cassert>
 #include <numeric>
 #include <stb/stb_image_resize.h>
+#include <dds.hpp>
+#include <gl_format.h>
+
 namespace Moer {
 
     struct MipmapDesc {
@@ -18,6 +22,183 @@ namespace Moer {
         /// Width depth and height of the mipmap
         Extent3D extent;
     };
+
+    EPixelFormat ConvertFormatFromDxgiFormat(DXGI_FORMAT format, bool alpha_flag) {
+        switch (format) {
+            case DXGI_FORMAT_BC1_UNORM: {
+                if (alpha_flag)
+                    return PF_BC1_RGBA_UNORM_BLOCK;
+                else
+                    return PF_BC1_RGB_UNORM_BLOCK;
+            }
+            case DXGI_FORMAT_BC1_UNORM_SRGB: {
+                if (alpha_flag)
+                    return PF_BC1_RGBA_SRGB_BLOCK;
+                else
+                    return PF_BC1_RGB_SRGB_BLOCK;
+            }
+
+            case DXGI_FORMAT_BC2_UNORM:
+                return PF_BC2_UNORM_BLOCK;
+            case DXGI_FORMAT_BC2_UNORM_SRGB:
+                return PF_BC2_SRGB_BLOCK;
+            case DXGI_FORMAT_BC3_UNORM:
+                return PF_BC3_UNORM_BLOCK;
+            case DXGI_FORMAT_BC3_UNORM_SRGB:
+                return PF_BC3_SRGB_BLOCK;
+            case DXGI_FORMAT_BC4_UNORM:
+                return PF_BC4_UNORM_BLOCK;
+            case DXGI_FORMAT_BC4_SNORM:
+                return PF_BC4_SNORM_BLOCK;
+            case DXGI_FORMAT_BC5_UNORM:
+                return PF_BC5_UNORM_BLOCK;
+            case DXGI_FORMAT_BC5_SNORM:
+                return PF_BC5_SNORM_BLOCK;
+            case DXGI_FORMAT_BC7_UNORM:
+                return PF_BC7_UNORM_BLOCK;
+            case DXGI_FORMAT_BC7_UNORM_SRGB:
+                return PF_BC7_SRGB_BLOCK;
+
+            // 8-bit wide formats
+            case DXGI_FORMAT_R8_UNORM:
+                return PF_R8_UNORM;
+            case DXGI_FORMAT_R8_UINT:
+                return PF_R8_UINT;
+            case DXGI_FORMAT_R8_SNORM:
+                return PF_R8_SNORM;
+            case DXGI_FORMAT_R8_SINT:
+                return PF_R8_SINT;
+
+            // 16-bit wide formats
+            case DXGI_FORMAT_R8G8_UNORM:
+                return PF_R8G8_UNORM;
+            case DXGI_FORMAT_R8G8_UINT:
+                return PF_R8G8_SINT;
+            case DXGI_FORMAT_R8G8_SNORM:
+                return PF_R8G8_SNORM;
+            case DXGI_FORMAT_R8G8_SINT:
+                return PF_R8G8_SINT;
+
+            case DXGI_FORMAT_R16_FLOAT:
+                return PF_R16_SFLOAT;
+            case DXGI_FORMAT_R16_UNORM:
+                return PF_R16_UNORM;
+            case DXGI_FORMAT_R16_UINT:
+                return PF_R16_UINT;
+            case DXGI_FORMAT_R16_SNORM:
+                return PF_R16_SNORM;
+            case DXGI_FORMAT_R16_SINT:
+                return PF_R16_SINT;
+
+            case DXGI_FORMAT_B5G5R5A1_UNORM:
+                return PF_B5G5R5A1_UNORM_PACK16;
+            case DXGI_FORMAT_B5G6R5_UNORM:
+                return PF_B5G6R5_UNORM_PACK16;
+            case DXGI_FORMAT_B4G4R4A4_UNORM:
+                return PF_B4G4R4A4_UNORM_PACK16;
+
+            // 32-bit wide formats
+            case DXGI_FORMAT_R8G8B8A8_UNORM:
+                return PF_R8G8B8A8_UNORM;
+            case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+                return PF_R8G8B8A8_SRGB;
+            case DXGI_FORMAT_R8G8B8A8_UINT:
+                return PF_R8G8B8A8_UINT;
+            case DXGI_FORMAT_R8G8B8A8_SNORM:
+                return PF_R8G8B8A8_SNORM;
+            case DXGI_FORMAT_R8G8B8A8_SINT:
+                return PF_R8G8B8A8_SINT;
+            case DXGI_FORMAT_B8G8R8A8_UNORM:
+                return PF_B8G8R8A8_UNORM;
+            case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+                return PF_B8G8R8A8_SRGB;
+
+            case DXGI_FORMAT_R16G16_FLOAT:
+                return PF_R16G16_SFLOAT;
+            case DXGI_FORMAT_R16G16_UNORM:
+                return PF_R16G16_UNORM;
+            case DXGI_FORMAT_R16G16_UINT:
+                return PF_R16G16_UINT;
+            case DXGI_FORMAT_R16G16_SNORM:
+                return PF_R16G16_SNORM;
+            case DXGI_FORMAT_R16G16_SINT:
+                return PF_R16G16_SINT;
+
+            case DXGI_FORMAT_R32_FLOAT:
+                return PF_R32_SFLOAT;
+            case DXGI_FORMAT_R32_UINT:
+                return PF_R32_UINT;
+            case DXGI_FORMAT_R32_SINT:
+                return PF_R32_SINT;
+
+            case DXGI_FORMAT_R9G9B9E5_SHAREDEXP:
+                return PF_E5B9G9R9_UFLOAT_PACK32;
+            case DXGI_FORMAT_R10G10B10A2_UNORM:
+                return PF_A2B10G10R10_UNORM_PACK32;
+            case DXGI_FORMAT_R10G10B10A2_UINT:
+                return PF_A2B10G10R10_UINT_PACK32;
+            case DXGI_FORMAT_R11G11B10_FLOAT:
+                return PF_B10G11R11_UFLOAT_PACK32;
+
+            // 64-bit wide formats
+            case DXGI_FORMAT_R16G16B16A16_FLOAT:
+                return PF_R16G16B16A16_SFLOAT;
+            case DXGI_FORMAT_R16G16B16A16_SINT:
+                return PF_R16G16B16A16_SINT;
+            case DXGI_FORMAT_R16G16B16A16_UINT:
+                return PF_R16G16B16A16_UINT;
+            case DXGI_FORMAT_R16G16B16A16_UNORM:
+                return PF_R16G16B16A16_UNORM;
+            case DXGI_FORMAT_R16G16B16A16_SNORM:
+                return PF_R16G16B16A16_SNORM;
+
+            case DXGI_FORMAT_R32G32_FLOAT:
+                return PF_R32G32_SFLOAT;
+            case DXGI_FORMAT_R32G32_UINT:
+                return PF_R32G32_UINT;
+            case DXGI_FORMAT_R32G32_SINT:
+                return PF_R32G32_SINT;
+
+            // 96-bit wide formats
+            case DXGI_FORMAT_R32G32B32_FLOAT:
+                return PF_R32G32B32_SFLOAT;
+            case DXGI_FORMAT_R32G32B32_UINT:
+                return PF_R32G32B32_UINT;
+            case DXGI_FORMAT_R32G32B32_SINT:
+                return PF_R32G32B32_SINT;
+
+            // 128-bit wide formats
+            case DXGI_FORMAT_R32G32B32A32_FLOAT:
+                return PF_R32G32B32A32_SFLOAT;
+            case DXGI_FORMAT_R32G32B32A32_UINT:
+                return PF_R32G32B32A32_UINT;
+            case DXGI_FORMAT_R32G32B32A32_SINT:
+                return PF_R32G32B32A32_SINT;
+
+            case DXGI_FORMAT_R8G8_B8G8_UNORM:
+            case DXGI_FORMAT_G8R8_G8B8_UNORM:
+            case DXGI_FORMAT_YUY2:
+            default:
+                return PF_UNDEFINED;
+        }
+    }
+
+    EPixelFormat ConvertFormatFromDDSFormat(uint32_t format) {
+        switch (format) {
+            case GL_RGBA8:
+                return EPixelFormat::PF_R8G8B8A8_UNORM;
+            case GL_RGBA:
+                return EPixelFormat::PF_R8G8B8_UNORM;
+            case GL_COMPRESSED_RGBA_S3TC_DXT1_EXT:
+                return EPixelFormat::PF_BC1_RGB_UNORM_BLOCK;
+            case GL_COMPRESSED_RGBA_S3TC_DXT3_EXT:
+                return EPixelFormat::PF_BC2_UNORM_BLOCK;
+            case GL_COMPRESSED_RGBA_S3TC_DXT5_EXT:
+                return EPixelFormat::PF_BC3_UNORM_BLOCK;
+        }
+        assert(false && "Unsupported format");
+        return EPixelFormat::PF_UNDEFINED;
+    }
 
     //
     static void Generatemipmaps(ImageReadDesc& desc) {
@@ -117,7 +298,10 @@ namespace Moer {
         ImageReadDesc desc;
         const auto&   path_str = path.string();
         if (path_str.ends_with(".png") || path_str.ends_with("jpg")) {
-            desc.data          = stbi_load(path_str.c_str(), reinterpret_cast<int*>(&desc.width), reinterpret_cast<int*>(&desc.height), reinterpret_cast<int*>(&desc.channal), desired_channal);
+            desc.data = stbi_load(path_str.c_str(), reinterpret_cast<int*>(&desc.width), reinterpret_cast<int*>(&desc.height), reinterpret_cast<int*>(&desc.channal), desired_channal);
+            if (!desc.data) {
+                return desc;
+            }
             desc.data_callback = stbi_image_free;
             desc.format        = EPixelFormat::PF_R8G8B8A8_UNORM;
             desc.data_size     = desc.width * desc.height * desc.channal;
@@ -169,6 +353,40 @@ namespace Moer {
                     }
                 }
             }
+        } else if (path_str.ends_with("dds")) {
+            dds::Image image;
+            auto       result = dds::readFile(path_str, &image);
+            assert(result == dds::Success);
+            desc.width     = image.width;
+            desc.height    = image.height;
+            desc.layers    = image.depth;
+            desc.data_size = image.data.size();
+            desc.data      = new uint8_t[desc.data_size];
+            desc.format    = ConvertFormatFromDxgiFormat(image.format, image.supportsAlpha);
+            memcpy(desc.data, image.data.data(), desc.data_size);
+            desc.data_callback = free;
+            desc.mips          = std::max(static_cast<uint32_t>(image.mipmaps.size()), 1u);
+            if (desc.mips > 1 && false) {
+                uint32_t offset = 0;
+                uint32_t width  = image.width;
+                uint32_t height = image.height;
+                for (uint32_t miplevel = 0; miplevel < desc.mips; ++miplevel) {
+                    desc.mip_offsets.push_back(offset);
+                    desc.mip_extents.push_back({width, height, 1});
+                    offset += image.mipmaps[miplevel].size();
+                    width  = std::max(1u, width / 2);
+                    height = std::max(1u, height / 2);
+                }
+            }
+
+            else {
+                desc.mip_offsets = {0};
+                desc.mip_extents = {{image.width, image.height, 1}};
+                desc.mips        = 1;
+            }
+        } else {
+            LOG_ERROR("Unsupported image format");
+            throw std::runtime_error("Unsupported image format");
         }
         return desc;
     }

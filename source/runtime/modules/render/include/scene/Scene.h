@@ -49,7 +49,7 @@ namespace Moer {
         class Scene* TryGetScene();
         COUNTABLE_IMPLEMENTATION_AUTO_DESTROY
         // private:
-        class Scene*     scene;
+        Scene*           scene;
         std::atomic_uint progress = 0u;
         bool             b_valid  = false;
     };

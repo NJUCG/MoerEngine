@@ -38,7 +38,10 @@ namespace Moer {
         const BufferInterfaceBlock&  GetBufferInterfaceBlock() const noexcept;
         EMaterialType                GetType() const noexcept;
         void                         SetType(EMaterialType type) noexcept;
+        void                         SetName(const std::string& name) noexcept;
+        const std::string&           GetName() const noexcept;
 
+        std::string              m_name;
         RHIShaderBoundStateInput m_shader_bound_state;
         TextureInterfaceBlock    m_sampler_interface_block;
         BufferInterfaceBlock     m_buffer_interface_block;
@@ -49,6 +52,12 @@ namespace Moer {
 
     Material::Material() {
         m_impl = new Impl();
+    }
+    void Material::SetName(const std::string& name) noexcept {
+        m_impl->SetName(name);
+    }
+    const std::string& Material::GetName() const noexcept {
+        return m_impl->GetName();
     }
     MaterialInstanceRef Material::CreateInstance() {
         MaterialInstanceRef material_instance = MoerNew(MaterialInstance(this));
@@ -86,7 +95,7 @@ namespace Moer {
         BufferInterfaceBlock::Builder  buffer_interface_block_builder;
         sampler_interface_block_builder.Name("material samplers");
         buffer_interface_block_builder.name("material uniforms");
-        for (const auto& param : mParameters) {
+        for (const auto& param : m_parameters) {
             if (param.IsSampler()) {
                 sampler_interface_block_builder.AddSampler(param.name.c_str(), param.samplerType);
             } else if (param.IsTexture()) {
@@ -105,25 +114,30 @@ namespace Moer {
         MaterialRef           material                = MoerNew(Material);
         material->SetSamplerInterfaceBlock(sampler_interface_block);
         material->SetBufferInterfaceBlock(buffer_interface_block);
+        material->SetName(m_material_name);
         return material;
     }
     MaterialBuilder& MaterialBuilder::SetParameter(const std::string& name, ESamplerType samplerType) noexcept {
-        this->mParameters[this->mParameterCount++] = Parameter(name, samplerType);
+        this->m_parameters[this->m_param_count++] = Parameter(name, samplerType);
         return *this;
     }
 
     MaterialBuilder& MaterialBuilder::SetParameter(const std::string& name, ETextureDimension textureType) noexcept {
-        this->mParameters[this->mParameterCount++] = Parameter(name, textureType);
+        this->m_parameters[this->m_param_count++] = Parameter(name, textureType);
         //For every texture, we add a  same name index uniform attribute
         SetParameter(name, UniformType::INT);
         return *this;
     }
     MaterialBuilder& MaterialBuilder::SetParameter(const std::string& name, UniformType type) noexcept {
-        this->mParameters[this->mParameterCount++] = Parameter(name, type, 1);
+        this->m_parameters[this->m_param_count++] = Parameter(name, type, 1);
         return *this;
     }
     MaterialBuilder& MaterialBuilder::SetParameter(const std::string& name, UniformType type, uint32_t size) noexcept {
-        this->mParameters[this->mParameterCount++] = Parameter(name, type, size);
+        this->m_parameters[this->m_param_count++] = Parameter(name, type, size);
+        return *this;
+    }
+    MaterialBuilder& MaterialBuilder::SetName(const std::string& name) noexcept {
+        m_material_name = name;
         return *this;
     }
 
@@ -132,7 +146,7 @@ namespace Moer {
     // }
 
     void Material::Impl::SetSamplerInterfaceBlock(TextureInterfaceBlock& sampler_interface_block) noexcept {
-        m_sampler_interface_block = sampler_interface_block;
+        m_sampler_interface_block = std::move(sampler_interface_block);
     }
     const TextureInterfaceBlock& Material::Impl::GetSamplerInterfaceBlock() const noexcept {
         return m_sampler_interface_block;
@@ -215,5 +229,11 @@ namespace Moer {
     }
     void Material::Impl::SetType(EMaterialType type) noexcept {
         m_type = type;
+    }
+    const std::string& Material::Impl::GetName() const noexcept {
+        return m_name;
+    }
+    void Material::Impl::SetName(const std::string& name) noexcept {
+        m_name = name;
     }
 }// namespace Moer

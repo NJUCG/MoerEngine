@@ -7,7 +7,7 @@
 namespace Moer {
     class MaterialInstance::Impl {
     public:
-        Impl(MaterialRef material) : m_material(material), m_sampler_group(material->GetSamplerInterfaceBlock().GetSize()), m_uniform(material->GetBufferInterfaceBlock().getSize()) {
+        Impl(MaterialRef material) : m_material(material), m_sampler_group(material->GetSamplerInterfaceBlock().GetSize()), m_uniform(material->GetBufferInterfaceBlock().GetSize()) {
         }
         void SetParameter(const std::string& name, RHITextureRef texture, SamplerParams sampler) {
             uint32_t sampler_index = m_material->GetSamplerInterfaceBlock().GetSamplerInfo(name)->offset;
@@ -22,8 +22,11 @@ namespace Moer {
             m_sampler_group.SetSampler(sampler_index, sampler);
         }
         void SetParameter(const std::string& name, const void* value, size_t size) {
-            auto offset = m_material->GetBufferInterfaceBlock().getFieldInfo(name)->offset;
+            auto offset = m_material->GetBufferInterfaceBlock().GetFieldInfo(name)->offset;
             m_uniform.SetData(value, size, offset);
+        }
+        void SetUnifomBuffer(const void* data, size_t size, size_t offset) {
+            m_uniform.SetData(data, size, offset);
         }
 
         RHITexture* GetTexture(const std::string& name) {
@@ -42,10 +45,19 @@ namespace Moer {
             return m_material;
         }
 
+        const std::string& GetName() const {
+            return m_name;
+        }
+
+        void SetName(const std::string& name) {
+            m_name = name;
+        }
+
     protected:
         MaterialRef   m_material;
         SamplerGroup  m_sampler_group;
         UniformBuffer m_uniform;
+        std::string   m_name;
     };
 
     // void SamplerGroup::Bind(RHIBatchedShaderParameters& parameters) {
@@ -76,6 +88,9 @@ namespace Moer {
     void MaterialInstance::SetParameter(const std::string& name, const SamplerParams& params) {
         m_impl->SetParameter(name, params);
     }
+    void MaterialInstance::SetUnifomBuffer(const void* data, size_t size) {
+        m_impl->SetUnifomBuffer(data, size, 0);
+    }
     RHITexture* MaterialInstance::GetTexture(const std::string& name) const {
         return m_impl->GetTexture(name);
     }
@@ -83,6 +98,13 @@ namespace Moer {
     }
     const UniformBuffer& MaterialInstance::GetUniformBuffer() const {
         return m_impl->GetUniformBuffer();
+    }
+    void MaterialInstance::SetName(const std::string& name) {
+        m_impl->SetName(name);
+    }
+
+    const std::string& MaterialInstance::GetName() const {
+        return m_impl->GetName();
     }
     MaterialRef MaterialInstance::GetMaterial() const {
         return m_impl->GetMaterial();
