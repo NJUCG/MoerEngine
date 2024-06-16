@@ -1,8 +1,19 @@
 #ifndef MOERENGINE_WINDOW_INPUT_H
 #define MOERENGINE_WINDOW_INPUT_H
+#include "misc/STL.h"
 
 namespace Moer {
-    struct WindowInput{
+
+    typedef enum {
+        Left,
+        Middle,
+        Right,
+
+        MouseButtonCount,
+        MouseButtonFirst = Left,
+    } MouseButtons;
+
+    struct WindowInput {
         //cursor coods
         float lastX = 0, lastY = 0;
 
@@ -26,7 +37,7 @@ namespace Moer {
         float deltaY = 0.0f;
 
         //camera speed(default)
-        float cameraSpeed = 25.0f;    //to be optimized
+        float cameraSpeed = 25.0f;//to be optimized
         bool  speedUp     = false;
         bool  speedDown   = false;
         bool  resetSpeed  = false;
@@ -40,7 +51,8 @@ namespace Moer {
         float fov = 60.f;
 
         //mouse right button setting
-        bool mouseEnterScreen = false;
+        bool                                              mouseEnterScreen = false;
+        StaticArray<bool, MouseButtons::MouseButtonCount> mouseButtonState = {false};
 
         static WindowInput& GetInstance();
     };
@@ -49,6 +61,6 @@ namespace Moer {
         static WindowInput wndInput;
         return wndInput;
     }
-} // namespace Moer
+}// namespace Moer
 
 #endif

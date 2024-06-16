@@ -3,6 +3,9 @@
 #include "rhi/RHICommon.h"
 
 namespace Moer {
+    class SceneCache;
+}
+namespace Moer {
 
     class TextureInterfaceBlock {
     public:
@@ -26,12 +29,14 @@ namespace Moer {
             Array<TextureInfo> m_entries;
             std::string        m_name;
         };
-        TextureInfo const* GetSamplerInfo(const std::string& name) const noexcept;
-        uint32_t           GetSize() const noexcept;
+        const Moer::Array<TextureInfo>& GetSamplerInfoList() const noexcept { return m_sampler_info_list; }
+        TextureInfo const*              GetSamplerInfo(const std::string& name) const noexcept;
+        uint32_t                        GetSize() const noexcept;
         TextureInterfaceBlock(const Builder& builder) noexcept;
         TextureInterfaceBlock() noexcept = default;
 
     private:
+        friend SceneCache;
         Array<TextureInfo>                 m_sampler_info_list;
         UnorderedMap<std::string, uint8_t> m_info_map;
         std::string                        m_name;

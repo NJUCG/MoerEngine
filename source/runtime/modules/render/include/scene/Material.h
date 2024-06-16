@@ -19,6 +19,8 @@ namespace Moer {
 
     class RENDER_API Material : public CountableResource {
     public:
+        const std::string&           GetName() const noexcept;
+        void                         SetName(const std::string& name) noexcept;
         MaterialInstanceRef          CreateInstance();
         void                         SetSamplerInterfaceBlock(TextureInterfaceBlock& sampler_interface_block) noexcept;
         const TextureInterfaceBlock& GetSamplerInterfaceBlock() const noexcept;
@@ -73,13 +75,14 @@ namespace Moer {
         RENDER_API MaterialBuilder& SetParameter(const std::string& name, ETextureDimension textureType) noexcept;
         RENDER_API MaterialBuilder& SetParameter(const std::string& name, UniformType type) noexcept;
         RENDER_API MaterialBuilder& SetParameter(const std::string& name, UniformType type, uint32_t size) noexcept;
-
-        RENDER_API MaterialRef Build();
+        RENDER_API MaterialBuilder& SetName(const std::string& name) noexcept;
+        RENDER_API MaterialRef      Build();
 
     protected:
         // constexpr static uint32_t MAX_PARAMETER_COUNT = 16;
-        Parameter mParameters[32];
-        uint32_t  mParameterCount{0};
+        Parameter   m_parameters[32];
+        uint32_t    m_param_count{0};
+        std::string m_material_name;
     };
 
 }

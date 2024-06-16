@@ -268,7 +268,6 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
             //reflect dx12
             assert(false && "dx reflect not implemented");
         }
-
         auto fill_succuss_data = [&_output, &param_map, &last_write_time, &file_path, &result, &file_data, &_input]() {
             IDxcBlob* code;
             result->GetResult(&code);
@@ -370,6 +369,9 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> result, const ShaderParam
     Moer::UnorderedMap<std::string, ParameterInfo>
                                     param_map;
     const ShaderParametersMetadata* meta_data = _meta_param;
+    if (reflect_module.descriptor_binding_count == 8) {
+        int k = 1;
+    }
     for (uint32_t binding_index = 0; binding_index < reflect_module.descriptor_binding_count; ++binding_index) {
         auto& binding = reflect_module.descriptor_bindings[binding_index];
         auto& param   = param_map[binding.name];

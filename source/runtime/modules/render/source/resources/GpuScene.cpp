@@ -170,7 +170,7 @@ namespace Moer {
         return *this;
     }
     TextureBuilder::~TextureBuilder() noexcept {
-        if (m_data)
+        if (m_data && m_callback)
             m_callback(m_data);
         if (m_offsets)
             delete[] m_offsets;

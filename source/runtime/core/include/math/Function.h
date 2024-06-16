@@ -86,6 +86,8 @@ namespace Moer {
 
     template<VectorType T> inline T Exp(const T& v) noexcept;
 
+    template<size_t N,NumericType T> inline Matrix<T,N,N>  OuterProduct(const Vector<T, N>& lhs, const Vector<T, N>& rhs) noexcept;
+
     // clang-format on
 }// namespace Moer
 
@@ -721,6 +723,14 @@ namespace Moer {
             ret.r2 = Vector<T, 4>(0, 0, diagonal_element, 0);
         ret.r3 = Vector<T, 4>(0, 0, 0, diagonal_element);
 
+        return ret;
+    }
+
+    template<size_t N, NumericType T>
+    Matrix<T, N, N> OuterProduct(const Vector<T, N>& lhs, const Vector<T, N>& rhs) noexcept {
+        Matrix<T, N, N> ret;
+        for (int i = 0; i < N; i++)
+            for (int j = 0; j < N; j++) ret[i][j] = lhs[i] * rhs[j];
         return ret;
     }
 }// namespace Moer

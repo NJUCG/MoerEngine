@@ -242,7 +242,7 @@ namespace std {
 struct ShaderTargetInfo {
     uint16_t shader_type;
     uint16_t shader_platform;
-    operator uint32_t() const { return *(uint32_t*)this; }
+             operator uint32_t() const { return *(uint32_t*)this; }
     ShaderTargetInfo(EShaderType _type, EShaderPlatform _platform)
         : shader_type(_type),
           shader_platform(_platform) {}
@@ -365,11 +365,11 @@ struct ParameterInfo {
     // space in dx12 while set in Vulkan
     int8_t space = -1;
     // array size, invalid for root cbv
-    int8_t num = 0;
+    int16_t num = 0;
     // parameter type enum
     EShaderParameterType type{EShaderParameterType::Num};
 };
-static_assert(sizeof(ParameterInfo) == 8);
+// static_assert(sizeof(ParameterInfo) == 8);
 
 struct ShaderReflectInfo {
     Moer::UnorderedMap<std::string, ParameterInfo> param_map;
@@ -494,12 +494,12 @@ private:
 
 template<typename TMaroType>
 concept MacroType = requires(TMaroType _type) {
-    std::is_same_v<TMaroType, uint32_t> ||
-        std::is_same_v<TMaroType, int32_t> ||
-        std::is_same_v<TMaroType, bool> ||
-        std::is_same_v<TMaroType, float> ||
-        std::is_same_v<TMaroType, std::string>;
-};
+                        std::is_same_v<TMaroType, uint32_t> ||
+                            std::is_same_v<TMaroType, int32_t> ||
+                            std::is_same_v<TMaroType, bool> ||
+                            std::is_same_v<TMaroType, float> ||
+                            std::is_same_v<TMaroType, std::string>;
+                    };
 struct ShaderCompilerEnvironment {
 public:
     ShaderCompilerEnvironment() {

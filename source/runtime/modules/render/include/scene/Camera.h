@@ -75,4 +75,7 @@ namespace Moer {
         float totalPitch = 0.f;  //limited within (0, 360)
         float yawReverse = false;//reverse left and right
     };
+
+    using CameraRef = CountableRef<Camera>;
+
 }// namespace Moer
