@@ -212,7 +212,11 @@ namespace Moer {
         size_t prim_info_count;
         stream.read(prim_info_count);
         sceneData.m_prim_infos.resize(prim_info_count);
-        stream.read(sceneData.m_prim_infos.data(), prim_info_count * sizeof(PrimInfo));
+        for (int i = 0; i < prim_info_count; ++i) {
+            stream.read(sceneData.m_prim_infos[i].mesh_id);
+            stream.read(sceneData.m_prim_infos[i].material_id);
+            stream.read(sceneData.m_prim_infos[i].transform);
+        }
 
         size_t instance_data_count;
         stream.read(instance_data_count);
@@ -362,7 +366,11 @@ namespace Moer {
         stream.write(sceneData.m_mesh_infos.data(), sceneData.m_mesh_infos.size() * sizeof(MeshInfo));
 
         stream.write(sceneData.m_prim_infos.size());
-        stream.write(sceneData.m_prim_infos.data(), sceneData.m_prim_infos.size() * sizeof(PrimInfo));
+        for (auto& prim_info : sceneData.m_prim_infos) {
+            stream.write(prim_info.mesh_id);
+            stream.write(prim_info.material_id);
+            stream.write(prim_info.transform);
+        }
 
         stream.write(sceneData.m_instance_data.size());
         stream.write(sceneData.m_instance_data.data(), sceneData.m_instance_data.size() * sizeof(InstanceData));
