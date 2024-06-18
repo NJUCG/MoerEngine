@@ -183,7 +183,7 @@ namespace Moer {
 
         bool b_need_update = true;
 
-        std::string_view              m_present_texture = "swapchain_output";
+        std::string                   m_present_texture = "swapchain_output";
         std::vector<std::string_view> m_current_textures{"swapchain_output"};
 
         RHISamplerRef sampler;
@@ -637,11 +637,7 @@ namespace Moer {
                 break;
             }
         }
-        uint32_t size = m_current_textures.size();
-        auto     t    = m_current_textures;
-        if (size > 50) {
-            m_current_textures.push_back("test");
-        }
+        uint32_t                 size = m_current_textures.size();
         std::vector<const char*> current_texture_cstr(m_current_textures.size());
         for (size_t i = 0; i < m_current_textures.size(); i++) {
             current_texture_cstr[i] = m_current_textures[i].data();
