@@ -23,4 +23,5 @@ target_link_libraries(${MODULE_NAME}
     PUBLIC MoerRuntimeCore
     PUBLIC MoerRender
     PUBLIC MeshProcess
+    PUBLIC nlohmann_json::nlohmann_json
 )
