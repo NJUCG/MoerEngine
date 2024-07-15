@@ -291,9 +291,10 @@ namespace Moer {
         return KTX_SUCCESS;
     }
 
-    void ImageReadDesc::CheckValid() {
-        assert(data != nullptr && width != 0 && height != 0 && layers != 0 && mips != 0 && channal != 0 && data_size != 0);
+    bool ImageReadDesc::IsValid() {
+        return (data != nullptr && width != 0 && height != 0 && layers != 0 && mips != 0 && channal != 0 && data_size != 0);
     }
+
     ImageReadDesc ImageIO::ReadFromFile(const std::filesystem::path& path, uint32_t desired_channal) {
         ImageReadDesc desc;
         const auto&   path_str = path.string();

@@ -195,8 +195,8 @@ namespace Moer::Resource::Gltf {
             std::filesystem::path texture_file_path = m_file_parent_path / texture_path.C_Str();
             image_desc                              = ImageIO::ReadFromFile(texture_file_path);
         }
-        image_desc.CheckValid();
-        if (image_desc.data == nullptr) {
+
+        if (!image_desc.IsValid()) {
             LOG_WARNING("Load Texture Failed:{}", texture_path.C_Str());
             return;
         }
