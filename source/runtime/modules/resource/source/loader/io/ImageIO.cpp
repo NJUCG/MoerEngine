@@ -1,6 +1,6 @@
 #include "ImageIO.h"
 #include "KtxImageHelper.h"
-
+#define STB_IMAGE_IMPLEMENTATION
 #include "contrib/stb/stb_image.h"
 #include "log/LogSystem.h"
 #include "rhi/RHICommon.h"
