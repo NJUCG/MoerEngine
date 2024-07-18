@@ -2,6 +2,7 @@
 #include "ResourceAPI.h"
 #include "loader/gltf/Parser.h"
 #include "loader/ply/Ply.h"
+#include "loader/jsonscene/JsonSceneParser.h"
 #include "log/LogSystem.h"
 #include "sceneCache/SceneCache.h"
 
@@ -22,6 +23,12 @@ namespace Resource {
                 SceneCache::LoadSceneFromCacheAsync(_file_path);
             } else {
                 Gltf::Parser::LoadSceneFromFileAsync(_file_path);
+            }
+        } else if (_file_path.extension() == ".json") {
+            if (SceneCache::HasValidCache(_file_path)) {
+                SceneCache::LoadSceneFromCacheAsync(_file_path);
+            } else {
+                JsonScene::JsonSceneParser::LoadSceneFromFileAsync(_file_path);
             }
         } else {
             LOG_ERROR("Unsupported file format: {}", file_path_str);
