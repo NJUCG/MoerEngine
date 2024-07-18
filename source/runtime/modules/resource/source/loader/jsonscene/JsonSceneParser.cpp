@@ -429,15 +429,13 @@ namespace Moer::Resource::JsonScene {
         if (camera_json.contains("transform")) {
             const Json& camera_trans_json = camera_json["transform"];
             position                      = camera_trans_json.value("position", position);
+            // This look_at is a Point3f!
             look_at                       = camera_trans_json.value("look_at", look_at);
             up                            = camera_trans_json.value("up", up);
-            // In Moer Json, the look_at is a point3 rather than a vector3, so we need conversion
-            if (camera_trans_json.contains("look_at")) {
-                look_at = look_at - position;
-            }
         }
         // calculate transform
         Transform transform   = Transform();
+        // Transform accept look_at as a Point3f
         auto      world_2_cam = Transform(position, look_at, up);
         transform.matrix      = Inverse(world_2_cam.GetMatrix4x4());
         // get aspect ratio
