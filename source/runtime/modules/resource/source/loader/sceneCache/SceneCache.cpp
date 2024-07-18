@@ -441,10 +441,16 @@ namespace Moer {
             stream.write(material_instance.first);
             stream.write(material_instance.second->GetMaterial()->GetName());
 
-            stream.write(sceneData.m_mat_instance_textures.at(material_instance.first).textures.size());
-            for (auto& texture : sceneData.m_mat_instance_textures.at(material_instance.first).textures) {
-                stream.write(texture.first);
-                stream.write(texture.second);
+            if (sceneData.m_mat_instance_textures.contains(material_instance.first)) {
+                stream.write(sceneData.m_mat_instance_textures.at(material_instance.first).textures.size());
+                for (auto& texture : sceneData.m_mat_instance_textures.at(material_instance.first).textures) {
+                    stream.write(texture.first);
+                    stream.write(texture.second);
+                }
+            } else {
+                // Because in ReadSceneMaterial(), we expect the texture_param_count to be a size_t
+                // Here we need to manual cast 0 to size_t to ensure it is written in 8 bytes instead of 4
+                stream.write(static_cast<size_t>(0));
             }
 
             stream.write(material_instance.second->GetUniformBuffer().GetData(), material_instance.second->GetUniformBuffer().GetSize());
@@ -548,6 +554,9 @@ namespace Moer {
         }
 
         for (auto material_instance : sceneData.m_material_instances) {
+            if (!sceneData.m_mat_instance_textures.contains(material_instance.first)) {
+                continue;
+            }
             for (auto& texture : sceneData.m_mat_instance_textures[material_instance.first].textures) {
                 material_instance.second->SetParameter(texture.first, textures[texture.second]);
             }
@@ -570,4 +579,4 @@ namespace Moer {
         });
     }
 
-}
+}// namespace Moer
