@@ -1,3 +1,4 @@
+#pragma once
 #include "rhi/RHI.h"
 #include "PixelFormat.h"
 #include "log/LogSystem.h"
@@ -5,6 +6,8 @@
 #include "rhi/RHIResource.h"
 #include "Core.h"
 #include <cassert>
+#include "RHIImpl.h"
+#include "vulkan/VulkanDevice.h"
 
 RHI* g_rhi = nullptr;
 
@@ -90,3 +93,23 @@ RHISRVRef RHI::RHICreateAccelerationStructureSRV(RHIRayTracingTLAS* _tlas) {
     RHIViewRef view = RHICreateViewInner(_tlas, GetAccelerationStructureSRVInfo(_tlas));
     return RHISRVRef(static_cast<RHISRV*>(view.Get()));
 }
+
+namespace Moer::Render {
+    RenderDevice& RenderDevice::Get() {
+        static RenderDevice device;
+        return device;
+    }
+    void RenderDevice::Init(DeviceInitInfo&& _info) {
+        switch (_info.rhi_type) {
+            case ERHIType::Vulkan:
+                Get().impl = std::move(UniquePtr<Impl>(MoerNew(Moer::Render::VulkanDevice)(std::move(_info))));
+                break;
+            case ERHIType::D3D12:
+                LOG_ERROR("D3D12 is not supported yet");
+                break;
+        }
+    }
+    const CommandQueue& RenderDevice::GetCommandQueue() const {
+        return Get().impl->GetCommandQueue();
+    }
+};// namespace Moer::Render

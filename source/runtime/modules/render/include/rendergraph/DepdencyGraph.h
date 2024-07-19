@@ -34,7 +34,7 @@ namespace Moer {
         struct BufferSubDesc {
             uint32_t      offset = 0;
             uint32_t      size   = 0;
-            EBufferLayout layout;
+            EBufferRuntimeUsageFlags layout;
         };
         using ResourceDesc = std::variant<TextureSubDesc, BufferSubDesc>;
 

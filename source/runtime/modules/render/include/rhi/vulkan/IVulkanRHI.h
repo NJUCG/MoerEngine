@@ -68,14 +68,14 @@ public:
     RHICommandQueue* RHICreateCommandQueue(ECommandQueueType type) override { return nullptr; }
     // RHIGraphicsCommandList* CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state = nullptr) override { return nullptr; }
 
-    RHIGraphicsCommandList* RHICreateGraphicsCommandList(RHICommandAllocator* _allocator, RHIGfxPso* _initial_state = nullptr) override { return nullptr; }
+    RHIGraphicsCommandList* RHICreateGraphicsCommandList(RHIGfxPso* _initial_state = nullptr) override { return nullptr; }
 
     // RHIComputeCommandList* CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr) override { return nullptr; }
-    RHIComputeCommandList* RHICreateComputeCommandList(RHICommandAllocator* _allocator, RHIComputePso* _initial_state = nullptr) override { return nullptr; };
+    RHIComputeCommandList* RHICreateComputeCommandList(RHIComputePso* _initial_state = nullptr) override { return nullptr; };
 
-    RHIRayTracingCommandList* RHICreateRayTracingCommandList(RHICommandAllocator* _allocator, RHIRTPso* _initial_state = nullptr) override { return nullptr; }
+    RHIRayTracingCommandList* RHICreateRayTracingCommandList(RHIRTPso* _initial_state = nullptr) override { return nullptr; }
 
-    RHICopyCommandList* RHICreateCopyCommandList(RHICommandAllocator* _allocator) override { return nullptr; }
+    RHICopyCommandList* RHICreateCopyCommandList() override { return nullptr; }
 
     // void RHISetBatchedShaderParameters(RHIGraphicsPipelineState* _pso, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) override {}
 

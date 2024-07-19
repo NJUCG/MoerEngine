@@ -18,50 +18,6 @@
 struct ShaderCompiledInitializer;
 using ShaderTypeKey = uint32_t;
 
-/**
- * @brief Binding Parameter Enum
- * 
- */
-enum class EShaderParameterType : uint8_t {
-    UNKNOWN,
-    CONSTANT_STRUCT,
-    CBV,
-    SAMPLER,
-    SRV,
-    UAV,
-
-    BINDLESS_RESOURCE_INDEX,
-    BINDLESS_SAMPLER_INDEX,
-
-    Num,
-    NumBits = 4
-};
-inline bool IsParameterResource(EShaderParameterType _base_type) {
-
-    switch (_base_type) {
-
-        case EShaderParameterType::CBV:
-        case EShaderParameterType::SAMPLER:
-        case EShaderParameterType::SRV:
-        case EShaderParameterType::UAV:
-            return true;
-        case EShaderParameterType::BINDLESS_RESOURCE_INDEX:
-        case EShaderParameterType::BINDLESS_SAMPLER_INDEX:
-        default: break;
-    }
-    return false;
-}
-BEGIN_ENUM_STR_DEFINITION(EShaderParameterType)
-
-ENUM_STR_ELEMENT(UNKNOWN)
-ENUM_STR_ELEMENT(CBV)
-ENUM_STR_ELEMENT(SAMPLER)
-ENUM_STR_ELEMENT(SRV)
-ENUM_STR_ELEMENT(UAV)
-ENUM_STR_ELEMENT(BINDLESS_RESOURCE_INDEX)
-ENUM_STR_ELEMENT(BINDLESS_SAMPLER_INDEX)
-END_ENUM_STR_DEFINITION(EShaderParameterType)
-
 enum class EShaderPrecisionModifier : uint8_t {
     FLOAT,
     HALF,
@@ -239,20 +195,6 @@ namespace std {
     };
 }// namespace std
 //compiled shader platform and type information
-struct ShaderTargetInfo {
-    uint16_t shader_type;
-    uint16_t shader_platform;
-    operator uint32_t() const { return *(uint32_t*)this; }
-    ShaderTargetInfo(EShaderType _type, EShaderPlatform _platform)
-        : shader_type(_type),
-          shader_platform(_platform) {}
-    ShaderTargetInfo(uint32_t _info) : shader_type(_info & 0xffff), shader_platform(static_cast<EShaderPlatform>(_info >> 16)) {}
-
-    ShaderTargetInfo() = default;
-
-    operator EShaderType() const { return static_cast<EShaderType>(shader_type); }
-    operator EShaderPlatform() const { return static_cast<EShaderPlatform>(shader_platform); }
-};
 
 typedef uint32_t ShaderTypeIndex;
 struct ShaderMutationParameters;
@@ -353,46 +295,11 @@ public:
     static void SubmitRegistrations();
 };
 
-/**
- * @brief Shader Root Parameter info
- * 
- */
-struct ParameterInfo {
-    // source pipeline stage
-    ERHIPipelineStageFlags stage{ERHIPipelineStageFlags::PS_NONE};
-    // slot in dx12 while binding in Vulkan
-    int8_t slot = -1;
-    // space in dx12 while set in Vulkan
-    int8_t space = -1;
-    // array size, invalid for root cbv
-    int8_t num = 0;
-    // parameter type enum
-    EShaderParameterType type{EShaderParameterType::Num};
-};
-static_assert(sizeof(ParameterInfo) == 8);
-
 struct ShaderReflectInfo {
     Moer::UnorderedMap<std::string, ParameterInfo> param_map;
     Moer::Array<RHIVertexInputInfo>                vertex_input_info;
 };
 
-/**
- * @brief Shader Reflected ParameterInfo Container,
-    index with parameter name
- * 
- */
-struct ShaderParametersInfoMap {
-    friend class ShaderCompiler;
-    friend class DXCompiler;
-
-public:
-    const Moer::UnorderedMap<std::string, ParameterInfo>& GetShaderParameterInfoMap() const {
-        return param_map;
-    }
-
-    // private:
-    Moer::UnorderedMap<std::string, ParameterInfo> param_map;
-};
 struct ShaderCompilerOutput {
 
     ShaderCompilerOutput()

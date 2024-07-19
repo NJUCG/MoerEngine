@@ -503,8 +503,8 @@ namespace Moer {
                     auto& rg          = render_context.GetRenderGraph();
                     auto  uni_handle  = rg.ImportIfNotExist("Deferred::UniformView", uniform_buffer);
                     auto  view_handle = rg.ImportIfNotExist(view_buffer_name, view_buffer);
-                    _builder.ReadBuffer(uni_handle, EBufferLayout::TRANSFER_READ);
-                    _builder.WriteBuffer(view_handle, EBufferLayout::TRANSFER_WRITE);
+                    _builder.ReadBuffer(uni_handle, EBufferRuntimeUsageFlags::TRANSFER_READ);
+                    _builder.WriteBuffer(view_handle, EBufferRuntimeUsageFlags::TRANSFER_WRITE);
                 },
                 [this](RenderPassContext& _context) {
                     auto              src_offset = render_context.GetFrameOffset() * uniform_buffer_size;

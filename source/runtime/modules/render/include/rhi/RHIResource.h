@@ -2,6 +2,7 @@
 #define RHI_RESOURCE_H
 #include "API_Macro.h"
 #include "PixelFormat.h"
+#include "RHICommon.h"
 #include "RenderCommon.h"
 #include "math/Base.h"
 
@@ -25,6 +26,7 @@
 #include <optional>
 #include <bitset>
 #include <tuple>
+#include <type_traits>
 #include <variant>
 template<typename TStructuredParam>
 concept concept_is_shader_struct = requires(TStructuredParam t) {
@@ -132,6 +134,19 @@ using RHIViewportRef                  = CountableRef<RHIViewport>;
 using RHIRenderPrimitiveRef           = CountableRef<RHIRenderPrimitive>;
 #pragma endregion
 
+namespace Moer::Render {
+    class Texture;
+    class Buffer;
+    class Fence;
+    class Sampler;
+    class DepthBuffer;
+    using TextureRef     = CountableRef<Texture>;
+    using BufferRef      = CountableRef<Buffer>;
+    using FenceRef       = CountableRef<Fence>;
+    using SamplerRef     = CountableRef<Sampler>;
+    using DepthBufferRef = CountableRef<DepthBuffer>;
+};// namespace Moer::Render
+
 class Shader;
 class RHITextureBarrierInfo;
 
@@ -238,6 +253,10 @@ public:
     }
 
 protected:
+    void MarkSuddenDeath() {
+        flags.SetSuddenDeath();
+    }
+
 private:
     void Destroy();
     struct ResourceAtomicFlags {
@@ -245,6 +264,7 @@ private:
 
         static constexpr uint32_t s_mark_for_delete_mask = 1 << 31;
         static constexpr uint32_t s_is_deleting_mask     = 1 << 30;
+        static constexpr uint32_t s_sudden_death_mask    = 1 << 29;
         static constexpr uint32_t s_ref_count_mask       = s_is_deleting_mask - 1;
 
     public:
@@ -261,6 +281,12 @@ private:
             int32_t num_ref = (current_packed & s_ref_count_mask) - 1;
             assert(num_ref >= 0);
             return num_ref;
+        }
+        bool IsSuddenDeath() {
+            return (packed.load(std::memory_order_relaxed) & s_sudden_death_mask) != 0;
+        }
+        void SetSuddenDeath() {
+            packed.fetch_or(s_sudden_death_mask, std::memory_order_relaxed);
         }
         bool MarkToDelete(std::memory_order memory_order) {
             uint32_t current_packed = packed.fetch_or(s_mark_for_delete_mask, memory_order);
@@ -308,43 +334,6 @@ class RHISampler : public RHIResource {
 public:
     explicit RHISampler() : RHIResource(RRT_SAMPLER) {}
 };
-// class RHIVertexInputState : public RHIResource {
-// public:
-//     RHIVertexInputState() : RHIResource(RRT_VERTEX_STATE_INITIALIZER) {}
-//     //    virtual bool GetInitializer(VertexInputStateInitializerList& _initializer_list) { return false; }
-// };
-// class RHIRasterizationState : public RHIResource {
-// public:
-//     explicit RHIRasterizationState() : RHIResource(RRT_RASTERIZE_STATE) {}
-//     //    virtual bool GetInitializer(struct RHIRasterizationStateInitializer& _init) { return false; }
-// };
-
-// class RHIDepthStencilState : public RHIResource {
-// public:
-//     explicit RHIDepthStencilState() : RHIResource(RRT_DEPTH_STENCIL_STATE) {}
-//     //    virtual bool GetInitializer(struct RHIDepthStencilStateInitializer& _init) { return false; }
-// };
-
-// class RHIMultisampleState : public RHIResource {
-// public:
-//     explicit RHIMultisampleState() : RHIResource(RRT_MULTI_SAMPLE_STATE) {}
-//     //    virtual bool GetInitializer(RHIDepthStencilStateInitializer& _init) { return false; }
-// };
-// class RHIBlendState : public RHIResource {
-// public:
-//     explicit RHIBlendState() : RHIResource(RRT_BLEND_STATE) {}
-//     //    virtual bool GetInitializer(struct RHIBlendStateInitializer& _init) { return false; }
-// };
-
-//class RHIVertexDescription : public RHIResource {
-//public:
-//    explicit RHIVertexDescription() : RHIResource(RRT_VERTEX_STATE_INITIALIZER) {}
-//};
-
-// class RHIPipelineShaderBindingState : public RHIResource {
-// public:
-//     explicit RHIPipelineShaderBindingState() : RHIResource(RRT_PIPELINE_BOUND_SHADER_STATE) {}
-// };
 
 #pragma region shader definitions
 class RHIShader : public RHIResource {
@@ -620,6 +609,232 @@ struct RHIBufferCreateInfo : public RHIBufferInfo {
     }
 };
 
+#pragma region new api
+namespace Moer::Render {
+
+    struct Sampler {
+        enum EType : uint8 {
+            NEAR_EDGE,
+            NEAR_MIRROR,
+            NEAR_REPEAT,
+            NEAR_BORDER,
+            LINEAR_EDGE,
+            LINEAR_MIRROR,
+            LINEAR_REPEAT,
+            LINEAR_BORDER,
+            ANISOTROPIC_EDGE,
+            ANISOTROPIC_MIRROR,
+            ANISOTROPIC_REPEAT,
+            ANISOTROPIC_BORDER,
+            CUBIC_EDGE,
+            CUBIC_MIRROR,
+            CUBIC_REPEAT,
+            CUBIC_BORDER
+        };
+        Sampler(EType _type) {}
+        static Sampler Create(EType _type) {
+            return Sampler(_type);
+        }
+        ESamplerFilter      filter;
+        ESamplerAddressMode address_mode;
+    };
+    class BufferView {
+    public:
+        BufferView() = default;
+        BufferView(Buffer* _buffer);
+        BufferView(Buffer* _buffer, uint64 _byte_offset, uint64 _num_elements, uint _stride) : buffer(_buffer),
+                                                                                               byte_offset(_byte_offset),
+                                                                                               num_elements(_num_elements),
+                                                                                               stride(_stride){};
+        uint          GetNumElements() const { return num_elements; }
+        uint          GetStride() const { return stride; }
+        uint64        GetByteOffset() const { return byte_offset; }
+        uint64        GetByteSize() const { return num_elements * stride; }
+        class Buffer* GetBuffer() const { return buffer; }
+
+        class Buffer* buffer;
+        uint64        byte_offset;
+        uint64        num_elements;
+        uint32        stride;
+    };
+
+    struct BufferInfo {
+        uint64_t          size;
+        uint32_t          stride;
+        EBufferUsageFlags usage;
+
+        BufferInfo() = default;
+        BufferInfo(uint64_t _size, uint32_t _stride, EBufferUsageFlags _usage)
+            : size(_size),
+              stride(_stride),
+              usage(_usage) {}
+
+        static BufferInfo GetNull() {
+            return {
+                0,
+                0,
+                EBufferUsageFlags::NONE};
+        }
+        bool IsNull() const {
+            return usage == EBufferUsageFlags::NONE && size == stride && size == 0;
+        }
+    };
+    class Buffer : public RHIResource {
+    public:
+        /**
+	 * @brief Construct a new RHIBuffer object
+	 *
+	 * @param _info
+	 */
+        Buffer(const BufferInfo& _info) : RHIResource(RRT_BUFFER), info(_info) {}
+
+        void SetName(const std::string& _name) {
+            name = _name;
+        }
+        uint              GetNumElement() const { return info.size / info.stride; }
+        uint64            GetByteSize() const { return info.size; }
+        uint              GetStride() const { return info.stride; }
+        EBufferUsageFlags GetUsage() const { return info.usage; }
+
+        BufferView GetView(uint64 _byte_offset = 0, uint64 _byte_size = 0);
+
+    protected:
+        /**
+	 * @brief Create an empty RHIBuffer, do nothing in rhi backend
+	 *
+	 */
+        Buffer() : RHIResource(RRT_BUFFER) {}
+        std::string name;
+
+    protected:
+        BufferInfo info;
+    };
+
+    struct TextureView {
+    public:
+        TextureView() = default;
+        TextureView(class Texture*);
+        TextureView(TextureRef);
+        class Texture* texture;
+        uint3          offset{};
+        uint3          extent{};
+        uint8          mip_level;
+        uint8          num_mips;
+        uint8          array_index;
+        uint8          num_array;
+    };
+    struct TextureInfo {
+        TextureInfo() = default;
+
+        TextureInfo(ETextureDimension _dimension) : dimension(_dimension) {}
+
+        TextureInfo(
+            ETextureDimension  _dimension,
+            ETextureUsageFlags _usage,
+            EPixelFormat       _format,
+            EClearAttachment   _clear_attachment,
+            Extent3D           _extent,
+            uint8_t            _num_mips    = 1u,
+            uint8_t            _num_samples = 1u)
+            : dimension(_dimension),
+              usage(_usage),
+              format(_format),
+              clear_attachment(_clear_attachment),
+              extent(_extent.x, _extent.y),
+              depth(_extent.z),
+              num_mips(_num_mips),
+              num_samples(_num_samples) {}
+
+        ETextureUsageFlags usage = ETextureUsageFlags::UNDEFINED;
+
+        Moer::Vector2i extent = Moer::Vector2i(1, 1);
+
+        /** Depth of the texture if the dimension is 3D. */
+        uint16_t depth = 1;
+
+        /** The number of array elements in the texture. (Keep at 1 if dimension is 3D). */
+        uint16_t array_size = 1;
+
+        /** Number of mips in the texture mip-map chain. */
+        uint8_t num_mips = 1;
+
+        /** Number of samples in the texture. >1 for MSAA. */
+        uint8_t num_samples = 1;
+
+        /** Texture dimension to use when creating the RHI texture. */
+        ETextureDimension dimension = ETextureDimension::TEX_2D;
+
+        /** Pixel format used to create RHI texture. */
+        EPixelFormat format = PF_UNDEFINED;
+
+        /** Texture format used when creating the UAV. PF_Unknown means to use the default one (same as Format). */
+        EPixelFormat uav_format = PF_UNDEFINED;
+
+        RHIClearAttachment clear_attachment;
+
+        ETextureAspectFlags aspect_flags = ETextureAspectFlags::COLOR;
+
+        bool
+        operator==(const TextureInfo& _other) const {
+            return dimension == _other.dimension && usage == _other.usage && format == _other.format && uav_format == _other.uav_format && extent == _other.extent && depth == _other.depth && array_size == _other.array_size && num_mips == _other.num_mips && num_samples == _other.num_samples && clear_attachment == _other.clear_attachment;
+        }
+
+        bool operator!=(const TextureInfo& _other) const {
+            return !(*this == _other);
+        }
+
+        TextureInfo& operator=(const TextureInfo& _other) = default;
+    };
+    class Texture : public RHIResource {
+    public:
+        Texture(const TextureInfo& _info) : RHIResource(RRT_TEXTURE), info(_info) {}
+
+        void SetName(const std::string& _name) {
+            name = _name;
+        }
+        uint32_t            GetNumMips() const { return info.num_mips; }
+        uint32_t            GetNumArray() const { return info.array_size; }
+        uint32_t            GetDepth() const { return info.depth; }
+        uint32_t            GetWidth() const { return info.extent.x; }
+        uint32_t            GetHeight() const { return info.extent.y; }
+        EPixelFormat        GetFormat() const { return info.format; }
+        ETextureDimension   GetDimension() const { return info.dimension; }
+        ETextureUsageFlags  GetUsage() const { return info.usage; }
+        ETextureAspectFlags GetAspectFlags() const { return info.aspect_flags; }
+
+        TextureView GetView(uint8 _mip_idx = 0u, uint8 _mip_num = 1u);
+
+    private:
+        friend DepthBuffer;
+        std::string name;
+        TextureInfo info;
+    };
+
+    class DepthBuffer : public RHIResource {
+        friend class RenderDevice;
+        DepthBuffer(TextureRef _tex) : RHIResource(RRT_DEPTH) {}
+
+    public:
+        uint                GetNumMips() const { return tex_handle->GetNumMips(); }
+        uint                GetNumArray() const { return tex_handle->GetNumArray(); }
+        uint                GetDepth() const { return tex_handle->GetDepth(); }
+        uint                GetWidth() const { return tex_handle->GetWidth(); }
+        uint                GetHeight() const { return tex_handle->GetHeight(); }
+        EPixelFormat        GetFormat() const { return tex_handle->GetFormat(); }
+        ETextureDimension   GetDimension() const { return tex_handle->GetDimension(); }
+        ETextureUsageFlags  GetUsage() const { return tex_handle->GetUsage(); }
+        ETextureAspectFlags GetAspectFlags() const { return tex_handle->GetAspectFlags(); }
+
+        TextureView GetView() {
+            return tex_handle->GetView();
+        }
+
+    private:
+        TextureRef tex_handle;
+    };
+
+}// namespace Moer::Render
+#pragma endregion
 /* index, vertex, staging, indirect */
 class RHIBuffer : public RHIViewableResource {
 public:
@@ -634,14 +849,14 @@ public:
     void                 SetName(const std::string& _name) {
         name = _name;
     }
-    void SetLayout(EBufferLayout _layout) {
+    void SetLayout(EBufferRuntimeUsageFlags _layout) {
         layout = _layout;
     }
     uint32_t          GetNumElement() const { return info.size / info.stride; }
     uint64_t          GetByteSize() const { return info.size; }
     uint32_t          GetStride() const { return info.stride; }
     EBufferUsageFlags GetUsage() const { return info.usage; }
-    void              SetTrackedInfo(EBufferLayout _layout, EPassType _pass) {
+    void              SetTrackedInfo(EBufferRuntimeUsageFlags _layout, EPassType _pass) {
         layout    = _layout;
         prev_pass = _pass;
     }
@@ -659,9 +874,9 @@ protected:
     std::string name;
 
 protected:
-    RHIBufferInfo info;
-    EBufferLayout layout    = EBufferLayout::UNDEFINED_LAYOUT;
-    EPassType     prev_pass = EPassType::None;
+    RHIBufferInfo            info;
+    EBufferRuntimeUsageFlags layout    = EBufferRuntimeUsageFlags::UNDEFINED;
+    EPassType                prev_pass = EPassType::None;
 };
 
 struct RHITextureInfo {
@@ -925,6 +1140,7 @@ public:
         }
         return std::make_tuple(TS_UNDEFINED, EPassType::None);
     }
+    Moer::UnorderedMap<Moer::uint, std::tuple<ETextureStateFlags, EPassType>> mip_usages;
 
 protected:
     RHITexture(const RHITextureCreateInfo& _info);
@@ -948,7 +1164,6 @@ private:
         }
     };
     // Moer::UnorderedMap<RHISubresourceRange, ETextureLayout, RHISubresourceRangeHash> subresource_layouts;
-    Moer::UnorderedMap<Moer::uint, std::tuple<ETextureStateFlags, EPassType>> mip_usages;
 };
 
 #pragma region acceleration structures
@@ -1138,7 +1353,31 @@ public:
 
 protected:
 };
+namespace Moer::Render {
+    class Fence : public RHIResource {
+    public:
+        Fence() : RHIResource(RRT_GPU_FENCE) {}
+        virtual uint64_t GetValue() const      = 0;
+        virtual void     Wait(uint64_t _value) = 0;
+    };
 
+    struct BackBufferInfo {
+        TextureRef texture;
+        FenceRef   fence;
+        bool       Valid() const {
+            return texture != nullptr;
+        }
+    };
+    class Viewport : public RHIResource {
+    public:
+        Viewport() : RHIResource(RRT_VIEWPORT) {}
+        virtual ~Viewport() {}
+        virtual void*          GetNativeWindow()                = 0;
+        virtual void           Present(FenceRef _present_fence) = 0;
+        virtual void           Resize(Extent2D)                 = 0;
+        virtual BackBufferInfo GetBackBuffer()                  = 0;
+    };
+}// namespace Moer::Render
 struct RHIBarrierInfo {
     RHIBarrierInfo() : src_stage(ERHIPipelineStageFlags::PS_TOP_OF_PIPE),
                        dst_stage(ERHIPipelineStageFlags::PS_BOTTOM_OF_PIPE),
@@ -2516,139 +2755,6 @@ struct GraphicsPipelineAttachmentInfo {
     bool b_has_fragment_density_attachment = false;
 };
 
-// class RHIGraphicsPipelineStateInfo {
-// public:
-//     using TAttachmentFormats = Moer::StaticArray<uint8_t, MAX_PASS_ATTACHMENT_COUNT>;
-//     using TAttachmentFlags   = Moer::StaticArray<ETextureUsageFlags, MAX_PASS_ATTACHMENT_COUNT>;
-
-//     RHIGraphicsPipelineStateInfo()
-//         : blend_state(nullptr),
-//           rasterizer_state(nullptr),
-//           multisample_state(nullptr),
-//           depth_stencil_state(nullptr),
-//           color_attachment_count(0),
-//           color_attachment_formats(CreateArray<MAX_PASS_ATTACHMENT_COUNT, uint8_t>((uint8_t)PF_UNDEFINED)),
-//           color_attachment_flags(CreateArray<MAX_PASS_ATTACHMENT_COUNT, ETextureUsageFlags>(ETextureUsageFlags::UNDEFINED)),
-//           depth_stencil_format(PF_UNDEFINED),
-//           depth_stencil_flag(ETextureUsageFlags::UNDEFINED),
-//           subpass_settings({SubpassSettings::Type::NONE, 0}),
-//           b_depth_bound(false),
-//           multi_view_count(1),
-//           b_has_fragment_density_attachments(false),
-//           shading_rate(EVariousShadingRate::VSR_1_1x1),
-//           hash_key(0) {}
-
-//     RHIGraphicsPipelineStateInfo(
-//         RHIBlendState*            _blend_state,
-//         RHIRasterizationState*    _rasterizer_state,
-//         RHIMultisampleState*      _multisample_state,
-//         RHIDepthStencilState*     _depth_stencil_state,
-//         EPrimitiveTopology        _primitive_topology,
-//         uint32_t                  _color_attachment_count,
-//         const TAttachmentFormats& _color_attachment_formats,
-//         const TAttachmentFlags&   _color_attachment_flags,
-//         EPixelFormat              _depth_stencil_format,
-//         ETextureUsageFlags        _depth_stencil_flag,
-//         const SubpassSettings&    _subpass_settings,
-//         bool                      _b_depth_bound,
-//         uint8_t                   _multi_view_count,
-//         bool                      _b_has_fragment_density_attachments,
-//         EVariousShadingRate       _shading_rate)
-//         : blend_state(_blend_state),
-//           rasterizer_state(_rasterizer_state),
-//           multisample_state(_multisample_state),
-//           depth_stencil_state(_depth_stencil_state),
-//           primitive_topology(_primitive_topology),
-//           color_attachment_count(_color_attachment_count),
-//           color_attachment_formats(_color_attachment_formats),
-//           color_attachment_flags(_color_attachment_flags),
-//           depth_stencil_format(_depth_stencil_format),
-//           depth_stencil_flag(_depth_stencil_flag),
-//           subpass_settings(_subpass_settings),
-//           b_depth_bound(_b_depth_bound),
-//           multi_view_count(_multi_view_count),
-//           b_has_fragment_density_attachments(_b_has_fragment_density_attachments),
-//           shading_rate(_shading_rate),
-//           hash_key(0) {}
-//     static constexpr ETextureUsageFlags relevant_color_attachment_flag_mask = ETextureUsageFlags::SRGB;
-//     static constexpr ETextureUsageFlags relevant_depth_stencil_flag_mask    = ETextureUsageFlags::SRGB | ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT;
-//     static bool                         IsSameColorAttachmentInPSO(ETextureUsageFlags lhs, ETextureUsageFlags rhs) {
-//         auto l = lhs & relevant_color_attachment_flag_mask;
-//         auto r = rhs & relevant_color_attachment_flag_mask;
-//         return l == r;
-//     }
-//     static bool IsSameDepthAttachmentInPSO(ETextureUsageFlags lhs, ETextureUsageFlags rhs) {
-//         auto l = lhs & relevant_depth_stencil_flag_mask;
-//         auto r = rhs & relevant_depth_stencil_flag_mask;
-//         return l == r;
-//     }
-//     static bool IsSameColorAttachmentArray(const TAttachmentFlags& lhs, const TAttachmentFlags& rhs) {
-//         bool b_same = true;
-//         for (int i = 0; i < lhs.size(); ++i) {
-//             b_same &= IsSameColorAttachmentInPSO(lhs[i], rhs[i]);
-//         }
-//         return b_same;
-//     }
-
-//     bool operator==(const RHIGraphicsPipelineStateInfo& other) const {
-//         return shader_stage.p_vertex_input_state == other.shader_stage.p_vertex_input_state && shader_stage.p_vertex_shader == other.shader_stage.p_vertex_shader &&
-//                shader_stage.p_fragment_shader == other.shader_stage.p_fragment_shader &&
-//                shader_stage.GetMeshShader() == other.shader_stage.GetMeshShader() &&
-//                shader_stage.GetGeometryShader() == other.shader_stage.GetGeometryShader() &&
-//                shader_stage.GetAmplificationShader() == other.shader_stage.GetAmplificationShader() &&
-//                blend_state == other.blend_state && rasterizer_state == other.rasterizer_state &&
-//                depth_stencil_state == other.depth_stencil_state &&
-//                primitive_topology == other.primitive_topology &&
-//                b_depth_bound == other.b_depth_bound && multi_view_count == other.multi_view_count &&
-//                shading_rate == other.shading_rate &&
-//                b_has_fragment_density_attachments == other.b_has_fragment_density_attachments &&
-//                color_attachment_count == other.color_attachment_count &&
-//                color_attachment_formats == other.color_attachment_formats &&
-//                IsSameColorAttachmentArray(color_attachment_flags, other.color_attachment_flags) &&
-//                depth_stencil_format == other.depth_stencil_format &&
-//                IsSameDepthAttachmentInPSO(depth_stencil_flag, other.depth_stencil_flag) && subpass_settings == other.subpass_settings;
-//     }
-
-//     uint32_t CalcValidColorAttachmentCount() const {
-//         if (color_attachment_count > 0) {
-//             int32_t last_index = -1;
-//             for (int i = (int)color_attachment_count; i >= 0; i--) {
-//                 if (color_attachment_formats[i] != PF_UNDEFINED) {
-//                     last_index = i;
-//                     break;
-//                 }
-//             }
-//             return (uint32_t)(last_index + 1);
-//         }
-//         return color_attachment_count;
-//     }
-
-//     RHIShaderBoundStateInput shader_stage;
-//     RHIBlendStateRef         blend_state;
-//     RHIRasterizationStateRef rasterizer_state;
-//     RHIMultisampleStateRef   multisample_state;
-//     RHIDepthStencilStateRef  depth_stencil_state;
-
-//     EPrimitiveTopology primitive_topology;
-//     uint32_t           color_attachment_count;
-//     TAttachmentFormats color_attachment_formats;
-//     TAttachmentFlags   color_attachment_flags;
-//     EPixelFormat       depth_stencil_format;
-//     ETextureUsageFlags depth_stencil_flag;
-
-//     SubpassSettings subpass_settings;
-
-//     bool    b_depth_bound;
-//     uint8_t multi_view_count = 1;
-
-//     //for VSR
-//     bool                b_has_fragment_density_attachments;
-//     EVariousShadingRate shading_rate;
-
-//     uint64_t hash_key;
-// };
-
-//combine blend state, clear color, attachment formats, and attachment flags
 struct RHIColorAttachmentInfo {
     RHIBlendAttachmentInfo blend_state_info;
     RHIClearAttachment     clear_attachment;
@@ -2823,6 +2929,114 @@ public:
 
     bool finalized = false;
 };
+
+namespace Moer::Render {
+    struct VkPipelineHandle {
+        uint64_t handle;
+    };
+    struct D3DPipelineHandle {
+        uint64_t handle;
+    };
+    struct PipelineHandle {
+        std::variant<VkPipelineHandle, D3DPipelineHandle> handle;
+        Array<uint64>                                     binding_infos;
+        UnorderedMap<uint64, uint>                        hash_2_info_index;
+        int                                               constant_idx = -1;
+    };
+    struct SingleShaderInfo {
+        std::string_view        name;
+        std::string_view        entry_point;
+        Array<uint8>            shader_data;
+        EShaderType             shader_type;
+        ShaderParametersInfoMap shader_param_map;
+    };
+    struct ShaderVsGsPs {
+        SingleShaderInfo vs;
+        SingleShaderInfo gs;
+        SingleShaderInfo ps;
+    };
+    struct ShaderCs {
+        SingleShaderInfo cs;
+    };
+
+    struct ShaderVsPs {
+        SingleShaderInfo vs;
+        SingleShaderInfo ps;
+    };
+
+    struct ShaderMsPs {
+        SingleShaderInfo ms;
+        SingleShaderInfo ps;
+    };
+
+    struct ShaderTsMsPs {
+        SingleShaderInfo ts;
+        SingleShaderInfo ms;
+        SingleShaderInfo ps;
+    };
+
+    struct ShaderDispatch {
+        SingleShaderInfo cs;
+    };
+
+    struct ShaderRT {
+        Array<SingleShaderInfo> raygen;
+        Array<SingleShaderInfo> miss;
+        Array<SingleShaderInfo> hit;
+        Array<SingleShaderInfo> closesthit;
+        Array<SingleShaderInfo> callable;
+    };
+
+    using ShaderOutputGroup = std::variant<ShaderVsGsPs, ShaderVsPs, ShaderMsPs, ShaderTsMsPs, ShaderDispatch, ShaderRT>;
+    struct PipelineShaderInfo {
+        ShaderOutputGroup       shader_group;
+        Array<std::string_view> layout_hash;
+    };
+    struct GfxPsoCreateInfo {
+        using RHIColorAttachmentInfoList = Moer::StaticArray<RHIColorAttachmentInfo, MAX_PASS_ATTACHMENT_COUNT>;
+        GfxPsoCreateInfo(
+            RHIRasterizeInfo              _rasterizer_info,
+            Array<RHIColorAttachmentInfo> _color_attachments_info,
+            RHIDepthStencilStateInfo      _depth_stencil_info,
+            EPixelFormat                  _depth_stencil_format               = PF_UNDEFINED,
+            EPrimitiveTopology            _primitive_topology                 = EPrimitiveTopology::TRIANGLE_LIST,
+            RHIMultisampleStateInfo       _multisample_info                   = RHIMultisampleStateInfo::Preset(),
+            uint8_t                       _multi_view_count                   = 1,
+            bool                          _b_has_fragment_density_attachments = false,
+            EVariousShadingRate           _shading_rate                       = EVariousShadingRate::VSR_1_1x1)
+            : rasterizer_info(std::move(_rasterizer_info)),
+              multisample_info(std::move(_multisample_info)),
+              depth_stencil_info(std::move(_depth_stencil_info)),
+              primitive_topology(_primitive_topology),
+              color_attachments_info(_color_attachments_info),
+              color_attachment_count(_color_attachments_info.size()),
+              depth_stencil_format(_depth_stencil_format),
+              multi_view_count(_multi_view_count),
+              b_has_fragment_density_attachments(_b_has_fragment_density_attachments),
+              shading_rate(_shading_rate),
+              hash_key(0) {}
+
+        RHIRasterizeInfo rasterizer_info;
+
+        RHIMultisampleStateInfo  multisample_info;
+        RHIDepthStencilStateInfo depth_stencil_info;
+
+        EPrimitiveTopology primitive_topology;
+
+        EPixelFormat                  depth_stencil_format;
+        Array<RHIColorAttachmentInfo> color_attachments_info;
+
+        uint32_t color_attachment_count;
+
+        uint8_t multi_view_count = 1;
+
+        //for VSR
+        bool                b_has_fragment_density_attachments;
+        EVariousShadingRate shading_rate;
+
+        uint64_t hash_key;
+    };
+};// namespace Moer::Render
 class RHIRTPsoInfo {
 protected:
     uint64_t hash_ray_gen;
@@ -3138,6 +3352,28 @@ struct RHIRenderPassInfo {
         return target;
     };
 };
+namespace Moer::Render {
+    struct ColorAttachment {
+
+        Texture*          target;
+        EAttachmentAction action = AC_CLEAR_STORE;
+        float4            clear_color;
+    };
+
+    struct DepthAttachment {
+        Texture*          target{};
+        EAttachmentAction action = AC_DS_CLEAR_STORE;
+        float             clear_depth;
+        uint              clear_stencil;
+        bool              Valid() const { return target != nullptr; }
+    };
+    struct RenderPassInfo {
+        Array<ColorAttachment> color_attachments;
+        DepthAttachment        depth_attachment;
+        Rect2D                 render_area;
+        uint                   viewport_cnt = 1;
+    };
+}// namespace Moer::Render
 
 #pragma endregion
 

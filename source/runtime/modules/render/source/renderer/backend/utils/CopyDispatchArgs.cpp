@@ -51,8 +51,8 @@ namespace Moer {
 
                 auto src_handle    = rg.ImportIfNotExist(_src_name, _src_buffer->GetBuffer());
                 auto target_handle = rg.ImportIfNotExist(_target_name, _target->GetBuffer());
-                _builder.ReadBuffer(src_handle, EBufferLayout::READ);
-                _builder.WriteBuffer(target_handle, EBufferLayout::WRITE); }, [&_context, _src_buffer, _target, _src_offset, _dst_offset, _group_size](RenderPassContext& _pass_context) {
+                _builder.ReadBuffer(src_handle, EBufferRuntimeUsageFlags::READ);
+                _builder.WriteBuffer(target_handle, EBufferRuntimeUsageFlags::WRITE); }, [&_context, _src_buffer, _target, _src_offset, _dst_offset, _group_size](RenderPassContext& _pass_context) {
                 auto& cmd_list = *_pass_context.cmd_list;
                 CopyDispatchArgsShader::Parameters params;
                 params.args.src_offset = _src_offset;

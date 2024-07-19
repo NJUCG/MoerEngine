@@ -58,6 +58,10 @@ ShaderCompilerOutput* ShaderCompiler::Compile(const ShaderCompilerInput& input) 
     return compiler->Compile(input);
 }
 
+ShaderCompilerOutput ShaderCompiler::Compile(ShaderCompilerInput&& _input) {
+    return compiler->Compile(std::move(_input));
+}
+
 struct ShaderCompileBatch {
 
     Moer::Array<ShaderCompilerInput>   inputs;

@@ -12,6 +12,7 @@
 #include "MMemory.h"
 #include <memory>
 #include "m_vector/m_vector.h"
+#include <deque>
 
 #if USE_MIMALLOC
 // #if 0
@@ -48,6 +49,15 @@ namespace Moer {
 
     template<typename T, class Deleter = MoerDeleter>
     using UniquePtr = std::unique_ptr<T, Deleter>;
+
+    template<typename T>
+    using DEQueue = std::deque<T, m_defualt_allocator<T>>;
+
+    template<typename T, typename... Args>
+        requires std::is_constructible_v<T, Args...>
+    constexpr UniquePtr<T> MakeUnique(Args&&... _args) {
+        return UniquePtr<T>(MoerNew(T)(std::forward<Args>(_args)...));
+    }
 
     template<typename T>
     constexpr bool StringEqual(const T& a, const T& b) {

@@ -4,127 +4,155 @@
 #include "misc/STL.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIResource.h"
+#include "rhi/RHIResourceInitilizer.h"
+#include "shader/ShaderPipeline.h"
+#include "shader/ShaderResourceManager.h"
+#include "RHIImpl.h"
 RHICommandListBase::RHICommandListBase() {
 }
 RHICommandListBase::~RHICommandListBase() {
 }
+namespace Moer::Render {
 
-namespace Moer {
-    struct SubmitBundleInfo {
-        RHICommandListBase* cmd_list;
-        RHISubmitInfo       submit_info;
-    };
-    class CommandListManager {
-        friend class RHICommandList;
+    void CommandQueue::Test() {
+        RenderDevice* device;
+        ShaderManager manager(*device);
 
-    public:
-        struct FrameCommandContext {
-            Moer::Array<SubmitBundleInfo> submit_bundles;
-            void                          ExecuteCommandLists() {
-            }
-        };
-        CommandListManager() {
-        }
-        ~CommandListManager() {
-        }
+        GfxPsoCreateInfo pso_info(RHIRasterizeInfo::Preset(),
+                                  {},
+                                  RHIDepthStencilStateInfo::Preset());
 
-    private:
-        //do they need to be thread local?
-        Moer::Array<RHIGraphicsCommandList*> graphics_cmd_lists;
-        Moer::Array<RHIComputeCommandList*>  compute_cmd_lists;
-        Moer::Array<RHICopyCommandList*>     copy_cmd_lists;
-
-        RHICommandQueue* graphics_queue;
-        RHICommandQueue* compute_queue;
-        RHICommandQueue* copy_queue;
-    };
-    RHICommandList::RHICommandList() {
+        GBufferLayout layout = manager.Raster()
+                                   .Vertex("")
+                                   .Pixel("")
+                                   .Build<GBufferLayout>(std::move(pso_info));
+        layout.SetArgs(
+            RHIBufferRef(), RHIBufferRef(), RHIBufferRef(), RHIBufferRef(), RHITextureRef(), RHITextureRef(), GBufferLayout::Constant{});
+        CommandList  cmd_list;
+        MeshDrawData draw_data;
+        auto&&       draw_dispatcher = cmd_list.Gfx(layout, {}, std::move(draw_data));
+        draw_dispatcher.Draw(3, 1, 0, 0, 0);
     }
-    struct RHICommandList::Impl {
-        Impl() {
+
+    CommandList::CommandList() {
+    }
+    void CommandList::ArgSetter::SetBuffer(uint64 _index, BufferView _buffer) {
+        auto idx          = handle.GetBindingIdx(_index);
+        temp_args[_index] = _buffer;
+    }
+
+    void CommandList::ArgSetter::SetTexture(uint64 _index, TextureView _texture) {
+        auto idx          = handle.GetBindingIdx(_index);
+        temp_args[_index] = _texture;
+    }
+
+    void CommandList::ArgSetter::SetConstant(void* _data, uint _size) {
+        temp_constant.resize(_size);
+        std::memcpy(temp_constant.data(), _data, _size);
+    }
+
+    void CommandList::DrawDispatcher::SubmitArgsIfPossible() {
+        if (HasParams()) {
+            cmd_list.SubmitArgs(pso, arg_setter.StealArgs());
         }
-        ~Impl() {
+        if (b_set_consts) {
+            cmd_list.SubmitConstants(pso, arg_setter.StealConstants());
         }
-        void SetViewport(const RHIViewport& _viewport) {
-        }
+        b_set_params = false;
+        b_set_consts = false;
+    }
 
-        void SetBatchedShaderParmeters(RHIBatchedShaderParameters _params) {
-        }
+    CommandList::ComputeDispatcher::ComputeDispatcher(
+        ComputePipeline& _pso,
+        CommandList&     _cmd_list,
+        ArrayArguments&& _args)
+        : cmd_list(_cmd_list), pso(_pso), arg_setter(_pso) {
+        cmd_list.commands.push_back(MakeUnique<SetParamsCmd>(_pso, std::move(_args)));
+    }
 
-        void SetPSO(RHIGraphicsPipelineState* _graphics_pso){
+    void CommandList::ComputeDispatcher::Dispatch(uint3 _group_count) {
+        SubmitArgsIfPossible();
+        cmd_list.commands.push_back(MakeUnique<DispatchCmd>(_group_count));
+    }
 
-        };
+    void CommandList::ComputeDispatcher::DispatchIndirect(BufferView _indirect) {
+        SubmitArgsIfPossible();
+        cmd_list.commands.push_back(MakeUnique<DispatchCmd>(_indirect));
+    }
 
-        void SetPSO(RHIComputePso* _compute_pso){
+    CmdSubmit CommandList::Submit() {
+        CmdSubmit submit{std::move(commands)};
+        return std::move(submit);
+    }
 
-        };
+    void
+    CommandList::CopyFrom(BufferView _src, BufferView _dst) {
+        commands.push_back(MakeUnique<CopyBufferCmd>(
+            reinterpret_cast<uint64>(_src.GetBuffer()),
+            reinterpret_cast<uint64>(_dst.GetBuffer()),
+            _src.byte_offset,
+            _dst.byte_offset,
+            _src.GetByteSize()));
+    }
+    void CommandList::CopyFrom(TextureView _src, TextureView _dst) {
+        commands.push_back(MakeUnique<CopyTextureCmd>(
+            _src.texture->GetFormat(),
+            reinterpret_cast<uint64>(_src.texture),//reinterpret_cast<uint64
+            reinterpret_cast<uint64>(_dst.texture),
+            _src.mip_level,
+            _dst.mip_level,
+            _src.offset,
+            _dst.offset,
+            _src.extent));
+    }
+    void CommandList::CopyFrom(TextureView _src, BufferView _dst) {
 
-        void DrawIndexedInstanced(
-            uint32_t _index_count,
-            uint32_t _instance_count,
-            uint32_t _start_index_location,
-            uint32_t _start_vertex_location,
-            uint32_t _start_instance_location){
+        commands.push_back(MakeUnique<CopyTextureToBufferCmd>(
+            _src.texture->GetFormat(),
+            reinterpret_cast<uint64>(_src.texture),
+            reinterpret_cast<uint64>(_dst.GetBuffer()),
+            _src.offset,
+            _dst.byte_offset,
+            _src.extent,
+            _src.mip_level));
+    }
+    void CommandList::CopyFrom(BufferView _src, TextureView _dst) {
+        commands.push_back(MakeUnique<CopyBufferToTextureCmd>(
+            _dst.texture->GetFormat(),
+            reinterpret_cast<uint64>(_src.GetBuffer()),
+            reinterpret_cast<uint64>(_dst.texture),
+            _src.byte_offset,
+            _dst.offset,
+            _dst.extent,
+            _dst.mip_level));
+    }
 
-        };
+    void CommandList::BeginRenderPass(PipelineHandle& _handle, RenderPassInfo&& _info, MeshDrawData&& _mesh_data) {
+        commands.push_back(MakeUnique<SetDrawStateCmd>(_handle, std::move(_info), std::move(_mesh_data.vertex_buffers), _mesh_data.index_buffer));
+    }
 
-        void DrawIndexedIndirect(
-            RHIBuffer* _argument_buffer,
-            uint64_t   _arg_offset,
-            RHIBuffer* _count_buffer,
-            uint64_t   _count_buffer_offset,
-            uint32_t   _max_draw_count,
-            uint32_t   _stride);
+    void CommandList::SubmitArgs(ShaderPipeline& _pso, Arguments&& _args) {
+        commands.push_back(MakeUnique<SetParamsCmd>(_pso, std::move(_args)));
+    }
 
-        void Dispatch(Moer::Vector3i _group_count) {
-            Dispatch(_group_count.x, _group_count.y, _group_count.z);
-        }
-        void Dispatch(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z){
+    void CommandList::SubmitConstants(ShaderPipeline& _pso, Array<uint>&& _constants) {
+        commands.push_back(MakeUnique<SetConstantCmd>(_pso, std::move(_constants)));
+    }
 
-        };
+    void CommandList::DrawDispatcher::Draw(uint32 _index_cnt, uint32 _instance_count, uint _vertex_offset, uint32 _first_vertex, uint32 _first_instance) {
+        SubmitArgsIfPossible();
+        DrawCmd cmd = DrawIndexedCmd{_index_cnt, _instance_count, _first_vertex, _vertex_offset, _first_instance};
+        cmd_list.commands.push_back(MakeUnique<RenderCmd>(cmd));
+    }
 
-        void DispatchIndirect(RHIBuffer* _buffer, uint64_t _offset);
+    void CommandList::DrawDispatcher::DrawIndirect(
+        BufferView _indirect,
+        BufferView _counter,
+        uint       _stride,
+        uint       _draw_count) {
+        SubmitArgsIfPossible();
+        DrawCmd cmd = DrawIndirectCmd{_indirect, _counter, _draw_count, _stride};
+        cmd_list.commands.push_back(MakeUnique<RenderCmd>(cmd));
+    }
 
-        void CopyBufferFrom(RHIBuffer* _src, RHIBuffer* _dst, uint64_t _src_offset, uint64_t _dst_offset, uint64_t _size) {
-        }
-
-        void CopyBufferFrom(RHIBuffer* _src, void* data, uint64_t _size) {
-        }
-
-        void CopyBufferTo(RHIBuffer* _src, void* data, uint64_t _size) {
-        }
-
-        void CopyTexture(const RHICopyTextureInfo& _copy_info, RHITexture* _src, RHITexture* _dst){};
-        void CopyBufferToTexture(const RHICopyBufferToTextureInfo& _info, RHIBuffer* src_buffer, RHITexture* dst_texture){};
-
-        void CopyTextureToBuffer(const RHICopyTextureToBufferInfo& _info, RHITexture* src_texture, RHIBuffer* dst_buffer){};
-
-        //To resolve a multi-sample color texture to a non-multisample color texture
-        void ResolveTexture(const RHIResolveTextureInfo& _resolve_info, RHITexture* _src, RHITexture* _dst){};
-
-        void SetPipelineBarrier(const RHIBarrierDependencyInfo& _dependency){};
-
-        void SetScissor(const Rect2D& _scissor){};
-
-        void BindVertexBuffers(
-            uint32_t                   _start_offset,
-            const Array<RHIBufferRef*> _vertex_buffers,
-            const Array<uint32_t>      _offsets){};
-
-        void BindIndexBuffer(
-            const RHIBuffer*  p_index_buffer,
-            uint32_t          _offset,
-            EIndexElementType _type){};
-
-        void SetAttachments() {
-        }
-
-        void BeginRenderPass(const RHIRenderPassInfo& _pass_info, const char* _pass_name){};
-        void EndRenderPass(){};
-        //raw cmd lists
-        Moer::Array<RHIGraphicsCommandList*> graphics_cmd_lists;
-        RHIComputeCommandList*               compute_cmd_list;
-        RHICopyCommandList*                  copy_cmd_list;
-    };
-
-}// namespace Moer
+}// namespace Moer::Render

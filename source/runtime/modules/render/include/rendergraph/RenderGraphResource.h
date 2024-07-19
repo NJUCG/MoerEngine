@@ -40,7 +40,7 @@ namespace Moer {
 
     class RENDER_API RenderGraphBuffer : public RenderGraphResource {
     public:
-        using Usage = EBufferLayout;
+        using Usage = EBufferRuntimeUsageFlags;
         struct Descriptor {
             uint32_t size;
             Usage    usage;

@@ -8,15 +8,15 @@
 #include "misc/STL.h"
 
 #include <vulkan/vulkan_core.h>
+namespace Moer::Render {
+    class VulkanDeviceExtension;
 
-class VulkanDeviceExtension;
-
-using TVulkanDeviceExtensionArray      = Moer::Array<std::shared_ptr<VulkanDeviceExtension>>;
-using TExtensionArray                  = Moer::Array<std::string>;
-using TExtensionPropsArray             = Moer::Array<VkExtensionProperties>;
-using TLayerArray                      = Moer::Array<std::string>;
-using TQueueFamilyPropertiesArray      = Moer::Array<VkQueueFamilyProperties>;
-using TDescriptorSetLayoutBindingArray = Moer::Array<VkDescriptorSetLayoutBinding>;
-using TDescriptorCountMap              = Moer::UnorderedMap<VkDescriptorType, uint32_t>;
-
+    using TVulkanDeviceExtensionArray      = Moer::Array<std::shared_ptr<VulkanDeviceExtension>>;
+    using TExtensionArray                  = Moer::Array<std::string>;
+    using TExtensionPropsArray             = Moer::Array<VkExtensionProperties>;
+    using TLayerArray                      = Moer::Array<std::string>;
+    using TQueueFamilyPropertiesArray      = Moer::Array<VkQueueFamilyProperties>;
+    using TDescriptorSetLayoutBindingArray = Moer::Array<VkDescriptorSetLayoutBinding>;
+    using TDescriptorCountMap              = Moer::UnorderedMap<VkDescriptorType, uint32_t>;
+}// namespace Moer::Render
 #endif//VULKAN_TYPEDEFS_H

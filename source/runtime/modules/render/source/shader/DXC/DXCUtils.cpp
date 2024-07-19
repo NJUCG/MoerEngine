@@ -3,10 +3,9 @@
 #include "platform/Platform.h"
 #include <format>
 #include "shader/ShaderCommon.h"
-#include "wsl/wrladapter.h"
-#include "dxguids/dxguids.h"
+#include "spirv_reflect.h"
 
-EShaderParameterType ToShaderParameterType(SpvReflectResourceType _type) {
+EShaderParameterType ToShaderParameterType(SpvReflectResourceType _type, SpvReflectDescriptorType _desc_type) {
     switch (_type) {
 
         case SPV_REFLECT_RESOURCE_FLAG_UNDEFINED:
@@ -14,10 +13,18 @@ EShaderParameterType ToShaderParameterType(SpvReflectResourceType _type) {
         case SPV_REFLECT_RESOURCE_FLAG_SAMPLER:
             return EShaderParameterType::SAMPLER;
         case SPV_REFLECT_RESOURCE_FLAG_CBV:
-            return EShaderParameterType::CBV;
+            if (_desc_type == SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
+                return EShaderParameterType::CBUFFER;
+
         case SPV_REFLECT_RESOURCE_FLAG_SRV:
-            return EShaderParameterType::SRV;
+            if (_desc_type == SPV_REFLECT_DESCRIPTOR_TYPE_SAMPLED_IMAGE || _desc_type == SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+                return EShaderParameterType::TEXTURE;
+
+            if (_desc_type == SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_BUFFER)
+                return EShaderParameterType::CBUFFER;
+            break;
         case SPV_REFLECT_RESOURCE_FLAG_UAV:
+
             return EShaderParameterType::UAV;
             break;
     }
@@ -77,7 +84,7 @@ EShaderParameterType BindingTypeToParameterType(EShaderBindingBaseType _type) {
     }
     return EShaderParameterType::Num;
 }
-const WCHAR* GetShaderTypeWChar(EShaderType _type) {
+const auto* GetShaderTypeWChar(EShaderType _type) {
     switch (_type) {
         case ST_VERTEX:
             return L"vs";
@@ -109,7 +116,7 @@ const WCHAR* GetShaderTypeWChar(EShaderType _type) {
     return L"";
 }
 
-const WCHAR* GetShaderModel(EShaderPlatform _type) {
+const auto* GetShaderModel(EShaderPlatform _type) {
     switch (_type) {
 
         case SP_WIN_D3D_SM6:
@@ -121,9 +128,9 @@ const WCHAR* GetShaderModel(EShaderPlatform _type) {
     return L"";
 }
 std::wstring GetPlatform(EShaderType _type, EShaderPlatform _platform) {
-    const WCHAR* type     = GetShaderTypeWChar(_type);
-    const WCHAR* platform = GetShaderModel(_platform);
-    auto         k        = std::format(L"{}_{}", type, platform);
+    const auto* type     = GetShaderTypeWChar(_type);
+    const auto* platform = GetShaderModel(_platform);
+    auto        k        = std::format(L"{}_{}", type, platform);
     return k;
 }
 

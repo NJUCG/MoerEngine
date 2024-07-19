@@ -52,7 +52,7 @@ private:
 
     void Compile(const ShaderCompilerInput& _input, ShaderCompilerOutput& _output);
 
-    void ReflectSPIRV(ComPtr<IDxcResult> result, const ShaderParametersMetadata* _meta_param, Moer::UnorderedMap<std::string, ParameterInfo>& _param_map);
+    void ReflectSPIRV(ComPtr<IDxcResult> result, const ShaderParametersMetadata* _meta_param, ShaderParametersInfoMap& _param_map);
 };
 
 DXCompiler::Impl::Impl() {
@@ -261,15 +261,14 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
             }
         }
 
-        Moer::UnorderedMap<std::string, ParameterInfo> param_map;
         if (_input.target_info.shader_platform == SP_VULKAN_SM6) {
-            ReflectSPIRV(result, _input.param_meta_data, param_map);
+            ReflectSPIRV(result, _input.param_meta_data, _output.parameter_map);
         } else {
             //reflect dx12
             assert(false && "dx reflect not implemented");
         }
 
-        auto fill_succuss_data = [&_output, &param_map, &last_write_time, &file_path, &result, &file_data, &_input]() {
+        auto fill_succuss_data = [&_output, &last_write_time, &file_path, &result, &file_data, &_input]() {
             IDxcBlob* code;
             result->GetResult(&code);
             const uint8_t* data = (uint8_t*)code->GetBufferPointer();
@@ -280,9 +279,7 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
             _output.b_succeeded      = true;
             _output.shader_name_hash = _input.shader_name_hash;
             _output.compiled_hash.FromData(data, size);
-            _output.mutation_id = _input.mutation_id;
-
-            _output.parameter_map.param_map.swap(param_map);
+            _output.mutation_id                 = _input.mutation_id;
             _output.target_info                 = _input.target_info;
             _output.cached                      = false;
             _output.source_file_last_write_time = last_write_time.time_since_epoch().count();
@@ -296,6 +293,12 @@ ShaderCompilerOutput* DXCompiler::Compile(const ShaderCompilerInput& _input) {
     auto* output_ptr = MoerNew(ShaderCompilerOutput)();
     impl->Compile(_input, *output_ptr);
     return output_ptr;
+}
+
+ShaderCompilerOutput DXCompiler::Compile(ShaderCompilerInput&& _input) {
+    ShaderCompilerOutput output;
+    impl->Compile(_input, output);
+    return std::move(output);
 }
 
 bool DXCompiler::IsSupportTarget(const ShaderTargetInfo& _target_info) {
@@ -351,7 +354,7 @@ bool LoadCache(long long _last_write_time, const ShaderCompilerInput& input, Sha
     return false;
 }
 
-void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> result, const ShaderParametersMetadata* _meta_param, Moer::UnorderedMap<std::string, ParameterInfo>& _param_map) {
+void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> result, const ShaderParametersMetadata* _meta_param, ShaderParametersInfoMap& _param_map) {
     IDxcBlob* code;
     result->GetResult(&code);
     const uint8_t* data = (uint8_t*)code->GetBufferPointer();
@@ -370,6 +373,7 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> result, const ShaderParam
     Moer::UnorderedMap<std::string, ParameterInfo>
                                     param_map;
     const ShaderParametersMetadata* meta_data = _meta_param;
+
     for (uint32_t binding_index = 0; binding_index < reflect_module.descriptor_binding_count; ++binding_index) {
         auto& binding = reflect_module.descriptor_bindings[binding_index];
         auto& param   = param_map[binding.name];
@@ -377,7 +381,8 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> result, const ShaderParam
         param.space   = binding.set;
         param.type    = ToShaderParameterType(binding.resource_type);
         param.stage |= ToPipelineStageFlag(reflect_module.shader_stage);
-        param.num = binding.count;
+        param.type_flags = binding.resource_type | binding.descriptor_type << 4u;
+        param.num        = binding.count;
     }
     for (uint32_t push_constant_index = 0; push_constant_index < reflect_module.push_constant_block_count; ++push_constant_index) {
         auto& push_constant = reflect_module.push_constant_blocks[push_constant_index];
@@ -386,7 +391,8 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> result, const ShaderParam
         param.space         = -1;
         param.type          = EShaderParameterType::CONSTANT_STRUCT;
         param.stage |= ToPipelineStageFlag(reflect_module.shader_stage);
-        param.num = push_constant.size;
+        param.type_flags = push_constant.padded_size | 1u << 20u;
+        param.num        = push_constant.size;
     }
     const auto&              members = meta_data->GetMembers();
     Moer::Array<std::string> error_msgs;
@@ -429,6 +435,7 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> result, const ShaderParam
         // assert(false && "shader reflection error");
     }
 #endif
-    _param_map.swap(param_map);
+    _param_map.param_map.swap(param_map);
+    _param_map.space_cnt = reflect_module.descriptor_set_count;
     spvReflectDestroyShaderModule(&reflect_module);
 }

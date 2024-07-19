@@ -14,6 +14,8 @@ struct ShaderCompiledFile {
 class IShaderCompiler {
 public:
     virtual ShaderCompilerOutput* Compile(const ShaderCompilerInput& input) = 0;
+
+    virtual ShaderCompilerOutput Compile(ShaderCompilerInput&& _input) = 0;
     /**
      * @brief Return If support target platform or shader type
      * 
@@ -46,6 +48,8 @@ public:
     * @param output ShaderCompilerOutput: output shader code, error messages and param data bindings
     */
     static ShaderCompilerOutput* Compile(const ShaderCompilerInput& input);
+
+    static ShaderCompilerOutput Compile(ShaderCompilerInput&& _input);
 
 private:
     static IShaderCompiler* compiler;

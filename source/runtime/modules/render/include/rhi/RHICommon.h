@@ -7,6 +7,8 @@
 #include "RenderAPI.h"
 #include "math/Base.h"
 #include "misc/EnumBitOperation.h"
+#include "misc/STL.h"
+#include "misc/Traits.h"
 #pragma region CommonEnums
 /** Maximum number of miplevels in a texture. */
 enum { MAX_TEXTURE_MIP_COUNT = 0xff };
@@ -147,7 +149,7 @@ struct Extent3D {
     }
     Extent3D() : x(0), y(0), z(0) {
     }
-    Extent3D(const Extent2D& _v, uint32_t _z = 0) : x(_v.x), y(_v.y), z(_z) {
+    Extent3D(const Extent2D& _v, uint32_t _z = 1u) : x(_v.x), y(_v.y), z(_z) {
     }
     bool operator==(const Extent3D& other) const {
         return x == other.x && y == other.y && z == other.z;
@@ -446,6 +448,7 @@ enum ERHIResourceType {
     RRT_GLOBAL_BUFFER,
     RRT_BUFFER,
     RRT_TEXTURE,
+    RRT_DEPTH,
     RRT_ATTACHMENT_VIEW,
     RRT_TEXTURE_REFERENCE,
     RRT_TimestampCalibrationQuery,
@@ -608,8 +611,8 @@ enum ETextureLayout : uint32_t {
     TEXTURE_LAYOUT_Num
 };
 
-enum EBufferLayout : uint32_t {
-    UNDEFINED_LAYOUT       = 0,
+enum EBufferRuntimeUsageFlags : uint32_t {
+    UNDEFINED              = 0,
     NO_CHAGNE              = 1 << 0,
     READ                   = 1 << 1,
     WRITE                  = 1 << 2,
@@ -628,7 +631,7 @@ enum class EPassType {
     Copy
 };
 
-ENUM_BIT_OP_IMPL(EBufferLayout, FLAG)
+ENUM_BIT_OP_IMPL(EBufferRuntimeUsageFlags, FLAG)
 
 #pragma endregion
 enum EShaderType : uint8_t {
@@ -901,6 +904,82 @@ ENUM_STR_ELEMENT(SP_WIN_D3D_SM6)
 ENUM_STR_ELEMENT(SP_VULKAN_SM6)
 END_ENUM_STR_DEFINITION(EShaderPlatform)
 static_assert(SP_Num < (1 << SP_NumBits) && "");
+
+/**
+ * @brief Binding Parameter Enum
+ * 
+ */
+enum class EShaderParameterType : uint8_t {
+    UNKNOWN,
+    CONSTANT_STRUCT,
+    CBV,
+    SAMPLER,
+    SRV,
+    UAV,
+
+    BINDLESS_RESOURCE_INDEX,
+    BINDLESS_SAMPLER_INDEX,
+
+    TEXTURE,
+    RWTEXTURE,
+    RWBUFFER,
+    CBUFFER,
+
+    Num,
+    NumBits = 4
+};
+inline bool IsParameterResource(EShaderParameterType _base_type) {
+
+    switch (_base_type) {
+
+        case EShaderParameterType::CBV:
+        case EShaderParameterType::SAMPLER:
+        case EShaderParameterType::SRV:
+        case EShaderParameterType::UAV:
+            return true;
+        case EShaderParameterType::BINDLESS_RESOURCE_INDEX:
+        case EShaderParameterType::BINDLESS_SAMPLER_INDEX:
+        default: break;
+    }
+    return false;
+}
+BEGIN_ENUM_STR_DEFINITION(EShaderParameterType)
+
+ENUM_STR_ELEMENT(UNKNOWN)
+ENUM_STR_ELEMENT(CBV)
+ENUM_STR_ELEMENT(SAMPLER)
+ENUM_STR_ELEMENT(SRV)
+ENUM_STR_ELEMENT(UAV)
+ENUM_STR_ELEMENT(BINDLESS_RESOURCE_INDEX)
+ENUM_STR_ELEMENT(BINDLESS_SAMPLER_INDEX)
+END_ENUM_STR_DEFINITION(EShaderParameterType)
+struct ParameterInfo {
+    // source pipeline stage
+    ERHIPipelineStageFlags stage{ERHIPipelineStageFlags::PS_NONE};
+    // slot in dx12 while binding in Vulkan
+    int8_t slot = -1;
+    // space in dx12 while set in Vulkan
+    int8_t space = -1;
+    // array size, invalid for root cbv
+    int8_t num = 0;
+    // parameter type enum
+    EShaderParameterType type{EShaderParameterType::Num};
+    Moer::uint           type_flags = 0;
+};
+
+struct ShaderParametersInfoMap {
+    friend class ShaderCompiler;
+    friend class DXCompiler;
+
+public:
+    const Moer::UnorderedMap<std::string, ParameterInfo>& GetShaderParameterInfoMap() const {
+        return param_map;
+    }
+
+    // private:
+    Moer::UnorderedMap<std::string, ParameterInfo> param_map;
+    Moer::uint                                     space_cnt;
+};
 #pragma endregion
 
 enum class ECommandQueueType {

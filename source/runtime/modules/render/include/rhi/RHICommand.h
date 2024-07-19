@@ -6,6 +6,8 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "RenderAPI.h"
+#include "shader/ShaderPipeline.h"
+#include <variant>
 
 class Shader;
 
@@ -188,9 +190,9 @@ public:
 class RHIRayTracingCommandList : public RHICommandListBase {
 public:
     virtual ~RHIRayTracingCommandList(){};
-    virtual void SetPipelineState(RHIRTPso* _raytracing_pso)                   = 0;
-    virtual void TraceRay(uint32_t _width, uint32_t _height, uint32_t _depth)  = 0;
-    virtual void TraceRayIndirect()                                            = 0;
+    virtual void SetPipelineState(RHIRTPso* _raytracing_pso)                  = 0;
+    virtual void TraceRay(uint32_t _width, uint32_t _height, uint32_t _depth) = 0;
+    virtual void TraceRayIndirect()                                           = 0;
 
     virtual void CopyBuffer(const RHICopyBufferInfo& _copy_info, RHIBuffer* _src, RHIBuffer* _dst)                              = 0;
     virtual void CopyTexture(const RHICopyTextureInfo& _copy_info, RHITexture* _src, RHITexture* _dst)                          = 0;
@@ -264,15 +266,264 @@ public:
     struct Impl;
 };
 
-namespace Moer {
-    //used for main thread recording cmds
-    class RHICommandList {
+namespace Moer::Render {
+    enum class EQueueType {
+        Graphics,
+        Compute,
+        Copy
+    };
+    struct Command {
     public:
-        RHICommandList();
-        struct Impl;
+        enum class EType {
+            UploadBuffer,
+            CopyBackBuffer,
+            BufferToBuffer,
+            BufferToTexture,
+            TextureToBuffer,
+            UploadTexture,
+            TextureToTexture,
+            ShaderDispatch,
+            BuildAccel,
+            Barrier,
+            SetDrawState,
+            UpdateDrawState,
+            Draw,
+            SetParams,
+            SetConstants,
+            Dispatch,
+            Custom
+        };
 
     private:
-        Moer::UniquePtr<Impl> impl;
+        EType type;
+
+    public:
+        explicit Command(EType _type) : type(_type) {}
+        virtual ~Command()                      = default;
+        virtual EQueueType GetQueueType() const = 0;
+
+    public:
+        EType Type() const { return type; }
     };
-}// namespace Moer
+
+    template<typename TRenderTarget>
+    concept is_render_target = std::is_same_v<TRenderTarget, ColorAttachment>;
+
+    struct VertexBuffer {
+        Buffer* buffer;
+        uint    offset{0};
+    };
+    struct IndexBuffer {
+        BufferView        buffer;
+        EIndexElementType stride;
+    };
+    struct MeshDrawData {
+        Array<VertexBuffer> vertex_buffers;
+        IndexBuffer         index_buffer;
+    };
+    struct CmdSubmit {
+        Array<UniquePtr<Command>> cmds;
+        Array<Fence*>             wait_fences;
+        Array<uint64>             wait_values;
+        Array<Fence*>             signal_fences;
+        Array<uint64>             signal_values;
+        CmdSubmit&                Wait(Fence* _fence, uint64 _wait_value) {
+            wait_fences.push_back(_fence);
+            wait_values.push_back(_wait_value);
+            return *this;
+        }
+
+        CmdSubmit& Signal(Fence* _fence, uint64 _signal_value) {
+            signal_fences.push_back(_fence);
+            signal_values.push_back(_signal_value);
+            return *this;
+        }
+    };
+
+    class CommandList {
+    public:
+        struct ArgSetter {
+        public:
+            ArgSetter(ShaderPipeline& _handle) : handle(_handle) {
+            }
+            template<typename T>
+            void SetParam(std::string_view _name, T&& _param) {
+                if constexpr (std::is_same_v<T, BufferView>) {
+                    SetBuffer(std::hash<std::string_view>{}(_name), _param);
+                } else if constexpr (std::is_same_v<T, TextureView>) {
+                    SetTexture(std::hash<std::string_view>{}(_name), _param);
+                } else if constexpr (std::is_same_v<T, Buffer*>) {
+                    assert(_param && "buffer is nullptr");
+                    SetBuffer(std::hash<std::string_view>{}(_name), _param->GetView());
+                } else if constexpr (std::is_same_v<T, Texture*>) {
+
+                    assert(_param && "texture is nullptr");
+                    SetTexture(std::hash<std::string_view>{}(_name), _param->GetView());
+                } else {
+                    static_assert(false, "unsupported type");
+                }
+            }
+            template<typename T>
+            void SetConstant(T&& _param) {
+                SetConstant(&_param, sizeof(T));
+            }
+            Arguments&& StealArgs() {
+                return std::move(temp_args);
+            }
+            Array<uint>&& StealConstants() {
+                return std::move(temp_constant);
+            }
+
+        private:
+            void SetBuffer(uint64 _hash, BufferView _buffer);
+            void SetTexture(uint64 _hash, TextureView _texture);
+            void SetConstant(void*, uint _size);
+
+            Arguments       temp_args;
+            Array<uint>     temp_constant;
+            ShaderPipeline& handle;
+        };
+        struct DrawDispatcher {
+            DrawDispatcher(RasterPipeline& _pso, CommandList& _cmd_list);
+            DrawDispatcher& SetViewport(Vector4f);
+            DrawDispatcher& SetScissor(Rect2D);
+
+            template<typename T>
+            DrawDispatcher& SetParam(std::string_view _name, T&& _param) {
+                arg_setter.SetParam(_name, std::forward<T>(_param));
+                b_set_params = true;
+            }
+            template<typename T>
+            DrawDispatcher& SetConstant(T&& _param) {
+                arg_setter.SetConstant(std::forward<T>(_param));
+                b_set_consts = true;
+                return *this;
+            }
+
+            void Draw(
+                uint _vertex_count,
+                uint _instance_count,
+                uint _start_vertex_location,
+                uint _vertex_offset,
+                uint _start_instance_location);
+
+            void DrawIndirect(BufferView _indirect,
+                              BufferView _counter,
+                              uint       _stride,
+                              uint       _max_draw_count = 114514u);
+
+            RasterPipeline& pso;
+            CommandList&    cmd_list;
+
+        private:
+            void SubmitArgsIfPossible();
+
+            bool HasParams() const {
+                return b_set_params;
+            }
+            ArgSetter arg_setter;
+            bool      b_set_params = false;
+            bool      b_set_consts = false;
+        };
+        struct ComputeDispatcher {
+            void Dispatch(Vector2ui _group_count) {
+                Dispatch(uint3(_group_count, 1));
+            }
+            void Dispatch(Vector3ui _group_count);
+            void Dispatch(uint _group_cnt) {
+                Dispatch(Vector3ui(_group_cnt, 1, 1));
+            }
+            void DispatchIndirect(BufferView);
+            ComputeDispatcher(ComputePipeline& _pso, CommandList& _cmd_list, ArrayArguments&& _args);
+            template<typename T>
+            ComputeDispatcher& SetParam(std::string_view _name, T&& _param) {
+                arg_setter.SetParam(_name, std::forward<T>(_param));
+                b_set_params = true;
+                return *this;
+            }
+            template<typename T>
+            ComputeDispatcher& SetConstant(T&& _param) {
+                arg_setter.SetConstant(std::forward<T>(_param));
+                b_set_consts = true;
+                return *this;
+            }
+            ComputePipeline& pso;
+            CommandList&     cmd_list;
+
+        private:
+            void SubmitArgsIfPossible();
+
+            bool HasParams() const {
+                return b_set_params;
+            }
+            ArgSetter arg_setter;
+            bool      b_set_params = false;
+            bool      b_set_consts = false;
+        };
+        friend class VkCommandQueue;
+
+        using Dispatcher = std::variant<DrawDispatcher, ComputeDispatcher>;
+
+    public:
+        CommandList();
+        class Impl;
+        void Dispose();
+        template<typename TGfxPso, typename... TRenderTarget>
+        DrawDispatcher Gfx(TGfxPso& _pso, Rect2D _rect, MeshDrawData&& _mesh_data, TRenderTarget&&... _render_targets) {
+            RenderPassInfo pass_info(
+                _rect,
+                {std::forward<TRenderTarget>(_render_targets)...});
+            BeginRenderPass(_pso.handle, std::move(pass_info), std::move(_mesh_data));
+            DrawDispatcher dispatcher(_pso, *this);
+
+            return dispatcher;
+        }
+
+        template<typename TGfxPso, typename... TRenderTarget>
+        DrawDispatcher Gfx(TGfxPso& _pso, Rect2D _rect, MeshDrawData&& _mesh_data, TRenderTarget&&... _render_targets, DepthAttachment _depth) {
+            RenderPassInfo pass_info(
+                _rect,
+                {std::forward<TRenderTarget>(_render_targets)...},
+                _depth);
+            BeginRenderPass(_pso.handle, std::move(pass_info), std::move(_mesh_data));
+            DrawDispatcher dispatcher(_pso, *this);
+            return dispatcher;
+        }
+
+        template<typename TComputePso, typename... TArgs>
+        ComputeDispatcher Compute(TComputePso& _pso, TArgs&&... _args) {
+            ArrayArguments&& args = std::move(_pso.SetArgs());
+            return ComputeDispatcher(_pso, *this, std::move(args));
+        };
+
+        void CopyFrom(BufferView _src, BufferView _dst);
+        void CopyFrom(TextureView _src, TextureView _dst);
+        void CopyFrom(TextureView _src, BufferView _dst);
+        void CopyFrom(BufferView _src, TextureView _dst);
+        void CopyFrom(std::span<byte> _data, BufferView _dst);
+        void CopyFrom(std::span<byte> _data, TextureView _dst);
+
+        void TransitionTexture(TextureView _tex, ETextureStateFlags _dst_state, EPassType _pass);
+        void TransitionBuffer(BufferView _buffer, EBufferRuntimeUsageFlags _dst_state, EPassType _pass);
+
+        CmdSubmit Submit();
+
+    private:
+        friend DrawDispatcher;
+        friend ComputeDispatcher;
+        friend class CommandQueue;
+        void                      BeginRenderPass(PipelineHandle& _handle, RenderPassInfo&&, MeshDrawData&&);
+        void                      SubmitArgs(ShaderPipeline&, Arguments&&);
+        void                      SubmitConstants(ShaderPipeline&, Array<uint>&&);
+        Array<UniquePtr<Command>> commands;
+    };
+
+    class CommandQueue {
+    public:
+        CommandQueue(){};
+
+        virtual void Execute(CmdSubmit&& _submit)                                                            = 0;
+        virtual void Present(RHIViewport* _viewport, FenceRef _fence, uint64 _wait_val, TextureView _target) = 0;
+    };
+}// namespace Moer::Render
 #endif

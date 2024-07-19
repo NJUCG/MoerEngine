@@ -16,6 +16,10 @@ LockFreeQueueBase<RHIResource> pending_deletings;
 void RHIResource::Destroy() {
     //mark resource to be deleted
     //deferred delete
+    if (flags.IsSuddenDeath()) {
+        delete this;
+        return;
+    }
     if (!flags.MarkToDelete(std::memory_order_release)) {
         //TODO: pending_deletings actual delete on render thread
         pending_deletings.Push(this);

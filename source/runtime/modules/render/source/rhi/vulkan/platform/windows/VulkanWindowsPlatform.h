@@ -21,17 +21,19 @@
 #include "rhi/vulkan/misc/VulkanTypeDefs.h"
 #include "../VulkanGenericPlatform.h"
 
-class VulkanWindowsPlatform : public VulkanGenericPlatform {
-public:
-    // Array of required extensions for the platform (Required!)
-    static void GetInstanceExtensions(TExtensionArray& _extensions);
-    static void GetInstanceLayers(TLayerArray& _layers) {}
-    static void GetDeviceExtensions(TVulkanDeviceExtensionArray& _extensions);
-    static void GetDeviceLayers(TLayerArray& _layers) {}
-    // create the platform-specific surface object - required
-    static void CreateSurface(void* _window_handle, VkInstance _instance, VkSurfaceKHR& _surface);
-};
+namespace Moer::Render {
+    class VulkanWindowsPlatform : public VulkanGenericPlatform {
+    public:
+        // Array of required extensions for the platform (Required!)
+        static void GetInstanceExtensions(TExtensionArray& _extensions);
+        static void GetInstanceLayers(TLayerArray& _layers) {}
+        static void GetDeviceExtensions(TVulkanDeviceExtensionArray& _extensions);
+        static void GetDeviceLayers(TLayerArray& _layers) {}
+        // create the platform-specific surface object - required
+        static void CreateSurface(void* _window_handle, VkInstance _instance, VkSurfaceKHR& _surface);
+    };
 
-typedef VulkanWindowsPlatform VulkanPlatform;
+}// namespace Moer::Render
 
+using VulkanPlatform = Moer::Render::VulkanWindowsPlatform;
 #endif// VULKAN_WINDOWS_PLATFORM_H

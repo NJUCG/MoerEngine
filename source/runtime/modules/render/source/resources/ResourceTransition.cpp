@@ -158,26 +158,26 @@ namespace Moer {
     }
 
     std::tuple<ERHIAccessFlags, ERHIPipelineStageFlags>
-    ResourceTransition::GetBufferTransitation(EBufferLayout layout, EPassType pass_type) {
-        if (layout == EBufferLayout::UNDEFINED_LAYOUT) {
+    ResourceTransition::GetBufferTransitation(EBufferRuntimeUsageFlags layout, EPassType pass_type) {
+        if (layout == EBufferRuntimeUsageFlags::UNDEFINED) {
             return {ERHIAccessFlags::UNDEFINED, ERHIPipelineStageFlags::PS_NONE};
         }
-        if (layout == EBufferLayout::INDIRECT_COMMAND_READ) {
+        if (layout == EBufferRuntimeUsageFlags::INDIRECT_COMMAND_READ) {
             return {ERHIAccessFlags::INDIRECT_COMMAND_READ, ERHIPipelineStageFlags::PS_DRAW_INDIRECT};
         }
-        if (layout == EBufferLayout::COMMON) {
+        if (layout == EBufferRuntimeUsageFlags::COMMON) {
             return {ERHIAccessFlags::SHADER_READ | ERHIAccessFlags::SHADER_WRITE, GetPipelineStageFromPassType(pass_type)};
         }
-        if (EnumHasAnyFlag(layout, EBufferLayout::WRITE)) {
+        if (EnumHasAnyFlag(layout, EBufferRuntimeUsageFlags::WRITE)) {
             return {ERHIAccessFlags::SHADER_WRITE, GetPipelineStageFromPassType(pass_type)};
         }
-        if (EnumHasAnyFlag(layout, EBufferLayout::READ)) {
+        if (EnumHasAnyFlag(layout, EBufferRuntimeUsageFlags::READ)) {
             return {ERHIAccessFlags::SHADER_READ, GetPipelineStageFromPassType(pass_type)};
         }
-        if (EnumHasAnyFlag(layout, EBufferLayout::TRANSFER_READ)) {
+        if (EnumHasAnyFlag(layout, EBufferRuntimeUsageFlags::TRANSFER_READ)) {
             return {ERHIAccessFlags::TRANSFER_READ, ERHIPipelineStageFlags::PS_TRANSFER};
         }
-        if (EnumHasAnyFlag(layout, EBufferLayout::TRANSFER_WRITE)) {
+        if (EnumHasAnyFlag(layout, EBufferRuntimeUsageFlags::TRANSFER_WRITE)) {
             return {ERHIAccessFlags::TRANSFER_WRITE, ERHIPipelineStageFlags::PS_TRANSFER};
         }
         return {};

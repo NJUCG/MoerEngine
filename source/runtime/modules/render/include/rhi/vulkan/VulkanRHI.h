@@ -7,14 +7,14 @@
 #include "rhi/RHICommand.h"
 #include "rhi/RHIResource.h"
 #include "window/WindowContext.h"
-
-class VulkanDevice;
-class VulkanSwapChain;
-class VulkanViewport;
-class VulkanRHIBuffer;
-class VulkanDescriptorSetAllocator;
-class VulkanCommandAllocator;
-
+namespace Moer::Render {
+    class VulkanDevice;
+    class VulkanSwapChain;
+    class VulkanRHIViewport;
+    class VulkanRHIBuffer;
+    class VulkanDescriptorSetAllocator;
+    class VulkanCommandAllocator;
+}// namespace Moer::Render
 class VulkanRHIImpl final : public IVulkanRHI {
 public:
     RENDER_API VulkanRHIImpl();
@@ -67,11 +67,11 @@ public:
 
     RHICommandQueue* RHICreateCommandQueue(ECommandQueueType _type) final override;
     // RHIGraphicsCommandList* CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state = nullptr) final override;
-    RHIGraphicsCommandList*   RHICreateGraphicsCommandList(RHICommandAllocator* _allocator, RHIGfxPso* _initial_state = nullptr) final override;
-    RHIComputeCommandList*    RHICreateComputeCommandList(RHICommandAllocator* _allocator, RHIComputePso* _initial_state = nullptr) final override;
-    RHIRayTracingCommandList* RHICreateRayTracingCommandList(RHICommandAllocator* _allocator, RHIRTPso* _initial_state = nullptr) final override;
+    RHIGraphicsCommandList*   RHICreateGraphicsCommandList(RHIGfxPso* _initial_state = nullptr) final override;
+    RHIComputeCommandList*    RHICreateComputeCommandList(RHIComputePso* _initial_state = nullptr) final override;
+    RHIRayTracingCommandList* RHICreateRayTracingCommandList(RHIRTPso* _initial_state = nullptr) final override;
     // RHIComputeCommandList* CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr) final override;
-    RHICopyCommandList* RHICreateCopyCommandList(RHICommandAllocator* _allocator) final override;
+    RHICopyCommandList* RHICreateCopyCommandList() final override;
 
     RHICommandAllocator* RHIGetCurrentCommandAllocator() final override;
 
@@ -107,8 +107,8 @@ protected:
 
     VkSurfaceKHR m_surface;
 
-    VulkanDevice*   m_device;
-    VulkanViewport* m_main_viewport;
+    Moer::Render::VulkanDevice*      m_device;
+    Moer::Render::VulkanRHIViewport* m_main_viewport;
     // VulkanSwapChain* m_swap_chain;
     // Moer::Array<VulkanViewport*> m_viewports;
     // VulkanViewport* m_current_viewport;
@@ -125,7 +125,7 @@ private:
 
 #pragma region helper functions
 private:
-    friend VulkanSwapChain;
+    friend Moer::Render::VulkanSwapChain;
     bool CheckValidationLayer(const std::string& layer_name);
     bool CheckEnabledExtensions();
 

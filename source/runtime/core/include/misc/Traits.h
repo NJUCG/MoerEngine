@@ -16,6 +16,12 @@ namespace Moer {
     using float4 = Vector4f;
     using float3 = Vector3f;
     using float2 = Vector2f;
+    using uint2  = Vector2ui;
+    using uint3  = Vector3ui;
+    using uint4  = Vector4ui;
+    using int2   = Vector2i;
+    using int3   = Vector3i;
+    using int4   = Vector4i;
     using byte   = std::byte;
 };// namespace Moer
 #endif

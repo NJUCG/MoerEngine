@@ -13,6 +13,7 @@
 #include "rhi/RHIResourceInitilizer.h"
 #include "shader/Shader.h"
 #include "shader/ShaderParameterMacros.h"
+#include "shader/ShaderPipeline.h"
 #include "shader/ShaderResourceManager.h"
 
 #include "math/Math.h"
@@ -47,19 +48,41 @@ struct GuiFrameRenderBuffers {
 
     RHIBufferRef staging_vertex_buffer;
     RHIBufferRef staging_index_buffer;
+
+    Moer::Render::BufferRef vtx_buffer;
+    Moer::Render::BufferRef idx_buffer;
 };
+
+namespace Moer::Render {
+    class GUIPipeline : public RasterPipeline {
+    public:
+        struct Constant {
+            Moer::Matrix4x4f mvp;
+            bool             need_correction;
+        };
+        DEFINE_PIPELINE_CLASS(GUIPipeline)
+
+        DEFINE_SHADER_SAMPLER(sampler0);
+        DEFINE_SHADER_TEX(texture0);
+        DEFINE_SHADER_CONSTANT_STRUCT(Constant, constant);
+
+        DEFINE_SHADER_ARGS(sampler0, texture0, constant);
+    };
+}// namespace Moer::Render
 struct GuiBackendData {
     size_t buffer_memory_alignment;
 
-    RHIGfxPsoRef                pipeline;
-    RHIShaderRef                shader_module_vert;
-    RHIShaderRef                shader_module_frag;
+    RHIGfxPsoRef              pipeline;
+    Moer::Render::GUIPipeline rast_pso;
+    RHIShaderRef              shader_module_vert;
+    RHIShaderRef              shader_module_frag;
 
     // Font data
-    RHISamplerRef font_sampler;
-    RHITextureRef font_texture;
-    RHISRVRef     font_view;
-    RHIBufferRef  upload_buffer;
+    RHISamplerRef            font_sampler;
+    RHITextureRef            font_texture;
+    Moer::Render::TextureRef font_tex;
+    RHISRVRef                font_view;
+    RHIBufferRef             upload_buffer;
 
     // Render buffers for main window
     GuiFrameRenderBuffers* main_viewport_render_buffers;
@@ -129,6 +152,9 @@ private:
 
     //render_thread
     RHIViewportNextBackBufferInfo next_frame_info;
+    Moer::Render::BackBufferInfo  back_buffer_info;
+
+    void UpdateGUIData();
 };
 void GuiInitPlatformInterface();
 bool CreateDeviceObjects();
@@ -147,12 +173,15 @@ inline GuiBackendData* GetBackendData() {
 
 struct GuiViewportData {
 
-    RHICommandQueue*        command_queue;
-    RHIGraphicsCommandList* comand_list;
+    RHICommandQueue*          command_queue;
+    RHIGraphicsCommandList*   comand_list;
+    Moer::Render::CommandList cmd_list;
 
     RHIGraphicsCommandList* upload_command_list;
 
     RHIFenceRef present_fence;
+
+    Moer::Render::FenceRef fence;
 
     RHIViewportRef viewport;
 
@@ -204,7 +233,7 @@ void ImGUIRenderer::EndRenderFrame() {
 
 void ImGUIRenderer::Impl::Init() {
     present_fence   = g_rhi->RHICreateFence(RHIFenceCreateInfo(EFenceUsageFlags::PRESENT));
-    ui_command_list = g_rhi->RHICreateGraphicsCommandList(g_rhi->RHIGetCurrentCommandAllocator());
+    ui_command_list = g_rhi->RHICreateGraphicsCommandList();
     command_queue   = g_rhi->RHICreateCommandQueue(ECommandQueueType::GRAPHICS);
 
     ImGuiIO& io = ImGui::GetIO();
@@ -245,13 +274,24 @@ void ImGUIRenderer::Impl::EndRenderFrame() {
 
     if (!b_window_minimized) {
 
-        RHIViewport* main_viewport = g_rhi->RHIGetMainViewport();
+        // RHIViewport* main_viewport = g_rhi->RHIGetMainViewport();
+        using namespace Moer::Render;
 
+        RHIViewportInitializer viewport_initializer{
+            .window_handle    = Moer::WindowContext::GetMainWindow(),
+            .b_is_full_screen = false,
+            .b_vsync          = false,
+            .preferred_format = PF_R8G8B8A8_SRGB,
+            .size             = {1920u, 1080u}};
+        auto&        rd_device     = RenderDevice::Get();
+        RHIViewport* main_viewport = RenderDevice::Get().CreateViewport(viewport_initializer);
         {
-            EnqueueRenderTask([main_viewport, this] {
-                next_frame_info = g_rhi->RHIGetNextFrameViewportBufferInfo(main_viewport);
-            });
+            // EnqueueRenderTask([main_viewport, this] {
+            //     next_frame_info = g_rhi->RHIGetNextFrameViewportBufferInfo(main_viewport);
+            // });
+            back_buffer_info = rd_device.GetNextBackBufferInfo(main_viewport);
             // auto next_frame_info = g_rhi->RHIGetNextFrameViewportBufferInfo(main_viewport);
+            if (!back_buffer_info.Valid()) return;
 
             // if (next_frame_info.backbuffer_index == UINT32_MAX) return;
             EnqueueRenderTask([main_viewport, this] {
@@ -428,6 +468,12 @@ void GUIUploadData(void* _draw_data, RHIGraphicsCommandList* _ui_command_list, R
                 new_size * sizeof(ImDrawIdx), EBufferUsageFlags::CPU_VISIBLE);
         }
     });
+    GuiFrameRenderBuffers* render_buffers = &viewport_data->render_buffers[viewport_data->frame_index % num_frames_in_flight];
+    auto&                  cmd_list       = viewport_data->cmd_list;
+
+    Moer::Render::CommandQueue* q;
+    auto&&                      submit = cmd_list.Submit();
+    q->Execute(std::move(submit));
 
     ImDrawVert* vertex_dst = nullptr;
     ImDrawIdx*  index_dst  = nullptr;
@@ -546,6 +592,9 @@ void GUIUploadData(void* _draw_data, RHIGraphicsCommandList* _ui_command_list, R
 
         _ui_command_list->SetPipelineBarrier(dependency_info);
     });
+}
+
+void ImGUIRenderer::Impl::UpdateGUIData() {
 }
 void GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list, RHIViewportNextBackBufferInfo* _next_frame_info_render_thread) {
     ImDrawData* draw_data = static_cast<ImDrawData*>(_draw_data);
@@ -770,6 +819,18 @@ bool CreateDeviceObjects() {
                       .Finalize());
 
     backend_data->pipeline = g_rhi->RHICreateGraphicsPSO(std::move(pso_create_info));
+    auto& sd_mgr           = Moer::Render::ShaderManager::Get();
+    using namespace Moer::Render;
+    GfxPsoCreateInfo pso_info(
+        RHIRasterizeInfo::Preset(),
+        {},
+        RHIDepthStencilStateInfo::Preset());
+    backend_data->rast_pso = std::move(
+        sd_mgr
+            .Raster()
+            .Vertex("GuiVert.hlsl")
+            .Pixel("GuiFrag.hlsl")
+            .Build<GUIPipeline>(std::move(pso_info)));
     // setup backend data
     backend_data->shader_module_vert = gui_vert;
     backend_data->shader_module_frag = gui_frag;
@@ -790,76 +851,93 @@ void CreateFontsTexture() {
     //MARK... this is freaking slow, it's build first called, we need a default data for it, and async load other fonts
     io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
 
+    using namespace Moer::Render;
+    auto& rd_device = Moer::Render::RenderDevice::Get();
     //upload texture
     {
         const uint32_t alignment    = 256;
         RHITextureRef  font_texture = nullptr;
 
-        font_texture          = g_rhi->RHICreateTexture(RHITextureCreateInfo::Create("GuiFontTexture2D", ETextureDimension::TEX_2D)
+        font_texture            = g_rhi->RHICreateTexture(RHITextureCreateInfo::Create("GuiFontTexture2D", ETextureDimension::TEX_2D)
                                                    .SetNumSamples(1)
                                                    .SetExtent({width, height})
                                                    .SetNumMips(1)
                                                    .SetArraySize(1)
                                                    .SetFormat(PF_R8G8B8A8_UNORM)
                                                    .SetUsageFlags(ETextureUsageFlags::SAMPLED | ETextureUsageFlags::SRGB | ETextureUsageFlags::TRANSFER_DST));
-        uint32_t upload_pitch = (width * 4 + alignment - 1u) & ~(alignment - 1u);
-        uint32_t upload_size  = height * upload_pitch;
+        uint32_t   upload_pitch = (width * 4 + alignment - 1u) & ~(alignment - 1u);
+        uint32_t   upload_size  = height * upload_pitch;
+        TextureRef font_tex     = rd_device.CreateTexture(
+            Extent2D(width, height),
+            PF_R8G8B8A8_UNORM,
+            ETextureUsageFlags::SAMPLED);
 
-        RHIBufferRef staging_buffer = g_rhi->RHICreateBuffer<std::byte>(
-            upload_size, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
+        CommandList cmd_list;
+        cmd_list.TransitionTexture(font_tex, TS_TRANSFER_DST, EPassType::Copy);
+        cmd_list.CopyFrom(
+            std::span<std::byte>((std::byte*)pixels, upload_size), font_tex);
 
-        assert(font_texture.Get() && staging_buffer.Get());
+        cmd_list.TransitionTexture(font_tex, TS_SAMPLED, EPassType::Graphics);
+        FenceRef end_fence = rd_device.CreateTimeline();
+        rd_device.GetCommandQueue().Execute(std::move(cmd_list.Submit().Signal(end_fence, 1)));
+        end_fence->Wait(1);
+        backend_data->font_tex = font_tex;
+        // cmd_list.CopyFrom()
+        // RHIBufferRef staging_buffer = g_rhi->RHICreateBuffer<std::byte>(
+        //     upload_size, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
 
-        void* mapped = g_rhi->RHIMapBuffer(staging_buffer, 0, upload_size);
+        // assert(font_texture.Get() && staging_buffer.Get());
 
-        memcpy(mapped, pixels, upload_size);
+        // void* mapped = g_rhi->RHIMapBuffer(staging_buffer, 0, upload_size);
 
-        g_rhi->RHIUnmapBuffer(staging_buffer);
+        // memcpy(mapped, pixels, upload_size);
 
-        RHIGraphicsCommandList* command_list = g_rhi->RHICreateGraphicsCommandList(g_rhi->RHIGetCurrentCommandAllocator());
+        // g_rhi->RHIUnmapBuffer(staging_buffer);
 
-        command_list->BeginRecording();
-        command_list->TransitionTexture(font_texture, TS_TRANSFER_DST, EPassType::Copy);
-        command_list->ExecuteTransition();
+        // RHIGraphicsCommandList* command_list = g_rhi->RHICreateGraphicsCommandList();
+        // auto&                   device       = Moer::Render::RenderDevice::Get();
+        // command_list->BeginRecording();
+        // command_list->TransitionTexture(font_texture, TS_TRANSFER_DST, EPassType::Copy);
+        // command_list->ExecuteTransition();
 
-        RHISubresourceSlice        resource_slice(ETextureAspectFlags::COLOR, 0, 0, 1, 0, 1);
-        RHICopyBufferToTextureInfo copy_info(
-            ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST,
-            {0, 0, 0},
-            {(uint32_t)width, (uint32_t)height, 1},
-            resource_slice,
-            0);
+        // RHISubresourceSlice        resource_slice(ETextureAspectFlags::COLOR, 0, 0, 1, 0, 1);
+        // RHICopyBufferToTextureInfo copy_info(
+        //     ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST,
+        //     {0, 0, 0},
+        //     {(uint32_t)width, (uint32_t)height, 1},
+        //     resource_slice,
+        //     0);
 
-        // 3. MARK: pRegion[0] is trying to copy 518144 bytes plus 0 offset to/from the VkBuffer (VkBuffer 0xcb1c7c000000001b[]) which exceeds the VkBuffer total size of 131072 bytes.
-        command_list->CopyBufferToTexture(copy_info, staging_buffer, font_texture);
+        // // 3. MARK: pRegion[0] is trying to copy 518144 bytes plus 0 offset to/from the VkBuffer (VkBuffer 0xcb1c7c000000001b[]) which exceeds the VkBuffer total size of 131072 bytes.
+        // command_list->CopyBufferToTexture(copy_info, staging_buffer, font_texture);
 
-        command_list->TransitionTexture(font_texture, TS_SAMPLED, EPassType::Graphics);
-        command_list->ExecuteTransition();
+        // command_list->TransitionTexture(font_texture, TS_SAMPLED, EPassType::Graphics);
+        // command_list->ExecuteTransition();
 
-        RHIBatchedShaderParameters  batched_params;
-        ImGuiShaderFrag::Parameters params;
-        params.sampler0 = backend_data->font_sampler;
-        params.texture0 = backend_data->font_view;
+        // RHIBatchedShaderParameters  batched_params;
+        // ImGuiShaderFrag::Parameters params;
+        // params.sampler0 = backend_data->font_sampler;
+        // params.texture0 = backend_data->font_view;
 
-        batched_params.SetParameters(backend_data->shader_module_frag, params);
-        g_rhi->RHISetBatchedShaderParameters(backend_data->pipeline, batched_params);
+        // batched_params.SetParameters(backend_data->shader_module_frag, params);
+        // g_rhi->RHISetBatchedShaderParameters(backend_data->pipeline, batched_params);
 
-        command_list->EndRecording();
+        // command_list->EndRecording();
 
-        RHICommandQueue* queue = g_rhi->RHICreateCommandQueue(ECommandQueueType::GRAPHICS);
+        // RHICommandQueue* queue = g_rhi->RHICreateCommandQueue(ECommandQueueType::GRAPHICS);
 
-        RHIFenceCreateInfo fence_info{EFenceUsageFlags::TIMELINE};
-        RHIFenceRef        fence = g_rhi->RHICreateFence(fence_info);
+        // RHIFenceCreateInfo fence_info{EFenceUsageFlags::TIMELINE};
+        // RHIFenceRef        fence = g_rhi->RHICreateFence(fence_info);
 
-        RHISubmitInfo submit_info;
+        // RHISubmitInfo submit_info;
 
-        uint64_t wait_value = 1;
-        submit_info.Signal(fence, wait_value);
-        queue->SubmitCommands(1, command_list, &submit_info);
+        // uint64_t wait_value = 1;
+        // submit_info.Signal(fence, wait_value);
+        // queue->SubmitCommands(1, command_list, &submit_info);
 
-        fence->Wait(wait_value);
-        backend_data->font_view    = g_rhi->RHICreateTextureSRV(font_texture);
-        backend_data->font_texture = font_texture;
+        // fence->Wait(wait_value);
+        // backend_data->font_view    = g_rhi->RHICreateTextureSRV(font_texture);
+        // backend_data->font_texture = font_texture;
     }
     io.Fonts->SetTexID((ImTextureID)backend_data->font_view);
 }
@@ -893,7 +971,7 @@ void GuiCreateWindow(ImGuiViewport* viewport) {
 
     viewport_data->command_queue = g_rhi->RHICreateCommandQueue(ECommandQueueType::GRAPHICS);
 
-    viewport_data->comand_list = g_rhi->RHICreateGraphicsCommandList(g_rhi->RHIGetCurrentCommandAllocator());
+    viewport_data->comand_list = g_rhi->RHICreateGraphicsCommandList();
 
     RHIFenceCreateInfo present_fence_info{EFenceUsageFlags::PRESENT};
     viewport_data->present_fence = g_rhi->RHICreateFence(present_fence_info);
@@ -910,8 +988,10 @@ void GuiCreateWindow(ImGuiViewport* viewport) {
     viewport_info.b_vsync = false;
     // viewport_info.window_handle = viewport->PlatformHandleRaw;
     viewport_data->frame_index = 0;
+    using namespace Moer::Render;
+    auto& rd_device = Moer::Render::RenderDevice::Get();
 
-    viewport_data->viewport = g_rhi->RHICreateViewport(viewport_info);
+    viewport_data->viewport = rd_device.CreateViewport(viewport_info);
 }
 
 void GuiDestroyWindow(ImGuiViewport* viewport) {
@@ -950,12 +1030,17 @@ void GuiSetWindowSize(ImGuiViewport* _viewport, ImVec2 _size) {
 
     auto m_viewport = viewport_data->viewport;
 
-    EnqueueRenderTask([m_viewport, _size] {
-        Extent2D viewport_extent = {(uint32_t)m_viewport->GetViewportExtent().width, (uint32_t)m_viewport->GetViewportExtent().height};
+    // EnqueueRenderTask([m_viewport, _size] {
+    //     Extent2D viewport_extent = {(uint32_t)m_viewport->GetViewportExtent().width, (uint32_t)m_viewport->GetViewportExtent().height};
 
-        if (_size.x == viewport_extent.width && _size.y == viewport_extent.height) return;
-        g_rhi->RHIResizeViewport(m_viewport, Extent2D(_size.x, _size.y), false);
-    });
+    //     if (_size.x == viewport_extent.width && _size.y == viewport_extent.height) return;
+    //     g_rhi->RHIResizeViewport(m_viewport, Extent2D(_size.x, _size.y), false);
+    // });
+    // auto extent = m_viewport->GetViewportExtent();
+    // if (_size.x == extent.width && _size.y == extent.height) return;
+    using namespace Moer::Render;
+    auto& rd_device = Moer::Render::RenderDevice::Get();
+    rd_device.ResizeViewport(m_viewport, Extent2D(_size.x, _size.y), false);
     // g_rhi->RHIResizeViewport(m_viewport, Extent2D(size.x, size.y), false);
 }
 void GuiRenderWindow(ImGuiViewport* viewport, void*) {

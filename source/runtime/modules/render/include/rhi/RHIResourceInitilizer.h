@@ -11,6 +11,7 @@
 
 #include <numeric>
 #include <cassert>
+#include <variant>
 
 namespace RHIConfig {
 
@@ -451,6 +452,7 @@ struct RHIViewportInitializer {
     bool                b_is_full_screen;
     bool                b_vsync;
     EPixelFormat        preferred_format;
+    Extent2D            size;
 };
 
 enum class EClearAttachment {
@@ -485,11 +487,13 @@ struct RHIClearAttachment {
             return uint32[0] == other.uint32[0] && uint32[1] == other.uint32[1] && uint32[2] == other.uint32[2] && uint32[3] == other.uint32[3];
         }
     };
-    union ClearValue {
-        ClearColorValue        color;
-        ClearDepthStencilValue depth_stencil;
-    } value;
-    EClearAttachment attachment;
+    // union ClearValue {
+    //     ClearColorValue        color;
+    //     ClearDepthStencilValue depth_stencil;
+    // } value;
+
+    std::variant<ClearColorValue, ClearDepthStencilValue> value;
+    EClearAttachment                                      attachment;
     RHIClearAttachment() : RHIClearAttachment(EClearAttachment::COLOR) {
     }
     explicit RHIClearAttachment(EClearAttachment none) : attachment(none) {
@@ -498,38 +502,36 @@ struct RHIClearAttachment {
             case EClearAttachment::NONE:
 
             case EClearAttachment::COLOR:
-                value.color.float32[0] = 0.f;
-                value.color.float32[1] = 0.f;
-                value.color.float32[2] = 0.f;
-                value.color.float32[3] = 0.f;
+                value = ClearColorValue{0.f, 0.f, 0.f, 0.f};
                 break;
             case EClearAttachment::DEPTH_STENCIL:
-                value.depth_stencil.depth   = 0.f;
-                value.depth_stencil.stencil = 0;
+                value = ClearDepthStencilValue{0.f, 0};
                 break;
         }
     }
     explicit RHIClearAttachment(float _depth, uint32_t _stencil = 0) : attachment(EClearAttachment::DEPTH_STENCIL) {
-        value.depth_stencil.depth   = _depth;
-        value.depth_stencil.stencil = _stencil;
+        value = ClearDepthStencilValue{_depth, _stencil};
     }
     bool operator==(const RHIClearAttachment& other) const {
         if (attachment == other.attachment) {
-            return attachment == EClearAttachment::COLOR ? value.color == other.value.color : value.depth_stencil == other.value.depth_stencil;
+            return value == other.value;
         }
         return false;
     }
-    friend uint32_t GetHash(const RHIClearAttachment& value) {
-        uint32_t hash = GetHash(value.attachment);
-        if (EClearAttachment::COLOR == value.attachment) {
-            HashCombine(hash, GetHash(value.value.color.uint32[0]));
-            HashCombine(hash, GetHash(value.value.color.uint32[1]));
-            HashCombine(hash, GetHash(value.value.color.uint32[2]));
-            HashCombine(hash, GetHash(value.value.color.uint32[3]));
-        } else {
-            HashCombine(hash, GetHash(value.value.depth_stencil.depth));
-            HashCombine(hash, GetHash(value.value.depth_stencil.stencil));
-        }
+    friend uint32_t GetHash(const RHIClearAttachment& _value) {
+        uint32_t hash = GetHash(_value.attachment);
+        std::visit([&hash](auto&& _arg) -> void {
+            if constexpr (std::is_same_v<std::decay_t<decltype(_arg)>, ClearColorValue>) {
+                HashCombine(hash, GetHash(_arg.uint32[0]));
+                HashCombine(hash, GetHash(_arg.uint32[1]));
+                HashCombine(hash, GetHash(_arg.uint32[2]));
+                HashCombine(hash, GetHash(_arg.uint32[3]));
+            } else {
+                HashCombine(hash, GetHash(_arg.depth));
+                HashCombine(hash, GetHash(_arg.stencil));
+            }
+        },
+                   _value.value);
         return hash;
     }
 };
@@ -816,36 +818,6 @@ private:
 /* todo: transition information definition */
 struct RHIResourceTransitionInfo {
 };
-
-///* resource copy definition */
-//struct RHICopyTextureRegion {
-//    /** offset in texture */
-//    uint32_t dst_x;
-//    uint32_t dst_y;
-//    uint32_t dst_z;
-//
-//    /** offset in source image data */
-//    int32_t src_x;
-//    int32_t src_y;
-//    int32_t src_z;
-//
-//    /** size of region to copy */
-//    uint32_t width;
-//    uint32_t height;
-//    uint32_t depth;
-//
-//    RHICopyTextureRegion() = default;
-//    explicit RHICopyTextureRegion(int3 _dst_range, int3 _src_range, int3 _src_size)
-//        : dst_x(_dst_range.x),
-//          dst_y(_dst_range.y),
-//          dst_z(_dst_range.z),
-//          src_x(_src_range.x),
-//          src_y(_src_range.y),
-//          src_z(_src_range.z),
-//          width(_src_size.x),
-//          height(_src_size.y),
-//          depth(_src_size.z) {}
-//};
 
 struct RHIDispatchIndirectParameters {
     uint32_t group_count_x;

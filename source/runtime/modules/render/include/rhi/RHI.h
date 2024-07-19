@@ -1,6 +1,7 @@
 #ifndef RHI_H
 #define RHI_H
 #include "PixelFormat.h"
+#include "RHICommand.h"
 #include "RHIResource.h"
 #include "log/LogSystem.h"
 #include "rhi/RHICommon.h"
@@ -15,6 +16,21 @@
 enum class ERHIType {
     Vulkan,
     D3D12
+};
+struct ShaderTargetInfo {
+    uint16_t shader_type;
+    uint16_t shader_platform;
+    ShaderTargetInfo(const ShaderTargetInfo& _other) : shader_type(_other.shader_type), shader_platform(_other.shader_platform) {}
+    operator uint32_t() const { return *(uint32_t*)this; }
+    ShaderTargetInfo(EShaderType _type, EShaderPlatform _platform)
+        : shader_type(_type),
+          shader_platform(_platform) {}
+    ShaderTargetInfo(uint32_t _info) : shader_type(_info & 0xffff), shader_platform(static_cast<EShaderPlatform>(_info >> 16)) {}
+
+    ShaderTargetInfo() = default;
+
+    operator EShaderType() const { return static_cast<EShaderType>(shader_type); }
+    operator EShaderPlatform() const { return static_cast<EShaderPlatform>(shader_platform); }
 };
 class RHIGraphicsCommandList;
 class RHIComputeCommandList;
@@ -33,6 +49,11 @@ struct RHIInfo {
     ERHIType rhi_type;
     uint32_t max_frame_in_flight;
     bool     ray_tracing;
+};
+struct DeviceInitInfo {
+    ERHIType         rhi_type;
+    std::string_view name;
+    bool             ray_tracing;
 };
 
 template<typename T>
@@ -186,11 +207,11 @@ public:
     virtual RHICommandQueue* RHICreateCommandQueue(ECommandQueueType type) = 0;
     // DX12 only: _initial_state
     // virtual RHIGraphicsCommandList* CreateGraphicsCommandList(RHIGraphicsPipelineState* _initial_state = nullptr)                                     = 0;
-    virtual RHIGraphicsCommandList* RHICreateGraphicsCommandList(RHICommandAllocator* _allocator, RHIGfxPso* _initial_state = nullptr) = 0;
+    virtual RHIGraphicsCommandList* RHICreateGraphicsCommandList(RHIGfxPso* _initial_state = nullptr) = 0;
     // virtual RHIComputeCommandList*  CreateComputeCommandList(RHIComputePipelineState* _initial_state = nullptr)   = 0;
-    virtual RHIComputeCommandList*    RHICreateComputeCommandList(RHICommandAllocator* _allocator, RHIComputePso* _initial_state = nullptr) = 0;
-    virtual RHIRayTracingCommandList* RHICreateRayTracingCommandList(RHICommandAllocator* _allocator, RHIRTPso* _initial_state = nullptr)   = 0;
-    virtual RHICopyCommandList*       RHICreateCopyCommandList(RHICommandAllocator* _allocator)                                             = 0;
+    virtual RHIComputeCommandList*    RHICreateComputeCommandList(RHIComputePso* _initial_state = nullptr) = 0;
+    virtual RHIRayTracingCommandList* RHICreateRayTracingCommandList(RHIRTPso* _initial_state = nullptr)   = 0;
+    virtual RHICopyCommandList*       RHICreateCopyCommandList()                                           = 0;
     template<TPipelineStateRef TPipelineRef>
     void RHISetBatchedShaderParameters(TPipelineRef _pso, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant = false) {
         RHISetBatchedShaderParametersInner(_pso, _batched_params, b_update_constant);
@@ -239,6 +260,57 @@ protected:
 protected:
     RHIInfo m_rhi_info;
 };
+namespace Moer::Render {
+    class RenderDevice {
+    public:
+        static void          Init(DeviceInitInfo&& _info);
+        static void          Dispose();
+        static RenderDevice& Get();
+
+    public:
+        FenceRef CreateTimeline();
+
+        FenceRef CreatePresentFence();
+
+        template<typename TElement>
+            requires(std::is_trivially_copyable_v<TElement> && std::is_standard_layout_v<TElement>)
+        BufferRef CreateBuffer(uint _element_cnt, EBufferUsageFlags _usage);
+
+        BufferRef CreateStagingBuffer(uint64_t _byte_size);
+
+        TextureRef CreateTexture(Extent2D _size, EPixelFormat _format, ETextureUsageFlags _usage, uint32_t _mip_cnt = 1, uint32_t _array_size = 1);
+
+        TextureRef CreateTexture(Extent3D _size, EPixelFormat _format, ETextureUsageFlags _usage, uint32_t _mip_cnt = 1, uint32_t _array_size = 1);
+
+        DepthBufferRef CreateDepthBuffer(Extent2D _size, EPixelFormat _format, uint32_t _array_size = 1);
+
+        RHIViewportRef CreateViewport(const RHIViewportInitializer& _init);
+
+        void ResizeViewport(RHIViewport* _viewport, Extent2D _size, bool _b_full_screen, EPixelFormat _format = PF_UNDEFINED);
+
+        BackBufferInfo GetNextBackBufferInfo(RHIViewport* _viewport);
+
+        TextureView GetBackBuffer(RHIViewport* _viewport, uint32_t _index);
+
+        void PresentViewport(RHIViewport* _viewport, RHIFence* _render_end_fence);
+        void FlushPendingDeletes();
+
+        const ShaderTargetInfo& GetShaderTargetInfo() const;
+
+        PipelineHandle CreatePipeline(GfxPsoCreateInfo&& _pso_info, PipelineShaderInfo&& _shaders);//gfx
+        PipelineHandle CreatePipeline(PipelineShaderInfo&& _shaders);                              //compute
+
+        const CommandQueue& GetCommandQueue() const;
+
+        class Impl;
+
+    protected:
+    private:
+        RenderDevice() = default;
+        UniquePtr<Impl> impl;
+        ERHIType        rhi_type;
+    };
+};// namespace Moer::Render
 
 extern RENDER_API RHI* g_rhi;
 

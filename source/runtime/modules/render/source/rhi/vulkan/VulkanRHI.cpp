@@ -39,9 +39,10 @@
 #include <type_traits>
 #include <fstream>
 #include <variant>
+#include "VulkanDevice.h"
 
 namespace VkUtil = Moer::RHI::Vulkan::Util;
-
+using namespace Moer::Render;
 VulkanRHIImpl::VulkanRHIImpl()
     : m_instance(VK_NULL_HANDLE), m_surface(VK_NULL_HANDLE),
       m_device(nullptr), m_main_viewport(nullptr) {
@@ -55,6 +56,8 @@ void VulkanRHIImpl::Initialize(const RHIInitInfo& _init) {
     m_rhi_info.ray_tracing         = _init.ray_tracing;
 
     LOG_INFO("raytraing: {}", _init.ray_tracing);
+    DeviceInitInfo init_info{};
+    m_device = MoerNew(Moer::Render::VulkanDevice)(std::move(init_info));
 
     CreateInstance();
     InitSurface(Moer::WindowContext::GetMainWindow());
@@ -77,43 +80,43 @@ void VulkanRHIImpl::ShutDown() {
 }
 
 #pragma region resources creation
-RHISamplerRef  VulkanRHIImpl::RHICreateSampler(const RHISamplerCreateInfo& _initializer) {
-    VulkanRHISampler* vk_sampler = MoerNew(VulkanRHISampler)();
+RHISamplerRef VulkanRHIImpl::RHICreateSampler(const RHISamplerCreateInfo& _initializer) {
+    Moer::Render::VulkanRHISampler* vk_sampler = MoerNew(Moer::Render::VulkanRHISampler)();
     vk_sampler->GenerateSamplerFromInitializer(m_device, _initializer);
 
     return RHISamplerRef(vk_sampler);
 }
 
 RHIVertexShaderRef VulkanRHIImpl::RHICreateVertexShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
-    auto* vk_shader            = MoerNew(VulkanRHIVertexShader)(shader);
+    auto* vk_shader            = MoerNew(Moer::Render::VulkanRHIVertexShader)(shader);
     vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
 
     return RHIVertexShaderRef(vk_shader);
 }
 
 RHIFragmentShaderRef VulkanRHIImpl::RHICreateFragmentShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
-    auto* vk_shader            = MoerNew(VulkanRHIFragmentShader)(shader);
+    auto* vk_shader            = MoerNew(Moer::Render::VulkanRHIFragmentShader)(shader);
     vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
 
     return RHIFragmentShaderRef(vk_shader);
 }
 
 RHIGeometryShaderRef VulkanRHIImpl::RHICreateGeometryShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
-    auto* vk_shader            = MoerNew(VulkanRHIGeometryShader)(shader);
+    auto* vk_shader            = MoerNew(Moer::Render::VulkanRHIGeometryShader)(shader);
     vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
 
     return RHIGeometryShaderRef(vk_shader);
 }
 
 RHIMeshShaderRef VulkanRHIImpl::RHICreateMeshShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
-    auto* vk_shader            = MoerNew(VulkanRHIMeshShader)(shader);
+    auto* vk_shader            = MoerNew(Moer::Render::VulkanRHIMeshShader)(shader);
     vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
 
     return RHIMeshShaderRef(vk_shader);
 }
 
 RHIAmplificationShaderRef VulkanRHIImpl::RHICreateAmplificationShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
-    auto* vk_shader            = MoerNew(VulkanRHIAmplificationShader)(shader);
+    auto* vk_shader            = MoerNew(Moer::Render::VulkanRHIAmplificationShader)(shader);
     vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
 
     return RHIAmplificationShaderRef(vk_shader);
@@ -132,7 +135,7 @@ static std::ofstream OpenOrCreateFile(const std::string& path) {
 }
 
 RHIComputeShaderRef VulkanRHIImpl::RHICreateComputeShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
-    auto* vk_shader            = MoerNew(VulkanRHIComputeShader)(shader);
+    auto* vk_shader            = MoerNew(Moer::Render::VulkanRHIComputeShader)(shader);
     vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
 
     return RHIComputeShaderRef(vk_shader);
@@ -178,7 +181,7 @@ RHIShaderLibraryRef VulkanRHIImpl::RHICreateShaderLibrary(EShaderPlatform _platf
 
 RHIFenceRef VulkanRHIImpl::RHICreateFence(const RHIFenceCreateInfo& _info) {
 
-    VulkanRHIFence* vk_fence = MoerNew(VulkanRHIFence)(m_device, _info.usage);
+    Moer::Render::VulkanRHIFence* vk_fence = MoerNew(Moer::Render::VulkanRHIFence)(m_device, _info.usage);
 
     return RHIFenceRef(vk_fence);
 }
@@ -380,7 +383,7 @@ void PopulateVertexAttribute(
     _bindings.shrink_to_fit();
 }
 RHIGfxPsoRef VulkanRHIImpl::RHICreateGraphicsPSO(RHIGraphicsPSOCreateInfo&& _init) {
-    VulkanRHIGraphicsPipelineState* vk_pso = MoerNew(VulkanRHIGraphicsPipelineState)(m_device);
+    Moer::Render::VulkanRHIGraphicsPipelineState* vk_pso = MoerNew(Moer::Render::VulkanRHIGraphicsPipelineState)(m_device);
 
     assert(_init.finalized && "RHICreateGraphicsPSO: PSO is not finalized!");
     uint32_t attachment_count = _init.color_attachment_count;
@@ -457,17 +460,17 @@ RHIGfxPsoRef VulkanRHIImpl::RHICreateGraphicsPSO(RHIGraphicsPSOCreateInfo&& _ini
         shader_stage_info.flags               = 0;
 
         {
-            auto* vk_vert_shader = static_cast<VulkanRHIVertexShader*>(work_flow.vertex_shader);
+            auto* vk_vert_shader = static_cast<Moer::Render::VulkanRHIVertexShader*>(work_flow.vertex_shader);
             FILL_SHADER_DATA(vk_vert_shader, VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_VERTEX_BIT);
         }
 
         {
-            auto* vk_frag_shader = static_cast<VulkanRHIFragmentShader*>(work_flow.fragment_shader);
+            auto* vk_frag_shader = static_cast<Moer::Render::VulkanRHIFragmentShader*>(work_flow.fragment_shader);
             FILL_SHADER_DATA(vk_frag_shader, VK_SHADER_STAGE_FRAGMENT_BIT, VK_SHADER_STAGE_FRAGMENT_BIT);
         }
 
         if (work_flow.geometry_shader) {
-            auto* vk_geom_shader = static_cast<VulkanRHIGeometryShader*>(work_flow.geometry_shader);
+            auto* vk_geom_shader = static_cast<Moer::Render::VulkanRHIGeometryShader*>(work_flow.geometry_shader);
             FILL_SHADER_DATA(vk_geom_shader, VK_SHADER_STAGE_GEOMETRY_BIT, VK_SHADER_STAGE_GEOMETRY_BIT);
         }
 
@@ -487,17 +490,17 @@ RHIGfxPsoRef VulkanRHIImpl::RHICreateGraphicsPSO(RHIGraphicsPSOCreateInfo&& _ini
         shader_stage_info.flags               = 0;
 
         {
-            auto* vk_mesh_shader = static_cast<VulkanRHIMeshShader*>(work_flow.mesh_shader);
+            auto* vk_mesh_shader = static_cast<Moer::Render::VulkanRHIMeshShader*>(work_flow.mesh_shader);
             FILL_SHADER_DATA(vk_mesh_shader, VK_SHADER_STAGE_MESH_BIT_NV, VK_SHADER_STAGE_MESH_BIT_NV);
         }
 
         {
-            auto* vk_frag_shader = static_cast<VulkanRHIFragmentShader*>(work_flow.fragment_shader);
+            auto* vk_frag_shader = static_cast<Moer::Render::VulkanRHIFragmentShader*>(work_flow.fragment_shader);
             FILL_SHADER_DATA(vk_frag_shader, VK_SHADER_STAGE_FRAGMENT_BIT, VK_SHADER_STAGE_FRAGMENT_BIT);
         }
 
         if (work_flow.amplification_shader) {
-            auto* vk_amp_shader = static_cast<VulkanRHIAmplificationShader*>(work_flow.amplification_shader);
+            auto* vk_amp_shader = static_cast<Moer::Render::VulkanRHIAmplificationShader*>(work_flow.amplification_shader);
             FILL_SHADER_DATA(vk_amp_shader, VK_SHADER_STAGE_TASK_BIT_NV, VK_SHADER_STAGE_TASK_BIT_NV);
         }
     }
@@ -699,9 +702,9 @@ RHIGfxPsoRef VulkanRHIImpl::RHICreateGraphicsPSO(RHIGraphicsPSOCreateInfo&& _ini
 }
 
 RHIComputePsoRef VulkanRHIImpl::RHICreateComputePipelineState(RHIShader* _compute_shader) {
-    VulkanRHIComputePipelineState* vk_pso = MoerNew(VulkanRHIComputePipelineState)(m_device);
+    Moer::Render::VulkanRHIComputePipelineState* vk_pso = MoerNew(Moer::Render::VulkanRHIComputePipelineState)(m_device);
 
-    auto* vk_shader = static_cast<VulkanRHIComputeShader*>(_compute_shader);
+    auto* vk_shader = static_cast<Moer::Render::VulkanRHIComputeShader*>(_compute_shader);
     if (!vk_shader) LOG_CRITICAL("RHICreateComputePipelineState: Compute shader is nullptr!");
 
     VkPipelineShaderStageCreateInfo shader_stage{};
@@ -941,7 +944,7 @@ RHIRTPsoRef VulkanRHIImpl::RHICreateRayTracingPipelineState(const RHIRayTracingP
         }
     }
 
-    VulkanRHIRayTracingPipelineState* vk_pso = MoerNew(VulkanRHIRayTracingPipelineState)(m_device);
+    Moer::Render::VulkanRHIRayTracingPipelineState* vk_pso = MoerNew(Moer::Render::VulkanRHIRayTracingPipelineState)(m_device);
 
     vk_pso->InitDescriptorSetLayouts(descriptor_bindings);
     vk_pso->InitPipelineResourceCache(descriptor_bindings);
@@ -977,7 +980,7 @@ RHIRTPsoRef VulkanRHIImpl::RHICreateRayTracingPipelineState(const RHIRayTracingP
     uint32_t handlecount    = 1 + miss_count + hit_count + callable_count;
 
     auto     rt_props             = VkUtil::QueryPhysicalDeviceExtensionProps<VkPhysicalDeviceRayTracingPipelinePropertiesKHR,
-                                                              VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR>(m_device->GetGpu());
+                                                                              VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR>(m_device->GetGpu());
     uint32_t handlesize           = rt_props.shaderGroupHandleSize;
     uint32_t handlesize_aligned   = ALIGNUP(handlesize, rt_props.shaderGroupHandleAlignment);
     vk_pso->m_raygen_sbt.size     = ALIGNUP(handlesize_aligned, rt_props.shaderGroupBaseAlignment);
@@ -1081,8 +1084,8 @@ void VulkanRHIImpl::RHIBatchedBuildRayTracingBLAS(int batch_size, const RHIRayTr
         vk_geos.reserve(_init.geometries.size());
         for (const auto& rhi_geo : _init.geometries) {
             VkAccelerationStructureGeometryKHR vk_geo{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
-            vk_geo.geometryType = VulkanRHIRayTracingAccelerationStructure::METoVKGeometryTypeKHR(rhi_geo.geo_type);
-            vk_geo.flags        = VulkanRHIRayTracingAccelerationStructure::METoGeometryFlagsKHR(rhi_geo.flags);
+            vk_geo.geometryType = Moer::Render::VulkanRHIRayTracingAccelerationStructure::METoVKGeometryTypeKHR(rhi_geo.geo_type);
+            vk_geo.flags        = Moer::Render::VulkanRHIRayTracingAccelerationStructure::METoGeometryFlagsKHR(rhi_geo.flags);
             if (vk_geo.geometryType == VK_GEOMETRY_TYPE_TRIANGLES_KHR) {
                 const RHIRayTracingTrianglesGeometry&           rhi_triangles = rhi_geo.geometry.triangles;
                 VkAccelerationStructureGeometryTrianglesDataKHR vk_triangles{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR};
@@ -1133,7 +1136,7 @@ void VulkanRHIImpl::RHIBatchedBuildRayTracingBLAS(int batch_size, const RHIRayTr
 
         VkAccelerationStructureBuildGeometryInfoKHR vk_geometry_info{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
         vk_geometry_info.type  = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-        vk_geometry_info.flags = VulkanRHIRayTracingAccelerationStructure::METoVKBuildAccelerationStructureFlagsKHR(_init.build_flags);
+        vk_geometry_info.flags = Moer::Render::VulkanRHIRayTracingAccelerationStructure::METoVKBuildAccelerationStructureFlagsKHR(_init.build_flags);
         if (vk_geometry_info.flags | VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR) {
             ++count_allow_compaction;
         }
@@ -1147,12 +1150,12 @@ void VulkanRHIImpl::RHIBatchedBuildRayTracingBLAS(int batch_size, const RHIRayTr
         all_vk_size_infos.emplace_back(vk_size_info);
         max_scratch_size = std::max(max_scratch_size, vk_size_info.buildScratchSize);
 
-        auto* rhi_blas                                      = new VulkanRHIRayTracingBLAS(_init);
+        auto* rhi_blas                                      = new Moer::Render::VulkanRHIRayTracingBLAS(_init);
         rhi_blas->size_info.build_scratch_size              = vk_size_info.buildScratchSize;
         rhi_blas->size_info.result_size                     = vk_size_info.accelerationStructureSize;
         RHIBufferCreateInfo blas_buffer_ci                  = RHIBufferCreateInfo::Create(vk_size_info.accelerationStructureSize, vk_size_info.accelerationStructureSize, EBufferUsageFlags::ACCELERATION_STRUCTURE);
         rhi_blas->m_buffer                                  = RHICreateBufferInner(blas_buffer_ci);
-        VkBuffer                             vk_blas_buffer = static_cast<VulkanRHIBuffer*>(rhi_blas->m_buffer.Get())->m_alloc.buffer;
+        VkBuffer                             vk_blas_buffer = static_cast<Moer::Render::VulkanRHIBuffer*>(rhi_blas->m_buffer.Get())->m_alloc.buffer;
         VkAccelerationStructureCreateInfoKHR vk_as_ci{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
         vk_as_ci.type   = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
         vk_as_ci.buffer = vk_blas_buffer;
@@ -1170,7 +1173,7 @@ void VulkanRHIImpl::RHIBatchedBuildRayTracingBLAS(int batch_size, const RHIRayTr
     RHIBufferRef        scratch_buffer                = RHICreateBufferInner(scratch_buffer_info);
     VkDeviceAddress     scratch_buffer_device_address = GetDeviceAddress(scratch_buffer);
 
-    const auto& vk_graphic_command_pool = m_device->GetCurrentCommandAllocator()->GetHandle(ECommandListType::GRAPHICS);
+    const auto& vk_graphic_command_pool = m_device->GetCurrentCommandAllocator().GetHandle(ECommandListType::GRAPHICS);
     const auto& vk_graphic_queue        = m_device->GetGraphicsQueue();
 
     //build acceleration structure in batch,but limit the batch size
@@ -1219,7 +1222,7 @@ void VulkanRHIImpl::RHIBatchedBuildRayTracingBLAS(int batch_size, const RHIRayTr
                                  nullptr);
             vkCmdWriteAccelerationStructuresPropertiesKHR(cb,
                                                           1,
-                                                          &(static_cast<VulkanRHIRayTracingBLAS*>(results[idx].Get())->m_blas),
+                                                          &(static_cast<Moer::Render::VulkanRHIRayTracingBLAS*>(results[idx].Get())->m_blas),
                                                           VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR,
                                                           query_pool,
                                                           indices.size());
@@ -1250,20 +1253,20 @@ void VulkanRHIImpl::RHIBatchedBuildRayTracingBLAS(int batch_size, const RHIRayTr
                     compacted_buffers[i]      = RHICreateBufferInner(bf_ci);
                     VkAccelerationStructureCreateInfoKHR as_ci{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
                     as_ci.type   = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-                    as_ci.buffer = static_cast<VulkanRHIBuffer*>(compacted_buffers[i].Get())->GetHandle();
+                    as_ci.buffer = static_cast<Moer::Render::VulkanRHIBuffer*>(compacted_buffers[i].Get())->GetHandle();
                     as_ci.offset = 0;
                     as_ci.size   = compacted_sizes[i];
                     VK_CHECK_RESULT(vkCreateAccelerationStructureKHR(m_device->GetDevice(), &as_ci, nullptr, &vk_compacted_ases[i]));
 
                     VkCopyAccelerationStructureInfoKHR as_copy_info{VK_STRUCTURE_TYPE_COPY_ACCELERATION_STRUCTURE_INFO_KHR};
-                    as_copy_info.src  = static_cast<VulkanRHIRayTracingBLAS*>(results[indices[i]].Get())->m_blas;
+                    as_copy_info.src  = static_cast<Moer::Render::VulkanRHIRayTracingBLAS*>(results[indices[i]].Get())->m_blas;
                     as_copy_info.dst  = vk_compacted_ases[i];
                     as_copy_info.mode = VK_COPY_ACCELERATION_STRUCTURE_MODE_COMPACT_KHR;
                     vkCmdCopyAccelerationStructureKHR(cb, &as_copy_info);
                 }
                 EndSingleTimeCommands(cb, vk_graphic_command_pool, vk_graphic_queue);
                 for (int i = 0; i < indices.size(); ++i) {
-                    VulkanRHIRayTracingBLAS* rhi_blas = static_cast<VulkanRHIRayTracingBLAS*>(results[indices[i]].Get());
+                    Moer::Render::VulkanRHIRayTracingBLAS* rhi_blas = static_cast<Moer::Render::VulkanRHIRayTracingBLAS*>(results[indices[i]].Get());
                     vkDestroyAccelerationStructureKHR(m_device->GetDevice(), rhi_blas->m_blas, nullptr);
                     rhi_blas->size_info.result_size = compacted_sizes[i];
                     rhi_blas->m_blas                = vk_compacted_ases[i];
@@ -1298,10 +1301,10 @@ RHIRayTracingTLASRef VulkanRHIImpl::RHIBuildRayTracingTLAS(const RHIRayTracingTL
         vk_instance.transform                              = *reinterpret_cast<const VkTransformMatrixKHR*>(&rhi_instance.transform);
         vk_instance.instanceCustomIndex                    = rhi_instance.custom_index;
         vk_instance.mask                                   = rhi_instance.instance_mask;
-        vk_instance.flags                                  = VulkanRHIRayTracingAccelerationStructure::METoVKGeometryInstanceFlagsKHR(rhi_instance.flags);
+        vk_instance.flags                                  = Moer::Render::VulkanRHIRayTracingAccelerationStructure::METoVKGeometryInstanceFlagsKHR(rhi_instance.flags);
         vk_instance.instanceShaderBindingTableRecordOffset = rhi_instance.instance_sbt_offset;
         VkAccelerationStructureDeviceAddressInfoKHR vk_asda_info{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR};
-        vk_asda_info.accelerationStructure         = static_cast<VulkanRHIRayTracingBLAS*>(rhi_instance.blas.Get())->m_blas;
+        vk_asda_info.accelerationStructure         = static_cast<Moer::Render::VulkanRHIRayTracingBLAS*>(rhi_instance.blas.Get())->m_blas;
         vk_instance.accelerationStructureReference = vkGetAccelerationStructureDeviceAddressKHR(m_device->GetDevice(), &vk_asda_info);
         vk_instances.emplace_back(vk_instance);
     }
@@ -1319,7 +1322,7 @@ RHIRayTracingTLASRef VulkanRHIImpl::RHIBuildRayTracingTLAS(const RHIRayTracingTL
 
     VkAccelerationStructureBuildGeometryInfoKHR vk_geo_info{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
     vk_geo_info.type          = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
-    vk_geo_info.flags         = VulkanRHIRayTracingAccelerationStructure::METoVKBuildAccelerationStructureFlagsKHR(_init.build_flags);
+    vk_geo_info.flags         = Moer::Render::VulkanRHIRayTracingAccelerationStructure::METoVKBuildAccelerationStructureFlagsKHR(_init.build_flags);
     vk_geo_info.geometryCount = 1;
     vk_geo_info.mode          = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
     vk_geo_info.pGeometries   = &vk_geo;
@@ -1327,12 +1330,12 @@ RHIRayTracingTLASRef VulkanRHIImpl::RHIBuildRayTracingTLAS(const RHIRayTracingTL
     VkAccelerationStructureBuildSizesInfoKHR vk_sizes_info{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
     vkGetAccelerationStructureBuildSizesKHR(m_device->GetDevice(), VK_ACCELERATION_STRUCTURE_BUILD_TYPE_HOST_OR_DEVICE_KHR, &vk_geo_info, &instance_count, &vk_sizes_info);
 
-    auto* rhi_tlas                                      = new VulkanRHIRayTracingTLAS(_init);
+    auto* rhi_tlas                                      = new Moer::Render::VulkanRHIRayTracingTLAS(_init);
     rhi_tlas->size_info.build_scratch_size              = vk_sizes_info.buildScratchSize;
     rhi_tlas->size_info.result_size                     = vk_sizes_info.accelerationStructureSize;
     RHIBufferCreateInfo tlas_buffer_ci                  = RHIBufferCreateInfo::Create(vk_sizes_info.accelerationStructureSize, vk_sizes_info.accelerationStructureSize, EBufferUsageFlags::ACCELERATION_STRUCTURE);
     rhi_tlas->m_buffer                                  = RHICreateBufferInner(tlas_buffer_ci);
-    VkBuffer                             vk_tlas_buffer = static_cast<VulkanRHIBuffer*>(rhi_tlas->m_buffer.Get())->GetHandle();
+    VkBuffer                             vk_tlas_buffer = static_cast<Moer::Render::VulkanRHIBuffer*>(rhi_tlas->m_buffer.Get())->GetHandle();
     VkAccelerationStructureCreateInfoKHR vk_as_ci{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
     vk_as_ci.type   = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
     vk_as_ci.buffer = vk_tlas_buffer;
@@ -1351,7 +1354,7 @@ RHIRayTracingTLASRef VulkanRHIImpl::RHIBuildRayTracingTLAS(const RHIRayTracingTL
     vk_range_info.primitiveCount                                    = instance_count;
     const VkAccelerationStructureBuildRangeInfoKHR* p_vk_range_info = &vk_range_info;
 
-    const auto& graphics_command_pool = m_device->GetCurrentCommandAllocator()->GetHandle(ECommandListType::GRAPHICS);
+    const auto& graphics_command_pool = m_device->GetCurrentCommandAllocator().GetHandle(ECommandListType::GRAPHICS);
     const auto& graphics_queue        = m_device->GetGraphicsQueue();
     auto        cb                    = BeginSingleTimeCommands(graphics_command_pool);
 
@@ -1371,7 +1374,7 @@ RHIBufferRef VulkanRHIImpl::RHICreateBufferInner(const RHIBufferCreateInfo& info
         LOG_CRITICAL("RHICreateBufferInner: stride is 0! Set stride to sizeof(std::byte)");
         buffer_info.stride = sizeof(std::byte);
     }
-    VulkanRHIBuffer* vk_buffer = MoerNew(VulkanRHIBuffer)(buffer_info);
+    Moer::Render::VulkanRHIBuffer* vk_buffer = MoerNew(Moer::Render::VulkanRHIBuffer)(buffer_info);
 
     VkBufferCreateInfo buffer_create_info{};
     buffer_create_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -1379,7 +1382,7 @@ RHIBufferRef VulkanRHIImpl::RHICreateBufferInner(const RHIBufferCreateInfo& info
     buffer_create_info.flags = 0;
     buffer_create_info.size  = info.size;
     // add device address flag for addressing buffer with 64-bit address
-    buffer_create_info.usage                 = VulkanRHIBuffer::METoVKBufferUsageFlags(m_device, info.usage) | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+    buffer_create_info.usage                 = Moer::Render::VulkanRHIBuffer::METoVKBufferUsageFlags(m_device, info.usage) | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
     buffer_create_info.sharingMode           = VK_SHARING_MODE_EXCLUSIVE;
     buffer_create_info.queueFamilyIndexCount = 0;
     buffer_create_info.pQueueFamilyIndices   = nullptr;
@@ -1395,7 +1398,7 @@ RHIBufferRef VulkanRHIImpl::RHICreateBufferInner(const RHIBufferCreateInfo& info
 }
 
 void* VulkanRHIImpl::RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t _size) {
-    auto* vk_buffer = static_cast<VulkanRHIBuffer*>(_buffer);
+    auto* vk_buffer = static_cast<Moer::Render::VulkanRHIBuffer*>(_buffer);
     VK_CHECK_NULLPTR(vk_buffer, "RHIMapBuffer: buffer to be mapped is nullptr!", return nullptr);
 
     VmaAllocator allocator = m_device->GetVmaAllocator();
@@ -1406,7 +1409,7 @@ void* VulkanRHIImpl::RHIMapBuffer(RHIBuffer* _buffer, uint64_t _offset, uint64_t
     return (std::byte*)p_data + _offset;
 }
 void VulkanRHIImpl::RHIUnmapBuffer(RHIBuffer* _buffer) {
-    auto* vk_buffer = static_cast<VulkanRHIBuffer*>(_buffer);
+    auto* vk_buffer = static_cast<Moer::Render::VulkanRHIBuffer*>(_buffer);
     VK_CHECK_NULLPTR(vk_buffer, "RHIUnmapBuffer: buffer to be unmapped is nullptr!", return);
 
     VmaAllocator allocator = m_device->GetVmaAllocator();
@@ -1419,19 +1422,19 @@ RHIBufferRef VulkanRHIImpl::RHICreateStagingBuffer(uint64_t _size) {
     info.size  = _size;
     info.usage = EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST;
 
-    auto* staging_buffer = m_device->AquireStagingBuffer(info.size);
+    // auto* staging_buffer = m_device->AquireStagingBuffer(info.size);
 
-    return RHIBufferRef(staging_buffer);
+    return RHIBufferRef();
 }
 
 RHITextureRef VulkanRHIImpl::RHICreateTexture(const RHITextureCreateInfo& info) {
-    VulkanRHITexture* vk_texture = MoerNew(VulkanRHITexture)(info, m_device);
+    Moer::Render::VulkanRHITexture* vk_texture = MoerNew(Moer::Render::VulkanRHITexture)(info, m_device);
 
     VkImageCreateInfo image_create_info{};
     image_create_info.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     image_create_info.pNext         = nullptr;
     image_create_info.flags         = 0;
-    image_create_info.imageType     = VulkanRHITexture::METoVKImageType(info.dimension);
+    image_create_info.imageType     = Moer::Render::VulkanRHITexture::METoVKImageType(info.dimension);
     image_create_info.format        = VulkanEnumTranslator::METoVKFormat(info.format);
     image_create_info.extent.width  = info.extent.x;
     image_create_info.extent.height = info.extent.y;
@@ -1440,7 +1443,7 @@ RHITextureRef VulkanRHIImpl::RHICreateTexture(const RHITextureCreateInfo& info) 
     image_create_info.arrayLayers   = info.array_size;
     image_create_info.samples       = VulkanEnumTranslator::METoVKSampleCountFlagBits(info.num_samples);
     image_create_info.tiling        = VK_IMAGE_TILING_OPTIMAL;// MARK...
-    image_create_info.usage         = VulkanRHITexture::METoVKImageUsageFlags(info.usage);
+    image_create_info.usage         = Moer::Render::VulkanRHITexture::METoVKImageUsageFlags(info.usage);
     image_create_info.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
     // if (uint32_t(info.usage | ETextureUsageFlags::TRANSFER_DST) || uint32_t(info.usage | ETextureUsageFlags::TRANSFER_SRC)) {
     //     image_create_info.sharingMode           = VK_SHARING_MODE_CONCURRENT;
@@ -1620,7 +1623,7 @@ RHIViewRef VulkanRHIImpl::RHICreateViewInner(RHIViewableResource* _resource, con
             using T = std::decay_t<decltype(_arg)>;
             if constexpr (std::is_same_v<T, RHIBufferViewInfo>) {
                 auto&         buffer_view_info = std::get<v_type_buffer_view>(_view_info.info);
-                auto*         vk_buffer        = static_cast<VulkanRHIBuffer*>(_resource);
+                auto*         vk_buffer        = static_cast<Moer::Render::VulkanRHIBuffer*>(_resource);
                 RHIViewRef    view             = nullptr;
                 VkBufferView* vk_view          = VK_NULL_HANDLE;
                 if (buffer_view_info.view_type == EViewType::BUFFER_CBV) {
@@ -1651,7 +1654,7 @@ RHIViewRef VulkanRHIImpl::RHICreateViewInner(RHIViewableResource* _resource, con
 
             } else if constexpr (std::is_same_v<T, RHITextureSRVInfo> || std::is_same_v<T, RHITextureUAVInfo>) {
                 RHIViewRef view       = nullptr;
-                auto*      vk_texture = static_cast<VulkanRHITexture*>(_resource);
+                auto*      vk_texture = static_cast<Moer::Render::VulkanRHITexture*>(_resource);
                 VK_CHECK_NULLPTR(vk_texture, "RHICreateView: texture to be viewed is nullptr!", return RHIViewRef{});
 
                 VkImageView*    vk_view   = VK_NULL_HANDLE;
@@ -1662,16 +1665,16 @@ RHIViewRef VulkanRHIImpl::RHICreateViewInner(RHIViewableResource* _resource, con
                 VkFormat        format    = VK_FORMAT_UNDEFINED;
                 VkImageViewType view_type;
                 if constexpr (std::is_same_v<T, RHITextureSRVInfo>) {
-                    view           = MoerNew(VulkanRHITextureSRV)(m_device, _resource, _view_info);
-                    vk_view        = &(static_cast<VulkanRHITextureSRV*>(view.Get()))->m_view;
+                    view           = MoerNew(Moer::Render::VulkanRHITextureSRV)(m_device, _resource, _view_info);
+                    vk_view        = &(static_cast<Moer::Render::VulkanRHITextureSRV*>(view.Get()))->m_view;
                     auto& srv_info = std::get<v_type_texture_srv>(_view_info.info);
                     mip_num        = srv_info.mip_num;
                     mip_min        = srv_info.mip_min;
                     FillImageViewInfo(srv_info, format, view_type, array_min, array_num);
 
                 } else if constexpr (std::is_same_v<T, RHITextureUAVInfo>) {
-                    view           = MoerNew(VulkanRHITextureUAV)(m_device, _resource, _view_info);
-                    vk_view        = &(static_cast<VulkanRHITextureUAV*>(view.Get()))->m_view;
+                    view           = MoerNew(Moer::Render::VulkanRHITextureUAV)(m_device, _resource, _view_info);
+                    vk_view        = &(static_cast<Moer::Render::VulkanRHITextureUAV*>(view.Get()))->m_view;
                     auto& uav_info = std::get<v_type_texture_uav>(_view_info.info);
                     mip_num        = 1;
                     mip_min        = uav_info.mip;
@@ -1736,35 +1739,31 @@ RHICommandQueue* VulkanRHIImpl::RHICreateCommandQueue(ECommandQueueType _type) {
 //     return MoerNew(VulkanRHIGraphicsCommandList(m_device, m_device->GetDefaultCommandPool(), VK_COMMAND_BUFFER_LEVEL_PRIMARY));
 // }
 
-RHIGraphicsCommandList* VulkanRHIImpl::RHICreateGraphicsCommandList(RHICommandAllocator* _allocator, RHIGfxPso* _initial_state) {
-    auto* vk_allocator = static_cast<VulkanCommandAllocator*>(_allocator);
-    VK_CHECK_NULLPTR(vk_allocator, "RHICreateGraphicsCommandList: allocator is nullptr!", return nullptr);
+RHIGraphicsCommandList* VulkanRHIImpl::RHICreateGraphicsCommandList(RHIGfxPso* _initial_state) {
+    auto& vk_allocator = m_device->GetCurrentCommandAllocator();
 
-    return MoerNew(VulkanRHIGraphicsCommandList(m_device, vk_allocator->GetHandle(ECommandListType::GRAPHICS), VK_COMMAND_BUFFER_LEVEL_PRIMARY));
+    return MoerNew(VulkanRHIGraphicsCommandList(m_device, vk_allocator.GetHandle(ECommandListType::GRAPHICS), VK_COMMAND_BUFFER_LEVEL_PRIMARY));
 }
 
-RHIComputeCommandList* VulkanRHIImpl::RHICreateComputeCommandList(RHICommandAllocator* _allocator, RHIComputePso* _initial_state) {
-    auto* vk_allocator = static_cast<VulkanCommandAllocator*>(_allocator);
-    VK_CHECK_NULLPTR(vk_allocator, "RHICreateComputeCommandList: allocator is nullptr!", return nullptr);
+RHIComputeCommandList* VulkanRHIImpl::RHICreateComputeCommandList(RHIComputePso* _initial_state) {
+    auto& vk_allocator = m_device->GetCurrentCommandAllocator();
 
-    return MoerNew(VulkanRHIComputeCommandList(m_device, vk_allocator->GetHandle(ECommandListType::COMPUTE), VK_COMMAND_BUFFER_LEVEL_PRIMARY));
+    return MoerNew(VulkanRHIComputeCommandList(m_device, vk_allocator.GetHandle(ECommandListType::COMPUTE), VK_COMMAND_BUFFER_LEVEL_PRIMARY));
 }
 
-RHIRayTracingCommandList* VulkanRHIImpl::RHICreateRayTracingCommandList(RHICommandAllocator* _allocator, RHIRTPso* _initial_state) {
-    auto* vk_allocator = static_cast<VulkanCommandAllocator*>(_allocator);
-    VK_CHECK_NULLPTR(vk_allocator, "RHICreateRayTracingCommandList: allocator is nullptr!", return nullptr);
+RHIRayTracingCommandList* VulkanRHIImpl::RHICreateRayTracingCommandList(RHIRTPso* _initial_state) {
+    auto& vk_allocator = m_device->GetCurrentCommandAllocator();
 
-    return MoerNew(VulkanRHIRayTracingCommandList(m_device, vk_allocator->GetHandle(ECommandListType::RAY_TRACING), VK_COMMAND_BUFFER_LEVEL_PRIMARY));
+    return MoerNew(VulkanRHIRayTracingCommandList(m_device, vk_allocator.GetHandle(ECommandListType::RAY_TRACING), VK_COMMAND_BUFFER_LEVEL_PRIMARY));
 }
 
 // RHIComputeCommandList* VulkanRHIImpl::CreateComputeCommandList(RHIComputePipelineState* _initial_state) {
 //     return nullptr;
 // }
-RHICopyCommandList* VulkanRHIImpl::RHICreateCopyCommandList(RHICommandAllocator* _allocator) {
-    auto* vk_allocator = static_cast<VulkanCommandAllocator*>(_allocator);
-    VK_CHECK_NULLPTR(vk_allocator, "RHICreateCopyCommandList: allocator is nullptr!", return nullptr);
+RHICopyCommandList* VulkanRHIImpl::RHICreateCopyCommandList() {
+    auto& vk_allocator = m_device->GetCurrentCommandAllocator();
 
-    return MoerNew(VulkanRHICopyCommandList(m_device, vk_allocator->GetHandle(ECommandListType::COPY), VK_COMMAND_BUFFER_LEVEL_PRIMARY));
+    return MoerNew(VulkanRHICopyCommandList(m_device, vk_allocator.GetHandle(ECommandListType::COPY), VK_COMMAND_BUFFER_LEVEL_PRIMARY));
 }
 
 void VulkanRHIImpl::RHISetBatchedShaderParametersInner(RHIResource* _pso, const RHIBatchedShaderParameters& _batched_params, bool _b_update_constant) {
@@ -1772,18 +1771,18 @@ void VulkanRHIImpl::RHISetBatchedShaderParametersInner(RHIResource* _pso, const 
     VkShaderStageFlags         stage = 0u;
     switch (_pso->GetResourceType()) {
         case RRT_GRAPHIC_PIPELINE_STATE:
-            vk_pso = static_cast<VulkanRHIGraphicsPipelineState*>(_pso);
+            vk_pso = static_cast<Moer::Render::VulkanRHIGraphicsPipelineState*>(_pso);
             stage  = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
             VK_CHECK_NULLPTR(vk_pso, "SetBatchedShaderParameter: graphics pipeline state is nullptr!", return);
             break;
         case RRT_COMPUTE_PIPELINE_STATE:
-            vk_pso = static_cast<VulkanRHIComputePipelineState*>(_pso);
+            vk_pso = static_cast<Moer::Render::VulkanRHIComputePipelineState*>(_pso);
             stage  = VK_SHADER_STAGE_COMPUTE_BIT;
             VK_CHECK_NULLPTR(vk_pso, "SetBatchedShaderParameter: compute pipeline state is nullptr!", return);
             break;
         case RRT_RAY_TRACING_PIPELINE_STATE:
             stage  = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR | VK_SHADER_STAGE_INTERSECTION_BIT_KHR | VK_SHADER_STAGE_CALLABLE_BIT_KHR | VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_ALL_GRAPHICS;
-            vk_pso = static_cast<VulkanRHIRayTracingPipelineState*>(_pso);
+            vk_pso = static_cast<Moer::Render::VulkanRHIRayTracingPipelineState*>(_pso);
             break;
         default:
             LOG_ERROR("RHISetBatchedShaderParameter: pso is not a pipeline state resource");
@@ -1797,7 +1796,7 @@ void VulkanRHIImpl::RHISetBatchedShaderParametersInner(RHIResource* _pso, const 
         auto* resource = params.resource.Get();
         if (type == ERHIResourceType::RRT_SAMPLER) {
             // sampler
-            auto* vk_sampler = static_cast<VulkanRHISampler*>(resource);
+            auto* vk_sampler = static_cast<Moer::Render::VulkanRHISampler*>(resource);
             VK_CHECK_NULLPTR(vk_sampler, "SetBatchedShaderParameter: sampler is nullptr!", break);
             resource_cache->SetSamplerState(params.space, params.slot, vk_sampler);
         } else {
@@ -1831,12 +1830,6 @@ void VulkanRHIImpl::RHISetBatchedShaderParametersInner(RHIResource* _pso, const 
     }
 }
 
-RHICommandAllocator* VulkanRHIImpl::RHIGetCurrentCommandAllocator() {
-    RHICommandAllocator* allocator = m_device->GetCurrentCommandAllocator();
-    VK_CHECK_NULLPTR(allocator, "RHIGetCurrentCommandAllocator: current command allocator is nullptr!", return nullptr);
-    return m_device->GetCurrentCommandAllocator();
-}
-
 #pragma endregion
 
 void VulkanRHIImpl::InitSurface(Moer::WindowHandle* _handle) {
@@ -1845,19 +1838,18 @@ void VulkanRHIImpl::InitSurface(Moer::WindowHandle* _handle) {
 
 void VulkanRHIImpl::InitVulkan() {
     DeviceInitializer initializer;
-    initializer.instance           = m_instance;
-    initializer.surface            = m_surface;
+    initializer.instance = m_instance;
+    // initializer.surface            = m_surface;
     initializer.api_version        = VK_API_VERSION_1_3;
     initializer.enabled_features   = VulkanDeviceFeature::GetMESupportedDeviceFeatures(initializer.api_version);
     initializer.enabled_extensions = VulkanDeviceExtension::GetMESupportedDeviceExtensions(m_rhi_info);
 
-    m_device = MoerNew(VulkanDevice)();
     m_device->Init(initializer);
     m_device->InitMemoryAllocator(m_instance);
     RHIViewportInitializer viewport_init{};
     viewport_init.window_handle = Moer::WindowContext::GetMainWindow();
     auto viewport               = RHICreateViewport(viewport_init);
-    m_main_viewport             = (VulkanViewport*)viewport.Get();
+    m_main_viewport             = (Moer::Render::VulkanRHIViewport*)viewport.Get();
 
     m_main_viewport->AddRef();
     // VulkanSwapChain* swap_chain = MoerNew(VulkanSwapChain();
@@ -1972,11 +1964,11 @@ RHIBufferRef VulkanRHIImpl::CreateBufferFromData(const RHIBufferCreateInfo& info
     buffer_info.usage |= EBufferUsageFlags::TRANSFER_DST;
     RHIBufferRef buffer = RHICreateBufferInner(buffer_info);
 
-    const auto&  copy_command_pool = m_device->GetCurrentCommandAllocator()->GetHandle(ECommandListType::COPY);
+    const auto&  copy_command_pool = m_device->GetCurrentCommandAllocator().GetHandle(ECommandListType::COPY);
     const auto&  transfer_queue    = m_device->GetTransferQueue();
     auto         cb                = BeginSingleTimeCommands(copy_command_pool);
-    VkBuffer     vk_buffer         = static_cast<VulkanRHIBuffer*>(buffer.Get())->GetHandle();
-    VkBuffer     vk_staging_buffer = static_cast<VulkanRHIBuffer*>(staging_buffer.Get())->GetHandle();
+    VkBuffer     vk_buffer         = static_cast<Moer::Render::VulkanRHIBuffer*>(buffer.Get())->GetHandle();
+    VkBuffer     vk_staging_buffer = static_cast<Moer::Render::VulkanRHIBuffer*>(staging_buffer.Get())->GetHandle();
     VkBufferCopy vk_region{};
     vk_region.size = info.size;
     vkCmdCopyBuffer(cb, vk_staging_buffer, vk_buffer, 1, &vk_region);
@@ -2026,7 +2018,7 @@ void VulkanRHIImpl::EndSingleTimeCommands(VkCommandBuffer _command_buffer, VkCom
 }
 
 VkDeviceAddress VulkanRHIImpl::GetDeviceAddress(RHIBufferRef _buffer) {
-    auto* vk_buffer = static_cast<VulkanRHIBuffer*>(_buffer.Get());
+    auto* vk_buffer = static_cast<Moer::Render::VulkanRHIBuffer*>(_buffer.Get());
     VK_CHECK_NULLPTR(vk_buffer, "GetDeviceAddress:buffer to getaddress is nullptr", return VkDeviceAddress{0});
     VkBufferDeviceAddressInfo info{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
     info.buffer = vk_buffer->GetHandle();
@@ -2036,7 +2028,7 @@ VkDeviceAddress VulkanRHIImpl::GetDeviceAddress(RHIBufferRef _buffer) {
 #pragma endregion
 
 #pragma region viewport
-RHIViewport*   VulkanRHIImpl::RHIGetMainViewport() {
+RHIViewport* VulkanRHIImpl::RHIGetMainViewport() {
     return static_cast<RHIViewport*>(m_main_viewport);
 }
 //create external viewport
@@ -2048,13 +2040,13 @@ RHIViewportRef VulkanRHIImpl::RHICreateViewport(const RHIViewportInitializer& _i
     swapchain->Connect(m_instance, surface, m_device);
     swapchain->Init(&width, &height, _init.b_vsync);
 
-    VulkanViewport* viewport = MoerNew(VulkanViewport)(swapchain, m_rhi_info.max_frame_in_flight);
+    Moer::Render::VulkanRHIViewport* viewport = MoerNew(Moer::Render::VulkanRHIViewport)(swapchain, m_rhi_info.max_frame_in_flight);
 
     return viewport;
 }
 void VulkanRHIImpl::RHIResizeViewport(RHIViewport* _viewport, Extent2D _size, bool _b_full_screen, EPixelFormat _format) {
     assert(_viewport != nullptr && "Passing invalid viewport");
-    VulkanViewport* vk_viewport = static_cast<VulkanViewport*>(_viewport);
+    Moer::Render::VulkanRHIViewport* vk_viewport = static_cast<Moer::Render::VulkanRHIViewport*>(_viewport);
 
     auto* swapchain = (VulkanSwapChain*)vk_viewport->GetNativeSwapchain();
 
@@ -2062,26 +2054,27 @@ void VulkanRHIImpl::RHIResizeViewport(RHIViewport* _viewport, Extent2D _size, bo
 }
 RHIViewportNextBackBufferInfo VulkanRHIImpl::RHIGetNextFrameViewportBufferInfo(RHIViewport* _viewport) {
     assert(_viewport != nullptr && "Passing invalid viewport");
-    VulkanViewport* vk_viewport = static_cast<VulkanViewport*>(_viewport);
+    Moer::Render::VulkanRHIViewport* vk_viewport = static_cast<Moer::Render::VulkanRHIViewport*>(_viewport);
 
     return vk_viewport->GetNextFrameBackBufferInfo();
 }
 RHIUAV* VulkanRHIImpl::RHIGetViewportBackBufferUAV(RHIViewport* _viewport, uint32_t index) {
     assert(_viewport != nullptr && "Passing invalid viewport");
-    VulkanViewport* vk_viewport = static_cast<VulkanViewport*>(_viewport);
+    Moer::Render::VulkanRHIViewport* vk_viewport = static_cast<Moer::Render::VulkanRHIViewport*>(_viewport);
     if (index == UINT32_MAX) {
         LOG_WARNING("Not valid viewport back buffer index");
         return nullptr;
     }
-    VulkanRHITextureUAV* uav = vk_viewport->GetCurrentBackBuffer(index);
+    Moer::Render::VulkanRHITextureUAV* uav = vk_viewport->GetCurrentBackBuffer(index);
     return static_cast<RHIUAV*>(uav);
 }
 void VulkanRHIImpl::RHIPresentViewport(RHIViewport* _viewport, RHIFence* _render_end_fence) {
     assert(_viewport != nullptr && "Passing invalid viewport");
-    VulkanViewport* vk_viewport = static_cast<VulkanViewport*>(_viewport);
+    Moer::Render::VulkanRHIViewport* vk_viewport = static_cast<Moer::Render::VulkanRHIViewport*>(_viewport);
 
     uint32_t value = _render_end_fence->GetValue();
 
     vk_viewport->Present(_render_end_fence);
 }
+
 #pragma endregion
