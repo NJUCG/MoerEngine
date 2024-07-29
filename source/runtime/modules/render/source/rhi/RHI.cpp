@@ -2,6 +2,7 @@
 #include "rhi/RHI.h"
 #include "PixelFormat.h"
 #include "log/LogSystem.h"
+#include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "Core.h"
@@ -102,14 +103,14 @@ namespace Moer::Render {
     void RenderDevice::Init(DeviceInitInfo&& _info) {
         switch (_info.rhi_type) {
             case ERHIType::Vulkan:
-                Get().impl = std::move(UniquePtr<Impl>(MoerNew(Moer::Render::VulkanDevice)(std::move(_info))));
+                Get().impl = std::move(UniquePtr<Impl>(MoerNew(VulkanDevice)(std::move(_info))));
                 break;
             case ERHIType::D3D12:
                 LOG_ERROR("D3D12 is not supported yet");
                 break;
         }
     }
-    const CommandQueue& RenderDevice::GetCommandQueue() const {
-        return Get().impl->GetCommandQueue();
+    CommandQueue& RenderDevice::GetCommandQueue(EQueueType _type) {
+        return Get().impl->GetCommandQueue(_type);
     }
 };// namespace Moer::Render

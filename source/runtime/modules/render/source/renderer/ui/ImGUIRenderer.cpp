@@ -60,7 +60,7 @@ namespace Moer::Render {
             Moer::Matrix4x4f mvp;
             bool             need_correction;
         };
-        DEFINE_PIPELINE_CLASS(GUIPipeline)
+        DEFINE_RASTER_PIPELINE_CLASS(GUIPipeline)
 
         DEFINE_SHADER_SAMPLER(sampler0);
         DEFINE_SHADER_TEX(texture0);
@@ -1040,7 +1040,16 @@ void GuiSetWindowSize(ImGuiViewport* _viewport, ImVec2 _size) {
     // if (_size.x == extent.width && _size.y == extent.height) return;
     using namespace Moer::Render;
     auto& rd_device = Moer::Render::RenderDevice::Get();
-    rd_device.ResizeViewport(m_viewport, Extent2D(_size.x, _size.y), false);
+    // rd_device.ResizeViewport(m_viewport, Extent2D(_size.x, _size.y), false);
+    m_viewport->OnResize(Extent2D(_size.x, _size.y));
+    RHIViewportInitializer viewport_info{
+        .window_handle =(Moer::WindowHandle*) m_viewport->GetNativeWindow((void**)0),
+        .b_is_full_screen = false,
+        .b_vsync = false,
+        .preferred_format = PF_R8G8B8A8_SRGB,
+        .size = Extent2D(_size.x, _size.y)};
+
+    viewport_data->viewport = rd_device.CreateViewport(viewport_info);
     // g_rhi->RHIResizeViewport(m_viewport, Extent2D(size.x, size.y), false);
 }
 void GuiRenderWindow(ImGuiViewport* viewport, void*) {

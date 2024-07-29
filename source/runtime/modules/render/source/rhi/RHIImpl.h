@@ -1,4 +1,5 @@
-#pragma once
+#ifndef MOER_RHI_IMPL_H
+#define MOER_RHI_IMPL_H
 #include "PixelFormat.h"
 #include "misc/STL.h"
 #include "rhi/RHI.h"
@@ -445,8 +446,6 @@ namespace Moer::Render {
 
         virtual RHIViewportRef CreateViewport(const RHIViewportInitializer& _init) = 0;
 
-        virtual void ResizeViewport(RHIViewport* _viewport, Extent2D _size, bool _b_full_screen, EPixelFormat _format = PF_UNDEFINED) = 0;
-
         virtual BackBufferInfo GetNextBackBufferInfo(RHIViewport* _viewport) = 0;
 
         virtual void PresentViewport(RHIViewport* _viewport, RHIFence* _render_end_fence) = 0;
@@ -454,49 +453,14 @@ namespace Moer::Render {
 
         const ShaderTargetInfo& GetShaderTargetInfo() const;
 
-        virtual const CommandQueue& GetCommandQueue() const = 0;
+        virtual CommandQueue& GetCommandQueue(EQueueType _type) = 0;
+
+        virtual SwapchainRef CreateSwapchain(const SwapchainCreateInfo& _info) = 0;
 
         virtual PipelineHandle CreatePipeline(GfxPsoCreateInfo&& _pso_info, PipelineShaderInfo&& _shaders) = 0;//gfx
         virtual PipelineHandle CreatePipeline(PipelineShaderInfo&& _shaders)                               = 0;//compute
     };
 
-    RHIViewportRef RenderDevice::CreateViewport(const RHIViewportInitializer& _init) {
-        return impl->CreateViewport(_init);
-    }
-
-    void RenderDevice::ResizeViewport(RHIViewport* _viewport, Extent2D _size, bool _b_full_screen, EPixelFormat _format) {
-        impl->ResizeViewport(_viewport, _size, _b_full_screen, _format);
-    }
-
-    BackBufferInfo RenderDevice::GetNextBackBufferInfo(RHIViewport* _viewport) {
-        return impl->GetNextBackBufferInfo(_viewport);
-    }
-
-    FenceRef RenderDevice::CreateTimeline() {
-        return impl->CreateTimeline();
-    }
-
-    FenceRef RenderDevice::CreatePresentFence() {
-        return impl->CreatePresentFence();
-    }
-
-    PipelineHandle RenderDevice::CreatePipeline(GfxPsoCreateInfo&& _pso_info, PipelineShaderInfo&& _shaders) {
-        return impl->CreatePipeline(std::move(_pso_info), std::move(_shaders));
-    }
-
-    PipelineHandle RenderDevice::CreatePipeline(PipelineShaderInfo&& _shaders) {
-        return impl->CreatePipeline(std::move(_shaders));
-    }
-
-    TextureRef RenderDevice::CreateTexture(Extent2D _size, EPixelFormat _format, ETextureUsageFlags _usage, uint32_t _mip_cnt, uint32_t _array_size) {
-        return impl->CreateTexture(_size, _format, _usage, _mip_cnt, _array_size);
-    }
-
-    TextureRef RenderDevice::CreateTexture(Extent3D _size, EPixelFormat _format, ETextureUsageFlags _usage, uint32_t _mip_cnt, uint32_t _array_size) {
-        return impl->CreateTexture(_size, _format, _usage, _mip_cnt, _array_size);
-    }
-
-    DepthBufferRef RenderDevice::CreateDepthBuffer(Extent2D _size, EPixelFormat _format, uint32_t _array_size) {
-        return impl->CreateDepthBuffer(_size, _format, _array_size);
-    }
+    
 }// namespace Moer::Render
+#endif

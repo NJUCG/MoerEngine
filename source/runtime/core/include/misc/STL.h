@@ -2,6 +2,7 @@
 #define MOER_ENGINE_STL_H
 #include <cstring>
 #include <map>
+#include <queue>
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
@@ -52,6 +53,9 @@ namespace Moer {
 
     template<typename T>
     using DEQueue = std::deque<T, m_defualt_allocator<T>>;
+
+    template<typename T>
+    using Queue = std::queue<T, DEQueue<T>>;
 
     template<typename T, typename... Args>
         requires std::is_constructible_v<T, Args...>

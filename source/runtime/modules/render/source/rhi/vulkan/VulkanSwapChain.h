@@ -6,6 +6,8 @@
 #define VULKAN_SWAP_CHAIN_H
 
 #include "misc/CountableRef.h"
+#include "rhi/RHI.h"
+#include "rhi/RHIResource.h"
 #include "rhi/vulkan/VulkanRHI.h"
 #include "window/WindowContext.h"
 
@@ -17,7 +19,9 @@ namespace Moer::Render {
         // VkImageView view;
         class VulkanImageView* view;
     };
-
+    VkSurfaceFormatKHR ChooseSwapSurfaceFormat(const Moer::Array<VkSurfaceFormatKHR>& _available_formats, bool _prefer_hdr = false);
+    VkPresentModeKHR   ChooseSwapPresentMode(const Moer::Array<VkPresentModeKHR>& _available_present_modes, bool vsync = false);
+    VkExtent2D         ChooseSwapExtent(uint32_t* _width, uint32_t* _height, const VkSurfaceCapabilitiesKHR& _capabilities);
     class VulkanSwapChain {
     public:
         VulkanSwapChain() {}
@@ -38,7 +42,7 @@ namespace Moer::Render {
     private:
         friend class VulkanRHIViewport;
         friend class VulkanViewport;
-        friend class VulkanRHIImpl;
+        friend class ::VulkanRHIImpl;
         VkInstance     m_instance;
         VulkanDevice*  m_device;
         VkSwapchainKHR m_swap_chain;
@@ -54,10 +58,36 @@ namespace Moer::Render {
 
     private:
         VkImageView CreateImageView(VkImage _image, VkFormat _format, uint32_t mipLevels, VkImageAspectFlags aspectMask);
+    };
 
-        VkSurfaceFormatKHR ChooseSwapSurfaceFormat(const Moer::Array<VkSurfaceFormatKHR>& _available_formats);
-        VkPresentModeKHR   ChooseSwapPresentMode(const Moer::Array<VkPresentModeKHR>& _available_present_modes, bool vsync = false);
-        VkExtent2D         ChooseSwapExtent(uint32_t* _width, uint32_t* _height, const VkSurfaceCapabilitiesKHR& _capabilities);
+    class VkSwapchain : public Swapchain {
+    public:
+        VkSwapchain(RenderDevice::Impl& _device, const SwapchainCreateInfo& _info);
+        ~VkSwapchain();
+        void                                       Recreate(const SwapchainCreateInfo& _info);
+        void                                       CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force_recreate = false);
+        std::tuple<class VulkanFence*, uint, uint> AquireNextImage();
+        TextureView                                GetSwapchainImage(uint _index);
+        class VulkanFence*                         GetImageReadyFence(uint _index);
+        VulkanFence*                               GetRenderFinishedFence();
+        void                                       Present(VkQueue _queue, uint _image_index);
+
+        void               WaitFrameInFlight(uint64 _image_idx);
+        VkSurfaceFormatKHR GetSurfaceFormat() const { return fmt; }
+        VkSurfaceFormatKHR fmt;
+
+        Array<VulkanFence*>         image_ready_fences;
+        Array<VulkanFence*>         render_finished_fences;
+        Array<class VulkanTexture*> swapchain_textures;
+        Array<TextureView>          swapchain_views;
+        Array<VkFence>              in_flight_fences;
+
+        VkSwapchainKHR handle  = VK_NULL_HANDLE;
+        VkSurfaceKHR   surface = VK_NULL_HANDLE;
+        VulkanDevice&  device;
+        uint           width = 0, height = 0;
+        uint64         image_idx            = 0;
+        uint           max_frames_in_flight = 2;
     };
 }// namespace Moer::Render
 

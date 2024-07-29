@@ -151,7 +151,7 @@ RunnableThread::RunnableThread(Runnable* _in_runnable, ThreadAttributes _attribu
     m_create_event = EventPool::Get()->GetEvent(false);
     m_end_event    = EventPool::Get()->GetEvent(false);
     EventRef create_event(m_create_event);
-    m_thread = MoerNew(std::jthread)([_in_runnable, name(_attributes.name), affinity(std::move(_attributes.affinity)), this]() {
+    m_thread = MoerNew(std::thread)([_in_runnable, name(_attributes.name), affinity(std::move(_attributes.affinity)), this]() {
         SetName(name);
         auto tmp_affinity = affinity;
         SetAffinity(std::move(tmp_affinity));

@@ -7,6 +7,7 @@
 #include "rhi/RHIResource.h"
 #include "RenderAPI.h"
 #include "shader/ShaderPipeline.h"
+#include <type_traits>
 #include <variant>
 
 class Shader;
@@ -168,7 +169,7 @@ public:
     virtual void ExecuteSubCommands(uint32_t                _num,
                                     RHIGraphicsCommandList* _sub_commands) = 0;
 
-    virtual void BindParameters(Shader* _shader, RHIBatchedShaderParameters* _batched_params) {};
+    virtual void BindParameters(Shader* _shader, RHIBatchedShaderParameters* _batched_params){};
 };
 
 class RHIComputeCommandList : public RHICommandListBase {
@@ -270,7 +271,8 @@ namespace Moer::Render {
     enum class EQueueType {
         Graphics,
         Compute,
-        Copy
+        Copy,
+        Num
     };
     struct Command {
     public:
@@ -339,23 +341,27 @@ namespace Moer::Render {
             return *this;
         }
     };
-
+    template<typename TInArg>
+    concept is_arg =
+        std::is_same_v<std::remove_reference_t<TInArg>(), BufferView> || std::is_same_v<std::remove_reference_t<TInArg>(), TextureView> || std::is_same_v<std::remove_reference_t<TInArg>(), Buffer*> || std::is_same_v<std::remove_reference_t<TInArg>(), Texture*>;
     class CommandList {
     public:
         struct ArgSetter {
         public:
             ArgSetter(ShaderPipeline& _handle) : handle(_handle) {
             }
-            template<typename T>
+
+            template<is_arg T>
             void SetParam(std::string_view _name, T&& _param) {
-                if constexpr (std::is_same_v<T, BufferView>) {
+                using Type = std::remove_reference_t<T>();
+                if constexpr (std::is_same_v<Type, BufferView>) {
                     SetBuffer(std::hash<std::string_view>{}(_name), _param);
-                } else if constexpr (std::is_same_v<T, TextureView>) {
+                } else if constexpr (std::is_same_v<Type, TextureView>) {
                     SetTexture(std::hash<std::string_view>{}(_name), _param);
-                } else if constexpr (std::is_same_v<T, Buffer*>) {
+                } else if constexpr (std::is_same_v<Type, Buffer*>) {
                     assert(_param && "buffer is nullptr");
                     SetBuffer(std::hash<std::string_view>{}(_name), _param->GetView());
-                } else if constexpr (std::is_same_v<T, Texture*>) {
+                } else if constexpr (std::is_same_v<Type, Texture*>) {
 
                     assert(_param && "texture is nullptr");
                     SetTexture(std::hash<std::string_view>{}(_name), _param->GetView());
@@ -471,8 +477,9 @@ namespace Moer::Render {
         template<typename TGfxPso, typename... TRenderTarget>
         DrawDispatcher Gfx(TGfxPso& _pso, Rect2D _rect, MeshDrawData&& _mesh_data, TRenderTarget&&... _render_targets) {
             RenderPassInfo pass_info(
-                _rect,
-                {std::forward<TRenderTarget>(_render_targets)...});
+                {std::forward<TRenderTarget>(_render_targets)...},
+                DepthAttachment{},
+                _rect);
             BeginRenderPass(_pso.handle, std::move(pass_info), std::move(_mesh_data));
             DrawDispatcher dispatcher(_pso, *this);
 
@@ -517,13 +524,15 @@ namespace Moer::Render {
         void                      SubmitConstants(ShaderPipeline&, Array<uint>&&);
         Array<UniquePtr<Command>> commands;
     };
-
+    class QueueCmd{};
     class CommandQueue {
     public:
         CommandQueue(){};
-
-        virtual void Execute(CmdSubmit&& _submit)                                                            = 0;
-        virtual void Present(RHIViewport* _viewport, FenceRef _fence, uint64 _wait_val, TextureView _target) = 0;
+        CommandQueue(EQueueType _type, RenderDevice& _device);
+        void         Test();
+        virtual void Execute(CmdSubmit&& _submit)                         = 0;
+        virtual void Present(RHIViewport* _viewport, TextureView _target) = 0;
+        virtual void Present(SwapchainRef _swapchain, TextureView _target) = 0;
     };
 }// namespace Moer::Render
 #endif

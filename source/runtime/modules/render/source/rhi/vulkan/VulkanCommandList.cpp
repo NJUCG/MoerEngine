@@ -11,6 +11,7 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
+#include "rhi/vulkan/VulkanRHI.h"
 #include "rhi/vulkan/misc/VulkanMacroUtils.h"
 #include "VulkanCommand.h"
 
@@ -22,7 +23,9 @@
 
 #include <cstdint>
 #include <optional>
+#include <stdint.h>
 #include <string>
+#include <variant>
 #include <vector>
 #include <vulkan/vulkan_core.h>
 namespace Moer::Render {
@@ -1365,8 +1368,60 @@ namespace Moer::Render {
         }
     };
 
+    VkNativeQueue::VkNativeQueue(EQueueType _type, VulkanDevice& _device) {
+        switch (_type) {
+            case EQueueType::Graphics:
+                queue = _device.GetGraphicsQueue();
+                break;
+            case EQueueType::Compute:
+                queue = _device.GetComputeQueue();
+                break;
+            case EQueueType::Copy:
+                queue = _device.GetTransferQueue();
+                break;
+        }
+    }
+
+    VkNativeQueue::~VkNativeQueue() {
+    }
+
+    void VkNativeQueue::Submit(VulkanCmdList& _cmdlist) {
+        VkSubmitInfo2   submit_info{};
+        VkCommandBuffer cmd = _cmdlist.GetHandle();
+
+        submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
+
+        submit_info.pNext                    = nullptr;
+        submit_info.waitSemaphoreInfoCount   = wait_infos.size();
+        submit_info.pWaitSemaphoreInfos      = wait_infos.data();
+        submit_info.signalSemaphoreInfoCount = signal_infos.size();
+        submit_info.pSignalSemaphoreInfos    = signal_infos.data();
+        vkQueueSubmit2(queue, 1, &submit_info, VK_NULL_HANDLE);
+        wait_infos.clear();
+        signal_infos.clear();
+    }
+
+    void VkNativeQueue::Wait(VulkanFence* _fence, uint64 _fence_val) {
+        VkSemaphore sem = _fence->GetUnderlyingHandle();
+        wait_infos.push_back(VkSemaphoreSubmitInfo{
+            .sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+            .pNext     = nullptr,
+            .semaphore = sem,
+            .value     = _fence_val});
+    }
+
+    void VkNativeQueue::Signal(VulkanFence* _fence, uint64 _fence_val) {
+        VkSemaphore sem = _fence->GetUnderlyingHandle();
+        signal_infos.push_back(VkSemaphoreSubmitInfo{
+            .sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+            .pNext     = nullptr,
+            .semaphore = sem,
+            .value     = _fence_val});
+    }
+
     void VkCommandQueue::Execute(CmdSubmit&& _submit) {
-        auto&        vk_allocator = *GetAllocator();
+        auto         allocator_ptr = std::move(GetAllocator());
+        auto&        vk_allocator  = *allocator_ptr;
         VkCmdVisitor visitor(vk_device, vk_allocator.GetCmdList());
         for (const auto& cmd : _submit.cmds) {
             switch (cmd->Type()) {
@@ -1422,6 +1477,99 @@ namespace Moer::Render {
                 case Command::EType::Custom: break;
             }
         }
+        auto current_timeline = ++last_frame;
+        queue.Signal(timeline, current_timeline);
+        queue.Submit(vk_allocator.GetCmdList());
+        if(_submit.cmds.empty()){
+            allocators.Push(allocator_ptr.release());
+        }else
+        {
+            std::unique_lock<std::mutex> lock(event_mutex);
+            event_queue.emplace_back(std::move(allocator_ptr), current_timeline, true);
+            queue_cv.notify_one();
+        }
+    }
+
+    void VkCommandQueue::Present(RHIViewport* _viewport, TextureView _view) {
+        auto  allocator    = std::move(GetAllocator());
+        auto& vk_allocator = *allocator;
+        auto& vk_cmd_list  = vk_allocator.GetCmdList();
+        auto* vk_viewport  = static_cast<VulkanRHIViewport*>(_viewport);
+        auto  info         = _viewport->GetNextFrameBackBufferInfo();
+
+        {
+            //copy
+            auto* vk_src_tex     = static_cast<VulkanTexture*>(_view.texture);
+            auto* swaphchain_tex = vk_viewport->GetSwapchainImage(info.backbuffer_index);
+            //todo: need transaction
+            vk_cmd_list.CopyTexture(vk_src_tex, swaphchain_tex, _view.texture->GetExtent(), {0, 0, 0}, {0, 0, 0}, 0, 0);
+        }
+        std::optional<VulkanFence*> binary_fence;
+        {
+            std::unique_lock<std::mutex> lock(present_mutex);
+            auto*                        fence = present_fences.front();
+            if (!fence) {
+                auto fence_ref = vk_device.CreateFence(EFenceUsageFlags::BINARY);
+                fence_ref->AddRef();
+                fence = static_cast<VulkanFence*>(fence_ref.Get());
+            }
+            assert(fence);
+            binary_fence.emplace(fence);
+        }
+
+        auto current_timeline = ++last_frame;
+        queue.Signal(timeline, current_timeline);
+        queue.Wait(vk_viewport->GetBinaryFence(info.backbuffer_index), 0);
+        queue.Signal(binary_fence.value(), 0);
+        queue.Submit(vk_allocator.GetCmdList());
+        vk_viewport->Present(std::get<VulkanFence::BinaryFence>(binary_fence.value()->GetFence()));
+        {
+            std::unique_lock<std::mutex> lock(event_mutex);
+            allocator->AddOnComplete([binary_fence = binary_fence.value(), &fences(present_fences), &present_mutex(present_mutex)]() {
+                {
+                    std::unique_lock<std::mutex> lock(present_mutex);
+                    fences.push(binary_fence);
+                }
+            });
+            event_queue.emplace_back(std::move(allocator), current_timeline, true);
+            queue_cv.notify_one();
+        }
+    }
+
+    void VkCommandQueue::Present(SwapchainRef _sc, TextureView _view) {
+        VkSwapchain* sc           = ResourceCast(_sc.Get());
+        auto         allocator    = std::move(GetAllocator());
+        auto&        vk_allocator = *allocator;
+        auto&        vk_cmd_list  = vk_allocator.GetCmdList();
+        auto [fence, idx, present_timeline]         = sc->AquireNextImage();
+        if (idx == UINT32_MAX) {
+            //present null
+            allocator->Reset();
+            allocators.Push(allocator.release());
+            return;
+        }
+        sc->WaitFrameInFlight(idx);
+        //copy
+        auto* vk_src_tex     = static_cast<VulkanTexture*>(_view.texture);
+        auto  swaphchain_tex = sc->GetSwapchainImage(idx);
+        {
+            //copy
+            auto* vk_src_tex = static_cast<VulkanTexture*>(_view.texture);
+            //todo: need transaction
+            vk_cmd_list.CopyTexture(vk_src_tex, ResourceCast(swaphchain_tex.texture), _view.texture->GetExtent(), {0, 0, 0}, {0, 0, 0}, 0, 0);
+        }
+
+        auto current_timeline = ++last_frame;
+        queue.Signal(timeline, current_timeline);
+        queue.Wait(sc->GetImageReadyFence(idx), 0);
+        queue.Signal(sc->GetRenderFinishedFence(), 0);
+        queue.Submit(vk_allocator.GetCmdList());
+        sc->Present(queue.GetHandle(), idx);
+        {
+            std::unique_lock<std::mutex> lock(event_mutex);
+            event_queue.emplace_back(std::move(allocator), current_timeline, true);
+            queue_cv.notify_one();
+        }
     }
 
     UniquePtr<VulkanAllocator> VkCommandQueue::GetAllocator() {
@@ -1430,7 +1578,7 @@ namespace Moer::Render {
         }
         auto allocator = std::move(UniquePtr<VulkanAllocator>(allocators.Pop()));
         if (allocator) {
-            allocator->ResetCmdList();
+            // allocator->ResetCmdList();
             return std::move(allocator);
         }
         return MakeUnique<VulkanAllocator>(&vk_device);
@@ -1438,7 +1586,30 @@ namespace Moer::Render {
 
     void VkCommandQueue::ExecuteThread() {
         while (enabled) {
+            uint64 timeline;
+            auto   wait_util_reach_timeline = [&timeline, this]() {
+                uint64 prev_timeline = executed_frame;
+                while (prev_timeline < timeline && !executed_frame.compare_exchange_weak(prev_timeline, timeline)) {
+                    std::this_thread::yield();
+                }
+            };
 
+            auto visit_allocator = [&, &allocators(this->allocators), fence(this->timeline)](UniquePtr<VulkanAllocator>& _allocator) {
+                _allocator->Complete(fence, timeline);
+                _allocator->Reset();
+                allocators.Push(_allocator.release());
+                wait_util_reach_timeline();
+            };
+            auto visit_fence = [&](FencePlaceHoler& _fence) {
+                this->timeline->Wait(timeline);
+                wait_util_reach_timeline();
+            };
+            auto visit_funcs = [&](Array<std::function<void()>>& _funcs) {
+                for (auto& func : _funcs) {
+                    func();
+                }
+                wait_util_reach_timeline();
+            };
             while (true) {
                 std::optional<QueueEvent> evt;
                 {
@@ -1452,12 +1623,25 @@ namespace Moer::Render {
                 if (!evt.has_value()) {
                     break;
                 }
+                timeline = evt->timeline;
+                std::visit(
+                    [&](auto& _evt) {
+                        using TEvent = std::decay_t<decltype(_evt)>;
+                        if constexpr (std::is_same_v<TEvent, UniquePtr<VulkanAllocator>>) {
+                            visit_allocator(_evt);
+                        } else if constexpr (std::is_same_v<TEvent, FencePlaceHoler>) {
+                            visit_fence(_evt);
+                        } else if constexpr (std::is_same_v<TEvent, Array<std::function<void()>>>) {
+                            visit_funcs(_evt);
+                        }
+                    },
+                    evt->event);
             }
             {
                 //wait for queue submission
                 std::unique_lock<std::mutex> lock(event_mutex);
                 while (enabled && event_queue.empty()) {
-                    event->Wait();
+                    queue_cv.wait(lock);
                 }
             }
         }
@@ -1469,18 +1653,30 @@ namespace Moer::Render {
         }
     }
 
-    void VkCommandQueue::Present(RHIViewport* _viewport, FenceRef _fence, uint64 _wait_val, TextureView _view) {
-
-        //only need timeline this time
-        VkSemaphore timeline;
-        auto&       allocator = *GetAllocator();
+    void VkCommandQueue::Signal() {
+        auto current_timeline = ++last_frame;
+        queue.Signal(timeline, current_timeline);
+        {
+            std::unique_lock<std::mutex> lock(event_mutex);
+            event_queue.push_back({FencePlaceHoler{}, current_timeline, true});
+            queue_cv.notify_one();
+        }
     }
+
     VulkanAllocator::VulkanAllocator(VulkanDevice* _device) : VulkanDeviceObject(_device),
                                                               allocator(_device),
                                                               small_allocator(&allocator, 1024, 1.5) {
 
         cmd_allocator.emplace(_device, VK_QUEUE_GRAPHICS_BIT);
         cmd_list.emplace(&cmd_allocator.value(), *_device);
+    }
+
+    VulkanAllocator::~VulkanAllocator() {
+        small_allocator.Dispose();
+        for (auto& handle : large_buffers) {
+            allocator.DeAllocate(reinterpret_cast<uint64>(handle));
+        }
+        large_buffers.clear();
     }
     //
     BufferView VulkanAllocator::AllocateBuffer(uint64 _size, uint _alignment) {
@@ -1507,6 +1703,18 @@ namespace Moer::Render {
 
     void VulkanAllocator::ResetCmdList() {
         vkResetCommandPool(m_device->GetDevice(), cmd_allocator->GetHandle(), 0);
+    }
+
+    void VulkanAllocator::Complete(VulkanFence* _fence, uint64 _wait_val) {
+        _fence->Wait(_wait_val);
+        //execute post complete functions if needed
+        for (auto& func : on_complete) {
+            func();
+        }
+    }
+    void VulkanAllocator::Reset() {
+        ResetBufferAlloc();
+        ResetCmdList();
     }
 
     VulkanAllocator::TmpBufferAllocator::TmpBufferAllocator(VulkanDevice* _device) : VulkanDeviceObject(_device) {}

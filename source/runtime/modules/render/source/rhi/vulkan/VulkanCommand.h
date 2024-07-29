@@ -12,6 +12,8 @@
 #include "rhi/RHIResource.h"
 #include "vulkan/vulkan_core.h"
 
+#include <condition_variable>
+#include <mutex>
 #include <optional>
 #include <type_traits>
 #include <variant>
@@ -126,7 +128,8 @@ namespace Moer::Render {
         void UploadDescriptors(PipelineHandle& _pso_handle);
         void UploadPushConstants(PipelineHandle& _pso_handle, std::span<const uint> _data);
 
-        void SetPso(const PipelineHandle& _pso_handle);
+        void            SetPso(const PipelineHandle& _pso_handle);
+        VkCommandBuffer GetHandle() const { return command_buffer; }
     };
     //allocator for tmp buffer and other tmp resources
     class VulkanCmdAllocator : public VulkanDeviceObject {
@@ -155,6 +158,11 @@ namespace Moer::Render {
         }
         void ResetBufferAlloc();
         void ResetCmdList();
+        void Complete(VulkanFence* _fence, uint64 _timeline);
+        void Reset();
+        void AddOnComplete(std::function<void()>&& _func) {
+            on_complete.push_back(std::move(_func));
+        }
         //staging buffer allocate with block strategy
     private:
         uint64 small_block_size;
@@ -192,6 +200,7 @@ namespace Moer::Render {
         TmpBufferAllocator                allocator;
 
         StackAllocator small_allocator;
+        Array<std::function<void()>> on_complete;
 
         struct LargeAllocator {
             TmpBufferAllocator* allocator;
@@ -438,12 +447,28 @@ namespace Moer::Render {
         VkQueue queue;
     };
 
+    class VkNativeQueue {
+    public:
+        VkNativeQueue(EQueueType _type, VulkanDevice& _device);
+        ~VkNativeQueue();
+
+        void Submit(VulkanCmdList& _cmdlist);
+        void Wait(VulkanFence* _fence, uint64 _timeline);
+        void Signal(VulkanFence* _fence, uint64 _timeline);
+        VkQueue GetHandle() const { return queue; }
+    private:
+        Array<VkSemaphoreSubmitInfo> wait_infos;
+        Array<VkSemaphoreSubmitInfo> signal_infos;
+        VkQueue                      queue;
+    };
+
     class VkCommandQueue : public CommandQueue {
     public:
+        struct FencePlaceHoler {};
         using EventType = std::variant<
             UniquePtr<VulkanAllocator>,
             Array<std::function<void()>>,
-            Fence*>;
+            FencePlaceHoler>;
 
         struct QueueEvent {
             EventType event;
@@ -458,11 +483,13 @@ namespace Moer::Render {
             }
         };
 
-        VkCommandQueue(VulkanDevice& _device) : CommandQueue(), vk_device(_device) {
+        VkCommandQueue(VulkanDevice& _device, EQueueType _type) : CommandQueue(), vk_device(_device), queue(_type, _device) {
             timeline = MoerNew(VulkanFence(EFenceUsageFlags::TIMELINE, vk_device));
         }
         void                               Execute(CmdSubmit&& _submit) override;
-        void                               Present(RHIViewport* _viewport, FenceRef _render_end_fence, uint64 _wait_val, TextureView _view) override;
+        void                               Present(RHIViewport* _viewport, TextureView _view) override;
+        void                               Present(SwapchainRef _viewport, TextureView _view) override;
+
         void                               ExecuteThread();
         VulkanDevice&                      vk_device;
         LockFreeQueueBase<VulkanAllocator> allocators;
@@ -471,14 +498,20 @@ namespace Moer::Render {
     private:
         UniquePtr<VulkanAllocator> GetAllocator();
         void                       Complete(uint64 _timeline);
+        void                       Signal();
 
     private:
-        uint                last_frame;
-        std::atomic<uint64> executed_frame;
-        VulkanFence*        timeline;
-        std::mutex          event_mutex;
-        bool                enabled{false};
-        Event*              event;
+        uint                    last_frame;
+        std::atomic<uint64>     executed_frame;
+        VulkanFence*            timeline;
+        std::mutex              event_mutex;
+        bool                    enabled{false};
+        std::condition_variable queue_cv;// wake up execute thread from sleeping
+        Event*                  event;
+        VkNativeQueue           queue;
+
+        Queue<VulkanFence*> present_fences;
+        std::mutex         present_mutex;
     };
 }// namespace Moer::Render
 #endif//VULKAN_COMMAND_H

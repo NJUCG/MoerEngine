@@ -1598,16 +1598,16 @@ void VulkanRHIFence::Wait(uint64_t value) {
 
 VulkanFence::VulkanFence( EFenceUsageFlags _usage, VulkanDevice& _device) : VulkanDeviceObject(&_device) {
     VkSemaphoreCreateInfo create_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
-    if (EnumHasAnyFlag(_usage, EFenceUsageFlags::PRESENT)) {
-        PresentFence fence;
+    if (EnumHasAnyFlag(_usage, EFenceUsageFlags::TIMELINE)) {
+        BinaryFence fence;
         VK_CHECK_RESULT(vkCreateSemaphore(m_device->GetDevice(), &create_info, nullptr, &fence.binary));
 
-        VkSemaphoreTypeCreateInfo timeline_semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
-        timeline_semaphore_info.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
-        timeline_semaphore_info.initialValue  = 0;
+        // VkSemaphoreTypeCreateInfo timeline_semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
+        // timeline_semaphore_info.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+        // timeline_semaphore_info.initialValue  = 0;
 
-        create_info.pNext = &timeline_semaphore_info;
-        VK_CHECK_RESULT(vkCreateSemaphore(m_device->GetDevice(), &create_info, nullptr, &fence.timeline));
+        // create_info.pNext = &timeline_semaphore_info;
+        // VK_CHECK_RESULT(vkCreateSemaphore(m_device->GetDevice(), &create_info, nullptr, &fence.timeline));
         
         m_fence = fence;
         
@@ -1628,7 +1628,10 @@ VulkanFence::VulkanFence( EFenceUsageFlags _usage, VulkanDevice& _device) : Vulk
 uint64 VulkanFence::GetValue() const {
     uint64_t value;
     std::visit([&](auto&& _arg) {
-        vkGetSemaphoreCounterValue(m_device->GetDevice(), _arg.timeline, &value);
+        if constexpr (std::is_same_v<std::decay_t<decltype(_arg)>, TimelineFence>) {
+            vkGetSemaphoreCounterValue(m_device->GetDevice(), _arg.timeline, &value);
+        } else {
+        }
     }, m_fence);
     // vkGetSemaphoreCounterValue(m_device->GetDevice(), m_fence.timeline, &value);
     return value;
@@ -1639,18 +1642,20 @@ void VulkanFence::Wait(uint64_t _value) {
     info.semaphoreCount = 1;
     info.pValues        = &_value;
     std::visit([&](auto&& _arg) {
-        info.pSemaphores = &_arg.timeline;
+        if constexpr (std::is_same_v<std::decay_t<decltype(_arg)>, TimelineFence>) {
+            info.pSemaphores = &_arg.timeline;
+            vkWaitSemaphores(m_device->GetDevice(), &info, UINT64_MAX);
+        } else {
+        }
     }, m_fence);
-    vkWaitSemaphores(m_device->GetDevice(), &info, UINT64_MAX);
+
 }
 
 VulkanFence::~VulkanFence() {
     std::visit([&](auto&& _arg) {
-        if constexpr (std::is_same_v<std::decay_t<decltype(_arg)>, PresentFence>) {
+        if constexpr (std::is_same_v<std::decay_t<decltype(_arg)>, BinaryFence>) {
                 VK_CHECK_NULLPTR(_arg.binary, "Binary semaphore is null");
-                VK_CHECK_NULLPTR(_arg.timeline, "Timeline semaphore is null");
                 vkDestroySemaphore(m_device->GetDevice(), _arg.binary, VK_NULL_HANDLE);
-                vkDestroySemaphore(m_device->GetDevice(), _arg.timeline, VK_NULL_HANDLE);
         } else {
                 VK_CHECK_NULLPTR(_arg.timeline, "Timeline semaphore is null");
                 vkDestroySemaphore(m_device->GetDevice(), _arg.timeline, VK_NULL_HANDLE);
@@ -1837,6 +1842,14 @@ void VulkanRHIViewport::OnResize(Extent2D _size) {
     ResetResources();
 }
 
+VulkanTexture* VulkanRHIViewport::GetSwapchainImage(uint32_t _index){
+    return swapchain_textures[_index];
+}
+VulkanFence* VulkanRHIViewport::GetBinaryFence(uint _index) {
+    return frame_fences[_index];
+
+}
+
 VulkanRHIFence* VulkanRHIViewport::GetAcquireNextImageFence() {
     return image_aquire_fences[frame_offset = (frame_offset - 1) % info.max_frame_in_flight];
 }
@@ -1873,6 +1886,17 @@ void VulkanRHIViewport::Present(RHIFence* _render_finished) {
     // swapchain->Present();
 }
 
+void VulkanRHIViewport::Present(VulkanFence::BinaryFence _fence){
+    VulkanDevice*   device   = swapchain->m_device;
+    assert(device != nullptr && "Swapchain not valid");
+
+    VkResult result = swapchain->Present(device->GetPresentQueue(),_fence.binary);
+    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+        swapchain->Recreate();
+        ResetResources();
+    }
+}
+
 void VulkanRHIViewport::WaitForQueueComplete(RHICommandQueue* _command_queue, RHIFence* _optional_fence) {
     if (!_command_queue) return;
     VulkanRHICommandQueue* vk_queue = dynamic_cast<VulkanRHICommandQueue*>(_command_queue);
@@ -1897,8 +1921,8 @@ void VulkanViewport::Present(FenceRef _fence) {
     assert(_fence && "Fence Empty");
     VulkanFence* vk_fence = reinterpret_cast<VulkanFence*>(_fence.Get());
     auto fence = vk_fence->GetFence();
-    assert(std::holds_alternative<VulkanFence::PresentFence>(fence) && "Fence type error");
-    auto result = m_swap_chain.Present(m_device->GetPresentQueue(), std::get<VulkanFence::PresentFence>(fence).binary);
+    assert(std::holds_alternative<VulkanFence::BinaryFence>(fence) && "Fence type error");
+    auto result = m_swap_chain.Present(m_device->GetPresentQueue(), std::get<VulkanFence::BinaryFence>(fence).binary);
 
     if(result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR){
         m_swap_chain.Recreate();

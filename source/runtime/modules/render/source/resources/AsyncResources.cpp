@@ -124,7 +124,7 @@ namespace Moer {
         present_fence = g_rhi->RHICreateFence({.usage = EFenceUsageFlags::TIMELINE});
 
         copy_queue    = g_rhi->RHICreateCommandQueue(ECommandQueueType::GRAPHICS);
-        copy_cmd_list = g_rhi->RHICreateGraphicsCommandList(g_rhi->RHIGetCurrentCommandAllocator());
+        copy_cmd_list = g_rhi->RHICreateGraphicsCommandList();
 
         info.back_buffer_count = _create_info.back_buffer_count;
         info.extent            = _create_info.extent;

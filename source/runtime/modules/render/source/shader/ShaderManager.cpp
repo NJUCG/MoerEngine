@@ -7,6 +7,8 @@
 #include "shader/ShaderResourceManager.h"
 
 namespace Moer::Render {
+    using std::move;
+
     struct ShaderManager::Impl {
 
         Impl(Render::RenderDevice& _device) : device(_device) {}
@@ -18,7 +20,7 @@ namespace Moer::Render {
         }
 
         ComputeConstructor Compute(std::string_view _path, std::string_view _entry_name = "main") {
-            return ComputeConstructor(_path, _entry_name);
+            return ComputeConstructor(device, _path, _entry_name);
         }
 
         RTConstructor RT() {
@@ -27,11 +29,21 @@ namespace Moer::Render {
     };
 
     ShaderManager::ShaderManager(Render::RenderDevice& _device) {
-        impl = std::move(UniquePtr<Impl>(MoerNew(Impl)(_device)));
+        impl = MoerNew(Impl)(_device);
+    }
+
+    ShaderManager& ShaderManager::Get() {
+        static ShaderManager manager(Render::RenderDevice::Get());
+        return manager;
+    }
+    RenderDevice& ShaderManager::GetDevice(){
+        return impl->device;
     }
 
     RasterPipelineConstructor ShaderManager::Raster() {
         return impl->Raster();
+    }
+    RasterPipelineConstructor::RasterPipelineConstructor(Render::RenderDevice& _device) : device(_device) {
     }
 
     RTConstructor ShaderManager::RT() {
@@ -59,7 +71,7 @@ namespace Moer::Render {
         auto get_shader_info = [&](EShaderType _type, ShaderCompilerOutput&& _output) {
             return std::move(SingleShaderInfo{.shader_data      = std::move(_output.shader_code),
                                               .shader_type      = _type,
-                                              .shader_param_map = std::move(_output.parameter_map.param_map)});
+                                              .shader_param_map = {std::move(_output.parameter_map.param_map)}});
         };
         PipelineShaderInfo sd_info{.layout_hash = _hash_values};
         if (b_vs_ps) {
@@ -93,5 +105,37 @@ namespace Moer::Render {
 
         return device.CreatePipeline(std::move(_pso_info), std::move(sd_info));
     }
+
+    #pragma region [ compute pipeline ]
+
+    ComputeConstructor::ComputeConstructor(RenderDevice& _device, std::string_view _path, std::string_view _entry_name) :device(_device), shader_info(_path, _entry_name) {
+    }
+
+    PipelineHandle ComputeConstructor::CreatePipeline(Array<std::string_view>& _hash_values) {
+        auto target_info       = device.GetShaderTargetInfo();
+        auto get_shader_output = [&](ShaderInfo& _info) {
+            ShaderCompilerInput input{
+                .target_info               = target_info,
+                .entry_point               = _info.entry_name,
+                .relative_source_file_path = _info.path,
+                .shader_name               = _info.path,
+                .environment               = _info.environment};
+
+            return ShaderCompiler::Compile(std::move(input));
+        };
+        auto get_shader_info = [&](EShaderType _type, ShaderCompilerOutput&& _output) {
+            return std::move(SingleShaderInfo{.shader_data      = std::move(_output.shader_code),
+                                              .shader_type      = _type,
+                                              .shader_param_map = {std::move(_output.parameter_map.param_map)}});
+        };
+
+        auto output = get_shader_output(shader_info);
+        PipelineShaderInfo sd_info{.layout_hash = _hash_values};
+        sd_info.shader_group = ShaderCs{.cs = get_shader_info(ST_COMPUTE, std::move(output))};
+
+        return device.CreatePipeline(std::move(sd_info));
+    }
+
+    #pragma endregion
 
 }// namespace Moer::Render

@@ -2,6 +2,7 @@
 #define VULKAN_DEVICE_H
 
 #include "misc/STL.h"
+#include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "rhi/vulkan/misc/VulkanTypeDefs.h"
@@ -178,7 +179,7 @@ namespace Moer::Render {
     public:
         VulkanDevice(DeviceInitInfo&& _info) : RenderDevice::Impl(std::move(_info)), m_gpu(VK_NULL_HANDLE), m_optional_extensions(), m_core_features(), m_core_properties(), m_optional_properties(), m_memery_properties(), m_queue_family_props(), m_queue_family_indices(),
                                                m_device(VK_NULL_HANDLE), m_graphics_queue(VK_NULL_HANDLE), m_present_queue(VK_NULL_HANDLE), m_compute_queue(VK_NULL_HANDLE), m_transfer_queue(VK_NULL_HANDLE),
-                                               m_allocator(VK_NULL_HANDLE), m_descriptor_allocator(nullptr), m_command_queue(*this) {}
+                                               m_allocator(VK_NULL_HANDLE), m_descriptor_allocator(nullptr), m_command_queue(*this, EQueueType::Graphics) {}
 
         virtual ~VulkanDevice();
         PipelineHandle CreatePipeline(GfxPsoCreateInfo&& _pso_info, PipelineShaderInfo&& _shaders) override;
@@ -193,11 +194,13 @@ namespace Moer::Render {
 
         RHIViewportRef CreateViewport(const RHIViewportInitializer& _init) override;
 
-        void ResizeViewport(RHIViewport* _viewport, Extent2D _size, bool _b_full_screen, EPixelFormat _format = PF_UNDEFINED) override;
-
         BackBufferInfo GetNextBackBufferInfo(RHIViewport* _viewport) override;
 
         void PresentViewport(RHIViewport* _viewport, RHIFence* _render_end_fence) override;
+
+        CommandQueue& GetCommandQueue(EQueueType _type) override;
+
+        SwapchainRef CreateSwapchain(const SwapchainCreateInfo& _info) override;
 
     public:
     public:
@@ -261,7 +264,6 @@ namespace Moer::Render {
             return m_raytracing_queue;
         }
 
-        const CommandQueue&     GetCommandQueue() const override;
         VulkanCommandAllocator& GetCurrentCommandAllocator();
         VulkanCmdAllocator&     GetCmdAllocator(VkQueueFlags);
         VulkanAllocator&        GetStagingAllocator();

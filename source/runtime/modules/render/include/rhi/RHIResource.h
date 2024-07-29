@@ -14,6 +14,7 @@
 #include "misc/STL.h"
 #include "misc/Traits.h"
 #include "rhi/RHICommon.h"
+#include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
 
 #include <cassert>
@@ -140,11 +141,13 @@ namespace Moer::Render {
     class Fence;
     class Sampler;
     class DepthBuffer;
+    class Swapchain;
     using TextureRef     = CountableRef<Texture>;
     using BufferRef      = CountableRef<Buffer>;
     using FenceRef       = CountableRef<Fence>;
     using SamplerRef     = CountableRef<Sampler>;
     using DepthBufferRef = CountableRef<DepthBuffer>;
+    using SwapchainRef   = CountableRef<Swapchain>;
 };// namespace Moer::Render
 
 class Shader;
@@ -801,6 +804,7 @@ namespace Moer::Render {
         ETextureDimension   GetDimension() const { return info.dimension; }
         ETextureUsageFlags  GetUsage() const { return info.usage; }
         ETextureAspectFlags GetAspectFlags() const { return info.aspect_flags; }
+        uint3              GetExtent() const { return uint3(info.extent.x, info.extent.y, info.depth); }
 
         TextureView GetView(uint8 _mip_idx = 0u, uint8 _mip_num = 1u);
 
@@ -2975,10 +2979,6 @@ namespace Moer::Render {
         SingleShaderInfo ps;
     };
 
-    struct ShaderDispatch {
-        SingleShaderInfo cs;
-    };
-
     struct ShaderRT {
         Array<SingleShaderInfo> raygen;
         Array<SingleShaderInfo> miss;
@@ -2987,7 +2987,7 @@ namespace Moer::Render {
         Array<SingleShaderInfo> callable;
     };
 
-    using ShaderOutputGroup = std::variant<ShaderVsGsPs, ShaderVsPs, ShaderMsPs, ShaderTsMsPs, ShaderDispatch, ShaderRT>;
+    using ShaderOutputGroup = std::variant<ShaderVsGsPs, ShaderVsPs, ShaderMsPs, ShaderTsMsPs, ShaderCs, ShaderRT>;
     struct PipelineShaderInfo {
         ShaderOutputGroup       shader_group;
         Array<std::string_view> layout_hash;
@@ -3372,6 +3372,23 @@ namespace Moer::Render {
         DepthAttachment        depth_attachment;
         Rect2D                 render_area;
         uint                   viewport_cnt = 1;
+    };
+
+    struct SwapchainCreateInfo {
+        uintptr_t window_handle;
+        Extent2D  size;
+        uint      back_buffer_sz = 2;
+        EPixelFormat preferred_format = PF_R8G8B8A8_SRGB;
+    };
+    class Swapchain : public RHIResource {
+        protected:
+        Swapchain() : RHIResource(RRT_SWAPCHAIN){};
+
+        public:
+ 
+        virtual ~Swapchain() = default;
+        public:
+        EPixelFormat format;
     };
 }// namespace Moer::Render
 

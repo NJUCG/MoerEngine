@@ -81,16 +81,16 @@ namespace Moer::Render {
         static VmaMemoryUsage           MEGenerateVmaMemoryUsage();
     };
 
-    uint64 EncodeReflectInfo(uint _set, uint _binding, uint _stage_flags) {
+    static uint64 EncodeReflectInfo(uint _set, uint _binding, uint _stage_flags) {
         return uint64(_set << 16) | uint64(_binding) | (uint64(_stage_flags) << 32);
     }
-    uint64 EncodeReflectPushConstant(uint _offset, uint _size, uint _stage_flags) {
+    static uint64 EncodeReflectPushConstant(uint _offset, uint _size, uint _stage_flags) {
         return uint64(_offset << 16) | uint64(_size) | (uint64(_stage_flags) << 32);
     }
-    auto DecodeReflectPushConstant(uint64 _val) {
+    static auto DecodeReflectPushConstant(uint64 _val) {
         return std::make_tuple(uint(_val >> 16), uint(_val & 0xFFFF), uint(_val >> 32));
     }
-    auto DecodeReflectInfo(uint64 _val) {
+    static auto DecodeReflectInfo(uint64 _val) {
         return std::make_tuple(uint(_val >> 16), uint(_val & 0xFFFF), uint(_val >> 32));
     }
 
@@ -518,11 +518,13 @@ namespace Moer::Render {
         EFenceUsageFlags usage;
     };
 
+    #define RESOURCE_CAST(RHIType, VkType) \
+    inline VkType* ResourceCast(RHIType* _val) { return static_cast<VkType*>(_val); }
+
     class VulkanFence final : public Fence, VulkanDeviceObject {
     public:
-        struct PresentFence {
+        struct BinaryFence {
             VkSemaphore binary;
-            VkSemaphore timeline;
         };
         struct TimelineFence {
             VkSemaphore timeline;
@@ -536,12 +538,20 @@ namespace Moer::Render {
 
         void                    Wait(uint64_t _value) override;
         auto&                   GetFence() { return m_fence; }
-        inline EFenceUsageFlags GetUsage() { return std::holds_alternative<PresentFence>(m_fence) ? EFenceUsageFlags::PRESENT : EFenceUsageFlags::TIMELINE; }
-
+        VkSemaphore GetUnderlyingHandle() { return std::holds_alternative<BinaryFence>(m_fence) ? std::get<BinaryFence>(m_fence).binary : std::get<TimelineFence>(m_fence).timeline; }
+        VkSemaphore GetBinaryHandle() { return std::get<BinaryFence>(m_fence).binary; }
+        inline EFenceUsageFlags GetUsage() { return std::holds_alternative<BinaryFence>(m_fence) ? EFenceUsageFlags::BINARY : EFenceUsageFlags::TIMELINE; }
     private:
-        std::variant<PresentFence, TimelineFence> m_fence;
+        std::variant<BinaryFence, TimelineFence> m_fence;
     };
 
+#pragma endregion
+
+#pragma region [ resource cast ]
+    RESOURCE_CAST(Buffer, VulkanBuffer)
+    RESOURCE_CAST(Texture, VulkanTexture)
+    RESOURCE_CAST(Fence, VulkanFence)
+    RESOURCE_CAST(Swapchain, VkSwapchain)
 #pragma endregion
 
 #pragma region viewable resources view definitions
@@ -635,6 +645,7 @@ namespace Moer::Render {
 #pragma region viewport
 
     class VulkanRHIViewport final : public RHIViewport {
+        friend class VkCommandQueue;
     public:
         VulkanRHIViewport(class VulkanSwapChain* _swapchain, uint32_t _max_frame_in_flight);
         ~VulkanRHIViewport();
@@ -655,7 +666,9 @@ namespace Moer::Render {
         void InnerCreateResources();
         void InnerDestroyResources();
         void ResetResources();
-
+        VulkanTexture* GetSwapchainImage(uint32_t _index);
+        VulkanFence*  GetBinaryFence(uint32_t _index);
+        void Present(VulkanFence::BinaryFence _fence);
         VulkanRHITextureUAV* InnerCreateVulkanUAV(VulkanDevice* _device, VulkanRHITexture* texture, const RHIViewInfo& _view_info);
 
         class VulkanSwapChain* swapchain;
@@ -665,6 +678,9 @@ namespace Moer::Render {
         Moer::Array<VulkanRHITextureUAV*> swapchain_image_uavs;
 
         Moer::Array<VulkanRHITexture*> swapchain_images;
+        //new resources
+        Moer::Array<VulkanTexture*> swapchain_textures;
+        Moer::Array<VulkanFence*>   frame_fences;
 
         uint32_t frame_offset = 0;
 

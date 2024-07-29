@@ -90,7 +90,7 @@ namespace Moer {
     }
 
     void GpuPrimitiveBuilder::Impl::InitBuild() {
-        copy_cmd_list = g_rhi->RHICreateCopyCommandList(g_rhi->RHIGetCurrentCommandAllocator());
+        copy_cmd_list = g_rhi->RHICreateCopyCommandList();
         copy_queue    = g_rhi->RHICreateCommandQueue(ECommandQueueType::COPY);
     }
 
@@ -229,7 +229,7 @@ namespace Moer {
         tex_barriers[1].p_texture          = texture;
         tex_barriers[1].sub_resource_range = range;
 
-        RHIGraphicsCommandList* command_list = g_rhi->RHICreateGraphicsCommandList(g_rhi->RHIGetCurrentCommandAllocator());
+        RHIGraphicsCommandList* command_list = g_rhi->RHICreateGraphicsCommandList();
 
         RHIBarrierDependencyInfo texture_create_barrier{};
         texture_create_barrier.texture_barriers.resize(1);
@@ -314,7 +314,7 @@ namespace Moer {
 
         RHIBufferRef buffer = g_rhi->RHICreateBuffer<std::byte>(_size, EBufferUsageFlags::TRANSFER_DST | _buffer_usage);
 
-        auto* cmd_list   = g_rhi->RHICreateCopyCommandList(g_rhi->RHIGetCurrentCommandAllocator());
+        auto* cmd_list   = g_rhi->RHICreateCopyCommandList();
         auto* copy_queue = g_rhi->RHICreateCommandQueue(ECommandQueueType::COPY);
         cmd_list->BeginRecording();
 
@@ -347,7 +347,7 @@ namespace Moer {
     }
 
     std::pair<RHIBufferRef, RHIBufferRef> GpuSceneBufferBuilder::Impl::Build() {
-        auto* cmd_list   = g_rhi->RHICreateCopyCommandList(g_rhi->RHIGetCurrentCommandAllocator());
+        auto* cmd_list   = g_rhi->RHICreateCopyCommandList();
         auto* copy_queue = g_rhi->RHICreateCommandQueue(ECommandQueueType::COPY);
         cmd_list->BeginRecording();
 

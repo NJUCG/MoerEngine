@@ -4,6 +4,7 @@
 #include "RHICommand.h"
 #include "RHIResource.h"
 #include "log/LogSystem.h"
+#include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "RenderAPI.h"
@@ -286,8 +287,6 @@ namespace Moer::Render {
 
         RHIViewportRef CreateViewport(const RHIViewportInitializer& _init);
 
-        void ResizeViewport(RHIViewport* _viewport, Extent2D _size, bool _b_full_screen, EPixelFormat _format = PF_UNDEFINED);
-
         BackBufferInfo GetNextBackBufferInfo(RHIViewport* _viewport);
 
         TextureView GetBackBuffer(RHIViewport* _viewport, uint32_t _index);
@@ -300,7 +299,9 @@ namespace Moer::Render {
         PipelineHandle CreatePipeline(GfxPsoCreateInfo&& _pso_info, PipelineShaderInfo&& _shaders);//gfx
         PipelineHandle CreatePipeline(PipelineShaderInfo&& _shaders);                              //compute
 
-        const CommandQueue& GetCommandQueue() const;
+        CommandQueue& GetCommandQueue(EQueueType _type);
+
+        SwapchainRef CreateSwapchain(const SwapchainCreateInfo& _info);
 
         class Impl;
 

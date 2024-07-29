@@ -150,7 +150,7 @@ void Moer::SplattingRender::Impl::Init(const BackendRendererInitInfo& _init_info
 
     render_cmd_lists.resize(create_info.back_buffer_count);
     for (uint32_t i = 0; i < create_info.back_buffer_count; ++i) {
-        render_cmd_lists[i] = g_rhi->RHICreateGraphicsCommandList(g_rhi->RHIGetCurrentCommandAllocator());
+        render_cmd_lists[i] = g_rhi->RHICreateGraphicsCommandList();
     }
     render_fence = g_rhi->RHICreateFence({.usage = EFenceUsageFlags::TIMELINE});
 

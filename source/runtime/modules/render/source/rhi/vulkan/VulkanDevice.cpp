@@ -5,6 +5,7 @@
 #include "VulkanRHIResource.h"
 #include "log/LogSystem.h"
 #include "misc/STL.h"
+#include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
@@ -764,7 +765,7 @@ namespace Moer::Render {
 
         std::visit([&](auto&& _shader_info_group) {
             using T = std::decay_t<decltype(_shader_info_group)>;
-            if constexpr (std::is_same_v<T, ShaderDispatch>) {
+            if constexpr (std::is_same_v<T, ShaderCs>) {
                 const auto& shader_info = _shader_info_group.cs;
                 shader_stage.sType      = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
                 shader_stage.stage      = VK_SHADER_STAGE_COMPUTE_BIT;
@@ -853,7 +854,8 @@ namespace Moer::Render {
             .constant_idx      = constant_idx};
     }
 
-    const CommandQueue& VulkanDevice::GetCommandQueue() const {
+    CommandQueue& VulkanDevice::GetCommandQueue(EQueueType _type) {
+        return m_command_queue;
     }
 
     TextureRef VulkanDevice::CreateTexture(Extent3D _size, EPixelFormat _format, ETextureUsageFlags _usage, uint32_t _mip_cnt, uint32_t _array_size) {
@@ -881,6 +883,19 @@ namespace Moer::Render {
 
     FenceRef VulkanDevice::CreateFence(EFenceUsageFlags _usage) {
         return FenceRef{MoerNew(VulkanFence)(_usage, *this)};
+    }
+
+    RHIViewportRef VulkanDevice::CreateViewport(const RHIViewportInitializer& _init) {
+        VulkanSwapChain* swapchain = MoerNew(VulkanSwapChain)();
+        uint32_t         width, height;
+        VkSurfaceKHR     surface;
+        Moer::WindowContext::CreateVulkanSurface(m_instance, _init.window_handle, nullptr, &surface);
+        swapchain->Connect(m_instance, surface, this);
+        swapchain->Init(&width, &height, _init.b_vsync);
+
+        Moer::Render::VulkanRHIViewport* viewport = MoerNew(Moer::Render::VulkanRHIViewport)(swapchain, 2);
+
+        return viewport;
     }
 
 };// namespace Moer::Render

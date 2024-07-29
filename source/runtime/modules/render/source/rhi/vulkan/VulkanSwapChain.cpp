@@ -6,9 +6,12 @@
 #include "VulkanUtil.h"
 #include "VulkanSwapChain.h"
 #include "log/LogSystem.h"
+#include "misc/MMemory.h"
+#include "misc/Traits.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
+#include "rhi/RHIResourceInitilizer.h"
 #include "rhi/vulkan/VulkanRHI.h"
 #include "rhi/vulkan/misc/VulkanMacroUtils.h"
 #include "vulkan/vulkan_core.h"
@@ -206,7 +209,7 @@ namespace Moer::Render {
         return view;
     }
 
-    VkSurfaceFormatKHR VulkanSwapChain::ChooseSwapSurfaceFormat(const Moer::Array<VkSurfaceFormatKHR>& _available_formats) {
+    VkSurfaceFormatKHR ChooseSwapSurfaceFormat(const Moer::Array<VkSurfaceFormatKHR>& _available_formats, bool _prefer_hdr) {
         for (const auto& format : _available_formats) {
             if (format.format == VK_FORMAT_B8G8R8A8_SRGB && format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
                 return format;
@@ -216,7 +219,7 @@ namespace Moer::Render {
         return _available_formats[0];
     }
 
-    VkPresentModeKHR VulkanSwapChain::ChooseSwapPresentMode(const Moer::Array<VkPresentModeKHR>& _available_present_modes, bool vsync) {
+    VkPresentModeKHR ChooseSwapPresentMode(const Moer::Array<VkPresentModeKHR>& _available_present_modes, bool vsync) {
         VkPresentModeKHR present_mode = VK_PRESENT_MODE_FIFO_KHR;
         if (!vsync) {
             for (auto mode : _available_present_modes) {
@@ -232,7 +235,7 @@ namespace Moer::Render {
         return present_mode;
     }
 
-    VkExtent2D VulkanSwapChain::ChooseSwapExtent(uint32_t* width, uint32_t* height, const VkSurfaceCapabilitiesKHR& _capabilities) {
+    VkExtent2D ChooseSwapExtent(uint32_t* width, uint32_t* height, const VkSurfaceCapabilitiesKHR& _capabilities) {
         if (_capabilities.currentExtent.width != static_cast<uint32_t>(-1)) {
             *width  = _capabilities.currentExtent.width;
             *height = _capabilities.currentExtent.height;
@@ -243,5 +246,177 @@ namespace Moer::Render {
         extent.height     = std::clamp(extent.height, _capabilities.minImageExtent.height, _capabilities.maxImageExtent.height);
 
         return extent;
+    }
+
+    VkSwapchain::VkSwapchain(RenderDevice::Impl& _device, const SwapchainCreateInfo& _info) : Swapchain(), device(*static_cast<VulkanDevice*>(&_device)) {
+        CreateOrRecreate(_info);
+    }
+    void VkSwapchain::WaitFrameInFlight(uint64 _image_idx) {
+        if(_image_idx < max_frames_in_flight){
+            return;
+        }
+        vkWaitForFences(device.GetDevice(), 1, &in_flight_fences[_image_idx % in_flight_fences.size()], VK_TRUE, UINT64_MAX);
+    }
+
+    void VkSwapchain::Recreate(const SwapchainCreateInfo& _info) {
+        CreateOrRecreate(_info);
+    }
+    void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force_recreate) {
+        bool b_recreate = handle != VK_NULL_HANDLE || _force_recreate;
+        VkInstance instance = device.GetInstance();
+        //create surface by window handle
+        assert(_info.window_handle != 0 && "Window handle is null when creating vulkan swapchain");
+        Moer::WindowContext::CreateVulkanSurface(instance, (WindowHandle*)_info.window_handle, VK_NULL_HANDLE, &surface);
+        //create swapchain
+        VkSurfaceCapabilitiesKHR capabilities;
+        vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device.GetGpu(), surface, &capabilities);
+        auto               details        = VkUtil::QuerySwapChainSupport(device.GetGpu(), surface);
+        VkSurfaceFormatKHR surface_format = ChooseSwapSurfaceFormat(details.formats);
+        ChooseSwapExtent(&width, &height, details.capabilities);
+        VkPresentModeKHR present_mode               = ChooseSwapPresentMode(details.present_modes, false);
+        format                                      = (EPixelFormat)surface_format.format;
+        uint                     queue_family_index = device.GetQueueFamilyIndices().graphics.value();
+        VkSwapchainCreateInfoKHR create_info{
+            .sType                 = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
+            .pNext                 = nullptr,
+            .flags                 = 0,
+            .surface               = surface,
+            .minImageCount         = capabilities.minImageCount,
+            .imageFormat           = surface_format.format,
+            .imageColorSpace       = surface_format.colorSpace,
+            .imageExtent           = {width, height},
+            .imageArrayLayers      = 1,
+            .imageUsage            = VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+            .imageSharingMode      = VK_SHARING_MODE_EXCLUSIVE,
+            .queueFamilyIndexCount = 1,
+            .pQueueFamilyIndices   = &queue_family_index,
+            .preTransform          = details.capabilities.currentTransform,
+            .compositeAlpha        = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+            .presentMode           = present_mode,
+            .clipped               = VK_TRUE,
+            .oldSwapchain          = handle};
+        //create swapchain
+        VK_CHECK_RESULT(vkCreateSwapchainKHR(device.GetDevice(), &create_info, nullptr, &handle));
+
+        uint image_cnt;
+        vkGetSwapchainImagesKHR(device.GetDevice(), handle, &image_cnt, nullptr);
+        bool recreate_fences = image_cnt != swapchain_textures.size();
+        if(b_recreate){
+            for (size_t i = 0; i < swapchain_textures.size(); ++i) {
+                MoerDelete(swapchain_textures[i]);
+                MoerDelete(image_ready_fences[i]);
+                MoerDelete(render_finished_fences[i]);
+            }
+        }
+        swapchain_views.resize(image_cnt);
+        swapchain_textures.resize(image_cnt);
+        image_ready_fences.resize(image_cnt);
+        Array<VkImage> images(image_cnt);
+        vkGetSwapchainImagesKHR(device.GetDevice(), handle, &image_cnt, images.data());
+
+        for (uint i = 0; i < image_cnt; i++) {
+            VulkanTexture texture(TextureInfo{}, &device, images[i]);
+            swapchain_textures[i]     = MoerNew(VulkanTexture)(TextureInfo{
+                                                               ETextureDimension::TEX_2D,
+                                                               ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::COLOR_ATTACHMENT,
+                                                               format,
+                                                               EClearAttachment{},
+                                                                   {width, height, 1},
+                                                               1,
+                                                               1},
+                                                           &device,
+                                                           images[i]);
+            swapchain_views[i]        = TextureView(swapchain_textures[i]);
+        }
+
+        bool b_reacreate_semaphores = image_ready_fences.size() != max_frames_in_flight;
+        if (b_reacreate_semaphores) {
+            for (size_t i = 0; i < image_ready_fences.size(); ++i) {
+                MoerDelete(image_ready_fences[i]);
+                MoerDelete(render_finished_fences[i]);
+            }
+            image_ready_fences.resize(image_cnt);
+            render_finished_fences.resize(image_cnt);
+            for (uint i = 0; i < image_cnt; i++) {
+                image_ready_fences[i]     = MoerNew(VulkanFence)(EFenceUsageFlags::BINARY, device);
+                render_finished_fences[i] = MoerNew(VulkanFence)(EFenceUsageFlags::BINARY, device);
+            }
+        }
+
+        if (recreate_fences) {
+            for (uint i = 0; i < in_flight_fences.size(); i++) {
+                vkDestroyFence(device.GetDevice(), in_flight_fences[i], VK_NULL_HANDLE);
+            }
+            in_flight_fences.resize(max_frames_in_flight);
+            VkFenceCreateInfo fence_info{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+            for (uint i = 0; i < max_frames_in_flight; i++) {
+                vkCreateFence(device.GetDevice(), &fence_info, VK_NULL_HANDLE, &in_flight_fences[i]);
+            }
+        } else {
+            vkResetFences(device.GetDevice(), in_flight_fences.size(), in_flight_fences.data());
+        }
+        image_idx = 0;
+    }
+    VkSwapchain::~VkSwapchain() {
+        if(surface){
+            vkDestroySurfaceKHR(device.GetInstance(), surface, VK_NULL_HANDLE);
+        }
+        if(handle){
+            vkDestroySwapchainKHR(device.GetDevice(), handle, VK_NULL_HANDLE);
+        }
+        for (size_t i = 0; i < swapchain_textures.size(); ++i) {
+            MoerDelete(swapchain_textures[i]);
+            MoerDelete(image_ready_fences[i]);
+            MoerDelete(render_finished_fences[i]);
+        }
+        for (uint i = 0; i < in_flight_fences.size(); i++) {
+            vkDestroyFence(device.GetDevice(), in_flight_fences[i], VK_NULL_HANDLE);
+        }
+    }
+    VulkanFence* VkSwapchain::GetImageReadyFence(uint _index) {
+        return image_ready_fences[_index % image_ready_fences.size()];
+    }
+    VulkanFence* VkSwapchain::GetRenderFinishedFence() {
+        return render_finished_fences[image_idx % render_finished_fences.size()];
+    }
+    TextureView VkSwapchain::GetSwapchainImage(uint _index) {
+        return swapchain_views[_index % swapchain_views.size()];
+    }
+    std::tuple<class VulkanFence*, uint, uint> VkSwapchain::AquireNextImage() {
+        uint32_t                  image_index = 0;
+        VkAcquireNextImageInfoKHR aquire_info{VK_STRUCTURE_TYPE_ACQUIRE_NEXT_IMAGE_INFO_KHR};
+        VulkanFence*              fence = image_ready_fences[image_idx % image_ready_fences.size()];
+        aquire_info.swapchain           = handle;
+        aquire_info.semaphore           = fence->GetBinaryHandle();
+
+        VkResult result = vkAcquireNextImageKHR(device.GetDevice(), handle, UINT64_MAX, aquire_info.semaphore, VK_NULL_HANDLE, &image_index);
+        if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+            image_index = INT32_MAX;
+        }
+        if (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR) {
+            return {fence, image_index, image_idx};
+        }
+        assert(false && "Error acquiring next present texture.");
+        return {nullptr, INT32_MAX, image_idx};
+    }
+
+    void VkSwapchain::Present(VkQueue _queue, uint _index) {
+        if (_index == INT32_MAX) {
+            return;
+        }
+        VkSemaphore      finished_semaphores[] = {render_finished_fences[image_idx % image_ready_fences.size()]->GetBinaryHandle()};
+        VkPresentInfoKHR present_info{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
+        present_info.waitSemaphoreCount = 1;
+        present_info.pWaitSemaphores    = finished_semaphores;
+        present_info.swapchainCount     = 1;
+        present_info.pSwapchains        = &handle;
+        present_info.pImageIndices      = &_index;
+        VkResult result                 = vkQueuePresentKHR(_queue, &present_info);
+        if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+            //recreate manually? because we don't know the window size
+        } else if (result != VK_SUCCESS) {
+            assert(false && "Error presenting to swapchain.");
+        }
+        image_idx++;
     }
 }// namespace Moer::Render

@@ -26,9 +26,8 @@ namespace Moer::Render {
                                    .Vertex("")
                                    .Pixel("")
                                    .Build<GBufferLayout>(std::move(pso_info));
-        layout.SetArgs(
-            RHIBufferRef(), RHIBufferRef(), RHIBufferRef(), RHIBufferRef(), RHITextureRef(), RHITextureRef(), GBufferLayout::Constant{});
         CommandList  cmd_list;
+        cmd_list.SubmitArgs(layout, {}); 
         MeshDrawData draw_data;
         auto&&       draw_dispatcher = cmd_list.Gfx(layout, {}, std::move(draw_data));
         draw_dispatcher.Draw(3, 1, 0, 0, 0);
@@ -127,6 +126,10 @@ namespace Moer::Render {
             _dst.mip_level));
     }
 
+    void CommandList::CopyFrom(std::span<byte> _data, TextureView _texture) {
+         //
+    }
+
     void CommandList::BeginRenderPass(PipelineHandle& _handle, RenderPassInfo&& _info, MeshDrawData&& _mesh_data) {
         commands.push_back(MakeUnique<SetDrawStateCmd>(_handle, std::move(_info), std::move(_mesh_data.vertex_buffers), _mesh_data.index_buffer));
     }
@@ -137,6 +140,16 @@ namespace Moer::Render {
 
     void CommandList::SubmitConstants(ShaderPipeline& _pso, Array<uint>&& _constants) {
         commands.push_back(MakeUnique<SetConstantCmd>(_pso, std::move(_constants)));
+    }
+
+    void CommandList::TransitionBuffer(BufferView _buffer, EBufferRuntimeUsageFlags _dst_state, EPassType _pass) {
+        // commands.push_back(MakeUnique<TransitionBufferCmd>(_buffer, _state));
+        //TODO
+    }
+
+    void CommandList::TransitionTexture(TextureView _texture, ETextureStateFlags _dst_state, EPassType _pass) {
+        // commands.push_back(MakeUnique<TransitionTextureCmd>(_texture, _state));
+        //TODO
     }
 
     void CommandList::DrawDispatcher::Draw(uint32 _index_cnt, uint32 _instance_count, uint _vertex_offset, uint32 _first_vertex, uint32 _first_instance) {

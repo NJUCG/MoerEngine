@@ -139,7 +139,7 @@ private:
     Event*        m_end_event;
     uint32_t      id;
     std::string   name;
-    std::jthread* m_thread;
+    std::thread* m_thread;
 };
 
 class Runnable {

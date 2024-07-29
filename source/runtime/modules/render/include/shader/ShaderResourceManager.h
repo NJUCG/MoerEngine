@@ -10,6 +10,7 @@
 #include "shader/ShaderCommon.h"
 #include "shader/ShaderMutation.h"
 #include "shader/ShaderResource.h"
+#include <condition_variable>
 #include <string_view>
 class GlobalShaderCache {
 public:
@@ -45,8 +46,15 @@ namespace Moer {
     };
     struct ShaderEntryKey {
         uint64 hash;
+
+        bool operator==(const ShaderEntryKey& _rhs) const noexcept {
+            return hash == _rhs.hash;
+        }
     };
 };// namespace Moer
+static bool operator==(const Moer::ShaderEntryKey& _lhs, const Moer::ShaderEntryKey& _rhs) noexcept {
+    return _lhs.hash == _rhs.hash;
+}
 namespace std {
     template<>
     struct hash<Moer::ShaderEntryKey> {
@@ -114,6 +122,7 @@ namespace Moer::Render {
         ShaderInfo(std::string_view _path, std::string_view _entry_name = "main", ShaderCompilerEnvironment _environment = {})
             : path(_path), entry_name(_entry_name), environment(_environment) {
         }
+        ShaderInfo() = default;
         bool Empty() const {
             return path.empty();
         }
@@ -177,9 +186,19 @@ namespace Moer::Render {
         template<typename TPipeline>
             requires std::is_base_of_v<ComputePipeline, TPipeline>
         TPipeline Build() {
+            auto hash_array = TPipeline::GetHashArray();
+
+            Array<std::string_view> hash_values(hash_array.size());
+            std::memcpy(hash_values.data(), hash_array.data(), hash_array.size() * sizeof(std::string_view));
+            PipelineHandle handle = CreatePipeline(hash_values);
             return TPipeline();
         };
-        ComputeConstructor(std::string_view _path, std::string_view _entry_name);
+        ComputeConstructor(RenderDevice&, std::string_view _path, std::string_view _entry_name);
+
+    private:
+        PipelineHandle CreatePipeline(Array<std::string_view>& _hash_values);
+
+        ShaderInfo            shader_info;
         Render::RenderDevice& device;
     };
 
@@ -196,7 +215,7 @@ namespace Moer::Render {
         RasterPipelineConstructor Raster();
         template<typename TPipeline>
         TPipeline Compute(std::string_view _path, std::string_view _entry_name = "main") {
-            return ComputeConstructor(_path, _entry_name).Build<TPipeline>();
+            return ComputeConstructor(GetDevice(), _path, _entry_name).Build<TPipeline>();
         }
         RTConstructor RT();
 
@@ -208,7 +227,8 @@ namespace Moer::Render {
         static ShaderManager& Get();
 
     private:
-        UniquePtr<Impl> impl;
+        Render::RenderDevice& GetDevice();
+        Impl* impl;
     };
 }// namespace Moer::Render
 #endif

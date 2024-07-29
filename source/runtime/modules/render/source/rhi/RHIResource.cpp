@@ -171,3 +171,20 @@ uint32_t RHIRenderPrimitive::GetOffset() const {
 uint32_t RHIRenderPrimitive::GetCount() const {
     return m_count;
 }
+
+namespace Moer::Render{
+    TextureView::TextureView(Texture* _texture):
+        texture(_texture),
+        offset(0),
+        extent(_texture->GetExtent()),
+        mip_level(0),
+        array_index(0),
+        num_array(1),
+        num_mips(1)
+    {
+        //todo: create view
+    }
+    TextureView::TextureView(TextureRef _texture_ref):TextureView(_texture_ref.Get()){
+        
+    }
+}

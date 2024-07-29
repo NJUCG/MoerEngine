@@ -23,7 +23,7 @@ namespace Moer {
             for (uint32_t i = 0; i < _info.back_buffer_cnt; ++i) {
 
                 auto* allocator = g_rhi->RHIGetCurrentCommandAllocator();
-                cmd_lists[i]    = g_rhi->RHICreateGraphicsCommandList(allocator);
+                cmd_lists[i]    = g_rhi->RHICreateGraphicsCommandList();
             }
 
             gfx_queue    = g_rhi->RHICreateCommandQueue(ECommandQueueType::GRAPHICS);

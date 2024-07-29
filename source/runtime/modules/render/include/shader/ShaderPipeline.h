@@ -19,6 +19,11 @@ namespace Moer::Render {
     template<typename T>
         requires std::is_trivial_v<T>
     using TConstantStruct = T;
+    template<typename T>
+    struct TConstsant{
+        using type = T;
+        T value;
+    };
 };// namespace Moer::Render
 
 #define BEGIN_SHADER_PARAMS \
@@ -34,13 +39,15 @@ namespace Moer::Render {
     StringType(name) using name = ShaderArg<BufferArg, GetStringType(name)>
 
 #define DEFINE_SHADER_CONSTANT_STRUCT(type, name) \
-    StringType(name) using name = ShaderArg<type, GetStringType(name)>
+    StringType(name) using name = ShaderArg<TConstsant<type>, GetStringType(name)>
 
 #define DEFINE_SHADER_SAMPLER(name) \
     StringType(name) using name = ShaderArg<SamplerArg, GetStringType(name)>
 
-#define DEFINE_PIPELINE_CLASS(name) \
-    using TPipeline = name;
+#define DEFINE_RASTER_PIPELINE_CLASS(name) \
+using TPipeline = name;\
+name(PipelineHandle _handle) : RasterPipeline(_handle) {}\
+name() : RasterPipeline() {}
 
 #define DEFINE_SHADER_ARGS(...)                                                                                \
 public:                                                                                                        \
@@ -163,27 +170,32 @@ namespace Moer::Render {
         };
 
         template<typename T, typename TArg>
+            requires std::is_same_v<std::remove_reference_t<T>, TextureView> || std::is_same_v<std::remove_reference_t<T>, BufferView> || std::is_same_v<std::remove_reference_t<T>, Sampler> ||
+            std::is_same_v<std::remove_reference_t<T>, TextureRef> || std::is_same_v<std::remove_reference_t<T>, BufferRef> || std::is_same_v<typename TArg::type, TConstsant<std::remove_reference_t<T>>>
         void SetParam(T&& _t, ArrayArguments& _arg_setter) {
             using cpp_type       = typename TArg::type;
             constexpr auto index = Index<TArg, tuple_helper>::value;
+            using Type           = std::remove_reference_t<T>;
             if constexpr (std::is_same_v<cpp_type, TextureArg>) {
                 //do texture stuff
-                if constexpr (std::is_same_v<T, TextureRef>) {
+                if constexpr (std::is_same_v<Type, TextureRef>) {
                     _arg_setter[index] = _t->GetView();
                     //do texture stuff
-                } else if constexpr (std::is_same_v<T, TextureView>) {
+                } else if constexpr (std::is_same_v<Type, TextureView>) {
                     _arg_setter[index] = std::forward<T>(_t);
                 } else {
-                    static_assert(false, "not a texture type");
+                    if constexpr (true)
+                        static_assert(false, "not a buffer type");
                 }
             } else if constexpr (std::is_same_v<cpp_type, BufferArg>) {
                 //do buffer stuff
-                if constexpr (std::is_same_v<T, BufferRef>) {
+                if constexpr (std::is_same_v<Type, BufferRef>) {
                     _arg_setter[index] = _t->GetView();
-                } else if constexpr (std::is_same_v<T, BufferView>) {
+                } else if constexpr (std::is_same_v<Type, BufferView>) {
                     _arg_setter[index] = std::forward<T>(_t);
                 } else {
-                    static_assert(false, "not a buffer type");
+                    if constexpr (true)
+                        static_assert(false, "not a buffer type");
                 }
             } else if constexpr (std::is_same_v<cpp_type, SamplerArg>) {
                 _arg_setter[index] = std::forward<T>(_t);
@@ -276,7 +288,7 @@ namespace Moer::Render {
     class GBufferLayout : public RasterPipeline {
     public:
         struct Constant {};
-        DEFINE_PIPELINE_CLASS(GBufferLayout)
+        DEFINE_RASTER_PIPELINE_CLASS(GBufferLayout)
 
         DEFINE_SHADER_BUFFER(PositionBuffer);
         DEFINE_SHADER_BUFFER(NormalBuffer);
