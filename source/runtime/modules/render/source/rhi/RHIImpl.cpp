@@ -1,13 +1,13 @@
 #include "RHIImpl.h"
 #include "rhi/RHIResource.h"
 namespace Moer::Render{
-    RHIViewportRef RenderDevice::CreateViewport(const RHIViewportInitializer& _init) {
-        return impl->CreateViewport(_init);
-    }
+    // RHIViewportRef RenderDevice::CreateViewport(const RHIViewportInitializer& _init) {
+    //     return impl->CreateViewport(_init);
+    // }
 
-    BackBufferInfo RenderDevice::GetNextBackBufferInfo(RHIViewport* _viewport) {
-        return impl->GetNextBackBufferInfo(_viewport);
-    }
+    // BackBufferInfo RenderDevice::GetNextBackBufferInfo(RHIViewport* _viewport) {
+    //     return impl->GetNextBackBufferInfo(_viewport);
+    // }
 
     FenceRef RenderDevice::CreateTimeline() {
         return impl->CreateTimeline();

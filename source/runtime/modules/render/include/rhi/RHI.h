@@ -287,11 +287,11 @@ namespace Moer::Render {
 
         RHIViewportRef CreateViewport(const RHIViewportInitializer& _init);
 
-        BackBufferInfo GetNextBackBufferInfo(RHIViewport* _viewport);
+        // BackBufferInfo GetNextBackBufferInfo(RHIViewport* _viewport);
 
-        TextureView GetBackBuffer(RHIViewport* _viewport, uint32_t _index);
+        // TextureView GetBackBuffer(RHIViewport* _viewport, uint32_t _index);
 
-        void PresentViewport(RHIViewport* _viewport, RHIFence* _render_end_fence);
+        // void PresentViewport(RHIViewport* _viewport, RHIFence* _render_end_fence);
         void FlushPendingDeletes();
 
         const ShaderTargetInfo& GetShaderTargetInfo() const;

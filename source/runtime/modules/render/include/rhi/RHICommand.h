@@ -329,6 +329,7 @@ namespace Moer::Render {
         Array<uint64>             wait_values;
         Array<Fence*>             signal_fences;
         Array<uint64>             signal_values;
+        bool                      b_sync{false};//force sync queue timeline
         CmdSubmit&                Wait(Fence* _fence, uint64 _wait_value) {
             wait_fences.push_back(_fence);
             wait_values.push_back(_wait_value);
@@ -524,15 +525,16 @@ namespace Moer::Render {
         void                      SubmitConstants(ShaderPipeline&, Array<uint>&&);
         Array<UniquePtr<Command>> commands;
     };
-    class QueueCmd{};
+    class QueueCmd {};
     class CommandQueue {
     public:
         CommandQueue(){};
         CommandQueue(EQueueType _type, RenderDevice& _device);
         void         Test();
-        virtual void Execute(CmdSubmit&& _submit)                         = 0;
-        virtual void Present(RHIViewport* _viewport, TextureView _target) = 0;
+        virtual void Execute(CmdSubmit&& _submit)                          = 0;
+        virtual void Present(RHIViewport* _viewport, TextureView _target)  = 0;
         virtual void Present(SwapchainRef _swapchain, TextureView _target) = 0;
+        virtual void Sync()                                                = 0;
     };
 }// namespace Moer::Render
 #endif

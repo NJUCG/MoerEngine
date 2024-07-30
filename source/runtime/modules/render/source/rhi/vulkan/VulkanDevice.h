@@ -192,11 +192,11 @@ namespace Moer::Render {
 
         FenceRef CreateFence(EFenceUsageFlags _usage) override;
 
-        RHIViewportRef CreateViewport(const RHIViewportInitializer& _init) override;
+        // RHIViewportRef CreateViewport(const RHIViewportInitializer& _init) override;
 
-        BackBufferInfo GetNextBackBufferInfo(RHIViewport* _viewport) override;
+        // BackBufferInfo GetNextBackBufferInfo(RHIViewport* _viewport) override;
 
-        void PresentViewport(RHIViewport* _viewport, RHIFence* _render_end_fence) override;
+        // void PresentViewport(RHIViewport* _viewport, RHIFence* _render_end_fence) override;
 
         CommandQueue& GetCommandQueue(EQueueType _type) override;
 

@@ -1480,10 +1480,9 @@ namespace Moer::Render {
         auto current_timeline = ++last_frame;
         queue.Signal(timeline, current_timeline);
         queue.Submit(vk_allocator.GetCmdList());
-        if(_submit.cmds.empty()){
+        if (_submit.cmds.empty()) {
             allocators.Push(allocator_ptr.release());
-        }else
-        {
+        } else {
             std::unique_lock<std::mutex> lock(event_mutex);
             event_queue.emplace_back(std::move(allocator_ptr), current_timeline, true);
             queue_cv.notify_one();
@@ -1537,11 +1536,11 @@ namespace Moer::Render {
     }
 
     void VkCommandQueue::Present(SwapchainRef _sc, TextureView _view) {
-        VkSwapchain* sc           = ResourceCast(_sc.Get());
-        auto         allocator    = std::move(GetAllocator());
-        auto&        vk_allocator = *allocator;
-        auto&        vk_cmd_list  = vk_allocator.GetCmdList();
-        auto [fence, idx, present_timeline]         = sc->AquireNextImage();
+        VkSwapchain* sc                     = ResourceCast(_sc.Get());
+        auto         allocator              = std::move(GetAllocator());
+        auto&        vk_allocator           = *allocator;
+        auto&        vk_cmd_list            = vk_allocator.GetCmdList();
+        auto [fence, idx, present_timeline] = sc->AquireNextImage();
         if (idx == UINT32_MAX) {
             //present null
             allocator->Reset();
@@ -1572,9 +1571,13 @@ namespace Moer::Render {
         }
     }
 
+    void VkCommandQueue::Sync(){
+        Complete(last_frame);
+    }
+
     UniquePtr<VulkanAllocator> VkCommandQueue::GetAllocator() {
         if (last_frame > vk_device.cmd_alloc_limits) {
-            Complete(last_frame - executed_frame);
+            Complete(last_frame - vk_device.cmd_alloc_limits);
         }
         auto allocator = std::move(UniquePtr<VulkanAllocator>(allocators.Pop()));
         if (allocator) {

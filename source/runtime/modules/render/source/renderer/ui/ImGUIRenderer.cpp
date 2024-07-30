@@ -185,6 +185,8 @@ struct GuiViewportData {
 
     RHIViewportRef viewport;
 
+    Moer::Render::SwapchainRef sc;
+
     Moer::Array<GuiFrameRenderBuffers> render_buffers;// Used by all viewports
 
     RHIViewportNextBackBufferInfo next_frame_info;
@@ -856,15 +858,15 @@ void CreateFontsTexture() {
     //upload texture
     {
         const uint32_t alignment    = 256;
-        RHITextureRef  font_texture = nullptr;
+        // RHITextureRef  font_texture = nullptr;
 
-        font_texture            = g_rhi->RHICreateTexture(RHITextureCreateInfo::Create("GuiFontTexture2D", ETextureDimension::TEX_2D)
-                                                   .SetNumSamples(1)
-                                                   .SetExtent({width, height})
-                                                   .SetNumMips(1)
-                                                   .SetArraySize(1)
-                                                   .SetFormat(PF_R8G8B8A8_UNORM)
-                                                   .SetUsageFlags(ETextureUsageFlags::SAMPLED | ETextureUsageFlags::SRGB | ETextureUsageFlags::TRANSFER_DST));
+        // font_texture            = g_rhi->RHICreateTexture(RHITextureCreateInfo::Create("GuiFontTexture2D", ETextureDimension::TEX_2D)
+        //                                            .SetNumSamples(1)
+        //                                            .SetExtent({width, height})
+        //                                            .SetNumMips(1)
+        //                                            .SetArraySize(1)
+        //                                            .SetFormat(PF_R8G8B8A8_UNORM)
+        //                                            .SetUsageFlags(ETextureUsageFlags::SAMPLED | ETextureUsageFlags::SRGB | ETextureUsageFlags::TRANSFER_DST));
         uint32_t   upload_pitch = (width * 4 + alignment - 1u) & ~(alignment - 1u);
         uint32_t   upload_size  = height * upload_pitch;
         TextureRef font_tex     = rd_device.CreateTexture(
@@ -878,66 +880,9 @@ void CreateFontsTexture() {
             std::span<std::byte>((std::byte*)pixels, upload_size), font_tex);
 
         cmd_list.TransitionTexture(font_tex, TS_SAMPLED, EPassType::Graphics);
-        FenceRef end_fence = rd_device.CreateTimeline();
-        rd_device.GetCommandQueue().Execute(std::move(cmd_list.Submit().Signal(end_fence, 1)));
-        end_fence->Wait(1);
+        rd_device.GetCommandQueue(EQueueType::Graphics).Execute(std::move(cmd_list.Submit()));
+        rd_device.GetCommandQueue(EQueueType::Graphics).Sync();
         backend_data->font_tex = font_tex;
-        // cmd_list.CopyFrom()
-        // RHIBufferRef staging_buffer = g_rhi->RHICreateBuffer<std::byte>(
-        //     upload_size, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
-
-        // assert(font_texture.Get() && staging_buffer.Get());
-
-        // void* mapped = g_rhi->RHIMapBuffer(staging_buffer, 0, upload_size);
-
-        // memcpy(mapped, pixels, upload_size);
-
-        // g_rhi->RHIUnmapBuffer(staging_buffer);
-
-        // RHIGraphicsCommandList* command_list = g_rhi->RHICreateGraphicsCommandList();
-        // auto&                   device       = Moer::Render::RenderDevice::Get();
-        // command_list->BeginRecording();
-        // command_list->TransitionTexture(font_texture, TS_TRANSFER_DST, EPassType::Copy);
-        // command_list->ExecuteTransition();
-
-        // RHISubresourceSlice        resource_slice(ETextureAspectFlags::COLOR, 0, 0, 1, 0, 1);
-        // RHICopyBufferToTextureInfo copy_info(
-        //     ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST,
-        //     {0, 0, 0},
-        //     {(uint32_t)width, (uint32_t)height, 1},
-        //     resource_slice,
-        //     0);
-
-        // // 3. MARK: pRegion[0] is trying to copy 518144 bytes plus 0 offset to/from the VkBuffer (VkBuffer 0xcb1c7c000000001b[]) which exceeds the VkBuffer total size of 131072 bytes.
-        // command_list->CopyBufferToTexture(copy_info, staging_buffer, font_texture);
-
-        // command_list->TransitionTexture(font_texture, TS_SAMPLED, EPassType::Graphics);
-        // command_list->ExecuteTransition();
-
-        // RHIBatchedShaderParameters  batched_params;
-        // ImGuiShaderFrag::Parameters params;
-        // params.sampler0 = backend_data->font_sampler;
-        // params.texture0 = backend_data->font_view;
-
-        // batched_params.SetParameters(backend_data->shader_module_frag, params);
-        // g_rhi->RHISetBatchedShaderParameters(backend_data->pipeline, batched_params);
-
-        // command_list->EndRecording();
-
-        // RHICommandQueue* queue = g_rhi->RHICreateCommandQueue(ECommandQueueType::GRAPHICS);
-
-        // RHIFenceCreateInfo fence_info{EFenceUsageFlags::TIMELINE};
-        // RHIFenceRef        fence = g_rhi->RHICreateFence(fence_info);
-
-        // RHISubmitInfo submit_info;
-
-        // uint64_t wait_value = 1;
-        // submit_info.Signal(fence, wait_value);
-        // queue->SubmitCommands(1, command_list, &submit_info);
-
-        // fence->Wait(wait_value);
-        // backend_data->font_view    = g_rhi->RHICreateTextureSRV(font_texture);
-        // backend_data->font_texture = font_texture;
     }
     io.Fonts->SetTexID((ImTextureID)backend_data->font_view);
 }
@@ -1049,7 +994,8 @@ void GuiSetWindowSize(ImGuiViewport* _viewport, ImVec2 _size) {
         .preferred_format = PF_R8G8B8A8_SRGB,
         .size = Extent2D(_size.x, _size.y)};
 
-    viewport_data->viewport = rd_device.CreateViewport(viewport_info);
+    // viewport_data->viewport = rd_device.CreateViewport(viewport_info);
+    viewport_data->sc;
     // g_rhi->RHIResizeViewport(m_viewport, Extent2D(size.x, size.y), false);
 }
 void GuiRenderWindow(ImGuiViewport* viewport, void*) {

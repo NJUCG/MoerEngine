@@ -885,17 +885,17 @@ namespace Moer::Render {
         return FenceRef{MoerNew(VulkanFence)(_usage, *this)};
     }
 
-    RHIViewportRef VulkanDevice::CreateViewport(const RHIViewportInitializer& _init) {
-        VulkanSwapChain* swapchain = MoerNew(VulkanSwapChain)();
-        uint32_t         width, height;
-        VkSurfaceKHR     surface;
-        Moer::WindowContext::CreateVulkanSurface(m_instance, _init.window_handle, nullptr, &surface);
-        swapchain->Connect(m_instance, surface, this);
-        swapchain->Init(&width, &height, _init.b_vsync);
+    // RHIViewportRef VulkanDevice::CreateViewport(const RHIViewportInitializer& _init) {
+    //     VulkanSwapChain* swapchain = MoerNew(VulkanSwapChain)();
+    //     uint32_t         width, height;
+    //     VkSurfaceKHR     surface;
+    //     Moer::WindowContext::CreateVulkanSurface(m_instance, _init.window_handle, nullptr, &surface);
+    //     swapchain->Connect(m_instance, surface, this);
+    //     swapchain->Init(&width, &height, _init.b_vsync);
 
-        Moer::Render::VulkanRHIViewport* viewport = MoerNew(Moer::Render::VulkanRHIViewport)(swapchain, 2);
+    //     Moer::Render::VulkanRHIViewport* viewport = MoerNew(Moer::Render::VulkanRHIViewport)(swapchain, 2);
 
-        return viewport;
-    }
+    //     return viewport;
+    // }
 
 };// namespace Moer::Render

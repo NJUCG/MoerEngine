@@ -199,7 +199,7 @@ namespace Moer::Render {
         Array<VulkanBuffer*>              large_buffers;
         TmpBufferAllocator                allocator;
 
-        StackAllocator small_allocator;
+        StackAllocator               small_allocator;
         Array<std::function<void()>> on_complete;
 
         struct LargeAllocator {
@@ -452,10 +452,11 @@ namespace Moer::Render {
         VkNativeQueue(EQueueType _type, VulkanDevice& _device);
         ~VkNativeQueue();
 
-        void Submit(VulkanCmdList& _cmdlist);
-        void Wait(VulkanFence* _fence, uint64 _timeline);
-        void Signal(VulkanFence* _fence, uint64 _timeline);
+        void    Submit(VulkanCmdList& _cmdlist);
+        void    Wait(VulkanFence* _fence, uint64 _timeline);
+        void    Signal(VulkanFence* _fence, uint64 _timeline);
         VkQueue GetHandle() const { return queue; }
+
     private:
         Array<VkSemaphoreSubmitInfo> wait_infos;
         Array<VkSemaphoreSubmitInfo> signal_infos;
@@ -486,9 +487,10 @@ namespace Moer::Render {
         VkCommandQueue(VulkanDevice& _device, EQueueType _type) : CommandQueue(), vk_device(_device), queue(_type, _device) {
             timeline = MoerNew(VulkanFence(EFenceUsageFlags::TIMELINE, vk_device));
         }
-        void                               Execute(CmdSubmit&& _submit) override;
-        void                               Present(RHIViewport* _viewport, TextureView _view) override;
-        void                               Present(SwapchainRef _viewport, TextureView _view) override;
+        void Execute(CmdSubmit&& _submit) override;
+        void Present(RHIViewport* _viewport, TextureView _view) override;
+        void Present(SwapchainRef _viewport, TextureView _view) override;
+        void Sync() override;
 
         void                               ExecuteThread();
         VulkanDevice&                      vk_device;
@@ -511,7 +513,7 @@ namespace Moer::Render {
         VkNativeQueue           queue;
 
         Queue<VulkanFence*> present_fences;
-        std::mutex         present_mutex;
+        std::mutex          present_mutex;
     };
 }// namespace Moer::Render
 #endif//VULKAN_COMMAND_H
