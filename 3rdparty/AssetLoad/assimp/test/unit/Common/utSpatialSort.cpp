@@ -3,7 +3,7 @@
 Open Asset Import Library (assimp)
 ---------------------------------------------------------------------------
 
-Copyright (c) 2006-2022, assimp team
+Copyright (c) 2006-2024, assimp team
 
 All rights reserved.
 
@@ -51,7 +51,7 @@ public
 
 protected:
     void SetUp() override {
-        ::srand(static_cast<unsigned>(time(0)));
+        ::srand(static_cast<unsigned>(time(nullptr)));
         vecs = new aiVector3D[100];
         for (size_t i = 0; i < 100; ++i) {
             vecs[i].x = static_cast<float>(rand()) / (static_cast<float>(RAND_MAX / 100));

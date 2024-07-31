@@ -2,7 +2,7 @@
 Open Asset Import Library (assimp)
 ----------------------------------------------------------------------
 
-Copyright (c) 2006-2022, assimp team
+Copyright (c) 2006-2024, assimp team
 
 All rights reserved.
 
@@ -48,10 +48,6 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <fstream>
 
 using namespace Assimp;
-
-EmbedTexturesProcess::EmbedTexturesProcess() = default;
-
-EmbedTexturesProcess::~EmbedTexturesProcess() = default;
 
 bool EmbedTexturesProcess::IsActive(unsigned int pFlags) const {
     return (pFlags & aiProcess_EmbedTextures) != 0;

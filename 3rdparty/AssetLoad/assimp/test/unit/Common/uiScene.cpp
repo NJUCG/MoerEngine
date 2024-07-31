@@ -3,7 +3,7 @@
 Open Asset Import Library (assimp)
 ---------------------------------------------------------------------------
 
-Copyright (c) 2006-2022, assimp team
+Copyright (c) 2006-2024, assimp team
 
 All rights reserved.
 
@@ -91,7 +91,7 @@ TEST_F(utScene, getShortFilenameTest) {
 
 TEST_F(utScene, deepCopyTest) {
     scene->mRootNode = new aiNode();
-    
+
     scene->mNumMeshes = 1;
     scene->mMeshes = new aiMesh *[scene->mNumMeshes] ();
     scene->mMeshes[0] = new aiMesh ();

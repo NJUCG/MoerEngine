@@ -3,7 +3,7 @@
 Open Asset Import Library (assimp)
 ---------------------------------------------------------------------------
 
-Copyright (c) 2006-2022, assimp team
+Copyright (c) 2006-2024, assimp team
 
 
 
@@ -910,7 +910,7 @@ int Assimp_CompareDump (const char* const* params, unsigned int num)
             if (m_file)
             {
                 fclose(m_file);
-                m_file = NULL;
+                m_file = nullptr;
             }
         }
 

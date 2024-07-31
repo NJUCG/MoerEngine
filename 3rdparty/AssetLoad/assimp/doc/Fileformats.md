@@ -12,9 +12,8 @@ __Importers__:
 - ASE
 - ASK
 - B3D
-- [BLEND](https://en.wikipedia.org/wiki/.blend_(file_format))
 - [BVH](https://en.wikipedia.org/wiki/Biovision_Hierarchy)
-- CMS
+- CSM
 - COB
 - [DAE/Collada](https://en.wikipedia.org/wiki/COLLADA)
 - [DXF](https://en.wikipedia.org/wiki/AutoCAD_DXF)
@@ -29,6 +28,7 @@ __Importers__:
   + KHR_texture_transform ( 5.1 under test )
 - HMB
 - IFC-STEP
+- IQM
 - IRR / IRRMESH
 - [LWO](https://en.wikipedia.org/wiki/LightWave_3D)
 - LWS
@@ -65,6 +65,9 @@ __Importers__:
 - [X3D](https://en.wikipedia.org/wiki/X3D)
 - XGL
 - ZGL
+
+Note: support for [BLEND](https://en.wikipedia.org/wiki/.blend_(file_format)) is deprecated.
+It is too time-consuming to maintain an undocumented format which contains so much more than we need.
 
 Additionally, some formats are supported by dependency on non-free code or external SDKs (not built by default):
 

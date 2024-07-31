@@ -3,7 +3,7 @@
 Open Asset Import Library (assimp)
 ---------------------------------------------------------------------------
 
-Copyright (c) 2006-2022, assimp team
+Copyright (c) 2006-2024, assimp team
 
 All rights reserved.
 
@@ -175,33 +175,29 @@ VOID WINAPI FillFunc(D3DXVECTOR4* pOut,
         pOut->x = pOut->y = 1.0f;
         pOut->z = 0.0f;
     }
-    return;
 }
 
 //-------------------------------------------------------------------------------
-int CMaterialManager::UpdateSpecularMaterials()
-    {
-    if (g_pcAsset && g_pcAsset->pcScene)
-        {
-        for (unsigned int i = 0; i < g_pcAsset->pcScene->mNumMeshes;++i)
-            {
-            if (aiShadingMode_Phong == g_pcAsset->apcMeshes[i]->eShadingMode)
-                {
+int CMaterialManager::UpdateSpecularMaterials() {
+    if (g_pcAsset && g_pcAsset->pcScene) {
+        for (unsigned int i = 0; i < g_pcAsset->pcScene->mNumMeshes;++i) {
+            if (aiShadingMode_Phong == g_pcAsset->apcMeshes[i]->eShadingMode) {
                 this->DeleteMaterial(g_pcAsset->apcMeshes[i]);
                 this->CreateMaterial(g_pcAsset->apcMeshes[i],g_pcAsset->pcScene->mMeshes[i]);
-                }
             }
         }
-    return 1;
     }
+    return 1;
+}
+
 //-------------------------------------------------------------------------------
-int CMaterialManager::SetDefaultTexture(IDirect3DTexture9** p_ppiOut)
-{
+int CMaterialManager::SetDefaultTexture(IDirect3DTexture9** p_ppiOut) {
     if  (sDefaultTexture) {
         sDefaultTexture->AddRef();
         *p_ppiOut = sDefaultTexture;
         return 1;
     }
+
     if(FAILED(g_piDevice->CreateTexture(
         256,
         256,
@@ -285,7 +281,7 @@ bool CMaterialManager::TryLongerPath(char* szTemp,aiString* p_szString)
                             // copy the result string back to the aiString
                             const size_t iLen = strlen(szTempB);
                             size_t iLen2 = iLen+1;
-                            iLen2 = iLen2 > MAXLEN ? MAXLEN : iLen2;
+                            iLen2 = iLen2 > AI_MAXLEN ? AI_MAXLEN : iLen2;
                             memcpy(p_szString->data,szTempB,iLen2);
                             p_szString->length = static_cast<ai_uint32>(iLen);
                             return true;
@@ -299,7 +295,7 @@ bool CMaterialManager::TryLongerPath(char* szTemp,aiString* p_szString)
                         // copy the result string back to the aiString
                         const size_t iLen = strlen(szTempB);
                         size_t iLen2 = iLen+1;
-                        iLen2 = iLen2 > MAXLEN ? MAXLEN : iLen2;
+                        iLen2 = iLen2 > AI_MAXLEN ? AI_MAXLEN : iLen2;
                         memcpy(p_szString->data,szTempB,iLen2);
                         p_szString->length = static_cast<ai_uint32>(iLen);
                         return true;
@@ -406,7 +402,7 @@ int CMaterialManager::FindValidPath(aiString* p_szString)
         // copy the result string back to the aiStr
         const size_t len = strlen(szTemp);
         size_t len2 = len+1;
-        len2 = len2 > MAXLEN ? MAXLEN : len2;
+        len2 = len2 > AI_MAXLEN ? AI_MAXLEN : len2;
         memcpy(p_szString->data, szTemp, len2);
         p_szString->length = static_cast<ai_uint32>(len);
     }

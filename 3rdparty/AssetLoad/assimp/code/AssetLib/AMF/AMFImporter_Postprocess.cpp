@@ -3,7 +3,7 @@
 Open Asset Import Library (assimp)
 ---------------------------------------------------------------------------
 
-Copyright (c) 2006-2022, assimp team
+Copyright (c) 2006-2024, assimp team
 
 All rights reserved.
 
@@ -815,6 +815,7 @@ nl_clean_loop:
             for (; next_it != nodeArray.end(); ++next_it) {
                 if ((*next_it)->FindNode((*nl_it)->mName) != nullptr) {
                     // if current top node(nl_it) found in another top node then erase it from node_list and restart search loop.
+                    // FIXME: this leaks memory on test models test8.amf and test9.amf
                     nodeArray.erase(nl_it);
 
                     goto nl_clean_loop;
