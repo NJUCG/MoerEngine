@@ -2,7 +2,7 @@
 Open Asset Import Library (assimp)
 ----------------------------------------------------------------------
 
-Copyright (c) 2006-2022, assimp team
+Copyright (c) 2006-2024, assimp team
 
 All rights reserved.
 
@@ -418,6 +418,27 @@ namespace glTF2 {
           exts.AddMember("KHR_materials_unlit", unlit, w.mAl);
         }
 
+        if (m.materialSpecular.isPresent) {
+            Value materialSpecular(rapidjson::Type::kObjectType);
+            materialSpecular.SetObject();
+
+            MaterialSpecular &specular = m.materialSpecular.value;
+
+            if (specular.specularFactor != 0.0f) {
+                WriteFloat(materialSpecular, specular.specularFactor, "specularFactor", w.mAl);
+            }
+            if (specular.specularColorFactor[0] != defaultSpecularColorFactor[0] && specular.specularColorFactor[1] != defaultSpecularColorFactor[1] && specular.specularColorFactor[2] != defaultSpecularColorFactor[2]) {
+                WriteVec(materialSpecular, specular.specularColorFactor, "specularColorFactor", w.mAl);
+            }
+
+            WriteTex(materialSpecular, specular.specularTexture, "specularTexture", w.mAl);
+            WriteTex(materialSpecular, specular.specularColorTexture, "specularColorTexture", w.mAl);
+
+            if (!materialSpecular.ObjectEmpty()) {
+                exts.AddMember("KHR_materials_specular", materialSpecular, w.mAl);
+            }
+        }
+
         if (m.materialSheen.isPresent) {
             Value materialSheen(rapidjson::Type::kObjectType);
 
@@ -511,6 +532,20 @@ namespace glTF2 {
             }
         }
 
+        if (m.materialEmissiveStrength.isPresent) {
+            Value materialEmissiveStrength(rapidjson::Type::kObjectType);
+
+            MaterialEmissiveStrength &emissiveStrength = m.materialEmissiveStrength.value;
+
+            if (emissiveStrength.emissiveStrength != 0.f) {
+                WriteFloat(materialEmissiveStrength, emissiveStrength.emissiveStrength, "emissiveStrength", w.mAl);
+            }
+
+            if (!materialEmissiveStrength.ObjectEmpty()) {
+                exts.AddMember("KHR_materials_emissive_strength", materialEmissiveStrength, w.mAl);
+            }
+        }
+
         if (!exts.ObjectEmpty()) {
             obj.AddMember("extensions", exts, w.mAl);
         }
@@ -536,7 +571,7 @@ namespace glTF2 {
 
     inline void Write(Value& obj, Mesh& m, AssetWriter& w)
     {
-		/****************** Primitives *******************/
+        /****************** Primitives *******************/
         Value primitives;
         primitives.SetArray();
         primitives.Reserve(unsigned(m.primitives.size()), w.mAl);
@@ -620,6 +655,44 @@ namespace glTF2 {
         }
     }
 
+    inline void WriteExtrasValue(Value &parent, const CustomExtension &value, AssetWriter &w) {
+        Value valueNode;
+
+        if (value.mStringValue.isPresent) {
+            MakeValue(valueNode, value.mStringValue.value.c_str(), w.mAl);
+        } else if (value.mDoubleValue.isPresent) {
+            MakeValue(valueNode, value.mDoubleValue.value, w.mAl);
+        } else if (value.mUint64Value.isPresent) {
+            MakeValue(valueNode, value.mUint64Value.value, w.mAl);
+        } else if (value.mInt64Value.isPresent) {
+            MakeValue(valueNode, value.mInt64Value.value, w.mAl);
+        } else if (value.mBoolValue.isPresent) {
+            MakeValue(valueNode, value.mBoolValue.value, w.mAl);
+        } else if (value.mValues.isPresent) {
+            valueNode.SetObject();
+            for (auto const &subvalue : value.mValues.value) {
+                WriteExtrasValue(valueNode, subvalue, w);
+            }
+        }
+
+        parent.AddMember(StringRef(value.name), valueNode, w.mAl);
+    }
+
+    inline void WriteExtras(Value &obj, const Extras &extras, AssetWriter &w) {
+        if (!extras.HasExtras()) {
+            return;
+        }
+
+        Value extrasNode;
+        extrasNode.SetObject();
+
+        for (auto const &value : extras.mValues) {
+            WriteExtrasValue(extrasNode, value, w);
+        }
+        
+        obj.AddMember("extras", extrasNode, w.mAl);
+    }
+
     inline void Write(Value& obj, Node& n, AssetWriter& w)
     {
         if (n.matrix.isPresent) {
@@ -655,6 +728,8 @@ namespace glTF2 {
         if(n.skeletons.size()) {
             AddRefsVector(obj, "skeletons", n.skeletons, w.mAl);
         }
+
+        WriteExtras(obj, n.extras, w);
     }
 
     inline void Write(Value& /*obj*/, Program& /*b*/, AssetWriter& /*w*/)
@@ -728,7 +803,6 @@ namespace glTF2 {
         }
     }
 
-
     inline AssetWriter::AssetWriter(Asset& a)
         : mDoc()
         , mAsset(a)
@@ -758,7 +832,7 @@ namespace glTF2 {
     {
         std::unique_ptr<IOStream> jsonOutFile(mAsset.OpenFile(path, "wt", true));
 
-        if (jsonOutFile == 0) {
+        if (jsonOutFile == nullptr) {
             throw DeadlyExportError("Could not open output file: " + std::string(path));
         }
 
@@ -781,7 +855,7 @@ namespace glTF2 {
 
             std::unique_ptr<IOStream> binOutFile(mAsset.OpenFile(binPath, "wb", true));
 
-            if (binOutFile == 0) {
+            if (binOutFile == nullptr) {
                 throw DeadlyExportError("Could not open output file: " + binPath);
             }
 
@@ -797,7 +871,7 @@ namespace glTF2 {
     {
         std::unique_ptr<IOStream> outfile(mAsset.OpenFile(path, "wb", true));
 
-        if (outfile == 0) {
+        if (outfile == nullptr) {
             throw DeadlyExportError("Could not open output file: " + std::string(path));
         }
 
@@ -822,7 +896,7 @@ namespace glTF2 {
             throw DeadlyExportError("Failed to write scene data!");
         }
 
-        uint32_t jsonChunkLength = (docBuffer.GetSize() + 3) & ~3; // Round up to next multiple of 4
+        uint32_t jsonChunkLength = static_cast<uint32_t>((docBuffer.GetSize() + 3) & ~3); // Round up to next multiple of 4
         auto paddingLength = jsonChunkLength - docBuffer.GetSize();
 
         GLB_Chunk jsonChunk;
@@ -848,7 +922,7 @@ namespace glTF2 {
         int GLB_Chunk_count = 1;
         uint32_t binaryChunkLength = 0;
         if (bodyBuffer->byteLength > 0) {
-            binaryChunkLength = (bodyBuffer->byteLength + 3) & ~3; // Round up to next multiple of 4
+            binaryChunkLength = static_cast<uint32_t>((bodyBuffer->byteLength + 3) & ~3); // Round up to next multiple of 4
 
             auto curPaddingLength = binaryChunkLength - bodyBuffer->byteLength;
             ++GLB_Chunk_count;
@@ -915,6 +989,10 @@ namespace glTF2 {
               exts.PushBack(StringRef("KHR_materials_unlit"), mAl);
             }
 
+            if (this->mAsset.extensionsUsed.KHR_materials_specular) {
+                exts.PushBack(StringRef("KHR_materials_specular"), mAl);
+            }
+
             if (this->mAsset.extensionsUsed.KHR_materials_sheen) {
                 exts.PushBack(StringRef("KHR_materials_sheen"), mAl);
             }
@@ -933,6 +1011,10 @@ namespace glTF2 {
 
             if (this->mAsset.extensionsUsed.KHR_materials_ior) {
                 exts.PushBack(StringRef("KHR_materials_ior"), mAl);
+            }
+
+            if (this->mAsset.extensionsUsed.KHR_materials_emissive_strength) {
+                exts.PushBack(StringRef("KHR_materials_emissive_strength"), mAl);
             }
 
             if (this->mAsset.extensionsUsed.FB_ngon_encoding) {
@@ -962,7 +1044,7 @@ namespace glTF2 {
         if (d.mObjs.empty()) return;
 
         Value* container = &mDoc;
-		const char* context = "Document";
+        const char* context = "Document";
 
         if (d.mExtId) {
             Value* exts = FindObject(mDoc, "extensions");

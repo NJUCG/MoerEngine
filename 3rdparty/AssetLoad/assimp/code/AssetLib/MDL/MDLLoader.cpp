@@ -3,7 +3,7 @@
 Open Asset Import Library (assimp)
 ---------------------------------------------------------------------------
 
-Copyright (c) 2006-2022, assimp team
+Copyright (c) 2006-2024, assimp team
 
 All rights reserved.
 
@@ -65,7 +65,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 using namespace Assimp;
 
-static const aiImporterDesc desc = {
+static constexpr aiImporterDesc desc = {
     "Quake Mesh / 3D GameStudio Mesh Importer",
     "",
     "",
@@ -95,10 +95,6 @@ MDLImporter::MDLImporter() :
         configFrameID(), mBuffer(), iGSFileVersion(), mIOHandler(nullptr), pScene(), iFileSize() {
     // empty
 }
-
-// ------------------------------------------------------------------------------------------------
-// Destructor, private as well
-MDLImporter::~MDLImporter() = default;
 
 // ------------------------------------------------------------------------------------------------
 // Returns whether the class can handle the format of the given file.
@@ -159,7 +155,7 @@ void MDLImporter::InternReadFile(const std::string &pFile,
     std::unique_ptr<IOStream> file(pIOHandler->Open(pFile));
 
     // Check whether we can read from the file
-    if (file.get() == nullptr) {
+    if (file == nullptr) {
         throw DeadlyImportError("Failed to open MDL file ", pFile, ".");
     }
 
@@ -273,8 +269,14 @@ void MDLImporter::InternReadFile(const std::string &pFile,
 
 // ------------------------------------------------------------------------------------------------
 // Check whether we're still inside the valid file range
+bool MDLImporter::IsPosValid(const void *szPos) const {
+    return szPos && (const unsigned char *)szPos <= this->mBuffer + this->iFileSize && szPos >= this->mBuffer;
+}
+
+// ------------------------------------------------------------------------------------------------
+// Check whether we're still inside the valid file range
 void MDLImporter::SizeCheck(const void *szPos) {
-    if (!szPos || (const unsigned char *)szPos > this->mBuffer + this->iFileSize) {
+    if (!IsPosValid(szPos)) {
         throw DeadlyImportError("Invalid MDL file. The file is too small "
                                 "or contains invalid data.");
     }
@@ -284,7 +286,7 @@ void MDLImporter::SizeCheck(const void *szPos) {
 // Just for debugging purposes
 void MDLImporter::SizeCheck(const void *szPos, const char *szFile, unsigned int iLine) {
     ai_assert(nullptr != szFile);
-    if (!szPos || (const unsigned char *)szPos > mBuffer + iFileSize) {
+    if (!IsPosValid(szPos)) {
         // remove a directory if there is one
         const char *szFilePtr = ::strrchr(szFile, '\\');
         if (!szFilePtr) {
@@ -298,7 +300,7 @@ void MDLImporter::SizeCheck(const void *szPos, const char *szFile, unsigned int 
         }
 
         char szBuffer[1024];
-        ::sprintf(szBuffer, "Invalid MDL file. The file is too small "
+        ::snprintf(szBuffer, sizeof(szBuffer), "Invalid MDL file. The file is too small "
                             "or contains invalid data (File: %s Line: %u)",
                 szFilePtr, iLine);
 
@@ -404,8 +406,15 @@ void MDLImporter::InternReadFile_Quake1() {
                     this->CreateTextureARGB8_3DGS_MDL3(szCurrent + iNumImages * sizeof(float));
                 }
                 // go to the end of the skin section / the beginning of the next skin
-                szCurrent += pcHeader->skinheight * pcHeader->skinwidth +
-                             sizeof(float) * iNumImages;
+                bool overflow = false;
+                if (pcHeader->skinwidth != 0 || pcHeader->skinheight != 0) {
+                    if ((pcHeader->skinheight > INT_MAX / pcHeader->skinwidth) || (pcHeader->skinwidth > INT_MAX / pcHeader->skinheight)){
+                        overflow = true;
+                    }
+                    if (!overflow) {
+                        szCurrent += pcHeader->skinheight * pcHeader->skinwidth +sizeof(float) * iNumImages;
+                    }
+                }
             }
         } else {
             szCurrent += sizeof(uint32_t);
@@ -953,7 +962,7 @@ void MDLImporter::CalcAbsBoneMatrices_3DGS_MDL7(MDL::IntBone_MDL7 **apcOutBones)
 
                 if (AI_MDL7_BONE_STRUCT_SIZE__NAME_IS_NOT_THERE == pcHeader->bone_stc_size) {
                     // no real name for our poor bone is specified :-(
-                    pcOutBone->mName.length = ai_snprintf(pcOutBone->mName.data, MAXLEN,
+                    pcOutBone->mName.length = ai_snprintf(pcOutBone->mName.data, AI_MAXLEN,
                             "UnnamedBone_%i", iBone);
                 } else {
                     // Make sure we won't run over the buffer's end if there is no
@@ -968,7 +977,7 @@ void MDLImporter::CalcAbsBoneMatrices_3DGS_MDL7(MDL::IntBone_MDL7 **apcOutBones)
                     }
 
                     // store the name of the bone
-                    pcOutBone->mName.length = (size_t)iMaxLen;
+                    pcOutBone->mName.length = static_cast<ai_uint32>(iMaxLen);
                     ::memcpy(pcOutBone->mName.data, pcBone->name, pcOutBone->mName.length);
                     pcOutBone->mName.data[pcOutBone->mName.length] = '\0';
                 }
@@ -1558,7 +1567,7 @@ void MDLImporter::InternReadFile_3DGS_MDL7() {
             } else {
                 pcNode->mName.length = (ai_uint32)::strlen(szBuffer);
             }
-            ::strncpy(pcNode->mName.data, szBuffer, MAXLEN - 1);
+            ::strncpy(pcNode->mName.data, szBuffer, AI_MAXLEN - 1);
             ++p;
         }
     }

@@ -2,7 +2,7 @@
 Open Asset Import Library (assimp)
 ----------------------------------------------------------------------
 
-Copyright (c) 2006-2022, assimp team
+Copyright (c) 2006-2024, assimp team
 
 
 All rights reserved.
@@ -72,7 +72,7 @@ struct Type {
 
 // ------------------------------------------------------------------------------------------------
 void DNAParser::Parse() {
-    StreamReaderAny &stream = *db.reader.get();
+    StreamReaderAny &stream = *db.reader;
     DNA &dna = db.dna;
 
     if (!match4(stream, "SDNA")) {

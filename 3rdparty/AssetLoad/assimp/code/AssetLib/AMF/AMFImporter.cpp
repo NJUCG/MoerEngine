@@ -3,7 +3,7 @@
 Open Asset Import Library (assimp)
 ---------------------------------------------------------------------------
 
-Copyright (c) 2006-2022, assimp team
+Copyright (c) 2006-2024, assimp team
 
 All rights reserved.
 
@@ -53,7 +53,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 namespace Assimp {
 
-const aiImporterDesc AMFImporter::Description = {
+static constexpr aiImporterDesc Description = {
     "Additive manufacturing file format(AMF) Importer",
     "smalcom",
     "",
@@ -83,11 +83,7 @@ void AMFImporter::Clear() {
 
 AMFImporter::AMFImporter() AI_NO_EXCEPT :
         mNodeElement_Cur(nullptr),
-        mXmlParser(nullptr),
-        mUnit(),
-        mVersion(),
-        mMaterial_Converted(),
-        mTexture_Converted() {
+        mXmlParser(nullptr) {
     // empty
 }
 
@@ -261,7 +257,7 @@ void AMFImporter::ParseFile(const std::string &pFile, IOSystem *pIOHandler) {
     std::unique_ptr<IOStream> file(pIOHandler->Open(pFile, "rb"));
 
     // Check whether we can read from the file
-    if (file.get() == nullptr) {
+    if (file == nullptr) {
         throw DeadlyImportError("Failed to open AMF file ", pFile, ".");
     }
 

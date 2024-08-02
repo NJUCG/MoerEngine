@@ -3,7 +3,7 @@
 Open Asset Import Library (assimp)
 ---------------------------------------------------------------------------
 
-Copyright (c) 2006-2022, assimp team
+Copyright (c) 2006-2024, assimp team
 
 All rights reserved.
 
@@ -233,8 +233,13 @@ const aiScene *aiImportFileFromMemoryWithProperties(
         unsigned int pFlags,
         const char *pHint,
         const aiPropertyStore *props) {
-    ai_assert(nullptr != pBuffer);
-    ai_assert(0 != pLength);
+    if (pBuffer == nullptr) {
+        return nullptr;
+    }
+
+    if (pLength == 0u) {
+        return nullptr;
+    }
 
     const aiScene *scene = nullptr;
     ASSIMP_BEGIN_EXCEPTION_REGION();
@@ -1131,7 +1136,7 @@ ASSIMP_API void aiMatrix4RotationX(
 ASSIMP_API void aiMatrix4RotationY(
         C_STRUCT aiMatrix4x4 *mat,
         const float angle) {
-    ai_assert(NULL != mat);
+    ai_assert(nullptr != mat);
     aiMatrix4x4::RotationY(angle, *mat);
 }
 
@@ -1273,11 +1278,13 @@ ASSIMP_API void aiQuaternionInterpolate(
 #define ASSIMP_HAS_PBRT_EXPORT (!ASSIMP_BUILD_NO_EXPORT && !ASSIMP_BUILD_NO_PBRT_EXPORTER)
 #define ASSIMP_HAS_M3D ((!ASSIMP_BUILD_NO_EXPORT && !ASSIMP_BUILD_NO_M3D_EXPORTER) || !ASSIMP_BUILD_NO_M3D_IMPORTER)
 
-#if ASSIMP_HAS_PBRT_EXPORT
-#   define ASSIMP_NEEDS_STB_IMAGE 1
-#elif ASSIMP_HAS_M3D
-#   define ASSIMP_NEEDS_STB_IMAGE 1
-#   define STBI_ONLY_PNG
+#ifndef STB_USE_HUNTER
+#   if ASSIMP_HAS_PBRT_EXPORT
+#       define ASSIMP_NEEDS_STB_IMAGE 1
+#   elif ASSIMP_HAS_M3D
+#       define ASSIMP_NEEDS_STB_IMAGE 1
+#       define STBI_ONLY_PNG
+#   endif
 #endif
 
 // Ensure all symbols are linked correctly

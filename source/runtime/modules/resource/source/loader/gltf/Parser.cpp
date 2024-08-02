@@ -72,6 +72,8 @@ namespace Moer::Resource::Gltf {
         UniquePtr<SceneData>  m_scene_data;
     };
 
+    Transform GetTransform(const aiNode* node);
+
     void Parser::Impl::LoadLights(const aiScene* scene) {
     }
     uint32_t GetVertexData(const aiMesh* mesh, float* data) {
@@ -239,13 +241,27 @@ namespace Moer::Resource::Gltf {
             m_scene_data->m_cameras.push_back(default_camera);
         } else
             for (uint32_t i = 0; i < camera_num; i++) {
-                const auto* camera      = scene->mCameras[i];
-                CameraRef   camera_ref  = MoerNew(Camera)();
-                Transform   transform   = Transform();
-                auto        world_2_cam = Transform(ToVector3f(camera->mPosition), ToVector3f(camera->mLookAt), ToVector3f(camera->mUp));
+                const auto* camera = scene->mCameras[i];
+                Vector4f    position(camera->mPosition.x, camera->mPosition.y, camera->mPosition.z, 1.f);
+                Vector4f    lookAt_vector(camera->mLookAt.x, camera->mLookAt.y, camera->mLookAt.z, 0.f);
+                Vector4f    up(camera->mUp.x, camera->mUp.y, camera->mUp.z, 0.f);
+                aiNode*     camera_node           = scene->mRootNode->FindNode(camera->mName);
+                Transform   camera_node_transform = GetTransform(camera_node);
 
-                transform.matrix = Inverse(world_2_cam.GetMatrix4x4());
-                camera_ref->SetFov(Angle::RadianToDegree(camera->mHorizontalFOV / camera->mAspect));
+                Vector4f world_position      = camera_node_transform * position;
+                Vector4f world_lookAt_vector = camera_node_transform * lookAt_vector;
+                Vector4f world_up            = camera_node_transform * up;
+                Vector4f world_lookAt_point  = world_position + world_lookAt_vector;
+
+                CameraRef camera_ref  = MoerNew(Camera)();
+                Transform transform   = Transform();
+                auto      world_2_cam = Transform(Vector3f(world_position), Vector3f(world_lookAt_point), Vector3f(world_up));
+                transform.matrix      = Inverse(world_2_cam.GetMatrix4x4());
+
+                // The interpretation of 'mHorizontalFOV' is inconsistent among gltf2, fbx, and the documentation in the official Assimp version (5.4.2).
+                // In this project, we ensure 'mHorizontalFOV' is the 'half' of the horizontal field of view angle (at least in GLTF2 and FBX).
+                float full_yfov_deg = AI_RAD_TO_DEG(2 * atan(tan(camera->mHorizontalFOV) / camera->mAspect));
+                camera_ref->SetFov(full_yfov_deg);
                 camera_ref->SetWorldTransform(transform);
                 camera_ref->SetNearClip(camera->mClipPlaneNear);
                 camera_ref->SetFarClip(camera->mClipPlaneFar);

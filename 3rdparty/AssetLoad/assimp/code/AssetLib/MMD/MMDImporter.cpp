@@ -3,7 +3,7 @@
 Open Asset Import Library (assimp)
 ---------------------------------------------------------------------------
 
-Copyright (c) 2006-2022, assimp team
+Copyright (c) 2006-2024, assimp team
 
 All rights reserved.
 
@@ -57,7 +57,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <memory>
 #include <sstream>
 
-static const aiImporterDesc desc = { "MMD Importer",
+static constexpr aiImporterDesc desc = { "MMD Importer",
     "",
     "",
     "surfaces supported?",
@@ -80,10 +80,6 @@ MMDImporter::MMDImporter() :
     DefaultIOSystem io;
     m_strAbsPath = io.getOsSeparator();
 }
-
-// ------------------------------------------------------------------------------------------------
-//  Destructor.
-MMDImporter::~MMDImporter() = default;
 
 // ------------------------------------------------------------------------------------------------
 //  Returns true, if file is an pmx file.
@@ -269,7 +265,7 @@ aiMesh *MMDImporter::CreateMesh(const pmx::PmxModel *pModel,
                 dynamic_cast<pmx::PmxVertexSkinningSDEF *>(v->skinning.get());
         switch (v->skinning_type) {
         case pmx::PmxVertexSkinningType::BDEF1:
-            bone_vertex_map[vsBDEF1_ptr->bone_index].emplace_back(index, 1.0);
+            bone_vertex_map[vsBDEF1_ptr->bone_index].emplace_back(index, static_cast<ai_real>(1));
             break;
         case pmx::PmxVertexSkinningType::BDEF2:
             bone_vertex_map[vsBDEF2_ptr->bone_index1].emplace_back(index, vsBDEF2_ptr->bone_weight);

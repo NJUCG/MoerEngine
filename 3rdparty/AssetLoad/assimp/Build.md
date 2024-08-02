@@ -7,7 +7,7 @@ You can download and install assimp using the [vcpkg](https://github.com/Microso
     cd vcpkg
     ./bootstrap-vcpkg.sh
     ./vcpkg integrate install
-    vcpkg install assimp
+    ./vcpkg install assimp
 ```
 The assimp port in vcpkg is kept up to date by Microsoft team members and community contributors. If the version is out of date, please [create an issue or pull request](https://github.com/Microsoft/vcpkg) on the vcpkg repository.
 
@@ -27,7 +27,7 @@ pip install pyassimp
 ## Manual build instructions
 
 ### Install CMake
-Asset-Importer-Lib can be build for a lot of different platforms. We are using cmake to generate the build environment for these via cmake. So you have to make sure that you have a working cmake-installation on your system. You can download it at https://cmake.org/ or for linux install it via
+Asset-Importer-Lib can be built for a lot of different platforms. We are using cmake to generate the build environment for these via cmake. So you have to make sure that you have a working cmake-installation on your system. You can download it at https://cmake.org/ or for linux install it via
 ```bash
 sudo apt-get install cmake
 ```
@@ -43,15 +43,16 @@ cd assimp
 cmake CMakeLists.txt 
 cmake --build .
 ```
+Note that by default this builds a shared library into the `bin` directory. If you want to build it as a static library see the build options at the bottom of this file.
 
 ### Build instructions for Windows with Visual-Studio
 
-First you have to install Visual-Studio on your windows-system. You can get the Community-Version for free here: https://visualstudio.microsoft.com/de/downloads/
+First, you have to install Visual-Studio on your windows-system. You can get the Community-Version for free here: https://visualstudio.microsoft.com/de/downloads/
 To generate the build environment for your IDE open a command prompt, navigate to your repo and type:
 ```bash
 cmake CMakeLists.txt
 ```
-This will generate the project files for the visual studio. All dependencies used to build Asset-IMporter-Lib shall be part of the repo. If you want to use you own zlib.installation this is possible as well. Check the options for it.
+This will generate the project files for the visual studio. All dependencies used to build Asset-Importer-Lib shall be part of the repo. If you want to use you own zlib installation this is possible as well. Check the options for it.
 
 ### Build instructions for Windows with UWP
 See <https://stackoverflow.com/questions/40803170/cmake-uwp-using-cmake-to-build-universal-windows-app>
@@ -63,9 +64,9 @@ Open a terminal and got to your repository. You can generate the makefiles and b
 cmake CMakeLists.txt
 make -j4
 ```
-The option -j descripes the number of parallel processes for the build. In this case make will try to use 4 cores for the build.
+The option -j describes the number of parallel processes for the build. In this case make will try to use 4 cores for the build.
 
-If you want to use a IDE for linux you can try QTCreator for instance. 
+If you want to use an IDE for linux you can try QTCreator for instance. 
 
 ### Build instructions for MinGW
  Older versions of MinGW's compiler (e.g. 5.1.0) do not support the -mbig_obj flag 
@@ -93,9 +94,9 @@ The cmake-build-environment provides options to configure the build. The followi
 - **ASSIMP_ANDROID_JNIIOSYSTEM (default OFF)**: Android JNI IOSystem support is active.
 - **ASSIMP_NO_EXPORT (default OFF)**: Disable Assimp's export functionality.
 - **ASSIMP_BUILD_ZLIB (default OFF)**: Build our own zlib.
-- **ASSIMP_BUILD_ALL_EXPORTERS_BY_DEFAULT (default ON)**: Build Assimp with all exporter senabled.
-- **ASSIMP_BUILD_ALL_IMPORTERS_BY_DEFAULT (default ON)**: Build Assimp with all importer senabled.
-- **ASSIMP_BUILD_ASSIMP_TOOLS (default ON)**: If the supplementary tools for Assimp are built in addition to the library.
+- **ASSIMP_BUILD_ALL_EXPORTERS_BY_DEFAULT (default ON)**: Build Assimp with all exporters enabled.
+- **ASSIMP_BUILD_ALL_IMPORTERS_BY_DEFAULT (default ON)**: Build Assimp with all importers enabled.
+- **ASSIMP_BUILD_ASSIMP_TOOLS (default OFF)**: If the supplementary tools for Assimp are built in addition to the library.
 - **ASSIMP_BUILD_SAMPLES (default OFF)**: If the official samples are built as well (needs Glut).
 - **ASSIMP_BUILD_TESTS (default ON)**: If the test suite for Assimp is built in addition to the library.
 - **ASSIMP_COVERALLS (default OFF)**: Enable this to measure test coverage.
