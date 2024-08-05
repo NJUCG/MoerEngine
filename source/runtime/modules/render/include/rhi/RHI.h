@@ -274,7 +274,7 @@ namespace Moer::Render {
         FenceRef CreatePresentFence();
 
         template<typename TElement>
-            requires(std::is_trivially_copyable_v<TElement> && std::is_standard_layout_v<TElement>)
+            requires(std::is_trivially_copyable_v<TElement> && std::is_standard_layout_v<TElement> || NumericType<TElement>)
         BufferRef CreateBuffer(uint _element_cnt, EBufferUsageFlags _usage);
 
         BufferRef CreateStagingBuffer(uint64_t _byte_size);
@@ -284,8 +284,6 @@ namespace Moer::Render {
         TextureRef CreateTexture(Extent3D _size, EPixelFormat _format, ETextureUsageFlags _usage, uint32_t _mip_cnt = 1, uint32_t _array_size = 1);
 
         DepthBufferRef CreateDepthBuffer(Extent2D _size, EPixelFormat _format, uint32_t _array_size = 1);
-
-        RHIViewportRef CreateViewport(const RHIViewportInitializer& _init);
 
         // BackBufferInfo GetNextBackBufferInfo(RHIViewport* _viewport);
 

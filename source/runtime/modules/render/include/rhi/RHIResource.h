@@ -14,7 +14,6 @@
 #include "misc/STL.h"
 #include "misc/Traits.h"
 #include "rhi/RHICommon.h"
-#include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
 
 #include <cassert>
@@ -3357,11 +3356,11 @@ namespace Moer::Render {
 
         Texture*          target;
         EAttachmentAction action = AC_CLEAR_STORE;
-        float4            clear_color;
+        float4            clear_color = {0, 0, 0, 0};
     };
 
     struct DepthAttachment {
-        Texture*          target{};
+        Texture*          target{nullptr};
         EAttachmentAction action = AC_DS_CLEAR_STORE;
         float             clear_depth;
         uint              clear_stencil;
@@ -3385,11 +3384,14 @@ namespace Moer::Render {
         Swapchain() : RHIResource(RRT_SWAPCHAIN){};
 
         public:
- 
+        virtual void Recreate(const SwapchainCreateInfo&)                    = 0;
         virtual ~Swapchain() = default;
         public:
         EPixelFormat format;
+        Extent2D     size;
     };
+
+    class BindlessArray{};
 }// namespace Moer::Render
 
 #pragma endregion

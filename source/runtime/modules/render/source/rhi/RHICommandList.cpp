@@ -28,9 +28,9 @@ namespace Moer::Render {
                                    .Build<GBufferLayout>(std::move(pso_info));
         CommandList  cmd_list;
         cmd_list.SubmitArgs(layout, {}); 
-        MeshDrawData draw_data;
-        auto&&       draw_dispatcher = cmd_list.Gfx(layout, {}, std::move(draw_data));
-        draw_dispatcher.Draw(3, 1, 0, 0, 0);
+        Array<MeshDrawData> draw_data;
+        auto&&       draw_dispatcher = cmd_list.Gfx(layout);
+        draw_dispatcher.Draw(Rect2D{}, std::move(draw_data), ColorAttachment{nullptr});
     }
 
     CommandList::CommandList() {
@@ -68,6 +68,25 @@ namespace Moer::Render {
         : cmd_list(_cmd_list), pso(_pso), arg_setter(_pso) {
         cmd_list.commands.push_back(MakeUnique<SetParamsCmd>(_pso, std::move(_args)));
     }
+    CommandList::ComputeDispatcher::ComputeDispatcher(
+        ComputePipeline& _pso,
+        CommandList&     _cmd_list)
+        : cmd_list(_cmd_list), pso(_pso), arg_setter(_pso) {
+    }
+
+    CommandList::DrawDispatcher::DrawDispatcher(
+        RasterPipeline& _pso,
+        CommandList&    _cmd_list,
+        ArrayArguments&& _args)
+        : cmd_list(_cmd_list), pso(_pso), arg_setter(_pso) {
+        cmd_list.commands.push_back(MakeUnique<SetParamsCmd>(_pso, std::move(_args)));
+    }
+
+    CommandList::DrawDispatcher::DrawDispatcher(
+        RasterPipeline& _pso,
+        CommandList&    _cmd_list)
+        : cmd_list(_cmd_list), pso(_pso), arg_setter(_pso) {
+    }
 
     void CommandList::ComputeDispatcher::Dispatch(uint3 _group_count) {
         SubmitArgsIfPossible();
@@ -80,7 +99,7 @@ namespace Moer::Render {
     }
 
     CmdSubmit CommandList::Submit() {
-        CmdSubmit submit{std::move(commands)};
+        CmdSubmit submit{std::move(commands), std::move(callbacks)};
         return std::move(submit);
     }
 
@@ -130,8 +149,12 @@ namespace Moer::Render {
          //
     }
 
-    void CommandList::BeginRenderPass(PipelineHandle& _handle, RenderPassInfo&& _info, MeshDrawData&& _mesh_data) {
-        commands.push_back(MakeUnique<SetDrawStateCmd>(_handle, std::move(_info), std::move(_mesh_data.vertex_buffers), _mesh_data.index_buffer));
+    void CommandList::CopyFrom(std::span<byte> _data, BufferView _buffer) {
+        //
+    }
+
+    void CommandList::SetRenderCmds(PipelineHandle& _handle, RenderPassInfo&& _info, Array<MeshDrawData>&& _mesh_data) {
+        commands.push_back(MakeUnique<SetDrawStateCmd>(_handle, std::move(_info), std::move(_mesh_data)));
     }
 
     void CommandList::SubmitArgs(ShaderPipeline& _pso, Arguments&& _args) {
@@ -151,21 +174,4 @@ namespace Moer::Render {
         // commands.push_back(MakeUnique<TransitionTextureCmd>(_texture, _state));
         //TODO
     }
-
-    void CommandList::DrawDispatcher::Draw(uint32 _index_cnt, uint32 _instance_count, uint _vertex_offset, uint32 _first_vertex, uint32 _first_instance) {
-        SubmitArgsIfPossible();
-        DrawCmd cmd = DrawIndexedCmd{_index_cnt, _instance_count, _first_vertex, _vertex_offset, _first_instance};
-        cmd_list.commands.push_back(MakeUnique<RenderCmd>(cmd));
-    }
-
-    void CommandList::DrawDispatcher::DrawIndirect(
-        BufferView _indirect,
-        BufferView _counter,
-        uint       _stride,
-        uint       _draw_count) {
-        SubmitArgsIfPossible();
-        DrawCmd cmd = DrawIndirectCmd{_indirect, _counter, _draw_count, _stride};
-        cmd_list.commands.push_back(MakeUnique<RenderCmd>(cmd));
-    }
-
 }// namespace Moer::Render

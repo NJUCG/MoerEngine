@@ -7,6 +7,7 @@
 #include "rhi/RHIResource.h"
 #include "RenderAPI.h"
 #include "shader/ShaderPipeline.h"
+#include <functional>
 #include <type_traits>
 #include <variant>
 
@@ -313,24 +314,67 @@ namespace Moer::Render {
 
     struct VertexBuffer {
         Buffer* buffer;
-        uint    offset{0};
+        uint64  offset{0};
     };
     struct IndexBuffer {
         BufferView        buffer;
         EIndexElementType stride;
     };
     struct MeshDrawData {
-        Array<VertexBuffer> vertex_buffers;
-        IndexBuffer         index_buffer;
+        StaticArray<VertexBuffer, 4>    vtx_views;
+        std::variant<IndexBuffer, uint> idx_view;
+        uint                            instance_count{1};
+        uint                            instance_offset{0};
+        uint                            vtx_cnt;
+
+    public:
+        MeshDrawData() = default;
+        MeshDrawData(MeshDrawData&& _other) noexcept {
+            vtx_views       = std::move(_other.vtx_views);
+            idx_view        = std::move(_other.idx_view);
+            instance_count  = _other.instance_count;
+            instance_offset = _other.instance_offset;
+        }
+        MeshDrawData& operator=(MeshDrawData&& _other) noexcept {
+            vtx_views       = std::move(_other.vtx_views);
+            idx_view        = std::move(_other.idx_view);
+            instance_count  = _other.instance_count;
+            instance_offset = _other.instance_offset;
+            return *this;
+        }
+
+        MeshDrawData(
+            std::span<VertexBuffer> _vertex_buffers,
+            IndexBuffer             _index_buffer,
+            uint                    _instance_count,
+            uint                    _instance_offset) : idx_view(_index_buffer),
+                                     instance_count(_instance_count),
+                                     instance_offset(_instance_offset) {
+            vtx_views.fill({nullptr, 0});
+            vtx_cnt = _vertex_buffers.size();
+            memcpy(vtx_views.data(), _vertex_buffers.data(), _vertex_buffers.size() * sizeof(VertexBuffer));
+        }
+
+        MeshDrawData(
+            std::span<VertexBuffer> _vtx_views,
+            uint                    _vtx_cnt,
+            uint                    _instance_count,
+            uint                    _instance_offset) : instance_count(_instance_count),
+                                     idx_view(_vtx_cnt),
+                                     instance_offset(_instance_offset) {
+            vtx_views.fill({nullptr, 0});
+            memcpy(vtx_views.data(), _vtx_views.data(), _vtx_views.size() * sizeof(VertexBuffer));
+        }
     };
     struct CmdSubmit {
-        Array<UniquePtr<Command>> cmds;
-        Array<Fence*>             wait_fences;
-        Array<uint64>             wait_values;
-        Array<Fence*>             signal_fences;
-        Array<uint64>             signal_values;
-        bool                      b_sync{false};//force sync queue timeline
-        CmdSubmit&                Wait(Fence* _fence, uint64 _wait_value) {
+        Array<UniquePtr<Command>>        cmds;
+        Array<std::function<void(void)>> callbacks;
+        Array<Fence*>                    wait_fences;
+        Array<uint64>                    wait_values;
+        Array<Fence*>                    signal_fences;
+        Array<uint64>                    signal_values;
+        bool                             b_sync{false};//force sync queue timeline
+        CmdSubmit&                       Wait(Fence* _fence, uint64 _wait_value) {
             wait_fences.push_back(_fence);
             wait_values.push_back(_wait_value);
             return *this;
@@ -367,7 +411,8 @@ namespace Moer::Render {
                     assert(_param && "texture is nullptr");
                     SetTexture(std::hash<std::string_view>{}(_name), _param->GetView());
                 } else {
-                    static_assert(false, "unsupported type");
+                    // static_assert(false, "unsupported type");
+                    assert(0 && "unsupported type");
                 }
             }
             template<typename T>
@@ -392,8 +437,8 @@ namespace Moer::Render {
         };
         struct DrawDispatcher {
             DrawDispatcher(RasterPipeline& _pso, CommandList& _cmd_list);
-            DrawDispatcher& SetViewport(Vector4f);
-            DrawDispatcher& SetScissor(Rect2D);
+
+            DrawDispatcher(RasterPipeline& _pso, CommandList& _cmd_list, ArrayArguments&& _args);
 
             template<typename T>
             DrawDispatcher& SetParam(std::string_view _name, T&& _param) {
@@ -406,18 +451,19 @@ namespace Moer::Render {
                 b_set_consts = true;
                 return *this;
             }
+            template<typename... TRenderTarget>
+            void Draw(Rect2D _rect, Array<MeshDrawData>&& _mesh_data, TRenderTarget&&... _render_targets, DepthAttachment _depth) {
+                RenderPassInfo pass_info(
+                    {std::forward<TRenderTarget>(_render_targets)...},
+                    _depth,
+                    _rect);
+                cmd_list.SetRenderCmds(pso.handle, std::move(pass_info), std::move(_mesh_data));
+            };
 
-            void Draw(
-                uint _vertex_count,
-                uint _instance_count,
-                uint _start_vertex_location,
-                uint _vertex_offset,
-                uint _start_instance_location);
-
-            void DrawIndirect(BufferView _indirect,
-                              BufferView _counter,
-                              uint       _stride,
-                              uint       _max_draw_count = 114514u);
+            template<typename... TRenderTarget>
+            void Draw(Rect2D _rect, Array<MeshDrawData>&& _mesh_data, TRenderTarget&&... _render_targets) {
+                Draw(_rect, std::move(_mesh_data), std::forward<TRenderTarget>(_render_targets)..., DepthAttachment{});
+            };
 
             RasterPipeline& pso;
             CommandList&    cmd_list;
@@ -442,6 +488,7 @@ namespace Moer::Render {
             }
             void DispatchIndirect(BufferView);
             ComputeDispatcher(ComputePipeline& _pso, CommandList& _cmd_list, ArrayArguments&& _args);
+            ComputeDispatcher(ComputePipeline& _pso, CommandList& _cmd_list);
             template<typename T>
             ComputeDispatcher& SetParam(std::string_view _name, T&& _param) {
                 arg_setter.SetParam(_name, std::forward<T>(_param));
@@ -475,33 +522,23 @@ namespace Moer::Render {
         CommandList();
         class Impl;
         void Dispose();
-        template<typename TGfxPso, typename... TRenderTarget>
-        DrawDispatcher Gfx(TGfxPso& _pso, Rect2D _rect, MeshDrawData&& _mesh_data, TRenderTarget&&... _render_targets) {
-            RenderPassInfo pass_info(
-                {std::forward<TRenderTarget>(_render_targets)...},
-                DepthAttachment{},
-                _rect);
-            BeginRenderPass(_pso.handle, std::move(pass_info), std::move(_mesh_data));
-            DrawDispatcher dispatcher(_pso, *this);
 
-            return dispatcher;
-        }
-
-        template<typename TGfxPso, typename... TRenderTarget>
-        DrawDispatcher Gfx(TGfxPso& _pso, Rect2D _rect, MeshDrawData&& _mesh_data, TRenderTarget&&... _render_targets, DepthAttachment _depth) {
-            RenderPassInfo pass_info(
-                _rect,
-                {std::forward<TRenderTarget>(_render_targets)...},
-                _depth);
-            BeginRenderPass(_pso.handle, std::move(pass_info), std::move(_mesh_data));
-            DrawDispatcher dispatcher(_pso, *this);
-            return dispatcher;
+        template<typename TGfxPso, typename... TArgs>
+        DrawDispatcher Gfx(TGfxPso& _pso, TArgs&&... _args) {
+            if constexpr (sizeof...(TArgs) > 0) {
+                ArrayArguments&& args = std::move(_pso.SetArgs());
+                return DrawDispatcher(_pso, *this, std::move(args));
+            }
+            return DrawDispatcher(_pso, *this);
         }
 
         template<typename TComputePso, typename... TArgs>
         ComputeDispatcher Compute(TComputePso& _pso, TArgs&&... _args) {
-            ArrayArguments&& args = std::move(_pso.SetArgs());
-            return ComputeDispatcher(_pso, *this, std::move(args));
+            if constexpr (sizeof...(TArgs) > 0) {
+                ArrayArguments&& args = std::move(_pso.SetArgs());
+                return ComputeDispatcher(_pso, *this, std::move(args));
+            }
+            return ComputeDispatcher(_pso, *this);
         };
 
         void CopyFrom(BufferView _src, BufferView _dst);
@@ -513,6 +550,7 @@ namespace Moer::Render {
 
         void TransitionTexture(TextureView _tex, ETextureStateFlags _dst_state, EPassType _pass);
         void TransitionBuffer(BufferView _buffer, EBufferRuntimeUsageFlags _dst_state, EPassType _pass);
+        void AddCallback(std::function<void()>&& _callback);
 
         CmdSubmit Submit();
 
@@ -520,10 +558,11 @@ namespace Moer::Render {
         friend DrawDispatcher;
         friend ComputeDispatcher;
         friend class CommandQueue;
-        void                      BeginRenderPass(PipelineHandle& _handle, RenderPassInfo&&, MeshDrawData&&);
-        void                      SubmitArgs(ShaderPipeline&, Arguments&&);
-        void                      SubmitConstants(ShaderPipeline&, Array<uint>&&);
-        Array<UniquePtr<Command>> commands;
+        void                         SetRenderCmds(PipelineHandle& _handle, RenderPassInfo&&, Array<MeshDrawData>&&);
+        void                         SubmitArgs(ShaderPipeline&, Arguments&&);
+        void                         SubmitConstants(ShaderPipeline&, Array<uint>&&);
+        Array<UniquePtr<Command>>    commands;
+        Array<std::function<void()>> callbacks;
     };
     class QueueCmd {};
     class CommandQueue {

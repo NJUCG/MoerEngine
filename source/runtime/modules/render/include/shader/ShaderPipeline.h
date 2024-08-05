@@ -185,7 +185,7 @@ namespace Moer::Render {
                     _arg_setter[index] = std::forward<T>(_t);
                 } else {
                     if constexpr (true)
-                        static_assert(false, "not a buffer type");
+                        assert(0 && "not a buffer type");
                 }
             } else if constexpr (std::is_same_v<cpp_type, BufferArg>) {
                 //do buffer stuff
@@ -195,7 +195,7 @@ namespace Moer::Render {
                     _arg_setter[index] = std::forward<T>(_t);
                 } else {
                     if constexpr (true)
-                        static_assert(false, "not a buffer type");
+                        assert(0 && "not a buffer type");
                 }
             } else if constexpr (std::is_same_v<cpp_type, SamplerArg>) {
                 _arg_setter[index] = std::forward<T>(_t);

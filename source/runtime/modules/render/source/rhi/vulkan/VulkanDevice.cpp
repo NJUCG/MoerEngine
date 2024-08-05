@@ -884,7 +884,10 @@ namespace Moer::Render {
     FenceRef VulkanDevice::CreateFence(EFenceUsageFlags _usage) {
         return FenceRef{MoerNew(VulkanFence)(_usage, *this)};
     }
-
+    
+    SwapchainRef VulkanDevice::CreateSwapchain(const SwapchainCreateInfo& _info) {
+        return SwapchainRef{MoerNew(VkSwapchain)(*this, _info)};
+    }
     // RHIViewportRef VulkanDevice::CreateViewport(const RHIViewportInitializer& _init) {
     //     VulkanSwapChain* swapchain = MoerNew(VulkanSwapChain)();
     //     uint32_t         width, height;

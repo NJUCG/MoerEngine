@@ -1301,27 +1301,45 @@ namespace Moer::Render {
                 .pStencilAttachment   = depth_stencil_attachment.has_value() ? &depth_stencil_attachment.value() : nullptr};
 
             cmd_list.BeginRendering(std::move(dynamic_rendering_info));
-            Array<VkBuffer>     vertex_buffers(_cmd.VertexBuffers().size());
-            Array<VkDeviceSize> offsets(_cmd.VertexBuffers().size());
-            for (size_t i = 0; i < _cmd.VertexBuffers().size(); ++i) {
-                vertex_buffers[i] = reinterpret_cast<VulkanBuffer*>(_cmd.VertexBuffers()[i].buffer)->GetHandle();
-                offsets[i]        = _cmd.VertexBuffers()[i].offset;
-            }
+
             cmd_list.SetPso(_cmd.Pipeline());
-            cmd_list.SetVertexBuffers(0,
-                                      vertex_buffers.size(),
-                                      std::span<VkBuffer>(vertex_buffers.data(),
-                                                          vertex_buffers.size()),
-                                      std::span<VkDeviceSize>(offsets.data(),
-                                                              offsets.size()));
+            Array<VkBuffer>     vertex_buffers(4);
+            Array<VkDeviceSize> offsets(4);
+            const auto&         draw_datas = _cmd.DrawData();
+            for (const auto& draw_data : draw_datas) {
+                cmd_list.SetVertexBuffers(0,
+                                          draw_data.vtx_cnt,
+                                          std::span<VkBuffer>(vertex_buffers.data(),
+                                                              vertex_buffers.size()),
+                                          std::span<VkDeviceSize>(offsets.data(),
+                                                                  offsets.size()));
 
-            const auto& index_buffer = _cmd.IndexBuffer().buffer;
-            uint64      offset       = index_buffer.GetByteOffset();
+                uint vtx_offset = draw_data.vtx_cnt != 0 ? draw_data.vtx_views[0].offset / draw_data.vtx_views[0].buffer->GetStride() : 0;
+                std::visit(
+                    [&](auto&& _idx_input) {
+                        using IdxType = std::decay_t<decltype(_idx_input)>;
+                        if constexpr (std::is_same_v<IdxType, IndexBuffer>) {
+                            const auto& index_buffer = _idx_input.buffer;
+                            uint64      offset       = index_buffer.GetByteOffset();
 
-            cmd_list.SetIndexBuffer(
-                reinterpret_cast<VulkanBuffer*>(index_buffer.GetBuffer()),
-                offset,
-                VulkanEnumTranslator::METoVKIndexType(_cmd.IndexBuffer().stride));
+                            cmd_list.SetIndexBuffer(
+                                reinterpret_cast<VulkanBuffer*>(index_buffer.GetBuffer()),
+                                offset,
+                                VulkanEnumTranslator::METoVKIndexType(_idx_input.stride));
+                            cmd_list.DrawIndexedInstanced(_idx_input.buffer.GetNumElements(),
+                                                          draw_data.instance_count,
+                                                          0,
+                                                          vtx_offset,
+                                                          draw_data.instance_offset);
+                        } else if constexpr (std::is_same_v<IdxType, uint>) {
+                            cmd_list.DrawInstanced(_idx_input,
+                                                   draw_data.instance_count,
+                                                   vtx_offset,
+                                                   draw_data.instance_offset);
+                        }
+                    },
+                    draw_data.idx_view);
+            }
         }
 
         void Visit(const UpdateDrawStateCmd& _cmd) {
@@ -1482,9 +1500,17 @@ namespace Moer::Render {
         queue.Submit(vk_allocator.GetCmdList());
         if (_submit.cmds.empty()) {
             allocators.Push(allocator_ptr.release());
+            std::unique_lock<std::mutex> lock(event_mutex);
+            if(_submit.callbacks.size() > 0) {
+                event_queue.emplace_back(std::move(_submit.callbacks), current_timeline, true);
+                queue_cv.notify_one();
+            }
         } else {
             std::unique_lock<std::mutex> lock(event_mutex);
             event_queue.emplace_back(std::move(allocator_ptr), current_timeline, true);
+            if(_submit.callbacks.size() > 0) {
+                event_queue.emplace_back(std::move(_submit.callbacks), current_timeline, true);
+            }
             queue_cv.notify_one();
         }
     }
@@ -1571,7 +1597,7 @@ namespace Moer::Render {
         }
     }
 
-    void VkCommandQueue::Sync(){
+    void VkCommandQueue::Sync() {
         Complete(last_frame);
     }
 

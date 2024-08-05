@@ -292,27 +292,26 @@ namespace Moer::Render {
     private:
         PipelineHandle pipeline{};
         RenderPassInfo render_pass_info;
-        Array<VertexBuffer>
-                    vertex_buffers;
-        IndexBuffer index_buffer;
+        Array<MeshDrawData> mesh_data;
+        uint vtx_cnt;
         SetDrawStateCmd() : Command(EType::SetDrawState) {}
 
     public:
         SetDrawStateCmd(PipelineHandle        _pipeline,
                         RenderPassInfo&&      _info,
-                        Array<VertexBuffer>&& _vertex_buffers,
-                        IndexBuffer           _index_buffer) : Command(EType::SetDrawState),
+                        Array<MeshDrawData>&& _draw_data) : Command(EType::SetDrawState),
                                                      pipeline(_pipeline),
                                                      render_pass_info(std::move(_info)),
-                                                     vertex_buffers(std::move(_vertex_buffers)),
-                                                     index_buffer(_index_buffer) {}
+                                                     mesh_data(std::move(_draw_data)),
+                                                     vtx_cnt(0) {
+                                                        
+                                                     }
 
         EQueueType GetQueueType() const override { return EQueueType::Graphics; }
 
         auto        Pipeline() const { return pipeline; }
         const auto& RenderPassInfo() const { return render_pass_info; }
-        const auto& VertexBuffers() const { return vertex_buffers; }
-        const auto& IndexBuffer() const { return index_buffer; }
+        const auto& DrawData() const { return mesh_data; }
     };
 
     struct RenderCmd : public Command {
