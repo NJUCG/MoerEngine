@@ -379,7 +379,7 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> result, const ShaderParam
         auto& param   = param_map[binding.name];
         param.slot    = binding.binding;
         param.space   = binding.set;
-        param.type    = ToShaderParameterType(binding.resource_type);
+        param.type    = ToShaderParameterType(binding.resource_type, binding.descriptor_type);
         param.stage |= ToPipelineStageFlag(reflect_module.shader_stage);
         param.type_flags = binding.resource_type | binding.descriptor_type << 4u;
         param.num        = binding.count;

@@ -1663,6 +1663,12 @@ VulkanFence::~VulkanFence() {
     }, m_fence);
 }
 
+VulkanTexture::~VulkanTexture() {
+    if (m_alloc.image != VK_NULL_HANDLE) {
+        vmaDestroyImage(m_device->GetVmaAllocator(), m_alloc.image, m_alloc.alloc);
+    }
+}
+
 #pragma endregion
 
 #pragma region viewable resources view definitions

@@ -309,6 +309,14 @@ namespace Moer::Render {
         EType Type() const { return type; }
     };
 
+    struct WaitEvent {
+        uint64 timeline_handle;
+        uint64 value;
+    };
+    struct SignalEvent {
+        uint64 timeline_handle;
+        uint64 value;
+    };
     template<typename TRenderTarget>
     concept is_render_target = std::is_same_v<TRenderTarget, ColorAttachment>;
 
@@ -369,20 +377,17 @@ namespace Moer::Render {
     struct CmdSubmit {
         Array<UniquePtr<Command>>        cmds;
         Array<std::function<void(void)>> callbacks;
-        Array<Fence*>                    wait_fences;
-        Array<uint64>                    wait_values;
-        Array<Fence*>                    signal_fences;
-        Array<uint64>                    signal_values;
-        bool                             b_sync{false};//force sync queue timeline
-        CmdSubmit&                       Wait(Fence* _fence, uint64 _wait_value) {
-            wait_fences.push_back(_fence);
-            wait_values.push_back(_wait_value);
+
+        Array<WaitEvent>   wait_events;
+        Array<SignalEvent> signal_events;
+        bool               b_sync{false};//force sync queue timeline
+        CmdSubmit&         Wait(Fence* _fence, uint64 _wait_value) {
+            wait_events.emplace_back(uint64(_fence), _wait_value);
             return *this;
         }
 
         CmdSubmit& Signal(Fence* _fence, uint64 _signal_value) {
-            signal_fences.push_back(_fence);
-            signal_values.push_back(_signal_value);
+            signal_events.emplace_back(uint64(_fence), _signal_value);
             return *this;
         }
     };
@@ -452,7 +457,7 @@ namespace Moer::Render {
                 return *this;
             }
             template<typename... TRenderTarget>
-            void Draw(Rect2D _rect, Array<MeshDrawData>&& _mesh_data, TRenderTarget&&... _render_targets, DepthAttachment _depth) {
+            void Draw(Rect2D _rect, Array<MeshDrawData>&& _mesh_data, DepthAttachment _depth, TRenderTarget&&... _render_targets) {
                 RenderPassInfo pass_info(
                     {std::forward<TRenderTarget>(_render_targets)...},
                     _depth,
@@ -462,7 +467,7 @@ namespace Moer::Render {
 
             template<typename... TRenderTarget>
             void Draw(Rect2D _rect, Array<MeshDrawData>&& _mesh_data, TRenderTarget&&... _render_targets) {
-                Draw(_rect, std::move(_mesh_data), std::forward<TRenderTarget>(_render_targets)..., DepthAttachment{});
+                Draw(_rect, std::move(_mesh_data), DepthAttachment{}, std::forward<TRenderTarget>(_render_targets)...);
             };
 
             RasterPipeline& pso;
@@ -526,8 +531,8 @@ namespace Moer::Render {
         template<typename TGfxPso, typename... TArgs>
         DrawDispatcher Gfx(TGfxPso& _pso, TArgs&&... _args) {
             if constexpr (sizeof...(TArgs) > 0) {
-                ArrayArguments&& args = std::move(_pso.SetArgs());
-                return DrawDispatcher(_pso, *this, std::move(args));
+                // ArrayArguments&& args = std::move(_pso.SetArgs());
+                return DrawDispatcher(_pso, *this, std::move(_pso.SetArgs(_args...)));
             }
             return DrawDispatcher(_pso, *this);
         }
@@ -565,15 +570,17 @@ namespace Moer::Render {
         Array<std::function<void()>> callbacks;
     };
     class QueueCmd {};
+
     class CommandQueue {
     public:
         CommandQueue(){};
         CommandQueue(EQueueType _type, RenderDevice& _device);
-        void         Test();
-        virtual void Execute(CmdSubmit&& _submit)                          = 0;
-        virtual void Present(RHIViewport* _viewport, TextureView _target)  = 0;
-        virtual void Present(SwapchainRef _swapchain, TextureView _target) = 0;
-        virtual void Sync()                                                = 0;
+        void              Test();
+        virtual void      Wait(WaitEvent _event)                                = 0;
+        virtual WaitEvent Execute(CmdSubmit&& _submit)                          = 0;
+        virtual void      Present(RHIViewport* _viewport, TextureView _target)  = 0;
+        virtual void      Present(SwapchainRef _swapchain, TextureView _target) = 0;
+        virtual void      Sync()                                                = 0;
     };
 }// namespace Moer::Render
 #endif

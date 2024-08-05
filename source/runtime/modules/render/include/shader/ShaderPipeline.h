@@ -112,6 +112,10 @@ namespace Moer::Render {
     struct ArrayArguments {
         ArrayArguments(uint _arg_size) : args(_arg_size) {
         }
+        ArrayArguments(ArrayArguments&& _other) {
+            args      = std::move(_other.args);
+            constants = std::move(_other.constants);
+        }
         // Array<TArg> args;
         TArg& operator[](uint _idx) {
             return args[_idx];

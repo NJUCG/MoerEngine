@@ -1,4 +1,6 @@
 #include "RHIImpl.h"
+#include "rhi/RHI.h"
+#include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 namespace Moer::Render{
     // RHIViewportRef RenderDevice::CreateViewport(const RHIViewportInitializer& _init) {
@@ -39,5 +41,21 @@ namespace Moer::Render{
 
     SwapchainRef RenderDevice::CreateSwapchain(const SwapchainCreateInfo& _info) {
         return impl->CreateSwapchain(_info);
+    }
+
+    BufferRef RenderDevice::CreateBuffer(uint _element_cnt, uint _stride, EBufferUsageFlags _usage) {
+        return impl->CreateBuffer(_element_cnt, _stride, _usage);
+    }
+
+    const EShaderPlatform RenderDevice::GetShaderPlatform() const{
+        switch (rhi_type) {
+            case ERHIType::Vulkan:
+                return EShaderPlatform::SP_VULKAN_SM6;
+            case ERHIType::D3D12:
+                return EShaderPlatform::SP_WIN_D3D_SM6;
+            default:
+                return EShaderPlatform::SP_Num;
+        
+        }
     }
 }

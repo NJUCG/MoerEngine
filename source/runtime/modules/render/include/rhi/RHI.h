@@ -275,15 +275,19 @@ namespace Moer::Render {
 
         template<typename TElement>
             requires(std::is_trivially_copyable_v<TElement> && std::is_standard_layout_v<TElement> || NumericType<TElement>)
-        BufferRef CreateBuffer(uint _element_cnt, EBufferUsageFlags _usage);
+        BufferRef CreateBuffer(uint _element_cnt, EBufferUsageFlags _usage){
+            return CreateBuffer(_element_cnt, sizeof(TElement), _usage);
+        }
+
+        BufferRef CreateBuffer(uint _element_cnt, uint _stride, EBufferUsageFlags _usage);
 
         BufferRef CreateStagingBuffer(uint64_t _byte_size);
 
-        TextureRef CreateTexture(Extent2D _size, EPixelFormat _format, ETextureUsageFlags _usage, uint32_t _mip_cnt = 1, uint32_t _array_size = 1);
+        RENDER_API TextureRef CreateTexture(Extent2D _size, EPixelFormat _format, ETextureUsageFlags _usage, uint32_t _mip_cnt = 1, uint32_t _array_size = 1);
 
-        TextureRef CreateTexture(Extent3D _size, EPixelFormat _format, ETextureUsageFlags _usage, uint32_t _mip_cnt = 1, uint32_t _array_size = 1);
+        RENDER_API TextureRef CreateTexture(Extent3D _size, EPixelFormat _format, ETextureUsageFlags _usage, uint32_t _mip_cnt = 1, uint32_t _array_size = 1);
 
-        DepthBufferRef CreateDepthBuffer(Extent2D _size, EPixelFormat _format, uint32_t _array_size = 1);
+        RENDER_API DepthBufferRef CreateDepthBuffer(Extent2D _size, EPixelFormat _format, uint32_t _array_size = 1);
 
         // BackBufferInfo GetNextBackBufferInfo(RHIViewport* _viewport);
 
@@ -292,12 +296,12 @@ namespace Moer::Render {
         // void PresentViewport(RHIViewport* _viewport, RHIFence* _render_end_fence);
         void FlushPendingDeletes();
 
-        const ShaderTargetInfo& GetShaderTargetInfo() const;
+        const EShaderPlatform GetShaderPlatform() const;
 
-        PipelineHandle CreatePipeline(GfxPsoCreateInfo&& _pso_info, PipelineShaderInfo&& _shaders);//gfx
-        PipelineHandle CreatePipeline(PipelineShaderInfo&& _shaders);                              //compute
+        RENDER_API PipelineHandle CreatePipeline(GfxPsoCreateInfo&& _pso_info, PipelineShaderInfo&& _shaders);//gfx
+        RENDER_API PipelineHandle CreatePipeline(PipelineShaderInfo&& _shaders);                              //compute
 
-        CommandQueue& GetCommandQueue(EQueueType _type);
+        RENDER_API CommandQueue& GetCommandQueue(EQueueType _type);
 
         SwapchainRef CreateSwapchain(const SwapchainCreateInfo& _info);
 

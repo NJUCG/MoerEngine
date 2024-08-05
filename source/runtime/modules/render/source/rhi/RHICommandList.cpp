@@ -98,6 +98,17 @@ namespace Moer::Render {
         cmd_list.commands.push_back(MakeUnique<DispatchCmd>(_indirect));
     }
 
+    void CommandList::ComputeDispatcher::SubmitArgsIfPossible() {
+        if (HasParams()) {
+            cmd_list.SubmitArgs(pso, arg_setter.StealArgs());
+        }
+        if (b_set_consts) {
+            cmd_list.SubmitConstants(pso, arg_setter.StealConstants());
+        }
+        b_set_params = false;
+        b_set_consts = false;
+    }
+
     CmdSubmit CommandList::Submit() {
         CmdSubmit submit{std::move(commands), std::move(callbacks)};
         return std::move(submit);
@@ -168,6 +179,10 @@ namespace Moer::Render {
     void CommandList::TransitionBuffer(BufferView _buffer, EBufferRuntimeUsageFlags _dst_state, EPassType _pass) {
         // commands.push_back(MakeUnique<TransitionBufferCmd>(_buffer, _state));
         //TODO
+    }
+
+    void CommandList::AddCallback(std::function<void()>&& _callback) {
+        callbacks.emplace_back(std::move(_callback));
     }
 
     void CommandList::TransitionTexture(TextureView _texture, ETextureStateFlags _dst_state, EPassType _pass) {

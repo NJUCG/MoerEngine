@@ -1436,8 +1436,15 @@ namespace Moer::Render {
             .semaphore = sem,
             .value     = _fence_val});
     }
-
-    void VkCommandQueue::Execute(CmdSubmit&& _submit) {
+    void VkCommandQueue::Wait(WaitEvent _evt) {
+        auto* fence = reinterpret_cast<VulkanFence*>(_evt.timeline_handle);
+        {
+            std::unique_lock<std::mutex> lock(event_mutex);
+            event_queue.emplace_back(fence, _evt.value, false);
+            queue_cv.notify_one();
+        }
+    }
+    WaitEvent VkCommandQueue::Execute(CmdSubmit&& _submit) {
         auto         allocator_ptr = std::move(GetAllocator());
         auto&        vk_allocator  = *allocator_ptr;
         VkCmdVisitor visitor(vk_device, vk_allocator.GetCmdList());
@@ -1495,24 +1502,35 @@ namespace Moer::Render {
                 case Command::EType::Custom: break;
             }
         }
-        auto current_timeline = ++last_frame;
-        queue.Signal(timeline, current_timeline);
-        queue.Submit(vk_allocator.GetCmdList());
+        uint64 last_time = last_frame;
         if (_submit.cmds.empty()) {
             allocators.Push(allocator_ptr.release());
             std::unique_lock<std::mutex> lock(event_mutex);
-            if(_submit.callbacks.size() > 0) {
-                event_queue.emplace_back(std::move(_submit.callbacks), current_timeline, true);
+            if (_submit.callbacks.size() > 0) {
+                event_queue.emplace_back(std::move(_submit.callbacks), last_time, true);
                 queue_cv.notify_one();
             }
+            return {uint64(timeline), last_time};
         } else {
+            auto current_timeline = ++last_frame;
+            queue.Signal(timeline, current_timeline);
+            for (auto& evt : _submit.wait_events) {
+                queue.Wait(reinterpret_cast<VulkanFence*>(evt.timeline_handle), evt.value);
+            }
+            for (auto& evt : _submit.signal_events) {
+                queue.Signal(reinterpret_cast<VulkanFence*>(evt.timeline_handle), evt.value);
+            }
+            queue.Submit(vk_allocator.GetCmdList());
+
             std::unique_lock<std::mutex> lock(event_mutex);
             event_queue.emplace_back(std::move(allocator_ptr), current_timeline, true);
-            if(_submit.callbacks.size() > 0) {
-                event_queue.emplace_back(std::move(_submit.callbacks), current_timeline, true);
+            if (_submit.callbacks.size() > 0) {
+                event_queue.emplace_back(std::move(_submit.callbacks), current_timeline, false);
             }
             queue_cv.notify_one();
+            return {uint64(timeline), current_timeline};
         }
+        return {uint64(timeline), 0ull};
     }
 
     void VkCommandQueue::Present(RHIViewport* _viewport, TextureView _view) {
@@ -1616,7 +1634,10 @@ namespace Moer::Render {
     void VkCommandQueue::ExecuteThread() {
         while (enabled) {
             uint64 timeline;
-            auto   wait_util_reach_timeline = [&timeline, this]() {
+            bool   b_wake_up = false;
+
+            auto wait_util_reach_timeline = [&timeline, &b_wake_up, this]() {
+                if (!b_wake_up) { return; }
                 uint64 prev_timeline = executed_frame;
                 while (prev_timeline < timeline && !executed_frame.compare_exchange_weak(prev_timeline, timeline)) {
                     std::this_thread::yield();
@@ -1639,6 +1660,9 @@ namespace Moer::Render {
                 }
                 wait_util_reach_timeline();
             };
+            auto visit_external_fence = [&](VulkanFence* _fence) {
+                _fence->Wait(timeline);
+            };
             while (true) {
                 std::optional<QueueEvent> evt;
                 {
@@ -1652,7 +1676,8 @@ namespace Moer::Render {
                 if (!evt.has_value()) {
                     break;
                 }
-                timeline = evt->timeline;
+                timeline  = evt->timeline;
+                b_wake_up = evt->wake_thread;
                 std::visit(
                     [&](auto& _evt) {
                         using TEvent = std::decay_t<decltype(_evt)>;
@@ -1890,6 +1915,14 @@ namespace Moer::Render {
         uint32_t _vertex_offset,
         uint32_t _first_instance) {
         vkCmdDrawIndexed(command_buffer, _index_cnt, _instance_cnt, _first_index, _vertex_offset, _first_instance);
+    }
+
+    void VulkanCmdList::DrawInstanced(
+        uint32_t _vertex_cnt,
+        uint32_t _instance_cnt,
+        uint32_t _first_vertex,
+        uint32_t _first_instance) {
+        vkCmdDraw(command_buffer, _vertex_cnt, _instance_cnt, _first_vertex, _first_instance);
     }
 
     void VulkanCmdList::DrawIndirectCnt(

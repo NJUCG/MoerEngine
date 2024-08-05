@@ -1766,6 +1766,11 @@ RHICopyCommandList* VulkanRHIImpl::RHICreateCopyCommandList() {
     return MoerNew(VulkanRHICopyCommandList(m_device, vk_allocator.GetHandle(ECommandListType::COPY), VK_COMMAND_BUFFER_LEVEL_PRIMARY));
 }
 
+RHICommandAllocator* VulkanRHIImpl::RHIGetCurrentCommandAllocator() {
+    assert(0 && "not implemented");
+    return nullptr;
+}
+
 void VulkanRHIImpl::RHISetBatchedShaderParametersInner(RHIResource* _pso, const RHIBatchedShaderParameters& _batched_params, bool _b_update_constant) {
     const VulkanPipelineState* vk_pso;
     VkShaderStageFlags         stage = 0u;

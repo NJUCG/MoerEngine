@@ -57,10 +57,10 @@ namespace Moer::Render {
         bool b_mesh  = !mesh_path.Empty() && !pixel_path.Empty();
         bool b_task  = !task_path.Empty();
 
-        auto target_info       = device.GetShaderTargetInfo();
-        auto get_shader_output = [&](ShaderInfo& _info) {
+        auto target_info       = device.GetShaderPlatform();
+        auto get_shader_output = [&](ShaderInfo& _info, EShaderType _type) {
             ShaderCompilerInput input{
-                .target_info               = target_info,
+                .target_info               = ShaderTargetInfo(_type, target_info),
                 .entry_point               = _info.entry_name,
                 .relative_source_file_path = _info.path,
                 .shader_name               = _info.path,
@@ -75,13 +75,13 @@ namespace Moer::Render {
         };
         PipelineShaderInfo sd_info{.layout_hash = _hash_values};
         if (b_vs_ps) {
-            auto vert_output  = get_shader_output(vertex_path);
-            auto pixel_output = get_shader_output(pixel_path);
+            auto vert_output  = get_shader_output(vertex_path, ST_VERTEX);
+            auto pixel_output = get_shader_output(pixel_path, ST_FRAGMENT);
             if (!b_gs) {
                 sd_info.shader_group = ShaderVsPs{.vs = get_shader_info(ST_VERTEX, std::move(vert_output)),
                                                   .ps = get_shader_info(ST_FRAGMENT, std::move(pixel_output))};
             } else {
-                auto geo_output      = get_shader_output(geometry_path);
+                auto geo_output      = get_shader_output(geometry_path, ST_GEOMETRY);
                 sd_info.shader_group = ShaderVsGsPs{.vs = get_shader_info(ST_VERTEX, std::move(vert_output)),
                                                     .gs = get_shader_info(ST_GEOMETRY, std::move(geo_output)),
                                                     .ps = get_shader_info(ST_FRAGMENT, std::move(pixel_output))};
@@ -89,14 +89,14 @@ namespace Moer::Render {
         }
 
         if (b_mesh) {
-            auto mesh_output  = get_shader_output(mesh_path);
-            auto pixel_output = get_shader_output(pixel_path);
+            auto mesh_output  = get_shader_output(mesh_path, ST_MESH);
+            auto pixel_output = get_shader_output(pixel_path, ST_FRAGMENT);
 
             if (!b_task) {
                 sd_info.shader_group = ShaderMsPs{.ms = get_shader_info(ST_MESH, std::move(mesh_output)),
                                                   .ps = get_shader_info(ST_FRAGMENT, std::move(pixel_output))};
             } else {
-                auto task_output     = get_shader_output(task_path);
+                auto task_output     = get_shader_output(task_path, ST_AMPLIFICATION);
                 sd_info.shader_group = ShaderTsMsPs{.ts = get_shader_info(ST_AMPLIFICATION, std::move(task_output)),
                                                     .ms = get_shader_info(ST_MESH, std::move(mesh_output)),
                                                     .ps = get_shader_info(ST_FRAGMENT, std::move(pixel_output))};
@@ -112,10 +112,10 @@ namespace Moer::Render {
     }
 
     PipelineHandle ComputeConstructor::CreatePipeline(Array<std::string_view>& _hash_values) {
-        auto target_info       = device.GetShaderTargetInfo();
-        auto get_shader_output = [&](ShaderInfo& _info) {
+        auto target_info       = device.GetShaderPlatform();
+        auto get_shader_output = [&](ShaderInfo& _info, EShaderType _type) {
             ShaderCompilerInput input{
-                .target_info               = target_info,
+                .target_info               = ShaderTargetInfo(_type, target_info),
                 .entry_point               = _info.entry_name,
                 .relative_source_file_path = _info.path,
                 .shader_name               = _info.path,
@@ -129,7 +129,7 @@ namespace Moer::Render {
                                               .shader_param_map = {std::move(_output.parameter_map.param_map)}});
         };
 
-        auto output = get_shader_output(shader_info);
+        auto output = get_shader_output(shader_info, ST_COMPUTE);
         PipelineShaderInfo sd_info{.layout_hash = _hash_values};
         sd_info.shader_group = ShaderCs{.cs = get_shader_info(ST_COMPUTE, std::move(output))};
 

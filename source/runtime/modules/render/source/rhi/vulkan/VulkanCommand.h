@@ -469,6 +469,7 @@ namespace Moer::Render {
         using EventType = std::variant<
             UniquePtr<VulkanAllocator>,
             Array<std::function<void()>>,
+            VulkanFence*,
             FencePlaceHoler>;
 
         struct QueueEvent {
@@ -487,7 +488,8 @@ namespace Moer::Render {
         VkCommandQueue(VulkanDevice& _device, EQueueType _type) : CommandQueue(), vk_device(_device), queue(_type, _device) {
             timeline = MoerNew(VulkanFence(EFenceUsageFlags::TIMELINE, vk_device));
         }
-        void Execute(CmdSubmit&& _submit) override;
+        WaitEvent Execute(CmdSubmit&& _submit) override;
+        void Wait(WaitEvent _event) override;
         void Present(RHIViewport* _viewport, TextureView _view) override;
         void Present(SwapchainRef _viewport, TextureView _view) override;
         void Sync() override;

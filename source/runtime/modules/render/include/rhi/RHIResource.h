@@ -14,6 +14,7 @@
 #include "misc/STL.h"
 #include "misc/Traits.h"
 #include "rhi/RHICommon.h"
+#include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
 
 #include <cassert>
@@ -698,7 +699,7 @@ namespace Moer::Render {
         uint              GetStride() const { return info.stride; }
         EBufferUsageFlags GetUsage() const { return info.usage; }
 
-        BufferView GetView(uint64 _byte_offset = 0, uint64 _byte_size = 0);
+        BufferView GetView(uint64 _byte_offset = 0, uint64 _byte_size = UINT64_MAX);
 
     protected:
         /**
@@ -717,6 +718,7 @@ namespace Moer::Render {
         TextureView() = default;
         TextureView(class Texture*);
         TextureView(TextureRef);
+        TextureView(Texture* _texture, uint8 _mip_idx, uint8 _mip_cnt);
         class Texture* texture;
         uint3          offset{};
         uint3          extent{};
@@ -1378,7 +1380,7 @@ namespace Moer::Render {
         virtual void*          GetNativeWindow()                = 0;
         virtual void           Present(FenceRef _present_fence) = 0;
         virtual void           Resize(Extent2D)                 = 0;
-        virtual BackBufferInfo GetBackBuffer()                  = 0;
+        // virtual BackBufferInfo GetBackBuffer()                  = 0;
     };
 }// namespace Moer::Render
 struct RHIBarrierInfo {

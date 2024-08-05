@@ -593,125 +593,125 @@ void GUIUploadData(void* _draw_data, CommandList& _cmd_list) {
 
 void ImGUIRenderer::Impl::UpdateGUIData() {
 }
-void GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list, RHIViewportNextBackBufferInfo* _next_frame_info_render_thread) {
-    ImDrawData* draw_data = static_cast<ImDrawData*>(_draw_data);
-    // std::this_thread::sleep_for(std::chrono::milliseconds(10));
+// void GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list, RHIViewportNextBackBufferInfo* _next_frame_info_render_thread) {
+//     ImDrawData* draw_data = static_cast<ImDrawData*>(_draw_data);
+//     // std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
-    if (draw_data->DisplaySize.x <= 0.0f || draw_data->DisplaySize.y <= 0.0f)
-        return;
-    // RHIFragmentShaderRef frag_rhi_shader = g_rhi->RHICreateFragmentShader(frag_shader);
+//     if (draw_data->DisplaySize.x <= 0.0f || draw_data->DisplaySize.y <= 0.0f)
+//         return;
+//     // RHIFragmentShaderRef frag_rhi_shader = g_rhi->RHICreateFragmentShader(frag_shader);
 
-    GuiBackendData* backend_data = GetBackendData();
+//     GuiBackendData* backend_data = GetBackendData();
 
-    GuiViewportData* viewport_data = (GuiViewportData*)draw_data->OwnerViewport->RendererUserData;
+//     GuiViewportData* viewport_data = (GuiViewportData*)draw_data->OwnerViewport->RendererUserData;
 
-    // GuiFrameRenderBuffers* render_buffers = &viewport_data->render_buffers[viewport_data->frame_index % backend_data->num_frames_in_flight];
-    //todo frame_index should not manage here
+//     // GuiFrameRenderBuffers* render_buffers = &viewport_data->render_buffers[viewport_data->frame_index % backend_data->num_frames_in_flight];
+//     //todo frame_index should not manage here
 
-    ImVec2 clip_off   = draw_data->DisplayPos;      // (0,0) unless using multi-viewports
-    ImVec2 clip_scale = draw_data->FramebufferScale;// (1,1) unless using retina display which are often (2,2)
-    SetupRenderState(draw_data, _ui_command_list, viewport_data, _next_frame_info_render_thread);
-    int32_t global_vertex_offset = 0,
-            global_index_offset  = 0;
-    ImGuiShaderVert::Parameters vert_param;
-    {
-        float l         = draw_data->DisplayPos.x;
-        float r         = draw_data->DisplayPos.x + draw_data->DisplaySize.x;
-        float t         = draw_data->DisplayPos.y;
-        float b         = draw_data->DisplayPos.y + draw_data->DisplaySize.y;
-        float mvp[4][4] = {
-            {2.0f / (r - l), 0.0f, 0.0f, (r + l) / (l - r)},
-            {0.0f, 2.0f / (t - b), 0.5f, (t + b) / (b - t)},
-            {0.0f, 0.0f, 0.f, 0.5f},
-            {0.f, 0.0f, 0.0f, 1.0f},
-        };
-        memcpy(&vert_param.vertexBuffer.mvp, mvp, sizeof(mvp));
-    }
-    // ImVec2 clip_off = draw_data->DisplayPos;
-    for (int32_t n = 0; n < draw_data->CmdListsCount; n++) {
-        const ImDrawList* cmd_list = draw_data->CmdLists[n];
-        for (uint32_t cmd_index = 0; cmd_index < cmd_list->CmdBuffer.Size; ++cmd_index) {
-            const ImDrawCmd* cmd = &cmd_list->CmdBuffer[cmd_index];
-            if (cmd->UserCallback != nullptr) {
-                if (cmd->UserCallback == ImDrawCallback_ResetRenderState) {
-                    SetupRenderState(draw_data, _ui_command_list, viewport_data, _next_frame_info_render_thread);
-                } else {
-                    cmd->UserCallback(cmd_list, cmd);
-                }
-            } else {
-                // Project scissor/clipping rectangles into framebuffer space
-                ImVec2 clip_min((cmd->ClipRect.x - clip_off.x) * clip_scale.x, (cmd->ClipRect.y - clip_off.y) * clip_scale.y);
-                ImVec2 clip_max((cmd->ClipRect.z - clip_off.x) * clip_scale.x, (cmd->ClipRect.w - clip_off.y) * clip_scale.y);
-                if (clip_max.x <= clip_min.x || clip_max.y <= clip_min.y)
-                    continue;
+//     ImVec2 clip_off   = draw_data->DisplayPos;      // (0,0) unless using multi-viewports
+//     ImVec2 clip_scale = draw_data->FramebufferScale;// (1,1) unless using retina display which are often (2,2)
+//     SetupRenderState(draw_data, _ui_command_list, viewport_data, _next_frame_info_render_thread);
+//     int32_t global_vertex_offset = 0,
+//             global_index_offset  = 0;
+//     ImGuiShaderVert::Parameters vert_param;
+//     {
+//         float l         = draw_data->DisplayPos.x;
+//         float r         = draw_data->DisplayPos.x + draw_data->DisplaySize.x;
+//         float t         = draw_data->DisplayPos.y;
+//         float b         = draw_data->DisplayPos.y + draw_data->DisplaySize.y;
+//         float mvp[4][4] = {
+//             {2.0f / (r - l), 0.0f, 0.0f, (r + l) / (l - r)},
+//             {0.0f, 2.0f / (t - b), 0.5f, (t + b) / (b - t)},
+//             {0.0f, 0.0f, 0.f, 0.5f},
+//             {0.f, 0.0f, 0.0f, 1.0f},
+//         };
+//         memcpy(&vert_param.vertexBuffer.mvp, mvp, sizeof(mvp));
+//     }
+//     // ImVec2 clip_off = draw_data->DisplayPos;
+//     for (int32_t n = 0; n < draw_data->CmdListsCount; n++) {
+//         const ImDrawList* cmd_list = draw_data->CmdLists[n];
+//         for (uint32_t cmd_index = 0; cmd_index < cmd_list->CmdBuffer.Size; ++cmd_index) {
+//             const ImDrawCmd* cmd = &cmd_list->CmdBuffer[cmd_index];
+//             if (cmd->UserCallback != nullptr) {
+//                 if (cmd->UserCallback == ImDrawCallback_ResetRenderState) {
+//                     SetupRenderState(draw_data, _ui_command_list, viewport_data, _next_frame_info_render_thread);
+//                 } else {
+//                     cmd->UserCallback(cmd_list, cmd);
+//                 }
+//             } else {
+//                 // Project scissor/clipping rectangles into framebuffer space
+//                 ImVec2 clip_min((cmd->ClipRect.x - clip_off.x) * clip_scale.x, (cmd->ClipRect.y - clip_off.y) * clip_scale.y);
+//                 ImVec2 clip_max((cmd->ClipRect.z - clip_off.x) * clip_scale.x, (cmd->ClipRect.w - clip_off.y) * clip_scale.y);
+//                 if (clip_max.x <= clip_min.x || clip_max.y <= clip_min.y)
+//                     continue;
 
-                Rect2D r = {
-                    (int32_t)clip_min.x,
-                    (int32_t)clip_min.y,
-                    (uint32_t)(clip_max.x - clip_min.x),
-                    uint32_t(clip_max.y - clip_min.y)};
+//                 Rect2D r = {
+//                     (int32_t)clip_min.x,
+//                     (int32_t)clip_min.y,
+//                     (uint32_t)(clip_max.x - clip_min.x),
+//                     uint32_t(clip_max.y - clip_min.y)};
 
-                // 5. local: set scissor and viewport
-                EnqueueRenderTask([_ui_command_list, r, _next_frame_info_render_thread] {
-                    if (_next_frame_info_render_thread->backbuffer_index == UINT32_MAX) return;
-                    _ui_command_list->SetScissor(r);
-                    // _ui_command_list->SetViewPort(g_rhi->RHIGetMainViewport()->GetViewportExtent());
-                });
+//                 // 5. local: set scissor and viewport
+//                 EnqueueRenderTask([_ui_command_list, r, _next_frame_info_render_thread] {
+//                     if (_next_frame_info_render_thread->backbuffer_index == UINT32_MAX) return;
+//                     _ui_command_list->SetScissor(r);
+//                     // _ui_command_list->SetViewPort(g_rhi->RHIGetMainViewport()->GetViewportExtent());
+//                 });
 
-                // _ui_command_list->SetScissor(r);
-                // _ui_command_list->SetViewPort(g_rhi->RHIGetMainViewport()->GetViewportExtent());
+//                 // _ui_command_list->SetScissor(r);
+//                 // _ui_command_list->SetViewPort(g_rhi->RHIGetMainViewport()->GetViewportExtent());
 
-                // 6. local: set texture
-                RHISRVRef texture_view = (RHISRVRef)cmd->GetTexID();
+//                 // 6. local: set texture
+//                 RHISRVRef texture_view = (RHISRVRef)cmd->GetTexID();
 
-                ImGuiShaderFrag::Parameters params;
-                params.texture0 = texture_view;
-                if (texture_view.Get() == backend_data->font_view.Get()) {
-                    vert_param.vertexBuffer.need_correction = false;
-                } else {
-                    vert_param.vertexBuffer.need_correction = true;
-                }
-                RHIBatchedShaderParameters batched_params;
+//                 ImGuiShaderFrag::Parameters params;
+//                 params.texture0 = texture_view;
+//                 if (texture_view.Get() == backend_data->font_view.Get()) {
+//                     vert_param.vertexBuffer.need_correction = false;
+//                 } else {
+//                     vert_param.vertexBuffer.need_correction = true;
+//                 }
+//                 RHIBatchedShaderParameters batched_params;
 
-                batched_params.SetParameters(backend_data->shader_module_frag, params, false);
-                batched_params.SetParameters(backend_data->shader_module_vert, vert_param);
+//                 batched_params.SetParameters(backend_data->shader_module_frag, params, false);
+//                 batched_params.SetParameters(backend_data->shader_module_vert, vert_param);
 
-                RHIGfxPsoRef pipeline = backend_data->pipeline;
+//                 RHIGfxPsoRef pipeline = backend_data->pipeline;
 
-                uint32_t elem_count = cmd->ElemCount;
-                uint32_t vtx_offset = cmd->VtxOffset + global_vertex_offset;
-                uint32_t idx_offset = cmd->IdxOffset + global_index_offset;
+//                 uint32_t elem_count = cmd->ElemCount;
+//                 uint32_t vtx_offset = cmd->VtxOffset + global_vertex_offset;
+//                 uint32_t idx_offset = cmd->IdxOffset + global_index_offset;
 
-                EnqueueRenderTask([_ui_command_list,
-                                   batched_params,
-                                   pipeline,
-                                   elem_count,
-                                   vtx_offset,
-                                   idx_offset,
-                                   _next_frame_info_render_thread] {
-                    if (_next_frame_info_render_thread->backbuffer_index == UINT32_MAX) return;
-                    g_rhi->RHISetBatchedShaderParameters(pipeline, batched_params);
+//                 EnqueueRenderTask([_ui_command_list,
+//                                    batched_params,
+//                                    pipeline,
+//                                    elem_count,
+//                                    vtx_offset,
+//                                    idx_offset,
+//                                    _next_frame_info_render_thread] {
+//                     if (_next_frame_info_render_thread->backbuffer_index == UINT32_MAX) return;
+//                     g_rhi->RHISetBatchedShaderParameters(pipeline, batched_params);
 
-                    _ui_command_list->DrawIndexedInstanced(elem_count, 1, idx_offset, vtx_offset, 0);
-                });
+//                     _ui_command_list->DrawIndexedInstanced(elem_count, 1, idx_offset, vtx_offset, 0);
+//                 });
 
-                // g_rhi->RHISetBatchedShaderParameters(backend_data->pipeline, batched_params);
+//                 // g_rhi->RHISetBatchedShaderParameters(backend_data->pipeline, batched_params);
 
-                // 7. local: draw indexed instanced
-                // _ui_command_list->DrawIndexedInstanced(cmd->ElemCount, 1, cmd->IdxOffset + global_index_offset, cmd->VtxOffset + global_vertex_offset, 0);
-            }
-        }
-        global_index_offset += cmd_list->IdxBuffer.Size;
-        global_vertex_offset += cmd_list->VtxBuffer.Size;
-    }
+//                 // 7. local: draw indexed instanced
+//                 // _ui_command_list->DrawIndexedInstanced(cmd->ElemCount, 1, cmd->IdxOffset + global_index_offset, cmd->VtxOffset + global_vertex_offset, 0);
+//             }
+//         }
+//         global_index_offset += cmd_list->IdxBuffer.Size;
+//         global_vertex_offset += cmd_list->VtxBuffer.Size;
+//     }
 
-    EnqueueRenderTask([viewport_data, _next_frame_info_render_thread] {
-        if (_next_frame_info_render_thread->backbuffer_index == UINT32_MAX) return;
-        viewport_data->frame_index += 1;
-    });
-}
+//     EnqueueRenderTask([viewport_data, _next_frame_info_render_thread] {
+//         if (_next_frame_info_render_thread->backbuffer_index == UINT32_MAX) return;
+//         viewport_data->frame_index += 1;
+//     });
+// }
 
-void GUIRender(void* _draw_data, CommandList&& _cmdlist) {
+void GUIRender(void* _draw_data, CommandList& _cmdlist) {
     ImDrawData* draw_data = static_cast<ImDrawData*>(_draw_data);
 
     if (draw_data->DisplaySize.x <= 0.0f || draw_data->DisplaySize.y <= 0.0f)
@@ -853,7 +853,7 @@ void GUIRender(void* _draw_data, CommandList&& _cmdlist) {
     cmd_list.CopyFrom(std::span<byte>((byte*)arg_buffer.data(), arg_buffer.size() * sizeof(ImGUIArg)), arg_view);
     auto&& submit = cmd_list.Submit()
                         .Signal(viewport_data->copy_fence, viewport_data->frame_index);
-    copy_queue.Execute(std::move(submit));
+    auto wait = copy_queue.Execute(std::move(submit));
 
     _cmdlist.Gfx(backend_data->rast_pso, constant)
         .Draw(
@@ -865,11 +865,19 @@ void GUIRender(void* _draw_data, CommandList&& _cmdlist) {
                           arg(std::move(arg_buffer))]() {
         // expand data life span
     });
-    device.GetCommandQueue(EQueueType::Graphics)
-        .Execute(std::move(_cmdlist.Submit()
-                               .Wait(viewport_data->copy_fence, viewport_data->frame_index)
-                               .Signal(viewport_data->fence, ++viewport_data->frame_index)));
-    // ImVec2 clip_off = draw_data->DisplayPos;
+    auto& gfx_queue = device.GetCommandQueue(EQueueType::Graphics);
+    if (viewport_data->frame_index > viewport_data->viewport_count) {
+        gfx_queue
+            .Execute(std::move(_cmdlist.Submit()
+                                   .Wait(viewport_data->copy_fence, viewport_data->frame_index)
+                                   .Wait(viewport_data->fence, viewport_data->frame_index - viewport_data->viewport_count)
+                                   .Signal(viewport_data->fence, ++viewport_data->frame_index)));
+    } else {
+        gfx_queue
+            .Execute(std::move(_cmdlist.Submit()
+                                   .Wait(viewport_data->copy_fence, viewport_data->frame_index)
+                                   .Signal(viewport_data->fence, ++viewport_data->frame_index)));
+    }// ImVec2 clip_off = draw_data->DisplayPos;
 }
 
 // void SetupRenderState(ImDrawData* draw_data, RHIGraphicsCommandList* commandList, GuiViewportData* _viewport_data, RHIViewportNextBackBufferInfo* _next_frame_info_render_thread) {

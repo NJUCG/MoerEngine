@@ -1,9 +1,10 @@
 #ifndef MOER_ENGINE_DXC_UTILS_H
 #define MOER_ENGINE_DXC_UTILS_H
 
+#include "RenderAPI.h"
 #include "shader/ShaderCommon.h"
 #include "spirv_reflect.h"
-EShaderParameterType ToShaderParameterType(SpvReflectResourceType _type);
+EShaderParameterType ToShaderParameterType(SpvReflectResourceType _type, SpvReflectDescriptorType _desc_type);
 
 ERHIPipelineStageFlags ToPipelineStageFlag(SpvReflectShaderStageFlagBits _stage);
 

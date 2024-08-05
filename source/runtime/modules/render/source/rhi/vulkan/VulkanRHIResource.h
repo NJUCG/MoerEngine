@@ -690,10 +690,10 @@ namespace Moer::Render {
     class VulkanViewport final : public Viewport, VulkanDeviceObject {
     public:
         VulkanViewport(RHIViewportInitializer _init_info, VulkanDevice& _device);
-        ~VulkanViewport();
+        // ~VulkanViewport();
         void           Resize(Extent2D _size) override;
         void           Present(FenceRef) override;
-        BackBufferInfo GetBackBuffer() override;
+        // BackBufferInfo GetBackBuffer() override;
         void*          GetNativeWindow() override;
 
     private:
