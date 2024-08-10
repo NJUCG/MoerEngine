@@ -64,20 +64,20 @@ namespace Moer::Render {
     public:
         VkSwapchain(RenderDevice::Impl& _device, const SwapchainCreateInfo& _info);
         ~VkSwapchain();
-        void                                       Recreate(const SwapchainCreateInfo& _info);
-        void                                       CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force_recreate = false);
-        std::tuple<class VulkanFence*, uint, uint> AquireNextImage();
-        TextureView                                GetSwapchainImage(uint _index);
-        class VulkanFence*                         GetImageReadyFence(uint _index);
-        VulkanFence*                               GetRenderFinishedFence();
-        void                                       Present(VkQueue _queue, uint _image_index);
+        void                                Recreate(const SwapchainCreateInfo& _info);
+        void                                CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force_recreate = false);
+        std::tuple<VkSemaphore, uint, uint> AquireNextImage();
+        TextureView                         GetSwapchainImage(uint _index);
+        VkSemaphore                         GetImageReadyFence(uint _index);
+        VkSemaphore                         GetRenderFinishedFence();
+        void                                Present(VkQueue _queue, uint _image_index);
 
         void               WaitFrameInFlight(uint64 _image_idx);
         VkSurfaceFormatKHR GetSurfaceFormat() const { return fmt; }
         VkSurfaceFormatKHR fmt;
 
-        Array<VulkanFence*>         image_ready_fences;
-        Array<VulkanFence*>         render_finished_fences;
+        Array<VkSemaphore>          image_ready_fences;
+        Array<VkSemaphore>          render_finished_fences;
         Array<class VulkanTexture*> swapchain_textures;
         Array<TextureView>          swapchain_views;
         Array<VkFence>              in_flight_fences;
@@ -85,7 +85,6 @@ namespace Moer::Render {
         VkSwapchainKHR handle  = VK_NULL_HANDLE;
         VkSurfaceKHR   surface = VK_NULL_HANDLE;
         VulkanDevice&  device;
-        uint           width = 0, height = 0;
         uint64         image_idx            = 0;
         uint           max_frames_in_flight = 2;
     };

@@ -422,13 +422,7 @@ namespace Moer::Render {
         virtual ~Impl() = default;
 
     public:
-        virtual FenceRef CreateFence(EFenceUsageFlags _usage = EFenceUsageFlags::TIMELINE) = 0;
-        FenceRef         CreateTimeline() {
-            return CreateFence(EFenceUsageFlags::TIMELINE);
-        }
-        FenceRef CreatePresentFence() {
-            return CreateFence(EFenceUsageFlags::PRESENT);
-        };
+        virtual FenceRef CreateFence() = 0;
         virtual BufferRef CreateBuffer(uint _element_cnt, uint _byte_stride, EBufferUsageFlags _usage) = 0;
 
         virtual BufferRef CreateStagingBuffer(uint64_t _byte_size) = 0;

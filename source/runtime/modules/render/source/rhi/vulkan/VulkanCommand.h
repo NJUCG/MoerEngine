@@ -15,6 +15,7 @@
 #include <condition_variable>
 #include <mutex>
 #include <optional>
+#include <thread>
 #include <type_traits>
 #include <variant>
 #include <vulkan/vulkan.h>
@@ -108,6 +109,8 @@ namespace Moer::Render {
 
     public:
         VulkanCmdList(VulkanCmdAllocator* _allocator, VulkanDevice& _device);
+        void Begin();
+        void End();
         void CopyBuffer(VulkanBuffer* _src, VulkanBuffer* _dst, uint64 _size, uint64 _src_offset, uint64 _dst_offset);
         void CopyData(BufferView& _dst, const void* _data, uint64 _size);
         void DrawIndexedInstanced(uint32_t _index_count, uint32_t _instance_count, uint32_t _start_index_location, uint32_t _base_vertex_location, uint32_t _start_instance_location);
@@ -149,6 +152,7 @@ namespace Moer::Render {
         }
     };
     class VulkanAllocator : public VulkanDeviceObject {
+        constexpr static uint64_t small_block_size = 64 * 1024;
     public:
         VulkanAllocator(VulkanDevice* _device);
         ~VulkanAllocator();
@@ -165,8 +169,6 @@ namespace Moer::Render {
         }
         //staging buffer allocate with block strategy
     private:
-        uint64 small_block_size;
-        uint64 large_threshold;
         struct TmpBufferAllocator : VulkanDeviceObject {
             TmpBufferAllocator(VulkanDevice* _device);
             uint64 Allocate(uint64 _size);
@@ -201,16 +203,6 @@ namespace Moer::Render {
 
         StackAllocator               small_allocator;
         Array<std::function<void()>> on_complete;
-
-        struct LargeAllocator {
-            TmpBufferAllocator* allocator;
-            Array<uint64>       allocated_buffers;
-            LargeAllocator(TmpBufferAllocator* _allocator);
-            uint64 Allocate(uint64 _size, uint _align);
-            void   DeAllocate(uint64 _handle);
-            void   ResetBufferAlloc();
-            void   Dispose();
-        };
     };
 
     static_assert(std::is_trivially_destructible_v<VulkanCommandAllocator>);
@@ -454,7 +446,9 @@ namespace Moer::Render {
 
         void    Submit(VulkanCmdList& _cmdlist);
         void    Wait(VulkanFence* _fence, uint64 _timeline);
+        void    Wait(VkSemaphore _sem);
         void    Signal(VulkanFence* _fence, uint64 _timeline);
+        void    Signal(VkSemaphore _semaphore);
         VkQueue GetHandle() const { return queue; }
 
     private:
@@ -486,13 +480,14 @@ namespace Moer::Render {
         };
 
         VkCommandQueue(VulkanDevice& _device, EQueueType _type) : CommandQueue(), vk_device(_device), queue(_type, _device) {
-            timeline = MoerNew(VulkanFence(EFenceUsageFlags::TIMELINE, vk_device));
+            timeline = MoerNew(VulkanFence(vk_device));
+            thread   = std::jthread(&VkCommandQueue::ExecuteThread, this);
+            enabled  = true;
         }
         WaitEvent Execute(CmdSubmit&& _submit) override;
-        void Wait(WaitEvent _event) override;
-        void Present(RHIViewport* _viewport, TextureView _view) override;
-        void Present(SwapchainRef _viewport, TextureView _view) override;
-        void Sync() override;
+        void      Wait(WaitEvent _event) override;
+        void      Present(SwapchainRef _viewport, TextureView _view) override;
+        void      Sync() override;
 
         void                               ExecuteThread();
         VulkanDevice&                      vk_device;
@@ -505,17 +500,17 @@ namespace Moer::Render {
         void                       Signal();
 
     private:
-        uint                    last_frame;
-        std::atomic<uint64>     executed_frame;
-        VulkanFence*            timeline;
+        uint                    last_frame     = 0;
+        std::atomic<uint64>     executed_frame = 0;
+        VulkanFence*            timeline       = nullptr;
         std::mutex              event_mutex;
         bool                    enabled{false};
         std::condition_variable queue_cv;// wake up execute thread from sleeping
-        Event*                  event;
         VkNativeQueue           queue;
 
         Queue<VulkanFence*> present_fences;
         std::mutex          present_mutex;
+        std::jthread        thread;
     };
 }// namespace Moer::Render
 #endif//VULKAN_COMMAND_H

@@ -1851,12 +1851,12 @@ void VulkanRHIImpl::InitVulkan() {
 
     m_device->Init(initializer);
     m_device->InitMemoryAllocator(m_instance);
-    RHIViewportInitializer viewport_init{};
-    viewport_init.window_handle = Moer::WindowContext::GetMainWindow();
-    auto viewport               = RHICreateViewport(viewport_init);
-    m_main_viewport             = (Moer::Render::VulkanRHIViewport*)viewport.Get();
+    // RHIViewportInitializer viewport_init{};
+    // viewport_init.window_handle = Moer::WindowContext::GetMainWindow();
+    // auto viewport               = RHICreateViewport(viewport_init);
+    // m_main_viewport             = (Moer::Render::VulkanRHIViewport*)viewport.Get();
 
-    m_main_viewport->AddRef();
+    // m_main_viewport->AddRef();
     // VulkanSwapChain* swap_chain = MoerNew(VulkanSwapChain();
     // swap_chain->Connect(m_instance, m_surface, m_device);
     // uint32_t width, height;

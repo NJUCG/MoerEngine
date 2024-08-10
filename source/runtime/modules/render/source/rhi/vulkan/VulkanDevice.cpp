@@ -23,6 +23,7 @@
 #include <shared_mutex>
 #include <spirv_reflect.h>
 #include <variant>
+#include <config.h>
 
 namespace Moer::Render {
     namespace VkUtil = Moer::RHI::Vulkan::Util;
@@ -42,10 +43,6 @@ namespace Moer::Render {
         Destroy();
     }
 
-    /**
- * Initialize GPU, GPU related resources, create the logical device, etc.
- * @param DeviceInitializer
- */
     void VulkanDevice::Init(const DeviceInitializer& _initializer) {
         m_gpu = SelectGpu(_initializer);
         if (m_gpu == VK_NULL_HANDLE) {
@@ -72,9 +69,104 @@ namespace Moer::Render {
 
         CreateDevice(_initializer.api_version);
         CreateDescriptorAllocator();
-        CreateCommandAllocators();
     }
 
+    VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
+        VkDebugUtilsMessageSeverityFlagBitsEXT      message_severity,
+        VkDebugUtilsMessageTypeFlagsEXT             message_type,
+        const VkDebugUtilsMessengerCallbackDataEXT* p_callback_data,
+        void*                                       p_user_data) {
+
+        std::stringstream stream;
+        stream << "[" << p_callback_data->messageIdNumber << "][" << p_callback_data->pMessageIdName << "]: " << p_callback_data->pMessage << std::endl;
+
+        if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT) {
+            LOG_DEBUG(stream.str());
+        } else if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT) {
+            LOG_INFO(stream.str());
+        } else if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
+            LOG_WARNING(stream.str());
+        } else if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
+            LOG_ERROR(stream.str());
+        }
+
+        return VK_FALSE;
+    }
+    void VulkanDevice::CreateInstance() {
+        VkApplicationInfo application_info{};
+        application_info.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+        // application_info.pApplicationName = MACRO_STR(__ENGINE_NAME__);
+        // application_info.applicationVersion = VK_MAKE_VERSION(PROJECT_VERSION_MAJOR, PROJECT_VERSION_MINOR, PROJECT_VERSION_PATCH);
+        application_info.pEngineName   = MACRO_STR(__ENGINE_NAME__);
+        application_info.engineVersion = VK_MAKE_VERSION(PROJECT_VERSION_MAJOR, PROJECT_VERSION_MINOR, PROJECT_VERSION_PATCH);
+        application_info.apiVersion    = VK_API_VERSION_1_3;
+
+        m_instance_extensions         = VulkanInstanceExtension::GetDriverSupportedInstanceExtensionNames();
+        m_enabled_instance_extensions = VulkanInstanceExtension::GetMESupportedInstanceExtensions();
+
+        bool extension_supported   = [&]() {
+            if (!m_enabled_instance_extensions.empty()) {
+                for (const auto& extension : m_enabled_instance_extensions) {
+                    if (std::find(m_instance_extensions.begin(), m_instance_extensions.end(), extension) == m_instance_extensions.end()) {
+                        VkUtil::ExitFatal("Enabled instance extension '" + std::string(extension) + "' is not supported!", -1);
+                        return false;
+                    }
+                }
+            }
+            return true; }();
+        bool debug_utils_available = std::find(m_enabled_instance_extensions.begin(), m_enabled_instance_extensions.end(), VK_EXT_DEBUG_UTILS_EXTENSION_NAME) != m_enabled_instance_extensions.end();
+
+        VkInstanceCreateInfo instance_create_info{};
+        instance_create_info.sType            = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+        instance_create_info.pNext            = nullptr;
+        instance_create_info.flags            = 0;
+        instance_create_info.pApplicationInfo = &application_info;
+
+        auto n = m_enabled_instance_extensions.size();
+
+        Moer::Array<const char*> r_extensions(n, nullptr);
+        for (size_t i = 0; i < n; ++i) {
+            r_extensions[i] = m_enabled_instance_extensions[i].c_str();
+        }
+        instance_create_info.enabledExtensionCount   = n;
+        instance_create_info.ppEnabledExtensionNames = r_extensions.data();
+
+        VkDebugUtilsMessengerCreateInfoEXT debug_create_info{};
+
+        const char* validation_layer_name = "VK_LAYER_KHRONOS_validation";
+
+        if ([&](std::string_view _view) {
+                uint32_t instance_layer_count = 0;
+                vkEnumerateInstanceLayerProperties(&instance_layer_count, nullptr);
+                Moer::Array<VkLayerProperties> instance_layer_properties(instance_layer_count);
+                vkEnumerateInstanceLayerProperties(&instance_layer_count, instance_layer_properties.data());
+                bool validation_layer_present = false;
+
+                for (auto layer_property : instance_layer_properties) {
+                    if (_view.data() == layer_property.layerName) {
+                        validation_layer_present = true;
+                        break;
+                    }
+                }
+                return validation_layer_present;
+            }(validation_layer_name)) {
+            instance_create_info.enabledLayerCount   = 1;
+            instance_create_info.ppEnabledLayerNames = &validation_layer_name;
+            PopulateDebugMessengerCreateInfo(debug_create_info);
+            instance_create_info.pNext = &debug_create_info;
+        } else {
+            instance_create_info.enabledLayerCount   = 0;
+            instance_create_info.ppEnabledLayerNames = nullptr;
+        }
+
+        VK_CHECK_RESULT(vkCreateInstance(&instance_create_info, nullptr, &m_instance))
+
+        SetupDebugUtilsMessengerEXT();
+
+        if (debug_utils_available) {
+            SetupDebugProcs();
+        }
+    }
     void VulkanDevice::InitMemoryAllocator(VkInstance _instance) {
         VmaAllocatorCreateInfo alloc_create_info{};
 
@@ -238,29 +330,14 @@ namespace Moer::Render {
         vkGetDeviceQueue(m_device, m_queue_family_indices.compute.value(), 0, &m_compute_queue);
         vkGetDeviceQueue(m_device, m_queue_family_indices.transfer.value(), 0, &m_transfer_queue);
         vkGetDeviceQueue(m_device, m_queue_family_indices.raytracing.value(), 0, &m_raytracing_queue);
+        gfx_queue      = MakeUnique<VkCommandQueue>(*this, EQueueType::Graphics);
+        compute_queue  = MakeUnique<VkCommandQueue>(*this, EQueueType::Compute);
+        transfer_queue = MakeUnique<VkCommandQueue>(*this, EQueueType::Copy);
     }
 
     void VulkanDevice::CreateDescriptorAllocator() {
         m_descriptor_allocator = MoerNew(VulkanDescriptorSetAllocator)(this);
         LOG_INFO("VulkanRHI: Descriptor set allocator is created.");
-    }
-
-    void VulkanDevice::CreateCommandAllocators() {
-        uint32_t thread_count = ThreadManager::Instance().GetNum();
-        for (uint32_t i = 0; i < thread_count; ++i) {
-            m_command_allocators.emplace_back(this);
-        }
-        m_cmd_allocators.resize(m_queue_family_indices.Size());
-        uint indice = 0;
-        if (m_queue_family_indices.graphics.has_value()) {
-            m_cmd_allocators[indice++] = MoerNew(VulkanCmdAllocator)(this, VK_QUEUE_GRAPHICS_BIT);
-        }
-        if (m_queue_family_indices.compute.has_value()) {
-            m_cmd_allocators[indice++] = MoerNew(VulkanCmdAllocator)(this, VK_QUEUE_COMPUTE_BIT);
-        }
-        if (m_queue_family_indices.transfer.has_value()) {
-            m_cmd_allocators[indice++] = MoerNew(VulkanCmdAllocator)(this, VK_QUEUE_TRANSFER_BIT);
-        }
     }
 
     void VulkanDevice::CreateStagingAllocator() {
@@ -303,24 +380,6 @@ namespace Moer::Render {
         return m_command_allocators[thread_id];
     }
 
-    VulkanCmdAllocator& VulkanDevice::GetCmdAllocator(VkQueueFlags _queue_flags) {
-        uint idx = 0;
-        switch (_queue_flags) {
-            case VK_QUEUE_GRAPHICS_BIT:
-                idx = 0;
-                break;
-            case VK_QUEUE_COMPUTE_BIT:
-                idx = 1;
-                break;
-            case VK_QUEUE_TRANSFER_BIT:
-                idx = 2;
-                break;
-            default:
-                break;
-        }
-        return *m_cmd_allocators[idx];
-    }
-
     VulkanAllocator& VulkanDevice::GetStagingAllocator() {
         if (m_staging_allocator == nullptr) {
             CreateStagingAllocator();
@@ -331,7 +390,14 @@ namespace Moer::Render {
     //uint32_t VulkanDevice::GetMemoryType(uint32_t type_bits, VkMemoryPropertyFlags properties, VkBool32* mem_type_found) const {
     //    return 0;
     //}
-
+    static uint32_t GetQueueFamilyIndice(std::span<const VkQueueFamilyProperties> _queue_family_props, VkQueueFlags _target_queue_flags, VkQueueFlags _exclude_queue_flags) {
+        for (uint32_t i = 0; i < _queue_family_props.size(); ++i) {
+            if (_queue_family_props[i].queueFlags & _target_queue_flags && !(_queue_family_props[i].queueFlags & _exclude_queue_flags)) {
+                return i;
+            }
+        }
+        return -1;
+    }
     int32_t VulkanDevice::GetQueueFamilyIndex(const Moer::Array<VkQueueFamilyProperties>& queue_family_props, VkQueueFlags _queue_flags) const {
         // Dedicated queue for transfer
         if ((_queue_flags & VK_QUEUE_TRANSFER_BIT) == _queue_flags) {
@@ -367,32 +433,27 @@ namespace Moer::Render {
 
         auto queue_family_props = GetQueueFamilyProperties(_gpu);
         //todo:what's the best queue for ray tracing operation?how to tell a queue support raytracing operation?
-        auto graphics = GetQueueFamilyIndex(queue_family_props, VK_QUEUE_GRAPHICS_BIT);
+        auto graphics = GetQueueFamilyIndice(queue_family_props, VK_QUEUE_GRAPHICS_BIT, VkQueueFlagBits(0));
         if (graphics >= 0) {
             indices.graphics   = graphics;
             indices.raytracing = graphics;
+            indices.present    = graphics;
         }
-        auto transfer = GetQueueFamilyIndex(queue_family_props, VK_QUEUE_TRANSFER_BIT);
-        if (transfer >= 0) {
-            indices.transfer = transfer;
-        } else {
-            indices.transfer = indices.graphics;
+        auto transfer = GetQueueFamilyIndice(queue_family_props, VK_QUEUE_TRANSFER_BIT, VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT);
+        if (transfer < 0) {
+            transfer = GetQueueFamilyIndice(queue_family_props, VK_QUEUE_TRANSFER_BIT, VK_QUEUE_GRAPHICS_BIT);
         }
-        auto compute = GetQueueFamilyIndex(queue_family_props, VK_QUEUE_COMPUTE_BIT);
+        if (transfer < 0) {
+            transfer = indices.graphics.value();
+        }
+        indices.transfer = transfer;
+
+        auto compute = GetQueueFamilyIndice(queue_family_props, VK_QUEUE_COMPUTE_BIT, VK_QUEUE_GRAPHICS_BIT);
         if (compute >= 0) {
             indices.compute = compute;
         } else {
             indices.compute = indices.transfer;
         }
-
-        // for (uint32_t i = 0; i < queue_family_props.size(); ++i) {
-        //     VkBool32 present_supported = false;
-        //     vkGetPhysicalDeviceSurfaceSupportKHR(_gpu, i, _surface, &present_supported);
-        //     if (present_supported) {
-        //         indices.present = i;
-        //         break;
-        //     }
-        // }
 
         return indices;
     }
@@ -447,6 +508,38 @@ namespace Moer::Render {
             default:
                 return VK_DESCRIPTOR_TYPE_MAX_ENUM;
         }
+    }
+
+    void VulkanDevice::PopulateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& _create_info) {
+        _create_info = {};
+
+        _create_info.sType           = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+        _create_info.pNext           = nullptr;
+        _create_info.flags           = 0;
+        _create_info.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+        _create_info.messageType     = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+        _create_info.pfnUserCallback = DebugCallback;
+        _create_info.pUserData       = nullptr;
+    }
+
+    void VulkanDevice::SetupDebugUtilsMessengerEXT() {
+        vk_create_debug_utils_messenger_ext  = PFN_vkCreateDebugUtilsMessengerEXT(vkGetInstanceProcAddr(m_instance, "vkCreateDebugUtilsMessengerEXT"));
+        vk_destroy_debug_utils_messenger_ext = PFN_vkDestroyDebugUtilsMessengerEXT(vkGetInstanceProcAddr(m_instance, "vkDestroyDebugUtilsMessengerEXT"));
+
+        if (vk_create_debug_utils_messenger_ext == nullptr || vk_destroy_debug_utils_messenger_ext == nullptr) {
+            assert(false);
+        }
+
+        VkDebugUtilsMessengerCreateInfoEXT debug_utils_messenger_create_info{};
+        PopulateDebugMessengerCreateInfo(debug_utils_messenger_create_info);
+
+        assert(vk_create_debug_utils_messenger_ext(m_instance, &debug_utils_messenger_create_info, nullptr, &debug_utils_messenger) == VK_SUCCESS);
+    }
+    void VulkanDevice::SetupDebugProcs() {
+        vk_cmd_begin_debug_utils_label_ext  = reinterpret_cast<PFN_vkCmdBeginDebugUtilsLabelEXT>(vkGetInstanceProcAddr(m_instance, "vkCmdBeginDebugUtilsLabelEXT"));
+        vk_cmd_end_debug_utils_label_ext    = reinterpret_cast<PFN_vkCmdEndDebugUtilsLabelEXT>(vkGetInstanceProcAddr(m_instance, "vkCmdEndDebugUtilsLabelEXT"));
+        vk_cmd_insert_debug_utils_label_ext = reinterpret_cast<PFN_vkCmdInsertDebugUtilsLabelEXT>(vkGetInstanceProcAddr(m_instance, "vkCmdInsertDebugUtilsLabelEXT"));
+        vk_set_debug_utils_object_name_ext  = reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>(vkGetInstanceProcAddr(m_instance, "vkSetDebugUtilsObjectNameEXT"));
     }
 
     PipelineHandle VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo&& _shader_info) {
@@ -855,7 +948,7 @@ namespace Moer::Render {
     }
 
     CommandQueue& VulkanDevice::GetCommandQueue(EQueueType _type) {
-        return m_command_queue;
+        return *gfx_queue;
     }
 
     TextureRef VulkanDevice::CreateTexture(Extent3D _size, EPixelFormat _format, ETextureUsageFlags _usage, uint32_t _mip_cnt, uint32_t _array_size) {
@@ -881,10 +974,10 @@ namespace Moer::Render {
         return BufferRef{MoerNew(VulkanBuffer)(info, *this)};
     }
 
-    FenceRef VulkanDevice::CreateFence(EFenceUsageFlags _usage) {
-        return FenceRef{MoerNew(VulkanFence)(_usage, *this)};
+    FenceRef VulkanDevice::CreateFence() {
+        return FenceRef{MoerNew(VulkanFence)(*this)};
     }
-    
+
     SwapchainRef VulkanDevice::CreateSwapchain(const SwapchainCreateInfo& _info) {
         return SwapchainRef{MoerNew(VkSwapchain)(*this, _info)};
     }

@@ -518,36 +518,28 @@ namespace Moer::Render {
         EFenceUsageFlags usage;
     };
 
-    #define RESOURCE_CAST(RHIType, VkType) \
+#define RESOURCE_CAST(RHIType, VkType) \
     inline VkType* ResourceCast(RHIType* _val) { return static_cast<VkType*>(_val); }
 
     class VulkanFence final : public Fence, VulkanDeviceObject {
     public:
-        struct BinaryFence {
-            VkSemaphore binary;
-        };
-        struct TimelineFence {
-            VkSemaphore timeline;
-        };
-
     public:
-        VulkanFence(EFenceUsageFlags _usage, VulkanDevice&);
+        VulkanFence(VulkanDevice&);
         virtual ~VulkanFence();
 
         uint64_t GetValue() const override;
 
-        void                    Wait(uint64_t _value) override;
-        auto&                   GetFence() { return m_fence; }
-        VkSemaphore GetUnderlyingHandle() { return std::holds_alternative<BinaryFence>(m_fence) ? std::get<BinaryFence>(m_fence).binary : std::get<TimelineFence>(m_fence).timeline; }
-        VkSemaphore GetBinaryHandle() { return std::get<BinaryFence>(m_fence).binary; }
-        inline EFenceUsageFlags GetUsage() { return std::holds_alternative<BinaryFence>(m_fence) ? EFenceUsageFlags::BINARY : EFenceUsageFlags::TIMELINE; }
+        void        Wait(uint64_t _value) override;
+        auto&       GetFence() { return timeline; }
+        VkSemaphore GetUnderlyingHandle() { return timeline; }
+
     private:
-        std::variant<BinaryFence, TimelineFence> m_fence;
+        VkSemaphore timeline;
     };
 
 #pragma endregion
 
-#pragma region [ resource cast ]
+#pragma region[ resource cast ]
     RESOURCE_CAST(Buffer, VulkanBuffer)
     RESOURCE_CAST(Texture, VulkanTexture)
     RESOURCE_CAST(Fence, VulkanFence)
@@ -646,6 +638,7 @@ namespace Moer::Render {
 
     class VulkanRHIViewport final : public RHIViewport {
         friend class VkCommandQueue;
+
     public:
         VulkanRHIViewport(class VulkanSwapChain* _swapchain, uint32_t _max_frame_in_flight);
         ~VulkanRHIViewport();
@@ -663,12 +656,12 @@ namespace Moer::Render {
         virtual ViewPort GetViewportExtent() const override;
 
     private:
-        void InnerCreateResources();
-        void InnerDestroyResources();
-        void ResetResources();
-        VulkanTexture* GetSwapchainImage(uint32_t _index);
-        VulkanFence*  GetBinaryFence(uint32_t _index);
-        void Present(VulkanFence::BinaryFence _fence);
+        void                 InnerCreateResources();
+        void                 InnerDestroyResources();
+        void                 ResetResources();
+        VulkanTexture*       GetSwapchainImage(uint32_t _index);
+        VulkanFence*         GetBinaryFence(uint32_t _index);
+        void                 Present(VkSemaphore _fence);
         VulkanRHITextureUAV* InnerCreateVulkanUAV(VulkanDevice* _device, VulkanRHITexture* texture, const RHIViewInfo& _view_info);
 
         class VulkanSwapChain* swapchain;
@@ -691,10 +684,11 @@ namespace Moer::Render {
     public:
         VulkanViewport(RHIViewportInitializer _init_info, VulkanDevice& _device);
         // ~VulkanViewport();
-        void           Resize(Extent2D _size) override;
-        void           Present(FenceRef) override;
+        void Resize(Extent2D _size) override;
+        void Present(FenceRef _render_finished) override {};
+        void Present(VkSemaphore _sem);
         // BackBufferInfo GetBackBuffer() override;
-        void*          GetNativeWindow() override;
+        void* GetNativeWindow() override;
 
     private:
         VulkanSwapChain m_swap_chain;

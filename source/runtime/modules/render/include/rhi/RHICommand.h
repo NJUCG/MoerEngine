@@ -396,7 +396,7 @@ namespace Moer::Render {
         std::is_same_v<std::remove_reference_t<TInArg>(), BufferView> || std::is_same_v<std::remove_reference_t<TInArg>(), TextureView> || std::is_same_v<std::remove_reference_t<TInArg>(), Buffer*> || std::is_same_v<std::remove_reference_t<TInArg>(), Texture*>;
     class CommandList {
     public:
-        struct ArgSetter {
+        struct RENDER_API ArgSetter {
         public:
             ArgSetter(ShaderPipeline& _handle) : handle(_handle) {
             }
@@ -440,7 +440,7 @@ namespace Moer::Render {
             Array<uint>     temp_constant;
             ShaderPipeline& handle;
         };
-        struct DrawDispatcher {
+        struct RENDER_API DrawDispatcher {
             DrawDispatcher(RasterPipeline& _pso, CommandList& _cmd_list);
 
             DrawDispatcher(RasterPipeline& _pso, CommandList& _cmd_list, ArrayArguments&& _args);
@@ -483,7 +483,7 @@ namespace Moer::Render {
             bool      b_set_params = false;
             bool      b_set_consts = false;
         };
-        struct ComputeDispatcher {
+        struct RENDER_API ComputeDispatcher {
             void Dispatch(Vector2ui _group_count) {
                 Dispatch(uint3(_group_count, 1));
             }
@@ -524,9 +524,8 @@ namespace Moer::Render {
         using Dispatcher = std::variant<DrawDispatcher, ComputeDispatcher>;
 
     public:
-        CommandList();
+        RENDER_API CommandList();
         class Impl;
-        void Dispose();
 
         template<typename TGfxPso, typename... TArgs>
         DrawDispatcher Gfx(TGfxPso& _pso, TArgs&&... _args) {
@@ -546,18 +545,18 @@ namespace Moer::Render {
             return ComputeDispatcher(_pso, *this);
         };
 
-        void CopyFrom(BufferView _src, BufferView _dst);
-        void CopyFrom(TextureView _src, TextureView _dst);
-        void CopyFrom(TextureView _src, BufferView _dst);
-        void CopyFrom(BufferView _src, TextureView _dst);
-        void CopyFrom(std::span<byte> _data, BufferView _dst);
-        void CopyFrom(std::span<byte> _data, TextureView _dst);
+        RENDER_API void CopyFrom(BufferView _src, BufferView _dst);
+        RENDER_API void CopyFrom(TextureView _src, TextureView _dst);
+        RENDER_API void CopyFrom(TextureView _src, BufferView _dst);
+        RENDER_API void CopyFrom(BufferView _src, TextureView _dst);
+        RENDER_API void CopyFrom(std::span<byte> _data, BufferView _dst);
+        RENDER_API void CopyFrom(std::span<byte> _data, TextureView _dst);
 
-        void TransitionTexture(TextureView _tex, ETextureStateFlags _dst_state, EPassType _pass);
-        void TransitionBuffer(BufferView _buffer, EBufferRuntimeUsageFlags _dst_state, EPassType _pass);
-        void AddCallback(std::function<void()>&& _callback);
+        RENDER_API void TransitionTexture(TextureView _tex, ETextureStateFlags _dst_state, EPassType _pass);
+        RENDER_API void TransitionBuffer(BufferView _buffer, EBufferRuntimeUsageFlags _dst_state, EPassType _pass);
+        RENDER_API void AddCallback(std::function<void()>&& _callback);
 
-        CmdSubmit Submit();
+        RENDER_API CmdSubmit Submit();
 
     private:
         friend DrawDispatcher;
@@ -571,14 +570,13 @@ namespace Moer::Render {
     };
     class QueueCmd {};
 
-    class CommandQueue {
+    class RENDER_API CommandQueue {
     public:
         CommandQueue(){};
         CommandQueue(EQueueType _type, RenderDevice& _device);
         void              Test();
         virtual void      Wait(WaitEvent _event)                                = 0;
         virtual WaitEvent Execute(CmdSubmit&& _submit)                          = 0;
-        virtual void      Present(RHIViewport* _viewport, TextureView _target)  = 0;
         virtual void      Present(SwapchainRef _swapchain, TextureView _target) = 0;
         virtual void      Sync()                                                = 0;
     };

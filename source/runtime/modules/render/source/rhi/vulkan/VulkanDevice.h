@@ -2,6 +2,7 @@
 #define VULKAN_DEVICE_H
 
 #include "misc/STL.h"
+#include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
@@ -16,6 +17,7 @@
 #include <optional>
 #include "VulkanCommand.h"
 #include "../RHIImpl.h"
+#include "taskgraph/Event.h"
 #include "vulkan/vulkan_core.h"
 namespace Moer::Render {
 
@@ -179,7 +181,22 @@ namespace Moer::Render {
     public:
         VulkanDevice(DeviceInitInfo&& _info) : RenderDevice::Impl(std::move(_info)), m_gpu(VK_NULL_HANDLE), m_optional_extensions(), m_core_features(), m_core_properties(), m_optional_properties(), m_memery_properties(), m_queue_family_props(), m_queue_family_indices(),
                                                m_device(VK_NULL_HANDLE), m_graphics_queue(VK_NULL_HANDLE), m_present_queue(VK_NULL_HANDLE), m_compute_queue(VK_NULL_HANDLE), m_transfer_queue(VK_NULL_HANDLE),
-                                               m_allocator(VK_NULL_HANDLE), m_descriptor_allocator(nullptr), m_command_queue(*this, EQueueType::Graphics) {}
+                                               m_allocator(VK_NULL_HANDLE), m_descriptor_allocator(nullptr), init_event() {
+            
+            CreateInstance();
+            DeviceInitializer initializer;
+            initializer.instance = m_instance;
+            initializer.api_version      = VK_API_VERSION_1_3;
+            initializer.enabled_features = VulkanDeviceFeature::GetMESupportedDeviceFeatures(initializer.api_version);
+            RHIInfo rhi_info             = {
+                            .rhi_type            = ERHIType::Vulkan,
+                            .max_frame_in_flight = 2,
+                            .ray_tracing         = true};
+            initializer.enabled_extensions = VulkanDeviceExtension::GetMESupportedDeviceExtensions(rhi_info);
+            //Init Gpu device and create queues
+            Init(initializer);
+            InitMemoryAllocator(m_instance);
+        }
 
         virtual ~VulkanDevice();
         PipelineHandle CreatePipeline(GfxPsoCreateInfo&& _pso_info, PipelineShaderInfo&& _shaders) override;
@@ -190,7 +207,7 @@ namespace Moer::Render {
 
         BufferRef CreateStagingBuffer(uint64 _byte_size) override;
 
-        FenceRef CreateFence(EFenceUsageFlags _usage) override;
+        FenceRef CreateFence() override;
 
         // RHIViewportRef CreateViewport(const RHIViewportInitializer& _init) override;
 
@@ -206,6 +223,7 @@ namespace Moer::Render {
     public:
         void Init(const DeviceInitializer& _initializer);
         void InitMemoryAllocator(VkInstance _instance);
+        void CreateInstance();
         void Destroy();
 
         inline VkPhysicalDevice GetGpu() const {
@@ -265,12 +283,10 @@ namespace Moer::Render {
         }
 
         VulkanCommandAllocator& GetCurrentCommandAllocator();
-        VulkanCmdAllocator&     GetCmdAllocator(VkQueueFlags);
         VulkanAllocator&        GetStagingAllocator();
 
     private:
         Array<VulkanCommandAllocator> m_command_allocators;
-        Array<VulkanCmdAllocator*>    m_cmd_allocators;
         VulkanAllocator*              m_staging_allocator;
 
     private:
@@ -284,6 +300,9 @@ namespace Moer::Render {
         VkPhysicalDeviceMemoryProperties m_memery_properties;
         TQueueFamilyPropertiesArray      m_queue_family_props;
         QueueFamilyIndices               m_queue_family_indices;
+        Moer::Array<std::string>         m_instance_layers;
+        Moer::Array<std::string>         m_instance_extensions;
+        Moer::Array<std::string>         m_enabled_instance_extensions;
 
         VkDevice m_device;
         VkQueue  m_graphics_queue;
@@ -291,10 +310,21 @@ namespace Moer::Render {
         VkQueue  m_compute_queue;
         VkQueue  m_raytracing_queue;
         VkQueue  m_transfer_queue;
+        EventRef init_event;
+
+        PFN_vkCreateDebugUtilsMessengerEXT  vk_create_debug_utils_messenger_ext  = VK_NULL_HANDLE;
+        PFN_vkDestroyDebugUtilsMessengerEXT vk_destroy_debug_utils_messenger_ext = VK_NULL_HANDLE;
+        VkDebugUtilsMessengerEXT            debug_utils_messenger                = VK_NULL_HANDLE;
+        PFN_vkCmdBeginDebugUtilsLabelEXT    vk_cmd_begin_debug_utils_label_ext   = VK_NULL_HANDLE;
+        PFN_vkCmdEndDebugUtilsLabelEXT      vk_cmd_end_debug_utils_label_ext     = VK_NULL_HANDLE;
+        PFN_vkCmdInsertDebugUtilsLabelEXT   vk_cmd_insert_debug_utils_label_ext  = VK_NULL_HANDLE;
+        PFN_vkSetDebugUtilsObjectNameEXT    vk_set_debug_utils_object_name_ext   = VK_NULL_HANDLE;
 
         VmaAllocator                  m_allocator;
         VulkanDescriptorSetAllocator* m_descriptor_allocator;
-        VkCommandQueue                m_command_queue;
+        UniquePtr<VkCommandQueue>     gfx_queue;
+        UniquePtr<VkCommandQueue>     compute_queue;
+        UniquePtr<VkCommandQueue>     transfer_queue;
 
     private:
         friend VkCommandQueue;
@@ -308,7 +338,6 @@ namespace Moer::Render {
         void CreateDevice(uint32_t _api_version);
         void CreateMemoryAllocator();
         void CreateDescriptorAllocator();
-        void CreateCommandAllocators();
         void CreateStagingAllocator();
 
         TExtensionArray                  GetGpuExtensions(VkPhysicalDevice _gpu) const;
@@ -321,6 +350,12 @@ namespace Moer::Render {
 
         bool CheckEnabledExtensionsSupported(VkPhysicalDevice _gpu, const TVulkanDeviceExtensionArray& _enabled_extensions) const;
         bool CheckEnabledFeaturesSupported(VkPhysicalDevice _gpu, const VulkanPhysicalDeviceFeatures& _enabled_features, uint32_t _api_version);
+
+#pragma region[ debug ]
+        void PopulateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& _create_info);
+        void SetupDebugUtilsMessengerEXT();
+        void SetupDebugProcs();
+#pragma endregion
     };
 }// namespace Moer::Render
 #endif// VULKAN_DEVICE_H

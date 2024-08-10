@@ -3,22 +3,6 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 namespace Moer::Render{
-    // RHIViewportRef RenderDevice::CreateViewport(const RHIViewportInitializer& _init) {
-    //     return impl->CreateViewport(_init);
-    // }
-
-    // BackBufferInfo RenderDevice::GetNextBackBufferInfo(RHIViewport* _viewport) {
-    //     return impl->GetNextBackBufferInfo(_viewport);
-    // }
-
-    FenceRef RenderDevice::CreateTimeline() {
-        return impl->CreateTimeline();
-    }
-
-    FenceRef RenderDevice::CreatePresentFence() {
-        return impl->CreatePresentFence();
-    }
-
     PipelineHandle RenderDevice::CreatePipeline(GfxPsoCreateInfo&& _pso_info, PipelineShaderInfo&& _shaders) {
         return impl->CreatePipeline(std::move(_pso_info), std::move(_shaders));
     }
@@ -37,6 +21,10 @@ namespace Moer::Render{
 
     DepthBufferRef RenderDevice::CreateDepthBuffer(Extent2D _size, EPixelFormat _format, uint32_t _array_size) {
         return impl->CreateDepthBuffer(_size, _format, _array_size);
+    }
+
+    FenceRef RenderDevice::CreateFence() {
+        return impl->CreateFence();
     }
 
     SwapchainRef RenderDevice::CreateSwapchain(const SwapchainCreateInfo& _info) {

@@ -1078,8 +1078,8 @@ void GuiCreateWindow(ImGuiViewport* _viewport) {
     RenderDevice& rd_device = RenderDevice::Get();
 
     _viewport->RendererUserData = viewport_data;
-    viewport_data->copy_fence   = rd_device.CreateTimeline();
-    viewport_data->fence        = rd_device.CreateTimeline();
+    viewport_data->copy_fence   = rd_device.CreateFence();
+    viewport_data->fence        = rd_device.CreateFence();
 
     Moer::WindowHandle handle{
         (Moer::WindowType*)(_viewport->PlatformHandle ?

@@ -271,10 +271,10 @@ namespace Moer::Render {
         VkSurfaceCapabilitiesKHR capabilities;
         vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device.GetGpu(), surface, &capabilities);
         auto               details        = VkUtil::QuerySwapChainSupport(device.GetGpu(), surface);
-        VkSurfaceFormatKHR surface_format = ChooseSwapSurfaceFormat(details.formats);
-        ChooseSwapExtent(&width, &height, details.capabilities);
+        fmt = ChooseSwapSurfaceFormat(details.formats);
+        ChooseSwapExtent(&size.x, &size.y, details.capabilities);
         VkPresentModeKHR present_mode               = ChooseSwapPresentMode(details.present_modes, false);
-        format                                      = (EPixelFormat)surface_format.format;
+        format                                      = (EPixelFormat)fmt.format;
         uint                     queue_family_index = device.GetQueueFamilyIndices().graphics.value();
         VkSwapchainCreateInfoKHR create_info{
             .sType                 = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
@@ -282,9 +282,9 @@ namespace Moer::Render {
             .flags                 = 0,
             .surface               = surface,
             .minImageCount         = capabilities.minImageCount,
-            .imageFormat           = surface_format.format,
-            .imageColorSpace       = surface_format.colorSpace,
-            .imageExtent           = {width, height},
+            .imageFormat           = fmt.format,
+            .imageColorSpace       = fmt.colorSpace,
+            .imageExtent           = {size.x, size.y},
             .imageArrayLayers      = 1,
             .imageUsage            = VK_IMAGE_USAGE_TRANSFER_DST_BIT,
             .imageSharingMode      = VK_SHARING_MODE_EXCLUSIVE,
@@ -300,28 +300,27 @@ namespace Moer::Render {
 
         uint image_cnt;
         vkGetSwapchainImagesKHR(device.GetDevice(), handle, &image_cnt, nullptr);
-        bool recreate_fences = image_cnt != swapchain_textures.size();
+        bool recreate_fences = in_flight_fences.size() != max_frames_in_flight;
+        bool b_reacreate_semaphores = image_ready_fences.size() != image_cnt;
         if(b_recreate){
             for (size_t i = 0; i < swapchain_textures.size(); ++i) {
                 MoerDelete(swapchain_textures[i]);
-                MoerDelete(image_ready_fences[i]);
-                MoerDelete(render_finished_fences[i]);
+                vkDestroySemaphore(device.GetDevice(), image_ready_fences[i], VK_NULL_HANDLE);
+                vkDestroySemaphore(device.GetDevice(), render_finished_fences[i], VK_NULL_HANDLE);
             }
         }
         swapchain_views.resize(image_cnt);
         swapchain_textures.resize(image_cnt);
-        image_ready_fences.resize(image_cnt);
         Array<VkImage> images(image_cnt);
         vkGetSwapchainImagesKHR(device.GetDevice(), handle, &image_cnt, images.data());
 
         for (uint i = 0; i < image_cnt; i++) {
-            VulkanTexture texture(TextureInfo{}, &device, images[i]);
             swapchain_textures[i]     = MoerNew(VulkanTexture)(TextureInfo{
                                                                ETextureDimension::TEX_2D,
                                                                ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::COLOR_ATTACHMENT,
                                                                format,
                                                                EClearAttachment{},
-                                                                   {width, height, 1},
+                                                                   {size.x, size.y, 1},
                                                                1,
                                                                1},
                                                            &device,
@@ -329,17 +328,17 @@ namespace Moer::Render {
             swapchain_views[i]        = TextureView(swapchain_textures[i]);
         }
 
-        bool b_reacreate_semaphores = image_ready_fences.size() != max_frames_in_flight;
         if (b_reacreate_semaphores) {
             for (size_t i = 0; i < image_ready_fences.size(); ++i) {
-                MoerDelete(image_ready_fences[i]);
-                MoerDelete(render_finished_fences[i]);
+                vkDestroySemaphore(device.GetDevice(), image_ready_fences[i], VK_NULL_HANDLE);
+                vkDestroySemaphore(device.GetDevice(), render_finished_fences[i], VK_NULL_HANDLE);
             }
             image_ready_fences.resize(image_cnt);
             render_finished_fences.resize(image_cnt);
             for (uint i = 0; i < image_cnt; i++) {
-                image_ready_fences[i]     = MoerNew(VulkanFence)(EFenceUsageFlags::BINARY, device);
-                render_finished_fences[i] = MoerNew(VulkanFence)(EFenceUsageFlags::BINARY, device);
+                VkSemaphoreCreateInfo semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+                vkCreateSemaphore(device.GetDevice(), &semaphore_info, VK_NULL_HANDLE, &image_ready_fences[i]);
+                vkCreateSemaphore(device.GetDevice(), &semaphore_info, VK_NULL_HANDLE, &render_finished_fences[i]);
             }
         }
 
@@ -366,45 +365,45 @@ namespace Moer::Render {
         }
         for (size_t i = 0; i < swapchain_textures.size(); ++i) {
             MoerDelete(swapchain_textures[i]);
-            MoerDelete(image_ready_fences[i]);
-            MoerDelete(render_finished_fences[i]);
+            vkDestroySemaphore(device.GetDevice(), image_ready_fences[i], VK_NULL_HANDLE);
+            vkDestroySemaphore(device.GetDevice(), render_finished_fences[i], VK_NULL_HANDLE); 
         }
         for (uint i = 0; i < in_flight_fences.size(); i++) {
             vkDestroyFence(device.GetDevice(), in_flight_fences[i], VK_NULL_HANDLE);
         }
     }
-    VulkanFence* VkSwapchain::GetImageReadyFence(uint _index) {
+    VkSemaphore VkSwapchain::GetImageReadyFence(uint _index) {
         return image_ready_fences[_index % image_ready_fences.size()];
     }
-    VulkanFence* VkSwapchain::GetRenderFinishedFence() {
+    VkSemaphore VkSwapchain::GetRenderFinishedFence() {
         return render_finished_fences[image_idx % render_finished_fences.size()];
     }
     TextureView VkSwapchain::GetSwapchainImage(uint _index) {
         return swapchain_views[_index % swapchain_views.size()];
     }
-    std::tuple<class VulkanFence*, uint, uint> VkSwapchain::AquireNextImage() {
+    std::tuple<VkSemaphore, uint, uint> VkSwapchain::AquireNextImage() {
         uint32_t                  image_index = 0;
         VkAcquireNextImageInfoKHR aquire_info{VK_STRUCTURE_TYPE_ACQUIRE_NEXT_IMAGE_INFO_KHR};
-        VulkanFence*              fence = image_ready_fences[image_idx % image_ready_fences.size()];
+        VkSemaphore             ready_sem = image_ready_fences[image_idx % image_ready_fences.size()];
         aquire_info.swapchain           = handle;
-        aquire_info.semaphore           = fence->GetBinaryHandle();
+        aquire_info.semaphore           = ready_sem;
 
         VkResult result = vkAcquireNextImageKHR(device.GetDevice(), handle, UINT64_MAX, aquire_info.semaphore, VK_NULL_HANDLE, &image_index);
         if (result == VK_ERROR_OUT_OF_DATE_KHR) {
             image_index = INT32_MAX;
         }
         if (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR) {
-            return {fence, image_index, image_idx};
+            return {ready_sem, image_index, image_idx};
         }
         assert(false && "Error acquiring next present texture.");
-        return {nullptr, INT32_MAX, image_idx};
+        return {VK_NULL_HANDLE, INT32_MAX, image_idx};
     }
 
     void VkSwapchain::Present(VkQueue _queue, uint _index) {
         if (_index == INT32_MAX) {
             return;
         }
-        VkSemaphore      finished_semaphores[] = {render_finished_fences[image_idx % image_ready_fences.size()]->GetBinaryHandle()};
+        VkSemaphore      finished_semaphores[] = {render_finished_fences[image_idx % image_ready_fences.size()]};
         VkPresentInfoKHR present_info{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
         present_info.waitSemaphoreCount = 1;
         present_info.pWaitSemaphores    = finished_semaphores;

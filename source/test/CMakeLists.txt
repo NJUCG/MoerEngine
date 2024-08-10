@@ -66,3 +66,15 @@ target_link_libraries(VulkanRTRHITest
         PRIVATE glfw
 )
 set_target_properties(VulkanRTRHITest PROPERTIES FOLDER ${moer_test_folder})
+
+add_executable(RHITest RHITest.cpp)
+target_include_directories(RHITest
+        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>
+        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
+        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
+)
+target_link_libraries(RHITest
+        PRIVATE MoerRender
+        PRIVATE glfw
+)
+set_target_properties(RHITest PROPERTIES FOLDER ${moer_test_folder})

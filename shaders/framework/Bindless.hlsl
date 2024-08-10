@@ -2,7 +2,7 @@
 #define FRAMEWORK_BINDLESS_COMMON_HLSL
 
 #define DEBUG_MODE 1
-
+#define NUM_STATIC_SAMPLERS 256
 struct RenderResourceHandle {
   // 23 bits for index, 2 bits to indicate resource type, 1 bit for writability,
   // 6 bits for version
@@ -45,39 +45,51 @@ struct RenderResourceHandle {
   ITERATOR(uint4, ##__VA_ARGS__)                                               \
   ITERATOR(float4, ##__VA_ARGS__)
 
-#define INNER_GENERATE_TEXTURE_TYPE_SLOT(NativeType, TextureType, Binding,     \
+#define INNER_GENERATE_TEXTURE_TYPE_SLOT(NativeType, TextureType, Name, Binding,     \
                                          Set)                                  \
   [[vk::binding(Binding, Set)]] TextureType<NativeType>                        \
-      g_##TextureType##NativeType[BINDLESS_DESCRIPTOR_HEAP_SIZE];
+      g_##Name##NativeType[BINDLESS_DESCRIPTOR_HEAP_SIZE];
 
-#define DEFINE_TEXTURE_TYPE_AND_FORMATS_SLOTS(TextureType, Binding, Set)       \
-  ITERATE_TEXTURE_TYPES(INNER_GENERATE_TEXTURE_TYPE_SLOT, TextureType,         \
+#define DEFINE_TEXTURE_TYPE_AND_FORMATS_SLOTS(TextureType, Name, Binding, Set)       \
+  ITERATE_TEXTURE_TYPES(INNER_GENERATE_TEXTURE_TYPE_SLOT, TextureType, Name         \
                         Binding, Set)
 
-DEFINE_TEXTURE_TYPE_AND_FORMATS_SLOTS(Texture1D, NUM_STATIC_SAMPLERS,
-                                      TEXTURE_SET)
-DEFINE_TEXTURE_TYPE_AND_FORMATS_SLOTS(Texture2D, NUM_STATIC_SAMPLERS,
-                                      TEXTURE_SET)
-DEFINE_TEXTURE_TYPE_AND_FORMATS_SLOTS(Texture3D, NUM_STATIC_SAMPLERS,
-                                      TEXTURE_SET)
-DEFINE_TEXTURE_TYPE_AND_FORMATS_SLOTS(TextureCube, NUM_STATIC_SAMPLERS,
-                                      TEXTURE_SET)
+#define BINDLESS_TEXTURE(Name, Space) \
+  [[vk::binding(0,
+              Space)]] SamplerState g_samplerState[NUM_STATIC_SAMPLERS]; \
+  DEFINE_TEXTURE_TYPE_AND_FORMATS_SLOTS(Texture1D, Name, NUM_STATIC_SAMPLERS, Space)\
+  DEFINE_TEXTURE_TYPE_AND_FORMATS_SLOTS(Texture2D, Name, NUM_STATIC_SAMPLERS, Space)\
+  DEFINE_TEXTURE_TYPE_AND_FORMATS_SLOTS(Texture3D, Name, NUM_STATIC_SAMPLERS, Space)\
+  DEFINE_TEXTURE_TYPE_AND_FORMATS_SLOTS(TextureCube, Name, NUM_STATIC_SAMPLERS, Space)
 
-DEFINE_TEXTURE_TYPE_AND_FORMATS_SLOTS(RWTexture1D, 0, RWTEXTURE_SET)
+#define BINDLESS_BUFFER(Name, Space) \
+  [[vk::binding(0, Space)]] ByteAddressBuffer g_##Name[];
 
-DEFINE_TEXTURE_TYPE_AND_FORMATS_SLOTS(RWTexture2D, 0, RWTEXTURE_SET)
+#define BINDLESS_ACCEL(Name, Space) \
+  [[vk::binding(0, Space)]] RaytracingAccelerationStructure g_##Name[];
+// DEFINE_TEXTURE_TYPE_AND_FORMATS_SLOTS(Texture1D, NUM_STATIC_SAMPLERS,
+//                                       TEXTURE_SET)
+// DEFINE_TEXTURE_TYPE_AND_FORMATS_SLOTS(Texture2D, NUM_STATIC_SAMPLERS,
+//                                       TEXTURE_SET)
+// DEFINE_TEXTURE_TYPE_AND_FORMATS_SLOTS(Texture3D, NUM_STATIC_SAMPLERS,
+//                                       TEXTURE_SET)
+// DEFINE_TEXTURE_TYPE_AND_FORMATS_SLOTS(TextureCube, NUM_STATIC_SAMPLERS,
+//                                       TEXTURE_SET)
 
-DEFINE_TEXTURE_TYPE_AND_FORMATS_SLOTS(RWTexture3D, 0, RWTEXTURE_SET)
+// DEFINE_TEXTURE_TYPE_AND_FORMATS_SLOTS(RWTexture1D, 0, RWTEXTURE_SET)
 
-[[vk::binding(0,
-              TEXTURE_SET)]] SamplerState g_samplerState[NUM_STATIC_SAMPLERS];
-[[vk::binding(0, BUFFER_SET)]] ByteAddressBuffer g_byteAddressBuffer[];
-[[vk::binding(0, BUFFER_SET)]] RWByteAddressBuffer g_rwByteAddressBuffer[];
+// DEFINE_TEXTURE_TYPE_AND_FORMATS_SLOTS(RWTexture2D, 0, RWTEXTURE_SET)
 
-[[vk::binding(
-    0, ACCELERATION_STRUCTURE_SET)]] RaytracingAccelerationStructure g_tlas[];
+// DEFINE_TEXTURE_TYPE_AND_FORMATS_SLOTS(RWTexture3D, 0, RWTEXTURE_SET)
 
-SamplerState SamplerMinMagMipPointWrap() { return g_samplerState[0]; }
+
+// [[vk::binding(0, BUFFER_SET)]] ByteAddressBuffer g_byteAddressBuffer[];
+// [[vk::binding(0, BUFFER_SET)]] RWByteAddressBuffer g_rwByteAddressBuffer[];
+
+// [[vk::binding(
+//     0, ACCELERATION_STRUCTURE_SET)]] RaytracingAccelerationStructure g_tlas[];
+
+// SamplerState SamplerMinMagMipPointWrap() { return g_samplerState[0]; }
 
 struct ByteBufferHandle {
   uint internalIndex;
@@ -127,6 +139,7 @@ template <typename T> struct RWTexture3DHandle {
 struct VKResourceDescriptorHeap {
   ByteAddressBuffer operator[](ByteBufferHandle handle) {
     return ByteAddressBuffer(
+      
         g_byteAddressBuffer[NonUniformResourceIndex(handle.internalIndex)]);
   }
   RWByteAddressBuffer operator[](RWByteBufferHandle handle) {

@@ -14,7 +14,6 @@
 #include "misc/STL.h"
 #include "misc/Traits.h"
 #include "rhi/RHICommon.h"
-#include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
 
 #include <cassert>
@@ -699,7 +698,7 @@ namespace Moer::Render {
         uint              GetStride() const { return info.stride; }
         EBufferUsageFlags GetUsage() const { return info.usage; }
 
-        BufferView GetView(uint64 _byte_offset = 0, uint64 _byte_size = UINT64_MAX);
+        RENDER_API BufferView GetView(uint64 _byte_offset = 0, uint64 _byte_size = UINT64_MAX);
 
     protected:
         /**
@@ -807,7 +806,7 @@ namespace Moer::Render {
         ETextureAspectFlags GetAspectFlags() const { return info.aspect_flags; }
         uint3              GetExtent() const { return uint3(info.extent.x, info.extent.y, info.depth); }
 
-        TextureView GetView(uint8 _mip_idx = 0u, uint8 _mip_num = 1u);
+        RENDER_API TextureView GetView(uint8 _mip_idx = 0u, uint8 _mip_num = 1u);
 
     private:
         friend DepthBuffer;
@@ -830,7 +829,7 @@ namespace Moer::Render {
         ETextureUsageFlags  GetUsage() const { return tex_handle->GetUsage(); }
         ETextureAspectFlags GetAspectFlags() const { return tex_handle->GetAspectFlags(); }
 
-        TextureView GetView() {
+        RENDER_API TextureView GetView() {
             return tex_handle->GetView();
         }
 
@@ -3381,7 +3380,7 @@ namespace Moer::Render {
         uint      back_buffer_sz = 2;
         EPixelFormat preferred_format = PF_R8G8B8A8_SRGB;
     };
-    class Swapchain : public RHIResource {
+    class RENDER_API Swapchain : public RHIResource {
         protected:
         Swapchain() : RHIResource(RRT_SWAPCHAIN){};
 

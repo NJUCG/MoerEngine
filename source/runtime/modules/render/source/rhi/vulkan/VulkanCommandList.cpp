@@ -1397,7 +1397,9 @@ namespace Moer::Render {
             case EQueueType::Copy:
                 queue = _device.GetTransferQueue();
                 break;
+            case EQueueType::Num: break;
         }
+        assert(queue != VK_NULL_HANDLE && "Invalid queue type!");
     }
 
     VkNativeQueue::~VkNativeQueue() {
@@ -1428,6 +1430,13 @@ namespace Moer::Render {
             .value     = _fence_val});
     }
 
+    void VkNativeQueue::Wait(VkSemaphore _sem) {
+        wait_infos.push_back(VkSemaphoreSubmitInfo{
+            .sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+            .pNext     = nullptr,
+            .semaphore = _sem,
+            .value     = 0});
+    }
     void VkNativeQueue::Signal(VulkanFence* _fence, uint64 _fence_val) {
         VkSemaphore sem = _fence->GetUnderlyingHandle();
         signal_infos.push_back(VkSemaphoreSubmitInfo{
@@ -1435,6 +1444,13 @@ namespace Moer::Render {
             .pNext     = nullptr,
             .semaphore = sem,
             .value     = _fence_val});
+    }
+    void VkNativeQueue::Signal(VkSemaphore _sem) {
+        signal_infos.push_back(VkSemaphoreSubmitInfo{
+            .sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+            .pNext     = nullptr,
+            .semaphore = _sem,
+            .value     = 0});
     }
     void VkCommandQueue::Wait(WaitEvent _evt) {
         auto* fence = reinterpret_cast<VulkanFence*>(_evt.timeline_handle);
@@ -1449,6 +1465,7 @@ namespace Moer::Render {
         auto&        vk_allocator  = *allocator_ptr;
         VkCmdVisitor visitor(vk_device, vk_allocator.GetCmdList());
         for (const auto& cmd : _submit.cmds) {
+            vk_allocator.GetCmdList().Begin();
             switch (cmd->Type()) {
 
                 case Command::EType::UploadBuffer:
@@ -1501,6 +1518,7 @@ namespace Moer::Render {
                     break;
                 case Command::EType::Custom: break;
             }
+            vk_allocator.GetCmdList().End();
         }
         uint64 last_time = last_frame;
         if (_submit.cmds.empty()) {
@@ -1533,52 +1551,6 @@ namespace Moer::Render {
         return {uint64(timeline), 0ull};
     }
 
-    void VkCommandQueue::Present(RHIViewport* _viewport, TextureView _view) {
-        auto  allocator    = std::move(GetAllocator());
-        auto& vk_allocator = *allocator;
-        auto& vk_cmd_list  = vk_allocator.GetCmdList();
-        auto* vk_viewport  = static_cast<VulkanRHIViewport*>(_viewport);
-        auto  info         = _viewport->GetNextFrameBackBufferInfo();
-
-        {
-            //copy
-            auto* vk_src_tex     = static_cast<VulkanTexture*>(_view.texture);
-            auto* swaphchain_tex = vk_viewport->GetSwapchainImage(info.backbuffer_index);
-            //todo: need transaction
-            vk_cmd_list.CopyTexture(vk_src_tex, swaphchain_tex, _view.texture->GetExtent(), {0, 0, 0}, {0, 0, 0}, 0, 0);
-        }
-        std::optional<VulkanFence*> binary_fence;
-        {
-            std::unique_lock<std::mutex> lock(present_mutex);
-            auto*                        fence = present_fences.front();
-            if (!fence) {
-                auto fence_ref = vk_device.CreateFence(EFenceUsageFlags::BINARY);
-                fence_ref->AddRef();
-                fence = static_cast<VulkanFence*>(fence_ref.Get());
-            }
-            assert(fence);
-            binary_fence.emplace(fence);
-        }
-
-        auto current_timeline = ++last_frame;
-        queue.Signal(timeline, current_timeline);
-        queue.Wait(vk_viewport->GetBinaryFence(info.backbuffer_index), 0);
-        queue.Signal(binary_fence.value(), 0);
-        queue.Submit(vk_allocator.GetCmdList());
-        vk_viewport->Present(std::get<VulkanFence::BinaryFence>(binary_fence.value()->GetFence()));
-        {
-            std::unique_lock<std::mutex> lock(event_mutex);
-            allocator->AddOnComplete([binary_fence = binary_fence.value(), &fences(present_fences), &present_mutex(present_mutex)]() {
-                {
-                    std::unique_lock<std::mutex> lock(present_mutex);
-                    fences.push(binary_fence);
-                }
-            });
-            event_queue.emplace_back(std::move(allocator), current_timeline, true);
-            queue_cv.notify_one();
-        }
-    }
-
     void VkCommandQueue::Present(SwapchainRef _sc, TextureView _view) {
         VkSwapchain* sc                     = ResourceCast(_sc.Get());
         auto         allocator              = std::move(GetAllocator());
@@ -1596,16 +1568,18 @@ namespace Moer::Render {
         auto* vk_src_tex     = static_cast<VulkanTexture*>(_view.texture);
         auto  swaphchain_tex = sc->GetSwapchainImage(idx);
         {
+            vk_cmd_list.Begin();
             //copy
             auto* vk_src_tex = static_cast<VulkanTexture*>(_view.texture);
             //todo: need transaction
             vk_cmd_list.CopyTexture(vk_src_tex, ResourceCast(swaphchain_tex.texture), _view.texture->GetExtent(), {0, 0, 0}, {0, 0, 0}, 0, 0);
+            vk_cmd_list.End();
         }
 
         auto current_timeline = ++last_frame;
         queue.Signal(timeline, current_timeline);
-        queue.Wait(sc->GetImageReadyFence(idx), 0);
-        queue.Signal(sc->GetRenderFinishedFence(), 0);
+        queue.Wait(sc->GetImageReadyFence(idx));
+        queue.Signal(sc->GetRenderFinishedFence());
         queue.Submit(vk_allocator.GetCmdList());
         sc->Present(queue.GetHandle(), idx);
         {
@@ -1667,8 +1641,8 @@ namespace Moer::Render {
                 std::optional<QueueEvent> evt;
                 {
                     std::unique_lock<std::mutex> lock(event_mutex);
-                    auto&                        event = event_queue.front();
                     if (!event_queue.empty()) {
+                        auto& event = event_queue.front();
                         evt.emplace(std::move(event));
                         event_queue.pop_front();
                     }
@@ -1719,7 +1693,7 @@ namespace Moer::Render {
 
     VulkanAllocator::VulkanAllocator(VulkanDevice* _device) : VulkanDeviceObject(_device),
                                                               allocator(_device),
-                                                              small_allocator(&allocator, 1024, 1.5) {
+                                                              small_allocator(&allocator, small_block_size, 1.5) {
 
         cmd_allocator.emplace(_device, VK_QUEUE_GRAPHICS_BIT);
         cmd_list.emplace(&cmd_allocator.value(), *_device);
@@ -1801,7 +1775,9 @@ namespace Moer::Render {
         MoerDelete(buffer);
     }
 
-    VulkanAllocator::StackAllocator::StackAllocator(TmpBufferAllocator* _alloc, uint64 _init_cap, double _grouth_factor) : allocator(_alloc) {
+    VulkanAllocator::StackAllocator::StackAllocator(TmpBufferAllocator* _alloc, uint64 _init_cap, double _grouth_factor) : allocator(_alloc), init_capacity(_init_cap), growth_factor(_grouth_factor) {
+        capacity = std::max<uint64>(init_capacity, 1);
+        allocated_buffers.push_back({allocator->Allocate(capacity), capacity, 0});
     }
 
     VulkanAllocator::StackAllocator::Chunk VulkanAllocator::StackAllocator::Allocate(uint64 _size, uint _align) {
@@ -1865,7 +1841,7 @@ namespace Moer::Render {
         VkCommandPoolCreateInfo pool_info = {
             .sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
             .pNext            = nullptr,
-            .flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+            .flags            = 0,
             .queueFamilyIndex = m_device->GetQueueFamilyIndex(queue_type)};
 
         VK_CHECK_RESULT(vkCreateCommandPool(_device->GetDevice(), &pool_info, nullptr, &command_pool));
@@ -1883,6 +1859,17 @@ namespace Moer::Render {
             .level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
             .commandBufferCount = 1};
         VK_CHECK_RESULT(vkAllocateCommandBuffers(device.GetDevice(), &command_buffer_info, &command_buffer));
+    }
+    void VulkanCmdList::Begin(){
+        VkCommandBufferBeginInfo begin_info = {
+            .sType            = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .pNext            = nullptr,
+            .flags            = 0,
+            .pInheritanceInfo = nullptr};
+        VK_CHECK_RESULT(vkBeginCommandBuffer(command_buffer, &begin_info));
+    }
+    void VulkanCmdList::End(){
+        VK_CHECK_RESULT(vkEndCommandBuffer(command_buffer));
     }
     void VulkanCmdList::CopyBuffer(
         VulkanBuffer* _src,
