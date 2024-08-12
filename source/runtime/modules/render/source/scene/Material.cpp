@@ -168,7 +168,7 @@ namespace Moer {
                 RHITexture* ao_map                 = mi->GetTexture("ao_map");
                 RHITexture* emissive_map           = mi->GetTexture("emissive_map");
 
-                static auto find_or_insert = [&](RHITexture* texture, int* idx) {
+                auto find_or_insert = [&](RHITexture* texture, int* idx) {
                     if (!texture) {
                         *idx = -1;
                         return;
