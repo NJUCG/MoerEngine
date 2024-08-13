@@ -9,8 +9,9 @@ struct  Light
 {
     // color.w represents light intensity
     float4 color;
-    // position.w represents type of light
+    // position.w represents the w component of position in the homogeneous coordinate
     float4 position;
+    // direction.w represents type of light
     float4 direction;
     // (only used for spot lights) info.x represents light inner cone angle, info.y represents light outer cone angle
     float4 info;
