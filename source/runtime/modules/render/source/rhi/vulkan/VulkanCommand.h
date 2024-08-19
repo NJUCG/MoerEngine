@@ -19,6 +19,7 @@
 #include <type_traits>
 #include <variant>
 #include <vulkan/vulkan.h>
+#include "VulkanResourceTracker.h"
 namespace Moer::Render {
     class VulkanDevice;
     class VulkanDescriptorSetAllocator;
@@ -160,6 +161,9 @@ namespace Moer::Render {
         VulkanCmdList& GetCmdList() {
             return cmd_list.value();
         }
+        VkTracker& GetTracker() {
+            return tracker;
+        }
         void ResetBufferAlloc();
         void ResetCmdList();
         void Complete(VulkanFence* _fence, uint64 _timeline);
@@ -203,6 +207,7 @@ namespace Moer::Render {
 
         StackAllocator               small_allocator;
         Array<std::function<void()>> on_complete;
+        VkTracker                  tracker;
     };
 
     static_assert(std::is_trivially_destructible_v<VulkanCommandAllocator>);
@@ -444,7 +449,7 @@ namespace Moer::Render {
         VkNativeQueue(EQueueType _type, VulkanDevice& _device);
         ~VkNativeQueue();
 
-        void    Submit(VulkanCmdList& _cmdlist);
+        void    Submit(VulkanCmdList& _cmdlist, VkFence _fence = VK_NULL_HANDLE);
         void    Wait(VulkanFence* _fence, uint64 _timeline);
         void    Wait(VkSemaphore _sem);
         void    Signal(VulkanFence* _fence, uint64 _timeline);

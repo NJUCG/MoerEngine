@@ -14,6 +14,7 @@
 
 #include "shader/ShaderCommon.h"
 
+#include <condition_variable>
 #include <variant>
 #include <vulkan/vulkan_core.h>
 
@@ -450,6 +451,8 @@ namespace Moer::Render {
 
         static VkIndexType        METoVKIndexType(EIndexElementType _type);
         static VkBufferUsageFlags METoVKBufferUsageFlags(VulkanDevice* _device, EBufferUsageFlags _me_flags);
+        VkAccessFlags2            m_access_flags;
+        VkPipelineStageFlags2     m_stage_flags;
 
     private:
         friend class TempBufferAllocator;
@@ -482,6 +485,14 @@ namespace Moer::Render {
 
         VkImageView GetView(uint _mip_level = 0, uint _mip_cnt = 1);
         bool        IsGeneralRead(uint _mip_level = 0) const;
+        struct SubResourceStates {
+            uint8                 mip_level;
+            uint8                 mip_cnt;
+            VkAccessFlags2        access;
+            VkImageLayout         layout;
+            VkPipelineStageFlags2 stage;
+        };
+        Array<SubResourceStates> m_subresource_states;
 
     private:
         struct TextureAlloc {
@@ -523,18 +534,29 @@ namespace Moer::Render {
 
     class VulkanFence final : public Fence, VulkanDeviceObject {
     public:
-    public:
         VulkanFence(VulkanDevice&);
         virtual ~VulkanFence();
 
         uint64_t GetValue() const override;
 
-        void        Wait(uint64_t _value) override;
+        void Wait(uint64_t _value) override;
+        // can be called on any thread to block current thread
+        void Sync(uint64);
+        // can be called on any thread to signal fence
+        void        Notify(uint64);
+        void        HostWait(uint64_t _value);
+        void        SignalHost(uint64_t _value);
         auto&       GetFence() { return timeline; }
         VkSemaphore GetUnderlyingHandle() { return timeline; }
 
+    public:
+        uint64 current_value = 0;
+        // uint64 last_value    = 0;
+
     private:
-        VkSemaphore timeline;
+        VkSemaphore             timeline;
+        std::condition_variable cv;
+        std::mutex              cv_m;
     };
 
 #pragma endregion
@@ -685,7 +707,7 @@ namespace Moer::Render {
         VulkanViewport(RHIViewportInitializer _init_info, VulkanDevice& _device);
         // ~VulkanViewport();
         void Resize(Extent2D _size) override;
-        void Present(FenceRef _render_finished) override {};
+        void Present(FenceRef _render_finished) override{};
         void Present(VkSemaphore _sem);
         // BackBufferInfo GetBackBuffer() override;
         void* GetNativeWindow() override;

@@ -72,7 +72,8 @@ namespace Moer::Render {
         VkSemaphore                         GetRenderFinishedFence();
         void                                Present(VkQueue _queue, uint _image_index);
 
-        void               WaitFrameInFlight(uint64 _image_idx);
+        void               WaitFrameInFlight();
+        VkFence            GetInFlightFence(uint64 _image_idx);
         VkSurfaceFormatKHR GetSurfaceFormat() const { return fmt; }
         VkSurfaceFormatKHR fmt;
 

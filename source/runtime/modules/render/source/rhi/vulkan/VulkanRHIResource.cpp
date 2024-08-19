@@ -19,6 +19,9 @@
 #include "rhi/vulkan/misc/VulkanMacroUtils.h"
 #include "log/LogSystem.h"
 
+#include <memory>
+#include <mutex>
+#include <thread>
 #include <vulkan/vulkan_core.h>
 
 #pragma region utils definition
@@ -1615,11 +1618,40 @@ uint64 VulkanFence::GetValue() const {
 }
 
 void VulkanFence::Wait(uint64_t _value) {
+    std::unique_lock<std::mutex> _(cv_m);
+    while(current_value < _value){
+        cv.wait(_);
+    }
+}
+
+void VulkanFence::Notify(uint64_t _value) {
+    {
+        std::unique_lock<std::mutex> _(cv_m);
+        current_value = std::max(current_value, _value);
+    }
+    cv.notify_all();
+}
+
+void VulkanFence::Sync(uint64_t _value) {
+    std::unique_lock<std::mutex> _(cv_m);
+    while(current_value < _value){
+        cv.wait(_);
+    }
+}
+
+void VulkanFence::HostWait(uint64_t _value) {
     VkSemaphoreWaitInfo info{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
     info.semaphoreCount = 1;
     info.pValues        = &_value;
     info.pSemaphores = &timeline;
     vkWaitSemaphores(m_device->GetDevice(), &info, UINT64_MAX);
+}
+
+void VulkanFence::SignalHost(uint64_t _value) {
+    VkSemaphoreSignalInfo info{VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
+    info.semaphore = timeline;
+    info.value     = _value;
+    vkSignalSemaphore(m_device->GetDevice(), &info);
 }
 
 VulkanFence::~VulkanFence() {

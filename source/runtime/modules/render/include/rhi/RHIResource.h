@@ -804,7 +804,7 @@ namespace Moer::Render {
         ETextureDimension   GetDimension() const { return info.dimension; }
         ETextureUsageFlags  GetUsage() const { return info.usage; }
         ETextureAspectFlags GetAspectFlags() const { return info.aspect_flags; }
-        uint3              GetExtent() const { return uint3(info.extent.x, info.extent.y, info.depth); }
+        uint3               GetExtent() const { return uint3(info.extent.x, info.extent.y, info.depth); }
 
         RENDER_API TextureView GetView(uint8 _mip_idx = 0u, uint8 _mip_num = 1u);
 
@@ -1376,9 +1376,9 @@ namespace Moer::Render {
     public:
         Viewport() : RHIResource(RRT_VIEWPORT) {}
         virtual ~Viewport() {}
-        virtual void*          GetNativeWindow()                = 0;
-        virtual void           Present(FenceRef _present_fence) = 0;
-        virtual void           Resize(Extent2D)                 = 0;
+        virtual void* GetNativeWindow()                = 0;
+        virtual void  Present(FenceRef _present_fence) = 0;
+        virtual void  Resize(Extent2D)                 = 0;
         // virtual BackBufferInfo GetBackBuffer()                  = 0;
     };
 }// namespace Moer::Render
@@ -3356,7 +3356,7 @@ namespace Moer::Render {
     struct ColorAttachment {
 
         Texture*          target;
-        EAttachmentAction action = AC_CLEAR_STORE;
+        EAttachmentAction action      = AC_CLEAR_STORE;
         float4            clear_color = {0, 0, 0, 0};
     };
 
@@ -3375,24 +3375,25 @@ namespace Moer::Render {
     };
 
     struct SwapchainCreateInfo {
-        uintptr_t window_handle;
-        Extent2D  size;
-        uint      back_buffer_sz = 2;
+        uintptr_t    window_handle;
+        Extent2D     size;
+        uint         back_buffer_sz   = 2;
         EPixelFormat preferred_format = PF_R8G8B8A8_SRGB;
     };
     class RENDER_API Swapchain : public RHIResource {
-        protected:
+    protected:
         Swapchain() : RHIResource(RRT_SWAPCHAIN){};
 
-        public:
-        virtual void Recreate(const SwapchainCreateInfo&)                    = 0;
-        virtual ~Swapchain() = default;
-        public:
+    public:
+        virtual void Recreate(const SwapchainCreateInfo&) = 0;
+        virtual ~Swapchain()                              = default;
+
+    public:
         EPixelFormat format;
         Extent2D     size;
     };
 
-    class BindlessArray{};
+    class BindlessArray {};
 }// namespace Moer::Render
 
 #pragma endregion
@@ -3533,7 +3534,7 @@ public:
     virtual void ReleasePreloadedShader(int32_t ShaderIndex) {}
 
     virtual CountableRef<RHIShader> CreateShader(int32_t ShaderIndex) { return nullptr; }
-    virtual void                    Teardown() {};
+    virtual void                    Teardown(){};
 
 protected:
     EShaderPlatform platform;

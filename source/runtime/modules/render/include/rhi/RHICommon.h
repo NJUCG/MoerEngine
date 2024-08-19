@@ -624,6 +624,29 @@ enum EBufferRuntimeUsageFlags : uint32_t {
     TRANSFER_WRITE         = 1 << 7,
 };
 
+namespace Moer::Render{
+    //one state a time
+    enum class EBufferState : uint32{
+        UNDEFINED,
+        TRANSFER,
+        VERTEX,
+        INDEX,
+        INDIRECT,
+        SHADER_RESOURCE,
+        UNORDERED_ACCESS
+    };
+    //one state a time
+    enum class ETextureState : uint32{
+        UNDEFINED,
+        TRANSFER,
+        SHADER_RESOURCE,
+        RENDER_TARGET,
+        DEPTH_STENCIL,
+        UNORDERED_ACCESS,
+        SAMPLE
+    };
+}
+
 enum class EPassType {
     None,
     Graphics,

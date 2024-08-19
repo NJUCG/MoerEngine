@@ -251,27 +251,33 @@ namespace Moer::Render {
     VkSwapchain::VkSwapchain(RenderDevice::Impl& _device, const SwapchainCreateInfo& _info) : Swapchain(), device(*static_cast<VulkanDevice*>(&_device)) {
         CreateOrRecreate(_info);
     }
-    void VkSwapchain::WaitFrameInFlight(uint64 _image_idx) {
-        if(_image_idx < max_frames_in_flight){
+    void VkSwapchain::WaitFrameInFlight() {
+        if (image_idx < max_frames_in_flight) {
             return;
         }
-        vkWaitForFences(device.GetDevice(), 1, &in_flight_fences[_image_idx % in_flight_fences.size()], VK_TRUE, UINT64_MAX);
+        auto frame_offset = image_idx % max_frames_in_flight;
+        vkWaitForFences(device.GetDevice(), 1, &in_flight_fences[frame_offset], VK_TRUE, UINT64_MAX);
+        vkResetFences(device.GetDevice(), 1, &in_flight_fences[frame_offset]);
+    }
+
+    VkFence VkSwapchain::GetInFlightFence(uint64 _index) {
+        return in_flight_fences[_index % in_flight_fences.size()];
     }
 
     void VkSwapchain::Recreate(const SwapchainCreateInfo& _info) {
         CreateOrRecreate(_info);
     }
     void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force_recreate) {
-        bool b_recreate = handle != VK_NULL_HANDLE || _force_recreate;
-        VkInstance instance = device.GetInstance();
+        bool       b_recreate = handle != VK_NULL_HANDLE || _force_recreate;
+        VkInstance instance   = device.GetInstance();
         //create surface by window handle
         assert(_info.window_handle != 0 && "Window handle is null when creating vulkan swapchain");
         Moer::WindowContext::CreateVulkanSurface(instance, (WindowHandle*)_info.window_handle, VK_NULL_HANDLE, &surface);
         //create swapchain
         VkSurfaceCapabilitiesKHR capabilities;
         vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device.GetGpu(), surface, &capabilities);
-        auto               details        = VkUtil::QuerySwapChainSupport(device.GetGpu(), surface);
-        fmt = ChooseSwapSurfaceFormat(details.formats);
+        auto details = VkUtil::QuerySwapChainSupport(device.GetGpu(), surface);
+        fmt          = ChooseSwapSurfaceFormat(details.formats);
         ChooseSwapExtent(&size.x, &size.y, details.capabilities);
         VkPresentModeKHR present_mode               = ChooseSwapPresentMode(details.present_modes, false);
         format                                      = (EPixelFormat)fmt.format;
@@ -300,9 +306,9 @@ namespace Moer::Render {
 
         uint image_cnt;
         vkGetSwapchainImagesKHR(device.GetDevice(), handle, &image_cnt, nullptr);
-        bool recreate_fences = in_flight_fences.size() != max_frames_in_flight;
+        bool recreate_fences        = in_flight_fences.size() != max_frames_in_flight;
         bool b_reacreate_semaphores = image_ready_fences.size() != image_cnt;
-        if(b_recreate){
+        if (b_recreate) {
             for (size_t i = 0; i < swapchain_textures.size(); ++i) {
                 MoerDelete(swapchain_textures[i]);
                 vkDestroySemaphore(device.GetDevice(), image_ready_fences[i], VK_NULL_HANDLE);
@@ -315,17 +321,17 @@ namespace Moer::Render {
         vkGetSwapchainImagesKHR(device.GetDevice(), handle, &image_cnt, images.data());
 
         for (uint i = 0; i < image_cnt; i++) {
-            swapchain_textures[i]     = MoerNew(VulkanTexture)(TextureInfo{
+            swapchain_textures[i] = MoerNew(VulkanTexture)(TextureInfo{
                                                                ETextureDimension::TEX_2D,
                                                                ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::COLOR_ATTACHMENT,
                                                                format,
                                                                EClearAttachment{},
-                                                                   {size.x, size.y, 1},
+                                                               {size.x, size.y, 1},
                                                                1,
                                                                1},
                                                            &device,
                                                            images[i]);
-            swapchain_views[i]        = TextureView(swapchain_textures[i]);
+            swapchain_views[i]    = TextureView(swapchain_textures[i]);
         }
 
         if (b_reacreate_semaphores) {
@@ -357,16 +363,16 @@ namespace Moer::Render {
         image_idx = 0;
     }
     VkSwapchain::~VkSwapchain() {
-        if(surface){
+        if (surface) {
             vkDestroySurfaceKHR(device.GetInstance(), surface, VK_NULL_HANDLE);
         }
-        if(handle){
+        if (handle) {
             vkDestroySwapchainKHR(device.GetDevice(), handle, VK_NULL_HANDLE);
         }
         for (size_t i = 0; i < swapchain_textures.size(); ++i) {
             MoerDelete(swapchain_textures[i]);
             vkDestroySemaphore(device.GetDevice(), image_ready_fences[i], VK_NULL_HANDLE);
-            vkDestroySemaphore(device.GetDevice(), render_finished_fences[i], VK_NULL_HANDLE); 
+            vkDestroySemaphore(device.GetDevice(), render_finished_fences[i], VK_NULL_HANDLE);
         }
         for (uint i = 0; i < in_flight_fences.size(); i++) {
             vkDestroyFence(device.GetDevice(), in_flight_fences[i], VK_NULL_HANDLE);
@@ -382,13 +388,10 @@ namespace Moer::Render {
         return swapchain_views[_index % swapchain_views.size()];
     }
     std::tuple<VkSemaphore, uint, uint> VkSwapchain::AquireNextImage() {
-        uint32_t                  image_index = 0;
-        VkAcquireNextImageInfoKHR aquire_info{VK_STRUCTURE_TYPE_ACQUIRE_NEXT_IMAGE_INFO_KHR};
-        VkSemaphore             ready_sem = image_ready_fences[image_idx % image_ready_fences.size()];
-        aquire_info.swapchain           = handle;
-        aquire_info.semaphore           = ready_sem;
+        uint32_t    image_index = 0;
+        VkSemaphore ready_sem   = image_ready_fences[image_idx % image_ready_fences.size()];
 
-        VkResult result = vkAcquireNextImageKHR(device.GetDevice(), handle, UINT64_MAX, aquire_info.semaphore, VK_NULL_HANDLE, &image_index);
+        VkResult result = vkAcquireNextImageKHR(device.GetDevice(), handle, UINT64_MAX, ready_sem, VK_NULL_HANDLE, &image_index);
         if (result == VK_ERROR_OUT_OF_DATE_KHR) {
             image_index = INT32_MAX;
         }

@@ -1,0 +1,99 @@
+#ifndef MOER_VK_RESOURCE_TRACKER_H
+#define MOER_VK_RESOURCE_TRACKER_H
+#include "VulkanRHIResource.h"
+#include "misc/Crc32.h"
+#include "misc/STL.h"
+#include "rhi/RHICommand.h"
+#include "rhi/RHICommon.h"
+#include "rhi/RHIResource.h"
+#include "vulkan/vulkan_core.h"
+namespace Moer::Render{
+    class VkTracker{
+        struct BufferState{
+            VkAccessFlagBits2 src_access;
+            VkPipelineStageFlagBits2 src_stage;
+            VkAccessFlagBits2 dst_access;
+            VkPipelineStageFlagBits2 dst_stage;
+        };
+        struct Range {
+            uint8 mip_level;
+            uint8 mip_count;
+
+            bool operator==(const Range& _other) const {
+                return mip_level == _other.mip_level && mip_count == _other.mip_count;
+            }
+
+            bool Overlaps(const Range& _other) const {
+                return mip_level < _other.mip_level + _other.mip_count && _other.mip_level < mip_level + mip_count;
+            }
+
+            bool Exceeds(const Range& _other) const {
+                return mip_level < _other.mip_level || mip_level + mip_count > _other.mip_level + _other.mip_count;
+            }
+
+            bool Contains(const Range& _other) const {
+                return mip_level <= _other.mip_level && mip_level + mip_count >= _other.mip_level + _other.mip_count;
+            }
+        };
+        struct TextureState{
+            Range range;
+            VkAccessFlagBits2 src_access;
+            VkImageLayout src_layout;
+            VkPipelineStageFlagBits2 src_stage;
+            VkAccessFlagBits2 dst_access;
+            VkImageLayout dst_layout;
+            VkPipelineStageFlagBits2 dst_stage;
+        };
+
+    public:
+        VkTracker() = default;
+        ~VkTracker() = default;
+        
+        void RecordState(
+            VulkanBuffer* _buffer,
+            VkAccessFlagBits2 _access,
+            VkPipelineStageFlagBits2 _stage
+        );
+
+        void RecordState(
+            VulkanBuffer* _texture,
+            std::tuple<VkAccessFlags2, VkPipelineStageFlags2>&&
+        );
+
+        void RecordState(
+            VulkanTexture* _texture,
+            VkAccessFlagBits2 _access,
+            VkImageLayout _layout,
+            VkPipelineStageFlagBits2 _stage,
+            uint8_t _mip_level = 0,
+            uint8_t _mip_count = 1
+        );
+
+        void RecordState(
+            VulkanTexture* _texture,
+            std::tuple<VkAccessFlags2, VkImageLayout, VkPipelineStageFlags2>&&
+        );
+
+        void SetPassType(EPassType _type){
+            pass_type = _type;
+        };
+        void ResolveBarriers();
+
+        void DispatchBarriers(class VulkanCmdList& _cmd_list);
+        void PropagateState();
+        
+        //automic state transition
+        auto ReadBuffer(VulkanBuffer*, EBufferState) -> std::tuple<VkAccessFlags2, VkPipelineStageFlags2>;
+        auto WriteBuffer(VulkanBuffer*, EBufferState) -> std::tuple<VkAccessFlags2, VkPipelineStageFlags2>;
+        auto ReadTexture(VulkanTexture*, ETextureState) -> std::tuple<VkAccessFlags2, VkImageLayout, VkPipelineStageFlags2>;
+        auto WriteTexture(VulkanTexture*, ETextureState) -> std::tuple<VkAccessFlags2, VkImageLayout, VkPipelineStageFlags2>;
+        private:
+        EPassType pass_type;
+        Array<VkBufferMemoryBarrier2> buffer_barriers;
+        Array<VkImageMemoryBarrier2> texture_barriers;
+
+        UnorderedMap<VulkanBuffer*, BufferState> buffer_states;
+        UnorderedMap<VulkanTexture*, Array<TextureState>> texture_states;
+    };
+}
+#endif
