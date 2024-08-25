@@ -450,10 +450,10 @@ namespace Moer::Render {
         ~VkNativeQueue();
 
         void    Submit(VulkanCmdList& _cmdlist, VkFence _fence = VK_NULL_HANDLE);
-        void    Wait(VulkanFence* _fence, uint64 _timeline);
-        void    Wait(VkSemaphore _sem);
-        void    Signal(VulkanFence* _fence, uint64 _timeline);
-        void    Signal(VkSemaphore _semaphore);
+        void    Wait(VulkanFence* _fence, uint64 _timeline, VkPipelineStageFlags2 _stage = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
+        void    Wait(VkSemaphore _sem, VkPipelineStageFlags2 _stage = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
+        void    Signal(VulkanFence* _fence, uint64 _timeline, VkPipelineStageFlags2 _stage = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
+        void    Signal(VkSemaphore _semaphore, VkPipelineStageFlags2 _stage = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
         VkQueue GetHandle() const { return queue; }
 
     private:

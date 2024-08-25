@@ -1426,36 +1426,40 @@ namespace Moer::Render {
         signal_infos.clear();
     }
 
-    void VkNativeQueue::Wait(VulkanFence* _fence, uint64 _fence_val) {
+    void VkNativeQueue::Wait(VulkanFence* _fence, uint64 _fence_val, VkPipelineStageFlags2 _stage) {
         VkSemaphore sem = _fence->GetUnderlyingHandle();
         wait_infos.push_back(VkSemaphoreSubmitInfo{
             .sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
             .pNext     = nullptr,
             .semaphore = sem,
-            .value     = _fence_val});
+            .value     = _fence_val,
+            .stageMask = _stage});
     }
 
-    void VkNativeQueue::Wait(VkSemaphore _sem) {
+    void VkNativeQueue::Wait(VkSemaphore _sem, VkPipelineStageFlags2 _stage) {
         wait_infos.push_back(VkSemaphoreSubmitInfo{
             .sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
             .pNext     = nullptr,
             .semaphore = _sem,
-            .value     = 0});
+            .value     = 0,
+            .stageMask = _stage});
     }
-    void VkNativeQueue::Signal(VulkanFence* _fence, uint64 _fence_val) {
+    void VkNativeQueue::Signal(VulkanFence* _fence, uint64 _fence_val, VkPipelineStageFlags2 _stage) {
         VkSemaphore sem = _fence->GetUnderlyingHandle();
         signal_infos.push_back(VkSemaphoreSubmitInfo{
             .sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
             .pNext     = nullptr,
             .semaphore = sem,
-            .value     = _fence_val});
+            .value     = _fence_val,
+            .stageMask = _stage});
     }
-    void VkNativeQueue::Signal(VkSemaphore _sem) {
+    void VkNativeQueue::Signal(VkSemaphore _sem, VkPipelineStageFlags2 _stage) {
         signal_infos.push_back(VkSemaphoreSubmitInfo{
             .sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
             .pNext     = nullptr,
             .semaphore = _sem,
-            .value     = 0});
+            .value     = 0,
+            .stageMask = _stage});
     }
     void VkCommandQueue::Wait(WaitEvent _evt) {
         auto* fence = reinterpret_cast<VulkanFence*>(_evt.timeline_handle);
@@ -1557,11 +1561,11 @@ namespace Moer::Render {
     }
 
     void VkCommandQueue::Present(SwapchainRef _sc, TextureView _view) {
-        VkSwapchain* sc                     = ResourceCast(_sc.Get());
-        auto         allocator              = std::move(GetAllocator());
-        auto&        vk_allocator           = *allocator;
-        auto&        vk_cmd_list            = vk_allocator.GetCmdList();
-        auto&        vk_tracker             = vk_allocator.GetTracker();
+        VkSwapchain* sc           = ResourceCast(_sc.Get());
+        auto         allocator    = std::move(GetAllocator());
+        auto&        vk_allocator = *allocator;
+        auto&        vk_cmd_list  = vk_allocator.GetCmdList();
+        auto&        vk_tracker   = vk_allocator.GetTracker();
         sc->WaitFrameInFlight();
         auto [fence, idx, present_timeline] = sc->AquireNextImage();
         if (idx == UINT32_MAX) {
@@ -1578,6 +1582,7 @@ namespace Moer::Render {
             vk_tracker.SetPassType(EPassType::Graphics);
             vk_tracker.RecordState(vk_src_tex, vk_tracker.ReadTexture(vk_src_tex, ETextureState::TRANSFER));
             vk_tracker.RecordState(swaphchain_tex, vk_tracker.WriteTexture(swaphchain_tex, ETextureState::TRANSFER));
+            vk_tracker.ResolveBarriers();
             vk_tracker.DispatchBarriers(vk_cmd_list);
             //copy
             //todo: need transaction
@@ -1585,16 +1590,17 @@ namespace Moer::Render {
             vk_tracker.RecordState(swaphchain_tex,
                                    VK_ACCESS_2_NONE,
                                    VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                                   VK_PIPELINE_STAGE_2_TRANSFER_BIT);
+                                   VK_PIPELINE_STAGE_2_COPY_BIT);
+            vk_tracker.ResolveBarriers();
             vk_tracker.DispatchBarriers(vk_cmd_list);
             vk_cmd_list.End();
             vk_tracker.PropagateState();
         }
 
         auto current_timeline = ++last_frame;
-        queue.Signal(timeline, current_timeline);
-        queue.Wait(sc->GetImageReadyFence(idx));
-        queue.Signal(sc->GetRenderFinishedFence());
+        queue.Signal(timeline, current_timeline, VK_PIPELINE_STAGE_2_COPY_BIT);
+        queue.Wait(sc->GetImageReadyFence(idx), VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT);
+        queue.Signal(sc->GetRenderFinishedFence(),VK_PIPELINE_STAGE_2_COPY_BIT);
         queue.Submit(vk_allocator.GetCmdList(), sc->GetInFlightFence(present_timeline));
         sc->Present(queue.GetHandle(), idx);
         {

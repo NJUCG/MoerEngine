@@ -493,6 +493,7 @@ namespace Moer::Render {
             VkPipelineStageFlags2 stage;
         };
         Array<SubResourceStates> m_subresource_states;
+        SubResourceStates state;
 
     private:
         struct TextureAlloc {

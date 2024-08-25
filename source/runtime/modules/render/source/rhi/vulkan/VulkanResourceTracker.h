@@ -93,7 +93,7 @@ namespace Moer::Render{
         Array<VkImageMemoryBarrier2> texture_barriers;
 
         UnorderedMap<VulkanBuffer*, BufferState> buffer_states;
-        UnorderedMap<VulkanTexture*, Array<TextureState>> texture_states;
+        UnorderedMap<VulkanTexture*, TextureState> texture_states;
     };
 }
 #endif
