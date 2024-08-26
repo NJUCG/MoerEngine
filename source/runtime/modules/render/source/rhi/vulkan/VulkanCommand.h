@@ -113,7 +113,9 @@ namespace Moer::Render {
         void Begin();
         void End();
         void CopyBuffer(VulkanBuffer* _src, VulkanBuffer* _dst, uint64 _size, uint64 _src_offset, uint64 _dst_offset);
-        void CopyData(BufferView& _dst, const void* _data, uint64 _size);
+        void CopyBufferToTexture(VulkanBuffer* _src, VulkanTexture* _dst, uint64 _size, uint64 _src_offset, uint3 _dst_offset, uint3 _dst_extent, uint32 _mip_level);
+        void CopyData(const BufferView& _dst, const void* _data, uint64 _size);
+        void CopyData(const void* _dst, const BufferView& _src, uint64 _size);
         void DrawIndexedInstanced(uint32_t _index_count, uint32_t _instance_count, uint32_t _start_index_location, uint32_t _base_vertex_location, uint32_t _start_instance_location);
         void DrawInstanced(uint32_t _vertex_count, uint32_t _instance_count, uint32_t _start_vertex_location, uint32_t _start_instance_location);
         void DrawIndirectCnt(VulkanBuffer* _arg_buffer, uint64 _arg_offset, VulkanBuffer* _count_buffer, uint64 _count_buffer_offset, uint32_t _max_draw_count, uint32_t _stride);
@@ -154,6 +156,7 @@ namespace Moer::Render {
     };
     class VulkanAllocator : public VulkanDeviceObject {
         constexpr static uint64_t small_block_size = 64 * 1024;
+
     public:
         VulkanAllocator(VulkanDevice* _device);
         ~VulkanAllocator();
@@ -207,7 +210,7 @@ namespace Moer::Render {
 
         StackAllocator               small_allocator;
         Array<std::function<void()>> on_complete;
-        VkTracker                  tracker;
+        VkTracker                    tracker;
     };
 
     static_assert(std::is_trivially_destructible_v<VulkanCommandAllocator>);
@@ -450,8 +453,8 @@ namespace Moer::Render {
         ~VkNativeQueue();
 
         void    Submit(VulkanCmdList& _cmdlist, VkFence _fence = VK_NULL_HANDLE);
-        void    Wait(VulkanFence* _fence, uint64 _timeline, VkPipelineStageFlags2 _stage = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
-        void    Wait(VkSemaphore _sem, VkPipelineStageFlags2 _stage = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
+        void    Wait(VulkanFence* _fence, uint64 _timeline, VkPipelineStageFlags2 _stage = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT);
+        void    Wait(VkSemaphore _sem, VkPipelineStageFlags2 _stage = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT);
         void    Signal(VulkanFence* _fence, uint64 _timeline, VkPipelineStageFlags2 _stage = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
         void    Signal(VkSemaphore _semaphore, VkPipelineStageFlags2 _stage = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
         VkQueue GetHandle() const { return queue; }
@@ -512,6 +515,7 @@ namespace Moer::Render {
         bool                    enabled{false};
         std::condition_variable queue_cv;// wake up execute thread from sleeping
         VkNativeQueue           queue;
+        VkTracker               tracker;
 
         Queue<VulkanFence*> present_fences;
         std::mutex          present_mutex;

@@ -186,7 +186,7 @@ namespace Moer::Render {
 
     void VkTracker::RecordState(VulkanTexture* _texture, VkAccessFlagBits2 _access, VkImageLayout _layout, VkPipelineStageFlagBits2 _stage, uint8_t _mip_level, uint8_t _mip_count) {
         // Range range{_mip_level, _mip_count};
-        TextureState state{{_mip_level, _mip_count}, VK_ACCESS_2_NONE, VK_IMAGE_LAYOUT_UNDEFINED, VK_PIPELINE_STAGE_2_NONE, _access, _layout, _stage};
+        TextureState state{VK_ACCESS_2_NONE, VK_IMAGE_LAYOUT_UNDEFINED, VK_PIPELINE_STAGE_2_NONE, _access, _layout, _stage};
         auto         state_iter = texture_states.find(_texture);
         if (state_iter != texture_states.end()) {
             auto& target_state = state_iter->second;
@@ -425,8 +425,8 @@ namespace Moer::Render {
             barrier.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
             barrier.subresourceRange.baseArrayLayer = 0;
             barrier.subresourceRange.layerCount     = 1;
-            barrier.subresourceRange.baseMipLevel   = state.range.mip_level;
-            barrier.subresourceRange.levelCount     = state.range.mip_count;
+            barrier.subresourceRange.baseMipLevel   = 0;
+            barrier.subresourceRange.levelCount     = texture->GetNumMips();
             barrier.oldLayout                       = state.src_layout;
             barrier.newLayout                       = state.dst_layout;
 
@@ -454,7 +454,7 @@ namespace Moer::Render {
     void VkTracker::PropagateState() {
         for (auto& [texture, state] : texture_states) {
             //get texture
-            texture->state = {state.range.mip_level, state.range.mip_count, state.dst_access, state.dst_layout, state.dst_stage};
+            texture->state = {0, (uint8)texture->GetNumMips(), state.dst_access, state.dst_layout, state.dst_stage};
         }
 
         for (auto& [buffer, state] : buffer_states) {

@@ -6,6 +6,7 @@
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
+#include "rhi/vulkan/RHICmdReorderer.h"
 #include "shader/ShaderPipeline.h"
 #include <variant>
 namespace Moer::Render {
@@ -167,6 +168,7 @@ namespace Moer::Render {
         auto SrcOffset() const { return src_offset; }
         auto DstOffset() const { return dst_offset; }
         auto Size() const { return size; }
+        auto ByteSize() const { return size[0] * size[1] * size[2]; }
         auto MipLevel() const { return mip_level; }
     };
 
@@ -209,6 +211,7 @@ namespace Moer::Render {
         auto SrcOffset() const { return src_offset; }
         auto DstOffset() const { return dst_offset; }
         auto Size() const { return size; }
+        auto ByteSize() const { return size[0] * size[1] * size[2]; }
         auto MipLevel() const { return mip_level; }
     };
 
@@ -217,8 +220,8 @@ namespace Moer::Render {
         EPixelFormat format{};
         uint64       handle{};
         uint         mip_level{};
-        uint         offset[3]{};
-        uint         size[3]{};
+        uint3         offset{};
+        uint3         size{};
         const void*  data{};
 
     private:
@@ -251,25 +254,60 @@ namespace Moer::Render {
     };
 
     using ResourceState = std::variant<EBufferRuntimeUsageFlags, ETextureStateFlags>;
+
+    struct TextureBarrier {
+        uint64        handle;
+        ETextureState state;
+        EPassType     pass_type;
+        uint          mip_level : 8;
+        uint          mip_cnt : 8;
+    };
+
+    struct BufferBarrier {
+        uint64       handle;
+        EBufferState state;
+        EPassType    pass_type;
+        uint64       offset{};
+        uint64       byte_size{};
+    };
     struct BarrierCmd : public Command {
     private:
-        ResourceState dst_state{};
-        EPassType     pass_type{};
-        uint64        handle{};
-
         BarrierCmd() : Command(EType::Barrier) {}
+        Array<TextureBarrier> read_textures;
+        Array<TextureBarrier> write_textures;
+        Array<BufferBarrier>  read_buffers;
+        Array<BufferBarrier>  write_buffers;
 
     public:
-        BarrierCmd(
-            EPassType     _pass_type,
-            uint64        _handle,
-            ResourceState _dst_state) : Command(EType::Barrier), pass_type(_pass_type), handle(_handle), dst_state(_dst_state) {}
+        BarrierCmd& ReadTexture(const TextureView& _view, ETextureState _dst_state, EPassType _pass_type) {
+            read_textures.emplace_back(TextureBarrier{reinterpret_cast<uint64>(_view.texture), _dst_state, _pass_type, _view.mip_level, _view.num_mips});
+            return *this;
+        }
+        BarrierCmd& WriteTexture(const TextureView& _view, ETextureState _dst_state, EPassType _pass_type) {
+            write_textures.emplace_back(TextureBarrier{reinterpret_cast<uint64>(_view.texture), _dst_state, _pass_type, _view.mip_level, _view.num_mips});
+            return *this;
+        }
+        BarrierCmd& ReadBuffer(const BufferView& _view, EBufferState _dst_state, EPassType _pass_type) {
+            read_buffers.emplace_back(BufferBarrier{reinterpret_cast<uint64>(_view.GetBuffer()), _dst_state, _pass_type, _view.GetByteOffset(), _view.GetByteSize()});
+            return *this;
+        }
+        BarrierCmd& WriteBuffer(const BufferView& _view, EBufferState _dst_state, EPassType _pass_type) {
+            write_buffers.emplace_back(BufferBarrier{reinterpret_cast<uint64>(_view.GetBuffer()), _dst_state, _pass_type, _view.GetByteOffset(), _view.GetByteSize()});
+            return *this;
+        }
 
-        EQueueType GetQueueType() const override { return EQueueType::Graphics; }
+        BarrierCmd(uint _read_tex_cnt, uint _write_tex_cnt, uint _read_buf_cnt, uint _write_buf_cnt) : Command(EType::Barrier) {
+            read_textures.reserve(_read_tex_cnt);
+            write_textures.reserve(_write_tex_cnt);
+            read_buffers.reserve(_read_buf_cnt);
+            write_buffers.reserve(_write_buf_cnt);
+        }
 
-        auto PassType() const { return pass_type; }
-        auto Handle() const { return handle; }
-        auto DstState() const { return dst_state; }
+        EQueueType  GetQueueType() const override { return EQueueType::Graphics; }
+        const auto& ReadTextures() const { return read_textures; }
+        const auto& WriteTextures() const { return write_textures; }
+        const auto& ReadBuffers() const { return read_buffers; }
+        const auto& WriteBuffers() const { return write_buffers; }
     };
 
     struct DrawIndexedCmd {
@@ -290,42 +328,27 @@ namespace Moer::Render {
     struct SetDrawStateCmd : public Command {
     public:
     private:
-        PipelineHandle pipeline{};
-        RenderPassInfo render_pass_info;
+        PipelineHandle      pipeline{};
+        RenderPassInfo      render_pass_info;
         Array<MeshDrawData> mesh_data;
-        uint vtx_cnt;
+        uint                vtx_cnt;
         SetDrawStateCmd() : Command(EType::SetDrawState) {}
 
     public:
         SetDrawStateCmd(PipelineHandle        _pipeline,
                         RenderPassInfo&&      _info,
                         Array<MeshDrawData>&& _draw_data) : Command(EType::SetDrawState),
-                                                     pipeline(_pipeline),
-                                                     render_pass_info(std::move(_info)),
-                                                     mesh_data(std::move(_draw_data)),
-                                                     vtx_cnt(0) {
-                                                        
-                                                     }
+                                                            pipeline(_pipeline),
+                                                            render_pass_info(std::move(_info)),
+                                                            mesh_data(std::move(_draw_data)),
+                                                            vtx_cnt(0) {
+        }
 
         EQueueType GetQueueType() const override { return EQueueType::Graphics; }
 
         auto        Pipeline() const { return pipeline; }
         const auto& RenderPassInfo() const { return render_pass_info; }
         const auto& DrawData() const { return mesh_data; }
-    };
-
-    struct RenderCmd : public Command {
-    private:
-        DrawCmd draw_cmd;
-
-    private:
-        RenderCmd() : Command(EType::Draw) {}
-
-    public:
-        RenderCmd(DrawCmd _draw_cmd) : Command(EType::Draw), draw_cmd(_draw_cmd) {}
-        EQueueType GetQueueType() const override { return EQueueType::Graphics; }
-
-        auto DrawCmd() const { return draw_cmd; }
     };
 
     struct UpdateDrawStateCmd : public Command {
@@ -388,11 +411,11 @@ namespace Moer::Render {
 
     private:
         DispatchParam param;
-        DispatchCmd() : Command(EType::Dispatch) {}
+        DispatchCmd() : Command(EType::ShaderDispatch) {}
 
     public:
-        DispatchCmd(uint3 _param) : Command(EType::Dispatch), param(_param) {}
-        DispatchCmd(BufferView _indirect) : Command(EType::Dispatch), param(DispatchIndirectParam{_indirect}) {}
+        DispatchCmd(uint3 _param) : Command(EType::ShaderDispatch), param(_param) {}
+        DispatchCmd(BufferView _indirect) : Command(EType::ShaderDispatch), param(DispatchIndirectParam{_indirect}) {}
 
         EQueueType GetQueueType() const override { return EQueueType::Compute; }
 
@@ -410,7 +433,6 @@ namespace Moer::Render {
         virtual void Visit(const UploadTextureCmd& _cmd)       = 0;
         virtual void Visit(const BarrierCmd& _cmd)             = 0;
         virtual void Visit(const SetDrawStateCmd& _cmd)        = 0;
-        virtual void Visit(const RenderCmd& _cmd)              = 0;
         virtual void Visit(const SetParamsCmd& _cmd)           = 0;
         virtual void Visit(const SetConstantCmd& _cmd)         = 0;
         virtual void Visit(const DispatchCmd& _cmd)            = 0;
@@ -422,7 +444,7 @@ namespace Moer::Render {
         virtual ~Impl() = default;
 
     public:
-        virtual FenceRef CreateFence() = 0;
+        virtual FenceRef  CreateFence()                                                                = 0;
         virtual BufferRef CreateBuffer(uint _element_cnt, uint _byte_stride, EBufferUsageFlags _usage) = 0;
 
         virtual BufferRef CreateStagingBuffer(uint64_t _byte_size) = 0;
@@ -442,7 +464,7 @@ namespace Moer::Render {
         // virtual BackBufferInfo GetNextBackBufferInfo(RHIViewport* _viewport) = 0;
 
         // virtual void PresentViewport(RHIViewport* _viewport, RHIFence* _render_end_fence) = 0;
-        void         FlushPendingDeletes();
+        void FlushPendingDeletes();
 
         const ShaderTargetInfo& GetShaderTargetInfo() const;
 
@@ -454,6 +476,5 @@ namespace Moer::Render {
         virtual PipelineHandle CreatePipeline(PipelineShaderInfo&& _shaders)                               = 0;//compute
     };
 
-    
 }// namespace Moer::Render
 #endif

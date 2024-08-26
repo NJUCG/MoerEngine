@@ -15,28 +15,7 @@ namespace Moer::Render{
             VkAccessFlagBits2 dst_access;
             VkPipelineStageFlagBits2 dst_stage;
         };
-        struct Range {
-            uint8 mip_level;
-            uint8 mip_count;
-
-            bool operator==(const Range& _other) const {
-                return mip_level == _other.mip_level && mip_count == _other.mip_count;
-            }
-
-            bool Overlaps(const Range& _other) const {
-                return mip_level < _other.mip_level + _other.mip_count && _other.mip_level < mip_level + mip_count;
-            }
-
-            bool Exceeds(const Range& _other) const {
-                return mip_level < _other.mip_level || mip_level + mip_count > _other.mip_level + _other.mip_count;
-            }
-
-            bool Contains(const Range& _other) const {
-                return mip_level <= _other.mip_level && mip_level + mip_count >= _other.mip_level + _other.mip_count;
-            }
-        };
         struct TextureState{
-            Range range;
             VkAccessFlagBits2 src_access;
             VkImageLayout src_layout;
             VkPipelineStageFlagBits2 src_stage;

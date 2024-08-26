@@ -290,10 +290,8 @@ namespace Moer::Render {
             Barrier,
             SetDrawState,
             UpdateDrawState,
-            Draw,
             SetParams,
             SetConstants,
-            Dispatch,
             Custom
         };
 
@@ -390,6 +388,25 @@ namespace Moer::Render {
             signal_events.emplace_back(uint64(_fence), _signal_value);
             return *this;
         }
+    };
+
+    struct ReadTexture {
+        TextureView   texture;
+        ETextureState state;
+    };
+    struct WriteTexture {
+        TextureView   texture;
+        ETextureState state;
+    };
+
+    struct ReadBuffer {
+        BufferView   buffer;
+        EBufferState state;
+    };
+
+    struct WriteBuffer {
+        BufferView   buffer;
+        EBufferState state;
     };
     template<typename TInArg>
     concept is_arg =
@@ -545,15 +562,60 @@ namespace Moer::Render {
             return ComputeDispatcher(_pso, *this);
         };
 
-        RENDER_API void CopyFrom(BufferView _src, BufferView _dst);
-        RENDER_API void CopyFrom(TextureView _src, TextureView _dst);
-        RENDER_API void CopyFrom(TextureView _src, BufferView _dst);
-        RENDER_API void CopyFrom(BufferView _src, TextureView _dst);
-        RENDER_API void CopyFrom(std::span<byte> _data, BufferView _dst);
-        RENDER_API void CopyFrom(std::span<byte> _data, TextureView _dst);
 
-        RENDER_API void TransitionTexture(TextureView _tex, ETextureStateFlags _dst_state, EPassType _pass);
-        RENDER_API void TransitionBuffer(BufferView _buffer, EBufferRuntimeUsageFlags _dst_state, EPassType _pass);
+        RENDER_API void           CopyFrom(BufferView _src, BufferView _dst);
+        RENDER_API void           CopyFrom(TextureView _src, TextureView _dst);
+        RENDER_API void           CopyFrom(TextureView _src, BufferView _dst);
+        RENDER_API void           CopyFrom(BufferView _src, TextureView _dst);
+        RENDER_API void           CopyFrom(std::span<byte> _data, BufferView _dst);
+        RENDER_API void           CopyFrom(std::span<byte> _data, TextureView _dst);
+
+        template<typename T, typename... Args>
+        struct CountType;
+
+        template<typename T>
+        struct CountType<T> {
+            static constexpr uint32_t value = 0;
+        };
+
+        template<typename T, typename First, typename... Rest>
+        struct CountType<T, First, Rest...> {
+            static constexpr uint32_t value = std::is_same_v<T, First> + CountType<T, Rest...>::value;
+        };
+
+        template<typename... Args>
+        struct GetReadTextureCnt {
+            static constexpr uint32_t value = CountType<ReadTexture, Args...>::value;
+        };
+
+        template<typename... Args>
+        struct GetWriteTextureCnt {
+            static constexpr uint32_t value = CountType<WriteTexture, Args...>::value;
+        };
+
+        template<typename... Args>
+        struct GetReadBufferCnt {
+            static constexpr uint32_t value = CountType<ReadBuffer, Args...>::value;
+        };
+
+        template<typename... Args>
+        struct GetWriteBufferCnt {
+            static constexpr uint32_t value = CountType<WriteBuffer, Args...>::value;
+        };
+
+        template<typename... T>
+        void Barriers(T... _args) {
+            constexpr uint read_tex_cnt  = GetReadTextureCnt<T...>::value;
+            constexpr uint write_tex_cnt = GetWriteTextureCnt<T...>::value;
+            constexpr uint read_buf_cnt  = GetReadBufferCnt<T...>::value;
+            constexpr uint write_buf_cnt = GetWriteBufferCnt<T...>::value;
+            static_assert(read_tex_cnt + write_tex_cnt + read_buf_cnt + write_buf_cnt > 0, "no barriers");
+
+            BeginBarriers(read_tex_cnt, write_tex_cnt, read_buf_cnt, write_buf_cnt);
+            (InnerBarrier(_args), ...);
+            EndBarriers();
+        }
+
         RENDER_API void AddCallback(std::function<void()>&& _callback);
 
         RENDER_API CmdSubmit Submit();
@@ -562,10 +624,31 @@ namespace Moer::Render {
         friend DrawDispatcher;
         friend ComputeDispatcher;
         friend class CommandQueue;
-        void                         SetRenderCmds(PipelineHandle& _handle, RenderPassInfo&&, Array<MeshDrawData>&&);
-        void                         SubmitArgs(ShaderPipeline&, Arguments&&);
-        void                         SubmitConstants(ShaderPipeline&, Array<uint>&&);
+        void SetRenderCmds(PipelineHandle& _handle, RenderPassInfo&&, Array<MeshDrawData>&&);
+        void SubmitArgs(ShaderPipeline&, Arguments&&);
+        void SubmitConstants(ShaderPipeline&, Array<uint>&&);
+
+        RENDER_API void BeginBarriers(uint _read_tex_cnt, uint _write_tex_cnt, uint _read_buf_cnt, uint _write_buf_cnt);
+        RENDER_API void InnerBarrier(ReadBuffer _buffer){
+            InnerReadBuffer(_buffer.buffer, _buffer.state);
+        }
+        RENDER_API void InnerBarrier(WriteBuffer _buffer){
+            InnerWriteBuffer(_buffer.buffer, _buffer.state);
+        }
+        RENDER_API void InnerBarrier(ReadTexture _texture){
+            InnerReadTexture(_texture.texture, _texture.state);
+        }
+        RENDER_API void InnerBarrier(WriteTexture _texture){
+            InnerWriteTexture(_texture.texture, _texture.state);
+        }
+
+        RENDER_API void              InnerReadBuffer(BufferView _buffer, EBufferState _state);
+        RENDER_API void              InnerWriteBuffer(BufferView _buffer, EBufferState _state);
+        RENDER_API void              InnerReadTexture(TextureView _texture, ETextureState _state);
+        RENDER_API void              InnerWriteTexture(TextureView _texture, ETextureState _state);
+        RENDER_API void              EndBarriers();
         Array<UniquePtr<Command>>    commands;
+        Command*                     current_barriers{nullptr};
         Array<std::function<void()>> callbacks;
     };
     class QueueCmd {};

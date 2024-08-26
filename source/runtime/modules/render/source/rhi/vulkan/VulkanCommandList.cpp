@@ -28,7 +28,150 @@
 #include <variant>
 #include <vector>
 #include <vulkan/vulkan_core.h>
+#include <rhi/vulkan/RHICmdReorderer.h>
 namespace Moer::Render {
+
+    struct VkCmdPreprocessor {
+        CmdReorderer& reorderer;
+
+        VkCmdPreprocessor(CmdReorderer& _reorderer) : reorderer(_reorderer) {
+        }
+
+        void VisitCmd(const Command* _cmd) {
+            assert(_cmd != nullptr);
+            switch (_cmd->Type()) {
+                case Command::EType::UploadBuffer:
+                    Visit(static_cast<const UploadBufferCmd*>(_cmd));
+                    break;
+                case Command::EType::UploadTexture:
+                    Visit(static_cast<const UploadTextureCmd*>(_cmd));
+                    break;
+                case Command::EType::BufferToBuffer:
+                    Visit(static_cast<const CopyBufferCmd*>(_cmd));
+                    break;
+                case Command::EType::BufferToTexture:
+                    Visit(static_cast<const CopyBufferToTextureCmd*>(_cmd));
+                    break;
+                case Command::EType::TextureToBuffer:
+                    Visit(static_cast<const CopyTextureToBufferCmd*>(_cmd));
+                    break;
+                case Command::EType::TextureToTexture:
+                    Visit(static_cast<const CopyTextureCmd*>(_cmd));
+                    break;
+                case Command::EType::CopyBackBuffer:
+                    Visit(static_cast<const CopyBackBufferCmd*>(_cmd));
+                    break;
+                case Command::EType::ShaderDispatch:
+                    Visit(static_cast<const DispatchCmd*>(_cmd));
+                    break;
+                case Command::EType::SetDrawState:
+                    Visit(static_cast<const SetDrawStateCmd*>(_cmd));
+                case Command::EType::UpdateDrawState:
+                    break;
+                case Command::EType::SetParams:
+                    break;
+                case Command::EType::SetConstants:
+                    break;
+                case Command::EType::BuildAccel:
+                    break;
+                case Command::EType::Barrier:
+                    Visit(static_cast<const BarrierCmd*>(_cmd));
+                    break;
+                case Command::EType::Custom:
+                    break;
+                default:
+                    assert(false && "Invalid command type");
+            }
+        }
+
+        void Visit(const UploadBufferCmd* _cmd) {
+            CmdReorderer::Range range(_cmd->Offset(), _cmd->ByteSize());
+            reorderer.SetWrite(_cmd->Handle(), range, CmdReorderer::ResourceType::Texture_Buffer);
+        }
+        void Visit(const UploadTextureCmd* _cmd) {
+            CmdReorderer::Range range(_cmd->MipLevel());
+            reorderer.SetWrite(_cmd->Handle(), range, CmdReorderer::ResourceType::Texture_Buffer);
+        }
+        void Visit(const CopyBufferCmd* _cmd) {
+            CmdReorderer::Range src_range(_cmd->SrcOffset(), _cmd->ByteSize());
+            CmdReorderer::Range dst_range(_cmd->DstOffset(), _cmd->ByteSize());
+            reorderer.SetRead(_cmd->SrcHandle(), src_range, CmdReorderer::ResourceType::Texture_Buffer);
+            reorderer.SetWrite(_cmd->DstHandle(), dst_range, CmdReorderer::ResourceType::Texture_Buffer);
+        }
+        void Visit(const CopyTextureCmd* _cmd) {
+            CmdReorderer::Range src_range(_cmd->SrcMipLevel());
+            CmdReorderer::Range dst_range(_cmd->DstMipLevel());
+            reorderer.SetRead(_cmd->SrcHandle(), src_range, CmdReorderer::ResourceType::Texture_Buffer);
+            reorderer.SetWrite(_cmd->DstHandle(), dst_range, CmdReorderer::ResourceType::Texture_Buffer);
+        }
+        void Visit(const CopyBufferToTextureCmd* _cmd) {
+            CmdReorderer::Range src_range(_cmd->SrcOffset(), _cmd->ByteSize());
+            CmdReorderer::Range dst_range(_cmd->MipLevel());
+            reorderer.SetRead(_cmd->SrcHandle(), src_range, CmdReorderer::ResourceType::Texture_Buffer);
+            reorderer.SetWrite(_cmd->DstHandle(), dst_range, CmdReorderer::ResourceType::Texture_Buffer);
+        }
+
+        void Visit(const CopyTextureToBufferCmd* _cmd) {
+            CmdReorderer::Range src_range(_cmd->MipLevel());
+            CmdReorderer::Range dst_range(_cmd->DstOffset(), _cmd->ByteSize());
+            reorderer.SetRead(_cmd->SrcHandle(), src_range, CmdReorderer::ResourceType::Texture_Buffer);
+            reorderer.SetWrite(_cmd->DstHandle(), dst_range, CmdReorderer::ResourceType::Texture_Buffer);
+        }
+
+        void Visit(const CopyBackBufferCmd* _cmd) {
+            CmdReorderer::Range src_range(_cmd->Offset(), _cmd->ByteSize() + _cmd->Offset());
+            reorderer.SetRead(_cmd->Handle(), src_range, CmdReorderer::ResourceType::Texture_Buffer);
+        }
+
+        void Visit(const DispatchCmd* _cmd) {
+            std::visit([this](auto&& _arg) {
+                using T = std::decay_t<decltype(_arg)>;
+                if constexpr (std::is_same_v<T, uint3>) {
+                    return;
+                } else if constexpr (std::is_same_v<T, BufferView>) {
+                    CmdReorderer::Range range(_arg.byte_offset, _arg.byte_offset + _arg.byte_size);
+                    reorderer.SetRead(reinterpret_cast<uint64>(_arg.GetBuffer()), range, CmdReorderer::ResourceType::Texture_Buffer);
+                }
+            },
+                       _cmd->Param());
+        }
+
+        void Visit(const SetParamsCmd* _cmd) {
+        }
+        void Visit(const SetConstantCmd* _cmd) {
+        }
+
+        void Visit(const BarrierCmd* _cmd) {
+            for (auto& barrier : _cmd->ReadBuffers()) {
+                CmdReorderer::Range range(barrier.offset, barrier.byte_size + barrier.offset);
+                reorderer.SetRead(barrier.handle, range, CmdReorderer::ResourceType::Texture_Buffer);
+            }
+            for (auto& barrier : _cmd->WriteBuffers()) {
+                CmdReorderer::Range range(barrier.offset, barrier.byte_size + barrier.offset);
+                reorderer.SetWrite(barrier.handle, range, CmdReorderer::ResourceType::Texture_Buffer);
+            }
+
+            for (auto& barrier : _cmd->ReadTextures()) {
+                CmdReorderer::Range range(barrier.mip_level, barrier.mip_level + barrier.mip_cnt);
+                reorderer.SetRead(barrier.handle, range, CmdReorderer::ResourceType::Texture_Buffer);
+            }
+            for (auto& barrier : _cmd->WriteTextures()) {
+                CmdReorderer::Range range(barrier.mip_level, barrier.mip_level + barrier.mip_cnt);
+                reorderer.SetWrite(barrier.handle, range, CmdReorderer::ResourceType::Texture_Buffer);
+            }
+        }
+
+        void Visit(const SetDrawStateCmd* _cmd) {
+            for (const auto& rt : _cmd->RenderPassInfo().color_attachments) {
+                CmdReorderer::Range range(0);
+                reorderer.SetWrite(reinterpret_cast<uint64>(rt.target), range, CmdReorderer::ResourceType::Texture_Buffer);
+            }
+            if (_cmd->RenderPassInfo().depth_attachment.target != nullptr) {
+                CmdReorderer::Range range(0);
+                reorderer.SetWrite(reinterpret_cast<uint64>(_cmd->RenderPassInfo().depth_attachment.target), range, CmdReorderer::ResourceType::Texture_Buffer);
+            }
+        }
+    };
     VulkanRHICommandListBase::VulkanRHICommandListBase(VulkanDevice* _device, VkCommandPool _pool, VkCommandBufferLevel _level) : VulkanDeviceObject(_device) {
         VkCommandBufferAllocateInfo buffer_alloc_info{};
         m_current_command_pool               = _pool;
@@ -1200,52 +1343,141 @@ namespace Moer::Render {
             Draw,
             Common
         } state = EState::Common;
-        VulkanCmdList& cmd_list;
+        VulkanCmdList&   cmd_list;
+        VulkanAllocator& allocator;
+        VkTracker&       tracker;
 
     public:
-        VkCmdVisitor(VulkanDevice& _device, VulkanCmdList& _cmd_list) : VulkanDeviceObject(&_device), cmd_list(_cmd_list) {}
+        VkCmdVisitor(VulkanDevice& _device, VulkanAllocator& _allocator, VulkanCmdList& _cmd_list, VkTracker& _tracker) : VulkanDeviceObject(&_device),
+                                                                                                                          allocator(_allocator),
+                                                                                                                          cmd_list(_cmd_list),
+                                                                                                                          tracker(_tracker) {}
         void Visit(const UploadBufferCmd& _cmd) {
             auto tmp_buffer = m_device->GetStagingAllocator().AllocateBuffer(_cmd.ByteSize(), 16);
             cmd_list.CopyData(tmp_buffer, _cmd.Data(), _cmd.ByteSize());
+            VulkanBuffer* buffer = reinterpret_cast<VulkanBuffer*>(_cmd.Handle());
             cmd_list.CopyBuffer(reinterpret_cast<VulkanBuffer*>(tmp_buffer.GetBuffer()),
-                                reinterpret_cast<VulkanBuffer*>(_cmd.Handle()),
+                                buffer,
                                 _cmd.ByteSize(),
                                 tmp_buffer.GetByteOffset(),
                                 _cmd.Offset());
+
+            tracker.RecordState(buffer, tracker.WriteBuffer(buffer, EBufferState::TRANSFER));
         }
 
+        uint64 GetSizeFromImageFormat(EPixelFormat _format, const uint3 _size) {
+            switch (_format) {
+                case PF_R8G8B8A8_SRGB:
+                case PF_R8G8B8A8_UNORM:
+                case PF_R8G8B8A8_UINT:
+                case PF_R8G8B8A8_SNORM:
+                case PF_R8G8B8A8_SINT:
+                    return _size.x * _size.y * _size.z * 4;
+                    break;
+                case PF_R32G32B32A32_SFLOAT:
+                case PF_R32G32B32A32_UINT:
+                case PF_R32G32B32A32_SINT:
+                    return _size.x * _size.y * _size.z * 16;
+                    break;
+                case PF_R32G32_SFLOAT:
+                case PF_R32G32_UINT:
+                case PF_R32G32_SINT:
+                    return _size.x * _size.y * _size.z * 8;
+                    break;
+                case PF_R32_SFLOAT:
+                case PF_R32_UINT:
+                case PF_R32_SINT:
+                    return _size.x * _size.y * _size.z * 4;
+                    break;
+                case PF_R16G16B16A16_SFLOAT:
+                case PF_R16G16B16A16_UNORM:
+                case PF_R16G16B16A16_UINT:
+                case PF_R16G16B16A16_SNORM:
+                case PF_R16G16B16A16_SINT:
+                    return _size.x * _size.y * _size.z * 8;
+                    break;
+                case PF_R16G16_SFLOAT:
+                case PF_R16G16_UNORM:
+                case PF_R16G16_UINT:
+                case PF_R16G16_SNORM:
+                case PF_R16G16_SINT:
+                    return _size.x * _size.y * _size.z * 4;
+                    break;
+                case PF_R16_SFLOAT:
+                case PF_R16_UNORM:
+                case PF_R16_UINT:
+                case PF_R16_SNORM:
+                case PF_R16_SINT:
+                    return _size.x * _size.y * _size.z * 2;
+                    break;
+                case PF_R8G8B8_SRGB:
+                case PF_R8G8B8_UNORM:
+                case PF_R8G8B8_UINT:
+                case PF_R8G8B8_SNORM:
+                case PF_R8G8B8_SINT:
+                    return _size.x * _size.y * _size.z * 3;
+                    break;
+                case PF_R8G8_SRGB:
+                case PF_R8G8_UNORM:
+                case PF_R8G8_UINT:
+                case PF_R8G8_SNORM:
+                case PF_R8G8_SINT:
+                    return _size.x * _size.y * _size.z * 2;
+                    break;
+                case PF_R8_SRGB:
+                case PF_R8_UNORM:
+                case PF_R8_UINT:
+                case PF_R8_SNORM:
+                case PF_R8_SINT:
+                    return _size.x * _size.y * _size.z;
+                    break;
+                default:
+                    assert(false && "not support format");
+            }
+            return 0;
+        }
         void Visit(const UploadTextureCmd& _cmd) {
-        }
+            uint64 buffer_size = GetSizeFromImageFormat(_cmd.Format(), _cmd.Size());
+            auto   tmp_buffer  = m_device->GetStagingAllocator().AllocateBuffer(buffer_size, 16);
+            cmd_list.CopyData(tmp_buffer, _cmd.Data(), buffer_size);
+            VulkanTexture* texture = reinterpret_cast<VulkanTexture*>(_cmd.Handle());
+            cmd_list.CopyBufferToTexture(reinterpret_cast<VulkanBuffer*>(tmp_buffer.GetBuffer()),
+                                         texture,
+                                         buffer_size,
+                                         tmp_buffer.GetByteOffset(),
+                                         _cmd.Offset(),
+                                         _cmd.Size(),
+                                         _cmd.MipLevel());
 
-        void Visit(const RenderCmd& _cmd) {
-            assert(state == EState::Draw);
-            std::visit(
-                [&](auto&& _cmd) {
-                    using TCmd = std::decay_t<decltype(_cmd)>;
-                    if constexpr (std::is_same_v<TCmd, DrawIndexedCmd>) {
-                        cmd_list.DrawIndexedInstanced(_cmd.index_cnt, _cmd.instance_cnt, _cmd.first_index, _cmd.vertex_offset, _cmd.first_instance);
-                    } else if constexpr (std::is_same_v<TCmd, DrawIndirectCmd>) {
-                        cmd_list.DrawIndirectCnt(
-                            reinterpret_cast<VulkanBuffer*>(_cmd.commands.GetBuffer()),
-                            _cmd.commands.GetByteOffset(),
-                            reinterpret_cast<VulkanBuffer*>(_cmd.count.GetBuffer()),
-                            _cmd.count.GetByteOffset(),
-                            _cmd.max_cnt,
-                            _cmd.stride);
-                    }
-                },
-                _cmd.DrawCmd());
+            tracker.RecordState(texture, tracker.WriteTexture(texture, ETextureState::TRANSFER));
         }
 
         void Visit(const CopyBufferCmd& _cmd) {
-            cmd_list.CopyBuffer(reinterpret_cast<VulkanBuffer*>(_cmd.SrcHandle()),
-                                reinterpret_cast<VulkanBuffer*>(_cmd.DstHandle()),
+            VulkanBuffer* src_buffer = reinterpret_cast<VulkanBuffer*>(_cmd.SrcHandle());
+            VulkanBuffer* dst_buffer = reinterpret_cast<VulkanBuffer*>(_cmd.DstHandle());
+
+            cmd_list.CopyBuffer(src_buffer,
+                                dst_buffer,
                                 _cmd.ByteSize(),
                                 _cmd.SrcOffset(),
                                 _cmd.DstOffset());
+
+            tracker.RecordState(src_buffer, tracker.ReadBuffer(src_buffer, EBufferState::TRANSFER));
+            tracker.RecordState(dst_buffer, tracker.WriteBuffer(dst_buffer, EBufferState::TRANSFER));
         }
 
         void Visit(const CopyBackBufferCmd& _cmd) {
+            VulkanBuffer* src_buffer = reinterpret_cast<VulkanBuffer*>(_cmd.Handle());
+            auto          tmp_buffer = m_device->GetStagingAllocator().AllocateBuffer(_cmd.ByteSize(), 16);
+            cmd_list.CopyBuffer(src_buffer,
+                                reinterpret_cast<VulkanBuffer*>(tmp_buffer.GetBuffer()),
+                                _cmd.ByteSize(),
+                                _cmd.Offset(),
+                                tmp_buffer.GetByteOffset());
+
+            allocator.AddOnComplete([tmp_buffer, &cmd_list(cmd_list), src_data(_cmd.Data())]() {
+                cmd_list.CopyData(src_data, tmp_buffer, tmp_buffer.GetByteSize());
+            });
         }
 
         void Visit(const CopyTextureCmd& _cmd) {
@@ -1470,63 +1702,76 @@ namespace Moer::Render {
         }
     }
     WaitEvent VkCommandQueue::Execute(CmdSubmit&& _submit) {
-        auto         allocator_ptr = std::move(GetAllocator());
-        auto&        vk_allocator  = *allocator_ptr;
-        VkCmdVisitor visitor(vk_device, vk_allocator.GetCmdList());
+        auto              allocator_ptr = std::move(GetAllocator());
+        auto&             vk_allocator  = *allocator_ptr;
+        VkCmdVisitor      visitor(vk_device, vk_allocator, vk_allocator.GetCmdList(), tracker);
+        CmdReorderer      reorderer{};
+        VkCmdPreprocessor preprocessor(reorderer);
+
         for (const auto& cmd : _submit.cmds) {
+            preprocessor.VisitCmd(cmd.get());
+        }
+        const auto& cmd_lists = preprocessor.reorderer.m_cmd_lists;
+        bool        has_cmd   = !preprocessor.reorderer.m_cmd_lists.empty();
+
+        if (has_cmd) {
             vk_allocator.GetCmdList().Begin();
-            switch (cmd->Type()) {
-
-                case Command::EType::UploadBuffer:
-                    visitor.Visit(static_cast<UploadBufferCmd&>(*cmd));
-                    break;
-                case Command::EType::CopyBackBuffer:
-                    visitor.Visit(static_cast<CopyBackBufferCmd&>(*cmd));
-                    break;
-                case Command::EType::BufferToBuffer:
-                    visitor.Visit(static_cast<CopyBufferCmd&>(*cmd));
-                    break;
-                case Command::EType::BufferToTexture:
-                    visitor.Visit(static_cast<CopyBufferToTextureCmd&>(*cmd));
-                    break;
-                case Command::EType::TextureToBuffer:
-                    visitor.Visit(static_cast<CopyTextureToBufferCmd&>(*cmd));
-                    break;
-                case Command::EType::UploadTexture:
-                    visitor.Visit(static_cast<UploadTextureCmd&>(*cmd));
-                    break;
-                case Command::EType::TextureToTexture:
-                    visitor.Visit(static_cast<CopyTextureCmd&>(*cmd));
-                    break;
-                case Command::EType::ShaderDispatch:
-                    visitor.Visit(static_cast<DispatchCmd&>(*cmd));
-                    break;
-                case Command::EType::BuildAccel:
-
-                    break;
-                case Command::EType::Barrier:
-                    visitor.Visit(static_cast<BarrierCmd&>(*cmd));
-                    break;
-                case Command::EType::SetDrawState:
-                    visitor.Visit(static_cast<SetDrawStateCmd&>(*cmd));
-                    break;
-                case Command::EType::UpdateDrawState:
-                    visitor.Visit(static_cast<UpdateDrawStateCmd&>(*cmd));
-                    break;
-                case Command::EType::Draw:
-                    visitor.Visit(static_cast<RenderCmd&>(*cmd));
-                    break;
-                case Command::EType::SetParams:
-                    visitor.Visit(static_cast<SetParamsCmd&>(*cmd));
-                    break;
-                case Command::EType::SetConstants:
-                    visitor.Visit(static_cast<SetConstantCmd&>(*cmd));
-                    break;
-                case Command::EType::Dispatch:
-                    visitor.Visit(static_cast<DispatchCmd&>(*cmd));
-                    break;
-                case Command::EType::Custom: break;
+        }
+        for (const CmdReorderer::CommandListNode* cmd_list : cmd_lists) {
+            if (cmd_list == nullptr) {
+                continue;
             }
+
+            for (const auto* cmdnode = cmd_list; cmdnode != nullptr; cmdnode = cmd_list->next) {
+                const auto* cmd = cmdnode->cmd;
+                switch (cmd->Type()) {
+                    case Command::EType::UploadBuffer:
+                        visitor.Visit(static_cast<const UploadBufferCmd&>(*cmd));
+                        break;
+                    case Command::EType::CopyBackBuffer:
+                        visitor.Visit(static_cast<const CopyBackBufferCmd&>(*cmd));
+                        break;
+                    case Command::EType::BufferToBuffer:
+                        visitor.Visit(static_cast<const CopyBufferCmd&>(*cmd));
+                        break;
+                    case Command::EType::BufferToTexture:
+                        visitor.Visit(static_cast<const CopyBufferToTextureCmd&>(*cmd));
+                        break;
+                    case Command::EType::TextureToBuffer:
+                        visitor.Visit(static_cast<const CopyTextureToBufferCmd&>(*cmd));
+                        break;
+                    case Command::EType::UploadTexture:
+                        visitor.Visit(static_cast<const UploadTextureCmd&>(*cmd));
+                        break;
+                    case Command::EType::TextureToTexture:
+                        visitor.Visit(static_cast<const CopyTextureCmd&>(*cmd));
+                        break;
+                    case Command::EType::ShaderDispatch:
+                        visitor.Visit(static_cast<const DispatchCmd&>(*cmd));
+                        break;
+                    case Command::EType::BuildAccel:
+                        break;
+                    case Command::EType::Barrier:
+                        visitor.Visit(static_cast<const BarrierCmd&>(*cmd));
+                        break;
+                    case Command::EType::SetDrawState:
+                        visitor.Visit(static_cast<const SetDrawStateCmd&>(*cmd));
+                        break;
+                    case Command::EType::UpdateDrawState:
+                        visitor.Visit(static_cast<const UpdateDrawStateCmd&>(*cmd));
+                    case Command::EType::SetParams:
+                        visitor.Visit(static_cast<const SetParamsCmd&>(*cmd));
+                        break;
+                    case Command::EType::SetConstants:
+                        visitor.Visit(static_cast<const SetConstantCmd&>(*cmd));
+                        break;
+                    case Command::EType::Custom: break;
+                }
+                vk_allocator.GetCmdList().End();
+            }
+        }
+
+        if (has_cmd) {
             vk_allocator.GetCmdList().End();
         }
         uint64 last_time = last_frame;
@@ -1600,7 +1845,7 @@ namespace Moer::Render {
         auto current_timeline = ++last_frame;
         queue.Signal(timeline, current_timeline, VK_PIPELINE_STAGE_2_COPY_BIT);
         queue.Wait(sc->GetImageReadyFence(idx), VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT);
-        queue.Signal(sc->GetRenderFinishedFence(),VK_PIPELINE_STAGE_2_COPY_BIT);
+        queue.Signal(sc->GetRenderFinishedFence(), VK_PIPELINE_STAGE_2_COPY_BIT);
         queue.Submit(vk_allocator.GetCmdList(), sc->GetInFlightFence(present_timeline));
         sc->Present(queue.GetHandle(), idx);
         {
@@ -1908,13 +2153,46 @@ namespace Moer::Render {
 
         vkCmdCopyBuffer(command_buffer, _src->GetHandle(), _dst->GetHandle(), 1, &copy_region);
     }
-    void VulkanCmdList::CopyData(BufferView& _dst, const void* _data, uint64 _size) {
+    void VulkanCmdList::CopyBufferToTexture(
+        VulkanBuffer*  _src,
+        VulkanTexture* _dst,
+        uint64         _size,
+        uint64         _src_offset,
+        uint3          _dst_offset,
+        uint3          _extent,
+        uint32         _mip_level) {
+        VkImageAspectFlags aspect      = _src->GetResourceType() == RRT_DEPTH ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
+        VkBufferImageCopy  copy_region = {
+             .bufferOffset      = _src_offset,
+             .bufferRowLength   = 0,
+             .bufferImageHeight = 0,
+             .imageSubresource  = {
+                  .aspectMask     = aspect,
+                  .mipLevel       = _mip_level,
+                  .baseArrayLayer = 0,
+                  .layerCount     = 1},
+             .imageOffset = {static_cast<int32_t>(_dst_offset.x), static_cast<int32_t>(_dst_offset.y), static_cast<int32_t>(_dst_offset.z)},
+             .imageExtent = {static_cast<uint32_t>(_extent.x), static_cast<uint32_t>(_extent.y), static_cast<uint32_t>(_extent.z)}};
+
+        vkCmdCopyBufferToImage(command_buffer, _src->GetHandle(), _dst->GetHandle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy_region);
+    }
+    void VulkanCmdList::CopyData(const BufferView& _dst, const void* _data, uint64 _size) {
         auto*        buffer    = static_cast<VulkanBuffer*>(_dst.buffer);
         VmaAllocator allocator = device.GetVmaAllocator();
 
         void* p_data;
         VK_CHECK_RESULT(vmaMapMemory(allocator, buffer->GetAllocation(), &p_data));
         std::memcpy((byte*)p_data + _dst.GetByteOffset(), _data, _size);
+        vmaUnmapMemory(allocator, buffer->GetAllocation());
+    }
+
+    void VulkanCmdList::CopyData(const void* _dst, const BufferView& _src, uint64 _size) {
+        auto*        buffer    = static_cast<VulkanBuffer*>(_src.buffer);
+        VmaAllocator allocator = device.GetVmaAllocator();
+
+        void* p_data;
+        VK_CHECK_RESULT(vmaMapMemory(allocator, buffer->GetAllocation(), &p_data));
+        std::memcpy((byte*)_dst, (byte*)p_data + _src.GetByteOffset(), _size);
         vmaUnmapMemory(allocator, buffer->GetAllocation());
     }
 

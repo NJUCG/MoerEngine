@@ -3,6 +3,7 @@
 //
 #include "misc/STL.h"
 #include "rhi/RHICommand.h"
+#include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
 #include "shader/ShaderPipeline.h"
@@ -26,10 +27,10 @@ namespace Moer::Render {
                                    .Vertex("")
                                    .Pixel("")
                                    .Build<GBufferLayout>(std::move(pso_info));
-        CommandList  cmd_list;
-        cmd_list.SubmitArgs(layout, {}); 
+        CommandList cmd_list;
+        cmd_list.SubmitArgs(layout, {});
         Array<MeshDrawData> draw_data;
-        auto&&       draw_dispatcher = cmd_list.Gfx(layout);
+        auto&&              draw_dispatcher = cmd_list.Gfx(layout);
         draw_dispatcher.Draw(Rect2D{}, std::move(draw_data), ColorAttachment{nullptr});
     }
 
@@ -75,8 +76,8 @@ namespace Moer::Render {
     }
 
     CommandList::DrawDispatcher::DrawDispatcher(
-        RasterPipeline& _pso,
-        CommandList&    _cmd_list,
+        RasterPipeline&  _pso,
+        CommandList&     _cmd_list,
         ArrayArguments&& _args)
         : cmd_list(_cmd_list), pso(_pso), arg_setter(_pso) {
         cmd_list.commands.push_back(MakeUnique<SetParamsCmd>(_pso, std::move(_args)));
@@ -157,7 +158,7 @@ namespace Moer::Render {
     }
 
     void CommandList::CopyFrom(std::span<byte> _data, TextureView _texture) {
-         //
+        //
     }
 
     void CommandList::CopyFrom(std::span<byte> _data, BufferView _buffer) {
@@ -176,17 +177,36 @@ namespace Moer::Render {
         commands.push_back(MakeUnique<SetConstantCmd>(_pso, std::move(_constants)));
     }
 
-    void CommandList::TransitionBuffer(BufferView _buffer, EBufferRuntimeUsageFlags _dst_state, EPassType _pass) {
-        // commands.push_back(MakeUnique<TransitionBufferCmd>(_buffer, _state));
-        //TODO
-    }
-
     void CommandList::AddCallback(std::function<void()>&& _callback) {
         callbacks.emplace_back(std::move(_callback));
     }
 
-    void CommandList::TransitionTexture(TextureView _texture, ETextureStateFlags _dst_state, EPassType _pass) {
-        // commands.push_back(MakeUnique<TransitionTextureCmd>(_texture, _state));
-        //TODO
+    void CommandList::BeginBarriers(uint _read_tex_cnt, uint _write_tex_cnt, uint _read_buf_cnt, uint _write_buf_cnt) {
+        commands.push_back(MakeUnique<BarrierCmd>(_read_tex_cnt, _write_tex_cnt, _read_buf_cnt, _write_buf_cnt));
+        current_barriers = commands.back().get();
     }
+
+    void CommandList::InnerReadBuffer(BufferView _buffer, EBufferState _state) {
+        BarrierCmd* barrier = static_cast<BarrierCmd*>(current_barriers);
+        barrier->ReadBuffer(_buffer.buffer, _state, EPassType::Graphics);
+    }
+    void CommandList::InnerWriteBuffer(BufferView _buffer, EBufferState _state) {
+        BarrierCmd* barrier = static_cast<BarrierCmd*>(current_barriers);
+        barrier->WriteBuffer(_buffer.buffer, _state, EPassType::Graphics);
+    }
+
+    void CommandList::InnerReadTexture(TextureView _texture, ETextureState _state) {
+        BarrierCmd* barrier = static_cast<BarrierCmd*>(current_barriers);
+        barrier->ReadTexture(_texture.texture, _state, EPassType::Graphics);
+    }
+
+    void CommandList::InnerWriteTexture(TextureView _texture, ETextureState _state) {
+        BarrierCmd* barrier = static_cast<BarrierCmd*>(current_barriers);
+        barrier->WriteTexture(_texture.texture, _state, EPassType::Graphics);
+    }
+
+    void CommandList::EndBarriers() {
+        current_barriers = nullptr;
+    }
+
 }// namespace Moer::Render

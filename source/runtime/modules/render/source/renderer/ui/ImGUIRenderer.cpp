@@ -583,8 +583,6 @@ void GUIUploadData(void* _draw_data, CommandList& _cmd_list) {
     auto&       copy_queue = device.GetCommandQueue(EQueueType::Copy);
     auto        vtx_view   = render_buffers->vtx_buffer->GetView();
     auto        idx_view   = render_buffers->idx_buffer->GetView();
-    cmd_list.TransitionBuffer(vtx_view, EBufferRuntimeUsageFlags::TRANSFER_WRITE, EPassType::Copy);
-    cmd_list.TransitionBuffer(idx_view, EBufferRuntimeUsageFlags::TRANSFER_WRITE, EPassType::Copy);
     cmd_list.CopyFrom(std::span<byte>((byte*)vertices.data(), vertices.size() * sizeof(ImDrawVert)), render_buffers->vtx_buffer->GetView());
     cmd_list.CopyFrom(std::span<byte>((byte*)indices.data(), indices.size() * sizeof(ImDrawIdx)), render_buffers->idx_buffer->GetView());
     auto&& submit = cmd_list.Submit().Signal(viewport_data->copy_fence, viewport_data->frame_index);
@@ -845,9 +843,6 @@ void GUIRender(void* _draw_data, CommandList& _cmdlist) {
     auto        vtx_view   = render_buffers->vtx_buffer->GetView();
     auto        idx_view   = render_buffers->idx_buffer->GetView();
     auto        arg_view   = render_buffers->arg_buffer->GetView();
-    cmd_list.TransitionBuffer(vtx_view, EBufferRuntimeUsageFlags::TRANSFER_WRITE, EPassType::Copy);
-    cmd_list.TransitionBuffer(idx_view, EBufferRuntimeUsageFlags::TRANSFER_WRITE, EPassType::Copy);
-    cmd_list.TransitionBuffer(arg_view, EBufferRuntimeUsageFlags::TRANSFER_WRITE, EPassType::Copy);
     cmd_list.CopyFrom(std::span<byte>((byte*)vertices.data(), vertices.size() * sizeof(ImDrawVert)), vtx_view);
     cmd_list.CopyFrom(std::span<byte>((byte*)indices.data(), indices.size() * sizeof(ImDrawIdx)), idx_view);
     cmd_list.CopyFrom(std::span<byte>((byte*)arg_buffer.data(), arg_buffer.size() * sizeof(ImGUIArg)), arg_view);
@@ -1039,11 +1034,10 @@ void CreateFontsTexture() {
             ETextureUsageFlags::SAMPLED);
 
         CommandList cmd_list;
-        cmd_list.TransitionTexture(font_tex, TS_TRANSFER_DST, EPassType::Copy);
         cmd_list.CopyFrom(
             std::span<std::byte>((std::byte*)pixels, upload_size), font_tex);
 
-        cmd_list.TransitionTexture(font_tex, TS_SAMPLED, EPassType::Graphics);
+        cmd_list.Barriers(ReadTexture(font_tex, ETextureState::SAMPLE));
         rd_device.GetCommandQueue(EQueueType::Graphics).Execute(std::move(cmd_list.Submit()));
         rd_device.GetCommandQueue(EQueueType::Graphics).Sync();
         backend_data->font_tex = font_tex;

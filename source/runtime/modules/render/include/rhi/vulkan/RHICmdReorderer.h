@@ -357,6 +357,7 @@ namespace Moer::Render {
                     no_range_handle->view.write_layer = layer;
                 } break;
             }
+            return layer;
         }
 
         int64 SetWrite(uint64 _handle, const Range& _range, ResourceType _type) {
