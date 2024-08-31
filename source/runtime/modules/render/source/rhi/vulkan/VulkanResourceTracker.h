@@ -60,6 +60,7 @@ namespace Moer::Render{
 
         void DispatchBarriers(class VulkanCmdList& _cmd_list);
         void PropagateState();
+        void RestoreState();
         
         //automic state transition
         auto ReadBuffer(VulkanBuffer*, EBufferState, EPassType _type = EPassType::Graphics) -> std::tuple<VkAccessFlags2, VkPipelineStageFlags2>;

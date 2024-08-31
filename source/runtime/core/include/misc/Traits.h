@@ -23,5 +23,6 @@ namespace Moer {
     using int3   = Vector3i;
     using int4   = Vector4i;
     using byte   = std::byte;
+    using ubyte  = uint8;
 };// namespace Moer
 #endif

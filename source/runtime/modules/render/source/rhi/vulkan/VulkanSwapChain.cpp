@@ -323,7 +323,7 @@ namespace Moer::Render {
         for (uint i = 0; i < image_cnt; i++) {
             swapchain_textures[i] = MoerNew(VulkanTexture)(TextureInfo{
                                                                ETextureDimension::TEX_2D,
-                                                               ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::COLOR_ATTACHMENT,
+                                                               ETextureUsageFlags::PRESENT,
                                                                format,
                                                                EClearAttachment{},
                                                                {size.x, size.y, 1},

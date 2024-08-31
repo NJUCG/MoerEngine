@@ -12,6 +12,10 @@ namespace {
         ~Disposer() {
             dispose_func();
         }
+        Disposer() = delete;
+        Disposer(const Disposer&) = delete;
+        Disposer& operator=(const Disposer&) = delete;
+        Disposer(Disposer&&) = default;
     };
 
     template<typename T>

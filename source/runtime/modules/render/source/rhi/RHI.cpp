@@ -110,6 +110,9 @@ namespace Moer::Render {
                 break;
         }
     }
+    void RenderDevice::Dispose() {
+        Get().impl.reset();
+    }
     CommandQueue& RenderDevice::GetCommandQueue(EQueueType _type) {
         return Get().impl->GetCommandQueue(_type);
     }

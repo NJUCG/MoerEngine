@@ -712,7 +712,7 @@ namespace Moer::Render {
         BufferInfo info;
     };
 
-    struct TextureView {
+    struct RENDER_API TextureView {
     public:
         TextureView() = default;
         TextureView(class Texture*);

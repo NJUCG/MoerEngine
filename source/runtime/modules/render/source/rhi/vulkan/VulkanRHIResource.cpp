@@ -1451,11 +1451,19 @@ uint EncodeViewKey(uint _mip_level, uint _mip_cnt){
 }
 VulkanTexture::VulkanTexture(const TextureInfo& _info, VulkanDevice* _device,VkImage _image)
     : Texture(_info), VulkanDeviceObject(_device) {
-        if (_image != VK_NULL_HANDLE) {
-            m_alloc.image = _image;
-            m_alloc.alloc = {};
-            return;
-        }
+    state = SubResourceStates{
+        .mip_level = 0,
+        .mip_cnt = _info.num_mips,
+        .access = VK_ACCESS_2_NONE, 
+        .layout = VK_IMAGE_LAYOUT_UNDEFINED, 
+        .stage = VK_PIPELINE_STAGE_2_NONE_KHR};
+        b_present = (_info.usage & ETextureUsageFlags::PRESENT) == ETextureUsageFlags::PRESENT;
+
+    if (_image != VK_NULL_HANDLE) {
+        m_alloc.image = _image;
+        m_alloc.alloc = {};
+        return;
+    }
     VkImageCreateInfo image_create_info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     image_create_info.flags         = 0;
     image_create_info.imageType     = VulkanEnumTranslator::METoVKImageType(_info.dimension);
@@ -1465,7 +1473,8 @@ VulkanTexture::VulkanTexture(const TextureInfo& _info, VulkanDevice* _device,VkI
     image_create_info.arrayLayers   = _info.array_size;
     image_create_info.samples       = VulkanEnumTranslator::METoVKSampleCountFlagBits(_info.num_samples);
     image_create_info.tiling        = VK_IMAGE_TILING_OPTIMAL;
-    image_create_info.usage         = VulkanEnumTranslator::METoVKImageUsageFlags(_info.usage);
+    image_create_info.usage         = VulkanEnumTranslator::METoVKImageUsageFlags(_info.usage) | 
+        VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     image_create_info.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
     image_create_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
@@ -1516,7 +1525,8 @@ VulkanBuffer::~VulkanBuffer(){
 VulkanBuffer::VulkanBuffer(const BufferInfo& _info, VulkanDevice& _device): Buffer(_info), VulkanDeviceObject(&_device){
     VkBufferCreateInfo buffer_create_info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
     buffer_create_info.size  = _info.size * _info.stride;
-    buffer_create_info.usage = VulkanEnumTranslator::METoVKBufferUsageFlags( _info.usage);
+    buffer_create_info.usage = VulkanEnumTranslator::METoVKBufferUsageFlags( _info.usage) |
+                               VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     buffer_create_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     buffer_create_info.flags = 0;
     buffer_create_info.pNext = nullptr;

@@ -452,7 +452,7 @@ namespace Moer::Render {
         static VkIndexType        METoVKIndexType(EIndexElementType _type);
         static VkBufferUsageFlags METoVKBufferUsageFlags(VulkanDevice* _device, EBufferUsageFlags _me_flags);
         VkAccessFlags2            m_access_flags = VK_ACCESS_2_NONE;
-        VkPipelineStageFlags2     m_stage_flags = VK_PIPELINE_STAGE_2_NONE;
+        VkPipelineStageFlags2     m_stage_flags  = VK_PIPELINE_STAGE_2_NONE;
 
     private:
         friend class TempBufferAllocator;
@@ -493,7 +493,10 @@ namespace Moer::Render {
             VkPipelineStageFlags2 stage;
         };
         Array<SubResourceStates> m_subresource_states;
-        SubResourceStates state;
+        SubResourceStates        state;
+        bool                     b_has_init_state : 1 = false;
+        bool                     b_present : 1        = false;
+        VkImageLayout            GetPreferredLayout() { return VK_IMAGE_LAYOUT_GENERAL; };
 
     private:
         struct TextureAlloc {

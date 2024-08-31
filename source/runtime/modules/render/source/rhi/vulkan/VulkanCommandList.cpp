@@ -1765,12 +1765,12 @@ namespace Moer::Render {
             if (cmd_list == nullptr) {
                 continue;
             }
-            for (const auto* cmdnode = cmd_list; cmdnode != nullptr; cmdnode = cmd_list->next) {
+            for (const auto* cmdnode = cmd_list; cmdnode != nullptr; cmdnode = cmdnode->next) {
                 preprocessor.VisitCmd(cmdnode->cmd);
             }
             tracker.ResolveBarriers();
             tracker.DispatchBarriers(vk_allocator.GetCmdList());
-            for (const auto* cmdnode = cmd_list; cmdnode != nullptr; cmdnode = cmd_list->next) {
+            for (const auto* cmdnode = cmd_list; cmdnode != nullptr; cmdnode = cmdnode->next) {
                 const auto* cmd = cmdnode->cmd;
                 switch (cmd->Type()) {
                     case Command::EType::UploadBuffer:
@@ -1819,8 +1819,10 @@ namespace Moer::Render {
         }
 
         if (has_cmd) {
+            tracker.RestoreState();
+            tracker.DispatchBarriers(vk_allocator.GetCmdList());
             vk_allocator.GetCmdList().End();
-            tracker.PropagateState();
+
         }
         uint64 last_time = last_frame;
         if (_submit.cmds.empty()) {
@@ -1879,15 +1881,18 @@ namespace Moer::Render {
             vk_tracker.DispatchBarriers(vk_cmd_list);
             //copy
             //todo: need transaction
-            vk_cmd_list.CopyTexture(vk_src_tex, swaphchain_tex, _view.texture->GetExtent(), {0, 0, 0}, {0, 0, 0}, 0, 0);
+            vk_cmd_list.CopyTexture(vk_src_tex, swaphchain_tex, _view.extent, {0, 0, 0}, {0, 0, 0}, 0, 0);
             vk_tracker.RecordState(swaphchain_tex,
                                    VK_ACCESS_2_NONE,
                                    VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
                                    VK_PIPELINE_STAGE_2_COPY_BIT);
             vk_tracker.ResolveBarriers();
             vk_tracker.DispatchBarriers(vk_cmd_list);
+
+            vk_tracker.RestoreState();
+            vk_tracker.DispatchBarriers(vk_cmd_list);
             vk_cmd_list.End();
-            vk_tracker.PropagateState();
+            // vk_tracker.PropagateState();
         }
 
         auto current_timeline = ++last_frame;
