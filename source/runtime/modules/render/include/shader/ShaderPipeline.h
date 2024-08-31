@@ -110,6 +110,7 @@ namespace Moer::Render {
     };
 
     struct ArrayArguments {
+        // ArrayArguments() = default;
         ArrayArguments(uint _arg_size) : args(_arg_size) {
         }
         ArrayArguments(ArrayArguments&& _other) {

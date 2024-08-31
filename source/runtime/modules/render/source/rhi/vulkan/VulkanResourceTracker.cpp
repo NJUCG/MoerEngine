@@ -28,7 +28,7 @@ namespace Moer::Render {
      * @param _usage 
      * @return std::tuple<VkAccessFlags2, VkPipelineStageFlags2> 
      */
-    auto VkTracker::ReadBuffer(VulkanBuffer* _buffer, EBufferState _state) -> std::tuple<VkAccessFlags2, VkPipelineStageFlags2> {
+    auto VkTracker::ReadBuffer(VulkanBuffer* _buffer, EBufferState _state, EPassType _type) -> std::tuple<VkAccessFlags2, VkPipelineStageFlags2> {
         static constexpr VkAccessFlags2 gfx_rules[] = {
             VK_ACCESS_2_NONE,
             VK_ACCESS_2_TRANSFER_READ_BIT,
@@ -50,7 +50,7 @@ namespace Moer::Render {
         return {gfx_rules[static_cast<uint32>(_state)], stage_rules[static_cast<uint32>(_state)]};
     }
 
-    auto VkTracker::WriteBuffer(VulkanBuffer* _buffer, EBufferState _state) -> std::tuple<VkAccessFlags2, VkPipelineStageFlags2> {
+    auto VkTracker::WriteBuffer(VulkanBuffer* _buffer, EBufferState _state, EPassType _type) -> std::tuple<VkAccessFlags2, VkPipelineStageFlags2> {
         static constexpr VkAccessFlags2 gfx_rules[] = {
             VK_ACCESS_2_NONE,
             VK_ACCESS_2_TRANSFER_WRITE_BIT,
@@ -71,7 +71,8 @@ namespace Moer::Render {
 
         return {gfx_rules[static_cast<uint32>(_state)], stage_rules[static_cast<uint32>(_state)]};
     }
-    static constexpr VkPipelineStageFlags2 gfx_tex_read_stage_rules[] = {
+    static constexpr VkPipelineStageFlags2 tex_read_stage_rules[] = {
+        //GFX PASS STAGES
         VK_PIPELINE_STAGE_2_NONE,
         VK_PIPELINE_STAGE_2_COPY_BIT,
         VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
@@ -79,9 +80,8 @@ namespace Moer::Render {
         VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
         VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
         VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-        VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT};
-
-    static constexpr VkPipelineStageFlags2 cs_tex_read_stage_rules[] = {
+        VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+        //COMPUTE PASS STAGES
         VK_PIPELINE_STAGE_2_NONE,
         VK_PIPELINE_STAGE_2_TRANSFER_BIT,
         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -91,7 +91,8 @@ namespace Moer::Render {
         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT};
 
-    static constexpr VkPipelineStageFlagBits2 gfx_tex_write_stage_rules[] = {
+    static constexpr VkPipelineStageFlagBits2 tex_write_stage_rules[] = {
+        //GFX PASS STAGES
         VK_PIPELINE_STAGE_2_NONE,
         VK_PIPELINE_STAGE_2_COPY_BIT,
         VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
@@ -99,9 +100,18 @@ namespace Moer::Render {
         VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
         VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
         VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-        VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT};
+        VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+        //COMPUTE PASS STAGES
+        VK_PIPELINE_STAGE_2_NONE,
+        VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT};
 
-    auto VkTracker::ReadTexture(VulkanTexture* _texture, ETextureState _state) -> std::tuple<VkAccessFlags2, VkImageLayout, VkPipelineStageFlags2> {
+    auto VkTracker::ReadTexture(VulkanTexture* _texture, ETextureState _state, EPassType _type) -> std::tuple<VkAccessFlags2, VkImageLayout, VkPipelineStageFlags2> {
 
         static constexpr VkAccessFlags2 gfx_rules[] = {
             VK_ACCESS_2_NONE,
@@ -109,7 +119,6 @@ namespace Moer::Render {
             VK_ACCESS_2_SHADER_READ_BIT,
             VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT,
             VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
-            VK_ACCESS_2_SHADER_READ_BIT,
             VK_ACCESS_2_SHADER_READ_BIT,
             VK_ACCESS_2_SHADER_SAMPLED_READ_BIT};
 
@@ -119,19 +128,15 @@ namespace Moer::Render {
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
             VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL,
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-        if (pass_type == EPassType::Graphics) {
-            return {gfx_rules[static_cast<uint32>(_state)], layout_rules[static_cast<uint32>(_state)], gfx_tex_read_stage_rules[static_cast<uint32>(_state)]};
-        }
-        if (pass_type == EPassType::Compute) {
-            return {gfx_rules[static_cast<uint32>(_state)], layout_rules[static_cast<uint32>(_state)], cs_tex_read_stage_rules[static_cast<uint32>(_state)]};
-        }
-        assert(false && "Invalid pass type");
-        return {gfx_rules[static_cast<uint32>(_state)], layout_rules[static_cast<uint32>(_state)], gfx_tex_read_stage_rules[static_cast<uint32>(_state)]};
+
+        auto index      = static_cast<uint32>(_state);
+        auto pass_index = static_cast<uint32>(_state) + uint32(ETextureState::Num) * uint32(_type);
+        return {gfx_rules[index], layout_rules[index], tex_read_stage_rules[pass_index]};
     }
 
-    auto VkTracker::WriteTexture(VulkanTexture* _texture, ETextureState _state) -> std::tuple<VkAccessFlags2, VkImageLayout, VkPipelineStageFlags2> {
+    auto VkTracker::WriteTexture(VulkanTexture* _texture, ETextureState _state, EPassType _type) -> std::tuple<VkAccessFlags2, VkImageLayout, VkPipelineStageFlags2> {
         static constexpr VkAccessFlags2 gfx_rules[] = {
             VK_ACCESS_2_NONE,
             VK_ACCESS_2_TRANSFER_WRITE_BIT,
@@ -139,8 +144,7 @@ namespace Moer::Render {
             VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
             VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
             VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
-            VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
-            VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT};
+            VK_ACCESS_2_NONE};
 
         static constexpr VkImageLayout layout_rules[] = {
             VK_IMAGE_LAYOUT_UNDEFINED,
@@ -150,14 +154,12 @@ namespace Moer::Render {
             VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
             VK_IMAGE_LAYOUT_GENERAL,
             VK_IMAGE_LAYOUT_UNDEFINED};// Invalid
-        if (pass_type == EPassType::Graphics) {
-            return {gfx_rules[static_cast<uint32>(_state)], layout_rules[static_cast<uint32>(_state)], gfx_tex_write_stage_rules[static_cast<uint32>(_state)]};
-        }
-        if (pass_type == EPassType::Compute) {
-            return {gfx_rules[static_cast<uint32>(_state)], layout_rules[static_cast<uint32>(_state)], cs_tex_read_stage_rules[static_cast<uint32>(_state)]};
-        }
-        return {gfx_rules[static_cast<uint32>(_state)], layout_rules[static_cast<uint32>(_state)], gfx_tex_write_stage_rules[static_cast<uint32>(_state)]};
+
+        auto index      = static_cast<uint32>(_state);
+        auto pass_index = static_cast<uint32>(_state) + uint32(ETextureState::Num) * uint32(_type);
+        return {gfx_rules[index], layout_rules[index], tex_write_stage_rules[pass_index]};
     }
+
     void VkTracker::RecordState(VulkanBuffer* _buffer, VkAccessFlagBits2 _access, VkPipelineStageFlagBits2 _stage) {
         if (auto it = buffer_states.find(_buffer); it != buffer_states.end()) {
             auto& state = it->second;

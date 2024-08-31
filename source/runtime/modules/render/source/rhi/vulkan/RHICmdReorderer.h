@@ -7,6 +7,10 @@
 #include "rhi/RHICommand.h"
 #include <limits>
 #include <type_traits>
+#include <variant>
+#include "../RHIImpl.h"
+#include "VulkanDevice.h"
+#include "rhi/RHIResource.h"
 /**
  * @brief Copy From Luisa Runtime(LC) src/backends/common/command_reorder_visitor.h with respect
  * 
@@ -235,7 +239,8 @@ namespace Moer::Render {
                 auto&& value = iter.first->second;
                 using TValue = std::remove_pointer_t<std::remove_reference_t<decltype(value)>>;
                 if (iter.second) {
-                    TValue* value = m_arena.Malloc<TValue>();
+                    TValue* value_ptr = m_arena.Malloc<TValue>();
+                    value             = value_ptr;
                     new (value) TValue();
                     value->handle = _handle;
                     value->type   = _type;
@@ -245,12 +250,30 @@ namespace Moer::Render {
 
             switch (_type) {
                 case ResourceType::Texture_Buffer:
+                    return func_emplace(m_range_handles);
                 case ResourceType::Mesh:
                 case ResourceType::Bindless:
                 case ResourceType::Accel:
                     return func_emplace(m_no_range_handles);
                 default: {
                     return func_emplace(m_range_handles);
+                }
+            }
+        }
+
+        //Important: sometimes we use barrier as previous states, last read-write already set by the last command, so we just read
+        int64 GetLastLayer(uint64 _handle, const Range& _range, ResourceType _type) {
+            auto* handle = GetHandle(_handle, _type);
+            switch (_type) {
+                case ResourceType::Texture_Buffer: {
+                    auto* range_handle = static_cast<RangeHandle*>(handle);
+                    return std::max((range_handle->GetMaxReadLayer(_range) - 1), 0ll);
+                }
+                case ResourceType::Mesh:
+                case ResourceType::Bindless:
+                case ResourceType::Accel: {
+                    auto* no_range_handle = static_cast<NoRangeHandle*>(handle);
+                    return std::max(no_range_handle->view.read_layer - 1, 0ll);
                 }
             }
         }
@@ -286,7 +309,7 @@ namespace Moer::Render {
             m_cmd_lists[_layer] = ptr;
         }
 
-        uint64 SetRead(ResourceHandle* _handle, const Range& _range) {
+        int64 SetRead(ResourceHandle* _handle, const Range& _range) {
             int64 layer = 0;
             switch (_handle->type) {
 
@@ -303,9 +326,10 @@ namespace Moer::Render {
                     no_range_handle->view.read_layer = layer;
                 } break;
             }
+            return layer;
         }
 
-        uint64 SetRead(uint64 _handle, const Range& _range, ResourceType _type) {
+        int64 SetRead(uint64 _handle, const Range& _range, ResourceType _type) {
             auto* handle = GetHandle(_handle, _type);
             return SetRead(handle, _range);
         }
@@ -397,8 +421,8 @@ namespace Moer::Render {
                     auto* no_range_handle             = static_cast<NoRangeHandle*>(write_handle);
                     layer                             = GetLastLayerWrite(no_range_handle);
                     no_range_handle->view.write_layer = layer;
-                } default:
-                 {
+                }
+                default: {
                     auto* range_handle = static_cast<RangeHandle*>(write_handle);
                     layer              = GetLastLayerWrite(range_handle, _write_range);
                     range_handle->EmplaceWriteLayer(_write_range, layer);
@@ -422,7 +446,154 @@ namespace Moer::Render {
             return layer;
         }
 
-        void Visit(){}
+        void VisitCmd(const UploadBufferCmd* _cmd) {
+            AddCmd(_cmd, SetWrite(_cmd->Handle(), Range(_cmd->Offset(), _cmd->ByteSize()), ResourceType::Texture_Buffer));
+        }
+
+        void VisitCmd(const CopyBackBufferCmd* _cmd) {
+            AddCmd(_cmd, SetRead(_cmd->Handle(), Range(_cmd->Offset(), _cmd->ByteSize()), ResourceType::Texture_Buffer));
+        }
+        void VisitCmd(const CopyBufferCmd* _cmd) {
+            AddCmd(_cmd, SetRW(_cmd->SrcHandle(), Range(_cmd->SrcOffset(), _cmd->ByteSize()), ResourceType::Texture_Buffer, _cmd->DstHandle(), Range(_cmd->DstOffset(), _cmd->ByteSize()), ResourceType::Texture_Buffer));
+        }
+        void VisitCmd(const CopyTextureCmd* _cmd) {
+            AddCmd(_cmd, SetRW(_cmd->SrcHandle(), Range(_cmd->SrcMipLevel()), ResourceType::Texture_Buffer, _cmd->DstHandle(), Range(_cmd->DstMipLevel()), ResourceType::Texture_Buffer));
+        }
+        void VisitCmd(const CopyBufferToTextureCmd* _cmd) {
+            AddCmd(_cmd, SetRW(_cmd->SrcHandle(), Range(_cmd->SrcOffset(), _cmd->ByteSize()), ResourceType::Texture_Buffer, _cmd->DstHandle(), Range(_cmd->MipLevel()), ResourceType::Texture_Buffer));
+        }
+        void VisitCmd(const CopyTextureToBufferCmd* _cmd) {
+            AddCmd(_cmd, SetRW(_cmd->SrcHandle(), Range(_cmd->MipLevel()), ResourceType::Texture_Buffer, _cmd->DstHandle(), Range(_cmd->DstOffset(), _cmd->ByteSize()), ResourceType::Texture_Buffer));
+        }
+
+        void VisitCmd(const UploadTextureCmd* _cmd) {
+            AddCmd(_cmd, SetWrite(_cmd->Handle(), Range(_cmd->MipLevel()), ResourceType::Texture_Buffer));
+        }
+
+        void VisitCmd(const BarrierCmd* _cmd) {
+            int64 layer = 0;
+            for (const auto& [handle, state, pass_type, offset, size] : _cmd->ReadBuffers()) {
+                layer = std::max(
+                    SetRead(handle, Range(offset, size), ResourceType::Texture_Buffer),
+                    layer);
+            }
+            for (const auto& [handle, state, pass_type, mip_level, mip_cnt] : _cmd->ReadTextures()) {
+                layer = std::max(
+                    SetRead(handle, Range(mip_level, mip_cnt), ResourceType::Texture_Buffer),
+                    layer);
+            }
+
+            for (auto& [handle, state, pass_type, offset, size] : _cmd->WriteBuffers()) {
+                layer = std::max(
+                    SetWrite(handle, Range(offset, size), ResourceType::Texture_Buffer),
+                    layer);
+            }
+
+            for (const auto& [handle, state, pass_type, mip_level, mip_cnt] : _cmd->WriteTextures()) {
+                layer = std::max(
+                    SetWrite(handle, Range(mip_level, mip_cnt), ResourceType::Texture_Buffer),
+                    layer);
+            }
+            AddCmd(_cmd, layer);
+        }
+
+        void VisitCmd(const SetDrawStateCmd* _cmd) {
+            int64 layer = 0;
+            auto  func  = [&](const TArg& _arg) {
+                std::visit([&](auto&& _arg) {
+                    int64 temp_layer = 0;
+                    using T          = std::decay_t<decltype(_arg)>;
+                    if constexpr (std::is_same_v<T, BufferView>) {
+                        temp_layer = GetLastLayer((uint64)(_arg.GetBuffer()), Range(_arg.GetByteOffset(), _arg.GetByteSize()), ResourceType::Texture_Buffer);
+                    } else if constexpr (std::is_same_v<T, TextureView>) {
+                        temp_layer = GetLastLayer(uint64(_arg.texture), Range(_arg.mip_level, _arg.num_mips), ResourceType::Texture_Buffer);
+                    }
+                    layer = std::max(layer, temp_layer);
+                },
+                           _arg);
+            };
+            _cmd->IterateArgs(func);
+            //depth and render targets
+            const auto& pass_info = _cmd->RenderPassInfo();
+            if (pass_info.depth_attachment.Valid()) {
+                const auto& depth          = pass_info.depth_attachment;
+                auto        depth_store_op = GetStoreOp(GetDepthAction(depth.action));
+                if (GetLoadOp(GetDepthAction(depth.action)) == EAttachmentLoadOp::LOAD) {
+                    layer = std::max(SetRead((uint64)(depth.target), Range(0), ResourceType::Texture_Buffer), layer);
+                }
+                if (depth_store_op == EAttachmentStoreOp::STORE) {
+                    layer = std::max(SetWrite((uint64)(depth.target), Range(0), ResourceType::Texture_Buffer), layer);
+                }
+            }
+            for (const auto& target : pass_info.color_attachments) {
+                auto color_store_op = GetStoreOp(target.action);
+                if (GetLoadOp(target.action) == EAttachmentLoadOp::LOAD) {
+                    layer = std::max(SetRead((uint64)(target.target), Range(0), ResourceType::Texture_Buffer), layer);
+                }
+                if (color_store_op == EAttachmentStoreOp::STORE) {
+                    layer = std::max(SetWrite((uint64)(target.target), Range(0), ResourceType::Texture_Buffer), layer);
+                }
+            }
+            AddCmd(_cmd, layer);
+        }
+
+        void VisitCmd(const DispatchCmd* _cmd) {
+            int64 layer = 0;
+            auto  func  = [&](const TArg& _arg) {
+                std::visit([&](auto&& _arg) {
+                    int64 temp_layer = 0;
+                    using T          = std::decay_t<decltype(_arg)>;
+                    if constexpr (std::is_same_v<T, BufferView>) {
+                        temp_layer = GetLastLayer((uint64)(_arg.GetBuffer()), Range(_arg.GetByteOffset(), _arg.GetByteSize()), ResourceType::Texture_Buffer);
+                    } else if constexpr (std::is_same_v<T, TextureView>) {
+                        temp_layer = GetLastLayer(uint64(_arg.texture), Range(_arg.mip_level, _arg.num_mips), ResourceType::Texture_Buffer);
+                    }
+                    layer = std::max(layer, temp_layer);
+                },
+                           _arg);
+            };
+            _cmd->IterateArgs(func);
+            AddCmd(_cmd, m_dispatch_layer);
+        }
+
+        void AcceptCmd(const Command* _cmd) {
+            assert(_cmd && "Invalid Command");
+            switch (_cmd->Type()) {
+                case Command::EType::UploadBuffer:
+                    VisitCmd(static_cast<const UploadBufferCmd*>(_cmd));
+                    break;
+                case Command::EType::CopyBackBuffer:
+                    VisitCmd(static_cast<const CopyBackBufferCmd*>(_cmd));
+                    break;
+                case Command::EType::BufferToBuffer:
+
+                    VisitCmd(static_cast<const CopyBufferCmd*>(_cmd));
+                    break;
+                case Command::EType::BufferToTexture:
+                    VisitCmd(static_cast<const CopyBufferToTextureCmd*>(_cmd));
+                    break;
+                case Command::EType::TextureToBuffer:
+                    VisitCmd(static_cast<const CopyTextureToBufferCmd*>(_cmd));
+                    break;
+                case Command::EType::UploadTexture:
+                    VisitCmd(static_cast<const UploadTextureCmd*>(_cmd));
+                    break;
+                case Command::EType::TextureToTexture:
+                    VisitCmd(static_cast<const CopyTextureCmd*>(_cmd));
+                    break;
+                case Command::EType::ShaderDispatch:
+                    VisitCmd(static_cast<const DispatchCmd*>(_cmd));
+                    break;
+                case Command::EType::Barrier:
+                    VisitCmd(static_cast<const BarrierCmd*>(_cmd));
+                    break;
+                case Command::EType::SetDrawState:
+                    VisitCmd(static_cast<const SetDrawStateCmd*>(_cmd));
+                    break;
+                default:
+                    assert(false && "Command Type Not Supported for Reorder");
+            }
+        }
     };
 
 }// namespace Moer::Render

@@ -643,12 +643,12 @@ namespace Moer::Render{
         RENDER_TARGET,
         DEPTH_STENCIL,
         UNORDERED_ACCESS,
-        SAMPLE
+        SAMPLE,
+        Num
     };
 }
 
 enum class EPassType {
-    None,
     Graphics,
     Compute,
     Raytracing,

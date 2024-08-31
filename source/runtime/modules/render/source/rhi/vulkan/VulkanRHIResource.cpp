@@ -1515,7 +1515,7 @@ VulkanBuffer::~VulkanBuffer(){
 }
 VulkanBuffer::VulkanBuffer(const BufferInfo& _info, VulkanDevice& _device): Buffer(_info), VulkanDeviceObject(&_device){
     VkBufferCreateInfo buffer_create_info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-    buffer_create_info.size  = _info.size;
+    buffer_create_info.size  = _info.size * _info.stride;
     buffer_create_info.usage = VulkanEnumTranslator::METoVKBufferUsageFlags( _info.usage);
     buffer_create_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     buffer_create_info.flags = 0;
@@ -1811,7 +1811,7 @@ void VulkanRHIViewport::ResetResources() {
         swapchain_images[index]->SetTrackInfo(
             {},
             TS_UNDEFINED,
-            EPassType::None
+            EPassType::Graphics
         );
         EPixelFormat swapchain_format = VulkanEnumTranslator::VKToMEFormat(swapchain->image_format);
 

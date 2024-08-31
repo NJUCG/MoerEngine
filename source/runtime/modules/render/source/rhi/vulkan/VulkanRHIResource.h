@@ -451,8 +451,8 @@ namespace Moer::Render {
 
         static VkIndexType        METoVKIndexType(EIndexElementType _type);
         static VkBufferUsageFlags METoVKBufferUsageFlags(VulkanDevice* _device, EBufferUsageFlags _me_flags);
-        VkAccessFlags2            m_access_flags;
-        VkPipelineStageFlags2     m_stage_flags;
+        VkAccessFlags2            m_access_flags = VK_ACCESS_2_NONE;
+        VkPipelineStageFlags2     m_stage_flags = VK_PIPELINE_STAGE_2_NONE;
 
     private:
         friend class TempBufferAllocator;

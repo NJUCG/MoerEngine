@@ -62,10 +62,10 @@ namespace Moer::Render{
         void PropagateState();
         
         //automic state transition
-        auto ReadBuffer(VulkanBuffer*, EBufferState) -> std::tuple<VkAccessFlags2, VkPipelineStageFlags2>;
-        auto WriteBuffer(VulkanBuffer*, EBufferState) -> std::tuple<VkAccessFlags2, VkPipelineStageFlags2>;
-        auto ReadTexture(VulkanTexture*, ETextureState) -> std::tuple<VkAccessFlags2, VkImageLayout, VkPipelineStageFlags2>;
-        auto WriteTexture(VulkanTexture*, ETextureState) -> std::tuple<VkAccessFlags2, VkImageLayout, VkPipelineStageFlags2>;
+        auto ReadBuffer(VulkanBuffer*, EBufferState, EPassType _type = EPassType::Graphics) -> std::tuple<VkAccessFlags2, VkPipelineStageFlags2>;
+        auto WriteBuffer(VulkanBuffer*, EBufferState, EPassType _type = EPassType::Graphics) -> std::tuple<VkAccessFlags2, VkPipelineStageFlags2>;
+        auto ReadTexture(VulkanTexture*, ETextureState, EPassType _type = EPassType::Graphics) -> std::tuple<VkAccessFlags2, VkImageLayout, VkPipelineStageFlags2>;
+        auto WriteTexture(VulkanTexture*, ETextureState, EPassType _type = EPassType::Graphics) -> std::tuple<VkAccessFlags2, VkImageLayout, VkPipelineStageFlags2>;
         private:
         EPassType pass_type;
         Array<VkBufferMemoryBarrier2> buffer_barriers;

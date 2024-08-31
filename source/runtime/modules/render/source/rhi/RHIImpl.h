@@ -6,17 +6,86 @@
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
-#include "rhi/vulkan/RHICmdReorderer.h"
 #include "shader/ShaderPipeline.h"
 #include <variant>
 namespace Moer::Render {
+    static uint64 GetSizeFromImageFormat(EPixelFormat _format, const uint3 _size) {
+        switch (_format) {
+            case PF_R8G8B8A8_SRGB:
+            case PF_R8G8B8A8_UNORM:
+            case PF_R8G8B8A8_UINT:
+            case PF_R8G8B8A8_SNORM:
+            case PF_R8G8B8A8_SINT:
+                return _size.x * _size.y * _size.z * 4;
+                break;
+            case PF_R32G32B32A32_SFLOAT:
+            case PF_R32G32B32A32_UINT:
+            case PF_R32G32B32A32_SINT:
+                return _size.x * _size.y * _size.z * 16;
+                break;
+            case PF_R32G32_SFLOAT:
+            case PF_R32G32_UINT:
+            case PF_R32G32_SINT:
+                return _size.x * _size.y * _size.z * 8;
+                break;
+            case PF_R32_SFLOAT:
+            case PF_R32_UINT:
+            case PF_R32_SINT:
+                return _size.x * _size.y * _size.z * 4;
+                break;
+            case PF_R16G16B16A16_SFLOAT:
+            case PF_R16G16B16A16_UNORM:
+            case PF_R16G16B16A16_UINT:
+            case PF_R16G16B16A16_SNORM:
+            case PF_R16G16B16A16_SINT:
+                return _size.x * _size.y * _size.z * 8;
+                break;
+            case PF_R16G16_SFLOAT:
+            case PF_R16G16_UNORM:
+            case PF_R16G16_UINT:
+            case PF_R16G16_SNORM:
+            case PF_R16G16_SINT:
+                return _size.x * _size.y * _size.z * 4;
+                break;
+            case PF_R16_SFLOAT:
+            case PF_R16_UNORM:
+            case PF_R16_UINT:
+            case PF_R16_SNORM:
+            case PF_R16_SINT:
+                return _size.x * _size.y * _size.z * 2;
+                break;
+            case PF_R8G8B8_SRGB:
+            case PF_R8G8B8_UNORM:
+            case PF_R8G8B8_UINT:
+            case PF_R8G8B8_SNORM:
+            case PF_R8G8B8_SINT:
+                return _size.x * _size.y * _size.z * 3;
+                break;
+            case PF_R8G8_SRGB:
+            case PF_R8G8_UNORM:
+            case PF_R8G8_UINT:
+            case PF_R8G8_SNORM:
+            case PF_R8G8_SINT:
+                return _size.x * _size.y * _size.z * 2;
+                break;
+            case PF_R8_SRGB:
+            case PF_R8_UNORM:
+            case PF_R8_UINT:
+            case PF_R8_SNORM:
+            case PF_R8_SINT:
+                return _size.x * _size.y * _size.z;
+                break;
+            default:
+                assert(false && "not support format");
+        }
+        return 0;
+    }
     struct UploadBufferCmd : public Command {
     private:
-        uint64      handle{};
-        uint64      offset{};
-        uint64      byte_size{};
-        const void* data{};
-
+        uint64                                           handle{};
+        uint64                                           offset{};
+        uint64                                           byte_size{};
+        std::variant<Array<byte>, std::span<const byte>> storage;
         UploadBufferCmd() : Command(EType::UploadBuffer) {}
 
     public:
@@ -24,12 +93,36 @@ namespace Moer::Render {
             uint64      _handle,
             uint64      _offset,
             uint64      _byte_size,
-            const void* _data) : Command(EType::UploadBuffer), handle(_handle), offset(_offset), byte_size(_byte_size), data(_data) {}
+            const void* _data) : Command(EType::UploadBuffer),
+                                 handle(_handle),
+                                 offset(_offset),
+                                 byte_size(_byte_size),
+                                 storage(std::span<const byte>(reinterpret_cast<const byte*>(_data), _byte_size)) {}
+        
+        UploadBufferCmd(
+            uint64      _handle,
+            uint64      _offset,
+            uint64      _byte_size,
+            Array<byte>&& _data) : Command(EType::UploadBuffer),
+                                   handle(_handle),
+                                   offset(_offset),
+                                   byte_size(_byte_size),
+                                   storage(std::move(_data)) {}
+        
         EQueueType GetQueueType() const override { return EQueueType::Copy; }
         auto       Handle() const { return handle; }
         auto       Offset() const { return offset; }
         auto       ByteSize() const { return byte_size; }
-        auto       Data() const { return data; }
+        auto       Data() const {
+            return std::visit([](auto&& _data) -> std::span<const byte> {
+                if constexpr (std::is_same_v<std::decay_t<decltype(_data)>, Array<byte>>) {
+                    return std::span<const byte>(_data.data(), _data.size());
+                } else {
+                    return _data;
+                }
+            },
+                              storage);
+        }
     };
 
     struct CopyBackBufferCmd : public Command {
@@ -90,9 +183,9 @@ namespace Moer::Render {
         uint64       dst_handle{};
         uint         src_mip_level{};
         uint         dst_mip_level{};
-        uint         src_offset[3]{};
-        uint         dst_offset[3]{};
-        uint         size[3]{};
+        uint3         src_offset{};
+        uint3         dst_offset{};
+        uint3         size{};
 
     private:
         CopyTextureCmd() : Command(EType::TextureToTexture) {}
@@ -135,8 +228,8 @@ namespace Moer::Render {
         uint64       src_handle{};
         uint64       dst_handle{};
         uint         src_offset{};
-        uint         dst_offset[3]{};
-        uint         size[3]{};
+        uint3         dst_offset{};
+        uint3         size{};
         uint         mip_level{};
 
     private:
@@ -177,9 +270,9 @@ namespace Moer::Render {
         EPixelFormat format{};
         uint64       src_handle{};
         uint64       dst_handle{};
-        uint         src_offset[3]{};
+        uint3         src_offset{};
         uint         dst_offset{};
-        uint         size[3]{};
+        uint3         size{};
         uint         mip_level{};
 
     private:
@@ -220,9 +313,10 @@ namespace Moer::Render {
         EPixelFormat format{};
         uint64       handle{};
         uint         mip_level{};
-        uint3         offset{};
-        uint3         size{};
-        const void*  data{};
+        uint3        offset{};
+        uint3        size{};
+        // const void*  data{};
+        std::variant<std::span<const byte>, Array<byte>> storage;
 
     private:
         UploadTextureCmd() : Command(EType::UploadTexture) {}
@@ -240,7 +334,23 @@ namespace Moer::Render {
                                  mip_level(_mip_level),
                                  offset{_offset.x, _offset.y, _offset.z},
                                  size{_size.x, _size.y, _size.z},
-                                 data(_data) {
+                                 storage(std::span<const byte>(reinterpret_cast<const byte*>(_data),
+                                                               GetSizeFromImageFormat(_format, _size))) {
+        }
+
+        UploadTextureCmd(
+            EPixelFormat _format,
+            uint64       _handle,
+            uint         _mip_level,
+            uint3        _offset,
+            uint3        _size,
+            Array<byte>&& _data) : Command(EType::UploadTexture),
+                                   format(_format),
+                                   handle(_handle),
+                                   mip_level(_mip_level),
+                                   offset{_offset.x, _offset.y, _offset.z},
+                                   size{_size.x, _size.y, _size.z},
+                                   storage(std::move(_data)) {
         }
 
         EQueueType GetQueueType() const override { return EQueueType::Copy; }
@@ -250,7 +360,19 @@ namespace Moer::Render {
         auto MipLevel() const { return mip_level; }
         auto Offset() const { return offset; }
         auto Size() const { return size; }
-        auto Data() const { return data; }
+        // auto Data() const { return data; }
+        auto Data() const {
+            return std::visit([](const auto& _data) -> std::span<const byte> {
+                using TData = std::decay_t<decltype(_data)>;
+                if constexpr (std::is_same_v<TData, std::span<const byte>>) {
+                    return _data;
+                } else if constexpr (std::is_same_v<TData, Array<byte>>) {
+                    return std::span<const byte>(_data.data(), _data.size());
+                }
+                return std::span<const byte>();
+            },
+                              storage);
+        }
     };
 
     using ResourceState = std::variant<EBufferRuntimeUsageFlags, ETextureStateFlags>;
@@ -332,12 +454,15 @@ namespace Moer::Render {
         RenderPassInfo      render_pass_info;
         Array<MeshDrawData> mesh_data;
         uint                vtx_cnt;
-        SetDrawStateCmd() : Command(EType::SetDrawState) {}
+        ArrayArguments      args;
+        SetDrawStateCmd(ArrayArguments&& _args) : Command(EType::SetDrawState), args(std::move(_args)) {}
 
     public:
         SetDrawStateCmd(PipelineHandle        _pipeline,
+                        ArrayArguments&&      _args,
                         RenderPassInfo&&      _info,
                         Array<MeshDrawData>&& _draw_data) : Command(EType::SetDrawState),
+                                                            args(std::move(_args)),
                                                             pipeline(_pipeline),
                                                             render_pass_info(std::move(_info)),
                                                             mesh_data(std::move(_draw_data)),
@@ -349,59 +474,65 @@ namespace Moer::Render {
         auto        Pipeline() const { return pipeline; }
         const auto& RenderPassInfo() const { return render_pass_info; }
         const auto& DrawData() const { return mesh_data; }
+        const auto& Args() const { return args; }
+        void        IterateArgs(std::function<void(const TArg&)> _func) const {
+            for (const auto& arg : args.args) {
+                std::visit([&_func](const auto& _arg) { _func(_arg); }, arg);
+            }
+        }
     };
 
-    struct UpdateDrawStateCmd : public Command {
-    private:
-        Rect2D scissor;
-        uint4  viewport;
+    // struct UpdateDrawStateCmd : public Command {
+    // private:
+    //     Rect2D scissor;
+    //     uint4  viewport;
 
-    private:
-        UpdateDrawStateCmd() : Command(EType::UpdateDrawState) {}
+    // private:
+    //     UpdateDrawStateCmd() : Command(EType::UpdateDrawState) {}
 
-    public:
-        UpdateDrawStateCmd(Rect2D _scissor, uint4 _viewport) : Command(EType::UpdateDrawState), scissor(_scissor), viewport(_viewport) {}
+    // public:
+    //     UpdateDrawStateCmd(Rect2D _scissor, uint4 _viewport) : Command(EType::UpdateDrawState), scissor(_scissor), viewport(_viewport) {}
 
-        EQueueType GetQueueType() const override { return EQueueType::Graphics; }
+    //     EQueueType GetQueueType() const override { return EQueueType::Graphics; }
 
-        auto Scissor() const { return scissor; }
-        auto Viewport() const { return viewport; }
-    };
+    //     auto Scissor() const { return scissor; }
+    //     auto Viewport() const { return viewport; }
+    // };
 
-    struct SetParamsCmd : public Command {
-    private:
-        using TArguments = std::variant<Arguments, ArrayArguments>;
+    // struct SetParamsCmd : public Command {
+    // private:
+    //     using TArguments = std::variant<Arguments, ArrayArguments>;
 
-        TArguments      args;
-        ShaderPipeline& pso;
+    //     TArguments      args;
+    //     ShaderPipeline& pso;
 
-    private:
-    public:
-        SetParamsCmd(ShaderPipeline& _pso, Arguments&& _args) : Command(EType::SetParams), args(std::move(_args)), pso(_pso) {}
-        SetParamsCmd(ShaderPipeline& _pso, ArrayArguments&& _args) : Command(EType::SetParams), args(std::move(_args)), pso(_pso) {}
+    // private:
+    // public:
+    //     SetParamsCmd(ShaderPipeline& _pso, Arguments&& _args) : Command(EType::SetParams), args(std::move(_args)), pso(_pso) {}
+    //     SetParamsCmd(ShaderPipeline& _pso, ArrayArguments&& _args) : Command(EType::SetParams), args(std::move(_args)), pso(_pso) {}
 
-        EQueueType GetQueueType() const override { return EQueueType::Graphics; }
+    //     EQueueType GetQueueType() const override { return EQueueType::Graphics; }
 
-        auto&& StealArgs() const { return std::move(args); }
+    //     auto&& StealArgs() const { return std::move(args); }
 
-        auto& Pso() const { return pso; }
-    };
+    //     auto& Pso() const { return pso; }
+    // };
 
-    struct SetConstantCmd : public Command {
-    private:
-        Array<uint>     data;
-        ShaderPipeline& pso;
+    // struct SetConstantCmd : public Command {
+    // private:
+    //     Array<uint>     data;
+    //     ShaderPipeline& pso;
 
-    private:
-    public:
-        SetConstantCmd(ShaderPipeline& _pso, Array<uint>&& _data) : Command(EType::SetConstants), data(std::move(_data)), pso(_pso) {}
+    // private:
+    // public:
+    //     SetConstantCmd(ShaderPipeline& _pso, Array<uint>&& _data) : Command(EType::SetConstants), data(std::move(_data)), pso(_pso) {}
 
-        EQueueType GetQueueType() const override { return EQueueType::Graphics; }
+    //     EQueueType GetQueueType() const override { return EQueueType::Graphics; }
 
-        auto&& StealData() const { return std::move(data); }
+    //     auto&& StealData() const { return std::move(data); }
 
-        auto& Pso() const { return pso; }
-    };
+    //     auto& Pso() const { return pso; }
+    // };
     struct DispatchIndirectParam {
         BufferView indirect;
     };
@@ -410,16 +541,25 @@ namespace Moer::Render {
         using DispatchParam = std::variant<uint3, DispatchIndirectParam>;
 
     private:
-        DispatchParam param;
-        DispatchCmd() : Command(EType::ShaderDispatch) {}
+        PipelineHandle pipeline{};
+        DispatchParam  param;
+        ArrayArguments args;
+        DispatchCmd(ArrayArguments&& _args) : Command(EType::ShaderDispatch), args(std::move(_args)) {}
 
     public:
-        DispatchCmd(uint3 _param) : Command(EType::ShaderDispatch), param(_param) {}
-        DispatchCmd(BufferView _indirect) : Command(EType::ShaderDispatch), param(DispatchIndirectParam{_indirect}) {}
+        DispatchCmd(ArrayArguments&& _args, PipelineHandle _handle, uint3 _param) : Command(EType::ShaderDispatch), param(_param), pipeline(_handle), args(std::move(_args)) {}
+        DispatchCmd(ArrayArguments&& _args, PipelineHandle _handle, BufferView _indirect) : Command(EType::ShaderDispatch), pipeline(_handle), param(DispatchIndirectParam{_indirect}), args(std::move(_args)) {}
 
         EQueueType GetQueueType() const override { return EQueueType::Compute; }
 
-        auto Param() const { return param; }
+        const auto& Args() const { return args; }
+        const auto& Pipeline() const { return pipeline; }
+        auto        Param() const { return param; }
+        void        IterateArgs(std::function<void(const TArg&)> _func) const {
+            for (const auto& arg : args.args) {
+                _func(arg);
+            }
+        }
     };
 
     class CmdVisitor {
@@ -433,9 +573,9 @@ namespace Moer::Render {
         virtual void Visit(const UploadTextureCmd& _cmd)       = 0;
         virtual void Visit(const BarrierCmd& _cmd)             = 0;
         virtual void Visit(const SetDrawStateCmd& _cmd)        = 0;
-        virtual void Visit(const SetParamsCmd& _cmd)           = 0;
-        virtual void Visit(const SetConstantCmd& _cmd)         = 0;
-        virtual void Visit(const DispatchCmd& _cmd)            = 0;
+        // virtual void Visit(const SetParamsCmd& _cmd)           = 0;
+        // virtual void Visit(const SetConstantCmd& _cmd)         = 0;
+        virtual void Visit(const DispatchCmd& _cmd) = 0;
     };
     class RenderDevice::Impl {
     public:

@@ -95,8 +95,6 @@ namespace Moer {
     }
     ERHIPipelineStageFlags GetPipelineStageFromPassType(EPassType pass_type) {
         switch (pass_type) {
-            case EPassType::None:
-                return PS_NONE;
             case EPassType::Compute:
                 return PS_COMPUTE_SHADER;
             case EPassType::Graphics:

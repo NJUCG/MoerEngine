@@ -289,9 +289,9 @@ namespace Moer::Render {
             BuildAccel,
             Barrier,
             SetDrawState,
-            UpdateDrawState,
-            SetParams,
-            SetConstants,
+            // UpdateDrawState,
+            // SetParams,
+            // SetConstants,
             Custom
         };
 
@@ -413,73 +413,73 @@ namespace Moer::Render {
         std::is_same_v<std::remove_reference_t<TInArg>(), BufferView> || std::is_same_v<std::remove_reference_t<TInArg>(), TextureView> || std::is_same_v<std::remove_reference_t<TInArg>(), Buffer*> || std::is_same_v<std::remove_reference_t<TInArg>(), Texture*>;
     class CommandList {
     public:
-        struct RENDER_API ArgSetter {
-        public:
-            ArgSetter(ShaderPipeline& _handle) : handle(_handle) {
-            }
+        // struct RENDER_API ArgSetter {
+        // public:
+        //     ArgSetter(ShaderPipeline& _handle) : handle(_handle) {
+        //     }
 
-            template<is_arg T>
-            void SetParam(std::string_view _name, T&& _param) {
-                using Type = std::remove_reference_t<T>();
-                if constexpr (std::is_same_v<Type, BufferView>) {
-                    SetBuffer(std::hash<std::string_view>{}(_name), _param);
-                } else if constexpr (std::is_same_v<Type, TextureView>) {
-                    SetTexture(std::hash<std::string_view>{}(_name), _param);
-                } else if constexpr (std::is_same_v<Type, Buffer*>) {
-                    assert(_param && "buffer is nullptr");
-                    SetBuffer(std::hash<std::string_view>{}(_name), _param->GetView());
-                } else if constexpr (std::is_same_v<Type, Texture*>) {
+        //     template<is_arg T>
+        //     void SetParam(std::string_view _name, T&& _param) {
+        //         using Type = std::remove_reference_t<T>();
+        //         if constexpr (std::is_same_v<Type, BufferView>) {
+        //             SetBuffer(std::hash<std::string_view>{}(_name), _param);
+        //         } else if constexpr (std::is_same_v<Type, TextureView>) {
+        //             SetTexture(std::hash<std::string_view>{}(_name), _param);
+        //         } else if constexpr (std::is_same_v<Type, Buffer*>) {
+        //             assert(_param && "buffer is nullptr");
+        //             SetBuffer(std::hash<std::string_view>{}(_name), _param->GetView());
+        //         } else if constexpr (std::is_same_v<Type, Texture*>) {
 
-                    assert(_param && "texture is nullptr");
-                    SetTexture(std::hash<std::string_view>{}(_name), _param->GetView());
-                } else {
-                    // static_assert(false, "unsupported type");
-                    assert(0 && "unsupported type");
-                }
-            }
-            template<typename T>
-            void SetConstant(T&& _param) {
-                SetConstant(&_param, sizeof(T));
-            }
-            Arguments&& StealArgs() {
-                return std::move(temp_args);
-            }
-            Array<uint>&& StealConstants() {
-                return std::move(temp_constant);
-            }
+        //             assert(_param && "texture is nullptr");
+        //             SetTexture(std::hash<std::string_view>{}(_name), _param->GetView());
+        //         } else {
+        //             // static_assert(false, "unsupported type");
+        //             assert(0 && "unsupported type");
+        //         }
+        //     }
+        //     template<typename T>
+        //     void SetConstant(T&& _param) {
+        //         SetConstant(&_param, sizeof(T));
+        //     }
+        //     Arguments&& StealArgs() {
+        //         return std::move(temp_args);
+        //     }
+        //     Array<uint>&& StealConstants() {
+        //         return std::move(temp_constant);
+        //     }
 
-        private:
-            void SetBuffer(uint64 _hash, BufferView _buffer);
-            void SetTexture(uint64 _hash, TextureView _texture);
-            void SetConstant(void*, uint _size);
+        // private:
+        //     void SetBuffer(uint64 _hash, BufferView _buffer);
+        //     void SetTexture(uint64 _hash, TextureView _texture);
+        //     void SetConstant(void*, uint _size);
 
-            Arguments       temp_args;
-            Array<uint>     temp_constant;
-            ShaderPipeline& handle;
-        };
+        //     Arguments       temp_args;
+        //     Array<uint>     temp_constant;
+        //     ShaderPipeline& handle;
+        // };
         struct RENDER_API DrawDispatcher {
             DrawDispatcher(RasterPipeline& _pso, CommandList& _cmd_list);
 
             DrawDispatcher(RasterPipeline& _pso, CommandList& _cmd_list, ArrayArguments&& _args);
 
-            template<typename T>
-            DrawDispatcher& SetParam(std::string_view _name, T&& _param) {
-                arg_setter.SetParam(_name, std::forward<T>(_param));
-                b_set_params = true;
-            }
-            template<typename T>
-            DrawDispatcher& SetConstant(T&& _param) {
-                arg_setter.SetConstant(std::forward<T>(_param));
-                b_set_consts = true;
-                return *this;
-            }
+            // template<typename T>
+            // DrawDispatcher& SetParam(std::string_view _name, T&& _param) {
+            //     arg_setter.SetParam(_name, std::forward<T>(_param));
+            //     b_set_params = true;
+            // }
+            // template<typename T>
+            // DrawDispatcher& SetConstant(T&& _param) {
+            //     arg_setter.SetConstant(std::forward<T>(_param));
+            //     b_set_consts = true;
+            //     return *this;
+            // }
             template<typename... TRenderTarget>
             void Draw(Rect2D _rect, Array<MeshDrawData>&& _mesh_data, DepthAttachment _depth, TRenderTarget&&... _render_targets) {
                 RenderPassInfo pass_info(
                     {std::forward<TRenderTarget>(_render_targets)...},
                     _depth,
                     _rect);
-                cmd_list.SetRenderCmds(pso.handle, std::move(pass_info), std::move(_mesh_data));
+                cmd_list.SetRenderCmds(pso.handle, std::move(args), std::move(pass_info), std::move(_mesh_data));
             };
 
             template<typename... TRenderTarget>
@@ -489,16 +489,17 @@ namespace Moer::Render {
 
             RasterPipeline& pso;
             CommandList&    cmd_list;
+            ArrayArguments  args;
 
         private:
-            void SubmitArgsIfPossible();
+            // void SubmitArgsIfPossible();
 
-            bool HasParams() const {
-                return b_set_params;
-            }
-            ArgSetter arg_setter;
-            bool      b_set_params = false;
-            bool      b_set_consts = false;
+            // bool HasParams() const {
+            //     return b_set_params;
+            // }
+            // ArgSetter arg_setter;
+            // bool      b_set_params = false;
+            // bool      b_set_consts = false;
         };
         struct RENDER_API ComputeDispatcher {
             void Dispatch(Vector2ui _group_count) {
@@ -511,30 +512,31 @@ namespace Moer::Render {
             void DispatchIndirect(BufferView);
             ComputeDispatcher(ComputePipeline& _pso, CommandList& _cmd_list, ArrayArguments&& _args);
             ComputeDispatcher(ComputePipeline& _pso, CommandList& _cmd_list);
-            template<typename T>
-            ComputeDispatcher& SetParam(std::string_view _name, T&& _param) {
-                arg_setter.SetParam(_name, std::forward<T>(_param));
-                b_set_params = true;
-                return *this;
-            }
-            template<typename T>
-            ComputeDispatcher& SetConstant(T&& _param) {
-                arg_setter.SetConstant(std::forward<T>(_param));
-                b_set_consts = true;
-                return *this;
-            }
+            // template<typename T>
+            // ComputeDispatcher& SetParam(std::string_view _name, T&& _param) {
+            //     arg_setter.SetParam(_name, std::forward<T>(_param));
+            //     b_set_params = true;
+            //     return *this;
+            // }
+            // template<typename T>
+            // ComputeDispatcher& SetConstant(T&& _param) {
+            //     arg_setter.SetConstant(std::forward<T>(_param));
+            //     b_set_consts = true;
+            //     return *this;
+            // }
             ComputePipeline& pso;
             CommandList&     cmd_list;
+            ArrayArguments   args;
 
         private:
-            void SubmitArgsIfPossible();
+            // void SubmitArgsIfPossible();
 
-            bool HasParams() const {
-                return b_set_params;
-            }
-            ArgSetter arg_setter;
-            bool      b_set_params = false;
-            bool      b_set_consts = false;
+            // bool HasParams() const {
+            //     return b_set_params;
+            // }
+            // ArgSetter arg_setter;
+            // bool      b_set_params = false;
+            // bool      b_set_consts = false;
         };
         friend class VkCommandQueue;
 
@@ -556,7 +558,7 @@ namespace Moer::Render {
         template<typename TComputePso, typename... TArgs>
         ComputeDispatcher Compute(TComputePso& _pso, TArgs&&... _args) {
             if constexpr (sizeof...(TArgs) > 0) {
-                ArrayArguments&& args = std::move(_pso.SetArgs());
+                ArrayArguments&& args = std::move(_pso.SetArgs(_args...));
                 return ComputeDispatcher(_pso, *this, std::move(args));
             }
             return ComputeDispatcher(_pso, *this);
@@ -569,6 +571,7 @@ namespace Moer::Render {
         RENDER_API void           CopyFrom(BufferView _src, TextureView _dst);
         RENDER_API void           CopyFrom(std::span<byte> _data, BufferView _dst);
         RENDER_API void           CopyFrom(std::span<byte> _data, TextureView _dst);
+        RENDER_API void           CopyFrom(BufferView _src, std::span<byte> _data);
 
         template<typename T, typename... Args>
         struct CountType;
@@ -624,9 +627,9 @@ namespace Moer::Render {
         friend DrawDispatcher;
         friend ComputeDispatcher;
         friend class CommandQueue;
-        void SetRenderCmds(PipelineHandle& _handle, RenderPassInfo&&, Array<MeshDrawData>&&);
-        void SubmitArgs(ShaderPipeline&, Arguments&&);
-        void SubmitConstants(ShaderPipeline&, Array<uint>&&);
+        void SetRenderCmds(PipelineHandle& _handle, ArrayArguments&& _args, RenderPassInfo&&, Array<MeshDrawData>&&);
+        // void SubmitArgs(ShaderPipeline&, Arguments&&);
+        // void SubmitConstants(ShaderPipeline&, Array<uint>&&);
 
         RENDER_API void BeginBarriers(uint _read_tex_cnt, uint _write_tex_cnt, uint _read_buf_cnt, uint _write_buf_cnt);
         RENDER_API void InnerBarrier(ReadBuffer _buffer){

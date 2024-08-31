@@ -693,8 +693,8 @@ namespace Moer::Render {
         void SetName(const std::string& _name) {
             name = _name;
         }
-        uint              GetNumElement() const { return info.size / info.stride; }
-        uint64            GetByteSize() const { return info.size; }
+        uint              GetNumElement() const { return info.size; }
+        uint64            GetByteSize() const { return info.size * info.stride; }
         uint              GetStride() const { return info.stride; }
         EBufferUsageFlags GetUsage() const { return info.usage; }
 
@@ -880,7 +880,7 @@ protected:
 protected:
     RHIBufferInfo            info;
     EBufferRuntimeUsageFlags layout    = EBufferRuntimeUsageFlags::UNDEFINED;
-    EPassType                prev_pass = EPassType::None;
+    EPassType                prev_pass = EPassType::Graphics;
 };
 
 struct RHITextureInfo {
@@ -1142,7 +1142,7 @@ public:
         if (it != mip_usages.end()) {
             return it->second;
         }
-        return std::make_tuple(TS_UNDEFINED, EPassType::None);
+        return std::make_tuple(TS_UNDEFINED, EPassType::Graphics);
     }
     Moer::UnorderedMap<Moer::uint, std::tuple<ETextureStateFlags, EPassType>> mip_usages;
 

@@ -28,7 +28,6 @@ namespace Moer::Render {
                                    .Pixel("")
                                    .Build<GBufferLayout>(std::move(pso_info));
         CommandList cmd_list;
-        cmd_list.SubmitArgs(layout, {});
         Array<MeshDrawData> draw_data;
         auto&&              draw_dispatcher = cmd_list.Gfx(layout);
         draw_dispatcher.Draw(Rect2D{}, std::move(draw_data), ColorAttachment{nullptr});
@@ -36,78 +35,64 @@ namespace Moer::Render {
 
     CommandList::CommandList() {
     }
-    void CommandList::ArgSetter::SetBuffer(uint64 _index, BufferView _buffer) {
-        auto idx          = handle.GetBindingIdx(_index);
-        temp_args[_index] = _buffer;
-    }
+    // void CommandList::ArgSetter::SetBuffer(uint64 _index, BufferView _buffer) {
+    //     auto idx          = handle.GetBindingIdx(_index);
+    //     temp_args[_index] = _buffer;
+    // }
 
-    void CommandList::ArgSetter::SetTexture(uint64 _index, TextureView _texture) {
-        auto idx          = handle.GetBindingIdx(_index);
-        temp_args[_index] = _texture;
-    }
+    // void CommandList::ArgSetter::SetTexture(uint64 _index, TextureView _texture) {
+    //     auto idx          = handle.GetBindingIdx(_index);
+    //     temp_args[_index] = _texture;
+    // }
 
-    void CommandList::ArgSetter::SetConstant(void* _data, uint _size) {
-        temp_constant.resize(_size);
-        std::memcpy(temp_constant.data(), _data, _size);
-    }
+    // void CommandList::ArgSetter::SetConstant(void* _data, uint _size) {
+    //     temp_constant.resize(_size);
+    //     std::memcpy(temp_constant.data(), _data, _size);
+    // }
 
-    void CommandList::DrawDispatcher::SubmitArgsIfPossible() {
-        if (HasParams()) {
-            cmd_list.SubmitArgs(pso, arg_setter.StealArgs());
-        }
-        if (b_set_consts) {
-            cmd_list.SubmitConstants(pso, arg_setter.StealConstants());
-        }
-        b_set_params = false;
-        b_set_consts = false;
-    }
+    // void CommandList::DrawDispatcher::SubmitArgsIfPossible() {
+    //     if (HasParams()) {
+    //         cmd_list.SubmitArgs(pso, arg_setter.StealArgs());
+    //     }
+    //     if (b_set_consts) {
+    //         cmd_list.SubmitConstants(pso, arg_setter.StealConstants());
+    //     }
+    //     b_set_params = false;
+    //     b_set_consts = false;
+    // }
 
     CommandList::ComputeDispatcher::ComputeDispatcher(
         ComputePipeline& _pso,
         CommandList&     _cmd_list,
         ArrayArguments&& _args)
-        : cmd_list(_cmd_list), pso(_pso), arg_setter(_pso) {
-        cmd_list.commands.push_back(MakeUnique<SetParamsCmd>(_pso, std::move(_args)));
+        : cmd_list(_cmd_list), pso(_pso), args(std::move(_args)) {
+        // cmd_list.commands.push_back(MakeUnique<SetParamsCmd>(_pso, std::move(_args)));
     }
     CommandList::ComputeDispatcher::ComputeDispatcher(
         ComputePipeline& _pso,
         CommandList&     _cmd_list)
-        : cmd_list(_cmd_list), pso(_pso), arg_setter(_pso) {
+        : cmd_list(_cmd_list), pso(_pso), args({}){
     }
 
     CommandList::DrawDispatcher::DrawDispatcher(
         RasterPipeline&  _pso,
         CommandList&     _cmd_list,
         ArrayArguments&& _args)
-        : cmd_list(_cmd_list), pso(_pso), arg_setter(_pso) {
-        cmd_list.commands.push_back(MakeUnique<SetParamsCmd>(_pso, std::move(_args)));
+        : cmd_list(_cmd_list), args(std::move(_args)), pso(_pso){
     }
 
     CommandList::DrawDispatcher::DrawDispatcher(
         RasterPipeline& _pso,
         CommandList&    _cmd_list)
-        : cmd_list(_cmd_list), pso(_pso), arg_setter(_pso) {
+        : cmd_list(_cmd_list), pso(_pso), args({}){
     }
 
     void CommandList::ComputeDispatcher::Dispatch(uint3 _group_count) {
-        SubmitArgsIfPossible();
-        cmd_list.commands.push_back(MakeUnique<DispatchCmd>(_group_count));
+        cmd_list.commands.push_back(MakeUnique<DispatchCmd>(std::move(args), pso.handle, _group_count));
     }
 
     void CommandList::ComputeDispatcher::DispatchIndirect(BufferView _indirect) {
-        SubmitArgsIfPossible();
-        cmd_list.commands.push_back(MakeUnique<DispatchCmd>(_indirect));
-    }
-
-    void CommandList::ComputeDispatcher::SubmitArgsIfPossible() {
-        if (HasParams()) {
-            cmd_list.SubmitArgs(pso, arg_setter.StealArgs());
-        }
-        if (b_set_consts) {
-            cmd_list.SubmitConstants(pso, arg_setter.StealConstants());
-        }
-        b_set_params = false;
-        b_set_consts = false;
+        cmd_list.commands.push_back(MakeUnique<DispatchCmd>(std::move(args), pso.handle, _indirect));
     }
 
     CmdSubmit CommandList::Submit() {
@@ -159,23 +144,45 @@ namespace Moer::Render {
 
     void CommandList::CopyFrom(std::span<byte> _data, TextureView _texture) {
         //
+        commands.push_back(MakeUnique<UploadTextureCmd>(
+            _texture.texture->GetFormat(),
+            reinterpret_cast<uint64>(_texture.texture),
+            _texture.mip_level,
+            _texture.offset,
+            _texture.extent,
+            _data.data()));
     }
+
 
     void CommandList::CopyFrom(std::span<byte> _data, BufferView _buffer) {
         //
+        commands.push_back(MakeUnique<UploadBufferCmd>(
+            reinterpret_cast<uint64>(_buffer.GetBuffer()),
+            _buffer.GetByteOffset(),
+            _buffer.GetByteSize(),
+            _data.data()));
     }
 
-    void CommandList::SetRenderCmds(PipelineHandle& _handle, RenderPassInfo&& _info, Array<MeshDrawData>&& _mesh_data) {
-        commands.push_back(MakeUnique<SetDrawStateCmd>(_handle, std::move(_info), std::move(_mesh_data)));
+    void CommandList::CopyFrom(BufferView _src, std::span<byte> _data) {
+        //
+        commands.push_back(MakeUnique<CopyBackBufferCmd>(
+            reinterpret_cast<uint64>(_src.GetBuffer()),
+            _src.GetByteOffset(),
+            _src.GetByteSize(),
+            _data.data()));
     }
 
-    void CommandList::SubmitArgs(ShaderPipeline& _pso, Arguments&& _args) {
-        commands.push_back(MakeUnique<SetParamsCmd>(_pso, std::move(_args)));
+    void CommandList::SetRenderCmds(PipelineHandle& _handle, ArrayArguments&& _args, RenderPassInfo&& _info, Array<MeshDrawData>&& _mesh_data) {
+        commands.push_back(MakeUnique<SetDrawStateCmd>(_handle, std::move(_args), std::move(_info), std::move(_mesh_data)));
     }
 
-    void CommandList::SubmitConstants(ShaderPipeline& _pso, Array<uint>&& _constants) {
-        commands.push_back(MakeUnique<SetConstantCmd>(_pso, std::move(_constants)));
-    }
+    // void CommandList::SubmitArgs(ShaderPipeline& _pso, Arguments&& _args) {
+    //     commands.push_back(MakeUnique<SetParamsCmd>(_pso, std::move(_args)));
+    // }
+
+    // void CommandList::SubmitConstants(ShaderPipeline& _pso, Array<uint>&& _constants) {
+    //     commands.push_back(MakeUnique<SetConstantCmd>(_pso, std::move(_constants)));
+    // }
 
     void CommandList::AddCallback(std::function<void()>&& _callback) {
         callbacks.emplace_back(std::move(_callback));

@@ -4,6 +4,7 @@
 #include "PixelFormat.h"
 #include "config/ConfigManager.h"
 #include "math/Matrix.h"
+#include "misc/Traits.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
@@ -36,6 +37,17 @@ int main(int argc, const char** argv) {
 
     auto&       cmd_queue = device.GetCommandQueue(EQueueType::Graphics);
     CommandList cmd_list;
+    auto buffer = device.CreateBuffer<uint>(1024, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST |  EBufferUsageFlags::TRANSFER_SRC);
+    Array<uint> data(1024);
+    for (uint i = 0; i < 1024; ++i) {
+        data[i] = i;
+    }
+    Array<uint> dst_data(1024);
+    cmd_list.CopyFrom(std::span<byte>((byte*)data.data(), data.size() * sizeof(uint)), buffer->GetView());
+    cmd_list.CopyFrom(buffer->GetView(), std::span<byte>((byte*)dst_data.data(), dst_data.size() * sizeof(uint)));
+
+    cmd_queue.Execute(cmd_list.Submit());
+    cmd_queue.Sync();
     while (WindowContext::ShouldClose(window_handle) == false) {
         WindowContext::Tick();
         cmd_queue.Present(sc, img->GetView());

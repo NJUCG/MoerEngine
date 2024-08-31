@@ -28,13 +28,13 @@
 #include <variant>
 #include <vector>
 #include <vulkan/vulkan_core.h>
-#include <rhi/vulkan/RHICmdReorderer.h>
+#include "RHICmdReorderer.h"
 namespace Moer::Render {
 
     struct VkCmdPreprocessor {
-        CmdReorderer& reorderer;
+        VkTracker& tracker;
 
-        VkCmdPreprocessor(CmdReorderer& _reorderer) : reorderer(_reorderer) {
+        VkCmdPreprocessor(VkTracker& _tracker) : tracker(_tracker) {
         }
 
         void VisitCmd(const Command* _cmd) {
@@ -66,11 +66,6 @@ namespace Moer::Render {
                     break;
                 case Command::EType::SetDrawState:
                     Visit(static_cast<const SetDrawStateCmd*>(_cmd));
-                case Command::EType::UpdateDrawState:
-                    break;
-                case Command::EType::SetParams:
-                    break;
-                case Command::EType::SetConstants:
                     break;
                 case Command::EType::BuildAccel:
                     break;
@@ -85,42 +80,42 @@ namespace Moer::Render {
         }
 
         void Visit(const UploadBufferCmd* _cmd) {
-            CmdReorderer::Range range(_cmd->Offset(), _cmd->ByteSize());
-            reorderer.SetWrite(_cmd->Handle(), range, CmdReorderer::ResourceType::Texture_Buffer);
+            auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(_cmd->Handle());
+            tracker.RecordState(vk_buffer, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
         }
         void Visit(const UploadTextureCmd* _cmd) {
-            CmdReorderer::Range range(_cmd->MipLevel());
-            reorderer.SetWrite(_cmd->Handle(), range, CmdReorderer::ResourceType::Texture_Buffer);
+            auto* vk_texture = reinterpret_cast<VulkanTexture*>(_cmd->Handle());
+            tracker.RecordState(vk_texture, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT, _cmd->MipLevel());
         }
         void Visit(const CopyBufferCmd* _cmd) {
-            CmdReorderer::Range src_range(_cmd->SrcOffset(), _cmd->ByteSize());
-            CmdReorderer::Range dst_range(_cmd->DstOffset(), _cmd->ByteSize());
-            reorderer.SetRead(_cmd->SrcHandle(), src_range, CmdReorderer::ResourceType::Texture_Buffer);
-            reorderer.SetWrite(_cmd->DstHandle(), dst_range, CmdReorderer::ResourceType::Texture_Buffer);
+            auto* vk_src_buffer = reinterpret_cast<VulkanBuffer*>(_cmd->SrcHandle());
+            auto* vk_dst_buffer = reinterpret_cast<VulkanBuffer*>(_cmd->DstHandle());
+            tracker.RecordState(vk_src_buffer, VK_ACCESS_2_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
+            tracker.RecordState(vk_dst_buffer, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
         }
         void Visit(const CopyTextureCmd* _cmd) {
-            CmdReorderer::Range src_range(_cmd->SrcMipLevel());
-            CmdReorderer::Range dst_range(_cmd->DstMipLevel());
-            reorderer.SetRead(_cmd->SrcHandle(), src_range, CmdReorderer::ResourceType::Texture_Buffer);
-            reorderer.SetWrite(_cmd->DstHandle(), dst_range, CmdReorderer::ResourceType::Texture_Buffer);
+            auto* vk_src_texture = reinterpret_cast<VulkanTexture*>(_cmd->SrcHandle());
+            auto* vk_dst_texture = reinterpret_cast<VulkanTexture*>(_cmd->DstHandle());
+            tracker.RecordState(vk_src_texture, VK_ACCESS_2_TRANSFER_READ_BIT, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT, _cmd->SrcMipLevel());
+            tracker.RecordState(vk_dst_texture, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT, _cmd->DstMipLevel());
         }
         void Visit(const CopyBufferToTextureCmd* _cmd) {
-            CmdReorderer::Range src_range(_cmd->SrcOffset(), _cmd->ByteSize());
-            CmdReorderer::Range dst_range(_cmd->MipLevel());
-            reorderer.SetRead(_cmd->SrcHandle(), src_range, CmdReorderer::ResourceType::Texture_Buffer);
-            reorderer.SetWrite(_cmd->DstHandle(), dst_range, CmdReorderer::ResourceType::Texture_Buffer);
+            auto* vk_src_buffer  = reinterpret_cast<VulkanBuffer*>(_cmd->SrcHandle());
+            auto* vk_dst_texture = reinterpret_cast<VulkanTexture*>(_cmd->DstHandle());
+            tracker.RecordState(vk_src_buffer, VK_ACCESS_2_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
+            tracker.RecordState(vk_dst_texture, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT, _cmd->MipLevel());
         }
 
         void Visit(const CopyTextureToBufferCmd* _cmd) {
-            CmdReorderer::Range src_range(_cmd->MipLevel());
-            CmdReorderer::Range dst_range(_cmd->DstOffset(), _cmd->ByteSize());
-            reorderer.SetRead(_cmd->SrcHandle(), src_range, CmdReorderer::ResourceType::Texture_Buffer);
-            reorderer.SetWrite(_cmd->DstHandle(), dst_range, CmdReorderer::ResourceType::Texture_Buffer);
+            auto* vk_src_texture = reinterpret_cast<VulkanTexture*>(_cmd->SrcHandle());
+            auto* vk_dst_buffer  = reinterpret_cast<VulkanBuffer*>(_cmd->DstHandle());
+            tracker.RecordState(vk_src_texture, VK_ACCESS_2_TRANSFER_READ_BIT, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT, _cmd->MipLevel());
+            tracker.RecordState(vk_dst_buffer, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
         }
 
         void Visit(const CopyBackBufferCmd* _cmd) {
-            CmdReorderer::Range src_range(_cmd->Offset(), _cmd->ByteSize() + _cmd->Offset());
-            reorderer.SetRead(_cmd->Handle(), src_range, CmdReorderer::ResourceType::Texture_Buffer);
+            auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(_cmd->Handle());
+            tracker.RecordState(vk_buffer, VK_ACCESS_2_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
         }
 
         void Visit(const DispatchCmd* _cmd) {
@@ -129,46 +124,69 @@ namespace Moer::Render {
                 if constexpr (std::is_same_v<T, uint3>) {
                     return;
                 } else if constexpr (std::is_same_v<T, BufferView>) {
-                    CmdReorderer::Range range(_arg.byte_offset, _arg.byte_offset + _arg.byte_size);
-                    reorderer.SetRead(reinterpret_cast<uint64>(_arg.GetBuffer()), range, CmdReorderer::ResourceType::Texture_Buffer);
+                    tracker.RecordState(reinterpret_cast<VulkanBuffer*>(_arg.GetBuffer()), VK_ACCESS_2_SHADER_READ_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
                 }
             },
                        _cmd->Param());
         }
 
-        void Visit(const SetParamsCmd* _cmd) {
-        }
-        void Visit(const SetConstantCmd* _cmd) {
-        }
+        // void Visit(const SetParamsCmd* _cmd) {
+        // }
+        // void Visit(const SetConstantCmd* _cmd) {
+        // }
 
         void Visit(const BarrierCmd* _cmd) {
             for (auto& barrier : _cmd->ReadBuffers()) {
-                CmdReorderer::Range range(barrier.offset, barrier.byte_size + barrier.offset);
-                reorderer.SetRead(barrier.handle, range, CmdReorderer::ResourceType::Texture_Buffer);
+                auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(barrier.handle);
+                tracker.RecordState(vk_buffer, tracker.ReadBuffer(vk_buffer, barrier.state, barrier.pass_type));
             }
             for (auto& barrier : _cmd->WriteBuffers()) {
-                CmdReorderer::Range range(barrier.offset, barrier.byte_size + barrier.offset);
-                reorderer.SetWrite(barrier.handle, range, CmdReorderer::ResourceType::Texture_Buffer);
+                auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(barrier.handle);
+                tracker.RecordState(vk_buffer, tracker.WriteBuffer(vk_buffer, barrier.state, barrier.pass_type));
             }
 
             for (auto& barrier : _cmd->ReadTextures()) {
-                CmdReorderer::Range range(barrier.mip_level, barrier.mip_level + barrier.mip_cnt);
-                reorderer.SetRead(barrier.handle, range, CmdReorderer::ResourceType::Texture_Buffer);
+                auto* vk_texture = reinterpret_cast<VulkanTexture*>(barrier.handle);
+                tracker.RecordState(vk_texture, tracker.ReadTexture(vk_texture, barrier.state, barrier.pass_type));
             }
             for (auto& barrier : _cmd->WriteTextures()) {
-                CmdReorderer::Range range(barrier.mip_level, barrier.mip_level + barrier.mip_cnt);
-                reorderer.SetWrite(barrier.handle, range, CmdReorderer::ResourceType::Texture_Buffer);
+                auto* vk_texture = reinterpret_cast<VulkanTexture*>(barrier.handle);
+                tracker.RecordState(vk_texture, tracker.WriteTexture(vk_texture, barrier.state, barrier.pass_type));
             }
         }
 
         void Visit(const SetDrawStateCmd* _cmd) {
             for (const auto& rt : _cmd->RenderPassInfo().color_attachments) {
-                CmdReorderer::Range range(0);
-                reorderer.SetWrite(reinterpret_cast<uint64>(rt.target), range, CmdReorderer::ResourceType::Texture_Buffer);
+                auto* vk_texture = ResourceCast(rt.target);
+                auto  action     = rt.action;
+                bool  b_load     = GetLoadOp(action) == EAttachmentLoadOp::LOAD;
+                bool  b_store    = GetStoreOp(action) == EAttachmentStoreOp::STORE;
+                tracker.RecordState(
+                    vk_texture,
+                    (b_load ? VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT : VK_ACCESS_2_NONE) |
+                        (b_store ? VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT : VK_ACCESS_2_NONE),
+                    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                    0,
+                    1);
             }
-            if (_cmd->RenderPassInfo().depth_attachment.target != nullptr) {
-                CmdReorderer::Range range(0);
-                reorderer.SetWrite(reinterpret_cast<uint64>(_cmd->RenderPassInfo().depth_attachment.target), range, CmdReorderer::ResourceType::Texture_Buffer);
+            if (_cmd->RenderPassInfo().depth_attachment.Valid()) {
+                auto* vk_texture      = ResourceCast(_cmd->RenderPassInfo().depth_attachment.target);
+                auto  action          = _cmd->RenderPassInfo().depth_attachment.action;
+                bool  b_depth_load    = GetLoadOp(GetDepthAction(action)) == EAttachmentLoadOp::LOAD;
+                bool  b_depth_store   = GetStoreOp(GetDepthAction(action)) == EAttachmentStoreOp::STORE;
+                bool  b_stencil_load  = GetLoadOp(GetStencilAction(action)) == EAttachmentLoadOp::LOAD;
+                bool  b_stencil_store = GetStoreOp(GetStencilAction(action)) == EAttachmentStoreOp::STORE;
+                bool  b_read          = b_depth_load || b_stencil_load;
+                bool  b_write         = b_depth_store || b_stencil_store;
+                tracker.RecordState(
+                    vk_texture,
+                    (b_read ? VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT : VK_ACCESS_2_NONE) |
+                        (b_write ? VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT : VK_ACCESS_2_NONE),
+                    VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
+                    0,
+                    1);
             }
         }
     };
@@ -257,8 +275,6 @@ namespace Moer::Render {
                 return VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
             case EPassType::Copy:
                 return VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-            case EPassType::None:
-                return VK_PIPELINE_STAGE_2_NONE;
             default:
                 assert(false && "Invalid pass type");
                 return VK_PIPELINE_STAGE_2_NONE;
@@ -1353,8 +1369,9 @@ namespace Moer::Render {
                                                                                                                           cmd_list(_cmd_list),
                                                                                                                           tracker(_tracker) {}
         void Visit(const UploadBufferCmd& _cmd) {
-            auto tmp_buffer = m_device->GetStagingAllocator().AllocateBuffer(_cmd.ByteSize(), 16);
-            cmd_list.CopyData(tmp_buffer, _cmd.Data(), _cmd.ByteSize());
+            auto data_span  = _cmd.Data();
+            auto tmp_buffer = allocator.AllocateBuffer(_cmd.ByteSize(), 16);
+            cmd_list.CopyData(tmp_buffer, data_span.data(), _cmd.ByteSize());
             VulkanBuffer* buffer = reinterpret_cast<VulkanBuffer*>(_cmd.Handle());
             cmd_list.CopyBuffer(reinterpret_cast<VulkanBuffer*>(tmp_buffer.GetBuffer()),
                                 buffer,
@@ -1362,94 +1379,21 @@ namespace Moer::Render {
                                 tmp_buffer.GetByteOffset(),
                                 _cmd.Offset());
 
-            tracker.RecordState(buffer, tracker.WriteBuffer(buffer, EBufferState::TRANSFER));
         }
 
-        uint64 GetSizeFromImageFormat(EPixelFormat _format, const uint3 _size) {
-            switch (_format) {
-                case PF_R8G8B8A8_SRGB:
-                case PF_R8G8B8A8_UNORM:
-                case PF_R8G8B8A8_UINT:
-                case PF_R8G8B8A8_SNORM:
-                case PF_R8G8B8A8_SINT:
-                    return _size.x * _size.y * _size.z * 4;
-                    break;
-                case PF_R32G32B32A32_SFLOAT:
-                case PF_R32G32B32A32_UINT:
-                case PF_R32G32B32A32_SINT:
-                    return _size.x * _size.y * _size.z * 16;
-                    break;
-                case PF_R32G32_SFLOAT:
-                case PF_R32G32_UINT:
-                case PF_R32G32_SINT:
-                    return _size.x * _size.y * _size.z * 8;
-                    break;
-                case PF_R32_SFLOAT:
-                case PF_R32_UINT:
-                case PF_R32_SINT:
-                    return _size.x * _size.y * _size.z * 4;
-                    break;
-                case PF_R16G16B16A16_SFLOAT:
-                case PF_R16G16B16A16_UNORM:
-                case PF_R16G16B16A16_UINT:
-                case PF_R16G16B16A16_SNORM:
-                case PF_R16G16B16A16_SINT:
-                    return _size.x * _size.y * _size.z * 8;
-                    break;
-                case PF_R16G16_SFLOAT:
-                case PF_R16G16_UNORM:
-                case PF_R16G16_UINT:
-                case PF_R16G16_SNORM:
-                case PF_R16G16_SINT:
-                    return _size.x * _size.y * _size.z * 4;
-                    break;
-                case PF_R16_SFLOAT:
-                case PF_R16_UNORM:
-                case PF_R16_UINT:
-                case PF_R16_SNORM:
-                case PF_R16_SINT:
-                    return _size.x * _size.y * _size.z * 2;
-                    break;
-                case PF_R8G8B8_SRGB:
-                case PF_R8G8B8_UNORM:
-                case PF_R8G8B8_UINT:
-                case PF_R8G8B8_SNORM:
-                case PF_R8G8B8_SINT:
-                    return _size.x * _size.y * _size.z * 3;
-                    break;
-                case PF_R8G8_SRGB:
-                case PF_R8G8_UNORM:
-                case PF_R8G8_UINT:
-                case PF_R8G8_SNORM:
-                case PF_R8G8_SINT:
-                    return _size.x * _size.y * _size.z * 2;
-                    break;
-                case PF_R8_SRGB:
-                case PF_R8_UNORM:
-                case PF_R8_UINT:
-                case PF_R8_SNORM:
-                case PF_R8_SINT:
-                    return _size.x * _size.y * _size.z;
-                    break;
-                default:
-                    assert(false && "not support format");
-            }
-            return 0;
-        }
         void Visit(const UploadTextureCmd& _cmd) {
-            uint64 buffer_size = GetSizeFromImageFormat(_cmd.Format(), _cmd.Size());
-            auto   tmp_buffer  = m_device->GetStagingAllocator().AllocateBuffer(buffer_size, 16);
-            cmd_list.CopyData(tmp_buffer, _cmd.Data(), buffer_size);
+            auto data_span  = _cmd.Data();
+            auto tmp_buffer = allocator.AllocateBuffer(data_span.size_bytes(), 16);
+            cmd_list.CopyData(tmp_buffer, data_span.data(), data_span.size_bytes());
             VulkanTexture* texture = reinterpret_cast<VulkanTexture*>(_cmd.Handle());
             cmd_list.CopyBufferToTexture(reinterpret_cast<VulkanBuffer*>(tmp_buffer.GetBuffer()),
                                          texture,
-                                         buffer_size,
+                                         data_span.size_bytes(),
                                          tmp_buffer.GetByteOffset(),
                                          _cmd.Offset(),
                                          _cmd.Size(),
                                          _cmd.MipLevel());
 
-            tracker.RecordState(texture, tracker.WriteTexture(texture, ETextureState::TRANSFER));
         }
 
         void Visit(const CopyBufferCmd& _cmd) {
@@ -1462,13 +1406,11 @@ namespace Moer::Render {
                                 _cmd.SrcOffset(),
                                 _cmd.DstOffset());
 
-            tracker.RecordState(src_buffer, tracker.ReadBuffer(src_buffer, EBufferState::TRANSFER));
-            tracker.RecordState(dst_buffer, tracker.WriteBuffer(dst_buffer, EBufferState::TRANSFER));
         }
 
         void Visit(const CopyBackBufferCmd& _cmd) {
             VulkanBuffer* src_buffer = reinterpret_cast<VulkanBuffer*>(_cmd.Handle());
-            auto          tmp_buffer = m_device->GetStagingAllocator().AllocateBuffer(_cmd.ByteSize(), 16);
+            auto          tmp_buffer = allocator.AllocateBuffer(_cmd.ByteSize(), 16);
             cmd_list.CopyBuffer(src_buffer,
                                 reinterpret_cast<VulkanBuffer*>(tmp_buffer.GetBuffer()),
                                 _cmd.ByteSize(),
@@ -1481,16 +1423,72 @@ namespace Moer::Render {
         }
 
         void Visit(const CopyTextureCmd& _cmd) {
+            VulkanTexture* src_texture = reinterpret_cast<VulkanTexture*>(_cmd.SrcHandle());
+            VulkanTexture* dst_texture = reinterpret_cast<VulkanTexture*>(_cmd.DstHandle());
+
+            cmd_list.CopyTexture(src_texture,
+                                 dst_texture,
+                                 _cmd.SrcOffset(),
+                                 _cmd.DstOffset(),
+                                 _cmd.Size(),
+                                 _cmd.SrcMipLevel(),
+                                 _cmd.DstMipLevel());
+
         }
 
         void Visit(const CopyBufferToTextureCmd& _cmd) {
+            VulkanBuffer*  src_buffer  = reinterpret_cast<VulkanBuffer*>(_cmd.SrcHandle());
+            VulkanTexture* dst_texture = reinterpret_cast<VulkanTexture*>(_cmd.DstHandle());
+
+            cmd_list.CopyBufferToTexture(src_buffer,
+                                         dst_texture,
+                                         _cmd.ByteSize(),
+                                         _cmd.SrcOffset(),
+                                         _cmd.DstOffset(),
+                                         _cmd.Size(),
+                                         _cmd.MipLevel());
+
         }
 
         void Visit(const CopyTextureToBufferCmd& _cmd) {
+            VulkanTexture* src_texture = reinterpret_cast<VulkanTexture*>(_cmd.SrcHandle());
+            VulkanBuffer*  dst_buffer  = reinterpret_cast<VulkanBuffer*>(_cmd.DstHandle());
+
+            cmd_list.CopyTextureToBuffer(src_texture,
+                                         dst_buffer,
+                                         _cmd.ByteSize(),
+                                         _cmd.SrcOffset(),
+                                         _cmd.DstOffset(),
+                                         _cmd.Size(),
+                                         _cmd.MipLevel());
+
         }
 
         void Visit(const DispatchCmd& _cmd) {
             const auto& param = _cmd.Param();
+
+            ComputePipeline pso(_cmd.Pipeline());
+            cmd_list.SetPso(pso.handle);
+            const auto& args = _cmd.Args();
+
+            auto set_param = [&](uint _idx, const TArg& _arg) {
+                if constexpr (std::is_same_v<TArg, TextureView>) {
+                    pso.SetTexture(_idx, std::get<TextureView>(_arg));
+                } else if constexpr (std::is_same_v<TArg, BufferView>) {
+                    pso.SetBuffer(_idx, std::get<BufferView>(_arg));
+                }
+            };
+
+            for (size_t i = 0; i < args.Size(); ++i) {
+                set_param(i, args[i]);
+            }
+            cmd_list.UploadDescriptors(pso.handle);
+
+            if (args.constants.size() > 0) {
+                cmd_list.UploadPushConstants(
+                    pso.handle,
+                    std::span<const uint>(args.constants.data(), args.constants.size()));
+            }
             std::visit(
                 [&](auto&& _param) {
                     using TParam = std::decay_t<decltype(_param)>;
@@ -1504,11 +1502,44 @@ namespace Moer::Render {
                 param);
         }
 
+        // we don't need to do anything
         void Visit(const BarrierCmd& _cmd) {
+            // state                      = EState::Barrier;
+            // const auto& read_buffers   = _cmd.ReadBuffers();
+            // const auto& write_buffers  = _cmd.WriteBuffers();
+            // const auto& read_textures  = _cmd.ReadTextures();
+            // const auto& write_textures = _cmd.WriteTextures();
+
+            // for (const auto& buffer : read_buffers) {
+            //     auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(buffer.handle);
+            //     tracker.RecordState(vk_buffer, tracker.ReadBuffer(vk_buffer, buffer.state, buffer.pass_type));
+            // }
+            // for (const auto& buffer : write_buffers) {
+            //     auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(buffer.handle);
+            //     tracker.RecordState(vk_buffer, tracker.WriteBuffer(vk_buffer, buffer.state, buffer.pass_type));
+            // }
+            // for (const auto& texture : read_textures) {
+            //     auto* vk_texture = reinterpret_cast<VulkanTexture*>(texture.handle);
+            //     tracker.RecordState(vk_texture, tracker.ReadTexture(vk_texture, texture.state, texture.pass_type));
+            // }
+            // for (const auto& texture : write_textures) {
+            //     auto* vk_texture = reinterpret_cast<VulkanTexture*>(texture.handle);
+            //     tracker.RecordState(vk_texture, tracker.WriteTexture(vk_texture, texture.state, texture.pass_type));
+            // }
         }
 
         void Visit(const SetDrawStateCmd& _cmd) {
             state = EState::Draw;
+
+            const auto&    args = std::move(_cmd.Args());
+            RasterPipeline pso(_cmd.Pipeline());
+            auto           set_param = [&](uint _idx, const TArg& _arg) {
+                if constexpr (std::is_same_v<TArg, TextureView>) {
+                    pso.SetTexture(_idx, std::get<TextureView>(_arg));
+                } else if constexpr (std::is_same_v<TArg, BufferView>) {
+                    pso.SetBuffer(_idx, std::get<BufferView>(_arg));
+                }
+            };
 
             const auto&                      pass_info = _cmd.RenderPassInfo();
             Array<VkRenderingAttachmentInfo> color_attachments(pass_info.color_attachments.size());
@@ -1519,6 +1550,7 @@ namespace Moer::Render {
             if (pass_info.depth_attachment.Valid()) {
                 depth_stencil_attachment = FromDepthAttachmentInfo(pass_info.depth_attachment);
             }
+
             VkRenderingInfo dynamic_rendering_info{
                 .sType      = VK_STRUCTURE_TYPE_RENDERING_INFO,
                 .pNext      = nullptr,
@@ -1535,6 +1567,18 @@ namespace Moer::Render {
             cmd_list.BeginRendering(std::move(dynamic_rendering_info));
 
             cmd_list.SetPso(_cmd.Pipeline());
+
+            for (size_t i = 0; i < args.Size(); ++i) {
+                set_param(i, args[i]);
+            }
+            cmd_list.UploadDescriptors(pso.handle);
+
+            if (args.constants.size() > 0) {
+                cmd_list.UploadPushConstants(
+                    pso.handle,
+                    std::span<const uint>(args.constants.data(), args.constants.size()));
+            }
+
             Array<VkBuffer>     vertex_buffers(4);
             Array<VkDeviceSize> offsets(4);
             const auto&         draw_datas = _cmd.DrawData();
@@ -1574,48 +1618,48 @@ namespace Moer::Render {
             }
         }
 
-        void Visit(const UpdateDrawStateCmd& _cmd) {
-        }
+        // void Visit(const UpdateDrawStateCmd& _cmd) {
+        // }
 
-        void Visit(const SetParamsCmd& _cmd) {
-            auto&& args      = std::move(_cmd.StealArgs());
-            auto&  pso       = _cmd.Pso();
-            auto   set_param = [&](uint _idx, const TArg& _arg) {
-                if constexpr (std::is_same_v<TArg, TextureView>) {
-                    pso.SetTexture(_idx, std::get<TextureView>(_arg));
-                } else if constexpr (std::is_same_v<TArg, BufferView>) {
-                    pso.SetBuffer(_idx, std::get<BufferView>(_arg));
-                }
-            };
-            std::visit([&](auto&& _args) {
-                using TArgs = std::decay_t<decltype(_args)>;
-                if constexpr (std::is_same_v<TArgs, ArrayArguments>) {
-                    for (size_t i = 0; i < _args.Size(); ++i) {
-                        set_param(i, _args[i]);
-                    }
-                    cmd_list.UploadDescriptors(pso.handle);
+        // void Visit(const SetParamsCmd& _cmd) {
+        //     auto&& args      = std::move(_cmd.StealArgs());
+        //     auto&  pso       = _cmd.Pso();
+        //     auto   set_param = [&](uint _idx, const TArg& _arg) {
+        //         if constexpr (std::is_same_v<TArg, TextureView>) {
+        //             pso.SetTexture(_idx, std::get<TextureView>(_arg));
+        //         } else if constexpr (std::is_same_v<TArg, BufferView>) {
+        //             pso.SetBuffer(_idx, std::get<BufferView>(_arg));
+        //         }
+        //     };
+        //     std::visit([&](auto&& _args) {
+        //         using TArgs = std::decay_t<decltype(_args)>;
+        //         if constexpr (std::is_same_v<TArgs, ArrayArguments>) {
+        //             for (size_t i = 0; i < _args.Size(); ++i) {
+        //                 set_param(i, _args[i]);
+        //             }
+        //             cmd_list.UploadDescriptors(pso.handle);
 
-                    if (_args.constants.size() > 0) {
-                        cmd_list.UploadPushConstants(pso.handle, std::span<const uint>(_args.constants.data(), _args.constants.size()));
-                    }
-                } else if constexpr (std::is_same_v<TArgs, Arguments>) {
-                    for (size_t i = 0; i < _args.Size(); ++i) {
-                        set_param(i, _args[i]);
-                    }
-                    cmd_list.UploadDescriptors(pso.handle);
-                }
-            },
-                       args);
+        //             if (_args.constants.size() > 0) {
+        //                 cmd_list.UploadPushConstants(pso.handle, std::span<const uint>(_args.constants.data(), _args.constants.size()));
+        //             }
+        //         } else if constexpr (std::is_same_v<TArgs, Arguments>) {
+        //             for (size_t i = 0; i < _args.Size(); ++i) {
+        //                 set_param(i, _args[i]);
+        //             }
+        //             cmd_list.UploadDescriptors(pso.handle);
+        //         }
+        //     },
+        //                args);
 
-            // cmd submit params
-        }
+        //     // cmd submit params
+        // }
 
-        void Visit(const SetConstantCmd& _cmd) {
-            auto& pso  = _cmd.Pso();
-            auto  data = std::move(_cmd.StealData());
-            cmd_list.UploadPushConstants(pso.handle, std::span<uint>(data.data(), data.size()));
-            // cmd submit consants
-        }
+        // void Visit(const SetConstantCmd& _cmd) {
+        //     auto& pso  = _cmd.Pso();
+        //     auto  data = std::move(_cmd.StealData());
+        //     cmd_list.UploadPushConstants(pso.handle, std::span<uint>(data.data(), data.size()));
+        //     // cmd submit consants
+        // }
     };
 
     VkNativeQueue::VkNativeQueue(EQueueType _type, VulkanDevice& _device) {
@@ -1706,13 +1750,13 @@ namespace Moer::Render {
         auto&             vk_allocator  = *allocator_ptr;
         VkCmdVisitor      visitor(vk_device, vk_allocator, vk_allocator.GetCmdList(), tracker);
         CmdReorderer      reorderer{};
-        VkCmdPreprocessor preprocessor(reorderer);
+        VkCmdPreprocessor preprocessor(tracker);
 
         for (const auto& cmd : _submit.cmds) {
-            preprocessor.VisitCmd(cmd.get());
+            reorderer.AcceptCmd(cmd.get());
         }
-        const auto& cmd_lists = preprocessor.reorderer.m_cmd_lists;
-        bool        has_cmd   = !preprocessor.reorderer.m_cmd_lists.empty();
+        const auto& cmd_lists = reorderer.m_cmd_lists;
+        bool        has_cmd   = !reorderer.m_cmd_lists.empty();
 
         if (has_cmd) {
             vk_allocator.GetCmdList().Begin();
@@ -1721,7 +1765,11 @@ namespace Moer::Render {
             if (cmd_list == nullptr) {
                 continue;
             }
-
+            for (const auto* cmdnode = cmd_list; cmdnode != nullptr; cmdnode = cmd_list->next) {
+                preprocessor.VisitCmd(cmdnode->cmd);
+            }
+            tracker.ResolveBarriers();
+            tracker.DispatchBarriers(vk_allocator.GetCmdList());
             for (const auto* cmdnode = cmd_list; cmdnode != nullptr; cmdnode = cmd_list->next) {
                 const auto* cmd = cmdnode->cmd;
                 switch (cmd->Type()) {
@@ -1757,22 +1805,22 @@ namespace Moer::Render {
                     case Command::EType::SetDrawState:
                         visitor.Visit(static_cast<const SetDrawStateCmd&>(*cmd));
                         break;
-                    case Command::EType::UpdateDrawState:
-                        visitor.Visit(static_cast<const UpdateDrawStateCmd&>(*cmd));
-                    case Command::EType::SetParams:
-                        visitor.Visit(static_cast<const SetParamsCmd&>(*cmd));
-                        break;
-                    case Command::EType::SetConstants:
-                        visitor.Visit(static_cast<const SetConstantCmd&>(*cmd));
-                        break;
+                    // case Command::EType::UpdateDrawState:
+                    //     visitor.Visit(static_cast<const UpdateDrawStateCmd&>(*cmd));
+                    // case Command::EType::SetParams:
+                    //     visitor.Visit(static_cast<const SetParamsCmd&>(*cmd));
+                    //     break;
+                    // case Command::EType::SetConstants:
+                    //     visitor.Visit(static_cast<const SetConstantCmd&>(*cmd));
+                    //     break;
                     case Command::EType::Custom: break;
                 }
-                vk_allocator.GetCmdList().End();
             }
         }
 
         if (has_cmd) {
             vk_allocator.GetCmdList().End();
+            tracker.PropagateState();
         }
         uint64 last_time = last_frame;
         if (_submit.cmds.empty()) {
@@ -2026,14 +2074,17 @@ namespace Moer::Render {
             .pQueueFamilyIndices   = nullptr};
 
         VmaAllocationCreateInfo alloc_info{
-            .usage = VMA_MEMORY_USAGE_CPU_ONLY};
+            .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+            .usage = VMA_MEMORY_USAGE_AUTO};
         VulkanBuffer::BufferAlloc buffer_alloc;
         BufferInfo                info(
             _size,
             1,
             EBufferUsageFlags::CPU_VISIBLE);
-        VulkanBuffer* vk_buffer = MoerNew(VulkanBuffer)(info, *m_device, buffer_alloc.buffer, buffer_alloc.alloc, false);
+
         VK_CHECK_RESULT(vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_info, &alloc_info, &buffer_alloc.buffer, &buffer_alloc.alloc, nullptr));
+        VulkanBuffer* vk_buffer = MoerNew(VulkanBuffer)(info, *m_device, buffer_alloc.buffer, buffer_alloc.alloc, false);
+
         return reinterpret_cast<uint64>(vk_buffer);
     }
 
@@ -2176,6 +2227,31 @@ namespace Moer::Render {
 
         vkCmdCopyBufferToImage(command_buffer, _src->GetHandle(), _dst->GetHandle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy_region);
     }
+
+    void VulkanCmdList::CopyTextureToBuffer(
+        VulkanTexture* _src,
+        VulkanBuffer*  _dst,
+        uint64         _size,
+        uint3          _src_offset,
+        uint64         _dst_offset,
+        uint3          _extent,
+        uint32         _mip_level) {
+        VkImageAspectFlags aspect      = _src->GetResourceType() == RRT_DEPTH ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
+        VkBufferImageCopy  copy_region = {
+             .bufferOffset      = _dst_offset,
+             .bufferRowLength   = 0,
+             .bufferImageHeight = 0,
+             .imageSubresource  = {
+                  .aspectMask     = aspect,
+                  .mipLevel       = _mip_level,
+                  .baseArrayLayer = 0,
+                  .layerCount     = 1},
+             .imageOffset = {static_cast<int32_t>(_src_offset.x), static_cast<int32_t>(_src_offset.y), static_cast<int32_t>(_src_offset.z)},
+             .imageExtent = {static_cast<uint32_t>(_extent.x), static_cast<uint32_t>(_extent.y), static_cast<uint32_t>(_extent.z)}};
+
+        vkCmdCopyImageToBuffer(command_buffer, _src->GetHandle(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, _dst->GetHandle(), 1, &copy_region);
+    }
+
     void VulkanCmdList::CopyData(const BufferView& _dst, const void* _data, uint64 _size) {
         auto*        buffer    = static_cast<VulkanBuffer*>(_dst.buffer);
         VmaAllocator allocator = device.GetVmaAllocator();

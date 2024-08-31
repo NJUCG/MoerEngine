@@ -114,6 +114,7 @@ namespace Moer::Render {
         void End();
         void CopyBuffer(VulkanBuffer* _src, VulkanBuffer* _dst, uint64 _size, uint64 _src_offset, uint64 _dst_offset);
         void CopyBufferToTexture(VulkanBuffer* _src, VulkanTexture* _dst, uint64 _size, uint64 _src_offset, uint3 _dst_offset, uint3 _dst_extent, uint32 _mip_level);
+        void CopyTextureToBuffer(VulkanTexture* _src, VulkanBuffer* _dst, uint64 _size, uint3 _src_offset, uint64 _dst_offset, uint3 _src_extent, uint32 _mip_level);
         void CopyData(const BufferView& _dst, const void* _data, uint64 _size);
         void CopyData(const void* _dst, const BufferView& _src, uint64 _size);
         void DrawIndexedInstanced(uint32_t _index_count, uint32_t _instance_count, uint32_t _start_index_location, uint32_t _base_vertex_location, uint32_t _start_instance_location);
@@ -124,7 +125,7 @@ namespace Moer::Render {
         void EndRendering();
         void SetVertexBuffers(uint _start_index, uint _num_buffers, std::span<VkBuffer>, std::span<uint64> _offsets);
         void SetIndexBuffer(VulkanBuffer* _buffer, uint64 _offset, VkIndexType _type);
-
+        void SetPso(const PipelineHandle& _pso_handle);
         void SetScissor(const VkRect2D& _scissor);
         void SetViewPort(const VkViewport& _viewport);
 
@@ -134,7 +135,6 @@ namespace Moer::Render {
         void UploadDescriptors(PipelineHandle& _pso_handle);
         void UploadPushConstants(PipelineHandle& _pso_handle, std::span<const uint> _data);
 
-        void            SetPso(const PipelineHandle& _pso_handle);
         VkCommandBuffer GetHandle() const { return command_buffer; }
     };
     //allocator for tmp buffer and other tmp resources
