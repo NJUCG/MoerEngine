@@ -515,7 +515,6 @@ namespace Moer::Render {
         bool                    enabled{false};
         std::condition_variable queue_cv;// wake up execute thread from sleeping
         VkNativeQueue           queue;
-        VkTracker               tracker;
 
         Queue<VulkanFence*> present_fences;
         std::mutex          present_mutex;

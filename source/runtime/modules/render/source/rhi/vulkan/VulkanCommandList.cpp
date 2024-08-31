@@ -1361,13 +1361,11 @@ namespace Moer::Render {
         } state = EState::Common;
         VulkanCmdList&   cmd_list;
         VulkanAllocator& allocator;
-        VkTracker&       tracker;
 
     public:
-        VkCmdVisitor(VulkanDevice& _device, VulkanAllocator& _allocator, VulkanCmdList& _cmd_list, VkTracker& _tracker) : VulkanDeviceObject(&_device),
+        VkCmdVisitor(VulkanDevice& _device, VulkanAllocator& _allocator, VulkanCmdList& _cmd_list) : VulkanDeviceObject(&_device),
                                                                                                                           allocator(_allocator),
-                                                                                                                          cmd_list(_cmd_list),
-                                                                                                                          tracker(_tracker) {}
+                                                                                                                          cmd_list(_cmd_list) {}
         void Visit(const UploadBufferCmd& _cmd) {
             auto data_span  = _cmd.Data();
             auto tmp_buffer = allocator.AllocateBuffer(_cmd.ByteSize(), 16);
@@ -1748,8 +1746,10 @@ namespace Moer::Render {
     WaitEvent VkCommandQueue::Execute(CmdSubmit&& _submit) {
         auto              allocator_ptr = std::move(GetAllocator());
         auto&             vk_allocator  = *allocator_ptr;
-        VkCmdVisitor      visitor(vk_device, vk_allocator, vk_allocator.GetCmdList(), tracker);
+        VkCmdVisitor      visitor(vk_device, vk_allocator, vk_allocator.GetCmdList());
         CmdReorderer      reorderer{};
+        auto&        tracker   = vk_allocator.GetTracker();
+
         VkCmdPreprocessor preprocessor(tracker);
 
         for (const auto& cmd : _submit.cmds) {
@@ -1822,7 +1822,7 @@ namespace Moer::Render {
             tracker.RestoreState();
             tracker.DispatchBarriers(vk_allocator.GetCmdList());
             vk_allocator.GetCmdList().End();
-
+            tracker.Reset();
         }
         uint64 last_time = last_frame;
         if (_submit.cmds.empty()) {
@@ -1892,6 +1892,7 @@ namespace Moer::Render {
             vk_tracker.RestoreState();
             vk_tracker.DispatchBarriers(vk_cmd_list);
             vk_cmd_list.End();
+            vk_tracker.Reset();
             // vk_tracker.PropagateState();
         }
 

@@ -518,16 +518,11 @@ namespace Moer::Render {
         }
     }
 
-    void VkTracker::PropagateState() {
-        for (auto& [texture, state] : texture_states) {
-            //get texture
-            texture->state = {0, (uint8)texture->GetNumMips(), state.dst_access, state.dst_layout, state.dst_stage};
-        }
-
-        for (auto& [buffer, state] : buffer_states) {
-            buffer->m_access_flags = state.dst_access;
-            buffer->m_stage_flags  = state.dst_stage;
-        }
+    void VkTracker::Reset() {
+        buffer_barriers.clear();
+        texture_barriers.clear();
+        buffer_states.clear();
+        texture_states.clear();
     }
 
 }// namespace Moer::Render
