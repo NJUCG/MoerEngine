@@ -75,4 +75,5 @@ int main(int argc, const char** argv) {
         WindowContext::Tick();
         cmd_queue.Present(sc, font_view);
     }
+    cmd_queue.Sync();
 }

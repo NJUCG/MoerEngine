@@ -152,6 +152,7 @@ namespace Moer::Render {
     struct TextureArg {};
     struct SamplerArg {};
     struct ConstantArg {};
+    struct BindlessArg {};
     class ShaderPipeline;
     template<typename TPipeline, typename... Args>
     struct ShaderArgs {

@@ -154,6 +154,9 @@ namespace Moer::Render {
         bool m_has_khr_acceleration_structure;
         bool m_has_khr_ray_tracing_pipeline;
         bool m_has_khr_ray_query;
+
+        // nvidia
+        bool m_has_direct_storage;
     };
 
     class VulkanEnabledDeviceExtensions final {

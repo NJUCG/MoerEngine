@@ -220,6 +220,8 @@ namespace Moer::Render {
         SwapchainRef CreateSwapchain(const SwapchainCreateInfo& _info) override;
 
     public:
+        void EnqueueDeferredRelease(RHIResource* _object);
+        void FlushDeferredReleases();
     public:
         void Init(const DeviceInitializer& _initializer);
         void InitMemoryAllocator(VkInstance _instance);
@@ -283,11 +285,9 @@ namespace Moer::Render {
         }
 
         VulkanCommandAllocator& GetCurrentCommandAllocator();
-        VulkanAllocator&        GetStagingAllocator();
 
     private:
         Array<VulkanCommandAllocator> m_command_allocators;
-        VulkanAllocator*              m_staging_allocator;
 
     private:
         VkInstance                       m_instance;
@@ -325,7 +325,7 @@ namespace Moer::Render {
         UniquePtr<VkCommandQueue>     gfx_queue;
         UniquePtr<VkCommandQueue>     compute_queue;
         UniquePtr<VkCommandQueue>     transfer_queue;
-
+        LockFreeQueueBase<RHIResource, 64> deferred_release_queue;
     private:
         friend VkCommandQueue;
         //configs
@@ -338,7 +338,6 @@ namespace Moer::Render {
         void CreateDevice(uint32_t _api_version);
         void CreateMemoryAllocator();
         void CreateDescriptorAllocator();
-        void CreateStagingAllocator();
 
         TExtensionArray                  GetGpuExtensions(VkPhysicalDevice _gpu) const;
         VkPhysicalDeviceMemoryProperties GetMemoryProperties(VkPhysicalDevice _gpu) const;

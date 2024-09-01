@@ -262,6 +262,15 @@ protected:
     RHIInfo m_rhi_info;
 };
 namespace Moer::Render {
+
+    struct DeviceConfig{
+        uint b_support_ray_tracing : 1;
+        uint b_support_mesh_shader : 1;
+        uint b_support_task_shader : 1;
+        uint b_support_bindless    : 1;
+        uint b_support_direct_storage   : 1;
+        uint b_support_virtual_texture  : 1;
+    };
     class RenderDevice {
     public:
         RENDER_API static void          Init(DeviceInitInfo&& _info);
@@ -310,6 +319,8 @@ namespace Moer::Render {
         RenderDevice() = default;
         UniquePtr<Impl> impl;
         ERHIType        rhi_type;
+
+        DeviceConfig config;
     };
 };// namespace Moer::Render
 

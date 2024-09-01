@@ -363,11 +363,12 @@ namespace Moer::Render {
         image_idx = 0;
     }
     VkSwapchain::~VkSwapchain() {
-        if (surface) {
-            vkDestroySurfaceKHR(device.GetInstance(), surface, VK_NULL_HANDLE);
-        }
+
         if (handle) {
             vkDestroySwapchainKHR(device.GetDevice(), handle, VK_NULL_HANDLE);
+        }
+        if (surface) {
+            vkDestroySurfaceKHR(device.GetInstance(), surface, VK_NULL_HANDLE);
         }
         for (size_t i = 0; i < swapchain_textures.size(); ++i) {
             MoerDelete(swapchain_textures[i]);

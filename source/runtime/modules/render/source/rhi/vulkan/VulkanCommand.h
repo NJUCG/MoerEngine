@@ -91,7 +91,9 @@ namespace Moer::Render {
 
         VulkanCommandAllocator(const VulkanCommandAllocator& _other) = delete;
         VulkanCommandAllocator(VulkanDevice* _device);
-        ~VulkanCommandAllocator() = default;
+        ~VulkanCommandAllocator() {
+            Dispose();
+        }
 
         void Reset();
 
@@ -213,7 +215,7 @@ namespace Moer::Render {
         VkTracker                    tracker;
     };
 
-    static_assert(std::is_trivially_destructible_v<VulkanCommandAllocator>);
+    // static_assert(std::is_trivially_destructible_v<VulkanCommandAllocator>);
     class VulkanRHIGraphicsCommandList final : public RHIGraphicsCommandList,
                                                public VulkanRHICommandListBase {
     public:
@@ -491,6 +493,19 @@ namespace Moer::Render {
             timeline = MoerNew(VulkanFence(vk_device));
             thread   = std::jthread(&VkCommandQueue::ExecuteThread, this);
             enabled  = true;
+        }
+
+        ~VkCommandQueue() {
+            enabled = false;
+            queue_cv.notify_all();
+            thread.join();
+            //clear allocators
+            Array<VulkanAllocator*> allocs;
+            allocators.PopAll(allocs);
+            for (auto& allocator : allocs) {
+                MoerDelete(allocator);
+            }
+            MoerDelete(timeline);
         }
         WaitEvent Execute(CmdSubmit&& _submit) override;
         void      Wait(WaitEvent _event) override;

@@ -1519,8 +1519,9 @@ bool VulkanTexture::IsGeneralRead(uint _mip_level) const{
     return false;
 }
 VulkanBuffer::~VulkanBuffer(){
-    if(info.usage == EBufferUsageFlags::CPU_VISIBLE){
-        }
+    if (m_alloc.buffer != VK_NULL_HANDLE && m_alloc.alloc != VK_NULL_HANDLE) {
+        vmaDestroyBuffer(m_device->GetVmaAllocator(), m_alloc.buffer, m_alloc.alloc);
+    }
 }
 VulkanBuffer::VulkanBuffer(const BufferInfo& _info, VulkanDevice& _device): Buffer(_info), VulkanDeviceObject(&_device){
     VkBufferCreateInfo buffer_create_info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
@@ -1543,8 +1544,7 @@ VulkanBuffer::VulkanBuffer(const BufferInfo& _info, VulkanDevice& _device): Buff
 VulkanBuffer::VulkanBuffer(const BufferInfo& _info, VulkanDevice& _device, VkBuffer _handle, VmaAllocation _alloc, bool _defer_destroy): Buffer(_info), VulkanDeviceObject(&_device){
     m_alloc.buffer = _handle;
     m_alloc.alloc = _alloc;
-    if(!_defer_destroy)
-        MarkSuddenDeath();
+    b_deferred_delete = _defer_destroy;
 }
 
 
@@ -1670,7 +1670,7 @@ VulkanFence::~VulkanFence() {
 }
 
 VulkanTexture::~VulkanTexture() {
-    if (m_alloc.image != VK_NULL_HANDLE) {
+    if (m_alloc.image != VK_NULL_HANDLE && m_alloc.alloc != VK_NULL_HANDLE) {
         vmaDestroyImage(m_device->GetVmaAllocator(), m_alloc.image, m_alloc.alloc);
     }
 }
@@ -2033,4 +2033,18 @@ VkGeometryInstanceFlagsKHR VulkanRHIRayTracingAccelerationStructure::METoVKGeome
 
 #pragma region RDG resource creater
 #pragma endregion
+
+#pragma region [ destroy override ]
+
+    void VulkanBuffer::Destroy(){
+        if (b_deferred_delete) {
+            m_device->EnqueueDeferredRelease(this);
+        }
+    }
+
+    void VulkanTexture::Destroy(){
+        if (b_deferred_delete) {
+            m_device->EnqueueDeferredRelease(this);
+        }
+    }
 }

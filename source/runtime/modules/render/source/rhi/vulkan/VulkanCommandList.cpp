@@ -2000,6 +2000,7 @@ namespace Moer::Render {
         while (executed_frame < _timeline) {
             std::this_thread::yield();
         }
+        vk_device.FlushDeferredReleases();
     }
 
     void VkCommandQueue::Signal() {
@@ -2096,7 +2097,6 @@ namespace Moer::Render {
 
     void VulkanAllocator::TmpBufferAllocator::DeAllocate(uint64 _buffer) {
         auto* buffer = reinterpret_cast<VulkanBuffer*>(_buffer);
-        vmaDestroyBuffer(m_device->GetVmaAllocator(), buffer->GetHandle(), buffer->GetAllocation());
         MoerDelete(buffer);
     }
 

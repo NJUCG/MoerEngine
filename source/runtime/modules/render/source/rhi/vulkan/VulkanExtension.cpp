@@ -477,6 +477,37 @@ namespace Moer::Render {
     private:
         VkPhysicalDeviceDescriptorBufferFeaturesEXT m_descriptor_buffer_features;
     };
+
+    class VulkanEXTCopyMemoryIndirectExtension final : public VulkanDeviceExtension {
+    public:
+        VulkanEXTCopyMemoryIndirectExtension(bool _is_enabled = true, bool _is_optional = true)
+            : VulkanDeviceExtension(VK_NV_COPY_MEMORY_INDIRECT_EXTENSION_NAME, _is_enabled, _is_optional), m_copy_memory_indirect_features() {}
+
+        void PreGpuFeatures(VkPhysicalDeviceFeatures2& _gpu_features2) override {
+            m_copy_memory_indirect_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COPY_MEMORY_INDIRECT_FEATURES_NV;
+            m_memory_decompression_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_DECOMPRESSION_FEATURES_NV;
+            AddToPNext(_gpu_features2, m_copy_memory_indirect_features);
+            AddToPNext(_gpu_features2, m_memory_decompression_features);
+        }
+
+        void PostGpuFeatures(VulkanOptionalDeviceExtensions& _gpu_extensions) override {
+            m_is_usable = (m_copy_memory_indirect_features.indirectCopy == VK_TRUE) && (m_memory_decompression_features.memoryDecompression == VK_TRUE);
+
+            _gpu_extensions.m_has_direct_storage = m_is_usable;
+        }
+
+        void PreCreateDevice(VkDeviceCreateInfo& _device_create_info) override {
+            if (m_is_usable && m_is_enabled) {
+                AddToPNext(_device_create_info, m_copy_memory_indirect_features);
+                AddToPNext(_device_create_info, m_memory_decompression_features);
+            }
+        }
+
+    private:
+        VkPhysicalDeviceCopyMemoryIndirectFeaturesNV  m_copy_memory_indirect_features;
+        VkPhysicalDeviceMemoryDecompressionFeaturesNV m_memory_decompression_features;
+    };
+
     TVulkanDeviceExtensionArray VulkanDeviceExtension::GetMESupportedDeviceExtensions(const RHIInfo& _rhi_info) {
         LOG_INFO("VulkanDeviceExtension: raytracing support, {}", _rhi_info.ray_tracing);
 
@@ -504,6 +535,9 @@ namespace Moer::Render {
 
         // platform specific extensions
         // VulkanPlatform::GetDeviceExtensions(extensions);//MARK...
+
+        // nvidia extensions
+        ADD_CUSTOM_EXTENSION(VulkanEXTCopyMemoryIndirectExtension, VULKAN_EXTENSION_ENABLED, VULKAN_EXTENSION_OPTIONAL);
 
 #undef ADD_EXTENSION
 #undef ADD_CUSTOM_EXTENSION

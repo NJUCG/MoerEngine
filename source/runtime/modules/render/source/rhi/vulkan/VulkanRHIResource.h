@@ -251,6 +251,7 @@ namespace Moer::Render {
 
     protected:
         VulkanDevice* m_device;
+        uint b_deferred_delete : 1 = true;
     };
     class VulkanPipelineState : public VulkanDeviceObject {
         enum EType {
@@ -439,6 +440,7 @@ namespace Moer::Render {
         };
         VulkanBuffer() = delete;
         virtual ~VulkanBuffer();
+        virtual void Destroy() override;
         VulkanBuffer(const BufferInfo& _info, VulkanDevice& _device);
         VulkanBuffer(const BufferInfo& _info, VulkanDevice& _device, VkBuffer _handle, VmaAllocation _alloc, bool _defer_destroy);
         inline const VmaAllocation GetAllocation() const {
@@ -499,6 +501,7 @@ namespace Moer::Render {
         VkImageLayout            GetPreferredLayout() { return VK_IMAGE_LAYOUT_GENERAL; };
 
     private:
+        void Destroy() override;
         struct TextureAlloc {
             VkImage       image;
             VmaAllocation alloc;

@@ -255,18 +255,14 @@ public:
     }
 
 protected:
-    void MarkSuddenDeath() {
-        flags.SetSuddenDeath();
-    }
+    virtual void Destroy();
 
 private:
-    void Destroy();
     struct ResourceAtomicFlags {
         std::atomic<uint32_t> packed;
 
         static constexpr uint32_t s_mark_for_delete_mask = 1 << 31;
         static constexpr uint32_t s_is_deleting_mask     = 1 << 30;
-        static constexpr uint32_t s_sudden_death_mask    = 1 << 29;
         static constexpr uint32_t s_ref_count_mask       = s_is_deleting_mask - 1;
 
     public:
@@ -283,12 +279,6 @@ private:
             int32_t num_ref = (current_packed & s_ref_count_mask) - 1;
             assert(num_ref >= 0);
             return num_ref;
-        }
-        bool IsSuddenDeath() {
-            return (packed.load(std::memory_order_relaxed) & s_sudden_death_mask) != 0;
-        }
-        void SetSuddenDeath() {
-            packed.fetch_or(s_sudden_death_mask, std::memory_order_relaxed);
         }
         bool MarkToDelete(std::memory_order memory_order) {
             uint32_t current_packed = packed.fetch_or(s_mark_for_delete_mask, memory_order);

@@ -193,7 +193,12 @@ namespace Moer::Render {
         // for (auto& cmd_allocator : m_command_allocators) {
         //     CHECK_AND_DELETE(cmd_allocator);
         // }
+        compute_queue.reset();
+        transfer_queue.reset();
+        gfx_queue.reset();
+        m_command_allocators.clear();
         CHECK_AND_DELETE(m_descriptor_allocator);
+        FlushDeferredReleases();
         vmaDestroyAllocator(m_allocator);
         // Assertion failed: m_pMetadata->IsEmpty() && "Some allocations were not freed before destruction of this memory block!"
     }
@@ -340,10 +345,6 @@ namespace Moer::Render {
         LOG_INFO("VulkanRHI: Descriptor set allocator is created.");
     }
 
-    void VulkanDevice::CreateStagingAllocator() {
-        m_staging_allocator = MoerNew(VulkanAllocator)(this);
-    }
-
     TExtensionArray VulkanDevice::GetGpuExtensions(VkPhysicalDevice _gpu) const {
         uint32_t gpu_extension_count;
         // check extensions
@@ -378,13 +379,6 @@ namespace Moer::Render {
     VulkanCommandAllocator& VulkanDevice::GetCurrentCommandAllocator() {
         auto thread_id = ThreadManager::Instance().GetCurrentThreadIndex();
         return m_command_allocators[thread_id];
-    }
-
-    VulkanAllocator& VulkanDevice::GetStagingAllocator() {
-        if (m_staging_allocator == nullptr) {
-            CreateStagingAllocator();
-        }
-        return *m_staging_allocator;
     }
 
     //uint32_t VulkanDevice::GetMemoryType(uint32_t type_bits, VkMemoryPropertyFlags properties, VkBool32* mem_type_found) const {
@@ -980,6 +974,18 @@ namespace Moer::Render {
 
     SwapchainRef VulkanDevice::CreateSwapchain(const SwapchainCreateInfo& _info) {
         return SwapchainRef{MoerNew(VkSwapchain)(*this, _info)};
+    }
+
+    void VulkanDevice::EnqueueDeferredRelease(RHIResource* _object) {
+        deferred_release_queue.Push(_object);
+    }
+
+    void VulkanDevice::FlushDeferredReleases() {
+        Array<RHIResource*> objects;
+        deferred_release_queue.PopAll(objects);
+        for (auto* object : objects) {
+            MoerDelete(object);
+        }
     }
     // RHIViewportRef VulkanDevice::CreateViewport(const RHIViewportInitializer& _init) {
     //     VulkanSwapChain* swapchain = MoerNew(VulkanSwapChain)();
