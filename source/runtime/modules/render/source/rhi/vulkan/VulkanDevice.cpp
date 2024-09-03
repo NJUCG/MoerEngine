@@ -69,6 +69,27 @@ namespace Moer::Render {
 
         CreateDevice(_initializer.api_version);
         CreateDescriptorAllocator();
+
+        VkSamplerCreateInfo sampler_create_info{.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+        sampler_create_info.borderColor             = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
+        sampler_create_info.unnormalizedCoordinates = VK_FALSE;
+        sampler_create_info.mipmapMode              = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        sampler_create_info.mipLodBias              = 0.0f;
+        sampler_create_info.minLod                  = 0.0f;
+        sampler_create_info.maxLod                  = 0.0f;
+        for (uint i = 0; i < immutable_sampler_count; ++i) {
+            ESamplerFilter          filter           = ESamplerFilter(i % SF_Num);
+            ESamplerAddressMode     address_mode     = ESamplerAddressMode((i / SF_Num) % SAM_Num);
+            ESamplerCompareFunction compare_function = ESamplerCompareFunction(i / (SAM_Num * SF_Num));
+
+            sampler_create_info.minFilter = sampler_create_info.magFilter = VulkanEnumTranslator::METoVKMinMagFilterMode(filter);
+            sampler_create_info.addressModeU = sampler_create_info.addressModeV = sampler_create_info.addressModeW = VulkanEnumTranslator::METoVKWrapMode(address_mode);
+
+            sampler_create_info.compareOp     = VulkanEnumTranslator::METoVKCompareOp(ECompareOption(compare_function));
+            sampler_create_info.compareEnable = compare_function != SCF_NEVER;
+
+            vkCreateSampler(m_device, &sampler_create_info, VK_NULL_HANDLE, &immutable_samplers[i]);
+        }
     }
 
     VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
@@ -536,6 +557,127 @@ namespace Moer::Render {
         vk_set_debug_utils_object_name_ext  = reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>(vkGetInstanceProcAddr(m_instance, "vkSetDebugUtilsObjectNameEXT"));
     }
 
+    // Merge Shader Reflection Info with Cpp End Definitions, thus we can get binding relations between shader and cpp.
+    static void MergeReflectInfo(
+        const VulkanDevice&                                                  _device,
+        const SingleShaderInfo&                                              _info,                    // target shader compiled result
+        const PipelineShaderInfo&                                            _shader_info,             // all shader compiled result in this pso
+        VkShaderStageFlagBits                                                _stage,                   // target shader stage
+        UnorderedMap<uint64, uint>&                                          _out_hash_2_idx,          // hash to index
+        Moer::Array<uint64>&                                                 _out_reflect_flags,       // cpp param name hash to shader binding index
+        UnorderedMap<uint, UnorderedMap<uint, VkDescriptorSetLayoutBinding>> _out_descriptor_bindings, // set to binding to binding info, actual vk pipeline layout
+        VkPushConstantRange&                                                 _out_push_constant_ranges,// push constant range
+        int&                                                                 _out_constant_idx,        // push constant index in cpp param
+        uint&                                                                _max_set                  // max set index, calculate descriptor set count
+    ) {
+
+        for (const auto& hash : _shader_info.layout_hash) {
+            uint idx                       = uint(&hash - _shader_info.layout_hash.data());
+            _out_hash_2_idx[GetHash(hash)] = idx;
+            EShaderArgType arg_type        = _shader_info.arg_types[idx];
+
+            const auto binding_iter = _info.shader_param_map.GetShaderParameterInfoMap().find(hash.data());
+            bool       b_found      = binding_iter != _info.shader_param_map.GetShaderParameterInfoMap().end();
+            if (arg_type != SDA_BindlessArray && !b_found) {
+                continue;
+            }
+            const ParameterInfo& binding_info = binding_iter->second;
+            auto [desc_type, resource_type]   = DecodeReflectType(binding_info.type_flags);
+            switch (arg_type) {
+                case SDA_BindlessArray: {
+                    std::string bindless_buffer_name      = std::string(hash) + "_bindless_buffer";
+                    auto        bindless_buffer_iter      = _info.shader_param_map.GetShaderParameterInfoMap().find(bindless_buffer_name);
+                    bool        b_found_bindless_buffer   = bindless_buffer_iter != _info.shader_param_map.GetShaderParameterInfoMap().end();
+                    std::string bindless_texture_name     = std::string(hash) + "_bindless_texture";
+                    auto        bindless_texture_iter     = _info.shader_param_map.GetShaderParameterInfoMap().find(bindless_texture_name);
+                    bool        b_found_bindless_texture  = bindless_texture_iter != _info.shader_param_map.GetShaderParameterInfoMap().end();
+                    std::string bindless_indirect_name    = std::string(hash) + "_bindless_indirect";
+                    auto        bindless_indirect_iter    = _info.shader_param_map.GetShaderParameterInfoMap().find(bindless_indirect_name);
+                    bool        b_found_bindless_indirect = bindless_indirect_iter != _info.shader_param_map.GetShaderParameterInfoMap().end();
+                    uint        texture_set               = 0;
+                    uint        buffer_set                = 0;
+                    if (b_found_bindless_indirect) {
+                        const ParameterInfo& indirect_binding_info = bindless_indirect_iter->second;
+
+                        auto&                 set           = _out_descriptor_bindings[indirect_binding_info.space];
+                        static constexpr uint indirect_slot = 0;
+                        static constexpr uint sampler_slot  = 0;
+                        static constexpr uint texture_slot  = 1;
+                        static constexpr uint buffer_slot   = 1;
+                        assert(indirect_binding_info.slot == 0 && "Indirect Binding Slot Must be 0.");
+                        auto& vk_binding           = set[indirect_slot];
+                        vk_binding.binding         = indirect_slot;
+                        vk_binding.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                        vk_binding.descriptorCount = 1;
+                        vk_binding.stageFlags |= _stage;
+                        vk_binding.pImmutableSamplers = nullptr;
+                        _max_set                      = uint(std::max(int(_max_set), int(indirect_binding_info.space)));
+                        buffer_set                    = indirect_binding_info.space;
+                        if (b_found_bindless_buffer) {
+                            auto& temp_binding           = set[buffer_slot];
+                            temp_binding.binding         = buffer_slot;
+                            temp_binding.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                            temp_binding.descriptorCount = 10000;
+                            temp_binding.stageFlags |= _stage;
+                            temp_binding.pImmutableSamplers = nullptr;
+                        }
+
+                        if (b_found_bindless_texture) {
+                            auto& temp_binding           = set[texture_slot];
+                            temp_binding.binding         = texture_slot;
+                            temp_binding.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                            temp_binding.descriptorCount = 10000;
+                            temp_binding.stageFlags |= _stage;
+                            temp_binding.pImmutableSamplers = nullptr;
+
+                            auto& temp_sampler_binding           = set[sampler_slot];
+                            temp_sampler_binding.binding         = sampler_slot;
+                            temp_sampler_binding.descriptorType  = VK_DESCRIPTOR_TYPE_SAMPLER;
+                            temp_sampler_binding.descriptorCount = _device.ImmutableSamplerCount();
+                            temp_sampler_binding.stageFlags |= _stage;
+                            temp_sampler_binding.pImmutableSamplers = _device.GetImmutableSamplers();
+                            texture_set                             = bindless_texture_iter->second.space;
+                            _max_set                                = uint(std::max(int(_max_set), int(texture_set)));
+                        }
+
+                        _out_reflect_flags[idx] = EncodeBindlessInfo(texture_set, buffer_set, _stage, b_found_bindless_texture, b_found_bindless_buffer);
+                    }
+
+                    break;
+                }
+                case SDA_Constant: {
+                    bool b_push_constant = std::holds_alternative<uint>(desc_type);
+                    assert(b_push_constant && "Shader Constant Param must be Declared Constant In Shader Param in cpp end.");
+                    _out_constant_idx              = idx;
+                    _out_push_constant_ranges.size = std::max(_out_push_constant_ranges.size, std::get<uint>(desc_type));
+                    _out_push_constant_ranges.stageFlags |= _stage;
+                    _out_reflect_flags[idx] = EncodeReflectInfo(0, std::get<uint>(desc_type), _out_push_constant_ranges.stageFlags);
+                    break;
+                }
+                case SDA_Buffer:
+                case SDA_Texture:
+                case SDA_Sampler: {
+                    auto  rel_desc_type        = std::get<SpvReflectDescriptorType>(desc_type);
+                    auto  rel_res_type         = std::get<SpvReflectResourceType>(resource_type);
+                    auto  desc_type            = METoVkDescriptorType(rel_desc_type, rel_res_type);
+                    auto& set                  = _out_descriptor_bindings[binding_info.space];
+                    auto& vk_binding           = set[binding_info.slot];
+                    vk_binding.binding         = binding_info.slot;
+                    vk_binding.descriptorType  = desc_type;
+                    vk_binding.descriptorCount = 1;
+                    vk_binding.stageFlags |= _stage;
+                    vk_binding.pImmutableSamplers = nullptr;
+                    _out_reflect_flags[idx]       = EncodeReflectInfo(binding_info.space, binding_info.slot, vk_binding.stageFlags);
+                    _max_set                      = uint(std::max(int(_max_set), int(binding_info.space)));
+
+                    break;
+                }
+                default:
+                    assert(false && "Unknown shader arg type.");
+            }
+        }
+    }
+
     PipelineHandle VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo&& _shader_info) {
         VulkanPipelineState* vk_pso = MoerNew(VulkanPipelineState)(this, VulkanPipelineState::GFX);
 
@@ -612,34 +754,47 @@ namespace Moer::Render {
         int                        constant_idx = -1;
 
         auto merge_reflect_info = [&](const SingleShaderInfo& _info, VkShaderStageFlagBits _stage) {
-            for (const auto& hash : _shader_info.layout_hash) {
-                uint idx                        = uint(&hash - _shader_info.layout_hash.data());
-                hash_2_idx[GetHash(hash)]       = idx;
-                const auto& binding             = _info.shader_param_map.GetShaderParameterInfoMap().find(hash.data());
-                const auto& binding_info        = binding->second;
-                auto [desc_type, resource_type] = DecodeReflectType(binding_info.type_flags);
-                bool b_push_constant            = std::holds_alternative<uint>(desc_type);
-                if (b_push_constant) {
-                    constant_idx              = idx;
-                    push_constant_ranges.size = std::max(push_constant_ranges.size, std::get<uint>(desc_type));
-                    push_constant_ranges.stageFlags |= _stage;
-                    reflect_flags[idx] = EncodeReflectInfo(0, std::get<uint>(desc_type), push_constant_ranges.stageFlags);
-                } else {
-                    auto  rel_desc_type        = std::get<SpvReflectDescriptorType>(desc_type);
-                    auto  rel_res_type         = std::get<SpvReflectResourceType>(resource_type);
-                    auto  desc_type            = METoVkDescriptorType(rel_desc_type, rel_res_type);
-                    auto& set                  = descriptor_bindings[binding_info.space];
-                    auto& vk_binding           = set[binding_info.slot];
-                    vk_binding.binding         = binding_info.slot;
-                    vk_binding.descriptorType  = desc_type;
-                    vk_binding.descriptorCount = 1;
-                    vk_binding.stageFlags |= _stage;
-                    vk_binding.pImmutableSamplers = nullptr;
-                    reflect_flags[idx]            = EncodeReflectInfo(binding_info.space, binding_info.slot, vk_binding.stageFlags);
-                    max_set                       = uint(std::max(int(max_set), int(binding_info.space)));
-                }
-            }
+            MergeReflectInfo(*this,
+                             _info,
+                             _shader_info,
+                             _stage,
+                             hash_2_idx,
+                             reflect_flags,
+                             descriptor_bindings,
+                             push_constant_ranges,
+                             constant_idx,
+                             max_set);
         };
+
+        // auto merge_reflect_info = [&](const SingleShaderInfo& _info, VkShaderStageFlagBits _stage) {
+        //     for (const auto& hash : _shader_info.layout_hash) {
+        //         uint idx                        = uint(&hash - _shader_info.layout_hash.data());
+        //         hash_2_idx[GetHash(hash)]       = idx;
+        //         const auto& binding             = _info.shader_param_map.GetShaderParameterInfoMap().find(hash.data());
+        //         const auto& binding_info        = binding->second;
+        //         auto [desc_type, resource_type] = DecodeReflectType(binding_info.type_flags);
+        //         bool b_push_constant            = std::holds_alternative<uint>(desc_type);
+        //         if (b_push_constant) {
+        //             constant_idx              = idx;
+        //             push_constant_ranges.size = std::max(push_constant_ranges.size, std::get<uint>(desc_type));
+        //             push_constant_ranges.stageFlags |= _stage;
+        //             reflect_flags[idx] = EncodeReflectInfo(0, std::get<uint>(desc_type), push_constant_ranges.stageFlags);
+        //         } else {
+        //             auto  rel_desc_type        = std::get<SpvReflectDescriptorType>(desc_type);
+        //             auto  rel_res_type         = std::get<SpvReflectResourceType>(resource_type);
+        //             auto  desc_type            = METoVkDescriptorType(rel_desc_type, rel_res_type);
+        //             auto& set                  = descriptor_bindings[binding_info.space];
+        //             auto& vk_binding           = set[binding_info.slot];
+        //             vk_binding.binding         = binding_info.slot;
+        //             vk_binding.descriptorType  = desc_type;
+        //             vk_binding.descriptorCount = 1;
+        //             vk_binding.stageFlags |= _stage;
+        //             vk_binding.pImmutableSamplers = nullptr;
+        //             reflect_flags[idx]            = EncodeReflectInfo(binding_info.space, binding_info.slot, vk_binding.stageFlags);
+        //             max_set                       = uint(std::max(int(max_set), int(binding_info.space)));
+        //         }
+        //     }
+        // };
         // shader stage
         std::visit([&](auto&& _shader_info_group) {
             using T = std::decay_t<decltype(_shader_info_group)>;
@@ -850,49 +1005,63 @@ namespace Moer::Render {
         UnorderedMap<uint64, uint> hash_2_idx;
         int                        constant_idx = -1;
 
+        auto merge_reflect_info = [&](const SingleShaderInfo& _info, VkShaderStageFlagBits _stage) {
+            MergeReflectInfo(*this,
+                             _info,
+                             _shader_info,
+                             _stage,
+                             hash_2_idx,
+                             reflect_flags,
+                             descriptor_bindings,
+                             push_constant_ranges,
+                             constant_idx,
+                             max_set);
+        };
+
         std::visit([&](auto&& _shader_info_group) {
             using T = std::decay_t<decltype(_shader_info_group)>;
             if constexpr (std::is_same_v<T, ShaderCs>) {
-                const auto& shader_info = _shader_info_group.cs;
-                shader_stage.sType      = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-                shader_stage.stage      = VK_SHADER_STAGE_COMPUTE_BIT;
-                VkShaderModuleCreateInfo shader_module_create_info{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-                shader_module_create_info.codeSize = shader_info.shader_data.size();
-                shader_module_create_info.pCode    = reinterpret_cast<const uint32_t*>(shader_info.shader_data.data());
-                shader_module_create_info.flags    = 0;
-                VkShaderModule shader_module;
-                VK_CHECK_RESULT(vkCreateShaderModule(m_device, &shader_module_create_info, nullptr, &shader_module));
-                shader_stage.module = shader_module;
-                shader_stage.pName  = shader_info.entry_point.data();
+                // const auto& shader_info = _shader_info_group.cs;
+                // shader_stage.sType      = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+                // shader_stage.stage      = VK_SHADER_STAGE_COMPUTE_BIT;
+                // VkShaderModuleCreateInfo shader_module_create_info{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+                // shader_module_create_info.codeSize = shader_info.shader_data.size();
+                // shader_module_create_info.pCode    = reinterpret_cast<const uint32_t*>(shader_info.shader_data.data());
+                // shader_module_create_info.flags    = 0;
+                // VkShaderModule shader_module;
+                // VK_CHECK_RESULT(vkCreateShaderModule(m_device, &shader_module_create_info, nullptr, &shader_module));
+                // shader_stage.module = shader_module;
+                // shader_stage.pName  = shader_info.entry_point.data();
 
-                shader_info.shader_param_map.GetShaderParameterInfoMap();
-                for (const auto& hash : _shader_info.layout_hash) {
+                // shader_info.shader_param_map.GetShaderParameterInfoMap();
+                // for (const auto& hash : _shader_info.layout_hash) {
 
-                    hash_2_idx[GetHash(hash)]       = uint(&hash - _shader_info.layout_hash.data());
-                    const auto& binding             = shader_info.shader_param_map.GetShaderParameterInfoMap().find(hash.data());
-                    const auto& binding_info        = binding->second;
-                    auto [desc_type, resource_type] = DecodeReflectType(binding_info.type_flags);
-                    bool b_push_constant            = std::holds_alternative<uint>(desc_type);
-                    if (b_push_constant) {
-                        constant_idx                                           = uint(&hash - _shader_info.layout_hash.data());
-                        push_constant_ranges.size                              = std::max(push_constant_ranges.size, std::get<uint>(desc_type));
-                        push_constant_ranges.stageFlags                        = VK_SHADER_STAGE_COMPUTE_BIT;
-                        reflect_flags[&hash - _shader_info.layout_hash.data()] = EncodeReflectInfo(0, std::get<uint>(desc_type), VK_SHADER_STAGE_COMPUTE_BIT);
-                    } else {
-                        auto  rel_desc_type        = std::get<SpvReflectDescriptorType>(desc_type);
-                        auto  rel_res_type         = std::get<SpvReflectResourceType>(resource_type);
-                        auto  desc_type            = METoVkDescriptorType(rel_desc_type, rel_res_type);
-                        auto& set                  = descriptor_bindings[binding_info.space];
-                        auto& vk_binding           = set[binding_info.slot];
-                        vk_binding.binding         = binding_info.slot;
-                        vk_binding.descriptorType  = desc_type;
-                        vk_binding.descriptorCount = 1;
-                        vk_binding.stageFlags |= VK_SHADER_STAGE_COMPUTE_BIT;
-                        vk_binding.pImmutableSamplers                          = nullptr;
-                        reflect_flags[&hash - _shader_info.layout_hash.data()] = EncodeReflectInfo(binding_info.space, binding_info.slot, VK_SHADER_STAGE_COMPUTE_BIT);
-                        max_set                                                = uint(std::max(int(max_set), int(binding_info.space)));
-                    }
-                }
+                //     hash_2_idx[GetHash(hash)]       = uint(&hash - _shader_info.layout_hash.data());
+                //     const auto& binding             = shader_info.shader_param_map.GetShaderParameterInfoMap().find(hash.data());
+                //     const auto& binding_info        = binding->second;
+                //     auto [desc_type, resource_type] = DecodeReflectType(binding_info.type_flags);
+                //     bool b_push_constant            = std::holds_alternative<uint>(desc_type);
+                //     if (b_push_constant) {
+                //         constant_idx                                           = uint(&hash - _shader_info.layout_hash.data());
+                //         push_constant_ranges.size                              = std::max(push_constant_ranges.size, std::get<uint>(desc_type));
+                //         push_constant_ranges.stageFlags                        = VK_SHADER_STAGE_COMPUTE_BIT;
+                //         reflect_flags[&hash - _shader_info.layout_hash.data()] = EncodeReflectInfo(0, std::get<uint>(desc_type), VK_SHADER_STAGE_COMPUTE_BIT);
+                //     } else {
+                //         auto  rel_desc_type        = std::get<SpvReflectDescriptorType>(desc_type);
+                //         auto  rel_res_type         = std::get<SpvReflectResourceType>(resource_type);
+                //         auto  desc_type            = METoVkDescriptorType(rel_desc_type, rel_res_type);
+                //         auto& set                  = descriptor_bindings[binding_info.space];
+                //         auto& vk_binding           = set[binding_info.slot];
+                //         vk_binding.binding         = binding_info.slot;
+                //         vk_binding.descriptorType  = desc_type;
+                //         vk_binding.descriptorCount = 1;
+                //         vk_binding.stageFlags |= VK_SHADER_STAGE_COMPUTE_BIT;
+                //         vk_binding.pImmutableSamplers                          = nullptr;
+                //         reflect_flags[&hash - _shader_info.layout_hash.data()] = EncodeReflectInfo(binding_info.space, binding_info.slot, VK_SHADER_STAGE_COMPUTE_BIT);
+                //         max_set                                                = uint(std::max(int(max_set), int(binding_info.space)));
+                //     }
+                // }
+                merge_reflect_info(_shader_info_group.cs, VK_SHADER_STAGE_COMPUTE_BIT);
             } else {
                 LOG_ERROR("Unsupported shader group type: {}", typeid(T).name());
             }

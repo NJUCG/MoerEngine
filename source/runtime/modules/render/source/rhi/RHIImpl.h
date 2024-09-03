@@ -432,6 +432,26 @@ namespace Moer::Render {
         const auto& WriteBuffers() const { return write_buffers; }
     };
 
+    struct UpdateBindlessArrayCmd : public Command {
+    private:
+        UpdateBindlessArrayCmd() : Command(EType::UpdateBindlessArray) {}
+        BindlessArrayRef array;
+        Array<BindlessArray::BufferUpdateInfo> buffer_updates;
+        Array<BindlessArray::TextureUpdateInfo> texture_updates;
+
+        Array<BindlessHandle> free_buffers;
+        Array<BindlessHandle> free_textures;
+
+    public:
+        UpdateBindlessArrayCmd(BindlessArrayRef _array) : Command(EType::UpdateBindlessArray), array(_array),
+        buffer_updates(std::move(array->buffers_allocated)), 
+        texture_updates(std::move(array->textures_allocated)) {}
+        auto* Handle() { return array.Get(); }
+        EQueueType GetQueueType() const override { return EQueueType::Graphics; }
+        const auto& BufferUpdates() const { return buffer_updates; }
+        const auto& TextureUpdates() const { return texture_updates; }
+        
+    };
     struct DrawIndexedCmd {
         uint index_cnt;
         uint instance_cnt;

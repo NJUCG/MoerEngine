@@ -176,6 +176,10 @@ namespace Moer::Render {
         commands.push_back(MakeUnique<SetDrawStateCmd>(_handle, std::move(_args), std::move(_info), std::move(_mesh_data)));
     }
 
+    void CommandList::UpdateBindlessArray(BindlessArrayRef _array) {
+        commands.push_back(MakeUnique<UpdateBindlessArrayCmd>(_array));
+    }
+
     // void CommandList::SubmitArgs(ShaderPipeline& _pso, Arguments&& _args) {
     //     commands.push_back(MakeUnique<SetParamsCmd>(_pso, std::move(_args)));
     // }

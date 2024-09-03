@@ -136,6 +136,40 @@ namespace Moer::Render {
 
         VK_CHECK_RESULT(vkCreateDescriptorPool(m_device->GetDevice(), &pool_info, nullptr, &m_pool));
     }
+    enum class EBindlessSizeType : uint8{
+        Buffer,
+        Sampler,
+        Image,
+        Num
+    };
+    enum class EBindlessSetType : uint8{
+        Buffer,
+        SamplerAndImage,
+        Num
+    };
+    void VulkanDescriptorSetAllocator::VulkanDescriptorSetCachePool::InitBindlessPool(){
+        constexpr uint immutable_sampler_count = 256;
+        VkDescriptorPoolSize pool_size{};
+        VkDescriptorPoolSize pool_sizes[static_cast<uint>(EBindlessSizeType::Num)];
+        pool_sizes[static_cast<uint>(EBindlessSizeType::Buffer)].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        pool_sizes[static_cast<uint>(EBindlessSizeType::Buffer)].descriptorCount = 4096 * 16;
+        pool_sizes[static_cast<uint>(EBindlessSizeType::Sampler)].type = VK_DESCRIPTOR_TYPE_SAMPLER;
+        pool_sizes[static_cast<uint>(EBindlessSizeType::Sampler)].descriptorCount = immutable_sampler_count;
+        pool_sizes[static_cast<uint>(EBindlessSizeType::Image)].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        pool_sizes[static_cast<uint>(EBindlessSizeType::Image)].descriptorCount = 4096 * 16;
+
+        VkDescriptorPoolCreateInfo pool_info{};
+        pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        pool_info.pNext = nullptr;
+        pool_info.maxSets = 4;
+        pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT | VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
+
+        pool_info.poolSizeCount = static_cast<uint>(EBindlessSizeType::Num);
+        pool_info.pPoolSizes = pool_sizes;
+
+        VK_CHECK_RESULT(vkCreateDescriptorPool(m_device->GetDevice(), &pool_info, nullptr, &m_bindless_pool));
+
+    }
 
     VulkanDescriptorSetAllocator::VulkanDescriptorSetCachePool::~VulkanDescriptorSetCachePool() {
         CleanUp();
@@ -210,6 +244,10 @@ namespace Moer::Render {
             m_pool = VK_NULL_HANDLE;
             m_allocated_sets.clear();
             m_allocated_set.clear();
+        }
+        if (m_bindless_pool) {
+            vkDestroyDescriptorPool(m_device->GetDevice(), m_bindless_pool, nullptr);
+            m_bindless_pool = VK_NULL_HANDLE;
         }
     }
 

@@ -1040,6 +1040,43 @@ uint32_t VulkanEnumTranslator::METoVkQueueFamilyIndex(ECommandListType _type, co
     }
 }
 
+VkFilter VulkanEnumTranslator::METoVKMinMagFilterMode(ESamplerFilter _filter) {
+    return VulkanEnumTranslator::METoVKImageFilter(_filter);
+}
+
+VkSamplerMipmapMode VulkanEnumTranslator::METoVKMipmapMode(ESamplerFilter _filter) {
+    switch (_filter) {
+        case SF_NEAREST:
+        case SF_LINEAR:
+            return VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        case SF_CUBIC:
+            return VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        case SF_ANISOTROPIC_NEAREST:
+            return VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        case SF_ANISOTROPIC_LINEAR:
+            return VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        default:
+            LOG_CRITICAL("Unknown Mipmap ESamplerFilter {:d}", static_cast<uint8_t>(_filter));
+            return VK_SAMPLER_MIPMAP_MODE_MAX_ENUM;
+    }
+}
+
+VkSamplerAddressMode VulkanEnumTranslator::METoVKWrapMode(ESamplerAddressMode _address_mode) {
+    switch (_address_mode) {
+        case SAM_REPEAT:
+            return VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        case SAM_MIRRORED_REPEAT:
+            return VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;
+        case SAM_CLAMP_TO_EDGE:
+            return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        case SAM_CLAMP_TO_BORDER:
+            return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+        default:
+            LOG_CRITICAL("Unknown ESamplerAddressMode {:d}", static_cast<uint8_t>(_address_mode));
+            return VK_SAMPLER_ADDRESS_MODE_MAX_ENUM;
+    }
+}
+
 #pragma endregion
 
 void VulkanRHISampler::GenerateSamplerFromInitializer(const VulkanDevice* _device, const RHISamplerCreateInfo& _initializer) {

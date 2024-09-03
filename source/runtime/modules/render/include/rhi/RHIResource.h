@@ -141,12 +141,14 @@ namespace Moer::Render {
     class Sampler;
     class DepthBuffer;
     class Swapchain;
-    using TextureRef     = CountableRef<Texture>;
-    using BufferRef      = CountableRef<Buffer>;
-    using FenceRef       = CountableRef<Fence>;
-    using SamplerRef     = CountableRef<Sampler>;
-    using DepthBufferRef = CountableRef<DepthBuffer>;
-    using SwapchainRef   = CountableRef<Swapchain>;
+    class BindlessArray;
+    using TextureRef       = CountableRef<Texture>;
+    using BufferRef        = CountableRef<Buffer>;
+    using FenceRef         = CountableRef<Fence>;
+    using SamplerRef       = CountableRef<Sampler>;
+    using DepthBufferRef   = CountableRef<DepthBuffer>;
+    using SwapchainRef     = CountableRef<Swapchain>;
+    using BindlessArrayRef = CountableRef<BindlessArray>;
 };// namespace Moer::Render
 
 class Shader;
@@ -624,11 +626,13 @@ namespace Moer::Render {
             CUBIC_BORDER
         };
         Sampler(EType _type) {}
+        Sampler(ESamplerFilter _filter, ESamplerAddressMode _address_mode, ESamplerCompareFunction _compare_function = ESamplerCompareFunction::SCF_NEVER) : filter(_filter), address_mode(_address_mode), compare_function(_compare_function) {}
         static Sampler Create(EType _type) {
             return Sampler(_type);
         }
-        ESamplerFilter      filter;
-        ESamplerAddressMode address_mode;
+        ESamplerFilter          filter;
+        ESamplerAddressMode     address_mode;
+        ESamplerCompareFunction compare_function;
     };
     class BufferView {
     public:
@@ -825,6 +829,48 @@ namespace Moer::Render {
 
     private:
         TextureRef tex_handle;
+    };
+
+    struct BindlessHandle {
+        uint handle;
+    };
+
+    class RENDER_API BindlessArray : public RHIResource {
+    public:
+        struct TextureUpdateInfo {
+            Texture* texture;
+            Sampler  sampler;
+            uint     slot;
+        };
+
+        struct BufferUpdateInfo {
+            Buffer* buffer;
+            uint     slot;
+        };
+        BindlessArray();
+        virtual ~BindlessArray() = default;
+        BindlessHandle AllocateTexture(Texture* _texture, Sampler _sampler);
+        BindlessHandle AllocateBuffer(Buffer* _buffer);
+
+        void FreeTexture(BindlessHandle _handle);
+        void FreeBuffer(BindlessHandle _handle);
+
+    private:
+        friend class CommandList;
+        friend class UpdateBindlessArrayCmd;
+
+        Array<uint> free_texture_slots;
+        Array<uint> free_buffer_slots;
+        uint        texture_slot_offset;
+        uint        buffer_slot_offset;
+
+        //frame resources
+        Array<TextureUpdateInfo> textures_allocated;
+        Array<BufferUpdateInfo> buffers_allocated;
+        Array<uint> textures_freed;
+        Array<uint> buffers_freed;
+
+        BufferRef indirect_buffer;
     };
 
 }// namespace Moer::Render
@@ -2976,11 +3022,19 @@ namespace Moer::Render {
         Array<SingleShaderInfo> closesthit;
         Array<SingleShaderInfo> callable;
     };
-
+    enum EShaderArgType : uint8 {
+        SDA_Buffer,
+        SDA_Texture,
+        SDA_Sampler,
+        SDA_Constant,
+        SDA_BindlessArray,
+        SDA_Num
+    };
     using ShaderOutputGroup = std::variant<ShaderVsGsPs, ShaderVsPs, ShaderMsPs, ShaderTsMsPs, ShaderCs, ShaderRT>;
     struct PipelineShaderInfo {
         ShaderOutputGroup       shader_group;
         Array<std::string_view> layout_hash;
+        Array<EShaderArgType>   arg_types;
     };
     struct GfxPsoCreateInfo {
         using RHIColorAttachmentInfoList = Moer::StaticArray<RHIColorAttachmentInfo, MAX_PASS_ATTACHMENT_COUNT>;
@@ -3382,8 +3436,6 @@ namespace Moer::Render {
         EPixelFormat format;
         Extent2D     size;
     };
-
-    class BindlessArray {};
 }// namespace Moer::Render
 
 #pragma endregion

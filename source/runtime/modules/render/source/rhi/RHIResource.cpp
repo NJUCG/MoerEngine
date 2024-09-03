@@ -1,4 +1,6 @@
 #include "rhi/RHIResource.h"
+#include "misc/Crc32.h"
+#include "misc/STL.h"
 #include "resources/ResourceTransition.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommon.h"
@@ -169,34 +171,87 @@ uint32_t RHIRenderPrimitive::GetCount() const {
     return m_count;
 }
 
-namespace Moer::Render{
-    TextureView::TextureView(Texture* _texture):
-        texture(_texture),
-        offset(0),
-        extent(_texture->GetExtent()),
-        mip_level(0),
-        array_index(0),
-        num_array(1),
-        num_mips(1)
-    {
+namespace Moer::Render {
+    TextureView::TextureView(Texture* _texture) : texture(_texture),
+                                                  offset(0),
+                                                  extent(_texture->GetExtent()),
+                                                  mip_level(0),
+                                                  array_index(0),
+                                                  num_array(1),
+                                                  num_mips(1) {
         //todo: create view
     }
-    TextureView::TextureView(TextureRef _texture_ref):TextureView(_texture_ref.Get()){
-
+    TextureView::TextureView(TextureRef _texture_ref) : TextureView(_texture_ref.Get()) {
     }
-    TextureView::TextureView(Texture* _tex, uint8 _mip_level, uint8 _mip_cnt):texture(_tex), mip_level(_mip_level), num_mips(_mip_cnt){
+    TextureView::TextureView(Texture* _tex, uint8 _mip_level, uint8 _mip_cnt) : texture(_tex), mip_level(_mip_level), num_mips(_mip_cnt) {
     }
     TextureView Texture::GetView(uint8 _mip_level, uint8 _mip_cnt) {
         return TextureView(this, _mip_level, _mip_cnt);
     }
 
-    BufferView::BufferView(Buffer* _buffer):buffer(_buffer), byte_offset(0), num_elements(_buffer->GetNumElement()), stride(_buffer->GetStride()){
+    BufferView::BufferView(Buffer* _buffer) : buffer(_buffer), byte_offset(0), num_elements(_buffer->GetNumElement()), stride(_buffer->GetStride()) {
     }
     BufferView Buffer::GetView(uint64_t _byte_offset, uint64_t _byte_size) {
-        if(_byte_size == UINT64_MAX){
+        if (_byte_size == UINT64_MAX) {
             return BufferView(this);
         }
         _byte_size = std::min(_byte_size, GetByteSize() - _byte_offset);
         return BufferView(this, _byte_offset, _byte_size, GetStride());
     }
-}
+
+    BindlessHandle BindlessArray::AllocateBuffer(Buffer* _buffer) {
+        uint slot = 0;
+        if (free_buffer_slots.empty()) {
+            slot = buffer_slot_offset++;
+            return BindlessHandle(uint64(slot));
+        }
+
+        slot = free_buffer_slots.back();
+        free_buffer_slots.pop_back();
+
+        buffers_allocated.emplace_back(_buffer, slot);
+
+        return BindlessHandle(uint64(slot));
+    }
+    BindlessHandle BindlessArray::AllocateTexture(Texture* _texture, Sampler _sampler) {
+        uint slot = 0;
+        if (free_texture_slots.empty()) {
+            slot = texture_slot_offset++;
+            return BindlessHandle(uint64(slot));
+        }
+
+        slot = free_texture_slots.back();
+        free_texture_slots.pop_back();
+
+        textures_allocated.push_back({_texture, _sampler, slot});
+
+        return BindlessHandle(uint64(slot));
+    }
+
+    void BindlessArray::FreeBuffer(BindlessHandle _handle) {
+        uint slot = _handle.handle;
+        buffers_freed.push_back(slot);
+    }
+
+    void BindlessArray::FreeTexture(BindlessHandle _handle) {
+        uint slot = _handle.handle;
+        textures_freed.push_back(slot);
+    }
+
+    // void BindlessArray::FreeBufferFrameEnd() {
+    //     for (uint slot : buffers_freed) {
+    //         free_buffer_slots.push_back(slot);
+    //     }
+    //     buffers_freed.clear();
+    // }
+
+    // void BindlessArray::FreeTextureFrameEnd() {
+    //     for (uint slot : textures_freed) {
+    //         free_texture_slots.push_back(slot);
+    //     }
+    //     textures_freed.clear();
+    // }
+
+    BindlessArray::BindlessArray() : RHIResource(RRT_BINDLESS_ARRAY){};
+
+}// namespace Moer::Render

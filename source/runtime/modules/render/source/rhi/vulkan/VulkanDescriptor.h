@@ -1,6 +1,7 @@
 #ifndef VULKAN_RHI_DESCRIPTOR_H
 #define VULKAN_RHI_DESCRIPTOR_H
 
+#include "vulkan/vulkan_core.h"
 #define VK_DESCRIPTOR_TYPE_BEGIN_RANGE (VK_DESCRIPTOR_TYPE_SAMPLER)
 #define VK_DESCRIPTOR_TYPE_END_RANGE   (VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT)
 #define VK_DESCRIPTOR_TYPE_RANGE_SIZE  3
@@ -84,9 +85,11 @@ namespace Moer::Render {
             bool AllocateDescriptorSet(VkDescriptorSetLayout _layout, VkDescriptorSet& _set);
             void Reset();
             void CleanUp();
-
+        private:
+            void InitBindlessPool();
         private:
             VkDescriptorPool m_pool;
+            VkDescriptorPool m_bindless_pool;
 
             Moer::UnorderedMap<uint32_t, Moer::Array<VkDescriptorSet>> m_allocated_sets;
             Moer::UnorderedMap<uint32_t, VkDescriptorSet>              m_allocated_set;

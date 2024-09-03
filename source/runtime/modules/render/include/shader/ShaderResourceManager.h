@@ -161,16 +161,18 @@ namespace Moer::Render {
         template<typename TPipeline>
             requires std::is_base_of_v<RasterPipeline, TPipeline>
         TPipeline Build(GfxPsoCreateInfo&& _pso_info) {
-            auto hash_array = TPipeline::GetHashArray();
-
+            auto                    hash_array     = TPipeline::GetHashArray();
+            auto                    arg_type_array = TPipeline::GetArgTypeArray();
             Array<std::string_view> hash_values(hash_array.size());
+            Array<EShaderArgType>   arg_type_values(hash_array.size());
             std::memcpy(hash_values.data(), hash_array.data(), hash_array.size() * sizeof(std::string_view));
-            PipelineHandle handle = CreatePipeline(std::move(_pso_info), hash_values);
+            std::memcpy(arg_type_values.data(), arg_type_array.data(), arg_type_array.size() * sizeof(EShaderArgType));
+            PipelineHandle handle = CreatePipeline(std::move(_pso_info), std::move(hash_values), std::move(arg_type_values));
             return TPipeline(handle);
         };
 
     private:
-        PipelineHandle CreatePipeline(GfxPsoCreateInfo&& _pso_info, Array<std::string_view>& _hash_values);
+        PipelineHandle CreatePipeline(GfxPsoCreateInfo&& _pso_info, Array<std::string_view>&& _hash_values, Array<EShaderArgType>&& _arg_type_values);
 
         ShaderInfo vertex_path;
         ShaderInfo pixel_path;
@@ -186,17 +188,20 @@ namespace Moer::Render {
         template<typename TPipeline>
             requires std::is_base_of_v<ComputePipeline, TPipeline>
         TPipeline Build() {
-            auto hash_array = TPipeline::GetHashArray();
+            auto hash_array     = TPipeline::GetHashArray();
+            auto arg_type_array = TPipeline::GetArgTypeArray();
 
             Array<std::string_view> hash_values(hash_array.size());
+            Array<EShaderArgType>   arg_type_values(hash_array.size());
             std::memcpy(hash_values.data(), hash_array.data(), hash_array.size() * sizeof(std::string_view));
-            PipelineHandle handle = CreatePipeline(hash_values);
+            std::memcpy(arg_type_values.data(), arg_type_array.data(), arg_type_array.size() * sizeof(EShaderArgType));
+            PipelineHandle handle = CreatePipeline(std::move(hash_values), std::move(arg_type_values));
             return TPipeline();
         };
         ComputeConstructor(RenderDevice&, std::string_view _path, std::string_view _entry_name);
 
     private:
-        PipelineHandle CreatePipeline(Array<std::string_view>& _hash_values);
+        PipelineHandle CreatePipeline(Array<std::string_view>&& _hash_values, Array<EShaderArgType>&& _arg_type_values);
 
         ShaderInfo            shader_info;
         Render::RenderDevice& device;
@@ -228,7 +233,7 @@ namespace Moer::Render {
 
     private:
         Render::RenderDevice& GetDevice();
-        Impl* impl;
+        Impl*                 impl;
     };
 }// namespace Moer::Render
 #endif

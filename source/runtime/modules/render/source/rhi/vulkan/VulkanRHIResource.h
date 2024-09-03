@@ -89,10 +89,17 @@ namespace Moer::Render {
         return uint64(_offset << 16) | uint64(_size) | (uint64(_stage_flags) << 32);
     }
     static auto DecodeReflectPushConstant(uint64 _val) {
-        return std::make_tuple(uint(_val >> 16), uint(_val & 0xFFFF), uint(_val >> 32));
+        return std::make_tuple(uint(_val >> 16) & 0xFFFF, uint(_val & 0xFFFF), uint(_val >> 32));
     }
     static auto DecodeReflectInfo(uint64 _val) {
-        return std::make_tuple(uint(_val >> 16), uint(_val & 0xFFFF), uint(_val >> 32));
+        return std::make_tuple(uint(_val >> 16) & 0xFFFF, uint(_val & 0xFFFF), uint(_val >> 32));
+    }
+    static uint64 EncodeBindlessInfo(int _texture_set, int _buffer_set, uint _stage_flags, uint8 _has_texture, uint8 _has_buffer) {
+        return uint64(_texture_set << 17) | uint64(_buffer_set << 2) | uint64(_has_texture << 1) | uint64(_has_buffer) | (uint64(_stage_flags) << 32);
+    }
+
+    static auto DecodeBindlessInfo(uint64 _val) {
+        return std::make_tuple(int(_val >> 17) & 0x7FFF, int(_val >> 2) & 0x7FFF, uint(_val >> 32), uint8(_val >> 1) & 0x1, uint8(_val) & 0x1);
     }
 
     class VulkanEnumTranslator final {
@@ -251,7 +258,7 @@ namespace Moer::Render {
 
     protected:
         VulkanDevice* m_device;
-        uint b_deferred_delete : 1 = true;
+        uint          b_deferred_delete : 1 = true;
     };
     class VulkanPipelineState : public VulkanDeviceObject {
         enum EType {
@@ -508,6 +515,11 @@ namespace Moer::Render {
         } m_alloc;
         UnorderedMap<uint, VkImageView>                                           m_views;
         Moer::UnorderedMap<Moer::uint, std::tuple<ETextureStateFlags, EPassType>> mip_usages;
+    };
+
+    class VulkanBindlessArray final : public BindlessArray, public VulkanDeviceObject {
+    public:
+        VulkanBindlessArray(VulkanDevice* _device) : BindlessArray(), VulkanDeviceObject(_device) {}
     };
 
 #pragma endregion

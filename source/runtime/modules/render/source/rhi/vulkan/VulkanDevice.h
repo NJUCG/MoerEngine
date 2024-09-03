@@ -222,6 +222,8 @@ namespace Moer::Render {
     public:
         void EnqueueDeferredRelease(RHIResource* _object);
         void FlushDeferredReleases();
+        constexpr uint ImmutableSamplerCount() const { return immutable_sampler_count; }
+        const VkSampler* GetImmutableSamplers() const{ return immutable_samplers.data(); }
     public:
         void Init(const DeviceInitializer& _initializer);
         void InitMemoryAllocator(VkInstance _instance);
@@ -326,6 +328,8 @@ namespace Moer::Render {
         UniquePtr<VkCommandQueue>     compute_queue;
         UniquePtr<VkCommandQueue>     transfer_queue;
         LockFreeQueueBase<RHIResource, 64> deferred_release_queue;
+        static constexpr uint immutable_sampler_count = uint(SF_Num) * uint(SAM_Num) * uint(SCF_Num) ;
+        StaticArray<VkSampler, immutable_sampler_count> immutable_samplers;
     private:
         friend VkCommandQueue;
         //configs

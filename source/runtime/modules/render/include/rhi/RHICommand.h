@@ -289,6 +289,7 @@ namespace Moer::Render {
             BuildAccel,
             Barrier,
             SetDrawState,
+            UpdateBindlessArray,
             // UpdateDrawState,
             // SetParams,
             // SetConstants,
@@ -564,14 +565,15 @@ namespace Moer::Render {
             return ComputeDispatcher(_pso, *this);
         };
 
+        RENDER_API void CopyFrom(BufferView _src, BufferView _dst);
+        RENDER_API void CopyFrom(TextureView _src, TextureView _dst);
+        RENDER_API void CopyFrom(TextureView _src, BufferView _dst);
+        RENDER_API void CopyFrom(BufferView _src, TextureView _dst);
+        RENDER_API void CopyFrom(std::span<byte> _data, BufferView _dst);
+        RENDER_API void CopyFrom(std::span<byte> _data, TextureView _dst);
+        RENDER_API void CopyFrom(BufferView _src, std::span<byte> _data);
 
-        RENDER_API void           CopyFrom(BufferView _src, BufferView _dst);
-        RENDER_API void           CopyFrom(TextureView _src, TextureView _dst);
-        RENDER_API void           CopyFrom(TextureView _src, BufferView _dst);
-        RENDER_API void           CopyFrom(BufferView _src, TextureView _dst);
-        RENDER_API void           CopyFrom(std::span<byte> _data, BufferView _dst);
-        RENDER_API void           CopyFrom(std::span<byte> _data, TextureView _dst);
-        RENDER_API void           CopyFrom(BufferView _src, std::span<byte> _data);
+        RENDER_API void UpdateBindlessArray(BindlessArrayRef _array);
 
         template<typename T, typename... Args>
         struct CountType;
@@ -632,16 +634,16 @@ namespace Moer::Render {
         // void SubmitConstants(ShaderPipeline&, Array<uint>&&);
 
         RENDER_API void BeginBarriers(uint _read_tex_cnt, uint _write_tex_cnt, uint _read_buf_cnt, uint _write_buf_cnt);
-        RENDER_API void InnerBarrier(ReadBuffer _buffer){
+        RENDER_API void InnerBarrier(ReadBuffer _buffer) {
             InnerReadBuffer(_buffer.buffer, _buffer.state);
         }
-        RENDER_API void InnerBarrier(WriteBuffer _buffer){
+        RENDER_API void InnerBarrier(WriteBuffer _buffer) {
             InnerWriteBuffer(_buffer.buffer, _buffer.state);
         }
-        RENDER_API void InnerBarrier(ReadTexture _texture){
+        RENDER_API void InnerBarrier(ReadTexture _texture) {
             InnerReadTexture(_texture.texture, _texture.state);
         }
-        RENDER_API void InnerBarrier(WriteTexture _texture){
+        RENDER_API void InnerBarrier(WriteTexture _texture) {
             InnerWriteTexture(_texture.texture, _texture.state);
         }
 
