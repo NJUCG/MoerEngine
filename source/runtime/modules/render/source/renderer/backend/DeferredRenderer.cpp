@@ -390,7 +390,6 @@ namespace Moer {
         // recheck_instance_id_srv = g_rhi->RHICreateBufferSRV(recheck_instance_id_buffer);
         // recheck_instance_id_uav = g_rhi->RHICreateBufferUAV(recheck_instance_id_buffer);
 
-        LOG_INFO("Light count: {}", g_scene->GetLights().size());
         for (auto& light_entity : g_scene->GetLights()) {
             auto      light_component = LightComponentManager::Get().Get(light_entity);
             LightData light_data;
@@ -414,6 +413,7 @@ namespace Moer {
                 auto spot_light = light;
 
                 // TODO: implement spot light (need test case)
+                // Be careful, I don't test any part of spot light (including data storage, etc)
                 LOG_WARNING("Spot light not implemented yet");
 
             } else {

@@ -8,14 +8,15 @@ namespace Moer {
     class RENDER_API DirectionalLightComponent : public LightComponent {
 
     public:
+        DirectionalLightComponent() noexcept {}
         DirectionalLightComponent(Vector3f color, float intensity, Vector3f direction) noexcept
-            : LightComponent(color, intensity), m_direction(direction) {}
+            : LightComponent(color, intensity, ELightComponentType::DIRECTIONAL), m_direction(direction) {}
 
         Vector3f GetDirection() const noexcept { return m_direction; }
         void     SetDirection(Vector3f direction) noexcept { m_direction = direction; }
 
     private:
-        Vector3f m_direction;
+        Vector3f m_direction{};
     };
 
 }// namespace Moer

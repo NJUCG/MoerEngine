@@ -8,6 +8,7 @@ namespace Moer {
     class RENDER_API SpotLightComponent : public LightComponent {
 
     public:
+        SpotLightComponent() noexcept {}
         SpotLightComponent(
             Vector3f color,
             float    intensity,
@@ -15,7 +16,7 @@ namespace Moer {
             Vector3f direction,
             float    inner_cone_angle,
             float    outer_cone_angle) noexcept
-            : LightComponent(color, intensity),
+            : LightComponent(color, intensity, ELightComponentType::SPOT),
               m_position(position),
               m_direction(direction),
               m_inner_cone_angle(inner_cone_angle),
@@ -31,10 +32,10 @@ namespace Moer {
         void     SetOuterConeAngle(float outer_cone_angle) noexcept { m_outer_cone_angle = outer_cone_angle; }
 
     private:
-        Vector3f m_position;
-        Vector3f m_direction;
-        float    m_inner_cone_angle;
-        float    m_outer_cone_angle;
+        Vector3f m_position{};
+        Vector3f m_direction{};
+        float    m_inner_cone_angle = 0.0f;
+        float    m_outer_cone_angle = 0.0f;
     };
 
 }// namespace Moer

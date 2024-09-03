@@ -6,6 +6,10 @@
 #include "rhi/RHI.h"
 #include "scene/EntityManager.h"
 #include "scene/light/LightComponentManager.h"
+#include "scene/light/LightComponent.h"
+#include "scene/light/DirectionalLightComponent.h"
+#include "scene/light/PointLightComponent.h"
+#include "scene/light/SpotLightComponent.h"
 #include "taskgraph/GraphTask.h"
 
 #include <fstream>
@@ -174,6 +178,7 @@ namespace Moer {
         }
     }
     void SceneCache::ReadSceneUtils(InputStream& stream, SceneData& sceneData) {
+        // read cameras
         size_t camera_count;
         stream.read(camera_count);
         sceneData.m_cameras.reserve(camera_count);
@@ -181,6 +186,35 @@ namespace Moer {
             CameraRef camera = MoerNew(Camera);
             stream.read(camera, sizeof(Camera));
             sceneData.m_cameras.push_back(camera);
+        }
+
+        // read lights
+        size_t light_count;
+        stream.read(light_count);
+        sceneData.m_lights.reserve(light_count);
+
+        for (int i = 0; i < light_count; ++i) {
+            ELightComponentType type;
+            stream.read(type);
+
+            if (type == ELightComponentType::DIRECTIONAL) {
+                auto light = MoerNew(DirectionalLightComponent)();
+                stream.read(light, sizeof(DirectionalLightComponent));
+                sceneData.m_lights.push_back(light);
+
+            } else if (type == ELightComponentType::POINT) {
+                auto light = MoerNew(PointLightComponent)();
+                stream.read(light, sizeof(PointLightComponent));
+                sceneData.m_lights.push_back(light);
+
+            } else if (type == ELightComponentType::SPOT) {
+                auto light = MoerNew(SpotLightComponent)();
+                stream.read(light, sizeof(SpotLightComponent));
+                sceneData.m_lights.push_back(light);
+
+            } else {
+                LOG_WARNING("Unknown light type: {}", static_cast<int>(type));
+            }
         }
     }
 
@@ -475,9 +509,23 @@ namespace Moer {
         }
     }
     void SceneCache::WriteSceneUtils(OutputStream& stream, const SceneData& sceneData) {
+        // write cameras
         stream.write(sceneData.m_cameras.size());
         for (auto& camera : sceneData.m_cameras) {
             stream.write(camera, sizeof(Camera));
+        }
+
+        // write lights
+        stream.write(sceneData.m_lights.size());
+        for (auto& light : sceneData.m_lights) {
+            stream.write(light->GetType());
+            if (light->GetType() == ELightComponentType::DIRECTIONAL) {
+                stream.write(light, sizeof(DirectionalLightComponent));
+            } else if (light->GetType() == ELightComponentType::POINT) {
+                stream.write(light, sizeof(PointLightComponent));
+            } else if (light->GetType() == ELightComponentType::SPOT) {
+                stream.write(light, sizeof(SpotLightComponent));
+            }
         }
     }
     SceneData SceneCache::ConvertToSceneData(const Scene& scene) {
