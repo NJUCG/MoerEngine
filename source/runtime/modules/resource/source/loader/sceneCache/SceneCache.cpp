@@ -5,6 +5,7 @@
 #include "resources/GpuScene.h"
 #include "rhi/RHI.h"
 #include "scene/EntityManager.h"
+#include "scene/light/LightComponentManager.h"
 #include "taskgraph/GraphTask.h"
 
 #include <fstream>
@@ -540,6 +541,12 @@ namespace Moer {
             auto entity = EntityManager::Get().Create();
             CameraManager::Get().Put(entity, camera);
             scene->AddCamera(entity);
+        }
+
+        for (auto& light : sceneData.m_lights) {
+            auto entity = EntityManager::Get().Create();
+            LightComponentManager::Get().Put(entity, light);
+            scene->AddLight(entity);
         }
 
         Moer::UnorderedMap<std::string, RHITextureRef> textures;

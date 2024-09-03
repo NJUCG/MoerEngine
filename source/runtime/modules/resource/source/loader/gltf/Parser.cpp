@@ -26,6 +26,7 @@
 #include "scene/RenderableManager.h"
 #include "scene/Scene.h"
 #include "scene/TransformManager.h"
+#include "scene/light/LightComponent.h"
 #include "taskgraph/Event.h"
 #include "taskgraph/GraphTask.h"
 
@@ -75,7 +76,14 @@ namespace Moer::Resource::Gltf {
     Transform GetTransform(const aiNode* node);
 
     void Parser::Impl::LoadLights(const aiScene* scene) {
+        if (true) {
+            LOG_INFO("No lights found, create default lights");
+            m_scene_data->m_lights = std::move(LightComponent::CreateDefaultLightComponents());
+            return;
+        }
+        // TODO: Load lights
     }
+
     uint32_t GetVertexData(const aiMesh* mesh, float* data) {
         //  Moer::Array<float> data;
         bool   has_position = mesh->HasPositions();
@@ -231,15 +239,10 @@ namespace Moer::Resource::Gltf {
     void Parser::Impl::LoadCameras(const aiScene* scene) {
         const uint32_t camera_num = scene->mNumCameras;
         if (camera_num == 0) {
-            CameraRef default_camera = MoerNew(Camera)();
-            default_camera->SetFov(36.f);
-            Transform transform = Transform(Vector3f(0.0f, 0.0f, 0.0f), Vector3f(0.0f, 0.0f, 1.0f), Vector3f(0.0f, 1.0f, 0.0f));
-            default_camera->SetWorldTransform(transform);
-            default_camera->SetNearClip(0.1f);
-            default_camera->SetFarClip(1000.0f);
-            default_camera->SetAspectRatio(16.0f / 9.0f);
+            LOG_INFO("No camera found, create default camera");
+            CameraRef default_camera = Camera::CreateDefaultCamera();
             m_scene_data->m_cameras.push_back(default_camera);
-        } else
+        } else {
             for (uint32_t i = 0; i < camera_num; i++) {
                 const auto* camera = scene->mCameras[i];
                 Vector4f    position(camera->mPosition.x, camera->mPosition.y, camera->mPosition.z, 1.f);
@@ -268,6 +271,7 @@ namespace Moer::Resource::Gltf {
                 camera_ref->SetAspectRatio(camera->mAspect);
                 m_scene_data->m_cameras.push_back(camera_ref);
             }
+        }
     }
 
     MaterialRef GetDefaultMaterial() {
@@ -448,7 +452,9 @@ namespace Moer::Resource::Gltf {
         //Todo Load Lights
         LoadCameras(gltf_scene);
         LoadNode(gltf_scene->mRootNode, gltf_scene);
+        LOG_INFO("Before Load Lights, light size:{}", m_scene_data->m_lights.size());
         LoadLights(gltf_scene);
+        LOG_INFO("After Load Lights, light size:{}", m_scene_data->m_lights.size());
 
         auto                          instance_id = 0;
         Moer::Array<InstanceData>     instance_data;

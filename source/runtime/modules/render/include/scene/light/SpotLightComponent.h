@@ -14,7 +14,12 @@ namespace Moer {
             Vector3f position,
             Vector3f direction,
             float    inner_cone_angle,
-            float    outer_cone_angle) noexcept;
+            float    outer_cone_angle) noexcept
+            : LightComponent(color, intensity),
+              m_position(position),
+              m_direction(direction),
+              m_inner_cone_angle(inner_cone_angle),
+              m_outer_cone_angle(outer_cone_angle) {}
 
         Vector3f GetPosition() const noexcept { return m_position; }
         void     SetPosition(Vector3f position) noexcept { m_position = position; }

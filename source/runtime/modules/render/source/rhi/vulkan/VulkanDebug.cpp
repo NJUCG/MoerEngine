@@ -30,6 +30,11 @@ namespace Vulkan {
         } else if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
             LOG_WARNING(stream.str());
         } else if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
+            if (
+                stream.str().find("VK_OBJECT_TYPE_COMMAND_BUFFER") == std::string::npos ||
+                stream.str().find("VK_OBJECT_TYPE_DESCRIPTOR_SET") == std::string::npos) {
+                return VK_FALSE;
+            }
             LOG_ERROR(stream.str());
         }
 

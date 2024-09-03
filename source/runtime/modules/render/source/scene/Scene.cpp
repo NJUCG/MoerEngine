@@ -26,6 +26,7 @@ namespace Moer {
     public:
         void         AddEntity(Entity _entity) noexcept { m_entities.emplace(_entity); }
         void         AddCamera(Entity _entity) noexcept { m_cameras.emplace(_entity); }
+        void         AddLight(Entity _entity) noexcept { m_lights.emplace(_entity); }
         void         RemoveEntity(Entity _entity) noexcept { m_entities.erase(_entity); };
         void         SetBuffer(const std::string& _name, RHIBufferRef _buffer) { m_buffers[_name] = _buffer; }
         RHIBufferRef GetBuffer(const std::string& _name) const { return m_buffers.at(_name); }
@@ -38,6 +39,10 @@ namespace Moer {
         }
         Array<Entity>                GetEntities() const noexcept;
         Array<Entity>                GetCameras() const noexcept;
+        Array<Entity>                GetLights() const noexcept;
+        bool                         IsEntitiesEmpty() const noexcept { return m_entities.empty(); }
+        bool                         IsCamerasEmpty() const noexcept { return m_cameras.empty(); }
+        bool                         IsLightsEmpty() const noexcept { return m_lights.empty(); }
         static AsyncSceneLoadInfoRef GetCurrentSceneLoadInfo() noexcept { return m_load_info; }
 
         GpuScene& GetGpuScene() noexcept { return gpu_scene; }
@@ -49,6 +54,7 @@ namespace Moer {
 
         EntitySet m_entities;
         EntitySet m_cameras;
+        EntitySet m_lights;
 
         static AsyncSceneLoadInfoRef m_load_info;
         GpuScene                     gpu_scene;
@@ -69,6 +75,15 @@ namespace Moer {
         Array<Entity> result;
         result.reserve(m_cameras.size());
         for (auto& entity : m_cameras) {
+            result.push_back(entity);
+        }
+        return result;
+    }
+
+    Array<Entity> Scene::Impl::GetLights() const noexcept {
+        Array<Entity> result;
+        result.reserve(m_lights.size());
+        for (auto& entity : m_lights) {
             result.push_back(entity);
         }
         return result;
@@ -99,15 +114,36 @@ namespace Moer {
         m_impl->AddCamera(entity);
     }
 
+    void Scene::AddLight(Entity entity) noexcept {
+        m_impl->AddLight(entity);
+    }
+
     Array<Entity> Scene::GetEntities() const noexcept {
         return m_impl->GetEntities();
+    }
+
+    Array<Entity> Scene::GetLights() const noexcept {
+        return m_impl->GetLights();
     }
 
     Array<Entity> Scene::GetCameras() const noexcept {
         return m_impl->GetCameras();
     }
+
     Entity Scene::GetMainCamera() const noexcept {
         return GetCameras()[0];
+    }
+
+    bool Scene::IsEntitiesEmpty() const noexcept {
+        return m_impl->IsEntitiesEmpty();
+    }
+
+    bool Scene::IsLightsEmpty() const noexcept {
+        return m_impl->IsLightsEmpty();
+    }
+
+    bool Scene::IsCamerasEmpty() const noexcept {
+        return m_impl->IsCamerasEmpty();
     }
 
     void Scene::ForEach(std::function<void(Entity)> _func) const noexcept {

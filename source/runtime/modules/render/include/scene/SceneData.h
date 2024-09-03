@@ -4,6 +4,7 @@
 #include "scene/Material.h"
 #include "scene/RenderableManager.h"
 #include "scene/Scene.h"
+#include "scene/light/LightComponent.h"
 
 #include <filesystem>
 namespace Moer {
@@ -36,7 +37,8 @@ namespace Moer {
         Moer::Array<InstanceMeshInfo>   m_instance_mesh_info{};
         Moer::Array<uint32_t>           m_instance_id;
 
-        Moer::Array<CameraRef> m_cameras{};
+        Moer::Array<CameraRef>         m_cameras{};
+        Moer::Array<LightComponentRef> m_lights{};
 
         Moer::UnorderedMap<std::string, TextureData>               m_textures{};
         Moer::UnorderedMap<std::string, Moer::MaterialInstanceRef> m_material_instances{};
@@ -46,4 +48,4 @@ namespace Moer {
         std::filesystem::path m_path;
         size_t                m_scene_key{0};
     };
-}
+}// namespace Moer

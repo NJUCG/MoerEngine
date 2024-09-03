@@ -9,12 +9,12 @@ namespace Moer {
 
     class RENDER_API LightComponentManager {
     private:
-        EntityComponentManger<LightComponent> m_manager;
+        EntityComponentManger<LightComponentRef> m_manager;
 
     public:
-        LightComponent& Get(Entity entity) noexcept;
+        LightComponentRef Get(Entity entity) noexcept;
         // LightComponent& Create(Entity entity) noexcept; // Cannot create a base light component
-        void Put(Entity entity, const LightComponent& light) noexcept;
+        void Put(Entity entity, LightComponentRef light) noexcept;
         bool HasComponent(Entity entity) const noexcept;
         void Destroy(Entity entity) noexcept;
 

@@ -8,7 +8,8 @@ namespace Moer {
     class RENDER_API PointLightComponent : public LightComponent {
 
     public:
-        DirectionalLightComponent(Vector3f color, float intensity, Vector3f position) noexcept;
+        PointLightComponent(Vector3f color, float intensity, Vector3f position) noexcept
+            : LightComponent(color, intensity), m_position(position) {}
 
         Vector3f GetPosition() const noexcept { return m_position; }
         void     SetPosition(Vector3f position) noexcept { m_position = position; }
