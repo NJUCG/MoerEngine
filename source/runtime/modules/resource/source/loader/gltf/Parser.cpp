@@ -27,6 +27,9 @@
 #include "scene/Scene.h"
 #include "scene/TransformManager.h"
 #include "scene/light/LightComponent.h"
+#include "scene/light/DirectionalLightComponent.h"
+#include "scene/light/PointLightComponent.h"
+#include "scene/light/SpotLightComponent.h"
 #include "taskgraph/Event.h"
 #include "taskgraph/GraphTask.h"
 
@@ -74,15 +77,6 @@ namespace Moer::Resource::Gltf {
     };
 
     Transform GetTransform(const aiNode* node);
-
-    void Parser::Impl::LoadLights(const aiScene* scene) {
-        if (true) {
-            LOG_INFO("No lights found, create default lights");
-            m_scene_data->m_lights = std::move(LightComponent::CreateDefaultLightComponents());
-            return;
-        }
-        // TODO: Load lights
-    }
 
     uint32_t GetVertexData(const aiMesh* mesh, float* data) {
         //  Moer::Array<float> data;
@@ -232,16 +226,20 @@ namespace Moer::Resource::Gltf {
         m_scene_data->m_mat_instance_textures[mat->GetName()].textures.push_back({param_name, texture_path.C_Str()});
         LOG_INFO("Load Texture Success:{}", texture_path.C_Str());
     }
+
     static Vector3f ToVector3f(const aiVector3D& vec) {
         return {vec.x, vec.y, vec.z};
+    }
+
+    static Vector3f ToVector3f(const aiColor3D& vec) {
+        return {vec.r, vec.g, vec.b};
     }
 
     void Parser::Impl::LoadCameras(const aiScene* scene) {
         const uint32_t camera_num = scene->mNumCameras;
         if (camera_num == 0) {
             LOG_INFO("No camera found, create default camera");
-            CameraRef default_camera = Camera::CreateDefaultCamera();
-            m_scene_data->m_cameras.push_back(default_camera);
+            m_scene_data->m_cameras.push_back(Camera::CreateDefaultCamera());
         } else {
             for (uint32_t i = 0; i < camera_num; i++) {
                 const auto* camera = scene->mCameras[i];
@@ -270,6 +268,63 @@ namespace Moer::Resource::Gltf {
                 camera_ref->SetFarClip(camera->mClipPlaneFar);
                 camera_ref->SetAspectRatio(camera->mAspect);
                 m_scene_data->m_cameras.push_back(camera_ref);
+            }
+        }
+    }
+
+    /**
+     * Load lights from gltf scene
+     * Refer to: https://assimp-docs.readthedocs.io/en/latest/API/API-Documentation.html#_CPPv47aiLight
+     */
+    void Parser::Impl::LoadLights(const aiScene* scene) {
+        const uint32_t light_num = scene->mNumLights;
+        if (light_num == 0) {
+            LOG_INFO("No lights found, loader will use default lights");
+            m_scene_data->m_lights = std::move(LightComponent::CreateDefaultLightComponents());
+        } else {
+            LOG_INFO("Found {} lights in the scene", light_num);
+
+            LOG_WARNING("Due to the Sponza scene only has a dark light, loader will use default lights instead. Please remove this warning and the following code after adding a new scene with lights");
+            m_scene_data->m_lights = std::move(LightComponent::CreateDefaultLightComponents());
+            return;
+
+            // The following code isn't tested fully. It may not work as expected.
+            // TODO: Add a new scene with lights to test the following code
+            for (uint32_t i = 0; i < light_num; i++) {
+                const auto* light = scene->mLights[i];
+                if (light->mType == aiLightSourceType::aiLightSource_DIRECTIONAL) {
+                    LightComponentRef light_component = MoerNew(DirectionalLightComponent)(
+                        ToVector3f(light->mColorDiffuse),// color
+                        1.0f,                            // intensity
+                        ToVector3f(light->mDirection)    // direction
+                    );
+                    m_scene_data->m_lights.push_back(light_component);
+
+                } else if (light->mType == aiLightSourceType::aiLightSource_POINT) {
+                    LightComponentRef light_component = MoerNew(PointLightComponent)(
+                        ToVector3f(light->mColorDiffuse),// color
+                        1.0f,                            // intensity
+                        ToVector3f(light->mPosition)     // position
+                    );
+                    m_scene_data->m_lights.push_back(light_component);
+
+                } else if (light->mType == aiLightSourceType::aiLightSource_SPOT) {
+                    LightComponentRef light_component = MoerNew(SpotLightComponent)(
+                        ToVector3f(light->mColorDiffuse),// color
+                        1.0f,                            // intensity
+                        ToVector3f(light->mPosition),    // position
+                        ToVector3f(light->mDirection),   // direction
+                        light->mAngleInnerCone,          // inner_cone_angle
+                        light->mAngleOuterCone           // outer_cone_angle
+                    );
+                    m_scene_data->m_lights.push_back(light_component);
+
+                } else if (light->mType == aiLightSourceType::aiLightSource_AMBIENT) {
+                    LOG_WARNING("Unsupported light type `Ambient Light` in loading scene");
+
+                } else if (light->mType == aiLightSourceType::aiLightSource_AREA) {
+                    LOG_WARNING("Unsupported light type `Area Light` in loading scene");
+                }
             }
         }
     }
@@ -452,9 +507,7 @@ namespace Moer::Resource::Gltf {
         //Todo Load Lights
         LoadCameras(gltf_scene);
         LoadNode(gltf_scene->mRootNode, gltf_scene);
-        LOG_INFO("Before Load Lights, light size:{}", m_scene_data->m_lights.size());
         LoadLights(gltf_scene);
-        LOG_INFO("After Load Lights, light size:{}", m_scene_data->m_lights.size());
 
         auto                          instance_id = 0;
         Moer::Array<InstanceData>     instance_data;
