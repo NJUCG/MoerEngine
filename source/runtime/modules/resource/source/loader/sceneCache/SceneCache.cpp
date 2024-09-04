@@ -560,6 +560,7 @@ namespace Moer {
                 stream.write(spot_light->GetDirection());
                 stream.write(spot_light->GetInnerConeAngle());
                 stream.write(spot_light->GetOuterConeAngle());
+
             } else {
                 LOG_WARNING("Unknown light type: {}", static_cast<uint8_t>(light->GetType()));
             }

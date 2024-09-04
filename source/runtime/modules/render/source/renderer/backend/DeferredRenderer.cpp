@@ -358,7 +358,10 @@ namespace Moer {
             sampler = g_rhi->RHICreateSampler(create_info);
         }
     }
+
     void DeferredRenderer::Impl::InitSceneResources() {
+        // FIXME: If this function is called multiple times (> 1000), the engine will crash and stuck OS.
+        //        According to the variable `b_need_update`, this function should be called multiple times.
 
         auto meshlet_descs = g_scene->GetBuffer("meshlet_descs");
 
@@ -422,6 +425,9 @@ namespace Moer {
             }
 
             lights.push_back(light_data);
+        }
+        if (lights.size() == 0) {
+            LOG_WARNING("No light in scene! Please make sure the scene cache is latest! And you have at least one light in scene.");
         }
 
         light_buffer      = GpuSceneBufferBuilder::CopyFrom(EBufferUsageFlags::UNORDERED_ACCESS, lights.data(), lights.size() * sizeof(LightData));
