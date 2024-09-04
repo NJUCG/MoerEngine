@@ -9,6 +9,7 @@
 
 namespace Moer {
 
+    // In shader, assume that only directional light has a strong ambient (in blinn phong model)
     enum class ELightComponentType : uint8_t {
         NONE = 0,
         DIRECTIONAL,

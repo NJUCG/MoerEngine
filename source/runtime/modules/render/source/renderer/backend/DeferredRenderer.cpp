@@ -429,6 +429,7 @@ namespace Moer {
         }
         if (lights.size() == 0) {
             LOG_WARNING("No light in scene! Please make sure the scene cache is latest! And you have at least one light in scene.");
+            LOG_WARNING("For ply and json scene, the loader hasn't implement default lights. So you can implement it by yourself refer to LightComponent.cpp:CreateDefaultLightComponents() and loader/gltf/Parser.cpp:LoadLights()");
         }
 
         light_buffer      = GpuSceneBufferBuilder::CopyFrom(EBufferUsageFlags::UNORDERED_ACCESS, lights.data(), lights.size() * sizeof(LightData));

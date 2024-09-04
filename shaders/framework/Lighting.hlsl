@@ -63,16 +63,17 @@ float3 apply_light(Light light, float3 pos, float3 normal)
     return float3(0,0,0);
 }
 
-#define DISTANCE_ATTENUATION_FACTOR 0.005f
-#define AMBIENT_FACTOR 0.1f
+#define DISTANCE_ATTENUATION_FACTOR 0.006f
+#define DIRECTIONAL_LIGHT_AMBIENT_FACTOR 0.3f
+#define POINT_LIGHT_AMBIENT_FACTOR 0.1f
 #define SPECULAR_EXPONENT 64.0f
 
 float3 apply_directional_light_blinn_phong(Light light, float3 frag_pos, float3 normal, float3 kd, float3 ks, float3 camera_position) {
-    float3 frag_to_camera = normalize(camera_position - 0);
     float3 frag_to_light = normalize(-light.direction.xyz);
+    float3 frag_to_camera = normalize(camera_position - frag_pos);
     float3 h = normalize(frag_to_camera + frag_to_light);
     // ambient
-    float3 ka = AMBIENT_FACTOR * kd;
+    float3 ka = DIRECTIONAL_LIGHT_AMBIENT_FACTOR * kd;
     float3 ambient = ka * light.color.rgb;
     // diffuse
     float3 diffuse = kd * clamp(dot(normal, frag_to_light), 0, 1) * light.color.rgb;
@@ -89,7 +90,7 @@ float3 apply_point_light_blinn_phong(Light light, float3 frag_pos, float3 normal
     float3 h = normalize(frag_to_camera + frag_to_light);
     float distance = length(light.position.xyz - frag_pos) * DISTANCE_ATTENUATION_FACTOR;
     // ambient
-    float3 ka = AMBIENT_FACTOR * kd;
+    float3 ka = POINT_LIGHT_AMBIENT_FACTOR * kd;
     float3 ambient = ka * light.color.rgb;
     // diffuse
     float3 diffuse = kd * clamp(dot(normal, frag_to_light), 0, 1) * light.color.rgb;
