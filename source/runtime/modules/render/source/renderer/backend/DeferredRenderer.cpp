@@ -55,6 +55,7 @@ BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(LightingData)
 DEFINE_SHADER_PARAM(Moer::Matrix4x4f, inv_view_proj)
 DEFINE_SHADER_PARAM(uint32_t, light_count)
 DEFINE_SHADER_PARAM(Moer::Vector3ui, padding)
+DEFINE_SHADER_PARAM(Moer::Vector3f, camera_position)
 END_SHADER_CONSTANT_STRUCT_DEFINITION()
 
 BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(LightData)
@@ -986,6 +987,7 @@ namespace Moer {
             LightingData lighting_data;
             lighting_data.inv_view_proj = Inverse(camera->GetProjectionMatrix() * camera->GetViewMatrix());
             lighting_data.light_count   = lights.size();
+            lighting_data.camera_position = camera->GetPosition();
                
             for(auto type : material_types){
                 RHIBatchedShaderParameters parameters;

@@ -5,6 +5,7 @@ struct LightingData {
   float4x4 inv_view_proj;
   uint light_count;
   uint3 padding;
+  float3 camera_position;
 };
 
  [[vk::binding(0, 2)]] Texture2D scene_textures[25];
@@ -56,7 +57,9 @@ float4 main(float2 in_uv
   float3 world_pos = worldPosFromDepth(depth, in_uv);
   for (uint i = 0; i < lighting_data.light_count; i++) {
     Light light = light_data[i];
-    result += base_color.xyz * apply_light(light, world_pos, normal);
+
+    // result += base_color.xyz * apply_light(light, world_pos, normal);
+    result += apply_light_blinn_phong(light, world_pos, normal, base_color.xyz, float3(0.4f, 0.4f, 0.4f), lighting_data.camera_position);
   }
   return float4(result, 1.0f);
 }
