@@ -390,6 +390,7 @@ namespace Moer {
         // recheck_instance_id_srv = g_rhi->RHICreateBufferSRV(recheck_instance_id_buffer);
         // recheck_instance_id_uav = g_rhi->RHICreateBufferUAV(recheck_instance_id_buffer);
 
+        lights.clear();
         for (auto& light_entity : g_scene->GetLights()) {
             auto      light_component = LightComponentManager::Get().Get(light_entity);
             LightData light_data;

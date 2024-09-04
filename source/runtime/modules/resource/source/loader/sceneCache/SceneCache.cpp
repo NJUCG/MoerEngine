@@ -189,33 +189,57 @@ namespace Moer {
         }
 
         // read lights
-        size_t light_count;
-        stream.read(light_count);
+
+#define DECLARE_AND_READ(type, name) \
+    type name;                       \
+    stream.read(name)
+
+        DECLARE_AND_READ(size_t, light_count);
         sceneData.m_lights.reserve(light_count);
 
         for (int i = 0; i < light_count; ++i) {
-            ELightComponentType type;
-            stream.read(type);
+            DECLARE_AND_READ(ELightComponentType, type);
+            DECLARE_AND_READ(Vector3f, color);
+            DECLARE_AND_READ(float, intensity);
 
             if (type == ELightComponentType::DIRECTIONAL) {
-                auto light = MoerNew(DirectionalLightComponent)();
-                stream.read(light, sizeof(DirectionalLightComponent));
+                DECLARE_AND_READ(Vector3f, direction);
+
+                auto light = MoerNew(DirectionalLightComponent)(
+                    color,
+                    intensity,
+                    direction);
                 sceneData.m_lights.push_back(light);
 
             } else if (type == ELightComponentType::POINT) {
-                auto light = MoerNew(PointLightComponent)();
-                stream.read(light, sizeof(PointLightComponent));
+                DECLARE_AND_READ(Vector3f, position);
+
+                auto light = MoerNew(PointLightComponent)(
+                    color,
+                    intensity,
+                    position);
                 sceneData.m_lights.push_back(light);
 
             } else if (type == ELightComponentType::SPOT) {
-                auto light = MoerNew(SpotLightComponent)();
-                stream.read(light, sizeof(SpotLightComponent));
+                DECLARE_AND_READ(Vector3f, position);
+                DECLARE_AND_READ(Vector3f, direction);
+                DECLARE_AND_READ(float, inner_cone_angle);
+                DECLARE_AND_READ(float, outer_cone_angle);
+
+                auto light = MoerNew(SpotLightComponent)(
+                    color,
+                    intensity,
+                    position,
+                    direction,
+                    inner_cone_angle,
+                    outer_cone_angle);
                 sceneData.m_lights.push_back(light);
 
             } else {
-                LOG_WARNING("Unknown light type: {}", static_cast<int>(type));
+                LOG_WARNING("Unknown light type: {}", static_cast<uint8_t>(type));
             }
         }
+#undef DECLARE_AND_READ
     }
 
     void SceneCache::ReadSceneGeomInfo(InputStream& stream, SceneData& sceneData) {
@@ -519,15 +543,29 @@ namespace Moer {
         stream.write(sceneData.m_lights.size());
         for (auto& light : sceneData.m_lights) {
             stream.write(light->GetType());
+            stream.write(light->GetColor());
+            stream.write(light->GetIntensity());
+
             if (light->GetType() == ELightComponentType::DIRECTIONAL) {
-                stream.write(light, sizeof(DirectionalLightComponent));
+                auto dir_light = dynamic_cast<DirectionalLightComponent*>(light.Get());
+                stream.write(dir_light->GetDirection());
+
             } else if (light->GetType() == ELightComponentType::POINT) {
-                stream.write(light, sizeof(PointLightComponent));
+                auto point_light = dynamic_cast<PointLightComponent*>(light.Get());
+                stream.write(point_light->GetPosition());
+
             } else if (light->GetType() == ELightComponentType::SPOT) {
-                stream.write(light, sizeof(SpotLightComponent));
+                auto spot_light = dynamic_cast<SpotLightComponent*>(light.Get());
+                stream.write(spot_light->GetPosition());
+                stream.write(spot_light->GetDirection());
+                stream.write(spot_light->GetInnerConeAngle());
+                stream.write(spot_light->GetOuterConeAngle());
+            } else {
+                LOG_WARNING("Unknown light type: {}", static_cast<uint8_t>(light->GetType()));
             }
         }
     }
+
     SceneData SceneCache::ConvertToSceneData(const Scene& scene) {
         //May be not necessary
         SceneData sceneData;
