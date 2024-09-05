@@ -960,9 +960,9 @@ bool CreateDeviceObjects() {
     RHIShaderRef gui_frag                = shader_resource_manager.GetShader<ImGuiShaderFrag>();
 
     RHIVertexInputInfo vertex_input_info(
-        VertexElement(0, IM_OFFSETOF(ImDrawVert, pos), PF_R32G32_SFLOAT, 0, sizeof(ImDrawVert), EVertexInputRate::VIR_VERTEX),
-        VertexElement(0, IM_OFFSETOF(ImDrawVert, uv), PF_R32G32_SFLOAT, 1, sizeof(ImDrawVert), EVertexInputRate::VIR_VERTEX),
-        VertexElement(0, IM_OFFSETOF(ImDrawVert, col), PF_R8G8B8A8_UNORM, 2, sizeof(ImDrawVert), EVertexInputRate::VIR_VERTEX));
+        ::VertexElement(0, IM_OFFSETOF(ImDrawVert, pos), PF_R32G32_SFLOAT, 0, sizeof(ImDrawVert), EVertexInputRate::VIR_VERTEX),
+        ::VertexElement(0, IM_OFFSETOF(ImDrawVert, uv), PF_R32G32_SFLOAT, 1, sizeof(ImDrawVert), EVertexInputRate::VIR_VERTEX),
+        ::VertexElement(0, IM_OFFSETOF(ImDrawVert, col), PF_R8G8B8A8_UNORM, 2, sizeof(ImDrawVert), EVertexInputRate::VIR_VERTEX));
 
     RHIGraphicsPSOCreateInfo pso_create_info =
         std::move(RHIGraphicsPSOCreateInfo::Create()
@@ -982,9 +982,15 @@ bool CreateDeviceObjects() {
     backend_data->pipeline = g_rhi->RHICreateGraphicsPSO(std::move(pso_create_info));
     auto& sd_mgr           = Moer::Render::ShaderManager::Get();
     using namespace Moer::Render;
+    VertexStream vertex_stream;
+    vertex_stream.Emplace(
+        {Moer::Render::VertexElement(PF_R32G32_SFLOAT),
+         Moer::Render::VertexElement(PF_R32G32_SFLOAT),
+         Moer::Render::VertexElement(PF_R8G8B8A8_UNORM)});
     GfxPsoCreateInfo pso_info(
         RHIRasterizeInfo::Preset(),
-        {},
+        vertex_stream,
+        {RHIColorAttachmentInfo::Preset<RHIConfig::Blend::ALPHA_BLEND>(PF_R8G8B8A8_SRGB)},
         RHIDepthStencilStateInfo::Preset());
     backend_data->rast_pso = std::move(
         sd_mgr

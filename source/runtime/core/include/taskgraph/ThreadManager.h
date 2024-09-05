@@ -116,8 +116,10 @@ public:
     virtual ~RunnableThread();
     void Tick();
     void Join() {
-        if (m_thread->joinable())
+        if (m_thread && m_thread->joinable()){
+            m_thread->join();
             MoerDelete(m_thread);
+        }
     }
     void Detach() { m_thread->detach(); }
     bool Joinable() { return m_thread->joinable(); }

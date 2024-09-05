@@ -629,7 +629,7 @@ namespace Moer::Render {
         friend DrawDispatcher;
         friend ComputeDispatcher;
         friend class CommandQueue;
-        void SetRenderCmds(PipelineHandle& _handle, ArrayArguments&& _args, RenderPassInfo&&, Array<MeshDrawData>&&);
+        RENDER_API void SetRenderCmds(PipelineHandle& _handle, ArrayArguments&& _args, RenderPassInfo&&, Array<MeshDrawData>&&);
         // void SubmitArgs(ShaderPipeline&, Arguments&&);
         // void SubmitConstants(ShaderPipeline&, Array<uint>&&);
 

@@ -766,35 +766,6 @@ namespace Moer::Render {
                              max_set);
         };
 
-        // auto merge_reflect_info = [&](const SingleShaderInfo& _info, VkShaderStageFlagBits _stage) {
-        //     for (const auto& hash : _shader_info.layout_hash) {
-        //         uint idx                        = uint(&hash - _shader_info.layout_hash.data());
-        //         hash_2_idx[GetHash(hash)]       = idx;
-        //         const auto& binding             = _info.shader_param_map.GetShaderParameterInfoMap().find(hash.data());
-        //         const auto& binding_info        = binding->second;
-        //         auto [desc_type, resource_type] = DecodeReflectType(binding_info.type_flags);
-        //         bool b_push_constant            = std::holds_alternative<uint>(desc_type);
-        //         if (b_push_constant) {
-        //             constant_idx              = idx;
-        //             push_constant_ranges.size = std::max(push_constant_ranges.size, std::get<uint>(desc_type));
-        //             push_constant_ranges.stageFlags |= _stage;
-        //             reflect_flags[idx] = EncodeReflectInfo(0, std::get<uint>(desc_type), push_constant_ranges.stageFlags);
-        //         } else {
-        //             auto  rel_desc_type        = std::get<SpvReflectDescriptorType>(desc_type);
-        //             auto  rel_res_type         = std::get<SpvReflectResourceType>(resource_type);
-        //             auto  desc_type            = METoVkDescriptorType(rel_desc_type, rel_res_type);
-        //             auto& set                  = descriptor_bindings[binding_info.space];
-        //             auto& vk_binding           = set[binding_info.slot];
-        //             vk_binding.binding         = binding_info.slot;
-        //             vk_binding.descriptorType  = desc_type;
-        //             vk_binding.descriptorCount = 1;
-        //             vk_binding.stageFlags |= _stage;
-        //             vk_binding.pImmutableSamplers = nullptr;
-        //             reflect_flags[idx]            = EncodeReflectInfo(binding_info.space, binding_info.slot, vk_binding.stageFlags);
-        //             max_set                       = uint(std::max(int(max_set), int(binding_info.space)));
-        //         }
-        //     }
-        // };
         // shader stage
         std::visit([&](auto&& _shader_info_group) {
             using T = std::decay_t<decltype(_shader_info_group)>;
@@ -834,6 +805,45 @@ namespace Moer::Render {
         Moer::Array<VkVertexInputBindingDescription>   binding_descs;
         Moer::Array<VkVertexInputAttributeDescription> attribute_descs;
 
+        auto to_vk_vertex_stream = [&](){
+            uint binding_offset = 0;
+            binding_descs.reserve(_create_info.vertex_stream.bindings.size());
+            auto attribute_cnt = [&](){
+                uint cnt = 0;
+                for (const auto& binding : _create_info.vertex_stream.bindings){
+                    cnt += binding.vertex_elements.size();
+                }
+                return cnt;
+            }();
+            uint attrib_location = 0;
+            attribute_descs.reserve(attribute_cnt);
+            for (const VertexBinding& binding : _create_info.vertex_stream.bindings){
+                uint binding_stride = 0;
+                uint attrib_offset = 0;
+                for (const VertexElement& attribute : binding.vertex_elements){
+                    const FormatInfo& format_info = g_platform_pixel_formats[uint(attribute.format)];
+                    attribute_descs.emplace_back(
+                        attrib_location++,
+                        binding_offset,
+                        format_info.format,
+                        attrib_offset
+                    );
+                    attrib_offset += format_info.stride;
+                    binding_stride = attrib_offset;
+                }
+                binding_descs.emplace_back(
+                    binding_offset,
+                    binding_stride,
+                    VulkanEnumTranslator::METoVKVertexInputRate(binding.vertex_elements[0].input_rate)
+                );
+                ++binding_offset;
+            }
+            vertex_input_state.vertexBindingDescriptionCount = uint(binding_descs.size());
+            vertex_input_state.pVertexBindingDescriptions    = binding_descs.data();
+            vertex_input_state.vertexAttributeDescriptionCount = uint(attribute_descs.size());
+            vertex_input_state.pVertexAttributeDescriptions    = attribute_descs.data();
+        };
+        to_vk_vertex_stream();
         // input assembly
         VkPipelineInputAssemblyStateCreateInfo input_assembly_state{};
         input_assembly_state.sType                  = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
@@ -1021,46 +1031,6 @@ namespace Moer::Render {
         std::visit([&](auto&& _shader_info_group) {
             using T = std::decay_t<decltype(_shader_info_group)>;
             if constexpr (std::is_same_v<T, ShaderCs>) {
-                // const auto& shader_info = _shader_info_group.cs;
-                // shader_stage.sType      = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-                // shader_stage.stage      = VK_SHADER_STAGE_COMPUTE_BIT;
-                // VkShaderModuleCreateInfo shader_module_create_info{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-                // shader_module_create_info.codeSize = shader_info.shader_data.size();
-                // shader_module_create_info.pCode    = reinterpret_cast<const uint32_t*>(shader_info.shader_data.data());
-                // shader_module_create_info.flags    = 0;
-                // VkShaderModule shader_module;
-                // VK_CHECK_RESULT(vkCreateShaderModule(m_device, &shader_module_create_info, nullptr, &shader_module));
-                // shader_stage.module = shader_module;
-                // shader_stage.pName  = shader_info.entry_point.data();
-
-                // shader_info.shader_param_map.GetShaderParameterInfoMap();
-                // for (const auto& hash : _shader_info.layout_hash) {
-
-                //     hash_2_idx[GetHash(hash)]       = uint(&hash - _shader_info.layout_hash.data());
-                //     const auto& binding             = shader_info.shader_param_map.GetShaderParameterInfoMap().find(hash.data());
-                //     const auto& binding_info        = binding->second;
-                //     auto [desc_type, resource_type] = DecodeReflectType(binding_info.type_flags);
-                //     bool b_push_constant            = std::holds_alternative<uint>(desc_type);
-                //     if (b_push_constant) {
-                //         constant_idx                                           = uint(&hash - _shader_info.layout_hash.data());
-                //         push_constant_ranges.size                              = std::max(push_constant_ranges.size, std::get<uint>(desc_type));
-                //         push_constant_ranges.stageFlags                        = VK_SHADER_STAGE_COMPUTE_BIT;
-                //         reflect_flags[&hash - _shader_info.layout_hash.data()] = EncodeReflectInfo(0, std::get<uint>(desc_type), VK_SHADER_STAGE_COMPUTE_BIT);
-                //     } else {
-                //         auto  rel_desc_type        = std::get<SpvReflectDescriptorType>(desc_type);
-                //         auto  rel_res_type         = std::get<SpvReflectResourceType>(resource_type);
-                //         auto  desc_type            = METoVkDescriptorType(rel_desc_type, rel_res_type);
-                //         auto& set                  = descriptor_bindings[binding_info.space];
-                //         auto& vk_binding           = set[binding_info.slot];
-                //         vk_binding.binding         = binding_info.slot;
-                //         vk_binding.descriptorType  = desc_type;
-                //         vk_binding.descriptorCount = 1;
-                //         vk_binding.stageFlags |= VK_SHADER_STAGE_COMPUTE_BIT;
-                //         vk_binding.pImmutableSamplers                          = nullptr;
-                //         reflect_flags[&hash - _shader_info.layout_hash.data()] = EncodeReflectInfo(binding_info.space, binding_info.slot, VK_SHADER_STAGE_COMPUTE_BIT);
-                //         max_set                                                = uint(std::max(int(max_set), int(binding_info.space)));
-                //     }
-                // }
                 merge_reflect_info(_shader_info_group.cs, VK_SHADER_STAGE_COMPUTE_BIT);
             } else {
                 LOG_ERROR("Unsupported shader group type: {}", typeid(T).name());

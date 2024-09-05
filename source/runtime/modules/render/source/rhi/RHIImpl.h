@@ -7,6 +7,8 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "shader/ShaderPipeline.h"
+#include "taskgraph/GraphTask.h"
+#include "taskgraph/TaskGraph.h"
 #include <variant>
 namespace Moer::Render {
     static uint64 GetSizeFromImageFormat(EPixelFormat _format, const uint3 _size) {
@@ -98,17 +100,17 @@ namespace Moer::Render {
                                  offset(_offset),
                                  byte_size(_byte_size),
                                  storage(std::span<const byte>(reinterpret_cast<const byte*>(_data), _byte_size)) {}
-        
+
         UploadBufferCmd(
-            uint64      _handle,
-            uint64      _offset,
-            uint64      _byte_size,
+            uint64        _handle,
+            uint64        _offset,
+            uint64        _byte_size,
             Array<byte>&& _data) : Command(EType::UploadBuffer),
                                    handle(_handle),
                                    offset(_offset),
                                    byte_size(_byte_size),
                                    storage(std::move(_data)) {}
-        
+
         EQueueType GetQueueType() const override { return EQueueType::Copy; }
         auto       Handle() const { return handle; }
         auto       Offset() const { return offset; }
@@ -183,9 +185,9 @@ namespace Moer::Render {
         uint64       dst_handle{};
         uint         src_mip_level{};
         uint         dst_mip_level{};
-        uint3         src_offset{};
-        uint3         dst_offset{};
-        uint3         size{};
+        uint3        src_offset{};
+        uint3        dst_offset{};
+        uint3        size{};
 
     private:
         CopyTextureCmd() : Command(EType::TextureToTexture) {}
@@ -228,8 +230,8 @@ namespace Moer::Render {
         uint64       src_handle{};
         uint64       dst_handle{};
         uint         src_offset{};
-        uint3         dst_offset{};
-        uint3         size{};
+        uint3        dst_offset{};
+        uint3        size{};
         uint         mip_level{};
 
     private:
@@ -270,9 +272,9 @@ namespace Moer::Render {
         EPixelFormat format{};
         uint64       src_handle{};
         uint64       dst_handle{};
-        uint3         src_offset{};
+        uint3        src_offset{};
         uint         dst_offset{};
-        uint3         size{};
+        uint3        size{};
         uint         mip_level{};
 
     private:
@@ -339,11 +341,11 @@ namespace Moer::Render {
         }
 
         UploadTextureCmd(
-            EPixelFormat _format,
-            uint64       _handle,
-            uint         _mip_level,
-            uint3        _offset,
-            uint3        _size,
+            EPixelFormat  _format,
+            uint64        _handle,
+            uint          _mip_level,
+            uint3         _offset,
+            uint3         _size,
             Array<byte>&& _data) : Command(EType::UploadTexture),
                                    format(_format),
                                    handle(_handle),
@@ -435,8 +437,8 @@ namespace Moer::Render {
     struct UpdateBindlessArrayCmd : public Command {
     private:
         UpdateBindlessArrayCmd() : Command(EType::UpdateBindlessArray) {}
-        BindlessArrayRef array;
-        Array<BindlessArray::BufferUpdateInfo> buffer_updates;
+        BindlessArrayRef                        array;
+        Array<BindlessArray::BufferUpdateInfo>  buffer_updates;
         Array<BindlessArray::TextureUpdateInfo> texture_updates;
 
         Array<BindlessHandle> free_buffers;
@@ -444,13 +446,12 @@ namespace Moer::Render {
 
     public:
         UpdateBindlessArrayCmd(BindlessArrayRef _array) : Command(EType::UpdateBindlessArray), array(_array),
-        buffer_updates(std::move(array->buffers_allocated)), 
-        texture_updates(std::move(array->textures_allocated)) {}
-        auto* Handle() { return array.Get(); }
-        EQueueType GetQueueType() const override { return EQueueType::Graphics; }
+                                                          buffer_updates(std::move(array->buffers_allocated)),
+                                                          texture_updates(std::move(array->textures_allocated)) {}
+        auto*       Handle() { return array.Get(); }
+        EQueueType  GetQueueType() const override { return EQueueType::Graphics; }
         const auto& BufferUpdates() const { return buffer_updates; }
         const auto& TextureUpdates() const { return texture_updates; }
-        
     };
     struct DrawIndexedCmd {
         uint index_cnt;
@@ -465,16 +466,29 @@ namespace Moer::Render {
         uint       max_cnt;
         uint       stride;
     };
-
+    struct BufferRange {
+        uint64 min;
+        uint64 max;
+        BufferRange(uint64 _offset, uint64 _size) : min(_offset), max(_offset + _size) {}
+        BufferRange() : min(0), max(0) {}
+        void Merge(const BufferRange& _other) {
+            min = std::min(min, _other.min);
+            max = std::max(max, _other.max);
+        }
+    };
     using DrawCmd = std::variant<DrawIndexedCmd, DrawIndirectCmd>;
     struct SetDrawStateCmd : public Command {
     public:
     private:
-        PipelineHandle      pipeline{};
-        RenderPassInfo      render_pass_info;
-        Array<MeshDrawData> mesh_data;
-        uint                vtx_cnt;
-        ArrayArguments      args;
+        PipelineHandle                     pipeline{};
+        RenderPassInfo                     render_pass_info;
+        Array<MeshDrawData>                mesh_data;
+        uint                               vtx_cnt;
+        ArrayArguments                     args;
+        GraphEventRef                      evaluate_mesh_task = nullptr;
+        UnorderedMap<Buffer*, BufferRange> vertex_buffers;
+        UnorderedMap<Buffer*, BufferRange> index_buffers;
+
         SetDrawStateCmd(ArrayArguments&& _args) : Command(EType::SetDrawState), args(std::move(_args)) {}
 
     public:
@@ -487,6 +501,31 @@ namespace Moer::Render {
                                                             render_pass_info(std::move(_info)),
                                                             mesh_data(std::move(_draw_data)),
                                                             vtx_cnt(0) {
+            evaluate_mesh_task = LambdaTask::Create([this]() {
+                                     for (const auto& mesh : mesh_data) {
+                                         for (uint vtx_idx = 0; vtx_idx < mesh.vtx_cnt; ++vtx_idx) {
+                                             const auto& vtx_view = mesh.vtx_views[vtx_idx];
+                                                BufferRange range(vtx_view.offset, vtx_view.buffer->GetByteSize());
+                                                if (vertex_buffers.find(vtx_view.buffer) == vertex_buffers.end()) {
+                                                    vertex_buffers[vtx_view.buffer] = range;
+                                                } else {
+                                                    auto [offset, size] = vertex_buffers[vtx_view.buffer];
+                                                    vertex_buffers[vtx_view.buffer].Merge(range);
+                                                }
+                                         }
+                                         if (std::holds_alternative<IndexBuffer>(mesh.idx_view)) {
+                                             const auto&       idx_buffer = std::get<IndexBuffer>(mesh.idx_view);
+                                             const BufferView& idx_view   = idx_buffer.buffer;
+                                             BufferRange       range(idx_view.GetByteOffset(), idx_view.GetByteSize());
+                                             if (index_buffers.find(idx_view.GetBuffer()) == index_buffers.end()) {
+                                                 index_buffers[idx_view.GetBuffer()] = range;
+                                             } else {
+                                                 auto [offset, size] = index_buffers[idx_view.GetBuffer()];
+                                                 index_buffers[idx_view.GetBuffer()].Merge(range);
+                                             }
+                                         }
+                                     }
+                                 }).Dispatch();
         }
 
         EQueueType GetQueueType() const override { return EQueueType::Graphics; }
@@ -499,6 +538,14 @@ namespace Moer::Render {
             for (const auto& arg : args.args) {
                 std::visit([&_func](const auto& _arg) { _func(_arg); }, arg);
             }
+        }
+        const auto& VertexBuffers() const {
+            if (evaluate_mesh_task && !evaluate_mesh_task->IsComplete()) { evaluate_mesh_task->Wait(); }
+            return vertex_buffers;
+        }
+        const auto& IndexBuffers() const {
+            if (evaluate_mesh_task && !evaluate_mesh_task->IsComplete()) { evaluate_mesh_task->Wait(); }
+            return index_buffers;
         }
     };
 

@@ -84,7 +84,7 @@ TaskGraph::~TaskGraph() {
         if (i >= m_named_thread_count) {
             m_workers[i].actual_thread->WaitUntilFinished();
 
-            delete m_workers[i].actual_thread;
+            MoerDelete(m_workers[i].actual_thread);
             m_workers[i].actual_thread = nullptr;
         }
         m_workers[i].attached = false;
@@ -106,7 +106,7 @@ EThread::Type TaskGraph::GetCurrentThread(bool localQueue) {
 bool TaskGraph::IsThreadProcessingTask(EThread::Type index) {
     return m_workers[EThread::GetThreadIndex(index)].task_thread->IsProcessingTask(EThread::GetQueueIndex(index));
 }
-void TaskGraph::ProcessThreadUntilIdle(EThread::Type index) {};
+void TaskGraph::ProcessThreadUntilIdle(EThread::Type index){};
 void TaskGraph::ProcessThreadUntilReturn(EThread::Type index) {
     m_workers[EThread::GetThreadIndex(index)].task_thread->ProcessTaskUntilQuit(EThread::GetQueueIndex(index));
 };

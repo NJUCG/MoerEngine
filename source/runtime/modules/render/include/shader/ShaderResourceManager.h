@@ -172,7 +172,7 @@ namespace Moer::Render {
         };
 
     private:
-        PipelineHandle CreatePipeline(GfxPsoCreateInfo&& _pso_info, Array<std::string_view>&& _hash_values, Array<EShaderArgType>&& _arg_type_values);
+        RENDER_API PipelineHandle CreatePipeline(GfxPsoCreateInfo&& _pso_info, Array<std::string_view>&& _hash_values, Array<EShaderArgType>&& _arg_type_values);
 
         ShaderInfo vertex_path;
         ShaderInfo pixel_path;

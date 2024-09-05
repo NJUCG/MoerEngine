@@ -293,7 +293,7 @@ namespace Moer::Render {
         uint GetBindingSize() {
             return handle.binding_infos.size();
         }
-        ShaderPipeline(PipelineHandle _handle) {
+        ShaderPipeline(PipelineHandle _handle): handle(std::move(_handle)) {
         }
         PipelineHandle handle;
 

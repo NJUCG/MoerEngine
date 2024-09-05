@@ -219,10 +219,14 @@ namespace Moer::Render {
             ResourceView view;
         };
         struct CommandListNode {
-            Command const*         cmd;
+            Command const*   cmd;
             CommandListNode const* next;
         };
-        Array<CommandListNode*> m_cmd_lists;
+        struct LinkedCommandList {
+            CommandListNode const* head = nullptr;
+            CommandListNode* tail      = nullptr;
+        };
+        Array<LinkedCommandList> m_cmd_lists;
 
         UnorderedMap<uint64, RangeHandle*>   m_range_handles;
         UnorderedMap<uint64, NoRangeHandle*> m_no_range_handles;
@@ -303,10 +307,14 @@ namespace Moer::Render {
             if (m_cmd_lists.size() <= _layer) {
                 m_cmd_lists.resize(_layer + 1);
             }
-            auto*            last = m_cmd_lists[_layer];
+            auto&            last = m_cmd_lists[_layer];
             CommandListNode* ptr  = m_arena.Malloc<CommandListNode>();
-            new (ptr) CommandListNode(_cmd, last);
-            m_cmd_lists[_layer] = ptr;
+            new (ptr) CommandListNode(_cmd, nullptr);
+            last.head = last.head ? last.head : ptr;
+            if (last.tail) {
+                last.tail->next = ptr;
+            }
+            m_cmd_lists[_layer].tail = ptr;
         }
 
         int64 SetRead(ResourceHandle* _handle, const Range& _range) {
@@ -513,6 +521,14 @@ namespace Moer::Render {
                            _arg);
             };
             _cmd->IterateArgs(func);
+            const auto& vbs = _cmd->VertexBuffers();
+            for (const auto& vb : vbs) {
+                layer = std::max(SetRead((uint64)(vb.first), Range(vb.second.min, vb.second.max - vb.second.min), ResourceType::Texture_Buffer), layer);
+            }
+            const auto& ibs = _cmd->IndexBuffers();
+            for (const auto& ib : ibs) {
+                layer = std::max(SetRead((uint64)(ib.first), Range(ib.second.min, ib.second.max - ib.second.min), ResourceType::Texture_Buffer), layer);
+            }
             //depth and render targets
             const auto& pass_info = _cmd->RenderPassInfo();
             if (pass_info.depth_attachment.Valid()) {

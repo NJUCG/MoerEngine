@@ -20,6 +20,7 @@ namespace Moer::Render {
         ShaderManager manager(*device);
 
         GfxPsoCreateInfo pso_info(RHIRasterizeInfo::Preset(),
+                                  VertexStream(),
                                   {},
                                   RHIDepthStencilStateInfo::Preset());
 
@@ -27,7 +28,7 @@ namespace Moer::Render {
                                    .Vertex("")
                                    .Pixel("")
                                    .Build<GBufferLayout>(std::move(pso_info));
-        CommandList cmd_list;
+        CommandList         cmd_list;
         Array<MeshDrawData> draw_data;
         auto&&              draw_dispatcher = cmd_list.Gfx(layout);
         draw_dispatcher.Draw(Rect2D{}, std::move(draw_data), ColorAttachment{nullptr});
@@ -71,20 +72,20 @@ namespace Moer::Render {
     CommandList::ComputeDispatcher::ComputeDispatcher(
         ComputePipeline& _pso,
         CommandList&     _cmd_list)
-        : cmd_list(_cmd_list), pso(_pso), args({}){
+        : cmd_list(_cmd_list), pso(_pso), args({}) {
     }
 
     CommandList::DrawDispatcher::DrawDispatcher(
         RasterPipeline&  _pso,
         CommandList&     _cmd_list,
         ArrayArguments&& _args)
-        : cmd_list(_cmd_list), args(std::move(_args)), pso(_pso){
+        : cmd_list(_cmd_list), args(std::move(_args)), pso(_pso) {
     }
 
     CommandList::DrawDispatcher::DrawDispatcher(
         RasterPipeline& _pso,
         CommandList&    _cmd_list)
-        : cmd_list(_cmd_list), pso(_pso), args({}){
+        : cmd_list(_cmd_list), pso(_pso), args({}) {
     }
 
     void CommandList::ComputeDispatcher::Dispatch(uint3 _group_count) {
@@ -152,7 +153,6 @@ namespace Moer::Render {
             _texture.extent,
             _data.data()));
     }
-
 
     void CommandList::CopyFrom(std::span<byte> _data, BufferView _buffer) {
         //

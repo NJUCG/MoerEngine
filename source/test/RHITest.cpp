@@ -10,13 +10,24 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "shader/Shader.h"
+#include "shader/ShaderPipeline.h"
 #include "shader/ShaderResourceManager.h"
 #include "log/LogSystem.h"
 #include "RenderThread.h"
 #include "taskgraph/GraphTask.h"
+#include "taskgraph/TaskGraph.h"
+#include "taskgraph/TaskSystem.h"
 #include "window/WindowContext.h"
 #include "imgui.h"
 #include "core/include/Core.h"
+
+using namespace Moer::Render;
+using namespace Moer;
+class TestTrianglePipeline : public RasterPipeline {
+public:
+    DEFINE_RASTER_PIPELINE_CLASS(TestTrianglePipeline);
+    DEFINE_SHADER_ARGS();
+};
 
 int main(int argc, const char** argv) {
 
@@ -25,17 +36,19 @@ int main(int argc, const char** argv) {
     std::filesystem::path path = argv[0];
     path.filename().string().find(".exe") != std::string::npos ? path = path.parent_path() : path = path;
     ConfigManager::GetInstance().Init(path);
+    TaskSystem::Init();
     DeviceInitInfo info{.rhi_type = ERHIType::Vulkan, .name = "RHITest", .ray_tracing = true};
     RenderDevice::Init(std::move(info));
-    auto& device = RenderDevice::Get();
-
+    auto&           device = RenderDevice::Get();
+    ShaderManager   manager(device);
     SurfaceInitInfo surface_info("Vulkan", 1280, 720, "RHITest", false);
     WindowContext::Init(surface_info);
-    auto&& scope_exit = OnScopeExit([&] {
+    auto&& scope_exit    = OnScopeExit([&] {
         WindowContext::ShutDown();
         RenderDevice::Dispose();
+        TaskSystem::ShutDown();
     });
-    auto* window_handle = WindowContext::GetMainWindow();
+    auto*  window_handle = WindowContext::GetMainWindow();
 
     auto buf = device.CreateBuffer<float>(1024, EBufferUsageFlags::UNORDERED_ACCESS);
     auto sc  = device.CreateSwapchain(SwapchainCreateInfo{.window_handle = (uintptr_t)window_handle, .size = {1280, 720}, .back_buffer_sz = 2, .preferred_format = PF_R8G8B8A8_SRGB});
@@ -51,10 +64,10 @@ int main(int argc, const char** argv) {
     cmd_list.CopyFrom(std::span<byte>((byte*)data.data(), data.size() * sizeof(uint)), buffer->GetView());
     cmd_list.CopyFrom(buffer->GetView(), std::span<byte>((byte*)dst_data.data(), dst_data.size() * sizeof(uint)));
 
-    ubyte*    pixels;
-    int width, height;
-    uint alignment = 4;
-    ImGuiIO& io = ImGui::GetIO();
+    ubyte*   pixels;
+    int      width, height;
+    uint     alignment = 4;
+    ImGuiIO& io        = ImGui::GetIO();
     io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
     uint32_t   upload_pitch = (width * 4 + alignment - 1u) & ~(alignment - 1u);
     uint32_t   upload_size  = height * upload_pitch;
@@ -63,6 +76,11 @@ int main(int argc, const char** argv) {
         PF_R8G8B8A8_UNORM,
         ETextureUsageFlags::SAMPLED);
 
+    TextureRef output = device.CreateTexture(
+        Extent2D(1280, 720),
+        PF_R8G8B8A8_SRGB,
+        ETextureUsageFlags::COLOR_ATTACHMENT);
+
     cmd_list.CopyFrom(
         std::span<std::byte>((std::byte*)pixels, upload_size), font_tex);
 
@@ -70,10 +88,60 @@ int main(int argc, const char** argv) {
     cmd_queue.Sync();
 
     TextureView font_view = font_tex->GetView();
-    font_view.extent = uint3(1280, 720, 1);
+    font_view.extent      = uint3(1280, 720, 1);
+
+    VertexStream vertex_stream;
+    vertex_stream.Emplace(
+        {Moer::Render::VertexElement(PF_R32G32B32_SFLOAT),
+         Moer::Render::VertexElement(PF_R32G32_SFLOAT)});
+    GfxPsoCreateInfo pso_info(RHIRasterizeInfo::Preset(),
+                              vertex_stream,
+                              {RHIColorAttachmentInfo::Preset(PF_R8G8B8A8_SRGB)},
+                              RHIDepthStencilStateInfo::Preset());
+
+    auto raster_pipeline = manager
+                               .Raster()
+                               .Vertex("test/BasicVertex.hlsl")
+                               .Pixel("test/BasicFrag.hlsl")
+                               .Build<TestTrianglePipeline>(std::move(pso_info));
+    struct Vertex {
+        float3 pos;
+        float2 uv;
+    };
+    Vertex vertices[] = {
+        {{0.0f, -0.5f, 0.0f}, {0.5f, 1.0f}},
+        {{-0.5f, 0.5f, 0.0f}, {1.0f, 0.0f}},
+        {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f}},
+    };
+    uint indices[]     = {0, 1, 2};
+    auto vertex_buffer = device.CreateBuffer<float>(3 * sizeof(Vertex) / sizeof(float), EBufferUsageFlags::VERTEX_BUFFER);
+    auto index_buffer  = device.CreateBuffer<uint>(3, EBufferUsageFlags::INDEX_BUFFER);
+    cmd_list.CopyFrom(std::span<byte>((byte*)vertices, sizeof(vertices)), vertex_buffer->GetView());
+    cmd_list.CopyFrom(std::span<byte>((byte*)indices, sizeof(indices)), index_buffer->GetView());
+    // cmd_queue.Execute(cmd_list.Submit());
+    // cmd_queue.Sync();
+
+    VertexBuffer vb(vertex_buffer, 0);
+    IndexBuffer  ib(index_buffer->GetView(), EIndexElementType::IET_UINT32);
     while (WindowContext::ShouldClose(window_handle) == false) {
         WindowContext::Tick();
-        cmd_queue.Present(sc, font_view);
+
+        Array<MeshDrawData> draw_datas;
+        draw_datas.emplace_back(
+            std::span<VertexBuffer>(&vb, 1),
+            ib,
+            1,
+            0);
+
+        MeshDrawData draw_data(
+            std::span<VertexBuffer>(&vb, 1),
+            ib,
+            1,
+            0);
+        cmd_list.Gfx(raster_pipeline)
+            .Draw(Rect2D(0, 0, 1280, 720), std::move(draw_datas), ColorAttachment(output));
+        cmd_queue.Execute(cmd_list.Submit());
+        cmd_queue.Present(sc, output);
     }
     cmd_queue.Sync();
 }

@@ -606,6 +606,22 @@ struct RHIBufferCreateInfo : public RHIBufferInfo {
 #pragma region new api
 namespace Moer::Render {
 
+    struct VertexElement {
+        EPixelFormat     format;
+        EVertexInputRate input_rate = VIR_VERTEX;
+    };
+    struct VertexBinding {
+        Moer::Array<VertexElement> vertex_elements;
+    };
+    struct VertexStream {
+        Moer::Array<VertexBinding> bindings;
+        void                       Emplace(VertexBinding&& _binding) {
+            bindings.emplace_back(std::move(_binding));
+        }
+        void Emplace(std::initializer_list<VertexElement> _elements) {
+            bindings.emplace_back(_elements);
+        }
+    };
     struct Sampler {
         enum EType : uint8 {
             NEAR_EDGE,
@@ -845,7 +861,7 @@ namespace Moer::Render {
 
         struct BufferUpdateInfo {
             Buffer* buffer;
-            uint     slot;
+            uint    slot;
         };
         BindlessArray();
         virtual ~BindlessArray() = default;
@@ -866,9 +882,9 @@ namespace Moer::Render {
 
         //frame resources
         Array<TextureUpdateInfo> textures_allocated;
-        Array<BufferUpdateInfo> buffers_allocated;
-        Array<uint> textures_freed;
-        Array<uint> buffers_freed;
+        Array<BufferUpdateInfo>  buffers_allocated;
+        Array<uint>              textures_freed;
+        Array<uint>              buffers_freed;
 
         BufferRef indirect_buffer;
     };
@@ -3040,6 +3056,7 @@ namespace Moer::Render {
         using RHIColorAttachmentInfoList = Moer::StaticArray<RHIColorAttachmentInfo, MAX_PASS_ATTACHMENT_COUNT>;
         GfxPsoCreateInfo(
             RHIRasterizeInfo              _rasterizer_info,
+            VertexStream                  _vertex_stream,
             Array<RHIColorAttachmentInfo> _color_attachments_info,
             RHIDepthStencilStateInfo      _depth_stencil_info,
             EPixelFormat                  _depth_stencil_format               = PF_UNDEFINED,
@@ -3049,6 +3066,7 @@ namespace Moer::Render {
             bool                          _b_has_fragment_density_attachments = false,
             EVariousShadingRate           _shading_rate                       = EVariousShadingRate::VSR_1_1x1)
             : rasterizer_info(std::move(_rasterizer_info)),
+              vertex_stream(std::move(_vertex_stream)),
               multisample_info(std::move(_multisample_info)),
               depth_stencil_info(std::move(_depth_stencil_info)),
               primitive_topology(_primitive_topology),
@@ -3060,8 +3078,8 @@ namespace Moer::Render {
               shading_rate(_shading_rate),
               hash_key(0) {}
 
-        RHIRasterizeInfo rasterizer_info;
-
+        RHIRasterizeInfo         rasterizer_info;
+        VertexStream             vertex_stream;
         RHIMultisampleStateInfo  multisample_info;
         RHIDepthStencilStateInfo depth_stencil_info;
 

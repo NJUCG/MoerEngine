@@ -156,6 +156,17 @@ namespace Moer::Render {
         }
 
         void Visit(const SetDrawStateCmd* _cmd) {
+            const auto& vbs = _cmd->VertexBuffers();
+            for (const auto& vb : vbs) {
+                auto* vk_buffer = ResourceCast(vb.first);
+                tracker.RecordState(vk_buffer, VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT, VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT);
+            }
+            const auto& ibs = _cmd->IndexBuffers();
+            for (const auto& ib : ibs) {
+                auto* vk_buffer = ResourceCast(ib.first);
+                tracker.RecordState(vk_buffer, VK_ACCESS_2_INDEX_READ_BIT, VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT);
+            }
+
             for (const auto& rt : _cmd->RenderPassInfo().color_attachments) {
                 auto* vk_texture = ResourceCast(rt.target);
                 auto  action     = rt.action;
@@ -1364,8 +1375,8 @@ namespace Moer::Render {
 
     public:
         VkCmdVisitor(VulkanDevice& _device, VulkanAllocator& _allocator, VulkanCmdList& _cmd_list) : VulkanDeviceObject(&_device),
-                                                                                                                          allocator(_allocator),
-                                                                                                                          cmd_list(_cmd_list) {}
+                                                                                                     allocator(_allocator),
+                                                                                                     cmd_list(_cmd_list) {}
         void Visit(const UploadBufferCmd& _cmd) {
             auto data_span  = _cmd.Data();
             auto tmp_buffer = allocator.AllocateBuffer(_cmd.ByteSize(), 16);
@@ -1376,7 +1387,6 @@ namespace Moer::Render {
                                 _cmd.ByteSize(),
                                 tmp_buffer.GetByteOffset(),
                                 _cmd.Offset());
-
         }
 
         void Visit(const UploadTextureCmd& _cmd) {
@@ -1391,7 +1401,6 @@ namespace Moer::Render {
                                          _cmd.Offset(),
                                          _cmd.Size(),
                                          _cmd.MipLevel());
-
         }
 
         void Visit(const CopyBufferCmd& _cmd) {
@@ -1403,7 +1412,6 @@ namespace Moer::Render {
                                 _cmd.ByteSize(),
                                 _cmd.SrcOffset(),
                                 _cmd.DstOffset());
-
         }
 
         void Visit(const CopyBackBufferCmd& _cmd) {
@@ -1431,7 +1439,6 @@ namespace Moer::Render {
                                  _cmd.Size(),
                                  _cmd.SrcMipLevel(),
                                  _cmd.DstMipLevel());
-
         }
 
         void Visit(const CopyBufferToTextureCmd& _cmd) {
@@ -1445,7 +1452,6 @@ namespace Moer::Render {
                                          _cmd.DstOffset(),
                                          _cmd.Size(),
                                          _cmd.MipLevel());
-
         }
 
         void Visit(const CopyTextureToBufferCmd& _cmd) {
@@ -1459,7 +1465,6 @@ namespace Moer::Render {
                                          _cmd.DstOffset(),
                                          _cmd.Size(),
                                          _cmd.MipLevel());
-
         }
 
         void Visit(const DispatchCmd& _cmd) {
@@ -1576,15 +1581,31 @@ namespace Moer::Render {
                     pso.handle,
                     std::span<const uint>(args.constants.data(), args.constants.size()));
             }
+            const auto& cmd_vertex_buffers = _cmd.VertexBuffers();
+            const auto& draw_datas         = _cmd.DrawData();
+            const auto& rect               = pass_info.render_area;
+            VkViewport  viewport{
+                 .x        = float(rect.offset.x),
+                 .y        = float(rect.offset.y),
+                 .width    = float(rect.extent.width),
+                 .height   = float(rect.extent.height),
+                 .minDepth = 0.0f,
+                 .maxDepth = 1.0f};
 
-            Array<VkBuffer>     vertex_buffers(4);
-            Array<VkDeviceSize> offsets(4);
-            const auto&         draw_datas = _cmd.DrawData();
+                 
+            cmd_list.SetViewPort(viewport);
+            cmd_list.SetScissor({rect.offset.x, rect.offset.y, rect.extent.width, rect.extent.height});
             for (const auto& draw_data : draw_datas) {
+                StaticArray<VkBuffer, 4>     vertex_buffers{};
+                StaticArray<VkDeviceSize, 4> offsets{};
+                for (size_t i = 0; i < draw_data.vtx_cnt; ++i) {
+                    vertex_buffers[i] = ResourceCast(draw_data.vtx_views[i].buffer)->GetHandle();
+                    offsets[i]        = draw_data.vtx_views[i].offset;
+                }
                 cmd_list.SetVertexBuffers(0,
                                           draw_data.vtx_cnt,
                                           std::span<VkBuffer>(vertex_buffers.data(),
-                                                              vertex_buffers.size()),
+                                                              draw_data.vtx_cnt),
                                           std::span<VkDeviceSize>(offsets.data(),
                                                                   offsets.size()));
 
@@ -1614,6 +1635,7 @@ namespace Moer::Render {
                     },
                     draw_data.idx_view);
             }
+            cmd_list.EndRendering();
         }
 
         // void Visit(const UpdateDrawStateCmd& _cmd) {
@@ -1744,11 +1766,11 @@ namespace Moer::Render {
         }
     }
     WaitEvent VkCommandQueue::Execute(CmdSubmit&& _submit) {
-        auto              allocator_ptr = std::move(GetAllocator());
-        auto&             vk_allocator  = *allocator_ptr;
-        VkCmdVisitor      visitor(vk_device, vk_allocator, vk_allocator.GetCmdList());
-        CmdReorderer      reorderer{};
-        auto&        tracker   = vk_allocator.GetTracker();
+        auto         allocator_ptr = std::move(GetAllocator());
+        auto&        vk_allocator  = *allocator_ptr;
+        VkCmdVisitor visitor(vk_device, vk_allocator, vk_allocator.GetCmdList());
+        CmdReorderer reorderer{};
+        auto&        tracker = vk_allocator.GetTracker();
 
         VkCmdPreprocessor preprocessor(tracker);
 
@@ -1761,16 +1783,16 @@ namespace Moer::Render {
         if (has_cmd) {
             vk_allocator.GetCmdList().Begin();
         }
-        for (const CmdReorderer::CommandListNode* cmd_list : cmd_lists) {
-            if (cmd_list == nullptr) {
+        for (const CmdReorderer::LinkedCommandList& cmd_list : cmd_lists) {
+            if (cmd_list.head == nullptr) {
                 continue;
             }
-            for (const auto* cmdnode = cmd_list; cmdnode != nullptr; cmdnode = cmdnode->next) {
+            for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
                 preprocessor.VisitCmd(cmdnode->cmd);
             }
             tracker.ResolveBarriers();
             tracker.DispatchBarriers(vk_allocator.GetCmdList());
-            for (const auto* cmdnode = cmd_list; cmdnode != nullptr; cmdnode = cmdnode->next) {
+            for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
                 const auto* cmd = cmdnode->cmd;
                 switch (cmd->Type()) {
                     case Command::EType::UploadBuffer:

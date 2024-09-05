@@ -396,7 +396,7 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> result, const ShaderParam
     }
     const auto&              members = meta_data->GetMembers();
     Moer::Array<std::string> error_msgs;
-#if _DEBUG
+#if OLD_REFLECT
     for (const ShaderParametersMetadata::Member& member : members) {
         EShaderBindingBaseType base_type = member.GetBaseType();
         std::string_view       name      = member.GetName();
