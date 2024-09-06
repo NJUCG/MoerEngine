@@ -455,7 +455,7 @@ namespace Moer::Render {
     }
 
     void VkTracker::DispatchBarriers(VulkanCmdList& _cmdlist) {
-        if (!buffer_barriers.empty() || !texture_barriers.empty()) {
+        if (!buffer_barriers.empty() || !texture_barriers.empty() || !memory_barriers.empty()) {
             VkDependencyInfoKHR dependency_info{};
             dependency_info.sType                    = VK_STRUCTURE_TYPE_DEPENDENCY_INFO_KHR;
             dependency_info.pNext                    = nullptr;
@@ -463,6 +463,8 @@ namespace Moer::Render {
             dependency_info.pBufferMemoryBarriers    = buffer_barriers.data();
             dependency_info.imageMemoryBarrierCount  = static_cast<uint32>(texture_barriers.size());
             dependency_info.pImageMemoryBarriers     = texture_barriers.data();
+            dependency_info.memoryBarrierCount       = static_cast<uint32>(memory_barriers.size());
+            dependency_info.pMemoryBarriers          = memory_barriers.data();
             vkCmdPipelineBarrier2(_cmdlist.GetHandle(), &dependency_info);
             buffer_barriers.clear();
             texture_barriers.clear();
@@ -496,7 +498,8 @@ namespace Moer::Render {
             state.dst_access = VK_ACCESS_2_NONE;
             state.dst_layout = texture->GetPreferredLayout();
         }
-
+        VkAccessFlags2 src_buffer_access = VK_ACCESS_2_NONE;
+        VkPipelineStageFlags2 src_buffer_stages = VK_PIPELINE_STAGE_2_NONE;
         for (auto& [buffer, state] : buffer_states) {
 
             buffer_barriers.emplace_back();
@@ -512,15 +515,30 @@ namespace Moer::Render {
             barrier.buffer                  = buffer->GetHandle();
             barrier.offset                  = 0;
             barrier.size                    = buffer->GetByteSize();
-
+            
+            src_buffer_access |= state.dst_access;
+            src_buffer_stages |= state.dst_stage;
             state.dst_access = VK_ACCESS_2_NONE;
             state.dst_stage  = VK_PIPELINE_STAGE_2_NONE;
+
+        }
+        if (!buffer_states.empty()) {
+            //memory barrier
+            memory_barriers.emplace_back();
+            VkMemoryBarrier2& barrier = memory_barriers.back();
+            barrier.sType             = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+            barrier.pNext             = nullptr;
+            barrier.srcAccessMask     = src_buffer_access;
+            barrier.dstAccessMask     = VK_ACCESS_2_MEMORY_READ_BIT;
+            barrier.srcStageMask      = src_buffer_stages;
+            barrier.dstStageMask      = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
         }
     }
 
     void VkTracker::Reset() {
         buffer_barriers.clear();
         texture_barriers.clear();
+        memory_barriers.clear();
         buffer_states.clear();
         texture_states.clear();
     }

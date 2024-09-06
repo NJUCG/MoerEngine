@@ -71,6 +71,7 @@ namespace Moer::Render{
         EPassType pass_type;
         Array<VkBufferMemoryBarrier2> buffer_barriers;
         Array<VkImageMemoryBarrier2> texture_barriers;
+        Array<VkMemoryBarrier2> memory_barriers;
 
         UnorderedMap<VulkanBuffer*, BufferState> buffer_states;
         UnorderedMap<VulkanTexture*, TextureState> texture_states;

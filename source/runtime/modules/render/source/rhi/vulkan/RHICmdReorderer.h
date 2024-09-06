@@ -17,40 +17,62 @@
  */
 namespace Moer::Render {
     struct ArenaAllocator {
+        struct LinkedChunk {
+			LinkedChunk* next = nullptr;
+			byte*         data = nullptr;
+		};
         ArenaAllocator(uint64 _size) : capacity(_size) {
-            data = reinterpret_cast<byte*>(Memory::Malloc(_size));
+            head = reinterpret_cast<LinkedChunk*>(Memory::Malloc(sizeof(LinkedChunk)));
+            head->data = reinterpret_cast<byte*>(Memory::Malloc(_size));
+            head->next = nullptr;
         }
         ArenaAllocator(const ArenaAllocator&)            = delete;
         ArenaAllocator& operator=(const ArenaAllocator&) = delete;
 
         ArenaAllocator(ArenaAllocator&& _other) noexcept {
-            data            = _other.data;
+            head = _other.head;
             capacity        = _other.capacity;
-            _other.data     = nullptr;
+            _other.head     = nullptr;
             _other.capacity = 0;
+  
         }
         ArenaAllocator& operator=(ArenaAllocator&& _other) noexcept {
             if (this != &_other) {
-                Memory::Free(data);
-                data            = _other.data;
-                capacity        = _other.capacity;
-                _other.data     = nullptr;
-                _other.capacity = 0;
+                this->~ArenaAllocator();
             }
+            head            = _other.head;
+            offset          = _other.offset;
+            capacity        = _other.capacity;
+            _other.head     = nullptr;
+            _other.capacity = 0;
+            _other.offset   = 0;
             return *this;
         }
 
         ~ArenaAllocator() {
-            if (data)
-                Memory::Free(data);
+            LinkedChunk* iter = head;
+            while (iter) {
+				LinkedChunk* next = iter->next;
+				Memory::Free(iter->data);
+				Memory::Free(iter);
+				iter = next;
+			}
+            head = nullptr;
+            offset = 0;
         }
-
+        void  Expand() {
+            LinkedChunk* new_chunk = reinterpret_cast<LinkedChunk*>(Memory::Malloc(sizeof(LinkedChunk)));
+			new_chunk->data = reinterpret_cast<byte*>(Memory::Malloc(capacity));
+			new_chunk->next = head;
+			head = new_chunk;
+            offset = 0;
+        }
         void* Malloc(uint64 _size) {
             if (offset + _size > capacity) {
-                assert(false && "Out of memory");
-                return nullptr;
+                assert(capacity >= _size && "Invalid Size");
+                Expand();
             }
-            void* ptr = data + offset;
+            void* ptr = head->data + offset;
             offset += _size;
             return ptr;
         }
@@ -60,14 +82,54 @@ namespace Moer::Render {
             return reinterpret_cast<T*>(Malloc(sizeof(T)));
         }
 
-        byte*  data     = nullptr;
+        //byte*  data     = nullptr;
         uint64 offset   = 0;
         uint64 capacity = 0;
+        LinkedChunk* head;
+    };
+
+    template<class T>
+    class ArenaAllocatorWrapper {
+    public:
+        ArenaAllocatorWrapper(ArenaAllocator& a) : _alloc{a} {}
+
+        template<class U>
+        ArenaAllocatorWrapper(const ArenaAllocatorWrapper<U>& rhs)
+            : _alloc{const_cast<ArenaAllocatorWrapper<U>&>(rhs).allocator()} {}
+
+        using type  = ArenaAllocatorWrapper<T>;
+        using other = ArenaAllocatorWrapper<T>;
+
+        using value_type                             = T;
+        using size_type                              = std::size_t;
+        using difference_type                        = std::ptrdiff_t;
+        using propagate_on_container_move_assignment = std::true_type;
+        using is_always_equal                        = std::true_type;
+
+        template<class U>
+        using rebind = ArenaAllocatorWrapper<U>;
+
+        T* allocate(std::size_t n) {
+            return reinterpret_cast<T*>(_alloc.Malloc(n * sizeof(T)));
+        }
+
+        constexpr void deallocate(T* p, std::size_t n) {
+            return;
+        }
+
+        ArenaAllocator& allocator() const {
+			return _alloc;
+		}
+
+    private:
+        ArenaAllocator& _alloc;
     };
     class CmdReorderer {
 
     public:
-        CmdReorderer() : m_arena(65556) {}
+        CmdReorderer() : m_arena(65556), m_arena_stl(m_arena){}
+        ~CmdReorderer() {
+        }
         enum class ResourceRW : uint8 {
             Read,
             Write
@@ -116,7 +178,7 @@ namespace Moer::Render {
         };
 
         struct RangeHandle : public ResourceHandle {
-            using Map = UnorderedMap<Range, ResourceView, RangeHash>;
+            using Map = UnorderedMap<Range, ResourceView, RangeHash,std::equal_to<Range>, ArenaAllocatorWrapper<std::pair<const Range, ResourceView>>>;
 
         private:
             ResourceView          max_view;
@@ -126,9 +188,9 @@ namespace Moer::Render {
             static constexpr uint max_range_size = 16;
 
         public:
-            RangeHandle() : read_range(std::numeric_limits<int64>::max(), std::numeric_limits<int64>::min()),
+            RangeHandle(const ArenaAllocatorWrapper<ResourceView>& _alloc) : read_range(std::numeric_limits<int64>::max(), std::numeric_limits<int64>::min()),
                             write_range(std::numeric_limits<int64>::max(), std::numeric_limits<int64>::min()),
-                            range2view(max_range_size) {
+                                                         range2view(max_range_size, _alloc) {
             }
 
             int64 GetMaxReadLayer(const Range& _range) {
@@ -235,6 +297,7 @@ namespace Moer::Render {
         Array<std::tuple<Range, ResourceHandle*>> m_write_resources;
         uint64                                    m_dispatch_layer;
         ArenaAllocator                            m_arena;
+        ArenaAllocatorWrapper<ResourceView>       m_arena_stl;
 
     public:
         ResourceHandle* GetHandle(uint64 _handle, ResourceType _type) {
@@ -245,7 +308,11 @@ namespace Moer::Render {
                 if (iter.second) {
                     TValue* value_ptr = m_arena.Malloc<TValue>();
                     value             = value_ptr;
-                    new (value) TValue();
+                    if constexpr (std::is_same_v<TValue, RangeHandle>) {
+						new (value) TValue(m_arena_stl);
+                    } else {
+                        new (value) TValue();
+                    }
                     value->handle = _handle;
                     value->type   = _type;
                 }

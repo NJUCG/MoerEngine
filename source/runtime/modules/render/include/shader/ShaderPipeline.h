@@ -11,7 +11,9 @@
 #include <typeindex>
 #include <utility>
 #include <variant>
+
 struct TDummy {};
+
 namespace Moer::Render {
     using TConstantArg = std::variant<int, float, bool, uint>;
     using TScalarArg   = std::variant<float2, float3, float4, uint2, uint3, uint4>;
@@ -19,6 +21,7 @@ namespace Moer::Render {
     template<typename T>
         requires std::is_trivial_v<T>
     using TConstantStruct = T;
+
     template<typename T>
     struct TConstsant {
         using type = T;
@@ -55,7 +58,7 @@ namespace Moer::Render {
 
 #define DEFINE_SHADER_ARGS(...)                                                                                          \
 public:                                                                                                                  \
-    using InnerArgs = ShaderArgs<TPipeline, __VA_ARGS__>;                                                                \
+    using InnerArgs = ShaderArgs<TPipeline __VA_OPT__(, ) __VA_ARGS__>;                                                                \
     template<typename... T>                                                                                              \
     ArrayArguments SetArgs(T&&... _args) {                                                                               \
         InnerArgs args(*this);                                                                                           \
@@ -80,12 +83,15 @@ private:                                                                        
                                                                                                                          \
 public:                                                                                                                  \
     static StaticArray<std::string_view, InnerArgs::arg_size> GetHashArray() {                                           \
+        if constexpr (InnerArgs::arg_size == 0){ return {}; }                \
         return GetHashArray(std::make_index_sequence<InnerArgs::arg_size>());                                            \
     }                                                                                                                    \
     static StaticArray<uint64, InnerArgs::arg_size> GetHashCodeArray() {                                                 \
+        if constexpr (InnerArgs::arg_size == 0){ return {}; }                                                            \
         return GetHashCodeArray(std::make_index_sequence<InnerArgs::arg_size>());                                        \
     }                                                                                                                    \
     static StaticArray<Moer::Render::EShaderArgType, InnerArgs::arg_size> GetArgTypeArray() {                            \
+        if constexpr (InnerArgs::arg_size == 0){ return {}; }                \
         return GetArgTypeArray(std::make_index_sequence<InnerArgs::arg_size>());                                         \
     }
 
@@ -129,28 +135,21 @@ namespace Moer::Render {
 
     struct ArrayArguments {
         // ArrayArguments() = default;
-        ArrayArguments(uint _arg_size) : args(_arg_size) {
-        }
+        ArrayArguments(uint _arg_size) : args(_arg_size) {}
+
         ArrayArguments(ArrayArguments&& _other) {
             args      = std::move(_other.args);
             constants = std::move(_other.constants);
         }
+
         // Array<TArg> args;
-        TArg& operator[](uint _idx) {
-            return args[_idx];
-        }
-        const TArg& operator[](uint _idx) const {
-            return args[_idx];
-        }
-        uint Size() const {
-            return args.size();
-        }
+        TArg&       operator[](uint _idx) { return args[_idx]; }
+        const TArg& operator[](uint _idx) const { return args[_idx]; }
+        uint        Size() const { return args.size(); }
         Array<TArg> args;
         Array<uint> constants;
 
-        Array<uint>&& StealConstants() {
-            return std::move(constants);
-        }
+        Array<uint>&& StealConstants() { return std::move(constants); }
     };
 
     template<typename T, typename arg_name>
@@ -158,24 +157,21 @@ namespace Moer::Render {
         static constexpr std::string_view name   = arg_name::name;
         using type                               = T;
         static constexpr EShaderArgType arg_type = ShaderArgEnum<T>::arg_type;
-        ShaderArg() {
-        }
-        static const std::string_view GetName() {
-            return name;
-        }
-        static uint64 GetHashCode() {
-            return GetHash(name);
-        }
+        ShaderArg() {}
+        static const std::string_view GetName() { return name; }
+        static uint64                 GetHashCode() { return GetHash(name); }
 
-        static EShaderArgType GetArgType() {
-            return arg_type;
-        }
+        static EShaderArgType GetArgType() { return arg_type; }
     };
 
     struct BufferArg {};
+
     struct TextureArg {};
+
     struct SamplerArg {};
+
     struct ConstantArg {};
+
     struct BindlessArg {};
 
     template<>
@@ -194,11 +190,11 @@ namespace Moer::Render {
     };
 
     class ShaderPipeline;
+
     template<typename TPipeline, typename... Args>
     struct ShaderArgs {
 
-        ShaderArgs(TPipeline& _pipeline) : pipeline(_pipeline) {
-        }
+        ShaderArgs(TPipeline& _pipeline) : pipeline(_pipeline) {}
         static constexpr size_t arg_size = sizeof...(Args);
         using tuple_helper               = std::tuple<Args...>;
 
@@ -228,28 +224,17 @@ namespace Moer::Render {
                 if constexpr (std::is_same_v<Type, TextureRef>) {
                     _arg_setter[index] = _t->GetView();
                     //do texture stuff
-                } else if constexpr (std::is_same_v<Type, TextureView>) {
-                    _arg_setter[index] = std::forward<T>(_t);
-                } else {
+                } else if constexpr (std::is_same_v<Type, TextureView>) { _arg_setter[index] = std::forward<T>(_t); } else {
                     if constexpr (true)
                         assert(0 && "not a buffer type");
                 }
             } else if constexpr (std::is_same_v<cpp_type, BufferArg>) {
                 //do buffer stuff
-                if constexpr (std::is_same_v<Type, BufferRef>) {
-                    _arg_setter[index] = _t->GetView();
-                } else if constexpr (std::is_same_v<Type, BufferView>) {
-                    _arg_setter[index] = std::forward<T>(_t);
-                } else {
+                if constexpr (std::is_same_v<Type, BufferRef>) { _arg_setter[index] = _t->GetView(); } else if constexpr (std::is_same_v<Type, BufferView>) { _arg_setter[index] = std::forward<T>(_t); } else {
                     if constexpr (true)
                         assert(0 && "not a buffer type");
                 }
-            } else if constexpr (std::is_same_v<cpp_type, SamplerArg>) {
-                _arg_setter[index] = std::forward<T>(_t);
-
-            } else if constexpr (std::is_same_v<cpp_type, BindlessArg>) {
-                _arg_setter[index] = std::forward<T>(_t);
-            } else {
+            } else if constexpr (std::is_same_v<cpp_type, SamplerArg>) { _arg_setter[index] = std::forward<T>(_t); } else if constexpr (std::is_same_v<cpp_type, BindlessArg>) { _arg_setter[index] = std::forward<T>(_t); } else {
                 //constant
                 _arg_setter.constants.resize(sizeof(T) / sizeof(uint));
                 std::memcpy(_arg_setter.constants.data(), &_t, sizeof(T));
@@ -280,32 +265,27 @@ namespace Moer::Render {
         void SetBuffer(uint _idx, BufferRef _param);
         void SetTexture(uint _idx, TextureView _param);
         void SetBuffer(uint _idx, BufferView _param);
+
         template<typename T>
-        void SetConstant(uint _idx, T&& _args) {
-            SetConstantInner(_idx, std::span<uint>((uint*)&_args, sizeof(T) / sizeof(uint)));
-        }
+        void SetConstant(uint _idx, T&& _args) { SetConstantInner(_idx, std::span<uint>((uint*)&_args, sizeof(T) / sizeof(uint))); }
+
         void SetConstantInner(uint _idx, std::span<uint> _data);
         void SetBufferHash(uint64 _hash, BufferView _param);
         void SetTextureHash(uint64 _hash, TextureView _param);
-        uint GetBindingIdx(uint64 _hash) {
-            return handle.hash_2_info_index[_hash];
-        }
-        uint GetBindingSize() {
-            return handle.binding_infos.size();
-        }
-        ShaderPipeline(PipelineHandle _handle): handle(std::move(_handle)) {
-        }
+        uint GetBindingIdx(uint64 _hash) { return handle.hash_2_info_index[_hash]; }
+        uint GetBindingSize() { return handle.binding_infos.size(); }
+        ShaderPipeline(PipelineHandle _handle): handle(std::move(_handle)) {}
         PipelineHandle handle;
 
         ShaderPipeline() = default;
-        ShaderPipeline(ShaderPipeline&& _other) {
-            handle = std::move(_other.handle);
-        }
+        ShaderPipeline(ShaderPipeline&& _other) { handle = std::move(_other.handle); }
+
         ShaderPipeline& operator=(ShaderPipeline&& _other) {
             handle = std::move(_other.handle);
             return *this;
         }
     };
+
 #define COPY_CONSTRUCTOR(name)                                 \
     name(name&& _other) : ShaderPipeline(std::move(_other)) {} \
     name() : ShaderPipeline() {}                               \
@@ -313,31 +293,30 @@ namespace Moer::Render {
         handle = std::move(_other.handle);                     \
         return *this;                                          \
     }
+
     class RasterPipeline : public ShaderPipeline, public RHIResource {
     public:
-        RasterPipeline(PipelineHandle _handle) : ShaderPipeline(_handle), RHIResource(RRT_GRAPHIC_PIPELINE_STATE) {
-        }
+        RasterPipeline(PipelineHandle _handle) : ShaderPipeline(_handle), RHIResource(RRT_GRAPHIC_PIPELINE_STATE) {}
         COPY_CONSTRUCTOR(RasterPipeline);
     };
 
     class ComputePipeline : public ShaderPipeline, public RHIResource {
     public:
-        ComputePipeline(PipelineHandle _handle) : ShaderPipeline(_handle), RHIResource(RRT_COMPUTE_PIPELINE_STATE) {
-        }
+        ComputePipeline(PipelineHandle _handle) : ShaderPipeline(_handle), RHIResource(RRT_COMPUTE_PIPELINE_STATE) {}
         COPY_CONSTRUCTOR(ComputePipeline);
     };
 
     class RTPipeline : public ShaderPipeline, public RHIResource {
 
     public:
-        RTPipeline(PipelineHandle _handle) : ShaderPipeline(_handle), RHIResource(RRT_RAY_TRACING_PIPELINE_STATE) {
-        }
+        RTPipeline(PipelineHandle _handle) : ShaderPipeline(_handle), RHIResource(RRT_RAY_TRACING_PIPELINE_STATE) {}
         COPY_CONSTRUCTOR(RTPipeline);
     };
 
     class GBufferLayout : public RasterPipeline {
     public:
         struct Constant {};
+
         DEFINE_RASTER_PIPELINE_CLASS(GBufferLayout)
 
         DEFINE_SHADER_BUFFER(PositionBuffer);
@@ -350,9 +329,7 @@ namespace Moer::Render {
 
         DEFINE_SHADER_ARGS(PositionBuffer, NormalBuffer, DiffuseBuffer, SpecularBuffer, DiffuseTexture, SpecularTexture, constant);
 
-        void Test() {
-            SetArgs(BufferRef(), BufferRef(), BufferRef(), BufferRef(), TextureRef(), TextureRef(), Constant{});
-        }
+        void Test() { SetArgs(BufferRef(), BufferRef(), BufferRef(), BufferRef(), TextureRef(), TextureRef(), Constant{}); }
     };
 };// namespace Moer::Render
 

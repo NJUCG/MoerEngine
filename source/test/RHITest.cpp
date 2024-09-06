@@ -41,7 +41,8 @@ int main(int argc, const char** argv) {
     RenderDevice::Init(std::move(info));
     auto&           device = RenderDevice::Get();
     ShaderManager   manager(device);
-    SurfaceInitInfo surface_info("Vulkan", 1280, 720, "RHITest", false);
+    uint2 resolution = {1280, 720};
+    SurfaceInitInfo surface_info("Vulkan", resolution.x, resolution.y, "RHITest", false);
     WindowContext::Init(surface_info);
     auto&& scope_exit    = OnScopeExit([&] {
         WindowContext::ShutDown();
@@ -51,7 +52,8 @@ int main(int argc, const char** argv) {
     auto*  window_handle = WindowContext::GetMainWindow();
 
     auto buf = device.CreateBuffer<float>(1024, EBufferUsageFlags::UNORDERED_ACCESS);
-    auto sc  = device.CreateSwapchain(SwapchainCreateInfo{.window_handle = (uintptr_t)window_handle, .size = {1280, 720}, .back_buffer_sz = 2, .preferred_format = PF_R8G8B8A8_SRGB});
+    SwapchainCreateInfo sc_info{.window_handle = (uintptr_t)window_handle, .size = {resolution.x, resolution.y}, .back_buffer_sz = 2, .preferred_format = PF_R8G8B8A8_SRGB};
+    auto sc  = device.CreateSwapchain(sc_info);
 
     auto&       cmd_queue = device.GetCommandQueue(EQueueType::Graphics);
     CommandList cmd_list;
@@ -77,7 +79,7 @@ int main(int argc, const char** argv) {
         ETextureUsageFlags::SAMPLED);
 
     TextureRef output = device.CreateTexture(
-        Extent2D(1280, 720),
+        Extent2D(resolution.x, resolution.y),
         PF_R8G8B8A8_SRGB,
         ETextureUsageFlags::COLOR_ATTACHMENT);
 
@@ -86,9 +88,6 @@ int main(int argc, const char** argv) {
 
     cmd_queue.Execute(cmd_list.Submit());
     cmd_queue.Sync();
-
-    TextureView font_view = font_tex->GetView();
-    font_view.extent      = uint3(1280, 720, 1);
 
     VertexStream vertex_stream;
     vertex_stream.Emplace(
@@ -118,8 +117,8 @@ int main(int argc, const char** argv) {
     auto index_buffer  = device.CreateBuffer<uint>(3, EBufferUsageFlags::INDEX_BUFFER);
     cmd_list.CopyFrom(std::span<byte>((byte*)vertices, sizeof(vertices)), vertex_buffer->GetView());
     cmd_list.CopyFrom(std::span<byte>((byte*)indices, sizeof(indices)), index_buffer->GetView());
-    // cmd_queue.Execute(cmd_list.Submit());
-    // cmd_queue.Sync();
+    cmd_queue.Execute(cmd_list.Submit());
+    cmd_queue.Sync();
 
     VertexBuffer vb(vertex_buffer, 0);
     IndexBuffer  ib(index_buffer->GetView(), EIndexElementType::IET_UINT32);
@@ -132,14 +131,24 @@ int main(int argc, const char** argv) {
             ib,
             1,
             0);
-
-        MeshDrawData draw_data(
-            std::span<VertexBuffer>(&vb, 1),
-            ib,
-            1,
-            0);
+        int width, height;
+        WindowContext::GetWindowSize(WindowContext::GetMainWindow(), &width, &height);
+        while (width == 0 || height == 0) {
+            std::this_thread::yield();
+        }
+        if(width != resolution.x || height != resolution.y){
+            resolution = {uint32(width), uint32(height)};
+            output = device.CreateTexture(
+                Extent2D(resolution.x, resolution.y),
+                PF_R8G8B8A8_SRGB,
+                ETextureUsageFlags::COLOR_ATTACHMENT);
+            cmd_queue.Sync();
+            sc_info.size = {resolution.x, resolution.y};
+            sc->Recreate(sc_info);
+        }
+        
         cmd_list.Gfx(raster_pipeline)
-            .Draw(Rect2D(0, 0, 1280, 720), std::move(draw_datas), ColorAttachment(output));
+            .Draw(Rect2D(0, 0, resolution.x, resolution.y), std::move(draw_datas), ColorAttachment(output));
         cmd_queue.Execute(cmd_list.Submit());
         cmd_queue.Present(sc, output);
     }

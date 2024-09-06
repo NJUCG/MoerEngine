@@ -479,10 +479,12 @@ struct RHIClearAttachment {
                    stencil == other.stencil;
         }
     };
-    union ClearColorValue {
-        float    float32[4];
-        int32_t  int32[4];
-        uint32_t uint32[4];
+    struct ClearColorValue {
+        union {
+            float    float32[4];
+            int32_t  int32[4];
+            uint32_t uint32[4];
+        };
         bool     operator==(const ClearColorValue& other) const {
             return uint32[0] == other.uint32[0] && uint32[1] == other.uint32[1] && uint32[2] == other.uint32[2] && uint32[3] == other.uint32[3];
         }

@@ -269,6 +269,7 @@ namespace Moer::Render {
     }
     void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force_recreate) {
         bool       b_recreate = handle != VK_NULL_HANDLE || _force_recreate;
+        VkSwapchainKHR old_sc = handle;
         VkInstance instance   = device.GetInstance();
         //create surface by window handle
         assert(_info.window_handle != 0 && "Window handle is null when creating vulkan swapchain");
@@ -300,19 +301,19 @@ namespace Moer::Render {
             .compositeAlpha        = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
             .presentMode           = present_mode,
             .clipped               = VK_TRUE,
-            .oldSwapchain          = handle};
+            .oldSwapchain          = VK_NULL_HANDLE};
+        if(old_sc != VK_NULL_HANDLE)
+            vkDestroySwapchainKHR(device.GetDevice(), old_sc, VK_NULL_HANDLE);
         //create swapchain
         VK_CHECK_RESULT(vkCreateSwapchainKHR(device.GetDevice(), &create_info, nullptr, &handle));
 
         uint image_cnt;
         vkGetSwapchainImagesKHR(device.GetDevice(), handle, &image_cnt, nullptr);
         bool recreate_fences        = in_flight_fences.size() != max_frames_in_flight;
-        bool b_reacreate_semaphores = image_ready_fences.size() != image_cnt;
+        bool b_recreate_semaphores = true;
         if (b_recreate) {
             for (size_t i = 0; i < swapchain_textures.size(); ++i) {
                 MoerDelete(swapchain_textures[i]);
-                vkDestroySemaphore(device.GetDevice(), image_ready_fences[i], VK_NULL_HANDLE);
-                vkDestroySemaphore(device.GetDevice(), render_finished_fences[i], VK_NULL_HANDLE);
             }
         }
         swapchain_views.resize(image_cnt);
@@ -334,7 +335,7 @@ namespace Moer::Render {
             swapchain_views[i]    = TextureView(swapchain_textures[i]);
         }
 
-        if (b_reacreate_semaphores) {
+        if (b_recreate_semaphores) {
             for (size_t i = 0; i < image_ready_fences.size(); ++i) {
                 vkDestroySemaphore(device.GetDevice(), image_ready_fences[i], VK_NULL_HANDLE);
                 vkDestroySemaphore(device.GetDevice(), render_finished_fences[i], VK_NULL_HANDLE);
@@ -399,7 +400,8 @@ namespace Moer::Render {
         if (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR) {
             return {ready_sem, image_index, image_idx};
         }
-        assert(false && "Error acquiring next present texture.");
+        // assert(false && "Error acquiring next present texture.");
+        LOG_WARNING("Fail to acquire next image, window may be resized.");
         return {VK_NULL_HANDLE, INT32_MAX, image_idx};
     }
 
