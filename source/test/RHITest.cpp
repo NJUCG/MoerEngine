@@ -150,13 +150,16 @@ int main(int argc, const char** argv) {
             ib,
             1,
             0);
-        int width, height;
-        WindowContext::GetWindowSize(WindowContext::GetMainWindow(), &width, &height);
-        while (width == 0 || height == 0) {
+        int w_width, w_height;
+
+        WindowContext::GetWindowSize(WindowContext::GetMainWindow(), &w_width, &w_height);
+        if(w_width == 0 || w_height == 0) {
             std::this_thread::yield();
+            continue;
         }
-        if(width != resolution.x || height != resolution.y){
-            resolution = {uint32(width), uint32(height)};
+        if(w_width != resolution.x || w_height != resolution.y){
+            
+            resolution = {uint32(w_width), uint32(w_height)};
             output = device.CreateTexture(
                 Extent2D(resolution.x, resolution.y),
                 PF_R8G8B8A8_SRGB,
