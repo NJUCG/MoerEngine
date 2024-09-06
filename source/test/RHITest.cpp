@@ -29,6 +29,19 @@ public:
     DEFINE_SHADER_ARGS();
 };
 
+class TestTrianglePipelineConstColor : public RasterPipeline {
+public:
+    DEFINE_RASTER_PIPELINE_CLASS(TestTrianglePipelineConstColor);
+    DEFINE_SHADER_CONSTANT_STRUCT(float4, param);
+    DEFINE_SHADER_ARGS(param);
+};
+
+class TestTrianglePipelineBdls : public RasterPipeline {
+public:
+    DEFINE_RASTER_PIPELINE_CLASS(TestTrianglePipelineBdls);
+    DEFINE_SHADER_ARGS();
+};
+
 int main(int argc, const char** argv) {
 
     using namespace Moer::Render;
@@ -103,6 +116,12 @@ int main(int argc, const char** argv) {
                                .Vertex("test/BasicVertex.hlsl")
                                .Pixel("test/BasicFrag.hlsl")
                                .Build<TestTrianglePipeline>(std::move(pso_info));
+
+    auto rast_pipeline_constant_color = manager
+                                            .Raster()
+                                            .Vertex("test/BasicVertex.hlsl")
+                                            .Pixel("test/BasicFragConstant.hlsl")
+                                            .Build<TestTrianglePipelineConstColor>(std::move(pso_info));
     struct Vertex {
         float3 pos;
         float2 uv;
@@ -119,7 +138,7 @@ int main(int argc, const char** argv) {
     cmd_list.CopyFrom(std::span<byte>((byte*)indices, sizeof(indices)), index_buffer->GetView());
     cmd_queue.Execute(cmd_list.Submit());
     cmd_queue.Sync();
-
+    float4 color_red = {1, 0, 0, 1};
     VertexBuffer vb(vertex_buffer, 0);
     IndexBuffer  ib(index_buffer->GetView(), EIndexElementType::IET_UINT32);
     while (WindowContext::ShouldClose(window_handle) == false) {
@@ -147,7 +166,7 @@ int main(int argc, const char** argv) {
             sc->Recreate(sc_info);
         }
         
-        cmd_list.Gfx(raster_pipeline)
+        cmd_list.Gfx(rast_pipeline_constant_color, color_red)
             .Draw(Rect2D(0, 0, resolution.x, resolution.y), std::move(draw_datas), ColorAttachment(output));
         cmd_queue.Execute(cmd_list.Submit());
         cmd_queue.Present(sc, output);
