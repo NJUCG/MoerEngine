@@ -43,6 +43,21 @@ namespace Moer::Render {
                    handle.handle);
     }
 
+    void ShaderPipeline::SetSampler(uint32_t _index, Sampler _sampler) {
+        uint64 binding_info = handle.binding_infos[_index];
+        std::visit([&](auto&& _arg) {
+            using T = std::decay_t<decltype(_arg)>;
+            if constexpr (std::is_same_v<T, VkPipelineHandle>) {
+                VulkanPipelineState& pso            = *reinterpret_cast<VulkanPipelineState*>(_arg.handle);
+                auto*                resource_cache = pso.GetPipelineResourceCache();
+                auto [set, binding, stage_flags]    = DecodeReflectInfo(binding_info);
+
+                resource_cache->SetSampler(set, binding, std::move(_sampler));
+            }
+        },
+                   handle.handle);
+    }
+
     void ShaderPipeline::SetConstantInner(uint _index, std::span<uint> _data) {
         uint64 binding_info = handle.binding_infos[_index];
         std::visit([&](auto&& _arg) {

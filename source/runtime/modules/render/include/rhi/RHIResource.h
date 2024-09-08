@@ -623,29 +623,7 @@ namespace Moer::Render {
         }
     };
     struct Sampler {
-        enum EType : uint8 {
-            NEAR_EDGE,
-            NEAR_MIRROR,
-            NEAR_REPEAT,
-            NEAR_BORDER,
-            LINEAR_EDGE,
-            LINEAR_MIRROR,
-            LINEAR_REPEAT,
-            LINEAR_BORDER,
-            ANISOTROPIC_EDGE,
-            ANISOTROPIC_MIRROR,
-            ANISOTROPIC_REPEAT,
-            ANISOTROPIC_BORDER,
-            CUBIC_EDGE,
-            CUBIC_MIRROR,
-            CUBIC_REPEAT,
-            CUBIC_BORDER
-        };
-        Sampler(EType _type) {}
         Sampler(ESamplerFilter _filter, ESamplerAddressMode _address_mode, ESamplerCompareFunction _compare_function = ESamplerCompareFunction::SCF_NEVER) : filter(_filter), address_mode(_address_mode), compare_function(_compare_function) {}
-        static Sampler Create(EType _type) {
-            return Sampler(_type);
-        }
         ESamplerFilter          filter;
         ESamplerAddressMode     address_mode;
         ESamplerCompareFunction compare_function;

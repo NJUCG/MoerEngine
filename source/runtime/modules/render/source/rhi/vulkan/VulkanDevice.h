@@ -225,6 +225,7 @@ namespace Moer::Render {
         void FlushDeferredReleases();
         constexpr uint ImmutableSamplerCount() const { return immutable_sampler_count; }
         const VkSampler* GetImmutableSamplers() const{ return immutable_samplers.data(); }
+        const VkSampler GetSampler(Sampler _sampler) const;
     public:
         void Init(const DeviceInitializer& _initializer);
         void InitMemoryAllocator(VkInstance _instance);

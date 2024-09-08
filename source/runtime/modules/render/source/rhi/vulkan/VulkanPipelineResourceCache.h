@@ -32,9 +32,10 @@ namespace Moer::Render {
         friend Moer::Render::VulkanDescriptorSetWriter;
 
     public:
-        VulkanPipelineResourceCache(const VulkanDescriptorSetsLayout* _layout, const Moer::Array<Moer::Render::TDescriptorSetLayoutBindingArray>& _descriptor_bindings);
+        VulkanPipelineResourceCache(const VulkanDescriptorSetsLayout* _layout, const Moer::Array<Moer::Render::TDescriptorSetLayoutBindingArray>& _descriptor_bindings, VulkanDevice& _device);
 
         void SetSamplerState(uint32_t _set, uint32_t _binding, VulkanRHISampler* _sampler);
+        void SetSampler(uint _set, int32_t _binding, Sampler _sampler);
 
         void SetCBV(uint32_t _set, uint32_t _binding, RHICBV* _cbv);
 
@@ -47,7 +48,7 @@ namespace Moer::Render {
         // void SetTlas()
         void PushConstant(uint _stage_flags, std::span<uint> _data);
 
-        bool UpdateDescriptorSets(VulkanDevice* _device, const VulkanDescriptorSetsLayout* _layout);
+        bool UpdateDescriptorSets(const VulkanDescriptorSetsLayout* _layout);
 
         void BindDescriptorSets(VkCommandBuffer _buffer, VkPipelineBindPoint _bind_point, VkPipelineLayout _layout);
 
@@ -78,6 +79,8 @@ namespace Moer::Render {
         void InitDescriptorSetWriteContainer(const Moer::Array<Moer::Render::TDescriptorSetLayoutBindingArray>& _descriptor_bindings);
 
         Moer::Array<DescriptorSetInfo> m_set_infos;
+
+        VulkanDevice& m_device;
     };
 }// namespace Moer::Render
 #endif// VULKAN_PIPELINE_STATE_CACHE_H

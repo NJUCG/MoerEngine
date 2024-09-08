@@ -26,17 +26,13 @@
 
 namespace Moer::Render {
     namespace VkUtil = Moer::RHI::Vulkan::Util;
-    std::tuple<std::variant<SpvReflectDescriptorType, uint>, std::variant<SpvReflectResourceType, uint>> DecodeReflectType(uint32 _value) {
-        std::variant<SpvReflectDescriptorType, uint> fst;
-        std::variant<SpvReflectResourceType, uint>   scd;
-        if (_value & (1u << 20)) {
-            fst = uint(_value & ((1u << 20) - 1));
-            scd = 0u;
-            return std::make_tuple(fst, scd);
-        }
-        fst = SpvReflectDescriptorType(_value << 4);
-        scd = SpvReflectResourceType(_value);
-        return std::make_tuple(fst, scd);
+
+    std::tuple<SpvReflectResourceType, SpvReflectDescriptorType> DecodeReflectType(uint32 _value) {
+        return std::make_tuple(SpvReflectResourceType(_value), SpvReflectDescriptorType(_value >> 4));
+    }
+
+    std::tuple<uint32, uint32> DecodeConstant(uint32 _flag) {
+        return std::make_tuple(_flag >> 20, (_flag & 0xFFFFF));
     }
     VulkanDevice::~VulkanDevice() {
         Destroy();
@@ -79,7 +75,7 @@ namespace Moer::Render {
         for (uint i = 0; i < immutable_sampler_count; ++i) {
             ESamplerFilter          filter           = ESamplerFilter(i % SF_Num);
             ESamplerAddressMode     address_mode     = ESamplerAddressMode((i / SF_Num) % SAM_Num);
-            ESamplerCompareFunction compare_function = ESamplerCompareFunction(i / (SAM_Num * SF_Num));
+            ESamplerCompareFunction compare_function = ESamplerCompareFunction(i / (SAM_Num * uint(SF_Num)));
 
             sampler_create_info.minFilter = sampler_create_info.magFilter = VulkanEnumTranslator::METoVKMinMagFilterMode(filter);
             sampler_create_info.addressModeU = sampler_create_info.addressModeV = sampler_create_info.addressModeW = VulkanEnumTranslator::METoVKWrapMode(address_mode);
@@ -203,7 +199,7 @@ namespace Moer::Render {
 
         //capable of using buffer via device address(64bit) passed to shader.
         alloc_create_info.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
-        if(m_optional_extensions.m_has_memory_priority) {
+        if (m_optional_extensions.m_has_memory_priority) {
             alloc_create_info.flags |= VMA_ALLOCATOR_CREATE_EXT_MEMORY_PRIORITY_BIT;
         }
 
@@ -561,16 +557,16 @@ namespace Moer::Render {
 
     // Merge Shader Reflection Info with Cpp End Definitions, thus we can get binding relations between shader and cpp.
     static void MergeReflectInfo(
-        const VulkanDevice&                                                  _device,
-        const SingleShaderInfo&                                              _info,                    // target shader compiled result
-        const PipelineShaderInfo&                                            _shader_info,             // all shader compiled result in this pso
-        VkShaderStageFlagBits                                                _stage,                   // target shader stage
-        UnorderedMap<uint64, uint>&                                          _out_hash_2_idx,          // hash to index
-        Moer::Array<uint64>&                                                 _out_reflect_flags,       // cpp param name hash to shader binding index
-        UnorderedMap<uint, UnorderedMap<uint, VkDescriptorSetLayoutBinding>> _out_descriptor_bindings, // set to binding to binding info, actual vk pipeline layout
-        VkPushConstantRange&                                                 _out_push_constant_ranges,// push constant range
-        int&                                                                 _out_constant_idx,        // push constant index in cpp param
-        uint&                                                                _max_set                  // max set index, calculate descriptor set count
+        const VulkanDevice&                                                   _device,
+        const SingleShaderInfo&                                               _info,                    // target shader compiled result
+        const PipelineShaderInfo&                                             _shader_info,             // all shader compiled result in this pso
+        VkShaderStageFlagBits                                                 _stage,                   // target shader stage
+        UnorderedMap<uint64, uint>&                                           _out_hash_2_idx,          // hash to index
+        Moer::Array<uint64>&                                                  _out_reflect_flags,       // cpp param name hash to shader binding index
+        UnorderedMap<uint, UnorderedMap<uint, VkDescriptorSetLayoutBinding>>& _out_descriptor_bindings, // set to binding to binding info, actual vk pipeline layout
+        VkPushConstantRange&                                                  _out_push_constant_ranges,// push constant range
+        int&                                                                  _out_constant_idx,        // push constant index in cpp param
+        uint&                                                                 _max_set                  // max set index, calculate descriptor set count
     ) {
 
         for (const auto& hash : _shader_info.layout_hash) {
@@ -584,7 +580,6 @@ namespace Moer::Render {
                 continue;
             }
             const ParameterInfo& binding_info = binding_iter->second;
-            auto [desc_type, resource_type]   = DecodeReflectType(binding_info.type_flags);
             switch (arg_type) {
                 case SDA_BindlessArray: {
                     std::string bindless_buffer_name      = std::string(hash) + "_bindless_buffer";
@@ -648,20 +643,22 @@ namespace Moer::Render {
                     break;
                 }
                 case SDA_Constant: {
-                    bool b_push_constant = std::holds_alternative<uint>(desc_type);
+                    auto [b_push_constant, size]   = DecodeConstant(binding_info.type_flags);
                     assert(b_push_constant && "Shader Constant Param must be Declared Constant In Shader Param in cpp end.");
                     _out_constant_idx              = idx;
-                    _out_push_constant_ranges.size = std::max(_out_push_constant_ranges.size, std::get<uint>(desc_type));
+                    _out_push_constant_ranges.size = std::max(_out_push_constant_ranges.size, size);
                     _out_push_constant_ranges.stageFlags |= _stage;
-                    _out_reflect_flags[idx] = EncodeReflectInfo(0, std::get<uint>(desc_type), _out_push_constant_ranges.stageFlags);
+                    _out_reflect_flags[idx] = EncodeReflectInfo(0, size, _out_push_constant_ranges.stageFlags);
                     break;
                 }
                 case SDA_Buffer:
                 case SDA_Texture:
                 case SDA_Sampler: {
-                    auto  rel_desc_type        = std::get<SpvReflectDescriptorType>(desc_type);
-                    auto  rel_res_type         = std::get<SpvReflectResourceType>(resource_type);
-                    auto  desc_type            = METoVkDescriptorType(rel_desc_type, rel_res_type);
+                    auto [resource_type, spv_desc_type]   = DecodeReflectType(binding_info.type_flags);
+
+                    // auto  rel_desc_type        = std::get<SpvReflectDescriptorType>(desc_type);
+                    // auto  rel_res_type         = std::get<SpvReflectResourceType>(resource_type);
+                    auto  desc_type            = METoVkDescriptorType(spv_desc_type, resource_type);
                     auto& set                  = _out_descriptor_bindings[binding_info.space];
                     auto& vk_binding           = set[binding_info.slot];
                     vk_binding.binding         = binding_info.slot;
@@ -807,41 +804,39 @@ namespace Moer::Render {
         Moer::Array<VkVertexInputBindingDescription>   binding_descs;
         Moer::Array<VkVertexInputAttributeDescription> attribute_descs;
 
-        auto to_vk_vertex_stream = [&](){
+        auto to_vk_vertex_stream = [&]() {
             uint binding_offset = 0;
             binding_descs.reserve(_create_info.vertex_stream.bindings.size());
-            auto attribute_cnt = [&](){
+            auto attribute_cnt = [&]() {
                 uint cnt = 0;
-                for (const auto& binding : _create_info.vertex_stream.bindings){
+                for (const auto& binding : _create_info.vertex_stream.bindings) {
                     cnt += binding.vertex_elements.size();
                 }
                 return cnt;
             }();
             uint attrib_location = 0;
             attribute_descs.reserve(attribute_cnt);
-            for (const VertexBinding& binding : _create_info.vertex_stream.bindings){
+            for (const VertexBinding& binding : _create_info.vertex_stream.bindings) {
                 uint binding_stride = 0;
-                uint attrib_offset = 0;
-                for (const VertexElement& attribute : binding.vertex_elements){
+                uint attrib_offset  = 0;
+                for (const VertexElement& attribute : binding.vertex_elements) {
                     const FormatInfo& format_info = g_platform_pixel_formats[uint(attribute.format)];
                     attribute_descs.emplace_back(
                         attrib_location++,
                         binding_offset,
                         format_info.format,
-                        attrib_offset
-                    );
+                        attrib_offset);
                     attrib_offset += format_info.stride;
                     binding_stride = attrib_offset;
                 }
                 binding_descs.emplace_back(
                     binding_offset,
                     binding_stride,
-                    VulkanEnumTranslator::METoVKVertexInputRate(binding.vertex_elements[0].input_rate)
-                );
+                    VulkanEnumTranslator::METoVKVertexInputRate(binding.vertex_elements[0].input_rate));
                 ++binding_offset;
             }
-            vertex_input_state.vertexBindingDescriptionCount = uint(binding_descs.size());
-            vertex_input_state.pVertexBindingDescriptions    = binding_descs.data();
+            vertex_input_state.vertexBindingDescriptionCount   = uint(binding_descs.size());
+            vertex_input_state.pVertexBindingDescriptions      = binding_descs.data();
             vertex_input_state.vertexAttributeDescriptionCount = uint(attribute_descs.size());
             vertex_input_state.pVertexAttributeDescriptions    = attribute_descs.data();
         };
@@ -1127,6 +1122,15 @@ namespace Moer::Render {
         for (auto* object : objects) {
             MoerDelete(object);
         }
+    }
+
+    const VkSampler VulkanDevice::GetSampler(Sampler _sampler) const {
+        uint filter  = uint(_sampler.filter);
+        uint address = uint(_sampler.address_mode);
+        uint compare = uint(_sampler.compare_function);
+
+        uint idx = (uint(SF_Num) * uint(SAM_Num)) * compare + (uint(SF_Num)) * address + filter;
+        return immutable_samplers[idx];
     }
     // RHIViewportRef VulkanDevice::CreateViewport(const RHIViewportInitializer& _init) {
     //     VulkanSwapChain* swapchain = MoerNew(VulkanSwapChain)();

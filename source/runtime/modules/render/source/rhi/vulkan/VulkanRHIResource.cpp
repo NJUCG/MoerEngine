@@ -1260,7 +1260,7 @@ void VulkanPipelineState::InitPipelineResourceCache(const Moer::Array<TDescripto
         return;
     }
 
-    m_pipeline_state_cache = MoerNew(VulkanPipelineResourceCache)(m_descriptor_sets_layout, _descriptor_bindings);
+    m_pipeline_state_cache = MoerNew(VulkanPipelineResourceCache)(m_descriptor_sets_layout, _descriptor_bindings, *m_device);
 }
 
 void VulkanPipelineState::CreatePipelineLayout(const VkPipelineLayoutCreateInfo& _pipeline_layout_ci) {

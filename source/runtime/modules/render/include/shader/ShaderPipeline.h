@@ -107,7 +107,8 @@ public:                                                                         
     String##name
 
 namespace Moer::Render {
-    using TArg = std::variant<BufferView, TextureView, Sampler, BindlessArrayRef>;
+    using TInvalidArg = uint;
+    using TArg = std::variant<TInvalidArg, BufferView, TextureView, Sampler, BindlessArrayRef>;
 
     template<typename T>
     struct ShaderArgEnum {
@@ -265,6 +266,7 @@ namespace Moer::Render {
         void SetBuffer(uint _idx, BufferRef _param);
         void SetTexture(uint _idx, TextureView _param);
         void SetBuffer(uint _idx, BufferView _param);
+        void SetSampler(uint _idx, Sampler _param);
 
         template<typename T>
         void SetConstant(uint _idx, T&& _args) { SetConstantInner(_idx, std::span<uint>((uint*)&_args, sizeof(T) / sizeof(uint))); }

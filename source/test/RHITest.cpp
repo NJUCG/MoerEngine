@@ -33,7 +33,9 @@ class TestTrianglePipelineConstColor : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(TestTrianglePipelineConstColor);
     DEFINE_SHADER_CONSTANT_STRUCT(float4, param);
-    DEFINE_SHADER_ARGS(param);
+    DEFINE_SHADER_TEX(texture);
+    DEFINE_SHADER_SAMPLER(defaultSampler);
+    DEFINE_SHADER_ARGS(defaultSampler, texture, param);
 };
 
 class TestTrianglePipelineBdls : public RasterPipeline {
@@ -138,7 +140,9 @@ int main(int argc, const char** argv) {
     cmd_list.CopyFrom(std::span<byte>((byte*)indices, sizeof(indices)), index_buffer->GetView());
     cmd_queue.Execute(cmd_list.Submit());
     cmd_queue.Sync();
+
     float4 color_red = {1, 0, 0, 1};
+    Sampler sampler(SF_LINEAR,SAM_CLAMP_TO_EDGE);
     VertexBuffer vb(vertex_buffer, 0);
     IndexBuffer  ib(index_buffer->GetView(), EIndexElementType::IET_UINT32);
     while (WindowContext::ShouldClose(window_handle) == false) {
@@ -168,8 +172,8 @@ int main(int argc, const char** argv) {
             sc_info.size = {resolution.x, resolution.y};
             sc->Recreate(sc_info);
         }
-        
-        cmd_list.Gfx(rast_pipeline_constant_color, color_red)
+        cmd_list.Barriers(ReadTexture(font_tex, ETextureState::SAMPLE));
+        cmd_list.Gfx(rast_pipeline_constant_color, sampler, font_tex, color_red)
             .Draw(Rect2D(0, 0, resolution.x, resolution.y), std::move(draw_datas), ColorAttachment(output));
         cmd_queue.Execute(cmd_list.Submit());
         cmd_queue.Present(sc, output);

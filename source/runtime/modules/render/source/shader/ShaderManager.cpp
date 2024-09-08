@@ -65,8 +65,17 @@ namespace Moer::Render {
                 .relative_source_file_path = _info.path,
                 .shader_name               = _info.path,
                 .environment               = _info.environment};
-
-            return ShaderCompiler::Compile(std::move(input));
+            auto output = ShaderCompiler::Compile(std::move(input));
+            if (!output.b_succeeded) {
+                for (const auto& error : output.errors) {
+                    LOG_ERROR("Shader Compile Error: {}", error.data());
+                }
+            }
+            if (output.shader_code.empty()) {
+                LOG_ERROR("Shader Compile Error: shader code is empty.");
+                assert(false && "Shader Compile Error: shader code is empty.");
+            }
+            return std::move(output);
         };
         auto get_shader_info = [&](EShaderType _type, ShaderInfo& _info, ShaderCompilerOutput&& _output) {
             return std::move(SingleShaderInfo{

@@ -3,6 +3,7 @@
 //
 
 #include "PixelFormat.h"
+#include "log/LogSystem.h"
 #include "math/Constant.h"
 #include "misc/STL.h"
 #include "resources/ResourceTransition.h"
@@ -1024,7 +1025,7 @@ namespace Moer::Render {
         const auto* vk_sets_layout = vk_pso->GetDescriptorSetsLayout();
         // 1. update and bind descriptor sets
         if (vk_resource_cache->HasDescriptorSets()) {
-            vk_resource_cache->UpdateDescriptorSets(m_device, vk_sets_layout);
+            vk_resource_cache->UpdateDescriptorSets(vk_sets_layout);
             if (m_bound_sets != vk_resource_cache->GetDescriptorSets()) {
                 vk_resource_cache->BindDescriptorSets(m_command_buffer, binding_point, pipeline_layout);
                 m_bound_sets = vk_resource_cache->GetDescriptorSets();
@@ -1122,7 +1123,7 @@ namespace Moer::Render {
         const auto* vk_sets_layout = vk_pso->GetDescriptorSetsLayout();
         // 1. update and bind descriptor sets
         if (vk_resource_cache->HasDescriptorSets()) {
-            vk_resource_cache->UpdateDescriptorSets(m_device, vk_sets_layout);
+            vk_resource_cache->UpdateDescriptorSets(vk_sets_layout);
             if (m_bound_sets != vk_resource_cache->GetDescriptorSets()) {
                 vk_resource_cache->BindDescriptorSets(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_layout);
                 m_bound_sets = vk_resource_cache->GetDescriptorSets();
@@ -1217,7 +1218,7 @@ namespace Moer::Render {
         const auto* vk_sets_layout = vk_pso->GetDescriptorSetsLayout();
         // 1. update and bind descriptor sets
         if (vk_resource_cache->HasDescriptorSets()) {
-            vk_resource_cache->UpdateDescriptorSets(m_device, vk_sets_layout);
+            vk_resource_cache->UpdateDescriptorSets(vk_sets_layout);
             if (m_bound_sets != vk_resource_cache->GetDescriptorSets()) {
                 vk_resource_cache->BindDescriptorSets(m_command_buffer, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, pipeline_layout);
                 m_bound_sets = vk_resource_cache->GetDescriptorSets();
@@ -1536,12 +1537,20 @@ namespace Moer::Render {
 
             const auto&    args = std::move(_cmd.Args());
             RasterPipeline pso(_cmd.Pipeline());
-            auto           set_param = [&](uint _idx, const TArg& _arg) {
-                if constexpr (std::is_same_v<TArg, TextureView>) {
-                    pso.SetTexture(_idx, std::get<TextureView>(_arg));
-                } else if constexpr (std::is_same_v<TArg, BufferView>) {
-                    pso.SetBuffer(_idx, std::get<BufferView>(_arg));
+            auto           set_param = [&](uint _idx, const auto& _arg) {
+
+                std::visit([&](auto&& _in_arg) {
+                    using T = std::decay_t<decltype(_in_arg)>;
+                if constexpr (std::is_same_v<T, TextureView>) {
+                    pso.SetTexture(_idx, _in_arg);
+                } else if constexpr (std::is_same_v<T, BufferView>) {
+                    pso.SetBuffer(_idx, _in_arg);
+                } else if constexpr (std::is_same_v<T, Sampler>) {
+                    pso.SetSampler(_idx, _in_arg);
+                } else {
+                    //constsant type
                 }
+                }, _arg);
             };
 
             const auto&                      pass_info = _cmd.RenderPassInfo();
@@ -2389,7 +2398,7 @@ namespace Moer::Render {
 
         auto* resource_cache = vk_pso->GetPipelineResourceCache();
         if (resource_cache->HasDescriptorSets()) {
-            resource_cache->UpdateDescriptorSets(&device, vk_pso->GetDescriptorSetsLayout());
+            resource_cache->UpdateDescriptorSets(vk_pso->GetDescriptorSetsLayout());
             resource_cache->BindDescriptorSets(command_buffer, vk_pso->GetPipelineBindPoint(), vk_pso->GetPipelineLayout());
         }
     }

@@ -8,7 +8,7 @@
 #include "rhi/RHIResourceInitilizer.h"
 #include "vulkan/vulkan_core.h"
 namespace Moer::Render {
-    VulkanPipelineResourceCache::VulkanPipelineResourceCache(const VulkanDescriptorSetsLayout* _layout, const Moer::Array<TDescriptorSetLayoutBindingArray>& _descriptor_bindings) {
+    VulkanPipelineResourceCache::VulkanPipelineResourceCache(const VulkanDescriptorSetsLayout* _layout, const Moer::Array<TDescriptorSetLayoutBindingArray>& _descriptor_bindings, VulkanDevice& _device):m_device(_device) {
         const uint32_t set_count = _layout->GetDescriptorSetCount();
         const auto&    layouts   = _layout->GetLayouts();
         m_descriptor_set_writers.resize(set_count, this);
@@ -143,11 +143,15 @@ namespace Moer::Render {
         m_push_constants.push_back(info);
     }
 
-    bool VulkanPipelineResourceCache::UpdateDescriptorSets(VulkanDevice* _device, const VulkanDescriptorSetsLayout* _layout) {
+    void VulkanPipelineResourceCache::SetSampler(uint _set, int32_t _binding, Sampler _sampler) {
+        m_descriptor_set_writers[_set].WriteSampler(_binding, m_device.GetSampler(_sampler), VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED);
+    }
+
+    bool VulkanPipelineResourceCache::UpdateDescriptorSets(const VulkanDescriptorSetsLayout* _layout) {
         if (m_descriptor_sets.empty()) {
             return false;
         }
-        return _device->GetDescriptorAllocator()->GetDescriptorSets(GetSetsKey(), *_layout, m_descriptor_set_writers, m_descriptor_sets);
+        return m_device.GetDescriptorAllocator()->GetDescriptorSets(GetSetsKey(), *_layout, m_descriptor_set_writers, m_descriptor_sets);
     }
 
     void VulkanPipelineResourceCache::BindDescriptorSets(VkCommandBuffer _buffer, VkPipelineBindPoint _bind_point, VkPipelineLayout _layout) {
