@@ -6,7 +6,6 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
-#include "rhi/vulkan/misc/VulkanMacroUtils.h"
 #include "vulkan/vulkan_core.h"
 namespace Moer::Render {
     VulkanPipelineResourceCache::VulkanPipelineResourceCache(const VulkanDescriptorSetsLayout* _layout, const Moer::Array<TDescriptorSetLayoutBindingArray>& _descriptor_bindings) {

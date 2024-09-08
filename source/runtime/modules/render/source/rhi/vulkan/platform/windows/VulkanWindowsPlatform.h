@@ -18,7 +18,7 @@
 #endif// VULKAN_RHI_RAYTRACING
 
 // and now, include the GenericPlatform class
-#include "rhi/vulkan/misc/VulkanTypeDefs.h"
+#include "../../VulkanTypeDefs.h"
 #include "../VulkanGenericPlatform.h"
 
 namespace Moer::Render {

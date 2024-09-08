@@ -6,7 +6,7 @@
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
-#include "rhi/vulkan/misc/VulkanTypeDefs.h"
+#include "VulkanTypeDefs.h"
 #include "VulkanExtension.h"
 #include "VulkanDeviceFeature.h"
 #include "VulkanDeviceProperty.h"
@@ -15,6 +15,7 @@
 #include <vk_mem_alloc.h>
 
 #include <optional>
+#include "VulkanMacroUtils.h"
 #include "VulkanCommand.h"
 #include "../RHIImpl.h"
 #include "taskgraph/Event.h"

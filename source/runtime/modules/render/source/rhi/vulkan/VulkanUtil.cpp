@@ -2,13 +2,12 @@
 // Created by 74535 on 2023/10/1.
 //
 
-#include "rhi/vulkan/misc/VulkanMacroUtils.h"
 
 #include "misc/Crc32.h"
 
 #include "VulkanUtil.h"
 #include "vulkan/vulkan_core.h"
-
+#include "VulkanMacroUtils.h"
 #if defined(_WIN32)
 #include <windows.h>
 #endif

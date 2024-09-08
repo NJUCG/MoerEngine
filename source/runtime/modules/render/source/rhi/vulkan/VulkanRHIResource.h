@@ -9,7 +9,7 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
-#include "rhi/vulkan/misc/VulkanTypeDefs.h"
+#include "VulkanTypeDefs.h"
 
 #include "misc/STL.h"
 

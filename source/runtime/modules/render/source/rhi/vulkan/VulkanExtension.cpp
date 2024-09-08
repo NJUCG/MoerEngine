@@ -7,7 +7,7 @@
 #include "VulkanDevice.h"
 #include "VulkanPlatform.h"
 #include "VulkanExtension.h"
-#include "rhi/vulkan/misc/VulkanMacroUtils.h"
+#include "VulkanMacroUtils.h"
 
 #include <vulkan/vulkan_core.h>
 
@@ -478,6 +478,39 @@ namespace Moer::Render {
         VkPhysicalDeviceDescriptorBufferFeaturesEXT m_descriptor_buffer_features;
     };
 
+
+    class VulkanEXTMemoryDecompressionExtension final : public VulkanDeviceExtension {
+        public: 
+            VulkanEXTMemoryDecompressionExtension(bool _is_enabled = true, bool _is_optional = true)
+                : VulkanDeviceExtension(VK_NV_MEMORY_DECOMPRESSION_EXTENSION_NAME, _is_enabled, _is_optional), m_memory_decompression_features{} {}
+
+            void PreGpuFeatures(VkPhysicalDeviceFeatures2& _gpu_features2) override {
+                m_memory_decompression_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_DECOMPRESSION_FEATURES_NV;
+                AddToPNext(_gpu_features2, m_memory_decompression_features);
+            }
+
+            void PostGpuFeatures(VulkanOptionalDeviceExtensions& _gpu_extensions) override {
+                m_is_usable = (m_memory_decompression_features.memoryDecompression == VK_TRUE);
+
+                _gpu_extensions.m_has_nv_memory_decompression = m_is_usable;
+            }
+
+            void PreGpuProperties(const VulkanDevice* _device, VkPhysicalDeviceProperties2& _gpu_properties2) override {
+                auto& memory_decompression = const_cast<VulkanOptionalDeviceProperties&>(_device->GetOptionalProperties()).memory_decompression_properties;
+                memory_decompression.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_DECOMPRESSION_PROPERTIES_NV;
+                AddToPNext(_gpu_properties2, memory_decompression);
+            }
+
+            void PreCreateDevice(VkDeviceCreateInfo& _device_create_info) override {
+                if (m_is_usable && m_is_enabled) {
+                    AddToPNext(_device_create_info, m_memory_decompression_features);
+                }
+            }
+
+        private:
+            VkPhysicalDeviceMemoryDecompressionFeaturesNV m_memory_decompression_features;
+    };
+
     class VulkanEXTCopyMemoryIndirectExtension final : public VulkanDeviceExtension {
     public:
         VulkanEXTCopyMemoryIndirectExtension(bool _is_enabled = true, bool _is_optional = true)
@@ -485,27 +518,79 @@ namespace Moer::Render {
 
         void PreGpuFeatures(VkPhysicalDeviceFeatures2& _gpu_features2) override {
             m_copy_memory_indirect_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COPY_MEMORY_INDIRECT_FEATURES_NV;
-            m_memory_decompression_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_DECOMPRESSION_FEATURES_NV;
             AddToPNext(_gpu_features2, m_copy_memory_indirect_features);
-            AddToPNext(_gpu_features2, m_memory_decompression_features);
         }
 
         void PostGpuFeatures(VulkanOptionalDeviceExtensions& _gpu_extensions) override {
-            m_is_usable = (m_copy_memory_indirect_features.indirectCopy == VK_TRUE) && (m_memory_decompression_features.memoryDecompression == VK_TRUE);
+            m_is_usable = (m_copy_memory_indirect_features.indirectCopy == VK_TRUE) ;
 
-            _gpu_extensions.m_has_direct_storage = m_is_usable;
+            _gpu_extensions.m_has_nv_copy_memory_indirect = m_is_usable;
+        }
+
+        void PreGpuProperties(const VulkanDevice* _device, VkPhysicalDeviceProperties2& _gpu_properties2) override {
+            auto& copy_memory_indirect = const_cast<VulkanOptionalDeviceProperties&>(_device->GetOptionalProperties()).copy_memory_indirect_properties;
+            copy_memory_indirect.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COPY_MEMORY_INDIRECT_PROPERTIES_NV;
+            AddToPNext(_gpu_properties2, copy_memory_indirect);
         }
 
         void PreCreateDevice(VkDeviceCreateInfo& _device_create_info) override {
             if (m_is_usable && m_is_enabled) {
                 AddToPNext(_device_create_info, m_copy_memory_indirect_features);
-                AddToPNext(_device_create_info, m_memory_decompression_features);
             }
         }
 
     private:
         VkPhysicalDeviceCopyMemoryIndirectFeaturesNV  m_copy_memory_indirect_features;
-        VkPhysicalDeviceMemoryDecompressionFeaturesNV m_memory_decompression_features;
+    };
+
+    class VulkanEXTMemoryPriorityAllocateInfoExtension final : public VulkanDeviceExtension {
+    public:
+        VulkanEXTMemoryPriorityAllocateInfoExtension(bool _is_enabled = true, bool _is_optional = true)
+            : VulkanDeviceExtension(VK_EXT_MEMORY_PRIORITY_EXTENSION_NAME, _is_enabled, _is_optional), m_memory_priority_features() {}
+
+        void PreGpuFeatures(VkPhysicalDeviceFeatures2& _gpu_features2) override {
+            m_memory_priority_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PRIORITY_FEATURES_EXT;
+            AddToPNext(_gpu_features2, m_memory_priority_features);
+        }
+
+        void PostGpuFeatures(VulkanOptionalDeviceExtensions& _gpu_extensions) override {
+            m_is_usable = (m_memory_priority_features.memoryPriority == VK_TRUE);
+
+            _gpu_extensions.m_has_memory_priority = m_is_usable;
+        }
+
+        void PreCreateDevice(VkDeviceCreateInfo& _device_create_info) override {
+            if (m_is_usable && m_is_enabled) {
+                AddToPNext(_device_create_info, m_memory_priority_features);
+            }
+        }
+        private:
+            VkPhysicalDeviceMemoryPriorityFeaturesEXT m_memory_priority_features;
+    };
+
+    class VulkanEXTPageableDeviceLocalMemoryExtension final : public VulkanDeviceExtension {
+    public:
+        VulkanEXTPageableDeviceLocalMemoryExtension(bool _is_enabled = true, bool _is_optional = true)
+            : VulkanDeviceExtension(VK_EXT_PAGEABLE_DEVICE_LOCAL_MEMORY_EXTENSION_NAME, _is_enabled, _is_optional), m_pageable_device_local_memory_features() {}
+
+        void PreGpuFeatures(VkPhysicalDeviceFeatures2& _gpu_features2) override {
+            m_pageable_device_local_memory_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PAGEABLE_DEVICE_LOCAL_MEMORY_FEATURES_EXT;
+            AddToPNext(_gpu_features2, m_pageable_device_local_memory_features);
+        }
+
+        void PostGpuFeatures(VulkanOptionalDeviceExtensions& _gpu_extensions) override {
+            m_is_usable = (m_pageable_device_local_memory_features.pageableDeviceLocalMemory == VK_TRUE);
+
+            _gpu_extensions.m_has_pageable_device_local_memory = m_is_usable;
+        }
+
+        void PreCreateDevice(VkDeviceCreateInfo& _device_create_info) override {
+            if (m_is_usable && m_is_enabled) {
+                AddToPNext(_device_create_info, m_pageable_device_local_memory_features);
+            }
+        }
+        private:
+            VkPhysicalDevicePageableDeviceLocalMemoryFeaturesEXT m_pageable_device_local_memory_features;
     };
 
     TVulkanDeviceExtensionArray VulkanDeviceExtension::GetMESupportedDeviceExtensions(const RHIInfo& _rhi_info) {
@@ -518,7 +603,7 @@ namespace Moer::Render {
 #define ADD_CUSTOM_EXTENSION(ext_class, enabled, optional) extensions.emplace_back(std::make_shared<ext_class>(enabled, optional))
         // generic simple extensions
         ADD_EXTENSION(VK_KHR_SWAPCHAIN_EXTENSION_NAME, VULKAN_EXTENSION_ENABLED, VULKAN_EXTENSION_REQUIRED);
-        ADD_EXTENSION(VK_EXT_INDEX_TYPE_UINT8_EXTENSION_NAME, VULKAN_EXTENSION_ENABLED, VULKAN_EXTENSION_REQUIRED);
+        ADD_EXTENSION(VK_KHR_INDEX_TYPE_UINT8_EXTENSION_NAME, VULKAN_EXTENSION_ENABLED, VULKAN_EXTENSION_REQUIRED);
 
         // raytracing extensions
         ADD_EXTENSION(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME, _rhi_info.ray_tracing, VULKAN_EXTENSION_OPTIONAL);
@@ -535,8 +620,10 @@ namespace Moer::Render {
 
         // platform specific extensions
         // VulkanPlatform::GetDeviceExtensions(extensions);//MARK...
-
+        ADD_CUSTOM_EXTENSION(VulkanEXTMemoryPriorityAllocateInfoExtension, VULKAN_EXTENSION_ENABLED, VULKAN_EXTENSION_OPTIONAL);
+        ADD_CUSTOM_EXTENSION(VulkanEXTPageableDeviceLocalMemoryExtension, VULKAN_EXTENSION_ENABLED, VULKAN_EXTENSION_OPTIONAL);
         // nvidia extensions
+        ADD_CUSTOM_EXTENSION(VulkanEXTMemoryDecompressionExtension, VULKAN_EXTENSION_ENABLED, VULKAN_EXTENSION_OPTIONAL);
         ADD_CUSTOM_EXTENSION(VulkanEXTCopyMemoryIndirectExtension, VULKAN_EXTENSION_ENABLED, VULKAN_EXTENSION_OPTIONAL);
 
 #undef ADD_EXTENSION

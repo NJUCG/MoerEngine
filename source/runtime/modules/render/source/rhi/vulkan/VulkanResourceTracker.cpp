@@ -502,19 +502,19 @@ namespace Moer::Render {
         VkPipelineStageFlags2 src_buffer_stages = VK_PIPELINE_STAGE_2_NONE;
         for (auto& [buffer, state] : buffer_states) {
 
-            buffer_barriers.emplace_back();
-            VkBufferMemoryBarrier2& barrier = buffer_barriers.back();
-            barrier.sType                   = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-            barrier.pNext                   = nullptr;
-            barrier.srcAccessMask           = state.dst_access;
-            barrier.dstAccessMask           = VK_ACCESS_2_NONE;
-            barrier.srcStageMask            = state.dst_stage;
-            barrier.dstStageMask            = VK_PIPELINE_STAGE_2_NONE;
-            barrier.srcQueueFamilyIndex     = VK_QUEUE_FAMILY_IGNORED;
-            barrier.dstQueueFamilyIndex     = VK_QUEUE_FAMILY_IGNORED;
-            barrier.buffer                  = buffer->GetHandle();
-            barrier.offset                  = 0;
-            barrier.size                    = buffer->GetByteSize();
+            // buffer_barriers.emplace_back();
+            // VkBufferMemoryBarrier2& barrier = buffer_barriers.back();
+            // barrier.sType                   = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+            // barrier.pNext                   = nullptr;
+            // barrier.srcAccessMask           = state.dst_access;
+            // barrier.dstAccessMask           = VK_ACCESS_2_NONE;
+            // barrier.srcStageMask            = state.dst_stage;
+            // barrier.dstStageMask            = VK_PIPELINE_STAGE_2_NONE;
+            // barrier.srcQueueFamilyIndex     = VK_QUEUE_FAMILY_IGNORED;
+            // barrier.dstQueueFamilyIndex     = VK_QUEUE_FAMILY_IGNORED;
+            // barrier.buffer                  = buffer->GetHandle();
+            // barrier.offset                  = 0;
+            // barrier.size                    = buffer->GetByteSize();
             
             src_buffer_access |= state.dst_access;
             src_buffer_stages |= state.dst_stage;

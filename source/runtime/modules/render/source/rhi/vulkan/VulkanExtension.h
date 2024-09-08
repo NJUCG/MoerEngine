@@ -11,7 +11,7 @@
 #define VULKAN_EXTENSION_OPTIONAL 1
 #define VULKAN_EXTENSION_REQUIRED 0
 
-#include "rhi/vulkan/misc/VulkanTypeDefs.h"
+#include "VulkanTypeDefs.h"
 #include "log/LogSystem.h"
 
 // struct RHIInfo;
@@ -155,8 +155,11 @@ namespace Moer::Render {
         bool m_has_khr_ray_tracing_pipeline;
         bool m_has_khr_ray_query;
 
+        bool m_has_memory_priority;
+        bool m_has_pageable_device_local_memory;
         // nvidia
-        bool m_has_direct_storage;
+        bool m_has_nv_memory_decompression;
+        bool m_has_nv_copy_memory_indirect;
     };
 
     class VulkanEnabledDeviceExtensions final {

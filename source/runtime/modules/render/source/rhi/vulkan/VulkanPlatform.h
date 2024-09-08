@@ -6,7 +6,11 @@
 #define VULKAN_PLATFORM_H
 
 #include "misc/MacroUtils.h"
+#include "platform/Platform.h"
 
-#include COMPILED_PLATFORM_HEADER(VulkanPlatformDefines.h)
+#if PLATFORM_WINDOWS
+#include "platform/windows/WindowsVulkanPlatformDefines.h"
+#else if PLATFORM_LINUX
 
+#endif
 #endif//VULKAN_PLATFORM_H

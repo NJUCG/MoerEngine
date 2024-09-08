@@ -25,6 +25,10 @@ public:
     // ray tracing
     VkPhysicalDeviceAccelerationStructurePropertiesKHR acceleration_structure_properties;
     VkPhysicalDeviceRayTracingPipelinePropertiesKHR    ray_tracing_pipeline_properties;
+
+    VkPhysicalDeviceCopyMemoryIndirectPropertiesNV copy_memory_indirect_properties;
+    VkPhysicalDeviceMemoryDecompressionPropertiesNV memory_decompression_properties;
+
 };
 
 #endif

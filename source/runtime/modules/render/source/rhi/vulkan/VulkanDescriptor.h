@@ -6,7 +6,7 @@
 #define VK_DESCRIPTOR_TYPE_END_RANGE   (VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT)
 #define VK_DESCRIPTOR_TYPE_RANGE_SIZE  3
 
-#include "rhi/vulkan/misc/VulkanTypeDefs.h"
+#include "VulkanTypeDefs.h"
 #include "VulkanRHIResource.h"
 
 #include <vulkan/vulkan.h>
@@ -88,8 +88,8 @@ namespace Moer::Render {
         private:
             void InitBindlessPool();
         private:
-            VkDescriptorPool m_pool;
-            VkDescriptorPool m_bindless_pool;
+            VkDescriptorPool m_pool = VK_NULL_HANDLE;
+            VkDescriptorPool m_bindless_pool = VK_NULL_HANDLE;
 
             Moer::UnorderedMap<uint32_t, Moer::Array<VkDescriptorSet>> m_allocated_sets;
             Moer::UnorderedMap<uint32_t, VkDescriptorSet>              m_allocated_set;

@@ -16,7 +16,6 @@
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
 #include "rhi/vulkan/VulkanRHI.h"
-#include "rhi/vulkan/misc/VulkanMacroUtils.h"
 #include "log/LogSystem.h"
 
 #include <memory>

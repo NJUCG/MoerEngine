@@ -2,7 +2,7 @@
 // Created by 74535 on 2023/10/1.
 //
 #include "VulkanWindowsPlatform.h"
-#include "rhi/vulkan/misc/VulkanMacroUtils.h"
+#include "../../VulkanMacroUtils.h"
 
 #include "../../VulkanExtension.h"
 namespace Moer::Render {

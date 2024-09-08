@@ -1,19 +1,20 @@
 {
-    "file_format_version": "1.2.0",
+    "file_format_version" : "1.2.0",
     "layer": {
         "name": "VK_LAYER_LUNARG_screenshot",
         "type": "GLOBAL",
         "library_path": ".\\VkLayer_screenshot.dll",
-        "api_version": "1.3.275",
+        "api_version": "1.3.290",
         "implementation_version": "1",
         "description": "LunarG image capture layer",
         "introduction": "The screenshot layer records frames to image files.",
         "url": "https://vulkan.lunarg.com/doc/sdk/latest/windows/screenshot_layer.html",
-        "platforms": [
-            "WINDOWS",
-            "LINUX",
-            "MACOS",
-            "ANDROID"
+        "platforms": [ "WINDOWS", "LINUX", "MACOS", "ANDROID" ],
+        "instance_extensions": [
+            {
+                "name": "VK_EXT_layer_settings",
+                "spec_version": "2"
+            }
         ],
         "device_extensions": [
             {

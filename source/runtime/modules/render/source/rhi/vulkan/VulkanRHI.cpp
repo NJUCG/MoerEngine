@@ -7,7 +7,6 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
-#include "rhi/vulkan/misc/VulkanMacroUtils.h"
 #include "misc/MacroUtils.h"
 #include "misc/STL.h"
 

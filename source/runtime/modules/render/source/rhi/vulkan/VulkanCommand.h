@@ -460,11 +460,12 @@ namespace Moer::Render {
         void    Signal(VulkanFence* _fence, uint64 _timeline, VkPipelineStageFlags2 _stage = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
         void    Signal(VkSemaphore _semaphore, VkPipelineStageFlags2 _stage = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
         VkQueue GetHandle() const { return queue; }
-
+        EQueueType GetType() const { return type; }
     private:
         Array<VkSemaphoreSubmitInfo> wait_infos;
         Array<VkSemaphoreSubmitInfo> signal_infos;
         VkQueue                      queue;
+        EQueueType                   type;
     };
 
     class VkCommandQueue : public CommandQueue {

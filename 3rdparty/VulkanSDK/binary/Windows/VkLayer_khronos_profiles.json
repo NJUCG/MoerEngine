@@ -4,12 +4,18 @@
         "name": "VK_LAYER_KHRONOS_profiles",
         "type": "GLOBAL",
         "library_path": ".\\VkLayer_khronos_profiles.dll",
-        "api_version": "1.3.275",
-        "implementation_version": "1.2.0",
+        "api_version": "1.3.290",
+        "implementation_version": "1.3.0",
         "status": "STABLE",
         "description": "Khronos Profiles layer",
         "introduction": "The Khronos Profiles layer helps test across a wide range of hardware capabilities without requiring a physical copy of every device.",
         "url": "https://vulkan.lunarg.com/doc/sdk/latest/windows/profiles_layer.html",
+        "instance_extensions": [
+            {
+                "name": "VK_EXT_layer_settings",
+                "spec_version": "2"
+            }
+        ],
         "device_extensions": [
             {
                 "name": "VK_EXT_tooling_info",
@@ -147,7 +153,7 @@
                     "key": "force_device",
                     "label": "Force Device",
                     "description": "On system with multiple physical devices, force the use of one specific physical device.",
-                    "status": "BETA",
+                    "status": "STABLE",
                     "type": "ENUM",
                     "default": "FORCE_DEVICE_OFF",
                     "platforms": [ "WINDOWS", "LINUX", "MACOS" ],
@@ -220,7 +226,7 @@
                     "settings": [
                         {
                             "key": "profile_dirs",
-                            "label": "Profiles Directories",
+                            "label": "Loading Directory",
                             "description": "Select the location all the profiles.",
                             "type": "LOAD_FOLDER",
                             "format": "PROFILE",
@@ -237,8 +243,8 @@
                         },
                         {
                             "key": "profile_name",
-                            "label": "Profile Name",
-                            "description": "Name of the profile specified by the profile file to use. If set to ${VP_DEFAULT}, the layer will load the first profile in the file.",
+                            "label": "Name",
+                            "description": "Name of the profile specified by the profile file to use.",
                             "type": "ENUM",
                             "flags": [],
                             "default": "${VP_DEFAULT}",

@@ -12,7 +12,7 @@
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
 #include "rhi/vulkan/VulkanRHI.h"
-#include "rhi/vulkan/misc/VulkanMacroUtils.h"
+#include "VulkanMacroUtils.h"
 #include "VulkanCommand.h"
 
 #include "VulkanDevice.h"
@@ -1682,7 +1682,7 @@ namespace Moer::Render {
         // }
     };
 
-    VkNativeQueue::VkNativeQueue(EQueueType _type, VulkanDevice& _device) {
+    VkNativeQueue::VkNativeQueue(EQueueType _type, VulkanDevice& _device) : type(_type){
         switch (_type) {
             case EQueueType::Graphics:
                 queue = _device.GetGraphicsQueue();
@@ -1857,12 +1857,13 @@ namespace Moer::Render {
             return {uint64(timeline), last_time};
         } else {
             auto current_timeline = ++last_frame;
-            queue.Signal(timeline, current_timeline, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+            auto end_tag = queue.GetType() == EQueueType::Graphics ? VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT : VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            queue.Signal(timeline, current_timeline, end_tag);
             for (auto& evt : _submit.wait_events) {
                 queue.Wait(reinterpret_cast<VulkanFence*>(evt.timeline_handle), evt.value);
             }
             for (auto& evt : _submit.signal_events) {
-                queue.Signal(reinterpret_cast<VulkanFence*>(evt.timeline_handle), evt.value);
+                queue.Signal(reinterpret_cast<VulkanFence*>(evt.timeline_handle), evt.value, end_tag);
             }
             queue.Submit(vk_allocator.GetCmdList());
 

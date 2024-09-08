@@ -9,7 +9,6 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
-#include "rhi/vulkan/misc/VulkanMacroUtils.h"
 #include "VulkanDescriptor.h"
 #include "VulkanExtension.h"
 #include "VulkanDevice.h"
@@ -204,6 +203,9 @@ namespace Moer::Render {
 
         //capable of using buffer via device address(64bit) passed to shader.
         alloc_create_info.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+        if(m_optional_extensions.m_has_memory_priority) {
+            alloc_create_info.flags |= VMA_ALLOCATOR_CREATE_EXT_MEMORY_PRIORITY_BIT;
+        }
 
         VK_CHECK_RESULT(vmaCreateAllocator(&alloc_create_info, &m_allocator));
 

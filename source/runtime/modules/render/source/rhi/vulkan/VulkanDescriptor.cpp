@@ -4,7 +4,6 @@
 #include "VulkanUtil.h"
 
 #include "misc/MacroUtils.h"
-#include "rhi/vulkan/misc/VulkanMacroUtils.h"
 
 #include <vulkan/vulkan_core.h>
 #include <cassert>
@@ -235,6 +234,11 @@ namespace Moer::Render {
             vkResetDescriptorPool(m_device->GetDevice(), m_pool, 0);
             m_allocated_sets.clear();
             m_allocated_set.clear();
+            m_pool = VK_NULL_HANDLE;
+        }
+        if (m_bindless_pool) {
+            vkResetDescriptorPool(m_device->GetDevice(), m_bindless_pool, 0);
+            m_bindless_pool = VK_NULL_HANDLE;
         }
     }
 

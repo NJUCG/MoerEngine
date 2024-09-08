@@ -1,6 +1,5 @@
 #include "VulkanCommand.h"
 #include "VulkanDevice.h"
-#include "rhi/vulkan/misc/VulkanMacroUtils.h"
 namespace Moer::Render {
     VulkanCommandAllocator::VulkanCommandAllocator(VulkanDevice* _device) : VulkanDeviceObject(_device) {
         VkCommandPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
