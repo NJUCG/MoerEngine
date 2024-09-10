@@ -2,6 +2,7 @@
 #define VULKAN_RHI_DESCRIPTOR_H
 
 #include "vulkan/vulkan_core.h"
+#include <mutex>
 #define VK_DESCRIPTOR_TYPE_BEGIN_RANGE (VK_DESCRIPTOR_TYPE_SAMPLER)
 #define VK_DESCRIPTOR_TYPE_END_RANGE   (VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT)
 #define VK_DESCRIPTOR_TYPE_RANGE_SIZE  3
@@ -85,10 +86,12 @@ namespace Moer::Render {
             bool AllocateDescriptorSet(VkDescriptorSetLayout _layout, VkDescriptorSet& _set);
             void Reset();
             void CleanUp();
+
         private:
             void InitBindlessPool();
+
         private:
-            VkDescriptorPool m_pool = VK_NULL_HANDLE;
+            VkDescriptorPool m_pool          = VK_NULL_HANDLE;
             VkDescriptorPool m_bindless_pool = VK_NULL_HANDLE;
 
             Moer::UnorderedMap<uint32_t, Moer::Array<VkDescriptorSet>> m_allocated_sets;
@@ -155,6 +158,50 @@ namespace Moer::Render {
 
         VulkanPipelineResourceCache* m_cache;
     };
+
+#pragma region[ descriptor buffer ext ]
+
+    struct VulkanDescritporSetLayout {
+        VkDescriptorSetLayout layout;
+        uint                  size;
+        uint                  offset;
+    };
+    struct BufferCpuDescHandle {
+        uint        data[4];
+        void*       Data() { return data; }
+        const void* Data() const { return data; }
+    };
+    struct ImageCpuDescHandle {
+        uint data[4];
+    };
+    struct VulkanDescriptorHeap {
+        VulkanBuffer* buffer_desc_buffer = nullptr;
+        VulkanBuffer* image_desc_buffer = nullptr;
+
+    public:
+        VulkanDescriptorHeap() = default;
+        VulkanDescriptorHeap(VulkanDevice& _device);
+        ~VulkanDescriptorHeap();
+
+        Array<byte> buffer_desc_data;
+        Array<byte> image_desc_data;
+        Array<uint> buffer_free_list;
+        Array<uint> image_free_list;
+
+        uint GetBufferDescIdx(VulkanBuffer* _in_buffer);
+        void FreeBufferDescIdx(uint _idx);
+        uint GetImageDescIdx(const TextureView* _in_image, VkImageLayout _layout);
+        void FreeImageDescIdx(uint _idx);
+        VulkanDevice* m_device;
+        uint    buffer_desc_stride;
+        uint    image_desc_stride;
+        std::mutex    m_mutex;
+    };
+
+    struct DescriptorBufferManager {
+        uint desc_buffer_offset_alignment;
+    };
+#pragma endregion
 }// namespace Moer::Render
 
 #endif

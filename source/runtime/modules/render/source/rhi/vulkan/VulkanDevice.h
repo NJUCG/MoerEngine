@@ -10,6 +10,7 @@
 #include "VulkanExtension.h"
 #include "VulkanDeviceFeature.h"
 #include "VulkanDeviceProperty.h"
+#include "VulkanDescriptor.h"
 
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
@@ -183,10 +184,10 @@ namespace Moer::Render {
         VulkanDevice(DeviceInitInfo&& _info) : RenderDevice::Impl(std::move(_info)), m_gpu(VK_NULL_HANDLE), m_optional_extensions(), m_core_features(), m_core_properties(), m_optional_properties(), m_memery_properties(), m_queue_family_props(), m_queue_family_indices(),
                                                m_device(VK_NULL_HANDLE), m_graphics_queue(VK_NULL_HANDLE), m_present_queue(VK_NULL_HANDLE), m_compute_queue(VK_NULL_HANDLE), m_transfer_queue(VK_NULL_HANDLE),
                                                m_allocator(VK_NULL_HANDLE), m_descriptor_allocator(nullptr), init_event() {
-            
+
             CreateInstance();
             DeviceInitializer initializer;
-            initializer.instance = m_instance;
+            initializer.instance         = m_instance;
             initializer.api_version      = VK_API_VERSION_1_3;
             initializer.enabled_features = VulkanDeviceFeature::GetMESupportedDeviceFeatures(initializer.api_version);
             RHIInfo rhi_info             = {
@@ -196,7 +197,6 @@ namespace Moer::Render {
             initializer.enabled_extensions = VulkanDeviceExtension::GetMESupportedDeviceExtensions(rhi_info);
             //Init Gpu device and create queues
             Init(initializer);
-            InitMemoryAllocator(m_instance);
         }
 
         virtual ~VulkanDevice();
@@ -221,11 +221,15 @@ namespace Moer::Render {
         SwapchainRef CreateSwapchain(const SwapchainCreateInfo& _info) override;
 
     public:
-        void EnqueueDeferredRelease(RHIResource* _object);
-        void FlushDeferredReleases();
-        constexpr uint ImmutableSamplerCount() const { return immutable_sampler_count; }
-        const VkSampler* GetImmutableSamplers() const{ return immutable_samplers.data(); }
-        const VkSampler GetSampler(Sampler _sampler) const;
+        void             EnqueueDeferredRelease(RHIResource* _object);
+        void             FlushDeferredReleases();
+        constexpr uint   ImmutableSamplerCount() const { return immutable_sampler_count; }
+        const VkSampler* GetImmutableSamplers() const { return immutable_samplers.data(); }
+        const VkSampler  GetSampler(Sampler _sampler) const;
+        void             GetDescriptorEXT(const VkDescriptorGetInfoEXT* _descriptor_info, size_t _data_size, void* _p_data) const {
+            vk_get_descriptor_ext(m_device, _descriptor_info, _data_size, _p_data);
+        };
+
     public:
         void Init(const DeviceInitializer& _initializer);
         void InitMemoryAllocator(VkInstance _instance);
@@ -241,7 +245,8 @@ namespace Moer::Render {
         inline VkDevice GetDevice() const {
             return m_device;
         }
-        inline VmaAllocator GetVmaAllocator() const {
+        VulkanDescriptorHeap& GetGlobalDescriptorHeap();
+        inline VmaAllocator   GetVmaAllocator() const {
             return m_allocator;
         }
         inline VulkanDescriptorSetAllocator* GetDescriptorAllocator() const {
@@ -324,14 +329,20 @@ namespace Moer::Render {
         PFN_vkCmdInsertDebugUtilsLabelEXT   vk_cmd_insert_debug_utils_label_ext  = VK_NULL_HANDLE;
         PFN_vkSetDebugUtilsObjectNameEXT    vk_set_debug_utils_object_name_ext   = VK_NULL_HANDLE;
 
-        VmaAllocator                  m_allocator;
-        VulkanDescriptorSetAllocator* m_descriptor_allocator;
-        UniquePtr<VkCommandQueue>     gfx_queue;
-        UniquePtr<VkCommandQueue>     compute_queue;
-        UniquePtr<VkCommandQueue>     transfer_queue;
-        LockFreeQueueBase<RHIResource, 64> deferred_release_queue;
-        static constexpr uint immutable_sampler_count = uint(SF_Num) * uint(SAM_Num) * uint(SCF_Num) ;
+        PFN_vkGetDescriptorEXT                       vk_get_descriptor_ext                           = VK_NULL_HANDLE;
+        PFN_vkGetDescriptorSetLayoutBindingOffsetEXT vk_get_descriptor_set_layout_binding_offset_ext = VK_NULL_HANDLE;
+        PFN_vkGetDescriptorSetLayoutSizeEXT          vk_get_descriptor_set_layout_size_ext           = VK_NULL_HANDLE;
+
+        VmaAllocator                                    m_allocator;
+        VulkanDescriptorSetAllocator*                   m_descriptor_allocator;
+        VulkanDescriptorHeap                            m_global_descriptor_heap;
+        UniquePtr<VkCommandQueue>                       gfx_queue;
+        UniquePtr<VkCommandQueue>                       compute_queue;
+        UniquePtr<VkCommandQueue>                       transfer_queue;
+        LockFreeQueueBase<RHIResource, 64>              deferred_release_queue;
+        static constexpr uint                           immutable_sampler_count = uint(SF_Num) * uint(SAM_Num) * uint(SCF_Num);
         StaticArray<VkSampler, immutable_sampler_count> immutable_samplers;
+
     private:
         friend VkCommandQueue;
         //configs
@@ -355,7 +366,7 @@ namespace Moer::Render {
 
         bool CheckEnabledExtensionsSupported(VkPhysicalDevice _gpu, const TVulkanDeviceExtensionArray& _enabled_extensions) const;
         bool CheckEnabledFeaturesSupported(VkPhysicalDevice _gpu, const VulkanPhysicalDeviceFeatures& _enabled_features, uint32_t _api_version);
-
+        void SetupProcs();
 #pragma region[ debug ]
         void PopulateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& _create_info);
         void SetupDebugUtilsMessengerEXT();

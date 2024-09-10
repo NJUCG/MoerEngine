@@ -58,11 +58,10 @@ namespace Moer::Render {
 
 #define DEFINE_SHADER_ARGS(...)                                                                                          \
 public:                                                                                                                  \
-    using InnerArgs = ShaderArgs<TPipeline __VA_OPT__(, ) __VA_ARGS__>;                                                                \
+    using InnerArgs = ShaderArgs<TPipeline __VA_OPT__(, ) __VA_ARGS__>;                                                  \
     template<typename... T>                                                                                              \
     ArrayArguments SetArgs(T&&... _args) {                                                                               \
-        InnerArgs args(*this);                                                                                           \
-        return std::move(args.SetParams(std::make_index_sequence<sizeof...(T)>(), std::forward<T>(_args)...));           \
+        return std::move(InnerArgs::SetParams(std::make_index_sequence<sizeof...(T)>(), std::forward<T>(_args)...));     \
     }                                                                                                                    \
                                                                                                                          \
 private:                                                                                                                 \
@@ -83,15 +82,15 @@ private:                                                                        
                                                                                                                          \
 public:                                                                                                                  \
     static StaticArray<std::string_view, InnerArgs::arg_size> GetHashArray() {                                           \
-        if constexpr (InnerArgs::arg_size == 0){ return {}; }                \
+        if constexpr (InnerArgs::arg_size == 0) { return {}; }                                                           \
         return GetHashArray(std::make_index_sequence<InnerArgs::arg_size>());                                            \
     }                                                                                                                    \
     static StaticArray<uint64, InnerArgs::arg_size> GetHashCodeArray() {                                                 \
-        if constexpr (InnerArgs::arg_size == 0){ return {}; }                                                            \
+        if constexpr (InnerArgs::arg_size == 0) { return {}; }                                                           \
         return GetHashCodeArray(std::make_index_sequence<InnerArgs::arg_size>());                                        \
     }                                                                                                                    \
     static StaticArray<Moer::Render::EShaderArgType, InnerArgs::arg_size> GetArgTypeArray() {                            \
-        if constexpr (InnerArgs::arg_size == 0){ return {}; }                \
+        if constexpr (InnerArgs::arg_size == 0) { return {}; }                                                           \
         return GetArgTypeArray(std::make_index_sequence<InnerArgs::arg_size>());                                         \
     }
 
@@ -108,7 +107,7 @@ public:                                                                         
 
 namespace Moer::Render {
     using TInvalidArg = uint;
-    using TArg = std::variant<TInvalidArg, BufferView, TextureView, Sampler, BindlessArrayRef>;
+    using TArg        = std::variant<TInvalidArg, BufferView, TextureView, Sampler, BindlessArrayRef>;
 
     template<typename T>
     struct ShaderArgEnum {
@@ -135,9 +134,8 @@ namespace Moer::Render {
     // };
 
     struct ArrayArguments {
-        // ArrayArguments() = default;
-        ArrayArguments(uint _arg_size) : args(_arg_size) {}
-
+        ArrayArguments() = default;
+        ArrayArguments(uint _arg_cnt, uint _const_size) : args(_arg_cnt), constants(_const_size) {}
         ArrayArguments(ArrayArguments&& _other) {
             args      = std::move(_other.args);
             constants = std::move(_other.constants);
@@ -195,7 +193,7 @@ namespace Moer::Render {
     template<typename TPipeline, typename... Args>
     struct ShaderArgs {
 
-        ShaderArgs(TPipeline& _pipeline) : pipeline(_pipeline) {}
+        using PipelineType               = TPipeline;
         static constexpr size_t arg_size = sizeof...(Args);
         using tuple_helper               = std::tuple<Args...>;
 
@@ -212,11 +210,16 @@ namespace Moer::Render {
             static const std::size_t value = 1 + Index<T, std::tuple<Types...>>::value;
         };
 
+        constexpr uint32 static GetConstantSize() {
+            //if TArg is a constant, add the size of TArg to the total size, other wise add 0
+            return (0 + ... + (std::is_same_v<typename Args::type, TConstsant<Args>> ? sizeof(typename Args::type) : 0)) / sizeof(uint);
+        }
+
         template<typename T, typename TArg>
             requires std::is_same_v<std::remove_reference_t<T>, TextureView> || std::is_same_v<std::remove_reference_t<T>, BufferView> || std::is_same_v<std::remove_reference_t<T>, Sampler> ||
                      std::is_same_v<std::remove_reference_t<T>, TextureRef> || std::is_same_v<std::remove_reference_t<T>, BufferRef> || std::is_same_v<typename TArg::type, TConstsant<std::remove_reference_t<T>>> ||
                      std::is_same_v<std::remove_reference_t<T>, BindlessArrayRef>
-        void SetParam(T&& _t, ArrayArguments& _arg_setter) {
+        static void SetParam(T&& _t, ArrayArguments& _arg_setter) {
             using cpp_type       = typename TArg::type;
             constexpr auto index = Index<TArg, tuple_helper>::value;
             using Type           = std::remove_reference_t<T>;
@@ -225,31 +228,48 @@ namespace Moer::Render {
                 if constexpr (std::is_same_v<Type, TextureRef>) {
                     _arg_setter[index] = _t->GetView();
                     //do texture stuff
-                } else if constexpr (std::is_same_v<Type, TextureView>) { _arg_setter[index] = std::forward<T>(_t); } else {
+                } else if constexpr (std::is_same_v<Type, TextureView>) {
+                    _arg_setter[index] = std::forward<T>(_t);
+                } else {
                     if constexpr (true)
                         assert(0 && "not a buffer type");
                 }
             } else if constexpr (std::is_same_v<cpp_type, BufferArg>) {
                 //do buffer stuff
-                if constexpr (std::is_same_v<Type, BufferRef>) { _arg_setter[index] = _t->GetView(); } else if constexpr (std::is_same_v<Type, BufferView>) { _arg_setter[index] = std::forward<T>(_t); } else {
+                if constexpr (std::is_same_v<Type, BufferRef>) {
+                    _arg_setter[index] = _t->GetView();
+                } else if constexpr (std::is_same_v<Type, BufferView>) {
+                    _arg_setter[index] = std::forward<T>(_t);
+                } else {
                     if constexpr (true)
                         assert(0 && "not a buffer type");
                 }
-            } else if constexpr (std::is_same_v<cpp_type, SamplerArg>) { _arg_setter[index] = std::forward<T>(_t); } else if constexpr (std::is_same_v<cpp_type, BindlessArg>) { _arg_setter[index] = std::forward<T>(_t); } else {
+            } else if constexpr (std::is_same_v<cpp_type, SamplerArg>) {
+                _arg_setter[index] = std::forward<T>(_t);
+            } else if constexpr (std::is_same_v<cpp_type, BindlessArg>) {
+                _arg_setter[index] = std::forward<T>(_t);
+            } else {
                 //constant
-                _arg_setter.constants.resize(sizeof(T) / sizeof(uint));
+                assert(_arg_setter.constants.size() == sizeof(T) / sizeof(uint) && "constant size mismatch");
                 std::memcpy(_arg_setter.constants.data(), &_t, sizeof(T));
             }
         }
 
+        // template<typename... T, std::size_t... Is>
+        // ArrayArguments SetParams(std::index_sequence<Is...>, T&&... _args) {
+        //     ArrayArguments arg_setter(arg_size);
+        //     (..., SetParam<T, std::tuple_element_t<Is, tuple_helper>>((std::forward<T>(_args)), arg_setter));
+        //     return std::move(arg_setter);
+        // }
+
         template<typename... T, std::size_t... Is>
-        ArrayArguments SetParams(std::index_sequence<Is...>, T&&... _args) {
-            ArrayArguments arg_setter(arg_size);
+        static ArrayArguments SetParams(std::index_sequence<Is...>, T&&... _args) {
+            ArrayArguments arg_setter(arg_size, GetConstantSize());
             (..., SetParam<T, std::tuple_element_t<Is, tuple_helper>>((std::forward<T>(_args)), arg_setter));
             return std::move(arg_setter);
         }
 
-        TPipeline& pipeline;
+        // TPipeline& pipeline;
     };
 
     class ShaderPipeline {
@@ -276,7 +296,7 @@ namespace Moer::Render {
         void SetTextureHash(uint64 _hash, TextureView _param);
         uint GetBindingIdx(uint64 _hash) { return handle.hash_2_info_index[_hash]; }
         uint GetBindingSize() { return handle.binding_infos.size(); }
-        ShaderPipeline(PipelineHandle _handle): handle(std::move(_handle)) {}
+        ShaderPipeline(PipelineHandle _handle) : handle(std::move(_handle)) {}
         PipelineHandle handle;
 
         ShaderPipeline() = default;
@@ -313,6 +333,29 @@ namespace Moer::Render {
     public:
         RTPipeline(PipelineHandle _handle) : ShaderPipeline(_handle), RHIResource(RRT_RAY_TRACING_PIPELINE_STATE) {}
         COPY_CONSTRUCTOR(RTPipeline);
+    };
+
+    struct ParamBlockAllcateInfo{
+        //ideally we can allocate param/descriptor block from global descriptor pool(vk) or descriptor heap(dx)
+        //when set params, we can allocate a descriptor set or descriptor buffer offset from the pool and bind it to the pipeline
+        //and the allocation info is stored in this struct, like descriptor buffer offset, descriptor sets key
+        //and when parameter changes, when using descriptor buffer, we can copy the data to the descriptor buffer,
+        //we can maintain a cpu end descriptor buffer and a gpu version descriptor buffer to avoid descriptor buffer update
+        //but question is, how do we know whether to delete the descriptor allocated from the pool
+        //life is short, use bindless maybe a better choice
+    };
+    template<typename TPipeline>
+        requires std::is_base_of_v<ShaderPipeline, TPipeline>
+    struct ParamterBlock {
+        using PipelineType = TPipeline;
+        template<typename... TArgs>
+        void SetParams(TArgs&&... _args) {
+            args = TPipeline::SetArgs(std::forward<TArgs>(_args)...);
+            b_args_set = true;
+        }
+        ParamBlockAllcateInfo* alloc_info = nullptr;
+        ArrayArguments args;
+        bool b_args_set = false;
     };
 
     class GBufferLayout : public RasterPipeline {

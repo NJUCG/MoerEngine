@@ -867,6 +867,11 @@ namespace Moer::Render {
         BufferRef indirect_buffer;
     };
 
+    template<typename T>
+    class ParameterBlock : public RHIResource{
+        // ArrayArguments args;
+    };
+
 }// namespace Moer::Render
 #pragma endregion
 /* index, vertex, staging, indirect */

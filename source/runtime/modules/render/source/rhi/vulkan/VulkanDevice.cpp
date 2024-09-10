@@ -85,6 +85,8 @@ namespace Moer::Render {
 
             vkCreateSampler(m_device, &sampler_create_info, VK_NULL_HANDLE, &immutable_samplers[i]);
         }
+        InitMemoryAllocator(m_instance);
+        new (&m_global_descriptor_heap) VulkanDescriptorHeap(*this);
     }
 
     VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
@@ -555,6 +557,16 @@ namespace Moer::Render {
         vk_set_debug_utils_object_name_ext  = reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>(vkGetInstanceProcAddr(m_instance, "vkSetDebugUtilsObjectNameEXT"));
     }
 
+    void VulkanDevice::SetupProcs() {
+        vk_get_descriptor_ext                           = reinterpret_cast<PFN_vkGetDescriptorEXT>(vkGetDeviceProcAddr(m_device, "vkGetDescriptorEXT"));
+        vk_get_descriptor_set_layout_binding_offset_ext = reinterpret_cast<PFN_vkGetDescriptorSetLayoutBindingOffsetEXT>(vkGetDeviceProcAddr(m_device, "vkGetDescriptorSetLayoutBindingOffsetEXT"));
+        vk_get_descriptor_set_layout_size_ext           = reinterpret_cast<PFN_vkGetDescriptorSetLayoutSizeEXT>(vkGetDeviceProcAddr(m_device, "vkGetDescriptorSetLayoutSizeEXT"));
+    }
+
+    VulkanDescriptorHeap& VulkanDevice::GetGlobalDescriptorHeap() {
+        return m_global_descriptor_heap;
+    }
+
     // Merge Shader Reflection Info with Cpp End Definitions, thus we can get binding relations between shader and cpp.
     static void MergeReflectInfo(
         const VulkanDevice&                                                   _device,
@@ -643,7 +655,7 @@ namespace Moer::Render {
                     break;
                 }
                 case SDA_Constant: {
-                    auto [b_push_constant, size]   = DecodeConstant(binding_info.type_flags);
+                    auto [b_push_constant, size] = DecodeConstant(binding_info.type_flags);
                     assert(b_push_constant && "Shader Constant Param must be Declared Constant In Shader Param in cpp end.");
                     _out_constant_idx              = idx;
                     _out_push_constant_ranges.size = std::max(_out_push_constant_ranges.size, size);
@@ -654,7 +666,7 @@ namespace Moer::Render {
                 case SDA_Buffer:
                 case SDA_Texture:
                 case SDA_Sampler: {
-                    auto [resource_type, spv_desc_type]   = DecodeReflectType(binding_info.type_flags);
+                    auto [resource_type, spv_desc_type] = DecodeReflectType(binding_info.type_flags);
 
                     // auto  rel_desc_type        = std::get<SpvReflectDescriptorType>(desc_type);
                     // auto  rel_res_type         = std::get<SpvReflectResourceType>(resource_type);

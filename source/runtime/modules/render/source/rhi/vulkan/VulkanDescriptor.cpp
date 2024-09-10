@@ -135,39 +135,38 @@ namespace Moer::Render {
 
         VK_CHECK_RESULT(vkCreateDescriptorPool(m_device->GetDevice(), &pool_info, nullptr, &m_pool));
     }
-    enum class EBindlessSizeType : uint8{
+    enum class EBindlessSizeType : uint8 {
         Buffer,
         Sampler,
         Image,
         Num
     };
-    enum class EBindlessSetType : uint8{
+    enum class EBindlessSetType : uint8 {
         Buffer,
         SamplerAndImage,
         Num
     };
-    void VulkanDescriptorSetAllocator::VulkanDescriptorSetCachePool::InitBindlessPool(){
-        constexpr uint immutable_sampler_count = 256;
+    void VulkanDescriptorSetAllocator::VulkanDescriptorSetCachePool::InitBindlessPool() {
+        constexpr uint       immutable_sampler_count = 256;
         VkDescriptorPoolSize pool_size{};
         VkDescriptorPoolSize pool_sizes[static_cast<uint>(EBindlessSizeType::Num)];
-        pool_sizes[static_cast<uint>(EBindlessSizeType::Buffer)].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        pool_sizes[static_cast<uint>(EBindlessSizeType::Buffer)].descriptorCount = 4096 * 16;
-        pool_sizes[static_cast<uint>(EBindlessSizeType::Sampler)].type = VK_DESCRIPTOR_TYPE_SAMPLER;
+        pool_sizes[static_cast<uint>(EBindlessSizeType::Buffer)].type             = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        pool_sizes[static_cast<uint>(EBindlessSizeType::Buffer)].descriptorCount  = 4096 * 16;
+        pool_sizes[static_cast<uint>(EBindlessSizeType::Sampler)].type            = VK_DESCRIPTOR_TYPE_SAMPLER;
         pool_sizes[static_cast<uint>(EBindlessSizeType::Sampler)].descriptorCount = immutable_sampler_count;
-        pool_sizes[static_cast<uint>(EBindlessSizeType::Image)].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        pool_sizes[static_cast<uint>(EBindlessSizeType::Image)].descriptorCount = 4096 * 16;
+        pool_sizes[static_cast<uint>(EBindlessSizeType::Image)].type              = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        pool_sizes[static_cast<uint>(EBindlessSizeType::Image)].descriptorCount   = 4096 * 16;
 
         VkDescriptorPoolCreateInfo pool_info{};
-        pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        pool_info.pNext = nullptr;
+        pool_info.sType   = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        pool_info.pNext   = nullptr;
         pool_info.maxSets = 4;
-        pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT | VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
+        pool_info.flags   = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT | VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
 
         pool_info.poolSizeCount = static_cast<uint>(EBindlessSizeType::Num);
-        pool_info.pPoolSizes = pool_sizes;
+        pool_info.pPoolSizes    = pool_sizes;
 
         VK_CHECK_RESULT(vkCreateDescriptorPool(m_device->GetDevice(), &pool_info, nullptr, &m_bindless_pool));
-
     }
 
     VulkanDescriptorSetAllocator::VulkanDescriptorSetCachePool::~VulkanDescriptorSetCachePool() {
@@ -431,9 +430,84 @@ namespace Moer::Render {
         m_hash_info_head[_write_index].resource.buffer = *buffer_info;
     }
 
+    VulkanDescriptorHeap::VulkanDescriptorHeap(VulkanDevice& _device) : m_device(&_device),
+                                                                        buffer_desc_stride(_device.GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize),
+                                                                        image_desc_stride(_device.GetOptionalProperties().descriptor_buffer_properties.sampledImageDescriptorSize) {
+        buffer_desc_data.reserve(1024 * buffer_desc_stride);
+        image_desc_data.reserve(1024 * image_desc_stride);
+    }
+
+    VulkanDescriptorHeap::~VulkanDescriptorHeap() {
+        if (buffer_desc_buffer) {
+            MoerDelete(buffer_desc_buffer);
+            buffer_desc_buffer = nullptr;
+        }
+        if (image_desc_buffer) {
+            MoerDelete(image_desc_buffer);
+            image_desc_buffer = nullptr;
+        }
+    }
     uint32_t VulkanDescriptorSetWriter::GetSetKey() const {
         return Moer::RHI::Vulkan::Util::MemCrc32(
             m_hash_info_head,
             sizeof(VulkanHashableDescriptorInfo) * (m_write_count + 1));
+    }
+
+    uint VulkanDescriptorHeap::GetBufferDescIdx(VulkanBuffer* _in_buffer) {
+        assert(_in_buffer != nullptr && "buffer is nullptr");
+        if (_in_buffer->m_descriptor_idx >= 0) { return _in_buffer->m_descriptor_idx; }
+        uint idx = 0;
+        {
+            VkDescriptorAddressInfoEXT buffer_info{VK_STRUCTURE_TYPE_DESCRIPTOR_ADDRESS_INFO_EXT};
+            buffer_info.address = _in_buffer->DeviceAddress();
+            VkDescriptorGetInfoEXT buffer_desc_info{VK_STRUCTURE_TYPE_DESCRIPTOR_GET_INFO_EXT};
+            buffer_desc_info.type                = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            buffer_desc_info.data.pStorageBuffer = &buffer_info;
+            assert(m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize <= sizeof(BufferCpuDescHandle));
+
+            std::lock_guard<std::mutex> lock(m_mutex);
+            if (buffer_free_list.empty()) {
+                idx = buffer_desc_data.size() / buffer_desc_stride;
+                buffer_desc_data.resize(buffer_desc_data.size() + buffer_desc_stride);
+            } else {
+                idx = buffer_free_list.back();
+                buffer_free_list.pop_back();
+            }
+            _in_buffer->m_descriptor_idx = idx;
+            m_device->GetDescriptorEXT(&buffer_desc_info, buffer_desc_stride, buffer_desc_data.data() + idx * buffer_desc_stride);
+        }
+        return idx;
+    }
+    void VulkanDescriptorHeap::FreeBufferDescIdx(uint _idx) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        buffer_free_list.push_back(_idx);
+    }
+
+    uint VulkanDescriptorHeap::GetImageDescIdx(const TextureView* _in_image, VkImageLayout _layout) {
+        auto* texture = ResourceCast(_in_image->texture);
+        assert(texture != nullptr && "texture is nullptr");
+        VkTextureDescKey key{_layout, _in_image->mip_level, _in_image->num_mips};
+        auto res = texture->m_descriptor_indices.try_emplace(key, -1);
+        if (!res.second) { return res.first->second; }
+        auto& idx = res.first->second;
+        {
+            VkDescriptorImageInfo  image_info{.imageView = texture->GetView(_in_image->mip_level, _in_image->num_mips), .imageLayout = _layout};
+            VkDescriptorGetInfoEXT desc_info{VK_STRUCTURE_TYPE_DESCRIPTOR_GET_INFO_EXT};
+            desc_info.data.pSampledImage = &image_info;
+            std::lock_guard<std::mutex> lock(m_mutex);
+            if (image_free_list.empty()) {
+                idx = image_desc_data.size() / image_desc_stride;
+                image_desc_data.resize(image_desc_data.size() + image_desc_stride);
+            } else {
+                idx = image_free_list.back();
+                image_free_list.pop_back();
+            }
+            m_device->GetDescriptorEXT(&desc_info, image_desc_stride, image_desc_data.data() + idx * image_desc_stride);
+        }
+        return idx;
+    }
+    void VulkanDescriptorHeap::FreeImageDescIdx(uint _idx) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        image_free_list.push_back(_idx);
     }
 }// namespace Moer::Render

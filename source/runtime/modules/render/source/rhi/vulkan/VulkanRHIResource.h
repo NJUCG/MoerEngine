@@ -6,6 +6,7 @@
 #define VULKAN_RHI_RESOURCE_H
 
 #include "PixelFormat.h"
+#include "misc/Crc32.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
@@ -704,6 +705,7 @@ namespace Moer::Render {
         virtual void Destroy() override;
         VulkanBuffer(const BufferInfo& _info, VulkanDevice& _device);
         VulkanBuffer(const BufferInfo& _info, VulkanDevice& _device, VkBuffer _handle, VmaAllocation _alloc, bool _defer_destroy);
+        uint64                     DeviceAddress() const;
         inline const VmaAllocation GetAllocation() const {
             return m_alloc.alloc;
         }
@@ -714,14 +716,31 @@ namespace Moer::Render {
 
         static VkIndexType        METoVKIndexType(EIndexElementType _type);
         static VkBufferUsageFlags METoVKBufferUsageFlags(VulkanDevice* _device, EBufferUsageFlags _me_flags);
-        VkAccessFlags2            m_access_flags = VK_ACCESS_2_NONE;
-        VkPipelineStageFlags2     m_stage_flags  = VK_PIPELINE_STAGE_2_NONE;
+        VkAccessFlags2            m_access_flags   = VK_ACCESS_2_NONE;
+        VkPipelineStageFlags2     m_stage_flags    = VK_PIPELINE_STAGE_2_NONE;
+        int                       m_descriptor_idx = -1;
 
     private:
         friend class TempBufferAllocator;
         BufferAlloc m_alloc;
+        uint64      m_device_address = 0;
     };
 
+    struct VkTextureDescKey {
+        VkImageLayout layout;
+        uint8         mip_level;
+        uint8         mip_cnt;
+
+        bool operator==(const VkTextureDescKey& _other) const {
+            return layout == _other.layout && mip_level == _other.mip_level && mip_cnt == _other.mip_cnt;
+        }
+
+        struct Hasher {
+            size_t operator()(const VkTextureDescKey& _key) const {
+                return std::hash<uint32_t>()(uint32_t(_key.layout)) ^ std::hash<uint32_t>()(uint32_t(_key.mip_level)) ^ std::hash<uint32_t>()(uint32_t(_key.mip_cnt));
+            }
+        };
+    };
     class VulkanTexture final : public Texture, public VulkanDeviceObject {
         friend VulkanRHIImpl;
 
@@ -760,6 +779,15 @@ namespace Moer::Render {
         bool                     b_has_init_state : 1 = false;
         bool                     b_present : 1        = false;
         VkImageLayout            GetPreferredLayout() { return VK_IMAGE_LAYOUT_GENERAL; };
+        int32                    GetDescriptorIndex(uint _mip_level, uint _mip_idx, VkImageLayout _layout) {
+            VkTextureDescKey key = {_layout, uint8(_mip_level), uint8(_mip_idx)};
+            auto             it  = m_descriptor_indices.find(key);
+            if (it != m_descriptor_indices.end()) {
+                return it->second;
+            }
+            return -1;
+        }
+        UnorderedMap<VkTextureDescKey, uint, VkTextureDescKey::Hasher> m_descriptor_indices;
 
     private:
         void Destroy() override;

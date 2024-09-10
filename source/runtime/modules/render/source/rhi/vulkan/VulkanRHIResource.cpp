@@ -1558,6 +1558,9 @@ VulkanBuffer::~VulkanBuffer(){
     if (m_alloc.buffer != VK_NULL_HANDLE && m_alloc.alloc != VK_NULL_HANDLE) {
         vmaDestroyBuffer(m_device->GetVmaAllocator(), m_alloc.buffer, m_alloc.alloc);
     }
+    if (m_descriptor_idx >=0 ){
+        m_device->GetGlobalDescriptorHeap().FreeBufferDescIdx(m_descriptor_idx);
+    }
 }
 VulkanBuffer::VulkanBuffer(const BufferInfo& _info, VulkanDevice& _device): Buffer(_info), VulkanDeviceObject(&_device){
     VkBufferCreateInfo buffer_create_info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
@@ -1575,6 +1578,14 @@ VulkanBuffer::VulkanBuffer(const BufferInfo& _info, VulkanDevice& _device): Buff
     VmaAllocator allocator = m_device->GetVmaAllocator();
     VK_CHECK_RESULT(vmaCreateBuffer(allocator, &buffer_create_info, &alloc_create_info, &m_alloc.buffer, &m_alloc.alloc, nullptr));
 
+    //get device address
+    VkBufferDeviceAddressInfo info{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
+    info.buffer = m_alloc.buffer;
+    m_device_address = vkGetBufferDeviceAddress(m_device->GetDevice(), &info);
+}
+
+uint64 VulkanBuffer::DeviceAddress() const{
+    return m_device_address;
 }
 
 VulkanBuffer::VulkanBuffer(const BufferInfo& _info, VulkanDevice& _device, VkBuffer _handle, VmaAllocation _alloc, bool _defer_destroy): Buffer(_info), VulkanDeviceObject(&_device){
@@ -1706,8 +1717,16 @@ VulkanFence::~VulkanFence() {
 }
 
 VulkanTexture::~VulkanTexture() {
+    //destroy image views
+    for (auto& [key, view] : m_views) {
+        vkDestroyImageView(m_device->GetDevice(), view, VK_NULL_HANDLE);
+    }
     if (m_alloc.image != VK_NULL_HANDLE && m_alloc.alloc != VK_NULL_HANDLE) {
         vmaDestroyImage(m_device->GetVmaAllocator(), m_alloc.image, m_alloc.alloc);
+    }
+    //free descriptors
+    for (auto& [key, desc] : m_descriptor_indices) {
+        m_device->GetGlobalDescriptorHeap().FreeImageDescIdx(desc);
     }
 }
 
