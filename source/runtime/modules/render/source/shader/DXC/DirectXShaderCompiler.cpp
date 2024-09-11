@@ -6,6 +6,7 @@
 #include "shader/ShaderResource.h"
 #include "shader/ShaderResourceManager.h"
 #include <cassert>
+#include <optional>
 #if PLATFORM_WINDOWS
 #ifndef NOMINMAX
 #define NOMINMAX 1
@@ -154,6 +155,7 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
         arguments.push_back(L"-fvk-use-dx-position-w");
         arguments.push_back(L"-fvk-use-dx-layout");
         arguments.push_back(L"-fvk-auto-shift-bindings");
+        arguments.push_back(L"-DVULKAN=1");
         // arguments.push_back(L"-fspv-flatten-resource-arrays");
     };
 
@@ -394,6 +396,78 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> result, const ShaderParam
         param.type_flags = push_constant.padded_size | 1u << 20u;
         param.num        = push_constant.size;
     }
+
+    using namespace Moer;
+
+    Moer::UnorderedMap<std::string, Moer::ReflectParamInfo> reflect_map;
+    constexpr std::string_view bdles_suffix = "_114514_bdls";
+    constexpr std::string_view bdls_array_suffix = "_array_114514_bdls";
+    auto is_bdls = [&](const std::string& _name) {
+        return _name.ends_with(bdles_suffix);
+    };
+    auto get_real_name = [](const std::string& _name) {
+        return _name.substr(0, _name.find_first_of("__"));
+    };
+    auto is_bdls_array = [&](const std::string& _name) {
+        return _name.ends_with(bdls_array_suffix);
+    };
+    #define SetZeroIfEmpty(_param) if(!_param.has_value()) _param = ReflectParamInfo::Bindless();
+    for (uint32_t binding_index = 0; binding_index < reflect_module.descriptor_binding_count; ++binding_index) {
+        const SpvReflectDescriptorBinding& binding = reflect_module.descriptor_bindings[binding_index];
+        if (is_bdls(binding.name)) {
+            std::string real_name = get_real_name(binding.name);
+            ReflectParamInfo::BindlessArray& bdls_param = reflect_map[real_name].spirv.bindless;
+            ReflectParamInfo::Bindless* target = nullptr;
+            if(binding.descriptor_type == SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_BUFFER) {
+                if(is_bdls_array(binding.name)){
+                    target = &bdls_param.array.value();
+                    SetZeroIfEmpty(bdls_param.array);
+                }else{
+                    target = &bdls_param.buffer.value();
+                    SetZeroIfEmpty(bdls_param.buffer);
+                }
+            } else if(binding.descriptor_type == SPV_REFLECT_DESCRIPTOR_TYPE_SAMPLED_IMAGE) {
+
+                    target = &bdls_param.image.value();
+                    SetZeroIfEmpty(bdls_param.image);
+                
+            }else if (binding.descriptor_type == SPV_REFLECT_DESCRIPTOR_TYPE_SAMPLER) {
+                target = &bdls_param.sampler.value();
+                SetZeroIfEmpty(bdls_param.sampler);
+            }else{
+                assert(false && "unknown bindless type");
+            }
+            target->set = binding.set;
+            target->binding = binding.binding;
+            target->count = binding.count;
+            target->desc_type = binding.descriptor_type;
+            target->resource_type = binding.resource_type;
+            target->stage_bits |= ToPipelineStageFlag(reflect_module.shader_stage);
+
+        } else {
+            ReflectParamInfo& param = reflect_map[binding.name];
+            param.spirv.resources.stage_bits |= ToPipelineStageFlag(reflect_module.shader_stage);
+            ReflectParamInfo::Resource res{};
+            res.set = binding.set;
+            res.binding = binding.binding;
+            res.sampled = binding.image.sampled;
+            res.desc_type = binding.descriptor_type;
+            res.resource_type = binding.resource_type;
+            res.count = binding.count;
+            param.spirv.resources.data = res;
+
+        }
+    }
+    for (uint32_t push_constant_index = 0; push_constant_index < reflect_module.push_constant_block_count; ++push_constant_index) {
+        auto& push_constant = reflect_module.push_constant_blocks[push_constant_index];
+        auto& param         = reflect_map[push_constant.name];
+        param.spirv.resources.stage_bits |= ToPipelineStageFlag(reflect_module.shader_stage);
+        ReflectParamInfo::Constant constant{};
+        constant.size = push_constant.size;
+        constant.padded_size = push_constant.padded_size;
+        param.spirv.resources.data = constant;
+    }
+
     const auto&              members = meta_data->GetMembers();
     Moer::Array<std::string> error_msgs;
 #if OLD_REFLECT

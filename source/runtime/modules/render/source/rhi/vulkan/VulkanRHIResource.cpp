@@ -1566,7 +1566,7 @@ VulkanBuffer::VulkanBuffer(const BufferInfo& _info, VulkanDevice& _device): Buff
     VkBufferCreateInfo buffer_create_info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
     buffer_create_info.size  = _info.size * _info.stride;
     buffer_create_info.usage = VulkanEnumTranslator::METoVKBufferUsageFlags( _info.usage) |
-                               VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+                               VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
     buffer_create_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     buffer_create_info.flags = 0;
     buffer_create_info.pNext = nullptr;

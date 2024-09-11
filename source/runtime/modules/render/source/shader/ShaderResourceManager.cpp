@@ -92,6 +92,9 @@ constexpr static auto serialize(auto& archive, ShaderTargetInfo& self) {
 constexpr static auto serialize(auto& archive, Hash64City const& self) {
     return archive(uint64_t(*self.hash_code.data()));
 }
+constexpr static auto serialize(auto& archive, Moer::ReflectParamInfo& self) {
+    return archive(zpp::bits::as_bytes(self.memory));
+}
 
 void GlobalShaderCache::Impl::Load() {
     const auto& cache_root = Moer::ConfigManager::GetInstance().GetEngineShaderCachedPath();
@@ -109,7 +112,7 @@ void GlobalShaderCache::Impl::Load() {
         std::stringstream ss;
         ss << file_buff;
         auto in = zpp::bits::in(ss.rdbuf()->view());
-        in(shader_cache[index]).or_throw();
+        // in(shader_cache[index]).or_throw();
     }
 }
 void GlobalShaderCache::Impl::Dump() {
@@ -131,8 +134,8 @@ void GlobalShaderCache::Impl::Dump() {
         }
         Moer::Array<uint8_t> cache_stream;
         auto                 out = zpp::bits::out(cache_stream);
-        out(cache).or_throw();
-        file.write(reinterpret_cast<const char*>(cache_stream.data()), cache_stream.size());
+        // out(cache).or_throw();
+        // file.write(reinterpret_cast<const char*>(cache_stream.data()), cache_stream.size());
     }
     // });
 }

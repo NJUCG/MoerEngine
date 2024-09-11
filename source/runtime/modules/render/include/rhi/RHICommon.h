@@ -3,6 +3,8 @@
 
 #include <cstdint>
 #include <limits>
+#include <optional>
+#include <variant>
 #include "RenderCommon.h"
 #include "RenderAPI.h"
 #include "math/Base.h"
@@ -625,9 +627,9 @@ enum EBufferRuntimeUsageFlags : uint32_t {
     TRANSFER_WRITE         = 1 << 7,
 };
 
-namespace Moer::Render{
+namespace Moer::Render {
     //one state a time
-    enum class EBufferState : uint32{
+    enum class EBufferState : uint32 {
         UNDEFINED,
         TRANSFER,
         VERTEX,
@@ -637,7 +639,7 @@ namespace Moer::Render{
         UNORDERED_ACCESS
     };
     //one state a time
-    enum class ETextureState : uint32{
+    enum class ETextureState : uint32 {
         UNDEFINED,
         TRANSFER,
         SHADER_RESOURCE,
@@ -647,7 +649,7 @@ namespace Moer::Render{
         SAMPLE,
         Num
     };
-}
+}// namespace Moer::Render
 
 enum class EPassType {
     Graphics,
@@ -992,19 +994,6 @@ struct ParameterInfo {
     Moer::uint           type_flags = 0;
 };
 
-struct ShaderParametersInfoMap {
-    friend class ShaderCompiler;
-    friend class DXCompiler;
-
-public:
-    const Moer::UnorderedMap<std::string, ParameterInfo>& GetShaderParameterInfoMap() const {
-        return param_map;
-    }
-
-    // private:
-    Moer::UnorderedMap<std::string, ParameterInfo> param_map;
-    Moer::uint                                     space_cnt;
-};
 #pragma endregion
 
 enum class ECommandQueueType {
@@ -1107,6 +1096,56 @@ struct MeshBoundInfo {
 };
 
 namespace Moer {
+    struct ReflectParamInfo {
+        ReflectParamInfo() {
+            memset(this, 0, sizeof(ReflectParamInfo));
+        };
+        struct Resource {
+            uint set;
+            uint binding;
+            uint sampled;
+            uint desc_type;
+            uint resource_type;
+            uint count;
+        };
+        struct Constant {
+            uint size;
+            uint padded_size;
+        };
+        struct Bindless {
+            uint set;
+            uint binding;
+            uint count;
+            uint desc_type;
+            uint resource_type;
+            uint stage_bits = 0;
+        };
+        struct BindlessArray {
+            std::optional<Bindless> array;
+            std::optional<Bindless> buffer;
+            std::optional<Bindless> image;
+            std::optional<Bindless> sampler;
+        };
+        struct Resources {
+            std::variant<Resource, Constant> data;
+            uint                             stage_bits;
+        };
+        struct Spirv {
+            union {
+                Resources resources;
+                BindlessArray  bindless;
+            };
+        };
+        struct Dxil {};
+        struct Memory{
+            byte data[sizeof(Spirv)];
+        };
+        union {
+            Spirv spirv;
+            Dxil  dxil;
+            Memory memory;
+        };
+    };
     struct MeshletDesc {
         uint32_t vertex_offset;
         uint32_t vertex_count;
@@ -1135,6 +1174,22 @@ namespace Moer {
         uint32_t padding[3];
     };
 }// namespace Moer
+
+struct ShaderParametersInfoMap {
+    friend class ShaderCompiler;
+    friend class DXCompiler;
+
+public:
+    const Moer::UnorderedMap<std::string, ParameterInfo>& GetShaderParameterInfoMap() const {
+        return param_map;
+    }
+
+    // private:
+    Moer::UnorderedMap<std::string, ParameterInfo>          param_map;
+    Moer::UnorderedMap<std::string, Moer::ReflectParamInfo> reflect_map;
+    Moer::uint                                              space_cnt;
+};
+
 #pragma endregion
 
 #endif// !RHI_PLATFORM_COMMON_H
