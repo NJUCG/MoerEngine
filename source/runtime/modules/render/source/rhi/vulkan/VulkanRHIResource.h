@@ -802,12 +802,38 @@ namespace Moer::Render {
     class VulkanBindlessArray final : public BindlessArray, public VulkanDeviceObject {
     public:
         VulkanBindlessArray(VulkanDevice* _device, uint32 _max_size);
-        virtual ~VulkanBindlessArray();
-        VulkanBuffer* bindless_array_buffer;
-        void CmdUpdate();
+        ~VulkanBindlessArray() override;
+        
+        uint AllocateTexture(const TextureView& _texture, Sampler _sampler) override;
+        uint AllocateBuffer(BufferView _buffer) override;
+        void CmdUpdate(Array<TextureUpdateInfo>&& _textures_allocated, Array<BufferUpdateInfo>&& _buffers_allocated);
         void OnFree();
-        std::shared_mutex lock;
+    public:
+        VulkanBuffer* bindless_array_buffer;
+        VulkanBuffer* bindless_buffer_descs;
+        VulkanBuffer* bindless_texture_descs;
+    private:
+        void WriteBufferBinding(uint _index, VulkanBuffer* _buffer);
+        void WriteTextureBinding(uint _index, Texture* _texture);
+    protected:
+    
+        UniquePtr<Command> CreateUpdateCommand() override;
         class VulkanDescriptorHeap& g_heap;
+
+        LockFreeQueueBase<uint> free_texture_slots;
+        LockFreeQueueBase<uint> free_buffer_slots;
+        LockFreeQueueBase<uint> free_slots;
+        uint        texture_slot_offset;
+        uint        buffer_slot_offset;
+        uint        slot_offset;
+        //frame resources
+        Array<TextureUpdateInfo> textures_allocated;
+        Array<BufferUpdateInfo>  buffers_allocated;
+        
+        Array<uint>              textures_freed;
+        Array<uint>              buffers_freed;
+        Array<uint>             slots_freed;
+        Array<uint> numbers;
     };
 
 #pragma endregion

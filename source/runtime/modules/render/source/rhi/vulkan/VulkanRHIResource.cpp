@@ -1172,7 +1172,7 @@ namespace Moer::Render {
         b_deferred_delete = _defer_destroy;
     }
 
-    VulkanBindlessArray::VulkanBindlessArray(VulkanDevice* _device, uint32 _max_size) : BindlessArray(), VulkanDeviceObject(_device), g_heap(_device->GetGlobalDescriptorHeap()) {
+    VulkanBindlessArray::VulkanBindlessArray(VulkanDevice* _device, uint32 _max_size) : BindlessArray(), VulkanDeviceObject(_device), bindless_buffer_descs(nullptr), bindless_texture_descs(nullptr), g_heap(_device->GetGlobalDescriptorHeap()), texture_slot_offset(0), buffer_slot_offset(0), slot_offset(0), numbers(_max_size) {
         BufferInfo buffer_info{
             .size = _max_size * sizeof(uint),
             .stride = uint(sizeof(uint)),
@@ -1193,32 +1193,156 @@ namespace Moer::Render {
         VK_CHECK_RESULT(vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &current_handle, &alloc, nullptr));
         bindless_array_buffer = MoerNew(VulkanBuffer)(buffer_info, *m_device, current_handle, alloc, false);
 
+        buffer_ci.usage = VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT;
+        buffer_ci.size  = _max_size * m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize;\
+        alloc_ci.flags  = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+        VK_CHECK_RESULT(vmaMapMemory(m_device->GetVmaAllocator(), bindless_array_buffer->GetAllocation(), (void**)&numbers.data));
+        bindless_buffer_descs = MoerNew(VulkanBuffer)(buffer_info, *m_device, current_handle, alloc, false);
+
+        buffer_ci.usage = VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT;
+        buffer_ci.size  = _max_size * m_device->GetOptionalProperties().descriptor_buffer_properties.sampledImageDescriptorSize;
+        VK_CHECK_RESULT(vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &current_handle, &alloc, nullptr));
+        bindless_texture_descs = MoerNew(VulkanBuffer)(buffer_info, *m_device, current_handle, alloc, false);
+
+        for (uint i = 0; i < _max_size; i++) { numbers[i] = i; }
+
     }
+
     static uint SamplerToIndex(const Sampler& _samp) {
         uint idx = uint(_samp.filter) + uint(_samp.address_mode) * uint(SF_Num) + uint(_samp.compare_function) * uint(SAM_Num) * uint(SF_Num);
         return idx;
     }
-    void VulkanBindlessArray::CmdUpdate() {
-        //TODO: update the heap
-        uint *mapped_data;
-        vmaMapMemory(m_device->GetVmaAllocator(), bindless_array_buffer->GetAllocation(), (void**)(&mapped_data));
-        for (const auto& texture: textures_allocated) {
-            uint indirect_handle = (SamplerToIndex(texture.sampler) & 0xff) | (texture.slot & 0xffffff) << 8;
-            mapped_data[texture.slot] = indirect_handle;
-            
-        }
 
-        for (const auto& buffer: buffers_allocated) {
-            uint indirect_handle = buffer.slot;
-            mapped_data[buffer.slot] = indirect_handle;
+    void VulkanBindlessArray::WriteBufferBinding(uint _index, VulkanBuffer* _buffer) {}
+
+    void VulkanBindlessArray::WriteTextureBinding(uint _index, Texture* _texture) {}
+
+    uint VulkanBindlessArray::AllocateTexture(const TextureView& _texture, Sampler _sampler) {
+        uint  slot_idx  = 0;
+        uint* array_idx = free_texture_slots.Pop();
+        if (array_idx == nullptr) {
+            texture_slot_offset++;
+            slot_idx = texture_slot_offset;
+        } else { slot_idx = *array_idx; }
+
+        //allocate texture slot
+        uint  texture_slot     = 0;
+        uint* texture_slot_ptr = free_texture_slots.Pop();
+        if (texture_slot_ptr == nullptr) { texture_slot = ++texture_slot_offset; } else { texture_slot = *texture_slot_ptr; }
+
+        textures_allocated.push_back({_texture.texture, _sampler, slot_idx, texture_slot});
+        return slot_idx;
+    }
+
+    uint VulkanBindlessArray::AllocateBuffer(BufferView _buffer) {
+        uint  slot_idx;
+        uint* array_idx = free_buffer_slots.Pop();
+        if (array_idx == nullptr) {
+            buffer_slot_offset++;
+            slot_idx = buffer_slot_offset;
+        } else { slot_idx = *array_idx; }
+
+        //allocate buffer index
+        uint  buffer_slot;
+        uint* buffer_slot_ptr = free_buffer_slots.Pop();
+        if (buffer_slot_ptr == nullptr) { buffer_slot = ++buffer_slot_offset; } else { buffer_slot = *buffer_slot_ptr; }
+
+        buffers_allocated.emplace_back(_buffer.buffer, slot_idx, buffer_slot);
+        return slot_idx;
+    }
+
+    void VulkanBindlessArray::CmdUpdate(Array<TextureUpdateInfo>&& _textures_allocated, Array<BufferUpdateInfo>&& _buffers_allocated) {
+        //TODO: update the heap
+        uint* mapped_data;
+        uint  range_min = std::numeric_limits<uint>::max();
+        uint  range_max = 0;
+        vmaMapMemory(m_device->GetVmaAllocator(), bindless_array_buffer->GetAllocation(), (void**)(&mapped_data));
+        for (const TextureUpdateInfo& texture : _textures_allocated) {
+            uint indirect_handle           = (SamplerToIndex(texture.sampler) & 0xff) | (texture.slot & 0xffffff) << 8;
+            mapped_data[texture.array_idx] = indirect_handle;
+            range_min                      = std::min(range_min, texture.array_idx);
+            range_max                      = std::max(range_max, texture.array_idx);
+        }
+        for (const auto& buffer : _buffers_allocated) {
+            uint indirect_handle          = buffer.slot;
+            mapped_data[buffer.array_idx] = indirect_handle;
+            range_min                     = std::min(range_min, buffer.array_idx);
+            range_max                     = std::max(range_max, buffer.array_idx);
         }
         vmaUnmapMemory(m_device->GetVmaAllocator(), bindless_array_buffer->GetAllocation());
+        vmaFlushAllocation(m_device->GetVmaAllocator(), bindless_array_buffer->GetAllocation(), range_min * sizeof(uint), (range_max - range_min) * sizeof(uint));
+
+        //update the descriptor set
+
+        std::sort(_buffers_allocated.begin(), _buffers_allocated.end(), [](const auto& a, const auto& b) { return a.slot < b.slot; });
+        std::sort(_textures_allocated.begin(), _textures_allocated.end(), [](const auto& a, const auto& b) { return a.slot < b.slot; });
+
+        byte* mapped_buffer_descs;
+        byte* mapped_image_descs;
+        if (!_buffers_allocated.empty()) vmaMapMemory(m_device->GetVmaAllocator(), bindless_buffer_descs->GetAllocation(), (void**)&mapped_buffer_descs);
+        if (!_textures_allocated.empty()) vmaMapMemory(m_device->GetVmaAllocator(), bindless_texture_descs->GetAllocation(), (void**)&mapped_image_descs);
+
+        VkDescriptorGetInfoEXT     get_info{VK_STRUCTURE_TYPE_DESCRIPTOR_GET_INFO_EXT};
+        VkDescriptorAddressInfoEXT address_info{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
+        uint                       storage_buffer_desc_size = m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize;
+        uint                       sampled_image_desc_size  = m_device->GetOptionalProperties().descriptor_buffer_properties.sampledImageDescriptorSize;
+        for (const auto& buffer : _buffers_allocated) {
+            VulkanBuffer* vk_buffer      = ResourceCast(buffer.buffer);
+            address_info.address         = vk_buffer->DeviceAddress();
+            address_info.range           = vk_buffer->GetByteSize();
+            get_info.data.pStorageBuffer = &address_info;
+            m_device->GetDescriptorEXT(&get_info, storage_buffer_desc_size, mapped_buffer_descs + buffer.array_idx * storage_buffer_desc_size);
+        }
+        VkDescriptorImageInfo image_info{};
+
+        for (const auto& texture : _textures_allocated) {
+            VulkanTexture* vk_texture   = ResourceCast(texture.texture);
+            image_info.imageView        = vk_texture->GetView(0, vk_texture->GetNumMips());
+            image_info.imageLayout      = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            get_info.data.pSampledImage = &image_info;
+            m_device->GetDescriptorEXT(&get_info, sampled_image_desc_size, mapped_image_descs + texture.array_idx * sampled_image_desc_size);
+        }
+
+        Array<VmaAllocation> allocations;
+        Array<VkDeviceSize>  offsets;
+        Array<VkDeviceSize>  ranges;
+        allocations.reserve(2);
+        offsets.reserve(2);
+        ranges.reserve(2);
+        if (!_buffers_allocated.empty()) {
+            offsets.push_back(_buffers_allocated.front().array_idx * storage_buffer_desc_size);
+            ranges.push_back((_buffers_allocated.back().array_idx - _buffers_allocated.front().array_idx + 1) * storage_buffer_desc_size);
+            allocations.push_back(bindless_buffer_descs->GetAllocation());
+            vmaUnmapMemory(m_device->GetVmaAllocator(), bindless_buffer_descs->GetAllocation());
+        }
+        if (!_textures_allocated.empty()) {
+            offsets.push_back(_textures_allocated.front().array_idx * sampled_image_desc_size);
+            ranges.push_back((_textures_allocated.back().array_idx - _textures_allocated.front().array_idx + 1) * sampled_image_desc_size);
+            allocations.push_back(bindless_texture_descs->GetAllocation());
+            vmaUnmapMemory(m_device->GetVmaAllocator(), bindless_texture_descs->GetAllocation());
+        }
+        if (!allocations.empty()) { vmaFlushAllocations(m_device->GetVmaAllocator(), allocations.size(), allocations.data(), offsets.data(), ranges.data()); }
+    }
+
+    void VulkanBindlessArray::OnFree() {
+        for (const uint& idx : textures_freed) { free_texture_slots.Push(&numbers[idx]); }
+        for (const uint& idx : buffers_freed) { free_buffer_slots.Push(&numbers[idx]); }
+
+        for (const uint& idx : slots_freed) { free_slots.Push(&numbers[idx]); }
     }
 
     VulkanBindlessArray::~VulkanBindlessArray() {
         if (bindless_array_buffer) {
             MoerDelete(bindless_array_buffer);
             bindless_array_buffer = nullptr;
+        }
+        if (bindless_buffer_descs) {
+            MoerDelete(bindless_buffer_descs);
+            bindless_buffer_descs = nullptr;
+        }
+        if (bindless_texture_descs) {
+            MoerDelete(bindless_texture_descs);
+            bindless_texture_descs = nullptr;
         }
     }
 #pragma endregion

@@ -28,6 +28,8 @@
 #include <tuple>
 #include <type_traits>
 #include <variant>
+
+#include "misc/LockFree.h"
 template<typename TStructuredParam>
 concept concept_is_shader_struct = requires(TStructuredParam t)
 {
@@ -833,38 +835,29 @@ namespace Moer::Render {
         struct TextureUpdateInfo {
             Texture* texture;
             Sampler  sampler;
+            uint     array_idx;
             uint     slot;
         };
 
         struct BufferUpdateInfo {
             Buffer* buffer;
+            uint    array_idx;
             uint    slot;
         };
 
         BindlessArray();
         virtual        ~BindlessArray() = default;
-        BindlessHandle AllocateTexture(Texture* _texture, Sampler _sampler);
-        BindlessHandle AllocateBuffer(Buffer* _buffer);
+        virtual uint  AllocateTexture(const TextureView& _texture, Sampler _sampler) = 0;
+        virtual uint  AllocateBuffer(BufferView _buffer) = 0;
 
-        void FreeTexture(BindlessHandle _handle);
-        void FreeBuffer(BindlessHandle _handle);
+        virtual void FreeTexture(uint _handle) = 0;
+        virtual void FreeBuffer(uint _handle) = 0;
 
     protected:
         friend class CommandList;
         friend class UpdateBindlessArrayCmd;
 
-        Array<uint> free_texture_slots;
-        Array<uint> free_buffer_slots;
-        uint        texture_slot_offset;
-        uint        buffer_slot_offset;
-
-        //frame resources
-        Array<TextureUpdateInfo> textures_allocated;
-        Array<BufferUpdateInfo>  buffers_allocated;
-        Array<uint>              textures_freed;
-        Array<uint>              buffers_freed;
-
-        BufferRef indirect_buffer;
+        virtual UniquePtr<class Command> CreateUpdateCommand()= 0;
     };
 
     template<typename T>
