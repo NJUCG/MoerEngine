@@ -666,6 +666,7 @@ namespace Moer::Render {
             return DepthBufferRef(MoerNew(DepthBuffer)(CreateTexture(_size, _format, ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT | ETextureUsageFlags::SAMPLED, 1, _array_size)));
         }
 
+        virtual BindlessArrayRef CreateBindlessArray(uint _max_size) = 0;
         // virtual RHIViewportRef CreateViewport(const RHIViewportInitializer& _init) = 0;
 
         // virtual BackBufferInfo GetNextBackBufferInfo(RHIViewport* _viewport) = 0;

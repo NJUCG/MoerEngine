@@ -801,7 +801,13 @@ namespace Moer::Render {
 
     class VulkanBindlessArray final : public BindlessArray, public VulkanDeviceObject {
     public:
-        VulkanBindlessArray(VulkanDevice* _device) : BindlessArray(), VulkanDeviceObject(_device) {}
+        VulkanBindlessArray(VulkanDevice* _device, uint32 _max_size);
+        virtual ~VulkanBindlessArray();
+        VulkanBuffer* bindless_array_buffer;
+        void CmdUpdate();
+        void OnFree();
+        std::shared_mutex lock;
+        class VulkanDescriptorHeap& g_heap;
     };
 
 #pragma endregion

@@ -23,6 +23,10 @@ namespace Moer::Render{
         return impl->CreateDepthBuffer(_size, _format, _array_size);
     }
 
+    BindlessArrayRef RenderDevice::CreateBindlessArray(uint _max_size) {
+        return impl->CreateBindlessArray(_max_size);
+    }
+
     FenceRef RenderDevice::CreateFence() {
         return impl->CreateFence();
     }

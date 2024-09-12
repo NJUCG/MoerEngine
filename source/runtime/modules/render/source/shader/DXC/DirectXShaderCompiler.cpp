@@ -415,8 +415,8 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> result, const ShaderParam
     for (uint32_t binding_index = 0; binding_index < reflect_module.descriptor_binding_count; ++binding_index) {
         const SpvReflectDescriptorBinding& binding = reflect_module.descriptor_bindings[binding_index];
         if (is_bdls(binding.name)) {
-            std::string real_name = get_real_name(binding.name);
-            ReflectParamInfo::BindlessArray& bdls_param = reflect_map[real_name].spirv.bindless;
+            static constexpr std::string_view real_name = ReflectParamInfo::bdls_name;
+            ReflectParamInfo::BindlessArray& bdls_param = reflect_map[real_name.data()].spirv.bindless;
             ReflectParamInfo::Bindless* target = nullptr;
             if(binding.descriptor_type == SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_BUFFER) {
                 if(is_bdls_array(binding.name)){
@@ -510,6 +510,7 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> result, const ShaderParam
     }
 #endif
     _param_map.param_map.swap(param_map);
+    _param_map.reflect_map.swap(reflect_map);
     _param_map.space_cnt = reflect_module.descriptor_set_count;
     spvReflectDestroyShaderModule(&reflect_module);
 }

@@ -27,22 +27,14 @@
 namespace Moer::Render {
     namespace VkUtil = Moer::RHI::Vulkan::Util;
 
-    std::tuple<SpvReflectResourceType, SpvReflectDescriptorType> DecodeReflectType(uint32 _value) {
-        return std::make_tuple(SpvReflectResourceType(_value), SpvReflectDescriptorType(_value >> 4));
-    }
+    std::tuple<SpvReflectResourceType, SpvReflectDescriptorType> DecodeReflectType(uint32 _value) { return std::make_tuple(SpvReflectResourceType(_value), SpvReflectDescriptorType(_value >> 4)); }
 
-    std::tuple<uint32, uint32> DecodeConstant(uint32 _flag) {
-        return std::make_tuple(_flag >> 20, (_flag & 0xFFFFF));
-    }
-    VulkanDevice::~VulkanDevice() {
-        Destroy();
-    }
+    std::tuple<uint32, uint32> DecodeConstant(uint32 _flag) { return std::make_tuple(_flag >> 20, (_flag & 0xFFFFF)); }
+    VulkanDevice::~VulkanDevice() { Destroy(); }
 
     void VulkanDevice::Init(const DeviceInitializer& _initializer) {
         m_gpu = SelectGpu(_initializer);
-        if (m_gpu == VK_NULL_HANDLE) {
-            VkUtil::ExitFatal("No available GPU found.", -1);
-        }
+        if (m_gpu == VK_NULL_HANDLE) { VkUtil::ExitFatal("No available GPU found.", -1); }
 
         InitGpu(_initializer);
 
@@ -77,7 +69,7 @@ namespace Moer::Render {
             ESamplerAddressMode     address_mode     = ESamplerAddressMode((i / SF_Num) % SAM_Num);
             ESamplerCompareFunction compare_function = ESamplerCompareFunction(i / (SAM_Num * uint(SF_Num)));
 
-            sampler_create_info.minFilter = sampler_create_info.magFilter = VulkanEnumTranslator::METoVKMinMagFilterMode(filter);
+            sampler_create_info.minFilter    = sampler_create_info.magFilter    = VulkanEnumTranslator::METoVKMinMagFilterMode(filter);
             sampler_create_info.addressModeU = sampler_create_info.addressModeV = sampler_create_info.addressModeW = VulkanEnumTranslator::METoVKWrapMode(address_mode);
 
             sampler_create_info.compareOp     = VulkanEnumTranslator::METoVKCompareOp(ECompareOption(compare_function));
@@ -86,7 +78,7 @@ namespace Moer::Render {
             vkCreateSampler(m_device, &sampler_create_info, VK_NULL_HANDLE, &immutable_samplers[i]);
         }
         InitMemoryAllocator(m_instance);
-        new (&m_global_descriptor_heap) VulkanDescriptorHeap(*this);
+        new(&m_global_descriptor_heap) VulkanDescriptorHeap(*this);
     }
 
     VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
@@ -98,18 +90,11 @@ namespace Moer::Render {
         std::stringstream stream;
         stream << "[" << p_callback_data->messageIdNumber << "][" << p_callback_data->pMessageIdName << "]: " << p_callback_data->pMessage << std::endl;
 
-        if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT) {
-            LOG_DEBUG(stream.str());
-        } else if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT) {
-            LOG_INFO(stream.str());
-        } else if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
-            LOG_WARNING(stream.str());
-        } else if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
-            LOG_ERROR(stream.str());
-        }
+        if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT) { LOG_DEBUG(stream.str()); } else if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT) { LOG_INFO(stream.str()); } else if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) { LOG_WARNING(stream.str()); } else if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) { LOG_ERROR(stream.str()); }
 
         return VK_FALSE;
     }
+
     void VulkanDevice::CreateInstance() {
         VkApplicationInfo application_info{};
         application_info.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -122,7 +107,7 @@ namespace Moer::Render {
         m_instance_extensions         = VulkanInstanceExtension::GetDriverSupportedInstanceExtensionNames();
         m_enabled_instance_extensions = VulkanInstanceExtension::GetMESupportedInstanceExtensions();
 
-        bool extension_supported   = [&]() {
+        bool extension_supported = [&]() {
             if (!m_enabled_instance_extensions.empty()) {
                 for (const auto& extension : m_enabled_instance_extensions) {
                     if (std::find(m_instance_extensions.begin(), m_instance_extensions.end(), extension) == m_instance_extensions.end()) {
@@ -131,7 +116,8 @@ namespace Moer::Render {
                     }
                 }
             }
-            return true; }();
+            return true;
+        }();
         bool debug_utils_available = std::find(m_enabled_instance_extensions.begin(), m_enabled_instance_extensions.end(), VK_EXT_DEBUG_UTILS_EXTENSION_NAME) != m_enabled_instance_extensions.end();
 
         VkInstanceCreateInfo instance_create_info{};
@@ -143,9 +129,7 @@ namespace Moer::Render {
         auto n = m_enabled_instance_extensions.size();
 
         Moer::Array<const char*> r_extensions(n, nullptr);
-        for (size_t i = 0; i < n; ++i) {
-            r_extensions[i] = m_enabled_instance_extensions[i].c_str();
-        }
+        for (size_t i = 0; i < n; ++i) { r_extensions[i] = m_enabled_instance_extensions[i].c_str(); }
         instance_create_info.enabledExtensionCount   = n;
         instance_create_info.ppEnabledExtensionNames = r_extensions.data();
 
@@ -154,20 +138,20 @@ namespace Moer::Render {
         const char* validation_layer_name = "VK_LAYER_KHRONOS_validation";
 
         if ([&](std::string_view _view) {
-                uint32_t instance_layer_count = 0;
-                vkEnumerateInstanceLayerProperties(&instance_layer_count, nullptr);
-                Moer::Array<VkLayerProperties> instance_layer_properties(instance_layer_count);
-                vkEnumerateInstanceLayerProperties(&instance_layer_count, instance_layer_properties.data());
-                bool validation_layer_present = false;
+            uint32_t instance_layer_count = 0;
+            vkEnumerateInstanceLayerProperties(&instance_layer_count, nullptr);
+            Moer::Array<VkLayerProperties> instance_layer_properties(instance_layer_count);
+            vkEnumerateInstanceLayerProperties(&instance_layer_count, instance_layer_properties.data());
+            bool validation_layer_present = false;
 
-                for (auto layer_property : instance_layer_properties) {
-                    if (_view.data() == layer_property.layerName) {
-                        validation_layer_present = true;
-                        break;
-                    }
+            for (auto layer_property : instance_layer_properties) {
+                if (_view.data() == layer_property.layerName) {
+                    validation_layer_present = true;
+                    break;
                 }
-                return validation_layer_present;
-            }(validation_layer_name)) {
+            }
+            return validation_layer_present;
+        }(validation_layer_name)) {
             instance_create_info.enabledLayerCount   = 1;
             instance_create_info.ppEnabledLayerNames = &validation_layer_name;
             PopulateDebugMessengerCreateInfo(debug_create_info);
@@ -181,10 +165,9 @@ namespace Moer::Render {
 
         SetupDebugUtilsMessengerEXT();
 
-        if (debug_utils_available) {
-            SetupDebugProcs();
-        }
+        if (debug_utils_available) { SetupDebugProcs(); }
     }
+
     void VulkanDevice::InitMemoryAllocator(VkInstance _instance) {
         VmaAllocatorCreateInfo alloc_create_info{};
 
@@ -201,9 +184,7 @@ namespace Moer::Render {
 
         //capable of using buffer via device address(64bit) passed to shader.
         alloc_create_info.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
-        if (m_optional_extensions.m_has_memory_priority) {
-            alloc_create_info.flags |= VMA_ALLOCATOR_CREATE_EXT_MEMORY_PRIORITY_BIT;
-        }
+        if (m_optional_extensions.m_has_memory_priority) { alloc_create_info.flags |= VMA_ALLOCATOR_CREATE_EXT_MEMORY_PRIORITY_BIT; }
 
         VK_CHECK_RESULT(vmaCreateAllocator(&alloc_create_info, &m_allocator));
 
@@ -254,9 +235,7 @@ namespace Moer::Render {
 
             auto indices = QueryQueueFamilyIndices(gpu);
 
-            if (indices.IsComplete() && core_features_supported && extensions_supported && type_matched) {
-                return gpu;
-            }
+            if (indices.IsComplete() && core_features_supported && extensions_supported && type_matched) { return gpu; }
         }
 
         LOG_ERROR("No available target type (discrete, etc.) GPU found!");
@@ -271,13 +250,9 @@ namespace Moer::Render {
         {
             VkPhysicalDeviceFeatures2 features2{};
             features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-            for (const auto& extension : _initializer.enabled_extensions) {
-                extension->PreGpuFeatures(features2);
-            }
+            for (const auto& extension : _initializer.enabled_extensions) { extension->PreGpuFeatures(features2); }
             vkGetPhysicalDeviceFeatures2(m_gpu, &features2);
-            for (const auto& extension : _initializer.enabled_extensions) {
-                extension->PostGpuFeatures(m_optional_extensions);
-            }
+            for (const auto& extension : _initializer.enabled_extensions) { extension->PostGpuFeatures(m_optional_extensions); }
         }
 
         // Query core properties
@@ -286,9 +261,7 @@ namespace Moer::Render {
         {
             VkPhysicalDeviceProperties2 props2{};
             props2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
-            for (const auto& extension : _initializer.enabled_extensions) {
-                extension->PreGpuProperties(this, props2);
-            }
+            for (const auto& extension : _initializer.enabled_extensions) { extension->PreGpuProperties(this, props2); }
             vkGetPhysicalDeviceProperties2(m_gpu, &props2);
         }
 
@@ -346,9 +319,7 @@ namespace Moer::Render {
             enabled_features.pNext    = &m_core_features.core_1_1;
             m_core_features.PreCreateDevice(device_create_info, _api_version);
             device_create_info.pNext = &enabled_features;
-        } else {
-            device_create_info.pEnabledFeatures = &m_core_features.core_1_0;
-        }
+        } else { device_create_info.pEnabledFeatures = &m_core_features.core_1_0; }
         VK_CHECK_RESULT(vkCreateDevice(m_gpu, &device_create_info, nullptr, &m_device));
 
         vkGetDeviceQueue(m_device, m_queue_family_indices.graphics.value(), 0, &m_graphics_queue);
@@ -374,9 +345,7 @@ namespace Moer::Render {
         vkEnumerateDeviceExtensionProperties(_gpu, nullptr, &gpu_extension_count, gpu_extensions.data());
 
         TExtensionArray ret;
-        for (const auto& extension : gpu_extensions) {
-            ret.push_back(extension.extensionName);
-        }
+        for (const auto& extension : gpu_extensions) { ret.push_back(extension.extensionName); }
 
         return ret;
     }
@@ -406,38 +375,19 @@ namespace Moer::Render {
     //    return 0;
     //}
     static uint32_t GetQueueFamilyIndice(std::span<const VkQueueFamilyProperties> _queue_family_props, VkQueueFlags _target_queue_flags, VkQueueFlags _exclude_queue_flags) {
-        for (uint32_t i = 0; i < _queue_family_props.size(); ++i) {
-            if (_queue_family_props[i].queueFlags & _target_queue_flags && !(_queue_family_props[i].queueFlags & _exclude_queue_flags)) {
-                return i;
-            }
-        }
+        for (uint32_t i = 0; i < _queue_family_props.size(); ++i) { if (_queue_family_props[i].queueFlags & _target_queue_flags && !(_queue_family_props[i].queueFlags & _exclude_queue_flags)) { return i; } }
         return -1;
     }
+
     int32_t VulkanDevice::GetQueueFamilyIndex(const Moer::Array<VkQueueFamilyProperties>& queue_family_props, VkQueueFlags _queue_flags) const {
         // Dedicated queue for transfer
-        if ((_queue_flags & VK_QUEUE_TRANSFER_BIT) == _queue_flags) {
-            for (uint32_t i = 0; i < queue_family_props.size(); ++i) {
-                if ((queue_family_props[i].queueFlags & VK_QUEUE_TRANSFER_BIT) && (queue_family_props[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) == 0) {
-                    return i;
-                }
-            }
-        }
+        if ((_queue_flags & VK_QUEUE_TRANSFER_BIT) == _queue_flags) { for (uint32_t i = 0; i < queue_family_props.size(); ++i) { if ((queue_family_props[i].queueFlags & VK_QUEUE_TRANSFER_BIT) && (queue_family_props[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) == 0) { return i; } } }
 
         // Dedicated queue for compute
-        if ((_queue_flags & VK_QUEUE_COMPUTE_BIT) == _queue_flags) {
-            for (uint32_t i = 0; i < queue_family_props.size(); ++i) {
-                if ((queue_family_props[i].queueFlags & VK_QUEUE_COMPUTE_BIT) && (queue_family_props[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) == 0 && (queue_family_props[i].queueFlags & VK_QUEUE_TRANSFER_BIT) == 0) {
-                    return i;
-                }
-            }
-        }
+        if ((_queue_flags & VK_QUEUE_COMPUTE_BIT) == _queue_flags) { for (uint32_t i = 0; i < queue_family_props.size(); ++i) { if ((queue_family_props[i].queueFlags & VK_QUEUE_COMPUTE_BIT) && (queue_family_props[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) == 0 && (queue_family_props[i].queueFlags & VK_QUEUE_TRANSFER_BIT) == 0) { return i; } } }
 
         // Default queue
-        for (uint32_t i = 0; i < queue_family_props.size(); ++i) {
-            if ((queue_family_props[i].queueFlags & _queue_flags) == _queue_flags) {
-                return i;
-            }
-        }
+        for (uint32_t i = 0; i < queue_family_props.size(); ++i) { if ((queue_family_props[i].queueFlags & _queue_flags) == _queue_flags) { return i; } }
 
         return -1;
         // CRITICAL_AND_THROW("No suitable queue family found for " + std::to_string(_queue_flags));
@@ -455,20 +405,12 @@ namespace Moer::Render {
             indices.present    = graphics;
         }
         auto transfer = GetQueueFamilyIndice(queue_family_props, VK_QUEUE_TRANSFER_BIT, VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT);
-        if (transfer < 0) {
-            transfer = GetQueueFamilyIndice(queue_family_props, VK_QUEUE_TRANSFER_BIT, VK_QUEUE_GRAPHICS_BIT);
-        }
-        if (transfer < 0) {
-            transfer = indices.graphics.value();
-        }
+        if (transfer < 0) { transfer = GetQueueFamilyIndice(queue_family_props, VK_QUEUE_TRANSFER_BIT, VK_QUEUE_GRAPHICS_BIT); }
+        if (transfer < 0) { transfer = indices.graphics.value(); }
         indices.transfer = transfer;
 
         auto compute = GetQueueFamilyIndice(queue_family_props, VK_QUEUE_COMPUTE_BIT, VK_QUEUE_GRAPHICS_BIT);
-        if (compute >= 0) {
-            indices.compute = compute;
-        } else {
-            indices.compute = indices.transfer;
-        }
+        if (compute >= 0) { indices.compute = compute; } else { indices.compute = indices.transfer; }
 
         return indices;
     }
@@ -480,9 +422,7 @@ namespace Moer::Render {
         for (const auto& extension : _enabled_extensions) {
             if (std::find(gpu_extensions.begin(), gpu_extensions.end(), extension->GetExtensionName()) == gpu_extensions.end()) {
                 LOG_WARNING("Disable the extension '{}' is not supported", extension->GetExtensionName());
-                if (!extension->IsOptional()) {
-                    return false;
-                }
+                if (!extension->IsOptional()) { return false; }
                 extension->Disable();
             }
         }
@@ -498,30 +438,18 @@ namespace Moer::Render {
 
     VkDescriptorType METoVkDescriptorType(SpvReflectDescriptorType _desc, SpvReflectResourceType _res) {
         switch (_desc) {
-            case SPV_REFLECT_DESCRIPTOR_TYPE_SAMPLER:
-                return VK_DESCRIPTOR_TYPE_SAMPLER;
-            case SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
-                return VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            case SPV_REFLECT_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
-                return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-            case SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_IMAGE:
-                return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            case SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
-                return VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER;
-            case SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
-                return VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER;
-            case SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
-                return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            case SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_BUFFER:
-                return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            case SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:
-                return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-            case SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC:
-                return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
-            case SPV_REFLECT_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
-                return VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
-            default:
-                return VK_DESCRIPTOR_TYPE_MAX_ENUM;
+            case SPV_REFLECT_DESCRIPTOR_TYPE_SAMPLER: return VK_DESCRIPTOR_TYPE_SAMPLER;
+            case SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER: return VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            case SPV_REFLECT_DESCRIPTOR_TYPE_SAMPLED_IMAGE: return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+            case SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_IMAGE: return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            case SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER: return VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER;
+            case SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER: return VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER;
+            case SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_BUFFER: return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            case SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_BUFFER: return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            case SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC: return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+            case SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC: return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
+            case SPV_REFLECT_DESCRIPTOR_TYPE_INPUT_ATTACHMENT: return VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+            default: return VK_DESCRIPTOR_TYPE_MAX_ENUM;
         }
     }
 
@@ -541,15 +469,14 @@ namespace Moer::Render {
         vk_create_debug_utils_messenger_ext  = PFN_vkCreateDebugUtilsMessengerEXT(vkGetInstanceProcAddr(m_instance, "vkCreateDebugUtilsMessengerEXT"));
         vk_destroy_debug_utils_messenger_ext = PFN_vkDestroyDebugUtilsMessengerEXT(vkGetInstanceProcAddr(m_instance, "vkDestroyDebugUtilsMessengerEXT"));
 
-        if (vk_create_debug_utils_messenger_ext == nullptr || vk_destroy_debug_utils_messenger_ext == nullptr) {
-            assert(false);
-        }
+        if (vk_create_debug_utils_messenger_ext == nullptr || vk_destroy_debug_utils_messenger_ext == nullptr) { assert(false); }
 
         VkDebugUtilsMessengerCreateInfoEXT debug_utils_messenger_create_info{};
         PopulateDebugMessengerCreateInfo(debug_utils_messenger_create_info);
 
         assert(vk_create_debug_utils_messenger_ext(m_instance, &debug_utils_messenger_create_info, nullptr, &debug_utils_messenger) == VK_SUCCESS);
     }
+
     void VulkanDevice::SetupDebugProcs() {
         vk_cmd_begin_debug_utils_label_ext  = reinterpret_cast<PFN_vkCmdBeginDebugUtilsLabelEXT>(vkGetInstanceProcAddr(m_instance, "vkCmdBeginDebugUtilsLabelEXT"));
         vk_cmd_end_debug_utils_label_ext    = reinterpret_cast<PFN_vkCmdEndDebugUtilsLabelEXT>(vkGetInstanceProcAddr(m_instance, "vkCmdEndDebugUtilsLabelEXT"));
@@ -563,65 +490,71 @@ namespace Moer::Render {
         vk_get_descriptor_set_layout_size_ext           = reinterpret_cast<PFN_vkGetDescriptorSetLayoutSizeEXT>(vkGetDeviceProcAddr(m_device, "vkGetDescriptorSetLayoutSizeEXT"));
     }
 
-    VulkanDescriptorHeap& VulkanDevice::GetGlobalDescriptorHeap() {
-        return m_global_descriptor_heap;
-    }
+    VulkanDescriptorHeap& VulkanDevice::GetGlobalDescriptorHeap() { return m_global_descriptor_heap; }
 
     // Merge Shader Reflection Info with Cpp End Definitions, thus we can get binding relations between shader and cpp.
     static void MergeReflectInfo(
-        const VulkanDevice&                                                   _device,
-        const SingleShaderInfo&                                               _info,                    // target shader compiled result
-        const PipelineShaderInfo&                                             _shader_info,             // all shader compiled result in this pso
-        VkShaderStageFlagBits                                                 _stage,                   // target shader stage
-        UnorderedMap<uint64, uint>&                                           _out_hash_2_idx,          // hash to index
-        Moer::Array<uint64>&                                                  _out_reflect_flags,       // cpp param name hash to shader binding index
-        UnorderedMap<uint, UnorderedMap<uint, VkDescriptorSetLayoutBinding>>& _out_descriptor_bindings, // set to binding to binding info, actual vk pipeline layout
-        VkPushConstantRange&                                                  _out_push_constant_ranges,// push constant range
-        int&                                                                  _out_constant_idx,        // push constant index in cpp param
-        uint&                                                                 _max_set                  // max set index, calculate descriptor set count
-    ) {
-
+        const VulkanDevice&     _device,
+        const SingleShaderInfo& _info,
+        // target shader compiled result
+        const PipelineShaderInfo& _shader_info,
+        // all shader compiled result in this pso
+        VkShaderStageFlagBits _stage,
+        // target shader stage
+        UnorderedMap<uint64, uint>& _out_hash_2_idx,
+        // hash to index
+        Moer::Array<uint64>& _out_reflect_flags,
+        // cpp param name hash to shader binding index
+        UnorderedMap<uint, UnorderedMap<uint, VkDescriptorSetLayoutBinding>>& _out_descriptor_bindings,
+        // set to binding to binding info, actual vk pipeline layout
+        VkPushConstantRange& _out_push_constant_ranges,
+        // push constant range
+        int& _out_constant_idx,
+        uint64& _out_valid_bits,
+        // push constant index in cpp param
+        uint& _max_set// max set index, calculate descriptor set count
+        ) {
         for (const auto& hash : _shader_info.layout_hash) {
             uint idx                       = uint(&hash - _shader_info.layout_hash.data());
             _out_hash_2_idx[GetHash(hash)] = idx;
             EShaderArgType arg_type        = _shader_info.arg_types[idx];
 
-            const auto binding_iter = _info.shader_param_map.GetShaderParameterInfoMap().find(hash.data());
-            bool       b_found      = binding_iter != _info.shader_param_map.GetShaderParameterInfoMap().end();
-            if (arg_type != SDA_BindlessArray && !b_found) {
-                continue;
-            }
-            const ParameterInfo& binding_info = binding_iter->second;
+            const UnorderedMap<std::string, ReflectParamInfo>& reflect_map  = _info.shader_param_map.reflect_map;
+            const auto                                         binding_iter = reflect_map.find(hash.data());
+            bool                                               b_found      = binding_iter != reflect_map.end();
+            if (arg_type != SDA_BindlessArray && !b_found) { continue; }
             switch (arg_type) {
                 case SDA_BindlessArray: {
-                    std::string bindless_buffer_name      = std::string(hash) + "_bindless_buffer";
-                    auto        bindless_buffer_iter      = _info.shader_param_map.GetShaderParameterInfoMap().find(bindless_buffer_name);
-                    bool        b_found_bindless_buffer   = bindless_buffer_iter != _info.shader_param_map.GetShaderParameterInfoMap().end();
-                    std::string bindless_texture_name     = std::string(hash) + "_bindless_texture";
-                    auto        bindless_texture_iter     = _info.shader_param_map.GetShaderParameterInfoMap().find(bindless_texture_name);
-                    bool        b_found_bindless_texture  = bindless_texture_iter != _info.shader_param_map.GetShaderParameterInfoMap().end();
-                    std::string bindless_indirect_name    = std::string(hash) + "_bindless_indirect";
-                    auto        bindless_indirect_iter    = _info.shader_param_map.GetShaderParameterInfoMap().find(bindless_indirect_name);
-                    bool        b_found_bindless_indirect = bindless_indirect_iter != _info.shader_param_map.GetShaderParameterInfoMap().end();
-                    uint        texture_set               = 0;
-                    uint        buffer_set                = 0;
+                    auto bdls_iter = reflect_map.find(ReflectParamInfo::bdls_name.data());
+                    if (bdls_iter == reflect_map.end()) {
+                        // no bindless array found, skip
+                        break;
+                    }
+                    _out_valid_bits |= 1 << idx;
+                    const ReflectParamInfo&                binding_info              = bdls_iter->second;
+                    const ReflectParamInfo::BindlessArray& bdls_array                = binding_info.spirv.bindless;
+                    bool                                   b_found_bindless_buffer   = bdls_array.buffer.has_value();
+                    bool                                   b_found_bindless_texture  = bdls_array.image.has_value();
+                    bool                                   b_found_bindless_indirect = bdls_array.array.has_value();
+                    uint                                   texture_set               = 0;
+                    uint                                   buffer_set                = 0;
                     if (b_found_bindless_indirect) {
-                        const ParameterInfo& indirect_binding_info = bindless_indirect_iter->second;
+                        const ReflectParamInfo::Bindless& indirect_binding_info = bdls_array.array.value();
 
-                        auto&                 set           = _out_descriptor_bindings[indirect_binding_info.space];
+                        auto&                 set           = _out_descriptor_bindings[indirect_binding_info.set];
                         static constexpr uint indirect_slot = 0;
                         static constexpr uint sampler_slot  = 0;
                         static constexpr uint texture_slot  = 1;
                         static constexpr uint buffer_slot   = 1;
-                        assert(indirect_binding_info.slot == 0 && "Indirect Binding Slot Must be 0.");
+                        assert(indirect_binding_info.binding == 0 && "Indirect Binding Slot Must be 0.");
                         auto& vk_binding           = set[indirect_slot];
                         vk_binding.binding         = indirect_slot;
                         vk_binding.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
                         vk_binding.descriptorCount = 1;
                         vk_binding.stageFlags |= _stage;
                         vk_binding.pImmutableSamplers = nullptr;
-                        _max_set                      = uint(std::max(int(_max_set), int(indirect_binding_info.space)));
-                        buffer_set                    = indirect_binding_info.space;
+                        _max_set                      = uint(std::max(int(_max_set), int(indirect_binding_info.set)));
+                        buffer_set                    = indirect_binding_info.set;
                         if (b_found_bindless_buffer) {
                             auto& temp_binding           = set[buffer_slot];
                             temp_binding.binding         = buffer_slot;
@@ -632,21 +565,21 @@ namespace Moer::Render {
                         }
 
                         if (b_found_bindless_texture) {
-                            auto& temp_binding           = set[texture_slot];
+                            auto& texture_set            = _out_descriptor_bindings[bdls_array.image.value().set];
+                            auto& temp_binding           = texture_set[texture_slot];
                             temp_binding.binding         = texture_slot;
                             temp_binding.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                             temp_binding.descriptorCount = 10000;
                             temp_binding.stageFlags |= _stage;
                             temp_binding.pImmutableSamplers = nullptr;
 
-                            auto& temp_sampler_binding           = set[sampler_slot];
+                            auto& temp_sampler_binding           = texture_set[sampler_slot];
                             temp_sampler_binding.binding         = sampler_slot;
                             temp_sampler_binding.descriptorType  = VK_DESCRIPTOR_TYPE_SAMPLER;
                             temp_sampler_binding.descriptorCount = _device.ImmutableSamplerCount();
                             temp_sampler_binding.stageFlags |= _stage;
                             temp_sampler_binding.pImmutableSamplers = _device.GetImmutableSamplers();
-                            texture_set                             = bindless_texture_iter->second.space;
-                            _max_set                                = uint(std::max(int(_max_set), int(texture_set)));
+                            _max_set                                = uint(std::max(int(_max_set), int(bdls_array.image.value().set)));
                         }
 
                         _out_reflect_flags[idx] = EncodeBindlessInfo(texture_set, buffer_set, _stage, b_found_bindless_texture, b_found_bindless_buffer);
@@ -655,32 +588,34 @@ namespace Moer::Render {
                     break;
                 }
                 case SDA_Constant: {
-                    auto [b_push_constant, size] = DecodeConstant(binding_info.type_flags);
-                    assert(b_push_constant && "Shader Constant Param must be Declared Constant In Shader Param in cpp end.");
-                    _out_constant_idx              = idx;
-                    _out_push_constant_ranges.size = std::max(_out_push_constant_ranges.size, size);
+                    _out_valid_bits |= 1 << idx;
+                    const ReflectParamInfo&           binding_info = binding_iter->second;
+                    const ReflectParamInfo::Constant& constant     = std::get<ReflectParamInfo::Constant>(binding_info.spirv.resources.data);
+                    _out_constant_idx                              = idx;
+                    _out_push_constant_ranges.size                 = std::max(_out_push_constant_ranges.size, constant.size);
                     _out_push_constant_ranges.stageFlags |= _stage;
-                    _out_reflect_flags[idx] = EncodeReflectInfo(0, size, _out_push_constant_ranges.stageFlags);
+                    _out_reflect_flags[idx] = EncodeReflectInfo(0, constant.size, _out_push_constant_ranges.stageFlags);
                     break;
                 }
                 case SDA_Buffer:
                 case SDA_Texture:
                 case SDA_Sampler: {
-                    auto [resource_type, spv_desc_type] = DecodeReflectType(binding_info.type_flags);
+                    _out_valid_bits |= 1 << idx;
+                    const ReflectParamInfo&           binding_info = binding_iter->second;
+                    const ReflectParamInfo::Resource& resource     = std::get<ReflectParamInfo::Resource>(binding_info.spirv.resources.data);
 
                     // auto  rel_desc_type        = std::get<SpvReflectDescriptorType>(desc_type);
                     // auto  rel_res_type         = std::get<SpvReflectResourceType>(resource_type);
-                    auto  desc_type            = METoVkDescriptorType(spv_desc_type, resource_type);
-                    auto& set                  = _out_descriptor_bindings[binding_info.space];
-                    auto& vk_binding           = set[binding_info.slot];
-                    vk_binding.binding         = binding_info.slot;
+                    auto  desc_type            = METoVkDescriptorType(SpvReflectDescriptorType(resource.desc_type), SpvReflectResourceType(resource.resource_type));
+                    auto& set                  = _out_descriptor_bindings[resource.set];
+                    auto& vk_binding           = set[resource.binding];
+                    vk_binding.binding         = resource.binding;
                     vk_binding.descriptorType  = desc_type;
                     vk_binding.descriptorCount = 1;
                     vk_binding.stageFlags |= _stage;
                     vk_binding.pImmutableSamplers = nullptr;
-                    _out_reflect_flags[idx]       = EncodeReflectInfo(binding_info.space, binding_info.slot, vk_binding.stageFlags);
-                    _max_set                      = uint(std::max(int(_max_set), int(binding_info.space)));
-
+                    _out_reflect_flags[idx]       = EncodeReflectInfo(resource.set, resource.binding, vk_binding.stageFlags);
+                    _max_set                      = uint(std::max(int(_max_set), int(resource.set)));
                     break;
                 }
                 default:
@@ -696,9 +631,7 @@ namespace Moer::Render {
 
         Moer::Array<VkFormat> color_attachment_formats(attachment_count);
 
-        for (int i = 0; i < attachment_count; ++i) {
-            color_attachment_formats[i] = VkFormat(_create_info.color_attachments_info[i].pixel_format);
-        }
+        for (int i = 0; i < attachment_count; ++i) { color_attachment_formats[i] = VkFormat(_create_info.color_attachments_info[i].pixel_format); }
         VkPipelineRenderingCreateInfo rendering_create_info{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
         rendering_create_info.pNext                   = nullptr;
         rendering_create_info.viewMask                = 0;
@@ -710,10 +643,10 @@ namespace Moer::Render {
         auto to_vk_blend_attachment = [](const RHIBlendAttachmentInfo& _info) {
             VkPipelineColorBlendAttachmentState state{};
             state.blendEnable =
-                (_info.color_blend_op != BO_ADD || _info.color_dst_blend_factor != BF_ZERO || _info.color_src_blend_factor != BF_ONE ||
-                 _info.alpha_blend_op != BO_ADD || _info.alpha_dst_blend_factor != BF_ZERO || _info.alpha_src_blend_factor != BF_ONE) ?
-                    VK_TRUE :
-                    VK_FALSE;
+            (_info.color_blend_op != BO_ADD || _info.color_dst_blend_factor != BF_ZERO || _info.color_src_blend_factor != BF_ONE ||
+             _info.alpha_blend_op != BO_ADD || _info.alpha_dst_blend_factor != BF_ZERO || _info.alpha_src_blend_factor != BF_ONE) ?
+                VK_TRUE :
+                VK_FALSE;
             state.srcColorBlendFactor = VulkanEnumTranslator::METoVKBlendFactor(_info.color_src_blend_factor);
             state.dstColorBlendFactor = VulkanEnumTranslator::METoVKBlendFactor(_info.color_dst_blend_factor);
             state.colorBlendOp        = VulkanEnumTranslator::METoVKBlendOp(_info.color_blend_op);
@@ -727,9 +660,7 @@ namespace Moer::Render {
             return std::move(state);
         };
         Moer::Array<VkPipelineColorBlendAttachmentState> color_blend_attachments(attachment_count);
-        for (int i = 0; i < attachment_count; ++i) {
-            color_blend_attachments[i] = to_vk_blend_attachment(_create_info.color_attachments_info[i].blend_state_info);
-        }
+        for (int i = 0; i < attachment_count; ++i) { color_blend_attachments[i] = to_vk_blend_attachment(_create_info.color_attachments_info[i].blend_state_info); }
         // color blend state
         VkPipelineColorBlendStateCreateInfo color_blend_state{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
 
@@ -761,6 +692,7 @@ namespace Moer::Render {
         uint                max_set = 0;
 
         Array<uint64>              reflect_flags(_shader_info.layout_hash.size(), 0u);
+        uint64                     valid_bits = 0;
         UnorderedMap<uint64, uint> hash_2_idx;
         int                        constant_idx = -1;
 
@@ -774,42 +706,43 @@ namespace Moer::Render {
                              descriptor_bindings,
                              push_constant_ranges,
                              constant_idx,
+                             valid_bits,
                              max_set);
         };
 
         // shader stage
         std::visit([&](auto&& _shader_info_group) {
-            using T = std::decay_t<decltype(_shader_info_group)>;
-            if constexpr (std::is_same_v<T, ShaderVsPs>) {
-                shader_stages.reserve(2);
-                emplace_shader(_shader_info_group.vs, VK_SHADER_STAGE_VERTEX_BIT);
-                emplace_shader(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
-                merge_reflect_info(_shader_info_group.vs, VK_SHADER_STAGE_VERTEX_BIT);
-                merge_reflect_info(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
-            } else if constexpr (std::is_same_v<T, ShaderVsGsPs>) {
-                shader_stages.reserve(3);
-                emplace_shader(_shader_info_group.vs, VK_SHADER_STAGE_VERTEX_BIT);
-                emplace_shader(_shader_info_group.gs, VK_SHADER_STAGE_GEOMETRY_BIT);
-                emplace_shader(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
-                merge_reflect_info(_shader_info_group.vs, VK_SHADER_STAGE_VERTEX_BIT);
-                merge_reflect_info(_shader_info_group.gs, VK_SHADER_STAGE_GEOMETRY_BIT);
-                merge_reflect_info(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
-            } else if constexpr (std::is_same_v<T, ShaderMsPs>) {
-                shader_stages.reserve(2);
-                emplace_shader(_shader_info_group.ms, VK_SHADER_STAGE_MESH_BIT_NV);
-                emplace_shader(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
-                merge_reflect_info(_shader_info_group.ms, VK_SHADER_STAGE_MESH_BIT_NV);
-                merge_reflect_info(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
-            } else if constexpr (std::is_same_v<T, ShaderTsMsPs>) {
-                shader_stages.reserve(3);
-                emplace_shader(_shader_info_group.ts, VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT);
-                emplace_shader(_shader_info_group.ms, VK_SHADER_STAGE_MESH_BIT_NV);
-                emplace_shader(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
-                merge_reflect_info(_shader_info_group.ts, VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT);
-                merge_reflect_info(_shader_info_group.ms, VK_SHADER_STAGE_MESH_BIT_NV);
-                merge_reflect_info(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
-            }
-        },
+                       using T = std::decay_t<decltype(_shader_info_group)>;
+                       if constexpr (std::is_same_v<T, ShaderVsPs>) {
+                           shader_stages.reserve(2);
+                           emplace_shader(_shader_info_group.vs, VK_SHADER_STAGE_VERTEX_BIT);
+                           emplace_shader(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
+                           merge_reflect_info(_shader_info_group.vs, VK_SHADER_STAGE_VERTEX_BIT);
+                           merge_reflect_info(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
+                       } else if constexpr (std::is_same_v<T, ShaderVsGsPs>) {
+                           shader_stages.reserve(3);
+                           emplace_shader(_shader_info_group.vs, VK_SHADER_STAGE_VERTEX_BIT);
+                           emplace_shader(_shader_info_group.gs, VK_SHADER_STAGE_GEOMETRY_BIT);
+                           emplace_shader(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
+                           merge_reflect_info(_shader_info_group.vs, VK_SHADER_STAGE_VERTEX_BIT);
+                           merge_reflect_info(_shader_info_group.gs, VK_SHADER_STAGE_GEOMETRY_BIT);
+                           merge_reflect_info(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
+                       } else if constexpr (std::is_same_v<T, ShaderMsPs>) {
+                           shader_stages.reserve(2);
+                           emplace_shader(_shader_info_group.ms, VK_SHADER_STAGE_MESH_BIT_NV);
+                           emplace_shader(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
+                           merge_reflect_info(_shader_info_group.ms, VK_SHADER_STAGE_MESH_BIT_NV);
+                           merge_reflect_info(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
+                       } else if constexpr (std::is_same_v<T, ShaderTsMsPs>) {
+                           shader_stages.reserve(3);
+                           emplace_shader(_shader_info_group.ts, VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT);
+                           emplace_shader(_shader_info_group.ms, VK_SHADER_STAGE_MESH_BIT_NV);
+                           emplace_shader(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
+                           merge_reflect_info(_shader_info_group.ts, VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT);
+                           merge_reflect_info(_shader_info_group.ms, VK_SHADER_STAGE_MESH_BIT_NV);
+                           merge_reflect_info(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
+                       }
+                   },
                    _shader_info.shader_group);
 
         VkPipelineVertexInputStateCreateInfo           vertex_input_state{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
@@ -821,9 +754,7 @@ namespace Moer::Render {
             binding_descs.reserve(_create_info.vertex_stream.bindings.size());
             auto attribute_cnt = [&]() {
                 uint cnt = 0;
-                for (const auto& binding : _create_info.vertex_stream.bindings) {
-                    cnt += binding.vertex_elements.size();
-                }
+                for (const auto& binding : _create_info.vertex_stream.bindings) { cnt += binding.vertex_elements.size(); }
                 return cnt;
             }();
             uint attrib_location = 0;
@@ -844,7 +775,7 @@ namespace Moer::Render {
                 binding_descs.emplace_back(
                     binding_offset,
                     binding_stride,
-                    VulkanEnumTranslator::METoVKVertexInputRate(binding.vertex_elements[0].input_rate));
+                    VulkanEnumTranslator::METoVKVertexInputRate(binding.input_rate));
                 ++binding_offset;
             }
             vertex_input_state.vertexBindingDescriptionCount   = uint(binding_descs.size());
@@ -935,9 +866,7 @@ namespace Moer::Render {
                 state.back.compareMask = info.stencil_readmask;
                 state.back.writeMask   = info.stencil_writemask;
                 state.back.reference   = 0;
-            } else {
-                state.front = state.back;
-            }
+            } else { state.front = state.back; }
             return std::move(state);
         };
         auto vk_depth_stencil_state = to_depth_stencil_state(_create_info.depth_stencil_info);
@@ -955,9 +884,7 @@ namespace Moer::Render {
         Moer::Array<TDescriptorSetLayoutBindingArray> desc_sets_array(max_set + 1u);
         for (const auto& [set_idx, desc_set] : descriptor_bindings) {
             TDescriptorSetLayoutBindingArray desc_set_layouts;
-            for (const auto& [binding_idx, binding] : desc_set) {
-                desc_set_layouts.push_back(binding);
-            }
+            for (const auto& [binding_idx, binding] : desc_set) { desc_set_layouts.push_back(binding); }
             desc_sets_array[set_idx] = std::move(desc_set_layouts);
         }
         vk_pso->InitDescriptorSetLayouts(desc_sets_array);
@@ -1001,10 +928,11 @@ namespace Moer::Render {
             m_device, VK_NULL_HANDLE, 1, &pipeline_create_info, nullptr, &vk_pso->m_pipeline));
 
         return PipelineHandle{
-            .handle            = VkPipelineHandle{reinterpret_cast<uint64>(vk_pso)},
-            .binding_infos     = std::move(reflect_flags),
+            .handle = VkPipelineHandle{reinterpret_cast<uint64>(vk_pso)},
+            .binding_infos = std::move(reflect_flags),
             .hash_2_info_index = std::move(hash_2_idx),
-            .constant_idx      = constant_idx};
+            .valid_bits = valid_bits,
+            .constant_idx = constant_idx};
     }
 
     PipelineHandle VulkanDevice::CreatePipeline(PipelineShaderInfo&& _shader_info) {
@@ -1023,7 +951,7 @@ namespace Moer::Render {
         Array<uint64>              reflect_flags(_shader_info.layout_hash.size(), 0u);
         UnorderedMap<uint64, uint> hash_2_idx;
         int                        constant_idx = -1;
-
+        uint64 valid_bits = 0;
         auto merge_reflect_info = [&](const SingleShaderInfo& _info, VkShaderStageFlagBits _stage) {
             MergeReflectInfo(*this,
                              _info,
@@ -1034,26 +962,21 @@ namespace Moer::Render {
                              descriptor_bindings,
                              push_constant_ranges,
                              constant_idx,
+                             valid_bits,
                              max_set);
         };
 
         std::visit([&](auto&& _shader_info_group) {
-            using T = std::decay_t<decltype(_shader_info_group)>;
-            if constexpr (std::is_same_v<T, ShaderCs>) {
-                merge_reflect_info(_shader_info_group.cs, VK_SHADER_STAGE_COMPUTE_BIT);
-            } else {
-                LOG_ERROR("Unsupported shader group type: {}", typeid(T).name());
-            }
-        },
+                       using T = std::decay_t<decltype(_shader_info_group)>;
+                       if constexpr (std::is_same_v<T, ShaderCs>) { merge_reflect_info(_shader_info_group.cs, VK_SHADER_STAGE_COMPUTE_BIT); } else { LOG_ERROR("Unsupported shader group type: {}", typeid(T).name()); }
+                   },
                    _shader_info.shader_group);
 
         // init descriptor set layouts and pipeline resource cache
         Moer::Array<TDescriptorSetLayoutBindingArray> desc_sets_array(max_set + 1u);
         for (const auto& [set_idx, desc_set] : descriptor_bindings) {
             TDescriptorSetLayoutBindingArray desc_set_layouts;
-            for (const auto& [binding_idx, binding] : desc_set) {
-                desc_set_layouts.push_back(binding);
-            }
+            for (const auto& [binding_idx, binding] : desc_set) { desc_set_layouts.push_back(binding); }
             desc_sets_array[set_idx] = std::move(desc_set_layouts);
         }
         vk_pso->InitDescriptorSetLayouts(desc_sets_array);
@@ -1083,15 +1006,14 @@ namespace Moer::Render {
         VK_CHECK_RESULT(
             vkCreateComputePipelines(m_device, VK_NULL_HANDLE, 1, &pipeline_create_info, nullptr, &vk_pso->m_pipeline));
         return PipelineHandle{
-            .handle            = VkPipelineHandle{reinterpret_cast<uint64>(vk_pso)},
-            .binding_infos     = std::move(reflect_flags),
+            .handle = VkPipelineHandle{reinterpret_cast<uint64>(vk_pso)},
+            .binding_infos = std::move(reflect_flags),
             .hash_2_info_index = std::move(hash_2_idx),
-            .constant_idx      = constant_idx};
+            .valid_bits = valid_bits,
+            .constant_idx = constant_idx};
     }
 
-    CommandQueue& VulkanDevice::GetCommandQueue(EQueueType _type) {
-        return *gfx_queue;
-    }
+    CommandQueue& VulkanDevice::GetCommandQueue(EQueueType _type) { return *gfx_queue; }
 
     TextureRef VulkanDevice::CreateTexture(Extent3D _size, EPixelFormat _format, ETextureUsageFlags _usage, uint32_t _mip_cnt, uint32_t _array_size) {
         TextureInfo info{
@@ -1116,24 +1038,20 @@ namespace Moer::Render {
         return BufferRef{MoerNew(VulkanBuffer)(info, *this)};
     }
 
-    FenceRef VulkanDevice::CreateFence() {
-        return FenceRef{MoerNew(VulkanFence)(*this)};
+    BindlessArrayRef VulkanDevice::CreateBindlessArray(uint _max_size) {
+        return MoerNew(VulkanBindlessArray)(this, _max_size);
     }
 
-    SwapchainRef VulkanDevice::CreateSwapchain(const SwapchainCreateInfo& _info) {
-        return SwapchainRef{MoerNew(VkSwapchain)(*this, _info)};
-    }
+    FenceRef VulkanDevice::CreateFence() { return FenceRef{MoerNew(VulkanFence)(*this)}; }
 
-    void VulkanDevice::EnqueueDeferredRelease(RHIResource* _object) {
-        deferred_release_queue.Push(_object);
-    }
+    SwapchainRef VulkanDevice::CreateSwapchain(const SwapchainCreateInfo& _info) { return SwapchainRef{MoerNew(VkSwapchain)(*this, _info)}; }
+
+    void VulkanDevice::EnqueueDeferredRelease(RHIResource* _object) { deferred_release_queue.Push(_object); }
 
     void VulkanDevice::FlushDeferredReleases() {
         Array<RHIResource*> objects;
         deferred_release_queue.PopAll(objects);
-        for (auto* object : objects) {
-            MoerDelete(object);
-        }
+        for (auto* object : objects) { MoerDelete(object); }
     }
 
     const VkSampler VulkanDevice::GetSampler(Sampler _sampler) const {
@@ -1144,6 +1062,7 @@ namespace Moer::Render {
         uint idx = (uint(SF_Num) * uint(SAM_Num)) * compare + (uint(SF_Num)) * address + filter;
         return immutable_samplers[idx];
     }
+
     // RHIViewportRef VulkanDevice::CreateViewport(const RHIViewportInitializer& _init) {
     //     VulkanSwapChain* swapchain = MoerNew(VulkanSwapChain)();
     //     uint32_t         width, height;

@@ -37,6 +37,7 @@ if(${MSVC})
     add_compile_options("/Zc:preprocessor")
     add_compile_options("/wd5105")
     add_compile_options("/wd5104")
+    add_compile_options("/FS")
 endif()
 
 add_subdirectory("3rdParty")

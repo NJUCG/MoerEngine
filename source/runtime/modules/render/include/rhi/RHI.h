@@ -292,6 +292,7 @@ namespace Moer::Render {
 
         RENDER_API DepthBufferRef CreateDepthBuffer(Extent2D _size, EPixelFormat _format, uint32_t _array_size = 1);
 
+        RENDER_API BindlessArrayRef CreateBindlessArray(uint _max_size = 11451);
         // BackBufferInfo GetNextBackBufferInfo(RHIViewport* _viewport);
 
         // TextureView GetBackBuffer(RHIViewport* _viewport, uint32_t _index);

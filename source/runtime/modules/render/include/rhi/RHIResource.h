@@ -29,7 +29,8 @@
 #include <type_traits>
 #include <variant>
 template<typename TStructuredParam>
-concept concept_is_shader_struct = requires(TStructuredParam t) {
+concept concept_is_shader_struct = requires(TStructuredParam t)
+{
     std::is_same<typename TStructuredParam::TypeInfo::TParamPtr, TStructuredParam>();
     t.GetStructMetadata();
 };
@@ -159,18 +160,22 @@ class RHITextureBarrierInfo;
 struct VertexAttrb {
     EPixelFormat format;
 };
+
 struct VertexBinding {
     EVertexInputRate input_rate = EVertexInputRate::VIR_VERTEX;
 
     Moer::Array<VertexAttrb> vertex_elements;
 
     VertexBinding() = default;
+
     template<class... _Valty>
         requires(std::is_same_v<std::remove_cvref_t<_Valty>, VertexAttrb> && ...)
     VertexBinding(_Valty&&... _Val) : vertex_elements({std::forward<_Valty>(_Val)...}) {}
 };
+
 struct VertexElement {
     VertexElement() = default;
+
     VertexElement(
         uint8_t          _binding_index,
         uint8_t          _offset,
@@ -185,9 +190,7 @@ struct VertexElement {
           stride(_stride),
           input_rate(_input_rate) {}
 
-    bool operator==(const VertexElement& other) const {
-        return binding_index == other.binding_index && offset == other.offset && format == other.format && attribute_index == other.attribute_index && stride == other.stride && input_rate == other.input_rate;
-    }
+    bool                         operator==(const VertexElement& other) const { return binding_index == other.binding_index && offset == other.offset && format == other.format && attribute_index == other.attribute_index && stride == other.stride && input_rate == other.input_rate; }
     uint8_t                      binding_index;
     uint8_t                      offset;
     EnumInByte<EPixelFormat>     format;
@@ -196,6 +199,7 @@ struct VertexElement {
     EnumInByte<EVertexInputRate> input_rate;
     uint8_t                      reserve_byte;
 };
+
 static_assert(sizeof(VertexElement) == 8, "VertexElement doesn't match cache line size");
 
 typedef Moer::StaticArray<VertexElement, MAX_VERTEX_ELEMENT_COUNT> VertexInputStateInitializerList;
@@ -212,10 +216,9 @@ struct RHIVertexInputInfo {
 
     RHIVertexInputInfo() = default;
 
-    bool operator==(const RHIVertexInputInfo& other) const {
-        return vertex_elements == other.vertex_elements;
-    }
+    bool operator==(const RHIVertexInputInfo& other) const { return vertex_elements == other.vertex_elements; }
 };
+
 struct RHIVertexInputFactory {
     static RHIVertexInputInfo Build();
 };
@@ -225,7 +228,7 @@ struct RHIVertexInputFactory {
 class RENDER_API RHIResource {
 public:
     explicit RHIResource(ERHIResourceType _type = ERHIResourceType::RRT_NONE) : type(_type) {}
-    virtual ~RHIResource() = default;
+    virtual  ~RHIResource() = default;
 
 public:
     uint32_t AddRef() {
@@ -238,23 +241,21 @@ public:
     uint32_t DeRef() {
         int32_t ref_count = flags.DeRef(std::memory_order_release);
         assert(ref_count >= 0);
-        if (ref_count == 0) {
-            Destroy();
-        }
+        if (ref_count == 0) { Destroy(); }
         return (uint32_t)ref_count;
     };
     //only for look-up purposes, don't care about sequences
     uint32_t GetRefCount() const { return (uint32_t)flags.GetRefCount(std::memory_order_relaxed); }
 
     bool IsValid() const { return flags.IsValid(std::memory_order_relaxed); }
+
     void Delete() {
         if (flags.MarkToDelete(std::memory_order_acquire)) {
             // delete this;
         }
     }
-    ERHIResourceType GetResourceType() const {
-        return type;
-    }
+
+    ERHIResourceType GetResourceType() const { return type; }
 
 protected:
     virtual void Destroy();
@@ -275,6 +276,7 @@ private:
             assert(num_ref < s_mark_for_delete_mask);
             return num_ref;
         }
+
         int32_t DeRef(std::memory_order memory_order) {
             uint32_t current_packed = packed.fetch_sub(1, memory_order);
             assert((current_packed & s_is_deleting_mask) == 0 && "resource is deleting");
@@ -282,6 +284,7 @@ private:
             assert(num_ref >= 0);
             return num_ref;
         }
+
         bool MarkToDelete(std::memory_order memory_order) {
             uint32_t current_packed = packed.fetch_or(s_mark_for_delete_mask, memory_order);
             assert((current_packed & s_is_deleting_mask) == 0 && "resource is deleting");
@@ -295,30 +298,27 @@ private:
             assert(current_mark_for_delete && "resource is not marked for deleting");
             return current_mark_for_delete;
         }
+
         bool IsDeleting() {
             /* make sure packed data processing sequence handled correctly - acquire-rel */
             uint32_t current_packed = packed.load(std::memory_order_acquire);
             assert((current_packed & s_mark_for_delete_mask) != 0 && "resource not marked for deleting");
             assert((current_packed & s_is_deleting_mask) != 0 && "resource is currently deleting");
             uint32_t num_ref = current_packed & s_ref_count_mask;
-            if (num_ref == 0) {
-                return true;
-            }
+            if (num_ref == 0) { return true; }
             UnMarkToDelete(std::memory_order_release);
             return false;
         }
+
         bool IsValid(std::memory_order memory_order) {
             uint32_t current_packed = packed.load(memory_order);
             return (current_packed & s_mark_for_delete_mask) == 0 && (current_packed & s_ref_count_mask) > 0;
         }
 
-        bool IsMarkedForDeleting(std::memory_order memory_order) {
-            return (packed.load(memory_order) & s_mark_for_delete_mask) != 0;
-        }
-        int32_t GetRefCount(std::memory_order memory_order) {
-            return packed.load(memory_order) & s_ref_count_mask;
-        }
+        bool    IsMarkedForDeleting(std::memory_order memory_order) { return (packed.load(memory_order) & s_mark_for_delete_mask) != 0; }
+        int32_t GetRefCount(std::memory_order memory_order) { return packed.load(memory_order) & s_ref_count_mask; }
     };
+
     ERHIResourceType type;
     //for const resource state change
     mutable ResourceAtomicFlags flags;
@@ -334,9 +334,7 @@ class RHIShader : public RHIResource {
 public:
     RHIShader() = delete;
     RHIShader(ERHIResourceType _type, EShaderType _shader_type, const Shader* _meta_shader) : RHIResource(_type), shader_type(_shader_type), meta_shader(_meta_shader) {}
-    FORCEINLINE EShaderType GetShaderType() const {
-        return shader_type;
-    }
+    FORCEINLINE EShaderType GetShaderType() const { return shader_type; }
 
     void          SetHash(const Hash64City& _hash) { hash = _hash; }
     Hash64City    GetHash() const { return hash; }
@@ -378,6 +376,7 @@ class RHIMeshShader : public RHIGraphicsShader {
 public:
     RHIMeshShader(const Shader* _meta_shader) : RHIGraphicsShader(RRT_MESH_SHADER, ST_MESH, _meta_shader) {}
 };
+
 class RHIAmplificationShader : public RHIGraphicsShader {
 public:
     RHIAmplificationShader(const Shader* _meta_shader) : RHIGraphicsShader(RRT_AMPLIFICATION_SHADER, ST_AMPLIFICATION, _meta_shader) {}
@@ -392,10 +391,12 @@ class RHIRayGenShader : public RHIRayTracingShader {
 public:
     RHIRayGenShader(const Shader* _meta_shader) : RHIRayTracingShader(ST_RAY_GEN, _meta_shader) {}
 };
+
 class RHIRayClosestHitShader : public RHIRayTracingShader {
 public:
     RHIRayClosestHitShader(const Shader* _meta_shader) : RHIRayTracingShader(ST_RAY_CLOSESTHIT, _meta_shader) {}
 };
+
 class RHIRayMissShader : public RHIRayTracingShader {
 public:
     RHIRayMissShader(const Shader* _meta_shader) : RHIRayTracingShader(ST_RAY_MISS, _meta_shader) {}
@@ -464,7 +465,8 @@ struct RHIResourceParameterLayout {
 };
 
 template<typename RootParameter>
-concept concept_is_root_parameter_struct = requires(RootParameter t) {
+concept concept_is_root_parameter_struct = requires(RootParameter t)
+{
     RootParameter::TypeInfo::GetStructMetadata();
     t.GetMembers();
 };
@@ -482,8 +484,9 @@ struct RHIShaderConstantParameter {
     uint16_t    slot;
     uint16_t    space;
 };
-struct RHIAttachmentBindingParameter {
-};
+
+struct RHIAttachmentBindingParameter {};
+
 struct RENDER_API RHIBatchedShaderParameters {
     //CBV SRV UAV SAMPLER
     // template<typename TShader, concept_is_root_parameter_struct TRootParameter>
@@ -499,25 +502,18 @@ struct RENDER_API RHIBatchedShaderParameters {
         size_t data_size = sizeof(TRootParameter);
         SetParameters(shader->GetMetaShader(), data_size, (uint8_t*)&params, _set_constant);
     }
+
     ~RHIBatchedShaderParameters();
 
     void SetParameters(RHIResource* resource, uint16_t slot, uint16_t space);
 
-    const uint8_t* GetConstData(uint32_t byte_offset) const {
-        return &raw_data[byte_offset];
-    }
+    const uint8_t* GetConstData(uint32_t byte_offset) const { return &raw_data[byte_offset]; }
 
-    const Moer::Array<RHIShaderResourceParameter>& GetResourceParameters() const {
-        return resource_parameters;
-    }
+    const Moer::Array<RHIShaderResourceParameter>& GetResourceParameters() const { return resource_parameters; }
 
-    const Moer::Array<RHIShaderConstantParameter>& GetConstantParameters() const {
-        return constant_parameters;
-    }
+    const Moer::Array<RHIShaderConstantParameter>& GetConstantParameters() const { return constant_parameters; }
 
-    const Moer::Array<uint8_t>& GetRawData() const {
-        return raw_data;
-    }
+    const Moer::Array<uint8_t>& GetRawData() const { return raw_data; }
 
 private:
     void SetParameters(const Shader* shader, size_t _data_size, uint8_t* data_source, bool _set_constants);
@@ -528,6 +524,7 @@ private:
     Moer::Array<uint8_t>                    raw_data;
     Moer::Array<RHIResource*>               resources_to_release;
 };
+
 //todo: may not inherit from RHIResource
 class RHIShaderRootParameterLayout : public RHIResource {
 public:
@@ -543,9 +540,7 @@ public:
 /* resources which is can be access by shaders via UAV/SRV, like buffer, texture, etc. */
 class RHIViewableResource : public RHIResource {
 public:
-    std::string GetName() const {
-        return name;
-    }
+    std::string GetName() const { return name; }
 
 protected:
     RHIViewableResource(ERHIResourceType _type) : RHIResource(_type) {}
@@ -558,6 +553,7 @@ struct RHIBufferInfo {
     EBufferUsageFlags usage;
 
     RHIBufferInfo() = default;
+
     RHIBufferInfo(uint64_t _size, uint32_t _stride, EBufferUsageFlags _usage)
         : size(_size),
           stride(_stride),
@@ -569,19 +565,19 @@ struct RHIBufferInfo {
             0,
             EBufferUsageFlags::NONE};
     }
-    bool IsNull() const {
-        return usage == EBufferUsageFlags::NONE && size == stride && size == 0;
-    }
+
+    bool IsNull() const { return usage == EBufferUsageFlags::NONE && size == stride && size == 0; }
 };
 
 struct RHIBufferCreateInfo : public RHIBufferInfo {
 
     RHIBufferCreateInfo() = default;
+
     RHIBufferCreateInfo(uint64_t _size, uint32_t _stride, EBufferUsageFlags _usage)
         : RHIBufferInfo(
-              _size,
-              _stride,
-              _usage) {}
+            _size,
+            _stride,
+            _usage) {}
 
     static RHIBufferCreateInfo Create(uint64_t _size = 0, uint32_t _stride = 1, EBufferUsageFlags _usage = EBufferUsageFlags::NONE) {
         return {
@@ -589,14 +585,17 @@ struct RHIBufferCreateInfo : public RHIBufferInfo {
             _stride,
             _usage};
     }
+
     RHIBufferCreateInfo& SetByteSize(uint64_t _size) {
         size = _size;
         return *this;
     }
+
     RHIBufferCreateInfo& SetStride(uint32_t _stride) {
         stride = _stride;
         return *this;
     }
+
     RHIBufferCreateInfo& SetUsage(EBufferUsageFlags _usage) {
         usage = _usage;
         return *this;
@@ -607,35 +606,42 @@ struct RHIBufferCreateInfo : public RHIBufferInfo {
 namespace Moer::Render {
 
     struct VertexElement {
-        EPixelFormat     format;
-        EVertexInputRate input_rate = VIR_VERTEX;
+        EPixelFormat format;
+
     };
+
     struct VertexBinding {
+        VertexBinding() = default;
+        VertexBinding(std::initializer_list<VertexElement> _elements, EVertexInputRate _vet) : vertex_elements(_elements), input_rate(_vet) {}
+        VertexBinding(VertexElement&& element, EVertexInputRate _vet) : vertex_elements({std::move(element)}), input_rate(_vet) {}
+        
         Moer::Array<VertexElement> vertex_elements;
+        EVertexInputRate           input_rate = VIR_VERTEX;
     };
+
     struct VertexStream {
         Moer::Array<VertexBinding> bindings;
-        void                       Emplace(VertexBinding&& _binding) {
-            bindings.emplace_back(std::move(_binding));
-        }
-        void Emplace(std::initializer_list<VertexElement> _elements) {
-            bindings.emplace_back(_elements);
-        }
+        void                       Emplace(VertexBinding&& _binding) { bindings.emplace_back(std::move(_binding)); }
+        void                       EmplacePerVertex(std::initializer_list<VertexElement> _elements) { bindings.emplace_back(_elements, VIR_VERTEX); }
+        void                       EmplacePerInstance(std::initializer_list<VertexElement> _elements) { bindings.emplace_back(_elements, VIR_INSTANCE); }
     };
+
     struct Sampler {
         Sampler(ESamplerFilter _filter, ESamplerAddressMode _address_mode, ESamplerCompareFunction _compare_function = ESamplerCompareFunction::SCF_NEVER) : filter(_filter), address_mode(_address_mode), compare_function(_compare_function) {}
         ESamplerFilter          filter;
         ESamplerAddressMode     address_mode;
         ESamplerCompareFunction compare_function;
     };
+
     class BufferView {
     public:
         BufferView() = default;
         BufferView(Buffer* _buffer);
+
         BufferView(Buffer* _buffer, uint64 _byte_offset, uint64 _num_elements, uint _stride) : buffer(_buffer),
                                                                                                byte_offset(_byte_offset),
                                                                                                num_elements(_num_elements),
-                                                                                               stride(_stride){};
+                                                                                               stride(_stride) {};
         uint          GetNumElements() const { return num_elements; }
         uint          GetStride() const { return stride; }
         uint64        GetByteOffset() const { return byte_offset; }
@@ -654,6 +660,7 @@ namespace Moer::Render {
         EBufferUsageFlags usage;
 
         BufferInfo() = default;
+
         BufferInfo(uint64_t _size, uint32_t _stride, EBufferUsageFlags _usage)
             : size(_size),
               stride(_stride),
@@ -665,10 +672,10 @@ namespace Moer::Render {
                 0,
                 EBufferUsageFlags::NONE};
         }
-        bool IsNull() const {
-            return usage == EBufferUsageFlags::NONE && size == stride && size == 0;
-        }
+
+        bool IsNull() const { return usage == EBufferUsageFlags::NONE && size == stride && size == 0; }
     };
+
     class Buffer : public RHIResource {
     public:
         /**
@@ -678,9 +685,7 @@ namespace Moer::Render {
 	 */
         Buffer(const BufferInfo& _info) : RHIResource(RRT_BUFFER), info(_info) {}
 
-        void SetName(const std::string& _name) {
-            name = _name;
-        }
+        void              SetName(const std::string& _name) { name = _name; }
         uint              GetNumElement() const { return info.size; }
         uint64            GetByteSize() const { return info.size * info.stride; }
         uint              GetStride() const { return info.stride; }
@@ -714,6 +719,7 @@ namespace Moer::Render {
         uint8          array_index;
         uint8          num_array;
     };
+
     struct TextureInfo {
         TextureInfo() = default;
 
@@ -766,23 +772,18 @@ namespace Moer::Render {
         ETextureAspectFlags aspect_flags = ETextureAspectFlags::COLOR;
 
         bool
-        operator==(const TextureInfo& _other) const {
-            return dimension == _other.dimension && usage == _other.usage && format == _other.format && uav_format == _other.uav_format && extent == _other.extent && depth == _other.depth && array_size == _other.array_size && num_mips == _other.num_mips && num_samples == _other.num_samples && clear_attachment == _other.clear_attachment;
-        }
+        operator==(const TextureInfo& _other) const { return dimension == _other.dimension && usage == _other.usage && format == _other.format && uav_format == _other.uav_format && extent == _other.extent && depth == _other.depth && array_size == _other.array_size && num_mips == _other.num_mips && num_samples == _other.num_samples && clear_attachment == _other.clear_attachment; }
 
-        bool operator!=(const TextureInfo& _other) const {
-            return !(*this == _other);
-        }
+        bool operator!=(const TextureInfo& _other) const { return !(*this == _other); }
 
         TextureInfo& operator=(const TextureInfo& _other) = default;
     };
+
     class Texture : public RHIResource {
     public:
         Texture(const TextureInfo& _info) : RHIResource(RRT_TEXTURE), info(_info) {}
 
-        void SetName(const std::string& _name) {
-            name = _name;
-        }
+        void                SetName(const std::string& _name) { name = _name; }
         uint32_t            GetNumMips() const { return info.num_mips; }
         uint32_t            GetNumArray() const { return info.array_size; }
         uint32_t            GetDepth() const { return info.depth; }
@@ -817,9 +818,7 @@ namespace Moer::Render {
         ETextureUsageFlags  GetUsage() const { return tex_handle->GetUsage(); }
         ETextureAspectFlags GetAspectFlags() const { return tex_handle->GetAspectFlags(); }
 
-        RENDER_API TextureView GetView() {
-            return tex_handle->GetView();
-        }
+        RENDER_API TextureView GetView() { return tex_handle->GetView(); }
 
     private:
         TextureRef tex_handle;
@@ -841,15 +840,16 @@ namespace Moer::Render {
             Buffer* buffer;
             uint    slot;
         };
+
         BindlessArray();
-        virtual ~BindlessArray() = default;
+        virtual        ~BindlessArray() = default;
         BindlessHandle AllocateTexture(Texture* _texture, Sampler _sampler);
         BindlessHandle AllocateBuffer(Buffer* _buffer);
 
         void FreeTexture(BindlessHandle _handle);
         void FreeBuffer(BindlessHandle _handle);
 
-    private:
+    protected:
         friend class CommandList;
         friend class UpdateBindlessArrayCmd;
 
@@ -868,7 +868,7 @@ namespace Moer::Render {
     };
 
     template<typename T>
-    class ParameterBlock : public RHIResource{
+    class ParameterBlock : public RHIResource {
         // ArrayArguments args;
     };
 
@@ -885,24 +885,19 @@ public:
     RHIBuffer(const RHIBufferInfo& _info) : RHIViewableResource(RRT_BUFFER), info(_info) {}
 
     const RHIBufferInfo& GetInfo() const { return info; }
-    void                 SetName(const std::string& _name) {
-        name = _name;
-    }
-    void SetLayout(EBufferRuntimeUsageFlags _layout) {
-        layout = _layout;
-    }
-    uint32_t          GetNumElement() const { return info.size / info.stride; }
-    uint64_t          GetByteSize() const { return info.size; }
-    uint32_t          GetStride() const { return info.stride; }
-    EBufferUsageFlags GetUsage() const { return info.usage; }
-    void              SetTrackedInfo(EBufferRuntimeUsageFlags _layout, EPassType _pass) {
+    void                 SetName(const std::string& _name) { name = _name; }
+    void                 SetLayout(EBufferRuntimeUsageFlags _layout) { layout = _layout; }
+    uint32_t             GetNumElement() const { return info.size / info.stride; }
+    uint64_t             GetByteSize() const { return info.size; }
+    uint32_t             GetStride() const { return info.stride; }
+    EBufferUsageFlags    GetUsage() const { return info.usage; }
+
+    void SetTrackedInfo(EBufferRuntimeUsageFlags _layout, EPassType _pass) {
         layout    = _layout;
         prev_pass = _pass;
     }
 
-    auto GetTrackedInfo() const {
-        return std::make_tuple(layout, prev_pass);
-    }
+    auto GetTrackedInfo() const { return std::make_tuple(layout, prev_pass); }
 
 protected:
     /**
@@ -989,13 +984,10 @@ struct RHITextureInfo {
         HashCombine(hash, GetHash(target.clear_attachment));
         return hash;
     }
-    bool operator==(const RHITextureInfo& other) const {
-        return dimension == other.dimension && usage == other.usage && format == other.format && preferred_layout == other.preferred_layout && uav_format == other.uav_format && extent == other.extent && depth == other.depth && array_size == other.array_size && num_mips == other.num_mips && num_samples == other.num_samples && clear_attachment == other.clear_attachment;
-    }
 
-    bool operator!=(const RHITextureInfo& other) const {
-        return !(*this == other);
-    }
+    bool operator==(const RHITextureInfo& other) const { return dimension == other.dimension && usage == other.usage && format == other.format && preferred_layout == other.preferred_layout && uav_format == other.uav_format && extent == other.extent && depth == other.depth && array_size == other.array_size && num_mips == other.num_mips && num_samples == other.num_samples && clear_attachment == other.clear_attachment; }
+
+    bool operator!=(const RHITextureInfo& other) const { return !(*this == other); }
 
     RHITextureInfo& operator=(const RHITextureInfo& other) = default;
 };
@@ -1007,8 +999,7 @@ struct RHITextureCreateInfo : public RHITextureInfo {
     // Constructor with minimal argument set. Name and dimension are always required.
     RHITextureCreateInfo(const char* _name, ETextureDimension _dimension)
         : RHITextureInfo(_dimension),
-          name(_name) {
-    }
+          name(_name) {}
 
     // Constructor for when you already have an FRHITextureDesc
     RHITextureCreateInfo(
@@ -1016,92 +1007,93 @@ struct RHITextureCreateInfo : public RHITextureInfo {
         const char*           _name)
         : RHITextureInfo(_info) {}
 
-    static RHITextureCreateInfo Create(const char* _name, ETextureDimension _dimension) {
-        return {_name, _dimension};
-    }
-    static RHITextureCreateInfo Create2D(const char* _name) {
-        return {_name, ETextureDimension::TEX_2D};
-    }
+    static RHITextureCreateInfo Create(const char* _name, ETextureDimension _dimension) { return {_name, _dimension}; }
+    static RHITextureCreateInfo Create2D(const char* _name) { return {_name, ETextureDimension::TEX_2D}; }
 
-    static RHITextureCreateInfo Create3D(const char* _name) {
-        return {_name, ETextureDimension::TEX_3D};
-    }
-    static RHITextureCreateInfo Create2DArray(const char* _name) {
-        return {_name, ETextureDimension::TEX_2D_ARRAY};
-    }
-    static RHITextureCreateInfo CreateCube(const char* _name) {
-        return {_name, ETextureDimension::TEX_CUBE};
-    }
-    static RHITextureCreateInfo CreateCubeArray(const char* _name) {
-        return {_name, ETextureDimension::TEX_CUBE_ARRAY};
-    }
-    static RHITextureCreateInfo Create2D(const char* _name, Moer::Vector2i _size, EPixelFormat _format) {
-        return Create2D(_name).SetExtent(_size).SetFormat(_format);
-    }
+    static RHITextureCreateInfo Create3D(const char* _name) { return {_name, ETextureDimension::TEX_3D}; }
+    static RHITextureCreateInfo Create2DArray(const char* _name) { return {_name, ETextureDimension::TEX_2D_ARRAY}; }
+    static RHITextureCreateInfo CreateCube(const char* _name) { return {_name, ETextureDimension::TEX_CUBE}; }
+    static RHITextureCreateInfo CreateCubeArray(const char* _name) { return {_name, ETextureDimension::TEX_CUBE_ARRAY}; }
+    static RHITextureCreateInfo Create2D(const char* _name, Moer::Vector2i _size, EPixelFormat _format) { return Create2D(_name).SetExtent(_size).SetFormat(_format); }
 
     RHITextureCreateInfo& SetUsageFlags(ETextureUsageFlags _usage) {
         usage = _usage;
         return *this;
     }
+
     RHITextureCreateInfo& AddUsageFlags(ETextureUsageFlags _usage) {
         usage |= _usage;
         return *this;
     }
+
     RHITextureCreateInfo& SetClearAttachment(RHIClearAttachment _attachment) {
         clear_attachment = _attachment;
         return *this;
     }
+
     RHITextureCreateInfo& SetExtent(const Moer::Vector2i _extent) {
         extent = _extent;
         return *this;
     }
+
     RHITextureCreateInfo& SetExtent(int32_t _x, int32_t _y) {
         extent = Moer::Vector2i(_x, _y);
         return *this;
     }
+
     RHITextureCreateInfo& SetExtent(uint32_t _extent) {
         extent = Moer::Vector2i(_extent);
         return *this;
     }
+
     RHITextureCreateInfo& SetDepth(uint16_t _depth) {
         depth = _depth;
         return *this;
     }
+
     RHITextureCreateInfo& SetArraySize(uint16_t _array_size) {
         array_size = _array_size;
         return *this;
     }
+
     RHITextureCreateInfo& SetNumMips(uint8_t _num_mips) {
         num_mips = _num_mips;
         return *this;
     }
+
     RHITextureCreateInfo& SetNumSamples(uint8_t _num_samples) {
         num_samples = _num_samples;
         return *this;
     }
+
     RHITextureCreateInfo& SetDimension(ETextureDimension _dimension) {
         dimension = _dimension;
         return *this;
     }
+
     RHITextureCreateInfo& SetPreferredLayout(ETextureLayout _texture_layout) {
         preferred_layout = _texture_layout;
         return *this;
     }
+
     RHITextureCreateInfo& SetFormat(EPixelFormat _format) {
         format = _format;
-        if (uav_format == PF_UNDEFINED)
-            SetUAVFormat(_format);
+        if (uav_format == PF_UNDEFINED) SetUAVFormat(_format);
         return *this;
     }
+
     RHITextureCreateInfo& SetUAVFormat(EPixelFormat _uav_format) {
         uav_format = _uav_format;
         return *this;
     }
+
     std::string name;
 };
+
 namespace Moer {
     class RenderGraphTexture;
 };
+
 class RHITexture : public RHIViewableResource {
 public:
     virtual const RHITextureInfo& GetInfo() const { return texture_info; }
@@ -1132,9 +1124,7 @@ public:
         return Moer::Vector3i(0, 0, 0);
     }
 
-    ETextureDimension GetDimension() const {
-        return GetInfo().dimension;
-    }
+    ETextureDimension GetDimension() const { return GetInfo().dimension; }
 
     Moer::Vector3i GetMipExtent(uint8_t _mip_index) const {
         const RHITextureInfo& info = GetInfo();
@@ -1142,43 +1132,28 @@ public:
                               std::max(info.extent.y >> _mip_index, 1),
                               std::max(info.depth >> _mip_index, 1));
     }
-    void SetName(const std::string& _name) {
-        name = _name;
-    }
 
-    bool IsMultiSampled() const {
-        return GetInfo().num_samples > 1;
-    }
+    void SetName(const std::string& _name) { name = _name; }
 
-    bool HasClearAttachment() const {
-        return GetInfo().clear_attachment.attachment != EClearAttachment::NONE;
-    }
+    bool IsMultiSampled() const { return GetInfo().num_samples > 1; }
 
-    uint32_t GetNumMips() const {
-        return GetInfo().num_mips;
-    }
-    EPixelFormat GetFormat() const {
-        return GetInfo().format;
-    }
-    uint32_t GetNumSamples() const {
-        return GetInfo().num_samples;
-    }
-    ETextureUsageFlags GetUsageFlags() const {
-        return GetInfo().usage;
-    }
-    EPixelFormat GetUAVFormat() const {
-        return GetInfo().uav_format;
-    }
-    void SetTrackInfo(const RHISubresourceRange& _range, ETextureStateFlags _usage, EPassType _pass_type);
+    bool HasClearAttachment() const { return GetInfo().clear_attachment.attachment != EClearAttachment::NONE; }
+
+    uint32_t           GetNumMips() const { return GetInfo().num_mips; }
+    EPixelFormat       GetFormat() const { return GetInfo().format; }
+    uint32_t           GetNumSamples() const { return GetInfo().num_samples; }
+    ETextureUsageFlags GetUsageFlags() const { return GetInfo().usage; }
+    EPixelFormat       GetUAVFormat() const { return GetInfo().uav_format; }
+    void               SetTrackInfo(const RHISubresourceRange& _range, ETextureStateFlags _usage, EPassType _pass_type);
 
     RHIClearAttachment GetClearAttachment() const { return GetInfo().clear_attachment; }
-    auto               GetTrackedUsage(Moer::uint _mip_index) const {
+
+    auto GetTrackedUsage(Moer::uint _mip_index) const {
         auto it = mip_usages.find(_mip_index);
-        if (it != mip_usages.end()) {
-            return it->second;
-        }
+        if (it != mip_usages.end()) { return it->second; }
         return std::make_tuple(TS_UNDEFINED, EPassType::Graphics);
     }
+
     Moer::UnorderedMap<Moer::uint, std::tuple<ETextureStateFlags, EPassType>> mip_usages;
 
 protected:
@@ -1189,8 +1164,9 @@ private:
     friend Moer::RenderGraphTexture;
     friend class VulkanPipelineResourceCache;
 
-    explicit RHITexture(ERHIResourceType _type) : RHIViewableResource(_type) {}
+    explicit       RHITexture(ERHIResourceType _type) : RHIViewableResource(_type) {}
     RHITextureInfo texture_info;
+
     struct RHISubresourceRangeHash {
         size_t operator()(const RHISubresourceRange& range) const {
             size_t hash = 0;
@@ -1202,6 +1178,7 @@ private:
             return hash;
         }
     };
+
     // Moer::UnorderedMap<RHISubresourceRange, ETextureLayout, RHISubresourceRangeHash> subresource_layouts;
 };
 
@@ -1211,11 +1188,13 @@ enum ERayTracingGeometryType : uint8_t {
     RTGT_TRIANGLES,
     RTGT_AABBS
 };
+
 enum class ERayTracingGeometryFlags : uint8_t {
     NONE,
-    GEOMETRY_OPAQUE                 = 1 << 0,
+    GEOMETRY_OPAQUE = 1 << 0,
     NO_DUPLICATE_ANY_HIT_INVOCATION = 1 << 1
 };
+
 ENUM_BIT_OP_IMPL(ERayTracingGeometryFlags, FLAG)
 
 enum class ERayTracingInstanceFlags : uint8_t {
@@ -1223,31 +1202,33 @@ enum class ERayTracingInstanceFlags : uint8_t {
     TRIANGLE_CULL_DISABLE = 1 << 0,
     //triangle flip face
     TRIANGLE_FRONT_COUNTERCLOCKWISE = 1 << 1,
-    FORCE_OPAQUE                    = 1 << 2,
-    FORCE_NO_OPAQUE                 = 1 << 3
+    FORCE_OPAQUE = 1 << 2,
+    FORCE_NO_OPAQUE = 1 << 3
 };
+
 ENUM_BIT_OP_IMPL(ERayTracingInstanceFlags, FLAG)
 
 enum class ERayTracingAccelerationStructureBuildFlags : uint8_t {
     NONE,
-    ALLOW_UPDATE      = 1 << 0,
-    ALLOW_COMPACTION  = 1 << 1,
+    ALLOW_UPDATE = 1 << 0,
+    ALLOW_COMPACTION = 1 << 1,
     PREFER_FAST_TRACE = 1 << 2,
     PREFER_FAST_BUILD = 1 << 3,
-    MINIMIZE_MEMORY   = 1 << 4
+    MINIMIZE_MEMORY = 1 << 4
 
 };
+
 ENUM_BIT_OP_IMPL(ERayTracingAccelerationStructureBuildFlags, FLAG)
 
 enum class ERayTracingAccelerationStructureCopyMode : uint8_t {
-    CLONE       = 0,
-    COMPACT     = 0x1,
-    SERIALIZE   = 0x2,
+    CLONE = 0,
+    COMPACT = 0x1,
+    SERIALIZE = 0x2,
     DESERIALIZE = 0x3
 };
 
 enum class ERayTracingAccelerationStructureType {
-    TOP_LEVEL    = 0,
+    TOP_LEVEL = 0,
     BOTTOM_LEVEL = 0x1
 };
 
@@ -1261,9 +1242,7 @@ enum class ERayTracingAccelerationStructureType {
 //};
 
 struct RHITransformMatrix {
-    RHITransformMatrix(const Moer::Matrix4x4f& mat = Moer::Matrix4x4f::Identity()) {
-        memcpy(this, &mat, sizeof(RHITransformMatrix));
-    }
+    RHITransformMatrix(const Moer::Matrix4x4f& mat = Moer::Matrix4x4f::Identity()) { memcpy(this, &mat, sizeof(RHITransformMatrix)); }
     float matrix[3][4];
 };
 
@@ -1284,6 +1263,7 @@ struct RHIRayTracingTrianglesGeometry {
 
     RHIBufferRef transform_buffer;
 };
+
 struct RHIRayTracingAABBsGeometry {
     //TODO:implement RHI RayTracing Geometry: AABB
 };
@@ -1293,6 +1273,7 @@ struct RHIRayTracingBLASGeometry {
         RHIRayTracingTrianglesGeometry triangles;
         RHIRayTracingAABBsGeometry     aabbs;
     } geometry;
+
     ERayTracingGeometryType  geo_type = ERayTracingGeometryType::RTGT_TRIANGLES;
     ERayTracingGeometryFlags flags;
 };
@@ -1319,6 +1300,7 @@ struct RHIRayTracingInstance {
     ERayTracingInstanceFlags flags = ERayTracingInstanceFlags::NONE;
     RHIRayTracingBLASRef     blas;
 };
+
 struct RHIRayTracingTLASInitializer {
     Moer::Array<RHIRayTracingInstance>         instances;
     ERayTracingAccelerationStructureBuildFlags build_flags;
@@ -1326,15 +1308,10 @@ struct RHIRayTracingTLASInitializer {
 
 class RHIRayTracingAccelerationStructure : public RHIViewableResource {
 public:
-    RHIRayTracingAccelerationStructure(ERayTracingAccelerationStructureType _as_type) : RHIViewableResource(RRT_RAYTRACING_ACCELERATION_STRUCTURE), as_type(_as_type) {
-    }
+    RHIRayTracingAccelerationStructure(ERayTracingAccelerationStructureType _as_type) : RHIViewableResource(RRT_RAYTRACING_ACCELERATION_STRUCTURE), as_type(_as_type) {}
 
-    RayTracingAccelerationStructureSizeInfo GetSize() const {
-        return size_info;
-    }
-    ERayTracingAccelerationStructureType GetType() const {
-        return as_type;
-    }
+    RayTracingAccelerationStructureSizeInfo GetSize() const { return size_info; }
+    ERayTracingAccelerationStructureType    GetType() const { return as_type; }
 
 protected:
     ERayTracingAccelerationStructureType    as_type{};
@@ -1345,6 +1322,7 @@ class RHIRayTracingBLAS : public RHIRayTracingAccelerationStructure {
 public:
     RHIRayTracingBLAS(const RHIRayTracingBLASInitializer& _init) : RHIRayTracingAccelerationStructure(ERayTracingAccelerationStructureType::BOTTOM_LEVEL),
                                                                    initializer(_init) {}
+
     const RHIRayTracingBLASInitializer& GetInitializer() const { return initializer; }
 
 protected:
@@ -1355,6 +1333,7 @@ class RHIRayTracingTLAS : public RHIRayTracingAccelerationStructure {
 public:
     RHIRayTracingTLAS(const RHIRayTracingTLASInitializer& _init) : RHIRayTracingAccelerationStructure(ERayTracingAccelerationStructureType::TOP_LEVEL),
                                                                    initializer(_init) {}
+
     const RHIRayTracingTLASInitializer& GetInitializer() const { return initializer; }
 
 protected:
@@ -1366,8 +1345,7 @@ protected:
 #pragma endregion
 
 #pragma region shader param
-struct PipelineParametersBinding {
-};
+struct PipelineParametersBinding {};
 
 #pragma endregion
 
@@ -1375,45 +1353,47 @@ struct PipelineParametersBinding {
 
 enum class EFenceUsageFlags {
     TIMELINE = 1 << 0,
-    BINARY   = 1 << 1,
-    PRESENT  = 1 << 2,
+    BINARY = 1 << 1,
+    PRESENT = 1 << 2,
 };
+
 ENUM_BIT_OP_IMPL(EFenceUsageFlags, FLAG)
 
 struct RHIFenceCreateInfo {
     EFenceUsageFlags usage = EFenceUsageFlags::TIMELINE;
 };
+
 /* fences in dx12, fence and timeline semaphore in vulkan */
 class RHIFence : public RHIResource {
 public:
     RHIFence() : RHIResource(RRT_GPU_FENCE) {}
-    virtual uint64_t GetValue() const     = 0;
+    virtual uint64_t GetValue() const = 0;
     virtual void     Wait(uint64_t value) = 0;
 
 protected:
 };
+
 namespace Moer::Render {
     class Fence : public RHIResource {
     public:
         Fence() : RHIResource(RRT_GPU_FENCE) {}
-        virtual uint64_t GetValue() const      = 0;
+        virtual uint64_t GetValue() const = 0;
         virtual void     Wait(uint64_t _value) = 0;
     };
 
     struct BackBufferInfo {
         TextureRef texture;
         FenceRef   fence;
-        bool       Valid() const {
-            return texture != nullptr;
-        }
+        bool       Valid() const { return texture != nullptr; }
     };
+
     class Viewport : public RHIResource {
     public:
         Viewport() : RHIResource(RRT_VIEWPORT) {}
-        virtual ~Viewport() {}
-        virtual void* GetNativeWindow()                = 0;
+        virtual       ~Viewport() {}
+        virtual void* GetNativeWindow() = 0;
         virtual void  Present(FenceRef _present_fence) = 0;
-        virtual void  Resize(Extent2D)                 = 0;
+        virtual void  Resize(Extent2D) = 0;
         // virtual BackBufferInfo GetBackBuffer()                  = 0;
     };
 }// namespace Moer::Render
@@ -1422,6 +1402,7 @@ struct RHIBarrierInfo {
                        dst_stage(ERHIPipelineStageFlags::PS_BOTTOM_OF_PIPE),
                        src_access(ERHIAccessFlags::UNDEFINED),
                        dst_access(ERHIAccessFlags::UNDEFINED) {}
+
     RHIBarrierInfo(ERHIPipelineStageFlags _src_stage,
                    ERHIPipelineStageFlags _dst_stage,
                    ERHIAccessFlags        _src_access,
@@ -1430,6 +1411,7 @@ struct RHIBarrierInfo {
           dst_stage(_dst_stage),
           src_access(_src_access),
           dst_access(_dst_access) {}
+
     ERHIPipelineStageFlags src_stage;
     ERHIPipelineStageFlags dst_stage;
 
@@ -1440,6 +1422,7 @@ struct RHIBarrierInfo {
         src_stage = _src_stage;
         return *this;
     }
+
     RHIBarrierInfo& SetDstStage(ERHIPipelineStageFlags _dst_stage) {
         dst_stage = _dst_stage;
         return *this;
@@ -1464,6 +1447,7 @@ struct RHITextureBarrierInfo : public RHIBarrierInfo {
           dst_layout(TEXTURE_LAYOUT_UNDEFINED), sub_resource_range(),
           src_queue_type(ECommandQueueType::UNDEFINED),
           dst_queue_type(ECommandQueueType::UNDEFINED) {}
+
     RHITextureBarrierInfo(
         ERHIPipelineStageFlags _src_stage,
         ERHIPipelineStageFlags _dst_stage,
@@ -1485,9 +1469,8 @@ struct RHITextureBarrierInfo : public RHIBarrierInfo {
           sub_resource_range(_sub_resource_range),
           src_queue_type(_src_queue_type),
           dst_queue_type(_dst_queue_type) {}
-    static RHITextureBarrierInfo Create() {
-        return {};
-    }
+
+    static RHITextureBarrierInfo Create() { return {}; }
 
     RHITexture*         p_texture;
     ETextureLayout      src_layout;
@@ -1500,10 +1483,12 @@ struct RHITextureBarrierInfo : public RHIBarrierInfo {
         p_texture = _p_texture;
         return *this;
     }
+
     RHITextureBarrierInfo& SetSrcTextureLayout(ETextureLayout _src_layout) {
         src_layout = _src_layout;
         return *this;
     }
+
     RHITextureBarrierInfo& SetDstTextureLayout(ETextureLayout _dst_layout) {
         dst_layout = _dst_layout;
         return *this;
@@ -1544,8 +1529,8 @@ struct RHIBufferBarrierInfo : public RHIBarrierInfo {
           src_queue_type(_src_queue_type),
           dst_queue_type(_dst_queue_type),
           offset(_offset),
-          size(_size) {
-    }
+          size(_size) {}
+
     RHIBufferBarrierInfo() : RHIBarrierInfo(),
                              p_buffer(nullptr),
                              offset(0),
@@ -1553,19 +1538,20 @@ struct RHIBufferBarrierInfo : public RHIBarrierInfo {
                              dst_queue_type(ECommandQueueType::UNDEFINED),
                              size(0) {}
 
-    static RHIBufferBarrierInfo Create() {
-        return {};
-    }
+    static RHIBufferBarrierInfo Create() { return {}; }
+
     RHIBufferBarrierInfo& SetBuffer(RHIBuffer* _buffer) {
         p_buffer = _buffer;
         size     = _buffer->GetInfo().size;
 
         return *this;
     }
+
     RHIBufferBarrierInfo& SetOffset(uint64_t _offset) {
         offset = _offset;
         return *this;
     }
+
     RHIBufferBarrierInfo& SetSize(uint64_t _size) {
         size = _size;
         return *this;
@@ -1580,6 +1566,7 @@ struct RHIBufferBarrierInfo : public RHIBarrierInfo {
         dst_queue_type = _dst_queue_type;
         return *this;
     }
+
     RHIBuffer*        p_buffer;
     ECommandQueueType src_queue_type;
     ECommandQueueType dst_queue_type;
@@ -1614,11 +1601,12 @@ struct RHIViewportNextBackBufferInfo {
     uint32_t  backbuffer_index;
     RHIFence* backbuffer_ready_fence;
 };
+
 class RHIViewport : public RHIResource {
 
 public:
     RHIViewport() : RHIResource(RRT_VIEWPORT) {}
-    virtual ~RHIViewport(){};
+    virtual       ~RHIViewport() {};
     virtual void* GetNativeSwapchain() const { return nullptr; }
     virtual void* GetNativeWindow(void** _params) const { return nullptr; }
 
@@ -1673,12 +1661,14 @@ enum class EViewType : uint8_t {
     ACCELERATION_STRUCTURE_UAV,
     ACCELERATION_STRUCTURE_CBV,
 };
+
 enum class EBufferViewType : uint8_t {
     STRUCTURED,
     CONSTANT,
     TEXTURE,
     RAW
 };
+
 struct RHIBufferViewInfo {
     EViewType    view_type;
     EPixelFormat format{PF_UNDEFINED};
@@ -1686,15 +1676,17 @@ struct RHIBufferViewInfo {
     uint32_t     num_elements;
     uint32_t     stride;
 };
+
 struct RHITextureViewInfo {
-    EViewType         view_type;
-    EPixelFormat      format{PF_UNDEFINED};
-    uint8_t           b_disable_srgb : 1;
-    ETextureDimension dimension : uint32_t(ETextureDimension::NumBits);
+    EViewType          view_type;
+    EPixelFormat       format{PF_UNDEFINED};
+    uint8_t            b_disable_srgb : 1;
+    ETextureDimension  dimension : uint32_t(ETextureDimension::NumBits);
     uint8_t /*padding*/ : 7 - uint32_t(ETextureDimension::NumBits);
-    uint16_t array_min;
-    uint16_t array_num;
+    uint16_t           array_min;
+    uint16_t           array_num;
 };
+
 struct RHIAccelerationStructureViewInfo {
     EViewType view_type;
 };
@@ -1709,42 +1701,28 @@ struct RHITextureUAVInfo : public RHITextureViewInfo {
 };
 
 struct RHIBufferSRVInfo : public RHIBufferViewInfo {
-    RHIBufferSRVInfo() {
-        view_type = EViewType::BUFFER_SRV;
-    }
+    RHIBufferSRVInfo() { view_type = EViewType::BUFFER_SRV; }
 };
 
 struct RHIBufferUAVInfo : public RHIBufferViewInfo {
-    RHIBufferUAVInfo() {
-        view_type = EViewType::BUFFER_UAV;
-    }
+    RHIBufferUAVInfo() { view_type = EViewType::BUFFER_UAV; }
 };
 
 struct RHIBufferCBVInfo : public RHIBufferViewInfo {
-    RHIBufferCBVInfo() {
-        view_type = EViewType::BUFFER_CBV;
-    }
+    RHIBufferCBVInfo() { view_type = EViewType::BUFFER_CBV; }
 };
 
 struct RHIAccelerationStructureSRVInfo : public RHIAccelerationStructureViewInfo {
-    RHIAccelerationStructureSRVInfo() {
-        view_type = EViewType::ACCELERATION_STRUCTURE_SRV;
-    }
+    RHIAccelerationStructureSRVInfo() { view_type = EViewType::ACCELERATION_STRUCTURE_SRV; }
 };
 
 template<uint32_t _type>
 static RHIBufferViewInfo GetBufferInfo(RHIBuffer* _buffer, uint32_t _byte_offset, uint32_t _num_elements, uint32_t _stride) {
     RHIBufferViewInfo info{
-        .byte_offset  = _byte_offset,
+        .byte_offset = _byte_offset,
         .num_elements = _num_elements,
-        .stride       = _stride};
-    if constexpr (_type == v_type_buffer_srv) {
-        info.view_type = EViewType::BUFFER_SRV;
-    } else if constexpr (_type == v_type_buffer_uav) {
-        info.view_type = EViewType::BUFFER_UAV;
-    } else if constexpr (_type == v_type_buffer_cbv) {
-        info.view_type = EViewType::BUFFER_CBV;
-    }
+        .stride = _stride};
+    if constexpr (_type == v_type_buffer_srv) { info.view_type = EViewType::BUFFER_SRV; } else if constexpr (_type == v_type_buffer_uav) { info.view_type = EViewType::BUFFER_UAV; } else if constexpr (_type == v_type_buffer_cbv) { info.view_type = EViewType::BUFFER_CBV; }
     return std::move(info);
 }
 
@@ -1801,8 +1779,8 @@ struct RHIViewInfo {
         /* An append and consume buffer is a special type of an unordered resource that
 		 * supports adding and removing values from the end of a buffer similar to the way a stack works.
 		 * An append and consume buffer must be a structured buffer */
-        uint8_t b_is_append_buffer : 1;
-        uint8_t : 6;
+        uint8_t  b_is_append_buffer : 1;
+        uint8_t   : 6;
         uint32_t byte_offset;
         uint32_t num_elements;
         uint32_t stride;
@@ -1810,16 +1788,17 @@ struct RHIViewInfo {
     protected:
         ViewInfo GetViewInfo(RHIBuffer* target) const;
     };
+
     /* equivalent to VkImageView */
     struct Texture : public BaseViewInfo {
         struct ViewInfo;
-        uint8_t           b_disable_srgb : 1;
-        ETextureDimension dimension : uint32_t(ETextureDimension::NumBits);
+        uint8_t            b_disable_srgb : 1;
+        ETextureDimension  dimension : uint32_t(ETextureDimension::NumBits);
         uint8_t /*padding*/ : 7 - uint32_t(ETextureDimension::NumBits);
-        uint8_t  mip_min;
-        uint8_t  mip_num;
-        uint16_t array_min;
-        uint16_t array_num;
+        uint8_t            mip_min;
+        uint8_t            mip_num;
+        uint16_t           array_min;
+        uint16_t           array_num;
 
     protected:
         ViewInfo GetViewInfo(RHITexture* target) const;
@@ -1838,16 +1817,19 @@ struct RHIViewInfo {
 
         ViewInfo GetViewInfo(RHIBuffer*) const;
     };
+
     struct BufferUAV : public Buffer {
         struct Initializer;
         struct ViewInfo;
         ViewInfo GetViewInfo(RHIBuffer*) const;
     };
+
     struct TextureSRV : public Texture {
         struct Initializer;
         struct ViewInfo;
         ViewInfo GetViewInfo(RHITexture*) const;
     };
+
     struct TextureUAV : public Texture {
         struct Initializer;
         struct ViewInfo;
@@ -1888,29 +1870,16 @@ struct RHIViewInfo {
         return std::visit(
             [](auto&& _arg) {
                 using T = std::decay_t<decltype(_arg)>;
-                if constexpr (std::is_same_v<T, RHIBufferViewInfo>) {
-                    return _arg.view_type == EViewType::BUFFER_SRV;
-                } else if constexpr (std::is_same_v<T, RHITextureSRVInfo>) {
-                    return true;
-                } else if constexpr (std::is_same_v<T, RHIAccelerationStructureSRVInfo>) {
-                    return true;
-                } else {
-                    return false;
-                }
+                if constexpr (std::is_same_v<T, RHIBufferViewInfo>) { return _arg.view_type == EViewType::BUFFER_SRV; } else if constexpr (std::is_same_v<T, RHITextureSRVInfo>) { return true; } else if constexpr (std::is_same_v<T, RHIAccelerationStructureSRVInfo>) { return true; } else { return false; }
             },
             info);
     }
+
     bool IsUAV() const {
         return std::visit(
             [](auto&& _arg) {
                 using T = std::decay_t<decltype(_arg)>;
-                if constexpr (std::is_same_v<T, RHIBufferViewInfo>) {
-                    return _arg.view_type == EViewType::BUFFER_UAV;
-                } else if constexpr (std::is_same_v<T, RHITextureUAVInfo>) {
-                    return true;
-                } else {
-                    return false;
-                }
+                if constexpr (std::is_same_v<T, RHIBufferViewInfo>) { return _arg.view_type == EViewType::BUFFER_UAV; } else if constexpr (std::is_same_v<T, RHITextureUAVInfo>) { return true; } else { return false; }
             },
             info);
     }
@@ -1919,11 +1888,7 @@ struct RHIViewInfo {
         return std::visit(
             [](auto&& _arg) {
                 using T = std::decay_t<decltype(_arg)>;
-                if constexpr (std::is_same_v<T, RHIBufferViewInfo>) {
-                    return _arg.view_type == EViewType::BUFFER_CBV;
-                } else {
-                    return false;
-                }
+                if constexpr (std::is_same_v<T, RHIBufferViewInfo>) { return _arg.view_type == EViewType::BUFFER_CBV; } else { return false; }
             },
             info);
     }
@@ -1932,35 +1897,25 @@ struct RHIViewInfo {
         return std::visit(
             [](auto&& _arg) {
                 using T = std::decay_t<decltype(_arg)>;
-                if constexpr (std::is_same_v<T, RHIBufferViewInfo>) {
-                    return true;
-                } else {
-                    return false;
-                }
+                if constexpr (std::is_same_v<T, RHIBufferViewInfo>) { return true; } else { return false; }
             },
             info);
     }
+
     bool IsAccelerationStructure() const {
         return std::visit(
             [](auto&& _arg) {
                 using T = std::decay_t<decltype(_arg)>;
-                if constexpr (std::is_same_v<T, RHIAccelerationStructureSRVInfo>) {
-                    return true;
-                } else {
-                    return false;
-                }
+                if constexpr (std::is_same_v<T, RHIAccelerationStructureSRVInfo>) { return true; } else { return false; }
             },
             info);
     }
+
     bool IsTexture() const { return !IsBuffer() && !IsAccelerationStructure(); }
 
-    bool operator==(const RHIViewInfo& _other) {
-        return memcmp(this, &_other, sizeof(*this)) == 0;
-    }
+    bool operator==(const RHIViewInfo& _other) { return memcmp(this, &_other, sizeof(*this)) == 0; }
 
-    bool operator!=(const RHIViewInfo& _other) {
-        return !(*this == _other);
-    }
+    bool operator!=(const RHIViewInfo& _other) { return !(*this == _other); }
 
     // RHIViewInfo() : RHIViewInfo(EViewType::BUFFER_SRV) {}
     RHIViewInfo(RHIBufferViewInfo _info) : info(_info) {}
@@ -1980,6 +1935,7 @@ protected:
     //     base_info.view_type = _type;
     // }
 };
+
 // struct RHIViewInfo::Buffer::ViewInfo {
 //     uint32_t    byte_offset;
 //     uint32_t    byte_stride;
@@ -2291,47 +2247,25 @@ public:
         // assert(_viewable_resource != nullptr && "ViewableResource is invalid");
     }
 
-    RHIViewableResource* GetResource() const {
-        return resource;
-    }
+    RHIViewableResource* GetResource() const { return resource; }
 
-    RHIBuffer* GetBuffer() const {
-        return info.IsBuffer() ? dynamic_cast<RHIBuffer*>(resource.Get()) : nullptr;
-    }
+    RHIBuffer* GetBuffer() const { return info.IsBuffer() ? dynamic_cast<RHIBuffer*>(resource.Get()) : nullptr; }
 
-    RHITexture* GetTexture() const {
-        return info.IsTexture() ? dynamic_cast<RHITexture*>(resource.Get()) : nullptr;
-    }
+    RHITexture* GetTexture() const { return info.IsTexture() ? dynamic_cast<RHITexture*>(resource.Get()) : nullptr; }
 
-    RHIRayTracingTLAS* GetAccelerationStructure() const {
-        return info.IsAccelerationStructure() ? dynamic_cast<RHIRayTracingTLAS*>(resource.Get()) : nullptr;
-    }
-    bool IsBuffer() const {
-        return info.IsBuffer();
-    }
+    RHIRayTracingTLAS* GetAccelerationStructure() const { return info.IsAccelerationStructure() ? dynamic_cast<RHIRayTracingTLAS*>(resource.Get()) : nullptr; }
+    bool               IsBuffer() const { return info.IsBuffer(); }
 
-    bool IsTexture() const {
-        return info.IsTexture();
-    }
-    bool IsAccelerationStructure() const {
-        return info.IsAccelerationStructure();
-    }
+    bool IsTexture() const { return info.IsTexture(); }
+    bool IsAccelerationStructure() const { return info.IsAccelerationStructure(); }
 
-    bool IsSRV() const {
-        return info.IsSRV();
-    }
+    bool IsSRV() const { return info.IsSRV(); }
 
-    bool IsUAV() const {
-        return info.IsUAV();
-    }
+    bool IsUAV() const { return info.IsUAV(); }
 
-    bool IsCBV() const {
-        return info.IsCBV();
-    }
+    bool IsCBV() const { return info.IsCBV(); }
 
-    const RHIViewInfo& GetInfo() const {
-        return info;
-    }
+    const RHIViewInfo& GetInfo() const { return info; }
 
 protected:
     const RHIViewInfo info;
@@ -2342,23 +2276,17 @@ private:
 
 class RHIUAV : public RHIView {
 public:
-    explicit RHIUAV(RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIView(RRT_UNORDERED_ACCESS_VIEW, _resource, _viewInfo) {
-        assert(_viewInfo.IsUAV() && "view must be uav");
-    }
+    explicit RHIUAV(RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIView(RRT_UNORDERED_ACCESS_VIEW, _resource, _viewInfo) { assert(_viewInfo.IsUAV() && "view must be uav"); }
 };
 
 class RHISRV : public RHIView {
 public:
-    explicit RHISRV(RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIView(RRT_SHADER_RESOURCE_VIEW, _resource, _viewInfo) {
-        assert(_viewInfo.IsSRV() && "view must be srv");
-    }
+    explicit RHISRV(RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIView(RRT_SHADER_RESOURCE_VIEW, _resource, _viewInfo) { assert(_viewInfo.IsSRV() && "view must be srv"); }
 };
 
 class RHICBV : public RHIView {
 public:
-    explicit RHICBV(RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIView(RRT_CONSTANT_BUFFER_VIEW, _resource, _viewInfo) {
-        assert(_viewInfo.IsCBV() && "view must be cbv");
-    }
+    explicit RHICBV(RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIView(RRT_CONSTANT_BUFFER_VIEW, _resource, _viewInfo) { assert(_viewInfo.IsCBV() && "view must be cbv"); }
 };
 #pragma endregion
 
@@ -2378,12 +2306,14 @@ public:
           array_index(-1),
           load_op(_load_op),
           store_op(EAttachmentStoreOp::STORE) {}
+
     explicit RHIColorAttachmentView(RHITexture* _texture, EAttachmentLoadOp _load_op, uint32_t _mip_index, uint32_t _array_index)
         : texture(_texture),
           mip_index(_mip_index),
           load_op(_load_op),
           array_index(_array_index),
           store_op(EAttachmentStoreOp::STORE) {}
+
     explicit RHIColorAttachmentView(RHITexture* _texture, uint32_t _mip_index, uint32_t _array_index, EAttachmentLoadOp _load_op, EAttachmentStoreOp _store_op)
         : texture(_texture),
           mip_index(_mip_index),
@@ -2419,9 +2349,7 @@ public:
           depth_load_op(EAttachmentLoadOp::NONE),
           depth_store_op(EAttachmentStoreOp::NONE),
           stencil_load_op(EAttachmentLoadOp::NONE),
-          stencil_store_op(EAttachmentStoreOp::NONE) {
-        Validate();
-    }
+          stencil_store_op(EAttachmentStoreOp::NONE) { Validate(); }
 
     //common case
     explicit RHIDepthAttachmentView(
@@ -2432,9 +2360,7 @@ public:
           depth_load_op(_load_op),
           depth_store_op(_store_op),
           stencil_load_op(_load_op),
-          stencil_store_op(_store_op) {
-        Validate();
-    }
+          stencil_store_op(_store_op) { Validate(); }
 
     explicit RHIDepthAttachmentView(
         RHITexture*        _texture,
@@ -2446,9 +2372,7 @@ public:
           depth_load_op(_depth_load_op),
           depth_store_op(_depth_store_op),
           stencil_load_op(_stencil_load_op),
-          stencil_store_op(_stencil_store_op) {
-        Validate();
-    }
+          stencil_store_op(_stencil_store_op) { Validate(); }
 
     void Validate() const {
         // VK and Metal MAY leave the attachment in an undefined state if the StoreAction is DontCare. So we can't assume read-only implies it should be DontCare unless we know for sure it will never be used again.
@@ -2489,7 +2413,8 @@ struct RHIShaderMapRef {
 
 struct RHIShaderBoundStateInput : public RHIResource {
 
-    RHIShaderBoundStateInput() : RHIResource(RRT_SHADER_BOUND_STATE){};
+    RHIShaderBoundStateInput() : RHIResource(RRT_SHADER_BOUND_STATE) {};
+
     RHIShaderBoundStateInput(
         RHIVertexInputState* _vertex_input_state,
         RHIVertexShader*     _vertex_shader,
@@ -2543,6 +2468,7 @@ struct RHIGraphicsShaderInputInfo {
         RHIGeometryShader* geometry_shader;
         RHIVertexInputInfo vertex_input_info;
     };
+
     struct Mesh {
         RHIFragmentShader*      fragment_shader;
         RHIMeshShader*          mesh_shader;
@@ -2555,9 +2481,7 @@ struct RHIGraphicsShaderInputInfo {
 
     RHIGraphicsShaderInputInfo() {}
 
-    static RHIGraphicsShaderInputInfo Create() {
-        return std::move(RHIGraphicsShaderInputInfo());
-    }
+    static RHIGraphicsShaderInputInfo Create() { return std::move(RHIGraphicsShaderInputInfo()); }
     // RHIGraphicsShaderInputInfo& SetVertexWorkFlow(
     //     RHIVertexInputState* _vertex_input_state,
     //     RHIShader*           _vertex_shader,
@@ -2598,9 +2522,7 @@ struct RHIGraphicsShaderInputInfo {
 
     bool operator==(const RHIGraphicsShaderInputInfo& other) const {
         //MARK... this is not a good way to compare variant
-        if (work_flow.index() != other.work_flow.index()) {
-            return false;
-        }
+        if (work_flow.index() != other.work_flow.index()) { return false; }
 
         if (work_flow.index() == t_vertex_work_flow) {
             const auto& vertex       = std::get<t_vertex_work_flow>(work_flow);
@@ -2619,13 +2541,9 @@ struct RHIGraphicsShaderInputInfo {
     }
 
 private:
-    RHIGraphicsShaderInputInfo::Vertex& VertexWorkFlow() {
-        return std::get<t_vertex_work_flow>(work_flow);
-    }
+    RHIGraphicsShaderInputInfo::Vertex& VertexWorkFlow() { return std::get<t_vertex_work_flow>(work_flow); }
 
-    RHIGraphicsShaderInputInfo::Mesh& MeshWorkFlow() {
-        return std::get<t_mesh_work_flow>(work_flow);
-    }
+    RHIGraphicsShaderInputInfo::Mesh& MeshWorkFlow() { return std::get<t_mesh_work_flow>(work_flow); }
 };
 
 //for shader parameter binding usage
@@ -2644,37 +2562,18 @@ struct ColorAttachmementBinding {
           load_op(_load_op),
           mip_index(_mip_index),
           array_index(_array_index) {}
-    RHITextureRef GetTexture() const {
-        return texture;
-    }
-    RHITextureRef GetResolveTexture() const {
-        return resolve_texture;
-    }
-    EAttachmentLoadOp GetLoadOp() const {
-        return load_op;
-    }
-    uint8_t GetMipIndex() const {
-        return mip_index;
-    }
-    uint8_t GetArrayIndex() const {
-        return array_index;
-    }
 
-    void SetTexture(RHITexture* _texture) {
-        texture = _texture;
-    }
-    void SetResolveTexture(RHITexture* _resolve_texture) {
-        resolve_texture = _resolve_texture;
-    }
-    void SetLoadOp(EAttachmentLoadOp _load_op) {
-        load_op = _load_op;
-    }
-    void SetMipIndex(uint8_t _mip_index) {
-        mip_index = _mip_index;
-    }
-    void SetArrayIndex(uint16_t _array_index) {
-        array_index = _array_index;
-    }
+    RHITextureRef     GetTexture() const { return texture; }
+    RHITextureRef     GetResolveTexture() const { return resolve_texture; }
+    EAttachmentLoadOp GetLoadOp() const { return load_op; }
+    uint8_t           GetMipIndex() const { return mip_index; }
+    uint8_t           GetArrayIndex() const { return array_index; }
+
+    void SetTexture(RHITexture* _texture) { texture = _texture; }
+    void SetResolveTexture(RHITexture* _resolve_texture) { resolve_texture = _resolve_texture; }
+    void SetLoadOp(EAttachmentLoadOp _load_op) { load_op = _load_op; }
+    void SetMipIndex(uint8_t _mip_index) { mip_index = _mip_index; }
+    void SetArrayIndex(uint16_t _array_index) { array_index = _array_index; }
 
 private:
     ShaderParameterPtr<RHITextureRef> texture;
@@ -2683,6 +2582,7 @@ private:
     uint8_t                           mip_index   = 0;
     uint16_t                          array_index = 0;
 };
+
 // static_assert(sizeof(ColorAttachmementBinding) == 16);
 
 struct DepthStencilBinding {
@@ -2695,48 +2595,32 @@ struct DepthStencilBinding {
           depth_load_op(_depth_load_op),
           stencil_load_op(_stencil_load_op) {}
 
-    RHITextureRef GetTexture() const {
-        return texture;
-    }
-    EAttachmentLoadOp GetDepthLoadOp() const {
-        return depth_load_op;
-    }
-    EAttachmentLoadOp GetStencilLoadOp() const {
-        return stencil_load_op;
-    }
-    void SetDepthTexture(RHITexture* _texture) {
-        texture = _texture;
-    }
-    void SetDepthLoadOp(EAttachmentLoadOp _depth_load_op) {
-        depth_load_op = _depth_load_op;
-    }
+    RHITextureRef     GetTexture() const { return texture; }
+    EAttachmentLoadOp GetDepthLoadOp() const { return depth_load_op; }
+    EAttachmentLoadOp GetStencilLoadOp() const { return stencil_load_op; }
+    void              SetDepthTexture(RHITexture* _texture) { texture = _texture; }
+    void              SetDepthLoadOp(EAttachmentLoadOp _depth_load_op) { depth_load_op = _depth_load_op; }
 
-    void SetStencilLoadOp(EAttachmentLoadOp _stencil_load_op) {
-        stencil_load_op = _stencil_load_op;
-    }
+    void SetStencilLoadOp(EAttachmentLoadOp _stencil_load_op) { stencil_load_op = _stencil_load_op; }
 
 private:
     ShaderParameterPtr<RHITextureRef> texture;
     EAttachmentLoadOp                 depth_load_op   = EAttachmentLoadOp::NONE;
     EAttachmentLoadOp                 stencil_load_op = EAttachmentLoadOp::NONE;
 };
+
 static_assert(sizeof(ShaderParameterPtr<RHITextureRef>) % SHADER_PARAMETER_PTR_ALIGNMENT == 0);
 
 struct alignas(SHADER_PARAMETER_STRUCTURE_ALIGNMENT) AttachmentBindingSlots {
 
-    ColorAttachmementBinding& operator[](uint32_t _index) {
-        return color_attachments_binding[_index];
-    }
+    ColorAttachmementBinding& operator[](uint32_t _index) { return color_attachments_binding[_index]; }
 
-    const ColorAttachmementBinding& operator[](uint32_t index) const {
-        return color_attachments_binding[index];
-    }
+    const ColorAttachmementBinding& operator[](uint32_t index) const { return color_attachments_binding[index]; }
+
     template<typename Lambda>
     void ForEachColorAttachment(Lambda lambda) {
         for (auto& color_attachment : color_attachments_binding) {
-            if (color_attachment.GetTexture() == nullptr) {
-                break;
-            }
+            if (color_attachment.GetTexture() == nullptr) { break; }
             lambda(color_attachment);
         }
     }
@@ -2744,17 +2628,14 @@ struct alignas(SHADER_PARAMETER_STRUCTURE_ALIGNMENT) AttachmentBindingSlots {
     template<typename Lambda>
     void ForEachColorAttachment(Lambda lambda) const {
         for (auto& color_attachment : color_attachments_binding) {
-            if (color_attachment.GetTexture() == nullptr) {
-                break;
-            }
+            if (color_attachment.GetTexture() == nullptr) { break; }
             lambda(color_attachment);
         }
     }
 
     uint32_t GetColorAttachmentCount() const {
         uint32_t count = 0;
-        for (; count < MAX_PASS_ATTACHMENT_COUNT && color_attachments_binding[count].GetTexture() != nullptr; count++) {
-        }
+        for (; count < MAX_PASS_ATTACHMENT_COUNT && color_attachments_binding[count].GetTexture() != nullptr; count++) {}
         return count;
     }
 
@@ -2766,6 +2647,7 @@ struct alignas(SHADER_PARAMETER_STRUCTURE_ALIGNMENT) AttachmentBindingSlots {
     uint8_t         multi_view_count;
     RHITexture*     shading_rate_texture = nullptr;
 };
+
 // static_assert(sizeof(AttachmentBindingSlots) == 240);
 // static_assert(offsetof(AttachmentBindingSlots, depth_stencil_binding) == 192);
 
@@ -2773,6 +2655,7 @@ struct GraphicsPipelineAttachmentInfo {
     GraphicsPipelineAttachmentInfo()
         : attachment_formats(CreateArray<MAX_PASS_ATTACHMENT_COUNT, uint8_t>((uint8_t)ETextureUsageFlags::UNDEFINED)),
           attachment_flags(CreateArray<MAX_PASS_ATTACHMENT_COUNT, ETextureUsageFlags>(ETextureUsageFlags::UNDEFINED)) {}
+
     uint32_t                                                         attachments_count;
     Moer::StaticArray<uint8_t, MAX_PASS_ATTACHMENT_COUNT>            attachment_formats;
     Moer::StaticArray<ETextureUsageFlags, MAX_PASS_ATTACHMENT_COUNT> attachment_flags;
@@ -2799,6 +2682,7 @@ struct RHIColorAttachmentInfo {
     RHIClearAttachment     clear_attachment;
     EPixelFormat           pixel_format;
     ETextureUsageFlags     usage_flags;
+
     template<RHIConfig::Blend blend_mode = RHIConfig::Blend::NONE, RHIConfig::ClearMode clear_mode = RHIConfig::ClearMode::COLOR>
     static RHIColorAttachmentInfo Preset(
         EPixelFormat       _pixel_format,
@@ -2817,9 +2701,7 @@ struct RHIColorAttachmentInfo {
         return *this;
     }
 
-    bool operator==(const RHIColorAttachmentInfo& other) const {
-        return blend_state_info == other.blend_state_info && clear_attachment == other.clear_attachment && pixel_format == other.pixel_format && usage_flags == other.usage_flags;
-    }
+    bool operator==(const RHIColorAttachmentInfo& other) const { return blend_state_info == other.blend_state_info && clear_attachment == other.clear_attachment && pixel_format == other.pixel_format && usage_flags == other.usage_flags; }
 };
 
 #define test_usage0
@@ -2842,13 +2724,13 @@ public:
           shading_rate(EVariousShadingRate::VSR_1_1x1),
           hash_key(0) {}
 
-    static RHIGraphicsPSOCreateInfo Create() {
-        return std::move(RHIGraphicsPSOCreateInfo());
-    }
+    static RHIGraphicsPSOCreateInfo Create() { return std::move(RHIGraphicsPSOCreateInfo()); }
+
     RHIGraphicsPSOCreateInfo& SetShaderStage(RHIGraphicsShaderInputInfo _shader_info) {
         shader_infos = std::move(_shader_info);
         return *this;
     }
+
     RHIGraphicsPSOCreateInfo& SetRasterizerInfo(RHIRasterizeInfo _rasterizer_info) {
         rasterizer_info = std::move(_rasterizer_info);
         return *this;
@@ -2873,9 +2755,7 @@ public:
 
         color_attachment_count = CalcValidColorAttachmentCount();
         assert(_color_attachment_info.size() <= MAX_PASS_ATTACHMENT_COUNT && "color attachment count exceeds the limit");
-        for (int i = color_attachment_count; i < _color_attachment_info.size(); i++) {
-            color_attachments_info[i] = std::move(_color_attachment_info[i - color_attachment_count]);
-        }
+        for (int i = color_attachment_count; i < _color_attachment_info.size(); i++) { color_attachments_info[i] = std::move(_color_attachment_info[i - color_attachment_count]); }
         return *this;
     }
 
@@ -2908,9 +2788,7 @@ public:
 
     static bool IsSameColorAttachmentArray(const RHIColorAttachmentInfoList& lhs, const RHIColorAttachmentInfoList& rhs) {
         bool b_same = true;
-        for (int i = 0; i < lhs.size(); ++i) {
-            b_same &= (lhs[i] == rhs[i]);
-        }
+        for (int i = 0; i < lhs.size(); ++i) { b_same &= (lhs[i] == rhs[i]); }
         return b_same;
     }
 
@@ -2973,15 +2851,19 @@ namespace Moer::Render {
     struct VkPipelineHandle {
         uint64_t handle;
     };
+
     struct D3DPipelineHandle {
         uint64_t handle;
     };
+
     struct PipelineHandle {
         std::variant<VkPipelineHandle, D3DPipelineHandle> handle;
         Array<uint64>                                     binding_infos;
         UnorderedMap<uint64, uint>                        hash_2_info_index;
+        uint64                                            valid_bits   = 0;
         int                                               constant_idx = -1;
     };
+
     struct SingleShaderInfo {
         std::string_view        name;
         std::string_view        entry_point;
@@ -2989,11 +2871,13 @@ namespace Moer::Render {
         EShaderType             shader_type;
         ShaderParametersInfoMap shader_param_map;
     };
+
     struct ShaderVsGsPs {
         SingleShaderInfo vs;
         SingleShaderInfo gs;
         SingleShaderInfo ps;
     };
+
     struct ShaderCs {
         SingleShaderInfo cs;
     };
@@ -3021,6 +2905,7 @@ namespace Moer::Render {
         Array<SingleShaderInfo> closesthit;
         Array<SingleShaderInfo> callable;
     };
+
     enum EShaderArgType : uint8 {
         SDA_Buffer,
         SDA_Texture,
@@ -3029,14 +2914,18 @@ namespace Moer::Render {
         SDA_BindlessArray,
         SDA_Num
     };
+
     using ShaderOutputGroup = std::variant<ShaderVsGsPs, ShaderVsPs, ShaderMsPs, ShaderTsMsPs, ShaderCs, ShaderRT>;
+
     struct PipelineShaderInfo {
         ShaderOutputGroup       shader_group;
         Array<std::string_view> layout_hash;
         Array<EShaderArgType>   arg_types;
     };
+
     struct GfxPsoCreateInfo {
         using RHIColorAttachmentInfoList = Moer::StaticArray<RHIColorAttachmentInfo, MAX_PASS_ATTACHMENT_COUNT>;
+
         GfxPsoCreateInfo(
             RHIRasterizeInfo              _rasterizer_info,
             VertexStream                  _vertex_stream,
@@ -3096,26 +2985,18 @@ public:
     uint32_t max_payload_byte_size      = 24;
     bool     b_allow_hit_group_indexing = true;
 
-    bool operator==(const RHIRTPsoInfo& value) const {
-        return max_attribute_byte_size == value.max_attribute_byte_size && max_payload_byte_size == value.max_payload_byte_size && b_allow_hit_group_indexing == value.b_allow_hit_group_indexing && hash_ray_gen == value.hash_ray_gen && hash_ray_miss == value.hash_ray_miss && hash_ray_hit == value.hash_ray_hit && hash_ray_callable == value.hash_ray_callable;
-    }
+    bool operator==(const RHIRTPsoInfo& value) const { return max_attribute_byte_size == value.max_attribute_byte_size && max_payload_byte_size == value.max_payload_byte_size && b_allow_hit_group_indexing == value.b_allow_hit_group_indexing && hash_ray_gen == value.hash_ray_gen && hash_ray_miss == value.hash_ray_miss && hash_ray_hit == value.hash_ray_hit && hash_ray_callable == value.hash_ray_callable; }
 };
+
 class RHIRayTracingPipelineStateInitializer : RHIRTPsoInfo {
 public:
     RHIRayTracingPipelineStateInitializer() = default;
 
-    void SetRayGenShader(RHIRayGenShader* rgen_shader) {
-        ray_gen_shader = rgen_shader;
-    }
-    void AddMissShader(RHIRayMissShader* rmiss_shader) {
-        ray_miss_table.push_back(rmiss_shader);
-    }
-    void AddCallableShader(RHIRayCallableShader* rcall_shader) {
-        ray_callable_table.push_back(rcall_shader);
-    }
-    void AddHitShaderGroup(RHIRayClosestHitShader* rchit_shader, RHIRayAnyhitShader* rahit_shader = nullptr, RHIRayIntersectionShader* rint_shader = nullptr) {
-        ray_hit_table.push_back(RHIRayHitGroup{rchit_shader, rahit_shader, rint_shader});
-    }
+    void SetRayGenShader(RHIRayGenShader* rgen_shader) { ray_gen_shader = rgen_shader; }
+    void AddMissShader(RHIRayMissShader* rmiss_shader) { ray_miss_table.push_back(rmiss_shader); }
+    void AddCallableShader(RHIRayCallableShader* rcall_shader) { ray_callable_table.push_back(rcall_shader); }
+    void AddHitShaderGroup(RHIRayClosestHitShader* rchit_shader, RHIRayAnyhitShader* rahit_shader = nullptr, RHIRayIntersectionShader* rint_shader = nullptr) { ray_hit_table.push_back(RHIRayHitGroup{rchit_shader, rahit_shader, rint_shader}); }
+
     struct RHIRayHitGroup {
         RHIRayClosestHitShader*   closesthit_shader;
         RHIRayAnyhitShader*       anyhit_shader;
@@ -3143,49 +3024,43 @@ enum EAttachmentAction : uint8_t {
     INNER_DEPTH_MASK_OFFSET = 4,
 #define MAKE_COLOR_ACTION_MASK(LOAD, STORE) ((uint8_t)EAttachmentLoadOp::LOAD << (uint32_t)EAttachmentStoreOp::NumBits | (uint8_t)EAttachmentStoreOp::STORE)
     AC_NO_LOAD_NO_STORE = MAKE_COLOR_ACTION_MASK(NONE, NONE),
-    AC_LOAD_NO_STORE    = MAKE_COLOR_ACTION_MASK(LOAD, NONE),
-    AC_LOAD_STORE       = MAKE_COLOR_ACTION_MASK(LOAD, STORE),
-    AC_CLEAR_NO_STORE   = MAKE_COLOR_ACTION_MASK(CLEAR, NONE),
-    AC_NO_LOAD_STORE    = MAKE_COLOR_ACTION_MASK(NONE, STORE),
-    AC_CLEAR_STORE      = MAKE_COLOR_ACTION_MASK(CLEAR, STORE),
-    AC_CLEAR_RESOLVE    = MAKE_COLOR_ACTION_MASK(CLEAR, MULTISAMPLE_RESOLVE),
-    AC_LOAD_RESOLVE     = MAKE_COLOR_ACTION_MASK(CLEAR, MULTISAMPLE_RESOLVE),
+    AC_LOAD_NO_STORE = MAKE_COLOR_ACTION_MASK(LOAD, NONE),
+    AC_LOAD_STORE = MAKE_COLOR_ACTION_MASK(LOAD, STORE),
+    AC_CLEAR_NO_STORE = MAKE_COLOR_ACTION_MASK(CLEAR, NONE),
+    AC_NO_LOAD_STORE = MAKE_COLOR_ACTION_MASK(NONE, STORE),
+    AC_CLEAR_STORE = MAKE_COLOR_ACTION_MASK(CLEAR, STORE),
+    AC_CLEAR_RESOLVE = MAKE_COLOR_ACTION_MASK(CLEAR, MULTISAMPLE_RESOLVE),
+    AC_LOAD_RESOLVE = MAKE_COLOR_ACTION_MASK(CLEAR, MULTISAMPLE_RESOLVE),
 #undef MAKE_COLOR_ACTION_MASK
 
 #define MAKE_DEPTH_STENCIL_MASK(DEPTH, STENCIL) ((uint8_t)EAttachmentAction::DEPTH << (uint32_t)INNER_DEPTH_MASK_OFFSET | (uint8_t)EAttachmentAction::STENCIL)
-    AC_DS_NO_LOAD_NO_STORE   = MAKE_DEPTH_STENCIL_MASK(AC_NO_LOAD_NO_STORE, AC_NO_LOAD_NO_STORE),
-    AC_DS_STORE              = MAKE_DEPTH_STENCIL_MASK(AC_NO_LOAD_STORE, AC_NO_LOAD_STORE),
-    AC_DS_DEPTH_STORE        = MAKE_DEPTH_STENCIL_MASK(AC_NO_LOAD_STORE, AC_NO_LOAD_NO_STORE),
-    AC_DS_STENCIL_STORE      = MAKE_DEPTH_STENCIL_MASK(AC_NO_LOAD_NO_STORE, AC_NO_LOAD_STORE),
-    AC_DS_CLEAR_STORE        = MAKE_DEPTH_STENCIL_MASK(AC_CLEAR_STORE, AC_CLEAR_STORE),
-    AC_DS_LOAD_STORE         = MAKE_DEPTH_STENCIL_MASK(AC_LOAD_STORE, AC_LOAD_STORE),
-    AC_DS_LOAD_STORE_DEPTH   = MAKE_DEPTH_STENCIL_MASK(AC_LOAD_STORE, AC_NO_LOAD_NO_STORE),
-    AC_DS_LOAD_DEPTH         = MAKE_DEPTH_STENCIL_MASK(AC_LOAD_NO_STORE, AC_NO_LOAD_NO_STORE),
+    AC_DS_NO_LOAD_NO_STORE = MAKE_DEPTH_STENCIL_MASK(AC_NO_LOAD_NO_STORE, AC_NO_LOAD_NO_STORE),
+    AC_DS_STORE = MAKE_DEPTH_STENCIL_MASK(AC_NO_LOAD_STORE, AC_NO_LOAD_STORE),
+    AC_DS_DEPTH_STORE = MAKE_DEPTH_STENCIL_MASK(AC_NO_LOAD_STORE, AC_NO_LOAD_NO_STORE),
+    AC_DS_STENCIL_STORE = MAKE_DEPTH_STENCIL_MASK(AC_NO_LOAD_NO_STORE, AC_NO_LOAD_STORE),
+    AC_DS_CLEAR_STORE = MAKE_DEPTH_STENCIL_MASK(AC_CLEAR_STORE, AC_CLEAR_STORE),
+    AC_DS_LOAD_STORE = MAKE_DEPTH_STENCIL_MASK(AC_LOAD_STORE, AC_LOAD_STORE),
+    AC_DS_LOAD_STORE_DEPTH = MAKE_DEPTH_STENCIL_MASK(AC_LOAD_STORE, AC_NO_LOAD_NO_STORE),
+    AC_DS_LOAD_DEPTH = MAKE_DEPTH_STENCIL_MASK(AC_LOAD_NO_STORE, AC_NO_LOAD_NO_STORE),
     AC_DS_LOAD_STORE_STENCIL = MAKE_DEPTH_STENCIL_MASK(AC_LOAD_NO_STORE, AC_LOAD_STORE),
 
-    AC_DS_CLEAR_NO_STORE                 = MAKE_DEPTH_STENCIL_MASK(AC_CLEAR_NO_STORE, AC_CLEAR_NO_STORE),
-    AC_DS_LOAD_NO_STORE                  = MAKE_DEPTH_STENCIL_MASK(AC_LOAD_NO_STORE, AC_LOAD_NO_STORE),
-    AC_DS_CLEAR_STORE_DEPTH              = MAKE_DEPTH_STENCIL_MASK(AC_CLEAR_STORE, AC_CLEAR_NO_STORE),
-    AC_DS_CLEAR_STORE_STENCIL            = MAKE_DEPTH_STENCIL_MASK(AC_CLEAR_NO_STORE, AC_CLEAR_STORE),
-    AC_DS_CLEAR_RESOLVE_DEPTH            = MAKE_DEPTH_STENCIL_MASK(AC_CLEAR_RESOLVE, AC_CLEAR_NO_STORE),
-    AC_DS_CLEAR_RESOLVE_STENCIL          = MAKE_DEPTH_STENCIL_MASK(AC_CLEAR_NO_STORE, AC_CLEAR_RESOLVE),
+    AC_DS_CLEAR_NO_STORE = MAKE_DEPTH_STENCIL_MASK(AC_CLEAR_NO_STORE, AC_CLEAR_NO_STORE),
+    AC_DS_LOAD_NO_STORE = MAKE_DEPTH_STENCIL_MASK(AC_LOAD_NO_STORE, AC_LOAD_NO_STORE),
+    AC_DS_CLEAR_STORE_DEPTH = MAKE_DEPTH_STENCIL_MASK(AC_CLEAR_STORE, AC_CLEAR_NO_STORE),
+    AC_DS_CLEAR_STORE_STENCIL = MAKE_DEPTH_STENCIL_MASK(AC_CLEAR_NO_STORE, AC_CLEAR_STORE),
+    AC_DS_CLEAR_RESOLVE_DEPTH = MAKE_DEPTH_STENCIL_MASK(AC_CLEAR_RESOLVE, AC_CLEAR_NO_STORE),
+    AC_DS_CLEAR_RESOLVE_STENCIL = MAKE_DEPTH_STENCIL_MASK(AC_CLEAR_NO_STORE, AC_CLEAR_RESOLVE),
     AC_DS_LOAD_DEPTH_CLEAR_STENCIL_STORE = MAKE_DEPTH_STENCIL_MASK(AC_LOAD_STORE, AC_CLEAR_STORE),
-    AC_DS_CLEAR_STENCIL_STORE_STENCIL    = MAKE_DEPTH_STENCIL_MASK(AC_NO_LOAD_NO_STORE, AC_CLEAR_STORE)
+    AC_DS_CLEAR_STENCIL_STORE_STENCIL = MAKE_DEPTH_STENCIL_MASK(AC_NO_LOAD_NO_STORE, AC_CLEAR_STORE)
 #undef MAKE_DEPTH_STENCIL_MASK
 };
-FORCEINLINE EAttachmentAction GetDepthAction(EAttachmentAction _depth_stencil_action) {
-    return (EAttachmentAction)(_depth_stencil_action >> (uint32_t)INNER_DEPTH_MASK_OFFSET);
-}
-FORCEINLINE EAttachmentAction GetStencilAction(EAttachmentAction _depth_stencil_action) {
-    return (EAttachmentAction)(_depth_stencil_action & ((1 << (uint32_t)INNER_DEPTH_MASK_OFFSET) - 1));
-}
-FORCEINLINE EAttachmentLoadOp GetLoadOp(EAttachmentAction _load_store_action) {
-    return (EAttachmentLoadOp)(_load_store_action >> (uint32_t)EAttachmentStoreOp::NumBits);
-}
-FORCEINLINE EAttachmentStoreOp GetStoreOp(EAttachmentAction _load_store_action) {
-    return (EAttachmentStoreOp)(_load_store_action & ((1 << (uint32_t)EAttachmentStoreOp::NumBits)) - 1);
-}
+
+FORCEINLINE EAttachmentAction  GetDepthAction(EAttachmentAction _depth_stencil_action) { return (EAttachmentAction)(_depth_stencil_action >> (uint32_t)INNER_DEPTH_MASK_OFFSET); }
+FORCEINLINE EAttachmentAction  GetStencilAction(EAttachmentAction _depth_stencil_action) { return (EAttachmentAction)(_depth_stencil_action & ((1 << (uint32_t)INNER_DEPTH_MASK_OFFSET) - 1)); }
+FORCEINLINE EAttachmentLoadOp  GetLoadOp(EAttachmentAction _load_store_action) { return (EAttachmentLoadOp)(_load_store_action >> (uint32_t)EAttachmentStoreOp::NumBits); }
+FORCEINLINE EAttachmentStoreOp GetStoreOp(EAttachmentAction _load_store_action) { return (EAttachmentStoreOp)(_load_store_action & ((1 << (uint32_t)EAttachmentStoreOp::NumBits)) - 1); }
 using RHITextureRef = CountableRef<RHITexture>;
+
 struct RHIRenderPassInfo {
     /* different from attachment info, this is used for specific RenderPass only*/
     struct ColorAttachmentInfo {
@@ -3199,6 +3074,7 @@ struct RHIRenderPassInfo {
         RenderAttachmentView resolve_attachment_view{};
         EAttachmentAction    depth_stencil_action;
     };
+
     static_assert(sizeof(ColorAttachmentInfo) == sizeof(DepthStencilAttachmentInfo));
 
     Moer::StaticArray<ColorAttachmentInfo, MAX_PASS_ATTACHMENT_COUNT> color_attachments;
@@ -3228,6 +3104,7 @@ struct RHIRenderPassInfo {
         color_attachments[0].color_attachment_action = _color_attachment_action;
         color_attachments[0].resolve_attachment_view = _resolve_attachment_view;
     }
+
     explicit RHIRenderPassInfo(int32_t               _num_color_attachments,
                                RenderAttachmentView* _color_attachment_views,
                                EAttachmentAction     _color_attachment_action) {
@@ -3278,6 +3155,7 @@ struct RHIRenderPassInfo {
         depth_stencil_attachment.depth_stencil_action          = _depth_stencil_action;
         depth_stencil_attachment.resolve_attachment_view       = {};
     }
+
     explicit RHIRenderPassInfo(int32_t               _num_color_attachments,
                                RenderAttachmentView* _color_attachment_views,
                                EAttachmentAction     _color_attachment_action,
@@ -3310,6 +3188,7 @@ struct RHIRenderPassInfo {
         depth_stencil_attachment.depth_stencil_action          = _depth_stencil_action;
         depth_stencil_attachment.resolve_attachment_view       = _depth_stencil_attachment_view_resolve;
     }
+
     explicit RHIRenderPassInfo(RenderAttachmentView _color_attachment_view,
                                EAttachmentAction    _color_attachment_action,
                                RenderAttachmentView _depth_stencil_attachment_view,
@@ -3325,6 +3204,7 @@ struct RHIRenderPassInfo {
         depth_stencil_attachment.depth_stencil_action          = _depth_stencil_action;
         depth_stencil_attachment.resolve_attachment_view       = {};
     }
+
     explicit RHIRenderPassInfo(RenderAttachmentView _color_attachment_view,
                                EAttachmentAction    _color_attachment_action,
                                RenderAttachmentView _resolve_attachment_view,
@@ -3348,9 +3228,7 @@ struct RHIRenderPassInfo {
         int32_t count = 0;
         for (; count < MAX_PASS_ATTACHMENT_COUNT; count++) {
             const ColorAttachmentInfo& color_attachment_info = color_attachments[count];
-            if (!color_attachment_info.color_attachment_view.texture_view) {
-                break;
-            }
+            if (!color_attachment_info.color_attachment_view.texture_view) { break; }
         }
         return count;
     }
@@ -3362,26 +3240,20 @@ struct RHIRenderPassInfo {
         for (; color_attachment_index < MAX_PASS_ATTACHMENT_COUNT; color_attachment_index++) {
             const ColorAttachmentInfo& color_attachment_info = color_attachments[color_attachment_index];
             auto*                      texture_view          = color_attachment_info.color_attachment_view.texture_view;
-            if (!texture_view) {
-                break;
-            }
+            if (!texture_view) { break; }
             target.attachment_formats[color_attachment_index] = texture_view->GetTexture()->GetFormat();
             target.attachment_flags[color_attachment_index]   = texture_view->GetTexture()->GetUsageFlags();
             target.num_samples |= texture_view->GetTexture()->GetNumSamples();
         }
         target.attachments_count = color_attachment_index;
         //set empty value
-        for (; color_attachment_index < MAX_PASS_ATTACHMENT_COUNT; ++color_attachment_index) {
-            target.attachment_formats[color_attachment_index] = PF_UNDEFINED;
-        }
+        for (; color_attachment_index < MAX_PASS_ATTACHMENT_COUNT; ++color_attachment_index) { target.attachment_formats[color_attachment_index] = PF_UNDEFINED; }
         auto* depth_stencil_view = depth_stencil_attachment.depth_stencil_attachment_view.texture_view;
         if (depth_stencil_view) {
             target.depth_stencil_attachment_format = depth_stencil_view->GetTexture()->GetFormat();
             target.depth_stencil_attachment_flag   = depth_stencil_view->GetTexture()->GetUsageFlags();
             target.num_samples |= depth_stencil_view->GetTexture()->GetNumSamples();
-        } else {
-            target.depth_stencil_attachment_format = PF_UNDEFINED;
-        }
+        } else { target.depth_stencil_attachment_format = PF_UNDEFINED; }
         auto depth_action   = GetDepthAction(depth_stencil_attachment.depth_stencil_action);
         auto stencil_action = GetStencilAction(depth_stencil_attachment.depth_stencil_action);
 
@@ -3397,6 +3269,7 @@ struct RHIRenderPassInfo {
         return target;
     };
 };
+
 namespace Moer::Render {
     struct ColorAttachment {
 
@@ -3412,6 +3285,7 @@ namespace Moer::Render {
         uint              clear_stencil;
         bool              Valid() const { return target != nullptr; }
     };
+
     struct RenderPassInfo {
         Array<ColorAttachment> color_attachments;
         DepthAttachment        depth_attachment;
@@ -3425,13 +3299,14 @@ namespace Moer::Render {
         uint         back_buffer_sz   = 2;
         EPixelFormat preferred_format = PF_R8G8B8A8_SRGB;
     };
+
     class RENDER_API Swapchain : public RHIResource {
     protected:
-        Swapchain() : RHIResource(RRT_SWAPCHAIN){};
+        Swapchain() : RHIResource(RRT_SWAPCHAIN) {};
 
     public:
         virtual void Recreate(const SwapchainCreateInfo&) = 0;
-        virtual ~Swapchain()                              = default;
+        virtual      ~Swapchain() = default;
 
     public:
         EPixelFormat format;
@@ -3450,8 +3325,10 @@ public:
 class RHIPooledRenderQuery {
 public:
     RHIPooledRenderQuery() = default;
+
     RHIPooledRenderQuery(RHIRenderQueryPool* _pool, RHIRenderQueryRef _query_ref)
         : query_ref(_query_ref), pool(_pool) {}
+
     ~RHIPooledRenderQuery();
 
     RHIPooledRenderQuery(const RHIPooledRenderQuery&)            = delete;
@@ -3474,7 +3351,7 @@ protected:
 class RHIRenderQueryPool : public RHIResource {
 public:
     RHIRenderQueryPool() : RHIResource(RRT_RENDER_QUERY_POOL) {}
-    virtual ~RHIRenderQueryPool() {}
+    virtual                      ~RHIRenderQueryPool() {}
     virtual RHIPooledRenderQuery AllocateQuery() = 0;
 
 private:
@@ -3516,6 +3393,7 @@ enum class ERHITexturePlane : uint8_t {
 
     CompressedSurface = PRIMARY_COMPRESSED,
 };
+
 static_assert((1u << uint32_t(ERHITexturePlane::NumBits)) >= uint32_t(ERHITexturePlane::Num), "Not enough bits in the ERHITexturePlane enum");
 
 #pragma endregion
@@ -3539,9 +3417,7 @@ public:
     static inline RHITexture* GetDefaultTexture() { return default_texture; }
 
 private:
-    void SetReferencedTexture(RHITexture* _texture_ref) {
-        texture_ref = _texture_ref;
-    }
+    void SetReferencedTexture(RHITexture* _texture_ref) { texture_ref = _texture_ref; }
 
     RHITextureRef texture_ref;
 
@@ -3557,27 +3433,28 @@ public:
           platform(_platform),
           library_name(_name),
           library_id(GetHash(_name)) {}
+
     virtual ~RHIShaderLibrary() = default;
 
-    FORCEINLINE EShaderPlatform GetPlatform() const { return platform; }
+    FORCEINLINE EShaderPlatform    GetPlatform() const { return platform; }
     FORCEINLINE const std::string& GetName() const { return library_name; }
     FORCEINLINE uint32_t           GetId() const { return library_id; }
 
-    virtual bool       IsNativeLibrary() const                                    = 0;
-    virtual int32_t    GetNumShaderMaps() const                                   = 0;
-    virtual int32_t    GetNumShaders() const                                      = 0;
-    virtual int32_t    GetNumShadersForShaderMap(int32_t ShaderMapIndex) const    = 0;
-    virtual int32_t    GetShaderIndex(int32_t ShaderMapIndex, int32_t i) const    = 0;
+    virtual bool       IsNativeLibrary() const = 0;
+    virtual int32_t    GetNumShaderMaps() const = 0;
+    virtual int32_t    GetNumShaders() const = 0;
+    virtual int32_t    GetNumShadersForShaderMap(int32_t ShaderMapIndex) const = 0;
+    virtual int32_t    GetShaderIndex(int32_t ShaderMapIndex, int32_t i) const = 0;
     virtual SHA256Hash GetShaderHash(int32_t ShaderMapIndex, int32_t ShaderIndex) = 0;
-    virtual int32_t    FindShaderMapIndex(const SHA256Hash& Hash)                 = 0;
-    virtual int32_t    FindShaderIndex(const SHA256Hash& Hash)                    = 0;
+    virtual int32_t    FindShaderMapIndex(const SHA256Hash& Hash) = 0;
+    virtual int32_t    FindShaderIndex(const SHA256Hash& Hash) = 0;
     //    virtual bool PreloadShader(int32_t ShaderIndex, FGraphEventArray& OutCompletionEvents) { return false; }
     //    virtual bool PreloadShaderMap(int32_t ShaderMapIndex, FGraphEventArray& OutCompletionEvents) { return false; }
     //    virtual bool PreloadShaderMap(int32_t ShaderMapIndex, FCoreDelegates::FAttachShaderReadRequestFunc AttachShaderReadRequestFunc) { return false; }
     virtual void ReleasePreloadedShader(int32_t ShaderIndex) {}
 
     virtual CountableRef<RHIShader> CreateShader(int32_t ShaderIndex) { return nullptr; }
-    virtual void                    Teardown(){};
+    virtual void                    Teardown() {};
 
 protected:
     EShaderPlatform platform;
@@ -3604,6 +3481,7 @@ public:
           m_type(mType),
           m_offset(offset),
           m_count(count) {}
+
     RHIBufferRef   GetVertexBuffer() const;
     RHIBufferRef   GetIndexBuffer() const;
     EPrimitiveType GetPrimitiveType() const;

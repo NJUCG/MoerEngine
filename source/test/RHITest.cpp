@@ -29,13 +29,18 @@ public:
     DEFINE_SHADER_ARGS();
 };
 
+struct TestBindlessParam {
+    float4 color;
+    uint texture_handle;
+};
 class TestTrianglePipelineConstColor : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(TestTrianglePipelineConstColor);
-    DEFINE_SHADER_CONSTANT_STRUCT(float4, param);
+    DEFINE_SHADER_CONSTANT_STRUCT(TestBindlessParam, param);
+    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
     DEFINE_SHADER_TEX(texture);
     DEFINE_SHADER_SAMPLER(defaultSampler);
-    DEFINE_SHADER_ARGS(defaultSampler, texture, param);
+    DEFINE_SHADER_ARGS(defaultSampler, texture, bdls, param);
 };
 
 class TestTrianglePipelineBdls : public RasterPipeline {
@@ -69,7 +74,7 @@ int main(int argc, const char** argv) {
     auto buf = device.CreateBuffer<float>(1024, EBufferUsageFlags::UNORDERED_ACCESS);
     SwapchainCreateInfo sc_info{.window_handle = (uintptr_t)window_handle, .size = {resolution.x, resolution.y}, .back_buffer_sz = 2, .preferred_format = PF_R8G8B8A8_SRGB};
     auto sc  = device.CreateSwapchain(sc_info);
-
+    BindlessArrayRef bindless_array = device.CreateBindlessArray();
     auto&       cmd_queue = device.GetCommandQueue(EQueueType::Graphics);
     CommandList cmd_list;
     auto        buffer = device.CreateBuffer<uint>(1024, EBufferUsageFlags::UNORDERED_ACCESS);
@@ -105,7 +110,7 @@ int main(int argc, const char** argv) {
     cmd_queue.Sync();
 
     VertexStream vertex_stream;
-    vertex_stream.Emplace(
+    vertex_stream.EmplacePerVertex(
         {Moer::Render::VertexElement(PF_R32G32B32_SFLOAT),
          Moer::Render::VertexElement(PF_R32G32_SFLOAT)});
     GfxPsoCreateInfo pso_info(RHIRasterizeInfo::Preset(),
@@ -134,17 +139,22 @@ int main(int argc, const char** argv) {
         {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f}},
     };
     uint indices[]     = {0, 1, 2};
+    float4 color_red = {1, 0, 0, 1};
+    Sampler sampler(SF_LINEAR,SAM_CLAMP_TO_EDGE);
+    uint bdls_tex_handle = bindless_array->AllocateTexture(font_tex, sampler).handle;
+
     auto vertex_buffer = device.CreateBuffer<float>(3 * sizeof(Vertex) / sizeof(float), EBufferUsageFlags::VERTEX_BUFFER);
     auto index_buffer  = device.CreateBuffer<uint>(3, EBufferUsageFlags::INDEX_BUFFER);
     cmd_list.CopyFrom(std::span<byte>((byte*)vertices, sizeof(vertices)), vertex_buffer->GetView());
     cmd_list.CopyFrom(std::span<byte>((byte*)indices, sizeof(indices)), index_buffer->GetView());
+    cmd_list.UpdateBindlessArray(bindless_array);
     cmd_queue.Execute(cmd_list.Submit());
     cmd_queue.Sync();
 
-    float4 color_red = {1, 0, 0, 1};
-    Sampler sampler(SF_LINEAR,SAM_CLAMP_TO_EDGE);
+
     VertexBuffer vb(vertex_buffer, 0);
     IndexBuffer  ib(index_buffer->GetView(), EIndexElementType::IET_UINT32);
+
     while (WindowContext::ShouldClose(window_handle) == false) {
         WindowContext::Tick();
 
@@ -172,8 +182,11 @@ int main(int argc, const char** argv) {
             sc_info.size = {resolution.x, resolution.y};
             sc->Recreate(sc_info);
         }
+        TestBindlessParam param;
+        param.color = color_red;
+        param.texture_handle = bdls_tex_handle;
         cmd_list.Barriers(ReadTexture(font_tex, ETextureState::SAMPLE));
-        cmd_list.Gfx(rast_pipeline_constant_color, sampler, font_tex, color_red)
+        cmd_list.Gfx(rast_pipeline_constant_color, sampler, font_tex, bindless_array, param)
             .Draw(Rect2D(0, 0, resolution.x, resolution.y), std::move(draw_datas), ColorAttachment(output));
         cmd_queue.Execute(cmd_list.Submit());
         cmd_queue.Present(sc, output);

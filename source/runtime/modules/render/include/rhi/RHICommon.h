@@ -1112,6 +1112,7 @@ namespace Moer {
             uint size;
             uint padded_size;
         };
+        static constexpr std::string_view bdls_name = "bdls_114514";
         struct Bindless {
             uint set;
             uint binding;

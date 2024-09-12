@@ -207,7 +207,7 @@ namespace Moer::Render {
         BufferRef  CreateBuffer(uint _element_cnt, uint _byte_stride, EBufferUsageFlags _usage) override;
 
         BufferRef CreateStagingBuffer(uint64 _byte_size) override;
-
+        BindlessArrayRef CreateBindlessArray(uint _max_size) override;
         FenceRef CreateFence() override;
 
         // RHIViewportRef CreateViewport(const RHIViewportInitializer& _init) override;

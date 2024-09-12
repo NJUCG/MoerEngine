@@ -983,7 +983,7 @@ bool CreateDeviceObjects() {
     auto& sd_mgr           = Moer::Render::ShaderManager::Get();
     using namespace Moer::Render;
     VertexStream vertex_stream;
-    vertex_stream.Emplace(
+    vertex_stream.EmplacePerVertex(
         {Moer::Render::VertexElement(PF_R32G32_SFLOAT),
          Moer::Render::VertexElement(PF_R32G32_SFLOAT),
          Moer::Render::VertexElement(PF_R8G8B8A8_UNORM)});
