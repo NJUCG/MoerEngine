@@ -199,45 +199,6 @@ namespace Moer::Render {
         return BufferView(this, _byte_offset, _byte_size, GetStride());
     }
 
-    BindlessHandle BindlessArray::AllocateBuffer(Buffer* _buffer) {
-        uint slot = 0;
-        if (free_buffer_slots.empty()) {
-            slot = buffer_slot_offset++;
-            return BindlessHandle(uint64(slot));
-        }
-
-        slot = free_buffer_slots.back();
-        free_buffer_slots.pop_back();
-
-        buffers_allocated.emplace_back(_buffer, slot);
-
-        return BindlessHandle(uint64(slot));
-    }
-    BindlessHandle BindlessArray::AllocateTexture(Texture* _texture, Sampler _sampler) {
-        uint slot = 0;
-        if (free_texture_slots.empty()) {
-            slot = texture_slot_offset++;
-            return BindlessHandle(uint64(slot));
-        }
-
-        slot = free_texture_slots.back();
-        free_texture_slots.pop_back();
-
-        textures_allocated.push_back({_texture, _sampler, slot});
-
-        return BindlessHandle(uint64(slot));
-    }
-
-    void BindlessArray::FreeBuffer(BindlessHandle _handle) {
-        uint slot = _handle.handle;
-        buffers_freed.push_back(slot);
-    }
-
-    void BindlessArray::FreeTexture(BindlessHandle _handle) {
-        uint slot = _handle.handle;
-        textures_freed.push_back(slot);
-    }
-
     // void BindlessArray::FreeBufferFrameEnd() {
     //     for (uint slot : buffers_freed) {
     //         free_buffer_slots.push_back(slot);

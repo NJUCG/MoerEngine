@@ -141,7 +141,7 @@ int main(int argc, const char** argv) {
     uint indices[]     = {0, 1, 2};
     float4 color_red = {1, 0, 0, 1};
     Sampler sampler(SF_LINEAR,SAM_CLAMP_TO_EDGE);
-    uint bdls_tex_handle = bindless_array->AllocateTexture(font_tex, sampler).handle;
+    uint bdls_tex_handle = bindless_array->AllocateTexture(font_tex, sampler);
 
     auto vertex_buffer = device.CreateBuffer<float>(3 * sizeof(Vertex) / sizeof(float), EBufferUsageFlags::VERTEX_BUFFER);
     auto index_buffer  = device.CreateBuffer<uint>(3, EBufferUsageFlags::INDEX_BUFFER);

@@ -177,7 +177,8 @@ namespace Moer::Render {
     }
 
     void CommandList::UpdateBindlessArray(BindlessArrayRef _array) {
-        commands.push_back(MakeUnique<UpdateBindlessArrayCmd>(_array));
+        assert(_array && "Bindless array is null");
+        commands.push_back(_array->CreateUpdateCommand());
     }
 
     // void CommandList::SubmitArgs(ShaderPipeline& _pso, Arguments&& _args) {

@@ -206,9 +206,9 @@ namespace Moer::Render {
         TextureRef CreateTexture(Extent3D _size, EPixelFormat _format, ETextureUsageFlags _usage, uint32_t _mip_cnt, uint32_t _array_size) override;
         BufferRef  CreateBuffer(uint _element_cnt, uint _byte_stride, EBufferUsageFlags _usage) override;
 
-        BufferRef CreateStagingBuffer(uint64 _byte_size) override;
+        BufferRef        CreateStagingBuffer(uint64 _byte_size) override;
         BindlessArrayRef CreateBindlessArray(uint _max_size) override;
-        FenceRef CreateFence() override;
+        FenceRef         CreateFence() override;
 
         // RHIViewportRef CreateViewport(const RHIViewportInitializer& _init) override;
 
@@ -228,6 +228,9 @@ namespace Moer::Render {
         const VkSampler  GetSampler(Sampler _sampler) const;
         void             GetDescriptorEXT(const VkDescriptorGetInfoEXT* _descriptor_info, size_t _data_size, void* _p_data) const {
             vk_get_descriptor_ext(m_device, _descriptor_info, _data_size, _p_data);
+        };
+        void GetDescriptorSetLayoutBindingOffsetEXT(VkDescriptorSetLayout _layout, uint32_t _binding, uint64* _offset) const {
+            vk_get_descriptor_set_layout_binding_offset_ext(m_device, _layout, _binding, _offset);
         };
 
     public:

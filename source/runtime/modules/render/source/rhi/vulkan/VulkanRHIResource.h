@@ -801,39 +801,59 @@ namespace Moer::Render {
 
     class VulkanBindlessArray final : public BindlessArray, public VulkanDeviceObject {
     public:
+        enum EType : uint {
+            Texture,
+            Buffer
+        };
+        struct Handle {
+            uint slot : 22;
+            uint attrib : 8;
+            uint type : 2;
+
+            bool IsTexture() const { return type == Texture; }
+            bool IsBuffer() const { return type == Buffer; }
+        };
+
         VulkanBindlessArray(VulkanDevice* _device, uint32 _max_size);
         ~VulkanBindlessArray() override;
-        
+
         uint AllocateTexture(const TextureView& _texture, Sampler _sampler) override;
         uint AllocateBuffer(BufferView _buffer) override;
+        void FreeTexture(uint _slot) override;
+        void FreeBuffer(uint _slot) override;
+        //call on update
         void CmdUpdate(Array<TextureUpdateInfo>&& _textures_allocated, Array<BufferUpdateInfo>&& _buffers_allocated);
-        void OnFree();
+        //call on frame end free
+        void OnFree(Array<uint>&& _slots_freed, Array<uint>&& _textures_freed, Array<uint>&& _buffers_freed);
+
     public:
         VulkanBuffer* bindless_array_buffer;
         VulkanBuffer* bindless_buffer_descs;
         VulkanBuffer* bindless_texture_descs;
+
     private:
-        void WriteBufferBinding(uint _index, VulkanBuffer* _buffer);
-        void WriteTextureBinding(uint _index, Texture* _texture);
     protected:
-    
-        UniquePtr<Command> CreateUpdateCommand() override;
+        UniquePtr<Command>          CreateUpdateCommand() override;
         class VulkanDescriptorHeap& g_heap;
 
         LockFreeQueueBase<uint> free_texture_slots;
         LockFreeQueueBase<uint> free_buffer_slots;
         LockFreeQueueBase<uint> free_slots;
-        uint        texture_slot_offset;
-        uint        buffer_slot_offset;
-        uint        slot_offset;
+        uint                    texture_slot_offset;
+        uint                    buffer_slot_offset;
+        uint                    slot_offset;
         //frame resources
         Array<TextureUpdateInfo> textures_allocated;
         Array<BufferUpdateInfo>  buffers_allocated;
-        
-        Array<uint>              textures_freed;
-        Array<uint>              buffers_freed;
-        Array<uint>             slots_freed;
-        Array<uint> numbers;
+
+        Array<uint>   textures_freed;
+        Array<uint>   buffers_freed;
+        Array<uint>   slots_freed;
+        Array<Handle> handles;
+        Array<uint>   numbers;
+
+        uint64 buffers_offset_in_set;
+        uint64 textures_offset_in_set;
     };
 
 #pragma endregion
