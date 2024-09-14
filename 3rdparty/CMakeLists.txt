@@ -49,4 +49,6 @@ set_target_folder(mimalloc ${third_party_folder}/mimalloc)
 add_subdirectory(MeshProcess)
 set_target_folder(MeshProcess ${third_party_folder})
 
-
+set(VOLK_STATIC_DEFINES ON)
+add_subdirectory(volk)
+set_target_folder(volk ${third_party_folder}/volk)
