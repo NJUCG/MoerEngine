@@ -10,6 +10,7 @@
 #include "VulkanPipelineResourceCache.h"
 #include "VulkanCommand.h"
 
+#include "misc/STL.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
@@ -873,6 +874,111 @@ namespace Moer::Render {
     }
 
     void VulkanPipelineState::CreatePipelineLayout(const VkPipelineLayoutCreateInfo& _pipeline_layout_ci) { VK_CHECK_RESULT(vkCreatePipelineLayout(m_device->GetDevice(), &_pipeline_layout_ci, nullptr, &m_pipeline_layout)); }
+
+    void VulkanPipelineState::InitPipelineLayout(UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>&& _descriptor_set_layouts, std::optional<VkPushConstantRange> _push_constant_range){
+        VkPipelineLayoutCreateInfo pipeline_layout_ci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        pipeline_layout_ci.setLayoutCount         = static_cast<uint32_t>(_descriptor_set_layouts.size());
+        
+        bind_template = MakeUnique<VulkanPipelineParamBinder>();
+        bind_template->set_binders.rehash(_descriptor_set_layouts.size());
+        
+        VkDescriptorSetLayoutCreateInfo descriptor_set_layout_ci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        Array<VkDescriptorSetLayout> descriptor_set_layouts;
+        Array<VkDescriptorSetLayoutBinding> descriptor_set_layout_bindings;
+        uint total_binding_count = 0;
+        for (auto& [set, layout] : _descriptor_set_layouts) {
+            total_binding_count += layout.bindings.size();
+            VulkanDescriptorSetBinder& binder = bind_template->set_binders[set];
+            binder.bind_infos.resize(layout.bindings.size());
+            binder.writers.resize(layout.bindings.size());
+            binder.is_bindless = layout.is_bindless;
+        }
+
+        descriptor_set_layouts.resize(total_binding_count);
+        descriptor_set_layout_bindings.resize(total_binding_count);
+        total_binding_count = 0;
+        for (const auto& [set, layout] : _descriptor_set_layouts) {
+            VkDescriptorSetLayoutCreateInfo descriptor_set_layout_ci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+            VulkanDescriptorSetBinder& binder = bind_template->set_binders[set];
+            for (const auto& [binding_idx, binding] : layout.bindings) {
+                descriptor_set_layout_bindings[total_binding_count + binding.binding] = binding;
+                
+                VkWriteDescriptorSet& write_info = binder.writers[binding.binding];
+                write_info.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                write_info.dstSet = VK_NULL_HANDLE;//ignored
+                write_info.dstBinding = binding.binding;
+                write_info.dstArrayElement = 0;
+                write_info.descriptorCount = binding.descriptorCount;
+                write_info.descriptorType = binding.descriptorType;
+
+                VulkanDescriptorInfo& descriptor_info = binder.bind_infos[binding.binding];
+                descriptor_info.param_idx = binding.binding;
+                
+                switch (binding.descriptorType){
+                    
+                    case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:{
+                        descriptor_info.info_idx = binder.buffer_infos.size();
+                        binder.buffer_infos.emplace_back(VK_NULL_HANDLE, 0, VK_WHOLE_SIZE);
+                        write_info.pBufferInfo = &binder.buffer_infos.back();
+                        break;
+                    }
+                    case VK_DESCRIPTOR_TYPE_SAMPLER:{
+                        descriptor_info.info_idx = binder.image_infos.size();
+                        binder.image_infos.emplace_back(VK_NULL_HANDLE,
+                            VK_NULL_HANDLE,
+                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                        write_info.pImageInfo = &binder.image_infos.back();
+                        break;
+                    }
+                    case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
+                    case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:{
+                        descriptor_info.info_idx = binder.image_infos.size();
+                        binder.image_infos.emplace_back(VK_NULL_HANDLE,
+                            VK_NULL_HANDLE,
+                            binding.descriptorType == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE ? 
+                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : 
+                                VK_IMAGE_LAYOUT_GENERAL);
+                        write_info.pImageInfo = &binder.image_infos.back();
+                        
+                        break;
+                    }
+                    case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:{
+                        
+                    }
+                    default:
+                        {
+                            LOG_CRITICAL("Unsupported descriptor type: {}", uint(binding.descriptorType));
+                            assert(false);
+                        }
+                }
+                binder.push_info.stageFlags |= binding.stageFlags;
+            }
+            descriptor_set_layout_ci = layout.layout_create_info;
+            descriptor_set_layout_ci.bindingCount = layout.bindings.size();
+            descriptor_set_layout_ci.pBindings = descriptor_set_layout_bindings.data() + total_binding_count;
+            VK_CHECK_RESULT(vkCreateDescriptorSetLayout(m_device->GetDevice(), &descriptor_set_layout_ci, VK_NULL_HANDLE, &descriptor_set_layouts[set]));
+            total_binding_count += layout.bindings.size();
+
+        }
+        pipeline_layout_ci.pSetLayouts = descriptor_set_layouts.data();
+        pipeline_layout_ci.pushConstantRangeCount = _push_constant_range.has_value() ? 1 : 0;
+        pipeline_layout_ci.pPushConstantRanges = _push_constant_range.has_value() ? &_push_constant_range.value() : nullptr;
+        VK_CHECK_RESULT(vkCreatePipelineLayout(m_device->GetDevice(), &pipeline_layout_ci, nullptr, &m_pipeline_layout));
+
+        for (auto& [set, binder] : bind_template->set_binders) {
+            binder.push_info.pDescriptorWrites = binder.writers.data();
+            binder.push_info.descriptorWriteCount = binder.writers.size();
+            binder.push_info.sType = VK_STRUCTURE_TYPE_PUSH_DESCRIPTOR_SET_INFO_KHR;
+            binder.push_info.pNext = nullptr;
+            binder.push_info.layout = m_pipeline_layout;
+            binder.push_info.set = set;
+        }
+        for (auto& layout : descriptor_set_layouts) {
+            vkDestroyDescriptorSetLayout(m_device->GetDevice(), layout, nullptr);
+        }
+
+
+    }
 
     VulkanRHIGraphicsPipelineState::~VulkanRHIGraphicsPipelineState() {
         // if (m_pipeline_state_cache) {

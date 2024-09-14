@@ -10,6 +10,7 @@
 
 #include "VulkanRHIResource.h"
 #include "rhi/RHIResource.h"
+#include "shader/ShaderPipeline.h"
 #include "vulkan/vulkan_core.h"
 
 #include <condition_variable>
@@ -136,6 +137,7 @@ namespace Moer::Render {
 
         void UploadDescriptors(PipelineHandle& _pso_handle);
         void UploadPushConstants(PipelineHandle& _pso_handle, std::span<const uint> _data);
+        void BindDescriptors(PipelineHandle& _pso_handle, const ArrayArguments& _args);
 
         VkCommandBuffer GetHandle() const { return command_buffer; }
     };

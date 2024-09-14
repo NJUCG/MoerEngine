@@ -17,6 +17,7 @@
 #include "shader/ShaderCommon.h"
 
 #include <condition_variable>
+// #include "VulkanDescriptor.h"
 #include <variant>
 #include <vulkan/vulkan_core.h>
 
@@ -356,6 +357,43 @@ namespace Moer::Render {
     static auto DecodeBindlessInfo(uint64 _val) {
         return std::make_tuple(int(_val >> 17) & 0x7FFF, int(_val >> 2) & 0x7FFF, uint(_val >> 32), uint8(_val >> 1) & 0x1, uint8(_val) & 0x1);
     }
+    struct VulkanDescriptorSetLayoutCreateInfo{
+        VkDescriptorSetLayoutCreateInfo layout_create_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        UnorderedMap<uint, VkDescriptorSetLayoutBinding> bindings{};
+        bool is_bindless = false;
+        VkDescriptorSetLayoutBinding& operator[](uint _binding) { return bindings[_binding]; }
+        auto TryEmplaceBinding(uint _binding, VkDescriptorSetLayoutBinding&& _binding_info) { return bindings.try_emplace(_binding, std::move(_binding_info)); }
+    };
+
+    struct VulkanDescriptorInfo{
+        /** offset in current descriptor set */
+        uint offset;
+        /** index in ArrayArguments */
+        uint param_idx;
+        /** index in descinfo arrays */
+        uint info_idx;
+        bool is_array;
+
+
+    };
+
+    struct VulkanDescriptorSetBinder{
+        Array<VkWriteDescriptorSet> writers;
+        Array<VulkanDescriptorInfo> bind_infos;
+        Array<VkDescriptorImageInfo> image_infos;
+        Array<VkDescriptorBufferInfo> buffer_infos;
+        VkPushDescriptorSetInfoKHR push_info;
+        bool is_bindless;
+    };
+
+    struct VulkanBindlessBinder{
+
+    };
+
+    struct VulkanPipelineParamBinder{
+        UnorderedMap<uint, VulkanDescriptorSetBinder> set_binders;
+        VkPushConstantsInfoKHR m_push_constants_info;
+    };
 
     class VulkanEnumTranslator final {
     public:
@@ -557,6 +595,10 @@ namespace Moer::Render {
                     return VK_PIPELINE_BIND_POINT_GRAPHICS;
             }
         }
+        void InitPipelineLayout(UnorderedMap<uint, struct VulkanDescriptorSetLayoutCreateInfo>&&, std::optional<VkPushConstantRange> _push_constant_range = std::nullopt);
+
+    public:
+        UniquePtr<struct VulkanPipelineParamBinder> bind_template;
 
     protected:
         friend VulkanDevice;
@@ -566,8 +608,7 @@ namespace Moer::Render {
         Moer::Render::VulkanDescriptorSetsLayout* m_descriptor_sets_layout;
         // resource cache
         VulkanPipelineResourceCache* m_pipeline_state_cache;
-
-        EType m_type;
+        EType                        m_type;
     };
 
     class VulkanRHIGraphicsPipelineState final : public RHIGfxPso, public VulkanPipelineState {

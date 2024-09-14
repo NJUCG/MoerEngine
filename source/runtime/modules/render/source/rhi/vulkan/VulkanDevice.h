@@ -332,10 +332,6 @@ namespace Moer::Render {
         PFN_vkCmdInsertDebugUtilsLabelEXT   vk_cmd_insert_debug_utils_label_ext  = VK_NULL_HANDLE;
         PFN_vkSetDebugUtilsObjectNameEXT    vk_set_debug_utils_object_name_ext   = VK_NULL_HANDLE;
 
-        PFN_vkGetDescriptorEXT                       vk_get_descriptor_ext                           = VK_NULL_HANDLE;
-        PFN_vkGetDescriptorSetLayoutBindingOffsetEXT vk_get_descriptor_set_layout_binding_offset_ext = VK_NULL_HANDLE;
-        PFN_vkGetDescriptorSetLayoutSizeEXT          vk_get_descriptor_set_layout_size_ext           = VK_NULL_HANDLE;
-
         VmaAllocator                                    m_allocator;
         VulkanDescriptorSetAllocator*                   m_descriptor_allocator;
         VulkanDescriptorHeap                            m_global_descriptor_heap;
@@ -345,6 +341,13 @@ namespace Moer::Render {
         LockFreeQueueBase<RHIResource, 64>              deferred_release_queue;
         static constexpr uint                           immutable_sampler_count = uint(SF_Num) * uint(SAM_Num) * uint(SCF_Num);
         StaticArray<VkSampler, immutable_sampler_count> immutable_samplers;
+
+    public:
+        PFN_vkGetDescriptorEXT                       vk_get_descriptor_ext                           = VK_NULL_HANDLE;
+        PFN_vkGetDescriptorSetLayoutBindingOffsetEXT vk_get_descriptor_set_layout_binding_offset_ext = VK_NULL_HANDLE;
+        PFN_vkGetDescriptorSetLayoutSizeEXT          vk_get_descriptor_set_layout_size_ext           = VK_NULL_HANDLE;
+
+        PFN_vkCmdPushDescriptorSet2KHR vk_cmd_push_descriptor_set = VK_NULL_HANDLE;
 
     private:
         friend VkCommandQueue;
