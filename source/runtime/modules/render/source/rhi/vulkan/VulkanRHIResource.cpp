@@ -1369,7 +1369,7 @@ namespace Moer::Render {
     bindless_buffer_descs(nullptr), 
     bindless_texture_descs(nullptr), 
     g_heap(_device->GetGlobalDescriptorHeap()), 
-    texture_slot_offset(256), 
+    texture_slot_offset(0), 
     buffer_slot_offset(0), 
     slot_offset(0), 
     numbers(_max_size),
@@ -1413,7 +1413,7 @@ namespace Moer::Render {
         VkDescriptorSetLayoutBinding& sampler_binding = texture_bindings[0]; 
         sampler_binding.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
         sampler_binding.binding = 0;
-        sampler_binding.descriptorCount = 256;
+        sampler_binding.descriptorCount = VulkanDevice::bindless_sampler_cnt;
         sampler_binding.stageFlags = VK_SHADER_STAGE_ALL;
         sampler_binding.pImmutableSamplers = VK_NULL_HANDLE;
 
@@ -1428,12 +1428,12 @@ namespace Moer::Render {
             descriptor_info.type = VK_DESCRIPTOR_TYPE_SAMPLER;
             
             VkDescriptorDataEXT& descriptor_data = descriptor_info.data;
-            for(uint i = 0; i < 256; i++){
+            for(uint i = 0; i < VulkanDevice::bindless_sampler_cnt; i++){
                 descriptor_data.pSampler = i >= m_device->ImmutableSamplerCount() ? &samplers[0] : &samplers[i];
                 m_device->GetDescriptorEXT(&descriptor_info, sampler_stride, mapped_data_byte + i * sampler_stride);
             }
             vmaUnmapMemory(m_device->GetVmaAllocator(), bindless_texture_descs->GetAllocation());
-            vmaFlushAllocation(m_device->GetVmaAllocator(), bindless_texture_descs->GetAllocation(), 0, 256 * sampler_stride);
+            vmaFlushAllocation(m_device->GetVmaAllocator(), bindless_texture_descs->GetAllocation(), 0, VulkanDevice::bindless_sampler_cnt * sampler_stride);
         }
 
         

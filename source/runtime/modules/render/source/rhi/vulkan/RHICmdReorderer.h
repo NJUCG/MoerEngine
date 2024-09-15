@@ -18,11 +18,11 @@
 namespace Moer::Render {
     struct ArenaAllocator {
         struct LinkedChunk {
-			LinkedChunk* next = nullptr;
-			byte*         data = nullptr;
-		};
+            LinkedChunk* next = nullptr;
+            byte*        data = nullptr;
+        };
         ArenaAllocator(uint64 _size) : capacity(_size) {
-            head = reinterpret_cast<LinkedChunk*>(Memory::Malloc(sizeof(LinkedChunk)));
+            head       = reinterpret_cast<LinkedChunk*>(Memory::Malloc(sizeof(LinkedChunk)));
             head->data = reinterpret_cast<byte*>(Memory::Malloc(_size));
             head->next = nullptr;
         }
@@ -30,11 +30,10 @@ namespace Moer::Render {
         ArenaAllocator& operator=(const ArenaAllocator&) = delete;
 
         ArenaAllocator(ArenaAllocator&& _other) noexcept {
-            head = _other.head;
+            head            = _other.head;
             capacity        = _other.capacity;
             _other.head     = nullptr;
             _other.capacity = 0;
-  
         }
         ArenaAllocator& operator=(ArenaAllocator&& _other) noexcept {
             if (this != &_other) {
@@ -52,20 +51,20 @@ namespace Moer::Render {
         ~ArenaAllocator() {
             LinkedChunk* iter = head;
             while (iter) {
-				LinkedChunk* next = iter->next;
-				Memory::Free(iter->data);
-				Memory::Free(iter);
-				iter = next;
-			}
-            head = nullptr;
+                LinkedChunk* next = iter->next;
+                Memory::Free(iter->data);
+                Memory::Free(iter);
+                iter = next;
+            }
+            head   = nullptr;
             offset = 0;
         }
-        void  Expand() {
+        void Expand() {
             LinkedChunk* new_chunk = reinterpret_cast<LinkedChunk*>(Memory::Malloc(sizeof(LinkedChunk)));
-			new_chunk->data = reinterpret_cast<byte*>(Memory::Malloc(capacity));
-			new_chunk->next = head;
-			head = new_chunk;
-            offset = 0;
+            new_chunk->data        = reinterpret_cast<byte*>(Memory::Malloc(capacity));
+            new_chunk->next        = head;
+            head                   = new_chunk;
+            offset                 = 0;
         }
         void* Malloc(uint64 _size) {
             if (offset + _size > capacity) {
@@ -83,8 +82,8 @@ namespace Moer::Render {
         }
 
         //byte*  data     = nullptr;
-        uint64 offset   = 0;
-        uint64 capacity = 0;
+        uint64       offset   = 0;
+        uint64       capacity = 0;
         LinkedChunk* head;
     };
 
@@ -118,8 +117,8 @@ namespace Moer::Render {
         }
 
         ArenaAllocator& allocator() const {
-			return _alloc;
-		}
+            return _alloc;
+        }
 
     private:
         ArenaAllocator& _alloc;
@@ -127,7 +126,7 @@ namespace Moer::Render {
     class CmdReorderer {
 
     public:
-        CmdReorderer() : m_arena(65556), m_arena_stl(m_arena){}
+        CmdReorderer() : m_arena(65556), m_arena_stl(m_arena) {}
         ~CmdReorderer() {
         }
         enum class ResourceRW : uint8 {
@@ -178,7 +177,7 @@ namespace Moer::Render {
         };
 
         struct RangeHandle : public ResourceHandle {
-            using Map = UnorderedMap<Range, ResourceView, RangeHash,std::equal_to<Range>, ArenaAllocatorWrapper<std::pair<const Range, ResourceView>>>;
+            using Map = UnorderedMap<Range, ResourceView, RangeHash, std::equal_to<Range>, ArenaAllocatorWrapper<std::pair<const Range, ResourceView>>>;
 
         private:
             ResourceView          max_view;
@@ -189,8 +188,8 @@ namespace Moer::Render {
 
         public:
             RangeHandle(const ArenaAllocatorWrapper<ResourceView>& _alloc) : read_range(std::numeric_limits<int64>::max(), std::numeric_limits<int64>::min()),
-                            write_range(std::numeric_limits<int64>::max(), std::numeric_limits<int64>::min()),
-                                                         range2view(max_range_size, _alloc) {
+                                                                             write_range(std::numeric_limits<int64>::max(), std::numeric_limits<int64>::min()),
+                                                                             range2view(max_range_size, _alloc) {
             }
 
             int64 GetMaxReadLayer(const Range& _range) {
@@ -281,12 +280,12 @@ namespace Moer::Render {
             ResourceView view;
         };
         struct CommandListNode {
-            Command const*   cmd;
+            Command const*         cmd;
             CommandListNode const* next;
         };
         struct LinkedCommandList {
             CommandListNode const* head = nullptr;
-            CommandListNode* tail      = nullptr;
+            CommandListNode*       tail = nullptr;
         };
         Array<LinkedCommandList> m_cmd_lists;
 
@@ -309,7 +308,7 @@ namespace Moer::Render {
                     TValue* value_ptr = m_arena.Malloc<TValue>();
                     value             = value_ptr;
                     if constexpr (std::is_same_v<TValue, RangeHandle>) {
-						new (value) TValue(m_arena_stl);
+                        new (value) TValue(m_arena_stl);
                     } else {
                         new (value) TValue();
                     }
@@ -620,6 +619,10 @@ namespace Moer::Render {
             AddCmd(_cmd, layer);
         }
 
+        void VisitCmd(const UpdateBindlessArrayCmd* _cmd) {
+            //TODO: important here
+        }
+
         void VisitCmd(const DispatchCmd* _cmd) {
             int64 layer = 0;
             auto  func  = [&](const TArg& _arg) {
@@ -672,6 +675,8 @@ namespace Moer::Render {
                     break;
                 case Command::EType::SetDrawState:
                     VisitCmd(static_cast<const SetDrawStateCmd*>(_cmd));
+                    break;
+                case Command::EType::UpdateBindlessArray:
                     break;
                 default:
                     assert(false && "Command Type Not Supported for Reorder");

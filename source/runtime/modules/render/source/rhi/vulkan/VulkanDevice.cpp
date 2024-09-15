@@ -607,7 +607,7 @@ namespace Moer::Render {
                             auto& texture_set                          = _out_descriptor_bindings[bdls_array.image.value().set];
                             auto& temp_binding                         = texture_set[texture_slot];
                             temp_binding.binding                       = texture_slot;
-                            temp_binding.descriptorType                = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                            temp_binding.descriptorType                = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
                             temp_binding.descriptorCount               = 10000;
                             temp_binding.stageFlags |= _stage;
                             temp_binding.pImmutableSamplers = nullptr;
@@ -615,7 +615,7 @@ namespace Moer::Render {
                             auto& temp_sampler_binding           = texture_set[sampler_slot];
                             temp_sampler_binding.binding         = sampler_slot;
                             temp_sampler_binding.descriptorType  = VK_DESCRIPTOR_TYPE_SAMPLER;
-                            temp_sampler_binding.descriptorCount = _device.ImmutableSamplerCount();
+                            temp_sampler_binding.descriptorCount = VulkanDevice::bindless_sampler_cnt;
                             temp_sampler_binding.stageFlags |= _stage;
                             temp_sampler_binding.pImmutableSamplers = VK_NULL_HANDLE;//TODO: maybe use immutable in the future?
                             _max_set                                = uint(std::max(int(_max_set), int(bdls_array.image.value().set)));
