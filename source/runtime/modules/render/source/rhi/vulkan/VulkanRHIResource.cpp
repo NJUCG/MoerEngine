@@ -984,7 +984,8 @@ namespace Moer::Render {
                                 }
                         }
                         _binder.push_info.stageFlags |= binding.stageFlags;
-            }
+                    }
+                    _binder.bind_point = GetPipelineBindPoint();
                 }
 
             }, binder);
@@ -1350,10 +1351,16 @@ namespace Moer::Render {
 
     uint64 VulkanBuffer::DeviceAddress() const { return m_device_address; }
 
-    VulkanBuffer::VulkanBuffer(const BufferInfo& _info, VulkanDevice& _device, VkBuffer _handle, VmaAllocation _alloc, bool _defer_destroy): Buffer(_info), VulkanDeviceObject(&_device) {
+    VulkanBuffer::VulkanBuffer(const BufferInfo& _info, VulkanDevice& _device, VkBuffer _handle, VmaAllocation _alloc, bool _defer_destroy, bool _get_address): Buffer(_info), VulkanDeviceObject(&_device) {
         m_alloc.buffer    = _handle;
         m_alloc.alloc     = _alloc;
         b_deferred_delete = _defer_destroy;
+        if(_get_address){
+            VkBufferDeviceAddressInfo info{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
+            info.buffer      = m_alloc.buffer;
+            m_device_address = vkGetBufferDeviceAddress(m_device->GetDevice(), &info);
+        }
+       
     }
 
     VulkanBindlessArray::VulkanBindlessArray(VulkanDevice* _device, uint32 _max_size) : 
@@ -1368,7 +1375,7 @@ namespace Moer::Render {
     numbers(_max_size),
     handles(_max_size) {
         BufferInfo buffer_info(
-            uint64(_max_size) * sizeof(uint),
+            uint64(_max_size),
             uint(sizeof(uint)),
              EBufferUsageFlags::CONSTANT_BUFFER | EBufferUsageFlags::CPU_VISIBLE
         );
@@ -1376,7 +1383,7 @@ namespace Moer::Render {
         VkBufferCreateInfo buffer_ci      = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
         VmaAllocation      alloc          = VK_NULL_HANDLE;
         buffer_ci.size                    = _max_size * sizeof(uint32);
-        buffer_ci.usage                   = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        buffer_ci.usage                   = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
         buffer_ci.sharingMode             = VK_SHARING_MODE_EXCLUSIVE;
         buffer_ci.queueFamilyIndexCount   = 0;
         buffer_ci.pQueueFamilyIndices     = nullptr;
@@ -1385,18 +1392,18 @@ namespace Moer::Render {
         alloc_ci.usage                    = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
         alloc_ci.flags                    = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
         VK_CHECK_RESULT(vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &current_handle, &alloc, nullptr));
-        bindless_array_buffer = MoerNew(VulkanBuffer)(buffer_info, *m_device, current_handle, alloc, false);
+        bindless_array_buffer = MoerNew(VulkanBuffer)(buffer_info, *m_device, current_handle, alloc, false, true);
 
-        buffer_ci.usage = VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT;
+        buffer_ci.usage = VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
         buffer_ci.size  = _max_size * m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize;
         alloc_ci.flags  = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
         VK_CHECK_RESULT(vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &current_handle, &alloc, nullptr));
-        bindless_buffer_descs = MoerNew(VulkanBuffer)(buffer_info, *m_device, current_handle, alloc, false);
+        bindless_buffer_descs = MoerNew(VulkanBuffer)(buffer_info, *m_device, current_handle, alloc, false, true);
 
-        buffer_ci.usage = VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT;
+        buffer_ci.usage = VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
         buffer_ci.size  = _max_size * m_device->GetOptionalProperties().descriptor_buffer_properties.sampledImageDescriptorSize;
         VK_CHECK_RESULT(vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &current_handle, &alloc, nullptr));
-        bindless_texture_descs = MoerNew(VulkanBuffer)(buffer_info, *m_device, current_handle, alloc, false);
+        bindless_texture_descs = MoerNew(VulkanBuffer)(buffer_info, *m_device, current_handle, alloc, false, true);
 
         for (uint i = 0; i < _max_size; i++) { numbers[i] = i; }//TODO: so fucking ugly
 
@@ -1408,7 +1415,7 @@ namespace Moer::Render {
         sampler_binding.binding = 0;
         sampler_binding.descriptorCount = 256;
         sampler_binding.stageFlags = VK_SHADER_STAGE_ALL;
-        sampler_binding.pImmutableSamplers = m_device->GetImmutableSamplers();
+        sampler_binding.pImmutableSamplers = VK_NULL_HANDLE;
 
         //fill sampler data to descriptor buffer
         {
@@ -1422,8 +1429,7 @@ namespace Moer::Render {
             
             VkDescriptorDataEXT& descriptor_data = descriptor_info.data;
             for(uint i = 0; i < 256; i++){
-
-                descriptor_data.pSampler = &samplers[i];
+                descriptor_data.pSampler = i >= m_device->ImmutableSamplerCount() ? &samplers[0] : &samplers[i];
                 m_device->GetDescriptorEXT(&descriptor_info, sampler_stride, mapped_data_byte + i * sampler_stride);
             }
             vmaUnmapMemory(m_device->GetVmaAllocator(), bindless_texture_descs->GetAllocation());
@@ -1431,16 +1437,15 @@ namespace Moer::Render {
         }
 
         
-        const VkDescriptorBindingFlagsEXT flags =
-            VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT_EXT |
-            VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT_EXT |
-            VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT_EXT |
-            VK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT_EXT;
+        const VkDescriptorBindingFlags flags[2] = {0,
+            VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT |
+            VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
+            VK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT };
 
         VkDescriptorSetLayoutBindingFlagsCreateInfoEXT binding_flags{};
         binding_flags.sType          = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO_EXT;
-        binding_flags.bindingCount   = 1;
-        binding_flags.pBindingFlags  = &flags;
+        binding_flags.bindingCount   = 2;
+        binding_flags.pBindingFlags  = flags;
 
         VkDescriptorSetLayoutBinding& textures_binding = texture_bindings[1];
         textures_binding.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
@@ -1480,7 +1485,9 @@ namespace Moer::Render {
         VkDescriptorGetInfoEXT descriptor_info{VK_STRUCTURE_TYPE_DESCRIPTOR_GET_INFO_EXT};
         VkDescriptorAddressInfoEXT address_info{VK_STRUCTURE_TYPE_DESCRIPTOR_ADDRESS_INFO_EXT};
         address_info.address = bindless_array_buffer->DeviceAddress();
+        address_info.range = bindless_array_buffer->GetByteSize();
         descriptor_info.data.pStorageBuffer = &address_info;
+        descriptor_info.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         {
             void* mapped_data;
             vmaMapMemory(m_device->GetVmaAllocator(), bindless_buffer_descs->GetAllocation(), &mapped_data);

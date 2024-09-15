@@ -2386,15 +2386,6 @@ namespace Moer::Render {
     void VulkanCmdList::BindDescriptors(PipelineHandle& _pso_handle, const ArrayArguments& _args) {
         auto* vk_pso = reinterpret_cast<VulkanPipelineState*>(std::get<VkPipelineHandle>(_pso_handle.handle).handle);
 
-        VkPushDescriptorSetInfoKHR push_info = {
-            .sType                = VK_STRUCTURE_TYPE_PUSH_DESCRIPTOR_SET_INFO_KHR,
-            .pNext                = nullptr,
-            .stageFlags           = VK_SHADER_STAGE_ALL,
-            .layout               = vk_pso->GetPipelineLayout(),
-            .set                  = 0,
-            .descriptorWriteCount = 0,
-            .pDescriptorWrites    = nullptr};
-        device.vk_cmd_push_descriptor_set(command_buffer, &push_info);
         assert(vk_pso && vk_pso->bind_template != nullptr && "Pipeline state has no bind template!");
         VulkanPipelineParamBinder& bind_template = *vk_pso->bind_template;
 
@@ -2438,7 +2429,7 @@ namespace Moer::Render {
                                 }
                             }
                         }
-                        device.vk_cmd_push_descriptor_set(command_buffer, &_binder.push_info);
+                        device.vk_cmd_push_descriptor_set(command_buffer, _binder.bind_point, _binder.push_info.layout, _binder.push_info.set, _binder.writers.size(), _binder.writers.data());
                     }
                 },
                 binder);

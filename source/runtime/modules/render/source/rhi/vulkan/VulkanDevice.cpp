@@ -89,7 +89,7 @@ namespace Moer::Render {
         void*                                       p_user_data) {
 
         std::stringstream stream;
-        stream << "[" << p_callback_data->messageIdNumber << "][" << p_callback_data->pMessageIdName << "]: " << p_callback_data->pMessage << std::endl;
+        stream << "[" << p_callback_data->messageIdNumber << "]\n\t[" << p_callback_data->pMessageIdName << "]:\n\t\t " << p_callback_data->pMessage << std::endl;
 
         if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT) {
             LOG_DEBUG(stream.str());
@@ -341,6 +341,9 @@ namespace Moer::Render {
         gfx_queue      = MakeUnique<VkCommandQueue>(*this, EQueueType::Graphics);
         compute_queue  = MakeUnique<VkCommandQueue>(*this, EQueueType::Compute);
         transfer_queue = MakeUnique<VkCommandQueue>(*this, EQueueType::Copy);
+
+        // select device procs
+        SetupProcs();
     }
 
     void VulkanDevice::CreateDescriptorAllocator() {
@@ -516,10 +519,11 @@ namespace Moer::Render {
         vk_get_descriptor_set_layout_binding_offset_ext = reinterpret_cast<PFN_vkGetDescriptorSetLayoutBindingOffsetEXT>(vkGetDeviceProcAddr(m_device, "vkGetDescriptorSetLayoutBindingOffsetEXT"));
         vk_get_descriptor_set_layout_size_ext           = reinterpret_cast<PFN_vkGetDescriptorSetLayoutSizeEXT>(vkGetDeviceProcAddr(m_device, "vkGetDescriptorSetLayoutSizeEXT"));
 
-        vk_cmd_push_descriptor_set           = reinterpret_cast<PFN_vkCmdPushDescriptorSet2KHR>(vkGetDeviceProcAddr(m_device, "vkCmdPushDescriptorSet2KHR"));
+        vk_cmd_push_descriptor_set           = reinterpret_cast<PFN_vkCmdPushDescriptorSetKHR>(vkGetDeviceProcAddr(m_device, "vkCmdPushDescriptorSetKHR"));
         vk_cmd_bind_descriptor_buffers       = reinterpret_cast<PFN_vkCmdBindDescriptorBuffersEXT>(vkGetDeviceProcAddr(m_device, "vkCmdBindDescriptorBuffersEXT"));
         vk_cmd_set_descriptor_buffer_offsets = reinterpret_cast<PFN_vkCmdSetDescriptorBufferOffsetsEXT>(vkGetDeviceProcAddr(m_device, "vkCmdSetDescriptorBufferOffsetsEXT"));
-        vk_cmd_push_descriptor_set           = reinterpret_cast<PFN_vkCmdPushDescriptorSet2KHR>(vkGetDeviceProcAddr(m_device, "vkCmdPushDescriptorSet2KHR"));
+        
+
     }
 
     VulkanDescriptorHeap& VulkanDevice::GetGlobalDescriptorHeap() { return m_global_descriptor_heap; }

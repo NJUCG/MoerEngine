@@ -188,6 +188,11 @@ namespace Moer::Render {
         static constexpr EShaderArgType arg_type = SDA_Sampler;
     };
 
+    template<>
+    struct ShaderArgEnum<BindlessArg> {
+        static constexpr EShaderArgType arg_type = SDA_BindlessArray;
+    };
+
     class ShaderPipeline;
 
     template<typename TPipeline, typename... Args>

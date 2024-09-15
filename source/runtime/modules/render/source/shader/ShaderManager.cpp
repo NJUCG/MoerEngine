@@ -83,7 +83,7 @@ namespace Moer::Render {
                 .entry_point      = _info.entry_name,
                 .shader_data      = std::move(_output.shader_code),
                 .shader_type      = _type,
-                .shader_param_map = {std::move(_output.parameter_map.param_map)}});
+                .shader_param_map = {std::move(_output.parameter_map.param_map), std::move(_output.parameter_map.reflect_map)}});
         };
         PipelineShaderInfo sd_info{.layout_hash = std::move(_hash_values), .arg_types = std::move(_arg_type_values)};
         if (b_vs_ps) {
@@ -141,7 +141,7 @@ namespace Moer::Render {
                 .entry_point      = _info.entry_name,
                 .shader_data      = std::move(_output.shader_code),
                 .shader_type      = _type,
-                .shader_param_map = {std::move(_output.parameter_map.param_map)}});
+                .shader_param_map = {std::move(_output.parameter_map.param_map), std::move(_output.parameter_map.reflect_map)}});
         };
 
         auto               output = get_shader_output(shader_info, ST_COMPUTE);

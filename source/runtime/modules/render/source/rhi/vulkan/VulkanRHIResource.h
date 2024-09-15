@@ -390,6 +390,7 @@ namespace Moer::Render {
         Array<VkDescriptorImageInfo> image_infos;
         Array<VkDescriptorBufferInfo> buffer_infos;
         VkPushDescriptorSetInfoKHR push_info;
+        VkPipelineBindPoint bind_point;
     };
 
     struct VulkanBindlessSetArray{
@@ -765,7 +766,7 @@ namespace Moer::Render {
         virtual ~VulkanBuffer();
         virtual void Destroy() override;
         VulkanBuffer(const BufferInfo& _info, VulkanDevice& _device);
-        VulkanBuffer(const BufferInfo& _info, VulkanDevice& _device, VkBuffer _handle, VmaAllocation _alloc, bool _defer_destroy);
+        VulkanBuffer(const BufferInfo& _info, VulkanDevice& _device, VkBuffer _handle, VmaAllocation _alloc, bool _defer_destroy, bool _get_address = false);
         uint64                     DeviceAddress() const;
         inline const VmaAllocation GetAllocation() const {
             return m_alloc.alloc;

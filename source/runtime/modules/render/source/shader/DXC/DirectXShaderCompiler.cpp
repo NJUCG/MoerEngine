@@ -420,20 +420,21 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> result, const ShaderParam
             ReflectParamInfo::Bindless* target = nullptr;
             if(binding.descriptor_type == SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_BUFFER) {
                 if(is_bdls_array(binding.name)){
-                    target = &bdls_param.array.value();
                     SetZeroIfEmpty(bdls_param.array);
+                    target = &bdls_param.array.value();
                 }else{
-                    target = &bdls_param.buffer.value();
                     SetZeroIfEmpty(bdls_param.buffer);
+                    target = &bdls_param.buffer.value();
+
                 }
             } else if(binding.descriptor_type == SPV_REFLECT_DESCRIPTOR_TYPE_SAMPLED_IMAGE) {
-
-                    target = &bdls_param.image.value();
                     SetZeroIfEmpty(bdls_param.image);
+                    target = &bdls_param.image.value();
+
                 
             }else if (binding.descriptor_type == SPV_REFLECT_DESCRIPTOR_TYPE_SAMPLER) {
-                target = &bdls_param.sampler.value();
                 SetZeroIfEmpty(bdls_param.sampler);
+                target = &bdls_param.sampler.value();
             }else{
                 assert(false && "unknown bindless type");
             }
