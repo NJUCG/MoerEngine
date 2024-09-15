@@ -295,7 +295,6 @@ namespace Moer::Render {
         void SetBufferHash(uint64 _hash, BufferView _param);
         void SetTextureHash(uint64 _hash, TextureView _param);
         uint GetBindingIdx(uint64 _hash) { return handle.hash_2_info_index[_hash]; }
-        uint GetBindingSize() { return handle.binding_infos.size(); }
         ShaderPipeline(PipelineHandle _handle) : handle(std::move(_handle)) {}
         PipelineHandle handle;
 

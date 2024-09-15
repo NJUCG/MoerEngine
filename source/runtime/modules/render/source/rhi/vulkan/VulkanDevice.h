@@ -348,6 +348,10 @@ namespace Moer::Render {
         PFN_vkGetDescriptorSetLayoutSizeEXT          vk_get_descriptor_set_layout_size_ext           = VK_NULL_HANDLE;
 
         PFN_vkCmdPushDescriptorSet2KHR vk_cmd_push_descriptor_set = VK_NULL_HANDLE;
+        PFN_vkCmdPushConstants2KHR vk_cmd_push_constants = VK_NULL_HANDLE;
+        PFN_vkCmdBindDescriptorBuffersEXT vk_cmd_bind_descriptor_buffers = VK_NULL_HANDLE;
+        PFN_vkCmdSetDescriptorBufferOffsetsEXT vk_cmd_set_descriptor_buffer_offsets = VK_NULL_HANDLE;
+
 
     private:
         friend VkCommandQueue;

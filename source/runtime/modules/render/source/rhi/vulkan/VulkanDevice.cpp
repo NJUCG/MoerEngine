@@ -515,7 +515,11 @@ namespace Moer::Render {
         vk_get_descriptor_ext                           = reinterpret_cast<PFN_vkGetDescriptorEXT>(vkGetDeviceProcAddr(m_device, "vkGetDescriptorEXT"));
         vk_get_descriptor_set_layout_binding_offset_ext = reinterpret_cast<PFN_vkGetDescriptorSetLayoutBindingOffsetEXT>(vkGetDeviceProcAddr(m_device, "vkGetDescriptorSetLayoutBindingOffsetEXT"));
         vk_get_descriptor_set_layout_size_ext           = reinterpret_cast<PFN_vkGetDescriptorSetLayoutSizeEXT>(vkGetDeviceProcAddr(m_device, "vkGetDescriptorSetLayoutSizeEXT"));
-        vk_cmd_push_descriptor_set                      = reinterpret_cast<PFN_vkCmdPushDescriptorSet2KHR>(vkGetDeviceProcAddr(m_device, "vkCmdPushDescriptorSet2KHR"));
+
+        vk_cmd_push_descriptor_set           = reinterpret_cast<PFN_vkCmdPushDescriptorSet2KHR>(vkGetDeviceProcAddr(m_device, "vkCmdPushDescriptorSet2KHR"));
+        vk_cmd_bind_descriptor_buffers       = reinterpret_cast<PFN_vkCmdBindDescriptorBuffersEXT>(vkGetDeviceProcAddr(m_device, "vkCmdBindDescriptorBuffersEXT"));
+        vk_cmd_set_descriptor_buffer_offsets = reinterpret_cast<PFN_vkCmdSetDescriptorBufferOffsetsEXT>(vkGetDeviceProcAddr(m_device, "vkCmdSetDescriptorBufferOffsetsEXT"));
+        vk_cmd_push_descriptor_set           = reinterpret_cast<PFN_vkCmdPushDescriptorSet2KHR>(vkGetDeviceProcAddr(m_device, "vkCmdPushDescriptorSet2KHR"));
     }
 
     VulkanDescriptorHeap& VulkanDevice::GetGlobalDescriptorHeap() { return m_global_descriptor_heap; }
@@ -531,7 +535,7 @@ namespace Moer::Render {
         // target shader stage
         UnorderedMap<uint64, uint>& _out_hash_2_idx,
         // hash to index
-        Moer::Array<uint64>& _out_reflect_flags,
+        // Moer::Array<uint64>& _out_reflect_flags,
         // cpp param name hash to shader binding index
         UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>& _out_descriptor_bindings,
         // set to binding to binding info, actual vk pipeline layout
@@ -580,26 +584,27 @@ namespace Moer::Render {
                         vk_binding.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
                         vk_binding.descriptorCount = 1;
                         vk_binding.stageFlags |= _stage;
-                        vk_binding.pImmutableSamplers = nullptr;
-                        _max_set                      = uint(std::max(int(_max_set), int(indirect_binding_info.set)));
-                        buffer_set                    = indirect_binding_info.set;
+                        vk_binding.pImmutableSamplers               = nullptr;
+                        _max_set                                    = uint(std::max(int(_max_set), int(indirect_binding_info.set)));
+                        buffer_set                                  = indirect_binding_info.set;
+                        array_set.bindings[indirect_slot].param_idx = idx;
                         if (b_found_bindless_buffer) {
-                            auto& temp_binding           = array_set[buffer_slot];
-                            temp_binding.binding         = buffer_slot;
-                            temp_binding.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                            temp_binding.descriptorCount = 10000;
+                            array_set.bindings[buffer_slot].param_idx = idx;
+                            auto& temp_binding                        = array_set[buffer_slot];
+                            temp_binding.binding                      = buffer_slot;
+                            temp_binding.descriptorType               = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                            temp_binding.descriptorCount              = 10000;
                             temp_binding.stageFlags |= _stage;
                             temp_binding.pImmutableSamplers = nullptr;
                         }
-                        if (b_found_bindless_buffer) {
-                        }
 
                         if (b_found_bindless_texture) {
-                            auto& texture_set            = _out_descriptor_bindings[bdls_array.image.value().set];
-                            auto& temp_binding           = texture_set[texture_slot];
-                            temp_binding.binding         = texture_slot;
-                            temp_binding.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                            temp_binding.descriptorCount = 10000;
+                            array_set.bindings[sampler_slot].param_idx = idx;
+                            auto& texture_set                          = _out_descriptor_bindings[bdls_array.image.value().set];
+                            auto& temp_binding                         = texture_set[texture_slot];
+                            temp_binding.binding                       = texture_slot;
+                            temp_binding.descriptorType                = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                            temp_binding.descriptorCount               = 10000;
                             temp_binding.stageFlags |= _stage;
                             temp_binding.pImmutableSamplers = nullptr;
 
@@ -608,11 +613,11 @@ namespace Moer::Render {
                             temp_sampler_binding.descriptorType  = VK_DESCRIPTOR_TYPE_SAMPLER;
                             temp_sampler_binding.descriptorCount = _device.ImmutableSamplerCount();
                             temp_sampler_binding.stageFlags |= _stage;
-                            temp_sampler_binding.pImmutableSamplers = _device.GetImmutableSamplers();
+                            temp_sampler_binding.pImmutableSamplers = VK_NULL_HANDLE;//TODO: maybe use immutable in the future?
                             _max_set                                = uint(std::max(int(_max_set), int(bdls_array.image.value().set)));
                         }
 
-                        _out_reflect_flags[idx] = EncodeBindlessInfo(texture_set, buffer_set, _stage, b_found_bindless_texture, b_found_bindless_buffer);
+                        // _out_reflect_flags[idx] = EncodeBindlessInfo(texture_set, buffer_set, _stage, b_found_bindless_texture, b_found_bindless_buffer);
                     }
 
                     break;
@@ -624,7 +629,7 @@ namespace Moer::Render {
                     _out_constant_idx                              = idx;
                     _out_push_constant_ranges.size                 = std::max(_out_push_constant_ranges.size, constant.size);
                     _out_push_constant_ranges.stageFlags |= _stage;
-                    _out_reflect_flags[idx] = EncodeReflectInfo(0, constant.size, _out_push_constant_ranges.stageFlags);
+                    // _out_reflect_flags[idx] = EncodeReflectInfo(0, constant.size, _out_push_constant_ranges.stageFlags);
                     break;
                 }
                 case SDA_Buffer:
@@ -643,9 +648,10 @@ namespace Moer::Render {
                     vk_binding.descriptorType  = desc_type;
                     vk_binding.descriptorCount = 1;
                     vk_binding.stageFlags |= _stage;
-                    vk_binding.pImmutableSamplers = nullptr;
-                    _out_reflect_flags[idx]       = EncodeReflectInfo(resource.set, resource.binding, vk_binding.stageFlags);
-                    _max_set                      = uint(std::max(int(_max_set), int(resource.set)));
+                    vk_binding.pImmutableSamplers            = nullptr;
+                    set.bindings[resource.binding].param_idx = idx;
+                    // _out_reflect_flags[idx]       = EncodeReflectInfo(resource.set, resource.binding, vk_binding.stageFlags);
+                    _max_set = uint(std::max(int(_max_set), int(resource.set)));
                     break;
                 }
                 default:
@@ -720,7 +726,7 @@ namespace Moer::Render {
         VkPushConstantRange push_constant_ranges{.offset = 0, .size = 0};
         uint                max_set = 0;
 
-        Array<uint64>              reflect_flags(_shader_info.layout_hash.size(), 0u);
+        // Array<uint64>              reflect_flags(_shader_info.layout_hash.size(), 0u);
         uint64                     valid_bits = 0;
         UnorderedMap<uint64, uint> hash_2_idx;
         int                        constant_idx = -1;
@@ -731,7 +737,7 @@ namespace Moer::Render {
                              _shader_info,
                              _stage,
                              hash_2_idx,
-                             reflect_flags,
+                             //  reflect_flags,
                              descriptor_bindings,
                              push_constant_ranges,
                              constant_idx,
@@ -965,8 +971,8 @@ namespace Moer::Render {
             m_device, VK_NULL_HANDLE, 1, &pipeline_create_info, nullptr, &vk_pso->m_pipeline));
 
         return PipelineHandle{
-            .handle            = VkPipelineHandle{reinterpret_cast<uint64>(vk_pso)},
-            .binding_infos     = std::move(reflect_flags),
+            .handle = VkPipelineHandle{reinterpret_cast<uint64>(vk_pso)},
+            // .binding_infos     = std::move(reflect_flags),
             .hash_2_info_index = std::move(hash_2_idx),
             .valid_bits        = valid_bits,
             .constant_idx      = constant_idx};
@@ -995,7 +1001,7 @@ namespace Moer::Render {
                              _shader_info,
                              _stage,
                              hash_2_idx,
-                             reflect_flags,
+                             //  reflect_flags,
                              descriptor_bindings,
                              push_constant_ranges,
                              constant_idx,
@@ -1053,8 +1059,8 @@ namespace Moer::Render {
         VK_CHECK_RESULT(
             vkCreateComputePipelines(m_device, VK_NULL_HANDLE, 1, &pipeline_create_info, nullptr, &vk_pso->m_pipeline));
         return PipelineHandle{
-            .handle            = VkPipelineHandle{reinterpret_cast<uint64>(vk_pso)},
-            .binding_infos     = std::move(reflect_flags),
+            .handle = VkPipelineHandle{reinterpret_cast<uint64>(vk_pso)},
+            // .binding_infos     = std::move(reflect_flags),
             .hash_2_info_index = std::move(hash_2_idx),
             .valid_bits        = valid_bits,
             .constant_idx      = constant_idx};

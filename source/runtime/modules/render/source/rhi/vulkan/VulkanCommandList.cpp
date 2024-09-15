@@ -2377,10 +2377,10 @@ namespace Moer::Render {
         PipelineHandle&       _pso_handle,
         std::span<const uint> _data) {
         auto* vk_pso                     = reinterpret_cast<VulkanPipelineState*>(std::get<VkPipelineHandle>(_pso_handle.handle).handle);
-        auto  binding_info               = _pso_handle.binding_infos[_pso_handle.constant_idx];
-        auto [offset, size, stage_flags] = DecodeReflectPushConstant(binding_info);
+        // auto  binding_info               = _pso_handle.binding_infos[_pso_handle.constant_idx];
+        // auto [offset, size, stage_flags] = DecodeReflectPushConstant(binding_info);
 
-        vkCmdPushConstants(command_buffer, vk_pso->GetPipelineLayout(), stage_flags, offset, size, _data.data());
+        // vkCmdPushConstants(command_buffer, vk_pso->GetPipelineLayout(), stage_flags, offset, size, _data.data());
     }
 
     void VulkanCmdList::BindDescriptors(PipelineHandle& _pso_handle, const ArrayArguments& _args) {
@@ -2396,38 +2396,64 @@ namespace Moer::Render {
             .pDescriptorWrites    = nullptr};
         device.vk_cmd_push_descriptor_set(command_buffer, &push_info);
         assert(vk_pso && vk_pso->bind_template != nullptr && "Pipeline state has no bind template!");
-        VulkanPipelineParamBinder& binder = *vk_pso->bind_template;
+        VulkanPipelineParamBinder& bind_template = *vk_pso->bind_template;
 
-        UnorderedMap<uint, VulkanDescriptorSetBinder>& set_binders = binder.set_binders;
+        auto& set_binders = bind_template.set_binders;
         for (auto& [set, binder] : set_binders) {
-
-            for (uint i = 0; i < binder.writers.size(); ++i) {
-                auto&                       writer   = binder.writers[i];
-                const VulkanDescriptorInfo& set_info = binder.bind_infos[i];
-                switch (writer.descriptorType) {
-                    case VK_DESCRIPTOR_TYPE_SAMPLER: {
-                        Sampler samp                                  = std::get<Sampler>(_args[set_info.param_idx]);
-                        binder.image_infos[set_info.info_idx].sampler = device.GetSampler(samp);
-                        break;
+            std::visit(
+                [&](auto& _binder) {
+                    using T = std::decay_t<decltype(_binder)>;
+                    if constexpr (std::is_same_v<T, VulkanBindlessSetArray>) {
+                        BindlessArrayRef     array                           = std::get<BindlessArrayRef>(_args[_binder.param_idx]);
+                        VulkanBindlessArray* bindless_array                  = static_cast<VulkanBindlessArray*>(array.Get());
+                        bind_template.desc_buffers[_binder.desc_idx].address = bindless_array->bindless_buffer_descs->DeviceAddress();
+                    } else if constexpr (std::is_same_v<T, VulkanBindlessSetImage>) {
+                        BindlessArrayRef     array                           = std::get<BindlessArrayRef>(_args[_binder.param_idx]);
+                        VulkanBindlessArray* bindless_array                  = static_cast<VulkanBindlessArray*>(array.Get());
+                        bind_template.desc_buffers[_binder.desc_idx].address = bindless_array->bindless_texture_descs->DeviceAddress();
+                    } else if constexpr (std::is_same_v<T, VulkanDescriptorSetBinder>) {
+                        //normal resources
+                        for (uint i = 0; i < _binder.writers.size(); ++i) {
+                            auto&                       writer   = _binder.writers[i];
+                            const VulkanDescriptorInfo& set_info = _binder.bind_infos[i];
+                            switch (writer.descriptorType) {
+                                case VK_DESCRIPTOR_TYPE_SAMPLER: {
+                                    Sampler samp                                   = std::get<Sampler>(_args[set_info.param_idx]);
+                                    _binder.image_infos[set_info.info_idx].sampler = device.GetSampler(samp);
+                                    break;
+                                }
+                                case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
+                                case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE: {
+                                    TextureView    tex_view                          = std::get<TextureView>(_args[set_info.param_idx]);
+                                    VulkanTexture* tex                               = static_cast<VulkanTexture*>(tex_view.texture);
+                                    VkImageView    img_view                          = tex->GetView(tex_view.mip_level, tex_view.num_mips);
+                                    _binder.image_infos[set_info.info_idx].imageView = img_view;
+                                    break;
+                                }
+                                case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR: {
+                                    break;
+                                }
+                                default: {
+                                    assert(false && "Unsupported descriptor type!");
+                                }
+                            }
+                        }
+                        device.vk_cmd_push_descriptor_set(command_buffer, &_binder.push_info);
                     }
-                    case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
-                    case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE: {
-                        TextureView    tex_view                         = std::get<TextureView>(_args[set_info.param_idx]);
-                        VulkanTexture* tex                              = static_cast<VulkanTexture*>(tex_view.texture);
-                        VkImageView    img_view                         = tex->GetView(tex_view.mip_level, tex_view.num_mips);
-                        binder.image_infos[set_info.info_idx].imageView = img_view;
-                        break;
-                    }
-                    case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR: {
-                        break;
-                    }
-                    default: {
-                        assert(false && "Unsupported descriptor type!");
-                    }
-                }
-            }
-            device.vk_cmd_push_descriptor_set(command_buffer, &binder.push_info);
+                },
+                binder);
         }
+        if (bind_template.desc_buffers.size() > 0) {
+            device.vk_cmd_bind_descriptor_buffers(command_buffer, bind_template.desc_buffers.size(), bind_template.desc_buffers.data());
+            for (const auto& desc_info : bind_template.desc_buffer_offsets){
+                device.vk_cmd_set_descriptor_buffer_offsets(command_buffer, desc_info.bind_point, desc_info.layout, desc_info.set, 1, &desc_info.buf_idx, &desc_info.offset);
+            }
+        }
+        if(bind_template.push_constants_info.size > 0){
+            bind_template.push_constants_info.pValues = _args.constants.data();
+            device.vk_cmd_push_constants(command_buffer, &bind_template.push_constants_info);
+        }
+        
     }
 
     void VulkanCmdList::SetPso(const PipelineHandle& _pso_handle) {

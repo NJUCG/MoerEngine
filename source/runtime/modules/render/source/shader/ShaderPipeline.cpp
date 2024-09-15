@@ -13,64 +13,66 @@ namespace Moer::Render {
         SetBuffer(_index, std::move(_buffer->GetView()));
     }
 
+    //Important! Below method should never be used due to bad design 
+    //Now we bind param reversely throw pipeline reflection implemented by backends like vulkan dx12
     void ShaderPipeline::SetBuffer(uint32_t _index, BufferView _view) {
-        uint64 binding_info = handle.binding_infos[_index];
-        std::visit([&](auto&& _arg) {
-            using T = std::decay_t<decltype(_arg)>;
-            if constexpr (std::is_same_v<T, VkPipelineHandle>) {
-                VulkanPipelineState& pso            = *reinterpret_cast<VulkanPipelineState*>(_arg.handle);
-                auto*                resource_cache = pso.GetPipelineResourceCache();
-                auto [set, binding, stage_flags]    = DecodeReflectInfo(binding_info);
+        // uint64 binding_info = handle.binding_infos[_index];
+        // std::visit([&](auto&& _arg) {
+        //     using T = std::decay_t<decltype(_arg)>;
+        //     if constexpr (std::is_same_v<T, VkPipelineHandle>) {
+        //         VulkanPipelineState& pso            = *reinterpret_cast<VulkanPipelineState*>(_arg.handle);
+        //         auto*                resource_cache = pso.GetPipelineResourceCache();
+        //         auto [set, binding, stage_flags]    = DecodeReflectInfo(binding_info);
 
-                resource_cache->SetBuffer(set, binding, std::move(_view));
-            }
-        },
-                   handle.handle);
+        //         resource_cache->SetBuffer(set, binding, std::move(_view));
+        //     }
+        // },
+        //            handle.handle);
     }
 
     void ShaderPipeline::SetTexture(uint32_t _index, TextureView _texture) {
-        uint64 binding_info = handle.binding_infos[_index];
-        std::visit([&](auto&& _arg) {
-            using T = std::decay_t<decltype(_arg)>;
-            if constexpr (std::is_same_v<T, VkPipelineHandle>) {
-                VulkanPipelineState& pso            = *reinterpret_cast<VulkanPipelineState*>(_arg.handle);
-                auto*                resource_cache = pso.GetPipelineResourceCache();
-                auto [set, binding, stage_flags]    = DecodeReflectInfo(binding_info);
+        // uint64 binding_info = handle.binding_infos[_index];
+        // std::visit([&](auto&& _arg) {
+        //     using T = std::decay_t<decltype(_arg)>;
+        //     if constexpr (std::is_same_v<T, VkPipelineHandle>) {
+        //         VulkanPipelineState& pso            = *reinterpret_cast<VulkanPipelineState*>(_arg.handle);
+        //         auto*                resource_cache = pso.GetPipelineResourceCache();
+        //         auto [set, binding, stage_flags]    = DecodeReflectInfo(binding_info);
 
-                resource_cache->SetTexture(set, binding, std::move(_texture));
-            }
-        },
-                   handle.handle);
+        //         resource_cache->SetTexture(set, binding, std::move(_texture));
+        //     }
+        // },
+        //            handle.handle);
     }
 
     void ShaderPipeline::SetSampler(uint32_t _index, Sampler _sampler) {
-        uint64 binding_info = handle.binding_infos[_index];
-        std::visit([&](auto&& _arg) {
-            using T = std::decay_t<decltype(_arg)>;
-            if constexpr (std::is_same_v<T, VkPipelineHandle>) {
-                VulkanPipelineState& pso            = *reinterpret_cast<VulkanPipelineState*>(_arg.handle);
-                auto*                resource_cache = pso.GetPipelineResourceCache();
-                auto [set, binding, stage_flags]    = DecodeReflectInfo(binding_info);
+        // uint64 binding_info = handle.binding_infos[_index];
+        // std::visit([&](auto&& _arg) {
+        //     using T = std::decay_t<decltype(_arg)>;
+        //     if constexpr (std::is_same_v<T, VkPipelineHandle>) {
+        //         VulkanPipelineState& pso            = *reinterpret_cast<VulkanPipelineState*>(_arg.handle);
+        //         auto*                resource_cache = pso.GetPipelineResourceCache();
+        //         auto [set, binding, stage_flags]    = DecodeReflectInfo(binding_info);
 
-                resource_cache->SetSampler(set, binding, std::move(_sampler));
-            }
-        },
-                   handle.handle);
+        //         resource_cache->SetSampler(set, binding, std::move(_sampler));
+        //     }
+        // },
+        //            handle.handle);
     }
 
     void ShaderPipeline::SetConstantInner(uint _index, std::span<uint> _data) {
-        uint64 binding_info = handle.binding_infos[_index];
-        std::visit([&](auto&& _arg) {
-            using T = std::decay_t<decltype(_arg)>;
-            if constexpr (std::is_same_v<T, VkPipelineHandle>) {
-                VulkanPipelineState& pso            = *reinterpret_cast<VulkanPipelineState*>(_arg.handle);
-                auto*                resource_cache = pso.GetPipelineResourceCache();
-                auto [offset, size, stage_flags]    = DecodeReflectPushConstant(binding_info);
+        // uint64 binding_info = handle.binding_infos[_index];
+        // std::visit([&](auto&& _arg) {
+        //     using T = std::decay_t<decltype(_arg)>;
+        //     if constexpr (std::is_same_v<T, VkPipelineHandle>) {
+        //         VulkanPipelineState& pso            = *reinterpret_cast<VulkanPipelineState*>(_arg.handle);
+        //         auto*                resource_cache = pso.GetPipelineResourceCache();
+        //         auto [offset, size, stage_flags]    = DecodeReflectPushConstant(binding_info);
 
-                resource_cache->PushConstant(stage_flags, _data);
-            }
-        },
-                   handle.handle);
+        //         resource_cache->PushConstant(stage_flags, _data);
+        //     }
+        // },
+        //            handle.handle);
     }
 
     void ShaderPipeline::SetBufferHash(uint64 _hash, BufferView _buffer) {

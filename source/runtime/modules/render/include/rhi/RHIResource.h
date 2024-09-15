@@ -2851,7 +2851,7 @@ namespace Moer::Render {
 
     struct PipelineHandle {
         std::variant<VkPipelineHandle, D3DPipelineHandle> handle;
-        Array<uint64>                                     binding_infos;
+        // Array<uint64>                                     binding_infos;
         UnorderedMap<uint64, uint>                        hash_2_info_index;
         uint64                                            valid_bits   = 0;
         int                                               constant_idx = -1;

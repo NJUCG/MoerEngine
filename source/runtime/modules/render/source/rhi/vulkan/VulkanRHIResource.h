@@ -357,11 +357,15 @@ namespace Moer::Render {
     static auto DecodeBindlessInfo(uint64 _val) {
         return std::make_tuple(int(_val >> 17) & 0x7FFF, int(_val >> 2) & 0x7FFF, uint(_val >> 32), uint8(_val >> 1) & 0x1, uint8(_val) & 0x1);
     }
+    struct VulkanDescriptorSetLayoutBinding{
+        VkDescriptorSetLayoutBinding binding;
+        int param_idx;
+    };
     struct VulkanDescriptorSetLayoutCreateInfo{
         VkDescriptorSetLayoutCreateInfo layout_create_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        UnorderedMap<uint, VkDescriptorSetLayoutBinding> bindings{};
+        UnorderedMap<uint, VulkanDescriptorSetLayoutBinding> bindings{};
         bool is_bindless = false;
-        VkDescriptorSetLayoutBinding& operator[](uint _binding) { return bindings[_binding]; }
+        VkDescriptorSetLayoutBinding& operator[](uint _binding) { return bindings[_binding].binding; }
         auto TryEmplaceBinding(uint _binding, VkDescriptorSetLayoutBinding&& _binding_info) { return bindings.try_emplace(_binding, std::move(_binding_info)); }
     };
 
@@ -372,27 +376,43 @@ namespace Moer::Render {
         uint param_idx;
         /** index in descinfo arrays */
         uint info_idx;
-        bool is_array;
-
-
     };
-
+    struct DescBufferOffsetInfo{
+            uint set;
+            VkPipelineBindPoint bind_point;
+            VkPipelineLayout layout;
+            uint buf_idx;
+            uint64 offset;
+    };
     struct VulkanDescriptorSetBinder{
         Array<VkWriteDescriptorSet> writers;
         Array<VulkanDescriptorInfo> bind_infos;
         Array<VkDescriptorImageInfo> image_infos;
         Array<VkDescriptorBufferInfo> buffer_infos;
         VkPushDescriptorSetInfoKHR push_info;
-        bool is_bindless;
     };
 
-    struct VulkanBindlessBinder{
+    struct VulkanBindlessSetArray{
+        //index in ArrayArguments
+        uint param_idx;
+        //descriptor buffer index
+        uint desc_idx;
+    };
 
+    struct VulkanBindlessSetImage{
+        //index in ArrayArguments
+        uint param_idx;
+        //descriptor buffer index
+        uint desc_idx;
     };
 
     struct VulkanPipelineParamBinder{
-        UnorderedMap<uint, VulkanDescriptorSetBinder> set_binders;
-        VkPushConstantsInfoKHR m_push_constants_info;
+        UnorderedMap<uint, std::variant<VulkanDescriptorSetBinder, VulkanBindlessSetArray, VulkanBindlessSetImage>> set_binders;
+        VkPushConstantsInfoKHR push_constants_info;
+        //descriptor buffer bind template
+        Array<VkDescriptorBufferBindingInfoEXT> desc_buffers;
+        //set offsets in descriptor buffers
+        Array<DescBufferOffsetInfo> desc_buffer_offsets;
     };
 
     class VulkanEnumTranslator final {
