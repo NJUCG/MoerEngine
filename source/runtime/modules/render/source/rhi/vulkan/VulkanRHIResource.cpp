@@ -889,30 +889,36 @@ namespace Moer::Render {
         Array<VkDescriptorSetLayoutBinding> descriptor_set_layout_bindings;
         uint total_binding_count = 0;
         uint descriptor_buffer_count = 0;
-        uint sampler_descriptor_buffer_idx = 114514;
+        constexpr static uint invalid_descriptor_buffer_idx = 114514;
+        uint buffer_descriptor_buffer_idx = invalid_descriptor_buffer_idx;
+        uint sampler_descriptor_buffer_idx = invalid_descriptor_buffer_idx;
+        uint global_descriptor_buffer_idx = invalid_descriptor_buffer_idx;
 
         //precompute array sizes
         for (auto& [set, layout] : _descriptor_set_layouts) {
             total_binding_count += layout.bindings.size();
             auto& binder = bind_template->set_binders[set];
-
+            
             if(layout.is_bindless){
                 if(!layout.bindings.empty() && layout[0].descriptorType == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER){
-                    descriptor_buffer_count++;
-                    binder.emplace<VulkanBindlessSetArray>(layout.bindings.at(0).param_idx, descriptor_buffer_count - 1);
-                }else if(!layout.bindings.empty() && (layout[0].descriptorType == VK_DESCRIPTOR_TYPE_SAMPLER)){
-                    if (sampler_descriptor_buffer_idx == 114514) {
+                    if(buffer_descriptor_buffer_idx == invalid_descriptor_buffer_idx){
                         descriptor_buffer_count++;
+                        buffer_descriptor_buffer_idx = descriptor_buffer_count - 1;
                     }
-                    sampler_descriptor_buffer_idx = descriptor_buffer_count - 1;
+                    binder.emplace<VulkanBindlessSetArray>(layout.bindings.at(0).param_idx, buffer_descriptor_buffer_idx);
+                }else if(!layout.bindings.empty() && (layout[0].descriptorType == VK_DESCRIPTOR_TYPE_SAMPLER)){
+                    if (sampler_descriptor_buffer_idx == invalid_descriptor_buffer_idx) {
+                        descriptor_buffer_count++;
+                        sampler_descriptor_buffer_idx = descriptor_buffer_count - 1;
+                    }
 
                     binder.emplace<VulkanBindlessSetImage>(layout.bindings.at(0).param_idx, sampler_descriptor_buffer_idx);
                 }else if (!layout.bindings.empty() && (layout[0].descriptorType == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE)){
                     //sampler and sampled_image use same descriptor buffer
-                    if (sampler_descriptor_buffer_idx == 114514) {
+                    if (sampler_descriptor_buffer_idx == invalid_descriptor_buffer_idx) {
                         descriptor_buffer_count++;
+                        sampler_descriptor_buffer_idx = descriptor_buffer_count - 1;
                     }
-                    sampler_descriptor_buffer_idx = descriptor_buffer_count - 1;
                     binder.emplace<VulkanBindlessSetSampler>(layout.bindings.at(0).param_idx, sampler_descriptor_buffer_idx);
                 }
                 else{
@@ -921,11 +927,17 @@ namespace Moer::Render {
                 }
                 continue;
             }
+            //not bindless
+            if(global_descriptor_buffer_idx == invalid_descriptor_buffer_idx){
+                descriptor_buffer_count++;
+                global_descriptor_buffer_idx = descriptor_buffer_count - 1;
+            }
             VulkanDescriptorSetBinder& resource_binder = std::get<VulkanDescriptorSetBinder>(binder);
             resource_binder.bind_infos.resize(layout.bindings.size());
             resource_binder.writers.resize(layout.bindings.size());
+            resource_binder.binding_infos.resize(layout.bindings.size());
         }
-        descriptor_buffers.reserve(descriptor_buffer_count);
+        descriptor_buffers.resize(descriptor_buffer_count);
         desc_buffer_offsets.reserve(descriptor_buffer_count);
         
 
@@ -949,10 +961,10 @@ namespace Moer::Render {
         //build descriptor set layouts
         for (const auto& [set, layout] : _descriptor_set_layouts) {
             VkDescriptorSetLayoutCreateInfo descriptor_set_layout_ci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-            descriptor_set_layout_ci.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
 
             auto& binder = bind_template->set_binders[set];
             descriptor_set_layout_ci = layout.layout_create_info;
+            descriptor_set_layout_ci.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
             VkDescriptorSetLayoutBindingFlagsCreateInfo bdls_buffer_ext{};
             bdls_buffer_ext.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
             bdls_buffer_ext.bindingCount = 1;
@@ -989,7 +1001,6 @@ namespace Moer::Render {
                     for (const auto& [binding_idx, m_binding] : layout.bindings) {
                         const auto& binding = m_binding.binding;
                         descriptor_set_layout_bindings[total_binding_count + binding.binding] = binding;
-                        
                         VkWriteDescriptorSet& write_info = _binder.writers[binding.binding];
                         write_info.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
                         write_info.dstSet = VK_NULL_HANDLE;//ignored
@@ -1038,6 +1049,7 @@ namespace Moer::Render {
                                 }
                         }
                         _binder.push_info.stageFlags |= binding.stageFlags;
+                        
                     }
                     _binder.bind_point = GetPipelineBindPoint();
                 }
@@ -1048,6 +1060,21 @@ namespace Moer::Render {
             descriptor_set_layout_ci.pBindings = descriptor_set_layout_bindings.data() + total_binding_count;
             VK_CHECK_RESULT(vkCreateDescriptorSetLayout(m_device->GetDevice(), &descriptor_set_layout_ci, VK_NULL_HANDLE, &descriptor_set_layouts[set]));
             total_binding_count += layout.bindings.size();
+            std::visit([&](auto&& _binder){
+                using T = std::decay_t<decltype(_binder)>;
+                if constexpr(std::is_same_v<T, VulkanDescriptorSetBinder>){
+                    for (const auto& [binding_idx, m_binding] : layout.bindings) {
+                        const auto& binding = m_binding.binding;
+                        auto& binding_info = _binder.binding_infos[binding.binding];
+                        m_device->vk_get_descriptor_set_layout_binding_offset_ext(m_device->GetDevice(), descriptor_set_layouts[set], binding.binding, &binding_info.offset);
+                        binding_info.binding = binding.binding;
+                    }
+                    m_device->vk_get_descriptor_set_layout_size_ext(m_device->GetDevice(), descriptor_set_layouts[set], &_binder.size);
+                    //align to 16 bytes
+                    uint64 align = m_device->GetOptionalProperties().descriptor_buffer_properties.descriptorBufferOffsetAlignment;
+                    _binder.size = (_binder.size + align - 1) & ~(align - 1);
+                }
+            }, binder);
 
         }
         pipeline_layout_ci.pSetLayouts = descriptor_set_layouts.data();
@@ -1060,26 +1087,25 @@ namespace Moer::Render {
             std::visit([&](auto&& _binder){
                 using T = std::decay_t<decltype(_binder)>;
                 if constexpr(std::is_same_v<T, VulkanBindlessSetArray>){
-                    descriptor_buffers.emplace_back(
+                    descriptor_buffers[buffer_descriptor_buffer_idx] = {
                         VK_STRUCTURE_TYPE_DESCRIPTOR_BUFFER_BINDING_INFO_EXT,
                         VK_NULL_HANDLE,
                         0ull,
-                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT);
-
+                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT
+                    };
                     desc_buffer_offsets.emplace_back(
                          set,
                         GetPipelineBindPoint(),
                         m_pipeline_layout,
-                        descriptor_buffers.size() - 1,
+                        buffer_descriptor_buffer_idx,
                         0);
                 }else if constexpr(std::is_same_v<T, VulkanBindlessSetImage>){
-                   if (descriptor_buffers.size() <= sampler_descriptor_buffer_idx){
-                        descriptor_buffers.emplace_back(
-                            VK_STRUCTURE_TYPE_DESCRIPTOR_BUFFER_BINDING_INFO_EXT,
-                            VK_NULL_HANDLE,
-                            0ull,
-                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT);
-                    }
+                    descriptor_buffers[sampler_descriptor_buffer_idx] = {
+                        VK_STRUCTURE_TYPE_DESCRIPTOR_BUFFER_BINDING_INFO_EXT,
+                        VK_NULL_HANDLE,
+                        0ull,
+                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT
+                    };
                     desc_buffer_offsets.emplace_back(
                         set,
                         GetPipelineBindPoint(),
@@ -1088,13 +1114,12 @@ namespace Moer::Render {
                         m_device->GetOptionalProperties().descriptor_buffer_properties.samplerDescriptorSize * 256);
 
                 }else if constexpr(std::is_same_v<T, VulkanBindlessSetSampler>){
-                    if (descriptor_buffers.size() <= sampler_descriptor_buffer_idx){
-                        descriptor_buffers.emplace_back(
-                            VK_STRUCTURE_TYPE_DESCRIPTOR_BUFFER_BINDING_INFO_EXT,
-                            VK_NULL_HANDLE,
-                            0ull,
-                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT);
-                    }
+                    descriptor_buffers[sampler_descriptor_buffer_idx] = {
+                        VK_STRUCTURE_TYPE_DESCRIPTOR_BUFFER_BINDING_INFO_EXT,
+                        VK_NULL_HANDLE,
+                        0ull,
+                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT
+                    };
 
                     desc_buffer_offsets.emplace_back(
                         set,
@@ -1103,12 +1128,27 @@ namespace Moer::Render {
                         sampler_descriptor_buffer_idx,
                         0);
                 }else if constexpr(std::is_same_v<T, VulkanDescriptorSetBinder>){
+                    descriptor_buffers[global_descriptor_buffer_idx] = {
+                        VK_STRUCTURE_TYPE_DESCRIPTOR_BUFFER_BINDING_INFO_EXT,
+                        VK_NULL_HANDLE,
+                        m_device->GetGlobalDescriptorHeap().ring_desc_buffer->DeviceAddress(),
+                        VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT | VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT
+                    };
+
                     _binder.push_info.pDescriptorWrites = _binder.writers.data();
                     _binder.push_info.descriptorWriteCount = _binder.writers.size();
                     _binder.push_info.sType = VK_STRUCTURE_TYPE_PUSH_DESCRIPTOR_SET_INFO_KHR;
                     _binder.push_info.pNext = nullptr;
                     _binder.push_info.layout = m_pipeline_layout;
                     _binder.push_info.set = set;
+
+                    _binder.desc_idx = global_descriptor_buffer_idx;
+                    desc_buffer_offsets.emplace_back(
+                        set,
+                        GetPipelineBindPoint(),
+                        m_pipeline_layout,
+                        global_descriptor_buffer_idx,
+                        0);
                 }
             }, binder);
             
@@ -1546,6 +1586,7 @@ namespace Moer::Render {
             m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize, 
             &mapped_data);
             vmaUnmapMemory(m_device->GetVmaAllocator(), bindless_buffer_descs->GetAllocation());
+            vmaFlushAllocation(m_device->GetVmaAllocator(), bindless_buffer_descs->GetAllocation(), 0, m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize);
         }
 
 

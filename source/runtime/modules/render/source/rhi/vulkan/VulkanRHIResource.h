@@ -391,6 +391,17 @@ namespace Moer::Render {
         Array<VkDescriptorBufferInfo> buffer_infos;
         VkPushDescriptorSetInfoKHR    push_info;
         VkPipelineBindPoint           bind_point;
+
+        struct BindingInfo {
+            uint64 offset;    //set offset in descriptor buffer
+            uint64 src_handle;//cpu handle in global buffer
+
+            uint binding;
+        };
+        Array<BindingInfo> binding_infos;
+        uint64 size;//size in descriptor buffer
+        uint64 pipeline_offset;
+        uint desc_idx;
     };
 
     struct VulkanBindlessSetArray {
@@ -407,7 +418,7 @@ namespace Moer::Render {
         uint desc_idx;
     };
 
-     struct VulkanBindlessSetSampler {
+    struct VulkanBindlessSetSampler {
         //index in ArrayArguments
         uint param_idx;
         //descriptor buffer index
@@ -416,7 +427,7 @@ namespace Moer::Render {
 
     struct VulkanPipelineParamBinder {
         UnorderedMap<uint, std::variant<VulkanDescriptorSetBinder, VulkanBindlessSetArray, VulkanBindlessSetImage, VulkanBindlessSetSampler>> set_binders;
-        VkPushConstantsInfoKHR                                                                                      push_constants_info;
+        VkPushConstantsInfoKHR                                                                                                                push_constants_info;
         //descriptor buffer bind template
         Array<VkDescriptorBufferBindingInfoEXT> desc_buffers;
         //set offsets in descriptor buffers
@@ -856,7 +867,7 @@ namespace Moer::Render {
             }
             return -1;
         }
-        UnorderedMap<VkTextureDescKey, uint, VkTextureDescKey::Hasher> m_descriptor_indices;
+        UnorderedMap<VkTextureDescKey, uint64, VkTextureDescKey::Hasher> m_descriptor_indices;
 
     private:
         void Destroy() override;

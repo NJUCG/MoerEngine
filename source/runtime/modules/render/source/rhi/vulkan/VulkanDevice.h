@@ -226,6 +226,12 @@ namespace Moer::Render {
         constexpr uint   ImmutableSamplerCount() const { return immutable_sampler_count; }
         const VkSampler* GetImmutableSamplers() const { return immutable_samplers.data(); }
         const VkSampler  GetSampler(Sampler _sampler) const;
+        const uint GetSamplerIdx(Sampler _sampler) const {
+            uint filter  = uint(_sampler.filter);
+            uint address = uint(_sampler.address_mode);
+            uint compare = uint(_sampler.compare_function);
+            return (uint(SF_Num) * uint(SAM_Num)) * compare + (uint(SF_Num)) * address + filter;
+        }
         void             GetDescriptorEXT(const VkDescriptorGetInfoEXT* _descriptor_info, size_t _data_size, void* _p_data) const {
             vk_get_descriptor_ext(m_device, _descriptor_info, _data_size, _p_data);
         };
@@ -344,6 +350,8 @@ namespace Moer::Render {
 
     public:
         static constexpr uint bindless_sampler_cnt = 256;
+        static constexpr uint cmd_alloc_limits = 3;
+
     public:
         PFN_vkGetDescriptorEXT                       vk_get_descriptor_ext                           = VK_NULL_HANDLE;
         PFN_vkGetDescriptorSetLayoutBindingOffsetEXT vk_get_descriptor_set_layout_binding_offset_ext = VK_NULL_HANDLE;
@@ -357,7 +365,6 @@ namespace Moer::Render {
     private:
         friend VkCommandQueue;
         //configs
-        uint cmd_alloc_limits = 2;
 
     private:
         VkPhysicalDevice SelectGpu(const DeviceInitializer& _init);
