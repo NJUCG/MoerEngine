@@ -853,6 +853,8 @@ namespace Moer::Render {
         virtual void FreeTexture(uint _handle) = 0;
         virtual void FreeBuffer(uint _handle) = 0;
 
+        virtual uint64 ArrayHandle() const = 0;
+
     protected:
         friend class CommandList;
         friend class UpdateBindlessArrayCmd;

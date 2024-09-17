@@ -522,8 +522,6 @@ namespace Moer::Render {
         vk_cmd_push_descriptor_set           = reinterpret_cast<PFN_vkCmdPushDescriptorSetKHR>(vkGetDeviceProcAddr(m_device, "vkCmdPushDescriptorSetKHR"));
         vk_cmd_bind_descriptor_buffers       = reinterpret_cast<PFN_vkCmdBindDescriptorBuffersEXT>(vkGetDeviceProcAddr(m_device, "vkCmdBindDescriptorBuffersEXT"));
         vk_cmd_set_descriptor_buffer_offsets = reinterpret_cast<PFN_vkCmdSetDescriptorBufferOffsetsEXT>(vkGetDeviceProcAddr(m_device, "vkCmdSetDescriptorBufferOffsetsEXT"));
-        
-
     }
 
     VulkanDescriptorHeap& VulkanDevice::GetGlobalDescriptorHeap() { return m_global_descriptor_heap; }
@@ -571,6 +569,7 @@ namespace Moer::Render {
                     const ReflectParamInfo::BindlessArray& bdls_array                = binding_info.spirv.bindless;
                     bool                                   b_found_bindless_buffer   = bdls_array.buffer.has_value();
                     bool                                   b_found_bindless_texture  = bdls_array.image.has_value();
+                    bool                                   b_found_bindless_sampler  = bdls_array.sampler.has_value();
                     bool                                   b_found_bindless_indirect = bdls_array.array.has_value();
                     uint                                   texture_set               = 0;
                     uint                                   buffer_set                = 0;
@@ -580,7 +579,7 @@ namespace Moer::Render {
                         auto&                 array_set     = _out_descriptor_bindings[indirect_binding_info.set];
                         static constexpr uint indirect_slot = 0;
                         static constexpr uint sampler_slot  = 0;
-                        static constexpr uint texture_slot  = 1;
+                        static constexpr uint texture_slot  = 0;
                         static constexpr uint buffer_slot   = 1;
                         assert(indirect_binding_info.binding == 0 && "Indirect Binding Slot Must be 0.");
                         auto& vk_binding           = array_set[indirect_slot];
@@ -592,33 +591,43 @@ namespace Moer::Render {
                         _max_set                                    = uint(std::max(int(_max_set), int(indirect_binding_info.set)));
                         buffer_set                                  = indirect_binding_info.set;
                         array_set.bindings[indirect_slot].param_idx = idx;
+                        array_set.is_bindless                       = true;
                         if (b_found_bindless_buffer) {
                             array_set.bindings[buffer_slot].param_idx = idx;
                             auto& temp_binding                        = array_set[buffer_slot];
                             temp_binding.binding                      = buffer_slot;
                             temp_binding.descriptorType               = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                            temp_binding.descriptorCount              = 10000;
+                            temp_binding.descriptorCount              = 0;
                             temp_binding.stageFlags |= _stage;
                             temp_binding.pImmutableSamplers = nullptr;
                         }
 
                         if (b_found_bindless_texture) {
-                            array_set.bindings[sampler_slot].param_idx = idx;
-                            auto& texture_set                          = _out_descriptor_bindings[bdls_array.image.value().set];
-                            auto& temp_binding                         = texture_set[texture_slot];
-                            temp_binding.binding                       = texture_slot;
-                            temp_binding.descriptorType                = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-                            temp_binding.descriptorCount               = 10000;
+                            auto& texture_set                            = _out_descriptor_bindings[bdls_array.image.value().set];
+                            texture_set.bindings[texture_slot].param_idx = idx;
+
+                            auto& temp_binding           = texture_set[texture_slot];
+                            texture_set.is_bindless      = true;
+                            temp_binding.binding         = texture_slot;
+                            temp_binding.descriptorType  = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+                            temp_binding.descriptorCount = 0;
                             temp_binding.stageFlags |= _stage;
                             temp_binding.pImmutableSamplers = nullptr;
 
-                            auto& temp_sampler_binding           = texture_set[sampler_slot];
-                            temp_sampler_binding.binding         = sampler_slot;
-                            temp_sampler_binding.descriptorType  = VK_DESCRIPTOR_TYPE_SAMPLER;
-                            temp_sampler_binding.descriptorCount = VulkanDevice::bindless_sampler_cnt;
-                            temp_sampler_binding.stageFlags |= _stage;
-                            temp_sampler_binding.pImmutableSamplers = VK_NULL_HANDLE;//TODO: maybe use immutable in the future?
-                            _max_set                                = uint(std::max(int(_max_set), int(bdls_array.image.value().set)));
+                            _max_set = uint(std::max(int(_max_set), int(bdls_array.image.value().set)));
+                        }
+
+                        if (b_found_bindless_sampler) {
+                            auto& sampler_set            = _out_descriptor_bindings[bdls_array.sampler.value().set];
+                            auto& temp_binding           = sampler_set[sampler_slot];
+                            sampler_set.bindings[sampler_slot].param_idx = idx;
+                            sampler_set.is_bindless      = true;
+                            temp_binding.binding         = sampler_slot;
+                            temp_binding.descriptorType  = VK_DESCRIPTOR_TYPE_SAMPLER;
+                            temp_binding.descriptorCount = 0;
+                            temp_binding.stageFlags |= _stage;
+                            temp_binding.pImmutableSamplers = nullptr;
+                            _max_set                        = uint(std::max(int(_max_set), int(bdls_array.sampler.value().set)));
                         }
 
                         // _out_reflect_flags[idx] = EncodeBindlessInfo(texture_set, buffer_set, _stage, b_found_bindless_texture, b_found_bindless_buffer);

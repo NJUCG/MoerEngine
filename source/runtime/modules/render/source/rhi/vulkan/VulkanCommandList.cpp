@@ -1617,6 +1617,17 @@ namespace Moer::Render {
             cmd_list.EndRendering();
         }
 
+        void Visit(const UpdateBindlessArrayCmd& _cmd) {
+            VulkanBindlessArray* bindless_array = reinterpret_cast<VulkanBindlessArray*>(_cmd.Handle());
+            bindless_array->CmdUpdate(_cmd.StealTextureUpdates(), _cmd.StealBufferUpdates());
+            allocator.AddOnComplete([bindless_array,
+                                     free_slots(_cmd.StealFreeSlots()),
+                                     free_buffers(_cmd.StealFreeBuffers()),
+                                     free_textures(_cmd.StealFreeTextures())]() {
+                bindless_array->OnFree(std::move(free_slots), free_textures, free_buffers);
+            });
+        }
+
         // void Visit(const UpdateDrawStateCmd& _cmd) {
         // }
 
@@ -1815,6 +1826,10 @@ namespace Moer::Render {
                     //     visitor.Visit(static_cast<const SetConstantCmd&>(*cmd));
                     //     break;
                     case Command::EType::Custom: break;
+                    case Command::EType::UpdateBindlessArray: {
+                        visitor.Visit(static_cast<const UpdateBindlessArrayCmd&>(*cmd));
+                        break;
+                    };
                 }
             }
         }
@@ -2376,7 +2391,7 @@ namespace Moer::Render {
     void VulkanCmdList::UploadPushConstants(
         PipelineHandle&       _pso_handle,
         std::span<const uint> _data) {
-        auto* vk_pso                     = reinterpret_cast<VulkanPipelineState*>(std::get<VkPipelineHandle>(_pso_handle.handle).handle);
+        auto* vk_pso = reinterpret_cast<VulkanPipelineState*>(std::get<VkPipelineHandle>(_pso_handle.handle).handle);
         // auto  binding_info               = _pso_handle.binding_infos[_pso_handle.constant_idx];
         // auto [offset, size, stage_flags] = DecodeReflectPushConstant(binding_info);
 
@@ -2436,15 +2451,14 @@ namespace Moer::Render {
         }
         if (bind_template.desc_buffers.size() > 0) {
             device.vk_cmd_bind_descriptor_buffers(command_buffer, bind_template.desc_buffers.size(), bind_template.desc_buffers.data());
-            for (const auto& desc_info : bind_template.desc_buffer_offsets){
+            for (const auto& desc_info : bind_template.desc_buffer_offsets) {
                 device.vk_cmd_set_descriptor_buffer_offsets(command_buffer, desc_info.bind_point, desc_info.layout, desc_info.set, 1, &desc_info.buf_idx, &desc_info.offset);
             }
         }
-        if(bind_template.push_constants_info.size > 0){
+        if (bind_template.push_constants_info.size > 0) {
             bind_template.push_constants_info.pValues = _args.constants.data();
             device.vk_cmd_push_constants(command_buffer, &bind_template.push_constants_info);
         }
-        
     }
 
     void VulkanCmdList::SetPso(const PipelineHandle& _pso_handle) {

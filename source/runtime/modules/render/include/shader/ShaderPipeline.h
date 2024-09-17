@@ -162,16 +162,19 @@ namespace Moer::Render {
 
         static EShaderArgType GetArgType() { return arg_type; }
     };
+    struct NonConstant{};
 
-    struct BufferArg {};
+    struct BufferArg {
+        using type = NonConstant;
+    };
 
-    struct TextureArg {};
+    struct TextureArg {using type = NonConstant;};
 
-    struct SamplerArg {};
+    struct SamplerArg {using type = NonConstant;};
 
-    struct ConstantArg {};
+    struct ConstantArg {using type = NonConstant;};
 
-    struct BindlessArg {};
+    struct BindlessArg {using type = NonConstant;};
 
     template<>
     struct ShaderArgEnum<BufferArg> {
@@ -214,11 +217,21 @@ namespace Moer::Render {
         struct Index<T, std::tuple<U, Types...>> {
             static const std::size_t value = 1 + Index<T, std::tuple<Types...>>::value;
         };
+        template<typename T>
+        struct is_constant_type {
+            static constexpr bool value = !std::is_same_v<typename T::type::type, NonConstant>;
+        };
 
-        constexpr uint32 static GetConstantSize() {
+
+        static constexpr uint32 GetConstantSize() {
             //if TArg is a constant, add the size of TArg to the total size, other wise add 0
-            return (0 + ... + (std::is_same_v<typename Args::type, TConstsant<Args>> ? sizeof(typename Args::type) : 0)) / sizeof(uint);
+            return (0 + ... + (is_constant_type<Args>::value ? sizeof(typename Args::type) : 0)) / sizeof(uint);
         }
+
+        // constexpr uint32 static GetConstantSize() {
+        //     //if TArg is a constant, add the size of TArg to the total size, other wise add 0
+        //     return (0 + ... + (std::is_same_v<typename Args::type, TConstsant<typename Args::type::type>> ? sizeof(typename Args::type) : 0)) / sizeof(uint);
+        // }
 
         template<typename T, typename TArg>
             requires std::is_same_v<std::remove_reference_t<T>, TextureView> || std::is_same_v<std::remove_reference_t<T>, BufferView> || std::is_same_v<std::remove_reference_t<T>, Sampler> ||

@@ -1,5 +1,5 @@
 #include "framework/Bindless.hlsl"
-BINDLESS_BINDINGS(3, 2, 4)
+BINDLESS_BINDINGS(3, 2, 4, 5)
 // BINDLESS_BUFFER_TEXTURE(3, 2)
 struct PixelInput {
   float4 Position : SV_POSITION;

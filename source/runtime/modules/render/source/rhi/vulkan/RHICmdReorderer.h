@@ -9,7 +9,6 @@
 #include <type_traits>
 #include <variant>
 #include "../RHIImpl.h"
-#include "VulkanDevice.h"
 #include "rhi/RHIResource.h"
 /**
  * @brief Copy From Luisa Runtime(LC) src/backends/common/command_reorder_visitor.h with respect
@@ -590,6 +589,8 @@ namespace Moer::Render {
                         temp_layer = GetLastLayer((uint64)(_arg.GetBuffer()), Range(_arg.GetByteOffset(), _arg.GetByteSize()), ResourceType::Texture_Buffer);
                     } else if constexpr (std::is_same_v<T, TextureView>) {
                         temp_layer = GetLastLayer(uint64(_arg.texture), Range(_arg.mip_level, _arg.num_mips), ResourceType::Texture_Buffer);
+                    } else if constexpr (std::is_same_v<T, BindlessArrayRef>) {
+                        temp_layer = GetLastLayer((uint64)(_arg->ArrayHandle()), Range(0), ResourceType::Bindless);
                     }
                     layer = std::max(layer, temp_layer);
                 },
@@ -630,6 +631,7 @@ namespace Moer::Render {
 
         void VisitCmd(const UpdateBindlessArrayCmd* _cmd) {
             //TODO: important here
+            AddCmd(_cmd, SetWrite((uint64)(_cmd->Handle()->ArrayHandle()), Range(), ResourceType::Bindless));
         }
 
         void VisitCmd(const DispatchCmd* _cmd) {
@@ -642,6 +644,8 @@ namespace Moer::Render {
                         temp_layer = GetLastLayer((uint64)(_arg.GetBuffer()), Range(_arg.GetByteOffset(), _arg.GetByteSize()), ResourceType::Texture_Buffer);
                     } else if constexpr (std::is_same_v<T, TextureView>) {
                         temp_layer = GetLastLayer(uint64(_arg.texture), Range(_arg.mip_level, _arg.num_mips), ResourceType::Texture_Buffer);
+                    } else if constexpr (std::is_same_v<T, BindlessArrayRef>) {
+                        temp_layer = SetRead((uint64)(_arg->ArrayHandle()), Range(0), ResourceType::Bindless);
                     }
                     layer = std::max(layer, temp_layer);
                 },
