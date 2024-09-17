@@ -391,6 +391,7 @@ namespace Moer::Render {
                     auto* range_handle = static_cast<RangeHandle*>(_handle);
                     layer              = GetLastLayerRead(range_handle, _range);
                     range_handle->EmplaceReadLayer(_range, layer);
+                    break;
                 }
                 case ResourceType::Mesh:
                 case ResourceType::Bindless:
@@ -398,7 +399,7 @@ namespace Moer::Render {
                     auto* no_range_handle            = static_cast<NoRangeHandle*>(_handle);
                     layer                            = GetLastLayerRead(no_range_handle);
                     no_range_handle->view.read_layer = layer;
-                } break;
+                }
             }
             return layer;
         }
@@ -413,13 +414,14 @@ namespace Moer::Render {
                 case ResourceType::Texture_Buffer: {
                     auto* range_handle = static_cast<RangeHandle*>(_handle);
                     range_handle->EmplaceReadLayer(_range, _layer);
+                    break;
                 }
                 case ResourceType::Mesh:
                 case ResourceType::Bindless:
                 case ResourceType::Accel: {
                     auto* no_range_handle            = static_cast<NoRangeHandle*>(_handle);
                     no_range_handle->view.read_layer = _layer;
-                } break;
+                }
             }
         }
 
@@ -428,13 +430,14 @@ namespace Moer::Render {
                 case ResourceType::Texture_Buffer: {
                     auto* range_handle = static_cast<RangeHandle*>(_handle);
                     range_handle->EmplaceWriteLayer(_range, _layer);
+                    break;
                 }
                 case ResourceType::Mesh:
                 case ResourceType::Bindless:
                 case ResourceType::Accel: {
                     auto* no_range_handle             = static_cast<NoRangeHandle*>(_handle);
                     no_range_handle->view.write_layer = _layer;
-                } break;
+                }
             }
         }
 
@@ -446,6 +449,7 @@ namespace Moer::Render {
                     auto* range_handle = static_cast<RangeHandle*>(_handle);
                     layer              = GetLastLayerWrite(range_handle, _range);
                     range_handle->EmplaceWriteLayer(_range, layer);
+                    break;
                 }
                 case ResourceType::Mesh:
                 case ResourceType::Bindless:
@@ -453,7 +457,8 @@ namespace Moer::Render {
                     auto* no_range_handle             = static_cast<NoRangeHandle*>(_handle);
                     layer                             = GetLastLayerWrite(no_range_handle);
                     no_range_handle->view.write_layer = layer;
-                } break;
+                    break;
+                }
             }
             return layer;
         }
@@ -473,13 +478,14 @@ namespace Moer::Render {
             auto* read_handle  = GetHandle(_handle, _read_type);
             auto* write_handle = GetHandle(_write_handle, _write_type);
             switch (_read_type) {
-                case ResourceType::Texture_Buffer:
                 case ResourceType::Mesh:
                 case ResourceType::Bindless:
                 case ResourceType::Accel: {
                     auto* no_range_handle = static_cast<NoRangeHandle*>(read_handle);
                     layer                 = GetLastLayerWrite(no_range_handle);
+                    break;
                 }
+                case ResourceType::Texture_Buffer:
                 default: {
 
                     auto* range_handle = static_cast<RangeHandle*>(read_handle);
@@ -488,30 +494,33 @@ namespace Moer::Render {
             }
 
             switch (_write_type) {
-                case ResourceType::Texture_Buffer:
                 case ResourceType::Mesh:
                 case ResourceType::Bindless:
                 case ResourceType::Accel: {
                     auto* no_range_handle             = static_cast<NoRangeHandle*>(write_handle);
-                    layer                             = GetLastLayerWrite(no_range_handle);
+                    layer                             = std::max(layer, GetLastLayerWrite(no_range_handle));
                     no_range_handle->view.write_layer = layer;
+                    break;
                 }
+                case ResourceType::Texture_Buffer:
                 default: {
                     auto* range_handle = static_cast<RangeHandle*>(write_handle);
-                    layer              = GetLastLayerWrite(range_handle, _write_range);
+                    layer              = std::max(GetLastLayerWrite(range_handle, _write_range), layer);
                     range_handle->EmplaceWriteLayer(_write_range, layer);
                 }
             }
 
             //now set read
             switch (_read_type) {
-                case ResourceType::Texture_Buffer:
                 case ResourceType::Mesh:
                 case ResourceType::Bindless:
                 case ResourceType::Accel: {
                     auto* no_range_handle            = static_cast<NoRangeHandle*>(read_handle);
                     no_range_handle->view.read_layer = std::max(no_range_handle->view.read_layer, layer);
+                    break;
                 }
+                case ResourceType::Texture_Buffer:
+
                 default: {
                     auto* range_handle = static_cast<RangeHandle*>(read_handle);
                     range_handle->EmplaceReadLayer(_read_range, layer);
