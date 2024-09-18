@@ -308,4 +308,15 @@ namespace Moer {
         }
     }
 
+    CameraRef Camera::CreateDefaultCamera() {
+        CameraRef default_camera = MoerNew(Camera)();
+        default_camera->SetFov(36.f);
+        Transform transform = Transform(Vector3f(0.0f, 0.0f, 0.0f), Vector3f(0.0f, 0.0f, 1.0f), Vector3f(0.0f, 1.0f, 0.0f));
+        default_camera->SetWorldTransform(transform);
+        default_camera->SetNearClip(0.1f);
+        default_camera->SetFarClip(1000.0f);
+        default_camera->SetAspectRatio(16.0f / 9.0f);
+        return default_camera;
+    }
+
 }// namespace Moer

@@ -6,6 +6,7 @@
 #include "window/WindowInput.h"
 
 namespace Moer {
+
     class RENDER_API Camera : public CountableResource {
     public:
         static float sensitivity;
@@ -46,6 +47,8 @@ namespace Moer {
         bool IsDirty() const;//judge if camera changed compared to last frame
 
         void Tick();//update camera per frame
+
+        static CountableRef<Camera> CreateDefaultCamera();// Create a default camera for the scene. Usually called in resource loader
 
     private:
         Matrix4x4f m_view_matrix;

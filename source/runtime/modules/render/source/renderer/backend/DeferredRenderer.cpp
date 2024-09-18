@@ -25,6 +25,10 @@
 #include "shader/ShaderParameterMacros.h"
 #include "shader/ShaderResourceManager.h"
 #include "scene/Scene.h"
+#include "scene/light/DirectionalLightComponent.h"
+#include "scene/light/PointLightComponent.h"
+#include "scene/light/SpotLightComponent.h"
+#include "scene/light/LightComponentManager.h"
 #include "deferred/BasePass.h"
 #include "utils/HiZBuilder.h"
 #include "utils/CopyDispatchArgs.h"
@@ -51,6 +55,7 @@ BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(LightingData)
 DEFINE_SHADER_PARAM(Moer::Matrix4x4f, inv_view_proj)
 DEFINE_SHADER_PARAM(uint32_t, light_count)
 DEFINE_SHADER_PARAM(Moer::Vector3ui, padding)
+DEFINE_SHADER_PARAM(Moer::Vector3f, camera_position)
 END_SHADER_CONSTANT_STRUCT_DEFINITION()
 
 BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(LightData)
@@ -354,7 +359,10 @@ namespace Moer {
             sampler = g_rhi->RHICreateSampler(create_info);
         }
     }
+
     void DeferredRenderer::Impl::InitSceneResources() {
+        // FIXME: If this function is called multiple times (> 1000), the engine will crash and stuck OS.
+        //        According to the variable `b_need_update`, this function should be called multiple times.
 
         auto meshlet_descs = g_scene->GetBuffer("meshlet_descs");
 
@@ -386,32 +394,42 @@ namespace Moer {
         // recheck_instance_id_srv = g_rhi->RHICreateBufferSRV(recheck_instance_id_buffer);
         // recheck_instance_id_uav = g_rhi->RHICreateBufferUAV(recheck_instance_id_buffer);
 
-        //HarCode lights
-        auto light_pos   = Moer::Vector3f(0.0f, 128.0f, -225.0f);
-        auto light_color = Moer::Vector3f(1.0, 1.0, 1.0);
+        lights.clear();
+        for (auto& light_entity : g_scene->GetLights()) {
+            auto      light_component = LightComponentManager::Get().Get(light_entity);
+            LightData light_data;
 
-        // Magic numbers used to offset lights in the Sponza scene
-        for (int i = -4; i < 4; ++i) {
-            for (int j = 0; j < 2; ++j) {
-                Moer::Vector3f pos = light_pos;
-                pos.x += i * 400;
-                pos.z += j * (225 + 140);
-                pos.y = 8;
+            if (auto light = dynamic_cast<DirectionalLightComponent*>(light_component.Get())) {
+                // lightcycle control, prevent accidently misuse directional_light in other branches
+                auto directional_light = light;
 
-                for (int k = 0; k < 3; ++k) {
-                    pos.y = pos.y + (k * 100);
+                light_data.color     = Vector4f(directional_light->GetColor(), directional_light->GetIntensity());
+                light_data.position  = Vector4f(0.0f, 0.0f, 0.0f, 1.0f);
+                light_data.direction = Vector4f(directional_light->GetDirection(), 1);// 1 means directional light
 
-                    light_color.x = static_cast<float>(rand()) / (RAND_MAX);
-                    light_color.y = static_cast<float>(rand()) / (RAND_MAX);
-                    light_color.z = static_cast<float>(rand()) / (RAND_MAX);
+            } else if (auto light = dynamic_cast<PointLightComponent*>(light_component.Get())) {
+                auto point_light = light;
 
-                    LightData light;
-                    light.color     = Moer::Vector4f(light_color, 1.0f);
-                    light.position  = Moer::Vector4f(pos, 1.0f);
-                    light.direction = Moer::Vector4f(0.0f, 0.0f, 0.0f, 2);
-                    lights.push_back(light);
-                }
+                light_data.color     = Vector4f(point_light->GetColor(), point_light->GetIntensity());
+                light_data.position  = Vector4f(point_light->GetPosition(), 1.0f);
+                light_data.direction = Vector4f(0.0f, 0.0f, 0.0f, 2);// 2 means point light
+
+            } else if (auto light = dynamic_cast<SpotLightComponent*>(light_component.Get())) {
+                auto spot_light = light;
+
+                // TODO: implement spot light (need test case)
+                // Be careful, I don't test any part of spot light (including data storage, etc)
+                LOG_WARNING("Spot light not implemented yet");
+
+            } else {
+                LOG_WARNING("Unknown light type");
             }
+
+            lights.push_back(light_data);
+        }
+        if (lights.size() == 0) {
+            LOG_WARNING("No light in scene! Please make sure the scene cache is latest! And you have at least one light in scene.");
+            LOG_WARNING("For ply and json scene, the loader hasn't implement default lights. So you can implement it by yourself refer to LightComponent.cpp:CreateDefaultLightComponents() and loader/gltf/Parser.cpp:LoadLights()");
         }
 
         light_buffer      = GpuSceneBufferBuilder::CopyFrom(EBufferUsageFlags::UNORDERED_ACCESS, lights.data(), lights.size() * sizeof(LightData));
@@ -970,6 +988,7 @@ namespace Moer {
             LightingData lighting_data;
             lighting_data.inv_view_proj = Inverse(camera->GetProjectionMatrix() * camera->GetViewMatrix());
             lighting_data.light_count   = lights.size();
+            lighting_data.camera_position = camera->GetPosition();
                
             for(auto type : material_types){
                 RHIBatchedShaderParameters parameters;

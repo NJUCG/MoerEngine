@@ -5,6 +5,11 @@
 #include "resources/GpuScene.h"
 #include "rhi/RHI.h"
 #include "scene/EntityManager.h"
+#include "scene/light/LightComponentManager.h"
+#include "scene/light/LightComponent.h"
+#include "scene/light/DirectionalLightComponent.h"
+#include "scene/light/PointLightComponent.h"
+#include "scene/light/SpotLightComponent.h"
 #include "taskgraph/GraphTask.h"
 
 #include <fstream>
@@ -173,6 +178,7 @@ namespace Moer {
         }
     }
     void SceneCache::ReadSceneUtils(InputStream& stream, SceneData& sceneData) {
+        // read cameras
         size_t camera_count;
         stream.read(camera_count);
         sceneData.m_cameras.reserve(camera_count);
@@ -181,6 +187,59 @@ namespace Moer {
             stream.read(camera, sizeof(Camera));
             sceneData.m_cameras.push_back(camera);
         }
+
+        // read lights
+
+#define DECLARE_AND_READ(type, name) \
+    type name;                       \
+    stream.read(name)
+
+        DECLARE_AND_READ(size_t, light_count);
+        sceneData.m_lights.reserve(light_count);
+
+        for (int i = 0; i < light_count; ++i) {
+            DECLARE_AND_READ(ELightComponentType, type);
+            DECLARE_AND_READ(Vector3f, color);
+            DECLARE_AND_READ(float, intensity);
+
+            if (type == ELightComponentType::DIRECTIONAL) {
+                DECLARE_AND_READ(Vector3f, direction);
+
+                auto light = MoerNew(DirectionalLightComponent)(
+                    color,
+                    intensity,
+                    direction);
+                sceneData.m_lights.push_back(light);
+
+            } else if (type == ELightComponentType::POINT) {
+                DECLARE_AND_READ(Vector3f, position);
+
+                auto light = MoerNew(PointLightComponent)(
+                    color,
+                    intensity,
+                    position);
+                sceneData.m_lights.push_back(light);
+
+            } else if (type == ELightComponentType::SPOT) {
+                DECLARE_AND_READ(Vector3f, position);
+                DECLARE_AND_READ(Vector3f, direction);
+                DECLARE_AND_READ(float, inner_cone_angle);
+                DECLARE_AND_READ(float, outer_cone_angle);
+
+                auto light = MoerNew(SpotLightComponent)(
+                    color,
+                    intensity,
+                    position,
+                    direction,
+                    inner_cone_angle,
+                    outer_cone_angle);
+                sceneData.m_lights.push_back(light);
+
+            } else {
+                LOG_WARNING("Unknown light type: {}", static_cast<uint8_t>(type));
+            }
+        }
+#undef DECLARE_AND_READ
     }
 
     void SceneCache::ReadSceneGeomInfo(InputStream& stream, SceneData& sceneData) {
@@ -474,11 +533,40 @@ namespace Moer {
         }
     }
     void SceneCache::WriteSceneUtils(OutputStream& stream, const SceneData& sceneData) {
+        // write cameras
         stream.write(sceneData.m_cameras.size());
         for (auto& camera : sceneData.m_cameras) {
             stream.write(camera, sizeof(Camera));
         }
+
+        // write lights
+        stream.write(sceneData.m_lights.size());
+        for (auto& light : sceneData.m_lights) {
+            stream.write(light->GetType());
+            stream.write(light->GetColor());
+            stream.write(light->GetIntensity());
+
+            if (light->GetType() == ELightComponentType::DIRECTIONAL) {
+                auto dir_light = dynamic_cast<DirectionalLightComponent*>(light.Get());
+                stream.write(dir_light->GetDirection());
+
+            } else if (light->GetType() == ELightComponentType::POINT) {
+                auto point_light = dynamic_cast<PointLightComponent*>(light.Get());
+                stream.write(point_light->GetPosition());
+
+            } else if (light->GetType() == ELightComponentType::SPOT) {
+                auto spot_light = dynamic_cast<SpotLightComponent*>(light.Get());
+                stream.write(spot_light->GetPosition());
+                stream.write(spot_light->GetDirection());
+                stream.write(spot_light->GetInnerConeAngle());
+                stream.write(spot_light->GetOuterConeAngle());
+
+            } else {
+                LOG_WARNING("Unknown light type: {}", static_cast<uint8_t>(light->GetType()));
+            }
+        }
     }
+
     SceneData SceneCache::ConvertToSceneData(const Scene& scene) {
         //May be not necessary
         SceneData sceneData;
@@ -540,6 +628,12 @@ namespace Moer {
             auto entity = EntityManager::Get().Create();
             CameraManager::Get().Put(entity, camera);
             scene->AddCamera(entity);
+        }
+
+        for (auto& light : sceneData.m_lights) {
+            auto entity = EntityManager::Get().Create();
+            LightComponentManager::Get().Put(entity, light);
+            scene->AddLight(entity);
         }
 
         Moer::UnorderedMap<std::string, RHITextureRef> textures;
