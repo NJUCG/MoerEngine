@@ -1091,7 +1091,7 @@ namespace Moer::Render {
                         VK_STRUCTURE_TYPE_DESCRIPTOR_BUFFER_BINDING_INFO_EXT,
                         VK_NULL_HANDLE,
                         0ull,
-                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT
+                        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT
                     };
                     desc_buffer_offsets.emplace_back(
                          set,
@@ -1104,7 +1104,7 @@ namespace Moer::Render {
                         VK_STRUCTURE_TYPE_DESCRIPTOR_BUFFER_BINDING_INFO_EXT,
                         VK_NULL_HANDLE,
                         0ull,
-                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT
+                        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT
                     };
                     desc_buffer_offsets.emplace_back(
                         set,
@@ -1118,7 +1118,7 @@ namespace Moer::Render {
                         VK_STRUCTURE_TYPE_DESCRIPTOR_BUFFER_BINDING_INFO_EXT,
                         VK_NULL_HANDLE,
                         0ull,
-                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT
+                        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT
                     };
 
                     desc_buffer_offsets.emplace_back(
@@ -1132,7 +1132,7 @@ namespace Moer::Render {
                         VK_STRUCTURE_TYPE_DESCRIPTOR_BUFFER_BINDING_INFO_EXT,
                         VK_NULL_HANDLE,
                         m_device->GetGlobalDescriptorHeap().ring_desc_buffer->DeviceAddress(),
-                        VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT | VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT
+                        VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT | VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT
                     };
 
                     _binder.push_info.pDescriptorWrites = _binder.writers.data();
@@ -1507,11 +1507,16 @@ namespace Moer::Render {
         buffer_ci.usage = VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
         buffer_ci.size  = _max_size * m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize;
         alloc_ci.flags  = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+        current_handle   = VK_NULL_HANDLE;
+        alloc           = VK_NULL_HANDLE;
+
         VK_CHECK_RESULT(vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &current_handle, &alloc, nullptr));
         bindless_buffer_descs = MoerNew(VulkanBuffer)(buffer_info, *m_device, current_handle, alloc, false, true);
 
         buffer_ci.usage = VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
         buffer_ci.size  = _max_size * m_device->GetOptionalProperties().descriptor_buffer_properties.sampledImageDescriptorSize;
+        current_handle   = VK_NULL_HANDLE;
+        alloc           = VK_NULL_HANDLE;
         VK_CHECK_RESULT(vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &current_handle, &alloc, nullptr));
         bindless_texture_descs = MoerNew(VulkanBuffer)(buffer_info, *m_device, current_handle, alloc, false, true);
 
@@ -1582,9 +1587,9 @@ namespace Moer::Render {
             void* mapped_data;
             vmaMapMemory(m_device->GetVmaAllocator(), bindless_buffer_descs->GetAllocation(), &mapped_data);
             m_device->vk_get_descriptor_ext(m_device->GetDevice(),
-            &descriptor_info, 
-            m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize, 
-            &mapped_data);
+                &descriptor_info, 
+                m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize, 
+                &mapped_data);
             vmaUnmapMemory(m_device->GetVmaAllocator(), bindless_buffer_descs->GetAllocation());
             vmaFlushAllocation(m_device->GetVmaAllocator(), bindless_buffer_descs->GetAllocation(), 0, m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize);
         }
@@ -1611,16 +1616,15 @@ namespace Moer::Render {
 
     uint VulkanBindlessArray::AllocateTexture(const TextureView& _texture, Sampler _sampler) {
         uint  slot_idx  = 0;
-        uint* array_idx = free_texture_slots.Pop();
+        uint* array_idx = free_slots.Pop();
         if (array_idx == nullptr) {
-            texture_slot_offset++;
-            slot_idx = texture_slot_offset;
+            slot_idx = slot_offset++;
         } else { slot_idx = *array_idx; }
         assert (slot_idx < numbers.size() && "Exceed the maximum number of bindless array");
         //allocate texture slot
         uint  texture_slot     = 0;
         uint* texture_slot_ptr = free_texture_slots.Pop();
-        if (texture_slot_ptr == nullptr) { texture_slot = ++texture_slot_offset; } else { texture_slot = *texture_slot_ptr; }
+        if (texture_slot_ptr == nullptr) { texture_slot = texture_slot_offset++; } else { texture_slot = *texture_slot_ptr; }
 
         textures_allocated.push_back({_texture.texture, _sampler, slot_idx, texture_slot});
         return slot_idx;
@@ -1628,10 +1632,9 @@ namespace Moer::Render {
 
     uint VulkanBindlessArray::AllocateBuffer(BufferView _buffer) {
         uint  slot_idx;
-        uint* array_idx = free_buffer_slots.Pop();
+        uint* array_idx = free_slots.Pop();
         if (array_idx == nullptr) {
-            buffer_slot_offset++;
-            slot_idx = buffer_slot_offset;
+            slot_idx = slot_offset++;
         } else { slot_idx = *array_idx; }
 
         assert (slot_idx < numbers.size() && "Exceed the maximum number of bindless array");
@@ -1639,7 +1642,7 @@ namespace Moer::Render {
         //allocate buffer index
         uint  buffer_slot;
         uint* buffer_slot_ptr = free_buffer_slots.Pop();
-        if (buffer_slot_ptr == nullptr) { buffer_slot = ++buffer_slot_offset; } else { buffer_slot = *buffer_slot_ptr; }
+        if (buffer_slot_ptr == nullptr) { buffer_slot = buffer_slot_offset++; } else { buffer_slot = *buffer_slot_ptr; }
 
         buffers_allocated.emplace_back(_buffer.buffer, slot_idx, buffer_slot);
         return slot_idx;
@@ -1672,7 +1675,7 @@ namespace Moer::Render {
         uint  range_max = 0;
         vmaMapMemory(m_device->GetVmaAllocator(), bindless_array_buffer->GetAllocation(), (void**)(&mapped_data));
         for (const TextureUpdateInfo& texture : _textures_allocated) {
-            uint indirect_handle           = (SamplerToIndex(texture.sampler) & 0xff) | (texture.slot & 0xffffff) << 8;
+            uint indirect_handle           = (m_device->GetSamplerIdx(texture.sampler) & 0xff) | (texture.slot & 0xffffff) << 8;
             mapped_data[texture.array_idx] = indirect_handle;
             handles[texture.array_idx]     = {1, texture.slot, Texture};
             range_min                      = std::min(range_min, texture.array_idx);
@@ -1729,13 +1732,13 @@ namespace Moer::Render {
         offsets.reserve(2);
         ranges.reserve(2);
         if (!_buffers_allocated.empty()) {
-            offsets.push_back(_buffers_allocated.front().array_idx * storage_buffer_desc_size);
+            offsets.push_back(_buffers_allocated.front().array_idx * storage_buffer_desc_size + buffers_offset_in_set);
             ranges.push_back((_buffers_allocated.back().array_idx - _buffers_allocated.front().array_idx + 1) * storage_buffer_desc_size);
             allocations.push_back(bindless_buffer_descs->GetAllocation());
             vmaUnmapMemory(m_device->GetVmaAllocator(), bindless_buffer_descs->GetAllocation());
         }
         if (!_textures_allocated.empty()) {
-            offsets.push_back(_textures_allocated.front().array_idx * sampled_image_desc_size);
+            offsets.push_back(_textures_allocated.front().array_idx * sampled_image_desc_size + textures_offset_in_set);
             ranges.push_back((_textures_allocated.back().array_idx - _textures_allocated.front().array_idx + 1) * sampled_image_desc_size);
             allocations.push_back(bindless_texture_descs->GetAllocation());
             vmaUnmapMemory(m_device->GetVmaAllocator(), bindless_texture_descs->GetAllocation());

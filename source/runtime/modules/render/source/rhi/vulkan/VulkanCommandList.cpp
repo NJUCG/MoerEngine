@@ -75,6 +75,8 @@ namespace Moer::Render {
                     break;
                 case Command::EType::Custom:
                     break;
+                case Command::EType::UpdateBindlessArray:
+                    break;
                 default:
                     assert(false && "Invalid command type");
             }
@@ -200,6 +202,12 @@ namespace Moer::Render {
                     0,
                     1);
             }
+        }
+
+        void Visit(const UpdateBindlessArrayCmd* _cmd) {
+            //use dispatch in the future
+            // auto* vk_bindless_array = reinterpret_cast<VulkanBindlessArray*>(_cmd->Handle());
+            // tracker.RecordState(vk_bindless_array, VK_ACCESS_2_SHADER_READ_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
         }
     };
     VulkanRHICommandListBase::VulkanRHICommandListBase(VulkanDevice* _device, VkCommandPool _pool, VkCommandBufferLevel _level) : VulkanDeviceObject(_device) {
@@ -2466,6 +2474,10 @@ namespace Moer::Render {
         }
         if (bind_template.desc_buffers.size() > 0) {
             device.vk_cmd_bind_descriptor_buffers(command_buffer, bind_template.desc_buffers.size(), bind_template.desc_buffers.data());
+            //LOG descriptor buffers info
+            for (const auto& desc_info : bind_template.desc_buffers) {
+                LOG_INFO("desc buffer address:{}", desc_info.address);
+            }
         }
 
         for (const auto& desc_info : bind_template.desc_buffer_offsets) {
