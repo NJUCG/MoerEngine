@@ -558,7 +558,7 @@ namespace Moer::Render {
                 idx = image_free_list.back();
                 image_free_list.pop_back();
             }
-            m_device->GetDescriptorEXT(&desc_info, image_desc_stride, image_desc_data.data() + idx * image_desc_stride + texture_desc_offset);
+            m_device->GetDescriptorEXT(&desc_info, image_desc_stride, image_desc_data.data() + idx * image_desc_stride);
         }
         return idx * image_desc_stride + texture_desc_offset;
     }
@@ -575,6 +575,7 @@ namespace Moer::Render {
         current_offset = ring_buffer_offsets[_frame_idx];
     }
     void VulkanDescriptorHeap::EndPushDescriptors(uint _frame_idx) {
+        _frame_idx = _frame_idx % m_device->cmd_alloc_limits;
         uint64 base_offset = ring_buffer_offsets[_frame_idx];
         vmaFlushAllocation(m_device->GetVmaAllocator(), ring_desc_buffer->GetAllocation(), base_offset, current_offset - base_offset);
     }

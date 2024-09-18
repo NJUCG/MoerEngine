@@ -2481,19 +2481,11 @@ namespace Moer::Render {
         }
 
         for (const auto& desc_info : bind_template.desc_buffer_offsets) {
-            device.vk_cmd_set_descriptor_buffer_offsets(command_buffer, desc_info.bind_point, desc_info.layout, desc_info.set, 1, &desc_info.buf_idx, &desc_info.offset);
+            uint buffer_idx = desc_info.buf_idx;
+            uint64 offset     = desc_info.offset;
+            device.vk_cmd_set_descriptor_buffer_offsets(command_buffer, desc_info.bind_point, desc_info.layout, desc_info.set, 1, &buffer_idx, &offset);
         }
-        //push descriptor sets
-        for (const auto& push_info : bind_template.set_binders) {
-            std::visit(
-                [&](auto& _binder) {
-                    using T = std::decay_t<decltype(_binder)>;
-                    if constexpr (std::is_same_v<T, VulkanDescriptorSetBinder>) {
-                        device.vk_cmd_push_descriptor_set(command_buffer, _binder.bind_point, _binder.push_info.layout, _binder.push_info.set, _binder.writers.size(), _binder.writers.data());
-                    }
-                },
-                push_info.second);
-        }
+        
         if (bind_template.push_constants_info.size > 0) {
             bind_template.push_constants_info.pValues = _args.constants.data();
             device.vk_cmd_push_constants(command_buffer, &bind_template.push_constants_info);

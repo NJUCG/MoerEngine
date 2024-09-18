@@ -1589,7 +1589,7 @@ namespace Moer::Render {
             m_device->vk_get_descriptor_ext(m_device->GetDevice(),
                 &descriptor_info, 
                 m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize, 
-                &mapped_data);
+                mapped_data);
             vmaUnmapMemory(m_device->GetVmaAllocator(), bindless_buffer_descs->GetAllocation());
             vmaFlushAllocation(m_device->GetVmaAllocator(), bindless_buffer_descs->GetAllocation(), 0, m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize);
         }
@@ -1698,15 +1698,20 @@ namespace Moer::Render {
 
         byte* mapped_buffer_descs;
         byte* mapped_image_descs;
-        if (!_buffers_allocated.empty()) vmaMapMemory(m_device->GetVmaAllocator(), bindless_buffer_descs->GetAllocation(), (void**)&mapped_buffer_descs);
-        if (!_textures_allocated.empty()) vmaMapMemory(m_device->GetVmaAllocator(), bindless_texture_descs->GetAllocation(), (void**)&mapped_image_descs);
+        if (!_buffers_allocated.empty()) {
+            vmaMapMemory(m_device->GetVmaAllocator(), bindless_buffer_descs->GetAllocation(), (void**)&mapped_buffer_descs);
+            mapped_buffer_descs += buffer_slot_offset;
+        };
+        if (!_textures_allocated.empty()) {
+            vmaMapMemory(m_device->GetVmaAllocator(), bindless_texture_descs->GetAllocation(), (void**)&mapped_image_descs);
+            mapped_image_descs += texture_slot_offset;
+        }
 
         VkDescriptorGetInfoEXT     get_info{VK_STRUCTURE_TYPE_DESCRIPTOR_GET_INFO_EXT};
         VkDescriptorAddressInfoEXT address_info{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
         uint                       storage_buffer_desc_size = m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize;
         uint                       sampled_image_desc_size  = m_device->GetOptionalProperties().descriptor_buffer_properties.sampledImageDescriptorSize;
         
-        mapped_buffer_descs += buffer_slot_offset;
         for (const auto& buffer : _buffers_allocated) {
             VulkanBuffer* vk_buffer      = ResourceCast(buffer.buffer);
             address_info.address         = vk_buffer->DeviceAddress();
@@ -1716,7 +1721,6 @@ namespace Moer::Render {
         }
         VkDescriptorImageInfo image_info{};
 
-        mapped_image_descs += texture_slot_offset;
         for (const auto& texture : _textures_allocated) {
             VulkanTexture* vk_texture   = ResourceCast(texture.texture);
             image_info.imageView        = vk_texture->GetView(0, vk_texture->GetNumMips());
