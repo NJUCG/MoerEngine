@@ -9,6 +9,7 @@
 #include "rhi/RHIResourceInitilizer.h"
 #include "misc/MacroUtils.h"
 #include "misc/STL.h"
+#include "misc/Traits.h"
 
 #include "rhi/vulkan/VulkanRHI.h"
 #include "VulkanCommand.h"
@@ -29,7 +30,6 @@
 
 #include "shader/Shader.h"
 #include "shader/ShaderResource.h"
-#include "vulkan/vulkan_core.h"
 #include "window/WindowContext.h"
 
 #include <algorithm>
@@ -50,13 +50,14 @@ VulkanRHIImpl::VulkanRHIImpl()
 }
 
 void VulkanRHIImpl::Initialize(const RHIInitInfo& _init) {
-    //todo: need more elegant way
-    m_rhi_info.max_frame_in_flight = _init.max_frame_in_flight;
-    m_rhi_info.ray_tracing         = _init.ray_tracing;
+    // const auto& rhi_config = VulkanRHIConfig::ResolveFromJson(_config);
+    // //todo: need more elegant way
+    // m_rhi_info.max_frame_in_flight = _config["render"]["max_frame_in_flight"].get<Moer::uint32>();
+    // m_rhi_info.ray_tracing         = _config["render"]["ray_tracing"].get<bool>();
 
-    LOG_INFO("raytraing: {}", _init.ray_tracing);
-    DeviceInitInfo init_info{};
-    m_device = MoerNew(Moer::Render::VulkanDevice)(std::move(init_info));
+    // LOG_INFO("raytraing: {}", m_rhi_info.ray_tracing);
+    // DeviceInitInfo init_info{};
+    // m_device = MoerNew(Moer::Render::VulkanDevice)(std::move(init_info));
 
     CreateInstance();
     InitSurface(Moer::WindowContext::GetMainWindow());
@@ -79,7 +80,7 @@ void VulkanRHIImpl::ShutDown() {
 }
 
 #pragma region resources creation
-RHISamplerRef VulkanRHIImpl::RHICreateSampler(const RHISamplerCreateInfo& _initializer) {
+RHISamplerRef  VulkanRHIImpl::RHICreateSampler(const RHISamplerCreateInfo& _initializer) {
     Moer::Render::VulkanRHISampler* vk_sampler = MoerNew(Moer::Render::VulkanRHISampler)();
     vk_sampler->GenerateSamplerFromInitializer(m_device, _initializer);
 
@@ -87,36 +88,36 @@ RHISamplerRef VulkanRHIImpl::RHICreateSampler(const RHISamplerCreateInfo& _initi
 }
 
 RHIVertexShaderRef VulkanRHIImpl::RHICreateVertexShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
-    auto* vk_shader            = MoerNew(Moer::Render::VulkanRHIVertexShader)(shader);
-    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
+    auto* vk_shader = MoerNew(Moer::Render::VulkanRHIVertexShader)(shader);
+    // vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
 
     return RHIVertexShaderRef(vk_shader);
 }
 
 RHIFragmentShaderRef VulkanRHIImpl::RHICreateFragmentShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
-    auto* vk_shader            = MoerNew(Moer::Render::VulkanRHIFragmentShader)(shader);
-    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
+    auto* vk_shader = MoerNew(Moer::Render::VulkanRHIFragmentShader)(shader);
+    // vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
 
     return RHIFragmentShaderRef(vk_shader);
 }
 
 RHIGeometryShaderRef VulkanRHIImpl::RHICreateGeometryShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
-    auto* vk_shader            = MoerNew(Moer::Render::VulkanRHIGeometryShader)(shader);
-    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
+    auto* vk_shader = MoerNew(Moer::Render::VulkanRHIGeometryShader)(shader);
+    // vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
 
     return RHIGeometryShaderRef(vk_shader);
 }
 
 RHIMeshShaderRef VulkanRHIImpl::RHICreateMeshShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
-    auto* vk_shader            = MoerNew(Moer::Render::VulkanRHIMeshShader)(shader);
-    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
+    auto* vk_shader = MoerNew(Moer::Render::VulkanRHIMeshShader)(shader);
+    // vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
 
     return RHIMeshShaderRef(vk_shader);
 }
 
 RHIAmplificationShaderRef VulkanRHIImpl::RHICreateAmplificationShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
-    auto* vk_shader            = MoerNew(Moer::Render::VulkanRHIAmplificationShader)(shader);
-    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
+    auto* vk_shader = MoerNew(Moer::Render::VulkanRHIAmplificationShader)(shader);
+    // vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
 
     return RHIAmplificationShaderRef(vk_shader);
 }
@@ -134,45 +135,45 @@ static std::ofstream OpenOrCreateFile(const std::string& path) {
 }
 
 RHIComputeShaderRef VulkanRHIImpl::RHICreateComputeShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
-    auto* vk_shader            = MoerNew(Moer::Render::VulkanRHIComputeShader)(shader);
-    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
+    auto* vk_shader = MoerNew(Moer::Render::VulkanRHIComputeShader)(shader);
+    // vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
 
     return RHIComputeShaderRef(vk_shader);
 }
 
 RHIRayGenShaderRef VulkanRHIImpl::RHICreateRayGenShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
-    auto* vk_shader            = new VulkanRHIRayGenShader(shader);
-    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
+    auto* vk_shader = new VulkanRHIRayGenShader(shader);
+    // vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
     return RHIRayGenShaderRef(vk_shader);
 }
 
 RHIRayMissShaderRef VulkanRHIImpl::RHICreateRayMissShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
-    auto* vk_shader            = new VulkanRHIRayMissShader(shader);
-    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
+    auto* vk_shader = new VulkanRHIRayMissShader(shader);
+    // vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
     return RHIRayMissShaderRef(vk_shader);
 }
 
 RHIRayClosestHitShaderRef VulkanRHIImpl::RHICreateRayClosestHitShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
-    auto* vk_shader            = new VulkanRHIRayClosestHitShader(shader);
-    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
+    auto* vk_shader = new VulkanRHIRayClosestHitShader(shader);
+    // vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
     return RHIRayClosestHitShaderRef(vk_shader);
 }
 
 RHIRayCallableShaderRef VulkanRHIImpl::RHICreateRayCallableShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
-    auto* vk_shader            = new VulkanRHIRayCallableShader(shader);
-    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
+    auto* vk_shader = new VulkanRHIRayCallableShader(shader);
+    // vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
     return RHIRayCallableShaderRef(vk_shader);
 }
 
 RHIRayIntersectionShaderRef VulkanRHIImpl::RHICreateRayIntersectionShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
-    auto* vk_shader            = new VulkanRHIRayIntersectionShader(shader);
-    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
+    auto* vk_shader = new VulkanRHIRayIntersectionShader(shader);
+    // vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
     return RHIRayIntersectionShaderRef(vk_shader);
 }
 
 RHIRayAnyhitShaderRef VulkanRHIImpl::RHICreateRayAnyhitShader(const class ShaderCodeEntry* code_entry, const Shader* shader) {
-    auto* vk_shader            = new VulkanRHIRayAnyhitShader(shader);
-    vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
+    auto* vk_shader = new VulkanRHIRayAnyhitShader(shader);
+    // vk_shader->m_shader_module = VkUtil::CreateShaderModule(code_entry->code, m_device->GetDevice());
     return RHIRayAnyhitShaderRef(vk_shader);
 }
 
@@ -979,7 +980,7 @@ RHIRTPsoRef VulkanRHIImpl::RHICreateRayTracingPipelineState(const RHIRayTracingP
     uint32_t handlecount    = 1 + miss_count + hit_count + callable_count;
 
     auto     rt_props             = VkUtil::QueryPhysicalDeviceExtensionProps<VkPhysicalDeviceRayTracingPipelinePropertiesKHR,
-                                                                              VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR>(m_device->GetGpu());
+                                                              VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR>(m_device->GetGpu());
     uint32_t handlesize           = rt_props.shaderGroupHandleSize;
     uint32_t handlesize_aligned   = ALIGNUP(handlesize, rt_props.shaderGroupHandleAlignment);
     vk_pso->m_raygen_sbt.size     = ALIGNUP(handlesize_aligned, rt_props.shaderGroupBaseAlignment);
@@ -1841,15 +1842,15 @@ void VulkanRHIImpl::InitSurface(Moer::WindowHandle* _handle) {
 }
 
 void VulkanRHIImpl::InitVulkan() {
-    DeviceInitializer initializer;
-    initializer.instance = m_instance;
-    // initializer.surface            = m_surface;
-    initializer.api_version        = VK_API_VERSION_1_3;
-    initializer.enabled_features   = VulkanDeviceFeature::GetMESupportedDeviceFeatures(initializer.api_version);
-    initializer.enabled_extensions = VulkanDeviceExtension::GetMESupportedDeviceExtensions(m_rhi_info);
+    // DeviceInitializer initializer;
+    // initializer.instance = m_instance;
+    // // initializer.surface            = m_surface;
+    // initializer.api_version        = VK_API_VERSION_1_3;
+    // initializer.enabled_features   = VulkanDeviceFeature::GetMESupportedDeviceFeatures(initializer.api_version);
+    // initializer.enabled_extensions = VulkanDeviceExtension::GetMESupportedDeviceExtensions(m_rhi_info);
 
-    m_device->Init(initializer);
-    m_device->InitMemoryAllocator(m_instance);
+    // m_device->Init(initializer);
+    // m_device->InitMemoryAllocator(m_instance);
     // RHIViewportInitializer viewport_init{};
     // viewport_init.window_handle = Moer::WindowContext::GetMainWindow();
     // auto viewport               = RHICreateViewport(viewport_init);
@@ -1869,56 +1870,56 @@ void VulkanRHIImpl::InitVulkan() {
 #pragma region vulkan functions
 
 void VulkanRHIImpl::CreateInstance() {
-    VkApplicationInfo application_info{};
-    application_info.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-    // application_info.pApplicationName = MACRO_STR(__ENGINE_NAME__);
-    // application_info.applicationVersion = VK_MAKE_VERSION(PROJECT_VERSION_MAJOR, PROJECT_VERSION_MINOR, PROJECT_VERSION_PATCH);
-    application_info.pEngineName   = MACRO_STR(__ENGINE_NAME__);
-    application_info.engineVersion = VK_MAKE_VERSION(PROJECT_VERSION_MAJOR, PROJECT_VERSION_MINOR, PROJECT_VERSION_PATCH);
-    application_info.apiVersion    = VK_API_VERSION_1_3;
+    // VkApplicationInfo application_info{};
+    // application_info.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+    // // application_info.pApplicationName = MACRO_STR(__ENGINE_NAME__);
+    // // application_info.applicationVersion = VK_MAKE_VERSION(PROJECT_VERSION_MAJOR, PROJECT_VERSION_MINOR, PROJECT_VERSION_PATCH);
+    // application_info.pEngineName   = MACRO_STR(__ENGINE_NAME__);
+    // application_info.engineVersion = VK_MAKE_VERSION(PROJECT_VERSION_MAJOR, PROJECT_VERSION_MINOR, PROJECT_VERSION_PATCH);
+    // application_info.apiVersion    = VK_API_VERSION_1_3;
 
-    m_instance_extensions         = VulkanInstanceExtension::GetDriverSupportedInstanceExtensionNames();
-    m_enabled_instance_extensions = VulkanInstanceExtension::GetMESupportedInstanceExtensions();
+    // m_instance_extensions         = VulkanInstanceExtension::GetDriverSupportedInstanceExtensionNames();
+    // m_enabled_instance_extensions = VulkanInstanceExtension::GetMESupportedInstanceExtensions();
 
-    bool extension_supported   = CheckEnabledExtensions();
-    bool debug_utils_available = std::find(m_enabled_instance_extensions.begin(), m_enabled_instance_extensions.end(), VK_EXT_DEBUG_UTILS_EXTENSION_NAME) != m_enabled_instance_extensions.end();
+    // bool extension_supported   = CheckEnabledExtensions();
+    // bool debug_utils_available = std::find(m_enabled_instance_extensions.begin(), m_enabled_instance_extensions.end(), VK_EXT_DEBUG_UTILS_EXTENSION_NAME) != m_enabled_instance_extensions.end();
 
-    VkInstanceCreateInfo instance_create_info{};
-    instance_create_info.sType            = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
-    instance_create_info.pNext            = nullptr;
-    instance_create_info.flags            = 0;
-    instance_create_info.pApplicationInfo = &application_info;
+    // VkInstanceCreateInfo instance_create_info{};
+    // instance_create_info.sType            = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+    // instance_create_info.pNext            = nullptr;
+    // instance_create_info.flags            = 0;
+    // instance_create_info.pApplicationInfo = &application_info;
 
-    auto n = m_enabled_instance_extensions.size();
+    // auto n = m_enabled_instance_extensions.size();
 
-    Moer::Array<const char*> r_extensions(n, nullptr);
-    for (size_t i = 0; i < n; ++i) {
-        r_extensions[i] = m_enabled_instance_extensions[i].c_str();
-    }
-    instance_create_info.enabledExtensionCount   = n;
-    instance_create_info.ppEnabledExtensionNames = r_extensions.data();
+    // Moer::Array<const char*> r_extensions(n, nullptr);
+    // for (size_t i = 0; i < n; ++i) {
+    //     r_extensions[i] = m_enabled_instance_extensions[i].c_str();
+    // }
+    // instance_create_info.enabledExtensionCount   = n;
+    // instance_create_info.ppEnabledExtensionNames = r_extensions.data();
 
-    VkDebugUtilsMessengerCreateInfoEXT debug_create_info{};
+    // VkDebugUtilsMessengerCreateInfoEXT debug_create_info{};
 
-    const char* validation_layer_name = "VK_LAYER_KHRONOS_validation";
+    // const char* validation_layer_name = "VK_LAYER_KHRONOS_validation";
 
-    if (CheckValidationLayer(validation_layer_name)) {
-        instance_create_info.enabledLayerCount   = 1;
-        instance_create_info.ppEnabledLayerNames = &validation_layer_name;
-        Moer::RHI::Vulkan::Debug::PopulateDebugMessengerCreateInfo(debug_create_info);
-        instance_create_info.pNext = &debug_create_info;
-    } else {
-        instance_create_info.enabledLayerCount   = 0;
-        instance_create_info.ppEnabledLayerNames = nullptr;
-    }
+    // if (CheckValidationLayer(validation_layer_name)) {
+    //     instance_create_info.enabledLayerCount   = 1;
+    //     instance_create_info.ppEnabledLayerNames = &validation_layer_name;
+    //     Moer::RHI::Vulkan::Debug::PopulateDebugMessengerCreateInfo(debug_create_info);
+    //     instance_create_info.pNext = &debug_create_info;
+    // } else {
+    //     instance_create_info.enabledLayerCount   = 0;
+    //     instance_create_info.ppEnabledLayerNames = nullptr;
+    // }
 
-    VK_CHECK_RESULT(vkCreateInstance(&instance_create_info, nullptr, &m_instance))
+    // VK_CHECK_RESULT(vkCreateInstance(&instance_create_info, nullptr, &m_instance))
 
-    Moer::RHI::Vulkan::Debug::SetupDebugUtilsMessengerEXT(m_instance);
+    // Moer::RHI::Vulkan::Debug::SetupDebugUtilsMessengerEXT(m_instance);
 
-    if (debug_utils_available) {
-        Moer::RHI::Vulkan::DebugUtils::Setup(m_instance);
-    }
+    // if (debug_utils_available) {
+    //     Moer::RHI::Vulkan::DebugUtils::Setup(m_instance);
+    // }
 }
 
 #pragma endregion
@@ -2032,7 +2033,7 @@ VkDeviceAddress VulkanRHIImpl::GetDeviceAddress(RHIBufferRef _buffer) {
 #pragma endregion
 
 #pragma region viewport
-RHIViewport* VulkanRHIImpl::RHIGetMainViewport() {
+RHIViewport*   VulkanRHIImpl::RHIGetMainViewport() {
     return static_cast<RHIViewport*>(m_main_viewport);
 }
 //create external viewport

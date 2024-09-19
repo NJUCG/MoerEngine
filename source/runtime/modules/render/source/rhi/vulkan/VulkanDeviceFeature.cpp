@@ -3,47 +3,8 @@
 #include "VulkanPlatform.h"
 #include "vulkan/vulkan_core.h"
 
-void VulkanPhysicalDeviceFeatures::Query(VkPhysicalDevice _gpu, uint32_t _api_version) {
-    VkPhysicalDeviceFeatures2 gpu_features_2{};
-    gpu_features_2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-
-    if (_api_version >= VK_API_VERSION_1_1) {
-        gpu_features_2.pNext = &core_1_1;
-        core_1_1.sType       = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
-    }
-
-    if (_api_version >= VK_API_VERSION_1_2) {
-        core_1_1.pNext = &core_1_2;
-        core_1_2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
-    }
-
-    if (_api_version >= VK_API_VERSION_1_3) {
-        core_1_2.pNext = &core_1_3;
-        core_1_3.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
-    }
-
-    vkGetPhysicalDeviceFeatures2(_gpu, &gpu_features_2);
-
-    // Copy features into old struct for convenience
-    core_1_0 = gpu_features_2.features;
-}
-
-bool VulkanPhysicalDeviceFeatures::Contains(const VulkanPhysicalDeviceFeatures& _other) const {
-    return core_1_0 >= _other.core_1_0 && core_1_1 >= _other.core_1_1 && core_1_2 >= _other.core_1_2 && core_1_3 >= _other.core_1_3;
-}
-
-void VulkanPhysicalDeviceFeatures::PreCreateDevice(VkDeviceCreateInfo& _device_create_info, uint32_t _api_version) {
-    if (_api_version >= VK_API_VERSION_1_3) {
-        core_1_3.pNext = (void*)_device_create_info.pNext;
-    } else if (_api_version == VK_API_VERSION_1_2) {
-        core_1_2.pNext = (void*)_device_create_info.pNext;
-    } else {
-        core_1_1.pNext = (void*)_device_create_info.pNext;
-    }
-}
-
-VulkanPhysicalDeviceFeatures VulkanDeviceFeature::GetMESupportedDeviceFeatures(uint32_t _api_version) {
-    VulkanPhysicalDeviceFeatures enabled_features;
+VulkanDeviceFeatures VulkanDeviceFeatures::GetMERequiredFeatures(uint32_t _api_version) {
+    VulkanDeviceFeatures enabled_features;
 
     // 1.0 features
     enabled_features.core_1_0.samplerAnisotropy = VK_TRUE;
@@ -88,6 +49,49 @@ VulkanPhysicalDeviceFeatures VulkanDeviceFeature::GetMESupportedDeviceFeatures(u
     VulkanPlatform::RestrictEnabledPhysicalDeviceFeatures(&enabled_features);
 
     return enabled_features;
+}
+
+VulkanDeviceFeatures VulkanDeviceFeatures::GetGpuFeatures(VkPhysicalDevice _gpu, uint32_t _api_version) {
+    VulkanDeviceFeatures gpu_features;
+
+    VkPhysicalDeviceFeatures2 gpu_features_2{};
+    gpu_features_2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+
+    if (_api_version >= VK_API_VERSION_1_1) {
+        gpu_features_2.pNext        = &gpu_features.core_1_1;
+        gpu_features.core_1_1.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+    }
+
+    if (_api_version >= VK_API_VERSION_1_2) {
+        gpu_features.core_1_1.pNext = &gpu_features.core_1_2;
+        gpu_features.core_1_2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    }
+
+    if (_api_version >= VK_API_VERSION_1_3) {
+        gpu_features.core_1_2.pNext = &gpu_features.core_1_3;
+        gpu_features.core_1_3.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+    }
+
+    vkGetPhysicalDeviceFeatures2(_gpu, &gpu_features_2);
+
+    // Copy features into old struct for convenience
+    gpu_features.core_1_0 = gpu_features_2.features;
+
+    return gpu_features;
+}
+
+bool VulkanDeviceFeatures::Contains(const VulkanDeviceFeatures& _other) const {
+    return core_1_0 >= _other.core_1_0 && core_1_1 >= _other.core_1_1 && core_1_2 >= _other.core_1_2 && core_1_3 >= _other.core_1_3;
+}
+
+void VulkanDeviceFeatures::PreCreateDevice(VkDeviceCreateInfo& _device_create_info, uint32_t _api_version) {
+    if (_api_version >= VK_API_VERSION_1_3) {
+        core_1_3.pNext = (void*)_device_create_info.pNext;
+    } else if (_api_version == VK_API_VERSION_1_2) {
+        core_1_2.pNext = (void*)_device_create_info.pNext;
+    } else {
+        core_1_1.pNext = (void*)_device_create_info.pNext;
+    }
 }
 
 bool operator>=(const VkPhysicalDeviceFeatures& _lhs, const VkPhysicalDeviceFeatures& _rhs) {

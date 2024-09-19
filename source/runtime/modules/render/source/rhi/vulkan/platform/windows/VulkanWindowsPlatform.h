@@ -26,7 +26,7 @@ namespace Moer::Render {
     public:
         // Array of required extensions for the platform (Required!)
         static void GetInstanceExtensions(TExtensionArray& _extensions);
-        static void GetInstanceLayers(TLayerArray& _layers) {}
+        static void GetInstanceLayers(TLayerArray& _layers);
         static void GetDeviceExtensions(TVulkanDeviceExtensionArray& _extensions);
         static void GetDeviceLayers(TLayerArray& _layers) {}
         // create the platform-specific surface object - required

@@ -7,13 +7,17 @@
 #include "../../VulkanExtension.h"
 namespace Moer::Render {
     void VulkanWindowsPlatform::GetInstanceExtensions(TExtensionArray& _extensions) {
-        _extensions.push_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
-        _extensions.push_back(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME);
+        _extensions.emplace_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
+        _extensions.emplace_back(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME);
+    }
+
+    void VulkanWindowsPlatform::GetInstanceLayers(TLayerArray& _layers) {
+        _layers.emplace_back("VK_LAYER_KHRONOS_validation");
     }
 
     void VulkanWindowsPlatform::GetDeviceExtensions(TVulkanDeviceExtensionArray& _extensions) {
         // _extensions.emplace_back(std::make_unique<VulkanDeviceExtension>(VK_EXT_FULL_SCREEN_EXCLUSIVE_EXTENSION_NAME));
-        // _extensions.push_back(VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME);
+        // _extensions.emplace_back(VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME);
     }
 
     void VulkanWindowsPlatform::CreateSurface(void* _window_handle, VkInstance _instance, VkSurfaceKHR& _surface) {

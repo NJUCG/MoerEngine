@@ -20,11 +20,13 @@ target_include_directories(${target_name}
 	PUBLIC $<BUILD_INTERFACE:${moer_runtime_core_dir}/include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/spdlog/include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/zpp_bits>
+    PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/json/include>
 )
 
 target_link_libraries(${target_name}
     PUBLIC mimalloc-static
     PUBLIC spdlog
+    PUBLIC nlohmann_json::nlohmann_json
 )
 target_compile_definitions(${target_name} 
     PRIVATE "DEVELOP_SHADER_PATH=${moer_root_dir}/shaders"

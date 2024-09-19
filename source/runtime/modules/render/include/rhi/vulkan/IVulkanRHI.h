@@ -13,12 +13,13 @@
 
 class IVulkanRHI : public RHI {
 public:
-    IVulkanRHI() : RHI(ERHIType::Vulkan) {}
+    IVulkanRHI() = default;
 
     void        Initialize(const RHIInitInfo& _init) override {}
     void        PostInit() override {}
     void        ShutDown() override {}
     const char* GetName() override { return "VulkanRHI Interface"; }
+    ERHIType    GetType() const override final { return ERHIType::Vulkan; };
 
 #pragma region resources creation
     RHISamplerRef RHICreateSampler(const RHISamplerCreateInfo& _initializer) override { return RHISamplerRef{}; }
@@ -100,7 +101,7 @@ public:
 #pragma endregion
 
 protected:
-    void         RHISetBatchedShaderParametersInner(RHIResource* _resource, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) override {};
+    void         RHISetBatchedShaderParametersInner(RHIResource* _resource, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) override{};
     RHIBufferRef RHICreateBufferInner(const RHIBufferCreateInfo& info) override { return RHIBufferRef{}; }
     RHIViewRef   RHICreateViewInner(RHIViewableResource* _resource, const RHIViewInfo& _view_info) override { return RHIViewRef{}; }
 };

@@ -5,6 +5,9 @@
 #include "API_Macro.h"
 #include "misc/STL.h"
 
+#include <nlohmann/json.hpp>
+using MoerRHIConfigAsJSON = nlohmann::json;
+
 //implement ConfigManager as Singleton
 #define FONTS_DIR  "fonts"
 #define CONFIG_DIR "config"
@@ -26,6 +29,7 @@ namespace Moer {
         uint32_t max_frame_in_flight : 3;
         bool     ray_tracing : 1;
 
+        char rhi_config_name[128]{"VkConfigs.json"};
         char default_rhi[32]{"Vulkan"};
         char default_render_name[32]{"DeferredRenderer"};
     };
@@ -60,10 +64,12 @@ namespace Moer {
         const std::filesystem::path& GetScenePath() const;
 
         //call after config manager init
-        const MoerInitConfig& GetInitConfig() const { return init_config; }
+        const MoerInitConfig&      GetInitConfig() const { return init_config; }
+        const MoerRHIConfigAsJSON& GetRHIConfigAsJSON() const { return rhi_config_as_json; }
 
     private:
-        MoerInitConfig init_config;
+        MoerInitConfig      init_config;
+        MoerRHIConfigAsJSON rhi_config_as_json;
     };
 
 }// namespace Moer

@@ -19,9 +19,15 @@ namespace Moer::Render {
         // VkImageView view;
         class VulkanImageView* view;
     };
-    VkSurfaceFormatKHR ChooseSwapSurfaceFormat(const Moer::Array<VkSurfaceFormatKHR>& _available_formats, bool _prefer_hdr = false);
-    VkPresentModeKHR   ChooseSwapPresentMode(const Moer::Array<VkPresentModeKHR>& _available_present_modes, bool vsync = false);
-    VkExtent2D         ChooseSwapExtent(uint32_t* _width, uint32_t* _height, const VkSurfaceCapabilitiesKHR& _capabilities);
+    struct SwapChainSupportDetails {
+        VkSurfaceCapabilitiesKHR  capabilities;
+        Array<VkSurfaceFormatKHR> formats;
+        Array<VkPresentModeKHR>   present_modes;
+    };
+    SwapChainSupportDetails QuerySwapChainSupport(VkPhysicalDevice _gpu, VkSurfaceKHR _surface);
+    VkSurfaceFormatKHR      ChooseSwapSurfaceFormat(const Array<VkSurfaceFormatKHR>& _available_formats, bool _prefer_hdr = false);
+    VkPresentModeKHR        ChooseSwapPresentMode(const Array<VkPresentModeKHR>& _available_present_modes, bool vsync = false);
+    VkExtent2D              ChooseSwapExtent(uint32_t* _width, uint32_t* _height, const VkSurfaceCapabilitiesKHR& _capabilities);
     class VulkanSwapChain {
     public:
         VulkanSwapChain() {}

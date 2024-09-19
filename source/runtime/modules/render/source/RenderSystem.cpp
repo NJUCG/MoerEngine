@@ -85,7 +85,6 @@ namespace Moer {
             //throw unimplemented error
             throw std::runtime_error("RHI not implemented");
         }
-        g_rhi = new VulkanRHIImpl();
     }
 
     void RenderSystem::PostInitRHI() {

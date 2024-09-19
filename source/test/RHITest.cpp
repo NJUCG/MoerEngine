@@ -31,7 +31,7 @@ public:
 
 struct TestBindlessParam {
     float4 color;
-    uint texture_handle;
+    uint   texture_handle;
 };
 class TestTrianglePipelineConstColor : public RasterPipeline {
 public:
@@ -57,11 +57,16 @@ int main(int argc, const char** argv) {
     path.filename().string().find(".exe") != std::string::npos ? path = path.parent_path() : path = path;
     ConfigManager::GetInstance().Init(path);
     TaskSystem::Init();
-    DeviceInitInfo info{.rhi_type = ERHIType::Vulkan, .name = "RHITest", .ray_tracing = true};
+    const auto& rhi_config_as_json = ConfigManager::GetInstance().GetRHIConfigAsJSON();
+
+    DeviceInitInfo info{
+        .type           = ERHIType::Vulkan,
+        .name           = "RHITest",
+        .config_as_json = rhi_config_as_json};
     RenderDevice::Init(std::move(info));
     auto&           device = RenderDevice::Get();
     ShaderManager   manager(device);
-    uint2 resolution = {1280, 720};
+    uint2           resolution = {1280, 720};
     SurfaceInitInfo surface_info("Vulkan", resolution.x, resolution.y, "RHITest", false);
     WindowContext::Init(surface_info);
     auto&& scope_exit    = OnScopeExit([&] {
@@ -71,14 +76,14 @@ int main(int argc, const char** argv) {
     });
     auto*  window_handle = WindowContext::GetMainWindow();
 
-    auto buf = device.CreateBuffer<float>(1024, EBufferUsageFlags::UNORDERED_ACCESS);
+    auto                buf = device.CreateBuffer<float>(1024, EBufferUsageFlags::UNORDERED_ACCESS);
     SwapchainCreateInfo sc_info{.window_handle = (uintptr_t)window_handle, .size = {resolution.x, resolution.y}, .back_buffer_sz = 2, .preferred_format = PF_R8G8B8A8_SRGB};
-    auto sc  = device.CreateSwapchain(sc_info);
-    BindlessArrayRef bindless_array = device.CreateBindlessArray();
-    auto&       cmd_queue = device.GetCommandQueue(EQueueType::Graphics);
-    CommandList cmd_list;
-    auto        buffer = device.CreateBuffer<uint>(1024, EBufferUsageFlags::UNORDERED_ACCESS);
-    Array<uint> data(1024);
+    auto                sc             = device.CreateSwapchain(sc_info);
+    BindlessArrayRef    bindless_array = device.CreateBindlessArray();
+    auto&               cmd_queue      = device.GetCommandQueue(EQueueType::Graphics);
+    CommandList         cmd_list;
+    auto                buffer = device.CreateBuffer<uint>(1024, EBufferUsageFlags::UNORDERED_ACCESS);
+    Array<uint>         data(1024);
     for (uint i = 0; i < 1024; ++i) {
         data[i] = i;
     }
@@ -138,10 +143,10 @@ int main(int argc, const char** argv) {
         {{-0.5f, 0.5f, 0.0f}, {1.0f, 0.0f}},
         {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f}},
     };
-    uint indices[]     = {0, 1, 2};
-    float4 color_red = {1, 0, 0, 1};
-    Sampler sampler(SF_LINEAR,SAM_CLAMP_TO_EDGE);
-    uint bdls_tex_handle = bindless_array->AllocateTexture(font_tex, sampler);
+    uint    indices[] = {0, 1, 2};
+    float4  color_red = {1, 0, 0, 1};
+    Sampler sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE);
+    uint    bdls_tex_handle = bindless_array->AllocateTexture(font_tex, sampler);
 
     auto vertex_buffer = device.CreateBuffer<float>(3 * sizeof(Vertex) / sizeof(float), EBufferUsageFlags::VERTEX_BUFFER);
     auto index_buffer  = device.CreateBuffer<uint>(3, EBufferUsageFlags::INDEX_BUFFER);
@@ -150,7 +155,6 @@ int main(int argc, const char** argv) {
     cmd_list.UpdateBindlessArray(bindless_array);
     cmd_queue.Execute(cmd_list.Submit());
     cmd_queue.Sync();
-
 
     VertexBuffer vb(vertex_buffer, 0);
     IndexBuffer  ib(index_buffer->GetView(), EIndexElementType::IET_UINT32);
@@ -167,14 +171,14 @@ int main(int argc, const char** argv) {
         int w_width, w_height;
 
         WindowContext::GetWindowSize(WindowContext::GetMainWindow(), &w_width, &w_height);
-        if(w_width == 0 || w_height == 0) {
+        if (w_width == 0 || w_height == 0) {
             std::this_thread::yield();
             continue;
         }
-        if(w_width != resolution.x || w_height != resolution.y){
-            
+        if (w_width != resolution.x || w_height != resolution.y) {
+
             resolution = {uint32(w_width), uint32(w_height)};
-            output = device.CreateTexture(
+            output     = device.CreateTexture(
                 Extent2D(resolution.x, resolution.y),
                 PF_R8G8B8A8_SRGB,
                 ETextureUsageFlags::COLOR_ATTACHMENT);
@@ -183,7 +187,7 @@ int main(int argc, const char** argv) {
             sc->Recreate(sc_info);
         }
         TestBindlessParam param;
-        param.color = color_red;
+        param.color          = color_red;
         param.texture_handle = bdls_tex_handle;
         cmd_list.Barriers(ReadTexture(font_tex, ETextureState::SAMPLE));
         cmd_list.Gfx(rast_pipeline_constant_color, sampler, font_tex, bindless_array, param)

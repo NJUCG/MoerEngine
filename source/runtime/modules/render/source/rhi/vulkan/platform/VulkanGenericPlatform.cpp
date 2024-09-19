@@ -6,7 +6,7 @@
 
 #include "../VulkanDeviceFeature.h"
 
-void VulkanGenericPlatform::RestrictEnabledPhysicalDeviceFeatures(VulkanPhysicalDeviceFeatures* _gpu_features) {
+void VulkanGenericPlatform::RestrictEnabledPhysicalDeviceFeatures(VulkanDeviceFeatures* _gpu_features) {
     // Disable everything sparse-related
     _gpu_features->core_1_0.shaderResourceResidency = VK_FALSE;
     _gpu_features->core_1_0.shaderResourceMinLod    = VK_FALSE;

@@ -96,14 +96,42 @@ RHISRVRef RHI::RHICreateAccelerationStructureSRV(RHIRayTracingTLAS* _tlas) {
 }
 
 namespace Moer::Render {
+    template<>
+    VulkanRHIConfig ResolveConfigAs(const MoerRHIConfigAsJSON& _config_as_json) {
+        using std::string;
+        assert(_config_as_json["rhi"].get<string>() == "vulkan");
+
+        VulkanRHIConfig config;
+
+        float api = _config_as_json["api_version"].get<float>();
+        if (api == 1.f)
+            config.api_version = VK_API_VERSION_1_0;
+        else if (api == 1.1f)
+            config.api_version = VK_API_VERSION_1_1;
+        else if (api == 1.2f)
+            config.api_version = VK_API_VERSION_1_2;
+        else if (api == 1.3f)
+            config.api_version = VK_API_VERSION_1_3;
+        else {
+            LOG_ERROR("Unsupported vulkan api version: {}", api);
+            assert(false);
+        }
+
+        return config;
+    }
+
+    // template<>
+    // DXRHIConfig ResolveConfigAs(const MoerRHIConfigAsJSON& _config_as_json) {
+    // }
+
     RenderDevice& RenderDevice::Get() {
         static RenderDevice device;
         return device;
     }
     void RenderDevice::Init(DeviceInitInfo&& _info) {
-        switch (_info.rhi_type) {
+        switch (_info.type) {
             case ERHIType::Vulkan:
-                Get().impl = std::move(UniquePtr<Impl>(MoerNew(VulkanDevice)(std::move(_info))));
+                Get().impl = std::move(UniquePtr<Impl>(MoerNew(VulkanDevice)(ResolveConfigAs<VulkanRHIConfig>(_info.config_as_json))));
                 break;
             case ERHIType::D3D12:
                 LOG_ERROR("D3D12 is not supported yet");
