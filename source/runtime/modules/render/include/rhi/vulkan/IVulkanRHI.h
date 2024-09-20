@@ -9,7 +9,8 @@
 #include "rhi/RHICommand.h"
 #include "rhi/RHIResource.h"
 #include <cstdint>
-#include <vulkan/vulkan.h>
+#define VK_NO_PROTOTYPES
+#include <vulkan/vulkan_core.h>
 
 class IVulkanRHI : public RHI {
 public:
@@ -101,7 +102,7 @@ public:
 #pragma endregion
 
 protected:
-    void         RHISetBatchedShaderParametersInner(RHIResource* _resource, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) override{};
+    void         RHISetBatchedShaderParametersInner(RHIResource* _resource, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) override {};
     RHIBufferRef RHICreateBufferInner(const RHIBufferCreateInfo& info) override { return RHIBufferRef{}; }
     RHIViewRef   RHICreateViewInner(RHIViewableResource* _resource, const RHIViewInfo& _view_info) override { return RHIViewRef{}; }
 };

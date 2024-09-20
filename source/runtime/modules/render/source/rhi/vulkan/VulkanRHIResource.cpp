@@ -3,6 +3,9 @@
 //
 
 #include "PixelFormat.h"
+
+#include <volk.h>
+#include "VulkanMacroUtils.h"
 #include "VulkanDevice.h"
 #include "VulkanSwapChain.h"
 #include "VulkanDescriptor.h"
@@ -21,7 +24,6 @@
 #include <memory>
 #include <mutex>
 #include <thread>
-#include <vulkan/vulkan_core.h>
 
 #pragma region utils definition
 namespace Moer::Render {

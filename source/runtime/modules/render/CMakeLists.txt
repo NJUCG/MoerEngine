@@ -28,12 +28,14 @@ target_include_directories(${MODULE_NAME}
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/spdlog/include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/glfw/include>
 	PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/VulkanSDK/include>
+    PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/volk>
 	PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/DirectXShaderCompiler/include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/VulkanMemoryAllocator>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/imgui>
 )
 target_link_libraries(${MODULE_NAME}
-    PUBLIC ${vulkan_lib}
+    # PUBLIC ${vulkan_lib}
+    PUBLIC volk
     PRIVATE spirv-reflect-static
 	PUBLIC dxc
     PUBLIC MoerRuntimeCore
@@ -54,9 +56,9 @@ target_link_libraries(${MODULE_NAME}
 #     target_link_libraries(${target_name} PRIVATE -fsanitize=address,undefined -fuse-ld=gold)
 # endfunction()
 # enable_sanitizer(${MODULE_NAME})
-if(WINDOWS)
+if(WIN32)
 target_compile_definitions(${MODULE_NAME}
-    PUBLIC "VK_LAYER_PATH=${moer_third_party_dir}/VulkanSDK/binary/Windows")
+    PUBLIC "NOMINMAX")
 elseif(LINUX)
 endif()
 

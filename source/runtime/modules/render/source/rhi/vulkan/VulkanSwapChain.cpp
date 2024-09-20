@@ -13,7 +13,9 @@
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
 #include "rhi/vulkan/VulkanRHI.h"
-#include "vulkan/vulkan_core.h"
+
+#include <volk.h>
+#include "VulkanMacroUtils.h"
 #include "VulkanRHIResource.h"
 #include "VulkanCommand.h"
 #include "window/WindowContext.h"

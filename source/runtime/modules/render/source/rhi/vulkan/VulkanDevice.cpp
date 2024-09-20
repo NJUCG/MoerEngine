@@ -2,24 +2,28 @@
 // Created by 74535 on 2023/10/2.
 //
 
-#include "VulkanRHIResource.h"
-#include "log/LogSystem.h"
-#include "misc/STL.h"
-#include "rhi/RHICommand.h"
-#include "rhi/RHICommon.h"
-#include "rhi/RHIResource.h"
-#include "rhi/RHIResourceInitilizer.h"
+#include <volk.h>
+#include "VulkanMacroUtils.h"
 #include "VulkanDescriptor.h"
 #include "VulkanExtension.h"
 #include "VulkanDevice.h"
 #include "VulkanUtil.h"
 #include "VulkanCommand.h"
 #include "VulkanPlatform.h"
+#include "VulkanRHIResource.h"
+
+#include "log/LogSystem.h"
+#include "misc/STL.h"
+#include "rhi/RHICommand.h"
+#include "rhi/RHICommon.h"
+#include "rhi/RHIResource.h"
+#include "rhi/RHIResourceInitilizer.h"
+
 #include "Core.h"
 #include "taskgraph/ThreadManager.h"
-#include "vk_mem_alloc.h"
-#include "vulkan/vulkan_core.h"
-#include <vulkan/vk_enum_string_helper.h>
+
+#include <vk_mem_alloc.h>
+
 #include <algorithm>
 #include <shared_mutex>
 #include <spirv_reflect.h>
@@ -63,7 +67,7 @@ namespace Moer::Render {
             vkCreateSampler(m_device, &sampler_create_info, VK_NULL_HANDLE, &immutable_samplers[i]);
         }
 
-        InitMemoryAllocator(m_instance, _config.api_version);
+        CreateMemoryAllocator(m_instance, _config.api_version);
 
         CreateDescriptorAllocator();
         CreateDescriptorHeap();
@@ -99,7 +103,7 @@ namespace Moer::Render {
      * @param _api_version 
      */
     void VulkanDevice::InitVulkanInstance(uint32 _api_version) {
-        // VK_CHECK_RESULT(volkInitialize());
+        VK_CHECK_RESULT(volkInitialize());
 
         VkApplicationInfo application_info{};
         application_info.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -201,17 +205,37 @@ namespace Moer::Render {
         instance_create_info.ppEnabledExtensionNames = instance_extensions_loaded.data();
 
         VK_CHECK_RESULT(vkCreateInstance(&instance_create_info, nullptr, &m_instance))
-        // volkLoadInstance(m_instance);
+        volkLoadInstance(m_instance);
 
         if (b_validation_layer_enabled) SetupDebugUtilsMessengerEXT();
     }
 
-    void VulkanDevice::InitMemoryAllocator(VkInstance _instance, uint32 _api_version) {
+    void VulkanDevice::CreateMemoryAllocator(VkInstance _instance, uint32 _api_version) {
         VmaAllocatorCreateInfo alloc_create_info{};
 
         VmaVulkanFunctions vma_functions{};
-        vma_functions.vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)vkGetInstanceProcAddr;
-        vma_functions.vkGetDeviceProcAddr   = (PFN_vkGetDeviceProcAddr)vkGetDeviceProcAddr;
+        vma_functions.vkGetPhysicalDeviceProperties           = vkGetPhysicalDeviceProperties;
+        vma_functions.vkGetPhysicalDeviceMemoryProperties     = vkGetPhysicalDeviceMemoryProperties;
+        vma_functions.vkAllocateMemory                        = vkAllocateMemory;
+        vma_functions.vkFreeMemory                            = vkFreeMemory;
+        vma_functions.vkMapMemory                             = vkMapMemory;
+        vma_functions.vkUnmapMemory                           = vkUnmapMemory;
+        vma_functions.vkFlushMappedMemoryRanges               = vkFlushMappedMemoryRanges;
+        vma_functions.vkInvalidateMappedMemoryRanges          = vkInvalidateMappedMemoryRanges;
+        vma_functions.vkBindBufferMemory                      = vkBindBufferMemory;
+        vma_functions.vkBindImageMemory                       = vkBindImageMemory;
+        vma_functions.vkGetBufferMemoryRequirements           = vkGetBufferMemoryRequirements;
+        vma_functions.vkGetImageMemoryRequirements            = vkGetImageMemoryRequirements;
+        vma_functions.vkCreateBuffer                          = vkCreateBuffer;
+        vma_functions.vkDestroyBuffer                         = vkDestroyBuffer;
+        vma_functions.vkCreateImage                           = vkCreateImage;
+        vma_functions.vkDestroyImage                          = vkDestroyImage;
+        vma_functions.vkCmdCopyBuffer                         = vkCmdCopyBuffer;
+        vma_functions.vkGetBufferMemoryRequirements2KHR       = vkGetBufferMemoryRequirements2KHR;
+        vma_functions.vkGetImageMemoryRequirements2KHR        = vkGetImageMemoryRequirements2KHR;
+        vma_functions.vkBindBufferMemory2KHR                  = vkBindBufferMemory2KHR;
+        vma_functions.vkBindImageMemory2KHR                   = vkBindImageMemory2KHR;
+        vma_functions.vkGetPhysicalDeviceMemoryProperties2KHR = vkGetPhysicalDeviceMemoryProperties2KHR;
 
         alloc_create_info.vulkanApiVersion = _api_version;
 
@@ -357,7 +381,7 @@ namespace Moer::Render {
                  m_device_info.core_properties.core_1_0.driverVersion,
                  m_device_info.core_properties.core_1_0.vendorID,
                  m_device_info.core_properties.core_1_0.deviceID,
-                 string_VkPhysicalDeviceType(m_device_info.core_properties.core_1_0.deviceType),
+                 VK_TYPE_TO_STRING(VkPhysicalDeviceType, m_device_info.core_properties.core_1_0.deviceType),
                  m_device_info.core_properties.core_1_0.limits.maxBoundDescriptorSets,
                  m_device_info.core_properties.core_1_0.limits.timestampComputeAndGraphics);
     }

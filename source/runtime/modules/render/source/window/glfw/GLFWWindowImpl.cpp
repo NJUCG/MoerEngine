@@ -6,7 +6,7 @@
 #include "window/WindowContext.h"
 #include "platform/Platform.h"
 //define vulkan ahead of glfw
-#include "vulkan/vulkan.h"
+#include <volk.h>
 #include "GLFW/glfw3.h"
 #include "IconsFontAwesome6.h"
 #include <fstream>

@@ -1,7 +1,7 @@
 #ifndef VULKAN_DEVICE_PROPERTY_H
 #define VULKAN_DEVICE_PROPERTY_H
 
-#include <vulkan/vulkan_core.h>
+#include <volk.h>
 
 class VulkanCoreDeviceProperties {
 public:

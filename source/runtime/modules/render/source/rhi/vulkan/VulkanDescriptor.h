@@ -1,16 +1,16 @@
 #ifndef VULKAN_RHI_DESCRIPTOR_H
 #define VULKAN_RHI_DESCRIPTOR_H
 
-#include "vulkan/vulkan_core.h"
-#include <mutex>
+#include <volk.h>
+#include "VulkanTypeDefs.h"
+#include "VulkanRHIResource.h"
+
 #define VK_DESCRIPTOR_TYPE_BEGIN_RANGE (VK_DESCRIPTOR_TYPE_SAMPLER)
 #define VK_DESCRIPTOR_TYPE_END_RANGE   (VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT)
 #define VK_DESCRIPTOR_TYPE_RANGE_SIZE  3
 
-#include "VulkanTypeDefs.h"
-#include "VulkanRHIResource.h"
+#include <mutex>
 
-#include <vulkan/vulkan.h>
 namespace Moer::Render {
     struct DescriptorSetInfo;
     struct DescriptorSetBindingInfo;
@@ -176,7 +176,7 @@ namespace Moer::Render {
     };
     struct VulkanDescriptorHeap {
         VulkanBuffer* buffer_desc_buffer = nullptr;
-        VulkanBuffer* image_desc_buffer = nullptr;
+        VulkanBuffer* image_desc_buffer  = nullptr;
 
     public:
         VulkanDescriptorHeap() = default;
@@ -188,13 +188,13 @@ namespace Moer::Render {
         Array<uint> buffer_free_list;
         Array<uint> image_free_list;
 
-        uint GetBufferDescIdx(VulkanBuffer* _in_buffer);
-        void FreeBufferDescIdx(uint _idx);
-        uint GetImageDescIdx(const TextureView* _in_image, VkImageLayout _layout);
-        void FreeImageDescIdx(uint _idx);
+        uint          GetBufferDescIdx(VulkanBuffer* _in_buffer);
+        void          FreeBufferDescIdx(uint _idx);
+        uint          GetImageDescIdx(const TextureView* _in_image, VkImageLayout _layout);
+        void          FreeImageDescIdx(uint _idx);
         VulkanDevice* m_device;
-        uint    buffer_desc_stride;
-        uint    image_desc_stride;
+        uint          buffer_desc_stride;
+        uint          image_desc_stride;
         std::mutex    m_mutex;
     };
 

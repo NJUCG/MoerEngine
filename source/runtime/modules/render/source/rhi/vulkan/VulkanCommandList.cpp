@@ -13,14 +13,17 @@
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
 #include "rhi/vulkan/VulkanRHI.h"
+
+#include <volk.h>
 #include "VulkanMacroUtils.h"
 #include "VulkanCommand.h"
-
 #include "VulkanDevice.h"
 #include "VulkanRHIResource.h"
 #include "VulkanDescriptor.h"
 #include "VulkanPipelineResourceCache.h"
 #include "VulkanDebug.h"
+
+#include "RHICmdReorderer.h"
 
 #include <cstdint>
 #include <optional>
@@ -28,8 +31,6 @@
 #include <string>
 #include <variant>
 #include <vector>
-#include <vulkan/vulkan_core.h>
-#include "RHICmdReorderer.h"
 namespace Moer::Render {
 
     struct VkCmdPreprocessor {
@@ -1538,19 +1539,19 @@ namespace Moer::Render {
             const auto&    args = std::move(_cmd.Args());
             RasterPipeline pso(_cmd.Pipeline());
             auto           set_param = [&](uint _idx, const auto& _arg) {
-
                 std::visit([&](auto&& _in_arg) {
                     using T = std::decay_t<decltype(_in_arg)>;
-                if constexpr (std::is_same_v<T, TextureView>) {
-                    pso.SetTexture(_idx, _in_arg);
-                } else if constexpr (std::is_same_v<T, BufferView>) {
-                    pso.SetBuffer(_idx, _in_arg);
-                } else if constexpr (std::is_same_v<T, Sampler>) {
-                    pso.SetSampler(_idx, _in_arg);
-                } else {
-                    //constsant type
-                }
-                }, _arg);
+                    if constexpr (std::is_same_v<T, TextureView>) {
+                        pso.SetTexture(_idx, _in_arg);
+                    } else if constexpr (std::is_same_v<T, BufferView>) {
+                        pso.SetBuffer(_idx, _in_arg);
+                    } else if constexpr (std::is_same_v<T, Sampler>) {
+                        pso.SetSampler(_idx, _in_arg);
+                    } else {
+                        //constsant type
+                    }
+                },
+                           _arg);
             };
 
             const auto&                      pass_info = _cmd.RenderPassInfo();
@@ -1601,7 +1602,6 @@ namespace Moer::Render {
                  .minDepth = 0.0f,
                  .maxDepth = 1.0f};
 
-                 
             cmd_list.SetViewPort(viewport);
             cmd_list.SetScissor({rect.offset.x, rect.offset.y, rect.extent.width, rect.extent.height});
             for (const auto& draw_data : draw_datas) {
@@ -1691,7 +1691,7 @@ namespace Moer::Render {
         // }
     };
 
-    VkNativeQueue::VkNativeQueue(EQueueType _type, VulkanDevice& _device) : type(_type){
+    VkNativeQueue::VkNativeQueue(EQueueType _type, VulkanDevice& _device) : type(_type) {
         switch (_type) {
             case EQueueType::Graphics:
                 queue = _device.GetGraphicsQueue();
@@ -1866,7 +1866,7 @@ namespace Moer::Render {
             return {uint64(timeline), last_time};
         } else {
             auto current_timeline = ++last_frame;
-            auto end_tag = queue.GetType() == EQueueType::Graphics ? VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT : VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            auto end_tag          = queue.GetType() == EQueueType::Graphics ? VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT : VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
             queue.Signal(timeline, current_timeline, end_tag);
             for (auto& evt : _submit.wait_events) {
                 queue.Wait(reinterpret_cast<VulkanFence*>(evt.timeline_handle), evt.value);

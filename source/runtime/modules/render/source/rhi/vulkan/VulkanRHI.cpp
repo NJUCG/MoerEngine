@@ -1,5 +1,4 @@
 #include "config.h"
-
 #include "config/ConfigManager.h"
 #include "log/LogSystem.h"
 #include "rhi/RHI.h"
@@ -10,19 +9,16 @@
 #include "misc/MacroUtils.h"
 #include "misc/STL.h"
 #include "misc/Traits.h"
-
 #include "rhi/vulkan/VulkanRHI.h"
-#include "VulkanCommand.h"
 
+#include <volk.h>
+#include "VulkanMacroUtils.h"
+#include "VulkanCommand.h"
 #include "VulkanRHIResource.h"
 #include "VulkanRHIInitializer.h"
 #include "VulkanExtension.h"
-
-#include "shader/Shader.h"
-
 #include "VulkanDebug.h"
 #include "VulkanUtil.h"
-
 #include "VulkanDevice.h"
 #include "VulkanSwapChain.h"
 #include "VulkanDescriptor.h"
@@ -38,7 +34,6 @@
 #include <type_traits>
 #include <fstream>
 #include <variant>
-#include "VulkanDevice.h"
 
 namespace VkUtil = Moer::RHI::Vulkan::Util;
 using namespace Moer::Render;
@@ -80,7 +75,7 @@ void VulkanRHIImpl::ShutDown() {
 }
 
 #pragma region resources creation
-RHISamplerRef  VulkanRHIImpl::RHICreateSampler(const RHISamplerCreateInfo& _initializer) {
+RHISamplerRef VulkanRHIImpl::RHICreateSampler(const RHISamplerCreateInfo& _initializer) {
     Moer::Render::VulkanRHISampler* vk_sampler = MoerNew(Moer::Render::VulkanRHISampler)();
     vk_sampler->GenerateSamplerFromInitializer(m_device, _initializer);
 
@@ -979,8 +974,7 @@ RHIRTPsoRef VulkanRHIImpl::RHICreateRayTracingPipelineState(const RHIRayTracingP
     uint32_t callable_count = _init.ray_callable_table.size();
     uint32_t handlecount    = 1 + miss_count + hit_count + callable_count;
 
-    auto     rt_props             = VkUtil::QueryPhysicalDeviceExtensionProps<VkPhysicalDeviceRayTracingPipelinePropertiesKHR,
-                                                              VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR>(m_device->GetGpu());
+    auto     rt_props             = m_device->GetOptionalProperties().ray_tracing_pipeline_properties;
     uint32_t handlesize           = rt_props.shaderGroupHandleSize;
     uint32_t handlesize_aligned   = ALIGNUP(handlesize, rt_props.shaderGroupHandleAlignment);
     vk_pso->m_raygen_sbt.size     = ALIGNUP(handlesize_aligned, rt_props.shaderGroupBaseAlignment);
@@ -1926,37 +1920,6 @@ void VulkanRHIImpl::CreateInstance() {
 
 #pragma region helper functions
 
-bool VulkanRHIImpl::CheckValidationLayer(const std::string& layer_name) {
-    uint32_t instance_layer_count = 0;
-    vkEnumerateInstanceLayerProperties(&instance_layer_count, nullptr);
-    Moer::Array<VkLayerProperties> instance_layer_properties(instance_layer_count);
-    vkEnumerateInstanceLayerProperties(&instance_layer_count, instance_layer_properties.data());
-    bool validation_layer_present = false;
-
-    for (auto layer_property : instance_layer_properties) {
-        if (layer_name == layer_property.layerName) {
-            validation_layer_present = true;
-            break;
-        }
-    }
-
-    return validation_layer_present;
-    //return false;
-    //MARK_TEST
-}
-
-bool VulkanRHIImpl::CheckEnabledExtensions() {
-    if (!m_enabled_instance_extensions.empty()) {
-        for (const auto& extension : m_enabled_instance_extensions) {
-            if (std::find(m_instance_extensions.begin(), m_instance_extensions.end(), extension) == m_instance_extensions.end()) {
-                VkUtil::ExitFatal("Enabled instance extension '" + std::string(extension) + "' is not supported!", -1);
-                return false;
-            }
-        }
-    }
-    return true;
-}
-
 RHIBufferRef VulkanRHIImpl::CreateBufferFromData(const RHIBufferCreateInfo& info, uint32_t size, void* data) {
     RHIBufferCreateInfo staging_buffer_info = info;
     staging_buffer_info.usage               = EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE;
@@ -2033,7 +1996,7 @@ VkDeviceAddress VulkanRHIImpl::GetDeviceAddress(RHIBufferRef _buffer) {
 #pragma endregion
 
 #pragma region viewport
-RHIViewport*   VulkanRHIImpl::RHIGetMainViewport() {
+RHIViewport* VulkanRHIImpl::RHIGetMainViewport() {
     return static_cast<RHIViewport*>(m_main_viewport);
 }
 //create external viewport

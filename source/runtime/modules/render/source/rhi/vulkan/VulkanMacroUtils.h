@@ -32,6 +32,7 @@
     }
 
 #if defined(_DEBUG) || defined(DEBUG)
+#define VK_NO_PROTOTYPES
 #include <vulkan/vk_enum_string_helper.h>
 #define VK_TYPE_TO_STRING(type, value)  string_##type(value)
 #define VK_FLAGS_TO_STRING(type, value) string_##type(value).c_str()

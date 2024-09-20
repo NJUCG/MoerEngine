@@ -4,12 +4,11 @@
 
 #include "rhi/RHI.h"
 
+#include <volk.h>
 #include "VulkanDevice.h"
 #include "VulkanPlatform.h"
 #include "VulkanExtension.h"
 #include "VulkanMacroUtils.h"
-
-#include <vulkan/vulkan_core.h>
 
 template<typename ExistingChainType, typename NewStructType>
 static void AddToPNext(ExistingChainType& _existing, NewStructType& _added) {
@@ -298,10 +297,10 @@ namespace Moer::Render {
 
 #if VULKAN_RHI_RAYTRACING
         // raytracing extensions
-        ADD_EXTENSION(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME, VULKAN_RHI_RAYTRACING, VULKAN_EXTENSION_OPTIONAL);
-        ADD_CUSTOM_EXTENSION(VulkanKHRAccelerationStructureExtension, VULKAN_RHI_RAYTRACING, VULKAN_EXTENSION_OPTIONAL);
-        ADD_CUSTOM_EXTENSION(VulkanKHRRayTracingPipelineExtension, VULKAN_RHI_RAYTRACING, VULKAN_EXTENSION_OPTIONAL);
-        ADD_CUSTOM_EXTENSION(VulkanKHRRayQueryExtension, VULKAN_RHI_RAYTRACING, VULKAN_EXTENSION_OPTIONAL);
+        ADD_EXTENSION(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME, VULKAN_EXTENSION_OPTIONAL);
+        ADD_CUSTOM_EXTENSION(VulkanKHRAccelerationStructureExtension, VULKAN_EXTENSION_OPTIONAL);
+        ADD_CUSTOM_EXTENSION(VulkanKHRRayTracingPipelineExtension, VULKAN_EXTENSION_OPTIONAL);
+        ADD_CUSTOM_EXTENSION(VulkanKHRRayQueryExtension, VULKAN_EXTENSION_OPTIONAL);
 #endif
         // bindless extensions
         ADD_CUSTOM_EXTENSION(VulkanEXTDescriptorBufferExtension, VULKAN_EXTENSION_OPTIONAL);

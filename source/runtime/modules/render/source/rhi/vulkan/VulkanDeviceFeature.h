@@ -1,7 +1,7 @@
 #ifndef VULKAN_DEVICE_FEATURE_H
 #define VULKAN_DEVICE_FEATURE_H
 
-#include <vulkan/vulkan.h>
+#include <volk.h>
 
 class VulkanDeviceFeatures {
 public:

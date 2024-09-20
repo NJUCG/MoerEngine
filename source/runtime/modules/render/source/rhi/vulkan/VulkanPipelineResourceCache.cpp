@@ -2,13 +2,13 @@
 
 #include "VulkanDevice.h"
 #include "VulkanUtil.h"
+#include "VulkanMacroUtils.h"
 
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
-#include "vulkan/vulkan_core.h"
 namespace Moer::Render {
-    VulkanPipelineResourceCache::VulkanPipelineResourceCache(const VulkanDescriptorSetsLayout* _layout, const Moer::Array<TDescriptorSetLayoutBindingArray>& _descriptor_bindings, VulkanDevice& _device):m_device(_device) {
+    VulkanPipelineResourceCache::VulkanPipelineResourceCache(const VulkanDescriptorSetsLayout* _layout, const Moer::Array<TDescriptorSetLayoutBindingArray>& _descriptor_bindings, VulkanDevice& _device) : m_device(_device) {
         const uint32_t set_count = _layout->GetDescriptorSetCount();
         const auto&    layouts   = _layout->GetLayouts();
         m_descriptor_set_writers.resize(set_count, this);

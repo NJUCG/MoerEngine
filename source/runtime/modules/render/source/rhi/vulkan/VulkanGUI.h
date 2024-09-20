@@ -1,8 +1,8 @@
 #ifndef MOER_VULKAN_GUI_H
 #define MOER_VULKAN_GUI_H
 
+#include <volk.h>
 #include <vk_mem_alloc.h>
-#include <vulkan/vulkan.h>
 #include <cstring>
 
 struct GuiVulkanFrame {

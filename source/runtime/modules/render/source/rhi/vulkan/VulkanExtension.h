@@ -8,7 +8,6 @@
 #include <string_view>
 #define VULKAN_EXTENSION_OPTIONAL 1
 #define VULKAN_EXTENSION_REQUIRED 0
-#define VULKAN_RHI_RAYTRACING     1
 
 #include "VulkanTypeDefs.h"
 #include "log/LogSystem.h"

@@ -7,7 +7,7 @@
 
 #include "misc/STL.h"
 
-#include <vulkan/vulkan.h>
+#include <volk.h>
 
 class VulkanDevice;
 class VulkanDeviceFeatures;

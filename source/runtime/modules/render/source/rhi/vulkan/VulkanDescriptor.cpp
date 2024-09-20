@@ -1,3 +1,5 @@
+#include <volk.h>
+#include "VulkanMacroUtils.h"
 #include "VulkanDescriptor.h"
 #include "VulkanPipelineResourceCache.h"
 #include "VulkanDevice.h"
@@ -5,7 +7,6 @@
 
 #include "misc/MacroUtils.h"
 
-#include <vulkan/vulkan_core.h>
 #include <cassert>
 
 const float default_pool_size[VK_DESCRIPTOR_TYPE_RANGE_SIZE] = {
@@ -487,7 +488,7 @@ namespace Moer::Render {
         auto* texture = ResourceCast(_in_image->texture);
         assert(texture != nullptr && "texture is nullptr");
         VkTextureDescKey key{_layout, _in_image->mip_level, _in_image->num_mips};
-        auto res = texture->m_descriptor_indices.try_emplace(key, -1);
+        auto             res = texture->m_descriptor_indices.try_emplace(key, -1);
         if (!res.second) { return res.first->second; }
         auto& idx = res.first->second;
         {

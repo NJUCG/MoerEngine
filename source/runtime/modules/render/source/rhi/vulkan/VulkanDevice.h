@@ -1,26 +1,26 @@
 #ifndef VULKAN_DEVICE_H
 #define VULKAN_DEVICE_H
 
+#include "taskgraph/Event.h"
 #include "misc/STL.h"
+
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
+#include "../RHIImpl.h"
+
+#include <volk.h>
 #include "VulkanTypeDefs.h"
 #include "VulkanExtension.h"
 #include "VulkanDeviceFeature.h"
 #include "VulkanDeviceProperty.h"
 #include "VulkanDescriptor.h"
+#include "VulkanCommand.h"
 
-#include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 
 #include <optional>
-#include "VulkanMacroUtils.h"
-#include "VulkanCommand.h"
-#include "../RHIImpl.h"
-#include "taskgraph/Event.h"
-#include "vulkan/vulkan_core.h"
 
 namespace Moer::Render {
     class VulkanDescriptorSetsLayout;
@@ -98,11 +98,6 @@ namespace Moer::Render {
         void GetDescriptorSetLayoutBindingOffsetEXT(VkDescriptorSetLayout _layout, uint32_t _binding, uint64* _offset) const {
             vkGetDescriptorSetLayoutBindingOffsetEXT(m_device, _layout, _binding, _offset);
         };
-
-    public:
-        void InitVulkanInstance(uint32 _api_version);
-        void InitMemoryAllocator(VkInstance _instance, uint32 _api_version);
-        void Destroy();
 
     public:
         inline VkPhysicalDevice GetGpu() const {
@@ -197,12 +192,15 @@ namespace Moer::Render {
         uint cmd_alloc_limits = 2;
 
     private:
+        void             InitVulkanInstance(uint32 _api_version);
         VkPhysicalDevice SelectGpu(uint32 _api_version);
         void             InitGpu(uint32 _api_version);
         void             CreateDevice(uint32 _api_version);
-        void             CreateMemoryAllocator();
+        void             CreateMemoryAllocator(VkInstance _instance, uint32 _api_version);
         void             CreateDescriptorAllocator();
         void             CreateDescriptorHeap();
+
+        void Destroy();
 
         static Set<std::string>            GetGpuExtensions(VkPhysicalDevice _gpu);
         static TQueueFamilyPropertiesArray GetQueueFamilyProperties(VkPhysicalDevice _gpu);
