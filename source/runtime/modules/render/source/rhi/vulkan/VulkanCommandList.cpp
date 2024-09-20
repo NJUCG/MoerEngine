@@ -2472,12 +2472,8 @@ namespace Moer::Render {
                 },
                 binder);
         }
-        if (bind_template.desc_buffers.size() > 0) {
+        if (!bind_template.desc_buffers.empty()) {
             device.vk_cmd_bind_descriptor_buffers(command_buffer, bind_template.desc_buffers.size(), bind_template.desc_buffers.data());
-            //LOG descriptor buffers info
-            for (const auto& desc_info : bind_template.desc_buffers) {
-                LOG_INFO("desc buffer address:{}", desc_info.address);
-            }
         }
 
         for (const auto& desc_info : bind_template.desc_buffer_offsets) {
@@ -2488,7 +2484,8 @@ namespace Moer::Render {
         
         if (bind_template.push_constants_info.size > 0) {
             bind_template.push_constants_info.pValues = _args.constants.data();
-            device.vk_cmd_push_constants(command_buffer, &bind_template.push_constants_info);
+            const auto& push_info = &bind_template.push_constants_info;
+            vkCmdPushConstants(command_buffer, push_info->layout, push_info->stageFlags, push_info->offset, push_info->size, push_info->pValues);
         }
     }
 
