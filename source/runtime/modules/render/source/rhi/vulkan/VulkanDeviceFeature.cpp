@@ -86,8 +86,11 @@ bool VulkanDeviceFeatures::Contains(const VulkanDeviceFeatures& _other) const {
 void VulkanDeviceFeatures::PreCreateDevice(VkDeviceCreateInfo& _device_create_info, uint32_t _api_version) {
     if (_api_version >= VK_API_VERSION_1_3) {
         core_1_3.pNext = (void*)_device_create_info.pNext;
+        core_1_2.pNext = &core_1_3;
+        core_1_1.pNext = &core_1_2;
     } else if (_api_version == VK_API_VERSION_1_2) {
         core_1_2.pNext = (void*)_device_create_info.pNext;
+        core_1_1.pNext = &core_1_2;
     } else {
         core_1_1.pNext = (void*)_device_create_info.pNext;
     }

@@ -44,9 +44,7 @@ namespace Moer::Render {
 
     class VulkanDeviceExtension : public VulkanExtensionBase {
     public:
-        VulkanDeviceExtension(std::string_view _ext_name, bool _is_optional = false) : VulkanExtensionBase(_ext_name), m_is_optional(_is_optional), m_is_usable(true) {
-            LOG_INFO("VulkanDeviceExtension: {}, {}", _ext_name.data(), m_is_enabled);
-        }
+        VulkanDeviceExtension(std::string_view _ext_name, bool _is_optional = false) : VulkanExtensionBase(_ext_name), m_is_optional(_is_optional), m_is_usable(true) {}
         virtual ~VulkanDeviceExtension() = default;
 
         static TVulkanDeviceExtensionArray GetMERequiredDeviceExtensions();

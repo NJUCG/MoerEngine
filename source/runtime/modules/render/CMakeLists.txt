@@ -27,7 +27,7 @@ target_include_directories(${MODULE_NAME}
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/DirectX-Headers/include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/spdlog/include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/glfw/include>
-	PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/VulkanSDK/include>
+	# PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/VulkanSDK/include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/volk>
 	PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/DirectXShaderCompiler/include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/VulkanMemoryAllocator>

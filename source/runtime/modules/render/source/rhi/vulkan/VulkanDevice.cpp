@@ -165,7 +165,7 @@ namespace Moer::Render {
 
         // instance extension
         const auto instance_extensions = [&]() {
-            Set<std::string_view> extensions;
+            Set<std::string> extensions;
 
             uint32_t prop_count = 0;
             VK_CHECK_RESULT(vkEnumerateInstanceExtensionProperties(nullptr, &prop_count, nullptr));
@@ -231,11 +231,11 @@ namespace Moer::Render {
         vma_functions.vkCreateImage                           = vkCreateImage;
         vma_functions.vkDestroyImage                          = vkDestroyImage;
         vma_functions.vkCmdCopyBuffer                         = vkCmdCopyBuffer;
-        vma_functions.vkGetBufferMemoryRequirements2KHR       = vkGetBufferMemoryRequirements2KHR;
-        vma_functions.vkGetImageMemoryRequirements2KHR        = vkGetImageMemoryRequirements2KHR;
-        vma_functions.vkBindBufferMemory2KHR                  = vkBindBufferMemory2KHR;
-        vma_functions.vkBindImageMemory2KHR                   = vkBindImageMemory2KHR;
-        vma_functions.vkGetPhysicalDeviceMemoryProperties2KHR = vkGetPhysicalDeviceMemoryProperties2KHR;
+        vma_functions.vkGetBufferMemoryRequirements2KHR       = vkGetBufferMemoryRequirements2;
+        vma_functions.vkGetImageMemoryRequirements2KHR        = vkGetImageMemoryRequirements2;
+        vma_functions.vkBindBufferMemory2KHR                  = vkBindBufferMemory2;
+        vma_functions.vkBindImageMemory2KHR                   = vkBindImageMemory2;
+        vma_functions.vkGetPhysicalDeviceMemoryProperties2KHR = vkGetPhysicalDeviceMemoryProperties2;
 
         alloc_create_info.vulkanApiVersion = _api_version;
 
@@ -337,8 +337,8 @@ namespace Moer::Render {
      */
     void VulkanDevice::InitGpu(uint32 _api_version) {
         // Enable extensions
-        auto gpu_extensions     = VulkanDevice::GetGpuExtensions(m_gpu);
-        auto extensions_enabled = VulkanDeviceExtension::GetMEEnabledDeviceExtensions(gpu_extensions);
+        auto gpu_extensions              = VulkanDevice::GetGpuExtensions(m_gpu);
+        m_device_info.enabled_extensions = VulkanDeviceExtension::GetMEEnabledDeviceExtensions(gpu_extensions);
 
         // Query core features
         m_device_info.core_features = VulkanDeviceFeatures::GetGpuFeatures(m_gpu, _api_version);
@@ -346,9 +346,9 @@ namespace Moer::Render {
         {
             VkPhysicalDeviceFeatures2 features2{};
             features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-            for (const auto& extension : extensions_enabled) { extension->PreGpuFeatures(features2); }
+            for (const auto& extension : m_device_info.enabled_extensions) { extension->PreGpuFeatures(features2); }
             vkGetPhysicalDeviceFeatures2(m_gpu, &features2);
-            for (const auto& extension : extensions_enabled) { extension->PostGpuFeatures(m_device_info.optional_extensions); }
+            for (const auto& extension : m_device_info.enabled_extensions) { extension->PostGpuFeatures(m_device_info.optional_extensions); }
         }
 
         // Query core properties
@@ -357,7 +357,7 @@ namespace Moer::Render {
         {
             VkPhysicalDeviceProperties2 props2{};
             props2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
-            for (const auto& extension : extensions_enabled) { extension->PreGpuProperties(this, props2); }
+            for (const auto& extension : m_device_info.enabled_extensions) { extension->PreGpuProperties(this, props2); }
             vkGetPhysicalDeviceProperties2(m_gpu, &props2);
         }
 
@@ -413,6 +413,7 @@ namespace Moer::Render {
         for (const auto& extension : m_device_info.enabled_extensions) {
             extensions_loaded.emplace_back(extension->GetExtensionName().data());
             extension->PreCreateDevice(device_create_info);
+            LOG_INFO("Loading VulkanDeviceExtension: {}", extension->GetExtensionName());
         }
         device_create_info.enabledExtensionCount   = static_cast<uint32>(extensions_loaded.size());
         device_create_info.ppEnabledExtensionNames = extensions_loaded.data();
