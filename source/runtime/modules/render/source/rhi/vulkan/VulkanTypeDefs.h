@@ -7,14 +7,13 @@
 
 #include "misc/STL.h"
 
-#include <vulkan/vulkan_core.h>
+#include <volk.h>
 namespace Moer::Render {
     class VulkanDeviceExtension;
 
     using TVulkanDeviceExtensionArray      = Moer::Array<std::shared_ptr<VulkanDeviceExtension>>;
-    using TExtensionArray                  = Moer::Array<std::string>;
-    using TExtensionPropsArray             = Moer::Array<VkExtensionProperties>;
-    using TLayerArray                      = Moer::Array<std::string>;
+    using TExtensionArray                  = Moer::Array<std::string_view>;
+    using TLayerArray                      = Moer::Array<std::string_view>;
     using TQueueFamilyPropertiesArray      = Moer::Array<VkQueueFamilyProperties>;
     using TDescriptorSetLayoutBindingArray = Moer::Array<VkDescriptorSetLayoutBinding>;
     using TDescriptorCountMap              = Moer::UnorderedMap<VkDescriptorType, uint32_t>;

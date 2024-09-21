@@ -5,13 +5,13 @@
 #include "misc/Traits.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
+#include "rhi/RHIResource.h"
 
 #include "misc/STL.h"
 
+#include <volk.h>
 #include "VulkanRHIResource.h"
-#include "rhi/RHIResource.h"
-#include "shader/ShaderPipeline.h"
-#include "vulkan/vulkan_core.h"
+#include "VulkanResourceTracker.h"
 
 #include <condition_variable>
 #include <mutex>
@@ -19,8 +19,7 @@
 #include <thread>
 #include <type_traits>
 #include <variant>
-#include <vulkan/vulkan.h>
-#include "VulkanResourceTracker.h"
+
 namespace Moer::Render {
     class VulkanDevice;
     class VulkanDescriptorSetAllocator;
@@ -456,13 +455,14 @@ namespace Moer::Render {
         VkNativeQueue(EQueueType _type, VulkanDevice& _device);
         ~VkNativeQueue();
 
-        void    Submit(VulkanCmdList& _cmdlist, VkFence _fence = VK_NULL_HANDLE);
-        void    Wait(VulkanFence* _fence, uint64 _timeline, VkPipelineStageFlags2 _stage = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT);
-        void    Wait(VkSemaphore _sem, VkPipelineStageFlags2 _stage = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT);
-        void    Signal(VulkanFence* _fence, uint64 _timeline, VkPipelineStageFlags2 _stage = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
-        void    Signal(VkSemaphore _semaphore, VkPipelineStageFlags2 _stage = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
-        VkQueue GetHandle() const { return queue; }
+        void       Submit(VulkanCmdList& _cmdlist, VkFence _fence = VK_NULL_HANDLE);
+        void       Wait(VulkanFence* _fence, uint64 _timeline, VkPipelineStageFlags2 _stage = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT);
+        void       Wait(VkSemaphore _sem, VkPipelineStageFlags2 _stage = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT);
+        void       Signal(VulkanFence* _fence, uint64 _timeline, VkPipelineStageFlags2 _stage = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
+        void       Signal(VkSemaphore _semaphore, VkPipelineStageFlags2 _stage = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
+        VkQueue    GetHandle() const { return queue; }
         EQueueType GetType() const { return type; }
+
     private:
         Array<VkSemaphoreSubmitInfo> wait_infos;
         Array<VkSemaphoreSubmitInfo> signal_infos;

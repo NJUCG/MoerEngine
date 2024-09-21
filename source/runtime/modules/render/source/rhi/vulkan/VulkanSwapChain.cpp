@@ -13,7 +13,9 @@
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
 #include "rhi/vulkan/VulkanRHI.h"
-#include "vulkan/vulkan_core.h"
+
+#include <volk.h>
+#include "VulkanMacroUtils.h"
 #include "VulkanRHIResource.h"
 #include "VulkanCommand.h"
 #include "window/WindowContext.h"
@@ -208,6 +210,28 @@ namespace Moer::Render {
         return view;
     }
 
+    SwapChainSupportDetails QuerySwapChainSupport(VkPhysicalDevice _gpu, VkSurfaceKHR _surface) {
+        SwapChainSupportDetails details;
+
+        VK_CHECK_RESULT(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(_gpu, _surface, &details.capabilities));
+
+        uint32_t format_count = 0;
+        VK_CHECK_RESULT(vkGetPhysicalDeviceSurfaceFormatsKHR(_gpu, _surface, &format_count, nullptr));
+        if (format_count > 0) {
+            details.formats.resize(format_count);
+            VK_CHECK_RESULT(vkGetPhysicalDeviceSurfaceFormatsKHR(_gpu, _surface, &format_count, details.formats.data()));
+        }
+
+        uint32_t present_mode_count = 0;
+        VK_CHECK_RESULT(vkGetPhysicalDeviceSurfacePresentModesKHR(_gpu, _surface, &present_mode_count, nullptr));
+        if (present_mode_count > 0) {
+            details.present_modes.resize(present_mode_count);
+            VK_CHECK_RESULT(vkGetPhysicalDeviceSurfacePresentModesKHR(_gpu, _surface, &present_mode_count, details.present_modes.data()));
+        }
+
+        return details;
+    }
+
     VkSurfaceFormatKHR ChooseSwapSurfaceFormat(const Moer::Array<VkSurfaceFormatKHR>& _available_formats, bool _prefer_hdr) {
         for (const auto& format : _available_formats) {
             if (format.format == VK_FORMAT_R8G8B8A8_SRGB && format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
@@ -267,9 +291,9 @@ namespace Moer::Render {
         CreateOrRecreate(_info);
     }
     void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force_recreate) {
-        bool       b_recreate = handle != VK_NULL_HANDLE || _force_recreate;
-        VkSwapchainKHR old_sc = handle;
-        VkInstance instance   = device.GetInstance();
+        bool           b_recreate = handle != VK_NULL_HANDLE || _force_recreate;
+        VkSwapchainKHR old_sc     = handle;
+        VkInstance     instance   = device.GetInstance();
         //create surface by window handle
         assert(_info.window_handle != 0 && "Window handle is null when creating vulkan swapchain");
         Moer::WindowContext::CreateVulkanSurface(instance, (WindowHandle*)_info.window_handle, VK_NULL_HANDLE, &surface);
@@ -301,14 +325,14 @@ namespace Moer::Render {
             .presentMode           = present_mode,
             .clipped               = VK_TRUE,
             .oldSwapchain          = VK_NULL_HANDLE};
-        if(old_sc != VK_NULL_HANDLE)
+        if (old_sc != VK_NULL_HANDLE)
             vkDestroySwapchainKHR(device.GetDevice(), old_sc, VK_NULL_HANDLE);
         //create swapchain
         VK_CHECK_RESULT(vkCreateSwapchainKHR(device.GetDevice(), &create_info, nullptr, &handle));
 
         uint image_cnt;
         vkGetSwapchainImagesKHR(device.GetDevice(), handle, &image_cnt, nullptr);
-        bool recreate_fences        = in_flight_fences.size() != max_frames_in_flight;
+        bool recreate_fences       = in_flight_fences.size() != max_frames_in_flight;
         bool b_recreate_semaphores = true;
         if (b_recreate) {
             for (size_t i = 0; i < swapchain_textures.size(); ++i) {

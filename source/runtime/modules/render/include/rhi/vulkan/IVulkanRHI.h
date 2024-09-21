@@ -9,16 +9,18 @@
 #include "rhi/RHICommand.h"
 #include "rhi/RHIResource.h"
 #include <cstdint>
-#include <vulkan/vulkan.h>
+#define VK_NO_PROTOTYPES
+#include <vulkan/vulkan_core.h>
 
 class IVulkanRHI : public RHI {
 public:
-    IVulkanRHI() : RHI(ERHIType::Vulkan) {}
+    IVulkanRHI() = default;
 
     void        Initialize(const RHIInitInfo& _init) override {}
     void        PostInit() override {}
     void        ShutDown() override {}
     const char* GetName() override { return "VulkanRHI Interface"; }
+    ERHIType    GetType() const override final { return ERHIType::Vulkan; };
 
 #pragma region resources creation
     RHISamplerRef RHICreateSampler(const RHISamplerCreateInfo& _initializer) override { return RHISamplerRef{}; }

@@ -1,16 +1,18 @@
 #ifndef VULKAN_DEVICE_FEATURE_H
 #define VULKAN_DEVICE_FEATURE_H
 
-#include <vulkan/vulkan.h>
+#include <volk.h>
 
-class VulkanPhysicalDeviceFeatures {
+class VulkanDeviceFeatures {
 public:
-    VulkanPhysicalDeviceFeatures() : core_1_0(), core_1_1(), core_1_2(), core_1_3() {}
-    VulkanPhysicalDeviceFeatures(const VulkanPhysicalDeviceFeatures& _other) = default;
+    VulkanDeviceFeatures() : core_1_0(), core_1_1(), core_1_2(), core_1_3() {}
+    VulkanDeviceFeatures(const VulkanDeviceFeatures& _other) = default;
 
-    void Query(VkPhysicalDevice _gpu, uint32_t _api_version);
+    static VulkanDeviceFeatures GetGpuFeatures(VkPhysicalDevice _gpu, uint32_t _api_version);
 
-    bool Contains(const VulkanPhysicalDeviceFeatures& _other) const;
+    static VulkanDeviceFeatures GetMERequiredFeatures(uint32_t _api_version);
+
+    bool Contains(const VulkanDeviceFeatures& _other) const;
 
     void PreCreateDevice(VkDeviceCreateInfo& _device_create_info, uint32_t _api_version);
 
@@ -24,11 +26,6 @@ private:
 
     friend class VulkanDevice;
     friend class VulkanDeviceFeature;
-};
-
-class VulkanDeviceFeature {
-public:
-    static VulkanPhysicalDeviceFeatures GetMESupportedDeviceFeatures(uint32_t _api_version);
 };
 
 bool operator>=(const VkPhysicalDeviceFeatures& _lhs, const VkPhysicalDeviceFeatures& _rhs);

@@ -14,7 +14,7 @@
 #include <cstdint>
 #include <type_traits>
 
-enum class ERHIType {
+enum class ERHIType : uint8_t {
     Vulkan,
     D3D12
 };
@@ -52,9 +52,9 @@ struct RHIInfo {
     bool     ray_tracing;
 };
 struct DeviceInitInfo {
-    ERHIType         rhi_type;
-    std::string_view name;
-    bool             ray_tracing;
+    ERHIType            type;
+    std::string_view    name;
+    MoerRHIConfigAsJSON config_as_json;
 };
 
 template<typename T>
@@ -63,7 +63,7 @@ concept TPipelineStateRef = requires(T) {
 };
 class RENDER_API RHI {
 public:
-    RHI(ERHIType _type) : m_rhi_info(_type) {}
+    RHI() = default;
 
     virtual ~RHI() = default;
 
@@ -75,7 +75,7 @@ public:
 
     virtual const char* GetName() = 0;
 
-    ERHIType GetType() const { return m_rhi_info.rhi_type; }
+    virtual ERHIType GetType() const = 0;
 
     //todo: test usage, delete later
     static void Test();
@@ -263,13 +263,16 @@ protected:
 };
 namespace Moer::Render {
 
-    struct DeviceConfig{
+    template<typename T>
+    static T ResolveConfigAs(const MoerRHIConfigAsJSON& _config_as_json);
+
+    struct DeviceConfig {
         uint b_support_ray_tracing : 1;
         uint b_support_mesh_shader : 1;
         uint b_support_task_shader : 1;
-        uint b_support_bindless    : 1;
-        uint b_support_direct_storage   : 1;
-        uint b_support_virtual_texture  : 1;
+        uint b_support_bindless : 1;
+        uint b_support_direct_storage : 1;
+        uint b_support_virtual_texture : 1;
     };
     class RenderDevice {
     public:
@@ -280,7 +283,7 @@ namespace Moer::Render {
     public:
         template<typename TElement>
             requires(std::is_trivially_copyable_v<TElement> && std::is_standard_layout_v<TElement> || NumericType<TElement>)
-        BufferRef CreateBuffer(uint _element_cnt, EBufferUsageFlags _usage){
+        BufferRef CreateBuffer(uint _element_cnt, EBufferUsageFlags _usage) {
             return CreateBuffer(_element_cnt, sizeof(TElement), _usage);
         }
 

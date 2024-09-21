@@ -2,22 +2,28 @@
 // Created by 74535 on 2023/10/2.
 //
 
+#include <volk.h>
+#include "VulkanMacroUtils.h"
+#include "VulkanDescriptor.h"
+#include "VulkanExtension.h"
+#include "VulkanDevice.h"
+#include "VulkanUtil.h"
+#include "VulkanCommand.h"
+#include "VulkanPlatform.h"
 #include "VulkanRHIResource.h"
+
 #include "log/LogSystem.h"
 #include "misc/STL.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
-#include "VulkanDescriptor.h"
-#include "VulkanExtension.h"
-#include "VulkanDevice.h"
-#include "VulkanUtil.h"
-#include "VulkanCommand.h"
+
 #include "Core.h"
 #include "taskgraph/ThreadManager.h"
-#include "vk_mem_alloc.h"
-#include "vulkan/vulkan_core.h"
+
+#include <vk_mem_alloc.h>
+
 #include <algorithm>
 #include <filesystem>
 #include <optional>
@@ -27,8 +33,8 @@
 #include <config.h>
 #include <platform/Platform.h>
 
-#ifndef MOER_STR 
-#define MOER_STR(x) #x
+#ifndef MOER_STR
+#define MOER_STR(x)  #x
 #define MOER_XSTR(x) MOER_STR(x)
 #endif
 
@@ -38,32 +44,14 @@ namespace Moer::Render {
     std::tuple<SpvReflectResourceType, SpvReflectDescriptorType> DecodeReflectType(uint32 _value) { return std::make_tuple(SpvReflectResourceType(_value), SpvReflectDescriptorType(_value >> 4)); }
 
     std::tuple<uint32, uint32> DecodeConstant(uint32 _flag) { return std::make_tuple(_flag >> 20, (_flag & 0xFFFFF)); }
-    VulkanDevice::~VulkanDevice() { Destroy(); }
 
-    void VulkanDevice::Init(const DeviceInitializer& _initializer) {
-        m_gpu = SelectGpu(_initializer);
-        if (m_gpu == VK_NULL_HANDLE) { VkUtil::ExitFatal("No available GPU found.", -1); }
+    VulkanDevice::VulkanDevice(const VulkanRHIConfig&& _config) : RenderDevice::Impl() {
+        InitVulkanInstance(_config.api_version);
 
-        InitGpu(_initializer);
+        m_gpu = SelectGpu(_config.api_version);
+        InitGpu(_config.api_version);
 
-        LOG_INFO("\n- DeviceName: {}."
-                 "\n- API={}.{}.{} (0x{:x}) Driver=0x{:x} VendorId=0x{:x}."
-                 "\n- DeviceID=0x{:x} Type={}."
-                 "\n- Max Descriptor Sets Bound {}, Timestamps {}.",
-                 m_core_properties.core_1_0.deviceName,
-                 VK_API_VERSION_MAJOR(m_core_properties.core_1_0.apiVersion),
-                 VK_API_VERSION_MINOR(m_core_properties.core_1_0.apiVersion),
-                 VK_API_VERSION_PATCH(m_core_properties.core_1_0.apiVersion),
-                 m_core_properties.core_1_0.apiVersion,
-                 m_core_properties.core_1_0.driverVersion,
-                 m_core_properties.core_1_0.vendorID,
-                 m_core_properties.core_1_0.deviceID,
-                 std::to_string(m_core_properties.core_1_0.deviceType),
-                 m_core_properties.core_1_0.limits.maxBoundDescriptorSets,
-                 m_core_properties.core_1_0.limits.timestampComputeAndGraphics);
-
-        CreateDevice(_initializer.api_version);
-        CreateDescriptorAllocator();
+        CreateDevice(_config.api_version);
 
         VkSamplerCreateInfo sampler_create_info{.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
         sampler_create_info.borderColor             = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
@@ -85,9 +73,14 @@ namespace Moer::Render {
 
             vkCreateSampler(m_device, &sampler_create_info, VK_NULL_HANDLE, &immutable_samplers[i]);
         }
-        InitMemoryAllocator(m_instance);
-        new (&m_global_descriptor_heap) VulkanDescriptorHeap(*this);
+
+        CreateMemoryAllocator(m_instance, _config.api_version);
+
+        CreateDescriptorAllocator();
+        CreateDescriptorHeap();
     }
+
+    VulkanDevice::~VulkanDevice() { Destroy(); }
 
     VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
         VkDebugUtilsMessageSeverityFlagBitsEXT      message_severity,
@@ -111,30 +104,21 @@ namespace Moer::Render {
         return VK_FALSE;
     }
 
-    void VulkanDevice::CreateInstance() {
+    /**
+     * @brief init vulkan instance
+     * check instance layers and extensions, create instance, load functions using volk
+     * @param _api_version 
+     */
+    void VulkanDevice::InitVulkanInstance(uint32 _api_version) {
+        VK_CHECK_RESULT(volkInitialize());
+
         VkApplicationInfo application_info{};
         application_info.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
         // application_info.pApplicationName = MACRO_STR(__ENGINE_NAME__);
         // application_info.applicationVersion = VK_MAKE_VERSION(PROJECT_VERSION_MAJOR, PROJECT_VERSION_MINOR, PROJECT_VERSION_PATCH);
         application_info.pEngineName   = MACRO_STR(__ENGINE_NAME__);
         application_info.engineVersion = VK_MAKE_VERSION(PROJECT_VERSION_MAJOR, PROJECT_VERSION_MINOR, PROJECT_VERSION_PATCH);
-        application_info.apiVersion    = VK_API_VERSION_1_3;
-
-        m_instance_extensions         = VulkanInstanceExtension::GetDriverSupportedInstanceExtensionNames();
-        m_enabled_instance_extensions = VulkanInstanceExtension::GetMESupportedInstanceExtensions();
-
-        bool extension_supported = [&]() {
-            if (!m_enabled_instance_extensions.empty()) {
-                for (const auto& extension : m_enabled_instance_extensions) {
-                    if (std::find(m_instance_extensions.begin(), m_instance_extensions.end(), extension) == m_instance_extensions.end()) {
-                        VkUtil::ExitFatal("Enabled instance extension '" + std::string(extension) + "' is not supported!", -1);
-                        return false;
-                    }
-                }
-            }
-            return true;
-        }();
-        bool debug_utils_available = std::find(m_enabled_instance_extensions.begin(), m_enabled_instance_extensions.end(), VK_EXT_DEBUG_UTILS_EXTENSION_NAME) != m_enabled_instance_extensions.end();
+        application_info.apiVersion    = _api_version;
 
         VkInstanceCreateInfo instance_create_info{};
         instance_create_info.sType            = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
@@ -142,166 +126,224 @@ namespace Moer::Render {
         instance_create_info.flags            = 0;
         instance_create_info.pApplicationInfo = &application_info;
 
-        auto n = m_enabled_instance_extensions.size();
-
-        Moer::Array<const char*> r_extensions(n, nullptr);
-        for (size_t i = 0; i < n; ++i) { r_extensions[i] = m_enabled_instance_extensions[i].c_str(); }
-        instance_create_info.enabledExtensionCount   = n;
-        instance_create_info.ppEnabledExtensionNames = r_extensions.data();
-
-        VkDebugUtilsMessengerCreateInfoEXT debug_create_info{};
-
+        // instance layer
         constexpr std::string_view vk_layer_path = MOER_XSTR(MOER_VK_LAYER_PATH);
-        std::filesystem::path     layer_path(vk_layer_path);
+        std::filesystem::path      layer_path(vk_layer_path);
         if (std::filesystem::exists(layer_path)) {
             Platform::SetEnv("VK_LAYER_PATH", MOER_XSTR(MOER_VK_LAYER_PATH));
         }
 
-        const char* validation_layer_name = "VK_LAYER_KHRONOS_validation";
+        const auto instance_layers = [&]() {
+            uint32 instance_layer_count = 0;
+            vkEnumerateInstanceLayerProperties(&instance_layer_count, nullptr);
+            Array<VkLayerProperties> instance_layer_properties(instance_layer_count);
+            vkEnumerateInstanceLayerProperties(&instance_layer_count, instance_layer_properties.data());
 
-        if ([&](std::string_view _view) {
-                uint32_t instance_layer_count = 0;
-                vkEnumerateInstanceLayerProperties(&instance_layer_count, nullptr);
-                Moer::Array<VkLayerProperties> instance_layer_properties(instance_layer_count);
-                vkEnumerateInstanceLayerProperties(&instance_layer_count, instance_layer_properties.data());
-                bool validation_layer_present = false;
+            Set<std::string> layers;
+            for (auto layer_property : instance_layer_properties)
+                layers.insert(layer_property.layerName);
 
-                for (auto layer_property : instance_layer_properties) {
-                    if (std::strcmp( _view.data(), layer_property.layerName ) == 0) {
-                        validation_layer_present = true;
-                        break;
-                    }
+            return layers;
+        }();
+
+        const auto& is_layer_valid = [&](std::string_view _view) {
+            if (!instance_layers.contains(_view.data())) {
+                LOG_WARNING("Layer '{}' is not supported.", _view.data());
+                return false;
+            }
+            return true;
+        };
+
+        TLayerArray instance_layers_required;
+        VulkanPlatform::GetInstanceLayers(instance_layers_required);
+
+        VkDebugUtilsMessengerCreateInfoEXT debug_create_info{};
+        Array<const char*>                 instance_layers_loaded;
+        bool                               b_validation_layer_enabled = false;
+
+        for (const auto& layer : instance_layers_required) {
+            if (is_layer_valid(layer)) {
+                if (layer == "VK_LAYER_KHRONOS_validation") {
+                    PopulateDebugMessengerCreateInfo(debug_create_info);
+                    debug_create_info.pNext    = instance_create_info.pNext;
+                    instance_create_info.pNext = &debug_create_info;
+                    b_validation_layer_enabled = true;
                 }
-                return validation_layer_present;
-            }(validation_layer_name)) {
-            instance_create_info.enabledLayerCount   = 1;
-            instance_create_info.ppEnabledLayerNames = &validation_layer_name;
-            PopulateDebugMessengerCreateInfo(debug_create_info);
-            instance_create_info.pNext = &debug_create_info;
-        } else {
-            instance_create_info.enabledLayerCount   = 0;
-            instance_create_info.ppEnabledLayerNames = nullptr;
+                instance_layers_loaded.emplace_back(layer.data());
+            }
+            // other layers, not fully implemented
         }
+        instance_create_info.enabledLayerCount   = instance_layers_loaded.size();
+        instance_create_info.ppEnabledLayerNames = instance_layers_loaded.data();
+
+        // instance extension
+        const auto instance_extensions = [&]() {
+            Set<std::string> extensions;
+
+            uint32_t prop_count = 0;
+            VK_CHECK_RESULT(vkEnumerateInstanceExtensionProperties(nullptr, &prop_count, nullptr));
+            Array<VkExtensionProperties> extension_props;
+            if (prop_count > 0) {
+                extension_props.resize(prop_count);
+                VK_CHECK_RESULT(vkEnumerateInstanceExtensionProperties(nullptr, &prop_count, extension_props.data()));
+                for (const auto& prop : extension_props) {
+                    extensions.insert(prop.extensionName);
+                }
+            }
+
+            return extensions;
+        }();
+
+        const auto& is_extension_supported = [&](const std::string& _ext) {
+            if (!instance_extensions.contains(_ext)) {
+                LOG_ERROR("Reqired instance extension '{}' is not supported", _ext);
+                return false;
+            }
+            return true;
+        };
+
+        const auto instance_extensions_required = VulkanInstanceExtension::GetMERequiredInstanceExtensions();
+
+        Array<const char*> instance_extensions_loaded;
+        bool               b_instance_extensions_fully_supported = true;
+        for (const auto& ext : instance_extensions_required) {
+            if (is_extension_supported(ext.data()))
+                instance_extensions_loaded.emplace_back(ext.data());
+            else
+                b_instance_extensions_fully_supported = false;
+        }
+        CHECK_ASSERT(b_instance_extensions_fully_supported, "Not all required instance extensions are supported.");
+
+        instance_create_info.enabledExtensionCount   = instance_extensions_loaded.size();
+        instance_create_info.ppEnabledExtensionNames = instance_extensions_loaded.data();
 
         VK_CHECK_RESULT(vkCreateInstance(&instance_create_info, nullptr, &m_instance))
+        volkLoadInstance(m_instance);
 
-        SetupDebugUtilsMessengerEXT();
-
-        if (debug_utils_available) { SetupDebugProcs(); }
-    }
-
-    void VulkanDevice::InitMemoryAllocator(VkInstance _instance) {
-        VmaAllocatorCreateInfo alloc_create_info{};
-
-        VmaVulkanFunctions vma_functions{};
-        vma_functions.vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)vkGetInstanceProcAddr;
-        vma_functions.vkGetDeviceProcAddr   = (PFN_vkGetDeviceProcAddr)vkGetDeviceProcAddr;
-
-        alloc_create_info.vulkanApiVersion = VK_API_VERSION_1_3;
-
-        alloc_create_info.instance         = _instance;
-        alloc_create_info.physicalDevice   = m_gpu;
-        alloc_create_info.device           = m_device;
-        alloc_create_info.pVulkanFunctions = &vma_functions;
-
-        //capable of using buffer via device address(64bit) passed to shader.
-        alloc_create_info.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
-        if (m_optional_extensions.m_has_memory_priority) { alloc_create_info.flags |= VMA_ALLOCATOR_CREATE_EXT_MEMORY_PRIORITY_BIT; }
-
-        VK_CHECK_RESULT(vmaCreateAllocator(&alloc_create_info, &m_allocator));
-
-        LOG_INFO("Vulkan Memory Allocator initialized with api version: {}.", alloc_create_info.vulkanApiVersion);
-    }
-
-    void VulkanDevice::Destroy() {
-        // for (auto& cmd_allocator : m_command_allocators) {
-        //     CHECK_AND_DELETE(cmd_allocator);
-        // }
-        compute_queue.reset();
-        transfer_queue.reset();
-        gfx_queue.reset();
-        m_command_allocators.clear();
-        CHECK_AND_DELETE(m_descriptor_allocator);
-        FlushDeferredReleases();
-        vmaDestroyAllocator(m_allocator);
-        // Assertion failed: m_pMetadata->IsEmpty() && "Some allocations were not freed before destruction of this memory block!"
+        if (b_validation_layer_enabled) SetupDebugUtilsMessengerEXT();
     }
 
     /**
- * Select gpu, check extension support, etc.
- * @param _initializer
- * @return selected gpu
- * only check core extensions and core features support.
- */
-    VkPhysicalDevice VulkanDevice::SelectGpu(const DeviceInitializer& _init) {
-        uint32_t gpu_count = 0;
-        VK_CHECK_RESULT(vkEnumeratePhysicalDevices(_init.instance, &gpu_count, nullptr))
-        if (gpu_count == 0) {
-            LOG_WARNING("No GPU with Vulkan support found!");
-            return VK_NULL_HANDLE;
-        }
-        Moer::Array<VkPhysicalDevice> gpu_list(gpu_count);
-        VK_CHECK_RESULT(vkEnumeratePhysicalDevices(_init.instance, &gpu_count, gpu_list.data()))
+    * @brief Select gpu, check extension support, etc. 
+    * Only check core extensions and core features support.
+    * @param _api_version
+    * @return selected gpu
+    */
+    VkPhysicalDevice VulkanDevice::SelectGpu(uint32 _api_version) {
+        uint32 gpu_count = 0;
+        VK_CHECK_RESULT(vkEnumeratePhysicalDevices(m_instance, &gpu_count, nullptr))
+        CHECK_ASSERT(gpu_count, "No GPU with Vulkan support found!");
 
-        for (const auto& gpu : gpu_list) {
+        Array<VkPhysicalDevice> gpu_list(gpu_count);
+        VK_CHECK_RESULT(vkEnumeratePhysicalDevices(m_instance, &gpu_count, gpu_list.data()))
+
+        // lambda helpers
+        const auto& extensions_required              = VulkanDeviceExtension::GetMERequiredDeviceExtensions();
+        const auto& is_extensions_required_supported = [&](VkPhysicalDevice _gpu) {
+            // only check whether the extension is included by the GPU, not check corresponding features
+            auto gpu_extensions = VulkanDevice::GetGpuExtensions(_gpu);
+
+            // only check required extensions
+            for (const auto& extension : extensions_required) {
+                if (!gpu_extensions.contains(extension->GetExtensionName().data()) && !extension->IsOptional())
+                    return false;
+            }
+
+            return true;
+        };
+
+        const auto& features_required          = VulkanDeviceFeatures::GetMERequiredFeatures(_api_version);
+        const auto& is_core_features_supported = [&](VkPhysicalDevice _gpu) {
+            return VulkanDeviceFeatures::GetGpuFeatures(_gpu, _api_version).Contains(features_required);
+        };
+
+        // check availability
+        Array<uint8> gpu_priorities;
+        for (auto* gpu : gpu_list) {
             VkPhysicalDeviceProperties props{};
             vkGetPhysicalDeviceProperties(gpu, &props);
-            bool type_matched            = props.deviceType == _init.gpu_type;
-            bool extensions_supported    = CheckEnabledExtensionsSupported(gpu, _init.enabled_extensions);
-            bool core_features_supported = CheckEnabledFeaturesSupported(gpu, _init.enabled_features, _init.api_version);
-            // bool swap_chain_adequate     = false;
-            // if (extensions_supported) {
-            //     auto details        = VkUtil::QuerySwapChainSupport(gpu, _init.surface);
-            //     swap_chain_adequate = !details.formats.empty() && !details.present_modes.empty();
-            // }
+            uint8 priority = 0;
+            switch (props.deviceType) {
+                case VK_PHYSICAL_DEVICE_TYPE_OTHER: priority += 0; break;
+                case VK_PHYSICAL_DEVICE_TYPE_CPU: priority += 1; break;
+                case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU: priority += 2; break;
+                case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU: priority += 3; break;
+                case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU: priority += 4; break;
+                default: LOG_ERROR("GPU Device type is invalid!");
+            }
 
             auto indices = QueryQueueFamilyIndices(gpu);
-
-            if (indices.IsComplete() && core_features_supported && extensions_supported && type_matched) { return gpu; }
+            if (indices.IsComplete() && is_extensions_required_supported(gpu) && is_core_features_supported(gpu)) {
+                priority += 100;
+                gpu_priorities.emplace_back(priority);
+            }
         }
 
-        LOG_ERROR("No available target type (discrete, etc.) GPU found!");
+        CHECK_ASSERT(gpu_priorities.size(), "No available GPU(discrete, etc.) found!");
 
-        return VK_NULL_HANDLE;
+        Array<uint8>::iterator highest_priority_iter = std::max_element(gpu_priorities.begin(), gpu_priorities.end());
+        uint8                  gpu_idx               = std::distance(gpu_priorities.begin(), highest_priority_iter);
+
+        return gpu_list[gpu_idx];
     }
 
-    void VulkanDevice::InitGpu(const DeviceInitializer& _initializer) {
+    /**
+     * @brief Initialize GPU, query features, properties, memory, queue family, etc.
+     * @param _api_version 
+     */
+    void VulkanDevice::InitGpu(uint32 _api_version) {
+        // Enable extensions
+        auto gpu_extensions              = VulkanDevice::GetGpuExtensions(m_gpu);
+        m_device_info.enabled_extensions = VulkanDeviceExtension::GetMEEnabledDeviceExtensions(gpu_extensions);
+
         // Query core features
-        m_core_features.Query(m_gpu, _initializer.api_version);
+        m_device_info.core_features = VulkanDeviceFeatures::GetGpuFeatures(m_gpu, _api_version);
         // Query advanced features, use advanced features as GPU supported, and developers cannot specify them.
         {
             VkPhysicalDeviceFeatures2 features2{};
             features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-            for (const auto& extension : _initializer.enabled_extensions) { extension->PreGpuFeatures(features2); }
+            for (const auto& extension : m_device_info.enabled_extensions) { extension->PreGpuFeatures(features2); }
             vkGetPhysicalDeviceFeatures2(m_gpu, &features2);
-            for (const auto& extension : _initializer.enabled_extensions) { extension->PostGpuFeatures(m_optional_extensions); }
+            for (const auto& extension : m_device_info.enabled_extensions) { extension->PostGpuFeatures(m_device_info.optional_extensions); }
         }
 
         // Query core properties
-        m_core_properties.Query(m_gpu, _initializer.api_version);
+        m_device_info.core_properties = VulkanCoreDeviceProperties::GetGpuCoreProperties(m_gpu, _api_version);
         // Query advanced properties.
         {
             VkPhysicalDeviceProperties2 props2{};
             props2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
-            for (const auto& extension : _initializer.enabled_extensions) { extension->PreGpuProperties(this, props2); }
+            for (const auto& extension : m_device_info.enabled_extensions) { extension->PreGpuProperties(this, props2); }
             vkGetPhysicalDeviceProperties2(m_gpu, &props2);
         }
 
-        // Query supported extensions
-        m_enabled_extensions.Init(_initializer.enabled_extensions);
-
         // Query core memory properties
-        vkGetPhysicalDeviceMemoryProperties(m_gpu, &m_memery_properties);
+        vkGetPhysicalDeviceMemoryProperties(m_gpu, &m_device_info.memery_properties);
 
         // Query queue family info
-        m_queue_family_indices = QueryQueueFamilyIndices(m_gpu);
-        m_queue_family_props   = GetQueueFamilyProperties(m_gpu);
+        m_device_info.queue_family_indices = VulkanDevice::QueryQueueFamilyIndices(m_gpu);
+        m_device_info.queue_family_props   = VulkanDevice::GetQueueFamilyProperties(m_gpu);
 
         LOG_INFO("VulkanRHI: GPU initialized.");
+        LOG_INFO("\n- DeviceName: {}."
+                 "\n- API={}.{}.{} (0x{:x}) Driver=0x{:x} VendorId=0x{:x}."
+                 "\n- DeviceID=0x{:x} Type={}."
+                 "\n- Max Descriptor Sets Bound {}, Timestamps {}.",
+                 m_device_info.core_properties.core_1_0.deviceName,
+                 VK_API_VERSION_MAJOR(m_device_info.core_properties.core_1_0.apiVersion),
+                 VK_API_VERSION_MINOR(m_device_info.core_properties.core_1_0.apiVersion),
+                 VK_API_VERSION_PATCH(m_device_info.core_properties.core_1_0.apiVersion),
+                 m_device_info.core_properties.core_1_0.apiVersion,
+                 m_device_info.core_properties.core_1_0.driverVersion,
+                 m_device_info.core_properties.core_1_0.vendorID,
+                 m_device_info.core_properties.core_1_0.deviceID,
+                 VK_TYPE_TO_STRING(VkPhysicalDeviceType, m_device_info.core_properties.core_1_0.deviceType),
+                 m_device_info.core_properties.core_1_0.limits.maxBoundDescriptorSets,
+                 m_device_info.core_properties.core_1_0.limits.timestampComputeAndGraphics);
     }
 
-    void VulkanDevice::CreateDevice(uint32_t _api_version) {
-        std::set<uint32_t> unique_family_indices = {m_queue_family_indices.graphics.value(), m_queue_family_indices.present.value(), m_queue_family_indices.compute.value(), m_queue_family_indices.transfer.value()};
+    void VulkanDevice::CreateDevice(uint32 _api_version) {
+        std::set<uint32> unique_family_indices = {m_device_info.queue_family_indices.graphics.value(), m_device_info.queue_family_indices.present.value(), m_device_info.queue_family_indices.compute.value(), m_device_info.queue_family_indices.transfer.value()};
 
         // setup queue info
         Moer::Array<VkDeviceQueueCreateInfo> queue_create_infos;
@@ -319,71 +361,124 @@ namespace Moer::Render {
 
         VkDeviceCreateInfo device_create_info{};
         device_create_info.sType                = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-        device_create_info.queueCreateInfoCount = static_cast<uint32_t>(queue_create_infos.size());
+        device_create_info.queueCreateInfoCount = static_cast<uint32>(queue_create_infos.size());
         device_create_info.pQueueCreateInfos    = queue_create_infos.data();
 
         // setup extension and feature info
-        Moer::Array<const char*> enabled_extensions;
-        for (const auto& extension : m_enabled_extensions.m_enabled_extensions) {
-            enabled_extensions.emplace_back(extension->GetExtensionName().data());
+        Moer::Array<const char*> extensions_loaded;
+        for (const auto& extension : m_device_info.enabled_extensions) {
+            extensions_loaded.emplace_back(extension->GetExtensionName().data());
             extension->PreCreateDevice(device_create_info);
+            LOG_INFO("Loading VulkanDeviceExtension: {}", extension->GetExtensionName());
         }
+        device_create_info.enabledExtensionCount   = static_cast<uint32>(extensions_loaded.size());
+        device_create_info.ppEnabledExtensionNames = extensions_loaded.data();
 
-        if (!enabled_extensions.empty()) {
-            device_create_info.enabledExtensionCount   = static_cast<uint32_t>(enabled_extensions.size());
-            device_create_info.ppEnabledExtensionNames = enabled_extensions.data();
-        }
-        VkPhysicalDeviceFeatures2 enabled_features;
-
+        VkPhysicalDeviceFeatures2 features_loaded;
         if (_api_version > VK_API_VERSION_1_0) {
-            enabled_features.sType    = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-            enabled_features.features = m_core_features.core_1_0;
-            enabled_features.pNext    = &m_core_features.core_1_1;
-            m_core_features.PreCreateDevice(device_create_info, _api_version);
-            device_create_info.pNext = &enabled_features;
+            features_loaded.sType    = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            features_loaded.features = m_device_info.core_features.core_1_0;
+            features_loaded.pNext    = &m_device_info.core_features.core_1_1;
+            m_device_info.core_features.PreCreateDevice(device_create_info, _api_version);
+            device_create_info.pNext = &features_loaded;
         } else {
-            device_create_info.pEnabledFeatures = &m_core_features.core_1_0;
+            device_create_info.pEnabledFeatures = &m_device_info.core_features.core_1_0;
         }
         VK_CHECK_RESULT(vkCreateDevice(m_gpu, &device_create_info, nullptr, &m_device));
+        volkLoadDevice(m_device);
 
-        vkGetDeviceQueue(m_device, m_queue_family_indices.graphics.value(), 0, &m_graphics_queue);
-        vkGetDeviceQueue(m_device, m_queue_family_indices.present.value(), 0, &m_present_queue);
-        vkGetDeviceQueue(m_device, m_queue_family_indices.compute.value(), 0, &m_compute_queue);
-        vkGetDeviceQueue(m_device, m_queue_family_indices.transfer.value(), 0, &m_transfer_queue);
-        vkGetDeviceQueue(m_device, m_queue_family_indices.raytracing.value(), 0, &m_raytracing_queue);
+        vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.graphics.value(), 0, &m_graphics_queue);
+        vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.present.value(), 0, &m_present_queue);
+        vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.compute.value(), 0, &m_compute_queue);
+        vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.transfer.value(), 0, &m_transfer_queue);
+        vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.raytracing.value(), 0, &m_raytracing_queue);
         gfx_queue      = MakeUnique<VkCommandQueue>(*this, EQueueType::Graphics);
         compute_queue  = MakeUnique<VkCommandQueue>(*this, EQueueType::Compute);
         transfer_queue = MakeUnique<VkCommandQueue>(*this, EQueueType::Copy);
+    }
 
-        // select device procs
-        SetupProcs();
+    void VulkanDevice::CreateMemoryAllocator(VkInstance _instance, uint32 _api_version) {
+        VmaAllocatorCreateInfo alloc_create_info{};
+
+        VmaVulkanFunctions vma_functions{};
+        vma_functions.vkGetPhysicalDeviceProperties           = vkGetPhysicalDeviceProperties;
+        vma_functions.vkGetPhysicalDeviceMemoryProperties     = vkGetPhysicalDeviceMemoryProperties;
+        vma_functions.vkAllocateMemory                        = vkAllocateMemory;
+        vma_functions.vkFreeMemory                            = vkFreeMemory;
+        vma_functions.vkMapMemory                             = vkMapMemory;
+        vma_functions.vkUnmapMemory                           = vkUnmapMemory;
+        vma_functions.vkFlushMappedMemoryRanges               = vkFlushMappedMemoryRanges;
+        vma_functions.vkInvalidateMappedMemoryRanges          = vkInvalidateMappedMemoryRanges;
+        vma_functions.vkBindBufferMemory                      = vkBindBufferMemory;
+        vma_functions.vkBindImageMemory                       = vkBindImageMemory;
+        vma_functions.vkGetBufferMemoryRequirements           = vkGetBufferMemoryRequirements;
+        vma_functions.vkGetImageMemoryRequirements            = vkGetImageMemoryRequirements;
+        vma_functions.vkCreateBuffer                          = vkCreateBuffer;
+        vma_functions.vkDestroyBuffer                         = vkDestroyBuffer;
+        vma_functions.vkCreateImage                           = vkCreateImage;
+        vma_functions.vkDestroyImage                          = vkDestroyImage;
+        vma_functions.vkCmdCopyBuffer                         = vkCmdCopyBuffer;
+        vma_functions.vkGetBufferMemoryRequirements2KHR       = vkGetBufferMemoryRequirements2;
+        vma_functions.vkGetImageMemoryRequirements2KHR        = vkGetImageMemoryRequirements2;
+        vma_functions.vkBindBufferMemory2KHR                  = vkBindBufferMemory2;
+        vma_functions.vkBindImageMemory2KHR                   = vkBindImageMemory2;
+        vma_functions.vkGetPhysicalDeviceMemoryProperties2KHR = vkGetPhysicalDeviceMemoryProperties2;
+
+        alloc_create_info.vulkanApiVersion = _api_version;
+
+        alloc_create_info.instance         = _instance;
+        alloc_create_info.physicalDevice   = m_gpu;
+        alloc_create_info.device           = m_device;
+        alloc_create_info.pVulkanFunctions = &vma_functions;
+
+        //capable of using buffer via device address(64bit) passed to shader.
+        alloc_create_info.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+        if (m_device_info.optional_extensions.m_has_memory_priority) { alloc_create_info.flags |= VMA_ALLOCATOR_CREATE_EXT_MEMORY_PRIORITY_BIT; }
+
+        VK_CHECK_RESULT(vmaCreateAllocator(&alloc_create_info, &m_allocator));
+
+        LOG_INFO("Vulkan Memory Allocator initialized with api version: {}.", alloc_create_info.vulkanApiVersion);
     }
 
     void VulkanDevice::CreateDescriptorAllocator() {
         m_descriptor_allocator = MoerNew(VulkanDescriptorSetAllocator)(this);
-        LOG_INFO("VulkanRHI: Descriptor set allocator is created.");
+        LOG_INFO("VulkanRHI: Descriptor Set Allocator initialized.");
     }
 
-    TExtensionArray VulkanDevice::GetGpuExtensions(VkPhysicalDevice _gpu) const {
-        uint32_t gpu_extension_count;
+    void VulkanDevice::CreateDescriptorHeap() {
+        new (&m_global_descriptor_heap) VulkanDescriptorHeap(*this);
+        LOG_INFO("VulkanRHI: Descriptor Heap initialized.");
+    }
+
+    void VulkanDevice::Destroy() {
+        // for (auto& cmd_allocator : m_command_allocators) {
+        //     CHECK_AND_DELETE(cmd_allocator);
+        // }
+        compute_queue.reset();
+        transfer_queue.reset();
+        gfx_queue.reset();
+        m_command_allocators.clear();
+        CHECK_AND_DELETE(m_descriptor_allocator);
+        FlushDeferredReleases();
+        vmaDestroyAllocator(m_allocator);
+        // Assertion failed: m_pMetadata->IsEmpty() && "Some allocations were not freed before destruction of this memory block!"
+    }
+
+    Set<std::string> VulkanDevice::GetGpuExtensions(VkPhysicalDevice _gpu) {
+        uint32 gpu_extension_count;
         // check extensions
         vkEnumerateDeviceExtensionProperties(_gpu, nullptr, &gpu_extension_count, nullptr);
-        Moer::Array<VkExtensionProperties> gpu_extensions(gpu_extension_count);
+        Array<VkExtensionProperties> gpu_extensions(gpu_extension_count);
         vkEnumerateDeviceExtensionProperties(_gpu, nullptr, &gpu_extension_count, gpu_extensions.data());
 
-        TExtensionArray ret;
-        for (const auto& extension : gpu_extensions) { ret.push_back(extension.extensionName); }
+        Set<std::string> ret;
+        for (const auto& extension : gpu_extensions)
+            ret.insert(extension.extensionName);
 
         return ret;
     }
 
-    VkPhysicalDeviceMemoryProperties VulkanDevice::GetMemoryProperties(VkPhysicalDevice _gpu) const {
-        VkPhysicalDeviceMemoryProperties props{};
-        vkGetPhysicalDeviceMemoryProperties(_gpu, &props);
-        return props;
-    }
-
-    TQueueFamilyPropertiesArray VulkanDevice::GetQueueFamilyProperties(VkPhysicalDevice _gpu) const {
+    TQueueFamilyPropertiesArray VulkanDevice::GetQueueFamilyProperties(VkPhysicalDevice _gpu) {
         uint32_t queue_family_count = 0;
         vkGetPhysicalDeviceQueueFamilyProperties(_gpu, &queue_family_count, nullptr);
         assert(queue_family_count > 0);
@@ -458,27 +553,6 @@ namespace Moer::Render {
         return indices;
     }
 
-    bool VulkanDevice::CheckEnabledExtensionsSupported(VkPhysicalDevice _gpu, const TVulkanDeviceExtensionArray& _enabled_extensions) const {
-        // only check whether the extension is included by the GPU, not check corresponding features
-        auto gpu_extensions = GetGpuExtensions(_gpu);
-
-        for (const auto& extension : _enabled_extensions) {
-            if (std::find(gpu_extensions.begin(), gpu_extensions.end(), extension->GetExtensionName()) == gpu_extensions.end()) {
-                LOG_WARNING("Disable the extension '{}' is not supported", extension->GetExtensionName());
-                if (!extension->IsOptional()) { return false; }
-                extension->Disable();
-            }
-        }
-
-        return true;
-    }
-
-    bool VulkanDevice::CheckEnabledFeaturesSupported(VkPhysicalDevice _gpu, const VulkanPhysicalDeviceFeatures& _enabled_features, uint32_t _api_version) {
-        m_core_features.Query(_gpu, _api_version);
-
-        return m_core_features.Contains(_enabled_features);
-    }
-
     VkDescriptorType METoVkDescriptorType(SpvReflectDescriptorType _desc, SpvReflectResourceType _res) {
         switch (_desc) {
             case SPV_REFLECT_DESCRIPTOR_TYPE_SAMPLER: return VK_DESCRIPTOR_TYPE_SAMPLER;
@@ -500,44 +574,16 @@ namespace Moer::Render {
         _create_info = {};
 
         _create_info.sType           = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
-        _create_info.pNext           = nullptr;
-        _create_info.flags           = 0;
         _create_info.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
         _create_info.messageType     = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
         _create_info.pfnUserCallback = DebugCallback;
-        _create_info.pUserData       = nullptr;
     }
 
     void VulkanDevice::SetupDebugUtilsMessengerEXT() {
-        vk_create_debug_utils_messenger_ext  = PFN_vkCreateDebugUtilsMessengerEXT(vkGetInstanceProcAddr(m_instance, "vkCreateDebugUtilsMessengerEXT"));
-        vk_destroy_debug_utils_messenger_ext = PFN_vkDestroyDebugUtilsMessengerEXT(vkGetInstanceProcAddr(m_instance, "vkDestroyDebugUtilsMessengerEXT"));
-
-        if (vk_create_debug_utils_messenger_ext == nullptr || vk_destroy_debug_utils_messenger_ext == nullptr) { assert(false); }
-
         VkDebugUtilsMessengerCreateInfoEXT debug_utils_messenger_create_info{};
         PopulateDebugMessengerCreateInfo(debug_utils_messenger_create_info);
-
-        assert(vk_create_debug_utils_messenger_ext(m_instance, &debug_utils_messenger_create_info, nullptr, &debug_utils_messenger) == VK_SUCCESS);
+        VK_CHECK_RESULT(vkCreateDebugUtilsMessengerEXT(m_instance, &debug_utils_messenger_create_info, nullptr, &m_debug_utils_messenger));
     }
-
-    void VulkanDevice::SetupDebugProcs() {
-        vk_cmd_begin_debug_utils_label_ext  = reinterpret_cast<PFN_vkCmdBeginDebugUtilsLabelEXT>(vkGetInstanceProcAddr(m_instance, "vkCmdBeginDebugUtilsLabelEXT"));
-        vk_cmd_end_debug_utils_label_ext    = reinterpret_cast<PFN_vkCmdEndDebugUtilsLabelEXT>(vkGetInstanceProcAddr(m_instance, "vkCmdEndDebugUtilsLabelEXT"));
-        vk_cmd_insert_debug_utils_label_ext = reinterpret_cast<PFN_vkCmdInsertDebugUtilsLabelEXT>(vkGetInstanceProcAddr(m_instance, "vkCmdInsertDebugUtilsLabelEXT"));
-        vk_set_debug_utils_object_name_ext  = reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>(vkGetInstanceProcAddr(m_instance, "vkSetDebugUtilsObjectNameEXT"));
-    }
-
-    void VulkanDevice::SetupProcs() {
-        vk_get_descriptor_ext                           = reinterpret_cast<PFN_vkGetDescriptorEXT>(vkGetDeviceProcAddr(m_device, "vkGetDescriptorEXT"));
-        vk_get_descriptor_set_layout_binding_offset_ext = reinterpret_cast<PFN_vkGetDescriptorSetLayoutBindingOffsetEXT>(vkGetDeviceProcAddr(m_device, "vkGetDescriptorSetLayoutBindingOffsetEXT"));
-        vk_get_descriptor_set_layout_size_ext           = reinterpret_cast<PFN_vkGetDescriptorSetLayoutSizeEXT>(vkGetDeviceProcAddr(m_device, "vkGetDescriptorSetLayoutSizeEXT"));
-
-        vk_cmd_push_descriptor_set           = reinterpret_cast<PFN_vkCmdPushDescriptorSetKHR>(vkGetDeviceProcAddr(m_device, "vkCmdPushDescriptorSetKHR"));
-        vk_cmd_bind_descriptor_buffers       = reinterpret_cast<PFN_vkCmdBindDescriptorBuffersEXT>(vkGetDeviceProcAddr(m_device, "vkCmdBindDescriptorBuffersEXT"));
-        vk_cmd_set_descriptor_buffer_offsets = reinterpret_cast<PFN_vkCmdSetDescriptorBufferOffsetsEXT>(vkGetDeviceProcAddr(m_device, "vkCmdSetDescriptorBufferOffsetsEXT"));
-    }
-
-    VulkanDescriptorHeap& VulkanDevice::GetGlobalDescriptorHeap() { return m_global_descriptor_heap; }
 
     // Merge Shader Reflection Info with Cpp End Definitions, thus we can get binding relations between shader and cpp.
     static void MergeReflectInfo(
@@ -631,13 +677,13 @@ namespace Moer::Render {
                         }
 
                         if (b_found_bindless_sampler) {
-                            auto& sampler_set            = _out_descriptor_bindings[bdls_array.sampler.value().set];
-                            auto& temp_binding           = sampler_set[sampler_slot];
+                            auto& sampler_set                            = _out_descriptor_bindings[bdls_array.sampler.value().set];
+                            auto& temp_binding                           = sampler_set[sampler_slot];
                             sampler_set.bindings[sampler_slot].param_idx = idx;
-                            sampler_set.is_bindless      = true;
-                            temp_binding.binding         = sampler_slot;
-                            temp_binding.descriptorType  = VK_DESCRIPTOR_TYPE_SAMPLER;
-                            temp_binding.descriptorCount = 0;
+                            sampler_set.is_bindless                      = true;
+                            temp_binding.binding                         = sampler_slot;
+                            temp_binding.descriptorType                  = VK_DESCRIPTOR_TYPE_SAMPLER;
+                            temp_binding.descriptorCount                 = 0;
                             temp_binding.stageFlags |= _stage;
                             temp_binding.pImmutableSamplers = nullptr;
                             _max_set                        = uint(std::max(int(_max_set), int(bdls_array.sampler.value().set)));
@@ -1154,5 +1200,4 @@ namespace Moer::Render {
 
     //     return viewport;
     // }
-
 };// namespace Moer::Render

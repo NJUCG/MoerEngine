@@ -3,6 +3,9 @@
 //
 
 #include "PixelFormat.h"
+
+#include <volk.h>
+#include "VulkanMacroUtils.h"
 #include "VulkanDevice.h"
 #include "VulkanSwapChain.h"
 #include "VulkanDescriptor.h"
@@ -22,7 +25,6 @@
 #include <memory>
 #include <mutex>
 #include <thread>
-#include <vulkan/vulkan_core.h>
 
 #pragma region utils definition
 namespace Moer::Render {
@@ -1066,10 +1068,10 @@ namespace Moer::Render {
                     for (const auto& [binding_idx, m_binding] : layout.bindings) {
                         const auto& binding = m_binding.binding;
                         auto& binding_info = _binder.binding_infos[binding.binding];
-                        m_device->vk_get_descriptor_set_layout_binding_offset_ext(m_device->GetDevice(), descriptor_set_layouts[set], binding.binding, &binding_info.offset);
+                        m_device->GetDescriptorSetLayoutBindingOffsetEXT(descriptor_set_layouts[set], binding.binding, &binding_info.offset);
                         binding_info.binding = binding.binding;
                     }
-                    m_device->vk_get_descriptor_set_layout_size_ext(m_device->GetDevice(), descriptor_set_layouts[set], &_binder.size);
+                    m_device->GetDescriptorSetLayoutSizeEXT(descriptor_set_layouts[set], &_binder.size);
                     //align to 16 bytes
                     uint64 align = m_device->GetOptionalProperties().descriptor_buffer_properties.descriptorBufferOffsetAlignment;
                     _binder.size = (_binder.size + align - 1) & ~(align - 1);
@@ -1586,7 +1588,7 @@ namespace Moer::Render {
         {
             void* mapped_data;
             vmaMapMemory(m_device->GetVmaAllocator(), bindless_buffer_descs->GetAllocation(), &mapped_data);
-            m_device->vk_get_descriptor_ext(m_device->GetDevice(),
+            m_device->GetDescriptorEXT(
                 &descriptor_info, 
                 m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize, 
                 mapped_data);

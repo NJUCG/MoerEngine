@@ -13,14 +13,17 @@
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
 #include "rhi/vulkan/VulkanRHI.h"
+
+#include <volk.h>
 #include "VulkanMacroUtils.h"
 #include "VulkanCommand.h"
-
 #include "VulkanDevice.h"
 #include "VulkanRHIResource.h"
 #include "VulkanDescriptor.h"
 #include "VulkanPipelineResourceCache.h"
 #include "VulkanDebug.h"
+
+#include "RHICmdReorderer.h"
 
 #include <cstdint>
 #include <optional>
@@ -28,8 +31,6 @@
 #include <string>
 #include <variant>
 #include <vector>
-#include <vulkan/vulkan_core.h>
-#include "RHICmdReorderer.h"
 namespace Moer::Render {
 
     struct VkCmdPreprocessor {
@@ -1777,7 +1778,7 @@ namespace Moer::Render {
         }
         const auto& cmd_lists = reorderer.m_cmd_lists;
         bool        has_cmd   = !reorderer.m_cmd_lists.empty();
-        uint64 last_time = last_frame;
+        uint64      last_time = last_frame;
 
         if (has_cmd) {
             vk_allocator.GetCmdList().Begin();
@@ -2412,10 +2413,10 @@ namespace Moer::Render {
         auto* vk_pso = reinterpret_cast<VulkanPipelineState*>(std::get<VkPipelineHandle>(_pso_handle.handle).handle);
 
         assert(vk_pso && vk_pso->bind_template != nullptr && "Pipeline state has no bind template!");
-        VulkanPipelineParamBinder& bind_template = *vk_pso->bind_template;
-        VulkanDescriptorHeap&      descriptor_heap = device.GetGlobalDescriptorHeap();
-        auto& set_binders = bind_template.set_binders;
-        uint64 g_global_desc_offset = descriptor_heap.current_offset;
+        VulkanPipelineParamBinder& bind_template        = *vk_pso->bind_template;
+        VulkanDescriptorHeap&      descriptor_heap      = device.GetGlobalDescriptorHeap();
+        auto&                      set_binders          = bind_template.set_binders;
+        uint64                     g_global_desc_offset = descriptor_heap.current_offset;
         for (auto& [set, binder] : set_binders) {
             std::visit(
                 [&](auto& _binder) {
@@ -2445,13 +2446,13 @@ namespace Moer::Render {
                                     descriptor_heap.PushSamplerDesc(src_handle, _binder.binding_infos[set_info.info_idx].offset);
                                     break;
                                 }
-                                case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:{
-                                    uint64 src_handle = descriptor_heap.GetImageDescIdx(&std::get<TextureView>(_args[set_info.param_idx]),VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                                case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE: {
+                                    uint64 src_handle = descriptor_heap.GetImageDescIdx(&std::get<TextureView>(_args[set_info.param_idx]), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
                                     descriptor_heap.PushImageDesc(src_handle, _binder.binding_infos[set_info.info_idx].offset);
                                     break;
                                 }
                                 case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE: {
-                                    uint64 src_handle = descriptor_heap.GetImageDescIdx(&std::get<TextureView>(_args[set_info.param_idx]),VK_IMAGE_LAYOUT_GENERAL);
+                                    uint64 src_handle = descriptor_heap.GetImageDescIdx(&std::get<TextureView>(_args[set_info.param_idx]), VK_IMAGE_LAYOUT_GENERAL);
                                     descriptor_heap.PushImageDesc(src_handle, _binder.binding_infos[set_info.info_idx].offset);
 
                                     break;
@@ -2473,18 +2474,18 @@ namespace Moer::Render {
                 binder);
         }
         if (!bind_template.desc_buffers.empty()) {
-            device.vk_cmd_bind_descriptor_buffers(command_buffer, bind_template.desc_buffers.size(), bind_template.desc_buffers.data());
+            vkCmdBindDescriptorBuffersEXT(command_buffer, bind_template.desc_buffers.size(), bind_template.desc_buffers.data());
         }
 
         for (const auto& desc_info : bind_template.desc_buffer_offsets) {
-            uint buffer_idx = desc_info.buf_idx;
+            uint   buffer_idx = desc_info.buf_idx;
             uint64 offset     = desc_info.offset;
-            device.vk_cmd_set_descriptor_buffer_offsets(command_buffer, desc_info.bind_point, desc_info.layout, desc_info.set, 1, &buffer_idx, &offset);
+            vkCmdSetDescriptorBufferOffsetsEXT(command_buffer, desc_info.bind_point, desc_info.layout, desc_info.set, 1, &buffer_idx, &offset);
         }
-        
+
         if (bind_template.push_constants_info.size > 0) {
             bind_template.push_constants_info.pValues = _args.constants.data();
-            const auto& push_info = &bind_template.push_constants_info;
+            const auto& push_info                     = &bind_template.push_constants_info;
             vkCmdPushConstants(command_buffer, push_info->layout, push_info->stageFlags, push_info->offset, push_info->size, push_info->pValues);
         }
     }

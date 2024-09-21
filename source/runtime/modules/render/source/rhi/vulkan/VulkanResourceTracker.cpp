@@ -1,7 +1,9 @@
+#include <volk.h>
 #include "VulkanResourceTracker.h"
-#include "rhi/RHICommon.h"
-#include "vulkan/vulkan_core.h"
 #include "VulkanCommand.h"
+
+#include "rhi/RHICommon.h"
+
 namespace Moer::Render {
     /**
      * @brief 
@@ -498,7 +500,7 @@ namespace Moer::Render {
             state.dst_access = VK_ACCESS_2_NONE;
             state.dst_layout = texture->GetPreferredLayout();
         }
-        VkAccessFlags2 src_buffer_access = VK_ACCESS_2_NONE;
+        VkAccessFlags2        src_buffer_access = VK_ACCESS_2_NONE;
         VkPipelineStageFlags2 src_buffer_stages = VK_PIPELINE_STAGE_2_NONE;
         for (auto& [buffer, state] : buffer_states) {
 
@@ -515,12 +517,11 @@ namespace Moer::Render {
             // barrier.buffer                  = buffer->GetHandle();
             // barrier.offset                  = 0;
             // barrier.size                    = buffer->GetByteSize();
-            
+
             src_buffer_access |= state.dst_access;
             src_buffer_stages |= state.dst_stage;
             state.dst_access = VK_ACCESS_2_NONE;
             state.dst_stage  = VK_PIPELINE_STAGE_2_NONE;
-
         }
         if (!buffer_states.empty()) {
             //memory barrier

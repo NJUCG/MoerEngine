@@ -7,22 +7,23 @@
 
 #include "PixelFormat.h"
 #include "misc/Crc32.h"
+#include "misc/STL.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
-#include "VulkanTypeDefs.h"
-
-#include "misc/STL.h"
 
 #include "shader/ShaderCommon.h"
+
+#include <volk.h>
+#include "VulkanTypeDefs.h"
+#include "VulkanSwapChain.h"
+
+#include <vk_mem_alloc.h>
 
 #include <condition_variable>
 // #include "VulkanDescriptor.h"
 #include <variant>
-#include <vulkan/vulkan_core.h>
 
-#include <vk_mem_alloc.h>
-#include "VulkanSwapChain.h"
 class VulkanRHIImpl;
 
 namespace Moer::Render {
@@ -399,9 +400,9 @@ namespace Moer::Render {
             uint binding;
         };
         Array<BindingInfo> binding_infos;
-        uint64 size;//size in descriptor buffer
-        uint64 pipeline_offset;
-        uint desc_idx;
+        uint64             size;//size in descriptor buffer
+        uint64             pipeline_offset;
+        uint               desc_idx;
     };
 
     struct VulkanBindlessSetArray {
@@ -600,7 +601,7 @@ namespace Moer::Render {
         };
 
     public:
-        VulkanPipelineState(VulkanDevice* _device, EType _type = EType::GFX) : VulkanDeviceObject(_device), m_pipeline(VK_NULL_HANDLE), m_pipeline_layout(VK_NULL_HANDLE), m_pipeline_state_cache(nullptr){};
+        VulkanPipelineState(VulkanDevice* _device, EType _type = EType::GFX) : VulkanDeviceObject(_device), m_pipeline(VK_NULL_HANDLE), m_pipeline_layout(VK_NULL_HANDLE), m_pipeline_state_cache(nullptr) {};
         virtual ~VulkanPipelineState();
 
         inline VkPipeline GetHandle() const {
@@ -1072,7 +1073,7 @@ namespace Moer::Render {
 
     public:
         virtual ~VulkanRHIAccelerationStructureSRV();
-        explicit VulkanRHIAccelerationStructureSRV(VulkanDevice* _device, RHIViewableResource* _resource, const RHIViewInfo& _viewinfo) : RHISRV(_resource, _viewinfo), VulkanDeviceObject(_device){};
+        explicit VulkanRHIAccelerationStructureSRV(VulkanDevice* _device, RHIViewableResource* _resource, const RHIViewInfo& _viewinfo) : RHISRV(_resource, _viewinfo), VulkanDeviceObject(_device) {};
     };
 
     class VulkanImageView final : public RHIView {
@@ -1142,7 +1143,7 @@ namespace Moer::Render {
         VulkanViewport(RHIViewportInitializer _init_info, VulkanDevice& _device);
         // ~VulkanViewport();
         void Resize(Extent2D _size) override;
-        void Present(FenceRef _render_finished) override{};
+        void Present(FenceRef _render_finished) override {};
         void Present(VkSemaphore _sem);
         // BackBufferInfo GetBackBuffer() override;
         void* GetNativeWindow() override;

@@ -1,17 +1,17 @@
 #ifndef VULKAN_RHI_DESCRIPTOR_H
 #define VULKAN_RHI_DESCRIPTOR_H
 
+#include <volk.h>
 #include "rhi/RHIResource.h"
-#include "vulkan/vulkan_core.h"
-#include <mutex>
+#include "VulkanTypeDefs.h"
+#include "VulkanRHIResource.h"
+
 #define VK_DESCRIPTOR_TYPE_BEGIN_RANGE (VK_DESCRIPTOR_TYPE_SAMPLER)
 #define VK_DESCRIPTOR_TYPE_END_RANGE   (VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT)
 #define VK_DESCRIPTOR_TYPE_RANGE_SIZE  3
 
-#include "VulkanTypeDefs.h"
-#include "VulkanRHIResource.h"
+#include <mutex>
 
-#include <vulkan/vulkan.h>
 namespace Moer::Render {
     struct DescriptorSetInfo;
     struct DescriptorSetBindingInfo;
@@ -188,8 +188,8 @@ namespace Moer::Render {
         Array<byte> image_desc_data;
         Array<uint> buffer_free_list;
         Array<uint> image_free_list;
-        uint64 buffer_offset;
-        uint64 image_offset;
+        uint64      buffer_offset;
+        uint64      image_offset;
 
         uint GetBufferDescIdx(VulkanBuffer* _in_buffer);
         void FreeBufferDescIdx(uint _idx);

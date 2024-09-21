@@ -446,27 +446,26 @@ namespace Moer::Render {
         mutable Array<uint> free_slots;
 
     public:
-        UpdateBindlessArrayCmd(BindlessArrayRef _array, 
-        Array<BindlessArray::BufferUpdateInfo>&& _update_buffers,
-        Array<BindlessArray::TextureUpdateInfo>&& _update_textures,
-        Array<uint>&& _free_buffers,
-        Array<uint>&& _free_textures,
-        Array<uint>&& _free_slots) : Command(EType::UpdateBindlessArray), array(_array),
-                                                          buffer_updates(std::move(_update_buffers)),
-                                                          texture_updates(std::move(_update_textures)),
-                                                          free_buffers(std::move(_free_buffers)),
-                                                          free_textures(std::move(_free_textures)),
-                                                          free_slots(std::move(_free_slots)) {}
+        UpdateBindlessArrayCmd(BindlessArrayRef                          _array,
+                               Array<BindlessArray::BufferUpdateInfo>&&  _update_buffers,
+                               Array<BindlessArray::TextureUpdateInfo>&& _update_textures,
+                               Array<uint>&&                             _free_buffers,
+                               Array<uint>&&                             _free_textures,
+                               Array<uint>&&                             _free_slots) : Command(EType::UpdateBindlessArray), array(_array),
+                                                            buffer_updates(std::move(_update_buffers)),
+                                                            texture_updates(std::move(_update_textures)),
+                                                            free_buffers(std::move(_free_buffers)),
+                                                            free_textures(std::move(_free_textures)),
+                                                            free_slots(std::move(_free_slots)) {}
         auto*       Handle() const { return array.Get(); }
         EQueueType  GetQueueType() const override { return EQueueType::Graphics; }
         const auto& BufferUpdates() const { return buffer_updates; }
         const auto& TextureUpdates() const { return texture_updates; }
-        auto StealBufferUpdates() const { return std::move(buffer_updates); }
-        auto StealTextureUpdates()  const { return std::move(texture_updates); }
-        auto StealFreeBuffers() const { return std::move(free_buffers); }
-        auto StealFreeTextures() const { return std::move(free_textures); }
-        auto StealFreeSlots() const { return std::move(free_slots); }
-        
+        auto        StealBufferUpdates() const { return std::move(buffer_updates); }
+        auto        StealTextureUpdates() const { return std::move(texture_updates); }
+        auto        StealFreeBuffers() const { return std::move(free_buffers); }
+        auto        StealFreeTextures() const { return std::move(free_textures); }
+        auto        StealFreeSlots() const { return std::move(free_slots); }
     };
     struct DrawIndexedCmd {
         uint index_cnt;
@@ -520,13 +519,13 @@ namespace Moer::Render {
                                      for (const auto& mesh : mesh_data) {
                                          for (uint vtx_idx = 0; vtx_idx < mesh.vtx_cnt; ++vtx_idx) {
                                              const auto& vtx_view = mesh.vtx_views[vtx_idx];
-                                                BufferRange range(vtx_view.offset, vtx_view.buffer->GetByteSize());
-                                                if (vertex_buffers.find(vtx_view.buffer) == vertex_buffers.end()) {
-                                                    vertex_buffers[vtx_view.buffer] = range;
-                                                } else {
-                                                    auto [offset, size] = vertex_buffers[vtx_view.buffer];
-                                                    vertex_buffers[vtx_view.buffer].Merge(range);
-                                                }
+                                             BufferRange range(vtx_view.offset, vtx_view.buffer->GetByteSize());
+                                             if (vertex_buffers.find(vtx_view.buffer) == vertex_buffers.end()) {
+                                                 vertex_buffers[vtx_view.buffer] = range;
+                                             } else {
+                                                 auto [offset, size] = vertex_buffers[vtx_view.buffer];
+                                                 vertex_buffers[vtx_view.buffer].Merge(range);
+                                             }
                                          }
                                          if (std::holds_alternative<IndexBuffer>(mesh.idx_view)) {
                                              const auto&       idx_buffer = std::get<IndexBuffer>(mesh.idx_view);
@@ -661,7 +660,7 @@ namespace Moer::Render {
     };
     class RenderDevice::Impl {
     public:
-        Impl(DeviceInitInfo&& _info) {}
+        Impl() {}
 
         virtual ~Impl() = default;
 

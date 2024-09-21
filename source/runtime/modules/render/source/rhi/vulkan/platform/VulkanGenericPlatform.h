@@ -7,10 +7,10 @@
 
 #include "misc/STL.h"
 
-#include <vulkan/vulkan.h>
+#include <volk.h>
 
 class VulkanDevice;
-class VulkanPhysicalDeviceFeatures;
+class VulkanDeviceFeatures;
 
 class VulkanGenericPlatform {
 public:
@@ -22,7 +22,7 @@ public:
     // create the platform-specific surface object - required
     static VkSurfaceKHR CreateSurface();
     // Allow the platform code to restrict the device features
-    static void RestrictEnabledPhysicalDeviceFeatures(VulkanPhysicalDeviceFeatures* _gpu_features);
+    static void RestrictEnabledPhysicalDeviceFeatures(VulkanDeviceFeatures* _gpu_features);
 };
 
 #endif// VULKAN_GENERIC_PLATFORM_H

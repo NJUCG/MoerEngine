@@ -44,10 +44,19 @@ namespace Moer {
         init_config.editor_font_size       = r.Get<float>("editor", "editor_font_size", 16.f);
 #endif
         init_config.max_frame_in_flight = r.Get<int>("engine", "max_frame_in_flight", 3);
-        init_config.ray_tracing         = r.Get<int>("engine", "ray_tracing", 0);
-        scene_path                      = r.Get<std::string>("engine", "scene_path", "resource/scenes");
+        auto rhi_config_name            = r.Get<std::string>("engine", "rhi_config_name", "VkConfigs.json");
         auto default_rhi                = r.Get<std::string>("engine", "default_rhi", "Vulkan");
         strcpy_s(init_config.default_rhi, default_rhi.c_str());
+
+        // load rhi configs from .json
+        std::filesystem::path rhi_config_path = _workspace_path / CONFIG_DIR / rhi_config_name;
+        if (!std::filesystem::exists(rhi_config_path)) {
+            throw std::runtime_error("RHIConfig directory does not exist");
+        }
+        rhi_config_as_json = nlohmann::json::parse(std::ifstream(rhi_config_path.generic_string()));
+
+        scene_path = r.Get<std::string>("engine", "scene_path", "resource/scenes");
+
         auto defulat_render_name = r.Get<std::string>("engine", "render", "DeferredRenderer");
         strcpy_s(init_config.default_render_name, defulat_render_name.c_str());
     }
@@ -71,6 +80,7 @@ namespace Moer {
     const std::filesystem::path& ConfigManager::GetEngineShaderCachedPath() const {
         return engine_shader_cached_path;
     }
+
     const std::filesystem::path& ConfigManager::GetScenePath() const {
         return scene_path;
     }

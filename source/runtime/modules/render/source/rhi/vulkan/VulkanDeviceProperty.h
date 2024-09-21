@@ -1,14 +1,14 @@
 #ifndef VULKAN_DEVICE_PROPERTY_H
 #define VULKAN_DEVICE_PROPERTY_H
 
-#include <vulkan/vulkan_core.h>
+#include <volk.h>
 
-class VulkanPhysicalDeviceProperties {
+class VulkanCoreDeviceProperties {
 public:
-    VulkanPhysicalDeviceProperties() : core_1_0(), core_1_1(), core_1_2(), core_1_3() {}
-    VulkanPhysicalDeviceProperties(const VulkanPhysicalDeviceProperties& _other) = default;
+    VulkanCoreDeviceProperties() : core_1_0(), core_1_1(), core_1_2(), core_1_3() {}
+    VulkanCoreDeviceProperties(const VulkanCoreDeviceProperties& _other) = default;
 
-    void Query(VkPhysicalDevice _gpu, uint32_t _api_version);
+    static VulkanCoreDeviceProperties GetGpuCoreProperties(VkPhysicalDevice _gpu, uint32_t _api_version);
 
     // core
     VkPhysicalDeviceProperties         core_1_0;
@@ -27,9 +27,8 @@ public:
     VkPhysicalDeviceAccelerationStructurePropertiesKHR acceleration_structure_properties;
     VkPhysicalDeviceRayTracingPipelinePropertiesKHR    ray_tracing_pipeline_properties;
 
-    VkPhysicalDeviceCopyMemoryIndirectPropertiesNV copy_memory_indirect_properties;
+    VkPhysicalDeviceCopyMemoryIndirectPropertiesNV  copy_memory_indirect_properties;
     VkPhysicalDeviceMemoryDecompressionPropertiesNV memory_decompression_properties;
-
 };
 
 #endif

@@ -1,3 +1,5 @@
+#include <volk.h>
+#include "VulkanMacroUtils.h"
 #include "VulkanDescriptor.h"
 #include "VulkanPipelineResourceCache.h"
 #include "VulkanDevice.h"
@@ -6,7 +8,6 @@
 #include "misc/MacroUtils.h"
 #include "rhi/RHIResource.h"
 
-#include <vulkan/vulkan_core.h>
 #include <cassert>
 
 const float default_pool_size[VK_DESCRIPTOR_TYPE_RANGE_SIZE] = {

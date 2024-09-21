@@ -6,9 +6,9 @@
 #define VULKAN_DEBUG_H
 
 #include "math/Base.h"
-#include "vulkan/vulkan_core.h"
 
-#include <vulkan/vulkan.h>
+#include <volk.h>
+
 #include <string>
 
 namespace Moer {

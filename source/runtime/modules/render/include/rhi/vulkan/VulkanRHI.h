@@ -126,8 +126,6 @@ private:
 #pragma region helper functions
 private:
     friend Moer::Render::VulkanSwapChain;
-    bool CheckValidationLayer(const std::string& layer_name);
-    bool CheckEnabledExtensions();
 
     RHIBufferRef CreateBufferFromData(const RHIBufferCreateInfo& info, uint32_t size, void* data);
 
