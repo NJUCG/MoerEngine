@@ -437,13 +437,13 @@ namespace Moer::Render {
     struct UpdateBindlessArrayCmd : public Command {
     private:
         UpdateBindlessArrayCmd() : Command(EType::UpdateBindlessArray) {}
-        BindlessArrayRef                        array;
-        Array<BindlessArray::BufferUpdateInfo>  buffer_updates;
-        Array<BindlessArray::TextureUpdateInfo> texture_updates;
+        mutable BindlessArrayRef                        array;
+        mutable Array<BindlessArray::BufferUpdateInfo>  buffer_updates;
+        mutable Array<BindlessArray::TextureUpdateInfo> texture_updates;
 
-        Array<uint> free_buffers;
-        Array<uint> free_textures;
-        Array<uint> free_slots;
+        mutable Array<uint> free_buffers;
+        mutable Array<uint> free_textures;
+        mutable Array<uint> free_slots;
 
     public:
         UpdateBindlessArrayCmd(BindlessArrayRef                          _array,
@@ -457,13 +457,15 @@ namespace Moer::Render {
                                                             free_buffers(std::move(_free_buffers)),
                                                             free_textures(std::move(_free_textures)),
                                                             free_slots(std::move(_free_slots)) {}
-        auto*       Handle() { return array.Get(); }
+        auto*       Handle() const { return array.Get(); }
         EQueueType  GetQueueType() const override { return EQueueType::Graphics; }
         const auto& BufferUpdates() const { return buffer_updates; }
         const auto& TextureUpdates() const { return texture_updates; }
-        auto        StealFreeBuffers() { return std::move(free_buffers); }
-        auto        StealFreeTextures() { return std::move(free_textures); }
-        auto        StealFreeSlots() { return std::move(free_slots); }
+        auto        StealBufferUpdates() const { return std::move(buffer_updates); }
+        auto        StealTextureUpdates() const { return std::move(texture_updates); }
+        auto        StealFreeBuffers() const { return std::move(free_buffers); }
+        auto        StealFreeTextures() const { return std::move(free_textures); }
+        auto        StealFreeSlots() const { return std::move(free_slots); }
     };
     struct DrawIndexedCmd {
         uint index_cnt;

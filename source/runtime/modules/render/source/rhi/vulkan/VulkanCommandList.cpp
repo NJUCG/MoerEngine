@@ -76,6 +76,8 @@ namespace Moer::Render {
                     break;
                 case Command::EType::Custom:
                     break;
+                case Command::EType::UpdateBindlessArray:
+                    break;
                 default:
                     assert(false && "Invalid command type");
             }
@@ -201,6 +203,12 @@ namespace Moer::Render {
                     0,
                     1);
             }
+        }
+
+        void Visit(const UpdateBindlessArrayCmd* _cmd) {
+            //use dispatch in the future
+            // auto* vk_bindless_array = reinterpret_cast<VulkanBindlessArray*>(_cmd->Handle());
+            // tracker.RecordState(vk_bindless_array, VK_ACCESS_2_SHADER_READ_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
         }
     };
     VulkanRHICommandListBase::VulkanRHICommandListBase(VulkanDevice* _device, VkCommandPool _pool, VkCommandBufferLevel _level) : VulkanDeviceObject(_device) {
@@ -1476,18 +1484,7 @@ namespace Moer::Render {
             cmd_list.SetPso(pso.handle);
             const auto& args = _cmd.Args();
 
-            auto set_param = [&](uint _idx, const TArg& _arg) {
-                if constexpr (std::is_same_v<TArg, TextureView>) {
-                    pso.SetTexture(_idx, std::get<TextureView>(_arg));
-                } else if constexpr (std::is_same_v<TArg, BufferView>) {
-                    pso.SetBuffer(_idx, std::get<BufferView>(_arg));
-                }
-            };
-
-            for (size_t i = 0; i < args.Size(); ++i) {
-                set_param(i, args[i]);
-            }
-            cmd_list.UploadDescriptors(pso.handle);
+            cmd_list.BindDescriptors(pso.handle, args);
 
             if (args.constants.size() > 0) {
                 cmd_list.UploadPushConstants(
@@ -1536,23 +1533,8 @@ namespace Moer::Render {
         void Visit(const SetDrawStateCmd& _cmd) {
             state = EState::Draw;
 
-            const auto&    args = std::move(_cmd.Args());
+            const auto&    args = _cmd.Args();
             RasterPipeline pso(_cmd.Pipeline());
-            auto           set_param = [&](uint _idx, const auto& _arg) {
-                std::visit([&](auto&& _in_arg) {
-                    using T = std::decay_t<decltype(_in_arg)>;
-                    if constexpr (std::is_same_v<T, TextureView>) {
-                        pso.SetTexture(_idx, _in_arg);
-                    } else if constexpr (std::is_same_v<T, BufferView>) {
-                        pso.SetBuffer(_idx, _in_arg);
-                    } else if constexpr (std::is_same_v<T, Sampler>) {
-                        pso.SetSampler(_idx, _in_arg);
-                    } else {
-                        //constsant type
-                    }
-                },
-                           _arg);
-            };
 
             const auto&                      pass_info = _cmd.RenderPassInfo();
             Array<VkRenderingAttachmentInfo> color_attachments(pass_info.color_attachments.size());
@@ -1581,10 +1563,7 @@ namespace Moer::Render {
 
             cmd_list.SetPso(_cmd.Pipeline());
 
-            for (size_t i = 0; i < args.Size(); ++i) {
-                set_param(i, args[i]);
-            }
-            cmd_list.UploadDescriptors(pso.handle);
+            cmd_list.BindDescriptors(pso.handle, args);
 
             if (args.constants.size() > 0) {
                 cmd_list.UploadPushConstants(
@@ -1645,6 +1624,17 @@ namespace Moer::Render {
                     draw_data.idx_view);
             }
             cmd_list.EndRendering();
+        }
+
+        void Visit(const UpdateBindlessArrayCmd& _cmd) {
+            VulkanBindlessArray* bindless_array = reinterpret_cast<VulkanBindlessArray*>(_cmd.Handle());
+            bindless_array->CmdUpdate(_cmd.StealTextureUpdates(), _cmd.StealBufferUpdates());
+            allocator.AddOnComplete([bindless_array,
+                                     free_slots(_cmd.StealFreeSlots()),
+                                     free_buffers(_cmd.StealFreeBuffers()),
+                                     free_textures(_cmd.StealFreeTextures())]() {
+                bindless_array->OnFree(std::move(free_slots), free_textures, free_buffers);
+            });
         }
 
         // void Visit(const UpdateDrawStateCmd& _cmd) {
@@ -1788,9 +1778,11 @@ namespace Moer::Render {
         }
         const auto& cmd_lists = reorderer.m_cmd_lists;
         bool        has_cmd   = !reorderer.m_cmd_lists.empty();
+        uint64      last_time = last_frame;
 
         if (has_cmd) {
             vk_allocator.GetCmdList().Begin();
+            vk_device.GetGlobalDescriptorHeap().BeginPushDescriptors(last_time + 1);
         }
         for (const CmdReorderer::LinkedCommandList& cmd_list : cmd_lists) {
             if (cmd_list.head == nullptr) {
@@ -1845,6 +1837,10 @@ namespace Moer::Render {
                     //     visitor.Visit(static_cast<const SetConstantCmd&>(*cmd));
                     //     break;
                     case Command::EType::Custom: break;
+                    case Command::EType::UpdateBindlessArray: {
+                        visitor.Visit(static_cast<const UpdateBindlessArrayCmd&>(*cmd));
+                        break;
+                    };
                 }
             }
         }
@@ -1853,9 +1849,9 @@ namespace Moer::Render {
             tracker.RestoreState();
             tracker.DispatchBarriers(vk_allocator.GetCmdList());
             vk_allocator.GetCmdList().End();
+            vk_device.GetGlobalDescriptorHeap().EndPushDescriptors(last_time + 1);
             tracker.Reset();
         }
-        uint64 last_time = last_frame;
         if (_submit.cmds.empty()) {
             allocators.Push(allocator_ptr.release());
             std::unique_lock<std::mutex> lock(event_mutex);
@@ -2406,11 +2402,92 @@ namespace Moer::Render {
     void VulkanCmdList::UploadPushConstants(
         PipelineHandle&       _pso_handle,
         std::span<const uint> _data) {
-        auto* vk_pso                     = reinterpret_cast<VulkanPipelineState*>(std::get<VkPipelineHandle>(_pso_handle.handle).handle);
-        auto  binding_info               = _pso_handle.binding_infos[_pso_handle.constant_idx];
-        auto [offset, size, stage_flags] = DecodeReflectPushConstant(binding_info);
+        auto* vk_pso = reinterpret_cast<VulkanPipelineState*>(std::get<VkPipelineHandle>(_pso_handle.handle).handle);
+        // auto  binding_info               = _pso_handle.binding_infos[_pso_handle.constant_idx];
+        // auto [offset, size, stage_flags] = DecodeReflectPushConstant(binding_info);
 
-        vkCmdPushConstants(command_buffer, vk_pso->GetPipelineLayout(), stage_flags, offset, size, _data.data());
+        // vkCmdPushConstants(command_buffer, vk_pso->GetPipelineLayout(), stage_flags, offset, size, _data.data());
+    }
+
+    void VulkanCmdList::BindDescriptors(PipelineHandle& _pso_handle, const ArrayArguments& _args) {
+        auto* vk_pso = reinterpret_cast<VulkanPipelineState*>(std::get<VkPipelineHandle>(_pso_handle.handle).handle);
+
+        assert(vk_pso && vk_pso->bind_template != nullptr && "Pipeline state has no bind template!");
+        VulkanPipelineParamBinder& bind_template        = *vk_pso->bind_template;
+        VulkanDescriptorHeap&      descriptor_heap      = device.GetGlobalDescriptorHeap();
+        auto&                      set_binders          = bind_template.set_binders;
+        uint64                     g_global_desc_offset = descriptor_heap.current_offset;
+        for (auto& [set, binder] : set_binders) {
+            std::visit(
+                [&](auto& _binder) {
+                    using T = std::decay_t<decltype(_binder)>;
+                    if constexpr (std::is_same_v<T, VulkanBindlessSetArray>) {
+                        BindlessArrayRef     array                           = std::get<BindlessArrayRef>(_args[_binder.param_idx]);
+                        VulkanBindlessArray* bindless_array                  = static_cast<VulkanBindlessArray*>(array.Get());
+                        bind_template.desc_buffers[_binder.desc_idx].address = bindless_array->bindless_buffer_descs->DeviceAddress();
+                    } else if constexpr (std::is_same_v<T, VulkanBindlessSetImage>) {
+                        BindlessArrayRef     array                           = std::get<BindlessArrayRef>(_args[_binder.param_idx]);
+                        VulkanBindlessArray* bindless_array                  = static_cast<VulkanBindlessArray*>(array.Get());
+                        bind_template.desc_buffers[_binder.desc_idx].address = bindless_array->bindless_texture_descs->DeviceAddress();
+
+                    } else if constexpr (std::is_same_v<T, VulkanBindlessSetSampler>) {
+                        BindlessArrayRef     array                           = std::get<BindlessArrayRef>(_args[_binder.param_idx]);
+                        VulkanBindlessArray* bindless_array                  = static_cast<VulkanBindlessArray*>(array.Get());
+                        bind_template.desc_buffers[_binder.desc_idx].address = bindless_array->bindless_texture_descs->DeviceAddress();
+
+                    } else if constexpr (std::is_same_v<T, VulkanDescriptorSetBinder>) {
+                        //normal resources
+                        for (uint i = 0; i < _binder.writers.size(); ++i) {
+                            auto&                       writer   = _binder.writers[i];
+                            const VulkanDescriptorInfo& set_info = _binder.bind_infos[i];
+                            switch (writer.descriptorType) {
+                                case VK_DESCRIPTOR_TYPE_SAMPLER: {
+                                    uint64 src_handle = descriptor_heap.GetSamplerDescIdx(std::get<Sampler>(_args[set_info.param_idx]));
+                                    descriptor_heap.PushSamplerDesc(src_handle, _binder.binding_infos[set_info.info_idx].offset);
+                                    break;
+                                }
+                                case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE: {
+                                    uint64 src_handle = descriptor_heap.GetImageDescIdx(&std::get<TextureView>(_args[set_info.param_idx]), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                                    descriptor_heap.PushImageDesc(src_handle, _binder.binding_infos[set_info.info_idx].offset);
+                                    break;
+                                }
+                                case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE: {
+                                    uint64 src_handle = descriptor_heap.GetImageDescIdx(&std::get<TextureView>(_args[set_info.param_idx]), VK_IMAGE_LAYOUT_GENERAL);
+                                    descriptor_heap.PushImageDesc(src_handle, _binder.binding_infos[set_info.info_idx].offset);
+
+                                    break;
+                                }
+                                case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR: {
+                                    break;
+                                }
+                                default: {
+                                    assert(false && "Unsupported descriptor type!");
+                                }
+                            }
+                        }
+                        //set desc buffer offset
+                        bind_template.desc_buffer_offsets[_binder.desc_idx].offset = descriptor_heap.current_offset;
+                        descriptor_heap.IncrementOffset(_binder.size);
+                        // device.vk_cmd_push_descriptor_set(command_buffer, _binder.bind_point, _binder.push_info.layout, _binder.push_info.set, _binder.writers.size(), _binder.writers.data());
+                    }
+                },
+                binder);
+        }
+        if (!bind_template.desc_buffers.empty()) {
+            device.vk_cmd_bind_descriptor_buffers(command_buffer, bind_template.desc_buffers.size(), bind_template.desc_buffers.data());
+        }
+
+        for (const auto& desc_info : bind_template.desc_buffer_offsets) {
+            uint   buffer_idx = desc_info.buf_idx;
+            uint64 offset     = desc_info.offset;
+            device.vk_cmd_set_descriptor_buffer_offsets(command_buffer, desc_info.bind_point, desc_info.layout, desc_info.set, 1, &buffer_idx, &offset);
+        }
+
+        if (bind_template.push_constants_info.size > 0) {
+            bind_template.push_constants_info.pValues = _args.constants.data();
+            const auto& push_info                     = &bind_template.push_constants_info;
+            vkCmdPushConstants(command_buffer, push_info->layout, push_info->stageFlags, push_info->offset, push_info->size, push_info->pValues);
+        }
     }
 
     void VulkanCmdList::SetPso(const PipelineHandle& _pso_handle) {

@@ -25,6 +25,7 @@
 #include <vk_mem_alloc.h>
 
 #include <algorithm>
+#include <optional>
 #include <shared_mutex>
 #include <spirv_reflect.h>
 #include <variant>
@@ -82,8 +83,17 @@ namespace Moer::Render {
         void*                                       p_user_data) {
 
         std::stringstream stream;
-        stream << "[" << p_callback_data->messageIdNumber << "][" << p_callback_data->pMessageIdName << "]: " << p_callback_data->pMessage << std::endl;
+        stream << "[" << p_callback_data->messageIdNumber << "]\n\t[" << p_callback_data->pMessageIdName << "]:\n\t\t " << p_callback_data->pMessage << std::endl;
 
+        if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT) {
+            LOG_DEBUG(stream.str());
+        } else if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT) {
+            LOG_INFO(stream.str());
+        } else if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
+            LOG_WARNING(stream.str());
+        } else if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
+            LOG_ERROR(stream.str());
+        }
         if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT) {
             LOG_DEBUG(stream.str());
         } else if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT) {
@@ -438,6 +448,9 @@ namespace Moer::Render {
         gfx_queue      = MakeUnique<VkCommandQueue>(*this, EQueueType::Graphics);
         compute_queue  = MakeUnique<VkCommandQueue>(*this, EQueueType::Compute);
         transfer_queue = MakeUnique<VkCommandQueue>(*this, EQueueType::Copy);
+
+        // select device procs
+        SetupProcs();
     }
 
     void VulkanDevice::CreateDescriptorAllocator() {
@@ -582,9 +595,9 @@ namespace Moer::Render {
         // target shader stage
         UnorderedMap<uint64, uint>& _out_hash_2_idx,
         // hash to index
-        Moer::Array<uint64>& _out_reflect_flags,
+        // Moer::Array<uint64>& _out_reflect_flags,
         // cpp param name hash to shader binding index
-        UnorderedMap<uint, UnorderedMap<uint, VkDescriptorSetLayoutBinding>>& _out_descriptor_bindings,
+        UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>& _out_descriptor_bindings,
         // set to binding to binding info, actual vk pipeline layout
         VkPushConstantRange& _out_push_constant_ranges,
         // push constant range
@@ -614,54 +627,68 @@ namespace Moer::Render {
                     const ReflectParamInfo::BindlessArray& bdls_array                = binding_info.spirv.bindless;
                     bool                                   b_found_bindless_buffer   = bdls_array.buffer.has_value();
                     bool                                   b_found_bindless_texture  = bdls_array.image.has_value();
+                    bool                                   b_found_bindless_sampler  = bdls_array.sampler.has_value();
                     bool                                   b_found_bindless_indirect = bdls_array.array.has_value();
                     uint                                   texture_set               = 0;
                     uint                                   buffer_set                = 0;
                     if (b_found_bindless_indirect) {
                         const ReflectParamInfo::Bindless& indirect_binding_info = bdls_array.array.value();
 
-                        auto&                 set           = _out_descriptor_bindings[indirect_binding_info.set];
+                        auto&                 array_set     = _out_descriptor_bindings[indirect_binding_info.set];
                         static constexpr uint indirect_slot = 0;
                         static constexpr uint sampler_slot  = 0;
-                        static constexpr uint texture_slot  = 1;
+                        static constexpr uint texture_slot  = 0;
                         static constexpr uint buffer_slot   = 1;
                         assert(indirect_binding_info.binding == 0 && "Indirect Binding Slot Must be 0.");
-                        auto& vk_binding           = set[indirect_slot];
+                        auto& vk_binding           = array_set[indirect_slot];
                         vk_binding.binding         = indirect_slot;
                         vk_binding.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
                         vk_binding.descriptorCount = 1;
                         vk_binding.stageFlags |= _stage;
-                        vk_binding.pImmutableSamplers = nullptr;
-                        _max_set                      = uint(std::max(int(_max_set), int(indirect_binding_info.set)));
-                        buffer_set                    = indirect_binding_info.set;
+                        vk_binding.pImmutableSamplers               = nullptr;
+                        _max_set                                    = uint(std::max(int(_max_set), int(indirect_binding_info.set)));
+                        buffer_set                                  = indirect_binding_info.set;
+                        array_set.bindings[indirect_slot].param_idx = idx;
+                        array_set.is_bindless                       = true;
                         if (b_found_bindless_buffer) {
-                            auto& temp_binding           = set[buffer_slot];
-                            temp_binding.binding         = buffer_slot;
-                            temp_binding.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                            temp_binding.descriptorCount = 10000;
+                            array_set.bindings[buffer_slot].param_idx = idx;
+                            auto& temp_binding                        = array_set[buffer_slot];
+                            temp_binding.binding                      = buffer_slot;
+                            temp_binding.descriptorType               = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                            temp_binding.descriptorCount              = 0;
                             temp_binding.stageFlags |= _stage;
                             temp_binding.pImmutableSamplers = nullptr;
                         }
 
                         if (b_found_bindless_texture) {
-                            auto& texture_set            = _out_descriptor_bindings[bdls_array.image.value().set];
+                            auto& texture_set                            = _out_descriptor_bindings[bdls_array.image.value().set];
+                            texture_set.bindings[texture_slot].param_idx = idx;
+
                             auto& temp_binding           = texture_set[texture_slot];
+                            texture_set.is_bindless      = true;
                             temp_binding.binding         = texture_slot;
-                            temp_binding.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                            temp_binding.descriptorCount = 10000;
+                            temp_binding.descriptorType  = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+                            temp_binding.descriptorCount = 0;
                             temp_binding.stageFlags |= _stage;
                             temp_binding.pImmutableSamplers = nullptr;
 
-                            auto& temp_sampler_binding           = texture_set[sampler_slot];
-                            temp_sampler_binding.binding         = sampler_slot;
-                            temp_sampler_binding.descriptorType  = VK_DESCRIPTOR_TYPE_SAMPLER;
-                            temp_sampler_binding.descriptorCount = _device.ImmutableSamplerCount();
-                            temp_sampler_binding.stageFlags |= _stage;
-                            temp_sampler_binding.pImmutableSamplers = _device.GetImmutableSamplers();
-                            _max_set                                = uint(std::max(int(_max_set), int(bdls_array.image.value().set)));
+                            _max_set = uint(std::max(int(_max_set), int(bdls_array.image.value().set)));
                         }
 
-                        _out_reflect_flags[idx] = EncodeBindlessInfo(texture_set, buffer_set, _stage, b_found_bindless_texture, b_found_bindless_buffer);
+                        if (b_found_bindless_sampler) {
+                            auto& sampler_set                            = _out_descriptor_bindings[bdls_array.sampler.value().set];
+                            auto& temp_binding                           = sampler_set[sampler_slot];
+                            sampler_set.bindings[sampler_slot].param_idx = idx;
+                            sampler_set.is_bindless                      = true;
+                            temp_binding.binding                         = sampler_slot;
+                            temp_binding.descriptorType                  = VK_DESCRIPTOR_TYPE_SAMPLER;
+                            temp_binding.descriptorCount                 = 0;
+                            temp_binding.stageFlags |= _stage;
+                            temp_binding.pImmutableSamplers = nullptr;
+                            _max_set                        = uint(std::max(int(_max_set), int(bdls_array.sampler.value().set)));
+                        }
+
+                        // _out_reflect_flags[idx] = EncodeBindlessInfo(texture_set, buffer_set, _stage, b_found_bindless_texture, b_found_bindless_buffer);
                     }
 
                     break;
@@ -673,7 +700,7 @@ namespace Moer::Render {
                     _out_constant_idx                              = idx;
                     _out_push_constant_ranges.size                 = std::max(_out_push_constant_ranges.size, constant.size);
                     _out_push_constant_ranges.stageFlags |= _stage;
-                    _out_reflect_flags[idx] = EncodeReflectInfo(0, constant.size, _out_push_constant_ranges.stageFlags);
+                    // _out_reflect_flags[idx] = EncodeReflectInfo(0, constant.size, _out_push_constant_ranges.stageFlags);
                     break;
                 }
                 case SDA_Buffer:
@@ -692,9 +719,10 @@ namespace Moer::Render {
                     vk_binding.descriptorType  = desc_type;
                     vk_binding.descriptorCount = 1;
                     vk_binding.stageFlags |= _stage;
-                    vk_binding.pImmutableSamplers = nullptr;
-                    _out_reflect_flags[idx]       = EncodeReflectInfo(resource.set, resource.binding, vk_binding.stageFlags);
-                    _max_set                      = uint(std::max(int(_max_set), int(resource.set)));
+                    vk_binding.pImmutableSamplers            = nullptr;
+                    set.bindings[resource.binding].param_idx = idx;
+                    // _out_reflect_flags[idx]       = EncodeReflectInfo(resource.set, resource.binding, vk_binding.stageFlags);
+                    _max_set = uint(std::max(int(_max_set), int(resource.set)));
                     break;
                 }
                 default:
@@ -764,13 +792,12 @@ namespace Moer::Render {
             shader_stage_info.module = shader_module;
             shader_stage_info.pName  = _info.entry_point.data();
         };
-        using TDescSet      = UnorderedMap<uint, VkDescriptorSetLayoutBinding>;
-        using TPipelineSets = UnorderedMap<uint, TDescSet>;
+        using TPipelineSets = UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>;
         TPipelineSets       descriptor_bindings;
         VkPushConstantRange push_constant_ranges{.offset = 0, .size = 0};
         uint                max_set = 0;
 
-        Array<uint64>              reflect_flags(_shader_info.layout_hash.size(), 0u);
+        // Array<uint64>              reflect_flags(_shader_info.layout_hash.size(), 0u);
         uint64                     valid_bits = 0;
         UnorderedMap<uint64, uint> hash_2_idx;
         int                        constant_idx = -1;
@@ -781,7 +808,7 @@ namespace Moer::Render {
                              _shader_info,
                              _stage,
                              hash_2_idx,
-                             reflect_flags,
+                             //  reflect_flags,
                              descriptor_bindings,
                              push_constant_ranges,
                              constant_idx,
@@ -962,27 +989,33 @@ namespace Moer::Render {
         dynamic_state.pDynamicStates    = states.data();
 
         // init descriptor set layouts and pipeline resource cache
-        Moer::Array<TDescriptorSetLayoutBindingArray> desc_sets_array(max_set + 1u);
-        for (const auto& [set_idx, desc_set] : descriptor_bindings) {
-            TDescriptorSetLayoutBindingArray desc_set_layouts;
-            for (const auto& [binding_idx, binding] : desc_set) { desc_set_layouts.push_back(binding); }
-            desc_sets_array[set_idx] = std::move(desc_set_layouts);
+        // Moer::Array<TDescriptorSetLayoutBindingArray> desc_sets_array(max_set + 1u);
+        // for (const auto& [set_idx, desc_set] : descriptor_bindings) {
+        //     TDescriptorSetLayoutBindingArray desc_set_layouts;
+        //     for (const auto& [binding_idx, binding] : desc_set) { desc_set_layouts.push_back(binding); }
+        //     desc_sets_array[set_idx] = std::move(desc_set_layouts);
+        // }
+        // vk_pso->InitDescriptorSetLayouts(desc_sets_array);
+        // vk_pso->InitPipelineResourceCache(desc_sets_array);
+        if (push_constant_ranges.size != 0) {
+            vk_pso->InitPipelineLayout(std::move(descriptor_bindings), std::move(push_constant_ranges));
+
+        } else {
+            vk_pso->InitPipelineLayout(std::move(descriptor_bindings));
         }
-        vk_pso->InitDescriptorSetLayouts(desc_sets_array);
-        vk_pso->InitPipelineResourceCache(desc_sets_array);
 
-        const auto& layouts = vk_pso->GetDescriptorSetsLayout()->GetLayouts();
-        // create pipeline layout
-        VkPipelineLayoutCreateInfo pipeline_layout_create_info{};
-        pipeline_layout_create_info.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        pipeline_layout_create_info.pNext                  = nullptr;
-        pipeline_layout_create_info.flags                  = 0;
-        pipeline_layout_create_info.setLayoutCount         = layouts.size();
-        pipeline_layout_create_info.pSetLayouts            = layouts.data();
-        pipeline_layout_create_info.pushConstantRangeCount = push_constant_ranges.size == 0 ? 0 : 1;
-        pipeline_layout_create_info.pPushConstantRanges    = &push_constant_ranges;
+        // const auto& layouts = vk_pso->GetDescriptorSetsLayout()->GetLayouts();
+        // // create pipeline layout
+        // VkPipelineLayoutCreateInfo pipeline_layout_create_info{};
+        // pipeline_layout_create_info.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        // pipeline_layout_create_info.pNext                  = nullptr;
+        // pipeline_layout_create_info.flags                  = 0;
+        // pipeline_layout_create_info.setLayoutCount         = layouts.size();
+        // pipeline_layout_create_info.pSetLayouts            = layouts.data();
+        // pipeline_layout_create_info.pushConstantRangeCount = push_constant_ranges.size == 0 ? 0 : 1;
+        // pipeline_layout_create_info.pPushConstantRanges    = &push_constant_ranges;
 
-        vk_pso->CreatePipelineLayout(pipeline_layout_create_info);
+        // vk_pso->CreatePipelineLayout(pipeline_layout_create_info);
         VkGraphicsPipelineCreateInfo pipeline_create_info{};
         pipeline_create_info.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
         pipeline_create_info.pNext               = &rendering_create_info;
@@ -1020,8 +1053,8 @@ namespace Moer::Render {
 
         auto* vk_pso = MoerNew(VulkanPipelineState)(this, VulkanPipelineState::Compute);
 
-        using TDescSet      = UnorderedMap<uint, VkDescriptorSetLayoutBinding>;
-        using TPipelineSets = UnorderedMap<uint, TDescSet>;
+        using TPipelineSets = UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>;
+
         VkComputePipelineCreateInfo pipeline_create_info{};
 
         VkPipelineShaderStageCreateInfo& shader_stage = pipeline_create_info.stage;
@@ -1039,7 +1072,7 @@ namespace Moer::Render {
                              _shader_info,
                              _stage,
                              hash_2_idx,
-                             reflect_flags,
+                             //  reflect_flags,
                              descriptor_bindings,
                              push_constant_ranges,
                              constant_idx,
@@ -1058,27 +1091,33 @@ namespace Moer::Render {
                    _shader_info.shader_group);
 
         // init descriptor set layouts and pipeline resource cache
-        Moer::Array<TDescriptorSetLayoutBindingArray> desc_sets_array(max_set + 1u);
-        for (const auto& [set_idx, desc_set] : descriptor_bindings) {
-            TDescriptorSetLayoutBindingArray desc_set_layouts;
-            for (const auto& [binding_idx, binding] : desc_set) { desc_set_layouts.push_back(binding); }
-            desc_sets_array[set_idx] = std::move(desc_set_layouts);
+        // Moer::Array<TDescriptorSetLayoutBindingArray> desc_sets_array(max_set + 1u);
+        // for (const auto& [set_idx, desc_set] : descriptor_bindings) {
+        //     TDescriptorSetLayoutBindingArray desc_set_layouts;
+        //     for (const auto& [binding_idx, binding] : desc_set) { desc_set_layouts.push_back(binding); }
+        //     desc_sets_array[set_idx] = std::move(desc_set_layouts);
+        // }
+        // vk_pso->InitDescriptorSetLayouts(desc_sets_array);
+        // vk_pso->InitPipelineResourceCache(desc_sets_array);
+
+        // const auto& layouts = vk_pso->GetDescriptorSetsLayout()->GetLayouts();
+        if (push_constant_ranges.size != 0) {
+            vk_pso->InitPipelineLayout(std::move(descriptor_bindings), std::move(push_constant_ranges));
+
+        } else {
+            vk_pso->InitPipelineLayout(std::move(descriptor_bindings));
         }
-        vk_pso->InitDescriptorSetLayouts(desc_sets_array);
-        vk_pso->InitPipelineResourceCache(desc_sets_array);
-
-        const auto& layouts = vk_pso->GetDescriptorSetsLayout()->GetLayouts();
         // create pipeline layout
-        VkPipelineLayoutCreateInfo pipeline_layout_create_info{};
-        pipeline_layout_create_info.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        pipeline_layout_create_info.pNext                  = nullptr;
-        pipeline_layout_create_info.flags                  = 0;
-        pipeline_layout_create_info.setLayoutCount         = layouts.size();
-        pipeline_layout_create_info.pSetLayouts            = layouts.data();
-        pipeline_layout_create_info.pushConstantRangeCount = push_constant_ranges.size == 0 ? 0 : 1;
-        pipeline_layout_create_info.pPushConstantRanges    = &push_constant_ranges;
+        // VkPipelineLayoutCreateInfo pipeline_layout_create_info{};
+        // pipeline_layout_create_info.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        // pipeline_layout_create_info.pNext                  = nullptr;
+        // pipeline_layout_create_info.flags                  = 0;
+        // pipeline_layout_create_info.setLayoutCount         = layouts.size();
+        // pipeline_layout_create_info.pSetLayouts            = layouts.data();
+        // pipeline_layout_create_info.pushConstantRangeCount = push_constant_ranges.size == 0 ? 0 : 1;
+        // pipeline_layout_create_info.pPushConstantRanges    = &push_constant_ranges;
 
-        vk_pso->CreatePipelineLayout(pipeline_layout_create_info);
+        // vk_pso->CreatePipelineLayout(pipeline_layout_create_info);
 
         pipeline_create_info.sType              = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
         pipeline_create_info.pNext              = nullptr;

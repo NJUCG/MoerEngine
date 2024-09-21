@@ -167,7 +167,7 @@ namespace Moer::Render {
             auto& state = it->second;
             if (state.dst_access != _access || state.dst_stage != _stage) {
                 state.src_access = state.dst_access;
-                state.dst_stage  = state.dst_stage;
+                state.src_stage  = state.dst_stage;
                 state.dst_access = _access;
                 state.dst_stage  = _stage;
             }

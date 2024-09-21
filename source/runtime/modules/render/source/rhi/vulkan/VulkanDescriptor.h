@@ -2,6 +2,7 @@
 #define VULKAN_RHI_DESCRIPTOR_H
 
 #include <volk.h>
+#include "rhi/RHIResource.h"
 #include "VulkanTypeDefs.h"
 #include "VulkanRHIResource.h"
 
@@ -187,15 +188,42 @@ namespace Moer::Render {
         Array<byte> image_desc_data;
         Array<uint> buffer_free_list;
         Array<uint> image_free_list;
+        uint64      buffer_offset;
+        uint64      image_offset;
 
-        uint          GetBufferDescIdx(VulkanBuffer* _in_buffer);
-        void          FreeBufferDescIdx(uint _idx);
-        uint          GetImageDescIdx(const TextureView* _in_image, VkImageLayout _layout);
-        void          FreeImageDescIdx(uint _idx);
+        uint GetBufferDescIdx(VulkanBuffer* _in_buffer);
+        void FreeBufferDescIdx(uint _idx);
+        uint GetImageDescIdx(const TextureView* _in_image, VkImageLayout _layout);
+        void FreeImageDescIdx(uint _idx);
+        uint GetSamplerDescIdx(Sampler _sampler);
+
+    public:
+        uint64 CurrentFrameOffset(uint _frame_idx) const;
+        void   BeginPushDescriptors(uint _frame_idx);
+
+        void EndPushDescriptors(uint _frame_idx);
+
+        void PushBufferDesc(uint64 _src_offset, uint64 _set_offset);
+        void PushImageDesc(uint64 _src_offset, uint64 _set_offset);
+        void PushSamplerDesc(uint64 _src_offset, uint64 _set_offset);
+        void IncrementOffset(uint64 _size);
+
+    public:
         VulkanDevice* m_device;
-        uint          buffer_desc_stride;
-        uint          image_desc_stride;
-        std::mutex    m_mutex;
+
+        VulkanBuffer* ring_desc_buffer;
+
+        uint       buffer_desc_stride;
+        uint       image_desc_stride;
+        uint       sample_desc_stride;
+        std::mutex m_mutex;
+        uint64     texture_desc_offset;
+
+        uint          ring_buffer_cnt;
+        uint64        ring_buffer_size;
+        Array<uint64> ring_buffer_offsets;
+        uint64        current_offset;
+        uint8*        map_ptr;
     };
 
     struct DescriptorBufferManager {

@@ -92,7 +92,13 @@ namespace Moer::Render {
         constexpr uint   ImmutableSamplerCount() const { return immutable_sampler_count; }
         const VkSampler* GetImmutableSamplers() const { return immutable_samplers.data(); }
         const VkSampler  GetSampler(Sampler _sampler) const;
-        void             GetDescriptorEXT(const VkDescriptorGetInfoEXT* _descriptor_info, size_t _data_size, void* _p_data) const {
+        const uint       GetSamplerIdx(Sampler _sampler) const {
+            uint filter  = uint(_sampler.filter);
+            uint address = uint(_sampler.address_mode);
+            uint compare = uint(_sampler.compare_function);
+            return (uint(SF_Num) * uint(SAM_Num)) * compare + (uint(SF_Num)) * address + filter;
+        }
+        void GetDescriptorEXT(const VkDescriptorGetInfoEXT* _descriptor_info, size_t _data_size, void* _p_data) const {
             vkGetDescriptorEXT(m_device, _descriptor_info, _data_size, _p_data);
         };
         void GetDescriptorSetLayoutBindingOffsetEXT(VkDescriptorSetLayout _layout, uint32_t _binding, uint64* _offset) const {
@@ -186,10 +192,13 @@ namespace Moer::Render {
         static constexpr uint                           immutable_sampler_count = uint(SF_Num) * uint(SAM_Num) * uint(SCF_Num);
         StaticArray<VkSampler, immutable_sampler_count> immutable_samplers{};
 
+    public:
+        static constexpr uint bindless_sampler_cnt = 256;
+        static constexpr uint cmd_alloc_limits     = 3;
+
     private:
         friend VkCommandQueue;
         //configs
-        uint cmd_alloc_limits = 2;
 
     private:
         void             InitVulkanInstance(uint32 _api_version);

@@ -21,6 +21,7 @@ class VulkanOptionalDeviceProperties {
 public:
     // descriptor buffer
     VkPhysicalDeviceDescriptorBufferPropertiesEXT descriptor_buffer_properties;
+    VkPhysicalDevicePushDescriptorPropertiesKHR   push_descriptor_properties;
 
     // ray tracing
     VkPhysicalDeviceAccelerationStructurePropertiesKHR acceleration_structure_properties;

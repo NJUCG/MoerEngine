@@ -146,7 +146,7 @@ namespace Moer::Render {
         }
 
         void PostGpuFeatures(VulkanOptionalDeviceExtensions& _gpu_extensions) override {
-            m_is_usable = (m_descriptor_buffer_features.descriptorBuffer == VK_TRUE);
+            m_is_usable = (m_descriptor_buffer_features.descriptorBuffer == VK_TRUE && m_descriptor_buffer_features.descriptorBufferPushDescriptors == VK_TRUE);
 
             _gpu_extensions.m_has_ext_descriptor_buffer = m_is_usable;
         }
@@ -165,6 +165,30 @@ namespace Moer::Render {
 
     private:
         VkPhysicalDeviceDescriptorBufferFeaturesEXT m_descriptor_buffer_features;
+    };
+
+    //***** VK_KHR_push_descriptor */
+    class VulkanKHRPushDescriptorExtension final : public VulkanDeviceExtension {
+    public:
+        VulkanKHRPushDescriptorExtension(bool _is_optional = false)
+            : VulkanDeviceExtension(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME, _is_optional) {}
+
+        void PreGpuFeatures(VkPhysicalDeviceFeatures2& _gpu_features2) override {
+        }
+
+        void PostGpuFeatures(VulkanOptionalDeviceExtensions& _gpu_extensions) override {
+        }
+
+        void PreGpuProperties(const VulkanDevice* _device, VkPhysicalDeviceProperties2& _gpu_properties2) override {
+            auto& push_descriptor_props = const_cast<VulkanOptionalDeviceProperties&>(_device->GetOptionalProperties()).push_descriptor_properties;
+            push_descriptor_props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PUSH_DESCRIPTOR_PROPERTIES_KHR;
+            AddToPNext(_gpu_properties2, push_descriptor_props);
+        }
+
+        void PreCreateDevice(VkDeviceCreateInfo& _device_create_info) override {
+        }
+
+    private:
     };
 
     class VulkanEXTMemoryDecompressionExtension final : public VulkanDeviceExtension {
@@ -304,7 +328,7 @@ namespace Moer::Render {
 #endif
         // bindless extensions
         ADD_CUSTOM_EXTENSION(VulkanEXTDescriptorBufferExtension, VULKAN_EXTENSION_OPTIONAL);
-
+        ADD_CUSTOM_EXTENSION(VulkanKHRPushDescriptorExtension, VULKAN_EXTENSION_REQUIRED);
         // vendor extensions
 
         // debug extensions

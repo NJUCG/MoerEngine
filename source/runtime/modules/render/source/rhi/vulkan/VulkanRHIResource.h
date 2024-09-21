@@ -21,6 +21,7 @@
 #include <vk_mem_alloc.h>
 
 #include <condition_variable>
+// #include "VulkanDescriptor.h"
 #include <variant>
 
 class VulkanRHIImpl;
@@ -357,6 +358,82 @@ namespace Moer::Render {
     static auto DecodeBindlessInfo(uint64 _val) {
         return std::make_tuple(int(_val >> 17) & 0x7FFF, int(_val >> 2) & 0x7FFF, uint(_val >> 32), uint8(_val >> 1) & 0x1, uint8(_val) & 0x1);
     }
+    struct VulkanDescriptorSetLayoutBinding {
+        VkDescriptorSetLayoutBinding binding;
+        int                          param_idx;
+    };
+    struct VulkanDescriptorSetLayoutCreateInfo {
+        VkDescriptorSetLayoutCreateInfo                      layout_create_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        UnorderedMap<uint, VulkanDescriptorSetLayoutBinding> bindings{};
+        bool                                                 is_bindless = false;
+        VkDescriptorSetLayoutBinding&                        operator[](uint _binding) { return bindings[_binding].binding; }
+        auto                                                 TryEmplaceBinding(uint _binding, VkDescriptorSetLayoutBinding&& _binding_info) { return bindings.try_emplace(_binding, std::move(_binding_info)); }
+    };
+
+    struct VulkanDescriptorInfo {
+        /** offset in current descriptor set */
+        uint offset;
+        /** index in ArrayArguments */
+        uint param_idx;
+        /** index in descinfo arrays */
+        uint info_idx;
+    };
+    struct DescBufferOffsetInfo {
+        uint                set;
+        VkPipelineBindPoint bind_point;
+        VkPipelineLayout    layout;
+        uint                buf_idx;
+        uint64              offset;
+    };
+    struct VulkanDescriptorSetBinder {
+        Array<VkWriteDescriptorSet>   writers;
+        Array<VulkanDescriptorInfo>   bind_infos;
+        Array<VkDescriptorImageInfo>  image_infos;
+        Array<VkDescriptorBufferInfo> buffer_infos;
+        VkPushDescriptorSetInfoKHR    push_info;
+        VkPipelineBindPoint           bind_point;
+
+        struct BindingInfo {
+            uint64 offset;    //set offset in descriptor buffer
+            uint64 src_handle;//cpu handle in global buffer
+
+            uint binding;
+        };
+        Array<BindingInfo> binding_infos;
+        uint64             size;//size in descriptor buffer
+        uint64             pipeline_offset;
+        uint               desc_idx;
+    };
+
+    struct VulkanBindlessSetArray {
+        //index in ArrayArguments
+        uint param_idx;
+        //descriptor buffer index
+        uint desc_idx;
+    };
+
+    struct VulkanBindlessSetImage {
+        //index in ArrayArguments
+        uint param_idx;
+        //descriptor buffer index
+        uint desc_idx;
+    };
+
+    struct VulkanBindlessSetSampler {
+        //index in ArrayArguments
+        uint param_idx;
+        //descriptor buffer index
+        uint desc_idx;
+    };
+
+    struct VulkanPipelineParamBinder {
+        UnorderedMap<uint, std::variant<VulkanDescriptorSetBinder, VulkanBindlessSetArray, VulkanBindlessSetImage, VulkanBindlessSetSampler>> set_binders;
+        VkPushConstantsInfoKHR                                                                                                                push_constants_info;
+        //descriptor buffer bind template
+        Array<VkDescriptorBufferBindingInfoEXT> desc_buffers;
+        //set offsets in descriptor buffers
+        Array<DescBufferOffsetInfo> desc_buffer_offsets;
+    };
 
     class VulkanEnumTranslator final {
     public:
@@ -558,6 +635,10 @@ namespace Moer::Render {
                     return VK_PIPELINE_BIND_POINT_GRAPHICS;
             }
         }
+        void InitPipelineLayout(UnorderedMap<uint, struct VulkanDescriptorSetLayoutCreateInfo>&&, std::optional<VkPushConstantRange> _push_constant_range = std::nullopt);
+
+    public:
+        UniquePtr<struct VulkanPipelineParamBinder> bind_template;
 
     protected:
         friend VulkanDevice;
@@ -567,8 +648,7 @@ namespace Moer::Render {
         Moer::Render::VulkanDescriptorSetsLayout* m_descriptor_sets_layout;
         // resource cache
         VulkanPipelineResourceCache* m_pipeline_state_cache;
-
-        EType m_type;
+        EType                        m_type;
     };
 
     class VulkanRHIGraphicsPipelineState final : public RHIGfxPso, public VulkanPipelineState {
@@ -705,7 +785,7 @@ namespace Moer::Render {
         virtual ~VulkanBuffer();
         virtual void Destroy() override;
         VulkanBuffer(const BufferInfo& _info, VulkanDevice& _device);
-        VulkanBuffer(const BufferInfo& _info, VulkanDevice& _device, VkBuffer _handle, VmaAllocation _alloc, bool _defer_destroy);
+        VulkanBuffer(const BufferInfo& _info, VulkanDevice& _device, VkBuffer _handle, VmaAllocation _alloc, bool _defer_destroy, bool _get_address = false);
         uint64                     DeviceAddress() const;
         inline const VmaAllocation GetAllocation() const {
             return m_alloc.alloc;
@@ -788,7 +868,7 @@ namespace Moer::Render {
             }
             return -1;
         }
-        UnorderedMap<VkTextureDescKey, uint, VkTextureDescKey::Hasher> m_descriptor_indices;
+        UnorderedMap<VkTextureDescKey, uint64, VkTextureDescKey::Hasher> m_descriptor_indices;
 
     private:
         void Destroy() override;
@@ -825,7 +905,9 @@ namespace Moer::Render {
         //call on update
         void CmdUpdate(Array<TextureUpdateInfo>&& _textures_allocated, Array<BufferUpdateInfo>&& _buffers_allocated);
         //call on frame end free
-        void OnFree(Array<uint>&& _slots_freed, Array<uint>&& _textures_freed, Array<uint>&& _buffers_freed);
+        void OnFree(const Array<uint>& _slots_freed, const Array<uint>& _textures_freed, const Array<uint>& _buffers_freed);
+
+        uint64 ArrayHandle() const override { return (uint64)bindless_array_buffer; }
 
     public:
         VulkanBuffer* bindless_array_buffer;

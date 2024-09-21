@@ -180,14 +180,14 @@ struct TextureHandle{\
 #define BINDLESS_ACCEL(Space) \
   [[vk::binding(0, Space)]] RaytracingAccelerationStructure gaccelg__114514_bdls[];
 
-#define BINDLESS_BINDINGS(BufferSpace, TextureSpace, AccelSpace) \
+#define BINDLESS_BINDINGS(BufferSpace, TextureSpace, SamplerSpace, AccelSpace) \
 [[vk::binding(0, BufferSpace)]] StructuredBuffer<uint> g__array_114514_bdls;\
 [[vk::binding(1, BufferSpace)]] ByteAddressBuffer gbuffer__114514_bdls[];\
-[[vk::binding(0, TextureSpace)]] SamplerState gsampler__114514_bdls[256]; \
-DEFINE_TEXTURE_TYPE_AND_FORMATS_SLOTS(Texture1D, 256, TextureSpace)\
-DEFINE_TEXTURE_TYPE_AND_FORMATS_SLOTS(Texture2D, 256, TextureSpace)\
-DEFINE_TEXTURE_TYPE_AND_FORMATS_SLOTS(Texture3D, 256, TextureSpace)\
-DEFINE_TEXTURE_TYPE_AND_FORMATS_SLOTS(TextureCube, 256, TextureSpace)\
+[[vk::binding(0, SamplerSpace)]] SamplerState gsampler__114514_bdls[]; \
+DEFINE_TEXTURE_TYPE_AND_FORMATS_SLOTS(Texture1D, 0, TextureSpace)\
+DEFINE_TEXTURE_TYPE_AND_FORMATS_SLOTS(Texture2D, 0, TextureSpace)\
+DEFINE_TEXTURE_TYPE_AND_FORMATS_SLOTS(Texture3D, 0, TextureSpace)\
+DEFINE_TEXTURE_TYPE_AND_FORMATS_SLOTS(TextureCube, 0, TextureSpace)\
 BINDLESS_ACCEL(AccelSpace)\
 VK_DESCRIPTOR_HEAP(INNER_GENERATE_TEXTURE_TYPE_FETCH, INNER_GENERATE_BUFFER_FETCH)\
 DX_DESCRIPTOR_HEAP(INNER_GENERATE_TEXTURE_TYPE_FETCH, INNER_GENERATE_BUFFER_FETCH)\

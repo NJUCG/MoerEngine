@@ -853,6 +853,8 @@ namespace Moer::Render {
         virtual void FreeTexture(uint _handle) = 0;
         virtual void FreeBuffer(uint _handle) = 0;
 
+        virtual uint64 ArrayHandle() const = 0;
+
     protected:
         friend class CommandList;
         friend class UpdateBindlessArrayCmd;
@@ -2851,7 +2853,7 @@ namespace Moer::Render {
 
     struct PipelineHandle {
         std::variant<VkPipelineHandle, D3DPipelineHandle> handle;
-        Array<uint64>                                     binding_infos;
+        // Array<uint64>                                     binding_infos;
         UnorderedMap<uint64, uint>                        hash_2_info_index;
         uint64                                            valid_bits   = 0;
         int                                               constant_idx = -1;
