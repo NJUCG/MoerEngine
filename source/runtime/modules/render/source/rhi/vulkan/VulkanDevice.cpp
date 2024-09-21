@@ -131,6 +131,7 @@ namespace Moer::Render {
         std::filesystem::path      layer_path(vk_layer_path);
         if (std::filesystem::exists(layer_path)) {
             Platform::SetEnv("VK_LAYER_PATH", MOER_XSTR(MOER_VK_LAYER_PATH));
+            LOG_INFO("Set VK_LAYER_PATH to {}", MOER_XSTR(MOER_VK_LAYER_PATH));
         }
 
         const auto instance_layers = [&]() {
