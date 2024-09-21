@@ -435,7 +435,13 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> result, const ShaderParam
             }else if (binding.descriptor_type == SPV_REFLECT_DESCRIPTOR_TYPE_SAMPLER) {
                 SetZeroIfEmpty(bdls_param.sampler);
                 target = &bdls_param.sampler.value();
-            }else{
+            }
+            else if (binding.descriptor_type == SPV_REFLECT_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR) {
+                    SetZeroIfEmpty(bdls_param.acceleration_structure);
+                    target = &bdls_param.acceleration_structure.value();
+            }
+            else{
+                LOG_INFO("unknown bindless type {}", uint(binding.descriptor_type));
                 assert(false && "unknown bindless type");
             }
             target->set = binding.set;

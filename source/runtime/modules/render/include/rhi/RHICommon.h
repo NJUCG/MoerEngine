@@ -1126,6 +1126,7 @@ namespace Moer {
             std::optional<Bindless> buffer;
             std::optional<Bindless> image;
             std::optional<Bindless> sampler;
+            std::optional<Bindless> acceleration_structure;
         };
         struct Resources {
             std::variant<Resource, Constant> data;

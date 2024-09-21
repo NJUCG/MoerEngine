@@ -21,6 +21,7 @@
 #include "rhi/RHIResourceInitilizer.h"
 #include "rhi/vulkan/VulkanRHI.h"
 #include "log/LogSystem.h"
+#include "vulkan/vulkan_core.h"
 
 #include <memory>
 #include <mutex>
@@ -879,7 +880,6 @@ namespace Moer::Render {
 
     void VulkanPipelineState::InitPipelineLayout(UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>&& _descriptor_set_layouts, std::optional<VkPushConstantRange> _push_constant_range){
         VkPipelineLayoutCreateInfo pipeline_layout_ci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-        pipeline_layout_ci.setLayoutCount         = static_cast<uint32_t>(_descriptor_set_layouts.size());
         
         bind_template = MakeUnique<VulkanPipelineParamBinder>();
         bind_template->set_binders.rehash(_descriptor_set_layouts.size());
@@ -895,6 +895,14 @@ namespace Moer::Render {
         uint buffer_descriptor_buffer_idx = invalid_descriptor_buffer_idx;
         uint sampler_descriptor_buffer_idx = invalid_descriptor_buffer_idx;
         uint global_descriptor_buffer_idx = invalid_descriptor_buffer_idx;
+
+        VkDescriptorSetLayout empty_layout = VK_NULL_HANDLE;
+        VkDescriptorSetLayoutCreateInfo empty_layout_ci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        empty_layout_ci.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
+        empty_layout_ci.bindingCount = 0;
+        empty_layout_ci.pBindings = nullptr;
+
+        vkCreateDescriptorSetLayout(m_device->GetDevice(), &empty_layout_ci, nullptr, &empty_layout);
 
         //precompute array sizes
         for (auto& [set, layout] : _descriptor_set_layouts) {
@@ -942,8 +950,16 @@ namespace Moer::Render {
         descriptor_buffers.resize(descriptor_buffer_count);
         desc_buffer_offsets.reserve(descriptor_buffer_count);
         
-
-        descriptor_set_layouts.resize(total_binding_count);
+        //get max set index
+        uint max_set_idx = 0;
+        for (const auto& [set, layout] : _descriptor_set_layouts) {
+            max_set_idx = std::max(max_set_idx, set);
+        }
+        if (_descriptor_set_layouts.empty()) {
+            max_set_idx = 0;
+        }
+        pipeline_layout_ci.setLayoutCount         = _descriptor_set_layouts.empty() ? 0 : max_set_idx + 1;
+        descriptor_set_layouts.resize(pipeline_layout_ci.setLayoutCount, VK_NULL_HANDLE);
         descriptor_set_layout_bindings.resize(total_binding_count);
         total_binding_count = 0;
 
@@ -1079,6 +1095,11 @@ namespace Moer::Render {
             }, binder);
 
         }
+        for (auto& layout : descriptor_set_layouts) {
+            if (layout == VK_NULL_HANDLE) {
+                layout = empty_layout;
+            }
+        }
         pipeline_layout_ci.pSetLayouts = descriptor_set_layouts.data();
         pipeline_layout_ci.pushConstantRangeCount = _push_constant_range.has_value() ? 1 : 0;
         pipeline_layout_ci.pPushConstantRanges = _push_constant_range.has_value() ? &_push_constant_range.value() : nullptr;
@@ -1145,6 +1166,8 @@ namespace Moer::Render {
                     _binder.push_info.set = set;
 
                     _binder.desc_idx = global_descriptor_buffer_idx;
+                    _binder.offset_idx = desc_buffer_offsets.size();
+
                     desc_buffer_offsets.emplace_back(
                         set,
                         GetPipelineBindPoint(),
@@ -1165,8 +1188,11 @@ namespace Moer::Render {
 
         }
         for (auto& layout : descriptor_set_layouts) {
-            vkDestroyDescriptorSetLayout(m_device->GetDevice(), layout, nullptr);
+            if (layout != empty_layout) {
+                vkDestroyDescriptorSetLayout(m_device->GetDevice(), layout, nullptr);
+            }
         }
+        vkDestroyDescriptorSetLayout(m_device->GetDevice(), empty_layout, nullptr);
 
 
     }
@@ -1513,6 +1539,9 @@ namespace Moer::Render {
         alloc           = VK_NULL_HANDLE;
 
         VK_CHECK_RESULT(vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &current_handle, &alloc, nullptr));
+        buffer_info.size = buffer_ci.size;
+        buffer_info.stride = m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize;
+
         bindless_buffer_descs = MoerNew(VulkanBuffer)(buffer_info, *m_device, current_handle, alloc, false, true);
 
         buffer_ci.usage = VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
@@ -1520,6 +1549,8 @@ namespace Moer::Render {
         current_handle   = VK_NULL_HANDLE;
         alloc           = VK_NULL_HANDLE;
         VK_CHECK_RESULT(vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &current_handle, &alloc, nullptr));
+        buffer_info.size = buffer_ci.size;
+        buffer_info.stride = m_device->GetOptionalProperties().descriptor_buffer_properties.sampledImageDescriptorSize;
         bindless_texture_descs = MoerNew(VulkanBuffer)(buffer_info, *m_device, current_handle, alloc, false, true);
 
         for (uint i = 0; i < _max_size; i++) { numbers[i] = i; }//TODO: so fucking ugly

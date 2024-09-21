@@ -2466,7 +2466,7 @@ namespace Moer::Render {
                             }
                         }
                         //set desc buffer offset
-                        bind_template.desc_buffer_offsets[_binder.desc_idx].offset = descriptor_heap.current_offset;
+                        bind_template.desc_buffer_offsets[_binder.offset_idx].offset = descriptor_heap.current_offset;
                         descriptor_heap.IncrementOffset(_binder.size);
                         // device.vk_cmd_push_descriptor_set(command_buffer, _binder.bind_point, _binder.push_info.layout, _binder.push_info.set, _binder.writers.size(), _binder.writers.data());
                     }

@@ -550,6 +550,7 @@ namespace Moer::Render {
         {
             VkDescriptorImageInfo  image_info{.imageView = texture->GetView(_in_image->mip_level, _in_image->num_mips), .imageLayout = _layout};
             VkDescriptorGetInfoEXT desc_info{VK_STRUCTURE_TYPE_DESCRIPTOR_GET_INFO_EXT};
+            desc_info.type                = _layout == VK_IMAGE_LAYOUT_GENERAL ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE : VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
             desc_info.data.pSampledImage = &image_info;
             std::lock_guard<std::mutex> lock(m_mutex);
             if (image_free_list.empty()) {
@@ -559,7 +560,7 @@ namespace Moer::Render {
                 idx = image_free_list.back();
                 image_free_list.pop_back();
             }
-            m_device->GetDescriptorEXT(&desc_info, image_desc_stride, image_desc_data.data() + idx * image_desc_stride);
+            m_device->GetDescriptorEXT(&desc_info, image_desc_stride, image_desc_data.data() + idx * image_desc_stride + texture_desc_offset);
         }
         return idx * image_desc_stride + texture_desc_offset;
     }

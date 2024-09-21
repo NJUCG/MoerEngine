@@ -144,14 +144,23 @@ int main(int argc, const char** argv) {
         {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f}},
     };
     uint    indices[] = {0, 1, 2};
-    float4  color_red = {1, 0, 0, 1};
-    Sampler sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE);
+    float4  color_red = {1, 1, 1, 1};
+    Sampler sampler(SF_LINEAR, SAM_REPEAT);
     uint    bdls_tex_handle = bindless_array->AllocateTexture(font_tex, sampler);
 
     auto vertex_buffer = device.CreateBuffer<float>(3 * sizeof(Vertex) / sizeof(float), EBufferUsageFlags::VERTEX_BUFFER);
     auto index_buffer  = device.CreateBuffer<uint>(3, EBufferUsageFlags::INDEX_BUFFER);
     cmd_list.CopyFrom(std::span<byte>((byte*)vertices, sizeof(vertices)), vertex_buffer->GetView());
     cmd_list.CopyFrom(std::span<byte>((byte*)indices, sizeof(indices)), index_buffer->GetView());
+    TextureRef red_tex = device.CreateTexture(
+        Extent2D(1, 1),
+        PF_R8G8B8A8_SRGB,
+        ETextureUsageFlags::SAMPLED);
+
+    byte red_data[4] = {byte(255), byte(0), byte(0), byte(255)};
+    cmd_list.CopyFrom(std::span<byte>((byte*)&red_data, sizeof(red_data)), red_tex);
+    uint bdls_tex_handle_red = bindless_array->AllocateTexture(red_tex, sampler);
+
     cmd_list.UpdateBindlessArray(bindless_array);
     cmd_queue.Execute(cmd_list.Submit());
     cmd_queue.Sync();
@@ -188,9 +197,9 @@ int main(int argc, const char** argv) {
         }
         TestBindlessParam param;
         param.color          = color_red;
-        param.texture_handle = bdls_tex_handle;
-        cmd_list.Barriers(ReadTexture(font_tex, ETextureState::SAMPLE));
-        cmd_list.Gfx(rast_pipeline_constant_color, sampler, font_tex, bindless_array, param)
+        param.texture_handle = bdls_tex_handle_red;
+        cmd_list.Barriers(ReadTexture(red_tex, ETextureState::SAMPLE));
+        cmd_list.Gfx(rast_pipeline_constant_color, sampler, red_tex, bindless_array, param)
             .Draw(Rect2D(0, 0, resolution.x, resolution.y), std::move(draw_datas), ColorAttachment(output));
         cmd_queue.Execute(cmd_list.Submit());
         cmd_queue.Present(sc, output);
