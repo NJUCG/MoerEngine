@@ -148,3 +148,7 @@ int32_t Platform::GetProcessorCoreCount() {
 uint32_t Platform::GetCurrentThreadID() {
     return PlatformImplement::GetInstance()->GetCurrentThreadID();
 }
+
+void Platform::SetEnv(const char *_name, const char *_value){
+    PlatformImplement::GetInstance()->SetEnv(_name, _value);
+}

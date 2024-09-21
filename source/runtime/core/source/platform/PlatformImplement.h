@@ -13,6 +13,7 @@ public:
     virtual int32_t           GetProcessorCoreCountInGroup(uint32_t groupID)                                                   = 0;
     virtual int32_t           GetProcessorCoreCount()                                                                          = 0;
     virtual uint32_t          GetCurrentThreadID()                                                                             = 0;
+    virtual void              SetEnv(const char* _name, const char* _value)                                                    = 0;
 
     virtual const PlatformMemoryInfo& GetMemoryInfo() = 0;
 };

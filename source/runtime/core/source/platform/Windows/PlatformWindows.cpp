@@ -65,6 +65,10 @@ uint32_t WindowsPlatform::GetCurrentThreadID() {
     return ::GetCurrentThreadId();
 }
 
+void WindowsPlatform::SetEnv(const char* _name, const char* _value) {
+    SetEnvironmentVariableA(_name, _value);
+}
+
 const PlatformMemoryInfo& WindowsPlatform::GetMemoryInfo() {
     static PlatformMemoryInfo memory_info;
 

@@ -86,6 +86,7 @@ public:
     CORE_API static int32_t  GetProcessorCoreCountInGroup(uint32_t groupID);
     CORE_API static int32_t  GetProcessorCoreCount();
     CORE_API static uint32_t GetCurrentThreadID();
+    CORE_API static void     SetEnv(const char* _name, const char* _value);
 
     CORE_API static const PlatformMemoryInfo& GetMemoryInfo();
 };

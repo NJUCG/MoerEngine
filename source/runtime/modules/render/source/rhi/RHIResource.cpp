@@ -22,7 +22,7 @@ void RHIResource::Destroy() {
     //     //TODO: pending_deletings actual delete on render thread
     //     pending_deletings.Push(this);
     // }
-    delete this;
+    MoerDelete(this);
     // delete this;
 }
 

@@ -19,11 +19,18 @@
 #include "vk_mem_alloc.h"
 #include "vulkan/vulkan_core.h"
 #include <algorithm>
+#include <filesystem>
 #include <optional>
 #include <shared_mutex>
 #include <spirv_reflect.h>
 #include <variant>
 #include <config.h>
+#include <platform/Platform.h>
+
+#ifndef MOER_STR 
+#define MOER_STR(x) #x
+#define MOER_XSTR(x) MOER_STR(x)
+#endif
 
 namespace Moer::Render {
     namespace VkUtil = Moer::RHI::Vulkan::Util;
@@ -144,6 +151,12 @@ namespace Moer::Render {
 
         VkDebugUtilsMessengerCreateInfoEXT debug_create_info{};
 
+        constexpr std::string_view vk_layer_path = MOER_XSTR(MOER_VK_LAYER_PATH);
+        std::filesystem::path     layer_path(vk_layer_path);
+        if (std::filesystem::exists(layer_path)) {
+            Platform::SetEnv("VK_LAYER_PATH", MOER_XSTR(MOER_VK_LAYER_PATH));
+        }
+
         const char* validation_layer_name = "VK_LAYER_KHRONOS_validation";
 
         if ([&](std::string_view _view) {
@@ -154,7 +167,7 @@ namespace Moer::Render {
                 bool validation_layer_present = false;
 
                 for (auto layer_property : instance_layer_properties) {
-                    if (_view.data() == layer_property.layerName) {
+                    if (std::strcmp( _view.data(), layer_property.layerName ) == 0) {
                         validation_layer_present = true;
                         break;
                     }

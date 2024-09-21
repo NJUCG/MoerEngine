@@ -56,7 +56,7 @@ target_link_libraries(${MODULE_NAME}
 # enable_sanitizer(${MODULE_NAME})
 if(WIN32)
 target_compile_definitions(${MODULE_NAME}
-    PUBLIC "VK_LAYER_PATH=${moer_third_party_dir}/VulkanSDK/binary/Windows")
+    PUBLIC "MOER_VK_LAYER_PATH=${moer_third_party_dir}/VulkanSDK/binary/Windows")
 elseif(LINUX)
 endif()
 
