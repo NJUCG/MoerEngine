@@ -98,12 +98,17 @@ namespace Moer::Render {
             uint compare = uint(_sampler.compare_function);
             return (uint(SF_Num) * uint(SAM_Num)) * compare + (uint(SF_Num)) * address + filter;
         }
-        void GetDescriptorEXT(const VkDescriptorGetInfoEXT* _descriptor_info, size_t _data_size, void* _p_data) const {
+
+    public:
+        void GetDescriptorEXT(const VkDescriptorGetInfoEXT* _descriptor_info, uint32 _data_size, void* _p_data) const {
             vkGetDescriptorEXT(m_device, _descriptor_info, _data_size, _p_data);
         };
-        void GetDescriptorSetLayoutBindingOffsetEXT(VkDescriptorSetLayout _layout, uint32_t _binding, uint64* _offset) const {
+        void GetDescriptorSetLayoutBindingOffsetEXT(VkDescriptorSetLayout _layout, uint32 _binding, uint64* _offset) const {
             vkGetDescriptorSetLayoutBindingOffsetEXT(m_device, _layout, _binding, _offset);
         };
+        void GetDescriptorSetLayoutSizeEXT(VkDescriptorSetLayout _layout, uint64* _layout_size_in_bytes) {
+            vkGetDescriptorSetLayoutSizeEXT(m_device, _layout, _layout_size_in_bytes);
+        }
 
     public:
         inline VkPhysicalDevice GetGpu() const {

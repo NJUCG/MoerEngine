@@ -94,15 +94,6 @@ namespace Moer::Render {
         } else if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
             LOG_ERROR(stream.str());
         }
-        if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT) {
-            LOG_DEBUG(stream.str());
-        } else if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT) {
-            LOG_INFO(stream.str());
-        } else if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
-            LOG_WARNING(stream.str());
-        } else if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
-            LOG_ERROR(stream.str());
-        }
 
         return VK_FALSE;
     }
@@ -218,63 +209,6 @@ namespace Moer::Render {
         volkLoadInstance(m_instance);
 
         if (b_validation_layer_enabled) SetupDebugUtilsMessengerEXT();
-    }
-
-    void VulkanDevice::CreateMemoryAllocator(VkInstance _instance, uint32 _api_version) {
-        VmaAllocatorCreateInfo alloc_create_info{};
-
-        VmaVulkanFunctions vma_functions{};
-        vma_functions.vkGetPhysicalDeviceProperties           = vkGetPhysicalDeviceProperties;
-        vma_functions.vkGetPhysicalDeviceMemoryProperties     = vkGetPhysicalDeviceMemoryProperties;
-        vma_functions.vkAllocateMemory                        = vkAllocateMemory;
-        vma_functions.vkFreeMemory                            = vkFreeMemory;
-        vma_functions.vkMapMemory                             = vkMapMemory;
-        vma_functions.vkUnmapMemory                           = vkUnmapMemory;
-        vma_functions.vkFlushMappedMemoryRanges               = vkFlushMappedMemoryRanges;
-        vma_functions.vkInvalidateMappedMemoryRanges          = vkInvalidateMappedMemoryRanges;
-        vma_functions.vkBindBufferMemory                      = vkBindBufferMemory;
-        vma_functions.vkBindImageMemory                       = vkBindImageMemory;
-        vma_functions.vkGetBufferMemoryRequirements           = vkGetBufferMemoryRequirements;
-        vma_functions.vkGetImageMemoryRequirements            = vkGetImageMemoryRequirements;
-        vma_functions.vkCreateBuffer                          = vkCreateBuffer;
-        vma_functions.vkDestroyBuffer                         = vkDestroyBuffer;
-        vma_functions.vkCreateImage                           = vkCreateImage;
-        vma_functions.vkDestroyImage                          = vkDestroyImage;
-        vma_functions.vkCmdCopyBuffer                         = vkCmdCopyBuffer;
-        vma_functions.vkGetBufferMemoryRequirements2KHR       = vkGetBufferMemoryRequirements2;
-        vma_functions.vkGetImageMemoryRequirements2KHR        = vkGetImageMemoryRequirements2;
-        vma_functions.vkBindBufferMemory2KHR                  = vkBindBufferMemory2;
-        vma_functions.vkBindImageMemory2KHR                   = vkBindImageMemory2;
-        vma_functions.vkGetPhysicalDeviceMemoryProperties2KHR = vkGetPhysicalDeviceMemoryProperties2;
-
-        alloc_create_info.vulkanApiVersion = _api_version;
-
-        alloc_create_info.instance         = _instance;
-        alloc_create_info.physicalDevice   = m_gpu;
-        alloc_create_info.device           = m_device;
-        alloc_create_info.pVulkanFunctions = &vma_functions;
-
-        //capable of using buffer via device address(64bit) passed to shader.
-        alloc_create_info.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
-        if (m_device_info.optional_extensions.m_has_memory_priority) { alloc_create_info.flags |= VMA_ALLOCATOR_CREATE_EXT_MEMORY_PRIORITY_BIT; }
-
-        VK_CHECK_RESULT(vmaCreateAllocator(&alloc_create_info, &m_allocator));
-
-        LOG_INFO("Vulkan Memory Allocator initialized with api version: {}.", alloc_create_info.vulkanApiVersion);
-    }
-
-    void VulkanDevice::Destroy() {
-        // for (auto& cmd_allocator : m_command_allocators) {
-        //     CHECK_AND_DELETE(cmd_allocator);
-        // }
-        compute_queue.reset();
-        transfer_queue.reset();
-        gfx_queue.reset();
-        m_command_allocators.clear();
-        CHECK_AND_DELETE(m_descriptor_allocator);
-        FlushDeferredReleases();
-        vmaDestroyAllocator(m_allocator);
-        // Assertion failed: m_pMetadata->IsEmpty() && "Some allocations were not freed before destruction of this memory block!"
     }
 
     /**
@@ -439,6 +373,7 @@ namespace Moer::Render {
             device_create_info.pEnabledFeatures = &m_device_info.core_features.core_1_0;
         }
         VK_CHECK_RESULT(vkCreateDevice(m_gpu, &device_create_info, nullptr, &m_device));
+        volkLoadDevice(m_device);
 
         vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.graphics.value(), 0, &m_graphics_queue);
         vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.present.value(), 0, &m_present_queue);
@@ -448,9 +383,49 @@ namespace Moer::Render {
         gfx_queue      = MakeUnique<VkCommandQueue>(*this, EQueueType::Graphics);
         compute_queue  = MakeUnique<VkCommandQueue>(*this, EQueueType::Compute);
         transfer_queue = MakeUnique<VkCommandQueue>(*this, EQueueType::Copy);
+    }
 
-        // select device procs
-        SetupProcs();
+    void VulkanDevice::CreateMemoryAllocator(VkInstance _instance, uint32 _api_version) {
+        VmaAllocatorCreateInfo alloc_create_info{};
+
+        VmaVulkanFunctions vma_functions{};
+        vma_functions.vkGetPhysicalDeviceProperties           = vkGetPhysicalDeviceProperties;
+        vma_functions.vkGetPhysicalDeviceMemoryProperties     = vkGetPhysicalDeviceMemoryProperties;
+        vma_functions.vkAllocateMemory                        = vkAllocateMemory;
+        vma_functions.vkFreeMemory                            = vkFreeMemory;
+        vma_functions.vkMapMemory                             = vkMapMemory;
+        vma_functions.vkUnmapMemory                           = vkUnmapMemory;
+        vma_functions.vkFlushMappedMemoryRanges               = vkFlushMappedMemoryRanges;
+        vma_functions.vkInvalidateMappedMemoryRanges          = vkInvalidateMappedMemoryRanges;
+        vma_functions.vkBindBufferMemory                      = vkBindBufferMemory;
+        vma_functions.vkBindImageMemory                       = vkBindImageMemory;
+        vma_functions.vkGetBufferMemoryRequirements           = vkGetBufferMemoryRequirements;
+        vma_functions.vkGetImageMemoryRequirements            = vkGetImageMemoryRequirements;
+        vma_functions.vkCreateBuffer                          = vkCreateBuffer;
+        vma_functions.vkDestroyBuffer                         = vkDestroyBuffer;
+        vma_functions.vkCreateImage                           = vkCreateImage;
+        vma_functions.vkDestroyImage                          = vkDestroyImage;
+        vma_functions.vkCmdCopyBuffer                         = vkCmdCopyBuffer;
+        vma_functions.vkGetBufferMemoryRequirements2KHR       = vkGetBufferMemoryRequirements2;
+        vma_functions.vkGetImageMemoryRequirements2KHR        = vkGetImageMemoryRequirements2;
+        vma_functions.vkBindBufferMemory2KHR                  = vkBindBufferMemory2;
+        vma_functions.vkBindImageMemory2KHR                   = vkBindImageMemory2;
+        vma_functions.vkGetPhysicalDeviceMemoryProperties2KHR = vkGetPhysicalDeviceMemoryProperties2;
+
+        alloc_create_info.vulkanApiVersion = _api_version;
+
+        alloc_create_info.instance         = _instance;
+        alloc_create_info.physicalDevice   = m_gpu;
+        alloc_create_info.device           = m_device;
+        alloc_create_info.pVulkanFunctions = &vma_functions;
+
+        //capable of using buffer via device address(64bit) passed to shader.
+        alloc_create_info.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+        if (m_device_info.optional_extensions.m_has_memory_priority) { alloc_create_info.flags |= VMA_ALLOCATOR_CREATE_EXT_MEMORY_PRIORITY_BIT; }
+
+        VK_CHECK_RESULT(vmaCreateAllocator(&alloc_create_info, &m_allocator));
+
+        LOG_INFO("Vulkan Memory Allocator initialized with api version: {}.", alloc_create_info.vulkanApiVersion);
     }
 
     void VulkanDevice::CreateDescriptorAllocator() {
@@ -461,6 +436,20 @@ namespace Moer::Render {
     void VulkanDevice::CreateDescriptorHeap() {
         new (&m_global_descriptor_heap) VulkanDescriptorHeap(*this);
         LOG_INFO("VulkanRHI: Descriptor Heap initialized.");
+    }
+
+    void VulkanDevice::Destroy() {
+        // for (auto& cmd_allocator : m_command_allocators) {
+        //     CHECK_AND_DELETE(cmd_allocator);
+        // }
+        compute_queue.reset();
+        transfer_queue.reset();
+        gfx_queue.reset();
+        m_command_allocators.clear();
+        CHECK_AND_DELETE(m_descriptor_allocator);
+        FlushDeferredReleases();
+        vmaDestroyAllocator(m_allocator);
+        // Assertion failed: m_pMetadata->IsEmpty() && "Some allocations were not freed before destruction of this memory block!"
     }
 
     Set<std::string> VulkanDevice::GetGpuExtensions(VkPhysicalDevice _gpu) {
@@ -1042,8 +1031,8 @@ namespace Moer::Render {
             m_device, VK_NULL_HANDLE, 1, &pipeline_create_info, nullptr, &vk_pso->m_pipeline));
 
         return PipelineHandle{
-            .handle            = VkPipelineHandle{reinterpret_cast<uint64>(vk_pso)},
-            .binding_infos     = std::move(reflect_flags),
+            .handle = VkPipelineHandle{reinterpret_cast<uint64>(vk_pso)},
+            // .binding_infos     = std::move(reflect_flags),
             .hash_2_info_index = std::move(hash_2_idx),
             .valid_bits        = valid_bits,
             .constant_idx      = constant_idx};
@@ -1130,8 +1119,8 @@ namespace Moer::Render {
         VK_CHECK_RESULT(
             vkCreateComputePipelines(m_device, VK_NULL_HANDLE, 1, &pipeline_create_info, nullptr, &vk_pso->m_pipeline));
         return PipelineHandle{
-            .handle            = VkPipelineHandle{reinterpret_cast<uint64>(vk_pso)},
-            .binding_infos     = std::move(reflect_flags),
+            .handle = VkPipelineHandle{reinterpret_cast<uint64>(vk_pso)},
+            // .binding_infos     = std::move(reflect_flags),
             .hash_2_info_index = std::move(hash_2_idx),
             .valid_bits        = valid_bits,
             .constant_idx      = constant_idx};

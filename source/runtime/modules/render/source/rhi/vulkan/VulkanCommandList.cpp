@@ -2474,13 +2474,13 @@ namespace Moer::Render {
                 binder);
         }
         if (!bind_template.desc_buffers.empty()) {
-            device.vk_cmd_bind_descriptor_buffers(command_buffer, bind_template.desc_buffers.size(), bind_template.desc_buffers.data());
+            vkCmdBindDescriptorBuffersEXT(command_buffer, bind_template.desc_buffers.size(), bind_template.desc_buffers.data());
         }
 
         for (const auto& desc_info : bind_template.desc_buffer_offsets) {
             uint   buffer_idx = desc_info.buf_idx;
             uint64 offset     = desc_info.offset;
-            device.vk_cmd_set_descriptor_buffer_offsets(command_buffer, desc_info.bind_point, desc_info.layout, desc_info.set, 1, &buffer_idx, &offset);
+            vkCmdSetDescriptorBufferOffsetsEXT(command_buffer, desc_info.bind_point, desc_info.layout, desc_info.set, 1, &buffer_idx, &offset);
         }
 
         if (bind_template.push_constants_info.size > 0) {
