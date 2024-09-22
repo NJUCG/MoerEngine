@@ -109,7 +109,7 @@ template <typename T> struct Texture3DSampleHandle {
     uint tex_idx = tex_handle >> 8 ; uint sampler_idx = tex_handle & 0xff;\
     TextureType<NativeType> tex = TextureType<NativeType>(                                            \
         g##TextureType##NativeType##__114514_bdls[NonUniformResourceIndex(                   \
-            tex_handle)]);    \
+            tex_idx)]);    \
             return tex.Sample(gsampler__114514_bdls[NonUniformResourceIndex(sampler_idx)], uv, offset);                                     \
   }
 

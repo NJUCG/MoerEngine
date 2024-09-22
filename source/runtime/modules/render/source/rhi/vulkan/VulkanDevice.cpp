@@ -21,6 +21,7 @@
 
 #include "Core.h"
 #include "taskgraph/ThreadManager.h"
+#include "vulkan/vulkan_core.h"
 
 #include <vk_mem_alloc.h>
 
@@ -78,6 +79,10 @@ namespace Moer::Render {
 
         CreateDescriptorAllocator();
         CreateDescriptorHeap();
+        //create empty descriptor set layout
+        VkDescriptorSetLayoutCreateInfo descriptor_set_layout_create_info{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        descriptor_set_layout_create_info.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
+        vkCreateDescriptorSetLayout(m_device, &descriptor_set_layout_create_info, VK_NULL_HANDLE, &empty_descriptor_set_layout);
     }
 
     VulkanDevice::~VulkanDevice() { Destroy(); }
@@ -462,6 +467,8 @@ namespace Moer::Render {
         CHECK_AND_DELETE(m_descriptor_allocator);
         FlushDeferredReleases();
         vmaDestroyAllocator(m_allocator);
+
+        vkDestroyDescriptorSetLayout(m_device, empty_descriptor_set_layout, VK_NULL_HANDLE);
         // Assertion failed: m_pMetadata->IsEmpty() && "Some allocations were not freed before destruction of this memory block!"
     }
 
@@ -657,7 +664,7 @@ namespace Moer::Render {
                             auto& temp_binding                        = array_set[buffer_slot];
                             temp_binding.binding                      = buffer_slot;
                             temp_binding.descriptorType               = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                            temp_binding.descriptorCount              = 0;
+                            temp_binding.descriptorCount              = 5000;
                             temp_binding.stageFlags |= _stage;
                             temp_binding.pImmutableSamplers = nullptr;
                         }
@@ -670,7 +677,7 @@ namespace Moer::Render {
                             texture_set.is_bindless      = true;
                             temp_binding.binding         = texture_slot;
                             temp_binding.descriptorType  = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-                            temp_binding.descriptorCount = 0;
+                            temp_binding.descriptorCount = 5000;
                             temp_binding.stageFlags |= _stage;
                             temp_binding.pImmutableSamplers = nullptr;
 
@@ -684,7 +691,7 @@ namespace Moer::Render {
                             sampler_set.is_bindless                      = true;
                             temp_binding.binding                         = sampler_slot;
                             temp_binding.descriptorType                  = VK_DESCRIPTOR_TYPE_SAMPLER;
-                            temp_binding.descriptorCount                 = 0;
+                            temp_binding.descriptorCount                 = 256;
                             temp_binding.stageFlags |= _stage;
                             temp_binding.pImmutableSamplers = nullptr;
                             _max_set                        = uint(std::max(int(_max_set), int(bdls_array.sampler.value().set)));

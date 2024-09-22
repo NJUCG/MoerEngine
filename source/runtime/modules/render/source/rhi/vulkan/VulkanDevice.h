@@ -17,6 +17,7 @@
 #include "VulkanDeviceProperty.h"
 #include "VulkanDescriptor.h"
 #include "VulkanCommand.h"
+#include "vulkan/vulkan_core.h"
 
 #include <vk_mem_alloc.h>
 
@@ -147,6 +148,9 @@ namespace Moer::Render {
         inline QueueFamilyIndices GetQueueFamilyIndices() const {
             return m_device_info.queue_family_indices;
         }
+        inline VkDescriptorSetLayout GetEmptyDescriptorSetLayout() const {
+            return empty_descriptor_set_layout;
+        }
         uint GetQueueFamilyIndex(VkQueueFlags _queue_flags) {
             return GetQueueFamilyIndex(m_device_info.queue_family_props, _queue_flags);
         }
@@ -181,6 +185,7 @@ namespace Moer::Render {
         VkQueue          m_compute_queue    = VK_NULL_HANDLE;
         VkQueue          m_raytracing_queue = VK_NULL_HANDLE;
         VkQueue          m_transfer_queue   = VK_NULL_HANDLE;
+        VkDescriptorSetLayout empty_descriptor_set_layout = VK_NULL_HANDLE;
         EventRef         init_event{};
 
         VulkanDeviceInfo m_device_info{};

@@ -860,6 +860,12 @@ namespace Moer::Render {
             vkDestroyPipeline(m_device->GetDevice(), m_pipeline, nullptr);
             m_pipeline = VK_NULL_HANDLE;
         }
+        for (auto& layout : descriptor_set_layouts) {
+            if (layout) {
+                vkDestroyDescriptorSetLayout(m_device->GetDevice(), layout, nullptr);
+                layout = VK_NULL_HANDLE;
+            }
+        }
         CHECK_AND_DELETE(m_descriptor_sets_layout);
         CHECK_AND_DELETE(m_pipeline_state_cache);
     }
@@ -887,7 +893,6 @@ namespace Moer::Render {
         Array<DescBufferOffsetInfo>& desc_buffer_offsets = bind_template->desc_buffer_offsets;
         
         // VkDescriptorSetLayoutCreateInfo descriptor_set_layout_ci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        Array<VkDescriptorSetLayout> descriptor_set_layouts;
         Array<VkDescriptorSetLayoutBinding> descriptor_set_layout_bindings;
         uint total_binding_count = 0;
         uint descriptor_buffer_count = 0;
@@ -896,13 +901,7 @@ namespace Moer::Render {
         uint sampler_descriptor_buffer_idx = invalid_descriptor_buffer_idx;
         uint global_descriptor_buffer_idx = invalid_descriptor_buffer_idx;
 
-        VkDescriptorSetLayout empty_layout = VK_NULL_HANDLE;
-        VkDescriptorSetLayoutCreateInfo empty_layout_ci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        empty_layout_ci.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
-        empty_layout_ci.bindingCount = 0;
-        empty_layout_ci.pBindings = nullptr;
-
-        vkCreateDescriptorSetLayout(m_device->GetDevice(), &empty_layout_ci, nullptr, &empty_layout);
+        VkDescriptorSetLayout empty_layout = m_device->GetEmptyDescriptorSetLayout();
 
         //precompute array sizes
         for (auto& [set, layout] : _descriptor_set_layouts) {
@@ -1189,11 +1188,9 @@ namespace Moer::Render {
         }
         for (auto& layout : descriptor_set_layouts) {
             if (layout != empty_layout) {
-                vkDestroyDescriptorSetLayout(m_device->GetDevice(), layout, nullptr);
+                // vkDestroyDescriptorSetLayout(m_device->GetDevice(), layout, nullptr);
             }
         }
-        vkDestroyDescriptorSetLayout(m_device->GetDevice(), empty_layout, nullptr);
-
 
     }
 
@@ -1560,6 +1557,7 @@ namespace Moer::Render {
         {
             uint sampler_stride = m_device->GetOptionalProperties().descriptor_buffer_properties.samplerDescriptorSize;
             void* mapped_data;
+            Array<byte> data_array(m_device->GetOptionalProperties().descriptor_buffer_properties.samplerDescriptorSize * VulkanDevice::bindless_sampler_cnt);
             vmaMapMemory(m_device->GetVmaAllocator(), bindless_texture_descs->GetAllocation(), &mapped_data);
             const auto* samplers = m_device->GetImmutableSamplers();
             byte* mapped_data_byte = reinterpret_cast<byte*>(mapped_data);
@@ -1569,8 +1567,9 @@ namespace Moer::Render {
             VkDescriptorDataEXT& descriptor_data = descriptor_info.data;
             for(uint i = 0; i < VulkanDevice::bindless_sampler_cnt; i++){
                 descriptor_data.pSampler = i >= m_device->ImmutableSamplerCount() ? &samplers[0] : &samplers[i];
-                m_device->GetDescriptorEXT(&descriptor_info, sampler_stride, mapped_data_byte + i * sampler_stride);
+                m_device->GetDescriptorEXT(&descriptor_info, sampler_stride, data_array.data() + i * sampler_stride);
             }
+            std::memcpy(mapped_data_byte, data_array.data(), data_array.size());
             vmaUnmapMemory(m_device->GetVmaAllocator(), bindless_texture_descs->GetAllocation());
             vmaFlushAllocation(m_device->GetVmaAllocator(), bindless_texture_descs->GetAllocation(), 0, VulkanDevice::bindless_sampler_cnt * sampler_stride);
         }
@@ -1617,18 +1616,21 @@ namespace Moer::Render {
         descriptor_info.data.pStorageBuffer = &address_info;
         descriptor_info.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         {
-            void* mapped_data;
-            vmaMapMemory(m_device->GetVmaAllocator(), bindless_buffer_descs->GetAllocation(), &mapped_data);
+            Array<byte> buffer_data(m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize);
+
+            byte* mapped_data;
+            vmaMapMemory(m_device->GetVmaAllocator(), bindless_buffer_descs->GetAllocation(), (void**)&mapped_data);
             m_device->GetDescriptorEXT(
                 &descriptor_info, 
                 m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize, 
-                mapped_data);
+                buffer_data.data());
+            std::memcpy(mapped_data, buffer_data.data(), buffer_data.size());
             vmaUnmapMemory(m_device->GetVmaAllocator(), bindless_buffer_descs->GetAllocation());
             vmaFlushAllocation(m_device->GetVmaAllocator(), bindless_buffer_descs->GetAllocation(), 0, m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize);
         }
 
 
-        textures_offset_in_set = m_device->GetOptionalProperties().descriptor_buffer_properties.samplerDescriptorSize * 256;
+        textures_offset_in_set = 0;
         vkDestroyDescriptorSetLayout(m_device->GetDevice(), buffer_desc_layout, VK_NULL_HANDLE);
 
     }
@@ -1700,7 +1702,10 @@ namespace Moer::Render {
             buffers_freed.push_back(handle.slot);
         }
     }
-
+    struct CopyPair{
+        uint src_idx;
+        uint dst_idx;
+    };
     void VulkanBindlessArray::CmdUpdate(Array<TextureUpdateInfo>&& _textures_allocated, Array<BufferUpdateInfo>&& _buffers_allocated) {
         //TODO: update the heap
         uint* mapped_data;
@@ -1725,7 +1730,10 @@ namespace Moer::Render {
         vmaFlushAllocation(m_device->GetVmaAllocator(), bindless_array_buffer->GetAllocation(), range_min * sizeof(uint), (range_max - range_min) * sizeof(uint));
 
         //update the descriptor set
-
+        Array<CopyPair> buffer_copies;
+        Array<CopyPair> texture_copies;
+        buffer_copies.reserve(_buffers_allocated.size());
+        texture_copies.reserve(_textures_allocated.size());
         std::sort(_buffers_allocated.begin(), _buffers_allocated.end(), [](const auto& a, const auto& b) { return a.slot < b.slot; });
         std::sort(_textures_allocated.begin(), _textures_allocated.end(), [](const auto& a, const auto& b) { return a.slot < b.slot; });
 
@@ -1733,11 +1741,11 @@ namespace Moer::Render {
         byte* mapped_image_descs;
         if (!_buffers_allocated.empty()) {
             vmaMapMemory(m_device->GetVmaAllocator(), bindless_buffer_descs->GetAllocation(), (void**)&mapped_buffer_descs);
-            mapped_buffer_descs += buffer_slot_offset;
+            mapped_buffer_descs += buffers_offset_in_set;
         };
         if (!_textures_allocated.empty()) {
             vmaMapMemory(m_device->GetVmaAllocator(), bindless_texture_descs->GetAllocation(), (void**)&mapped_image_descs);
-            mapped_image_descs += texture_slot_offset;
+            mapped_image_descs += textures_offset_in_set;
         }
 
         VkDescriptorGetInfoEXT     get_info{VK_STRUCTURE_TYPE_DESCRIPTOR_GET_INFO_EXT};
@@ -1745,21 +1753,29 @@ namespace Moer::Render {
         uint                       storage_buffer_desc_size = m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize;
         uint                       sampled_image_desc_size  = m_device->GetOptionalProperties().descriptor_buffer_properties.sampledImageDescriptorSize;
         
+        VulkanDescriptorHeap& g_heap = m_device->GetGlobalDescriptorHeap();
+        
         for (const auto& buffer : _buffers_allocated) {
             VulkanBuffer* vk_buffer      = ResourceCast(buffer.buffer);
-            address_info.address         = vk_buffer->DeviceAddress();
-            address_info.range           = vk_buffer->GetByteSize();
-            get_info.data.pStorageBuffer = &address_info;
-            m_device->GetDescriptorEXT(&get_info, storage_buffer_desc_size, mapped_buffer_descs + buffer.array_idx * storage_buffer_desc_size);
+            uint src_idx = g_heap.GetBufferDescIdx(vk_buffer);
+            buffer_copies.push_back({src_idx, buffer.slot});      
         }
         VkDescriptorImageInfo image_info{};
 
         for (const auto& texture : _textures_allocated) {
             VulkanTexture* vk_texture   = ResourceCast(texture.texture);
-            image_info.imageView        = vk_texture->GetView(0, vk_texture->GetNumMips());
-            image_info.imageLayout      = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            get_info.data.pSampledImage = &image_info;
-            m_device->GetDescriptorEXT(&get_info, sampled_image_desc_size, mapped_image_descs + texture.array_idx * sampled_image_desc_size);
+            TextureView   view(vk_texture,0, vk_texture->GetNumMips());
+            uint src_idx = g_heap.GetImageDescIdx(&view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            texture_copies.push_back({src_idx, texture.slot});
+        }
+
+        //do memcpy, do in cs in the future
+        for (const auto& copy : buffer_copies) {
+            std::memcpy(mapped_buffer_descs + copy.dst_idx * storage_buffer_desc_size, g_heap.buffer_desc_data.data() + copy.src_idx, storage_buffer_desc_size);
+        }
+
+        for (const auto& copy : texture_copies) {
+            std::memcpy(mapped_image_descs + copy.dst_idx * sampled_image_desc_size + textures_offset_in_set, g_heap.image_desc_data.data() + copy.src_idx, sampled_image_desc_size);
         }
 
         Array<VmaAllocation> allocations;

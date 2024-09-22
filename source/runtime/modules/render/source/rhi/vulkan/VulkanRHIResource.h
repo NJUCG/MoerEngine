@@ -17,6 +17,7 @@
 #include <volk.h>
 #include "VulkanTypeDefs.h"
 #include "VulkanSwapChain.h"
+#include "vulkan/vulkan_core.h"
 
 #include <vk_mem_alloc.h>
 
@@ -645,6 +646,7 @@ namespace Moer::Render {
         friend VulkanDevice;
         VkPipeline       m_pipeline;
         VkPipelineLayout m_pipeline_layout;
+        Array<VkDescriptorSetLayout> descriptor_set_layouts;
         // descriptor sets
         Moer::Render::VulkanDescriptorSetsLayout* m_descriptor_sets_layout;
         // resource cache
