@@ -8,6 +8,7 @@
 #include "PixelFormat.h"
 #include "misc/Crc32.h"
 #include "misc/STL.h"
+#include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
@@ -478,6 +479,8 @@ namespace Moer::Render {
         static VkBlendFactor METoVKBlendFactor(EBlendFactor _blend_factor);
 
         static VkVertexInputRate METoVKVertexInputRate(EVertexInputRate _me_rate);
+
+        static VkQueueFlagBits METoVKQueueFlagBits(EQueueType _type);
     };
 
 #pragma endregion

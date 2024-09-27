@@ -813,6 +813,17 @@ namespace Moer::Render {
         }
     }
 
+    VkQueueFlagBits VulkanEnumTranslator::METoVKQueueFlagBits(EQueueType _queue_type) {
+        switch (_queue_type) {
+            case EQueueType::Graphics: return VK_QUEUE_GRAPHICS_BIT;
+            case EQueueType::Compute: return VK_QUEUE_COMPUTE_BIT;
+            case EQueueType::Copy: return VK_QUEUE_TRANSFER_BIT;
+            default:
+                LOG_CRITICAL("Unsupported queue type: {}", static_cast<uint32_t>(_queue_type));
+                return VK_QUEUE_FLAG_BITS_MAX_ENUM;
+        }
+    }
+
     VkCompareOp VulkanEnumTranslator::METoVKCompareOp(ECompareOption _compare_op) {
         switch (_compare_op) {
             case ECompareOption::CO_NEVER: return VK_COMPARE_OP_NEVER;

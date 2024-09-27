@@ -1782,7 +1782,9 @@ namespace Moer::Render {
 
         if (has_cmd) {
             vk_allocator.GetCmdList().Begin();
-            vk_device.GetGlobalDescriptorHeap().BeginPushDescriptors(last_time + 1);
+            if (queue.GetType() != EQueueType::Copy) {
+                vk_device.GetGlobalDescriptorHeap().BeginPushDescriptors(last_time + 1);
+            }
         }
         for (const CmdReorderer::LinkedCommandList& cmd_list : cmd_lists) {
             if (cmd_list.head == nullptr) {
@@ -1849,7 +1851,9 @@ namespace Moer::Render {
             tracker.RestoreState();
             tracker.DispatchBarriers(vk_allocator.GetCmdList());
             vk_allocator.GetCmdList().End();
-            vk_device.GetGlobalDescriptorHeap().EndPushDescriptors(last_time + 1);
+            if (queue.GetType() != EQueueType::Copy) {
+                vk_device.GetGlobalDescriptorHeap().EndPushDescriptors(last_time + 1);
+            }
             tracker.Reset();
         }
         if (_submit.cmds.empty()) {
@@ -1950,7 +1954,7 @@ namespace Moer::Render {
             // allocator->ResetCmdList();
             return std::move(allocator);
         }
-        return MakeUnique<VulkanAllocator>(&vk_device);
+        return MakeUnique<VulkanAllocator>(&vk_device, queue.GetType());
     }
 
     void VkCommandQueue::ExecuteThread() {
@@ -2041,11 +2045,11 @@ namespace Moer::Render {
         }
     }
 
-    VulkanAllocator::VulkanAllocator(VulkanDevice* _device) : VulkanDeviceObject(_device),
+    VulkanAllocator::VulkanAllocator(VulkanDevice* _device, EQueueType _type) : VulkanDeviceObject(_device),
                                                               allocator(_device),
                                                               small_allocator(&allocator, small_block_size, 1.5) {
-
-        cmd_allocator.emplace(_device, VK_QUEUE_GRAPHICS_BIT);
+        VkQueueFlagBits queue_type = VulkanEnumTranslator::METoVKQueueFlagBits(_type);
+        cmd_allocator.emplace(_device, queue_type);
         cmd_list.emplace(&cmd_allocator.value(), *_device);
     }
 
