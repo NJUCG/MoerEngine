@@ -1146,7 +1146,16 @@ namespace Moer::Render {
             .constant_idx      = constant_idx};
     }
 
-    CommandQueue& VulkanDevice::GetCommandQueue(EQueueType _type) { return *gfx_queue; }
+    CommandQueue& VulkanDevice::GetCommandQueue(EQueueType _type) {
+
+        switch (_type) {
+            case EQueueType::Graphics: return *gfx_queue;
+            case EQueueType::Compute: return *compute_queue;
+            case EQueueType::Copy: return *transfer_queue;
+            default: assert(false && "Unknown queue type.");
+        }
+        return *gfx_queue;
+    }
 
     TextureRef VulkanDevice::CreateTexture(Extent3D _size, EPixelFormat _format, ETextureUsageFlags _usage, uint32_t _mip_cnt, uint32_t _array_size) {
         TextureInfo info{

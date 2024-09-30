@@ -97,7 +97,7 @@ namespace Moer::Render {
     }
 
     CmdSubmit CommandList::Submit() {
-        CmdSubmit submit{std::move(commands), std::move(callbacks),bindless_array};
+        CmdSubmit submit(std::move(commands), std::move(callbacks),bindless_array);
         return std::move(submit);
     }
 

@@ -381,15 +381,36 @@ namespace Moer::Render {
         Array<WaitEvent>   wait_events;
         Array<SignalEvent> signal_events;
         bool               b_sync{false};//force sync queue timeline
-        CmdSubmit&         Wait(Fence* _fence, uint64 _wait_value) {
+        CmdSubmit&&         Wait(Fence* _fence, uint64 _wait_value) {
             wait_events.emplace_back(uint64(_fence), _wait_value);
-            return *this;
+            return std::move(*this);
         }
 
-        CmdSubmit& Signal(Fence* _fence, uint64 _signal_value) {
+        CmdSubmit&& Signal(Fence* _fence, uint64 _signal_value) {
             signal_events.emplace_back(uint64(_fence), _signal_value);
+            return std::move(*this);
+        }
+
+        CmdSubmit(CmdSubmit&& _other) noexcept {
+            cmds          = std::move(_other.cmds);
+            callbacks     = std::move(_other.callbacks);
+            wait_events   = std::move(_other.wait_events);
+            signal_events = std::move(_other.signal_events);
+            b_sync        = _other.b_sync;
+        }
+
+        CmdSubmit& operator=(CmdSubmit&& _other) noexcept {
+            cmds          = std::move(_other.cmds);
+            callbacks     = std::move(_other.callbacks);
+            wait_events   = std::move(_other.wait_events);
+            signal_events = std::move(_other.signal_events);
+            b_sync        = _other.b_sync;
             return *this;
         }
+        CmdSubmit(Array<UniquePtr<Command>>&& _cmds, Array<std::function<void(void)>>&& _callbacks,BindlessArrayRef _bindless_array) : cmds(std::move(_cmds)), callbacks(std::move(_callbacks)),bindless_array(_bindless_array) {
+        }
+
+        
     };
 
     struct ReadTexture {

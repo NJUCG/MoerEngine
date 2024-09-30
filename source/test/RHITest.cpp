@@ -81,15 +81,28 @@ int main(int argc, const char** argv) {
     auto                sc             = device.CreateSwapchain(sc_info);
     BindlessArrayRef    bindless_array = device.CreateBindlessArray();
     auto&               cmd_queue      = device.GetCommandQueue(EQueueType::Graphics);
-    CommandList         cmd_list;
-    auto                buffer = device.CreateBuffer<uint>(1024, EBufferUsageFlags::UNORDERED_ACCESS);
-    Array<uint>         data(1024);
+    auto&               copy_queue     = device.GetCommandQueue(EQueueType::Copy);
+
+    Array<uint> data(1024);
     for (uint i = 0; i < 1024; ++i) {
         data[i] = i;
     }
+    
+    FenceRef copy_timeline = device.CreateFence();
+    BufferRef copy_queue_buffer = device.CreateBuffer<uint>(1024, EBufferUsageFlags::UNORDERED_ACCESS);
+    {
+        CommandList copy_cmd_list;
+        copy_cmd_list.CopyFrom(std::span<byte>((byte*)data.data(), data.size() * sizeof(uint)), copy_queue_buffer->GetView());
+        copy_queue.Execute(copy_cmd_list.Submit().Signal(copy_timeline, 1));
+    }
+    CommandList cmd_list;
+    auto        buffer = device.CreateBuffer<uint>(1024, EBufferUsageFlags::UNORDERED_ACCESS);
+
     Array<uint> dst_data(1024);
-    cmd_list.CopyFrom(std::span<byte>((byte*)data.data(), data.size() * sizeof(uint)), buffer->GetView());
+    cmd_list.CopyFrom(copy_queue_buffer->GetView(), buffer->GetView());
     cmd_list.CopyFrom(buffer->GetView(), std::span<byte>((byte*)dst_data.data(), dst_data.size() * sizeof(uint)));
+    cmd_queue.Execute(cmd_list.Submit().Wait(copy_timeline, 1));
+    cmd_queue.Sync();
 
     ubyte*   pixels;
     int      width, height;

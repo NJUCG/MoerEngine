@@ -161,7 +161,7 @@ namespace Moer::Render {
         constexpr static uint64_t small_block_size = 64 * 1024;
 
     public:
-        VulkanAllocator(VulkanDevice* _device);
+        VulkanAllocator(VulkanDevice* _device, EQueueType _queue_type);
         ~VulkanAllocator();
         BufferView     AllocateBuffer(uint64 _size, uint _align);
         VulkanCmdList& GetCmdList() {
