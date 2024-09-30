@@ -97,7 +97,7 @@ namespace Moer::Render {
     }
 
     CmdSubmit CommandList::Submit() {
-        CmdSubmit submit{std::move(commands), std::move(callbacks)};
+        CmdSubmit submit{std::move(commands), std::move(callbacks),bindless_array};
         return std::move(submit);
     }
 
@@ -178,6 +178,7 @@ namespace Moer::Render {
 
     void CommandList::UpdateBindlessArray(BindlessArrayRef _array) {
         assert(_array && "Bindless array is null");
+        
         commands.push_back(_array->CreateUpdateCommand());
     }
 

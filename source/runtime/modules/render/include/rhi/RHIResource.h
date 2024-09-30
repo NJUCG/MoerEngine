@@ -849,7 +849,7 @@ namespace Moer::Render {
         virtual        ~BindlessArray() = default;
         virtual uint  AllocateTexture(const TextureView& _texture, Sampler _sampler) = 0;
         virtual uint  AllocateBuffer(BufferView _buffer) = 0;
-
+        
         virtual void FreeTexture(uint _handle) = 0;
         virtual void FreeBuffer(uint _handle) = 0;
 

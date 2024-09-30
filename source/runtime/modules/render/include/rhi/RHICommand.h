@@ -376,6 +376,7 @@ namespace Moer::Render {
     struct CmdSubmit {
         Array<UniquePtr<Command>>        cmds;
         Array<std::function<void(void)>> callbacks;
+        BindlessArrayRef                bindless_array{nullptr};
 
         Array<WaitEvent>   wait_events;
         Array<SignalEvent> signal_events;
@@ -550,8 +551,14 @@ namespace Moer::Render {
         template<typename TGfxPso, typename... TArgs>
         DrawDispatcher Gfx(TGfxPso& _pso, TArgs&&... _args) {
             if constexpr (sizeof...(TArgs) > 0) {
-                // ArrayArguments&& args = std::move(_pso.SetArgs());
-                return DrawDispatcher(_pso, *this, std::move(_pso.SetArgs(_args...)));
+                ArrayArguments&& args = std::move(_pso.SetArgs(_args...));
+                for(const auto & arg:args.args) {
+                    static constexpr uint BindLessIndex = 4;
+                    if(arg.index() == BindLessIndex) {
+                        bindless_array = std::get<BindlessArrayRef>(arg);
+                    }
+                }
+                return DrawDispatcher(_pso, *this, std::move(args));
             }
             return DrawDispatcher(_pso, *this);
         }
@@ -655,6 +662,7 @@ namespace Moer::Render {
         Array<UniquePtr<Command>>    commands;
         Command*                     current_barriers{nullptr};
         Array<std::function<void()>> callbacks;
+        BindlessArrayRef             bindless_array{nullptr};
     };
     class QueueCmd {};
 
