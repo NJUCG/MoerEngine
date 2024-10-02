@@ -655,6 +655,20 @@ namespace Moer::Render {
             AddCmd(_cmd, m_dispatch_layer);
         }
 
+        void VisitCmd(const BuildAccelerationStructuresCmd* _cmd) {
+            int64 layer = 0;
+            for (const auto& cmd : _cmd->Params()) {
+                Buffer* vtx = cmd.geometry->GetInfo().vertex_buffer.Get();
+                Buffer* idx = cmd.geometry->GetInfo().index_buffer.Get();
+
+                layer = std::max(layer, SetRead((uint64)vtx, Range(0, vtx->GetByteSize()), ResourceType::Texture_Buffer));
+                layer = std::max(layer, SetRead((uint64)idx, Range(0, idx->GetByteSize()), ResourceType::Texture_Buffer));
+                layer = std::max(layer, SetWrite((uint64)cmd.geometry.Get(), Range(0), ResourceType::Accel));
+            }
+
+            AddCmd(_cmd, layer);
+        }
+
         void AcceptCmd(const Command* _cmd) {
             assert(_cmd && "Invalid Command");
             switch (_cmd->Type()) {
@@ -691,6 +705,9 @@ namespace Moer::Render {
                     break;
                 case Command::EType::UpdateBindlessArray:
                     VisitCmd(static_cast<const UpdateBindlessArrayCmd*>(_cmd));
+                    break;
+                case Command::EType::BuildAccel:
+                    VisitCmd(static_cast<const BuildAccelerationStructuresCmd*>(_cmd));
                     break;
                 default:
                     assert(false && "Command Type Not Supported for Reorder");

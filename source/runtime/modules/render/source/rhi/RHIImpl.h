@@ -562,58 +562,6 @@ namespace Moer::Render {
             return index_buffers;
         }
     };
-
-    // struct UpdateDrawStateCmd : public Command {
-    // private:
-    //     Rect2D scissor;
-    //     uint4  viewport;
-
-    // private:
-    //     UpdateDrawStateCmd() : Command(EType::UpdateDrawState) {}
-
-    // public:
-    //     UpdateDrawStateCmd(Rect2D _scissor, uint4 _viewport) : Command(EType::UpdateDrawState), scissor(_scissor), viewport(_viewport) {}
-
-    //     EQueueType GetQueueType() const override { return EQueueType::Graphics; }
-
-    //     auto Scissor() const { return scissor; }
-    //     auto Viewport() const { return viewport; }
-    // };
-
-    // struct SetParamsCmd : public Command {
-    // private:
-    //     using TArguments = std::variant<Arguments, ArrayArguments>;
-
-    //     TArguments      args;
-    //     ShaderPipeline& pso;
-
-    // private:
-    // public:
-    //     SetParamsCmd(ShaderPipeline& _pso, Arguments&& _args) : Command(EType::SetParams), args(std::move(_args)), pso(_pso) {}
-    //     SetParamsCmd(ShaderPipeline& _pso, ArrayArguments&& _args) : Command(EType::SetParams), args(std::move(_args)), pso(_pso) {}
-
-    //     EQueueType GetQueueType() const override { return EQueueType::Graphics; }
-
-    //     auto&& StealArgs() const { return std::move(args); }
-
-    //     auto& Pso() const { return pso; }
-    // };
-
-    // struct SetConstantCmd : public Command {
-    // private:
-    //     Array<uint>     data;
-    //     ShaderPipeline& pso;
-
-    // private:
-    // public:
-    //     SetConstantCmd(ShaderPipeline& _pso, Array<uint>&& _data) : Command(EType::SetConstants), data(std::move(_data)), pso(_pso) {}
-
-    //     EQueueType GetQueueType() const override { return EQueueType::Graphics; }
-
-    //     auto&& StealData() const { return std::move(data); }
-
-    //     auto& Pso() const { return pso; }
-    // };
     struct DispatchIndirectParam {
         BufferView indirect;
     };
@@ -643,21 +591,44 @@ namespace Moer::Render {
         }
     };
 
-    class CmdVisitor {
+    struct BuildAccelerationStructuresCmd : public Command {
+    private:
+        BuildAccelerationStructuresCmd() : Command(EType::BuildAccel) {}
+
     public:
-        virtual void Visit(const UploadBufferCmd& _cmd)        = 0;
-        virtual void Visit(const CopyBackBufferCmd& _cmd)      = 0;
-        virtual void Visit(const CopyBufferCmd& _cmd)          = 0;
-        virtual void Visit(const CopyTextureCmd& _cmd)         = 0;
-        virtual void Visit(const CopyBufferToTextureCmd& _cmd) = 0;
-        virtual void Visit(const CopyTextureToBufferCmd& _cmd) = 0;
-        virtual void Visit(const UploadTextureCmd& _cmd)       = 0;
-        virtual void Visit(const BarrierCmd& _cmd)             = 0;
-        virtual void Visit(const SetDrawStateCmd& _cmd)        = 0;
-        // virtual void Visit(const SetParamsCmd& _cmd)           = 0;
-        // virtual void Visit(const SetConstantCmd& _cmd)         = 0;
-        virtual void Visit(const DispatchCmd& _cmd) = 0;
+        BuildAccelerationStructuresCmd(Array<AccelerationStructureBuildParam> _params) : Command(EType::BuildAccel) {}
+        BuildAccelerationStructuresCmd(Array<AccelerationStructureBuildParam>&& _params) : Command(EType::BuildAccel) {}
+
+        EQueueType GetQueueType() const override { return EQueueType::Compute; }
+
+        const auto& Params() const { return params; }
+
+        auto& Scratch() const { return scratch_buffer; }
+
+    private:
+        Array<AccelerationStructureBuildParam> params;
+        mutable BufferView                     scratch_buffer{};
     };
+
+    struct BuildRaytracingSceneCmd : public Command {
+    private:
+        BuildRaytracingSceneCmd() : Command(EType::BuildTLAS) {}
+
+    public:
+        BuildRaytracingSceneCmd(Array<AccelerationStructureBuildParam> _params) : Command(EType::BuildTLAS) {}
+        BuildRaytracingSceneCmd(Array<AccelerationStructureBuildParam>&& _params) : Command(EType::BuildTLAS) {}
+
+        EQueueType GetQueueType() const override { return EQueueType::Compute; }
+
+        const auto& Params() const { return params; }
+
+        auto& Scratch() const { return scratch_buffer; }
+
+    private:
+        Array<AccelerationStructureBuildParam> params;
+        mutable BufferView                     scratch_buffer{};
+    };
+
     class RenderDevice::Impl {
     public:
         Impl() {}
@@ -681,6 +652,10 @@ namespace Moer::Render {
         }
 
         virtual BindlessArrayRef CreateBindlessArray(uint _max_size) = 0;
+
+        /// Raytracing
+        virtual RaytracingGeometryRef CreateRaytracingGeometry(const RaytracingGeometryInfo& _init) = 0;
+
         // virtual RHIViewportRef CreateViewport(const RHIViewportInitializer& _init) = 0;
 
         // virtual BackBufferInfo GetNextBackBufferInfo(RHIViewport* _viewport) = 0;

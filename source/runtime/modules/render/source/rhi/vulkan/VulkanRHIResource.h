@@ -7,6 +7,7 @@
 
 #include "PixelFormat.h"
 #include "misc/Crc32.h"
+#include "misc/LockFree.h"
 #include "misc/STL.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
@@ -481,6 +482,12 @@ namespace Moer::Render {
         static VkVertexInputRate METoVKVertexInputRate(EVertexInputRate _me_rate);
 
         static VkQueueFlagBits METoVKQueueFlagBits(EQueueType _type);
+
+        //Raytracing
+        static VkGeometryTypeKHR                    METoVKGeometryType(ERayTracingGeometryType _type);
+        static VkGeometryFlagsKHR                   METoVKGeometryFlags(ERayTracingGeometryFlags _flags);
+        static VkBuildAccelerationStructureFlagsKHR METoVKAccelerationStructureBuildType(ERayTracingAccelerationStructureBuildFlags _type);
+        static VkBuildAccelerationStructureModeKHR  METoVKBuildAccelerationStructureMode(ERaytracingBuildMode _mode);
     };
 
 #pragma endregion
@@ -647,8 +654,8 @@ namespace Moer::Render {
 
     protected:
         friend VulkanDevice;
-        VkPipeline       m_pipeline;
-        VkPipelineLayout m_pipeline_layout;
+        VkPipeline                   m_pipeline;
+        VkPipelineLayout             m_pipeline_layout;
         Array<VkDescriptorSetLayout> descriptor_set_layouts;
         // descriptor sets
         Moer::Render::VulkanDescriptorSetsLayout* m_descriptor_sets_layout;
@@ -925,12 +932,12 @@ namespace Moer::Render {
         UniquePtr<Command>          CreateUpdateCommand() override;
         class VulkanDescriptorHeap& g_heap;
 
-        LockFreeQueueBase<uint> free_texture_slots;
-        LockFreeQueueBase<uint> free_buffer_slots;
-        LockFreeQueueBase<uint> free_slots;
-        uint                    texture_slot_offset;
-        uint                    buffer_slot_offset;
-        uint                    slot_offset;
+        LockFreeQueueBase<uint, true> free_texture_slots;
+        LockFreeQueueBase<uint, true> free_buffer_slots;
+        LockFreeQueueBase<uint, true> free_slots;
+        uint                          texture_slot_offset;
+        uint                          buffer_slot_offset;
+        uint                          slot_offset;
         //frame resources
         Array<TextureUpdateInfo> textures_allocated;
         Array<BufferUpdateInfo>  buffers_allocated;
@@ -943,6 +950,60 @@ namespace Moer::Render {
 
         uint64 buffers_offset_in_set;
         uint64 textures_offset_in_set;
+    };
+
+#pragma endregion
+
+#pragma region[ raytracing ]
+    static void GetBuildRaytracingGeometryInfo(
+        Array<VkAccelerationStructureGeometryKHR>&       _build_info,
+        Array<VkAccelerationStructureBuildRangeInfoKHR>& _build_ranges,
+        const RaytracingGeometryInfo&                    _info);
+
+    class VulkanRaytracingGeometry final : public RaytracingGeometry,
+                                           public VulkanDeviceObject {
+    public:
+        VulkanRaytracingGeometry(const RaytracingGeometryInfo& _info, VulkanDevice* _device);
+        virtual ~VulkanRaytracingGeometry();
+
+        inline VkAccelerationStructureKHR GetHandle() const {
+            return acc;
+        }
+
+        inline VulkanBuffer* GetUnderlyingBuffer() const {
+            return underlying_buffer;
+        }
+        Array<VkAccelerationStructureGeometryKHR>       build_geometries;
+        Array<VkAccelerationStructureBuildRangeInfoKHR> build_ranges;
+        VkAccelerationStructureBuildSizesInfoKHR        build_sizes_info{};
+
+    private:
+    private:
+        VkAccelerationStructureKHR acc;
+        VulkanBuffer*              underlying_buffer;
+    };
+
+    class VulkanRaytracingScene final : public RaytracingScene, public VulkanDeviceObject {
+    public:
+        VulkanRaytracingScene(VulkanDevice* _device) : VulkanDeviceObject(_device), RaytracingScene() {}
+
+        RaytracingInstance& AddInstance() override;
+        void                FreeInstance(uint _array_idx) override;
+
+        UniquePtr<Command> UpdateScene() override;
+
+    public:
+        // temperory
+        Array<uint> temp_update_instance_ids;
+        Array<uint> temp_free_instance_ids;
+
+    public:
+        VkAccelerationStructureBuildSizesInfoKHR size_infos;
+        VkAccelerationStructureKHR               tlas;
+        VulkanBuffer*                            tlas_buffer;
+
+        Array<VkAccelerationStructureInstanceKHR> vk_instances;
+        LockFreeQueueBase<uint, true>             free_instance_ids;
     };
 
 #pragma endregion
@@ -1008,6 +1069,8 @@ namespace Moer::Render {
     RESOURCE_CAST(Texture, VulkanTexture)
     RESOURCE_CAST(Fence, VulkanFence)
     RESOURCE_CAST(Swapchain, VkSwapchain)
+
+    RESOURCE_CAST(RaytracingGeometry, VulkanRaytracingGeometry)
 #pragma endregion
 
 #pragma region viewable resources view definitions
@@ -1149,7 +1212,7 @@ namespace Moer::Render {
         VulkanViewport(RHIViewportInitializer _init_info, VulkanDevice& _device);
         // ~VulkanViewport();
         void Resize(Extent2D _size) override;
-        void Present(FenceRef _render_finished) override{};
+        void Present(FenceRef _render_finished) override {};
         void Present(VkSemaphore _sem);
         // BackBufferInfo GetBackBuffer() override;
         void* GetNativeWindow() override;

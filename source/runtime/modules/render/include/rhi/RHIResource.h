@@ -6,6 +6,7 @@
 #include "RenderCommon.h"
 #include "math/Base.h"
 
+#include "math/Matrix.h"
 #include "misc/EnumBitOperation.h"
 #include "misc/Hash.h"
 #include "misc/Ptr.h"
@@ -31,8 +32,7 @@
 
 #include "misc/LockFree.h"
 template<typename TStructuredParam>
-concept concept_is_shader_struct = requires(TStructuredParam t)
-{
+concept concept_is_shader_struct = requires(TStructuredParam t) {
     std::is_same<typename TStructuredParam::TypeInfo::TParamPtr, TStructuredParam>();
     t.GetStructMetadata();
 };
@@ -145,13 +145,15 @@ namespace Moer::Render {
     class DepthBuffer;
     class Swapchain;
     class BindlessArray;
-    using TextureRef       = CountableRef<Texture>;
-    using BufferRef        = CountableRef<Buffer>;
-    using FenceRef         = CountableRef<Fence>;
-    using SamplerRef       = CountableRef<Sampler>;
-    using DepthBufferRef   = CountableRef<DepthBuffer>;
-    using SwapchainRef     = CountableRef<Swapchain>;
-    using BindlessArrayRef = CountableRef<BindlessArray>;
+    class RaytracingGeometry;
+    using TextureRef            = CountableRef<Texture>;
+    using BufferRef             = CountableRef<Buffer>;
+    using FenceRef              = CountableRef<Fence>;
+    using SamplerRef            = CountableRef<Sampler>;
+    using DepthBufferRef        = CountableRef<DepthBuffer>;
+    using SwapchainRef          = CountableRef<Swapchain>;
+    using BindlessArrayRef      = CountableRef<BindlessArray>;
+    using RaytracingGeometryRef = CountableRef<RaytracingGeometry>;
 };// namespace Moer::Render
 
 class Shader;
@@ -230,7 +232,7 @@ struct RHIVertexInputFactory {
 class RENDER_API RHIResource {
 public:
     explicit RHIResource(ERHIResourceType _type = ERHIResourceType::RRT_NONE) : type(_type) {}
-    virtual  ~RHIResource() = default;
+    virtual ~RHIResource() = default;
 
 public:
     uint32_t AddRef() {
@@ -467,8 +469,7 @@ struct RHIResourceParameterLayout {
 };
 
 template<typename RootParameter>
-concept concept_is_root_parameter_struct = requires(RootParameter t)
-{
+concept concept_is_root_parameter_struct = requires(RootParameter t) {
     RootParameter::TypeInfo::GetStructMetadata();
     t.GetMembers();
 };
@@ -577,9 +578,9 @@ struct RHIBufferCreateInfo : public RHIBufferInfo {
 
     RHIBufferCreateInfo(uint64_t _size, uint32_t _stride, EBufferUsageFlags _usage)
         : RHIBufferInfo(
-            _size,
-            _stride,
-            _usage) {}
+              _size,
+              _stride,
+              _usage) {}
 
     static RHIBufferCreateInfo Create(uint64_t _size = 0, uint32_t _stride = 1, EBufferUsageFlags _usage = EBufferUsageFlags::NONE) {
         return {
@@ -609,14 +610,13 @@ namespace Moer::Render {
 
     struct VertexElement {
         EPixelFormat format;
-
     };
 
     struct VertexBinding {
         VertexBinding() = default;
         VertexBinding(std::initializer_list<VertexElement> _elements, EVertexInputRate _vet) : vertex_elements(_elements), input_rate(_vet) {}
         VertexBinding(VertexElement&& element, EVertexInputRate _vet) : vertex_elements({std::move(element)}), input_rate(_vet) {}
-        
+
         Moer::Array<VertexElement> vertex_elements;
         EVertexInputRate           input_rate = VIR_VERTEX;
     };
@@ -643,7 +643,7 @@ namespace Moer::Render {
         BufferView(Buffer* _buffer, uint64 _byte_offset, uint64 _num_elements, uint _stride) : buffer(_buffer),
                                                                                                byte_offset(_byte_offset),
                                                                                                num_elements(_num_elements),
-                                                                                               stride(_stride) {};
+                                                                                               stride(_stride){};
         uint          GetNumElements() const { return num_elements; }
         uint          GetStride() const { return stride; }
         uint64        GetByteOffset() const { return byte_offset; }
@@ -826,10 +826,6 @@ namespace Moer::Render {
         TextureRef tex_handle;
     };
 
-    struct BindlessHandle {
-        uint handle;
-    };
-
     class RENDER_API BindlessArray : public RHIResource {
     public:
         struct TextureUpdateInfo {
@@ -846,12 +842,12 @@ namespace Moer::Render {
         };
 
         BindlessArray();
-        virtual        ~BindlessArray() = default;
-        virtual uint  AllocateTexture(const TextureView& _texture, Sampler _sampler) = 0;
-        virtual uint  AllocateBuffer(BufferView _buffer) = 0;
+        virtual ~BindlessArray()                                                    = default;
+        virtual uint AllocateTexture(const TextureView& _texture, Sampler _sampler) = 0;
+        virtual uint AllocateBuffer(BufferView _buffer)                             = 0;
 
         virtual void FreeTexture(uint _handle) = 0;
-        virtual void FreeBuffer(uint _handle) = 0;
+        virtual void FreeBuffer(uint _handle)  = 0;
 
         virtual uint64 ArrayHandle() const = 0;
 
@@ -859,12 +855,77 @@ namespace Moer::Render {
         friend class CommandList;
         friend class UpdateBindlessArrayCmd;
 
-        virtual UniquePtr<class Command> CreateUpdateCommand()= 0;
+        virtual UniquePtr<class Command> CreateUpdateCommand() = 0;
     };
 
-    template<typename T>
-    class ParameterBlock : public RHIResource {
-        // ArrayArguments args;
+    /// <summary>
+    /// HWRayTracing
+    /// </summary>
+
+    // geometry segment in raytracing geometry
+    struct RaytracingSegment {
+        uint vertex_offset;
+        uint vertex_count;
+        uint index_offset;
+        uint index_count;
+
+        ERayTracingGeometryType  type  = RTGT_TRIANGLES;
+        ERayTracingGeometryFlags flags = ERayTracingGeometryFlags::NONE;
+    };
+    struct RaytracingGeometryInfo {
+        BufferRef                vertex_buffer = nullptr;
+        BufferRef                index_buffer  = nullptr;
+        Array<RaytracingSegment> segments      = {};
+
+        uint              max_vertex_count = 0;
+        uint              primitive_count  = 0;
+        EIndexElementType index_type       = EIndexElementType::IET_UINT32;
+        EPixelFormat      vertex_format    = PF_R32G32B32_SFLOAT;
+
+        ERayTracingAccelerationStructureBuildFlags build_flags = ERayTracingAccelerationStructureBuildFlags::NONE;
+    };
+    class RaytracingGeometry : public RHIResource {
+    public:
+        RaytracingGeometry(const RaytracingGeometryInfo& _info) : info(_info), RHIResource(RRT_RAYTRACING_GEOMETRY) {}
+
+        RaytracingGeometryInfo GetInfo() const { return info; }
+
+    protected:
+        RaytracingGeometryInfo info;
+    };
+
+    struct AccelerationStructureBuildParam {
+        RaytracingGeometryRef geometry;
+        ERaytracingBuildMode  mode;
+    };
+
+    struct RaytracingInstance {
+        struct Flag {
+            uint need_update : 1 = false;
+            uint need_create : 1 = true;
+        };
+
+        RaytracingGeometry* geom;//src geom reference
+        Matrix3x4f          transform;
+        const uint          array_idx;  //index in scene array
+        const uint          instance_id;//raw data idx in soa representation
+
+        Flag flag;
+    };
+
+    //container for scene TLAS and rt instances
+    class RaytracingScene : public RHIResource {
+    public:
+        RaytracingScene() : RHIResource(RRT_RAYTRACING_SCENE) {}
+
+    public:
+        virtual RaytracingInstance& AddInstance()                 = 0;
+        virtual void                FreeInstance(uint _array_idx) = 0;
+
+        virtual UniquePtr<Command> UpdateScene() = 0;
+
+    protected:
+        Array<RaytracingInstance> instances;
     };
 
 }// namespace Moer::Render
@@ -1159,7 +1220,7 @@ private:
     friend Moer::RenderGraphTexture;
     friend class VulkanPipelineResourceCache;
 
-    explicit       RHITexture(ERHIResourceType _type) : RHIViewableResource(_type) {}
+    explicit RHITexture(ERHIResourceType _type) : RHIViewableResource(_type) {}
     RHITextureInfo texture_info;
 
     struct RHISubresourceRangeHash {
@@ -1179,51 +1240,15 @@ private:
 
 #pragma region acceleration structures
 
-enum ERayTracingGeometryType : uint8_t {
-    RTGT_TRIANGLES,
-    RTGT_AABBS
-};
-
-enum class ERayTracingGeometryFlags : uint8_t {
-    NONE,
-    GEOMETRY_OPAQUE = 1 << 0,
-    NO_DUPLICATE_ANY_HIT_INVOCATION = 1 << 1
-};
-
-ENUM_BIT_OP_IMPL(ERayTracingGeometryFlags, FLAG)
-
-enum class ERayTracingInstanceFlags : uint8_t {
-    NONE,
-    TRIANGLE_CULL_DISABLE = 1 << 0,
-    //triangle flip face
-    TRIANGLE_FRONT_COUNTERCLOCKWISE = 1 << 1,
-    FORCE_OPAQUE = 1 << 2,
-    FORCE_NO_OPAQUE = 1 << 3
-};
-
-ENUM_BIT_OP_IMPL(ERayTracingInstanceFlags, FLAG)
-
-enum class ERayTracingAccelerationStructureBuildFlags : uint8_t {
-    NONE,
-    ALLOW_UPDATE = 1 << 0,
-    ALLOW_COMPACTION = 1 << 1,
-    PREFER_FAST_TRACE = 1 << 2,
-    PREFER_FAST_BUILD = 1 << 3,
-    MINIMIZE_MEMORY = 1 << 4
-
-};
-
-ENUM_BIT_OP_IMPL(ERayTracingAccelerationStructureBuildFlags, FLAG)
-
 enum class ERayTracingAccelerationStructureCopyMode : uint8_t {
-    CLONE = 0,
-    COMPACT = 0x1,
-    SERIALIZE = 0x2,
+    CLONE       = 0,
+    COMPACT     = 0x1,
+    SERIALIZE   = 0x2,
     DESERIALIZE = 0x3
 };
 
 enum class ERayTracingAccelerationStructureType {
-    TOP_LEVEL = 0,
+    TOP_LEVEL    = 0,
     BOTTOM_LEVEL = 0x1
 };
 
@@ -1348,8 +1373,8 @@ struct PipelineParametersBinding {};
 
 enum class EFenceUsageFlags {
     TIMELINE = 1 << 0,
-    BINARY = 1 << 1,
-    PRESENT = 1 << 2,
+    BINARY   = 1 << 1,
+    PRESENT  = 1 << 2,
 };
 
 ENUM_BIT_OP_IMPL(EFenceUsageFlags, FLAG)
@@ -1362,7 +1387,7 @@ struct RHIFenceCreateInfo {
 class RHIFence : public RHIResource {
 public:
     RHIFence() : RHIResource(RRT_GPU_FENCE) {}
-    virtual uint64_t GetValue() const = 0;
+    virtual uint64_t GetValue() const     = 0;
     virtual void     Wait(uint64_t value) = 0;
 
 protected:
@@ -1372,7 +1397,7 @@ namespace Moer::Render {
     class Fence : public RHIResource {
     public:
         Fence() : RHIResource(RRT_GPU_FENCE) {}
-        virtual uint64_t GetValue() const = 0;
+        virtual uint64_t GetValue() const      = 0;
         virtual void     Wait(uint64_t _value) = 0;
     };
 
@@ -1385,10 +1410,10 @@ namespace Moer::Render {
     class Viewport : public RHIResource {
     public:
         Viewport() : RHIResource(RRT_VIEWPORT) {}
-        virtual       ~Viewport() {}
-        virtual void* GetNativeWindow() = 0;
+        virtual ~Viewport() {}
+        virtual void* GetNativeWindow()                = 0;
         virtual void  Present(FenceRef _present_fence) = 0;
-        virtual void  Resize(Extent2D) = 0;
+        virtual void  Resize(Extent2D)                 = 0;
         // virtual BackBufferInfo GetBackBuffer()                  = 0;
     };
 }// namespace Moer::Render
@@ -1601,7 +1626,7 @@ class RHIViewport : public RHIResource {
 
 public:
     RHIViewport() : RHIResource(RRT_VIEWPORT) {}
-    virtual       ~RHIViewport() {};
+    virtual ~RHIViewport(){};
     virtual void* GetNativeSwapchain() const { return nullptr; }
     virtual void* GetNativeWindow(void** _params) const { return nullptr; }
 
@@ -1673,13 +1698,13 @@ struct RHIBufferViewInfo {
 };
 
 struct RHITextureViewInfo {
-    EViewType          view_type;
-    EPixelFormat       format{PF_UNDEFINED};
-    uint8_t            b_disable_srgb : 1;
-    ETextureDimension  dimension : uint32_t(ETextureDimension::NumBits);
+    EViewType         view_type;
+    EPixelFormat      format{PF_UNDEFINED};
+    uint8_t           b_disable_srgb : 1;
+    ETextureDimension dimension : uint32_t(ETextureDimension::NumBits);
     uint8_t /*padding*/ : 7 - uint32_t(ETextureDimension::NumBits);
-    uint16_t           array_min;
-    uint16_t           array_num;
+    uint16_t array_min;
+    uint16_t array_num;
 };
 
 struct RHIAccelerationStructureViewInfo {
@@ -1714,10 +1739,16 @@ struct RHIAccelerationStructureSRVInfo : public RHIAccelerationStructureViewInfo
 template<uint32_t _type>
 static RHIBufferViewInfo GetBufferInfo(RHIBuffer* _buffer, uint32_t _byte_offset, uint32_t _num_elements, uint32_t _stride) {
     RHIBufferViewInfo info{
-        .byte_offset = _byte_offset,
+        .byte_offset  = _byte_offset,
         .num_elements = _num_elements,
-        .stride = _stride};
-    if constexpr (_type == v_type_buffer_srv) { info.view_type = EViewType::BUFFER_SRV; } else if constexpr (_type == v_type_buffer_uav) { info.view_type = EViewType::BUFFER_UAV; } else if constexpr (_type == v_type_buffer_cbv) { info.view_type = EViewType::BUFFER_CBV; }
+        .stride       = _stride};
+    if constexpr (_type == v_type_buffer_srv) {
+        info.view_type = EViewType::BUFFER_SRV;
+    } else if constexpr (_type == v_type_buffer_uav) {
+        info.view_type = EViewType::BUFFER_UAV;
+    } else if constexpr (_type == v_type_buffer_cbv) {
+        info.view_type = EViewType::BUFFER_CBV;
+    }
     return std::move(info);
 }
 
@@ -1774,8 +1805,8 @@ struct RHIViewInfo {
         /* An append and consume buffer is a special type of an unordered resource that
 		 * supports adding and removing values from the end of a buffer similar to the way a stack works.
 		 * An append and consume buffer must be a structured buffer */
-        uint8_t  b_is_append_buffer : 1;
-        uint8_t   : 6;
+        uint8_t b_is_append_buffer : 1;
+        uint8_t : 6;
         uint32_t byte_offset;
         uint32_t num_elements;
         uint32_t stride;
@@ -1787,13 +1818,13 @@ struct RHIViewInfo {
     /* equivalent to VkImageView */
     struct Texture : public BaseViewInfo {
         struct ViewInfo;
-        uint8_t            b_disable_srgb : 1;
-        ETextureDimension  dimension : uint32_t(ETextureDimension::NumBits);
+        uint8_t           b_disable_srgb : 1;
+        ETextureDimension dimension : uint32_t(ETextureDimension::NumBits);
         uint8_t /*padding*/ : 7 - uint32_t(ETextureDimension::NumBits);
-        uint8_t            mip_min;
-        uint8_t            mip_num;
-        uint16_t           array_min;
-        uint16_t           array_num;
+        uint8_t  mip_min;
+        uint8_t  mip_num;
+        uint16_t array_min;
+        uint16_t array_num;
 
     protected:
         ViewInfo GetViewInfo(RHITexture* target) const;
@@ -1865,7 +1896,15 @@ struct RHIViewInfo {
         return std::visit(
             [](auto&& _arg) {
                 using T = std::decay_t<decltype(_arg)>;
-                if constexpr (std::is_same_v<T, RHIBufferViewInfo>) { return _arg.view_type == EViewType::BUFFER_SRV; } else if constexpr (std::is_same_v<T, RHITextureSRVInfo>) { return true; } else if constexpr (std::is_same_v<T, RHIAccelerationStructureSRVInfo>) { return true; } else { return false; }
+                if constexpr (std::is_same_v<T, RHIBufferViewInfo>) {
+                    return _arg.view_type == EViewType::BUFFER_SRV;
+                } else if constexpr (std::is_same_v<T, RHITextureSRVInfo>) {
+                    return true;
+                } else if constexpr (std::is_same_v<T, RHIAccelerationStructureSRVInfo>) {
+                    return true;
+                } else {
+                    return false;
+                }
             },
             info);
     }
@@ -1874,7 +1913,13 @@ struct RHIViewInfo {
         return std::visit(
             [](auto&& _arg) {
                 using T = std::decay_t<decltype(_arg)>;
-                if constexpr (std::is_same_v<T, RHIBufferViewInfo>) { return _arg.view_type == EViewType::BUFFER_UAV; } else if constexpr (std::is_same_v<T, RHITextureUAVInfo>) { return true; } else { return false; }
+                if constexpr (std::is_same_v<T, RHIBufferViewInfo>) {
+                    return _arg.view_type == EViewType::BUFFER_UAV;
+                } else if constexpr (std::is_same_v<T, RHITextureUAVInfo>) {
+                    return true;
+                } else {
+                    return false;
+                }
             },
             info);
     }
@@ -1883,7 +1928,11 @@ struct RHIViewInfo {
         return std::visit(
             [](auto&& _arg) {
                 using T = std::decay_t<decltype(_arg)>;
-                if constexpr (std::is_same_v<T, RHIBufferViewInfo>) { return _arg.view_type == EViewType::BUFFER_CBV; } else { return false; }
+                if constexpr (std::is_same_v<T, RHIBufferViewInfo>) {
+                    return _arg.view_type == EViewType::BUFFER_CBV;
+                } else {
+                    return false;
+                }
             },
             info);
     }
@@ -1892,7 +1941,11 @@ struct RHIViewInfo {
         return std::visit(
             [](auto&& _arg) {
                 using T = std::decay_t<decltype(_arg)>;
-                if constexpr (std::is_same_v<T, RHIBufferViewInfo>) { return true; } else { return false; }
+                if constexpr (std::is_same_v<T, RHIBufferViewInfo>) {
+                    return true;
+                } else {
+                    return false;
+                }
             },
             info);
     }
@@ -1901,7 +1954,11 @@ struct RHIViewInfo {
         return std::visit(
             [](auto&& _arg) {
                 using T = std::decay_t<decltype(_arg)>;
-                if constexpr (std::is_same_v<T, RHIAccelerationStructureSRVInfo>) { return true; } else { return false; }
+                if constexpr (std::is_same_v<T, RHIAccelerationStructureSRVInfo>) {
+                    return true;
+                } else {
+                    return false;
+                }
             },
             info);
     }
@@ -2408,7 +2465,7 @@ struct RHIShaderMapRef {
 
 struct RHIShaderBoundStateInput : public RHIResource {
 
-    RHIShaderBoundStateInput() : RHIResource(RRT_SHADER_BOUND_STATE) {};
+    RHIShaderBoundStateInput() : RHIResource(RRT_SHADER_BOUND_STATE){};
 
     RHIShaderBoundStateInput(
         RHIVertexInputState* _vertex_input_state,
@@ -2854,9 +2911,9 @@ namespace Moer::Render {
     struct PipelineHandle {
         std::variant<VkPipelineHandle, D3DPipelineHandle> handle;
         // Array<uint64>                                     binding_infos;
-        UnorderedMap<uint64, uint>                        hash_2_info_index;
-        uint64                                            valid_bits   = 0;
-        int                                               constant_idx = -1;
+        UnorderedMap<uint64, uint> hash_2_info_index;
+        uint64                     valid_bits   = 0;
+        int                        constant_idx = -1;
     };
 
     struct SingleShaderInfo {
@@ -3019,34 +3076,34 @@ enum EAttachmentAction : uint8_t {
     INNER_DEPTH_MASK_OFFSET = 4,
 #define MAKE_COLOR_ACTION_MASK(LOAD, STORE) ((uint8_t)EAttachmentLoadOp::LOAD << (uint32_t)EAttachmentStoreOp::NumBits | (uint8_t)EAttachmentStoreOp::STORE)
     AC_NO_LOAD_NO_STORE = MAKE_COLOR_ACTION_MASK(NONE, NONE),
-    AC_LOAD_NO_STORE = MAKE_COLOR_ACTION_MASK(LOAD, NONE),
-    AC_LOAD_STORE = MAKE_COLOR_ACTION_MASK(LOAD, STORE),
-    AC_CLEAR_NO_STORE = MAKE_COLOR_ACTION_MASK(CLEAR, NONE),
-    AC_NO_LOAD_STORE = MAKE_COLOR_ACTION_MASK(NONE, STORE),
-    AC_CLEAR_STORE = MAKE_COLOR_ACTION_MASK(CLEAR, STORE),
-    AC_CLEAR_RESOLVE = MAKE_COLOR_ACTION_MASK(CLEAR, MULTISAMPLE_RESOLVE),
-    AC_LOAD_RESOLVE = MAKE_COLOR_ACTION_MASK(CLEAR, MULTISAMPLE_RESOLVE),
+    AC_LOAD_NO_STORE    = MAKE_COLOR_ACTION_MASK(LOAD, NONE),
+    AC_LOAD_STORE       = MAKE_COLOR_ACTION_MASK(LOAD, STORE),
+    AC_CLEAR_NO_STORE   = MAKE_COLOR_ACTION_MASK(CLEAR, NONE),
+    AC_NO_LOAD_STORE    = MAKE_COLOR_ACTION_MASK(NONE, STORE),
+    AC_CLEAR_STORE      = MAKE_COLOR_ACTION_MASK(CLEAR, STORE),
+    AC_CLEAR_RESOLVE    = MAKE_COLOR_ACTION_MASK(CLEAR, MULTISAMPLE_RESOLVE),
+    AC_LOAD_RESOLVE     = MAKE_COLOR_ACTION_MASK(CLEAR, MULTISAMPLE_RESOLVE),
 #undef MAKE_COLOR_ACTION_MASK
 
 #define MAKE_DEPTH_STENCIL_MASK(DEPTH, STENCIL) ((uint8_t)EAttachmentAction::DEPTH << (uint32_t)INNER_DEPTH_MASK_OFFSET | (uint8_t)EAttachmentAction::STENCIL)
-    AC_DS_NO_LOAD_NO_STORE = MAKE_DEPTH_STENCIL_MASK(AC_NO_LOAD_NO_STORE, AC_NO_LOAD_NO_STORE),
-    AC_DS_STORE = MAKE_DEPTH_STENCIL_MASK(AC_NO_LOAD_STORE, AC_NO_LOAD_STORE),
-    AC_DS_DEPTH_STORE = MAKE_DEPTH_STENCIL_MASK(AC_NO_LOAD_STORE, AC_NO_LOAD_NO_STORE),
-    AC_DS_STENCIL_STORE = MAKE_DEPTH_STENCIL_MASK(AC_NO_LOAD_NO_STORE, AC_NO_LOAD_STORE),
-    AC_DS_CLEAR_STORE = MAKE_DEPTH_STENCIL_MASK(AC_CLEAR_STORE, AC_CLEAR_STORE),
-    AC_DS_LOAD_STORE = MAKE_DEPTH_STENCIL_MASK(AC_LOAD_STORE, AC_LOAD_STORE),
-    AC_DS_LOAD_STORE_DEPTH = MAKE_DEPTH_STENCIL_MASK(AC_LOAD_STORE, AC_NO_LOAD_NO_STORE),
-    AC_DS_LOAD_DEPTH = MAKE_DEPTH_STENCIL_MASK(AC_LOAD_NO_STORE, AC_NO_LOAD_NO_STORE),
+    AC_DS_NO_LOAD_NO_STORE   = MAKE_DEPTH_STENCIL_MASK(AC_NO_LOAD_NO_STORE, AC_NO_LOAD_NO_STORE),
+    AC_DS_STORE              = MAKE_DEPTH_STENCIL_MASK(AC_NO_LOAD_STORE, AC_NO_LOAD_STORE),
+    AC_DS_DEPTH_STORE        = MAKE_DEPTH_STENCIL_MASK(AC_NO_LOAD_STORE, AC_NO_LOAD_NO_STORE),
+    AC_DS_STENCIL_STORE      = MAKE_DEPTH_STENCIL_MASK(AC_NO_LOAD_NO_STORE, AC_NO_LOAD_STORE),
+    AC_DS_CLEAR_STORE        = MAKE_DEPTH_STENCIL_MASK(AC_CLEAR_STORE, AC_CLEAR_STORE),
+    AC_DS_LOAD_STORE         = MAKE_DEPTH_STENCIL_MASK(AC_LOAD_STORE, AC_LOAD_STORE),
+    AC_DS_LOAD_STORE_DEPTH   = MAKE_DEPTH_STENCIL_MASK(AC_LOAD_STORE, AC_NO_LOAD_NO_STORE),
+    AC_DS_LOAD_DEPTH         = MAKE_DEPTH_STENCIL_MASK(AC_LOAD_NO_STORE, AC_NO_LOAD_NO_STORE),
     AC_DS_LOAD_STORE_STENCIL = MAKE_DEPTH_STENCIL_MASK(AC_LOAD_NO_STORE, AC_LOAD_STORE),
 
-    AC_DS_CLEAR_NO_STORE = MAKE_DEPTH_STENCIL_MASK(AC_CLEAR_NO_STORE, AC_CLEAR_NO_STORE),
-    AC_DS_LOAD_NO_STORE = MAKE_DEPTH_STENCIL_MASK(AC_LOAD_NO_STORE, AC_LOAD_NO_STORE),
-    AC_DS_CLEAR_STORE_DEPTH = MAKE_DEPTH_STENCIL_MASK(AC_CLEAR_STORE, AC_CLEAR_NO_STORE),
-    AC_DS_CLEAR_STORE_STENCIL = MAKE_DEPTH_STENCIL_MASK(AC_CLEAR_NO_STORE, AC_CLEAR_STORE),
-    AC_DS_CLEAR_RESOLVE_DEPTH = MAKE_DEPTH_STENCIL_MASK(AC_CLEAR_RESOLVE, AC_CLEAR_NO_STORE),
-    AC_DS_CLEAR_RESOLVE_STENCIL = MAKE_DEPTH_STENCIL_MASK(AC_CLEAR_NO_STORE, AC_CLEAR_RESOLVE),
+    AC_DS_CLEAR_NO_STORE                 = MAKE_DEPTH_STENCIL_MASK(AC_CLEAR_NO_STORE, AC_CLEAR_NO_STORE),
+    AC_DS_LOAD_NO_STORE                  = MAKE_DEPTH_STENCIL_MASK(AC_LOAD_NO_STORE, AC_LOAD_NO_STORE),
+    AC_DS_CLEAR_STORE_DEPTH              = MAKE_DEPTH_STENCIL_MASK(AC_CLEAR_STORE, AC_CLEAR_NO_STORE),
+    AC_DS_CLEAR_STORE_STENCIL            = MAKE_DEPTH_STENCIL_MASK(AC_CLEAR_NO_STORE, AC_CLEAR_STORE),
+    AC_DS_CLEAR_RESOLVE_DEPTH            = MAKE_DEPTH_STENCIL_MASK(AC_CLEAR_RESOLVE, AC_CLEAR_NO_STORE),
+    AC_DS_CLEAR_RESOLVE_STENCIL          = MAKE_DEPTH_STENCIL_MASK(AC_CLEAR_NO_STORE, AC_CLEAR_RESOLVE),
     AC_DS_LOAD_DEPTH_CLEAR_STENCIL_STORE = MAKE_DEPTH_STENCIL_MASK(AC_LOAD_STORE, AC_CLEAR_STORE),
-    AC_DS_CLEAR_STENCIL_STORE_STENCIL = MAKE_DEPTH_STENCIL_MASK(AC_NO_LOAD_NO_STORE, AC_CLEAR_STORE)
+    AC_DS_CLEAR_STENCIL_STORE_STENCIL    = MAKE_DEPTH_STENCIL_MASK(AC_NO_LOAD_NO_STORE, AC_CLEAR_STORE)
 #undef MAKE_DEPTH_STENCIL_MASK
 };
 
@@ -3248,7 +3305,9 @@ struct RHIRenderPassInfo {
             target.depth_stencil_attachment_format = depth_stencil_view->GetTexture()->GetFormat();
             target.depth_stencil_attachment_flag   = depth_stencil_view->GetTexture()->GetUsageFlags();
             target.num_samples |= depth_stencil_view->GetTexture()->GetNumSamples();
-        } else { target.depth_stencil_attachment_format = PF_UNDEFINED; }
+        } else {
+            target.depth_stencil_attachment_format = PF_UNDEFINED;
+        }
         auto depth_action   = GetDepthAction(depth_stencil_attachment.depth_stencil_action);
         auto stencil_action = GetStencilAction(depth_stencil_attachment.depth_stencil_action);
 
@@ -3297,11 +3356,11 @@ namespace Moer::Render {
 
     class RENDER_API Swapchain : public RHIResource {
     protected:
-        Swapchain() : RHIResource(RRT_SWAPCHAIN) {};
+        Swapchain() : RHIResource(RRT_SWAPCHAIN){};
 
     public:
         virtual void Recreate(const SwapchainCreateInfo&) = 0;
-        virtual      ~Swapchain() = default;
+        virtual ~Swapchain()                              = default;
 
     public:
         EPixelFormat format;
@@ -3346,7 +3405,7 @@ protected:
 class RHIRenderQueryPool : public RHIResource {
 public:
     RHIRenderQueryPool() : RHIResource(RRT_RENDER_QUERY_POOL) {}
-    virtual                      ~RHIRenderQueryPool() {}
+    virtual ~RHIRenderQueryPool() {}
     virtual RHIPooledRenderQuery AllocateQuery() = 0;
 
 private:
@@ -3431,18 +3490,18 @@ public:
 
     virtual ~RHIShaderLibrary() = default;
 
-    FORCEINLINE EShaderPlatform    GetPlatform() const { return platform; }
+    FORCEINLINE EShaderPlatform GetPlatform() const { return platform; }
     FORCEINLINE const std::string& GetName() const { return library_name; }
     FORCEINLINE uint32_t           GetId() const { return library_id; }
 
-    virtual bool       IsNativeLibrary() const = 0;
-    virtual int32_t    GetNumShaderMaps() const = 0;
-    virtual int32_t    GetNumShaders() const = 0;
-    virtual int32_t    GetNumShadersForShaderMap(int32_t ShaderMapIndex) const = 0;
-    virtual int32_t    GetShaderIndex(int32_t ShaderMapIndex, int32_t i) const = 0;
+    virtual bool       IsNativeLibrary() const                                    = 0;
+    virtual int32_t    GetNumShaderMaps() const                                   = 0;
+    virtual int32_t    GetNumShaders() const                                      = 0;
+    virtual int32_t    GetNumShadersForShaderMap(int32_t ShaderMapIndex) const    = 0;
+    virtual int32_t    GetShaderIndex(int32_t ShaderMapIndex, int32_t i) const    = 0;
     virtual SHA256Hash GetShaderHash(int32_t ShaderMapIndex, int32_t ShaderIndex) = 0;
-    virtual int32_t    FindShaderMapIndex(const SHA256Hash& Hash) = 0;
-    virtual int32_t    FindShaderIndex(const SHA256Hash& Hash) = 0;
+    virtual int32_t    FindShaderMapIndex(const SHA256Hash& Hash)                 = 0;
+    virtual int32_t    FindShaderIndex(const SHA256Hash& Hash)                    = 0;
     //    virtual bool PreloadShader(int32_t ShaderIndex, FGraphEventArray& OutCompletionEvents) { return false; }
     //    virtual bool PreloadShaderMap(int32_t ShaderMapIndex, FGraphEventArray& OutCompletionEvents) { return false; }
     //    virtual bool PreloadShaderMap(int32_t ShaderMapIndex, FCoreDelegates::FAttachShaderReadRequestFunc AttachShaderReadRequestFunc) { return false; }

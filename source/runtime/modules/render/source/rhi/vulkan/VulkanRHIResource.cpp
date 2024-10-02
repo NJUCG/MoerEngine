@@ -856,6 +856,55 @@ namespace Moer::Render {
         };
     }
 
+    VkGeometryFlagsKHR VulkanEnumTranslator::METoVKGeometryFlags(ERayTracingGeometryFlags _flags) {
+        VkGeometryFlagsKHR vk_flags = 0;
+
+        auto translate_flag = [&vk_flags, &_flags](ERayTracingGeometryFlags _search_me_flags, VkGeometryFlagsKHR _added_if_found, VkGeometryFlagsKHR _added_if_not_found = 0) {
+            const bool has_flag = (_flags & _search_me_flags) == _search_me_flags;
+            vk_flags |= has_flag ? _added_if_found : _added_if_not_found;
+        };
+
+        translate_flag(ERayTracingGeometryFlags::GEOMETRY_OPAQUE, VK_GEOMETRY_OPAQUE_BIT_KHR);
+        translate_flag(ERayTracingGeometryFlags::NO_DUPLICATE_ANY_HIT_INVOCATION, VK_GEOMETRY_NO_DUPLICATE_ANY_HIT_INVOCATION_BIT_KHR);
+        return vk_flags;
+    }
+
+    VkGeometryTypeKHR VulkanEnumTranslator::METoVKGeometryType(ERayTracingGeometryType _type) {
+        switch (_type) {
+            case RTGT_TRIANGLES: return VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+            case RTGT_AABBS: return VK_GEOMETRY_TYPE_AABBS_KHR;
+            default:
+                LOG_CRITICAL("Unsupported ray tracing geometry type: {}", static_cast<uint32_t>(_type));
+                return VK_GEOMETRY_TYPE_MAX_ENUM_KHR;
+        }
+    }
+
+    VkBuildAccelerationStructureFlagsKHR VulkanEnumTranslator::METoVKAccelerationStructureBuildType(ERayTracingAccelerationStructureBuildFlags _flags) {
+        VkBuildAccelerationStructureFlagsKHR vk_flags = 0;
+
+        auto translate_flag = [&vk_flags, &_flags](ERayTracingAccelerationStructureBuildFlags _search_me_flags, VkBuildAccelerationStructureFlagsKHR _added_if_found, VkBuildAccelerationStructureFlagsKHR _added_if_not_found = 0) {
+            const bool has_flag = (_flags & _search_me_flags) == _search_me_flags;
+            vk_flags |= has_flag ? _added_if_found : _added_if_not_found;
+        };
+
+        translate_flag(ERayTracingAccelerationStructureBuildFlags::ALLOW_UPDATE, VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR);
+        translate_flag(ERayTracingAccelerationStructureBuildFlags::ALLOW_COMPACTION, VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR);
+        translate_flag(ERayTracingAccelerationStructureBuildFlags::PREFER_FAST_TRACE, VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR);
+        translate_flag(ERayTracingAccelerationStructureBuildFlags::PREFER_FAST_BUILD, VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR);
+        translate_flag(ERayTracingAccelerationStructureBuildFlags::MINIMIZE_MEMORY, VK_BUILD_ACCELERATION_STRUCTURE_LOW_MEMORY_BIT_KHR);
+        return vk_flags;
+    }
+
+    VkBuildAccelerationStructureModeKHR VulkanEnumTranslator::METoVKBuildAccelerationStructureMode(ERaytracingBuildMode _mode){
+        switch (_mode) {
+            case ERaytracingBuildMode::BUILD:
+            return VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+            case ERaytracingBuildMode::UPDATE:
+            return VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR;
+        }
+        assert(false && "unsupported build mode");
+    }
+
 #pragma region shader definitions
 
 #pragma endregion
@@ -1515,9 +1564,9 @@ namespace Moer::Render {
     bindless_buffer_descs(nullptr), 
     bindless_texture_descs(nullptr), 
     g_heap(_device->GetGlobalDescriptorHeap()), 
-    texture_slot_offset(0), 
-    buffer_slot_offset(0), 
-    slot_offset(0), 
+    texture_slot_offset(1), 
+    buffer_slot_offset(1), 
+    slot_offset(1), 
     numbers(_max_size),
     handles(_max_size) {
         BufferInfo buffer_info(
@@ -1662,15 +1711,15 @@ namespace Moer::Render {
 
     uint VulkanBindlessArray::AllocateTexture(const TextureView& _texture, Sampler _sampler) {
         uint  slot_idx  = 0;
-        uint* array_idx = free_slots.Pop();
-        if (array_idx == nullptr) {
+        uint array_idx = free_slots.Pop();
+        if (array_idx == 0) {
             slot_idx = slot_offset++;
-        } else { slot_idx = *array_idx; }
+        } else { slot_idx = array_idx; }
         assert (slot_idx < numbers.size() && "Exceed the maximum number of bindless array");
         //allocate texture slot
         uint  texture_slot     = 0;
-        uint* texture_slot_ptr = free_texture_slots.Pop();
-        if (texture_slot_ptr == nullptr) { texture_slot = texture_slot_offset++; } else { texture_slot = *texture_slot_ptr; }
+        uint texture_slot_ptr = free_texture_slots.Pop();
+        if (texture_slot_ptr == 0) { texture_slot = texture_slot_offset++; } else { texture_slot = texture_slot_ptr; }
 
         textures_allocated.push_back({_texture.texture, _sampler, slot_idx, texture_slot});
         return slot_idx;
@@ -1678,17 +1727,17 @@ namespace Moer::Render {
 
     uint VulkanBindlessArray::AllocateBuffer(BufferView _buffer) {
         uint  slot_idx;
-        uint* array_idx = free_slots.Pop();
-        if (array_idx == nullptr) {
+        uint array_idx = free_slots.Pop();
+        if (array_idx == 0) {
             slot_idx = slot_offset++;
-        } else { slot_idx = *array_idx; }
+        } else { slot_idx = array_idx; }
 
         assert (slot_idx < numbers.size() && "Exceed the maximum number of bindless array");
 
         //allocate buffer index
         uint  buffer_slot;
-        uint* buffer_slot_ptr = free_buffer_slots.Pop();
-        if (buffer_slot_ptr == nullptr) { buffer_slot = buffer_slot_offset++; } else { buffer_slot = *buffer_slot_ptr; }
+        uint buffer_slot_ptr = free_buffer_slots.Pop();
+        if (buffer_slot_ptr == 0) { buffer_slot = buffer_slot_offset++; } else { buffer_slot = buffer_slot_ptr; }
 
         buffers_allocated.emplace_back(_buffer.buffer, slot_idx, buffer_slot);
         return slot_idx;
@@ -1811,10 +1860,10 @@ namespace Moer::Render {
     }
 
     void VulkanBindlessArray::OnFree(const Array<uint>& _slots_freed, const Array<uint>& _textures_freed, const Array<uint>& _buffers_freed) {
-        for (const uint& idx : _textures_freed) { free_texture_slots.Push(&numbers[idx]); }
-        for (const uint& idx : _buffers_freed) { free_buffer_slots.Push(&numbers[idx]); }
+        for (const uint& idx : _textures_freed) { free_texture_slots.Push(idx); }
+        for (const uint& idx : _buffers_freed) { free_buffer_slots.Push(idx); }
 
-        for (const uint& idx : _slots_freed) { free_slots.Push(&numbers[idx]); }
+        for (const uint& idx : _slots_freed) { free_slots.Push(idx); }
     }
 
     VulkanBindlessArray::~VulkanBindlessArray() {
@@ -1831,6 +1880,144 @@ namespace Moer::Render {
             bindless_texture_descs = nullptr;
         }
     }
+#pragma endregion
+
+#pragma region [ raytracing ]
+
+    void GetBuildRaytracingGeometryInfo(
+        Array<VkAccelerationStructureGeometryKHR>& _build_info,
+        Array<VkAccelerationStructureBuildRangeInfoKHR>& _build_ranges,
+        const RaytracingGeometryInfo& _info){
+
+            _build_info.reserve(_info.segments.size());
+            _build_ranges.reserve(_info.segments.size());
+
+            VulkanBuffer* vertex_buffer =  ResourceCast(_info.vertex_buffer.Get());
+            VulkanBuffer* index_buffer =  ResourceCast(_info.index_buffer.Get());
+            uint64 vtx_addr =  vertex_buffer->DeviceAddress();
+            uint64 idx_addr =  index_buffer->DeviceAddress();
+            assert(vtx_addr != 0 && idx_addr != 0 && "Invalid buffer address");
+            assert(_info.segments.size() > 0 && "No segment to build");
+
+            VkGeometryTypeKHR geometry_type = VulkanEnumTranslator::METoVKGeometryType(_info.segments[0].type);
+
+            for (const auto& segment : _info.segments) {
+                //TODO: currently only support triangle
+                assert(segment.type == RTGT_TRIANGLES && "Unsupported geometry type");
+                VkAccelerationStructureGeometryKHR geometry{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
+                geometry.geometryType = VulkanEnumTranslator::METoVKGeometryType(segment.type);
+                geometry.flags = 0;
+                geometry.geometry.triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+                geometry.geometry.triangles.vertexFormat = g_platform_pixel_formats[_info.vertex_format].format;
+                geometry.geometry.triangles.vertexStride = g_platform_pixel_formats[_info.vertex_format].stride;
+                geometry.geometry.triangles.vertexData.deviceAddress = vtx_addr + segment.vertex_offset * g_platform_pixel_formats[_info.vertex_format].stride;
+                geometry.geometry.triangles.maxVertex = segment.vertex_count;
+                geometry.geometry.triangles.indexType = VulkanEnumTranslator::METoVKIndexType(_info.index_type);
+                geometry.geometry.triangles.indexData.deviceAddress = idx_addr;
+                geometry.geometry.triangles.transformData.deviceAddress = 0;
+
+                _build_info.push_back(geometry);
+
+                VkAccelerationStructureBuildRangeInfoKHR range{};
+                range.firstVertex = segment.vertex_offset;
+                range.primitiveOffset = segment.index_offset / 3;
+                range.primitiveCount = segment.index_count / 3;
+                range.transformOffset = 0;
+
+                _build_ranges.push_back(range);
+            }
+        }
+
+    VulkanRaytracingGeometry::VulkanRaytracingGeometry(const RaytracingGeometryInfo& _info, VulkanDevice* _device): VulkanDeviceObject(_device), RaytracingGeometry(_info){
+        
+        VkAccelerationStructureBuildTypeKHR                 build_type = VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR;
+        VkAccelerationStructureBuildGeometryInfoKHR build_info{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
+        
+        GetBuildRaytracingGeometryInfo(build_geometries, build_ranges, _info);
+        build_info.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+        build_info.flags = VulkanEnumTranslator::METoVKAccelerationStructureBuildType(_info.build_flags);
+        build_info.geometryCount = build_geometries.size();
+        vkGetAccelerationStructureBuildSizesKHR(
+            m_device->GetDevice(), 
+            build_type, 
+            &build_info, 
+            &_info.primitive_count, 
+            &build_sizes_info);
+
+
+        {
+            BufferInfo buffer_info(
+            build_sizes_info.accelerationStructureSize,
+            1,
+            EBufferUsageFlags::ACCELERATION_STRUCTURE
+            );
+
+            VkBufferCreateInfo buffer_ci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+            buffer_ci.size = buffer_info.size;
+            buffer_ci.usage = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+            buffer_ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+            VmaAllocationCreateInfo alloc_ci{};
+            alloc_ci.flags = 0;
+            alloc_ci.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+
+            VkBuffer buffer = VK_NULL_HANDLE;
+            VmaAllocation alloc = VK_NULL_HANDLE;
+            
+            vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &buffer, &alloc, nullptr);
+
+            underlying_buffer = MoerNew(VulkanBuffer)(buffer_info, *m_device, buffer, alloc, false, true);
+
+        }
+        
+        
+        VkAccelerationStructureCreateInfoKHR create_info{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
+        create_info.deviceAddress = 0;//for capture replay
+        create_info.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+        create_info.createFlags = 0;
+        create_info.buffer = underlying_buffer->GetHandle();
+        create_info.offset = 0;
+        create_info.size = underlying_buffer->GetByteSize();
+        
+
+        VK_CHECK_RESULT(vkCreateAccelerationStructureKHR(m_device->GetDevice(), &create_info, nullptr, &acc));
+    
+
+    
+    
+    }
+
+    VulkanRaytracingGeometry::~VulkanRaytracingGeometry(){
+        if(acc != VK_NULL_HANDLE){
+            vkDestroyAccelerationStructureKHR(m_device->GetDevice(), acc, VK_NULL_HANDLE);
+            acc = VK_NULL_HANDLE;
+        }
+
+        if(underlying_buffer){
+            MoerDelete(underlying_buffer);
+            underlying_buffer = nullptr;
+        }
+    }
+
+
+    RaytracingInstance& VulkanRaytracingScene::AddInstance(){
+        uint idx = instances.size();
+        RaytracingInstance instance{
+            .array_idx = idx,
+            .instance_id = idx
+        };
+        VkAccelerationStructureInstanceKHR vk_instance{
+    
+        };
+        instances.emplace_back(instance);
+        vk_instances.emplace_back(vk_instance);
+        return instances.back();
+    }
+
+    void VulkanRaytracingScene::FreeInstance(uint _array_idx){
+
+    }
+
 #pragma endregion
 
 #pragma region shader param

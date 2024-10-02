@@ -5,6 +5,7 @@
 #include "PixelFormat.h"
 #include "log/LogSystem.h"
 #include "math/Constant.h"
+#include "misc/MMemory.h"
 #include "misc/STL.h"
 #include "resources/ResourceTransition.h"
 #include "rhi/RHI.h"
@@ -24,6 +25,7 @@
 #include "VulkanDebug.h"
 
 #include "RHICmdReorderer.h"
+#include "vulkan/vulkan_core.h"
 
 #include <cstdint>
 #include <optional>
@@ -34,9 +36,10 @@
 namespace Moer::Render {
 
     struct VkCmdPreprocessor {
-        VkTracker& tracker;
+        VkTracker&       tracker;
+        VulkanAllocator& allocator;
 
-        VkCmdPreprocessor(VkTracker& _tracker) : tracker(_tracker) {
+        VkCmdPreprocessor(VkTracker& _tracker, VulkanAllocator& _allocator) : tracker(_tracker), allocator(_allocator) {
         }
 
         void VisitCmd(const Command* _cmd) {
@@ -70,6 +73,7 @@ namespace Moer::Render {
                     Visit(static_cast<const SetDrawStateCmd*>(_cmd));
                     break;
                 case Command::EType::BuildAccel:
+                    Visit(static_cast<const BuildAccelerationStructuresCmd*>(_cmd));
                     break;
                 case Command::EType::Barrier:
                     Visit(static_cast<const BarrierCmd*>(_cmd));
@@ -138,6 +142,34 @@ namespace Moer::Render {
         // }
         // void Visit(const SetConstantCmd* _cmd) {
         // }
+        void Visit(const BuildAccelerationStructuresCmd* _cmd) {
+            const Array<AccelerationStructureBuildParam>& params  = _cmd->Params();
+            BufferView&                                   scratch = _cmd->Scratch();
+            if (!scratch.GetBuffer()) {
+                uint64 scratch_size      = 0;
+                uint64 scratch_alignment = 256u;
+
+                for (const AccelerationStructureBuildParam& param : params) {
+                    auto* vk_geo = ResourceCast(param.geometry.Get());
+                    scratch_size = (scratch_size + scratch_alignment - 1) & ~(scratch_alignment - 1);
+                    scratch_size += param.mode == ERaytracingBuildMode::BUILD ? vk_geo->build_sizes_info.buildScratchSize : vk_geo->build_sizes_info.updateScratchSize;
+                }
+
+                scratch = allocator.AllocateScratch(scratch_size);
+            }
+            tracker.RecordState(ResourceCast(scratch.GetBuffer()), {VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR | VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR});
+            for (const AccelerationStructureBuildParam& param : params) {
+                auto* vk_geo    = ResourceCast(param.geometry.Get());
+                auto* vk_buffer = vk_geo->GetUnderlyingBuffer();
+
+                auto* vtx_buffer = ResourceCast(vk_geo->GetInfo().vertex_buffer.Get());
+                auto* idx_buffer = ResourceCast(vk_geo->GetInfo().index_buffer.Get());
+
+                tracker.RecordState(vk_buffer, {VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR});
+                tracker.RecordState(vtx_buffer, {VK_ACCESS_2_MEMORY_READ_BIT, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR});
+                tracker.RecordState(idx_buffer, {VK_ACCESS_2_MEMORY_READ_BIT, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR});
+            }
+        }
 
         void Visit(const BarrierCmd* _cmd) {
             for (auto& barrier : _cmd->ReadBuffers()) {
@@ -1637,6 +1669,45 @@ namespace Moer::Render {
             });
         }
 
+        void Visit(const BuildAccelerationStructuresCmd& _cmd) {
+            const Array<AccelerationStructureBuildParam>& build_params = _cmd.Params();
+
+            Array<VkAccelerationStructureBuildGeometryInfoKHR> build_infos;
+            Array<VkAccelerationStructureBuildRangeInfoKHR*>   build_ranges;
+
+            uint64 scratch_alignment = m_device->GetOptionalProperties().acceleration_structure_properties.minAccelerationStructureScratchOffsetAlignment;
+
+            BufferView    scratch_view    = _cmd.Scratch();
+            VulkanBuffer* scratch_buf     = ResourceCast(scratch_view.GetBuffer());
+            uint64        scratch_address = scratch_buf->DeviceAddress();
+
+            build_infos.reserve(build_params.size());
+            build_ranges.reserve(build_params.size());
+
+            uint64 scratch_offset = 0;
+
+            for (const auto& build_param : build_params) {
+                VulkanRaytracingGeometry* geometry = ResourceCast(build_param.geometry.Get());
+                build_ranges.emplace_back(geometry->build_ranges.data());
+
+                VkAccelerationStructureBuildGeometryInfoKHR build_info{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
+                build_info.dstAccelerationStructure = geometry->GetHandle();
+                if (build_param.mode == ERaytracingBuildMode::BUILD) {
+                    build_info.srcAccelerationStructure = geometry->GetHandle();
+                }
+                build_info.geometryCount             = geometry->build_geometries.size();
+                build_info.pGeometries               = geometry->build_geometries.data();
+                build_info.mode                      = VulkanEnumTranslator::METoVKBuildAccelerationStructureMode(build_param.mode);
+                build_info.flags                     = VulkanEnumTranslator::METoVKAccelerationStructureBuildType(geometry->GetInfo().build_flags);
+                build_info.scratchData.deviceAddress = scratch_address + scratch_offset;
+
+                scratch_offset = (scratch_offset + scratch_alignment - 1) & ~(scratch_alignment - 1);
+                scratch_offset += build_param.mode == ERaytracingBuildMode::BUILD ? geometry->build_sizes_info.buildScratchSize : geometry->build_sizes_info.updateScratchSize;
+            }
+
+            cmd_list.BuildAccelerationStructures(build_infos, build_ranges);
+        }
+
         // void Visit(const UpdateDrawStateCmd& _cmd) {
         // }
 
@@ -1771,7 +1842,7 @@ namespace Moer::Render {
         CmdReorderer reorderer{};
         auto&        tracker = vk_allocator.GetTracker();
 
-        VkCmdPreprocessor preprocessor(tracker);
+        VkCmdPreprocessor preprocessor(tracker, vk_allocator);
 
         for (const auto& cmd : _submit.cmds) {
             reorderer.AcceptCmd(cmd.get());
@@ -1823,6 +1894,7 @@ namespace Moer::Render {
                         visitor.Visit(static_cast<const DispatchCmd&>(*cmd));
                         break;
                     case Command::EType::BuildAccel:
+                        visitor.Visit(static_cast<const BuildAccelerationStructuresCmd&>(*cmd));
                         break;
                     case Command::EType::Barrier:
                         visitor.Visit(static_cast<const BarrierCmd&>(*cmd));
@@ -2046,8 +2118,9 @@ namespace Moer::Render {
     }
 
     VulkanAllocator::VulkanAllocator(VulkanDevice* _device, EQueueType _type) : VulkanDeviceObject(_device),
-                                                              allocator(_device),
-                                                              small_allocator(&allocator, small_block_size, 1.5) {
+                                                                                allocator(_device),
+                                                                                small_allocator(&allocator, small_block_size, 1.5),
+                                                                                scratch_allocator(_device) {
         VkQueueFlagBits queue_type = VulkanEnumTranslator::METoVKQueueFlagBits(_type);
         cmd_allocator.emplace(_device, queue_type);
         cmd_list.emplace(&cmd_allocator.value(), *_device);
@@ -2081,6 +2154,7 @@ namespace Moer::Render {
             allocator.DeAllocate(reinterpret_cast<uint64>(handle));
         }
         large_buffers.clear();
+        scratch_allocator.Reset();
     }
 
     void VulkanAllocator::ResetCmdList() {
@@ -2130,6 +2204,55 @@ namespace Moer::Render {
     void VulkanAllocator::TmpBufferAllocator::DeAllocate(uint64 _buffer) {
         auto* buffer = reinterpret_cast<VulkanBuffer*>(_buffer);
         MoerDelete(buffer);
+    }
+
+    VulkanAllocator::ScratchAllocator::ScratchAllocator(VulkanDevice* _device) : VulkanDeviceObject(_device) {
+        alignment = _device->GetOptionalProperties().acceleration_structure_properties.minAccelerationStructureScratchOffsetAlignment;
+    }
+
+    uint64 VulkanAllocator::ScratchAllocator::Allocate(uint64 _size) {
+        _size                          = (_size + alignment - 1) / alignment * alignment;
+        VkBufferCreateInfo buffer_info = {
+            .sType                 = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            .pNext                 = nullptr,
+            .flags                 = 0,
+            .size                  = _size,
+            .usage                 = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+            .sharingMode           = VK_SHARING_MODE_EXCLUSIVE,
+            .queueFamilyIndexCount = 0,
+            .pQueueFamilyIndices   = nullptr};
+
+        VmaAllocationCreateInfo alloc_info{
+            .flags = VMA_ALLOCATION_CREATE_STRATEGY_BEST_FIT_BIT,
+            .usage = VMA_MEMORY_USAGE_AUTO};
+        VulkanBuffer::BufferAlloc buffer_alloc;
+        BufferInfo                info(
+            _size,
+            1,
+            EBufferUsageFlags::ACCELERATION_STRUCTURE_SCRATCH);
+
+        VK_CHECK_RESULT(vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_info, &alloc_info, &buffer_alloc.buffer, &buffer_alloc.alloc, nullptr));
+        VulkanBuffer* vk_buffer = MoerNew(VulkanBuffer)(info, *m_device, buffer_alloc.buffer, buffer_alloc.alloc, false, true);
+        allocated_buffers.push_back((uint64)vk_buffer);
+        return reinterpret_cast<uint64>(vk_buffer);
+    }
+
+    BufferView VulkanAllocator::AllocateScratch(uint64 _size) {
+        auto          handle = scratch_allocator.Allocate(_size);
+        VulkanBuffer* buffer = reinterpret_cast<VulkanBuffer*>(handle);
+        return {buffer, 0, buffer->GetNumElement(), 1u};
+    }
+
+    void VulkanAllocator::ScratchAllocator::Deallocate(uint64 _handle) {
+        VulkanBuffer* buffer = reinterpret_cast<VulkanBuffer*>(_handle);
+        MoerDelete(buffer);
+    }
+
+    void VulkanAllocator::ScratchAllocator::Reset() {
+        for (uint64 handle : allocated_buffers) {
+            Deallocate(handle);
+        }
+        allocated_buffers.clear();
     }
 
     VulkanAllocator::StackAllocator::StackAllocator(TmpBufferAllocator* _alloc, uint64 _init_cap, double _grouth_factor) : allocator(_alloc), init_capacity(_init_cap), growth_factor(_grouth_factor) {
@@ -2497,6 +2620,10 @@ namespace Moer::Render {
     void VulkanCmdList::SetPso(const PipelineHandle& _pso_handle) {
         auto* vk_pso = reinterpret_cast<VulkanPipelineState*>(std::get<VkPipelineHandle>(_pso_handle.handle).handle);
         vkCmdBindPipeline(command_buffer, vk_pso->GetPipelineBindPoint(), vk_pso->GetHandle());
+    }
+
+    void VulkanCmdList::BuildAccelerationStructures(const Array<VkAccelerationStructureBuildGeometryInfoKHR>& _build_infos, const Array<VkAccelerationStructureBuildRangeInfoKHR*>& _build_ranges) {
+        vkCmdBuildAccelerationStructuresKHR(command_buffer, _build_infos.size(), _build_infos.data(), _build_ranges.data());
     }
 
 }// namespace Moer::Render

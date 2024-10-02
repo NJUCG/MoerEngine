@@ -78,3 +78,16 @@ target_link_libraries(RHITest
         PRIVATE glfw
 )
 set_target_properties(RHITest PROPERTIES FOLDER ${moer_test_folder})
+
+add_executable(RaytracingTest Raytracing/RTTest.cpp)
+target_include_directories(RaytracingTest
+        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>
+        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
+        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
+        PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Raytracing>
+)
+target_link_libraries(RaytracingTest
+        PRIVATE MoerRender
+        PRIVATE glfw
+)
+set_target_properties(RaytracingTest PROPERTIES FOLDER ${moer_test_folder})

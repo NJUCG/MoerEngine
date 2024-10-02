@@ -222,7 +222,7 @@ namespace Moer::Render {
         TPipeline Compute(std::string_view _path, std::string_view _entry_name = "main") {
             return ComputeConstructor(GetDevice(), _path, _entry_name).Build<TPipeline>();
         }
-        RTConstructor RT();
+        RTConstructor Raytracing();
 
         struct Impl;
         friend Impl;

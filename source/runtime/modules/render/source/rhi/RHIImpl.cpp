@@ -2,7 +2,7 @@
 #include "rhi/RHI.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
-namespace Moer::Render{
+namespace Moer::Render {
     PipelineHandle RenderDevice::CreatePipeline(GfxPsoCreateInfo&& _pso_info, PipelineShaderInfo&& _shaders) {
         return impl->CreatePipeline(std::move(_pso_info), std::move(_shaders));
     }
@@ -39,7 +39,7 @@ namespace Moer::Render{
         return impl->CreateBuffer(_element_cnt, _stride, _usage);
     }
 
-    const EShaderPlatform RenderDevice::GetShaderPlatform() const{
+    const EShaderPlatform RenderDevice::GetShaderPlatform() const {
         switch (rhi_type) {
             case ERHIType::Vulkan:
                 return EShaderPlatform::SP_VULKAN_SM6;
@@ -47,7 +47,10 @@ namespace Moer::Render{
                 return EShaderPlatform::SP_WIN_D3D_SM6;
             default:
                 return EShaderPlatform::SP_Num;
-        
         }
     }
-}
+
+    RaytracingGeometryRef RenderDevice::CreateRaytracingGeometry(const RaytracingGeometryInfo& _init) {
+        return impl->CreateRaytracingGeometry(_init);
+    }
+}// namespace Moer::Render

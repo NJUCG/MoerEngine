@@ -138,6 +138,9 @@ namespace Moer::Render {
         void UploadPushConstants(PipelineHandle& _pso_handle, std::span<const uint> _data);
         void BindDescriptors(PipelineHandle& _pso_handle, const ArrayArguments& _args);
 
+        //Raytracing
+        void BuildAccelerationStructures(const Array<VkAccelerationStructureBuildGeometryInfoKHR>& _build_infos, const Array<VkAccelerationStructureBuildRangeInfoKHR*>& _range_infos);
+
         VkCommandBuffer GetHandle() const { return command_buffer; }
     };
     //allocator for tmp buffer and other tmp resources
@@ -164,6 +167,7 @@ namespace Moer::Render {
         VulkanAllocator(VulkanDevice* _device, EQueueType _queue_type);
         ~VulkanAllocator();
         BufferView     AllocateBuffer(uint64 _size, uint _align);
+        BufferView     AllocateScratch(uint64 _size);
         VulkanCmdList& GetCmdList() {
             return cmd_list.value();
         }
@@ -183,6 +187,16 @@ namespace Moer::Render {
             TmpBufferAllocator(VulkanDevice* _device);
             uint64 Allocate(uint64 _size);
             void   DeAllocate(uint64 _handle);
+        };
+
+        struct ScratchAllocator : VulkanDeviceObject {
+            ScratchAllocator(VulkanDevice* _device);
+            uint64 Allocate(uint64 _size);
+            void   Deallocate(uint64 _handle);
+            void   Reset();
+
+            Array<uint64> allocated_buffers;
+            uint64        alignment;
         };
         struct StackAllocator {
             uint64 init_capacity;
@@ -212,6 +226,7 @@ namespace Moer::Render {
         TmpBufferAllocator                allocator;
 
         StackAllocator               small_allocator;
+        ScratchAllocator             scratch_allocator;
         Array<std::function<void()>> on_complete;
         VkTracker                    tracker;
     };
@@ -515,10 +530,10 @@ namespace Moer::Render {
         void      Present(SwapchainRef _viewport, TextureView _view) override;
         void      Sync() override;
 
-        void                               ExecuteThread();
-        VulkanDevice&                      vk_device;
-        LockFreeQueueBase<VulkanAllocator> allocators;
-        DEQueue<QueueEvent>                event_queue;
+        void                                      ExecuteThread();
+        VulkanDevice&                             vk_device;
+        LockFreeQueueBase<VulkanAllocator, false> allocators;
+        DEQueue<QueueEvent>                       event_queue;
 
     private:
         UniquePtr<VulkanAllocator> GetAllocator();

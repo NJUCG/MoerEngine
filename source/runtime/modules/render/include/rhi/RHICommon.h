@@ -463,6 +463,7 @@ enum ERHIResourceType {
     RRT_SHADER_RESOURCE_VIEW,
     RRT_CONSTANT_BUFFER_VIEW,
     RRT_RAYTRACING_ACCELERATION_STRUCTURE,
+    RRT_RAYTRACING_GEOMETRY,
     RRT_RAYTRACING_SCENE,
     RRT_STAGING_BUFFER,
     RRT_SHADER_LIBRARY,
@@ -659,6 +660,51 @@ enum class EPassType {
 };
 
 ENUM_BIT_OP_IMPL(EBufferRuntimeUsageFlags, FLAG)
+
+#pragma endregion
+
+#pragma[raytracing]
+
+enum ERayTracingGeometryType : uint8_t {
+    RTGT_TRIANGLES,
+    RTGT_AABBS
+};
+
+enum class ERayTracingGeometryFlags : uint8_t {
+    NONE,
+    GEOMETRY_OPAQUE                 = 1 << 0,
+    NO_DUPLICATE_ANY_HIT_INVOCATION = 1 << 1
+};
+
+ENUM_BIT_OP_IMPL(ERayTracingGeometryFlags, FLAG)
+
+enum class ERayTracingInstanceFlags : uint8_t {
+    NONE,
+    TRIANGLE_CULL_DISABLE = 1 << 0,
+    //triangle flip face
+    TRIANGLE_FRONT_COUNTERCLOCKWISE = 1 << 1,
+    FORCE_OPAQUE                    = 1 << 2,
+    FORCE_NO_OPAQUE                 = 1 << 3
+};
+
+ENUM_BIT_OP_IMPL(ERayTracingInstanceFlags, FLAG)
+
+enum class ERayTracingAccelerationStructureBuildFlags : uint8_t {
+    NONE,
+    ALLOW_UPDATE      = 1 << 0,
+    ALLOW_COMPACTION  = 1 << 1,
+    PREFER_FAST_TRACE = 1 << 2,
+    PREFER_FAST_BUILD = 1 << 3,
+    MINIMIZE_MEMORY   = 1 << 4
+
+};
+
+ENUM_BIT_OP_IMPL(ERayTracingAccelerationStructureBuildFlags, FLAG)
+
+enum class ERaytracingBuildMode : uint8_t {
+    BUILD,
+    UPDATE
+};
 
 #pragma endregion
 enum EShaderType : uint8_t {
@@ -1134,17 +1180,17 @@ namespace Moer {
         };
         struct Spirv {
             union {
-                Resources resources;
-                BindlessArray  bindless;
+                Resources     resources;
+                BindlessArray bindless;
             };
         };
         struct Dxil {};
-        struct Memory{
+        struct Memory {
             byte data[sizeof(Spirv)];
         };
         union {
-            Spirv spirv;
-            Dxil  dxil;
+            Spirv  spirv;
+            Dxil   dxil;
             Memory memory;
         };
     };

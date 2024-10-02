@@ -35,7 +35,7 @@ struct A {
 };
 
 void LockFreeStackTest() {
-    LockFreeQueueBase<class A, 64> stack;
+    LockFreeQueueBase<class A> stack;
 
     A a;
     stack.Push(MoerNew(A)());
@@ -68,7 +68,7 @@ void LockFreeStackTest() {
 }
 
 void LockFreeQueueTest() {
-    LockFreeQueueBase<class A, 64> queue;
+    LockFreeQueueBase<class A> queue;
 
     A a;
     queue.Push(&a);

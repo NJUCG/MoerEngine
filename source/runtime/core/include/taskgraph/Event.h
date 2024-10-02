@@ -4,19 +4,6 @@
 #include "misc/LockFree.h"
 #include <mutex>
 #include <condition_variable>
-class Event;
-
-class EventPool {
-public:
-    ~EventPool();
-    CORE_API Event*            GetEvent(bool autoReset = true);
-    CORE_API static EventPool* Get();
-    CORE_API void              ReleaseEvent(Event* target);
-
-private:
-    EventPool();
-    LockFreeQueueBase<Event> m_pool;
-};
 class Event {
     friend class EventPool;
     friend class EventRef;
@@ -34,6 +21,18 @@ private:
     std::atomic<uint32_t> m_signal;
     bool                  m_autoReset;
     //void* _event;
+};
+
+class EventPool {
+public:
+    ~EventPool();
+    CORE_API Event*            GetEvent(bool autoReset = true);
+    CORE_API static EventPool* Get();
+    CORE_API void              ReleaseEvent(Event* target);
+
+private:
+    EventPool();
+    LockFreeQueueBase<Event, false> m_pool;
 };
 
 class EventRef {

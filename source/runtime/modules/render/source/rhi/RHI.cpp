@@ -12,7 +12,7 @@
 
 RHI* g_rhi = nullptr;
 
-extern LockFreeQueueBase<RHIResource, 64> pending_deletings;
+extern LockFreeQueueBase<RHIResource, false> pending_deletings;
 // global shader
 void MTest() {
 

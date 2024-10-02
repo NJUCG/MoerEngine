@@ -202,9 +202,9 @@ struct CORE_API LockFreeNode {
     // union {
     ABADoublePtr next_double;//double index for queue, because we need to change both head&head-next or tail&tail-next
     // };
-    void*       data = nullptr;
+    uint64_t    data = 0;
     uint32_t    next_single;//single index for stack, because we only need to change head
-    inline void SetData(void* _data) {
+    inline void SetData(uint64_t _data) {
         {
             data = _data;
         }
@@ -228,6 +228,22 @@ struct LockFreeNodeStrategy {
     CORE_API static TAllocator& GetAllocator();
 
     // static LockFreeIndexedAllocator<LockFreeNode, MAX_LOCK_FREE_NODE_COUNT, s_node_per_block> fix_size_allocator;
+};
+
+template<typename T, bool SmallEnough>
+struct InlineValue {
+};
+
+template<typename T>
+struct InlineValue<T, false> {
+    using TValue                   = T*;
+    static constexpr T* zero_value = nullptr;
+};
+
+template<typename T>
+struct InlineValue<T, true> {
+    using TValue                  = T;
+    static constexpr T zero_value = T{};
 };
 
 /**
@@ -331,25 +347,27 @@ private:
     alignas(Padding) ABADoublePtr m_head{0};
 };
 
-template<class T, uint32_t Padding>
+template<class T, bool InlineType, uint32_t Padding>
 class LockFreeStackBase {
-    using TNodeIndex = LockFreeNodeStrategy::TNodeIndex;
-    using TNode      = LockFreeNodeStrategy::TNode;
+    using TNodeIndex                 = LockFreeNodeStrategy::TNodeIndex;
+    using TNode                      = LockFreeNodeStrategy::TNode;
+    static constexpr bool use_inline = InlineType && sizeof(T) < sizeof(uint64_t);
 
 public:
+    using TValue        = InlineValue<T, use_inline>::TValue;
     LockFreeStackBase() = default;
     ~LockFreeStackBase() {
         while (Pop() != nullptr) {}
     }
-    void Push(T* _payload) {
+    void Push(TValue _payload) {
         TNodeIndex index = LockFreeNodeStrategy::AllocateNodeIndex();
 
         LockFreeNode* node = LockFreeNodeStrategy::GetNode(index);
 
-        node->SetData(_payload);
+        node->SetData(uint64(_payload));
         node_list.Push(index);
     }
-    bool PushIf(T* _payload, std::function<bool(uint64_t)> push_if_true) {
+    bool PushIf(TValue _payload, std::function<bool(uint64_t)> push_if_true) {
         TNodeIndex index = 0;
 
         auto allocate_node_if_true = [&index, _payload, &push_if_true](uint64_t state) {
@@ -357,7 +375,7 @@ public:
                 if (index == 0) {
                     index              = LockFreeNodeStrategy::AllocateNodeIndex();
                     LockFreeNode* node = LockFreeNodeStrategy::GetNode(index);
-                    node->SetData(_payload);
+                    node->SetData(uint64_t(_payload));
                 }
                 return index;
             }
@@ -372,23 +390,23 @@ public:
         return true;
     }
 
-    T* Pop() {
+    TValue Pop() {
         TNodeIndex index = node_list.Pop();
         if (index == 0) return nullptr;
 
         LockFreeNode* node = LockFreeNodeStrategy::GetNode(index);
 
-        T* data = (T*)node->data;
+        TValue data = (TValue)node->data;
         LockFreeNodeStrategy::FreeNodeIndex(index);
 
         return data;
     }
 
-    void PopAll(Moer::Array<T*>& target) {
+    void PopAll(Moer::Array<TValue>& _target) {
         TNodeIndex index = node_list.PopAll();
         while (index != 0) {
             LockFreeNode* node = LockFreeNodeStrategy::GetNode(index);
-            target.push_back((T*)node->data);
+            _target.push_back((TValue)node->data);
             TNodeIndex current_node_index = index;
 
             index = node->next_single;
@@ -396,11 +414,11 @@ public:
         }
     }
 
-    void PopAllAndChangeTag(Moer::Array<T*>& target, std::function<uint64_t(uint64_t)> func_change_state) {
+    void PopAllAndChangeTag(Moer::Array<TValue>& _target, std::function<uint64_t(uint64_t)> func_change_state) {
         TNodeIndex index = node_list.PopAllAndChangeTag(func_change_state);
         while (index != 0) {
             LockFreeNode* node = LockFreeNodeStrategy::GetNode(index);
-            target.push_back((T*)node->data);
+            _target.push_back((TValue)node->data);
             TNodeIndex current_node_index = index;
 
             index = node->next_single;
@@ -416,12 +434,15 @@ private:
     LockFreeNodeStack<Padding> node_list;
 };
 
-template<class T, uint32_t Padding = PLATFORM_CACHELINE_SIZE>
+template<class T, bool InlineType = false, uint32_t Padding = PLATFORM_CACHELINE_SIZE>
 class LockFreeQueueBase {
-    using TNodeIndex = LockFreeNodeStrategy::TNodeIndex;
-    using TNode      = LockFreeNodeStrategy::TNode;
+    using TNodeIndex                 = LockFreeNodeStrategy::TNodeIndex;
+    using TNode                      = LockFreeNodeStrategy::TNode;
+    static constexpr bool use_inline = InlineType && sizeof(T) < sizeof(uint64_t);
 
 public:
+    using TValue                       = InlineValue<T, use_inline>::TValue;
+    static constexpr TValue zero_value = InlineValue<T, use_inline>::zero_value;
     LockFreeQueueBase() {
         m_head.SetAll(0, 0);
         m_tail.SetAll(0, 0);
@@ -430,16 +451,16 @@ public:
         m_tail.SetValue(avoid_zero);
     };
     ~LockFreeQueueBase() {
-        while (Pop() != nullptr) {
+        while (Pop() != zero_value) {
         }
         //delete avoid zero node stub
         LockFreeNodeStrategy::FreeNodeIndex(m_head.GetValue());
     }
-    void Push(T* _payload) {
+    void Push(TValue _payload) {
         //use fetch and add
         TNodeIndex index = LockFreeNodeStrategy::AllocateNodeIndex();
 
-        LockFreeNodeStrategy::GetNode(index)->SetData(_payload);
+        LockFreeNodeStrategy::GetNode(index)->SetData(uint64_t(_payload));
 
         ABADoublePtr local_tail;
         ABADoublePtr new_tail;
@@ -487,7 +508,7 @@ public:
         }
     }
 
-    T* Pop() {
+    TValue Pop() {
         ABADoublePtr local_head;
         ABADoublePtr new_head;
         ABADoublePtr local_tail;
@@ -495,7 +516,7 @@ public:
         ABADoublePtr local_next;
         ABADoublePtr new_next;
 
-        T* result = nullptr;
+        TValue result = zero_value;
 
         while (true) {
             local_head = m_head;
@@ -512,7 +533,7 @@ public:
                 if (local_head.GetValue() == local_tail.GetValue()) {
                     //empty return null
                     if (local_next.GetValue() == 0) {
-                        return nullptr;
+                        return zero_value;
                     }
                     //next has been pushed, help to update tail
                     new_tail = local_tail;
@@ -522,7 +543,7 @@ public:
 
                 } else {
                     //pop current node
-                    result   = (T*)LockFreeNodeStrategy::GetNode(local_next.GetValue())->data;
+                    result   = (TValue)LockFreeNodeStrategy::GetNode(local_next.GetValue())->data;
                     new_head = local_head;
                     new_head.AdvanceCounter(1);
                     new_head.SetValue(local_next.GetValue());
@@ -537,9 +558,9 @@ public:
         return result;
     }
 
-    void PopAll(Moer::Array<T*>& target) {
-        while (T* item = Pop()) {
-            target.push_back(item);
+    void PopAll(Moer::Array<TValue>& _target) {
+        while (TValue item = Pop()) {
+            _target.push_back(item);
         }
     }
 
@@ -548,27 +569,29 @@ private:
     alignas(Padding) ABADoublePtr m_tail;
 };
 
-template<class T, uint32_t Padding = PLATFORM_CACHELINE_SIZE>
-class ClosableLockFreeMpScStack : public LockFreeStackBase<T, Padding> {
+template<class T, bool InlineType = false, uint32_t Padding = PLATFORM_CACHELINE_SIZE>
+class ClosableLockFreeMpScStack : public LockFreeStackBase<T, InlineType, Padding> {
+    using TValue = LockFreeStackBase<T, InlineType, Padding>::TValue;
+
 public:
-    ClosableLockFreeMpScStack() : LockFreeStackBase<T, Padding>() {
+    ClosableLockFreeMpScStack() : LockFreeStackBase<T, InlineType, Padding>() {
     }
     ClosableLockFreeMpScStack(ClosableLockFreeMpScStack const&)            = delete;
     ClosableLockFreeMpScStack& operator=(ClosableLockFreeMpScStack const&) = delete;
     // void Reset(){
 
     // }
-    bool TryPush(T* _payload) {
-        return LockFreeStackBase<T, Padding>::PushIf(_payload, [](uint64_t State) { return (ABADoublePtr::GetTagFromState(State) & 1) == 0; });
+    bool TryPush(TValue _payload) {
+        return LockFreeStackBase<T, InlineType, Padding>::PushIf(_payload, [](uint64_t State) { return (ABADoublePtr::GetTagFromState(State) & 1) == 0; });
     }
     bool IsClosed() const {
-        return ABADoublePtr::GetTagFromState(LockFreeStackBase<T, Padding>::GetState()) & 1;
+        return ABADoublePtr::GetTagFromState(LockFreeStackBase<T, InlineType, Padding>::GetState()) & 1;
     }
-    void ComsumeAllAndClose(Moer::Array<T*>& target) {
-        LockFreeStackBase<T, Padding>::PopAllAndChangeTag(target,
-                                                          [](uint64_t State) {
-                                                              return ABADoublePtr::SetTagInState(State, 1);
-                                                          });
+    void ComsumeAllAndClose(Moer::Array<TValue>& target) {
+        LockFreeStackBase<T, InlineType, Padding>::PopAllAndChangeTag(target,
+                                                                      [](uint64_t State) {
+                                                                          return ABADoublePtr::SetTagInState(State, 1);
+                                                                      });
     }
 
 private:
@@ -647,7 +670,7 @@ public:
     }
 
 private:
-    LockFreeQueueBase<T, PLATFORM_CACHELINE_SIZE> m_queue[TaskPriorityCount];
+    LockFreeQueueBase<T, false, PLATFORM_CACHELINE_SIZE> m_queue[TaskPriorityCount];
 
     ABADoublePtr state;
 };

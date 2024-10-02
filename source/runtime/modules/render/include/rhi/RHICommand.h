@@ -170,7 +170,7 @@ public:
     virtual void ExecuteSubCommands(uint32_t                _num,
                                     RHIGraphicsCommandList* _sub_commands) = 0;
 
-    virtual void BindParameters(Shader* _shader, RHIBatchedShaderParameters* _batched_params){};
+    virtual void BindParameters(Shader* _shader, RHIBatchedShaderParameters* _batched_params) {};
 };
 
 class RHIComputeCommandList : public RHICommandListBase {
@@ -287,6 +287,8 @@ namespace Moer::Render {
             TextureToTexture,
             ShaderDispatch,
             BuildAccel,
+            BuildTLAS,
+            TraceRay,
             Barrier,
             SetDrawState,
             UpdateBindlessArray,
@@ -380,7 +382,7 @@ namespace Moer::Render {
         Array<WaitEvent>   wait_events;
         Array<SignalEvent> signal_events;
         bool               b_sync{false};//force sync queue timeline
-        CmdSubmit&&         Wait(Fence* _fence, uint64 _wait_value) {
+        CmdSubmit&&        Wait(Fence* _fence, uint64 _wait_value) {
             wait_events.emplace_back(uint64(_fence), _wait_value);
             return std::move(*this);
         }
@@ -408,8 +410,6 @@ namespace Moer::Render {
         }
         CmdSubmit(Array<UniquePtr<Command>>&& _cmds, Array<std::function<void(void)>>&& _callbacks) : cmds(std::move(_cmds)), callbacks(std::move(_callbacks)) {
         }
-
-        
     };
 
     struct ReadTexture {
@@ -523,6 +523,9 @@ namespace Moer::Render {
             // bool      b_set_params = false;
             // bool      b_set_consts = false;
         };
+
+        struct RENDER_API RTDispatcher {
+        };
         struct RENDER_API ComputeDispatcher {
             void Dispatch(Vector2ui _group_count) {
                 Dispatch(uint3(_group_count, 1));
@@ -585,6 +588,12 @@ namespace Moer::Render {
             }
             return ComputeDispatcher(_pso, *this);
         };
+
+        template<typename TRTPso, typename... TArgs>
+        void RT(TRTPso& _pso, TArgs&&... _args) {
+            // ArrayArguments&& args = std::move(_pso.SetArgs(_args...));
+            // commands.push_back(MakeUnique<ShaderDispatchCmd>(_pso, std::move(args)));
+        }
 
         RENDER_API void CopyFrom(BufferView _src, BufferView _dst);
         RENDER_API void CopyFrom(TextureView _src, TextureView _dst);

@@ -16,7 +16,7 @@ public:
 
         TNode* node = LockFreeNodeStrategy::GetNode(index);
         node->next_double.SetValue(0);
-        node->SetData(nullptr);
+        node->SetData(uint64_t(0));
         node->next_single = 0;
         node_stack.Push(index);
     }
@@ -30,7 +30,7 @@ public:
         //init nodes
         TNode* node = LockFreeNodeStrategy::GetNode(index);
         node->next_double.SetAll(0, 0);
-        node->SetData(nullptr);
+        node->SetData(uint64_t(0));
         assert(node->next_single == 0);
         return index;
     }

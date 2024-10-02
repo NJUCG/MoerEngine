@@ -1028,7 +1028,7 @@ namespace Moer::Render {
         VkGraphicsPipelineCreateInfo pipeline_create_info{};
         pipeline_create_info.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
         pipeline_create_info.pNext               = &rendering_create_info;
-        pipeline_create_info.flags               = VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT ;
+        pipeline_create_info.flags               = VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
         pipeline_create_info.stageCount          = shader_stages.size();
         pipeline_create_info.pStages             = shader_stages.data();
         pipeline_create_info.pVertexInputState   = &vertex_input_state;
@@ -1130,7 +1130,7 @@ namespace Moer::Render {
 
         pipeline_create_info.sType              = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
         pipeline_create_info.pNext              = nullptr;
-        pipeline_create_info.flags              = VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT ;
+        pipeline_create_info.flags              = VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
         pipeline_create_info.stage              = shader_stage;
         pipeline_create_info.layout             = vk_pso->GetPipelineLayout();
         pipeline_create_info.basePipelineHandle = nullptr;
@@ -1185,6 +1185,14 @@ namespace Moer::Render {
     }
 
     FenceRef VulkanDevice::CreateFence() { return FenceRef{MoerNew(VulkanFence)(*this)}; }
+
+#pragma region[ raytracing ]
+
+    RaytracingGeometryRef VulkanDevice::CreateRaytracingGeometry(const RaytracingGeometryInfo& _info) {
+        return RaytracingGeometryRef{MoerNew(VulkanRaytracingGeometry)(_info, this)};
+    }
+
+#pragma endregion
 
     SwapchainRef VulkanDevice::CreateSwapchain(const SwapchainCreateInfo& _info) { return SwapchainRef{MoerNew(VkSwapchain)(*this, _info)}; }
 

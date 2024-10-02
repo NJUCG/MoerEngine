@@ -77,6 +77,9 @@ namespace Moer::Render {
         BindlessArrayRef CreateBindlessArray(uint _max_size) override;
         FenceRef         CreateFence() override;
 
+        // Raytracing
+        RaytracingGeometryRef CreateRaytracingGeometry(const RaytracingGeometryInfo& _init) override;
+
         // RHIViewportRef CreateViewport(const RHIViewportInitializer& _init) override;
 
         // BackBufferInfo GetNextBackBufferInfo(RHIViewport* _viewport) override;
@@ -177,16 +180,16 @@ namespace Moer::Render {
         Array<VulkanCommandAllocator> m_command_allocators;
 
     private:
-        VkInstance       m_instance         = VK_NULL_HANDLE;
-        VkPhysicalDevice m_gpu              = VK_NULL_HANDLE;
-        VkDevice         m_device           = VK_NULL_HANDLE;
-        VkQueue          m_graphics_queue   = VK_NULL_HANDLE;
-        VkQueue          m_present_queue    = VK_NULL_HANDLE;
-        VkQueue          m_compute_queue    = VK_NULL_HANDLE;
-        VkQueue          m_raytracing_queue = VK_NULL_HANDLE;
-        VkQueue          m_transfer_queue   = VK_NULL_HANDLE;
+        VkInstance            m_instance                  = VK_NULL_HANDLE;
+        VkPhysicalDevice      m_gpu                       = VK_NULL_HANDLE;
+        VkDevice              m_device                    = VK_NULL_HANDLE;
+        VkQueue               m_graphics_queue            = VK_NULL_HANDLE;
+        VkQueue               m_present_queue             = VK_NULL_HANDLE;
+        VkQueue               m_compute_queue             = VK_NULL_HANDLE;
+        VkQueue               m_raytracing_queue          = VK_NULL_HANDLE;
+        VkQueue               m_transfer_queue            = VK_NULL_HANDLE;
         VkDescriptorSetLayout empty_descriptor_set_layout = VK_NULL_HANDLE;
-        EventRef         init_event{};
+        EventRef              init_event{};
 
         VulkanDeviceInfo m_device_info{};
 
@@ -198,7 +201,7 @@ namespace Moer::Render {
         UniquePtr<VkCommandQueue>                       gfx_queue{};
         UniquePtr<VkCommandQueue>                       compute_queue{};
         UniquePtr<VkCommandQueue>                       transfer_queue{};
-        LockFreeQueueBase<RHIResource, 64>              deferred_release_queue{};
+        LockFreeQueueBase<RHIResource, false, 64>       deferred_release_queue{};
         static constexpr uint                           immutable_sampler_count = uint(SF_Num) * uint(SAM_Num) * uint(SCF_Num);
         StaticArray<VkSampler, immutable_sampler_count> immutable_samplers{};
 

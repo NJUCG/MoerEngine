@@ -3,8 +3,8 @@
 #include "ThreadManager.h"
 #include "Event.h"
 #include "misc/LockFree.h"
+#include "GraphTask.h"
 #include <iostream>
-class BaseGraphTask;
 
 enum QuitCommand : int32_t {
     QUIT   = -1,

@@ -13,7 +13,7 @@
 #include <tuple>
 
 //need a mpmc linked list to delete resource
-LockFreeQueueBase<RHIResource> pending_deletings;
+LockFreeQueueBase<RHIResource, false> pending_deletings;
 
 void RHIResource::Destroy() {
     //mark resource to be deleted

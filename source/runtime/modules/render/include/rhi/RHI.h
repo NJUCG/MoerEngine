@@ -314,6 +314,8 @@ namespace Moer::Render {
 
         RENDER_API FenceRef CreateFence();
 
+        RENDER_API RaytracingGeometryRef CreateRaytracingGeometry(const RaytracingGeometryInfo& _init);
+
         class Impl;
 
     protected:

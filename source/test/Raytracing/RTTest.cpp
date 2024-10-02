@@ -67,7 +67,7 @@ int main(int argc, const char** argv) {
     auto&           device = RenderDevice::Get();
     ShaderManager   manager(device);
     uint2           resolution = {1280, 720};
-    SurfaceInitInfo surface_info("Vulkan", resolution.x, resolution.y, "RHITest", false);
+    SurfaceInitInfo surface_info("Vulkan", resolution.x, resolution.y, "RaytracingTest", false);
     WindowContext::Init(surface_info);
     auto&& scope_exit    = OnScopeExit([&] {
         WindowContext::ShutDown();
@@ -76,7 +76,6 @@ int main(int argc, const char** argv) {
     });
     auto*  window_handle = WindowContext::GetMainWindow();
 
-    auto                buf = device.CreateBuffer<float>(1024, EBufferUsageFlags::UNORDERED_ACCESS);
     SwapchainCreateInfo sc_info{.window_handle = (uintptr_t)window_handle, .size = {resolution.x, resolution.y}, .back_buffer_sz = 2, .preferred_format = PF_R8G8B8A8_SRGB};
     auto                sc             = device.CreateSwapchain(sc_info);
     BindlessArrayRef    bindless_array = device.CreateBindlessArray();
@@ -109,49 +108,16 @@ int main(int argc, const char** argv) {
     uint     alignment = 4;
     ImGuiIO& io        = ImGui::GetIO();
     io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
-    uint32_t   upload_pitch = (width * 4 + alignment - 1u) & ~(alignment - 1u);
-    uint32_t   upload_size  = height * upload_pitch;
-    TextureRef font_tex     = device.CreateTexture(
-        Extent2D(width, height),
-        PF_R8G8B8A8_UNORM,
-        ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT);
+    uint32_t upload_pitch = (width * 4 + alignment - 1u) & ~(alignment - 1u);
+    uint32_t upload_size  = height * upload_pitch;
 
     TextureRef output = device.CreateTexture(
         Extent2D(resolution.x, resolution.y),
         PF_R8G8B8A8_SRGB,
         ETextureUsageFlags::COLOR_ATTACHMENT);
-
-    TextureRef output2 = device.CreateTexture(
-        Extent2D(resolution.x, resolution.y),
-        PF_R8G8B8A8_SRGB,
-        ETextureUsageFlags::COLOR_ATTACHMENT);
-
-    cmd_list.CopyFrom(
-        std::span<std::byte>((std::byte*)pixels, upload_size), font_tex);
-
     cmd_queue.Execute(cmd_list.Submit());
     cmd_queue.Sync();
 
-    VertexStream vertex_stream;
-    vertex_stream.EmplacePerVertex(
-        {Moer::Render::VertexElement(PF_R32G32B32_SFLOAT),
-         Moer::Render::VertexElement(PF_R32G32_SFLOAT)});
-    GfxPsoCreateInfo pso_info(RHIRasterizeInfo::Preset(),
-                              vertex_stream,
-                              {RHIColorAttachmentInfo::Preset(PF_R8G8B8A8_SRGB)},
-                              RHIDepthStencilStateInfo::Preset());
-
-    auto raster_pipeline = manager
-                               .Raster()
-                               .Vertex("test/BasicVertex.hlsl")
-                               .Pixel("test/BasicFrag.hlsl")
-                               .Build<TestTrianglePipeline>(std::move(pso_info));
-
-    auto rast_pipeline_constant_color = manager
-                                            .Raster()
-                                            .Vertex("test/BasicVertex.hlsl")
-                                            .Pixel("test/BasicFragConstant.hlsl")
-                                            .Build<TestTrianglePipelineConstColor>(std::move(pso_info));
     struct Vertex {
         float3 pos;
         float2 uv;
@@ -164,7 +130,6 @@ int main(int argc, const char** argv) {
     uint    indices[] = {0, 1, 2};
     float4  color_red = {1, 1, 1, 1};
     Sampler sampler(SF_LINEAR, SAM_REPEAT);
-    uint    bdls_tex_handle = bindless_array->AllocateTexture(font_tex, sampler);
 
     auto vertex_buffer = device.CreateBuffer<float>(3 * sizeof(Vertex) / sizeof(float), EBufferUsageFlags::VERTEX_BUFFER);
     auto index_buffer  = device.CreateBuffer<uint>(3, EBufferUsageFlags::INDEX_BUFFER);
@@ -188,20 +153,6 @@ int main(int argc, const char** argv) {
 
     while (WindowContext::ShouldClose(window_handle) == false) {
         WindowContext::Tick();
-
-        Array<MeshDrawData> draw_datas;
-        draw_datas.emplace_back(
-            std::span<VertexBuffer>(&vb, 1),
-            ib,
-            1,
-            0);
-
-        Array<MeshDrawData> draw_datas2;
-        draw_datas2.emplace_back(
-            std::span<VertexBuffer>(&vb, 1),
-            ib,
-            1,
-            0);
         int w_width, w_height;
 
         WindowContext::GetWindowSize(WindowContext::GetMainWindow(), &w_width, &w_height);
@@ -223,12 +174,7 @@ int main(int argc, const char** argv) {
         TestBindlessParam param;
         param.color          = color_red;
         param.texture_handle = bdls_tex_handle_red;
-        cmd_list.Gfx(rast_pipeline_constant_color, sampler, red_tex, bindless_array, param)
-            .Draw(Rect2D(0, 0, resolution.x, resolution.y), std::move(draw_datas2), ColorAttachment(output));
 
-        cmd_list.Barriers(ReadTexture(red_tex, ETextureState::SAMPLE));
-        cmd_list.Gfx(rast_pipeline_constant_color, sampler, red_tex, bindless_array, param)
-            .Draw(Rect2D(0, 0, resolution.x, resolution.y), std::move(draw_datas), ColorAttachment(output));
         cmd_queue.Execute(cmd_list.Submit());
         cmd_queue.Present(sc, output);
     }

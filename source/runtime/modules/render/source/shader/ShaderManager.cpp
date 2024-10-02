@@ -23,7 +23,7 @@ namespace Moer::Render {
             return ComputeConstructor(device, _path, _entry_name);
         }
 
-        RTConstructor RT() {
+        RTConstructor Raytracing() {
             return RTConstructor(device);
         }
     };
@@ -46,8 +46,8 @@ namespace Moer::Render {
     RasterPipelineConstructor::RasterPipelineConstructor(Render::RenderDevice& _device) : device(_device) {
     }
 
-    RTConstructor ShaderManager::RT() {
-        return impl->RT();
+    RTConstructor ShaderManager::Raytracing() {
+        return impl->Raytracing();
     }
 
     PipelineHandle RasterPipelineConstructor::CreatePipeline(GfxPsoCreateInfo&& _pso_info, Array<std::string_view>&& _hash_values, Array<EShaderArgType>&& _arg_type_values) {
