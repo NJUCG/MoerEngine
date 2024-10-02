@@ -147,11 +147,11 @@ int main(int argc, const char** argv) {
                                .Pixel("test/BasicFrag.hlsl")
                                .Build<TestTrianglePipeline>(std::move(pso_info));
 
-    auto rast_pipeline_constant_color = manager
-                                            .Raster()
-                                            .Vertex("test/BasicVertex.hlsl")
-                                            .Pixel("test/BasicFragConstant.hlsl")
-                                            .Build<TestTrianglePipelineConstColor>(std::move(pso_info));
+    auto raster_pipeline_constant_color = manager
+                                              .Raster()
+                                              .Vertex("test/BasicVertex.hlsl")
+                                              .Pixel("test/BasicFragConstant.hlsl")
+                                              .Build<TestTrianglePipelineConstColor>(std::move(pso_info));
     struct Vertex {
         float3 pos;
         float2 uv;
@@ -173,7 +173,7 @@ int main(int argc, const char** argv) {
     TextureRef red_tex = device.CreateTexture(
         Extent2D(1, 1),
         PF_R8G8B8A8_SRGB,
-        ETextureUsageFlags::SAMPLED);
+        ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT);
 
     byte red_data[4] = {byte(255), byte(0), byte(0), byte(255)};
     cmd_list.CopyFrom(std::span<byte>((byte*)&red_data, sizeof(red_data)), red_tex);
@@ -190,6 +190,7 @@ int main(int argc, const char** argv) {
         WindowContext::Tick();
 
         Array<MeshDrawData> draw_datas;
+        Array<MeshDrawData> draw_datas1;
         draw_datas.emplace_back(
             std::span<VertexBuffer>(&vb, 1),
             ib,
@@ -203,6 +204,11 @@ int main(int argc, const char** argv) {
             1,
             0);
         int w_width, w_height;
+        draw_datas1.emplace_back(
+            std::span<VertexBuffer>(&vb, 1),
+            ib,
+            1,
+            0);
 
         WindowContext::GetWindowSize(WindowContext::GetMainWindow(), &w_width, &w_height);
         if (w_width == 0 || w_height == 0) {
@@ -220,15 +226,17 @@ int main(int argc, const char** argv) {
             sc_info.size = {resolution.x, resolution.y};
             sc->Recreate(sc_info);
         }
+
+        cmd_list.Gfx(raster_pipeline)
+            .Draw(Rect2D(0, 0, 1, 1), std::move(draw_datas), ColorAttachment(red_tex));
+
         TestBindlessParam param;
         param.color          = color_red;
         param.texture_handle = bdls_tex_handle_red;
-        cmd_list.Gfx(rast_pipeline_constant_color, sampler, red_tex, bindless_array, param)
+        cmd_list.Gfx(raster_pipeline_constant_color, sampler, red_tex, bindless_array, param)
             .Draw(Rect2D(0, 0, resolution.x, resolution.y), std::move(draw_datas2), ColorAttachment(output));
 
-        cmd_list.Barriers(ReadTexture(red_tex, ETextureState::SAMPLE));
-        cmd_list.Gfx(rast_pipeline_constant_color, sampler, red_tex, bindless_array, param)
-            .Draw(Rect2D(0, 0, resolution.x, resolution.y), std::move(draw_datas), ColorAttachment(output));
+        // cmd_list.Barriers(ReadTexture(red_tex, ETextureState::SAMPLE));
         cmd_queue.Execute(cmd_list.Submit());
         cmd_queue.Present(sc, output);
     }

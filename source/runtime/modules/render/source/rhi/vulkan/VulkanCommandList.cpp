@@ -39,7 +39,20 @@ namespace Moer::Render {
         VkTracker&       tracker;
         VulkanAllocator& allocator;
 
-        VkCmdPreprocessor(VkTracker& _tracker, VulkanAllocator& _allocator) : tracker(_tracker), allocator(_allocator) {
+        VkCmdPreprocessor(VkTracker& _tracker, VulkanAllocator& _allocator) : tracker(_tracker), allocator(_allocator) {}
+        void HandleBindless(BindlessArrayRef bindless_array) {
+            auto                        vk_bindless_array = reinterpret_cast<VulkanBindlessArray*>(bindless_array.Get());
+            Moer::Array<VulkanTexture*> write_map;
+            for (auto&& i : tracker.GetWriteStates()) {
+                if (vk_bindless_array->IsTextureInBindLessArray(i)) {
+                    write_map.push_back(i);
+                }
+            }
+            if (!write_map.empty()) {
+                for (auto&& i : write_map) {
+                    tracker.RecordState(i, tracker.ReadTexture(i, ETextureState::SAMPLE, EPassType::Graphics));
+                }
+            }
         }
 
         void VisitCmd(const Command* _cmd) {
@@ -1860,6 +1873,9 @@ namespace Moer::Render {
         for (const CmdReorderer::LinkedCommandList& cmd_list : cmd_lists) {
             if (cmd_list.head == nullptr) {
                 continue;
+            }
+            if (_submit.bindless_array) {
+                preprocessor.HandleBindless(_submit.bindless_array);
             }
             for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
                 preprocessor.VisitCmd(cmdnode->cmd);

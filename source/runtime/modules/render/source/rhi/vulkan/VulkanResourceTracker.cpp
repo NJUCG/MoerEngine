@@ -133,6 +133,7 @@ namespace Moer::Render {
             VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL,
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
 
+        write_states_set.erase(_texture);
         auto index      = static_cast<uint32>(_state);
         auto pass_index = static_cast<uint32>(_state) + uint32(ETextureState::Num) * uint32(_type);
         return {gfx_rules[index], layout_rules[index], tex_read_stage_rules[pass_index]};
@@ -157,6 +158,7 @@ namespace Moer::Render {
             VK_IMAGE_LAYOUT_GENERAL,
             VK_IMAGE_LAYOUT_UNDEFINED};// Invalid
 
+        write_states_set.insert(_texture);
         auto index      = static_cast<uint32>(_state);
         auto pass_index = static_cast<uint32>(_state) + uint32(ETextureState::Num) * uint32(_type);
         return {gfx_rules[index], layout_rules[index], tex_write_stage_rules[pass_index]};
@@ -188,6 +190,18 @@ namespace Moer::Render {
         return a < b ? a : b;
     }
 
+    bool IsWriteState(VkImageLayout layout) {
+        switch (layout) {
+            case VK_IMAGE_LAYOUT_GENERAL:
+            case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
+            case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
+            case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+                return true;
+            default:
+                return false;
+        }
+    }
+
     void VkTracker::RecordState(VulkanTexture* _texture, VkAccessFlagBits2 _access, VkImageLayout _layout, VkPipelineStageFlagBits2 _stage, uint8_t _mip_level, uint8_t _mip_count) {
         // Range range{_mip_level, _mip_count};
         TextureState state{
@@ -199,6 +213,7 @@ namespace Moer::Render {
             _stage};
 
         auto state_iter = texture_states.find(_texture);
+        bool is_write = IsWriteState(_layout);
         if (state_iter != texture_states.end()) {
             auto& target_state = state_iter->second;
             if (target_state.dst_stage == state.dst_stage && target_state.dst_access == state.dst_access && target_state.dst_layout == state.dst_layout) {
@@ -217,6 +232,13 @@ namespace Moer::Render {
             target_state.dst_access = state.dst_access;
             target_state.dst_stage  = state.dst_stage;
 
+            if(is_write) {
+                write_states_set.insert(_texture);
+            }
+            else {
+                write_states_set.erase(_texture);
+            }
+
         } else {
             if (_texture->b_has_init_state) {
                 state.src_layout = _texture->GetPreferredLayout();
@@ -225,6 +247,9 @@ namespace Moer::Render {
                     state.src_access = VK_ACCESS_2_NONE;
                     state.src_stage  = _stage;
                 }
+            }
+            if(is_write) {
+                write_states_set.insert(_texture);
             }
 
             texture_states[_texture] = {state};
@@ -534,6 +559,8 @@ namespace Moer::Render {
             barrier.srcStageMask      = src_buffer_stages;
             barrier.dstStageMask      = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
         }
+
+        //write_states_set.clear();
     }
 
     void VkTracker::Reset() {
@@ -542,6 +569,7 @@ namespace Moer::Render {
         memory_barriers.clear();
         buffer_states.clear();
         texture_states.clear();
+        write_states_set.clear();
     }
 
 }// namespace Moer::Render
