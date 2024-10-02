@@ -378,7 +378,7 @@ namespace Moer::Render {
     struct CmdSubmit {
         Array<UniquePtr<Command>>        cmds;
         Array<std::function<void(void)>> callbacks;
-        BindlessArrayRef                bindless_array{nullptr};
+        BindlessArrayRef                 bindless_array{nullptr};
 
         Array<WaitEvent>   wait_events;
         Array<SignalEvent> signal_events;
@@ -409,7 +409,7 @@ namespace Moer::Render {
             b_sync        = _other.b_sync;
             return *this;
         }
-        CmdSubmit(Array<UniquePtr<Command>>&& _cmds, Array<std::function<void(void)>>&& _callbacks,BindlessArrayRef _bindless_array) : cmds(std::move(_cmds)), callbacks(std::move(_callbacks)),bindless_array(_bindless_array) {
+        CmdSubmit(Array<UniquePtr<Command>>&& _cmds, Array<std::function<void(void)>>&& _callbacks, BindlessArrayRef _bindless_array) : cmds(std::move(_cmds)), callbacks(std::move(_callbacks)), bindless_array(_bindless_array) {
         }
     };
 
@@ -575,10 +575,9 @@ namespace Moer::Render {
         template<typename TGfxPso, typename... TArgs>
         DrawDispatcher Gfx(TGfxPso& _pso, TArgs&&... _args) {
             if constexpr (sizeof...(TArgs) > 0) {
-                ArrayArguments&& args = std::move(_pso.SetArgs(_args...));
-                for(const auto & arg:args.args) {
-                    static constexpr uint BindLessIndex = 4;
-                    if(arg.index() == BindLessIndex) {
+                ArrayArguments&& args = _pso.SetArgs(_args...);
+                for (const auto& arg : args.args) {
+                    if (arg.index() == bindless_arg_type_idx) {
                         bindless_array = std::get<BindlessArrayRef>(arg);
                     }
                 }
@@ -590,7 +589,7 @@ namespace Moer::Render {
         template<typename TComputePso, typename... TArgs>
         ComputeDispatcher Compute(TComputePso& _pso, TArgs&&... _args) {
             if constexpr (sizeof...(TArgs) > 0) {
-                ArrayArguments&& args = std::move(_pso.SetArgs(_args...));
+                ArrayArguments&& args = _pso.SetArgs(_args...);
                 return ComputeDispatcher(_pso, *this, std::move(args));
             }
             return ComputeDispatcher(_pso, *this);

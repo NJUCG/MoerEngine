@@ -106,8 +106,9 @@ public:                                                                         
     String##name
 
 namespace Moer::Render {
-    using TInvalidArg = uint;
-    using TArg        = std::variant<TInvalidArg, BufferView, TextureView, Sampler, BindlessArrayRef>;
+    using TInvalidArg                           = uint;
+    using TArg                                  = std::variant<TInvalidArg, BufferView, TextureView, Sampler, BindlessArrayRef>;
+    static constexpr uint bindless_arg_type_idx = 4;
 
     template<typename T>
     struct ShaderArgEnum {
@@ -162,19 +163,27 @@ namespace Moer::Render {
 
         static EShaderArgType GetArgType() { return arg_type; }
     };
-    struct NonConstant{};
+    struct NonConstant {};
 
     struct BufferArg {
         using type = NonConstant;
     };
 
-    struct TextureArg {using type = NonConstant;};
+    struct TextureArg {
+        using type = NonConstant;
+    };
 
-    struct SamplerArg {using type = NonConstant;};
+    struct SamplerArg {
+        using type = NonConstant;
+    };
 
-    struct ConstantArg {using type = NonConstant;};
+    struct ConstantArg {
+        using type = NonConstant;
+    };
 
-    struct BindlessArg {using type = NonConstant;};
+    struct BindlessArg {
+        using type = NonConstant;
+    };
 
     template<>
     struct ShaderArgEnum<BufferArg> {
@@ -221,7 +230,6 @@ namespace Moer::Render {
         struct is_constant_type {
             static constexpr bool value = !std::is_same_v<typename T::type::type, NonConstant>;
         };
-
 
         static constexpr uint32 GetConstantSize() {
             //if TArg is a constant, add the size of TArg to the total size, other wise add 0
@@ -352,7 +360,7 @@ namespace Moer::Render {
         COPY_CONSTRUCTOR(RTPipeline);
     };
 
-    struct ParamBlockAllcateInfo{
+    struct ParamBlockAllcateInfo {
         //ideally we can allocate param/descriptor block from global descriptor pool(vk) or descriptor heap(dx)
         //when set params, we can allocate a descriptor set or descriptor buffer offset from the pool and bind it to the pipeline
         //and the allocation info is stored in this struct, like descriptor buffer offset, descriptor sets key
@@ -367,12 +375,12 @@ namespace Moer::Render {
         using PipelineType = TPipeline;
         template<typename... TArgs>
         void SetParams(TArgs&&... _args) {
-            args = TPipeline::SetArgs(std::forward<TArgs>(_args)...);
+            args       = TPipeline::SetArgs(std::forward<TArgs>(_args)...);
             b_args_set = true;
         }
         ParamBlockAllcateInfo* alloc_info = nullptr;
-        ArrayArguments args;
-        bool b_args_set = false;
+        ArrayArguments         args;
+        bool                   b_args_set = false;
     };
 
     class GBufferLayout : public RasterPipeline {
