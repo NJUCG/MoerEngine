@@ -594,14 +594,24 @@ namespace Moer::Render {
 
         void VisitCmd(const SetDrawStateCmd* _cmd) {
             int64 layer = 0;
-            auto  func  = [&](const TArg& _arg) {
+            auto  func  = [&](const TArg& _arg,uint64_t flag) {
                 std::visit([&](auto&& _arg) {
                     int64 temp_layer = 0;
                     using T          = std::decay_t<decltype(_arg)>;
                     if constexpr (std::is_same_v<T, BufferView>) {
-                        temp_layer = GetLastLayer((uint64)(_arg.GetBuffer()), Range(_arg.GetByteOffset(), _arg.GetByteSize()), ResourceType::Texture_Buffer);
+                        if(m_funcs.is_resource_write(flag))
+                            temp_layer = SetWrite((uint64)(_arg.GetBuffer()), Range(_arg.GetByteOffset(), _arg.GetByteSize()), ResourceType::Texture_Buffer);
+                        else if(m_funcs.is_resource_read(flag))
+                            temp_layer = SetRead((uint64)(_arg.GetBuffer()), Range(_arg.GetByteOffset(), _arg.GetByteSize()), ResourceType::Texture_Buffer);
+                        else    
+                            temp_layer = GetLastLayer((uint64)(_arg.GetBuffer()), Range(_arg.GetByteOffset(), _arg.GetByteSize()), ResourceType::Texture_Buffer);
                     } else if constexpr (std::is_same_v<T, TextureView>) {
-                        temp_layer = GetLastLayer(uint64(_arg.texture), Range(_arg.mip_level, _arg.num_mips), ResourceType::Texture_Buffer);
+                        if(m_funcs.is_resource_write(flag))
+                            temp_layer = SetWrite(uint64(_arg.GetTexture()), Range(_arg.mip_level, _arg.num_mips), ResourceType::Texture_Buffer);
+                        else if(m_funcs.is_resource_read(flag))
+                            temp_layer = SetRead(uint64(_arg.GetTexture()), Range(_arg.mip_level, _arg.num_mips), ResourceType::Texture_Buffer);
+                        else
+                            temp_layer = GetLastLayer(uint64(_arg.GetTexture()), Range(_arg.mip_level, _arg.num_mips), ResourceType::Texture_Buffer);
                     } else if constexpr (std::is_same_v<T, BindlessArrayRef>) {
                         temp_layer = SetRead((uint64)(_arg->ArrayHandle()), Range(0), ResourceType::Bindless);
                     }
@@ -649,14 +659,24 @@ namespace Moer::Render {
 
         void VisitCmd(const DispatchCmd* _cmd) {
             int64 layer = 0;
-            auto  func  = [&](const TArg& _arg) {
+            auto  func  = [&](const TArg& _arg,uint64 flag) {
                 std::visit([&](auto&& _arg) {
                     int64 temp_layer = 0;
                     using T          = std::decay_t<decltype(_arg)>;
                     if constexpr (std::is_same_v<T, BufferView>) {
-                        temp_layer = GetLastLayer((uint64)(_arg.GetBuffer()), Range(_arg.GetByteOffset(), _arg.GetByteSize()), ResourceType::Texture_Buffer);
+                        if(m_funcs.is_resource_write(flag))
+                            temp_layer = SetWrite((uint64)(_arg.GetBuffer()), Range(_arg.GetByteOffset(), _arg.GetByteSize()), ResourceType::Texture_Buffer);
+                        else if(m_funcs.is_resource_read(flag))
+                            temp_layer = SetRead((uint64)(_arg.GetBuffer()), Range(_arg.GetByteOffset(), _arg.GetByteSize()), ResourceType::Texture_Buffer);
+                        else    
+                            temp_layer = GetLastLayer((uint64)(_arg.GetBuffer()), Range(_arg.GetByteOffset(), _arg.GetByteSize()), ResourceType::Texture_Buffer);
                     } else if constexpr (std::is_same_v<T, TextureView>) {
-                        temp_layer = GetLastLayer(uint64(_arg.texture), Range(_arg.mip_level, _arg.num_mips), ResourceType::Texture_Buffer);
+                        if(m_funcs.is_resource_write(flag))
+                            temp_layer = SetWrite(uint64(_arg.GetTexture()), Range(_arg.mip_level, _arg.num_mips), ResourceType::Texture_Buffer);
+                        else if(m_funcs.is_resource_read(flag))
+                            temp_layer = SetRead(uint64(_arg.GetTexture()), Range(_arg.mip_level, _arg.num_mips), ResourceType::Texture_Buffer);
+                        else
+                            temp_layer = GetLastLayer(uint64(_arg.GetTexture()), Range(_arg.mip_level, _arg.num_mips), ResourceType::Texture_Buffer);
                     } else if constexpr (std::is_same_v<T, BindlessArrayRef>) {
                         temp_layer = SetRead((uint64)(_arg->ArrayHandle()), Range(0), ResourceType::Bindless);
                     }
@@ -665,7 +685,6 @@ namespace Moer::Render {
                            _arg);
             };
             _cmd->IterateArgs(func);
-            AddCmd(_cmd, m_dispatch_layer);
         }
 
         void VisitCmd(const BuildAccelerationStructuresCmd* _cmd) {

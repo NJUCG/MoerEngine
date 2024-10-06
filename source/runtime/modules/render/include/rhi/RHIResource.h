@@ -722,6 +722,7 @@ namespace Moer::Render {
         uint8          num_mips;
         uint8          array_index;
         uint8          num_array;
+        Texture *     GetTexture() const { return texture; }
     };
 
     struct TextureInfo {

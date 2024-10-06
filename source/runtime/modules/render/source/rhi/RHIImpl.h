@@ -524,14 +524,8 @@ namespace Moer::Render {
         GraphEventRef                      evaluate_mesh_task = nullptr;
         UnorderedMap<Buffer*, BufferRange> vertex_buffers;
         UnorderedMap<Buffer*, BufferRange> index_buffers;
-        BindlessArrayRef                   bindless_array = nullptr;
 
         SetDrawStateCmd(ArrayArguments&& _args) : Command(EType::SetDrawState), args(std::move(_args)) {
-            for (const auto& arg : args.args) {
-                if (arg.index() == bindless_arg_type_idx) {
-                    bindless_array = std::get<BindlessArrayRef>(arg);
-                }
-            }
         }
 
     public:
@@ -577,10 +571,9 @@ namespace Moer::Render {
         const auto& RenderPassInfo() const { return render_pass_info; }
         const auto& DrawData() const { return mesh_data; }
         const auto& Args() const { return args; }
-        auto BindlessArray() const { return bindless_array; }
-        void        IterateArgs(std::function<void(const TArg&)> _func) const {
-            for (const auto& arg : args.args) {
-                std::visit([&_func](const auto& _arg) { _func(_arg); }, arg);
+        void        IterateArgs(std::function<void(const TArg&,uint64 flag)> _func) const {
+            for(int i = 0; i < args.args.size(); i++){
+                std::visit([&_func, i,this](const auto& _arg) { _func(_arg, pipeline.binding_infos[i]); }, args.args[i]);
             }
         }
         const auto& VertexBuffers() const {
@@ -603,13 +596,7 @@ namespace Moer::Render {
         PipelineHandle pipeline{};
         DispatchParam  param;
         ArrayArguments args;
-        BindlessArrayRef bindless_array;
         DispatchCmd(ArrayArguments&& _args) : Command(EType::ShaderDispatch), args(std::move(_args)) {
-            for (const auto& arg : args.args) {
-                if (arg.index() == bindless_arg_type_idx) {
-                    bindless_array = std::get<BindlessArrayRef>(arg);
-                }
-            }
         }
 
     public:
@@ -621,10 +608,9 @@ namespace Moer::Render {
         const auto& Args() const { return args; }
         const auto& Pipeline() const { return pipeline; }
         auto        Param() const { return param; }
-        auto BindlessArray() const { return bindless_array; }
-        void        IterateArgs(std::function<void(const TArg&)> _func) const {
-            for (const auto& arg : args.args) {
-                _func(arg);
+        void        IterateArgs(std::function<void(const TArg&,uint64 flag)> _func) const {
+            for(int i = 0; i < args.args.size(); i++){
+                std::visit([&_func, i,this](const auto& _arg) { _func(_arg, pipeline.binding_infos[i]); }, args.args[i]);
             }
         }
     };
