@@ -1568,7 +1568,6 @@ namespace Moer::Render {
     texture_slot_offset(1), 
     buffer_slot_offset(1), 
     slot_offset(1), 
-    numbers(_max_size),
     handles(_max_size) {
         BufferInfo buffer_info(
             uint64(_max_size),
@@ -1610,9 +1609,6 @@ namespace Moer::Render {
         buffer_info.size = buffer_ci.size;
         buffer_info.stride = m_device->GetOptionalProperties().descriptor_buffer_properties.sampledImageDescriptorSize;
         bindless_texture_descs = MoerNew(VulkanBuffer)(buffer_info, *m_device, current_handle, alloc, false, true);
-
-        for (uint i = 0; i < _max_size; i++) { numbers[i] = i; }//TODO: so fucking ugly
-
 
         //fill sampler data to descriptor buffer
         {
@@ -1716,7 +1712,6 @@ namespace Moer::Render {
         if (array_idx == 0) {
             slot_idx = slot_offset++;
         } else { slot_idx = array_idx; }
-        assert (slot_idx < numbers.size() && "Exceed the maximum number of bindless array");
         //allocate texture slot
         uint  texture_slot     = 0;
         uint texture_slot_ptr = free_texture_slots.Pop();
@@ -1733,8 +1728,6 @@ namespace Moer::Render {
         if (array_idx == 0) {
             slot_idx = slot_offset++;
         } else { slot_idx = array_idx; }
-
-        assert (slot_idx < numbers.size() && "Exceed the maximum number of bindless array");
 
         //allocate buffer index
         uint  buffer_slot;
