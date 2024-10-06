@@ -6,9 +6,11 @@
 #define VULKAN_RHI_RESOURCE_H
 
 #include "PixelFormat.h"
+#include "misc/CountableRef.h"
 #include "misc/Crc32.h"
 #include "misc/LockFree.h"
 #include "misc/STL.h"
+#include "misc/Traits.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
@@ -16,6 +18,8 @@
 
 #include "shader/ShaderCommon.h"
 
+#include <atomic>
+#include <cstddef>
 #include <volk.h>
 #include "VulkanTypeDefs.h"
 #include "VulkanSwapChain.h"
@@ -79,6 +83,14 @@ class VulkanViewport;
 #pragma region utils definition
 
 namespace Moer::Render {
+
+    //forward declaration
+    class VulkanBuffer;
+    class VulkanTexture;
+
+    using VulkanBufferRef  = CountableRef<VulkanBuffer>;
+    using VulkanTextureRef = CountableRef<VulkanTexture>;
+
     class VulkanMemoryManager final {
     public:
         VulkanMemoryManager()                                      = delete;
@@ -613,7 +625,7 @@ namespace Moer::Render {
         };
 
     public:
-        VulkanPipelineState(VulkanDevice* _device, EType _type = EType::GFX) : VulkanDeviceObject(_device), m_pipeline(VK_NULL_HANDLE), m_pipeline_layout(VK_NULL_HANDLE), m_pipeline_state_cache(nullptr){};
+        VulkanPipelineState(VulkanDevice* _device, EType _type = EType::GFX) : VulkanDeviceObject(_device), m_pipeline(VK_NULL_HANDLE), m_pipeline_layout(VK_NULL_HANDLE), m_pipeline_state_cache(nullptr), m_type(_type){};
         virtual ~VulkanPipelineState();
 
         inline VkPipeline GetHandle() const {
@@ -943,13 +955,13 @@ namespace Moer::Render {
         Array<TextureUpdateInfo> textures_allocated;
         Array<BufferUpdateInfo>  buffers_allocated;
 
-        Array<uint>   textures_freed;
-        Array<uint>   buffers_freed;
-        Array<uint>   slots_freed;
-        Array<Handle> handles;
-        Array<uint>   numbers;
-        Set<const VulkanTexture *> textures_allocated_set;
-        
+        Array<uint>               textures_freed;
+        Array<uint>               buffers_freed;
+        Array<uint>               slots_freed;
+        Array<Handle>             handles;
+        Array<uint>               numbers;
+        Set<const VulkanTexture*> textures_allocated_set;
+
         uint64 buffers_offset_in_set;
         uint64 textures_offset_in_set;
     };
@@ -962,6 +974,18 @@ namespace Moer::Render {
         Array<VkAccelerationStructureBuildRangeInfoKHR>& _build_ranges,
         const RaytracingGeometryInfo&                    _info);
 
+    struct VulkanAccelerationStructure : RHIResource {
+        VulkanAccelerationStructure(VulkanDevice& _device);
+        virtual ~VulkanAccelerationStructure() override;
+        void Destroy() override;
+
+        VkAccelerationStructureKHR handle            = VK_NULL_HANDLE;
+        VulkanBuffer*              underlying_buffer = nullptr;
+
+        VulkanDevice& device;
+    };
+
+    using VulkanAccelRef = CountableRef<VulkanAccelerationStructure>;
     class VulkanRaytracingGeometry final : public RaytracingGeometry,
                                            public VulkanDeviceObject {
     public:
@@ -977,7 +1001,8 @@ namespace Moer::Render {
         }
         Array<VkAccelerationStructureGeometryKHR>       build_geometries;
         Array<VkAccelerationStructureBuildRangeInfoKHR> build_ranges;
-        VkAccelerationStructureBuildSizesInfoKHR        build_sizes_info{};
+        VkAccelerationStructureBuildSizesInfoKHR        build_sizes_info{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
+        uint64                                          blas_address;
 
     private:
     private:
@@ -987,25 +1012,46 @@ namespace Moer::Render {
 
     class VulkanRaytracingScene final : public RaytracingScene, public VulkanDeviceObject {
     public:
-        VulkanRaytracingScene(VulkanDevice* _device) : VulkanDeviceObject(_device), RaytracingScene() {}
-
+        VulkanRaytracingScene(VulkanDevice* _device);
         RaytracingInstance& AddInstance() override;
-        void                FreeInstance(uint _array_idx) override;
+
+        void MarkModified(uint _array_idx) override;
+        void FreeInstance(uint _array_idx) override;
+
+        void RegisterGeometry(RaytracingGeometryRef _geometry) override;
+        void UnregisterGeometry(RaytracingGeometryRef _geometry) override;
 
         UniquePtr<Command> UpdateScene() override;
 
     public:
+        void                RefitInstanceBuffer();
+        bool                RefitTLASAndScratchBuffer();
+        RaytracingSizeInfos CalculateSizeInfos();
         // temperory
         Array<uint> temp_update_instance_ids;
-        Array<uint> temp_free_instance_ids;
+        Set<uint>   temp_modified_instance_ids;
+
+        Array<byte> temp_update_instances;
 
     public:
-        VkAccelerationStructureBuildSizesInfoKHR size_infos;
-        VkAccelerationStructureKHR               tlas;
-        VulkanBuffer*                            tlas_buffer;
+        RaytracingSizeInfos size_infos{};
+        VulkanAccelRef      tlas           = nullptr;
+        VulkanBufferRef     scratch_buffer = nullptr;
 
-        Array<VkAccelerationStructureInstanceKHR> vk_instances;
-        LockFreeQueueBase<uint, true>             free_instance_ids;
+        VulkanBufferRef instance_buffer = nullptr;
+
+        Array<VkAccelerationStructureInstanceKHR>
+            vk_instances;
+
+        Array<uint> free_instance_slots;
+
+        std::mutex                 geom_mutex;
+        UnorderedMap<uint64, uint> related_geometries;
+
+    private:
+        uint instance_capacity = 1000;
+        uint exponent          = 2;
+        uint instance_offset   = 1;
     };
 
 #pragma endregion

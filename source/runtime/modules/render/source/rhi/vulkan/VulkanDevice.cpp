@@ -20,6 +20,7 @@
 #include "rhi/RHIResourceInitilizer.h"
 
 #include "Core.h"
+#include "shader/ShaderResourceManager.h"
 #include "taskgraph/ThreadManager.h"
 #include "vulkan/vulkan_core.h"
 
@@ -79,6 +80,7 @@ namespace Moer::Render {
 
         CreateDescriptorAllocator();
         CreateDescriptorHeap();
+        CreateInternalShaders();
         //create empty descriptor set layout
         VkDescriptorSetLayoutCreateInfo descriptor_set_layout_create_info{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
         descriptor_set_layout_create_info.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
@@ -456,6 +458,12 @@ namespace Moer::Render {
         LOG_INFO("VulkanRHI: Descriptor Heap initialized.");
     }
 
+    void VulkanDevice::CreateInternalShaders() {
+
+        internal_shaders.sd_component_shuffle = ComponentShuffleShader(
+            CreatePipeline(ShaderManager::Get().Compute<ComponentShuffleShader>("utils/ShuffleBufferIndices.hlsl")));
+    }
+
     void VulkanDevice::Destroy() {
         // for (auto& cmd_allocator : m_command_allocators) {
         //     CHECK_AND_DELETE(cmd_allocator);
@@ -604,7 +612,7 @@ namespace Moer::Render {
         // target shader stage
         UnorderedMap<uint64, uint>& _out_hash_2_idx,
         // hash to index
-        // Moer::Array<uint64>& _out_reflect_flags,
+        Moer::Array<VulkanShaderResourceState>& _out_reflect_flags,
         // cpp param name hash to shader binding index
         UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>& _out_descriptor_bindings,
         // set to binding to binding info, actual vk pipeline layout
@@ -731,7 +739,12 @@ namespace Moer::Render {
                     vk_binding.pImmutableSamplers            = nullptr;
                     set.bindings[resource.binding].param_idx = idx;
                     // _out_reflect_flags[idx]       = EncodeReflectInfo(resource.set, resource.binding, vk_binding.stageFlags);
-                    _max_set = uint(std::max(int(_max_set), int(resource.set)));
+                    _max_set                = uint(std::max(int(_max_set), int(resource.set)));
+                    _out_reflect_flags[idx] = VulkanShaderResourceState(SpvReflectDescriptorType(resource.desc_type), SpvReflectResourceType(resource.resource_type));
+                    if (arg_type == SDA_Buffer) {
+                    } else if (arg_type == SDA_Texture) {
+                        _out_reflect_flags[idx].b_sampled = resource.sampled;
+                    }
                     break;
                 }
                 default:
@@ -806,10 +819,10 @@ namespace Moer::Render {
         VkPushConstantRange push_constant_ranges{.offset = 0, .size = 0};
         uint                max_set = 0;
 
-        // Array<uint64>              reflect_flags(_shader_info.layout_hash.size(), 0u);
-        uint64                     valid_bits = 0;
-        UnorderedMap<uint64, uint> hash_2_idx;
-        int                        constant_idx = -1;
+        Moer::Array<VulkanShaderResourceState> reflect_flags(_shader_info.layout_hash.size());
+        uint64                                 valid_bits = 0;
+        UnorderedMap<uint64, uint>             hash_2_idx;
+        int                                    constant_idx = -1;
 
         auto merge_reflect_info = [&](const SingleShaderInfo& _info, VkShaderStageFlagBits _stage) {
             MergeReflectInfo(*this,
@@ -817,7 +830,7 @@ namespace Moer::Render {
                              _shader_info,
                              _stage,
                              hash_2_idx,
-                             //  reflect_flags,
+                             reflect_flags,
                              descriptor_bindings,
                              push_constant_ranges,
                              constant_idx,
@@ -1050,9 +1063,15 @@ namespace Moer::Render {
         VK_CHECK_RESULT(vkCreateGraphicsPipelines(
             m_device, VK_NULL_HANDLE, 1, &pipeline_create_info, nullptr, &vk_pso->m_pipeline));
 
+        //destroy shader modules
+        for (auto& shader_stage : shader_stages) { vkDestroyShaderModule(m_device, shader_stage.module, nullptr); }
+
+        Array<uint64> binding_infos(_shader_info.layout_hash.size());
+        memcpy(binding_infos.data(), reflect_flags.data(), reflect_flags.size() * sizeof(VulkanShaderResourceState));
+
         return PipelineHandle{
-            .handle = VkPipelineHandle{reinterpret_cast<uint64>(vk_pso)},
-            // .binding_infos     = std::move(reflect_flags),
+            .handle            = VkPipelineHandle{reinterpret_cast<uint64>(vk_pso)},
+            .binding_infos     = std::move(binding_infos),
             .hash_2_info_index = std::move(hash_2_idx),
             .valid_bits        = valid_bits,
             .constant_idx      = constant_idx};
@@ -1065,23 +1084,29 @@ namespace Moer::Render {
         using TPipelineSets = UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>;
 
         VkComputePipelineCreateInfo pipeline_create_info{};
+        pipeline_create_info.sType              = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        pipeline_create_info.pNext              = nullptr;
+        pipeline_create_info.flags              = VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
+        pipeline_create_info.stage              = {};
+        pipeline_create_info.layout             = nullptr;
+        pipeline_create_info.basePipelineHandle = nullptr;
 
         VkPipelineShaderStageCreateInfo& shader_stage = pipeline_create_info.stage;
 
-        TPipelineSets              descriptor_bindings;
-        VkPushConstantRange        push_constant_ranges{.offset = 0, .size = 0};
-        uint                       max_set = 0;
-        Array<uint64>              reflect_flags(_shader_info.layout_hash.size(), 0u);
-        UnorderedMap<uint64, uint> hash_2_idx;
-        int                        constant_idx       = -1;
-        uint64                     valid_bits         = 0;
-        auto                       merge_reflect_info = [&](const SingleShaderInfo& _info, VkShaderStageFlagBits _stage) {
+        TPipelineSets                    descriptor_bindings;
+        VkPushConstantRange              push_constant_ranges{.offset = 0, .size = 0};
+        uint                             max_set = 0;
+        Array<VulkanShaderResourceState> reflect_flags(_shader_info.layout_hash.size());
+        UnorderedMap<uint64, uint>       hash_2_idx;
+        int                              constant_idx       = -1;
+        uint64                           valid_bits         = 0;
+        auto                             merge_reflect_info = [&](const SingleShaderInfo& _info, VkShaderStageFlagBits _stage) {
             MergeReflectInfo(*this,
                              _info,
                              _shader_info,
                              _stage,
                              hash_2_idx,
-                             //  reflect_flags,
+                             reflect_flags,
                              descriptor_bindings,
                              push_constant_ranges,
                              constant_idx,
@@ -1089,10 +1114,24 @@ namespace Moer::Render {
                              max_set);
         };
 
+        auto emplace_shader = [&](SingleShaderInfo& _info, VkShaderStageFlagBits _stage) {
+            VkShaderModuleCreateInfo shader_module_create_info{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+            shader_module_create_info.codeSize = _info.shader_data.size();
+            shader_module_create_info.pCode    = reinterpret_cast<const uint32_t*>(_info.shader_data.data());
+            shader_module_create_info.flags    = 0;
+            VkShaderModule shader_module;
+            VK_CHECK_RESULT(vkCreateShaderModule(m_device, &shader_module_create_info, nullptr, &shader_module));
+            shader_stage        = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+            shader_stage.stage  = _stage;
+            shader_stage.module = shader_module;
+            shader_stage.pName  = _info.entry_point.data();
+        };
+
         std::visit([&](auto&& _shader_info_group) {
             using T = std::decay_t<decltype(_shader_info_group)>;
             if constexpr (std::is_same_v<T, ShaderCs>) {
                 merge_reflect_info(_shader_info_group.cs, VK_SHADER_STAGE_COMPUTE_BIT);
+                emplace_shader(_shader_info_group.cs, VK_SHADER_STAGE_COMPUTE_BIT);
             } else {
                 LOG_ERROR("Unsupported shader group type: {}", typeid(T).name());
             }
@@ -1138,9 +1177,15 @@ namespace Moer::Render {
 
         VK_CHECK_RESULT(
             vkCreateComputePipelines(m_device, VK_NULL_HANDLE, 1, &pipeline_create_info, nullptr, &vk_pso->m_pipeline));
+
+        //destroy shader module
+        vkDestroyShaderModule(m_device, shader_stage.module, nullptr);
+
+        Array<uint64> binding_infos(_shader_info.layout_hash.size());
+        memcpy(binding_infos.data(), reflect_flags.data(), reflect_flags.size() * sizeof(VulkanShaderResourceState));
         return PipelineHandle{
-            .handle = VkPipelineHandle{reinterpret_cast<uint64>(vk_pso)},
-            // .binding_infos     = std::move(reflect_flags),
+            .handle            = VkPipelineHandle{reinterpret_cast<uint64>(vk_pso)},
+            .binding_infos     = std::move(binding_infos),
             .hash_2_info_index = std::move(hash_2_idx),
             .valid_bits        = valid_bits,
             .constant_idx      = constant_idx};
@@ -1190,6 +1235,10 @@ namespace Moer::Render {
 
     RaytracingGeometryRef VulkanDevice::CreateRaytracingGeometry(const RaytracingGeometryInfo& _info) {
         return RaytracingGeometryRef{MoerNew(VulkanRaytracingGeometry)(_info, this)};
+    }
+
+    RaytracingSceneRef VulkanDevice::CreateRaytracingScene() {
+        return RaytracingSceneRef{MoerNew(VulkanRaytracingScene)(this)};
     }
 
 #pragma endregion

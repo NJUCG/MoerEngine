@@ -97,7 +97,7 @@ namespace Moer::Render {
     }
 
     CmdSubmit CommandList::Submit() {
-        CmdSubmit submit(std::move(commands), std::move(callbacks),bindless_array);
+        CmdSubmit submit(std::move(commands), std::move(callbacks), bindless_array);
         return std::move(submit);
     }
 
@@ -178,10 +178,21 @@ namespace Moer::Render {
 
     void CommandList::UpdateBindlessArray(BindlessArrayRef _array) {
         assert(_array && "Bindless array is null");
-        
+
         commands.push_back(_array->CreateUpdateCommand());
     }
 
+#pragma region[ raytracing ]
+
+    void CommandList::BuildAccelerationStructures(Array<AccelerationStructureBuildParam>&& _geometries) {
+        commands.emplace_back(MakeUnique<BuildAccelerationStructuresCmd>(std::move(_geometries)));
+    }
+
+    void CommandList::UpdateRaytracingScene(RaytracingSceneRef _scene) {
+        commands.emplace_back(_scene->UpdateScene());
+    }
+
+#pragma endregion
     // void CommandList::SubmitArgs(ShaderPipeline& _pso, Arguments&& _args) {
     //     commands.push_back(MakeUnique<SetParamsCmd>(_pso, std::move(_args)));
     // }

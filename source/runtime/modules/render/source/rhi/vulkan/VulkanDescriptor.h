@@ -5,6 +5,7 @@
 #include "rhi/RHIResource.h"
 #include "VulkanTypeDefs.h"
 #include "VulkanRHIResource.h"
+#include "spirv_reflect.h"
 
 #define VK_DESCRIPTOR_TYPE_BEGIN_RANGE (VK_DESCRIPTOR_TYPE_SAMPLER)
 #define VK_DESCRIPTOR_TYPE_END_RANGE   (VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT)
@@ -39,6 +40,19 @@ namespace Moer::Render {
         } layout;
 
         DescriptorResource resource;
+    };
+
+    struct VulkanShaderResourceState {
+        SpvReflectDescriptorType desc_type;
+        uint                     b_sampled : 8;
+        SpvReflectResourceType   resource_type : 8;
+
+        VulkanShaderResourceState() = default;
+        VulkanShaderResourceState(SpvReflectDescriptorType _type, SpvReflectResourceType _resource_type) : desc_type(_type), resource_type(_resource_type) {}
+
+        VulkanShaderResourceState(uint64 _value) {
+            memcpy(this, &_value, sizeof(VulkanShaderResourceState));
+        }
     };
 
     class VulkanDescriptorSetsLayout final : public VulkanDeviceObject {

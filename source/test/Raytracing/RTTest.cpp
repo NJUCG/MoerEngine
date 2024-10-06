@@ -151,6 +151,30 @@ int main(int argc, const char** argv) {
     VertexBuffer vb(vertex_buffer, 0);
     IndexBuffer  ib(index_buffer->GetView(), EIndexElementType::IET_UINT32);
 
+    RaytracingGeometryInfo rt_geo_info{};
+    rt_geo_info.build_flags      = ERayTracingAccelerationStructureBuildFlags::PREFER_FAST_TRACE;
+    rt_geo_info.vertex_format    = PF_R32G32B32_SFLOAT;
+    rt_geo_info.vertex_buffer    = vertex_buffer;
+    rt_geo_info.index_buffer     = index_buffer;
+    rt_geo_info.index_type       = IET_UINT32;
+    rt_geo_info.max_vertex_count = vertex_buffer->GetByteSize() / sizeof(Vertex);
+    rt_geo_info.segments.emplace_back(0, 3, sizeof(Vertex), 0, 1);
+
+    RaytracingGeometryRef blas = device.CreateRaytracingGeometry(rt_geo_info);
+    cmd_list.BuildAccelerationStructures({{blas, ERaytracingBuildMode::BUILD}});
+
+    RaytracingSceneRef scene = device.CreateRaytracingScene();
+
+    RaytracingMaterial  mat{};
+    RaytracingInstance& rt_instance = scene->AddInstance();
+    rt_instance.geom                = blas;
+    rt_instance.transform           = Matrix3x4f(Matrix4x4f::Identity().r0, Matrix4x4f::Identity().r1, Matrix4x4f::Identity().r2);
+    rt_instance.flag.need_create    = true;
+    rt_instance.flag.need_update    = true;
+    rt_instance.material_ref        = mat;
+
+    rt_instance.visible_mask = RTVM_ALL;
+
     while (WindowContext::ShouldClose(window_handle) == false) {
         WindowContext::Tick();
         int w_width, w_height;
@@ -175,6 +199,8 @@ int main(int argc, const char** argv) {
         param.color          = color_red;
         param.texture_handle = bdls_tex_handle_red;
 
+        scene->MarkModified(0);
+        cmd_list.UpdateRaytracingScene(scene);
         cmd_queue.Execute(cmd_list.Submit());
         cmd_queue.Present(sc, output);
     }

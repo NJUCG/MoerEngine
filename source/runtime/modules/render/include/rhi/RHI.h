@@ -12,6 +12,7 @@
 #include "taskgraph/TaskGraph.h"
 #include "taskgraph/ThreadManager.h"
 #include <cstdint>
+#include <optional>
 #include <type_traits>
 
 enum class ERHIType : uint8_t {
@@ -316,6 +317,8 @@ namespace Moer::Render {
 
         RENDER_API RaytracingGeometryRef CreateRaytracingGeometry(const RaytracingGeometryInfo& _init);
 
+        RENDER_API RaytracingSceneRef CreateRaytracingScene();
+
         class Impl;
 
     protected:
@@ -323,8 +326,9 @@ namespace Moer::Render {
         RENDER_API BufferRef CreateBuffer(uint _element_cnt, uint _stride, EBufferUsageFlags _usage);
 
         RenderDevice() = default;
-        UniquePtr<Impl> impl;
-        ERHIType        rhi_type;
+        UniquePtr<Impl>
+                 impl;
+        ERHIType rhi_type;
 
         DeviceConfig config;
     };

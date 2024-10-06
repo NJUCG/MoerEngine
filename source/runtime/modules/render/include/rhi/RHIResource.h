@@ -146,6 +146,7 @@ namespace Moer::Render {
     class Swapchain;
     class BindlessArray;
     class RaytracingGeometry;
+    class RaytracingScene;
     using TextureRef            = CountableRef<Texture>;
     using BufferRef             = CountableRef<Buffer>;
     using FenceRef              = CountableRef<Fence>;
@@ -154,6 +155,7 @@ namespace Moer::Render {
     using SwapchainRef          = CountableRef<Swapchain>;
     using BindlessArrayRef      = CountableRef<BindlessArray>;
     using RaytracingGeometryRef = CountableRef<RaytracingGeometry>;
+    using RaytracingSceneRef    = CountableRef<RaytracingScene>;
 };// namespace Moer::Render
 
 class Shader;
@@ -863,14 +865,24 @@ namespace Moer::Render {
     /// </summary>
 
     // geometry segment in raytracing geometry
+
+    struct RaytracingSizeInfos {
+        uint64 build_scratch_size;
+        uint64 update_scratch_size;
+        uint64 result_size;
+    };
     struct RaytracingSegment {
         uint vertex_offset;
         uint vertex_count;
+        uint vertex_stride;
         uint index_offset;
         uint index_count;
 
-        ERayTracingGeometryType  type  = RTGT_TRIANGLES;
-        ERayTracingGeometryFlags flags = ERayTracingGeometryFlags::NONE;
+        ERayTracingGeometryType  type             = RTGT_TRIANGLES;
+        ERayTracingGeometryFlags flags            = ERayTracingGeometryFlags::NONE;
+        bool                     b_force_opaque   = false;
+        bool                     b_cull_back_face = false;
+        bool                     b_flip_face      = false;
     };
     struct RaytracingGeometryInfo {
         BufferRef                vertex_buffer = nullptr;
@@ -899,6 +911,17 @@ namespace Moer::Render {
         ERaytracingBuildMode  mode;
     };
 
+    enum RTVisibleMask : uint8 {
+        RTVM_NONE,
+        RTVM_DISABLE,
+        RTVM_ALL = 0xff,
+    };
+
+    struct RaytracingMaterial {
+        uint64 handle;
+        uint64 sbt_offset;
+    };
+
     struct RaytracingInstance {
         struct Flag {
             uint need_update : 1 = false;
@@ -906,11 +929,15 @@ namespace Moer::Render {
         };
 
         RaytracingGeometry* geom;//src geom reference
+        RaytracingMaterial  material_ref;
         Matrix3x4f          transform;
-        const uint          array_idx;  //index in scene array
-        const uint          instance_id;//raw data idx in soa representation
 
-        Flag flag;
+        const uint    array_idx;  //index in scene array
+        const uint    instance_id;//raw data idx in soa representation
+        uint          segment_idx  = 0;
+        uint          custom_index = 0;
+        RTVisibleMask visible_mask = RTVM_ALL;
+        Flag          flag;
     };
 
     //container for scene TLAS and rt instances
@@ -921,11 +948,18 @@ namespace Moer::Render {
     public:
         virtual RaytracingInstance& AddInstance()                 = 0;
         virtual void                FreeInstance(uint _array_idx) = 0;
+        virtual void                MarkModified(uint _array_idx) = 0;
+        virtual UniquePtr<Command>  UpdateScene()                 = 0;
 
-        virtual UniquePtr<Command> UpdateScene() = 0;
+        virtual void RegisterGeometry(RaytracingGeometryRef _geom)   = 0;
+        virtual void UnregisterGeometry(RaytracingGeometryRef _geom) = 0;
+
+        RaytracingInstance&       GetInstance(uint _array_idx);
+        const RaytracingInstance& GetInstance(uint _array_idx) const;
 
     protected:
         Array<RaytracingInstance> instances;
+        RaytracingSizeInfos       size_infos;
     };
 
 }// namespace Moer::Render
@@ -2910,10 +2944,10 @@ namespace Moer::Render {
 
     struct PipelineHandle {
         std::variant<VkPipelineHandle, D3DPipelineHandle> handle;
-        // Array<uint64>                                     binding_infos;
-        UnorderedMap<uint64, uint> hash_2_info_index;
-        uint64                     valid_bits   = 0;
-        int                        constant_idx = -1;
+        Array<uint64>                                     binding_infos;
+        UnorderedMap<uint64, uint>                        hash_2_info_index;
+        uint64                                            valid_bits   = 0;
+        int                                               constant_idx = -1;
     };
 
     struct SingleShaderInfo {

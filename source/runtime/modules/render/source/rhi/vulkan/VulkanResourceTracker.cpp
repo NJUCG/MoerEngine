@@ -202,6 +202,14 @@ namespace Moer::Render {
         }
     }
 
+    void VkTracker::EmplaceWriteBLAS(uint64 _blas_buf) {
+        write_blas_states.insert(_blas_buf);
+    }
+
+    bool VkTracker::ContainsWriteBLAS(uint64 _blas_buf) {
+        return write_blas_states.find(_blas_buf) != write_blas_states.end();
+    }
+
     void VkTracker::RecordState(VulkanTexture* _texture, VkAccessFlagBits2 _access, VkImageLayout _layout, VkPipelineStageFlagBits2 _stage, uint8_t _mip_level, uint8_t _mip_count) {
         // Range range{_mip_level, _mip_count};
         TextureState state{
@@ -213,7 +221,7 @@ namespace Moer::Render {
             _stage};
 
         auto state_iter = texture_states.find(_texture);
-        bool is_write = IsWriteState(_layout);
+        bool is_write   = IsWriteState(_layout);
         if (state_iter != texture_states.end()) {
             auto& target_state = state_iter->second;
             if (target_state.dst_stage == state.dst_stage && target_state.dst_access == state.dst_access && target_state.dst_layout == state.dst_layout) {
@@ -232,10 +240,9 @@ namespace Moer::Render {
             target_state.dst_access = state.dst_access;
             target_state.dst_stage  = state.dst_stage;
 
-            if(is_write) {
+            if (is_write) {
                 write_states_set.insert(_texture);
-            }
-            else {
+            } else {
                 write_states_set.erase(_texture);
             }
 
@@ -248,7 +255,7 @@ namespace Moer::Render {
                     state.src_stage  = _stage;
                 }
             }
-            if(is_write) {
+            if (is_write) {
                 write_states_set.insert(_texture);
             }
 

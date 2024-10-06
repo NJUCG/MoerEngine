@@ -7,10 +7,32 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "shader/ShaderPipeline.h"
+#include "shader/ShaderResourceManager.h"
 #include "taskgraph/GraphTask.h"
 #include "taskgraph/TaskGraph.h"
 #include <variant>
 namespace Moer::Render {
+
+    struct ComponentShuffleShader : public ComputePipeline {
+        struct Arg {
+            uint stride;
+            uint component_cnt;
+        };
+
+        DEFINE_COMPUTE_PIPELINE_CLASS(ComponentShuffleShader);
+
+        DEFINE_SHADER_CONSTANT_STRUCT(Arg, args);
+        DEFINE_SHADER_BUFFER(indices);
+        DEFINE_SHADER_BUFFER(src);
+        DEFINE_SHADER_BUFFER(dst);
+
+        DEFINE_SHADER_ARGS(args, indices, src, dst);
+    };
+
+    struct DeviceInternalShaders {
+        ComponentShuffleShader sd_component_shuffle;
+    };
+
     static uint64 GetSizeFromImageFormat(EPixelFormat _format, const uint3 _size) {
         switch (_format) {
             case PF_R8G8B8A8_SRGB:
@@ -596,8 +618,8 @@ namespace Moer::Render {
         BuildAccelerationStructuresCmd() : Command(EType::BuildAccel) {}
 
     public:
-        BuildAccelerationStructuresCmd(Array<AccelerationStructureBuildParam> _params) : Command(EType::BuildAccel) {}
-        BuildAccelerationStructuresCmd(Array<AccelerationStructureBuildParam>&& _params) : Command(EType::BuildAccel) {}
+        BuildAccelerationStructuresCmd(const Array<AccelerationStructureBuildParam>& _params) : Command(EType::BuildAccel), params(_params) {}
+        BuildAccelerationStructuresCmd(Array<AccelerationStructureBuildParam>&& _params) : Command(EType::BuildAccel), params(std::move(_params)) {}
 
         EQueueType GetQueueType() const override { return EQueueType::Compute; }
 
@@ -610,23 +632,64 @@ namespace Moer::Render {
         mutable BufferView                     scratch_buffer{};
     };
 
-    struct BuildRaytracingSceneCmd : public Command {
+    struct UpdateRaytracingSceneCmd : public Command {
     private:
-        BuildRaytracingSceneCmd() : Command(EType::BuildTLAS) {}
+        UpdateRaytracingSceneCmd() : Command(EType::BuildTLAS) {}
 
     public:
-        BuildRaytracingSceneCmd(Array<AccelerationStructureBuildParam> _params) : Command(EType::BuildTLAS) {}
-        BuildRaytracingSceneCmd(Array<AccelerationStructureBuildParam>&& _params) : Command(EType::BuildTLAS) {}
+        UpdateRaytracingSceneCmd(
+            UnorderedMap<uint64, uint32>&& _related_geoms,
+            uint64                         _scene_handle,
+            uint64                         _instance_buffer_handle,
+            uint64                         _scratch_buffer_handle,
+            uint64                         _tlas_handle,
+            Array<uint>&&                  _instances_to_update,
+            Array<byte>&&                  _instance_data,
+            uint                           _instance_cnt,
+            bool                           _full_refit) : related_geometries(std::move(_related_geoms)),
+                                scene_handle(_scene_handle),
+                                instance_buffer_handle(_instance_buffer_handle),
+                                scratch_buffer_handle(_scratch_buffer_handle),
+                                tlas_handle(_tlas_handle),
+
+                                instance_to_update_ids(std::move(_instances_to_update)),
+                                instance_data(std::move(_instance_data)),
+                                instance_cnt(_instance_cnt),
+                                b_full_refit(_full_refit),
+                                Command(EType::BuildTLAS) {
+        }
 
         EQueueType GetQueueType() const override { return EQueueType::Compute; }
 
-        const auto& Params() const { return params; }
+        const auto& InstancesToUpdate() const { return instance_to_update_ids; }
+        const auto& InstanceData() const { return instance_data; }
 
-        auto& Scratch() const { return scratch_buffer; }
+        auto StealInstancesToUpdate() const { return std::move(instance_to_update_ids); }
+        auto StealInstanceData() const { return std::move(instance_data); }
+
+        auto SceneHandle() const { return scene_handle; }
+
+        uint64 InstanceBufferHandle() const { return instance_buffer_handle; }
+        uint64 ScratchBufferHandle() const { return scratch_buffer_handle; }
+        uint64 TlasHandle() const { return tlas_handle; }
+
+        uint32 InstanceCount() const { return instance_cnt; }
+
+        bool HasGeometry(uint64 _handle) const { return related_geometries.find(_handle) != related_geometries.end(); }
 
     private:
-        Array<AccelerationStructureBuildParam> params;
-        mutable BufferView                     scratch_buffer{};
+        uint64      scene_handle;
+        Array<uint> instance_to_update_ids;
+        Array<byte> instance_data;
+
+        uint64 instance_buffer_handle;
+        uint64 scratch_buffer_handle;
+        uint64 tlas_handle;
+
+        uint                       modifiable_instance_cnt = 0;
+        bool                       b_full_refit            = false;
+        uint                       instance_cnt            = 0;
+        UnorderedMap<uint64, uint> related_geometries;
     };
 
     class RenderDevice::Impl {
@@ -655,6 +718,8 @@ namespace Moer::Render {
 
         /// Raytracing
         virtual RaytracingGeometryRef CreateRaytracingGeometry(const RaytracingGeometryInfo& _init) = 0;
+
+        virtual RaytracingSceneRef CreateRaytracingScene() = 0;
 
         // virtual RHIViewportRef CreateViewport(const RHIViewportInitializer& _init) = 0;
 

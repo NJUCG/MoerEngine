@@ -53,10 +53,10 @@ namespace Moer::Render {
             pass_type = _type;
         }
 
-        const Set<VulkanTexture*> & GetWriteStates() const {
+        const Set<VulkanTexture*>& GetWriteStates() const {
             return write_states_set;
         }
-        
+
         void ResolveBarriers();
 
         void DispatchBarriers(class VulkanCmdList& _cmd_list);
@@ -68,7 +68,14 @@ namespace Moer::Render {
         auto WriteBuffer(VulkanBuffer*, EBufferState, EPassType _type = EPassType::Graphics) -> std::tuple<VkAccessFlags2, VkPipelineStageFlags2>;
         auto ReadTexture(VulkanTexture*, ETextureState, EPassType _type = EPassType::Graphics) -> std::tuple<VkAccessFlags2, VkImageLayout, VkPipelineStageFlags2>;
         auto WriteTexture(VulkanTexture*, ETextureState, EPassType _type = EPassType::Graphics) -> std::tuple<VkAccessFlags2, VkImageLayout, VkPipelineStageFlags2>;
-        
+
+        void EmplaceWriteBLAS(uint64 _blas_buf);
+        bool ContainsWriteBLAS(uint64 _blas_buf);
+
+        const Set<uint64>& GetWriteBLASStates() const {
+            return write_blas_states;
+        }
+
     private:
         EPassType                     pass_type;
         Array<VkBufferMemoryBarrier2> buffer_barriers;
@@ -77,7 +84,9 @@ namespace Moer::Render {
 
         UnorderedMap<VulkanBuffer*, BufferState>   buffer_states;
         UnorderedMap<VulkanTexture*, TextureState> texture_states;
-        Set<VulkanTexture*>  write_states_set;
+        Set<VulkanTexture*>                        write_states_set;
+
+        Set<uint64> write_blas_states;
     };
 }// namespace Moer::Render
 #endif

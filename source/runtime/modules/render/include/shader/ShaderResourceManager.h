@@ -196,12 +196,26 @@ namespace Moer::Render {
             std::memcpy(hash_values.data(), hash_array.data(), hash_array.size() * sizeof(std::string_view));
             std::memcpy(arg_type_values.data(), arg_type_array.data(), arg_type_array.size() * sizeof(EShaderArgType));
             PipelineHandle handle = CreatePipeline(std::move(hash_values), std::move(arg_type_values));
-            return TPipeline();
+            return TPipeline(handle);
         };
         ComputeConstructor(RenderDevice&, std::string_view _path, std::string_view _entry_name);
 
+        template<typename TPipeline>
+            requires std::is_base_of_v<ComputePipeline, TPipeline>
+        PipelineShaderInfo CompileShaderInfo() {
+            auto hash_array     = TPipeline::GetHashArray();
+            auto arg_type_array = TPipeline::GetArgTypeArray();
+
+            Array<std::string_view> hash_values(hash_array.size());
+            Array<EShaderArgType>   arg_type_values(hash_array.size());
+            std::memcpy(hash_values.data(), hash_array.data(), hash_array.size() * sizeof(std::string_view));
+            std::memcpy(arg_type_values.data(), arg_type_array.data(), arg_type_array.size() * sizeof(EShaderArgType));
+            return CompileShaderInfo(std::move(hash_values), std::move(arg_type_values));
+        }
+
     private:
-        PipelineHandle CreatePipeline(Array<std::string_view>&& _hash_values, Array<EShaderArgType>&& _arg_type_values);
+        PipelineHandle     CreatePipeline(Array<std::string_view>&& _hash_values, Array<EShaderArgType>&& _arg_type_values);
+        PipelineShaderInfo CompileShaderInfo(Array<std::string_view>&& _hash_values, Array<EShaderArgType>&& _arg_type_values);
 
         ShaderInfo            shader_info;
         Render::RenderDevice& device;
@@ -219,8 +233,8 @@ namespace Moer::Render {
         ShaderManager(Render::RenderDevice& _device);
         RasterPipelineConstructor Raster();
         template<typename TPipeline>
-        TPipeline Compute(std::string_view _path, std::string_view _entry_name = "main") {
-            return ComputeConstructor(GetDevice(), _path, _entry_name).Build<TPipeline>();
+        PipelineShaderInfo Compute(std::string_view _path, std::string_view _entry_name = "main") {
+            return ComputeConstructor(GetDevice(), _path, _entry_name).CompileShaderInfo<TPipeline>();
         }
         RTConstructor Raytracing();
 

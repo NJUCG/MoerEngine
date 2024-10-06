@@ -657,6 +657,13 @@ namespace Moer::Render {
             EndBarriers();
         }
 
+#pragma region[ raytracing ]
+
+        RENDER_API void BuildAccelerationStructures(Array<AccelerationStructureBuildParam>&& _params);
+
+        RENDER_API void UpdateRaytracingScene(RaytracingSceneRef _scene);
+#pragma endregion
+
         RENDER_API void AddCallback(std::function<void()>&& _callback);
 
         RENDER_API CmdSubmit Submit();

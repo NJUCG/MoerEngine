@@ -9,6 +9,7 @@
 #include <cassert>
 #include "RHIImpl.h"
 #include "vulkan/VulkanDevice.h"
+#include "shader/ShaderResourceManager.h"
 
 RHI* g_rhi = nullptr;
 

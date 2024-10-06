@@ -15,6 +15,16 @@
  * 
  */
 namespace Moer::Render {
+
+    struct FunctionTable {
+        using IsResourceWrite  = bool (*)(uint64 _flag);
+        using IsResourceRead   = bool (*)(uint64 _flag);
+        using IsTextureSampled = bool (*)(uint64 _flag);
+
+        IsResourceWrite  is_resource_write;
+        IsResourceRead   is_resource_read;
+        IsTextureSampled is_texture_sampled;
+    };
     struct ArenaAllocator {
         struct LinkedChunk {
             LinkedChunk* next = nullptr;
@@ -125,7 +135,7 @@ namespace Moer::Render {
     class CmdReorderer {
 
     public:
-        CmdReorderer() : m_arena(65556), m_arena_stl(m_arena) {}
+        CmdReorderer(FunctionTable _funcs) : m_arena(65556), m_arena_stl(m_arena), m_funcs(_funcs) {}
         ~CmdReorderer() {
         }
         enum class ResourceRW : uint8 {
@@ -292,10 +302,13 @@ namespace Moer::Render {
         UnorderedMap<uint64, NoRangeHandle*> m_no_range_handles;
 
         Array<std::tuple<Range, ResourceHandle*>> m_read_resources;
-        Array<std::tuple<Range, ResourceHandle*>> m_write_resources;
-        uint64                                    m_dispatch_layer;
-        ArenaAllocator                            m_arena;
-        ArenaAllocatorWrapper<ResourceView>       m_arena_stl;
+        UnorderedSet<uint64>                      m_write_resources;
+        UnorderedSet<uint64>                      m_writed_geometry;
+
+        uint64                              m_dispatch_layer;
+        ArenaAllocator                      m_arena;
+        ArenaAllocatorWrapper<ResourceView> m_arena_stl;
+        FunctionTable                       m_funcs;
 
     public:
         ResourceHandle* GetHandle(uint64 _handle, ResourceType _type) {
@@ -664,6 +677,22 @@ namespace Moer::Render {
                 layer = std::max(layer, SetRead((uint64)vtx, Range(0, vtx->GetByteSize()), ResourceType::Texture_Buffer));
                 layer = std::max(layer, SetRead((uint64)idx, Range(0, idx->GetByteSize()), ResourceType::Texture_Buffer));
                 layer = std::max(layer, SetWrite((uint64)cmd.geometry.Get(), Range(0), ResourceType::Accel));
+
+                m_writed_geometry.emplace((uint64)cmd.geometry.Get());
+            }
+
+            AddCmd(_cmd, layer);
+        }
+
+        void VisitCmd(const UpdateRaytracingSceneCmd* _cmd) {
+            if (_cmd->InstancesToUpdate().size() == 0) {
+                return;
+            }
+            int64 layer = SetWrite((uint64)_cmd->SceneHandle(), Range(0), ResourceType::Accel);
+            for (const uint64& handle : m_writed_geometry) {
+                if (_cmd->HasGeometry(handle)) {
+                    layer = std::max(layer, SetRead(handle, Range(0), ResourceType::Accel));
+                }
             }
 
             AddCmd(_cmd, layer);
@@ -708,6 +737,9 @@ namespace Moer::Render {
                     break;
                 case Command::EType::BuildAccel:
                     VisitCmd(static_cast<const BuildAccelerationStructuresCmd*>(_cmd));
+                    break;
+                case Command::EType::BuildTLAS:
+                    VisitCmd(static_cast<const UpdateRaytracingSceneCmd*>(_cmd));
                     break;
                 default:
                     assert(false && "Command Type Not Supported for Reorder");

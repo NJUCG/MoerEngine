@@ -56,6 +56,11 @@ namespace Moer::Render {
     name(PipelineHandle _handle) : RasterPipeline(_handle) {} \
     name() : RasterPipeline() {}
 
+#define DEFINE_COMPUTE_PIPELINE_CLASS(name)                    \
+    using TPipeline = name;                                    \
+    name(PipelineHandle _handle) : ComputePipeline(_handle) {} \
+    name() : ComputePipeline() {}
+
 #define DEFINE_SHADER_ARGS(...)                                                                                          \
 public:                                                                                                                  \
     using InnerArgs = ShaderArgs<TPipeline __VA_OPT__(, ) __VA_ARGS__>;                                                  \
@@ -136,7 +141,7 @@ namespace Moer::Render {
 
     struct ArrayArguments {
         ArrayArguments() = default;
-        ArrayArguments(uint _arg_cnt, uint _const_size) : args(_arg_cnt), constants(_const_size) {}
+        ArrayArguments(uint _arg_cnt, uint _const_size, bool _b_use_bdls) : args(_arg_cnt), constants(_const_size), b_use_bindless(_b_use_bdls) {}
         ArrayArguments(ArrayArguments&& _other) {
             args      = std::move(_other.args);
             constants = std::move(_other.constants);
@@ -150,6 +155,7 @@ namespace Moer::Render {
         Array<uint> constants;
 
         Array<uint>&& StealConstants() { return std::move(constants); }
+        bool          b_use_bindless = false;
     };
 
     template<typename T, typename arg_name>
@@ -236,6 +242,11 @@ namespace Moer::Render {
             return (0 + ... + (is_constant_type<Args>::value ? sizeof(typename Args::type) : 0)) / sizeof(uint);
         }
 
+        static constexpr bool IsUsingBdls() {
+            //if TArg is a constant, add the size of TArg to the total size, other wise add 0
+            return (... || (Args::arg_type == SDA_BindlessArray));
+        }
+
         // constexpr uint32 static GetConstantSize() {
         //     //if TArg is a constant, add the size of TArg to the total size, other wise add 0
         //     return (0 + ... + (std::is_same_v<typename Args::type, TConstsant<typename Args::type::type>> ? sizeof(typename Args::type) : 0)) / sizeof(uint);
@@ -290,7 +301,7 @@ namespace Moer::Render {
 
         template<typename... T, std::size_t... Is>
         static ArrayArguments SetParams(std::index_sequence<Is...>, T&&... _args) {
-            ArrayArguments arg_setter(arg_size, GetConstantSize());
+            ArrayArguments arg_setter(arg_size, GetConstantSize(), IsUsingBdls());
             (..., SetParam<T, std::tuple_element_t<Is, tuple_helper>>((std::forward<T>(_args)), arg_setter));
             return std::move(arg_setter);
         }

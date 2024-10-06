@@ -112,24 +112,26 @@ namespace Moer::Render {
 
     public:
         VulkanCmdList(VulkanCmdAllocator* _allocator, VulkanDevice& _device);
-        void Begin();
-        void End();
-        void CopyBuffer(VulkanBuffer* _src, VulkanBuffer* _dst, uint64 _size, uint64 _src_offset, uint64 _dst_offset);
-        void CopyBufferToTexture(VulkanBuffer* _src, VulkanTexture* _dst, uint64 _size, uint64 _src_offset, uint3 _dst_offset, uint3 _dst_extent, uint32 _mip_level);
-        void CopyTextureToBuffer(VulkanTexture* _src, VulkanBuffer* _dst, uint64 _size, uint3 _src_offset, uint64 _dst_offset, uint3 _src_extent, uint32 _mip_level);
-        void CopyData(const BufferView& _dst, const void* _data, uint64 _size);
-        void CopyData(const void* _dst, const BufferView& _src, uint64 _size);
-        void DrawIndexedInstanced(uint32_t _index_count, uint32_t _instance_count, uint32_t _start_index_location, uint32_t _base_vertex_location, uint32_t _start_instance_location);
-        void DrawInstanced(uint32_t _vertex_count, uint32_t _instance_count, uint32_t _start_vertex_location, uint32_t _start_instance_location);
-        void DrawIndirectCnt(VulkanBuffer* _arg_buffer, uint64 _arg_offset, VulkanBuffer* _count_buffer, uint64 _count_buffer_offset, uint32_t _max_draw_count, uint32_t _stride);
-        void CopyTexture(VulkanTexture* _src, VulkanTexture* _dst, uint3 _extent, uint3 _src_offset, uint3 _dst_offset, uint32 _src_mip_level, uint32 _dst_mip_level);
-        void BeginRendering(VkRenderingInfo&& _info);
-        void EndRendering();
-        void SetVertexBuffers(uint _start_index, uint _num_buffers, std::span<VkBuffer>, std::span<uint64> _offsets);
-        void SetIndexBuffer(VulkanBuffer* _buffer, uint64 _offset, VkIndexType _type);
-        void SetPso(const PipelineHandle& _pso_handle);
-        void SetScissor(const VkRect2D& _scissor);
-        void SetViewPort(const VkViewport& _viewport);
+        void  Begin();
+        void  End();
+        void  CopyBuffer(VulkanBuffer* _src, VulkanBuffer* _dst, uint64 _size, uint64 _src_offset, uint64 _dst_offset);
+        void  CopyBufferToTexture(VulkanBuffer* _src, VulkanTexture* _dst, uint64 _size, uint64 _src_offset, uint3 _dst_offset, uint3 _dst_extent, uint32 _mip_level);
+        void  CopyTextureToBuffer(VulkanTexture* _src, VulkanBuffer* _dst, uint64 _size, uint3 _src_offset, uint64 _dst_offset, uint3 _src_extent, uint32 _mip_level);
+        void  CopyData(const BufferView& _dst, const void* _data, uint64 _size);
+        void  CopyData(const void* _dst, const BufferView& _src, uint64 _size);
+        void* MapBuffer(const BufferView& _src);
+        void  UnmapBuffer(const BufferView& _buffer);
+        void  DrawIndexedInstanced(uint32_t _index_count, uint32_t _instance_count, uint32_t _start_index_location, uint32_t _base_vertex_location, uint32_t _start_instance_location);
+        void  DrawInstanced(uint32_t _vertex_count, uint32_t _instance_count, uint32_t _start_vertex_location, uint32_t _start_instance_location);
+        void  DrawIndirectCnt(VulkanBuffer* _arg_buffer, uint64 _arg_offset, VulkanBuffer* _count_buffer, uint64 _count_buffer_offset, uint32_t _max_draw_count, uint32_t _stride);
+        void  CopyTexture(VulkanTexture* _src, VulkanTexture* _dst, uint3 _extent, uint3 _src_offset, uint3 _dst_offset, uint32 _src_mip_level, uint32 _dst_mip_level);
+        void  BeginRendering(VkRenderingInfo&& _info);
+        void  EndRendering();
+        void  SetVertexBuffers(uint _start_index, uint _num_buffers, std::span<VkBuffer>, std::span<uint64> _offsets);
+        void  SetIndexBuffer(VulkanBuffer* _buffer, uint64 _offset, VkIndexType _type);
+        void  SetPso(const PipelineHandle& _pso_handle);
+        void  SetScissor(const VkRect2D& _scissor);
+        void  SetViewPort(const VkViewport& _viewport);
 
         void Dispatch(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z);
         void DispatchIndirect(VulkanBuffer* _buffer, uint64 _offset);
@@ -168,6 +170,7 @@ namespace Moer::Render {
         ~VulkanAllocator();
         BufferView     AllocateBuffer(uint64 _size, uint _align);
         BufferView     AllocateScratch(uint64 _size);
+        BufferView     AllocateShaderBuffer(uint64 _size);
         VulkanCmdList& GetCmdList() {
             return cmd_list.value();
         }
@@ -191,6 +194,16 @@ namespace Moer::Render {
 
         struct ScratchAllocator : VulkanDeviceObject {
             ScratchAllocator(VulkanDevice* _device);
+            uint64 Allocate(uint64 _size);
+            void   Deallocate(uint64 _handle);
+            void   Reset();
+
+            Array<uint64> allocated_buffers;
+            uint64        alignment;
+        };
+
+        struct ShaderBufferAllocator : VulkanDeviceObject {
+            ShaderBufferAllocator(VulkanDevice* _device);
             uint64 Allocate(uint64 _size);
             void   Deallocate(uint64 _handle);
             void   Reset();
@@ -227,6 +240,7 @@ namespace Moer::Render {
 
         StackAllocator               small_allocator;
         ScratchAllocator             scratch_allocator;
+        ShaderBufferAllocator        shader_buffer_allocator;
         Array<std::function<void()>> on_complete;
         VkTracker                    tracker;
     };

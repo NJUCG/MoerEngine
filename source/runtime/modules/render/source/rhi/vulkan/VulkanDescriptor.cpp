@@ -517,6 +517,7 @@ namespace Moer::Render {
         {
             VkDescriptorAddressInfoEXT buffer_info{VK_STRUCTURE_TYPE_DESCRIPTOR_ADDRESS_INFO_EXT};
             buffer_info.address = _in_buffer->DeviceAddress();
+            buffer_info.range   = _in_buffer->GetByteSize();
             VkDescriptorGetInfoEXT buffer_desc_info{VK_STRUCTURE_TYPE_DESCRIPTOR_GET_INFO_EXT};
             buffer_desc_info.type                = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             buffer_desc_info.data.pStorageBuffer = &buffer_info;
@@ -541,7 +542,7 @@ namespace Moer::Render {
     }
 
     uint VulkanDescriptorHeap::GetImageDescIdx(const TextureView* _in_image, VkImageLayout _layout) {
-        auto*                       texture = ResourceCast(_in_image->texture);
+        auto* texture = ResourceCast(_in_image->texture);
         assert(texture != nullptr && "texture is nullptr");
         VkTextureDescKey key{_layout, _in_image->mip_level, _in_image->num_mips};
         auto             res = texture->m_descriptor_indices.try_emplace(key, -1);
@@ -550,11 +551,11 @@ namespace Moer::Render {
         {
             VkDescriptorImageInfo  image_info{.imageView = texture->GetView(_in_image->mip_level, _in_image->num_mips), .imageLayout = _layout};
             VkDescriptorGetInfoEXT desc_info{VK_STRUCTURE_TYPE_DESCRIPTOR_GET_INFO_EXT};
-            desc_info.type                = _layout == VK_IMAGE_LAYOUT_GENERAL ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE : VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+            desc_info.type               = _layout == VK_IMAGE_LAYOUT_GENERAL ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE : VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
             desc_info.data.pSampledImage = &image_info;
             std::lock_guard<std::mutex> lock(m_mutex);
             if (image_free_list.empty()) {
-                idx = image_offset  / image_desc_stride;
+                idx = image_offset / image_desc_stride;
                 image_offset += image_desc_stride;
             } else {
                 idx = image_free_list.back();
@@ -577,7 +578,7 @@ namespace Moer::Render {
         current_offset = ring_buffer_offsets[_frame_idx];
     }
     void VulkanDescriptorHeap::EndPushDescriptors(uint _frame_idx) {
-        _frame_idx = _frame_idx % m_device->cmd_alloc_limits;
+        _frame_idx         = _frame_idx % m_device->cmd_alloc_limits;
         uint64 base_offset = ring_buffer_offsets[_frame_idx];
         vmaFlushAllocation(m_device->GetVmaAllocator(), ring_desc_buffer->GetAllocation(), base_offset, current_offset - base_offset);
     }

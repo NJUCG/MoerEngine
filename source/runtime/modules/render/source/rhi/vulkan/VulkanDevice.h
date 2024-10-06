@@ -80,6 +80,8 @@ namespace Moer::Render {
         // Raytracing
         RaytracingGeometryRef CreateRaytracingGeometry(const RaytracingGeometryInfo& _init) override;
 
+        RaytracingSceneRef CreateRaytracingScene() override;
+
         // RHIViewportRef CreateViewport(const RHIViewportInitializer& _init) override;
 
         // BackBufferInfo GetNextBackBufferInfo(RHIViewport* _viewport) override;
@@ -208,6 +210,7 @@ namespace Moer::Render {
     public:
         static constexpr uint bindless_sampler_cnt = 256;
         static constexpr uint cmd_alloc_limits     = 3;
+        DeviceInternalShaders internal_shaders;
 
     private:
         friend VkCommandQueue;
@@ -221,6 +224,8 @@ namespace Moer::Render {
         void             CreateMemoryAllocator(VkInstance _instance, uint32 _api_version);
         void             CreateDescriptorAllocator();
         void             CreateDescriptorHeap();
+
+        void CreateInternalShaders();
 
         void Destroy();
 

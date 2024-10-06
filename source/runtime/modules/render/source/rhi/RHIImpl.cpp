@@ -2,6 +2,7 @@
 #include "rhi/RHI.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
+#include "shader/ShaderResourceManager.h"
 namespace Moer::Render {
     PipelineHandle RenderDevice::CreatePipeline(GfxPsoCreateInfo&& _pso_info, PipelineShaderInfo&& _shaders) {
         return impl->CreatePipeline(std::move(_pso_info), std::move(_shaders));
@@ -53,4 +54,9 @@ namespace Moer::Render {
     RaytracingGeometryRef RenderDevice::CreateRaytracingGeometry(const RaytracingGeometryInfo& _init) {
         return impl->CreateRaytracingGeometry(_init);
     }
+
+    RaytracingSceneRef RenderDevice::CreateRaytracingScene() {
+        return impl->CreateRaytracingScene();
+    }
+
 }// namespace Moer::Render

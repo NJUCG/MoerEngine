@@ -215,4 +215,12 @@ namespace Moer::Render {
 
     BindlessArray::BindlessArray() : RHIResource(RRT_BINDLESS_ARRAY){};
 
+    RaytracingInstance& RaytracingScene::GetInstance(uint _array_idx) {
+        return instances[_array_idx];
+    }
+
+    const RaytracingInstance& RaytracingScene::GetInstance(uint _array_idx) const {
+        return instances[_array_idx];
+    }
+
 }// namespace Moer::Render
