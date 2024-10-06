@@ -576,11 +576,6 @@ namespace Moer::Render {
         DrawDispatcher Gfx(TGfxPso& _pso, TArgs&&... _args) {
             if constexpr (sizeof...(TArgs) > 0) {
                 ArrayArguments&& args = _pso.SetArgs(_args...);
-                for (const auto& arg : args.args) {
-                    if (arg.index() == bindless_arg_type_idx) {
-                        bindless_array = std::get<BindlessArrayRef>(arg);
-                    }
-                }
                 return DrawDispatcher(_pso, *this, std::move(args));
             }
             return DrawDispatcher(_pso, *this);

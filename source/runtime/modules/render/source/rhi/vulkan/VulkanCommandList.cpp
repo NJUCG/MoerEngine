@@ -42,26 +42,31 @@ namespace Moer::Render {
         VulkanAllocator& allocator;
 
         VkCmdPreprocessor(VkTracker& _tracker, VulkanAllocator& _allocator) : tracker(_tracker), allocator(_allocator) {}
-
-        void HandleShaderParams(const ArrayArguments& _args) {
-            for (uint i = 0; i < _args.Size(); ++i) {
-                auto& arg = _args[i];
-                if (std::holds_alternative<BindlessArrayRef>(arg)) {
-                    HandleBindless(std::get<BindlessArrayRef>(arg));
-                }
+        void HandleBindless(BindlessArrayRef bindless_array) {
+            if (!bindless_array) {
+                return;
             }
-        }
-        void HandleBindless(BindlessArrayRef _bindless_array) {
-            auto*                       vk_bindless_array = reinterpret_cast<VulkanBindlessArray*>(_bindless_array.Get());
-            Moer::Array<VulkanTexture*> write_map;
-            for (auto&& i : tracker.GetWriteStates()) {
+            auto                        vk_bindless_array = reinterpret_cast<VulkanBindlessArray*>(bindless_array.Get());
+            Moer::Array<VulkanTexture*> write_map_textures;
+            for (auto&& i : tracker.GetWritedStateTextures()) {
                 if (vk_bindless_array->IsTextureInBindLessArray(i)) {
-                    write_map.push_back(i);
+                    write_map_textures.push_back(i);
                 }
             }
-            if (!write_map.empty()) {
-                for (auto&& i : write_map) {
+            if (!write_map_textures.empty()) {
+                for (auto&& i : write_map_textures) {
                     tracker.RecordState(i, tracker.ReadTexture(i, ETextureState::SAMPLE, EPassType::Graphics));
+                }
+            }
+            Moer::Array<VulkanBuffer*> write_map_buffers;
+            for (auto&& i : tracker.GetWritedStateBuffers()) {
+                if (vk_bindless_array->IsBufferInBindLessArray(i)) {
+                    write_map_buffers.push_back(i);
+                }
+            }
+            if (!write_map_buffers.empty()) {
+                for (auto&& i : write_map_buffers) {
+                    tracker.RecordState(i, tracker.ReadBuffer(i, EBufferState::SHADER_RESOURCE, EPassType::Graphics));
                 }
             }
         }
@@ -163,6 +168,8 @@ namespace Moer::Render {
                 }
             },
                        _cmd->Param());
+
+            HandleBindless(_cmd->BindlessArray());
         }
 
         // void Visit(const SetParamsCmd* _cmd) {
@@ -243,6 +250,8 @@ namespace Moer::Render {
         }
 
         void Visit(const SetDrawStateCmd* _cmd) {
+            HandleBindless(_cmd->BindlessArray());
+
             const auto& vbs = _cmd->VertexBuffers();
             for (const auto& vb : vbs) {
                 auto* vk_buffer = ResourceCast(vb.first);
@@ -2033,9 +2042,6 @@ namespace Moer::Render {
         for (const CmdReorderer::LinkedCommandList& cmd_list : cmd_lists) {
             if (cmd_list.head == nullptr) {
                 continue;
-            }
-            if (_submit.bindless_array) {
-                preprocessor.HandleBindless(_submit.bindless_array);
             }
             for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
                 preprocessor.VisitCmd(cmdnode->cmd);

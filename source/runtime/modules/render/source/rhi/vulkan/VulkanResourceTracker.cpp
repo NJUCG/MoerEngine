@@ -48,7 +48,7 @@ namespace Moer::Render {
             VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
             VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
             VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT};
-
+        MarkWriteable(_buffer, false);
         return {gfx_rules[static_cast<uint32>(_state)], stage_rules[static_cast<uint32>(_state)]};
     }
 
@@ -70,7 +70,7 @@ namespace Moer::Render {
             VK_ACCESS_2_NONE,
             VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
             VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT};
-
+        MarkWriteable(_buffer, true);
         return {gfx_rules[static_cast<uint32>(_state)], stage_rules[static_cast<uint32>(_state)]};
     }
     static constexpr VkPipelineStageFlags2 tex_read_stage_rules[] = {
@@ -133,9 +133,10 @@ namespace Moer::Render {
             VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL,
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
 
-        write_states_set.erase(_texture);
         auto index      = static_cast<uint32>(_state);
         auto pass_index = static_cast<uint32>(_state) + uint32(ETextureState::Num) * uint32(_type);
+        MarkWriteable(_texture, layout_rules[index] != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL && layout_rules[index] != VK_IMAGE_LAYOUT_GENERAL);
+
         return {gfx_rules[index], layout_rules[index], tex_read_stage_rules[pass_index]};
     }
 
@@ -158,10 +159,25 @@ namespace Moer::Render {
             VK_IMAGE_LAYOUT_GENERAL,
             VK_IMAGE_LAYOUT_UNDEFINED};// Invalid
 
-        write_states_set.insert(_texture);
         auto index      = static_cast<uint32>(_state);
         auto pass_index = static_cast<uint32>(_state) + uint32(ETextureState::Num) * uint32(_type);
+        MarkWriteable(_texture, true);
         return {gfx_rules[index], layout_rules[index], tex_write_stage_rules[pass_index]};
+    }
+    void VkTracker::MarkWriteable(VulkanTexture* _texture, bool _writeable) {
+        if (_writeable) {
+            writed_state_textures.insert(_texture);
+        } else {
+            writed_state_textures.erase(_texture);
+        }
+    }
+
+    void VkTracker::MarkWriteable(VulkanBuffer* _buffer, bool _writeable) {
+        if (_writeable) {
+            writed_state_buffers.insert(_buffer);
+        } else {
+            writed_state_buffers.erase(_buffer);
+        }
     }
 
     void VkTracker::RecordState(VulkanBuffer* _buffer, VkAccessFlagBits2 _access, VkPipelineStageFlagBits2 _stage) {
@@ -241,9 +257,9 @@ namespace Moer::Render {
             target_state.dst_stage  = state.dst_stage;
 
             if (is_write) {
-                write_states_set.insert(_texture);
+                writed_state_textures.insert(_texture);
             } else {
-                write_states_set.erase(_texture);
+                writed_state_textures.erase(_texture);
             }
 
         } else {
@@ -256,7 +272,7 @@ namespace Moer::Render {
                 }
             }
             if (is_write) {
-                write_states_set.insert(_texture);
+                writed_state_textures.insert(_texture);
             }
 
             texture_states[_texture] = {state};
@@ -576,7 +592,8 @@ namespace Moer::Render {
         memory_barriers.clear();
         buffer_states.clear();
         texture_states.clear();
-        write_states_set.clear();
+        writed_state_textures.clear();
+        writed_state_buffers.clear();
     }
 
 }// namespace Moer::Render

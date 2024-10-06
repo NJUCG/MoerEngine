@@ -928,6 +928,7 @@ namespace Moer::Render {
         void FreeTexture(uint _slot) override;
         void FreeBuffer(uint _slot) override;
         bool IsTextureInBindLessArray(const VulkanTexture* _texture) const;
+        bool IsBufferInBindLessArray(const VulkanBuffer* _buffer) const;
         //call on update
         void CmdUpdate(Array<TextureUpdateInfo>&& _textures_allocated, Array<BufferUpdateInfo>&& _buffers_allocated);
         //call on frame end free
@@ -959,8 +960,8 @@ namespace Moer::Render {
         Array<uint>               buffers_freed;
         Array<uint>               slots_freed;
         Array<Handle>             handles;
-        Array<uint>               numbers;
         Set<const VulkanTexture*> textures_allocated_set;
+        Set<const VulkanBuffer*>  buffers_allocated_set;
 
         uint64 buffers_offset_in_set;
         uint64 textures_offset_in_set;

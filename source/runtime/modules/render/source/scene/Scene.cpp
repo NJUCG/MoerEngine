@@ -14,11 +14,12 @@ namespace Moer {
     Scene* g_scene = nullptr;
     struct GpuScene {
         RHIBufferRef GetGpuBuffer(EGpuSceneResource _resource) const { return global_resources.buffers[(uint32_t)_resource]; }
-
+        RHIRayTracingTLASRef GetTLAS() const { return tlas; }
     private:
         struct GResource {
             StaticArray<RHIBufferRef, (uint32_t)EGpuSceneResource::Num> buffers;
         } global_resources;
+        RHIRayTracingTLASRef tlas;
     };
     class RENDER_API Scene::Impl {
         friend class Scene;

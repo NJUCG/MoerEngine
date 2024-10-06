@@ -28,12 +28,14 @@ using namespace Moer;
 class TestTrianglePipeline : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(TestTrianglePipeline);
-    DEFINE_SHADER_ARGS();
+    DEFINE_SHADER_BUFFER(buffer);
+    DEFINE_SHADER_ARGS(buffer);
 };
 
 struct TestBindlessParam {
     float4 color;
     uint   texture_handle;
+    uint   buffer_handle;
 };
 class TestTrianglePipelineConstColor : public RasterPipeline {
 public:
@@ -181,6 +183,11 @@ int main(int argc, const char** argv) {
     cmd_list.CopyFrom(std::span<byte>((byte*)&red_data, sizeof(red_data)), red_tex);
     uint bdls_tex_handle_red = bindless_array->AllocateTexture(red_tex, sampler);
 
+    BufferRef red_buffer = device.CreateBuffer<float>(4, EBufferUsageFlags::UNORDERED_ACCESS);
+    BufferView red_buffer_view(red_buffer, 0, 4,4);
+    cmd_list.CopyFrom(std::span<byte>((byte*)&red_data, sizeof(red_data)), red_buffer->GetView());
+    uint bdls_buffer_handle_red = bindless_array->AllocateBuffer(red_buffer_view);
+
     cmd_list.UpdateBindlessArray(bindless_array);
     cmd_queue.Execute(cmd_list.Submit());
     cmd_queue.Sync();
@@ -229,14 +236,17 @@ int main(int argc, const char** argv) {
             sc->Recreate(sc_info);
         }
 
-        cmd_list.Gfx(raster_pipeline)
+        cmd_list.Gfx(raster_pipeline,red_buffer)
             .Draw(Rect2D(0, 0, 1, 1), std::move(draw_datas), ColorAttachment(red_tex));
 
         TestBindlessParam param;
         param.color          = color_red;
         param.texture_handle = bdls_tex_handle_red;
+        param.buffer_handle = bdls_buffer_handle_red;
         cmd_list.Gfx(raster_pipeline_constant_color, sampler, red_tex, bindless_array, param)
             .Draw(Rect2D(0, 0, resolution.x, resolution.y), std::move(draw_datas2), ColorAttachment(output));
+
+        
 
         // cmd_list.Barriers(ReadTexture(red_tex, ETextureState::SAMPLE));
         cmd_queue.Execute(cmd_list.Submit());
