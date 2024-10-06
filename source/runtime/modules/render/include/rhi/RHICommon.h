@@ -663,7 +663,7 @@ ENUM_BIT_OP_IMPL(EBufferRuntimeUsageFlags, FLAG)
 
 #pragma endregion
 
-#pragma[raytracing]
+#pragma region [raytracing]
 
 enum ERayTracingGeometryType : uint8_t {
     RTGT_TRIANGLES,
