@@ -1519,7 +1519,9 @@ namespace Moer::Render {
     }
 
     VulkanBuffer::~VulkanBuffer() {
-        if (m_alloc.buffer != VK_NULL_HANDLE && m_alloc.alloc != VK_NULL_HANDLE) { vmaDestroyBuffer(m_device->GetVmaAllocator(), m_alloc.buffer, m_alloc.alloc); }
+        if (m_alloc.buffer != VK_NULL_HANDLE && m_alloc.alloc != VK_NULL_HANDLE) { 
+            vmaDestroyBuffer(m_device->GetVmaAllocator(), m_alloc.buffer, m_alloc.alloc); 
+        }
         if (m_descriptor_idx >= 0) { m_device->GetGlobalDescriptorHeap().FreeBufferDescIdx(m_descriptor_idx); }
     }
 
@@ -1555,8 +1557,7 @@ namespace Moer::Render {
             VkBufferDeviceAddressInfo info{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
             info.buffer      = m_alloc.buffer;
             m_device_address = vkGetBufferDeviceAddress(m_device->GetDevice(), &info);
-        }
-       
+        }       
     }
 
     VulkanBindlessArray::VulkanBindlessArray(VulkanDevice* _device, uint32 _max_size) : 
@@ -2263,7 +2264,8 @@ namespace Moer::Render {
                 buffer_ci.size = build_sizes_info.build_scratch_size;
                 buffer_ci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
                 VK_CHECK_RESULT(vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &current_handle, &alloc, nullptr));
-                scratch_buffer = MoerNew(VulkanBuffer)(BufferInfo{buffer_ci.size, 1, EBufferUsageFlags::ACCELERATION_STRUCTURE}, *m_device, current_handle, alloc, false, true);
+                    
+                scratch_buffer = MoerNew(VulkanBuffer)(BufferInfo{buffer_ci.size, 1, EBufferUsageFlags::ACCELERATION_STRUCTURE}, *m_device, current_handle, alloc, true, true);
             }
             //TLAS
             if(build_sizes_info.result_size > size_infos.result_size){
@@ -2273,7 +2275,7 @@ namespace Moer::Render {
                 
                 tlas = MoerNew(VulkanAccelerationStructure)(*m_device);
 
-                tlas->underlying_buffer = MoerNew(VulkanBuffer)(BufferInfo{buffer_ci.size, 1, EBufferUsageFlags::ACCELERATION_STRUCTURE}, *m_device, current_handle, alloc, false, true);
+                tlas->underlying_buffer = MoerNew(VulkanBuffer)(BufferInfo{buffer_ci.size, 1, EBufferUsageFlags::ACCELERATION_STRUCTURE}, *m_device, current_handle, alloc, true, true);
 
 
                 //create new TLAS
@@ -2739,7 +2741,18 @@ namespace Moer::Render {
 
 #pragma region [ destroy override ]
 
-    void VulkanBuffer::Destroy() { if (b_deferred_delete) { m_device->EnqueueDeferredRelease(this); } }
+    void VulkanBuffer::Destroy() { 
+        if (b_deferred_delete)
+        { 
+            m_device->EnqueueDeferredRelease(this); return;
+        }
+        MoerDelete(this);
+    }
 
-    void VulkanTexture::Destroy() { if (b_deferred_delete) { m_device->EnqueueDeferredRelease(this); } }
+    void VulkanTexture::Destroy() { if (b_deferred_delete) { 
+        m_device->EnqueueDeferredRelease(this); 
+        return;
+        } 
+        MoerDelete(this);
+    }
 }
