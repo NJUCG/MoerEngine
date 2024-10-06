@@ -502,8 +502,15 @@ namespace Moer::Render {
         GraphEventRef                      evaluate_mesh_task = nullptr;
         UnorderedMap<Buffer*, BufferRange> vertex_buffers;
         UnorderedMap<Buffer*, BufferRange> index_buffers;
+        BindlessArrayRef                   bindless_array = nullptr;
 
-        SetDrawStateCmd(ArrayArguments&& _args) : Command(EType::SetDrawState), args(std::move(_args)) {}
+        SetDrawStateCmd(ArrayArguments&& _args) : Command(EType::SetDrawState), args(std::move(_args)) {
+            for (const auto& arg : args.args) {
+                if (arg.index() == bindless_arg_type_idx) {
+                    bindless_array = std::get<BindlessArrayRef>(arg);
+                }
+            }
+        }
 
     public:
         SetDrawStateCmd(PipelineHandle        _pipeline,
@@ -548,6 +555,7 @@ namespace Moer::Render {
         const auto& RenderPassInfo() const { return render_pass_info; }
         const auto& DrawData() const { return mesh_data; }
         const auto& Args() const { return args; }
+        auto BindlessArray() const { return bindless_array; }
         void        IterateArgs(std::function<void(const TArg&)> _func) const {
             for (const auto& arg : args.args) {
                 std::visit([&_func](const auto& _arg) { _func(_arg); }, arg);
@@ -573,7 +581,14 @@ namespace Moer::Render {
         PipelineHandle pipeline{};
         DispatchParam  param;
         ArrayArguments args;
-        DispatchCmd(ArrayArguments&& _args) : Command(EType::ShaderDispatch), args(std::move(_args)) {}
+        BindlessArrayRef bindless_array;
+        DispatchCmd(ArrayArguments&& _args) : Command(EType::ShaderDispatch), args(std::move(_args)) {
+            for (const auto& arg : args.args) {
+                if (arg.index() == bindless_arg_type_idx) {
+                    bindless_array = std::get<BindlessArrayRef>(arg);
+                }
+            }
+        }
 
     public:
         DispatchCmd(ArrayArguments&& _args, PipelineHandle _handle, uint3 _param) : Command(EType::ShaderDispatch), param(_param), pipeline(_handle), args(std::move(_args)) {}
@@ -584,6 +599,7 @@ namespace Moer::Render {
         const auto& Args() const { return args; }
         const auto& Pipeline() const { return pipeline; }
         auto        Param() const { return param; }
+        auto BindlessArray() const { return bindless_array; }
         void        IterateArgs(std::function<void(const TArg&)> _func) const {
             for (const auto& arg : args.args) {
                 _func(arg);

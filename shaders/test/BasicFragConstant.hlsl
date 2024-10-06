@@ -7,6 +7,7 @@ struct PixelInput {
 struct Constsant{
   float4 color;
   uint texture;
+  uint buffer; 
 };
 [[vk::push_constant]] ConstantBuffer<Constsant> param;
 Texture2D<float> texture : register(t0, space1);

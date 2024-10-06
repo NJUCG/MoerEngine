@@ -317,7 +317,7 @@ namespace Moer::Render {
 #define ADD_CUSTOM_EXTENSION(ext_class, optional) extensions.emplace_back(std::make_shared<ext_class>(optional))
         // generic simple extensions
         ADD_EXTENSION(VK_KHR_SWAPCHAIN_EXTENSION_NAME, VULKAN_EXTENSION_REQUIRED);
-        ADD_EXTENSION(VK_KHR_INDEX_TYPE_UINT8_EXTENSION_NAME, VULKAN_EXTENSION_REQUIRED);
+       // ADD_EXTENSION(VK_KHR_INDEX_TYPE_UINT8_EXTENSION_NAME, VULKAN_EXTENSION_REQUIRED);
 
 #if VULKAN_RHI_RAYTRACING
         // raytracing extensions
