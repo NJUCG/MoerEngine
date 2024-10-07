@@ -48,7 +48,6 @@ namespace Moer::Render {
             VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
             VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
             VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT};
-        MarkWriteable(_buffer, false);
         return {gfx_rules[static_cast<uint32>(_state)], stage_rules[static_cast<uint32>(_state)]};
     }
 
@@ -70,7 +69,6 @@ namespace Moer::Render {
             VK_ACCESS_2_NONE,
             VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
             VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT};
-        MarkWriteable(_buffer, true);
         return {gfx_rules[static_cast<uint32>(_state)], stage_rules[static_cast<uint32>(_state)]};
     }
     static constexpr VkPipelineStageFlags2 tex_read_stage_rules[] = {
@@ -135,7 +133,6 @@ namespace Moer::Render {
 
         auto index      = static_cast<uint32>(_state);
         auto pass_index = static_cast<uint32>(_state) + uint32(ETextureState::Num) * uint32(_type);
-        MarkWriteable(_texture, layout_rules[index] != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL && layout_rules[index] != VK_IMAGE_LAYOUT_GENERAL);
 
         return {gfx_rules[index], layout_rules[index], tex_read_stage_rules[pass_index]};
     }
@@ -161,9 +158,26 @@ namespace Moer::Render {
 
         auto index      = static_cast<uint32>(_state);
         auto pass_index = static_cast<uint32>(_state) + uint32(ETextureState::Num) * uint32(_type);
-        MarkWriteable(_texture, true);
         return {gfx_rules[index], layout_rules[index], tex_write_stage_rules[pass_index]};
     }
+
+    static  bool IsWriteState(VkImageLayout layout) {
+        return layout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL && layout != VK_IMAGE_LAYOUT_GENERAL;
+        // switch (layout) {
+        //     case VK_IMAGE_LAYOUT_GENERAL:
+        //     case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
+        //     case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
+        //     case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+        //         return true;
+        //     default:
+        //         return false;
+        // }
+    }
+
+    static bool IsWriteState(VkAccessFlags2 access) {
+        return access & VK_ACCESS_2_SHADER_WRITE_BIT;
+    }
+    
     void VkTracker::MarkWriteable(VulkanTexture* _texture, bool _writeable) {
         if (_writeable) {
             writed_state_textures.insert(_texture);
@@ -191,7 +205,7 @@ namespace Moer::Render {
             }
             return;
         }
-
+        MarkWriteable(_buffer, IsWriteState(_access));
         buffer_states[_buffer] = {_buffer->m_access_flags, _buffer->m_stage_flags, _access, _stage};
     }
 
@@ -206,17 +220,7 @@ namespace Moer::Render {
         return a < b ? a : b;
     }
 
-    bool IsWriteState(VkImageLayout layout) {
-        switch (layout) {
-            case VK_IMAGE_LAYOUT_GENERAL:
-            case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
-            case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
-            case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
-                return true;
-            default:
-                return false;
-        }
-    }
+ 
 
     void VkTracker::EmplaceWriteBLAS(uint64 _blas_buf) {
         write_blas_states.insert(_blas_buf);
@@ -256,11 +260,7 @@ namespace Moer::Render {
             target_state.dst_access = state.dst_access;
             target_state.dst_stage  = state.dst_stage;
 
-            if (is_write) {
-                writed_state_textures.insert(_texture);
-            } else {
-                writed_state_textures.erase(_texture);
-            }
+            MarkWriteable(_texture, is_write);
 
         } else {
             if (_texture->b_has_init_state) {
@@ -271,10 +271,7 @@ namespace Moer::Render {
                     state.src_stage  = _stage;
                 }
             }
-            if (is_write) {
-                writed_state_textures.insert(_texture);
-            }
-
+            MarkWriteable(_texture, is_write);
             texture_states[_texture] = {state};
         }
         // const auto& final_state = texture_states.find(_texture)->second;
