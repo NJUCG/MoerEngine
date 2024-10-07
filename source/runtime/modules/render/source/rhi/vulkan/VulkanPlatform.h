@@ -10,7 +10,6 @@
 
 #if PLATFORM_WINDOWS
 #include "platform/windows/WindowsVulkanPlatformDefines.h"
-#else if PLATFORM_LINUX
-
+#elif PLATFORM_LINUX
 #endif
 #endif//VULKAN_PLATFORM_H

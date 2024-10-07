@@ -1461,6 +1461,7 @@ namespace Moer::Render {
             .layout = VK_IMAGE_LAYOUT_UNDEFINED,
             .stage = VK_PIPELINE_STAGE_2_NONE_KHR};
         b_present = (_info.usage & ETextureUsageFlags::PRESENT) == ETextureUsageFlags::PRESENT;
+        m_preferred_layout = (_info.usage & ETextureUsageFlags::SAMPLED) == ETextureUsageFlags::SAMPLED ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_GENERAL;
 
         if (_image != VK_NULL_HANDLE) {
             m_alloc.image = _image;

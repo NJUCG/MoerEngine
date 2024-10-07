@@ -884,7 +884,7 @@ namespace Moer::Render {
         SubResourceStates        state;
         bool                     b_has_init_state : 1 = false;
         bool                     b_present : 1        = false;
-        VkImageLayout            GetPreferredLayout() { return VK_IMAGE_LAYOUT_GENERAL; };
+        VkImageLayout            GetPreferredLayout() { return m_preferred_layout; };
         int32                    GetDescriptorIndex(uint _mip_level, uint _mip_idx, VkImageLayout _layout) {
             VkTextureDescKey key = {_layout, uint8(_mip_level), uint8(_mip_idx)};
             auto             it  = m_descriptor_indices.find(key);
@@ -903,6 +903,7 @@ namespace Moer::Render {
         } m_alloc;
         UnorderedMap<uint, VkImageView>                                           m_views;
         Moer::UnorderedMap<Moer::uint, std::tuple<ETextureStateFlags, EPassType>> mip_usages;
+        VkImageLayout                                                             m_preferred_layout = VK_IMAGE_LAYOUT_GENERAL;
     };
 
     class VulkanBindlessArray final : public BindlessArray, public VulkanDeviceObject {
