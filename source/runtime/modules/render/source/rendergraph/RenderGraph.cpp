@@ -23,6 +23,10 @@ namespace Moer {
         return handles;
     }
     void BlackBoard::PutHandle(std::string_view name, RenderGraphHandle handle) {
+        if (m_handles.contains(name)) {
+            LOG_ERROR("Resource {0} already exists in blackboard", name);
+            return;
+        }
         m_handles.emplace(name, handle);
     }
     BlackBoard::BlackBoard(RenderGraph& renderGraph) : m_renderGraph(renderGraph) {
@@ -178,6 +182,35 @@ namespace Moer {
         Builder builder(node, *this);
         _setup(builder);
     }
+    void RenderGraph::AddImageCopyPass(std::string_view _name, RenderGraphHandle _src, RenderGraphHandle _dst) {
+        if (_src == _dst) {
+            return;
+        }
+        auto execute = [_src, _dst](RenderPassContext& context) {
+            auto*              cmd_list        = context.cmd_list;
+            auto*              graph           = &context.graph;
+            auto               src_rhi_texture = graph->GetTexture(_src)->GetTexture();
+            auto               dst_rhi_texture = graph->GetTexture(_dst)->GetTexture();
+            RHIBlitTextureInfo blit_info{};
+            blit_info.src_slice  = RHISubresourceSlice(ETextureAspectFlags::COLOR, 0, 0, 1, 0, 1);
+            blit_info.dst_slice  = RHISubresourceSlice(ETextureAspectFlags::COLOR, 0, 0, 1, 0, 1);
+            blit_info.src_layout = RenderGraphTexture::GetTextureLayout(std::get<RenderGraphTexture::Usage>(src_rhi_texture->GetTrackedUsage(0)));
+            blit_info.dst_layout = RenderGraphTexture::GetTextureLayout(std::get<RenderGraphTexture::Usage>(dst_rhi_texture->GetTrackedUsage(0)));
+            auto     extent      = dst_rhi_texture->GetExtent3D();
+            auto     src_extent  = src_rhi_texture->GetExtent3D();
+            Offset3D zero_offset(0, 0, 0);
+            blit_info.src_offsets[0] = zero_offset;
+            blit_info.src_offsets[1] = Offset3D(src_extent.x, src_extent.y, 1);
+            blit_info.dst_offsets[0] = zero_offset;
+            blit_info.dst_offsets[1] = Offset3D(extent.x, extent.y, 1);
+            cmd_list->BlitTexture(blit_info, src_rhi_texture, dst_rhi_texture);
+        };
+        auto setup = [_src, _dst](Builder& builder) {
+            builder.ReadTexture(_src, RenderGraphTexture::Usage::TS_TRANSFER_SRC);
+            builder.WriteTexture(_dst, RenderGraphTexture::Usage::TS_TRANSFER_DST);
+        };
+        AddCopyPass(_name, std::move(setup), std::move(execute));
+    }
 
     void RenderGraph::Execute(const RenderGraphExecuteConfig& config) {
         Compile();
@@ -305,6 +338,14 @@ namespace Moer {
         GetResource(handle)->AddRef();
         return *this;
     }
+    std::vector<std::string_view> RenderGraph::GetResourceNames(RenderGraphResource::Type type) const {
+        std::vector<std::string_view> resourceNames;
+        for (auto& resource : m_resources) {
+            if (resource->GetType() == type || type == RenderGraphResource::Type::ALL)
+                resourceNames.emplace_back(resource->GetName());
+        }
+        return resourceNames;
+    }
     RenderGraph::~RenderGraph() {
         for (auto& resource : m_resources) {
             MoerDelete(resource);
@@ -345,6 +386,10 @@ namespace Moer {
         GetResource(input)->ConnectForRead(m_dependency_graph, pass, std::move(_desc));
     }
     RenderGraphHandle RenderGraph::AddTextureInternal(RenderGraphTexture* texture) {
+        if (m_black_board.GetHandle(texture->GetName()).IsInitialized()) {
+            LOG_ERROR("Resource {0} already exists in blackboard", texture->GetName());
+            return RenderGraphHandle();
+        }
         m_dependency_graph.RegisterNode(texture);
         const RenderGraphHandle handle(static_cast<RenderGraphHandle::Index>(m_resources.size()));
         m_black_board.PutHandle(texture->GetName(), handle);

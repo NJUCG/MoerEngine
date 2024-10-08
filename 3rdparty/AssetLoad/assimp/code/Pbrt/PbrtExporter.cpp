@@ -2,7 +2,7 @@
 Open Asset Import Library (assimp)
 ----------------------------------------------------------------------
 
-Copyright (c) 2006-2022, assimp team
+Copyright (c) 2006-2024, assimp team
 
 All rights reserved.
 
@@ -89,33 +89,53 @@ using namespace Assimp;
 
 namespace Assimp {
 
-void ExportScenePbrt (
-    const char* pFile,
-    IOSystem* pIOSystem,
-    const aiScene* pScene,
-    const ExportProperties* /*pProperties*/
-){
+void ExportScenePbrt(const char *pFile, IOSystem *pIOSystem, const aiScene *pScene,
+        const ExportProperties *) {
     std::string path = DefaultIOSystem::absolutePath(std::string(pFile));
     std::string file = DefaultIOSystem::completeBaseName(std::string(pFile));
-
+    path = path + file + ".pbrt";
     // initialize the exporter
     PbrtExporter exporter(pScene, pIOSystem, path, file);
 }
 
 } // end of namespace Assimp
 
-// Constructor
+static void create_embedded_textures_folder(const aiScene *scene, IOSystem *pIOSystem) {
+    if (scene->mNumTextures > 0) {
+        if (!pIOSystem->Exists("textures")) {
+            if (!pIOSystem->CreateDirectory("textures")) {
+                throw DeadlyExportError("Could not create textures/ directory.");
+            }
+        }
+    }
+}
+
 PbrtExporter::PbrtExporter(
         const aiScene *pScene, IOSystem *pIOSystem,
         const std::string &path, const std::string &file) :
         mScene(pScene),
         mIOSystem(pIOSystem),
         mPath(path),
-        mFile(file) {
+        mFile(file),
+        mRootTransform(
+            // rotates the (already left-handed) CRS -90 degrees around the x axis in order to
+            // make +Z 'up' and +Y 'towards viewer', as in default in pbrt
+            1.f,  0.f,  0.f, 0.f, //
+            0.f,  0.f, -1.f, 0.f, //
+            0.f,  1.f,  0.f, 0.f, //
+            0.f,  0.f,  0.f, 1.f  //
+        ) {
+
+    mRootTransform = aiMatrix4x4(
+        -1.f,  0,  0.f, 0.f, //
+        0.0f,  -1.f,  0.f, 0.f, //
+        0.f,  0.f,  1.f, 0.f, //
+        0.f,  0.f,  0.f, 1.f  //
+    ) * mRootTransform;
+    
     // Export embedded textures.
-    if (mScene->mNumTextures > 0)
-        if (!mIOSystem->CreateDirectory("textures"))
-            throw DeadlyExportError("Could not create textures/ directory.");
+    create_embedded_textures_folder(mScene, mIOSystem);
+    
     for (unsigned int i = 0; i < mScene->mNumTextures; ++i) {
         aiTexture* tex = mScene->mTextures[i];
         std::string fn = CleanTextureFilename(tex->mFilename, false);
@@ -160,9 +180,6 @@ PbrtExporter::PbrtExporter(
     }
     outfile->Write(mOutput.str().c_str(), mOutput.str().length(), 1);
 }
-
-// Destructor
-PbrtExporter::~PbrtExporter() = default;
 
 void PbrtExporter::WriteMetaData() {
     mOutput << "#############################\n";
@@ -260,7 +277,7 @@ aiMatrix4x4 PbrtExporter::GetNodeTransform(const aiString &name) const {
             node = node->mParent;
         }
     }
-    return m;
+    return mRootTransform * m;
 }
 
 std::string PbrtExporter::TransformAsString(const aiMatrix4x4 &m) {
@@ -309,7 +326,7 @@ void PbrtExporter::WriteCamera(int i) {
 
     // Get camera fov
     float hfov = AI_RAD_TO_DEG(camera->mHorizontalFOV);
-    float fov = (aspect >= 1.0) ? hfov : (hfov * aspect);
+    float fov = (aspect >= 1.0) ? hfov : (hfov / aspect);
     if (fov < 5) {
         std::cerr << fov << ": suspiciously low field of view specified by camera. Setting to 45 degrees.\n";
         fov = 45;
@@ -327,7 +344,7 @@ void PbrtExporter::WriteCamera(int i) {
 
     if (!cameraActive)
         mOutput << "# ";
-    mOutput << "Scale -1 1 1\n";  // right handed -> left handed
+    mOutput << "Scale 1 1 1\n";
     if (!cameraActive)
         mOutput << "# ";
     mOutput << "LookAt "
@@ -383,8 +400,8 @@ void PbrtExporter::WriteWorldDefinition() {
     }
 
     mOutput << "# Geometry\n\n";
-    aiMatrix4x4 worldFromObject;
-    WriteGeometricObjects(mScene->mRootNode, worldFromObject, meshUses);
+
+    WriteGeometricObjects(mScene->mRootNode, mRootTransform, meshUses);
 }
 
 void PbrtExporter::WriteTextures() {

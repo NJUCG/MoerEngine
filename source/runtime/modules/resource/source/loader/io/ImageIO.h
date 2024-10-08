@@ -14,7 +14,7 @@ namespace Moer {
         //size = layer * mips
         std::vector<uint32_t> mip_offsets = {0};
         std::vector<Extent3D> mip_extents;
-        void                  CheckValid();
+        bool                  IsValid();
     };
 
     class ImageIO {

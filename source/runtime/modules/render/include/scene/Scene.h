@@ -49,7 +49,7 @@ namespace Moer {
         class Scene* TryGetScene();
         COUNTABLE_IMPLEMENTATION_AUTO_DESTROY
         // private:
-        class Scene*     scene;
+        Scene*           scene;
         std::atomic_uint progress = 0u;
         bool             b_valid  = false;
     };
@@ -62,12 +62,17 @@ namespace Moer {
         ~Scene() noexcept;
         void          AddEntity(Entity _entity) noexcept;
         void          AddCamera(Entity _entity) noexcept;
+        void          AddLight(Entity _entity) noexcept;
         void          RemoveEntity(Entity _entity) noexcept;
         void          SetBuffer(const std::string& _name, RHIBufferRef _buffer) noexcept;
         RHIBufferRef  GetBuffer(const std::string& _name) const noexcept;
         Array<Entity> GetEntities() const noexcept;
+        Array<Entity> GetLights() const noexcept;
         Array<Entity> GetCameras() const noexcept;
         Entity        GetMainCamera() const noexcept;
+        bool          IsEntitiesEmpty() const noexcept;
+        bool          IsLightsEmpty() const noexcept;
+        bool          IsCamerasEmpty() const noexcept;
         void          ForEach(std::function<void(Entity)> _func) const noexcept;
         bool          IsReady() const noexcept;
 

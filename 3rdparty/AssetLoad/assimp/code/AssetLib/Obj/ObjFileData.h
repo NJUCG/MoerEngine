@@ -2,7 +2,7 @@
 Open Asset Import Library (assimp)
 ----------------------------------------------------------------------
 
-Copyright (c) 2006-2022, assimp team
+Copyright (c) 2006-2024, assimp team
 
 All rights reserved.
 
@@ -239,8 +239,6 @@ struct Mesh {
     unsigned int m_uiMaterialIndex;
     /// True, if normals are stored.
     bool m_hasNormals;
-    /// True, if vertex colors are stored.
-    bool m_hasVertexColors;
 
     /// Constructor
     explicit Mesh(const std::string &name) :

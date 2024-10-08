@@ -70,8 +70,8 @@ namespace Moer {
         matrix[2][3] = translation.z;
     }
 
-    Transform::Transform(const Vector3f& origin, const Vector3f& look_at, const Vector3f& up_dir) noexcept {
-        matrix = Moer::MakeLookatViewMatrixRH(origin, look_at, up_dir);
+    Transform::Transform(const Vector3f& origin, const Vector3f& look_at_point, const Vector3f& up_dir) noexcept {
+        matrix = Moer::MakeLookatViewMatrixRH(origin, look_at_point, up_dir);
     }
 
     Transform::Transform(const Moer::Angle& fov_y, float aspect_ratio, float near_clip, float far_clip) noexcept {

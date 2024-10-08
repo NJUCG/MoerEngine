@@ -2,7 +2,7 @@
 Open Asset Import Library (assimp)
 ----------------------------------------------------------------------
 
-Copyright (c) 2006-2022, assimp team
+Copyright (c) 2006-2024, assimp team
 
 
 All rights reserved.
@@ -652,7 +652,7 @@ void DumpSceneToAssxml(
         const char *pFile, const char *cmd, IOSystem *pIOSystem,
         const aiScene *pScene, bool shortened) {
     std::unique_ptr<IOStream> file(pIOSystem->Open(pFile, "wt"));
-    if (!file.get()) {
+    if (!file) {
         throw std::runtime_error("Unable to open output file " + std::string(pFile) + '\n');
     }
 

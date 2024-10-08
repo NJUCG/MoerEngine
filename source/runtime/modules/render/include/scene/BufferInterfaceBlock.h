@@ -1,4 +1,5 @@
 #pragma once
+#include "RenderAPI.h"
 #include "math/Base.h"
 #include "misc/STL.h"
 
@@ -130,58 +131,63 @@ namespace Moer {
         std::string_view getName() const noexcept { return {m_name.data(), m_name.size()}; }
 
         // size needed for the buffer in bytes
-        size_t getSize() const noexcept { return m_size; }
+        size_t GetSize() const noexcept { return m_size; }
 
         // list of information records for each field
-        Moer::Array<FieldInfo> const& getFieldInfoList() const noexcept {
+        Moer::Array<FieldInfo> const& GetFieldInfoList() const noexcept {
             return m_field_info_list;
         }
 
         // negative value if name doesn't exist or Panic if exceptions are enabled
-        size_t getFieldOffset(std::string_view name, size_t index) const;
+        size_t GetFieldOffset(std::string_view name, size_t index) const;
 
-        FieldInfo const* getFieldInfo(std::string_view name) const;
+        FieldInfo const* GetFieldInfo(std::string_view name) const;
 
-        bool hasField(std::string_view name) const noexcept {
+        bool HasField(std::string_view name) const noexcept {
             return m_info_map.find(name) != m_info_map.end();
         }
 
-        bool isEmpty() const noexcept { return m_field_info_list.empty(); }
+        bool IsEmpty() const noexcept { return m_field_info_list.empty(); }
 
-        Alignment getAlignment() const noexcept { return m_alignment; }
+        Alignment GetAlignment() const noexcept { return m_alignment; }
 
-        Target getTarget() const noexcept { return m_target; }
+        Target GetTarget() const noexcept { return m_target; }
 
         uint8_t getQualifier() const noexcept { return m_qualifiers; }
 
     private:
         friend class Builder;
+        friend class SceneCache;
 
         explicit BufferInterfaceBlock(Builder const& builder) noexcept;
 
         static uint8_t baseAlignmentForType(Type type) noexcept;
         static uint8_t strideForType(Type type, uint32_t stride) noexcept;
 
-        std::string                                    m_name;
+        std::string m_name;
+        uint32_t    m_size       = 0;// size in bytes rounded to multiple of 4
+        Alignment   m_alignment  = Alignment::std140;
+        Target      m_target     = Target::UNIFORM;
+        uint8_t     m_qualifiers = 0;
+
         Moer::Array<FieldInfo>                         m_field_info_list;
         Moer::UnorderedMap<std::string_view, uint32_t> m_info_map;
-        uint32_t                                       m_size       = 0;// size in bytes rounded to multiple of 4
-        Alignment                                      m_alignment  = Alignment::std140;
-        Target                                         m_target     = Target::UNIFORM;
-        uint8_t                                        m_qualifiers = 0;
     };
 
-    class UniformBuffer {
+    class RENDER_API UniformBuffer {
     public:
         void        SetData(const void* data, size_t size, size_t offset);
         const void* GetData() const;
+        uint32_t    GetSize() const;
         UniformBuffer(uint32_t size);
         ~UniformBuffer();
         UniformBuffer(const UniformBuffer& rhs)            = delete;
         UniformBuffer& operator=(const UniformBuffer& rhs) = delete;
-        UniformBuffer(UniformBuffer&& rhs) = delete;
-        UniformBuffer& operator=(UniformBuffer&& rhs) = delete;
+        UniformBuffer(UniformBuffer&& rhs)                 = delete;
+        UniformBuffer& operator=(UniformBuffer&& rhs)      = delete;
+
     protected:
-        void * m_buffer;
+        void*    m_buffer;
+        uint32_t m_size;
     };
 }

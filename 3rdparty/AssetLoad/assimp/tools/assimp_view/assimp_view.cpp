@@ -3,7 +3,7 @@
 Open Asset Import Library (assimp)
 ---------------------------------------------------------------------------
 
-Copyright (c) 2006-2022, assimp team
+Copyright (c) 2006-2024, assimp team
 
 All rights reserved.
 
@@ -81,7 +81,7 @@ float g_fWheelPos = -10.0f;
 bool g_bLoadingCanceled = false;
 IDirect3DTexture9 *g_pcTexture = nullptr;
 bool g_bPlay = false;
-double g_dCurrent = 0.;
+double g_dCurrent = 0.; // Animation time
 
 // default pp steps
 unsigned int ppsteps = aiProcess_CalcTangentSpace | // calculate tangents and bitangents if possible
@@ -145,9 +145,7 @@ float g_fLoadTime = 0.0f;
 // The loader thread loads the asset while the progress dialog displays the
 // smart progress bar
 //-------------------------------------------------------------------------------
-DWORD WINAPI LoadThreadProc(LPVOID lpParameter) {
-    UNREFERENCED_PARAMETER(lpParameter);
-
+DWORD WINAPI LoadThreadProc(LPVOID) {
     // get current time
     double fCur = (double)timeGetTime();
 
@@ -193,8 +191,8 @@ DWORD WINAPI LoadThreadProc(LPVOID lpParameter) {
 }
 
 //-------------------------------------------------------------------------------
-// load the current asset
-// THe path to the asset is specified in the global path variable
+// Load the current asset
+// The path to the asset is specified in the global variable g_szFileName
 //-------------------------------------------------------------------------------
 int LoadAsset() {
     // set the world and world rotation matrices to the identity
@@ -269,14 +267,6 @@ int LoadAsset() {
     if (1 != CreateAssetData())
         return 0;
 
-    if (!g_pcAsset->pcScene->HasAnimations()) {
-        EnableWindow(GetDlgItem(g_hDlg, IDC_PLAY), FALSE);
-        EnableWindow(GetDlgItem(g_hDlg, IDC_SLIDERANIM), FALSE);
-    } else {
-        EnableWindow(GetDlgItem(g_hDlg, IDC_PLAY), TRUE);
-        EnableWindow(GetDlgItem(g_hDlg, IDC_SLIDERANIM), TRUE);
-    }
-
     CLogDisplay::Instance().AddEntry("[OK] The asset has been loaded successfully");
     CDisplay::Instance().FillDisplayList();
     CDisplay::Instance().FillAnimList();
@@ -293,7 +283,7 @@ int LoadAsset() {
 
 //-------------------------------------------------------------------------------
 // Delete the loaded asset
-// The function does nothing is no asset is loaded
+// The function does nothing if no asset is loaded
 //-------------------------------------------------------------------------------
 int DeleteAsset(void) {
     if (!g_pcAsset) {
@@ -313,6 +303,8 @@ int DeleteAsset(void) {
     delete g_pcAsset->mAnimator;
     delete g_pcAsset;
     g_pcAsset = nullptr;
+
+    g_szFileName[0] = '\0';
 
     // reset the caption of the viewer window
     SetWindowText(g_hDlg, AI_VIEW_CAPTION_BASE);
@@ -367,7 +359,7 @@ int CalculateBounds(aiNode *piNode, aiVector3D *p_avOut, const aiMatrix4x4 &piMa
 // The function calculates the boundaries of the mesh and modifies the
 // global world transformation matrix according to the aset AABB
 //-------------------------------------------------------------------------------
-int ScaleAsset(void) {
+int ScaleAsset() {
     aiVector3D aiVecs[2] = { aiVector3D(1e10f, 1e10f, 1e10f),
         aiVector3D(-1e10f, -1e10f, -1e10f) };
 
@@ -521,8 +513,7 @@ int CreateAssetData() {
             }
         } else {
             // create 16 bit index buffer
-            if (FAILED(g_piDevice->CreateIndexBuffer(2 *
-numIndices,
+            if (FAILED(g_piDevice->CreateIndexBuffer(2 * numIndices,
                         D3DUSAGE_WRITEONLY | dwUsage,
                         D3DFMT_INDEX16,
                         D3DPOOL_DEFAULT,

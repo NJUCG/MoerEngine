@@ -5,9 +5,10 @@ struct LightingData {
   float4x4 inv_view_proj;
   uint light_count;
   uint3 padding;
+  float3 camera_position;
 };
 
-[[vk::binding(0, 2)]] Texture2D scene_textures[25];
+ [[vk::binding(0, 2)]] Texture2D scene_textures[25];
 // [[vk::binding(0, 2)]] Texture2D scene_texture;
 
 static const uint CUR_MATERIAL_TYPE = 0;
@@ -44,10 +45,11 @@ float4 main(float2 in_uv
   MaterialData mat = material_data[NonUniformResourceIndex(mat_id)];
   float4 base_color;
   if (mat.albedo_map == -1) {
-    base_color = 0.f;
+    base_color = mat.base_color_factor;
   } else {
-    base_color = scene_textures[NonUniformResourceIndex(mat.albedo_map)].Sample(
-        default_sampler, uv);
+     base_color = scene_textures[NonUniformResourceIndex(mat.albedo_map)].Sample(
+         default_sampler, uv);
+	//base_color = float4(uv, 0.0f, 1.0f);
   }
   float3 result = float3(0.0f, 0.0f, 0.0f);
   float3 normal = (normal_attach.Sample(default_sampler, in_uv).xyz - 0.5f) * 2;
@@ -55,7 +57,9 @@ float4 main(float2 in_uv
   float3 world_pos = worldPosFromDepth(depth, in_uv);
   for (uint i = 0; i < lighting_data.light_count; i++) {
     Light light = light_data[i];
-    result += base_color.xyz * apply_light(light, world_pos, normal);
+
+    // result += base_color.xyz * apply_light(light, world_pos, normal);
+    result += apply_light_blinn_phong(light, world_pos, normal, base_color.xyz, float3(0.4f, 0.4f, 0.4f), lighting_data.camera_position);
   }
   return float4(result, 1.0f);
 }

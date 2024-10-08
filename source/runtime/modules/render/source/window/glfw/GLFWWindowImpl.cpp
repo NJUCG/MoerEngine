@@ -446,7 +446,22 @@ namespace Moer {
     }
 
     void MouseButtonCallbackFunc(GLFWwindow* window, int button, int action, int mode) {
-        // todo: drag / rotate objects callback function
+        static const std::unordered_map<int, int> mouseButtonMap = {
+            {GLFW_MOUSE_BUTTON_LEFT, MouseButtons::Left},
+            {GLFW_MOUSE_BUTTON_MIDDLE, MouseButtons::Middle},
+            {GLFW_MOUSE_BUTTON_RIGHT, MouseButtons::Right},
+        };
+        if (wndInput.mouseEnterScreen) {
+            if (mouseButtonMap.find(button) == mouseButtonMap.end()) {
+                return;
+            }
+            auto cameraButton = mouseButtonMap.at(button);
+            if (action == GLFW_PRESS) {
+                wndInput.mouseButtonState[cameraButton] = true;
+            } else {
+                wndInput.mouseButtonState[cameraButton] = false;
+            }
+        }
     }
 
 }// namespace Moer

@@ -6,6 +6,7 @@
 #include "window/WindowInput.h"
 
 namespace Moer {
+
     class RENDER_API Camera : public CountableResource {
     public:
         static float sensitivity;
@@ -47,6 +48,8 @@ namespace Moer {
 
         void Tick();//update camera per frame
 
+        static CountableRef<Camera> CreateDefaultCamera();// Create a default camera for the scene. Usually called in resource loader
+
     private:
         Matrix4x4f m_view_matrix;
 
@@ -75,4 +78,7 @@ namespace Moer {
         float totalPitch = 0.f;  //limited within (0, 360)
         float yawReverse = false;//reverse left and right
     };
+
+    using CameraRef = CountableRef<Camera>;
+
 }// namespace Moer

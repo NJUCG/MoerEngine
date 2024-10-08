@@ -129,6 +129,25 @@ namespace Moer {
 
             return handle;
         }
+
+        template<typename TResourceDesc>
+        RenderGraphHandle CreateIfNotExist(std::string_view _name,
+                                           TResourceDesc    _resource) {
+            if (auto handle = GetBlackBoard().GetHandle(_name);
+                handle.IsInitialized()) {
+                return handle;
+            }
+            RenderGraphHandle handle;
+
+            using T = std::decay_t<decltype(_resource)>;
+            if constexpr (std::is_constructible_v<RenderGraphTexture::Descriptor, T>) {
+                handle = CreateTexture(_name, RenderGraphTexture::Descriptor(_resource));
+            } else if constexpr (std::is_constructible_v<RenderGraphBuffer::Descriptor, T>) {
+                handle = CreateBuffer(_name, RenderGraphBuffer::Descriptor(_resource));
+            }
+
+            return handle;
+        }
         RenderGraphHandle
                           CreateBuffer(std::string_view                     name,
                                        const RenderGraphBuffer::Descriptor& descriptor);
@@ -143,18 +162,20 @@ namespace Moer {
         void AddComputePass(std::string_view name, const ComputeSetUp& setup, ComputeExecute&& execute);
         void AddRayTracingPass(std::string_view name, const RayTracingSetup& setup, RaytracingExecute&& execute);
         void AddCopyPass(std::string_view _name, const CopySetup& _setup, CopyExecute&& _execute);
+        void AddImageCopyPass(std::string_view _name, RenderGraphHandle _src, RenderGraphHandle _dst);
         void Execute(const RenderGraphExecuteConfig& config);
         void Compile();
         void SetCutUnUsedResources(bool cut);
 
-        BlackBoard&               GetBlackBoard();
-        bool                      IsWriteResource(RenderGraphHandle handle, PassNode* node) const;
-        bool                      IsReadResource(RenderGraphHandle handle, PassNode* node) const;
-        RenderGraphTexture*       GetTexture(RenderGraphHandle handle) const;
-        RenderGraphBuffer*        GetBuffer(RenderGraphHandle handle) const;
-        RenderGraphResource::Type GetResourceType(RenderGraphHandle handle) const;
-        RenderGraph&              SetGraphOutput(RenderGraphHandle handle);
-        Extent3D                  GetRenderExtent() const;
+        BlackBoard&                   GetBlackBoard();
+        bool                          IsWriteResource(RenderGraphHandle handle, PassNode* node) const;
+        bool                          IsReadResource(RenderGraphHandle handle, PassNode* node) const;
+        RenderGraphTexture*           GetTexture(RenderGraphHandle handle) const;
+        RenderGraphBuffer*            GetBuffer(RenderGraphHandle handle) const;
+        RenderGraphResource::Type     GetResourceType(RenderGraphHandle handle) const;
+        RenderGraph&                  SetGraphOutput(RenderGraphHandle handle);
+        Extent3D                      GetRenderExtent() const;
+        std::vector<std::string_view> GetResourceNames(RenderGraphResource::Type type) const;
         ~RenderGraph();
 
     protected:

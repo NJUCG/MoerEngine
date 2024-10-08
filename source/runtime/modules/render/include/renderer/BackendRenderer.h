@@ -35,6 +35,8 @@ namespace Moer {
         RENDER_API virtual void SetPresentResolution(uint32_t _width, uint32_t _height) = 0;
 
         RENDER_API virtual RHISRVRef GetRendererOutput() = 0;
+
+        RENDER_API virtual void UpdateGUI() {}
     };
 }// namespace Moer
 #endif

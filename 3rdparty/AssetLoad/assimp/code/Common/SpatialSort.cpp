@@ -3,7 +3,7 @@
 Open Asset Import Library (assimp)
 ---------------------------------------------------------------------------
 
-Copyright (c) 2006-2022, assimp team
+Copyright (c) 2006-2024, assimp team
 
 All rights reserved.
 
@@ -94,7 +94,7 @@ ai_real SpatialSort::CalculateDistance(const aiVector3D &pPosition) const {
 void SpatialSort::Finalize() {
     const ai_real scale = 1.0f / mPositions.size();
     for (unsigned int i = 0; i < mPositions.size(); i++) {
-        mCentroid += scale * mPositions[i].mPosition; 
+        mCentroid += scale * mPositions[i].mPosition;
     }
     for (unsigned int i = 0; i < mPositions.size(); i++) {
         mPositions[i].mDistance = CalculateDistance(mPositions[i].mPosition);

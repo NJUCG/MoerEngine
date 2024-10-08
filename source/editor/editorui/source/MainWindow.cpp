@@ -158,7 +158,10 @@ void MainWindow::Show() {
 
     auto& render_manager = Moer::RendererManager::GetInstance();
     auto  renderer_id    = render_manager.GetRendererID(Moer::ConfigManager::GetInstance().GetInitConfig().default_render_name);
-    auto  output         = render_manager.GetRendererOutput(renderer_id);
+
+    render_manager.UpdateGUI(renderer_id);
+
+    auto output = render_manager.GetRendererOutput(renderer_id);
     render_manager.SetRendererPresentResolution(renderer_id, values.x, values.y);
     float display_width  = ImGui::GetWindowWidth();
     float display_height = display_width * 9.f / 16.f;

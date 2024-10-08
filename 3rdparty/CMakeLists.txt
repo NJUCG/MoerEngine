@@ -34,6 +34,7 @@ add_subdirectory(DirectX-Headers)
 set_target_folder(DirectX-Headers ${third_party_folder}/dxheaders)
 set_target_folder(DirectX-Guids ${third_party_folder}/dxheaders)
 
+set(JSON_BuildTests OFF CACHE INTERNAL "")
 add_subdirectory(json)
 add_subdirectory(AssetLoad)
 

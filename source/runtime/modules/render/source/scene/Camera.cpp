@@ -218,8 +218,7 @@ namespace Moer {
 
         m_rotate =
             FillDiagonal4x4(pitch.GetRotation(), 1.f) *
-            m_rotate *
-            FillDiagonal4x4(yaw.GetRotation(), 1.f);
+            FillDiagonal4x4(yaw.GetRotation(), 1.f) * m_rotate;
 
         m_rotate_inv     = Transpose(m_rotate);
         m_to_world_dirty = true;
@@ -300,13 +299,24 @@ namespace Moer {
                 this->MoveUp(-wndInput.cameraSpeed * wndInput.deltaTime);
 
             // rotation
-            if (wndInput.deltaX || wndInput.deltaY) {
+            if ((wndInput.deltaX || wndInput.deltaY) && wndInput.mouseButtonState[MouseButtons::Left]) {
 
                 this->UpdateRotation(wndInput.deltaX, wndInput.deltaY);
                 wndInput.deltaX = 0;
                 wndInput.deltaY = 0;
             }
         }
+    }
+
+    CameraRef Camera::CreateDefaultCamera() {
+        CameraRef default_camera = MoerNew(Camera)();
+        default_camera->SetFov(36.f);
+        Transform transform = Transform(Vector3f(0.0f, 0.0f, 0.0f), Vector3f(0.0f, 0.0f, 1.0f), Vector3f(0.0f, 1.0f, 0.0f));
+        default_camera->SetWorldTransform(transform);
+        default_camera->SetNearClip(0.1f);
+        default_camera->SetFarClip(1000.0f);
+        default_camera->SetAspectRatio(16.0f / 9.0f);
+        return default_camera;
     }
 
 }// namespace Moer
