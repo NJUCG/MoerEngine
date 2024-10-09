@@ -4,6 +4,7 @@
 #include "RenderThread.h"
 #include "config/ConfigManager.h"
 #include "math/Constant.h"
+#include "math/Matrix.h"
 #include "misc/MMemory.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
@@ -43,25 +44,56 @@ struct UIFrameData {
         MoerDelete(command_queue);
     }
 };
+
+void GuiInitPlatformInterface();
+void GUIRender(void* _draw_data, const TextureView& _view, CommandList&);
+
 struct GuiFrameRenderBuffers {
-
-    // RHIBufferRef vertex_buffer;
-    // RHIBufferRef index_buffer;
-
-    // RHIBufferRef staging_vertex_buffer;
-    // RHIBufferRef staging_index_buffer;
 
     Moer::Render::BufferRef vtx_buffer;
     Moer::Render::BufferRef idx_buffer;
     Moer::Render::BufferRef arg_buffer;
 };
+struct GuiViewportData {
+    Moer::Render::FenceRef     fence;
+    Moer::Render::FenceRef     copy_fence;
+    Moer::Render::SwapchainRef sc;
 
+    Moer::Array<GuiFrameRenderBuffers> render_buffers;// Used by all viewports
+    Moer::Render::TextureRef           framebuffer;
+    RHIViewportNextBackBufferInfo      next_frame_info;
+
+    uint64_t        frame_index;
+    uint32_t        viewport_index;
+    static uint32_t viewport_count;
+    bool            IsBackBufferReady() {
+        return next_frame_info.backbuffer_index != UINT32_MAX;
+    }
+
+    GuiViewportData(uint32_t _frame_in_flight) {
+        memset((void*)this, 0, sizeof(*this));
+        render_buffers.resize(_frame_in_flight);
+        for (uint32_t i = 0; i < _frame_in_flight; ++i) {
+            render_buffers[i].vtx_buffer = nullptr;
+            render_buffers[i].idx_buffer = nullptr;
+            render_buffers[i].arg_buffer = nullptr;
+        }
+        viewport_index = viewport_count;
+        viewport_count++;
+    }
+    ~GuiViewportData() {
+        viewport_count--;
+    }
+};
 namespace Moer::Render {
+
     struct ImGUIArg {
         ImVec2 min_xy;
         ImVec2 max_xy;
         uint   image_handle;
-        // uint padding;
+        uint   padding;
+        uint   padding2;
+        uint   padding3;
     };
     class GUIPipeline : public RasterPipeline {
     public:
@@ -76,6 +108,177 @@ namespace Moer::Render {
 
         DEFINE_SHADER_ARGS(constant);
     };
+
+    class GUIPipelineBdls : public RasterPipeline {
+    public:
+        struct Constant {
+            Matrix4x4f mvp;
+        };
+        DEFINE_RASTER_PIPELINE_CLASS(GUIPipelineBdls)
+
+        DEFINE_SHADER_BINDLESS_ARRAY(bdls);
+        DEFINE_SHADER_BUFFER(arg_buffer);
+        DEFINE_SHADER_CONSTANT_STRUCT(Constant, param);
+
+        DEFINE_SHADER_ARGS(bdls, arg_buffer, param);
+    };
+
+    struct ImGUIData {
+        size_t buffer_memory_alignment;
+
+        GUIPipelineBdls rast_pso;
+
+        TextureRef font_texture;
+        BufferRef  upload_buffer;
+
+        // Render buffers for main window
+        Array<GuiFrameRenderBuffers> render_buffers;
+        SwapchainRef                 sc;
+        TextureRef                   framebuffer;
+        uint32_t                     num_frames_in_flight;
+
+        ImGUIRenderBackend* render_backend = nullptr;
+    };
+
+    ImGUIRenderBackend::ImGUIRenderBackend(RenderDevice& _device) : device(_device) {
+        bindless_array = device.CreateBindlessArray();
+
+        ImGuiIO& io = ImGui::GetIO();
+        assert(io.BackendRendererUserData == nullptr && "GUI backend already initialized.");
+
+        const Moer::ConfigManager& config_manager      = Moer::ConfigManager::GetInstance();
+        uint32_t                   max_frame_in_flight = config_manager.GetInitConfig().max_frame_in_flight;
+
+        ImGUIData* render_backend_data            = MoerNew(ImGUIData)();
+        render_backend_data->num_frames_in_flight = max_frame_in_flight;
+
+        io.BackendRendererUserData = render_backend_data;
+        io.BackendRendererName     = "Moer";
+        io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;
+        io.BackendFlags |= ImGuiBackendFlags_RendererHasViewports;
+        ImGuiViewport*   main_viewport      = ImGui::GetMainViewport();
+        GuiViewportData* viewport_data      = MoerNew(GuiViewportData)(max_frame_in_flight);
+        render_backend_data->render_backend = this;
+        main_viewport->RendererUserData     = viewport_data;
+
+        auto& sd_mgr = ShaderManager::Get();
+        using namespace Moer::Render;
+        VertexStream vertex_stream;
+        vertex_stream.EmplacePerVertex(
+            {Moer::Render::VertexElement(PF_R32G32_SFLOAT),
+             Moer::Render::VertexElement(PF_R32G32_SFLOAT),
+             Moer::Render::VertexElement(PF_R8G8B8A8_UNORM)});
+        GfxPsoCreateInfo pso_info(
+            RHIRasterizeInfo::Preset<Rast::CULL_BACK, FrontFace::CW>(),
+            vertex_stream,
+            {RHIColorAttachmentInfo::Preset<Blend::NONE>(PF_R8G8B8A8_SRGB)},
+            RHIDepthStencilStateInfo::Preset());
+        render_backend_data->rast_pso = std::move(
+            sd_mgr
+                .Raster()
+                .Vertex("GuiVert.hlsl")
+                .Pixel("GuiFrag.hlsl")
+                .Build<GUIPipelineBdls>(std::move(pso_info)));
+
+        uint8_t* pixels;
+
+        int width, height;
+        //MARK... this is freaking slow, it's build first called, we need a default data for it, and async load other fonts
+        io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+
+        using namespace Moer::Render;
+        auto& rd_device = Moer::Render::RenderDevice::Get();
+        //upload texture
+        {
+            const uint32_t alignment    = 256;
+            uint32_t       upload_pitch = (width * 4 + alignment - 1u) & ~(alignment - 1u);
+            uint32_t       upload_size  = height * upload_pitch;
+            TextureRef     font_tex     = rd_device.CreateTexture(
+                Extent2D(width, height),
+                PF_R8G8B8A8_UNORM,
+                ETextureUsageFlags::SAMPLED);
+
+            CommandList cmd_list;
+            cmd_list.CopyFrom(
+                std::span<std::byte>((std::byte*)pixels, upload_size), font_tex);
+
+            rd_device.GetCommandQueue(EQueueType::Graphics).Execute(std::move(cmd_list.Submit()));
+            rd_device.GetCommandQueue(EQueueType::Graphics).Sync();
+            render_backend_data->font_texture = font_tex;
+            uint handle                       = bindless_array->AllocateTexture(font_tex, Sampler(SF_LINEAR, SAM_REPEAT));
+            registered_images.try_emplace(font_tex, handle);
+            io.Fonts->SetTexID(handle);
+        }
+
+        if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
+            GuiInitPlatformInterface();
+    };
+    inline ImGUIData* GetGUIBackendData() {
+        return ImGui::GetCurrentContext() ? (ImGUIData*)ImGui::GetIO().BackendRendererUserData : nullptr;
+    }
+    ImGUIRenderBackend::~ImGUIRenderBackend() {
+        bindless_array  = nullptr;
+        ImGUIData* data = GetGUIBackendData();
+        MoerDelete(data);
+        ImGui::GetIO().BackendRendererUserData = nullptr;
+
+        ImGui::DestroyContext();
+    }
+    void ImGUIRenderBackend::BeginGUIFrame() {
+        ImGui::NewFrame();
+    }
+
+    void ImGUIRenderBackend::EndGUIFrame() {
+        ImGui::Render();
+    }
+
+    void ImGUIRenderBackend::RegisterImage(Texture* _texture, Sampler _sampler) {
+        auto iter = registered_images.try_emplace(_texture, 0);
+        if (iter.second) {
+            uint handle        = bindless_array->AllocateTexture(_texture->GetView(0, _texture->GetNumMips()), _sampler);
+            iter.first->second = handle;
+        }
+    }
+
+    void ImGUIRenderBackend::UnRegisterImage(Texture* _texture) {
+    }
+
+    void ImGUIRenderBackend::RenderGUI(CommandList& _cmd_list, const TextureView& _framebuffer) {
+        ImGuiIO& io = ImGui::GetIO();
+        _cmd_list.UpdateBindlessArray(bindless_array);
+
+        if (io.DisplaySize.x <= 0.0f || io.DisplaySize.y <= 0.0f)
+            return;
+
+        ImDrawData* draw_data = ImGui::GetDrawData();
+        if (!draw_data)
+            return;
+
+        ImDrawData* main_draw_data     = ImGui::GetDrawData();
+        const bool  b_window_minimized = main_draw_data->DisplaySize.x <= 0.0f || main_draw_data->DisplaySize.y <= 0.0f;
+
+        if (!b_window_minimized) {
+            auto& rd_device = RenderDevice::Get();
+            GUIRender(main_draw_data, _framebuffer, _cmd_list);
+        }
+        {
+            auto& io = ImGui::GetIO();
+            if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+                ImGui::UpdatePlatformWindows();
+            }
+            ImGuiPlatformIO& platform_io = ImGui::GetPlatformIO();
+
+            // if (io.BackendFlags & ImGuiBackendFlags_RendererHasViewports) {
+            //     for (int i = 1; i < platform_io.Viewports.Size; i++)
+            //         if ((platform_io.Viewports[i]->Flags & ImGuiViewportFlags_IsMinimized) == 0)
+            //             GuiRenderWindow(platform_io.Viewports[i], nullptr);
+            //     for (int i = 1; i < platform_io.Viewports.Size; i++)
+            //         if ((platform_io.Viewports[i]->Flags & ImGuiViewportFlags_IsMinimized) == 0)
+            //             GuiSwapbuffer(platform_io.Viewports[i], nullptr);
+            // }
+        }
+    }
+
 }// namespace Moer::Render
 struct GuiBackendData {
     size_t buffer_memory_alignment;
@@ -165,7 +368,6 @@ private:
 
     void UpdateGUIData();
 };
-void GuiInitPlatformInterface();
 bool CreateDeviceObjects();
 void DestroyRenderBuffers(GuiFrameRenderBuffers* _render_buffers);
 void InvalidateDeviceObjects();
@@ -173,7 +375,6 @@ void InvalidateDeviceObjects();
 void GUIUploadData(void* _draw_data, RHIGraphicsCommandList* _ui_command_list, RHIViewportNextBackBufferInfo* _next_frame_info_render_thread);
 void GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list, RHIViewportNextBackBufferInfo* _next_frame_info_render_thread);
 void GUIUploadData(void* _draw_data, CommandList&);
-void GUIRender(void* _draw_data, CommandList&);
 
 void GuiRenderWindow(ImGuiViewport* viewport, void*);
 void GuiSwapbuffer(ImGuiViewport* viewport, void*);
@@ -181,38 +382,6 @@ void GuiSwapbuffer(ImGuiViewport* viewport, void*);
 inline GuiBackendData* GetBackendData() {
     return ImGui::GetCurrentContext() ? (GuiBackendData*)ImGui::GetIO().BackendRendererUserData : nullptr;
 }
-
-struct GuiViewportData {
-    Moer::Render::FenceRef     fence;
-    Moer::Render::FenceRef     copy_fence;
-    Moer::Render::SwapchainRef sc;
-
-    Moer::Array<GuiFrameRenderBuffers> render_buffers;// Used by all viewports
-    Moer::Render::TextureRef           framebuffer;
-    RHIViewportNextBackBufferInfo      next_frame_info;
-
-    uint64_t        frame_index;
-    uint32_t        viewport_index;
-    static uint32_t viewport_count;
-    bool            IsBackBufferReady() {
-        return next_frame_info.backbuffer_index != UINT32_MAX;
-    }
-
-    GuiViewportData(uint32_t _frame_in_flight) {
-        memset((void*)this, 0, sizeof(*this));
-        render_buffers.resize(_frame_in_flight);
-        for (uint32_t i = 0; i < _frame_in_flight; ++i) {
-            render_buffers[i].vtx_buffer = nullptr;
-            render_buffers[i].idx_buffer = nullptr;
-            render_buffers[i].arg_buffer = nullptr;
-        }
-        viewport_index = viewport_count;
-        viewport_count++;
-    }
-    ~GuiViewportData() {
-        viewport_count--;
-    }
-};
 
 void ImGUIRenderer::Init() {
     impl = MoerNew(Impl)();
@@ -291,7 +460,7 @@ void ImGUIRenderer::Impl::EndRenderFrame() {
         auto        tex  = GetBackendData()->framebuffer;
         TextureView view = tex->GetView(0);
         // GUIUploadData(main_draw_data, ui_command_list, &next_frame_info);
-        GUIRender(main_draw_data, cmd_list);
+        // GUIRender(main_draw_data, cmd_list);
         rd_device.GetCommandQueue(EQueueType::Graphics).Present(sc, view);
     }
     {
@@ -543,7 +712,6 @@ void GUIUploadData(void* _draw_data, CommandList& _cmd_list) {
     uint32_t num_frames_in_flight = backend_data->num_frames_in_flight;
 
     GuiFrameRenderBuffers* render_buffers = &viewport_data->render_buffers[viewport_data->frame_index % num_frames_in_flight];
-
     if (render_buffers->vtx_buffer == nullptr || render_buffers->vtx_buffer->GetNumElement() < total_size_vert) {
         //delete the old one and create new
         if (render_buffers->vtx_buffer != nullptr) {}
@@ -709,7 +877,7 @@ void ImGUIRenderer::Impl::UpdateGUIData() {
 //     });
 // }
 
-void GUIRender(void* _draw_data, CommandList& _cmdlist) {
+void GUIRender(void* _draw_data, const TextureView& _frame_buffer, CommandList& _cmdlist) {
     ImDrawData* draw_data = static_cast<ImDrawData*>(_draw_data);
 
     if (draw_data->DisplaySize.x <= 0.0f || draw_data->DisplaySize.y <= 0.0f)
@@ -719,14 +887,16 @@ void GUIRender(void* _draw_data, CommandList& _cmdlist) {
     uint32_t total_size_vert = draw_data->TotalVtxCount;
     uint32_t total_size_idx  = draw_data->TotalIdxCount * sizeof(ImDrawIdx);
 
-    GuiBackendData* backend_data = GetBackendData();
-    auto&           device       = RenderDevice::Get();
+    ImGUIData&          backend_data   = *GetGUIBackendData();
+    ImGUIRenderBackend& render_backend = *backend_data.render_backend;
+    auto&               device         = RenderDevice::Get();
 
     GuiViewportData* viewport_data = (GuiViewportData*)draw_data->OwnerViewport->RendererUserData;
 
-    uint32_t num_frames_in_flight = backend_data->num_frames_in_flight;
+    uint32_t num_frames_in_flight = backend_data.num_frames_in_flight;
 
     GuiFrameRenderBuffers* render_buffers = &viewport_data->render_buffers[viewport_data->frame_index % num_frames_in_flight];
+    viewport_data->frame_index++;
 
     if (render_buffers->vtx_buffer == nullptr || render_buffers->vtx_buffer->GetNumElement() < total_size_vert) {
         //delete the old one and create new
@@ -756,27 +926,24 @@ void GUIRender(void* _draw_data, CommandList& _cmdlist) {
         index_offset += cmd_list->IdxBuffer.Size;
         total_cmd_cnt += cmd_list->CmdBuffer.Size;
     }
-    Array<ImGUIArg> arg_buffer;
-    arg_buffer.reserve(total_cmd_cnt);
+    Array<ImGUIArg> args;
+    args.reserve(total_cmd_cnt);
     if (render_buffers->arg_buffer == nullptr || render_buffers->arg_buffer->GetNumElement() < total_cmd_cnt) {
         uint32_t new_size          = 128 + total_cmd_cnt;
         render_buffers->arg_buffer = device.CreateBuffer<ImGUIArg>(new_size, EBufferUsageFlags::TRANSFER_DST);
     }
 
-    // RHIFragmentShaderRef frag_rhi_shader = g_rhi->RHICreateFragmentShader(frag_shader);
-
     ImVec2 clip_off   = draw_data->DisplayPos;      // (0,0) unless using multi-viewports
     ImVec2 clip_scale = draw_data->FramebufferScale;// (1,1) unless using retina display which are often (2,2)
 
-    // SetupRenderState(draw_data, _ui_command_list, viewport_data, _next_frame_info_render_thread);
     Array<MeshDrawData> draw_meshes;
     draw_meshes.reserve(total_cmd_cnt);
 
     int32_t global_vertex_offset = 0,
             global_index_offset  = 0;
 
-    uint                  cmd_offset = 0;
-    GUIPipeline::Constant constant;
+    uint                      cmd_offset = 0;
+    GUIPipelineBdls::Constant constant;
     {
         float l         = draw_data->DisplayPos.x;
         float r         = draw_data->DisplayPos.x + draw_data->DisplaySize.x;
@@ -807,15 +974,13 @@ void GUIRender(void* _draw_data, CommandList& _cmdlist) {
                 if (clip_max.x <= clip_min.x || clip_max.y <= clip_min.y)
                     continue;
 
-                uint texture_handle           = (uint) reinterpret_cast<uint64>(cmd->TextureId.Get());
-                arg_buffer[cmd_offset].min_xy = {clip_min.x, clip_min.y};
-                arg_buffer[cmd_offset].max_xy = {clip_max.x, clip_max.y};
-                arg_buffer.emplace_back(
+                uint texture_handle = (uint)cmd->TextureId;
+                // arg_buffer[cmd_offset].min_xy = {clip_min.x, clip_min.y};
+                // arg_buffer[cmd_offset].max_xy = {clip_max.x, clip_max.y};
+                args.emplace_back(
                     ImVec2{clip_min.x, clip_min.y},
                     ImVec2{clip_max.x, clip_max.y},
                     texture_handle);
-
-                RHIGfxPsoRef pipeline = backend_data->pipeline;
 
                 uint32_t elem_count = cmd->ElemCount;
                 uint32_t vtx_offset = cmd->VtxOffset + global_vertex_offset;
@@ -832,47 +997,32 @@ void GUIRender(void* _draw_data, CommandList& _cmdlist) {
                     idx_buffer,
                     1,
                     cmd_offset);
+                cmd_offset++;
             }
         }
         global_index_offset += cmd_list->IdxBuffer.Size;
         global_vertex_offset += cmd_list->VtxBuffer.Size;
     }
 
-    CommandList cmd_list{};
-    auto&       copy_queue = device.GetCommandQueue(EQueueType::Copy);
-    auto        vtx_view   = render_buffers->vtx_buffer->GetView();
-    auto        idx_view   = render_buffers->idx_buffer->GetView();
-    auto        arg_view   = render_buffers->arg_buffer->GetView();
-    cmd_list.CopyFrom(std::span<byte>((byte*)vertices.data(), vertices.size() * sizeof(ImDrawVert)), vtx_view);
-    cmd_list.CopyFrom(std::span<byte>((byte*)indices.data(), indices.size() * sizeof(ImDrawIdx)), idx_view);
-    cmd_list.CopyFrom(std::span<byte>((byte*)arg_buffer.data(), arg_buffer.size() * sizeof(ImGUIArg)), arg_view);
-    auto&& submit = cmd_list.Submit()
-                        .Signal(viewport_data->copy_fence, viewport_data->frame_index);
-    auto wait = copy_queue.Execute(std::move(submit));
+    auto vtx_view = render_buffers->vtx_buffer->GetView();
+    auto idx_view = render_buffers->idx_buffer->GetView();
+    auto arg_view = render_buffers->arg_buffer->GetView();
 
-    _cmdlist.Gfx(backend_data->rast_pso, constant)
+    _cmdlist.CopyFrom(std::span<byte>((byte*)vertices.data(), vertices.size() * sizeof(ImDrawVert)), vtx_view);
+    _cmdlist.CopyFrom(std::span<byte>((byte*)indices.data(), indices.size() * sizeof(ImDrawIdx)), idx_view);
+    _cmdlist.CopyFrom(std::span<byte>((byte*)args.data(), args.size() * sizeof(ImGUIArg)), arg_view);
+
+    _cmdlist.Gfx(backend_data.rast_pso, render_backend.bindless_array, arg_view, constant)
         .Draw(
             {0, 0, (uint)(draw_data->DisplaySize.x * draw_data->FramebufferScale.x), uint(draw_data->DisplaySize.y * draw_data->FramebufferScale.y)},
             std::move(draw_meshes),
-            ColorAttachment(viewport_data->framebuffer));
+            ColorAttachment(_frame_buffer.GetTexture()));
+
     _cmdlist.AddCallback([vtx(std::move(vertices)),
                           idx(std::move(indices)),
-                          arg(std::move(arg_buffer))]() {
-        // expand data life span
+                          arg(std::move(args))]() {
+
     });
-    auto& gfx_queue = device.GetCommandQueue(EQueueType::Graphics);
-    if (viewport_data->frame_index > viewport_data->viewport_count) {
-        gfx_queue
-            .Execute(std::move(_cmdlist.Submit()
-                                   .Wait(viewport_data->copy_fence, viewport_data->frame_index)
-                                   .Wait(viewport_data->fence, viewport_data->frame_index - viewport_data->viewport_count)
-                                   .Signal(viewport_data->fence, ++viewport_data->frame_index)));
-    } else {
-        gfx_queue
-            .Execute(std::move(_cmdlist.Submit()
-                                   .Wait(viewport_data->copy_fence, viewport_data->frame_index)
-                                   .Signal(viewport_data->fence, ++viewport_data->frame_index)));
-    }// ImVec2 clip_off = draw_data->DisplayPos;
 }
 
 // void SetupRenderState(ImDrawData* draw_data, RHIGraphicsCommandList* commandList, GuiViewportData* _viewport_data, RHIViewportNextBackBufferInfo* _next_frame_info_render_thread) {
@@ -976,7 +1126,7 @@ bool CreateDeviceObjects() {
                                                         gui_frag)))
                       .SetColorAttachmentInfo(
                           {RHIColorAttachmentInfo::Preset(g_rhi->RHIGetMainViewport()->GetViewportInfo().backbuffer_format)
-                               .SetBlendStateInfo(RHIBlendAttachmentInfo::Preset<RHIConfig::Blend::ALPHA_BLEND>())})
+                               .SetBlendStateInfo(RHIBlendAttachmentInfo::Preset<Moer::Render::Blend::ALPHA_BLEND>())})
                       .Finalize());
 
     backend_data->pipeline = g_rhi->RHICreateGraphicsPSO(std::move(pso_create_info));
@@ -990,7 +1140,7 @@ bool CreateDeviceObjects() {
     GfxPsoCreateInfo pso_info(
         RHIRasterizeInfo::Preset(),
         vertex_stream,
-        {RHIColorAttachmentInfo::Preset<RHIConfig::Blend::ALPHA_BLEND>(PF_R8G8B8A8_SRGB)},
+        {RHIColorAttachmentInfo::Preset<Moer::Render::Blend::ALPHA_BLEND>(PF_R8G8B8A8_SRGB)},
         RHIDepthStencilStateInfo::Preset());
     backend_data->rast_pso = std::move(
         sd_mgr
@@ -1043,12 +1193,11 @@ void CreateFontsTexture() {
         cmd_list.CopyFrom(
             std::span<std::byte>((std::byte*)pixels, upload_size), font_tex);
 
-        cmd_list.Barriers(ReadTexture(font_tex, ETextureState::SAMPLE));
         rd_device.GetCommandQueue(EQueueType::Graphics).Execute(std::move(cmd_list.Submit()));
         rd_device.GetCommandQueue(EQueueType::Graphics).Sync();
         backend_data->font_tex = font_tex;
     }
-    io.Fonts->SetTexID((ImTextureID)backend_data->font_view);
+    // io.Fonts->SetTexID((ImTextureID)backend_data->font_view);
 }
 
 void GuiCreateWindow(ImGuiViewport* _viewport);
@@ -1072,14 +1221,15 @@ void DestroyRenderBuffers(GuiFrameRenderBuffers* _render_buffers) {
 }
 
 void GuiCreateWindow(ImGuiViewport* _viewport) {
-    GuiBackendData*  backend_data  = GetBackendData();
-    GuiViewportData* viewport_data = MoerNew(GuiViewportData)(backend_data->num_frames_in_flight);
+    ImGUIData&       backend_data  = *GetGUIBackendData();
+    GuiViewportData* viewport_data = MoerNew(GuiViewportData)(backend_data.num_frames_in_flight);
     using namespace Moer::Render;
-    RenderDevice& rd_device = RenderDevice::Get();
+    ImGUIRenderBackend& render_backend = *backend_data.render_backend;
+    RenderDevice&       rd_device      = render_backend.device;
 
     _viewport->RendererUserData = viewport_data;
-    viewport_data->copy_fence   = rd_device.CreateFence();
-    viewport_data->fence        = rd_device.CreateFence();
+    // viewport_data->copy_fence   = rd_device.CreateFence();
+    // viewport_data->fence        = rd_device.CreateFence();
 
     Moer::WindowHandle handle{
         (Moer::WindowType*)(_viewport->PlatformHandle ?
@@ -1088,10 +1238,13 @@ void GuiCreateWindow(ImGuiViewport* _viewport) {
     using namespace Moer::Render;
     using namespace Moer;
 
+    int width, height;
+    WindowContext::GetWindowSize(&handle, &width, &height);
+
     SwapchainCreateInfo swapchain_info{
-        .window_handle    = (uintptr_t)(_viewport->PlatformHandle ? _viewport->PlatformHandle : _viewport->PlatformHandleRaw),
+        .window_handle    = (uint64)&handle,
         .size             = {(uint)_viewport->Size.x, (uint)_viewport->Size.y},
-        .back_buffer_sz   = backend_data->num_frames_in_flight,
+        .back_buffer_sz   = backend_data.num_frames_in_flight,
         .preferred_format = PF_R8G8B8A8_SRGB};
 
     viewport_data->sc          = rd_device.CreateSwapchain(swapchain_info);
@@ -1101,32 +1254,29 @@ void GuiCreateWindow(ImGuiViewport* _viewport) {
         ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED);
 }
 
-void GuiDestroyWindow(ImGuiViewport* viewport) {
-    GuiBackendData* backend_data = GetBackendData();
+void GuiDestroyWindow(ImGuiViewport* _viewport) {
+    ImGUIData& backend_data = *GetGUIBackendData();
     using namespace Moer::Render;
     using namespace Moer;
-    auto& device = RenderDevice::Get();
+    auto& device = backend_data.render_backend->device;
 
-    if (GuiViewportData* viewport_data = (GuiViewportData*)viewport->RendererUserData) {
+    if (GuiViewportData* viewport_data = (GuiViewportData*)_viewport->RendererUserData) {
         if (viewport_data && viewport_data->sc) {
             device.GetCommandQueue(EQueueType::Graphics).Sync();
             viewport_data->sc = nullptr;
-            RenderThreadFence fence;
-            fence.BeginFence();
-            fence.Wait();
 
             // We could just call ImGui_ImplDX12_DestroyWindow(main_viewport) as a convenience but that would be misleading since we only use data->Resources[]
-            for (uint32_t i = 0; i < backend_data->num_frames_in_flight; i++)
+            for (uint32_t i = 0; i < backend_data.num_frames_in_flight; i++)
                 DestroyRenderBuffers(&viewport_data->render_buffers[i]);
             MoerDelete(viewport_data);
         }
     }
-    viewport->RendererUserData = nullptr;
+    _viewport->RendererUserData = nullptr;
 }
 void GuiSetWindowSize(ImGuiViewport* _viewport, ImVec2 _size) {
     GuiViewportData* viewport_data = (GuiViewportData*)_viewport->RendererUserData;
 
-    auto& rd_device = Moer::Render::RenderDevice::Get();
+    auto& rd_device = GetGUIBackendData()->render_backend->device;
     auto  sc        = viewport_data->sc;
     if (sc->size.x == _size.x && sc->size.y == _size.y) return;
     rd_device.GetCommandQueue(EQueueType::Graphics).Sync();
@@ -1135,21 +1285,11 @@ void GuiSetWindowSize(ImGuiViewport* _viewport, ImVec2 _size) {
         .size             = {(uint)_size.x, (uint)_size.y},
         .back_buffer_sz   = 3,
         .preferred_format = PF_R8G8B8A8_SRGB};
-    viewport_data->sc = rd_device.CreateSwapchain(swapchain_info);
-    // EnqueueRenderTask([m_viewport, _size] {
-    //     Extent2D viewport_extent = {(uint32_t)m_viewport->GetViewportExtent().width, (uint32_t)m_viewport->GetViewportExtent().height};
-
-    //     if (_size.x == viewport_extent.width && _size.y == viewport_extent.height) return;
-    //     g_rhi->RHIResizeViewport(m_viewport, Extent2D(_size.x, _size.y), false);
-    // });
-    // auto extent = m_viewport->GetViewportExtent();
-    // if (_size.x == extent.width && _size.y == extent.height) return;
-
-    // g_rhi->RHIResizeViewport(m_viewport, Extent2D(size.x, size.y), false);
+    viewport_data->sc->Recreate(swapchain_info);
 }
-void GuiRenderWindow(ImGuiViewport* viewport, void*) {
+void GuiRenderWindow(ImGuiViewport* _viewport, void*) {
     GuiBackendData*  backend_data  = GetBackendData();
-    GuiViewportData* viewport_data = (GuiViewportData*)viewport->RendererUserData;
+    GuiViewportData* viewport_data = (GuiViewportData*)_viewport->RendererUserData;
 
     auto sc = viewport_data->sc;
     if (!sc) return;
@@ -1157,81 +1297,11 @@ void GuiRenderWindow(ImGuiViewport* viewport, void*) {
     auto&       device    = Moer::Render::RenderDevice::Get();
     auto        extent    = sc->size;
     auto&       gfx_queue = device.GetCommandQueue(EQueueType::Graphics);
-    GUIRender(viewport->DrawData, cmd_list);
-    // gfx_queue.Present(sc, viewport_data->framebuffer);
-    // RHIViewport*     rhi_viewport  = viewport_data->viewport;
-    // EnqueueRenderTask([rhi_viewport, viewport_data] {
-    //     viewport_data->next_frame_info = g_rhi->RHIGetNextFrameViewportBufferInfo(rhi_viewport);
-    //     if (!viewport_data->IsBackBufferReady()) return;
-
-    //     RHIUAV* present_view = g_rhi->RHIGetViewportBackBufferUAV(rhi_viewport, viewport_data->next_frame_info.backbuffer_index);
-    //     //transfer present texture layout to present src
-    //     auto& cmd_list = *viewport_data->comand_list;
-    //     viewport_data->present_fence->Wait(viewport_data->frame_index);
-    //     cmd_list.Reset();
-
-    //     cmd_list.BeginRecording();
-
-    //     cmd_list.TransitionTexture(present_view->GetTexture(), TS_COLOR_ATTACHMENT, EPassType::Graphics);
-    //     cmd_list.ExecuteTransition();
-    // });
-    // // RHIViewportNextBackBufferInfo info = g_rhi->RHIGetNextFrameViewportBufferInfo(rhi_viewport);
-
-    // GUIUploadData(viewport->DrawData, viewport_data->comand_list, &viewport_data->next_frame_info);
-
-    // EnqueueRenderTask([viewport_data] {
-    //     if (!viewport_data->IsBackBufferReady()) return;
-
-    //     RHIUAV* present_view = g_rhi->RHIGetViewportBackBufferUAV(viewport_data->viewport, viewport_data->next_frame_info.backbuffer_index);
-
-    //     RHIRenderPassInfo pass_info;
-    //     pass_info.color_attachments[0].color_attachment_action                = AC_CLEAR_STORE;
-    //     pass_info.color_attachments[0].color_attachment_view.texture_view     = present_view;
-    //     pass_info.color_attachments[0].color_attachment_view.required_layout  = ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT;
-    //     pass_info.color_attachments[0].color_attachment_view.clear_attachment = RHIClearAttachment();
-
-    //     auto viewport_extent                = viewport_data->viewport->GetViewportExtent();
-    //     pass_info.render_area.offset.x      = 0;
-    //     pass_info.render_area.offset.y      = 0;
-    //     pass_info.render_area.extent.width  = viewport_extent.width;
-    //     pass_info.render_area.extent.height = viewport_extent.height;
-    //     viewport_data->comand_list->BeginRenderPass(pass_info, "Imgui Window");
-    // });
-
-    // GUIRender(viewport->DrawData, viewport_data->comand_list, &viewport_data->next_frame_info);
-    // EnqueueRenderTask([viewport_data] {
-    //     if (!viewport_data->IsBackBufferReady()) return;
-    //     RHIUAV* present_view = g_rhi->RHIGetViewportBackBufferUAV(viewport_data->viewport, viewport_data->next_frame_info.backbuffer_index);
-    //     auto&   cmd_list     = *viewport_data->comand_list;
-    //     cmd_list.EndRenderPass();
-    //     cmd_list.TransitionTexture(present_view->GetTexture(), TS_PRESENT, EPassType::Graphics);
-    //     cmd_list.ExecuteTransition();
-    //     cmd_list.EndRecording();
-
-    //     RHISubmitInfo submit_info{};
-
-    //     //wait for last frame recording
-    //     submit_info.Wait(viewport_data->present_fence, viewport_data->frame_index - 1);
-    //     //wait for back_buffer ready
-    //     submit_info.Wait(viewport_data->next_frame_info.backbuffer_ready_fence, 0);
-    //     //signal this frame present fence
-    //     submit_info.Signal(viewport_data->present_fence, viewport_data->frame_index);
-
-    //     viewport_data->command_queue->SubmitCommands(1, viewport_data->comand_list, &submit_info);
-    // });
+    GUIRender(_viewport->DrawData, viewport_data->framebuffer->GetView(), cmd_list);
 }
 
 void GuiSwapbuffer(ImGuiViewport* _viewport, void*) {
-    GuiBackendData*  backend_data  = GetBackendData();
+    ImGUIData&       backend_data  = *GetGUIBackendData();
     GuiViewportData* viewport_data = (GuiViewportData*)_viewport->RendererUserData;
-
-    //present wait for this frame rendering end fence
-    // viewport_data->viewport->Present(viewport_data->present_fence);
-    // EnqueueRenderTask([viewport_data] {
-    //     if (!viewport_data->IsBackBufferReady()) return;
-    //     // viewport_data->viewport->Present(viewport_data->present_fence);
-    //     g_rhi->RHIPresentViewport(viewport_data->viewport, viewport_data->present_fence);
-    // });
-    Moer::Render::RenderDevice::Get().GetCommandQueue(Moer::Render::EQueueType::Graphics).Present(viewport_data->sc, viewport_data->framebuffer);
-    // g_rhi->RHIPresentViewport(viewport_data->viewport, viewport_data->present_fence);
+    backend_data.render_backend->device.GetCommandQueue(Moer::Render::EQueueType::Graphics).Present(viewport_data->sc, viewport_data->framebuffer);
 }

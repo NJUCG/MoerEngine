@@ -571,9 +571,10 @@ namespace Moer::Render {
         const auto& RenderPassInfo() const { return render_pass_info; }
         const auto& DrawData() const { return mesh_data; }
         const auto& Args() const { return args; }
-        void        IterateArgs(std::function<void(const TArg&,uint64 flag)> _func) const {
-            for(int i = 0; i < args.args.size(); i++){
-                std::visit([&_func, i,this](const auto& _arg) { _func(_arg, pipeline.binding_infos[i]); }, args.args[i]);
+
+        void IterateArgs(std::function<void(const TArg&, ParamInfoFlags _flag)> _func) const {
+            for (int i = 0; i < args.args.size(); i++) {
+                std::visit([&_func, i, this](const auto& _arg) { _func(_arg, pipeline.binding_infos[i]); }, args.args[i]);
             }
         }
         const auto& VertexBuffers() const {
@@ -608,9 +609,9 @@ namespace Moer::Render {
         const auto& Args() const { return args; }
         const auto& Pipeline() const { return pipeline; }
         auto        Param() const { return param; }
-        void        IterateArgs(std::function<void(const TArg&,uint64 flag)> _func) const {
-            for(int i = 0; i < args.args.size(); i++){
-                std::visit([&_func, i,this](const auto& _arg) { _func(_arg, pipeline.binding_infos[i]); }, args.args[i]);
+        void        IterateArgs(std::function<void(const TArg&, ParamInfoFlags _flag)> _func) const {
+            for (int i = 0; i < args.args.size(); i++) {
+                std::visit([&_func, i, this](const auto& _arg) { _func(_arg, pipeline.binding_infos[i]); }, args.args[i]);
             }
         }
     };

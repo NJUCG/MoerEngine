@@ -532,7 +532,7 @@ namespace Moer::Render {
                 buffer_free_list.pop_back();
             }
             _in_buffer->m_descriptor_idx = idx;
-            m_device->GetDescriptorEXT(&buffer_desc_info, buffer_desc_stride, buffer_desc_data.data() + idx * buffer_desc_stride);
+            vkGetDescriptorEXT(m_device->GetDevice(), &buffer_desc_info, buffer_desc_stride, buffer_desc_data.data() + idx * buffer_desc_stride);
         }
         return idx * buffer_desc_stride;
     }
@@ -561,7 +561,7 @@ namespace Moer::Render {
                 idx = image_free_list.back();
                 image_free_list.pop_back();
             }
-            m_device->GetDescriptorEXT(&desc_info, image_desc_stride, image_desc_data.data() + idx * image_desc_stride + texture_desc_offset);
+            vkGetDescriptorEXT(m_device->GetDevice(), &desc_info, image_desc_stride, image_desc_data.data() + idx * image_desc_stride + texture_desc_offset);
         }
         return idx * image_desc_stride + texture_desc_offset;
     }

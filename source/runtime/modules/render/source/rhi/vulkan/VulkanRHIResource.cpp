@@ -2371,7 +2371,9 @@ namespace Moer::Render {
 
     void VulkanFence::Wait(uint64_t _value) {
         std::unique_lock<std::mutex> _(cv_m);
-        while (current_value < _value) { cv.wait(_); }
+        while (current_value < _value) { 
+            std::this_thread::yield();
+            cv.wait(_); }
     }
 
     void VulkanFence::Notify(uint64_t _value) {

@@ -26,6 +26,7 @@
 #include "VulkanDebug.h"
 
 #include "RHICmdReorderer.h"
+#include "shader/ShaderPipeline.h"
 #include "spirv_reflect.h"
 #include "vulkan/vulkan_core.h"
 
@@ -42,12 +43,13 @@ namespace Moer::Render {
         FunctionTable    m_funcs;
         VulkanAllocator& allocator;
 
-        VkCmdPreprocessor(VkTracker& _tracker, VulkanAllocator& _allocator,FunctionTable _funcs) : tracker(_tracker), allocator(_allocator),m_funcs(_funcs) {}
-        void HandleBindless(BindlessArrayRef bindless_array) {
-            if (!bindless_array) {
+        VkCmdPreprocessor(VkTracker& _tracker, VulkanAllocator& _allocator, FunctionTable _funcs) : tracker(_tracker), allocator(_allocator), m_funcs(_funcs) {}
+        void HandleBindless(BindlessArrayRef _bindless_array) {
+            if (!_bindless_array) {
                 return;
             }
-            auto                        vk_bindless_array = reinterpret_cast<VulkanBindlessArray*>(bindless_array.Get());
+            auto* vk_bindless_array = reinterpret_cast<VulkanBindlessArray*>(_bindless_array.Get());
+
             Moer::Array<VulkanTexture*> write_map_textures;
             for (auto&& i : tracker.GetWritedStateTextures()) {
                 if (vk_bindless_array->IsTextureInBindLessArray(i)) {
@@ -72,6 +74,70 @@ namespace Moer::Render {
             }
         }
 
+        static VkAccessFlagBits2 GetBufferAccess(VulkanShaderResourceState _flag) {
+            switch (_flag.resource_type) {
+                case SpvReflectResourceType::SPV_REFLECT_RESOURCE_FLAG_CBV:
+                    return VK_ACCESS_2_UNIFORM_READ_BIT;
+                case SpvReflectResourceType::SPV_REFLECT_RESOURCE_FLAG_SRV:
+                    return VK_ACCESS_2_SHADER_READ_BIT;
+                case SpvReflectResourceType::SPV_REFLECT_RESOURCE_FLAG_UAV:
+                    return VK_ACCESS_2_SHADER_WRITE_BIT;
+                default:
+                    return VK_ACCESS_2_SHADER_READ_BIT;
+            }
+        }
+
+        static VkAccessFlagBits2 GetTextureAccess(VulkanShaderResourceState _flag) {
+            switch (_flag.resource_type) {
+                case SpvReflectResourceType::SPV_REFLECT_RESOURCE_FLAG_SAMPLER:
+                    return VK_ACCESS_2_SHADER_READ_BIT;
+                case SpvReflectResourceType::SPV_REFLECT_RESOURCE_FLAG_SRV:
+                    return VK_ACCESS_2_SHADER_READ_BIT;
+                case SpvReflectResourceType::SPV_REFLECT_RESOURCE_FLAG_UAV:
+                    return VK_ACCESS_2_SHADER_WRITE_BIT;
+                default:
+                    assert(false && "Invalid texture resource type");
+                    return VK_ACCESS_2_SHADER_READ_BIT;
+            }
+        }
+
+        static VkImageLayout GetTextureLayout(VulkanShaderResourceState _flag) {
+            switch (_flag.resource_type) {
+                case SpvReflectResourceType::SPV_REFLECT_RESOURCE_FLAG_SAMPLER:
+                    return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                case SpvReflectResourceType::SPV_REFLECT_RESOURCE_FLAG_SRV: {
+                    if (_flag.b_sampled)
+                        return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+                    return VK_IMAGE_LAYOUT_GENERAL;
+                }
+
+                case SpvReflectResourceType::SPV_REFLECT_RESOURCE_FLAG_UAV:
+                    return VK_IMAGE_LAYOUT_GENERAL;
+                default:
+                    assert(false && "Invalid texture resource type");
+                    return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            }
+        }
+
+        void VisitArgs(const TArg& _arg, VulkanShaderResourceState _flag, VkPipelineStageFlagBits2 _pipelines) {
+            if (_pipelines == VK_PIPELINE_STAGE_2_NONE) return;
+            std::visit([&](auto&& _arg) {
+                using T = std::decay_t<decltype(_arg)>;
+                if constexpr (std::is_same_v<T, BufferView>) {
+                    if (_flag.resource_type == SPV_REFLECT_RESOURCE_FLAG_UNDEFINED) return;
+                    auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(_arg.GetBuffer());
+                    tracker.RecordState(vk_buffer, GetBufferAccess(_flag), _pipelines);
+                } else if constexpr (std::is_same_v<T, TextureView>) {
+                    if (_flag.resource_type == SPV_REFLECT_RESOURCE_FLAG_UNDEFINED) return;
+                    auto* vk_texture = reinterpret_cast<VulkanTexture*>(_arg.GetTexture());
+                    tracker.RecordState(vk_texture, GetTextureAccess(_flag), GetTextureLayout(_flag), _pipelines, _arg.mip_level, _arg.num_mips);
+                } else if constexpr (std::is_same_v<T, BindlessArrayRef>) {
+                    HandleBindless(_arg);
+                }
+            },
+                       _arg);
+        }
         void VisitCmd(const Command* _cmd) {
             assert(_cmd != nullptr);
             switch (_cmd->Type()) {
@@ -169,28 +235,9 @@ namespace Moer::Render {
                 }
             },
                        _cmd->Param());
-
-            auto  func  = [&](const TArg& _arg,uint64_t flag) {
-                std::visit([&](auto&& _arg) {
-                    using T          = std::decay_t<decltype(_arg)>;
-                    if constexpr (std::is_same_v<T, BufferView>) {
-                        auto vk_buffer = reinterpret_cast<VulkanBuffer*>(_arg.GetBuffer());
-                        if(m_funcs.is_resource_write(flag))
-                            tracker.RecordState(vk_buffer, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
-                        else if(m_funcs.is_resource_read(flag))
-                            tracker.RecordState(vk_buffer, VK_ACCESS_2_SHADER_READ_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
-                    } else if constexpr (std::is_same_v<T, TextureView>) {
-                        auto* vk_texture = reinterpret_cast<VulkanTexture*>(_arg.GetTexture());
-                        if(m_funcs.is_resource_write(flag))
-                            tracker.RecordState(vk_texture,VK_ACCESS_SHADER_WRITE_BIT,VK_IMAGE_LAYOUT_GENERAL,VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,_arg.mip_level,_arg.num_mips);
-                        else if(m_funcs.is_resource_read(flag))
-                            tracker.RecordState(vk_texture,VK_ACCESS_SHADER_READ_BIT,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,_arg.mip_level,_arg.num_mips);
-                             
-                    } else if constexpr (std::is_same_v<T, BindlessArrayRef>) {
-                        HandleBindless(_arg);
-                    }
-                },
-                           _arg);
+            // _cmd->Pipeline().binding_infos;
+            auto func = [&](const TArg& _arg, ParamInfoFlags _flag) {
+                VisitArgs(_arg, _flag.state_flags, _flag.state_flags);
             };
             _cmd->IterateArgs(func);
         }
@@ -285,26 +332,8 @@ namespace Moer::Render {
                 tracker.RecordState(vk_buffer, VK_ACCESS_2_INDEX_READ_BIT, VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT);
             }
 
-            auto  func  = [&](const TArg& _arg,uint64_t flag) {
-                std::visit([&](auto&& _arg) {
-                    using T          = std::decay_t<decltype(_arg)>;
-                    if constexpr (std::is_same_v<T, BufferView>) {
-                        auto vk_buffer = reinterpret_cast<VulkanBuffer*>(_arg.GetBuffer());
-                        if(m_funcs.is_resource_write(flag))
-                            tracker.RecordState(vk_buffer, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
-                        else if(m_funcs.is_resource_read(flag))
-                            tracker.RecordState(vk_buffer, VK_ACCESS_2_SHADER_READ_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
-                    } else if constexpr (std::is_same_v<T, TextureView>) {
-                        auto* vk_texture = reinterpret_cast<VulkanTexture*>(_arg.GetTexture());
-                        if(m_funcs.is_resource_write(flag))
-                            tracker.RecordState(vk_texture,VK_ACCESS_SHADER_WRITE_BIT,VK_IMAGE_LAYOUT_GENERAL,VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,_arg.mip_level,_arg.num_mips);
-                        else if(m_funcs.is_resource_read(flag))
-                            tracker.RecordState(vk_texture,VK_ACCESS_SHADER_READ_BIT,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,_arg.mip_level,_arg.num_mips);
-                    } else if constexpr (std::is_same_v<T, BindlessArrayRef>) {
-                        HandleBindless(_arg);
-                    }
-                },
-                           _arg);
+            auto func = [&](const TArg& _arg, ParamInfoFlags _flag) {
+                VisitArgs(_arg, (VulkanShaderResourceState)_flag.state_flags, _flag.pipeline_flags);
             };
             _cmd->IterateArgs(func);
 
@@ -1529,7 +1558,7 @@ namespace Moer::Render {
         void Visit(const UploadBufferCmd& _cmd) {
             auto data_span  = _cmd.Data();
             auto tmp_buffer = allocator.AllocateBuffer(_cmd.ByteSize(), 16);
-            cmd_list.CopyData(tmp_buffer, data_span.data(), _cmd.ByteSize());
+            cmd_list.CopyData(tmp_buffer, data_span.data(), data_span.size_bytes());
             VulkanBuffer* buffer = reinterpret_cast<VulkanBuffer*>(_cmd.Handle());
             cmd_list.CopyBuffer(reinterpret_cast<VulkanBuffer*>(tmp_buffer.GetBuffer()),
                                 buffer,
@@ -1720,6 +1749,9 @@ namespace Moer::Render {
                  .minDepth = 0.0f,
                  .maxDepth = 1.0f};
 
+            viewport.y += viewport.height;
+            viewport.height = -viewport.height;
+
             cmd_list.SetViewPort(viewport);
             cmd_list.SetScissor({rect.offset.x, rect.offset.y, rect.extent.width, rect.extent.height});
             for (const auto& draw_data : draw_datas) {
@@ -1736,7 +1768,7 @@ namespace Moer::Render {
                                           std::span<VkDeviceSize>(offsets.data(),
                                                                   offsets.size()));
 
-                uint vtx_offset = draw_data.vtx_cnt != 0 ? draw_data.vtx_views[0].offset / draw_data.vtx_views[0].buffer->GetStride() : 0;
+                // uint vtx_offset = draw_data.vtx_cnt != 0 ? draw_data.vtx_views[0].offset / draw_data.vtx_views[0].buffer->GetStride() : 0;
                 std::visit(
                     [&](auto&& _idx_input) {
                         using IdxType = std::decay_t<decltype(_idx_input)>;
@@ -1751,12 +1783,12 @@ namespace Moer::Render {
                             cmd_list.DrawIndexedInstanced(_idx_input.buffer.GetNumElements(),
                                                           draw_data.instance_count,
                                                           0,
-                                                          vtx_offset,
+                                                          0,
                                                           draw_data.instance_offset);
                         } else if constexpr (std::is_same_v<IdxType, uint>) {
                             cmd_list.DrawInstanced(_idx_input,
                                                    draw_data.instance_count,
-                                                   vtx_offset,
+                                                   0,
                                                    draw_data.instance_offset);
                         }
                     },
@@ -1969,6 +2001,22 @@ namespace Moer::Render {
     VkNativeQueue::~VkNativeQueue() {
     }
 
+    void VkNativeQueue::SubmitEmpty(VkFence _fence) {
+        VkSubmitInfo2 submit_info{};
+        submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
+
+        submit_info.pNext                    = nullptr;
+        submit_info.waitSemaphoreInfoCount   = wait_infos.size();
+        submit_info.pWaitSemaphoreInfos      = wait_infos.data();
+        submit_info.signalSemaphoreInfoCount = signal_infos.size();
+        submit_info.pSignalSemaphoreInfos    = signal_infos.data();
+        submit_info.commandBufferInfoCount   = 0;
+        submit_info.pCommandBufferInfos      = VK_NULL_HANDLE;
+        vkQueueSubmit2(queue, 1, &submit_info, _fence);
+        wait_infos.clear();
+        signal_infos.clear();
+    }
+
     void VkNativeQueue::Submit(VulkanCmdList& _cmdlist, VkFence _fence) {
         VkSubmitInfo2   submit_info{};
         VkCommandBuffer cmd = _cmdlist.GetHandle();
@@ -2069,7 +2117,7 @@ namespace Moer::Render {
         };
         CmdReorderer reorderer{function_table};
 
-        VkCmdPreprocessor preprocessor(tracker, vk_allocator,function_table);
+        VkCmdPreprocessor preprocessor(tracker, vk_allocator, function_table);
 
         for (const auto& cmd : _submit.cmds) {
             reorderer.AcceptCmd(cmd.get());
@@ -2161,8 +2209,23 @@ namespace Moer::Render {
         if (_submit.cmds.empty()) {
             allocators.Push(allocator_ptr.release());
             std::unique_lock<std::mutex> lock(event_mutex);
-            if (_submit.callbacks.size() > 0) {
-                event_queue.emplace_back(std::move(_submit.callbacks), last_time, true);
+            bool                         b_wake_up = false;
+
+            b_wake_up = _submit.callbacks.size() != 0 || _submit.wait_events.size() != 0 || _submit.signal_events.size() != 0;
+            if (b_wake_up) {
+                auto end_tag = queue.GetType() == EQueueType::Graphics ? VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT : VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+
+                if (_submit.callbacks.size() > 0) {
+                    event_queue.emplace_back(std::move(_submit.callbacks), last_time, true);
+                }
+                for (auto& evt : _submit.signal_events) {
+                    event_queue.emplace_back(WaitEvent(evt.timeline_handle, evt.value), last_frame, false);
+                    event_queue.emplace_back(SignalEvent(evt.timeline_handle, evt.value), last_time, false);
+                }
+                queue.SubmitEmpty();
+            }
+
+            if (b_wake_up) {
                 queue_cv.notify_one();
             }
             return {uint64(timeline), last_time};
@@ -2180,6 +2243,9 @@ namespace Moer::Render {
 
             std::unique_lock<std::mutex> lock(event_mutex);
             event_queue.emplace_back(std::move(allocator_ptr), current_timeline, true);
+            for (auto& evt : _submit.signal_events) {
+                event_queue.emplace_back(SignalEvent(evt.timeline_handle, evt.value), current_timeline, false);
+            }
             if (_submit.callbacks.size() > 0) {
                 event_queue.emplace_back(std::move(_submit.callbacks), current_timeline, false);
             }
@@ -2288,9 +2354,14 @@ namespace Moer::Render {
                 }
                 wait_util_reach_timeline();
             };
-            auto visit_external_fence = [&](VulkanFence* _fence) {
-                _fence->HostWait(timeline);
-                _fence->Notify(std::max(timeline, _fence->current_value));
+
+            auto visit_signal_event = [&](SignalEvent& _evt) {
+                auto* fence = reinterpret_cast<VulkanFence*>(_evt.timeline_handle);
+                fence->Notify(_evt.value);
+            };
+            auto visit_wait_event = [&](WaitEvent& _evt) {
+                auto* fence = reinterpret_cast<VulkanFence*>(_evt.timeline_handle);
+                fence->HostWait(_evt.value);
             };
             while (true) {
                 std::optional<QueueEvent> evt;
@@ -2316,6 +2387,8 @@ namespace Moer::Render {
                             visit_fence(_evt);
                         } else if constexpr (std::is_same_v<TEvent, Array<std::function<void()>>>) {
                             visit_funcs(_evt);
+                        } else if constexpr (std::is_same_v<TEvent, SignalEvent>) {
+                            visit_signal_event(_evt);
                         }
                     },
                     evt->event);

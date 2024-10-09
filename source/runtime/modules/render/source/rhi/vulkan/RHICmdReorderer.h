@@ -541,6 +541,31 @@ namespace Moer::Render {
             return layer;
         }
 
+        void VisitArgs(const TArg& _arg, uint64 _flag, int64& _layer) {
+
+            std::visit([&](auto&& _arg) {
+                using T = std::decay_t<decltype(_arg)>;
+                if constexpr (std::is_same_v<T, BufferView>) {
+                    if (m_funcs.is_resource_write(_flag))
+                        _layer = std::max(_layer, SetWrite((uint64)(_arg.GetBuffer()), Range(_arg.GetByteOffset(), _arg.GetByteSize()), ResourceType::Texture_Buffer));
+                    else// else if (m_funcs.is_resource_read(_flag))
+                        _layer = std::max(_layer, SetRead((uint64)(_arg.GetBuffer()), Range(_arg.GetByteOffset(), _arg.GetByteSize()), ResourceType::Texture_Buffer));
+                    // else
+                    // _layer = std::max(_layer, GetLastLayer((uint64)(_arg.GetBuffer()), Range(_arg.GetByteOffset(), _arg.GetByteSize()), ResourceType::Texture_Buffer));
+                } else if constexpr (std::is_same_v<T, TextureView>) {
+                    if (m_funcs.is_resource_write(_flag))
+                        _layer = std::max(_layer, SetWrite(uint64(_arg.GetTexture()), Range(_arg.mip_level, _arg.num_mips), ResourceType::Texture_Buffer));
+                    else// else if (m_funcs.is_resource_read(_flag))
+                        _layer = std::max(_layer, SetRead(uint64(_arg.GetTexture()), Range(_arg.mip_level, _arg.num_mips), ResourceType::Texture_Buffer));
+                    // else
+                    // _layer = GetLastLayer(uint64(_arg.GetTexture()), Range(_arg.mip_level, _arg.num_mips), ResourceType::Texture_Buffer);
+                } else if constexpr (std::is_same_v<T, BindlessArrayRef>) {
+                    _layer = std::max(_layer, SetRead((uint64)(_arg->ArrayHandle()), Range(0), ResourceType::Bindless));
+                }
+            },
+                       _arg);
+        }
+
         void VisitCmd(const UploadBufferCmd* _cmd) {
             AddCmd(_cmd, SetWrite(_cmd->Handle(), Range(_cmd->Offset(), _cmd->ByteSize()), ResourceType::Texture_Buffer));
         }
@@ -594,30 +619,8 @@ namespace Moer::Render {
 
         void VisitCmd(const SetDrawStateCmd* _cmd) {
             int64 layer = 0;
-            auto  func  = [&](const TArg& _arg,uint64_t flag) {
-                std::visit([&](auto&& _arg) {
-                    int64 temp_layer = 0;
-                    using T          = std::decay_t<decltype(_arg)>;
-                    if constexpr (std::is_same_v<T, BufferView>) {
-                        if(m_funcs.is_resource_write(flag))
-                            temp_layer = SetWrite((uint64)(_arg.GetBuffer()), Range(_arg.GetByteOffset(), _arg.GetByteSize()), ResourceType::Texture_Buffer);
-                        else if(m_funcs.is_resource_read(flag))
-                            temp_layer = SetRead((uint64)(_arg.GetBuffer()), Range(_arg.GetByteOffset(), _arg.GetByteSize()), ResourceType::Texture_Buffer);
-                        else    
-                            temp_layer = GetLastLayer((uint64)(_arg.GetBuffer()), Range(_arg.GetByteOffset(), _arg.GetByteSize()), ResourceType::Texture_Buffer);
-                    } else if constexpr (std::is_same_v<T, TextureView>) {
-                        if(m_funcs.is_resource_write(flag))
-                            temp_layer = SetWrite(uint64(_arg.GetTexture()), Range(_arg.mip_level, _arg.num_mips), ResourceType::Texture_Buffer);
-                        else if(m_funcs.is_resource_read(flag))
-                            temp_layer = SetRead(uint64(_arg.GetTexture()), Range(_arg.mip_level, _arg.num_mips), ResourceType::Texture_Buffer);
-                        else
-                            temp_layer = GetLastLayer(uint64(_arg.GetTexture()), Range(_arg.mip_level, _arg.num_mips), ResourceType::Texture_Buffer);
-                    } else if constexpr (std::is_same_v<T, BindlessArrayRef>) {
-                        temp_layer = SetRead((uint64)(_arg->ArrayHandle()), Range(0), ResourceType::Bindless);
-                    }
-                    layer = std::max(layer, temp_layer);
-                },
-                           _arg);
+            auto  func  = [&](const TArg& _arg, ParamInfoFlags _flag) {
+                VisitArgs(_arg, _flag.state_flags, layer);
             };
             _cmd->IterateArgs(func);
             const auto& vbs = _cmd->VertexBuffers();
@@ -659,30 +662,8 @@ namespace Moer::Render {
 
         void VisitCmd(const DispatchCmd* _cmd) {
             int64 layer = 0;
-            auto  func  = [&](const TArg& _arg,uint64 flag) {
-                std::visit([&](auto&& _arg) {
-                    int64 temp_layer = 0;
-                    using T          = std::decay_t<decltype(_arg)>;
-                    if constexpr (std::is_same_v<T, BufferView>) {
-                        if(m_funcs.is_resource_write(flag))
-                            temp_layer = SetWrite((uint64)(_arg.GetBuffer()), Range(_arg.GetByteOffset(), _arg.GetByteSize()), ResourceType::Texture_Buffer);
-                        else if(m_funcs.is_resource_read(flag))
-                            temp_layer = SetRead((uint64)(_arg.GetBuffer()), Range(_arg.GetByteOffset(), _arg.GetByteSize()), ResourceType::Texture_Buffer);
-                        else    
-                            temp_layer = GetLastLayer((uint64)(_arg.GetBuffer()), Range(_arg.GetByteOffset(), _arg.GetByteSize()), ResourceType::Texture_Buffer);
-                    } else if constexpr (std::is_same_v<T, TextureView>) {
-                        if(m_funcs.is_resource_write(flag))
-                            temp_layer = SetWrite(uint64(_arg.GetTexture()), Range(_arg.mip_level, _arg.num_mips), ResourceType::Texture_Buffer);
-                        else if(m_funcs.is_resource_read(flag))
-                            temp_layer = SetRead(uint64(_arg.GetTexture()), Range(_arg.mip_level, _arg.num_mips), ResourceType::Texture_Buffer);
-                        else
-                            temp_layer = GetLastLayer(uint64(_arg.GetTexture()), Range(_arg.mip_level, _arg.num_mips), ResourceType::Texture_Buffer);
-                    } else if constexpr (std::is_same_v<T, BindlessArrayRef>) {
-                        temp_layer = SetRead((uint64)(_arg->ArrayHandle()), Range(0), ResourceType::Bindless);
-                    }
-                    layer = std::max(layer, temp_layer);
-                },
-                           _arg);
+            auto  func  = [&](const TArg& _arg, ParamInfoFlags _flag) {
+                VisitArgs(_arg, _flag.state_flags, layer);
             };
             _cmd->IterateArgs(func);
         }

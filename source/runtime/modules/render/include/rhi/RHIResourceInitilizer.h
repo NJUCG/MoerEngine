@@ -13,7 +13,7 @@
 #include <cassert>
 #include <variant>
 
-namespace RHIConfig {
+namespace Moer::Render {
 
     enum class MultiSample {
         NONE,
@@ -36,6 +36,11 @@ namespace RHIConfig {
         CULL_NONE
     };
 
+    enum class FrontFace {
+        CCW,
+        CW
+    };
+
     enum class DepthStencil {
         NONE,
         DEPTH_WRITE,
@@ -49,7 +54,7 @@ namespace RHIConfig {
         COLOR,
         DEPTH_STENCIL
     };
-}// namespace RHIConfig
+}// namespace Moer::Render
 struct RHISamplerCreateInfo {
     RHISamplerCreateInfo() = default;
     explicit RHISamplerCreateInfo(
@@ -171,23 +176,23 @@ struct RHIDepthStencilStateInfo {
           stencil_readmask(_stencil_readmask),
           stencil_writemask(_stencil_writemask) {}
 
-    template<RHIConfig::DepthStencil preset = RHIConfig::
+    template<Moer::Render::DepthStencil preset = Moer::Render::
                  DepthStencil::NONE>
     static RHIDepthStencilStateInfo Preset() {
-        if constexpr (preset == RHIConfig::DepthStencil::NONE) {
+        if constexpr (preset == Moer::Render::DepthStencil::NONE) {
             return RHIDepthStencilStateInfo();
-        } else if constexpr (preset == RHIConfig::DepthStencil::DEPTH_WRITE) {
+        } else if constexpr (preset == Moer::Render::DepthStencil::DEPTH_WRITE) {
             return RHIDepthStencilStateInfo(true, CO_LESS_OR_EQUAL);
-        } else if constexpr (preset == RHIConfig::DepthStencil::DEPTH_WRITE_LESS) {
+        } else if constexpr (preset == Moer::Render::DepthStencil::DEPTH_WRITE_LESS) {
             return RHIDepthStencilStateInfo(true, CO_LESS);
-        } else if constexpr (preset == RHIConfig::DepthStencil::DEPTH_WRITE_LESS_EQUAL) {
+        } else if constexpr (preset == Moer::Render::DepthStencil::DEPTH_WRITE_LESS_EQUAL) {
             return RHIDepthStencilStateInfo(true, CO_LESS_OR_EQUAL);
-        } else if constexpr (preset == RHIConfig::DepthStencil::DEPTH_WRITE_GREATER) {
+        } else if constexpr (preset == Moer::Render::DepthStencil::DEPTH_WRITE_GREATER) {
             return RHIDepthStencilStateInfo(true, CO_GREATER);
-        } else if constexpr (preset == RHIConfig::DepthStencil::DEPTH_WRITE_GREATER_EQUAL) {
+        } else if constexpr (preset == Moer::Render::DepthStencil::DEPTH_WRITE_GREATER_EQUAL) {
             return RHIDepthStencilStateInfo(true, CO_GREATER_OR_EQUAL);
         } else {
-            static_assert(preset == RHIConfig::DepthStencil::NONE, "Invalid preset");
+            static_assert(preset == Moer::Render::DepthStencil::NONE, "Invalid preset");
         }
     }
     RENDER_API friend uint32_t GetHash(const RHIDepthStencilStateInfo& target);
@@ -195,27 +200,38 @@ struct RHIDepthStencilStateInfo {
 };
 
 struct RHIRasterizeInfo {
-    EnumInByte<ERasterizerFillMode> fill_mode              = FM_FILL;
-    EnumInByte<ERasterizerCullMode> cull_mode              = RCM_NONE;
-    bool                            b_depth_bias           = false;
-    bool                            b_depth_clamp_enable   = false;
-    bool                            b_enable_msaa          = false;
-    float                           depth_bias             = 0;
-    float                           depth_bias_clamp       = 0;
-    float                           depth_bias_slop_factor = 0;
-    template<RHIConfig::Rast preset = RHIConfig::Rast::NONE>
+    EnumInByte<ERasterizerFillMode> fill_mode                 = FM_FILL;
+    EnumInByte<ERasterizerCullMode> cull_mode                 = RCM_NONE;
+    bool                            b_front_counter_clockwise = true;
+    bool                            b_depth_bias              = false;
+    bool                            b_depth_clamp_enable      = false;
+    bool                            b_enable_msaa             = false;
+    float                           depth_bias                = 0;
+    float                           depth_bias_clamp          = 0;
+    float                           depth_bias_slop_factor    = 0;
+    template<Moer::Render::Rast preset = Moer::Render::Rast::NONE, Moer::Render::FrontFace front = Moer::Render::FrontFace::CCW>
     static RHIRasterizeInfo Preset() {
-        if constexpr (preset == RHIConfig::Rast::NONE) {
-            return RHIRasterizeInfo();
-        } else if constexpr (preset == RHIConfig::Rast::CULL_BACK) {
-            return RHIRasterizeInfo(FM_FILL, RCM_BACK, false, false, false, 0, 0, 0);
-        } else if constexpr (preset == RHIConfig::Rast::CULL_FRONT) {
-            return RHIRasterizeInfo(FM_FILL, RCM_FRONT, false, false, false, 0, 0, 0);
-        } else if constexpr (preset == RHIConfig::Rast::CULL_NONE) {
-            return RHIRasterizeInfo(FM_FILL, RCM_NONE, false, false, false, 0, 0, 0);
+        RHIRasterizeInfo info{};
+        if constexpr (preset == Moer::Render::Rast::NONE) {
+
+        } else if constexpr (preset == Moer::Render::Rast::CULL_BACK) {
+            info.cull_mode = RCM_BACK;
+        } else if constexpr (preset == Moer::Render::Rast::CULL_FRONT) {
+            info.cull_mode = RCM_FRONT;
+        } else if constexpr (preset == Moer::Render::Rast::CULL_NONE) {
+            info.cull_mode = RCM_NONE;
         } else {
-            static_assert(preset == RHIConfig::Rast::NONE, "Invalid preset");
+            static_assert(preset == Moer::Render::Rast::NONE, "Invalid preset");
         }
+
+        if constexpr (front == Moer::Render::FrontFace::CCW) {
+            info.b_front_counter_clockwise = true;
+        } else if constexpr (front == Moer::Render::FrontFace::CW) {
+            info.b_front_counter_clockwise = false;
+        } else {
+            static_assert(front == Moer::Render::FrontFace::CCW, "Invalid preset");
+        }
+        return info;
     }
 
     RHIRasterizeInfo& SetFillMode(ERasterizerFillMode mode) {
@@ -261,20 +277,20 @@ struct RHIMultisampleStateInfo {
     bool b_alpha_to_one = false;
     /*a minimum fraction of sample shading if sample_shading is enabled, closer to 1 is smoother*/
     float min_sample_shading = 0.2f;
-    template<RHIConfig::MultiSample preset = RHIConfig::MultiSample::NONE>
+    template<Moer::Render::MultiSample preset = Moer::Render::MultiSample::NONE>
     static RHIMultisampleStateInfo Preset() {
-        if constexpr (preset == RHIConfig::MultiSample::NONE) {
+        if constexpr (preset == Moer::Render::MultiSample::NONE) {
             return RHIMultisampleStateInfo();
-        } else if constexpr (preset == RHIConfig::MultiSample::MSAA_2X) {
+        } else if constexpr (preset == Moer::Render::MultiSample::MSAA_2X) {
             return RHIMultisampleStateInfo(2);
-        } else if constexpr (preset == RHIConfig::MultiSample::MSAA_4X) {
+        } else if constexpr (preset == Moer::Render::MultiSample::MSAA_4X) {
             return RHIMultisampleStateInfo(4);
-        } else if constexpr (preset == RHIConfig::MultiSample::MSAA_8X) {
+        } else if constexpr (preset == Moer::Render::MultiSample::MSAA_8X) {
             return RHIMultisampleStateInfo(8);
-        } else if constexpr (preset == RHIConfig::MultiSample::MSAA_16X) {
+        } else if constexpr (preset == Moer::Render::MultiSample::MSAA_16X) {
             return RHIMultisampleStateInfo(16);
         } else {
-            static_assert(preset == RHIConfig::MultiSample::NONE, "Invalid preset");
+            static_assert(preset == Moer::Render::MultiSample::NONE, "Invalid preset");
         }
     }
 
@@ -332,11 +348,11 @@ struct RHIBlendAttachmentInfo {
           alpha_dst_blend_factor(_alpha_dst_blend_factor),
           color_write_mask(_color_write_mask) {}
 
-    template<RHIConfig::Blend preset = RHIConfig::Blend::NONE>
+    template<Moer::Render::Blend preset = Moer::Render::Blend::NONE>
     static RHIBlendAttachmentInfo Preset() {
-        if constexpr (preset == RHIConfig::Blend::NONE) {
+        if constexpr (preset == Moer::Render::Blend::NONE) {
             return RHIBlendAttachmentInfo();
-        } else if constexpr (preset == RHIConfig::Blend::ALPHA_BLEND) {
+        } else if constexpr (preset == Moer::Render::Blend::ALPHA_BLEND) {
             return RHIBlendAttachmentInfo(
                 BO_ADD,
                 BF_SRC_ALPHA,
@@ -345,7 +361,7 @@ struct RHIBlendAttachmentInfo {
                 BF_ONE,
                 BF_ONE_MINUS_SRC_ALPHA,
                 CW_RGBA);
-        } else if constexpr (preset == RHIConfig::Blend::ADDITIVE_BLEND) {
+        } else if constexpr (preset == Moer::Render::Blend::ADDITIVE_BLEND) {
             return RHIBlendAttachmentInfo(
                 BO_ADD,
                 BF_ONE,
@@ -354,7 +370,7 @@ struct RHIBlendAttachmentInfo {
                 BF_ONE,
                 BF_ONE,
                 CW_RGBA);
-        } else if constexpr (preset == RHIConfig::Blend::PRE_MULTIPLIED_ALPHA_BLEND) {
+        } else if constexpr (preset == Moer::Render::Blend::PRE_MULTIPLIED_ALPHA_BLEND) {
             return RHIBlendAttachmentInfo(
                 BO_ADD,
                 BF_ONE,
@@ -364,7 +380,7 @@ struct RHIBlendAttachmentInfo {
                 BF_ONE_MINUS_SRC_ALPHA,
                 CW_RGBA);
         } else {
-            static_assert(preset == RHIConfig::Blend::NONE, "Invalid preset");
+            static_assert(preset == Moer::Render::Blend::NONE, "Invalid preset");
         }
     }
     RHIBlendAttachmentInfo& SetColorBlendOp(EBlendOperation op) {
@@ -461,14 +477,14 @@ enum class EClearAttachment {
     DEPTH_STENCIL
 };
 struct RHIClearAttachment {
-    template<RHIConfig::ClearMode preset = RHIConfig::ClearMode::COLOR>
+    template<Moer::Render::ClearMode preset = Moer::Render::ClearMode::COLOR>
     static RHIClearAttachment Preset() {
-        if constexpr (preset == RHIConfig::ClearMode::COLOR) {
+        if constexpr (preset == Moer::Render::ClearMode::COLOR) {
             return RHIClearAttachment(EClearAttachment::COLOR);
-        } else if constexpr (preset == RHIConfig::ClearMode::DEPTH_STENCIL) {
+        } else if constexpr (preset == Moer::Render::ClearMode::DEPTH_STENCIL) {
             return RHIClearAttachment(EClearAttachment::DEPTH_STENCIL);
         } else {
-            static_assert(preset == RHIConfig::ClearMode::COLOR, "Invalid preset");
+            static_assert(preset == Moer::Render::ClearMode::COLOR, "Invalid preset");
         }
     }
     struct ClearDepthStencilValue {
@@ -485,7 +501,7 @@ struct RHIClearAttachment {
             int32_t  int32[4];
             uint32_t uint32[4];
         };
-        bool     operator==(const ClearColorValue& other) const {
+        bool operator==(const ClearColorValue& other) const {
             return uint32[0] == other.uint32[0] && uint32[1] == other.uint32[1] && uint32[2] == other.uint32[2] && uint32[3] == other.uint32[3];
         }
     };

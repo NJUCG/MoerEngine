@@ -156,10 +156,13 @@ namespace Moer::Render {
 
     void CommandList::CopyFrom(std::span<byte> _data, BufferView _buffer) {
         //
+        if (_data.size() == 0) {
+            return;
+        }
         commands.push_back(MakeUnique<UploadBufferCmd>(
             reinterpret_cast<uint64>(_buffer.GetBuffer()),
             _buffer.GetByteOffset(),
-            _buffer.GetByteSize(),
+            _data.size_bytes(),
             _data.data()));
     }
 
@@ -170,6 +173,32 @@ namespace Moer::Render {
             _src.GetByteOffset(),
             _src.GetByteSize(),
             _data.data()));
+    }
+
+    void CommandList::CopyFrom(Array<byte>&& _data, BufferView _dst) {
+        //
+        if (_data.size() == 0) {
+            return;
+        }
+        commands.push_back(MakeUnique<UploadBufferCmd>(
+            reinterpret_cast<uint64>(_dst.GetBuffer()),
+            _dst.GetByteOffset(),
+            _data.size(),
+            std::move(_data)));
+    }
+
+    void CommandList::CopyFrom(Array<byte>&& _data, TextureView _dst) {
+        //
+        if (_data.size() == 0) {
+            return;
+        }
+        commands.push_back(MakeUnique<UploadTextureCmd>(
+            _dst.texture->GetFormat(),
+            reinterpret_cast<uint64>(_dst.texture),
+            _dst.mip_level,
+            _dst.offset,
+            _dst.extent,
+            std::move(_data)));
     }
 
     void CommandList::SetRenderCmds(PipelineHandle& _handle, ArrayArguments&& _args, RenderPassInfo&& _info, Array<MeshDrawData>&& _mesh_data) {

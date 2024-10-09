@@ -602,6 +602,8 @@ namespace Moer::Render {
         RENDER_API void CopyFrom(BufferView _src, TextureView _dst);
         RENDER_API void CopyFrom(std::span<byte> _data, BufferView _dst);
         RENDER_API void CopyFrom(std::span<byte> _data, TextureView _dst);
+        RENDER_API void CopyFrom(Array<byte>&& _data, BufferView _dst);
+        RENDER_API void CopyFrom(Array<byte>&& _data, TextureView _dst);
         RENDER_API void CopyFrom(BufferView _src, std::span<byte> _data);
 
         RENDER_API void UpdateBindlessArray(BindlessArrayRef _array);
