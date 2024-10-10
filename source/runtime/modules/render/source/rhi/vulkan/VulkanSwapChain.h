@@ -93,7 +93,7 @@ namespace Moer::Render {
         VkSurfaceKHR   surface = VK_NULL_HANDLE;
         VulkanDevice&  device;
         uint64         image_idx            = 0;
-        uint           max_frames_in_flight = 2;
+        uint           max_frames_in_flight = 3;
     };
 }// namespace Moer::Render
 

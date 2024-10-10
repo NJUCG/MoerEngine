@@ -2356,7 +2356,8 @@ namespace Moer::Render {
             };
 
             auto visit_signal_event = [&](SignalEvent& _evt) {
-                auto* fence = reinterpret_cast<VulkanFence*>(_evt.timeline_handle);
+                auto*  fence    = reinterpret_cast<VulkanFence*>(_evt.timeline_handle);
+                uint64 test_val = fence->GetValue();
                 fence->Notify(_evt.value);
             };
             auto visit_wait_event = [&](WaitEvent& _evt) {
@@ -2473,6 +2474,7 @@ namespace Moer::Render {
         for (auto& func : on_complete) {
             func();
         }
+        on_complete.clear();
     }
     void VulkanAllocator::Reset() {
         ResetBufferAlloc();

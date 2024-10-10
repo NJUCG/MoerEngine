@@ -19,8 +19,8 @@ float4 main(PixelInput input) : SV_TARGET {
   ArrayBuffer buf = ArrayBuffer(param.buffer);
   float4 value = buf.Load<float4>(0);
   float4 bdls_color = tex.Sample2D<float4>(input.UV);
-  bdls_color.x = 0.f;
+  bdls_color.x = value.x;
   bdls_color.y = 0.f;
-  bdls_color.z = value.x;
+  bdls_color.z = 0.f;
   return float4(bdls_color);
 }

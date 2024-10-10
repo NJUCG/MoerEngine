@@ -276,12 +276,12 @@ int main(int argc, const char** argv) {
 
     while (WindowContext::ShouldClose(window_handle) == false) {
         WindowContext::Tick();
-        gui.BeginGUIFrame();
+        // gui.BeginGUIFrame();
         {
             static bool show = true;
-            ShowGUI(&show);
+            // ShowGUI(&show);
         }
-        gui.EndGUIFrame();
+        // gui.EndGUIFrame();
         if (time > 2) {
             timeline->Wait(time - 2);
         }
@@ -324,17 +324,21 @@ int main(int argc, const char** argv) {
             sc_info.size = {resolution.x, resolution.y};
             sc->Recreate(sc_info);
         }
+        cmd_list.Gfx(raster_pipeline, red_buffer)
+            .Draw(Rect2D(0, 0, 1, 1), std::move(draw_datas), ColorAttachment(red_tex));
 
-        // cmd_list.Gfx(raster_pipeline, red_buffer)
-        //     .Draw(Rect2D(0, 0, 1, 1), std::move(draw_datas), ColorAttachment(red_tex));
+        //float color with time sine
+        color_red[0] = 0.5f + 0.5f * sinf(time * 0.1f);
+        color_red[2] = 0.5f + 0.5f * cosf(time * 0.1f);
+        cmd_list.CopyFrom(red_buffer_view, std::span<byte>((byte*)&color_red, sizeof(color_red)));
 
-        // TestBindlessParam param;
-        // param.color          = color_red;
-        // param.texture_handle = bdls_tex_handle_red;
-        // param.buffer_handle  = bdls_buffer_handle_red;
-        // cmd_list.Gfx(raster_pipeline_constant_color, sampler, red_tex, bindless_array, param)
-        //     .Draw(Rect2D(0, 0, resolution.x, resolution.y), std::move(draw_datas2), ColorAttachment(output));
-        gui.RenderGUI(cmd_list, output);
+        TestBindlessParam param;
+        param.color          = color_red;
+        param.texture_handle = bdls_tex_handle_red;
+        param.buffer_handle  = bdls_buffer_handle_red;
+        cmd_list.Gfx(raster_pipeline_constant_color, sampler, red_tex, bindless_array, param)
+            .Draw(Rect2D(0, 0, resolution.x, resolution.y), std::move(draw_datas2), ColorAttachment(output));
+        // gui.RenderGUI(cmd_list, output);
 
         // cmd_list.Barriers(ReadTexture(red_tex, ETextureState::SAMPLE));
         time++;

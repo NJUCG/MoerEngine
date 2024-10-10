@@ -1004,13 +1004,15 @@ void GUIRender(void* _draw_data, const TextureView& _frame_buffer, CommandList& 
         global_vertex_offset += cmd_list->VtxBuffer.Size;
     }
 
-    auto vtx_view = render_buffers->vtx_buffer->GetView();
-    auto idx_view = render_buffers->idx_buffer->GetView();
-    auto arg_view = render_buffers->arg_buffer->GetView();
+    auto            vtx_view = render_buffers->vtx_buffer->GetView();
+    auto            idx_view = render_buffers->idx_buffer->GetView();
+    auto            arg_view = render_buffers->arg_buffer->GetView();
+    Array<ImGUIArg> copy_back_args(render_buffers->arg_buffer->GetNumElement());
 
     _cmdlist.CopyFrom(std::span<byte>((byte*)vertices.data(), vertices.size() * sizeof(ImDrawVert)), vtx_view);
     _cmdlist.CopyFrom(std::span<byte>((byte*)indices.data(), indices.size() * sizeof(ImDrawIdx)), idx_view);
     _cmdlist.CopyFrom(std::span<byte>((byte*)args.data(), args.size() * sizeof(ImGUIArg)), arg_view);
+    _cmdlist.CopyFrom(arg_view, std::span<byte>((byte*)copy_back_args.data(), copy_back_args.size() * sizeof(ImGUIArg)));
 
     _cmdlist.Gfx(backend_data.rast_pso, render_backend.bindless_array, arg_view, constant)
         .Draw(
@@ -1020,8 +1022,8 @@ void GUIRender(void* _draw_data, const TextureView& _frame_buffer, CommandList& 
 
     _cmdlist.AddCallback([vtx(std::move(vertices)),
                           idx(std::move(indices)),
-                          arg(std::move(args))]() {
-
+                          arg(std::move(args)),
+                          copy_back_args(std::move(copy_back_args))]() {
     });
 }
 
