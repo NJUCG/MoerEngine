@@ -26,6 +26,8 @@
 
 using namespace Moer::Render;
 using namespace Moer;
+
+static bool b_show_demo = true;
 class TestTrianglePipeline : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(TestTrianglePipeline);
@@ -118,7 +120,7 @@ static void ShowGUI(bool* _b_show) {
 
             // ImGui::MenuItem("Moer Engine", nullptr, g_main_window.ShowWindow());
             // ImGui::MenuItem("Inspector", nullptr, &m_b_show_inspector_window);
-            // ImGui::MenuItem("Demo", nullptr, &show_demo_window);
+            ImGui::MenuItem("Demo", nullptr, &b_show_demo);
             ImGui::EndMenu();
         }
         ImGui::EndMenuBar();
@@ -276,37 +278,21 @@ int main(int argc, const char** argv) {
 
     while (WindowContext::ShouldClose(window_handle) == false) {
         WindowContext::Tick();
-        // gui.BeginGUIFrame();
+        gui.BeginGUIFrame();
         {
             static bool show = true;
-            // ShowGUI(&show);
+            ShowGUI(&show);
+            ImGui::ShowDemoWindow(&b_show_demo);
         }
-        // gui.EndGUIFrame();
+        gui.EndGUIFrame();
         if (time > 2) {
             timeline->Wait(time - 2);
         }
 
-        Array<MeshDrawData>
-                            draw_datas;
-        Array<MeshDrawData> draw_datas1;
-        draw_datas.emplace_back(
-            std::span<VertexBuffer>(&vb, 1),
-            ib,
-            1,
-            0);
-
-        Array<MeshDrawData> draw_datas2;
-        draw_datas2.emplace_back(
-            std::span<VertexBuffer>(&vb, 1),
-            ib,
-            1,
-            0);
         int w_width, w_height;
-        draw_datas1.emplace_back(
-            std::span<VertexBuffer>(&vb, 1),
-            ib,
-            1,
-            0);
+
+        std::span<VertexBuffer> vb_span(&vb, 1);
+        IndexBuffer             ib_span = ib;
 
         WindowContext::GetWindowSize(WindowContext::GetMainWindow(), &w_width, &w_height);
         if (w_width == 0 || w_height == 0) {
@@ -324,21 +310,25 @@ int main(int argc, const char** argv) {
             sc_info.size = {resolution.x, resolution.y};
             sc->Recreate(sc_info);
         }
+
+        Array<SingleDrawParam> draw_datas;
+        draw_datas.emplace_back(SingleDrawParam{3, 1, 0, 0, 0});
+
         cmd_list.Gfx(raster_pipeline, red_buffer)
-            .Draw(Rect2D(0, 0, 1, 1), std::move(draw_datas), ColorAttachment(red_tex));
+            .Draw(Rect2D(0, 0, 1, 1), vb_span, ib, std::move(draw_datas), ColorAttachment(red_tex));
 
-        //float color with time sine
-        color_red[0] = 0.5f + 0.5f * sinf(time * 0.1f);
-        color_red[2] = 0.5f + 0.5f * cosf(time * 0.1f);
-        cmd_list.CopyFrom(red_buffer_view, std::span<byte>((byte*)&color_red, sizeof(color_red)));
+        // //float color with time sine
+        // color_red[0] = 0.5f + 0.5f * sinf(time * 0.1f);
+        // color_red[2] = 0.5f + 0.5f * cosf(time * 0.1f);
+        // cmd_list.CopyFrom(std::span<byte>((byte*)&color_red, sizeof(color_red)), red_buffer_view);
 
-        TestBindlessParam param;
-        param.color          = color_red;
-        param.texture_handle = bdls_tex_handle_red;
-        param.buffer_handle  = bdls_buffer_handle_red;
-        cmd_list.Gfx(raster_pipeline_constant_color, sampler, red_tex, bindless_array, param)
-            .Draw(Rect2D(0, 0, resolution.x, resolution.y), std::move(draw_datas2), ColorAttachment(output));
-        // gui.RenderGUI(cmd_list, output);
+        // TestBindlessParam param;
+        // param.color          = color_red;
+        // param.texture_handle = bdls_tex_handle_red;
+        // param.buffer_handle  = bdls_buffer_handle_red;
+        // cmd_list.Gfx(raster_pipeline_constant_color, sampler, red_tex, bindless_array, param)
+        //     .Draw(Rect2D(0, 0, resolution.x, resolution.y), std::move(draw_datas2), ColorAttachment(output));
+        gui.RenderGUI(cmd_list, output);
 
         // cmd_list.Barriers(ReadTexture(red_tex, ETextureState::SAMPLE));
         time++;

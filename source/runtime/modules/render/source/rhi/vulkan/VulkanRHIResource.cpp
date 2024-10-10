@@ -1720,7 +1720,7 @@ namespace Moer::Render {
         if (texture_slot_ptr == 0) { texture_slot = texture_slot_offset++; } else { texture_slot = texture_slot_ptr; }
 
         textures_allocated.push_back({_texture.texture, _sampler, slot_idx, texture_slot});
-        textures_allocated_set.insert(reinterpret_cast<VulkanTexture *>(_texture.texture));
+        resource_allocated_set.insert(uint64(_texture.texture));
         return slot_idx;
     }
 
@@ -1737,7 +1737,7 @@ namespace Moer::Render {
         if (buffer_slot_ptr == 0) { buffer_slot = buffer_slot_offset++; } else { buffer_slot = buffer_slot_ptr; }
 
         buffers_allocated.emplace_back(_buffer.buffer, slot_idx, buffer_slot);
-        buffers_allocated_set.insert(reinterpret_cast<VulkanBuffer *>(_buffer.buffer));
+        resource_allocated_set.insert(uint64(_buffer.buffer));
         return slot_idx;
     }
 
@@ -1749,7 +1749,7 @@ namespace Moer::Render {
         }else if (handle.type == Buffer){
             buffers_freed.push_back(handle.slot);
         }
-        textures_allocated_set.erase(reinterpret_cast<VulkanTexture *>(textures_allocated[_array_idx].texture));
+        resource_allocated_set.erase((uint64)(textures_allocated[_array_idx].texture));
     }
 
     void VulkanBindlessArray::FreeBuffer(uint _array_idx) {
@@ -1760,14 +1760,12 @@ namespace Moer::Render {
         }else if (handle.type == Buffer){
             buffers_freed.push_back(handle.slot);
         }
-        buffers_allocated_set.erase(reinterpret_cast<VulkanBuffer *>(buffers_allocated[_array_idx].buffer));
+        resource_allocated_set.erase((uint64)(buffers_allocated[_array_idx].buffer));
     }
     
-    bool VulkanBindlessArray::IsTextureInBindLessArray(const VulkanTexture* _texture) const{
-        return textures_allocated_set.find(_texture) != textures_allocated_set.end();
-    }bool VulkanBindlessArray::IsBufferInBindLessArray(const VulkanBuffer* _buffer) const{
-        return buffers_allocated_set.find(_buffer) != buffers_allocated_set.end();
-}
+    bool VulkanBindlessArray::IsResourceAllocated(uint64 _resource) const {
+        return resource_allocated_set.find(_resource) != resource_allocated_set.end();
+    }
     
     struct CopyPair{
         uint src_idx;

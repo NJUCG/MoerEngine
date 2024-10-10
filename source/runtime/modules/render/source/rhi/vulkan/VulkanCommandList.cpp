@@ -52,7 +52,7 @@ namespace Moer::Render {
 
             Moer::Array<VulkanTexture*> write_map_textures;
             for (auto&& i : tracker.GetWritedStateTextures()) {
-                if (vk_bindless_array->IsTextureInBindLessArray(i)) {
+                if (vk_bindless_array->IsResourceAllocated(uint64(i))) {
                     write_map_textures.push_back(i);
                 }
             }
@@ -63,7 +63,7 @@ namespace Moer::Render {
             }
             Moer::Array<VulkanBuffer*> write_map_buffers;
             for (auto&& i : tracker.GetWritedStateBuffers()) {
-                if (vk_bindless_array->IsBufferInBindLessArray(i)) {
+                if (vk_bindless_array->IsResourceAllocated(uint64(i))) {
                     write_map_buffers.push_back(i);
                 }
             }
@@ -1756,19 +1756,20 @@ namespace Moer::Render {
             cmd_list.SetScissor({rect.offset.x, rect.offset.y, rect.extent.width, rect.extent.height});
             for (const auto& draw_data : draw_datas) {
                 StaticArray<VkBuffer, 4>     vertex_buffers{};
-                StaticArray<VkDeviceSize, 4> offsets{};
+                StaticArray<VkDeviceSize, 4> vtx_offsets{};
                 for (size_t i = 0; i < draw_data.vtx_cnt; ++i) {
                     vertex_buffers[i] = ResourceCast(draw_data.vtx_views[i].buffer)->GetHandle();
-                    offsets[i]        = draw_data.vtx_views[i].offset;
+                    vtx_offsets[i]    = draw_data.vtx_views[i].offset;
                 }
                 cmd_list.SetVertexBuffers(0,
                                           draw_data.vtx_cnt,
                                           std::span<VkBuffer>(vertex_buffers.data(),
                                                               draw_data.vtx_cnt),
-                                          std::span<VkDeviceSize>(offsets.data(),
-                                                                  offsets.size()));
+                                          std::span<VkDeviceSize>(vtx_offsets.data(),
+                                                                  draw_data.vtx_cnt));
 
                 // uint vtx_offset = draw_data.vtx_cnt != 0 ? draw_data.vtx_views[0].offset / draw_data.vtx_views[0].buffer->GetStride() : 0;
+
                 std::visit(
                     [&](auto&& _idx_input) {
                         using IdxType = std::decay_t<decltype(_idx_input)>;
@@ -1778,18 +1779,25 @@ namespace Moer::Render {
 
                             cmd_list.SetIndexBuffer(
                                 reinterpret_cast<VulkanBuffer*>(index_buffer.GetBuffer()),
-                                offset,
+                                index_buffer.GetByteOffset(),
                                 VulkanEnumTranslator::METoVKIndexType(_idx_input.stride));
-                            cmd_list.DrawIndexedInstanced(_idx_input.buffer.GetNumElements(),
-                                                          draw_data.instance_count,
-                                                          0,
-                                                          0,
-                                                          draw_data.instance_offset);
+
+                            for (size_t i = 0; i < draw_data.draw_params.size(); ++i) {
+                                const SingleDrawParam& draw_param = draw_data.draw_params[i];
+                                cmd_list.DrawIndexedInstanced(draw_param.index_cnt,
+                                                              draw_param.instance_cnt,
+                                                              draw_param.first_index,
+                                                              draw_param.vertex_offset,
+                                                              draw_param.first_instance);
+                            }
                         } else if constexpr (std::is_same_v<IdxType, uint>) {
-                            cmd_list.DrawInstanced(_idx_input,
-                                                   draw_data.instance_count,
-                                                   0,
-                                                   draw_data.instance_offset);
+                            for (size_t i = 0; i < draw_data.draw_params.size(); ++i) {
+                                const SingleDrawParam& draw_param = draw_data.draw_params[i];
+                                cmd_list.DrawInstanced(draw_param.index_cnt,
+                                                       draw_param.instance_cnt,
+                                                       draw_param.vertex_offset,
+                                                       draw_param.first_instance);
+                            }
                         }
                     },
                     draw_data.idx_view);
@@ -2096,6 +2104,11 @@ namespace Moer::Render {
         return state.b_sampled;
     }
 
+    static bool IsResourceInBindlessArray(uint64 _res, uint64 _bdls_handle) {
+        VulkanBindlessArray* bindless_array = reinterpret_cast<VulkanBindlessArray*>(_bdls_handle);
+        return bindless_array->IsResourceAllocated(_res);
+    }
+
     static bool IsBufferTextureRead(uint64 _flags) {
         VulkanShaderResourceState state(_flags);
         switch (state.resource_type) {
@@ -2111,10 +2124,10 @@ namespace Moer::Render {
 
         VkCmdVisitor  visitor(vk_device, vk_allocator, tracker, vk_allocator.GetCmdList());
         FunctionTable function_table{
-            .is_resource_write  = &IsBufferTextureWrite,
-            .is_resource_read   = &IsBufferTextureRead,
-            .is_texture_sampled = &IsTextureSampled,
-        };
+            .is_resource_write       = &IsBufferTextureWrite,
+            .is_resource_read        = &IsBufferTextureRead,
+            .is_texture_sampled      = &IsTextureSampled,
+            .is_resource_in_bindless = &IsResourceInBindlessArray};
         CmdReorderer reorderer{function_table};
 
         VkCmdPreprocessor preprocessor(tracker, vk_allocator, function_table);

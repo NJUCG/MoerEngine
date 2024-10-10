@@ -12,5 +12,5 @@ struct Constant {
 };
 BINDLESS_BINDINGS(1, 2, 3, 4)
 
-StructuredBuffer<DrawParam> arg_buffer : register(t0);
+StructuredBuffer<DrawParam> arg_buffer : register(t0, space0);
 [[vk::push_constant]] ConstantBuffer<Constant> param : register(b0);

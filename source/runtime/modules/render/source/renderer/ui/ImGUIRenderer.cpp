@@ -47,7 +47,8 @@ struct UIFrameData {
 
 void GuiInitPlatformInterface();
 void GUIRender(void* _draw_data, const TextureView& _view, CommandList&);
-
+void GuiRenderWindow(ImGuiViewport* viewport, void*);
+void GuiSwapbuffer(ImGuiViewport* viewport, void*);
 struct GuiFrameRenderBuffers {
 
     Moer::Render::BufferRef vtx_buffer;
@@ -120,7 +121,7 @@ namespace Moer::Render {
         DEFINE_SHADER_BUFFER(arg_buffer);
         DEFINE_SHADER_CONSTANT_STRUCT(Constant, param);
 
-        DEFINE_SHADER_ARGS(bdls, arg_buffer, param);
+        DEFINE_SHADER_ARGS(arg_buffer, bdls, param);
     };
 
     struct ImGUIData {
@@ -171,7 +172,7 @@ namespace Moer::Render {
         GfxPsoCreateInfo pso_info(
             RHIRasterizeInfo::Preset<Rast::CULL_BACK, FrontFace::CW>(),
             vertex_stream,
-            {RHIColorAttachmentInfo::Preset<Blend::NONE>(PF_R8G8B8A8_SRGB)},
+            {RHIColorAttachmentInfo::Preset<Blend::ALPHA_BLEND>(PF_R8G8B8A8_SRGB)},
             RHIDepthStencilStateInfo::Preset());
         render_backend_data->rast_pso = std::move(
             sd_mgr
@@ -268,14 +269,14 @@ namespace Moer::Render {
             }
             ImGuiPlatformIO& platform_io = ImGui::GetPlatformIO();
 
-            // if (io.BackendFlags & ImGuiBackendFlags_RendererHasViewports) {
-            //     for (int i = 1; i < platform_io.Viewports.Size; i++)
-            //         if ((platform_io.Viewports[i]->Flags & ImGuiViewportFlags_IsMinimized) == 0)
-            //             GuiRenderWindow(platform_io.Viewports[i], nullptr);
-            //     for (int i = 1; i < platform_io.Viewports.Size; i++)
-            //         if ((platform_io.Viewports[i]->Flags & ImGuiViewportFlags_IsMinimized) == 0)
-            //             GuiSwapbuffer(platform_io.Viewports[i], nullptr);
-            // }
+            if (io.BackendFlags & ImGuiBackendFlags_RendererHasViewports) {
+                for (int i = 1; i < platform_io.Viewports.Size; i++)
+                    if ((platform_io.Viewports[i]->Flags & ImGuiViewportFlags_IsMinimized) == 0)
+                        GuiRenderWindow(platform_io.Viewports[i], nullptr);
+                for (int i = 1; i < platform_io.Viewports.Size; i++)
+                    if ((platform_io.Viewports[i]->Flags & ImGuiViewportFlags_IsMinimized) == 0)
+                        GuiSwapbuffer(platform_io.Viewports[i], nullptr);
+            }
         }
     }
 
@@ -375,9 +376,6 @@ void InvalidateDeviceObjects();
 void GUIUploadData(void* _draw_data, RHIGraphicsCommandList* _ui_command_list, RHIViewportNextBackBufferInfo* _next_frame_info_render_thread);
 void GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list, RHIViewportNextBackBufferInfo* _next_frame_info_render_thread);
 void GUIUploadData(void* _draw_data, CommandList&);
-
-void GuiRenderWindow(ImGuiViewport* viewport, void*);
-void GuiSwapbuffer(ImGuiViewport* viewport, void*);
 
 inline GuiBackendData* GetBackendData() {
     return ImGui::GetCurrentContext() ? (GuiBackendData*)ImGui::GetIO().BackendRendererUserData : nullptr;
@@ -937,13 +935,25 @@ void GUIRender(void* _draw_data, const TextureView& _frame_buffer, CommandList& 
     ImVec2 clip_scale = draw_data->FramebufferScale;// (1,1) unless using retina display which are often (2,2)
 
     Array<MeshDrawData> draw_meshes;
-    draw_meshes.reserve(total_cmd_cnt);
+    VertexBuffer        vtx_buffers[] = {{render_buffers->vtx_buffer,
+                                          0}};
+    IndexBuffer         idx_buffer    = {
+        render_buffers->idx_buffer->GetView(),
+        EIndexElementType::IET_UINT16};
+    draw_meshes.emplace_back(
+        std::span<VertexBuffer>(vtx_buffers, 1),
+        idx_buffer);
+
+    MeshDrawData& batch = draw_meshes[0];
+
+    batch.Reserve(total_cmd_cnt);
 
     int32_t global_vertex_offset = 0,
             global_index_offset  = 0;
 
     uint                      cmd_offset = 0;
     GUIPipelineBdls::Constant constant;
+
     {
         float l         = draw_data->DisplayPos.x;
         float r         = draw_data->DisplayPos.x + draw_data->DisplaySize.x;
@@ -986,16 +996,10 @@ void GUIRender(void* _draw_data, const TextureView& _frame_buffer, CommandList& 
                 uint32_t vtx_offset = cmd->VtxOffset + global_vertex_offset;
                 uint32_t idx_offset = cmd->IdxOffset + global_index_offset;
 
-                VertexBuffer vtx_buffers[] = {{render_buffers->vtx_buffer,
-                                               uint64(vtx_offset) * sizeof(ImDrawVert)}};
-                IndexBuffer  idx_buffer    = {
-                    render_buffers->idx_buffer->GetView(idx_offset * sizeof(ImDrawIdx), elem_count * sizeof(ImDrawIdx)),
-                    EIndexElementType::IET_UINT16};
-
-                draw_meshes.emplace_back(
-                    std::span<VertexBuffer>(vtx_buffers, 1),
-                    idx_buffer,
-                    1,
+                batch.EmplaceDrawIndexed(
+                    idx_offset,
+                    elem_count,
+                    vtx_offset,
                     cmd_offset);
                 cmd_offset++;
             }
@@ -1014,7 +1018,7 @@ void GUIRender(void* _draw_data, const TextureView& _frame_buffer, CommandList& 
     _cmdlist.CopyFrom(std::span<byte>((byte*)args.data(), args.size() * sizeof(ImGUIArg)), arg_view);
     _cmdlist.CopyFrom(arg_view, std::span<byte>((byte*)copy_back_args.data(), copy_back_args.size() * sizeof(ImGUIArg)));
 
-    _cmdlist.Gfx(backend_data.rast_pso, render_backend.bindless_array, arg_view, constant)
+    _cmdlist.Gfx(backend_data.rast_pso, render_buffers->arg_buffer, render_backend.bindless_array, constant)
         .Draw(
             {0, 0, (uint)(draw_data->DisplaySize.x * draw_data->FramebufferScale.x), uint(draw_data->DisplaySize.y * draw_data->FramebufferScale.y)},
             std::move(draw_meshes),
@@ -1265,8 +1269,8 @@ void GuiDestroyWindow(ImGuiViewport* _viewport) {
     if (GuiViewportData* viewport_data = (GuiViewportData*)_viewport->RendererUserData) {
         if (viewport_data && viewport_data->sc) {
             device.GetCommandQueue(EQueueType::Graphics).Sync();
-            viewport_data->sc = nullptr;
-
+            viewport_data->sc          = nullptr;
+            viewport_data->framebuffer = nullptr;
             // We could just call ImGui_ImplDX12_DestroyWindow(main_viewport) as a convenience but that would be misleading since we only use data->Resources[]
             for (uint32_t i = 0; i < backend_data.num_frames_in_flight; i++)
                 DestroyRenderBuffers(&viewport_data->render_buffers[i]);
@@ -1282,12 +1286,22 @@ void GuiSetWindowSize(ImGuiViewport* _viewport, ImVec2 _size) {
     auto  sc        = viewport_data->sc;
     if (sc->size.x == _size.x && sc->size.y == _size.y) return;
     rd_device.GetCommandQueue(EQueueType::Graphics).Sync();
+
+    Moer::WindowHandle handle{
+        (Moer::WindowType*)(_viewport->PlatformHandle ?
+                                _viewport->PlatformHandle :
+                                _viewport->PlatformHandleRaw)};
+
     SwapchainCreateInfo swapchain_info{
-        .window_handle    = (uintptr_t)(_viewport->PlatformHandle ? _viewport->PlatformHandle : _viewport->PlatformHandleRaw),
+        .window_handle    = (uintptr_t)&handle,
         .size             = {(uint)_size.x, (uint)_size.y},
-        .back_buffer_sz   = 3,
+        .back_buffer_sz   = 2,
         .preferred_format = PF_R8G8B8A8_SRGB};
     viewport_data->sc->Recreate(swapchain_info);
+    viewport_data->framebuffer = rd_device.CreateTexture(
+        Extent2D(_viewport->Size.x, _viewport->Size.y),
+        PF_R8G8B8A8_SRGB,
+        ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED);
 }
 void GuiRenderWindow(ImGuiViewport* _viewport, void*) {
     GuiBackendData*  backend_data  = GetBackendData();
@@ -1300,6 +1314,8 @@ void GuiRenderWindow(ImGuiViewport* _viewport, void*) {
     auto        extent    = sc->size;
     auto&       gfx_queue = device.GetCommandQueue(EQueueType::Graphics);
     GUIRender(_viewport->DrawData, viewport_data->framebuffer->GetView(), cmd_list);
+    gfx_queue.Execute(std::move(cmd_list.Submit()));
+    gfx_queue.Sync();
 }
 
 void GuiSwapbuffer(ImGuiViewport* _viewport, void*) {
