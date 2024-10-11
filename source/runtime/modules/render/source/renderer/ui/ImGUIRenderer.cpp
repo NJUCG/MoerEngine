@@ -1,4 +1,5 @@
 #include "ImGUIRenderer.h"
+#include "GLFW/glfw3.h"
 #include "IconsFontAwesome6.h"
 #include "PixelFormat.h"
 #include "RenderThread.h"
@@ -20,15 +21,15 @@
 #include "math/Math.h"
 #include "misc/STL.h"
 
-#include "taskgraph/GraphTask.h"
-#include "taskgraph/ThreadManager.h"
 #include "window/WindowContext.h"
 
 #include <atomic>
 #include <cstddef>
 #include <imgui.h>
 #include <imgui_internal.h>
-#include <vadefs.h>
+
+#include <backends/imgui_impl_glfw.h>
+
 using namespace Moer::Render;
 using namespace Moer;
 struct UIFrameData {
@@ -96,6 +97,26 @@ namespace Moer::Render {
         uint   padding2;
         uint   padding3;
     };
+
+    enum class EFontType {
+        Greek,
+        Chinese,
+        Korean,
+        Japanese,
+        Cyrillic,
+        Thai,
+        Vietnamese,
+        Icon,
+        Default
+    };
+
+    struct RENDER_API FontDesc {
+        FontDesc(const char* _font_path, float _font_size, EFontType _font_type)
+            : font_path(_font_path), font_size(_font_size), font_type(_font_type) {}
+        std::string font_path;
+        float       font_size = 13.f;
+        EFontType   font_type;
+    };
     class GUIPipeline : public RasterPipeline {
     public:
         struct Constant {
@@ -140,8 +161,92 @@ namespace Moer::Render {
 
         ImGUIRenderBackend* render_backend = nullptr;
     };
+    const ImWchar* FontTypeToRange(EFontType _font_range_type) {
+        using namespace Moer;
+        static const ImWchar icons_ranges[] = {ICON_MIN_FA, ICON_MAX_16_FA, 0};
 
+        switch (_font_range_type) {
+            case EFontType::Greek:
+                return ImGui::GetIO().Fonts->GetGlyphRangesGreek();
+            case EFontType::Chinese:
+                return ImGui::GetIO().Fonts->GetGlyphRangesChineseFull();
+            case EFontType::Korean:
+                return ImGui::GetIO().Fonts->GetGlyphRangesKorean();
+            case EFontType::Japanese:
+                return ImGui::GetIO().Fonts->GetGlyphRangesJapanese();
+            case EFontType::Cyrillic:
+                return ImGui::GetIO().Fonts->GetGlyphRangesCyrillic();
+            case EFontType::Thai:
+                return ImGui::GetIO().Fonts->GetGlyphRangesThai();
+            case EFontType::Vietnamese:
+                return ImGui::GetIO().Fonts->GetGlyphRangesVietnamese();
+            case EFontType::Default:
+                return ImGui::GetIO().Fonts->GetGlyphRangesDefault();
+            case EFontType::Icon:
+                return icons_ranges;
+            default:
+                break;
+        }
+        return ImGui::GetIO().Fonts->GetGlyphRangesDefault();
+    }
+    static void AddFont(FontDesc _desc) {
+        const auto font_base_path = Moer::ConfigManager::GetInstance().GetEditorResourcePath() / FONTS_DIR;
+        const auto font_path      = font_base_path / _desc.font_path;
+
+        auto& io = ImGui::GetIO();
+
+        const ImWchar* font_range = FontTypeToRange(_desc.font_type);
+        ImFontConfig   icons_config;
+        icons_config.MergeMode            = false;
+        icons_config.PixelSnapH           = true;
+        icons_config.FontDataOwnedByAtlas = false;
+        if (_desc.font_type == EFontType::Icon) {
+            float icon_font_size = _desc.font_size * 2.0f / 3.0f;// FontAwesome fonts need to have their sizes reduced by 2.0f/3.0f in order to align correctly
+
+            icons_config.MergeMode        = true;
+            icons_config.GlyphMinAdvanceX = icon_font_size;
+
+            io.Fonts->AddFontFromFileTTF(font_path.generic_string().data(), icon_font_size, &icons_config, font_range);
+        } else {
+            io.FontDefault = io.Fonts->AddFontFromFileTTF(font_path.generic_string().data(), _desc.font_size, &icons_config, font_range);
+        }
+    }
+    static void* MallocWrapper(size_t size, void* user_data) {
+        return Memory::Malloc(size);
+    }
+    static void FreeWrapper(void* ptr, void* user_data) {
+        Memory::Free(ptr);
+    }
     ImGUIRenderBackend::ImGUIRenderBackend(RenderDevice& _device) : device(_device) {
+
+        ImGui::SetAllocatorFunctions(MallocWrapper, FreeWrapper, nullptr);
+        IMGUI_CHECKVERSION();
+        ImGui::CreateContext();
+        {
+            ImGuiIO& io = ImGui::GetIO();
+            io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+            io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
+
+            GLFWwindow* window = (GLFWwindow*)WindowContext::GetMainWindow()->window;
+            switch (device.GetRHIType()) {
+                case ERHIType::Vulkan: {
+                    ImGui_ImplGlfw_InitForVulkan(window, true);
+                    break;
+                }
+                default:
+                    ImGui_ImplGlfw_InitForOther(window, true);
+            }
+            {
+
+                io.Fonts->AddFontDefault();
+                AddFont({FONT_ICON_FILE_NAME_FAS,
+                         13.0f,
+                         EFontType::Icon});
+                AddFont({"msyh.ttc",
+                         20.0f,
+                         EFontType::Chinese});
+            }
+        }
         bindless_array = device.CreateBindlessArray();
 
         ImGuiIO& io = ImGui::GetIO();
@@ -223,9 +328,12 @@ namespace Moer::Render {
         MoerDelete(data);
         ImGui::GetIO().BackendRendererUserData = nullptr;
 
+        ImGui_ImplGlfw_Shutdown();
         ImGui::DestroyContext();
     }
     void ImGUIRenderBackend::BeginGUIFrame() {
+        ImGui_ImplGlfw_NewFrame();
+
         ImGui::NewFrame();
     }
 
@@ -694,67 +802,6 @@ void SetupRenderState(ImDrawData* draw_data, RHIGraphicsCommandList* commandList
 //     });
 // }
 
-void GUIUploadData(void* _draw_data, CommandList& _cmd_list) {
-    ImDrawData* draw_data = static_cast<ImDrawData*>(_draw_data);
-    if (draw_data->DisplaySize.x <= 0.0f || draw_data->DisplaySize.y <= 0.0f)
-        return;
-    // RHIFragmentShaderRef frag_rhi_shader = g_rhi->RHICreateFragmentShader(frag_shader);
-    uint32_t total_size_vert = draw_data->TotalVtxCount;
-    uint32_t total_size_idx  = draw_data->TotalIdxCount * sizeof(ImDrawIdx);
-
-    GuiBackendData* backend_data = GetBackendData();
-    auto&           device       = RenderDevice::Get();
-
-    GuiViewportData* viewport_data = (GuiViewportData*)draw_data->OwnerViewport->RendererUserData;
-
-    uint32_t num_frames_in_flight = backend_data->num_frames_in_flight;
-
-    GuiFrameRenderBuffers* render_buffers = &viewport_data->render_buffers[viewport_data->frame_index % num_frames_in_flight];
-    if (render_buffers->vtx_buffer == nullptr || render_buffers->vtx_buffer->GetNumElement() < total_size_vert) {
-        //delete the old one and create new
-        if (render_buffers->vtx_buffer != nullptr) {}
-        // render_buffers->vertex_buffer->DeRef();
-        uint32_t new_size          = 4096 + total_size_vert;
-        render_buffers->vtx_buffer = device.CreateBuffer<ImDrawVert>(new_size, EBufferUsageFlags::VERTEX_BUFFER | EBufferUsageFlags::TRANSFER_DST);
-    }
-    if (render_buffers->idx_buffer == nullptr || render_buffers->idx_buffer->GetNumElement() < total_size_idx) {
-
-        if (render_buffers->idx_buffer != nullptr) {}
-        uint32_t new_size          = 8192 + total_size_idx;
-        render_buffers->idx_buffer = device.CreateBuffer<ImDrawIdx>(new_size, EBufferUsageFlags::INDEX_BUFFER | EBufferUsageFlags::TRANSFER_DST);
-    }
-
-    // ImDrawVert* vertex_dst = nullptr;
-    // ImDrawIdx*  index_dst  = nullptr;
-
-    // RHIBufferRef staging_index_buffer  = render_buffers->staging_index_buffer;
-    // RHIBufferRef staging_vertex_buffer = render_buffers->staging_vertex_buffer;
-
-    // vertex_dst = (ImDrawVert*)g_rhi->RHIMapBuffer(render_buffers->staging_vertex_buffer, 0, UINT64_MAX);
-    // index_dst  = (ImDrawIdx*)g_rhi->RHIMapBuffer(render_buffers->staging_index_buffer, 0, UINT64_MAX);
-    // vertex_dst = (ImDrawVert*)g_rhi->RHIMapBuffer(staging_vertex_buffer, 0, UINT64_MAX);
-    // index_dst  = (ImDrawIdx*)g_rhi->RHIMapBuffer(staging_index_buffer, 0, UINT64_MAX);
-    size_t            vertex_offset = 0;
-    size_t            index_offset  = 0;
-    Array<ImDrawVert> vertices(draw_data->TotalVtxCount);
-    Array<ImDrawIdx>  indices(draw_data->TotalIdxCount);
-    for (int32_t n = 0; n < draw_data->CmdListsCount; n++) {
-        const ImDrawList* cmd_list = draw_data->CmdLists[n];
-        memcpy(vertices.data() + vertex_offset, cmd_list->VtxBuffer.Data, cmd_list->VtxBuffer.Size * sizeof(ImDrawVert));
-        memcpy(indices.data() + index_offset, cmd_list->IdxBuffer.Data, cmd_list->IdxBuffer.Size * sizeof(ImDrawIdx));
-        vertex_offset += cmd_list->VtxBuffer.Size;
-        index_offset += cmd_list->IdxBuffer.Size;
-    }
-    CommandList cmd_list{};
-    auto&       copy_queue = device.GetCommandQueue(EQueueType::Copy);
-    auto        vtx_view   = render_buffers->vtx_buffer->GetView();
-    auto        idx_view   = render_buffers->idx_buffer->GetView();
-    cmd_list.CopyFrom(std::span<byte>((byte*)vertices.data(), vertices.size() * sizeof(ImDrawVert)), render_buffers->vtx_buffer->GetView());
-    cmd_list.CopyFrom(std::span<byte>((byte*)indices.data(), indices.size() * sizeof(ImDrawIdx)), render_buffers->idx_buffer->GetView());
-    auto&& submit = cmd_list.Submit().Signal(viewport_data->copy_fence, viewport_data->frame_index);
-    copy_queue.Execute(std::move(submit));
-}
-
 void ImGUIRenderer::Impl::UpdateGUIData() {
 }
 // void GUIRender(void* _draw_data, RHIGraphicsCommandList* _ui_command_list, RHIViewportNextBackBufferInfo* _next_frame_info_render_thread) {
@@ -1013,10 +1060,10 @@ void GUIRender(void* _draw_data, const TextureView& _frame_buffer, CommandList& 
     auto            arg_view = render_buffers->arg_buffer->GetView();
     Array<ImGUIArg> copy_back_args(render_buffers->arg_buffer->GetNumElement());
 
-    _cmdlist.CopyFrom(std::span<byte>((byte*)vertices.data(), vertices.size() * sizeof(ImDrawVert)), vtx_view);
-    _cmdlist.CopyFrom(std::span<byte>((byte*)indices.data(), indices.size() * sizeof(ImDrawIdx)), idx_view);
-    _cmdlist.CopyFrom(std::span<byte>((byte*)args.data(), args.size() * sizeof(ImGUIArg)), arg_view);
-    _cmdlist.CopyFrom(arg_view, std::span<byte>((byte*)copy_back_args.data(), copy_back_args.size() * sizeof(ImGUIArg)));
+    _cmdlist.CopyFrom(std::span<Moer::byte>((Moer::byte*)vertices.data(), vertices.size() * sizeof(ImDrawVert)), vtx_view);
+    _cmdlist.CopyFrom(std::span<Moer::byte>((Moer::byte*)indices.data(), indices.size() * sizeof(ImDrawIdx)), idx_view);
+    _cmdlist.CopyFrom(std::span<Moer::byte>((Moer::byte*)args.data(), args.size() * sizeof(ImGUIArg)), arg_view);
+    _cmdlist.CopyFrom(arg_view, std::span<Moer::byte>((Moer::byte*)copy_back_args.data(), copy_back_args.size() * sizeof(ImGUIArg)));
 
     _cmdlist.Gfx(backend_data.rast_pso, render_buffers->arg_buffer, render_backend.bindless_array, constant)
         .Draw(

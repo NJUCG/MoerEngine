@@ -80,11 +80,10 @@ namespace Moer::Render {
 
         CreateDescriptorAllocator();
         CreateDescriptorHeap();
+    }
+
+    void VulkanDevice::PostInit() {
         CreateInternalShaders();
-        //create empty descriptor set layout
-        VkDescriptorSetLayoutCreateInfo descriptor_set_layout_create_info{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        descriptor_set_layout_create_info.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
-        vkCreateDescriptorSetLayout(m_device, &descriptor_set_layout_create_info, VK_NULL_HANDLE, &empty_descriptor_set_layout);
     }
 
     VulkanDevice::~VulkanDevice() { Destroy(); }
@@ -455,13 +454,16 @@ namespace Moer::Render {
 
     void VulkanDevice::CreateDescriptorHeap() {
         new (&m_global_descriptor_heap) VulkanDescriptorHeap(*this);
+        //create empty descriptor set layout
+        VkDescriptorSetLayoutCreateInfo descriptor_set_layout_create_info{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        descriptor_set_layout_create_info.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
+        vkCreateDescriptorSetLayout(m_device, &descriptor_set_layout_create_info, VK_NULL_HANDLE, &empty_descriptor_set_layout);
+
         LOG_INFO("VulkanRHI: Descriptor Heap initialized.");
     }
 
     void VulkanDevice::CreateInternalShaders() {
-
-        internal_shaders.sd_component_shuffle = ComponentShuffleShader(
-            CreatePipeline(ShaderManager::Get().Compute<ComponentShuffleShader>("utils/ShuffleBufferIndices.hlsl")));
+        internal_shaders.sd_component_shuffle = ShaderManager::Get().Compute<ComponentShuffleShader>("utils/ShuffleBufferIndices.hlsl");
     }
 
     void VulkanDevice::Destroy() {

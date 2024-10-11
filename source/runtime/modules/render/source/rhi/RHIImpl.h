@@ -700,6 +700,7 @@ namespace Moer::Render {
         Impl() {}
 
         virtual ~Impl() = default;
+        virtual void PostInit() {}
 
     public:
         virtual FenceRef  CreateFence()                                                                = 0;

@@ -224,6 +224,7 @@ namespace Moer::Render {
         void             CreateMemoryAllocator(VkInstance _instance, uint32 _api_version);
         void             CreateDescriptorAllocator();
         void             CreateDescriptorHeap();
+        void             PostInit() override;
 
         void CreateInternalShaders();
 

@@ -228,13 +228,14 @@ namespace Moer::Render {
         RTConstructor&        Callable(std::string_view _path, std::string_view _entry_name = "main");
         Render::RenderDevice& device;
     };
+
     class RENDER_API ShaderManager {
     public:
         ShaderManager(Render::RenderDevice& _device);
         RasterPipelineConstructor Raster();
         template<typename TPipeline>
-        PipelineShaderInfo Compute(std::string_view _path, std::string_view _entry_name = "main") {
-            return ComputeConstructor(GetDevice(), _path, _entry_name).CompileShaderInfo<TPipeline>();
+        TPipeline Compute(std::string_view _path, std::string_view _entry_name = "main") {
+            return ComputeConstructor(GetDevice(), _path, _entry_name).Build<TPipeline>();
         }
         RTConstructor Raytracing();
 
@@ -242,7 +243,6 @@ namespace Moer::Render {
         friend Impl;
 
     public:
-        static void           Register(ShaderManager&);
         static ShaderManager& Get();
 
     private:

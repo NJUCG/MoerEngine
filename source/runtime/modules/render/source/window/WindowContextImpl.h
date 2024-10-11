@@ -22,8 +22,6 @@ namespace Moer {
         virtual void SetTitle(WindowHandle*, const char* _new_title)                     = 0;
         virtual bool ShouldClose(WindowHandle*) const                                    = 0;
 
-        virtual void AddFont(const FontDesc& _font_desc) = 0;
-
         virtual void* GetNativeWindow(WindowHandle*) const = 0;
 
         static void OnCharCallback(WindowType* window, unsigned int codepoint);
@@ -85,10 +83,6 @@ namespace Moer {
         void RegisterOnWindowPosFunc(WindowType* handle, WindowContext::OnWindowPosFunc func);
         void RegisterOnWindowSizeFunc(WindowType* handle, WindowContext::OnWindowSizeFunc func);
         void RegisterOnWindowFocusFunc(WindowType* handle, WindowContext::OnWindowFocusFunc func);
-
-        virtual void GuiInit(const GuiWindowInitInfo&) = 0;
-        virtual void GuiUpdate()                       = 0;
-        virtual void GuiShutDown()                     = 0;
 
     protected:
         WindowImpl() {}
