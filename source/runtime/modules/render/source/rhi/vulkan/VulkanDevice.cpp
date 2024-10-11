@@ -54,32 +54,9 @@ namespace Moer::Render {
         InitGpu(_config.api_version);
 
         CreateDevice(_config.api_version);
-
-        VkSamplerCreateInfo sampler_create_info{.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
-        sampler_create_info.borderColor             = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
-        sampler_create_info.unnormalizedCoordinates = VK_FALSE;
-        sampler_create_info.mipmapMode              = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-        sampler_create_info.mipLodBias              = 0.0f;
-        sampler_create_info.minLod                  = 0.0f;
-        sampler_create_info.maxLod                  = 0.0f;
-        for (uint i = 0; i < immutable_sampler_count; ++i) {
-            ESamplerFilter          filter           = ESamplerFilter(i % SF_Num);
-            ESamplerAddressMode     address_mode     = ESamplerAddressMode((i / SF_Num) % SAM_Num);
-            ESamplerCompareFunction compare_function = ESamplerCompareFunction(i / (SAM_Num * uint(SF_Num)));
-
-            sampler_create_info.minFilter = sampler_create_info.magFilter = VulkanEnumTranslator::METoVKMinMagFilterMode(filter);
-            sampler_create_info.addressModeU = sampler_create_info.addressModeV = sampler_create_info.addressModeW = VulkanEnumTranslator::METoVKWrapMode(address_mode);
-
-            sampler_create_info.compareOp     = VulkanEnumTranslator::METoVKCompareOp(ECompareOption(compare_function));
-            sampler_create_info.compareEnable = compare_function != SCF_NEVER;
-
-            vkCreateSampler(m_device, &sampler_create_info, VK_NULL_HANDLE, &immutable_samplers[i]);
-        }
-
         CreateMemoryAllocator(m_instance, _config.api_version);
 
-        CreateDescriptorAllocator();
-        CreateDescriptorHeap();
+        CreateInternalResources();
     }
 
     void VulkanDevice::PostInit() {
@@ -447,11 +424,6 @@ namespace Moer::Render {
         LOG_INFO("Vulkan Memory Allocator initialized with api version: {}.", alloc_create_info.vulkanApiVersion);
     }
 
-    void VulkanDevice::CreateDescriptorAllocator() {
-        m_descriptor_allocator = MoerNew(VulkanDescriptorSetAllocator)(this);
-        LOG_INFO("VulkanRHI: Descriptor Set Allocator initialized.");
-    }
-
     void VulkanDevice::CreateDescriptorHeap() {
         new (&m_global_descriptor_heap) VulkanDescriptorHeap(*this);
         //create empty descriptor set layout
@@ -466,6 +438,52 @@ namespace Moer::Render {
         internal_shaders.sd_component_shuffle = ShaderManager::Get().Compute<ComponentShuffleShader>("utils/ShuffleBufferIndices.hlsl");
     }
 
+    void VulkanDevice::CreateInternalResources() {
+
+        CreateDescriptorHeap();
+        CreateImmutableSamplers();
+    }
+
+    void VulkanDevice::DestroyInternalResources() {
+        DestroyImmutableSamplers();
+        DestroyDescriptorHeap();
+    }
+
+    void VulkanDevice::CreateImmutableSamplers() {
+
+        VkSamplerCreateInfo sampler_create_info{.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+        sampler_create_info.borderColor             = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
+        sampler_create_info.unnormalizedCoordinates = VK_FALSE;
+        sampler_create_info.mipmapMode              = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        sampler_create_info.mipLodBias              = 0.0f;
+        sampler_create_info.minLod                  = 0.0f;
+        sampler_create_info.maxLod                  = 0.0f;
+        for (uint i = 0; i < immutable_sampler_count; ++i) {
+            ESamplerFilter          filter           = ESamplerFilter(i % SF_Num);
+            ESamplerAddressMode     address_mode     = ESamplerAddressMode((i / SF_Num) % SAM_Num);
+            ESamplerCompareFunction compare_function = ESamplerCompareFunction(i / (SAM_Num * uint(SF_Num)));
+
+            sampler_create_info.minFilter = sampler_create_info.magFilter = VulkanEnumTranslator::METoVKMinMagFilterMode(filter);
+            sampler_create_info.addressModeU = sampler_create_info.addressModeV = sampler_create_info.addressModeW = VulkanEnumTranslator::METoVKWrapMode(address_mode);
+
+            sampler_create_info.compareOp     = VulkanEnumTranslator::METoVKCompareOp(ECompareOption(compare_function));
+            sampler_create_info.compareEnable = compare_function != SCF_NEVER;
+
+            vkCreateSampler(m_device, &sampler_create_info, VK_NULL_HANDLE, &immutable_samplers[i]);
+        }
+    }
+
+    void VulkanDevice::DestroyImmutableSamplers() {
+        for (auto& sampler : immutable_samplers) {
+            vkDestroySampler(m_device, sampler, VK_NULL_HANDLE);
+        }
+    }
+
+    void VulkanDevice::DestroyDescriptorHeap() {
+        m_global_descriptor_heap.~VulkanDescriptorHeap();
+        vkDestroyDescriptorSetLayout(m_device, empty_descriptor_set_layout, VK_NULL_HANDLE);
+    }
+
     void VulkanDevice::Destroy() {
         // for (auto& cmd_allocator : m_command_allocators) {
         //     CHECK_AND_DELETE(cmd_allocator);
@@ -474,11 +492,10 @@ namespace Moer::Render {
         transfer_queue.reset();
         gfx_queue.reset();
         m_command_allocators.clear();
-        CHECK_AND_DELETE(m_descriptor_allocator);
         FlushDeferredReleases();
+        DestroyInternalResources();
         vmaDestroyAllocator(m_allocator);
 
-        vkDestroyDescriptorSetLayout(m_device, empty_descriptor_set_layout, VK_NULL_HANDLE);
         // Assertion failed: m_pMetadata->IsEmpty() && "Some allocations were not freed before destruction of this memory block!"
     }
 
@@ -1110,7 +1127,7 @@ namespace Moer::Render {
         //destroy shader modules
         for (auto& shader_stage : shader_stages) { vkDestroyShaderModule(m_device, shader_stage.module, nullptr); }
         return PipelineHandle{
-            .handle            = VkPipelineHandle{reinterpret_cast<uint64>(vk_pso)},
+            .handle            = reinterpret_cast<uint64>(vk_pso),
             .binding_infos     = std::move(reflect_flags),
             .hash_2_info_index = std::move(hash_2_idx),
             .valid_bits        = valid_bits,
@@ -1222,7 +1239,7 @@ namespace Moer::Render {
         vkDestroyShaderModule(m_device, shader_stage.module, nullptr);
 
         return PipelineHandle{
-            .handle            = VkPipelineHandle{reinterpret_cast<uint64>(vk_pso)},
+            .handle            = reinterpret_cast<uint64>(vk_pso),
             .binding_infos     = std::move(reflect_flags),
             .hash_2_info_index = std::move(hash_2_idx),
             .valid_bits        = valid_bits,
@@ -1255,11 +1272,6 @@ namespace Moer::Render {
 
     BufferRef VulkanDevice::CreateBuffer(uint _element_cnt, uint _byte_stride, EBufferUsageFlags _usage) {
         BufferInfo info{_element_cnt, _byte_stride, _usage};
-        return BufferRef{MoerNew(VulkanBuffer)(info, *this)};
-    }
-
-    BufferRef VulkanDevice::CreateStagingBuffer(uint64 _byte_size) {
-        BufferInfo info{_byte_size, sizeof(uint8), EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST};
         return BufferRef{MoerNew(VulkanBuffer)(info, *this)};
     }
 

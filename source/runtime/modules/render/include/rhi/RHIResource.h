@@ -2935,23 +2935,18 @@ public:
 };
 
 namespace Moer::Render {
-    struct VkPipelineHandle {
-        uint64_t handle;
-    };
-
-    struct D3DPipelineHandle {
-        uint64_t handle;
-    };
     struct ParamInfoFlags {
         uint64 state_flags;
         uint64 pipeline_flags;
     };
     struct PipelineHandle {
-        std::variant<VkPipelineHandle, D3DPipelineHandle> handle;
-        Array<ParamInfoFlags>                             binding_infos;
-        UnorderedMap<uint64, uint>                        hash_2_info_index;
-        uint64                                            valid_bits   = 0;
-        int                                               constant_idx = -1;
+        uint64                     handle = 0;
+        Array<ParamInfoFlags>      binding_infos;
+        UnorderedMap<uint64, uint> hash_2_info_index;
+        uint64                     valid_bits   = 0;
+        int                        constant_idx = -1;
+
+        bool IsValid() const { return handle != 0; }
     };
 
     struct SingleShaderInfo {

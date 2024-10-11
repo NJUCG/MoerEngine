@@ -196,7 +196,7 @@ namespace Moer::Render {
             std::memcpy(hash_values.data(), hash_array.data(), hash_array.size() * sizeof(std::string_view));
             std::memcpy(arg_type_values.data(), arg_type_array.data(), arg_type_array.size() * sizeof(EShaderArgType));
             PipelineHandle handle = CreatePipeline(std::move(hash_values), std::move(arg_type_values));
-            return TPipeline(handle);
+            return std::move(TPipeline(handle));
         };
         ComputeConstructor(RenderDevice&, std::string_view _path, std::string_view _entry_name);
 
@@ -235,7 +235,7 @@ namespace Moer::Render {
         RasterPipelineConstructor Raster();
         template<typename TPipeline>
         TPipeline Compute(std::string_view _path, std::string_view _entry_name = "main") {
-            return ComputeConstructor(GetDevice(), _path, _entry_name).Build<TPipeline>();
+            return std::move(ComputeConstructor(GetDevice(), _path, _entry_name).Build<TPipeline>());
         }
         RTConstructor Raytracing();
 

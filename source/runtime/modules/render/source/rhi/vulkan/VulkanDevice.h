@@ -73,7 +73,6 @@ namespace Moer::Render {
         TextureRef CreateTexture(Extent3D _size, EPixelFormat _format, ETextureUsageFlags _usage, uint32_t _mip_cnt, uint32_t _array_size) override;
         BufferRef  CreateBuffer(uint _element_cnt, uint _byte_stride, EBufferUsageFlags _usage) override;
 
-        BufferRef        CreateStagingBuffer(uint64 _byte_size) override;
         BindlessArrayRef CreateBindlessArray(uint _max_size) override;
         FenceRef         CreateFence() override;
 
@@ -81,12 +80,6 @@ namespace Moer::Render {
         RaytracingGeometryRef CreateRaytracingGeometry(const RaytracingGeometryInfo& _init) override;
 
         RaytracingSceneRef CreateRaytracingScene() override;
-
-        // RHIViewportRef CreateViewport(const RHIViewportInitializer& _init) override;
-
-        // BackBufferInfo GetNextBackBufferInfo(RHIViewport* _viewport) override;
-
-        // void PresentViewport(RHIViewport* _viewport, RHIFence* _render_end_fence) override;
 
         CommandQueue& GetCommandQueue(EQueueType _type) override;
 
@@ -106,16 +99,6 @@ namespace Moer::Render {
         }
 
     public:
-        void GetDescriptorEXT(const VkDescriptorGetInfoEXT* _descriptor_info, uint32 _data_size, void* _p_data) const {
-            vkGetDescriptorEXT(m_device, _descriptor_info, _data_size, _p_data);
-        };
-        void GetDescriptorSetLayoutBindingOffsetEXT(VkDescriptorSetLayout _layout, uint32 _binding, uint64* _offset) const {
-            vkGetDescriptorSetLayoutBindingOffsetEXT(m_device, _layout, _binding, _offset);
-        };
-        void GetDescriptorSetLayoutSizeEXT(VkDescriptorSetLayout _layout, uint64* _layout_size_in_bytes) {
-            vkGetDescriptorSetLayoutSizeEXT(m_device, _layout, _layout_size_in_bytes);
-        }
-
     public:
         inline VkPhysicalDevice GetGpu() const {
             return m_gpu;
@@ -131,9 +114,6 @@ namespace Moer::Render {
         }
         inline VmaAllocator GetVmaAllocator() const {
             return m_allocator;
-        }
-        inline VulkanDescriptorSetAllocator* GetDescriptorAllocator() const {
-            return m_descriptor_allocator;
         }
         inline const VulkanOptionalDeviceExtensions& GetOptionalExtensions() const {
             return m_device_info.optional_extensions;
@@ -197,8 +177,7 @@ namespace Moer::Render {
 
         VkDebugUtilsMessengerEXT m_debug_utils_messenger = VK_NULL_HANDLE;
 
-        VmaAllocator                                    m_allocator            = VK_NULL_HANDLE;
-        VulkanDescriptorSetAllocator*                   m_descriptor_allocator = nullptr;
+        VmaAllocator                                    m_allocator = VK_NULL_HANDLE;
         VulkanDescriptorHeap                            m_global_descriptor_heap{};
         UniquePtr<VkCommandQueue>                       gfx_queue{};
         UniquePtr<VkCommandQueue>                       compute_queue{};
@@ -222,8 +201,12 @@ namespace Moer::Render {
         void             InitGpu(uint32 _api_version);
         void             CreateDevice(uint32 _api_version);
         void             CreateMemoryAllocator(VkInstance _instance, uint32 _api_version);
-        void             CreateDescriptorAllocator();
         void             CreateDescriptorHeap();
+        void             DestroyDescriptorHeap();
+        void             CreateInternalResources();
+        void             DestroyInternalResources();
+        void             CreateImmutableSamplers();
+        void             DestroyImmutableSamplers();
         void             PostInit() override;
 
         void CreateInternalShaders();

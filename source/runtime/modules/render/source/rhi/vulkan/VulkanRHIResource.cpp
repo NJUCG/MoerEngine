@@ -1144,10 +1144,10 @@ namespace Moer::Render {
                     for (const auto& [binding_idx, m_binding] : layout.bindings) {
                         const auto& binding = m_binding.binding;
                         auto& binding_info = _binder.binding_infos[binding.binding];
-                        m_device->GetDescriptorSetLayoutBindingOffsetEXT(descriptor_set_layouts[set], binding.binding, &binding_info.offset);
+                        vkGetDescriptorSetLayoutBindingOffsetEXT(m_device->GetDevice(), descriptor_set_layouts[set], binding.binding, &binding_info.offset);
                         binding_info.binding = binding.binding;
                     }
-                    m_device->GetDescriptorSetLayoutSizeEXT(descriptor_set_layouts[set], &_binder.size);
+                    vkGetDescriptorSetLayoutSizeEXT(m_device->GetDevice(), descriptor_set_layouts[set], &_binder.size);
                     //align to 16 bytes
                     uint64 align = m_device->GetOptionalProperties().descriptor_buffer_properties.descriptorBufferOffsetAlignment;
                     _binder.size = (_binder.size + align - 1) & ~(align - 1);
@@ -1626,7 +1626,7 @@ namespace Moer::Render {
             VkDescriptorDataEXT& descriptor_data = descriptor_info.data;
             for(uint i = 0; i < VulkanDevice::bindless_sampler_cnt; i++){
                 descriptor_data.pSampler = i >= m_device->ImmutableSamplerCount() ? &samplers[0] : &samplers[i];
-                m_device->GetDescriptorEXT(&descriptor_info, sampler_stride, data_array.data() + i * sampler_stride);
+                vkGetDescriptorEXT( m_device->GetDevice(), &descriptor_info, sampler_stride, data_array.data() + i * sampler_stride);
             }
             std::memcpy(mapped_data_byte, data_array.data(), data_array.size());
             vmaUnmapMemory(m_device->GetVmaAllocator(), bindless_texture_descs->GetAllocation());
@@ -1666,7 +1666,7 @@ namespace Moer::Render {
 
         VkDescriptorSetLayout buffer_desc_layout = VK_NULL_HANDLE;                                 
         VK_CHECK_RESULT(vkCreateDescriptorSetLayout(m_device->GetDevice(), &buffer_desc_info, VK_NULL_HANDLE, &buffer_desc_layout));        uint64 buffers_offset;
-        m_device->GetDescriptorSetLayoutBindingOffsetEXT( buffer_desc_layout, 1, &buffers_offset_in_set);
+        vkGetDescriptorSetLayoutBindingOffsetEXT(m_device->GetDevice(), buffer_desc_layout, 1, &buffers_offset_in_set);
         
         VkDescriptorGetInfoEXT descriptor_info{VK_STRUCTURE_TYPE_DESCRIPTOR_GET_INFO_EXT};
         VkDescriptorAddressInfoEXT address_info{VK_STRUCTURE_TYPE_DESCRIPTOR_ADDRESS_INFO_EXT};
@@ -1679,7 +1679,8 @@ namespace Moer::Render {
 
             byte* mapped_data;
             vmaMapMemory(m_device->GetVmaAllocator(), bindless_buffer_descs->GetAllocation(), (void**)&mapped_data);
-            m_device->GetDescriptorEXT(
+            vkGetDescriptorEXT(
+                m_device->GetDevice(),
                 &descriptor_info, 
                 m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize, 
                 buffer_data.data());

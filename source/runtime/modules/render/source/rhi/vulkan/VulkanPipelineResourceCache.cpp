@@ -151,7 +151,7 @@ namespace Moer::Render {
         if (m_descriptor_sets.empty()) {
             return false;
         }
-        return m_device.GetDescriptorAllocator()->GetDescriptorSets(GetSetsKey(), *_layout, m_descriptor_set_writers, m_descriptor_sets);
+        return true;
     }
 
     void VulkanPipelineResourceCache::BindDescriptorSets(VkCommandBuffer _buffer, VkPipelineBindPoint _bind_point, VkPipelineLayout _layout) {

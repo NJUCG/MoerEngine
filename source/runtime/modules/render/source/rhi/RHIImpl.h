@@ -30,7 +30,7 @@ namespace Moer::Render {
     };
 
     struct DeviceInternalShaders {
-        ComponentShuffleShader sd_component_shuffle;
+        ComponentShuffleShader sd_component_shuffle{};
     };
 
     static uint64 GetSizeFromImageFormat(EPixelFormat _format, const uint3 _size) {
@@ -114,24 +114,26 @@ namespace Moer::Render {
 
     public:
         UploadBufferCmd(
-            uint64      _handle,
-            uint64      _offset,
-            uint64      _byte_size,
-            const void* _data) : Command(EType::UploadBuffer),
-                                 handle(_handle),
-                                 offset(_offset),
-                                 byte_size(_byte_size),
-                                 storage(std::span<const byte>(reinterpret_cast<const byte*>(_data), _byte_size)) {}
+            uint64           _handle,
+            uint64           _offset,
+            uint64           _byte_size,
+            const void*      _data,
+            std::string_view _name = typenames[uint(EType::UploadBuffer)]) : Command(EType::UploadBuffer, _name),
+                                                                             handle(_handle),
+                                                                             offset(_offset),
+                                                                             byte_size(_byte_size),
+                                                                             storage(std::span<const byte>(reinterpret_cast<const byte*>(_data), _byte_size)) {}
 
         UploadBufferCmd(
-            uint64        _handle,
-            uint64        _offset,
-            uint64        _byte_size,
-            Array<byte>&& _data) : Command(EType::UploadBuffer),
-                                   handle(_handle),
-                                   offset(_offset),
-                                   byte_size(_byte_size),
-                                   storage(std::move(_data)) {}
+            uint64           _handle,
+            uint64           _offset,
+            uint64           _byte_size,
+            Array<byte>&&    _data,
+            std::string_view _name = typenames[uint(EType::UploadBuffer)]) : Command(EType::UploadBuffer, _name),
+                                                                             handle(_handle),
+                                                                             offset(_offset),
+                                                                             byte_size(_byte_size),
+                                                                             storage(std::move(_data)) {}
 
         EQueueType GetQueueType() const override { return EQueueType::Copy; }
         auto       Handle() const { return handle; }
@@ -159,10 +161,11 @@ namespace Moer::Render {
 
     public:
         CopyBackBufferCmd(
-            uint64      _handle,
-            uint64      _offset,
-            uint64      _byte_size,
-            void* const _data) : Command(EType::CopyBackBuffer), handle(_handle), offset(_offset), byte_size(_byte_size), data(_data) {}
+            uint64           _handle,
+            uint64           _offset,
+            uint64           _byte_size,
+            void* const      _data,
+            std::string_view _name = typenames[uint(EType::CopyBackBuffer)]) : Command(EType::CopyBackBuffer, _name), handle(_handle), offset(_offset), byte_size(_byte_size), data(_data) {}
 
         //generate getters
         EQueueType GetQueueType() const override { return EQueueType::Copy; }
@@ -185,11 +188,12 @@ namespace Moer::Render {
 
     public:
         CopyBufferCmd(
-            uint64 _src_handle,
-            uint64 _dst_handle,
-            uint64 _src_offset,
-            uint64 _dst_offset,
-            uint64 _byte_size) : Command(EType::BufferToBuffer), src_handle(_src_handle), dst_handle(_dst_handle), src_offset(_src_offset), dst_offset(_dst_offset), byte_size(_byte_size) {}
+            uint64           _src_handle,
+            uint64           _dst_handle,
+            uint64           _src_offset,
+            uint64           _dst_offset,
+            uint64           _byte_size,
+            std::string_view _name = typenames[uint(EType::CopyBackBuffer)]) : Command(EType::BufferToBuffer, _name), src_handle(_src_handle), dst_handle(_dst_handle), src_offset(_src_offset), dst_offset(_dst_offset), byte_size(_byte_size) {}
 
         EQueueType GetQueueType() const override { return EQueueType::Copy; }
 
@@ -216,22 +220,23 @@ namespace Moer::Render {
 
     public:
         CopyTextureCmd(
-            EPixelFormat _format,
-            uint64       _src_handle,
-            uint64       _dst_handle,
-            uint         _src_mip_level,
-            uint         _dst_mip_level,
-            uint3        _src_offset,
-            uint3        _dst_offset,
-            uint3        _size) : Command(EType::TextureToTexture),
-                           format(_format),
-                           src_handle(_src_handle),
-                           dst_handle(_dst_handle),
-                           src_mip_level(_src_mip_level),
-                           dst_mip_level(_dst_mip_level),
-                           src_offset{_src_offset.x, _src_offset.y, _src_offset.z},
-                           dst_offset{_dst_offset.x, _dst_offset.y, _dst_offset.z},
-                           size{_size.x, _size.y, _size.z} {
+            EPixelFormat     _format,
+            uint64           _src_handle,
+            uint64           _dst_handle,
+            uint             _src_mip_level,
+            uint             _dst_mip_level,
+            uint3            _src_offset,
+            uint3            _dst_offset,
+            uint3            _size,
+            std::string_view _name = typenames[uint(EType::TextureToTexture)]) : Command(EType::TextureToTexture, _name),
+                                                                                 format(_format),
+                                                                                 src_handle(_src_handle),
+                                                                                 dst_handle(_dst_handle),
+                                                                                 src_mip_level(_src_mip_level),
+                                                                                 dst_mip_level(_dst_mip_level),
+                                                                                 src_offset{_src_offset.x, _src_offset.y, _src_offset.z},
+                                                                                 dst_offset{_dst_offset.x, _dst_offset.y, _dst_offset.z},
+                                                                                 size{_size.x, _size.y, _size.z} {
         }
 
         EQueueType GetQueueType() const override { return EQueueType::Copy; }
@@ -261,20 +266,21 @@ namespace Moer::Render {
 
     public:
         CopyBufferToTextureCmd(
-            EPixelFormat _format,
-            uint64       _src_handle,
-            uint64       _dst_handle,
-            uint         _src_offset,
-            uint3        _dst_offset,
-            uint3        _size,
-            uint         _mip_level) : Command(EType::BufferToTexture),
-                               format(_format),
-                               src_handle(_src_handle),
-                               dst_handle(_dst_handle),
-                               src_offset(_src_offset),
-                               dst_offset{_dst_offset.x, _dst_offset.y, _dst_offset.z},
-                               size{_size.x, _size.y, _size.z},
-                               mip_level{_mip_level} {
+            EPixelFormat     _format,
+            uint64           _src_handle,
+            uint64           _dst_handle,
+            uint             _src_offset,
+            uint3            _dst_offset,
+            uint3            _size,
+            uint             _mip_level,
+            std::string_view _name = typenames[uint(EType::BufferToTexture)]) : Command(EType::BufferToTexture, _name),
+                                                                                format(_format),
+                                                                                src_handle(_src_handle),
+                                                                                dst_handle(_dst_handle),
+                                                                                src_offset(_src_offset),
+                                                                                dst_offset{_dst_offset.x, _dst_offset.y, _dst_offset.z},
+                                                                                size{_size.x, _size.y, _size.z},
+                                                                                mip_level{_mip_level} {
         }
 
         EQueueType GetQueueType() const override { return EQueueType::Copy; }
@@ -304,20 +310,21 @@ namespace Moer::Render {
 
     public:
         CopyTextureToBufferCmd(
-            EPixelFormat _format,
-            uint64       _src_handle,
-            uint64       _dst_handle,
-            uint3        _src_offset,
-            uint         _dst_offset,
-            uint3        _size,
-            uint         _mip_level) : Command(EType::TextureToBuffer),
-                               format(_format),
-                               src_handle(_src_handle),
-                               dst_handle(_dst_handle),
-                               src_offset{_src_offset.x, _src_offset.y, _src_offset.z},
-                               dst_offset(_dst_offset),
-                               size{_size.x, _size.y, _size.z},
-                               mip_level(_mip_level) {
+            EPixelFormat     _format,
+            uint64           _src_handle,
+            uint64           _dst_handle,
+            uint3            _src_offset,
+            uint             _dst_offset,
+            uint3            _size,
+            uint             _mip_level,
+            std::string_view _name = typenames[uint(EType::TextureToBuffer)]) : Command(EType::TextureToBuffer, _name),
+                                                                                format(_format),
+                                                                                src_handle(_src_handle),
+                                                                                dst_handle(_dst_handle),
+                                                                                src_offset{_src_offset.x, _src_offset.y, _src_offset.z},
+                                                                                dst_offset(_dst_offset),
+                                                                                size{_size.x, _size.y, _size.z},
+                                                                                mip_level(_mip_level) {
         }
 
         EQueueType GetQueueType() const override { return EQueueType::Copy; }
@@ -347,34 +354,36 @@ namespace Moer::Render {
 
     public:
         UploadTextureCmd(
-            EPixelFormat _format,
-            uint64       _handle,
-            uint         _mip_level,
-            uint3        _offset,
-            uint3        _size,
-            const void*  _data) : Command(EType::UploadTexture),
-                                 format(_format),
-                                 handle(_handle),
-                                 mip_level(_mip_level),
-                                 offset{_offset.x, _offset.y, _offset.z},
-                                 size{_size.x, _size.y, _size.z},
-                                 storage(std::span<const byte>(reinterpret_cast<const byte*>(_data),
-                                                               GetSizeFromImageFormat(_format, _size))) {
+            EPixelFormat     _format,
+            uint64           _handle,
+            uint             _mip_level,
+            uint3            _offset,
+            uint3            _size,
+            const void*      _data,
+            std::string_view _name = typenames[uint(EType::UploadTexture)]) : Command(EType::UploadTexture, _name),
+                                                                              format(_format),
+                                                                              handle(_handle),
+                                                                              mip_level(_mip_level),
+                                                                              offset{_offset.x, _offset.y, _offset.z},
+                                                                              size{_size.x, _size.y, _size.z},
+                                                                              storage(std::span<const byte>(reinterpret_cast<const byte*>(_data),
+                                                                                                            GetSizeFromImageFormat(_format, _size))) {
         }
 
         UploadTextureCmd(
-            EPixelFormat  _format,
-            uint64        _handle,
-            uint          _mip_level,
-            uint3         _offset,
-            uint3         _size,
-            Array<byte>&& _data) : Command(EType::UploadTexture),
-                                   format(_format),
-                                   handle(_handle),
-                                   mip_level(_mip_level),
-                                   offset{_offset.x, _offset.y, _offset.z},
-                                   size{_size.x, _size.y, _size.z},
-                                   storage(std::move(_data)) {
+            EPixelFormat     _format,
+            uint64           _handle,
+            uint             _mip_level,
+            uint3            _offset,
+            uint3            _size,
+            Array<byte>&&    _data,
+            std::string_view _name = typenames[uint(EType::UploadTexture)]) : Command(EType::UploadTexture, _name),
+                                                                              format(_format),
+                                                                              handle(_handle),
+                                                                              mip_level(_mip_level),
+                                                                              offset{_offset.x, _offset.y, _offset.z},
+                                                                              size{_size.x, _size.y, _size.z},
+                                                                              storage(std::move(_data)) {
         }
 
         EQueueType GetQueueType() const override { return EQueueType::Copy; }
@@ -473,12 +482,13 @@ namespace Moer::Render {
                                Array<BindlessArray::TextureUpdateInfo>&& _update_textures,
                                Array<uint>&&                             _free_buffers,
                                Array<uint>&&                             _free_textures,
-                               Array<uint>&&                             _free_slots) : Command(EType::UpdateBindlessArray), array(_array),
-                                                            buffer_updates(std::move(_update_buffers)),
-                                                            texture_updates(std::move(_update_textures)),
-                                                            free_buffers(std::move(_free_buffers)),
-                                                            free_textures(std::move(_free_textures)),
-                                                            free_slots(std::move(_free_slots)) {}
+                               Array<uint>&&                             _free_slots,
+                               std::string_view                          _name = typenames[uint(EType::UpdateBindlessArray)]) : Command(EType::UpdateBindlessArray, _name), array(_array),
+                                                                                                       buffer_updates(std::move(_update_buffers)),
+                                                                                                       texture_updates(std::move(_update_textures)),
+                                                                                                       free_buffers(std::move(_free_buffers)),
+                                                                                                       free_textures(std::move(_free_textures)),
+                                                                                                       free_slots(std::move(_free_slots)) {}
         auto*       Handle() const { return array.Get(); }
         EQueueType  GetQueueType() const override { return EQueueType::Graphics; }
         const auto& BufferUpdates() const { return buffer_updates; }
@@ -489,19 +499,7 @@ namespace Moer::Render {
         auto        StealFreeTextures() const { return std::move(free_textures); }
         auto        StealFreeSlots() const { return std::move(free_slots); }
     };
-    struct DrawIndexedCmd {
-        uint index_cnt;
-        uint instance_cnt;
-        uint first_index;
-        uint vertex_offset;
-        uint first_instance;
-    };
-    struct DrawIndirectCmd {
-        BufferView commands;
-        BufferView count;
-        uint       max_cnt;
-        uint       stride;
-    };
+
     struct BufferRange {
         uint64 min;
         uint64 max;
@@ -512,7 +510,6 @@ namespace Moer::Render {
             max = std::max(max, _other.max);
         }
     };
-    using DrawCmd = std::variant<DrawIndexedCmd, DrawIndirectCmd>;
     struct SetDrawStateCmd : public Command {
     public:
     private:
@@ -532,12 +529,13 @@ namespace Moer::Render {
         SetDrawStateCmd(PipelineHandle        _pipeline,
                         ArrayArguments&&      _args,
                         RenderPassInfo&&      _info,
-                        Array<MeshDrawData>&& _draw_data) : Command(EType::SetDrawState),
-                                                            args(std::move(_args)),
-                                                            pipeline(_pipeline),
-                                                            render_pass_info(std::move(_info)),
-                                                            mesh_data(std::move(_draw_data)),
-                                                            vtx_cnt(0) {
+                        Array<MeshDrawData>&& _draw_data,
+                        std::string_view      _name = typenames[uint(EType::SetDrawState)]) : Command(EType::SetDrawState, _name),
+                                                                                         args(std::move(_args)),
+                                                                                         pipeline(_pipeline),
+                                                                                         render_pass_info(std::move(_info)),
+                                                                                         mesh_data(std::move(_draw_data)),
+                                                                                         vtx_cnt(0) {
             evaluate_mesh_task = LambdaTask::Create([this]() {
                                      for (const auto& mesh : mesh_data) {
                                          for (uint vtx_idx = 0; vtx_idx < mesh.vtx_cnt; ++vtx_idx) {
@@ -601,8 +599,8 @@ namespace Moer::Render {
         }
 
     public:
-        DispatchCmd(ArrayArguments&& _args, PipelineHandle _handle, uint3 _param) : Command(EType::ShaderDispatch), param(_param), pipeline(_handle), args(std::move(_args)) {}
-        DispatchCmd(ArrayArguments&& _args, PipelineHandle _handle, BufferView _indirect) : Command(EType::ShaderDispatch), pipeline(_handle), param(DispatchIndirectParam{_indirect}), args(std::move(_args)) {}
+        DispatchCmd(ArrayArguments&& _args, PipelineHandle _handle, uint3 _param, std::string_view _name = typenames[uint(EType::ShaderDispatch)]) : Command(EType::ShaderDispatch, _name), param(_param), pipeline(_handle), args(std::move(_args)) {}
+        DispatchCmd(ArrayArguments&& _args, PipelineHandle _handle, BufferView _indirect, std::string_view _name = typenames[uint(EType::ShaderDispatch)]) : Command(EType::ShaderDispatch, _name), pipeline(_handle), param(DispatchIndirectParam{_indirect}), args(std::move(_args)) {}
 
         EQueueType GetQueueType() const override { return EQueueType::Compute; }
 
@@ -621,8 +619,8 @@ namespace Moer::Render {
         BuildAccelerationStructuresCmd() : Command(EType::BuildAccel) {}
 
     public:
-        BuildAccelerationStructuresCmd(const Array<AccelerationStructureBuildParam>& _params) : Command(EType::BuildAccel), params(_params) {}
-        BuildAccelerationStructuresCmd(Array<AccelerationStructureBuildParam>&& _params) : Command(EType::BuildAccel), params(std::move(_params)) {}
+        BuildAccelerationStructuresCmd(const Array<AccelerationStructureBuildParam>& _params, std::string_view _name = typenames[uint(EType::BuildAccel)]) : Command(EType::BuildAccel, _name), params(_params) {}
+        BuildAccelerationStructuresCmd(Array<AccelerationStructureBuildParam>&& _params, std::string_view _name = typenames[uint(EType::BuildAccel)]) : Command(EType::BuildAccel, _name), params(std::move(_params)) {}
 
         EQueueType GetQueueType() const override { return EQueueType::Compute; }
 
@@ -649,17 +647,18 @@ namespace Moer::Render {
             Array<uint>&&                  _instances_to_update,
             Array<byte>&&                  _instance_data,
             uint                           _instance_cnt,
-            bool                           _full_refit) : related_geometries(std::move(_related_geoms)),
-                                scene_handle(_scene_handle),
-                                instance_buffer_handle(_instance_buffer_handle),
-                                scratch_buffer_handle(_scratch_buffer_handle),
-                                tlas_handle(_tlas_handle),
+            bool                           _full_refit,
+            std::string_view               _name = typenames[uint(EType::BuildTLAS)]) : related_geometries(std::move(_related_geoms)),
+                                                                          scene_handle(_scene_handle),
+                                                                          instance_buffer_handle(_instance_buffer_handle),
+                                                                          scratch_buffer_handle(_scratch_buffer_handle),
+                                                                          tlas_handle(_tlas_handle),
 
-                                instance_to_update_ids(std::move(_instances_to_update)),
-                                instance_data(std::move(_instance_data)),
-                                instance_cnt(_instance_cnt),
-                                b_full_refit(_full_refit),
-                                Command(EType::BuildTLAS) {
+                                                                          instance_to_update_ids(std::move(_instances_to_update)),
+                                                                          instance_data(std::move(_instance_data)),
+                                                                          instance_cnt(_instance_cnt),
+                                                                          b_full_refit(_full_refit),
+                                                                          Command(EType::BuildTLAS, _name) {
         }
 
         EQueueType GetQueueType() const override { return EQueueType::Compute; }
@@ -705,8 +704,6 @@ namespace Moer::Render {
     public:
         virtual FenceRef  CreateFence()                                                                = 0;
         virtual BufferRef CreateBuffer(uint _element_cnt, uint _byte_stride, EBufferUsageFlags _usage) = 0;
-
-        virtual BufferRef CreateStagingBuffer(uint64_t _byte_size) = 0;
 
         TextureRef CreateTexture(Extent2D _size, EPixelFormat _format, ETextureUsageFlags _usage, uint32_t _mip_cnt = 1, uint32_t _array_size = 1) {
             return CreateTexture(Extent3D{_size.width, _size.height, 1}, _format, _usage, _mip_cnt, _array_size);

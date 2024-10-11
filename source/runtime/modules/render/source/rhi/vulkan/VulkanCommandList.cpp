@@ -2901,7 +2901,7 @@ namespace Moer::Render {
     }
 
     void VulkanCmdList::UploadDescriptors(PipelineHandle& _pso_handle) {
-        auto* vk_pso = reinterpret_cast<VulkanPipelineState*>(std::get<VkPipelineHandle>(_pso_handle.handle).handle);
+        auto* vk_pso = reinterpret_cast<VulkanPipelineState*>(_pso_handle.handle);
 
         auto* resource_cache = vk_pso->GetPipelineResourceCache();
         if (resource_cache->HasDescriptorSets()) {
@@ -2913,7 +2913,7 @@ namespace Moer::Render {
     void VulkanCmdList::UploadPushConstants(
         PipelineHandle&       _pso_handle,
         std::span<const uint> _data) {
-        auto* vk_pso = reinterpret_cast<VulkanPipelineState*>(std::get<VkPipelineHandle>(_pso_handle.handle).handle);
+        auto* vk_pso = reinterpret_cast<VulkanPipelineState*>(_pso_handle.handle);
         // auto  binding_info               = _pso_handle.binding_infos[_pso_handle.constant_idx];
         // auto [offset, size, stage_flags] = DecodeReflectPushConstant(binding_info);
 
@@ -2921,7 +2921,7 @@ namespace Moer::Render {
     }
 
     void VulkanCmdList::BindDescriptors(PipelineHandle& _pso_handle, const ArrayArguments& _args) {
-        auto* vk_pso = reinterpret_cast<VulkanPipelineState*>(std::get<VkPipelineHandle>(_pso_handle.handle).handle);
+        auto* vk_pso = reinterpret_cast<VulkanPipelineState*>(_pso_handle.handle);
 
         assert(vk_pso && vk_pso->bind_template != nullptr && "Pipeline state has no bind template!");
         VulkanPipelineParamBinder& bind_template        = *vk_pso->bind_template;
@@ -3008,7 +3008,7 @@ namespace Moer::Render {
     }
 
     void VulkanCmdList::SetPso(const PipelineHandle& _pso_handle) {
-        auto* vk_pso = reinterpret_cast<VulkanPipelineState*>(std::get<VkPipelineHandle>(_pso_handle.handle).handle);
+        auto* vk_pso = reinterpret_cast<VulkanPipelineState*>(_pso_handle.handle);
         vkCmdBindPipeline(command_buffer, vk_pso->GetPipelineBindPoint(), vk_pso->GetHandle());
     }
 

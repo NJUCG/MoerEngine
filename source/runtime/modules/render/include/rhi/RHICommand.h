@@ -8,6 +8,7 @@
 #include "RenderAPI.h"
 #include "shader/ShaderPipeline.h"
 #include <functional>
+#include <string_view>
 #include <type_traits>
 #include <variant>
 
@@ -275,6 +276,7 @@ namespace Moer::Render {
         Copy,
         Num
     };
+
     struct Command {
     public:
         enum class EType {
@@ -298,16 +300,35 @@ namespace Moer::Render {
             Custom
         };
 
+        static constexpr std::string_view typenames[] = {
+            "UploadBuffer",
+            "CopyBackBuffer",
+            "BufferToBuffer",
+            "BufferToTexture",
+            "TextureToBuffer",
+            "UploadTexture",
+            "TextureToTexture",
+            "ShaderDispatch",
+            "BuildAccel",
+            "BuildTLAS",
+            "TraceRay",
+            "Barrier",
+            "SetDrawState",
+            "UpdateBindlessArray",
+            "Custom"};
+
     private:
         EType type;
 
     public:
-        explicit Command(EType _type) : type(_type) {}
+        explicit Command(EType _type) : type(_type), name(typenames[uint(_type)]) {}
+        explicit Command(EType _type, std::string_view _name) : type(_type), name(_name) {}
         virtual ~Command()                      = default;
         virtual EQueueType GetQueueType() const = 0;
 
     public:
-        EType Type() const { return type; }
+        EType            Type() const { return type; }
+        std::string_view name;
     };
 
     struct WaitEvent {
@@ -447,66 +468,11 @@ namespace Moer::Render {
         std::is_same_v<std::remove_reference_t<TInArg>(), BufferView> || std::is_same_v<std::remove_reference_t<TInArg>(), TextureView> || std::is_same_v<std::remove_reference_t<TInArg>(), Buffer*> || std::is_same_v<std::remove_reference_t<TInArg>(), Texture*>;
     class CommandList {
     public:
-        // struct RENDER_API ArgSetter {
-        // public:
-        //     ArgSetter(ShaderPipeline& _handle) : handle(_handle) {
-        //     }
-
-        //     template<is_arg T>
-        //     void SetParam(std::string_view _name, T&& _param) {
-        //         using Type = std::remove_reference_t<T>();
-        //         if constexpr (std::is_same_v<Type, BufferView>) {
-        //             SetBuffer(std::hash<std::string_view>{}(_name), _param);
-        //         } else if constexpr (std::is_same_v<Type, TextureView>) {
-        //             SetTexture(std::hash<std::string_view>{}(_name), _param);
-        //         } else if constexpr (std::is_same_v<Type, Buffer*>) {
-        //             assert(_param && "buffer is nullptr");
-        //             SetBuffer(std::hash<std::string_view>{}(_name), _param->GetView());
-        //         } else if constexpr (std::is_same_v<Type, Texture*>) {
-
-        //             assert(_param && "texture is nullptr");
-        //             SetTexture(std::hash<std::string_view>{}(_name), _param->GetView());
-        //         } else {
-        //             // static_assert(false, "unsupported type");
-        //             assert(0 && "unsupported type");
-        //         }
-        //     }
-        //     template<typename T>
-        //     void SetConstant(T&& _param) {
-        //         SetConstant(&_param, sizeof(T));
-        //     }
-        //     Arguments&& StealArgs() {
-        //         return std::move(temp_args);
-        //     }
-        //     Array<uint>&& StealConstants() {
-        //         return std::move(temp_constant);
-        //     }
-
-        // private:
-        //     void SetBuffer(uint64 _hash, BufferView _buffer);
-        //     void SetTexture(uint64 _hash, TextureView _texture);
-        //     void SetConstant(void*, uint _size);
-
-        //     Arguments       temp_args;
-        //     Array<uint>     temp_constant;
-        //     ShaderPipeline& handle;
-        // };
         struct RENDER_API DrawDispatcher {
             DrawDispatcher(RasterPipeline& _pso, CommandList& _cmd_list);
 
             DrawDispatcher(RasterPipeline& _pso, CommandList& _cmd_list, ArrayArguments&& _args);
 
-            // template<typename T>
-            // DrawDispatcher& SetParam(std::string_view _name, T&& _param) {
-            //     arg_setter.SetParam(_name, std::forward<T>(_param));
-            //     b_set_params = true;
-            // }
-            // template<typename T>
-            // DrawDispatcher& SetConstant(T&& _param) {
-            //     arg_setter.SetConstant(std::forward<T>(_param));
-            //     b_set_consts = true;
-            //     return *this;
-            // }
             template<typename... TRenderTarget>
             void Draw(Rect2D _rect, Array<MeshDrawData>&& _mesh_data, DepthAttachment _depth, TRenderTarget&&... _render_targets) {
                 RenderPassInfo pass_info(
@@ -640,15 +606,15 @@ namespace Moer::Render {
             // commands.push_back(MakeUnique<ShaderDispatchCmd>(_pso, std::move(args)));
         }
 
-        RENDER_API void CopyFrom(BufferView _src, BufferView _dst);
-        RENDER_API void CopyFrom(TextureView _src, TextureView _dst);
-        RENDER_API void CopyFrom(TextureView _src, BufferView _dst);
-        RENDER_API void CopyFrom(BufferView _src, TextureView _dst);
-        RENDER_API void CopyFrom(std::span<byte> _data, BufferView _dst);
-        RENDER_API void CopyFrom(std::span<byte> _data, TextureView _dst);
-        RENDER_API void CopyFrom(Array<byte>&& _data, BufferView _dst);
-        RENDER_API void CopyFrom(Array<byte>&& _data, TextureView _dst);
-        RENDER_API void CopyFrom(BufferView _src, std::span<byte> _data);
+        RENDER_API void CopyFrom(BufferView _src, BufferView _dst, std::string_view _name = Command::typenames[(uint)Command::EType::BufferToBuffer]);
+        RENDER_API void CopyFrom(TextureView _src, TextureView _dst, std::string_view _name = Command::typenames[(uint)Command::EType::TextureToTexture]);
+        RENDER_API void CopyFrom(TextureView _src, BufferView _dst, std::string_view _name = Command::typenames[(uint)Command::EType::TextureToBuffer]);
+        RENDER_API void CopyFrom(BufferView _src, TextureView _dst, std::string_view _name = Command::typenames[(uint)Command::EType::BufferToTexture]);
+        RENDER_API void CopyFrom(std::span<byte> _data, BufferView _dst, std::string_view _name = Command::typenames[(uint)Command::EType::UploadBuffer]);
+        RENDER_API void CopyFrom(std::span<byte> _data, TextureView _dst, std::string_view _name = Command::typenames[(uint)Command::EType::UploadTexture]);
+        RENDER_API void CopyFrom(Array<byte>&& _data, BufferView _dst, std::string_view _name = Command::typenames[(uint)Command::EType::UploadBuffer]);
+        RENDER_API void CopyFrom(Array<byte>&& _data, TextureView _dst, std::string_view _name = Command::typenames[(uint)Command::EType::UploadTexture]);
+        RENDER_API void CopyFrom(BufferView _src, std::span<byte> _data, std::string_view _name = Command::typenames[(uint)Command::EType::CopyBackBuffer]);
 
         RENDER_API void UpdateBindlessArray(BindlessArrayRef _array);
 

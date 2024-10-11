@@ -54,12 +54,16 @@ namespace Moer::Render {
 #define DEFINE_RASTER_PIPELINE_CLASS(name)                    \
     using TPipeline = name;                                   \
     name(PipelineHandle _handle) : RasterPipeline(_handle) {} \
-    name() : RasterPipeline() {}
+    name() : RasterPipeline() {}                              \
+    MOVE_CONSTRUCTOR(name)                                    \
+    NO_COPY_CONSTRUCTOR(name)
 
 #define DEFINE_COMPUTE_PIPELINE_CLASS(name)                    \
     using TPipeline = name;                                    \
     name(PipelineHandle _handle) : ComputePipeline(_handle) {} \
-    name() : ComputePipeline() {}
+    name() : ComputePipeline() {}                              \
+    MOVE_CONSTRUCTOR(name)                                     \
+    NO_COPY_CONSTRUCTOR(name)
 
 #define DEFINE_SHADER_ARGS(...)                                                                                          \
 public:                                                                                                                  \
@@ -335,22 +339,41 @@ namespace Moer::Render {
         ShaderPipeline(PipelineHandle _handle) : handle(std::move(_handle)) {}
         PipelineHandle handle;
 
-        ShaderPipeline() = default;
+        ShaderPipeline() : handle{} {}
         ShaderPipeline(ShaderPipeline&& _other) { handle = std::move(_other.handle); }
 
         ShaderPipeline& operator=(ShaderPipeline&& _other) {
+            if (*this == _other) return *this;
             handle = std::move(_other.handle);
             return *this;
         }
+
+        ShaderPipeline(const ShaderPipeline& _other)            = delete;
+        ShaderPipeline& operator=(const ShaderPipeline& _other) = delete;
+
+        ~ShaderPipeline() {}
+
+        bool operator==(const ShaderPipeline& _other) const { return handle.handle == _other.handle.handle; }
+        bool IsValid() const { return !handle.IsValid(); }
     };
+
+#define MOVE_CONSTRUCTOR(name)             \
+    name& operator=(name&& _other) {       \
+        if (*this == _other) return *this; \
+        handle = std::move(_other.handle); \
+        return *this;                      \
+    }                                      \
+    name(name&& _other) {                  \
+        handle = std::move(_other.handle); \
+    }
+
+#define NO_COPY_CONSTRUCTOR(name) \
+    name(const name& _other) = delete;
 
 #define COPY_CONSTRUCTOR(name)                                 \
     name(name&& _other) : ShaderPipeline(std::move(_other)) {} \
-    name() : ShaderPipeline() {}                               \
-    name& operator=(name&& _other) {                           \
-        handle = std::move(_other.handle);                     \
-        return *this;                                          \
-    }
+    name() : ShaderPipeline() {}
+    // MOVE_CONSTRUCTOR(name)
 
     class RasterPipeline : public ShaderPipeline, public RHIResource {
     public:

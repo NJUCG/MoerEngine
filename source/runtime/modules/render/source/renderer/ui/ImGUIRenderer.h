@@ -13,11 +13,11 @@ class ImGUIRenderer : public UIRenderer {
 public:
     ImGUIRenderer()          = default;
     virtual ~ImGUIRenderer() = default;
-    virtual void Init() override;
-    virtual void ShutDown() override;
+    virtual void Init() override {};
+    virtual void ShutDown() override {};
 
-    virtual void BeginRenderFrame() override;
-    virtual void EndRenderFrame() override;
+    virtual void BeginRenderFrame() override {};
+    virtual void EndRenderFrame() override {};
 
     virtual void RegisterImage(uint64_t _handle) override {};
     virtual void UnRegisterImage(uint64_t _handle) override {};
