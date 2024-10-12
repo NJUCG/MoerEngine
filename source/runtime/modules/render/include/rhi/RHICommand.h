@@ -8,6 +8,7 @@
 #include "RenderAPI.h"
 #include "shader/ShaderPipeline.h"
 #include <functional>
+#include <string_view>
 #include <type_traits>
 #include <variant>
 
@@ -275,6 +276,7 @@ namespace Moer::Render {
         Copy,
         Num
     };
+
     struct Command {
     public:
         enum class EType {
@@ -298,16 +300,35 @@ namespace Moer::Render {
             Custom
         };
 
+        static constexpr std::string_view typenames[] = {
+            "UploadBuffer",
+            "CopyBackBuffer",
+            "BufferToBuffer",
+            "BufferToTexture",
+            "TextureToBuffer",
+            "UploadTexture",
+            "TextureToTexture",
+            "ShaderDispatch",
+            "BuildAccel",
+            "BuildTLAS",
+            "TraceRay",
+            "Barrier",
+            "SetDrawState",
+            "UpdateBindlessArray",
+            "Custom"};
+
     private:
         EType type;
 
     public:
-        explicit Command(EType _type) : type(_type) {}
+        explicit Command(EType _type) : type(_type), name(typenames[uint(_type)]) {}
+        explicit Command(EType _type, std::string_view _name) : type(_type), name(_name) {}
         virtual ~Command()                      = default;
         virtual EQueueType GetQueueType() const = 0;
 
     public:
-        EType Type() const { return type; }
+        EType            Type() const { return type; }
+        std::string_view name;
     };
 
     struct WaitEvent {
@@ -329,36 +350,38 @@ namespace Moer::Render {
         BufferView        buffer;
         EIndexElementType stride;
     };
+
+    struct SingleDrawParam {
+        uint index_cnt;
+        uint instance_cnt;
+        uint first_index;
+        uint vertex_offset;
+        uint first_instance;
+    };
     struct MeshDrawData {
         StaticArray<VertexBuffer, 4>    vtx_views;
         std::variant<IndexBuffer, uint> idx_view;
-        uint                            instance_count{1};
-        uint                            instance_offset{0};
         uint                            vtx_cnt;
+
+        Array<SingleDrawParam> draw_params;
 
     public:
         MeshDrawData() = default;
         MeshDrawData(MeshDrawData&& _other) noexcept {
-            vtx_views       = std::move(_other.vtx_views);
-            idx_view        = std::move(_other.idx_view);
-            instance_count  = _other.instance_count;
-            instance_offset = _other.instance_offset;
+            vtx_views   = std::move(_other.vtx_views);
+            idx_view    = std::move(_other.idx_view);
+            draw_params = std::move(_other.draw_params);
         }
         MeshDrawData& operator=(MeshDrawData&& _other) noexcept {
-            vtx_views       = std::move(_other.vtx_views);
-            idx_view        = std::move(_other.idx_view);
-            instance_count  = _other.instance_count;
-            instance_offset = _other.instance_offset;
+            vtx_views   = std::move(_other.vtx_views);
+            idx_view    = std::move(_other.idx_view);
+            draw_params = std::move(_other.draw_params);
             return *this;
         }
 
         MeshDrawData(
             std::span<VertexBuffer> _vertex_buffers,
-            IndexBuffer             _index_buffer,
-            uint                    _instance_count,
-            uint                    _instance_offset) : idx_view(_index_buffer),
-                                     instance_count(_instance_count),
-                                     instance_offset(_instance_offset) {
+            IndexBuffer             _index_buffer) : idx_view(_index_buffer) {
             vtx_views.fill({nullptr, 0});
             vtx_cnt = _vertex_buffers.size();
             memcpy(vtx_views.data(), _vertex_buffers.data(), _vertex_buffers.size() * sizeof(VertexBuffer));
@@ -366,13 +389,22 @@ namespace Moer::Render {
 
         MeshDrawData(
             std::span<VertexBuffer> _vtx_views,
-            uint                    _vtx_cnt,
-            uint                    _instance_count,
-            uint                    _instance_offset) : instance_count(_instance_count),
-                                     idx_view(_vtx_cnt),
-                                     instance_offset(_instance_offset) {
+            uint                    _vtx_cnt) : idx_view(_vtx_cnt) {
             vtx_views.fill({nullptr, 0});
             memcpy(vtx_views.data(), _vtx_views.data(), _vtx_views.size() * sizeof(VertexBuffer));
+        }
+
+        void EmplaceDrawIndexed(
+            uint _first_index,
+            uint _index_cnt,
+            uint _first_vertex,
+            uint _first_instance,
+            uint _instance_cnt = 1) {
+
+            draw_params.emplace_back(SingleDrawParam{_index_cnt, _instance_cnt, _first_index, _first_vertex, _first_instance});
+        }
+        void Reserve(uint _size) {
+            draw_params.reserve(_size);
         }
     };
     struct CmdSubmit {
@@ -436,66 +468,11 @@ namespace Moer::Render {
         std::is_same_v<std::remove_reference_t<TInArg>(), BufferView> || std::is_same_v<std::remove_reference_t<TInArg>(), TextureView> || std::is_same_v<std::remove_reference_t<TInArg>(), Buffer*> || std::is_same_v<std::remove_reference_t<TInArg>(), Texture*>;
     class CommandList {
     public:
-        // struct RENDER_API ArgSetter {
-        // public:
-        //     ArgSetter(ShaderPipeline& _handle) : handle(_handle) {
-        //     }
-
-        //     template<is_arg T>
-        //     void SetParam(std::string_view _name, T&& _param) {
-        //         using Type = std::remove_reference_t<T>();
-        //         if constexpr (std::is_same_v<Type, BufferView>) {
-        //             SetBuffer(std::hash<std::string_view>{}(_name), _param);
-        //         } else if constexpr (std::is_same_v<Type, TextureView>) {
-        //             SetTexture(std::hash<std::string_view>{}(_name), _param);
-        //         } else if constexpr (std::is_same_v<Type, Buffer*>) {
-        //             assert(_param && "buffer is nullptr");
-        //             SetBuffer(std::hash<std::string_view>{}(_name), _param->GetView());
-        //         } else if constexpr (std::is_same_v<Type, Texture*>) {
-
-        //             assert(_param && "texture is nullptr");
-        //             SetTexture(std::hash<std::string_view>{}(_name), _param->GetView());
-        //         } else {
-        //             // static_assert(false, "unsupported type");
-        //             assert(0 && "unsupported type");
-        //         }
-        //     }
-        //     template<typename T>
-        //     void SetConstant(T&& _param) {
-        //         SetConstant(&_param, sizeof(T));
-        //     }
-        //     Arguments&& StealArgs() {
-        //         return std::move(temp_args);
-        //     }
-        //     Array<uint>&& StealConstants() {
-        //         return std::move(temp_constant);
-        //     }
-
-        // private:
-        //     void SetBuffer(uint64 _hash, BufferView _buffer);
-        //     void SetTexture(uint64 _hash, TextureView _texture);
-        //     void SetConstant(void*, uint _size);
-
-        //     Arguments       temp_args;
-        //     Array<uint>     temp_constant;
-        //     ShaderPipeline& handle;
-        // };
         struct RENDER_API DrawDispatcher {
             DrawDispatcher(RasterPipeline& _pso, CommandList& _cmd_list);
 
             DrawDispatcher(RasterPipeline& _pso, CommandList& _cmd_list, ArrayArguments&& _args);
 
-            // template<typename T>
-            // DrawDispatcher& SetParam(std::string_view _name, T&& _param) {
-            //     arg_setter.SetParam(_name, std::forward<T>(_param));
-            //     b_set_params = true;
-            // }
-            // template<typename T>
-            // DrawDispatcher& SetConstant(T&& _param) {
-            //     arg_setter.SetConstant(std::forward<T>(_param));
-            //     b_set_consts = true;
-            //     return *this;
-            // }
             template<typename... TRenderTarget>
             void Draw(Rect2D _rect, Array<MeshDrawData>&& _mesh_data, DepthAttachment _depth, TRenderTarget&&... _render_targets) {
                 RenderPassInfo pass_info(
@@ -503,6 +480,39 @@ namespace Moer::Render {
                     _depth,
                     _rect);
                 cmd_list.SetRenderCmds(pso.handle, std::move(args), std::move(pass_info), std::move(_mesh_data));
+            };
+
+            template<typename... TRenderTarget>
+            void Draw(Rect2D _rect, std::span<VertexBuffer> _vtx, IndexBuffer _idx, Array<SingleDrawParam>&& _mesh_data, DepthAttachment _depth, TRenderTarget&&... _render_targets) {
+
+                Array<MeshDrawData> mesh_data;
+                mesh_data.emplace_back(_vtx, _idx);
+                mesh_data.back().draw_params = std::move(_mesh_data);
+
+                Draw(_rect, std::move(mesh_data), _depth, std::forward<TRenderTarget>(_render_targets)...);
+            };
+
+            template<typename... TRenderTarget>
+            void Draw(Rect2D _rect, std::span<VertexBuffer> _vtx, IndexBuffer _idx, Array<SingleDrawParam>&& _mesh_data, TRenderTarget&&... _render_targets) {
+
+                Array<MeshDrawData> mesh_data;
+                mesh_data.emplace_back(_vtx, _idx);
+                mesh_data.back().draw_params = std::move(_mesh_data);
+
+                Draw(_rect, std::move(mesh_data), std::forward<TRenderTarget>(_render_targets)...);
+            };
+
+            template<typename... TRenderTarget>
+            void Draw(Rect2D _rect, std::span<VertexBuffer> _vtx, uint _vtx_cnt, Array<SingleDrawParam>&& _mesh_data, DepthAttachment _depth, TRenderTarget&&... _render_targets) {
+                RenderPassInfo pass_info(
+                    {std::forward<TRenderTarget>(_render_targets)...},
+                    _depth,
+                    _rect);
+                Array<MeshDrawData> mesh_data;
+                mesh_data.emplace_back(_vtx, _vtx_cnt);
+                mesh_data.back().draw_params = std::move(_mesh_data);
+
+                cmd_list.SetRenderCmds(pso.handle, std::move(args), std::move(pass_info), std::move(mesh_data));
             };
 
             template<typename... TRenderTarget>
@@ -596,13 +606,15 @@ namespace Moer::Render {
             // commands.push_back(MakeUnique<ShaderDispatchCmd>(_pso, std::move(args)));
         }
 
-        RENDER_API void CopyFrom(BufferView _src, BufferView _dst);
-        RENDER_API void CopyFrom(TextureView _src, TextureView _dst);
-        RENDER_API void CopyFrom(TextureView _src, BufferView _dst);
-        RENDER_API void CopyFrom(BufferView _src, TextureView _dst);
-        RENDER_API void CopyFrom(std::span<byte> _data, BufferView _dst);
-        RENDER_API void CopyFrom(std::span<byte> _data, TextureView _dst);
-        RENDER_API void CopyFrom(BufferView _src, std::span<byte> _data);
+        RENDER_API void CopyFrom(BufferView _src, BufferView _dst, std::string_view _name = Command::typenames[(uint)Command::EType::BufferToBuffer]);
+        RENDER_API void CopyFrom(TextureView _src, TextureView _dst, std::string_view _name = Command::typenames[(uint)Command::EType::TextureToTexture]);
+        RENDER_API void CopyFrom(TextureView _src, BufferView _dst, std::string_view _name = Command::typenames[(uint)Command::EType::TextureToBuffer]);
+        RENDER_API void CopyFrom(BufferView _src, TextureView _dst, std::string_view _name = Command::typenames[(uint)Command::EType::BufferToTexture]);
+        RENDER_API void CopyFrom(std::span<byte> _data, BufferView _dst, std::string_view _name = Command::typenames[(uint)Command::EType::UploadBuffer]);
+        RENDER_API void CopyFrom(std::span<byte> _data, TextureView _dst, std::string_view _name = Command::typenames[(uint)Command::EType::UploadTexture]);
+        RENDER_API void CopyFrom(Array<byte>&& _data, BufferView _dst, std::string_view _name = Command::typenames[(uint)Command::EType::UploadBuffer]);
+        RENDER_API void CopyFrom(Array<byte>&& _data, TextureView _dst, std::string_view _name = Command::typenames[(uint)Command::EType::UploadTexture]);
+        RENDER_API void CopyFrom(BufferView _src, std::span<byte> _data, std::string_view _name = Command::typenames[(uint)Command::EType::CopyBackBuffer]);
 
         RENDER_API void UpdateBindlessArray(BindlessArrayRef _array);
 

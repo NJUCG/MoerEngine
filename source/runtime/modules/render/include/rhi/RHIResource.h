@@ -722,7 +722,7 @@ namespace Moer::Render {
         uint8          num_mips;
         uint8          array_index;
         uint8          num_array;
-        Texture *     GetTexture() const { return texture; }
+        Texture*       GetTexture() const { return texture; }
     };
 
     struct TextureInfo {
@@ -2770,7 +2770,7 @@ struct RHIColorAttachmentInfo {
     EPixelFormat           pixel_format;
     ETextureUsageFlags     usage_flags;
 
-    template<RHIConfig::Blend blend_mode = RHIConfig::Blend::NONE, RHIConfig::ClearMode clear_mode = RHIConfig::ClearMode::COLOR>
+    template<Moer::Render::Blend blend_mode = Moer::Render::Blend::NONE, Moer::Render::ClearMode clear_mode = Moer::Render::ClearMode::COLOR>
     static RHIColorAttachmentInfo Preset(
         EPixelFormat       _pixel_format,
         ETextureUsageFlags _usage_flags = ETextureUsageFlags::COLOR_ATTACHMENT) {
@@ -2935,20 +2935,18 @@ public:
 };
 
 namespace Moer::Render {
-    struct VkPipelineHandle {
-        uint64_t handle;
+    struct ParamInfoFlags {
+        uint64 state_flags;
+        uint64 pipeline_flags;
     };
-
-    struct D3DPipelineHandle {
-        uint64_t handle;
-    };
-
     struct PipelineHandle {
-        std::variant<VkPipelineHandle, D3DPipelineHandle> handle;
-        Array<uint64>                                     binding_infos;
-        UnorderedMap<uint64, uint>                        hash_2_info_index;
-        uint64                                            valid_bits   = 0;
-        int                                               constant_idx = -1;
+        uint64                     handle = 0;
+        Array<ParamInfoFlags>      binding_infos;
+        UnorderedMap<uint64, uint> hash_2_info_index;
+        uint64                     valid_bits   = 0;
+        int                        constant_idx = -1;
+
+        bool IsValid() const { return handle != 0; }
     };
 
     struct SingleShaderInfo {

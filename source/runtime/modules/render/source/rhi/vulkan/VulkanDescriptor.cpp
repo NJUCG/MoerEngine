@@ -485,7 +485,7 @@ namespace Moer::Render {
             }
             VkSampler sampler       = m_device->GetImmutableSamplers()[i];
             desc_info.data.pSampler = &sampler;
-            m_device->GetDescriptorEXT(&desc_info, sample_desc_stride, image_desc_data.data() + i * sample_desc_stride);
+            vkGetDescriptorEXT(m_device->GetDevice(), &desc_info, sample_desc_stride, image_desc_data.data() + i * sample_desc_stride);
         }
     }
 
@@ -512,9 +512,10 @@ namespace Moer::Render {
 
     uint VulkanDescriptorHeap::GetBufferDescIdx(VulkanBuffer* _in_buffer) {
         assert(_in_buffer != nullptr && "buffer is nullptr");
-        if (_in_buffer->m_descriptor_idx >= 0) { return _in_buffer->m_descriptor_idx; }
         uint idx = 0;
-        {
+        if (_in_buffer->m_descriptor_idx >= 0) {
+            idx = _in_buffer->m_descriptor_idx;
+        } else {
             VkDescriptorAddressInfoEXT buffer_info{VK_STRUCTURE_TYPE_DESCRIPTOR_ADDRESS_INFO_EXT};
             buffer_info.address = _in_buffer->DeviceAddress();
             buffer_info.range   = _in_buffer->GetByteSize();
@@ -532,7 +533,7 @@ namespace Moer::Render {
                 buffer_free_list.pop_back();
             }
             _in_buffer->m_descriptor_idx = idx;
-            m_device->GetDescriptorEXT(&buffer_desc_info, buffer_desc_stride, buffer_desc_data.data() + idx * buffer_desc_stride);
+            vkGetDescriptorEXT(m_device->GetDevice(), &buffer_desc_info, buffer_desc_stride, buffer_desc_data.data() + idx * buffer_desc_stride);
         }
         return idx * buffer_desc_stride;
     }
@@ -546,7 +547,7 @@ namespace Moer::Render {
         assert(texture != nullptr && "texture is nullptr");
         VkTextureDescKey key{_layout, _in_image->mip_level, _in_image->num_mips};
         auto             res = texture->m_descriptor_indices.try_emplace(key, -1);
-        if (!res.second) { return res.first->second; }
+        if (!res.second) { return res.first->second * image_desc_stride + texture_desc_offset; }
         auto& idx = res.first->second;
         {
             VkDescriptorImageInfo  image_info{.imageView = texture->GetView(_in_image->mip_level, _in_image->num_mips), .imageLayout = _layout};
@@ -561,7 +562,7 @@ namespace Moer::Render {
                 idx = image_free_list.back();
                 image_free_list.pop_back();
             }
-            m_device->GetDescriptorEXT(&desc_info, image_desc_stride, image_desc_data.data() + idx * image_desc_stride + texture_desc_offset);
+            vkGetDescriptorEXT(m_device->GetDevice(), &desc_info, image_desc_stride, image_desc_data.data() + idx * image_desc_stride + texture_desc_offset);
         }
         return idx * image_desc_stride + texture_desc_offset;
     }

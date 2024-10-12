@@ -53,6 +53,11 @@ namespace Moer::Render {
         VulkanShaderResourceState(uint64 _value) {
             memcpy(this, &_value, sizeof(VulkanShaderResourceState));
         }
+        uint64 operator()() const {
+            uint64 value;
+            memcpy(&value, this, sizeof(VulkanShaderResourceState));
+            return value;
+        }
     };
 
     class VulkanDescriptorSetsLayout final : public VulkanDeviceObject {

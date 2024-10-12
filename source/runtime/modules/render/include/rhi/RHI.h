@@ -306,6 +306,8 @@ namespace Moer::Render {
 
         RENDER_API const EShaderPlatform GetShaderPlatform() const;
 
+        ERHIType GetRHIType() const { return rhi_type; }
+
         RENDER_API PipelineHandle CreatePipeline(GfxPsoCreateInfo&& _pso_info, PipelineShaderInfo&& _shaders);//gfx
         RENDER_API PipelineHandle CreatePipeline(PipelineShaderInfo&& _shaders);                              //compute
 

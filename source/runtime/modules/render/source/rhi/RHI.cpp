@@ -138,6 +138,8 @@ namespace Moer::Render {
                 LOG_ERROR("D3D12 is not supported yet");
                 break;
         }
+        Get().rhi_type = _info.type;
+        Get().impl->PostInit();
     }
     void RenderDevice::Dispose() {
         Get().impl.reset();

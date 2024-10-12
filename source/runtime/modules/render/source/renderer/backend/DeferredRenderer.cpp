@@ -316,9 +316,9 @@ namespace Moer {
                 RHIGraphicsPSOCreateInfo::Create()
                     .SetShaderStage(
                         std::move(gbuffer_shader_input_info))
-                    .SetDepthStencilInfo(RHIDepthStencilStateInfo::Preset<RHIConfig::DepthStencil::DEPTH_WRITE_GREATER>())
+                    .SetDepthStencilInfo(RHIDepthStencilStateInfo::Preset<Moer::Render::DepthStencil::DEPTH_WRITE_GREATER>())
                     .SetColorAttachmentInfo(
-                        {std::move(RHIColorAttachmentInfo::Preset<RHIConfig::Blend::ALPHA_BLEND>(EPixelFormat::PF_R8G8B8A8_SRGB))})
+                        {std::move(RHIColorAttachmentInfo::Preset<Moer::Render::Blend::ALPHA_BLEND>(EPixelFormat::PF_R8G8B8A8_SRGB))})
                     .SetDepthStencilFormat(PF_D32_SFLOAT_S8_UINT)
                     .Finalize();
 

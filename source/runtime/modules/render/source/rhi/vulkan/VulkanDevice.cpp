@@ -54,37 +54,13 @@ namespace Moer::Render {
         InitGpu(_config.api_version);
 
         CreateDevice(_config.api_version);
-
-        VkSamplerCreateInfo sampler_create_info{.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
-        sampler_create_info.borderColor             = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
-        sampler_create_info.unnormalizedCoordinates = VK_FALSE;
-        sampler_create_info.mipmapMode              = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-        sampler_create_info.mipLodBias              = 0.0f;
-        sampler_create_info.minLod                  = 0.0f;
-        sampler_create_info.maxLod                  = 0.0f;
-        for (uint i = 0; i < immutable_sampler_count; ++i) {
-            ESamplerFilter          filter           = ESamplerFilter(i % SF_Num);
-            ESamplerAddressMode     address_mode     = ESamplerAddressMode((i / SF_Num) % SAM_Num);
-            ESamplerCompareFunction compare_function = ESamplerCompareFunction(i / (SAM_Num * uint(SF_Num)));
-
-            sampler_create_info.minFilter = sampler_create_info.magFilter = VulkanEnumTranslator::METoVKMinMagFilterMode(filter);
-            sampler_create_info.addressModeU = sampler_create_info.addressModeV = sampler_create_info.addressModeW = VulkanEnumTranslator::METoVKWrapMode(address_mode);
-
-            sampler_create_info.compareOp     = VulkanEnumTranslator::METoVKCompareOp(ECompareOption(compare_function));
-            sampler_create_info.compareEnable = compare_function != SCF_NEVER;
-
-            vkCreateSampler(m_device, &sampler_create_info, VK_NULL_HANDLE, &immutable_samplers[i]);
-        }
-
         CreateMemoryAllocator(m_instance, _config.api_version);
 
-        CreateDescriptorAllocator();
-        CreateDescriptorHeap();
+        CreateInternalResources();
+    }
+
+    void VulkanDevice::PostInit() {
         CreateInternalShaders();
-        //create empty descriptor set layout
-        VkDescriptorSetLayoutCreateInfo descriptor_set_layout_create_info{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        descriptor_set_layout_create_info.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
-        vkCreateDescriptorSetLayout(m_device, &descriptor_set_layout_create_info, VK_NULL_HANDLE, &empty_descriptor_set_layout);
     }
 
     VulkanDevice::~VulkanDevice() { Destroy(); }
@@ -448,20 +424,64 @@ namespace Moer::Render {
         LOG_INFO("Vulkan Memory Allocator initialized with api version: {}.", alloc_create_info.vulkanApiVersion);
     }
 
-    void VulkanDevice::CreateDescriptorAllocator() {
-        m_descriptor_allocator = MoerNew(VulkanDescriptorSetAllocator)(this);
-        LOG_INFO("VulkanRHI: Descriptor Set Allocator initialized.");
-    }
-
     void VulkanDevice::CreateDescriptorHeap() {
         new (&m_global_descriptor_heap) VulkanDescriptorHeap(*this);
+        //create empty descriptor set layout
+        VkDescriptorSetLayoutCreateInfo descriptor_set_layout_create_info{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        descriptor_set_layout_create_info.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
+        vkCreateDescriptorSetLayout(m_device, &descriptor_set_layout_create_info, VK_NULL_HANDLE, &empty_descriptor_set_layout);
+
         LOG_INFO("VulkanRHI: Descriptor Heap initialized.");
     }
 
     void VulkanDevice::CreateInternalShaders() {
+        internal_shaders.sd_component_shuffle = ShaderManager::Get().Compute<ComponentShuffleShader>("utils/ShuffleBufferIndices.hlsl");
+    }
 
-        internal_shaders.sd_component_shuffle = ComponentShuffleShader(
-            CreatePipeline(ShaderManager::Get().Compute<ComponentShuffleShader>("utils/ShuffleBufferIndices.hlsl")));
+    void VulkanDevice::CreateInternalResources() {
+
+        CreateDescriptorHeap();
+        CreateImmutableSamplers();
+    }
+
+    void VulkanDevice::DestroyInternalResources() {
+        DestroyImmutableSamplers();
+        DestroyDescriptorHeap();
+    }
+
+    void VulkanDevice::CreateImmutableSamplers() {
+
+        VkSamplerCreateInfo sampler_create_info{.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+        sampler_create_info.borderColor             = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
+        sampler_create_info.unnormalizedCoordinates = VK_FALSE;
+        sampler_create_info.mipmapMode              = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        sampler_create_info.mipLodBias              = 0.0f;
+        sampler_create_info.minLod                  = 0.0f;
+        sampler_create_info.maxLod                  = 0.0f;
+        for (uint i = 0; i < immutable_sampler_count; ++i) {
+            ESamplerFilter          filter           = ESamplerFilter(i % SF_Num);
+            ESamplerAddressMode     address_mode     = ESamplerAddressMode((i / SF_Num) % SAM_Num);
+            ESamplerCompareFunction compare_function = ESamplerCompareFunction(i / (SAM_Num * uint(SF_Num)));
+
+            sampler_create_info.minFilter = sampler_create_info.magFilter = VulkanEnumTranslator::METoVKMinMagFilterMode(filter);
+            sampler_create_info.addressModeU = sampler_create_info.addressModeV = sampler_create_info.addressModeW = VulkanEnumTranslator::METoVKWrapMode(address_mode);
+
+            sampler_create_info.compareOp     = VulkanEnumTranslator::METoVKCompareOp(ECompareOption(compare_function));
+            sampler_create_info.compareEnable = compare_function != SCF_NEVER;
+
+            vkCreateSampler(m_device, &sampler_create_info, VK_NULL_HANDLE, &immutable_samplers[i]);
+        }
+    }
+
+    void VulkanDevice::DestroyImmutableSamplers() {
+        for (auto& sampler : immutable_samplers) {
+            vkDestroySampler(m_device, sampler, VK_NULL_HANDLE);
+        }
+    }
+
+    void VulkanDevice::DestroyDescriptorHeap() {
+        m_global_descriptor_heap.~VulkanDescriptorHeap();
+        vkDestroyDescriptorSetLayout(m_device, empty_descriptor_set_layout, VK_NULL_HANDLE);
     }
 
     void VulkanDevice::Destroy() {
@@ -472,11 +492,10 @@ namespace Moer::Render {
         transfer_queue.reset();
         gfx_queue.reset();
         m_command_allocators.clear();
-        CHECK_AND_DELETE(m_descriptor_allocator);
         FlushDeferredReleases();
+        DestroyInternalResources();
         vmaDestroyAllocator(m_allocator);
 
-        vkDestroyDescriptorSetLayout(m_device, empty_descriptor_set_layout, VK_NULL_HANDLE);
         // Assertion failed: m_pMetadata->IsEmpty() && "Some allocations were not freed before destruction of this memory block!"
     }
 
@@ -601,6 +620,47 @@ namespace Moer::Render {
         VK_CHECK_RESULT(vkCreateDebugUtilsMessengerEXT(m_instance, &debug_utils_messenger_create_info, nullptr, &m_debug_utils_messenger));
     }
 
+    static VkPipelineStageFlags2 VkShaderStage2PipelineStage(VkShaderStageFlagBits _stage) {
+        switch (_stage) {
+
+            case VK_SHADER_STAGE_VERTEX_BIT:
+                return VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
+            case VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT:
+                return VK_PIPELINE_STAGE_2_TESSELLATION_CONTROL_SHADER_BIT;
+            case VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT:
+                return VK_PIPELINE_STAGE_2_TESSELLATION_EVALUATION_SHADER_BIT;
+            case VK_SHADER_STAGE_GEOMETRY_BIT:
+                return VK_PIPELINE_STAGE_2_GEOMETRY_SHADER_BIT;
+            case VK_SHADER_STAGE_FRAGMENT_BIT:
+                return VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+            case VK_SHADER_STAGE_COMPUTE_BIT:
+                return VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            case VK_SHADER_STAGE_ALL_GRAPHICS:
+                return VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT;
+            case VK_SHADER_STAGE_ALL:
+                return VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            case VK_SHADER_STAGE_RAYGEN_BIT_KHR:
+                return VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+            case VK_SHADER_STAGE_ANY_HIT_BIT_KHR:
+                return VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+            case VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR:
+                return VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+            case VK_SHADER_STAGE_MISS_BIT_KHR:
+                return VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+            case VK_SHADER_STAGE_INTERSECTION_BIT_KHR:
+                return VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+            case VK_SHADER_STAGE_CALLABLE_BIT_KHR:
+                return VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+            case VK_SHADER_STAGE_TASK_BIT_EXT:
+                return VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_NV;
+            case VK_SHADER_STAGE_MESH_BIT_EXT:
+                return VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_NV;
+            default:
+                assert(false && "Invalid Shader Stage.");
+        }
+        return VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    }
+
     // Merge Shader Reflection Info with Cpp End Definitions, thus we can get binding relations between shader and cpp.
     static void MergeReflectInfo(
         const VulkanDevice&     _device,
@@ -612,7 +672,7 @@ namespace Moer::Render {
         // target shader stage
         UnorderedMap<uint64, uint>& _out_hash_2_idx,
         // hash to index
-        Moer::Array<VulkanShaderResourceState>& _out_reflect_flags,
+        Moer::Array<ParamInfoFlags>& _out_reflect_flags,
         // cpp param name hash to shader binding index
         UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>& _out_descriptor_bindings,
         // set to binding to binding info, actual vk pipeline layout
@@ -704,9 +764,8 @@ namespace Moer::Render {
                             temp_binding.pImmutableSamplers = nullptr;
                             _max_set                        = uint(std::max(int(_max_set), int(bdls_array.sampler.value().set)));
                         }
-
-                        // _out_reflect_flags[idx] = EncodeBindlessInfo(texture_set, buffer_set, _stage, b_found_bindless_texture, b_found_bindless_buffer);
                     }
+                    _out_reflect_flags[idx].pipeline_flags |= VkShaderStage2PipelineStage(_stage);
 
                     break;
                 }
@@ -739,12 +798,14 @@ namespace Moer::Render {
                     vk_binding.pImmutableSamplers            = nullptr;
                     set.bindings[resource.binding].param_idx = idx;
                     // _out_reflect_flags[idx]       = EncodeReflectInfo(resource.set, resource.binding, vk_binding.stageFlags);
-                    _max_set                = uint(std::max(int(_max_set), int(resource.set)));
-                    _out_reflect_flags[idx] = VulkanShaderResourceState(SpvReflectDescriptorType(resource.desc_type), SpvReflectResourceType(resource.resource_type));
+                    _max_set                        = uint(std::max(int(_max_set), int(resource.set)));
+                    VulkanShaderResourceState state = VulkanShaderResourceState(SpvReflectDescriptorType(resource.desc_type), SpvReflectResourceType(resource.resource_type));
                     if (arg_type == SDA_Buffer) {
                     } else if (arg_type == SDA_Texture) {
-                        _out_reflect_flags[idx].b_sampled = resource.sampled;
+                        state.b_sampled = resource.sampled;
                     }
+                    _out_reflect_flags[idx].state_flags = state();
+                    _out_reflect_flags[idx].pipeline_flags |= VkShaderStage2PipelineStage(_stage);
                     break;
                 }
                 default:
@@ -819,10 +880,10 @@ namespace Moer::Render {
         VkPushConstantRange push_constant_ranges{.offset = 0, .size = 0};
         uint                max_set = 0;
 
-        Moer::Array<VulkanShaderResourceState> reflect_flags(_shader_info.layout_hash.size());
-        uint64                                 valid_bits = 0;
-        UnorderedMap<uint64, uint>             hash_2_idx;
-        int                                    constant_idx = -1;
+        Moer::Array<ParamInfoFlags> reflect_flags(_shader_info.layout_hash.size());
+        uint64                      valid_bits = 0;
+        UnorderedMap<uint64, uint>  hash_2_idx;
+        int                         constant_idx = -1;
 
         auto merge_reflect_info = [&](const SingleShaderInfo& _info, VkShaderStageFlagBits _stage) {
             MergeReflectInfo(*this,
@@ -930,20 +991,20 @@ namespace Moer::Render {
         // rasterization state
         VkPipelineRasterizationStateCreateInfo vk_rasterization_state{};
 
-        auto to_rasterize_state = [](const RHIRasterizeInfo& info) {
+        auto to_rasterize_state = [](const RHIRasterizeInfo& _info) {
             VkPipelineRasterizationStateCreateInfo state{};
             state.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
             state.pNext                   = nullptr;
             state.flags                   = 0;
-            state.depthClampEnable        = info.b_depth_clamp_enable ? VK_TRUE : VK_FALSE;
+            state.depthClampEnable        = _info.b_depth_clamp_enable ? VK_TRUE : VK_FALSE;
             state.rasterizerDiscardEnable = VK_FALSE;// MARK...
-            state.polygonMode             = VulkanEnumTranslator::METoVKPolygonMode(info.fill_mode);
-            state.cullMode                = VulkanEnumTranslator::METoVKCullModeFlags(info.cull_mode);
-            state.frontFace               = VK_FRONT_FACE_COUNTER_CLOCKWISE;// MARK...
-            state.depthBiasEnable         = info.b_depth_bias ? VK_TRUE : VK_FALSE;
-            state.depthBiasConstantFactor = info.depth_bias;
-            state.depthBiasClamp          = info.depth_bias_clamp;
-            state.depthBiasSlopeFactor    = info.depth_bias_slop_factor;
+            state.polygonMode             = VulkanEnumTranslator::METoVKPolygonMode(_info.fill_mode);
+            state.cullMode                = VulkanEnumTranslator::METoVKCullModeFlags(_info.cull_mode);
+            state.frontFace               = _info.b_front_counter_clockwise ? VK_FRONT_FACE_COUNTER_CLOCKWISE : VK_FRONT_FACE_CLOCKWISE;// MARK...
+            state.depthBiasEnable         = _info.b_depth_bias ? VK_TRUE : VK_FALSE;
+            state.depthBiasConstantFactor = _info.depth_bias;
+            state.depthBiasClamp          = _info.depth_bias_clamp;
+            state.depthBiasSlopeFactor    = _info.depth_bias_slop_factor;
             state.lineWidth               = 1.0f;
             return std::move(state);
         };
@@ -1065,13 +1126,9 @@ namespace Moer::Render {
 
         //destroy shader modules
         for (auto& shader_stage : shader_stages) { vkDestroyShaderModule(m_device, shader_stage.module, nullptr); }
-
-        Array<uint64> binding_infos(_shader_info.layout_hash.size());
-        memcpy(binding_infos.data(), reflect_flags.data(), reflect_flags.size() * sizeof(VulkanShaderResourceState));
-
         return PipelineHandle{
-            .handle            = VkPipelineHandle{reinterpret_cast<uint64>(vk_pso)},
-            .binding_infos     = std::move(binding_infos),
+            .handle            = reinterpret_cast<uint64>(vk_pso),
+            .binding_infos     = std::move(reflect_flags),
             .hash_2_info_index = std::move(hash_2_idx),
             .valid_bits        = valid_bits,
             .constant_idx      = constant_idx};
@@ -1093,14 +1150,14 @@ namespace Moer::Render {
 
         VkPipelineShaderStageCreateInfo& shader_stage = pipeline_create_info.stage;
 
-        TPipelineSets                    descriptor_bindings;
-        VkPushConstantRange              push_constant_ranges{.offset = 0, .size = 0};
-        uint                             max_set = 0;
-        Array<VulkanShaderResourceState> reflect_flags(_shader_info.layout_hash.size());
-        UnorderedMap<uint64, uint>       hash_2_idx;
-        int                              constant_idx       = -1;
-        uint64                           valid_bits         = 0;
-        auto                             merge_reflect_info = [&](const SingleShaderInfo& _info, VkShaderStageFlagBits _stage) {
+        TPipelineSets              descriptor_bindings;
+        VkPushConstantRange        push_constant_ranges{.offset = 0, .size = 0};
+        uint                       max_set = 0;
+        Array<ParamInfoFlags>      reflect_flags(_shader_info.layout_hash.size());
+        UnorderedMap<uint64, uint> hash_2_idx;
+        int                        constant_idx       = -1;
+        uint64                     valid_bits         = 0;
+        auto                       merge_reflect_info = [&](const SingleShaderInfo& _info, VkShaderStageFlagBits _stage) {
             MergeReflectInfo(*this,
                              _info,
                              _shader_info,
@@ -1181,11 +1238,9 @@ namespace Moer::Render {
         //destroy shader module
         vkDestroyShaderModule(m_device, shader_stage.module, nullptr);
 
-        Array<uint64> binding_infos(_shader_info.layout_hash.size());
-        memcpy(binding_infos.data(), reflect_flags.data(), reflect_flags.size() * sizeof(VulkanShaderResourceState));
         return PipelineHandle{
-            .handle            = VkPipelineHandle{reinterpret_cast<uint64>(vk_pso)},
-            .binding_infos     = std::move(binding_infos),
+            .handle            = reinterpret_cast<uint64>(vk_pso),
+            .binding_infos     = std::move(reflect_flags),
             .hash_2_info_index = std::move(hash_2_idx),
             .valid_bits        = valid_bits,
             .constant_idx      = constant_idx};
@@ -1217,11 +1272,6 @@ namespace Moer::Render {
 
     BufferRef VulkanDevice::CreateBuffer(uint _element_cnt, uint _byte_stride, EBufferUsageFlags _usage) {
         BufferInfo info{_element_cnt, _byte_stride, _usage};
-        return BufferRef{MoerNew(VulkanBuffer)(info, *this)};
-    }
-
-    BufferRef VulkanDevice::CreateStagingBuffer(uint64 _byte_size) {
-        BufferInfo info{_byte_size, sizeof(uint8), EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST};
         return BufferRef{MoerNew(VulkanBuffer)(info, *this)};
     }
 

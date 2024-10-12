@@ -102,15 +102,16 @@ namespace Moer::Render {
     }
 
     void
-    CommandList::CopyFrom(BufferView _src, BufferView _dst) {
+    CommandList::CopyFrom(BufferView _src, BufferView _dst, std::string_view _name) {
         commands.push_back(MakeUnique<CopyBufferCmd>(
             reinterpret_cast<uint64>(_src.GetBuffer()),
             reinterpret_cast<uint64>(_dst.GetBuffer()),
             _src.byte_offset,
             _dst.byte_offset,
-            _src.GetByteSize()));
+            _src.GetByteSize(),
+            _name));
     }
-    void CommandList::CopyFrom(TextureView _src, TextureView _dst) {
+    void CommandList::CopyFrom(TextureView _src, TextureView _dst, std::string_view _name) {
         commands.push_back(MakeUnique<CopyTextureCmd>(
             _src.texture->GetFormat(),
             reinterpret_cast<uint64>(_src.texture),//reinterpret_cast<uint64
@@ -119,9 +120,10 @@ namespace Moer::Render {
             _dst.mip_level,
             _src.offset,
             _dst.offset,
-            _src.extent));
+            _src.extent,
+            _name));
     }
-    void CommandList::CopyFrom(TextureView _src, BufferView _dst) {
+    void CommandList::CopyFrom(TextureView _src, BufferView _dst, std::string_view _name) {
 
         commands.push_back(MakeUnique<CopyTextureToBufferCmd>(
             _src.texture->GetFormat(),
@@ -130,9 +132,10 @@ namespace Moer::Render {
             _src.offset,
             _dst.byte_offset,
             _src.extent,
-            _src.mip_level));
+            _src.mip_level,
+            _name));
     }
-    void CommandList::CopyFrom(BufferView _src, TextureView _dst) {
+    void CommandList::CopyFrom(BufferView _src, TextureView _dst, std::string_view _name) {
         commands.push_back(MakeUnique<CopyBufferToTextureCmd>(
             _dst.texture->GetFormat(),
             reinterpret_cast<uint64>(_src.GetBuffer()),
@@ -140,10 +143,11 @@ namespace Moer::Render {
             _src.byte_offset,
             _dst.offset,
             _dst.extent,
-            _dst.mip_level));
+            _dst.mip_level,
+            _name));
     }
 
-    void CommandList::CopyFrom(std::span<byte> _data, TextureView _texture) {
+    void CommandList::CopyFrom(std::span<byte> _data, TextureView _texture, std::string_view _name) {
         //
         commands.push_back(MakeUnique<UploadTextureCmd>(
             _texture.texture->GetFormat(),
@@ -151,25 +155,59 @@ namespace Moer::Render {
             _texture.mip_level,
             _texture.offset,
             _texture.extent,
-            _data.data()));
+            _data.data(),
+            _name));
     }
 
-    void CommandList::CopyFrom(std::span<byte> _data, BufferView _buffer) {
+    void CommandList::CopyFrom(std::span<byte> _data, BufferView _buffer, std::string_view _name) {
         //
+        if (_data.size() == 0) {
+            return;
+        }
         commands.push_back(MakeUnique<UploadBufferCmd>(
             reinterpret_cast<uint64>(_buffer.GetBuffer()),
             _buffer.GetByteOffset(),
-            _buffer.GetByteSize(),
-            _data.data()));
+            _data.size_bytes(),
+            _data.data(),
+            _name));
     }
 
-    void CommandList::CopyFrom(BufferView _src, std::span<byte> _data) {
+    void CommandList::CopyFrom(BufferView _src, std::span<byte> _data, std::string_view _name) {
         //
         commands.push_back(MakeUnique<CopyBackBufferCmd>(
             reinterpret_cast<uint64>(_src.GetBuffer()),
             _src.GetByteOffset(),
             _src.GetByteSize(),
-            _data.data()));
+            _data.data(),
+            _name));
+    }
+
+    void CommandList::CopyFrom(Array<byte>&& _data, BufferView _dst, std::string_view _name) {
+        //
+        if (_data.size() == 0) {
+            return;
+        }
+        commands.push_back(MakeUnique<UploadBufferCmd>(
+            reinterpret_cast<uint64>(_dst.GetBuffer()),
+            _dst.GetByteOffset(),
+            _data.size(),
+            std::move(_data),
+            _name));
+    }
+
+    void CommandList::CopyFrom(Array<byte>&& _data, TextureView _dst, std::string_view _name) {
+        //
+        if (_data.size() == 0) {
+            return;
+        }
+        commands.push_back(MakeUnique<UploadTextureCmd>(
+            _dst.texture->GetFormat(),
+            reinterpret_cast<uint64>(_dst.texture),
+            _dst.mip_level,
+            _dst.offset,
+            _dst.extent,
+            std::move(_data),
+            _name));
     }
 
     void CommandList::SetRenderCmds(PipelineHandle& _handle, ArrayArguments&& _args, RenderPassInfo&& _info, Array<MeshDrawData>&& _mesh_data) {

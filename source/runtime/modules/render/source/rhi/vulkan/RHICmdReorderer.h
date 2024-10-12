@@ -17,13 +17,15 @@
 namespace Moer::Render {
 
     struct FunctionTable {
-        using IsResourceWrite  = bool (*)(uint64 _flag);
-        using IsResourceRead   = bool (*)(uint64 _flag);
-        using IsTextureSampled = bool (*)(uint64 _flag);
+        using IsResourceWrite      = bool (*)(uint64 _flag);
+        using IsResourceRead       = bool (*)(uint64 _flag);
+        using IsTextureSampled     = bool (*)(uint64 _flag);
+        using IsResourceInBindless = bool (*)(uint64 _resource, uint64 _bdls_handle);
 
-        IsResourceWrite  is_resource_write;
-        IsResourceRead   is_resource_read;
-        IsTextureSampled is_texture_sampled;
+        IsResourceWrite      is_resource_write;
+        IsResourceRead       is_resource_read;
+        IsTextureSampled     is_texture_sampled;
+        IsResourceInBindless is_resource_in_bindless;
     };
     struct ArenaAllocator {
         struct LinkedChunk {
@@ -301,11 +303,15 @@ namespace Moer::Render {
         UnorderedMap<uint64, RangeHandle*>   m_range_handles;
         UnorderedMap<uint64, NoRangeHandle*> m_no_range_handles;
 
-        Array<std::tuple<Range, ResourceHandle*>> m_read_resources;
-        UnorderedSet<uint64>                      m_write_resources;
-        UnorderedSet<uint64>                      m_writed_geometry;
+        UnorderedSet<uint64> m_write_resources;
+        UnorderedSet<uint64> m_writed_geometry;
 
-        uint64                              m_dispatch_layer;
+        //temporal resources
+        Array<std::tuple<Range, ResourceHandle*>> m_arg_read_resources;
+        Array<std::tuple<Range, ResourceHandle*>> m_arg_write_resources;
+        int64                                     m_dispatch_layer = -1;
+        int64                                     m_max_bdls_layer = -1;//optimization
+
         ArenaAllocator                      m_arena;
         ArenaAllocatorWrapper<ResourceView> m_arena_stl;
         FunctionTable                       m_funcs;
@@ -461,6 +467,7 @@ namespace Moer::Render {
                     auto* range_handle = static_cast<RangeHandle*>(_handle);
                     layer              = GetLastLayerWrite(range_handle, _range);
                     range_handle->EmplaceWriteLayer(_range, layer);
+                    m_write_resources.emplace(_handle->handle);
                     break;
                 }
                 case ResourceType::Mesh:
@@ -519,6 +526,7 @@ namespace Moer::Render {
                     auto* range_handle = static_cast<RangeHandle*>(write_handle);
                     layer              = std::max(GetLastLayerWrite(range_handle, _write_range), layer);
                     range_handle->EmplaceWriteLayer(_write_range, layer);
+                    m_write_resources.emplace(range_handle->handle);
                 }
             }
 
@@ -539,6 +547,60 @@ namespace Moer::Render {
                 }
             }
             return layer;
+        }
+
+        void EmplaceArg(uint64 _handle, ResourceType _type, const Range& _range, bool _b_write) {
+            ResourceHandle* handle = GetHandle(_handle, _type);
+            if (_b_write) {
+                switch (_type) {
+
+                    case ResourceType::Texture_Buffer: {
+                        m_dispatch_layer = std::max(m_dispatch_layer, GetLastLayerWrite(static_cast<RangeHandle*>(handle), _range));
+                        break;
+                    }
+                    case ResourceType::Bindless:
+                    case ResourceType::Mesh:
+                    case ResourceType::Accel: {
+                        m_dispatch_layer = std::max(m_dispatch_layer, GetLastLayerWrite(static_cast<NoRangeHandle*>(handle)));
+
+                    } break;
+                }
+            } else {
+                switch (_type) {
+                    case ResourceType::Texture_Buffer: {
+                        m_dispatch_layer = std::max(m_dispatch_layer, GetLastLayerRead(static_cast<RangeHandle*>(handle), _range));
+                        break;
+                    }
+                    case ResourceType::Bindless:
+                    case ResourceType::Mesh:
+                    case ResourceType::Accel: {
+                        m_dispatch_layer = std::max(m_dispatch_layer, GetLastLayerRead(static_cast<NoRangeHandle*>(handle)));
+                    } break;
+                }
+            }
+        }
+
+        void VisitArgs(const TArg& _arg, uint64 _flag) {
+
+            std::visit([&](auto&& _arg) {
+                using T = std::decay_t<decltype(_arg)>;
+                if constexpr (std::is_same_v<T, BufferView>) {
+                    EmplaceArg((uint64)(_arg.GetBuffer()), ResourceType::Texture_Buffer, Range(_arg.GetByteOffset(), _arg.GetByteSize()), m_funcs.is_resource_write(_flag));
+                    // _layer = std::max(_layer, GetLastLayer((uint64)(_arg.GetBuffer()), Range(_arg.GetByteOffset(), _arg.GetByteSize()), ResourceType::Texture_Buffer));
+                } else if constexpr (std::is_same_v<T, TextureView>) {
+                    EmplaceArg((uint64)(_arg.GetTexture()), ResourceType::Texture_Buffer, Range(_arg.mip_level, _arg.num_mips), m_funcs.is_resource_write(_flag));
+                    // _layer = GetLastLayer(uint64(_arg.GetTexture()), Range(_arg.mip_level, _arg.num_mips), ResourceType::Texture_Buffer);
+                } else if constexpr (std::is_same_v<T, BindlessArrayRef>) {
+                    for (auto&& res : m_write_resources) {
+                        if (m_funcs.is_resource_in_bindless(res, (uint64)(_arg.Get()))) {
+                            EmplaceArg(res, ResourceType::Texture_Buffer, Range{}, false);
+                        }
+                    }
+                    //emplace self
+                    EmplaceArg((uint64)(_arg->ArrayHandle()), ResourceType::Bindless, Range{}, false);
+                }
+            },
+                       _arg);
         }
 
         void VisitCmd(const UploadBufferCmd* _cmd) {
@@ -594,39 +656,23 @@ namespace Moer::Render {
 
         void VisitCmd(const SetDrawStateCmd* _cmd) {
             int64 layer = 0;
-            auto  func  = [&](const TArg& _arg,uint64_t flag) {
-                std::visit([&](auto&& _arg) {
-                    int64 temp_layer = 0;
-                    using T          = std::decay_t<decltype(_arg)>;
-                    if constexpr (std::is_same_v<T, BufferView>) {
-                        if(m_funcs.is_resource_write(flag))
-                            temp_layer = SetWrite((uint64)(_arg.GetBuffer()), Range(_arg.GetByteOffset(), _arg.GetByteSize()), ResourceType::Texture_Buffer);
-                        else if(m_funcs.is_resource_read(flag))
-                            temp_layer = SetRead((uint64)(_arg.GetBuffer()), Range(_arg.GetByteOffset(), _arg.GetByteSize()), ResourceType::Texture_Buffer);
-                        else    
-                            temp_layer = GetLastLayer((uint64)(_arg.GetBuffer()), Range(_arg.GetByteOffset(), _arg.GetByteSize()), ResourceType::Texture_Buffer);
-                    } else if constexpr (std::is_same_v<T, TextureView>) {
-                        if(m_funcs.is_resource_write(flag))
-                            temp_layer = SetWrite(uint64(_arg.GetTexture()), Range(_arg.mip_level, _arg.num_mips), ResourceType::Texture_Buffer);
-                        else if(m_funcs.is_resource_read(flag))
-                            temp_layer = SetRead(uint64(_arg.GetTexture()), Range(_arg.mip_level, _arg.num_mips), ResourceType::Texture_Buffer);
-                        else
-                            temp_layer = GetLastLayer(uint64(_arg.GetTexture()), Range(_arg.mip_level, _arg.num_mips), ResourceType::Texture_Buffer);
-                    } else if constexpr (std::is_same_v<T, BindlessArrayRef>) {
-                        temp_layer = SetRead((uint64)(_arg->ArrayHandle()), Range(0), ResourceType::Bindless);
-                    }
-                    layer = std::max(layer, temp_layer);
-                },
-                           _arg);
+            m_arg_read_resources.clear();
+            m_arg_write_resources.clear();
+
+            auto func = [&](const TArg& _arg, ParamInfoFlags _flag) {
+                VisitArgs(_arg, _flag.state_flags);
             };
             _cmd->IterateArgs(func);
+
             const auto& vbs = _cmd->VertexBuffers();
             for (const auto& vb : vbs) {
-                layer = std::max(SetRead((uint64)(vb.first), Range(vb.second.min, vb.second.max - vb.second.min), ResourceType::Texture_Buffer), layer);
+                EmplaceArg((uint64)(vb.first), ResourceType::Texture_Buffer, Range(vb.second.min, vb.second.max - vb.second.min), false);
+                // m_dispatch_layer = std::max(SetRead((uint64)(vb.first), Range(vb.second.min, vb.second.max - vb.second.min), ResourceType::Texture_Buffer), layer);
             }
             const auto& ibs = _cmd->IndexBuffers();
             for (const auto& ib : ibs) {
-                layer = std::max(SetRead((uint64)(ib.first), Range(ib.second.min, ib.second.max - ib.second.min), ResourceType::Texture_Buffer), layer);
+                // m_dispatch_layer = std::max(SetRead((uint64)(ib.first), Range(ib.second.min, ib.second.max - ib.second.min), ResourceType::Texture_Buffer), layer);
+                EmplaceArg((uint64)(ib.first), ResourceType::Texture_Buffer, Range(ib.second.min, ib.second.max - ib.second.min), false);
             }
             //depth and render targets
             const auto& pass_info = _cmd->RenderPassInfo();
@@ -634,22 +680,29 @@ namespace Moer::Render {
                 const auto& depth          = pass_info.depth_attachment;
                 auto        depth_store_op = GetStoreOp(GetDepthAction(depth.action));
                 if (GetLoadOp(GetDepthAction(depth.action)) == EAttachmentLoadOp::LOAD) {
-                    layer = std::max(SetRead((uint64)(depth.target), Range(0), ResourceType::Texture_Buffer), layer);
+                    EmplaceArg((uint64)(depth.target), ResourceType::Texture_Buffer, Range(0), false);
                 }
                 if (depth_store_op == EAttachmentStoreOp::STORE) {
-                    layer = std::max(SetWrite((uint64)(depth.target), Range(0), ResourceType::Texture_Buffer), layer);
+                    EmplaceArg((uint64)(depth.target), ResourceType::Texture_Buffer, Range(0), true);
                 }
             }
             for (const auto& target : pass_info.color_attachments) {
                 auto color_store_op = GetStoreOp(target.action);
                 if (GetLoadOp(target.action) == EAttachmentLoadOp::LOAD) {
-                    layer = std::max(SetRead((uint64)(target.target), Range(0), ResourceType::Texture_Buffer), layer);
+                    EmplaceArg((uint64)(target.target), ResourceType::Texture_Buffer, Range(0), false);
                 }
                 if (color_store_op == EAttachmentStoreOp::STORE) {
-                    layer = std::max(SetWrite((uint64)(target.target), Range(0), ResourceType::Texture_Buffer), layer);
+                    EmplaceArg((uint64)(target.target), ResourceType::Texture_Buffer, Range(0), true);
                 }
             }
-            AddCmd(_cmd, layer);
+            for (const auto& write_res : m_arg_write_resources) {
+                RecordWrite(std::get<1>(write_res), std::get<0>(write_res), m_dispatch_layer);
+            }
+
+            for (const auto& read_res : m_arg_read_resources) {
+                RecordRead(std::get<1>(read_res), std::get<0>(read_res), m_dispatch_layer);
+            }
+            AddCmd(_cmd, m_dispatch_layer);
         }
 
         void VisitCmd(const UpdateBindlessArrayCmd* _cmd) {
@@ -658,33 +711,20 @@ namespace Moer::Render {
         }
 
         void VisitCmd(const DispatchCmd* _cmd) {
-            int64 layer = 0;
-            auto  func  = [&](const TArg& _arg,uint64 flag) {
-                std::visit([&](auto&& _arg) {
-                    int64 temp_layer = 0;
-                    using T          = std::decay_t<decltype(_arg)>;
-                    if constexpr (std::is_same_v<T, BufferView>) {
-                        if(m_funcs.is_resource_write(flag))
-                            temp_layer = SetWrite((uint64)(_arg.GetBuffer()), Range(_arg.GetByteOffset(), _arg.GetByteSize()), ResourceType::Texture_Buffer);
-                        else if(m_funcs.is_resource_read(flag))
-                            temp_layer = SetRead((uint64)(_arg.GetBuffer()), Range(_arg.GetByteOffset(), _arg.GetByteSize()), ResourceType::Texture_Buffer);
-                        else    
-                            temp_layer = GetLastLayer((uint64)(_arg.GetBuffer()), Range(_arg.GetByteOffset(), _arg.GetByteSize()), ResourceType::Texture_Buffer);
-                    } else if constexpr (std::is_same_v<T, TextureView>) {
-                        if(m_funcs.is_resource_write(flag))
-                            temp_layer = SetWrite(uint64(_arg.GetTexture()), Range(_arg.mip_level, _arg.num_mips), ResourceType::Texture_Buffer);
-                        else if(m_funcs.is_resource_read(flag))
-                            temp_layer = SetRead(uint64(_arg.GetTexture()), Range(_arg.mip_level, _arg.num_mips), ResourceType::Texture_Buffer);
-                        else
-                            temp_layer = GetLastLayer(uint64(_arg.GetTexture()), Range(_arg.mip_level, _arg.num_mips), ResourceType::Texture_Buffer);
-                    } else if constexpr (std::is_same_v<T, BindlessArrayRef>) {
-                        temp_layer = SetRead((uint64)(_arg->ArrayHandle()), Range(0), ResourceType::Bindless);
-                    }
-                    layer = std::max(layer, temp_layer);
-                },
-                           _arg);
+            m_arg_write_resources.clear();
+            m_arg_read_resources.clear();
+            auto func = [&](const TArg& _arg, ParamInfoFlags _flag) {
+                VisitArgs(_arg, _flag.state_flags);
             };
             _cmd->IterateArgs(func);
+
+            for (const auto& write_res : m_arg_write_resources) {
+                RecordWrite(std::get<1>(write_res), std::get<0>(write_res), m_dispatch_layer);
+            }
+            for (const auto& read_res : m_arg_read_resources) {
+                RecordRead(std::get<1>(read_res), std::get<0>(read_res), m_dispatch_layer);
+            }
+            AddCmd(_cmd, m_dispatch_layer);
         }
 
         void VisitCmd(const BuildAccelerationStructuresCmd* _cmd) {

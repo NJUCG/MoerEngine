@@ -16,8 +16,6 @@
 #define GLFW_EXPOSE_NATIVE_WIN32
 #include <GLFW/glfw3native.h>
 #endif
-#include "GLFWUIImpl.h"
-
 #include <imgui.h>
 
 #include "log/LogSystem.h"
@@ -40,62 +38,6 @@ namespace Moer {
     GLFWWindowImpl::~GLFWWindowImpl() {
     }
     void GLFWWindowImpl::PollEvents() const { glfwPollEvents(); }
-
-    const ImWchar* FontTypeToRange(Moer::EFontType _font_range_type) {
-        using namespace Moer;
-        static const ImWchar icons_ranges[] = {ICON_MIN_FA, ICON_MAX_16_FA, 0};
-
-        switch (_font_range_type) {
-            case EFontType::Greek:
-                return ImGui::GetIO().Fonts->GetGlyphRangesGreek();
-            case EFontType::Chinese:
-                return ImGui::GetIO().Fonts->GetGlyphRangesChineseFull();
-            case EFontType::Korean:
-                return ImGui::GetIO().Fonts->GetGlyphRangesKorean();
-            case EFontType::Japanese:
-                return ImGui::GetIO().Fonts->GetGlyphRangesJapanese();
-            case EFontType::Cyrillic:
-                return ImGui::GetIO().Fonts->GetGlyphRangesCyrillic();
-            case EFontType::Thai:
-                return ImGui::GetIO().Fonts->GetGlyphRangesThai();
-            case EFontType::Vietnamese:
-                return ImGui::GetIO().Fonts->GetGlyphRangesVietnamese();
-            case EFontType::Default:
-                return ImGui::GetIO().Fonts->GetGlyphRangesDefault();
-            case EFontType::Icon:
-                return icons_ranges;
-            default:
-                break;
-        }
-        return ImGui::GetIO().Fonts->GetGlyphRangesDefault();
-    }
-
-    static void* MallocWrapper(size_t size, void* user_data) {
-        return Memory::Malloc(size);
-    }
-    static void FreeWrapper(void* ptr, void* user_data) {
-        Memory::Free(ptr);
-    }
-    void GLFWWindowImpl::GuiInit(const GuiWindowInitInfo& _init_info) {
-
-        ImGui::SetAllocatorFunctions(MallocWrapper, FreeWrapper, nullptr);
-
-        GuiWindowInit(_init_info);
-        ImGuiIO& io = ImGui::GetIO();
-        io.Fonts->AddFontDefault();
-        //icon fonts
-        {
-            AddFont({FONT_ICON_FILE_NAME_FAS,
-                     13.0f,
-                     EFontType::Icon});
-        }
-
-        {
-            AddFont({"msyh.ttc",
-                     20.0f,
-                     EFontType::Chinese});
-        }
-    };
 
     void GLFWWindowImpl::Init(const SurfaceInitInfo& info) {
         if (!glfwInit()) {
@@ -127,7 +69,7 @@ namespace Moer {
         InstallInterface(&main_window_handle);
 
         //install imgui io callbacks
-        GuiInit(window_info);
+        // GuiInit(window_info);
         // ImGui::CreateContext();
         // ImGui_ImplGlfw_InitForVulkan(window, true);
     }
@@ -208,29 +150,6 @@ namespace Moer {
         }
     }
 
-    void GLFWWindowImpl::AddFont(const FontDesc& _desc) {
-        const auto font_base_path = Moer::ConfigManager::GetInstance().GetEditorResourcePath() / FONTS_DIR;
-        const auto font_path      = font_base_path / _desc.font_path;
-
-        auto& io = ImGui::GetIO();
-
-        const ImWchar* font_range = FontTypeToRange(_desc.font_type);
-        ImFontConfig   icons_config;
-        icons_config.MergeMode            = false;
-        icons_config.PixelSnapH           = true;
-        icons_config.FontDataOwnedByAtlas = false;
-        if (_desc.font_type == Moer::EFontType::Icon) {
-            float icon_font_size = _desc.font_size * 2.0f / 3.0f;// FontAwesome fonts need to have their sizes reduced by 2.0f/3.0f in order to align correctly
-
-            icons_config.MergeMode        = true;
-            icons_config.GlyphMinAdvanceX = icon_font_size;
-
-            io.Fonts->AddFontFromFileTTF(font_path.generic_string().data(), icon_font_size, &icons_config, font_range);
-        } else {
-            io.FontDefault = io.Fonts->AddFontFromFileTTF(font_path.generic_string().data(), _desc.font_size, &icons_config, font_range);
-        }
-    }
-
     void GLFWWindowImpl::Tick() {
         // per-frame time logic
         float currentFrame = static_cast<float>(glfwGetTime());
@@ -238,10 +157,10 @@ namespace Moer {
         wndInput.lastFrame = currentFrame;
 
         PollEvents();
-        GuiUpdate();
+        // GuiUpdate();
     }
     void GLFWWindowImpl::ShutDown() {
-        GuiShutDown();
+        // GuiShutDown();
         glfwDestroyWindow((GLFWwindow*)main_window_handle.window);
     }
 
@@ -255,12 +174,6 @@ namespace Moer {
 #if PLATFORM_WINDOWS
 
 #endif
-    }
-    void GLFWWindowImpl::GuiUpdate() {
-        GuiWindowNewFrame();
-    }
-    void GLFWWindowImpl::GuiShutDown() {
-        GuiWindowShutDown();
     }
     // void GLFWWindowImpl::CreateVulkanSurface(void* instance, WindowType* window, void* allocation_callback, void* surface) {
     //     glfwCreateWindowSurface((VkInstance)instance, (GLFWwindow*)window, (const VkAllocationCallbacks*)allocation_callback, (VkSurfaceKHR*)surface);

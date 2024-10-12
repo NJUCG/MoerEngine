@@ -130,15 +130,15 @@ namespace Moer::Resource::JsonScene {
         [[nodiscard("Handle Err")]] bool LoadMaterials(ExtendedSceneData& dst, const Json& scene_json);
 
         [[nodiscard("Handle Err")]] bool LoadEntityMeshData(ExtendedSceneData& dst, const Json& entity_json);
-        void LoadObjFile(ExtendedSceneData& dst, const Path& abs_obj_path);
-        void ProcessMesh(ExtendedSceneData& dst, const aiScene* mesh_scene);
-        void LoadQuad(ExtendedSceneData& dst);
-        void LoadCube(ExtendedSceneData& dst);
-        void LoadLambertMaterial(ExtendedSceneData& dst, const Json& material_json);
-        void LoadConductorMaterial(ExtendedSceneData& dst, const Json& material_json);
-        void LoadNullMaterial(ExtendedSceneData& dst, const Json& material_json);
-        void LoadTextureIntoMaterial(ExtendedSceneData& dst, const Path& abs_texture_path, MaterialInstanceRef& mat, const std::string& param_name);
-        void InitDefaultMaterial(ExtendedSceneData& dst);
+        void                             LoadObjFile(ExtendedSceneData& dst, const Path& abs_obj_path);
+        void                             ProcessMesh(ExtendedSceneData& dst, const aiScene* mesh_scene);
+        void                             LoadQuad(ExtendedSceneData& dst);
+        void                             LoadCube(ExtendedSceneData& dst);
+        void                             LoadLambertMaterial(ExtendedSceneData& dst, const Json& material_json);
+        void                             LoadConductorMaterial(ExtendedSceneData& dst, const Json& material_json);
+        void                             LoadNullMaterial(ExtendedSceneData& dst, const Json& material_json);
+        void                             LoadTextureIntoMaterial(ExtendedSceneData& dst, const Path& abs_texture_path, MaterialInstanceRef& mat, const std::string& param_name);
+        void                             InitDefaultMaterial(ExtendedSceneData& dst);
 
     private:
         // This function will set both paths.
@@ -350,7 +350,7 @@ namespace Moer::Resource::JsonScene {
         Moer::MeshProcessInput input{
             .vertex_data   = data.vertices.data(),
             .vertex_count  = data.vertex_num,
-            .vertex_stride = data.attribute_info.stride * sizeof(float),
+            .vertex_stride = data.attribute_info.stride * uint(sizeof(float)),
             .index_data    = data.indices.data(),
             .index_count   = static_cast<uint32_t>(data.indices.size())};
         return MeshProcessor::GenerateMeshlets(input);
@@ -430,14 +430,14 @@ namespace Moer::Resource::JsonScene {
             const Json& camera_trans_json = camera_json["transform"];
             position                      = camera_trans_json.value("position", position);
             // This look_at is a Point3f!
-            look_at                       = camera_trans_json.value("look_at", look_at);
-            up                            = camera_trans_json.value("up", up);
+            look_at = camera_trans_json.value("look_at", look_at);
+            up      = camera_trans_json.value("up", up);
         }
         // calculate transform
-        Transform transform   = Transform();
+        Transform transform = Transform();
         // Transform accept look_at as a Point3f
-        auto      world_2_cam = Transform(position, look_at, up);
-        transform.matrix      = Inverse(world_2_cam.GetMatrix4x4());
+        auto world_2_cam = Transform(position, look_at, up);
+        transform.matrix = Inverse(world_2_cam.GetMatrix4x4());
         // get aspect ratio
         float aspect_ratio = 16.f / 9.f;
         if (camera_json.contains("resolution")) {
