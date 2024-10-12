@@ -11,7 +11,7 @@ namespace Moer {
         static RESOURCE_API UniquePtr<Scene> FromFile(const std::filesystem::path& path);
         static RESOURCE_API bool             HasValidCache(const std::filesystem::path& path);
         static RESOURCE_API void             ToFile(const Scene& scene, const std::filesystem::path& path);
-        static RESOURCE_API UniquePtr<Scene> ConvertToScene(SceneData& sceneData, bool need_cache = true);
+        static RESOURCE_API UniquePtr<Scene> ConvertToScene(SceneData& scene_data, bool need_cache = true);
         static RESOURCE_API void             LoadSceneFromCacheAsync(const std::filesystem::path& path);
         //
     protected:

@@ -51,11 +51,14 @@ namespace Moer {
         TextureBuilder& MipAndLayers(uint32_t mip_levels, uint32_t layer_levels, const uint32_t* offsets, const Extent3D* extents) noexcept;
         TextureBuilder& CallBack(Callback callback) noexcept;
         TextureBuilder& Data(void* data, uint32_t data_size) noexcept;
+        TextureBuilder& Name(const std::string& name) noexcept;
         RHITextureRef   Build() noexcept;
         ~TextureBuilder() noexcept;
+        static Moer::UnorderedMap<std::string,Render::TextureRef> BuildTexturesInBatch(Moer::Array<TextureBuilder>& builders) noexcept;
         // static void InitBuild() noexcept;
         // static void EndBuild() noexcept;
     protected:
+        std::string  m_name;
         EPixelFormat m_format{EPixelFormat::PF_R8G8B8_UNORM};
         uint32_t     m_width{0}, m_height{0}, m_depth{0}, m_mip_levels{1}, m_layer_levels{1}, m_data_size{0};
         Callback     m_callback{nullptr};
@@ -78,7 +81,7 @@ namespace Moer {
         static RHIBufferRef CopyFrom(EBufferUsageFlags _usages, const std::span<T> _data) {
             return CopyFrom(_usages, _data->data(), _data->size() * sizeof(T), sizeof(T));
         }
-        RHIBufferRef CreateBufferWithData(EBufferUsageFlags usages, const void* data, uint32_t size);
+        static  RHIBufferRef CreateBufferWithData(EBufferUsageFlags usages, const void* data, uint32_t size);
 
     protected:
         class Impl;

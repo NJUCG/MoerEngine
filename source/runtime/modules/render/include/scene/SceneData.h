@@ -28,6 +28,10 @@ namespace Moer {
 
     struct SceneData {
         Moer::Array<float>              m_vertex_data{};
+        
+        Moer::Array<float>              m_position_data{};
+        Moer::Array<float>              m_uv_data{};
+        Moer::Array<float>              m_normal_data{};
         Moer::Array<uint32_t>           m_index_data{};
         Moer::Array<MeshletDesc>        m_meshlet_descs{};
         Moer::Array<Moer::MeshletBound> m_meshlet_bounds{};
@@ -47,5 +51,7 @@ namespace Moer {
 
         std::filesystem::path m_path;
         size_t                m_scene_key{0};
+        uint32_t              m_vertex_stride{0};
+        uint32_t              m_index_stride{0};
     };
 }// namespace Moer

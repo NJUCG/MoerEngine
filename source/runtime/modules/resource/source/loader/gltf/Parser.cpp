@@ -441,7 +441,7 @@ namespace Moer::Resource::Gltf {
             uint32_t temp_stride;
             auto     flags = GetAttribute(gltf_scene->mMeshes[i], temp_stride);
             assert(attribute == flags && "Meshes have different attribute");
-            assert(temp_stride == stride / 4 && "Meshes have different attribute");
+            assert(temp_stride == stride /4  && "Meshes have different attribute");
             Moer::Array<float> temp_vertex_data(mesh->mNumVertices * stride / sizeof(float));
             GetVertexData(mesh, temp_vertex_data.data());
 
@@ -560,12 +560,14 @@ namespace Moer::Resource::Gltf {
             RenderThreadFence fence;
             fence.Wait();
         }
-        if (!IsCurrentlyRenderThread()) {
-            ScopeEventRef event;
-            EnqueueRenderTask([&event]() {
-                event.Trigger();
-            });
-        }
+        // if (!IsCurrentlyRenderThread()) {
+        //     ScopeEventRef event;
+        //     EnqueueRenderTask([&event]() {
+        //         event.Trigger();
+        //     });
+        // }
+        // TaskGraph::QueueTask()
+        
 
         m_scene_data->m_vertex_data        = std::move(m_vertex_data);
         m_scene_data->m_index_data         = std::move(m_index_data);
@@ -580,6 +582,8 @@ namespace Moer::Resource::Gltf {
         m_scene_data->m_textures           = std::move(m_textures);
         m_scene_data->m_cameras            = std::move(m_scene_data->m_cameras);
         m_scene_data->m_path               = _file_path.string();
+        m_scene_data->m_vertex_stride      = stride;
+        m_scene_data->m_index_stride       = sizeof(uint32_t);
 
         auto scene_data = std::move(m_scene_data);
 
@@ -619,23 +623,33 @@ namespace Moer::Resource::Gltf {
         Scene::RegisterAsyncLoadInfo(load_info);
         // auto future      = promise->GetFuture();
 
-        LambdaTask::Dispatch(
-            [this, path(file_path), info(load_info)]() {
-                Timer* timer = MoerNew(Timer)();
-                timer->Start();
-                auto        load_info = Scene::GetCurrentSceneLoadInfo();
-                std::string path_str  = path.generic_string();
+        Timer* timer = MoerNew(Timer)();
+        timer->Start();
+        auto scene_data = this->LoadSceneFromFile(file_path, true);
+        // auto        load_info = Scene::GetCurrentSceneLoadInfo();
+        load_info->scene = SceneCache::ConvertToScene(*scene_data).release();
+        Scene::SetCurrentScene(std::move(load_info->scene));
+        load_info->progress.store(1);
+        timer->Stop();
+        LOG_INFO("Load Scene {} Success, Time:{}", scene_data->m_path.string(), timer->ElapsedMilliseconds());
+        MoerDelete(timer);
+        
+        // auto event = LambdaTask::Dispatch(
+        //     [this, path(file_path), info(load_info),scene_data]() {
+        //         
+        //         auto        load_info = Scene::GetCurrentSceneLoadInfo();
+        //         std::string path_str  = path.generic_string();
+        //
+        //         // scene_data = this->LoadSceneFromFile(path, true);
+        //
+        //        
+        //         
+        //         // auto event = LambdaTask::Create(std::move(lambda_task)).Dispatch();
+        //     });
 
-                auto sceneData = this->LoadSceneFromFile(path, true);
-                EnqueueRenderTask([load_info = std::move(load_info), sceneData = std::move(sceneData), timer]() {
-                    load_info->scene = SceneCache::ConvertToScene(*sceneData).release();
-                    Scene::SetCurrentScene(std::move(load_info->scene));
-                    load_info->progress.store(1);
-                    timer->Stop();
-                    LOG_INFO("Load Scene {} Success, Time:{}", sceneData->m_path.string(), timer->ElapsedMilliseconds());
-                    MoerDelete(timer);
-                });
-            });
+        auto lambda_task = [load_info = std::move(load_info), sceneData = std::move(scene_data), timer]() {
+            
+        };
     }
 
     Transform GetTransform(const aiNode* node) {

@@ -14,12 +14,12 @@ namespace Moer {
     Scene* g_scene = nullptr;
     struct GpuScene {
         RHIBufferRef GetGpuBuffer(EGpuSceneResource _resource) const { return global_resources.buffers[(uint32_t)_resource]; }
-        RHIRayTracingTLASRef GetTLAS() const { return tlas; }
-    private:
+        // RHIRayTracingTLASRef GetTLAS() const { return tlas; }
         struct GResource {
             StaticArray<RHIBufferRef, (uint32_t)EGpuSceneResource::Num> buffers;
         } global_resources;
-        RHIRayTracingTLASRef tlas;
+        Render::RaytracingSceneRef rt_scene{nullptr};
+        Render::BufferRef vertex_buffer{nullptr}, index_buffer{nullptr};
     };
     class RENDER_API Scene::Impl {
         friend class Scene;
@@ -101,6 +101,16 @@ namespace Moer {
     void Scene::AddEntity(Entity entity) noexcept {
         m_impl->AddEntity(entity);
     }
+    void Scene::SetBlasList(Moer::Array<RHIRayTracingBLASRef> _blas_list) noexcept {
+        // m_impl->gpu_scene.blases =  std::move(_blas_list);
+    }
+    void Scene::SetRaytracingScene(Render::RaytracingSceneRef _scene) noexcept {
+        m_impl->gpu_scene.rt_scene = _scene;
+    }
+
+    void Scene::SetTlas(RHIRayTracingTLASRef _tlas) noexcept {
+       // m_impl->gpu_scene.tlas = _tlas;
+    }
     void Scene::RemoveEntity(Entity entity) noexcept {
         m_impl->RemoveEntity(entity);
     }
@@ -164,6 +174,19 @@ namespace Moer {
 
     GpuScene& Scene::GetGpuScene() noexcept {
         return m_impl->GetGpuScene();
+    }
+    void Scene::SetVertexBuffer(Render::BufferRef _buffer) noexcept {
+        m_impl->gpu_scene.vertex_buffer = _buffer;
+    }
+
+    void Scene::SetIndexBuffer(Render::BufferRef _buffer) noexcept {
+        m_impl->gpu_scene.index_buffer = _buffer;
+    }
+    Render::BufferRef Scene::GetVertexBuffer() const noexcept {
+        return m_impl->gpu_scene.vertex_buffer;
+    }
+    Render::BufferRef Scene::GetIndexBuffer() const noexcept {
+        return m_impl->gpu_scene.index_buffer;
     }
 
     AsyncSceneLoadInfoRef Scene::GetCurrentSceneLoadInfo() noexcept {

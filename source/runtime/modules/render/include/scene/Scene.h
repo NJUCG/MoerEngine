@@ -63,6 +63,9 @@ namespace Moer {
         void          AddEntity(Entity _entity) noexcept;
         void          AddCamera(Entity _entity) noexcept;
         void          AddLight(Entity _entity) noexcept;
+        void          SetTlas(RHIRayTracingTLASRef _tlas) noexcept;
+        void SetBlasList(Moer::Array<RHIRayTracingBLASRef> _blas_list) noexcept;
+        void SetRaytracingScene(Render::RaytracingSceneRef _scene) noexcept;
         void          RemoveEntity(Entity _entity) noexcept;
         void          SetBuffer(const std::string& _name, RHIBufferRef _buffer) noexcept;
         RHIBufferRef  GetBuffer(const std::string& _name) const noexcept;
@@ -84,6 +87,13 @@ namespace Moer {
         static bool RegisterAsyncLoadInfo(AsyncSceneLoadInfoRef _load_info);
 
         GpuScene& GetGpuScene() noexcept;
+
+        void SetVertexBuffer(Render::BufferRef _buffer) noexcept;
+        void SetIndexBuffer(Render::BufferRef _buffer) noexcept;
+
+        Render::BufferRef GetVertexBuffer() const noexcept;
+        Render::BufferRef GetIndexBuffer() const noexcept;
+        
 
     protected:
         class Impl;
