@@ -2751,10 +2751,20 @@ namespace Moer::Render {
         MoerDelete(this);
     }
 
+    void VulkanBuffer::SetName(const std::string_view _name) {
+        debug_name = _name;
+        m_device->SetResourceName(uint64(m_alloc.buffer), VK_OBJECT_TYPE_BUFFER, _name);
+    }
+
     void VulkanTexture::Destroy() { if (b_deferred_delete) { 
         m_device->EnqueueDeferredRelease(this); 
         return;
         } 
         MoerDelete(this);
+    }
+
+    void VulkanTexture::SetName(const std::string_view _name) {
+        debug_name = _name;
+        m_device->SetResourceName(uint64(m_alloc.image), VK_OBJECT_TYPE_IMAGE, _name);
     }
 }

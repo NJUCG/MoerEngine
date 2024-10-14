@@ -16,6 +16,7 @@
 #include "rhi/RHIResourceInitilizer.h"
 #include "rhi/vulkan/VulkanRHI.h"
 
+#include <string_view>
 #include <volk.h>
 #include "VulkanMacroUtils.h"
 #include "VulkanCommand.h"
@@ -1646,6 +1647,8 @@ namespace Moer::Render {
         }
 
         void Visit(const DispatchCmd& _cmd) {
+            static float4 dispatch_color = {0.0f, 0.0f, 1.0f, 1.0f};
+            cmd_list.InsertLabel(_cmd.name, dispatch_color);
             const auto& param = _cmd.Param();
 
             ComputePipeline pso(_cmd.Pipeline());
@@ -1670,6 +1673,8 @@ namespace Moer::Render {
                     }
                 },
                 param);
+
+            cmd_list.EndLabel();
         }
 
         // we don't need to do anything
@@ -1699,6 +1704,9 @@ namespace Moer::Render {
         }
 
         void Visit(const SetDrawStateCmd& _cmd) {
+
+            static float4 draw_color = {0.0f, 1.0f, 0.0f, 1.0f};
+            cmd_list.BeginLabel(_cmd.name, draw_color);
             state = EState::Draw;
 
             const auto&    args = _cmd.Args();
@@ -1803,6 +1811,7 @@ namespace Moer::Render {
                     draw_data.idx_view);
             }
             cmd_list.EndRendering();
+            cmd_list.EndLabel();
         }
 
         void Visit(const UpdateBindlessArrayCmd& _cmd) {
@@ -1854,8 +1863,9 @@ namespace Moer::Render {
                 scratch_offset = (scratch_offset + scratch_alignment - 1) & ~(scratch_alignment - 1);
                 scratch_offset += build_param.mode == ERaytracingBuildMode::BUILD ? geometry->build_sizes_info.buildScratchSize : geometry->build_sizes_info.updateScratchSize;
             }
-
+            cmd_list.BeginLabel(std::format("BuildBLAS {}", build_infos.size()), {});
             cmd_list.BuildAccelerationStructures(build_infos, build_ranges);
+            cmd_list.EndLabel();
         }
 
         void Visit(const UpdateRaytracingSceneCmd& _cmd) {
@@ -1943,7 +1953,9 @@ namespace Moer::Render {
 
             build_info.scratchData.deviceAddress = scratch_buffer->DeviceAddress();
 
+            cmd_list.BeginLabel(std::format("UpdateTLAS with {} instances", _cmd.InstanceCount()), {});
             vkCmdBuildAccelerationStructuresKHR(cmd_list.GetHandle(), 1, &build_info, &range);
+            cmd_list.EndLabel();
         }
 
         // void Visit(const UpdateDrawStateCmd& _cmd) {
@@ -2090,6 +2102,30 @@ namespace Moer::Render {
         }
     }
 
+    void VkNativeQueue::BeginLabel(std::string_view _label, float4 _color) {
+        VkDebugUtilsLabelEXT label{VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT};
+        label.pLabelName = _label.data();
+        label.color[0]   = _color.x;
+        label.color[1]   = _color.y;
+        label.color[2]   = _color.z;
+        label.color[3]   = _color.w;
+        vkQueueBeginDebugUtilsLabelEXT(queue, &label);
+    }
+
+    void VkNativeQueue::EndLabel() {
+        vkQueueEndDebugUtilsLabelEXT(queue);
+    }
+
+    void VkNativeQueue::InsertLabel(std::string_view _label, float4 _color) {
+        VkDebugUtilsLabelEXT label{VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT};
+        label.pLabelName = _label.data();
+        label.color[0]   = _color.x;
+        label.color[1]   = _color.y;
+        label.color[2]   = _color.z;
+        label.color[3]   = _color.w;
+        vkQueueInsertDebugUtilsLabelEXT(queue, &label);
+    }
+
     static bool IsBufferTextureWrite(uint64 _flags) {
         VulkanShaderResourceState state(_flags);
         switch (state.resource_type) {
@@ -2144,6 +2180,10 @@ namespace Moer::Render {
             if (queue.GetType() != EQueueType::Copy) {
                 vk_device.GetGlobalDescriptorHeap().BeginPushDescriptors(last_time + 1);
             }
+
+            std::string_view queue_label = queue.GetType() == EQueueType::Graphics ? "Graphics Exec" : queue.GetType() == EQueueType::Compute ? "Compute Exec" :
+                                                                                                                                                "Copy Exec";
+            vk_allocator.GetCmdList().BeginLabel(queue_label, {1.0f, 0.0f, 0.0f, 1.0f});
         }
         for (const CmdReorderer::LinkedCommandList& cmd_list : cmd_lists) {
             if (cmd_list.head == nullptr) {
@@ -2205,6 +2245,7 @@ namespace Moer::Render {
         if (has_cmd) {
             tracker.RestoreState();
             tracker.DispatchBarriers(vk_allocator.GetCmdList());
+            vk_allocator.GetCmdList().EndLabel();
             vk_allocator.GetCmdList().End();
             if (queue.GetType() != EQueueType::Copy) {
                 vk_device.GetGlobalDescriptorHeap().EndPushDescriptors(last_time + 1);
@@ -2287,6 +2328,7 @@ namespace Moer::Render {
         auto* swaphchain_tex = ResourceCast(sc->GetSwapchainImage(idx).texture);
         {
             vk_cmd_list.Begin();
+            vk_cmd_list.BeginLabel("Present", {0.0f, 1.0f, 1.0f, 1.0f});
             vk_tracker.SetPassType(EPassType::Graphics);
             vk_tracker.RecordState(vk_src_tex, vk_tracker.ReadTexture(vk_src_tex, ETextureState::TRANSFER));
             vk_tracker.RecordState(swaphchain_tex, vk_tracker.WriteTexture(swaphchain_tex, ETextureState::TRANSFER));
@@ -2294,6 +2336,7 @@ namespace Moer::Render {
             vk_tracker.DispatchBarriers(vk_cmd_list);
             //copy
             //todo: need transaction
+            vk_cmd_list.InsertLabel("Copy Present Image", {0.0f, 0.0f, 0.0f, 1.0f});
             vk_cmd_list.CopyTexture(vk_src_tex, swaphchain_tex, _view.extent, {0, 0, 0}, {0, 0, 0}, 0, 0);
             vk_tracker.RecordState(swaphchain_tex,
                                    VK_ACCESS_2_NONE,
@@ -2304,6 +2347,7 @@ namespace Moer::Render {
 
             vk_tracker.RestoreState();
             vk_tracker.DispatchBarriers(vk_cmd_list);
+            vk_cmd_list.EndLabel();
             vk_cmd_list.End();
             vk_tracker.Reset();
             // vk_tracker.PropagateState();
@@ -3014,6 +3058,28 @@ namespace Moer::Render {
 
     void VulkanCmdList::BuildAccelerationStructures(const Array<VkAccelerationStructureBuildGeometryInfoKHR>& _build_infos, const Array<VkAccelerationStructureBuildRangeInfoKHR*>& _build_ranges) {
         vkCmdBuildAccelerationStructuresKHR(command_buffer, _build_infos.size(), _build_infos.data(), _build_ranges.data());
+    }
+
+    void VulkanCmdList::BeginLabel(std::string_view _label, float4 _color) {
+        VkDebugUtilsLabelEXT label = {
+            .sType      = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT,
+            .pNext      = nullptr,
+            .pLabelName = _label.data(),
+            .color      = {_color.x, _color.y, _color.z, _color.w}};
+        vkCmdBeginDebugUtilsLabelEXT(command_buffer, &label);
+    }
+
+    void VulkanCmdList::EndLabel() {
+        vkCmdEndDebugUtilsLabelEXT(command_buffer);
+    }
+
+    void VulkanCmdList::InsertLabel(std::string_view _label, float4 _color) {
+        VkDebugUtilsLabelEXT label = {
+            .sType      = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT,
+            .pNext      = nullptr,
+            .pLabelName = _label.data(),
+            .color      = {_color.x, _color.y, _color.z, _color.w}};
+        vkCmdInsertDebugUtilsLabelEXT(command_buffer, &label);
     }
 
 }// namespace Moer::Render

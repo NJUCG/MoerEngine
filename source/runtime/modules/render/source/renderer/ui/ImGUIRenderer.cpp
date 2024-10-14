@@ -494,10 +494,10 @@ void GUIRender(void* _draw_data, const TextureView& _frame_buffer, CommandList& 
     _cmdlist.CopyFrom(arg_view, std::span<Moer::byte>((Moer::byte*)copy_back_args.data(), copy_back_args.size() * sizeof(ImGUIArg)));
 
     _cmdlist.Gfx(backend_data.rast_pso, render_buffers->arg_buffer, render_backend.bindless_array, constant)
-        .Draw(
-            {0, 0, (uint)(draw_data->DisplaySize.x * draw_data->FramebufferScale.x), uint(draw_data->DisplaySize.y * draw_data->FramebufferScale.y)},
-            std::move(draw_meshes),
-            ColorAttachment(_frame_buffer.GetTexture()));
+        .Draw("ImGui Draws",
+              {0, 0, (uint)(draw_data->DisplaySize.x * draw_data->FramebufferScale.x), uint(draw_data->DisplaySize.y * draw_data->FramebufferScale.y)},
+              std::move(draw_meshes),
+              ColorAttachment(_frame_buffer.GetTexture()));
 
     _cmdlist.AddCallback([vtx(std::move(vertices)),
                           idx(std::move(indices)),

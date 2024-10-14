@@ -8,6 +8,7 @@
 #include "RenderAPI.h"
 #include "shader/ShaderPipeline.h"
 #include <functional>
+#include <optional>
 #include <string_view>
 #include <type_traits>
 #include <variant>
@@ -327,8 +328,8 @@ namespace Moer::Render {
         virtual EQueueType GetQueueType() const = 0;
 
     public:
-        EType            Type() const { return type; }
-        std::string_view name;
+        EType       Type() const { return type; }
+        std::string name;
     };
 
     struct WaitEvent {
@@ -520,6 +521,54 @@ namespace Moer::Render {
                 Draw(_rect, std::move(_mesh_data), DepthAttachment{}, std::forward<TRenderTarget>(_render_targets)...);
             };
 
+            //draw with names
+            template<typename... TRenderTarget>
+            void Draw(std::string_view _name, Rect2D _rect, Array<MeshDrawData>&& _mesh_data, DepthAttachment _depth, TRenderTarget&&... _render_targets) {
+                RenderPassInfo pass_info(
+                    {std::forward<TRenderTarget>(_render_targets)...},
+                    _depth,
+                    _rect);
+                cmd_list.SetRenderCmds(pso.handle, std::move(args), std::move(pass_info), std::move(_mesh_data), _name);
+            };
+
+            template<typename... TRenderTarget>
+            void Draw(std::string_view _name, Rect2D _rect, std::span<VertexBuffer> _vtx, IndexBuffer _idx, Array<SingleDrawParam>&& _mesh_data, DepthAttachment _depth, TRenderTarget&&... _render_targets) {
+
+                Array<MeshDrawData> mesh_data;
+                mesh_data.emplace_back(_vtx, _idx);
+                mesh_data.back().draw_params = std::move(_mesh_data);
+
+                Draw(_name, _rect, std::move(mesh_data), _depth, std::forward<TRenderTarget>(_render_targets)...);
+            };
+
+            template<typename... TRenderTarget>
+            void Draw(std::string_view _name, Rect2D _rect, std::span<VertexBuffer> _vtx, IndexBuffer _idx, Array<SingleDrawParam>&& _mesh_data, TRenderTarget&&... _render_targets) {
+
+                Array<MeshDrawData> mesh_data;
+                mesh_data.emplace_back(_vtx, _idx);
+                mesh_data.back().draw_params = std::move(_mesh_data);
+
+                Draw(_name, _rect, std::move(mesh_data), std::forward<TRenderTarget>(_render_targets)...);
+            };
+
+            template<typename... TRenderTarget>
+            void Draw(std::string_view _name, Rect2D _rect, std::span<VertexBuffer> _vtx, uint _vtx_cnt, Array<SingleDrawParam>&& _mesh_data, DepthAttachment _depth, TRenderTarget&&... _render_targets) {
+                RenderPassInfo pass_info(
+                    {std::forward<TRenderTarget>(_render_targets)...},
+                    _depth,
+                    _rect);
+                Array<MeshDrawData> mesh_data;
+                mesh_data.emplace_back(_vtx, _vtx_cnt);
+                mesh_data.back().draw_params = std::move(_mesh_data);
+
+                cmd_list.SetRenderCmds(pso.handle, std::move(args), std::move(pass_info), std::move(mesh_data), _name);
+            };
+
+            template<typename... TRenderTarget>
+            void Draw(std::string_view _name, Rect2D _rect, Array<MeshDrawData>&& _mesh_data, TRenderTarget&&... _render_targets) {
+                Draw(_name, _rect, std::move(_mesh_data), DepthAttachment{}, std::forward<TRenderTarget>(_render_targets)...);
+            };
+
             RasterPipeline& pso;
             CommandList&    cmd_list;
             ArrayArguments  args;
@@ -538,14 +587,14 @@ namespace Moer::Render {
         struct RENDER_API RTDispatcher {
         };
         struct RENDER_API ComputeDispatcher {
-            void Dispatch(Vector2ui _group_count) {
-                Dispatch(uint3(_group_count, 1));
+            void Dispatch(Vector2ui _group_count, std::string_view _name = Command::typenames[(uint)Command::EType::ShaderDispatch]) {
+                Dispatch(uint3(_group_count, 1), _name);
             }
-            void Dispatch(Vector3ui _group_count);
-            void Dispatch(uint _group_cnt) {
-                Dispatch(Vector3ui(_group_cnt, 1, 1));
+            void Dispatch(Vector3ui _group_count, std::string_view _name = Command::typenames[(uint)Command::EType::ShaderDispatch]);
+            void Dispatch(uint _group_cnt, std::string_view _name = Command::typenames[(uint)Command::EType::ShaderDispatch]) {
+                Dispatch(Vector3ui(_group_cnt, 1, 1), _name);
             }
-            void DispatchIndirect(BufferView);
+            void DispatchIndirect(BufferView, std::string_view _name = Command::typenames[(uint)Command::EType::ShaderDispatch]);
             ComputeDispatcher(ComputePipeline& _pso, CommandList& _cmd_list, ArrayArguments&& _args);
             ComputeDispatcher(ComputePipeline& _pso, CommandList& _cmd_list);
             // template<typename T>
@@ -679,7 +728,7 @@ namespace Moer::Render {
         friend DrawDispatcher;
         friend ComputeDispatcher;
         friend class CommandQueue;
-        RENDER_API void SetRenderCmds(PipelineHandle& _handle, ArrayArguments&& _args, RenderPassInfo&&, Array<MeshDrawData>&&);
+        RENDER_API void SetRenderCmds(PipelineHandle& _handle, ArrayArguments&& _args, RenderPassInfo&&, Array<MeshDrawData>&&, std::optional<std::string_view> _name = std::nullopt);
         // void SubmitArgs(ShaderPipeline&, Arguments&&);
         // void SubmitConstants(ShaderPipeline&, Array<uint>&&);
 

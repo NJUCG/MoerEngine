@@ -202,6 +202,7 @@ int main(int argc, const char** argv) {
         Extent2D(resolution.x, resolution.y),
         PF_R8G8B8A8_SRGB,
         ETextureUsageFlags::COLOR_ATTACHMENT);
+    output->SetName("output");
 
     TextureRef output2 = device.CreateTexture(
         Extent2D(resolution.x, resolution.y),
@@ -306,6 +307,7 @@ int main(int argc, const char** argv) {
                 Extent2D(resolution.x, resolution.y),
                 PF_R8G8B8A8_SRGB,
                 ETextureUsageFlags::COLOR_ATTACHMENT);
+            output->SetName("output");
             cmd_queue.Sync();
             sc_info.size = {resolution.x, resolution.y};
             sc->Recreate(sc_info);

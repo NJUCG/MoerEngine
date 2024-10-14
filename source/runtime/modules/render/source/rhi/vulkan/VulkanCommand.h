@@ -143,6 +143,12 @@ namespace Moer::Render {
         //Raytracing
         void BuildAccelerationStructures(const Array<VkAccelerationStructureBuildGeometryInfoKHR>& _build_infos, const Array<VkAccelerationStructureBuildRangeInfoKHR*>& _range_infos);
 
+        //Debug
+        void BeginLabel(std::string_view _label, float4 _color);
+        void EndLabel();
+
+        void InsertLabel(std::string_view _label, float4 _color);
+
         VkCommandBuffer GetHandle() const { return command_buffer; }
     };
     //allocator for tmp buffer and other tmp resources
@@ -492,6 +498,10 @@ namespace Moer::Render {
         void       Signal(VkSemaphore _semaphore, VkPipelineStageFlags2 _stage = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
         VkQueue    GetHandle() const { return queue; }
         EQueueType GetType() const { return type; }
+
+        void BeginLabel(std::string_view _label, float4 _color);
+        void EndLabel();
+        void InsertLabel(std::string_view _label, float4 _color);
 
     private:
         Array<VkSemaphoreSubmitInfo> wait_infos;

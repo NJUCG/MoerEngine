@@ -88,12 +88,14 @@ namespace Moer::Render {
         : cmd_list(_cmd_list), pso(_pso), args({}) {
     }
 
-    void CommandList::ComputeDispatcher::Dispatch(uint3 _group_count) {
+    void CommandList::ComputeDispatcher::Dispatch(uint3 _group_count, std::string_view _name) {
         cmd_list.commands.push_back(MakeUnique<DispatchCmd>(std::move(args), pso.handle, _group_count));
+        cmd_list.commands.back()->name = _name;
     }
 
-    void CommandList::ComputeDispatcher::DispatchIndirect(BufferView _indirect) {
+    void CommandList::ComputeDispatcher::DispatchIndirect(BufferView _indirect, std::string_view _name) {
         cmd_list.commands.push_back(MakeUnique<DispatchCmd>(std::move(args), pso.handle, _indirect));
+        cmd_list.commands.back()->name = _name;
     }
 
     CmdSubmit CommandList::Submit() {
@@ -210,8 +212,11 @@ namespace Moer::Render {
             _name));
     }
 
-    void CommandList::SetRenderCmds(PipelineHandle& _handle, ArrayArguments&& _args, RenderPassInfo&& _info, Array<MeshDrawData>&& _mesh_data) {
+    void CommandList::SetRenderCmds(PipelineHandle& _handle, ArrayArguments&& _args, RenderPassInfo&& _info, Array<MeshDrawData>&& _mesh_data, std::optional<std::string_view> _name) {
         commands.push_back(MakeUnique<SetDrawStateCmd>(_handle, std::move(_args), std::move(_info), std::move(_mesh_data)));
+        if (_name.has_value()) {
+            commands.back()->name = *_name;
+        }
     }
 
     void CommandList::UpdateBindlessArray(BindlessArrayRef _array) {

@@ -98,6 +98,8 @@ namespace Moer::Render {
             return (uint(SF_Num) * uint(SAM_Num)) * compare + (uint(SF_Num)) * address + filter;
         }
 
+        void SetResourceName(uint64 _object, VkObjectType _object_type, const std::string_view _name);
+
     public:
     public:
         inline VkPhysicalDevice GetGpu() const {
