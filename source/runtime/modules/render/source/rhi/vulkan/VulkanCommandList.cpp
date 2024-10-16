@@ -1769,12 +1769,13 @@ namespace Moer::Render {
                     vertex_buffers[i] = ResourceCast(draw_data.vtx_views[i].buffer)->GetHandle();
                     vtx_offsets[i]    = draw_data.vtx_views[i].offset;
                 }
-                cmd_list.SetVertexBuffers(0,
-                                          draw_data.vtx_cnt,
-                                          std::span<VkBuffer>(vertex_buffers.data(),
-                                                              draw_data.vtx_cnt),
-                                          std::span<VkDeviceSize>(vtx_offsets.data(),
-                                                                  draw_data.vtx_cnt));
+                if (draw_data.vtx_cnt > 0)
+                    cmd_list.SetVertexBuffers(0,
+                                              draw_data.vtx_cnt,
+                                              std::span<VkBuffer>(vertex_buffers.data(),
+                                                                  draw_data.vtx_cnt),
+                                              std::span<VkDeviceSize>(vtx_offsets.data(),
+                                                                      draw_data.vtx_cnt));
 
                 // uint vtx_offset = draw_data.vtx_cnt != 0 ? draw_data.vtx_views[0].offset / draw_data.vtx_views[0].buffer->GetStride() : 0;
 

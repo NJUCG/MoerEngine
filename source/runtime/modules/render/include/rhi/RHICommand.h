@@ -361,8 +361,8 @@ namespace Moer::Render {
     };
     struct MeshDrawData {
         StaticArray<VertexBuffer, 4>    vtx_views;
-        std::variant<IndexBuffer, uint> idx_view;
-        uint                            vtx_cnt;
+        std::variant<IndexBuffer, uint> idx_view = 0u;
+        uint                            vtx_cnt  = 0;
 
         Array<SingleDrawParam> draw_params;
 
@@ -403,6 +403,15 @@ namespace Moer::Render {
             uint _instance_cnt = 1) {
 
             draw_params.emplace_back(SingleDrawParam{_index_cnt, _instance_cnt, _first_index, _first_vertex, _first_instance});
+        }
+
+        void EmplaceDraw(
+            uint _vertex_cnt,
+            uint _first_vertex,
+            uint _first_instance,
+            uint _instance_cnt = 1) {
+
+            draw_params.emplace_back(SingleDrawParam{_vertex_cnt, _instance_cnt, 0, _first_vertex, _first_instance});
         }
         void Reserve(uint _size) {
             draw_params.reserve(_size);

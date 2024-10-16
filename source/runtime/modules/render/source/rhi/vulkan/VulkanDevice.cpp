@@ -440,8 +440,8 @@ namespace Moer::Render {
 
     void VulkanDevice::CreateInternalResources() {
 
-        CreateDescriptorHeap();
         CreateImmutableSamplers();
+        CreateDescriptorHeap();
     }
 
     void VulkanDevice::DestroyInternalResources() {
