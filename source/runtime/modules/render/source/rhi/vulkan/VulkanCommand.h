@@ -174,7 +174,9 @@ namespace Moer::Render {
     public:
         VulkanAllocator(VulkanDevice* _device, EQueueType _queue_type);
         ~VulkanAllocator();
-        BufferView     AllocateBuffer(uint64 _size, uint _align);
+        BufferView AllocateUploadBuffer(uint64 _size, uint _align);
+        BufferView AllocateReadbackBuffer(uint64 _size, uint _align);
+
         BufferView     AllocateScratch(uint64 _size);
         BufferView     AllocateShaderBuffer(uint64 _size);
         VulkanCmdList& GetCmdList() {
@@ -244,7 +246,9 @@ namespace Moer::Render {
         Array<VulkanBuffer*>              large_buffers;
         TmpBufferAllocator                allocator;
 
-        StackAllocator               small_allocator;
+        StackAllocator small_allocator;
+        StackAllocator readback_allocator;
+
         ScratchAllocator             scratch_allocator;
         ShaderBufferAllocator        shader_buffer_allocator;
         Array<std::function<void()>> on_complete;

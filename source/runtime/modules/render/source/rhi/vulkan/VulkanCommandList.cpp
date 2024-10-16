@@ -1558,7 +1558,7 @@ namespace Moer::Render {
                                                                                                                           cmd_list(_cmd_list) {}
         void Visit(const UploadBufferCmd& _cmd) {
             auto data_span  = _cmd.Data();
-            auto tmp_buffer = allocator.AllocateBuffer(_cmd.ByteSize(), 16);
+            auto tmp_buffer = allocator.AllocateUploadBuffer(_cmd.ByteSize(), 16);
             cmd_list.CopyData(tmp_buffer, data_span.data(), data_span.size_bytes());
             VulkanBuffer* buffer = reinterpret_cast<VulkanBuffer*>(_cmd.Handle());
             cmd_list.CopyBuffer(reinterpret_cast<VulkanBuffer*>(tmp_buffer.GetBuffer()),
@@ -1570,7 +1570,7 @@ namespace Moer::Render {
 
         void Visit(const UploadTextureCmd& _cmd) {
             auto data_span  = _cmd.Data();
-            auto tmp_buffer = allocator.AllocateBuffer(data_span.size_bytes(), 16);
+            auto tmp_buffer = allocator.AllocateUploadBuffer(data_span.size_bytes(), 16);
             cmd_list.CopyData(tmp_buffer, data_span.data(), data_span.size_bytes());
             VulkanTexture* texture = reinterpret_cast<VulkanTexture*>(_cmd.Handle());
             cmd_list.CopyBufferToTexture(reinterpret_cast<VulkanBuffer*>(tmp_buffer.GetBuffer()),
@@ -1595,7 +1595,7 @@ namespace Moer::Render {
 
         void Visit(const CopyBackBufferCmd& _cmd) {
             VulkanBuffer* src_buffer = reinterpret_cast<VulkanBuffer*>(_cmd.Handle());
-            auto          tmp_buffer = allocator.AllocateBuffer(_cmd.ByteSize(), 16);
+            auto          tmp_buffer = allocator.AllocateReadbackBuffer(_cmd.ByteSize(), 16);
             cmd_list.CopyBuffer(src_buffer,
                                 reinterpret_cast<VulkanBuffer*>(tmp_buffer.GetBuffer()),
                                 _cmd.ByteSize(),
@@ -2482,6 +2482,7 @@ namespace Moer::Render {
     VulkanAllocator::VulkanAllocator(VulkanDevice* _device, EQueueType _type) : VulkanDeviceObject(_device),
                                                                                 allocator(_device),
                                                                                 small_allocator(&allocator, small_block_size, 1.5),
+                                                                                readback_allocator(&allocator, small_block_size, 1.5),
                                                                                 scratch_allocator(_device),
                                                                                 shader_buffer_allocator(_device) {
         VkQueueFlagBits queue_type = VulkanEnumTranslator::METoVKQueueFlagBits(_type);
@@ -2496,11 +2497,25 @@ namespace Moer::Render {
         }
         large_buffers.clear();
     }
-    //
-    BufferView VulkanAllocator::AllocateBuffer(uint64 _size, uint _alignment) {
+
+    BufferView VulkanAllocator::AllocateUploadBuffer(uint64 _size, uint _alignment) {
         _size = std::max<uint64>(_size, _alignment);
         if (_size < small_block_size) {
             auto          handle = small_allocator.Allocate(_size, _alignment);
+            VulkanBuffer* buffer = reinterpret_cast<VulkanBuffer*>(handle.handle);
+            return {buffer, handle.offset, _size, 1u};
+        }
+        auto          handle = allocator.Allocate(_size);
+        VulkanBuffer* buffer = reinterpret_cast<VulkanBuffer*>(handle);
+        large_buffers.push_back(buffer);
+
+        return {buffer, 0, _size, 1u};
+    }
+
+    BufferView VulkanAllocator::AllocateReadbackBuffer(uint64 _size, uint _alignment) {
+        _size = std::max<uint64>(_size, _alignment);
+        if (_size < small_block_size) {
+            auto          handle = readback_allocator.Allocate(_size, _alignment);
             VulkanBuffer* buffer = reinterpret_cast<VulkanBuffer*>(handle.handle);
             return {buffer, handle.offset, _size, 1u};
         }

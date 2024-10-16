@@ -336,9 +336,10 @@ int main(int argc, const char** argv) {
     cmd_list.CopyFrom(std::span<byte>((byte*)&red_data, sizeof(red_data)), red_tex);
     uint bdls_tex_handle_red = bindless_array->AllocateTexture(red_tex, sampler);
 
-    BufferRef  red_buffer = device.CreateBuffer<float>(4, EBufferUsageFlags::UNORDERED_ACCESS);
+    BufferRef  red_buffer      = device.CreateBuffer<float>(4, EBufferUsageFlags::UNORDERED_ACCESS);
+    float4     red_data_float4 = {1, 0, 0, 1};
     BufferView red_buffer_view(red_buffer, 0, 4, 4);
-    cmd_list.CopyFrom(std::span<byte>((byte*)&red_data, sizeof(red_data)), red_buffer->GetView());
+    cmd_list.CopyFrom(std::span<byte>((byte*)&red_data_float4, sizeof(red_data_float4)), red_buffer->GetView());
     uint bdls_buffer_handle_red = bindless_array->AllocateBuffer(red_buffer_view);
 
     cmd_list.UpdateBindlessArray(bindless_array);
