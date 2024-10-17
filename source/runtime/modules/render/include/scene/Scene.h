@@ -17,6 +17,7 @@ namespace Moer {
         MaterialInfo,
         LightInfo,
         CameraInfo,
+        GaussianSplattingVertex,
         Num
     };
     struct InstanceData {
@@ -68,7 +69,9 @@ namespace Moer {
         void SetRaytracingScene(Render::RaytracingSceneRef _scene) noexcept;
         void          RemoveEntity(Entity _entity) noexcept;
         void          SetBuffer(const std::string& _name, RHIBufferRef _buffer) noexcept;
-        RHIBufferRef  GetBuffer(const std::string& _name) const noexcept;
+        void          SetBuffer(EGpuSceneResource _type, Render::BufferRef _buffer) noexcept;
+        Render::BufferRef GetBuffer(EGpuSceneResource _type) const noexcept;
+        RHIBufferRef GetBuffer(const std::string& _name) const noexcept;
         Array<Entity> GetEntities() const noexcept;
         Array<Entity> GetLights() const noexcept;
         Array<Entity> GetCameras() const noexcept;
@@ -90,10 +93,12 @@ namespace Moer {
 
         void SetVertexBuffer(Render::BufferRef _buffer) noexcept;
         void SetIndexBuffer(Render::BufferRef _buffer) noexcept;
+        void SetInstanceBuffer(Render::BufferRef _buffer) noexcept;
 
         Render::BufferRef GetVertexBuffer() const noexcept;
         Render::BufferRef GetIndexBuffer() const noexcept;
-        
+        Render::BufferRef GetInstanceBuffer() const noexcept;
+        Render::BindlessArrayRef GetBindlessArray() const noexcept;
 
     protected:
         class Impl;

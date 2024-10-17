@@ -47,6 +47,7 @@ namespace Moer {
         Moer::UnorderedMap<std::string, TextureData>               m_textures{};
         Moer::UnorderedMap<std::string, Moer::MaterialInstanceRef> m_material_instances{};
         Moer::UnorderedMap<std::string, MatInstanceTextureInfo>    m_mat_instance_textures{};
+        Moer::UnorderedMap<std::string, Moer::uint32>              m_material_instance_indexes;
         Moer::UnorderedMap<std::string, Moer::MaterialRef>         m_materials;
 
         std::filesystem::path m_path;

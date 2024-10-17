@@ -165,31 +165,31 @@ namespace Moer::Resource::JsonScene {
     }
 
     RESOURCE_API void Moer::Resource::JsonScene::JsonSceneParser::LoadSceneFromFileAsync(const std::filesystem::path& abs_scn_json_path) noexcept {
-        Impl* impl = MoerNew(Impl);
-        impl->LoadSceneFromFileAsync(abs_scn_json_path);
+        // Impl* impl = MoerNew(Impl);
+        // impl->LoadSceneFromFileAsync(abs_scn_json_path);
     }
 
-    void JsonSceneParser::Impl::LoadSceneFromFileAsync(const Path& abs_scn_json_path) {
-        AsyncSceneLoadInfoRef load_info = MoerNew(AsyncSceneLoadInfo);
-        load_info->b_valid              = true;
-        load_info->progress.store(0);
-        Scene::RegisterAsyncLoadInfo(load_info);
-        LambdaTask::Dispatch(
-            [this, path(abs_scn_json_path), info(load_info)]() {
-                Timer* timer = MoerNew(Timer);
-                timer->Start();
-                auto load_info  = Scene::GetCurrentSceneLoadInfo();
-                auto scene_data = this->LoadSceneFromFile(path, true);
-                EnqueueRenderTask([load_info = std::move(load_info), scene_data = std::move(scene_data), timer]() {
-                    load_info->scene = SceneCache::ConvertToScene(*scene_data).release();
-                    Scene::SetCurrentScene(std::move(load_info->scene));
-                    load_info->progress.store(1);
-                    timer->Stop();
-                    LOG_INFO("Load Json Scene {} Success, Time:{}", scene_data->m_path.string(), timer->ElapsedMilliseconds());
-                    MoerDelete(timer);
-                });
-            });
-    }
+    // void JsonSceneParser::Impl::LoadSceneFromFileAsync(const Path& abs_scn_json_path) {
+    //     AsyncSceneLoadInfoRef load_info = MoerNew(AsyncSceneLoadInfo);
+    //     load_info->b_valid              = true;
+    //     load_info->progress.store(0);
+    //     Scene::RegisterAsyncLoadInfo(load_info);
+    //     LambdaTask::Dispatch(
+    //         [this, path(abs_scn_json_path), info(load_info)]() {
+    //             Timer* timer = MoerNew(Timer);
+    //             timer->Start();
+    //             auto load_info  = Scene::GetCurrentSceneLoadInfo();
+    //             auto scene_data = this->LoadSceneFromFile(path, true);
+    //             EnqueueRenderTask([load_info = std::move(load_info), scene_data = std::move(scene_data), timer]() {
+    //                 load_info->scene = SceneCache::ConvertToScene(*scene_data).release();
+    //                 Scene::SetCurrentScene(std::move(load_info->scene));
+    //                 load_info->progress.store(1);
+    //                 timer->Stop();
+    //                 LOG_INFO("Load Json Scene {} Success, Time:{}", scene_data->m_path.string(), timer->ElapsedMilliseconds());
+    //                 MoerDelete(timer);
+    //             });
+    //         });
+    // }
 
     UniquePtr<SceneData> JsonSceneParser::Impl::LoadSceneFromFile(const Path& abs_scn_json_path, bool _delete_after_load) {
         GpuPrimitiveBuilder::InitBuild();
@@ -501,11 +501,11 @@ namespace Moer::Resource::JsonScene {
         material_builder.SetParameter("roughness_factor", UniformType::FLOAT);
         material_builder.SetParameter("ao", UniformType::FLOAT);
 
-        material_builder.SetParameter("albedo_map", ETextureDimension::TEX_2D);
-        material_builder.SetParameter("normal_map", ETextureDimension::TEX_2D);
-        material_builder.SetParameter("metallic_roughness_map", ETextureDimension::TEX_2D);
-        material_builder.SetParameter("ao_map", ETextureDimension::TEX_2D);
-        material_builder.SetParameter("emissive_map", ETextureDimension::TEX_2D);
+        material_builder.SetTexture("albedo_map", ETextureDimension::TEX_2D);
+        material_builder.SetTexture("normal_map", ETextureDimension::TEX_2D);
+        material_builder.SetTexture("metallic_roughness_map", ETextureDimension::TEX_2D);
+        material_builder.SetTexture("ao_map", ETextureDimension::TEX_2D);
+        material_builder.SetTexture("emissive_map", ETextureDimension::TEX_2D);
         material_builder.SetName("standard");
 
         dst.scn_dat->m_materials["standard"] = material_builder.Build();

@@ -13,18 +13,20 @@ namespace Moer {
     // Scene * Scene::default_scene = nullptr;
     Scene* g_scene = nullptr;
     struct GpuScene {
-        RHIBufferRef GetGpuBuffer(EGpuSceneResource _resource) const { return global_resources.buffers[(uint32_t)_resource]; }
+        Render::BufferRef GetGpuBuffer(EGpuSceneResource _resource) const { return global_resources.buffers[(uint32_t)_resource]; }
         // RHIRayTracingTLASRef GetTLAS() const { return tlas; }
         struct GResource {
-            StaticArray<RHIBufferRef, (uint32_t)EGpuSceneResource::Num> buffers;
+            StaticArray<Render::BufferRef, (uint32_t)EGpuSceneResource::Num> buffers;
         } global_resources;
         Render::RaytracingSceneRef rt_scene{nullptr};
-        Render::BufferRef vertex_buffer{nullptr}, index_buffer{nullptr};
+        Render::BufferRef          vertex_buffer{nullptr}, index_buffer{nullptr};
+        Render::BindlessArrayRef bindless_array{nullptr};        
     };
     class RENDER_API Scene::Impl {
         friend class Scene;
 
     public:
+        Impl() noexcept;
         void         AddEntity(Entity _entity) noexcept { m_entities.emplace(_entity); }
         void         AddCamera(Entity _entity) noexcept { m_cameras.emplace(_entity); }
         void         AddLight(Entity _entity) noexcept { m_lights.emplace(_entity); }
@@ -62,6 +64,9 @@ namespace Moer {
     };
     AsyncSceneLoadInfoRef Scene::Impl::m_load_info{nullptr};
 
+    Scene::Impl::Impl() noexcept {
+        gpu_scene.bindless_array = Render::RenderDevice::Get().CreateBindlessArray();
+    }
     Array<Entity> Scene::Impl::GetEntities() const noexcept {
         Array<Entity> result;
         // result.reserve(m_entities.size());
@@ -117,8 +122,14 @@ namespace Moer {
     void Scene::SetBuffer(const std::string& name, RHIBufferRef buffer) noexcept {
         return m_impl->SetBuffer(name, buffer);
     }
-    RHIBufferRef Scene::GetBuffer(const std::string& name) const noexcept {
-        return m_impl->GetBuffer(name);
+    void Scene::SetBuffer(EGpuSceneResource _type, Render::BufferRef _buffer) noexcept {
+        m_impl->gpu_scene.global_resources.buffers[(uint32_t)_type] = _buffer;
+    }
+    Render::BufferRef Scene::GetBuffer(EGpuSceneResource _type) const noexcept {
+        return m_impl->gpu_scene.global_resources.buffers[(uint32_t)_type];
+    }
+    RHIBufferRef Scene::GetBuffer(const std::string& _name) const noexcept {
+        return nullptr;
     }
 
     void Scene::AddCamera(Entity entity) noexcept {
@@ -182,15 +193,23 @@ namespace Moer {
     void Scene::SetIndexBuffer(Render::BufferRef _buffer) noexcept {
         m_impl->gpu_scene.index_buffer = _buffer;
     }
+    void Scene::SetInstanceBuffer(Render::BufferRef _buffer) noexcept {
+        m_impl->gpu_scene.global_resources.buffers[(uint32_t)EGpuSceneResource::InstanceInfo] = _buffer;
+    }
     Render::BufferRef Scene::GetVertexBuffer() const noexcept {
         return m_impl->gpu_scene.vertex_buffer;
     }
     Render::BufferRef Scene::GetIndexBuffer() const noexcept {
         return m_impl->gpu_scene.index_buffer;
     }
-
+    Render::BufferRef Scene::GetInstanceBuffer() const noexcept {
+        return m_impl->gpu_scene.GetGpuBuffer(EGpuSceneResource::InstanceInfo);
+    }
+    Render::BindlessArrayRef Scene::GetBindlessArray() const noexcept {
+        return m_impl->gpu_scene.bindless_array;
+    }
+    
     AsyncSceneLoadInfoRef Scene::GetCurrentSceneLoadInfo() noexcept {
-
         return Impl::GetCurrentSceneLoadInfo();
     }
 

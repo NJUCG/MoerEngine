@@ -76,6 +76,7 @@ target_include_directories(RHITest
 target_link_libraries(RHITest
         PRIVATE MoerRender
         PRIVATE glfw
+        PRIVATE MoerResource
 )
 set_target_properties(RHITest PROPERTIES FOLDER ${moer_test_folder})
 

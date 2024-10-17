@@ -497,7 +497,7 @@ void GUIRender(void* _draw_data, const TextureView& _frame_buffer, CommandList& 
         .Draw(
             {0, 0, (uint)(draw_data->DisplaySize.x * draw_data->FramebufferScale.x), uint(draw_data->DisplaySize.y * draw_data->FramebufferScale.y)},
             std::move(draw_meshes),
-            ColorAttachment(_frame_buffer.GetTexture()));
+            ColorAttachment(_frame_buffer.GetTexture(),EAttachmentAction::AC_LOAD_STORE));
 
     _cmdlist.AddCallback([vtx(std::move(vertices)),
                           idx(std::move(indices)),
