@@ -11,7 +11,9 @@
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
+#include "rhi/RHIResourceInitilizer.h"
 #include "shader/Shader.h"
+#include "shader/ShaderParameterMacros.h"
 #include "shader/ShaderPipeline.h"
 #include "shader/ShaderResourceManager.h"
 #include "log/LogSystem.h"
@@ -21,6 +23,7 @@
 #include "taskgraph/TaskSystem.h"
 #include "window/WindowContext.h"
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "core/include/Core.h"
 #include "modules/resource/include/loader/LoaderInterface.h"
 #include "renderer/UIRenderer.h"
@@ -32,7 +35,8 @@
 using namespace Moer::Render;
 using namespace Moer;
 
-static bool b_show_demo = true;
+static bool b_show_demo        = true;
+static bool b_show_scene_color = true;
 class TestTrianglePipeline : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(TestTrianglePipeline);
@@ -74,6 +78,77 @@ public:
     DEFINE_SHADER_ARGS();
 };
 
+class CombineUIPipeline : public RasterPipeline {
+
+public:
+    struct Param {
+        float2 min_xy;
+        float2 max_xy;
+    };
+
+    DEFINE_RASTER_PIPELINE_CLASS(CombineUIPipeline);
+    DEFINE_SHADER_TEX(scene_color);
+    DEFINE_SHADER_TEX(gui_color);
+    DEFINE_SHADER_SAMPLER(linear_sampler);
+    DEFINE_SHADER_CONSTANT_STRUCT(Param, scene_rect);
+
+    DEFINE_SHADER_ARGS(scene_color, gui_color, linear_sampler, scene_rect);
+};
+
+static float2 scene_color_resolution = {1280, 720};
+static float2 scene_color_pos        = {0, 0};
+
+static void ShowSceneColor(bool* _b_show) {
+
+    ImGuiIO&         io           = ImGui::GetIO();
+    ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_MenuBar;
+
+    const ImGuiViewport* main_viewport = ImGui::GetMainViewport();
+    if (!*_b_show) {
+        return;
+    }
+    if (!ImGui::Begin("Scene Color", _b_show, window_flags)) {
+
+        ImGui::End();
+        return;
+    }
+    float2 scene_size = {0, 0};
+
+    static float2 xy_ratio = {16, 9};
+    // auto          menu_rect = ImGui::GetCurrentWindow()->MenuBarRect();
+
+    auto* current_window    = ImGui::FindWindowByName("Scene Color");
+    bool  b_separate_window = current_window->ParentWindow == nullptr;
+    auto  menu_rect         = current_window->MenuBarRect();
+
+    scene_size.x = current_window->Size.x;
+    scene_size.y = current_window->Size.y + current_window->Pos.y - menu_rect.Max.y;
+
+    auto   window_rect = current_window->Rect();// this is main window rect
+    ImRect parent_rect{};
+
+    if (b_separate_window) {
+    } else {
+        parent_rect = current_window->ParentWindow->Rect();
+    }
+
+    float2 local_pos = {window_rect.Min.x - parent_rect.Min.x, menu_rect.Max.y - parent_rect.Min.y};
+    // LOG_INFO("window_rect: {} {} {} {}", window_rect.Min.x, window_rect.Min.y, window_rect.Max.x, window_rect.Max.y);
+
+    //calculate final pos and size base on xy_ratio
+
+    // if (scene_size.x / scene_size.y > xy_ratio.x / xy_ratio.y) {
+    //     scene_size.x = scene_size.y * xy_ratio.x / xy_ratio.y;
+    // } else {
+    //     scene_size.y = scene_size.x * xy_ratio.y / xy_ratio.x;
+    // }
+    // scene_pos.x += (ImGui::GetWindowWidth() - scene_size.x) / 2;
+    // scene_pos.y += (ImGui::GetWindowHeight() - scene_size.y) / 2;
+
+    scene_color_resolution = {scene_size.x, scene_size.y};
+    scene_color_pos        = {local_pos.x, local_pos.y};
+    ImGui::End();
+}
 class MaterialShadingPipeline : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(MaterialShadingPipeline);
@@ -87,7 +162,7 @@ static void ShowGUI(bool* _b_show) {
     static bool               opt_fullscreen  = true;
     static bool               opt_padding     = false;
     static ImGuiDockNodeFlags dockspace_flags = ImGuiDockNodeFlags_None;
-
+    // ImGui::DockSpaceOverViewport(ImGui::GetMainViewport());
     // We are using the ImGuiWindowFlags_NoDocking flag to make the parent window not dockable into,
     // because it would be confusing to have two docking targets within each others.
     ImGuiWindowFlags window_flags = ImGuiWindowFlags_MenuBar;
@@ -126,7 +201,6 @@ static void ShowGUI(bool* _b_show) {
 
     // Submit the DockSpace
     ImGuiIO& io = ImGui::GetIO();
-    // io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     if (io.ConfigFlags & ImGuiConfigFlags_DockingEnable) {
         ImGuiID dockspace_id = ImGui::GetID("Docking Main");
         ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), dockspace_flags);
@@ -144,7 +218,7 @@ static void ShowGUI(bool* _b_show) {
         }
         if (ImGui::BeginMenu("Window")) {
 
-            // ImGui::MenuItem("Moer Engine", nullptr, g_main_window.ShowWindow());
+            ImGui::MenuItem("Scene Color", nullptr, &b_show_scene_color);
             // ImGui::MenuItem("Inspector", nullptr, &m_b_show_inspector_window);
             ImGui::MenuItem("Demo", nullptr, &b_show_demo);
             ImGui::EndMenu();
@@ -249,6 +323,8 @@ int main(int argc, const char** argv) {
         Extent2D(resolution.x, resolution.y),
         PF_R8G8B8A8_SRGB,
         ETextureUsageFlags::COLOR_ATTACHMENT);
+    output->SetName("output");
+
 
     cmd_list.CopyFrom(
         std::span<std::byte>((std::byte*)pixels, upload_size), font_tex);
@@ -320,9 +396,10 @@ int main(int argc, const char** argv) {
     cmd_list.CopyFrom(std::span<byte>((byte*)&red_data, sizeof(red_data)), red_tex);
     uint bdls_tex_handle_red = bindless_array->AllocateTexture(red_tex, sampler);
 
-    BufferRef  red_buffer = device.CreateBuffer<float>(4, EBufferUsageFlags::UNORDERED_ACCESS);
+    BufferRef  red_buffer      = device.CreateBuffer<float>(4, EBufferUsageFlags::UNORDERED_ACCESS);
+    float4     red_data_float4 = {1, 0, 0, 1};
     BufferView red_buffer_view(red_buffer, 0, 4, 4);
-    cmd_list.CopyFrom(std::span<byte>((byte*)&red_data, sizeof(red_data)), red_buffer->GetView());
+    cmd_list.CopyFrom(std::span<byte>((byte*)&red_data_float4, sizeof(red_data_float4)), red_buffer->GetView());
     uint bdls_buffer_handle_red = bindless_array->AllocateBuffer(red_buffer_view);
 
     cmd_list.UpdateBindlessArray(bindless_array);
@@ -346,6 +423,7 @@ int main(int argc, const char** argv) {
         {
             static bool show = true;
             ShowGUI(&show);
+            ShowSceneColor(&b_show_scene_color);
             ImGui::ShowDemoWindow(&b_show_demo);
         }
         gui.EndGUIFrame();
@@ -452,9 +530,33 @@ int main(int argc, const char** argv) {
                 Extent2D(resolution.x, resolution.y),
                 PF_R8G8B8A8_SRGB,
                 ETextureUsageFlags::COLOR_ATTACHMENT);
+            output->SetName("output");
             cmd_queue.Sync();
             sc_info.size = {resolution.x, resolution.y};
             sc->Recreate(sc_info);
+
+            vbuffer = device.CreateTexture(
+                Extent2D(resolution.x, resolution.y),
+                PF_R8G8B8A8_SRGB,
+                ETextureUsageFlags::COLOR_ATTACHMENT);
+            normal = device.CreateTexture(
+                Extent2D(resolution.x, resolution.y),
+                PF_R8G8B8A8_UNORM,
+                ETextureUsageFlags::COLOR_ATTACHMENT);
+            uv = device.CreateTexture(
+                Extent2D(resolution.x, resolution.y),
+                PF_R8G8_UNORM,
+                ETextureUsageFlags::COLOR_ATTACHMENT);
+
+            depth = device.CreateTexture(
+                Extent2D(resolution.x, resolution.y),
+                PF_D32_SFLOAT,
+                ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT);
+
+            bdls_tex_handle_vbuffer = bindless_array->AllocateTexture(vbuffer, sampler);
+            bdls_tex_handle_normal  = bindless_array->AllocateTexture(normal, sampler);
+            bdls_tex_handle_uv      = bindless_array->AllocateTexture(uv, sampler);
+            bdls_tex_handle_depth   = bindless_array->AllocateTexture(depth, sampler);
         }
 
         // cmd_list.Gfx(raster_pipeline, red_buffer)

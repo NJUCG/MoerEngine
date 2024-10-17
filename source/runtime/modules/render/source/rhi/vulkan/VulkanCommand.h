@@ -143,6 +143,12 @@ namespace Moer::Render {
         //Raytracing
         void BuildAccelerationStructures(const Array<VkAccelerationStructureBuildGeometryInfoKHR>& _build_infos, const Array<VkAccelerationStructureBuildRangeInfoKHR*>& _range_infos);
 
+        //Debug
+        void BeginLabel(std::string_view _label, float4 _color);
+        void EndLabel();
+
+        void InsertLabel(std::string_view _label, float4 _color);
+
         VkCommandBuffer GetHandle() const { return command_buffer; }
     };
     //allocator for tmp buffer and other tmp resources
@@ -168,7 +174,9 @@ namespace Moer::Render {
     public:
         VulkanAllocator(VulkanDevice* _device, EQueueType _queue_type);
         ~VulkanAllocator();
-        BufferView     AllocateBuffer(uint64 _size, uint _align);
+        BufferView AllocateUploadBuffer(uint64 _size, uint _align);
+        BufferView AllocateReadbackBuffer(uint64 _size, uint _align);
+
         BufferView     AllocateScratch(uint64 _size);
         BufferView     AllocateShaderBuffer(uint64 _size);
         VulkanCmdList& GetCmdList() {
@@ -238,7 +246,9 @@ namespace Moer::Render {
         Array<VulkanBuffer*>              large_buffers;
         TmpBufferAllocator                allocator;
 
-        StackAllocator               small_allocator;
+        StackAllocator small_allocator;
+        StackAllocator readback_allocator;
+
         ScratchAllocator             scratch_allocator;
         ShaderBufferAllocator        shader_buffer_allocator;
         Array<std::function<void()>> on_complete;
@@ -492,6 +502,10 @@ namespace Moer::Render {
         void       Signal(VkSemaphore _semaphore, VkPipelineStageFlags2 _stage = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
         VkQueue    GetHandle() const { return queue; }
         EQueueType GetType() const { return type; }
+
+        void BeginLabel(std::string_view _label, float4 _color);
+        void EndLabel();
+        void InsertLabel(std::string_view _label, float4 _color);
 
     private:
         Array<VkSemaphoreSubmitInfo> wait_infos;

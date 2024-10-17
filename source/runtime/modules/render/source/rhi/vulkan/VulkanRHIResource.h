@@ -809,6 +809,8 @@ namespace Moer::Render {
         VulkanBuffer() = delete;
         virtual ~VulkanBuffer();
         virtual void Destroy() override;
+        void         SetName(const std::string_view _name) override;
+
         VulkanBuffer(const BufferInfo& _info, VulkanDevice& _device);
         VulkanBuffer(const BufferInfo& _info, VulkanDevice& _device, VkBuffer _handle, VmaAllocation _alloc, bool _defer_destroy, bool _get_address = false);
         uint64                     DeviceAddress() const;
@@ -873,6 +875,8 @@ namespace Moer::Render {
 
         VkImageView GetView(uint _mip_level = 0, uint _mip_cnt = 1);
         bool        IsGeneralRead(uint _mip_level = 0) const;
+
+        void SetName(const std::string_view _name) override;
         struct SubResourceStates {
             uint8                 mip_level;
             uint8                 mip_cnt;

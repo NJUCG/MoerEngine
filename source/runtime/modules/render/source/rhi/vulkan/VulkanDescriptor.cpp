@@ -485,6 +485,7 @@ namespace Moer::Render {
             }
             VkSampler sampler       = m_device->GetImmutableSamplers()[i];
             desc_info.data.pSampler = &sampler;
+            desc_info.type          = VK_DESCRIPTOR_TYPE_SAMPLER;
             vkGetDescriptorEXT(m_device->GetDevice(), &desc_info, sample_desc_stride, image_desc_data.data() + i * sample_desc_stride);
         }
     }

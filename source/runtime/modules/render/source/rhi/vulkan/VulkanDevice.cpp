@@ -440,8 +440,8 @@ namespace Moer::Render {
 
     void VulkanDevice::CreateInternalResources() {
 
-        CreateDescriptorHeap();
         CreateImmutableSamplers();
+        CreateDescriptorHeap();
     }
 
     void VulkanDevice::DestroyInternalResources() {
@@ -1310,6 +1310,15 @@ namespace Moer::Render {
 
         uint idx = (uint(SF_Num) * uint(SAM_Num)) * compare + (uint(SF_Num)) * address + filter;
         return immutable_samplers[idx];
+    }
+
+    void VulkanDevice::SetResourceName(uint64 _handle, VkObjectType _type, const std::string_view _name) {
+
+        VkDebugUtilsObjectNameInfoEXT name_info{VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT};
+        name_info.objectType   = _type;
+        name_info.objectHandle = _handle;
+        name_info.pObjectName  = _name.data();
+        vkSetDebugUtilsObjectNameEXT(m_device, &name_info);
     }
 
     // RHIViewportRef VulkanDevice::CreateViewport(const RHIViewportInitializer& _init) {

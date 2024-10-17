@@ -26,11 +26,14 @@
 #include <string>
 #include <optional>
 #include <bitset>
+#include <string_view>
 #include <tuple>
 #include <type_traits>
 #include <variant>
 
 #include "misc/LockFree.h"
+
+static constexpr std::string_view default_name = "NoName";
 template<typename TStructuredParam>
 concept concept_is_shader_struct = requires(TStructuredParam t) {
     std::is_same<typename TStructuredParam::TypeInfo::TParamPtr, TStructuredParam>();
@@ -689,13 +692,14 @@ namespace Moer::Render {
 	 */
         Buffer(const BufferInfo& _info) : RHIResource(RRT_BUFFER), info(_info) {}
 
-        void              SetName(const std::string& _name) { name = _name; }
-        uint              GetNumElement() const { return info.size; }
-        uint64            GetByteSize() const { return info.size * info.stride; }
-        uint              GetStride() const { return info.stride; }
-        EBufferUsageFlags GetUsage() const { return info.usage; }
+        uint                   GetNumElement() const { return info.size; }
+        uint64                 GetByteSize() const { return info.size * info.stride; }
+        uint                   GetStride() const { return info.stride; }
+        EBufferUsageFlags      GetUsage() const { return info.usage; }
+        const std::string_view GetName() const { return std::string_view(debug_name.has_value() ? debug_name.value().data() : default_name.data()); }
 
-        RENDER_API BufferView GetView(uint64 _byte_offset = 0, uint64 _byte_size = UINT64_MAX);
+        RENDER_API BufferView   GetView(uint64 _byte_offset = 0, uint64 _byte_size = UINT64_MAX);
+        virtual RENDER_API void SetName(const std::string_view _name) = 0;
 
     protected:
         /**
@@ -703,7 +707,7 @@ namespace Moer::Render {
 	 *
 	 */
         Buffer() : RHIResource(RRT_BUFFER) {}
-        std::string name;
+        std::optional<std::string> debug_name;
 
     protected:
         BufferInfo info;
@@ -776,6 +780,8 @@ namespace Moer::Render {
 
         ETextureAspectFlags aspect_flags = ETextureAspectFlags::COLOR;
 
+        std::optional<std::string> debug_name;
+
         bool
         operator==(const TextureInfo& _other) const { return dimension == _other.dimension && usage == _other.usage && format == _other.format && uav_format == _other.uav_format && extent == _other.extent && depth == _other.depth && array_size == _other.array_size && num_mips == _other.num_mips && num_samples == _other.num_samples && clear_attachment == _other.clear_attachment; }
 
@@ -788,23 +794,26 @@ namespace Moer::Render {
     public:
         Texture(const TextureInfo& _info) : RHIResource(RRT_TEXTURE), info(_info) {}
 
-        void                SetName(const std::string& _name) { name = _name; }
-        uint32_t            GetNumMips() const { return info.num_mips; }
-        uint32_t            GetNumArray() const { return info.array_size; }
-        uint32_t            GetDepth() const { return info.depth; }
-        uint32_t            GetWidth() const { return info.extent.x; }
-        uint32_t            GetHeight() const { return info.extent.y; }
-        EPixelFormat        GetFormat() const { return info.format; }
-        ETextureDimension   GetDimension() const { return info.dimension; }
-        ETextureUsageFlags  GetUsage() const { return info.usage; }
-        ETextureAspectFlags GetAspectFlags() const { return info.aspect_flags; }
-        uint3               GetExtent() const { return uint3(info.extent.x, info.extent.y, info.depth); }
-
+        uint32_t               GetNumMips() const { return info.num_mips; }
+        uint32_t               GetNumArray() const { return info.array_size; }
+        uint32_t               GetDepth() const { return info.depth; }
+        uint32_t               GetWidth() const { return info.extent.x; }
+        uint32_t               GetHeight() const { return info.extent.y; }
+        EPixelFormat           GetFormat() const { return info.format; }
+        ETextureDimension      GetDimension() const { return info.dimension; }
+        ETextureUsageFlags     GetUsage() const { return info.usage; }
+        ETextureAspectFlags    GetAspectFlags() const { return info.aspect_flags; }
+        uint3                  GetExtent() const { return uint3(info.extent.x, info.extent.y, info.depth); }
+        const std::string_view GetName() const { return std::string_view(debug_name.has_value() ? debug_name.value().data() : default_name.data()); }
         RENDER_API TextureView GetView(uint8 _mip_idx = 0u, uint8 _mip_num = 1u);
+
+        virtual RENDER_API void SetName(const std::string_view _name) = 0;
+
+    protected:
+        std::optional<std::string> debug_name;
 
     private:
         friend DepthBuffer;
-        std::string name;
         TextureInfo info;
     };
 
@@ -813,17 +822,19 @@ namespace Moer::Render {
         DepthBuffer(TextureRef _tex) : RHIResource(RRT_DEPTH) {}
 
     public:
-        uint                GetNumMips() const { return tex_handle->GetNumMips(); }
-        uint                GetNumArray() const { return tex_handle->GetNumArray(); }
-        uint                GetDepth() const { return tex_handle->GetDepth(); }
-        uint                GetWidth() const { return tex_handle->GetWidth(); }
-        uint                GetHeight() const { return tex_handle->GetHeight(); }
-        EPixelFormat        GetFormat() const { return tex_handle->GetFormat(); }
-        ETextureDimension   GetDimension() const { return tex_handle->GetDimension(); }
-        ETextureUsageFlags  GetUsage() const { return tex_handle->GetUsage(); }
-        ETextureAspectFlags GetAspectFlags() const { return tex_handle->GetAspectFlags(); }
-
+        uint                   GetNumMips() const { return tex_handle->GetNumMips(); }
+        uint                   GetNumArray() const { return tex_handle->GetNumArray(); }
+        uint                   GetDepth() const { return tex_handle->GetDepth(); }
+        uint                   GetWidth() const { return tex_handle->GetWidth(); }
+        uint                   GetHeight() const { return tex_handle->GetHeight(); }
+        EPixelFormat           GetFormat() const { return tex_handle->GetFormat(); }
+        ETextureDimension      GetDimension() const { return tex_handle->GetDimension(); }
+        ETextureUsageFlags     GetUsage() const { return tex_handle->GetUsage(); }
+        ETextureAspectFlags    GetAspectFlags() const { return tex_handle->GetAspectFlags(); }
+        uint3                  GetExtent() const { return tex_handle->GetExtent(); }
+        const std::string_view GetName() const { return tex_handle->GetName(); }
         RENDER_API TextureView GetView() { return tex_handle->GetView(); }
+        RENDER_API void        SetName(const std::string_view _name) { tex_handle->SetName(_name); }
 
     private:
         TextureRef tex_handle;

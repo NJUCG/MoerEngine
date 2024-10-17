@@ -224,7 +224,7 @@ namespace Moer::Render {
              Moer::Render::VertexElement(PF_R32G32_SFLOAT),
              Moer::Render::VertexElement(PF_R8G8B8A8_UNORM)});
         GfxPsoCreateInfo pso_info(
-            RHIRasterizeInfo::Preset<Rast::CULL_BACK, FrontFace::CW>(),
+            RHIRasterizeInfo::Preset<Rast::CULL_NONE, FrontFace::CW>(),
             vertex_stream,
             {RHIColorAttachmentInfo::Preset<Blend::ALPHA_BLEND>(PF_R8G8B8A8_SRGB)},
             RHIDepthStencilStateInfo::Preset());
@@ -269,7 +269,7 @@ namespace Moer::Render {
             rd_device.GetCommandQueue(EQueueType::Graphics).Execute(std::move(cmd_list.Submit()));
             rd_device.GetCommandQueue(EQueueType::Graphics).Sync();
             render_backend_data->font_texture = font_tex;
-            uint handle                       = bindless_array->AllocateTexture(font_tex, Sampler(SF_LINEAR, SAM_REPEAT));
+            uint handle                       = bindless_array->AllocateTexture(font_tex, Sampler(SF_CUBIC, SAM_REPEAT));
             registered_images.try_emplace(font_tex, handle);
             io.Fonts->SetTexID(handle);
         }
@@ -494,10 +494,10 @@ void GUIRender(void* _draw_data, const TextureView& _frame_buffer, CommandList& 
     _cmdlist.CopyFrom(arg_view, std::span<Moer::byte>((Moer::byte*)copy_back_args.data(), copy_back_args.size() * sizeof(ImGUIArg)));
 
     _cmdlist.Gfx(backend_data.rast_pso, render_buffers->arg_buffer, render_backend.bindless_array, constant)
-        .Draw(
-            {0, 0, (uint)(draw_data->DisplaySize.x * draw_data->FramebufferScale.x), uint(draw_data->DisplaySize.y * draw_data->FramebufferScale.y)},
-            std::move(draw_meshes),
-            ColorAttachment(_frame_buffer.GetTexture(),EAttachmentAction::AC_LOAD_STORE));
+        .Draw("ImGui Draws",
+              {0, 0, (uint)(draw_data->DisplaySize.x * draw_data->FramebufferScale.x), uint(draw_data->DisplaySize.y * draw_data->FramebufferScale.y)},
+              std::move(draw_meshes),
+              ColorAttachment(_frame_buffer.GetTexture(),EAttachmentAction::AC_LOAD_STORE));
 
     _cmdlist.AddCallback([vtx(std::move(vertices)),
                           idx(std::move(indices)),
@@ -558,6 +558,7 @@ void GuiCreateWindow(ImGuiViewport* _viewport) {
         Extent2D(_viewport->Size.x, _viewport->Size.y),
         PF_R8G8B8A8_SRGB,
         ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED);
+    viewport_data->framebuffer->SetName(std::format("ImGui Window {}", viewport_data->viewport_index));
 }
 
 void GuiDestroyWindow(ImGuiViewport* _viewport) {

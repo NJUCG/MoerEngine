@@ -565,6 +565,7 @@ namespace Moer::Render {
 
                     } break;
                 }
+                m_arg_write_resources.emplace_back(_range, handle);
             } else {
                 switch (_type) {
                     case ResourceType::Texture_Buffer: {
@@ -577,6 +578,7 @@ namespace Moer::Render {
                         m_dispatch_layer = std::max(m_dispatch_layer, GetLastLayerRead(static_cast<NoRangeHandle*>(handle)));
                     } break;
                 }
+                m_arg_read_resources.emplace_back(_range, handle);
             }
         }
 
