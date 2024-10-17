@@ -593,7 +593,10 @@ namespace Moer::Render {
             // bool      b_set_consts = false;
         };
 
-        struct RENDER_API RTDispatcher {
+        struct RENDER_API RaytracingDispatcher {
+            CommandList&   cmd_list;
+            ArrayArguments args;
+            RTPipeline&    pso;
         };
         struct RENDER_API ComputeDispatcher {
             void Dispatch(Vector2ui _group_count, std::string_view _name = Command::typenames[(uint)Command::EType::ShaderDispatch]) {
@@ -727,6 +730,7 @@ namespace Moer::Render {
         RENDER_API void BuildAccelerationStructures(Array<AccelerationStructureBuildParam>&& _params);
 
         RENDER_API void UpdateRaytracingScene(RaytracingSceneRef _scene);
+
 #pragma endregion
 
         RENDER_API void AddCallback(std::function<void()>&& _callback);
@@ -755,11 +759,17 @@ namespace Moer::Render {
             InnerWriteTexture(_texture.texture, _texture.state);
         }
 
-        RENDER_API void              InnerReadBuffer(BufferView _buffer, EBufferState _state);
-        RENDER_API void              InnerWriteBuffer(BufferView _buffer, EBufferState _state);
-        RENDER_API void              InnerReadTexture(TextureView _texture, ETextureState _state);
-        RENDER_API void              InnerWriteTexture(TextureView _texture, ETextureState _state);
-        RENDER_API void              EndBarriers();
+        RENDER_API void InnerReadBuffer(BufferView _buffer, EBufferState _state);
+        RENDER_API void InnerWriteBuffer(BufferView _buffer, EBufferState _state);
+        RENDER_API void InnerReadTexture(TextureView _texture, ETextureState _state);
+        RENDER_API void InnerWriteTexture(TextureView _texture, ETextureState _state);
+        RENDER_API void EndBarriers();
+
+#pragma region[ raytracing ]
+        RENDER_API void TraceRays(PipelineHandle _pipeline, ArrayArguments&& _args, uint3 _extent);
+        RENDER_API void TraceRayIndirect(PipelineHandle _pipeline, BufferView _buffer);
+#pragma endregion
+
         Array<UniquePtr<Command>>    commands;
         Command*                     current_barriers{nullptr};
         Array<std::function<void()>> callbacks;

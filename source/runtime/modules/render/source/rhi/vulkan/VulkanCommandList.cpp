@@ -2481,7 +2481,7 @@ namespace Moer::Render {
 
     VulkanAllocator::VulkanAllocator(VulkanDevice* _device, EQueueType _type) : VulkanDeviceObject(_device),
                                                                                 allocator(_device),
-                                                                                small_allocator(&allocator, small_block_size, 1.5),
+                                                                                upload_allocator(&allocator, small_block_size, 1.5),
                                                                                 readback_allocator(&allocator, small_block_size, 1.5),
                                                                                 scratch_allocator(_device),
                                                                                 shader_buffer_allocator(_device) {
@@ -2491,7 +2491,10 @@ namespace Moer::Render {
     }
 
     VulkanAllocator::~VulkanAllocator() {
-        small_allocator.Dispose();
+        upload_allocator.Dispose();
+        readback_allocator.Dispose();
+        scratch_allocator.Reset();
+        shader_buffer_allocator.Reset();
         for (auto& handle : large_buffers) {
             allocator.DeAllocate(reinterpret_cast<uint64>(handle));
         }
@@ -2501,7 +2504,7 @@ namespace Moer::Render {
     BufferView VulkanAllocator::AllocateUploadBuffer(uint64 _size, uint _alignment) {
         _size = std::max<uint64>(_size, _alignment);
         if (_size < small_block_size) {
-            auto          handle = small_allocator.Allocate(_size, _alignment);
+            auto          handle = upload_allocator.Allocate(_size, _alignment);
             VulkanBuffer* buffer = reinterpret_cast<VulkanBuffer*>(handle.handle);
             return {buffer, handle.offset, _size, 1u};
         }
@@ -2527,7 +2530,8 @@ namespace Moer::Render {
     }
 
     void VulkanAllocator::ResetBufferAlloc() {
-        small_allocator.Reset();
+        upload_allocator.Reset();
+        readback_allocator.Reset();
         for (auto& handle : large_buffers) {
             allocator.DeAllocate(reinterpret_cast<uint64>(handle));
         }

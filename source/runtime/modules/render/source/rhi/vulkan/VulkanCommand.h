@@ -246,7 +246,7 @@ namespace Moer::Render {
         Array<VulkanBuffer*>              large_buffers;
         TmpBufferAllocator                allocator;
 
-        StackAllocator small_allocator;
+        StackAllocator upload_allocator;
         StackAllocator readback_allocator;
 
         ScratchAllocator             scratch_allocator;

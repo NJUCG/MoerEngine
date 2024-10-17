@@ -127,7 +127,7 @@ namespace Moer {
         return path.string() + ".MOERSCENE";
     }
 
-    void SceneCache::FromFile(const std::filesystem::path& path,Scene * scene) {
+    void SceneCache::FromFile(const std::filesystem::path& path, Scene* scene) {
         Moer::Timer timer;
         timer.Start();
         std::ifstream fs(path, std::ios::binary);
@@ -139,7 +139,7 @@ namespace Moer {
         ReadSceneMaterial(stream, sceneData);
         ReadSceneUtils(stream, sceneData);
 
-        ConvertToScene(sceneData, scene,false);
+        ConvertToScene(sceneData, scene, false);
         timer.Stop();
         LOG_INFO("Load Scene Cache Time(ms): {}", timer.ElapsedMilliseconds());
     }
@@ -341,14 +341,15 @@ namespace Moer {
                 block.m_field_info_list.resize(field_count);
                 stream.read(block.m_field_info_list.data(), field_count * sizeof(BufferInterfaceBlock::FieldInfo));
 
-                size_t info_count;
+                const auto& field_info_list = block.m_field_info_list;
+                size_t      info_count;
                 stream.read(info_count);
                 for (int j = 0; j < info_count; ++j) {
                     std::string name;
                     stream.read(name);
                     uint32_t offset;
                     stream.read(offset);
-                    block.m_info_map[name] = offset;
+                    block.m_info_map[field_info_list[offset].name] = offset;
                 }
             }
 
@@ -403,7 +404,7 @@ namespace Moer {
             stream.read(buffer_data.data(), unfirom_buffer_size);
             material_instance->SetUnifomBuffer(buffer_data.data(), unfirom_buffer_size);
             material_instance->SetName(material_instance_name);
-            sceneData.m_material_instances[material_instance_name] = material_instance;
+            sceneData.m_material_instances[material_instance_name]        = material_instance;
             sceneData.m_material_instance_indexes[material_instance_name] = i;
         }
     }
@@ -496,8 +497,8 @@ namespace Moer {
         }
 
         stream.write(sceneData.m_material_instances.size());
-        for (auto [name,index] : sceneData.m_material_instance_indexes) {
-            auto & material_instance = sceneData.m_material_instances.at(name);
+        for (auto [name, index] : sceneData.m_material_instance_indexes) {
+            auto& material_instance = sceneData.m_material_instances.at(name);
             stream.write(name);
             stream.write(material_instance->GetMaterial()->GetName());
 
@@ -679,7 +680,7 @@ namespace Moer {
         // scene->SetBlasList(blas_list);
     }
 
-    void SceneCache::ConvertToScene(SceneData& scene_data,Scene * scene, bool need_cache) {
+    void SceneCache::ConvertToScene(SceneData& scene_data, Scene* scene, bool need_cache) {
         size_t hash    = HashSceneData(scene_data);
         bool   updated = true;
         if (updated && need_cache) {
@@ -689,7 +690,7 @@ namespace Moer {
         auto& device = Render::RenderDevice::Get();
 
         Moer::Array<byte> material_data(scene_data.m_material_instances.size() * Material::MaterialBytesNum);
-        for(auto [name,index] : scene_data.m_material_instance_indexes) {
+        for (auto [name, index] : scene_data.m_material_instance_indexes) {
             auto& material = scene_data.m_material_instances[name];
             memcpy(material_data.data() + index * Material::MaterialBytesNum, material->GetUniformBuffer().GetData(), material->GetUniformBuffer().GetSize());
         }
@@ -707,9 +708,8 @@ namespace Moer {
         auto index_buffer              = device.CreateBuffer<uint32_t>(scene_data.m_index_data.size(), EBufferUsageFlags::INDEX_BUFFER | EBufferUsageFlags::ACCELERATION_STRUCTURE);
         auto instance_id_buffer        = device.CreateBuffer<uint32_t>(scene_data.m_instance_id.size(), EBufferUsageFlags::VERTEX_BUFFER);
         auto instance_mesh_info_buffer = device.CreateBuffer<byte>(scene_data.m_instance_mesh_info.size() * sizeof(InstanceMeshInfo), EBufferUsageFlags::UNORDERED_ACCESS);
-        auto material_buffer = device.CreateBuffer<byte>(scene_data.m_material_instances.size() * Material::MaterialBytesNum, EBufferUsageFlags::UNORDERED_ACCESS);
+        auto material_buffer           = device.CreateBuffer<byte>(scene_data.m_material_instances.size() * Material::MaterialBytesNum, EBufferUsageFlags::UNORDERED_ACCESS);
 
-        
         cmd_list.CopyFrom(std::span<byte>((byte*)scene_data.m_meshlet_bounds.data(), scene_data.m_meshlet_bounds.size() * sizeof(MeshletBound)), meshlet_bounds_buffer->GetView());
         cmd_list.CopyFrom(std::span<byte>((byte*)scene_data.m_meshlet_descs.data(), scene_data.m_meshlet_descs.size() * sizeof(MeshletDesc)), meshlet_descs_buffer->GetView());
         cmd_list.CopyFrom(std::span<byte>((byte*)scene_data.m_mesh_infos.data(), scene_data.m_mesh_infos.size() * sizeof(MeshInfo)), mesh_infos_buffer->GetView());
@@ -754,7 +754,6 @@ namespace Moer {
             RenderableManager::Get().SetMaterialInstance(entity, scene_data.m_material_instances[primitive.material_id]);
         }
 
-       
         for (auto& camera : scene_data.m_cameras) {
             auto entity = EntityManager::Get().Create();
             CameraManager::Get().Put(entity, camera);

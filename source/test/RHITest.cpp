@@ -31,7 +31,6 @@
 #include "scene/Material.h"
 #include "scene/RenderableManager.h"
 
-
 using namespace Moer::Render;
 using namespace Moer;
 
@@ -260,11 +259,11 @@ int main(int argc, const char** argv) {
 
     auto                buf = device.CreateBuffer<float>(1024, EBufferUsageFlags::UNORDERED_ACCESS);
     SwapchainCreateInfo sc_info{.window_handle = (uintptr_t)window_handle, .size = {resolution.x, resolution.y}, .back_buffer_sz = 2, .preferred_format = PF_R8G8B8A8_SRGB};
-    auto                sc             = device.CreateSwapchain(sc_info);
-    g_scene = MoerNew(Scene)();
-    BindlessArrayRef    bindless_array = g_scene->GetBindlessArray();
-    auto&               cmd_queue      = device.GetCommandQueue(EQueueType::Graphics);
-    auto&               copy_queue     = device.GetCommandQueue(EQueueType::Copy);
+    auto                sc          = device.CreateSwapchain(sc_info);
+    g_scene                         = MoerNew(Scene)();
+    BindlessArrayRef bindless_array = g_scene->GetBindlessArray();
+    auto&            cmd_queue      = device.GetCommandQueue(EQueueType::Graphics);
+    auto&            copy_queue     = device.GetCommandQueue(EQueueType::Copy);
 
     Array<uint> data(1024);
     for (uint i = 0; i < 1024; ++i) {
@@ -325,7 +324,6 @@ int main(int argc, const char** argv) {
         ETextureUsageFlags::COLOR_ATTACHMENT);
     output->SetName("output");
 
-
     cmd_list.CopyFrom(
         std::span<std::byte>((std::byte*)pixels, upload_size), font_tex);
 
@@ -340,7 +338,9 @@ int main(int argc, const char** argv) {
          Moer::Render::VertexElement(PF_R32G32_SFLOAT)});
     GfxPsoCreateInfo pso_info(RHIRasterizeInfo::Preset(),
                               vertex_stream,
-                              {RHIColorAttachmentInfo::Preset(PF_R8G8B8A8_SRGB)},
+                              {RHIColorAttachmentInfo::Preset(PF_R32_UINT),
+                               RHIColorAttachmentInfo::Preset(PF_R32G32B32A32_SFLOAT),
+                               RHIColorAttachmentInfo::Preset(PF_R32G32_SFLOAT)},
                               RHIDepthStencilStateInfo::Preset());
 
     // auto raster_pipeline = manager
@@ -359,7 +359,7 @@ int main(int argc, const char** argv) {
     vertex_stream.EmplacePerVertex(
         {Moer::Render::VertexElement(PF_R32G32B32_SFLOAT)});
     GfxPsoCreateInfo pso_full_screen_info(RHIRasterizeInfo::Preset(),
-                                          vertex_stream,
+                                          {},
                                           {RHIColorAttachmentInfo::Preset(PF_R8G8B8A8_SRGB)},
                                           RHIDepthStencilStateInfo::Preset());
 
@@ -406,7 +406,7 @@ int main(int argc, const char** argv) {
     cmd_queue.Execute(cmd_list.Submit());
     cmd_queue.Sync();
 
-    Resource::LoaderInterface::LoadSceneFromFileAsync(ConfigManager::GetInstance().GetScenePath(),g_scene);
+    Resource::LoaderInterface::LoadSceneFromFileAsync(ConfigManager::GetInstance().GetScenePath(), g_scene);
 
     FenceRef timeline   = device.CreateFence();
     uint64   time       = 0;
@@ -431,6 +431,7 @@ int main(int argc, const char** argv) {
             timeline->Wait(time - 2);
         }
 
+        uint material_buffer_idx = 0;
         if (Scene::GetCurrentSceneLoadInfo()->IsReady()) {
             if (first_load) {
                 instance_buffer_handle = bindless_array->AllocateBuffer(g_scene->GetBuffer(EGpuSceneResource::InstanceInfo)->GetView());
@@ -487,7 +488,10 @@ int main(int argc, const char** argv) {
             //         material_instances[mi->GetMaterial()->GetType()].push_back(mi);
             //     }
             // });
-            material_param.material_buffer = bindless_array->AllocateBuffer(g_scene->GetBuffer(EGpuSceneResource::MaterialInfo)->GetView());
+            if (material_buffer_idx == 0) {
+                material_buffer_idx = bindless_array->AllocateBuffer(g_scene->GetBuffer(EGpuSceneResource::MaterialInfo)->GetView());
+            }
+            material_param.material_buffer = material_buffer_idx;
 
             for (auto type : material_types) {
                 // RHIBatchedShaderParameters parameters;
@@ -508,6 +512,7 @@ int main(int argc, const char** argv) {
                 // g_rhi->RHISetBatchedShaderParameters(lighting_pipeline_state,parameters);
                 //
                 // cmd_list->Draw(3, 1,0,0);
+                cmd_list.UpdateBindlessArray(bindless_array);
                 material_param.material_type = uint(type);
                 cmd_list.Gfx(pbr_pipeline, bindless_array, material_param)
                     .Draw(Rect2D(0, 0, resolution.x, resolution.y), vb_span, ib, std::move(draw_datas), DepthAttachment(depth), ColorAttachment(output));
@@ -567,7 +572,7 @@ int main(int argc, const char** argv) {
         // color_red[2] = 0.5f + 0.5f * cosf(time * 0.1f);
         // cmd_list.CopyFrom(std::span<byte>((byte*)&color_red, sizeof(color_red)), red_buffer_view);
 
-       gui.RenderGUI(cmd_list, output);
+        gui.RenderGUI(cmd_list, output);
 
         // cmd_list.Barriers(ReadTexture(red_tex, ETextureState::SAMPLE));
         time++;

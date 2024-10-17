@@ -614,6 +614,33 @@ namespace Moer::Render {
         }
     };
 
+    struct TraceRayCmd : public Command {
+    public:
+        using TraceRayParam = std::variant<uint3, BufferView>;
+
+    private:
+        PipelineHandle pipeline{};
+        TraceRayParam  param;
+        ArrayArguments args;
+        TraceRayCmd(ArrayArguments&& _args) : Command(EType::TraceRay), args(std::move(_args)) {
+        }
+
+    public:
+        TraceRayCmd(ArrayArguments&& _args, PipelineHandle _handle, uint3 _param, std::string_view _name = typenames[uint(EType::TraceRay)]) : Command(EType::TraceRay, _name), param(_param), pipeline(_handle), args(std::move(_args)) {}
+        TraceRayCmd(ArrayArguments&& _args, PipelineHandle _handle, BufferView _param, std::string_view _name = typenames[uint(EType::TraceRay)]) : Command(EType::TraceRay, _name), pipeline(_handle), param(_param), args(std::move(_args)) {}
+
+        EQueueType GetQueueType() const override { return EQueueType::Graphics; }
+
+        const auto& Args() const { return args; }
+        const auto& Pipeline() const { return pipeline; }
+        auto        Param() const { return param; }
+        void        IterateArgs(const std::function<void(const TArg&, ParamInfoFlags _flag)>& _func) const {
+            for (int i = 0; i < args.args.size(); i++) {
+                std::visit([&_func, i, this](const auto& _arg) { _func(_arg, pipeline.binding_infos[i]); }, args.args[i]);
+            }
+        }
+    };
+
     struct BuildAccelerationStructuresCmd : public Command {
     private:
         BuildAccelerationStructuresCmd() : Command(EType::BuildAccel) {}
