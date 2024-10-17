@@ -103,7 +103,7 @@ namespace Moer {
             info            = {e.name, offset, uint8_t(stride), e.type, e.isArray, e.size, e.structName, e.sizeName};
 
             // record this uniform info
-            infoMap[{info.name.data(), info.name.size()}] = i;
+            infoMap[info.name] = i;
 
             // advance offset to next slot
             offset += sizeof(uint32_t) * stride * std::max(1u, e.size);

@@ -9,17 +9,12 @@ namespace Moer {
     public:
         Impl(MaterialRef material) : m_material(material), m_sampler_group(material->GetSamplerInterfaceBlock().GetSize()), m_uniform(material->GetBufferInterfaceBlock().GetSize()) {
         }
-        void SetParameter(const std::string& name, RHITextureRef texture, SamplerParams sampler) {
+        void SetParameter(const std::string& name, Render::TextureRef texture, SamplerParams sampler) {
             uint32_t sampler_index = m_material->GetSamplerInterfaceBlock().GetSamplerInfo(name)->offset;
             m_sampler_group.SetSampler(sampler_index, texture, sampler);
         }
-        void SetParameter(const std::string& name, RHITextureRef texture) {
-            uint32_t sampler_index = m_material->GetSamplerInterfaceBlock().GetSamplerInfo(name)->offset;
-            m_sampler_group.SetSampler(sampler_index, texture);
-        }
-        void SetParameter(const std::string& name, SamplerParams sampler) {
-            uint32_t sampler_index = m_material->GetSamplerInterfaceBlock().GetSamplerInfo(name)->offset;
-            m_sampler_group.SetSampler(sampler_index, sampler);
+        void SetParameter(const std::string& name, uint32 texture) {
+            SetParameter(name,&texture,sizeof(uint32));
         }
         void SetParameter(const std::string& name, const void* value, size_t size) {
             auto offset = m_material->GetBufferInterfaceBlock().GetFieldInfo(name)->offset;
@@ -29,7 +24,7 @@ namespace Moer {
             m_uniform.SetData(data, size, offset);
         }
 
-        RHITexture* GetTexture(const std::string& name) {
+        Render::Texture* GetTexture(const std::string& name) {
             uint32_t sampler_index = m_material->GetSamplerInterfaceBlock().GetSamplerInfo(name)->offset;
             return m_sampler_group.GetTexture(sampler_index);
         }
@@ -59,19 +54,7 @@ namespace Moer {
         UniformBuffer m_uniform;
         std::string   m_name;
     };
-
-    // void SamplerGroup::Bind(RHIBatchedShaderParameters& parameters) {
-    //     uint16_t idx = 0;
-    //     for (auto& sampler : m_samplers) {
-    //         if (sampler.type == EParamaterType::TEXTURE) {
-    //             auto texture_view = SamplerCache::Get().GetTextureView(sampler.texture);
-    //             parameters.SetParameters(texture_view, idx++, 1);
-    //         } else if (sampler.type == EParamaterType::SAMPLER) {
-    //             auto rhiSampler = SamplerCache::Get().GetSampler(sampler.sampler);
-    //             parameters.SetParameters(rhiSampler, idx++, 1);
-    //         }
-    //     }
-    // }
+    
     SamplerGroup::SamplerGroup(uint32_t size) {
         this->m_samplers = Array<SamplerDescriptor>(size);
     }
@@ -82,16 +65,19 @@ namespace Moer {
     void MaterialInstance::SetParameter(const std::string& name, const void* value, size_t size) {
         m_impl->SetParameter(name, value, size);
     }
-    void MaterialInstance::SetParameter(const std::string& name, const RHITextureRef& texture) {
-        m_impl->SetParameter(name, texture);
-    }
-    void MaterialInstance::SetParameter(const std::string& name, const SamplerParams& params) {
-        m_impl->SetParameter(name, params);
-    }
+    // void MaterialInstance::SetTexture(const std::string& name, const uint texture_handle) {
+    //     m_impl->SetParameter(name,texture_handle);
+    // }
+    // void MaterialInstance::SetParameter(const std::string& name, const Render::TextureRef& texture) {
+    //     m_impl->SetParameter(name, texture);
+    // }
+    // void MaterialInstance::SetParameter(const std::string& name, const SamplerParams& params) {
+    //     m_impl->SetParameter(name, params);
+    // }
     void MaterialInstance::SetUnifomBuffer(const void* data, size_t size) {
         m_impl->SetUnifomBuffer(data, size, 0);
     }
-    RHITexture* MaterialInstance::GetTexture(const std::string& name) const {
+    Render::Texture* MaterialInstance::GetTexture(const std::string& name) const {
         return m_impl->GetTexture(name);
     }
     void MaterialInstance::Use(RHIBatchedShaderParameters& parameters) {
@@ -109,16 +95,16 @@ namespace Moer {
     MaterialRef MaterialInstance::GetMaterial() const {
         return m_impl->GetMaterial();
     }
-    void SamplerGroup::SetSampler(uint32_t index, RHITextureRef texture, SamplerParams sampler) {
+    void SamplerGroup::SetSampler(uint32_t index, Render::TextureRef texture, SamplerParams sampler) {
         m_samplers[index] = SamplerDescriptor(texture, sampler, EParamaterType::COMBINED);
     }
-    void SamplerGroup::SetSampler(uint32_t index, RHITextureRef texture) {
+    void SamplerGroup::SetSampler(uint32_t index, Render::TextureRef texture) {
         m_samplers[index] = SamplerDescriptor(texture, SamplerParams(), EParamaterType::TEXTURE);
     }
     void SamplerGroup::SetSampler(uint32_t index, SamplerParams sampler) {
         m_samplers[index] = SamplerDescriptor(nullptr, sampler, EParamaterType::SAMPLER);
     }
-    RHITextureRef SamplerGroup::GetTexture(uint32_t index) const {
+    Render::TextureRef SamplerGroup::GetTexture(uint32_t index) const {
         return m_samplers[index].texture;
     }
 

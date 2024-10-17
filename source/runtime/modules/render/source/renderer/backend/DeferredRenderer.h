@@ -21,6 +21,8 @@ namespace Moer {
         class Impl;
         Impl* impl;
     };
+
+    
 }// namespace Moer
 
 #endif//MOER_ENGINE_DEFERRED_RENDERER_H

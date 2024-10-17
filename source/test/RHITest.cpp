@@ -25,7 +25,12 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "core/include/Core.h"
+#include "modules/resource/include/loader/LoaderInterface.h"
 #include "renderer/UIRenderer.h"
+#include "scene/CameraManager.h"
+#include "scene/Material.h"
+#include "scene/RenderableManager.h"
+
 
 using namespace Moer::Render;
 using namespace Moer;
@@ -40,10 +45,23 @@ public:
 };
 
 struct TestBindlessParam {
-    float4 color;
-    uint   texture_handle;
-    uint   buffer_handle;
+    float4     color;
+    uint       texture_handle;
+    uint       buffer_handle;
+    uint       instance_buffer_handle;
+    Matrix4x4f camera_view_proj;
 };
+
+struct MaterialPassBindlessParam {
+    uint material_type;
+    uint light_buffer;
+    uint material_buffer;
+    uint v_buffer;
+    uint g_buffer_normal;
+    uint g_buffer_uv;
+    uint depth;
+};
+
 class TestTrianglePipelineConstColor : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(TestTrianglePipelineConstColor);
@@ -131,6 +149,14 @@ static void ShowSceneColor(bool* _b_show) {
     scene_color_pos        = {local_pos.x, local_pos.y};
     ImGui::End();
 }
+class MaterialShadingPipeline : public RasterPipeline {
+public:
+    DEFINE_RASTER_PIPELINE_CLASS(MaterialShadingPipeline);
+    DEFINE_SHADER_CONSTANT_STRUCT(MaterialPassBindlessParam, param);
+    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
+    DEFINE_SHADER_ARGS(bdls, param);
+};
+
 static void ShowGUI(bool* _b_show) {
 
     static bool               opt_fullscreen  = true;
@@ -235,7 +261,8 @@ int main(int argc, const char** argv) {
     auto                buf = device.CreateBuffer<float>(1024, EBufferUsageFlags::UNORDERED_ACCESS);
     SwapchainCreateInfo sc_info{.window_handle = (uintptr_t)window_handle, .size = {resolution.x, resolution.y}, .back_buffer_sz = 2, .preferred_format = PF_R8G8B8A8_SRGB};
     auto                sc             = device.CreateSwapchain(sc_info);
-    BindlessArrayRef    bindless_array = device.CreateBindlessArray();
+    g_scene = MoerNew(Scene)();
+    BindlessArrayRef    bindless_array = g_scene->GetBindlessArray();
     auto&               cmd_queue      = device.GetCommandQueue(EQueueType::Graphics);
     auto&               copy_queue     = device.GetCommandQueue(EQueueType::Copy);
 
@@ -272,16 +299,32 @@ int main(int argc, const char** argv) {
         PF_R8G8B8A8_UNORM,
         ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT);
 
+    TextureRef vbuffer = device.CreateTexture(
+        Extent2D(resolution.x, resolution.y),
+        PF_R8G8B8A8_SRGB,
+        ETextureUsageFlags::COLOR_ATTACHMENT);
+
+    TextureRef normal = device.CreateTexture(
+        Extent2D(resolution.x, resolution.y),
+        PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::COLOR_ATTACHMENT);
+
+    TextureRef uv = device.CreateTexture(
+        Extent2D(resolution.x, resolution.y),
+        PF_R8G8_UNORM,
+        ETextureUsageFlags::COLOR_ATTACHMENT);
+
+    TextureRef depth = device.CreateTexture(
+        Extent2D(resolution.x, resolution.y),
+        PF_D32_SFLOAT,
+        ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT);
+
     TextureRef output = device.CreateTexture(
         Extent2D(resolution.x, resolution.y),
         PF_R8G8B8A8_SRGB,
         ETextureUsageFlags::COLOR_ATTACHMENT);
     output->SetName("output");
 
-    TextureRef output2 = device.CreateTexture(
-        Extent2D(resolution.x, resolution.y),
-        PF_R8G8B8A8_SRGB,
-        ETextureUsageFlags::COLOR_ATTACHMENT);
 
     cmd_list.CopyFrom(
         std::span<std::byte>((std::byte*)pixels, upload_size), font_tex);
@@ -292,23 +335,40 @@ int main(int argc, const char** argv) {
     VertexStream vertex_stream;
     vertex_stream.EmplacePerVertex(
         {Moer::Render::VertexElement(PF_R32G32B32_SFLOAT),
+         Moer::Render::VertexElement(PF_R32G32B32_SFLOAT),
+         Moer::Render::VertexElement(PF_R32G32B32_SFLOAT),
          Moer::Render::VertexElement(PF_R32G32_SFLOAT)});
     GfxPsoCreateInfo pso_info(RHIRasterizeInfo::Preset(),
                               vertex_stream,
                               {RHIColorAttachmentInfo::Preset(PF_R8G8B8A8_SRGB)},
                               RHIDepthStencilStateInfo::Preset());
 
-    auto raster_pipeline = manager
-                               .Raster()
-                               .Vertex("test/BasicVertex.hlsl")
-                               .Pixel("test/BasicFrag.hlsl")
-                               .Build<TestTrianglePipeline>(std::move(pso_info));
+    // auto raster_pipeline = manager
+    //                            .Raster()
+    //                            .Vertex("test/BasicVertex.hlsl")
+    //                            .Pixel("test/BasicFrag.hlsl")
+    //                            .Build<TestTrianglePipeline>(std::move(pso_info));
 
     auto raster_pipeline_constant_color = manager
                                               .Raster()
                                               .Vertex("test/BasicVertex.hlsl")
                                               .Pixel("test/BasicFragConstant.hlsl")
                                               .Build<TestTrianglePipelineConstColor>(std::move(pso_info));
+
+    VertexStream vertex_full_screen_stream;
+    vertex_stream.EmplacePerVertex(
+        {Moer::Render::VertexElement(PF_R32G32B32_SFLOAT)});
+    GfxPsoCreateInfo pso_full_screen_info(RHIRasterizeInfo::Preset(),
+                                          vertex_stream,
+                                          {RHIColorAttachmentInfo::Preset(PF_R8G8B8A8_SRGB)},
+                                          RHIDepthStencilStateInfo::Preset());
+
+    auto pbr_pipeline = manager
+                            .Raster()
+                            .Vertex("test/PBRMaterialVertex.hlsl")
+                            .Pixel("test/PBRMaterialFrag.hlsl")
+                            .Build<MaterialShadingPipeline>(std::move(pso_full_screen_info));
+
     struct Vertex {
         float3 pos;
         float2 uv;
@@ -322,11 +382,11 @@ int main(int argc, const char** argv) {
     float4  color_red = {1, 1, 1, 1};
     Sampler sampler(SF_LINEAR, SAM_REPEAT);
     uint    bdls_tex_handle = bindless_array->AllocateTexture(font_tex, sampler);
-
-    auto vertex_buffer = device.CreateBuffer<float>(3 * sizeof(Vertex) / sizeof(float), EBufferUsageFlags::VERTEX_BUFFER);
-    auto index_buffer  = device.CreateBuffer<uint>(3, EBufferUsageFlags::INDEX_BUFFER);
-    cmd_list.CopyFrom(std::span<byte>((byte*)vertices, sizeof(vertices)), vertex_buffer->GetView());
-    cmd_list.CopyFrom(std::span<byte>((byte*)indices, sizeof(indices)), index_buffer->GetView());
+    uint    instance_buffer_handle;
+    // auto vertex_buffer = device.CreateBuffer<float>(3 * sizeof(Vertex) / sizeof(float), EBufferUsageFlags::VERTEX_BUFFER);
+    // auto index_buffer  = device.CreateBuffer<uint>(3, EBufferUsageFlags::INDEX_BUFFER);
+    // cmd_list.CopyFrom(std::span<byte>((byte*)vertices, sizeof(vertices)), vertex_buffer->GetView());
+    // cmd_list.CopyFrom(std::span<byte>((byte*)indices, sizeof(indices)), index_buffer->GetView());
     TextureRef red_tex = device.CreateTexture(
         Extent2D(1, 1),
         PF_R8G8B8A8_SRGB,
@@ -346,33 +406,16 @@ int main(int argc, const char** argv) {
     cmd_queue.Execute(cmd_list.Submit());
     cmd_queue.Sync();
 
-    VertexBuffer vb(vertex_buffer, 0);
-    IndexBuffer  ib(index_buffer->GetView(), EIndexElementType::IET_UINT32);
+    Resource::LoaderInterface::LoadSceneFromFileAsync(ConfigManager::GetInstance().GetScenePath(),g_scene);
 
-    FenceRef timeline = device.CreateFence();
-    uint64   time     = 0;
+    FenceRef timeline   = device.CreateFence();
+    uint64   time       = 0;
+    bool     first_load = true;
 
-    TextureRef scene_color = device.CreateTexture(
-        Extent2D(scene_color_resolution.x, scene_color_resolution.y),
-        PF_R8G8B8A8_SRGB,
-        ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED);
-    scene_color->SetName("scene_color");
-    float2 temp_scene_color_size = {scene_color_resolution.x, scene_color_resolution.y};
-
-    TextureRef gui_color = device.CreateTexture(
-        Extent2D(resolution.x, resolution.y),
-        PF_R8G8B8A8_SRGB,
-        ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED);
-    gui_color->SetName("gui_color");
-
-    GfxPsoCreateInfo combine(RHIRasterizeInfo::Preset<Rast::CULL_BACK, FrontFace::CCW>(),
-                             {},
-                             {RHIColorAttachmentInfo::Preset<>(PF_R8G8B8A8_SRGB)},
-                             RHIDepthStencilStateInfo::Preset());
-    auto             combine_gui_pipeline = manager.Raster()
-                                    .Vertex("CombineGuiVert.hlsl")
-                                    .Pixel("CombineGuiFrag.hlsl")
-                                    .Build<CombineUIPipeline>(std::move(combine));
+    uint bdls_tex_handle_vbuffer = bindless_array->AllocateTexture(vbuffer, sampler);
+    uint bdls_tex_handle_normal  = bindless_array->AllocateTexture(normal, sampler);
+    uint bdls_tex_handle_uv      = bindless_array->AllocateTexture(uv, sampler);
+    uint bdls_tex_handle_depth   = bindless_array->AllocateTexture(depth, sampler);
 
     while (WindowContext::ShouldClose(window_handle) == false) {
         WindowContext::Tick();
@@ -388,10 +431,92 @@ int main(int argc, const char** argv) {
             timeline->Wait(time - 2);
         }
 
-        int w_width, w_height;
+        if (Scene::GetCurrentSceneLoadInfo()->IsReady()) {
+            if (first_load) {
+                instance_buffer_handle = bindless_array->AllocateBuffer(g_scene->GetBuffer(EGpuSceneResource::InstanceInfo)->GetView());
+                first_load             = false;
+            }
 
-        std::span<VertexBuffer> vb_span(&vb, 1);
-        IndexBuffer             ib_span = ib;
+            auto camera_entity = g_scene->GetCameras()[0];
+            auto camera        = CameraManager::Get().Get(camera_entity);
+            camera->Tick();
+
+            //GBuffer Pass
+            auto                    vertex_buffer = g_scene->GetVertexBuffer();
+            auto                    index_buffer  = g_scene->GetIndexBuffer();
+            VertexBuffer            vb(vertex_buffer, 0);
+            IndexBuffer             ib(index_buffer->GetView(), EIndexElementType::IET_UINT32);
+            std::span<VertexBuffer> vb_span(&vb, 1);
+            IndexBuffer             ib_span = ib;
+            Array<SingleDrawParam>  draw_datas;
+            // draw_datas.emplace_back(SingleDrawParam{uint(index_buffer->GetByteSize()/sizeof(uint)), 1, 0, 0, 0});
+
+            uint instance_count = 0;
+            for (auto entity : g_scene->GetEntities()) {
+                auto& mesh = RenderableManager::Get().GetMeshInfo(entity);
+                draw_datas.emplace_back(SingleDrawParam{mesh.index_count, 1, mesh.index_offset, mesh.vertex_offset, instance_count++});
+            }
+
+            TestBindlessParam param;
+            param.color                  = color_red;
+            param.texture_handle         = bdls_tex_handle_red;
+            param.buffer_handle          = bdls_buffer_handle_red;
+            param.instance_buffer_handle = instance_buffer_handle;
+            param.camera_view_proj       = camera->GetProjectionMatrix() * camera->GetViewMatrix();
+            cmd_list.Gfx(raster_pipeline_constant_color, sampler, red_tex, bindless_array, param)
+                .Draw(Rect2D(0, 0, resolution.x, resolution.y), vb_span, ib, std::move(draw_datas), DepthAttachment(depth), ColorAttachment(vbuffer), ColorAttachment(uv), ColorAttachment(normal));
+
+            MaterialPassBindlessParam material_param;
+            // material_param.material_buffer = bdls_buffer_handle_red;
+            material_param.g_buffer_uv     = bdls_tex_handle_uv;
+            material_param.g_buffer_normal = bdls_tex_handle_normal;
+            material_param.v_buffer        = bdls_tex_handle_vbuffer;
+            material_param.depth           = bdls_tex_handle_depth;
+
+            //First Get all material instances
+            //Material organize this materials
+            //Material bind all resources for it's pass
+            //Draw a full screen quad pass for each material type
+            Moer::UnorderedSet<EMaterialType>                                   material_types = {};
+            Moer::UnorderedMap<EMaterialType, Moer::Array<MaterialInstanceRef>> material_instances;
+            // g_scene->ForEach([&](Entity _entity) {
+            //     if (RenderableManager::Get().Contains(_entity)) {
+            //
+            //         auto mi = RenderableManager::Get().GetMaterialInstance(_entity);
+            //         material_types.insert(mi->GetMaterial()->GetType());
+            //         material_instances[mi->GetMaterial()->GetType()].push_back(mi);
+            //     }
+            // });
+            material_param.material_buffer = bindless_array->AllocateBuffer(g_scene->GetBuffer(EGpuSceneResource::MaterialInfo)->GetView());
+
+            for (auto type : material_types) {
+                // RHIBatchedShaderParameters parameters;
+                // LightingShaderFrag::Parameters frag_params;
+                // frag_params.lighting_data = lighting_data;
+                // // frag_params.material_data = g_scene->GetB;
+                // frag_params.light_data = light_buffer_view;
+                // frag_params.depth_attach = depth_srv;
+                // frag_params.gbuffer_uv = uv_srv;
+                // frag_params.normal_attach = normal_srv;
+                // frag_params.mat_attach = mat_srv;
+                // frag_params.default_sampler = sampler;
+                // parameters.SetParameters(ShaderResourceManager::GetInstance().GetShader<LightingShaderFrag>(),frag_params);
+                //
+                // auto& mat_instances = material_instances[type];
+                // MaterialRef material = mat_instances[0]->GetMaterial();
+                // material->OrganizeInstancesAndBind(parameters,mat_instances);
+                // g_rhi->RHISetBatchedShaderParameters(lighting_pipeline_state,parameters);
+                //
+                // cmd_list->Draw(3, 1,0,0);
+                material_param.material_type = uint(type);
+                cmd_list.Gfx(pbr_pipeline, bindless_array, material_param)
+                    .Draw(Rect2D(0, 0, resolution.x, resolution.y), vb_span, ib, std::move(draw_datas), DepthAttachment(depth), ColorAttachment(output));
+            };
+
+            //PBR Pass
+        }
+
+        int w_width, w_height;
 
         WindowContext::GetWindowSize(WindowContext::GetMainWindow(), &w_width, &w_height);
         if (w_width == 0 || w_height == 0) {
@@ -401,7 +526,7 @@ int main(int argc, const char** argv) {
         if (w_width != resolution.x || w_height != resolution.y) {
 
             resolution = {uint32(w_width), uint32(w_height)};
-            output     = device.CreateTexture(
+            vbuffer    = device.CreateTexture(
                 Extent2D(resolution.x, resolution.y),
                 PF_R8G8B8A8_SRGB,
                 ETextureUsageFlags::COLOR_ATTACHMENT);
@@ -410,60 +535,44 @@ int main(int argc, const char** argv) {
             sc_info.size = {resolution.x, resolution.y};
             sc->Recreate(sc_info);
 
-            gui_color = device.CreateTexture(
+            vbuffer = device.CreateTexture(
                 Extent2D(resolution.x, resolution.y),
                 PF_R8G8B8A8_SRGB,
-                ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED);
-            gui_color->SetName("gui_color");
+                ETextureUsageFlags::COLOR_ATTACHMENT);
+            normal = device.CreateTexture(
+                Extent2D(resolution.x, resolution.y),
+                PF_R8G8B8A8_UNORM,
+                ETextureUsageFlags::COLOR_ATTACHMENT);
+            uv = device.CreateTexture(
+                Extent2D(resolution.x, resolution.y),
+                PF_R8G8_UNORM,
+                ETextureUsageFlags::COLOR_ATTACHMENT);
+
+            depth = device.CreateTexture(
+                Extent2D(resolution.x, resolution.y),
+                PF_D32_SFLOAT,
+                ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT);
+
+            bdls_tex_handle_vbuffer = bindless_array->AllocateTexture(vbuffer, sampler);
+            bdls_tex_handle_normal  = bindless_array->AllocateTexture(normal, sampler);
+            bdls_tex_handle_uv      = bindless_array->AllocateTexture(uv, sampler);
+            bdls_tex_handle_depth   = bindless_array->AllocateTexture(depth, sampler);
         }
 
-        if (temp_scene_color_size.x != scene_color_resolution.x || temp_scene_color_size.y != scene_color_resolution.y) {
-            scene_color = device.CreateTexture(
-                Extent2D(scene_color_resolution.x, scene_color_resolution.y),
-                PF_R8G8B8A8_SRGB,
-                ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED);
-            temp_scene_color_size = {scene_color_resolution.x, scene_color_resolution.y};
-            scene_color->SetName("scene_color");
-        }
-        {
-            Array<SingleDrawParam> draw_datas;
-            draw_datas.emplace_back(SingleDrawParam{3, 1, 0, 0, 0});
+        // cmd_list.Gfx(raster_pipeline, red_buffer)
+        //     .Draw(Rect2D(0, 0, 1, 1), vb_span, ib, std::move(draw_datas), ColorAttachment(red_tex));
 
-            cmd_list.Gfx(raster_pipeline, red_buffer)
-                .Draw("Draw Red Tex", Rect2D(0, 0, 1, 1), vb_span, ib, std::move(draw_datas), ColorAttachment(red_tex));
-        }
         // //float color with time sine
         // color_red[0] = 0.5f + 0.5f * sinf(time * 0.1f);
         // color_red[2] = 0.5f + 0.5f * cosf(time * 0.1f);
         // cmd_list.CopyFrom(std::span<byte>((byte*)&color_red, sizeof(color_red)), red_buffer_view);
-        {
-            Array<SingleDrawParam> draw_datas2;
-            draw_datas2.emplace_back(SingleDrawParam{3, 1, 0, 0, 0});
-            TestBindlessParam param;
-            param.color          = color_red;
-            param.texture_handle = bdls_tex_handle_red;
-            param.buffer_handle  = bdls_buffer_handle_red;
-            cmd_list.Gfx(raster_pipeline_constant_color, sampler, red_tex, bindless_array, param)
-                .Draw("Scene Color", Rect2D(0, 0, scene_color_resolution.x, scene_color_resolution.y), vb_span, ib, std::move(draw_datas2), ColorAttachment(scene_color));
-        }
-        TextureView gui_color_view(gui_color);
-        gui.RenderGUI(cmd_list, gui_color_view);
 
-        {
-            Array<MeshDrawData> draw(1);
-            draw.back().EmplaceDraw(3, 0, 0);
-            CombineUIPipeline::Param param;
-            param.min_xy = scene_color_pos / resolution;
-            param.max_xy = (scene_color_pos + scene_color_resolution) / resolution;
-
-            cmd_list.Gfx(combine_gui_pipeline, scene_color, gui_color_view, sampler, param)
-                .Draw("Combine UI", Rect2D(0, 0, resolution.x, resolution.y), std::move(draw), ColorAttachment(output));
-        }
+       gui.RenderGUI(cmd_list, output);
 
         // cmd_list.Barriers(ReadTexture(red_tex, ETextureState::SAMPLE));
         time++;
         cmd_queue.Execute(cmd_list.Submit().Signal(timeline, time));
-        cmd_queue.Present(sc, output);
+        cmd_queue.Present(sc, vbuffer);
     }
     cmd_queue.Sync();
 }

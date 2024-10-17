@@ -1533,8 +1533,8 @@ namespace Moer::Render {
         attachment_info.imageView = vk_texture->GetView();
 
         attachment_info.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        attachment_info.loadOp      = VulkanEnumTranslator::METoVKAttachmentLoadOp(GetLoadOp(_attachment.action));
-        attachment_info.storeOp     = VulkanEnumTranslator::METoVKAttachmentStoreOp(GetStoreOp(_attachment.action));
+        attachment_info.loadOp      = VulkanEnumTranslator::METoVKAttachmentLoadOp(GetLoadOp(GetDepthAction(_attachment.action)));
+        attachment_info.storeOp     = VulkanEnumTranslator::METoVKAttachmentStoreOp(GetStoreOp(GetDepthAction(_attachment.action)));
         // std::memcpy(attachment_info.clearValue.color.float32, color.float32, sizeof(color.float32));
         attachment_info.clearValue.depthStencil = {_attachment.clear_depth, _attachment.clear_stencil};
 

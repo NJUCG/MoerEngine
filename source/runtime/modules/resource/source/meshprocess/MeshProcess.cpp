@@ -130,6 +130,8 @@ namespace Moer {
     MeshProcessOutput MeshProcessor::GenerateMeshlets(const MeshProcessInput& input) {
         MeshProcessOutput output{};
         GenerateMeshlets(input, output);
+        output.meshlet_vertex_data = Moer::Array<float>(static_cast<float *>(input.vertex_data), static_cast<float *>(input.vertex_data) + input.vertex_count * input.vertex_stride / 4);
+        output.primitive_indices = Moer::Array<uint32_t>(input.index_data, input.index_data + input.index_count);
         return std::move(output);
     }
 

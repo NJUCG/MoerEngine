@@ -90,13 +90,13 @@ namespace Moer {
     }
 
     void GpuPrimitiveBuilder::Impl::InitBuild() {
-        copy_cmd_list = g_rhi->RHICreateCopyCommandList();
-        copy_queue    = g_rhi->RHICreateCommandQueue(ECommandQueueType::COPY);
+        // copy_cmd_list = g_rhi->RHICreateCopyCommandList();
+        // copy_queue    = g_rhi->RHICreateCommandQueue(ECommandQueueType::COPY);
     }
 
     void GpuPrimitiveBuilder::Impl::EndBuild() {
-        copy_cmd_list = nullptr;
-        copy_queue    = nullptr;
+        // copy_cmd_list = nullptr;
+        // copy_queue    = nullptr;
     }
 
     void GpuPrimitiveBuilder::InitBuild() {
@@ -169,6 +169,10 @@ namespace Moer {
         m_data      = data;
         return *this;
     }
+    TextureBuilder& TextureBuilder::Name(const std::string& name) noexcept {
+        m_name = name;
+        return *this;
+    }
     TextureBuilder::~TextureBuilder() noexcept {
         if (m_data && m_callback)
             m_callback(m_data);
@@ -176,6 +180,43 @@ namespace Moer {
             delete[] m_offsets;
         if (m_mip_extents)
             delete[] m_mip_extents;
+    }
+    Moer::UnorderedMap<std::string, Render::TextureRef> TextureBuilder::BuildTexturesInBatch(Moer::Array<TextureBuilder>& builders) noexcept {
+        const int batch_size = 256'000'000;
+        Moer::UnorderedMap<std::string, Render::TextureRef> textures(builders.size());
+        Moer::Array<Moer::Array<uint32_t> > batch_indices;
+
+        {
+            auto & indices = batch_indices.emplace_back();
+            int cur_size = 0;
+            for (int i = 0; i < builders.size(); i++) {
+                if(cur_size + builders[i].m_data_size > batch_size) {
+                    indices.emplace_back(i);
+                    cur_size = 0;
+                }
+                cur_size += builders[i].m_data_size;
+                indices.emplace_back(i);
+            }
+        }
+
+        auto & device = Render::RenderDevice::Get();
+        auto & copy_queue = device.GetCommandQueue(Render::EQueueType::Copy);
+        for(const auto & indices :batch_indices) {
+            Render::CommandList cmd_list;
+            // Moer::Array<Render::BufferRef> staging_buffers(indices.size());
+            int count = 0;
+            for(auto & indice : indices) {
+                auto & builder = builders[indice];
+                textures[builder.m_name] = device.CreateTexture(Extent2D{builder.m_width, builder.m_height}, builder.m_format,ETextureUsageFlags::SAMPLED | ETextureUsageFlags::SRGB | ETextureUsageFlags::TRANSFER_DST,builder.m_mip_levels, builder.m_layer_levels);
+                // staging_buffers[count] = device.CreateBuffer<byte>(builder.m_data_size, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
+                cmd_list.CopyFrom(std::span<byte>((byte*)builder.m_data, builder.m_data_size), textures[builder.m_name]->GetView());
+                cmd_list.Barriers(Render::ReadTexture{textures[builder.m_name]->GetView(),Render::ETextureState::SAMPLE} );
+                count++;
+            }
+            copy_queue.Execute(cmd_list.Submit());
+            copy_queue.Sync();
+        }
+        return textures;
     }
 
     RHITextureRef TextureBuilder::Build() noexcept {
@@ -336,14 +377,12 @@ namespace Moer {
     }
 
     RHIBufferRef GpuSceneBufferBuilder::CreateBufferWithData(EBufferUsageFlags usages, const void* data, uint32_t size) {
-        RHIBufferRef staging_buffer            = g_rhi->RHICreateBuffer<std::byte>(size, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
+        RHIBufferRef staging_buffer            = g_rhi->RHICreateBuffer<std::byte>(size, usages | EBufferUsageFlags::CPU_VISIBLE);
         auto*        staging_buffer_mapped_ptr = static_cast<uint8_t*>(g_rhi->RHIMapBuffer(staging_buffer, 0, size));
         memcpy(staging_buffer_mapped_ptr, data, size);
         g_rhi->RHIUnmapBuffer(staging_buffer);
 
-        RHIBufferRef buffer = g_rhi->RHICreateBuffer<std::byte>(size, usages | EBufferUsageFlags::TRANSFER_DST);
-
-        return buffer;
+        return staging_buffer;
     }
 
     std::pair<RHIBufferRef, RHIBufferRef> GpuSceneBufferBuilder::Impl::Build() {

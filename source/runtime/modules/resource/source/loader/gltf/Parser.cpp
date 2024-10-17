@@ -338,11 +338,12 @@ namespace Moer::Resource::Gltf {
         materialBuilder.SetParameter("roughness_factor", UniformType::FLOAT);
         materialBuilder.SetParameter("ao", UniformType::FLOAT);
 
-        materialBuilder.SetParameter("albedo_map", ETextureDimension::TEX_2D);
-        materialBuilder.SetParameter("normal_map", ETextureDimension::TEX_2D);
-        materialBuilder.SetParameter("metallic_roughness_map", ETextureDimension::TEX_2D);
-        materialBuilder.SetParameter("ao_map", ETextureDimension::TEX_2D);
-        materialBuilder.SetParameter("emissive_map", ETextureDimension::TEX_2D);
+        materialBuilder.SetTexture("albedo_map", ETextureDimension::TEX_2D);
+        materialBuilder.SetTexture("normal_map", ETextureDimension::TEX_2D);
+        materialBuilder.SetTexture("metallic_roughness_map", ETextureDimension::TEX_2D);
+        materialBuilder.SetTexture("ao_map", ETextureDimension::TEX_2D);
+        materialBuilder.SetTexture("emissive_map", ETextureDimension::TEX_2D);
+        materialBuilder.SetType(EMaterialType::E_PBR_STANDARD);
         materialBuilder.SetName("standered");
 
         return materialBuilder.Build();
@@ -524,7 +525,7 @@ namespace Moer::Resource::Gltf {
                                        Inverse(model_2_world),
                                        std::max(scale.x, std::max(scale.y, scale.z)),
                                        0,
-                                       instance_id,
+                                       m_scene_data->m_material_instance_indexes[m_scene_data->m_prim_infos[i].material_id],
                                        0);
             Vector4f corner[8];
             corner[0]    = model_2_world * Vector4f(mesh_info.center + mesh_info.extent, 1.0f);
@@ -560,12 +561,13 @@ namespace Moer::Resource::Gltf {
             RenderThreadFence fence;
             fence.Wait();
         }
-        if (!IsCurrentlyRenderThread()) {
-            ScopeEventRef event;
-            EnqueueRenderTask([&event]() {
-                event.Trigger();
-            });
-        }
+        // if (!IsCurrentlyRenderThread()) {
+        //     ScopeEventRef event;
+        //     EnqueueRenderTask([&event]() {
+        //         event.Trigger();
+        //     });
+        // }
+        // TaskGraph::QueueTask()
 
         m_scene_data->m_vertex_data        = std::move(m_vertex_data);
         m_scene_data->m_index_data         = std::move(m_index_data);
@@ -580,6 +582,8 @@ namespace Moer::Resource::Gltf {
         m_scene_data->m_textures           = std::move(m_textures);
         m_scene_data->m_cameras            = std::move(m_scene_data->m_cameras);
         m_scene_data->m_path               = _file_path.string();
+        m_scene_data->m_vertex_stride      = stride;
+        m_scene_data->m_index_stride       = sizeof(uint32_t);
 
         auto scene_data = std::move(m_scene_data);
 
@@ -609,34 +613,6 @@ namespace Moer::Resource::Gltf {
             return m_promise.get_future();
         }
     };
-
-    void
-    Parser::Impl::LoadSceneFromFileAsync(const std::filesystem::path& file_path) {
-
-        AsyncSceneLoadInfoRef load_info = MoerNew(AsyncSceneLoadInfo)();
-        load_info->b_valid              = true;
-        load_info->progress.store(0);
-        Scene::RegisterAsyncLoadInfo(load_info);
-        // auto future      = promise->GetFuture();
-
-        LambdaTask::Dispatch(
-            [this, path(file_path), info(load_info)]() {
-                Timer* timer = MoerNew(Timer)();
-                timer->Start();
-                auto        load_info = Scene::GetCurrentSceneLoadInfo();
-                std::string path_str  = path.generic_string();
-
-                auto sceneData = this->LoadSceneFromFile(path, true);
-                EnqueueRenderTask([load_info = std::move(load_info), sceneData = std::move(sceneData), timer]() {
-                    load_info->scene = SceneCache::ConvertToScene(*sceneData).release();
-                    Scene::SetCurrentScene(std::move(load_info->scene));
-                    load_info->progress.store(1);
-                    timer->Stop();
-                    LOG_INFO("Load Scene {} Success, Time:{}", sceneData->m_path.string(), timer->ElapsedMilliseconds());
-                    MoerDelete(timer);
-                });
-            });
-    }
 
     Transform GetTransform(const aiNode* node) {
         Matrix4x4f matrix;
@@ -674,6 +650,8 @@ namespace Moer::Resource::Gltf {
                     material_name = name.C_Str();
                 }
 
+                m_scene_data->m_material_instance_indexes[material_name] = material_id;
+
                 if (!m_material_instances.contains(material_name)) {
                     LoadMaterial(scene, material, material_name);
                 }
@@ -697,7 +675,7 @@ namespace Moer::Resource::Gltf {
 
     void Parser::LoadSceneFromFileAsync(const std::filesystem::path& file_path) noexcept {
         Impl* impl = MoerNew(Impl)();
-        impl->LoadSceneFromFileAsync(file_path);
+        //  impl->LoadSceneFromFileAsync(file_path);
     }
 
 }// namespace Moer::Resource::Gltf

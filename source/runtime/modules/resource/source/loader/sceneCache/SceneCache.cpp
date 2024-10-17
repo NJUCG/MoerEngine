@@ -127,7 +127,7 @@ namespace Moer {
         return path.string() + ".MOERSCENE";
     }
 
-    UniquePtr<Scene> SceneCache::FromFile(const std::filesystem::path& path) {
+    void SceneCache::FromFile(const std::filesystem::path& path,Scene * scene) {
         Moer::Timer timer;
         timer.Start();
         std::ifstream fs(path, std::ios::binary);
@@ -139,10 +139,9 @@ namespace Moer {
         ReadSceneMaterial(stream, sceneData);
         ReadSceneUtils(stream, sceneData);
 
-        auto scene = ConvertToScene(sceneData, false);
+        ConvertToScene(sceneData, scene,false);
         timer.Stop();
         LOG_INFO("Load Scene Cache Time(ms): {}", timer.ElapsedMilliseconds());
-        return scene;
     }
     bool SceneCache::HasValidCache(const std::filesystem::path& path) {
         auto cache_path = RemapScenePath(path);
@@ -405,6 +404,7 @@ namespace Moer {
             material_instance->SetUnifomBuffer(buffer_data.data(), unfirom_buffer_size);
             material_instance->SetName(material_instance_name);
             sceneData.m_material_instances[material_instance_name] = material_instance;
+            sceneData.m_material_instance_indexes[material_instance_name] = i;
         }
     }
 
@@ -496,13 +496,14 @@ namespace Moer {
         }
 
         stream.write(sceneData.m_material_instances.size());
-        for (auto& material_instance : sceneData.m_material_instances) {
-            stream.write(material_instance.first);
-            stream.write(material_instance.second->GetMaterial()->GetName());
+        for (auto [name,index] : sceneData.m_material_instance_indexes) {
+            auto & material_instance = sceneData.m_material_instances.at(name);
+            stream.write(name);
+            stream.write(material_instance->GetMaterial()->GetName());
 
-            if (sceneData.m_mat_instance_textures.contains(material_instance.first)) {
-                stream.write(sceneData.m_mat_instance_textures.at(material_instance.first).textures.size());
-                for (auto& texture : sceneData.m_mat_instance_textures.at(material_instance.first).textures) {
+            if (sceneData.m_mat_instance_textures.contains(name)) {
+                stream.write(sceneData.m_mat_instance_textures.at(name).textures.size());
+                for (auto& texture : sceneData.m_mat_instance_textures.at(name).textures) {
                     stream.write(texture.first);
                     stream.write(texture.second);
                 }
@@ -512,7 +513,7 @@ namespace Moer {
                 stream.write(static_cast<size_t>(0));
             }
 
-            stream.write(material_instance.second->GetUniformBuffer().GetData(), material_instance.second->GetUniformBuffer().GetSize());
+            stream.write(material_instance->GetUniformBuffer().GetData(), material_instance->GetUniformBuffer().GetSize());
         }
     }
     void SceneCache::WriteSceneTextures(OutputStream& stream, const SceneData& sceneData) {
@@ -588,89 +589,232 @@ namespace Moer {
         WriteSceneUtils(stream, sceneData);
     }
 
-    UniquePtr<Scene> SceneCache::ConvertToScene(SceneData& sceneData, bool need_cache) {
-        size_t hash    = HashSceneData(sceneData);
+    void BuildSceneRaytracing(SceneData& sceneData, Scene* scene) {
+
+        Render::RaytracingSceneRef raytracing_scene = Render::RenderDevice::Get().CreateRaytracingScene();
+
+        auto&               device = Render::RenderDevice::Get();
+        Render::CommandList cmd_list;
+        auto&               cmd_queue = device.GetCommandQueue(Render::EQueueType::Compute);
+
+        Moer::Array<Render::RaytracingGeometryRef> blas_list;
+        for (auto& primitive : sceneData.m_prim_infos) {
+            Render::RaytracingGeometryInfo rt_geo_info{};
+            const auto&                    mesh_info = sceneData.m_mesh_infos[primitive.mesh_id];
+            rt_geo_info.build_flags                  = ERayTracingAccelerationStructureBuildFlags::PREFER_FAST_TRACE;
+            rt_geo_info.vertex_format                = PF_R32G32B32_SFLOAT;
+            rt_geo_info.vertex_buffer                = scene->GetVertexBuffer();
+            rt_geo_info.index_buffer                 = scene->GetIndexBuffer();
+            rt_geo_info.index_type                   = IET_UINT32;
+            rt_geo_info.max_vertex_count             = mesh_info.vertex_count;
+            rt_geo_info.primitive_count              = mesh_info.index_count / 3;
+            rt_geo_info.segments.emplace_back(mesh_info.vertex_offset, mesh_info.vertex_count, sceneData.m_vertex_stride, mesh_info.index_offset, mesh_info.index_count);
+
+            Render::RaytracingGeometryRef blas = device.CreateRaytracingGeometry(rt_geo_info);
+            cmd_list.BuildAccelerationStructures({{blas, ERaytracingBuildMode::BUILD}});
+
+            Render::RaytracingMaterial  mat{};
+            Render::RaytracingInstance& rt_instance = raytracing_scene->AddInstance();
+            rt_instance.geom                        = blas;
+            auto transform                          = primitive.transform.matrix;
+            rt_instance.transform                   = Matrix3x4f(transform.r0, transform.r1, transform.r2);
+            rt_instance.flag.need_create            = true;
+            rt_instance.flag.need_update            = true;
+            rt_instance.material_ref                = mat;
+
+            rt_instance.visible_mask = Render::RTVM_ALL;
+            blas_list.push_back(blas);
+            raytracing_scene->RegisterGeometry(blas);
+
+            // break;
+        }
+        // raytracing_scene->
+        scene->SetRaytracingScene(raytracing_scene);
+        cmd_list.UpdateRaytracingScene(raytracing_scene);
+        cmd_queue.Execute(cmd_list.Submit());
+        // cmd_queue.Sync();
+        LOG_INFO("Build Scene Raytracing Completed");
+        // Moer::Array<RHIRayTracingBLASRef> blas_list;
+        // RHIRayTracingTLASInitializer tlas_initializer;
+        //
+        // for(auto& primitive : sceneData.m_prim_infos) {
+        //     RHIRayTracingBLASInitializer blas_initializer;
+        //     blas_initializer.build_flags = ERayTracingAccelerationStructureBuildFlags::ALLOW_UPDATE;
+        //     auto & blas_geometryies = blas_initializer.geometries;
+        //     auto & blas_range_infos = blas_initializer.range_infos;
+        //
+        //     auto & geometry = blas_geometryies.emplace_back();
+        //     auto & triangles_geometry = geometry.geometry.triangles;
+        //     triangles_geometry.vertex_buffer = scene->GetVertexBuffer();
+        //     triangles_geometry.vertex_buffer_stride = sizeof(float) * (3+2+3);
+        //     triangles_geometry.max_vertex_count = mesh_info.vertex_count;
+        //     triangles_geometry.vertex_element_type = EPixelFormat::PF_R32G32B32_SFLOAT;
+        //
+        //     triangles_geometry.index_buffer = scene->GetIndexBuffer();
+        //     triangles_geometry.index_element_type = EIndexElementType::IET_UINT32;
+        //
+        //     triangles_geometry.transform_buffer = GpuSceneBufferBuilder::CreateBufferWithData(EBufferUsageFlags::CONSTANT_BUFFER, &primitive.transform.matrix, sizeof(Moer::Matrix4x4f));
+        //
+        //     //todo Add aabb geometry
+        //     geometry.geo_type = ERayTracingGeometryType::RTGT_TRIANGLES;
+        //     geometry.flags = ERayTracingGeometryFlags::NONE;
+        //
+        //     auto & range_info = blas_range_infos.emplace_back();
+        //     range_info.first_vertex = 0;
+        //     range_info.primitive_count = mesh_info.index_count / 3;
+        //     range_info.primtive_offset = 0;
+        //     range_info.transform_offset = 0;
+        //
+        //     auto blas = g_rhi->RHIBuildRayTracingBLAS(blas_initializer);
+        //     blas_list.push_back(blas);
+        //
+        //     auto & tlas_instance = tlas_initializer.instances.emplace_back();
+        //     tlas_instance.blas = blas;
+        //     tlas_instance.custom_index = primitive.mesh_id;
+        //     tlas_instance.transform = primitive.transform.matrix;
+        // }
+        //
+        // auto tlas = g_rhi->RHIBuildRayTracingTLAS(tlas_initializer);
+        // scene->SetTlas(tlas);
+        // scene->SetBlasList(blas_list);
+    }
+
+    void SceneCache::ConvertToScene(SceneData& scene_data,Scene * scene, bool need_cache) {
+        size_t hash    = HashSceneData(scene_data);
         bool   updated = true;
         if (updated && need_cache) {
-            Cache(sceneData, hash);
+            Cache(scene_data, hash);
         }
 
-        UniquePtr<Scene> scene = UniquePtr<Scene>(MoerNew(Scene));
+        auto& device = Render::RenderDevice::Get();
 
-        GpuSceneBufferBuilder buffer_builder;
-        auto                  meshlet_bounds_buffer = GpuSceneBufferBuilder::CopyFrom(EBufferUsageFlags::UNORDERED_ACCESS, sceneData.m_meshlet_bounds.data(), sceneData.m_meshlet_bounds.size() * sizeof(MeshletBound));
-        auto                  meshlet_descs_buffer  = GpuSceneBufferBuilder::CopyFrom(EBufferUsageFlags::UNORDERED_ACCESS, sceneData.m_meshlet_descs.data(), sceneData.m_meshlet_descs.size() * sizeof(MeshletDesc));
-        //auto                  mesh_infos_buffer         = GpuSceneBufferBuilder::CopyFrom(EBufferUsageFlags::UNORDERED_ACCESS, sceneData.m_mesh_infos.data(), sceneData.m_mesh_infos.size() * sizeof(MeshInfo));
-        auto instance_data_buffer      = GpuSceneBufferBuilder::CopyFrom(EBufferUsageFlags::UNORDERED_ACCESS, sceneData.m_instance_data.data(), sceneData.m_instance_data.size() * sizeof(InstanceData));
-        auto vertex_buffer             = GpuSceneBufferBuilder::CopyFrom(EBufferUsageFlags::VERTEX_BUFFER, sceneData.m_vertex_data.data(), sceneData.m_vertex_data.size() * sizeof(float));
-        auto index_buffer              = GpuSceneBufferBuilder::CopyFrom(EBufferUsageFlags::INDEX_BUFFER, sceneData.m_index_data.data(), sceneData.m_index_data.size() * sizeof(uint32_t));
-        auto instance_id_buffer        = GpuSceneBufferBuilder::CopyFrom(EBufferUsageFlags::VERTEX_BUFFER, sceneData.m_instance_id.data(), sceneData.m_instance_id.size() * sizeof(uint32_t));
-        auto instance_mesh_info_buffer = GpuSceneBufferBuilder::CopyFrom(EBufferUsageFlags::UNORDERED_ACCESS, sceneData.m_instance_mesh_info.data(), sceneData.m_instance_mesh_info.size() * sizeof(InstanceMeshInfo));
+        Moer::Array<byte> material_data(scene_data.m_material_instances.size() * Material::MaterialBytesNum);
+        for(auto [name,index] : scene_data.m_material_instance_indexes) {
+            auto& material = scene_data.m_material_instances[name];
+            memcpy(material_data.data() + index * Material::MaterialBytesNum, material->GetUniformBuffer().GetData(), material->GetUniformBuffer().GetSize());
+        }
 
-        scene->SetBuffer("meshlet_bounds", meshlet_bounds_buffer);
-        scene->SetBuffer("meshlet_descs", meshlet_descs_buffer);
-        // scene->SetBuffer("mesh_infos", mesh_infos_buffer);
-        scene->SetBuffer("vertex_buffer", vertex_buffer);
-        scene->SetBuffer("index_buffer", index_buffer);
-        scene->SetBuffer("instance_data", instance_data_buffer);
-        scene->SetBuffer("instance_id_buffer", instance_id_buffer);
-        scene->SetBuffer("instance_meshlet_info_buffer", instance_mesh_info_buffer);
+        Render::CommandList cmd_list;
+        auto&               cmd_queue      = device.GetCommandQueue(Render::EQueueType::Graphics);
+        auto&               copy_queue     = device.GetCommandQueue(Render::EQueueType::Copy);
+        auto                bindless_array = scene->GetBindlessArray();
 
-        for (auto& primitive : sceneData.m_prim_infos) {
+        auto meshlet_bounds_buffer     = device.CreateBuffer<byte>(scene_data.m_meshlet_bounds.size() * sizeof(MeshletBound), EBufferUsageFlags::UNORDERED_ACCESS);
+        auto meshlet_descs_buffer      = device.CreateBuffer<byte>(scene_data.m_meshlet_descs.size() * sizeof(MeshletDesc), EBufferUsageFlags::UNORDERED_ACCESS);
+        auto mesh_infos_buffer         = device.CreateBuffer<byte>(scene_data.m_mesh_infos.size() * sizeof(MeshInfo), EBufferUsageFlags::UNORDERED_ACCESS);
+        auto instance_data_buffer      = device.CreateBuffer<byte>(scene_data.m_instance_data.size() * sizeof(InstanceData), EBufferUsageFlags::UNORDERED_ACCESS);
+        auto vertex_buffer             = device.CreateBuffer<float>(scene_data.m_vertex_data.size(), EBufferUsageFlags::VERTEX_BUFFER | EBufferUsageFlags::ACCELERATION_STRUCTURE);
+        auto index_buffer              = device.CreateBuffer<uint32_t>(scene_data.m_index_data.size(), EBufferUsageFlags::INDEX_BUFFER | EBufferUsageFlags::ACCELERATION_STRUCTURE);
+        auto instance_id_buffer        = device.CreateBuffer<uint32_t>(scene_data.m_instance_id.size(), EBufferUsageFlags::VERTEX_BUFFER);
+        auto instance_mesh_info_buffer = device.CreateBuffer<byte>(scene_data.m_instance_mesh_info.size() * sizeof(InstanceMeshInfo), EBufferUsageFlags::UNORDERED_ACCESS);
+        auto material_buffer = device.CreateBuffer<byte>(scene_data.m_material_instances.size() * Material::MaterialBytesNum, EBufferUsageFlags::UNORDERED_ACCESS);
+
+        
+        cmd_list.CopyFrom(std::span<byte>((byte*)scene_data.m_meshlet_bounds.data(), scene_data.m_meshlet_bounds.size() * sizeof(MeshletBound)), meshlet_bounds_buffer->GetView());
+        cmd_list.CopyFrom(std::span<byte>((byte*)scene_data.m_meshlet_descs.data(), scene_data.m_meshlet_descs.size() * sizeof(MeshletDesc)), meshlet_descs_buffer->GetView());
+        cmd_list.CopyFrom(std::span<byte>((byte*)scene_data.m_mesh_infos.data(), scene_data.m_mesh_infos.size() * sizeof(MeshInfo)), mesh_infos_buffer->GetView());
+        cmd_list.CopyFrom(std::span<byte>((byte*)scene_data.m_instance_data.data(), scene_data.m_instance_data.size() * sizeof(InstanceData)), instance_data_buffer->GetView());
+        cmd_list.CopyFrom(std::span<byte>((byte*)scene_data.m_vertex_data.data(), scene_data.m_vertex_data.size() * sizeof(float)), vertex_buffer->GetView());
+        cmd_list.CopyFrom(std::span<byte>((byte*)scene_data.m_index_data.data(), scene_data.m_index_data.size() * sizeof(uint32_t)), index_buffer->GetView());
+        cmd_list.CopyFrom(std::span<byte>((byte*)scene_data.m_instance_id.data(), scene_data.m_instance_id.size() * sizeof(uint32_t)), instance_id_buffer->GetView());
+        cmd_list.CopyFrom(std::span<byte>((byte*)scene_data.m_instance_mesh_info.data(), scene_data.m_instance_mesh_info.size() * sizeof(InstanceMeshInfo)), instance_mesh_info_buffer->GetView());
+        cmd_list.CopyFrom(material_data, material_buffer->GetView());
+
+        copy_queue.Execute(cmd_list.Submit());
+        copy_queue.Sync();
+
+        // GpuSceneBufferBuilder buffer_builder;
+        // auto                  meshlet_bounds_buffer = GpuSceneBufferBuilder::CopyFrom(EBufferUsageFlags::UNORDERED_ACCESS, sceneData.m_meshlet_bounds.data(), sceneData.m_meshlet_bounds.size() * sizeof(MeshletBound));
+        // auto                  meshlet_descs_buffer  = GpuSceneBufferBuilder::CopyFrom(EBufferUsageFlags::UNORDERED_ACCESS, sceneData.m_meshlet_descs.data(), sceneData.m_meshlet_descs.size() * sizeof(MeshletDesc));
+        // //auto                  mesh_infos_buffer         = GpuSceneBufferBuilder::CopyFrom(EBufferUsageFlags::UNORDERED_ACCESS, sceneData.m_mesh_infos.data(), sceneData.m_mesh_infos.size() * sizeof(MeshInfo));
+        // auto instance_data_buffer      = GpuSceneBufferBuilder::CopyFrom(EBufferUsageFlags::UNORDERED_ACCESS, sceneData.m_instance_data.data(), sceneData.m_instance_data.size() * sizeof(InstanceData));
+        // auto vertex_buffer             = GpuSceneBufferBuilder::CopyFrom(EBufferUsageFlags::VERTEX_BUFFER, sceneData.m_vertex_data.data(), sceneData.m_vertex_data.size() * sizeof(float));
+        // auto index_buffer              = GpuSceneBufferBuilder::CopyFrom(EBufferUsageFlags::INDEX_BUFFER, sceneData.m_index_data.data(), sceneData.m_index_data.size() * sizeof(uint32_t));
+        // auto instance_id_buffer        = GpuSceneBufferBuilder::CopyFrom(EBufferUsageFlags::VERTEX_BUFFER, sceneData.m_instance_id.data(), sceneData.m_instance_id.size() * sizeof(uint32_t));
+        // auto instance_mesh_info_buffer = GpuSceneBufferBuilder::CopyFrom(EBufferUsageFlags::UNORDERED_ACCESS, sceneData.m_instance_mesh_info.data(), sceneData.m_instance_mesh_info.size() * sizeof(InstanceMeshInfo));
+
+        // scene->SetBuffer("meshlet_bounds", meshlet_bounds_buffer);
+        // scene->SetBuffer("meshlet_descs", meshlet_descs_buffer);
+        // // scene->SetBuffer("mesh_infos", mesh_infos_buffer);
+        // scene->SetBuffer("vertex_buffer", vertex_buffer);
+        // scene->SetBuffer("index_buffer", index_buffer);
+        // scene->SetBuffer("instance_data", instance_data_buffer);
+        // scene->SetBuffer("instance_id_buffer", instance_id_buffer);
+        // scene->SetBuffer("instance_meshlet_info_buffer", instance_mesh_info_buffer);
+        scene->SetVertexBuffer(vertex_buffer);
+        scene->SetIndexBuffer(index_buffer);
+        scene->SetBuffer(EGpuSceneResource::InstanceInfo, instance_data_buffer);
+        scene->SetBuffer(EGpuSceneResource::MaterialInfo, material_buffer);
+
+        for (auto& primitive : scene_data.m_prim_infos) {
             auto entity = EntityManager::Get().Create();
             scene->AddEntity(entity);
             RenderableManager::Get().Create(entity);
-            RenderableManager::Get().SetMeshInfo(entity, sceneData.m_mesh_infos[primitive.mesh_id]);
-            RenderableManager::Get().SetMaterialInstance(entity, sceneData.m_material_instances[primitive.material_id]);
+            RenderableManager::Get().SetMeshInfo(entity, scene_data.m_mesh_infos[primitive.mesh_id]);
+            RenderableManager::Get().SetMaterialInstance(entity, scene_data.m_material_instances[primitive.material_id]);
         }
 
-        for (auto& camera : sceneData.m_cameras) {
+       
+        for (auto& camera : scene_data.m_cameras) {
             auto entity = EntityManager::Get().Create();
             CameraManager::Get().Put(entity, camera);
             scene->AddCamera(entity);
         }
 
-        for (auto& light : sceneData.m_lights) {
+        for (auto& light : scene_data.m_lights) {
             auto entity = EntityManager::Get().Create();
             LightComponentManager::Get().Put(entity, light);
             scene->AddLight(entity);
         }
 
-        Moer::UnorderedMap<std::string, RHITextureRef> textures;
-        for (auto& texture : sceneData.m_textures) {
-            TextureBuilder builder;
+        Moer::UnorderedMap<std::string, Render::TextureRef> textures;
+        Moer::Array<TextureBuilder>                         texture_builders;
+        texture_builders.reserve(scene_data.m_textures.size());
+        for (auto& texture : scene_data.m_textures) {
+            auto& builder = texture_builders.emplace_back();
             builder.Data(texture.second.data.data(), texture.second.data.size());
             builder.Width(texture.second.width);
             builder.Height(texture.second.height);
             builder.Format(texture.second.format);
             builder.MipAndLayers(texture.second.mips, texture.second.layers, texture.second.mip_offsets.data(), texture.second.mip_extents.data());
-            textures.emplace(texture.first, builder.Build());
+            builder.Name(texture.first);
         }
+        textures = TextureBuilder::BuildTexturesInBatch(texture_builders);
+        Render::Sampler sampler(SF_LINEAR, SAM_REPEAT);
 
-        for (auto material_instance : sceneData.m_material_instances) {
-            if (!sceneData.m_mat_instance_textures.contains(material_instance.first)) {
+        //  scene_data.m_textures = GpuSceneBufferBuilder::
+        for (auto material_instance : scene_data.m_material_instances) {
+            if (!scene_data.m_mat_instance_textures.contains(material_instance.first)) {
                 continue;
             }
-            for (auto& texture : sceneData.m_mat_instance_textures[material_instance.first].textures) {
-                material_instance.second->SetParameter(texture.first, textures[texture.second]);
+            for (auto& texture : scene_data.m_mat_instance_textures[material_instance.first].textures) {
+                uint32_t handle = scene->GetBindlessArray()->AllocateTexture(textures[texture.second], sampler);
+                material_instance.second->SetParameter(texture.first, handle);
             }
         }
-
-        return scene;
+        // BuildSceneRaytracing(scene_data,scene.get());
     }
-    void SceneCache::LoadSceneFromCacheAsync(const std::filesystem::path& path) {
-        LambdaTask::Dispatch([path]() {
+    void SceneCache::LoadSceneFromCacheAsync(const std::filesystem::path& path, Scene* scene) {
+        LambdaTask::Dispatch([path, scene]() {
             AsyncSceneLoadInfoRef load_info = MoerNew(AsyncSceneLoadInfo)();
             load_info->b_valid              = true;
             load_info->progress.store(0);
             Scene::RegisterAsyncLoadInfo(load_info);
-            auto sceneData = FromFile(RemapScenePath(path)).release();
-            EnqueueRenderTask([load_info = std::move(load_info), sceneData = std::move(sceneData)]() {
-                load_info->scene = sceneData;
-                Scene::SetCurrentScene(load_info->scene);
-                load_info->progress.store(1);
-            });
+            FromFile(RemapScenePath(path), scene);
+            // load_info->scene = scene_data;
+            // Scene::SetCurrentScene(load_info->scene);
+            load_info->progress.store(1);
         });
+    }
+    void SceneCache::LoadSceneFromCache(const std::filesystem::path& path, Scene* scene) {
+        AsyncSceneLoadInfoRef load_info = MoerNew(AsyncSceneLoadInfo)();
+        load_info->b_valid              = true;
+        load_info->progress.store(0);
+        Scene::RegisterAsyncLoadInfo(load_info);
+        FromFile(RemapScenePath(path), scene);
+        // load_info->scene = scene_data;
+        // Scene::SetCurrentScene(load_info->scene);
+        load_info->progress.store(1);
     }
 
 }// namespace Moer

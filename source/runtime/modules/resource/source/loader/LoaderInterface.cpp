@@ -5,33 +5,53 @@
 #include "loader/jsonscene/JsonSceneParser.h"
 #include "log/LogSystem.h"
 #include "sceneCache/SceneCache.h"
+#include "taskgraph/TaskGraph.h"
 
 #include <filesystem>
 namespace Moer {
 namespace Resource {
-    void LoaderInterface::LoadSceneFromFileAsync(const std::filesystem::path& _file_path) noexcept {
+
+    using LoadFunction                                                = std::function<UniquePtr<SceneData>(const std::filesystem::path&)>;
+    static Moer::Map<std::string, LoadFunction> SceneLoadFunctionMaps = {{"gltf", Gltf::Parser::LoadSceneFromFile},
+                                                                         {"fbx", Gltf::Parser::LoadSceneFromFile},
+                                                                         {"json", JsonScene::JsonSceneParser::LoadSceneFromFile}};
+
+    void LoadFromFile(const std::filesystem::path& _file_path, Scene* scene) {
+        auto ext = _file_path.string().substr(_file_path.string().find_last_of(".") + 1);
+        if (SceneLoadFunctionMaps.find(ext) == SceneLoadFunctionMaps.end()) {
+            LOG_ERROR("Unsupported file format: {}", _file_path.extension().string());
+            return;
+        }
+        AsyncSceneLoadInfoRef load_info = MoerNew(AsyncSceneLoadInfo)();
+        load_info->b_valid              = true;
+        load_info->progress.store(0);
+        Scene::RegisterAsyncLoadInfo(load_info);
+        LambdaTask::Dispatch([_file_path, scene, load_info, ext]() {
+            if (auto scene_data = std::move(SceneLoadFunctionMaps[ext](_file_path))) {
+                SceneCache::ConvertToScene(*scene_data, scene);
+                load_info->progress.store(1);
+            }
+        });
+    }
+
+    void LoaderInterface::LoadSceneFromFileAsync(const std::filesystem::path& _file_path, Scene* scene) noexcept {
         auto file_path_str = _file_path.string();
         if (_file_path.string().ends_with(".ply")) {
-            auto scene = PlyLoader::LoadSceneFromFile(_file_path);
-            if (g_scene != nullptr) {
-                g_scene->SetBuffer("gs_scene_buffer", scene->GetBuffer("gs_scene_buffer"));
-            } else {
-                Scene::SetCurrentScene(scene.release());
-            }
-        } else if (_file_path.string().ends_with(".gltf") || _file_path.string().ends_with(".fbx")) {
-            if (SceneCache::HasValidCache(_file_path)) {
-                SceneCache::LoadSceneFromCacheAsync(_file_path);
-            } else {
-                Gltf::Parser::LoadSceneFromFileAsync(_file_path);
-            }
-        } else if (_file_path.extension() == ".json") {
-            if (SceneCache::HasValidCache(_file_path)) {
-                SceneCache::LoadSceneFromCacheAsync(_file_path);
-            } else {
-                JsonScene::JsonSceneParser::LoadSceneFromFileAsync(_file_path);
-            }
+            auto gs_scene = PlyLoader::LoadSceneFromFile(_file_path);
+            scene->SetBuffer(EGpuSceneResource::GaussianSplattingVertex, gs_scene->GetBuffer(EGpuSceneResource::GaussianSplattingVertex));
         } else {
-            LOG_ERROR("Unsupported file format: {}", file_path_str);
+            if (SceneCache::HasValidCache(_file_path)) {
+                LambdaTask::Dispatch([_file_path, scene]() {
+                    try {
+                        SceneCache::LoadSceneFromCache(_file_path, scene);
+                    } catch (const std::exception& e) {
+                        LOG_ERROR("Failed to load scene from cache: {} retrying to load from file", e.what());
+                        LoadFromFile(_file_path, scene);
+                    }
+                });
+            } else {
+                LoadFromFile(_file_path, scene);
+            }
         }
     }
 }
