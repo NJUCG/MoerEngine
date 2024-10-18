@@ -3,6 +3,7 @@
 #include "VulkanCommand.h"
 
 #include "rhi/RHICommon.h"
+#include "vulkan/vulkan_core.h"
 
 namespace Moer::Render {
     /**
@@ -161,7 +162,7 @@ namespace Moer::Render {
         return {gfx_rules[index], layout_rules[index], tex_write_stage_rules[pass_index]};
     }
 
-    static  bool IsWriteState(VkImageLayout layout) {
+    static bool IsWriteState(VkImageLayout layout) {
         return layout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL && layout != VK_IMAGE_LAYOUT_GENERAL;
         // switch (layout) {
         //     case VK_IMAGE_LAYOUT_GENERAL:
@@ -174,10 +175,13 @@ namespace Moer::Render {
         // }
     }
 
-    static bool IsWriteState(VkAccessFlags2 access) {
-        return access & VK_ACCESS_2_SHADER_WRITE_BIT;
+    static bool IsWriteState(VkAccessFlags2 _access) {
+        return _access & VK_ACCESS_2_SHADER_WRITE_BIT ||
+               _access & VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT ||
+               _access & VK_ACCESS_2_MEMORY_WRITE_BIT ||
+               _access & VK_ACCESS_2_TRANSFER_WRITE_BIT;
     }
-    
+
     void VkTracker::MarkWriteable(VulkanTexture* _texture, bool _writeable) {
         if (_writeable) {
             writed_state_textures.insert(_texture);
@@ -195,18 +199,21 @@ namespace Moer::Render {
     }
 
     void VkTracker::RecordState(VulkanBuffer* _buffer, VkAccessFlagBits2 _access, VkPipelineStageFlagBits2 _stage) {
+        MarkWriteable(_buffer, IsWriteState(_access));
         if (auto it = buffer_states.find(_buffer); it != buffer_states.end()) {
             auto& state = it->second;
-            if (state.dst_access != _access || state.dst_stage != _stage) {
-                state.src_access = state.dst_access;
-                state.src_stage  = state.dst_stage;
-                state.dst_access = _access;
-                state.dst_stage  = _stage;
-            }
+            // if (state.dst_access != _access || state.dst_stage != _stage) {
+            //     state.src_access = state.dst_access;
+            //     state.src_stage  = state.dst_stage;
+            //     state.dst_access = _access;
+            //     state.dst_stage  = _stage;
+            // }
+
+            state.dst_access |= _access;
+            state.dst_stage |= _stage;
             return;
         }
-        MarkWriteable(_buffer, IsWriteState(_access));
-        buffer_states[_buffer] = {_buffer->m_access_flags, _buffer->m_stage_flags, _access, _stage};
+        buffer_states[_buffer] = {VK_ACCESS_2_NONE, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, _access, _stage};
     }
 
     void VkTracker::RecordState(VulkanBuffer* _buffer, std::tuple<VkAccessFlags2, VkPipelineStageFlags2>&& _state) {
@@ -219,8 +226,6 @@ namespace Moer::Render {
     uint8 Min(uint8 a, uint8 b) {
         return a < b ? a : b;
     }
-
- 
 
     void VkTracker::EmplaceWriteBLAS(uint64 _blas_buf) {
         write_blas_states.insert(_blas_buf);
@@ -235,7 +240,7 @@ namespace Moer::Render {
         TextureState state{
             VK_ACCESS_2_NONE,
             VK_IMAGE_LAYOUT_UNDEFINED,
-            VK_PIPELINE_STAGE_2_NONE,
+            VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
             _access,
             _layout,
             _stage};
@@ -470,6 +475,8 @@ namespace Moer::Render {
 
             state.src_access = state.dst_access;
             state.src_stage  = state.dst_stage;
+            state.dst_access = VK_ACCESS_2_NONE;
+            state.dst_stage  = VK_PIPELINE_STAGE_2_NONE;
         }
 
         for (auto& [texture, state] : texture_states) {

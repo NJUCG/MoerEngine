@@ -2,6 +2,7 @@
 #include "RenderAPI.h"
 #include "math/Base.h"
 #include "misc/STL.h"
+#include "serialize/Serializer.h"
 
 #include <string_view>
 
@@ -63,6 +64,16 @@ namespace Moer {
             // returns offset in bytes of this field (at index if an array)
             inline size_t getBufferOffset(size_t index = 0) const {
                 return (offset + stride * index) * sizeof(uint32_t);
+            }
+
+            OutputStream& operator<<(OutputStream& _stream) const {
+                _stream << name << offset << stride << type << isArray << size << structName << sizeName;
+                return _stream;
+            }
+
+            InputStream& operator>>(InputStream& _stream) {
+                _stream >> name >> offset >> stride >> type >> isArray >> size >> structName >> sizeName;
+                return _stream;
             }
         };
 
@@ -190,4 +201,4 @@ namespace Moer {
         void*    m_buffer;
         uint32_t m_size;
     };
-}
+}// namespace Moer

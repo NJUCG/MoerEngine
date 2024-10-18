@@ -406,7 +406,7 @@ int main(int argc, const char** argv) {
     cmd_queue.Execute(cmd_list.Submit());
     cmd_queue.Sync();
 
-    Resource::LoaderInterface::LoadSceneFromFileAsync(ConfigManager::GetInstance().GetScenePath(), g_scene);
+    // Resource::LoaderInterface::LoadSceneFromFileAsync(ConfigManager::GetInstance().GetScenePath(), g_scene);
 
     FenceRef timeline   = device.CreateFence();
     uint64   time       = 0;
@@ -432,94 +432,94 @@ int main(int argc, const char** argv) {
         }
 
         uint material_buffer_idx = 0;
-        if (Scene::GetCurrentSceneLoadInfo()->IsReady()) {
-            if (first_load) {
-                instance_buffer_handle = bindless_array->AllocateBuffer(g_scene->GetBuffer(EGpuSceneResource::InstanceInfo)->GetView());
-                first_load             = false;
-            }
+        // if (Scene::GetCurrentSceneLoadInfo()->IsReady()) {
+        //     if (first_load) {
+        //         instance_buffer_handle = bindless_array->AllocateBuffer(g_scene->GetBuffer(EGpuSceneResource::InstanceInfo)->GetView());
+        //         first_load             = false;
+        //     }
 
-            auto camera_entity = g_scene->GetCameras()[0];
-            auto camera        = CameraManager::Get().Get(camera_entity);
-            camera->Tick();
+        //     auto camera_entity = g_scene->GetCameras()[0];
+        //     auto camera        = CameraManager::Get().Get(camera_entity);
+        //     camera->Tick();
 
-            //GBuffer Pass
-            auto                    vertex_buffer = g_scene->GetVertexBuffer();
-            auto                    index_buffer  = g_scene->GetIndexBuffer();
-            VertexBuffer            vb(vertex_buffer, 0);
-            IndexBuffer             ib(index_buffer->GetView(), EIndexElementType::IET_UINT32);
-            std::span<VertexBuffer> vb_span(&vb, 1);
-            IndexBuffer             ib_span = ib;
-            Array<SingleDrawParam>  draw_datas;
-            // draw_datas.emplace_back(SingleDrawParam{uint(index_buffer->GetByteSize()/sizeof(uint)), 1, 0, 0, 0});
+        //     //GBuffer Pass
+        //     auto                    vertex_buffer = g_scene->GetVertexBuffer();
+        //     auto                    index_buffer  = g_scene->GetIndexBuffer();
+        //     VertexBuffer            vb(vertex_buffer, 0);
+        //     IndexBuffer             ib(index_buffer->GetView(), EIndexElementType::IET_UINT32);
+        //     std::span<VertexBuffer> vb_span(&vb, 1);
+        //     IndexBuffer             ib_span = ib;
+        //     Array<SingleDrawParam>  draw_datas;
+        //     // draw_datas.emplace_back(SingleDrawParam{uint(index_buffer->GetByteSize()/sizeof(uint)), 1, 0, 0, 0});
 
-            uint instance_count = 0;
-            for (auto entity : g_scene->GetEntities()) {
-                auto& mesh = RenderableManager::Get().GetMeshInfo(entity);
-                draw_datas.emplace_back(SingleDrawParam{mesh.index_count, 1, mesh.index_offset, mesh.vertex_offset, instance_count++});
-            }
+        //     uint instance_count = 0;
+        //     for (auto entity : g_scene->GetEntities()) {
+        //         auto& mesh = RenderableManager::Get().GetMeshInfo(entity);
+        //         draw_datas.emplace_back(SingleDrawParam{mesh.index_count, 1, mesh.index_offset, mesh.vertex_offset, instance_count++});
+        //     }
 
-            TestBindlessParam param;
-            param.color                  = color_red;
-            param.texture_handle         = bdls_tex_handle_red;
-            param.buffer_handle          = bdls_buffer_handle_red;
-            param.instance_buffer_handle = instance_buffer_handle;
-            param.camera_view_proj       = camera->GetProjectionMatrix() * camera->GetViewMatrix();
-            cmd_list.Gfx(raster_pipeline_constant_color, sampler, red_tex, bindless_array, param)
-                .Draw(Rect2D(0, 0, resolution.x, resolution.y), vb_span, ib, std::move(draw_datas), DepthAttachment(depth), ColorAttachment(vbuffer), ColorAttachment(uv), ColorAttachment(normal));
+        //     TestBindlessParam param;
+        //     param.color                  = color_red;
+        //     param.texture_handle         = bdls_tex_handle_red;
+        //     param.buffer_handle          = bdls_buffer_handle_red;
+        //     param.instance_buffer_handle = instance_buffer_handle;
+        //     param.camera_view_proj       = camera->GetProjectionMatrix() * camera->GetViewMatrix();
+        //     cmd_list.Gfx(raster_pipeline_constant_color, sampler, red_tex, bindless_array, param)
+        //         .Draw(Rect2D(0, 0, resolution.x, resolution.y), vb_span, ib, std::move(draw_datas), DepthAttachment(depth), ColorAttachment(vbuffer), ColorAttachment(uv), ColorAttachment(normal));
 
-            MaterialPassBindlessParam material_param;
-            // material_param.material_buffer = bdls_buffer_handle_red;
-            material_param.g_buffer_uv     = bdls_tex_handle_uv;
-            material_param.g_buffer_normal = bdls_tex_handle_normal;
-            material_param.v_buffer        = bdls_tex_handle_vbuffer;
-            material_param.depth           = bdls_tex_handle_depth;
+        //     MaterialPassBindlessParam material_param;
+        //     // material_param.material_buffer = bdls_buffer_handle_red;
+        //     material_param.g_buffer_uv     = bdls_tex_handle_uv;
+        //     material_param.g_buffer_normal = bdls_tex_handle_normal;
+        //     material_param.v_buffer        = bdls_tex_handle_vbuffer;
+        //     material_param.depth           = bdls_tex_handle_depth;
 
-            //First Get all material instances
-            //Material organize this materials
-            //Material bind all resources for it's pass
-            //Draw a full screen quad pass for each material type
-            Moer::UnorderedSet<EMaterialType>                                   material_types = {};
-            Moer::UnorderedMap<EMaterialType, Moer::Array<MaterialInstanceRef>> material_instances;
-            // g_scene->ForEach([&](Entity _entity) {
-            //     if (RenderableManager::Get().Contains(_entity)) {
-            //
-            //         auto mi = RenderableManager::Get().GetMaterialInstance(_entity);
-            //         material_types.insert(mi->GetMaterial()->GetType());
-            //         material_instances[mi->GetMaterial()->GetType()].push_back(mi);
-            //     }
-            // });
-            if (material_buffer_idx == 0) {
-                material_buffer_idx = bindless_array->AllocateBuffer(g_scene->GetBuffer(EGpuSceneResource::MaterialInfo)->GetView());
-            }
-            material_param.material_buffer = material_buffer_idx;
+        //     //First Get all material instances
+        //     //Material organize this materials
+        //     //Material bind all resources for it's pass
+        //     //Draw a full screen quad pass for each material type
+        //     Moer::UnorderedSet<EMaterialType>                                   material_types = {};
+        //     Moer::UnorderedMap<EMaterialType, Moer::Array<MaterialInstanceRef>> material_instances;
+        //     // g_scene->ForEach([&](Entity _entity) {
+        //     //     if (RenderableManager::Get().Contains(_entity)) {
+        //     //
+        //     //         auto mi = RenderableManager::Get().GetMaterialInstance(_entity);
+        //     //         material_types.insert(mi->GetMaterial()->GetType());
+        //     //         material_instances[mi->GetMaterial()->GetType()].push_back(mi);
+        //     //     }
+        //     // });
+        //     if (material_buffer_idx == 0) {
+        //         material_buffer_idx = bindless_array->AllocateBuffer(g_scene->GetBuffer(EGpuSceneResource::MaterialInfo)->GetView());
+        //     }
+        //     material_param.material_buffer = material_buffer_idx;
 
-            for (auto type : material_types) {
-                // RHIBatchedShaderParameters parameters;
-                // LightingShaderFrag::Parameters frag_params;
-                // frag_params.lighting_data = lighting_data;
-                // // frag_params.material_data = g_scene->GetB;
-                // frag_params.light_data = light_buffer_view;
-                // frag_params.depth_attach = depth_srv;
-                // frag_params.gbuffer_uv = uv_srv;
-                // frag_params.normal_attach = normal_srv;
-                // frag_params.mat_attach = mat_srv;
-                // frag_params.default_sampler = sampler;
-                // parameters.SetParameters(ShaderResourceManager::GetInstance().GetShader<LightingShaderFrag>(),frag_params);
-                //
-                // auto& mat_instances = material_instances[type];
-                // MaterialRef material = mat_instances[0]->GetMaterial();
-                // material->OrganizeInstancesAndBind(parameters,mat_instances);
-                // g_rhi->RHISetBatchedShaderParameters(lighting_pipeline_state,parameters);
-                //
-                // cmd_list->Draw(3, 1,0,0);
-                cmd_list.UpdateBindlessArray(bindless_array);
-                material_param.material_type = uint(type);
-                cmd_list.Gfx(pbr_pipeline, bindless_array, material_param)
-                    .Draw(Rect2D(0, 0, resolution.x, resolution.y), vb_span, ib, std::move(draw_datas), DepthAttachment(depth), ColorAttachment(output));
-            };
+        //     for (auto type : material_types) {
+        //         // RHIBatchedShaderParameters parameters;
+        //         // LightingShaderFrag::Parameters frag_params;
+        //         // frag_params.lighting_data = lighting_data;
+        //         // // frag_params.material_data = g_scene->GetB;
+        //         // frag_params.light_data = light_buffer_view;
+        //         // frag_params.depth_attach = depth_srv;
+        //         // frag_params.gbuffer_uv = uv_srv;
+        //         // frag_params.normal_attach = normal_srv;
+        //         // frag_params.mat_attach = mat_srv;
+        //         // frag_params.default_sampler = sampler;
+        //         // parameters.SetParameters(ShaderResourceManager::GetInstance().GetShader<LightingShaderFrag>(),frag_params);
+        //         //
+        //         // auto& mat_instances = material_instances[type];
+        //         // MaterialRef material = mat_instances[0]->GetMaterial();
+        //         // material->OrganizeInstancesAndBind(parameters,mat_instances);
+        //         // g_rhi->RHISetBatchedShaderParameters(lighting_pipeline_state,parameters);
+        //         //
+        //         // cmd_list->Draw(3, 1,0,0);
+        //         cmd_list.UpdateBindlessArray(bindless_array);
+        //         material_param.material_type = uint(type);
+        //         cmd_list.Gfx(pbr_pipeline, bindless_array, material_param)
+        //             .Draw(Rect2D(0, 0, resolution.x, resolution.y), vb_span, ib, std::move(draw_datas), DepthAttachment(depth), ColorAttachment(output));
+        //     };
 
-            //PBR Pass
-        }
+        //     //PBR Pass
+        // }
 
         int w_width, w_height;
 
@@ -577,7 +577,7 @@ int main(int argc, const char** argv) {
         // cmd_list.Barriers(ReadTexture(red_tex, ETextureState::SAMPLE));
         time++;
         cmd_queue.Execute(cmd_list.Submit().Signal(timeline, time));
-        cmd_queue.Present(sc, vbuffer);
+        cmd_queue.Present(sc, output);
     }
     cmd_queue.Sync();
 }

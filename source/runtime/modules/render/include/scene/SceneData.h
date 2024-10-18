@@ -5,6 +5,7 @@
 #include "scene/RenderableManager.h"
 #include "scene/Scene.h"
 #include "scene/light/LightComponent.h"
+#include "serialize/Serializer.h"
 
 #include <filesystem>
 namespace Moer {
@@ -18,17 +19,37 @@ namespace Moer {
         Moer::Array<uint8_t>  data;
         std::vector<uint32_t> mip_offsets = {0};
         std::vector<Extent3D> mip_extents;
+
+        OutputStream& operator<<(OutputStream& _stream) const {
+            _stream << width << height << layers << mips << channal << data_size << format << data << mip_offsets << mip_extents;
+            return _stream;
+        }
+
+        InputStream& operator>>(InputStream& _stream) {
+            _stream >> width >> height >> layers >> mips >> channal >> data_size >> format >> data >> mip_offsets >> mip_extents;
+            return _stream;
+        }
     };
 
     struct PrimInfo {
         uint        mesh_id;
         std::string material_id;
         Transform   transform;
+
+        OutputStream& operator<<(OutputStream& _stream) const {
+            _stream << mesh_id << material_id << transform;
+            return _stream;
+        }
+
+        InputStream& operator>>(InputStream& _stream) {
+            _stream >> mesh_id >> material_id >> transform;
+            return _stream;
+        }
     };
 
     struct SceneData {
-        Moer::Array<float>              m_vertex_data{};
-        
+        Moer::Array<float> m_vertex_data{};
+
         Moer::Array<float>              m_position_data{};
         Moer::Array<float>              m_uv_data{};
         Moer::Array<float>              m_normal_data{};
