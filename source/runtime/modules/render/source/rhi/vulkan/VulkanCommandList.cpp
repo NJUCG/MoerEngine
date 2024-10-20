@@ -139,7 +139,7 @@ namespace Moer::Render {
             },
                        _arg);
         }
-        void VisitCmd(const Command* _cmd) {
+        bool VisitCmd(const Command* _cmd) {
             assert(_cmd != nullptr);
             switch (_cmd->Type()) {
                 case Command::EType::UploadBuffer:
@@ -185,6 +185,7 @@ namespace Moer::Render {
                 default:
                     assert(false && "Invalid command type");
             }
+            return false;
         }
 
         void Visit(const UploadBufferCmd* _cmd) {
@@ -1553,9 +1554,58 @@ namespace Moer::Render {
 
     public:
         VkCmdVisitor(VulkanDevice& _device, VulkanAllocator& _allocator, VkTracker& _tracker, VulkanCmdList& _cmd_list) : VulkanDeviceObject(&_device),
-                                                                                                                          allocator(_allocator),
-                                                                                                                          tracker(_tracker),
+                                                                                                                          allocator(_allocator), tracker(_tracker),
                                                                                                                           cmd_list(_cmd_list) {}
+
+        void VisitCmd(const Command* _cmd) {
+            switch (_cmd->Type()) {
+                case Command::EType::UploadBuffer:
+                    Visit(static_cast<const UploadBufferCmd&>(*_cmd));
+                    break;
+                case Command::EType::CopyBackBuffer:
+                    Visit(static_cast<const CopyBackBufferCmd&>(*_cmd));
+                    break;
+                case Command::EType::BufferToBuffer:
+                    Visit(static_cast<const CopyBufferCmd&>(*_cmd));
+                    break;
+                case Command::EType::BufferToTexture:
+                    Visit(static_cast<const CopyBufferToTextureCmd&>(*_cmd));
+                    break;
+                case Command::EType::TextureToBuffer:
+                    Visit(static_cast<const CopyTextureToBufferCmd&>(*_cmd));
+                    break;
+                case Command::EType::UploadTexture:
+                    Visit(static_cast<const UploadTextureCmd&>(*_cmd));
+                    break;
+                case Command::EType::TextureToTexture:
+                    Visit(static_cast<const CopyTextureCmd&>(*_cmd));
+                    break;
+                case Command::EType::ShaderDispatch:
+                    Visit(static_cast<const DispatchCmd&>(*_cmd));
+                    break;
+                case Command::EType::BuildAccel:
+                    Visit(static_cast<const BuildAccelerationStructuresCmd&>(*_cmd));
+                    break;
+                case Command::EType::BuildTLAS:
+                    Visit(static_cast<const UpdateRaytracingSceneCmd&>(*_cmd));
+                    break;
+                case Command::EType::Barrier:
+                    Visit(static_cast<const BarrierCmd&>(*_cmd));
+                    break;
+                case Command::EType::SetDrawState:
+                    Visit(static_cast<const SetDrawStateCmd&>(*_cmd));
+                    break;
+                case Command::EType::TraceRay: {
+                    assert(false && "TraceRay not implemented");
+                    break;
+                }
+                case Command::EType::Custom: break;
+                case Command::EType::UpdateBindlessArray: {
+                    Visit(static_cast<const UpdateBindlessArrayCmd&>(*_cmd));
+                    break;
+                };
+            }
+        };
         void Visit(const UploadBufferCmd& _cmd) {
             auto data_span  = _cmd.Data();
             auto tmp_buffer = allocator.AllocateUploadBuffer(_cmd.ByteSize(), 16);
@@ -1566,6 +1616,8 @@ namespace Moer::Render {
                                 _cmd.ByteSize(),
                                 tmp_buffer.GetByteOffset(),
                                 _cmd.Offset());
+
+            // LOG_INFO("upload temp buffer handle {} offset {} size {}", (uint64)ResourceCast(tmp_buffer.GetBuffer())->GetHandle(), tmp_buffer.GetByteOffset(), tmp_buffer.GetByteSize());
         }
 
         void Visit(const UploadTextureCmd& _cmd) {
@@ -1596,12 +1648,18 @@ namespace Moer::Render {
         void Visit(const CopyBackBufferCmd& _cmd) {
             VulkanBuffer* src_buffer = reinterpret_cast<VulkanBuffer*>(_cmd.Handle());
             auto          tmp_buffer = allocator.AllocateReadbackBuffer(_cmd.ByteSize(), 16);
+
+            tracker.RegisterFlushBuffer(tmp_buffer, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
+            tracker.DispatchBarriers(cmd_list);
             cmd_list.CopyBuffer(src_buffer,
                                 reinterpret_cast<VulkanBuffer*>(tmp_buffer.GetBuffer()),
                                 _cmd.ByteSize(),
                                 _cmd.Offset(),
                                 tmp_buffer.GetByteOffset());
 
+            // LOG_INFO("copyback temp buffer handle {} offset {} size {}", (uint64)ResourceCast(tmp_buffer.GetBuffer())->GetHandle(), tmp_buffer.GetByteOffset(), tmp_buffer.GetByteSize());
+
+            // tracker.RegisterFlushBuffer(VulkanBuffer *_buffer, VkAccessFlagBits2 _access, VkPipelineStageFlagBits2 _stage)
             allocator.AddOnComplete([tmp_buffer, &cmd_list(cmd_list), src_data(_cmd.Data())]() {
                 cmd_list.CopyData(src_data, tmp_buffer, tmp_buffer.GetByteSize());
             });
@@ -2186,6 +2244,7 @@ namespace Moer::Render {
                                                                                                                                                 "Copy Exec";
             vk_allocator.GetCmdList().BeginLabel(queue_label, {1.0f, 0.0f, 0.0f, 1.0f});
         }
+
         for (const CmdReorderer::LinkedCommandList& cmd_list : cmd_lists) {
             if (cmd_list.head == nullptr) {
                 continue;
@@ -2197,49 +2256,7 @@ namespace Moer::Render {
             tracker.DispatchBarriers(vk_allocator.GetCmdList());
             for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
                 const auto* cmd = cmdnode->cmd;
-                switch (cmd->Type()) {
-                    case Command::EType::UploadBuffer:
-                        visitor.Visit(static_cast<const UploadBufferCmd&>(*cmd));
-                        break;
-                    case Command::EType::CopyBackBuffer:
-                        visitor.Visit(static_cast<const CopyBackBufferCmd&>(*cmd));
-                        break;
-                    case Command::EType::BufferToBuffer:
-                        visitor.Visit(static_cast<const CopyBufferCmd&>(*cmd));
-                        break;
-                    case Command::EType::BufferToTexture:
-                        visitor.Visit(static_cast<const CopyBufferToTextureCmd&>(*cmd));
-                        break;
-                    case Command::EType::TextureToBuffer:
-                        visitor.Visit(static_cast<const CopyTextureToBufferCmd&>(*cmd));
-                        break;
-                    case Command::EType::UploadTexture:
-                        visitor.Visit(static_cast<const UploadTextureCmd&>(*cmd));
-                        break;
-                    case Command::EType::TextureToTexture:
-                        visitor.Visit(static_cast<const CopyTextureCmd&>(*cmd));
-                        break;
-                    case Command::EType::ShaderDispatch:
-                        visitor.Visit(static_cast<const DispatchCmd&>(*cmd));
-                        break;
-                    case Command::EType::BuildAccel:
-                        visitor.Visit(static_cast<const BuildAccelerationStructuresCmd&>(*cmd));
-                        break;
-                    case Command::EType::BuildTLAS:
-                        visitor.Visit(static_cast<const UpdateRaytracingSceneCmd&>(*cmd));
-                        break;
-                    case Command::EType::Barrier:
-                        visitor.Visit(static_cast<const BarrierCmd&>(*cmd));
-                        break;
-                    case Command::EType::SetDrawState:
-                        visitor.Visit(static_cast<const SetDrawStateCmd&>(*cmd));
-                        break;
-                    case Command::EType::Custom: break;
-                    case Command::EType::UpdateBindlessArray: {
-                        visitor.Visit(static_cast<const UpdateBindlessArrayCmd&>(*cmd));
-                        break;
-                    };
-                }
+                visitor.VisitCmd(cmd);
             }
         }
 
@@ -2286,7 +2303,9 @@ namespace Moer::Render {
             return {uint64(timeline), last_time};
         } else {
             auto current_timeline = ++last_frame;
-            auto end_tag          = queue.GetType() == EQueueType::Graphics ? VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT : VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            // LOG_INFO("signal timeline {}", current_timeline);
+
+            auto end_tag = queue.GetType() == EQueueType::Graphics ? VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT : VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
             queue.Signal(timeline, current_timeline, end_tag);
             for (auto& evt : _submit.wait_events) {
                 queue.Wait(reinterpret_cast<VulkanFence*>(evt.timeline_handle), evt.value);
@@ -2372,8 +2391,8 @@ namespace Moer::Render {
     }
 
     UniquePtr<VulkanAllocator> VkCommandQueue::GetAllocator() {
-        if (last_frame > vk_device.cmd_alloc_limits) {
-            Complete(last_frame - vk_device.cmd_alloc_limits);
+        if (last_frame >= vk_device.cmd_alloc_limits) {
+            Complete(last_frame - vk_device.cmd_alloc_limits + 1);
         }
         auto allocator = std::move(UniquePtr<VulkanAllocator>(allocators.Pop()));
         if (allocator) {
@@ -2398,6 +2417,7 @@ namespace Moer::Render {
 
             auto visit_allocator = [&, &allocators(this->allocators), fence(this->timeline)](UniquePtr<VulkanAllocator>& _allocator) {
                 _allocator->Complete(fence, timeline);
+                // LOG_INFO("timeline {} complete", timeline);
                 _allocator->Reset();
                 allocators.Push(_allocator.release());
                 wait_util_reach_timeline();
@@ -2646,7 +2666,7 @@ namespace Moer::Render {
 
     VulkanAllocator::StackAllocator::Chunk VulkanAllocator::StackAllocator::Allocate(uint64 _size, uint _align) {
 
-        auto align_size = std::max<uint64>(_align, _size);
+        auto align_size = std::max(_align, 16u);
         for (auto& alloc_buf : allocated_buffers) {
             auto offset = (alloc_buf.offset + align_size - 1) & ~(align_size - 1);
             if (alloc_buf.size - offset >= _size) {
@@ -2862,6 +2882,7 @@ namespace Moer::Render {
         VK_CHECK_RESULT(vmaMapMemory(allocator, buffer->GetAllocation(), &p_data));
         std::memcpy((byte*)_dst, (byte*)p_data + _src.GetByteOffset(), _size);
         vmaUnmapMemory(allocator, buffer->GetAllocation());
+        vmaFlushAllocation(allocator, buffer->GetAllocation(), _src.GetByteOffset(), _size);
     }
 
     void* VulkanCmdList::MapBuffer(const BufferView& _buffer) {

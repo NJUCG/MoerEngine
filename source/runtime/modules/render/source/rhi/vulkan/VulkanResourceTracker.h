@@ -45,6 +45,7 @@ namespace Moer::Render {
             uint8_t                  _mip_level = 0,
             uint8_t                  _mip_count = 1);
 
+        void RegisterFlushBuffer(const BufferView& _view, VkAccessFlagBits2 _access, VkPipelineStageFlagBits2 _stage);
         void RecordState(
             VulkanTexture* _texture,
             std::tuple<VkAccessFlags2, VkImageLayout, VkPipelineStageFlags2>&&);
@@ -92,9 +93,14 @@ namespace Moer::Render {
         UnorderedMap<VulkanBuffer*, BufferState>   buffer_states;
         UnorderedMap<VulkanTexture*, TextureState> texture_states;
 
+        Set<VulkanBuffer*>  pending_buffers;
+        Set<VulkanTexture*> pending_textures;
+
         Set<uint64>         write_blas_states;
         Set<VulkanTexture*> writed_state_textures;
         Set<VulkanBuffer*>  writed_state_buffers;
+
+        UnorderedMap<VulkanBuffer*, BufferState> flush_buffer_states;
     };
 }// namespace Moer::Render
 #endif
