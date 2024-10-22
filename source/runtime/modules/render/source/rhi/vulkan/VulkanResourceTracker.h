@@ -7,6 +7,7 @@
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
+#include "vulkan/vulkan_core.h"
 namespace Moer::Render {
     class VkTracker {
         struct BufferState {
@@ -25,7 +26,29 @@ namespace Moer::Render {
         };
 
     public:
-        VkTracker()  = default;
+        VkTracker(EQueueType _queue = EQueueType::Graphics) : queue_type(_queue) {
+            switch (_queue) {
+
+                case EQueueType::Graphics: {
+                    first_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+                    last_stage  = VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT;
+                    break;
+                }
+                case EQueueType::Compute: {
+                    first_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+                    last_stage  = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+                    break;
+                }
+                case EQueueType::Copy: {
+                    first_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+                    last_stage  = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+                    break;
+                }
+                case EQueueType::Num: {
+                    assert(false && "Invalid queue type for vk tracker");
+                }
+            }
+        };
         ~VkTracker() = default;
 
         void RecordState(
@@ -85,7 +108,11 @@ namespace Moer::Render {
         void MarkWriteable(VulkanBuffer* _buffer, bool _writeable = true);
 
     private:
-        EPassType                     pass_type;
+        EPassType             pass_type;
+        EQueueType            queue_type  = EQueueType::Graphics;
+        VkPipelineStageFlags2 last_stage  = 0;
+        VkPipelineStageFlags2 first_stage = 0;
+
         Array<VkBufferMemoryBarrier2> buffer_barriers;
         Array<VkImageMemoryBarrier2>  texture_barriers;
         Array<VkMemoryBarrier2>       memory_barriers;

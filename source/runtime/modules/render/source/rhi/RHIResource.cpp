@@ -183,7 +183,8 @@ namespace Moer::Render {
     }
     TextureView::TextureView(TextureRef _texture_ref) : TextureView(_texture_ref.Get()) {
     }
-    TextureView::TextureView(Texture* _tex, uint8 _mip_level, uint8 _mip_cnt) : texture(_tex), mip_level(_mip_level), num_mips(_mip_cnt) {
+    TextureView::TextureView(Texture* _tex, uint8 _mip_level, uint8 _mip_cnt) : texture(_tex), mip_level(_mip_level), num_mips(_mip_cnt), extent(_tex->GetExtent()) {
+        //calculate extent
     }
     TextureView Texture::GetView(uint8 _mip_level, uint8 _mip_cnt) {
         return TextureView(this, _mip_level, _mip_cnt);

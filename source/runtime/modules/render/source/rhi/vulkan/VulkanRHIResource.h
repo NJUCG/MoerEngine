@@ -20,6 +20,8 @@
 
 #include <atomic>
 #include <cstddef>
+#include <mutex>
+#include <stdatomic.h>
 #include <volk.h>
 #include "VulkanTypeDefs.h"
 #include "VulkanSwapChain.h"
@@ -886,10 +888,14 @@ namespace Moer::Render {
         };
         Array<SubResourceStates> m_subresource_states;
         SubResourceStates        state;
-        bool                     b_has_init_state : 1 = false;
-        bool                     b_present : 1        = false;
+        bool                     b_has_init_state : 1      = false;
+        bool                     b_has_preferred_state : 1 = false;
+        bool                     b_present : 1             = false;
         VkImageLayout            GetPreferredLayout() { return m_preferred_layout; };
-        int32                    GetDescriptorIndex(uint _mip_level, uint _mip_idx, VkImageLayout _layout) {
+        VkImageLayout            GetInitlayout() {
+            return VK_IMAGE_LAYOUT_GENERAL;
+        }
+        int32 GetDescriptorIndex(uint _mip_level, uint _mip_idx, VkImageLayout _layout) {
             VkTextureDescKey key = {_layout, uint8(_mip_level), uint8(_mip_idx)};
             auto             it  = m_descriptor_indices.find(key);
             if (it != m_descriptor_indices.end()) {
@@ -940,12 +946,17 @@ namespace Moer::Render {
 
         uint64 ArrayHandle() const override { return (uint64)bindless_array_buffer; }
 
+        void Lock() { mtx.lock(); }
+        void Unlock() { mtx.unlock(); }
+
     public:
         VulkanBuffer* bindless_array_buffer;
         VulkanBuffer* bindless_buffer_descs;
         VulkanBuffer* bindless_texture_descs;
 
     private:
+        std::mutex mtx;
+
     protected:
         UniquePtr<Command>          CreateUpdateCommand() override;
         class VulkanDescriptorHeap& g_heap;
@@ -953,9 +964,9 @@ namespace Moer::Render {
         LockFreeQueueBase<uint, true> free_texture_slots;
         LockFreeQueueBase<uint, true> free_buffer_slots;
         LockFreeQueueBase<uint, true> free_slots;
-        uint                          texture_slot_offset;
-        uint                          buffer_slot_offset;
-        uint                          slot_offset;
+        std::atomic_uint              texture_slot_offset;
+        std::atomic_uint              buffer_slot_offset;
+        std::atomic_uint              slot_offset;
         //frame resources
         Array<TextureUpdateInfo> textures_allocated;
         Array<BufferUpdateInfo>  buffers_allocated;

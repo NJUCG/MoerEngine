@@ -12,6 +12,7 @@
 #include <string_view>
 #include <type_traits>
 #include <variant>
+#include <io/IOCommon.h>
 
 class Shader;
 
@@ -430,6 +431,11 @@ namespace Moer::Render {
             return std::move(*this);
         }
 
+        CmdSubmit&& Wait(WaitEvent _event) {
+            wait_events.emplace_back(_event);
+            return std::move(*this);
+        }
+
         CmdSubmit&& Signal(Fence* _fence, uint64 _signal_value) {
             signal_events.emplace_back(uint64(_fence), _signal_value);
             return std::move(*this);
@@ -786,6 +792,24 @@ namespace Moer::Render {
         virtual WaitEvent Execute(CmdSubmit&& _submit)                          = 0;
         virtual void      Present(SwapchainRef _swapchain, TextureView _target) = 0;
         virtual void      Sync()                                                = 0;
+    };
+
+    class RENDER_API CopyQueue {
+    public:
+        CopyQueue(){};
+        ~CopyQueue()                                      = default;
+        virtual IOWaitEvt Execute(IOSubmission&& _submit) = 0;
+        virtual IOWaitEvt Execute(CmdSubmit&& _submit)    = 0;
+
+        virtual void CopyFrom(BufferView _src, BufferView _dst)        = 0;
+        virtual void CopyFrom(TextureView _src, TextureView _dst)      = 0;
+        virtual void CopyFrom(TextureView _src, BufferView _dst)       = 0;
+        virtual void CopyFrom(BufferView _src, TextureView _dst)       = 0;
+        virtual void CopyFrom(std::span<byte> _data, BufferView _dst)  = 0;
+        virtual void CopyFrom(std::span<byte> _data, TextureView _dst) = 0;
+
+        virtual FenceRef GetFenceHandle()       = 0;
+        virtual void     Sync(uint64 _timeline) = 0;
     };
 }// namespace Moer::Render
 #endif

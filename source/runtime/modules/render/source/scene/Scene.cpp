@@ -3,6 +3,7 @@
 #include "config/ConfigManager.h"
 // #include "loader/gltf/Parser.h"
 #include "log/LogSystem.h"
+#include "misc/STL.h"
 #include "rhi/RHIResource.h"
 #include "scene/EntityManager.h"
 #include "scene/RenderableManager.h"
@@ -20,7 +21,9 @@ namespace Moer {
         } global_resources;
         Render::RaytracingSceneRef rt_scene{nullptr};
         Render::BufferRef          vertex_buffer{nullptr}, index_buffer{nullptr};
-        Render::BindlessArrayRef bindless_array{nullptr};        
+        Render::BindlessArrayRef   bindless_array{nullptr};
+
+        UnorderedMap<std::string, Render::TextureRef> material_textures;
     };
     class RENDER_API Scene::Impl {
         friend class Scene;
@@ -114,7 +117,7 @@ namespace Moer {
     }
 
     void Scene::SetTlas(RHIRayTracingTLASRef _tlas) noexcept {
-       // m_impl->gpu_scene.tlas = _tlas;
+        // m_impl->gpu_scene.tlas = _tlas;
     }
     void Scene::RemoveEntity(Entity entity) noexcept {
         m_impl->RemoveEntity(entity);
@@ -183,6 +186,10 @@ namespace Moer {
         return true;
     }
 
+    void Scene::RegisterMaterialTextures(UnorderedMap<std::string, Render::TextureRef> _textures) noexcept {
+        m_impl->gpu_scene.material_textures.insert(_textures.begin(), _textures.end());
+    }
+
     GpuScene& Scene::GetGpuScene() noexcept {
         return m_impl->GetGpuScene();
     }
@@ -208,7 +215,7 @@ namespace Moer {
     Render::BindlessArrayRef Scene::GetBindlessArray() const noexcept {
         return m_impl->gpu_scene.bindless_array;
     }
-    
+
     AsyncSceneLoadInfoRef Scene::GetCurrentSceneLoadInfo() noexcept {
         return Impl::GetCurrentSceneLoadInfo();
     }
@@ -223,6 +230,10 @@ namespace Moer {
         }
         Impl::m_load_info = _load_info;
         return true;
+    }
+
+    void Scene::ResetAsyncLoadInfo() noexcept {
+        Impl::m_load_info = nullptr;
     }
 
     Scene* AsyncSceneLoadInfo::TryGetScene() {

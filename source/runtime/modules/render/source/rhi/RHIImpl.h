@@ -488,16 +488,19 @@ namespace Moer::Render {
                                                                                                        texture_updates(std::move(_update_textures)),
                                                                                                        free_buffers(std::move(_free_buffers)),
                                                                                                        free_textures(std::move(_free_textures)),
-                                                                                                       free_slots(std::move(_free_slots)) {}
-        auto*       Handle() const { return array.Get(); }
-        EQueueType  GetQueueType() const override { return EQueueType::Graphics; }
-        const auto& BufferUpdates() const { return buffer_updates; }
-        const auto& TextureUpdates() const { return texture_updates; }
-        auto        StealBufferUpdates() const { return std::move(buffer_updates); }
-        auto        StealTextureUpdates() const { return std::move(texture_updates); }
-        auto        StealFreeBuffers() const { return std::move(free_buffers); }
-        auto        StealFreeTextures() const { return std::move(free_textures); }
-        auto        StealFreeSlots() const { return std::move(free_slots); }
+                                                                                                       free_slots(std::move(_free_slots)) {
+
+            // assert(texture_updates.size() < 20 && "too many textures");
+        }
+        auto*                                     Handle() const { return array.Get(); }
+        EQueueType                                GetQueueType() const override { return EQueueType::Graphics; }
+        const auto&                               BufferUpdates() const { return buffer_updates; }
+        const auto&                               TextureUpdates() const { return texture_updates; }
+        auto                                      StealBufferUpdates() const { return std::move(buffer_updates); }
+        Array<BindlessArray::TextureUpdateInfo>&& StealTextureUpdates() const { return std::move(texture_updates); }
+        auto                                      StealFreeBuffers() const { return std::move(free_buffers); }
+        auto                                      StealFreeTextures() const { return std::move(free_textures); }
+        auto                                      StealFreeSlots() const { return std::move(free_slots); }
     };
 
     struct BufferRange {
@@ -739,7 +742,7 @@ namespace Moer::Render {
         virtual TextureRef CreateTexture(Extent3D _size, EPixelFormat _format, ETextureUsageFlags _usage, uint32_t _mip_cnt = 1, uint32_t _array_size = 1) = 0;
 
         DepthBufferRef CreateDepthBuffer(Extent2D _size, EPixelFormat _format, uint32_t _array_size = 1) {
-            return DepthBufferRef(MoerNew(DepthBuffer)(CreateTexture(_size, _format, ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT | ETextureUsageFlags::SAMPLED, 1, _array_size)));
+            return DepthBufferRef(MoerNew(DepthBuffer)(CreateTexture(_size, _format, ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT, 1, _array_size)));
         }
 
         virtual BindlessArrayRef CreateBindlessArray(uint _max_size) = 0;
@@ -759,6 +762,8 @@ namespace Moer::Render {
         const ShaderTargetInfo& GetShaderTargetInfo() const;
 
         virtual CommandQueue& GetCommandQueue(EQueueType _type) = 0;
+
+        virtual CopyQueue& GetCopyQueue() = 0;
 
         virtual SwapchainRef CreateSwapchain(const SwapchainCreateInfo& _info) = 0;
 

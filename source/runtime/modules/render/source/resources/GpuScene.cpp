@@ -182,15 +182,15 @@ namespace Moer {
             delete[] m_mip_extents;
     }
     Moer::UnorderedMap<std::string, Render::TextureRef> TextureBuilder::BuildTexturesInBatch(Moer::Array<TextureBuilder>& builders) noexcept {
-        const int batch_size = 256'000'000;
+        const int                                           batch_size = 256'000'000;
         Moer::UnorderedMap<std::string, Render::TextureRef> textures(builders.size());
-        Moer::Array<Moer::Array<uint32_t> > batch_indices;
+        Moer::Array<Moer::Array<uint32_t>>                  batch_indices;
 
         {
-            auto & indices = batch_indices.emplace_back();
-            int cur_size = 0;
+            auto& indices  = batch_indices.emplace_back();
+            int   cur_size = 0;
             for (int i = 0; i < builders.size(); i++) {
-                if(cur_size + builders[i].m_data_size > batch_size) {
+                if (cur_size + builders[i].m_data_size > batch_size) {
                     indices.emplace_back(i);
                     cur_size = 0;
                 }
@@ -199,23 +199,25 @@ namespace Moer {
             }
         }
 
-        auto & device = Render::RenderDevice::Get();
-        auto & copy_queue = device.GetCommandQueue(Render::EQueueType::Copy);
-        for(const auto & indices :batch_indices) {
+        auto&  device     = Render::RenderDevice::Get();
+        auto&  copy_queue = device.GetCopyQueue();
+        uint64 timeline   = 0;
+        for (const auto& indices : batch_indices) {
             Render::CommandList cmd_list;
             // Moer::Array<Render::BufferRef> staging_buffers(indices.size());
             int count = 0;
-            for(auto & indice : indices) {
-                auto & builder = builders[indice];
-                textures[builder.m_name] = device.CreateTexture(Extent2D{builder.m_width, builder.m_height}, builder.m_format,ETextureUsageFlags::SAMPLED | ETextureUsageFlags::SRGB | ETextureUsageFlags::TRANSFER_DST,builder.m_mip_levels, builder.m_layer_levels);
+            for (auto& indice : indices) {
+                auto& builder            = builders[indice];
+                textures[builder.m_name] = device.CreateTexture(Extent2D{builder.m_width, builder.m_height}, builder.m_format, ETextureUsageFlags::SAMPLED | ETextureUsageFlags::SRGB | ETextureUsageFlags::TRANSFER_DST, builder.m_mip_levels, builder.m_layer_levels);
                 // staging_buffers[count] = device.CreateBuffer<byte>(builder.m_data_size, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
                 cmd_list.CopyFrom(std::span<byte>((byte*)builder.m_data, builder.m_data_size), textures[builder.m_name]->GetView());
-                cmd_list.Barriers(Render::ReadTexture{textures[builder.m_name]->GetView(),Render::ETextureState::SAMPLE} );
+                // cmd_list.Barriers(Render::ReadTexture{textures[builder.m_name]->GetView(),Render::ETextureState::SAMPLE} );
                 count++;
             }
-            copy_queue.Execute(cmd_list.Submit());
-            copy_queue.Sync();
+            auto evt = copy_queue.Execute(cmd_list.Submit());
+            timeline = std::max(timeline, evt.timeline);
         }
+        copy_queue.Sync(timeline);
         return textures;
     }
 

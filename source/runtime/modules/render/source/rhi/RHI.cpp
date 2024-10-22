@@ -147,4 +147,8 @@ namespace Moer::Render {
     CommandQueue& RenderDevice::GetCommandQueue(EQueueType _type) {
         return Get().impl->GetCommandQueue(_type);
     }
+
+    CopyQueue& RenderDevice::GetCopyQueue() {
+        return Get().impl->GetCopyQueue();
+    }
 };// namespace Moer::Render

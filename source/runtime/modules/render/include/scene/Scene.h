@@ -8,6 +8,7 @@
 #include "math/Base.h"
 #include "math/Matrix.h"
 #include "misc/CountableRef.h"
+#include "misc/STL.h"
 #include "rhi/RHIResource.h"
 
 namespace Moer {
@@ -61,26 +62,29 @@ namespace Moer {
     public:
         Scene() noexcept;
         ~Scene() noexcept;
-        void          AddEntity(Entity _entity) noexcept;
-        void          AddCamera(Entity _entity) noexcept;
-        void          AddLight(Entity _entity) noexcept;
-        void          SetTlas(RHIRayTracingTLASRef _tlas) noexcept;
-        void SetBlasList(Moer::Array<RHIRayTracingBLASRef> _blas_list) noexcept;
-        void SetRaytracingScene(Render::RaytracingSceneRef _scene) noexcept;
-        void          RemoveEntity(Entity _entity) noexcept;
-        void          SetBuffer(const std::string& _name, RHIBufferRef _buffer) noexcept;
-        void          SetBuffer(EGpuSceneResource _type, Render::BufferRef _buffer) noexcept;
+        void              AddEntity(Entity _entity) noexcept;
+        void              AddCamera(Entity _entity) noexcept;
+        void              AddLight(Entity _entity) noexcept;
+        void              SetTlas(RHIRayTracingTLASRef _tlas) noexcept;
+        void              SetBlasList(Moer::Array<RHIRayTracingBLASRef> _blas_list) noexcept;
+        void              SetRaytracingScene(Render::RaytracingSceneRef _scene) noexcept;
+        void              RemoveEntity(Entity _entity) noexcept;
+        void              SetBuffer(const std::string& _name, RHIBufferRef _buffer) noexcept;
+        void              SetBuffer(EGpuSceneResource _type, Render::BufferRef _buffer) noexcept;
         Render::BufferRef GetBuffer(EGpuSceneResource _type) const noexcept;
-        RHIBufferRef GetBuffer(const std::string& _name) const noexcept;
-        Array<Entity> GetEntities() const noexcept;
-        Array<Entity> GetLights() const noexcept;
-        Array<Entity> GetCameras() const noexcept;
-        Entity        GetMainCamera() const noexcept;
-        bool          IsEntitiesEmpty() const noexcept;
-        bool          IsLightsEmpty() const noexcept;
-        bool          IsCamerasEmpty() const noexcept;
-        void          ForEach(std::function<void(Entity)> _func) const noexcept;
-        bool          IsReady() const noexcept;
+        RHIBufferRef      GetBuffer(const std::string& _name) const noexcept;
+        Array<Entity>     GetEntities() const noexcept;
+        Array<Entity>     GetLights() const noexcept;
+        Array<Entity>     GetCameras() const noexcept;
+        Entity            GetMainCamera() const noexcept;
+        bool              IsEntitiesEmpty() const noexcept;
+        bool              IsLightsEmpty() const noexcept;
+        bool              IsCamerasEmpty() const noexcept;
+        void              ForEach(std::function<void(Entity)> _func) const noexcept;
+        bool              IsReady() const noexcept;
+
+        // [temperory]
+        void RegisterMaterialTextures(UnorderedMap<std::string, Render::TextureRef> _textures) noexcept;
 
         static Scene* GetCurrentScene() noexcept;
         static void   SetCurrentScene(Scene* _scene) noexcept;
@@ -88,6 +92,7 @@ namespace Moer {
         static AsyncSceneLoadInfoRef GetCurrentSceneLoadInfo() noexcept;
 
         static bool RegisterAsyncLoadInfo(AsyncSceneLoadInfoRef _load_info);
+        static void ResetAsyncLoadInfo() noexcept;
 
         GpuScene& GetGpuScene() noexcept;
 
@@ -95,9 +100,9 @@ namespace Moer {
         void SetIndexBuffer(Render::BufferRef _buffer) noexcept;
         void SetInstanceBuffer(Render::BufferRef _buffer) noexcept;
 
-        Render::BufferRef GetVertexBuffer() const noexcept;
-        Render::BufferRef GetIndexBuffer() const noexcept;
-        Render::BufferRef GetInstanceBuffer() const noexcept;
+        Render::BufferRef        GetVertexBuffer() const noexcept;
+        Render::BufferRef        GetIndexBuffer() const noexcept;
+        Render::BufferRef        GetInstanceBuffer() const noexcept;
         Render::BindlessArrayRef GetBindlessArray() const noexcept;
 
     protected:

@@ -4,6 +4,7 @@
 #include "loader/ply/Ply.h"
 #include "loader/jsonscene/JsonSceneParser.h"
 #include "log/LogSystem.h"
+#include "scene/Scene.h"
 #include "sceneCache/SceneCache.h"
 #include "taskgraph/TaskGraph.h"
 
@@ -46,6 +47,7 @@ namespace Resource {
                         SceneCache::LoadSceneFromCache(_file_path, scene);
                     } catch (const std::exception& e) {
                         LOG_ERROR("Failed to load scene from cache: {} retrying to load from file", e.what());
+                        Scene::ResetAsyncLoadInfo();
                         LoadFromFile(_file_path, scene);
                     }
                 });

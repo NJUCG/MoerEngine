@@ -5,7 +5,8 @@ struct PixelInput {
   float4 Position : SV_POSITION;
   float2 uv : TEXCOORD0;
   float3 normal : NORMAL;
-  int InstanceID : SV_InstanceID;
+  float3 tangent : TANGENT;
+  int InstanceID : INSTANCEID;
 };
 struct Constsant {
   float4 color;

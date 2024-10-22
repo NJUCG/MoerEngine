@@ -819,7 +819,7 @@ namespace Moer::Render {
 
     class DepthBuffer : public RHIResource {
         friend class RenderDevice;
-        DepthBuffer(TextureRef _tex) : RHIResource(RRT_DEPTH) {}
+        DepthBuffer(TextureRef _tex) : RHIResource(RRT_DEPTH), tex_handle(_tex) {}
 
     public:
         uint                   GetNumMips() const { return tex_handle->GetNumMips(); }
@@ -3027,7 +3027,7 @@ namespace Moer::Render {
             VertexStream                  _vertex_stream,
             Array<RHIColorAttachmentInfo> _color_attachments_info,
             RHIDepthStencilStateInfo      _depth_stencil_info,
-            EPixelFormat                  _depth_stencil_format               = PF_UNDEFINED,
+            EPixelFormat                  _depth_stencil_format,
             EPrimitiveTopology            _primitive_topology                 = EPrimitiveTopology::TRIANGLE_LIST,
             RHIMultisampleStateInfo       _multisample_info                   = RHIMultisampleStateInfo::Preset(),
             uint8_t                       _multi_view_count                   = 1,
@@ -3044,6 +3044,23 @@ namespace Moer::Render {
               multi_view_count(_multi_view_count),
               b_has_fragment_density_attachments(_b_has_fragment_density_attachments),
               shading_rate(_shading_rate),
+              hash_key(0) {}
+
+        GfxPsoCreateInfo(
+            RHIRasterizeInfo              _rasterizer_info,
+            VertexStream                  _vertex_stream,
+            Array<RHIColorAttachmentInfo> _color_attachments_info)
+            : rasterizer_info(std::move(_rasterizer_info)),
+              vertex_stream(std::move(_vertex_stream)),
+              multisample_info(RHIMultisampleStateInfo::Preset()),
+              depth_stencil_info(RHIDepthStencilStateInfo::Preset()),
+              primitive_topology(EPrimitiveTopology::TRIANGLE_LIST),
+              color_attachments_info(_color_attachments_info),
+              color_attachment_count(_color_attachments_info.size()),
+              depth_stencil_format(PF_UNDEFINED),
+              multi_view_count(1),
+              b_has_fragment_density_attachments(false),
+              shading_rate(VSR_1_1x1),
               hash_key(0) {}
 
         RHIRasterizeInfo         rasterizer_info;

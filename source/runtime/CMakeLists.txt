@@ -7,6 +7,7 @@ set(moer_runtime_module_root_dir ${moer_runtime_dir}/modules)
 add_subdirectory(core)
 add_subdirectory(modules/render)
 add_subdirectory(modules/resource)
+add_subdirectory(modules/io)
 
 
 # add_subdirectory(functions)
@@ -26,4 +27,5 @@ target_link_libraries(${target_name}
     PUBLIC MoerRuntimeCore
     PUBLIC MoerRender
     PUBLIC MoerResource
+    PUBLIC MoerIO
 )

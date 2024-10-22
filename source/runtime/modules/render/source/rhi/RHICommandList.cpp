@@ -1,6 +1,7 @@
 //
 // Created by 17152 on 2023/9/21.
 //
+#include "PixelFormat.h"
 #include "misc/STL.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
@@ -22,7 +23,8 @@ namespace Moer::Render {
         GfxPsoCreateInfo pso_info(RHIRasterizeInfo::Preset(),
                                   VertexStream(),
                                   {},
-                                  RHIDepthStencilStateInfo::Preset());
+                                  RHIDepthStencilStateInfo::Preset(),
+                                  PF_D32_SFLOAT_S8_UINT);
 
         GBufferLayout layout = manager.Raster()
                                    .Vertex("")

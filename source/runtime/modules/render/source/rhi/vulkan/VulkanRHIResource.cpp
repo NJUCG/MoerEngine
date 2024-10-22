@@ -1701,6 +1701,7 @@ namespace Moer::Render {
     }
 
     UniquePtr<Command> VulkanBindlessArray::CreateUpdateCommand(){
+        std::unique_lock<std::mutex> lk(mtx);
         return MakeUnique<UpdateBindlessArrayCmd>(this, 
         std::move(buffers_allocated), 
         std::move(textures_allocated),
@@ -1720,6 +1721,7 @@ namespace Moer::Render {
         uint texture_slot_ptr = free_texture_slots.Pop();
         if (texture_slot_ptr == 0) { texture_slot = texture_slot_offset++; } else { texture_slot = texture_slot_ptr; }
 
+        std::unique_lock<std::mutex> lk(mtx);
         textures_allocated.push_back({_texture.texture, _sampler, slot_idx, texture_slot});
         resource_allocated_set.insert(uint64(_texture.texture));
         return slot_idx;
@@ -1737,12 +1739,14 @@ namespace Moer::Render {
         uint buffer_slot_ptr = free_buffer_slots.Pop();
         if (buffer_slot_ptr == 0) { buffer_slot = buffer_slot_offset++; } else { buffer_slot = buffer_slot_ptr; }
 
+        std::unique_lock<std::mutex> lk(mtx);
         buffers_allocated.emplace_back(_buffer.buffer, slot_idx, buffer_slot);
         resource_allocated_set.insert(uint64(_buffer.buffer));
         return slot_idx;
     }
 
     void VulkanBindlessArray::FreeTexture(uint _array_idx) {
+        std::unique_lock<std::mutex> lk(mtx);
         slots_freed.push_back(_array_idx);
         const auto& handle = handles[_array_idx];
         if(handle.type == Texture){
@@ -1754,6 +1758,7 @@ namespace Moer::Render {
     }
 
     void VulkanBindlessArray::FreeBuffer(uint _array_idx) {
+        std::unique_lock<std::mutex> lk(mtx);
         slots_freed.push_back(_array_idx);
         const auto& handle = handles[_array_idx];
         if(handle.type == Texture){

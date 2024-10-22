@@ -3,6 +3,7 @@
 #include "VulkanCommand.h"
 
 #include "VulkanRHIResource.h"
+#include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "vulkan/vulkan_core.h"
 
@@ -303,8 +304,16 @@ namespace Moer::Render {
             target_state.dst_stage  = state.dst_stage;
 
         } else {
-            if (_texture->b_has_init_state) {
-                state.src_layout = _texture->GetPreferredLayout();
+            bool b_init      = _texture->b_has_init_state;
+            bool b_preferred = _texture->b_has_preferred_state;
+
+            if (b_preferred || b_init) {
+
+                if (b_preferred)
+                    state.src_layout = _texture->GetPreferredLayout();
+                else if (b_init) {
+                    state.src_layout = _texture->GetInitlayout();
+                }
                 if (_texture->b_present) {
                     state.src_layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
                     state.src_access = VK_ACCESS_2_NONE;
@@ -391,7 +400,7 @@ namespace Moer::Render {
                 barrier.srcQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
                 barrier.dstQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
                 barrier.image                           = texture->GetHandle();
-                barrier.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+                barrier.subresourceRange.aspectMask     = VulkanEnumTranslator::METoVKImageAspectFlags(texture->GetAspectFlags());
                 barrier.subresourceRange.baseArrayLayer = 0;
                 barrier.subresourceRange.layerCount     = 1;
                 barrier.subresourceRange.baseMipLevel   = 0;
@@ -465,6 +474,13 @@ namespace Moer::Render {
     void VkTracker::RestoreState() {
         for (auto& [texture, state] : texture_states) {
             texture->b_has_init_state = true;
+            VkImageLayout layout      = texture->GetInitlayout();
+            if (queue_type == EQueueType::Graphics) {
+                texture->b_has_preferred_state = true;
+                layout                         = texture->GetPreferredLayout();
+            } else {
+                texture->b_has_preferred_state = false;
+            }
             if (texture->b_present) continue;
             texture_barriers.emplace_back();
             VkImageMemoryBarrier2& barrier          = texture_barriers.back();
@@ -477,17 +493,17 @@ namespace Moer::Render {
             barrier.srcQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
             barrier.dstQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
             barrier.image                           = texture->GetHandle();
-            barrier.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+            barrier.subresourceRange.aspectMask     = VulkanEnumTranslator::METoVKImageAspectFlags(texture->GetAspectFlags());
             barrier.subresourceRange.baseArrayLayer = 0;
             barrier.subresourceRange.layerCount     = 1;
             barrier.subresourceRange.baseMipLevel   = 0;
             barrier.subresourceRange.levelCount     = texture->GetNumMips();
             barrier.oldLayout                       = state.src_layout;
-            barrier.newLayout                       = texture->GetPreferredLayout();
+            barrier.newLayout                       = layout;
 
             state.dst_stage  = VK_PIPELINE_STAGE_2_NONE;
             state.dst_access = VK_ACCESS_2_NONE;
-            state.dst_layout = texture->GetPreferredLayout();
+            state.dst_layout = layout;
         }
         VkAccessFlags2        src_buffer_access = VK_ACCESS_2_NONE;
         VkPipelineStageFlags2 src_buffer_stages = VK_PIPELINE_STAGE_2_NONE;
@@ -511,7 +527,7 @@ namespace Moer::Render {
             barrier.srcAccessMask     = src_buffer_access;
             barrier.dstAccessMask     = VK_ACCESS_2_NONE;
             barrier.srcStageMask      = src_buffer_stages;
-            barrier.dstStageMask      = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            barrier.dstStageMask      = last_stage;
         }
 
         // flush_buffer_states.clear();

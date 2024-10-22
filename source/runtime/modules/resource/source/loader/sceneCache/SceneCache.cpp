@@ -542,11 +542,10 @@ namespace Moer {
 
                 stream << buffer_info.m_field_info_list;
 
-                // stream.write(buffer_info.m_info_map.size());
+                stream << buffer_info.m_info_map.size();
                 for (auto& info : buffer_info.m_info_map) {
                     stream << info.first;
                     stream << info.second;
-                    // stream.write(info.second);
                 }
             }
 
@@ -562,6 +561,7 @@ namespace Moer {
 
                 stream << sampler_info.m_name;
                 stream << sampler_info.m_sampler_info_list;
+                stream << sampler_info.m_info_map.size();
                 for (auto& info : sampler_info.m_info_map) {
                     stream << info.first;
                     stream << info.second;
@@ -793,7 +793,7 @@ namespace Moer {
 
         Render::CommandList cmd_list;
         auto&               cmd_queue      = device.GetCommandQueue(Render::EQueueType::Graphics);
-        auto&               copy_queue     = device.GetCommandQueue(Render::EQueueType::Copy);
+        auto&               copy_queue     = device.GetCopyQueue();
         auto                bindless_array = scene->GetBindlessArray();
 
         auto meshlet_bounds_buffer     = device.CreateBuffer<byte>(scene_data.m_meshlet_bounds.size() * sizeof(MeshletBound), EBufferUsageFlags::UNORDERED_ACCESS);
@@ -816,8 +816,8 @@ namespace Moer {
         cmd_list.CopyFrom(std::span<byte>((byte*)scene_data.m_instance_mesh_info.data(), scene_data.m_instance_mesh_info.size() * sizeof(InstanceMeshInfo)), instance_mesh_info_buffer->GetView());
         cmd_list.CopyFrom(material_data, material_buffer->GetView());
 
-        copy_queue.Execute(cmd_list.Submit());
-        copy_queue.Sync();
+        auto evt = copy_queue.Execute(cmd_list.Submit());
+        copy_queue.Sync(evt.timeline);
 
         // GpuSceneBufferBuilder buffer_builder;
         // auto                  meshlet_bounds_buffer = GpuSceneBufferBuilder::CopyFrom(EBufferUsageFlags::UNORDERED_ACCESS, sceneData.m_meshlet_bounds.data(), sceneData.m_meshlet_bounds.size() * sizeof(MeshletBound));
@@ -887,6 +887,8 @@ namespace Moer {
                 material_instance.second->SetParameter(texture.first, handle);
             }
         }
+        scene->RegisterMaterialTextures(textures);
+
         // BuildSceneRaytracing(scene_data,scene.get());
     }
     void SceneCache::LoadSceneFromCacheAsync(const std::filesystem::path& path, Scene* scene) {

@@ -17,6 +17,7 @@
 #include "VulkanDeviceProperty.h"
 #include "VulkanDescriptor.h"
 #include "VulkanCommand.h"
+#include "VulkanQueue.h"
 #include "vulkan/vulkan_core.h"
 
 #include <vk_mem_alloc.h>
@@ -82,6 +83,8 @@ namespace Moer::Render {
         RaytracingSceneRef CreateRaytracingScene() override;
 
         CommandQueue& GetCommandQueue(EQueueType _type) override;
+
+        CopyQueue& GetCopyQueue() override;
 
         SwapchainRef CreateSwapchain(const SwapchainCreateInfo& _info) override;
 
@@ -183,7 +186,7 @@ namespace Moer::Render {
         VulkanDescriptorHeap                            m_global_descriptor_heap{};
         UniquePtr<VkCommandQueue>                       gfx_queue{};
         UniquePtr<VkCommandQueue>                       compute_queue{};
-        UniquePtr<VkCommandQueue>                       transfer_queue{};
+        UniquePtr<VkCopyQueue>                          copy_queue{};
         LockFreeQueueBase<RHIResource, false, 64>       deferred_release_queue{};
         static constexpr uint                           immutable_sampler_count = uint(SF_Num) * uint(SAM_Num) * uint(SCF_Num);
         StaticArray<VkSampler, immutable_sampler_count> immutable_samplers{};

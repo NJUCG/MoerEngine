@@ -313,6 +313,8 @@ namespace Moer::Render {
 
         RENDER_API CommandQueue& GetCommandQueue(EQueueType _type);
 
+        RENDER_API CopyQueue& GetCopyQueue();
+
         RENDER_API SwapchainRef CreateSwapchain(const SwapchainCreateInfo& _info);
 
         RENDER_API FenceRef CreateFence();

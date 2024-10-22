@@ -4,13 +4,13 @@
 
 #include <volk.h>
 #include "VulkanMacroUtils.h"
-#include "VulkanDescriptor.h"
 #include "VulkanExtension.h"
 #include "VulkanDevice.h"
 #include "VulkanUtil.h"
 #include "VulkanCommand.h"
-#include "VulkanPlatform.h"
+#include "VulkanQueue.h"
 #include "VulkanRHIResource.h"
+#include "VulkanPlatform.h"
 
 #include "log/LogSystem.h"
 #include "misc/STL.h"
@@ -376,9 +376,10 @@ namespace Moer::Render {
         vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.compute.value(), 0, &m_compute_queue);
         vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.transfer.value(), 0, &m_transfer_queue);
         vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.raytracing.value(), 0, &m_raytracing_queue);
-        gfx_queue      = MakeUnique<VkCommandQueue>(*this, EQueueType::Graphics);
-        compute_queue  = MakeUnique<VkCommandQueue>(*this, EQueueType::Compute);
-        transfer_queue = MakeUnique<VkCommandQueue>(*this, EQueueType::Copy);
+        gfx_queue     = MakeUnique<VkCommandQueue>(*this, EQueueType::Graphics);
+        compute_queue = MakeUnique<VkCommandQueue>(*this, EQueueType::Compute);
+        // transfer_queue = MakeUnique<VkCommandQueue>(*this, EQueueType::Copy);
+        copy_queue = MakeUnique<VkCopyQueue>(*this);
     }
 
     void VulkanDevice::CreateMemoryAllocator(VkInstance _instance, uint32 _api_version) {
@@ -489,8 +490,8 @@ namespace Moer::Render {
         //     CHECK_AND_DELETE(cmd_allocator);
         // }
         compute_queue.reset();
-        transfer_queue.reset();
         gfx_queue.reset();
+        compute_queue.reset();
         m_command_allocators.clear();
         FlushDeferredReleases();
         DestroyInternalResources();
@@ -1251,21 +1252,26 @@ namespace Moer::Render {
         switch (_type) {
             case EQueueType::Graphics: return *gfx_queue;
             case EQueueType::Compute: return *compute_queue;
-            case EQueueType::Copy: return *transfer_queue;
+            case EQueueType::Copy:
             default: assert(false && "Unknown queue type.");
         }
         return *gfx_queue;
     }
 
+    CopyQueue& VulkanDevice::GetCopyQueue() { return *copy_queue; }
+
     TextureRef VulkanDevice::CreateTexture(Extent3D _size, EPixelFormat _format, ETextureUsageFlags _usage, uint32_t _mip_cnt, uint32_t _array_size) {
+
+        bool        b_depth = uint(ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT & _usage) != 0;
         TextureInfo info{
             _size.z == 1 ? ETextureDimension::TEX_2D : ETextureDimension::TEX_3D,
             _usage,
             _format,
-            EClearAttachment::COLOR,
+            b_depth ? EClearAttachment::DEPTH_STENCIL : EClearAttachment::COLOR,
             _size,
             uint8(_mip_cnt),
             1};
+        info.aspect_flags = b_depth ? ETextureAspectFlags::DEPTH_SLICE : ETextureAspectFlags::COLOR;
 
         return TextureRef{MoerNew(VulkanTexture)(info, this)};
     }

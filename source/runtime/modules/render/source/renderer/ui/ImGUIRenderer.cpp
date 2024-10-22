@@ -226,8 +226,7 @@ namespace Moer::Render {
         GfxPsoCreateInfo pso_info(
             RHIRasterizeInfo::Preset<Rast::CULL_NONE, FrontFace::CW>(),
             vertex_stream,
-            {RHIColorAttachmentInfo::Preset<Blend::ALPHA_BLEND>(PF_R8G8B8A8_SRGB)},
-            RHIDepthStencilStateInfo::Preset());
+            {RHIColorAttachmentInfo::Preset<Blend::ALPHA_BLEND>(PF_R8G8B8A8_SRGB)});
         ImGUIData* render_backend_data            = MoerNew(ImGUIData)(sd_mgr
                                                                 .Raster()
                                                                 .Vertex("GuiVert.hlsl")
