@@ -90,6 +90,8 @@ target_include_directories(RaytracingTest
 target_link_libraries(RaytracingTest
         PRIVATE MoerRender
         PRIVATE glfw
+        PRIVATE MoerResource
+
 )
 set_target_properties(RaytracingTest PROPERTIES FOLDER ${moer_test_folder})
 

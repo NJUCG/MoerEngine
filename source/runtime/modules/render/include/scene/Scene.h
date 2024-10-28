@@ -19,15 +19,45 @@ namespace Moer {
         LightInfo,
         CameraInfo,
         GaussianSplattingVertex,
+        RTInstance,
+        RTPrimitive,
+        RTVertex,
+        RTMeshInfo,
         Num
     };
     struct InstanceData {
-        Moer::Matrix4x4f model2world;
-        Moer::Matrix4x4f inv_model2world;
-        float            scale;
-        uint32_t         padding;
-        uint32_t         material_id;
-        uint32_t         material_type;
+        Matrix4x4f model2world;
+        Matrix4x4f inv_model2world;
+        float      scale;
+        uint       padding;
+        uint       material_id;
+        uint       material_type;
+    };
+
+    struct RTInstance {
+        float4   overload_m1;
+        float4   overload_m2;
+        float4   overload_m3;
+        uint32_t material_id;
+        uint32_t material_type;
+        uint     prim_offset;
+        uint     vtx_offset;
+    };
+
+    struct RTMeshInfo {
+        uint32_t vertex_offset;
+        uint32_t vertex_count;
+        uint32_t primitive_offset;
+        uint32_t primitive_count;
+    };
+
+    struct RTVertex {
+        float3 position;
+        float  uv0;
+        float3 normal;
+        float  uv1;
+        float3 tangent;
+        float  padding;
     };
 
     struct InstanceMeshInfo {

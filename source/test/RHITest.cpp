@@ -5,6 +5,7 @@
 #include "config/ConfigManager.h"
 #include "math/Constant.h"
 #include "math/Matrix.h"
+#include "misc/MMemory.h"
 #include "misc/Traits.h"
 #include "rhi/RHI.h"
 #include "modules/render/source/rhi/RHIImpl.h"
@@ -408,8 +409,13 @@ int main(int argc, const char** argv) {
     gfx_queue.Execute(cmd_list.Submit());
     gfx_queue.Sync();
 
-    Resource::LoaderInterface::LoadSceneFromFileAsync(ConfigManager::GetInstance().GetScenePath(), g_scene);
+    g_scene = MoerNew(Scene)();
 
+    Resource::LoaderInterface::LoadSceneFromFileAsync(ConfigManager::GetInstance().GetScenePath(), g_scene);
+    OnScopeExit([&] {
+        MoerDelete(g_scene);
+        Scene::ResetAsyncLoadInfo();
+    });
     FenceRef timeline   = device.CreateFence();
     uint64   time       = 0;
     bool     first_load = true;

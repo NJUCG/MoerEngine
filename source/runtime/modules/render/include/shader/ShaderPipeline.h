@@ -51,6 +51,9 @@ namespace Moer::Render {
 #define DEFINE_SHADER_BINDLESS_ARRAY(name) \
     StringType(name) using name = ShaderArg<BindlessArg, GetStringType(name)>
 
+#define DEFINE_SHADER_TLAS(name) \
+    StringType(name) using name = ShaderArg<TLASArg, GetStringType(name)>
+
 #define DEFINE_RASTER_PIPELINE_CLASS(name)                    \
     using TPipeline = name;                                   \
     name(PipelineHandle _handle) : RasterPipeline(_handle) {} \
@@ -116,7 +119,7 @@ public:                                                                         
 
 namespace Moer::Render {
     using TInvalidArg                           = uint;
-    using TArg                                  = std::variant<TInvalidArg, BufferView, TextureView, Sampler, BindlessArrayRef>;
+    using TArg                                  = std::variant<TInvalidArg, BufferView, TextureView, Sampler, BindlessArrayRef, RaytracingSceneRef>;
     static constexpr uint bindless_arg_type_idx = 4;
 
     template<typename T>
@@ -195,6 +198,10 @@ namespace Moer::Render {
         using type = NonConstant;
     };
 
+    struct TLASArg {
+        using type = NonConstant;
+    };
+
     template<>
     struct ShaderArgEnum<BufferArg> {
         static constexpr EShaderArgType arg_type = SDA_Buffer;
@@ -213,6 +220,11 @@ namespace Moer::Render {
     template<>
     struct ShaderArgEnum<BindlessArg> {
         static constexpr EShaderArgType arg_type = SDA_BindlessArray;
+    };
+
+    template<>
+    struct ShaderArgEnum<TLASArg> {
+        static constexpr EShaderArgType arg_type = SDA_TLAS;
     };
 
     class ShaderPipeline;
@@ -259,7 +271,7 @@ namespace Moer::Render {
         template<typename T, typename TArg>
             requires std::is_same_v<std::remove_reference_t<T>, TextureView> || std::is_same_v<std::remove_reference_t<T>, BufferView> || std::is_same_v<std::remove_reference_t<T>, Sampler> ||
                      std::is_same_v<std::remove_reference_t<T>, TextureRef> || std::is_same_v<std::remove_reference_t<T>, BufferRef> || std::is_same_v<typename TArg::type, TConstsant<std::remove_reference_t<T>>> ||
-                     std::is_same_v<std::remove_reference_t<T>, BindlessArrayRef>
+                     std::is_same_v<std::remove_reference_t<T>, BindlessArrayRef> || std::is_same_v<std::remove_reference_t<T>, RaytracingSceneRef>
         static void SetParam(T&& _t, ArrayArguments& _arg_setter) {
             using cpp_type       = typename TArg::type;
             constexpr auto index = Index<TArg, tuple_helper>::value;
@@ -288,6 +300,9 @@ namespace Moer::Render {
             } else if constexpr (std::is_same_v<cpp_type, SamplerArg>) {
                 _arg_setter[index] = std::forward<T>(_t);
             } else if constexpr (std::is_same_v<cpp_type, BindlessArg>) {
+                _arg_setter[index] = std::forward<T>(_t);
+
+            } else if constexpr (std::is_same_v<cpp_type, TLASArg>) {
                 _arg_setter[index] = std::forward<T>(_t);
             } else {
                 //constant
@@ -367,8 +382,9 @@ namespace Moer::Render {
         handle = std::move(_other.handle); \
     }
 
-#define NO_COPY_CONSTRUCTOR(name) \
-    name(const name& _other) = delete;
+#define NO_COPY_CONSTRUCTOR(name)                 \
+    name(const name& _other)            = delete; \
+    name& operator=(const name& _other) = delete;
 
 #define COPY_CONSTRUCTOR(name)                                 \
     name(name&& _other) : ShaderPipeline(std::move(_other)) {} \

@@ -47,6 +47,8 @@ namespace Moer {
         }
     };
 
+    struct GeometryInfo {};
+
     struct SceneData {
         Moer::Array<float> m_vertex_data{};
 
@@ -61,6 +63,12 @@ namespace Moer {
         Moer::Array<InstanceData>       m_instance_data{};
         Moer::Array<InstanceMeshInfo>   m_instance_mesh_info{};
         Moer::Array<uint32_t>           m_instance_id;
+
+        //raytracing
+        Moer::Array<RTVertex>   rt_vertices{};
+        Moer::Array<RTInstance> rt_instances{};
+        Moer::Array<RTMeshInfo> rt_mesh_infos{};
+        Moer::Array<uint3>      rt_prims{};
 
         Moer::Array<CameraRef>         m_cameras{};
         Moer::Array<LightComponentRef> m_lights{};

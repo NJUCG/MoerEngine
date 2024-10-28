@@ -491,11 +491,14 @@ namespace Moer::Render {
         // }
         compute_queue.reset();
         gfx_queue.reset();
-        compute_queue.reset();
+        copy_queue.reset();
         m_command_allocators.clear();
         FlushDeferredReleases();
         DestroyInternalResources();
         vmaDestroyAllocator(m_allocator);
+        vkDestroyDevice(m_device, VK_NULL_HANDLE);
+
+        LOG_INFO("VulkanRHI: Device destroyed.");
 
         // Assertion failed: m_pMetadata->IsEmpty() && "Some allocations were not freed before destruction of this memory block!"
     }
@@ -602,6 +605,7 @@ namespace Moer::Render {
             case SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC: return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
             case SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC: return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
             case SPV_REFLECT_DESCRIPTOR_TYPE_INPUT_ATTACHMENT: return VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+            case SPV_REFLECT_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR: return VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
             default: return VK_DESCRIPTOR_TYPE_MAX_ENUM;
         }
     }
@@ -782,6 +786,7 @@ namespace Moer::Render {
                 }
                 case SDA_Buffer:
                 case SDA_Texture:
+                case SDA_TLAS:
                 case SDA_Sampler: {
                     _out_valid_bits |= 1 << idx;
                     const ReflectParamInfo&           binding_info = binding_iter->second;

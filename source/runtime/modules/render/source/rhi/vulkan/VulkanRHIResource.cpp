@@ -1118,7 +1118,11 @@ namespace Moer::Render {
                                 break;
                             }
                             case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:{
-                                
+                                descriptor_info.info_idx = _binder.accel_structures.size();
+                                _binder.accel_structures.emplace_back();
+                                write_info.pNext = &_binder.accel_structures.back();
+                                break;
+
                             }
                             default:
                                 {
@@ -1461,7 +1465,8 @@ namespace Moer::Render {
             .layout = VK_IMAGE_LAYOUT_UNDEFINED,
             .stage = VK_PIPELINE_STAGE_2_NONE_KHR};
         b_present = (_info.usage & ETextureUsageFlags::PRESENT) == ETextureUsageFlags::PRESENT;
-        m_preferred_layout = (_info.usage & ETextureUsageFlags::SAMPLED) == ETextureUsageFlags::SAMPLED ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_GENERAL;
+        bool b_prefer_sample = (_info.usage & ETextureUsageFlags::SAMPLED) == ETextureUsageFlags::SAMPLED && (_info.usage & ETextureUsageFlags::UNORDERED_ACCESS) == ETextureUsageFlags::UNDEFINED;
+        m_preferred_layout = b_prefer_sample ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_GENERAL;
 
         if (_image != VK_NULL_HANDLE) {
             m_alloc.image = _image;
@@ -1488,7 +1493,7 @@ namespace Moer::Render {
 
         VmaAllocator allocator = m_device->GetVmaAllocator();
         VK_CHECK_RESULT(vmaCreateImage(allocator, &image_create_info, &alloc_create_info, &m_alloc.image, &m_alloc.alloc, nullptr));
-
+        SetName("UserTexture");
     }
 
     VkImageView VulkanTexture::GetView(uint _mip_level, uint _mip_cnt) {
@@ -1546,6 +1551,8 @@ namespace Moer::Render {
         VkBufferDeviceAddressInfo info{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
         info.buffer      = m_alloc.buffer;
         m_device_address = vkGetBufferDeviceAddress(m_device->GetDevice(), &info);
+        SetName("UserBuffer");
+
     }
 
     uint64 VulkanBuffer::DeviceAddress() const { return m_device_address; }
@@ -1921,18 +1928,18 @@ namespace Moer::Render {
                 geometry.geometry.triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
                 geometry.geometry.triangles.vertexFormat = g_platform_pixel_formats[_info.vertex_format].format;
                 geometry.geometry.triangles.vertexStride = segment.vertex_stride;
-                geometry.geometry.triangles.vertexData.deviceAddress = vtx_addr + segment.vertex_offset * g_platform_pixel_formats[_info.vertex_format].stride;
-                geometry.geometry.triangles.maxVertex = segment.vertex_count;
+                geometry.geometry.triangles.vertexData.deviceAddress = vtx_addr + segment.vertex_offset * segment.vertex_stride;
+                geometry.geometry.triangles.maxVertex = _info.max_vertex_count;
                 geometry.geometry.triangles.indexType = VulkanEnumTranslator::METoVKIndexType(_info.index_type);
-                geometry.geometry.triangles.indexData.deviceAddress = idx_addr;
+                geometry.geometry.triangles.indexData.deviceAddress = idx_addr + segment.primitive_offset * 3 * (_info.index_type == IET_UINT32 ? 4 : 2); 
                 geometry.geometry.triangles.transformData.deviceAddress = 0;
 
                 _build_info.push_back(geometry);
 
                 VkAccelerationStructureBuildRangeInfoKHR range{};
-                range.firstVertex = segment.vertex_offset;
-                range.primitiveOffset = segment.index_offset / 3;
-                range.primitiveCount = segment.index_count / 3;
+                range.firstVertex = 0;
+                range.primitiveOffset = 0;
+                range.primitiveCount = segment.primitive_count;
                 range.transformOffset = 0;
 
                 _build_ranges.push_back(range);
@@ -2023,6 +2030,9 @@ namespace Moer::Render {
             MoerDelete(underlying_buffer);
             underlying_buffer = nullptr;
         }
+        if(m_descriptor_idx >= 0){
+            device.GetGlobalDescriptorHeap().FreeAccelDescIdx(m_descriptor_idx);
+        }
     }
 
     void VulkanAccelerationStructure::Destroy(){
@@ -2050,6 +2060,9 @@ namespace Moer::Render {
 
         instance_buffer = MoerNew(VulkanBuffer)(BufferInfo{buffer_ci.size, 1, EBufferUsageFlags::ACCELERATION_STRUCTURE}, *m_device, current_handle, alloc, false, true);
 
+    }
+
+    VulkanRaytracingScene::~VulkanRaytracingScene(){
     }
 
     RaytracingInstance& VulkanRaytracingScene::AddInstance(){
@@ -2086,7 +2099,10 @@ namespace Moer::Render {
     }
 
     void VulkanRaytracingScene::MarkModified(uint _array_idx){
-        temp_update_instance_ids.emplace_back(_array_idx);
+        auto res =  temp_modified_instance_ids.emplace(_array_idx);
+        if(res.second){
+            temp_update_instance_ids.emplace_back(_array_idx);
+        }
     }
 
     void VulkanRaytracingScene::RegisterGeometry(RaytracingGeometryRef _geometry){
@@ -2177,7 +2193,7 @@ namespace Moer::Render {
         //maybe we should calculate relative blas here
 
         // RefitTLASAndScratchBuffer();
-
+        temp_modified_instance_ids.clear();
         return MakeUnique<UpdateRaytracingSceneCmd>(
             std::move(related_geometries),
             uint64(this),

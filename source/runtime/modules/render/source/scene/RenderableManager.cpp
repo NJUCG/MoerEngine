@@ -105,8 +105,16 @@ namespace Moer {
     void RenderableManager::SetMeshInfo(Entity entity, const MeshInfo& mesh_info) {
         m_manager[entity].mesh_info = mesh_info;
     }
+
+    void RenderableManager::SetRTMeshInfo(Entity entity, const RTMeshInfo& rt_mesh_info) {
+        m_manager[entity].rt_mesh_info = rt_mesh_info;
+    }
+
     const MeshInfo& RenderableManager::GetMeshInfo(Entity entity) {
         return m_manager[entity].mesh_info;
+    }
+    const RTMeshInfo& RenderableManager::GetRTMeshInfo(Entity entity) {
+        return m_manager[entity].rt_mesh_info;
     }
     MaterialInstanceRef RenderableManager::GetMaterialInstance(Entity entity) {
         return m_manager[entity].material_instance;

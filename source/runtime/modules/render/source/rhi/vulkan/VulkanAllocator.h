@@ -8,19 +8,13 @@ namespace Moer::Render {
 
     class VulkanCmdAllocator : public VulkanDeviceObject {
     private:
-        VkQueueFlags                 queue_type;
-        VkCommandPool                command_pool;
-        std::optional<VulkanCmdList> command_list;
+        VkQueueFlags  queue_type;
+        VkCommandPool command_pool;
 
     public:
         VulkanCmdAllocator(VulkanDevice* _device, VkQueueFlagBits _queue_type);
-        VkCommandPool  GetHandle() const { return command_pool; }
-        VulkanCmdList& GetCommandList() {
-            if (!command_list.has_value()) {
-                LOG_ERROR("Command list is not initialized");
-            }
-            return *command_list;
-        }
+        ~VulkanCmdAllocator();
+        VkCommandPool GetHandle() const { return command_pool; }
     };
     enum class EVkInternalBufferUsage {
         Upload,
@@ -104,8 +98,8 @@ namespace Moer::Render {
             void                  Reset();
             void                  Dispose();
         };
-        std::optional<VulkanCmdList>      cmd_list;
         std::optional<VulkanCmdAllocator> cmd_allocator;
+        std::optional<VulkanCmdList>      cmd_list;
         Array<VulkanBuffer*>              large_buffers;
         VkTmpBufferAllocator              allocator;
 

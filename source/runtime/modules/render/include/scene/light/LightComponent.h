@@ -27,19 +27,19 @@ namespace Moer {
     public:
         LightComponent() noexcept
             : m_color(Vector3f(1.0f)), m_intensity(1.0f), m_type(ELightComponentType::NONE) {}
-        LightComponent(Vector3f color, float intensity, ELightComponentType type) noexcept
-            : m_color(color), m_intensity(intensity), m_type(type) {}
+        LightComponent(Vector3f _color, float _intensity, ELightComponentType _type) noexcept
+            : m_color(_color), m_intensity(_intensity), m_type(_type) {}
 
-        virtual ~LightComponent() noexcept                              = default;
-        LightComponent(const LightComponent& light) noexcept            = default;
-        LightComponent& operator=(const LightComponent& light) noexcept = default;
-        LightComponent(LightComponent&& light) noexcept                 = default;
-        LightComponent& operator=(LightComponent&& light) noexcept      = default;
+        virtual ~LightComponent() noexcept = default;
+        // LightComponent(const LightComponent& _light) noexcept           = delete;
+        // LightComponent& operator=(const LightComponent& light) noexcept = delete;
+        // LightComponent(LightComponent&& _light) noexcept                = delete;
+        // LightComponent& operator=(LightComponent&& light) noexcept      = default;
 
         Vector3f            GetColor() const noexcept { return m_color; }
-        void                SetColor(Vector3f color) noexcept { m_color = color; }
+        void                SetColor(Vector3f _color) noexcept { m_color = _color; }
         float               GetIntensity() const noexcept { return m_intensity; }
-        void                SetIntensity(float intensity) noexcept { m_intensity = intensity; }
+        void                SetIntensity(float _intensity) noexcept { m_intensity = _intensity; }
         ELightComponentType GetType() const noexcept { return m_type; }
         // m_type is not settable
 

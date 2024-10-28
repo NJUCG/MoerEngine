@@ -288,7 +288,7 @@ namespace Moer::Render {
         };
 
         struct NoRangeHandle : public ResourceHandle {
-            ResourceView view;
+            ResourceView view{-1, -1};
         };
         struct CommandListNode {
             Command const*         cmd;
@@ -476,6 +476,7 @@ namespace Moer::Render {
                     auto* no_range_handle             = static_cast<NoRangeHandle*>(_handle);
                     layer                             = GetLastLayerWrite(no_range_handle);
                     no_range_handle->view.write_layer = layer;
+                    no_range_handle->view.read_layer  = layer;
                     break;
                 }
             }
@@ -592,6 +593,8 @@ namespace Moer::Render {
                 } else if constexpr (std::is_same_v<T, TextureView>) {
                     EmplaceArg((uint64)(_arg.GetTexture()), ResourceType::Texture_Buffer, Range(_arg.mip_level, _arg.num_mips), m_funcs.is_resource_write(_flag));
                     // _layer = GetLastLayer(uint64(_arg.GetTexture()), Range(_arg.mip_level, _arg.num_mips), ResourceType::Texture_Buffer);
+                } else if constexpr (std::is_same_v<T, RaytracingSceneRef>) {
+                    EmplaceArg((uint64)(_arg.Get()), ResourceType::Accel, Range{}, false);
                 } else if constexpr (std::is_same_v<T, BindlessArrayRef>) {
                     for (auto&& res : m_write_resources) {
                         if (m_funcs.is_resource_in_bindless(res, (uint64)(_arg.Get()))) {
@@ -749,12 +752,31 @@ namespace Moer::Render {
             if (_cmd->InstancesToUpdate().size() == 0) {
                 return;
             }
-            int64 layer = SetWrite((uint64)_cmd->SceneHandle(), Range(0), ResourceType::Accel);
+            int64 layer        = SetWrite((uint64)_cmd->SceneHandle(), Range(0), ResourceType::Accel);
+            auto* scene_handle = static_cast<NoRangeHandle*>(GetHandle((uint64)_cmd->SceneHandle(), ResourceType::Accel));
+
+            {
+                layer = GetLastLayerWrite(scene_handle);
+            }
             for (const uint64& handle : m_writed_geometry) {
                 if (_cmd->HasGeometry(handle)) {
-                    layer = std::max(layer, SetRead(handle, Range(0), ResourceType::Accel));
+                    // layer = std::max(layer, SetRead(handle, Range(0), ResourceType::Accel));
+
+                    auto* geo_handle = GetHandle((uint64)handle, ResourceType::Accel);
+                    layer            = std::max(layer, GetLastLayerRead(static_cast<NoRangeHandle*>(geo_handle)));
                 }
             }
+
+            //set read and write
+            for (const uint64& handle : m_writed_geometry) {
+                if (_cmd->HasGeometry(handle)) {
+                    auto* geo_handle            = (NoRangeHandle*)GetHandle((uint64)handle, ResourceType::Accel);
+                    geo_handle->view.read_layer = layer;
+                }
+            }
+
+            scene_handle->view.write_layer = layer;
+            scene_handle->view.read_layer  = layer;
 
             AddCmd(_cmd, layer);
         }

@@ -12,11 +12,11 @@ namespace Moer {
         EntityComponentManger<LightComponentRef> m_manager;
 
     public:
-        LightComponentRef Get(Entity entity) noexcept;
+        LightComponentRef Get(Entity _entity) noexcept;
         // LightComponent& Create(Entity entity) noexcept; // Cannot create a base light component
-        void Put(Entity entity, LightComponentRef light) noexcept;
-        bool HasComponent(Entity entity) const noexcept;
-        void Destroy(Entity entity) noexcept;
+        void Put(Entity _entity, LightComponentRef _light) noexcept;
+        bool HasComponent(Entity _entity) const noexcept;
+        void Destroy(Entity _entity) noexcept;
 
         static LightComponentManager& Get() noexcept;
     };

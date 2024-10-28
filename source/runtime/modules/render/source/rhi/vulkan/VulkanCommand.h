@@ -112,6 +112,7 @@ namespace Moer::Render {
 
     public:
         VulkanCmdList(VulkanCmdAllocator* _allocator, VulkanDevice& _device);
+        ~VulkanCmdList();
         void  Begin();
         void  End();
         void  CopyBuffer(VulkanBuffer* _src, VulkanBuffer* _dst, uint64 _size, uint64 _src_offset, uint64 _dst_offset);

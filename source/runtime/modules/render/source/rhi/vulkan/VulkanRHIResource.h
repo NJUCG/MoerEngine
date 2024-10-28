@@ -89,9 +89,11 @@ namespace Moer::Render {
     //forward declaration
     class VulkanBuffer;
     class VulkanTexture;
+    class VulkanFence;
 
     using VulkanBufferRef  = CountableRef<VulkanBuffer>;
     using VulkanTextureRef = CountableRef<VulkanTexture>;
+    using VulkanFenceRef   = CountableRef<VulkanFence>;
 
     class VulkanMemoryManager final {
     public:
@@ -403,12 +405,14 @@ namespace Moer::Render {
         uint64              offset;
     };
     struct VulkanDescriptorSetBinder {
-        Array<VkWriteDescriptorSet>   writers;
-        Array<VulkanDescriptorInfo>   bind_infos;
-        Array<VkDescriptorImageInfo>  image_infos;
-        Array<VkDescriptorBufferInfo> buffer_infos;
-        VkPushDescriptorSetInfoKHR    push_info;
-        VkPipelineBindPoint           bind_point;
+        Array<VkWriteDescriptorSet>                        writers;
+        Array<VulkanDescriptorInfo>                        bind_infos;
+        Array<VkDescriptorImageInfo>                       image_infos;
+        Array<VkDescriptorBufferInfo>                      buffer_infos;
+        Array<VkWriteDescriptorSetAccelerationStructureNV> accel_structures;
+
+        VkPushDescriptorSetInfoKHR push_info;
+        VkPipelineBindPoint        bind_point;
 
         struct BindingInfo {
             uint64 offset;    //set offset in descriptor buffer
@@ -619,7 +623,7 @@ namespace Moer::Render {
         VulkanDevice* m_device;
         uint          b_deferred_delete : 1 = true;
     };
-    class VulkanPipelineState : public VulkanDeviceObject {
+    class VulkanPipelineState : public PipelineState, public VulkanDeviceObject {
         enum EType {
             GFX,
             Compute,
@@ -627,7 +631,7 @@ namespace Moer::Render {
         };
 
     public:
-        VulkanPipelineState(VulkanDevice* _device, EType _type = EType::GFX) : VulkanDeviceObject(_device), m_pipeline(VK_NULL_HANDLE), m_pipeline_layout(VK_NULL_HANDLE), m_pipeline_state_cache(nullptr), m_type(_type){};
+        VulkanPipelineState(VulkanDevice* _device, EType _type = EType::GFX) : PipelineState(), VulkanDeviceObject(_device), m_pipeline(VK_NULL_HANDLE), m_pipeline_layout(VK_NULL_HANDLE), m_pipeline_state_cache(nullptr), m_type(_type){};
         virtual ~VulkanPipelineState();
 
         inline VkPipeline GetHandle() const {
@@ -678,11 +682,10 @@ namespace Moer::Render {
         EType                        m_type;
     };
 
-    class VulkanRHIGraphicsPipelineState final : public RHIGfxPso, public VulkanPipelineState {
+    class VulkanRHIGraphicsPipelineState final : public VulkanPipelineState {
     public:
         VulkanRHIGraphicsPipelineState(VulkanDevice* _device)
-            : RHIGfxPso(),
-              VulkanPipelineState(_device) {}
+            : VulkanPipelineState(_device) {}
 
         virtual ~VulkanRHIGraphicsPipelineState();
 
@@ -693,22 +696,20 @@ namespace Moer::Render {
         void CreateGraphicsPipeline(const VkGraphicsPipelineCreateInfo& _info);
     };
 
-    class VulkanRHIComputePipelineState final : public RHIComputePso, public VulkanPipelineState {
+    class VulkanRHIComputePipelineState final : public VulkanPipelineState {
     public:
         VulkanRHIComputePipelineState(VulkanDevice* _device)
-            : RHIComputePso(),
-              VulkanPipelineState(_device) {}
+            : VulkanPipelineState(_device) {}
 
         void CreateComputePipeline(const VkComputePipelineCreateInfo& _info);
     };
 
-    class VulkanRHIRayTracingPipelineState final : public RHIRTPso, public VulkanPipelineState {
+    class VulkanRHIRayTracingPipelineState final : public VulkanPipelineState {
         friend VulkanRHIImpl;
 
     public:
         VulkanRHIRayTracingPipelineState(VulkanDevice* _device)
-            : RHIRTPso(),
-              VulkanPipelineState(_device) {}
+            : VulkanPipelineState(_device) {}
 
         const VkStridedDeviceAddressRegionKHR* GetRayGenSBT() { return &m_raygen_sbt; }
         const VkStridedDeviceAddressRegionKHR* GetRayMissSBT() { return &m_miss_sbt; }
@@ -996,8 +997,8 @@ namespace Moer::Render {
 
         VkAccelerationStructureKHR handle            = VK_NULL_HANDLE;
         VulkanBuffer*              underlying_buffer = nullptr;
-
-        VulkanDevice& device;
+        int                        m_descriptor_idx  = -1;
+        VulkanDevice&              device;
     };
 
     using VulkanAccelRef = CountableRef<VulkanAccelerationStructure>;
@@ -1028,6 +1029,7 @@ namespace Moer::Render {
     class VulkanRaytracingScene final : public RaytracingScene, public VulkanDeviceObject {
     public:
         VulkanRaytracingScene(VulkanDevice* _device);
+        virtual ~VulkanRaytracingScene();
         RaytracingInstance& AddInstance() override;
 
         void MarkModified(uint _array_idx) override;
@@ -1134,6 +1136,7 @@ namespace Moer::Render {
     RESOURCE_CAST(Swapchain, VkSwapchain)
 
     RESOURCE_CAST(RaytracingGeometry, VulkanRaytracingGeometry)
+    RESOURCE_CAST(RaytracingScene, VulkanRaytracingScene)
 #pragma endregion
 
 #pragma region viewable resources view definitions

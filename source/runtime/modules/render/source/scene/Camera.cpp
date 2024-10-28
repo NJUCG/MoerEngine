@@ -1,5 +1,6 @@
 #include "scene/Camera.h"
 
+#include "log/LogSystem.h"
 #include "math/Base.h"
 #include "math/Constant.h"
 #include "math/Function.h"
@@ -87,6 +88,14 @@ namespace Moer {
     float Camera::GetFarClip() const noexcept { return m_far_clip; }
     float Camera::GetTanHalfFov() const noexcept { return tan(m_fov_y / 180.f * HALF_PI); }
     float Camera::GetAspectRatio() const noexcept { return m_aspect_ratio; }
+
+    Vector4f Camera::GetFrustum() const noexcept {
+        return m_frustum;
+    }
+
+    Vector3f Camera::GetDirection() const noexcept {
+        return m_dir;
+    }
 
     Matrix4x4f Camera::GetToWorldMatrix() noexcept {
         if (m_to_world_dirty) {
@@ -191,30 +200,30 @@ namespace Moer {
         m_to_world_dirty = true;
     }
 
-    void Camera::MoveUp(float delta) {
-        Vector3f t       = Y * Vector3f(delta);
+    void Camera::MoveUp(float _delta) {
+        Vector3f t       = Y * Vector3f(_delta);
         t                = Vector3f(m_rotate_inv * Vector4f(t * sensitivity * sensitivity_scale, 0.f));
         auto translation = MakeTranslation(t.x, t.y, t.z);
         m_position       = Vector3f(translation * Vector4f(m_position, 1.f));
         m_to_world_dirty = true;
     }
 
-    void Camera::UpdateRotation(float delta_x, float delta_y) {
+    void Camera::UpdateRotation(float _delta_x, float _delta_y) {
         // Quaternion pitch(X, Angle::MakeFromDegree(delta_x * sensitivity * sensitivity_scale));
         // Quaternion yaw(Y, Angle::MakeFromDegree(delta_y * sensitivity * sensitivity_scale));
-        totalPitch += delta_y * 0.15f;
-        if (totalPitch < 0.f)
-            totalPitch += 360.f;
-        if (totalPitch > 360.f)
-            totalPitch = fmodf(totalPitch, 360.f);
+        total_pitch += _delta_y * 0.15f;
+        if (total_pitch < 0.f)
+            total_pitch += 360.f;
+        if (total_pitch > 360.f)
+            total_pitch = fmodf(total_pitch, 360.f);
 
-        if (totalPitch < 90.f || totalPitch > 270.f)
-            yawReverse = false;
+        if (total_pitch < 90.f || total_pitch > 270.f)
+            yaw_reverse = false;
         else
-            yawReverse = true;
+            yaw_reverse = true;
 
-        Quaternion pitch(X, Angle::MakeFromDegree(delta_y * 0.15f));                          //rotate around x-axis
-        Quaternion yaw(Y, Angle::MakeFromDegree((yawReverse ? -1.f : 1.f) * delta_x * 0.15f));//rotate around y-axis
+        Quaternion pitch(X, Angle::MakeFromDegree(_delta_y * 0.15f));                           //rotate around x-axis
+        Quaternion yaw(Y, Angle::MakeFromDegree((yaw_reverse ? -1.f : 1.f) * _delta_x * 0.15f));//rotate around y-axis
 
         m_rotate =
             FillDiagonal4x4(pitch.GetRotation(), 1.f) *
@@ -265,6 +274,65 @@ namespace Moer {
         return m_projection_dirty || m_to_world_dirty;
     }
 
+    void Camera::UpdateCalculatedValues() {
+
+        m_view     = m_rotate * MakeTranslation(-m_position.x, -m_position.y, -m_position.z);
+        m_to_world = Inverse(m_view);
+
+        if (m_projection_dirty) {
+            m_proj = MakePerspectiveMatrixRH(
+                //Use Inverse Depth
+                Angle::DegreeToRadian(m_fov_y),
+                m_aspect_ratio,
+                m_far_clip,
+                m_near_clip);
+            m_sample_to_camera = Inverse(
+                MakeScaling(0.5f, 0.5f, 1.f) *
+                MakeTranslation(1.f, 1.f, 0.f) *
+                m_proj);
+            m_projection_dirty = false;
+        }
+        m_to_world_dirty = false;
+
+        auto vp = GetProjectionMatrix();
+
+        m_planes[0] = vp.r3 + vp.r0;//left
+        m_planes[1] = vp.r3 - vp.r0;//right
+        m_planes[2] = vp.r3 + vp.r1;//bottom
+        m_planes[3] = vp.r3 - vp.r1;//top
+        m_planes[4] = vp.r2;        //near
+        m_planes[5] = vp.r3 - vp.r2;//far
+        //normalize
+        for (int i = 0; i < 6; i++) {
+            auto length = Length(Vector3f(m_planes[i]));
+            m_planes[i] = Vector4f(Normalizef(Vector3f(m_planes[i])), m_planes[i].w / length);
+        }
+
+        auto inv_proj = Inverse(vp);
+        auto left     = inv_proj * Vector4f(-1.f, 1.f, -1.f, 1.f);
+
+        //frustum
+        float x0 = m_planes[FRUSTUM_LEFT].z / m_planes[FRUSTUM_LEFT].x;
+        float x1 = m_planes[FRUSTUM_RIGHT].z / m_planes[FRUSTUM_RIGHT].x;
+        float y0 = m_planes[FRUSTUM_BOTTOM].z / m_planes[FRUSTUM_BOTTOM].y;
+        float y1 = m_planes[FRUSTUM_TOP].z / m_planes[FRUSTUM_TOP].y;
+
+        m_frustum.x = -x0;
+        m_frustum.y = -y0;
+        m_frustum.z = x0 - x1;
+        m_frustum.w = y0 - y1;
+
+        //direction
+        // m_dir = Normalizef(Vector3f(m_rotate_inv * Vector4f(0.f, 0.f, 1.f, 0.f)));
+        m_dir = Vector3f(0.f, 0.f, 1.f);
+        // LOG_INFO("dir: {} {} {}", m_dir.x, m_dir.y, m_dir.z);
+        // auto     test_dir  = Vector2f(0.f, 1.f) * Vector2f(m_frustum.z, m_frustum.w) + Vector2f(m_frustum.x, m_frustum.y);
+        // Vector3f test_dir3 = Vector3f(test_dir.x, test_dir.y, 1.f);
+        // test_dir3          = Normalizef(Vector3f(m_rotate_inv * Vector4f(test_dir3, 0.f)));
+        // LOG_INFO("test_dir3: {} {} {}", test_dir3.x, test_dir3.y, test_dir3.z);
+        // int k = 0;
+    }
+
     void Camera::Tick() {
         if (wndInput.mouseEnterScreen) {
             // fov & aspect_ratio
@@ -306,6 +374,10 @@ namespace Moer {
                 wndInput.deltaY = 0;
             }
         }
+
+        if (IsDirty()) {
+            UpdateCalculatedValues();
+        }
     }
 
     CameraRef Camera::CreateDefaultCamera() {
@@ -317,6 +389,18 @@ namespace Moer {
         default_camera->SetFarClip(1000.0f);
         default_camera->SetAspectRatio(16.0f / 9.0f);
         return default_camera;
+    }
+
+    InputStream& Camera::operator>>(InputStream& _stream) {
+        _stream >> m_position >> m_rotate >> m_fov_y >> m_aspect_ratio >> m_near_clip >> m_far_clip;
+        UpdateCalculatedValues();
+        return _stream;
+    }
+
+    OutputStream& Camera::operator<<(OutputStream& _stream) const {
+        _stream << m_position << m_rotate << m_fov_y << m_aspect_ratio << m_near_clip << m_far_clip;
+        //calculate values
+        return _stream;
     }
 
 }// namespace Moer

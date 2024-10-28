@@ -4,8 +4,12 @@
 #include "misc/Timer.h"
 #include "resources/GpuScene.h"
 #include "rhi/RHI.h"
+#include "rhi/RHICommon.h"
 #include "scene/EntityManager.h"
+#include "scene/RenderableManager.h"
+#include "scene/Scene.h"
 #include "scene/SceneData.h"
+#include "scene/TransformManager.h"
 #include "scene/light/LightComponentManager.h"
 #include "scene/light/LightComponent.h"
 #include "scene/light/DirectionalLightComponent.h"
@@ -246,7 +250,7 @@ namespace Moer {
             if (type == ELightComponentType::DIRECTIONAL) {
                 DECLARE_AND_READ(Vector3f, direction);
 
-                auto light = MoerNew(DirectionalLightComponent)(
+                auto* light = MoerNew(DirectionalLightComponent)(
                     color,
                     intensity,
                     direction);
@@ -255,7 +259,7 @@ namespace Moer {
             } else if (type == ELightComponentType::POINT) {
                 DECLARE_AND_READ(Vector3f, position);
 
-                auto light = MoerNew(PointLightComponent)(
+                auto* light = MoerNew(PointLightComponent)(
                     color,
                     intensity,
                     position);
@@ -267,7 +271,7 @@ namespace Moer {
                 DECLARE_AND_READ(float, inner_cone_angle);
                 DECLARE_AND_READ(float, outer_cone_angle);
 
-                auto light = MoerNew(SpotLightComponent)(
+                auto* light = MoerNew(SpotLightComponent)(
                     color,
                     intensity,
                     position,
@@ -283,63 +287,28 @@ namespace Moer {
 #undef DECLARE_AND_READ
     }
 
-    void SceneCache::ReadSceneGeomInfo(FInputStream& stream, SceneData& sceneData) {
+    void SceneCache::ReadSceneGeomInfo(FInputStream& _stream, SceneData& _scene_data) {
         size_t vertex_count;
-        stream >> sceneData.m_vertex_data >> sceneData.m_index_data;
-        // stream >> sceneData.m_index_data;
-        // size_t meshlet_desc_count;
-        // stream >> meshlet_desc_count;
-        // sceneData.m_meshlet_descs.resize(meshlet_desc_count);
-        // stream.Read(sceneData.m_meshlet_descs.data(), meshlet_desc_count * sizeof(MeshletDesc));
-        stream >> sceneData.m_meshlet_descs;
+        _stream >> _scene_data.m_vertex_data >> _scene_data.m_index_data;
+        _stream >> _scene_data.m_meshlet_descs;
+        _stream >> _scene_data.m_meshlet_bounds >> _scene_data.m_mesh_infos >> _scene_data.m_prim_infos;
+        _stream >> _scene_data.m_instance_data >> _scene_data.m_instance_mesh_info >> _scene_data.m_instance_id;
 
-        // size_t meshlet_bound_count;
-        // stream >> meshlet_bound_count;
-        // sceneData.m_meshlet_bounds.resize(meshlet_bound_count);
-        // stream.Read(sceneData.m_meshlet_bounds.data(), meshlet_bound_count * sizeof(MeshletBound));
-
-        // size_t mesh_info_count;
-        // stream >> mesh_info_count;
-        // sceneData.m_mesh_infos.resize(mesh_info_count);
-        // stream.Read(sceneData.m_mesh_infos.data(), mesh_info_count * sizeof(MeshInfo));
-
-        // size_t prim_info_count;
-        // stream >> prim_info_count;
-        // sceneData.m_prim_infos.resize(prim_info_count);
-        // for (int i = 0; i < prim_info_count; ++i) {
-        //     stream >> sceneData.m_prim_infos[i].mesh_id;
-        //     stream >> sceneData.m_prim_infos[i].material_id;
-        //     stream >> sceneData.m_prim_infos[i].transform;
-        // }
-
-        stream >> sceneData.m_meshlet_bounds >> sceneData.m_mesh_infos >> sceneData.m_prim_infos;
-
-        // size_t instance_data_count;
-        // stream >> instance_data_count;
-        // sceneData.m_instance_data.resize(instance_data_count);
-        // stream.Read(sceneData.m_instance_data.data(), instance_data_count * sizeof(InstanceData));
-
-        // size_t instance_mesh_info_count;
-        // stream >> instance_mesh_info_count;
-        // sceneData.m_instance_mesh_info.resize(instance_mesh_info_count);
-        // stream.Read(sceneData.m_instance_mesh_info.data(), instance_mesh_info_count * sizeof(InstanceMeshInfo));
-
-        // size_t instance_id_count;
-        // stream >> instance_id_count;
-        // sceneData.m_instance_id.resize(instance_id_count);
-        // stream.Read(sceneData.m_instance_id.data(), instance_id_count * sizeof(uint32_t));
-
-        stream >> sceneData.m_instance_data >> sceneData.m_instance_mesh_info >> sceneData.m_instance_id;
+        //raytracing
+        _stream >> _scene_data.rt_vertices;
+        _stream >> _scene_data.rt_instances;
+        _stream >> _scene_data.rt_mesh_infos;
+        _stream >> _scene_data.rt_prims;
     }
 
-    void SceneCache::ReadSceneMaterial(InputStream& stream, SceneData& sceneData) {
+    void SceneCache::ReadSceneMaterial(InputStream& _stream, SceneData& _scene_data) {
         size_t material_count;
-        stream >> material_count;
+        _stream >> material_count;
         for (int i = 0; i < material_count; ++i) {
             std::string material_name;
             // stream.Read(material_name);
             // stream >> sceneData.m_materials[material_name];
-            stream >> material_name;
+            _stream >> material_name;
             // MaterialBuilder materialBuilder;
             // size_t          param_count;
             // stream.read(param_count);
@@ -372,49 +341,45 @@ namespace Moer {
             BufferInterfaceBlock block;
             {
                 // stream.Read(block.m_name);
-                stream >> block.m_name;
+                _stream >> block.m_name;
                 // stream.read(block.m_size);
                 // stream.read(block.m_alignment);
                 // stream.read(block.m_target);
                 // stream.read(block.m_qualifiers);
-                stream >> block.m_size;
-                stream >> block.m_alignment;
-                stream >> block.m_target;
-                stream >> block.m_qualifiers;
+                _stream >> block.m_size;
+                _stream >> block.m_alignment;
+                _stream >> block.m_target;
+                _stream >> block.m_qualifiers;
 
                 size_t field_count;
                 // stream >> field_count;
                 // block.m_field_info_list.resize(field_count);
                 // stream.Read(block.m_field_info_list.data(), field_count * sizeof(BufferInterfaceBlock::FieldInfo));
-                stream >> block.m_field_info_list;
+                _stream >> block.m_field_info_list;
                 const auto& field_info_list = block.m_field_info_list;
                 size_t      info_count;
-                stream >> info_count;
+                _stream >> info_count;
                 for (int j = 0; j < info_count; ++j) {
                     std::string name;
-                    stream >> name;
+                    _stream >> name;
                     uint32_t offset;
-                    stream >> offset;
+                    _stream >> offset;
                     block.m_info_map[field_info_list[offset].name] = offset;
                 }
             }
 
             TextureInterfaceBlock sampler;
             {
-                stream >> sampler.m_name;
-                // size_t sampler_count;
-                // stream >> sampler_count;
-                // sampler.m_sampler_info_list.resize(sampler_count);
-                // stream.Read(sampler.m_sampler_info_list.data(), sampler_count * sizeof(TextureInterfaceBlock::TextureInfo));
-                stream >> sampler.m_sampler_info_list;
+                _stream >> sampler.m_name;
+                _stream >> sampler.m_sampler_info_list;
 
                 size_t info_count;
-                stream >> info_count;
+                _stream >> info_count;
                 for (int j = 0; j < info_count; ++j) {
                     std::string name;
-                    stream >> name;
+                    _stream >> name;
                     uint8_t offset;
-                    stream >> offset;
+                    _stream >> offset;
                     sampler.m_info_map[sampler.m_sampler_info_list[offset].name] = offset;
                 }
             }
@@ -424,228 +389,174 @@ namespace Moer {
             material->SetSamplerInterfaceBlock(sampler);
             material->SetName(material_name);
 
-            sceneData.m_materials[material_name] = material;
+            _scene_data.m_materials[material_name] = material;
         }
 
         size_t material_instance_count;
-        stream >> material_instance_count;
+        _stream >> material_instance_count;
         for (int i = 0; i < material_instance_count; ++i) {
             std::string material_instance_name;
-            stream >> material_instance_name;
+            _stream >> material_instance_name;
             std::string mat_name;
-            stream >> mat_name;
-            auto   material_instance = sceneData.m_materials[mat_name]->CreateInstance();
+            _stream >> mat_name;
+            auto   material_instance = _scene_data.m_materials[mat_name]->CreateInstance();
             size_t texture_param_count;
-            stream >> texture_param_count;
+            _stream >> texture_param_count;
             for (int j = 0; j < texture_param_count; ++j) {
                 std::string param_name;
-                stream >> param_name;
+                _stream >> param_name;
                 std::string texture_name;
-                stream >> texture_name;
-                sceneData.m_mat_instance_textures[material_instance_name].textures.emplace_back(param_name, texture_name);
+                _stream >> texture_name;
+                _scene_data.m_mat_instance_textures[material_instance_name].textures.emplace_back(param_name, texture_name);
             }
             //  sceneData.m_mat_instance_textures[material_instance_name].textures.resize(texture_param_count);
             //  stream.read(sceneData.m_mat_instance_textures[material_instance_name].textures);
 
             auto unfirom_buffer_size = material_instance->GetUniformBuffer().GetSize();
             auto buffer_data         = Moer::Array<uint8_t>(unfirom_buffer_size);
-            stream >> buffer_data;
+            _stream >> buffer_data;
             material_instance->SetUnifomBuffer(buffer_data.data(), unfirom_buffer_size);
             material_instance->SetName(material_instance_name);
-            sceneData.m_material_instances[material_instance_name]        = material_instance;
-            sceneData.m_material_instance_indexes[material_instance_name] = i;
+            _scene_data.m_material_instances[material_instance_name]        = material_instance;
+            _scene_data.m_material_instance_indexes[material_instance_name] = i;
         }
     }
 
-    void SceneCache::WriteSceneGeomInfo(FOutputStream& stream, const SceneData& sceneData) {
-        stream << sceneData.m_vertex_data;
+    void SceneCache::WriteSceneGeomInfo(FOutputStream& _stream, const SceneData& _scene_data) {
+        _stream << _scene_data.m_vertex_data;
+        _stream << _scene_data.m_index_data;
+        _stream << _scene_data.m_meshlet_descs;
+        _stream << _scene_data.m_meshlet_bounds;
+        _stream << _scene_data.m_mesh_infos;
 
-        // stream.write(sceneData.m_index_data.size());
-        // stream.write(sceneData.m_index_data.data(), sceneData.m_index_data.size() * sizeof(uint32_t));
+        _stream << _scene_data.m_prim_infos;
+        _stream << _scene_data.m_instance_data;
 
-        // stream.write(sceneData.m_meshlet_descs.size());
-        // stream.write(sceneData.m_meshlet_descs.data(), sceneData.m_meshlet_descs.size() * sizeof(MeshletDesc));
+        _stream << _scene_data.m_instance_mesh_info;
+        _stream << _scene_data.m_instance_id;
 
-        // stream.write(sceneData.m_meshlet_bounds.size());
-        // stream.write(sceneData.m_meshlet_bounds.data(), sceneData.m_meshlet_bounds.size() * sizeof(MeshletBound));
-
-        // stream.write(sceneData.m_mesh_infos.size());
-        // stream.write(sceneData.m_mesh_infos.data(), sceneData.m_mesh_infos.size() * sizeof(MeshInfo));
-
-        stream << sceneData.m_index_data;
-        stream << sceneData.m_meshlet_descs;
-        stream << sceneData.m_meshlet_bounds;
-        stream << sceneData.m_mesh_infos;
-
-        stream << sceneData.m_prim_infos;
-        // for (auto& prim_info : sceneData.m_prim_infos) {
-        //     stream.write(prim_info.mesh_id);
-        //     stream.write(prim_info.material_id);
-        //     stream.write(prim_info.transform);
-        // }
-
-        // stream.write(sceneData.m_instance_data.size());
-        // stream.write(sceneData.m_instance_data.data(), sceneData.m_instance_data.size() * sizeof(InstanceData));
-
-        stream << sceneData.m_instance_data;
-
-        // stream.write(sceneData.m_instance_mesh_info.size());
-        // stream.write(sceneData.m_instance_mesh_info.data(), sceneData.m_instance_mesh_info.size() * sizeof(InstanceMeshInfo));
-
-        // stream.write(sceneData.m_instance_id.size());
-        // stream.write(sceneData.m_instance_id.data(), sceneData.m_instance_id.size() * sizeof(uint32_t));
-
-        stream << sceneData.m_instance_mesh_info;
-        stream << sceneData.m_instance_id;
+        //raytracing
+        _stream << _scene_data.rt_vertices;
+        _stream << _scene_data.rt_instances;
+        _stream << _scene_data.rt_mesh_infos;
+        _stream << _scene_data.rt_prims;
     }
-    void SceneCache::WriteSceneMaterial(FOutputStream& stream, const SceneData& sceneData) {
+    void SceneCache::WriteSceneMaterial(FOutputStream& _stream, const SceneData& _scene_data) {
         // stream.write(sceneData.m_materials.size());
-        stream << sceneData.m_materials.size();
-        for (auto& material : sceneData.m_materials) {
-            stream << material.first;
+        _stream << _scene_data.m_materials.size();
+        for (auto& material : _scene_data.m_materials) {
+            _stream << material.first;
             auto& sampler_info = material.second->GetSamplerInterfaceBlock();
             auto& buffer_info  = material.second->GetBufferInterfaceBlock();
-            // auto& buffer_info_list  = buffer_info.GetFieldInfoList();
-            // auto  sampler_info_list = sampler_info.GetSamplerInfoList();
-            // stream.write(sampler_info_list.size() + buffer_info_list.size());
-            // for (auto& sampler : sampler_info_list) {
-            //     uint param_type = sampler.type == EParamaterType::SAMPLER ? 0 : 1;
-            //     stream.write(sampler.name);
-            //     stream.write(param_type);
-            //     if (param_type == 0) {
-            //         stream.write(sampler.samplerType);
-            //     } else {
-            //         stream.write(sampler.textureType);
-            //     }
-            // }
-            // for (auto& buffer : buffer_info_list) {
-            //     stream.write(buffer.name);
-            //     stream.write(2);
-            //     stream.write(buffer.type);
-            //     stream.write(buffer.size);
-            // }
 
             {
-                // stream.write(buffer_info.m_name);
-                // stream.write(buffer_info.m_size);
-                // stream.write(buffer_info.m_alignment);
-                // stream.write(buffer_info.m_target);
-                // stream.write(buffer_info.m_qualifiers);
+                _stream << buffer_info.m_name;
+                _stream << buffer_info.m_size;
+                _stream << buffer_info.m_alignment;
+                _stream << buffer_info.m_target;
+                _stream << buffer_info.m_qualifiers;
 
-                // stream.write(buffer_info.m_field_info_list.size());
-                // stream.write(buffer_info.m_field_info_list.data(), buffer_info.m_field_info_list.size() * sizeof(BufferInterfaceBlock::FieldInfo));
-                stream << buffer_info.m_name;
-                stream << buffer_info.m_size;
-                stream << buffer_info.m_alignment;
-                stream << buffer_info.m_target;
-                stream << buffer_info.m_qualifiers;
+                _stream << buffer_info.m_field_info_list;
 
-                stream << buffer_info.m_field_info_list;
-
-                stream << buffer_info.m_info_map.size();
+                _stream << buffer_info.m_info_map.size();
                 for (auto& info : buffer_info.m_info_map) {
-                    stream << info.first;
-                    stream << info.second;
+                    _stream << info.first;
+                    _stream << info.second;
                 }
             }
 
             {
-                // stream.write(sampler_info.m_name);
-                // stream.write(sampler_info.m_sampler_info_list.size());
-                // stream.write(sampler_info.m_sampler_info_list.data(), sampler_info.m_sampler_info_list.size() * sizeof(TextureInterfaceBlock::TextureInfo));
-                // stream.write(sampler_info.m_info_map.size());
-                // for (auto& info : sampler_info.m_info_map) {
-                //     stream.write(info.first);
-                //     stream.write(info.second);
-                // }
-
-                stream << sampler_info.m_name;
-                stream << sampler_info.m_sampler_info_list;
-                stream << sampler_info.m_info_map.size();
+                _stream << sampler_info.m_name;
+                _stream << sampler_info.m_sampler_info_list;
+                _stream << sampler_info.m_info_map.size();
                 for (auto& info : sampler_info.m_info_map) {
-                    stream << info.first;
-                    stream << info.second;
+                    _stream << info.first;
+                    _stream << info.second;
                 }
             }
         }
 
         // stream.write(sceneData.m_material_instances.size());
-        stream << sceneData.m_material_instances.size();
-        for (auto [name, index] : sceneData.m_material_instance_indexes) {
-            auto& material_instance = sceneData.m_material_instances.at(name);
+        _stream << _scene_data.m_material_instances.size();
+        for (auto [name, index] : _scene_data.m_material_instance_indexes) {
+            auto& material_instance = _scene_data.m_material_instances.at(name);
             // stream.write(name);
             // stream.write(material_instance->GetMaterial()->GetName());
-            stream << name;
-            stream << material_instance->GetMaterial()->GetName();
+            _stream << name;
+            _stream << material_instance->GetMaterial()->GetName();
 
-            if (sceneData.m_mat_instance_textures.contains(name)) {
+            if (_scene_data.m_mat_instance_textures.contains(name)) {
                 // stream.write(sceneData.m_mat_instance_textures.at(name).textures.size());
                 // for (auto& texture : sceneData.m_mat_instance_textures.at(name).textures) {
                 //     stream.write(texture.first);
                 //     stream.write(texture.second);
                 // }
-                stream << sceneData.m_mat_instance_textures.at(name).textures;
-                for (auto& texture : sceneData.m_mat_instance_textures.at(name).textures) {
-                    stream << texture.first;
-                    stream << texture.second;
+                const MatInstanceTextureInfo& mat_instance_texture_info = _scene_data.m_mat_instance_textures.at(name);
+                _stream << mat_instance_texture_info.textures.size();
+
+                for (auto& texture : mat_instance_texture_info.textures) {
+                    _stream << texture.first;
+                    _stream << texture.second;
                 }
+
             } else {
                 // Because in ReadSceneMaterial(), we expect the texture_param_count to be a size_t
                 // Here we need to manual cast 0 to size_t to ensure it is written in 8 bytes instead of 4
                 // stream.write(static_cast<size_t>(0));
-                stream << 0ull;
+                _stream << 0ull;
             }
+            // stream << material_instance->GetUniformBuffer();
 
-            stream << std::span<byte>((byte*)material_instance->GetUniformBuffer().GetData(), material_instance->GetUniformBuffer().GetSize());
+            _stream << std::span<byte>((byte*)material_instance->GetUniformBuffer().GetData(), material_instance->GetUniformBuffer().GetSize());
             // stream << material_instance->GetUniformBuffer().GetData();
         }
     }
-    void SceneCache::WriteSceneTextures(FOutputStream& stream, const SceneData& sceneData) {
-        stream << sceneData.m_textures.size();
+    void SceneCache::WriteSceneTextures(FOutputStream& _stream, const SceneData& _scene_data) {
+        _stream << _scene_data.m_textures.size();
         // stream << sceneData.m_textures.size();
 
-        for (auto& texture : sceneData.m_textures) {
-            stream << texture.first;
-            stream << texture.second;
+        for (auto& texture : _scene_data.m_textures) {
+            _stream << texture.first;
+            _stream << texture.second;
         }
 
         // stream << sceneData.m_textures;
     }
-    void SceneCache::WriteSceneUtils(OutputStream& stream, const SceneData& sceneData) {
+    void SceneCache::WriteSceneUtils(OutputStream& _stream, const SceneData& _scene_data) {
         // write cameras
         // stream.write(sceneData.m_cameras.size());
-        stream << sceneData.m_cameras.size();
-        for (auto& camera : sceneData.m_cameras) {
+        _stream << _scene_data.m_cameras.size();
+        for (auto& camera : _scene_data.m_cameras) {
             // stream.write(camera, sizeof(Camera));
 
-            stream << camera;
+            _stream << *camera;
         }
 
         // write lights
         // stream.write(sceneData.m_lights.size());
 
-        stream << sceneData.m_lights.size();
+        _stream << _scene_data.m_lights.size();
 
-        for (auto& light : sceneData.m_lights) {
+        for (auto& light : _scene_data.m_lights) {
             // stream.write(light->GetType());
             // stream.write(light->GetColor());
             // stream.write(light->GetIntensity());
 
-            stream << light->GetType();
-            stream << light->GetColor();
-            stream << light->GetIntensity();
+            _stream << light->GetType();
+            _stream << light->GetColor();
+            _stream << light->GetIntensity();
 
             if (light->GetType() == ELightComponentType::DIRECTIONAL) {
                 auto* dir_light = dynamic_cast<DirectionalLightComponent*>(light.Get());
                 // stream.write(dir_light->GetDirection());
 
-                stream << dir_light->GetDirection();
+                _stream << dir_light->GetDirection();
 
             } else if (light->GetType() == ELightComponentType::POINT) {
                 auto* point_light = dynamic_cast<PointLightComponent*>(light.Get());
                 // stream.write(point_light->GetPosition());
 
-                stream << point_light->GetPosition();
+                _stream << point_light->GetPosition();
 
             } else if (light->GetType() == ELightComponentType::SPOT) {
                 auto* spot_light = dynamic_cast<SpotLightComponent*>(light.Get());
@@ -654,10 +565,10 @@ namespace Moer {
                 // stream.write(spot_light->GetInnerConeAngle());
                 // stream.write(spot_light->GetOuterConeAngle());
 
-                stream << spot_light->GetPosition();
-                stream << spot_light->GetDirection();
-                stream << spot_light->GetInnerConeAngle();
-                stream << spot_light->GetOuterConeAngle();
+                _stream << spot_light->GetPosition();
+                _stream << spot_light->GetDirection();
+                _stream << spot_light->GetInnerConeAngle();
+                _stream << spot_light->GetOuterConeAngle();
 
             } else {
                 LOG_WARNING("Unknown light type: {}", static_cast<uint8_t>(light->GetType()));
@@ -665,28 +576,28 @@ namespace Moer {
         }
     }
 
-    SceneData SceneCache::ConvertToSceneData(const Scene& scene) {
+    SceneData SceneCache::ConvertToSceneData(const Scene& _scene) {
         //May be not necessary
-        SceneData sceneData;
-        return sceneData;
+        SceneData scene_data;
+        return scene_data;
     }
 
-    size_t HashSceneData(const SceneData& sceneData) {
+    size_t HashSceneData(const SceneData& _scene_data) {
         size_t hash = 0;
         return hash;
     }
 
-    void SceneCache::Cache(const SceneData& sceneData, size_t key) {
-        std::filesystem::path path = RemapScenePath(sceneData.m_path);
+    void SceneCache::Cache(const SceneData& _scene_data, size_t _key) {
+        std::filesystem::path path = RemapScenePath(_scene_data.m_path);
         std::ofstream         fs(path, std::ios::binary);
         OutputStream          stream(fs);
-        WriteSceneGeomInfo(stream, sceneData);
-        WriteSceneTextures(stream, sceneData);
-        WriteSceneMaterial(stream, sceneData);
-        WriteSceneUtils(stream, sceneData);
+        WriteSceneGeomInfo(stream, _scene_data);
+        WriteSceneTextures(stream, _scene_data);
+        WriteSceneMaterial(stream, _scene_data);
+        WriteSceneUtils(stream, _scene_data);
     }
 
-    void BuildSceneRaytracing(SceneData& sceneData, Scene* scene) {
+    void BuildSceneRaytracing(SceneData& _scene_data, Scene* _scene) {
 
         Render::RaytracingSceneRef raytracing_scene = Render::RenderDevice::Get().CreateRaytracingScene();
 
@@ -695,17 +606,17 @@ namespace Moer {
         auto&               cmd_queue = device.GetCommandQueue(Render::EQueueType::Compute);
 
         Moer::Array<Render::RaytracingGeometryRef> blas_list;
-        for (auto& primitive : sceneData.m_prim_infos) {
+        for (auto& primitive : _scene_data.m_prim_infos) {
             Render::RaytracingGeometryInfo rt_geo_info{};
-            const auto&                    mesh_info = sceneData.m_mesh_infos[primitive.mesh_id];
+            const auto&                    mesh_info = _scene_data.m_mesh_infos[primitive.mesh_id];
             rt_geo_info.build_flags                  = ERayTracingAccelerationStructureBuildFlags::PREFER_FAST_TRACE;
             rt_geo_info.vertex_format                = PF_R32G32B32_SFLOAT;
-            rt_geo_info.vertex_buffer                = scene->GetVertexBuffer();
-            rt_geo_info.index_buffer                 = scene->GetIndexBuffer();
+            rt_geo_info.vertex_buffer                = _scene->GetVertexBuffer();
+            rt_geo_info.index_buffer                 = _scene->GetIndexBuffer();
             rt_geo_info.index_type                   = IET_UINT32;
             rt_geo_info.max_vertex_count             = mesh_info.vertex_count;
             rt_geo_info.primitive_count              = mesh_info.index_count / 3;
-            rt_geo_info.segments.emplace_back(mesh_info.vertex_offset, mesh_info.vertex_count, sceneData.m_vertex_stride, mesh_info.index_offset, mesh_info.index_count);
+            rt_geo_info.segments.emplace_back(mesh_info.vertex_offset, mesh_info.vertex_count, _scene_data.m_vertex_stride, mesh_info.index_offset, mesh_info.index_count);
 
             Render::RaytracingGeometryRef blas = device.CreateRaytracingGeometry(rt_geo_info);
             cmd_list.BuildAccelerationStructures({{blas, ERaytracingBuildMode::BUILD}});
@@ -726,7 +637,7 @@ namespace Moer {
             // break;
         }
         // raytracing_scene->
-        scene->SetRaytracingScene(raytracing_scene);
+        _scene->SetRaytracingScene(raytracing_scene);
         cmd_list.UpdateRaytracingScene(raytracing_scene);
         cmd_queue.Execute(cmd_list.Submit());
         // cmd_queue.Sync();
@@ -776,45 +687,57 @@ namespace Moer {
         // scene->SetBlasList(blas_list);
     }
 
-    void SceneCache::ConvertToScene(SceneData& scene_data, Scene* scene, bool need_cache) {
-        size_t hash    = HashSceneData(scene_data);
+    void SceneCache::ConvertToScene(SceneData& _scene_data, Scene* _scene, bool _need_cache) {
+        using namespace Moer::Render;
+        using namespace Moer;
+        size_t hash    = HashSceneData(_scene_data);
         bool   updated = true;
-        if (updated && need_cache) {
-            Cache(scene_data, hash);
+        if (updated && _need_cache) {
+            Cache(_scene_data, hash);
         }
 
         auto& device = Render::RenderDevice::Get();
 
-        Moer::Array<byte> material_data(scene_data.m_material_instances.size() * Material::MaterialBytesNum);
-        for (auto [name, index] : scene_data.m_material_instance_indexes) {
-            auto& material = scene_data.m_material_instances[name];
+        Moer::Array<byte> material_data(_scene_data.m_material_instances.size() * Material::MaterialBytesNum);
+        for (auto [name, index] : _scene_data.m_material_instance_indexes) {
+            auto& material = _scene_data.m_material_instances[name];
             memcpy(material_data.data() + index * Material::MaterialBytesNum, material->GetUniformBuffer().GetData(), material->GetUniformBuffer().GetSize());
         }
 
         Render::CommandList cmd_list;
-        auto&               cmd_queue      = device.GetCommandQueue(Render::EQueueType::Graphics);
+        auto&               gfx_queue      = device.GetCommandQueue(Render::EQueueType::Graphics);
         auto&               copy_queue     = device.GetCopyQueue();
-        auto                bindless_array = scene->GetBindlessArray();
+        auto                bindless_array = _scene->GetBindlessArray();
 
-        auto meshlet_bounds_buffer     = device.CreateBuffer<byte>(scene_data.m_meshlet_bounds.size() * sizeof(MeshletBound), EBufferUsageFlags::UNORDERED_ACCESS);
-        auto meshlet_descs_buffer      = device.CreateBuffer<byte>(scene_data.m_meshlet_descs.size() * sizeof(MeshletDesc), EBufferUsageFlags::UNORDERED_ACCESS);
-        auto mesh_infos_buffer         = device.CreateBuffer<byte>(scene_data.m_mesh_infos.size() * sizeof(MeshInfo), EBufferUsageFlags::UNORDERED_ACCESS);
-        auto instance_data_buffer      = device.CreateBuffer<byte>(scene_data.m_instance_data.size() * sizeof(InstanceData), EBufferUsageFlags::UNORDERED_ACCESS);
-        auto vertex_buffer             = device.CreateBuffer<float>(scene_data.m_vertex_data.size(), EBufferUsageFlags::VERTEX_BUFFER | EBufferUsageFlags::ACCELERATION_STRUCTURE);
-        auto index_buffer              = device.CreateBuffer<uint32_t>(scene_data.m_index_data.size(), EBufferUsageFlags::INDEX_BUFFER | EBufferUsageFlags::ACCELERATION_STRUCTURE);
-        auto instance_id_buffer        = device.CreateBuffer<uint32_t>(scene_data.m_instance_id.size(), EBufferUsageFlags::VERTEX_BUFFER);
-        auto instance_mesh_info_buffer = device.CreateBuffer<byte>(scene_data.m_instance_mesh_info.size() * sizeof(InstanceMeshInfo), EBufferUsageFlags::UNORDERED_ACCESS);
-        auto material_buffer           = device.CreateBuffer<byte>(scene_data.m_material_instances.size() * Material::MaterialBytesNum, EBufferUsageFlags::UNORDERED_ACCESS);
+        auto meshlet_bounds_buffer     = device.CreateBuffer<byte>(_scene_data.m_meshlet_bounds.size() * sizeof(MeshletBound), EBufferUsageFlags::UNORDERED_ACCESS);
+        auto meshlet_descs_buffer      = device.CreateBuffer<byte>(_scene_data.m_meshlet_descs.size() * sizeof(MeshletDesc), EBufferUsageFlags::UNORDERED_ACCESS);
+        auto mesh_infos_buffer         = device.CreateBuffer<byte>(_scene_data.m_mesh_infos.size() * sizeof(MeshInfo), EBufferUsageFlags::UNORDERED_ACCESS);
+        auto instance_data_buffer      = device.CreateBuffer<byte>(_scene_data.m_instance_data.size() * sizeof(InstanceData), EBufferUsageFlags::UNORDERED_ACCESS);
+        auto vertex_buffer             = device.CreateBuffer<float>(_scene_data.m_vertex_data.size(), EBufferUsageFlags::VERTEX_BUFFER | EBufferUsageFlags::ACCELERATION_STRUCTURE);
+        auto index_buffer              = device.CreateBuffer<uint32_t>(_scene_data.m_index_data.size(), EBufferUsageFlags::INDEX_BUFFER | EBufferUsageFlags::ACCELERATION_STRUCTURE);
+        auto instance_id_buffer        = device.CreateBuffer<uint32_t>(_scene_data.m_instance_id.size(), EBufferUsageFlags::VERTEX_BUFFER);
+        auto instance_mesh_info_buffer = device.CreateBuffer<byte>(_scene_data.m_instance_mesh_info.size() * sizeof(InstanceMeshInfo), EBufferUsageFlags::UNORDERED_ACCESS);
+        auto material_buffer           = device.CreateBuffer<byte>(_scene_data.m_material_instances.size() * Material::MaterialBytesNum, EBufferUsageFlags::UNORDERED_ACCESS);
 
-        cmd_list.CopyFrom(std::span<byte>((byte*)scene_data.m_meshlet_bounds.data(), scene_data.m_meshlet_bounds.size() * sizeof(MeshletBound)), meshlet_bounds_buffer->GetView());
-        cmd_list.CopyFrom(std::span<byte>((byte*)scene_data.m_meshlet_descs.data(), scene_data.m_meshlet_descs.size() * sizeof(MeshletDesc)), meshlet_descs_buffer->GetView());
-        cmd_list.CopyFrom(std::span<byte>((byte*)scene_data.m_mesh_infos.data(), scene_data.m_mesh_infos.size() * sizeof(MeshInfo)), mesh_infos_buffer->GetView());
-        cmd_list.CopyFrom(std::span<byte>((byte*)scene_data.m_instance_data.data(), scene_data.m_instance_data.size() * sizeof(InstanceData)), instance_data_buffer->GetView());
-        cmd_list.CopyFrom(std::span<byte>((byte*)scene_data.m_vertex_data.data(), scene_data.m_vertex_data.size() * sizeof(float)), vertex_buffer->GetView());
-        cmd_list.CopyFrom(std::span<byte>((byte*)scene_data.m_index_data.data(), scene_data.m_index_data.size() * sizeof(uint32_t)), index_buffer->GetView());
-        cmd_list.CopyFrom(std::span<byte>((byte*)scene_data.m_instance_id.data(), scene_data.m_instance_id.size() * sizeof(uint32_t)), instance_id_buffer->GetView());
-        cmd_list.CopyFrom(std::span<byte>((byte*)scene_data.m_instance_mesh_info.data(), scene_data.m_instance_mesh_info.size() * sizeof(InstanceMeshInfo)), instance_mesh_info_buffer->GetView());
+        BufferRef rt_instance_buffer  = device.CreateBuffer<byte>(_scene_data.rt_instances.size() * sizeof(RTInstance), EBufferUsageFlags::UNORDERED_ACCESS);
+        BufferRef rt_vtx_buffer       = device.CreateBuffer<float>(_scene_data.rt_vertices.size() * sizeof(RTVertex) / sizeof(float), EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::ACCELERATION_STRUCTURE | EBufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT);
+        BufferRef rt_prim_buffer      = device.CreateBuffer<uint>(_scene_data.rt_prims.size() * sizeof(uint3) / sizeof(uint), EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::ACCELERATION_STRUCTURE | EBufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT);
+        BufferRef rt_mesh_info_buffer = device.CreateBuffer<byte>(_scene_data.rt_mesh_infos.size() * sizeof(RTMeshInfo), EBufferUsageFlags::UNORDERED_ACCESS);
+
+        cmd_list.CopyFrom(std::span<byte>((byte*)_scene_data.m_meshlet_bounds.data(), _scene_data.m_meshlet_bounds.size() * sizeof(MeshletBound)), meshlet_bounds_buffer->GetView());
+        cmd_list.CopyFrom(std::span<byte>((byte*)_scene_data.m_meshlet_descs.data(), _scene_data.m_meshlet_descs.size() * sizeof(MeshletDesc)), meshlet_descs_buffer->GetView());
+        cmd_list.CopyFrom(std::span<byte>((byte*)_scene_data.m_mesh_infos.data(), _scene_data.m_mesh_infos.size() * sizeof(MeshInfo)), mesh_infos_buffer->GetView());
+        cmd_list.CopyFrom(std::span<byte>((byte*)_scene_data.m_instance_data.data(), _scene_data.m_instance_data.size() * sizeof(InstanceData)), instance_data_buffer->GetView());
+        cmd_list.CopyFrom(std::span<byte>((byte*)_scene_data.m_vertex_data.data(), _scene_data.m_vertex_data.size() * sizeof(float)), vertex_buffer->GetView());
+        cmd_list.CopyFrom(std::span<byte>((byte*)_scene_data.m_index_data.data(), _scene_data.m_index_data.size() * sizeof(uint32_t)), index_buffer->GetView());
+        cmd_list.CopyFrom(std::span<byte>((byte*)_scene_data.m_instance_id.data(), _scene_data.m_instance_id.size() * sizeof(uint32_t)), instance_id_buffer->GetView());
+        cmd_list.CopyFrom(std::span<byte>((byte*)_scene_data.m_instance_mesh_info.data(), _scene_data.m_instance_mesh_info.size() * sizeof(InstanceMeshInfo)), instance_mesh_info_buffer->GetView());
         cmd_list.CopyFrom(material_data, material_buffer->GetView());
+
+        cmd_list.CopyFrom(std::span<byte>((byte*)_scene_data.rt_instances.data(), _scene_data.rt_instances.size() * sizeof(RTInstance)), rt_instance_buffer->GetView());
+        cmd_list.CopyFrom(std::span<byte>((byte*)_scene_data.rt_vertices.data(), _scene_data.rt_vertices.size() * sizeof(RTVertex)), rt_vtx_buffer->GetView());
+        cmd_list.CopyFrom(std::span<byte>((byte*)_scene_data.rt_prims.data(), _scene_data.rt_prims.size() * sizeof(uint3)), rt_prim_buffer->GetView());
+        cmd_list.CopyFrom(std::span<byte>((byte*)_scene_data.rt_mesh_infos.data(), _scene_data.rt_mesh_infos.size() * sizeof(RTMeshInfo)), rt_mesh_info_buffer->GetView());
 
         auto evt = copy_queue.Execute(cmd_list.Submit());
         copy_queue.Sync(evt.timeline);
@@ -837,35 +760,47 @@ namespace Moer {
         // scene->SetBuffer("instance_data", instance_data_buffer);
         // scene->SetBuffer("instance_id_buffer", instance_id_buffer);
         // scene->SetBuffer("instance_meshlet_info_buffer", instance_mesh_info_buffer);
-        scene->SetVertexBuffer(vertex_buffer);
-        scene->SetIndexBuffer(index_buffer);
-        scene->SetBuffer(EGpuSceneResource::InstanceInfo, instance_data_buffer);
-        scene->SetBuffer(EGpuSceneResource::MaterialInfo, material_buffer);
+        _scene->SetVertexBuffer(vertex_buffer);
+        _scene->SetIndexBuffer(index_buffer);
+        _scene->SetBuffer(EGpuSceneResource::InstanceInfo, instance_data_buffer);
+        _scene->SetBuffer(EGpuSceneResource::MaterialInfo, material_buffer);
 
-        for (auto& primitive : scene_data.m_prim_infos) {
+        _scene->SetBuffer(EGpuSceneResource::RTInstance, rt_instance_buffer);
+        _scene->SetBuffer(EGpuSceneResource::RTVertex, rt_vtx_buffer);
+        _scene->SetBuffer(EGpuSceneResource::RTPrimitive, rt_prim_buffer);
+        _scene->SetBuffer(EGpuSceneResource::RTMeshInfo, rt_mesh_info_buffer);
+
+        rt_instance_buffer->SetName("rt_instance_buffer");
+        rt_vtx_buffer->SetName("rt_vtx_buffer");
+        rt_prim_buffer->SetName("rt_prim_buffer");
+        rt_mesh_info_buffer->SetName("rt_mesh_info_buffer");
+
+        for (auto& primitive : _scene_data.m_prim_infos) {
             auto entity = EntityManager::Get().Create();
-            scene->AddEntity(entity);
+            _scene->AddEntity(entity);
             RenderableManager::Get().Create(entity);
-            RenderableManager::Get().SetMeshInfo(entity, scene_data.m_mesh_infos[primitive.mesh_id]);
-            RenderableManager::Get().SetMaterialInstance(entity, scene_data.m_material_instances[primitive.material_id]);
+            RenderableManager::Get().SetMeshInfo(entity, _scene_data.m_mesh_infos[primitive.mesh_id]);
+            RenderableManager::Get().SetMaterialInstance(entity, _scene_data.m_material_instances[primitive.material_id]);
+            RenderableManager::Get().SetRTMeshInfo(entity, _scene_data.rt_mesh_infos[primitive.mesh_id]);
+            TransformManager::Get().Set(entity, primitive.transform);
         }
 
-        for (auto& camera : scene_data.m_cameras) {
+        for (auto& camera : _scene_data.m_cameras) {
             auto entity = EntityManager::Get().Create();
             CameraManager::Get().Put(entity, camera);
-            scene->AddCamera(entity);
+            _scene->AddCamera(entity);
         }
 
-        for (auto& light : scene_data.m_lights) {
+        for (auto& light : _scene_data.m_lights) {
             auto entity = EntityManager::Get().Create();
             LightComponentManager::Get().Put(entity, light);
-            scene->AddLight(entity);
+            _scene->AddLight(entity);
         }
 
         Moer::UnorderedMap<std::string, Render::TextureRef> textures;
         Moer::Array<TextureBuilder>                         texture_builders;
-        texture_builders.reserve(scene_data.m_textures.size());
-        for (auto& texture : scene_data.m_textures) {
+        texture_builders.reserve(_scene_data.m_textures.size());
+        for (auto& texture : _scene_data.m_textures) {
             auto& builder = texture_builders.emplace_back();
             builder.Data(texture.second.data.data(), texture.second.data.size());
             builder.Width(texture.second.width);
@@ -878,16 +813,16 @@ namespace Moer {
         Render::Sampler sampler(SF_LINEAR, SAM_REPEAT);
 
         //  scene_data.m_textures = GpuSceneBufferBuilder::
-        for (auto material_instance : scene_data.m_material_instances) {
-            if (!scene_data.m_mat_instance_textures.contains(material_instance.first)) {
+        for (auto material_instance : _scene_data.m_material_instances) {
+            if (!_scene_data.m_mat_instance_textures.contains(material_instance.first)) {
                 continue;
             }
-            for (auto& texture : scene_data.m_mat_instance_textures[material_instance.first].textures) {
-                uint32_t handle = scene->GetBindlessArray()->AllocateTexture(textures[texture.second], sampler);
+            for (auto& texture : _scene_data.m_mat_instance_textures[material_instance.first].textures) {
+                uint32_t handle = _scene->GetBindlessArray()->AllocateTexture(textures[texture.second], sampler);
                 material_instance.second->SetParameter(texture.first, handle);
             }
         }
-        scene->RegisterMaterialTextures(textures);
+        _scene->RegisterMaterialTextures(textures);
 
         // BuildSceneRaytracing(scene_data,scene.get());
     }

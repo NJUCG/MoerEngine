@@ -48,7 +48,7 @@ namespace Moer::Render {
         SpvReflectResourceType   resource_type : 8;
 
         VulkanShaderResourceState() = default;
-        VulkanShaderResourceState(SpvReflectDescriptorType _type, SpvReflectResourceType _resource_type) : desc_type(_type), resource_type(_resource_type) {}
+        VulkanShaderResourceState(SpvReflectDescriptorType _type, SpvReflectResourceType _resource_type) : desc_type(_type), resource_type(_resource_type), b_sampled(0) {}
 
         VulkanShaderResourceState(uint64 _value) {
             memcpy(this, &_value, sizeof(VulkanShaderResourceState));
@@ -205,16 +205,23 @@ namespace Moer::Render {
 
         Array<byte> buffer_desc_data;
         Array<byte> image_desc_data;
+        Array<byte> accel_desc_data;
+
         Array<uint> buffer_free_list;
         Array<uint> image_free_list;
-        uint64      buffer_offset;
-        uint64      image_offset;
+        Array<uint> accel_free_list;
+
+        uint64 buffer_offset;
+        uint64 image_offset;
+        uint64 accel_offset;
 
         uint GetBufferDescIdx(VulkanBuffer* _in_buffer);
         void FreeBufferDescIdx(uint _idx);
         uint GetImageDescIdx(const TextureView* _in_image, VkImageLayout _layout);
         void FreeImageDescIdx(uint _idx);
         uint GetSamplerDescIdx(Sampler _sampler);
+        uint GetAccelDescIdx(VulkanAccelerationStructure* _as);
+        uint FreeAccelDescIdx(uint _idx);
 
     public:
         uint64 CurrentFrameOffset(uint _frame_idx) const;
@@ -225,6 +232,8 @@ namespace Moer::Render {
         void PushBufferDesc(uint64 _src_offset, uint64 _set_offset);
         void PushImageDesc(uint64 _src_offset, uint64 _set_offset);
         void PushSamplerDesc(uint64 _src_offset, uint64 _set_offset);
+        void PushAccelDesc(uint64 _src_offset, uint64 _set_offset);
+
         void IncrementOffset(uint64 _size);
 
     public:
@@ -232,9 +241,11 @@ namespace Moer::Render {
 
         VulkanBuffer* ring_desc_buffer;
 
-        uint       buffer_desc_stride;
-        uint       image_desc_stride;
-        uint       sample_desc_stride;
+        uint buffer_desc_stride;
+        uint image_desc_stride;
+        uint sample_desc_stride;
+        uint accel_desc_stride;
+
         std::mutex m_mutex;
         uint64     texture_desc_offset;
 

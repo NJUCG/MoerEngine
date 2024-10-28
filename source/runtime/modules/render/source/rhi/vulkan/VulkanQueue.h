@@ -100,9 +100,8 @@ namespace Moer::Render {
         std::condition_variable queue_cv;// wake up execute thread from sleeping
         VkNativeQueue           queue;
 
-        Queue<VulkanFence*> present_fences;
-        std::mutex          present_mutex;
-        std::jthread        thread;
+        std::mutex   exec_mtx;
+        std::jthread thread;
     };
 
     class VkCopyQueue : public CopyQueue {
@@ -156,7 +155,7 @@ namespace Moer::Render {
 
         uint                    last_frame     = 0;
         std::atomic<uint64>     executed_frame = 0;
-        VulkanFence*            timeline       = nullptr;
+        VulkanFenceRef          timeline       = nullptr;
         std::mutex              event_mutex;
         bool                    enabled{false};
         std::condition_variable queue_cv;// wake up execute thread from sleeping

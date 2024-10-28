@@ -887,8 +887,8 @@ namespace Moer::Render {
         uint vertex_offset;
         uint vertex_count;
         uint vertex_stride;
-        uint index_offset;
-        uint index_count;
+        uint primitive_offset;
+        uint primitive_count;
 
         ERayTracingGeometryType  type             = RTGT_TRIANGLES;
         ERayTracingGeometryFlags flags            = ERayTracingGeometryFlags::NONE;
@@ -956,6 +956,7 @@ namespace Moer::Render {
     class RaytracingScene : public RHIResource {
     public:
         RaytracingScene() : RHIResource(RRT_RAYTRACING_SCENE) {}
+        virtual ~RaytracingScene() = default;
 
     public:
         virtual RaytracingInstance& AddInstance()                 = 0;
@@ -966,8 +967,8 @@ namespace Moer::Render {
         virtual void RegisterGeometry(RaytracingGeometryRef _geom)   = 0;
         virtual void UnregisterGeometry(RaytracingGeometryRef _geom) = 0;
 
-        RaytracingInstance&       GetInstance(uint _array_idx);
-        const RaytracingInstance& GetInstance(uint _array_idx) const;
+        RENDER_API RaytracingInstance&       GetInstance(uint _array_idx);
+        RENDER_API const RaytracingInstance& GetInstance(uint _array_idx) const;
 
     protected:
         Array<RaytracingInstance> instances;
@@ -2950,6 +2951,11 @@ namespace Moer::Render {
         uint64 state_flags;
         uint64 pipeline_flags;
     };
+
+    class PipelineState : public RHIResource {
+    public:
+        PipelineState() : RHIResource(RRT_PIPELINE_STATE) {}
+    };
     struct PipelineHandle {
         uint64                     handle = 0;
         Array<ParamInfoFlags>      binding_infos;
@@ -3008,6 +3014,7 @@ namespace Moer::Render {
         SDA_Sampler,
         SDA_Constant,
         SDA_BindlessArray,
+        SDA_TLAS,
         SDA_Num
     };
 

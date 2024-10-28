@@ -129,9 +129,10 @@ namespace Moer::Render {
                 break;
             }
             case EVkInternalBufferUsage::Scratch: {
-                usage     = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-                flags     = VMA_ALLOCATION_CREATE_STRATEGY_BEST_FIT_BIT;
-                mem_usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+                usage         = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+                flags         = VMA_ALLOCATION_CREATE_STRATEGY_BEST_FIT_BIT;
+                mem_usage     = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+                devce_address = true;
                 break;
             }
             case EVkInternalBufferUsage::ShaderBuffer: {
@@ -164,6 +165,8 @@ namespace Moer::Render {
         VK_CHECK_RESULT(vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_info, &alloc_info, &buffer_alloc.buffer, &buffer_alloc.alloc, nullptr));
         VulkanBuffer* vk_buffer = MoerNew(VulkanBuffer)(info, *m_device, buffer_alloc.buffer, buffer_alloc.alloc, false, devce_address);
 
+        static constexpr std::string_view usage_str[] = {"Upload", "Readback", "Scratch", "ShaderBuffer"};
+        vk_buffer->SetName(usage_str[static_cast<uint>(_usage)]);
         return reinterpret_cast<uint64>(vk_buffer);
     }
 
@@ -177,7 +180,9 @@ namespace Moer::Render {
     }
 
     uint64 VulkanAllocator::ScratchAllocator::Allocate(uint64 _size) {
-        return allocator->Allocate(_size, EVkInternalBufferUsage::Scratch);
+        uint64 handle = allocator->Allocate(_size, EVkInternalBufferUsage::Scratch);
+        allocated_buffers.push_back(handle);
+        return handle;
     }
 
     BufferView VulkanAllocator::AllocateScratch(uint64 _size) {
@@ -262,8 +267,9 @@ namespace Moer::Render {
     VulkanAllocator::ShaderBufferAllocator::ShaderBufferAllocator(VulkanDevice* _device, VkTmpBufferAllocator* _allocator) : VulkanDeviceObject(_device), allocator(_allocator) {}
 
     uint64 VulkanAllocator::ShaderBufferAllocator::Allocate(uint64 _size) {
-
-        return allocator->Allocate(_size, EVkInternalBufferUsage::ShaderBuffer);
+        uint64 handle = allocator->Allocate(_size, EVkInternalBufferUsage::ShaderBuffer);
+        allocated_buffers.push_back(handle);
+        return handle;
     }
 
     void VulkanAllocator::ShaderBufferAllocator::Deallocate(uint64 _handle) {
@@ -291,9 +297,12 @@ namespace Moer::Render {
             .queueFamilyIndex = m_device->GetQueueFamilyIndex(queue_type)};
 
         VK_CHECK_RESULT(vkCreateCommandPool(_device->GetDevice(), &pool_info, nullptr, &command_pool));
+    }
 
-        if (!command_list.has_value()) {
-            command_list.emplace(this, *m_device);
+    VulkanCmdAllocator::~VulkanCmdAllocator() {
+        if (command_pool != VK_NULL_HANDLE) {
+            vkDestroyCommandPool(m_device->GetDevice(), command_pool, nullptr);
+            command_pool = VK_NULL_HANDLE;
         }
     }
 }// namespace Moer::Render

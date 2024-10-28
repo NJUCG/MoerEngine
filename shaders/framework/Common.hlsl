@@ -1,5 +1,8 @@
 #ifndef FRAMEWORK_COMMON_HLSL
 #define FRAMEWORK_COMMON_HLSL
+
+#define FP16_MAX                            65504.0
+#define INF                                 1e5
 struct CameraData {
   float4x4 view;
   float4x4 view_proj;

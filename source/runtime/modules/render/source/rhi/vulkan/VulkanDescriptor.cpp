@@ -3,6 +3,7 @@
 #include "VulkanDescriptor.h"
 #include "VulkanPipelineResourceCache.h"
 #include "VulkanDevice.h"
+#include "VulkanRHIResource.h"
 #include "VulkanUtil.h"
 
 #include "misc/MacroUtils.h"
@@ -436,11 +437,13 @@ namespace Moer::Render {
                                                                         buffer_desc_stride(_device.GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize),
                                                                         image_desc_stride(_device.GetOptionalProperties().descriptor_buffer_properties.sampledImageDescriptorSize),
                                                                         texture_desc_offset(_device.GetOptionalProperties().descriptor_buffer_properties.samplerDescriptorSize * VulkanDevice::bindless_sampler_cnt),
+                                                                        accel_desc_stride(_device.GetOptionalProperties().descriptor_buffer_properties.accelerationStructureDescriptorSize),
                                                                         image_offset(0),
                                                                         buffer_offset(0) {
 
         buffer_desc_data.resize(10086 * buffer_desc_stride);
         image_desc_data.resize(10086 * image_desc_stride);
+        accel_desc_data.resize(10086 * accel_desc_stride);
 
         VkBuffer           desc_buffer            = VK_NULL_HANDLE;
         VmaAllocation      desc_buffer_allocation = VK_NULL_HANDLE;
@@ -575,6 +578,35 @@ namespace Moer::Render {
         return m_device->GetSamplerIdx(_sampler) * sample_desc_stride;
     }
 
+    uint VulkanDescriptorHeap::GetAccelDescIdx(VulkanAccelerationStructure* _as) {
+        assert(_as != nullptr && "accel struct is nullptr");
+        if (_as->m_descriptor_idx >= 0) {
+            return _as->m_descriptor_idx * accel_desc_stride;
+        }
+        VkDescriptorGetInfoEXT desc_info{VK_STRUCTURE_TYPE_DESCRIPTOR_GET_INFO_EXT};
+        desc_info.type                       = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+        desc_info.data.accelerationStructure = _as->underlying_buffer->DeviceAddress();
+        uint                        idx      = 0;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (accel_free_list.empty()) {
+            idx = accel_offset / accel_desc_stride;
+            accel_offset += accel_desc_stride;
+        } else {
+            idx = accel_free_list.back();
+            accel_free_list.pop_back();
+        }
+        _as->m_descriptor_idx = idx;
+        vkGetDescriptorEXT(m_device->GetDevice(), &desc_info, accel_desc_stride, accel_desc_data.data() + idx * accel_desc_stride);
+
+        return idx * accel_desc_stride;
+    }
+
+    uint VulkanDescriptorHeap::FreeAccelDescIdx(uint _idx) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        accel_free_list.push_back(_idx);
+        return 0;
+    }
+
     void VulkanDescriptorHeap::BeginPushDescriptors(uint _frame_idx) {
         _frame_idx     = _frame_idx % m_device->cmd_alloc_limits;
         current_offset = ring_buffer_offsets[_frame_idx];
@@ -598,6 +630,11 @@ namespace Moer::Render {
     void VulkanDescriptorHeap::PushSamplerDesc(uint64 _src_offset, uint64 _set_offset) {
         std::lock_guard<std::mutex> lock(m_mutex);
         memcpy(map_ptr + current_offset + _set_offset, image_desc_data.data() + _src_offset, image_desc_stride);
+    }
+
+    void VulkanDescriptorHeap::PushAccelDesc(uint64 _src_offset, uint64 _set_offset) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        memcpy(map_ptr + current_offset + _set_offset, accel_desc_data.data() + _src_offset, accel_desc_stride);
     }
 
     void VulkanDescriptorHeap::IncrementOffset(uint64 _size) {

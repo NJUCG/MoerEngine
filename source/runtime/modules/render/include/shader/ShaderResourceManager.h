@@ -198,7 +198,7 @@ namespace Moer::Render {
             PipelineHandle handle = CreatePipeline(std::move(hash_values), std::move(arg_type_values));
             return std::move(TPipeline(handle));
         };
-        ComputeConstructor(RenderDevice&, std::string_view _path, std::string_view _entry_name);
+        RENDER_API ComputeConstructor(RenderDevice&, std::string_view _path, std::string_view _entry_name);
 
         template<typename TPipeline>
             requires std::is_base_of_v<ComputePipeline, TPipeline>
@@ -214,8 +214,8 @@ namespace Moer::Render {
         }
 
     private:
-        PipelineHandle     CreatePipeline(Array<std::string_view>&& _hash_values, Array<EShaderArgType>&& _arg_type_values);
-        PipelineShaderInfo CompileShaderInfo(Array<std::string_view>&& _hash_values, Array<EShaderArgType>&& _arg_type_values);
+        RENDER_API PipelineHandle CreatePipeline(Array<std::string_view>&& _hash_values, Array<EShaderArgType>&& _arg_type_values);
+        PipelineShaderInfo        CompileShaderInfo(Array<std::string_view>&& _hash_values, Array<EShaderArgType>&& _arg_type_values);
 
         ShaderInfo            shader_info;
         Render::RenderDevice& device;

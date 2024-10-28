@@ -469,6 +469,7 @@ enum ERHIResourceType {
     RRT_SHADER_LIBRARY,
     RRT_PIPELINE_BINARY_DATA_LIBRARY,
     RRT_BINDLESS_ARRAY,
+    RRT_PIPELINE_STATE,
 
     RRT_Num
 };
@@ -637,7 +638,8 @@ namespace Moer::Render {
         INDEX,
         INDIRECT,
         SHADER_RESOURCE,
-        UNORDERED_ACCESS
+        UNORDERED_ACCESS,
+        Num
     };
     //one state a time
     enum class ETextureState : uint32 {
@@ -663,7 +665,7 @@ ENUM_BIT_OP_IMPL(EBufferRuntimeUsageFlags, FLAG)
 
 #pragma endregion
 
-#pragma region [raytracing]
+#pragma region[raytracing]
 
 enum ERayTracingGeometryType : uint8_t {
     RTGT_TRIANGLES,

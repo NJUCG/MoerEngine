@@ -1,5 +1,4 @@
 #include <filesystem>
-#include <vcruntime_string.h>
 #include "Core.h"
 #include "PixelFormat.h"
 #include "config/ConfigManager.h"
@@ -9,44 +8,55 @@
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
-#include "shader/Shader.h"
+#include "scene/Scene.h"
+#include "scene/TransformManager.h"
 #include "shader/ShaderPipeline.h"
 #include "shader/ShaderResourceManager.h"
-#include "log/LogSystem.h"
-#include "RenderThread.h"
-#include "taskgraph/GraphTask.h"
-#include "taskgraph/TaskGraph.h"
 #include "taskgraph/TaskSystem.h"
 #include "window/WindowContext.h"
-#include "imgui.h"
-#include "core/include/Core.h"
+#include "loader/LoaderInterface.h"
+#include "scene/CameraManager.h"
+#include "scene/Material.h"
+#include "scene/RenderableManager.h"
 
 using namespace Moer::Render;
 using namespace Moer;
-class TestTrianglePipeline : public RasterPipeline {
-public:
-    DEFINE_RASTER_PIPELINE_CLASS(TestTrianglePipeline);
-    DEFINE_SHADER_ARGS();
+
+struct RTViewParam {
+
+    Matrix4x4f view2world;
+    Matrix4x4f world2view;
+    float4     frustum;
+    float2     near_far;
+    uint2      rect;
+    float2     inv_rect;
+    float2     jitter;
+    float3     dir;
+    float      orthomode;
 };
 
-struct TestBindlessParam {
-    float4 color;
-    uint   texture_handle;
-};
-class TestTrianglePipelineConstColor : public RasterPipeline {
+class TestInlineRTShader : public ComputePipeline {
 public:
-    DEFINE_RASTER_PIPELINE_CLASS(TestTrianglePipelineConstColor);
-    DEFINE_SHADER_CONSTANT_STRUCT(TestBindlessParam, param);
+    struct Param {
+        uint   instance_buffer_handle;
+        uint   mesh_info_buffer_handle;
+        uint   primitive_buffer_handle;
+        uint   vtx_buffer_handle;
+        uint   global_param_handle;
+        uint2  rect;
+        float2 inv_rect;
+        float2 jitter;
+    };
+    DEFINE_COMPUTE_PIPELINE_CLASS(TestInlineRTShader);
+
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
-    DEFINE_SHADER_TEX(texture);
-    DEFINE_SHADER_SAMPLER(defaultSampler);
-    DEFINE_SHADER_ARGS(defaultSampler, texture, bdls, param);
-};
+    DEFINE_SHADER_TEX(out_normal);
+    DEFINE_SHADER_TEX(out_color);
+    DEFINE_SHADER_TEX(out_position);
+    DEFINE_SHADER_TLAS(tlas);
+    DEFINE_SHADER_CONSTANT_STRUCT(Param, param);
 
-class TestTrianglePipelineBdls : public RasterPipeline {
-public:
-    DEFINE_RASTER_PIPELINE_CLASS(TestTrianglePipelineBdls);
-    DEFINE_SHADER_ARGS();
+    DEFINE_SHADER_ARGS(param, out_normal, out_color, out_position, bdls, tlas);
 };
 
 int main(int argc, const char** argv) {
@@ -76,109 +86,100 @@ int main(int argc, const char** argv) {
     });
     auto*  window_handle = WindowContext::GetMainWindow();
 
-    SwapchainCreateInfo sc_info{.window_handle = (uintptr_t)window_handle, .size = {resolution.x, resolution.y}, .back_buffer_sz = 2, .preferred_format = PF_R8G8B8A8_SRGB};
+    SwapchainCreateInfo sc_info{.window_handle = (uintptr_t)window_handle, .size = {resolution.x, resolution.y}, .back_buffer_sz = 3, .preferred_format = PF_R8G8B8A8_SRGB};
     auto                sc             = device.CreateSwapchain(sc_info);
     BindlessArrayRef    bindless_array = device.CreateBindlessArray();
-    auto&               cmd_queue      = device.GetCommandQueue(EQueueType::Graphics);
-    auto&               copy_queue     = device.GetCommandQueue(EQueueType::Copy);
+    auto&               gfx_queue      = device.GetCommandQueue(EQueueType::Graphics);
+    auto&               copy_queue     = device.GetCopyQueue();
 
-    Array<uint> data(1024);
-    for (uint i = 0; i < 1024; ++i) {
-        data[i] = i;
-    }
+    Scene g_scene{};
+    Resource::LoaderInterface::LoadSceneFromFileAsync(ConfigManager::GetInstance().GetScenePath(), &g_scene);
+    OnScopeExit([&] {
+        Scene::ResetAsyncLoadInfo();
+    });
+    FenceRef copy_timeline = device.CreateFence();
 
-    FenceRef  copy_timeline     = device.CreateFence();
-    BufferRef copy_queue_buffer = device.CreateBuffer<uint>(1024, EBufferUsageFlags::UNORDERED_ACCESS);
-    {
-        CommandList copy_cmd_list;
-        copy_cmd_list.CopyFrom(std::span<byte>((byte*)data.data(), data.size() * sizeof(uint)), copy_queue_buffer->GetView());
-        copy_queue.Execute(copy_cmd_list.Submit().Signal(copy_timeline, 1));
-    }
     CommandList cmd_list;
-    auto        buffer = device.CreateBuffer<uint>(1024, EBufferUsageFlags::UNORDERED_ACCESS);
-
-    Array<uint> dst_data(1024);
-    cmd_list.CopyFrom(copy_queue_buffer->GetView(), buffer->GetView());
-    cmd_list.CopyFrom(buffer->GetView(), std::span<byte>((byte*)dst_data.data(), dst_data.size() * sizeof(uint)));
-    cmd_queue.Execute(cmd_list.Submit().Wait(copy_timeline, 1));
-    cmd_queue.Sync();
-
-    ubyte*   pixels;
-    int      width, height;
-    uint     alignment = 4;
-    ImGuiIO& io        = ImGui::GetIO();
-    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
-    uint32_t upload_pitch = (width * 4 + alignment - 1u) & ~(alignment - 1u);
-    uint32_t upload_size  = height * upload_pitch;
 
     TextureRef output = device.CreateTexture(
         Extent2D(resolution.x, resolution.y),
         PF_R8G8B8A8_SRGB,
         ETextureUsageFlags::COLOR_ATTACHMENT);
-    cmd_queue.Execute(cmd_list.Submit());
-    cmd_queue.Sync();
+    gfx_queue.Execute(cmd_list.Submit());
+    gfx_queue.Sync();
 
     struct Vertex {
         float3 pos;
+        float3 normal;
+        float3 tangent;
         float2 uv;
     };
-    Vertex vertices[] = {
-        {{0.0f, -0.5f, 0.0f}, {0.5f, 1.0f}},
-        {{-0.5f, 0.5f, 0.0f}, {1.0f, 0.0f}},
-        {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f}},
-    };
-    uint    indices[] = {0, 1, 2};
-    float4  color_red = {1, 1, 1, 1};
-    Sampler sampler(SF_LINEAR, SAM_REPEAT);
 
-    auto vertex_buffer = device.CreateBuffer<float>(3 * sizeof(Vertex) / sizeof(float), EBufferUsageFlags::VERTEX_BUFFER);
-    auto index_buffer  = device.CreateBuffer<uint>(3, EBufferUsageFlags::INDEX_BUFFER);
-    cmd_list.CopyFrom(std::span<byte>((byte*)vertices, sizeof(vertices)), vertex_buffer->GetView());
-    cmd_list.CopyFrom(std::span<byte>((byte*)indices, sizeof(indices)), index_buffer->GetView());
-    TextureRef red_tex = device.CreateTexture(
-        Extent2D(1, 1),
-        PF_R8G8B8A8_SRGB,
-        ETextureUsageFlags::SAMPLED);
+    RTViewParam rt_view_param{};
 
-    byte red_data[4] = {byte(255), byte(0), byte(0), byte(255)};
-    cmd_list.CopyFrom(std::span<byte>((byte*)&red_data, sizeof(red_data)), red_tex);
-    uint bdls_tex_handle_red = bindless_array->AllocateTexture(red_tex, sampler);
+    BufferRef rt_view_param_buffer = device.CreateBuffer<byte>(sizeof(RTViewParam) * 1, EBufferUsageFlags::UNORDERED_ACCESS);
+    rt_view_param_buffer->SetName("rt_view_param_buffer");
+    // RaytracingGeometryRef blas = device.CreateRaytracingGeometry(rt_geo_info);
+    // cmd_list.BuildAccelerationStructures({{blas, ERaytracingBuildMode::BUILD}});
 
-    cmd_list.UpdateBindlessArray(bindless_array);
-    cmd_queue.Execute(cmd_list.Submit());
-    cmd_queue.Sync();
+    RaytracingSceneRef rt_scene  = device.CreateRaytracingScene();
+    TestInlineRTShader rt_shader = manager.Compute<TestInlineRTShader>("hwrt/InlineRayTracing.hlsl");
+    // RaytracingMaterial  mat{};
+    // RaytracingInstance& rt_instance = rt_scene->AddInstance();
+    // rt_instance.geom                = blas;
+    // rt_instance.transform           = Matrix3x4f(Matrix4x4f::Identity().r0, Matrix4x4f::Identity().r1, Matrix4x4f::Identity().r2);
+    // rt_instance.flag.need_create    = true;
+    // rt_instance.flag.need_update    = true;
+    // rt_instance.material_ref        = mat;
 
-    VertexBuffer vb(vertex_buffer, 0);
-    IndexBuffer  ib(index_buffer->GetView(), EIndexElementType::IET_UINT32);
+    // rt_instance.visible_mask = RTVM_ALL;
 
-    RaytracingGeometryInfo rt_geo_info{};
-    rt_geo_info.build_flags      = ERayTracingAccelerationStructureBuildFlags::PREFER_FAST_TRACE;
-    rt_geo_info.vertex_format    = PF_R32G32B32_SFLOAT;
-    rt_geo_info.vertex_buffer    = vertex_buffer;
-    rt_geo_info.index_buffer     = index_buffer;
-    rt_geo_info.index_type       = IET_UINT32;
-    rt_geo_info.max_vertex_count = vertex_buffer->GetByteSize() / sizeof(Vertex);
-    rt_geo_info.segments.emplace_back(0, 3, sizeof(Vertex), 0, 1);
+    bool   first_load = true;
+    uint   instance_buffer_handle;
+    uint   material_buffer_idx;
+    uint64 last_io_change_timeline = 0;
+    uint   view_buffer_handle      = 0;
+    auto   copy_queue_timeline     = copy_queue.GetFenceHandle();
 
-    RaytracingGeometryRef blas = device.CreateRaytracingGeometry(rt_geo_info);
-    cmd_list.BuildAccelerationStructures({{blas, ERaytracingBuildMode::BUILD}});
+    //gbuffer bdls handle
+    uint bdls_tex_handle_uv      = 0;
+    uint bdls_tex_handle_normal  = 0;
+    uint bdls_tex_handle_vbuffer = 0;
+    uint bdls_tex_handle_depth   = 0;
 
-    RaytracingSceneRef scene = device.CreateRaytracingScene();
+    uint                         rt_vtx_handle      = 0;
+    uint                         rt_prim_handle     = 0;
+    uint                         rt_instance_handle = 0;
+    Array<RaytracingGeometryRef> rt_geometries;
 
-    RaytracingMaterial  mat{};
-    RaytracingInstance& rt_instance = scene->AddInstance();
-    rt_instance.geom                = blas;
-    rt_instance.transform           = Matrix3x4f(Matrix4x4f::Identity().r0, Matrix4x4f::Identity().r1, Matrix4x4f::Identity().r2);
-    rt_instance.flag.need_create    = true;
-    rt_instance.flag.need_update    = true;
-    rt_instance.material_ref        = mat;
+    auto   timeline = device.CreateFence();
+    uint64 time     = 0ull;
 
-    rt_instance.visible_mask = RTVM_ALL;
+    TextureRef out_normal = device.CreateTexture(
+        Extent2D(resolution.x, resolution.y),
+        PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+
+    TextureRef out_color = device.CreateTexture(
+        Extent2D(resolution.x, resolution.y),
+        PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+
+    TextureRef out_position = device.CreateTexture(
+        Extent2D(resolution.x, resolution.y),
+        PF_R32G32B32A32_SFLOAT,
+        ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+
+    out_normal->SetName("out_normal");
+    out_color->SetName("out_color");
+    out_position->SetName("out_position");
 
     while (WindowContext::ShouldClose(window_handle) == false) {
         WindowContext::Tick();
         int w_width, w_height;
-
+        if (time >= 3) {
+            timeline->Wait(time - 2);
+        }
         WindowContext::GetWindowSize(WindowContext::GetMainWindow(), &w_width, &w_height);
         if (w_width == 0 || w_height == 0) {
             std::this_thread::yield();
@@ -191,18 +192,130 @@ int main(int argc, const char** argv) {
                 Extent2D(resolution.x, resolution.y),
                 PF_R8G8B8A8_SRGB,
                 ETextureUsageFlags::COLOR_ATTACHMENT);
-            cmd_queue.Sync();
+            gfx_queue.Sync();
             sc_info.size = {resolution.x, resolution.y};
             sc->Recreate(sc_info);
-        }
-        TestBindlessParam param;
-        param.color          = color_red;
-        param.texture_handle = bdls_tex_handle_red;
 
-        scene->MarkModified(0);
-        cmd_list.UpdateRaytracingScene(scene);
-        cmd_queue.Execute(cmd_list.Submit());
-        cmd_queue.Present(sc, output);
+            out_position = device.CreateTexture(
+                Extent2D(resolution.x, resolution.y),
+                PF_R32G32B32A32_SFLOAT,
+                ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+
+            out_color = device.CreateTexture(
+                Extent2D(resolution.x, resolution.y),
+                PF_R8G8B8A8_UNORM,
+                ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+
+            out_normal = device.CreateTexture(
+                Extent2D(resolution.x, resolution.y),
+                PF_R8G8B8A8_UNORM,
+                ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+
+            out_normal->SetName("out_normal");
+            out_color->SetName("out_color");
+            out_position->SetName("out_position");
+        }
+
+        if (Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady()) {
+            if (first_load) {
+                instance_buffer_handle = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::InstanceInfo)->GetView());
+                material_buffer_idx    = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::MaterialInfo)->GetView());
+                rt_vtx_handle          = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::RTVertex)->GetView());
+                rt_prim_handle         = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::RTPrimitive)->GetView());
+                rt_instance_handle     = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::RTInstance)->GetView());
+                view_buffer_handle     = bindless_array->AllocateBuffer(rt_view_param_buffer->GetView());
+                first_load             = false;
+
+                cmd_list.UpdateBindlessArray(bindless_array);
+                last_io_change_timeline = copy_queue_timeline->GetValue();
+                // gfx_queue.Wait({uint64(copy_queue_timeline.Get()), copy_timeline->GetValue()});
+                // gfx_queue.Sync();
+
+                rt_geometries.reserve(g_scene.GetEntities().size());
+                Array<AccelerationStructureBuildParam> build_params;
+                build_params.reserve(g_scene.GetEntities().size());
+                auto vertex_buffer = g_scene.GetBuffer(EGpuSceneResource::RTVertex);
+
+                auto index_buffer = g_scene.GetBuffer(EGpuSceneResource::RTPrimitive);
+                g_scene.ForEach([&](Entity _entity) {
+                    auto&                  mesh = RenderableManager::Get().GetRTMeshInfo(_entity);
+                    RaytracingGeometryInfo rt_geo_info{};
+                    rt_geo_info.build_flags      = ERayTracingAccelerationStructureBuildFlags::PREFER_FAST_TRACE;
+                    rt_geo_info.vertex_format    = PF_R32G32B32_SFLOAT;
+                    rt_geo_info.vertex_buffer    = vertex_buffer;
+                    rt_geo_info.index_buffer     = index_buffer;
+                    rt_geo_info.index_type       = IET_UINT32;
+                    rt_geo_info.max_vertex_count = mesh.vertex_count;
+                    rt_geo_info.primitive_count  = mesh.primitive_count;
+                    rt_geo_info.segments.emplace_back(mesh.vertex_offset, mesh.vertex_count, sizeof(RTVertex), mesh.primitive_offset, mesh.primitive_count);
+
+                    RaytracingGeometryRef blas = device.CreateRaytracingGeometry(rt_geo_info);
+                    rt_geometries.push_back(blas);
+
+                    auto prim = RenderableManager::Get().GetRenderPrimitive(_entity);
+
+                    auto& instance     = rt_scene->AddInstance();
+                    instance.geom      = blas;
+                    instance.transform = TransformManager::Get().Get(_entity).GetMatrix3x4();
+
+                    instance.flag.need_create = true;
+                    instance.custom_index     = instance.instance_id;
+                    instance.visible_mask     = RTVM_ALL;
+                    rt_scene->MarkModified(instance.instance_id);
+                    build_params.push_back({blas, ERaytracingBuildMode::BUILD});
+                });
+
+                cmd_list.BuildAccelerationStructures(std::move(build_params));
+                // cmd_list.UpdateRaytracingScene(rt_scene);
+                gfx_queue.Execute(cmd_list.Submit());
+                gfx_queue.Sync();
+            }
+
+            if (Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady()) {
+
+                for (size_t i = 0; i < g_scene.GetEntities().size(); i++) {
+                    auto& instance = rt_scene->GetInstance(i);
+                    // instance.transform = TransformManager::Get().Get(g_scene.GetEntities()[i]).GetMatrix3x4();
+                    rt_scene->MarkModified(instance.instance_id);
+                }
+                cmd_list.UpdateRaytracingScene(rt_scene);
+            }
+
+            auto camera_entity = g_scene.GetCameras()[0];
+            auto camera        = CameraManager::Get().Get(camera_entity);
+            camera->Tick();
+
+            rt_view_param.view2world = camera->GetViewMatrix();
+            rt_view_param.world2view = Inverse(camera->GetViewMatrix());
+            rt_view_param.frustum    = camera->GetFrustum();
+            rt_view_param.near_far   = float2(camera->GetNearClip(), camera->GetFarClip());
+            rt_view_param.rect       = uint2(resolution.x, resolution.y);
+            rt_view_param.inv_rect   = float2(1.f / resolution.x, 1.f / resolution.y);
+            rt_view_param.jitter     = float2(0, 0);
+            rt_view_param.dir        = camera->GetDirection();
+            rt_view_param.orthomode  = 0;
+
+            cmd_list.CopyFrom(std::span<byte>((byte*)&rt_view_param, sizeof(RTViewParam)), rt_view_param_buffer->GetView());
+            TestInlineRTShader::Param param;
+            param.global_param_handle     = view_buffer_handle;
+            param.instance_buffer_handle  = rt_instance_handle;
+            param.primitive_buffer_handle = rt_prim_handle;
+            param.vtx_buffer_handle       = rt_vtx_handle;
+            param.rect                    = uint2(resolution.x, resolution.y);
+            param.inv_rect                = float2(1.f / resolution.x, 1.f / resolution.y);
+            param.jitter                  = float2(0, 0);
+
+            cmd_list.Compute(rt_shader, param, out_normal, out_color, out_position, bindless_array, rt_scene)
+                .Dispatch(uint3((resolution.x + 15) >> 4, (resolution.y + 15) >> 4, 1), "Primary Ray");
+
+            //copy normal to output
+            cmd_list.CopyFrom(out_normal->GetView(), output->GetView());
+        }
+        // rt_scene->MarkModified(0);
+        // cmd_list.UpdateRaytracingScene(rt_scene);
+        time++;
+        gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time));
+        gfx_queue.Present(sc, output);
     }
-    cmd_queue.Sync();
+    gfx_queue.Sync();
 }

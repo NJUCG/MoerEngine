@@ -2,6 +2,7 @@
 #include "ECS.h"
 #include "Entity.h"
 #include "MaterialInstance.h"
+#include "Scene.h"
 #include "rhi/RHIResource.h"
 #include <memory>
 
@@ -14,6 +15,7 @@ namespace Moer {
             bool                                   culling{false};
             bool                                   cast_shadows{false};
             MeshInfo                               mesh_info{};
+            RTMeshInfo                             rt_mesh_info{};
             MaterialInstanceRef                    material_instance{nullptr};
             Proxy() = default;
         };
@@ -62,6 +64,7 @@ namespace Moer {
         void SetCastShadows(Entity entity, bool castShadows);
         void SetMaterialInstance(Entity entity, MaterialInstanceRef material_instance);
         void SetMeshInfo(Entity entity, const MeshInfo& mesh_info);
+        void SetRTMeshInfo(Entity entity, const RTMeshInfo& rt_mesh_info);
 
         RHIRenderPrimitiveRef        GetRenderPrimitive(Entity entity);
         bool                         GetCulling(Entity entity);
@@ -69,6 +72,7 @@ namespace Moer {
         const Moer::Array<uint32_t>& GetIndexData(Entity entity);
         MaterialInstanceRef          GetMaterialInstance(Entity entity);
         const MeshInfo&              GetMeshInfo(Entity entity);
+        const RTMeshInfo&            GetRTMeshInfo(Entity entity);
 
         static RenderableManager& Get();
 

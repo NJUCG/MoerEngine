@@ -693,7 +693,7 @@ RHIGfxPsoRef VulkanRHIImpl::RHICreateGraphicsPSO(RHIGraphicsPSOCreateInfo&& _ini
 
     vk_pso->CreateGraphicsPipeline(pipeline_create_info);
 
-    return RHIGfxPsoRef(vk_pso);
+    return RHIGfxPsoRef();
 }
 
 RHIComputePsoRef VulkanRHIImpl::RHICreateComputePipelineState(RHIShader* _compute_shader) {
@@ -771,7 +771,7 @@ RHIComputePsoRef VulkanRHIImpl::RHICreateComputePipelineState(RHIShader* _comput
 
     vk_pso->CreateComputePipeline(pipeline_create_info);
 
-    return RHIComputePsoRef(vk_pso);
+    return RHIComputePsoRef();
 }
 
 RHIRTPsoRef VulkanRHIImpl::RHICreateRayTracingPipelineState(const RHIRayTracingPipelineStateInitializer& _init) {
@@ -1026,7 +1026,7 @@ RHIRTPsoRef VulkanRHIImpl::RHICreateRayTracingPipelineState(const RHIRayTracingP
     }
     RHIUnmapBuffer(vk_pso->m_sbt_buffer);
 
-    return RHIRTPsoRef(vk_pso);
+    return RHIRTPsoRef();
 #undef ALIGNUP
 }
 

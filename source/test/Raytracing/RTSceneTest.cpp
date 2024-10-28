@@ -24,34 +24,8 @@
 
 using namespace Moer::Render;
 using namespace Moer;
-class TestTrianglePipeline : public RasterPipeline {
-public:
-    DEFINE_RASTER_PIPELINE_CLASS(TestTrianglePipeline);
-    DEFINE_SHADER_ARGS();
-};
 
-struct TestBindlessParam {
-    float4 color;
-    uint   texture_handle;
-};
-class TestTrianglePipelineConstColor : public RasterPipeline {
-public:
-    DEFINE_RASTER_PIPELINE_CLASS(TestTrianglePipelineConstColor);
-    DEFINE_SHADER_CONSTANT_STRUCT(TestBindlessParam, param);
-    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
-    DEFINE_SHADER_TEX(texture);
-    DEFINE_SHADER_SAMPLER(defaultSampler);
-    DEFINE_SHADER_ARGS(defaultSampler, texture, bdls, param);
-};
-
-class TestTrianglePipelineBdls : public RasterPipeline {
-public:
-    DEFINE_RASTER_PIPELINE_CLASS(TestTrianglePipelineBdls);
-    DEFINE_SHADER_ARGS();
-};
-
-class RaytracingPipeline : public  RTPipeline {
-    
+class RaytracingPipeline : public RTPipeline {
 };
 
 int main(int argc, const char** argv) {
@@ -181,14 +155,13 @@ int main(int argc, const char** argv) {
     // rt_instance.material_ref        = mat;
     //
     // rt_instance.visible_mask = RTVM_ALL;
+    Scene scene{};
+    Resource::LoaderInterface::LoadSceneFromFileAsync(ConfigManager::GetInstance().GetScenePath(), &scene);
 
-    Resource::LoaderInterface::LoadSceneFromFileAsync(ConfigManager::GetInstance().GetScenePath());
-
-    
     while (WindowContext::ShouldClose(window_handle) == false) {
 
         continue;
-        
+
         WindowContext::Tick();
         int w_width, w_height;
 
@@ -208,7 +181,6 @@ int main(int argc, const char** argv) {
             sc_info.size = {resolution.x, resolution.y};
             sc->Recreate(sc_info);
         }
-        TestBindlessParam param;
         // param.color          = color_red;
         // param.texture_handle = bdls_tex_handle_red;
         //

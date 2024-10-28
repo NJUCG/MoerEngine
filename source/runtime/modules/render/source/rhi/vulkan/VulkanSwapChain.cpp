@@ -332,6 +332,7 @@ namespace Moer::Render {
 
         uint image_cnt;
         vkGetSwapchainImagesKHR(device.GetDevice(), handle, &image_cnt, nullptr);
+        max_frames_in_flight       = std::min(max_frames_in_flight, image_cnt);
         bool recreate_fences       = in_flight_fences.size() != max_frames_in_flight;
         bool b_recreate_semaphores = true;
         if (b_recreate) {

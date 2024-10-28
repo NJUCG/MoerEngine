@@ -12,14 +12,14 @@
 namespace Moer {
 namespace Resource {
 
-    using LoadFunction                                                = std::function<UniquePtr<SceneData>(const std::filesystem::path&)>;
-    static Moer::Map<std::string, LoadFunction> SceneLoadFunctionMaps = {{"gltf", Gltf::Parser::LoadSceneFromFile},
-                                                                         {"fbx", Gltf::Parser::LoadSceneFromFile},
-                                                                         {"json", JsonScene::JsonSceneParser::LoadSceneFromFile}};
+    using LoadFunction                                                   = std::function<UniquePtr<SceneData>(const std::filesystem::path&)>;
+    static Moer::Map<std::string, LoadFunction> scene_load_function_maps = {{"gltf", Gltf::Parser::LoadSceneFromFile},
+                                                                            {"fbx", Gltf::Parser::LoadSceneFromFile},
+                                                                            {"json", JsonScene::JsonSceneParser::LoadSceneFromFile}};
 
-    void LoadFromFile(const std::filesystem::path& _file_path, Scene* scene) {
+    void LoadFromFile(const std::filesystem::path& _file_path, Scene* _scene) {
         auto ext = _file_path.string().substr(_file_path.string().find_last_of(".") + 1);
-        if (SceneLoadFunctionMaps.find(ext) == SceneLoadFunctionMaps.end()) {
+        if (scene_load_function_maps.find(ext) == scene_load_function_maps.end()) {
             LOG_ERROR("Unsupported file format: {}", _file_path.extension().string());
             return;
         }
@@ -27,9 +27,9 @@ namespace Resource {
         load_info->b_valid              = true;
         load_info->progress.store(0);
         Scene::RegisterAsyncLoadInfo(load_info);
-        LambdaTask::Dispatch([_file_path, scene, load_info, ext]() {
-            if (auto scene_data = std::move(SceneLoadFunctionMaps[ext](_file_path))) {
-                SceneCache::ConvertToScene(*scene_data, scene);
+        LambdaTask::Dispatch([_file_path, _scene, load_info, ext]() {
+            if (auto scene_data = std::move(scene_load_function_maps[ext](_file_path))) {
+                SceneCache::ConvertToScene(*scene_data, _scene, true);
                 load_info->progress.store(1);
             }
         });

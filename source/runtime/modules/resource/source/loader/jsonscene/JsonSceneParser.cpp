@@ -13,7 +13,7 @@
 #include "scene/Material.h"
 #include "scene/MaterialInstance.h"
 #include "../io/ImageIO.h"
-#include "loader/jsonScene/CubeQuadPrimitive.h"
+#include "loader/jsonscene/CubeQuadPrimitive.h"
 #include <fstream>
 #include <RenderThread.h>
 using Json = nlohmann::json;
@@ -142,9 +142,9 @@ namespace Moer::Resource::JsonScene {
 
     private:
         // This function will set both paths.
-        void SetPaths(const Path& abs_json_path) {
-            this->abs_json_path  = abs_json_path;
-            abs_working_dir_path = abs_json_path.parent_path();
+        void SetPaths(const Path& _abs_json_path) {
+            this->abs_json_path  = _abs_json_path;
+            abs_working_dir_path = _abs_json_path.parent_path();
         }
         Path abs_json_path, abs_working_dir_path;
     };
@@ -579,7 +579,7 @@ namespace Moer::Resource::JsonScene {
         }
     }
 
-    void Moer::Resource::JsonScene::JsonSceneParser::Impl::LoadNullMaterial(ExtendedSceneData& dst, const Json& material_json) {
+    void JsonSceneParser::Impl::LoadNullMaterial(ExtendedSceneData& dst, const Json& material_json) {
         if (!material_json.contains("name")) {
             LOG_ERROR("Invalid material format: Missing 'name' for a conductor material.");
             return;
@@ -597,7 +597,7 @@ namespace Moer::Resource::JsonScene {
         mi->SetParameter("ao", 1.0f);
     }
 
-    void Resource::JsonScene::JsonSceneParser::Impl::LoadTextureIntoMaterial(ExtendedSceneData& dst, const Path& abs_texture_path, MaterialInstanceRef& mat, const std::string& param_name) {
+    void JsonSceneParser::Impl::LoadTextureIntoMaterial(ExtendedSceneData& dst, const Path& abs_texture_path, MaterialInstanceRef& mat, const std::string& param_name) {
         // get a string used as the key in the texture map.
         // Using abs_texture_path as the key is also ok, but it is longer.
         std::string texture_key = (abs_texture_path.parent_path().filename() / abs_texture_path.filename()).string();
@@ -651,7 +651,7 @@ namespace Moer::Resource::JsonScene {
         return Quaternion(w, x, y, z);
     }
 
-    Transform Moer::Resource::JsonScene::GetTransform(const Json& json) {
+    Transform GetTransform(const Json& json) {
         Vector3f position(0.f, 0.f, 0.f), scale(1.f, 1.f, 1.f), rotation(0.f, 0.f, 0.f);
         position = json.value("position", position);
         scale    = json.value("scale", scale);
@@ -661,7 +661,7 @@ namespace Moer::Resource::JsonScene {
         return Transform(position, scale, q);
     }
 
-    std::tuple<Vector4f, Vector4f> Moer::Resource::JsonScene::GetTransformedAABB(MeshInfo& info, Matrix4x4f& model_2_world) {
+    std::tuple<Vector4f, Vector4f> GetTransformedAABB(MeshInfo& info, Matrix4x4f& model_2_world) {
         Vector4f corner[8];
         corner[0]    = model_2_world * Vector4f(info.center + info.extent, 1.0f);
         corner[1]    = model_2_world * Vector4f(info.center - Vector3f(info.extent.x, info.extent.y, -info.extent.z), 1.0f);
@@ -680,7 +680,7 @@ namespace Moer::Resource::JsonScene {
         return std::tuple<Vector4f, Vector4f>(new_min, new_max);
     }
 
-    void Moer::Resource::JsonScene::JsonSceneParser::Impl::LoadQuad(ExtendedSceneData& dst) {
+    void JsonSceneParser::Impl::LoadQuad(ExtendedSceneData& dst) {
         Assimp::Importer importer;
         importer.SetPropertyInteger(AI_CONFIG_PP_SBP_REMOVE, aiPrimitiveType_LINE | aiPrimitiveType_POINT);
         // clang-format off
@@ -718,13 +718,13 @@ namespace Moer::Resource::JsonScene {
         ProcessMesh(dst, mesh_scene);
     }
 
-    Transform Moer::Resource::JsonScene::GetQuadTransform(const Json& quad_json) {
+    Transform GetQuadTransform(const Json& _quad_json) {
         // Because in loadQuad we actually only load a square plane
         // so we need the Transfrom that turn a square into the actual quad
         Vector3f base(0.f, 0.f, 0.f), e0(1.f, 0.f, 0.f), e1(0.f, 0.f, 1.f);
-        base = quad_json.value("base", base);
-        e0   = quad_json.value("edge0", e0);
-        e1   = quad_json.value("edge1", e1);
+        base = _quad_json.value("base", base);
+        e0   = _quad_json.value("edge0", e0);
+        e1   = _quad_json.value("edge1", e1);
         Vector4f r0(e0.x, 0.f, e1.x, base.x - e0.x * 0.5 - e1.x * 0.5);
         Vector4f r1(e0.y, 1.f, e1.y, base.y - e0.y * 0.5 - e1.y * 0.5);
         Vector4f r2(e0.z, 0.f, e1.z, base.z - e0.z * 0.5 - e1.z * 0.5);

@@ -20,6 +20,8 @@ struct IndicePair {
     return;
   }
   IndicePair pair = indices[gid];
+  // printf("src %d dst %d stride %d component_cnt %d\n", pair.src, pair.dst,
+  //        args.stride, args.component_cnt);
 
   [branch] if (args.stride == 1) {
     uint src_offset = pair.src * 4;

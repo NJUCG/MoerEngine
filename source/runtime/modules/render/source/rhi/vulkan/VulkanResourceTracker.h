@@ -56,6 +56,8 @@ namespace Moer::Render {
             VkAccessFlagBits2        _access,
             VkPipelineStageFlagBits2 _stage);
 
+        void FlushSrcState(VulkanBuffer* _buffer, VkAccessFlagBits2 _access, VkPipelineStageFlagBits2 _stage);
+
         void RecordState(
             VulkanBuffer* _texture,
             std::tuple<VkAccessFlags2, VkPipelineStageFlags2>&&);

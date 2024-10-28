@@ -479,20 +479,20 @@ namespace Moer::Render {
     }
 
     void VulkanRHIGraphicsCommandList::SetPipelineState(RHIGfxPso* _graphics_pso) {
-        auto* vk_pso = static_cast<VulkanRHIGraphicsPipelineState*>(_graphics_pso);
-        VK_CHECK_NULLPTR(vk_pso, "SetPipelineState: graphics pipeline state is nullptr!", return);
-        vkCmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk_pso->GetHandle());
-        m_current_pipeline_state = vk_pso;
-        current_pso              = vk_pso;
+        // auto* vk_pso = static_cast<VulkanRHIGraphicsPipelineState*>(_graphics_pso);
+        // VK_CHECK_NULLPTR(vk_pso, "SetPipelineState: graphics pipeline state is nullptr!", return);
+        // vkCmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk_pso->GetHandle());
+        // m_current_pipeline_state = vk_pso;
+        // current_pso              = vk_pso;
     }
 
     // MARK... current_pipeline_state_design
     void VulkanRHIGraphicsCommandList::SetPipelineState(RHIComputePso* _compute_pso) {
-        auto* vk_pso = static_cast<VulkanRHIComputePipelineState*>(_compute_pso);
-        VK_CHECK_NULLPTR(vk_pso, "SetPipelineState: compute pipeline state is nullptr!", return);
+        // auto* vk_pso = static_cast<VulkanRHIComputePipelineState*>(_compute_pso);
+        // VK_CHECK_NULLPTR(vk_pso, "SetPipelineState: compute pipeline state is nullptr!", return);
 
-        vkCmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, vk_pso->GetHandle());
-        current_pso = vk_pso;
+        // vkCmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, vk_pso->GetHandle());
+        // current_pso = vk_pso;
     }
 
     void VulkanRHIGraphicsCommandList::BeginRecording() {
@@ -513,8 +513,8 @@ namespace Moer::Render {
     void VulkanRHIGraphicsCommandList::ClearState(RHIGfxPso* _graphics_pso) {
         // MARK...
         // need to implemented
-        auto* vk_pipelie_state = static_cast<const VulkanRHIGraphicsPipelineState*>(_graphics_pso);
-        VK_CHECK_NULLPTR(vk_pipelie_state, "ClearState: graphics pipeline state is nullptr!", return);
+        // auto* vk_pipelie_state = static_cast<const VulkanRHIGraphicsPipelineState*>(_graphics_pso);
+        // VK_CHECK_NULLPTR(vk_pipelie_state, "ClearState: graphics pipeline state is nullptr!", return);
     }
 
     void VulkanRHIGraphicsCommandList::DrawIndexedInstanced(
@@ -894,11 +894,11 @@ namespace Moer::Render {
     VulkanRHIComputeCommandList::~VulkanRHIComputeCommandList() {
     }
     void VulkanRHIComputeCommandList::SetPipelineState(RHIComputePso* _compute_pso) {
-        auto* vk_pso = static_cast<VulkanRHIComputePipelineState*>(_compute_pso);
-        VK_CHECK_NULLPTR(vk_pso, "SetPipelineState: compute pipeline state is nullptr!", return);
+        // auto* vk_pso = static_cast<VulkanRHIComputePipelineState*>(_compute_pso);
+        // VK_CHECK_NULLPTR(vk_pso, "SetPipelineState: compute pipeline state is nullptr!", return);
 
-        vkCmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, vk_pso->GetHandle());
-        m_current_pipeline_state = vk_pso;
+        // vkCmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, vk_pso->GetHandle());
+        // m_current_pipeline_state = vk_pso;
     }
     void VulkanRHIComputeCommandList::BeginRecording() {
         VulkanRHICommandListBase::Begin();
@@ -988,11 +988,11 @@ namespace Moer::Render {
     VulkanRHIRayTracingCommandList::~VulkanRHIRayTracingCommandList() {
     }
     void VulkanRHIRayTracingCommandList::SetPipelineState(RHIRTPso* _raytracing_pso) {
-        auto* vk_pso = static_cast<VulkanRHIRayTracingPipelineState*>(_raytracing_pso);
-        VK_CHECK_NULLPTR(vk_pso, "SetPipelineState: raytracing pipeline state is nullptr!", return);
+        // auto* vk_pso = static_cast<VulkanRHIRayTracingPipelineState*>(_raytracing_pso);
+        // VK_CHECK_NULLPTR(vk_pso, "SetPipelineState: raytracing pipeline state is nullptr!", return);
 
-        vkCmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, vk_pso->GetHandle());
-        m_current_pipeline_state = vk_pso;
+        // vkCmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, vk_pso->GetHandle());
+        // m_current_pipeline_state = vk_pso;
     }
     void VulkanRHIRayTracingCommandList::BeginRecording() {
         VulkanRHICommandListBase::Begin();
@@ -1180,6 +1180,10 @@ namespace Moer::Render {
             .level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
             .commandBufferCount = 1};
         VK_CHECK_RESULT(vkAllocateCommandBuffers(device.GetDevice(), &command_buffer_info, &command_buffer));
+    }
+
+    VulkanCmdList::~VulkanCmdList() {
+        vkFreeCommandBuffers(device.GetDevice(), allocator->GetHandle(), 1, &command_buffer);
     }
     void VulkanCmdList::Begin() {
         VkCommandBufferBeginInfo begin_info = {
@@ -1450,6 +1454,9 @@ namespace Moer::Render {
                                     break;
                                 }
                                 case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR: {
+                                    VulkanAccelerationStructure* as         = ResourceCast(std::get<RaytracingSceneRef>(_args[set_info.param_idx]).Get())->tlas;
+                                    uint64                       src_handle = descriptor_heap.GetAccelDescIdx(as);
+                                    descriptor_heap.PushAccelDesc(src_handle, _binder.binding_infos[set_info.info_idx].offset);
                                     break;
                                 }
                                 default: {

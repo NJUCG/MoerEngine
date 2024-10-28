@@ -2,9 +2,12 @@
 #include "RHICmdReorderer.h"
 #include "VulkanDescriptor.h"
 #include "VulkanDevice.h"
+#include "VulkanRHIResource.h"
 #include "io/IOCommon.h"
 #include "misc/STL.h"
+#include "misc/Timer.h"
 #include "rhi/RHICommand.h"
+#include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "vulkan/vulkan_core.h"
 #include <memory>
@@ -89,7 +92,13 @@ namespace Moer::Render {
         VulkanAllocator& allocator;
 
         VkCmdPreprocessor(VkTracker& _tracker, VulkanAllocator& _allocator, FunctionTable _funcs) : tracker(_tracker), allocator(_allocator), m_funcs(_funcs) {}
-        void HandleBindless(BindlessArrayRef _bindless_array) {
+        void HandleBindless(BindlessArrayRef _bindless_array, VkPipelineStageFlagBits2 _pipeline_stages) {
+            EPassType pass_type = EPassType::Graphics;
+            if (_pipeline_stages == VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT) {
+                pass_type = EPassType::Compute;
+            } else if (_pipeline_stages == VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR) {
+                pass_type = EPassType::Raytracing;
+            }
             if (!_bindless_array) {
                 return;
             }
@@ -103,7 +112,7 @@ namespace Moer::Render {
             }
             if (!write_map_textures.empty()) {
                 for (auto&& i : write_map_textures) {
-                    tracker.RecordState(i, tracker.ReadTexture(i, ETextureState::SAMPLE, EPassType::Graphics));
+                    tracker.RecordState(i, tracker.ReadTexture(i, ETextureState::SAMPLE, pass_type));
                 }
             }
             Moer::Array<VulkanBuffer*> write_map_buffers;
@@ -114,7 +123,7 @@ namespace Moer::Render {
             }
             if (!write_map_buffers.empty()) {
                 for (auto&& i : write_map_buffers) {
-                    tracker.RecordState(i, tracker.ReadBuffer(i, EBufferState::SHADER_RESOURCE, EPassType::Graphics));
+                    tracker.RecordState(i, VK_ACCESS_2_SHADER_READ_BIT, _pipeline_stages);
                 }
             }
         }
@@ -178,7 +187,10 @@ namespace Moer::Render {
                     auto* vk_texture = reinterpret_cast<VulkanTexture*>(_arg.GetTexture());
                     tracker.RecordState(vk_texture, GetTextureAccess(_flag), GetTextureLayout(_flag), _pipelines, _arg.mip_level, _arg.num_mips);
                 } else if constexpr (std::is_same_v<T, BindlessArrayRef>) {
-                    HandleBindless(_arg);
+                    HandleBindless(_arg, _pipelines);
+                } else if constexpr (std::is_same_v<T, RaytracingSceneRef>) {
+                    VulkanRaytracingScene* vk_as = ResourceCast(_arg.Get());
+                    tracker.RecordState(vk_as->tlas->underlying_buffer, VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR, _pipelines);
                 }
             },
                        _arg);
@@ -283,7 +295,7 @@ namespace Moer::Render {
                        _cmd->Param());
             // _cmd->Pipeline().binding_infos;
             auto func = [&](const TArg& _arg, ParamInfoFlags _flag) {
-                VisitArgs(_arg, _flag.state_flags, _flag.state_flags);
+                VisitArgs(_arg, _flag.state_flags, _flag.pipeline_flags);
             };
             _cmd->IterateArgs(func);
         }
@@ -557,9 +569,9 @@ namespace Moer::Render {
 
             cmd_list.CopyTexture(src_texture,
                                  dst_texture,
+                                 _cmd.Size(),
                                  _cmd.SrcOffset(),
                                  _cmd.DstOffset(),
-                                 _cmd.Size(),
                                  _cmd.SrcMipLevel(),
                                  _cmd.DstMipLevel());
         }
@@ -592,7 +604,7 @@ namespace Moer::Render {
 
         void Visit(const DispatchCmd& _cmd) {
             static float4 dispatch_color = {0.0f, 0.0f, 1.0f, 1.0f};
-            cmd_list.InsertLabel(_cmd.name, dispatch_color);
+            cmd_list.BeginLabel(_cmd.name, dispatch_color);
             const auto& param = _cmd.Param();
 
             ComputePipeline pso(_cmd.Pipeline());
@@ -866,7 +878,9 @@ namespace Moer::Render {
             dependency.pBufferMemoryBarriers    = &barrier;
 
             vkCmdPipelineBarrier2(cmd_list.GetHandle(), &dependency);
-            tracker.RecordState(instance_buffer, {VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT_KHR});
+            tracker.FlushSrcState(instance_buffer, VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR);
+            // tracker.RecordState(instance_buffer, {VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR});
+
             VkAccelerationStructureBuildGeometryInfoKHR build_info{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
             build_info.dstAccelerationStructure = tlas->handle;
             build_info.type                     = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
@@ -1087,6 +1101,8 @@ namespace Moer::Render {
 
 #pragma region[ VkCommandQueue ]
     WaitEvent VkCommandQueue::Execute(CmdSubmit&& _submit) {
+        Timer timer{};
+        timer.Start();
         auto  allocator_ptr = std::move(GetAllocator());
         auto& vk_allocator  = *allocator_ptr;
         auto& tracker       = vk_allocator.GetTracker();
@@ -1104,6 +1120,10 @@ namespace Moer::Render {
         for (const auto& cmd : _submit.cmds) {
             reorderer.AcceptCmd(cmd.get());
         }
+
+        timer.Stop();
+        // LOG_INFO("Reorderer time {}", timer.ElapsedMilliseconds());
+        timer.Start();
         const auto& cmd_lists = reorderer.m_cmd_lists;
         bool        has_cmd   = !reorderer.m_cmd_lists.empty();
         uint64      last_time = last_frame;
@@ -1152,6 +1172,8 @@ namespace Moer::Render {
                 MoerDelete(resource);
             }
         });
+        timer.Stop();
+        // LOG_INFO("Command Recording time {}", timer.ElapsedMilliseconds());
         if (_submit.cmds.empty()) {
             allocators.Push(allocator_ptr.release());
             std::unique_lock<std::mutex> lock(event_mutex);
@@ -1176,6 +1198,7 @@ namespace Moer::Render {
             }
             return {uint64(timeline), last_time};
         } else {
+            timer.Start();
             auto current_timeline = ++last_frame;
             // LOG_INFO("signal timeline {}", current_timeline);
 
@@ -1198,6 +1221,8 @@ namespace Moer::Render {
                 event_queue.emplace_back(std::move(_submit.callbacks), current_timeline, false);
             }
             queue_cv.notify_one();
+            timer.Stop();
+            // LOG_INFO("Submit time {}", timer.ElapsedMilliseconds());
             return {uint64(timeline), current_timeline};
         }
         return {uint64(timeline), 0ull};
@@ -1395,7 +1420,7 @@ namespace Moer::Render {
         for (auto& allocator : allocs) {
             MoerDelete(allocator);
         }
-        MoerDelete(timeline);
+        timeline = nullptr;
     }
 
     IOWaitEvt VkCopyQueue::Execute(IOSubmission&& _submission) {
@@ -1456,9 +1481,9 @@ namespace Moer::Render {
                 event_queue.emplace_back(std::move(_evt.callbacks), current_timeline, false);
                 queue_cv.notify_one();
             }
-            return {uint64(timeline), current_timeline};
+            return {uint64(timeline.Get()), current_timeline};
         }
-        return {uint64(timeline), current_timeline};
+        return {uint64(timeline.Get()), current_timeline};
     }
 
     void VkCopyQueue::Sync(uint64 _timeline) {

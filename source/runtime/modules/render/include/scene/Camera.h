@@ -3,11 +3,21 @@
 #include "math/Transform.h"
 #include "misc/CountableRef.h"
 #include "RenderAPI.h"
+#include "serialize/Serializer.h"
 #include "window/WindowInput.h"
 
 namespace Moer {
 
     class RENDER_API Camera : public CountableResource {
+        enum {
+            FRUSTUM_LEFT = 0,
+            FRUSTUM_RIGHT,
+            FRUSTUM_BOTTOM,
+            FRUSTUM_TOP,
+            FRUSTUM_NEAR,
+            FRUSTUM_FAR
+        };
+
     public:
         static float sensitivity;
         static float sensitivity_scale;
@@ -36,6 +46,8 @@ namespace Moer {
         float      GetFarClip() const noexcept;
         float      GetTanHalfFov() const noexcept;
         float      GetAspectRatio() const noexcept;
+        Vector4f   GetFrustum() const noexcept;
+        Vector3f   GetDirection() const noexcept;
 
         void MoveForward(float);
         void MoveRight(float);
@@ -49,6 +61,12 @@ namespace Moer {
         void Tick();//update camera per frame
 
         static CountableRef<Camera> CreateDefaultCamera();// Create a default camera for the scene. Usually called in resource loader
+
+        InputStream&  operator>>(InputStream& _stream);
+        OutputStream& operator<<(OutputStream& _stream) const;
+
+    private:
+        void UpdateCalculatedValues();
 
     private:
         Matrix4x4f m_view_matrix;
@@ -74,9 +92,13 @@ namespace Moer {
         Vector3f p_min;
         Vector3f p_max;
 
+        Vector4f m_frustum;
+        Vector4f m_planes[6];
+        Vector3f m_dir;
+
         // bool pitchLock = true;
-        float totalPitch = 0.f;  //limited within (0, 360)
-        float yawReverse = false;//reverse left and right
+        float total_pitch = 0.f;  //limited within (0, 360)
+        float yaw_reverse = false;//reverse left and right
     };
 
     using CameraRef = CountableRef<Camera>;

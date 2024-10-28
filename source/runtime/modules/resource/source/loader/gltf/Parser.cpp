@@ -428,6 +428,25 @@ namespace Moer::Resource::Gltf {
         auto attribute = GetAttribute(gltf_scene->mMeshes[0], stride);
 
         stride *= sizeof(float);
+        Moer::Array<RTVertex>   rt_vertices;
+        Moer::Array<RTMeshInfo> rt_mesh_infos;
+        Moer::Array<uint3>      rt_indices;
+
+        uint rt_vtx_cnt  = 0;
+        uint rt_prim_cnt = 0;
+
+        for (uint32_t i = 0; i < gltf_scene->mNumMeshes; i++) {
+            const auto* mesh = gltf_scene->mMeshes[i];
+            rt_vtx_cnt += mesh->mNumVertices;
+            rt_prim_cnt += mesh->mNumFaces;
+        }
+        rt_vertices.reserve(rt_vtx_cnt);
+        rt_mesh_infos.reserve(gltf_scene->mNumMeshes);
+        rt_indices.reserve(rt_prim_cnt);
+
+        rt_vtx_cnt  = 0;
+        rt_prim_cnt = 0;
+
         m_mesh_infos.resize(gltf_scene->mNumMeshes);
 
         uint32_t vertex_count = 0, index_count = 0, meshlet_count = 0;
@@ -483,6 +502,31 @@ namespace Moer::Resource::Gltf {
             m_vertex_data.insert(m_vertex_data.end(), output.meshlet_vertex_data.begin(), output.meshlet_vertex_data.end());
             m_index_data.insert(m_index_data.end(), output.primitive_indices.begin(), output.primitive_indices.end());
 
+            for (size_t vtx_idx = 0; vtx_idx < mesh->mNumVertices; vtx_idx++) {
+                RTVertex rt_vertex;
+                rt_vertex.position = ToVector3f(mesh->mVertices[vtx_idx]);
+                rt_vertex.normal   = ToVector3f(mesh->mNormals[vtx_idx]);
+                rt_vertex.uv0      = mesh->mTextureCoords[0][vtx_idx].x;
+                rt_vertex.uv1      = mesh->mTextureCoords[0][vtx_idx].y;
+                rt_vertex.tangent  = ToVector3f(mesh->mTangents[vtx_idx]);
+                rt_vertices.emplace_back(std::move(rt_vertex));
+            }
+
+            for (size_t idx_idx = 0; idx_idx < mesh->mNumFaces; idx_idx++) {
+                const auto& face = mesh->mFaces[idx_idx];
+                rt_indices.emplace_back(face.mIndices[0], face.mIndices[1], face.mIndices[2]);
+            }
+
+            RTMeshInfo rt_mesh_info{};
+            rt_mesh_info.primitive_offset = rt_prim_cnt;
+            rt_mesh_info.primitive_count  = mesh->mNumFaces;
+            rt_mesh_info.vertex_offset    = rt_vtx_cnt;
+            rt_mesh_info.vertex_count     = mesh->mNumVertices;
+
+            rt_mesh_infos.emplace_back(std::move(rt_mesh_info));
+            rt_vtx_cnt += mesh->mNumVertices;
+            rt_prim_cnt += mesh->mNumFaces;
+
             vertex_count += output.meshlet_vertex_data.size() / (stride / sizeof(float));
             index_count += output.primitive_indices.size();
             meshlet_count += output.meshlets.size();
@@ -510,14 +554,19 @@ namespace Moer::Resource::Gltf {
         LoadNode(gltf_scene->mRootNode, gltf_scene);
         LoadLights(gltf_scene);
 
-        auto                          instance_id = 0;
-        Moer::Array<InstanceData>     instance_data;
+        auto                      instance_id = 0;
+        Moer::Array<InstanceData> instance_data;
+        Moer::Array<RTInstance>   rt_instances;
+        rt_instances.reserve(m_scene_data->m_prim_infos.size());
+
         Moer::Array<InstanceMeshInfo> instance_mesh_info;
         Moer::Array<uint32_t>         instance_ids;
         // instance_data.reserve(entities.size());
         for (int i = 0; i < m_scene_data->m_prim_infos.size(); i++) {
-            auto transform     = m_scene_data->m_prim_infos[i].transform;
-            auto mesh_info     = m_mesh_infos[m_scene_data->m_prim_infos[i].mesh_id];
+            auto              transform    = m_scene_data->m_prim_infos[i].transform;
+            auto              mesh_info    = m_mesh_infos[m_scene_data->m_prim_infos[i].mesh_id];
+            const RTMeshInfo& rt_mesh_info = rt_mesh_infos[m_scene_data->m_prim_infos[i].mesh_id];
+
             auto model_2_world = transform.GetMatrix4x4();
             //todo material data not correct
             auto scale = transform.AffineDecomposition().scaling;
@@ -542,6 +591,18 @@ namespace Moer::Resource::Gltf {
                 new_min = Min(new_min, corner[i]);
                 new_max = Max(new_max, corner[i]);
             }
+
+            RTInstance rt_instance;
+            rt_instance.overload_m1 = model_2_world.r0;
+            rt_instance.overload_m2 = model_2_world.r1;
+            rt_instance.overload_m3 = model_2_world.r2;
+
+            rt_instance.material_id   = m_scene_data->m_material_instance_indexes[m_scene_data->m_prim_infos[i].material_id];
+            rt_instance.material_type = 0;
+            rt_instance.prim_offset   = rt_mesh_info.primitive_offset;
+            rt_instance.vtx_offset    = rt_mesh_info.vertex_offset;
+
+            rt_instances.push_back(rt_instance);
 
             instance_mesh_info.emplace_back(
                 Vector3f(new_min + new_max) * 0.5f,
@@ -577,6 +638,12 @@ namespace Moer::Resource::Gltf {
         m_scene_data->m_instance_data      = std::move(instance_data);
         m_scene_data->m_instance_mesh_info = std::move(instance_mesh_info);
         m_scene_data->m_instance_id        = std::move(instance_ids);
+
+        m_scene_data->rt_instances  = std::move(rt_instances);
+        m_scene_data->rt_vertices   = std::move(rt_vertices);
+        m_scene_data->rt_prims      = std::move(rt_indices);
+        m_scene_data->rt_mesh_infos = std::move(rt_mesh_infos);
+
         m_scene_data->m_materials          = std::move(m_materials);
         m_scene_data->m_material_instances = std::move(m_material_instances);
         m_scene_data->m_textures           = std::move(m_textures);

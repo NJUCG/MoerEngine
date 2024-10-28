@@ -5,21 +5,21 @@
 
 namespace Moer {
 
-    LightComponentRef LightComponentManager::Get(Entity entity) noexcept {
-        return m_manager[entity];
+    LightComponentRef LightComponentManager::Get(Entity _entity) noexcept {
+        return m_manager[_entity];
     }
 
-    void LightComponentManager::Put(Entity entity, LightComponentRef light) noexcept {
-        m_manager.AddComponent(entity);
-        m_manager[entity] = light;
+    void LightComponentManager::Put(Entity _entity, LightComponentRef _light) noexcept {
+        m_manager.AddComponent(_entity);
+        m_manager[_entity] = _light;
     }
 
-    bool LightComponentManager::HasComponent(Entity entity) const noexcept {
-        return m_manager.HasComponent(entity);
+    bool LightComponentManager::HasComponent(Entity _entity) const noexcept {
+        return m_manager.HasComponent(_entity);
     }
 
-    void LightComponentManager::Destroy(Entity entity) noexcept {
-        m_manager.RemoveComponent(entity);
+    void LightComponentManager::Destroy(Entity _entity) noexcept {
+        m_manager.RemoveComponent(_entity);
     }
 
     LightComponentManager& LightComponentManager::Get() noexcept {
