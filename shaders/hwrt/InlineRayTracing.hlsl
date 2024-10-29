@@ -126,8 +126,8 @@ void main( uint2 pixel_pos : SV_DispatchThreadID )
 
    RTViewParam view = global_params.Load<RTViewParam>(0);
 
-   float3 cam_ray_origion_v = Raytracing::ReconstructViewPosition(uv, view.frustum, view.near_far.x, view.orthomode);
-   float3 cam_ray_origion_w = mul(view.view2world, float4(cam_ray_origion_v, 1.0f)).xyz;
+   float3 cam_ray_origion_v = Raytracing::ReconstructViewPosition(uv, view.frustum, -view.near_far.x, view.orthomode);
+   float3 cam_ray_origion_w = mul(float4(cam_ray_origion_v, 1.0f), view.view2world).xyz;
    float3 cam_ray_dir_w = view.orthomode == 0 ? normalize(mul((float3x3)view.view2world, cam_ray_origion_v)) : -view.dir;
 
     RTHitInfo hit_info = CastRay(cam_ray_origion_w, cam_ray_dir_w, 0.001f, INF, tlas, INSTANCE_FLAG_GEOMETRY_ALL, 0);

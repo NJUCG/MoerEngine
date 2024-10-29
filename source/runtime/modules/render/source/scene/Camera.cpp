@@ -98,20 +98,20 @@ namespace Moer {
     }
 
     Matrix4x4f Camera::GetToWorldMatrix() noexcept {
-        if (m_to_world_dirty) {
-            m_view           = m_rotate * MakeTranslation(-m_position.x, -m_position.y, -m_position.z);//world to camera
-            m_to_world       = Inverse(m_view);
-            m_to_world_dirty = false;
-        }
+        // if (m_to_world_dirty) {
+        //     m_view           = MakeTranslation(-m_position.x, -m_position.y, -m_position.z) * m_rotate;//world to camera
+        //     m_to_world       = Inverse(m_view);
+        //     m_to_world_dirty = false;
+        // }
         return m_to_world;//camera to world
     }
 
     Matrix4x4f Camera::GetViewMatrix() noexcept {
-        if (m_to_world_dirty) {
-            m_view           = m_rotate * MakeTranslation(-m_position.x, -m_position.y, -m_position.z);
-            m_to_world       = Inverse(m_view);
-            m_to_world_dirty = false;
-        }
+        // if (m_to_world_dirty) {
+        //     m_view           = MakeTranslation(-m_position.x, -m_position.y, -m_position.z) * m_rotate;
+        //     m_to_world       = Inverse(m_view);
+        //     m_to_world_dirty = false;
+        // }
         return m_view;//world to camera
     }
     Matrix4x4f Camera::GetRotateMatrix() noexcept {
@@ -178,9 +178,10 @@ namespace Moer {
 
         m_rotate_inv = Transpose(m_rotate);
 
-        m_view = m_rotate * MakeTranslation(-m_position.x, -m_position.y, -m_position.z);
+        m_to_world = MakeTranslation(m_position.x, m_position.y, m_position.z) * m_rotate;
+        m_view     = Inverse(m_to_world);
         //world to cam
-        m_to_world       = Inverse(m_view);
+        // m_to_world       = Inverse(m_view);
         m_to_world_dirty = false;
     }
 
@@ -276,8 +277,11 @@ namespace Moer {
 
     void Camera::UpdateCalculatedValues() {
 
-        m_view     = m_rotate * MakeTranslation(-m_position.x, -m_position.y, -m_position.z);
-        m_to_world = Inverse(m_view);
+        // m_view     = MakeTranslation(-m_position.x, -m_position.y, -m_position.z) * m_rotate;
+        // m_to_world = Inverse(m_view);
+        m_to_world         = MakeTranslation(m_position.x, m_position.y, m_position.z) * m_rotate;
+        m_view             = Inverse(m_to_world);
+        auto test_identity = m_to_world * m_view;
 
         if (m_projection_dirty) {
             m_proj = MakePerspectiveMatrixRH(
@@ -318,13 +322,13 @@ namespace Moer {
         float y1 = m_planes[FRUSTUM_TOP].z / m_planes[FRUSTUM_TOP].y;
 
         m_frustum.x = -x0;
-        m_frustum.y = -y0;
+        m_frustum.y = -y1;
         m_frustum.z = x0 - x1;
-        m_frustum.w = y0 - y1;
+        m_frustum.w = y1 - y0;
 
         //direction
         // m_dir = Normalizef(Vector3f(m_rotate_inv * Vector4f(0.f, 0.f, 1.f, 0.f)));
-        m_dir = Vector3f(0.f, 0.f, 1.f);
+        m_dir = Vector3f(0.f, 0.f, -1.f);
         // LOG_INFO("dir: {} {} {}", m_dir.x, m_dir.y, m_dir.z);
         // auto     test_dir  = Vector2f(0.f, 1.f) * Vector2f(m_frustum.z, m_frustum.w) + Vector2f(m_frustum.x, m_frustum.y);
         // Vector3f test_dir3 = Vector3f(test_dir.x, test_dir.y, 1.f);

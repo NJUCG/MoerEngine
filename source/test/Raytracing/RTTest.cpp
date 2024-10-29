@@ -2,6 +2,7 @@
 #include "Core.h"
 #include "PixelFormat.h"
 #include "config/ConfigManager.h"
+#include "contrib/Open3DGC/o3dgcTimer.h"
 #include "math/Matrix.h"
 #include "misc/Traits.h"
 #include "rhi/RHI.h"
@@ -15,6 +16,7 @@
 #include "taskgraph/TaskSystem.h"
 #include "window/WindowContext.h"
 #include "loader/LoaderInterface.h"
+#include "misc/Timer.h"
 #include "scene/CameraManager.h"
 #include "scene/Material.h"
 #include "scene/RenderableManager.h"
@@ -117,7 +119,7 @@ int main(int argc, const char** argv) {
 
     RTViewParam rt_view_param{};
 
-    BufferRef rt_view_param_buffer = device.CreateBuffer<byte>(sizeof(RTViewParam) * 1, EBufferUsageFlags::UNORDERED_ACCESS);
+    BufferRef rt_view_param_buffer = device.CreateBuffer<Moer::byte>(sizeof(RTViewParam) * 1, EBufferUsageFlags::UNORDERED_ACCESS);
     rt_view_param_buffer->SetName("rt_view_param_buffer");
     // RaytracingGeometryRef blas = device.CreateRaytracingGeometry(rt_geo_info);
     // cmd_list.BuildAccelerationStructures({{blas, ERaytracingBuildMode::BUILD}});
@@ -174,12 +176,23 @@ int main(int argc, const char** argv) {
     out_color->SetName("out_color");
     out_position->SetName("out_position");
 
+    Timer timer;
+    timer.Start();
+    uint64 last_time = 0ull;
     while (WindowContext::ShouldClose(window_handle) == false) {
         WindowContext::Tick();
         int w_width, w_height;
         if (time >= 3) {
             timeline->Wait(time - 2);
         }
+        timer.Stop();
+        auto frame_time = timer.ElapsedMilliseconds();
+
+        if (time - last_time > 5000) {
+            last_time = time;
+            LOG_INFO("FPS {}, Time elapsed {} ms\n", 1000.f / frame_time, frame_time);
+        }
+        timer.Start();
         WindowContext::GetWindowSize(WindowContext::GetMainWindow(), &w_width, &w_height);
         if (w_width == 0 || w_height == 0) {
             std::this_thread::yield();
@@ -267,8 +280,8 @@ int main(int argc, const char** argv) {
 
                 cmd_list.BuildAccelerationStructures(std::move(build_params));
                 // cmd_list.UpdateRaytracingScene(rt_scene);
-                gfx_queue.Execute(cmd_list.Submit());
-                gfx_queue.Sync();
+                // gfx_queue.Execute(cmd_list.Submit());
+                // gfx_queue.Sync();
             }
 
             if (Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady()) {
@@ -285,8 +298,10 @@ int main(int argc, const char** argv) {
             auto camera        = CameraManager::Get().Get(camera_entity);
             camera->Tick();
 
-            rt_view_param.view2world = camera->GetViewMatrix();
-            rt_view_param.world2view = Inverse(camera->GetViewMatrix());
+            float3 center            = {0, 0, -1.f};
+            auto   pos_w             = camera->GetToWorldMatrix() * float4(center, 1.f);
+            rt_view_param.view2world = camera->GetToWorldMatrix();
+            rt_view_param.world2view = camera->GetViewMatrix();
             rt_view_param.frustum    = camera->GetFrustum();
             rt_view_param.near_far   = float2(camera->GetNearClip(), camera->GetFarClip());
             rt_view_param.rect       = uint2(resolution.x, resolution.y);
@@ -295,7 +310,7 @@ int main(int argc, const char** argv) {
             rt_view_param.dir        = camera->GetDirection();
             rt_view_param.orthomode  = 0;
 
-            cmd_list.CopyFrom(std::span<byte>((byte*)&rt_view_param, sizeof(RTViewParam)), rt_view_param_buffer->GetView());
+            cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)&rt_view_param, sizeof(RTViewParam)), rt_view_param_buffer->GetView());
             TestInlineRTShader::Param param;
             param.global_param_handle     = view_buffer_handle;
             param.instance_buffer_handle  = rt_instance_handle;
