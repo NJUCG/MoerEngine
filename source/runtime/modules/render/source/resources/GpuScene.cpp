@@ -210,7 +210,15 @@ namespace Moer {
                 auto& builder            = builders[indice];
                 textures[builder.m_name] = device.CreateTexture(Extent2D{builder.m_width, builder.m_height}, builder.m_format, ETextureUsageFlags::SAMPLED | ETextureUsageFlags::SRGB | ETextureUsageFlags::TRANSFER_DST, builder.m_mip_levels, builder.m_layer_levels);
                 // staging_buffers[count] = device.CreateBuffer<byte>(builder.m_data_size, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
-                cmd_list.CopyFrom(std::span<byte>((byte*)builder.m_data, builder.m_data_size), textures[builder.m_name]->GetView());
+                auto   target_texture = textures[builder.m_name];
+                uint64 offset         = 0;
+                for (uint i = 0; i < builder.m_mip_levels * builder.m_layer_levels; i++) {
+                    uint mip_size = target_texture->GetMipByteSize(i);
+                    cmd_list.CopyFrom(std::span<byte>((byte*)builder.m_data + offset, mip_size), textures[builder.m_name]->GetView(i, 1));
+                    offset += mip_size;
+                }
+                // cmd_list.CopyFrom(std::span<byte>((byte*)builder.m_data, builder.m_data_size), textures[builder.m_name]->GetView(0, textures[builder.m_name]->GetNumMips()));
+
                 // cmd_list.Barriers(Render::ReadTexture{textures[builder.m_name]->GetView(),Render::ETextureState::SAMPLE} );
                 count++;
             }

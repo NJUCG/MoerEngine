@@ -20,6 +20,7 @@
 #include "scene/CameraManager.h"
 #include "scene/Material.h"
 #include "scene/RenderableManager.h"
+#include "scene/Scene.h"
 
 using namespace Moer::Render;
 using namespace Moer;
@@ -37,14 +38,70 @@ struct RTViewParam {
     float      orthomode;
 };
 
+struct RTConfigParam {
+    float4 sun_direction_gexposure;
+    float4 camera_origin_gmipbias;
+    float4 view_direction_gorthomode;
+    // float4 HairBaseColorOverride; // w is alpha or blend factor
+    // float2 HairBetasOverride;
+    float2   window_size;
+    float2   inv_window_size;
+    float2   output_size;
+    float2   inv_output_size;
+    float2   render_size;
+    float2   inv_render_size;
+    float2   rect_size;
+    float2   inv_rect_size;
+    float2   rect_size_prev;
+    float2   jitter;
+    float    emission_intensity;
+    float    separator;
+    float    roughness_override;
+    float    metalness_override;
+    float    unit_to_meters_multiplier;
+    float    indirect_diffuse;
+    float    indirect_specular;
+    float    tan_sun_angular_radius;
+    float    tan_pixel_angular_radius;
+    float    debug;
+    float    transparent;
+    float    prev_frame_confidence;
+    float    min_probability;
+    float    unproject;
+    float    aperture;
+    float    focal_distance;
+    float    focal_length;
+    uint32_t denoiser_type;
+    uint32_t on_screen;
+    uint32_t frame_index;
+    uint32_t forced_material;
+    uint32_t use_normalmap;
+    uint32_t b_worldspace_motion;
+    uint32_t tracing_mode;
+    uint32_t sample_num;
+    uint32_t bounce_num;
+    uint32_t taa;
+    uint32_t resolve;
+    uint32_t psr;
+    uint32_t validation;
+    uint32_t trim_lobe;
+    // uint32_t highlight_ahs;
+    // uint32_t ahs_dynamic_mip;
+
+    // Ambient
+    float ambient_max_accumulated_frames_num;
+    float ambient;
+};
+
 class TestInlineRTShader : public ComputePipeline {
 public:
     struct Param {
         uint   instance_buffer_handle;
-        uint   mesh_info_buffer_handle;
+        uint   material_buffer_handle;
         uint   primitive_buffer_handle;
         uint   vtx_buffer_handle;
         uint   global_param_handle;
+        uint   light_buffer_handle;
         uint2  rect;
         float2 inv_rect;
         float2 jitter;
@@ -52,13 +109,14 @@ public:
     DEFINE_COMPUTE_PIPELINE_CLASS(TestInlineRTShader);
 
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
+    DEFINE_SHADER_BUFFER(rt_config);
     DEFINE_SHADER_TEX(out_normal);
     DEFINE_SHADER_TEX(out_color);
     DEFINE_SHADER_TEX(out_position);
     DEFINE_SHADER_TLAS(tlas);
     DEFINE_SHADER_CONSTANT_STRUCT(Param, param);
 
-    DEFINE_SHADER_ARGS(param, out_normal, out_color, out_position, bdls, tlas);
+    DEFINE_SHADER_ARGS(param, rt_config, out_normal, out_color, out_position, bdls, tlas);
 };
 
 int main(int argc, const char** argv) {
@@ -89,16 +147,17 @@ int main(int argc, const char** argv) {
     auto*  window_handle = WindowContext::GetMainWindow();
 
     SwapchainCreateInfo sc_info{.window_handle = (uintptr_t)window_handle, .size = {resolution.x, resolution.y}, .back_buffer_sz = 3, .preferred_format = PF_R8G8B8A8_SRGB};
-    auto                sc             = device.CreateSwapchain(sc_info);
-    BindlessArrayRef    bindless_array = device.CreateBindlessArray();
-    auto&               gfx_queue      = device.GetCommandQueue(EQueueType::Graphics);
-    auto&               copy_queue     = device.GetCopyQueue();
+    auto                sc         = device.CreateSwapchain(sc_info);
+    auto&               gfx_queue  = device.GetCommandQueue(EQueueType::Graphics);
+    auto&               copy_queue = device.GetCopyQueue();
 
     Scene g_scene{};
     Resource::LoaderInterface::LoadSceneFromFileAsync(ConfigManager::GetInstance().GetScenePath(), &g_scene);
     OnScopeExit([&] {
         Scene::ResetAsyncLoadInfo();
     });
+    BindlessArrayRef bindless_array = g_scene.GetBindlessArray();
+
     FenceRef copy_timeline = device.CreateFence();
 
     CommandList cmd_list;
@@ -117,9 +176,12 @@ int main(int argc, const char** argv) {
         float2 uv;
     };
 
-    RTViewParam rt_view_param{};
+    RTViewParam   rt_view_param{};
+    RTConfigParam rt_config_param{};
 
-    BufferRef rt_view_param_buffer = device.CreateBuffer<Moer::byte>(sizeof(RTViewParam) * 1, EBufferUsageFlags::UNORDERED_ACCESS);
+    BufferRef rt_view_param_buffer   = device.CreateBuffer<Moer::byte>(sizeof(RTViewParam) * 1, EBufferUsageFlags::UNORDERED_ACCESS);
+    BufferRef rt_config_param_buffer = device.CreateBuffer<Moer::byte>(sizeof(RTConfigParam) * 1, EBufferUsageFlags::CONSTANT_BUFFER);
+
     rt_view_param_buffer->SetName("rt_view_param_buffer");
     // RaytracingGeometryRef blas = device.CreateRaytracingGeometry(rt_geo_info);
     // cmd_list.BuildAccelerationStructures({{blas, ERaytracingBuildMode::BUILD}});
@@ -139,6 +201,7 @@ int main(int argc, const char** argv) {
     bool   first_load = true;
     uint   instance_buffer_handle;
     uint   material_buffer_idx;
+    uint   light_buffer_handle     = 0;
     uint64 last_io_change_timeline = 0;
     uint   view_buffer_handle      = 0;
     auto   copy_queue_timeline     = copy_queue.GetFenceHandle();
@@ -237,8 +300,17 @@ int main(int argc, const char** argv) {
                 rt_prim_handle         = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::RTPrimitive)->GetView());
                 rt_instance_handle     = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::RTInstance)->GetView());
                 view_buffer_handle     = bindless_array->AllocateBuffer(rt_view_param_buffer->GetView());
+                light_buffer_handle    = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::LightInfo)->GetView());
                 first_load             = false;
 
+                // Array<ReadTexture> sampled_textures;
+                // sampled_textures.reserve((g_scene.GetGpuScene().material_textures.size()));
+
+                // for (auto& [name, tex] : g_scene.GetGpuScene().material_textures) {
+                //     sampled_textures.emplace_back(ReadTexture(tex->GetView(0, tex->GetNumMips()), ETextureState::SAMPLE));
+                // }
+
+                // cmd_list.TextureBarriers(EQueueType::Copy, EQueueType::Graphics, std::move(sampled_textures));
                 cmd_list.UpdateBindlessArray(bindless_array);
                 last_io_change_timeline = copy_queue_timeline->GetValue();
                 // gfx_queue.Wait({uint64(copy_queue_timeline.Get()), copy_timeline->GetValue()});
@@ -249,7 +321,7 @@ int main(int argc, const char** argv) {
                 build_params.reserve(g_scene.GetEntities().size());
                 auto vertex_buffer = g_scene.GetBuffer(EGpuSceneResource::RTVertex);
 
-                auto index_buffer = g_scene.GetBuffer(EGpuSceneResource::RTPrimitive);
+                auto index_buffer = g_scene.GetBuffer(EGpuSceneResource::RTIndex);
                 g_scene.ForEach([&](Entity _entity) {
                     auto&                  mesh = RenderableManager::Get().GetRTMeshInfo(_entity);
                     RaytracingGeometryInfo rt_geo_info{};
@@ -310,21 +382,26 @@ int main(int argc, const char** argv) {
             rt_view_param.dir        = camera->GetDirection();
             rt_view_param.orthomode  = 0;
 
+            rt_config_param.tan_pixel_angular_radius = tanf(Angle::DegreeToRadian(camera->GetFov()));
+            cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)&rt_config_param, sizeof(RTConfigParam)), rt_config_param_buffer->GetView());
+
             cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)&rt_view_param, sizeof(RTViewParam)), rt_view_param_buffer->GetView());
             TestInlineRTShader::Param param;
             param.global_param_handle     = view_buffer_handle;
+            param.material_buffer_handle  = material_buffer_idx;
             param.instance_buffer_handle  = rt_instance_handle;
             param.primitive_buffer_handle = rt_prim_handle;
             param.vtx_buffer_handle       = rt_vtx_handle;
+            param.light_buffer_handle     = light_buffer_handle;
             param.rect                    = uint2(resolution.x, resolution.y);
             param.inv_rect                = float2(1.f / resolution.x, 1.f / resolution.y);
             param.jitter                  = float2(0, 0);
 
-            cmd_list.Compute(rt_shader, param, out_normal, out_color, out_position, bindless_array, rt_scene)
+            cmd_list.Compute(rt_shader, param, rt_config_param_buffer, out_normal, out_color, out_position, bindless_array, rt_scene)
                 .Dispatch(uint3((resolution.x + 15) >> 4, (resolution.y + 15) >> 4, 1), "Primary Ray");
 
             //copy normal to output
-            cmd_list.CopyFrom(out_normal->GetView(), output->GetView());
+            cmd_list.CopyFrom(out_color->GetView(), output->GetView());
         }
         // rt_scene->MarkModified(0);
         // cmd_list.UpdateRaytracingScene(rt_scene);

@@ -34,6 +34,7 @@
 #include "taskgraph/GraphTask.h"
 
 #include <atomic>
+#include <cmath>
 #include <filesystem>
 #include <future>
 #include <stb/stb_image.h>
@@ -402,7 +403,25 @@ namespace Moer::Resource::Gltf {
 
         mi->SetParameter("ao", 1.0f);
     }
+    static float CalculateWorldToUvUnits(const RTVertex& _v0, const RTVertex& _v1, const RTVertex& _v2) {
 
+        float3 p0(_v0.position);
+        float3 p1(_v1.position);
+        float3 p2(_v2.position);
+
+        float3 edge20          = p2 - p0;
+        float3 edge10          = p1 - p0;
+        float3 triangle_normal = Cross(edge20, edge10);
+        float  world_area      = std::max((float)Length(triangle_normal), 1e-9f);
+
+        float3 uv_edge20 = float3(_v2.uv0, _v2.uv1, 0.0f) - float3(_v0.uv0, _v0.uv1, 0.0f);
+        float3 uv_edge10 = float3(_v1.uv0, _v1.uv1, 0.0f) - float3(_v0.uv0, _v0.uv1, 0.0f);
+
+        float3 uv_normal = Cross(uv_edge20, uv_edge10);
+        float  uv_area   = Length(Cross(uv_edge20, uv_edge10));
+
+        return uv_area == 0 ? 1.0f : sqrt(uv_area / world_area);
+    }
     UniquePtr<SceneData> Parser::Impl::LoadSceneFromFile(const std::filesystem::path& _file_path, bool _delete_after_load) {
 
         GpuPrimitiveBuilder::InitBuild();
@@ -428,9 +447,10 @@ namespace Moer::Resource::Gltf {
         auto attribute = GetAttribute(gltf_scene->mMeshes[0], stride);
 
         stride *= sizeof(float);
-        Moer::Array<RTVertex>   rt_vertices;
-        Moer::Array<RTMeshInfo> rt_mesh_infos;
-        Moer::Array<uint3>      rt_indices;
+        Moer::Array<RTVertex>    rt_vertices;
+        Moer::Array<RTMeshInfo>  rt_mesh_infos;
+        Moer::Array<RTPrimitvie> rt_prims;
+        Moer::Array<uint3>       rt_indices;
 
         uint rt_vtx_cnt  = 0;
         uint rt_prim_cnt = 0;
@@ -443,6 +463,7 @@ namespace Moer::Resource::Gltf {
         rt_vertices.reserve(rt_vtx_cnt);
         rt_mesh_infos.reserve(gltf_scene->mNumMeshes);
         rt_indices.reserve(rt_prim_cnt);
+        rt_prims.reserve(rt_prim_cnt);
 
         rt_vtx_cnt  = 0;
         rt_prim_cnt = 0;
@@ -514,7 +535,8 @@ namespace Moer::Resource::Gltf {
 
             for (size_t idx_idx = 0; idx_idx < mesh->mNumFaces; idx_idx++) {
                 const auto& face = mesh->mFaces[idx_idx];
-                rt_indices.emplace_back(face.mIndices[0], face.mIndices[1], face.mIndices[2]);
+                rt_indices.emplace_back(uint3(face.mIndices[0], face.mIndices[1], face.mIndices[2]));
+                rt_prims.emplace_back(uint3(face.mIndices[0], face.mIndices[1], face.mIndices[2]), CalculateWorldToUvUnits(rt_vertices[face.mIndices[0]], rt_vertices[face.mIndices[1]], rt_vertices[face.mIndices[2]]));
             }
 
             RTMeshInfo rt_mesh_info{};
@@ -641,7 +663,8 @@ namespace Moer::Resource::Gltf {
 
         m_scene_data->rt_instances  = std::move(rt_instances);
         m_scene_data->rt_vertices   = std::move(rt_vertices);
-        m_scene_data->rt_prims      = std::move(rt_indices);
+        m_scene_data->rt_prims      = std::move(rt_prims);
+        m_scene_data->rt_indices    = std::move(rt_indices);
         m_scene_data->rt_mesh_infos = std::move(rt_mesh_infos);
 
         m_scene_data->m_materials          = std::move(m_materials);

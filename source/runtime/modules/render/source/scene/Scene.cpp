@@ -13,18 +13,7 @@
 namespace Moer {
     // Scene * Scene::default_scene = nullptr;
     Scene* g_scene = nullptr;
-    struct GpuScene {
-        Render::BufferRef GetGpuBuffer(EGpuSceneResource _resource) const { return global_resources.buffers[(uint32_t)_resource]; }
-        // RHIRayTracingTLASRef GetTLAS() const { return tlas; }
-        struct GResource {
-            StaticArray<Render::BufferRef, (uint32_t)EGpuSceneResource::Num> buffers;
-        } global_resources;
-        Render::RaytracingSceneRef rt_scene{nullptr};
-        Render::BufferRef          vertex_buffer{nullptr}, index_buffer{nullptr};
-        Render::BindlessArrayRef   bindless_array{nullptr};
 
-        UnorderedMap<std::string, Render::TextureRef> material_textures;
-    };
     class RENDER_API Scene::Impl {
         friend class Scene;
 
@@ -99,11 +88,11 @@ namespace Moer {
     }
 
     Scene::Scene() noexcept {
-        m_impl = new Impl();
+        m_impl = MoerNew(Impl)();
     }
 
     Scene::~Scene() noexcept {
-        delete m_impl;
+        MoerDelete(m_impl);
     }
 
     void Scene::AddEntity(Entity entity) noexcept {

@@ -90,8 +90,9 @@ namespace Moer::Render {
         VkTracker&       tracker;
         FunctionTable    m_funcs;
         VulkanAllocator& allocator;
+        VulkanDevice&    device;
 
-        VkCmdPreprocessor(VkTracker& _tracker, VulkanAllocator& _allocator, FunctionTable _funcs) : tracker(_tracker), allocator(_allocator), m_funcs(_funcs) {}
+        VkCmdPreprocessor(VulkanDevice& _device, VkTracker& _tracker, VulkanAllocator& _allocator, FunctionTable _funcs) : device(_device), tracker(_tracker), allocator(_allocator), m_funcs(_funcs) {}
         void HandleBindless(BindlessArrayRef _bindless_array, VkPipelineStageFlagBits2 _pipeline_stages) {
             EPassType pass_type = EPassType::Graphics;
             if (_pipeline_stages == VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT) {
@@ -131,11 +132,11 @@ namespace Moer::Render {
         static VkAccessFlagBits2 GetBufferAccess(VulkanShaderResourceState _flag) {
             switch (_flag.resource_type) {
                 case SpvReflectResourceType::SPV_REFLECT_RESOURCE_FLAG_CBV:
-                    return VK_ACCESS_2_UNIFORM_READ_BIT;
+                    return VK_ACCESS_2_SHADER_READ_BIT;
                 case SpvReflectResourceType::SPV_REFLECT_RESOURCE_FLAG_SRV:
                     return VK_ACCESS_2_SHADER_READ_BIT;
                 case SpvReflectResourceType::SPV_REFLECT_RESOURCE_FLAG_UAV:
-                    return VK_ACCESS_2_SHADER_WRITE_BIT;
+                    return VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT;
                 default:
                     return VK_ACCESS_2_SHADER_READ_BIT;
             }
@@ -358,23 +359,73 @@ namespace Moer::Render {
         }
 
         void Visit(const BarrierCmd* _cmd) {
+            if (!_cmd->IsQueueTransition()) {
+
+                for (auto& barrier : _cmd->ReadBuffers()) {
+                    auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(barrier.handle);
+                    tracker.RecordState(vk_buffer, tracker.ReadBuffer(vk_buffer, barrier.state, barrier.pass_type));
+                }
+                for (auto& barrier : _cmd->WriteBuffers()) {
+                    auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(barrier.handle);
+                    tracker.RecordState(vk_buffer, tracker.WriteBuffer(vk_buffer, barrier.state, barrier.pass_type));
+                }
+
+                for (auto& barrier : _cmd->ReadTextures()) {
+                    auto* vk_texture = reinterpret_cast<VulkanTexture*>(barrier.handle);
+                    tracker.RecordState(vk_texture, tracker.ReadTexture(vk_texture, barrier.state, barrier.pass_type));
+                }
+                for (auto& barrier : _cmd->WriteTextures()) {
+                    auto* vk_texture = reinterpret_cast<VulkanTexture*>(barrier.handle);
+                    tracker.RecordState(vk_texture, tracker.WriteTexture(vk_texture, barrier.state, barrier.pass_type));
+                }
+
+                return;
+            }
+
+            uint src_queue_family = VK_QUEUE_FAMILY_IGNORED;
+            uint dst_queue_family = VK_QUEUE_FAMILY_IGNORED;
+
+            auto get_queue_idx = [&](EQueueType _type) {
+                switch (_type) {
+                    case EQueueType::Graphics:
+                        return device.GetQueueFamilyIndex(VK_QUEUE_GRAPHICS_BIT);
+                        break;
+                    case EQueueType::Compute:
+                        return device.GetQueueFamilyIndex(VK_QUEUE_COMPUTE_BIT);
+                        break;
+                    case EQueueType::Copy:
+                        return device.GetQueueFamilyIndex(VK_QUEUE_TRANSFER_BIT);
+                        break;
+                    case EQueueType::Ignore:
+                        return VK_QUEUE_FAMILY_IGNORED;
+                    default:
+                        assert(false && "Invalid queue type");
+                }
+                return VK_QUEUE_FAMILY_IGNORED;
+            };
+
+            src_queue_family = get_queue_idx(_cmd->GetSrcQueue());
+            dst_queue_family = get_queue_idx(_cmd->GetDstQueue());
+
             for (auto& barrier : _cmd->ReadBuffers()) {
                 auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(barrier.handle);
-                tracker.RecordState(vk_buffer, tracker.ReadBuffer(vk_buffer, barrier.state, barrier.pass_type));
+                tracker.RecordState(vk_buffer, tracker.ReadBuffer(vk_buffer, barrier.state, barrier.pass_type), src_queue_family, dst_queue_family);
             }
             for (auto& barrier : _cmd->WriteBuffers()) {
                 auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(barrier.handle);
-                tracker.RecordState(vk_buffer, tracker.WriteBuffer(vk_buffer, barrier.state, barrier.pass_type));
+                tracker.RecordState(vk_buffer, tracker.WriteBuffer(vk_buffer, barrier.state, barrier.pass_type), src_queue_family, dst_queue_family);
             }
 
             for (auto& barrier : _cmd->ReadTextures()) {
                 auto* vk_texture = reinterpret_cast<VulkanTexture*>(barrier.handle);
-                tracker.RecordState(vk_texture, tracker.ReadTexture(vk_texture, barrier.state, barrier.pass_type));
+                tracker.RecordState(vk_texture, tracker.ReadTexture(vk_texture, barrier.state, barrier.pass_type), src_queue_family, dst_queue_family);
             }
             for (auto& barrier : _cmd->WriteTextures()) {
                 auto* vk_texture = reinterpret_cast<VulkanTexture*>(barrier.handle);
-                tracker.RecordState(vk_texture, tracker.WriteTexture(vk_texture, barrier.state, barrier.pass_type));
+                tracker.RecordState(vk_texture, tracker.WriteTexture(vk_texture, barrier.state, barrier.pass_type), src_queue_family, dst_queue_family);
             }
+
+            //queue transition
         }
 
         void Visit(const SetDrawStateCmd* _cmd) {
@@ -978,7 +1029,8 @@ namespace Moer::Render {
             case EQueueType::Copy:
                 queue = _device.GetTransferQueue();
                 break;
-            case EQueueType::Num: break;
+            default:
+                assert(false && "Invalid queue type");
         }
         assert(queue != VK_NULL_HANDLE && "Invalid queue type!");
     }
@@ -1115,7 +1167,7 @@ namespace Moer::Render {
             .is_resource_in_bindless = &IsResourceInBindlessArray};
         CmdReorderer reorderer{function_table};
 
-        VkCmdPreprocessor preprocessor(tracker, vk_allocator, function_table);
+        VkCmdPreprocessor preprocessor(vk_device, tracker, vk_allocator, function_table);
 
         for (const auto& cmd : _submit.cmds) {
             reorderer.AcceptCmd(cmd.get());
@@ -1441,7 +1493,7 @@ namespace Moer::Render {
 
             std::unique_lock<std::mutex> lk(exec_mutex);
 
-            VkCmdPreprocessor preprocessor(vk_tracker, vk_allocator, {});
+            VkCmdPreprocessor preprocessor(device, vk_tracker, vk_allocator, {});
             VkCmdVisitor      visitor(device, vk_allocator, vk_tracker, vk_cmd_list);
 
             vk_cmd_list.Begin();

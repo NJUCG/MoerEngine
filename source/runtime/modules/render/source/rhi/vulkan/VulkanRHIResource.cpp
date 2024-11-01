@@ -22,6 +22,7 @@
 #include "rhi/RHIResourceInitilizer.h"
 #include "rhi/vulkan/VulkanRHI.h"
 #include "log/LogSystem.h"
+#include "vulkan/vk_enum_string_helper.h"
 #include "vulkan/vulkan_core.h"
 
 #include <memory>
@@ -366,6 +367,14 @@ namespace Moer::Render {
         TranslateFlag(EBufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
 
         return vk_flags;
+    }
+
+    VkDescriptorType VulkanEnumTranslator::METoVkBufferDescriptorType(EBufferUsageFlags _type) {
+        auto has_flag = [&_type](EBufferUsageFlags _search_me_flags) { return (_type & _search_me_flags) == _search_me_flags; };
+        if (has_flag(EBufferUsageFlags::CONSTANT_BUFFER)) return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        if (has_flag(EBufferUsageFlags::UNORDERED_ACCESS)) return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        if (has_flag(EBufferUsageFlags::TEXTURE_BUFFER)) return VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER;
+        return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     }
 
     VkSampleCountFlagBits VulkanEnumTranslator::METoVKSampleCountFlagBits(uint32_t _me_count) {
@@ -1089,9 +1098,12 @@ namespace Moer::Render {
 
                         VulkanDescriptorInfo& descriptor_info = _binder.bind_infos[binding.binding];
                         descriptor_info.param_idx = m_binding.param_idx;
-                        
+                        if(binding.descriptorCount < 1){
+                            continue;
+                        }
                         switch (binding.descriptorType){
                             
+                            case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
                             case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:{
                                 descriptor_info.info_idx = _binder.buffer_infos.size();
                                 _binder.buffer_infos.emplace_back(VK_NULL_HANDLE, 0, VK_WHOLE_SIZE);
@@ -1519,6 +1531,13 @@ namespace Moer::Render {
         return view;
     }
 
+    uint VulkanTexture::GetMipByteSize(uint _mip_level) const {
+        uint mip_width  = std::max(1u, GetWidth() >> _mip_level);
+        uint mip_height = std::max(1u, GetHeight() >> _mip_level);
+        uint mip_depth  = std::max(1u, GetDepth() >> _mip_level);
+        return mip_width * mip_height * mip_depth * g_platform_pixel_formats[uint(GetFormat())].stride;
+    }
+
     bool         VulkanTexture::IsGeneralRead(uint _mip_level) const {
         if (auto iter = mip_usages.find(_mip_level); iter != mip_usages.end()) { return std::get<ETextureStateFlags>(iter->second) == ETextureStateFlags::TS_UNORDERED_READ; }
         return false;
@@ -1551,8 +1570,8 @@ namespace Moer::Render {
         VkBufferDeviceAddressInfo info{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
         info.buffer      = m_alloc.buffer;
         m_device_address = vkGetBufferDeviceAddress(m_device->GetDevice(), &info);
+        m_descriptor_type = VulkanEnumTranslator::METoVkBufferDescriptorType(_info.usage);
         SetName("UserBuffer");
-
     }
 
     uint64 VulkanBuffer::DeviceAddress() const { return m_device_address; }
@@ -1561,6 +1580,7 @@ namespace Moer::Render {
         m_alloc.buffer    = _handle;
         m_alloc.alloc     = _alloc;
         b_deferred_delete = _defer_destroy;
+        m_descriptor_type = VulkanEnumTranslator::METoVkBufferDescriptorType(_info.usage);
         if(_get_address){
             VkBufferDeviceAddressInfo info{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
             info.buffer      = m_alloc.buffer;

@@ -65,10 +65,11 @@ namespace Moer {
         Moer::Array<uint32_t>           m_instance_id;
 
         //raytracing
-        Moer::Array<RTVertex>   rt_vertices{};
-        Moer::Array<RTInstance> rt_instances{};
-        Moer::Array<RTMeshInfo> rt_mesh_infos{};
-        Moer::Array<uint3>      rt_prims{};
+        Moer::Array<RTVertex>    rt_vertices{};
+        Moer::Array<RTInstance>  rt_instances{};
+        Moer::Array<RTMeshInfo>  rt_mesh_infos{};
+        Moer::Array<RTPrimitvie> rt_prims{};
+        Moer::Array<uint3>       rt_indices{};
 
         Moer::Array<CameraRef>         m_cameras{};
         Moer::Array<LightComponentRef> m_lights{};

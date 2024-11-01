@@ -44,6 +44,18 @@ struct MaterialData {
     int    padding;
 };
 
+struct PackedMaterialData{
+    float4 packed_0;
+    float4 packed_1;
+    float4 packed_2;
+    float4 packed_3;
+
+    float4 packed_4;
+    float4 packed_5;
+    float4 packed_6;
+    float4 packed_7;
+};
+
 struct Constant {
     uint material_type;
     uint light_buffer;

@@ -633,29 +633,58 @@ namespace Moer::Render {
         }
 
         void VisitCmd(const BarrierCmd* _cmd) {
-            int64 layer = 0;
+            int64               layer = 0;
+            Array<RangeHandle*> barrier_resources;
+            Array<Range>        barrier_ranges;
+            //reserve
+            barrier_resources.reserve(_cmd->ReadBuffers().size() + _cmd->ReadTextures().size() + _cmd->WriteBuffers().size() + _cmd->WriteTextures().size());
+            barrier_ranges.reserve(_cmd->ReadBuffers().size() + _cmd->ReadTextures().size() + _cmd->WriteBuffers().size() + _cmd->WriteTextures().size());
+
             for (const auto& [handle, state, pass_type, offset, size] : _cmd->ReadBuffers()) {
-                layer = std::max(
-                    SetRead(handle, Range(offset, size), ResourceType::Texture_Buffer),
-                    layer);
+                // layer = std::max(
+                //     SetRead(handle, Range(offset, size), ResourceType::Texture_Buffer),
+                //     layer);
+                RangeHandle* range_handle = static_cast<RangeHandle*>(GetHandle(handle, ResourceType::Texture_Buffer));
+                layer                     = GetLastLayerWrite(range_handle, Range(offset, size));
+                barrier_resources.emplace_back(range_handle);
+                barrier_ranges.emplace_back(Range(offset, size));
             }
             for (const auto& [handle, state, pass_type, mip_level, mip_cnt] : _cmd->ReadTextures()) {
-                layer = std::max(
-                    SetRead(handle, Range(mip_level, mip_cnt), ResourceType::Texture_Buffer),
-                    layer);
+                // layer = std::max(
+                //     SetRead(handle, Range(mip_level, mip_cnt), ResourceType::Texture_Buffer),
+                //     layer);
+                RangeHandle* range_handle = static_cast<RangeHandle*>(GetHandle(handle, ResourceType::Texture_Buffer));
+                layer                     = GetLastLayerWrite(range_handle, Range(mip_level, mip_cnt));
+                barrier_resources.emplace_back(range_handle);
+                barrier_ranges.emplace_back(Range(mip_level, mip_cnt));
             }
 
             for (auto& [handle, state, pass_type, offset, size] : _cmd->WriteBuffers()) {
-                layer = std::max(
-                    SetWrite(handle, Range(offset, size), ResourceType::Texture_Buffer),
-                    layer);
+                // layer = std::max(
+                //     SetWrite(handle, Range(offset, size), ResourceType::Texture_Buffer),
+                //     layer);
+                RangeHandle* range_handle = static_cast<RangeHandle*>(GetHandle(handle, ResourceType::Texture_Buffer));
+                layer                     = GetLastLayerRead(range_handle, Range(offset, size));
+                barrier_resources.emplace_back(range_handle);
+                barrier_ranges.emplace_back(Range(offset, size));
             }
 
             for (const auto& [handle, state, pass_type, mip_level, mip_cnt] : _cmd->WriteTextures()) {
-                layer = std::max(
-                    SetWrite(handle, Range(mip_level, mip_cnt), ResourceType::Texture_Buffer),
-                    layer);
+                // layer = std::max(
+                //     SetWrite(handle, Range(mip_level, mip_cnt), ResourceType::Texture_Buffer),
+                //     layer);
+                RangeHandle* range_handle = static_cast<RangeHandle*>(GetHandle(handle, ResourceType::Texture_Buffer));
+                layer                     = GetLastLayerRead(range_handle, Range(mip_level, mip_cnt));
+                barrier_resources.emplace_back(range_handle);
+                barrier_ranges.emplace_back(Range(mip_level, mip_cnt));
             }
+            for (uint i = 0; i < barrier_resources.size(); ++i) {
+                RangeHandle* range_handle = barrier_resources[i];
+                Range        range        = barrier_ranges[i];
+                range_handle->EmplaceWriteLayer(range, layer);
+                m_write_resources.emplace(range_handle->handle);
+            }
+
             AddCmd(_cmd, layer);
         }
 

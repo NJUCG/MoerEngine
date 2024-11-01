@@ -229,7 +229,9 @@ namespace Moer::Render {
 
         void EndPushDescriptors(uint _frame_idx);
 
-        void PushBufferDesc(uint64 _src_offset, uint64 _set_offset);
+        // void PushBufferDesc(uint64 _src_offset, uint64 _set_offset);
+        void PushUniformDesc(uint64 _src_offset, uint64 _set_offset);
+        void PushStorageDesc(uint64 _src_offset, uint64 _set_offset);
         void PushImageDesc(uint64 _src_offset, uint64 _set_offset);
         void PushSamplerDesc(uint64 _src_offset, uint64 _set_offset);
         void PushAccelDesc(uint64 _src_offset, uint64 _set_offset);
@@ -241,7 +243,10 @@ namespace Moer::Render {
 
         VulkanBuffer* ring_desc_buffer;
 
+        uint storage_desc_stride;
+        uint uniform_desc_stride;
         uint buffer_desc_stride;
+
         uint image_desc_stride;
         uint sample_desc_stride;
         uint accel_desc_stride;

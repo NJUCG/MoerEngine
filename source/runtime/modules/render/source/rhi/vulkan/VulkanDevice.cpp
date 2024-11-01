@@ -818,6 +818,24 @@ namespace Moer::Render {
                     assert(false && "Unknown shader arg type.");
             }
         }
+        //finalize
+        for (auto& create_info : _out_descriptor_bindings) {
+            //fill missing bindings with empty
+            uint max_binding = 0;
+            for (auto& binding : create_info.second.bindings) {
+                max_binding = std::max(max_binding, binding.first);
+            }
+            for (uint i = 0; i <= max_binding; ++i) {
+                if (create_info.second.bindings.find(i) == create_info.second.bindings.end()) {
+                    auto& vk_binding              = create_info.second[i];
+                    vk_binding.binding            = i;
+                    vk_binding.descriptorType     = VK_DESCRIPTOR_TYPE_SAMPLER;
+                    vk_binding.descriptorCount    = 0;
+                    vk_binding.stageFlags         = 0;
+                    vk_binding.pImmutableSamplers = nullptr;
+                }
+            }
+        }
     }
 
     PipelineHandle VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo&& _shader_info) {

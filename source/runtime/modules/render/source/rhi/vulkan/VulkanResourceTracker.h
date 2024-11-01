@@ -15,6 +15,8 @@ namespace Moer::Render {
             VkPipelineStageFlagBits2 src_stage;
             VkAccessFlagBits2        dst_access;
             VkPipelineStageFlagBits2 dst_stage;
+            uint32_t                 src_queue_family;
+            uint32_t                 dst_queue_family;
         };
         struct TextureState {
             VkAccessFlagBits2        src_access;
@@ -23,6 +25,8 @@ namespace Moer::Render {
             VkAccessFlagBits2        dst_access;
             VkImageLayout            dst_layout;
             VkPipelineStageFlagBits2 dst_stage;
+            uint32_t                 src_queue_family;
+            uint32_t                 dst_queue_family;
         };
 
     public:
@@ -44,6 +48,7 @@ namespace Moer::Render {
                     last_stage  = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
                     break;
                 }
+                case EQueueType::Ignore:
                 case EQueueType::Num: {
                     assert(false && "Invalid queue type for vk tracker");
                 }
@@ -54,26 +59,34 @@ namespace Moer::Render {
         void RecordState(
             VulkanBuffer*            _buffer,
             VkAccessFlagBits2        _access,
-            VkPipelineStageFlagBits2 _stage);
+            VkPipelineStageFlagBits2 _stage,
+            uint32_t                 _src_queue_family = VK_QUEUE_FAMILY_IGNORED,
+            uint32_t                 _dst_queue_family = VK_QUEUE_FAMILY_IGNORED);
 
         void FlushSrcState(VulkanBuffer* _buffer, VkAccessFlagBits2 _access, VkPipelineStageFlagBits2 _stage);
 
         void RecordState(
             VulkanBuffer* _texture,
-            std::tuple<VkAccessFlags2, VkPipelineStageFlags2>&&);
+            std::tuple<VkAccessFlags2, VkPipelineStageFlags2>&&,
+            uint32_t _src_queue_family = VK_QUEUE_FAMILY_IGNORED,
+            uint32_t _dst_queue_family = VK_QUEUE_FAMILY_IGNORED);
 
         void RecordState(
             VulkanTexture*           _texture,
             VkAccessFlagBits2        _access,
             VkImageLayout            _layout,
             VkPipelineStageFlagBits2 _stage,
-            uint8_t                  _mip_level = 0,
-            uint8_t                  _mip_count = 1);
+            uint8_t                  _mip_level        = 0,
+            uint8_t                  _mip_count        = 1,
+            uint32_t                 _src_queue_family = VK_QUEUE_FAMILY_IGNORED,
+            uint32_t                 _dst_queue_family = VK_QUEUE_FAMILY_IGNORED);
 
         void RegisterFlushBuffer(const BufferView& _view, VkAccessFlagBits2 _access, VkPipelineStageFlagBits2 _stage);
         void RecordState(
             VulkanTexture* _texture,
-            std::tuple<VkAccessFlags2, VkImageLayout, VkPipelineStageFlags2>&&);
+            std::tuple<VkAccessFlags2, VkImageLayout, VkPipelineStageFlags2>&&,
+            uint32_t _src_queue_family = VK_QUEUE_FAMILY_IGNORED,
+            uint32_t _dst_queue_family = VK_QUEUE_FAMILY_IGNORED);
 
         void SetPassType(EPassType _type) {
             pass_type = _type;

@@ -8,6 +8,7 @@
 
 #include "misc/MacroUtils.h"
 #include "rhi/RHIResource.h"
+#include "vulkan/vulkan_core.h"
 
 #include <cassert>
 
@@ -434,7 +435,10 @@ namespace Moer::Render {
     }
 
     VulkanDescriptorHeap::VulkanDescriptorHeap(VulkanDevice& _device) : m_device(&_device),
-                                                                        buffer_desc_stride(_device.GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize),
+                                                                        storage_desc_stride(_device.GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize),
+                                                                        uniform_desc_stride(_device.GetOptionalProperties().descriptor_buffer_properties.uniformBufferDescriptorSize),
+                                                                        buffer_desc_stride(std::max(_device.GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize,
+                                                                                                    _device.GetOptionalProperties().descriptor_buffer_properties.uniformBufferDescriptorSize)),
                                                                         image_desc_stride(_device.GetOptionalProperties().descriptor_buffer_properties.sampledImageDescriptorSize),
                                                                         texture_desc_offset(_device.GetOptionalProperties().descriptor_buffer_properties.samplerDescriptorSize * VulkanDevice::bindless_sampler_cnt),
                                                                         accel_desc_stride(_device.GetOptionalProperties().descriptor_buffer_properties.accelerationStructureDescriptorSize),
@@ -524,8 +528,24 @@ namespace Moer::Render {
             buffer_info.address = _in_buffer->DeviceAddress();
             buffer_info.range   = _in_buffer->GetByteSize();
             VkDescriptorGetInfoEXT buffer_desc_info{VK_STRUCTURE_TYPE_DESCRIPTOR_GET_INFO_EXT};
-            buffer_desc_info.type                = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            buffer_desc_info.data.pStorageBuffer = &buffer_info;
+
+            VkDescriptorType desc_type = _in_buffer->GetDescriptorType();
+            buffer_desc_info.type      = desc_type;
+            uint desc_size             = 0;
+            switch (desc_type) {
+                case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+                    buffer_desc_info.data.pStorageBuffer = &buffer_info;
+                    desc_size                            = storage_desc_stride;
+                    break;
+                case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
+                    buffer_desc_info.data.pUniformBuffer = &buffer_info;
+                    desc_size                            = uniform_desc_stride;
+                    break;
+                default:
+                    LOG_ERROR("Unsupported buffer descriptor type: {}", VK_TYPE_TO_STRING(VkDescriptorType, desc_type));
+                    assert(false && "Unsupported buffer descriptor type");
+                    return 0;
+            }
             assert(m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize <= sizeof(BufferCpuDescHandle));
 
             std::lock_guard<std::mutex> lock(m_mutex);
@@ -537,7 +557,7 @@ namespace Moer::Render {
                 buffer_free_list.pop_back();
             }
             _in_buffer->m_descriptor_idx = idx;
-            vkGetDescriptorEXT(m_device->GetDevice(), &buffer_desc_info, buffer_desc_stride, buffer_desc_data.data() + idx * buffer_desc_stride);
+            vkGetDescriptorEXT(m_device->GetDevice(), &buffer_desc_info, desc_size, buffer_desc_data.data() + idx * buffer_desc_stride);
         }
         return idx * buffer_desc_stride;
     }
@@ -617,9 +637,19 @@ namespace Moer::Render {
         vmaFlushAllocation(m_device->GetVmaAllocator(), ring_desc_buffer->GetAllocation(), base_offset, current_offset - base_offset);
     }
 
-    void VulkanDescriptorHeap::PushBufferDesc(uint64 _src_offset, uint64 _set_offset) {
+    // void VulkanDescriptorHeap::PushBufferDesc(uint64 _src_offset, uint64 _set_offset) {
+    //     std::lock_guard<std::mutex> lock(m_mutex);
+    //     memcpy(map_ptr + current_offset + _set_offset, buffer_desc_data.data() + _src_offset, buffer_desc_stride);
+    // }
+
+    void VulkanDescriptorHeap::PushUniformDesc(uint64 _src_offset, uint64 _set_offset) {
         std::lock_guard<std::mutex> lock(m_mutex);
-        memcpy(map_ptr + current_offset + _set_offset, buffer_desc_data.data() + _src_offset, buffer_desc_stride);
+        memcpy(map_ptr + current_offset + _set_offset, buffer_desc_data.data() + _src_offset, uniform_desc_stride);
+    }
+
+    void VulkanDescriptorHeap::PushStorageDesc(uint64 _src_offset, uint64 _set_offset) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        memcpy(map_ptr + current_offset + _set_offset, buffer_desc_data.data() + _src_offset, storage_desc_stride);
     }
 
     void VulkanDescriptorHeap::PushImageDesc(uint64 _src_offset, uint64 _set_offset) {

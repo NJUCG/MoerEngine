@@ -369,7 +369,7 @@ namespace Moer::Render {
         }
     }
 
-    void VkTracker::RecordState(VulkanBuffer* _buffer, VkAccessFlagBits2 _access, VkPipelineStageFlagBits2 _stage) {
+    void VkTracker::RecordState(VulkanBuffer* _buffer, VkAccessFlagBits2 _access, VkPipelineStageFlagBits2 _stage, uint32_t _src_queue_family, uint32_t _dst_queue_family) {
         MarkWriteable(_buffer, IsWriteState(_access));
         pending_buffers.insert(_buffer);
 
@@ -395,7 +395,7 @@ namespace Moer::Render {
             return;
         }
 
-        buffer_states[_buffer] = {VK_ACCESS_2_NONE, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, _access, _stage};
+        buffer_states[_buffer] = {VK_ACCESS_2_NONE, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, _access, _stage, _src_queue_family, _dst_queue_family};
     }
 
     void VkTracker::FlushSrcState(VulkanBuffer* _buffer, VkAccessFlagBits2 _access, VkPipelineStageFlagBits2 _stage) {
@@ -408,8 +408,8 @@ namespace Moer::Render {
         }
     }
 
-    void VkTracker::RecordState(VulkanBuffer* _buffer, std::tuple<VkAccessFlags2, VkPipelineStageFlags2>&& _state) {
-        RecordState(_buffer, std::get<0>(_state), std::get<1>(_state));
+    void VkTracker::RecordState(VulkanBuffer* _buffer, std::tuple<VkAccessFlags2, VkPipelineStageFlags2>&& _state, uint32_t _src_queue_family, uint32_t _dst_queue_family) {
+        RecordState(_buffer, std::get<0>(_state), std::get<1>(_state), _src_queue_family, _dst_queue_family);
     }
 
     void VkTracker::RegisterFlushBuffer(const BufferView& _view, VkAccessFlagBits2 _access, VkPipelineStageFlagBits2 _stage) {
@@ -431,8 +431,11 @@ namespace Moer::Render {
         state.dst_stage |= _stage;
     }
 
-    void VkTracker::RecordState(VulkanTexture* _texture, std::tuple<VkAccessFlags2, VkImageLayout, VkPipelineStageFlags2>&& _state) {
-        RecordState(_texture, std::get<0>(_state), std::get<1>(_state), std::get<2>(_state));
+    void VkTracker::RecordState(VulkanTexture*                                                     _texture,
+                                std::tuple<VkAccessFlags2, VkImageLayout, VkPipelineStageFlags2>&& _state,
+                                uint32_t                                                           _src_queue_family,
+                                uint32_t                                                           _dst_queue_family) {
+        RecordState(_texture, std::get<0>(_state), std::get<1>(_state), std::get<2>(_state), 0, _texture->GetNumMips(), _src_queue_family, _dst_queue_family);
     }
     uint8 Min(uint8 a, uint8 b) {
         return a < b ? a : b;
@@ -446,7 +449,14 @@ namespace Moer::Render {
         return write_blas_states.find(_blas_buf) != write_blas_states.end();
     }
 
-    void VkTracker::RecordState(VulkanTexture* _texture, VkAccessFlagBits2 _access, VkImageLayout _layout, VkPipelineStageFlagBits2 _stage, uint8_t _mip_level, uint8_t _mip_count) {
+    void VkTracker::RecordState(VulkanTexture*           _texture,
+                                VkAccessFlagBits2        _access,
+                                VkImageLayout            _layout,
+                                VkPipelineStageFlagBits2 _stage,
+                                uint8_t                  _mip_level,
+                                uint8_t                  _mip_count,
+                                uint32_t                 _src_queue_family,
+                                uint32_t                 _dst_queue_family) {
         // Range range{_mip_level, _mip_count};
         TextureState state{
             VK_ACCESS_2_NONE,
@@ -454,7 +464,9 @@ namespace Moer::Render {
             VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
             _access,
             _layout,
-            _stage};
+            _stage,
+            _src_queue_family,
+            _dst_queue_family};
 
         auto state_iter = texture_states.find(_texture);
         bool is_write   = IsWriteState(_layout, _access);
@@ -508,8 +520,10 @@ namespace Moer::Render {
             if (auto it = buffer_states.find(buffer); it != buffer_states.end()) {
                 auto& state = it->second;
                 if (state.src_access == state.dst_access && state.src_stage == state.dst_stage) {
-                    state.dst_access = VK_ACCESS_2_NONE;
-                    state.dst_stage  = VK_PIPELINE_STAGE_2_NONE;
+                    state.dst_access       = VK_ACCESS_2_NONE;
+                    state.dst_stage        = VK_PIPELINE_STAGE_2_NONE;
+                    state.src_queue_family = VK_QUEUE_FAMILY_IGNORED;
+                    state.dst_queue_family = VK_QUEUE_FAMILY_IGNORED;
                     continue;
                 }
                 buffer_barriers.emplace_back();
@@ -520,50 +534,30 @@ namespace Moer::Render {
                 barrier.dstAccessMask           = state.dst_access;
                 barrier.srcStageMask            = state.src_stage;
                 barrier.dstStageMask            = state.dst_stage;
-                barrier.srcQueueFamilyIndex     = VK_QUEUE_FAMILY_IGNORED;
-                barrier.dstQueueFamilyIndex     = VK_QUEUE_FAMILY_IGNORED;
+                barrier.srcQueueFamilyIndex     = state.src_queue_family;
+                barrier.dstQueueFamilyIndex     = state.dst_queue_family;
                 barrier.buffer                  = buffer->GetHandle();
                 barrier.offset                  = 0;
                 barrier.size                    = buffer->GetByteSize();
 
-                state.src_access = state.dst_access;
-                state.src_stage  = state.dst_stage;
-                state.dst_access = VK_ACCESS_2_NONE;
-                state.dst_stage  = VK_PIPELINE_STAGE_2_NONE;
+                state.src_access       = state.dst_access;
+                state.src_stage        = state.dst_stage;
+                state.dst_access       = VK_ACCESS_2_NONE;
+                state.dst_stage        = VK_PIPELINE_STAGE_2_NONE;
+                state.src_queue_family = VK_QUEUE_FAMILY_IGNORED;
+                state.dst_queue_family = VK_QUEUE_FAMILY_IGNORED;
             }
         }
-
-        // for (auto& [buffer, state] : buffer_states) {
-        //     if (state.src_access == state.dst_access && state.src_stage == state.dst_stage) {
-        //         continue;
-        //     }
-        //     buffer_barriers.emplace_back();
-        //     VkBufferMemoryBarrier2& barrier = buffer_barriers.back();
-        //     barrier.sType                   = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-        //     barrier.pNext                   = nullptr;
-        //     barrier.srcAccessMask           = state.src_access;
-        //     barrier.dstAccessMask           = state.dst_access;
-        //     barrier.srcStageMask            = state.src_stage;
-        //     barrier.dstStageMask            = state.dst_stage;
-        //     barrier.srcQueueFamilyIndex     = VK_QUEUE_FAMILY_IGNORED;
-        //     barrier.dstQueueFamilyIndex     = VK_QUEUE_FAMILY_IGNORED;
-        //     barrier.buffer                  = buffer->GetHandle();
-        //     barrier.offset                  = 0;
-        //     barrier.size                    = buffer->GetByteSize();
-
-        //     state.src_access = state.dst_access;
-        //     state.src_stage  = state.dst_stage;
-        //     state.dst_access = VK_ACCESS_2_NONE;
-        //     state.dst_stage  = VK_PIPELINE_STAGE_2_NONE;
-        // }
 
         for (VulkanTexture* texture : pending_textures) {
             if (auto it = texture_states.find(texture); it != texture_states.end()) {
                 auto& state = it->second;
                 if (state.src_access == state.dst_access && state.src_stage == state.dst_stage) {
-                    state.dst_access = VK_ACCESS_2_NONE;
-                    state.dst_stage  = VK_PIPELINE_STAGE_2_NONE;
-                    state.dst_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+                    state.dst_access       = VK_ACCESS_2_NONE;
+                    state.dst_stage        = VK_PIPELINE_STAGE_2_NONE;
+                    state.dst_layout       = VK_IMAGE_LAYOUT_UNDEFINED;
+                    state.src_queue_family = VK_QUEUE_FAMILY_IGNORED;
+                    state.dst_queue_family = VK_QUEUE_FAMILY_IGNORED;
                     continue;
                 }
                 texture_barriers.emplace_back();
@@ -574,8 +568,8 @@ namespace Moer::Render {
                 barrier.dstAccessMask                   = state.dst_access;
                 barrier.srcStageMask                    = state.src_stage;
                 barrier.dstStageMask                    = state.dst_stage;
-                barrier.srcQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
-                barrier.dstQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
+                barrier.srcQueueFamilyIndex             = state.src_queue_family;
+                barrier.dstQueueFamilyIndex             = state.dst_queue_family;
                 barrier.image                           = texture->GetHandle();
                 barrier.subresourceRange.aspectMask     = VulkanEnumTranslator::METoVKImageAspectFlags(texture->GetAspectFlags());
                 barrier.subresourceRange.baseArrayLayer = 0;
@@ -589,44 +583,13 @@ namespace Moer::Render {
                 state.src_stage  = state.dst_stage;
                 state.src_layout = state.dst_layout;
 
-                state.dst_access = VK_ACCESS_2_NONE;
-                state.dst_stage  = VK_PIPELINE_STAGE_2_NONE;
-                state.dst_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+                state.dst_access       = VK_ACCESS_2_NONE;
+                state.dst_stage        = VK_PIPELINE_STAGE_2_NONE;
+                state.dst_layout       = VK_IMAGE_LAYOUT_UNDEFINED;
+                state.src_queue_family = VK_QUEUE_FAMILY_IGNORED;
+                state.dst_queue_family = VK_QUEUE_FAMILY_IGNORED;
             }
         }
-
-        // for (auto& [texture, state] : texture_states) {
-        //     if (state.src_access == state.dst_access && state.src_stage == state.dst_stage) {
-        //         continue;
-        //     }
-        //     texture_barriers.emplace_back();
-        //     VkImageMemoryBarrier2& barrier          = texture_barriers.back();
-        //     barrier.sType                           = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-        //     barrier.pNext                           = nullptr;
-        //     barrier.srcAccessMask                   = state.src_access;
-        //     barrier.dstAccessMask                   = state.dst_access;
-        //     barrier.srcStageMask                    = state.src_stage;
-        //     barrier.dstStageMask                    = state.dst_stage;
-        //     barrier.srcQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
-        //     barrier.dstQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
-        //     barrier.image                           = texture->GetHandle();
-        //     barrier.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
-        //     barrier.subresourceRange.baseArrayLayer = 0;
-        //     barrier.subresourceRange.layerCount     = 1;
-        //     barrier.subresourceRange.baseMipLevel   = 0;
-        //     barrier.subresourceRange.levelCount     = texture->GetNumMips();
-        //     barrier.oldLayout                       = state.src_layout;
-        //     barrier.newLayout                       = state.dst_layout;
-
-        //     state.src_access = state.dst_access;
-        //     state.src_stage  = state.dst_stage;
-        //     state.src_layout = state.dst_layout;
-
-        //     state.dst_access = VK_ACCESS_2_NONE;
-        //     state.dst_stage  = VK_PIPELINE_STAGE_2_NONE;
-        //     state.dst_layout = VK_IMAGE_LAYOUT_UNDEFINED;
-        // }
-
         pending_buffers.clear();
         pending_textures.clear();
     }

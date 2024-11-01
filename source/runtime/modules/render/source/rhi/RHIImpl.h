@@ -432,6 +432,9 @@ namespace Moer::Render {
         Array<TextureBarrier> write_textures;
         Array<BufferBarrier>  read_buffers;
         Array<BufferBarrier>  write_buffers;
+        EQueueType            src_queue;
+        EQueueType            dst_queue;
+        bool                  b_queue_transition = false;
 
     public:
         BarrierCmd& ReadTexture(const TextureView& _view, ETextureState _dst_state, EPassType _pass_type) {
@@ -451,18 +454,21 @@ namespace Moer::Render {
             return *this;
         }
 
-        BarrierCmd(uint _read_tex_cnt, uint _write_tex_cnt, uint _read_buf_cnt, uint _write_buf_cnt) : Command(EType::Barrier) {
+        BarrierCmd(uint _read_tex_cnt, uint _write_tex_cnt, uint _read_buf_cnt, uint _write_buf_cnt, EQueueType _src_queue, EQueueType _dst_queue) : Command(EType::Barrier), src_queue(_src_queue), dst_queue(_dst_queue), b_queue_transition(_src_queue != _dst_queue) {
             read_textures.reserve(_read_tex_cnt);
             write_textures.reserve(_write_tex_cnt);
             read_buffers.reserve(_read_buf_cnt);
             write_buffers.reserve(_write_buf_cnt);
         }
 
-        EQueueType  GetQueueType() const override { return EQueueType::Graphics; }
-        const auto& ReadTextures() const { return read_textures; }
-        const auto& WriteTextures() const { return write_textures; }
-        const auto& ReadBuffers() const { return read_buffers; }
-        const auto& WriteBuffers() const { return write_buffers; }
+        EQueueType       GetQueueType() const override { return EQueueType::Graphics; }
+        const auto&      ReadTextures() const { return read_textures; }
+        const auto&      WriteTextures() const { return write_textures; }
+        const auto&      ReadBuffers() const { return read_buffers; }
+        const auto&      WriteBuffers() const { return write_buffers; }
+        const bool       IsQueueTransition() const { return b_queue_transition; }
+        const EQueueType GetSrcQueue() const { return src_queue; }
+        const EQueueType GetDstQueue() const { return dst_queue; }
     };
 
     struct UpdateBindlessArrayCmd : public Command {

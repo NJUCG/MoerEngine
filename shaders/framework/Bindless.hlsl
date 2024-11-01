@@ -90,6 +90,10 @@ template <typename T> struct Texture3DSampleHandle {
   uint internalIndex;
 };
 
+struct SamplerHeapHandle{
+  uint internalIndex;
+};
+
 #define INNER_GENERATE_TEXTURE_TYPE_FETCH(NativeType, TextureType)             \
   TextureType<NativeType> operator[](TextureType##Handle<NativeType> handle) { \
     uint tex_handle =                                                          \
@@ -97,7 +101,7 @@ template <typename T> struct Texture3DSampleHandle {
     uint tex_idx = tex_handle >> 8;                                            \
     return TextureType<NativeType>(                                            \
         g##TextureType##NativeType##__114514_bdls[NonUniformResourceIndex(     \
-            tex_handle)]);                                                     \
+            tex_idx)]);                                                     \
   }
 
 #define INNER_GENERATE_TEXTURE_TYPE_SAMPLE(NativeType, TextureType, CoordType, \
@@ -116,10 +120,28 @@ template <typename T> struct Texture3DSampleHandle {
         offset);                                                               \
   }
 
+#define INNER_GENERATE_TEXTURE_TYPE_SAMPLE_LEVEL(NativeType, TextureType, CoordType, \
+                                          OffsetType)                         \
+NativeType SampleLevel(TextureType##SampleHandle<NativeType> handle,              \
+                  CoordType uv, OffsetType offset, float level) {                         \
+  uint tex_handle =                                                          \
+      g__array_114514_bdls[NonUniformResourceIndex(handle.internalIndex)];   \
+  uint tex_idx = tex_handle >> 8;                                            \
+  uint sampler_idx = tex_handle & 0xff;                                      \
+  TextureType<NativeType> tex = TextureType<NativeType>(                     \
+      g##TextureType##NativeType##__114514_bdls[NonUniformResourceIndex(     \
+          tex_idx)]);                                                        \
+  return tex.SampleLevel(                                                         \
+      gsampler__114514_bdls[NonUniformResourceIndex(sampler_idx)], uv, level,       \
+      offset);                                                               \
+}
+
 #define DEFINE_FETCH_TEXTURE_TYPE_AND_FORMATS(TextureType, CoordType,          \
                                               OffsetType)                      \
   ITERATE_TEXTURE_TYPES(INNER_GENERATE_TEXTURE_TYPE_FETCH, TextureType)        \
   ITERATE_TEXTURE_TYPES(INNER_GENERATE_TEXTURE_TYPE_SAMPLE, TextureType,       \
+                        CoordType, OffsetType)\
+ITERATE_TEXTURE_TYPES(INNER_GENERATE_TEXTURE_TYPE_SAMPLE_LEVEL, TextureType,       \
                         CoordType, OffsetType)
 
 #define INNER_GENERATE_BUFFER_FETCH()                                          \
@@ -129,6 +151,11 @@ template <typename T> struct Texture3DSampleHandle {
     return ByteAddressBuffer(                                                  \
         gbuffer__114514_bdls[NonUniformResourceIndex(array_handle)]);          \
   }
+
+#define INNER_SAMPLER_FETCH()                                                  \
+  SamplerState operator[](SamplerHeapHandle handle) {                              \
+    return gsampler__114514_bdls[NonUniformResourceIndex(handle.internalIndex)]; \
+  }
 #if VULKAN
 #define VK_DESCRIPTOR_HEAP(INNER_GENERATE_TEXTURE_TYPE_FETCH,                  \
                            INNER_GENERATE_BUFFER_FETCH)                        \
@@ -137,6 +164,7 @@ template <typename T> struct Texture3DSampleHandle {
     DEFINE_FETCH_TEXTURE_TYPE_AND_FORMATS(Texture2D, float2, int2)             \
     DEFINE_FETCH_TEXTURE_TYPE_AND_FORMATS(Texture3D, float3, int3)             \
     INNER_GENERATE_BUFFER_FETCH()                                              \
+    INNER_SAMPLER_FETCH()\
   };                                                                           \
   static VKResourceDescriptorHeap vkResourceDescriptorHeap;
 
@@ -156,6 +184,10 @@ template <typename T> struct Texture3DSampleHandle {
   vkResourceDescriptorHeap[(HandleType)handle]
 #define DESCRIPTOR_HEAP_SAMPLE(HandleType, handle, uv, offset)                 \
   vkResourceDescriptorHeap.Sample(HandleType(handle), uv, offset)
+#define DESCRIPTOR_HEAP_SAMPLE_LEVEL(HandleType, handle, uv, offset, level)           \
+  vkResourceDescriptorHeap.SampleLevel(HandleType(handle), uv, offset, level)
+
+
 #elif DXIL
 
 #define DESCRIPTOR_HEAP_UNIFORM(HandleType, handle)                            \
@@ -188,6 +220,20 @@ template <typename T> struct Texture3DSampleHandle {
       return DESCRIPTOR_HEAP_SAMPLE(Texture2DSampleHandle<TextureValue>,       \
                                     handle, uv, offset);                       \
     }                                                                          \
+    template <typename TextureValue> TextureValue SampleLevel2D(float2 uv, float level=0.f) {        \
+      int2 offset = int2(0, 0);                                                \
+      return DESCRIPTOR_HEAP_SAMPLE_LEVEL(Texture2DSampleHandle<TextureValue>,       \
+                                    handle, uv, offset, level);                       \
+    }                                                                          \
+    template<typename TextureValue> Texture2D<TextureValue> GetTexture2D() {    \
+      return DESCRIPTOR_HEAP(Texture2DHandle<TextureValue>, handle);           \
+    }                                                                          \
+  };\
+  struct SamplerHandle {                                                       \
+    uint handle;\
+    SamplerState GetSampler() {\
+  return DESCRIPTOR_HEAP(SamplerHeapHandle, handle);\
+    }\
   };
 
 #define BINDLESS_ACCEL(Space)                                                  \

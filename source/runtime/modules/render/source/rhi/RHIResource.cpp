@@ -8,6 +8,7 @@
 #include "shader/Shader.h"
 #include "shader/ShaderCommon.h"
 #include "shader/ShaderParameterMacros.h"
+#include "vulkan/VulkanRHIResource.h"
 #include <algorithm>
 #include <misc/Traits.h>
 #include <tuple>
@@ -186,6 +187,7 @@ namespace Moer::Render {
     TextureView::TextureView(Texture* _tex, uint8 _mip_level, uint8 _mip_cnt) : texture(_tex), mip_level(_mip_level), num_mips(_mip_cnt), extent(_tex->GetExtent()) {
         //calculate extent
     }
+
     TextureView Texture::GetView(uint8 _mip_level, uint8 _mip_cnt) {
         return TextureView(this, _mip_level, _mip_cnt);
     }

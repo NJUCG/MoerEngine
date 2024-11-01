@@ -10,6 +10,18 @@ namespace Moer {
     using MaterialInstanceRef = CountableRef<MaterialInstance>;
     class BufferInterfaceBlock;
 
+    struct PackedMaterialData {
+        float4 packed_0;
+        float4 packed_1;
+        float4 packed_2;
+        float4 packed_3;
+
+        float4 packed_4;
+        float4 packed_5;
+        float4 packed_6;
+        float4 packed_7;
+    };
+
     enum class EMaterialType : uint32_t {
         E_PBR_STANDARD,
         E_HAIR,
@@ -19,7 +31,7 @@ namespace Moer {
 
     class RENDER_API Material : public CountableResource {
     public:
-        static constexpr uint32_t MaterialBytesNum = 512;
+        static constexpr uint32_t    MaterialBytesNum = 512;
         const std::string&           GetName() const noexcept;
         void                         SetName(const std::string& name) noexcept;
         MaterialInstanceRef          CreateInstance();
@@ -57,7 +69,7 @@ namespace Moer {
             PREFER_UNCOMPRESSED_TEXTURES  = 1 << 13,
             DISABLE_VERTEXAO              = 1 << 14,
         };
-        uint32_t _flags = CAST_SHADOW;
+        uint32_t flags = CAST_SHADOW;
 
         enum SHADERTYPE {
             SHADERTYPE_PBR,
@@ -72,9 +84,9 @@ namespace Moer {
             SHADERTYPE_PBR_CLOTH_CLEARCOAT,
             SHADERTYPE_PBR_TERRAINBLENDED,
             SHADERTYPE_COUNT
-        } shaderType = SHADERTYPE_PBR;
+        } shader_type = SHADERTYPE_PBR;
 
-        inline static const Moer::Array<std::string> shaderTypeDefines[] = {
+        inline static const Moer::Array<std::string> shader_type_defines[] = {
             {},                          // SHADERTYPE_PBR,
             {"PLANARREFLECTION"},        // SHADERTYPE_PBR_PLANARREFLECTION,
             {"PARALLAXOCCLUSIONMAPPING"},// SHADERTYPE_PBR_PARALLAXOCCLUSIONMAPPING,
@@ -87,43 +99,43 @@ namespace Moer {
             {"SHEEN", "CLEARCOAT"},      // SHADERTYPE_PBR_CLOTH_CLEARCOAT,
             {"TERRAINBLENDED"},          //SHADERTYPE_PBR_TERRAINBLENDED
         };
-        static_assert(SHADERTYPE_COUNT == sizeof(shaderTypeDefines) / sizeof(shaderTypeDefines[0]), "These values must match!");
+        static_assert(SHADERTYPE_COUNT == sizeof(shader_type_defines) / sizeof(shader_type_defines[0]), "These values must match!");
 
-        uint8_t               userStencilRef   = 0;
-
-        Moer::Vector4f
-            baseColor = Moer::Vector4f(1, 1, 1, 1);
-        Moer::Vector4f
-            specularColor = Moer::Vector4f(1, 1, 1, 1);
-        Moer::Vector4f
-            emissiveColor = Moer::Vector4f(1, 1, 1, 0);
-        Moer::Vector4f
-            subsurfaceScattering = Moer::Vector4f(1, 1, 1, 0);
-        Moer::Vector4f
-              texMulAdd                 = Moer::Vector4f(1, 1, 0, 0);
-        float roughness                 = 0.2f;
-        float reflectance               = 0.02f;
-        float metalness                 = 0.0f;
-        float normalMapStrength         = 1.0f;
-        float parallaxOcclusionMapping  = 0.0f;
-        float displacementMapping       = 0.0f;
-        float refraction                = 0.0f;
-        float transmission              = 0.0f;
-        float alphaRef                  = 1.0f;
-        float anisotropy_strength       = 0;
-        float anisotropy_rotation       = 0;//radians, counter-clockwise
-        float blend_with_terrain_height = 0;
+        uint8_t user_stencil_ref = 0;
 
         Moer::Vector4f
-              sheenColor         = Moer::Vector4f(1, 1, 1, 1);
-        float sheenRoughness     = 0;
-        float clearcoat          = 0;
-        float clearcoatRoughness = 0;
+            base_color = Moer::Vector4f(1, 1, 1, 1);
+        Moer::Vector4f
+            specular_color = Moer::Vector4f(1, 1, 1, 1);
+        Moer::Vector4f
+            emissive_color = Moer::Vector4f(1, 1, 1, 0);
+        Moer::Vector4f
+            subsurface_scattering = Moer::Vector4f(1, 1, 1, 0);
+        Moer::Vector4f
+              tex_mul_add                = Moer::Vector4f(1, 1, 0, 0);
+        float roughness                  = 0.2f;
+        float reflectance                = 0.02f;
+        float metalness                  = 0.0f;
+        float normal_map_strength        = 1.0f;
+        float parallax_occlusion_mapping = 0.0f;
+        float displacement_mapping       = 0.0f;
+        float refraction                 = 0.0f;
+        float transmission               = 0.0f;
+        float alpha_ref                  = 1.0f;
+        float anisotropy_strength        = 0;
+        float anisotropy_rotation        = 0;//radians, counter-clockwise
+        float blend_with_terrain_height  = 0;
+
+        Moer::Vector4f
+              sheen_color         = Moer::Vector4f(1, 1, 1, 1);
+        float sheen_roughness     = 0;
+        float clearcoat           = 0;
+        float clearcoat_roughness = 0;
 
         Moer::Vector2f
-              texAnimDirection   = Moer::Vector2f(0, 0);
-        float texAnimFrameRate   = 0.0f;
-        float texAnimElapsedTime = 0.0f;
+              tex_anim_direction    = Moer::Vector2f(0, 0);
+        float tex_anim_frame_rate   = 0.0f;
+        float tex_anim_elapsed_time = 0.0f;
 
         enum TEXTURESLOT {
             BASECOLORMAP,
@@ -155,94 +167,94 @@ namespace Moer {
         };
         TextureMap textures[TEXTURESLOT_COUNT];
 
-        int   customShaderID = -1;
-        uint4 userdata       = uint4(0, 0, 0, 0);// can be accessed by custom shader
+        int   custom_shader_id = -1;
+        uint4 userdata         = uint4(0, 0, 0, 0);// can be accessed by custom shader
 
         // Non-serialized attributes:
-        uint32_t layerMask          = ~0u;
+        uint32_t layer_mask         = ~0u;
         int      sampler_descriptor = -1;// optional
 
         // User stencil value can be in range [0, 15]
-        inline void SetUserStencilRef(uint8_t value) {
-            assert(value < 16);
-            userStencilRef = value & 0x0F;
+        inline void SetUserStencilRef(uint8_t _value) {
+            assert(_value < 16);
+            user_stencil_ref = _value & 0x0F;
         }
         uint32_t GetStencilRef() const;
 
-        inline float GetOpacity() const { return baseColor.w; }
-        inline float GetEmissiveStrength() const { return emissiveColor.w; }
-        inline int   GetCustomShaderID() const { return customShaderID; }
+        inline float GetOpacity() const { return base_color.w; }
+        inline float GetEmissiveStrength() const { return emissive_color.w; }
+        inline int   GetCustomShaderID() const { return custom_shader_id; }
 
-        inline bool HasPlanarReflection() const { return shaderType == SHADERTYPE_PBR_PLANARREFLECTION || shaderType == SHADERTYPE_WATER; }
+        inline bool HasPlanarReflection() const { return shader_type == SHADERTYPE_PBR_PLANARREFLECTION || shader_type == SHADERTYPE_WATER; }
 
-        inline void SetDirty(bool value = true) {
-            if (value) {
-                _flags |= DIRTY;
+        inline void SetDirty(bool _value = true) {
+            if (_value) {
+                flags |= DIRTY;
             } else {
-                _flags &= ~DIRTY;
+                flags &= ~DIRTY;
             }
         }
-        inline bool IsDirty() const { return _flags & DIRTY; }
+        inline bool IsDirty() const { return flags & DIRTY; }
 
-        inline void SetCastShadow(bool value) {
+        inline void SetCastShadow(bool _value) {
             SetDirty();
-            if (value) {
-                _flags |= CAST_SHADOW;
+            if (_value) {
+                flags |= CAST_SHADOW;
             } else {
-                _flags &= ~CAST_SHADOW;
+                flags &= ~CAST_SHADOW;
             }
         }
-        inline void SetReceiveShadow(bool value) {
+        inline void SetReceiveShadow(bool _value) {
             SetDirty();
-            if (value) {
-                _flags &= ~DISABLE_RECEIVE_SHADOW;
+            if (_value) {
+                flags &= ~DISABLE_RECEIVE_SHADOW;
             } else {
-                _flags |= DISABLE_RECEIVE_SHADOW;
+                flags |= DISABLE_RECEIVE_SHADOW;
             }
         }
-        inline void SetOcclusionEnabled_Primary(bool value) {
+        inline void SetOcclusionEnabledPrimary(bool _value) {
             SetDirty();
-            if (value) {
-                _flags |= OCCLUSION_PRIMARY;
+            if (_value) {
+                flags |= OCCLUSION_PRIMARY;
             } else {
-                _flags &= ~OCCLUSION_PRIMARY;
+                flags &= ~OCCLUSION_PRIMARY;
             }
         }
-        inline void SetOcclusionEnabled_Secondary(bool value) {
+        inline void SetOcclusionEnabledSecondary(bool _value) {
             SetDirty();
-            if (value) {
-                _flags |= OCCLUSION_SECONDARY;
+            if (_value) {
+                flags |= OCCLUSION_SECONDARY;
             } else {
-                _flags &= ~OCCLUSION_SECONDARY;
+                flags &= ~OCCLUSION_SECONDARY;
             }
         }
 
         // inline wi::enums::BLENDMODE GetBlendMode() const { if (userBlendMode == wi::enums::BLENDMODE_OPAQUE && (GetFilterMask() & wi::enums::FILTER_TRANSPARENT)) return wi::enums::BLENDMODE_ALPHA; else return userBlendMode; }
-        inline bool IsCastingShadow() const { return _flags & CAST_SHADOW; }
-        inline bool IsAlphaTestEnabled() const { return alphaRef <= 1.0f - 1.0f / 256.0f; }
-        inline bool IsUsingVertexColors() const { return _flags & USE_VERTEXCOLORS; }
-        inline bool IsUsingWind() const { return _flags & USE_WIND; }
-        inline bool IsReceiveShadow() const { return (_flags & DISABLE_RECEIVE_SHADOW) == 0; }
-        inline bool IsUsingSpecularGlossinessWorkflow() const { return _flags & SPECULAR_GLOSSINESS_WORKFLOW; }
-        inline bool IsOcclusionEnabled_Primary() const { return _flags & OCCLUSION_PRIMARY; }
-        inline bool IsOcclusionEnabled_Secondary() const { return _flags & OCCLUSION_SECONDARY; }
-        inline bool IsCustomShader() const { return customShaderID >= 0; }
-        inline bool IsDoubleSided() const { return _flags & DOUBLE_SIDED; }
-        inline bool IsOutlineEnabled() const { return _flags & OUTLINE; }
-        inline bool IsPreferUncompressedTexturesEnabled() const { return _flags & PREFER_UNCOMPRESSED_TEXTURES; }
-        inline bool IsVertexAODisabled() const { return _flags & DISABLE_VERTEXAO; }
+        inline bool IsCastingShadow() const { return flags & CAST_SHADOW; }
+        inline bool IsAlphaTestEnabled() const { return alpha_ref <= 1.0f - 1.0f / 256.0f; }
+        inline bool IsUsingVertexColors() const { return flags & USE_VERTEXCOLORS; }
+        inline bool IsUsingWind() const { return flags & USE_WIND; }
+        inline bool IsReceiveShadow() const { return (flags & DISABLE_RECEIVE_SHADOW) == 0; }
+        inline bool IsUsingSpecularGlossinessWorkflow() const { return flags & SPECULAR_GLOSSINESS_WORKFLOW; }
+        inline bool IsOcclusionEnabledPrimary() const { return flags & OCCLUSION_PRIMARY; }
+        inline bool IsOcclusionEnabledSecondary() const { return flags & OCCLUSION_SECONDARY; }
+        inline bool IsCustomShader() const { return custom_shader_id >= 0; }
+        inline bool IsDoubleSided() const { return flags & DOUBLE_SIDED; }
+        inline bool IsOutlineEnabled() const { return flags & OUTLINE; }
+        inline bool IsPreferUncompressedTexturesEnabled() const { return flags & PREFER_UNCOMPRESSED_TEXTURES; }
+        inline bool IsVertexAODisabled() const { return flags & DISABLE_VERTEXAO; }
 
         inline void SetBaseColor(const Moer::Vector4f& value) {
             SetDirty();
-            baseColor = value;
+            base_color = value;
         }
         inline void SetSpecularColor(const Moer::Vector4f& value) {
             SetDirty();
-            specularColor = value;
+            specular_color = value;
         }
         inline void SetEmissiveColor(const Moer::Vector4f& value) {
             SetDirty();
-            emissiveColor = value;
+            emissive_color = value;
         }
         inline void SetRoughness(float value) {
             SetDirty();
@@ -258,7 +270,7 @@ namespace Moer {
         }
         inline void SetEmissiveStrength(float value) {
             SetDirty();
-            emissiveColor.w = value;
+            emissive_color.w = value;
         }
         inline void SetTransmissionAmount(float value) {
             SetDirty();
@@ -270,65 +282,65 @@ namespace Moer {
         }
         inline void SetNormalMapStrength(float value) {
             SetDirty();
-            normalMapStrength = value;
+            normal_map_strength = value;
         }
         inline void SetParallaxOcclusionMapping(float value) {
             SetDirty();
-            parallaxOcclusionMapping = value;
+            parallax_occlusion_mapping = value;
         }
         inline void SetDisplacementMapping(float value) {
             SetDirty();
-            displacementMapping = value;
+            displacement_mapping = value;
         }
         inline void SetSubsurfaceScatteringColor(Moer::Vector3f
                                                      value) {
             SetDirty();
-            subsurfaceScattering.x = value.x;
-            subsurfaceScattering.y = value.y;
-            subsurfaceScattering.z = value.z;
+            subsurface_scattering.x = value.x;
+            subsurface_scattering.y = value.y;
+            subsurface_scattering.z = value.z;
         }
         inline void SetSubsurfaceScatteringAmount(float value) {
             SetDirty();
-            subsurfaceScattering.w = value;
+            subsurface_scattering.w = value;
         }
         inline void SetOpacity(float value) {
             SetDirty();
-            baseColor.w = value;
+            base_color.w = value;
         }
         inline void SetAlphaRef(float value) {
             SetDirty();
-            alphaRef = value;
+            alpha_ref = value;
         }
         inline void SetUseVertexColors(bool value) {
             SetDirty();
             if (value) {
-                _flags |= USE_VERTEXCOLORS;
+                flags |= USE_VERTEXCOLORS;
             } else {
-                _flags &= ~USE_VERTEXCOLORS;
+                flags &= ~USE_VERTEXCOLORS;
             }
         }
         inline void SetUseWind(bool value) {
             SetDirty();
             if (value) {
-                _flags |= USE_WIND;
+                flags |= USE_WIND;
             } else {
-                _flags &= ~USE_WIND;
+                flags &= ~USE_WIND;
             }
         }
         inline void SetUseSpecularGlossinessWorkflow(bool value) {
             SetDirty();
             if (value) {
-                _flags |= SPECULAR_GLOSSINESS_WORKFLOW;
+                flags |= SPECULAR_GLOSSINESS_WORKFLOW;
             } else {
-                _flags &= ~SPECULAR_GLOSSINESS_WORKFLOW;
+                flags &= ~SPECULAR_GLOSSINESS_WORKFLOW;
             }
         }
         inline void SetSheenColor(const Moer::Vector3f& value) {
-            sheenColor = Moer::Vector4f(value.x, value.y, value.z, sheenColor.w);
+            sheen_color = Moer::Vector4f(value.x, value.y, value.z, sheen_color.w);
             SetDirty();
         }
         inline void SetSheenRoughness(float value) {
-            sheenRoughness = value;
+            sheen_roughness = value;
             SetDirty();
         }
         inline void SetClearcoatFactor(float value) {
@@ -336,38 +348,38 @@ namespace Moer {
             SetDirty();
         }
         inline void SetClearcoatRoughness(float value) {
-            clearcoatRoughness = value;
+            clearcoat_roughness = value;
             SetDirty();
         }
-        inline void SetCustomShaderID(int id) { customShaderID = id; }
-        inline void DisableCustomShader() { customShaderID = -1; }
+        inline void SetCustomShaderID(int id) { custom_shader_id = id; }
+        inline void DisableCustomShader() { custom_shader_id = -1; }
         inline void SetDoubleSided(bool value = true) {
             if (value) {
-                _flags |= DOUBLE_SIDED;
+                flags |= DOUBLE_SIDED;
             } else {
-                _flags &= ~DOUBLE_SIDED;
+                flags &= ~DOUBLE_SIDED;
             }
         }
         inline void SetOutlineEnabled(bool value = true) {
             if (value) {
-                _flags |= OUTLINE;
+                flags |= OUTLINE;
             } else {
-                _flags &= ~OUTLINE;
+                flags &= ~OUTLINE;
             }
         }
         inline void SetPreferUncompressedTexturesEnabled(bool value = true) {
             if (value) {
-                _flags |= PREFER_UNCOMPRESSED_TEXTURES;
+                flags |= PREFER_UNCOMPRESSED_TEXTURES;
             } else {
-                _flags &= ~PREFER_UNCOMPRESSED_TEXTURES;
+                flags &= ~PREFER_UNCOMPRESSED_TEXTURES;
             }
             CreateRenderData(true);
         }
         inline void SetVertexAODisabled(bool value = true) {
             if (value) {
-                _flags |= DISABLE_VERTEXAO;
+                flags |= DISABLE_VERTEXAO;
             } else {
-                _flags &= ~DISABLE_VERTEXAO;
+                flags &= ~DISABLE_VERTEXAO;
             }
         }
 
@@ -380,10 +392,8 @@ namespace Moer {
         // Returns the bitwise OR of all the wi::enums::FILTER flags applicable to this material
         uint32_t GetFilterMask() const;
 
-
         // Create texture resources for GPU
-        void CreateRenderData(bool force_recreate = false);
-
+        void CreateRenderData(bool _force_recreate = false);
     };
 
     using MaterialRef = CountableRef<Material>;
@@ -428,12 +438,13 @@ namespace Moer {
         RENDER_API MaterialBuilder& SetName(const std::string& name) noexcept;
         RENDER_API MaterialBuilder& SetType(EMaterialType type) noexcept;
         RENDER_API MaterialRef      Build();
+
     protected:
         // constexpr static uint32_t MAX_PARAMETER_COUNT = 16;
-        Parameter   m_parameters[32];
-        uint32_t    m_param_count{0};
-        std::string m_material_name;
+        Parameter     m_parameters[32];
+        uint32_t      m_param_count{0};
+        std::string   m_material_name;
         EMaterialType m_material_type{EMaterialType::E_PBR_STANDARD};
     };
 
-}
+}// namespace Moer

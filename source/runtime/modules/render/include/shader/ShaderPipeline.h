@@ -182,6 +182,10 @@ namespace Moer::Render {
         using type = NonConstant;
     };
 
+    struct ConstantBufferArg {
+        using type = NonConstant;
+    };
+
     struct TextureArg {
         using type = NonConstant;
     };
@@ -205,6 +209,11 @@ namespace Moer::Render {
     template<>
     struct ShaderArgEnum<BufferArg> {
         static constexpr EShaderArgType arg_type = SDA_Buffer;
+    };
+
+    template<>
+    struct ShaderArgEnum<ConstantBufferArg> {
+        static constexpr EShaderArgType arg_type = SDA_ConstantBuffer;
     };
 
     template<>

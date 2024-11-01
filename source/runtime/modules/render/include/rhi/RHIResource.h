@@ -804,6 +804,7 @@ namespace Moer::Render {
         ETextureUsageFlags     GetUsage() const { return info.usage; }
         ETextureAspectFlags    GetAspectFlags() const { return info.aspect_flags; }
         uint3                  GetExtent() const { return uint3(info.extent.x, info.extent.y, info.depth); }
+        virtual uint           GetMipByteSize(uint _mip_idx) const = 0;
         const std::string_view GetName() const { return std::string_view(debug_name.has_value() ? debug_name.value().data() : default_name.data()); }
         RENDER_API TextureView GetView(uint8 _mip_idx = 0u, uint8 _mip_num = 1u);
 
@@ -3010,6 +3011,7 @@ namespace Moer::Render {
 
     enum EShaderArgType : uint8 {
         SDA_Buffer,
+        SDA_ConstantBuffer,
         SDA_Texture,
         SDA_Sampler,
         SDA_Constant,

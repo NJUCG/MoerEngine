@@ -153,12 +153,16 @@ namespace Moer::Render {
 
     void CommandList::CopyFrom(std::span<byte> _data, TextureView _texture, std::string_view _name) {
         //
+        uint3 extent = uint3(
+            std::max(uint(_texture.extent.x) >> _texture.mip_level, 1u),
+            std::max(uint(_texture.extent.y) >> _texture.mip_level, 1u),
+            std::max(uint(_texture.extent.z) >> _texture.mip_level, 1u));
         commands.push_back(MakeUnique<UploadTextureCmd>(
             _texture.texture->GetFormat(),
             reinterpret_cast<uint64>(_texture.texture),
             _texture.mip_level,
             _texture.offset,
-            _texture.extent,
+            extent,
             _data.data(),
             _name));
     }
@@ -250,8 +254,8 @@ namespace Moer::Render {
         callbacks.emplace_back(std::move(_callback));
     }
 
-    void CommandList::BeginBarriers(uint _read_tex_cnt, uint _write_tex_cnt, uint _read_buf_cnt, uint _write_buf_cnt) {
-        commands.push_back(MakeUnique<BarrierCmd>(_read_tex_cnt, _write_tex_cnt, _read_buf_cnt, _write_buf_cnt));
+    void CommandList::BeginBarriers(uint _read_tex_cnt, uint _write_tex_cnt, uint _read_buf_cnt, uint _write_buf_cnt, EQueueType _src_queue, EQueueType _dst_queue) {
+        commands.push_back(MakeUnique<BarrierCmd>(_read_tex_cnt, _write_tex_cnt, _read_buf_cnt, _write_buf_cnt, _src_queue, _dst_queue));
         current_barriers = commands.back().get();
     }
 

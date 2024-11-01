@@ -465,6 +465,7 @@ namespace Moer::Render {
         static VkImageUsageFlags     METoVKImageUsageFlags(ETextureUsageFlags _me_flags);
         static EPixelFormat          VKToMEFormat(VkFormat _format);
         static VkBufferUsageFlags    METoVKBufferUsageFlags(EBufferUsageFlags _me_flags);
+        static VkDescriptorType      METoVkBufferDescriptorType(EBufferUsageFlags _type);
         static VkSampleCountFlagBits METoVKSampleCountFlagBits(uint32_t _me_count);
         static VkImageAspectFlags    METoVKImageAspectFlags(ETextureAspectFlags _flags);
         static VkImageViewType       METoVKImageViewType(ETextureDimension _dim);
@@ -825,16 +826,19 @@ namespace Moer::Render {
             return m_alloc.buffer;
         }
 
-        static VkIndexType        METoVKIndexType(EIndexElementType _type);
-        static VkBufferUsageFlags METoVKBufferUsageFlags(VulkanDevice* _device, EBufferUsageFlags _me_flags);
-        VkAccessFlags2            m_access_flags   = VK_ACCESS_2_NONE;
-        VkPipelineStageFlags2     m_stage_flags    = VK_PIPELINE_STAGE_2_NONE;
-        int                       m_descriptor_idx = -1;
+        VkAccessFlags2        m_access_flags   = VK_ACCESS_2_NONE;
+        VkPipelineStageFlags2 m_stage_flags    = VK_PIPELINE_STAGE_2_NONE;
+        int                   m_descriptor_idx = -1;
+
+        VkDescriptorType GetDescriptorType() const {
+            return m_descriptor_type;
+        }
 
     private:
         friend class TempBufferAllocator;
-        BufferAlloc m_alloc;
-        uint64      m_device_address = 0;
+        BufferAlloc      m_alloc;
+        uint64           m_device_address = 0;
+        VkDescriptorType m_descriptor_type;
     };
 
     struct VkTextureDescKey {
@@ -876,6 +880,7 @@ namespace Moer::Render {
         static VkImageType       METoVKImageType(ETextureDimension _dim);
         static VkImageUsageFlags METoVKImageUsageFlags(ETextureUsageFlags _me_flags);
 
+        uint GetMipByteSize(uint _mip_idx) const override;
         VkImageView GetView(uint _mip_level = 0, uint _mip_cnt = 1);
         bool        IsGeneralRead(uint _mip_level = 0) const;
 

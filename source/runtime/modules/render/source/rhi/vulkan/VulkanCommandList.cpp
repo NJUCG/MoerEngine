@@ -1428,35 +1428,45 @@ namespace Moer::Render {
                     } else if constexpr (std::is_same_v<T, VulkanDescriptorSetBinder>) {
                         //normal resources
                         for (uint i = 0; i < _binder.writers.size(); ++i) {
-                            auto&                       writer   = _binder.writers[i];
+                            auto& writer = _binder.writers[i];
+                            if (writer.descriptorCount < 1) continue;
                             const VulkanDescriptorInfo& set_info = _binder.bind_infos[i];
                             switch (writer.descriptorType) {
                                 case VK_DESCRIPTOR_TYPE_SAMPLER: {
                                     uint64 src_handle = descriptor_heap.GetSamplerDescIdx(std::get<Sampler>(_args[set_info.param_idx]));
-                                    descriptor_heap.PushSamplerDesc(src_handle, _binder.binding_infos[set_info.info_idx].offset);
+                                    descriptor_heap.PushSamplerDesc(src_handle, _binder.binding_infos[i].offset);
                                     break;
                                 }
                                 case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE: {
                                     uint64 src_handle = descriptor_heap.GetImageDescIdx(&std::get<TextureView>(_args[set_info.param_idx]), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-                                    descriptor_heap.PushImageDesc(src_handle, _binder.binding_infos[set_info.info_idx].offset);
+                                    descriptor_heap.PushImageDesc(src_handle, _binder.binding_infos[i].offset);
                                     break;
                                 }
                                 case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE: {
                                     uint64 src_handle = descriptor_heap.GetImageDescIdx(&std::get<TextureView>(_args[set_info.param_idx]), VK_IMAGE_LAYOUT_GENERAL);
-                                    descriptor_heap.PushImageDesc(src_handle, _binder.binding_infos[set_info.info_idx].offset);
+                                    descriptor_heap.PushImageDesc(src_handle, _binder.binding_infos[i].offset);
                                     break;
                                 }
-
+                                case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER: {
+                                    VulkanBuffer* buffer     = ResourceCast(std::get<BufferView>(_args[set_info.param_idx]).GetBuffer());
+                                    uint64        src_handle = descriptor_heap.GetBufferDescIdx(buffer);
+                                    descriptor_heap.PushUniformDesc(src_handle, _binder.binding_infos[i].offset);
+                                    break;
+                                }
                                 case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER: {
                                     VulkanBuffer* buffer     = ResourceCast(std::get<BufferView>(_args[set_info.param_idx]).GetBuffer());
                                     uint64        src_handle = descriptor_heap.GetBufferDescIdx(buffer);
-                                    descriptor_heap.PushBufferDesc(src_handle, _binder.binding_infos[set_info.info_idx].offset);
+                                    descriptor_heap.PushStorageDesc(src_handle, _binder.binding_infos[i].offset);
                                     break;
                                 }
                                 case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR: {
                                     VulkanAccelerationStructure* as         = ResourceCast(std::get<RaytracingSceneRef>(_args[set_info.param_idx]).Get())->tlas;
                                     uint64                       src_handle = descriptor_heap.GetAccelDescIdx(as);
-                                    descriptor_heap.PushAccelDesc(src_handle, _binder.binding_infos[set_info.info_idx].offset);
+                                    descriptor_heap.PushAccelDesc(src_handle, _binder.binding_infos[i].offset);
+                                    break;
+                                }
+                                case VK_DESCRIPTOR_TYPE_MAX_ENUM: {
+                                    //empty
                                     break;
                                 }
                                 default: {

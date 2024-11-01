@@ -51,6 +51,12 @@ namespace Moer {
         ELightComponentType m_type;// This field is used to distinguish type when read & write
     };
 
+    struct LightComponentData {
+        Vector3f            color;
+        float               intensity;
+        ELightComponentType type;
+    };
+
     using LightComponentRef = CountableRef<LightComponent>;
 
 }// namespace Moer

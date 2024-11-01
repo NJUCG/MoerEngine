@@ -272,11 +272,12 @@ public:
 };
 
 namespace Moer::Render {
-    enum class EQueueType {
+    enum class EQueueType : uint8 {
         Graphics,
         Compute,
         Copy,
-        Num
+        Num,
+        Ignore
     };
 
     struct Command {
@@ -719,15 +720,53 @@ namespace Moer::Render {
         };
 
         template<typename... T>
-        void Barriers(T... _args) {
+        void Barriers(EQueueType _src_queue, EQueueType _dst_queue, T... _args) {
             constexpr uint read_tex_cnt  = GetReadTextureCnt<T...>::value;
             constexpr uint write_tex_cnt = GetWriteTextureCnt<T...>::value;
             constexpr uint read_buf_cnt  = GetReadBufferCnt<T...>::value;
             constexpr uint write_buf_cnt = GetWriteBufferCnt<T...>::value;
             static_assert(read_tex_cnt + write_tex_cnt + read_buf_cnt + write_buf_cnt > 0, "no barriers");
 
-            BeginBarriers(read_tex_cnt, write_tex_cnt, read_buf_cnt, write_buf_cnt);
+            BeginBarriers(read_tex_cnt, write_tex_cnt, read_buf_cnt, write_buf_cnt, _src_queue, _dst_queue);
             (InnerBarrier(_args), ...);
+            EndBarriers();
+        }
+
+        void TextureBarriers(EQueueType _src_queue, EQueueType _dst_queue, Array<ReadTexture>&& _read_tex, Array<WriteTexture>&& _write_tex) {
+            BeginBarriers(_read_tex.size(), _write_tex.size(), 0, 0, _src_queue, _dst_queue);
+            for (auto& tex : _read_tex) {
+                InnerBarrier(tex);
+            }
+            for (auto& tex : _write_tex) {
+                InnerBarrier(tex);
+            }
+            EndBarriers();
+        }
+
+        void BufferBarriers(EQueueType _src_queue, EQueueType _dst_queue, Array<ReadBuffer>&& _read_buf, Array<WriteBuffer>&& _write_buf) {
+            BeginBarriers(0, 0, _read_buf.size(), _write_buf.size(), _src_queue, _dst_queue);
+            for (auto& buf : _read_buf) {
+                InnerBarrier(buf);
+            }
+            for (auto& buf : _write_buf) {
+                InnerBarrier(buf);
+            }
+            EndBarriers();
+        }
+
+        void TextureBarriers(EQueueType _src_queue, EQueueType _dst_queue, Array<ReadTexture>&& _read_tex) {
+            BeginBarriers(_read_tex.size(), 0, 0, 0, _src_queue, _dst_queue);
+            for (auto& tex : _read_tex) {
+                InnerBarrier(tex);
+            }
+            EndBarriers();
+        }
+
+        void TextureBarriers(EQueueType _src_queue, EQueueType _dst_queue, Array<WriteTexture>&& _write_tex) {
+            BeginBarriers(0, _write_tex.size(), 0, 0, _src_queue, _dst_queue);
+            for (auto& tex : _write_tex) {
+                InnerBarrier(tex);
+            }
             EndBarriers();
         }
 
@@ -751,7 +790,7 @@ namespace Moer::Render {
         // void SubmitArgs(ShaderPipeline&, Arguments&&);
         // void SubmitConstants(ShaderPipeline&, Array<uint>&&);
 
-        RENDER_API void BeginBarriers(uint _read_tex_cnt, uint _write_tex_cnt, uint _read_buf_cnt, uint _write_buf_cnt);
+        RENDER_API void BeginBarriers(uint _read_tex_cnt, uint _write_tex_cnt, uint _read_buf_cnt, uint _write_buf_cnt, EQueueType _src_queue, EQueueType _dst_queue);
         RENDER_API void InnerBarrier(ReadBuffer _buffer) {
             InnerReadBuffer(_buffer.buffer, _buffer.state);
         }

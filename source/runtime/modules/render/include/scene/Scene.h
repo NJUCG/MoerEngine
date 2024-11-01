@@ -20,6 +20,7 @@ namespace Moer {
         CameraInfo,
         GaussianSplattingVertex,
         RTInstance,
+        RTIndex,
         RTPrimitive,
         RTVertex,
         RTMeshInfo,
@@ -58,6 +59,11 @@ namespace Moer {
         float  uv1;
         float3 tangent;
         float  padding;
+    };
+
+    struct RTPrimitvie {
+        uint3 indices;
+        float world_uv_units;
     };
 
     struct InstanceMeshInfo {
@@ -138,6 +144,19 @@ namespace Moer {
     protected:
         class Impl;
         Impl* m_impl = nullptr;
+    };
+
+    struct GpuScene {
+        Render::BufferRef GetGpuBuffer(EGpuSceneResource _resource) const { return global_resources.buffers[(uint32_t)_resource]; }
+        // RHIRayTracingTLASRef GetTLAS() const { return tlas; }
+        struct GResource {
+            StaticArray<Render::BufferRef, (uint32_t)EGpuSceneResource::Num> buffers;
+        } global_resources;
+        Render::RaytracingSceneRef rt_scene{nullptr};
+        Render::BufferRef          vertex_buffer{nullptr}, index_buffer{nullptr};
+        Render::BindlessArrayRef   bindless_array{nullptr};
+
+        UnorderedMap<std::string, Render::TextureRef> material_textures;
     };
 
     extern RENDER_API Scene* g_scene;

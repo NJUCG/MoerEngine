@@ -1,8 +1,17 @@
 #ifndef FRAMEWORK_COMMON_HLSL
 #define FRAMEWORK_COMMON_HLSL
+#include "framework/Math.hlsli"
 
 #define FP16_MAX                            65504.0
 #define INF                                 1e5
+
+#define MAX_MIP 11
+
+// Mip mode
+#define MIP_VISIBILITY                      0 // for visibility: emission, shadow and alpha mask
+#define MIP_LESS_SHARP                      1 // for normal
+#define MIP_SHARP                           2 // for albedo and roughness
+
 struct CameraData {
   float4x4 view;
   float4x4 view_proj;
@@ -71,6 +80,65 @@ struct MeshletDesc {
   uint index_offset;
   uint index_count;
 };
+
+struct RTConfigParam{
+    float4 sun_direction_gexposure;
+    float4 camera_origin_gmip_bias;
+    float4 view_direction_gorthomode;
+    // float4 HairBaseColorOverride; // w is alpha or blend factor
+    // float2 HairBetasOverride;
+    float2 window_size;
+    float2 inv_window_size;
+    float2 output_size;
+    float2 inv_output_size;
+    float2 render_size;
+    float2 inv_render_size;
+    float2 rect_size;
+    float2 inv_rect_size;
+    float2 rect_size_prev;
+    float2 jitter;
+    float emission_intensity;
+    float separator;
+    float roughness_override;
+    float metalness_override;
+    float unit_to_meters_multiplier;
+    float indirect_diffuse;
+    float indirect_specular;
+    float tan_sun_angular_radius;
+    float tan_pixel_angular_radius;
+    float debug;
+    float transparent;
+    float prev_frame_confidence;
+    float min_probability;
+    float unproject;
+    float aperture;
+    float focal_distance;
+    float focal_length;
+    uint32_t denoiser_type;
+    uint32_t on_screen;
+    uint32_t frame_index;
+    uint32_t forced_material;
+    uint32_t use_normalmap;
+    uint32_t b_worldspace_motion;
+    uint32_t tracing_mode;
+    uint32_t sample_num;
+    uint32_t bounce_num;
+    uint32_t taa;
+    uint32_t resolve;
+    uint32_t psr;
+    uint32_t validation;
+    uint32_t trim_lobe;
+    // uint32_t highlight_ahs;
+    // uint32_t ahs_dynamic_mip;
+
+    // Ambient
+    float ambient_max_accumulated_frames_num;
+    float ambient;
+};
+
+#define RTCONFIG_BINDING(t, s) [[vk::binding(t, s)]] ConstantBuffer<RTConfigParam> rt_config : register(b##t, space##s)
+
+
 static uint cull_thread_size = 64;
 static uint cull_thread_bits = 6;
 
@@ -116,5 +184,22 @@ struct MeshletBound {
   uint padding1;
   uint padding2;
 };
+
+namespace ImportanceSampling {
+  float GetSpecularLobeHalfAngle( float linear_roughness, float percent_of_volumn = 0.75 )
+  {
+    float m = linear_roughness * linear_roughness;
+
+    // Comparison of two methods:
+    // https://www.desmos.com/calculator/4vvg1qrec7
+    // #if 1
+        // https://seblagarde.files.wordpress.com/2015/07/course_notes_moving_frostbite_to_pbr_v32.pdf (page 72)
+        // TODO: % of NDF volume - is it the trimming factor from VNDF sampling?
+        return atan( m * percent_of_volumn / ( 1.0 - percent_of_volumn ) );
+    // #else
+    //     return Math::DegToRad( 180.0 ) * m / ( 1.0 + m );
+    // #endif
+  }
+}
 
 #endif
