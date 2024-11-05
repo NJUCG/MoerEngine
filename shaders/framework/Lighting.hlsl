@@ -17,6 +17,12 @@ struct  Light
     float4 info;
 };
 
+struct LightData{
+    float3 color;
+    float intensity;
+    uint type;
+};
+
 float3 apply_directional_light(Light light, float3 normal)
 {
     float3 world_to_light = -light.direction.xyz;

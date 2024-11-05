@@ -145,6 +145,8 @@ namespace Moer::Render {
             return GetQueueFamilyIndex(m_device_info.queue_family_props, _queue_flags);
         }
 
+        uint GetQueueFamilyIndex(EQueueType _queue_type) const;
+
         inline VkQueue GetGraphicsQueue() const {
             return m_graphics_queue;
         }
@@ -192,9 +194,9 @@ namespace Moer::Render {
         StaticArray<VkSampler, immutable_sampler_count> immutable_samplers{};
 
     public:
-        static constexpr uint bindless_sampler_cnt = 256;
-        static constexpr uint cmd_alloc_limits     = 3;
-        DeviceInternalShaders internal_shaders;
+        static constexpr uint            bindless_sampler_cnt = 256;
+        static constexpr uint            cmd_alloc_limits     = 3;
+        UniquePtr<DeviceInternalShaders> internal_shaders;
 
     private:
         friend VkCommandQueue;
@@ -215,6 +217,7 @@ namespace Moer::Render {
         void             PostInit() override;
 
         void CreateInternalShaders();
+        void DestroyInternalShaders();
 
         void Destroy();
 

@@ -259,27 +259,36 @@ namespace Moer::Render {
         current_barriers = commands.back().get();
     }
 
-    void CommandList::InnerReadBuffer(BufferView _buffer, EBufferState _state) {
+    void CommandList::InnerReadBuffer(BufferView _buffer, EBufferState _state, EPassType _pass) {
         BarrierCmd* barrier = static_cast<BarrierCmd*>(current_barriers);
-        barrier->ReadBuffer(_buffer.buffer, _state, EPassType::Graphics);
+        barrier->ReadBuffer(_buffer.buffer, _state, _pass);
     }
-    void CommandList::InnerWriteBuffer(BufferView _buffer, EBufferState _state) {
+    void CommandList::InnerWriteBuffer(BufferView _buffer, EBufferState _state, EPassType _pass) {
         BarrierCmd* barrier = static_cast<BarrierCmd*>(current_barriers);
-        barrier->WriteBuffer(_buffer.buffer, _state, EPassType::Graphics);
-    }
-
-    void CommandList::InnerReadTexture(TextureView _texture, ETextureState _state) {
-        BarrierCmd* barrier = static_cast<BarrierCmd*>(current_barriers);
-        barrier->ReadTexture(_texture.texture, _state, EPassType::Graphics);
+        barrier->WriteBuffer(_buffer.buffer, _state, _pass);
     }
 
-    void CommandList::InnerWriteTexture(TextureView _texture, ETextureState _state) {
+    void CommandList::InnerReadTexture(TextureView _texture, ETextureState _state, EPassType _pass) {
         BarrierCmd* barrier = static_cast<BarrierCmd*>(current_barriers);
-        barrier->WriteTexture(_texture.texture, _state, EPassType::Graphics);
+        barrier->ReadTexture(_texture.texture, _state, _pass);
+    }
+
+    void CommandList::InnerWriteTexture(TextureView _texture, ETextureState _state, EPassType _pass) {
+        BarrierCmd* barrier = static_cast<BarrierCmd*>(current_barriers);
+        barrier->WriteTexture(_texture.texture, _state, _pass);
     }
 
     void CommandList::EndBarriers() {
         current_barriers = nullptr;
+    }
+
+    void CommandList::ImportTextureFromQueue(EQueueType _src_queue, Array<ImportTexture>&& _textures_to_import) {
+        // QueueTransferCmd cmd(_src_queue, std::move(_textures_to_import));
+        commands.emplace_back(MakeUnique<QueueTransferCmd>(_src_queue, std::move(_textures_to_import)));
+    }
+
+    void CommandList::ExportTextureToQueue(EQueueType _dst_queue, Array<ExportTexture>&& _textures_to_export) {
+        commands.emplace_back(MakeUnique<QueueTransferCmd>(_dst_queue, std::move(_textures_to_export)));
     }
 
 }// namespace Moer::Render

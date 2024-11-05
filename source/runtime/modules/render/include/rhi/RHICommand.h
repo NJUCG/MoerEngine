@@ -295,6 +295,7 @@ namespace Moer::Render {
             BuildTLAS,
             TraceRay,
             Barrier,
+            QueueTransfer,
             SetDrawState,
             UpdateBindlessArray,
             // UpdateDrawState,
@@ -316,6 +317,7 @@ namespace Moer::Render {
             "BuildTLAS",
             "TraceRay",
             "Barrier",
+            "QueueTransfer",
             "SetDrawState",
             "UpdateBindlessArray",
             "Custom"};
@@ -480,6 +482,27 @@ namespace Moer::Render {
         BufferView   buffer;
         EBufferState state;
     };
+
+    struct ImportTexture {
+        TextureView   texture;
+        ETextureState state;
+    };
+
+    struct ExportTexture {
+        TextureView   texture;
+        ETextureState state;
+    };
+
+    struct ImportBuffer {
+        BufferView   buffer;
+        EBufferState state;
+    };
+
+    struct ExportBuffer {
+        BufferView   buffer;
+        EBufferState state;
+    };
+
     template<typename TInArg>
     concept is_arg =
         std::is_same_v<std::remove_reference_t<TInArg>(), BufferView> || std::is_same_v<std::remove_reference_t<TInArg>(), TextureView> || std::is_same_v<std::remove_reference_t<TInArg>(), Buffer*> || std::is_same_v<std::remove_reference_t<TInArg>(), Texture*>;
@@ -720,7 +743,7 @@ namespace Moer::Render {
         };
 
         template<typename... T>
-        void Barriers(EQueueType _src_queue, EQueueType _dst_queue, T... _args) {
+        void Barriers(EQueueType _src_queue, EQueueType _dst_queue, EPassType _pass, T... _args) {
             constexpr uint read_tex_cnt  = GetReadTextureCnt<T...>::value;
             constexpr uint write_tex_cnt = GetWriteTextureCnt<T...>::value;
             constexpr uint read_buf_cnt  = GetReadBufferCnt<T...>::value;
@@ -728,47 +751,50 @@ namespace Moer::Render {
             static_assert(read_tex_cnt + write_tex_cnt + read_buf_cnt + write_buf_cnt > 0, "no barriers");
 
             BeginBarriers(read_tex_cnt, write_tex_cnt, read_buf_cnt, write_buf_cnt, _src_queue, _dst_queue);
-            (InnerBarrier(_args), ...);
+            (InnerBarrier(_args, _pass), ...);
             EndBarriers();
         }
 
-        void TextureBarriers(EQueueType _src_queue, EQueueType _dst_queue, Array<ReadTexture>&& _read_tex, Array<WriteTexture>&& _write_tex) {
+        void TextureBarriers(EQueueType _src_queue, EQueueType _dst_queue, EPassType _pass, Array<ReadTexture>&& _read_tex, Array<WriteTexture>&& _write_tex) {
             BeginBarriers(_read_tex.size(), _write_tex.size(), 0, 0, _src_queue, _dst_queue);
             for (auto& tex : _read_tex) {
-                InnerBarrier(tex);
+                InnerBarrier(tex, _pass);
             }
             for (auto& tex : _write_tex) {
-                InnerBarrier(tex);
+                InnerBarrier(tex, _pass);
             }
             EndBarriers();
         }
 
-        void BufferBarriers(EQueueType _src_queue, EQueueType _dst_queue, Array<ReadBuffer>&& _read_buf, Array<WriteBuffer>&& _write_buf) {
+        void BufferBarriers(EQueueType _src_queue, EQueueType _dst_queue, EPassType _pass, Array<ReadBuffer>&& _read_buf, Array<WriteBuffer>&& _write_buf) {
             BeginBarriers(0, 0, _read_buf.size(), _write_buf.size(), _src_queue, _dst_queue);
             for (auto& buf : _read_buf) {
-                InnerBarrier(buf);
+                InnerBarrier(buf, _pass);
             }
             for (auto& buf : _write_buf) {
-                InnerBarrier(buf);
+                InnerBarrier(buf, _pass);
             }
             EndBarriers();
         }
 
-        void TextureBarriers(EQueueType _src_queue, EQueueType _dst_queue, Array<ReadTexture>&& _read_tex) {
+        void TextureBarriers(EQueueType _src_queue, EQueueType _dst_queue, EPassType _pass, Array<ReadTexture>&& _read_tex) {
             BeginBarriers(_read_tex.size(), 0, 0, 0, _src_queue, _dst_queue);
             for (auto& tex : _read_tex) {
-                InnerBarrier(tex);
+                InnerBarrier(tex, _pass);
             }
             EndBarriers();
         }
 
-        void TextureBarriers(EQueueType _src_queue, EQueueType _dst_queue, Array<WriteTexture>&& _write_tex) {
+        void TextureBarriers(EQueueType _src_queue, EQueueType _dst_queue, EPassType _pass, Array<WriteTexture>&& _write_tex) {
             BeginBarriers(0, _write_tex.size(), 0, 0, _src_queue, _dst_queue);
             for (auto& tex : _write_tex) {
-                InnerBarrier(tex);
+                InnerBarrier(tex, _pass);
             }
             EndBarriers();
         }
+
+        RENDER_API void ImportTextureFromQueue(EQueueType _src_queue, Array<ImportTexture>&& _textures_to_import);
+        RENDER_API void ExportTextureToQueue(EQueueType _dst_queue, Array<ExportTexture>&& _textures_to_export);
 
 #pragma region[ raytracing ]
 
@@ -791,23 +817,23 @@ namespace Moer::Render {
         // void SubmitConstants(ShaderPipeline&, Array<uint>&&);
 
         RENDER_API void BeginBarriers(uint _read_tex_cnt, uint _write_tex_cnt, uint _read_buf_cnt, uint _write_buf_cnt, EQueueType _src_queue, EQueueType _dst_queue);
-        RENDER_API void InnerBarrier(ReadBuffer _buffer) {
-            InnerReadBuffer(_buffer.buffer, _buffer.state);
+        RENDER_API void InnerBarrier(ReadBuffer _buffer, EPassType _pass) {
+            InnerReadBuffer(_buffer.buffer, _buffer.state, _pass);
         }
-        RENDER_API void InnerBarrier(WriteBuffer _buffer) {
-            InnerWriteBuffer(_buffer.buffer, _buffer.state);
+        RENDER_API void InnerBarrier(WriteBuffer _buffer, EPassType _pass) {
+            InnerWriteBuffer(_buffer.buffer, _buffer.state, _pass);
         }
-        RENDER_API void InnerBarrier(ReadTexture _texture) {
-            InnerReadTexture(_texture.texture, _texture.state);
+        RENDER_API void InnerBarrier(ReadTexture _texture, EPassType _pass) {
+            InnerReadTexture(_texture.texture, _texture.state, _pass);
         }
-        RENDER_API void InnerBarrier(WriteTexture _texture) {
-            InnerWriteTexture(_texture.texture, _texture.state);
+        RENDER_API void InnerBarrier(WriteTexture _texture, EPassType _pass) {
+            InnerWriteTexture(_texture.texture, _texture.state, _pass);
         }
 
-        RENDER_API void InnerReadBuffer(BufferView _buffer, EBufferState _state);
-        RENDER_API void InnerWriteBuffer(BufferView _buffer, EBufferState _state);
-        RENDER_API void InnerReadTexture(TextureView _texture, ETextureState _state);
-        RENDER_API void InnerWriteTexture(TextureView _texture, ETextureState _state);
+        RENDER_API void InnerReadBuffer(BufferView _buffer, EBufferState _state, EPassType _pass);
+        RENDER_API void InnerWriteBuffer(BufferView _buffer, EBufferState _state, EPassType _pass);
+        RENDER_API void InnerReadTexture(TextureView _texture, ETextureState _state, EPassType _pass);
+        RENDER_API void InnerWriteTexture(TextureView _texture, ETextureState _state, EPassType _pass);
         RENDER_API void EndBarriers();
 
 #pragma region[ raytracing ]

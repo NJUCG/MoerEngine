@@ -3,8 +3,10 @@
 #include "PixelFormat.h"
 #include "config/ConfigManager.h"
 #include "contrib/Open3DGC/o3dgcTimer.h"
+#include "imgui.h"
 #include "math/Matrix.h"
 #include "misc/Traits.h"
+#include "renderer/UIRenderer.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
@@ -113,10 +115,11 @@ public:
     DEFINE_SHADER_TEX(out_normal);
     DEFINE_SHADER_TEX(out_color);
     DEFINE_SHADER_TEX(out_position);
+    DEFINE_SHADER_TEX(out_direct_lighting);
     DEFINE_SHADER_TLAS(tlas);
     DEFINE_SHADER_CONSTANT_STRUCT(Param, param);
 
-    DEFINE_SHADER_ARGS(param, rt_config, out_normal, out_color, out_position, bdls, tlas);
+    DEFINE_SHADER_ARGS(param, rt_config, out_normal, out_color, out_position, out_direct_lighting, bdls, tlas);
 };
 
 int main(int argc, const char** argv) {
@@ -146,10 +149,11 @@ int main(int argc, const char** argv) {
     });
     auto*  window_handle = WindowContext::GetMainWindow();
 
-    SwapchainCreateInfo sc_info{.window_handle = (uintptr_t)window_handle, .size = {resolution.x, resolution.y}, .back_buffer_sz = 3, .preferred_format = PF_R8G8B8A8_SRGB};
-    auto                sc         = device.CreateSwapchain(sc_info);
-    auto&               gfx_queue  = device.GetCommandQueue(EQueueType::Graphics);
-    auto&               copy_queue = device.GetCopyQueue();
+    SwapchainCreateInfo      sc_info{.window_handle = (uintptr_t)window_handle, .size = {resolution.x, resolution.y}, .back_buffer_sz = 3, .preferred_format = PF_R8G8B8A8_SRGB};
+    auto                     sc         = device.CreateSwapchain(sc_info);
+    auto&                    gfx_queue  = device.GetCommandQueue(EQueueType::Graphics);
+    auto&                    copy_queue = device.GetCopyQueue();
+    Moer::Render::UIRenderer gui(device);
 
     Scene g_scene{};
     Resource::LoaderInterface::LoadSceneFromFileAsync(ConfigManager::GetInstance().GetScenePath(), &g_scene);
@@ -183,20 +187,9 @@ int main(int argc, const char** argv) {
     BufferRef rt_config_param_buffer = device.CreateBuffer<Moer::byte>(sizeof(RTConfigParam) * 1, EBufferUsageFlags::CONSTANT_BUFFER);
 
     rt_view_param_buffer->SetName("rt_view_param_buffer");
-    // RaytracingGeometryRef blas = device.CreateRaytracingGeometry(rt_geo_info);
-    // cmd_list.BuildAccelerationStructures({{blas, ERaytracingBuildMode::BUILD}});
 
     RaytracingSceneRef rt_scene  = device.CreateRaytracingScene();
     TestInlineRTShader rt_shader = manager.Compute<TestInlineRTShader>("hwrt/InlineRayTracing.hlsl");
-    // RaytracingMaterial  mat{};
-    // RaytracingInstance& rt_instance = rt_scene->AddInstance();
-    // rt_instance.geom                = blas;
-    // rt_instance.transform           = Matrix3x4f(Matrix4x4f::Identity().r0, Matrix4x4f::Identity().r1, Matrix4x4f::Identity().r2);
-    // rt_instance.flag.need_create    = true;
-    // rt_instance.flag.need_update    = true;
-    // rt_instance.material_ref        = mat;
-
-    // rt_instance.visible_mask = RTVM_ALL;
 
     bool   first_load = true;
     uint   instance_buffer_handle;
@@ -235,9 +228,15 @@ int main(int argc, const char** argv) {
         PF_R32G32B32A32_SFLOAT,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
 
+    TextureRef out_direct_lighting = device.CreateTexture(
+        Extent2D(resolution.x, resolution.y),
+        PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+
     out_normal->SetName("out_normal");
     out_color->SetName("out_color");
     out_position->SetName("out_position");
+    out_direct_lighting->SetName("out_direct_lighting");
 
     Timer timer;
     timer.Start();
@@ -264,13 +263,15 @@ int main(int argc, const char** argv) {
         if (w_width != resolution.x || w_height != resolution.y) {
 
             resolution = {uint32(w_width), uint32(w_height)};
-            output     = device.CreateTexture(
-                Extent2D(resolution.x, resolution.y),
-                PF_R8G8B8A8_SRGB,
-                ETextureUsageFlags::COLOR_ATTACHMENT);
+
             gfx_queue.Sync();
             sc_info.size = {resolution.x, resolution.y};
             sc->Recreate(sc_info);
+
+            output = device.CreateTexture(
+                Extent2D(resolution.x, resolution.y),
+                PF_R8G8B8A8_SRGB,
+                ETextureUsageFlags::COLOR_ATTACHMENT);
 
             out_position = device.CreateTexture(
                 Extent2D(resolution.x, resolution.y),
@@ -287,9 +288,15 @@ int main(int argc, const char** argv) {
                 PF_R8G8B8A8_UNORM,
                 ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
 
+            out_direct_lighting = device.CreateTexture(
+                Extent2D(resolution.x, resolution.y),
+                PF_R8G8B8A8_UNORM,
+                ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+
             out_normal->SetName("out_normal");
             out_color->SetName("out_color");
             out_position->SetName("out_position");
+            out_direct_lighting->SetName("out_direct_lighting");
         }
 
         if (Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady()) {
@@ -303,22 +310,14 @@ int main(int argc, const char** argv) {
                 light_buffer_handle    = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::LightInfo)->GetView());
                 first_load             = false;
 
-                // Array<ReadTexture> sampled_textures;
-                // sampled_textures.reserve((g_scene.GetGpuScene().material_textures.size()));
-
-                // for (auto& [name, tex] : g_scene.GetGpuScene().material_textures) {
-                //     sampled_textures.emplace_back(ReadTexture(tex->GetView(0, tex->GetNumMips()), ETextureState::SAMPLE));
-                // }
-
-                // cmd_list.TextureBarriers(EQueueType::Copy, EQueueType::Graphics, std::move(sampled_textures));
                 cmd_list.UpdateBindlessArray(bindless_array);
                 last_io_change_timeline = copy_queue_timeline->GetValue();
                 // gfx_queue.Wait({uint64(copy_queue_timeline.Get()), copy_timeline->GetValue()});
                 // gfx_queue.Sync();
 
-                rt_geometries.reserve(g_scene.GetEntities().size());
+                rt_geometries.reserve(g_scene.GetEntityCount());
                 Array<AccelerationStructureBuildParam> build_params;
-                build_params.reserve(g_scene.GetEntities().size());
+                build_params.reserve(g_scene.GetEntityCount());
                 auto vertex_buffer = g_scene.GetBuffer(EGpuSceneResource::RTVertex);
 
                 auto index_buffer = g_scene.GetBuffer(EGpuSceneResource::RTIndex);
@@ -351,14 +350,25 @@ int main(int argc, const char** argv) {
                 });
 
                 cmd_list.BuildAccelerationStructures(std::move(build_params));
+                last_io_change_timeline = copy_queue_timeline->GetValue();
+
+                Array<ImportTexture> sampled_textures;
+                sampled_textures.reserve((g_scene.GetGpuScene().material_textures.size()));
+
+                for (auto& [name, tex] : g_scene.GetGpuScene().material_textures) {
+                    sampled_textures.emplace_back(ImportTexture(tex->GetView(0, tex->GetNumMips()), ETextureState::SAMPLE));
+                }
+
+                cmd_list.ImportTextureFromQueue(EQueueType::Copy, std::move(sampled_textures));
+
                 // cmd_list.UpdateRaytracingScene(rt_scene);
-                // gfx_queue.Execute(cmd_list.Submit());
-                // gfx_queue.Sync();
+                gfx_queue.Execute(cmd_list.Submit().Wait(copy_queue_timeline, last_io_change_timeline));
+                gfx_queue.Sync();
             }
 
             if (Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady()) {
 
-                for (size_t i = 0; i < g_scene.GetEntities().size(); i++) {
+                for (size_t i = 0; i < g_scene.GetEntityCount(); i++) {
                     auto& instance = rt_scene->GetInstance(i);
                     // instance.transform = TransformManager::Get().Get(g_scene.GetEntities()[i]).GetMatrix3x4();
                     rt_scene->MarkModified(instance.instance_id);
@@ -370,8 +380,6 @@ int main(int argc, const char** argv) {
             auto camera        = CameraManager::Get().Get(camera_entity);
             camera->Tick();
 
-            float3 center            = {0, 0, -1.f};
-            auto   pos_w             = camera->GetToWorldMatrix() * float4(center, 1.f);
             rt_view_param.view2world = camera->GetToWorldMatrix();
             rt_view_param.world2view = camera->GetViewMatrix();
             rt_view_param.frustum    = camera->GetFrustum();
@@ -383,6 +391,9 @@ int main(int argc, const char** argv) {
             rt_view_param.orthomode  = 0;
 
             rt_config_param.tan_pixel_angular_radius = tanf(Angle::DegreeToRadian(camera->GetFov()));
+            rt_config_param.tan_sun_angular_radius   = tanf(Angle::DegreeToRadian(0.533f * 0.5f));
+            float3 sun_dir                           = Normalizef(float3(0.f, 0.5f, 0.02f));
+            rt_config_param.sun_direction_gexposure  = float4(sun_dir, 80.f);
             cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)&rt_config_param, sizeof(RTConfigParam)), rt_config_param_buffer->GetView());
 
             cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)&rt_view_param, sizeof(RTViewParam)), rt_view_param_buffer->GetView());
@@ -397,11 +408,11 @@ int main(int argc, const char** argv) {
             param.inv_rect                = float2(1.f / resolution.x, 1.f / resolution.y);
             param.jitter                  = float2(0, 0);
 
-            cmd_list.Compute(rt_shader, param, rt_config_param_buffer, out_normal, out_color, out_position, bindless_array, rt_scene)
+            cmd_list.Compute(rt_shader, param, rt_config_param_buffer, out_normal, out_color, out_position, out_direct_lighting, bindless_array, rt_scene)
                 .Dispatch(uint3((resolution.x + 15) >> 4, (resolution.y + 15) >> 4, 1), "Primary Ray");
 
             //copy normal to output
-            cmd_list.CopyFrom(out_color->GetView(), output->GetView());
+            cmd_list.CopyFrom(out_direct_lighting->GetView(), output->GetView());
         }
         // rt_scene->MarkModified(0);
         // cmd_list.UpdateRaytracingScene(rt_scene);

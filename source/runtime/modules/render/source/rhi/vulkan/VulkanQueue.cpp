@@ -91,8 +91,9 @@ namespace Moer::Render {
         FunctionTable    m_funcs;
         VulkanAllocator& allocator;
         VulkanDevice&    device;
+        EQueueType       current_queue;
 
-        VkCmdPreprocessor(VulkanDevice& _device, VkTracker& _tracker, VulkanAllocator& _allocator, FunctionTable _funcs) : device(_device), tracker(_tracker), allocator(_allocator), m_funcs(_funcs) {}
+        VkCmdPreprocessor(VulkanDevice& _device, VkTracker& _tracker, VulkanAllocator& _allocator, FunctionTable _funcs, EQueueType _current_queue = EQueueType::Graphics) : device(_device), tracker(_tracker), allocator(_allocator), m_funcs(_funcs), current_queue(_current_queue) {}
         void HandleBindless(BindlessArrayRef _bindless_array, VkPipelineStageFlagBits2 _pipeline_stages) {
             EPassType pass_type = EPassType::Graphics;
             if (_pipeline_stages == VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT) {
@@ -234,6 +235,9 @@ namespace Moer::Render {
                     break;
                 case Command::EType::Barrier:
                     Visit(static_cast<const BarrierCmd*>(_cmd));
+                    break;
+                case Command::EType::QueueTransfer:
+                    Visit(static_cast<const QueueTransferCmd*>(_cmd));
                     break;
                 case Command::EType::Custom:
                     break;
@@ -428,6 +432,42 @@ namespace Moer::Render {
             //queue transition
         }
 
+        void Visit(const QueueTransferCmd* _cmd) {
+            // EQueueType current_queue = this->allocator.
+            EQueueType temp_queue = this->current_queue;
+            if (_cmd->IsImport()) {
+                _cmd->dst_queue = temp_queue;
+
+                for (auto& barrier : _cmd->ImportTextures()) {
+                    auto*         vk_texture = ResourceCast(barrier.texture.GetTexture());
+                    auto          access     = tracker.ReadTexture(vk_texture, barrier.state);
+                    VkImageLayout src_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    device.GetComputeQueue();
+                    tracker.QueueTransferAcquireResource(
+                        vk_texture,
+                        device.GetQueueFamilyIndex(_cmd->src_queue),
+                        device.GetQueueFamilyIndex(_cmd->dst_queue),
+                        vk_texture->GetQueuePreferredLayout(_cmd->src_queue),
+                        std::get<1>(access),
+                        VK_ACCESS_2_NONE,
+                        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT);
+                }
+
+            } else {
+                _cmd->src_queue = temp_queue;
+
+                for (auto& barrier : _cmd->ExportTextures()) {
+                    auto* vk_texture = ResourceCast(barrier.texture.GetTexture());
+                    auto  access     = tracker.ReadTexture(vk_texture, barrier.state);
+                    tracker.QueueTransferReleaseResource(
+                        vk_texture,
+                        device.GetQueueFamilyIndex(_cmd->src_queue),
+                        device.GetQueueFamilyIndex(_cmd->dst_queue),
+                        vk_texture->GetQueuePreferredLayout(_cmd->src_queue),
+                        std::get<1>(access));
+                }
+            }
+        }
         void Visit(const SetDrawStateCmd* _cmd) {
 
             const auto& vbs = _cmd->VertexBuffers();
@@ -540,6 +580,9 @@ namespace Moer::Render {
                     break;
                 case Command::EType::Barrier:
                     Visit(static_cast<const BarrierCmd&>(*_cmd));
+                    break;
+                case Command::EType::QueueTransfer:
+                    // Visit(static_cast<const QueueTransferCmd&>(*_cmd));
                     break;
                 case Command::EType::SetDrawState:
                     Visit(static_cast<const SetDrawStateCmd&>(*_cmd));
@@ -658,15 +701,15 @@ namespace Moer::Render {
             cmd_list.BeginLabel(_cmd.name, dispatch_color);
             const auto& param = _cmd.Param();
 
-            ComputePipeline pso(_cmd.Pipeline());
-            cmd_list.SetPso(pso.handle);
+            PipelineHandle& pso = _cmd.Pipeline();
+            cmd_list.SetPso(_cmd.Pipeline());
             const auto& args = _cmd.Args();
 
-            cmd_list.BindDescriptors(pso.handle, args);
+            cmd_list.BindDescriptors(pso, args);
 
             if (args.constants.size() > 0) {
                 cmd_list.UploadPushConstants(
-                    pso.handle,
+                    pso,
                     std::span<const uint>(args.constants.data(), args.constants.size()));
             }
             std::visit(
@@ -716,8 +759,8 @@ namespace Moer::Render {
             cmd_list.BeginLabel(_cmd.name, draw_color);
             state = EState::Draw;
 
-            const auto&    args = _cmd.Args();
-            RasterPipeline pso(_cmd.Pipeline());
+            const auto&     args = _cmd.Args();
+            PipelineHandle& pso  = _cmd.Pipeline();
 
             const auto&                      pass_info = _cmd.RenderPassInfo();
             Array<VkRenderingAttachmentInfo> color_attachments(pass_info.color_attachments.size());
@@ -746,11 +789,11 @@ namespace Moer::Render {
 
             cmd_list.SetPso(_cmd.Pipeline());
 
-            cmd_list.BindDescriptors(pso.handle, args);
+            cmd_list.BindDescriptors(pso, args);
 
             if (args.constants.size() > 0) {
                 cmd_list.UploadPushConstants(
-                    pso.handle,
+                    pso,
                     std::span<const uint>(args.constants.data(), args.constants.size()));
             }
             const auto& cmd_vertex_buffers = _cmd.VertexBuffers();
@@ -902,7 +945,7 @@ namespace Moer::Render {
             cmd_list.CopyData(staging, _cmd.InstanceData().data(), to_update.size() * sizeof(VkAccelerationStructureInstanceKHR));
             cmd_list.CopyData(indices, to_update_indices.data(), to_update.size() * sizeof(uint32) * 2);
 
-            auto& shuffle_sd = m_device->internal_shaders.sd_component_shuffle;
+            auto& shuffle_sd = m_device->internal_shaders->sd_component_shuffle;
             cmd_list.SetPso(shuffle_sd.handle);
 
             ComponentShuffleShader::Arg arg;
@@ -1257,7 +1300,7 @@ namespace Moer::Render {
             auto end_tag = queue.GetType() == EQueueType::Graphics ? VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT : VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
             queue.Signal(timeline, current_timeline, end_tag);
             for (auto& evt : _submit.wait_events) {
-                queue.Wait(reinterpret_cast<VulkanFence*>(evt.timeline_handle), evt.value);
+                queue.Wait(reinterpret_cast<VulkanFence*>(evt.timeline_handle), evt.value, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
             }
             for (auto& evt : _submit.signal_events) {
                 queue.Signal(reinterpret_cast<VulkanFence*>(evt.timeline_handle), evt.value, end_tag);
@@ -1485,28 +1528,51 @@ namespace Moer::Render {
 
         auto current_timeline = last_frame;
         if (!cmds.empty()) {
-            auto  allocator    = GetAllocator();
-            auto& vk_allocator = *allocator;
-            auto& vk_cmd_list  = vk_allocator.GetCmdList();
-            auto& vk_tracker   = vk_allocator.GetTracker();
-            ;
+            auto          allocator    = GetAllocator();
+            auto&         vk_allocator = *allocator;
+            auto&         vk_cmd_list  = vk_allocator.GetCmdList();
+            auto&         vk_tracker   = vk_allocator.GetTracker();
+            FunctionTable function_table{
+                .is_resource_write       = &IsBufferTextureWrite,
+                .is_resource_read        = &IsBufferTextureRead,
+                .is_texture_sampled      = &IsTextureSampled,
+                .is_resource_in_bindless = &IsResourceInBindlessArray};
+            CmdReorderer reorderer{function_table};
 
             std::unique_lock<std::mutex> lk(exec_mutex);
 
-            VkCmdPreprocessor preprocessor(device, vk_tracker, vk_allocator, {});
+            VkCmdPreprocessor preprocessor(device, vk_tracker, vk_allocator, {}, EQueueType::Copy);
             VkCmdVisitor      visitor(device, vk_allocator, vk_tracker, vk_cmd_list);
+
+            for (const auto& cmd : cmds) {
+                // preprocessor.VisitCmd(cmd.get());
+                reorderer.AcceptCmd(cmd.get());
+            }
 
             vk_cmd_list.Begin();
             vk_cmd_list.BeginLabel("Copy", {0.0f, 1.0f, 1.0f, 1.0f});
+            const auto& cmd_lists = reorderer.m_cmd_lists;
 
-            for (const auto& cmd : cmds) {
-                preprocessor.VisitCmd(cmd.get());
+            for (const CmdReorderer::LinkedCommandList& cmd_list : cmd_lists) {
+                if (cmd_list.head == nullptr) {
+                    continue;
+                }
+                for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
+                    preprocessor.VisitCmd(cmdnode->cmd);
+                }
+                vk_tracker.ResolveBarriers();
+                vk_tracker.DispatchBarriers(vk_cmd_list);
+                for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
+                    const auto* cmd = cmdnode->cmd;
+                    visitor.VisitCmd(cmd);
+                }
             }
-            vk_tracker.ResolveBarriers();
-            vk_tracker.DispatchBarriers(vk_cmd_list);
-            for (const auto& cmd : cmds) {
-                visitor.VisitCmd(cmd.get());
-            }
+
+            // vk_tracker.ResolveBarriers();
+            // vk_tracker.DispatchBarriers(vk_cmd_list);
+            // for (const auto& cmd : cmds) {
+            //     visitor.VisitCmd(cmd.get());
+            // }
             //copy
             vk_tracker.RestoreState();
             vk_tracker.DispatchBarriers(vk_cmd_list);

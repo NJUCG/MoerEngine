@@ -12,6 +12,10 @@
 #define MIP_LESS_SHARP                      1 // for normal
 #define MIP_SHARP                           2 // for albedo and roughness
 
+// BRDF
+#define RF0_DIELECTRICS                         0.04
+#define GTR_GAMMA                               1.5
+
 struct CameraData {
   float4x4 view;
   float4x4 view_proj;

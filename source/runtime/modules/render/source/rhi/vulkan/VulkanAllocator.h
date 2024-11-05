@@ -1,4 +1,5 @@
 #pragma once
+#include "RHICmdReorderer.h"
 #include "VulkanRHIResource.h"
 #include "VulkanResourceTracker.h"
 #include "VulkanCommand.h"

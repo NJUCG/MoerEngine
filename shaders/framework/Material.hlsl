@@ -23,4 +23,30 @@ T UnpackMaterialData(uint material_buffer_handle, uint material_index) {
 
 #define Material_Standard_PBR 0
 
+namespace BRDF {
+
+namespace IOR {
+static const float Air = 1.0f;
+static const float Glass = 1.5f;
+static const float Water = 1.33f;
+static const float Diamond = 2.42f;
+static const float Vaccuum = 1.0f;
+static const float Ice = 1.31f;
+static const float Quartz = 1.46f;
+static const float FusedSilica = 1.46f;
+static const float SodiumChloride = 1.54f;
+static const float Fluorite = 1.43f;
+static const float Pyrex = 1.47f;
+static const float Acrylic = 1.49f;
+static const float Polystyrene = 1.59f;
+static const float Polyethylene = 1.51f;
+static const float Polypropylene = 1.49f;
+}; // namespace IOR
+
+void BaseColorMetalnessToAlbedoRf0(float3 base_color, float metalness,
+                                   out float3 albedo, out float rf0) {
+  albedo = base_color * saturate(1.0f - metalness);
+  rf0 = lerp(RF0_DIELECTRICS, base_color, metalness);
+}
+}; // namespace BRDF
 #endif

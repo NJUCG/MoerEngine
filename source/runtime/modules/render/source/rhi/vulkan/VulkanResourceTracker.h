@@ -56,6 +56,12 @@ namespace Moer::Render {
         };
         ~VkTracker() = default;
 
+        void QueueTransferReleaseResource(VulkanBuffer* _buffer, uint _src_queue, uint _dst_queue);
+        void QueueTransferReleaseResource(VulkanTexture* _texture, uint _src_queue, uint _dst_queue, VkImageLayout _src_layout, VkImageLayout _dst_layout);
+
+        void QueueTransferAcquireResource(VulkanBuffer* _buffer, uint _src_queue, uint _dst_queue, VkAccessFlagBits2 _dst_access, VkPipelineStageFlagBits2 _dst_stage);
+        void QueueTransferAcquireResource(VulkanTexture* _texture, uint _src_queue, uint _dst_queue, VkImageLayout _src_layout, VkImageLayout _dst_layout, VkAccessFlagBits2 _dst_access, VkPipelineStageFlagBits2 _dst_stage);
+
         void RecordState(
             VulkanBuffer*            _buffer,
             VkAccessFlagBits2        _access,
@@ -134,6 +140,7 @@ namespace Moer::Render {
 
         UnorderedMap<VulkanBuffer*, BufferState>   buffer_states;
         UnorderedMap<VulkanTexture*, TextureState> texture_states;
+        Set<VulkanTexture*>                        exported_textures;
 
         Set<VulkanBuffer*>  pending_buffers;
         Set<VulkanTexture*> pending_textures;

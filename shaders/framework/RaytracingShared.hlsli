@@ -2,13 +2,15 @@
 #define MOER_RT_SHARED_HLSL
 
 // #include "framework/Common.hlsl"
+#include "MathLib/STL.hlsli"
 
 #pragma region [ rt geometry ]
 
 
-#define INSTANCE_FLAG_DEFAULT 0x1
-#define INSTANCE_FLAG_TRANSPARANT 0x2
-#define INSTANCE_FLAG_EMISSION 0x4
+#define INSTANCE_FLAG_DISABLE 0x1
+#define INSTANCE_FLAG_DEFAULT 0x2
+#define INSTANCE_FLAG_TRANSPARANT 0x4
+#define INSTANCE_FLAG_EMISSION 0x8
 
 #define INSTANCE_FLAG_GEOMETRY_ALL 0xff
 #define INSTANCE_FLAG_GEOMETRY_NONE 0x00
@@ -22,12 +24,58 @@ struct RTVertex{
     float padding;
 };
 
+#ifndef VULKAN
+    // TODO: This code is not needed if HLSL 2021 is enabled. But currently
+    // it works only for latest DXC from VK SDK. DXC from Win SDK crashes!
+    // Keep an eye on "--hlsl2021" used in Cmake and C++.
+    int3 select( bool3 cmp, int3 a, int3 b )
+{
+        int3 r;
+        r.x = cmp.x ? a.x : b.x;
+        r.y = cmp.y ? a.y : b.y;
+        r.z = cmp.z ? a.z : b.z;
+
+        return r;
+    }
+
+    float3 select( bool3 cmp, float3 a, float3 b )
+    {
+        float3 r;
+        r.x = cmp.x ? a.x : b.x;
+        r.y = cmp.y ? a.y : b.y;
+        r.z = cmp.z ? a.z : b.z;
+
+        return r;
+    }
+    #endif
+
+float3 _GetXoffset( float3 X, float3 N )
+{
+    // TODO: try out: https://developer.nvidia.com/blog/solving-self-intersection-artifacts-in-directx-raytracing/
+
+    // RT Gems "A Fast and Robust Method for Avoiding Self-Intersection" ( updated version taken from Falcor )
+    // Moves the ray origin further from surface to prevent self-intersections, minimizes the distance.
+    const float origin = 1.0 / 16.0;
+    const float fScale = 3.0 / 65536.0;
+    const float iScale = 3.0 * 256.0;
+
+    // Per-component integer offset to bit representation of FP32 position
+    int3 iOff = int3( N * iScale );
+
+    // Select per-component between small fixed offset or variable offset depending on distance to origin
+    float3 iPos = asfloat( asint( X ) + select( X < 0.0, -iOff, iOff ) );
+    float3 fOff = N * fScale;
+
+    return select( abs( X ) < origin, X + fOff, iPos );
+}
 struct RTPrimitive{
      uint3 indices;
      float world_uv_units;
 };
 
 
+#define RT_MATERIAL_INDEX_BIT_OFFSET 8
+#define RT_MATERIAL_TYPE_MASK 0xff
 struct RTHitInfo{
     float3 x;
     float3 x_prev;
@@ -38,7 +86,25 @@ struct RTHitInfo{
     float mip;
     float tmin;
     uint instance_id;
-    uint material_id;
+    uint material_type_and_id;
+    uint flags;
+
+    bool IsSky( )
+    { return tmin == INF; }
+    float3 GetXOffset(){
+        return _GetXoffset(x, n);
+    }
+    bool IsTransparent(){
+        return (flags & INSTANCE_FLAG_TRANSPARANT) != 0;
+    }
+
+    uint GetMaterialType(){
+        return material_type_and_id & RT_MATERIAL_TYPE_MASK;
+    }
+
+    uint GetMaterialID(){
+        return material_type_and_id >> RT_MATERIAL_INDEX_BIT_OFFSET;
+    }
 };
 
 #pragma endregion
@@ -58,23 +124,29 @@ struct RTViewParam{
 };
 
 
-
 struct RTInstanceData{
     float4 overload_m1;
     float4 overload_m2;
     float4 overload_m3;
-    uint material_id;
-    uint material_type;
+    uint material_type_and_id;
+    uint flags;
     uint prim_offset;
     uint vtx_offset;
+
+    uint GetMaterialType(){
+        return material_type_and_id & RT_MATERIAL_TYPE_MASK;
+    }
+    uint GetMaterialID(){
+        return material_type_and_id >> RT_MATERIAL_INDEX_BIT_OFFSET;
+    }
 
 };
 
 struct RTMaterialProp{
-    float3 Ldirect; // unshadowed
-    float3 Lemi;
-    float3 N;
-    float3 T;
+    float3 l_direct; // unshadowed
+    float3 l_emi;
+    float3 n;
+    float3 t;
     float3 base_color;
     float roughness;
     float metalness;

@@ -4,6 +4,7 @@
 #include "misc/Timer.h"
 #include "resources/GpuScene.h"
 #include "rhi/RHI.h"
+#include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "scene/EntityManager.h"
 #include "scene/RenderableManager.h"
@@ -827,6 +828,21 @@ namespace Moer {
         rt_mesh_info_buffer->SetName("rt_mesh_info_buffer");
         light_buffer->SetName("light_buffer");
         material_buffer->SetName("material_buffer");
+
+        Array<Render::ExportTexture> export_textures;
+        export_textures.reserve(textures.size());
+
+        for (auto& texture : textures) {
+            export_textures.push_back({texture.second->GetView(), ETextureState::SAMPLE});
+        }
+        cmd_list.ExportTextureToQueue(EQueueType::Graphics, std::move(export_textures));
+
+        auto copy_handle = copy_queue.GetFenceHandle();
+
+        //wait all texture export done
+        evt = copy_queue.Execute(cmd_list.Submit().Wait(copy_handle, copy_handle->GetValue()));
+
+        copy_queue.Sync(evt.timeline);
 
         // BuildSceneRaytracing(scene_data,scene.get());
     }

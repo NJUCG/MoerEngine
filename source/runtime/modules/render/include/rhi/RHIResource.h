@@ -926,8 +926,11 @@ namespace Moer::Render {
 
     enum RTVisibleMask : uint8 {
         RTVM_NONE,
-        RTVM_DISABLE,
-        RTVM_ALL = 0xff,
+        RTVM_DISABLE     = 0x1,
+        RTVM_DEFAULT     = 0x2,
+        RTVM_TRANSPARANT = 0x4,
+        RTVM_EMISSION    = 0x8,
+        RTVM_ALL         = 0xff
     };
 
     struct RaytracingMaterial {

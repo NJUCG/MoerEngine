@@ -471,6 +471,28 @@ namespace Moer::Render {
         const EQueueType GetDstQueue() const { return dst_queue; }
     };
 
+    struct QueueTransferCmd : public Command {
+    private:
+        QueueTransferCmd() : Command(EType::QueueTransfer) {}
+
+    public:
+        QueueTransferCmd(EQueueType _src_queue, Array<ImportTexture>&& _textures_to_import) : Command(EType::QueueTransfer), src_queue(_src_queue), import_textures(std::move(_textures_to_import)), b_is_import(true) {}
+        QueueTransferCmd(EQueueType _dst_queue, Array<ExportTexture>&& _textures_to_export) : Command(EType::QueueTransfer), dst_queue(_dst_queue), export_textures(std::move(_textures_to_export)) {}
+
+    private:
+        Array<ImportTexture> import_textures;
+        Array<ExportTexture> export_textures;
+        bool                 b_is_import = false;
+
+    public:
+        EQueueType         GetQueueType() const override { return EQueueType::Ignore; }
+        mutable EQueueType src_queue;
+        mutable EQueueType dst_queue;
+        const auto&        ImportTextures() const { return import_textures; }
+        const auto&        ExportTextures() const { return export_textures; }
+        const bool         IsImport() const { return b_is_import; }
+    };
+
     struct UpdateBindlessArrayCmd : public Command {
     private:
         UpdateBindlessArrayCmd() : Command(EType::UpdateBindlessArray) {}
@@ -522,7 +544,7 @@ namespace Moer::Render {
     struct SetDrawStateCmd : public Command {
     public:
     private:
-        PipelineHandle                     pipeline{};
+        mutable PipelineHandle*            pipeline{};
         RenderPassInfo                     render_pass_info;
         Array<MeshDrawData>                mesh_data;
         uint                               vtx_cnt;
@@ -535,13 +557,13 @@ namespace Moer::Render {
         }
 
     public:
-        SetDrawStateCmd(PipelineHandle        _pipeline,
+        SetDrawStateCmd(PipelineHandle&       _pipeline,
                         ArrayArguments&&      _args,
                         RenderPassInfo&&      _info,
                         Array<MeshDrawData>&& _draw_data,
                         std::string_view      _name = typenames[uint(EType::SetDrawState)]) : Command(EType::SetDrawState, _name),
                                                                                          args(std::move(_args)),
-                                                                                         pipeline(_pipeline),
+                                                                                         pipeline(&_pipeline),
                                                                                          render_pass_info(std::move(_info)),
                                                                                          mesh_data(std::move(_draw_data)),
                                                                                          vtx_cnt(0) {
@@ -574,14 +596,14 @@ namespace Moer::Render {
 
         EQueueType GetQueueType() const override { return EQueueType::Graphics; }
 
-        auto        Pipeline() const { return pipeline; }
+        auto&       Pipeline() const { return *pipeline; }
         const auto& RenderPassInfo() const { return render_pass_info; }
         const auto& DrawData() const { return mesh_data; }
         const auto& Args() const { return args; }
 
         void IterateArgs(std::function<void(const TArg&, ParamInfoFlags _flag)> _func) const {
             for (int i = 0; i < args.args.size(); i++) {
-                std::visit([&_func, i, this](const auto& _arg) { _func(_arg, pipeline.binding_infos[i]); }, args.args[i]);
+                std::visit([&_func, i, this](const auto& _arg) { _func(_arg, pipeline->binding_infos[i]); }, args.args[i]);
             }
         }
         const auto& VertexBuffers() const {
@@ -601,24 +623,25 @@ namespace Moer::Render {
         using DispatchParam = std::variant<uint3, DispatchIndirectParam>;
 
     private:
-        PipelineHandle pipeline{};
-        DispatchParam  param;
-        ArrayArguments args;
+        // const PipelineHandle& pipeline;
+        mutable PipelineHandle* pipeline = nullptr;
+        DispatchParam           param;
+        ArrayArguments          args;
         DispatchCmd(ArrayArguments&& _args) : Command(EType::ShaderDispatch), args(std::move(_args)) {
         }
 
     public:
-        DispatchCmd(ArrayArguments&& _args, PipelineHandle _handle, uint3 _param, std::string_view _name = typenames[uint(EType::ShaderDispatch)]) : Command(EType::ShaderDispatch, _name), param(_param), pipeline(_handle), args(std::move(_args)) {}
-        DispatchCmd(ArrayArguments&& _args, PipelineHandle _handle, BufferView _indirect, std::string_view _name = typenames[uint(EType::ShaderDispatch)]) : Command(EType::ShaderDispatch, _name), pipeline(_handle), param(DispatchIndirectParam{_indirect}), args(std::move(_args)) {}
+        DispatchCmd(ArrayArguments&& _args, PipelineHandle& _handle, uint3 _param, std::string_view _name = typenames[uint(EType::ShaderDispatch)]) : Command(EType::ShaderDispatch, _name), param(_param), pipeline(&_handle), args(std::move(_args)) {}
+        DispatchCmd(ArrayArguments&& _args, PipelineHandle& _handle, BufferView _indirect, std::string_view _name = typenames[uint(EType::ShaderDispatch)]) : Command(EType::ShaderDispatch, _name), pipeline(&_handle), param(DispatchIndirectParam{_indirect}), args(std::move(_args)) {}
 
         EQueueType GetQueueType() const override { return EQueueType::Compute; }
 
         const auto& Args() const { return args; }
-        const auto& Pipeline() const { return pipeline; }
+        auto&       Pipeline() const { return *pipeline; }
         auto        Param() const { return param; }
         void        IterateArgs(std::function<void(const TArg&, ParamInfoFlags _flag)> _func) const {
             for (int i = 0; i < args.args.size(); i++) {
-                std::visit([&_func, i, this](const auto& _arg) { _func(_arg, pipeline.binding_infos[i]); }, args.args[i]);
+                std::visit([&_func, i, this](const auto& _arg) { _func(_arg, pipeline->binding_infos[i]); }, args.args[i]);
             }
         }
     };

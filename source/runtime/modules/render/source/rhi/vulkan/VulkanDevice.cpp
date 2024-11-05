@@ -436,7 +436,12 @@ namespace Moer::Render {
     }
 
     void VulkanDevice::CreateInternalShaders() {
-        internal_shaders.sd_component_shuffle = ShaderManager::Get().Compute<ComponentShuffleShader>("utils/ShuffleBufferIndices.hlsl");
+        internal_shaders                       = MakeUnique<DeviceInternalShaders>();
+        internal_shaders->sd_component_shuffle = ShaderManager::Get().Compute<ComponentShuffleShader>("utils/ShuffleBufferIndices.hlsl");
+    }
+
+    void VulkanDevice::DestroyInternalShaders() {
+        internal_shaders.reset();
     }
 
     void VulkanDevice::CreateInternalResources() {
@@ -493,6 +498,7 @@ namespace Moer::Render {
         gfx_queue.reset();
         copy_queue.reset();
         m_command_allocators.clear();
+        DestroyInternalShaders();
         FlushDeferredReleases();
         DestroyInternalResources();
         vmaDestroyAllocator(m_allocator);
@@ -564,6 +570,26 @@ namespace Moer::Render {
 
         return -1;
         // CRITICAL_AND_THROW("No suitable queue family found for " + std::to_string(_queue_flags));
+    }
+
+    uint VulkanDevice::GetQueueFamilyIndex(EQueueType _type) const {
+        switch (_type) {
+
+            case EQueueType::Graphics:
+                return m_device_info.queue_family_indices.graphics.value();
+            case EQueueType::Compute:
+                return m_device_info.queue_family_indices.compute.value();
+            case EQueueType::Copy:
+                return m_device_info.queue_family_indices.transfer.value();
+            case EQueueType::Num: {
+                break;
+            }
+            case EQueueType::Ignore: {
+                return VK_QUEUE_FAMILY_IGNORED;
+            }
+        }
+        assert(false && "Invalid queue type.");
+        return VK_QUEUE_FAMILY_IGNORED;
     }
 
     QueueFamilyIndices VulkanDevice::QueryQueueFamilyIndices(VkPhysicalDevice _gpu) const {

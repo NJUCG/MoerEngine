@@ -375,20 +375,24 @@ namespace Moer::Render {
         ShaderPipeline(const ShaderPipeline& _other)            = delete;
         ShaderPipeline& operator=(const ShaderPipeline& _other) = delete;
 
-        ~ShaderPipeline() {}
+        virtual ~ShaderPipeline() {
+            if (handle.IsValid()) MoerDelete((PipelineState*)handle.handle);
+        }
 
         bool operator==(const ShaderPipeline& _other) const { return handle.handle == _other.handle.handle; }
         bool IsValid() const { return !handle.IsValid(); }
     };
 
-#define MOVE_CONSTRUCTOR(name)             \
-    name& operator=(name&& _other) {       \
-        if (*this == _other) return *this; \
-        handle = std::move(_other.handle); \
-        return *this;                      \
-    }                                      \
-    name(name&& _other) {                  \
-        handle = std::move(_other.handle); \
+#define MOVE_CONSTRUCTOR(name)                           \
+    name& operator=(name&& _other) {                     \
+        if (*this == _other) return *this;               \
+        handle               = std::move(_other.handle); \
+        _other.handle.handle = 0;                        \
+        return *this;                                    \
+    }                                                    \
+    name(name&& _other) {                                \
+        handle               = std::move(_other.handle); \
+        _other.handle.handle = 0;                        \
     }
 
 #define NO_COPY_CONSTRUCTOR(name)                 \
@@ -398,7 +402,6 @@ namespace Moer::Render {
 #define COPY_CONSTRUCTOR(name)                                 \
     name(name&& _other) : ShaderPipeline(std::move(_other)) {} \
     name() : ShaderPipeline() {}
-    // MOVE_CONSTRUCTOR(name)
 
     class RasterPipeline : public ShaderPipeline, public RHIResource {
     public:

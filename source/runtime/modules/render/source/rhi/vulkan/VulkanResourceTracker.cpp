@@ -437,6 +437,82 @@ namespace Moer::Render {
                                 uint32_t                                                           _dst_queue_family) {
         RecordState(_texture, std::get<0>(_state), std::get<1>(_state), std::get<2>(_state), 0, _texture->GetNumMips(), _src_queue_family, _dst_queue_family);
     }
+
+    void VkTracker::QueueTransferReleaseResource(VulkanBuffer* _buffer, uint _src_queue, uint _dst_queue) {
+
+        pending_buffers.insert(_buffer);
+        if (auto it = buffer_states.find(_buffer); it != buffer_states.end()) {
+            auto& state            = it->second;
+            state.src_queue_family = _src_queue;
+            state.dst_queue_family = _dst_queue;
+        } else {
+            buffer_states[_buffer] = {VK_ACCESS_2_NONE, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, VK_ACCESS_2_NONE, VK_PIPELINE_STAGE_2_NONE, _src_queue, _dst_queue};
+        }
+    }
+
+    void GetInitImageLayoutAndAccess(VulkanTexture* _texture, VkImageLayout& _layout, VkAccessFlags2& _access, EQueueType _queue) {
+        if (!_texture->b_has_preferred_state) {
+            _layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            _access = VK_ACCESS_2_NONE;
+            return;
+        }
+        if (_texture->b_present) {
+            _layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            _access = VK_ACCESS_2_NONE;
+            return;
+        }
+        if (_texture->b_has_preferred_state) {
+            _layout = _texture->GetQueuePreferredLayout(_queue);
+            _access = VK_ACCESS_2_NONE;
+            return;
+        }
+    }
+    void VkTracker::QueueTransferReleaseResource(VulkanTexture* _texture, uint _src_queue, uint _dst_queue, VkImageLayout _src_layout, VkImageLayout _dst_layout) {
+        pending_textures.insert(_texture);
+        if (auto it = texture_states.find(_texture); it != texture_states.end()) {
+            auto& state            = it->second;
+            state.src_queue_family = _src_queue;
+            state.dst_queue_family = _dst_queue;
+            state.src_layout       = _src_layout;
+            state.dst_layout       = _dst_layout;
+        } else {
+            TextureState state{VK_ACCESS_2_NONE, VK_IMAGE_LAYOUT_UNDEFINED, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_NONE, _dst_layout, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, _src_queue, _dst_queue};
+            GetInitImageLayoutAndAccess(_texture, state.src_layout, state.src_access, queue_type);
+            texture_states[_texture] = state;
+        }
+        exported_textures.insert(_texture);
+    }
+
+    void VkTracker::QueueTransferAcquireResource(VulkanBuffer* _buffer, uint _src_queue, uint _dst_queue, VkAccessFlagBits2 _dst_access, VkPipelineStageFlagBits2 _dst_stage) {
+        pending_buffers.insert(_buffer);
+        if (auto it = buffer_states.find(_buffer); it != buffer_states.end()) {
+            auto& state            = it->second;
+            state.src_queue_family = _src_queue;
+            state.dst_queue_family = _dst_queue;
+            state.dst_access       = _dst_access;
+            state.dst_stage        = _dst_stage;
+        } else {
+            buffer_states[_buffer] = {VK_ACCESS_2_NONE, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, _dst_access, _dst_stage, _src_queue, _dst_queue};
+        }
+    }
+
+    void VkTracker::QueueTransferAcquireResource(VulkanTexture* _texture, uint _src_queue, uint _dst_queue, VkImageLayout _src_layout, VkImageLayout _dst_layout, VkAccessFlagBits2 _dst_access, VkPipelineStageFlagBits2 _dst_stage) {
+        pending_textures.insert(_texture);
+        if (auto it = texture_states.find(_texture); it != texture_states.end()) {
+            auto& state            = it->second;
+            state.src_queue_family = _src_queue;
+            state.dst_queue_family = _dst_queue;
+            state.src_layout       = _src_layout;
+            state.dst_layout       = _dst_layout;
+            state.dst_access       = _dst_access;
+            state.dst_stage        = _dst_stage;
+        } else {
+            //src access and stage are ignored in vulkan
+            TextureState state{VK_ACCESS_2_NONE, _src_layout, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, VK_ACCESS_2_NONE, _dst_layout, _dst_stage, _src_queue, _dst_queue};
+            texture_states[_texture] = state;
+        }
+    }
+
     uint8 Min(uint8 a, uint8 b) {
         return a < b ? a : b;
     }
@@ -469,8 +545,7 @@ namespace Moer::Render {
             _dst_queue_family};
 
         auto state_iter = texture_states.find(_texture);
-        bool is_write   = IsWriteState(_layout, _access);
-        MarkWriteable(_texture, is_write);
+
         pending_textures.insert(_texture);
         if (state_iter != texture_states.end()) {
             auto& target_state = state_iter->second;
@@ -495,22 +570,26 @@ namespace Moer::Render {
             target_state.dst_stage  = state.dst_stage;
 
         } else {
-            bool b_init      = _texture->b_has_init_state;
-            bool b_preferred = _texture->b_has_preferred_state;
+            // bool b_init      = _texture->b_has_init_state;
+            // bool b_preferred = _texture->b_has_preferred_state;
 
-            if (b_preferred || b_init) {
-                if (_texture->b_present) {
-                    state.src_layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-                    state.src_access = VK_ACCESS_2_NONE;
-                    // state.src_stage  = _stage;
-                } else if (b_preferred)
-                    state.src_layout = _texture->GetPreferredLayout();
-                else if (b_init) {
-                    state.src_layout = _texture->GetInitlayout();
-                }
-            }
+            // if (b_preferred || b_init) {
+            //     if (_texture->b_present) {
+            //         state.src_layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            //         state.src_access = VK_ACCESS_2_NONE;
+            //         // state.src_stage  = _stage;
+            //     } else if (b_preferred)
+            //         state.src_layout = _texture->GetPreferredLayout();
+            //     else if (b_init) {
+            //         state.src_layout = _texture->GetInitlayout();
+            //     }
+            // }
+            GetInitImageLayoutAndAccess(_texture, state.src_layout, state.src_access, queue_type);
+
             texture_states[_texture] = {state};
         }
+        bool is_write = IsWriteState(_layout, _access) || state.src_layout != state.dst_layout;
+        MarkWriteable(_texture, is_write);
     }
 
     void VkTracker::ResolveBarriers() {
@@ -552,7 +631,7 @@ namespace Moer::Render {
         for (VulkanTexture* texture : pending_textures) {
             if (auto it = texture_states.find(texture); it != texture_states.end()) {
                 auto& state = it->second;
-                if (state.src_access == state.dst_access && state.src_stage == state.dst_stage) {
+                if (state.src_access == state.dst_access && state.src_stage == state.dst_stage && exported_textures.find(texture) == exported_textures.end()) {
                     state.dst_access       = VK_ACCESS_2_NONE;
                     state.dst_stage        = VK_PIPELINE_STAGE_2_NONE;
                     state.dst_layout       = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -613,14 +692,9 @@ namespace Moer::Render {
 
     void VkTracker::RestoreState() {
         for (auto& [texture, state] : texture_states) {
-            texture->b_has_init_state = true;
-            VkImageLayout layout      = texture->GetInitlayout();
-            if (queue_type == EQueueType::Graphics) {
-                texture->b_has_preferred_state = true;
-                layout                         = texture->GetPreferredLayout();
-            } else {
-                texture->b_has_preferred_state = false;
-            }
+            if (exported_textures.find(texture) != exported_textures.end()) continue;
+            texture->b_has_preferred_state = true;
+            VkImageLayout layout           = texture->GetQueuePreferredLayout(queue_type);
             if (texture->b_present) continue;
             texture_barriers.emplace_back();
             VkImageMemoryBarrier2& barrier          = texture_barriers.back();

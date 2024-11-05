@@ -5,6 +5,7 @@
 #include "misc/MMemory.h"
 #include "misc/STL.h"
 #include "rhi/RHICommand.h"
+#include <format>
 #include <limits>
 #include <type_traits>
 #include <variant>
@@ -645,18 +646,18 @@ namespace Moer::Render {
                 //     SetRead(handle, Range(offset, size), ResourceType::Texture_Buffer),
                 //     layer);
                 RangeHandle* range_handle = static_cast<RangeHandle*>(GetHandle(handle, ResourceType::Texture_Buffer));
-                layer                     = GetLastLayerWrite(range_handle, Range(offset, size));
-                barrier_resources.emplace_back(range_handle);
-                barrier_ranges.emplace_back(Range(offset, size));
+                layer                     = GetLastLayerRead(range_handle, Range(offset, size));
+                // barrier_resources.emplace_back(range_handle);
+                // barrier_ranges.emplace_back(Range(offset, size));
             }
             for (const auto& [handle, state, pass_type, mip_level, mip_cnt] : _cmd->ReadTextures()) {
                 // layer = std::max(
                 //     SetRead(handle, Range(mip_level, mip_cnt), ResourceType::Texture_Buffer),
                 //     layer);
                 RangeHandle* range_handle = static_cast<RangeHandle*>(GetHandle(handle, ResourceType::Texture_Buffer));
-                layer                     = GetLastLayerWrite(range_handle, Range(mip_level, mip_cnt));
-                barrier_resources.emplace_back(range_handle);
-                barrier_ranges.emplace_back(Range(mip_level, mip_cnt));
+                layer                     = GetLastLayerRead(range_handle, Range(mip_level, mip_cnt));
+                // barrier_resources.emplace_back(range_handle);
+                // barrier_ranges.emplace_back(Range(mip_level, mip_cnt));
             }
 
             for (auto& [handle, state, pass_type, offset, size] : _cmd->WriteBuffers()) {
@@ -683,6 +684,35 @@ namespace Moer::Render {
                 Range        range        = barrier_ranges[i];
                 range_handle->EmplaceWriteLayer(range, layer);
                 m_write_resources.emplace(range_handle->handle);
+            }
+
+            AddCmd(_cmd, layer);
+        }
+
+        void VisitCmd(const QueueTransferCmd* _cmd) {
+            int64               layer = 0;
+            Array<RangeHandle*> barrier_resources;
+            Array<Range>        barrier_ranges;
+            //reserve
+            if (_cmd->IsImport()) {
+                barrier_resources.reserve(_cmd->ImportTextures().size());
+                barrier_ranges.reserve(_cmd->ImportTextures().size());
+
+                for (const auto& [handle, state] : _cmd->ImportTextures()) {
+                    RangeHandle* range_handle = static_cast<RangeHandle*>(GetHandle(uint64(handle.GetTexture()), ResourceType::Texture_Buffer));
+                    layer                     = GetLastLayerRead(range_handle, Range(handle.mip_level, handle.num_mips));
+                    assert(layer == 0 && std::format("Import Texture {} should be the first command", handle.GetTexture()->GetName()).c_str());
+                }
+            } else {
+                barrier_resources.reserve(_cmd->ExportTextures().size());
+                barrier_ranges.reserve(_cmd->ExportTextures().size());
+
+                for (const auto& [handle, state] : _cmd->ExportTextures()) {
+                    RangeHandle* range_handle = static_cast<RangeHandle*>(GetHandle(uint64(handle.GetTexture()), ResourceType::Texture_Buffer));
+                    layer                     = GetLastLayerWrite(range_handle, Range(handle.mip_level, handle.num_mips));
+                    //TODO: store export resources and check later usages
+                    // assert(layer == 0 && std::format("Export Texture {} should be the first command", handle.GetTexture()->GetName()).c_str());
+                }
             }
 
             AddCmd(_cmd, layer);
@@ -840,6 +870,9 @@ namespace Moer::Render {
                     break;
                 case Command::EType::Barrier:
                     VisitCmd(static_cast<const BarrierCmd*>(_cmd));
+                    break;
+                case Command::EType::QueueTransfer:
+                    VisitCmd(static_cast<const QueueTransferCmd*>(_cmd));
                     break;
                 case Command::EType::SetDrawState:
                     VisitCmd(static_cast<const SetDrawStateCmd*>(_cmd));

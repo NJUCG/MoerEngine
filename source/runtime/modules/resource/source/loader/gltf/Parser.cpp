@@ -18,6 +18,7 @@
 #include "rhi/RHI.h"
 #include "resources/GpuScene.h"
 #include "rhi/RHICommon.h"
+#include "rhi/RHIResource.h"
 #include "scene/BufferInterfaceBlock.h"
 #include "scene/EntityManager.h"
 #include "scene/CameraManager.h"
@@ -619,10 +620,10 @@ namespace Moer::Resource::Gltf {
             rt_instance.overload_m2 = model_2_world.r1;
             rt_instance.overload_m3 = model_2_world.r2;
 
-            rt_instance.material_id   = m_scene_data->m_material_instance_indexes[m_scene_data->m_prim_infos[i].material_id];
-            rt_instance.material_type = 0;
-            rt_instance.prim_offset   = rt_mesh_info.primitive_offset;
-            rt_instance.vtx_offset    = rt_mesh_info.vertex_offset;
+            rt_instance.SetMaterial(0, m_scene_data->m_material_instance_indexes[m_scene_data->m_prim_infos[i].material_id]);
+            rt_instance.flags       = Render::RTVM_DEFAULT;
+            rt_instance.prim_offset = rt_mesh_info.primitive_offset;
+            rt_instance.vtx_offset  = rt_mesh_info.vertex_offset;
 
             rt_instances.push_back(rt_instance);
 

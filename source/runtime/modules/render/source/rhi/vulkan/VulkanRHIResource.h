@@ -21,7 +21,7 @@
 #include <atomic>
 #include <cstddef>
 #include <mutex>
-#include <stdatomic.h>
+#include <atomic>
 #include <volk.h>
 #include "VulkanTypeDefs.h"
 #include "VulkanSwapChain.h"
@@ -677,9 +677,9 @@ namespace Moer::Render {
         VkPipelineLayout             m_pipeline_layout;
         Array<VkDescriptorSetLayout> descriptor_set_layouts;
         // descriptor sets
-        Moer::Render::VulkanDescriptorSetsLayout* m_descriptor_sets_layout;
+        Moer::Render::VulkanDescriptorSetsLayout* m_descriptor_sets_layout = nullptr;
         // resource cache
-        VulkanPipelineResourceCache* m_pipeline_state_cache;
+        VulkanPipelineResourceCache* m_pipeline_state_cache = nullptr;
         EType                        m_type;
     };
 
@@ -880,7 +880,7 @@ namespace Moer::Render {
         static VkImageType       METoVKImageType(ETextureDimension _dim);
         static VkImageUsageFlags METoVKImageUsageFlags(ETextureUsageFlags _me_flags);
 
-        uint GetMipByteSize(uint _mip_idx) const override;
+        uint        GetMipByteSize(uint _mip_idx) const override;
         VkImageView GetView(uint _mip_level = 0, uint _mip_cnt = 1);
         bool        IsGeneralRead(uint _mip_level = 0) const;
 
@@ -894,13 +894,23 @@ namespace Moer::Render {
         };
         Array<SubResourceStates> m_subresource_states;
         SubResourceStates        state;
-        bool                     b_has_init_state : 1      = false;
         bool                     b_has_preferred_state : 1 = false;
         bool                     b_present : 1             = false;
         VkImageLayout            GetPreferredLayout() { return m_preferred_layout; };
-        VkImageLayout            GetInitlayout() {
-            return VK_IMAGE_LAYOUT_GENERAL;
+
+        VkImageLayout GetQueuePreferredLayout(EQueueType _queue) {
+            switch (_queue) {
+                case EQueueType::Graphics:
+                    return m_preferred_layout;
+                case EQueueType::Compute:
+                    return m_preferred_layout;
+                case EQueueType::Copy:
+                    return VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                default:
+                    return VK_IMAGE_LAYOUT_GENERAL;
+            }
         }
+
         int32 GetDescriptorIndex(uint _mip_level, uint _mip_idx, VkImageLayout _layout) {
             VkTextureDescKey key = {_layout, uint8(_mip_level), uint8(_mip_idx)};
             auto             it  = m_descriptor_indices.find(key);

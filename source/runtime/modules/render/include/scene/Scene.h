@@ -36,13 +36,23 @@ namespace Moer {
     };
 
     struct RTInstance {
-        float4   overload_m1;
-        float4   overload_m2;
-        float4   overload_m3;
-        uint32_t material_id;
-        uint32_t material_type;
-        uint     prim_offset;
-        uint     vtx_offset;
+        static constexpr uint material_type_mask = 0xff;
+        static constexpr uint material_id_offset = 8;
+        float4                overload_m1;
+        float4                overload_m2;
+        float4                overload_m3;
+        uint                  material_type_and_id;
+        uint                  flags;
+        uint                  prim_offset;
+        uint                  vtx_offset;
+
+        uint GetMaterialType() const { return material_type_and_id & material_type_mask; }
+        uint GetMaterialID() const { return material_type_and_id >> material_id_offset; }
+        void SetMaterialType(uint _type) { material_type_and_id = (_type & material_type_mask) | (material_type_and_id & ~material_type_mask); }
+        void SetMaterialID(uint _id) { material_type_and_id = (_id << material_id_offset) | (material_type_and_id & material_type_mask); }
+        void SetMaterial(uint _type, uint _id) {
+            material_type_and_id = (_type & material_type_mask) | ((_id << material_id_offset) & ~material_type_mask);
+        }
     };
 
     struct RTMeshInfo {
@@ -118,6 +128,7 @@ namespace Moer {
         bool              IsCamerasEmpty() const noexcept;
         void              ForEach(std::function<void(Entity)> _func) const noexcept;
         bool              IsReady() const noexcept;
+        uint              GetEntityCount() const noexcept;
 
         // [temperory]
         void RegisterMaterialTextures(UnorderedMap<std::string, Render::TextureRef> _textures) noexcept;
