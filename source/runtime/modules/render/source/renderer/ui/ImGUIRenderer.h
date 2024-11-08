@@ -42,6 +42,10 @@ namespace Moer::Render {
 
         void RenderGUI(CommandList& _cmd_list, const TextureView& _framebuffer);
 
+        void PresentWindows();
+
+        TextureView GetWindowFrameBuffer(void* _window);
+
         BindlessArrayRef             bindless_array;
         RenderDevice&                device;
         UnorderedMap<Texture*, uint> registered_images;

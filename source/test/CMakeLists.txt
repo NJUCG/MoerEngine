@@ -80,7 +80,7 @@ target_link_libraries(RHITest
 )
 set_target_properties(RHITest PROPERTIES FOLDER ${moer_test_folder})
 
-add_executable(RaytracingTest Raytracing/RTTest.cpp)
+add_executable(RaytracingTest Raytracing/RTTest.cpp Raytracing/RTUI.cpp)
 target_include_directories(RaytracingTest
         PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>
         PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>

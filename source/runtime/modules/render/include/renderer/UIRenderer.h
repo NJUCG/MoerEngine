@@ -45,6 +45,9 @@ namespace Moer::Render {
         RENDER_API void RegisterImage(Texture* _texture, Sampler _sampler);
         RENDER_API void UnRegisterImage(Texture* _texture);
 
+        RENDER_API TextureView GetWindowFrameBuffer(void* _window);
+        RENDER_API void        PresentWindows();
+
     private:
         UniquePtr<Impl> impl;
         // RENDER_API virtual void UploadFonts(FontDesc _font_desc) = 0;

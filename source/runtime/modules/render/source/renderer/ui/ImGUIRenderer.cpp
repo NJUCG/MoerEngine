@@ -336,11 +336,27 @@ namespace Moer::Render {
                 for (int i = 1; i < platform_io.Viewports.Size; i++)
                     if ((platform_io.Viewports[i]->Flags & ImGuiViewportFlags_IsMinimized) == 0)
                         GuiRenderWindow(platform_io.Viewports[i], nullptr);
-                for (int i = 1; i < platform_io.Viewports.Size; i++)
-                    if ((platform_io.Viewports[i]->Flags & ImGuiViewportFlags_IsMinimized) == 0)
-                        GuiSwapbuffer(platform_io.Viewports[i], nullptr);
             }
         }
+    }
+
+    void ImGUIRenderBackend::PresentWindows() {
+        ImGuiPlatformIO& platform_io = ImGui::GetPlatformIO();
+        auto&            io          = ImGui::GetIO();
+
+        if (io.BackendFlags & ImGuiBackendFlags_RendererHasViewports) {
+
+            for (int i = 1; i < platform_io.Viewports.Size; i++)
+                if ((platform_io.Viewports[i]->Flags & ImGuiViewportFlags_IsMinimized) == 0)
+                    GuiSwapbuffer(platform_io.Viewports[i], nullptr);
+        }
+    }
+
+    TextureView ImGUIRenderBackend::GetWindowFrameBuffer(void* _window) {
+        ImGuiViewport*   viewport      = (ImGuiViewport*)_window;
+        GuiViewportData* viewport_data = (GuiViewportData*)viewport->RendererUserData;
+
+        return viewport_data && viewport_data->framebuffer ? viewport_data->framebuffer->GetView() : TextureView();
     }
 
 }// namespace Moer::Render
@@ -496,7 +512,7 @@ void GUIRender(void* _draw_data, const TextureView& _frame_buffer, CommandList& 
         .Draw("ImGui Draws",
               {0, 0, (uint)(draw_data->DisplaySize.x * draw_data->FramebufferScale.x), uint(draw_data->DisplaySize.y * draw_data->FramebufferScale.y)},
               std::move(draw_meshes),
-              ColorAttachment(_frame_buffer.GetTexture(), EAttachmentAction::AC_LOAD_STORE));
+              ColorAttachment(_frame_buffer.GetTexture(), EAttachmentAction::AC_CLEAR_STORE));
 
     _cmdlist.AddCallback([vtx(std::move(vertices)),
                           idx(std::move(indices)),

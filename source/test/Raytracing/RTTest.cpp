@@ -24,6 +24,8 @@
 #include "scene/RenderableManager.h"
 #include "scene/Scene.h"
 
+#include "RTUI.h"
+
 using namespace Moer::Render;
 using namespace Moer;
 
@@ -122,6 +124,32 @@ public:
     DEFINE_SHADER_ARGS(param, rt_config, out_normal, out_color, out_position, out_direct_lighting, bdls, tlas);
 };
 
+class CombineUIPipeline : public RasterPipeline {
+
+public:
+    struct Param {
+        float2 min_xy;
+        float2 max_xy;
+    };
+
+    DEFINE_RASTER_PIPELINE_CLASS(CombineUIPipeline);
+    DEFINE_SHADER_TEX(scene_color);
+    DEFINE_SHADER_TEX(gui_color);
+    DEFINE_SHADER_SAMPLER(linear_sampler);
+    DEFINE_SHADER_CONSTANT_STRUCT(Param, scene_rect);
+
+    DEFINE_SHADER_ARGS(scene_color, gui_color, linear_sampler, scene_rect);
+};
+
+class SampleTexturePipeline : public RasterPipeline {
+public:
+    DEFINE_RASTER_PIPELINE_CLASS(SampleTexturePipeline);
+    DEFINE_SHADER_TEX(src_color);
+    DEFINE_SHADER_SAMPLER(spl);
+
+    DEFINE_SHADER_ARGS(src_color, spl);
+};
+
 int main(int argc, const char** argv) {
 
     using namespace Moer::Render;
@@ -170,6 +198,14 @@ int main(int argc, const char** argv) {
         Extent2D(resolution.x, resolution.y),
         PF_R8G8B8A8_SRGB,
         ETextureUsageFlags::COLOR_ATTACHMENT);
+
+    TextureRef ui_frame_buffer = device.CreateTexture(
+        Extent2D(resolution.x, resolution.y),
+        PF_R8G8B8A8_SRGB,
+        ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED);
+
+    ui_frame_buffer->SetName("ui_frame_buffer");
+
     gfx_queue.Execute(cmd_list.Submit());
     gfx_queue.Sync();
 
@@ -190,6 +226,25 @@ int main(int argc, const char** argv) {
 
     RaytracingSceneRef rt_scene  = device.CreateRaytracingScene();
     TestInlineRTShader rt_shader = manager.Compute<TestInlineRTShader>("hwrt/InlineRayTracing.hlsl");
+
+    GfxPsoCreateInfo  combine_pso_info(RHIRasterizeInfo::Preset(),
+                                       {},
+                                       {RHIColorAttachmentInfo::Preset(PF_R8G8B8A8_SRGB)});
+    CombineUIPipeline combine_ui = manager
+                                       .Raster()
+                                       .Vertex("CombineGuiVert.hlsl")
+                                       .Pixel("CombineGuiFrag.hlsl")
+                                       .Build<CombineUIPipeline>(std::move(combine_pso_info));
+
+    GfxPsoCreateInfo sample_tex_pso_info(RHIRasterizeInfo::Preset(),
+                                         {},
+                                         {RHIColorAttachmentInfo::Preset(PF_R8G8B8A8_SRGB)});
+
+    SampleTexturePipeline sample_tex = manager
+                                           .Raster()
+                                           .Vertex("framework/FullScreen.vert.hlsl")
+                                           .Pixel("utils/CopyTexture.frag.hlsl")
+                                           .Build<SampleTexturePipeline>(std::move(sample_tex_pso_info));
 
     bool   first_load = true;
     uint   instance_buffer_handle;
@@ -233,16 +288,30 @@ int main(int argc, const char** argv) {
         PF_R8G8B8A8_UNORM,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
 
+    TextureRef scene_color = device.CreateTexture(
+        Extent2D(resolution.x, resolution.y),
+        PF_R8G8B8A8_SRGB,
+        ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED);
+
     out_normal->SetName("out_normal");
     out_color->SetName("out_color");
     out_position->SetName("out_position");
     out_direct_lighting->SetName("out_direct_lighting");
+
+    scene_color->SetName("scene_color");
+
+    RTUI rt_ui{gui};
 
     Timer timer;
     timer.Start();
     uint64 last_time = 0ull;
     while (WindowContext::ShouldClose(window_handle) == false) {
         WindowContext::Tick();
+        gui.BeginGUIFrame();
+        {
+            rt_ui.TickUI();
+        }
+        gui.EndGUIFrame();
         int w_width, w_height;
         if (time >= 3) {
             timeline->Wait(time - 2);
@@ -293,10 +362,22 @@ int main(int argc, const char** argv) {
                 PF_R8G8B8A8_UNORM,
                 ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
 
+            scene_color = device.CreateTexture(
+                Extent2D(resolution.x, resolution.y),
+                PF_R8G8B8A8_SRGB,
+                ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED);
+
+            ui_frame_buffer = device.CreateTexture(
+                Extent2D(resolution.x, resolution.y),
+                PF_R8G8B8A8_SRGB,
+                ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED);
+
             out_normal->SetName("out_normal");
             out_color->SetName("out_color");
             out_position->SetName("out_position");
             out_direct_lighting->SetName("out_direct_lighting");
+            ui_frame_buffer->SetName("ui_frame_buffer");
+            scene_color->SetName("scene_color");
         }
 
         if (Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady()) {
@@ -392,7 +473,7 @@ int main(int argc, const char** argv) {
 
             rt_config_param.tan_pixel_angular_radius = tanf(Angle::DegreeToRadian(camera->GetFov()));
             rt_config_param.tan_sun_angular_radius   = tanf(Angle::DegreeToRadian(0.533f * 0.5f));
-            float3 sun_dir                           = Normalizef(float3(0.f, 0.5f, 0.02f));
+            float3 sun_dir                           = Normalizef(float3(0.f, 0.5f, 0.16f));
             rt_config_param.sun_direction_gexposure  = float4(sun_dir, 80.f);
             cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)&rt_config_param, sizeof(RTConfigParam)), rt_config_param_buffer->GetView());
 
@@ -412,13 +493,35 @@ int main(int argc, const char** argv) {
                 .Dispatch(uint3((resolution.x + 15) >> 4, (resolution.y + 15) >> 4, 1), "Primary Ray");
 
             //copy normal to output
-            cmd_list.CopyFrom(out_direct_lighting->GetView(), output->GetView());
+            cmd_list.CopyFrom(out_direct_lighting->GetView(), scene_color->GetView());
         }
         // rt_scene->MarkModified(0);
         // cmd_list.UpdateRaytracingScene(rt_scene);
+        gui.RenderGUI(cmd_list, ui_frame_buffer);
+        Sampler linear_sampler{SF_LINEAR, SAM_CLAMP_TO_BORDER};
+
+        if (rt_ui.IsSeperateWindow() && rt_ui.GetWindowFrameBuffer().GetTexture()) {
+            auto frame_buffer = rt_ui.GetWindowFrameBuffer();
+            auto scene_res    = rt_ui.GetSceneColorResolution();
+            auto scene_pos    = rt_ui.GetSceneColorPos();
+            cmd_list.Gfx(sample_tex, scene_color, linear_sampler).Draw("SampleTexture", Rect2D(scene_pos.x, scene_pos.y, scene_res.x, scene_res.y), {}, 3, {SingleDrawParam(3, 1, 0, 0, 0)}, ColorAttachment(frame_buffer.GetTexture()));
+
+        } else {
+            float2 f_res  = float2(resolution.x, resolution.y);
+            float2 min_xy = rt_ui.GetSceneColorPos() / f_res;
+            float2 max_xy = (rt_ui.GetSceneColorPos() + rt_ui.GetSceneColorResolution()) / f_res;
+            cmd_list.Gfx(combine_ui, scene_color, ui_frame_buffer, linear_sampler, CombineUIPipeline::Param{min_xy, max_xy})
+                .Draw("CombineUI",
+                      Rect2D(0, 0, resolution.x, resolution.y),
+                      {},
+                      3,
+                      {SingleDrawParam(3, 1, 0, 0, 0)},
+                      ColorAttachment(output));
+        }
         time++;
         gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time));
         gfx_queue.Present(sc, output);
+        gui.PresentWindows();
     }
     gfx_queue.Sync();
 }

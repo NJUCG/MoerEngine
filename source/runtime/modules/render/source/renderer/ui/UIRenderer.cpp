@@ -53,4 +53,12 @@ namespace Moer::Render {
         impl->RenderGUI(_cmd_list, _framebuffer);
     }
 
+    TextureView UIRenderer::GetWindowFrameBuffer(void* _window) {
+        return impl->backend.GetWindowFrameBuffer(_window);
+    }
+
+    void UIRenderer::PresentWindows() {
+        impl->backend.PresentWindows();
+    }
+
 }// namespace Moer::Render
