@@ -813,20 +813,23 @@ namespace Moer::Render {
             cmd_list.SetViewPort(viewport);
             cmd_list.SetScissor({rect.offset.x, rect.offset.y, rect.extent.width, rect.extent.height});
             for (const auto& draw_data : draw_datas) {
-                StaticArray<VkBuffer, 4>     vertex_buffers{};
-                StaticArray<VkDeviceSize, 4> vtx_offsets{};
-                for (size_t i = 0; i < draw_data.vtx_cnt; ++i) {
-                    vertex_buffers[i] = ResourceCast(draw_data.vtx_views[i].buffer)->GetHandle();
-                    vtx_offsets[i]    = draw_data.vtx_views[i].offset;
-                }
                 if (draw_data.vtx_cnt > 0)
+                {
+                    StaticArray<VkBuffer, 4>     vertex_buffers{};
+                    StaticArray<VkDeviceSize, 4> vtx_offsets{};
+                
+                    for (size_t i = 0; i < draw_data.vtx_cnt; ++i) {
+                        vertex_buffers[i] = ResourceCast(draw_data.vtx_views[i].buffer)->GetHandle();
+                        vtx_offsets[i]    = draw_data.vtx_views[i].offset;
+                    }
                     cmd_list.SetVertexBuffers(0,
                                               draw_data.vtx_cnt,
                                               std::span<VkBuffer>(vertex_buffers.data(),
                                                                   draw_data.vtx_cnt),
                                               std::span<VkDeviceSize>(vtx_offsets.data(),
                                                                       draw_data.vtx_cnt));
-
+                }
+               
                 // uint vtx_offset = draw_data.vtx_cnt != 0 ? draw_data.vtx_views[0].offset / draw_data.vtx_views[0].buffer->GetStride() : 0;
 
                 std::visit(

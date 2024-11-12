@@ -740,6 +740,9 @@ namespace Moer::Resource::Gltf {
                 if (material->Get(AI_MATKEY_NAME, name) == AI_SUCCESS) {
                     material_name = name.C_Str();
                 }
+                else {
+                    material_name = std::string("_default_material_Name") + std::to_string(material_id);
+                }
 
                 m_scene_data->m_material_instance_indexes[material_name] = material_id;
 

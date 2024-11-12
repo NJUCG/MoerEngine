@@ -532,6 +532,8 @@ namespace Moer::Render {
                 Draw(_rect, std::move(mesh_data), _depth, std::forward<TRenderTarget>(_render_targets)...);
             };
 
+        
+
             template<typename... TRenderTarget>
             void Draw(Rect2D _rect, std::span<VertexBuffer> _vtx, IndexBuffer _idx, Array<SingleDrawParam>&& _mesh_data, TRenderTarget&&... _render_targets) {
 
@@ -588,6 +590,19 @@ namespace Moer::Render {
                 mesh_data.back().draw_params = std::move(_mesh_data);
 
                 Draw(_name, _rect, std::move(mesh_data), std::forward<TRenderTarget>(_render_targets)...);
+            };
+
+            template<typename... TRenderTarget>
+            void Draw(std::string_view _name,Rect2D _rect,  Array<SingleDrawParam>&& _mesh_data,  TRenderTarget&&... _render_targets) {
+                RenderPassInfo pass_info(
+                                    {std::forward<TRenderTarget>(_render_targets)...},
+                                    DepthAttachment{},
+                                    _rect);
+                Array<MeshDrawData> mesh_data;
+                mesh_data.emplace_back();
+                mesh_data.back().draw_params = std::move(_mesh_data);
+
+                cmd_list.SetRenderCmds(pso.handle, std::move(args), std::move(pass_info), std::move(mesh_data), _name);
             };
 
             template<typename... TRenderTarget>

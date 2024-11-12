@@ -260,11 +260,11 @@ int main(int argc, const char** argv) {
 
     auto                buf = device.CreateBuffer<float>(1024, EBufferUsageFlags::UNORDERED_ACCESS);
     SwapchainCreateInfo sc_info{.window_handle = (uintptr_t)window_handle, .size = {resolution.x, resolution.y}, .back_buffer_sz = 2, .preferred_format = PF_R8G8B8A8_SRGB};
-    auto                sc          = device.CreateSwapchain(sc_info);
-    g_scene                         = MoerNew(Scene)();
-    BindlessArrayRef bindless_array = g_scene->GetBindlessArray();
-    auto&            gfx_queue      = device.GetCommandQueue(EQueueType::Graphics);
-    auto&            copy_queue     = device.GetCopyQueue();
+    auto                sc             = device.CreateSwapchain(sc_info);
+    Scene*              scene          = MoerNew(Scene)();
+    BindlessArrayRef    bindless_array = scene->GetBindlessArray();
+    auto&               gfx_queue      = device.GetCommandQueue(EQueueType::Graphics);
+    auto&               copy_queue     = device.GetCopyQueue();
 
     Array<uint> data(1024);
     for (uint i = 0; i < 1024; ++i) {
@@ -305,21 +305,21 @@ int main(int argc, const char** argv) {
     TextureRef vbuffer = device.CreateTexture(
         Extent2D(resolution.x, resolution.y),
         PF_R32_UINT,
-        ETextureUsageFlags::COLOR_ATTACHMENT);
+        ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT);
 
     TextureRef normal = device.CreateTexture(
         Extent2D(resolution.x, resolution.y),
         PF_R8G8B8A8_UNORM,
-        ETextureUsageFlags::COLOR_ATTACHMENT);
+        ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT);
 
     TextureRef uv = device.CreateTexture(
         Extent2D(resolution.x, resolution.y),
         PF_R32G32_SFLOAT,
-        ETextureUsageFlags::COLOR_ATTACHMENT);
+        ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT);
 
     DepthBufferRef depth = device.CreateDepthBuffer(
         Extent2D(resolution.x, resolution.y),
-        PF_D32_SFLOAT_S8_UINT);
+          PF_D32_SFLOAT_S8_UINT);
 
     TextureRef output = device.CreateTexture(
         Extent2D(resolution.x, resolution.y),
@@ -409,21 +409,20 @@ int main(int argc, const char** argv) {
     gfx_queue.Execute(cmd_list.Submit());
     gfx_queue.Sync();
 
-    g_scene = MoerNew(Scene)();
-
-    Resource::LoaderInterface::LoadSceneFromFileAsync(ConfigManager::GetInstance().GetScenePath(), g_scene);
+    Resource::LoaderInterface::LoadSceneFromFileAsync(ConfigManager::GetInstance().GetScenePath(), scene);
     OnScopeExit([&] {
-        MoerDelete(g_scene);
         Scene::ResetAsyncLoadInfo();
     });
     FenceRef timeline   = device.CreateFence();
     uint64   time       = 0;
     bool     first_load = true;
 
-    uint bdls_tex_handle_vbuffer = bindless_array->AllocateTexture(vbuffer, sampler);
-    uint bdls_tex_handle_normal  = bindless_array->AllocateTexture(normal, sampler);
-    uint bdls_tex_handle_uv      = bindless_array->AllocateTexture(uv, sampler);
+
     // uint bdls_tex_handle_depth   = bindless_array->AllocateTexture(depth, sampler);
+    uint bdls_tex_handle_vbuffer = 0;
+    uint bdls_tex_handle_normal  = 0;
+    uint bdls_tex_handle_uv      = 0;
+    uint material_buffer_idx     = 0;
 
     while (WindowContext::ShouldClose(window_handle) == false) {
         WindowContext::Tick();
@@ -439,28 +438,29 @@ int main(int argc, const char** argv) {
             timeline->Wait(time - 2);
         }
 
-        uint material_buffer_idx     = 0;
         uint last_io_change_timeline = 0;
         if (Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady()) {
             if (first_load) {
-                instance_buffer_handle = bindless_array->AllocateBuffer(g_scene->GetBuffer(EGpuSceneResource::InstanceInfo)->GetView());
-                material_buffer_idx    = bindless_array->AllocateBuffer(g_scene->GetBuffer(EGpuSceneResource::MaterialInfo)->GetView());
+                instance_buffer_handle = bindless_array->AllocateBuffer(scene->GetBuffer(EGpuSceneResource::InstanceInfo)->GetView());
+                material_buffer_idx    = bindless_array->AllocateBuffer(scene->GetBuffer(EGpuSceneResource::MaterialInfo)->GetView());
 
                 first_load = false;
-
+                bdls_tex_handle_vbuffer = bindless_array->AllocateTexture(vbuffer, sampler);
+                bdls_tex_handle_normal  = bindless_array->AllocateTexture(normal, sampler);
+                bdls_tex_handle_uv      = bindless_array->AllocateTexture(uv, sampler);
                 cmd_list.UpdateBindlessArray(bindless_array);
                 last_io_change_timeline = copy_queue_timeline->GetValue();
                 // gfx_queue.Wait({uint64(copy_queue_timeline.Get()), copy_timeline->GetValue()});
                 // gfx_queue.Sync();
             }
-
-            auto camera_entity = g_scene->GetCameras()[0];
+            
+            auto camera_entity = scene->GetCameras()[0];
             auto camera        = CameraManager::Get().Get(camera_entity);
             camera->Tick();
 
             //GBuffer Pass
-            auto                    vertex_buffer = g_scene->GetVertexBuffer();
-            auto                    index_buffer  = g_scene->GetIndexBuffer();
+            auto                    vertex_buffer = scene->GetVertexBuffer();
+            auto                    index_buffer  = scene->GetIndexBuffer();
             VertexBuffer            vb(vertex_buffer, 0);
             IndexBuffer             ib(index_buffer->GetView(), EIndexElementType::IET_UINT32);
             std::span<VertexBuffer> vb_span(&vb, 1);
@@ -469,7 +469,7 @@ int main(int argc, const char** argv) {
             // draw_datas.emplace_back(SingleDrawParam{uint(index_buffer->GetByteSize()/sizeof(uint)), 1, 0, 0, 0});
 
             uint instance_count = 0;
-            for (auto entity : g_scene->GetEntities()) {
+            for (auto entity : scene->GetEntities()) {
                 auto& mesh = RenderableManager::Get().GetMeshInfo(entity);
                 draw_datas.emplace_back(SingleDrawParam{mesh.index_count, 1, mesh.index_offset, mesh.vertex_offset, instance_count++});
             }
@@ -494,9 +494,9 @@ int main(int argc, const char** argv) {
             //Material organize this materials
             //Material bind all resources for it's pass
             //Draw a full screen quad pass for each material type
-            Moer::UnorderedSet<EMaterialType>                                   material_types = {};
+            Moer::UnorderedSet<EMaterialType>                                   material_types = {EMaterialType::E_PBR_STANDARD};
             Moer::UnorderedMap<EMaterialType, Moer::Array<MaterialInstanceRef>> material_instances;
-            // g_scene->ForEach([&](Entity _entity) {
+            // scene->ForEach([&](Entity _entity) {
             //     if (RenderableManager::Get().Contains(_entity)) {
             //
             //         auto mi = RenderableManager::Get().GetMaterialInstance(_entity);
@@ -507,10 +507,12 @@ int main(int argc, const char** argv) {
             material_param.material_buffer = material_buffer_idx;
 
             for (auto type : material_types) {
+                Array<SingleDrawParam> full_screen_draw_datas;
+                full_screen_draw_datas.emplace_back(SingleDrawParam{3, 1, 0, 0, 0});
                 // RHIBatchedShaderParameters parameters;
                 // LightingShaderFrag::Parameters frag_params;
                 // frag_params.lighting_data = lighting_data;
-                // // frag_params.material_data = g_scene->GetB;
+                // // frag_params.material_data = scene->GetB;
                 // frag_params.light_data = light_buffer_view;
                 // frag_params.depth_attach = depth_srv;
                 // frag_params.gbuffer_uv = uv_srv;
@@ -527,7 +529,7 @@ int main(int argc, const char** argv) {
                 // cmd_list->Draw(3, 1,0,0);
                 material_param.material_type = uint(type);
                 cmd_list.Gfx(pbr_pipeline, bindless_array, material_param)
-                    .Draw("GBuffer Pass", Rect2D(0, 0, resolution.x, resolution.y), vb_span, ib, std::move(draw_datas), DepthAttachment(depth->GetView().GetTexture()), ColorAttachment(output));
+                    .Draw("Lighting", Rect2D(0, 0, resolution.x, resolution.y), std::move(full_screen_draw_datas), ColorAttachment(output));
             };
 
             //PBR Pass

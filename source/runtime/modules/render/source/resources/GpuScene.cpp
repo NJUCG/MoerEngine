@@ -187,15 +187,15 @@ namespace Moer {
         Moer::Array<Moer::Array<uint32_t>>                  batch_indices;
 
         {
-            auto& indices  = batch_indices.emplace_back();
+            auto * indices  = & batch_indices.emplace_back();
             int   cur_size = 0;
             for (int i = 0; i < builders.size(); i++) {
                 if (cur_size + builders[i].m_data_size > batch_size) {
-                    indices.emplace_back(i);
+                    indices = &batch_indices.emplace_back();
                     cur_size = 0;
                 }
                 cur_size += builders[i].m_data_size;
-                indices.emplace_back(i);
+                indices->emplace_back(i);
             }
         }
 

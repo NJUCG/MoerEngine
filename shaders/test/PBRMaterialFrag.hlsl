@@ -13,36 +13,22 @@ struct LightingData {
     float3   camera_position;
 };
 
-// [[vk::binding(0, 2)]] Texture2D scene_textures[25];
-// [[vk::binding(0, 2)]] Texture2D scene_texture;
-
 static const uint CUR_MATERIAL_TYPE = 0;
-
-// [[vk::binding(0, 0)]] StructuredBuffer<MaterialData> material_data
-//     : register(t0, space0);
-// [[vk::binding(1, 0)]] StructuredBuffer<Light> light_data : register(t1, space0);
-// [[vk::push_constant]] ConstantBuffer<LightingData> lighting_data : register(b0);
-
-// [[vk::binding(0, 1)]] Texture2D<uint> mat_attach;
-// [[vk::binding(1, 1)]] Texture2D<float4> normal_attach;
-// [[vk::binding(2, 1)]] Texture2D<float2> gbuffer_uv;
-// [[vk::binding(3, 1)]] Texture2D depth_attach;
-
-// [[vk::binding(4, 1)]] SamplerState default_sampler;
 
 struct MaterialData {
     float4 base_color_factor;
     float3 emissive_factor;
-    float  metallic_factor;
-    float  roughness_factor;
-    float  ao;
-    uint   albedo_map;
-    int    normal_map;
-    int    metallic_roughness_map;
-    int    ao_map;
-    int    emissive_map;
-    int    padding;
+    float metallic_factor;
+    float roughness_factor;
+    float ao;
+    uint albedo_map;
+    int normal_map;
+    int metallic_roughness_map;
+    int ao_map;
+    int emissive_map;
+    int padding;
 };
+
 
 struct PackedMaterialData{
     float4 packed_0;
@@ -82,13 +68,19 @@ float4 main(float2 in_uv
 
     uint         gbuffer_mat = TextureHandle(param.vbuffer).Sample2D<uint>(in_uv);
     uint         mat_type    = gbuffer_mat & 0x000000FF;
+   if(mat_type!= param.material_type){
+        printf("mat_type:%d, param.material_type:%d\n", mat_type, param.material_type);
+        discard;
+   }
     float2       uv          = TextureHandle(param.gbuffer_uv).Sample2D<float2>(in_uv);
+  //  return float4(uv, 0.0, 1.0);
     uint         mat_id      = (gbuffer_mat & 0xFFFFFF00) >> 8;
     MaterialData mat         = UnpackMaterialData<MaterialData>(param.material_buffer, mat_id);
     float4       base_color;
     if (mat.albedo_map == -1) {
         base_color = mat.base_color_factor;
     } else {
+        //printf("mat.albedo_map:%d\n", mat.albedo_map);
         base_color = TextureHandle(mat.albedo_map).Sample2D<float4>(uv);
     }
     return float4(base_color.xyz, 1.0f);

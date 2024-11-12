@@ -13,6 +13,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(moer_root_dir ${CMAKE_CURRENT_SOURCE_DIR})
 set(moer_source_dir ${moer_root_dir}/source) 
 set(moer_third_party_dir "${moer_root_dir}/3rdparty")
+set(moer_shader_dir "${moer_root_dir}/shaders")
 
 # set(CMAKE_INSTALL_PREFIX "${moer_root_dir}/target/$<$<CXX_COMPILER_ID:MSVC>:>$<$<NOT:$<CXX_COMPILER_ID:MSVC>>:$<CMAKE_BUILD_TYPE>>")
 if(MSVC)
