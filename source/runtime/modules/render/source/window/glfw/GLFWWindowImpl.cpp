@@ -27,11 +27,14 @@ namespace Moer {
     WindowInput& wndInput = WindowInput::GetInstance();
 
     //------------------------call back functions---------------------------
-    void KeyCallbackFunc(GLFWwindow* window, int key, int scancode, int action, int mods);
-    void CursorPosCallbackFunc(GLFWwindow* window, double xpos, double ypos);
-    void FrameBufferSizeCallbackFunc(GLFWwindow* window, int width, int height);
-    void ScrollCallbackFunc(GLFWwindow* window, double xoffset, double yoffset);
-    void MouseButtonCallbackFunc(GLFWwindow* window, int button, int action, int mode);
+    static void UpdateKeyStateWithActionIsPress(bool& key_state, int action);                  // tool func
+    static bool UpdateKeyStateWhenBoolExpression(bool& key_state, bool expression, int action);// tool func
+    static void UpdateAllKeyStates(int key, int action, int mods);                             // tool func
+    static void KeyCallbackFunc(GLFWwindow* window, int key, int scancode, int action, int mods);
+    static void CursorPosCallbackFunc(GLFWwindow* window, double xpos, double ypos);
+    static void FrameBufferSizeCallbackFunc(GLFWwindow* window, int width, int height);
+    static void ScrollCallbackFunc(GLFWwindow* window, double xoffset, double yoffset);
+    static void MouseButtonCallbackFunc(GLFWwindow* window, int button, int action, int mode);
 
     GLFWWindowImpl::GLFWWindowImpl() {
     }
@@ -152,9 +155,9 @@ namespace Moer {
 
     void GLFWWindowImpl::Tick() {
         // per-frame time logic
-        float currentFrame = static_cast<float>(glfwGetTime());
-        wndInput.deltaTime = currentFrame - wndInput.lastFrame;
-        wndInput.lastFrame = currentFrame;
+        float current_frame_time = static_cast<float>(glfwGetTime());
+        wndInput.delta_time      = current_frame_time - wndInput.last_frame_time;
+        wndInput.delta_time      = current_frame_time;
 
         PollEvents();
         // GuiUpdate();
@@ -245,111 +248,92 @@ namespace Moer {
         OnWindowFocus(window, focused);
     }
 
-    void KeyCallbackFunc(GLFWwindow* window, int key, int scancode, int action, int mods) {
-        // if(key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
-        // glfwSetWindowShouldClose(window, GL_TRUE);
-
-        if (key == GLFW_KEY_F && action == GLFW_PRESS) {
-            if (!wndInput.mouseEnterScreen) {
-                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-                wndInput.mouseEnterScreen = true;
-            } else {
-                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-                wndInput.mouseEnterScreen = false;
-                wndInput.firstMouse       = true;
-            }
+    static void UpdateKeyStateWithActionIsPress(bool& key_state, int action) {
+        if (action == GLFW_PRESS) {
+            key_state = true;
+        } else if (action == GLFW_RELEASE) {
+            key_state = false;
         }
-        if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
+    }
+
+    static bool UpdateKeyStateWhenBoolExpression(bool& key_state, bool expression, int action) {
+        if (expression) {
+            UpdateKeyStateWithActionIsPress(key_state, action);
+            return true;
+        }
+        return false;
+    }
+
+    static void UpdateAllKeyStates(int key, int action, int mods) {
+        if (UpdateKeyStateWhenBoolExpression(wndInput.camera_forward, key == GLFW_KEY_W, action)) return;
+        if (UpdateKeyStateWhenBoolExpression(wndInput.camera_backward, key == GLFW_KEY_S, action)) return;
+        if (UpdateKeyStateWhenBoolExpression(wndInput.camera_left, key == GLFW_KEY_A, action)) return;
+        if (UpdateKeyStateWhenBoolExpression(wndInput.camera_right, key == GLFW_KEY_D, action)) return;
+        if (UpdateKeyStateWhenBoolExpression(wndInput.camera_up, key == GLFW_KEY_Q, action)) return;
+        if (UpdateKeyStateWhenBoolExpression(wndInput.camera_down, key == GLFW_KEY_E, action)) return;
+
+        if (UpdateKeyStateWhenBoolExpression(wndInput.speed_up, key == GLFW_KEY_UP, action)) return;
+        if (UpdateKeyStateWhenBoolExpression(wndInput.speed_down, key == GLFW_KEY_DOWN, action)) return;
+        if (UpdateKeyStateWhenBoolExpression(wndInput.camera_forward, key == GLFW_KEY_W, action)) return;
+        if (UpdateKeyStateWhenBoolExpression(wndInput.reset_speed,
+                                             key == GLFW_KEY_KP_0 && mods == GLFW_MOD_CONTROL,
+                                             action)) return;
+    }
+
+    static void KeyCallbackFunc(GLFWwindow* window, int key, int scancode, int action, int mods) {
+
+        auto set_cursor_hide = [&]() {
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+            wndInput.is_cursor_hiding = true;
+        };
+
+        auto set_cursor_normal = [&]() {
             glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-            wndInput.mouseEnterScreen = false;
-            wndInput.firstMouse       = true;
+            wndInput.is_cursor_hiding = false;
+            wndInput.is_cursor_dirty  = true;
+        };
+
+        if (key == GLFW_KEY_F && action == GLFW_RELEASE && !wndInput.is_cursor_hiding) {
+            // Press F
+            set_cursor_hide();
+
+        } else if (key == GLFW_KEY_F && action == GLFW_RELEASE && wndInput.is_cursor_hiding) {
+            // Press F
+            set_cursor_normal();
+
+        } else if (key == GLFW_KEY_ESCAPE && action == GLFW_RELEASE) {
+            // Press escape
+            set_cursor_normal();
         }
 
-        if (wndInput.mouseEnterScreen) {
-            if (key == GLFW_KEY_W) {
-                if (action == GLFW_PRESS)
-                    wndInput.camera_forward = true;
-                if (action == GLFW_RELEASE)
-                    wndInput.camera_forward = false;
-            }
-            if (key == GLFW_KEY_S) {
-                if (action == GLFW_PRESS)
-                    wndInput.camera_backward = true;
-                if (action == GLFW_RELEASE)
-                    wndInput.camera_backward = false;
-            }
-            if (key == GLFW_KEY_A) {
-                if (action == GLFW_PRESS)
-                    wndInput.camera_left = true;
-                if (action == GLFW_RELEASE)
-                    wndInput.camera_left = false;
-            }
-            if (key == GLFW_KEY_D) {
-                if (action == GLFW_PRESS)
-                    wndInput.camera_right = true;
-                if (action == GLFW_RELEASE)
-                    wndInput.camera_right = false;
-            }
-            if (key == GLFW_KEY_SPACE) {
-                if (action == GLFW_PRESS)
-                    wndInput.camera_up = true;
-                if (action == GLFW_RELEASE)
-                    wndInput.camera_up = false;
-            }
-            if (key == GLFW_KEY_C) {
-                if (action == GLFW_PRESS)
-                    wndInput.camera_down = true;
-                if (action == GLFW_RELEASE)
-                    wndInput.camera_down = false;
-            }
-            if (key == GLFW_KEY_UP) {
-                if (action == GLFW_PRESS)
-                    wndInput.speedUp = true;
-                if (action == GLFW_RELEASE)
-                    wndInput.speedUp = false;
-            }
-            if (key == GLFW_KEY_DOWN) {
-                if (action == GLFW_PRESS)
-                    wndInput.speedDown = true;
-                if (action == GLFW_RELEASE)
-                    wndInput.speedDown = false;
-            }
-            if (key == GLFW_KEY_KP_0 && mods == GLFW_MOD_CONTROL) {
-                if (action == GLFW_PRESS)
-                    wndInput.resetSpeed = true;
-                if (action == GLFW_RELEASE)
-                    wndInput.resetSpeed = false;
-            }
-        }
+        UpdateAllKeyStates(key, action, mods);
     }
 
-    void CursorPosCallbackFunc(GLFWwindow* window, double xpos, double ypos) {
-        if (wndInput.mouseEnterScreen) {
-            float xPos = static_cast<float>(xpos);
-            float yPos = static_cast<float>(ypos);
+    static void CursorPosCallbackFunc(GLFWwindow* window, double xpos, double ypos) {
+        float xPos = static_cast<float>(xpos);
+        float yPos = static_cast<float>(ypos);
 
-            if (wndInput.firstMouse) {
-                wndInput.lastX      = xPos;
-                wndInput.lastY      = yPos;
-                wndInput.firstMouse = false;
-            }
-
-            wndInput.deltaX = xPos - wndInput.lastX;
-            wndInput.deltaY = yPos - wndInput.lastY;
-
-            wndInput.lastX = xPos;
-            wndInput.lastY = yPos;
+        if (wndInput.is_cursor_dirty) {
+            wndInput.cursor_last_x   = xPos;
+            wndInput.cursor_last_y   = yPos;
+            wndInput.is_cursor_dirty = false;
         }
+
+        wndInput.cursor_delta_x = xPos - wndInput.cursor_last_x;
+        wndInput.cursor_delta_y = yPos - wndInput.cursor_last_y;
+
+        wndInput.cursor_last_x = xPos;
+        wndInput.cursor_last_y = yPos;
     }
 
-    void FrameBufferSizeCallbackFunc(GLFWwindow* window, int width, int height) {
+    static void FrameBufferSizeCallbackFunc(GLFWwindow* window, int width, int height) {
         wndInput.width        = width;
         wndInput.height       = height;
         wndInput.aspect_ratio = height == 0 ? 0 : width / height;
     }
 
-    void ScrollCallbackFunc(GLFWwindow* window, double xoffset, double yoffset) {
-        if (wndInput.mouseEnterScreen) {
+    static void ScrollCallbackFunc(GLFWwindow* window, double xoffset, double yoffset) {
+        if (wndInput.is_cursor_hiding) {
             wndInput.fov -= (float)yoffset * 2.f;
             if (wndInput.fov < 10.0f)
                 wndInput.fov = 10.0f;
@@ -358,23 +342,17 @@ namespace Moer {
         }
     }
 
-    void MouseButtonCallbackFunc(GLFWwindow* window, int button, int action, int mode) {
-        static const std::unordered_map<int, int> mouseButtonMap = {
+    static void MouseButtonCallbackFunc(GLFWwindow* window, int button, int action, int mode) {
+        static const std::unordered_map<int, int> mouse_button_map = {
             {GLFW_MOUSE_BUTTON_LEFT, MouseButtons::Left},
             {GLFW_MOUSE_BUTTON_MIDDLE, MouseButtons::Middle},
             {GLFW_MOUSE_BUTTON_RIGHT, MouseButtons::Right},
         };
-        if (wndInput.mouseEnterScreen) {
-            if (mouseButtonMap.find(button) == mouseButtonMap.end()) {
-                return;
-            }
-            auto cameraButton = mouseButtonMap.at(button);
-            if (action == GLFW_PRESS) {
-                wndInput.mouseButtonState[cameraButton] = true;
-            } else {
-                wndInput.mouseButtonState[cameraButton] = false;
-            }
+        if (mouse_button_map.find(button) == mouse_button_map.end()) {
+            return;
         }
+        auto cameraButton = mouse_button_map.at(button);
+        UpdateKeyStateWithActionIsPress(wndInput.mouse_button_state[cameraButton], action);
     }
 
 }// namespace Moer

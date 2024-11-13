@@ -13,18 +13,22 @@ namespace Moer {
         MouseButtonFirst = Left,
     } MouseButtons;
 
+    // restores the input information after processing (including camera control logic)
     struct WindowInput {
-        //cursor coods
-        float lastX = 0, lastY = 0;
 
-        bool firstMouse = true;
-        // bool firstEnter = true;
+        // cursor
+        float cursor_last_x  = 0.0f;
+        float cursor_last_y  = 0.0f;
+        float cursor_delta_x = 0.0f;
+        float cursor_delta_y = 0.0f;
 
-        //timing(in order to perform equally on every device)
-        float deltaTime = 0.0f;
-        float lastFrame = 0.0f;
+        bool is_cursor_dirty = true;// origin "firstMouse", presents if the cursor is needed to be reset (such as when you press F key 2 times)
 
-        //keyboard input
+        // timing
+        float delta_time      = 0.0f;
+        float last_frame_time = 0.0f;
+
+        // camera movement
         bool camera_forward  = false;
         bool camera_backward = false;
         bool camera_left     = false;
@@ -32,28 +36,31 @@ namespace Moer {
         bool camera_up       = false;
         bool camera_down     = false;
 
-        //mouse movement
-        float deltaX = 0.0f;
-        float deltaY = 0.0f;
+        // camera speed(default)
+        const float k_default_camera_speed    = 25.0f;
+        const float k_max_camera_speed        = 100.0f;
+        const float k_min_camera_speed        = 0.0f;
+        const float k_camera_speed_up_delta   = 5.0f;
+        const float k_camera_speed_down_delta = 2.5f;
 
-        //camera speed(default)
-        float cameraSpeed = 25.0f;//to be optimized
-        bool  speedUp     = false;
-        bool  speedDown   = false;
-        bool  resetSpeed  = false;
+        float camera_speed = k_default_camera_speed;//to be optimized
+        bool  speed_up     = false;
+        bool  speed_down   = false;
+        bool  reset_speed  = false;
 
-        //window size
+        // window size
         float width        = 1280.f;
         float height       = 720.f;
         float aspect_ratio = width / height;
 
-        //fov
+        // fov
         float fov = 60.f;
 
-        //mouse right button setting
-        bool                                              mouseEnterScreen = false;
-        StaticArray<bool, MouseButtons::MouseButtonCount> mouseButtonState = {false};
+        // mouse button state
+        bool                                              is_cursor_hiding   = false;
+        StaticArray<bool, MouseButtons::MouseButtonCount> mouse_button_state = {false};
 
+        // singleton
         static WindowInput& GetInstance();
     };
 

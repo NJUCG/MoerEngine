@@ -17,3 +17,6 @@ cmake-build-*/
 .vscode/settings.json
 /.idea
 logs/
+
+# Ignore scene cache
+*.MOERSCENE

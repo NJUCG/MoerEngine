@@ -37,206 +37,246 @@
 namespace Moer {
     extern WindowInput& wndInput;
 
-    float Camera::sensitivity       = 0.5f;
-    float Camera::sensitivity_scale = 1.f;
-
     //camera space axis
-    Vector3f Camera::X = Vector3f(1.f, 0.f, 0.f);
-    Vector3f Camera::Y = Vector3f(0.f, 1.f, 0.f);
-    Vector3f Camera::Z = Vector3f(0.f, 0.f, 1.f);
+    const Vector3f Camera::X           = Vector3f(1.f, 0.f, 0.f);
+    const Vector3f Camera::Y           = Vector3f(0.f, 1.f, 0.f);
+    const Vector3f Camera::Z           = Vector3f(0.f, 0.f, 1.f);
+    const Vector3f Camera::UP_IN_WORLD = Camera::Y;
 
-    static const float fov_min = 0.012f;
-    static const float fov_max = 180.f;
+    const float Camera::k_pitch_min = -89.5f;
+    const float Camera::k_pitch_max = 89.5f;
+    const float Camera::k_fov_min   = 0.012f;
+    const float Camera::k_fov_max   = 180.f;
 
     Camera::Camera() noexcept {
     }
 
-    float    Camera::GetFov() const noexcept { return m_fov_y; }
     Vector3f Camera::GetPosition() const noexcept { return m_position; }
+    float    Camera::GetYaw() const noexcept { return m_yaw; }
+    float    Camera::GetPitch() const noexcept { return m_pitch; }
 
-    // Matrix4x4f Camera::getSampleToCameraMatrix() noexcept {
-    //     if (m_projection_dirty) {
-    //         m_proj = MakePerspectiveMatrixRH(
-    //             m_fov_y / 180.f * 3.14159265358979323846f, m_aspect_ratio, m_near_clip, m_far_clip);
-    //         m_sample_to_camera = Inverse(
-    //             MakeScaling(0.5f, 0.5f, 1.f) *
-    //             MakeTranslation(1.f, 1.f, 0.f) *
-    //             m_proj);
-    //         m_projection_dirty = false;
-    //     }
-    //     return m_sample_to_camera;
-    // }
-
-    Matrix4x4f Camera::GetProjectionMatrix() noexcept {
-        if (m_projection_dirty) {
-            m_proj = MakePerspectiveMatrixRH(
-                //Use Inverse Depth
-                Angle::DegreeToRadian(m_fov_y),
-                m_aspect_ratio,
-                m_far_clip,
-                m_near_clip);
-            m_sample_to_camera = Inverse(
-                MakeScaling(0.5f, 0.5f, 1.f) *
-                MakeTranslation(1.f, 1.f, 0.f) *
-                m_proj);
-            m_projection_dirty = false;
-        }
-        return m_proj;//camera to screen
-    }
-
+    float Camera::GetFov() const noexcept { return m_fov_y; }
     float Camera::GetNearClip() const noexcept { return m_near_clip; }
     float Camera::GetFarClip() const noexcept { return m_far_clip; }
     float Camera::GetTanHalfFov() const noexcept { return tan(m_fov_y / 180.f * HALF_PI); }
     float Camera::GetAspectRatio() const noexcept { return m_aspect_ratio; }
 
-    Vector4f Camera::GetFrustum() const noexcept {
-        return m_frustum;
+    Vector3f Camera::GetDirection() const noexcept { return Vector3f(0.f, 0.f, -1.f); }
+    Vector3f Camera::GetUp() const noexcept { return m_up; }
+    Vector3f Camera::GetRight() const noexcept { return m_right; }
+    Vector3f Camera::GetFront() const noexcept { return m_front; }
+    Vector3f Camera::GetForward() const noexcept { return m_forward; }
+
+    Matrix4x4f Camera::GetViewMatrix() noexcept {
+        UpdateViewMatrix();
+        return m_view_matrix;// world to camera
     }
 
-    Vector3f Camera::GetDirection() const noexcept {
-        return m_dir;
+    Matrix4x4f Camera::GetViewMatrixInv() noexcept {
+        UpdateViewMatrix();
+        return m_view_matrix_inv;
     }
 
     Matrix4x4f Camera::GetToWorldMatrix() noexcept {
-        // if (m_to_world_dirty) {
-        //     m_view           = MakeTranslation(-m_position.x, -m_position.y, -m_position.z) * m_rotate;//world to camera
-        //     m_to_world       = Inverse(m_view);
-        //     m_to_world_dirty = false;
-        // }
-        return m_to_world;//camera to world
+        // same with GetViewMatrixInv
+        return GetViewMatrixInv();
+        // UpdateViewMatrix();
+        // return m_view_matrix_inv;
     }
 
-    Matrix4x4f Camera::GetViewMatrix() noexcept {
-        // if (m_to_world_dirty) {
-        //     m_view           = MakeTranslation(-m_position.x, -m_position.y, -m_position.z) * m_rotate;
-        //     m_to_world       = Inverse(m_view);
-        //     m_to_world_dirty = false;
-        // }
-        return m_view;//world to camera
-    }
     Matrix4x4f Camera::GetRotateMatrix() noexcept {
-        return m_rotate;
+        UpdateViewMatrix();
+        return m_view_matrix_rotate_submatrix;
     }
+
     Matrix4x4f Camera::GetTranslateMatrix() noexcept {
         return MakeTranslation(m_position.x, m_position.y, m_position.z);
     }
 
+    Matrix4x4f Camera::GetProjectionMatrix() noexcept {
+        UpdateProjectionMatrix();
+        return m_projection_matrix;
+    }
+
+    Matrix4x4f Camera::GetProjectionMatrixInv() noexcept {
+        UpdateProjectionMatrix();
+        return m_projection_matrix_inv;
+    }
+
+    Matrix4x4f Camera::GetViewProjectionMatrix() noexcept {
+        UpdateViewProjectionMatrix();
+        return m_view_projection_matrix;
+    }
+
+    Matrix4x4f Camera::GetViewProjectionMatrixInv() noexcept {
+        UpdateViewProjectionMatrix();
+        return m_view_projection_matrix_inv;
+    }
+
     void Camera::SetProjectionFactor(float fov_y, float aspect_ratio, float near_clip, float far_clip) noexcept {
-        if (fov_y < fov_min)
-            fov_y = fov_min;
-        else if (fov_y > fov_max)
-            fov_y = fov_max;
-        m_fov_y            = fov_y;
-        m_aspect_ratio     = aspect_ratio;
-        m_near_clip        = near_clip;
-        m_far_clip         = far_clip;
-        m_projection_dirty = true;
+        if (fov_y < k_fov_min)
+            fov_y = k_fov_min;
+        else if (fov_y > k_fov_max)
+            fov_y = k_fov_max;
+        m_fov_y                      = fov_y;
+        m_aspect_ratio               = aspect_ratio;
+        m_near_clip                  = near_clip;
+        m_far_clip                   = far_clip;
+        m_is_projection_matrix_dirty = true;
     }
 
     void Camera::SetFov(float fov) noexcept {
-        if (fov < fov_min)
-            fov = fov_min;
-        else if (fov > fov_max)
-            fov = fov_max;
+        if (fov < k_fov_min)
+            fov = k_fov_min;
+        else if (fov > k_fov_max)
+            fov = k_fov_max;
         if (m_fov_y != fov) {
-            m_fov_y            = fov;
-            m_projection_dirty = true;
+            m_fov_y                      = fov;
+            m_is_projection_matrix_dirty = true;
         }
     }
 
     void Camera::SetAspectRatio(float aspect_ratio) noexcept {
         if (m_aspect_ratio != aspect_ratio) {
-            m_aspect_ratio     = aspect_ratio;
-            m_projection_dirty = true;
+            m_aspect_ratio               = aspect_ratio;
+            m_is_projection_matrix_dirty = true;
         }
     }
 
     void Camera::SetNearClip(float near_clip) noexcept {
         if (m_near_clip != near_clip) {
-            m_near_clip        = near_clip;
-            m_projection_dirty = true;
+            m_near_clip                  = near_clip;
+            m_is_projection_matrix_dirty = true;
         }
     }
 
     void Camera::SetFarClip(float far_clip) noexcept {
         if (m_far_clip != far_clip) {
-            m_far_clip         = far_clip;
-            m_projection_dirty = true;
+            m_far_clip                   = far_clip;
+            m_is_projection_matrix_dirty = true;
         }
     }
 
-    void Camera::SetWorldTransform(Transform to_world) noexcept {
-        m_to_world   = to_world.GetMatrix4x4();
-        m_position.x = m_to_world[0].w;
-        m_position.y = m_to_world[1].w;
-        m_position.z = m_to_world[2].w;
+    void Camera::SetWorldTransform(const Transform& to_world_transform) noexcept {
+        // to_world == camera_to_world == view_matrix_inv
 
-        m_rotate      = Transpose(m_to_world);
-        m_rotate[3].x = 0.f;
-        m_rotate[3].y = 0.f;
-        m_rotate[3].z = 0.f;
+        auto mat4_to_str = [](const Matrix4x4f& mat) {
+            std::string str = "Matrix4x4f {\n";
+            for (int i = 0; i < 4; i++) {
+                str += "  ";
+                for (int j = 0; j < 4; j++) {
+                    str += std::to_string(mat[i][j]) + " ";
+                }
+                str += "\n";
+            }
+            str += "}";
+            return str;
+        };
 
-        m_rotate_inv = Transpose(m_rotate);
+        auto vec3_to_str = [](const Vector3f& vec) {
+            return "Vector3f {" + std::to_string(vec.x) + ", " + std::to_string(vec.y) + ", " + std::to_string(vec.z) + "}";
+        };
 
-        m_to_world = MakeTranslation(m_position.x, m_position.y, m_position.z) * m_rotate;
-        m_view     = Inverse(m_to_world);
-        //world to cam
-        // m_to_world       = Inverse(m_view);
-        m_to_world_dirty = false;
+        auto to_world = to_world_transform.GetMatrix4x4();
+        m_position.x  = to_world[0].w;
+        m_position.y  = to_world[1].w;
+        m_position.z  = to_world[2].w;
+
+        LOG_INFO("ToWorldTransform    : {}", mat4_to_str(to_world));
+
+        auto rotate = Transpose(to_world);
+        rotate[3].x = 0.f;
+        rotate[3].y = 0.f;
+        rotate[3].z = 0.f;
+        LOG_INFO("Rotate after: {}", mat4_to_str(rotate));
+
+        auto rotate_inv = Inverse(rotate);
+        LOG_INFO("Rotate Inv: {}", mat4_to_str(rotate_inv));
+
+        UpdateDerivedProperties();
+
+        auto view_matrix_v0 = GetViewMatrix();
+        LOG_INFO("ViewMatrix v0: {}", mat4_to_str(view_matrix_v0));
+
+        auto to_world_2 = MakeTranslation(m_position.x, m_position.y, m_position.z) * rotate_inv;
+        LOG_INFO("ToWorldTransform 2: {}", mat4_to_str(to_world_2));
+
+        auto view_matrix = Inverse(to_world_2);
+        LOG_INFO("ToWorldTransform 2 Inv (View Matrix): {}", mat4_to_str(view_matrix));
+
+        auto forward_v0 = Vector3f(-rotate[0][2], -rotate[1][2], -rotate[2][2]);
+        LOG_INFO("Forward v0: {}", vec3_to_str(forward_v0));
+        m_yaw   = Angle::RadianToDegree(atan2(forward_v0.x, forward_v0.z));
+        m_pitch = Angle::RadianToDegree(asin(-forward_v0.y));
+
+        Matrix4x4f view_matrix_f1;
+        {
+            auto forward = Vector3f(view_matrix[0][2], view_matrix[1][2], view_matrix[2][2]);
+
+            LOG_INFO("Forward v1: {}", vec3_to_str(forward));
+
+            m_yaw   = Angle::RadianToDegree(atan2(forward.x, forward.z));
+            m_pitch = Angle::RadianToDegree(asin(-forward.y));
+
+            UpdateDerivedProperties();
+
+            view_matrix_f1 = GetViewMatrix();
+            LOG_INFO("ViewMatrix: {}", mat4_to_str(view_matrix_f1));
+        }
+
+        {
+            auto forward = Vector3f(view_matrix_f1[0][2], view_matrix_f1[1][2], view_matrix_f1[2][2]);
+
+            LOG_INFO("Forward v2: {}", vec3_to_str(forward));
+
+            m_yaw   = Angle::RadianToDegree(atan2(forward.x, forward.z));
+            m_pitch = Angle::RadianToDegree(asin(-forward.y));
+
+            UpdateDerivedProperties();
+
+            auto view_matrix_f = GetViewMatrix();
+            LOG_INFO("ViewMatrix: {}", mat4_to_str(view_matrix_f));
+        }
     }
 
     void Camera::MoveForward(float delta) {
-        Vector3f t       = Z * Vector3f(delta);                                                         //camera space
-        t                = -Vector3f(m_rotate_inv * Vector4f(t * sensitivity * sensitivity_scale, 0.f));//into world space(considering -z instead of z)
-        auto translation = MakeTranslation(t.x, t.y, t.z);
-        m_position       = Vector3f(translation * Vector4f(m_position, 1.f));
-        m_to_world_dirty = true;
+        if (Abs(delta) < EPS) return;
+
+        float velocity = m_move_speed * delta;
+        m_position += m_forward * velocity;
+
+        m_is_view_matrix_dirty = true;
     }
 
     void Camera::MoveRight(float delta) {
-        Vector3f t       = X * Vector3f(delta);
-        t                = Vector3f(m_rotate_inv * Vector4f(t * sensitivity * sensitivity_scale, 0.f));
-        auto translation = MakeTranslation(t.x, t.y, t.z);
-        m_position       = Vector3f(translation * Vector4f(m_position, 1.f));
-        m_to_world_dirty = true;
+        if (Abs(delta) < EPS) return;
+
+        float velocity = m_move_speed * delta;
+        m_position += m_right * velocity;
+
+        m_is_view_matrix_dirty = true;
     }
 
-    void Camera::MoveUp(float _delta) {
-        Vector3f t       = Y * Vector3f(_delta);
-        t                = Vector3f(m_rotate_inv * Vector4f(t * sensitivity * sensitivity_scale, 0.f));
-        auto translation = MakeTranslation(t.x, t.y, t.z);
-        m_position       = Vector3f(translation * Vector4f(m_position, 1.f));
-        m_to_world_dirty = true;
+    void Camera::MoveUp(float delta) {
+        if (Abs(delta) < EPS) return;
+
+        float velocity = m_move_speed * delta;
+        m_position += m_up * velocity;
+
+        m_is_view_matrix_dirty = true;
     }
 
-    void Camera::UpdateRotation(float _delta_x, float _delta_y) {
-        // Quaternion pitch(X, Angle::MakeFromDegree(delta_x * sensitivity * sensitivity_scale));
-        // Quaternion yaw(Y, Angle::MakeFromDegree(delta_y * sensitivity * sensitivity_scale));
-        total_pitch += _delta_y * 0.15f;
-        if (total_pitch < 0.f)
-            total_pitch += 360.f;
-        if (total_pitch > 360.f)
-            total_pitch = fmodf(total_pitch, 360.f);
+    void Camera::UpdateRotation(float delta_x, float delta_y) {
+        if (Abs(delta_x) < EPS && Abs(delta_y) < EPS) return;
 
-        if (total_pitch < 90.f || total_pitch > 270.f)
-            yaw_reverse = false;
-        else
-            yaw_reverse = true;
+        m_yaw += delta_x * m_mouse_sensitivity;
+        m_pitch += -1.0 * delta_y * m_mouse_sensitivity;
+        m_pitch = Clamp(m_pitch, k_pitch_min, k_pitch_max);
 
-        Quaternion pitch(X, Angle::MakeFromDegree(_delta_y * 0.15f));                           //rotate around x-axis
-        Quaternion yaw(Y, Angle::MakeFromDegree((yaw_reverse ? -1.f : 1.f) * _delta_x * 0.15f));//rotate around y-axis
-
-        m_rotate =
-            FillDiagonal4x4(pitch.GetRotation(), 1.f) *
-            FillDiagonal4x4(yaw.GetRotation(), 1.f) * m_rotate;
-
-        m_rotate_inv     = Transpose(m_rotate);
-        m_to_world_dirty = true;
+        UpdateDerivedProperties();
     }
 
     void Camera::GetAABB(Vector3f& _out_min, Vector3f& _out_max) {
-        // if (IsDirty()) {
-        //far plane points and near plane points
         Vector3f far_points[4];
         Vector3f near_points[4];
         Vector3f cam_pos = this->GetPosition();
@@ -244,27 +284,25 @@ namespace Moer {
             far_points[i]  = cam_pos + Z * m_far_clip + X * (i % 2 == 0 ? 1.f : -1.f) * m_far_clip * m_aspect_ratio + Y * (i / 2 == 0 ? 1.f : -1.f) * m_far_clip;
             near_points[i] = cam_pos + Z * m_near_clip + X * (i % 2 == 0 ? 1.f : -1.f) * m_near_clip * m_aspect_ratio + Y * (i / 2 == 0 ? 1.f : -1.f) * m_near_clip;
         }
+        _out_min = far_points[0];
+        _out_max = far_points[0];
         for (int i = 0; i < 4; i++) {
-            p_min = Min(p_min, far_points[i]);
-            p_min = Min(p_min, near_points[i]);
+            _out_min = Min(_out_min, far_points[i]);
+            _out_min = Min(_out_min, near_points[i]);
+            _out_max = Max(_out_max, far_points[i]);
+            _out_max = Max(_out_max, near_points[i]);
         }
-        // }
-        _out_min = p_min;
-        _out_max = p_max;
+    }
+
+    Vector4f Camera::GetFrustum() noexcept {
+        UpdatePlanesAndFrustum();
+        return m_frustum;
     }
 
     void Camera::GetPlanes(Vector4f _out_planes[6]) {
-        auto vp        = GetProjectionMatrix() * GetViewMatrix();
-        _out_planes[0] = vp.r3 + vp.r0;//left
-        _out_planes[1] = vp.r3 - vp.r0;//right
-        _out_planes[2] = vp.r3 + vp.r1;//top
-        _out_planes[3] = vp.r3 - vp.r1;//bottom
-        _out_planes[4] = vp.r2;        //near
-        _out_planes[5] = vp.r3 - vp.r2;//far
-        //normalize
+        UpdatePlanesAndFrustum();// TODO: m_is_xxx_dirty
         for (int i = 0; i < 6; i++) {
-            auto length    = Length(Vector3f(_out_planes[i]));
-            _out_planes[i] = Vector4f(Normalizef(Vector3f(_out_planes[i])), _out_planes[i].w / length);
+            _out_planes[i] = m_planes[i];
         }
     }
 
@@ -272,48 +310,78 @@ namespace Moer {
     //if changed fov, clips, aspect_ratio：m_projection_dirty->true
     //currently not used
     bool Camera::IsDirty() const {
-        return m_projection_dirty || m_to_world_dirty;
+        return m_is_view_matrix_dirty || m_is_projection_matrix_dirty || m_is_view_projection_matrix_dirty || m_is_planes_and_frustum_dirty;
     }
 
-    void Camera::UpdateCalculatedValues() {
+    // position/yaw/pitch -> front/right/up/forward
+    void Camera::UpdateDerivedProperties() {
+        m_front   = Normalizef(Vector3f(cos(Angle::DegreeToRadian(m_yaw)) * cos(Angle::DegreeToRadian(m_pitch)),
+                                      sin(Angle::DegreeToRadian(m_pitch)),
+                                      sin(Angle::DegreeToRadian(m_yaw)) * cos(Angle::DegreeToRadian(m_pitch))));
+        m_right   = Normalizef(Cross(m_front, UP_IN_WORLD));
+        m_up      = Normalizef(Cross(m_right, m_front));
+        m_forward = Normalizef(Cross(UP_IN_WORLD, m_right));
 
-        // m_view     = MakeTranslation(-m_position.x, -m_position.y, -m_position.z) * m_rotate;
-        // m_to_world = Inverse(m_view);
-        m_to_world         = MakeTranslation(m_position.x, m_position.y, m_position.z) * m_rotate;
-        m_view             = Inverse(m_to_world);
-        auto test_identity = m_to_world * m_view;
+        m_is_view_matrix_dirty        = true;
+        m_is_planes_and_frustum_dirty = true;
+    }
 
-        if (m_projection_dirty) {
-            m_proj = MakePerspectiveMatrixRH(
-                //Use Inverse Depth
-                Angle::DegreeToRadian(m_fov_y),
-                m_aspect_ratio,
-                m_far_clip,
-                m_near_clip);
-            m_sample_to_camera = Inverse(
-                MakeScaling(0.5f, 0.5f, 1.f) *
-                MakeTranslation(1.f, 1.f, 0.f) *
-                m_proj);
-            m_projection_dirty = false;
-        }
-        m_to_world_dirty = false;
+    void Camera::UpdateViewMatrix() {
+        if (!m_is_view_matrix_dirty) return;
 
-        auto vp = GetProjectionMatrix();
+        m_is_view_matrix_dirty            = false;
+        m_is_view_projection_matrix_dirty = true;
 
+        auto view_matrix_transform = Transform(m_position, m_position + m_front, m_up);
+        m_view_matrix              = view_matrix_transform.matrix;
+        // m_view_matrix     = MakeLookatViewMatrixRH(m_position, m_position + m_front, m_up);
+        m_view_matrix_inv = Inverse(m_view_matrix);
+
+        m_view_matrix_rotate_submatrix      = m_view_matrix;
+        m_view_matrix_rotate_submatrix[0].w = 0.f;
+        m_view_matrix_rotate_submatrix[1].w = 0.f;
+        m_view_matrix_rotate_submatrix[2].w = 0.f;
+        m_view_matrix_rotate_submatrix_inv  = Transpose(m_view_matrix_rotate_submatrix);
+    }
+
+    void Camera::UpdateProjectionMatrix() {
+        if (!m_is_projection_matrix_dirty) return;
+
+        m_is_projection_matrix_dirty      = false;
+        m_is_view_projection_matrix_dirty = true;
+
+        // The m_far_clip and m_near_clip is swapped on purpose.
+        // Inverse Depth Projection: https://forums.developer.nvidia.com/t/inverse-depth-projection-tutorial-or-code-sample/219704
+        m_projection_matrix     = MakePerspectiveMatrixRH(Angle::DegreeToRadian(m_fov_y), m_aspect_ratio, m_far_clip, m_near_clip);
+        m_projection_matrix_inv = Inverse(m_projection_matrix);
+    }
+
+    void Camera::UpdateViewProjectionMatrix() {
+        UpdateViewMatrix();
+        UpdateProjectionMatrix();
+
+        if (!m_is_view_projection_matrix_dirty) return;
+
+        m_view_projection_matrix     = m_projection_matrix * m_view_matrix;
+        m_view_projection_matrix_inv = Inverse(m_view_projection_matrix);
+    }
+
+    void Camera::UpdatePlanesAndFrustum() {
+        if (!m_is_planes_and_frustum_dirty) return;
+
+        auto vp     = GetViewProjectionMatrix();
         m_planes[0] = vp.r3 + vp.r0;//left
         m_planes[1] = vp.r3 - vp.r0;//right
-        m_planes[2] = vp.r3 + vp.r1;//bottom
-        m_planes[3] = vp.r3 - vp.r1;//top
+        m_planes[2] = vp.r3 + vp.r1;//top
+        m_planes[3] = vp.r3 - vp.r1;//bottom
         m_planes[4] = vp.r2;        //near
         m_planes[5] = vp.r3 - vp.r2;//far
+
         //normalize
         for (int i = 0; i < 6; i++) {
             auto length = Length(Vector3f(m_planes[i]));
             m_planes[i] = Vector4f(Normalizef(Vector3f(m_planes[i])), m_planes[i].w / length);
         }
-
-        auto inv_proj = Inverse(vp);
-        auto left     = inv_proj * Vector4f(-1.f, 1.f, -1.f, 1.f);
 
         //frustum
         float x0 = m_planes[FRUSTUM_LEFT].z / m_planes[FRUSTUM_LEFT].x;
@@ -325,69 +393,85 @@ namespace Moer {
         m_frustum.y = -y1;
         m_frustum.z = x0 - x1;
         m_frustum.w = y1 - y0;
-
-        //direction
-        // m_dir = Normalizef(Vector3f(m_rotate_inv * Vector4f(0.f, 0.f, 1.f, 0.f)));
-        m_dir = Vector3f(0.f, 0.f, -1.f);
-        // LOG_INFO("dir: {} {} {}", m_dir.x, m_dir.y, m_dir.z);
-        // auto     test_dir  = Vector2f(0.f, 1.f) * Vector2f(m_frustum.z, m_frustum.w) + Vector2f(m_frustum.x, m_frustum.y);
-        // Vector3f test_dir3 = Vector3f(test_dir.x, test_dir.y, 1.f);
-        // test_dir3          = Normalizef(Vector3f(m_rotate_inv * Vector4f(test_dir3, 0.f)));
-        // LOG_INFO("test_dir3: {} {} {}", test_dir3.x, test_dir3.y, test_dir3.z);
-        // int k = 0;
     }
 
+    /**
+     * ## Camera Control Logic
+     * 
+     * - Drag right mouse button to rotate the camera
+     * - Press F key to enter screen
+     *   * Move mouse to rotate the camera
+     *   * Press W/S/A/D to move the camera
+     *   * Press Q/E to move the camera up and down
+     *   * Use scroll wheel to adjust the camera fov
+     */
     void Camera::Tick() {
-        if (wndInput.mouseEnterScreen) {
+
+        auto reset_cursor_delta = [&]() {
+            wndInput.cursor_delta_x = 0.0f;
+            wndInput.cursor_delta_y = 0.0f;
+        };
+
+        if (!wndInput.is_cursor_hiding) {
+            if ((wndInput.cursor_delta_x || wndInput.cursor_delta_y) && wndInput.mouse_button_state[MouseButtons::Right]) {
+                this->UpdateRotation(wndInput.cursor_delta_x, wndInput.cursor_delta_y);
+                reset_cursor_delta();
+            }
+
+        } else {
+            // Pressed F
+
             // fov & aspect_ratio
-            // this->SetFov(wndInput.fov);
-            // this->SetAspectRatio(wndInput.aspect_ratio);
+            this->SetFov(wndInput.fov);
+            this->SetAspectRatio(wndInput.aspect_ratio);
 
             // camera speed
-            if (wndInput.speedUp) {
-                wndInput.cameraSpeed += 5.0f;
+            if (wndInput.speed_up) {
+                wndInput.camera_speed += wndInput.k_camera_speed_up_delta;
+                if (wndInput.camera_speed > wndInput.k_max_camera_speed)
+                    wndInput.camera_speed = wndInput.k_max_camera_speed;
             }
-            if (wndInput.speedDown) {
-                wndInput.cameraSpeed -= 2.5f;
-                if (wndInput.cameraSpeed < 0.f)
-                    wndInput.cameraSpeed = 0.f;
+            if (wndInput.speed_down) {
+                wndInput.camera_speed -= wndInput.k_camera_speed_down_delta;
+                if (wndInput.camera_speed < wndInput.k_min_camera_speed)
+                    wndInput.camera_speed = wndInput.k_min_camera_speed;
             }
-            if (wndInput.resetSpeed) {
-                wndInput.cameraSpeed = 25.f;
+            if (wndInput.reset_speed) {
+                wndInput.camera_speed = wndInput.k_default_camera_speed;
             }
 
             // movement
             if (wndInput.camera_forward)
-                this->MoveForward(wndInput.cameraSpeed * wndInput.deltaTime);
+                this->MoveForward(wndInput.camera_speed * wndInput.delta_time);
             if (wndInput.camera_backward)
-                this->MoveForward(-wndInput.cameraSpeed * wndInput.deltaTime);
+                this->MoveForward(-wndInput.camera_speed * wndInput.delta_time);
             if (wndInput.camera_left)
-                this->MoveRight(-wndInput.cameraSpeed * wndInput.deltaTime);
+                this->MoveRight(-wndInput.camera_speed * wndInput.delta_time);
             if (wndInput.camera_right)
-                this->MoveRight(wndInput.cameraSpeed * wndInput.deltaTime);
+                this->MoveRight(wndInput.camera_speed * wndInput.delta_time);
             if (wndInput.camera_up)
-                this->MoveUp(wndInput.cameraSpeed * wndInput.deltaTime);
+                this->MoveUp(wndInput.camera_speed * wndInput.delta_time);
             if (wndInput.camera_down)
-                this->MoveUp(-wndInput.cameraSpeed * wndInput.deltaTime);
+                this->MoveUp(-wndInput.camera_speed * wndInput.delta_time);
 
             // rotation
-            if ((wndInput.deltaX || wndInput.deltaY) && wndInput.mouseButtonState[MouseButtons::Left]) {
-
-                this->UpdateRotation(wndInput.deltaX, wndInput.deltaY);
-                wndInput.deltaX = 0;
-                wndInput.deltaY = 0;
+            if (wndInput.cursor_delta_x || wndInput.cursor_delta_y) {
+                this->UpdateRotation(wndInput.cursor_delta_x, wndInput.cursor_delta_y);
+                reset_cursor_delta();
             }
         }
 
         if (IsDirty()) {
-            UpdateCalculatedValues();
+            UpdateDerivedProperties();
         }
     }
 
-    CameraRef Camera::CreateDefaultCamera() {
+    CameraRef Camera::CreateDefaultCamera() {// TODO: implement
         CameraRef default_camera = MoerNew(Camera)();
         default_camera->SetFov(36.f);
-        Transform transform = Transform(Vector3f(0.0f, 0.0f, 0.0f), Vector3f(0.0f, 0.0f, 1.0f), Vector3f(0.0f, 1.0f, 0.0f));
+        Transform transform    = Transform(Vector3f(0.0f, 0.0f, 0.0f), Vector3f(0.0f, 0.0f, 1.0f), Vector3f(0.0f, 1.0f, 0.0f));
+        auto      world_to_cam = Inverse(transform.GetMatrix4x4());
+        transform.matrix       = world_to_cam;
         default_camera->SetWorldTransform(transform);
         default_camera->SetNearClip(0.1f);
         default_camera->SetFarClip(1000.0f);
@@ -396,15 +480,52 @@ namespace Moer {
     }
 
     InputStream& Camera::operator>>(InputStream& _stream) {
-        _stream >> m_position >> m_rotate >> m_fov_y >> m_aspect_ratio >> m_near_clip >> m_far_clip;
-        UpdateCalculatedValues();
+        _stream >> m_position >> m_yaw >> m_pitch >> m_fov_y >> m_aspect_ratio >> m_near_clip >> m_far_clip;
+        UpdateDerivedProperties();
         return _stream;
     }
 
     OutputStream& Camera::operator<<(OutputStream& _stream) const {
-        _stream << m_position << m_rotate << m_fov_y << m_aspect_ratio << m_near_clip << m_far_clip;
+        _stream << m_position << m_yaw << m_pitch << m_fov_y << m_aspect_ratio << m_near_clip << m_far_clip;
         //calculate values
         return _stream;
+    }
+
+    std::string Camera::ToString() {
+        std::string str = "Camera {\n";
+        str += "  position: (" + std::to_string(m_position[0]) + ", " + std::to_string(m_position[1]) + ", " + std::to_string(m_position[2]) + ")\n";
+        str += "  yaw: " + std::to_string(m_yaw) + "\n";
+        str += "  pitch: " + std::to_string(m_pitch) + "\n";
+        str += "  fov: " + std::to_string(m_fov_y) + "\n";
+        str += "  aspect ratio: " + std::to_string(m_aspect_ratio) + "\n";
+        str += "  near clip: " + std::to_string(m_near_clip) + "\n";
+        str += "  far clip: " + std::to_string(m_far_clip) + "\n";
+        auto view_matrix       = GetViewMatrix();
+        auto projection_matrix = GetProjectionMatrix();
+        str += "  view matrix:\n";
+        for (int i = 0; i < 4; i++) {
+            str += "    ";
+            for (int j = 0; j < 4; j++) {
+                str += std::to_string(view_matrix[i][j]);
+                if (j < 3) {
+                    str += ", ";
+                }
+            }
+            str += "\n";
+        }
+        str += "  projection matrix:\n";
+        for (int i = 0; i < 4; i++) {
+            str += "    ";
+            for (int j = 0; j < 4; j++) {
+                str += std::to_string(projection_matrix[i][j]);
+                if (j < 3) {
+                    str += ", ";
+                }
+            }
+            str += "\n";
+        }
+        str += "}\n";
+        return str;
     }
 
 }// namespace Moer

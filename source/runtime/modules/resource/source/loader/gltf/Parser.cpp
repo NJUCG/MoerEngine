@@ -270,6 +270,8 @@ namespace Moer::Resource::Gltf {
                 camera_ref->SetFarClip(camera->mClipPlaneFar);
                 camera_ref->SetAspectRatio(camera->mAspect);
                 m_scene_data->m_cameras.push_back(camera_ref);
+
+                LOG_INFO("Camera: {}", camera_ref->ToString());
             }
         }
     }
@@ -739,8 +741,7 @@ namespace Moer::Resource::Gltf {
 
                 if (material->Get(AI_MATKEY_NAME, name) == AI_SUCCESS) {
                     material_name = name.C_Str();
-                }
-                else {
+                } else {
                     material_name = std::string("_default_material_Name") + std::to_string(material_id);
                 }
 
