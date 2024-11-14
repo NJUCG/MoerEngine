@@ -271,7 +271,7 @@ namespace Moer::Resource::Gltf {
                 camera_ref->SetAspectRatio(camera->mAspect);
                 m_scene_data->m_cameras.push_back(camera_ref);
 
-                LOG_INFO("Camera: {}", camera_ref->ToString());
+                // LOG_INFO("Camera: {}", camera_ref->ToString());
             }
         }
     }
