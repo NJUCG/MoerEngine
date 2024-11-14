@@ -127,8 +127,8 @@ namespace Moer {
         float       m_aspect_ratio;
         float       m_near_clip;
         float       m_far_clip;
-        const float m_move_speed        = 0.004f;// TODO: need to be optimized (optimize code)
-        const float m_mouse_sensitivity = 0.3f;
+        const float m_move_speed        = 0.002f;
+        const float m_mouse_sensitivity = 0.2f;
 
         // bool yaw_reverse   = false;// reverse left and right
         // bool pitch_reverse = false;// reverse up and down

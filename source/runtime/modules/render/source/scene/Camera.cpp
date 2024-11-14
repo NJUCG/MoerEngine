@@ -4,35 +4,6 @@
 #include "math/Base.h"
 #include "math/Constant.h"
 #include "math/Function.h"
-//
-// namespace Moer {
-//     void Camera::SetPerspective(float fov, float aspect, float zNear, float zFar) {
-//         m_fov = fov;
-//         m_aspect = aspect;
-//         m_zNear = zNear;
-//         m_zFar = zFar;
-//
-//         //todo
-//         //m_perspective = (fov, aspect, zNear, zFar);
-//     }
-//
-//     void Camera::SetRotation(Vector3f rotation) {
-//         m_rotation = rotation;
-//     }
-//
-//     void Camera::SetTranslation(Vector3f translation) {
-//         m_position = translation;
-//     }
-//
-//     void Camera::Translate(const Vector3f& delta) {
-//         m_position = m_position + delta;
-//     }
-//
-//     void Camera::Rotate(const Vector3f& delta) {
-//         m_rotation = m_rotation + delta;
-//     }
-//
-// }
 
 namespace Moer {
     extern WindowInput& wndInput;
@@ -236,11 +207,13 @@ namespace Moer {
 
     Vector4f Camera::GetFrustum() noexcept {
         UpdatePlanesAndFrustum();
+        LOG_WARNING("Camera.GetFrustum() is not tested yet");
         return m_frustum;
     }
 
     void Camera::GetPlanes(Vector4f _out_planes[6]) {
-        UpdatePlanesAndFrustum();// TODO: m_is_xxx_dirty
+        UpdatePlanesAndFrustum();
+        LOG_WARNING("Camera.GetPlanes(..) is not tested yet");
         for (int i = 0; i < 6; i++) {
             _out_planes[i] = m_planes[i];
         }
@@ -407,7 +380,7 @@ namespace Moer {
         }
     }
 
-    CameraRef Camera::CreateDefaultCamera() {// TODO: implement
+    CameraRef Camera::CreateDefaultCamera() {
         CameraRef default_camera = MoerNew(Camera)();
         default_camera->SetFov(36.f);
         Transform transform    = Transform(Vector3f(0.0f, 0.0f, 0.0f), Vector3f(0.0f, 0.0f, 1.0f), Vector3f(0.0f, 1.0f, 0.0f));
@@ -470,19 +443,22 @@ namespace Moer {
         str += "  right: (" + std::to_string(m_right[0]) + ", " + std::to_string(m_right[1]) + ", " + std::to_string(m_right[2]) + ")\n";
         str += "  up: (" + std::to_string(m_up[0]) + ", " + std::to_string(m_up[1]) + ", " + std::to_string(m_up[2]) + ")\n";
         str += "  forward: (" + std::to_string(m_forward[0]) + ", " + std::to_string(m_forward[1]) + ", " + std::to_string(m_forward[2]) + ")\n";
+        Vector4f planes[6];
+        GetPlanes(planes);
         str += "  planes:\n";
         for (int i = 0; i < 6; i++) {
             str += "    ";
             for (int j = 0; j < 4; j++) {
-                str += std::to_string(m_planes[i][j]);
+                str += std::to_string(planes[i][j]);
                 if (j < 3) {
                     str += ", ";
                 }
             }
             str += "\n";
         }
-        str += "  frustum: (" + std::to_string(m_frustum[0]) + ", " + std::to_string(m_frustum[1]) + ", ";
-        str += std::to_string(m_frustum[2]) + ", " + std::to_string(m_frustum[3]) + ")\n";
+        auto frustum = GetFrustum();
+        str += "  frustum: (" + std::to_string(frustum[0]) + ", " + std::to_string(frustum[1]) + ", ";
+        str += std::to_string(frustum[2]) + ", " + std::to_string(frustum[3]) + ")\n";
 
         return str;
     }
