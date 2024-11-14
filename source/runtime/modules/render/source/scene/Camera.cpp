@@ -159,84 +159,24 @@ namespace Moer {
 
     void Camera::SetWorldTransform(const Transform& to_world_transform) noexcept {
         // to_world == camera_to_world == view_matrix_inv
+        auto to_world = to_world_transform.GetMatrix4x4();// M^-1 = T^-1 * R^-1
+        assert(Abs(to_world[3].x) < EPS && Abs(to_world[3].y) < EPS && Abs(to_world[3].z) < EPS && Abs(to_world[3].w - 1.f) < EPS);
+        auto front_v0 = Normalizef(Vector3f(-to_world[0][2], -to_world[1][2], -to_world[2][2]));
 
-        auto mat4_to_str = [](const Matrix4x4f& mat) {
-            std::string str = "Matrix4x4f {\n";
-            for (int i = 0; i < 4; i++) {
-                str += "  ";
-                for (int j = 0; j < 4; j++) {
-                    str += std::to_string(mat[i][j]) + " ";
-                }
-                str += "\n";
-            }
-            str += "}";
-            return str;
-        };
-
-        auto vec3_to_str = [](const Vector3f& vec) {
-            return "Vector3f {" + std::to_string(vec.x) + ", " + std::to_string(vec.y) + ", " + std::to_string(vec.z) + "}";
-        };
-
-        auto to_world = to_world_transform.GetMatrix4x4();
-        m_position.x  = to_world[0].w;
-        m_position.y  = to_world[1].w;
-        m_position.z  = to_world[2].w;
-
-        LOG_INFO("ToWorldTransform    : {}", mat4_to_str(to_world));
-
-        auto rotate = Transpose(to_world);
-        rotate[3].x = 0.f;
-        rotate[3].y = 0.f;
-        rotate[3].z = 0.f;
-        LOG_INFO("Rotate after: {}", mat4_to_str(rotate));
-
-        auto rotate_inv = Inverse(rotate);
-        LOG_INFO("Rotate Inv: {}", mat4_to_str(rotate_inv));
+        m_position.x = to_world[0].w;
+        m_position.y = to_world[1].w;
+        m_position.z = to_world[2].w;
+        m_yaw        = Angle::RadianToDegree(atan2(front_v0.z, front_v0.x));
+        m_pitch      = Angle::RadianToDegree(asin(front_v0.y));
 
         UpdateDerivedProperties();
 
-        auto view_matrix_v0 = GetViewMatrix();
-        LOG_INFO("ViewMatrix v0: {}", mat4_to_str(view_matrix_v0));
-
-        auto to_world_2 = MakeTranslation(m_position.x, m_position.y, m_position.z) * rotate_inv;
-        LOG_INFO("ToWorldTransform 2: {}", mat4_to_str(to_world_2));
-
-        auto view_matrix = Inverse(to_world_2);
-        LOG_INFO("ToWorldTransform 2 Inv (View Matrix): {}", mat4_to_str(view_matrix));
-
-        auto forward_v0 = Vector3f(-rotate[0][2], -rotate[1][2], -rotate[2][2]);
-        LOG_INFO("Forward v0: {}", vec3_to_str(forward_v0));
-        m_yaw   = Angle::RadianToDegree(atan2(forward_v0.x, forward_v0.z));
-        m_pitch = Angle::RadianToDegree(asin(-forward_v0.y));
-
-        Matrix4x4f view_matrix_f1;
-        {
-            auto forward = Vector3f(view_matrix[0][2], view_matrix[1][2], view_matrix[2][2]);
-
-            LOG_INFO("Forward v1: {}", vec3_to_str(forward));
-
-            m_yaw   = Angle::RadianToDegree(atan2(forward.x, forward.z));
-            m_pitch = Angle::RadianToDegree(asin(-forward.y));
-
-            UpdateDerivedProperties();
-
-            view_matrix_f1 = GetViewMatrix();
-            LOG_INFO("ViewMatrix: {}", mat4_to_str(view_matrix_f1));
-        }
-
-        {
-            auto forward = Vector3f(view_matrix_f1[0][2], view_matrix_f1[1][2], view_matrix_f1[2][2]);
-
-            LOG_INFO("Forward v2: {}", vec3_to_str(forward));
-
-            m_yaw   = Angle::RadianToDegree(atan2(forward.x, forward.z));
-            m_pitch = Angle::RadianToDegree(asin(-forward.y));
-
-            UpdateDerivedProperties();
-
-            auto view_matrix_f = GetViewMatrix();
-            LOG_INFO("ViewMatrix: {}", mat4_to_str(view_matrix_f));
-        }
+        // auto to_world_rotate = to_world;// R^-1
+        // to_world_rotate[0].w = 0.f;
+        // to_world_rotate[1].w = 0.f;
+        // to_world_rotate[2].w = 0.f;
+        // auto view_matrix_inv = MakeTranslation(m_position.x, m_position.y, m_position.z) * to_world_rotate;
+        // assert(view_matrix_inv == to_world) // This will pass
     }
 
     void Camera::MoveForward(float delta) {
@@ -315,9 +255,10 @@ namespace Moer {
 
     // position/yaw/pitch -> front/right/up/forward
     void Camera::UpdateDerivedProperties() {
-        m_front   = Normalizef(Vector3f(cos(Angle::DegreeToRadian(m_yaw)) * cos(Angle::DegreeToRadian(m_pitch)),
-                                      sin(Angle::DegreeToRadian(m_pitch)),
-                                      sin(Angle::DegreeToRadian(m_yaw)) * cos(Angle::DegreeToRadian(m_pitch))));
+        // m_front has no need to be normalized
+        m_front   = Vector3f(cos(Angle::DegreeToRadian(m_yaw)) * cos(Angle::DegreeToRadian(m_pitch)),
+                           sin(Angle::DegreeToRadian(m_pitch)),
+                           sin(Angle::DegreeToRadian(m_yaw)) * cos(Angle::DegreeToRadian(m_pitch)));
         m_right   = Normalizef(Cross(m_front, UP_IN_WORLD));
         m_up      = Normalizef(Cross(m_right, m_front));
         m_forward = Normalizef(Cross(UP_IN_WORLD, m_right));
@@ -525,6 +466,24 @@ namespace Moer {
             str += "\n";
         }
         str += "}\n";
+        str += "  front: (" + std::to_string(m_front[0]) + ", " + std::to_string(m_front[1]) + ", " + std::to_string(m_front[2]) + ")\n";
+        str += "  right: (" + std::to_string(m_right[0]) + ", " + std::to_string(m_right[1]) + ", " + std::to_string(m_right[2]) + ")\n";
+        str += "  up: (" + std::to_string(m_up[0]) + ", " + std::to_string(m_up[1]) + ", " + std::to_string(m_up[2]) + ")\n";
+        str += "  forward: (" + std::to_string(m_forward[0]) + ", " + std::to_string(m_forward[1]) + ", " + std::to_string(m_forward[2]) + ")\n";
+        str += "  planes:\n";
+        for (int i = 0; i < 6; i++) {
+            str += "    ";
+            for (int j = 0; j < 4; j++) {
+                str += std::to_string(m_planes[i][j]);
+                if (j < 3) {
+                    str += ", ";
+                }
+            }
+            str += "\n";
+        }
+        str += "  frustum: (" + std::to_string(m_frustum[0]) + ", " + std::to_string(m_frustum[1]) + ", ";
+        str += std::to_string(m_frustum[2]) + ", " + std::to_string(m_frustum[3]) + ")\n";
+
         return str;
     }
 
