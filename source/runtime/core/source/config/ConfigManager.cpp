@@ -5,6 +5,7 @@
 #include <string>
 #include "config/ConfigManager.h"
 
+#include "log/LogSystem.h"
 #include "config/ini.h"
 #include "misc/MacroUtils.h"
 
@@ -25,6 +26,8 @@ namespace Moer {
 
         std::filesystem::path config_path = _workspace_path / CONFIG_DIR / "MoerEngine.ini";
         if (!std::filesystem::exists(config_path)) {
+            LOG_ERROR("Config `MoerEngine.ini` does not exist.");
+            LOG_ERROR("Please enter `./source/configs/` and copy `MoerEngine.ini.template` to `MoerEngine.ini`. You can read README.md for details. MoerEngine will abort.", config_path.generic_string());
             throw std::runtime_error("Config directory does not exist");
         }
 
