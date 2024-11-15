@@ -36,17 +36,9 @@ namespace Moer {
         bool camera_up       = false;
         bool camera_down     = false;
 
-        // camera speed(default)
-        const float k_default_camera_speed    = 25.0f;
-        const float k_max_camera_speed        = 100.0f;
-        const float k_min_camera_speed        = 0.0f;
-        const float k_camera_speed_up_delta   = 5.0f;
-        const float k_camera_speed_down_delta = 2.5f;
-
-        float camera_speed = k_default_camera_speed;//to be optimized
-        bool  speed_up     = false;
-        bool  speed_down   = false;
-        bool  reset_speed  = false;
+        bool speed_up    = false;
+        bool speed_down  = false;
+        bool reset_speed = false;
 
         // window size
         float width        = 1280.f;

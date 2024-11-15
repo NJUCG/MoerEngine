@@ -14,10 +14,23 @@ namespace Moer {
     const Vector3f Camera::Z           = Vector3f(0.f, 0.f, 1.f);
     const Vector3f Camera::UP_IN_WORLD = Camera::Y;
 
+    // mouse control parameters
     const float Camera::k_pitch_min = -89.5f;
     const float Camera::k_pitch_max = 89.5f;
     const float Camera::k_fov_min   = 0.012f;
     const float Camera::k_fov_max   = 180.f;
+
+    const float Camera::k_mouse_sensitivity = 0.2f;
+
+    // camera movement parameters
+    // actual camera speed = camera_speed * k_camera_speed_multiplier * delta_time
+    // e.g. camera_speed = 25.0 & k_camera_speed_multiplier = 0.1 => 2.5 units per second
+    const float Camera::k_camera_speed_multiplier = 0.1f;
+    const float Camera::k_camera_speed_default    = 25.0f;
+    const float Camera::k_camera_speed_max        = 100.0f;
+    const float Camera::k_camera_speed_min        = 0.1f;
+    const float Camera::k_camera_speed_up_delta   = 50.0f;// use 2 sec to reach max speed
+    const float Camera::k_camera_speed_down_delta = 25.0f;// use 4 sec to reach min speed
 
     Camera::Camera() noexcept {
     }
@@ -153,8 +166,7 @@ namespace Moer {
     void Camera::MoveForward(float delta) {
         if (Abs(delta) < EPS) return;
 
-        float velocity = m_move_speed * delta;
-        m_position += m_forward * velocity;
+        m_position += m_front * delta;// use m_front for more comfortable control
 
         m_is_view_matrix_dirty = true;
     }
@@ -162,8 +174,7 @@ namespace Moer {
     void Camera::MoveRight(float delta) {
         if (Abs(delta) < EPS) return;
 
-        float velocity = m_move_speed * delta;
-        m_position += m_right * velocity;
+        m_position += m_right * delta;
 
         m_is_view_matrix_dirty = true;
     }
@@ -171,8 +182,7 @@ namespace Moer {
     void Camera::MoveUp(float delta) {
         if (Abs(delta) < EPS) return;
 
-        float velocity = m_move_speed * delta;
-        m_position += m_up * velocity;
+        m_position += m_up * delta;
 
         m_is_view_matrix_dirty = true;
     }
@@ -180,8 +190,8 @@ namespace Moer {
     void Camera::UpdateRotation(float delta_x, float delta_y) {
         if (Abs(delta_x) < EPS && Abs(delta_y) < EPS) return;
 
-        m_yaw += delta_x * m_mouse_sensitivity;
-        m_pitch += -1.0 * delta_y * m_mouse_sensitivity;
+        m_yaw += delta_x * k_mouse_sensitivity;
+        m_pitch += -1.0 * delta_y * k_mouse_sensitivity;
         m_pitch = Clamp(m_pitch, k_pitch_min, k_pitch_max);
 
         UpdateDerivedProperties();
@@ -339,34 +349,38 @@ namespace Moer {
             this->SetFov(wndInput.fov);
             this->SetAspectRatio(wndInput.aspect_ratio);
 
+            // LOG_INFO("Delta time: {}", wndInput.delta_time);
+
             // camera speed
             if (wndInput.speed_up) {
-                wndInput.camera_speed += wndInput.k_camera_speed_up_delta;
-                if (wndInput.camera_speed > wndInput.k_max_camera_speed)
-                    wndInput.camera_speed = wndInput.k_max_camera_speed;
+                camera_speed += k_camera_speed_up_delta * wndInput.delta_time;
+                if (camera_speed > k_camera_speed_max)
+                    camera_speed = k_camera_speed_max;
             }
             if (wndInput.speed_down) {
-                wndInput.camera_speed -= wndInput.k_camera_speed_down_delta;
-                if (wndInput.camera_speed < wndInput.k_min_camera_speed)
-                    wndInput.camera_speed = wndInput.k_min_camera_speed;
+                camera_speed -= k_camera_speed_down_delta * wndInput.delta_time;
+                if (camera_speed < k_camera_speed_min)
+                    camera_speed = k_camera_speed_min;
             }
             if (wndInput.reset_speed) {
-                wndInput.camera_speed = wndInput.k_default_camera_speed;
+                camera_speed = k_camera_speed_default;
             }
+
+            float speed = 1.0 * camera_speed * k_camera_speed_multiplier * wndInput.delta_time;
 
             // movement
             if (wndInput.camera_forward)
-                this->MoveForward(wndInput.camera_speed * wndInput.delta_time);
+                this->MoveForward(speed);
             if (wndInput.camera_backward)
-                this->MoveForward(-wndInput.camera_speed * wndInput.delta_time);
+                this->MoveForward(-speed);
             if (wndInput.camera_left)
-                this->MoveRight(-wndInput.camera_speed * wndInput.delta_time);
+                this->MoveRight(-speed);
             if (wndInput.camera_right)
-                this->MoveRight(wndInput.camera_speed * wndInput.delta_time);
+                this->MoveRight(speed);
             if (wndInput.camera_up)
-                this->MoveUp(wndInput.camera_speed * wndInput.delta_time);
+                this->MoveUp(speed);
             if (wndInput.camera_down)
-                this->MoveUp(-wndInput.camera_speed * wndInput.delta_time);
+                this->MoveUp(-speed);
 
             // rotation
             if (wndInput.cursor_delta_x || wndInput.cursor_delta_y) {

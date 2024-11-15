@@ -28,6 +28,14 @@ namespace Moer {
         const static float k_pitch_max;
         const static float k_fov_min;
         const static float k_fov_max;
+        const static float k_mouse_sensitivity;
+        const static float k_camera_speed_multiplier;
+
+        const static float k_camera_speed_default;
+        const static float k_camera_speed_max;
+        const static float k_camera_speed_min;
+        const static float k_camera_speed_up_delta;
+        const static float k_camera_speed_down_delta;
 
         Camera() noexcept;
 
@@ -105,6 +113,9 @@ namespace Moer {
         void UpdateRotation(float, float);
 
     private:
+        // MARK: camera control
+        float camera_speed = k_camera_speed_default;
+
         /**
          * origin properties + options => derived properties
          * 
@@ -123,12 +134,10 @@ namespace Moer {
 
         // MARK: options
 
-        float       m_fov_y;// degree
-        float       m_aspect_ratio;
-        float       m_near_clip;
-        float       m_far_clip;
-        const float m_move_speed        = 0.002f;
-        const float m_mouse_sensitivity = 0.2f;
+        float m_fov_y;// degree
+        float m_aspect_ratio;
+        float m_near_clip;
+        float m_far_clip;
 
         // bool yaw_reverse   = false;// reverse left and right
         // bool pitch_reverse = false;// reverse up and down

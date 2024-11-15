@@ -157,7 +157,7 @@ namespace Moer {
         // per-frame time logic
         float current_frame_time = static_cast<float>(glfwGetTime());
         wndInput.delta_time      = current_frame_time - wndInput.last_frame_time;
-        wndInput.delta_time      = current_frame_time;
+        wndInput.last_frame_time = current_frame_time;
 
         PollEvents();
         // GuiUpdate();
@@ -274,7 +274,6 @@ namespace Moer {
 
         if (UpdateKeyStateWhenBoolExpression(wndInput.speed_up, key == GLFW_KEY_UP, action)) return;
         if (UpdateKeyStateWhenBoolExpression(wndInput.speed_down, key == GLFW_KEY_DOWN, action)) return;
-        if (UpdateKeyStateWhenBoolExpression(wndInput.camera_forward, key == GLFW_KEY_W, action)) return;
         if (UpdateKeyStateWhenBoolExpression(wndInput.reset_speed,
                                              key == GLFW_KEY_KP_0 && mods == GLFW_MOD_CONTROL,
                                              action)) return;
