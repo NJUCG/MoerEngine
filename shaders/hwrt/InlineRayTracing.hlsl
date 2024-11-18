@@ -8,6 +8,20 @@ BINDLESS_BINDINGS(3, 2, 4, 5);
 
 #include <framework/Material.hlsl>
 
+struct MaterialData {
+  float4 base_color_factor;
+  float3 emissive_factor;
+  float metallic_factor;
+  float roughness_factor;
+  float ao;
+  uint albedo_map;
+  int normal_map;
+  int metallic_roughness_map;
+  int ao_map;
+  int emissive_map;
+  int padding;
+};
+
 struct Param {
   uint instance_buffer_handle;
   uint material_buffer_handle;

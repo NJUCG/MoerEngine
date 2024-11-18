@@ -280,6 +280,9 @@ namespace Moer::Render {
         return ImGui::GetCurrentContext() ? (ImGUIData*)ImGui::GetIO().BackendRendererUserData : nullptr;
     }
     ImGUIRenderBackend::~ImGUIRenderBackend() {
+        ImGuiViewport* main_viewport = ImGui::GetMainViewport();
+        MoerDelete((GuiViewportData*)main_viewport->RendererUserData);
+        main_viewport->RendererUserData = nullptr;
         ImGui_ImplGlfw_Shutdown();
         ImGUIData* data = GetGUIBackendData();
         ImGui::DestroyContext();
@@ -392,12 +395,14 @@ void GUIRender(void* _draw_data, const TextureView& _frame_buffer, CommandList& 
         // render_buffers->vertex_buffer->DeRef();
         uint32_t new_size          = 4096 + total_size_vert;
         render_buffers->vtx_buffer = device.CreateBuffer<ImDrawVert>(new_size, EBufferUsageFlags::VERTEX_BUFFER | EBufferUsageFlags::TRANSFER_DST);
+        render_buffers->vtx_buffer->SetName("ImGUI Vertex Buffer");
     }
     if (render_buffers->idx_buffer == nullptr || render_buffers->idx_buffer->GetNumElement() < total_size_idx) {
 
         if (render_buffers->idx_buffer != nullptr) {}
         uint32_t new_size          = 8192 + total_size_idx;
         render_buffers->idx_buffer = device.CreateBuffer<ImDrawIdx>(new_size, EBufferUsageFlags::INDEX_BUFFER | EBufferUsageFlags::TRANSFER_DST);
+        render_buffers->idx_buffer->SetName("ImGUI Index Buffer");
     }
 
     size_t            vertex_offset = 0;
@@ -419,6 +424,7 @@ void GUIRender(void* _draw_data, const TextureView& _frame_buffer, CommandList& 
     if (render_buffers->arg_buffer == nullptr || render_buffers->arg_buffer->GetNumElement() < total_cmd_cnt) {
         uint32_t new_size          = 128 + total_cmd_cnt;
         render_buffers->arg_buffer = device.CreateBuffer<ImGUIArg>(new_size, EBufferUsageFlags::TRANSFER_DST);
+        render_buffers->arg_buffer->SetName("ImGUI Arg Buffer");
     }
 
     ImVec2 clip_off   = draw_data->DisplayPos;      // (0,0) unless using multi-viewports
