@@ -21,6 +21,20 @@ struct Param {
   uint frame_index;
 };
 
+struct MaterialData {
+  float4 base_color_factor;
+  float3 emissive_factor;
+  float metallic_factor;
+  float roughness_factor;
+  float ao;
+  uint albedo_map;
+  int normal_map;
+  int metallic_roughness_map;
+  int ao_map;
+  int emissive_map;
+  int padding;
+};
+
 [[vk::push_constant]] ConstantBuffer<Param> param;
 [[vk::binding(0, 0)]] RaytracingAccelerationStructure tlas
     : register(t0, space0);
@@ -308,7 +322,7 @@ RTMaterialProp GetMaterialProps(in RTHitInfo hit_info) {
       mul(float4(cam_ray_origion_v, 1.0f), view.view2world).xyz;
   float3 cam_ray_dir_w =
       view.orthomode == 0
-          ? normalize(mul((float3x3)view.view2world, cam_ray_origion_v))
+          ? normalize(mul(cam_ray_origion_v, (float3x3)view.view2world))
           : -view.dir;
   // RTHitInfo hit_info = (RTHitInfo)0;
   // RTMaterialProp mat = (RTMaterialProp)0;

@@ -321,7 +321,7 @@ int main(int argc, const char** argv) {
 
         if (time - last_time > 5000) {
             last_time = time;
-            LOG_INFO("FPS {}, Time elapsed {} ms\n", 1000.f / frame_time, frame_time);
+            LOG_INFO("FPS {}, Time elapsed {} ms", 1000.f / frame_time, frame_time);
         }
         timer.Start();
         WindowContext::GetWindowSize(WindowContext::GetMainWindow(), &w_width, &w_height);

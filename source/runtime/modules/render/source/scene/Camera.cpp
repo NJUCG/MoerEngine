@@ -45,7 +45,7 @@ namespace Moer {
     float Camera::GetTanHalfFov() const noexcept { return tan(m_fov_y / 180.f * HALF_PI); }
     float Camera::GetAspectRatio() const noexcept { return m_aspect_ratio; }
 
-    Vector3f Camera::GetDirection() const noexcept { return Vector3f(0.f, 0.f, -1.f); }
+    Vector3f Camera::GetDirection() const noexcept { return m_front; }
     Vector3f Camera::GetUp() const noexcept { return m_up; }
     Vector3f Camera::GetRight() const noexcept { return m_right; }
     Vector3f Camera::GetFront() const noexcept { return m_front; }
@@ -62,10 +62,7 @@ namespace Moer {
     }
 
     Matrix4x4f Camera::GetToWorldMatrix() noexcept {
-        // same with GetViewMatrixInv
         return GetViewMatrixInv();
-        // UpdateViewMatrix();
-        // return m_view_matrix_inv;
     }
 
     Matrix4x4f Camera::GetRotateMatrix() noexcept {
@@ -198,6 +195,8 @@ namespace Moer {
     }
 
     void Camera::GetAABB(Vector3f& _out_min, Vector3f& _out_max) {
+        LOG_WARNING("Camera.GetAABB(..) is not tested yet");
+
         Vector3f far_points[4];
         Vector3f near_points[4];
         Vector3f cam_pos = this->GetPosition();
@@ -217,7 +216,6 @@ namespace Moer {
 
     Vector4f Camera::GetFrustum() noexcept {
         UpdatePlanesAndFrustum();
-        LOG_WARNING("Camera.GetFrustum() is not tested yet");
         return m_frustum;
     }
 
@@ -246,13 +244,11 @@ namespace Moer {
         m_up      = Normalizef(Cross(m_right, m_front));
         m_forward = Normalizef(Cross(UP_IN_WORLD, m_right));
 
-        m_is_view_matrix_dirty        = true;
-        m_is_planes_and_frustum_dirty = true;
+        m_is_view_matrix_dirty = true;
     }
 
     void Camera::UpdateViewMatrix() {
         if (!m_is_view_matrix_dirty) return;
-
         m_is_view_matrix_dirty            = false;
         m_is_view_projection_matrix_dirty = true;
 
@@ -270,9 +266,9 @@ namespace Moer {
 
     void Camera::UpdateProjectionMatrix() {
         if (!m_is_projection_matrix_dirty) return;
-
         m_is_projection_matrix_dirty      = false;
         m_is_view_projection_matrix_dirty = true;
+        m_is_planes_and_frustum_dirty     = true;// Planes and frustum depend on projection matrix
 
         // The m_far_clip and m_near_clip is swapped on purpose.
         // Inverse Depth Projection: https://forums.developer.nvidia.com/t/inverse-depth-projection-tutorial-or-code-sample/219704
@@ -285,15 +281,19 @@ namespace Moer {
         UpdateProjectionMatrix();
 
         if (!m_is_view_projection_matrix_dirty) return;
+        m_is_view_projection_matrix_dirty = false;
 
         m_view_projection_matrix     = m_projection_matrix * m_view_matrix;
         m_view_projection_matrix_inv = Inverse(m_view_projection_matrix);
     }
 
     void Camera::UpdatePlanesAndFrustum() {
-        if (!m_is_planes_and_frustum_dirty) return;
+        UpdateProjectionMatrix();
 
-        auto vp     = GetViewProjectionMatrix();
+        if (!m_is_planes_and_frustum_dirty) return;
+        m_is_planes_and_frustum_dirty = false;
+
+        auto vp     = GetProjectionMatrix();
         m_planes[0] = vp.r3 + vp.r0;//left
         m_planes[1] = vp.r3 - vp.r0;//right
         m_planes[2] = vp.r3 + vp.r1;//top
@@ -430,6 +430,7 @@ namespace Moer {
         str += "  far clip: " + std::to_string(m_far_clip) + "\n";
         auto view_matrix       = GetViewMatrix();
         auto projection_matrix = GetProjectionMatrix();
+        auto inv_view_matrix   = GetViewMatrixInv();
         str += "  view matrix:\n";
         for (int i = 0; i < 4; i++) {
             str += "    ";
@@ -452,7 +453,17 @@ namespace Moer {
             }
             str += "\n";
         }
-        str += "}\n";
+        str += "  inv view matrix:\n";
+        for (int i = 0; i < 4; i++) {
+            str += "    ";
+            for (int j = 0; j < 4; j++) {
+                str += std::to_string(inv_view_matrix[i][j]);
+                if (j < 3) {
+                    str += ", ";
+                }
+            }
+            str += "\n";
+        }
         str += "  front: (" + std::to_string(m_front[0]) + ", " + std::to_string(m_front[1]) + ", " + std::to_string(m_front[2]) + ")\n";
         str += "  right: (" + std::to_string(m_right[0]) + ", " + std::to_string(m_right[1]) + ", " + std::to_string(m_right[2]) + ")\n";
         str += "  up: (" + std::to_string(m_up[0]) + ", " + std::to_string(m_up[1]) + ", " + std::to_string(m_up[2]) + ")\n";
@@ -473,6 +484,7 @@ namespace Moer {
         auto frustum = GetFrustum();
         str += "  frustum: (" + std::to_string(frustum[0]) + ", " + std::to_string(frustum[1]) + ", ";
         str += std::to_string(frustum[2]) + ", " + std::to_string(frustum[3]) + ")\n";
+        str += "}\n";
 
         return str;
     }
