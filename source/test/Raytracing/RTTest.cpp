@@ -223,6 +223,7 @@ int main(int argc, const char** argv) {
     BufferRef rt_config_param_buffer = device.CreateBuffer<Moer::byte>(sizeof(RTConfigParam) * 1, EBufferUsageFlags::CONSTANT_BUFFER);
 
     rt_view_param_buffer->SetName("rt_view_param_buffer");
+    rt_config_param_buffer->SetName("rt_config_param_buffer");
 
     RaytracingSceneRef rt_scene  = device.CreateRaytracingScene();
     TestInlineRTShader rt_shader = manager.Compute<TestInlineRTShader>("hwrt/InlineRayTracing.hlsl");

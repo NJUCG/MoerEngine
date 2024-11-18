@@ -39,6 +39,7 @@ if(${MSVC})
     add_compile_options("/wd5105")
     add_compile_options("/wd5104")
     add_compile_options("/FS")
+    add_compile_options("/MP")
 endif()
 
 add_subdirectory("3rdParty")
