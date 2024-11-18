@@ -472,10 +472,12 @@ int main(int argc, const char** argv) {
             rt_view_param.dir        = camera->GetDirection();
             rt_view_param.orthomode  = 0;
 
+            const RTUI::Config& rt_ui_config = rt_ui.GetConfig();
+
             rt_config_param.tan_pixel_angular_radius = tanf(Angle::DegreeToRadian(camera->GetFov()));
             rt_config_param.tan_sun_angular_radius   = tanf(Angle::DegreeToRadian(0.533f * 0.5f));
-            float3 sun_dir                           = Normalizef(float3(0.f, 0.5f, 0.16f));
-            rt_config_param.sun_direction_gexposure  = float4(sun_dir, 80.f);
+            float3 sun_dir                           = Normalizef(rt_ui_config.sun_direction);
+            rt_config_param.sun_direction_gexposure  = float4(sun_dir, rt_ui_config.exposure);
             cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)&rt_config_param, sizeof(RTConfigParam)), rt_config_param_buffer->GetView());
 
             cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)&rt_view_param, sizeof(RTViewParam)), rt_view_param_buffer->GetView());
@@ -498,7 +500,6 @@ int main(int argc, const char** argv) {
         }
         // rt_scene->MarkModified(0);
         // cmd_list.UpdateRaytracingScene(rt_scene);
-        gui.RenderGUI(cmd_list, ui_frame_buffer);
         Sampler linear_sampler{SF_LINEAR, SAM_CLAMP_TO_BORDER};
 
         if (rt_ui.IsSeperateWindow() && rt_ui.GetWindowFrameBuffer().GetTexture()) {
@@ -519,6 +520,8 @@ int main(int argc, const char** argv) {
                       {SingleDrawParam(3, 1, 0, 0, 0)},
                       ColorAttachment(output));
         }
+        gui.RenderGUI(cmd_list, output);
+
         time++;
         gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time));
         gfx_queue.Present(sc, output);

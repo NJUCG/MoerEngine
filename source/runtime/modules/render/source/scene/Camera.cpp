@@ -52,12 +52,12 @@ namespace Moer {
     Vector3f Camera::GetForward() const noexcept { return m_forward; }
 
     Matrix4x4f Camera::GetViewMatrix() noexcept {
-        UpdateViewMatrix();
+        // UpdateViewMatrix();
         return m_view_matrix;// world to camera
     }
 
     Matrix4x4f Camera::GetViewMatrixInv() noexcept {
-        UpdateViewMatrix();
+        // UpdateViewMatrix();
         return m_view_matrix_inv;
     }
 
@@ -66,7 +66,7 @@ namespace Moer {
     }
 
     Matrix4x4f Camera::GetRotateMatrix() noexcept {
-        UpdateViewMatrix();
+        // UpdateViewMatrix();
         return m_view_matrix_rotate_submatrix;
     }
 
@@ -85,12 +85,12 @@ namespace Moer {
     }
 
     Matrix4x4f Camera::GetViewProjectionMatrix() noexcept {
-        UpdateViewProjectionMatrix();
+        // UpdateViewProjectionMatrix();
         return m_view_projection_matrix;
     }
 
     Matrix4x4f Camera::GetViewProjectionMatrixInv() noexcept {
-        UpdateViewProjectionMatrix();
+        // UpdateViewProjectionMatrix();
         return m_view_projection_matrix_inv;
     }
 
@@ -138,9 +138,9 @@ namespace Moer {
         }
     }
 
-    void Camera::SetWorldTransform(const Transform& to_world_transform) noexcept {
+    void Camera::SetWorldTransform(const Transform& _to_world_transform) noexcept {
         // to_world == camera_to_world == view_matrix_inv
-        auto to_world = to_world_transform.GetMatrix4x4();// M^-1 = T^-1 * R^-1
+        auto to_world = _to_world_transform.GetMatrix4x4();// M^-1 = T^-1 * R^-1
         assert(Abs(to_world[3].x) < EPS && Abs(to_world[3].y) < EPS && Abs(to_world[3].z) < EPS && Abs(to_world[3].w - 1.f) < EPS);
         auto front_v0 = Normalizef(Vector3f(-to_world[0][2], -to_world[1][2], -to_world[2][2]));
 
@@ -189,9 +189,10 @@ namespace Moer {
 
         m_yaw += delta_x * k_mouse_sensitivity;
         m_pitch += -1.0 * delta_y * k_mouse_sensitivity;
-        m_pitch = Clamp(m_pitch, k_pitch_min, k_pitch_max);
-
-        UpdateDerivedProperties();
+        m_pitch                       = Clamp(m_pitch, k_pitch_min, k_pitch_max);
+        m_is_view_matrix_dirty        = true;
+        m_is_planes_and_frustum_dirty = true;
+        // UpdateDerivedProperties();
     }
 
     void Camera::GetAABB(Vector3f& _out_min, Vector3f& _out_max) {
@@ -220,8 +221,8 @@ namespace Moer {
     }
 
     void Camera::GetPlanes(Vector4f _out_planes[6]) {
-        UpdatePlanesAndFrustum();
-        LOG_WARNING("Camera.GetPlanes(..) is not tested yet");
+        // UpdatePlanesAndFrustum();
+        // LOG_WARNING("Camera.GetPlanes(..) is not tested yet");
         for (int i = 0; i < 6; i++) {
             _out_planes[i] = m_planes[i];
         }
@@ -244,7 +245,9 @@ namespace Moer {
         m_up      = Normalizef(Cross(m_right, m_front));
         m_forward = Normalizef(Cross(UP_IN_WORLD, m_right));
 
-        m_is_view_matrix_dirty = true;
+        // m_is_view_matrix_dirty = true;
+
+        UpdateViewProjectionMatrix();
     }
 
     void Camera::UpdateViewMatrix() {
@@ -279,12 +282,14 @@ namespace Moer {
     void Camera::UpdateViewProjectionMatrix() {
         UpdateViewMatrix();
         UpdateProjectionMatrix();
+        UpdatePlanesAndFrustum();
 
         if (!m_is_view_projection_matrix_dirty) return;
         m_is_view_projection_matrix_dirty = false;
 
-        m_view_projection_matrix     = m_projection_matrix * m_view_matrix;
-        m_view_projection_matrix_inv = Inverse(m_view_projection_matrix);
+        m_view_projection_matrix          = m_projection_matrix * m_view_matrix;
+        m_view_projection_matrix_inv      = Inverse(m_view_projection_matrix);
+        m_is_view_projection_matrix_dirty = false;
     }
 
     void Camera::UpdatePlanesAndFrustum() {

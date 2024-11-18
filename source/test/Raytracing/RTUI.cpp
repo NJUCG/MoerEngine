@@ -1,6 +1,7 @@
 #include "RTUI.h"
 #include "imgui.h"
 #include "imgui_internal.h"
+#include "math/Function.h"
 
 namespace Moer::Render {
     void RTUI::TickUI() {
@@ -73,6 +74,7 @@ namespace Moer::Render {
         ImGui::End();
 
         ShowSceneColor();
+        ShowConfig();
     }
 
     void RTUI::ShowSceneColor() {
@@ -119,6 +121,25 @@ namespace Moer::Render {
             scene_color_resolution = {scene_size.x, scene_size.y};
             scene_color_pos        = {local_pos.x, local_pos.y};
         }
+
+        ImGui::End();
+    }
+
+    void RTUI::ShowConfig() {
+        ImGuiIO&         io           = ImGui::GetIO();
+        ImGuiWindowFlags window_flags = ImGuiWindowFlags_None;
+
+        if (!b_show_config) {
+            return;
+        }
+        if (!ImGui::Begin("Configs", &b_show_config, window_flags)) {
+
+            ImGui::End();
+            return;
+        }
+        config.sun_direction = Normalizef(config.sun_direction);
+        ImGui::SliderFloat3("Sun Direction", &config.sun_direction.x, -1.0f, 1.0f);
+        ImGui::SliderFloat("Exposure", &config.exposure, 0.0f, 10.0f);
 
         ImGui::End();
     }

@@ -280,9 +280,13 @@ namespace Moer::Render {
         return ImGui::GetCurrentContext() ? (ImGUIData*)ImGui::GetIO().BackendRendererUserData : nullptr;
     }
     ImGUIRenderBackend::~ImGUIRenderBackend() {
-        ImGuiViewport* main_viewport = ImGui::GetMainViewport();
-        MoerDelete((GuiViewportData*)main_viewport->RendererUserData);
-        main_viewport->RendererUserData = nullptr;
+        {
+            //delete main viewport data
+            ImGuiViewport*   main_viewport = ImGui::GetMainViewport();
+            GuiViewportData* viewport_data = (GuiViewportData*)main_viewport->RendererUserData;
+            MoerDelete(viewport_data);
+            main_viewport->RendererUserData = nullptr;
+        }
         ImGui_ImplGlfw_Shutdown();
         ImGUIData* data = GetGUIBackendData();
         ImGui::DestroyContext();

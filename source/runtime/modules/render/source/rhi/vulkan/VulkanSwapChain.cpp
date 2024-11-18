@@ -414,15 +414,15 @@ namespace Moer::Render {
         return swapchain_views[_index % swapchain_views.size()];
     }
     std::tuple<VkSemaphore, uint, uint> VkSwapchain::AquireNextImage() {
-        uint32_t    image_index = 0;
-        VkSemaphore ready_sem   = image_ready_fences[image_idx % image_ready_fences.size()];
+        uint32_t    aquire_idx = 0;
+        VkSemaphore ready_sem  = image_ready_fences[image_idx % image_ready_fences.size()];
 
-        VkResult result = vkAcquireNextImageKHR(device.GetDevice(), handle, UINT64_MAX, ready_sem, VK_NULL_HANDLE, &image_index);
+        VkResult result = vkAcquireNextImageKHR(device.GetDevice(), handle, UINT64_MAX, ready_sem, VK_NULL_HANDLE, &aquire_idx);
         if (result == VK_ERROR_OUT_OF_DATE_KHR) {
-            image_index = INT32_MAX;
+            aquire_idx = INT32_MAX;
         }
         if (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR) {
-            return {ready_sem, image_index, image_idx};
+            return {ready_sem, aquire_idx, image_idx};
         }
         // assert(false && "Error acquiring next present texture.");
         LOG_WARNING("Fail to acquire next image, window may be resized.");

@@ -321,6 +321,7 @@ namespace Moer::Render {
                     scratch_size = (scratch_size + scratch_alignment - 1) & ~(scratch_alignment - 1);
                     scratch_size += param.mode == ERaytracingBuildMode::BUILD ? vk_geo->build_sizes_info.buildScratchSize : vk_geo->build_sizes_info.updateScratchSize;
                 }
+                scratch_size += scratch_alignment;
 
                 scratch = allocator.AllocateScratch(scratch_size);
             }
@@ -813,11 +814,10 @@ namespace Moer::Render {
             cmd_list.SetViewPort(viewport);
             cmd_list.SetScissor({rect.offset.x, rect.offset.y, rect.extent.width, rect.extent.height});
             for (const auto& draw_data : draw_datas) {
-                if (draw_data.vtx_cnt > 0)
-                {
+                if (draw_data.vtx_cnt > 0) {
                     StaticArray<VkBuffer, 4>     vertex_buffers{};
                     StaticArray<VkDeviceSize, 4> vtx_offsets{};
-                
+
                     for (size_t i = 0; i < draw_data.vtx_cnt; ++i) {
                         vertex_buffers[i] = ResourceCast(draw_data.vtx_views[i].buffer)->GetHandle();
                         vtx_offsets[i]    = draw_data.vtx_views[i].offset;
@@ -829,7 +829,7 @@ namespace Moer::Render {
                                               std::span<VkDeviceSize>(vtx_offsets.data(),
                                                                       draw_data.vtx_cnt));
                 }
-               
+
                 // uint vtx_offset = draw_data.vtx_cnt != 0 ? draw_data.vtx_views[0].offset / draw_data.vtx_views[0].buffer->GetStride() : 0;
 
                 std::visit(
@@ -892,6 +892,8 @@ namespace Moer::Render {
             BufferView    scratch_view    = _cmd.Scratch();
             VulkanBuffer* scratch_buf     = ResourceCast(scratch_view.GetBuffer());
             uint64        scratch_address = scratch_buf->DeviceAddress();
+            //align scratch address
+            scratch_address = (scratch_address + scratch_alignment - 1) & ~(scratch_alignment - 1);
 
             build_infos.reserve(build_params.size());
             build_ranges.reserve(build_params.size());

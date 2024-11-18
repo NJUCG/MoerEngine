@@ -19,7 +19,8 @@ float4 main(PSInput input) : SV_TARGET {
     // #if VULKAN
     //     input.uv.y = 1.0 - input.uv.y;
     // #endif
-    return gui_color.Sample(linear_sampler, input.uv);
+    // return gui_color.Sample(linear_sampler, input.uv);
+    return float4(0.0, 0.0, 0.0, 0.0);
   }
   float2 scene_uv =
       (input.uv - scene_rect.min_xy) / (scene_rect.max_xy - scene_rect.min_xy);
