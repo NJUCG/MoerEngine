@@ -163,7 +163,7 @@ namespace Moer {
     void Camera::MoveForward(float delta) {
         if (Abs(delta) < EPS) return;
 
-        m_position += m_front * delta;// use m_front for more comfortable control
+        m_position += m_forward * delta;// use m_front for more comfortable control
 
         m_is_view_matrix_dirty = true;
     }
@@ -179,7 +179,7 @@ namespace Moer {
     void Camera::MoveUp(float delta) {
         if (Abs(delta) < EPS) return;
 
-        m_position += m_up * delta;
+        m_position += UP_IN_WORLD * delta;
 
         m_is_view_matrix_dirty = true;
     }
