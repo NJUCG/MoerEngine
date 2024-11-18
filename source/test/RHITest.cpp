@@ -249,11 +249,12 @@ int main(int argc, const char** argv) {
     SurfaceInitInfo surface_info("Vulkan", resolution.x, resolution.y, "RHITest", false);
     WindowContext::Init(surface_info);
 
-    auto&&                   scope_exit = OnScopeExit([&] {
+    auto&& scope_exit_window_context_and_etc = OnScopeExit([&] {
         WindowContext::ShutDown();
         RenderDevice::Dispose();
         TaskSystem::ShutDown();
     });
+
     Moer::Render::UIRenderer gui(device);
 
     auto* window_handle = WindowContext::GetMainWindow();
@@ -319,7 +320,7 @@ int main(int argc, const char** argv) {
 
     DepthBufferRef depth = device.CreateDepthBuffer(
         Extent2D(resolution.x, resolution.y),
-          PF_D32_SFLOAT_S8_UINT);
+        PF_D32_SFLOAT_S8_UINT);
 
     TextureRef output = device.CreateTexture(
         Extent2D(resolution.x, resolution.y),
@@ -410,13 +411,13 @@ int main(int argc, const char** argv) {
     gfx_queue.Sync();
 
     Resource::LoaderInterface::LoadSceneFromFileAsync(ConfigManager::GetInstance().GetScenePath(), scene);
-    OnScopeExit([&] {
+    auto&& scope_exit_reset_async_load_info = OnScopeExit([&] {
         Scene::ResetAsyncLoadInfo();
     });
+
     FenceRef timeline   = device.CreateFence();
     uint64   time       = 0;
     bool     first_load = true;
-
 
     // uint bdls_tex_handle_depth   = bindless_array->AllocateTexture(depth, sampler);
     uint bdls_tex_handle_vbuffer = 0;
@@ -444,7 +445,7 @@ int main(int argc, const char** argv) {
                 instance_buffer_handle = bindless_array->AllocateBuffer(scene->GetBuffer(EGpuSceneResource::InstanceInfo)->GetView());
                 material_buffer_idx    = bindless_array->AllocateBuffer(scene->GetBuffer(EGpuSceneResource::MaterialInfo)->GetView());
 
-                first_load = false;
+                first_load              = false;
                 bdls_tex_handle_vbuffer = bindless_array->AllocateTexture(vbuffer, sampler);
                 bdls_tex_handle_normal  = bindless_array->AllocateTexture(normal, sampler);
                 bdls_tex_handle_uv      = bindless_array->AllocateTexture(uv, sampler);
@@ -453,7 +454,7 @@ int main(int argc, const char** argv) {
                 // gfx_queue.Wait({uint64(copy_queue_timeline.Get()), copy_timeline->GetValue()});
                 // gfx_queue.Sync();
             }
-            
+
             auto camera_entity = scene->GetCameras()[0];
             auto camera        = CameraManager::Get().Get(camera_entity);
             camera->Tick();
