@@ -72,7 +72,7 @@ namespace Moer::Render {
         void*                                       p_user_data) {
 
         std::stringstream stream;
-        stream << "[" << p_callback_data->messageIdNumber << "]\n\t[" << p_callback_data->pMessageIdName << "]:\n\t\t " << p_callback_data->pMessage << std::endl;
+        stream << "[" << p_callback_data->messageIdNumber << "]\n\t[" << p_callback_data->pMessageIdName << "]:\n\t\t " << p_callback_data->pMessage;
 
         if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT) {
             LOG_DEBUG(stream.str());
