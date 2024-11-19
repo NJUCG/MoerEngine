@@ -23,6 +23,7 @@
 
 #include <serialize/Serializer.h>
 #include <span>
+#include <sstream>
 namespace Moer {
 
     class MaterialSystem {
@@ -174,7 +175,8 @@ namespace Moer {
         Timer timer;
         timer.Start();
         std::ifstream fs(_path, std::ios::binary);
-        InputStream   stream(fs);
+
+        InputStream stream(fs);
 
         SceneData scene_data;
 

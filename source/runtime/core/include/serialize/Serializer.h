@@ -52,8 +52,12 @@ namespace Moer {
             size_t size;
             *this >> size;
             _value.resize(size);
-            for (auto& v : _value) {
-                *this >> v;
+            if constexpr (HasInputStreamOverloadFunction<T>::value) {
+                for (auto& v : _value) {
+                    *this >> v;
+                }
+            } else {
+                m_stream.read(reinterpret_cast<char*>(_value.data()), size * sizeof(T));
             }
             return *this;
         }
