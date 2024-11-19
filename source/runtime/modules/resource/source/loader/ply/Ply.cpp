@@ -147,12 +147,13 @@ namespace Moer::Resource {
         Transform world_transform(Vector3f(0, 0, 5), Vector3f(1), Quaternion(1, 0, 0, 0));
         float     tan_fovx = std::tan(Angle::DegreeToRadian(45.f) / 2.0);
         float     tan_fovy = tan_fovx * 1080.f / 1920.f;
-
-        camera->SetWorldTransform(world_transform);
-        camera->SetNearClip(1000.f);
-        camera->SetFarClip(0.1f);
-        camera->SetFov(Angle::RadianToDegree(std::atan(tan_fovy) * 2.0f));
-        camera->SetAspectRatio(1920.f / 1080.f);
+        camera->Initialize(
+            world_transform,
+            Angle::RadianToDegree(std::atan(tan_fovy) * 2.0f),
+            1920.f / 1080.f,
+            0.1f,
+            1000.0f// default value, identical with gltf parser
+        );
         m_scene->AddCamera(camera_entity);
         precomputeCov3D();
     }

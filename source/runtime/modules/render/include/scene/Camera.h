@@ -77,19 +77,30 @@ namespace Moer {
 
         // MARK: Setter
 
-        void SetWorldTransform(const Transform& to_world_transform) noexcept;
-
         void SetProjectionFactor(float fov_y, float aspect_ratio, float near_clip, float far_clip) noexcept;
         void SetFov(float f) noexcept;
         void SetAspectRatio(float aspect_ratio) noexcept;
         void SetNearClip(float near_clip) noexcept;
         void SetFarClip(float far_clip) noexcept;
 
-        // MARK: Others
+        void SetWorldTransform(const Transform& to_world_transform) noexcept;
+
+        /**
+         * ## Initialize the camera
+         */
+        void Initialize(const Transform& to_world_transform, float fov_y, float aspect_ratio, float near_clip, float far_clip);
+
+        /**
+         * ## Initialize the camera
+         */
+        void Initialize(Vector3f position, float yaw, float pitch, float fov_y, float aspect_ratio, float near_clip, float far_clip);
+
+        /**
+         * ## Update the camera based on input per frame
+         */
+        void Tick();//update camera per frame
 
         bool IsDirty() const;//judge if camera changed compared to last frame
-
-        void Tick();//update camera per frame
 
         static CountableRef<Camera> CreateDefaultCamera();// Create a default camera for the scene. Usually called in resource loader
 
@@ -99,9 +110,16 @@ namespace Moer {
         std::string ToString();
 
     private:
-        // void UpdateCalculatedValues();
+        /**
+         * ## Update the camera based on position/rotation/fov/aspect_ratio/near_clip/far_clip
+         * 
+         * If you want to update all derived properties, set `is_ignore_dirty_flags_and_update_all` to true
+         * If you want a better performance and dirty flags are correct, set `is_ignore_dirty_flags_and_update_all` to false
+         * You can call `UpdateAllDerivedProperties(true)` to initialize the camera
+         */
+        void UpdateAllDerivedProperties();
 
-        void UpdateDerivedProperties();
+        void UpdateVectors();
         void UpdateViewMatrix();
         void UpdateProjectionMatrix();
         void UpdateViewProjectionMatrix();
@@ -110,7 +128,7 @@ namespace Moer {
         void MoveForward(float);
         void MoveRight(float);
         void MoveUp(float);
-        void UpdateRotation(float, float);
+        void ApplyRotation(float, float);
 
     private:
         // MARK: camera control
@@ -128,12 +146,15 @@ namespace Moer {
         // MARK: origin properties
         // (human readable properties)
 
+        bool     m_is_position_modified = false;
         Vector3f m_position;
+        bool     m_is_rotation_modified = false;
         float    m_yaw;  // degree
         float    m_pitch;// degree
 
         // MARK: options
 
+        bool  m_is_options_modified = false;
         float m_fov_y;// degree
         float m_aspect_ratio;
         float m_near_clip;
@@ -151,13 +172,11 @@ namespace Moer {
         Vector3f m_forward;// = normalize(cross(UP_IN_WORLD, m_right))
         // front vs. forward: forward parallel to the XZ plane; front is the direction the camera is facing
 
-        bool     m_is_planes_and_frustum_dirty = true;
         Vector4f m_planes[6];
         Vector4f m_frustum;
 
         // MARK: derived matrices
 
-        bool       m_is_view_matrix_dirty = true;
         Matrix4x4f m_view_matrix;
         Matrix4x4f m_view_matrix_inv;
         Matrix4x4f m_view_matrix_rotate_submatrix;
@@ -165,11 +184,9 @@ namespace Moer {
         // Matrix4x4f m_view_matrix_translate_submatrix;     // no need
         // Matrix4x4f m_view_matrix_translate_submatrix_inv; // no need
 
-        bool       m_is_projection_matrix_dirty = true;
         Matrix4x4f m_projection_matrix;
         Matrix4x4f m_projection_matrix_inv;
 
-        bool       m_is_view_projection_matrix_dirty = true;
         Matrix4x4f m_view_projection_matrix;
         Matrix4x4f m_view_projection_matrix_inv;
     };

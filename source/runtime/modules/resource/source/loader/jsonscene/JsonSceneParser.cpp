@@ -449,11 +449,13 @@ namespace Moer::Resource::JsonScene {
         // load all the parameter into camera
         float distToFilm = 1.0f / tan(xfov * PI / 360);
         float yfov       = AI_RAD_TO_DEG(2 * atan(tan(AI_DEG_TO_RAD(xfov) / 2) / aspect_ratio));
-        camera->SetFov(yfov);
-        camera->SetAspectRatio(aspect_ratio);
-        camera->SetWorldTransform(transform);
-        camera->SetNearClip(distToFilm);
-        camera->SetFarClip(1000.0f);// default value, identical with gltf parser
+        camera->Initialize(
+            transform,
+            yfov,
+            aspect_ratio,
+            distToFilm,
+            1000.0f// default value, identical with gltf parser
+        );
         dst.scn_dat->m_cameras.push_back(camera);
         return true;
     }

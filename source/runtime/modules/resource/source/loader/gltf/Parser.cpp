@@ -264,11 +264,12 @@ namespace Moer::Resource::Gltf {
                 // The interpretation of 'mHorizontalFOV' is inconsistent among gltf2, fbx, and the documentation in the official Assimp version (5.4.2).
                 // In this project, we ensure 'mHorizontalFOV' is the 'half' of the horizontal field of view angle (at least in GLTF2 and FBX).
                 float full_yfov_deg = AI_RAD_TO_DEG(2 * atan(tan(camera->mHorizontalFOV) / camera->mAspect));
-                camera_ref->SetFov(full_yfov_deg);
-                camera_ref->SetWorldTransform(transform);
-                camera_ref->SetNearClip(camera->mClipPlaneNear);
-                camera_ref->SetFarClip(camera->mClipPlaneFar);
-                camera_ref->SetAspectRatio(camera->mAspect);
+                camera_ref->Initialize(
+                    transform,
+                    full_yfov_deg,
+                    camera->mAspect,
+                    camera->mClipPlaneNear,
+                    camera->mClipPlaneFar);
                 m_scene_data->m_cameras.push_back(camera_ref);
 
                 // LOG_INFO("Camera: {}", camera_ref->ToString());
