@@ -222,4 +222,13 @@ float GetSpecularLobeHalfAngle(float linear_roughness,
 }
 } // namespace ImportanceSampling
 
+namespace DeferedRendering{
+float3 PackNormal(float3 n) {
+  return n * 0.5 + 0.5;
+}
+float3 UnpackNormal(float3 n) {
+  return n * 2 - 1;
+}
+} // namespace DeferedRendering
+
 #endif

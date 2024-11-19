@@ -14,7 +14,17 @@ namespace Moer {
 
         Vector3f GetDirection() const noexcept { return m_direction; }
         void     SetDirection(Vector3f direction) noexcept { m_direction = direction; }
-
+        //Todo Handle Position for Shadow Map
+        LightComponentData ToData() const noexcept override {
+            LightComponentData data;
+            data.color      = GetColor();
+            data.intensity  = GetIntensity();
+            data.position   = Vector3f(0.0f);
+            data.direction  = m_direction;
+            data.info       = Vector4f(0.0f, 0.0f, 0.0f, 0.0f);
+            data.type       = static_cast<uint32_t>(GetType());
+            return data;
+        }
     private:
         Vector3f m_direction{};
     };

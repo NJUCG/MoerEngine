@@ -30,7 +30,16 @@ namespace Moer {
         void     SetInnerConeAngle(float inner_cone_angle) noexcept { m_inner_cone_angle = inner_cone_angle; }
         float    GetOuterConeAngle() const noexcept { return m_outer_cone_angle; }
         void     SetOuterConeAngle(float outer_cone_angle) noexcept { m_outer_cone_angle = outer_cone_angle; }
-
+        LightComponentData ToData() const noexcept override {
+            LightComponentData data;
+            data.color      = GetColor();
+            data.intensity  = GetIntensity();
+            data.position   = m_position;
+            data.direction  = m_direction;
+            data.info       = Vector4f(m_inner_cone_angle, m_outer_cone_angle, 0.0f, 0.0f);
+            data.type       = static_cast<uint32_t>(GetType());
+            return data;
+        }
     private:
         Vector3f m_position{};
         Vector3f m_direction{};

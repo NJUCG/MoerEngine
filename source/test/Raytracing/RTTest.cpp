@@ -29,6 +29,8 @@
 using namespace Moer::Render;
 using namespace Moer;
 
+
+
 struct RTViewParam {
 
     Matrix4x4f view2world;

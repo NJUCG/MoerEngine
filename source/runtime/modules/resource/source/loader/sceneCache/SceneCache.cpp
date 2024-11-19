@@ -777,9 +777,7 @@ namespace Moer {
 
         Array<LightComponentData> lights(_scene_data.m_lights.size());
         for (uint i = 0; i < _scene_data.m_lights.size(); ++i) {
-            lights[i].color     = _scene_data.m_lights[i]->GetColor();
-            lights[i].intensity = _scene_data.m_lights[i]->GetIntensity();
-            lights[i].type      = _scene_data.m_lights[i]->GetType();
+            lights[i] = _scene_data.m_lights[i]->ToData();
         }
 
         BufferRef light_buffer        = device.CreateBuffer<byte>(lights.size() * sizeof(LightComponentData), EBufferUsageFlags::UNORDERED_ACCESS);

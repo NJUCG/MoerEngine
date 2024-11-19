@@ -20,8 +20,8 @@ namespace Moer::Render {
         return impl->CreateTexture(_size, _format, _usage, _mip_cnt, _array_size);
     }
 
-    DepthBufferRef RenderDevice::CreateDepthBuffer(Extent2D _size, EPixelFormat _format, uint32_t _array_size) {
-        return impl->CreateDepthBuffer(_size, _format, _array_size);
+    DepthBufferRef RenderDevice::CreateDepthBuffer(Extent2D _size, EPixelFormat _format, uint32_t _array_size, ETextureUsageFlags _usage) {
+        return impl->CreateDepthBuffer(_size, _format, _array_size,_usage);
     }
 
     BindlessArrayRef RenderDevice::CreateBindlessArray(uint _max_size) {

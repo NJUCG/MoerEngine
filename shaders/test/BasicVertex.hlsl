@@ -10,6 +10,7 @@ struct VSInput {
 
 struct VertexOutput {
   float4 Position : SV_POSITION;
+  float3 world_positon : POSITION;
   float2 UV : TEXCOORD0;
   float3 normal : NORMAL;
   float3 tangent : TANGENT;
@@ -42,5 +43,6 @@ VertexOutput main(VSInput input, uint instance_id : SV_InstanceID) {
                                            modelInv[2].xyz)));
   output.tangent = normalize(mul(model._11_12_13, input.tangent));
   output.InstanceID = instance_id;
+  output.world_positon = mul(model, float4(input.Position, 1.0f)).xyz;
   return output;
 }

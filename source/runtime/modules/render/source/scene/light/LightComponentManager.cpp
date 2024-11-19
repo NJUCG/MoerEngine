@@ -21,6 +21,9 @@ namespace Moer {
     void LightComponentManager::Destroy(Entity _entity) noexcept {
         m_manager.RemoveComponent(_entity);
     }
+    uint LightComponentManager::GetLightCount() const noexcept {
+        return m_manager.GetComponentCount();
+    }
 
     LightComponentManager& LightComponentManager::Get() noexcept {
         static UniquePtr<LightComponentManager> m_instance = nullptr;

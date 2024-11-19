@@ -27,6 +27,7 @@ namespace Moer {
         bool       HasComponent(Entity entity) const;
         void       AddComponent(Entity entity);
         void       RemoveComponent(Entity entity);
+        uint32_t   GetComponentCount() const { return m_data.size(); }
         COMPONENT& operator[](Entity entity);
 
         using Instance = uint16_t;

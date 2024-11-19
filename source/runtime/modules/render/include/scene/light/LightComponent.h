@@ -17,6 +17,15 @@ namespace Moer {
         SPOT,
     };
 
+    struct LightComponentData {
+        Vector3f            color;
+        float               intensity;
+        uint32_t type;
+        Vector3f position;
+        Vector3f direction;
+        Vector4f info;
+    };
+
     /**
      * This class implements the light component in ECS.
      * This is the base class and should not be initialized directly.
@@ -41,6 +50,7 @@ namespace Moer {
         float               GetIntensity() const noexcept { return m_intensity; }
         void                SetIntensity(float _intensity) noexcept { m_intensity = _intensity; }
         ELightComponentType GetType() const noexcept { return m_type; }
+        virtual  LightComponentData  ToData() const noexcept = 0;
         // m_type is not settable
 
         static Array<CountableRef<LightComponent>> CreateDefaultLightComponents();
@@ -51,11 +61,7 @@ namespace Moer {
         ELightComponentType m_type;// This field is used to distinguish type when read & write
     };
 
-    struct LightComponentData {
-        Vector3f            color;
-        float               intensity;
-        ELightComponentType type;
-    };
+   
 
     using LightComponentRef = CountableRef<LightComponent>;
 

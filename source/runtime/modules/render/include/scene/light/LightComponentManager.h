@@ -17,7 +17,7 @@ namespace Moer {
         void Put(Entity _entity, LightComponentRef _light) noexcept;
         bool HasComponent(Entity _entity) const noexcept;
         void Destroy(Entity _entity) noexcept;
-
+        uint GetLightCount() const noexcept;
         static LightComponentManager& Get() noexcept;
     };
 }// namespace Moer
