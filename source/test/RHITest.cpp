@@ -360,7 +360,8 @@ int main(int argc, const char** argv) {
                               vertex_stream,
                               {RHIColorAttachmentInfo::Preset(PF_R32_UINT),
                                RHIColorAttachmentInfo::Preset(PF_R8G8B8A8_UNORM),
-                               RHIColorAttachmentInfo::Preset(PF_R32G32_SFLOAT)},
+                               RHIColorAttachmentInfo::Preset(PF_R32G32_SFLOAT),
+                              RHIColorAttachmentInfo::Preset(PF_R32G32B32A32_SFLOAT)},
                               RHIDepthStencilStateInfo::Preset<DepthStencil::DEPTH_WRITE_GREATER>(),
                               PF_D32_SFLOAT_S8_UINT);
 

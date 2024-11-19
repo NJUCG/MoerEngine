@@ -39,7 +39,6 @@ PS_OUTPUT main(PixelInput input) : SV_TARGET {
   output.normal = float4(input.normal * 0.5f + 0.5f, 1.0f);
   output.uv = input.uv;
   output.position = float4(input.world_position, 1.0f);
-   output.position = float4(input.normal * 0.5f + 0.5f, 1.0f);
 
   //printf("position: %f %f %f\n", input.world_position.x, input.world_position.y, input.world_position.z);
   return output;
