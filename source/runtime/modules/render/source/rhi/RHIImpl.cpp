@@ -13,15 +13,25 @@ namespace Moer::Render {
     }
 
     TextureRef RenderDevice::CreateTexture(Extent2D _size, EPixelFormat _format, ETextureUsageFlags _usage, uint32_t _mip_cnt, uint32_t _array_size) {
-        return impl->CreateTexture(_size, _format, _usage, _mip_cnt, _array_size);
+        ETextureDimension dim = _array_size > 1 ? ETextureDimension::TEX_2D_ARRAY : ETextureDimension::TEX_2D;
+
+        return impl->CreateTexture("User2DTexture", dim, _size, _format, _usage, _mip_cnt, _array_size);
     }
 
     TextureRef RenderDevice::CreateTexture(Extent3D _size, EPixelFormat _format, ETextureUsageFlags _usage, uint32_t _mip_cnt, uint32_t _array_size) {
-        return impl->CreateTexture(_size, _format, _usage, _mip_cnt, _array_size);
+        ETextureDimension dim = _size.z > 1 ? ETextureDimension::TEX_3D : (_array_size > 1 ? ETextureDimension::TEX_2D_ARRAY : ETextureDimension::TEX_2D);
+
+        return impl->CreateTexture("UserTexture", dim, _size, _format, _usage, _mip_cnt, _array_size);
     }
 
-    DepthBufferRef RenderDevice::CreateDepthBuffer(Extent2D _size, EPixelFormat _format, uint32_t _array_size, ETextureUsageFlags _usage) {
-        return impl->CreateDepthBuffer(_size, _format, _array_size,_usage);
+    TextureRef RenderDevice::CreateTexture(std::string_view _name, Extent3D _size, EPixelFormat _format, ETextureUsageFlags _usage, uint32_t _mip_cnt, uint32_t _array_size) {
+        ETextureDimension dim = _size.z > 1 ? ETextureDimension::TEX_3D : (_array_size > 1 ? ETextureDimension::TEX_2D_ARRAY : ETextureDimension::TEX_2D);
+
+        return impl->CreateTexture(_name, dim, _size, _format, _usage, _mip_cnt, _array_size);
+    }
+
+    DepthBufferRef RenderDevice::CreateDepthBuffer(std::string_view _name, Extent2D _size, EPixelFormat _format, uint32_t _array_size, ETextureUsageFlags _usage) {
+        return impl->CreateDepthBuffer(_name, _size, _format, _array_size, _usage);
     }
 
     BindlessArrayRef RenderDevice::CreateBindlessArray(uint _max_size) {

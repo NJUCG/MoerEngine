@@ -1438,7 +1438,10 @@ namespace Moer::Render {
                                     break;
                                 }
                                 case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE: {
-                                    uint64 src_handle = descriptor_heap.GetImageDescIdx(&std::get<TextureView>(_args[set_info.param_idx]), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+                                    VkImageLayout layout = uint(std::get<TextureView>(_args[set_info.param_idx]).GetTexture()->GetAspectFlags() & ETextureAspectFlags::DEPTH_SLICE) ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+                                    uint64 src_handle = descriptor_heap.GetImageDescIdx(&std::get<TextureView>(_args[set_info.param_idx]), layout);
                                     descriptor_heap.PushImageDesc(src_handle, _binder.binding_infos[i].offset);
                                     break;
                                 }

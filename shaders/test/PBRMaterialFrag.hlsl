@@ -95,7 +95,7 @@ struct PBRInfo {
 
  float3 WorldPosFromDepth(float depth, float2 screen_uv,float4x4 inv_view_proj) {
      float4 clip    = float4(screen_uv.x * 2.f - 1.f, 1.f - screen_uv.y * 2.f, depth, 1.0);
-     float4 world_w = mul(inv_view_proj, clip);
+     float4 world_w = mul(clip, inv_view_proj);
      float3 pos     = world_w.xyz / world_w.w;
      return pos;
  }
@@ -126,11 +126,11 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     pbrInfo.albedo = GetTextureData<float3>(mat.albedo_map, uv, base_color.xyz);
     ArrayBuffer global_params = ArrayBuffer(param.global_param_handle);
     LightingData lighting_data = global_params.Load<LightingData>(0);
-    float depth = TextureHandle(param.gbuffer_depth).Sample2D<float4>(in_uv).r;
 
+    float depth = TextureHandle(param.gbuffer_depth).Sample2D<float>(in_uv);
     //Shoude be reconstructed from depth
-    //float3 position = WorldPosFromDepth(depth, in_uv, lighting_data.inv_view_proj);
-    float3 position = TextureHandle(param.gbuffer_position).Sample2D<float3>(in_uv);
+    float3 position = WorldPosFromDepth(depth, in_uv, lighting_data.inv_view_proj);
+    // float3 position = TextureHandle(param.gbuffer_position).Sample2D<float3>(in_uv);
 
     pbrInfo.viewDir = normalize(lighting_data.camera_position - position.xyz);
     float3 color = float3(0, 0, 0);

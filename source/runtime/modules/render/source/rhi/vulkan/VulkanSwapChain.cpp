@@ -351,9 +351,7 @@ namespace Moer::Render {
                                                                ETextureUsageFlags::PRESENT,
                                                                format,
                                                                EClearAttachment{},
-                                                               {size.x, size.y, 1},
-                                                               1,
-                                                               1},
+                                                               {size.x, size.y, 1}},
                                                            &device,
                                                            images[i]);
             swapchain_views[i]    = TextureView(swapchain_textures[i]);

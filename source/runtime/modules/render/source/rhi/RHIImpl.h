@@ -764,14 +764,10 @@ namespace Moer::Render {
         virtual FenceRef  CreateFence()                                                                = 0;
         virtual BufferRef CreateBuffer(uint _element_cnt, uint _byte_stride, EBufferUsageFlags _usage) = 0;
 
-        TextureRef CreateTexture(Extent2D _size, EPixelFormat _format, ETextureUsageFlags _usage, uint32_t _mip_cnt = 1, uint32_t _array_size = 1) {
-            return CreateTexture(Extent3D{_size.width, _size.height, 1}, _format, _usage, _mip_cnt, _array_size);
-        };
+        virtual TextureRef CreateTexture(std::string_view _name, ETextureDimension _dimension, Extent3D _size, EPixelFormat _format, ETextureUsageFlags _usage, uint32_t _mip_cnt = 1, uint _array_size = 1) = 0;
 
-        virtual TextureRef CreateTexture(Extent3D _size, EPixelFormat _format, ETextureUsageFlags _usage, uint32_t _mip_cnt = 1, uint32_t _array_size = 1) = 0;
-
-        DepthBufferRef CreateDepthBuffer(Extent2D _size, EPixelFormat _format, uint32_t _array_size = 1,ETextureUsageFlags _usage = ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT) {
-            return DepthBufferRef(MoerNew(DepthBuffer)(CreateTexture(_size, _format, ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT, 1, _array_size)));
+        DepthBufferRef CreateDepthBuffer(std::string_view _name, Extent2D _size, EPixelFormat _format, uint32_t _array_size = 1, ETextureUsageFlags _usage = ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT) {
+            return DepthBufferRef(MoerNew(DepthBuffer)(CreateTexture(_name, ETextureDimension::TEX_2D, _size, _format, _usage, 1, _array_size)));
         }
 
         virtual BindlessArrayRef CreateBindlessArray(uint _max_size) = 0;

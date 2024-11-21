@@ -187,11 +187,11 @@ namespace Moer {
         Moer::Array<Moer::Array<uint32_t>>                  batch_indices;
 
         {
-            auto * indices  = & batch_indices.emplace_back();
+            auto* indices  = &batch_indices.emplace_back();
             int   cur_size = 0;
             for (int i = 0; i < builders.size(); i++) {
                 if (cur_size + builders[i].m_data_size > batch_size) {
-                    indices = &batch_indices.emplace_back();
+                    indices  = &batch_indices.emplace_back();
                     cur_size = 0;
                 }
                 cur_size += builders[i].m_data_size;
@@ -208,7 +208,7 @@ namespace Moer {
             int count = 0;
             for (auto& indice : indices) {
                 auto& builder            = builders[indice];
-                textures[builder.m_name] = device.CreateTexture(Extent2D{builder.m_width, builder.m_height}, builder.m_format, ETextureUsageFlags::SAMPLED | ETextureUsageFlags::SRGB | ETextureUsageFlags::TRANSFER_DST, builder.m_mip_levels, builder.m_layer_levels);
+                textures[builder.m_name] = device.CreateTexture(builder.m_name, Extent2D{builder.m_width, builder.m_height}, builder.m_format, ETextureUsageFlags::SAMPLED | ETextureUsageFlags::SRGB | ETextureUsageFlags::TRANSFER_DST, builder.m_mip_levels, builder.m_layer_levels);
                 // staging_buffers[count] = device.CreateBuffer<byte>(builder.m_data_size, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
                 auto   target_texture = textures[builder.m_name];
                 uint64 offset         = 0;

@@ -29,8 +29,6 @@
 using namespace Moer::Render;
 using namespace Moer;
 
-
-
 struct RTViewParam {
 
     Matrix4x4f view2world;
@@ -111,6 +109,7 @@ public:
         uint2  rect;
         float2 inv_rect;
         float2 jitter;
+        uint   frame_idx;
     };
     DEFINE_COMPUTE_PIPELINE_CLASS(TestInlineRTShader);
 
@@ -272,36 +271,34 @@ int main(int argc, const char** argv) {
     uint64 time     = 0ull;
 
     TextureRef out_normal = device.CreateTexture(
-        Extent2D(resolution.x, resolution.y),
+        "out_normal",
+        Extent3D(resolution.x, resolution.y),
         PF_R8G8B8A8_UNORM,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
 
     TextureRef out_color = device.CreateTexture(
-        Extent2D(resolution.x, resolution.y),
+        "out_color",
+        Extent3D(resolution.x, resolution.y),
         PF_R8G8B8A8_UNORM,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
 
     TextureRef out_position = device.CreateTexture(
+        "out_position",
         Extent2D(resolution.x, resolution.y),
         PF_R32G32B32A32_SFLOAT,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
 
     TextureRef out_direct_lighting = device.CreateTexture(
+        "out_direct_lighting",
         Extent2D(resolution.x, resolution.y),
         PF_R8G8B8A8_UNORM,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
 
     TextureRef scene_color = device.CreateTexture(
+        "scene_color",
         Extent2D(resolution.x, resolution.y),
         PF_R8G8B8A8_SRGB,
         ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED);
-
-    out_normal->SetName("out_normal");
-    out_color->SetName("out_color");
-    out_position->SetName("out_position");
-    out_direct_lighting->SetName("out_direct_lighting");
-
-    scene_color->SetName("scene_color");
 
     RTUI rt_ui{gui};
 
@@ -341,46 +338,46 @@ int main(int argc, const char** argv) {
             sc->Recreate(sc_info);
 
             output = device.CreateTexture(
+                "output",
                 Extent2D(resolution.x, resolution.y),
                 PF_R8G8B8A8_SRGB,
                 ETextureUsageFlags::COLOR_ATTACHMENT);
 
             out_position = device.CreateTexture(
+                "out_position",
                 Extent2D(resolution.x, resolution.y),
                 PF_R32G32B32A32_SFLOAT,
                 ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
 
             out_color = device.CreateTexture(
+                "out_color",
                 Extent2D(resolution.x, resolution.y),
                 PF_R8G8B8A8_UNORM,
                 ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
 
             out_normal = device.CreateTexture(
+                "out_normal",
                 Extent2D(resolution.x, resolution.y),
                 PF_R8G8B8A8_UNORM,
                 ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
 
             out_direct_lighting = device.CreateTexture(
+                "out_direct_lighting",
                 Extent2D(resolution.x, resolution.y),
                 PF_R8G8B8A8_UNORM,
                 ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
 
             scene_color = device.CreateTexture(
+                "scene_color",
                 Extent2D(resolution.x, resolution.y),
                 PF_R8G8B8A8_SRGB,
                 ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED);
 
             ui_frame_buffer = device.CreateTexture(
+                "ui_frame_buffer",
                 Extent2D(resolution.x, resolution.y),
                 PF_R8G8B8A8_SRGB,
                 ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED);
-
-            out_normal->SetName("out_normal");
-            out_color->SetName("out_color");
-            out_position->SetName("out_position");
-            out_direct_lighting->SetName("out_direct_lighting");
-            ui_frame_buffer->SetName("ui_frame_buffer");
-            scene_color->SetName("scene_color");
         }
 
         if (Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady()) {
@@ -493,6 +490,7 @@ int main(int argc, const char** argv) {
             param.rect                    = uint2(resolution.x, resolution.y);
             param.inv_rect                = float2(1.f / resolution.x, 1.f / resolution.y);
             param.jitter                  = float2(0, 0);
+            param.frame_idx               = time;
 
             cmd_list.Compute(rt_shader, param, rt_config_param_buffer, out_normal, out_color, out_position, out_direct_lighting, bindless_array, rt_scene)
                 .Dispatch(uint3((resolution.x + 15) >> 4, (resolution.y + 15) >> 4, 1), "Primary Ray");

@@ -217,11 +217,11 @@ namespace Moer::Render {
         //GFX PASS LAYOUTS
         VK_IMAGE_LAYOUT_UNDEFINED,
         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        VK_IMAGE_LAYOUT_GENERAL,
+        VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
         VK_IMAGE_LAYOUT_GENERAL,
         VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
         VK_IMAGE_LAYOUT_GENERAL,
-        VK_IMAGE_LAYOUT_GENERAL,
+        VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
         //COMPUTE PASS LAYOUTS
         VK_IMAGE_LAYOUT_UNDEFINED,
         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
@@ -229,7 +229,7 @@ namespace Moer::Render {
         VK_IMAGE_LAYOUT_GENERAL,
         VK_IMAGE_LAYOUT_GENERAL,
         VK_IMAGE_LAYOUT_GENERAL,
-        VK_IMAGE_LAYOUT_GENERAL,
+        VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
         //RAYTRACING PASS LAYOUTS
         VK_IMAGE_LAYOUT_UNDEFINED,
         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
@@ -237,7 +237,7 @@ namespace Moer::Render {
         VK_IMAGE_LAYOUT_GENERAL,
         VK_IMAGE_LAYOUT_GENERAL,
         VK_IMAGE_LAYOUT_GENERAL,
-        VK_IMAGE_LAYOUT_GENERAL};
+        VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
 
     static constexpr VkAccessFlags2 tex_read_access_rules[] = {
         //GFX PASS ACCESS
@@ -297,7 +297,7 @@ namespace Moer::Render {
 
         auto index      = static_cast<uint32>(_state);
         auto pass_index = static_cast<uint32>(_state) + uint32(ETextureState::Num) * uint32(_type);
-        if (_texture->GetAspectFlags() == ETextureAspectFlags::DEPTH_SLICE) {
+        if (uint(_texture->GetAspectFlags() & ETextureAspectFlags::DEPTH_SLICE) != 0u) {
             return {tex_read_access_rules[pass_index], depth_read_layout_rules[pass_index], tex_read_stage_rules[pass_index]};
         }
 

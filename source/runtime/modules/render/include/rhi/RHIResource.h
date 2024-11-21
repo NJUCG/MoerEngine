@@ -741,14 +741,16 @@ namespace Moer::Render {
             EClearAttachment   _clear_attachment,
             Extent3D           _extent,
             uint8_t            _num_mips    = 1u,
+            uint8              _array_size  = 1u,
             uint8_t            _num_samples = 1u)
             : dimension(_dimension),
               usage(_usage),
               format(_format),
               clear_attachment(_clear_attachment),
               extent(_extent.x, _extent.y),
-              depth(_extent.z),
+              depth(_extent.z == 0 ? 1 : _extent.z),
               num_mips(_num_mips),
+              array_size(_array_size),
               num_samples(_num_samples) {}
 
         ETextureUsageFlags usage = ETextureUsageFlags::UNDEFINED;

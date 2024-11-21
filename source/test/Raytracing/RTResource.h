@@ -1,6 +1,7 @@
 #ifndef MOER_RT_RESOURCE_H
 #define MOER_RT_RESOURCE_H
 
+#include "misc/STL.h"
 #include "rhi/RHIResource.h"
 #include <filesystem>
 #include <string_view>
@@ -19,6 +20,8 @@ namespace Moer::Render {
     private:
         bool                  b_loaded;
         std::filesystem::path resource_path;
+
+        UnorderedMap<std::string, TextureRef> textures;
     };
 }// namespace Moer::Render
 

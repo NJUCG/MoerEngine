@@ -71,8 +71,9 @@ namespace Moer::Render {
         PipelineHandle CreatePipeline(GfxPsoCreateInfo&& _pso_info, PipelineShaderInfo&& _shaders) override;
         PipelineHandle CreatePipeline(PipelineShaderInfo&& _shaders) override;
 
-        TextureRef CreateTexture(Extent3D _size, EPixelFormat _format, ETextureUsageFlags _usage, uint32_t _mip_cnt, uint32_t _array_size) override;
-        BufferRef  CreateBuffer(uint _element_cnt, uint _byte_stride, EBufferUsageFlags _usage) override;
+        TextureRef CreateTexture(std::string_view _name, ETextureDimension _dimension, Extent3D _size, EPixelFormat _format, ETextureUsageFlags _usage, uint32_t _mip_cnt, uint _array_size) override;
+
+        BufferRef CreateBuffer(uint _element_cnt, uint _byte_stride, EBufferUsageFlags _usage) override;
 
         BindlessArrayRef CreateBindlessArray(uint _max_size) override;
         FenceRef         CreateFence() override;

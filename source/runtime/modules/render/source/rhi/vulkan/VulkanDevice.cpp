@@ -2,6 +2,7 @@
 // Created by 74535 on 2023/10/2.
 //
 
+#include <string_view>
 #include <volk.h>
 #include "VulkanMacroUtils.h"
 #include "VulkanExtension.h"
@@ -1309,18 +1310,20 @@ namespace Moer::Render {
 
     CopyQueue& VulkanDevice::GetCopyQueue() { return *copy_queue; }
 
-    TextureRef VulkanDevice::CreateTexture(Extent3D _size, EPixelFormat _format, ETextureUsageFlags _usage, uint32_t _mip_cnt, uint32_t _array_size) {
+    TextureRef VulkanDevice::CreateTexture(std::string_view _name, ETextureDimension _dimension, Extent3D _size, EPixelFormat _format, ETextureUsageFlags _usage, uint32_t _mip_cnt, uint32_t _array_size) {
 
         bool        b_depth = uint(ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT & _usage) != 0;
         TextureInfo info{
-            _size.z == 1 ? ETextureDimension::TEX_2D : ETextureDimension::TEX_3D,
+            _dimension,
             _usage,
             _format,
             b_depth ? EClearAttachment::DEPTH_STENCIL : EClearAttachment::COLOR,
             _size,
             uint8(_mip_cnt),
+            uint8(_dimension == ETextureDimension::TEX_CUBE ? 6 : 1),
             1};
         info.aspect_flags = b_depth ? ETextureAspectFlags::DEPTH_SLICE : ETextureAspectFlags::COLOR;
+        info.debug_name   = _name;
 
         return TextureRef{MoerNew(VulkanTexture)(info, this)};
     }

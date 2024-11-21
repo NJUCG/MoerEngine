@@ -294,7 +294,11 @@ namespace Moer::Render {
 
         RENDER_API TextureRef CreateTexture(Extent3D _size, EPixelFormat _format, ETextureUsageFlags _usage, uint32_t _mip_cnt = 1, uint32_t _array_size = 1);
 
-        RENDER_API DepthBufferRef CreateDepthBuffer(Extent2D _size, EPixelFormat _format, uint32_t _array_size = 1,ETextureUsageFlags _usage = ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT);
+        RENDER_API TextureRef CreateTexture(std::string_view _name, Extent3D _size, EPixelFormat _format, ETextureUsageFlags _usage, uint32_t _mip_cnt = 1, uint32_t _array_size = 1);
+
+        RENDER_API TextureRef CreateCubeMap(std::string_view _name, Extent2D _size, EPixelFormat _format, ETextureUsageFlags _usage, uint32_t _mip_cnt = 1);
+
+        RENDER_API DepthBufferRef CreateDepthBuffer(std::string_view _name, Extent2D _size, EPixelFormat _format, uint32_t _array_size = 1, ETextureUsageFlags _usage = ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT);
 
         RENDER_API BindlessArrayRef CreateBindlessArray(uint _max_size = 5000);
         // BackBufferInfo GetNextBackBufferInfo(RHIViewport* _viewport);

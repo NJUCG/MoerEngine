@@ -1505,7 +1505,11 @@ namespace Moer::Render {
 
         VmaAllocator allocator = m_device->GetVmaAllocator();
         VK_CHECK_RESULT(vmaCreateImage(allocator, &image_create_info, &alloc_create_info, &m_alloc.image, &m_alloc.alloc, nullptr));
-        SetName("UserTexture");
+        if(!_info.debug_name.has_value()){
+            SetName("UserTexture");
+        }else{
+            SetName(_info.debug_name->c_str());
+        }
     }
 
     VkImageView VulkanTexture::GetView(uint _mip_level, uint _mip_cnt) {
@@ -1522,7 +1526,7 @@ namespace Moer::Render {
         view_create_info.subresourceRange.baseMipLevel   = _mip_level;
         view_create_info.subresourceRange.levelCount     = _mip_cnt;
         view_create_info.subresourceRange.baseArrayLayer = 0;
-        view_create_info.subresourceRange.layerCount     = 1;
+        view_create_info.subresourceRange.layerCount     = GetNumArray();
         view_create_info.pNext                           = nullptr;
         view_create_info.flags                           = 0;
 
@@ -1560,7 +1564,7 @@ namespace Moer::Render {
         buffer_create_info.pNext       = nullptr;
 
         VmaAllocationCreateInfo alloc_create_info{};
-        alloc_create_info.flags = 0;
+        alloc_create_info.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT ;
         alloc_create_info.usage = VulkanMemoryManager::MEGenerateVmaMemoryUsage();
 
         VmaAllocator allocator = m_device->GetVmaAllocator();
@@ -1863,7 +1867,14 @@ namespace Moer::Render {
         for (const auto& texture : _textures_allocated) {
             VulkanTexture* vk_texture   = ResourceCast(texture.texture);
             TextureView   view(vk_texture,0, vk_texture->GetNumMips());
-            uint src_idx = g_heap.GetImageDescIdx(&view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            uint src_idx ;
+            if(uint(vk_texture->GetAspectFlags() & ETextureAspectFlags::DEPTH_SLICE) != 0){
+                // view.aspect_flags = ETextureAspectFlags::COLOR;
+                src_idx = g_heap.GetImageDescIdx(&view, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+
+            } else{ 
+                src_idx = g_heap.GetImageDescIdx(&view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            }
             texture_copies.push_back({src_idx, texture.slot});
         }
 

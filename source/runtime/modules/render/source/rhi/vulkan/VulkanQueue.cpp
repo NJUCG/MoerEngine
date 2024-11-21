@@ -1588,6 +1588,9 @@ namespace Moer::Render {
 
             auto current_timeline = ++last_frame;
             queue.Signal(timeline, current_timeline, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+            if (current_timeline > 1) {
+                queue.Wait(timeline, current_timeline - 1, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT);
+            }
             for (auto& evt : _evt.wait_events) {
                 queue.Wait(reinterpret_cast<VulkanFence*>(evt.timeline_handle), evt.value);
             }
