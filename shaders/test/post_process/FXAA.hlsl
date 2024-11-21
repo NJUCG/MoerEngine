@@ -18,7 +18,7 @@ struct Constant {
 };
 
 // const static float fxaa_contrast_threshold = 0.0312;
-const static float fxaa_contrast_threshold = 0.1;
+const static float fxaa_contrast_threshold = 0.025;
 const static uint fxaa_search_times = 10;
 const static uint fxaa_search_limit = 8;
 
@@ -28,9 +28,11 @@ float get_luminance(float2 uv) {
     return TextureHandle(param.input_image).Sample2D<float4>(uv).a;
 }
 
-float3 fxaa(float2 uv, float3 color, float M) {
+float3 lerp_color(float2 uv1, float2 uv2, float t) {
+    return lerp(TextureHandle(param.input_image).Sample2D<float4>(uv1).rgb, TextureHandle(param.input_image).Sample2D<float4>(uv2).rgb, t);
+}
 
-    if (param.fxaa_mode == 3) return float3(M, M, M); // output luminance
+float3 fxaa(float2 uv, float3 color, float M) {
 
     // 1. check contrast
     float2 delta = 1.0 / param.resolution;
@@ -44,8 +46,7 @@ float3 fxaa(float2 uv, float3 color, float M) {
     float contrast = max_luminance - min_luminance;
 
     // cross filter (edge extraction)
-    if (param.fxaa_mode == 4) return float3(contrast * 3.0, contrast * 3.0, contrast * 3.0);
-    else if (param.fxaa_mode == 5) return (contrast <= fxaa_contrast_threshold ? float3(0.0, 0.0, 0.0) : color);
+    if (param.fxaa_mode == 3) return (contrast <= fxaa_contrast_threshold ? float3(0.0, 0.0, 0.0) : color);
 
     if (contrast <= fxaa_contrast_threshold) return color;
 
@@ -81,7 +82,9 @@ float3 fxaa(float2 uv, float3 color, float M) {
     }
 
     // 4. blend
-    if (param.fxaa_mode == 2) return TextureHandle(param.input_image).Sample2D<float4>(uv + pixel_step * blend).rgb;
+    // if (param.fxaa_mode == 1) return TextureHandle(param.input_image).Sample2D<float4>(uv + pixel_step * blend).rgb;
+    if (param.fxaa_mode == 1) return lerp_color(uv, uv + pixel_step, blend);
+    // assert param.fxaa_mode == 2
 
     float positive = abs((is_edge_horizontal ? N : E) - M);
     float negative = abs((is_edge_horizontal ? S : W) - M);
@@ -103,7 +106,7 @@ float3 fxaa(float2 uv, float3 color, float M) {
     float i;
     
     // positive
-    for (i = 1.0; i < fxaa_search_times; i += 1.0) {
+    for (i = 1.0; i <= fxaa_search_times; i += 1.0) {
         p_luminance_delta = get_luminance(uv_in_edge + i * edge_step) - edge_luminance;
         if (abs(p_luminance_delta) > gradient_threshold) {
             p_distance = i;
@@ -114,7 +117,7 @@ float3 fxaa(float2 uv, float3 color, float M) {
         p_distance = fxaa_search_limit;
     }
     // negative
-    for (i = 1.0; i < fxaa_search_times; i += 1.0) {
+    for (i = 1.0; i <= fxaa_search_times; i += 1.0) {
         n_luminance_delta = get_luminance(uv - i * edge_step) - edge_luminance;
         if (abs(n_luminance_delta) > gradient_threshold) {
             n_distance = i;
@@ -142,7 +145,8 @@ float3 fxaa(float2 uv, float3 color, float M) {
 
     float final_blend = max(blend, edge_blend);
 
-    return TextureHandle(param.input_image).Sample2D<float4>(uv + pixel_step * final_blend).rgb;
+    // return TextureHandle(param.input_image).Sample2D<float4>(uv + pixel_step * final_blend).rgb;
+    return lerp_color(uv, uv + pixel_step, final_blend);
 }
 
 float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {

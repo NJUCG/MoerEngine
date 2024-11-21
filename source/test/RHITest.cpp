@@ -631,9 +631,9 @@ int main(int argc, const char** argv) {
 
                 // input (this part code should be refactored, move to another place)
                 static uint8_t fxaa_mode = 1;
-                // 0: off; 1: fxaa(simple); 2: fxaa(complex); 3: output luminance; 4: edge extraction(luminance); 5: edge extraction(colorful)
+                // 0: off; 1: fxaa(simple); 2: fxaa(complex); 3: edge extraction;
                 if (ImGui::IsKeyPressed(ImGuiKey_M, false)) {
-                    fxaa_mode = (fxaa_mode + 1) % 6;
+                    fxaa_mode = (fxaa_mode + 1) % 4;
                 }
 
                 // param
@@ -641,6 +641,8 @@ int main(int argc, const char** argv) {
                 param.input_image = bdls_tex_handle_post_process_output;
                 param.fxaa_mode   = fxaa_mode;
                 param.resolution  = float2(resolution);
+
+                // LOG_INFO("resolution {}, {}", resolution.x, resolution.y);
 
                 // command
                 cmd_list
