@@ -365,6 +365,7 @@ int main(int argc, const char** argv) {
                                               .Pixel("test/BasicFragConstant.hlsl")
                                               .Build<TestTrianglePipelineConstColor>(std::move(pso_info));
 
+    // FIXME: vertex_full_screen_stream and vertex_stream, these two variabels have not been used in the following code
     VertexStream vertex_full_screen_stream;
     vertex_stream.EmplacePerVertex(
         {Moer::Render::VertexElement(PF_R32G32B32_SFLOAT)});
