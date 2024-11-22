@@ -2,9 +2,6 @@
   * FXAA implementation
   * Reference: https://github.com/YXHXianYu/BJTU-Game-Engine/blob/main/engine/shader/glsl/final_fxaa.frag
   *            & https://zhuanlan.zhihu.com/p/431384101
-  *
-  * TODO: An possible optimization, precompute luminance per pixel and store it.
-  *       In current implementation, luminance per pixel will be computed multiple times (10x or more!)
   */
 
 #include "framework/Bindless.hlsl"
@@ -18,11 +15,10 @@ struct Constant {
     float2 inv_resolution;
 };
 
-// const static float fxaa_contrast_threshold = 0.0312;
-const static float fxaa_contrast_threshold = 0.025;
-const static uint fxaa_search_limit = 8;
+static const float fxaa_contrast_threshold = 0.025;
+static const uint fxaa_search_limit = 8;
 
-const static float EPS = 1e-3;
+static const float Epsilon = 0.0001; // same with PBRMaterialFrag.hlsl
 
 [[vk::push_constant]] ConstantBuffer<Constant> param;
 
@@ -38,12 +34,13 @@ float4 get_rgba_lerp_by_4_uv(float2 uv00, float2 uv01, float2 uv10, float2 uv11,
     );
 }
 
+// tip: pixel center is (0.5, 0.5)
 float4 get_rgba_lerp(float2 uv) {
     float t_x = frac(uv.x * param.resolution.x);
     float t_y = frac(uv.y * param.resolution.y);
 
-    if (abs(t_x - 0.5) < EPS) { // t_x == 0.5
-        if (abs(t_y - 0.5) < EPS) { // t_x == 0.5 && t_y == 0.5
+    if (abs(t_x - 0.5) < Epsilon) { // t_x == 0.5
+        if (abs(t_y - 0.5) < Epsilon) { // t_x == 0.5 && t_y == 0.5
             return TextureHandle(param.input_image).Sample2D<float4>(uv);
         } else if (t_y < 0.5) { // t_x == 0.5 && t_y < 0.5
             return get_rgba_lerp_by_2_uv(
@@ -59,7 +56,7 @@ float4 get_rgba_lerp(float2 uv) {
             );
         }
     } else if (t_x < 0.5) { // t_x < 0.5
-        if (abs(t_y - 0.5) < EPS) { // t_x < 0.5 && t_y == 0.5
+        if (abs(t_y - 0.5) < Epsilon) { // t_x < 0.5 && t_y == 0.5
             return get_rgba_lerp_by_2_uv(
                 float2(uv.x - param.inv_resolution.x, uv.y),
                 uv,
@@ -83,7 +80,7 @@ float4 get_rgba_lerp(float2 uv) {
             );
         }
     } else { // t_x > 0.5
-        if (abs(t_y - 0.5) < EPS) { // t_x > 0.5 && t_y == 0.5
+        if (abs(t_y - 0.5) < Epsilon) { // t_x > 0.5 && t_y == 0.5
             return get_rgba_lerp_by_2_uv(
                 uv,
                 float2(uv.x + param.inv_resolution.x, uv.y),
@@ -175,6 +172,7 @@ float3 fxaa(float2 uv, float3 color, float M) {
         return get_rgba_lerp_by_2_uv(uv, uv + pixel_step, blend).rgb;
     }
     // assert param.fxaa_mode == 2
+    // Important: the following code may has some bugs, so the default fxaa_mode is 1
 
     float positive = abs((is_edge_horizontal ? N : E) - M);
     float negative = abs((is_edge_horizontal ? S : W) - M);

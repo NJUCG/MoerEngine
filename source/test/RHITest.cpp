@@ -631,8 +631,9 @@ int main(int argc, const char** argv) {
              * 1: FXAA Simple：590+-fps [Default]
              * 2: FXAA Complex：530+-fps (maybe has some bug)
              * 
-             * TODO: Use hardware leap (SF_LINEAR) instead of shader lerp. This will significantly improve the performance of fxaa
-             * TODO: Move the control (input) code to another place
+             * TODO: Use hardware leap (SF_LINEAR) instead of shader lerp. This will significantly improve the performance of fxaa.
+             *       The current sampler has a bug. The filter is SF_LINEAR, but the actual sampler is SF_NEAREST
+             * TODO: Move the control (input) code to another place (next 7-12 lines)
              */
             {
                 // draw data
