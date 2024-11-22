@@ -183,6 +183,7 @@ struct FxaaPipelineBindlessParam {
     uint   input_image;
     uint   fxaa_mode;
     float2 resolution;
+    float2 inv_resolution;
 };
 class FxaaPipeline : public RasterPipeline {
 public:
@@ -622,8 +623,17 @@ int main(int argc, const char** argv) {
                     .Draw("FXAA Precompute", Rect2D(0, 0, resolution.x, resolution.y), std::move(full_screen_draw_datas), ColorAttachment(post_process_output));
             }
 
-            // FXAA Pass
-            // Press M to switch FXAA on/off (default on)
+            /**
+             * FXAA Pass
+             * 
+             * Press M to switch FXAA mode:
+             * 0: FXAA Off：610+-fps
+             * 1: FXAA Simple：590+-fps [Default]
+             * 2: FXAA Complex：530+-fps (maybe has some bug)
+             * 
+             * TODO: Use hardware leap (SF_LINEAR) instead of shader lerp. This will significantly improve the performance of fxaa
+             * TODO: Move the control (input) code to another place
+             */
             {
                 // draw data
                 Array<SingleDrawParam> full_screen_draw_datas;
@@ -631,18 +641,17 @@ int main(int argc, const char** argv) {
 
                 // input (this part code should be refactored, move to another place)
                 static uint8_t fxaa_mode = 1;
-                // 0: off; 1: fxaa(simple); 2: fxaa(complex); 3: edge extraction;
+                // 0: off; 1: fxaa(simple); 2: fxaa(complex, maybe has some bugs);
                 if (ImGui::IsKeyPressed(ImGuiKey_M, false)) {
-                    fxaa_mode = (fxaa_mode + 1) % 4;
+                    fxaa_mode = (fxaa_mode + 1) % 3;
                 }
 
                 // param
                 FxaaPipelineBindlessParam param;
-                param.input_image = bdls_tex_handle_post_process_output;
-                param.fxaa_mode   = fxaa_mode;
-                param.resolution  = float2(resolution);
-
-                // LOG_INFO("resolution {}, {}", resolution.x, resolution.y);
+                param.input_image    = bdls_tex_handle_post_process_output;
+                param.fxaa_mode      = fxaa_mode;
+                param.resolution     = float2(resolution);
+                param.inv_resolution = float2(1.0) / float2(resolution);
 
                 // command
                 cmd_list
