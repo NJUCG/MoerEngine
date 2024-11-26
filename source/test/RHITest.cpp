@@ -627,12 +627,10 @@ int main(int argc, const char** argv) {
              * FXAA Pass
              * 
              * Press M to switch FXAA mode:
-             * 0: FXAA Off：610+-fps
-             * 1: FXAA Simple：590+-fps [Default]
-             * 2: FXAA Complex：530+-fps (maybe has some bug)
+             * 0: FXAA Off                ：645+-fps
+             * 1: FXAA Quality(Simplified)：630+-fps
+             * 2: FXAA Quality            ：610+-fps [Default]
              * 
-             * TODO: Use hardware leap (SF_LINEAR) instead of shader lerp. This will significantly improve the performance of fxaa.
-             *       The current sampler has a bug. The filter is SF_LINEAR, but the actual sampler is SF_NEAREST
              * TODO: Move the control (input) code to another place (next 7-12 lines)
              */
             {
@@ -641,8 +639,8 @@ int main(int argc, const char** argv) {
                 full_screen_draw_datas.emplace_back(SingleDrawParam{3, 1, 0, 0, 0});
 
                 // input (this part code should be refactored, move to another place)
-                static uint8_t fxaa_mode = 1;
-                // 0: off; 1: fxaa(simple); 2: fxaa(complex, maybe has some bugs);
+                static uint8_t fxaa_mode = 2;
+                // 0: off; 1: fxaa quality(simplified); 2: fxaa quality;
                 if (ImGui::IsKeyPressed(ImGuiKey_M, false)) {
                     fxaa_mode = (fxaa_mode + 1) % 3;
                 }

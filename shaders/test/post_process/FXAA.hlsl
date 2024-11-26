@@ -22,113 +22,21 @@ static const float Epsilon = 0.0001; // same with PBRMaterialFrag.hlsl
 
 [[vk::push_constant]] ConstantBuffer<Constant> param;
 
-float4 get_rgba_lerp_by_2_uv(float2 uv, float2 uv1, float t) {
-    return lerp(TextureHandle(param.input_image).Sample2D<float4>(uv), TextureHandle(param.input_image).Sample2D<float4>(uv1), t);
-}
-
-float4 get_rgba_lerp_by_4_uv(float2 uv00, float2 uv01, float2 uv10, float2 uv11, float2 t) {
-    return lerp(
-        lerp(TextureHandle(param.input_image).Sample2D<float4>(uv00), TextureHandle(param.input_image).Sample2D<float4>(uv01), t.y),
-        lerp(TextureHandle(param.input_image).Sample2D<float4>(uv10), TextureHandle(param.input_image).Sample2D<float4>(uv11), t.y),
-        t.x
-    );
-}
-
-// tip: pixel center is (0.5, 0.5)
-float4 get_rgba_lerp(float2 uv) {
-    float t_x = frac(uv.x * param.resolution.x);
-    float t_y = frac(uv.y * param.resolution.y);
-
-    if (abs(t_x - 0.5) < Epsilon) { // t_x == 0.5
-        if (abs(t_y - 0.5) < Epsilon) { // t_x == 0.5 && t_y == 0.5
-            return TextureHandle(param.input_image).Sample2D<float4>(uv);
-        } else if (t_y < 0.5) { // t_x == 0.5 && t_y < 0.5
-            return get_rgba_lerp_by_2_uv(
-                float2(uv.x, uv.y - param.inv_resolution.y),
-                uv,
-                0.5 + t_y
-            );
-        } else { // t_x == 0.5 && t_y > 0.5
-            return get_rgba_lerp_by_2_uv(
-                uv,
-                float2(uv.x, uv.y + param.inv_resolution.y),
-                t_y - 0.5
-            );
-        }
-    } else if (t_x < 0.5) { // t_x < 0.5
-        if (abs(t_y - 0.5) < Epsilon) { // t_x < 0.5 && t_y == 0.5
-            return get_rgba_lerp_by_2_uv(
-                float2(uv.x - param.inv_resolution.x, uv.y),
-                uv,
-                0.5 + t_x
-            );
-        } else if (t_y < 0.5) { // t_x < 0.5 && t_y < 0.5
-            return get_rgba_lerp_by_4_uv(
-                float2(uv.x - param.inv_resolution.x, uv.y - param.inv_resolution.y),
-                float2(uv.x - param.inv_resolution.x, uv.y),
-                float2(uv.x, uv.y - param.inv_resolution.y),
-                uv,
-                float2(0.5 + t_x, 0.5 + t_y)
-            );
-        } else { // t_x < 0.5 && t_y > 0.5
-            return get_rgba_lerp_by_4_uv(
-                float2(uv.x - param.inv_resolution.x, uv.y),
-                float2(uv.x - param.inv_resolution.x, uv.y + param.inv_resolution.y),
-                uv,
-                float2(uv.x, uv.y + param.inv_resolution.y),
-                float2(0.5 + t_x, t_y - 0.5)
-            );
-        }
-    } else { // t_x > 0.5
-        if (abs(t_y - 0.5) < Epsilon) { // t_x > 0.5 && t_y == 0.5
-            return get_rgba_lerp_by_2_uv(
-                uv,
-                float2(uv.x + param.inv_resolution.x, uv.y),
-                t_x - 0.5
-            );
-        } else if (t_y < 0.5) { // t_x > 0.5 && t_y < 0.5
-            return get_rgba_lerp_by_4_uv(
-                float2(uv.x, uv.y - param.inv_resolution.y),
-                uv,
-                float2(uv.x + param.inv_resolution.x, uv.y - param.inv_resolution.y),
-                float2(uv.x + param.inv_resolution.x, uv.y),
-                float2(t_x - 0.5, 0.5 + t_y)
-            );
-        } else { // t_x > 0.5 && t_y > 0.5
-            return get_rgba_lerp_by_4_uv(
-                uv,
-                float2(uv.x, uv.y + param.inv_resolution.y),
-                float2(uv.x + param.inv_resolution.x, uv.y),
-                float2(uv.x + param.inv_resolution.x, uv.y + param.inv_resolution.y),
-                float2(t_x - 0.5, t_y - 0.5)
-            );
-        }
-    }
-}
-
-float get_luminance_nearest(float2 uv) {
+float get_luminance(float2 uv) {
     return TextureHandle(param.input_image).Sample2D<float4>(uv).a;
 }
 
-float3 get_color_nearest(float2 uv) {
+float3 get_color(float2 uv) {
     return TextureHandle(param.input_image).Sample2D<float4>(uv).rgb;
-}
-
-float get_luminance_lerp(float2 uv) {
-    return get_rgba_lerp(uv).a;
-}
-
-float3 get_color_lerp(float2 uv) {
-    return get_rgba_lerp(uv).rgb;
 }
 
 float3 fxaa(float2 uv, float3 color, float M) {
 
     // 1. check contrast
-    float S = get_luminance_nearest(uv + float2(0.0, -param.inv_resolution.y));
-    float N = get_luminance_nearest(uv + float2(0.0, param.inv_resolution.y));
-    float W = get_luminance_nearest(uv + float2(-param.inv_resolution.x, 0.0));
-    float E = get_luminance_nearest(uv + float2(param.inv_resolution.x, 0.0));
+    float S = get_luminance(uv + float2(0.0, -param.inv_resolution.y));
+    float N = get_luminance(uv + float2(0.0, param.inv_resolution.y));
+    float W = get_luminance(uv + float2(-param.inv_resolution.x, 0.0));
+    float E = get_luminance(uv + float2(param.inv_resolution.x, 0.0));
 
     float max_luminance = max(M, max(S, max(N, max(W, E))));
     float min_luminance = min(M, min(S, min(N, min(W, E))));
@@ -137,10 +45,10 @@ float3 fxaa(float2 uv, float3 color, float M) {
     if (contrast <= fxaa_contrast_threshold) return color;
 
     // 2. get luminance
-    float NE = get_luminance_nearest(uv + param.inv_resolution);
-    float NW = get_luminance_nearest(uv + float2(-param.inv_resolution.x, param.inv_resolution.y));
-    float SW = get_luminance_nearest(uv - param.inv_resolution);
-    float SE = get_luminance_nearest(uv + float2(param.inv_resolution.x, -param.inv_resolution.y));
+    float NE = get_luminance(uv + param.inv_resolution);
+    float NW = get_luminance(uv + float2(-param.inv_resolution.x, param.inv_resolution.y));
+    float SW = get_luminance(uv - param.inv_resolution);
+    float SE = get_luminance(uv + float2(param.inv_resolution.x, -param.inv_resolution.y));
 
     float blend = abs((2.0 * (N + E + S + W) + NE + NW + SE + SW) / 12.0 - M) / contrast;
     blend = smoothstep(0.0, 1.0, blend);
@@ -169,7 +77,7 @@ float3 fxaa(float2 uv, float3 color, float M) {
 
     // 4. blend
     if (param.fxaa_mode == 1) {
-        return get_rgba_lerp_by_2_uv(uv, uv + pixel_step, blend).rgb;
+        return get_color(uv + pixel_step * blend);
     }
     // assert param.fxaa_mode == 2
     // Important: the following code may has some bugs, so the default fxaa_mode is 1
@@ -198,7 +106,7 @@ float3 fxaa(float2 uv, float3 color, float M) {
     
     // positive
     for (i = 1.0; i <= fxaa_search_limit; i += 1.0) {
-        p_luminance_delta = get_luminance_lerp(uv_in_edge + i * edge_step) - edge_luminance;
+        p_luminance_delta = get_luminance(uv_in_edge + i * edge_step) - edge_luminance;
         if (abs(p_luminance_delta) > gradient_threshold) {
             p_distance = i;
             break;
@@ -206,7 +114,7 @@ float3 fxaa(float2 uv, float3 color, float M) {
     }
     // negative
     for (i = 1.0; i <= fxaa_search_limit; i += 1.0) {
-        n_luminance_delta = get_luminance_lerp(uv_in_edge - i * edge_step) - edge_luminance;
+        n_luminance_delta = get_luminance(uv_in_edge - i * edge_step) - edge_luminance;
         if (abs(n_luminance_delta) > gradient_threshold) {
             n_distance = i;
             break;
@@ -230,7 +138,7 @@ float3 fxaa(float2 uv, float3 color, float M) {
 
     float final_blend = max(blend, edge_blend);
 
-    return get_rgba_lerp_by_2_uv(uv, uv + pixel_step, final_blend).rgb;
+    return get_color(uv + pixel_step * final_blend);
 }
 
 float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
@@ -242,16 +150,6 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     if (param.fxaa_mode >= 1) {
         color = fxaa(in_uv, color, M);
     }
-
-    // { // direct
-    //     float2 uv = in_uv / float2(4.0, 4.0);
-    //     color = TextureHandle(param.input_image).Sample2D<float4>(uv).rgb;
-    // }
-
-    // { // lerp
-    //     float2 uv = in_uv / float2(4.0, 4.0);
-    //     color = get_color_lerp(uv);
-    // }
 
     return float4(color, 1.0);
 }
