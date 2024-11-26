@@ -30,30 +30,58 @@ namespace Moer::Render {
         void   DeAllocate(uint64 _handle);
     };
 
-    class VulkanAllocator : public VulkanDeviceObject {
-        constexpr static uint64_t small_block_size = 64 * 1024;
-
+    class VulkanAllocatorBase : public VulkanDeviceObject {
     public:
-        VulkanAllocator(VulkanDevice* _device, EQueueType _queue_type);
-        ~VulkanAllocator();
-        BufferView AllocateUploadBuffer(uint64 _size, uint _align);
-        BufferView AllocateReadbackBuffer(uint64 _size, uint _align);
+        VulkanAllocatorBase(VulkanDevice* _device, EQueueType _queue_type);
+        virtual ~VulkanAllocatorBase();
 
-        BufferView     AllocateScratch(uint64 _size);
-        BufferView     AllocateShaderBuffer(uint64 _size);
         VulkanCmdList& GetCmdList() {
             return cmd_list.value();
         }
         VkTracker& GetTracker() {
             return tracker;
         }
-        void ResetBufferAlloc();
         void ResetCmdList();
-        void Complete(VulkanFence* _fence, uint64 _timeline);
-        void Reset();
         void AddOnComplete(std::function<void()>&& _func) {
             on_complete.push_back(std::move(_func));
         }
+
+        virtual void Complete(VulkanFence* _fence, uint64 _timeline);
+        virtual void Reset();
+
+    protected:
+        std::optional<VulkanCmdAllocator> cmd_allocator;
+        std::optional<VulkanCmdList>      cmd_list;
+
+        Array<std::function<void()>> on_complete;
+
+        VkTracker tracker;
+    };
+
+    class VulkanPresentor : public VulkanAllocatorBase {
+    public:
+        VulkanPresentor(VulkanDevice* _device, EQueueType _queue_type);
+        virtual ~VulkanPresentor();
+
+        void Complete(VulkanFence* _fence, uint64 _timeline) override;
+    };
+
+    class VulkanAllocator : public VulkanAllocatorBase {
+        constexpr static uint64_t small_block_size = 64 * 1024;
+
+    public:
+        VulkanAllocator(VulkanDevice* _device, EQueueType _queue_type);
+        virtual ~VulkanAllocator();
+        BufferView AllocateUploadBuffer(uint64 _size, uint _align);
+        BufferView AllocateReadbackBuffer(uint64 _size, uint _align);
+
+        BufferView AllocateScratch(uint64 _size);
+        BufferView AllocateShaderBuffer(uint64 _size);
+
+        void ResetBufferAlloc();
+
+        void Complete(VulkanFence* _fence, uint64 _timeline) override;
+        void Reset() override;
         //staging buffer allocate with block strategy
     private:
         struct ScratchAllocator : VulkanDeviceObject {
@@ -99,17 +127,13 @@ namespace Moer::Render {
             void                  Reset();
             void                  Dispose();
         };
-        std::optional<VulkanCmdAllocator> cmd_allocator;
-        std::optional<VulkanCmdList>      cmd_list;
-        Array<VulkanBuffer*>              large_buffers;
-        VkTmpBufferAllocator              allocator;
+        Array<VulkanBuffer*> large_buffers;
+        VkTmpBufferAllocator allocator;
 
         StackAllocator upload_allocator;
         StackAllocator readback_allocator;
 
-        ScratchAllocator             scratch_allocator;
-        ShaderBufferAllocator        shader_buffer_allocator;
-        Array<std::function<void()>> on_complete;
-        VkTracker                    tracker;
+        ScratchAllocator      scratch_allocator;
+        ShaderBufferAllocator shader_buffer_allocator;
     };
 }// namespace Moer::Render

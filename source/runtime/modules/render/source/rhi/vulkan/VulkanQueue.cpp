@@ -1320,6 +1320,7 @@ namespace Moer::Render {
             if (_submit.callbacks.size() > 0) {
                 event_queue.emplace_back(std::move(_submit.callbacks), current_timeline, false);
             }
+            event_queue.emplace_back(PresentEvent(), current_timeline, false);
             queue_cv.notify_one();
             timer.Stop();
             // LOG_INFO("Submit time {}", timer.ElapsedMilliseconds());
@@ -1329,17 +1330,19 @@ namespace Moer::Render {
     }
 
     void VkCommandQueue::Present(SwapchainRef _sc, TextureView _view) {
-        VkSwapchain* sc           = ResourceCast(_sc.Get());
-        auto         allocator    = std::move(GetAllocator());
-        auto&        vk_allocator = *allocator;
-        auto&        vk_cmd_list  = vk_allocator.GetCmdList();
-        auto&        vk_tracker   = vk_allocator.GetTracker();
+        VkSwapchain* sc = ResourceCast(_sc.Get());
+        // auto         allocator    = std::move(GetAllocator());
+        auto presentor = std::move(GetPresentor());
+        // auto& vk_allocator = *allocator;
+        auto& vk_allocator = *presentor;
+        auto& vk_cmd_list  = vk_allocator.GetCmdList();
+        auto& vk_tracker   = vk_allocator.GetTracker();
         sc->WaitFrameInFlight();
         auto [fence, idx, present_timeline] = sc->AquireNextImage();
         if (idx == UINT32_MAX) {
             //present null
-            allocator->Reset();
-            allocators.Push(allocator.release());
+            presentor->Reset();
+            presentors.Push(presentor.release());
             return;
         }
         //copy
@@ -1380,7 +1383,7 @@ namespace Moer::Render {
         sc->Present(queue.GetHandle(), idx);
         {
             std::unique_lock<std::mutex> lock(event_mutex);
-            event_queue.emplace_back(std::move(allocator), current_timeline, true);
+            event_queue.emplace_back(std::move(presentor), current_timeline, true);
             queue_cv.notify_one();
         }
     }
@@ -1401,6 +1404,15 @@ namespace Moer::Render {
         return MakeUnique<VulkanAllocator>(&vk_device, queue.GetType());
     }
 
+    UniquePtr<VulkanPresentor> VkCommandQueue::GetPresentor() {
+        Complete(presented_frame);
+        auto presentor = std::move(UniquePtr<VulkanPresentor>(presentors.Pop()));
+        if (presentor) {
+            return std::move(presentor);
+        }
+        return MakeUnique<VulkanPresentor>(&vk_device, queue.GetType());
+    }
+
     void VkCommandQueue::ExecuteThread() {
         while (enabled) {
             uint64 timeline;
@@ -1414,11 +1426,24 @@ namespace Moer::Render {
                 }
             };
 
+            auto wait_until_reach_present_timeline = [&timeline, this]() {
+                uint64 prev_timeline = presented_frame;
+                while (prev_timeline < timeline && !presented_frame.compare_exchange_weak(prev_timeline, timeline)) {
+                    std::this_thread::yield();
+                }
+            };
+
             auto visit_allocator = [&, &allocators(this->allocators), fence(this->timeline)](UniquePtr<VulkanAllocator>& _allocator) {
                 _allocator->Complete(fence, timeline);
                 // LOG_INFO("timeline {} complete", timeline);
                 _allocator->Reset();
                 allocators.Push(_allocator.release());
+                wait_util_reach_timeline();
+            };
+            auto visit_presentor = [&, &presentors(this->presentors), fence(this->timeline)](UniquePtr<VulkanPresentor>& _presentor) {
+                _presentor->Complete(fence, timeline);
+                _presentor->Reset();
+                presentors.Push(_presentor.release());
                 wait_util_reach_timeline();
             };
             auto visit_fence = [&](FencePlaceHoler& _fence) {
@@ -1461,12 +1486,16 @@ namespace Moer::Render {
                         using TEvent = std::decay_t<decltype(_evt)>;
                         if constexpr (std::is_same_v<TEvent, UniquePtr<VulkanAllocator>>) {
                             visit_allocator(_evt);
+                        } else if constexpr (std::is_same_v<TEvent, UniquePtr<VulkanPresentor>>) {
+                            visit_presentor(_evt);
                         } else if constexpr (std::is_same_v<TEvent, FencePlaceHoler>) {
                             visit_fence(_evt);
                         } else if constexpr (std::is_same_v<TEvent, Array<std::function<void()>>>) {
                             visit_funcs(_evt);
                         } else if constexpr (std::is_same_v<TEvent, SignalEvent>) {
                             visit_signal_event(_evt);
+                        } else if constexpr (std::is_same_v<TEvent, PresentEvent>) {
+                            wait_until_reach_present_timeline();
                         }
                     },
                     evt->event);
@@ -1486,6 +1515,12 @@ namespace Moer::Render {
             std::this_thread::yield();
         }
         // vk_device.FlushDeferredReleases();
+    }
+
+    void VkCommandQueue::Present(uint64 _timeline) {
+        while (presented_frame < _timeline) {
+            std::this_thread::yield();
+        }
     }
 
     void VkCommandQueue::Signal() {

@@ -6,17 +6,63 @@
 #include "vulkan/vulkan_core.h"
 namespace Moer::Render {
 
-    VulkanAllocator::VulkanAllocator(VulkanDevice* _device, EQueueType _type) : VulkanDeviceObject(_device),
-                                                                                allocator(_device),
-                                                                                upload_allocator(&allocator, small_block_size, 1.5),
-                                                                                readback_allocator(&allocator, small_block_size, 1.5),
-                                                                                scratch_allocator(_device, &allocator),
-                                                                                shader_buffer_allocator(_device, &allocator),
-                                                                                tracker(_type) {
+    // VulkanAllocatorBase
+    VulkanAllocatorBase::VulkanAllocatorBase(VulkanDevice* _device, EQueueType _type)
+        : VulkanDeviceObject(_device),
+          tracker(_type) {
         VkQueueFlagBits queue_type = VulkanEnumTranslator::METoVKQueueFlagBits(_type);
         cmd_allocator.emplace(_device, queue_type);
         cmd_list.emplace(&cmd_allocator.value(), *_device);
     }
+
+    VulkanAllocatorBase::~VulkanAllocatorBase() {
+        cmd_list.reset();
+        cmd_allocator.reset();
+        on_complete.clear();
+        tracker.Reset();
+    }
+
+    void VulkanAllocatorBase::ResetCmdList() {
+        vkResetCommandPool(m_device->GetDevice(), cmd_allocator->GetHandle(), 0);
+    }
+
+    void VulkanAllocatorBase::Complete(VulkanFence* _fence, uint64 _wait_val) {
+        _fence->Notify(_wait_val);
+        //execute post complete functions if needed
+        for (auto& func : on_complete) {
+            func();
+        }
+        on_complete.clear();
+    }
+
+    void VulkanAllocatorBase::Reset() {
+        ResetCmdList();
+    }
+
+    // VulkanPresentor
+    VulkanPresentor::VulkanPresentor(VulkanDevice* _device, EQueueType _type)
+        : VulkanAllocatorBase(_device, _type) {}
+
+    VulkanPresentor::~VulkanPresentor() {}
+
+    void VulkanPresentor::Complete(VulkanFence* _fence, uint64 _wait_val) {
+        _fence->HostWait(_wait_val);
+        _fence->Notify(_wait_val);
+        //execute post complete functions if needed
+        for (auto& func : on_complete) {
+            func();
+        }
+        on_complete.clear();
+    }
+
+    // VulkanAllocator
+    VulkanAllocator::VulkanAllocator(VulkanDevice* _device, EQueueType _type)
+        : VulkanAllocatorBase(_device, _type),
+          allocator(_device),
+          upload_allocator(&allocator, small_block_size, 1.5),
+          readback_allocator(&allocator, small_block_size, 1.5),
+          scratch_allocator(_device, &allocator),
+          shader_buffer_allocator(_device, &allocator) {}
 
     VulkanAllocator::~VulkanAllocator() {
         upload_allocator.Dispose();
@@ -68,10 +114,6 @@ namespace Moer::Render {
         shader_buffer_allocator.Reset();
     }
 
-    void VulkanAllocator::ResetCmdList() {
-        vkResetCommandPool(m_device->GetDevice(), cmd_allocator->GetHandle(), 0);
-    }
-
     void VulkanAllocator::Complete(VulkanFence* _fence, uint64 _wait_val) {
         _fence->HostWait(_wait_val);
         _fence->Notify(std::max(_wait_val, _fence->current_value));
@@ -81,6 +123,7 @@ namespace Moer::Render {
         }
         on_complete.clear();
     }
+
     void VulkanAllocator::Reset() {
         ResetBufferAlloc();
         ResetCmdList();
