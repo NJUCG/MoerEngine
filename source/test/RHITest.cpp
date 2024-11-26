@@ -604,7 +604,7 @@ int main(int argc, const char** argv) {
                 full_screen_draw_datas.emplace_back(SingleDrawParam{3, 1, 0, 0, 0});
                 material_param.material_type = uint(type);
                 cmd_list.Gfx(pbr_pipeline, bindless_array, material_param)
-                    .Draw("Lighting", Rect2D(0, 0, resolution.x, resolution.y), std::move(full_screen_draw_datas), ColorAttachment(pbr_shading_output));
+                    .Draw("Lighting Pass", Rect2D(0, 0, resolution.x, resolution.y), std::move(full_screen_draw_datas), ColorAttachment(pbr_shading_output));
             };
 
             // Post process Pass (only for FXAA Precompute now)
@@ -620,7 +620,7 @@ int main(int argc, const char** argv) {
                 // command
                 cmd_list
                     .Gfx(post_process_pipeline, bindless_array, param)
-                    .Draw("FXAA Precompute", Rect2D(0, 0, resolution.x, resolution.y), std::move(full_screen_draw_datas), ColorAttachment(post_process_output));
+                    .Draw("FXAA Precompute Pass", Rect2D(0, 0, resolution.x, resolution.y), std::move(full_screen_draw_datas), ColorAttachment(post_process_output));
             }
 
             /**
@@ -655,7 +655,7 @@ int main(int argc, const char** argv) {
                 // command
                 cmd_list
                     .Gfx(fxaa_pipeline, bindless_array, param)
-                    .Draw("FXAA", Rect2D(0, 0, resolution.x, resolution.y), std::move(full_screen_draw_datas), ColorAttachment(fxaa_output));
+                    .Draw("FXAA Pass", Rect2D(0, 0, resolution.x, resolution.y), std::move(full_screen_draw_datas), ColorAttachment(fxaa_output));
             }
         }
 
