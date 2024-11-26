@@ -35,7 +35,7 @@ using namespace Moer;
 
 void GuiInitPlatformInterface();
 void GUIRender(void* _draw_data, const TextureView& _view, CommandList&);
-void GuiRenderWindow(ImGuiViewport* _viewport, void*);
+void GuiRenderWindow(ImGuiViewport* _viewport, void* _cmd_list);
 void GuiSwapbuffer(ImGuiViewport* _viewport, void*);
 
 namespace Moer::Render {
@@ -342,7 +342,7 @@ namespace Moer::Render {
             if (io.BackendFlags & ImGuiBackendFlags_RendererHasViewports) {
                 for (int i = 1; i < platform_io.Viewports.Size; i++)
                     if ((platform_io.Viewports[i]->Flags & ImGuiViewportFlags_IsMinimized) == 0)
-                        GuiRenderWindow(platform_io.Viewports[i], nullptr);
+                        GuiRenderWindow(platform_io.Viewports[i], &_cmd_list);
             }
         }
     }
@@ -629,18 +629,17 @@ void GuiSetWindowSize(ImGuiViewport* _viewport, ImVec2 _size) {
         PF_R8G8B8A8_SRGB,
         ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED);
 }
-void GuiRenderWindow(ImGuiViewport* _viewport, void*) {
+void GuiRenderWindow(ImGuiViewport* _viewport, void* _cmd_list) {
     GuiViewportData* viewport_data = (GuiViewportData*)_viewport->RendererUserData;
 
     auto sc = viewport_data->sc;
     if (!sc) return;
-    CommandList cmd_list;
-    auto&       device    = Moer::Render::RenderDevice::Get();
-    auto        extent    = sc->size;
-    auto&       gfx_queue = device.GetCommandQueue(EQueueType::Graphics);
-    GUIRender(_viewport->DrawData, viewport_data->framebuffer->GetView(), cmd_list);
-    gfx_queue.Execute(std::move(cmd_list.Submit()));
-    gfx_queue.Sync();
+    auto& device    = Moer::Render::RenderDevice::Get();
+    auto  extent    = sc->size;
+    auto& gfx_queue = device.GetCommandQueue(EQueueType::Graphics);
+    GUIRender(_viewport->DrawData, viewport_data->framebuffer->GetView(), *(CommandList*)(_cmd_list));
+    // gfx_queue.Execute(std::move(cmd_list.Submit()));
+    // gfx_queue.Sync();
 }
 
 void GuiSwapbuffer(ImGuiViewport* _viewport, void*) {
