@@ -62,3 +62,14 @@ set_target_folder(volk ${third_party_folder}/volk)
 # Load smaa precomputed textures
 include(${CMAKE_CURRENT_SOURCE_DIR}/smaa.cmake)
 set_target_folder(smaa ${third_party_folder}/smaa)
+
+# nrd
+set(NRD_EMBEDS_SPIRV_SHADERS OFF)
+set(NRD_EMBEDS_DXIL_SHADERS OFF)
+set(NRD_EMBEDS_DXBC_SHADERS OFF)
+set(NRD_DISABLE_SHADER_COMPILATION ON)
+if(MSVC)
+else()
+    add_compile_options(-msse3 -mssse3)
+endif()
+add_subdirectory(NRD)
