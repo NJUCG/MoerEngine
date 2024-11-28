@@ -985,14 +985,14 @@ namespace Moer::Render {
                         buffer_descriptor_buffer_idx = descriptor_buffer_count - 1;
                     }
                     binder.emplace<VulkanBindlessSetArray>(layout.bindings.at(0).param_idx, buffer_descriptor_buffer_idx);
-                }else if(!layout.bindings.empty() && (layout[0].descriptorType == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE)){
+                }else if(!layout.bindings.empty() && (layout[0].descriptorType == VK_DESCRIPTOR_TYPE_SAMPLER)){
                     if (sampler_descriptor_buffer_idx == invalid_descriptor_buffer_idx) {
                         descriptor_buffer_count++;
                         sampler_descriptor_buffer_idx = descriptor_buffer_count - 1;
                     }
 
-                    binder.emplace<VulkanBindlessSetImage>(layout.bindings.at(0).param_idx, sampler_descriptor_buffer_idx);
-                }else if (!layout.bindings.empty() && (layout[0].descriptorType == VK_DESCRIPTOR_TYPE_SAMPLER)){
+                    binder.emplace<VulkanBindlessSetSampler>(layout.bindings.at(0).param_idx, sampler_descriptor_buffer_idx);
+                }else if (!layout.bindings.empty() && (layout[0].descriptorType == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE)){
                     //sampler and sampled_image use same descriptor buffer
                     if (sampler_descriptor_buffer_idx == invalid_descriptor_buffer_idx) {
                         descriptor_buffer_count++;
