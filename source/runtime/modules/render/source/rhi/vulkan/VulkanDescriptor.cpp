@@ -524,7 +524,7 @@ namespace Moer::Render {
         VulkanBuffer* vk_buffer = ResourceCast(_in_buffer.GetBuffer());
         if (_in_buffer.byte_offset != 0 && vk_buffer->m_descriptor_indices.find(_in_buffer.byte_offset) != vk_buffer->m_descriptor_indices.end()) {
             idx = vk_buffer->m_descriptor_indices[_in_buffer.byte_offset];
-        } else if (vk_buffer->m_descriptor_idx >= 0) {
+        } else if (_in_buffer.byte_offset == 0 && vk_buffer->m_descriptor_idx >= 0) {
             idx = vk_buffer->m_descriptor_idx;
         } else {
             VkDescriptorAddressInfoEXT buffer_info{VK_STRUCTURE_TYPE_DESCRIPTOR_ADDRESS_INFO_EXT};

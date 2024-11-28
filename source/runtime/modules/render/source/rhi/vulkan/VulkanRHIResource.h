@@ -956,8 +956,7 @@ namespace Moer::Render {
         void FreeTexture(uint _slot) override;
         void FreeBuffer(uint _slot) override;
         bool IsResourceAllocated(uint64 _handle) const;
-        //call on update
-        void CmdUpdate(Array<TextureUpdateInfo>&& _textures_allocated, Array<BufferUpdateInfo>&& _buffers_allocated);
+
         //call on frame end free
         void OnFree(const Array<uint>& _slots_freed, const Array<uint>& _textures_freed, const Array<uint>& _buffers_freed);
 
@@ -995,8 +994,6 @@ namespace Moer::Render {
         Array<uint>          buffers_freed;
         Array<uint>          slots_freed;
         UnorderedSet<uint64> resource_allocated_set;
-
-        uint64 textures_offset_in_set;
     };
 
 #pragma endregion

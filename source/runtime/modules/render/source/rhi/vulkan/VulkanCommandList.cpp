@@ -1266,6 +1266,7 @@ namespace Moer::Render {
         VK_CHECK_RESULT(vmaMapMemory(allocator, buffer->GetAllocation(), &p_data));
         std::memcpy((byte*)p_data + _dst.GetByteOffset(), _data, _size);
         vmaUnmapMemory(allocator, buffer->GetAllocation());
+        vmaFlushAllocation(allocator, buffer->GetAllocation(), _dst.GetByteOffset(), _size);
     }
 
     void VulkanCmdList::CopyData(const void* _dst, const BufferView& _src, uint64 _size) {
