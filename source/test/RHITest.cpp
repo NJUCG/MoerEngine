@@ -166,6 +166,33 @@ public:
     DEFINE_SHADER_ARGS(bdls, param);
 };
 
+// Post Process Pipeline Definition
+struct PostProcessPipelineBindlessParam {
+    uint input_image;
+};
+class PostProcessPipeline : public RasterPipeline {
+public:
+    DEFINE_RASTER_PIPELINE_CLASS(PostProcessPipeline);
+    DEFINE_SHADER_CONSTANT_STRUCT(PostProcessPipelineBindlessParam, param);
+    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
+    DEFINE_SHADER_ARGS(bdls, param);
+};
+
+// FXAA Pipeline Definition
+struct FxaaPipelineBindlessParam {
+    uint   input_image;
+    uint   fxaa_mode;
+    float2 resolution;
+    float2 inv_resolution;
+};
+class FxaaPipeline : public RasterPipeline {
+public:
+    DEFINE_RASTER_PIPELINE_CLASS(FxaaPipeline);
+    DEFINE_SHADER_CONSTANT_STRUCT(FxaaPipelineBindlessParam, param);
+    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
+    DEFINE_SHADER_ARGS(bdls, param);
+};
+
 static void ShowGUI(bool* _b_show) {
 
     static bool               opt_fullscreen  = true;
@@ -329,8 +356,20 @@ int main(int argc, const char** argv) {
         PF_R32G32B32A32_SFLOAT,
         ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT);
 
-    TextureRef output = device.CreateTexture(
-        "output",
+    TextureRef pbr_shading_output = device.CreateTexture(
+        "pbr_shading_output",
+        Extent2D(resolution.x, resolution.y),
+        PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT);
+
+    TextureRef post_process_output = device.CreateTexture(
+        "post_process_output",
+        Extent2D(resolution.x, resolution.y),
+        PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT);
+
+    TextureRef fxaa_output = device.CreateTexture(
+        "fxaa_output",
         Extent2D(resolution.x, resolution.y),
         PF_R8G8B8A8_SRGB,
         ETextureUsageFlags::COLOR_ATTACHMENT);
@@ -365,18 +404,41 @@ int main(int argc, const char** argv) {
                                               .Pixel("test/BasicFragConstant.hlsl")
                                               .Build<TestTrianglePipelineConstColor>(std::move(pso_info));
 
+    // FIXME: vertex_full_screen_stream and vertex_stream, these two variabels have not been used in the following code
     VertexStream vertex_full_screen_stream;
     vertex_stream.EmplacePerVertex(
         {Moer::Render::VertexElement(PF_R32G32B32_SFLOAT)});
     GfxPsoCreateInfo pso_full_screen_info(RHIRasterizeInfo::Preset(),
                                           {},
-                                          {RHIColorAttachmentInfo::Preset(PF_R8G8B8A8_SRGB)});
+                                          {RHIColorAttachmentInfo::Preset(pbr_shading_output->GetFormat())});
 
     auto pbr_pipeline = manager
                             .Raster()
                             .Vertex("test/PBRMaterialVertex.hlsl")
                             .Pixel("test/PBRMaterialFrag.hlsl")
                             .Build<MaterialShadingPipeline>(std::move(pso_full_screen_info));
+
+    auto post_process_pipeline = [&]() {
+        GfxPsoCreateInfo pso_full_screen_info(RHIRasterizeInfo::Preset(),
+                                              {},
+                                              {RHIColorAttachmentInfo::Preset(post_process_output->GetFormat())});
+        return manager
+            .Raster()
+            .Vertex("test/post_process/PostProcessFullScreenQuad.hlsl")
+            .Pixel("test/post_process/FxaaPrecompute.hlsl")
+            .Build<PostProcessPipeline>(std::move(pso_full_screen_info));
+    }();
+
+    auto fxaa_pipeline = [&]() {
+        GfxPsoCreateInfo pso_full_screen_info(RHIRasterizeInfo::Preset(),
+                                              {},
+                                              {RHIColorAttachmentInfo::Preset(fxaa_output->GetFormat())});
+        return manager
+            .Raster()
+            .Vertex("test/post_process/PostProcessFullScreenQuad.hlsl")
+            .Pixel("test/post_process/Fxaa.hlsl")
+            .Build<FxaaPipeline>(std::move(pso_full_screen_info));
+    }();// IILE(Immediately Invoked Lambda Expression), usually for complex varaible initialization and avoid naming conflicts
 
     struct Vertex {
         float3 pos;
@@ -424,11 +486,14 @@ int main(int argc, const char** argv) {
     bool     first_load = true;
 
     // uint bdls_tex_handle_depth   = bindless_array->AllocateTexture(depth, sampler);
-    uint bdls_tex_handle_vbuffer  = 0;
-    uint bdls_tex_handle_normal   = 0;
-    uint bdls_tex_handle_uv       = 0;
-    uint bdls_tex_handle_position = 0;
-    uint bdls_tex_handle_depth    = 0;
+    uint bdls_tex_handle_vbuffer             = 0;
+    uint bdls_tex_handle_normal              = 0;
+    uint bdls_tex_handle_uv                  = 0;
+    uint bdls_tex_handle_position            = 0;
+    uint bdls_tex_handle_depth               = 0;
+    uint bdls_tex_handle_pbr_shading_output  = 0;
+    uint bdls_tex_handle_post_process_output = 0;
+    uint bdls_tex_handle_fxaa_output         = 0;
 
     uint material_buffer_handle = 0;
     uint light_buffer_handle    = 0;
@@ -458,11 +523,14 @@ int main(int argc, const char** argv) {
                 light_buffer_handle    = bindless_array->AllocateBuffer(scene.GetBuffer(EGpuSceneResource::LightInfo)->GetView());
                 lighting_data_handle   = bindless_array->AllocateBuffer(lighting_buffer->GetView());
 
-                bdls_tex_handle_vbuffer  = bindless_array->AllocateTexture(vbuffer, sampler);
-                bdls_tex_handle_normal   = bindless_array->AllocateTexture(normal, sampler);
-                bdls_tex_handle_uv       = bindless_array->AllocateTexture(uv, sampler);
-                bdls_tex_handle_position = bindless_array->AllocateTexture(position, sampler);
-                bdls_tex_handle_depth    = bindless_array->AllocateTexture(depth->GetView(), sampler);
+                bdls_tex_handle_vbuffer             = bindless_array->AllocateTexture(vbuffer, sampler);
+                bdls_tex_handle_normal              = bindless_array->AllocateTexture(normal, sampler);
+                bdls_tex_handle_uv                  = bindless_array->AllocateTexture(uv, sampler);
+                bdls_tex_handle_position            = bindless_array->AllocateTexture(position, sampler);
+                bdls_tex_handle_depth               = bindless_array->AllocateTexture(depth->GetView(), sampler);
+                bdls_tex_handle_pbr_shading_output  = bindless_array->AllocateTexture(pbr_shading_output, sampler);
+                bdls_tex_handle_post_process_output = bindless_array->AllocateTexture(post_process_output, sampler);
+                bdls_tex_handle_fxaa_output         = bindless_array->AllocateTexture(fxaa_output, sampler);
 
                 Array<ImportTexture> sampled_textures;
                 sampled_textures.reserve((scene.GetGpuScene().material_textures.size()));
@@ -484,7 +552,8 @@ int main(int argc, const char** argv) {
             auto camera        = CameraManager::Get().Get(camera_entity);
             camera->Tick();
 
-            //GBuffer Pass
+            // GBuffer Pass
+
             auto                    vertex_buffer = scene.GetVertexBuffer();
             auto                    index_buffer  = scene.GetIndexBuffer();
             VertexBuffer            vb(vertex_buffer, 0);
@@ -508,6 +577,8 @@ int main(int argc, const char** argv) {
             param.camera_view_proj       = camera->GetProjectionMatrix() * camera->GetViewMatrix();
             cmd_list.Gfx(raster_pipeline_constant_color, sampler, red_tex, bindless_array, param)
                 .Draw(Rect2D(0, 0, resolution.x, resolution.y), vb_span, ib, std::move(draw_datas), DepthAttachment(depth->GetView().GetTexture()), ColorAttachment(vbuffer), ColorAttachment(normal), ColorAttachment(uv), ColorAttachment(position));
+
+            // PBR Pass
 
             MaterialPassBindlessParam material_param;
             // material_param.material_buffer = bdls_buffer_handle_red;
@@ -533,11 +604,62 @@ int main(int argc, const char** argv) {
                 full_screen_draw_datas.emplace_back(SingleDrawParam{3, 1, 0, 0, 0});
                 material_param.material_type = uint(type);
                 cmd_list.Gfx(pbr_pipeline, bindless_array, material_param)
-                    .Draw("Lighting", Rect2D(0, 0, resolution.x, resolution.y), std::move(full_screen_draw_datas), ColorAttachment(output));
+                    .Draw("Lighting Pass", Rect2D(0, 0, resolution.x, resolution.y), std::move(full_screen_draw_datas), ColorAttachment(pbr_shading_output));
             };
 
-            //PBR Pass
+            // Post process Pass (only for FXAA Precompute now)
+            {
+                // draw data
+                Array<SingleDrawParam> full_screen_draw_datas;
+                full_screen_draw_datas.emplace_back(SingleDrawParam{3, 1, 0, 0, 0});
+
+                // param
+                PostProcessPipelineBindlessParam param;
+                param.input_image = bdls_tex_handle_pbr_shading_output;
+
+                // command
+                cmd_list
+                    .Gfx(post_process_pipeline, bindless_array, param)
+                    .Draw("FXAA Precompute Pass", Rect2D(0, 0, resolution.x, resolution.y), std::move(full_screen_draw_datas), ColorAttachment(post_process_output));
+            }
+
+            /**
+             * FXAA Pass
+             * 
+             * Press M to switch FXAA mode:
+             * 0: FXAA Off                ：645+-fps
+             * 1: FXAA Quality(Simplified)：630+-fps
+             * 2: FXAA Quality            ：610+-fps [Default]
+             * 
+             * TODO: Move the control (input) code to another place (next 7-12 lines)
+             */
+            {
+                // draw data
+                Array<SingleDrawParam> full_screen_draw_datas;
+                full_screen_draw_datas.emplace_back(SingleDrawParam{3, 1, 0, 0, 0});
+
+                // input (this part code should be refactored, move to another place)
+                static uint8_t fxaa_mode = 2;
+                // 0: off; 1: fxaa quality(simplified); 2: fxaa quality;
+                if (ImGui::IsKeyPressed(ImGuiKey_M, false)) {
+                    fxaa_mode = (fxaa_mode + 1) % 3;
+                }
+
+                // param
+                FxaaPipelineBindlessParam param;
+                param.input_image    = bdls_tex_handle_post_process_output;
+                param.fxaa_mode      = fxaa_mode;
+                param.resolution     = float2(resolution);
+                param.inv_resolution = float2(1.0) / float2(resolution);
+
+                // command
+                cmd_list
+                    .Gfx(fxaa_pipeline, bindless_array, param)
+                    .Draw("FXAA Pass", Rect2D(0, 0, resolution.x, resolution.y), std::move(full_screen_draw_datas), ColorAttachment(fxaa_output));
+            }
         }
+
+        auto output = fxaa_output;// actual output (must be R8G8B8A8_SRGB format)
 
         int w_width, w_height;
 

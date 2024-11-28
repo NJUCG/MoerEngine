@@ -985,14 +985,14 @@ namespace Moer::Render {
                         buffer_descriptor_buffer_idx = descriptor_buffer_count - 1;
                     }
                     binder.emplace<VulkanBindlessSetArray>(layout.bindings.at(0).param_idx, buffer_descriptor_buffer_idx);
-                }else if(!layout.bindings.empty() && (layout[0].descriptorType == VK_DESCRIPTOR_TYPE_SAMPLER)){
+                }else if(!layout.bindings.empty() && (layout[0].descriptorType == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE)){
                     if (sampler_descriptor_buffer_idx == invalid_descriptor_buffer_idx) {
                         descriptor_buffer_count++;
                         sampler_descriptor_buffer_idx = descriptor_buffer_count - 1;
                     }
 
-                    binder.emplace<VulkanBindlessSetSampler>(layout.bindings.at(0).param_idx, sampler_descriptor_buffer_idx);
-                }else if (!layout.bindings.empty() && (layout[0].descriptorType == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE)){
+                    binder.emplace<VulkanBindlessSetImage>(layout.bindings.at(0).param_idx, sampler_descriptor_buffer_idx);
+                }else if (!layout.bindings.empty() && (layout[0].descriptorType == VK_DESCRIPTOR_TYPE_SAMPLER)){
                     //sampler and sampled_image use same descriptor buffer
                     if (sampler_descriptor_buffer_idx == invalid_descriptor_buffer_idx) {
                         descriptor_buffer_count++;
@@ -1756,8 +1756,6 @@ namespace Moer::Render {
             gfx_queue.Sync();
         }
 
-
-        textures_offset_in_set = 0;
         vkDestroyDescriptorSetLayout(m_device->GetDevice(), buffer_desc_layout, VK_NULL_HANDLE);
 
     }
@@ -1920,7 +1918,8 @@ namespace Moer::Render {
         }
 
         for (const auto& copy : texture_copies) {
-            std::memcpy(mapped_image_descs + copy.dst_idx * sampled_image_desc_size + textures_offset_in_set, g_heap.image_desc_data.data() + copy.src_idx, sampled_image_desc_size);
+            // no need to add `textures_offset_in_set` here, since the offset is already added in the previous code
+            std::memcpy(mapped_image_descs + copy.dst_idx * sampled_image_desc_size, g_heap.image_desc_data.data() + copy.src_idx, sampled_image_desc_size);
         }
 
         Array<VmaAllocation> allocations;
