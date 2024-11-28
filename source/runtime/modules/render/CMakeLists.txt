@@ -33,6 +33,7 @@ target_include_directories(${MODULE_NAME}
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/VulkanMemoryAllocator>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/imgui>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/smaa>
+    PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/NRD/include>
 )
 target_link_libraries(${MODULE_NAME}
     # PUBLIC ${vulkan_lib}
@@ -45,6 +46,7 @@ target_link_libraries(${MODULE_NAME}
     PUBLIC glfw
     PUBLIC ImGui::imgui
     PUBLIC smaa
+    PUBLIC NRD
 )
 # function(enable_sanitizer target_name)
 #     if(NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
