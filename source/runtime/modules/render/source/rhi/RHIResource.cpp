@@ -8,7 +8,6 @@
 #include "shader/Shader.h"
 #include "shader/ShaderCommon.h"
 #include "shader/ShaderParameterMacros.h"
-#include "vulkan/VulkanRHIResource.h"
 #include <algorithm>
 #include <misc/Traits.h>
 #include <tuple>
@@ -183,22 +182,26 @@ namespace Moer::Render {
     }
     TextureView::TextureView(TextureRef _texture_ref) : TextureView(_texture_ref.Get()) {
     }
-    TextureView::TextureView(Texture* _tex, uint8 _mip_level, uint8 _mip_cnt) : texture(_tex), mip_level(_mip_level), num_mips(_mip_cnt), extent(_tex->GetExtent()), array_index(0), num_array(_tex->GetNumArray()) {
+    TextureView::TextureView(Texture* _tex, EPixelFormat _fmt, uint8 _mip_level, uint8 _mip_cnt) : texture(_tex), format(_fmt), mip_level(_mip_level), num_mips(_mip_cnt), extent(_tex->GetExtent()), array_index(0), num_array(_tex->GetNumArray()) {
         //calculate extent
     }
 
     TextureView Texture::GetView(uint8 _mip_level, uint8 _mip_cnt) {
-        return TextureView(this, _mip_level, _mip_cnt);
+        return TextureView(this, this->GetFormat(), _mip_level, _mip_cnt);
+    }
+
+    TextureView Texture::GetView(EPixelFormat _format, uint8 _mip_level, uint8 _mip_cnt) {
+        return TextureView(this, _format, _mip_level, _mip_cnt);
     }
 
     BufferView::BufferView(Buffer* _buffer) : buffer(_buffer), byte_offset(0), num_elements(_buffer->GetNumElement()), stride(_buffer->GetStride()) {
     }
     BufferView Buffer::GetView(uint64_t _byte_offset, uint64_t _byte_size) {
-        if (_byte_size == UINT64_MAX) {
+        if (_byte_size == UINT64_MAX && _byte_offset == 0) {
             return BufferView(this);
         }
         _byte_size = std::min(_byte_size, GetByteSize() - _byte_offset);
-        return BufferView(this, _byte_offset, _byte_size, GetStride());
+        return BufferView(this, _byte_offset, _byte_size / GetStride(), GetStride());
     }
 
     // void BindlessArray::FreeBufferFrameEnd() {

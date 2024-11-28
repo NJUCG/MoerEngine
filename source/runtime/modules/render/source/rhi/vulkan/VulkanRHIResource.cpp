@@ -977,7 +977,7 @@ namespace Moer::Render {
         for (auto& [set, layout] : _descriptor_set_layouts) {
             total_binding_count += layout.bindings.size();
             auto& binder = bind_template->set_binders[set];
-            
+             
             if(layout.is_bindless){
                 if(!layout.bindings.empty() && layout[0].descriptorType == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER){
                     if(buffer_descriptor_buffer_idx == invalid_descriptor_buffer_idx){
@@ -991,14 +991,14 @@ namespace Moer::Render {
                         sampler_descriptor_buffer_idx = descriptor_buffer_count - 1;
                     }
 
-                    binder.emplace<VulkanBindlessSetImage>(layout.bindings.at(0).param_idx, sampler_descriptor_buffer_idx);
+                    binder.emplace<VulkanBindlessSetSampler>(layout.bindings.at(0).param_idx, sampler_descriptor_buffer_idx);
                 }else if (!layout.bindings.empty() && (layout[0].descriptorType == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE)){
                     //sampler and sampled_image use same descriptor buffer
                     if (sampler_descriptor_buffer_idx == invalid_descriptor_buffer_idx) {
                         descriptor_buffer_count++;
                         sampler_descriptor_buffer_idx = descriptor_buffer_count - 1;
                     }
-                    binder.emplace<VulkanBindlessSetSampler>(layout.bindings.at(0).param_idx, sampler_descriptor_buffer_idx);
+                    binder.emplace<VulkanBindlessSetImage>(layout.bindings.at(0).param_idx, sampler_descriptor_buffer_idx);
                 }
                 else{
                     LOG_CRITICAL("Unsupported bindless descriptor type: {}", uint(layout[0].descriptorType));
@@ -1154,7 +1154,7 @@ namespace Moer::Render {
             descriptor_set_layout_ci.pBindings = descriptor_set_layout_bindings.data() + total_binding_count;
             VK_CHECK_RESULT(vkCreateDescriptorSetLayout(m_device->GetDevice(), &descriptor_set_layout_ci, VK_NULL_HANDLE, &descriptor_set_layouts[set]));
             total_binding_count += layout.bindings.size();
-            std::visit([&](auto&& _binder){
+            std::visit([&](auto& _binder){
                 using T = std::decay_t<decltype(_binder)>;
                 if constexpr(std::is_same_v<T, VulkanDescriptorSetBinder>){
                     for (const auto& [binding_idx, m_binding] : layout.bindings) {
@@ -1468,6 +1468,26 @@ namespace Moer::Render {
 
     uint EncodeViewKey(uint _mip_level, uint _mip_cnt) { return _mip_level | (_mip_cnt << 8); }
 
+
+    VkImageTiling GetVkImageTilling(VkImageCreateInfo _create_infos, VulkanDevice& _device){
+        //query device property
+        VkImageFormatProperties2 properties2{};
+        properties2.sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2;
+        VkPhysicalDeviceImageFormatInfo2 format_info{};
+        format_info.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2;
+        format_info.format = _create_infos.format;
+        format_info.type = _create_infos.imageType;
+        format_info.tiling = _create_infos.tiling;
+        format_info.usage = _create_infos.usage;
+        format_info.flags = _create_infos.flags;
+        properties2.pNext = VK_NULL_HANDLE;
+        VkResult result = vkGetPhysicalDeviceImageFormatProperties2(_device.GetGpu(), &format_info, &properties2);
+        if(result != VK_SUCCESS){
+            // LOG_CRITICAL("Failed to get image format properties");
+            return VK_IMAGE_TILING_LINEAR;
+        }
+        return format_info.tiling;
+    }
     VulkanTexture::VulkanTexture(const TextureInfo& _info, VulkanDevice* _device, VkImage _image)
         : Texture(_info), VulkanDeviceObject(_device) {
         state = SubResourceStates{
@@ -1499,6 +1519,8 @@ namespace Moer::Render {
         image_create_info.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
         image_create_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
+        auto tilling = GetVkImageTilling(image_create_info, *_device);
+        image_create_info.tiling = tilling;
         VmaAllocationCreateInfo alloc_create_info{};
         alloc_create_info.flags = 0;
         alloc_create_info.usage = VulkanMemoryManager::MEGenerateVmaMemoryUsage();
@@ -1552,6 +1574,7 @@ namespace Moer::Render {
             vmaDestroyBuffer(m_device->GetVmaAllocator(), m_alloc.buffer, m_alloc.alloc); 
         }
         if (m_descriptor_idx >= 0) { m_device->GetGlobalDescriptorHeap().FreeBufferDescIdx(m_descriptor_idx); }
+        for (const auto& idx : m_descriptor_indices) { m_device->GetGlobalDescriptorHeap().FreeBufferDescIdx(idx.second); }
     }
 
     VulkanBuffer::VulkanBuffer(const BufferInfo& _info, VulkanDevice& _device): Buffer(_info), VulkanDeviceObject(&_device) {
@@ -1601,56 +1624,63 @@ namespace Moer::Render {
     texture_slot_offset(1), 
     buffer_slot_offset(1), 
     slot_offset(1), 
-    handles(_max_size) {
+    handles(_max_size),
+    texture_offset_in_buffer(_device->GetOptionalProperties().descriptor_buffer_properties.samplerDescriptorSize * 256) {
         BufferInfo buffer_info(
             uint64(_max_size),
             uint(sizeof(uint)),
-             EBufferUsageFlags::CONSTANT_BUFFER | EBufferUsageFlags::CPU_VISIBLE
+             EBufferUsageFlags::UNORDERED_ACCESS
         );
         VkBuffer           current_handle = VK_NULL_HANDLE;
         VkBufferCreateInfo buffer_ci      = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
         VmaAllocation      alloc          = VK_NULL_HANDLE;
         buffer_ci.size                    = _max_size * sizeof(uint32);
-        buffer_ci.usage                   = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+        buffer_ci.usage                   = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
         buffer_ci.sharingMode             = VK_SHARING_MODE_EXCLUSIVE;
         buffer_ci.queueFamilyIndexCount   = 0;
         buffer_ci.pQueueFamilyIndices     = nullptr;
         buffer_ci.flags                   = 0;
         VmaAllocationCreateInfo alloc_ci  = {};
-        alloc_ci.usage                    = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
-        alloc_ci.flags                    = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
+        alloc_ci.usage                    = VMA_MEMORY_USAGE_AUTO;
+        alloc_ci.flags                    = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+
         VK_CHECK_RESULT(vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &current_handle, &alloc, nullptr));
         bindless_array_buffer = MoerNew(VulkanBuffer)(buffer_info, *m_device, current_handle, alloc, false, true);
-
-        buffer_ci.usage = VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+        bindless_array_buffer->SetName("BindlessArrayBuffer");
+        
+        buffer_ci.usage = VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
         buffer_ci.size  = _max_size * m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize;
-        alloc_ci.flags  = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
         current_handle   = VK_NULL_HANDLE;
         alloc           = VK_NULL_HANDLE;
 
         VK_CHECK_RESULT(vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &current_handle, &alloc, nullptr));
-        buffer_info.size = buffer_ci.size;
+        buffer_info.size = _max_size;
         buffer_info.stride = m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize;
 
         bindless_buffer_descs = MoerNew(VulkanBuffer)(buffer_info, *m_device, current_handle, alloc, false, true);
+        bindless_buffer_descs->SetName("BindlessBufferDescs");
 
-        buffer_ci.usage = VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+        buffer_ci.usage = VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
         buffer_ci.size  = _max_size * m_device->GetOptionalProperties().descriptor_buffer_properties.sampledImageDescriptorSize;
         current_handle   = VK_NULL_HANDLE;
         alloc           = VK_NULL_HANDLE;
         VK_CHECK_RESULT(vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &current_handle, &alloc, nullptr));
-        buffer_info.size = buffer_ci.size;
+        
+        buffer_info.size = _max_size;
         buffer_info.stride = m_device->GetOptionalProperties().descriptor_buffer_properties.sampledImageDescriptorSize;
         bindless_texture_descs = MoerNew(VulkanBuffer)(buffer_info, *m_device, current_handle, alloc, false, true);
+        bindless_texture_descs->SetName("BindlessTextureDescs");
 
+        CommandList cmd_list{};
+        auto& gfx_queue = m_device->GetCommandQueue(EQueueType::Graphics);
         //fill sampler data to descriptor buffer
         {
             uint sampler_stride = m_device->GetOptionalProperties().descriptor_buffer_properties.samplerDescriptorSize;
-            void* mapped_data;
+            // void* mapped_data;
             Array<byte> data_array(m_device->GetOptionalProperties().descriptor_buffer_properties.samplerDescriptorSize * VulkanDevice::bindless_sampler_cnt);
-            vmaMapMemory(m_device->GetVmaAllocator(), bindless_texture_descs->GetAllocation(), &mapped_data);
+            // vmaMapMemory(m_device->GetVmaAllocator(), bindless_texture_descs->GetAllocation(), &mapped_data);
             const auto* samplers = m_device->GetImmutableSamplers();
-            byte* mapped_data_byte = reinterpret_cast<byte*>(mapped_data);
+            // byte* mapped_data_byte = reinterpret_cast<byte*>(mapped_data);
             VkDescriptorGetInfoEXT descriptor_info{VK_STRUCTURE_TYPE_DESCRIPTOR_GET_INFO_EXT};
             descriptor_info.type = VK_DESCRIPTOR_TYPE_SAMPLER;
             
@@ -1659,9 +1689,12 @@ namespace Moer::Render {
                 descriptor_data.pSampler = i >= m_device->ImmutableSamplerCount() ? &samplers[0] : &samplers[i];
                 vkGetDescriptorEXT( m_device->GetDevice(), &descriptor_info, sampler_stride, data_array.data() + i * sampler_stride);
             }
-            std::memcpy(mapped_data_byte, data_array.data(), data_array.size());
-            vmaUnmapMemory(m_device->GetVmaAllocator(), bindless_texture_descs->GetAllocation());
-            vmaFlushAllocation(m_device->GetVmaAllocator(), bindless_texture_descs->GetAllocation(), 0, VulkanDevice::bindless_sampler_cnt * sampler_stride);
+            // std::memcpy(mapped_data_byte, data_array.data(), data_array.size());
+            // vmaUnmapMemory(m_device->GetVmaAllocator(), bindless_texture_descs->GetAllocation());
+            // vmaFlushAllocation(m_device->GetVmaAllocator(), bindless_texture_descs->GetAllocation(), 0, VulkanDevice::bindless_sampler_cnt * sampler_stride);
+            cmd_list.CopyFrom(std::span<byte>(data_array.data(), data_array.size()), bindless_texture_descs->GetView(0, data_array.size()));
+            gfx_queue.Execute(cmd_list.Submit());
+            gfx_queue.Sync();
         }
 
         
@@ -1708,16 +1741,19 @@ namespace Moer::Render {
         {
             Array<byte> buffer_data(m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize);
 
-            byte* mapped_data;
-            vmaMapMemory(m_device->GetVmaAllocator(), bindless_buffer_descs->GetAllocation(), (void**)&mapped_data);
+            // byte* mapped_data;
+            // vmaMapMemory(m_device->GetVmaAllocator(), bindless_buffer_descs->GetAllocation(), (void**)&mapped_data);
             vkGetDescriptorEXT(
                 m_device->GetDevice(),
                 &descriptor_info, 
                 m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize, 
                 buffer_data.data());
-            std::memcpy(mapped_data, buffer_data.data(), buffer_data.size());
-            vmaUnmapMemory(m_device->GetVmaAllocator(), bindless_buffer_descs->GetAllocation());
-            vmaFlushAllocation(m_device->GetVmaAllocator(), bindless_buffer_descs->GetAllocation(), 0, m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize);
+            // std::memcpy(mapped_data, buffer_data.data(), buffer_data.size());
+            // vmaUnmapMemory(m_device->GetVmaAllocator(), bindless_buffer_descs->GetAllocation());
+            // vmaFlushAllocation(m_device->GetVmaAllocator(), bindless_buffer_descs->GetAllocation(), 0, m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize);
+            cmd_list.CopyFrom(std::span<byte>(buffer_data.data(), buffer_data.size()), bindless_buffer_descs->GetView(0, buffer_data.size()));
+            gfx_queue.Execute(cmd_list.Submit());
+            gfx_queue.Sync();
         }
 
 
@@ -1753,7 +1789,7 @@ namespace Moer::Render {
         if (texture_slot_ptr == 0) { texture_slot = texture_slot_offset++; } else { texture_slot = texture_slot_ptr; }
 
         std::unique_lock<std::mutex> lk(mtx);
-        textures_allocated.push_back({_texture.texture, _sampler, slot_idx, texture_slot});
+        textures_allocated.emplace_back(_texture.texture, _sampler, _texture.format, slot_idx, texture_slot, _texture.mip_level, _texture.num_mips);
         resource_allocated_set.insert(uint64(_texture.texture));
         return slot_idx;
     }
@@ -1785,7 +1821,7 @@ namespace Moer::Render {
         }else if (handle.type == Buffer){
             buffers_freed.push_back(handle.slot);
         }
-        resource_allocated_set.erase((uint64)(textures_allocated[_array_idx].texture));
+        // resource_allocated_set.erase((uint64)(textures_allocated[_array_idx].texture));
     }
 
     void VulkanBindlessArray::FreeBuffer(uint _array_idx) {
@@ -1817,7 +1853,7 @@ namespace Moer::Render {
         for (const TextureUpdateInfo& texture : _textures_allocated) {
             uint indirect_handle           = (m_device->GetSamplerIdx(texture.sampler) & 0xff) | (texture.slot & 0xffffff) << 8;
             mapped_data[texture.array_idx] = indirect_handle;
-            handles[texture.array_idx]     = {1, texture.slot, Texture};
+            handles[texture.array_idx]     = {texture.slot, 1, Texture};
             range_min                      = std::min(range_min, texture.array_idx);
             range_max                      = std::max(range_max, texture.array_idx);
         }
@@ -1866,7 +1902,7 @@ namespace Moer::Render {
 
         for (const auto& texture : _textures_allocated) {
             VulkanTexture* vk_texture   = ResourceCast(texture.texture);
-            TextureView   view(vk_texture,0, vk_texture->GetNumMips());
+            TextureView   view(vk_texture, texture.format ,texture.mip_level, texture.num_mips);
             uint src_idx ;
             if(uint(vk_texture->GetAspectFlags() & ETextureAspectFlags::DEPTH_SLICE) != 0){
                 // view.aspect_flags = ETextureAspectFlags::COLOR;

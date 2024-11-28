@@ -1451,14 +1451,14 @@ namespace Moer::Render {
                                     break;
                                 }
                                 case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER: {
-                                    VulkanBuffer* buffer     = ResourceCast(std::get<BufferView>(_args[set_info.param_idx]).GetBuffer());
-                                    uint64        src_handle = descriptor_heap.GetBufferDescIdx(buffer);
+                                    // VulkanBuffer* buffer     = ResourceCast(std::get<BufferView>(_args[set_info.param_idx]).GetBuffer());
+                                    uint64 src_handle = descriptor_heap.GetBufferDescIdx(std::get<BufferView>(_args[set_info.param_idx]));
                                     descriptor_heap.PushUniformDesc(src_handle, _binder.binding_infos[i].offset);
                                     break;
                                 }
                                 case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER: {
-                                    VulkanBuffer* buffer     = ResourceCast(std::get<BufferView>(_args[set_info.param_idx]).GetBuffer());
-                                    uint64        src_handle = descriptor_heap.GetBufferDescIdx(buffer);
+                                    // VulkanBuffer* buffer     = ResourceCast(std::get<BufferView>(_args[set_info.param_idx]).GetBuffer());
+                                    uint64 src_handle = descriptor_heap.GetBufferDescIdx(std::get<BufferView>(_args[set_info.param_idx]));
                                     descriptor_heap.PushStorageDesc(src_handle, _binder.binding_infos[i].offset);
                                     break;
                                 }

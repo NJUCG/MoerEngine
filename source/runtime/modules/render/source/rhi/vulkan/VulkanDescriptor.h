@@ -215,7 +215,7 @@ namespace Moer::Render {
         uint64 image_offset;
         uint64 accel_offset;
 
-        uint GetBufferDescIdx(VulkanBuffer* _in_buffer);
+        uint GetBufferDescIdx(const BufferView& _in_buffer);
         void FreeBufferDescIdx(uint _idx);
         uint GetImageDescIdx(const TextureView* _in_image, VkImageLayout _layout);
         void FreeImageDescIdx(uint _idx);

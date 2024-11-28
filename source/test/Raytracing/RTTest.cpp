@@ -43,9 +43,15 @@ struct RTViewParam {
 };
 
 struct RTConfigParam {
-    float4 sun_direction_gexposure;
-    float4 camera_origin_gmipbias;
-    float4 view_direction_gorthomode;
+    Matrix4x4f view2world;
+    Matrix4x4f view2clip;
+    Matrix4x4f world2view;
+    Matrix4x4f world2view_prev;
+    Matrix4x4f world2clip;
+    Matrix4x4f world2clip_prev;
+    float4     sun_direction_gexposure;
+    float4     camera_origin_gmipbias;
+    float4     view_direction_gorthomode;
     // float4 HairBaseColorOverride; // w is alpha or blend factor
     // float2 HairBetasOverride;
     float2   window_size;
@@ -115,14 +121,20 @@ public:
 
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
     DEFINE_SHADER_BUFFER(rt_config);
-    DEFINE_SHADER_TEX(out_normal);
-    DEFINE_SHADER_TEX(out_color);
-    DEFINE_SHADER_TEX(out_position);
+    DEFINE_SHADER_TEX(out_normal_roughness);
+    DEFINE_SHADER_TEX(out_base_color_metalness);
     DEFINE_SHADER_TEX(out_direct_lighting);
+    DEFINE_SHADER_TEX(out_emission);
+    DEFINE_SHADER_TEX(out_diffuse);
+    DEFINE_SHADER_TEX(out_specular);
+    DEFINE_SHADER_TEX(out_view_z);
+    DEFINE_SHADER_TEX(out_mv);
+    DEFINE_SHADER_TEX(out_shadow_info);
+
     DEFINE_SHADER_TLAS(tlas);
     DEFINE_SHADER_CONSTANT_STRUCT(Param, param);
 
-    DEFINE_SHADER_ARGS(param, rt_config, out_normal, out_color, out_position, out_direct_lighting, bdls, tlas);
+    DEFINE_SHADER_ARGS(param, rt_config, out_normal_roughness, out_base_color_metalness, out_direct_lighting, out_emission, out_diffuse, out_specular, out_view_z, out_mv, out_shadow_info, bdls, tlas);
 };
 
 class CombineUIPipeline : public RasterPipeline {
@@ -195,18 +207,6 @@ int main(int argc, const char** argv) {
 
     CommandList cmd_list;
 
-    TextureRef output = device.CreateTexture(
-        Extent2D(resolution.x, resolution.y),
-        PF_R8G8B8A8_SRGB,
-        ETextureUsageFlags::COLOR_ATTACHMENT);
-
-    TextureRef ui_frame_buffer = device.CreateTexture(
-        Extent2D(resolution.x, resolution.y),
-        PF_R8G8B8A8_SRGB,
-        ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED);
-
-    ui_frame_buffer->SetName("ui_frame_buffer");
-
     gfx_queue.Execute(cmd_list.Submit());
     gfx_queue.Sync();
 
@@ -270,28 +270,33 @@ int main(int argc, const char** argv) {
     auto   timeline = device.CreateFence();
     uint64 time     = 0ull;
 
-    TextureRef out_normal = device.CreateTexture(
-        "out_normal",
-        Extent3D(resolution.x, resolution.y),
-        PF_R8G8B8A8_UNORM,
-        ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-
-    TextureRef out_color = device.CreateTexture(
-        "out_color",
-        Extent3D(resolution.x, resolution.y),
-        PF_R8G8B8A8_UNORM,
-        ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-
-    TextureRef out_position = device.CreateTexture(
-        "out_position",
+    TextureRef output = device.CreateTexture(
         Extent2D(resolution.x, resolution.y),
-        PF_R32G32B32A32_SFLOAT,
+        PF_R8G8B8A8_SRGB,
+        ETextureUsageFlags::COLOR_ATTACHMENT);
+
+    TextureRef ui_frame_buffer = device.CreateTexture(
+        "ui_frame_buffer",
+        Extent2D(resolution.x, resolution.y),
+        PF_R8G8B8A8_SRGB,
+        ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED);
+
+    TextureRef out_normal_roughness = device.CreateTexture(
+        "out_normal_roughness",
+        Extent3D(resolution.x, resolution.y),
+        PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+
+    TextureRef out_base_color_matalness = device.CreateTexture(
+        "out_base_color_matalness",
+        Extent3D(resolution.x, resolution.y),
+        PF_R8G8B8A8_UNORM,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
 
     TextureRef out_direct_lighting = device.CreateTexture(
         "out_direct_lighting",
         Extent2D(resolution.x, resolution.y),
-        PF_R8G8B8A8_UNORM,
+        PF_B10G11R11_UFLOAT_PACK32,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
 
     TextureRef scene_color = device.CreateTexture(
@@ -299,6 +304,68 @@ int main(int argc, const char** argv) {
         Extent2D(resolution.x, resolution.y),
         PF_R8G8B8A8_SRGB,
         ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED);
+
+    TextureRef out_emission    = device.CreateTexture("out_emission", Extent2D(resolution.x, resolution.y), PF_B10G11R11_UFLOAT_PACK32, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+    TextureRef out_diffuse     = device.CreateTexture("out_diffuse", Extent2D(resolution.x, resolution.y), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+    TextureRef out_specular    = device.CreateTexture("out_specular", Extent2D(resolution.x, resolution.y), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+    TextureRef out_view_z      = device.CreateTexture("out_view_z", Extent2D(resolution.x, resolution.y), PF_R32_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+    TextureRef out_shadow_info = device.CreateTexture("out_shadow_info", Extent2D(resolution.x, resolution.y), PF_R32G32_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+    TextureRef out_mv          = device.CreateTexture("out_mv", Extent2D(resolution.x, resolution.y), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+
+    Array<TextureRef> test_bdls_texs(3);
+    Array<uint>       test_bdls_handles(3);
+    for (auto& tex : test_bdls_texs) {
+        tex = device.CreateTexture(
+            "test_bdls_tex",
+            Extent2D(1, 1),
+            PF_R8G8B8A8_SRGB,
+            ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT);
+    }
+
+    auto create_frame_buffers = [&](uint2 _new_extent) {
+        output = device.CreateTexture(
+            "output",
+            Extent2D(_new_extent.x, _new_extent.y),
+            PF_R8G8B8A8_SRGB,
+            ETextureUsageFlags::COLOR_ATTACHMENT);
+
+        out_normal_roughness = device.CreateTexture(
+            "out_normal_roughness",
+            Extent2D(_new_extent.x, _new_extent.y),
+            PF_R8G8B8A8_UNORM,
+            ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+
+        out_base_color_matalness = device.CreateTexture(
+            "out_base_color_matalness",
+            Extent2D(_new_extent.x, _new_extent.y),
+            PF_R8G8B8A8_UNORM,
+            ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+
+        out_direct_lighting = device.CreateTexture(
+            "out_direct_lighting",
+            Extent2D(_new_extent.x, _new_extent.y),
+            PF_B10G11R11_UFLOAT_PACK32,
+            ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+
+        scene_color = device.CreateTexture(
+            "scene_color",
+            Extent2D(_new_extent.x, _new_extent.y),
+            PF_R8G8B8A8_SRGB,
+            ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED);
+
+        ui_frame_buffer = device.CreateTexture(
+            "ui_frame_buffer",
+            Extent2D(_new_extent.x, _new_extent.y),
+            PF_R8G8B8A8_SRGB,
+            ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED);
+
+        out_emission    = device.CreateTexture("out_emission", Extent2D(_new_extent.x, _new_extent.y), PF_B10G11R11_UFLOAT_PACK32, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+        out_diffuse     = device.CreateTexture("out_diffuse", Extent2D(_new_extent.x, _new_extent.y), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+        out_specular    = device.CreateTexture("out_specular", Extent2D(_new_extent.x, _new_extent.y), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+        out_view_z      = device.CreateTexture("out_view_z", Extent2D(_new_extent.x, _new_extent.y), PF_R32_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+        out_shadow_info = device.CreateTexture("out_shadow_info", Extent2D(_new_extent.x, _new_extent.y), PF_R32G32_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+        out_mv          = device.CreateTexture("out_mv", Extent2D(_new_extent.x, _new_extent.y), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+    };
 
     RTUI rt_ui{gui};
 
@@ -343,41 +410,7 @@ int main(int argc, const char** argv) {
                 PF_R8G8B8A8_SRGB,
                 ETextureUsageFlags::COLOR_ATTACHMENT);
 
-            out_position = device.CreateTexture(
-                "out_position",
-                Extent2D(resolution.x, resolution.y),
-                PF_R32G32B32A32_SFLOAT,
-                ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-
-            out_color = device.CreateTexture(
-                "out_color",
-                Extent2D(resolution.x, resolution.y),
-                PF_R8G8B8A8_UNORM,
-                ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-
-            out_normal = device.CreateTexture(
-                "out_normal",
-                Extent2D(resolution.x, resolution.y),
-                PF_R8G8B8A8_UNORM,
-                ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-
-            out_direct_lighting = device.CreateTexture(
-                "out_direct_lighting",
-                Extent2D(resolution.x, resolution.y),
-                PF_R8G8B8A8_UNORM,
-                ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-
-            scene_color = device.CreateTexture(
-                "scene_color",
-                Extent2D(resolution.x, resolution.y),
-                PF_R8G8B8A8_SRGB,
-                ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED);
-
-            ui_frame_buffer = device.CreateTexture(
-                "ui_frame_buffer",
-                Extent2D(resolution.x, resolution.y),
-                PF_R8G8B8A8_SRGB,
-                ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED);
+            create_frame_buffers(resolution);
         }
 
         if (Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady()) {
@@ -431,6 +464,7 @@ int main(int argc, const char** argv) {
                 });
 
                 cmd_list.BuildAccelerationStructures(std::move(build_params));
+
                 last_io_change_timeline = copy_queue_timeline->GetValue();
 
                 Array<ImportTexture> sampled_textures;
@@ -459,6 +493,10 @@ int main(int argc, const char** argv) {
 
             auto camera_entity = g_scene.GetCameras()[0];
             auto camera        = CameraManager::Get().Get(camera_entity);
+
+            rt_config_param.world2view_prev = camera->GetViewMatrix();
+            rt_config_param.world2clip_prev = camera->GetProjectionMatrix() * camera->GetViewMatrix();
+
             camera->Tick();
 
             rt_view_param.view2world = camera->GetToWorldMatrix();
@@ -472,6 +510,11 @@ int main(int argc, const char** argv) {
             rt_view_param.orthomode  = 0;
 
             const RTUI::Config& rt_ui_config = rt_ui.GetConfig();
+
+            rt_config_param.view2world = camera->GetToWorldMatrix();
+            rt_config_param.view2clip  = camera->GetProjectionMatrix();
+            rt_config_param.world2view = camera->GetViewMatrix();
+            rt_config_param.world2clip = camera->GetProjectionMatrix() * camera->GetViewMatrix();
 
             rt_config_param.tan_pixel_angular_radius = tanf(Angle::DegreeToRadian(camera->GetFov()));
             rt_config_param.tan_sun_angular_radius   = tanf(Angle::DegreeToRadian(0.533f * 0.5f));
@@ -492,27 +535,44 @@ int main(int argc, const char** argv) {
             param.jitter                  = float2(0, 0);
             param.frame_idx               = time;
 
-            cmd_list.Compute(rt_shader, param, rt_config_param_buffer, out_normal, out_color, out_position, out_direct_lighting, bindless_array, rt_scene)
-                .Dispatch(uint3((resolution.x + 15) >> 4, (resolution.y + 15) >> 4, 1), "Primary Ray");
+            cmd_list.Compute(rt_shader,
+                             param,
+                             rt_config_param_buffer,
+                             out_normal_roughness,
+                             out_base_color_matalness,
+                             out_direct_lighting,
+                             out_emission,
+                             out_diffuse,
+                             out_specular,
+                             out_view_z,
+                             out_mv,
+                             out_shadow_info,
+                             bindless_array,
+                             rt_scene)
+                .Dispatch(uint3((resolution.x + 15) >> 4, (resolution.y + 15) >> 4, 1), "PathTracing");
 
             //copy normal to output
-            cmd_list.CopyFrom(out_direct_lighting->GetView(), scene_color->GetView());
+            // cmd_list.CopyFrom(out_direct_lighting->GetView(), scene_color->GetView());
         }
         // rt_scene->MarkModified(0);
         // cmd_list.UpdateRaytracingScene(rt_scene);
         Sampler linear_sampler{SF_LINEAR, SAM_CLAMP_TO_BORDER};
 
+        if (time >= 3) {
+            bindless_array->FreeTexture(test_bdls_handles[time % 3]);
+        }
+        test_bdls_handles[time % 3] = bindless_array->AllocateTexture(test_bdls_texs[time % 3], linear_sampler);
+        cmd_list.UpdateBindlessArray(bindless_array);
         if (rt_ui.IsSeperateWindow() && rt_ui.GetWindowFrameBuffer().GetTexture()) {
             auto frame_buffer = rt_ui.GetWindowFrameBuffer();
             auto scene_res    = rt_ui.GetSceneColorResolution();
             auto scene_pos    = rt_ui.GetSceneColorPos();
-            cmd_list.Gfx(sample_tex, scene_color, linear_sampler).Draw("SampleTexture", Rect2D(scene_pos.x, scene_pos.y, scene_res.x, scene_res.y), {}, 3, {SingleDrawParam(3, 1, 0, 0, 0)}, ColorAttachment(frame_buffer.GetTexture()));
-
+            cmd_list.Gfx(sample_tex, out_direct_lighting, linear_sampler).Draw("SampleTexture", Rect2D(scene_pos.x, scene_pos.y, scene_res.x, scene_res.y), {}, 3, {SingleDrawParam(3, 1, 0, 0, 0)}, ColorAttachment(frame_buffer.GetTexture()));
         } else {
             float2 f_res  = float2(resolution.x, resolution.y);
             float2 min_xy = rt_ui.GetSceneColorPos() / f_res;
             float2 max_xy = (rt_ui.GetSceneColorPos() + rt_ui.GetSceneColorResolution()) / f_res;
-            cmd_list.Gfx(combine_ui, scene_color, ui_frame_buffer, linear_sampler, CombineUIPipeline::Param{min_xy, max_xy})
+            cmd_list.Gfx(combine_ui, out_direct_lighting, ui_frame_buffer, linear_sampler, CombineUIPipeline::Param{min_xy, max_xy})
                 .Draw("CombineUI",
                       Rect2D(0, 0, resolution.x, resolution.y),
                       {},

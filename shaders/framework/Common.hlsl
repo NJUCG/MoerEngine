@@ -86,6 +86,12 @@ struct MeshletDesc {
 };
 
 struct RTConfigParam {
+  float4x4 view2world;
+  float4x4 view2clip;
+  float4x4 world2view;
+  float4x4 world2view_prev;
+  float4x4 world2clip;
+  float4x4 world2clip_prev;
   float4 sun_direction_gexposure;
   float4 camera_origin_gmip_bias;
   float4 view_direction_gorthomode;
@@ -230,5 +236,7 @@ float3 UnpackNormal(float3 n) {
   return n * 2 - 1;
 }
 } // namespace DeferedRendering
+
+
 
 #endif

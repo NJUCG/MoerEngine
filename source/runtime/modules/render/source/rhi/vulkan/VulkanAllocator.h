@@ -21,7 +21,8 @@ namespace Moer::Render {
         Upload,
         Readback,
         Scratch,
-        ShaderBuffer
+        ShaderBuffer,
+        ShaderBuffer_Constant
     };
     struct VkTmpBufferAllocator : VulkanDeviceObject {
         VkTmpBufferAllocator(VulkanDevice* _device);

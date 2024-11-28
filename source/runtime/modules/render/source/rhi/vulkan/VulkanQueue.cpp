@@ -128,6 +128,9 @@ namespace Moer::Render {
                     tracker.RecordState(i, VK_ACCESS_2_SHADER_READ_BIT, _pipeline_stages);
                 }
             }
+            tracker.RecordState(vk_bindless_array->bindless_texture_descs, VK_ACCESS_2_DESCRIPTOR_BUFFER_READ_BIT_EXT, _pipeline_stages);
+            tracker.RecordState(vk_bindless_array->bindless_buffer_descs, VK_ACCESS_2_DESCRIPTOR_BUFFER_READ_BIT_EXT, _pipeline_stages);
+            tracker.RecordState(vk_bindless_array->bindless_array_buffer, VK_ACCESS_2_SHADER_READ_BIT, _pipeline_stages);
         }
 
         static VkAccessFlagBits2 GetBufferAccess(VulkanShaderResourceState _flag) {
@@ -242,6 +245,7 @@ namespace Moer::Render {
                 case Command::EType::Custom:
                     break;
                 case Command::EType::UpdateBindlessArray:
+                    Visit(static_cast<const UpdateBindlessArrayCmd*>(_cmd));
                     break;
                 default:
                     assert(false && "Invalid command type");
@@ -525,6 +529,20 @@ namespace Moer::Render {
             //use dispatch in the future
             // auto* vk_bindless_array = reinterpret_cast<VulkanBindlessArray*>(_cmd->Handle());
             // tracker.RecordState(vk_bindless_array, VK_ACCESS_2_SHADER_READ_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
+
+            if (_cmd->TextureUpdates().empty() && _cmd->BufferUpdates().empty()) {
+                return;
+            }
+
+            VulkanBindlessArray* vk_bindless_array = reinterpret_cast<VulkanBindlessArray*>(_cmd->Handle());
+            tracker.RecordState(vk_bindless_array->bindless_array_buffer, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
+            if (!_cmd->TextureUpdates().empty()) {
+                tracker.RecordState(vk_bindless_array->bindless_texture_descs, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
+            }
+
+            if (!_cmd->BufferUpdates().empty()) {
+                tracker.RecordState(vk_bindless_array->bindless_buffer_descs, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
+            }
         }
     };
 
@@ -870,14 +888,144 @@ namespace Moer::Render {
 
         void Visit(const UpdateBindlessArrayCmd& _cmd) {
             VulkanBindlessArray* bindless_array = reinterpret_cast<VulkanBindlessArray*>(_cmd.Handle());
-            auto                 updates        = _cmd.StealTextureUpdates();
+            auto                 texture_slots  = _cmd.StealTextureUpdates();
             auto                 buffer_slots   = _cmd.StealBufferUpdates();
-            bindless_array->CmdUpdate(std::move(updates), std::move(buffer_slots));
+
+            {
+                bindless_array->Lock();
+                for (const VulkanBindlessArray::TextureUpdateInfo& texture : texture_slots) {
+                    uint indirect_handle                       = (m_device->GetSamplerIdx(texture.sampler) & 0xff) | (texture.slot & 0xffffff) << 8;
+                    bindless_array->handles[texture.array_idx] = {texture.slot, 1, VulkanBindlessArray::Texture};
+                }
+                for (const auto& buffer : buffer_slots) {
+                    uint indirect_handle                      = buffer.slot;
+                    bindless_array->handles[buffer.array_idx] = {buffer.slot, 0, VulkanBindlessArray::Buffer};
+                }
+                bindless_array->Unlock();
+            }
+            Array<uint>                  to_update_texture_handle_indices(texture_slots.size());
+            Array<std::pair<uint, uint>> to_update_textures_indices(texture_slots.size());
+            Array<std::pair<uint, uint>> to_update_array_indices(buffer_slots.size() + texture_slots.size());
+            Array<uint>                  slots_to_update(texture_slots.size() + buffer_slots.size());
+
+            VulkanDescriptorHeap& heap = m_device->GetGlobalDescriptorHeap();
+
+            //shuffle copy shader
+            auto& shuffle_sd = m_device->internal_shaders->sd_component_shuffle;
+
+            BufferView texture_staging{};
+            BufferView buffer_staging{};
+            uint64     texture_handle_stride = m_device->GetOptionalProperties().descriptor_buffer_properties.sampledImageDescriptorSize;
+            uint64     buffer_handle_stride  = m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize;
+
+            byte* mapped_image_descs  = nullptr;
+            byte* mapped_buffer_descs = nullptr;
+
+            uint array_idx = 0;
+            if (!texture_slots.empty()) {
+                texture_staging = allocator.AllocateShaderBuffer(texture_slots.size() * texture_handle_stride);
+                vmaMapMemory(m_device->GetVmaAllocator(), ResourceCast(texture_staging.GetBuffer())->GetAllocation(), (void**)&mapped_image_descs);
+
+                //copy texture handles
+                for (size_t i = 0; i < texture_slots.size(); ++i) {
+                    const auto&    texture    = texture_slots[i];
+                    VulkanTexture* vk_texture = ResourceCast(texture_slots[i].texture);
+                    TextureView    view(vk_texture, texture.format, texture.mip_level, texture.num_mips);
+                    uint           src_idx;
+                    if (uint(vk_texture->GetAspectFlags() & ETextureAspectFlags::DEPTH_SLICE) != 0) {
+                        // view.aspect_flags = ETextureAspectFlags::COLOR;
+                        src_idx = heap.GetImageDescIdx(&view, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+
+                    } else {
+                        src_idx = heap.GetImageDescIdx(&view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                    }
+                    to_update_texture_handle_indices[i] = src_idx;
+                    to_update_textures_indices[i]       = {i, texture_slots[i].slot};
+                    to_update_array_indices[array_idx]  = {array_idx, texture_slots[i].array_idx};
+
+                    uint indirect_handle = (m_device->GetSamplerIdx(texture.sampler) & 0xff) | (texture.slot & 0xffffff) << 8;
+
+                    slots_to_update[array_idx] = indirect_handle;
+                    array_idx++;
+                }
+                //warning: descriptor heap copy memory is not thread safe
+                for (size_t i = 0; i < texture_slots.size(); ++i) {
+                    memcpy(mapped_image_descs + i * texture_handle_stride, &heap.image_desc_data[to_update_texture_handle_indices[i]], texture_handle_stride);
+                }
+                vmaUnmapMemory(m_device->GetVmaAllocator(), ResourceCast(texture_staging.GetBuffer())->GetAllocation());
+
+                //copy texture handles
+            }
+
+            Array<std::pair<uint, uint>> to_update_buffers_indices(buffer_slots.size());
+
+            if (!buffer_slots.empty()) {
+                buffer_staging = allocator.AllocateShaderBuffer(buffer_slots.size() * buffer_handle_stride);
+                vmaMapMemory(m_device->GetVmaAllocator(), ResourceCast(buffer_staging.GetBuffer())->GetAllocation(), (void**)&mapped_buffer_descs);
+
+                uint buffer_dst_slot_offset = bindless_array->buffers_offset_in_set / buffer_handle_stride;
+                for (size_t i = 0; i < buffer_slots.size(); ++i) {
+                    VulkanBuffer* vk_buffer = ResourceCast(buffer_slots[i].buffer);
+                    uint          src_idx   = heap.GetBufferDescIdx(vk_buffer->GetView());
+                    memcpy(mapped_buffer_descs + i * buffer_handle_stride, &heap.buffer_desc_data[src_idx], buffer_handle_stride);
+                    to_update_buffers_indices[i] = {i, buffer_slots[i].slot + buffer_dst_slot_offset};
+
+                    to_update_array_indices[array_idx] = {array_idx, buffer_slots[i].array_idx};
+                    slots_to_update[array_idx]         = buffer_slots[i].slot;
+                    array_idx++;
+                }
+                vmaUnmapMemory(m_device->GetVmaAllocator(), ResourceCast(buffer_staging.GetBuffer())->GetAllocation());
+            }
+
+            if (!texture_slots.empty() || !buffer_slots.empty()) {
+                cmd_list.BeginLabel("UpdateBindlessArray", {0.0f, 1.0f, 0.0f, 1.0f});
+                cmd_list.SetPso(shuffle_sd.handle);
+                ComponentShuffleShader::Arg arg;
+
+                {
+                    //bindless array update
+                    arg.component_cnt  = texture_slots.size() + buffer_slots.size();
+                    arg.stride         = sizeof(uint) >> 2;
+                    BufferView indices = allocator.AllocateShaderBuffer((texture_slots.size() + buffer_slots.size()) * sizeof(uint) * 2);
+                    cmd_list.CopyData(indices, to_update_array_indices.data(), (texture_slots.size() + buffer_slots.size()) * sizeof(uint) * 2);
+                    BufferView slots = allocator.AllocateShaderBuffer((texture_slots.size() + buffer_slots.size()) * sizeof(uint));
+                    cmd_list.CopyData(slots, slots_to_update.data(), (texture_slots.size() + buffer_slots.size()) * sizeof(uint));
+                    // BufferView test_temp = allocator.AllocateShaderBuffer(10000);
+
+                    cmd_list.BindDescriptors(shuffle_sd.handle, shuffle_sd.SetArgs(arg, indices, slots, bindless_array->bindless_array_buffer->GetView()));
+                    cmd_list.Dispatch((texture_slots.size() + buffer_slots.size() + 63) / 64, 1, 1);
+                }
+
+                if (!texture_slots.empty()) {
+                    arg.component_cnt = texture_slots.size();
+                    arg.stride        = m_device->GetOptionalProperties().descriptor_buffer_properties.sampledImageDescriptorSize >> 2;
+
+                    BufferView indices = allocator.AllocateShaderBuffer(texture_slots.size() * sizeof(uint) * 2);
+                    cmd_list.CopyData(indices, to_update_textures_indices.data(), texture_slots.size() * sizeof(uint) * 2);
+
+                    cmd_list.BindDescriptors(shuffle_sd.handle, shuffle_sd.SetArgs(arg, indices, texture_staging, bindless_array->bindless_texture_descs->GetView(bindless_array->texture_offset_in_buffer)));
+                    cmd_list.Dispatch((texture_slots.size() + 63) / 64, 1, 1);
+                }
+
+                if (!buffer_slots.empty()) {
+                    arg.component_cnt = buffer_slots.size();
+                    arg.stride        = m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize >> 2;
+
+                    BufferView buffer_indices = allocator.AllocateShaderBuffer(buffer_slots.size() * sizeof(uint) * 2);
+                    cmd_list.CopyData(buffer_indices, to_update_buffers_indices.data(), buffer_slots.size() * sizeof(uint) * 2);
+
+                    cmd_list.BindDescriptors(shuffle_sd.handle, shuffle_sd.SetArgs(arg, buffer_indices, buffer_staging, bindless_array->bindless_buffer_descs->GetView()));
+                    cmd_list.Dispatch((buffer_slots.size() + 63) / 64, 1, 1);
+                }
+
+                cmd_list.EndLabel();
+            }
+
             allocator.AddOnComplete([bindless_array,
                                      free_slots(_cmd.StealFreeSlots()),
                                      free_buffers(_cmd.StealFreeBuffers()),
-                                     free_textures(_cmd.StealFreeTextures())]() {
-                bindless_array->OnFree(std::move(free_slots), free_textures, free_buffers);
+                                     free_textures(std::move(_cmd.StealFreeTextures()))]() {
+                bindless_array->OnFree(std::move(free_slots), std::move(free_textures), free_buffers);
             });
         }
 
@@ -955,7 +1103,7 @@ namespace Moer::Render {
 
             ComponentShuffleShader::Arg arg;
             arg.component_cnt = to_update.size();
-            arg.stride        = sizeof(VkAccelerationStructureInstanceKHR);
+            arg.stride        = sizeof(VkAccelerationStructureInstanceKHR) >> 2;
 
             cmd_list.BindDescriptors(shuffle_sd.handle, shuffle_sd.SetArgs(arg, indices, staging, instance_buffer->GetView()));
 

@@ -11,8 +11,8 @@ struct IndicePair {
 [[vk::push_constant]] ConstantBuffer<Args> args : register(b0);
 
 [[vk::binding(0, 0)]] StructuredBuffer<IndicePair> indices : register(t0);
-[[vk::binding(0, 1)]] ByteAddressBuffer src : register(t0, space1);
-[[vk::binding(1, 1)]] RWByteAddressBuffer dst : register(u0);
+[[vk::binding(1, 0)]] ByteAddressBuffer src : register(t0, space1);
+[[vk::binding(2, 0)]] RWByteAddressBuffer dst : register(u0);
 
 [numthreads(64, 1, 1)] void main(uint gid
                                  : SV_DispatchThreadID) {
@@ -20,9 +20,12 @@ struct IndicePair {
     return;
   }
   IndicePair pair = indices[gid];
-  // printf("src %d dst %d stride %d component_cnt %d\n", pair.src, pair.dst,
-  //        args.stride, args.component_cnt);
-
+  // if(args.stride != 16){
+  //   uint dim = 0;
+  //   dst.GetDimensions(dim);
+  // printf("src %d dst %d stride %d component_cnt %d dst dimension %d\n", pair.src, pair.dst,
+  //        args.stride, args.component_cnt, dim);
+  // }
   [branch] if (args.stride == 1) {
     uint src_offset = pair.src * 4;
     uint dst_offset = pair.dst * 4;

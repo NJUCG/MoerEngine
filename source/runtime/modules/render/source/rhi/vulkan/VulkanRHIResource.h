@@ -391,7 +391,7 @@ namespace Moer::Render {
 
     struct VulkanDescriptorInfo {
         /** offset in current descriptor set */
-        uint offset;
+        // uint offset;
         /** index in ArrayArguments */
         uint param_idx;
         /** index in descinfo arrays */
@@ -826,9 +826,10 @@ namespace Moer::Render {
             return m_alloc.buffer;
         }
 
-        VkAccessFlags2        m_access_flags   = VK_ACCESS_2_NONE;
-        VkPipelineStageFlags2 m_stage_flags    = VK_PIPELINE_STAGE_2_NONE;
-        int                   m_descriptor_idx = -1;
+        VkAccessFlags2             m_access_flags   = VK_ACCESS_2_NONE;
+        VkPipelineStageFlags2      m_stage_flags    = VK_PIPELINE_STAGE_2_NONE;
+        int                        m_descriptor_idx = -1;
+        UnorderedMap<uint64, uint> m_descriptor_indices;
 
         VkDescriptorType GetDescriptorType() const {
             return m_descriptor_type;
@@ -969,6 +970,9 @@ namespace Moer::Render {
         VulkanBuffer* bindless_array_buffer;
         VulkanBuffer* bindless_buffer_descs;
         VulkanBuffer* bindless_texture_descs;
+        uint64        texture_offset_in_buffer;
+        uint64        buffers_offset_in_set;
+        Array<Handle> handles;
 
     private:
         std::mutex mtx;
@@ -990,10 +994,8 @@ namespace Moer::Render {
         Array<uint>          textures_freed;
         Array<uint>          buffers_freed;
         Array<uint>          slots_freed;
-        Array<Handle>        handles;
         UnorderedSet<uint64> resource_allocated_set;
 
-        uint64 buffers_offset_in_set;
         uint64 textures_offset_in_set;
     };
 

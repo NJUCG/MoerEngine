@@ -518,18 +518,21 @@ namespace Moer::Render {
             sizeof(VulkanHashableDescriptorInfo) * (m_write_count + 1));
     }
 
-    uint VulkanDescriptorHeap::GetBufferDescIdx(VulkanBuffer* _in_buffer) {
-        assert(_in_buffer != nullptr && "buffer is nullptr");
-        uint idx = 0;
-        if (_in_buffer->m_descriptor_idx >= 0) {
-            idx = _in_buffer->m_descriptor_idx;
+    uint VulkanDescriptorHeap::GetBufferDescIdx(const BufferView& _in_buffer) {
+        assert(_in_buffer.GetBuffer() != nullptr && "buffer is nullptr");
+        uint          idx       = 0;
+        VulkanBuffer* vk_buffer = ResourceCast(_in_buffer.GetBuffer());
+        if (_in_buffer.byte_offset != 0 && vk_buffer->m_descriptor_indices.find(_in_buffer.byte_offset) != vk_buffer->m_descriptor_indices.end()) {
+            idx = vk_buffer->m_descriptor_indices[_in_buffer.byte_offset];
+        } else if (vk_buffer->m_descriptor_idx >= 0) {
+            idx = vk_buffer->m_descriptor_idx;
         } else {
             VkDescriptorAddressInfoEXT buffer_info{VK_STRUCTURE_TYPE_DESCRIPTOR_ADDRESS_INFO_EXT};
-            buffer_info.address = _in_buffer->DeviceAddress();
-            buffer_info.range   = _in_buffer->GetByteSize();
+            buffer_info.address = vk_buffer->DeviceAddress() + _in_buffer.byte_offset;
+            buffer_info.range   = _in_buffer.GetByteSize();
             VkDescriptorGetInfoEXT buffer_desc_info{VK_STRUCTURE_TYPE_DESCRIPTOR_GET_INFO_EXT};
 
-            VkDescriptorType desc_type = _in_buffer->GetDescriptorType();
+            VkDescriptorType desc_type = vk_buffer->GetDescriptorType();
             buffer_desc_info.type      = desc_type;
             uint desc_size             = 0;
             switch (desc_type) {
@@ -556,7 +559,11 @@ namespace Moer::Render {
                 idx = buffer_free_list.back();
                 buffer_free_list.pop_back();
             }
-            _in_buffer->m_descriptor_idx = idx;
+            if (_in_buffer.GetByteOffset() == 0) {
+                vk_buffer->m_descriptor_idx = idx;
+            } else {
+                vk_buffer->m_descriptor_indices[_in_buffer.byte_offset] = idx;
+            }
             vkGetDescriptorEXT(m_device->GetDevice(), &buffer_desc_info, desc_size, buffer_desc_data.data() + idx * buffer_desc_stride);
         }
         return idx * buffer_desc_stride;

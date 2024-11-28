@@ -757,6 +757,8 @@ namespace Moer::Render {
         texture_states.clear();
         writed_state_textures.clear();
         writed_state_buffers.clear();
+        write_blas_states.clear();
+        flush_buffer_states.clear();
     }
 
 }// namespace Moer::Render

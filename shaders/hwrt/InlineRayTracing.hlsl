@@ -24,14 +24,38 @@ struct Param {
 [[vk::push_constant]] ConstantBuffer<Param> param;
 [[vk::binding(0, 0)]] RaytracingAccelerationStructure tlas
     : register(t0, space0);
-[[vk::binding(0, 1)]] RWTexture2D<float4> out_normal : register(u0, space1);
-[[vk::binding(1, 1)]] RWTexture2D<float4> out_color : register(u1, space1);
-[[vk::binding(2, 1)]] RWTexture2D<float4> out_position : register(u2, space1);
-[[vk::binding(3, 1)]] RWTexture2D<float4> out_direct_lighting
+[[vk::binding(0, 1)]] RWTexture2D<float4> out_normal_roughness
+    : register(u0, space1);
+[[vk::binding(1, 1)]] RWTexture2D<float4> out_base_color_metalness
+    : register(u1, space1);
+[[vk::binding(2, 1)]] RWTexture2D<float3> out_direct_lighting
     : register(u3, space1);
+[[vk::binding(3, 1)]] RWTexture2D<float3> out_emission : register(u4, space1);
+[[vk::binding(4, 1)]] RWTexture2D<float4> out_diffuse;
+[[vk::binding(5, 1)]] RWTexture2D<float4> out_specular;
+[[vk::binding(6, 1)]] RWTexture2D<float> out_view_z;
+[[vk::binding(7, 1)]] RWTexture2D<float3> out_mv;
+[[vk::binding(8, 1)]] RWTexture2D<float2> out_shadow_info;
 
 #define SKY_INTENSITY 1.0
 #define SUN_INTENSITY 8.0
+
+struct PathTracingDesc {
+  RTHitInfo hit_info;
+  RTMaterialProp mat;
+  uint2 pixel_pos;
+  uint path_num;
+  uint bounce_num;
+  uint instance_mask;
+  uint ray_flags;
+};
+
+struct PathTracingResult {
+  float3 diffuse_radiance;
+  float diffuse_hit_dist;
+  float3 specular_radiance;
+  float specular_hit_dist;
+};
 
 float3 GetSunIntensity(float3 v, float3 sunDirection, float tanAngularRadius) {
   float b = dot(v, sunDirection);
@@ -177,6 +201,27 @@ RTHitInfo CastRay(float3 origin, float3 direction, float tmin, float tmax,
   return hit_info;
 }
 
+bool CastVisibilityRay(float3 origin, float3 direction, float tmin, float tmax,
+                       float2 mip_and_cone,
+                       RaytracingAccelerationStructure accel,
+                       uint instance_mask, uint ray_flags) {
+  RayDesc ray_desc;
+  ray_desc.Origin = origin;
+  ray_desc.Direction = direction;
+  ray_desc.TMin = tmin;
+  ray_desc.TMax = tmax;
+
+  RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES |
+           RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH>
+      ray_query;
+  ray_query.TraceRayInline(accel, ray_flags, instance_mask, ray_desc);
+
+  while (ray_query.Proceed()) {
+  }
+
+  return ray_query.CommittedStatus() == COMMITTED_NOTHING;
+}
+
 RTMaterialProp GetMaterialProps(in RTHitInfo hit_info) {
   RTMaterialProp mat = (RTMaterialProp)0;
 
@@ -194,30 +239,28 @@ RTMaterialProp GetMaterialProps(in RTHitInfo hit_info) {
   }
   // base color
   TextureHandle albedo_map = TextureHandle(mat_data.albedo_map);
+//   printf("albedo_map %d material_buffer_handle %d \n", mat_data.albedo_map, param.material_buffer_handle);
 
   float3 coords = Raytracing::GetSamplingCoords(albedo_map.handle, hit_info.uv,
                                                 hit_info.mip, MIP_SHARP);
-  //   printf("mip %f\n", coords.z);
-  //   float3 coords = Raytracing::GetLoadCoords(albedo_map.handle, hit_info.uv,
-  //   hit_info.mip, MIP_SHARP); printf("coords %f %f %f\n", coords.x, coords.y,
-  //   coords.z);
-  float4 color = albedo_map.SampleLevel2D<float4>(coords.xy, 0.f);
-  //    color.xyz = STL::Color::GammaToLinear(color.xyz);
+  float4 color = albedo_map.SampleLevel2D<float4>(coords.xy, coords.z);
+//   printf("coord z %f\n", coords.z);
+
+//   uint tex_handle =                                                         
+//       g__array_114514_bdls[NonUniformResourceIndex(albedo_map.handle)];  
+//   uint tex_idx = tex_handle >> 8;                                           
+//   uint sampler_idx = tex_handle & 0xff;                                     
+//   Texture2D<float4> tex = Texture2D<float4>(                    
+//       gTexture2Dfloat4__114514_bdls[NonUniformResourceIndex(    
+//           tex_idx)]); 
+
+//           SamplerState splr = SamplerState(gsampler__114514_bdls[NonUniformResourceIndex(sampler_idx)]);
+//                    float4 color = tex.SampleLevel(splr, coords.xy, 1.f);  
+//   printf("sampler_idx %d\n", sampler_idx);
+//   printf("albedo_map.handle %d tex_handle %d tex_idx %d sampler_idx %d\n", albedo_map.handle, tex_handle, tex_idx, sampler_idx);
   float3 base_color = color.xyz;
-  // Texture2D<float4> albedo = albedo_map.GetTexture2D<float4>();
-  // SamplerHandle sp = (SamplerHandle)0;
-  // mat.base_color = albedo.SampleLevel(sp.GetSampler(), coords.xy,
-  // coords.z).xyz;
-  //   mat.base_color = albedo.Load(int3(coords)).xyz;
-  // normal
   float3 n = hit_info.n;
-  //   if (mat_data.normal_map != -1) {
-  //     TextureHandle normal_map = TextureHandle(mat_data.normal_map);
-  //     coords = Raytracing::GetSamplingCoords(normal_map.handle, hit_info.uv,
-  //                                            hit_info.mip, MIP_LESS_SHARP);
-  //     n = normal_map.SampleLevel2D<float4>(coords.xy, coords.z).xyz;
-  //     n = normalize(n * 2.0f - 1.0f);
-  //   }
+  
   float roughness = mat_data.roughness_factor;
   float metalness = mat_data.metallic_factor;
   // metallic
@@ -249,15 +292,11 @@ RTMaterialProp GetMaterialProps(in RTHitInfo hit_info) {
 
   float NoL = saturate(dot(n, sun_direction_exposure.xyz));
   float shadow = STL::Math::SmoothStep(0.03, 0.1, NoL);
-  // if (n.y > 0.f)
-  //   printf("n %f %f %f %f\n", n.x, n.y, n.z, NoL);
+
   [branch] if (shadow != 0.f) {
     float3 c_sun =
         GetSunIntensity(sun_direction_exposure.xyz, sun_direction_exposure.xyz,
                         rt_config.tan_sun_angular_radius);
-
-    // printf("c_sun %f %f %f\n", c_sun.x, c_sun.y, c_sun.z);
-
     float3 c_imp =
         lerp(c_sky, c_sun, STL::Math::SmoothStep(0.0, 0.2, metalness));
     c_imp *= STL::Math::SmoothStep(0.01, 0.05, sun_direction_exposure.z);
@@ -287,6 +326,242 @@ RTMaterialProp GetMaterialProps(in RTHitInfo hit_info) {
   return mat;
 }
 
+PathTracingResult PathTracing(PathTracingDesc pt_desc) {
+
+  RTViewParam view =
+      ArrayBuffer(param.global_param_handle).Load<RTViewParam>(0);
+
+  float view_z = mul(view.world2view, float4(pt_desc.hit_info.x, 1.f)).z;
+
+  // Pathtracing from primary hit
+
+  PathTracingResult pt_result = (PathTracingResult)0;
+
+  uint path_num = pt_desc.path_num;
+  uint diffuse_path_num = 0;
+
+  [loop] for (uint i = 0; i < path_num; i++) {
+    RTHitInfo hit_info = pt_desc.hit_info;
+    RTMaterialProp mat = pt_desc.mat;
+
+    float accumulate_hit_dist = 0.f;
+    float accumulate_diffuse_like_motion = 0.f;
+
+    float3 l_sum = 0.f;
+    float3 path_throughput = 1.f;
+
+    bool is_diffuse_path = true;
+    [loop] for (uint bounce = 1;
+                bounce <= pt_desc.bounce_num && !hit_info.IsSky(); bounce++) {
+
+      bool is_diffuse = is_diffuse_path;
+
+      {
+        float diffuse_probablility =
+            Raytracing::EstimateDiffuseProbability(hit_info, mat);
+
+        float rnd = STL::Rng::Hash::GetFloat();
+
+        if (bounce > 1) {
+          is_diffuse = rnd < diffuse_probablility;
+          path_throughput *= abs(float(!is_diffuse) - diffuse_probablility);
+        }
+        if (bounce == 1) {
+          is_diffuse_path = is_diffuse;
+        }
+
+        float2 mip_and_cone =
+            Raytracing::GetConeAngleFromRoughness(hit_info.mip, mat.roughness);
+
+        float3x3 local_basis = STL::Geometry::GetBasis(hit_info.n);
+
+        float3 v_local = STL::Geometry::RotateVector(local_basis, hit_info.v);
+
+        float3 ray = 0.f;
+        uint samples_num = 0;
+
+        uint max_sample_num = 0;
+
+        if (bounce == 1) {
+        }
+
+        max_sample_num = max(1, max_sample_num);
+
+        // mainly for hair in the future
+        for (uint sample_idx = 0; sample_idx < max_sample_num; sample_idx++) {
+          float2 rnd = STL::Rng::Hash::GetFloat2();
+
+          float3 r;
+
+          r = STL::ImportanceSampling::Cosine::GetRay(rnd);
+
+          bool is_miss = r.z < 0.f;
+
+          // to world space
+          r = STL::Geometry::RotateVectorInverse(local_basis, r);
+
+          is_miss =
+              CastVisibilityRay(hit_info.x, r, 0.001f, INF, mip_and_cone, tlas,
+                                INSTANCE_FLAG_GEOMETRY_ALL, pt_desc.ray_flags);
+
+          if (!is_miss) {
+            samples_num++;
+          }
+          if (!is_miss || sample_idx == 0) {
+            ray = r;
+          }
+        }
+
+        if (samples_num != 0) {
+          path_throughput *= float(samples_num) / float(max_sample_num);
+        }
+
+        float a = dot(hit_info.n, ray);
+        if (a < 0.f) {
+          if (is_diffuse) {
+            path_throughput = 0.f;
+          } else {
+            // specular reflection
+            float b = dot(hit_info.n, mat.n);
+            ray = normalize(ray +
+                            mat.n * STL::Math::Sqrt01(1.f - a * a) * rcp(b));
+          }
+        }
+
+        // update path throughput
+        {
+          float3 albedo, Rf0;
+          STL::BRDF::ConvertBaseColorMetalnessToAlbedoRf0(
+              mat.base_color, mat.metalness, albedo, Rf0);
+          float3 h = normalize(ray + hit_info.v);
+          float voh = abs(dot(ray, h));
+          float nol = saturate(dot(hit_info.n, ray));
+
+          if (is_diffuse) {
+            float nov = abs(dot(mat.n, hit_info.v));
+            path_throughput *=
+                STL::Math::Pi(1.f) * albedo *
+                STL::BRDF::DiffuseTerm_Burley(mat.roughness, nol, nov, voh);
+
+          } else {
+            float3 f = STL::BRDF::FresnelTerm_Schlick(Rf0, voh);
+            path_throughput *=
+                f * STL::BRDF::GeometryTerm_Smith(mat.roughness, nol);
+          }
+        }
+
+        {
+          // not using russian roulette
+          if (STL::Color::Luminance(path_throughput) < 0.01f) {
+            break;
+          }
+        }
+
+        hit_info = CastRay(hit_info.x, ray, 0.001f, INF, mip_and_cone, tlas,
+                           INSTANCE_FLAG_GEOMETRY_ALL, pt_desc.ray_flags);
+        mat = GetMaterialProps(hit_info);
+      }
+
+      // current point lighting
+      {
+        float4 l_cached = float4(0.f, 0.f, 0.f, 0.f); // came from previous
+                                                      // frame
+
+        if (l_cached.w != 1.f) {
+          float3 l = mat.l_direct;
+          if (STL::Color::Luminance(l) > 0.f) {
+
+            float2 rnd = STL::Rng::Hash::GetFloat2();
+            rnd = STL::ImportanceSampling::Cosine::GetRay(rnd).xy;
+            rnd *= rt_config.tan_sun_angular_radius;
+
+            float3x3 sun_basis =
+                STL::Geometry::GetBasis(rt_config.sun_direction_gexposure.xyz);
+
+            float3 sun_direction = normalize(
+                sun_basis[0] * rnd.x + sun_basis[1] * rnd.y + sun_basis[2]);
+
+            float2 mip_and_cone = Raytracing::GetConeAngleFromRoughness(
+                hit_info.mip, mat.roughness);
+
+            l *= CastVisibilityRay(
+                hit_info.GetXOffset(), sun_direction, 0.001f, INF, mip_and_cone,
+                tlas, INSTANCE_FLAG_GEOMETRY_ALL, pt_desc.ray_flags);
+          }
+          l += mat.l_emi;
+          l_cached.xyz = lerp(l, l_cached.xyz, l_cached.w);
+        }
+
+        // accumulate lighting
+        float3 l = l_cached.xyz * path_throughput;
+        l_sum += l;
+
+        // biased
+        path_throughput *= 1.f - l_cached.w;
+
+        // accumulate distance for NRD
+
+        float a = STL::Color::Luminance(l);
+        float b = STL::Color::Luminance(l_sum);
+
+        float importance = a / (b + 0.001f);
+        importance *= 1.f - STL::Color::Luminance(mat.l_emi) * rcp(a + 1e-6);
+
+        float diffuse_like_motion =
+            Raytracing::EstimateDiffuseProbability(hit_info, mat, true);
+        diffuse_like_motion =
+            lerp(diffuse_like_motion, 1.f, STL::Math::Sqrt01(mat.curvature));
+        diffuse_like_motion = is_diffuse ? 1.f : diffuse_like_motion;
+
+        accumulate_hit_dist +=
+            hit_info.tmin *
+            STL::Math::SmoothStep(0.2f, 0.f, accumulate_diffuse_like_motion);
+        accumulate_diffuse_like_motion +=
+            1.f - importance * (1.f - diffuse_like_motion);
+      }
+    }
+
+    path_throughput *= Raytracing::GetAmbientBRDF(hit_info, mat, true);
+    path_throughput *=
+        1.f + Raytracing::EstimateDiffuseProbability(hit_info, mat, true);
+
+    // TODO: add ambient
+
+    float norm_hit_distance = accumulate_hit_dist;
+    if (is_diffuse_path) {
+      pt_result.diffuse_radiance += l_sum;
+      pt_result.diffuse_hit_dist += norm_hit_distance;
+      diffuse_path_num++;
+    } else {
+      pt_result.specular_radiance += l_sum;
+      pt_result.specular_hit_dist += norm_hit_distance;
+    }
+  }
+
+  float3 albedo, Rf0;
+
+  STL::BRDF::ConvertBaseColorMetalnessToAlbedoRf0(
+      pt_desc.mat.base_color, pt_desc.mat.metalness, albedo, Rf0);
+
+  float nov = abs(dot(pt_desc.mat.n, pt_desc.hit_info.v));
+  float3 fenv = STL::BRDF::EnvironmentTerm_Rtg(Rf0, nov, pt_desc.mat.roughness);
+  float3 diff_demod = (1.f - fenv) * albedo * 0.99 + 0.01;
+  float3 spec_demod = fenv * 0.99 + 0.01;
+
+  float radiance_norm = 1.f / float(pt_desc.path_num);
+  pt_result.diffuse_radiance *= radiance_norm;
+  pt_result.specular_radiance *= radiance_norm;
+
+  float diff_norm = diffuse_path_num == 0 ? 0.f : 1.f / float(diffuse_path_num);
+  pt_result.diffuse_hit_dist *= diff_norm;
+
+  float spec_norm = pt_desc.path_num == diffuse_path_num
+                        ? 0.f
+                        : 1.f / float(path_num - diffuse_path_num);
+  pt_result.specular_hit_dist *= spec_norm;
+
+  return pt_result;
+}
 // dispatch inline raytracing
 
 [numthreads(16, 16, 1)] void main(uint2 pixel_pos
@@ -320,6 +595,32 @@ RTMaterialProp GetMaterialProps(in RTHitInfo hit_info) {
 
   RTMaterialProp mat = GetMaterialProps(hit_info);
 
+  // view z
+  float view_z = mul(view.world2view, float4(hit_info.x, 1.f)).z;
+  view_z = hit_info.IsSky() ? STL::Math::Sign(view_z) * INF : view_z;
+  out_view_z[pixel_pos] = view_z;
+
+  // motion
+  float3 motion = Raytracing::GetMotion(hit_info.x, hit_info.x_prev);
+  out_mv[pixel_pos] = motion;
+
+  if (hit_info.IsSky()) {
+    out_shadow_info[pixel_pos] = float2(0.f, 0.f);
+    out_emission[pixel_pos] = mat.l_emi;
+    out_direct_lighting[pixel_pos] = mat.l_direct;
+    return;
+  }
+
+  float diffuse_probablility =
+      Raytracing::EstimateDiffuseProbability(hit_info, mat);
+
+  out_normal_roughness[pixel_pos] = float4(hit_info.n, mat.roughness);
+  out_base_color_metalness[pixel_pos] =
+      float4(STL::Color::LinearToSrgb(mat.base_color), mat.metalness);
+
+  out_direct_lighting[pixel_pos] = mat.l_direct;
+  out_emission[pixel_pos] = mat.l_emi;
+
   float3 shadow_translucency = 0.f;
 
   float shadow_distance = 0.f;
@@ -338,40 +639,54 @@ RTMaterialProp GetMaterialProps(in RTHitInfo hit_info) {
     float3 x_offset = hit_info.GetXOffset();
     float2 mip_and_cone = Raytracing::GetConeAngleFromRoughness(
         hit_info.mip, rt_config.tan_sun_angular_radius);
-    shadow_translucency = 1.f;
+
+    shadow_translucency =
+        (STL::Color::Luminance(mat.l_direct) != 0.f) ? 1.0f : 0.0f;
+
     while (STL::Color::Luminance(shadow_translucency) > 0.01f) {
       RTHitInfo shadow_hit_info =
           CastRay(x_offset, sun_direction, 0.001f, INF, mip_and_cone, tlas,
                   INSTANCE_FLAG_GEOMETRY_ALL, 0);
       if (shadow_hit_info.IsSky()) {
-        // shadow_translucency =
-        //     shadow_distance == 0.f ? 0.f : shadow_translucency;
         shadow_distance = shadow_distance == 0.f ? INF : shadow_distance;
-        // printf("sky shadow translucency %f %f %f\n", shadow_translucency,
-        //        shadow_hit_info.tmin, shadow_distance);
         break;
       }
 
       // glass approximation
       float NoV = abs(dot(shadow_hit_info.n, sun_direction));
-      shadow_translucency *= lerp(0.9f, 0.f, STL::Math::Pow01(1.0 - NoV, 2.5f));
-      shadow_translucency *= float(shadow_hit_info.IsTransparent());
+      shadow_translucency *= lerp(shadow_hit_info.IsTransparent() ? 0.9f : 0.f, 0.f, STL::Math::Pow01(1.0 - NoV, 2.5f));
 
       float offset = shadow_hit_info.tmin * 0.0001f + 0.001f;
       x_offset = shadow_hit_info.GetXOffset() + sun_direction * offset;
       shadow_distance += shadow_hit_info.tmin;
-      // printf("occluded shadow translucency %f %f %f\n", shadow_translucency,
-      //        shadow_hit_info.tmin, shadow_distance);
     }
-  }
-  float3 l_sum = mat.l_direct * (shadow_translucency) + mat.l_emi;
-  // if (STL::Color::Luminance(mat.l_direct) > 0.0f)
-  //   printf("mat.l_direct %f %f %f shadow_distance %f\n", mat.l_emi,
-  //   mat.l_emi,
-  //          mat.l_emi, shadow_translucency);
 
-  out_normal[pixel_pos] = float4(hit_info.n, 1.0f);
-  out_color[pixel_pos] = float4(mat.base_color, 1.0f);
-  out_position[pixel_pos] = float4(hit_info.x, 1.0f);
-  out_direct_lighting[pixel_pos] = float4(l_sum, 1.0f);
+    float2 shadow_info =
+        float2(shadow_distance == INF ? INF : shadow_distance, 0.f);
+    out_shadow_info[pixel_pos] = shadow_info;
+  }
+
+  // secondary ray
+  PathTracingDesc pt_desc = (PathTracingDesc)0;
+  pt_desc.hit_info = hit_info;
+  pt_desc.mat = mat;
+  pt_desc.pixel_pos = pixel_pos;
+  pt_desc.path_num = 1;
+  pt_desc.bounce_num = 3;
+  pt_desc.instance_mask = INSTANCE_FLAG_GEOMETRY_ALL;
+  pt_desc.ray_flags = 0;
+
+  PathTracingResult pt_result = PathTracing(pt_desc);
+
+  float3 l_sum = mat.l_direct * (shadow_translucency) + mat.l_emi;
+//   if (STL::Color::Luminance(shadow_translucency) > 0.0f)
+//     printf("mat.l_direct %f %f %f shadow_distance %f\n", mat.l_emi,
+//     mat.l_emi,
+//            mat.l_emi, shadow_translucency);
+  //   out_position[pixel_pos] = float4(hit_info.x, 1.0f);
+  out_direct_lighting[pixel_pos] = l_sum;
+  out_diffuse[pixel_pos] =
+      float4(pt_result.diffuse_radiance, pt_result.diffuse_hit_dist);
+  out_specular[pixel_pos] =
+      float4(pt_result.specular_radiance, pt_result.specular_hit_dist);
 }

@@ -750,7 +750,7 @@ namespace Moer {
                 continue;
             }
             for (auto& texture : _scene_data.m_mat_instance_textures[material_instance.first].textures) {
-                uint32_t handle = _scene->GetBindlessArray()->AllocateTexture(textures[texture.second], sampler);
+                uint32_t handle = _scene->GetBindlessArray()->AllocateTexture(textures[texture.second]->GetView(0, textures[texture.second]->GetNumMips()), sampler);
                 material_instance.second->SetParameter(texture.first, handle);
             }
         }

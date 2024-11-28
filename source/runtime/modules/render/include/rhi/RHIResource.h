@@ -718,8 +718,9 @@ namespace Moer::Render {
         TextureView() = default;
         TextureView(class Texture*);
         TextureView(TextureRef);
-        TextureView(Texture* _texture, uint8 _mip_idx, uint8 _mip_cnt);
+        TextureView(Texture* _texture, EPixelFormat _fmt, uint8 _mip_idx, uint8 _mip_cnt);
         class Texture* texture;
+        EPixelFormat   format;
         uint3          offset{};
         uint3          extent{};
         uint8          mip_level;
@@ -796,20 +797,20 @@ namespace Moer::Render {
     public:
         Texture(const TextureInfo& _info) : RHIResource(RRT_TEXTURE), info(_info) {}
 
-        uint32_t               GetNumMips() const { return info.num_mips; }
-        uint32_t               GetNumArray() const { return info.array_size; }
-        uint32_t               GetDepth() const { return info.depth; }
-        uint32_t               GetWidth() const { return info.extent.x; }
-        uint32_t               GetHeight() const { return info.extent.y; }
-        EPixelFormat           GetFormat() const { return info.format; }
-        ETextureDimension      GetDimension() const { return info.dimension; }
-        ETextureUsageFlags     GetUsage() const { return info.usage; }
-        ETextureAspectFlags    GetAspectFlags() const { return info.aspect_flags; }
-        uint3                  GetExtent() const { return uint3(info.extent.x, info.extent.y, info.depth); }
-        virtual uint           GetMipByteSize(uint _mip_idx) const = 0;
-        const std::string_view GetName() const { return std::string_view(debug_name.has_value() ? debug_name.value().data() : default_name.data()); }
-        RENDER_API TextureView GetView(uint8 _mip_idx = 0u, uint8 _mip_num = 1u);
-
+        uint32_t                GetNumMips() const { return info.num_mips; }
+        uint32_t                GetNumArray() const { return info.array_size; }
+        uint32_t                GetDepth() const { return info.depth; }
+        uint32_t                GetWidth() const { return info.extent.x; }
+        uint32_t                GetHeight() const { return info.extent.y; }
+        EPixelFormat            GetFormat() const { return info.format; }
+        ETextureDimension       GetDimension() const { return info.dimension; }
+        ETextureUsageFlags      GetUsage() const { return info.usage; }
+        ETextureAspectFlags     GetAspectFlags() const { return info.aspect_flags; }
+        uint3                   GetExtent() const { return uint3(info.extent.x, info.extent.y, info.depth); }
+        virtual uint            GetMipByteSize(uint _mip_idx) const = 0;
+        const std::string_view  GetName() const { return std::string_view(debug_name.has_value() ? debug_name.value().data() : default_name.data()); }
+        RENDER_API TextureView  GetView(uint8 _mip_idx = 0u, uint8 _mip_num = 1u);
+        RENDER_API TextureView  GetView(EPixelFormat _format, uint8 _mip_idx = 0u, uint8 _mip_num = 1u);
         virtual RENDER_API void SetName(const std::string_view _name) = 0;
 
     protected:
@@ -846,10 +847,13 @@ namespace Moer::Render {
     class RENDER_API BindlessArray : public RHIResource {
     public:
         struct TextureUpdateInfo {
-            Texture* texture;
-            Sampler  sampler;
-            uint     array_idx;
-            uint     slot;
+            Texture*     texture;
+            Sampler      sampler;
+            EPixelFormat format;
+            uint         array_idx;
+            uint         slot;
+            uint8        mip_level;
+            uint8        num_mips;
         };
 
         struct BufferUpdateInfo {
@@ -859,7 +863,7 @@ namespace Moer::Render {
         };
 
         BindlessArray();
-        virtual ~BindlessArray()                                                    = default;
+        virtual ~BindlessArray()                                                       = default;
         virtual uint AllocateTexture(const TextureView& _texture, Sampler _sampler) = 0;
         virtual uint AllocateBuffer(BufferView _buffer)                             = 0;
 

@@ -142,6 +142,13 @@ namespace Moer::Render {
                 devce_address = true;
                 break;
             }
+            case EVkInternalBufferUsage::ShaderBuffer_Constant: {
+                usage         = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+                flags         = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+                mem_usage     = VMA_MEMORY_USAGE_AUTO;
+                devce_address = true;
+                break;
+            }
         }
         VkBufferCreateInfo buffer_info = {
             .sType                 = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
@@ -165,7 +172,7 @@ namespace Moer::Render {
         VK_CHECK_RESULT(vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_info, &alloc_info, &buffer_alloc.buffer, &buffer_alloc.alloc, nullptr));
         VulkanBuffer* vk_buffer = MoerNew(VulkanBuffer)(info, *m_device, buffer_alloc.buffer, buffer_alloc.alloc, false, devce_address);
 
-        static constexpr std::string_view usage_str[] = {"Upload", "Readback", "Scratch", "ShaderBuffer"};
+        static constexpr std::string_view usage_str[] = {"Upload", "Readback", "Scratch", "ShaderBuffer", "ShaderBuffer_Constant"};
         vk_buffer->SetName(usage_str[static_cast<uint>(_usage)]);
         return reinterpret_cast<uint64>(vk_buffer);
     }
