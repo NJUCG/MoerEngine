@@ -27,13 +27,13 @@
  */
 
 
-#ifndef AREATEX_H
-#define AREATEX_H
+#ifndef SMAA_AREATEX_H
+#define SMAA_AREATEX_H
 
-#define AREATEX_WIDTH 160
-#define AREATEX_HEIGHT 560
-#define AREATEX_PITCH (AREATEX_WIDTH * 2)
-#define AREATEX_SIZE (AREATEX_HEIGHT * AREATEX_PITCH)
+#define SMAA_AREATEX_WIDTH 160
+#define SMAA_AREATEX_HEIGHT 560
+#define SMAA_AREATEX_PITCH (AREATEX_WIDTH * 2)
+#define SMAA_AREATEX_SIZE (AREATEX_HEIGHT * AREATEX_PITCH)
 
 /**
  * Stored in R8G8 format. Load it in the following format:
