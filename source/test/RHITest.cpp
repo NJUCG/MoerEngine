@@ -362,14 +362,20 @@ int main(int argc, const char** argv) {
         PF_R8G8B8A8_UNORM,
         ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT);
 
-    TextureRef post_process_output = device.CreateTexture(
-        "post_process_output",
+    TextureRef antialiasing_temporal_texture_1 = device.CreateTexture(
+        "antialiasing_temporal_texture_1",
         Extent2D(resolution.x, resolution.y),
         PF_R8G8B8A8_UNORM,
         ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT);
 
-    TextureRef fxaa_output = device.CreateTexture(
-        "fxaa_output",
+    TextureRef antialiasing_temporal_texture_2 = device.CreateTexture(
+        "antialiasing_temporal_texture_2",
+        Extent2D(resolution.x, resolution.y),
+        PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT);
+
+    TextureRef antialiasing_output = device.CreateTexture(
+        "antialiasing_output",
         Extent2D(resolution.x, resolution.y),
         PF_R8G8B8A8_SRGB,
         ETextureUsageFlags::COLOR_ATTACHMENT);
@@ -421,7 +427,7 @@ int main(int argc, const char** argv) {
     auto post_process_pipeline = [&]() {
         GfxPsoCreateInfo pso_full_screen_info(RHIRasterizeInfo::Preset(),
                                               {},
-                                              {RHIColorAttachmentInfo::Preset(post_process_output->GetFormat())});
+                                              {RHIColorAttachmentInfo::Preset(antialiasing_temporal_texture_1->GetFormat())});
         return manager
             .Raster()
             .Vertex("test/post_process/PostProcessFullScreenQuad.hlsl")
@@ -432,7 +438,7 @@ int main(int argc, const char** argv) {
     auto fxaa_pipeline = [&]() {
         GfxPsoCreateInfo pso_full_screen_info(RHIRasterizeInfo::Preset(),
                                               {},
-                                              {RHIColorAttachmentInfo::Preset(fxaa_output->GetFormat())});
+                                              {RHIColorAttachmentInfo::Preset(antialiasing_output->GetFormat())});
         return manager
             .Raster()
             .Vertex("test/post_process/PostProcessFullScreenQuad.hlsl")
@@ -486,14 +492,15 @@ int main(int argc, const char** argv) {
     bool     first_load = true;
 
     // uint bdls_tex_handle_depth   = bindless_array->AllocateTexture(depth, sampler);
-    uint bdls_tex_handle_vbuffer             = 0;
-    uint bdls_tex_handle_normal              = 0;
-    uint bdls_tex_handle_uv                  = 0;
-    uint bdls_tex_handle_position            = 0;
-    uint bdls_tex_handle_depth               = 0;
-    uint bdls_tex_handle_pbr_shading_output  = 0;
-    uint bdls_tex_handle_post_process_output = 0;
-    uint bdls_tex_handle_fxaa_output         = 0;
+    uint bdls_tex_handle_vbuffer                         = 0;
+    uint bdls_tex_handle_normal                          = 0;
+    uint bdls_tex_handle_uv                              = 0;
+    uint bdls_tex_handle_position                        = 0;
+    uint bdls_tex_handle_depth                           = 0;
+    uint bdls_tex_handle_pbr_shading_output              = 0;
+    uint bdls_tex_handle_antialiasing_temporal_texture_1 = 0;
+    uint bdls_tex_handle_antialiasing_temporal_texture_2 = 0;
+    uint bdls_tex_handle_antialiasing_output             = 0;
 
     uint material_buffer_handle = 0;
     uint light_buffer_handle    = 0;
@@ -523,14 +530,15 @@ int main(int argc, const char** argv) {
                 light_buffer_handle    = bindless_array->AllocateBuffer(scene.GetBuffer(EGpuSceneResource::LightInfo)->GetView());
                 lighting_data_handle   = bindless_array->AllocateBuffer(lighting_buffer->GetView());
 
-                bdls_tex_handle_vbuffer             = bindless_array->AllocateTexture(vbuffer, sampler);
-                bdls_tex_handle_normal              = bindless_array->AllocateTexture(normal, sampler);
-                bdls_tex_handle_uv                  = bindless_array->AllocateTexture(uv, sampler);
-                bdls_tex_handle_position            = bindless_array->AllocateTexture(position, sampler);
-                bdls_tex_handle_depth               = bindless_array->AllocateTexture(depth->GetView(), sampler);
-                bdls_tex_handle_pbr_shading_output  = bindless_array->AllocateTexture(pbr_shading_output, sampler);
-                bdls_tex_handle_post_process_output = bindless_array->AllocateTexture(post_process_output, sampler);
-                bdls_tex_handle_fxaa_output         = bindless_array->AllocateTexture(fxaa_output, sampler);
+                bdls_tex_handle_vbuffer                         = bindless_array->AllocateTexture(vbuffer, sampler);
+                bdls_tex_handle_normal                          = bindless_array->AllocateTexture(normal, sampler);
+                bdls_tex_handle_uv                              = bindless_array->AllocateTexture(uv, sampler);
+                bdls_tex_handle_position                        = bindless_array->AllocateTexture(position, sampler);
+                bdls_tex_handle_depth                           = bindless_array->AllocateTexture(depth->GetView(), sampler);
+                bdls_tex_handle_pbr_shading_output              = bindless_array->AllocateTexture(pbr_shading_output, sampler);
+                bdls_tex_handle_antialiasing_temporal_texture_1 = bindless_array->AllocateTexture(antialiasing_temporal_texture_1, sampler);
+                bdls_tex_handle_antialiasing_temporal_texture_2 = bindless_array->AllocateTexture(antialiasing_temporal_texture_2, sampler);
+                bdls_tex_handle_antialiasing_output             = bindless_array->AllocateTexture(antialiasing_output, sampler);
 
                 Array<ImportTexture> sampled_textures;
                 sampled_textures.reserve((scene.GetGpuScene().material_textures.size()));
@@ -607,59 +615,83 @@ int main(int argc, const char** argv) {
                     .Draw("Lighting Pass", Rect2D(0, 0, resolution.x, resolution.y), std::move(full_screen_draw_datas), ColorAttachment(pbr_shading_output));
             };
 
-            // Post process Pass (only for FXAA Precompute now)
-            {
-                // draw data
-                Array<SingleDrawParam> full_screen_draw_datas;
-                full_screen_draw_datas.emplace_back(SingleDrawParam{3, 1, 0, 0, 0});
-
-                // param
-                PostProcessPipelineBindlessParam param;
-                param.input_image = bdls_tex_handle_pbr_shading_output;
-
-                // command
-                cmd_list
-                    .Gfx(post_process_pipeline, bindless_array, param)
-                    .Draw("FXAA Precompute Pass", Rect2D(0, 0, resolution.x, resolution.y), std::move(full_screen_draw_datas), ColorAttachment(post_process_output));
-            }
-
             /**
-             * FXAA Pass
+             * Antialiasing Passes (including 3 passes)
              * 
-             * Press M to switch FXAA mode:
+             * Press M to switch antialiasing mode:
              * 0: FXAA Off                ：645+-fps
              * 1: FXAA Quality(Simplified)：630+-fps
              * 2: FXAA Quality            ：610+-fps [Default]
+             * 3: SMAA (WIP)
+             * 
+             * For FXAA
+             *   Pass 1: precompute luma
+             *   Pass 2: not used
+             *   Pass 3: FXAA main pass
+             * 
+             * For SMAA (Details in shaders/test/post_process/SMAA.hlsl)
+             *   Pass 1: Edge Detection
+             *   Pass 2: Blending Weight Calculation
+             *   Pass 3: Neighborhood Blending
+             *   antialiasing_temporal_texture_1 <=> edgesTex
+             *   antialiasing_temporal_texture_2 <=> blendTex
              * 
              * TODO: Move the control (input) code to another place (next 7-12 lines)
              */
             {
-                // draw data
-                Array<SingleDrawParam> full_screen_draw_datas;
-                full_screen_draw_datas.emplace_back(SingleDrawParam{3, 1, 0, 0, 0});
+                // SMAA Precomputed Resources
+                // TODO
 
-                // input (this part code should be refactored, move to another place)
-                static uint8_t fxaa_mode = 2;
+                // input
+                static uint8_t aa_mode = 2;
                 // 0: off; 1: fxaa quality(simplified); 2: fxaa quality;
                 if (ImGui::IsKeyPressed(ImGuiKey_M, false)) {
-                    fxaa_mode = (fxaa_mode + 1) % 3;
+                    aa_mode = (aa_mode + 1) % 3;
                 }
 
-                // param
-                FxaaPipelineBindlessParam param;
-                param.input_image    = bdls_tex_handle_post_process_output;
-                param.fxaa_mode      = fxaa_mode;
-                param.resolution     = float2(resolution);
-                param.inv_resolution = float2(1.0) / float2(resolution);
+                {
+                    // draw data
+                    Array<SingleDrawParam> full_screen_draw_datas;
+                    full_screen_draw_datas.emplace_back(SingleDrawParam{3, 1, 0, 0, 0});
 
-                // command
-                cmd_list
-                    .Gfx(fxaa_pipeline, bindless_array, param)
-                    .Draw("FXAA Pass", Rect2D(0, 0, resolution.x, resolution.y), std::move(full_screen_draw_datas), ColorAttachment(fxaa_output));
+                    // param
+                    PostProcessPipelineBindlessParam param;
+                    param.input_image = bdls_tex_handle_pbr_shading_output;
+
+                    // command
+                    cmd_list
+                        .Gfx(post_process_pipeline, bindless_array, param)
+                        .Draw(
+                            "FXAA Precompute Pass",
+                            Rect2D(0, 0, resolution.x, resolution.y),
+                            std::move(full_screen_draw_datas),
+                            ColorAttachment(antialiasing_temporal_texture_1));
+                }
+
+                {
+                    // draw data
+                    Array<SingleDrawParam> full_screen_draw_datas;
+                    full_screen_draw_datas.emplace_back(SingleDrawParam{3, 1, 0, 0, 0});
+
+                    // param
+                    FxaaPipelineBindlessParam param;
+                    param.input_image    = bdls_tex_handle_antialiasing_temporal_texture_1;
+                    param.fxaa_mode      = aa_mode;
+                    param.resolution     = float2(resolution);
+                    param.inv_resolution = float2(1.0) / float2(resolution);
+
+                    // command
+                    cmd_list
+                        .Gfx(fxaa_pipeline, bindless_array, param)
+                        .Draw("FXAA Pass",
+                              Rect2D(0, 0, resolution.x, resolution.y),
+                              std::move(full_screen_draw_datas),
+                              ColorAttachment(antialiasing_output));
+                }
             }
         }
 
-        auto output = fxaa_output;// actual output (must be R8G8B8A8_SRGB format)
+        auto output = antialiasing_output;// actual output (must be R8G8B8A8_SRGB format)
 
         int w_width, w_height;
 
