@@ -459,6 +459,7 @@ int main(int argc, const char** argv) {
     uint    indices[] = {0, 1, 2};
     float4  color_red = {1, 1, 1, 1};
     Sampler sampler(SF_LINEAR, SAM_REPEAT);
+    Sampler sampler_linear_clamp(SF_LINEAR, SAM_CLAMP_TO_EDGE);
     uint    instance_buffer_handle;
     // auto vertex_buffer = device.CreateBuffer<float>(3 * sizeof(Vertex) / sizeof(float), EBufferUsageFlags::VERTEX_BUFFER);
     // auto index_buffer  = device.CreateBuffer<uint>(3, EBufferUsageFlags::INDEX_BUFFER);
@@ -536,9 +537,9 @@ int main(int argc, const char** argv) {
                 bdls_tex_handle_uv                              = bindless_array->AllocateTexture(uv, sampler);
                 bdls_tex_handle_position                        = bindless_array->AllocateTexture(position, sampler);
                 bdls_tex_handle_depth                           = bindless_array->AllocateTexture(depth->GetView(), sampler);
-                bdls_tex_handle_pbr_shading_output              = bindless_array->AllocateTexture(pbr_shading_output, sampler);
-                bdls_tex_handle_antialiasing_temporal_texture_1 = bindless_array->AllocateTexture(antialiasing_temporal_texture_1, sampler);
-                bdls_tex_handle_antialiasing_temporal_texture_2 = bindless_array->AllocateTexture(antialiasing_temporal_texture_2, sampler);
+                bdls_tex_handle_pbr_shading_output              = bindless_array->AllocateTexture(pbr_shading_output, sampler_linear_clamp);// sampler_linear_clamp is for smaa
+                bdls_tex_handle_antialiasing_temporal_texture_1 = bindless_array->AllocateTexture(antialiasing_temporal_texture_1, sampler_linear_clamp);
+                bdls_tex_handle_antialiasing_temporal_texture_2 = bindless_array->AllocateTexture(antialiasing_temporal_texture_2, sampler_linear_clamp);
                 bdls_tex_handle_antialiasing_output             = bindless_array->AllocateTexture(antialiasing_output, sampler);
 
                 Array<ImportTexture> sampled_textures;
