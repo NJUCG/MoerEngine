@@ -31,6 +31,7 @@
 #include "scene/CameraManager.h"
 #include "scene/Material.h"
 #include "scene/RenderableManager.h"
+#include "utils/smaa/SmaaPrecomputedTextures.h"
 
 using namespace Moer::Render;
 using namespace Moer;
@@ -639,15 +640,15 @@ int main(int argc, const char** argv) {
              * TODO: Move the control (input) code to another place (next 7-12 lines)
              */
             {
-                // SMAA Precomputed Resources
-                // TODO
-
                 // input
                 static uint8_t aa_mode = 2;
                 // 0: off; 1: fxaa quality(simplified); 2: fxaa quality;
                 if (ImGui::IsKeyPressed(ImGuiKey_M, false)) {
                     aa_mode = (aa_mode + 1) % 3;
                 }
+
+                Moer::SmaaPrecomputedTextures::areaTexBytes;
+                Moer::SmaaPrecomputedTextures::searchTexBytes;
 
                 {
                     // draw data
