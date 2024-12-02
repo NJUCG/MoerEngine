@@ -58,3 +58,7 @@ endif()
 set(VULKAN_HEADERS_INSTALL_DIR ${moer_third_party_dir}/VulkanSDK)
 add_subdirectory(volk)
 set_target_folder(volk ${third_party_folder}/volk)
+
+# Load smaa precomputed textures
+include(${CMAKE_CURRENT_SOURCE_DIR}/smaa.cmake)
+set_target_folder(smaa ${third_party_folder}/smaa)
