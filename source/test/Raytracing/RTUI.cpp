@@ -140,6 +140,11 @@ namespace Moer::Render {
         config.sun_direction = Normalizef(config.sun_direction);
         ImGui::SliderFloat3("Sun Direction", &config.sun_direction.x, -1.0f, 1.0f);
         ImGui::SliderFloat("Exposure", &config.exposure, 0.0f, 10.0f);
+        ImGui::SliderFloat("Sun Angular Diameter", &config.sun_angular_diameter, 0.0f, 1.0f);
+
+        int max_bounce = config.max_bounce;
+        ImGui::SliderInt("Max Bounce", &max_bounce, 1, 5);
+        config.max_bounce = max_bounce;
         //show fps
         ImGui::Text("FPS: %.1f", io.Framerate);
 

@@ -714,6 +714,7 @@ namespace Moer {
             RenderableManager::Get().SetMeshInfo(entity, _scene_data.m_mesh_infos[primitive.mesh_id]);
             RenderableManager::Get().SetMaterialInstance(entity, _scene_data.m_material_instances[primitive.material_id]);
             RenderableManager::Get().SetRTMeshInfo(entity, _scene_data.rt_mesh_infos[primitive.mesh_id]);
+            TransformManager::Get().Create(entity);
             TransformManager::Get().Set(entity, primitive.transform);
         }
 

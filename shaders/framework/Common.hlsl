@@ -124,20 +124,20 @@ struct RTConfigParam {
   float aperture;
   float focal_distance;
   float focal_length;
-  uint32_t denoiser_type;
-  uint32_t on_screen;
-  uint32_t frame_index;
-  uint32_t forced_material;
-  uint32_t use_normalmap;
-  uint32_t b_worldspace_motion;
-  uint32_t tracing_mode;
-  uint32_t sample_num;
-  uint32_t bounce_num;
-  uint32_t taa;
-  uint32_t resolve;
-  uint32_t psr;
-  uint32_t validation;
-  uint32_t trim_lobe;
+  uint denoiser_type;
+  uint on_screen;
+  uint frame_index;
+  uint forced_material;
+  uint use_normalmap;
+  uint b_worldspace_motion;
+  uint tracing_mode;
+  uint sample_num;
+  uint bounce_num;
+  uint taa;
+  uint resolve;
+  uint psr;
+  uint validation;
+  uint trim_lobe;
   // uint32_t highlight_ahs;
   // uint32_t ahs_dynamic_mip;
 
@@ -152,7 +152,7 @@ struct MaterialData {
   float metallic_factor;
   float roughness_factor;
   float ao;
-  uint albedo_map;
+  int albedo_map;
   int normal_map;
   int metallic_roughness_map;
   int ao_map;
@@ -228,15 +228,9 @@ float GetSpecularLobeHalfAngle(float linear_roughness,
 }
 } // namespace ImportanceSampling
 
-namespace DeferedRendering{
-float3 PackNormal(float3 n) {
-  return n * 0.5 + 0.5;
-}
-float3 UnpackNormal(float3 n) {
-  return n * 2 - 1;
-}
+namespace DeferedRendering {
+float3 PackNormal(float3 n) { return n * 0.5 + 0.5; }
+float3 UnpackNormal(float3 n) { return n * 2 - 1; }
 } // namespace DeferedRendering
-
-
 
 #endif

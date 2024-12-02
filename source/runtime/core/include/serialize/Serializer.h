@@ -51,6 +51,9 @@ namespace Moer {
         InputStream& operator>>(Moer::Array<T>& _value) {
             size_t size;
             *this >> size;
+            if (size == 0) {
+                return *this;
+            }
             _value.resize(size);
             if constexpr (HasInputStreamOverloadFunction<T>::value) {
                 for (auto& v : _value) {

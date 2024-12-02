@@ -217,6 +217,12 @@ bool CastVisibilityRay(float3 origin, float3 direction, float tmin, float tmax,
   ray_query.TraceRayInline(accel, ray_flags, instance_mask, ray_desc);
 
   while (ray_query.Proceed()) {
+  if (ray_query.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE) {
+      ray_query.CommitNonOpaqueTriangleHit();
+    } else {
+      ray_query.Abort();
+      break;
+    }
   }
 
   return ray_query.CommittedStatus() == COMMITTED_NOTHING;
@@ -238,12 +244,16 @@ RTMaterialProp GetMaterialProps(in RTHitInfo hit_info) {
     return mat;
   }
   // base color
+  float4 color = mat_data.base_color_factor;
+//   printf("mat_data.albedo_map %d\n", mat_data.albedo_map);
+  if(mat_data.albedo_map != 0){
   TextureHandle albedo_map = TextureHandle(mat_data.albedo_map);
 //   printf("albedo_map %d material_buffer_handle %d \n", mat_data.albedo_map, param.material_buffer_handle);
 
   float3 coords = Raytracing::GetSamplingCoords(albedo_map.handle, hit_info.uv,
                                                 hit_info.mip, MIP_SHARP);
-  float4 color = albedo_map.SampleLevel2D<float4>(coords.xy, coords.z);
+    color = albedo_map.SampleLevel2D<float4>(coords.xy, coords.z);
+  }
 //   printf("coord z %f\n", coords.z);
 
 //   uint tex_handle =                                                         
@@ -275,9 +285,9 @@ RTMaterialProp GetMaterialProps(in RTHitInfo hit_info) {
   //   metalness = mr.x;
   //   roughness = mr.y;
   // }
-  float3 l_emi = float3(0.0, 0.0, 0.0);
+  float3 l_emi = mat_data.emissive_factor;
 
-  float emission_level = STL::Color::Luminance(mat.l_emi);
+  float emission_level = STL::Color::Luminance(l_emi);
   emission_level = saturate(emission_level * 50.0);
 
   metalness = lerp(metalness, 0.0, emission_level);
@@ -350,12 +360,23 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
     float3 l_sum = 0.f;
     float3 path_throughput = 1.f;
 
-    bool is_diffuse_path = true;
+    bool is_diffuse_path = false;
+    {
+        float diffuse_probablility =
+            Raytracing::EstimateDiffuseProbability(hit_info, mat);
+
+        float rnd = STL::Rng::Hash::GetFloat();
+
+        is_diffuse_path = rnd < diffuse_probablility;
+    }
     [loop] for (uint bounce = 1;
                 bounce <= pt_desc.bounce_num && !hit_info.IsSky(); bounce++) {
 
       bool is_diffuse = is_diffuse_path;
-
+    //   if(bounce > 3){
+    //     printf("bounce %d\n", bounce);
+    //   }
+        //current point
       {
         float diffuse_probablility =
             Raytracing::EstimateDiffuseProbability(hit_info, mat);
@@ -373,7 +394,7 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
         float2 mip_and_cone =
             Raytracing::GetConeAngleFromRoughness(hit_info.mip, mat.roughness);
 
-        float3x3 local_basis = STL::Geometry::GetBasis(hit_info.n);
+        float3x3 local_basis = STL::Geometry::GetBasis(mat.n);
 
         float3 v_local = STL::Geometry::RotateVector(local_basis, hit_info.v);
 
@@ -392,18 +413,24 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
           float2 rnd = STL::Rng::Hash::GetFloat2();
 
           float3 r;
+          if(is_diffuse){
+            r = STL::ImportanceSampling::Cosine::GetRay(rnd);
+          }else{
+             float3 h_local = STL::ImportanceSampling::VNDF::GetRay(
+                rnd, mat.roughness, v_local, 1.f);
 
-          r = STL::ImportanceSampling::Cosine::GetRay(rnd);
+            r = reflect(-v_local, h_local);
+          }
 
           bool is_miss = r.z < 0.f;
-
-          // to world space
           r = STL::Geometry::RotateVectorInverse(local_basis, r);
 
-          is_miss =
-              CastVisibilityRay(hit_info.x, r, 0.001f, INF, mip_and_cone, tlas,
+          if(!is_miss){
+            is_miss =
+              CastVisibilityRay(hit_info.GetXOffset(), r, 0.001f, INF, mip_and_cone, tlas,
                                 INSTANCE_FLAG_GEOMETRY_ALL, pt_desc.ray_flags);
-
+          }
+          // to world space
           if (!is_miss) {
             samples_num++;
           }
@@ -434,7 +461,7 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
           STL::BRDF::ConvertBaseColorMetalnessToAlbedoRf0(
               mat.base_color, mat.metalness, albedo, Rf0);
           float3 h = normalize(ray + hit_info.v);
-          float voh = abs(dot(ray, h));
+          float voh = abs(dot(hit_info.v, h));
           float nol = saturate(dot(hit_info.n, ray));
 
           if (is_diffuse) {
@@ -457,7 +484,7 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
           }
         }
 
-        hit_info = CastRay(hit_info.x, ray, 0.001f, INF, mip_and_cone, tlas,
+        hit_info = CastRay(hit_info.GetXOffset(), ray, 0.001f, INF, mip_and_cone, tlas,
                            INSTANCE_FLAG_GEOMETRY_ALL, pt_desc.ray_flags);
         mat = GetMaterialProps(hit_info);
       }
@@ -485,10 +512,10 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
                 hit_info.mip, mat.roughness);
 
             l *= CastVisibilityRay(
-                hit_info.GetXOffset(), sun_direction, 0.001f, INF, mip_and_cone,
+                hit_info.GetXOffset(), sun_direction, 0.f, INF, mip_and_cone,
                 tlas, INSTANCE_FLAG_GEOMETRY_ALL, pt_desc.ray_flags);
           }
-          l += mat.l_emi;
+          l += mat.l_emi.xyz;
           l_cached.xyz = lerp(l, l_cached.xyz, l_cached.w);
         }
 
@@ -521,7 +548,7 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
       }
     }
 
-    path_throughput *= Raytracing::GetAmbientBRDF(hit_info, mat, true);
+    path_throughput *= Raytracing::GetAmbientBRDF(hit_info, mat);
     path_throughput *=
         1.f + Raytracing::EstimateDiffuseProbability(hit_info, mat, true);
 
@@ -535,6 +562,7 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
     } else {
       pt_result.specular_radiance += l_sum;
       pt_result.specular_hit_dist += norm_hit_distance;
+    //   printf("specular path flux: %f", STL::Color::Luminance(l_sum));
     }
   }
 
@@ -607,7 +635,7 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
   if (hit_info.IsSky()) {
     out_shadow_info[pixel_pos] = float2(0.f, 0.f);
     out_emission[pixel_pos] = mat.l_emi;
-    out_direct_lighting[pixel_pos] = mat.l_direct;
+    out_direct_lighting[pixel_pos] = mat.l_emi;
     return;
   }
 
@@ -631,7 +659,7 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
     rnd = STL::Rng::Hash::GetFloat2();
 
     rnd = STL::ImportanceSampling::Cosine::GetRay(rnd).xy;
-    rnd *= 0.1f; // angular radius
+    rnd *= rt_config.tan_sun_angular_radius; // angular radius
     float3x3 m_sun_basis =
         STL::Geometry::GetBasis(rt_config.sun_direction_gexposure.xyz);
     float3 sun_direction = normalize(m_sun_basis[0] * rnd.x +
@@ -672,19 +700,37 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
   pt_desc.mat = mat;
   pt_desc.pixel_pos = pixel_pos;
   pt_desc.path_num = 1;
-  pt_desc.bounce_num = 3;
+  pt_desc.bounce_num = rt_config.bounce_num;
   pt_desc.instance_mask = INSTANCE_FLAG_GEOMETRY_ALL;
   pt_desc.ray_flags = 0;
 
   PathTracingResult pt_result = PathTracing(pt_desc);
 
   float3 l_sum = mat.l_direct * (shadow_translucency) + mat.l_emi;
+
+    //composition
+  
+    float3 albedo, Rf0;
+    STL::BRDF::ConvertBaseColorMetalnessToAlbedoRf0(mat.base_color, mat.metalness,
+                                                    albedo, Rf0);
+     float3 nov = abs(dot(hit_info.n, hit_info.v));
+     float3 f_env = STL::BRDF::EnvironmentTerm_Rtg(Rf0, nov, mat.roughness);
+
+     float3 diff_demod = ( 1.0 - f_env ) * albedo * 0.99 + 0.01;
+    float3 spec_demod = f_env * 0.99 + 0.01;
+
+    float3 l_diff = pt_result.diffuse_radiance * diff_demod;
+    float3 l_spec = pt_result.specular_radiance * spec_demod;
+
+
+    l_diff += l_sum;
+  
 //   if (STL::Color::Luminance(shadow_translucency) > 0.0f)
 //     printf("mat.l_direct %f %f %f shadow_distance %f\n", mat.l_emi,
 //     mat.l_emi,
 //            mat.l_emi, shadow_translucency);
   //   out_position[pixel_pos] = float4(hit_info.x, 1.0f);
-  out_direct_lighting[pixel_pos] = l_sum;
+  out_direct_lighting[pixel_pos] = l_diff + l_spec;
   out_diffuse[pixel_pos] =
       float4(pt_result.diffuse_radiance, pt_result.diffuse_hit_dist);
   out_specular[pixel_pos] =

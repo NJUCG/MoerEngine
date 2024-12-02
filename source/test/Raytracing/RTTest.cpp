@@ -198,10 +198,10 @@ int main(int argc, const char** argv) {
 
     Scene g_scene{};
     Resource::LoaderInterface::LoadSceneFromFileAsync(ConfigManager::GetInstance().GetScenePath(), &g_scene);
-    OnScopeExit([&] {
+    auto&&           load_scene_scope = OnScopeExit([&] {
         Scene::ResetAsyncLoadInfo();
     });
-    BindlessArrayRef bindless_array = g_scene.GetBindlessArray();
+    BindlessArrayRef bindless_array   = g_scene.GetBindlessArray();
 
     FenceRef copy_timeline = device.CreateFence();
 
@@ -456,6 +456,8 @@ int main(int argc, const char** argv) {
                     instance.geom      = blas;
                     instance.transform = TransformManager::Get().Get(_entity).GetMatrix3x4();
 
+                    LOG_INFO("instance transform w {} {} {} ", instance.transform.r0.w, instance.transform.r1.w, instance.transform.r2.w);
+
                     instance.flag.need_create = true;
                     instance.custom_index     = instance.instance_id;
                     instance.visible_mask     = RTVM_ALL;
@@ -517,7 +519,8 @@ int main(int argc, const char** argv) {
             rt_config_param.world2clip = camera->GetProjectionMatrix() * camera->GetViewMatrix();
 
             rt_config_param.tan_pixel_angular_radius = tanf(Angle::DegreeToRadian(camera->GetFov()));
-            rt_config_param.tan_sun_angular_radius   = tanf(Angle::DegreeToRadian(0.533f * 0.5f));
+            rt_config_param.tan_sun_angular_radius   = tanf(Angle::DegreeToRadian(rt_ui_config.sun_angular_diameter * 0.5f));
+            rt_config_param.bounce_num               = rt_ui_config.max_bounce;
             float3 sun_dir                           = Normalizef(rt_ui_config.sun_direction);
             rt_config_param.sun_direction_gexposure  = float4(sun_dir, rt_ui_config.exposure);
             cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)&rt_config_param, sizeof(RTConfigParam)), rt_config_param_buffer->GetView());
