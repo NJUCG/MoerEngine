@@ -68,5 +68,81 @@ namespace Moer {
         return std::strcmp(a.c_str(), b.c_str()) == 0;
     }
 
+    template<typename T, size_t N>
+        requires std::is_trivially_copyable_v<T>
+    class CircularQueue {
+    private:
+        StaticArray<T, N> data;
+        size_t            head = 0;
+        size_t            tail = 0;
+        size_t            size = 0;
+
+    public:
+        bool Enqueue(const T& _value) {
+            if (Full()) {
+                Dequeue();
+            }
+
+            data[tail] = _value;
+            tail       = (tail + 1) % N;
+            ++size;
+            return true;
+        }
+
+        bool Enqueue(const T&& _value) {
+            if (Full()) {
+                Dequeue();
+            }
+
+            data[tail] = std::forward<T>(_value);
+            tail       = (tail + 1) % N;
+            ++size;
+            return true;
+        }
+
+        bool Dequeue() {
+            assert(!Empty() && "CircularQueue is empty, cannot dequeue!");
+            head = (head + 1) % N;
+            --size;
+            return true;
+        }
+
+        T& Front() {
+            assert(!Empty() && "CircularQueue is empty, cannot get front!");
+            return data[head];
+        }
+
+        const T& Front() const {
+            assert(!Empty() && "CircularQueue is empty, cannot get front!");
+            return data[head];
+        }
+
+        T& Back() {
+            assert(!Empty() && "CircularQueue is empty, cannot get back!");
+            return data[(tail - 1 + N) % N];
+        }
+
+        const T& Back() const {
+            assert(!Empty() && "CircularQueue is empty, cannot get back!");
+            return data[(tail - 1 + N) % N];
+        }
+
+        bool Full() const {
+            return size == N;
+        }
+
+        bool Empty() const {
+            return size == 0;
+        }
+
+        size_t Size() const {
+            return size;
+        }
+
+        constexpr size_t Capacity() const {
+            return N;
+        }
+    };
+
 }// namespace Moer
 #endif//MOER_ENGINE_STL_H

@@ -1320,9 +1320,9 @@ namespace Moer::Render {
             if (_submit.callbacks.size() > 0) {
                 event_queue.emplace_back(std::move(_submit.callbacks), current_timeline, false);
             }
-            event_queue.emplace_back(PresentEvent(), current_timeline, false);
             queue_cv.notify_one();
             timer.Stop();
+            executed_queue.Enqueue(current_timeline);
             // LOG_INFO("Submit time {}", timer.ElapsedMilliseconds());
             return {uint64(timeline), current_timeline};
         }
@@ -1385,6 +1385,7 @@ namespace Moer::Render {
             std::unique_lock<std::mutex> lock(event_mutex);
             event_queue.emplace_back(std::move(presentor), current_timeline, true);
             queue_cv.notify_one();
+            presented_queue.Enqueue(current_timeline);
         }
     }
 
@@ -1393,8 +1394,8 @@ namespace Moer::Render {
     }
 
     UniquePtr<VulkanAllocator> VkCommandQueue::GetAllocator() {
-        if (last_frame >= vk_device.cmd_alloc_limits) {
-            Complete(last_frame - vk_device.cmd_alloc_limits + 1);
+        if (executed_queue.Full()) {
+            Complete(executed_queue.Front());
         }
         auto allocator = std::move(UniquePtr<VulkanAllocator>(allocators.Pop()));
         if (allocator) {
@@ -1405,7 +1406,9 @@ namespace Moer::Render {
     }
 
     UniquePtr<VulkanPresentor> VkCommandQueue::GetPresentor() {
-        Complete(presented_frame);
+        if (presented_queue.Full()) {
+            Complete(presented_queue.Front());
+        }
         auto presentor = std::move(UniquePtr<VulkanPresentor>(presentors.Pop()));
         if (presentor) {
             return std::move(presentor);
@@ -1422,13 +1425,6 @@ namespace Moer::Render {
                 if (!b_wake_up) { return; }
                 uint64 prev_timeline = executed_frame;
                 while (prev_timeline < timeline && !executed_frame.compare_exchange_weak(prev_timeline, timeline)) {
-                    std::this_thread::yield();
-                }
-            };
-
-            auto wait_until_reach_present_timeline = [&timeline, this]() {
-                uint64 prev_timeline = presented_frame;
-                while (prev_timeline < timeline && !presented_frame.compare_exchange_weak(prev_timeline, timeline)) {
                     std::this_thread::yield();
                 }
             };
@@ -1494,8 +1490,6 @@ namespace Moer::Render {
                             visit_funcs(_evt);
                         } else if constexpr (std::is_same_v<TEvent, SignalEvent>) {
                             visit_signal_event(_evt);
-                        } else if constexpr (std::is_same_v<TEvent, PresentEvent>) {
-                            wait_until_reach_present_timeline();
                         }
                     },
                     evt->event);
@@ -1515,12 +1509,6 @@ namespace Moer::Render {
             std::this_thread::yield();
         }
         // vk_device.FlushDeferredReleases();
-    }
-
-    void VkCommandQueue::Present(uint64 _timeline) {
-        while (presented_frame < _timeline) {
-            std::this_thread::yield();
-        }
     }
 
     void VkCommandQueue::Signal() {
