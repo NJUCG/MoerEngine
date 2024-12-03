@@ -474,8 +474,8 @@ int main(int argc, const char** argv) {
                                               {RHIColorAttachmentInfo::Preset(antialiasing_temporal_texture_1->GetFormat())});
         return manager
             .Raster()
-            .Vertex("test/post_process/SMAA.hlsl", "SMAAEdgeDetectionVS_Wrapper")
-            .Pixel("test/post_process/SMAA.hlsl", "SMAALumaEdgeDetectionPS_Wrapper")
+            .Vertex("test/post_process/SMAAWrapper.hlsl", "SMAAEdgeDetectionVS_Wrapper")
+            .Pixel("test/post_process/SMAAWrapper.hlsl", "SMAALumaEdgeDetectionPS_Wrapper")
             .Build<SmaaEdgeDetectionPipeline>(std::move(pso_full_screen_info));
     }();// IILE(Immediately Invoked Lambda Expression), usually for complex varaible initialization and avoid naming conflicts
 
@@ -485,8 +485,8 @@ int main(int argc, const char** argv) {
                                               {RHIColorAttachmentInfo::Preset(antialiasing_temporal_texture_2->GetFormat())});
         return manager
             .Raster()
-            .Vertex("test/post_process/SMAA.hlsl", "SMAABlendingWeightCalculationVS_Wrapper")
-            .Pixel("test/post_process/SMAA.hlsl", "SMAABlendingWeightCalculationPS_Wrapper")
+            .Vertex("test/post_process/SMAAWrapper.hlsl", "SMAABlendingWeightCalculationVS_Wrapper")
+            .Pixel("test/post_process/SMAAWrapper.hlsl", "SMAABlendingWeightCalculationPS_Wrapper")
             .Build<SmaaBlendingWeightPipeline>(std::move(pso_full_screen_info));
     }();
 
@@ -496,8 +496,8 @@ int main(int argc, const char** argv) {
                                               {RHIColorAttachmentInfo::Preset(antialiasing_output->GetFormat())});
         return manager
             .Raster()
-            .Vertex("test/post_process/SMAA.hlsl", "SMAANeighborhoodBlendingVS_Wrapper")
-            .Pixel("test/post_process/SMAA.hlsl", "SMAANeighborhoodBlendingPS_Wrapper")
+            .Vertex("test/post_process/SMAAWrapper.hlsl", "SMAANeighborhoodBlendingVS_Wrapper")
+            .Pixel("test/post_process/SMAAWrapper.hlsl", "SMAANeighborhoodBlendingPS_Wrapper")
             .Build<SmaaNeighborhoodBlendingPipeline>(std::move(pso_full_screen_info));
     }();
 
