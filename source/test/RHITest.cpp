@@ -170,14 +170,21 @@ public:
 #pragma region AA Pipeline Struct
 
 struct SmaaSharedPipelineBindlessParam {
-    uint   color_tex;// initial input image
-    uint   search_tex;
-    uint   area_tex;
-    uint   edges_tex;
-    uint   blend_tex;
-    uint   point_sampler;
-    uint   linear_sampler;
-    float4 rt_metrics;// float4(inv_resolution.xy, resolution.xy)
+    uint       aa_mode;
+    uint       color_tex;   // initial input image
+    uint       position_tex;// position gbuffer
+    uint       depth_tex;   // depth gbuffer
+    uint       search_tex;
+    uint       area_tex;
+    uint       edges_tex;
+    uint       blend_tex;
+    uint       current_color_tex; // current output image (without temporal AA)
+    uint       previous_color_tex;// previous output image (without temporal AA)
+    uint       frame_index;
+    uint       point_sampler;
+    uint       linear_sampler;
+    float4     rt_metrics;             // float4(inv_resolution.xy, resolution.xy)
+    Matrix4x4f curr_inv_vp_and_prev_vp;// = previous_view_projection * current_inverse_view_projection
 };
 class SmaaEdgeDetectionPipeline : public RasterPipeline {
 public:
@@ -186,7 +193,6 @@ public:
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
     DEFINE_SHADER_ARGS(bdls, param);
 };
-
 class SmaaBlendingWeightPipeline : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(SmaaBlendingWeightPipeline);
@@ -194,10 +200,23 @@ public:
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
     DEFINE_SHADER_ARGS(bdls, param);
 };
-
 class SmaaNeighborhoodBlendingPipeline : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(SmaaNeighborhoodBlendingPipeline);
+    DEFINE_SHADER_CONSTANT_STRUCT(SmaaSharedPipelineBindlessParam, param);
+    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
+    DEFINE_SHADER_ARGS(bdls, param);
+};
+class SmaaT2xNeighborhoodBlendingPipeline : public RasterPipeline {
+public:
+    DEFINE_RASTER_PIPELINE_CLASS(SmaaT2xNeighborhoodBlendingPipeline);
+    DEFINE_SHADER_CONSTANT_STRUCT(SmaaSharedPipelineBindlessParam, param);
+    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
+    DEFINE_SHADER_ARGS(bdls, param);
+};
+class SmaaT2xResolvePipeline : public RasterPipeline {
+public:
+    DEFINE_RASTER_PIPELINE_CLASS(SmaaT2xResolvePipeline);
     DEFINE_SHADER_CONSTANT_STRUCT(SmaaSharedPipelineBindlessParam, param);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
     DEFINE_SHADER_ARGS(bdls, param);
@@ -413,6 +432,18 @@ int main(int argc, const char** argv) {
         PF_R8G8B8A8_UNORM,
         ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT);
 
+    StaticArray<TextureRef, 2> antialiasing_temporal_texture_34 = StaticArray<TextureRef, 2>{
+        device.CreateTexture(
+            "antialiasing_temporal_texture_3",
+            Extent2D(resolution.x, resolution.y),
+            PF_R8G8B8A8_UNORM,
+            ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT),
+        device.CreateTexture(
+            "antialiasing_temporal_texture_4",
+            Extent2D(resolution.x, resolution.y),
+            PF_R8G8B8A8_UNORM,
+            ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT)};
+
     TextureRef antialiasing_output = device.CreateTexture(
         "antialiasing_output",
         Extent2D(resolution.x, resolution.y),
@@ -501,6 +532,28 @@ int main(int argc, const char** argv) {
             .Build<SmaaNeighborhoodBlendingPipeline>(std::move(pso_full_screen_info));
     }();
 
+    auto smaa_t2x_neighborhood_blending_pipeline = [&]() {
+        GfxPsoCreateInfo pso_full_screen_info(RHIRasterizeInfo::Preset(),
+                                              {},
+                                              {RHIColorAttachmentInfo::Preset(antialiasing_temporal_texture_34[0]->GetFormat())});
+        return manager
+            .Raster()
+            .Vertex("test/post_process/SMAAWrapper.hlsl", "SMAANeighborhoodBlendingVS_Wrapper")
+            .Pixel("test/post_process/SMAAWrapper.hlsl", "SMAANeighborhoodBlendingPS_Wrapper")
+            .Build<SmaaT2xNeighborhoodBlendingPipeline>(std::move(pso_full_screen_info));
+    }();
+
+    auto smaa_t2x_resolve_pipeline = [&]() {
+        GfxPsoCreateInfo pso_full_screen_info(RHIRasterizeInfo::Preset(),
+                                              {},
+                                              {RHIColorAttachmentInfo::Preset(antialiasing_output->GetFormat())});
+        return manager
+            .Raster()
+            .Vertex("test/post_process/SMAAWrapper.hlsl", "SMAAResolveVS_Wrapper")
+            .Pixel("test/post_process/SMAAWrapper.hlsl", "SMAAResolvePS_Wrapper")
+            .Build<SmaaT2xResolvePipeline>(std::move(pso_full_screen_info));
+    }();
+
     // fxaa
     auto fxaa_precompute_pipeline = [&]() {
         GfxPsoCreateInfo pso_full_screen_info(RHIRasterizeInfo::Preset(),
@@ -574,7 +627,7 @@ int main(int argc, const char** argv) {
         std::span<byte>((byte*)&SmaaPrecomputedTextures::areaTexBytes,
                         sizeof(SmaaPrecomputedTextures::areaTexBytes)),
         smaa_area_tex);
-    uint bdls_tex_smaa_area_tex = bindless_array->AllocateTexture(smaa_area_tex, sampler);
+    uint bdls_tex_handle_smaa_area_tex = bindless_array->AllocateTexture(smaa_area_tex, sampler);
 
     TextureRef smaa_search_tex = device.CreateTexture(
         "smaa_search_tex",
@@ -586,7 +639,7 @@ int main(int argc, const char** argv) {
         std::span<byte>((byte*)&SmaaPrecomputedTextures::searchTexBytes,
                         sizeof(SmaaPrecomputedTextures::searchTexBytes)),
         smaa_search_tex);
-    uint bdls_tex_smaa_search_tex = bindless_array->AllocateTexture(smaa_search_tex, sampler);
+    uint bdls_tex_handle_smaa_search_tex = bindless_array->AllocateTexture(smaa_search_tex, sampler);
 
 #pragma endregion
 
@@ -604,15 +657,16 @@ int main(int argc, const char** argv) {
     bool     first_load = true;
 
     // uint bdls_tex_handle_depth   = bindless_array->AllocateTexture(depth, sampler);
-    uint bdls_tex_handle_vbuffer                         = 0;
-    uint bdls_tex_handle_normal                          = 0;
-    uint bdls_tex_handle_uv                              = 0;
-    uint bdls_tex_handle_position                        = 0;
-    uint bdls_tex_handle_depth                           = 0;
-    uint bdls_tex_handle_pbr_shading_output              = 0;
-    uint bdls_tex_handle_antialiasing_temporal_texture_1 = 0;
-    uint bdls_tex_handle_antialiasing_temporal_texture_2 = 0;
-    uint bdls_tex_handle_antialiasing_output             = 0;
+    uint                 bdls_tex_handle_vbuffer                          = 0;
+    uint                 bdls_tex_handle_normal                           = 0;
+    uint                 bdls_tex_handle_uv                               = 0;
+    uint                 bdls_tex_handle_position                         = 0;
+    uint                 bdls_tex_handle_depth                            = 0;
+    uint                 bdls_tex_handle_pbr_shading_output               = 0;
+    uint                 bdls_tex_handle_antialiasing_temporal_texture_1  = 0;
+    uint                 bdls_tex_handle_antialiasing_temporal_texture_2  = 0;
+    StaticArray<uint, 2> bdls_tex_handle_antialiasing_temporal_texture_34 = StaticArray<uint, 2>{0, 0};
+    uint                 bdls_tex_handle_antialiasing_output              = 0;
 
     uint material_buffer_handle = 0;
     uint light_buffer_handle    = 0;
@@ -642,15 +696,17 @@ int main(int argc, const char** argv) {
                 light_buffer_handle    = bindless_array->AllocateBuffer(scene.GetBuffer(EGpuSceneResource::LightInfo)->GetView());
                 lighting_data_handle   = bindless_array->AllocateBuffer(lighting_buffer->GetView());
 
-                bdls_tex_handle_vbuffer                         = bindless_array->AllocateTexture(vbuffer, sampler);
-                bdls_tex_handle_normal                          = bindless_array->AllocateTexture(normal, sampler);
-                bdls_tex_handle_uv                              = bindless_array->AllocateTexture(uv, sampler);
-                bdls_tex_handle_position                        = bindless_array->AllocateTexture(position, sampler);
-                bdls_tex_handle_depth                           = bindless_array->AllocateTexture(depth->GetView(), sampler);
-                bdls_tex_handle_pbr_shading_output              = bindless_array->AllocateTexture(pbr_shading_output, sampler);
-                bdls_tex_handle_antialiasing_temporal_texture_1 = bindless_array->AllocateTexture(antialiasing_temporal_texture_1, sampler);
-                bdls_tex_handle_antialiasing_temporal_texture_2 = bindless_array->AllocateTexture(antialiasing_temporal_texture_2, sampler);
-                bdls_tex_handle_antialiasing_output             = bindless_array->AllocateTexture(antialiasing_output, sampler);
+                bdls_tex_handle_vbuffer                             = bindless_array->AllocateTexture(vbuffer, sampler);
+                bdls_tex_handle_normal                              = bindless_array->AllocateTexture(normal, sampler);
+                bdls_tex_handle_uv                                  = bindless_array->AllocateTexture(uv, sampler);
+                bdls_tex_handle_position                            = bindless_array->AllocateTexture(position, sampler);
+                bdls_tex_handle_depth                               = bindless_array->AllocateTexture(depth->GetView(), sampler);
+                bdls_tex_handle_pbr_shading_output                  = bindless_array->AllocateTexture(pbr_shading_output, sampler);
+                bdls_tex_handle_antialiasing_temporal_texture_1     = bindless_array->AllocateTexture(antialiasing_temporal_texture_1, sampler);
+                bdls_tex_handle_antialiasing_temporal_texture_2     = bindless_array->AllocateTexture(antialiasing_temporal_texture_2, sampler);
+                bdls_tex_handle_antialiasing_temporal_texture_34[0] = bindless_array->AllocateTexture(antialiasing_temporal_texture_34[0], sampler);
+                bdls_tex_handle_antialiasing_temporal_texture_34[1] = bindless_array->AllocateTexture(antialiasing_temporal_texture_34[1], sampler);
+                bdls_tex_handle_antialiasing_output                 = bindless_array->AllocateTexture(antialiasing_output, sampler);
 
                 Array<ImportTexture> sampled_textures;
                 sampled_textures.reserve((scene.GetGpuScene().material_textures.size()));
@@ -670,6 +726,22 @@ int main(int argc, const char** argv) {
 
             auto camera_entity = scene.GetCameras()[0];
             auto camera        = CameraManager::Get().Get(camera_entity);
+
+            // @AA_INPUT
+            static uint8_t       aa_mode     = 3;
+            static const uint8_t aa_mode_max = 5;
+            if (ImGui::IsKeyPressed(ImGuiKey_M, false)) {
+                aa_mode = (aa_mode + 1) % aa_mode_max;
+            }
+
+            // Jitter Camera for SMAA T2x
+            static uint8_t smaa_current_frame_index = 0;
+            if (aa_mode == 4) {
+                smaa_current_frame_index ^= 1;
+                static StaticArray<float2, 2> smaa_jitter = {float2(0.25f, -0.25f), float2(-0.25f, 0.25f)};
+                camera->SetJitterMatrix(smaa_jitter[smaa_current_frame_index]);
+            }
+
             camera->Tick();
 
             // GBuffer Pass
@@ -694,7 +766,7 @@ int main(int argc, const char** argv) {
             param.texture_handle         = bdls_tex_handle_red;
             param.buffer_handle          = bdls_buffer_handle_red;
             param.instance_buffer_handle = instance_buffer_handle;
-            param.camera_view_proj       = camera->GetProjectionMatrix() * camera->GetViewMatrix();
+            param.camera_view_proj       = camera->GetViewProjectionMatrix();
             cmd_list.Gfx(raster_pipeline_constant_color, sampler, red_tex, bindless_array, param)
                 .Draw(Rect2D(0, 0, resolution.x, resolution.y), vb_span, ib, std::move(draw_datas), DepthAttachment(depth->GetView().GetTexture()), ColorAttachment(vbuffer), ColorAttachment(normal), ColorAttachment(uv), ColorAttachment(position));
 
@@ -711,7 +783,7 @@ int main(int argc, const char** argv) {
             material_param.light_buffer        = light_buffer_handle;
 
             LightingData lighting_data;
-            lighting_data.inv_view_proj   = Inverse(camera->GetProjectionMatrix() * camera->GetViewMatrix());
+            lighting_data.inv_view_proj   = camera->GetViewProjectionMatrixInv();
             lighting_data.light_count     = scene.GetLights().size();
             lighting_data.camera_position = camera->GetPosition();
             cmd_list.CopyFrom(std::span<byte>((byte*)&lighting_data, sizeof(lighting_data)), lighting_buffer->GetView());
@@ -734,16 +806,28 @@ int main(int argc, const char** argv) {
              * 0: FXAA Off                : 620+-fps
              * 1: FXAA Quality(Simplified): 612+-fps
              * 2: FXAA Quality            : 584+-fps
-             * 3: SMAA (Preset High)      : 578+-fps [Default]
+             * 3: SMAA 1x  (Preset High)  : 578+-fps [Default]
+             * 4: SMAA T2x (Preset High)  : 
              * 
              * For FXAA (2 passes)
              *   Pass 1: precompute luma -> antialiasing_temporal_texture_1
              *   Pass 2: FXAA main pass  -> antiailiasing_output
              * 
-             * For SMAA (3 passes, details in shaders/test/post_process/SMAA.hlsl)
+             * For SMAA 1x (3 passes, details in shaders/test/post_process/SMAA.hlsl)
              *   Pass 1: Edge Detection              -> antialiasing_temporal_texture_1 (edgesTex)
              *   Pass 2: Blending Weight Calculation -> antialiasing_temporal_texture_2 (blendTex)
              *   Pass 3: Neighborhood Blending       -> antialiasing_output
+             * 
+             * For SMAA T2x (4 passes)
+             *   Pass 1: Edge Detection              -> antialiasing_temporal_texture_1  (rg: edgesTex & ba: velocityTex)
+             *   Pass 2: Blending Weight Calculation -> antialiasing_temporal_texture_2  (blendTex)
+             *   Pass 3: Neighborhood Blending       -> antialiasing_temporal_texture_34 (double buffer) (currentColorTex & previousColorTex)
+             *   Pass 4: Resolve                     -> antialiasing_output
+             *   注：SMAA T2x需要启用Reprojection才可以防止ghosting。Reprojection需要一个velocityTex，在这里我直接将velocityTex写入edgesTex的后两个通道
+             *   注2：实际上，因为目前帧数为500+fps，所以看不到ghosting；可以在主循环中sleep 0.1s并且设置shader中的SMAAReprojection为0来得到一个ghosting的结果
+             * 
+             * 关于不同抗锯齿模式的说明
+             *   切换抗锯齿时，多余的Pass不会被执行，应该不会有额外的性能开销
              * 
              * 关于SMAA实现的一些说明
              *   SMAA是通过直接集成论文仓库中的代码实现的（https://github.com/iryoku/smaa）
@@ -752,19 +836,16 @@ int main(int argc, const char** argv) {
              *   shader部分和bindless rhi的耦合性特别高，如果修改bindless框架的话，大概率shader也要一起修改
              * Imporant: 所以如果修改了bindless框架，然后画面黑屏的话，请先将抗锯齿设置为FXAA(aa_mode = 2)，可以快速解决问题
              * 
+             * 关于SMAA T2x的说明
+             *   1. T2x使用了Temporal Supersampling，需要让相机抖动。可以通过camera->SetJitteredMatrix()来设置JitteredMatrix，这个矩阵会作用在ViewMatrix上
+             *   2. 目前SMAA T2x效果和SMAA 1x类似，没有明显优势；不确定是场景问题还是实现问题
+             * 
              * TODO: Add more SMAA features (different presets, temporal supersampling, spatial supersampling, etc.)
              * 
-             * TODO: Move the control (input) code to another place (next 4-9 lines)
+             * TODO: Move the control (input) code to another place <=> @AA_INPUT
              */
 #pragma region AA Pipeline Pass
             {
-                // input
-                static uint8_t       aa_mode     = 3;
-                static const uint8_t aa_mode_max = 4;
-                if (ImGui::IsKeyPressed(ImGuiKey_M, false)) {
-                    aa_mode = (aa_mode + 1) % aa_mode_max;
-                }
-
                 auto get_full_screen_draw_datas = [&]() {
                     Array<SingleDrawParam> full_screen_draw_datas;
                     full_screen_draw_datas.emplace_back(SingleDrawParam{3, 1, 0, 0, 0});
@@ -797,7 +878,7 @@ int main(int argc, const char** argv) {
                               std::move(get_full_screen_draw_datas()),
                               ColorAttachment(antialiasing_output));
 
-                } else if (3 <= aa_mode && aa_mode <= 3) {// smaa
+                } else if (3 <= aa_mode && aa_mode <= 4) {// smaa
 
                     // TODO: optimize the following code
                     //           以下是我会写出这段代码的原因：
@@ -822,20 +903,37 @@ int main(int argc, const char** argv) {
                         // return sampler_idx;
                     };
 
-                    auto get_smaa_shared_param = [&]() {
-                        SmaaSharedPipelineBindlessParam param;
-                        param.color_tex      = bdls_tex_handle_pbr_shading_output;
-                        param.search_tex     = bdls_tex_smaa_search_tex;
-                        param.area_tex       = bdls_tex_smaa_area_tex;
-                        param.edges_tex      = bdls_tex_handle_antialiasing_temporal_texture_1;
-                        param.blend_tex      = bdls_tex_handle_antialiasing_temporal_texture_2;
-                        param.point_sampler  = GetSamplerIdx(sampler_point_clamp);
-                        param.linear_sampler = GetSamplerIdx(sampler_linear_clamp);
-                        param.rt_metrics     = float4(1.0f / resolution.x, 1.0f / resolution.y, resolution.x, resolution.y);
-                        return param;
-                    };
+                    static Matrix4x4f current_view_proj     = Matrix4x4f::Identity();
+                    static Matrix4x4f previous_view_proj    = Matrix4x4f::Identity();
+                    static Matrix4x4f current_inv_view_proj = Matrix4x4f::Identity();
 
-                    auto smaa_shared_param = get_smaa_shared_param();
+                    previous_view_proj    = current_view_proj;
+                    current_view_proj     = camera->GetViewProjectionMatrix();
+                    current_inv_view_proj = camera->GetViewProjectionMatrixInv();
+
+                    // #include <thread>
+                    // #include <chrono>
+                    //                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+                    auto smaa_shared_param = [&]() {
+                        SmaaSharedPipelineBindlessParam param;
+                        param.aa_mode                 = aa_mode;
+                        param.color_tex               = bdls_tex_handle_pbr_shading_output;
+                        param.position_tex            = bdls_tex_handle_position;
+                        param.depth_tex               = bdls_tex_handle_depth;
+                        param.search_tex              = bdls_tex_handle_smaa_search_tex;
+                        param.area_tex                = bdls_tex_handle_smaa_area_tex;
+                        param.edges_tex               = bdls_tex_handle_antialiasing_temporal_texture_1;
+                        param.blend_tex               = bdls_tex_handle_antialiasing_temporal_texture_2;
+                        param.current_color_tex       = bdls_tex_handle_antialiasing_temporal_texture_34[smaa_current_frame_index];
+                        param.previous_color_tex      = bdls_tex_handle_antialiasing_temporal_texture_34[smaa_current_frame_index ^ 1];
+                        param.frame_index             = smaa_current_frame_index;
+                        param.point_sampler           = GetSamplerIdx(sampler_point_clamp);
+                        param.linear_sampler          = GetSamplerIdx(sampler_linear_clamp);
+                        param.rt_metrics              = float4(1.0f / resolution.x, 1.0f / resolution.y, resolution.x, resolution.y);
+                        param.curr_inv_vp_and_prev_vp = previous_view_proj * current_inv_view_proj;
+                        return param;
+                    }();
 
                     cmd_list
                         .Gfx(smaa_edge_detection_pipeline, bindless_array, smaa_shared_param)
@@ -853,13 +951,33 @@ int main(int argc, const char** argv) {
                             std::move(get_full_screen_draw_datas()),
                             ColorAttachment(antialiasing_temporal_texture_2));
 
-                    cmd_list
-                        .Gfx(smaa_neighborhood_blending_pipeline, bindless_array, smaa_shared_param)
-                        .Draw(
-                            "SMAA Neighborhood Blending Pass",
-                            Rect2D(0, 0, resolution.x, resolution.y),
-                            std::move(get_full_screen_draw_datas()),
-                            ColorAttachment(antialiasing_output));
+                    if (aa_mode == 3) {
+                        cmd_list
+                            .Gfx(smaa_neighborhood_blending_pipeline, bindless_array, smaa_shared_param)
+                            .Draw(
+                                "SMAA Neighborhood Blending Pass",
+                                Rect2D(0, 0, resolution.x, resolution.y),
+                                std::move(get_full_screen_draw_datas()),
+                                ColorAttachment(antialiasing_output));
+                    } else if (aa_mode == 4) {
+                        cmd_list
+                            .Gfx(smaa_t2x_neighborhood_blending_pipeline, bindless_array, smaa_shared_param)
+                            .Draw(
+                                "SMAA T2x Neighborhood Blending Pass",
+                                Rect2D(0, 0, resolution.x, resolution.y),
+                                std::move(get_full_screen_draw_datas()),
+                                ColorAttachment(antialiasing_temporal_texture_34[smaa_current_frame_index]));
+
+                        cmd_list
+                            .Gfx(smaa_t2x_resolve_pipeline, bindless_array, smaa_shared_param)
+                            .Draw(
+                                "SMAA T2x Resolve Pass",
+                                Rect2D(0, 0, resolution.x, resolution.y),
+                                std::move(get_full_screen_draw_datas()),
+                                ColorAttachment(antialiasing_output));
+                    } else {
+                        assert(false && "Invalid antialiasing mode");
+                    }
 
                 } else {
                     assert(false && "Invalid antialiasing mode");

@@ -1322,7 +1322,7 @@ float4 SMAAResolvePS(float2 texcoord,
     #if SMAA_REPROJECTION
     // Velocity is assumed to be calculated for motion blur, so we need to
     // inverse it for reprojection:
-    float2 velocity = -SMAA_DECODE_VELOCITY(SMAASamplePoint(velocityTex, texcoord).rg);
+    float2 velocity = -SMAA_DECODE_VELOCITY(SMAASamplePoint(velocityTex, texcoord));
 
     // Fetch current pixel:
     float4 current = SMAASamplePoint(currentColorTex, texcoord);

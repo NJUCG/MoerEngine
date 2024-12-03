@@ -131,6 +131,25 @@ namespace Moer {
         }
     }
 
+    void Camera::SetJitterMatrix(const Matrix4x4f& jitter_matrix) noexcept {
+        m_jittered_matrix             = jitter_matrix;
+        m_is_jittered_matrix_modified = true;
+    }
+
+    void Camera::SetJitterMatrix(const Vector2f& jitter) noexcept {
+        m_jittered_matrix             = MakeTranslation(2.0f * jitter.x / wndInput.width, 2.0f * jitter.y / wndInput.height, 0.f);
+        m_is_jittered_matrix_modified = true;
+    }
+
+    Matrix4x4f Camera::GetJitterMatrix() const noexcept {
+        return m_jittered_matrix;
+    }
+
+    void Camera::ResetJitterMatrix() noexcept {
+        m_jittered_matrix             = Matrix4x4f::Identity();
+        m_is_jittered_matrix_modified = true;
+    }
+
     void Camera::SetWorldTransform(const Transform& _to_world_transform) noexcept {
         // to_world == camera_to_world == view_matrix_inv
         auto to_world = _to_world_transform.GetMatrix4x4();// M^-1 = T^-1 * R^-1
@@ -228,6 +247,7 @@ namespace Moer {
     void Camera::Initialize(const Transform& to_world_transform, float fov_y, float aspect_ratio, float near_clip, float far_clip) {
         SetWorldTransform(to_world_transform);
         SetProjectionFactor(fov_y, aspect_ratio, near_clip, far_clip);
+        ResetJitterMatrix();
         UpdateAllDerivedProperties();
     }
 
@@ -238,6 +258,7 @@ namespace Moer {
         m_is_position_modified = true;
         m_is_rotation_modified = true;
         SetProjectionFactor(fov_y, aspect_ratio, near_clip, far_clip);
+        ResetJitterMatrix();
         UpdateAllDerivedProperties();
     }
 
@@ -245,20 +266,21 @@ namespace Moer {
         if (m_is_rotation_modified) {
             UpdateVectors();
         }
-        if (m_is_position_modified || m_is_rotation_modified) {
+        if (m_is_position_modified || m_is_rotation_modified || m_is_jittered_matrix_modified) {
             UpdateViewMatrix();
         }
         if (m_is_options_modified) {
             UpdateProjectionMatrix();
         }
-        if (m_is_position_modified || m_is_rotation_modified || m_is_options_modified) {
+        if (m_is_position_modified || m_is_rotation_modified || m_is_jittered_matrix_modified || m_is_options_modified) {
             UpdateViewProjectionMatrix();
             UpdatePlanesAndFrustum();
         }
 
-        m_is_position_modified = false;
-        m_is_rotation_modified = false;
-        m_is_options_modified  = false;
+        m_is_position_modified        = false;
+        m_is_rotation_modified        = false;
+        m_is_options_modified         = false;
+        m_is_jittered_matrix_modified = false;
     }
 
     // position/yaw/pitch -> front/right/up/forward
@@ -276,6 +298,9 @@ namespace Moer {
         auto view_matrix_transform = Transform(m_position, m_position + m_front, m_up);
         m_view_matrix              = view_matrix_transform.matrix;
         // m_view_matrix     = MakeLookatViewMatrixRH(m_position, m_position + m_front, m_up);
+
+        m_view_matrix = m_view_matrix * m_jittered_matrix;
+
         m_view_matrix_inv = Inverse(m_view_matrix);
 
         m_view_matrix_rotate_submatrix      = m_view_matrix;

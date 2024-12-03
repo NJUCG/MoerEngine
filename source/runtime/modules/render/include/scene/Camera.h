@@ -83,6 +83,12 @@ namespace Moer {
         void SetNearClip(float near_clip) noexcept;
         void SetFarClip(float far_clip) noexcept;
 
+        // Jitter Matrix only affect the view_projection_matrix
+        void       SetJitterMatrix(const Matrix4x4f& jitter_matrix) noexcept;
+        void       SetJitterMatrix(const Vector2f& jitter) noexcept;
+        Matrix4x4f GetJitterMatrix() const noexcept;
+        void       ResetJitterMatrix() noexcept;
+
         void SetWorldTransform(const Transform& to_world_transform) noexcept;
 
         /**
@@ -159,6 +165,9 @@ namespace Moer {
         float m_aspect_ratio;
         float m_near_clip;
         float m_far_clip;
+
+        bool       m_is_jittered_matrix_modified = false;
+        Matrix4x4f m_jittered_matrix             = Matrix4x4f::Identity();// only affect view_projection_matrix
 
         // bool yaw_reverse   = false;// reverse left and right
         // bool pitch_reverse = false;// reverse up and down
