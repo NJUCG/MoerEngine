@@ -39,6 +39,7 @@ namespace Moer::Render {
         struct FencePlaceHoler {};
         using EventType = std::variant<
             UniquePtr<VulkanAllocator>,
+            UniquePtr<VulkanPresentor>,
             Array<std::function<void()>>,
             VulkanFence*,
             SignalEvent,
@@ -71,9 +72,20 @@ namespace Moer::Render {
             //clear allocators
             Array<VulkanAllocator*> allocs;
             allocators.PopAll(allocs);
+            // uint32 alloc_count = 0;
             for (auto& allocator : allocs) {
                 MoerDelete(allocator);
+                // ++alloc_count
             }
+            // LOG_INFO("Allocator count {}", alloc_count);
+            Array<VulkanPresentor*> presents;
+            presentors.PopAll(presents);
+            // uint32 present_count = 0;
+            for (auto& presentor : presents) {
+                MoerDelete(presentor);
+                // present_count++;
+            }
+            // LOG_INFO("Presentor count {}", present_count);
             MoerDelete(timeline);
         }
         WaitEvent Execute(CmdSubmit&& _submit) override;
@@ -84,21 +96,25 @@ namespace Moer::Render {
         void                                      ExecuteThread();
         VulkanDevice&                             vk_device;
         LockFreeQueueBase<VulkanAllocator, false> allocators;
+        LockFreeQueueBase<VulkanPresentor, false> presentors;
         DEQueue<QueueEvent>                       event_queue;
 
     private:
         UniquePtr<VulkanAllocator> GetAllocator();
+        UniquePtr<VulkanPresentor> GetPresentor();
         void                       Complete(uint64 _timeline);
         void                       Signal();
 
     private:
-        uint                    last_frame     = 0;
-        std::atomic<uint64>     executed_frame = 0;
-        VulkanFence*            timeline       = nullptr;
-        std::mutex              event_mutex;
-        bool                    enabled{false};
-        std::condition_variable queue_cv;// wake up execute thread from sleeping
-        VkNativeQueue           queue;
+        uint64                   last_frame = 0;
+        CircularQueue<uint64, 3> executed_queue;
+        std::atomic<uint64>      executed_frame = 0;
+        CircularQueue<uint64, 3> presented_queue;
+        VulkanFence*             timeline = nullptr;
+        std::mutex               event_mutex;
+        bool                     enabled{false};
+        std::condition_variable  queue_cv;// wake up execute thread from sleeping
+        VkNativeQueue            queue;
 
         std::mutex   exec_mtx;
         std::jthread thread;
@@ -111,6 +127,7 @@ namespace Moer::Render {
         struct Placeholder {};
         using EventType = std::variant<
             UniquePtr<VulkanAllocator>,
+            UniquePtr<VulkanPresentor>,
             Array<std::function<void()>>,
             IOSignalEvt,
             IOWaitEvt,

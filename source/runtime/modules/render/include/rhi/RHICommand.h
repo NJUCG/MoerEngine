@@ -68,7 +68,7 @@ public:
 
 class RHIGraphicsCommandList : public RHICommandListBase {
 public:
-    virtual ~RHIGraphicsCommandList(){};
+    virtual ~RHIGraphicsCommandList() {};
     virtual void SetPipelineState(RHIGfxPso* _graphics_pso)    = 0;
     virtual void SetPipelineState(RHIComputePso* _compute_pso) = 0;
     // virtual void Open()                                                    = 0;
@@ -178,7 +178,7 @@ public:
 
 class RHIComputeCommandList : public RHICommandListBase {
 public:
-    virtual ~RHIComputeCommandList(){};
+    virtual ~RHIComputeCommandList() {};
     virtual void SetPipelineState(RHIComputePso* _compute_pso)                                       = 0;
     virtual void Dispatch(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z) = 0;
     virtual void DispatchIndirect(RHIBuffer* _buffer, uint64_t _offset)                              = 0;
@@ -194,7 +194,7 @@ public:
 
 class RHIRayTracingCommandList : public RHICommandListBase {
 public:
-    virtual ~RHIRayTracingCommandList(){};
+    virtual ~RHIRayTracingCommandList() {};
     virtual void SetPipelineState(RHIRTPso* _raytracing_pso)                  = 0;
     virtual void TraceRay(uint32_t _width, uint32_t _height, uint32_t _depth) = 0;
     virtual void TraceRayIndirect()                                           = 0;
@@ -210,7 +210,7 @@ public:
 
 class RHICopyCommandList : public RHICommandListBase {
 public:
-    virtual ~RHICopyCommandList(){};
+    virtual ~RHICopyCommandList() {};
     virtual void CopyBuffer(const RHICopyBufferInfo& _copy_info, RHIBuffer* _src, RHIBuffer* _dst)                              = 0;
     virtual void CopyTexture(const RHICopyTextureInfo& _copy_info, RHITexture* _src, RHITexture* _dst)                          = 0;
     virtual void CopyBufferToTexture(const RHICopyBufferToTextureInfo& _info, RHIBuffer* _src_buffer, RHITexture* _dst_texture) = 0;
@@ -228,7 +228,7 @@ struct RHISubmitInfo;
 
 class RHICommandQueue {
 public:
-    virtual ~RHICommandQueue(){};
+    virtual ~RHICommandQueue() {};
     virtual void SubmitCommands(
         uint32_t                  _num_command_lists,
         const RHICommandListBase* _command_lists,
@@ -532,8 +532,6 @@ namespace Moer::Render {
                 Draw(_rect, std::move(mesh_data), _depth, std::forward<TRenderTarget>(_render_targets)...);
             };
 
-        
-
             template<typename... TRenderTarget>
             void Draw(Rect2D _rect, std::span<VertexBuffer> _vtx, IndexBuffer _idx, Array<SingleDrawParam>&& _mesh_data, TRenderTarget&&... _render_targets) {
 
@@ -593,11 +591,11 @@ namespace Moer::Render {
             };
 
             template<typename... TRenderTarget>
-            void Draw(std::string_view _name,Rect2D _rect,  Array<SingleDrawParam>&& _mesh_data,  TRenderTarget&&... _render_targets) {
+            void Draw(std::string_view _name, Rect2D _rect, Array<SingleDrawParam>&& _mesh_data, TRenderTarget&&... _render_targets) {
                 RenderPassInfo pass_info(
-                                    {std::forward<TRenderTarget>(_render_targets)...},
-                                    DepthAttachment{},
-                                    _rect);
+                    {std::forward<TRenderTarget>(_render_targets)...},
+                    DepthAttachment{},
+                    _rect);
                 Array<MeshDrawData> mesh_data;
                 mesh_data.emplace_back();
                 mesh_data.back().draw_params = std::move(_mesh_data);
@@ -878,7 +876,7 @@ namespace Moer::Render {
 
     class RENDER_API CommandQueue {
     public:
-        CommandQueue(){};
+        CommandQueue() {};
         CommandQueue(EQueueType _type, RenderDevice& _device);
         void              Test();
         virtual void      Wait(WaitEvent _event)                                = 0;
@@ -889,7 +887,7 @@ namespace Moer::Render {
 
     class RENDER_API CopyQueue {
     public:
-        CopyQueue(){};
+        CopyQueue() {};
         ~CopyQueue()                                      = default;
         virtual IOWaitEvt Execute(IOSubmission&& _submit) = 0;
         virtual IOWaitEvt Execute(CmdSubmit&& _submit)    = 0;
