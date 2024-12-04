@@ -22,6 +22,9 @@ Makefile
 *.dxbc
 *.dxil
 *.spirv
+*.dxbc.h
+*.dxil.h
+*.spirv.h
 NRDEncoding.hlsli
 
 # ninja

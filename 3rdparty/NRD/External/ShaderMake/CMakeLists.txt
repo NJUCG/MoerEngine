@@ -91,9 +91,11 @@ set_property (DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT 
 set_property (TARGET ShaderMake PROPERTY FOLDER ShaderMake)
 target_link_libraries (ShaderMake ShaderMakeBlob)
 
-if (MSVC)
+if (WIN32)
     target_compile_definitions (ShaderMake PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
-    target_link_options (ShaderMake PRIVATE "/DELAYLOAD:dxcompiler.dll")
+    if (MSVC)
+        target_link_options (ShaderMake PRIVATE "/DELAYLOAD:dxcompiler.dll")
+    endif ()
     target_link_libraries (ShaderMake d3dcompiler dxcompiler delayimp)
 elseif (CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
     target_link_libraries (ShaderMake pthread)
