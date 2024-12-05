@@ -66,6 +66,7 @@ namespace Moer::Render {
             if (ImGui::BeginMenu("Window")) {
 
                 ImGui::MenuItem("Scene Color", nullptr, &b_show_scene_color);
+                ImGui::MenuItem("Configs", nullptr, &b_show_config);
                 // ImGui::MenuItem("Inspector", nullptr, &m_b_show_inspector_window);
                 ImGui::EndMenu();
             }
