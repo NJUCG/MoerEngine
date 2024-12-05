@@ -1,5 +1,5 @@
 #include <filesystem>
-#include <vcruntime_string.h>
+// #include <vcruntime_string.h>
 #include "Core.h"
 #include "PixelFormat.h"
 #include "config/ConfigManager.h"
@@ -33,11 +33,11 @@
 #include "scene/RenderableManager.h"
 #include "utils/smaa/SmaaPrecomputedTextures.h"
 
+#include "RHIUI.h"
+
 using namespace Moer::Render;
 using namespace Moer;
 
-static bool b_show_demo        = false;
-static bool b_show_scene_color = true;
 class TestTrianglePipeline : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(TestTrianglePipeline);
@@ -105,60 +105,15 @@ public:
     DEFINE_SHADER_ARGS(scene_color, gui_color, linear_sampler, scene_rect);
 };
 
-static float2 scene_color_resolution = {1280, 720};
-static float2 scene_color_pos        = {0, 0};
+class SampleTexturePipeline : public RasterPipeline {
+public:
+    DEFINE_RASTER_PIPELINE_CLASS(SampleTexturePipeline);
+    DEFINE_SHADER_TEX(src_color);
+    DEFINE_SHADER_SAMPLER(spl);
 
-static void ShowSceneColor(bool* _b_show) {
+    DEFINE_SHADER_ARGS(src_color, spl);
+};
 
-    ImGuiIO&         io           = ImGui::GetIO();
-    ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_MenuBar;
-
-    const ImGuiViewport* main_viewport = ImGui::GetMainViewport();
-    if (!*_b_show) {
-        return;
-    }
-    if (!ImGui::Begin("Scene Color", _b_show, window_flags)) {
-
-        ImGui::End();
-        return;
-    }
-    float2 scene_size = {0, 0};
-
-    static float2 xy_ratio = {16, 9};
-    // auto          menu_rect = ImGui::GetCurrentWindow()->MenuBarRect();
-
-    auto* current_window    = ImGui::FindWindowByName("Scene Color");
-    bool  b_separate_window = current_window->ParentWindow == nullptr;
-    auto  menu_rect         = current_window->MenuBarRect();
-
-    scene_size.x = current_window->Size.x;
-    scene_size.y = current_window->Size.y + current_window->Pos.y - menu_rect.Max.y;
-
-    auto   window_rect = current_window->Rect();// this is main window rect
-    ImRect parent_rect{};
-
-    if (b_separate_window) {
-    } else {
-        parent_rect = current_window->ParentWindow->Rect();
-    }
-
-    float2 local_pos = {window_rect.Min.x - parent_rect.Min.x, menu_rect.Max.y - parent_rect.Min.y};
-    // LOG_INFO("window_rect: {} {} {} {}", window_rect.Min.x, window_rect.Min.y, window_rect.Max.x, window_rect.Max.y);
-
-    //calculate final pos and size base on xy_ratio
-
-    // if (scene_size.x / scene_size.y > xy_ratio.x / xy_ratio.y) {
-    //     scene_size.x = scene_size.y * xy_ratio.x / xy_ratio.y;
-    // } else {
-    //     scene_size.y = scene_size.x * xy_ratio.y / xy_ratio.x;
-    // }
-    // scene_pos.x += (ImGui::GetWindowWidth() - scene_size.x) / 2;
-    // scene_pos.y += (ImGui::GetWindowHeight() - scene_size.y) / 2;
-
-    scene_color_resolution = {scene_size.x, scene_size.y};
-    scene_color_pos        = {local_pos.x, local_pos.y};
-    ImGui::End();
-}
 class MaterialShadingPipeline : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(MaterialShadingPipeline);
@@ -249,77 +204,6 @@ public:
 
 #pragma endregion
 
-static void ShowGUI(bool* _b_show) {
-
-    static bool               opt_fullscreen  = true;
-    static bool               opt_padding     = false;
-    static ImGuiDockNodeFlags dockspace_flags = ImGuiDockNodeFlags_None;
-    // ImGui::DockSpaceOverViewport(ImGui::GetMainViewport());
-    // We are using the ImGuiWindowFlags_NoDocking flag to make the parent window not dockable into,
-    // because it would be confusing to have two docking targets within each others.
-    ImGuiWindowFlags window_flags = ImGuiWindowFlags_MenuBar;
-    if (opt_fullscreen) {
-        const ImGuiViewport* viewport = ImGui::GetMainViewport();
-        ImGui::SetNextWindowPos(viewport->WorkPos);
-        ImGui::SetNextWindowSize(viewport->WorkSize);
-        ImGui::SetNextWindowViewport(viewport->ID);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-        window_flags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
-        window_flags |= ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
-        window_flags |= ImGuiWindowFlags_NoBackground;
-    } else {
-        dockspace_flags &= ~ImGuiDockNodeFlags_PassthruCentralNode;
-    }
-
-    // When using ImGuiDockNodeFlags_PassthruCentralNode, DockSpace() will render our background
-    // and handle the pass-thru hole, so we ask Begin() to not render a background.
-    if (dockspace_flags & ImGuiDockNodeFlags_PassthruCentralNode)
-        window_flags |= ImGuiWindowFlags_NoBackground;
-
-    // Important: note that we proceed even if Begin() returns false (aka window is collapsed).
-    // This is because we want to keep our DockSpace() active. If a DockSpace() is inactive,
-    // all active windows docked into it will lose their parent and become undocked.
-    // We cannot preserve the docking relationship between an active window and an inactive docking, otherwise
-    // any change of dockspace/settings would lead to windows being stuck in limbo and never being visible.
-    if (!opt_padding)
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-    ImGui::Begin("Editor Menu", _b_show, window_flags);
-    if (!opt_padding)
-        ImGui::PopStyleVar();
-
-    if (opt_fullscreen)
-        ImGui::PopStyleVar(2);
-
-    // Submit the DockSpace
-    ImGuiIO& io = ImGui::GetIO();
-    if (io.ConfigFlags & ImGuiConfigFlags_DockingEnable) {
-        ImGuiID dockspace_id = ImGui::GetID("Docking Main");
-        ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), dockspace_flags);
-    }
-    if (ImGui::BeginMenuBar()) {
-        if (ImGui::BeginMenu("Menu")) {
-            // if (ImGui::MenuItem("Reload Current Level")) {
-            // }
-            // if (ImGui::MenuItem("Save Current Level")) {
-            // }
-            if (ImGui::MenuItem("Exit")) {
-                exit(0);
-            }
-            ImGui::EndMenu();
-        }
-        if (ImGui::BeginMenu("Window")) {
-
-            ImGui::MenuItem("Scene Color", nullptr, &b_show_scene_color);
-            // ImGui::MenuItem("Inspector", nullptr, &m_b_show_inspector_window);
-            ImGui::MenuItem("Demo", nullptr, &b_show_demo);
-            ImGui::EndMenu();
-        }
-        ImGui::EndMenuBar();
-    }
-    ImGui::End();
-}
-
 int main(int argc, const char** argv) {
 
     using namespace Moer::Render;
@@ -389,7 +273,9 @@ int main(int argc, const char** argv) {
         pbr_shading_output,
         antialiasing_temporal_texture_1,
         antialiasing_temporal_texture_2,
-        antialiasing_output;
+        antialiasing_output,
+        output,
+        ui_frame_buffer;
     DepthBufferRef             depth;
     StaticArray<TextureRef, 2> antialiasing_temporal_texture_34;
 
@@ -406,6 +292,8 @@ int main(int argc, const char** argv) {
     uint                 bdls_tex_handle_antialiasing_temporal_texture_2  = 0;
     StaticArray<uint, 2> bdls_tex_handle_antialiasing_temporal_texture_34 = StaticArray<uint, 2>{0, 0};
     uint                 bdls_tex_handle_antialiasing_output              = 0;
+    uint                 bdls_tex_handle_output                           = 0;
+    uint                 bdls_tex_handle_ui_frame_buffer                  = 0;
 
     auto create_frame_buffers = [&](uint2 _new_extent) {
         vbuffer = device.CreateTexture(
@@ -472,6 +360,18 @@ int main(int argc, const char** argv) {
         antialiasing_output = device.CreateTexture(
             "antialiasing_output",
             Extent2D(resolution.x, resolution.y),
+            PF_R8G8B8A8_UNORM,
+            ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED);
+
+        ui_frame_buffer = device.CreateTexture(
+            "ui_frame_buffer",
+            Extent2D(resolution.x, resolution.y),
+            PF_R8G8B8A8_SRGB,
+            ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED);
+
+        output = device.CreateTexture(
+            "output",
+            Extent2D(resolution.x, resolution.y),
             PF_R8G8B8A8_SRGB,
             ETextureUsageFlags::COLOR_ATTACHMENT);
     };
@@ -488,6 +388,8 @@ int main(int argc, const char** argv) {
         bdls_tex_handle_antialiasing_temporal_texture_34[0] = bindless_array->AllocateTexture(antialiasing_temporal_texture_34[0], sampler);
         bdls_tex_handle_antialiasing_temporal_texture_34[1] = bindless_array->AllocateTexture(antialiasing_temporal_texture_34[1], sampler);
         bdls_tex_handle_antialiasing_output                 = bindless_array->AllocateTexture(antialiasing_output, sampler);
+        bdls_tex_handle_ui_frame_buffer                     = bindless_array->AllocateTexture(ui_frame_buffer, sampler);
+        bdls_tex_handle_output                              = bindless_array->AllocateTexture(output, sampler);
 
         cmd_list.UpdateBindlessArray(bindless_array);
     };
@@ -504,6 +406,8 @@ int main(int argc, const char** argv) {
         bindless_array->FreeTexture(bdls_tex_handle_antialiasing_temporal_texture_34[0]);
         bindless_array->FreeTexture(bdls_tex_handle_antialiasing_temporal_texture_34[1]);
         bindless_array->FreeTexture(bdls_tex_handle_antialiasing_output);
+        bindless_array->FreeTexture(bdls_tex_handle_ui_frame_buffer);
+        bindless_array->FreeTexture(bdls_tex_handle_output);
     };
 
     create_frame_buffers(resolution);
@@ -636,6 +540,28 @@ int main(int argc, const char** argv) {
 
 #pragma endregion
 
+    auto combine_ui_pipeline = [&]() {
+        GfxPsoCreateInfo combine_pso_info(RHIRasterizeInfo::Preset(),
+                                          {},
+                                          {RHIColorAttachmentInfo::Preset(output->GetFormat())});
+        return manager
+            .Raster()
+            .Vertex("CombineGuiVert.hlsl")
+            .Pixel("CombineGuiFrag.hlsl")
+            .Build<CombineUIPipeline>(std::move(combine_pso_info));
+    }();
+
+    auto sample_texture_pipeline = [&]() {
+        GfxPsoCreateInfo sample_tex_pso_info(RHIRasterizeInfo::Preset(),
+                                             {},
+                                             {RHIColorAttachmentInfo::Preset(output->GetFormat())});
+        return manager
+            .Raster()
+            .Vertex("framework/FullScreen.vert.hlsl")
+            .Pixel("utils/CopyTexture.frag.hlsl")
+            .Build<SampleTexturePipeline>(std::move(sample_tex_pso_info));
+    }();
+
     struct Vertex {
         float3 pos;
         float2 uv;
@@ -718,18 +644,35 @@ int main(int argc, const char** argv) {
 
     BufferRef lighting_buffer = device.CreateBuffer<byte>(1 * sizeof(LightingData), EBufferUsageFlags::UNORDERED_ACCESS);
 
+    RHIUI rhi_ui{gui};
+
     while (WindowContext::ShouldClose(window_handle) == false) {
         WindowContext::Tick();
         gui.BeginGUIFrame();
         {
-            static bool show = true;
-            ShowGUI(&show);
-            ShowSceneColor(&b_show_scene_color);
-            ImGui::ShowDemoWindow(&b_show_demo);
+            rhi_ui.TickUI();
         }
         gui.EndGUIFrame();
         if (time > 2) {
             timeline->Wait(time - 2);
+        }
+
+        // resize window
+        int w_width, w_height;
+        WindowContext::GetWindowSize(WindowContext::GetMainWindow(), &w_width, &w_height);
+        if (w_width == 0 || w_height == 0) {
+            std::this_thread::yield();
+            continue;
+        }
+        if (w_width != resolution.x || w_height != resolution.y) {
+            resolution = {uint32(w_width), uint32(w_height)};
+            gfx_queue.Sync();
+            sc_info.size = {resolution.x, resolution.y};
+            sc->Recreate(sc_info);
+
+            free_frame_buffers();
+            create_frame_buffers(resolution);
+            allocate_frame_buffers();
         }
 
         uint last_io_change_timeline = 0;
@@ -764,15 +707,11 @@ int main(int argc, const char** argv) {
             auto camera        = CameraManager::Get().Get(camera_entity);
 
             // @AA_INPUT
-            static uint8_t       aa_mode     = 3;
-            static const uint8_t aa_mode_max = 5;
-            if (ImGui::IsKeyPressed(ImGuiKey_M, false)) {
-                aa_mode = (aa_mode + 1) % aa_mode_max;
-            }
+            const RHIUI::Config ui_config = rhi_ui.GetConfig();
 
             // Jitter Camera for SMAA T2x
             static uint8_t smaa_current_frame_index = 0;
-            if (aa_mode == 4) {
+            if (ui_config.aa_mode == 4) {
                 smaa_current_frame_index ^= 1;
                 static StaticArray<float2, 2> smaa_jitter = {float2(0.25f, -0.25f), float2(-0.25f, 0.25f)};
                 camera->SetJitterMatrix(smaa_jitter[smaa_current_frame_index]);
@@ -838,7 +777,7 @@ int main(int argc, const char** argv) {
             /**
              * Antialiasing Passes
              * 
-             * Press M to switch antialiasing mode:
+             * Use gui to switch antialiasing mode:
              * 0: FXAA Off                : 620+-fps
              * 1: FXAA Quality(Simplified): 612+-fps
              * 2: FXAA Quality            : 584+-fps
@@ -888,7 +827,7 @@ int main(int argc, const char** argv) {
                     return full_screen_draw_datas;
                 };
 
-                if (0 <= aa_mode && aa_mode <= 2) {// fxaa
+                if (0 <= ui_config.aa_mode && ui_config.aa_mode <= 2) {// fxaa
 
                     FxaaPrecomputePipelineBindlessParam param_fxaa_precomputed;
                     param_fxaa_precomputed.input_image = bdls_tex_handle_pbr_shading_output;
@@ -903,7 +842,7 @@ int main(int argc, const char** argv) {
 
                     FxaaPipelineBindlessParam param_fxaa;
                     param_fxaa.input_image    = bdls_tex_handle_antialiasing_temporal_texture_1;
-                    param_fxaa.fxaa_mode      = aa_mode;
+                    param_fxaa.fxaa_mode      = ui_config.aa_mode;
                     param_fxaa.resolution     = float2(resolution);
                     param_fxaa.inv_resolution = float2(1.0) / float2(resolution);
 
@@ -914,7 +853,7 @@ int main(int argc, const char** argv) {
                               std::move(get_full_screen_draw_datas()),
                               ColorAttachment(antialiasing_output));
 
-                } else if (3 <= aa_mode && aa_mode <= 4) {// smaa
+                } else if (3 <= ui_config.aa_mode && ui_config.aa_mode <= 4) {// smaa
 
                     // TODO: optimize the following code
                     //           以下是我会写出这段代码的原因：
@@ -953,7 +892,7 @@ int main(int argc, const char** argv) {
 
                     auto smaa_shared_param = [&]() {
                         SmaaSharedPipelineBindlessParam param;
-                        param.aa_mode                 = aa_mode;
+                        param.aa_mode                 = ui_config.aa_mode;
                         param.color_tex               = bdls_tex_handle_pbr_shading_output;
                         param.position_tex            = bdls_tex_handle_position;
                         param.depth_tex               = bdls_tex_handle_depth;
@@ -987,7 +926,7 @@ int main(int argc, const char** argv) {
                             std::move(get_full_screen_draw_datas()),
                             ColorAttachment(antialiasing_temporal_texture_2));
 
-                    if (aa_mode == 3) {
+                    if (ui_config.aa_mode == 3) {
                         cmd_list
                             .Gfx(smaa_neighborhood_blending_pipeline, bindless_array, smaa_shared_param)
                             .Draw(
@@ -995,7 +934,7 @@ int main(int argc, const char** argv) {
                                 Rect2D(0, 0, resolution.x, resolution.y),
                                 std::move(get_full_screen_draw_datas()),
                                 ColorAttachment(antialiasing_output));
-                    } else if (aa_mode == 4) {
+                    } else if (ui_config.aa_mode == 4) {
                         cmd_list
                             .Gfx(smaa_t2x_neighborhood_blending_pipeline, bindless_array, smaa_shared_param)
                             .Draw(
@@ -1022,26 +961,41 @@ int main(int argc, const char** argv) {
 #pragma endregion
         }
 
-        int w_width, w_height;
-
-        WindowContext::GetWindowSize(WindowContext::GetMainWindow(), &w_width, &w_height);
-        if (w_width == 0 || w_height == 0) {
-            std::this_thread::yield();
-            continue;
+        // UI Combine Pass
+        if (rhi_ui.IsSeperateWindow() && rhi_ui.GetWindowFrameBuffer().GetTexture()) {
+            auto frame_buffer = rhi_ui.GetWindowFrameBuffer();
+            auto scene_res    = rhi_ui.GetSceneColorResolution();
+            auto scene_pos    = rhi_ui.GetSceneColorPos();
+            cmd_list
+                .Gfx(
+                    sample_texture_pipeline,
+                    antialiasing_output,
+                    Sampler(ESamplerFilter::SF_LINEAR, ESamplerAddressMode::SAM_CLAMP_TO_EDGE))
+                .Draw(
+                    "SampleTexture",
+                    Rect2D(scene_pos.x, scene_pos.y, scene_res.x, scene_res.y),
+                    {},
+                    3,
+                    {SingleDrawParam(3, 1, 0, 0, 0)},
+                    ColorAttachment(frame_buffer.GetTexture()));
+        } else {
+            float2 f_res  = float2(resolution.x, resolution.y);
+            float2 min_xy = rhi_ui.GetSceneColorPos() / f_res;
+            float2 max_xy = (rhi_ui.GetSceneColorPos() + rhi_ui.GetSceneColorResolution()) / f_res;
+            cmd_list
+                .Gfx(
+                    combine_ui_pipeline,
+                    antialiasing_output,
+                    ui_frame_buffer,
+                    Sampler(ESamplerFilter::SF_LINEAR, ESamplerAddressMode::SAM_CLAMP_TO_EDGE),// linear_sampler
+                    CombineUIPipeline::Param{min_xy, max_xy})
+                .Draw("Combine UI Pass",
+                      Rect2D(0, 0, resolution.x, resolution.y),
+                      {},
+                      3,
+                      {SingleDrawParam(3, 1, 0, 0, 0)},
+                      ColorAttachment(output));
         }
-        if (w_width != resolution.x || w_height != resolution.y) {
-            resolution = {uint32(w_width), uint32(w_height)};
-            gfx_queue.Sync();
-            sc_info.size = {resolution.x, resolution.y};
-            sc->Recreate(sc_info);
-
-            free_frame_buffers();
-            create_frame_buffers(resolution);
-            allocate_frame_buffers();
-        }
-
-        auto output = antialiasing_output;// actual output (must be R8G8B8A8_SRGB format)
-        output->SetName("output");
 
         // cmd_list.Gfx(raster_pipeline, red_buffer)
         //     .Draw(Rect2D(0, 0, 1, 1), vb_span, ib, std::move(draw_datas), ColorAttachment(red_tex));

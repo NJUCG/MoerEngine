@@ -67,11 +67,12 @@ target_link_libraries(VulkanRTRHITest
 )
 set_target_properties(VulkanRTRHITest PROPERTIES FOLDER ${moer_test_folder})
 
-add_executable(RHITest RHITest.cpp)
+add_executable(RHITest RHITest/RHITest.cpp RHITest/RHIUI.cpp)
 target_include_directories(RHITest
         PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>
         PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
         PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
+        PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/RHITest>
 )
 target_link_libraries(RHITest
         PRIVATE MoerRender
