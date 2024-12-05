@@ -48,6 +48,7 @@ namespace Moer::Render {
         TextureView GetWindowFrameBuffer();
 
     private:
+        void InitUIStyle();
         void ShowSceneColor();
         void ShowConfig();
 

@@ -86,6 +86,7 @@ namespace Moer::Render {
         }
         ImGui::End();
 
+        InitUIStyle();
         ShowSceneColor();
         ShowConfig();
     }
@@ -107,6 +108,11 @@ namespace Moer::Render {
             return m_ui_renderer.GetWindowFrameBuffer(current_window->Viewport);
         }
         return TextureView();
+    }
+
+    void RHIUI::InitUIStyle() {
+        ImGuiStyle& style   = ImGui::GetStyle();
+        style.ItemSpacing.y = 7.f;// default is 4.f
     }
 
     void RHIUI::ShowSceneColor() {
@@ -164,6 +170,18 @@ namespace Moer::Render {
             return;
         }
 
+        ImGui::Text("FPS: %.1f", io.Framerate);
+
+        // ImGui::Dummy(ImVec2(0, 10));
+
+        auto draw_border = [&]() {
+            // 获取选项的矩形区域
+            ImVec2 min = ImGui::GetItemRectMin();
+            ImVec2 max = ImGui::GetItemRectMax();
+            // 绘制边框
+            ImGui::GetWindowDrawList()->AddRect(min, max, IM_COL32(255, 255, 255, 255));
+        };
+
         if (ImGui::TreeNode("Output Frame Buffer", "Output: [%s]", m_frame_buffer_and_name_array[m_config.selected_frame_buffer_index].second.c_str())) {
             for (uint i = 0; i < m_frame_buffer_and_name_array.size(); i++) {
                 if (ImGui::Selectable(
@@ -171,6 +189,7 @@ namespace Moer::Render {
                         m_config.selected_frame_buffer_index == i)) {
                     m_config.selected_frame_buffer_index = i;
                 }
+                draw_border();
             }
             ImGui::TreePop();
         }
@@ -180,19 +199,10 @@ namespace Moer::Render {
                 if (ImGui::Selectable(k_aa_mode_name_array[i].c_str(), m_config.aa_mode == i)) {
                     m_config.aa_mode = i;
                 }
-                // 获取选项的矩形区域
-                ImVec2 min = ImGui::GetItemRectMin();
-                ImVec2 max = ImGui::GetItemRectMax();
-                // 绘制边框
-                ImGui::GetWindowDrawList()->AddRect(min, max, IM_COL32(255, 255, 255, 255));
+                draw_border();
             }
             ImGui::TreePop();
         }
-
-        ImGui::Dummy(ImVec2(0, 10));
-
-        //show fps
-        ImGui::Text("FPS: %.1f", io.Framerate);
 
         ImGui::End();
     }
