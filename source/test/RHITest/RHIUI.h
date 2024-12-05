@@ -33,6 +33,7 @@ namespace Moer::Render {
         float2        GetSceneColorResolution() const { return scene_color_resolution; }
         float2        GetSceneColorPos() const { return scene_color_pos; }
         const Config& GetConfig() const { return config; }
+        float         GetSceneColorAspectRatio() const { return scene_color_resolution.x / scene_color_resolution.y; }
 
         bool        IsSeperateWindow() const;
         TextureView GetWindowFrameBuffer();

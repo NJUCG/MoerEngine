@@ -359,14 +359,18 @@ namespace Moer {
      *   * Press Q/E to move the camera up and down
      *   * Use scroll wheel to adjust the camera fov
      */
-    void Camera::Tick() {
+    void Camera::Tick(float aspect_ratio) {
 
         auto reset_cursor_delta = [&]() {
             wndInput.cursor_delta_x = 0.0f;
             wndInput.cursor_delta_y = 0.0f;
         };
 
-        this->SetAspectRatio(wndInput.aspect_ratio);
+        if (aspect_ratio <= EPS) {
+            this->SetAspectRatio(wndInput.aspect_ratio);
+        } else {
+            this->SetAspectRatio(aspect_ratio);
+        }
 
         if (!wndInput.is_cursor_hiding) {
             if ((wndInput.cursor_delta_x || wndInput.cursor_delta_y) && wndInput.mouse_button_state[MouseButtons::Right]) {

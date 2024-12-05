@@ -657,6 +657,8 @@ int main(int argc, const char** argv) {
             timeline->Wait(time - 2);
         }
 
+        const RHIUI::Config& ui_config = rhi_ui.GetConfig();
+
         // resize window
         int w_width, w_height;
         WindowContext::GetWindowSize(WindowContext::GetMainWindow(), &w_width, &w_height);
@@ -706,9 +708,6 @@ int main(int argc, const char** argv) {
             auto camera_entity = scene.GetCameras()[0];
             auto camera        = CameraManager::Get().Get(camera_entity);
 
-            // @AA_INPUT
-            const RHIUI::Config ui_config = rhi_ui.GetConfig();
-
             // Jitter Camera for SMAA T2x
             static uint8_t smaa_current_frame_index = 0;
             if (ui_config.aa_mode == 4) {
@@ -717,7 +716,9 @@ int main(int argc, const char** argv) {
                 camera->SetJitterMatrix(smaa_jitter[smaa_current_frame_index]);
             }
 
-            camera->Tick();
+            // use scene_color resolution instead of window resolution
+            // TODO: fix the same issue in RTTest
+            camera->Tick(rhi_ui.GetSceneColorAspectRatio());
 
             // GBuffer Pass
 
