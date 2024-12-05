@@ -295,6 +295,8 @@ int main(int argc, const char** argv) {
     uint                 bdls_tex_handle_output                           = 0;
     uint                 bdls_tex_handle_ui_frame_buffer                  = 0;
 
+    Array<std::pair<TextureView, std::string>> frame_buffer_and_name_array;// for RHI UI
+
     auto create_frame_buffers = [&](uint2 _new_extent) {
         vbuffer = device.CreateTexture(
             "vbuffer",
@@ -409,6 +411,27 @@ int main(int argc, const char** argv) {
         bindless_array->FreeTexture(bdls_tex_handle_ui_frame_buffer);
         bindless_array->FreeTexture(bdls_tex_handle_output);
     };
+
+    // call this function like `RHIUI rhi_ui(renderer, create_frame_buffer_and_name_array(), ..)`
+    //     or, `rhi_ui->RegisterFrameBuffers(create_frame_buffer_and_name_array(), ..);`
+    auto create_frame_buffer_and_name_array = [&]() {
+        return Array<std::pair<TextureView, std::string>>{
+            {vbuffer->GetView(), "vbuffer"},
+            {normal->GetView(), "normal"},
+            {uv->GetView(), "uv"},
+            {position->GetView(), "position"},
+            {depth->GetView(), "depth"},
+            {pbr_shading_output->GetView(), "pbr_shading_output"},
+            {antialiasing_temporal_texture_1->GetView(), "antialiasing_temporal_texture_1"},
+            {antialiasing_temporal_texture_2->GetView(), "antialiasing_temporal_texture_2"},
+            {antialiasing_temporal_texture_34[0]->GetView(), "antialiasing_temporal_texture_34[0]"},
+            {antialiasing_temporal_texture_34[1]->GetView(), "antialiasing_temporal_texture_34[1]"},
+            {antialiasing_output->GetView(), "antialiasing_output"},
+            {ui_frame_buffer->GetView(), "ui_frame_buffer"}
+            // , {output->GetView(), "output"} // don't put output here, because it will be used as the final output
+        };
+    };
+    uint rhi_ui_default_selected_frame_buffer_index = 10;
 
     create_frame_buffers(resolution);
     allocate_frame_buffers();
@@ -644,7 +667,10 @@ int main(int argc, const char** argv) {
 
     BufferRef lighting_buffer = device.CreateBuffer<byte>(1 * sizeof(LightingData), EBufferUsageFlags::UNORDERED_ACCESS);
 
-    RHIUI rhi_ui{gui};
+    RHIUI rhi_ui(
+        gui,
+        create_frame_buffer_and_name_array(),
+        rhi_ui_default_selected_frame_buffer_index);
 
     while (WindowContext::ShouldClose(window_handle) == false) {
         WindowContext::Tick();
@@ -675,6 +701,7 @@ int main(int argc, const char** argv) {
             free_frame_buffers();
             create_frame_buffers(resolution);
             allocate_frame_buffers();
+            rhi_ui.RegisterFrameBuffers(create_frame_buffer_and_name_array(), rhi_ui_default_selected_frame_buffer_index);
         }
 
         uint last_io_change_timeline = 0;
@@ -962,6 +989,8 @@ int main(int argc, const char** argv) {
 #pragma endregion
         }
 
+        auto final_output = rhi_ui.GetSelectedFrameBuffer();
+
         // UI Combine Pass
         if (rhi_ui.IsSeperateWindow() && rhi_ui.GetWindowFrameBuffer().GetTexture()) {
             auto frame_buffer = rhi_ui.GetWindowFrameBuffer();
@@ -970,7 +999,7 @@ int main(int argc, const char** argv) {
             cmd_list
                 .Gfx(
                     sample_texture_pipeline,
-                    antialiasing_output,
+                    final_output,
                     Sampler(ESamplerFilter::SF_LINEAR, ESamplerAddressMode::SAM_CLAMP_TO_EDGE))
                 .Draw(
                     "SampleTexture",
@@ -986,7 +1015,7 @@ int main(int argc, const char** argv) {
             cmd_list
                 .Gfx(
                     combine_ui_pipeline,
-                    antialiasing_output,
+                    final_output,
                     ui_frame_buffer,
                     Sampler(ESamplerFilter::SF_LINEAR, ESamplerAddressMode::SAM_CLAMP_TO_EDGE),// linear_sampler
                     CombineUIPipeline::Param{min_xy, max_xy})

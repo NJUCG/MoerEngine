@@ -24,16 +24,25 @@ namespace Moer::Render {
 
         struct Config {
             uint aa_mode = 3;
+
+            uint selected_frame_buffer_index = 0;
         };
 
-        RHIUI(UIRenderer& _renderer) : ui_renderer(_renderer) {}
+        RHIUI(
+            UIRenderer&                                       _renderer,
+            const Array<std::pair<TextureView, std::string>>& frame_buffer_and_name_array,
+            uint                                              default_selected_frame_buffer_index);
         ~RHIUI() = default;
         void TickUI();
 
-        float2        GetSceneColorResolution() const { return scene_color_resolution; }
-        float2        GetSceneColorPos() const { return scene_color_pos; }
-        const Config& GetConfig() const { return config; }
-        float         GetSceneColorAspectRatio() const { return scene_color_resolution.x / scene_color_resolution.y; }
+        float2        GetSceneColorResolution() const { return m_scene_color_resolution; }
+        float2        GetSceneColorPos() const { return m_scene_color_pos; }
+        const Config& GetConfig() const { return m_config; }
+        float         GetSceneColorAspectRatio() const { return m_scene_color_resolution.x / m_scene_color_resolution.y; }
+
+        void        RegisterFrameBuffers(const Array<std::pair<TextureView, std::string>>& frame_buffer_and_name_array,
+                                         uint                                              default_selected_frame_buffer_index);
+        TextureView GetSelectedFrameBuffer() const { return m_frame_buffer_and_name_array[m_config.selected_frame_buffer_index].first; }
 
         bool        IsSeperateWindow() const;
         TextureView GetWindowFrameBuffer();
@@ -43,14 +52,17 @@ namespace Moer::Render {
         void ShowConfig();
 
     private:
-        bool   b_show_scene_color = true;
-        bool   b_show_config      = true;
-        float2 scene_color_resolution;
-        float2 scene_color_pos;
-        bool   b_show = true;
-        Config config;
+        bool   m_b_show_scene_color = true;
+        bool   m_b_show_config      = true;
+        float2 m_scene_color_resolution;
+        float2 m_scene_color_pos;
+        bool   m_b_show = true;
 
-        UIRenderer& ui_renderer;
+        Array<std::pair<TextureView, std::string>> m_frame_buffer_and_name_array;
+
+        Config m_config;
+
+        UIRenderer& m_ui_renderer;
     };
 }// namespace Moer::Render
 #endif
