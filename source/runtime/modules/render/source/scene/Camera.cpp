@@ -366,6 +366,8 @@ namespace Moer {
             wndInput.cursor_delta_y = 0.0f;
         };
 
+        this->SetAspectRatio(wndInput.aspect_ratio);
+
         if (!wndInput.is_cursor_hiding) {
             if ((wndInput.cursor_delta_x || wndInput.cursor_delta_y) && wndInput.mouse_button_state[MouseButtons::Right]) {
                 this->ApplyRotation(wndInput.cursor_delta_x, wndInput.cursor_delta_y);
@@ -377,7 +379,6 @@ namespace Moer {
 
             // fov & aspect_ratio
             this->SetFov(wndInput.fov);
-            this->SetAspectRatio(wndInput.aspect_ratio);
 
             // LOG_INFO("Delta time: {}", wndInput.delta_time);
 

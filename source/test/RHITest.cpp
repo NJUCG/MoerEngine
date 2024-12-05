@@ -381,76 +381,133 @@ int main(int argc, const char** argv) {
     gfx_queue.Execute(cmd_list.Submit().Wait(copy_queue_timeline, 0));
     gfx_queue.Sync();
 
-    TextureRef vbuffer = device.CreateTexture(
-        "vbuffer",
-        Extent2D(resolution.x, resolution.y),
-        PF_R32_UINT,
-        ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT);
+    TextureRef
+        vbuffer,
+        normal,
+        uv,
+        position,
+        pbr_shading_output,
+        antialiasing_temporal_texture_1,
+        antialiasing_temporal_texture_2,
+        antialiasing_output;
+    DepthBufferRef             depth;
+    StaticArray<TextureRef, 2> antialiasing_temporal_texture_34;
 
-    TextureRef normal = device.CreateTexture(
-        "normal",
-        Extent2D(resolution.x, resolution.y),
-        PF_R8G8B8A8_UNORM,
-        ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT);
+    Sampler sampler(SF_LINEAR, SAM_REPEAT);
+    Sampler depth_sampler(SF_NEAREST, SAM_CLAMP_TO_EDGE);
 
-    TextureRef uv = device.CreateTexture(
-        "uv",
-        Extent2D(resolution.x, resolution.y),
-        PF_R32G32_SFLOAT,
-        ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT);
+    uint                 bdls_tex_handle_vbuffer                          = 0;
+    uint                 bdls_tex_handle_normal                           = 0;
+    uint                 bdls_tex_handle_uv                               = 0;
+    uint                 bdls_tex_handle_position                         = 0;
+    uint                 bdls_tex_handle_depth                            = 0;
+    uint                 bdls_tex_handle_pbr_shading_output               = 0;
+    uint                 bdls_tex_handle_antialiasing_temporal_texture_1  = 0;
+    uint                 bdls_tex_handle_antialiasing_temporal_texture_2  = 0;
+    StaticArray<uint, 2> bdls_tex_handle_antialiasing_temporal_texture_34 = StaticArray<uint, 2>{0, 0};
+    uint                 bdls_tex_handle_antialiasing_output              = 0;
 
-    DepthBufferRef depth = device.CreateDepthBuffer(
-        "depth",
-        Extent2D(resolution.x, resolution.y),
-        PF_D32_SFLOAT_S8_UINT,
-        1,
-        ETextureUsageFlags::SAMPLED | ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT);
+    auto create_frame_buffers = [&](uint2 _new_extent) {
+        vbuffer = device.CreateTexture(
+            "vbuffer",
+            Extent2D(resolution.x, resolution.y),
+            PF_R32_UINT,
+            ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT);
 
-    TextureRef position = device.CreateTexture(
-        "position",
-        Extent2D(resolution.x, resolution.y),
-        PF_R32G32B32A32_SFLOAT,
-        ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT);
-
-    TextureRef pbr_shading_output = device.CreateTexture(
-        "pbr_shading_output",
-        Extent2D(resolution.x, resolution.y),
-        PF_R8G8B8A8_UNORM,
-        ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT);
-
-#pragma region AA Textures
-
-    TextureRef antialiasing_temporal_texture_1 = device.CreateTexture(
-        "antialiasing_temporal_texture_1",
-        Extent2D(resolution.x, resolution.y),
-        PF_R8G8B8A8_UNORM,
-        ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT);
-
-    TextureRef antialiasing_temporal_texture_2 = device.CreateTexture(
-        "antialiasing_temporal_texture_2",
-        Extent2D(resolution.x, resolution.y),
-        PF_R8G8B8A8_UNORM,
-        ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT);
-
-    StaticArray<TextureRef, 2> antialiasing_temporal_texture_34 = StaticArray<TextureRef, 2>{
-        device.CreateTexture(
-            "antialiasing_temporal_texture_3",
+        normal = device.CreateTexture(
+            "normal",
             Extent2D(resolution.x, resolution.y),
             PF_R8G8B8A8_UNORM,
-            ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT),
-        device.CreateTexture(
-            "antialiasing_temporal_texture_4",
+            ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT);
+
+        uv = device.CreateTexture(
+            "uv",
+            Extent2D(resolution.x, resolution.y),
+            PF_R32G32_SFLOAT,
+            ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT);
+
+        depth = device.CreateDepthBuffer(
+            "depth",
+            Extent2D(resolution.x, resolution.y),
+            PF_D32_SFLOAT_S8_UINT,
+            1,
+            ETextureUsageFlags::SAMPLED | ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT);
+
+        position = device.CreateTexture(
+            "position",
+            Extent2D(resolution.x, resolution.y),
+            PF_R32G32B32A32_SFLOAT,
+            ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT);
+
+        pbr_shading_output = device.CreateTexture(
+            "pbr_shading_output",
             Extent2D(resolution.x, resolution.y),
             PF_R8G8B8A8_UNORM,
-            ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT)};
+            ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT);
 
-    TextureRef antialiasing_output = device.CreateTexture(
-        "antialiasing_output",
-        Extent2D(resolution.x, resolution.y),
-        PF_R8G8B8A8_SRGB,
-        ETextureUsageFlags::COLOR_ATTACHMENT);
+        antialiasing_temporal_texture_1 = device.CreateTexture(
+            "antialiasing_temporal_texture_1",
+            Extent2D(resolution.x, resolution.y),
+            PF_R8G8B8A8_UNORM,
+            ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT);
 
-#pragma endregion
+        antialiasing_temporal_texture_2 = device.CreateTexture(
+            "antialiasing_temporal_texture_2",
+            Extent2D(resolution.x, resolution.y),
+            PF_R8G8B8A8_UNORM,
+            ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT);
+
+        antialiasing_temporal_texture_34 = StaticArray<TextureRef, 2>{
+            device.CreateTexture(
+                "antialiasing_temporal_texture_3",
+                Extent2D(resolution.x, resolution.y),
+                PF_R8G8B8A8_UNORM,
+                ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT),
+            device.CreateTexture(
+                "antialiasing_temporal_texture_4",
+                Extent2D(resolution.x, resolution.y),
+                PF_R8G8B8A8_UNORM,
+                ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT)};
+
+        antialiasing_output = device.CreateTexture(
+            "antialiasing_output",
+            Extent2D(resolution.x, resolution.y),
+            PF_R8G8B8A8_SRGB,
+            ETextureUsageFlags::COLOR_ATTACHMENT);
+    };
+
+    auto allocate_frame_buffers = [&]() {
+        bdls_tex_handle_vbuffer                             = bindless_array->AllocateTexture(vbuffer, sampler);
+        bdls_tex_handle_normal                              = bindless_array->AllocateTexture(normal, sampler);
+        bdls_tex_handle_uv                                  = bindless_array->AllocateTexture(uv, sampler);
+        bdls_tex_handle_position                            = bindless_array->AllocateTexture(position, sampler);
+        bdls_tex_handle_depth                               = bindless_array->AllocateTexture(depth->GetView(), depth_sampler);
+        bdls_tex_handle_pbr_shading_output                  = bindless_array->AllocateTexture(pbr_shading_output, sampler);
+        bdls_tex_handle_antialiasing_temporal_texture_1     = bindless_array->AllocateTexture(antialiasing_temporal_texture_1, sampler);
+        bdls_tex_handle_antialiasing_temporal_texture_2     = bindless_array->AllocateTexture(antialiasing_temporal_texture_2, sampler);
+        bdls_tex_handle_antialiasing_temporal_texture_34[0] = bindless_array->AllocateTexture(antialiasing_temporal_texture_34[0], sampler);
+        bdls_tex_handle_antialiasing_temporal_texture_34[1] = bindless_array->AllocateTexture(antialiasing_temporal_texture_34[1], sampler);
+        bdls_tex_handle_antialiasing_output                 = bindless_array->AllocateTexture(antialiasing_output, sampler);
+
+        cmd_list.UpdateBindlessArray(bindless_array);
+    };
+
+    auto free_frame_buffers = [&]() {
+        bindless_array->FreeTexture(bdls_tex_handle_vbuffer);
+        bindless_array->FreeTexture(bdls_tex_handle_normal);
+        bindless_array->FreeTexture(bdls_tex_handle_uv);
+        bindless_array->FreeTexture(bdls_tex_handle_position);
+        bindless_array->FreeTexture(bdls_tex_handle_depth);
+        bindless_array->FreeTexture(bdls_tex_handle_pbr_shading_output);
+        bindless_array->FreeTexture(bdls_tex_handle_antialiasing_temporal_texture_1);
+        bindless_array->FreeTexture(bdls_tex_handle_antialiasing_temporal_texture_2);
+        bindless_array->FreeTexture(bdls_tex_handle_antialiasing_temporal_texture_34[0]);
+        bindless_array->FreeTexture(bdls_tex_handle_antialiasing_temporal_texture_34[1]);
+        bindless_array->FreeTexture(bdls_tex_handle_antialiasing_output);
+    };
+
+    create_frame_buffers(resolution);
+    allocate_frame_buffers();
 
     gfx_queue.Execute(cmd_list.Submit());
     gfx_queue.Sync();
@@ -588,10 +645,9 @@ int main(int argc, const char** argv) {
         {{-0.5f, 0.5f, 0.0f}, {1.0f, 0.0f}},
         {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f}},
     };
-    uint    indices[] = {0, 1, 2};
-    float4  color_red = {1, 1, 1, 1};
-    Sampler sampler(SF_LINEAR, SAM_REPEAT);
-    uint    instance_buffer_handle;
+    uint   indices[] = {0, 1, 2};
+    float4 color_red = {1, 1, 1, 1};
+    uint   instance_buffer_handle;
     // auto vertex_buffer = device.CreateBuffer<float>(3 * sizeof(Vertex) / sizeof(float), EBufferUsageFlags::VERTEX_BUFFER);
     // auto index_buffer  = device.CreateBuffer<uint>(3, EBufferUsageFlags::INDEX_BUFFER);
     // cmd_list.CopyFrom(std::span<byte>((byte*)vertices, sizeof(vertices)), vertex_buffer->GetView());
@@ -656,18 +712,6 @@ int main(int argc, const char** argv) {
     uint64   time       = 0;
     bool     first_load = true;
 
-    // uint bdls_tex_handle_depth   = bindless_array->AllocateTexture(depth, sampler);
-    uint                 bdls_tex_handle_vbuffer                          = 0;
-    uint                 bdls_tex_handle_normal                           = 0;
-    uint                 bdls_tex_handle_uv                               = 0;
-    uint                 bdls_tex_handle_position                         = 0;
-    uint                 bdls_tex_handle_depth                            = 0;
-    uint                 bdls_tex_handle_pbr_shading_output               = 0;
-    uint                 bdls_tex_handle_antialiasing_temporal_texture_1  = 0;
-    uint                 bdls_tex_handle_antialiasing_temporal_texture_2  = 0;
-    StaticArray<uint, 2> bdls_tex_handle_antialiasing_temporal_texture_34 = StaticArray<uint, 2>{0, 0};
-    uint                 bdls_tex_handle_antialiasing_output              = 0;
-
     uint material_buffer_handle = 0;
     uint light_buffer_handle    = 0;
     uint lighting_data_handle   = 0;
@@ -696,17 +740,9 @@ int main(int argc, const char** argv) {
                 light_buffer_handle    = bindless_array->AllocateBuffer(scene.GetBuffer(EGpuSceneResource::LightInfo)->GetView());
                 lighting_data_handle   = bindless_array->AllocateBuffer(lighting_buffer->GetView());
 
-                bdls_tex_handle_vbuffer                             = bindless_array->AllocateTexture(vbuffer, sampler);
-                bdls_tex_handle_normal                              = bindless_array->AllocateTexture(normal, sampler);
-                bdls_tex_handle_uv                                  = bindless_array->AllocateTexture(uv, sampler);
-                bdls_tex_handle_position                            = bindless_array->AllocateTexture(position, sampler);
-                bdls_tex_handle_depth                               = bindless_array->AllocateTexture(depth->GetView(), sampler);
-                bdls_tex_handle_pbr_shading_output                  = bindless_array->AllocateTexture(pbr_shading_output, sampler);
-                bdls_tex_handle_antialiasing_temporal_texture_1     = bindless_array->AllocateTexture(antialiasing_temporal_texture_1, sampler);
-                bdls_tex_handle_antialiasing_temporal_texture_2     = bindless_array->AllocateTexture(antialiasing_temporal_texture_2, sampler);
-                bdls_tex_handle_antialiasing_temporal_texture_34[0] = bindless_array->AllocateTexture(antialiasing_temporal_texture_34[0], sampler);
-                bdls_tex_handle_antialiasing_temporal_texture_34[1] = bindless_array->AllocateTexture(antialiasing_temporal_texture_34[1], sampler);
-                bdls_tex_handle_antialiasing_output                 = bindless_array->AllocateTexture(antialiasing_output, sampler);
+                // I moved AllocateTexture code to `allocate_frame_buffers()` to reuse when resolution changed.
+                //     And `allocate_frame_buffers()` will be called after `create_frame_buffers()` immediately,
+                //     because `allocate_frame_buffers()` doesn't depends on SceneLoadInfo.
 
                 Array<ImportTexture> sampled_textures;
                 sampled_textures.reserve((scene.GetGpuScene().material_textures.size()));
@@ -986,8 +1022,6 @@ int main(int argc, const char** argv) {
 #pragma endregion
         }
 
-        auto output = antialiasing_output;// actual output (must be R8G8B8A8_SRGB format)
-
         int w_width, w_height;
 
         WindowContext::GetWindowSize(WindowContext::GetMainWindow(), &w_width, &w_height);
@@ -996,55 +1030,18 @@ int main(int argc, const char** argv) {
             continue;
         }
         if (w_width != resolution.x || w_height != resolution.y) {
-
             resolution = {uint32(w_width), uint32(w_height)};
-            vbuffer    = device.CreateTexture(
-                Extent2D(resolution.x, resolution.y),
-                PF_R32_UINT,
-                ETextureUsageFlags::COLOR_ATTACHMENT);
-            output->SetName("output");
             gfx_queue.Sync();
             sc_info.size = {resolution.x, resolution.y};
             sc->Recreate(sc_info);
-            bindless_array->FreeTexture(bdls_tex_handle_vbuffer);
-            bindless_array->FreeTexture(bdls_tex_handle_normal);
-            bindless_array->FreeTexture(bdls_tex_handle_uv);
-            bindless_array->FreeTexture(bdls_tex_handle_position);
-            bindless_array->FreeTexture(bdls_tex_handle_depth);
 
-            normal = device.CreateTexture(
-                "normal",
-                Extent2D(resolution.x, resolution.y),
-                PF_R8G8B8A8_UNORM,
-                ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED);
-            uv = device.CreateTexture(
-                "uv",
-                Extent2D(resolution.x, resolution.y),
-                PF_R32G32_SFLOAT,
-                ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED);
-
-            position = device.CreateTexture(
-                "position",
-                Extent2D(resolution.x, resolution.y),
-                PF_R32G32B32A32_SFLOAT,
-                ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED);
-
-            depth = device.CreateDepthBuffer(
-                "depth",
-                Extent2D(resolution.x, resolution.y),
-                PF_D32_SFLOAT_S8_UINT,
-                1,
-                ETextureUsageFlags::SAMPLED | ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT);
-
-            bdls_tex_handle_vbuffer  = bindless_array->AllocateTexture(vbuffer, sampler);
-            bdls_tex_handle_normal   = bindless_array->AllocateTexture(normal, sampler);
-            bdls_tex_handle_uv       = bindless_array->AllocateTexture(uv, sampler);
-            bdls_tex_handle_position = bindless_array->AllocateTexture(position, sampler);
-
-            Sampler depth_sampler(SF_NEAREST, SAM_CLAMP_TO_EDGE);
-
-            bdls_tex_handle_depth = bindless_array->AllocateTexture(depth->GetView(), depth_sampler);
+            free_frame_buffers();
+            create_frame_buffers(resolution);
+            allocate_frame_buffers();
         }
+
+        auto output = antialiasing_output;// actual output (must be R8G8B8A8_SRGB format)
+        output->SetName("output");
 
         // cmd_list.Gfx(raster_pipeline, red_buffer)
         //     .Draw(Rect2D(0, 0, 1, 1), vb_span, ib, std::move(draw_datas), ColorAttachment(red_tex));

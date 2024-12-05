@@ -328,7 +328,7 @@ namespace Moer {
     static void FrameBufferSizeCallbackFunc(GLFWwindow* window, int width, int height) {
         wndInput.width        = width;
         wndInput.height       = height;
-        wndInput.aspect_ratio = height == 0 ? 0 : width / height;
+        wndInput.aspect_ratio = height == 0 ? 0 : (float)width / height;
     }
 
     static void ScrollCallbackFunc(GLFWwindow* window, double xoffset, double yoffset) {
