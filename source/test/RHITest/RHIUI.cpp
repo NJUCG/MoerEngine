@@ -172,8 +172,6 @@ namespace Moer::Render {
 
         ImGui::Text("FPS: %.1f", io.Framerate);
 
-        // ImGui::Dummy(ImVec2(0, 10));
-
         auto draw_border = [&]() {
             // 获取选项的矩形区域
             ImVec2 min = ImGui::GetItemRectMin();
@@ -191,6 +189,20 @@ namespace Moer::Render {
                 }
                 draw_border();
             }
+            ImGui::TreePop();
+        }
+
+        if (ImGui::TreeNode("AO Mode", "AO Mode: [%s]", k_ao_mode_name_array[m_config.ao_mode].c_str())) {
+            for (uint i = 0; i < k_ao_mode_name_array.size(); i++) {
+                if (ImGui::Selectable(k_ao_mode_name_array[i].c_str(), m_config.ao_mode == i)) {
+                    m_config.ao_mode = i;
+                }
+                draw_border();
+            }
+
+            ImGui::SliderInt("Sample Count", &m_config.ssao_sample_count, 1, 16);
+            ImGui::SliderInt("Sample Radius", &m_config.ssao_radius, 1, 32);
+
             ImGui::TreePop();
         }
 

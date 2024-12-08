@@ -21,9 +21,21 @@ namespace Moer::Render {
             "SMAA 1x",
             "SMAA T2x",
         };
+        const Array<std::string> k_ao_mode_name_array = {
+            "None",
+            "SSAO (IQ)",
+            "SSAO (IQ) AO Only",
+            "SSAO (GAMES202)",
+            "HBAO (GAMES202) AO Only",
+            "SSDO (GAMES202)",
+            "SSDO (GAMES202) AO Only",
+        };
 
         struct Config {
-            uint aa_mode = 3;
+            uint aa_mode           = 3; // default ssma 1x
+            uint ao_mode           = 1; // default ssao
+            int  ssao_sample_count = 8; //ssao sample count
+            int  ssao_radius       = 16;//ssao radius
 
             uint selected_frame_buffer_index = 0;
         };
