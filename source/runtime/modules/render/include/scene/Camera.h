@@ -103,8 +103,10 @@ namespace Moer {
 
         /**
          * ## Update the camera based on input per frame
+         * 
+         * @param aspect_ratio: aspect ratio of the window. If not set, use wndInput.aspect_ratio instead.
          */
-        void Tick();//update camera per frame
+        void Tick(float aspect_ratio = -1.0f);//update camera per frame
 
         bool IsDirty() const;//judge if camera changed compared to last frame
 
