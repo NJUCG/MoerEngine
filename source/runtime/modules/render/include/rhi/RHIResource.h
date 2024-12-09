@@ -863,7 +863,7 @@ namespace Moer::Render {
         };
 
         BindlessArray();
-        virtual ~BindlessArray()                                                       = default;
+        virtual ~BindlessArray()                                                    = default;
         virtual uint AllocateTexture(const TextureView& _texture, Sampler _sampler) = 0;
         virtual uint AllocateBuffer(BufferView _buffer)                             = 0;
 
@@ -3029,12 +3029,17 @@ namespace Moer::Render {
         SDA_Num
     };
 
+    struct ShaderArgCppInfo {
+        uint           array_size;
+        EShaderArgType type;
+    };
+
     using ShaderOutputGroup = std::variant<ShaderVsGsPs, ShaderVsPs, ShaderMsPs, ShaderTsMsPs, ShaderCs, ShaderRT>;
 
     struct PipelineShaderInfo {
         ShaderOutputGroup       shader_group;
         Array<std::string_view> layout_hash;
-        Array<EShaderArgType>   arg_types;
+        Array<ShaderArgCppInfo> arg_cpp_info;
     };
 
     struct GfxPsoCreateInfo {

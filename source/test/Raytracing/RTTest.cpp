@@ -1,6 +1,7 @@
 #include <filesystem>
 #include "Core.h"
 #include "PixelFormat.h"
+#include "RTResource.h"
 #include "config/ConfigManager.h"
 #include "contrib/Open3DGC/o3dgcTimer.h"
 #include "imgui.h"
@@ -23,6 +24,8 @@
 #include "scene/Material.h"
 #include "scene/RenderableManager.h"
 #include "scene/Scene.h"
+#include "shaderheaders/shared/lighting/ShaderParameters.h"
+#include "shaderheaders/shared/utils/ShaderParameters.h"
 
 #include "RTUI.h"
 
@@ -163,6 +166,25 @@ public:
     DEFINE_SHADER_ARGS(src_color, spl);
 };
 
+struct GenerateMipPdfPipeline : public ComputePipeline {
+public:
+    DEFINE_COMPUTE_PIPELINE_CLASS(GenerateMipPdfPipeline);
+    DEFINE_SHADER_TEX(env_map);
+    DEFINE_SHADER_TEX_ARRAY(integrated_mips, 10);
+    DEFINE_SHADER_CONSTANT_STRUCT(PreprocessEnvironmentMapParams, param);
+
+    DEFINE_SHADER_ARGS(env_map, integrated_mips, param);
+};
+
+struct GenerateMipsPipeline : public ComputePipeline {
+public:
+    DEFINE_COMPUTE_PIPELINE_CLASS(GenerateMipsPipeline);
+    DEFINE_SHADER_TEX_ARRAY(mips, 10);
+    DEFINE_SHADER_CONSTANT_STRUCT(BuildMipsParam, param);
+
+    DEFINE_SHADER_ARGS(mips, param);
+};
+
 int main(int argc, const char** argv) {
 
     using namespace Moer::Render;
@@ -198,17 +220,23 @@ int main(int argc, const char** argv) {
 
     Scene g_scene{};
     Resource::LoaderInterface::LoadSceneFromFileAsync(ConfigManager::GetInstance().GetScenePath(), &g_scene);
-    auto&&           load_scene_scope = OnScopeExit([&] {
+    auto&&     load_scene_scope = OnScopeExit([&] {
         Scene::ResetAsyncLoadInfo();
     });
-    BindlessArrayRef bindless_array   = g_scene.GetBindlessArray();
+    RTResource rt_res(ConfigManager::GetInstance().GetEditorResourcePath());
+    rt_res.LoadResources();
+    TextureRef         env_map = rt_res.GetDefaultEnvMap();
+    Array<TextureView> env_mips;
+    TextureRef         env_pdf = device.CreateTexture("env_pdf", env_map->GetExtent(), PF_R16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED, env_map->GetNumMips());
+    Array<TextureView> env_pdf_mips;
+    for (int i = 0; i < env_map->GetNumMips(); ++i) {
+        env_mips.push_back(env_map->GetView(i));
+        env_pdf_mips.push_back(env_pdf->GetView(i));
+    }
 
-    FenceRef copy_timeline = device.CreateFence();
+    BindlessArrayRef bindless_array = g_scene.GetBindlessArray();
 
     CommandList cmd_list;
-
-    gfx_queue.Execute(cmd_list.Submit());
-    gfx_queue.Sync();
 
     struct Vertex {
         float3 pos;
@@ -248,13 +276,56 @@ int main(int argc, const char** argv) {
                                            .Pixel("utils/CopyTexture.frag.hlsl")
                                            .Build<SampleTexturePipeline>(std::move(sample_tex_pso_info));
 
+    GenerateMipPdfPipeline sd_generate_mip_pdf = manager.Compute<GenerateMipPdfPipeline>("lighting/ProcessEnvironmentMap.hlsl");
+    GenerateMipsPipeline   sd_generate_mips    = manager.Compute<GenerateMipsPipeline>("utils/BuildMips.hlsl");
+    auto                   copy_queue_timeline = copy_queue.GetFenceHandle();
+
+    {
+        Array<ImportTexture> import_textures;
+        const auto&          rt_res_textures = rt_res.GetTextures();
+        for (auto& [name, tex] : rt_res_textures) {
+            import_textures.emplace_back(ImportTexture(tex->GetView(0, tex->GetNumMips()), ETextureState::SAMPLE));
+        }
+        cmd_list.ImportTextureFromQueue(EQueueType::Copy, std::move(import_textures));
+        gfx_queue.Execute(cmd_list.Submit().Wait(copy_queue_timeline, copy_queue_timeline->GetValue()));
+        gfx_queue.Sync();
+
+        uint width  = env_map->GetExtent().x;
+        uint height = env_map->GetExtent().y;
+
+        for (uint i = 0; i < env_map->GetNumMips(); i += 5) {
+            BuildMipsParam param{};
+            param.num_mip_levels = env_map->GetNumMips();
+            param.src_mip_level  = i;
+            param.src_size       = uint2(width, height);
+            cmd_list.Compute(sd_generate_mips, std::span<TextureView>(env_mips.data(), env_mips.size()), param).Dispatch(uint3(ceil(width / 32), ceil(height / 32), 1));
+
+            width  = std::max(1u, width >> 5);
+            height = std::max(1u, height >> 5);
+        }
+
+        PreprocessEnvironmentMapParams preprocess_param{};
+        width  = env_map->GetExtent().x;
+        height = env_map->GetExtent().y;
+        for (uint i = 0; i < env_pdf->GetNumMips(); i += 5) {
+            preprocess_param.src_mip_level  = i;
+            preprocess_param.num_mip_levels = env_pdf->GetNumMips();
+            preprocess_param.src_size       = uint2(width, height);
+            cmd_list.Compute(sd_generate_mip_pdf, env_map->GetView(0), std::span<TextureView>(env_pdf_mips.data(), env_pdf_mips.size()), preprocess_param).Dispatch(uint3(ceil(width / 32), ceil(height / 32), 1));
+            width  = std::max(1u, width >> 5);
+            height = std::max(1u, height >> 5);
+        }
+    }
+
+    gfx_queue.Execute(cmd_list.Submit().Wait(copy_queue_timeline, copy_queue_timeline->GetValue()));
+    gfx_queue.Sync();
+
     bool   first_load = true;
     uint   instance_buffer_handle;
     uint   material_buffer_idx;
     uint   light_buffer_handle     = 0;
     uint64 last_io_change_timeline = 0;
     uint   view_buffer_handle      = 0;
-    auto   copy_queue_timeline     = copy_queue.GetFenceHandle();
 
     //gbuffer bdls handle
     uint bdls_tex_handle_uv      = 0;
@@ -385,11 +456,6 @@ int main(int argc, const char** argv) {
         }
         timer.Stop();
         auto frame_time = timer.ElapsedMilliseconds();
-
-        if (time - last_time > 5000) {
-            last_time = time;
-            LOG_INFO("FPS {}, Time elapsed {} ms", 1000.f / frame_time, frame_time);
-        }
         timer.Start();
         WindowContext::GetWindowSize(WindowContext::GetMainWindow(), &w_width, &w_height);
         if (w_width == 0 || w_height == 0) {
@@ -455,8 +521,6 @@ int main(int argc, const char** argv) {
                     auto& instance     = rt_scene->AddInstance();
                     instance.geom      = blas;
                     instance.transform = TransformManager::Get().Get(_entity).GetMatrix3x4();
-
-                    LOG_INFO("instance transform w {} {} {} ", instance.transform.r0.w, instance.transform.r1.w, instance.transform.r2.w);
 
                     instance.flag.need_create = true;
                     instance.custom_index     = instance.instance_id;
@@ -583,6 +647,15 @@ int main(int argc, const char** argv) {
                       {SingleDrawParam(3, 1, 0, 0, 0)},
                       ColorAttachment(output));
         }
+        // {
+        //     for (uint i = 0; i < env_map->GetNumMips(); i += 5) {
+        //         BuildMipsParam param{};
+        //         param.num_mip_levels = std::min(5u, env_map->GetNumMips() - i);
+        //         param.src_mip_level  = i;
+        //         param.src_size       = uint2(env_map->GetExtent().x >> (i + 1), env_map->GetExtent().y >> (i + 1));
+        //         cmd_list.Compute(sd_generate_mips, std::span<TextureView>(env_mips.data(), env_mips.size()), param).Dispatch(uint3(env_map->GetExtent().x, env_map->GetExtent().y, 1));
+        //     }
+        // }
         gui.RenderGUI(cmd_list, output);
 
         time++;

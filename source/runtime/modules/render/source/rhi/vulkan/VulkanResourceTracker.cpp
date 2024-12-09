@@ -475,6 +475,7 @@ namespace Moer::Render {
             state.dst_queue_family = _dst_queue;
             state.src_layout       = _src_layout;
             state.dst_layout       = _dst_layout;
+            state.dst_stage        = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
         } else {
             TextureState state{VK_ACCESS_2_NONE, VK_IMAGE_LAYOUT_UNDEFINED, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_NONE, _dst_layout, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, _src_queue, _dst_queue};
             GetInitImageLayoutAndAccess(_texture, state.src_layout, state.src_access, queue_type);
@@ -631,7 +632,7 @@ namespace Moer::Render {
         for (VulkanTexture* texture : pending_textures) {
             if (auto it = texture_states.find(texture); it != texture_states.end()) {
                 auto& state = it->second;
-                if (state.src_access == state.dst_access && state.src_stage == state.dst_stage && exported_textures.find(texture) == exported_textures.end()) {
+                if (((state.dst_access | VK_ACCESS_2_SHADER_WRITE_BIT) == 0) && state.src_access == state.dst_access && state.src_stage == state.dst_stage && state.src_layout == state.dst_layout && exported_textures.find(texture) == exported_textures.end()) {
                     state.dst_access       = VK_ACCESS_2_NONE;
                     state.dst_stage        = VK_PIPELINE_STAGE_2_NONE;
                     state.dst_layout       = VK_IMAGE_LAYOUT_UNDEFINED;

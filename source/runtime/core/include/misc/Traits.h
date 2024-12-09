@@ -24,5 +24,18 @@ namespace Moer {
     using int4   = Vector4i;
     using byte   = std::byte;
     using ubyte  = uint8;
+
+    // Primary template for is_template_of
+    template<template<auto...> class Template, typename T>
+    struct IsTemplateOf : std::false_type {};
+
+    // Specialization for when T is an instantiation of Template
+    template<template<auto...> class Template, auto... Args>
+    struct IsTemplateOf<Template, Template<Args...>> : std::true_type {};
+
+    // Helper variable template
+    template<typename T, template<auto...> class TargetTemp>
+    inline constexpr bool is_template_of_v = IsTemplateOf<TargetTemp, T>::value;
+
 };// namespace Moer
 #endif

@@ -12,14 +12,16 @@ namespace Moer::Render {
         ~RTResource();
         void LoadResources();
         void UnloadResources();
-        bool IsLoadComplete() const;
 
-        TextureRef GetTexture(std::string_view _name) const;
-        BufferRef  GetBuffer(std::string_view _name) const;
+        TextureRef                                   GetTexture(std::string_view _name) const;
+        BufferRef                                    GetBuffer(std::string_view _name) const;
+        TextureRef                                   GetDefaultEnvMap();
+        const UnorderedMap<std::string, TextureRef>& GetTextures() const { return textures; }
 
     private:
         bool                  b_loaded;
         std::filesystem::path resource_path;
+        std::string_view      default_env_map_name;
 
         UnorderedMap<std::string, TextureRef> textures;
     };
