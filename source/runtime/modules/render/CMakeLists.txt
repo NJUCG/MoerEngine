@@ -45,6 +45,10 @@ target_link_libraries(${MODULE_NAME}
     PUBLIC glfw
     PUBLIC ImGui::imgui
     PUBLIC smaa
+    # dx
+    PUBLIC d3d12 
+    PUBLIC dxgi 
+    PUBLIC dxguid 
 )
 # function(enable_sanitizer target_name)
 #     if(NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")

@@ -9,6 +9,7 @@
 #include <cassert>
 #include "RHIImpl.h"
 #include "vulkan/VulkanDevice.h"
+#include "d3d12/D3D12Device.h"
 #include "shader/ShaderResourceManager.h"
 
 RHI* g_rhi = nullptr;
@@ -121,9 +122,13 @@ namespace Moer::Render {
         return config;
     }
 
-    // template<>
-    // DXRHIConfig ResolveConfigAs(const MoerRHIConfigAsJSON& _config_as_json) {
-    // }
+     template<>
+     D3D12RHIConfig ResolveConfigAs(const MoerRHIConfigAsJSON& _config_as_json) {
+        using std::string;
+        assert(_config_as_json["rhi"].get<string>() == "d3d12");
+
+         return D3D12RHIConfig();
+     }
 
     RenderDevice& RenderDevice::Get() {
         static RenderDevice device;
@@ -135,7 +140,8 @@ namespace Moer::Render {
                 Get().impl = std::move(UniquePtr<Impl>(MoerNew(VulkanDevice)(ResolveConfigAs<VulkanRHIConfig>(_info.config_as_json))));
                 break;
             case ERHIType::D3D12:
-                LOG_ERROR("D3D12 is not supported yet");
+                Get().impl = std::move(UniquePtr<Impl>(MoerNew(D3D12Device)(ResolveConfigAs<D3D12RHIConfig>(_info.config_as_json))));
+                //LOG_ERROR("D3D12 is not supported yet");
                 break;
         }
         Get().rhi_type = _info.type;
