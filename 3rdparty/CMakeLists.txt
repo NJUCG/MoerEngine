@@ -34,6 +34,10 @@ add_subdirectory(d3d12_agilitysdk)
 set_target_folder(d3d12_agilitysdk ${third_party_folder}/d3d12_agilitysdk)
 set_target_folder(d3d12_agilitysdk_d3dx12 ${third_party_folder}/d3d12_agilitysdk)
 
+add_subdirectory(D3D12MemoryAllocator)
+set_target_folder(D3D12MemoryAllocator ${third_party_folder}/D3D12MemoryAllocator)
+
+
 set(JSON_BuildTests OFF CACHE INTERNAL "")
 add_subdirectory(json)
 add_subdirectory(AssetLoad)

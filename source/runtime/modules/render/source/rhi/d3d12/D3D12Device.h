@@ -12,7 +12,10 @@
 
 #include <wrl/client.h>
 #include <d3d12.h>
+#include <d3dx12/d3dx12.h>
+
 #include <dxgi1_6.h>
+#include <D3D12MemAlloc.h>
 #include <optional>
 
 template<typename T>
@@ -82,6 +85,7 @@ namespace Moer::Render {
         ComPtr<ID3D12Device> device;
         ComPtr<IDXGIFactory6> factory;
         ComPtr<IDXGIAdapter3>  adapter;
+        ComPtr<D3D12MA::Allocator> d3d12Allocator;
 
         //VmaAllocator                                    m_allocator = VK_NULL_HANDLE;
         //D3D12DescriptorHeap                            m_global_descriptor_heap{};

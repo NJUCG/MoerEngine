@@ -42,17 +42,18 @@ Moer::Render::D3D12Device::D3D12Device(const D3D12RHIConfig&& _config) {
     ThrowIfFailed(hardwareAdapter.As(&adapter));
     hardwareAdapter = nullptr;
 
-    //{
-    //    // d3d12MA
+    {
+        // d3d12MA
 
-    //    D3D12MA::ALLOCATOR_DESC allocatorDesc{};
-    //    allocatorDesc.pDevice  = m_device.get();
-    //    allocatorDesc.pAdapter = m_adapter.get();
-    //    // These flags are optional but recommended.
-    //    allocatorDesc.Flags = static_cast<D3D12MA::ALLOCATOR_FLAGS>(// cast make it happy
-    //        D3D12MA::ALLOCATOR_FLAG_MSAA_TEXTURES_ALWAYS_COMMITTED | D3D12MA::ALLOCATOR_FLAG_DEFAULT_POOLS_NOT_ZEROED | D3D12MA::ALLOCATOR_FLAG_SINGLETHREADED);
-    //    ThrowIfFailed(D3D12MA::CreateAllocator(&allocatorDesc, m_d3d12Allocator.put()));
-    //}
+        D3D12MA::ALLOCATOR_DESC allocatorDesc{};
+        allocatorDesc.pDevice  = device.Get();
+        allocatorDesc.pAdapter = adapter.Get();
+        // These flags are optional but recommended.
+        allocatorDesc.Flags = static_cast<D3D12MA::ALLOCATOR_FLAGS>(// cast make it happy
+            D3D12MA::ALLOCATOR_FLAG_MSAA_TEXTURES_ALWAYS_COMMITTED | D3D12MA::ALLOCATOR_FLAG_DEFAULT_POOLS_NOT_ZEROED);
+            //| D3D12MA::ALLOCATOR_FLAG_SINGLETHREADED);
+        ThrowIfFailed(D3D12MA::CreateAllocator(&allocatorDesc, d3d12Allocator.ReleaseAndGetAddressOf()));
+    }
 
 
 }

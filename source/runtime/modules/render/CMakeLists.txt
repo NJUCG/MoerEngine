@@ -48,6 +48,7 @@ target_link_libraries(${MODULE_NAME}
     PUBLIC d3d12 
     PUBLIC dxgi
     PUBLIC dxguid
+    PUBLIC D3D12MemoryAllocator
 )
 target_compile_definitions(${MODULE_NAME} PUBLIC -DMOER_AGILITY_SDK_VERSION=${MOER_AGILITYSDK_VERSION_MAJOR})
 # agilitysdk need to export symbols from exe, however current render module is dll, so not easy for exe to import this then export again...
