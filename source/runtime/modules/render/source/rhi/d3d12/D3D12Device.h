@@ -81,7 +81,7 @@ namespace Moer::Render {
         // device, factory, adapter
         ComPtr<ID3D12Device> device;
         ComPtr<IDXGIFactory6> factory;
-        ComPtr<IDXGIAdapter>  adapter;
+        ComPtr<IDXGIAdapter3>  adapter;
 
         //VmaAllocator                                    m_allocator = VK_NULL_HANDLE;
         //D3D12DescriptorHeap                            m_global_descriptor_heap{};

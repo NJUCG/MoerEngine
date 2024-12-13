@@ -2,8 +2,7 @@
 #include "DirectXShaderReflectorVulkan.h"
 #include "rhi/RHICommon.h"
 #include "spirv_reflect.h"
-#include "wsl/wrladapter.h"
-#include "dxguids/dxguids.h"
+#include <wrl/client.h>
 #include "dxc/dxcapi.h"
 #include "DXCUtils.h"
 #include "log/LogSystem.h"

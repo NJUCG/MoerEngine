@@ -24,7 +24,6 @@ target_include_directories(${MODULE_NAME}
 	PUBLIC $<BUILD_INTERFACE:${MODULE_DIR}/include>
     PUBLIC $<BUILD_INTERFACE:${moer_runtime_core_dir}/include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/SPIRV-Reflect>
-    PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/DirectX-Headers/include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/spdlog/include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/glfw/include>
 	# PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/VulkanSDK/include>
@@ -40,16 +39,21 @@ target_link_libraries(${MODULE_NAME}
     PRIVATE spirv-reflect-static
 	PUBLIC dxc
     PUBLIC MoerRuntimeCore
-    PUBLIC Microsoft::DirectX-Guids
-    PUBLIC Microsoft::DirectX-Headers
     PUBLIC glfw
     PUBLIC ImGui::imgui
     PUBLIC smaa
     # dx
+    PUBLIC d3d12_agilitysdk
+    PUBLIC d3d12_agilitysdk_d3dx12
     PUBLIC d3d12 
-    PUBLIC dxgi 
-    PUBLIC dxguid 
+    PUBLIC dxgi
+    PUBLIC dxguid
 )
+target_compile_definitions(${MODULE_NAME} PUBLIC -DMOER_AGILITY_SDK_VERSION=${MOER_AGILITYSDK_VERSION_MAJOR})
+# agilitysdk need to export symbols from exe, however current render module is dll, so not easy for exe to import this then export again...
+# so here use PUBLIC not PRIVATE
+
+
 # function(enable_sanitizer target_name)
 #     if(NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 #         message(FATAL_ERROR "Sanitizer supported only for gcc/clang")

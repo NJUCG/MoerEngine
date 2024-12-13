@@ -1,3 +1,11 @@
+
+extern "C" {
+__declspec(dllexport) extern const unsigned int D3D12SDKVersion = MOER_AGILITY_SDK_VERSION;
+}
+extern "C" {
+__declspec(dllexport) extern const char8_t* D3D12SDKPath = u8".\\D3D12\\";
+}
+
 #include <filesystem>
 // #include <vcruntime_string.h>
 #include "Core.h"
@@ -19,6 +27,9 @@
 #include "taskgraph/TaskGraph.h"
 #include "taskgraph/TaskSystem.h"
 
+#include <iostream>
+#include "d3dx12_property_format_table.h"
+
 int main(int argc, char** argv) {
     using namespace Moer;
     using namespace Moer::Render;
@@ -35,5 +46,8 @@ int main(int argc, char** argv) {
         .config_as_json = rhi_config_as_json};
     RenderDevice::Init(std::move(info));
     auto& device = RenderDevice::Get();
+
+    LOG_INFO("{}", D3D12_PROPERTY_LAYOUT_FORMAT_TABLE::GetPlaneCount(DXGI_FORMAT_D24_UNORM_S8_UINT));
+
     return 0;
 }

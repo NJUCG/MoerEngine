@@ -2,7 +2,7 @@ out
 .vs
 .vscode
 target
-build
+/build/
 /.idea/codeStyles/codeStyleConfig.xml
 /.idea/codeStyles/Project.xml
 /.idea/.gitignore

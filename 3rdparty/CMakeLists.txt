@@ -30,9 +30,9 @@ set(SPIRV_REFLECT_STATIC_LIB ON)
 add_subdirectory(SPIRV-Reflect)
 set_target_folder(spirv-reflect-static ${third_party_folder}/spirv-reflect)
 
-add_subdirectory(DirectX-Headers)
-set_target_folder(DirectX-Headers ${third_party_folder}/dxheaders)
-set_target_folder(DirectX-Guids ${third_party_folder}/dxheaders)
+add_subdirectory(d3d12_agilitysdk)
+set_target_folder(d3d12_agilitysdk ${third_party_folder}/d3d12_agilitysdk)
+set_target_folder(d3d12_agilitysdk_d3dx12 ${third_party_folder}/d3d12_agilitysdk)
 
 set(JSON_BuildTests OFF CACHE INTERNAL "")
 add_subdirectory(json)
