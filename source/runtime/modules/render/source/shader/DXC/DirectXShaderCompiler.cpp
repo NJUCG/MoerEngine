@@ -448,11 +448,11 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> result, const ShaderParam
             target->count         = binding.count;
             target->desc_type     = binding.descriptor_type;
             target->resource_type = binding.resource_type;
-            target->stage_bits |= ToPipelineStageFlag(reflect_module.shader_stage);
+            target->stage_bits |= uint(ToPipelineStageFlag(reflect_module.shader_stage));
 
         } else {
             ReflectParamInfo& param = reflect_map[binding.name];
-            param.spirv.resources.stage_bits |= ToPipelineStageFlag(reflect_module.shader_stage);
+            param.spirv.resources.stage_bits |= uint(ToPipelineStageFlag(reflect_module.shader_stage));
             ReflectParamInfo::Resource res{};
             res.set                    = binding.set;
             res.binding                = binding.binding;
@@ -466,7 +466,7 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> result, const ShaderParam
     for (uint32_t push_constant_index = 0; push_constant_index < reflect_module.push_constant_block_count; ++push_constant_index) {
         auto& push_constant = reflect_module.push_constant_blocks[push_constant_index];
         auto& param         = reflect_map[push_constant.name];
-        param.spirv.resources.stage_bits |= ToPipelineStageFlag(reflect_module.shader_stage);
+        param.spirv.resources.stage_bits |= uint(ToPipelineStageFlag(reflect_module.shader_stage));
         ReflectParamInfo::Constant constant{};
         constant.size              = push_constant.size;
         constant.padded_size       = push_constant.padded_size;

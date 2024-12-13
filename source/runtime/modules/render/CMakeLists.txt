@@ -42,13 +42,14 @@ target_link_libraries(${MODULE_NAME}
     PUBLIC glfw
     PUBLIC ImGui::imgui
     PUBLIC smaa
-    # dx
+    # dx, maybe add a option based on platform
     PUBLIC d3d12_agilitysdk
     PUBLIC d3d12_agilitysdk_d3dx12
     PUBLIC d3d12 
     PUBLIC dxgi
     PUBLIC dxguid
     PUBLIC D3D12MemoryAllocator
+    PUBLIC winpixeventruntime
 )
 target_compile_definitions(${MODULE_NAME} PUBLIC -DMOER_AGILITY_SDK_VERSION=${MOER_AGILITYSDK_VERSION_MAJOR})
 # agilitysdk need to export symbols from exe, however current render module is dll, so not easy for exe to import this then export again...

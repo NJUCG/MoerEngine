@@ -496,7 +496,7 @@ enum class EAttachmentStoreOp : uint8_t {
 static_assert((int32_t)EAttachmentStoreOp::Num <= 1 << (uint32_t)EAttachmentStoreOp::NumBits, "EAttachmentStoreOp::Num will not fit on EAttachmentStoreOp::NumBits");
 
 //todo: maybe get rid of some of them, cause not every frag is supported
-enum ERHIPipelineStageFlags : uint32_t {
+enum class ERHIPipelineStageFlags : uint32_t {
     PS_TOP_OF_PIPE                      = 0x00000001,
     PS_DRAW_INDIRECT                    = 0x00000002,
     PS_VERTEX_INPUT                     = 0x00000004,
@@ -986,7 +986,7 @@ static_assert(SP_Num < (1 << SP_NumBits) && "");
 
 /**
  * @brief Binding Parameter Enum
- * 
+ *
  */
 enum class EShaderParameterType : uint8_t {
     UNKNOWN,

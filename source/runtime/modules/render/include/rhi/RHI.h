@@ -340,6 +340,23 @@ namespace Moer::Render {
 
         DeviceConfig config;
     };
+
+
+    class RENDER_API GPUCapturer {
+    public:
+        virtual ~GPUCapturer() = default;
+
+        virtual void Begin(const std::filesystem::path& outputFilename) = 0;
+
+        virtual void End() = 0;
+    };
+
+#ifdef PLATFORM_WINDOWS // && ENABLE_D3D12
+    RENDER_API UniquePtr<GPUCapturer> CreatePIXCapturer(); // call this before create device
+    //// not sure add this directly into RenderDevice
+    //RENDER_API void BeginCapture(GPUCapturer* capturer, const std::filesystem::path& outputFilename) {capturer->Begin(outputFilename); }
+    //RENDER_API void EndCapture(GPUCapturer* capturer) { capturer->End(); }
+#endif
 };// namespace Moer::Render
 
 extern RENDER_API RHI* g_rhi;
@@ -377,11 +394,11 @@ struct UndefinedRenderTaskName {
 /**
  * @brief Enqueue a render task to render thread,
  *        if current thread is render thread, execute immediately
- * 
+ *
  * @tparam TaskNameType task name type for statistic profiling
  * @tparam Funtion lambda type
  * @param _func lambda function
- * @return FORCEINLINE 
+ * @return FORCEINLINE
  */
 template<typename Funtion, typename TaskNameType = UndefinedRenderTaskName>
 FORCEINLINE void EnqueueRenderTask(Funtion&& _func) {

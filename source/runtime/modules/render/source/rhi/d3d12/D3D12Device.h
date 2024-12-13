@@ -10,6 +10,7 @@
 #include "rhi/RHIResource.h"
 #include "../RHIImpl.h"
 
+#include "D3D12Macro.h"
 #include <wrl/client.h>
 #include <d3d12.h>
 #include <d3dx12/d3dx12.h>
@@ -22,11 +23,13 @@ template<typename T>
 using ComPtr = Microsoft::WRL::ComPtr<T>; // maybe use custom comptr?
 
 namespace Moer::Render {
+
     //class D3D12DescriptorSetsLayout;
     //class D3D12DescriptorSetAllocator;
     //class D3D12DescriptorSetWriter;
 
     struct D3D12RHIConfig {
+        //bool want_capture = false; // put here because we have to initialize capturer before the device is created
         //uint32 api_version = VK_API_VERSION_1_3; // feature level?
     };
 

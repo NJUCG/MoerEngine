@@ -34,6 +34,8 @@ int main(int argc, char** argv) {
     using namespace Moer;
     using namespace Moer::Render;
 
+    auto capturer = CreatePIXCapturer();
+
     std::filesystem::path path = argv[0];
     path.filename().string().find(".exe") != std::string::npos ? path = path.parent_path() : path = path;
     ConfigManager::GetInstance().Init(path);

@@ -2,7 +2,10 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 
+using enum ERHIPipelineStageFlags;
+
 namespace Moer {
+
     std::tuple<ERHIAccessFlags, ERHIAccessFlags, ERHIPipelineStageFlags, ERHIPipelineStageFlags>
     ResourceTransition::GetImageTransition(ETextureLayout oldLayout, ETextureLayout new_layout) {
         ERHIAccessFlags        src_access_flags, dst_access_flags;

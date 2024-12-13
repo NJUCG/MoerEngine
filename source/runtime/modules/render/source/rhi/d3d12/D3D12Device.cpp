@@ -20,26 +20,20 @@
 
 namespace Moer::Render {
 
-static void ThrowIfFailed(HRESULT hr) {
-    /*  if (FAILED(hr)) {
-        throw HrException(hr);
-    }*/
-    assert(SUCCEEDED(hr));
-}
 
 Moer::Render::D3D12Device::D3D12Device(const D3D12RHIConfig&& _config) {
 
     UINT dxgiFactoryFlags = 0;
-    ThrowIfFailed(CreateDXGIFactory2(dxgiFactoryFlags, IID_PPV_ARGS(factory.ReleaseAndGetAddressOf())));
+    DX_CHECK_HRESULT(CreateDXGIFactory2(dxgiFactoryFlags, IID_PPV_ARGS(factory.ReleaseAndGetAddressOf())));
 
     ComPtr<IDXGIAdapter1> hardwareAdapter;
     GetHardwareAdapter(factory, hardwareAdapter.ReleaseAndGetAddressOf(), true);
 
-    ThrowIfFailed(D3D12CreateDevice(
+    DX_CHECK_HRESULT(D3D12CreateDevice(
         hardwareAdapter.Get(),
         D3D_FEATURE_LEVEL_12_0,
         IID_PPV_ARGS(device.ReleaseAndGetAddressOf())));
-    ThrowIfFailed(hardwareAdapter.As(&adapter));
+    DX_CHECK_HRESULT(hardwareAdapter.As(&adapter));
     hardwareAdapter = nullptr;
 
     {
@@ -52,7 +46,7 @@ Moer::Render::D3D12Device::D3D12Device(const D3D12RHIConfig&& _config) {
         allocatorDesc.Flags = static_cast<D3D12MA::ALLOCATOR_FLAGS>(// cast make it happy
             D3D12MA::ALLOCATOR_FLAG_MSAA_TEXTURES_ALWAYS_COMMITTED | D3D12MA::ALLOCATOR_FLAG_DEFAULT_POOLS_NOT_ZEROED);
             //| D3D12MA::ALLOCATOR_FLAG_SINGLETHREADED);
-        ThrowIfFailed(D3D12MA::CreateAllocator(&allocatorDesc, d3d12Allocator.ReleaseAndGetAddressOf()));
+        DX_CHECK_HRESULT(D3D12MA::CreateAllocator(&allocatorDesc, d3d12Allocator.ReleaseAndGetAddressOf()));
     }
 
 
