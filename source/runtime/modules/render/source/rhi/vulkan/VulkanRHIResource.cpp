@@ -2732,10 +2732,10 @@ namespace Moer::Render {
 #pragma region [ destroy override ]
 
     void VulkanBuffer::Destroy() {
-        if (b_deferred_delete)
-        {
-            m_device->EnqueueDeferredRelease(this); return;
-        }
+        //if (b_deferred_delete)
+        //{
+        //    m_device->EnqueueDeferredRelease(this); return;
+        //}
         MoerDelete(this);
     }
 
@@ -2744,10 +2744,11 @@ namespace Moer::Render {
         m_device->SetResourceName(uint64(m_alloc.buffer), VK_OBJECT_TYPE_BUFFER, _name);
     }
 
-    void VulkanTexture::Destroy() { if (b_deferred_delete) {
-        m_device->EnqueueDeferredRelease(this);
-        return;
-        }
+    void VulkanTexture::Destroy() {
+        //if (b_deferred_delete) {
+        //m_device->EnqueueDeferredRelease(this);
+        //return;
+        //}
         MoerDelete(this);
     }
 

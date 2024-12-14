@@ -91,7 +91,7 @@ namespace Moer::Render {
     /**
      * @brief init vulkan instance
      * check instance layers and extensions, create instance, load functions using volk
-     * @param _api_version 
+     * @param _api_version
      */
     void VulkanDevice::InitVulkanInstance(uint32 _api_version) {
         VK_CHECK_RESULT(volkInitialize());
@@ -209,7 +209,7 @@ namespace Moer::Render {
     }
 
     /**
-    * @brief Select gpu, check extension support, etc. 
+    * @brief Select gpu, check extension support, etc.
     * Only check core extensions and core features support.
     * @param _api_version
     * @return selected gpu
@@ -274,7 +274,7 @@ namespace Moer::Render {
 
     /**
      * @brief Initialize GPU, query features, properties, memory, queue family, etc.
-     * @param _api_version 
+     * @param _api_version
      */
     void VulkanDevice::InitGpu(uint32 _api_version) {
         // Enable extensions
@@ -1357,7 +1357,9 @@ namespace Moer::Render {
 
     SwapchainRef VulkanDevice::CreateSwapchain(const SwapchainCreateInfo& _info) { return SwapchainRef{MoerNew(VkSwapchain)(*this, _info)}; }
 
-    void VulkanDevice::EnqueueDeferredRelease(RHIResource* _object) { deferred_release_queue.Push(_object); }
+    void VulkanDevice::EnqueueDeferredRelease(RHIResource* _object) {
+        //deferred_release_queue.Push(_object);
+    }
 
     void VulkanDevice::FlushDeferredReleases() {
         Array<RHIResource*> objects;
