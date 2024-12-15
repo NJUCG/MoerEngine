@@ -133,8 +133,12 @@ struct AoPipelineBindlessParam {
     uint   position_tex;
     uint   noise_tex;// linear & repeat sampler
     float2 inv_resolution;
+    float  ssao_intensity;
     uint   ssao_sample_count;
     uint   ssao_radius;
+    float  ssao_max_distance;
+    float  near_clip;
+    float  far_clip;
 };
 
 class AoPipeline : public RasterPipeline {
@@ -305,13 +309,13 @@ int main(int argc, const char** argv) {
     StaticArray<TextureRef, 2> antialiasing_temporal_texture_34;
 
     Sampler sampler(SF_LINEAR, SAM_REPEAT);
-    Sampler depth_sampler(SF_NEAREST, SAM_CLAMP_TO_EDGE);
 
     uint                 bdls_tex_handle_vbuffer                          = 0;
     uint                 bdls_tex_handle_normal                           = 0;
     uint                 bdls_tex_handle_uv                               = 0;
     uint                 bdls_tex_handle_position                         = 0;
-    uint                 bdls_tex_handle_depth                            = 0;
+    uint                 bdls_tex_handle_depth_with_nearest_sampler       = 0;
+    uint                 bdls_tex_handle_depth_with_linear_sampler        = 0;
     uint                 bdls_tex_handle_pbr_shading_output               = 0;
     uint                 bdls_tex_handle_ao_output                        = 0;
     uint                 bdls_tex_handle_antialiasing_temporal_texture_1  = 0;
@@ -417,7 +421,8 @@ int main(int argc, const char** argv) {
         bdls_tex_handle_normal                              = bindless_array->AllocateTexture(normal, sampler);
         bdls_tex_handle_uv                                  = bindless_array->AllocateTexture(uv, sampler);
         bdls_tex_handle_position                            = bindless_array->AllocateTexture(position, sampler);
-        bdls_tex_handle_depth                               = bindless_array->AllocateTexture(depth->GetView(), depth_sampler);
+        bdls_tex_handle_depth_with_nearest_sampler          = bindless_array->AllocateTexture(depth->GetView(), Sampler(SF_NEAREST, SAM_CLAMP_TO_EDGE));
+        bdls_tex_handle_depth_with_linear_sampler           = bindless_array->AllocateTexture(depth->GetView(), Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE));
         bdls_tex_handle_pbr_shading_output                  = bindless_array->AllocateTexture(pbr_shading_output, sampler);
         bdls_tex_handle_ao_output                           = bindless_array->AllocateTexture(ao_output, sampler);
         bdls_tex_handle_antialiasing_temporal_texture_1     = bindless_array->AllocateTexture(antialiasing_temporal_texture_1, sampler);
@@ -437,7 +442,8 @@ int main(int argc, const char** argv) {
         bindless_array->FreeTexture(bdls_tex_handle_normal);
         bindless_array->FreeTexture(bdls_tex_handle_uv);
         bindless_array->FreeTexture(bdls_tex_handle_position);
-        bindless_array->FreeTexture(bdls_tex_handle_depth);
+        bindless_array->FreeTexture(bdls_tex_handle_depth_with_nearest_sampler);
+        bindless_array->FreeTexture(bdls_tex_handle_depth_with_linear_sampler);
         bindless_array->FreeTexture(bdls_tex_handle_pbr_shading_output);
         bindless_array->FreeTexture(bdls_tex_handle_ao_output);
         bindless_array->FreeTexture(bdls_tex_handle_antialiasing_temporal_texture_1);
@@ -856,7 +862,7 @@ int main(int argc, const char** argv) {
             material_param.g_buffer_uv         = bdls_tex_handle_uv;
             material_param.g_buffer_normal     = bdls_tex_handle_normal;
             material_param.v_buffer            = bdls_tex_handle_vbuffer;
-            material_param.g_buffer_depth      = bdls_tex_handle_depth;
+            material_param.g_buffer_depth      = bdls_tex_handle_depth_with_nearest_sampler;
             material_param.gbuffer_position    = bdls_tex_handle_position;
             material_param.global_param_handle = lighting_data_handle;
             material_param.light_buffer        = light_buffer_handle;
@@ -892,12 +898,16 @@ int main(int argc, const char** argv) {
                 param.ao_mode           = ui_config.ao_mode;
                 param.input_image       = bdls_tex_handle_pbr_shading_output;
                 param.normal_tex        = bdls_tex_handle_normal;
-                param.depth_tex         = bdls_tex_handle_depth;
+                param.depth_tex         = bdls_tex_handle_depth_with_linear_sampler;
                 param.position_tex      = bdls_tex_handle_position;
                 param.noise_tex         = bdls_tex_handle_noise_with_linear_sampler;
-                param.inv_resolution    = 1.0f / float2(resolution);
+                param.inv_resolution    = float2(1.0f) / float2(resolution);
+                param.ssao_intensity    = ui_config.ssao_intensity;
                 param.ssao_sample_count = ui_config.ssao_sample_count;
                 param.ssao_radius       = ui_config.ssao_radius;
+                param.ssao_max_distance = ui_config.ssao_max_distance;
+                param.near_clip         = camera->GetNearClip();
+                param.far_clip          = camera->GetFarClip();
 
                 cmd_list
                     .Gfx(ao_pipeline, bindless_array, param)
@@ -1015,7 +1025,7 @@ int main(int argc, const char** argv) {
                         param.aa_mode                 = ui_config.aa_mode;
                         param.color_tex               = bdls_tex_handle_ao_output;
                         param.position_tex            = bdls_tex_handle_position;
-                        param.depth_tex               = bdls_tex_handle_depth;
+                        param.depth_tex               = bdls_tex_handle_depth_with_nearest_sampler;
                         param.search_tex              = bdls_tex_handle_smaa_search_tex;
                         param.area_tex                = bdls_tex_handle_smaa_area_tex;
                         param.edges_tex               = bdls_tex_handle_antialiasing_temporal_texture_1;

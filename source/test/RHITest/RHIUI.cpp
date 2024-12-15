@@ -200,8 +200,10 @@ namespace Moer::Render {
                 draw_border();
             }
 
+            ImGui::SliderFloat("Intensity", &m_config.ssao_intensity, 0.0f, 2.0f);
             ImGui::SliderInt("Sample Count", &m_config.ssao_sample_count, 1, 16);
-            ImGui::SliderInt("Sample Radius", &m_config.ssao_radius, 1, 32);
+            ImGui::SliderInt("Sample Radius", &m_config.ssao_radius, 1, 8);
+            ImGui::SliderFloat("Max Distance", &m_config.ssao_max_distance, 0.0f, 2.0f);
 
             ImGui::TreePop();
         }

@@ -15,20 +15,21 @@ struct Constant {
     uint   position_tex;
     uint   noise_tex;// linear & repeat sampler
     float2 inv_resolution;
+    float  ssao_intensity;
     uint   ssao_sample_count;
     uint   ssao_radius;
+    float  ssao_max_distance;
+    float  near_clip;
+    float  far_clip;
 };
 [[vk::push_constant]] ConstantBuffer<Constant> param;
 
 #define AO_MODE_NONE 0
-#define AO_MODE_SSAO_IQ 1
-#define AO_MODE_SSAO_IQ_AO_ONLY 2
-#define AO_MODE_SSAO_GAMES202 3
-#define AO_MODE_SSAO_GAMES202_AO_ONLY 4
-#define AO_MODE_SSDO_GAMES202 5
-#define AO_MODE_SSDO_GAMES202_AO_ONLY 6
-
-#define SSAO_IQ_DEPTH_THRESHOLD 0.1
+#define AO_MODE_SSAO 1
+#define AO_MODE_SSAO_AO_ONLY 2
+#define AO_MODE_SSDO 3
+#define AO_MODE_SSDO_AO_ONLY 4
+#define AO_MODE_LINEARIZED_DEPTH 5
 
 static const float Epsilon = 0.0001; // same with PBRMaterialFrag.hlsl
 static const float3 ABNORMAL_COLOR = float3(0.0, 0.0, 1.0);
@@ -37,54 +38,36 @@ static const float3 ABNORMAL_COLOR = float3(0.0, 0.0, 1.0);
 float2 random_2to2(float2 uv) {
     return TextureHandle(param.noise_tex).Sample2D<float4>(uv).rg;
 }
-float3 random_2to3(float2 uv) {
-    return TextureHandle(param.noise_tex).Sample2D<float4>(uv).rga;
-}
 
 float get_depth(float2 uv) {
-    float depth = TextureHandle(param.depth_tex).Sample2D<float>(uv).x;
-
-    // TODO: convert to linear depth
-
-    return depth;
+    // linearize depth
+    // formula: `near_clip * far_clip / (far_clip + (1.0 - depth) * (near_clip - far_clip))`
+    // `(1.0 - depth)` to convert from reverse z to regular z
+    return param.near_clip * param.far_clip / (param.far_clip + (
+        1.0 - TextureHandle(param.depth_tex).Sample2D<float>(uv).x
+    ) * (param.near_clip - param.far_clip));
 }
 
-// The MIT License
-// Copyright © 2014 Inigo Quilez
-// Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions: The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-// Reference: https://www.shadertoy.com/view/Ms23Wm
-float ssao_iq(float2 uv) {
-    // sample zbuffer (in linear eye space) at the current shading point	
-	float zr = 1.0 - get_depth(uv);
-
-    // sample neighbor pixels
-	float ao = 0.0;
-	for (int i = 0; i < param.ssao_sample_count; i++) {
-        // get a random 2D offset vector
-        float2 offset = random_2to2(uv + float2(0.02371*i, 0.01337*i)) * 2.0 - 1.0;
-        // sample the zbuffer at a neightbor pixel (in a ssao_radius pixel radious)        		
-        float z = 1.0 - get_depth(uv + floor(offset * param.ssao_radius) * param.inv_resolution);
-        // accumulate occlusion if difference is less than SSAO_IQ_DEPTH_THRESHOLD units		
-		ao += clamp((zr - z) / SSAO_IQ_DEPTH_THRESHOLD, 0.0, 1.0);
-	}
-    // average down the occlusion	
-    ao = clamp(1.0 - ao / param.ssao_sample_count, 0.0, 1.0);
-	
-	return ao;
-}
-
+// reference: games202 & https://www.shadertoy.com/view/Ms33WB
 float ssao_games202(float2 uv) {
-    float sum = 0.0;
     float3 normal = TextureHandle(param.normal_tex).Sample2D<float4>(uv).rgb * 2.0 - 1.0;
+    float3 position = TextureHandle(param.position_tex).Sample2D<float4>(uv).rgb;
 
+    float ao = 0.0;
+    float2 tmp1 = param.ssao_radius * param.inv_resolution;
     for (uint i = 0; i < param.ssao_sample_count; i++) {
-        float3 offset = random_2to3(uv) * 2.0 - 1.0;
-        if (dot(offset, normal) < 0.0) {
-            offset = -offset;
-        }
-    }
+        float2 offset = random_2to2(uv + 0.093 * float2(i, i)) * 2.0 - 1.0;
+        float3 sample_position = TextureHandle(param.position_tex).Sample2D<float4>(uv + offset * tmp1).rgb;
 
-    return 1.0;
+        float3 vec = sample_position - position;
+        float3 len = length(vec);
+        float3 norm_vec = vec / len;
+
+        ao += max(0.0, dot(normal, norm_vec) - 0.01) * smoothstep(param.ssao_max_distance, param.ssao_max_distance * 0.5, len);
+    }
+    ao = clamp(1.0 - ao / param.ssao_sample_count * param.ssao_intensity, 0.0, 1.0);
+
+    return ao;
 }
 
 float4 main(float2 uv : TEXCOORD0) : SV_TARGET {
@@ -94,13 +77,17 @@ float4 main(float2 uv : TEXCOORD0) : SV_TARGET {
     if (param.ao_mode == AO_MODE_NONE) {
         return float4(color, 1.0);
 
-    } else if (param.ao_mode == AO_MODE_SSAO_IQ) {
-        float3 ssao_result = ssao_iq(uv);
+    } else if (param.ao_mode == AO_MODE_SSAO) {
+        float3 ssao_result = ssao_games202(uv);
         return float4(ssao_result * color, 1.0);
 
-    } else if (param.ao_mode == AO_MODE_SSAO_IQ_AO_ONLY) {
-        float3 ssao_result = ssao_iq(uv);
+    } else if (param.ao_mode == AO_MODE_SSAO_AO_ONLY) {
+        float3 ssao_result = ssao_games202(uv);
         return float4(ssao_result, 1.0);
+
+    } else if (param.ao_mode == AO_MODE_LINEARIZED_DEPTH) {
+        float d = get_depth(uv) / 10.0;
+        return float4(d, d, d, 1.0);
 
     } else {
         return float4(ABNORMAL_COLOR, 1.0);
