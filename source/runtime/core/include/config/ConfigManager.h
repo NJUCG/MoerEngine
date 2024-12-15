@@ -42,6 +42,7 @@ namespace Moer {
         std::filesystem::path workspace_path;
         std::filesystem::path editor_resource_path;
         std::filesystem::path engine_shader_path;
+        std::filesystem::path engine_shader_shared_path;
         std::filesystem::path engine_shader_cached_path;
         std::filesystem::path scene_path;
         ConfigManager() {}
@@ -58,6 +59,8 @@ namespace Moer {
         const std::filesystem::path& GetEditorResourcePath() const;
 
         const std::filesystem::path& GetEngineShaderPath() const;
+
+        const std::filesystem::path& GetEngineShaderSharedPath() const;
 
         const std::filesystem::path& GetEngineShaderCachedPath() const;
 

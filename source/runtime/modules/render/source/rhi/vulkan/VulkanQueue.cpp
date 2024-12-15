@@ -153,7 +153,7 @@ namespace Moer::Render {
                 case SpvReflectResourceType::SPV_REFLECT_RESOURCE_FLAG_SRV:
                     return VK_ACCESS_2_SHADER_READ_BIT;
                 case SpvReflectResourceType::SPV_REFLECT_RESOURCE_FLAG_UAV:
-                    return VK_ACCESS_2_SHADER_WRITE_BIT;
+                    return VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT;
                 default:
                     assert(false && "Invalid texture resource type");
                     return VK_ACCESS_2_SHADER_READ_BIT;
@@ -191,7 +191,17 @@ namespace Moer::Render {
                     if (_flag.resource_type == SPV_REFLECT_RESOURCE_FLAG_UNDEFINED) return;
                     auto* vk_texture = reinterpret_cast<VulkanTexture*>(_arg.GetTexture());
                     tracker.RecordState(vk_texture, GetTextureAccess(_flag), GetTextureLayout(_flag), _pipelines, _arg.mip_level, _arg.num_mips);
-                } else if constexpr (std::is_same_v<T, BindlessArrayRef>) {
+                } else if constexpr (std::is_same_v<T, std::span<TextureView>>) {
+                    for (auto&& i : _arg) {
+                        VisitArgs(i, _flag, _pipelines);
+                    }
+                } else if constexpr (std::is_same_v<T, std::span<BufferView>>) {
+                    for (auto&& i : _arg) {
+                        VisitArgs(i, _flag, _pipelines);
+                    }
+                }
+
+                else if constexpr (std::is_same_v<T, BindlessArrayRef>) {
                     HandleBindless(_arg, _pipelines);
                 } else if constexpr (std::is_same_v<T, RaytracingSceneRef>) {
                     VulkanRaytracingScene* vk_as = ResourceCast(_arg.Get());
@@ -447,7 +457,6 @@ namespace Moer::Render {
                     auto*         vk_texture = ResourceCast(barrier.texture.GetTexture());
                     auto          access     = tracker.ReadTexture(vk_texture, barrier.state);
                     VkImageLayout src_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                    device.GetComputeQueue();
                     tracker.QueueTransferAcquireResource(
                         vk_texture,
                         device.GetQueueFamilyIndex(_cmd->src_queue),

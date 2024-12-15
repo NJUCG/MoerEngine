@@ -721,16 +721,13 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
 
     float3 l_diff = pt_result.diffuse_radiance * diff_demod;
     float3 l_spec = pt_result.specular_radiance * spec_demod;
-
-
-    l_diff += l_sum;
   
 //   if (STL::Color::Luminance(shadow_translucency) > 0.0f)
 //     printf("mat.l_direct %f %f %f shadow_distance %f\n", mat.l_emi,
 //     mat.l_emi,
 //            mat.l_emi, shadow_translucency);
   //   out_position[pixel_pos] = float4(hit_info.x, 1.0f);
-  out_direct_lighting[pixel_pos] = l_diff + l_spec;
+  out_direct_lighting[pixel_pos] = l_sum + l_diff + l_spec;
   out_diffuse[pixel_pos] =
       float4(pt_result.diffuse_radiance, pt_result.diffuse_hit_dist);
   out_specular[pixel_pos] =

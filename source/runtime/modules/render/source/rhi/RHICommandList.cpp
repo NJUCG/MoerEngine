@@ -90,12 +90,12 @@ namespace Moer::Render {
         : cmd_list(_cmd_list), pso(_pso), args({}) {
     }
 
-    void CommandList::ComputeDispatcher::Dispatch(uint3 _group_count, std::string_view _name) {
+    void CommandList::ComputeDispatcher::Dispatch(uint3 _group_count, std::string_view _name, ProfileSection _section) {
         cmd_list.commands.push_back(MakeUnique<DispatchCmd>(std::move(args), pso.handle, _group_count));
         cmd_list.commands.back()->name = _name;
     }
 
-    void CommandList::ComputeDispatcher::DispatchIndirect(BufferView _indirect, std::string_view _name) {
+    void CommandList::ComputeDispatcher::DispatchIndirect(BufferView _indirect, std::string_view _name, ProfileSection _section) {
         cmd_list.commands.push_back(MakeUnique<DispatchCmd>(std::move(args), pso.handle, _indirect));
         cmd_list.commands.back()->name = _name;
     }

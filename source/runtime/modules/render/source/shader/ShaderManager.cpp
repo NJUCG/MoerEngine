@@ -51,7 +51,7 @@ namespace Moer::Render {
         return impl->Raytracing();
     }
 
-    PipelineHandle RasterPipelineConstructor::CreatePipeline(GfxPsoCreateInfo&& _pso_info, Array<std::string_view>&& _hash_values, Array<EShaderArgType>&& _arg_type_values) {
+    PipelineHandle RasterPipelineConstructor::CreatePipeline(GfxPsoCreateInfo&& _pso_info, Array<std::string_view>&& _hash_values, Array<ShaderArgCppInfo>&& _arg_type_values) {
         // get shaders and reflection
         bool b_vs_ps = task_path.Empty() && !vertex_path.Empty() && !pixel_path.Empty();
         bool b_gs    = !geometry_path.Empty();
@@ -86,7 +86,7 @@ namespace Moer::Render {
                 .shader_type      = _type,
                 .shader_param_map = {std::move(_output.parameter_map.param_map), std::move(_output.parameter_map.reflect_map)}});
         };
-        PipelineShaderInfo sd_info{.layout_hash = std::move(_hash_values), .arg_types = std::move(_arg_type_values)};
+        PipelineShaderInfo sd_info{.layout_hash = std::move(_hash_values), .arg_cpp_info = std::move(_arg_type_values)};
         if (b_vs_ps) {
             auto vert_output  = get_shader_output(vertex_path, ST_VERTEX);
             auto pixel_output = get_shader_output(pixel_path, ST_FRAGMENT);
@@ -124,7 +124,7 @@ namespace Moer::Render {
     ComputeConstructor::ComputeConstructor(RenderDevice& _device, std::string_view _path, std::string_view _entry_name) : device(_device), shader_info(_path, _entry_name) {
     }
 
-    PipelineShaderInfo ComputeConstructor::CompileShaderInfo(Array<std::string_view>&& _hash_values, Array<EShaderArgType>&& _arg_type_values) {
+    PipelineShaderInfo ComputeConstructor::CompileShaderInfo(Array<std::string_view>&& _hash_values, Array<ShaderArgCppInfo>&& _arg_type_values) {
 
         auto target_info       = device.GetShaderPlatform();
         auto get_shader_output = [&](ShaderInfo& _info, EShaderType _type) {
@@ -157,12 +157,12 @@ namespace Moer::Render {
         };
 
         auto               output = get_shader_output(shader_info, ST_COMPUTE);
-        PipelineShaderInfo sd_info{.layout_hash = std::move(_hash_values), .arg_types = std::move(_arg_type_values)};
+        PipelineShaderInfo sd_info{.layout_hash = std::move(_hash_values), .arg_cpp_info = std::move(_arg_type_values)};
         sd_info.shader_group = ShaderCs{.cs = get_shader_info(ST_COMPUTE, shader_info, std::move(output))};
         return std::move(sd_info);
     }
 
-    PipelineHandle ComputeConstructor::CreatePipeline(Array<std::string_view>&& _hash_values, Array<EShaderArgType>&& _arg_type_values) {
+    PipelineHandle ComputeConstructor::CreatePipeline(Array<std::string_view>&& _hash_values, Array<ShaderArgCppInfo>&& _arg_type_values) {
         // auto target_info       = device.GetShaderPlatform();
         // auto get_shader_output = [&](ShaderInfo& _info, EShaderType _type) {
         //     ShaderCompilerInput input{

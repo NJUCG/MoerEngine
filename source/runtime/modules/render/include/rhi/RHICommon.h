@@ -150,6 +150,9 @@ struct Extent3D {
     Extent3D() : x(0), y(0), z(0) {
     }
 
+    Extent3D(Moer::uint3 _v) : x(_v.x), y(_v.y), z(_v.z) {
+    }
+
     Extent3D(Moer::uint _x, Moer::uint _y, Moer::uint _z = 0) : x(_x), y(_y), z(_z) {
     }
     Extent3D(const Extent2D& _v, uint32_t _z = 1u) : x(_v.x), y(_v.y), z(_z) {

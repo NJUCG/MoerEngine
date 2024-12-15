@@ -1400,6 +1400,10 @@ namespace Moer::Render {
         // vkCmdPushConstants(command_buffer, vk_pso->GetPipelineLayout(), stage_flags, offset, size, _data.data());
     }
 
+    VkImageLayout GetSamplerImageLayout(const TextureView& _view) {
+        return uint(_view.GetTexture()->GetAspectFlags() & ETextureAspectFlags::DEPTH_SLICE) ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    }
+
     void VulkanCmdList::BindDescriptors(PipelineHandle& _pso_handle, const ArrayArguments& _args) {
         auto* vk_pso = reinterpret_cast<VulkanPipelineState*>(_pso_handle.handle);
 
@@ -1440,13 +1444,30 @@ namespace Moer::Render {
                                 }
                                 case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE: {
 
-                                    VkImageLayout layout = uint(std::get<TextureView>(_args[set_info.param_idx]).GetTexture()->GetAspectFlags() & ETextureAspectFlags::DEPTH_SLICE) ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                                    if (writer.descriptorCount > 1) {
+                                        std::span<TextureView> textures = std::get<std::span<TextureView>>(_args[set_info.param_idx]);
+                                        for (uint j = 0; j < writer.descriptorCount; ++j) {
+                                            VkImageLayout layout     = GetSamplerImageLayout(textures[j]);
+                                            uint64        src_handle = descriptor_heap.GetImageDescIdx(&textures[j], layout);
+                                            descriptor_heap.PushImageDesc(src_handle, _binder.binding_infos[i].offset + j * device.GetOptionalProperties().descriptor_buffer_properties.sampledImageDescriptorSize);
+                                        }
+                                        break;
+                                    }
+                                    VkImageLayout layout = GetSamplerImageLayout(std::get<TextureView>(_args[set_info.param_idx]));
 
                                     uint64 src_handle = descriptor_heap.GetImageDescIdx(&std::get<TextureView>(_args[set_info.param_idx]), layout);
                                     descriptor_heap.PushImageDesc(src_handle, _binder.binding_infos[i].offset);
                                     break;
                                 }
                                 case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE: {
+                                    if (writer.descriptorCount > 1) {
+                                        std::span<TextureView> textures = std::get<std::span<TextureView>>(_args[set_info.param_idx]);
+                                        for (uint j = 0; j < writer.descriptorCount; ++j) {
+                                            uint64 src_handle = descriptor_heap.GetImageDescIdx(&textures[j], VK_IMAGE_LAYOUT_GENERAL);
+                                            descriptor_heap.PushImageDesc(src_handle, _binder.binding_infos[i].offset + j * device.GetOptionalProperties().descriptor_buffer_properties.storageImageDescriptorSize);
+                                        }
+                                        break;
+                                    }
                                     uint64 src_handle = descriptor_heap.GetImageDescIdx(&std::get<TextureView>(_args[set_info.param_idx]), VK_IMAGE_LAYOUT_GENERAL);
                                     descriptor_heap.PushImageDesc(src_handle, _binder.binding_infos[i].offset);
                                     break;
@@ -1458,6 +1479,14 @@ namespace Moer::Render {
                                     break;
                                 }
                                 case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER: {
+                                    if (writer.descriptorCount > 1) {
+                                        std::span<BufferView> buffers = std::get<std::span<BufferView>>(_args[set_info.param_idx]);
+                                        for (uint j = 0; j < writer.descriptorCount; ++j) {
+                                            uint64 src_handle = descriptor_heap.GetBufferDescIdx(buffers[j]);
+                                            descriptor_heap.PushStorageDesc(src_handle, _binder.binding_infos[i].offset + j * device.GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize);
+                                        }
+                                        break;
+                                    }
                                     // VulkanBuffer* buffer     = ResourceCast(std::get<BufferView>(_args[set_info.param_idx]).GetBuffer());
                                     uint64 src_handle = descriptor_heap.GetBufferDescIdx(std::get<BufferView>(_args[set_info.param_idx]));
                                     descriptor_heap.PushStorageDesc(src_handle, _binder.binding_infos[i].offset);

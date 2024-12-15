@@ -15,6 +15,7 @@
 struct TDummy {};
 
 namespace Moer::Render {
+
     using TConstantArg = std::variant<int, float, bool, uint>;
     using TScalarArg   = std::variant<float2, float3, float4, uint2, uint3, uint4>;
     using TMatrixArg   = std::variant<Matrix4x4f, Matrix3x3f, Matrix3x4f, Matrix3x4ui, Matrix3x4i>;
@@ -37,10 +38,16 @@ namespace Moer::Render {
     > ;
 
 #define DEFINE_SHADER_TEX(name) \
-    StringType(name) using name = ShaderArg<TextureArg, GetStringType(name)>
+    StringType(name) using name = ShaderArg<TextureArg<1>, GetStringType(name)>
+
+#define DEFINE_SHADER_TEX_ARRAY(name, max_num) \
+    StringType(name) using name = ShaderArg<TextureArg<max_num>, GetStringType(name)>
 
 #define DEFINE_SHADER_BUFFER(name) \
-    StringType(name) using name = ShaderArg<BufferArg, GetStringType(name)>
+    StringType(name) using name = ShaderArg<BufferArg<1>, GetStringType(name)>
+
+#define DEFINE_SHADER_BUFFER_ARRAY(name, max_num) \
+    StringType(name) using name = ShaderArg<BufferArg<max_num>, GetStringType(name)>
 
 #define DEFINE_SHADER_CONSTANT_STRUCT(type, name) \
     StringType(name) using name = ShaderArg<TConstsant<type>, GetStringType(name)>
@@ -68,42 +75,42 @@ namespace Moer::Render {
     MOVE_CONSTRUCTOR(name)                                     \
     NO_COPY_CONSTRUCTOR(name)
 
-#define DEFINE_SHADER_ARGS(...)                                                                                          \
-public:                                                                                                                  \
-    using InnerArgs = ShaderArgs<TPipeline __VA_OPT__(, ) __VA_ARGS__>;                                                  \
-    template<typename... T>                                                                                              \
-    ArrayArguments SetArgs(T&&... _args) {                                                                               \
-        return std::move(InnerArgs::SetParams(std::make_index_sequence<sizeof...(T)>(), std::forward<T>(_args)...));     \
-    }                                                                                                                    \
-                                                                                                                         \
-private:                                                                                                                 \
-    template<size_t... idx>                                                                                              \
-    static StaticArray<std::string_view, InnerArgs::arg_size> GetHashArray(std::index_sequence<idx...>) {                \
-        return {std::tuple_element_t<idx, InnerArgs::tuple_helper>::GetName()...};                                       \
-    }                                                                                                                    \
-                                                                                                                         \
-    template<size_t... idx>                                                                                              \
-    static StaticArray<uint64, InnerArgs::arg_size> GetHashCodeArray(std::index_sequence<idx...>) {                      \
-        return {std::tuple_element_t<idx, InnerArgs::tuple_helper>::GetHashCode()...};                                   \
-    }                                                                                                                    \
-                                                                                                                         \
-    template<size_t... idx>                                                                                              \
-    static StaticArray<Moer::Render::EShaderArgType, InnerArgs::arg_size> GetArgTypeArray(std::index_sequence<idx...>) { \
-        return {std::tuple_element_t<idx, InnerArgs::tuple_helper>::GetArgType()...};                                    \
-    }                                                                                                                    \
-                                                                                                                         \
-public:                                                                                                                  \
-    static StaticArray<std::string_view, InnerArgs::arg_size> GetHashArray() {                                           \
-        if constexpr (InnerArgs::arg_size == 0) { return {}; }                                                           \
-        return GetHashArray(std::make_index_sequence<InnerArgs::arg_size>());                                            \
-    }                                                                                                                    \
-    static StaticArray<uint64, InnerArgs::arg_size> GetHashCodeArray() {                                                 \
-        if constexpr (InnerArgs::arg_size == 0) { return {}; }                                                           \
-        return GetHashCodeArray(std::make_index_sequence<InnerArgs::arg_size>());                                        \
-    }                                                                                                                    \
-    static StaticArray<Moer::Render::EShaderArgType, InnerArgs::arg_size> GetArgTypeArray() {                            \
-        if constexpr (InnerArgs::arg_size == 0) { return {}; }                                                           \
-        return GetArgTypeArray(std::make_index_sequence<InnerArgs::arg_size>());                                         \
+#define DEFINE_SHADER_ARGS(...)                                                                                            \
+public:                                                                                                                    \
+    using InnerArgs = ShaderArgs<TPipeline __VA_OPT__(, ) __VA_ARGS__>;                                                    \
+    template<typename... T>                                                                                                \
+    ArrayArguments SetArgs(T&&... _args) {                                                                                 \
+        return std::move(InnerArgs::SetParams(std::make_index_sequence<sizeof...(T)>(), std::forward<T>(_args)...));       \
+    }                                                                                                                      \
+                                                                                                                           \
+private:                                                                                                                   \
+    template<size_t... idx>                                                                                                \
+    static StaticArray<std::string_view, InnerArgs::arg_size> GetHashArray(std::index_sequence<idx...>) {                  \
+        return {std::tuple_element_t<idx, InnerArgs::tuple_helper>::GetName()...};                                         \
+    }                                                                                                                      \
+                                                                                                                           \
+    template<size_t... idx>                                                                                                \
+    static StaticArray<uint64, InnerArgs::arg_size> GetHashCodeArray(std::index_sequence<idx...>) {                        \
+        return {std::tuple_element_t<idx, InnerArgs::tuple_helper>::GetHashCode()...};                                     \
+    }                                                                                                                      \
+                                                                                                                           \
+    template<size_t... idx>                                                                                                \
+    static StaticArray<Moer::Render::ShaderArgCppInfo, InnerArgs::arg_size> GetArgInfoArray(std::index_sequence<idx...>) { \
+        return {std::tuple_element_t<idx, InnerArgs::tuple_helper>::GetArgInfo()...};                                      \
+    }                                                                                                                      \
+                                                                                                                           \
+public:                                                                                                                    \
+    static StaticArray<std::string_view, InnerArgs::arg_size> GetHashArray() {                                             \
+        if constexpr (InnerArgs::arg_size == 0) { return {}; }                                                             \
+        return GetHashArray(std::make_index_sequence<InnerArgs::arg_size>());                                              \
+    }                                                                                                                      \
+    static StaticArray<uint64, InnerArgs::arg_size> GetHashCodeArray() {                                                   \
+        if constexpr (InnerArgs::arg_size == 0) { return {}; }                                                             \
+        return GetHashCodeArray(std::make_index_sequence<InnerArgs::arg_size>());                                          \
+    }                                                                                                                      \
+    static StaticArray<Moer::Render::ShaderArgCppInfo, InnerArgs::arg_size> GetArgInfoArray() {                            \
+        if constexpr (InnerArgs::arg_size == 0) { return {}; }                                                             \
+        return GetArgInfoArray(std::make_index_sequence<InnerArgs::arg_size>());                                           \
     }
 
 #define StringType(in_name)                                \
@@ -118,13 +125,13 @@ public:                                                                         
     String##name
 
 namespace Moer::Render {
-    using TInvalidArg                           = uint;
-    using TArg                                  = std::variant<TInvalidArg, BufferView, TextureView, Sampler, BindlessArrayRef, RaytracingSceneRef>;
-    static constexpr uint bindless_arg_type_idx = 4;
+    using TInvalidArg = uint;
+    using TArg        = std::variant<TInvalidArg, BufferView, TextureView, std::span<TextureView>, std::span<BufferView>, Sampler, BindlessArrayRef, RaytracingSceneRef>;
 
     template<typename T>
     struct ShaderArgEnum {
-        static constexpr EShaderArgType arg_type = SDA_Constant;
+        static constexpr EShaderArgType arg_type   = SDA_Constant;
+        static constexpr uint           array_size = 1;
     };
 
     // struct Arguments {
@@ -167,17 +174,21 @@ namespace Moer::Render {
 
     template<typename T, typename arg_name>
     struct ShaderArg {
-        static constexpr std::string_view name   = arg_name::name;
-        using type                               = T;
-        static constexpr EShaderArgType arg_type = ShaderArgEnum<T>::arg_type;
+        static constexpr std::string_view name         = arg_name::name;
+        using type                                     = T;
+        static constexpr EShaderArgType arg_type       = ShaderArgEnum<T>::arg_type;
+        static constexpr uint           max_array_size = ShaderArgEnum<T>::array_size;
         ShaderArg() {}
         static const std::string_view GetName() { return name; }
         static uint64                 GetHashCode() { return GetHash(name); }
 
-        static EShaderArgType GetArgType() { return arg_type; }
+        static ShaderArgCppInfo GetArgInfo() {
+            return {max_array_size, arg_type};
+        }
     };
     struct NonConstant {};
 
+    template<uint array_size>
     struct BufferArg {
         using type = NonConstant;
     };
@@ -186,6 +197,7 @@ namespace Moer::Render {
         using type = NonConstant;
     };
 
+    template<uint array_size>
     struct TextureArg {
         using type = NonConstant;
     };
@@ -206,34 +218,40 @@ namespace Moer::Render {
         using type = NonConstant;
     };
 
-    template<>
-    struct ShaderArgEnum<BufferArg> {
-        static constexpr EShaderArgType arg_type = SDA_Buffer;
+    template<uint _array_size>
+    struct ShaderArgEnum<BufferArg<_array_size>> {
+        static constexpr EShaderArgType arg_type   = SDA_Buffer;
+        static constexpr uint           array_size = _array_size;
     };
 
     template<>
     struct ShaderArgEnum<ConstantBufferArg> {
-        static constexpr EShaderArgType arg_type = SDA_ConstantBuffer;
+        static constexpr EShaderArgType arg_type   = SDA_ConstantBuffer;
+        static constexpr uint           array_size = 1;
     };
 
-    template<>
-    struct ShaderArgEnum<TextureArg> {
-        static constexpr EShaderArgType arg_type = SDA_Texture;
+    template<uint _array_size>
+    struct ShaderArgEnum<TextureArg<_array_size>> {
+        static constexpr EShaderArgType arg_type   = SDA_Texture;
+        static constexpr uint           array_size = _array_size;
     };
 
     template<>
     struct ShaderArgEnum<SamplerArg> {
-        static constexpr EShaderArgType arg_type = SDA_Sampler;
+        static constexpr EShaderArgType arg_type   = SDA_Sampler;
+        static constexpr uint           array_size = 1;
     };
 
     template<>
     struct ShaderArgEnum<BindlessArg> {
-        static constexpr EShaderArgType arg_type = SDA_BindlessArray;
+        static constexpr EShaderArgType arg_type   = SDA_BindlessArray;
+        static constexpr uint           array_size = 1;
     };
 
     template<>
     struct ShaderArgEnum<TLASArg> {
-        static constexpr EShaderArgType arg_type = SDA_TLAS;
+        static constexpr EShaderArgType arg_type   = SDA_TLAS;
+        static constexpr uint           array_size = 1;
     };
 
     class ShaderPipeline;
@@ -276,31 +294,38 @@ namespace Moer::Render {
         //     //if TArg is a constant, add the size of TArg to the total size, other wise add 0
         //     return (0 + ... + (std::is_same_v<typename Args::type, TConstsant<typename Args::type::type>> ? sizeof(typename Args::type) : 0)) / sizeof(uint);
         // }
+        using t_texture_array_arg = std::span<TextureView>;
+        using t_buffer_array_arg  = std::span<BufferView>;
 
         template<typename T, typename TArg>
-            requires std::is_same_v<std::remove_reference_t<T>, TextureView> || std::is_same_v<std::remove_reference_t<T>, BufferView> || std::is_same_v<std::remove_reference_t<T>, Sampler> ||
+            requires std::is_same_v<std::remove_reference_t<T>, TextureView> || std::is_same_v<std::remove_reference_t<T>, t_texture_array_arg> ||
+                     std::is_same_v<std::remove_reference_t<T>, BufferView> || std::is_same_v<std::remove_reference_t<T>, t_buffer_array_arg> || std::is_same_v<std::remove_reference_t<T>, Sampler> ||
                      std::is_same_v<std::remove_reference_t<T>, TextureRef> || std::is_same_v<std::remove_reference_t<T>, BufferRef> || std::is_same_v<typename TArg::type, TConstsant<std::remove_reference_t<T>>> ||
                      std::is_same_v<std::remove_reference_t<T>, BindlessArrayRef> || std::is_same_v<std::remove_reference_t<T>, RaytracingSceneRef>
         static void SetParam(T&& _t, ArrayArguments& _arg_setter) {
             using cpp_type       = typename TArg::type;
             constexpr auto index = Index<TArg, tuple_helper>::value;
             using Type           = std::remove_reference_t<T>;
-            if constexpr (std::is_same_v<cpp_type, TextureArg>) {
+            if constexpr (is_template_of_v<cpp_type, Moer::Render::TextureArg>) {
                 //do texture stuff
                 if constexpr (std::is_same_v<Type, TextureRef>) {
                     _arg_setter[index] = _t->GetView();
                     //do texture stuff
                 } else if constexpr (std::is_same_v<Type, TextureView>) {
                     _arg_setter[index] = std::forward<T>(_t);
+                } else if constexpr (std::is_same_v<Type, t_texture_array_arg>) {
+                    _arg_setter[index] = std::forward<T>(_t);
                 } else {
                     if constexpr (true)
                         assert(0 && "not a buffer type");
                 }
-            } else if constexpr (std::is_same_v<cpp_type, BufferArg>) {
+            } else if constexpr (is_template_of_v<cpp_type, BufferArg>) {
                 //do buffer stuff
                 if constexpr (std::is_same_v<Type, BufferRef>) {
                     _arg_setter[index] = _t->GetView();
                 } else if constexpr (std::is_same_v<Type, BufferView>) {
+                    _arg_setter[index] = std::forward<T>(_t);
+                } else if constexpr (std::is_same_v<Type, t_buffer_array_arg>) {
                     _arg_setter[index] = std::forward<T>(_t);
                 } else {
                     if constexpr (true)
