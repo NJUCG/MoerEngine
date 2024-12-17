@@ -8,19 +8,16 @@
 BINDLESS_BINDINGS(3, 2, 4, 5)
 
 struct Constant {
+    float2 inv_resolution;
+    float  ssao_intensity;
+    float  ssao_max_distance;
+    uint   ssao_sample_count;
+    uint   ssao_radius;
     uint   ao_mode;
     uint   input_image;
     uint   normal_tex;
-    uint   depth_tex;
     uint   position_tex;
     uint   noise_tex;// linear & repeat sampler
-    float2 inv_resolution;
-    float  ssao_intensity;
-    uint   ssao_sample_count;
-    uint   ssao_radius;
-    float  ssao_max_distance;
-    float  near_clip;
-    float  far_clip;
 };
 [[vk::push_constant]] ConstantBuffer<Constant> param;
 
@@ -29,7 +26,6 @@ struct Constant {
 #define AO_MODE_SSAO_AO_ONLY 2
 #define AO_MODE_SSDO 3
 #define AO_MODE_SSDO_AO_ONLY 4
-#define AO_MODE_LINEARIZED_DEPTH 5
 
 static const float Epsilon = 0.0001; // same with PBRMaterialFrag.hlsl
 static const float3 ABNORMAL_COLOR = float3(0.0, 0.0, 1.0);
@@ -37,15 +33,6 @@ static const float3 ABNORMAL_COLOR = float3(0.0, 0.0, 1.0);
 // uv in [0, 1]; output in [0, 1]
 float2 random_2to2(float2 uv) {
     return TextureHandle(param.noise_tex).Sample2D<float4>(uv).rg;
-}
-
-float get_depth(float2 uv) {
-    // linearize depth
-    // formula: `near_clip * far_clip / (far_clip + (1.0 - depth) * (near_clip - far_clip))`
-    // `(1.0 - depth)` to convert from reverse z to regular z
-    return param.near_clip * param.far_clip / (param.far_clip + (
-        1.0 - TextureHandle(param.depth_tex).Sample2D<float>(uv).x
-    ) * (param.near_clip - param.far_clip));
 }
 
 // reference: games202 & https://www.shadertoy.com/view/Ms33WB
@@ -84,10 +71,6 @@ float4 main(float2 uv : TEXCOORD0) : SV_TARGET {
     } else if (param.ao_mode == AO_MODE_SSAO_AO_ONLY) {
         float3 ssao_result = ssao_games202(uv);
         return float4(ssao_result, 1.0);
-
-    } else if (param.ao_mode == AO_MODE_LINEARIZED_DEPTH) {
-        float d = get_depth(uv) / 10.0;
-        return float4(d, d, d, 1.0);
 
     } else {
         return float4(ABNORMAL_COLOR, 1.0);

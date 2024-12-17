@@ -210,6 +210,26 @@ namespace Moer::Render {
             ImGui::TreePop();
         }
 
+        if (ImGui::TreeNode("SSR Mode", "SSR: [%s]", (m_config.ssr_mode == 1 ? "Enable" : "Disable"))) {
+            if (ImGui::Selectable("Enable", m_config.ssr_mode == 1)) {
+                m_config.ssr_mode = 1;
+            }
+            if (ImGui::Selectable("Disable", m_config.ssr_mode == 0)) {
+                m_config.ssr_mode = 0;
+            }
+            draw_border();
+
+            if (m_config.ssr_mode == 1) {
+                ImGui::Checkbox("Enable Jitter", &m_config.ssr_is_enabled_jitter);
+                ImGui::SliderInt("Sample Count", &m_config.ssr_sample_count, 1, 64);
+                ImGui::SliderFloat("Step Base", &m_config.ssr_step_base, 0.0f, 0.1f);
+                ImGui::SliderFloat("Roughness Threshold", &m_config.ssr_roughness_threshold, 0.0f, 1.0f);
+                ImGui::SliderFloat("Metallic Threshold", &m_config.ssr_metallic_threshold, 0.0f, 1.0f);
+            }
+
+            ImGui::TreePop();
+        }
+
         if (ImGui::TreeNode("AA Mode", "Anti-Aliasing Mode: [%s]", k_aa_mode_name_array[m_config.aa_mode].c_str())) {
             for (uint i = 0; i < k_aa_mode_name_array.size(); i++) {
                 if (ImGui::Selectable(k_aa_mode_name_array[i].c_str(), m_config.aa_mode == i)) {

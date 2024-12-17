@@ -126,25 +126,49 @@ public:
 };
 
 struct AoPipelineBindlessParam {
+    float2 inv_resolution;
+    float  ssao_intensity;
+    float  ssao_max_distance;
+    uint   ssao_sample_count;
+    uint   ssao_radius;
     uint   ao_mode;
     uint   input_image;
     uint   normal_tex;
-    uint   depth_tex;
     uint   position_tex;
     uint   noise_tex;// linear & repeat sampler
-    float2 inv_resolution;
-    float  ssao_intensity;
-    uint   ssao_sample_count;
-    uint   ssao_radius;
-    float  ssao_max_distance;
-    float  near_clip;
-    float  far_clip;
 };
 
 class AoPipeline : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(AoPipeline);
     DEFINE_SHADER_CONSTANT_STRUCT(AoPipelineBindlessParam, param);
+    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
+    DEFINE_SHADER_ARGS(bdls, param);
+};
+
+struct SsrPipelineBindlessParam {
+    Matrix4x4f view_projection_matrix;
+    float3     camera_position;
+    float      near_clip;
+    float2     resolution;
+    float      far_clip;
+    float      ssr_roughness_threshold;
+    float      ssr_metallic_threshold;
+    float      ssr_step_base;
+    uint       ssr_sample_count;
+    uint       ssr_is_enabled_jitter;
+    uint       color_tex;
+    uint       position_tex;
+    uint       normal_tex;
+    uint       depth_tex;
+    uint       vbuffer;
+    uint       gbuffer_uv;
+    uint       material_buffer;
+};
+class SsrPipeline : public RasterPipeline {
+public:
+    DEFINE_RASTER_PIPELINE_CLASS(SsrPipeline);
+    DEFINE_SHADER_CONSTANT_STRUCT(SsrPipelineBindlessParam, param);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
     DEFINE_SHADER_ARGS(bdls, param);
 };
@@ -300,6 +324,7 @@ int main(int argc, const char** argv) {
         position,
         pbr_shading_output,
         ao_output,
+        ssr_output,
         antialiasing_temporal_texture_1,
         antialiasing_temporal_texture_2,
         antialiasing_output,
@@ -318,6 +343,7 @@ int main(int argc, const char** argv) {
     uint                 bdls_tex_handle_depth_with_linear_sampler        = 0;
     uint                 bdls_tex_handle_pbr_shading_output               = 0;
     uint                 bdls_tex_handle_ao_output                        = 0;
+    uint                 bdls_tex_handle_ssr_output                       = 0;
     uint                 bdls_tex_handle_antialiasing_temporal_texture_1  = 0;
     uint                 bdls_tex_handle_antialiasing_temporal_texture_2  = 0;
     StaticArray<uint, 2> bdls_tex_handle_antialiasing_temporal_texture_34 = StaticArray<uint, 2>{0, 0};
@@ -368,6 +394,12 @@ int main(int argc, const char** argv) {
 
         ao_output = device.CreateTexture(
             "ao_output",
+            Extent2D(resolution.x, resolution.y),
+            PF_R8G8B8A8_UNORM,
+            ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT);
+
+        ssr_output = device.CreateTexture(
+            "ssr_output",
             Extent2D(resolution.x, resolution.y),
             PF_R8G8B8A8_UNORM,
             ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT);
@@ -425,6 +457,7 @@ int main(int argc, const char** argv) {
         bdls_tex_handle_depth_with_linear_sampler           = bindless_array->AllocateTexture(depth->GetView(), Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE));
         bdls_tex_handle_pbr_shading_output                  = bindless_array->AllocateTexture(pbr_shading_output, sampler);
         bdls_tex_handle_ao_output                           = bindless_array->AllocateTexture(ao_output, sampler);
+        bdls_tex_handle_ssr_output                          = bindless_array->AllocateTexture(ssr_output, sampler);
         bdls_tex_handle_antialiasing_temporal_texture_1     = bindless_array->AllocateTexture(antialiasing_temporal_texture_1, sampler);
         bdls_tex_handle_antialiasing_temporal_texture_2     = bindless_array->AllocateTexture(antialiasing_temporal_texture_2, sampler);
         bdls_tex_handle_antialiasing_temporal_texture_34[0] = bindless_array->AllocateTexture(antialiasing_temporal_texture_34[0], sampler);
@@ -446,6 +479,7 @@ int main(int argc, const char** argv) {
         bindless_array->FreeTexture(bdls_tex_handle_depth_with_linear_sampler);
         bindless_array->FreeTexture(bdls_tex_handle_pbr_shading_output);
         bindless_array->FreeTexture(bdls_tex_handle_ao_output);
+        bindless_array->FreeTexture(bdls_tex_handle_ssr_output);
         bindless_array->FreeTexture(bdls_tex_handle_antialiasing_temporal_texture_1);
         bindless_array->FreeTexture(bdls_tex_handle_antialiasing_temporal_texture_2);
         bindless_array->FreeTexture(bdls_tex_handle_antialiasing_temporal_texture_34[0]);
@@ -474,6 +508,7 @@ int main(int argc, const char** argv) {
             {depth->GetView(), "depth"},
             {pbr_shading_output->GetView(), "pbr_shading_output"},
             {ao_output->GetView(), "ao_output"},
+            {ssr_output->GetView(), "ssr_output"},
             {antialiasing_temporal_texture_1->GetView(), "antialiasing_temporal_texture_1"},
             {antialiasing_temporal_texture_2->GetView(), "antialiasing_temporal_texture_2"},
             {antialiasing_temporal_texture_34[0]->GetView(), "antialiasing_temporal_texture_34[0]"},
@@ -544,6 +579,17 @@ int main(int argc, const char** argv) {
             .Vertex("test/post_process/PostProcessFullScreenQuad.hlsl")
             .Pixel("test/post_process/AO.hlsl")
             .Build<AoPipeline>(std::move(pso_full_screen_info));
+    }();
+
+    auto ssr_pipeline = [&]() {
+        GfxPsoCreateInfo pso_full_screen_info(RHIRasterizeInfo::Preset(),
+                                              {},
+                                              {RHIColorAttachmentInfo::Preset(ssr_output->GetFormat())});
+        return manager
+            .Raster()
+            .Vertex("test/post_process/PostProcessFullScreenQuad.hlsl")
+            .Pixel("test/post_process/Ssr.hlsl")
+            .Build<SsrPipeline>(std::move(pso_full_screen_info));
     }();
 
     // MARK: * AA Pipeline
@@ -892,22 +938,21 @@ int main(int argc, const char** argv) {
 
             /**
              * MARK: AO Pass
+             * 
+             * TODO: SSDO Support
              */
             {
                 AoPipelineBindlessParam param;
+                param.inv_resolution    = float2(1.0f) / float2(resolution);
+                param.ssao_intensity    = ui_config.ssao_intensity;
+                param.ssao_max_distance = ui_config.ssao_max_distance;
+                param.ssao_sample_count = ui_config.ssao_sample_count;
+                param.ssao_radius       = ui_config.ssao_radius;
                 param.ao_mode           = ui_config.ao_mode;
                 param.input_image       = bdls_tex_handle_pbr_shading_output;
                 param.normal_tex        = bdls_tex_handle_normal;
-                param.depth_tex         = bdls_tex_handle_depth_with_linear_sampler;
                 param.position_tex      = bdls_tex_handle_position;
                 param.noise_tex         = bdls_tex_handle_noise_with_linear_sampler;
-                param.inv_resolution    = float2(1.0f) / float2(resolution);
-                param.ssao_intensity    = ui_config.ssao_intensity;
-                param.ssao_sample_count = ui_config.ssao_sample_count;
-                param.ssao_radius       = ui_config.ssao_radius;
-                param.ssao_max_distance = ui_config.ssao_max_distance;
-                param.near_clip         = camera->GetNearClip();
-                param.far_clip          = camera->GetFarClip();
 
                 cmd_list
                     .Gfx(ao_pipeline, bindless_array, param)
@@ -916,6 +961,41 @@ int main(int argc, const char** argv) {
                         Rect2D(0, 0, resolution.x, resolution.y),
                         std::move(get_full_screen_draw_datas()),
                         ColorAttachment(ao_output));
+            }
+
+            /**
+             * MARK: SSR Pass
+             * 
+             * TODO: use HiZ buffer to accelerate SSR (now, a simple heuristic and binary search is used for SSR)
+             * TODO: skip ssr if ssr_mode == 0
+             */
+            {
+                SsrPipelineBindlessParam param;
+                param.view_projection_matrix  = camera->GetViewProjectionMatrix();
+                param.camera_position         = camera->GetPosition();
+                param.near_clip               = camera->GetNearClip();
+                param.resolution              = float2(resolution);
+                param.far_clip                = camera->GetFarClip();
+                param.ssr_roughness_threshold = ui_config.ssr_roughness_threshold;
+                param.ssr_metallic_threshold  = ui_config.ssr_metallic_threshold;
+                param.ssr_step_base           = ui_config.ssr_step_base;
+                param.ssr_sample_count        = ui_config.ssr_sample_count;
+                param.ssr_is_enabled_jitter   = ui_config.ssr_is_enabled_jitter;
+                param.color_tex               = bdls_tex_handle_ao_output;
+                param.position_tex            = bdls_tex_handle_position;
+                param.normal_tex              = bdls_tex_handle_normal;
+                param.depth_tex               = bdls_tex_handle_depth_with_linear_sampler;
+                param.vbuffer                 = bdls_tex_handle_vbuffer;
+                param.gbuffer_uv              = bdls_tex_handle_uv;
+                param.material_buffer         = material_buffer_handle;
+
+                cmd_list
+                    .Gfx(ssr_pipeline, bindless_array, param)
+                    .Draw(
+                        "SSR Pass",
+                        Rect2D(0, 0, resolution.x, resolution.y),
+                        std::move(get_full_screen_draw_datas()),
+                        ColorAttachment(ssr_output));
             }
 
             /**
@@ -960,11 +1040,12 @@ int main(int argc, const char** argv) {
              *   2. 目前SMAA T2x效果和SMAA 1x类似，没有明显优势；不确定是场景问题还是实现问题
              */
             {
+                auto aa_input_image = bdls_tex_handle_ssr_output;
 
                 if (0 <= ui_config.aa_mode && ui_config.aa_mode <= 2) {// fxaa
 
                     FxaaPrecomputePipelineBindlessParam param_fxaa_precomputed;
-                    param_fxaa_precomputed.input_image = bdls_tex_handle_ao_output;
+                    param_fxaa_precomputed.input_image = aa_input_image;
 
                     cmd_list
                         .Gfx(fxaa_precompute_pipeline, bindless_array, param_fxaa_precomputed)
@@ -1023,7 +1104,7 @@ int main(int argc, const char** argv) {
                     auto smaa_shared_param = [&]() {
                         SmaaSharedPipelineBindlessParam param;
                         param.aa_mode                 = ui_config.aa_mode;
-                        param.color_tex               = bdls_tex_handle_ao_output;
+                        param.color_tex               = aa_input_image;
                         param.position_tex            = bdls_tex_handle_position;
                         param.depth_tex               = bdls_tex_handle_depth_with_nearest_sampler;
                         param.search_tex              = bdls_tex_handle_smaa_search_tex;
