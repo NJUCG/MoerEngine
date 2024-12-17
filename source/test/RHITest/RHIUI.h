@@ -25,8 +25,8 @@ namespace Moer::Render {
             "None",
             "SSAO",
             "SSAO AO Only",
-            "SSDO",
-            "SSDO AO Only",
+            "SSDO (TODO)",
+            "SSDO AO Only (TODO)",
             "Linearized Depth / 10.0",
         };
 

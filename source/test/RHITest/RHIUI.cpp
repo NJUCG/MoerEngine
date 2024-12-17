@@ -194,7 +194,9 @@ namespace Moer::Render {
 
         if (ImGui::TreeNode("AO Mode", "AO Mode: [%s]", k_ao_mode_name_array[m_config.ao_mode].c_str())) {
             for (uint i = 0; i < k_ao_mode_name_array.size(); i++) {
-                if (ImGui::Selectable(k_ao_mode_name_array[i].c_str(), m_config.ao_mode == i)) {
+                if (
+                    ImGui::Selectable(k_ao_mode_name_array[i].c_str(), m_config.ao_mode == i) && i != 3 && i != 4// SSDO is not implemented yet
+                ) {
                     m_config.ao_mode = i;
                 }
                 draw_border();
