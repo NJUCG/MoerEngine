@@ -39,12 +39,13 @@ namespace Moer::Render {
             int   ssao_radius       = 2;
             float ssao_max_distance = 0.1f;
 
-            uint  ssr_mode                = 1;
-            int   ssr_sample_count        = 32;
-            bool  ssr_is_enabled_jitter   = true;
-            float ssr_roughness_threshold = 0.5;
-            float ssr_metallic_threshold  = 0.5;
-            float ssr_step_base           = 0.025;
+            bool  ssr_is_enable_ssr              = true;
+            int   ssr_sample_count               = 32;
+            bool  ssr_is_enable_jitter           = true;
+            bool  ssr_is_force_ground_enable_ssr = true;
+            float ssr_roughness_threshold        = 0.5;
+            float ssr_metallic_threshold         = 0.5;
+            float ssr_step_base                  = 0.025;
 
             uint selected_frame_buffer_index = 0;
         };

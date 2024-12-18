@@ -156,7 +156,8 @@ struct SsrPipelineBindlessParam {
     float      ssr_metallic_threshold;
     float      ssr_step_base;
     uint       ssr_sample_count;
-    uint       ssr_is_enabled_jitter;
+    uint       ssr_is_enable_jitter;
+    uint       ssr_is_force_ground_enable_ssr;
     uint       color_tex;
     uint       position_tex;
     uint       normal_tex;
@@ -176,6 +177,8 @@ public:
 // MARK: * AA Pipeline Struct
 
 struct SmaaSharedPipelineBindlessParam {
+    Matrix4x4f curr_inv_vp_and_prev_vp;// = previous_view_projection * current_inverse_view_projection
+    float4     rt_metrics;             // float4(inv_resolution.xy, resolution.xy)
     uint       aa_mode;
     uint       color_tex;   // initial input image
     uint       position_tex;// position gbuffer
@@ -189,8 +192,7 @@ struct SmaaSharedPipelineBindlessParam {
     uint       frame_index;
     uint       point_sampler;
     uint       linear_sampler;
-    float4     rt_metrics;             // float4(inv_resolution.xy, resolution.xy)
-    Matrix4x4f curr_inv_vp_and_prev_vp;// = previous_view_projection * current_inverse_view_projection
+    uint       padding[3];
 };
 class SmaaEdgeDetectionPipeline : public RasterPipeline {
 public:
@@ -941,7 +943,11 @@ int main(int argc, const char** argv) {
              * 
              * TODO: SSDO Support
              */
-            {
+            uint ao_actual_input  = bdls_tex_handle_pbr_shading_output;
+            uint ao_actual_output = bdls_tex_handle_pbr_shading_output;
+            if (ui_config.ao_mode != 0) {
+                ao_actual_output = bdls_tex_handle_ao_output;// update actual output when ao is enabled
+
                 AoPipelineBindlessParam param;
                 param.inv_resolution    = float2(1.0f) / float2(resolution);
                 param.ssao_intensity    = ui_config.ssao_intensity;
@@ -949,7 +955,7 @@ int main(int argc, const char** argv) {
                 param.ssao_sample_count = ui_config.ssao_sample_count;
                 param.ssao_radius       = ui_config.ssao_radius;
                 param.ao_mode           = ui_config.ao_mode;
-                param.input_image       = bdls_tex_handle_pbr_shading_output;
+                param.input_image       = ao_actual_input;
                 param.normal_tex        = bdls_tex_handle_normal;
                 param.position_tex      = bdls_tex_handle_position;
                 param.noise_tex         = bdls_tex_handle_noise_with_linear_sampler;
@@ -967,27 +973,33 @@ int main(int argc, const char** argv) {
              * MARK: SSR Pass
              * 
              * TODO: use HiZ buffer to accelerate SSR (now, a simple heuristic and binary search is used for SSR)
-             * TODO: skip ssr if ssr_mode == 0
+             * TODO: glossy ssr
+             * TODO: performance optimization
              */
-            {
+            uint ssr_actual_input  = ao_actual_output;
+            uint ssr_actual_output = ao_actual_output;
+            if (ui_config.ssr_is_enable_ssr) {
+                ssr_actual_output = bdls_tex_handle_ssr_output;// update actual output when ssr is enabled
+
                 SsrPipelineBindlessParam param;
-                param.view_projection_matrix  = camera->GetViewProjectionMatrix();
-                param.camera_position         = camera->GetPosition();
-                param.near_clip               = camera->GetNearClip();
-                param.resolution              = float2(resolution);
-                param.far_clip                = camera->GetFarClip();
-                param.ssr_roughness_threshold = ui_config.ssr_roughness_threshold;
-                param.ssr_metallic_threshold  = ui_config.ssr_metallic_threshold;
-                param.ssr_step_base           = ui_config.ssr_step_base;
-                param.ssr_sample_count        = ui_config.ssr_sample_count;
-                param.ssr_is_enabled_jitter   = ui_config.ssr_is_enabled_jitter;
-                param.color_tex               = bdls_tex_handle_ao_output;
-                param.position_tex            = bdls_tex_handle_position;
-                param.normal_tex              = bdls_tex_handle_normal;
-                param.depth_tex               = bdls_tex_handle_depth_with_linear_sampler;
-                param.vbuffer                 = bdls_tex_handle_vbuffer;
-                param.gbuffer_uv              = bdls_tex_handle_uv;
-                param.material_buffer         = material_buffer_handle;
+                param.view_projection_matrix         = camera->GetViewProjectionMatrix();
+                param.camera_position                = camera->GetPosition();
+                param.near_clip                      = camera->GetNearClip();
+                param.resolution                     = float2(resolution);
+                param.far_clip                       = camera->GetFarClip();
+                param.ssr_roughness_threshold        = ui_config.ssr_roughness_threshold;
+                param.ssr_metallic_threshold         = ui_config.ssr_metallic_threshold;
+                param.ssr_step_base                  = ui_config.ssr_step_base;
+                param.ssr_sample_count               = ui_config.ssr_sample_count;
+                param.ssr_is_enable_jitter           = ui_config.ssr_is_enable_jitter;
+                param.ssr_is_force_ground_enable_ssr = ui_config.ssr_is_force_ground_enable_ssr;
+                param.color_tex                      = ssr_actual_input;
+                param.position_tex                   = bdls_tex_handle_position;
+                param.normal_tex                     = bdls_tex_handle_normal;
+                param.depth_tex                      = bdls_tex_handle_depth_with_linear_sampler;
+                param.vbuffer                        = bdls_tex_handle_vbuffer;
+                param.gbuffer_uv                     = bdls_tex_handle_uv;
+                param.material_buffer                = material_buffer_handle;
 
                 cmd_list
                     .Gfx(ssr_pipeline, bindless_array, param)
@@ -1038,14 +1050,14 @@ int main(int argc, const char** argv) {
              * 关于SMAA T2x的说明
              *   1. T2x使用了Temporal Supersampling，需要让相机抖动。可以通过camera->SetJitteredMatrix()来设置JitteredMatrix，这个矩阵会作用在ViewMatrix上
              *   2. 目前SMAA T2x效果和SMAA 1x类似，没有明显优势；不确定是场景问题还是实现问题
+             *   FIXME: fix jitter in SMAA T2x when SMAA_REPROJECTION is enabled
              */
+            uint aa_actual_input = ssr_actual_output;
             {
-                auto aa_input_image = bdls_tex_handle_ssr_output;
-
                 if (0 <= ui_config.aa_mode && ui_config.aa_mode <= 2) {// fxaa
 
                     FxaaPrecomputePipelineBindlessParam param_fxaa_precomputed;
-                    param_fxaa_precomputed.input_image = aa_input_image;
+                    param_fxaa_precomputed.input_image = aa_actual_input;
 
                     cmd_list
                         .Gfx(fxaa_precompute_pipeline, bindless_array, param_fxaa_precomputed)
@@ -1104,7 +1116,7 @@ int main(int argc, const char** argv) {
                     auto smaa_shared_param = [&]() {
                         SmaaSharedPipelineBindlessParam param;
                         param.aa_mode                 = ui_config.aa_mode;
-                        param.color_tex               = aa_input_image;
+                        param.color_tex               = aa_actual_input;
                         param.position_tex            = bdls_tex_handle_position;
                         param.depth_tex               = bdls_tex_handle_depth_with_nearest_sampler;
                         param.search_tex              = bdls_tex_handle_smaa_search_tex;
