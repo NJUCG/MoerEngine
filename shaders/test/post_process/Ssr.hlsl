@@ -59,7 +59,7 @@ bool should_apply_ssr(float2 uv) { // the performance cost is so high
     );
 
     if (metallic_roughness.x < param.ssr_metallic_threshold) return false;
-    if (metallic_roughness.y < param.ssr_roughness_threshold) return false;
+    if (metallic_roughness.y > param.ssr_roughness_threshold) return false;
     return true;
 }
 

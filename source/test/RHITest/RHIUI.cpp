@@ -214,6 +214,7 @@ namespace Moer::Render {
             if (ImGui::Selectable("Enable", m_config.ssr_is_enable_ssr == 1)) {
                 m_config.ssr_is_enable_ssr = 1;
             }
+            draw_border();
             if (ImGui::Selectable("Disable", m_config.ssr_is_enable_ssr == 0)) {
                 m_config.ssr_is_enable_ssr = 0;
             }
