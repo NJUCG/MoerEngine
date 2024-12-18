@@ -6,6 +6,7 @@
 #include "math/Constant.h"
 #include "math/Matrix.h"
 #include "misc/MMemory.h"
+#include "misc/STL.h"
 #include "misc/Traits.h"
 #include "rhi/RHI.h"
 #include "modules/render/source/rhi/RHIImpl.h"
@@ -13,6 +14,7 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
+#include "scene/Scene.h"
 #include "shader/Shader.h"
 #include "shader/ShaderParameterMacros.h"
 #include "shader/ShaderPipeline.h"
@@ -50,6 +52,8 @@ struct TestBindlessParam {
     uint       texture_handle;
     uint       buffer_handle;
     uint       instance_buffer_handle;
+    uint       geometry_data_handle;
+    uint       geometry_instance_handle;
     Matrix4x4f camera_view_proj;
 };
 
@@ -464,11 +468,16 @@ int main(int argc, const char** argv) {
 
     auto raster_pipeline_constant_color = [&]() {
         VertexStream vertex_stream;
+        //pos
         vertex_stream.EmplacePerVertex(
-            {Moer::Render::VertexElement(PF_R32G32B32_SFLOAT),
-             Moer::Render::VertexElement(PF_R32G32B32_SFLOAT),
-             Moer::Render::VertexElement(PF_R32G32B32_SFLOAT),
-             Moer::Render::VertexElement(PF_R32G32_SFLOAT)});
+            {Moer::Render::VertexElement(PF_R32G32B32_SFLOAT)});
+        //normal
+        vertex_stream.EmplacePerVertex({Moer::Render::VertexElement(PF_R32_UINT)});
+        //tangent
+        vertex_stream.EmplacePerVertex({Moer::Render::VertexElement(PF_R32_UINT)});
+        //uv
+        vertex_stream.EmplacePerVertex({Moer::Render::VertexElement(PF_R32G32_SFLOAT)});
+
         GfxPsoCreateInfo pso_info(RHIRasterizeInfo::Preset(),
                                   vertex_stream,
                                   {RHIColorAttachmentInfo::Preset(PF_R32_UINT),
@@ -604,6 +613,8 @@ int main(int argc, const char** argv) {
 
     float4     color_red = {1, 1, 1, 1};
     uint       instance_buffer_handle;
+    uint       geom_data_buffer_handle;
+    uint       geom_instance_buffer_handle;
     TextureRef red_tex = device.CreateTexture(
         Extent2D(1, 1),
         PF_R8G8B8A8_SRGB,
@@ -706,7 +717,10 @@ int main(int argc, const char** argv) {
         if (Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady()) {
             // MARK: First Load
             if (first_load) {
-                instance_buffer_handle = bindless_array->AllocateBuffer(scene.GetBuffer(EGpuSceneResource::InstanceInfo)->GetView());
+                instance_buffer_handle      = bindless_array->AllocateBuffer(scene.GetBuffer(EGpuSceneResource::InstanceInfo)->GetView());
+                geom_data_buffer_handle     = bindless_array->AllocateBuffer(scene.GetBuffer(EGpuSceneResource::GeometryInfo)->GetView());
+                geom_instance_buffer_handle = bindless_array->AllocateBuffer(scene.GetBuffer(EGpuSceneResource::GeometryInstance)->GetView());
+
                 material_buffer_handle = bindless_array->AllocateBuffer(scene.GetBuffer(EGpuSceneResource::MaterialInfo)->GetView());
                 light_buffer_handle    = bindless_array->AllocateBuffer(scene.GetBuffer(EGpuSceneResource::LightInfo)->GetView());
                 lighting_data_handle   = bindless_array->AllocateBuffer(lighting_buffer->GetView());
@@ -749,30 +763,45 @@ int main(int argc, const char** argv) {
             camera->Tick(rhi_ui.GetSceneColorAspectRatio());
 
             // MARK: GBuffer Pass
-
-            auto                    vertex_buffer = scene.GetVertexBuffer();
-            auto                    index_buffer  = scene.GetIndexBuffer();
-            VertexBuffer            vb(vertex_buffer, 0);
-            IndexBuffer             ib(index_buffer->GetView(), EIndexElementType::IET_UINT32);
-            std::span<VertexBuffer> vb_span(&vb, 1);
-            IndexBuffer             ib_span = ib;
-            Array<SingleDrawParam>  draw_datas;
+            Array<MeshDrawData> mesh_draw_datas{};
             // draw_datas.emplace_back(SingleDrawParam{uint(index_buffer->GetByteSize()/sizeof(uint)), 1, 0, 0, 0});
 
             uint instance_count = 0;
-            for (auto entity : scene.GetEntities()) {
-                auto& mesh = RenderableManager::Get().GetMeshInfo(entity);
-                draw_datas.emplace_back(SingleDrawParam{mesh.index_count, 1, mesh.index_offset, mesh.vertex_offset, instance_count++});
-            }
+            // for (auto entity : scene.GetEntities()) {
+            //     auto& mesh = RenderableManager::Get().GetMeshInfo(entity);
+            //     draw_datas.emplace_back(SingleDrawParam{mesh->idx_count, 1, mesh->idx_offset, mesh->vtx_offset, instance_count++});
+            // }
+            std::span<const StaticArray<VertexBuffer, VETA_Num>> vertex_buffers = scene.GetVertexBufferViews();
+            std::span<const IndexBuffer>                         index_buffers  = scene.GetIndexBufferViews();
+
+            uint geom_idx = 0;
+            scene.ForEach([&](Entity _entity) {
+                auto& mesh = RenderableManager::Get().GetMeshInfo(_entity);
+
+                const StaticArray<VertexBuffer, VETA_Num>& vertex_buffer = vertex_buffers[mesh->global_mesh_idx];
+                auto&                                      mesh_draw_dat = mesh_draw_datas.emplace_back(
+                    std::span<VertexBuffer>((VertexBuffer*)vertex_buffer.data(), 4),
+                    index_buffers[mesh->global_mesh_idx]);
+                for (uint i = 0; i < mesh->geometries.size(); i++) {
+                    uint                idx              = geom_idx + i;
+                    const MeshGeometry& geom             = *mesh->geometries[i];
+                    uint                first_idx        = geom.local_idx_offset + mesh->idx_offset;
+                    uint                first_vertex_idx = geom.local_vtx_offset + mesh->vtx_offset;
+                    mesh_draw_dat.EmplaceDrawIndexed(first_idx, geom.local_idx_count, first_vertex_idx, geom_idx);
+                }
+                geom_idx += mesh->geometries.size();
+            });
 
             TestBindlessParam param;
-            param.color                  = color_red;
-            param.texture_handle         = bdls_tex_handle_red;
-            param.buffer_handle          = bdls_buffer_handle_red;
-            param.instance_buffer_handle = instance_buffer_handle;
-            param.camera_view_proj       = camera->GetViewProjectionMatrix();
+            param.color                    = color_red;
+            param.texture_handle           = bdls_tex_handle_red;
+            param.buffer_handle            = bdls_buffer_handle_red;
+            param.instance_buffer_handle   = instance_buffer_handle;
+            param.geometry_data_handle     = geom_data_buffer_handle;
+            param.geometry_instance_handle = geom_instance_buffer_handle;
+            param.camera_view_proj         = camera->GetViewProjectionMatrix();
             cmd_list.Gfx(raster_pipeline_constant_color, sampler, red_tex, bindless_array, param)
-                .Draw(Rect2D(0, 0, resolution.x, resolution.y), vb_span, ib, std::move(draw_datas), DepthAttachment(depth->GetView().GetTexture()), ColorAttachment(vbuffer), ColorAttachment(normal), ColorAttachment(uv), ColorAttachment(position));
+                .Draw(Rect2D(0, 0, resolution.x, resolution.y), std::move(mesh_draw_datas), DepthAttachment(depth->GetView().GetTexture()), ColorAttachment(vbuffer), ColorAttachment(normal), ColorAttachment(uv), ColorAttachment(position));
 
             // MARK: PBR Pass
 

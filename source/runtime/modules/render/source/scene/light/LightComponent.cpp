@@ -12,10 +12,10 @@ namespace Moer {
         // Directional light
         {
             LightComponentRef directional_light = MoerNew(DirectionalLightComponent)(
-                Vector3f(1.0f, 1.0f, 1.0f),  // color
-                1.0f,                        // intensity
-                Vector3f(-1.0f, -2.0f, -1.0f)// direction
-            );
+                Vector3f(1.0f, 1.0f, 1.0f),   // color
+                1.0f,                         // intensity
+                Vector3f(-1.0f, -2.0f, -1.0f),// direction
+                0.f);
             lights.push_back(directional_light);
         }
 

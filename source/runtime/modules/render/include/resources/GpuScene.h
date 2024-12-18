@@ -6,14 +6,20 @@
 #include <cstddef>
 
 namespace Moer {
-    enum E_VERTEX_ATTRIBUTE {
+    enum EVertexAttributeFlags {
         E_POSITION  = 1 << 1,
         E_NORMAL    = 1 << 2,
         E_TANGENT   = 1 << 3,
         E_BITANGENT = 1 << 4,
         E_UV0       = 1 << 5,
+        E_UV1       = 1 << 6,
+        E_COLOR     = 1 << 7,
+        E_JOINTS    = 1 << 8,
+        E_WEIGHTS   = 1 << 9
     };
-    using VertexAttributeFlags = uint8_t;
+
+    using VertexAttributeFlags           = uint8_t;
+    static constexpr uint vtx_attrib_cnt = 6;
 
     class GpuPrimitiveBuilder {
     public:
@@ -54,7 +60,7 @@ namespace Moer {
         TextureBuilder& Name(const std::string& name) noexcept;
         RHITextureRef   Build() noexcept;
         ~TextureBuilder() noexcept;
-        static Moer::UnorderedMap<std::string,Render::TextureRef> BuildTexturesInBatch(Moer::Array<TextureBuilder>& builders) noexcept;
+        static Moer::UnorderedMap<std::string, Render::TextureRef> BuildTexturesInBatch(Moer::Array<TextureBuilder>& builders) noexcept;
         // static void InitBuild() noexcept;
         // static void EndBuild() noexcept;
     protected:
@@ -81,7 +87,7 @@ namespace Moer {
         static RHIBufferRef CopyFrom(EBufferUsageFlags _usages, const std::span<T> _data) {
             return CopyFrom(_usages, _data->data(), _data->size() * sizeof(T), sizeof(T));
         }
-        static  RHIBufferRef CreateBufferWithData(EBufferUsageFlags usages, const void* data, uint32_t size);
+        static RHIBufferRef CreateBufferWithData(EBufferUsageFlags usages, const void* data, uint32_t size);
 
     protected:
         class Impl;

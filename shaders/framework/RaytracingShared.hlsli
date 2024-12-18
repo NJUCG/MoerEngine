@@ -84,6 +84,7 @@ struct RTHitInfo {
   float mip;
   float tmin;
   uint instance_id;
+  uint geometry_idx;
   uint material_type_and_id;
   uint flags;
 

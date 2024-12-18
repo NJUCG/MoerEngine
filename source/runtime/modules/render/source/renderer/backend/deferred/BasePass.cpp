@@ -17,6 +17,7 @@
 #include "../utils/CopyDispatchArgs.h"
 #include <string_view>
 #include "../DeferredRenderer.h"
+#include "shaderheaders/shared/Geometry.h"
 
 constexpr std::string_view instance_meshlet_cull_info_name = "BasePass::instance_meshlet_cull_info_buffer";
 constexpr std::string_view recheck_instance_id_name        = "BasePass::recheck_instance_id_buffer";
@@ -235,7 +236,7 @@ namespace Moer {
 
     void BasePass::Impl::PrePass(RenderContext& _context) {
         uint32_t frame_offset   = _context.GetFrameOffset();
-        auto     instance_count = instance_buffer_view->GetBuffer()->GetNumElement() / sizeof(InstanceData);
+        auto     instance_count = instance_buffer_view->GetBuffer()->GetNumElement() / sizeof(Render::InstanceData);
 
         CullInstancePrePassShader::Parameters cull_instance_params;
         cull_instance_params.input.meshlet_count_offset          = meshlet_count_offset;

@@ -37,12 +37,12 @@ namespace Moer {
             std::is_same<Matrix3x3f, T>::value>::type;
 
         template<typename T, typename = is_supported_parameter_t<T>>
-        void        SetParameter(const std::string& name, T const& value);
-        void        SetParameter(const std::string& name, const void* value, size_t size);
+        void SetParameter(const std::string& name, T const& value);
+        void SetParameter(const std::string& name, const void* value, size_t size);
         // void        SetTexture(const std::string& name, const uint texture_handle);
         // void        SetParameter(const std::string& name, const Render::TextureRef& texture);
         // void        SetParameter(const std::string& name, const SamplerParams& params);
-        void        SetUnifomBuffer(const void* data, size_t size);
+        void             SetUnifomBuffer(const void* data, size_t size);
         Render::Texture* GetTexture(const std::string& name) const;
 
         void        Use(RHIBatchedShaderParameters& parameters);
@@ -51,6 +51,15 @@ namespace Moer {
         const UniformBuffer& GetUniformBuffer() const;
         const std::string&   GetName() const;
         void                 SetName(const std::string& name);
+
+        template<typename T>
+        T GetParameter(const std::string& _name) {
+            T value;
+            GetParameter(_name, &value, sizeof(T));
+            return value;
+        }
+
+        void GetParameter(const std::string& _name, void* _value, size_t _size);
 
     protected:
         class Impl;
@@ -65,21 +74,21 @@ namespace Moer {
     class SamplerGroup {
     public:
         SamplerGroup(uint32_t size);
-        void          SetSampler(uint32_t index, Render::TextureRef texture, SamplerParams sampler);
-        void          SetSampler(uint32_t index, Render::TextureRef texture);
-        void          SetSampler(uint32_t index, SamplerParams sampler);
+        void               SetSampler(uint32_t index, Render::TextureRef texture, SamplerParams sampler);
+        void               SetSampler(uint32_t index, Render::TextureRef texture);
+        void               SetSampler(uint32_t index, SamplerParams sampler);
         Render::TextureRef GetTexture(uint32_t index) const;
         // void Bind(RHIBatchedShaderParameters& parameters);
 
     protected:
         struct SamplerDescriptor {
-            Render::TextureRef  texture;
-            SamplerParams  sampler;
-            EParamaterType type;
+            Render::TextureRef texture;
+            SamplerParams      sampler;
+            EParamaterType     type;
         };
         Array<SamplerDescriptor> m_samplers;
     };
 
     using MaterialInstanceRef = CountableRef<MaterialInstance>;
 
-}
+}// namespace Moer

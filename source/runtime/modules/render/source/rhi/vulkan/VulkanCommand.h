@@ -133,6 +133,8 @@ namespace Moer::Render {
         void  SetPso(const PipelineHandle& _pso_handle);
         void  SetScissor(const VkRect2D& _scissor);
         void  SetViewPort(const VkViewport& _viewport);
+        void  ClearBufferUInt(VulkanBuffer* _buffer, uint64 _offset, uint64 _size, uint _data);
+        void  ClearTexture(VulkanTexture* _texture, const VkClearColorValue& _color, const VkImageSubresourceRange& _range);
 
         void Dispatch(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z);
         void DispatchIndirect(VulkanBuffer* _buffer, uint64 _offset);

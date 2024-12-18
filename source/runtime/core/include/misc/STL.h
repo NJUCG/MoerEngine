@@ -64,6 +64,15 @@ namespace Moer {
     }
 
     template<typename T>
+    using SharedPtr = std::shared_ptr<T>;
+
+    template<typename T, typename... Args>
+        requires std::is_constructible_v<T, Args...>
+    constexpr SharedPtr<T> MakeShared(Args&&... _args) {
+        return SharedPtr<T>(MoerNew(T)(std::forward(_args)...), MoerDelete<T>);
+    }
+
+    template<typename T>
     constexpr bool StringEqual(const T& a, const T& b) {
         return std::strcmp(a.c_str(), b.c_str()) == 0;
     }

@@ -104,7 +104,7 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     uint gbuffer_mat = TextureHandle(param.vbuffer).Sample2D<uint>(in_uv);
     uint mat_type = gbuffer_mat & 0x000000FF;
     if (mat_type != param.material_type) {
-        printf("mat_type:%d, param.material_type:%d\n", mat_type, param.material_type);
+        // printf("mat_type:%d, param.material_type:%d\n", mat_type, param.material_type);
         discard;
     }
     float2 uv = TextureHandle(param.gbuffer_uv).Sample2D<float2>(in_uv);

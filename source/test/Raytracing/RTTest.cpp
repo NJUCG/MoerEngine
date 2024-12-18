@@ -12,8 +12,11 @@
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
+#include "scene/EntityManager.h"
 #include "scene/Scene.h"
 #include "scene/TransformManager.h"
+#include "scene/light/LightComponent.h"
+#include "scene/light/LightComponentManager.h"
 #include "shader/ShaderPipeline.h"
 #include "shader/ShaderResourceManager.h"
 #include "taskgraph/TaskSystem.h"
@@ -110,9 +113,8 @@ class TestInlineRTShader : public ComputePipeline {
 public:
     struct Param {
         uint   instance_buffer_handle;
+        uint   geometry_buffer_handle;
         uint   material_buffer_handle;
-        uint   primitive_buffer_handle;
-        uint   vtx_buffer_handle;
         uint   global_param_handle;
         uint   light_buffer_handle;
         uint2  rect;
@@ -317,11 +319,13 @@ int main(int argc, const char** argv) {
         }
     }
 
-    gfx_queue.Execute(cmd_list.Submit().Wait(copy_queue_timeline, copy_queue_timeline->GetValue()));
-    gfx_queue.Sync();
+    // gfx_queue.Execute(cmd_list.Submit().Wait(copy_queue_timeline, copy_queue_timeline->GetValue()));
+    // gfx_queue.Sync();
 
     bool   first_load = true;
     uint   instance_buffer_handle;
+    uint   geometry_buffer_handle;
+    uint   geometry_instance_buffer_handle;
     uint   material_buffer_idx;
     uint   light_buffer_handle     = 0;
     uint64 last_io_change_timeline = 0;
@@ -333,9 +337,6 @@ int main(int argc, const char** argv) {
     uint bdls_tex_handle_vbuffer = 0;
     uint bdls_tex_handle_depth   = 0;
 
-    uint                         rt_vtx_handle      = 0;
-    uint                         rt_prim_handle     = 0;
-    uint                         rt_instance_handle = 0;
     Array<RaytracingGeometryRef> rt_geometries;
 
     auto   timeline = device.CreateFence();
@@ -481,14 +482,23 @@ int main(int argc, const char** argv) {
 
         if (Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady()) {
             if (first_load) {
-                instance_buffer_handle = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::InstanceInfo)->GetView());
-                material_buffer_idx    = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::MaterialInfo)->GetView());
-                rt_vtx_handle          = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::RTVertex)->GetView());
-                rt_prim_handle         = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::RTPrimitive)->GetView());
-                rt_instance_handle     = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::RTInstance)->GetView());
-                view_buffer_handle     = bindless_array->AllocateBuffer(rt_view_param_buffer->GetView());
-                light_buffer_handle    = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::LightInfo)->GetView());
-                first_load             = false;
+                instance_buffer_handle          = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::InstanceInfo)->GetView());
+                geometry_buffer_handle          = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::GeometryInfo)->GetView());
+                geometry_instance_buffer_handle = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::GeometryInstance)->GetView());
+                material_buffer_idx             = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::MaterialInfo)->GetView());
+                view_buffer_handle              = bindless_array->AllocateBuffer(rt_view_param_buffer->GetView());
+                light_buffer_handle             = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::LightInfo)->GetView());
+
+                if (env_map) {
+                    Sampler sampler{SF_LINEAR, SAM_CLAMP_TO_BORDER};
+
+                    Moer::EnvironmentLightComponent* env_light = MoerNew(Moer::EnvironmentLightComponent)(float3(1.f));
+                    env_light->bdls_handle                     = bindless_array->AllocateTexture(env_map->GetView(0, env_map->GetNumMips()), sampler);
+
+                    auto entity = EntityManager::Get().Create();
+                    LightComponentManager::Get().Put(entity, env_light);
+                }
+                first_load = false;
 
                 cmd_list.UpdateBindlessArray(bindless_array);
                 last_io_change_timeline = copy_queue_timeline->GetValue();
@@ -498,25 +508,31 @@ int main(int argc, const char** argv) {
                 rt_geometries.reserve(g_scene.GetEntityCount());
                 Array<AccelerationStructureBuildParam> build_params;
                 build_params.reserve(g_scene.GetEntityCount());
-                auto vertex_buffer = g_scene.GetBuffer(EGpuSceneResource::RTVertex);
 
-                auto index_buffer = g_scene.GetBuffer(EGpuSceneResource::RTIndex);
                 g_scene.ForEach([&](Entity _entity) {
-                    auto&                  mesh = RenderableManager::Get().GetRTMeshInfo(_entity);
+                    auto& mesh = RenderableManager::Get().GetMeshInfo(_entity);
+
+                    const MeshBuffers&     mesh_buffers = *mesh->buffers;
                     RaytracingGeometryInfo rt_geo_info{};
                     rt_geo_info.build_flags      = ERayTracingAccelerationStructureBuildFlags::PREFER_FAST_TRACE;
                     rt_geo_info.vertex_format    = PF_R32G32B32_SFLOAT;
-                    rt_geo_info.vertex_buffer    = vertex_buffer;
-                    rt_geo_info.index_buffer     = index_buffer;
+                    rt_geo_info.vertex_buffer    = mesh_buffers.vertex_buffer;
+                    rt_geo_info.index_buffer     = mesh_buffers.index_buffer;
                     rt_geo_info.index_type       = IET_UINT32;
-                    rt_geo_info.max_vertex_count = mesh.vertex_count;
-                    rt_geo_info.primitive_count  = mesh.primitive_count;
-                    rt_geo_info.segments.emplace_back(mesh.vertex_offset, mesh.vertex_count, sizeof(RTVertex), mesh.primitive_offset, mesh.primitive_count);
+                    rt_geo_info.max_vertex_count = mesh->vtx_count;
+                    rt_geo_info.primitive_count  = mesh->idx_count / 3;
+
+                    for (uint i = 0; i < mesh->geometries.size(); i++) {
+                        uint vtx_offset = mesh->vtx_offset + mesh->geometries[i]->local_vtx_offset;
+                        uint vtx_count  = mesh->geometries[i]->local_vtx_count;
+                        uint idx_offset = mesh->idx_offset + mesh->geometries[i]->local_idx_offset;
+                        uint idx_count  = mesh->geometries[i]->local_idx_count;
+
+                        rt_geo_info.segments.emplace_back(vtx_offset, vtx_count, sizeof(float3), idx_offset / 3, idx_count / 3);
+                    }
 
                     RaytracingGeometryRef blas = device.CreateRaytracingGeometry(rt_geo_info);
                     rt_geometries.push_back(blas);
-
-                    auto prim = RenderableManager::Get().GetRenderPrimitive(_entity);
 
                     auto& instance     = rt_scene->AddInstance();
                     instance.geom      = blas;
@@ -591,16 +607,15 @@ int main(int argc, const char** argv) {
 
             cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)&rt_view_param, sizeof(RTViewParam)), rt_view_param_buffer->GetView());
             TestInlineRTShader::Param param;
-            param.global_param_handle     = view_buffer_handle;
-            param.material_buffer_handle  = material_buffer_idx;
-            param.instance_buffer_handle  = rt_instance_handle;
-            param.primitive_buffer_handle = rt_prim_handle;
-            param.vtx_buffer_handle       = rt_vtx_handle;
-            param.light_buffer_handle     = light_buffer_handle;
-            param.rect                    = uint2(resolution.x, resolution.y);
-            param.inv_rect                = float2(1.f / resolution.x, 1.f / resolution.y);
-            param.jitter                  = float2(0, 0);
-            param.frame_idx               = time;
+            param.global_param_handle    = view_buffer_handle;
+            param.material_buffer_handle = material_buffer_idx;
+            param.instance_buffer_handle = instance_buffer_handle;
+            param.geometry_buffer_handle = geometry_buffer_handle;
+            param.light_buffer_handle    = light_buffer_handle;
+            param.rect                   = uint2(resolution.x, resolution.y);
+            param.inv_rect               = float2(1.f / resolution.x, 1.f / resolution.y);
+            param.jitter                 = float2(0, 0);
+            param.frame_idx              = time;
 
             cmd_list.Compute(rt_shader,
                              param,

@@ -231,6 +231,17 @@ namespace Moer::Render {
         commands.push_back(_array->CreateUpdateCommand());
     }
 
+    void CommandList::ClearResource(BufferView _buffer, uint _value) {
+        commands.emplace_back(MakeUnique<ClearResourceCmd>(_buffer, _value));
+    }
+
+    void CommandList::ClearResource(TextureView _texture, float4 _color) {
+        commands.emplace_back(MakeUnique<ClearResourceCmd>(_texture, _color));
+    }
+
+    void CommandList::ClearResource(TextureView _texture, uint _value) {
+        commands.emplace_back(MakeUnique<ClearResourceCmd>(_texture, _value));
+    }
 #pragma region[ raytracing ]
 
     void CommandList::BuildAccelerationStructures(Array<AccelerationStructureBuildParam>&& _geometries) {

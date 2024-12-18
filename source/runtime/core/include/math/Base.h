@@ -23,6 +23,9 @@ namespace Moer {
             struct {
                 T x, y;
             };
+            struct {
+                T r, g;
+            };
             T e[2];
         };
         static constexpr size_t size = 2;
@@ -30,7 +33,6 @@ namespace Moer {
         Vector() noexcept : x(0), y(0) {}
         Vector(T x, T y) noexcept : x(x), y(y) {}
         Vector(const Vector<T, 2>& v) noexcept : x(v.x), y(v.y) {}
-
         explicit Vector(const Vector<T, 3>& v) noexcept : x(v.x), y(v.y) {}
         explicit Vector(const Vector<T, 4>& v) noexcept : x(v.x), y(v.y) {}
         explicit Vector(T xy) noexcept : x(xy), y(xy) {}
@@ -48,6 +50,30 @@ namespace Moer {
             struct {
                 T x, y, z;
             };
+            struct {
+                T r, g, b;
+            };
+
+            struct {
+                Vector<T, 2> xy;
+                T            _z;
+            };
+
+            struct {
+                T            _x;
+                Vector<T, 2> yz;
+            };
+
+            struct {
+                Vector<T, 2> rg;
+                T            _b;
+            };
+
+            struct {
+                T            _r;
+                Vector<T, 2> gb;
+            };
+
             T e[3];
         };
         static constexpr size_t size = 3;
@@ -73,6 +99,22 @@ namespace Moer {
             struct {
                 T x, y, z, w;
             };
+            struct {
+                T r, g, b, a;
+            };
+
+            struct {
+                Vector<T, 2> xy, zw;
+            };
+
+            struct {
+                Vector<T, 2> rg, ba;
+            };
+
+            struct {
+                Vector<T, 3> xyz;
+                T            _w;
+            };
             T e[4];
         };
         static constexpr size_t size = 4;
@@ -82,6 +124,7 @@ namespace Moer {
         Vector(const Vector<T, 4>& v) noexcept : x(v.x), y(v.y), z(v.z), w(v.w) {}
 
         explicit Vector(const Vector<T, 2>& v, T z = 0, T w = 0) noexcept : x(v.x), y(v.y), z(z), w(w) {}
+        explicit Vector(const Vector<T, 2>& v, const Vector<T, 2>& zw) noexcept : x(v.x), y(v.y), z(zw.x), w(zw.y) {}
         explicit Vector(const Vector<T, 3>& v, T w = 0) noexcept : x(v.x), y(v.y), z(v.z), w(w) {}
         explicit Vector(T xyzw) noexcept : x(xyzw), y(xyzw), z(xyzw), w(xyzw) {}
 

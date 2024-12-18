@@ -1,4 +1,5 @@
 #include "loader/LoaderInterface.h"
+#include "scene/MaterialInstance.h"
 #include "ResourceAPI.h"
 #include "loader/gltf/Parser.h"
 #include "loader/ply/Ply.h"

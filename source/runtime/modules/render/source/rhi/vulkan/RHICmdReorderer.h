@@ -793,6 +793,18 @@ namespace Moer::Render {
             AddCmd(_cmd, SetWrite((uint64)(_cmd->Handle()->ArrayHandle()), Range(), ResourceType::Bindless));
         }
 
+        void VisitCmd(const ClearResourceCmd* _cmd) {
+            std::visit([&](auto&& _arg) {
+                using T = std::decay_t<decltype(_arg)>;
+                if constexpr (std::is_same_v<T, BufferView>) {
+                    AddCmd(_cmd, SetWrite((uint64)(_arg.GetBuffer()), Range(_arg.GetByteOffset(), _arg.GetByteSize()), ResourceType::Texture_Buffer));
+                } else if constexpr (std::is_same_v<T, TextureView>) {
+                    AddCmd(_cmd, SetWrite((uint64)(_arg.GetTexture()), Range(_arg.mip_level, _arg.num_mips), ResourceType::Texture_Buffer));
+                }
+            },
+                       _cmd->Resource());
+        }
+
         void VisitCmd(const DispatchCmd* _cmd) {
             m_arg_write_resources.clear();
             m_arg_read_resources.clear();

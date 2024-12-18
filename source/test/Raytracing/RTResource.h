@@ -25,6 +25,25 @@ namespace Moer::Render {
 
         UnorderedMap<std::string, TextureRef> textures;
     };
+
+    struct RTContext {
+    public:
+        RTContext(uint _num_emissive_meshes, uint _num_emissive_triangles, uint _num_prim_lights, uint _num_geom_instance, uint2 _env_map_extent);
+
+        BufferRef geo_instance_to_light_buf;
+        BufferRef light_mapping_buf;
+        BufferRef prim_light_buf;
+        BufferRef task_buf;
+        BufferRef light_data_buf;
+
+        TextureRef env_pdf_tex;
+        TextureRef local_light_pdf_tex;
+
+        uint max_emissive_meshes;
+        uint max_emissive_triangles;
+        uint max_geom_instance;
+        uint max_prim_lights;
+    };
 }// namespace Moer::Render
 
 #endif

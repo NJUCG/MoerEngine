@@ -7,12 +7,13 @@ BINDLESS_BINDINGS(3, 2, 4, 5);
 #include <framework/RaytracingShared.hlsli>
 
 #include <framework/Material.hlsl>
+#include <shared/Geometry.h>
+#include <shared/utils/Packing.h>
 
 struct Param {
   uint instance_buffer_handle;
+  uint geometry_buffer_handle;
   uint material_buffer_handle;
-  uint primitive_buffer_handle;
-  uint vtx_buffer_handle;
   uint global_param_handle;
   uint light_buffer_handle;
   uint2 rect;
@@ -114,8 +115,10 @@ RTHitInfo CastRay(float3 origin, float3 direction, float tmin, float tmax,
   ray_query.TraceRayInline(accel, ray_flags, instance_mask, ray);
 
   ArrayBuffer instance_buffer = ArrayBuffer(param.instance_buffer_handle);
-  ArrayBuffer primitive_buffer = ArrayBuffer(param.primitive_buffer_handle);
-  ArrayBuffer vtx_buffer = ArrayBuffer(param.vtx_buffer_handle);
+  ArrayBuffer geometry_buffer = ArrayBuffer(param.geometry_buffer_handle);
+
+//   ArrayBuffer primitive_buffer = ArrayBuffer(param.primitive_buffer_handle);
+//   ArrayBuffer vtx_buffer = ArrayBuffer(param.vtx_buffer_handle);
 
   while (ray_query.Proceed()) {
     if (ray_query.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE) {
@@ -137,54 +140,88 @@ RTHitInfo CastRay(float3 origin, float3 direction, float tmin, float tmax,
     hit_info.mip = mip_and_cone.x;
     // printf("mip %f\n", hit_info.mip);
 
-    float3x3 model2world = (float3x3)ray_query.CommittedObjectToWorld3x4();
 
     uint instance_id =
-        ray_query.CandidateInstanceID() + ray_query.CandidateGeometryIndex();
+        ray_query.CommittedInstanceID();
     hit_info.instance_id = instance_id;
+    hit_info.geometry_idx = ray_query.CommittedGeometryIndex();
 
-    RTInstanceData instance_data =
-        instance_buffer.Load<RTInstanceData>(instance_id);
+    Moer::InstanceData instance_data =
+        Moer::LoadInstanceData(instance_buffer.GetByteAddressBuffer(), instance_id * sizeof(Moer::InstanceData));
 
-    uint primitive_id =
-        instance_data.prim_offset + ray_query.CandidatePrimitiveIndex();
+    float3x4 model2world = ray_query.CommittedObjectToWorld3x4();
 
-    RTPrimitive primitive = primitive_buffer.Load<RTPrimitive>(primitive_id);
-    RTVertex vtx[3];
-    vtx[0] = vtx_buffer.Load<RTVertex>(primitive.indices.x +
-                                       instance_data.vtx_offset);
-    vtx[1] = vtx_buffer.Load<RTVertex>(primitive.indices.y +
-                                       instance_data.vtx_offset);
-    vtx[2] = vtx_buffer.Load<RTVertex>(primitive.indices.z +
-                                       instance_data.vtx_offset);
+    uint glob_geom_id = instance_data.first_geom_idx + hit_info.geometry_idx;
+    Moer::GeometryData geom_data =
+        Moer::LoadGeometryData(geometry_buffer.GetByteAddressBuffer(), glob_geom_id * sizeof(Moer::GeometryData));
+
+    uint primitive_id = ray_query.CommittedPrimitiveIndex();
+
+    ArrayBuffer idx_buffer = ArrayBuffer(geom_data.index_buffer_handle);
+    uint3 indices = idx_buffer.Load<uint3>(primitive_id, geom_data.index_offset);
+
+    ArrayBuffer vtx_buffer = ArrayBuffer(geom_data.vertex_buffer_handle);
+
     float3 barycentrics;
     barycentrics.yz = ray_query.CandidateTriangleBarycentrics();
     barycentrics.x = 1.0f - barycentrics.y - barycentrics.z;
 
-    float2 uv = barycentrics.x * float2(vtx[0].uv0, vtx[0].uv1) +
-                barycentrics.y * float2(vtx[1].uv0, vtx[1].uv1) +
-                barycentrics.z * float2(vtx[2].uv0, vtx[2].uv1);
-    float3 n = barycentrics.x * vtx[0].normal + barycentrics.y * vtx[1].normal +
-               barycentrics.z * vtx[2].normal;
-    n = mul(model2world, n);
-    n = normalize(n);
+    float3 positions[3];
+    positions[0] = vtx_buffer.Load<float3>(indices.x,geom_data.vertex_offset);
+    positions[1] = vtx_buffer.Load<float3>(indices.y,geom_data.vertex_offset);
+    positions[2] = vtx_buffer.Load<float3>(indices.z,geom_data.vertex_offset);
 
-    hit_info.n = n;
-    hit_info.uv = uv;
+    float3 pos = Moer::Interpolate(positions,
+                                   barycentrics);
 
-    float3 t = barycentrics.x * vtx[0].tangent +
-               barycentrics.y * vtx[1].tangent +
-               barycentrics.z * vtx[2].tangent;
-    t = mul(model2world, t);
-    t = normalize(t);
+    float3 normals[3];
+    normals[0] = Moer::Unpack_RGB8_SNORM(vtx_buffer.Load<uint>(indices.x, geom_data.normal_offset));
+    normals[1] = Moer::Unpack_RGB8_SNORM(vtx_buffer.Load<uint>(indices.y, geom_data.normal_offset));
+    normals[2] = Moer::Unpack_RGB8_SNORM(vtx_buffer.Load<uint>(indices.z, geom_data.normal_offset));
 
-    hit_info.t = t;
+    float3 normal = Moer::Interpolate(normals,
+                                     barycentrics);
+
+    float3 tangents[3];
+    tangents[0] = Moer::Unpack_RGB8_SNORM(vtx_buffer.Load<uint>(indices.x, geom_data.tangent_offset));
+    tangents[1] = Moer::Unpack_RGB8_SNORM(vtx_buffer.Load<uint>(indices.y, geom_data.tangent_offset));
+    tangents[2] = Moer::Unpack_RGB8_SNORM(vtx_buffer.Load<uint>(indices.z, geom_data.tangent_offset));
+
+    float3 tangent = Moer::Interpolate(tangents,
+                                      barycentrics);
+
+    float2 uv0s[3];
+    uv0s[0] = vtx_buffer.Load<float2>(indices.x, geom_data.texcoord0_offset);
+    uv0s[1] = vtx_buffer.Load<float2>(indices.y, geom_data.texcoord0_offset);
+    uv0s[2] = vtx_buffer.Load<float2>(indices.z, geom_data.texcoord0_offset);
+
+    float2 uv0 = Moer::Interpolate(uv0s, barycentrics);
+    
+    // RTPrimitive primitive = primitive_buffer.Load<RTPrimitive>(primitive_id);
+    // RTVertex vtx[3];
+    // vtx[0] = vtx_buffer.Load<RTVertex>(primitive.indices.x +
+    //                                    instance_data.vtx_offset);
+    // vtx[1] = vtx_buffer.Load<RTVertex>(primitive.indices.y +
+    //                                    instance_data.vtx_offset);
+    // vtx[2] = vtx_buffer.Load<RTVertex>(primitive.indices.z +
+    //                                    instance_data.vtx_offset);
+    float3x3 model2worldrot = (float3x3)model2world;
+    normal = mul(model2worldrot, normal).xyz;
+    normal = normalize(normal);
+
+    hit_info.n = normal;
+    hit_info.uv = uv0;
+
+    tangent = mul(model2worldrot, tangent).xyz;
+    tangent = normalize(tangent);
+
+    hit_info.t = tangent;
 
     float NoR = abs(dot(hit_info.n, direction));
 
     float a = hit_info.tmin * mip_and_cone.y;
     a *= 1.f / NoR;
-    a *= primitive.world_uv_units;
+    // a *= primitive.world_uv_units;
     // printf("a %f\n", a);
 
     float mip = log2(a);
@@ -194,8 +231,8 @@ RTHitInfo CastRay(float3 origin, float3 direction, float tmin, float tmax,
 
     hit_info.x = origin + direction * hit_info.tmin;
     hit_info.x_prev = hit_info.x;
-    hit_info.flags = instance_data.flags;
-    hit_info.material_type_and_id = instance_data.material_type_and_id;
+    hit_info.flags = 0;
+    hit_info.material_type_and_id = geom_data.mat_idx_and_type;
   }
   hit_info.v = -direction;
   return hit_info;

@@ -1,12 +1,15 @@
 #include "RTResource.h"
+#include "PreprocessLightPass.h"
 #include "config/ConfigManager.h"
 #include <cstdio>
 #include <filesystem>
 #include <stb_image.h>
+#include "math/Function.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 
 #include "rhi/RHICommon.h"
+#include "shaderheaders/shared/lighting/ShaderParameters.h"
 #include "tinyexr.h"
 
 namespace Moer::Render {
@@ -118,6 +121,44 @@ namespace Moer::Render {
 
     BufferRef RTResource::GetBuffer(std::string_view _name) const {
         return nullptr;
+    }
+
+    RTContext::RTContext(uint  _num_emissive_meshes,
+                         uint  _num_emissive_triangles,
+                         uint  _num_prim_lights,
+                         uint  _num_geom_instance,
+                         uint2 _env_map_extent) : max_emissive_meshes(_num_emissive_meshes),
+                                                  max_emissive_triangles(_num_emissive_triangles),
+                                                  max_geom_instance(_num_geom_instance),
+                                                  max_prim_lights(_num_prim_lights) {
+        RenderDevice& device = RenderDevice::Get();
+        task_buf             = device.CreateBuffer<PrepareLightsTask>(max_emissive_meshes + max_prim_lights, EBufferUsageFlags::UNORDERED_ACCESS);
+
+        geo_instance_to_light_buf = device.CreateBuffer<uint>(max_geom_instance, EBufferUsageFlags::UNORDERED_ACCESS);
+
+        uint max_local_lights  = max_emissive_triangles + max_prim_lights;
+        uint light_buf_element = max_local_lights * 2;
+
+        light_mapping_buf = device.CreateBuffer<uint>(light_buf_element, EBufferUsageFlags::UNORDERED_ACCESS);
+        light_data_buf    = device.CreateBuffer<PolymorphicLightInfo>(light_buf_element, EBufferUsageFlags::UNORDERED_ACCESS);
+        prim_light_buf    = device.CreateBuffer<PolymorphicLightInfo>(max_prim_lights, EBufferUsageFlags::UNORDERED_ACCESS);
+
+        env_pdf_tex = device.CreateTexture("env_pdf_tex",
+                                           Extent2D(_env_map_extent.x, _env_map_extent.y),
+                                           PF_R32_UINT,
+                                           ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED,
+                                           uint(ceilf(log2f(float(std::max(_env_map_extent.x, _env_map_extent.y))))));
+        {
+            uint texture_width  = RoundUpToPowerOf2(uint(ceil(sqrt(double(light_buf_element)))));
+            uint texture_height = RoundUpToPowerOf2(uint(ceil(double(light_buf_element) / texture_width)));
+            uint mips           = Max(1u, uint(log2(Max(texture_width, texture_height))) + 1u);
+
+            local_light_pdf_tex = device.CreateTexture("local_light_pdf_tex",
+                                                       Extent2D(texture_width, texture_height),
+                                                       PF_R32_UINT,
+                                                       ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED,
+                                                       mips);
+        };
     }
 
 };// namespace Moer::Render

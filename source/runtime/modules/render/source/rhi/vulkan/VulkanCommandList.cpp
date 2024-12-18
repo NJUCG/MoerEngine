@@ -1372,6 +1372,14 @@ namespace Moer::Render {
         vkCmdSetScissor(command_buffer, 0, 1, &_scissor);
     }
 
+    void VulkanCmdList::ClearBufferUInt(VulkanBuffer* _buffer, uint64 _offset, uint64 _size, uint32 _data) {
+        vkCmdFillBuffer(command_buffer, _buffer->GetHandle(), _offset, _size, _data);
+    }
+
+    void VulkanCmdList::ClearTexture(VulkanTexture* _texture, const VkClearColorValue& _color, const VkImageSubresourceRange& _range) {
+        vkCmdClearColorImage(command_buffer, _texture->GetHandle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &_color, 1, &_range);
+    }
+
     void VulkanCmdList::Dispatch(uint _group_count_x, uint _group_count_y, uint _group_count_z) {
         vkCmdDispatch(command_buffer, _group_count_x, _group_count_y, _group_count_z);
     }

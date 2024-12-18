@@ -1,13 +1,16 @@
 #ifndef MOER_SERIALIZER_H
 #define MOER_SERIALIZER_H
 #include "misc/STL.h"
+#include "misc/Traits.h"
 #include "zpp_bits.h"
 #include <cassert>
 #include <ostream>
 #include <istream>
 
 namespace Moer {
-
+    template<typename T>
+    static constexpr bool is_ptr_t_v = is_shared_ptr_v<T> || is_unique_ptr_v<T> || is_countable_v<T> || std::is_pointer_v<T>;
+    static_assert(is_ptr_t_v<SharedPtr<uint>>);
     struct InputStream {
         InputStream(std::istream& _stream) : m_stream(_stream) {}
         template<typename T>
@@ -15,13 +18,40 @@ namespace Moer {
             template<typename U>
             static auto           Test(U* _p) -> decltype(std::declval<U>().operator>>(std::declval<InputStream&>()), std::true_type{});
             static auto           Test(...) -> std::false_type;
-            static constexpr bool value = decltype(Test(static_cast<T*>(nullptr)))::value;
+            static constexpr bool value = decltype(Test(static_cast<T*>(nullptr)))::value || is_shared_ptr_v<T> || is_unique_ptr_v<T> || is_countable_v<T>;
         };
 
         template<typename T>
         InputStream& operator>>(T& _value) {
             if constexpr (HasInputStreamOverloadFunction<T>::value) {
-                return _value >> *this;
+                if constexpr (is_ptr_t_v<T>) {
+                    bool has_value;
+                    *this >> has_value;
+                    if (has_value) {
+                        if constexpr (is_shared_ptr_v<T>) {
+                            T value = MakeShared<typename T::element_type>();
+                            *this >> *value;
+                            _value = value;
+                        } else if constexpr (is_unique_ptr_v<T>) {
+                            T value = MakeUnique<typename T::element_type>();
+                            *this >> *value;
+                            _value = value;
+                        } else if constexpr (is_countable_v<T>) {
+                            T value = MoerNew(typename T::CountableType)();
+                            *this >> *value;
+                            _value = value;
+                        } else {
+                            using U = std::remove_pointer_t<T>;
+                            T value = MoerNew(U)();
+                            *this >> *value;
+                            _value = value;
+                        }
+                    } else {
+                        _value = nullptr;
+                    }
+                    return *this;
+                } else
+                    return _value.operator>>(*this);
             } else {
                 m_stream.read(reinterpret_cast<char*>(&_value), sizeof(T));
             }
@@ -83,6 +113,7 @@ namespace Moer {
     private:
         std::istream& m_stream;
     };
+    static_assert(InputStream::HasInputStreamOverloadFunction<UniquePtr<uint>>::value);
 
     struct OutputStream {
         template<typename T>
@@ -90,7 +121,7 @@ namespace Moer {
             template<typename U>
             static auto           Test(U* _p) -> decltype(std::declval<U>().operator<<(std::declval<OutputStream&>()), std::true_type{});
             static auto           Test(...) -> std::false_type;
-            static constexpr bool value = decltype(Test(static_cast<T*>(nullptr)))::value;
+            static constexpr bool value = decltype(Test(static_cast<T*>(nullptr)))::value || is_shared_ptr_v<T> || is_unique_ptr_v<T> || is_countable_v<T>;
         };
 
         OutputStream(std::ostream& _stream) : m_stream(_stream) {}
@@ -98,7 +129,14 @@ namespace Moer {
         template<typename T>
         OutputStream& operator<<(const T& _value) {
             if constexpr (HasOutputStreamOverloadFunction<T>::value) {
-                return _value.operator<<(*this);
+                if constexpr (is_ptr_t_v<T>) {
+                    if (!_value)
+                        return *this << false;
+
+                    return *this << true << *_value;
+                } else {
+                    return _value.operator<<(*this);
+                }
             } else {
                 // m_stream << _value;
                 m_stream.write(reinterpret_cast<const char*>(&_value), sizeof(T));
@@ -125,8 +163,16 @@ namespace Moer {
         template<typename T>
         OutputStream& operator<<(const Moer::Array<T>& _value) {
             *this << _value.size();
-            for (const auto& v : _value) {
-                *this << v;
+            if (_value.empty()) {
+                return *this;
+            }
+            if constexpr (HasOutputStreamOverloadFunction<T>::value) {
+
+                for (const auto& v : _value) {
+                    *this << v;
+                }
+            } else {
+                m_stream.write(reinterpret_cast<const char*>(_value.data()), _value.size() * sizeof(T));
             }
             return *this;
         }
@@ -134,9 +180,18 @@ namespace Moer {
         template<typename T>
         OutputStream& operator<<(const std::span<T>& _value) {
             *this << _value.size();
-            for (const auto& v : _value) {
-                *this << v;
+            if (_value.empty()) {
+                return *this;
             }
+
+            if constexpr (HasOutputStreamOverloadFunction<T>::value) {
+                for (const auto& v : _value) {
+                    *this << v;
+                }
+            } else {
+                m_stream.write(reinterpret_cast<const char*>(_value.data()), _value.size() * sizeof(T));
+            }
+
             return *this;
         }
 

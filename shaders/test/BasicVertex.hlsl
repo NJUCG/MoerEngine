@@ -1,11 +1,14 @@
 #include "framework/Bindless.hlsl"
 #include "framework/Common.hlsl"
 BINDLESS_BINDINGS(3, 2, 4, 5)
+#include "shared/Geometry.h"
+#include "shared/utils/Packing.h"
+
 struct VSInput {
-  float3 Position : POSITION;
-  float3 normal : NORMAL;
-  float3 tangent : TANGENT;
-  float2 UV : TEXCOORD0;
+  [[vk::location(0)]] float3 Position : POSITION;
+  [[vk::location(1)]] uint normal : NORMAL;
+  [[vk::location(2)]] uint tangent : TANGENT;
+  [[vk::location(3)]] float2 UV : TEXCOORD0;
 };
 
 struct VertexOutput {
@@ -22,6 +25,8 @@ struct Constsant {
   uint texture;
   uint buffer;
   uint instance_data;
+  uint geometry_data;
+  uint geometry_instance_data;
   float4x4 camera_view_proj;
 };
 [[vk::push_constant]] ConstantBuffer<Constsant> param;
@@ -29,20 +34,35 @@ struct Constsant {
 VertexOutput main(VSInput input, uint instance_id : SV_InstanceID) {
 
   ArrayBuffer instance_data_array = ArrayBuffer(param.instance_data);
-  InstanceData instance_data =
-      instance_data_array.Load<InstanceData>(instance_id);
-  float4x4 model = instance_data.model2world;
-  float4x4 modelInv = instance_data.inv_model2world;
-  float4x4 mvp = mul(param.camera_view_proj, model);
+
+  ArrayBuffer geom_instance_array = ArrayBuffer(param.geometry_instance_data);
+
+  Moer::GeometryInstance geom_instance =
+      geom_instance_array.Load<Moer::GeometryInstance>(instance_id);
+
+  Moer::InstanceData instance_data = Moer::LoadInstanceData(instance_data_array.GetByteAddressBuffer(), geom_instance.instance_idx * sizeof(Moer::InstanceData));
+
+
+  float3x4 model3x4 = instance_data.model2world;
+  float3x3 model = (float3x3)model3x4;
+
+  float3 world_position = mul(model3x4, float4(input.Position, 1.0f)).xyz;
+  float4 pos = mul(param.camera_view_proj, float4(world_position, 1.0f) );
+
+  // printf("sizeof InstanceData %d\n", sizeof(Moer::InstanceData));
+  // printf("mat3x4\n %f %f %f %f\n %f %f %f %f\n %f %f %f %f\n ", model3x4._11,
+  //        model3x4._12, model3x4._13, model3x4._14, model3x4._21, model3x4._22,
+  //        model3x4._23, model3x4._24, model3x4._31, model3x4._32, model3x4._33,
+  //        model3x4._34);
 
   VertexOutput output;
-  output.Position = mul(mvp, float4(input.Position, 1.0f));
+  output.Position = pos;
   output.UV = input.UV;
-  output.normal =
-      normalize(mul(input.normal, float3x3(modelInv[0].xyz, modelInv[1].xyz,
-                                           modelInv[2].xyz)));
-  output.tangent = normalize(mul(model._11_12_13, input.tangent));
-  output.InstanceID = instance_id;
-  output.world_positon = mul(model, float4(input.Position, 1.0f)).xyz;
+  output.normal = normalize(mul(model,
+                                Moer::Unpack_RGB8_SNORM(input.normal)));
+  output.tangent = normalize(mul(model,
+                                 Moer::Unpack_RGB8_SNORM(input.tangent)));
+  output.InstanceID = geom_instance.geom_idx;
+  output.world_positon = world_position;
   return output;
 }

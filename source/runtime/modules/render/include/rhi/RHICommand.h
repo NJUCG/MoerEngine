@@ -6,6 +6,7 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "RenderAPI.h"
+#include "scene/Scene.h"
 #include "shader/ShaderPipeline.h"
 #include <functional>
 #include <optional>
@@ -303,6 +304,7 @@ namespace Moer::Render {
             QueueTransfer,
             SetDrawState,
             UpdateBindlessArray,
+            ClearResource,
             // UpdateDrawState,
             // SetParams,
             // SetConstants,
@@ -325,6 +327,7 @@ namespace Moer::Render {
             "QueueTransfer",
             "SetDrawState",
             "UpdateBindlessArray",
+            "ClearResource",
             "Custom"};
 
     private:
@@ -352,15 +355,6 @@ namespace Moer::Render {
     template<typename TRenderTarget>
     concept is_render_target = std::is_same_v<TRenderTarget, ColorAttachment>;
 
-    struct VertexBuffer {
-        Buffer* buffer;
-        uint64  offset{0};
-    };
-    struct IndexBuffer {
-        BufferView        buffer;
-        EIndexElementType stride;
-    };
-
     struct SingleDrawParam {
         uint index_cnt;
         uint instance_cnt;
@@ -369,9 +363,9 @@ namespace Moer::Render {
         uint first_instance;
     };
     struct MeshDrawData {
-        StaticArray<VertexBuffer, 4>    vtx_views;
-        std::variant<IndexBuffer, uint> idx_view = 0u;
-        uint                            vtx_cnt  = 0;
+        StaticArray<VertexBuffer, EVertexAttributes::VETA_Num> vtx_views;
+        std::variant<IndexBuffer, uint>                        idx_view = 0u;
+        uint                                                   vtx_cnt  = 0;
 
         Array<SingleDrawParam> draw_params;
 
@@ -380,11 +374,13 @@ namespace Moer::Render {
         MeshDrawData(MeshDrawData&& _other) noexcept {
             vtx_views   = std::move(_other.vtx_views);
             idx_view    = std::move(_other.idx_view);
+            vtx_cnt     = _other.vtx_cnt;
             draw_params = std::move(_other.draw_params);
         }
         MeshDrawData& operator=(MeshDrawData&& _other) noexcept {
             vtx_views   = std::move(_other.vtx_views);
             idx_view    = std::move(_other.idx_view);
+            vtx_cnt     = _other.vtx_cnt;
             draw_params = std::move(_other.draw_params);
             return *this;
         }
@@ -739,6 +735,10 @@ namespace Moer::Render {
         RENDER_API void CopyFrom(BufferView _src, std::span<byte> _data, std::string_view _name = Command::typenames[(uint)Command::EType::CopyBackBuffer]);
 
         RENDER_API void UpdateBindlessArray(BindlessArrayRef _array);
+
+        RENDER_API void ClearResource(BufferView _buffer, uint32_t _value);
+        RENDER_API void ClearResource(TextureView _texture, float4 _color);
+        RENDER_API void ClearResource(TextureView _texture, uint32_t _value);
 
         template<typename T, typename... Args>
         struct CountType;

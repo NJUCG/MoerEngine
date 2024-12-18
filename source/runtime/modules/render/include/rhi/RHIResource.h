@@ -844,6 +844,15 @@ namespace Moer::Render {
         TextureRef tex_handle;
     };
 
+    struct VertexBuffer {
+        Buffer* buffer;
+        uint64  offset{0};
+    };
+    struct IndexBuffer {
+        BufferView        buffer;
+        EIndexElementType stride;
+    };
+
     class RENDER_API BindlessArray : public RHIResource {
     public:
         struct TextureUpdateInfo {
