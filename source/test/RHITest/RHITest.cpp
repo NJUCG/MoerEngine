@@ -1,4 +1,5 @@
 #include <filesystem>
+#include <stb_image.h>
 // #include <vcruntime_string.h>
 #include "Core.h"
 #include "PixelFormat.h"
@@ -128,9 +129,60 @@ public:
     DEFINE_SHADER_ARGS(bdls, param);
 };
 
+struct AoPipelineBindlessParam {
+    float2 inv_resolution;
+    float  ssao_intensity;
+    float  ssao_max_distance;
+    uint   ssao_sample_count;
+    uint   ssao_radius;
+    uint   ao_mode;
+    uint   input_image;
+    uint   normal_tex;
+    uint   position_tex;
+    uint   noise_tex;// linear & repeat sampler
+};
+
+class AoPipeline : public RasterPipeline {
+public:
+    DEFINE_RASTER_PIPELINE_CLASS(AoPipeline);
+    DEFINE_SHADER_CONSTANT_STRUCT(AoPipelineBindlessParam, param);
+    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
+    DEFINE_SHADER_ARGS(bdls, param);
+};
+
+struct SsrPipelineBindlessParam {
+    Matrix4x4f view_projection_matrix;
+    float3     camera_position;
+    float      near_clip;
+    float2     resolution;
+    float      far_clip;
+    float      ssr_roughness_threshold;
+    float      ssr_metallic_threshold;
+    float      ssr_step_base;
+    uint       ssr_sample_count;
+    uint       ssr_is_enable_jitter;
+    uint       ssr_is_force_ground_enable_ssr;
+    uint       color_tex;
+    uint       position_tex;
+    uint       normal_tex;
+    uint       depth_tex;
+    uint       vbuffer;
+    uint       gbuffer_uv;
+    uint       material_buffer;
+};
+class SsrPipeline : public RasterPipeline {
+public:
+    DEFINE_RASTER_PIPELINE_CLASS(SsrPipeline);
+    DEFINE_SHADER_CONSTANT_STRUCT(SsrPipelineBindlessParam, param);
+    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
+    DEFINE_SHADER_ARGS(bdls, param);
+};
+
 // MARK: * AA Pipeline Struct
 
 struct SmaaSharedPipelineBindlessParam {
+    Matrix4x4f curr_inv_vp_and_prev_vp;// = previous_view_projection * current_inverse_view_projection
+    float4     rt_metrics;             // float4(inv_resolution.xy, resolution.xy)
     uint       aa_mode;
     uint       color_tex;   // initial input image
     uint       position_tex;// position gbuffer
@@ -144,8 +196,7 @@ struct SmaaSharedPipelineBindlessParam {
     uint       frame_index;
     uint       point_sampler;
     uint       linear_sampler;
-    float4     rt_metrics;             // float4(inv_resolution.xy, resolution.xy)
-    Matrix4x4f curr_inv_vp_and_prev_vp;// = previous_view_projection * current_inverse_view_projection
+    uint       padding[3];
 };
 class SmaaEdgeDetectionPipeline : public RasterPipeline {
 public:
@@ -278,6 +329,8 @@ int main(int argc, const char** argv) {
         uv,
         position,
         pbr_shading_output,
+        ao_output,
+        ssr_output,
         antialiasing_temporal_texture_1,
         antialiasing_temporal_texture_2,
         antialiasing_output,
@@ -287,14 +340,16 @@ int main(int argc, const char** argv) {
     StaticArray<TextureRef, 2> antialiasing_temporal_texture_34;
 
     Sampler sampler(SF_LINEAR, SAM_REPEAT);
-    Sampler depth_sampler(SF_NEAREST, SAM_CLAMP_TO_EDGE);
 
     uint                 bdls_tex_handle_vbuffer                          = 0;
     uint                 bdls_tex_handle_normal                           = 0;
     uint                 bdls_tex_handle_uv                               = 0;
     uint                 bdls_tex_handle_position                         = 0;
-    uint                 bdls_tex_handle_depth                            = 0;
+    uint                 bdls_tex_handle_depth_with_nearest_sampler       = 0;
+    uint                 bdls_tex_handle_depth_with_linear_sampler        = 0;
     uint                 bdls_tex_handle_pbr_shading_output               = 0;
+    uint                 bdls_tex_handle_ao_output                        = 0;
+    uint                 bdls_tex_handle_ssr_output                       = 0;
     uint                 bdls_tex_handle_antialiasing_temporal_texture_1  = 0;
     uint                 bdls_tex_handle_antialiasing_temporal_texture_2  = 0;
     StaticArray<uint, 2> bdls_tex_handle_antialiasing_temporal_texture_34 = StaticArray<uint, 2>{0, 0};
@@ -339,6 +394,18 @@ int main(int argc, const char** argv) {
 
         pbr_shading_output = device.CreateTexture(
             "pbr_shading_output",
+            Extent2D(resolution.x, resolution.y),
+            PF_R8G8B8A8_UNORM,
+            ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT);
+
+        ao_output = device.CreateTexture(
+            "ao_output",
+            Extent2D(resolution.x, resolution.y),
+            PF_R8G8B8A8_UNORM,
+            ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT);
+
+        ssr_output = device.CreateTexture(
+            "ssr_output",
             Extent2D(resolution.x, resolution.y),
             PF_R8G8B8A8_UNORM,
             ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT);
@@ -392,8 +459,11 @@ int main(int argc, const char** argv) {
         bdls_tex_handle_normal                              = bindless_array->AllocateTexture(normal, sampler);
         bdls_tex_handle_uv                                  = bindless_array->AllocateTexture(uv, sampler);
         bdls_tex_handle_position                            = bindless_array->AllocateTexture(position, sampler);
-        bdls_tex_handle_depth                               = bindless_array->AllocateTexture(depth->GetView(), depth_sampler);
+        bdls_tex_handle_depth_with_nearest_sampler          = bindless_array->AllocateTexture(depth->GetView(), Sampler(SF_NEAREST, SAM_CLAMP_TO_EDGE));
+        bdls_tex_handle_depth_with_linear_sampler           = bindless_array->AllocateTexture(depth->GetView(), Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE));
         bdls_tex_handle_pbr_shading_output                  = bindless_array->AllocateTexture(pbr_shading_output, sampler);
+        bdls_tex_handle_ao_output                           = bindless_array->AllocateTexture(ao_output, sampler);
+        bdls_tex_handle_ssr_output                          = bindless_array->AllocateTexture(ssr_output, sampler);
         bdls_tex_handle_antialiasing_temporal_texture_1     = bindless_array->AllocateTexture(antialiasing_temporal_texture_1, sampler);
         bdls_tex_handle_antialiasing_temporal_texture_2     = bindless_array->AllocateTexture(antialiasing_temporal_texture_2, sampler);
         bdls_tex_handle_antialiasing_temporal_texture_34[0] = bindless_array->AllocateTexture(antialiasing_temporal_texture_34[0], sampler);
@@ -411,8 +481,11 @@ int main(int argc, const char** argv) {
         bindless_array->FreeTexture(bdls_tex_handle_normal);
         bindless_array->FreeTexture(bdls_tex_handle_uv);
         bindless_array->FreeTexture(bdls_tex_handle_position);
-        bindless_array->FreeTexture(bdls_tex_handle_depth);
+        bindless_array->FreeTexture(bdls_tex_handle_depth_with_nearest_sampler);
+        bindless_array->FreeTexture(bdls_tex_handle_depth_with_linear_sampler);
         bindless_array->FreeTexture(bdls_tex_handle_pbr_shading_output);
+        bindless_array->FreeTexture(bdls_tex_handle_ao_output);
+        bindless_array->FreeTexture(bdls_tex_handle_ssr_output);
         bindless_array->FreeTexture(bdls_tex_handle_antialiasing_temporal_texture_1);
         bindless_array->FreeTexture(bdls_tex_handle_antialiasing_temporal_texture_2);
         bindless_array->FreeTexture(bdls_tex_handle_antialiasing_temporal_texture_34[0]);
@@ -440,6 +513,8 @@ int main(int argc, const char** argv) {
             {position->GetView(), "position"},
             {depth->GetView(), "depth"},
             {pbr_shading_output->GetView(), "pbr_shading_output"},
+            {ao_output->GetView(), "ao_output"},
+            {ssr_output->GetView(), "ssr_output"},
             {antialiasing_temporal_texture_1->GetView(), "antialiasing_temporal_texture_1"},
             {antialiasing_temporal_texture_2->GetView(), "antialiasing_temporal_texture_2"},
             {antialiasing_temporal_texture_34[0]->GetView(), "antialiasing_temporal_texture_34[0]"},
@@ -504,6 +579,28 @@ int main(int argc, const char** argv) {
             .Vertex("test/PBRMaterialVertex.hlsl")
             .Pixel("test/PBRMaterialFrag.hlsl")
             .Build<MaterialShadingPipeline>(std::move(pso_full_screen_info));
+    }();
+
+    auto ao_pipeline = [&]() {
+        GfxPsoCreateInfo pso_full_screen_info(RHIRasterizeInfo::Preset(),
+                                              {},
+                                              {RHIColorAttachmentInfo::Preset(ao_output->GetFormat())});
+        return manager
+            .Raster()
+            .Vertex("test/post_process/PostProcessFullScreenQuad.hlsl")
+            .Pixel("test/post_process/AO.hlsl")
+            .Build<AoPipeline>(std::move(pso_full_screen_info));
+    }();
+
+    auto ssr_pipeline = [&]() {
+        GfxPsoCreateInfo pso_full_screen_info(RHIRasterizeInfo::Preset(),
+                                              {},
+                                              {RHIColorAttachmentInfo::Preset(ssr_output->GetFormat())});
+        return manager
+            .Raster()
+            .Vertex("test/post_process/PostProcessFullScreenQuad.hlsl")
+            .Pixel("test/post_process/Ssr.hlsl")
+            .Build<SsrPipeline>(std::move(pso_full_screen_info));
     }();
 
     // MARK: * AA Pipeline
@@ -629,6 +726,38 @@ int main(int argc, const char** argv) {
     BufferView red_buffer_view(red_buffer, 0, 4, 4);
     cmd_list.CopyFrom(std::span<byte>((byte*)&red_data_float4, sizeof(red_data_float4)), red_buffer->GetView());
     uint bdls_buffer_handle_red = bindless_array->AllocateBuffer(red_buffer_view);
+
+    // TODO: optimize code (maybe could refer to RTResource.h/cpp ?)
+
+    // MARK: AO Pipeline Resource
+
+    TextureRef noise_tex = device.CreateTexture(
+        "noise_tex",
+        Extent2D(4, 4),
+        PF_R8_UNORM,
+        ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST);
+    uint bdls_tex_handle_noise_with_linear_sampler = 0;
+
+    {
+        std::string filepath = (ConfigManager::GetInstance().GetEditorResourcePath() / "textures" / "noise_256x256.png").string();
+
+        FILE* file = nullptr;
+        fopen_s(&file, filepath.c_str(), "rb");
+        int width, height, channels;
+        if (file) {
+            ubyte* data = stbi_load_from_file(file, &width, &height, &channels, 4);
+
+            cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)data, width * height * 4), noise_tex);
+            cmd_list.AddCallback([data]() {
+                stbi_image_free(data);
+            });
+
+            bdls_tex_handle_noise_with_linear_sampler = bindless_array->AllocateTexture(noise_tex, Sampler(SF_LINEAR, SAM_REPEAT));
+            // UpdateBindlessArray will be called with other resources
+        } else {
+            LOG_ERROR("Failed to load noise texture");
+        }
+    }
 
     // MARK: AA Pipeline Resource
 
@@ -810,7 +939,7 @@ int main(int argc, const char** argv) {
             material_param.g_buffer_uv         = bdls_tex_handle_uv;
             material_param.g_buffer_normal     = bdls_tex_handle_normal;
             material_param.v_buffer            = bdls_tex_handle_vbuffer;
-            material_param.g_buffer_depth      = bdls_tex_handle_depth;
+            material_param.g_buffer_depth      = bdls_tex_handle_depth_with_nearest_sampler;
             material_param.gbuffer_position    = bdls_tex_handle_position;
             material_param.global_param_handle = lighting_data_handle;
             material_param.light_buffer        = light_buffer_handle;
@@ -831,6 +960,90 @@ int main(int argc, const char** argv) {
                 cmd_list.Gfx(pbr_pipeline, bindless_array, material_param)
                     .Draw("Lighting Pass", Rect2D(0, 0, resolution.x, resolution.y), std::move(full_screen_draw_datas), ColorAttachment(pbr_shading_output));
             };
+
+            auto get_full_screen_draw_datas = [&]() {
+                Array<SingleDrawParam> full_screen_draw_datas;
+                full_screen_draw_datas.emplace_back(SingleDrawParam{3, 1, 0, 0, 0});
+                return full_screen_draw_datas;
+            };
+
+            /**
+             * MARK: AO Pass
+             * 
+             * TODO: SSDO Support
+             */
+            uint ao_actual_input  = bdls_tex_handle_pbr_shading_output;
+            uint ao_actual_output = bdls_tex_handle_pbr_shading_output;
+            if (ui_config.ao_mode != 0) {
+                ao_actual_output = bdls_tex_handle_ao_output;// update actual output when ao is enabled
+
+                AoPipelineBindlessParam param;
+                param.inv_resolution    = float2(1.0f) / float2(resolution);
+                param.ssao_intensity    = ui_config.ssao_intensity;
+                param.ssao_max_distance = ui_config.ssao_max_distance;
+                param.ssao_sample_count = ui_config.ssao_sample_count;
+                param.ssao_radius       = ui_config.ssao_radius;
+                param.ao_mode           = ui_config.ao_mode;
+                param.input_image       = ao_actual_input;
+                param.normal_tex        = bdls_tex_handle_normal;
+                param.position_tex      = bdls_tex_handle_position;
+                param.noise_tex         = bdls_tex_handle_noise_with_linear_sampler;
+
+                cmd_list
+                    .Gfx(ao_pipeline, bindless_array, param)
+                    .Draw(
+                        "AO Pass",
+                        Rect2D(0, 0, resolution.x, resolution.y),
+                        std::move(get_full_screen_draw_datas()),
+                        ColorAttachment(ao_output));
+            }
+
+            /**
+             * MARK: SSR Pass
+             * 
+             * GUI Help:
+             *   You can set `Roughness Threshold` and `Metallic Threshold` to control which material will be reflected.
+             *   If you want all materials to be reflected, set `Roughness Threshold` to 0.0 and `Metallic Threshold` to 1.0.
+             *   `Force Ground Enable SSR` will force the ground to be reflected, which is useful for testing.
+             *   TODO: move the above text to gui
+             * 
+             * TODO: use HiZ buffer to accelerate SSR (now, a simple heuristic and binary search is used for SSR)
+             * TODO: glossy ssr
+             * TODO: performance optimization
+             */
+            uint ssr_actual_input  = ao_actual_output;
+            uint ssr_actual_output = ao_actual_output;
+            if (ui_config.ssr_is_enable_ssr) {
+                ssr_actual_output = bdls_tex_handle_ssr_output;// update actual output when ssr is enabled
+
+                SsrPipelineBindlessParam param;
+                param.view_projection_matrix         = camera->GetViewProjectionMatrix();
+                param.camera_position                = camera->GetPosition();
+                param.near_clip                      = camera->GetNearClip();
+                param.resolution                     = float2(resolution);
+                param.far_clip                       = camera->GetFarClip();
+                param.ssr_roughness_threshold        = ui_config.ssr_roughness_threshold;
+                param.ssr_metallic_threshold         = ui_config.ssr_metallic_threshold;
+                param.ssr_step_base                  = ui_config.ssr_step_base;
+                param.ssr_sample_count               = ui_config.ssr_sample_count;
+                param.ssr_is_enable_jitter           = ui_config.ssr_is_enable_jitter;
+                param.ssr_is_force_ground_enable_ssr = ui_config.ssr_is_force_ground_enable_ssr;
+                param.color_tex                      = ssr_actual_input;
+                param.position_tex                   = bdls_tex_handle_position;
+                param.normal_tex                     = bdls_tex_handle_normal;
+                param.depth_tex                      = bdls_tex_handle_depth_with_linear_sampler;
+                param.vbuffer                        = bdls_tex_handle_vbuffer;
+                param.gbuffer_uv                     = bdls_tex_handle_uv;
+                param.material_buffer                = material_buffer_handle;
+
+                cmd_list
+                    .Gfx(ssr_pipeline, bindless_array, param)
+                    .Draw(
+                        "SSR Pass",
+                        Rect2D(0, 0, resolution.x, resolution.y),
+                        std::move(get_full_screen_draw_datas()),
+                        ColorAttachment(ssr_output));
+            }
 
             /**
              * MARK: AA Passes
@@ -872,18 +1085,14 @@ int main(int argc, const char** argv) {
              * 关于SMAA T2x的说明
              *   1. T2x使用了Temporal Supersampling，需要让相机抖动。可以通过camera->SetJitteredMatrix()来设置JitteredMatrix，这个矩阵会作用在ViewMatrix上
              *   2. 目前SMAA T2x效果和SMAA 1x类似，没有明显优势；不确定是场景问题还是实现问题
+             *   FIXME: fix jitter in SMAA T2x when SMAA_REPROJECTION is enabled
              */
+            uint aa_actual_input = ssr_actual_output;
             {
-                auto get_full_screen_draw_datas = [&]() {
-                    Array<SingleDrawParam> full_screen_draw_datas;
-                    full_screen_draw_datas.emplace_back(SingleDrawParam{3, 1, 0, 0, 0});
-                    return full_screen_draw_datas;
-                };
-
                 if (0 <= ui_config.aa_mode && ui_config.aa_mode <= 2) {// fxaa
 
                     FxaaPrecomputePipelineBindlessParam param_fxaa_precomputed;
-                    param_fxaa_precomputed.input_image = bdls_tex_handle_pbr_shading_output;
+                    param_fxaa_precomputed.input_image = aa_actual_input;
 
                     cmd_list
                         .Gfx(fxaa_precompute_pipeline, bindless_array, param_fxaa_precomputed)
@@ -942,9 +1151,9 @@ int main(int argc, const char** argv) {
                     auto smaa_shared_param = [&]() {
                         SmaaSharedPipelineBindlessParam param;
                         param.aa_mode                 = ui_config.aa_mode;
-                        param.color_tex               = bdls_tex_handle_pbr_shading_output;
+                        param.color_tex               = aa_actual_input;
                         param.position_tex            = bdls_tex_handle_position;
-                        param.depth_tex               = bdls_tex_handle_depth;
+                        param.depth_tex               = bdls_tex_handle_depth_with_nearest_sampler;
                         param.search_tex              = bdls_tex_handle_smaa_search_tex;
                         param.area_tex                = bdls_tex_handle_smaa_area_tex;
                         param.edges_tex               = bdls_tex_handle_antialiasing_temporal_texture_1;

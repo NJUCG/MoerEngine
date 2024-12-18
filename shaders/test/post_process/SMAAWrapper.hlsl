@@ -5,6 +5,8 @@
 BINDLESS_BINDINGS(3, 2, 4, 5)
 
 struct Constant {
+    float4x4 curr_inv_vp_and_prev_vp;// = previous_view_projection * current_inverse_view_projection
+    float4   rt_metrics;             // float4(inv_resolution.xy, resolution.xy)
     uint     aa_mode;
     uint     color_tex;   // initial input image
     uint     position_tex;// position gbuffer
@@ -18,8 +20,7 @@ struct Constant {
     uint     frame_index;
     uint     point_sampler;
     uint     linear_sampler;
-    float4   rt_metrics;             // float4(inv_resolution.xy, resolution.xy)
-    float4x4 curr_inv_vp_and_prev_vp;// = previous_view_projection * current_inverse_view_projection
+    uint     padding[3];
 };
 [[vk::push_constant]] ConstantBuffer<Constant> param;
 
@@ -46,7 +47,8 @@ Texture2D SMAAGetTexture2D(uint handle_idx) {
 #define SMAA_PRESET_HIGH
 #define SMAA_CUSTOM_SL
 
-#define SMAA_REPROJECTION 1
+// TODO: Fix Reprojection (SMAAGetVelocity)
+#define SMAA_REPROJECTION 0
 #define SMAA_DECODE_VELOCITY(sample) sample.ba
 
 // 4. smaa porting functions (custom shading language for bindless rhi)
@@ -147,7 +149,7 @@ SMAAResolveVS_Output SMAAResolveVS_Wrapper(uint VertexIndex : SV_VertexID) {
 // according to SMAARepo: Demo/DX10/Shaders/Simple.fx
 float2 SMAAGetVelocity(float2 uv) {
     float4 c_pos = SMAAGetTexture2D(param.position_tex).Sample(LinearSampler, uv);
-    float4 p_pos = mul(c_pos, param.curr_inv_vp_and_prev_vp);
+    float4 p_pos = mul(param.curr_inv_vp_and_prev_vp, float4(c_pos.xyz, 1.0));
     float2 c_pos2 = (c_pos.xy / c_pos.w) * float2(0.5, -0.5);
     float2 p_pos2 = (p_pos.xy / p_pos.w) * float2(0.5, -0.5);
     

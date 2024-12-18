@@ -172,8 +172,6 @@ namespace Moer::Render {
 
         ImGui::Text("FPS: %.1f", io.Framerate);
 
-        // ImGui::Dummy(ImVec2(0, 10));
-
         auto draw_border = [&]() {
             // 获取选项的矩形区域
             ImVec2 min = ImGui::GetItemRectMin();
@@ -191,6 +189,46 @@ namespace Moer::Render {
                 }
                 draw_border();
             }
+            ImGui::TreePop();
+        }
+
+        if (ImGui::TreeNode("AO Mode", "AO Mode: [%s]", k_ao_mode_name_array[m_config.ao_mode].c_str())) {
+            for (uint i = 0; i < k_ao_mode_name_array.size(); i++) {
+                if (
+                    ImGui::Selectable(k_ao_mode_name_array[i].c_str(), m_config.ao_mode == i) && i != 3 && i != 4// SSDO is not implemented yet
+                ) {
+                    m_config.ao_mode = i;
+                }
+                draw_border();
+            }
+
+            ImGui::SliderFloat("Intensity", &m_config.ssao_intensity, 0.0f, 2.0f);
+            ImGui::SliderInt("Sample Count", &m_config.ssao_sample_count, 1, 16);
+            ImGui::SliderInt("Sample Radius", &m_config.ssao_radius, 1, 8);
+            ImGui::SliderFloat("Max Distance", &m_config.ssao_max_distance, 0.0f, 2.0f);
+
+            ImGui::TreePop();
+        }
+
+        if (ImGui::TreeNode("SSR Mode", "SSR: [%s]", (m_config.ssr_is_enable_ssr == 1 ? "Enable" : "Disable"))) {
+            if (ImGui::Selectable("Enable", m_config.ssr_is_enable_ssr == 1)) {
+                m_config.ssr_is_enable_ssr = 1;
+            }
+            draw_border();
+            if (ImGui::Selectable("Disable", m_config.ssr_is_enable_ssr == 0)) {
+                m_config.ssr_is_enable_ssr = 0;
+            }
+            draw_border();
+
+            if (m_config.ssr_is_enable_ssr == 1) {
+                ImGui::Checkbox("Enable Jitter", &m_config.ssr_is_enable_jitter);
+                ImGui::Checkbox("Force Ground Enable SSR", &m_config.ssr_is_force_ground_enable_ssr);
+                ImGui::SliderInt("Sample Count", &m_config.ssr_sample_count, 1, 64);
+                ImGui::SliderFloat("Step Base", &m_config.ssr_step_base, 0.0f, 0.1f);
+                ImGui::SliderFloat("Roughness Threshold", &m_config.ssr_roughness_threshold, 0.0f, 1.0f);
+                ImGui::SliderFloat("Metallic Threshold", &m_config.ssr_metallic_threshold, 0.0f, 1.0f);
+            }
+
             ImGui::TreePop();
         }
 
