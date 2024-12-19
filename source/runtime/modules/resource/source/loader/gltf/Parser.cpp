@@ -301,10 +301,7 @@ namespace Moer::Resource::Gltf {
         } else {
             LOG_INFO("Found {} lights in the scene", light_num);
 
-            LOG_WARNING("Due to the Sponza scene only has a dark light, loader will use default lights instead. Please remove this warning and the following code after adding a new scene with lights");
-            m_scene_data->m_lights = std::move(LightComponent::CreateDefaultLightComponents());
-            return;
-
+            LOG_WARNING("gltf LoadLights function isn't tested fully. It may not work as expected.");
             // The following code isn't tested fully. It may not work as expected.
             // TODO: Add a new scene with lights to test the following code
             for (uint32_t i = 0; i < light_num; i++) {
