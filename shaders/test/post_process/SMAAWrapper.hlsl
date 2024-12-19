@@ -72,7 +72,7 @@ Texture2D SMAAGetTexture2D(uint handle_idx) {
 #endif
 
 // 5. include "SMAA.hlsl"
-#include "test/post_process/SMAA.hlsl"
+#include "test/post_process/Smaa.hlsl"
 
 // 6. entry functions
 
