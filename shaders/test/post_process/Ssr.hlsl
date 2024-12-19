@@ -154,7 +154,7 @@ float3 ssr(float3 color, float2 uv) {
         ? fmod(uv.x * param.resolution.x + uv.y * param.resolution.y, 4.0) * 0.25
         : 0.0f;
 
-    return ssr_ray_tracing(color, position + normal * 0.01, reflect_dir * param.ssr_step_base, fresnel, jitter);
+    return ssr_ray_tracing(color, position + normal * 0.1, reflect_dir * param.ssr_step_base, fresnel, jitter);
 }
 
 float4 main(float2 uv : TEXCOORD0) : SV_TARGET {
