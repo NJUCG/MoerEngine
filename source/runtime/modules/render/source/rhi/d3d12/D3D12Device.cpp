@@ -21,6 +21,8 @@
 
 namespace Moer::Render {
 
+    // todo? logging, add a d3d12 sink? , with specialize output prefix e.g. [D3D12]
+
     //https://stackoverflow.com/questions/16190078/how-to-atomically-update-a-maximum-value
     // (look forward to c++26 fetch_max
     template<typename T>
@@ -164,7 +166,19 @@ namespace Moer::Render {
     }
 
     TextureRef D3D12Device::CreateTexture(std::string_view _name, ETextureDimension _dimension, Extent3D _size, EPixelFormat _format, ETextureUsageFlags _usage, uint32_t _mip_cnt, uint _array_size) {
-        return nullptr;
+        bool        b_depth = uint(ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT & _usage) != 0;
+        TextureInfo info{
+            _dimension,
+            _usage,
+            _format,
+            b_depth ? EClearAttachment::DEPTH_STENCIL : EClearAttachment::COLOR,
+            _size,
+            uint8(_mip_cnt),
+            uint8(_dimension == ETextureDimension::TEX_CUBE ? 6 : _array_size),
+            1};// TODO ? msaa tex
+        info.aspect_flags = b_depth ? ETextureAspectFlags::DEPTH_SLICE : ETextureAspectFlags::COLOR;
+        info.debug_name   = _name;
+        return TextureRef{MoerNew(D3D12Texture)(this, info)};
     }
 
     BufferRef D3D12Device::CreateBuffer(uint _element_cnt, uint _byte_stride, EBufferUsageFlags _usage) {
@@ -411,20 +425,39 @@ namespace Moer::Render {
         return _value != 0 && (_value & (_value - 1)) == 0;
     }
 
-    Allocation D3D12GpuGlobalAllocator::AllocateBufferHeap(std::string_view _name, uint64 _byte_size, uint64 _align, D3D12_HEAP_TYPE _heap_type) {
+    Allocation D3D12GpuGlobalAllocator::AllocateBufferHeap(std::string_view _name, uint64 _byte_size, uint64 _alignment, D3D12_HEAP_TYPE _heap_type) {
         D3D12MA::ALLOCATION_DESC desc;
         desc.HeapType       = _heap_type;
         desc.Flags          = D3D12MA::ALLOCATION_FLAGS::ALLOCATION_FLAG_STRATEGY_BEST_FIT;
         desc.ExtraHeapFlags = D3D12_HEAP_FLAG_ALLOW_ONLY_BUFFERS;
         desc.CustomPool     = nullptr;
         D3D12_RESOURCE_ALLOCATION_INFO info;
-        DASSERT(IsPowerOfTwo(_align));
-        info.Alignment   = _align;
-        info.SizeInBytes = AlignUpToPowerOfTwo(_byte_size, _align);
+        DASSERT(IsPowerOfTwo(_alignment));
+        info.Alignment   = _alignment;
+        info.SizeInBytes = AlignUpToPowerOfTwo(_byte_size, _alignment);
 
         Allocation alloc;
         DX_CHECK_HRESULT(d3d12Allocator->AllocateMemory(&desc, &info, &alloc.alloc));
         alloc.alloc->SetPrivateData(device);// sometime useful
+        alloc.alloc->SetName(StringWiden(_name).c_str());
+        return alloc;
+    }
+
+    Allocation D3D12GpuGlobalAllocator::AllocateTextureHeap(std::string_view _name, uint64 _byte_size, uint64 _alignment, bool _is_rtv_dsv) {
+        D3D12MA::ALLOCATION_DESC desc;
+        desc.HeapType       = D3D12_HEAP_TYPE_DEFAULT;
+        desc.Flags          = D3D12MA::ALLOCATION_FLAGS::ALLOCATION_FLAG_STRATEGY_BEST_FIT;
+        desc.ExtraHeapFlags = _is_rtv_dsv ? D3D12_HEAP_FLAG_ALLOW_ONLY_RT_DS_TEXTURES : D3D12_HEAP_FLAG_ALLOW_ONLY_NON_RT_DS_TEXTURES;
+        desc.CustomPool     = nullptr;
+        D3D12_RESOURCE_ALLOCATION_INFO info;
+        DASSERT(IsPowerOfTwo(_alignment));
+        info.Alignment   = _alignment;
+        info.SizeInBytes = AlignUpToPowerOfTwo(_byte_size, _alignment);
+
+        Allocation alloc;
+        DX_CHECK_HRESULT(d3d12Allocator->AllocateMemory(&desc, &info, &alloc.alloc));
+        alloc.alloc->SetPrivateData(device);// sometime useful
+        alloc.alloc->SetName(StringWiden(_name).c_str());
         return alloc;
     }
 
@@ -520,7 +553,7 @@ namespace Moer::Render {
         D3D12CommandVisitor(D3D12CommandResourceAllocator& allocator) : allocator(allocator), tracker(allocator.GetResourceStateTracker()), cmd_list(*allocator.GetCommandList()) {}
 
         void Visit(const UploadBufferCmd& _cmd) {
-            auto data_span = _cmd.Data();
+            auto data_span  = _cmd.Data();
             auto tmp_buffer = allocator.AllocateUploadBuffer(_cmd.ByteSize(), 256);// ? not sure alignment
             cmd_list.CopyData(tmp_buffer, data_span.data(), data_span.size_bytes());
             D3D12Buffer* buffer = reinterpret_cast<D3D12Buffer*>(_cmd.Handle());
@@ -802,9 +835,11 @@ namespace Moer::Render {
     }
 
     static UniquePtr<D3D12Buffer> CreateLargeStagingBuffer(D3D12Device* _device, D3D12_HEAP_TYPE _heap_type, uint64 _byte_size) {
-        // allocate large upload buffer
-        const auto                 heap_prop    = CD3DX12_HEAP_PROPERTIES(_heap_type);
-        const D3D12_RESOURCE_DESC1 resourceDesc = CD3DX12_RESOURCE_DESC1::Buffer(_byte_size);
+        const auto           heap_prop    = CD3DX12_HEAP_PROPERTIES(_heap_type);
+        D3D12_RESOURCE_DESC1 resourceDesc = CD3DX12_RESOURCE_DESC1::Buffer(_byte_size);
+        if (_heap_type == D3D12_HEAP_TYPE_READBACK) {
+            resourceDesc.Flags |= D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE;
+        }
 
         Allocation allocation;
         _device->Native()->CreateCommittedResource3(
@@ -833,7 +868,7 @@ namespace Moer::Render {
         auto*       buffer = large_buffers.back().get();
         uint8*      mapped;
         D3D12_RANGE read_range{0, 0};
-        buffer->Native()->Map(0, &read_range, reinterpret_cast<void**>(&mapped));
+        DX_CHECK_HRESULT(buffer->Native()->Map(0, &read_range, reinterpret_cast<void**>(&mapped)));
         return D3D12StagingBufferView{buffer, 0, buffer->GetGpuVirtualAddress(), mapped};
     }
 
@@ -845,7 +880,7 @@ namespace Moer::Render {
         large_buffers.emplace_back(CreateLargeStagingBuffer(device, D3D12_HEAP_TYPE_READBACK, _size));
         auto*  buffer = large_buffers.back().get();
         uint8* mapped;
-        buffer->Native()->Map(0, nullptr, reinterpret_cast<void**>(&mapped));
+        DX_CHECK_HRESULT(buffer->Native()->Map(0, nullptr, reinterpret_cast<void**>(&mapped)));
         return D3D12StagingBufferView{buffer, 0, buffer->GetGpuVirtualAddress(), mapped};
     }
 
@@ -942,7 +977,7 @@ namespace Moer::Render {
         // Create the underlying buffer
         underlying_buffer = CreateLargeStagingBuffer(device, heap_type, total_byte_size);
         underlying_buffer->Native()->SetName(StringWiden(std::format("D3D12BuddyAllocator-back-buffer-{}", heap_type == D3D12_HEAP_TYPE_UPLOAD ? "upload" : "readback")).c_str());
-        underlying_buffer->Native()->Map(0, nullptr, reinterpret_cast<void**>(&ptr_mapped));
+        DX_CHECK_HRESULT(underlying_buffer->Native()->Map(0, nullptr, reinterpret_cast<void**>(&ptr_mapped)));
     }
     uint32 D3D12BuddyAllocator::GetSizeToAllocate(uint32 _size, uint32 _alignment) {
         if (_alignment != 0 && min_block_byte_size % _alignment != 0) {
@@ -1110,4 +1145,290 @@ namespace Moer::Render {
     void D3D12FastConstantAllocator::CleanUpAllocations() {
         allocator.CleanUpAllocations();
     }
+
+    D3D12Texture::D3D12Texture(D3D12Device* _device, const TextureInfo& _info) : D3D12DeviceChild(_device), Texture(_info) {
+        DASSERT(false == EnumHasAnyFlag(_info.usage, ETextureUsageFlags::CPU_VISIBLE));
+        auto* allocator = _device->GetGpuGlobalAllocator();
+
+        D3D12_RESOURCE_DESC1 resourceDesc;
+        resourceDesc.Dimension                       = D3D12EnumTranslation::METoDxResourceDimension(GetDimension());
+        resourceDesc.Alignment                       = 0;
+        resourceDesc.Width                           = GetWidth();
+        resourceDesc.Height                          = GetHeight();
+        resourceDesc.DepthOrArraySize                = resourceDesc.Dimension == D3D12_RESOURCE_DIMENSION::D3D12_RESOURCE_DIMENSION_TEXTURE3D ? GetDepth() : GetNumArray();
+        resourceDesc.MipLevels                       = GetNumMips();
+        resourceDesc.Format                          = D3D12EnumTranslation::METoDxFormat(GetFormat());
+        resourceDesc.SampleDesc.Count                = 1;// todo?
+        resourceDesc.SampleDesc.Quality              = 0;
+        resourceDesc.Layout                          = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        resourceDesc.Flags                           = D3D12EnumTranslation::METoDxTextureResourceFlags(GetUsage());
+        resourceDesc.SamplerFeedbackMipRegion.Width  = 0;// todo ?
+        resourceDesc.SamplerFeedbackMipRegion.Height = 0;
+        resourceDesc.SamplerFeedbackMipRegion.Depth  = 0;
+
+        std::optional<D3D12_CLEAR_VALUE> clearValue;
+        if (resourceDesc.Flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL) {
+            ASSERT(EnumHasAnyFlag(GetAspectFlags(), ETextureAspectFlags::DEPTH_SLICE | ETextureAspectFlags::STENCIL_SLICE));
+            clearValue.emplace(CD3DX12_CLEAR_VALUE(resourceDesc.Format, 1.0f, 0));// maybe consider reverseZ
+        } else if (resourceDesc.Flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET) {
+            ASSERT(EnumHasAnyFlag(GetAspectFlags(), ETextureAspectFlags::COLOR));
+            const float color[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+            clearValue           = CD3DX12_CLEAR_VALUE(resourceDesc.Format, color);
+        }
+
+        const auto allocateInfo = device->Native()->GetResourceAllocationInfo2(0, 1, &resourceDesc, nullptr);
+        allocation              = allocator->AllocateTextureHeap("default-texture-name", allocateInfo.SizeInBytes, allocateInfo.Alignment);
+        DX_CHECK_HRESULT(device->Native()->CreatePlacedResource2(
+            allocation.alloc->GetHeap(),
+            allocation.alloc->GetOffset(),
+            &resourceDesc,
+            D3D12_BARRIER_LAYOUT_UNDEFINED,// simply use undefined to init, ez for later
+            clearValue ? &clearValue.value() : nullptr,
+            0,// omit castable format
+            nullptr,
+            IID_PPV_ARGS(&allocation.resource)));
+    }
+    D3D12Texture::D3D12Texture(D3D12Device* _device, const TextureInfo& _info, Allocation&& _allocation) : D3D12DeviceChild(_device), Texture(_info), allocation(std::move(_allocation)) {
+    }
+    D3D12Texture::~D3D12Texture() {
+    }
+    void D3D12Texture::Destroy() {
+        MoerDelete(this);
+    }
+    uint D3D12Texture::GetMipByteSize(uint _mip_level) const {
+        uint mip_width  = std::max(1u, GetWidth() >> _mip_level);
+        uint mip_height = std::max(1u, GetHeight() >> _mip_level);
+        uint mip_depth  = std::max(1u, GetDepth() >> _mip_level);
+        return mip_width * mip_height * mip_depth * D3D12_PROPERTY_LAYOUT_FORMAT_TABLE::GetBitsPerUnit(D3D12EnumTranslation::METoDxFormat(GetFormat())) / 8;
+    }
+    void D3D12Texture::SetName(const std::string_view _name) {
+        debug_name.emplace(_name);
+        allocation.resource->SetName(StringWiden(_name).c_str());
+    }
+
+    namespace D3D12EnumTranslation {
+
+        DXGI_FORMAT Moer::Render::D3D12EnumTranslation::METoDxFormat(EPixelFormat _format) {
+            // ref https://github.com/doitsujin/dxvk/blob/master/src/dxgi/dxgi_format.cpp
+            //     https://github.com/HansKristian-Work/vkd3d-proton/blob/master/libs/vkd3d/utils.c#L48
+            //     https://registry.khronos.org/vulkan/specs/latest/man/html/VkFormat.html
+            //     https://learn.microsoft.com/en-us/windows/win32/api/dxgiformat/ne-dxgiformat-dxgi_format#byte-order--lsb-msb- that's why some vulkan format like R5G6B5 match dxgi format B5G6R5
+            //     https://stackoverflow.com/questions/59628956/what-is-the-difference-between-normalized-scaled-and-integer-vkformats
+
+            // currently, not use typeless format
+            switch (_format) {
+                    // clang-format off
+                case PF_UNDEFINED:                       return DXGI_FORMAT_UNKNOWN;
+                //case PF_R4G4_UNORM_PACK8:                return DXGI_FORMAT_UNKNOWN;
+                //case PF_R4G4B4A4_UNORM_PACK16:           return DXGI_FORMAT_UNKNOWN;
+                //case PF_B4G4R4A4_UNORM_PACK16:           return DXGI_FORMAT_UNKNOWN;
+                case PF_R5G6B5_UNORM_PACK16:             return DXGI_FORMAT_B5G6R5_UNORM;
+                //case PF_B5G6R5_UNORM_PACK16:             return DXGI_FORMAT_UNKNOWN;
+                //case PF_R5G5B5A1_UNORM_PACK16:           return DXGI_FORMAT_UNKNOWN;
+                //case PF_B5G5R5A1_UNORM_PACK16:           return DXGI_FORMAT_UNKNOWN;
+                case PF_A1R5G5B5_UNORM_PACK16:           return DXGI_FORMAT_B5G5R5A1_UNORM;
+                case PF_R8_UNORM:                        return DXGI_FORMAT_R8_UNORM;
+                case PF_R8_SNORM:                        return DXGI_FORMAT_R8_SNORM;
+                //case PF_R8_USCALED:                      return DXGI_FORMAT_UNKNOWN;
+                //case PF_R8_SSCALED:                      return DXGI_FORMAT_UNKNOWN;
+                case PF_R8_UINT:                         return DXGI_FORMAT_R8_UINT;
+                case PF_R8_SINT:                         return DXGI_FORMAT_R8_SINT;
+                //case PF_R8_SRGB:                         return DXGI_FORMAT_UNKNOWN;
+                case PF_R8G8_UNORM:                      return DXGI_FORMAT_R8G8_UNORM;
+                case PF_R8G8_SNORM:                      return DXGI_FORMAT_R8G8_SNORM;
+                //case PF_R8G8_USCALED:                    return DXGI_FORMAT_UNKNOWN;
+                //case PF_R8G8_SSCALED:                    return DXGI_FORMAT_UNKNOWN;
+                case PF_R8G8_UINT:                       return DXGI_FORMAT_R8G8_UINT;
+                case PF_R8G8_SINT:                       return DXGI_FORMAT_R8G8_SINT;
+                //case PF_R8G8_SRGB:                       return DXGI_FORMAT_UNKNOWN;
+                //case PF_R8G8B8_UNORM:                    return DXGI_FORMAT_UNKNOWN;
+                //case PF_R8G8B8_SNORM:                    return DXGI_FORMAT_UNKNOWN;
+                //case PF_R8G8B8_USCALED:                  return DXGI_FORMAT_UNKNOWN;
+                //case PF_R8G8B8_SSCALED:                  return DXGI_FORMAT_UNKNOWN;
+                //case PF_R8G8B8_UINT:                     return DXGI_FORMAT_UNKNOWN;
+                //case PF_R8G8B8_SINT:                     return DXGI_FORMAT_UNKNOWN;
+                //case PF_R8G8B8_SRGB:                     return DXGI_FORMAT_UNKNOWN;
+                //case PF_B8G8R8_UNORM:                    return DXGI_FORMAT_UNKNOWN;
+                //case PF_B8G8R8_SNORM:                    return DXGI_FORMAT_UNKNOWN;
+                //case PF_B8G8R8_USCALED:                  return DXGI_FORMAT_UNKNOWN;
+                //case PF_B8G8R8_SSCALED:                  return DXGI_FORMAT_UNKNOWN;
+                //case PF_B8G8R8_UINT:                     return DXGI_FORMAT_UNKNOWN;
+                //case PF_B8G8R8_SINT:                     return DXGI_FORMAT_UNKNOWN;
+                //case PF_B8G8R8_SRGB:                     return DXGI_FORMAT_UNKNOWN;
+                case PF_R8G8B8A8_UNORM:                  return DXGI_FORMAT_R8G8B8A8_UNORM;
+                case PF_R8G8B8A8_SNORM:                  return DXGI_FORMAT_R8G8B8A8_SNORM;
+                //case PF_R8G8B8A8_USCALED:                return DXGI_FORMAT_UNKNOWN;
+                //case PF_R8G8B8A8_SSCALED:                return DXGI_FORMAT_UNKNOWN;
+                case PF_R8G8B8A8_UINT:                   return DXGI_FORMAT_R8G8B8A8_UINT;
+                case PF_R8G8B8A8_SINT:                   return DXGI_FORMAT_R8G8B8A8_SINT;
+                case PF_R8G8B8A8_SRGB:                   return DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+                case PF_B8G8R8A8_UNORM:                  return DXGI_FORMAT_B8G8R8A8_UNORM;
+                //case PF_B8G8R8A8_SNORM:                  return DXGI_FORMAT_UNKNOWN;
+                //case PF_B8G8R8A8_USCALED:                return DXGI_FORMAT_UNKNOWN;
+                //case PF_B8G8R8A8_SSCALED:                return DXGI_FORMAT_UNKNOWN;
+                //case PF_B8G8R8A8_UINT:                   return DXGI_FORMAT_UNKNOWN;
+                //case PF_B8G8R8A8_SINT:                   return DXGI_FORMAT_UNKNOWN;
+                //case PF_B8G8R8A8_SRGB:                   return DXGI_FORMAT_UNKNOWN;
+                //case PF_A8B8G8R8_UNORM_PACK32:           return DXGI_FORMAT_UNKNOWN;
+                //case PF_A8B8G8R8_SNORM_PACK32:           return DXGI_FORMAT_UNKNOWN;
+                //case PF_A8B8G8R8_USCALED_PACK32:         return DXGI_FORMAT_UNKNOWN;
+                //case PF_A8B8G8R8_SSCALED_PACK32:         return DXGI_FORMAT_UNKNOWN;
+                //case PF_A8B8G8R8_UINT_PACK32:            return DXGI_FORMAT_UNKNOWN;
+                //case PF_A8B8G8R8_SINT_PACK32:            return DXGI_FORMAT_UNKNOWN;
+                //case PF_A8B8G8R8_SRGB_PACK32:            return DXGI_FORMAT_UNKNOWN;
+                //case PF_A2R10G10B10_UNORM_PACK32:        return DXGI_FORMAT_UNKNOWN;
+                //case PF_A2R10G10B10_SNORM_PACK32:        return DXGI_FORMAT_UNKNOWN;
+                //case PF_A2R10G10B10_USCALED_PACK32:      return DXGI_FORMAT_UNKNOWN;
+                //case PF_A2R10G10B10_SSCALED_PACK32:      return DXGI_FORMAT_UNKNOWN;
+                //case PF_A2R10G10B10_UINT_PACK32:         return DXGI_FORMAT_UNKNOWN;
+                //case PF_A2R10G10B10_SINT_PACK32:         return DXGI_FORMAT_UNKNOWN;
+                case PF_A2B10G10R10_UNORM_PACK32:        return DXGI_FORMAT_R10G10B10A2_UNORM;
+                //case PF_A2B10G10R10_SNORM_PACK32:        return DXGI_FORMAT_UNKNOWN;
+                //case PF_A2B10G10R10_USCALED_PACK32:      return DXGI_FORMAT_UNKNOWN;
+                //case PF_A2B10G10R10_SSCALED_PACK32:      return DXGI_FORMAT_UNKNOWN;
+                case PF_A2B10G10R10_UINT_PACK32:         return DXGI_FORMAT_R10G10B10A2_UINT;
+                //case PF_A2B10G10R10_SINT_PACK32:         return DXGI_FORMAT_UNKNOWN;
+                case PF_R16_UNORM:                       return DXGI_FORMAT_R16_UNORM;
+                case PF_R16_SNORM:                       return DXGI_FORMAT_R16_SNORM;
+                //case PF_R16_USCALED:                     return DXGI_FORMAT_UNKNOWN;
+                //case PF_R16_SSCALED:                     return DXGI_FORMAT_UNKNOWN;
+                case PF_R16_UINT:                        return DXGI_FORMAT_R16_UINT;
+                case PF_R16_SINT:                        return DXGI_FORMAT_R16_SINT;
+                case PF_R16_SFLOAT:                      return DXGI_FORMAT_R16_FLOAT;
+                case PF_R16G16_UNORM:                    return DXGI_FORMAT_R16G16_UNORM;
+                case PF_R16G16_SNORM:                    return DXGI_FORMAT_R16G16_SNORM;
+                //case PF_R16G16_USCALED:                  return DXGI_FORMAT_UNKNOWN;
+                //case PF_R16G16_SSCALED:                  return DXGI_FORMAT_UNKNOWN;
+                case PF_R16G16_UINT:                     return DXGI_FORMAT_R16G16_UINT;
+                case PF_R16G16_SINT:                     return DXGI_FORMAT_R16G16_SINT;
+                case PF_R16G16_SFLOAT:                   return DXGI_FORMAT_R16G16_FLOAT;
+                //case PF_R16G16B16_UNORM:                 return DXGI_FORMAT_UNKNOWN;
+                //case PF_R16G16B16_SNORM:                 return DXGI_FORMAT_UNKNOWN;
+                //case PF_R16G16B16_USCALED:               return DXGI_FORMAT_UNKNOWN;
+                //case PF_R16G16B16_SSCALED:               return DXGI_FORMAT_UNKNOWN;
+                //case PF_R16G16B16_UINT:                  return DXGI_FORMAT_UNKNOWN;
+                //case PF_R16G16B16_SINT:                  return DXGI_FORMAT_UNKNOWN;
+                //case PF_R16G16B16_SFLOAT:                return DXGI_FORMAT_UNKNOWN;
+                case PF_R16G16B16A16_UNORM:              return DXGI_FORMAT_R16G16B16A16_UNORM;
+                case PF_R16G16B16A16_SNORM:              return DXGI_FORMAT_R16G16B16A16_SNORM;
+                //case PF_R16G16B16A16_USCALED:            return DXGI_FORMAT_UNKNOWN;
+                //case PF_R16G16B16A16_SSCALED:            return DXGI_FORMAT_UNKNOWN;
+                case PF_R16G16B16A16_UINT:               return DXGI_FORMAT_R16G16B16A16_UINT;
+                case PF_R16G16B16A16_SINT:               return DXGI_FORMAT_R16G16B16A16_SINT;
+                case PF_R16G16B16A16_SFLOAT:             return DXGI_FORMAT_R16G16B16A16_FLOAT;
+                case PF_R32_UINT:                        return DXGI_FORMAT_R32_UINT;
+                case PF_R32_SINT:                        return DXGI_FORMAT_R32_SINT;
+                case PF_R32_SFLOAT:                      return DXGI_FORMAT_R32_FLOAT;
+                case PF_R32G32_UINT:                     return DXGI_FORMAT_R32G32_UINT;
+                case PF_R32G32_SINT:                     return DXGI_FORMAT_R32G32_SINT;
+                case PF_R32G32_SFLOAT:                   return DXGI_FORMAT_R32G32_FLOAT;
+                case PF_R32G32B32_UINT:                  return DXGI_FORMAT_R32G32B32_UINT;
+                case PF_R32G32B32_SINT:                  return DXGI_FORMAT_R32G32B32_SINT;
+                case PF_R32G32B32_SFLOAT:                return DXGI_FORMAT_R32G32B32_FLOAT;
+                case PF_R32G32B32A32_UINT:               return DXGI_FORMAT_R32G32B32A32_UINT;
+                case PF_R32G32B32A32_SINT:               return DXGI_FORMAT_R32G32B32A32_SINT;
+                case PF_R32G32B32A32_SFLOAT:             return DXGI_FORMAT_R32G32B32A32_FLOAT;
+                //case PF_R64_UINT:                        return DXGI_FORMAT_UNKNOWN;
+                //case PF_R64_SINT:                        return DXGI_FORMAT_UNKNOWN;
+                //case PF_R64_SFLOAT:                      return DXGI_FORMAT_UNKNOWN;
+                //case PF_R64G64_UINT:                     return DXGI_FORMAT_UNKNOWN;
+                //case PF_R64G64_SINT:                     return DXGI_FORMAT_UNKNOWN;
+                //case PF_R64G64_SFLOAT:                   return DXGI_FORMAT_UNKNOWN;
+                //case PF_R64G64B64_UINT:                  return DXGI_FORMAT_UNKNOWN;
+                //case PF_R64G64B64_SINT:                  return DXGI_FORMAT_UNKNOWN;
+                //case PF_R64G64B64_SFLOAT:                return DXGI_FORMAT_UNKNOWN;
+                //case PF_R64G64B64A64_UINT:               return DXGI_FORMAT_UNKNOWN;
+                //case PF_R64G64B64A64_SINT:               return DXGI_FORMAT_UNKNOWN;
+                //case PF_R64G64B64A64_SFLOAT:             return DXGI_FORMAT_UNKNOWN;
+                case PF_B10G11R11_UFLOAT_PACK32:         return DXGI_FORMAT_R11G11B10_FLOAT; // note, ufloat vs float
+                case PF_E5B9G9R9_UFLOAT_PACK32:          return DXGI_FORMAT_R9G9B9E5_SHAREDEXP;
+                case PF_D16_UNORM:                       return DXGI_FORMAT_D16_UNORM;
+                //case PF_X8_D24_UNORM_PACK32:             return DXGI_FORMAT_UNKNOWN;
+                case PF_D32_SFLOAT:                      return DXGI_FORMAT_D32_FLOAT;
+                //case PF_S8_UINT:                         return DXGI_FORMAT_UNKNOWN;
+                //case PF_D16_UNORM_S8_UINT:               return DXGI_FORMAT_UNKNOWN;
+                case PF_D24_UNORM_S8_UINT:               return DXGI_FORMAT_D24_UNORM_S8_UINT;
+                case PF_D32_SFLOAT_S8_UINT:              return DXGI_FORMAT_D32_FLOAT_S8X24_UINT;
+                //case PF_BC1_RGB_UNORM_BLOCK:             return DXGI_FORMAT_UNKNOWN;
+                //case PF_BC1_RGB_SRGB_BLOCK:              return DXGI_FORMAT_UNKNOWN;
+                case PF_BC1_RGBA_UNORM_BLOCK:            return DXGI_FORMAT_BC1_UNORM;
+                case PF_BC1_RGBA_SRGB_BLOCK:             return DXGI_FORMAT_BC1_UNORM_SRGB;
+                case PF_BC2_UNORM_BLOCK:                 return DXGI_FORMAT_BC2_UNORM;
+                case PF_BC2_SRGB_BLOCK:                  return DXGI_FORMAT_BC2_UNORM_SRGB;
+                case PF_BC3_UNORM_BLOCK:                 return DXGI_FORMAT_BC3_UNORM;
+                case PF_BC3_SRGB_BLOCK:                  return DXGI_FORMAT_BC3_UNORM_SRGB;
+                case PF_BC4_UNORM_BLOCK:                 return DXGI_FORMAT_BC4_UNORM;
+                case PF_BC4_SNORM_BLOCK:                 return DXGI_FORMAT_BC4_SNORM;
+                case PF_BC5_UNORM_BLOCK:                 return DXGI_FORMAT_BC5_UNORM;
+                case PF_BC5_SNORM_BLOCK:                 return DXGI_FORMAT_BC5_SNORM;
+                case PF_BC6H_UFLOAT_BLOCK:               return DXGI_FORMAT_BC6H_UF16;
+                case PF_BC6H_SFLOAT_BLOCK:               return DXGI_FORMAT_BC6H_SF16;
+                case PF_BC7_UNORM_BLOCK:                 return DXGI_FORMAT_BC7_UNORM;
+                case PF_BC7_SRGB_BLOCK:                  return DXGI_FORMAT_BC7_UNORM_SRGB;
+                case PF_G8_B8R8_2PLANE_420_UNORM:        return DXGI_FORMAT_NV12;
+                //case PF_G8_B8R8_2PLANE_420_UNORM:return DXGI_FORMAT_420_OPAQUE; // alternative to NV12, depends on whether tex layout is standard/non-opaque
+                //case PF_G16_B16R16_2PLANE_420_UNORM:return DXGI_FORMAT_P010;  // P010 and P016 are functionally equivalent, 10 means use 10 out of 16 bits
+                case PF_G16_B16R16_2PLANE_420_UNORM:     return DXGI_FORMAT_P016;
+                case PF_G8B8G8R8_422_UNORM:              return DXGI_FORMAT_YUY2;
+                case PF_A4R4G4B4_UNORM_PACK16:           return DXGI_FORMAT_B4G4R4A4_UNORM;
+                case PF_R4G4B4A4_UNORM_PACK16:           return DXGI_FORMAT_A4B4G4R4_UNORM;
+                // clang-format on
+                default:
+                    LOG_CRITICAL("Unsupported pixel format: {}", static_cast<uint32_t>(_format));
+                    return DXGI_FORMAT_UNKNOWN;
+            }
+        }
+
+        D3D12_RESOURCE_DIMENSION METoDxResourceDimension(ETextureDimension _dim) {
+            switch (_dim) {
+                case ETextureDimension::TEX_2D:
+                case ETextureDimension::TEX_2D_ARRAY:
+                case ETextureDimension::TEX_CUBE:
+                case ETextureDimension::TEX_CUBE_ARRAY: return D3D12_RESOURCE_DIMENSION::D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+                case ETextureDimension::TEX_3D: return D3D12_RESOURCE_DIMENSION::D3D12_RESOURCE_DIMENSION_TEXTURE3D;
+                default:
+                    LOG_CRITICAL("Unsupported texture dimension: {}", static_cast<uint32_t>(_dim));
+                    return D3D12_RESOURCE_DIMENSION_UNKNOWN;
+            }
+        }
+
+        D3D12_RESOURCE_FLAGS METoDxTextureResourceFlags(ETextureUsageFlags _me_flags) {
+            D3D12_RESOURCE_FLAGS ret = D3D12_RESOURCE_FLAG_NONE;
+
+            ASSERT(false == EnumHasAnyFlag(_me_flags, ETextureUsageFlags::CPU_VISIBLE));// won't create texture directly for upload/readback
+            //INPUT_ATTACHMENT         = 1 << 4, // no-op
+            //TRANSFER_SRC             = 1 << 5, // no-op
+            //TRANSFER_DST             = 1 << 6, // no-op
+            //SAMPLED                  = 1 << 7, // no-op
+            if (EnumHasAnyFlag(_me_flags, ETextureUsageFlags::UNORDERED_ACCESS)) {
+                ret |= D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+            }
+            if (EnumHasAnyFlag(_me_flags, ETextureUsageFlags::COLOR_ATTACHMENT)) {
+                ret |= D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+            }
+            //RESOLVE_ATTACHMENT       = 1 << 10, // no-op
+            if (EnumHasAnyFlag(_me_flags, ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT)) {
+                ret |= D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+                ASSERT(false == EnumHasAnyFlag(_me_flags, ETextureUsageFlags::COLOR_ATTACHMENT));// can't co-exist
+                ASSERT(false == EnumHasAnyFlag(_me_flags, ETextureUsageFlags::UNORDERED_ACCESS));
+            }
+
+            if (EnumHasAnyFlag(_me_flags,
+                               // clang-format off
+                  ETextureUsageFlags::TILLING_NONE
+                | ETextureUsageFlags::TRANSIENT_ATTACHMENT
+                | ETextureUsageFlags::FRAGMENT_DENSITY_MAP
+                | ETextureUsageFlags::FRAGMENT_SHADING_RATE_ATTACHMENT
+                | ETextureUsageFlags::VIDEO_DECODE
+                | ETextureUsageFlags::VIDEO_ENCODE
+                | ETextureUsageFlags::SRGB
+                | ETextureUsageFlags::PRESENT)) {
+                // clang-format on
+                LOG_WARNING("Unsupported texture usage flags: {}", static_cast<uint32_t>(_me_flags));
+            }
+            return ret;
+        }
+
+    }// namespace D3D12EnumTranslation
+
 }// namespace Moer::Render

@@ -87,6 +87,66 @@ namespace Moer::Render {
     //#define D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT (64)
     //#define D3D12_RAYTRACING_TRANSFORM3X4_BYTE_ALIGNMENT (16)
 
+    namespace D3D12EnumTranslation {
+        //static VkIndexType           METoVKIndexType(EIndexElementType _type);
+
+        //static VkFormat              METoVKFormat(EPixelFormat _format);
+        DXGI_FORMAT METoDxFormat(EPixelFormat _format);
+        //static VkImageType           METoVKImageType(ETextureDimension _dim);
+        D3D12_RESOURCE_DIMENSION METoDxResourceDimension(ETextureDimension _dim);
+        //static VkImageUsageFlags     METoVKImageUsageFlags(ETextureUsageFlags _me_flags);
+        D3D12_RESOURCE_FLAGS METoDxTextureResourceFlags(ETextureUsageFlags _me_flags);
+
+        //static EPixelFormat          VKToMEFormat(VkFormat _format);
+
+        //static VkBufferUsageFlags    METoVKBufferUsageFlags(EBufferUsageFlags _me_flags);
+        // for EBufferUsageFlags, we only care about uav and blas/tlas
+
+        //static VkDescriptorType      METoVkBufferDescriptorType(EBufferUsageFlags _type);
+        //static VkSampleCountFlagBits METoVKSampleCountFlagBits(uint32_t _me_count);
+        //static VkImageAspectFlags    METoVKImageAspectFlags(ETextureAspectFlags _flags);
+
+        //static VkImageViewType       METoVKImageViewType(ETextureDimension _dim);
+        //static VkImageLayout         METoVKImageLayout(ETextureLayout _layout);
+        //static VkAttachmentLoadOp    METoVKAttachmentLoadOp(EAttachmentLoadOp _load_op);
+        //static VkAttachmentStoreOp   METoVKAttachmentStoreOp(EAttachmentStoreOp _store_op);
+        //static VkFilter              METoVKImageFilter(ESamplerFilter _filter);
+
+        //static VkPipelineStageFlags2 METoVkPipelineStageFlags2(ERHIPipelineStageFlags _flags);
+        //static VkAccessFlags2        METoVkAccessFlags2(ERHIAccessFlags _flags);
+
+        //static VkCullModeFlags     METoVKCullModeFlags(ERasterizerCullMode _cull_mode);
+        //static VkPrimitiveTopology METoVKPrimitiveTopology(EPrimitiveTopology _primitive_type);
+        //static VkPolygonMode       METoVKPolygonMode(ERasterizerFillMode _fill_mode);
+
+        //static VkDescriptorType   METoVKDescriptorType(EShaderParameterType _type, EShaderCodeResourceBindingType _binding_type);
+        //static VkShaderStageFlags METoVKShaderStageFlags(EShaderType _type);
+
+        //static uint32_t METoVkQueueFamilyIndex(ECommandQueueType _type, const VulkanDevice* _device);
+        //static uint32_t METoVkQueueFamilyIndex(ECommandListType _type, const VulkanDevice* _device);
+
+        //static VkFilter             METoVKMinMagFilterMode(ESamplerFilter _filter);
+        //static VkSamplerMipmapMode  METoVKMipmapMode(ESamplerFilter _filter);
+        //static VkSamplerAddressMode METoVKWrapMode(ESamplerAddressMode _address_mode);
+        //static VkCompareOp          METoVKCompareOpSampler(ESamplerCompareFunction _compare_op);
+
+        //static VkCompareOp METoVKCompareOp(ECompareOption _compare_op);
+        //static VkStencilOp METoVKStencilOp(EStencilOp _stencil_op);
+
+        //static VkBlendOp     METoVKBlendOp(EBlendOperation _blend_op);
+        //static VkBlendFactor METoVKBlendFactor(EBlendFactor _blend_factor);
+
+        //static VkVertexInputRate METoVKVertexInputRate(EVertexInputRate _me_rate);
+
+        //static VkQueueFlagBits METoVKQueueFlagBits(EQueueType _type);
+
+        ////Raytracing
+        //static VkGeometryTypeKHR                    METoVKGeometryType(ERayTracingGeometryType _type);
+        //static VkGeometryFlagsKHR                   METoVKGeometryFlags(ERayTracingGeometryFlags _flags);
+        //static VkBuildAccelerationStructureFlagsKHR METoVKAccelerationStructureBuildType(ERayTracingAccelerationStructureBuildFlags _type);
+        //static VkBuildAccelerationStructureModeKHR  METoVKBuildAccelerationStructureMode(ERaytracingBuildMode _mode);
+    }// namespace D3D12EnumTranslation
+
     class D3D12Device;
     class D3D12GpuGlobalAllocator;
     class D3D12GraphicsCommandQueue;
@@ -144,13 +204,27 @@ namespace Moer::Render {
                                       uint64           _byte_size,
                                       uint64           _alignment = D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT,
                                       D3D12_HEAP_TYPE  _heap_type = D3D12_HEAP_TYPE_DEFAULT);
-        // todo texture heap
+        Allocation AllocateTextureHeap(std::string_view _name,
+                                       uint64           _byte_size,
+                                       uint64           _alignment  = D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT,
+                                       bool             _is_rtv_dsv = false);
     };
-
 
     class D3D12Texture final : public Texture, public D3D12DeviceChild {
     private:
-        Allocation          allocation;
+        Allocation allocation;
+
+    public:
+        D3D12Texture(D3D12Device* _device, const TextureInfo& _info);
+        D3D12Texture(D3D12Device* _device, const TextureInfo& _info, Allocation&& _allocation);
+
+        ~D3D12Texture();
+
+        ID3D12Resource* Native() const { return allocation.resource; }
+
+        void            Destroy() override;                            // from Texxture.RHIResource
+        uint            GetMipByteSize(uint _mip_idx) const override;  // from Texture
+        RENDER_API void SetName(const std::string_view _name) override;// from Texture
     };
 
     // not for readback/upload
@@ -218,7 +292,6 @@ namespace Moer::Render {
     };
 
     class D3D12ResourceStateTracker {
-
     };
 
     //class D3D12ResourceStateTracker {

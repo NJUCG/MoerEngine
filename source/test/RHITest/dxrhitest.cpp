@@ -62,6 +62,8 @@ int main(int argc, char** argv) {
 
         //LOG_INFO("{}", D3D12_PROPERTY_LAYOUT_FORMAT_TABLE::GetPlaneCount(DXGI_FORMAT_D24_UNORM_S8_UINT));
 
+        auto tex = device.CreateTexture(Extent2D(1280, 720), EPixelFormat::PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS);
+
         auto buf  = device.CreateBuffer<float>(534, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST);
         auto buf2 = device.CreateBuffer<float>(128, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST);
 
