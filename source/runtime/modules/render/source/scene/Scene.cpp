@@ -115,7 +115,7 @@ namespace Moer {
         }
 
         geometry_datas.resize(geometry_count);
-        geom_instances.resize(instance_count);
+        geom_instances.resize(geometry_count);
         vtx_views.resize(instance_count);
         idx_views.resize(instance_count);
         instance_datas.resize(instance_count);

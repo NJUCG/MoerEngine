@@ -901,9 +901,12 @@ namespace Moer::Render {
     };
     struct RaytracingSegment {
         uint vertex_offset;
+        uint index_offset;
+
+        uint first_vertex;
         uint vertex_count;
         uint vertex_stride;
-        uint primitive_offset;
+        uint first_primitive;
         uint primitive_count;
 
         ERayTracingGeometryType  type             = RTGT_TRIANGLES;

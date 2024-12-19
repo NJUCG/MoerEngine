@@ -85,6 +85,17 @@ namespace Moer {
         uint  num_mip_levels;
     };
 
+    namespace DI {
+        struct PackedReservoir {
+            uint  light_data;
+            uint  uv_data;
+            uint  visibility;
+            uint  distance_age;
+            float target_pdf;
+            float weight;
+        };
+    };// namespace DI
+
 #ifdef __cplusplus
 }
 #else

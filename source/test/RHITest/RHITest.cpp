@@ -916,7 +916,7 @@ int main(int argc, const char** argv) {
                     const MeshGeometry& geom             = *mesh->geometries[i];
                     uint                first_idx        = geom.local_idx_offset + mesh->idx_offset;
                     uint                first_vertex_idx = geom.local_vtx_offset + mesh->vtx_offset;
-                    mesh_draw_dat.EmplaceDrawIndexed(first_idx, geom.local_idx_count, first_vertex_idx, geom_idx);
+                    mesh_draw_dat.EmplaceDrawIndexed(first_idx, geom.local_idx_count, first_vertex_idx, idx);
                 }
                 geom_idx += mesh->geometries.size();
             });

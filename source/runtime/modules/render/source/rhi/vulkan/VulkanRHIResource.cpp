@@ -1870,11 +1870,13 @@ namespace Moer::Render {
 
     void GetBuildRaytracingGeometryInfo(
         Array<VkAccelerationStructureGeometryKHR>& _build_info,
+        Array<uint>& _primitive_counts,
         Array<VkAccelerationStructureBuildRangeInfoKHR>& _build_ranges,
         const RaytracingGeometryInfo& _info){
 
             _build_info.reserve(_info.segments.size());
             _build_ranges.reserve(_info.segments.size());
+            _primitive_counts.reserve(_info.segments.size());
 
             VulkanBuffer* vertex_buffer =  ResourceCast(_info.vertex_buffer.Get());
             VulkanBuffer* index_buffer =  ResourceCast(_info.index_buffer.Get());
@@ -1884,7 +1886,7 @@ namespace Moer::Render {
             assert(_info.segments.size() > 0 && "No segment to build");
 
             VkGeometryTypeKHR geometry_type = VulkanEnumTranslator::METoVKGeometryType(_info.segments[0].type);
-
+            
             for (const auto& segment : _info.segments) {
                 //TODO: currently only support triangle
                 assert(segment.type == RTGT_TRIANGLES && "Unsupported geometry type");
@@ -1894,17 +1896,18 @@ namespace Moer::Render {
                 geometry.geometry.triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
                 geometry.geometry.triangles.vertexFormat = g_platform_pixel_formats[_info.vertex_format].format;
                 geometry.geometry.triangles.vertexStride = segment.vertex_stride;
-                geometry.geometry.triangles.vertexData.deviceAddress = vtx_addr + segment.vertex_offset * segment.vertex_stride;
-                geometry.geometry.triangles.maxVertex = _info.max_vertex_count;
+                geometry.geometry.triangles.vertexData.deviceAddress = vtx_addr + segment.vertex_offset;
+                geometry.geometry.triangles.maxVertex = _info.max_vertex_count - segment.vertex_offset;
                 geometry.geometry.triangles.indexType = VulkanEnumTranslator::METoVKIndexType(_info.index_type);
-                geometry.geometry.triangles.indexData.deviceAddress = idx_addr + segment.primitive_offset * 3 * (_info.index_type == IET_UINT32 ? 4 : 2); 
+                geometry.geometry.triangles.indexData.deviceAddress = idx_addr + segment.index_offset; 
                 geometry.geometry.triangles.transformData.deviceAddress = 0;
 
                 _build_info.push_back(geometry);
+                _primitive_counts.push_back(segment.primitive_count);
 
                 VkAccelerationStructureBuildRangeInfoKHR range{};
-                range.firstVertex = 0;
-                range.primitiveOffset = 0;
+                range.firstVertex = segment.first_vertex;
+                range.primitiveOffset = segment.first_primitive * 3 * (_info.index_type == EIndexElementType::IET_UINT16 ? 2 : 4);
                 range.primitiveCount = segment.primitive_count;
                 range.transformOffset = 0;
 
@@ -1916,8 +1919,8 @@ namespace Moer::Render {
         
         VkAccelerationStructureBuildTypeKHR                 build_type = VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR;
         VkAccelerationStructureBuildGeometryInfoKHR build_info{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
-        
-        GetBuildRaytracingGeometryInfo(build_geometries, build_ranges, _info);
+        Array<uint> primitive_counts;
+        GetBuildRaytracingGeometryInfo(build_geometries,primitive_counts, build_ranges, _info);
         build_info.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
         build_info.flags = VulkanEnumTranslator::METoVKAccelerationStructureBuildType(_info.build_flags);
         build_info.geometryCount = build_geometries.size();
@@ -1926,7 +1929,7 @@ namespace Moer::Render {
             m_device->GetDevice(), 
             build_type, 
             &build_info, 
-            &_info.primitive_count, 
+            primitive_counts.data(), 
             &build_sizes_info);
 
 

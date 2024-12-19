@@ -528,7 +528,7 @@ int main(int argc, const char** argv) {
                         uint idx_offset = mesh->idx_offset + mesh->geometries[i]->local_idx_offset;
                         uint idx_count  = mesh->geometries[i]->local_idx_count;
 
-                        rt_geo_info.segments.emplace_back(vtx_offset, vtx_count, sizeof(float3), idx_offset / 3, idx_count / 3);
+                        rt_geo_info.segments.emplace_back(0, 0, vtx_offset, vtx_count, sizeof(float3), idx_offset / 3, idx_count / 3);
                     }
 
                     RaytracingGeometryRef blas = device.CreateRaytracingGeometry(rt_geo_info);

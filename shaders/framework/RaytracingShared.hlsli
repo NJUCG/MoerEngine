@@ -67,10 +67,6 @@ float3 _GetXoffset(float3 X, float3 N) {
 
   return select(abs(X) < origin, X + fOff, iPos);
 }
-struct RTPrimitive {
-  uint3 indices;
-  float world_uv_units;
-};
 
 #define RT_MATERIAL_INDEX_BIT_OFFSET 8
 #define RT_MATERIAL_TYPE_MASK 0xff
@@ -142,6 +138,122 @@ struct RTMaterialProp {
   float metalness;
   float curvature;
 };
+#include "shared/lighting/ShaderParameters.h"
+namespace Moer {
+#pragma region[ ReSTIR ]
+
+namespace DI {
+
+// Encoding helper constants for PackedDIReservoir.visibility
+static const uint s_packed_di_reservoir_visibility_mask = 0x3ffff;
+static const uint s_packed_di_reservoir_visibility_channel_max = 0x3f;
+static const uint s_packed_di_reservoir_visibility_channel_shift = 6;
+static const uint s_packed_di_reservoir_M_shift = 18;
+static const uint s_packed_di_reservoir_max_M = 0x3fff;
+
+// Encoding helper constants for PackedDIReservoir.distance_age
+static const uint s_packed_di_reservoir_distance_channel_bits = 8;
+static const uint s_packed_di_reservoir_distance_x_shift = 0;
+static const uint s_packed_di_reservoir_distance_y_shift = 8;
+static const uint s_packed_di_reservoir_age_shift = 16;
+static const uint s_packed_di_reservoir_max_age = 0xff;
+static const uint s_packed_di_reservoir_distance_mask =
+    (1u << s_packed_di_reservoir_distance_channel_bits) - 1;
+static const int s_packed_di_reservoir_max_distance =
+    int((1u << (s_packed_di_reservoir_distance_channel_bits - 1)) - 1);
+
+// Light index helpers
+static const uint s_di_reservoir_light_valid_bit = 0x80000000;
+static const uint s_di_reservoir_light_index_mask = 0x7FFFFFFF;
+
+struct Reservoir {
+  uint light_data;
+  uint uv_data;
+  float weight_sum;
+  float target_pdf;
+  float M;
+  uint packed_visibility;
+  int2 spatial_dist;
+  uint age;               // frame
+  float canonical_weight; // Cannonical weight when using pairwise MIS
+
+  bool StreamSample(uint _light_idx, float2 _uv, float _random,
+                    float _target_pdf, float _inv_src_pdf) {
+    float ris_weight = _target_pdf * _inv_src_pdf;
+
+    M += 1;
+
+    weight_sum += ris_weight;
+
+    bool select = (_random * weight_sum) < ris_weight;
+    if (select) {
+      light_data = _light_idx | s_di_reservoir_light_valid_bit;
+      uv_data = uint(saturate(_uv.x) * 0xffff) |
+                (uint(saturate(_uv.y) * 0xffff) << 16);
+      target_pdf = _target_pdf;
+    }
+
+    return select;
+  }
+};
+
+PackedReservoir PackReservoir(Reservoir r) {
+  PackedReservoir packed;
+  packed.light_data = r.light_data;
+  packed.uv_data = r.uv_data;
+  packed.target_pdf = r.target_pdf;
+  packed.visibility =
+      r.packed_visibility | (min(uint(r.M), s_packed_di_reservoir_max_M)
+                             << s_packed_di_reservoir_M_shift);
+  packed.distance_age =
+      (uint(r.spatial_dist.x) & s_packed_di_reservoir_distance_mask)
+          << s_packed_di_reservoir_distance_x_shift |
+      (uint(r.spatial_dist.y) & s_packed_di_reservoir_distance_mask)
+          << s_packed_di_reservoir_distance_y_shift |
+      clamp(r.age, 0, s_packed_di_reservoir_max_age)
+          << s_packed_di_reservoir_age_shift;
+  packed.weight = r.weight_sum;
+  return packed;
+}
+
+Reservoir EmptyReservoir() {
+  Reservoir r;
+  r.light_data = 0;
+  r.uv_data = 0;
+  r.weight_sum = 0;
+  r.target_pdf = 0;
+  r.M = 0;
+  r.packed_visibility = 0;
+  r.spatial_dist = int2(0, 0);
+  r.age = 0;
+  r.canonical_weight = 0;
+  return r;
+}
+
+Reservoir UnpackReservoir(PackedReservoir r) {
+  Reservoir unpacked;
+  unpacked.light_data = r.light_data;
+  unpacked.uv_data = r.uv_data;
+  unpacked.target_pdf = r.target_pdf;
+  unpacked.packed_visibility = r.visibility;
+  unpacked.M = (r.visibility >> s_packed_di_reservoir_M_shift) &
+               s_packed_di_reservoir_max_M;
+  unpacked.spatial_dist =
+      int2((r.distance_age >> s_packed_di_reservoir_distance_x_shift) &
+               s_packed_di_reservoir_distance_mask,
+           (r.distance_age >> s_packed_di_reservoir_distance_y_shift) &
+               s_packed_di_reservoir_distance_mask);
+  unpacked.age = (r.distance_age >> s_packed_di_reservoir_age_shift) &
+                 s_packed_di_reservoir_max_age;
+  unpacked.weight_sum = r.weight;
+
+  if (isinf(unpacked.weight_sum) || isnan(unpacked.weight_sum))
+    unpacked = EmptyReservoir();
+  return unpacked;
+}
+}; // namespace DI
+#pragma endregion
+} // namespace Moer
 
 namespace Raytracing {
 #pragma region[ material ]
