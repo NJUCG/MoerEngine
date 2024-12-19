@@ -439,7 +439,7 @@ namespace Moer::Render {
             return std::move(*this);
         }
 
-        CmdSubmit&& Wait(WaitEvent _event) {
+        CmdSubmit&& Wait(WaitEvent _event) {  // FIX waitevent.timelinehandle maybe not a fence?
             wait_events.emplace_back(_event);
             return std::move(*this);
         }

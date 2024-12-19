@@ -127,7 +127,11 @@ namespace Moer::Render {
         using std::string;
         assert(_config_as_json["rhi"].get<string>() == "d3d12");
 
-         return D3D12RHIConfig();
+         D3D12RHIConfig config;
+
+         config.force_sync = _config_as_json.value("force_sync", false);
+
+         return config;
      }
 
     RenderDevice& RenderDevice::Get() {

@@ -25,7 +25,7 @@ Affinity::Affinity(std::initializer_list<Core> _cores) {
 }
 
 #if PLATFORM_WINDOWS
-#define WIN32_LEAN_AND_MEAN 1
+
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
