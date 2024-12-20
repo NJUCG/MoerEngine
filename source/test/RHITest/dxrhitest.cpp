@@ -80,15 +80,20 @@ int main(int argc, char** argv) {
         capturer->Begin("D:\\codebase\\repos\\MoerEngine\\target\\bin\\test.wpix");
         //while (timeline < 10) {
         //    if (timeline > 2) fence->Wait(timeline - 2);
-            LOG_INFO("dispatch work on {}", ++timeline);
-    /*        list.CopyFrom(ToSpan(a), buf->GetView());
-            list.CopyFrom(buf->GetView(0, 5 * sizeof(float)), buf2->GetView(0, 5 * sizeof(float)));
-            list.CopyFrom(buf2->GetView(0, 5 * sizeof(float)), ToSpan(a).subspan(5 * sizeof(float), 5 * sizeof(float)));*/
+        LOG_INFO("dispatch work on {}", ++timeline);
+        //list.Barriers(EQueueType::Graphics, EQueueType::Graphics, EPassType::Copy, WriteBuffer{buf->GetView(), EBufferState::TRANSFER});
+        list.CopyFrom(ToSpan(a), buf->GetView());
+        //list.Barriers(EQueueType::Graphics, EQueueType::Graphics, EPassType::Copy, ReadBuffer{buf->GetView(), EBufferState::TRANSFER});
+        //list.Barriers(EQueueType::Graphics, EQueueType::Graphics, EPassType::Copy, WriteBuffer{buf2->GetView(), EBufferState::TRANSFER});
+        list.CopyFrom(buf->GetView(0, 5 * sizeof(float)), buf2->GetView(0, 5 * sizeof(float)));
+        //list.Barriers(EQueueType::Graphics, EQueueType::Graphics, EPassType::Copy, ReadBuffer{buf2->GetView(), EBufferState::TRANSFER});
 
-            list.CopyFrom(ToSpan(a), tex->GetView());
-            //list.CopyFrom(tex->GetView(0), buf->GetView(4));
-            //list.CopyFrom(buf->GetView(), tex->GetView());
-            gfx_queue.Execute(list.Submit().Signal(fence, timeline));
+        list.CopyFrom(buf2->GetView(0, 5 * sizeof(float)), ToSpan(a).subspan(5 * sizeof(float), 5 * sizeof(float)));
+
+        //list.CopyFrom(ToSpan(a), tex->GetView());
+        //list.CopyFrom(tex->GetView(0), buf->GetView(4));
+        //list.CopyFrom(buf->GetView(), tex->GetView());
+        gfx_queue.Execute(list.Submit().Signal(fence, timeline));
         //}
         gfx_queue.Sync();
         capturer->End();

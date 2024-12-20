@@ -564,6 +564,28 @@ namespace Moer::Render {
             tracker.RecordState(src_texture, {.layout = D3D12_BARRIER_LAYOUT_COPY_SOURCE, .sync = D3D12_BARRIER_SYNC_COPY, .access = D3D12_BARRIER_ACCESS_COPY_SOURCE});
         }
 
+        void Visit(const BarrierCmd& _cmd) {
+            // we not ignore _cmd.IsQueueTransition()
+            ASSERT(!_cmd.IsQueueTransition());
+
+            for (const auto& barrier : _cmd.ReadBuffers()) {
+                D3D12Buffer* buffer = reinterpret_cast<D3D12Buffer*>(barrier.handle);
+                tracker.RecordState(buffer, barrier.state, barrier.pass_type, false);
+            }
+            for (const auto& barrier : _cmd.WriteBuffers()) {
+                D3D12Buffer* buffer = reinterpret_cast<D3D12Buffer*>(barrier.handle);
+                tracker.RecordState(buffer, barrier.state, barrier.pass_type, true);
+            }
+            for (const auto& barrier : _cmd.ReadTextures()) {
+                D3D12Texture* texture = reinterpret_cast<D3D12Texture*>(barrier.handle);
+                tracker.RecordState(texture, barrier.state, barrier.pass_type, false);
+            }
+            for (const auto& barrier : _cmd.WriteTextures()) {
+                D3D12Texture* texture = reinterpret_cast<D3D12Texture*>(barrier.handle);
+                tracker.RecordState(texture, barrier.state, barrier.pass_type, true);
+            }
+        }
+
         void VisitCmd(const Command* _cmd) {
             switch (_cmd->Type()) {
                 case Command::EType::UploadBuffer:
@@ -586,6 +608,9 @@ namespace Moer::Render {
                     break;
                 case Command::EType::TextureToTexture:
                     Visit(static_cast<const CopyTextureCmd&>(*_cmd));
+                    break;
+                case Command::EType::Barrier:
+                    Visit(static_cast<const BarrierCmd&>(*_cmd));
                     break;
                 default:
                     FATAL("not implemented cmdtype {}", Command::typenames[uint(_cmd->Type())]);
@@ -699,6 +724,8 @@ namespace Moer::Render {
                 case Command::EType::TextureToTexture:
                     Visit(static_cast<const CopyTextureCmd&>(*_cmd));
                     break;
+                case Command::EType::Barrier:
+                    break;// no-op
                 default:
                     FATAL("not implemented cmdtype {}", Command::typenames[uint(_cmd->Type())]);
             }
