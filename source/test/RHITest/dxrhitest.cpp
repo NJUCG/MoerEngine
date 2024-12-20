@@ -78,15 +78,15 @@ int main(int argc, char** argv) {
         }
         CommandList list;
         capturer->Begin("D:\\codebase\\repos\\MoerEngine\\target\\bin\\test.wpix");
-        //while (timeline < 10) {
-        //    if (timeline > 2) fence->Wait(timeline - 2);
-        LOG_INFO("dispatch work on {}", ++timeline);
-        list.CopyFrom(ToSpan(a), buf->GetView());
-        list.CopyFrom(buf->GetView(0, 5 * sizeof(float)), buf2->GetView(0, 5 * sizeof(float)));
-        list.CopyFrom(buf2->GetView(0, 5 * sizeof(float)), ToSpan(a).subspan(5 * sizeof(float), 5 * sizeof(float)));
+        while (timeline < 10) {
+            if (timeline > 2) fence->Wait(timeline - 2);
+            LOG_INFO("dispatch work on {}", ++timeline);
+            list.CopyFrom(ToSpan(a), buf->GetView());
+            list.CopyFrom(buf->GetView(0, 5 * sizeof(float)), buf2->GetView(0, 5 * sizeof(float)));
+            list.CopyFrom(buf2->GetView(0, 5 * sizeof(float)), ToSpan(a).subspan(5 * sizeof(float), 5 * sizeof(float)));
 
-        gfx_queue.Execute(list.Submit().Signal(fence, timeline));
-        //}
+            gfx_queue.Execute(list.Submit().Signal(fence, timeline));
+        }
         gfx_queue.Sync();
         capturer->End();
         LOG_INFO("dispatch work done");

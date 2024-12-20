@@ -521,11 +521,21 @@ namespace Moer::Render {
 
         D3D12CommandPreprocessVisitor(D3D12CommandResourceAllocator& allocator) : allocator(allocator), tracker(allocator.GetResourceStateTracker()) {}
 
-        void Visit(const UploadBufferCmd& _cmd) {}
+        void Visit(const UploadBufferCmd& _cmd) {
+            D3D12Buffer* dst_buffer = reinterpret_cast<D3D12Buffer*>(_cmd.Handle());
+            tracker.RecordState(dst_buffer, {.sync = D3D12_BARRIER_SYNC_COPY, .access = D3D12_BARRIER_ACCESS_COPY_DEST});
+        }
 
-        void Visit(const CopyBackBufferCmd& _cmd) {}
+        void Visit(const CopyBackBufferCmd& _cmd) {
+            D3D12Buffer* src_buffer = reinterpret_cast<D3D12Buffer*>(_cmd.Handle());
+            tracker.RecordState(src_buffer, {.sync = D3D12_BARRIER_SYNC_COPY, .access = D3D12_BARRIER_ACCESS_COPY_SOURCE});
+        }
 
         void Visit(const CopyBufferCmd& _cmd) {
+            D3D12Buffer* dst_buffer = reinterpret_cast<D3D12Buffer*>(_cmd.DstHandle());
+            D3D12Buffer* src_buffer = reinterpret_cast<D3D12Buffer*>(_cmd.SrcHandle());
+            tracker.RecordState(dst_buffer, {.sync = D3D12_BARRIER_SYNC_COPY, .access = D3D12_BARRIER_ACCESS_COPY_DEST});
+            tracker.RecordState(src_buffer, {.sync = D3D12_BARRIER_SYNC_COPY, .access = D3D12_BARRIER_ACCESS_COPY_SOURCE});
         }
 
         void VisitCmd(const Command* _cmd) {
@@ -558,40 +568,11 @@ namespace Moer::Render {
             cmd_list.CopyData(tmp_buffer, data_span.data(), data_span.size_bytes());
             D3D12Buffer* buffer = reinterpret_cast<D3D12Buffer*>(_cmd.Handle());
             cmd_list.CopyBuffer(tmp_buffer.buffer, buffer, _cmd.ByteSize(), tmp_buffer.byte_offset, _cmd.Offset());
-
-            // FIX state barrier!!
-            {
-                D3D12_BUFFER_BARRIER BufBarriers[] = {
-                    CD3DX12_BUFFER_BARRIER(
-                        D3D12_BARRIER_SYNC_COPY,
-                        D3D12_BARRIER_SYNC_COPY,
-                        D3D12_BARRIER_ACCESS_COPY_DEST,
-                        D3D12_BARRIER_ACCESS_COPY_SOURCE,
-                        buffer->Native())};
-                D3D12_BARRIER_GROUP BufBarrierGroups[] = {
-                    CD3DX12_BARRIER_GROUP(1, BufBarriers)};
-                cmd_list.Native()->Barrier(1, BufBarrierGroups);
-            }
         }
 
         void Visit(const CopyBackBufferCmd& _cmd) {
             auto         tmp_buffer = allocator.AllocateReadbackBuffer(_cmd.ByteSize(), 256);// ? not sure alignment
             D3D12Buffer* src_buffer = reinterpret_cast<D3D12Buffer*>(_cmd.Handle());
-            // FIX state barrier!!
-
-            {
-                D3D12_BUFFER_BARRIER BufBarriers[] = {
-                    CD3DX12_BUFFER_BARRIER(
-                        D3D12_BARRIER_SYNC_COPY,
-                        D3D12_BARRIER_SYNC_COPY,
-                        D3D12_BARRIER_ACCESS_COPY_DEST,
-                        D3D12_BARRIER_ACCESS_COPY_SOURCE,
-                        src_buffer->Native())};
-                D3D12_BARRIER_GROUP BufBarrierGroups[] = {
-                    CD3DX12_BARRIER_GROUP(1, BufBarriers)};
-                cmd_list.Native()->Barrier(1, BufBarrierGroups);
-            }
-
             cmd_list.CopyBuffer(src_buffer, tmp_buffer.buffer, _cmd.ByteSize(), _cmd.Offset(), tmp_buffer.byte_offset);
             allocator.AddOnComplete([tmp_buffer, &cmd_list(cmd_list), dst(_cmd.Data()), size(_cmd.ByteSize())] {
                 cmd_list.CopyData(dst, tmp_buffer, size);
@@ -687,20 +668,20 @@ namespace Moer::Render {
         if (!_submit.cmds.empty()) {
             D3D12CommandVisitor           cmd_visitor(*allocator);
             D3D12CommandPreprocessVisitor preprocess_visitor(*allocator);
-            //D3D12ResourceStateTracker     tracker;
-            //allocator.Native()->Reset();
-            for (const auto& cmd : _submit.cmds) {// todo reorder
-                //preprocess_visitor.Visit(cmd);
+            auto&                         tracker = allocator->GetResourceStateTracker();
 
-                //tracker.ResolveBarrier();
-                //tracker.DispatchBarrier(cmd_list);
+            for (const auto& cmd : _submit.cmds) {// todo reorder
+                preprocess_visitor.VisitCmd(cmd.get());
+
+                tracker.ResolveBarriers();
+                tracker.DispatchBarriers(cmd_list->Native());
 
                 cmd_visitor.VisitCmd(cmd.get());
             }
             {
-                //tracker.RestoreState();
-                //tracker.DispatchBarriers(cmd_list);
-                //tracker.Reset();
+                tracker.RestoreState();
+                tracker.DispatchBarriers(cmd_list->Native());
+                tracker.Reset();
             }
         }
         cmd_list->End();
@@ -1374,7 +1355,7 @@ namespace Moer::Render {
                 case PF_R4G4B4A4_UNORM_PACK16:           return DXGI_FORMAT_A4B4G4R4_UNORM;
                 // clang-format on
                 default:
-                    LOG_CRITICAL("Unsupported pixel format: {}", static_cast<uint32_t>(_format));
+                    FATAL("Unsupported pixel format: {}", static_cast<uint32_t>(_format));
                     return DXGI_FORMAT_UNKNOWN;
             }
         }
@@ -1387,7 +1368,7 @@ namespace Moer::Render {
                 case ETextureDimension::TEX_CUBE_ARRAY: return D3D12_RESOURCE_DIMENSION::D3D12_RESOURCE_DIMENSION_TEXTURE2D;
                 case ETextureDimension::TEX_3D: return D3D12_RESOURCE_DIMENSION::D3D12_RESOURCE_DIMENSION_TEXTURE3D;
                 default:
-                    LOG_CRITICAL("Unsupported texture dimension: {}", static_cast<uint32_t>(_dim));
+                    FATAL("Unsupported texture dimension: {}", static_cast<uint32_t>(_dim));
                     return D3D12_RESOURCE_DIMENSION_UNKNOWN;
             }
         }
@@ -1430,5 +1411,248 @@ namespace Moer::Render {
         }
 
     }// namespace D3D12EnumTranslation
+
+    void D3D12ResourceStateTracker::RecordState(D3D12Texture* texture, ETextureState _state, EPassType _pass_type, bool _is_write) {
+        TextureStateDescription desc;
+        switch (_state) {
+            case ETextureState::UNDEFINED:
+                desc = {.layout = D3D12_BARRIER_LAYOUT_UNDEFINED, .sync = D3D12_BARRIER_SYNC_NONE, .access = D3D12_BARRIER_ACCESS_NO_ACCESS};
+                break;
+            case ETextureState::TRANSFER:
+                desc = {.layout = _is_write ? D3D12_BARRIER_LAYOUT_COPY_DEST : D3D12_BARRIER_LAYOUT_COPY_SOURCE,
+                        .sync   = D3D12_BARRIER_SYNC_COPY,
+                        .access = _is_write ? D3D12_BARRIER_ACCESS_COPY_DEST : D3D12_BARRIER_ACCESS_COPY_SOURCE};
+                break;
+            case ETextureState::SHADER_RESOURCE:
+            case ETextureState::SAMPLE:
+                DASSERT(!_is_write);
+                DASSERT(_pass_type != EPassType::Copy);
+                desc = {.layout = D3D12_BARRIER_LAYOUT_SHADER_RESOURCE,
+                        .sync   = _pass_type == EPassType::Graphics ? D3D12_BARRIER_SYNC_DRAW : D3D12_BARRIER_SYNC_COMPUTE_SHADING,
+                        .access = D3D12_BARRIER_ACCESS_SHADER_RESOURCE};
+                break;
+            case ETextureState::RENDER_TARGET:
+                DASSERT(_is_write);
+                DASSERT(_pass_type == EPassType::Graphics);
+                desc = {.layout = D3D12_BARRIER_LAYOUT_RENDER_TARGET, .sync = D3D12_BARRIER_SYNC_RENDER_TARGET, .access = D3D12_BARRIER_ACCESS_RENDER_TARGET};
+                break;
+            case ETextureState::DEPTH_STENCIL:
+                DASSERT(_pass_type == EPassType::Graphics);
+                desc = {.layout = _is_write ? D3D12_BARRIER_LAYOUT_DEPTH_STENCIL_WRITE : D3D12_BARRIER_LAYOUT_DEPTH_STENCIL_READ,
+                        .sync   = D3D12_BARRIER_SYNC_COPY,
+                        .access = _is_write ? D3D12_BARRIER_ACCESS_DEPTH_STENCIL_WRITE : D3D12_BARRIER_ACCESS_DEPTH_STENCIL_READ};
+                break;
+            case ETextureState::UNORDERED_ACCESS:
+                DASSERT(_is_write);
+                DASSERT(_pass_type != EPassType::Copy);// NOTE there is a special case for clearUAV commands, buffer is viewed as UAV, but it works like a copy/transfer
+                desc = {.layout = D3D12_BARRIER_LAYOUT_UNORDERED_ACCESS,
+                        .sync   = _pass_type == EPassType::Graphics ? D3D12_BARRIER_SYNC_PIXEL_SHADING : D3D12_BARRIER_SYNC_COMPUTE_SHADING,
+                        .access = D3D12_BARRIER_ACCESS_UNORDERED_ACCESS};
+                break;
+            default:
+                FATAL("Unsupported texture state: {} {}", static_cast<uint32_t>(_state), static_cast<uint32_t>(_pass_type), _is_write);
+        }
+        RecordState(texture, desc);
+    }
+
+    void D3D12ResourceStateTracker::RecordState(D3D12Texture* texture, TextureStateDescription _required_state) {
+        if (auto it = texture_states.find(texture); it != texture_states.end()) {
+            auto& state = it->second.after;
+            if (_required_state.layout != D3D12_BARRIER_LAYOUT_UNDEFINED && state.layout != _required_state.layout) {
+                FATAL("texture in one layer should not have different layouts");
+            }
+            state.layout = _required_state.layout;
+            state.access |= _required_state.access;
+            state.sync |= _required_state.sync;
+        } else {
+            // new added, set the initial
+
+            // TODO consider queue transfer, e.g. state start from SRV
+            const TextureStateDescription init{
+                .layout = D3D12_BARRIER_LAYOUT_UNDEFINED,
+                .sync   = D3D12_BARRIER_SYNC_NONE,
+                .access = D3D12_BARRIER_ACCESS_NO_ACCESS,
+            };
+
+            texture_states[texture] = TextureState{
+                .before  = init,
+                .after   = _required_state,
+                .initial = init};
+        }
+        pending_textures.insert(texture);
+    }
+
+    void D3D12ResourceStateTracker::RecordState(D3D12Buffer* buffer, EBufferState _state, EPassType _pass_type, bool _is_write) {
+        BufferStateDescription desc;
+        switch (_state) {
+            case EBufferState::UNDEFINED:
+                desc = {.sync = D3D12_BARRIER_SYNC_NONE, .access = D3D12_BARRIER_ACCESS_NO_ACCESS};
+                break;
+            case EBufferState::TRANSFER:
+                desc = {.sync = D3D12_BARRIER_SYNC_COPY, .access = _is_write ? D3D12_BARRIER_ACCESS_COPY_DEST : D3D12_BARRIER_ACCESS_COPY_SOURCE};
+                break;
+            case EBufferState::VERTEX:
+                DASSERT(!_is_write);
+                DASSERT(_pass_type == EPassType::Graphics);
+                desc = {.sync = D3D12_BARRIER_SYNC_VERTEX_SHADING, .access = D3D12_BARRIER_ACCESS_VERTEX_BUFFER};
+                break;
+            case EBufferState::INDEX:
+                DASSERT(!_is_write);
+                DASSERT(_pass_type == EPassType::Graphics);
+                desc = {.sync = D3D12_BARRIER_SYNC_VERTEX_SHADING, .access = D3D12_BARRIER_ACCESS_INDEX_BUFFER};
+                break;
+            case EBufferState::INDIRECT:
+                DASSERT(!_is_write);// if want to update indirect args, use uav state
+                DASSERT(_pass_type != EPassType::Copy);
+                desc = {.sync = D3D12_BARRIER_SYNC_EXECUTE_INDIRECT, .access = D3D12_BARRIER_ACCESS_INDIRECT_ARGUMENT};
+                break;
+            case EBufferState::SHADER_RESOURCE:
+                DASSERT(!_is_write);
+                DASSERT(_pass_type != EPassType::Copy);
+                // also possible to use srv in vertex shader, so not only SYNC_PIXEL_SHADING
+                desc = {.sync   = _pass_type == EPassType::Graphics ? D3D12_BARRIER_SYNC_DRAW : D3D12_BARRIER_SYNC_COMPUTE_SHADING,
+                        .access = D3D12_BARRIER_ACCESS_SHADER_RESOURCE};
+                break;
+            case EBufferState::UNORDERED_ACCESS:
+                DASSERT(_is_write);
+                DASSERT(_pass_type != EPassType::Copy);// NOTE there is a special case for clearUAV commands, buffer is viewed as UAV, but it works like a copy/transfer
+                desc = {.sync   = _pass_type == EPassType::Graphics ? D3D12_BARRIER_SYNC_PIXEL_SHADING : D3D12_BARRIER_SYNC_COMPUTE_SHADING,
+                        .access = D3D12_BARRIER_ACCESS_UNORDERED_ACCESS};
+                break;
+            default:
+                FATAL("Unsupported buffer state: {} {}", static_cast<uint32_t>(_state), static_cast<uint32_t>(_pass_type), _is_write);
+        }
+        RecordState(buffer, desc);
+    }
+
+    void D3D12ResourceStateTracker::RecordState(D3D12Buffer* buffer, BufferStateDescription _required_state) {
+        if (auto it = buffer_states.find(buffer); it != buffer_states.end()) {
+            auto& state = it->second.after;
+            state.access |= _required_state.access;
+            state.sync |= _required_state.sync;
+        } else {
+            // new added, set the initial
+            buffer_states[buffer] = BufferState{
+                .before = {
+                    .sync   = D3D12_BARRIER_SYNC_NONE,
+                    .access = D3D12_BARRIER_ACCESS_NO_ACCESS,
+                },
+                .after = _required_state};
+        }
+        pending_buffers.insert(buffer);
+    }
+
+    void D3D12ResourceStateTracker::ResolveBarriers() {
+        for (auto& tex : pending_textures) {
+            ASSERT(texture_states.contains(tex));
+            auto& texState = texture_states[tex];
+
+            auto& state = texState;
+            if (state.before == state.after && state.after.access != D3D12_BARRIER_ACCESS_UNORDERED_ACCESS && state.before.access != D3D12_BARRIER_ACCESS_UNORDERED_ACCESS) {
+                continue;
+            }
+
+            texture_barriers.emplace_back(CD3DX12_TEXTURE_BARRIER(
+                state.before.sync,
+                state.after.sync,
+                state.before.access,
+                state.after.access,
+                state.before.layout,
+                state.after.layout,
+                tex->Native(),
+                CD3DX12_BARRIER_SUBRESOURCE_RANGE(0xffffffff),// all subresources
+                D3D12_TEXTURE_BARRIER_FLAG_NONE));
+
+            state.before = state.after;
+            state.after  = TextureStateDescription{};
+        }
+        pending_textures.clear();
+
+        for (auto& buf : pending_buffers) {
+            ASSERT(buffer_states.contains(buf));
+            auto& state = buffer_states[buf];
+
+            if (state.before == state.after && state.after.access != D3D12_BARRIER_ACCESS_UNORDERED_ACCESS && state.before.access != D3D12_BARRIER_ACCESS_UNORDERED_ACCESS) {
+                continue;
+            }
+
+            buffer_barriers.emplace_back(CD3DX12_BUFFER_BARRIER(
+                state.before.sync,
+                state.after.sync,
+                state.before.access,
+                state.after.access,
+                buf->Native()));
+
+            state.before = state.after;
+            state.after  = BufferStateDescription{};
+        }
+        pending_buffers.clear();
+
+        global_barriers.clear();
+    }
+
+    void D3D12ResourceStateTracker::DispatchBarriers(ID3D12GraphicsCommandList7* list) {
+        std::vector<D3D12_BARRIER_GROUP> groups;
+        groups.reserve(!texture_barriers.empty() + !buffer_barriers.empty() + !global_barriers.empty());
+        if (!buffer_barriers.empty())
+            groups.emplace_back(CD3DX12_BARRIER_GROUP(buffer_barriers.size(), buffer_barriers.data()));
+        if (!texture_barriers.empty())
+            groups.emplace_back(CD3DX12_BARRIER_GROUP(texture_barriers.size(), texture_barriers.data()));
+        if (!global_barriers.empty())
+            groups.emplace_back(CD3DX12_BARRIER_GROUP(global_barriers.size(), global_barriers.data()));
+        if (!groups.empty())
+            list->Barrier(groups.size(), groups.data());
+        texture_barriers.clear();
+        buffer_barriers.clear();
+        global_barriers.clear();
+    }
+
+    void D3D12ResourceStateTracker::RestoreState() {
+        for (auto& [tex, state] : texture_states) {
+            if (state.initial == state.before)
+                continue;
+            //if (pending_textures.contains(tex))
+            //    continue;// has next/export state, not reset to init // TODO
+
+            texture_barriers.emplace_back(CD3DX12_TEXTURE_BARRIER(
+                state.before.sync,
+                state.initial.sync,
+                state.before.access,
+                state.initial.access,
+                state.before.layout,
+                state.initial.layout,
+                tex->Native(),
+                CD3DX12_BARRIER_SUBRESOURCE_RANGE(0xffffffff),// all subresources
+                D3D12_TEXTURE_BARRIER_FLAG_NONE));
+
+            state.before = std::exchange(state.after, state.initial);
+        }
+
+        // maybe not need
+        const auto buffer_init_state = BufferStateDescription{.sync = D3D12_BARRIER_SYNC_NONE, .access = D3D12_BARRIER_ACCESS_NO_ACCESS};
+        for (auto& [buf, state] : buffer_states) {
+            if (buffer_init_state == state.before)
+                continue;
+
+            buffer_barriers.emplace_back(CD3DX12_BUFFER_BARRIER(
+                state.before.sync,
+                buffer_init_state.sync,
+                state.before.access,
+                buffer_init_state.access,
+                buf->Native()));
+
+            state.before = std::exchange(state.after, buffer_init_state);
+        }
+    }
+
+    void D3D12ResourceStateTracker::Reset() {
+        texture_states.clear();
+        texture_barriers.clear();
+        pending_textures.clear();
+        buffer_states.clear();
+        buffer_barriers.clear();
+        pending_buffers.clear();
+        global_barriers.clear();
+    }
 
 }// namespace Moer::Render

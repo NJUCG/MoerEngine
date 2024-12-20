@@ -292,57 +292,61 @@ namespace Moer::Render {
     };
 
     class D3D12ResourceStateTracker {
+    private:
+        Array<D3D12_GLOBAL_BARRIER>  global_barriers;// not used yet
+        Array<D3D12_TEXTURE_BARRIER> texture_barriers;
+        Array<D3D12_BUFFER_BARRIER>  buffer_barriers;
+
+        struct TextureStateDescription {
+            D3D12_BARRIER_LAYOUT layout = D3D12_BARRIER_LAYOUT_UNDEFINED;
+            D3D12_BARRIER_SYNC   sync   = D3D12_BARRIER_SYNC_NONE;
+            D3D12_BARRIER_ACCESS access = D3D12_BARRIER_ACCESS_COMMON;// note the default case SYNC_NONE is not compatible with ACCESS_COMMON, here use COMMON is because it is 0, so can 'or' with other access later
+            // D3D12_TEXTURE_BARRIER_FLAGS discard ?
+
+            auto operator<=>(const TextureStateDescription& other) const = default;
+        };
+        struct BufferStateDescription {
+            D3D12_BARRIER_SYNC   sync   = D3D12_BARRIER_SYNC_NONE;
+            D3D12_BARRIER_ACCESS access = D3D12_BARRIER_ACCESS_COMMON;
+
+            auto operator<=>(const BufferStateDescription& other) const = default;
+        };
+
+        struct TextureState {
+            TextureStateDescription before;
+            TextureStateDescription after;
+
+            TextureStateDescription initial;// backup
+        };
+        struct BufferState {
+            BufferStateDescription before;
+            BufferStateDescription after;
+
+            //BufferStateDescription initial; // don't need specific initial state
+        };
+
+        UnorderedMap<D3D12Texture*, TextureState> texture_states;
+        UnorderedMap<D3D12Buffer*, BufferState>   buffer_states;
+        Set<D3D12Texture*>                        pending_textures;// textures need to be transitioned in this layer
+        Set<D3D12Buffer*>                         pending_buffers; // buffers need to be transitioned in this layer
+
+    public:
+        D3D12_COMMAND_LIST_TYPE queue_type = D3D12_COMMAND_LIST_TYPE_DIRECT;// !not used yet
+
+        // dont't care about tex subresource
+        void RecordState(D3D12Texture* texture, ETextureState _state, EPassType _pass_type, bool _is_write);
+        void RecordState(D3D12Texture* texture, TextureStateDescription _state);
+        void RecordState(D3D12Buffer* buffer, EBufferState _state, EPassType _pass_type, bool _is_write);
+        void RecordState(D3D12Buffer* buffer, BufferStateDescription _state);
+
+        void ResolveBarriers();
+        void DispatchBarriers(ID3D12GraphicsCommandList7* list);
+
+        // after whole execute , restore state to initial
+        void RestoreState();
+
+        void Reset();
     };
-
-    //class D3D12ResourceStateTracker {
-    //private:
-    //    //std::vector<D3D12_GLOBAL_BARRIER> globalBarriers;
-    //    //std::vector<D3D12_TEXTURE_BARRIER> textureBarriers;
-    //    Array<D3D12_BUFFER_BARRIER> bufferBarriers;
-
-    //    struct TextureSubresourceState {
-    //        TextureStateDescription before;
-    //        TextureStateDescription after;
-    //    };
-    //    struct TextureState {// ref nvrhi state tracking
-    //        // all
-    //        TextureStateDescription before;
-    //        TextureStateDescription after;
-    //        // sub
-    //        std::vector<TextureSubresourceState> subresources;
-
-    //        TextureStateDescription initial;
-    //    };
-    //    struct BufferState {
-    //        BufferStateDescription before;
-    //        BufferStateDescription after;
-
-    //        BufferStateDescription initial;
-    //    };
-
-    //    std::map<GpuTexture*, TextureState> textureStates;
-    //    std::map<GpuBuffer*, BufferState>   bufferStates;
-    //    std::set<GpuTexture*>               pendingTextures;  // textures need to be transitioned in this layer
-    //    std::set<GpuTexture*>               subdivideTextures;// need to consider subresource state explicitly from now on
-    //    std::set<GpuBuffer*>                pendingBuffers;   // buffers need to be transitioned in this layer
-
-    //public:
-    //    // preprocess
-    //    void StartState(GpuTexture* tex, TextureSubresourceSet subresourceSet, EResourceAccessType accessType);
-    //    void RecordState(GpuTexture* tex, TextureSubresourceSet subresourceSet, EResourceAccessType accessType);
-    //    void StartState(GpuBuffer* buffer, EResourceAccessType accessType);
-    //    void RecordState(GpuBuffer* buffer, EResourceAccessType accessType);
-
-    //    // before pass execute, generate and dispatch barriers
-    //    // (also flush state 'after' to 'before' in ResolveBarriers)
-    //    void ResolveBarriers();
-    //    void DispatchBarriers(ID3D12GraphicsCommandList7* list);
-
-    //    // after whole execute , restore state to initial ?
-    //    void RestoreState();
-
-    //    void Reset();
-    //};
 
     // only for upload/readback buffer now
     class D3D12BuddyAllocator : public D3D12DeviceChild {
