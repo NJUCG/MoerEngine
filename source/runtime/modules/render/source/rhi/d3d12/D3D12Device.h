@@ -221,6 +221,7 @@ namespace Moer::Render {
         ~D3D12Texture();
 
         ID3D12Resource* Native() const { return allocation.resource; }
+        uint            QuerySubresourceIndex(uint _mip_level, uint _array_slice, uint _plane_slice) const;
 
         void            Destroy() override;                            // from Texxture.RHIResource
         uint            GetMipByteSize(uint _mip_idx) const override;  // from Texture
@@ -283,12 +284,16 @@ namespace Moer::Render {
         D3D12CommandList(D3D12CommandList&&)      = default;
 
         ID3D12GraphicsCommandList7* Native() const { return list.Get(); }
-        void                        Begin();
-        void                        End();
+
+        void Begin();
+        void End();
 
         void CopyBuffer(D3D12Buffer* _src, D3D12Buffer* _dst, uint64 _size, uint64 _src_offset, uint64 _dst_offset);
         void CopyData(D3D12StagingBufferView _dst, const void* _data, uint64 _size);
         void CopyData(void* _dst, D3D12StagingBufferView _src, uint64 _size);
+        void CopyBufferToTexture(D3D12Buffer* _src, D3D12Texture* _dst, uint64 _src_offset, uint3 _dst_offset, uint3 _dst_extent, uint32 _mip_level);
+        void CopyTextureToBuffer(D3D12Texture* _src, D3D12Buffer* _dst, uint3 _src_offset, uint64 _dst_offset, uint3 _src_extent, uint32 _mip_level);
+        void CopyTexture(D3D12Texture* _src, D3D12Texture* _dst, uint3 _extent, uint3 _src_offset, uint3 _dst_offset, uint32 _src_mip_level, uint32 _dst_mip_level);
     };
 
     class D3D12ResourceStateTracker {
