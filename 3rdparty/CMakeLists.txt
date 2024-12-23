@@ -93,6 +93,7 @@ set(CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION ${MOER_WINDOWS_SDK_VERSION})
 add_subdirectory(NRI)
 # NRD
 set(NRD_SHADERS_PATH ${moer_third_party_dir}/NRD/Shaders/Binary)
+set(NRD_NORMAL_ENCODING "0")
 if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     add_compile_options(-msse4.1)
 endif()

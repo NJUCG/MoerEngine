@@ -105,6 +105,8 @@ namespace Moer::Render {
         Moer::StaticArray<VkCommandPool, (size_t)ECommandListType::Num> m_command_pool;
     };
     class VulkanCmdList {
+        friend struct VkCustomDispatchCmd;
+
     private:
         VkCommandBuffer           command_buffer;
         class VulkanCmdAllocator* allocator;

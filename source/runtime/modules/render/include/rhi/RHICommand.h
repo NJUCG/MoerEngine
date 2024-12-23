@@ -830,6 +830,12 @@ namespace Moer::Render {
 
 #pragma endregion
 
+#pragma region[ custom commands ]
+
+        RENDER_API void AddCustomCommand(UniquePtr<Command>&& _cmd, std::string_view _name = Command::typenames[(uint)Command::EType::Custom]);
+
+#pragma endregion
+
         RENDER_API void AddCallback(std::function<void()>&& _callback);
 
         RENDER_API CmdSubmit Submit();
