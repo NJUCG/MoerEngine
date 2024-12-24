@@ -13,9 +13,46 @@ namespace Moer {
         MouseButtonFirst = Left,
     } MouseButtons;
 
-    // restores the input information after processing (including camera control logic)
-    struct WindowInput {
+    typedef enum {
+        A,
+        B,
+        C,
+        D,
+        E,
+        F,
+        G,
+        H,
+        I,
+        J,
+        K,
+        L,
+        M,
+        N,
+        O,
+        P,
+        Q,
+        R,
+        S,
+        T,
+        U,
+        V,
+        W,
+        X,
+        Y,
+        Z,
+        UP,
+        DOWN,
+        LEFT,
+        RIGHT,
+        ESCAPE,
 
+        KeyButtonCount,
+        KeyButtonFirst = A,
+    } KeyButtons;
+
+    // restores the input information after processing (including camera control logic)
+
+    struct WindowInput {
         // cursor
         float cursor_last_x  = 0.0f;
         float cursor_last_y  = 0.0f;
@@ -49,8 +86,11 @@ namespace Moer {
         float fov = 60.f;
 
         // mouse button state
-        bool                                              is_cursor_hiding   = false;
-        StaticArray<bool, MouseButtons::MouseButtonCount> mouse_button_state = {false};
+        bool is_cursor_hiding = false;
+
+        StaticArray<bool, MouseButtons::MouseButtonCount> mouse_button_state      = {false};
+        StaticArray<bool, KeyButtons::KeyButtonCount>     key_button_state        = {false};// Press or Release
+        StaticArray<bool, KeyButtons::KeyButtonCount>     key_button_switch_state = {false};// Press once to switch state
 
         // singleton
         static WindowInput& GetInstance();

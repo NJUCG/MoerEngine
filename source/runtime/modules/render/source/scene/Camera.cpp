@@ -20,7 +20,8 @@ namespace Moer {
     const float Camera::k_fov_min   = 0.012f;
     const float Camera::k_fov_max   = 180.f;
 
-    const float Camera::k_mouse_sensitivity = 0.2f;
+    const float Camera::k_mouse_sensitivity              = 0.2f;
+    const float Camera::k_mouse_sensitivity_mouse_moving = 1.0f;
 
     // camera movement parameters
     // actual camera speed = camera_speed * k_camera_speed_multiplier * delta_time
@@ -181,6 +182,14 @@ namespace Moer {
         m_is_position_modified = true;
     }
 
+    void Camera::MoveFront(float delta) {
+        if (Abs(delta) < EPS) return;
+
+        m_position += m_front * delta;
+
+        m_is_position_modified = true;
+    }
+
     void Camera::MoveRight(float delta) {
         if (Abs(delta) < EPS) return;
 
@@ -245,6 +254,8 @@ namespace Moer {
     }
 
     void Camera::Initialize(const Transform& to_world_transform, float fov_y, float aspect_ratio, float near_clip, float far_clip) {
+        fov_y = wndInput.fov;
+
         SetWorldTransform(to_world_transform);
         SetProjectionFactor(fov_y, aspect_ratio, near_clip, far_clip);
         ResetJitterMatrix();
@@ -252,6 +263,8 @@ namespace Moer {
     }
 
     void Camera::Initialize(Vector3f position, float yaw, float pitch, float fov_y, float aspect_ratio, float near_clip, float far_clip) {
+        fov_y = wndInput.fov;
+
         m_position             = position;
         m_yaw                  = yaw;
         m_pitch                = pitch;
@@ -361,25 +374,13 @@ namespace Moer {
      */
     void Camera::Tick(float aspect_ratio) {
 
-        auto reset_cursor_delta = [&]() {
-            wndInput.cursor_delta_x = 0.0f;
-            wndInput.cursor_delta_y = 0.0f;
-        };
-
         if (aspect_ratio <= EPS) {
             this->SetAspectRatio(wndInput.aspect_ratio);
         } else {
             this->SetAspectRatio(aspect_ratio);
         }
 
-        if (!wndInput.is_cursor_hiding) {
-            if ((wndInput.cursor_delta_x || wndInput.cursor_delta_y) && wndInput.mouse_button_state[MouseButtons::Right]) {
-                this->ApplyRotation(wndInput.cursor_delta_x, wndInput.cursor_delta_y);
-                reset_cursor_delta();
-            }
-
-        } else {
-            // Pressed F
+        if (wndInput.is_cursor_hiding) {
 
             // fov & aspect_ratio
             this->SetFov(wndInput.fov);
@@ -405,9 +406,9 @@ namespace Moer {
 
             // movement
             if (wndInput.camera_forward)
-                this->MoveForward(speed);
+                this->MoveFront(speed);
             if (wndInput.camera_backward)
-                this->MoveForward(-speed);
+                this->MoveFront(-speed);
             if (wndInput.camera_left)
                 this->MoveRight(-speed);
             if (wndInput.camera_right)
@@ -418,9 +419,41 @@ namespace Moer {
                 this->MoveUp(-speed);
 
             // rotation
-            if (wndInput.cursor_delta_x || wndInput.cursor_delta_y) {
+
+            auto pure_rotate = [&]() {
                 this->ApplyRotation(wndInput.cursor_delta_x, wndInput.cursor_delta_y);
-                reset_cursor_delta();
+            };
+
+            auto rotate_with_moving = [&]() {
+                this->ApplyRotation(wndInput.cursor_delta_x, 0.f);
+
+                float speed_y = wndInput.cursor_delta_y * k_mouse_sensitivity_mouse_moving * wndInput.delta_time;
+                this->MoveForward(-speed_y);
+            };
+
+            auto pure_move = [&]() {
+                float speed_x = wndInput.cursor_delta_x * k_mouse_sensitivity_mouse_moving * wndInput.delta_time;
+                float speed_y = wndInput.cursor_delta_y * k_mouse_sensitivity_mouse_moving * wndInput.delta_time;
+
+                this->MoveRight(speed_x);
+                this->MoveUp(-speed_y);
+            };
+
+            if (wndInput.cursor_delta_x || wndInput.cursor_delta_y) {
+
+                // unreal style camera control
+                if (wndInput.key_button_switch_state[KeyButtons::F]) {
+                    pure_rotate();
+                } else if (wndInput.mouse_button_state[MouseButtons::Left] && wndInput.mouse_button_state[MouseButtons::Right]) {
+                    pure_move();
+                } else if (wndInput.mouse_button_state[MouseButtons::Right]) {
+                    pure_rotate();
+                } else if (wndInput.mouse_button_state[MouseButtons::Left]) {
+                    rotate_with_moving();
+                }
+
+                wndInput.cursor_delta_x = 0.0f;
+                wndInput.cursor_delta_y = 0.0f;
             }
         }
 

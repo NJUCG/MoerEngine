@@ -29,6 +29,7 @@ namespace Moer {
         const static float k_fov_min;
         const static float k_fov_max;
         const static float k_mouse_sensitivity;
+        const static float k_mouse_sensitivity_mouse_moving;
         const static float k_camera_speed_multiplier;
 
         const static float k_camera_speed_default;
@@ -134,6 +135,7 @@ namespace Moer {
         void UpdatePlanesAndFrustum();
 
         void MoveForward(float);
+        void MoveFront(float);
         void MoveRight(float);
         void MoveUp(float);
         void ApplyRotation(float, float);
