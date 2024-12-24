@@ -365,12 +365,11 @@ namespace Moer {
     /**
      * ## Camera Control Logic
      * 
+     * - Almost the same as Unreal Engine
+     * - When dragging the mouse, press W/A/S/D/Q/E to move the camera
      * - Drag right mouse button to rotate the camera
-     * - Press F key to enter screen
-     *   * Move mouse to rotate the camera
-     *   * Press W/S/A/D to move the camera
-     *   * Press Q/E to move the camera up and down
-     *   * Use scroll wheel to adjust the camera fov
+     * - Drag left mouse button to rotate the camera and move forward/backward
+     * - Drag both mouse buttons to move the camera
      */
     void Camera::Tick(float aspect_ratio) {
 
