@@ -172,7 +172,10 @@ namespace Moer {
     void GLFWWindowImpl::TickCursorState() {
         // hide cursor when **left or right** mouse button is pressed
         if (
-            wndInput.mouse_button_state[MouseButtons::Left] || wndInput.mouse_button_state[MouseButtons::Right] || wndInput.key_button_switch_state[KeyButtons::F]) {
+            wndInput.mouse_button_state[MouseButtons::Left] ||
+            wndInput.mouse_button_state[MouseButtons::Right] ||
+            wndInput.mouse_button_state[MouseButtons::Middle] ||
+            wndInput.key_button_switch_state[KeyButtons::F]) {
             SetCursorHide();
         } else {
             SetCursorNormal();
@@ -376,13 +379,7 @@ namespace Moer {
     }
 
     static void ScrollCallbackFunc(GLFWwindow* window, double xoffset, double yoffset) {
-        if (wndInput.is_cursor_hiding) {
-            wndInput.fov -= (float)yoffset * 2.f;
-            if (wndInput.fov < 10.0f)
-                wndInput.fov = 10.0f;
-            if (wndInput.fov > 120.0f)
-                wndInput.fov = 120.0f;
-        }
+        wndInput.scroll_offset = static_cast<float>(yoffset);
     }
 
     static void MouseButtonCallbackFunc(GLFWwindow* window, int button, int action, int mode) {

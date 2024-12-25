@@ -15,10 +15,12 @@ namespace Moer {
     const Vector3f Camera::UP_IN_WORLD = Camera::Y;
 
     // mouse control parameters
-    const float Camera::k_pitch_min = -89.5f;
-    const float Camera::k_pitch_max = 89.5f;
-    const float Camera::k_fov_min   = 0.012f;
-    const float Camera::k_fov_max   = 180.f;
+    const float Camera::k_pitch_min      = -89.5f;
+    const float Camera::k_pitch_max      = 89.5f;
+    const float Camera::k_fov_default    = 60.0f;
+    const float Camera::k_fov_min        = 0.012f;
+    const float Camera::k_fov_max        = 180.0f;
+    const float Camera::k_fov_multiplier = 2.f;
 
     const float Camera::k_mouse_sensitivity              = 0.2f;
     const float Camera::k_mouse_sensitivity_mouse_moving = 1.0f;
@@ -254,7 +256,7 @@ namespace Moer {
     }
 
     void Camera::Initialize(const Transform& to_world_transform, float fov_y, float aspect_ratio, float near_clip, float far_clip) {
-        fov_y = wndInput.fov;
+        fov_y = k_fov_default;
 
         SetWorldTransform(to_world_transform);
         SetProjectionFactor(fov_y, aspect_ratio, near_clip, far_clip);
@@ -263,7 +265,7 @@ namespace Moer {
     }
 
     void Camera::Initialize(Vector3f position, float yaw, float pitch, float fov_y, float aspect_ratio, float near_clip, float far_clip) {
-        fov_y = wndInput.fov;
+        fov_y = k_fov_default;
 
         m_position             = position;
         m_yaw                  = yaw;
@@ -367,9 +369,9 @@ namespace Moer {
      * 
      * - Almost the same as Unreal Engine
      * - When dragging the mouse, press W/A/S/D/Q/E to move the camera
-     * - Drag right mouse button to rotate the camera
-     * - Drag left mouse button to rotate the camera and move forward/backward
-     * - Drag both mouse buttons to move the camera
+     * - Drag `right mouse button` to rotate the camera
+     * - Drag `left mouse button` to rotate the camera and move forward/backward
+     * - Drag `both mouse buttons` or `middle button` to move the camera
      */
     void Camera::Tick(float aspect_ratio) {
 
@@ -379,14 +381,25 @@ namespace Moer {
             this->SetAspectRatio(aspect_ratio);
         }
 
-        if (wndInput.is_cursor_hiding) {
+        if (!wndInput.is_cursor_hiding) {
 
             // fov & aspect_ratio
-            this->SetFov(wndInput.fov);
+            if (!IsZero(wndInput.scroll_offset)) {
+                float coef;
+                if (Compare(m_fov_y, k_fov_default) <= 0) {
+                    coef = (Min(k_fov_default, m_fov_y) - k_fov_min) / (k_fov_default - k_fov_min);
+                } else {
+                    coef = (k_fov_max - Max(k_fov_default, m_fov_y)) / (k_fov_max - k_fov_default);
+                }
 
-            // LOG_INFO("Delta time: {}", wndInput.delta_time);
+                this->SetFov(m_fov_y - wndInput.scroll_offset * coef * k_fov_multiplier);
+                wndInput.scroll_offset = 0.0f;
+            }
+
+        } else {
 
             // camera speed
+
             if (wndInput.speed_up) {
                 camera_speed += k_camera_speed_up_delta * wndInput.delta_time;
                 if (camera_speed > k_camera_speed_max)
@@ -444,6 +457,8 @@ namespace Moer {
                 if (wndInput.key_button_switch_state[KeyButtons::F]) {
                     pure_rotate();
                 } else if (wndInput.mouse_button_state[MouseButtons::Left] && wndInput.mouse_button_state[MouseButtons::Right]) {
+                    pure_move();
+                } else if (wndInput.mouse_button_state[MouseButtons::Middle]) {
                     pure_move();
                 } else if (wndInput.mouse_button_state[MouseButtons::Right]) {
                     pure_rotate();

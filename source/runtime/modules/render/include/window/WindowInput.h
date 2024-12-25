@@ -58,6 +58,7 @@ namespace Moer {
         float cursor_last_y  = 0.0f;
         float cursor_delta_x = 0.0f;
         float cursor_delta_y = 0.0f;
+        float scroll_offset  = 0.0f;
 
         bool is_cursor_dirty = true;// origin "firstMouse", presents if the cursor is needed to be reset (such as when you press F key 2 times)
 
@@ -81,9 +82,6 @@ namespace Moer {
         float width        = 1280.f;
         float height       = 720.f;
         float aspect_ratio = width / height;
-
-        // fov
-        float fov = 60.f;
 
         // mouse button state
         bool is_cursor_hiding = false;
