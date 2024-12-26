@@ -372,10 +372,7 @@ namespace Moer::Render {
         DASSERT(false == EnumHasAnyFlag(_info.usage, EBufferUsageFlags::CPU_VISIBLE));
         auto* allocator = _device->GetGpuGlobalAllocator();
 
-        uint64 align = D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT;
-        if (EnumHasAnyFlag(_info.usage, EBufferUsageFlags::ACCELERATION_STRUCTURE | EBufferUsageFlags::ACCELERATION_STRUCTURE_SCRATCH | EBufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT))
-            align = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT;
-        allocation = allocator->AllocateBufferHeap("default-buffer-name", GetByteSize(), align, D3D12_HEAP_TYPE_DEFAULT);
+        allocation = allocator->AllocateBufferHeap("default-buffer-name", GetByteSize(), D3D12_HEAP_TYPE_DEFAULT);
 
         D3D12_RESOURCE_DESC1 resourceDesc = CD3DX12_RESOURCE_DESC1::Buffer(GetByteSize());
         if (EnumHasAnyFlag(_info.usage, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::ACCELERATION_STRUCTURE_SCRATCH)) {
@@ -425,16 +422,15 @@ namespace Moer::Render {
         return _value != 0 && (_value & (_value - 1)) == 0;
     }
 
-    Allocation D3D12GpuGlobalAllocator::AllocateBufferHeap(std::string_view _name, uint64 _byte_size, uint64 _alignment, D3D12_HEAP_TYPE _heap_type) {
+    Allocation D3D12GpuGlobalAllocator::AllocateBufferHeap(std::string_view _name, uint64 _byte_size, D3D12_HEAP_TYPE _heap_type) {
         D3D12MA::ALLOCATION_DESC desc;
         desc.HeapType       = _heap_type;
         desc.Flags          = D3D12MA::ALLOCATION_FLAGS::ALLOCATION_FLAG_STRATEGY_BEST_FIT;
         desc.ExtraHeapFlags = D3D12_HEAP_FLAG_ALLOW_ONLY_BUFFERS;
         desc.CustomPool     = nullptr;
         D3D12_RESOURCE_ALLOCATION_INFO info;
-        DASSERT(IsPowerOfTwo(_alignment));
-        info.Alignment   = _alignment;
-        info.SizeInBytes = AlignUpToPowerOfTwo(_byte_size, _alignment);
+        info.Alignment = D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT;
+        info.SizeInBytes = AlignUpToPowerOfTwo(_byte_size, info.Alignment);
 
         Allocation alloc;
         DX_CHECK_HRESULT(d3d12Allocator->AllocateMemory(&desc, &info, &alloc.alloc));

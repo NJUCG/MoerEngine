@@ -202,7 +202,6 @@ namespace Moer::Render {
 
         Allocation AllocateBufferHeap(std::string_view _name,// name?
                                       uint64           _byte_size,
-                                      uint64           _alignment = D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT,
                                       D3D12_HEAP_TYPE  _heap_type = D3D12_HEAP_TYPE_DEFAULT);
         Allocation AllocateTextureHeap(std::string_view _name,
                                        uint64           _byte_size,
