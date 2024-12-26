@@ -1278,7 +1278,13 @@ namespace Moer::Render {
         }
 
         void Visit(const VkCustomDispatchCmd& _cmd) {
-            _cmd.Execute(cmd_list.GetHandle());
+            const VkCustomDispatchCmd::VkDispatchContext context = {
+                m_device->GetInstance(),
+                m_device->GetGpu(),
+                m_device->GetDevice(),
+                cmd_list.GetHandle(),
+                &this->tracker};
+            _cmd.Execute(context);
         }
 
         // void Visit(const UpdateDrawStateCmd& _cmd) {

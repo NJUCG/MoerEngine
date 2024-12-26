@@ -383,7 +383,7 @@ int main(int argc, const char** argv) {
     // nrd extension
     auto* nrd_ext       = device.LoadExtension<Ext::NRDExtension>();
     auto  nrd_interface = nrd_ext->CreateInterface(3, resolution.x, resolution.y);
-    nrd_interface->UseDenoiser(nrd::Denoiser::REBLUR_DIFFUSE);
+    nrd_interface->UseDenoiser(nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR);
 
     while (WindowContext::ShouldClose(window_handle) == false) {
         WindowContext::Tick();
@@ -424,6 +424,10 @@ int main(int argc, const char** argv) {
                 ETextureUsageFlags::COLOR_ATTACHMENT);
 
             create_frame_buffers(resolution);
+
+            // nrd recreation
+            nrd_interface = nrd_ext->CreateInterface(3, resolution.x, resolution.y);
+            nrd_interface->UseDenoiser(nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR);
         }
 
         if (Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady()) {
@@ -573,14 +577,16 @@ int main(int argc, const char** argv) {
             nrd_interface->SetInput(Ext::NRDInterface::EInResource::NORMAL_ROUGHNESS, out_normal_roughness);
             nrd_interface->SetInput(Ext::NRDInterface::EInResource::VIEW_Z, out_view_z);
             nrd_interface->SetInput(Ext::NRDInterface::EInResource::BASECOLOR_METALNESS, out_base_color_matalness);
-            nrd_interface->SetInput(Ext::NRDInterface::EInResource::IN_DIFFUSE, out_diffuse);
-            // nrd_interface->SetInput(Ext::NRDInterface::EInResource::IN_SPECULAR, out_specular);
+            nrd_interface->SetInput(Ext::NRDInterface::EInResource::IN_DIFFUSE, out_direct_lighting);
+            nrd_interface->SetInput(Ext::NRDInterface::EInResource::IN_SPECULAR, out_specular);
             nrd_interface->SetOutput(Ext::NRDInterface::EOutResource::OUT_DIFFUSE, denoised_diffuse);
-            // nrd_interface->SetOutput(Ext::NRDInterface::EOutResource::OUT_SPECULAR, denoised_specular);
-            nrd_interface->SetFrameIndex(time);
-            nrd_interface->SetCameraMatrix(camera->GetViewMatrix(), camera->GetProjectionMatrix());
-            // nrd_interface->SetCommonSettings(rt_ui_config.common_settings);
-            // nrd_interface->SetDenoiserSettings(rt_ui_config.denoiser_settings);
+            nrd_interface->SetOutput(Ext::NRDInterface::EOutResource::OUT_SPECULAR, denoised_specular);
+            nrd_interface->UpdateCommonSettings(
+                time,
+                Vector2ui(resolution.x, resolution.y),
+                Vector2f(0.f, 0.f),
+                camera->GetViewMatrix(),
+                camera->GetProjectionMatrix());
             nrd_interface->Denoise(cmd_list);
 
             //copy normal to output
@@ -599,12 +605,12 @@ int main(int argc, const char** argv) {
             auto frame_buffer = rt_ui.GetWindowFrameBuffer();
             auto scene_res    = rt_ui.GetSceneColorResolution();
             auto scene_pos    = rt_ui.GetSceneColorPos();
-            cmd_list.Gfx(sample_tex, out_direct_lighting, linear_sampler).Draw("SampleTexture", Rect2D(scene_pos.x, scene_pos.y, scene_res.x, scene_res.y), {}, 3, {SingleDrawParam(3, 1, 0, 0, 0)}, ColorAttachment(frame_buffer.GetTexture()));
+            cmd_list.Gfx(sample_tex, denoised_specular, linear_sampler).Draw("SampleTexture", Rect2D(scene_pos.x, scene_pos.y, scene_res.x, scene_res.y), {}, 3, {SingleDrawParam(3, 1, 0, 0, 0)}, ColorAttachment(frame_buffer.GetTexture()));
         } else {
             float2 f_res  = float2(resolution.x, resolution.y);
             float2 min_xy = rt_ui.GetSceneColorPos() / f_res;
             float2 max_xy = (rt_ui.GetSceneColorPos() + rt_ui.GetSceneColorResolution()) / f_res;
-            cmd_list.Gfx(combine_ui, out_direct_lighting, ui_frame_buffer, linear_sampler, CombineUIPipeline::Param{min_xy, max_xy})
+            cmd_list.Gfx(combine_ui, denoised_specular, ui_frame_buffer, linear_sampler, CombineUIPipeline::Param{min_xy, max_xy})
                 .Draw("CombineUI",
                       Rect2D(0, 0, resolution.x, resolution.y),
                       {},

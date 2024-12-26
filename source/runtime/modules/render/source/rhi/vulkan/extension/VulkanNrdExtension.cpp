@@ -5,8 +5,6 @@
 #include "../../vulkan/VulkanDescriptor.h"
 #include "../../vulkan/VulkanCustomCommand.h"
 
-#include <NRDIntegration.hpp>
-
 namespace Moer::Render::Ext {
 
     class VkNRDInterface final : public NRDInterface {
@@ -122,10 +120,18 @@ namespace Moer::Render::Ext {
 
                 LOG_INFO("[NRD]: NRD Integration created or recreated.");
             }
+
+            {
+                SetDefaultCommonSettings(_frame_width, _frame_height);
+                SetDefaultDenoiserSettings(nrd::Identifier(type));
+            }
         }
 
         void Begin() override {
             resource_usages.clear();
+
+            // Must be called once on a frame start
+            nrd.integration.NewFrame();
         }
 
         void Denoise(CommandList& _cmd_list) override;
@@ -154,14 +160,17 @@ namespace Moer::Render::Ext {
             // Useful information:
             //    SRV = nri::AccessBits::SHADER_RESOURCE, nri::TextureLayout::SHADER_RESOURCE
             //    UAV = nri::AccessBits::SHADER_RESOURCE_STORAGE, nri::TextureLayout::GENERAL
-            tex_barrier_desc.after.access = nri::AccessBits::SHADER_RESOURCE;
-            tex_barrier_desc.after.layout = nri::Layout::SHADER_RESOURCE;
-            tex_barrier_desc.after.stages = nri::StageBits::COMPUTE_SHADER;
-            tex_barrier_desc.mipOffset    = 0;
-            tex_barrier_desc.mipNum       = vk_tex->GetNumMips();
-            tex_barrier_desc.layerOffset  = 0;
-            tex_barrier_desc.layerNum     = vk_tex->GetNumArray();
-            tex_barrier_desc.planes       = nri::PlaneBits::COLOR;
+            tex_barrier_desc.before.access = nri::AccessBits::SHADER_RESOURCE;
+            tex_barrier_desc.before.layout = nri::Layout::SHADER_RESOURCE;
+            tex_barrier_desc.before.stages = nri::StageBits::COMPUTE_SHADER;
+            tex_barrier_desc.after.access  = nri::AccessBits::SHADER_RESOURCE;
+            tex_barrier_desc.after.layout  = nri::Layout::SHADER_RESOURCE;
+            tex_barrier_desc.after.stages  = nri::StageBits::COMPUTE_SHADER;
+            tex_barrier_desc.mipOffset     = 0;
+            tex_barrier_desc.mipNum        = vk_tex->GetNumMips();
+            tex_barrier_desc.layerOffset   = 0;
+            tex_barrier_desc.layerNum      = vk_tex->GetNumArray();
+            tex_barrier_desc.planes        = nri::PlaneBits::COLOR;
 
             // Resource usage
             VulkanShaderResourceState pipeline_flags{};
@@ -181,7 +190,7 @@ namespace Moer::Render::Ext {
         void SetOutput(EOutResource _index, TextureRef _texture) override {
             auto* vk_tex = ResourceCast(_texture);
             // Wrap required textures (better do it only once on initialization)
-            auto& tex_barrier_desc = texture_barrier_descs[uint8(_index)];
+            auto& tex_barrier_desc = texture_barrier_descs[uint8(EInResource::INPUT_NUM) + uint8(_index)];
 
             nri::TextureVKDesc tex_desc = {};
 
@@ -202,14 +211,17 @@ namespace Moer::Render::Ext {
             // Useful information:
             //    SRV = nri::AccessBits::SHADER_RESOURCE, nri::TextureLayout::SHADER_RESOURCE
             //    UAV = nri::AccessBits::SHADER_RESOURCE_STORAGE, nri::TextureLayout::GENERAL
-            tex_barrier_desc.after.access = nri::AccessBits::SHADER_RESOURCE_STORAGE;
-            tex_barrier_desc.after.layout = nri::Layout::SHADER_RESOURCE_STORAGE;
-            tex_barrier_desc.after.stages = nri::StageBits::COMPUTE_SHADER;
-            tex_barrier_desc.mipOffset    = 0;
-            tex_barrier_desc.mipNum       = vk_tex->GetNumMips();
-            tex_barrier_desc.layerOffset  = 0;
-            tex_barrier_desc.layerNum     = vk_tex->GetNumArray();
-            tex_barrier_desc.planes       = nri::PlaneBits::COLOR;
+            tex_barrier_desc.before.access = nri::AccessBits::SHADER_RESOURCE_STORAGE;
+            tex_barrier_desc.before.layout = nri::Layout::SHADER_RESOURCE_STORAGE;
+            tex_barrier_desc.before.stages = nri::StageBits::COMPUTE_SHADER;
+            tex_barrier_desc.after.access  = nri::AccessBits::SHADER_RESOURCE_STORAGE;
+            tex_barrier_desc.after.layout  = nri::Layout::SHADER_RESOURCE_STORAGE;
+            tex_barrier_desc.after.stages  = nri::StageBits::COMPUTE_SHADER;
+            tex_barrier_desc.mipOffset     = 0;
+            tex_barrier_desc.mipNum        = vk_tex->GetNumMips();
+            tex_barrier_desc.layerOffset   = 0;
+            tex_barrier_desc.layerNum      = vk_tex->GetNumArray();
+            tex_barrier_desc.planes        = nri::PlaneBits::COLOR;
 
             // Resource usage
             VulkanShaderResourceState pipeline_flags{};
@@ -228,10 +240,13 @@ namespace Moer::Render::Ext {
 
     private:
         Array<CustomDispatchCmd::ResourceUsage> resource_usages;
+        int8                                    mv_index = -1;
 
         constexpr nrd::ResourceType ResourceSlot(const uint8 _index) {
             switch (_index) {
-                case uint8(EInResource::MOTION_VECTOR): return nrd::ResourceType::IN_MV;
+                case uint8(EInResource::MOTION_VECTOR):
+                    mv_index = resource_usages.size() - 1;
+                    return nrd::ResourceType::IN_MV;
                 case uint8(EInResource::NORMAL_ROUGHNESS): return nrd::ResourceType::IN_NORMAL_ROUGHNESS;
                 case uint8(EInResource::VIEW_Z): return nrd::ResourceType::IN_VIEWZ;
                 case uint8(EInResource::BASECOLOR_METALNESS): return nrd::ResourceType::IN_BASECOLOR_METALNESS;
@@ -271,7 +286,7 @@ namespace Moer::Render::Ext {
 
         EQueueType GetQueueType() const override { return EQueueType::Graphics; }
 
-        void Execute(VkCommandBuffer _cmd_list) const override {
+        void Execute(const VkDispatchContext& _context) const override {
             const auto& denoiser_type   = nrd_interface.type;
             auto&       nrd_integration = nrd_interface.nrd.integration;
             auto&       nri             = nrd_interface.nrd.nri;
@@ -281,16 +296,23 @@ namespace Moer::Render::Ext {
             // Wrap a command buffer
             nri::CommandBufferVKDesc cmd_buffer_desc = {};
             cmd_buffer_desc.commandQueueType         = nri::CommandQueueType::GRAPHICS;
-            cmd_buffer_desc.vkCommandBuffer          = _cmd_list;
+            cmd_buffer_desc.vkCommandBuffer          = _context.cmd_list;
 
             nri.rhi.CreateCommandBufferVK(*nri.device, cmd_buffer_desc, nri.cmd_list);
-
-            // Must be called once on a frame start
-            nrd_integration.NewFrame();
 
             const nrd::Identifier denoiser = nrd::Identifier(denoiser_type);
             nrd_integration.Denoise(&denoiser, 1, *nri.cmd_list, nrd_interface.nrd.user_pool);
 
+            // The motion vector has been trasitioned to GENERAL layout by NRD, so we need to flush the state
+            if (nrd_interface.mv_index >= 0) {
+                auto* mv         = ResourceCast(std::get<TextureView>(nrd_interface.resource_usages[nrd_interface.mv_index].resource).GetTexture());
+                auto* vk_tracker = (VkTracker*)_context.user_data;
+                vk_tracker->FlushSrcState(
+                    mv,
+                    VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+                    VK_IMAGE_LAYOUT_GENERAL,
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+            }
             // IMPORTANT: NRD integration binds own descriptor pool, don't forget to re-bind back your pool (heap)
         }
     };

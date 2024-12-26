@@ -408,6 +408,18 @@ namespace Moer::Render {
         }
     }
 
+    void VkTracker::FlushSrcState(VulkanTexture* _texture, VkAccessFlagBits2 _access, VkImageLayout _layout, VkPipelineStageFlagBits2 _stage) {
+        if (auto it = texture_states.find(_texture); it != texture_states.end()) {
+            auto& state      = it->second;
+            state.src_access = _access;
+            state.src_layout = _layout;
+            state.src_stage  = _stage;
+            state.dst_access = VK_ACCESS_2_NONE;
+            state.dst_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            state.dst_stage  = VK_PIPELINE_STAGE_2_NONE;
+        }
+    }
+
     void VkTracker::RecordState(VulkanBuffer* _buffer, std::tuple<VkAccessFlags2, VkPipelineStageFlags2>&& _state, uint32_t _src_queue_family, uint32_t _dst_queue_family) {
         RecordState(_buffer, std::get<0>(_state), std::get<1>(_state), _src_queue_family, _dst_queue_family);
     }

@@ -171,6 +171,7 @@ namespace Moer::Render {
         pool_info.pPoolSizes    = pool_sizes;
 
         VK_CHECK_RESULT(vkCreateDescriptorPool(m_device->GetDevice(), &pool_info, nullptr, &m_bindless_pool));
+        // m_device->SetResourceName((uint64)m_bindless_pool, VK_OBJECT_TYPE_DESCRIPTOR_POOL, "Bindless Descriptor Pool");
     }
 
     VulkanDescriptorSetAllocator::VulkanDescriptorSetCachePool::~VulkanDescriptorSetCachePool() {

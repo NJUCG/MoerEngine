@@ -868,6 +868,7 @@ namespace Moer::Render {
                 RecordRead(std::get<1>(read_res), std::get<0>(read_res), m_dispatch_layer);
             }
             AddCmd(_cmd, m_dispatch_layer);
+            ++m_dispatch_layer;// make custom dispatch command in a separate layer
         }
 
         void AcceptCmd(const Command* _cmd) {
