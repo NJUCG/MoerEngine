@@ -462,6 +462,8 @@ void Integration::NewFrame()
     }
 #endif
 
+    m_FrameIndex++; // move here to avoid resetting the same descriptor pool of frame 0
+
     m_DescriptorPoolIndex = m_FrameIndex % m_BufferedFramesNum;
     nri::DescriptorPool* descriptorPool = m_DescriptorPools[m_DescriptorPoolIndex];
     m_NRI->ResetDescriptorPool(*descriptorPool);
@@ -477,7 +479,6 @@ void Integration::NewFrame()
         m_DescriptorsInFlight[m_DescriptorPoolIndex].clear();
     }
 
-    m_FrameIndex++;
     m_PrevFrameIndexFromSettings++;
 }
 
