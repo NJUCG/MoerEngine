@@ -77,7 +77,7 @@ namespace Moer::Render::Ext {
                 // Denoisers
                 // NRD sample doesn't use several instances of the same denoiser in one NRD instance (like REBLUR_DIFFUSE x 3),
                 // thus we can use fields of "nrd::Denoiser" enum as unique identifiers
-                Array<nrd::DenoiserDesc> denoiser_descs = {
+                const Array<nrd::DenoiserDesc> denoiser_descs = {
                     // REBLUR
                     // {NRD_ID(REBLUR_DIFFUSE_SPECULAR_SH), nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR_SH},
                     // {NRD_ID(REBLUR_DIFFUSE_SH), nrd::Denoiser::REBLUR_DIFFUSE_SH},
@@ -102,6 +102,7 @@ namespace Moer::Render::Ext {
                     // REFERENCE
                     // {NRD_ID(REFERENCE), nrd::Denoiser::REFERENCE},
                 };
+#undef NRD_ID
 
                 nrd::InstanceCreationDesc instance_desc = {};
                 instance_desc.denoisers                 = denoiser_descs.data();
@@ -118,7 +119,7 @@ namespace Moer::Render::Ext {
                                  nri_entry.rhi),
                              "Failed to initialize NRD Integration");
 
-                LOG_INFO("[NRD]: NRD Integration created or recreated.");
+                LOG_INFO("[NRD]: NRD Integration created.");
             }
 
             {
@@ -135,6 +136,80 @@ namespace Moer::Render::Ext {
         }
 
         void Denoise(CommandList& _cmd_list) override;
+
+        void Reinitialize(uint16 _frame_width, uint16 _frame_height) override {
+            //=======================================================================================================
+            // INITIALIZATION - INITIALIZE NRD && RESOURCES && SETTINGS
+            //=======================================================================================================
+            auto& nri_entry = nrd.nri;
+
+            {
+                nrd.integration.Destroy();
+            }
+
+            {
+                nrd.frame_width  = _frame_width;
+                nrd.frame_height = _frame_height;
+
+                nrd::IntegrationCreationDesc integration_desc = {};
+                integration_desc.name                         = "NRD Integration for MoerEngine VkBackend";
+                integration_desc.resourceWidth                = _frame_width;
+                integration_desc.resourceHeight               = _frame_height;
+                integration_desc.bufferedFramesNum            = nrd.max_frame_in_flight;
+
+#define NRD_ID(x) nrd::Identifier(nrd::Denoiser::x)
+                // Denoisers
+                // NRD sample doesn't use several instances of the same denoiser in one NRD instance (like REBLUR_DIFFUSE x 3),
+                // thus we can use fields of "nrd::Denoiser" enum as unique identifiers
+                const Array<nrd::DenoiserDesc> denoiser_descs = {
+                    // REBLUR
+                    // {NRD_ID(REBLUR_DIFFUSE_SPECULAR_SH), nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR_SH},
+                    // {NRD_ID(REBLUR_DIFFUSE_SH), nrd::Denoiser::REBLUR_DIFFUSE_SH},
+                    // {NRD_ID(REBLUR_SPECULAR_SH), nrd::Denoiser::REBLUR_SPECULAR_SH},
+                    // {NRD_ID(REBLUR_DIFFUSE_SPECULAR_OCCLUSION), nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR_OCCLUSION},
+                    // {NRD_ID(REBLUR_DIFFUSE_OCCLUSION), nrd::Denoiser::REBLUR_DIFFUSE_OCCLUSION},
+                    // {NRD_ID(REBLUR_SPECULAR_OCCLUSION), nrd::Denoiser::REBLUR_SPECULAR_OCCLUSION},
+                    // {NRD_ID(REBLUR_DIFFUSE_DIRECTIONAL_OCCLUSION), nrd::Denoiser::REBLUR_DIFFUSE_DIRECTIONAL_OCCLUSION},
+                    {NRD_ID(REBLUR_DIFFUSE_SPECULAR), nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR},
+                    {NRD_ID(REBLUR_DIFFUSE), nrd::Denoiser::REBLUR_DIFFUSE},
+                    {NRD_ID(REBLUR_SPECULAR), nrd::Denoiser::REBLUR_SPECULAR},
+                    // RELAX
+                    // {NRD_ID(RELAX_DIFFUSE_SPECULAR_SH), nrd::Denoiser::RELAX_DIFFUSE_SPECULAR_SH},
+                    // {NRD_ID(RELAX_DIFFUSE_SH), nrd::Denoiser::RELAX_DIFFUSE_SH},
+                    // {NRD_ID(RELAX_SPECULAR_SH), nrd::Denoiser::RELAX_SPECULAR_SH},
+                    {NRD_ID(RELAX_DIFFUSE_SPECULAR), nrd::Denoiser::RELAX_DIFFUSE_SPECULAR},
+                    {NRD_ID(RELAX_DIFFUSE), nrd::Denoiser::RELAX_DIFFUSE},
+                    {NRD_ID(RELAX_SPECULAR), nrd::Denoiser::RELAX_SPECULAR},
+                    // SIGMA
+                    // {NRD_ID(SIGMA_SHADOW_TRANSLUCENCY), nrd::Denoiser::SIGMA_SHADOW_TRANSLUCENCY},
+                    // {NRD_ID(SIGMA_SHADOW), nrd::Denoiser::SIGMA_SHADOW_TRANSLUCENCY},
+                    // REFERENCE
+                    // {NRD_ID(REFERENCE), nrd::Denoiser::REFERENCE},
+                };
+#undef NRD_ID
+
+                nrd::InstanceCreationDesc instance_desc = {};
+                instance_desc.denoisers                 = denoiser_descs.data();
+                instance_desc.denoisersNum              = denoiser_descs.size();
+
+                // NRD itself is flexible and supports any kind of dynamic resolution scaling, but NRD INTEGRATION pre-
+                // allocates resources with statically defined dimensions. DRS is only supported by adjusting the viewport
+                // via "CommonSettings::rectSize"
+                CHECK_ASSERT(nrd.integration.Initialize(
+                                 integration_desc,
+                                 instance_desc,
+                                 *nri_entry.device,
+                                 nri_entry.rhi,
+                                 nri_entry.rhi),
+                             "Failed to initialize NRD Integration");
+
+                LOG_INFO("[NRD]: NRD Integration recreated.");
+            }
+
+            {
+                SetDefaultCommonSettings(_frame_width, _frame_height);
+            }
+        }
 
         void SetInput(EInResource _index, TextureRef _texture) override {
             auto* vk_tex = ResourceCast(_texture);
@@ -271,6 +346,18 @@ namespace Moer::Render::Ext {
             _frame_height);
     }
 
+    UniquePtr<NRDInterface> VkNRDExtension::RecreateInterface(
+        UniquePtr<NRDInterface> _interface,
+        uint16                  _frame_width,
+        uint16                  _frame_height) {
+
+        auto* vk_interface = static_cast<VkNRDInterface*>(_interface.get());
+
+        vk_interface->Reinitialize(_frame_width, _frame_height);
+
+        return std::move(_interface);
+    }
+
     class VkNrdDenoiseCmd final : public VkCustomDispatchCmd {
     private:
         std::span<const ResourceUsage> GetResourceUsages() const override {
@@ -303,8 +390,8 @@ namespace Moer::Render::Ext {
             const nrd::Identifier denoiser = nrd::Identifier(denoiser_type);
             nrd_integration.Denoise(&denoiser, 1, *nri.cmd_list, nrd_interface.nrd.user_pool);
 
-            // The motion vector has been trasitioned to GENERAL layout by NRD, so we need to flush the state
-            if (nrd_interface.mv_index >= 0) {
+            // The motion vector has been trasitioned to GENERAL layout by NRD REBLUR Denoisers, so we need to flush the state
+            if (nrd_interface.type < nrd::Denoiser::RELAX_DIFFUSE && nrd_interface.mv_index >= 0) {
                 auto* mv         = ResourceCast(std::get<TextureView>(nrd_interface.resource_usages[nrd_interface.mv_index].resource).GetTexture());
                 auto* vk_tracker = (VkTracker*)_context.user_data;
                 vk_tracker->FlushSrcState(

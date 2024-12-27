@@ -426,8 +426,7 @@ int main(int argc, const char** argv) {
             create_frame_buffers(resolution);
 
             // nrd recreation
-            nrd_interface = nrd_ext->CreateInterface(3, resolution.x, resolution.y);
-            nrd_interface->UseDenoiser(nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR);
+            nrd_interface = nrd_ext->RecreateInterface(std::move(nrd_interface), resolution.x, resolution.y);
         }
 
         if (Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady()) {

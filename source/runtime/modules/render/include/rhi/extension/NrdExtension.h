@@ -22,6 +22,8 @@ namespace Moer::Render::Ext {
 
         virtual void Denoise(CommandList& _cmd_list) = 0;
 
+        virtual void Reinitialize(uint16 _frame_width, uint16 _frame_height) = 0;
+
     private:
         nrd::CommonSettings nrd_common_settings = {};
 
@@ -98,6 +100,11 @@ namespace Moer::Render::Ext {
             uint8  _max_frame_in_flight = 0,
             uint16 _frame_width         = 0,
             uint16 _frame_height        = 0) = 0;
+
+        virtual UniquePtr<NRDInterface> RecreateInterface(
+            UniquePtr<NRDInterface> _interface,
+            uint16                  _frame_width  = 0,
+            uint16                  _frame_height = 0) = 0;
     };
 }// namespace Moer::Render::Ext
 
