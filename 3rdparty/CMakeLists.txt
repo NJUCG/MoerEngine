@@ -98,3 +98,19 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     add_compile_options(-msse4.1)
 endif()
 add_subdirectory(NRD)
+
+# post build
+set(NRD_ENCODING_FILE "${moer_third_party_dir}/NRD/Shaders/Include/NRDEncoding.hlsli")
+set(MOER_SHADER_NRD_DIR "${moer_shader_dir}/nrd")
+add_custom_command(
+    OUTPUT "${MOER_SHADER_NRD_DIR}/NRDEncoding.hlsli"
+    COMMAND ${CMAKE_COMMAND} -E copy "${NRD_ENCODING_FILE}" "${MOER_SHADER_NRD_DIR}/NRDEncoding.hlsli"
+    DEPENDS "${NRD_ENCODING_FILE}"
+    COMMENT "Copying NRDEncoding.hlsli to ${MOER_SHADER_NRD_DIR}"
+)
+
+add_custom_target(CopyNRDEncodingFile ALL
+    DEPENDS "${MOER_SHADER_NRD_DIR}/NRDEncoding.hlsli"
+)
+
+add_dependencies(NRD CopyNRDEncodingFile)
