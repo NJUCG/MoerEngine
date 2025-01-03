@@ -53,3 +53,9 @@ NRIAgilitySDK.h
 _Bin/
 _Build/
 _NRI_SDK/
+
+# nvapi lib & amdags lib
+!External/nvapi/amd64/nvapi64.lib
+!External/nvapi/x86/nvapi.lib
+!External/amdags/ags_lib/lib/amd_ags_*.lib
+!External/amdags/ags_lib/lib/amd_ags_*.dll
