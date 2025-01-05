@@ -13,20 +13,22 @@
 #include "scene/TransformManager.h"
 #include "serialize/Serializer.h"
 #include "shaderheaders/shared/Geometry.h"
+#include "resources/vertexfactory/VertexAttributes.h"
+#include "resources/vertexfactory/VertexFactoryBuffers.h"
 
 namespace Moer {
 
-    enum EVertexAttributes {
-        Position = 0,
-        Normal,
-        Tangent,
-        Texcoord0,
-        Texcoord1,
-        Color,
-        JointIndices,
-        JointWeights,
-        VETA_Num
-    };
+    // enum EVertexAttributes {
+    //     Position = 0,
+    //     Normal,
+    //     Tangent,
+    //     Texcoord0,
+    //     Texcoord1,
+    //     Color,
+    //     JointIndices,
+    //     JointWeights,
+    //     VETA_Num
+    // };
 
     enum class EGpuSceneResource {
         MeshInfo,
@@ -102,40 +104,44 @@ namespace Moer {
         int idx_bdls_handle;
         int inst_bdls_handle;
 
-        StaticArray<Range, EVertexAttributes::VETA_Num> vertex_ranges;
+        StaticArray<Range, VA_NUM> vertex_ranges;
 
         //cpu datas
-        Array<uint>   indices;
-        Array<float3> positions;
-        Array<uint>   normals;
-        Array<uint>   tangents;
-        Array<float2> texcoords0;
-        Array<float2> texcoords1;
+        Array<uint> indices;
 
-        Array<Array<uint16>> joint_data;
-        Array<float4>        joint_weights;
+        VertexFactoryBuffers vertex_factory_buffers;
 
-        bool   HasAttribute(EVertexAttributes _attr) const noexcept { return vertex_ranges[_attr].size > 0; }
-        Range  GetAttributeRange(EVertexAttributes _attr) const noexcept { return vertex_ranges[_attr]; }
-        Range& GetAttributeRange(EVertexAttributes _attr) noexcept { return vertex_ranges[_attr]; }
+        bool   HasAttribute(EVertexAttributes _attr) const noexcept { return vertex_ranges[static_cast<size_t>(_attr)].size > 0; }
+        Range  GetAttributeRange(EVertexAttributes _attr) const noexcept { return vertex_ranges[static_cast<size_t>(_attr)]; }
+        Range& GetAttributeRange(EVertexAttributes _attr) noexcept { return vertex_ranges[static_cast<size_t>(_attr)]; }
 
         void FillRanges() {
-            vertex_ranges[EVertexAttributes::Position]     = {0, positions.size() * sizeof(float3)};
-            vertex_ranges[EVertexAttributes::Normal]       = {vertex_ranges[EVertexAttributes::Position].size, normals.size() * sizeof(uint)};
-            vertex_ranges[EVertexAttributes::Tangent]      = {vertex_ranges[EVertexAttributes::Normal].offset + vertex_ranges[EVertexAttributes::Normal].size, tangents.size() * sizeof(uint)};
-            vertex_ranges[EVertexAttributes::Texcoord0]    = {vertex_ranges[EVertexAttributes::Tangent].offset + vertex_ranges[EVertexAttributes::Tangent].size, texcoords0.size() * sizeof(float2)};
-            vertex_ranges[EVertexAttributes::Texcoord1]    = {vertex_ranges[EVertexAttributes::Texcoord0].offset + vertex_ranges[EVertexAttributes::Texcoord0].size, texcoords1.size() * sizeof(float2)};
-            vertex_ranges[EVertexAttributes::JointIndices] = {vertex_ranges[EVertexAttributes::Texcoord1].offset + vertex_ranges[EVertexAttributes::Texcoord1].size, joint_data.size() * sizeof(uint16)};
-            vertex_ranges[EVertexAttributes::JointWeights] = {vertex_ranges[EVertexAttributes::JointIndices].offset + vertex_ranges[EVertexAttributes::JointIndices].size, joint_weights.size() * sizeof(float4)};
+            size_t offset = 0;
+            for (size_t i = 0; i < vertex_factory_buffers.GetAttributesCount(); i++) {
+                EVertexAttributes attr = vertex_factory_buffers.GetAttribute(i);
+
+                vertex_ranges[static_cast<size_t>(attr)] = {offset, vertex_factory_buffers.GetBufferLength() * vertex_factory_buffers.GetSizeOfAttribute(attr)};
+
+                offset += vertex_ranges[static_cast<size_t>(attr)].size;
+            }
+            // vertex_ranges[EVertexAttributes::Position]     = {0, positions.size() * sizeof(float3)};
+            // vertex_ranges[EVertexAttributes::Normal]       = {vertex_ranges[EVertexAttributes::Position].size, normals.size() * sizeof(uint)};
+            // vertex_ranges[EVertexAttributes::Tangent]      = {vertex_ranges[EVertexAttributes::Normal].offset + vertex_ranges[EVertexAttributes::Normal].size, tangents.size() * sizeof(uint)};
+            // vertex_ranges[EVertexAttributes::Texcoord0]    = {vertex_ranges[EVertexAttributes::Tangent].offset + vertex_ranges[EVertexAttributes::Tangent].size, texcoords0.size() * sizeof(float2)};
+            // vertex_ranges[EVertexAttributes::Texcoord1]    = {vertex_ranges[EVertexAttributes::Texcoord0].offset + vertex_ranges[EVertexAttributes::Texcoord0].size, texcoords1.size() * sizeof(float2)};
+            // vertex_ranges[EVertexAttributes::JointIndices] = {vertex_ranges[EVertexAttributes::Texcoord1].offset + vertex_ranges[EVertexAttributes::Texcoord1].size, joint_data.size() * sizeof(uint16)};
+            // vertex_ranges[EVertexAttributes::JointWeights] = {vertex_ranges[EVertexAttributes::JointIndices].offset + vertex_ranges[EVertexAttributes::JointIndices].size, joint_weights.size() * sizeof(float4)};
         }
 
         InputStream& operator>>(InputStream& _stream) {
-            _stream >> vertex_ranges >> indices >> positions >> normals >> tangents >> texcoords0 >> texcoords1 >> joint_data >> joint_weights;
+            // _stream >> vertex_ranges >> indices >> positions >> normals >> tangents >> texcoords0 >> texcoords1 >> joint_data >> joint_weights;
+            _stream >> vertex_ranges >> indices >> vertex_factory_buffers;
             return _stream;
         }
 
         OutputStream& operator<<(OutputStream& _stream) const {
-            _stream << vertex_ranges << indices << positions << normals << tangents << texcoords0 << texcoords1 << joint_data << joint_weights;
+            // _stream << vertex_ranges << indices << positions << normals << tangents << texcoords0 << texcoords1 << joint_data << joint_weights;
+            _stream << vertex_ranges << indices << vertex_factory_buffers;
             return _stream;
         }
     };
@@ -308,12 +314,12 @@ namespace Moer {
         Render::BufferRef        GetInstanceBuffer() const noexcept;
         Render::BindlessArrayRef GetBindlessArray() const noexcept;
 
-        void                                                         UpdateGpuData();
-        std::span<const Render::GeometryData>                        GetGeometryDatas() const noexcept;
-        std::span<const Render::InstanceData>                        GetInstanceDatas() const noexcept;
-        std::span<const StaticArray<Render::VertexBuffer, VETA_Num>> GetVertexBufferViews();
-        std::span<const Render::IndexBuffer>                         GetIndexBufferViews();
-        std::span<const Render::GeometryInstance>                    GetGeometryInstances() const noexcept;
+        void                                                       UpdateGpuData();
+        std::span<const Render::GeometryData>                      GetGeometryDatas() const noexcept;
+        std::span<const Render::InstanceData>                      GetInstanceDatas() const noexcept;
+        std::span<const StaticArray<Render::VertexBuffer, VA_NUM>> GetVertexBufferViews();
+        std::span<const Render::IndexBuffer>                       GetIndexBufferViews();
+        std::span<const Render::GeometryInstance>                  GetGeometryInstances() const noexcept;
 
     protected:
         class Impl;

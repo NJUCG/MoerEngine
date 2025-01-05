@@ -900,15 +900,15 @@ int main(int argc, const char** argv) {
             //     auto& mesh = RenderableManager::Get().GetMeshInfo(entity);
             //     draw_datas.emplace_back(SingleDrawParam{mesh->idx_count, 1, mesh->idx_offset, mesh->vtx_offset, instance_count++});
             // }
-            std::span<const StaticArray<VertexBuffer, VETA_Num>> vertex_buffers = scene.GetVertexBufferViews();
-            std::span<const IndexBuffer>                         index_buffers  = scene.GetIndexBufferViews();
+            std::span<const StaticArray<VertexBuffer, VA_NUM>> vertex_buffers = scene.GetVertexBufferViews();
+            std::span<const IndexBuffer>                       index_buffers  = scene.GetIndexBufferViews();
 
             uint geom_idx = 0;
             scene.ForEach([&](Entity _entity) {
                 auto& mesh = RenderableManager::Get().GetMeshInfo(_entity);
 
-                const StaticArray<VertexBuffer, VETA_Num>& vertex_buffer = vertex_buffers[mesh->global_mesh_idx];
-                auto&                                      mesh_draw_dat = mesh_draw_datas.emplace_back(
+                const StaticArray<VertexBuffer, VA_NUM>& vertex_buffer = vertex_buffers[mesh->global_mesh_idx];
+                auto&                                    mesh_draw_dat = mesh_draw_datas.emplace_back(
                     std::span<VertexBuffer>((VertexBuffer*)vertex_buffer.data(), 4),
                     index_buffers[mesh->global_mesh_idx]);
                 for (uint i = 0; i < mesh->geometries.size(); i++) {

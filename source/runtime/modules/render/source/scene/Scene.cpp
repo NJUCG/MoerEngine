@@ -66,11 +66,11 @@ namespace Moer {
         static AsyncSceneLoadInfoRef m_load_info;
         GpuScene                     gpu_scene;
 
-        Array<Render::GeometryData>                        geometry_datas;
-        Array<Render::InstanceData>                        instance_datas;
-        Array<StaticArray<Render::VertexBuffer, VETA_Num>> vtx_views;
-        Array<Render::IndexBuffer>                         idx_views;
-        Array<Render::GeometryInstance>                    geom_instances;
+        Array<Render::GeometryData>                      geometry_datas;
+        Array<Render::InstanceData>                      instance_datas;
+        Array<StaticArray<Render::VertexBuffer, VA_NUM>> vtx_views;
+        Array<Render::IndexBuffer>                       idx_views;
+        Array<Render::GeometryInstance>                  geom_instances;
     };
     AsyncSceneLoadInfoRef Scene::Impl::m_load_info{nullptr};
 
@@ -125,16 +125,16 @@ namespace Moer {
             std::span<MaterialInstanceRef> mat_instances = RenderableManager::Get().GetMaterialInstances(entity);
             const MeshBuffers&             buffers       = *info.buffers;
             for (auto& geo : info.geometries) {
-                uint  vtx_offset              = geo->local_vtx_offset + info.vtx_offset;
-                uint  geo_idx                 = &geo - info.geometries.data();
-                auto& geo_data                = geometry_datas[geo->global_geom_idx];
-                geo_data.num_indices          = geo->local_idx_count;
-                geo_data.num_vertices         = geo->local_vtx_count;
-                geo_data.vertex_offset        = vtx_offset;
-                geo_data.normal_offset        = buffers.GetAttributeRange(EVertexAttributes::Normal).offset + vtx_offset * sizeof(uint);
-                geo_data.tangent_offset       = buffers.GetAttributeRange(EVertexAttributes::Tangent).offset + vtx_offset * sizeof(uint);
-                geo_data.texcoord0_offset     = buffers.GetAttributeRange(EVertexAttributes::Texcoord0).offset + vtx_offset * sizeof(float2);
-                geo_data.texcoord1_offset     = buffers.GetAttributeRange(EVertexAttributes::Texcoord1).offset + vtx_offset * sizeof(float2);
+                uint  vtx_offset          = geo->local_vtx_offset + info.vtx_offset;
+                uint  geo_idx             = &geo - info.geometries.data();
+                auto& geo_data            = geometry_datas[geo->global_geom_idx];
+                geo_data.num_indices      = geo->local_idx_count;
+                geo_data.num_vertices     = geo->local_vtx_count;
+                geo_data.vertex_offset    = vtx_offset;
+                geo_data.normal_offset    = buffers.GetAttributeRange(EVertexAttributes::VA_NORMAL).offset + vtx_offset * VertexAttributesTool::GetSize(EVertexAttributes::VA_NORMAL);
+                geo_data.tangent_offset   = buffers.GetAttributeRange(EVertexAttributes::VA_TANGENT).offset + vtx_offset * VertexAttributesTool::GetSize(EVertexAttributes::VA_TANGENT);
+                geo_data.texcoord0_offset = buffers.GetAttributeRange(EVertexAttributes::VA_TEXCOORD0).offset + vtx_offset * VertexAttributesTool::GetSize(EVertexAttributes::VA_TEXCOORD0);
+                // geo_data.texcoord1_offset     = buffers.GetAttributeRange(EVertexAttributes::VA_TEXCOORD1).offset + vtx_offset * VertexAttributesTool::GetSize(EVertexAttributes::VA_TEXCOORD1);
                 geo_data.mat_idx_and_type     = geo->material_id << 8 | (uint)mat_instances[geo_idx]->GetMaterial()->GetType();
                 geo_data.index_offset         = (geo->local_idx_offset + info.idx_offset) * sizeof(uint);
                 geo_data.index_buffer_handle  = buffers.idx_bdls_handle;
@@ -145,12 +145,13 @@ namespace Moer {
                 geom_instance.geom_idx     = geo->global_geom_idx;
             }
 
-            StaticArray<Render::VertexBuffer, VETA_Num>& vtx_view = vtx_views[info.global_mesh_idx];
-            vtx_view[EVertexAttributes::Position]                 = {buffers.vertex_buffer.Get(), buffers.GetAttributeRange(EVertexAttributes::Position).offset};
-            vtx_view[EVertexAttributes::Normal]                   = {buffers.vertex_buffer.Get(), buffers.GetAttributeRange(EVertexAttributes::Normal).offset};
-            vtx_view[EVertexAttributes::Tangent]                  = {buffers.vertex_buffer.Get(), buffers.GetAttributeRange(EVertexAttributes::Tangent).offset};
-            vtx_view[EVertexAttributes::Texcoord0]                = {buffers.vertex_buffer.Get(), buffers.GetAttributeRange(EVertexAttributes::Texcoord0).offset};
-            vtx_view[EVertexAttributes::Texcoord1]                = {buffers.vertex_buffer.Get(), buffers.GetAttributeRange(EVertexAttributes::Texcoord1).offset};
+            StaticArray<Render::VertexBuffer, VA_NUM>& vtx_view = vtx_views[info.global_mesh_idx];
+
+            vtx_view[static_cast<size_t>(EVertexAttributes::VA_POSITION)]  = {buffers.vertex_buffer.Get(), buffers.GetAttributeRange(EVertexAttributes::VA_POSITION).offset};
+            vtx_view[static_cast<size_t>(EVertexAttributes::VA_NORMAL)]    = {buffers.vertex_buffer.Get(), buffers.GetAttributeRange(EVertexAttributes::VA_NORMAL).offset};
+            vtx_view[static_cast<size_t>(EVertexAttributes::VA_TANGENT)]   = {buffers.vertex_buffer.Get(), buffers.GetAttributeRange(EVertexAttributes::VA_TANGENT).offset};
+            vtx_view[static_cast<size_t>(EVertexAttributes::VA_TEXCOORD0)] = {buffers.vertex_buffer.Get(), buffers.GetAttributeRange(EVertexAttributes::VA_TEXCOORD0).offset};
+            // vtx_view[static_cast<size_t>(EVertexAttributes::VA_TEXCOORD1)] = {buffers.vertex_buffer.Get(), buffers.GetAttributeRange(EVertexAttributes::VA_TEXCOORD1).offset};
 
             idx_views[info.global_mesh_idx] = {buffers.index_buffer->GetView(),
                                                EIndexElementType::IET_UINT32};
@@ -295,7 +296,7 @@ namespace Moer {
         return m_impl->GetInstanceDatas();
     }
 
-    std::span<const StaticArray<Render::VertexBuffer, VETA_Num>> Scene::GetVertexBufferViews() {
+    std::span<const StaticArray<Render::VertexBuffer, VA_NUM>> Scene::GetVertexBufferViews() {
         return m_impl->vtx_views;
     }
 

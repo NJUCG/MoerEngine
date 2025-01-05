@@ -169,7 +169,7 @@ namespace Moer {
         return m_manager[_entity].geom_instance_id;
     }
 
-    std::span<const StaticArray<Render::VertexBuffer, VETA_Num>> RenderableManager::GetVertexBuffer(Entity _entity) {
+    std::span<const StaticArray<Render::VertexBuffer, VA_NUM>> RenderableManager::GetVertexBuffer(Entity _entity) {
         return m_manager[_entity].vertex_buffers;
     }
 

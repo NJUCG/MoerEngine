@@ -12,13 +12,13 @@
 namespace Moer {
     class RENDER_API RenderableManager {
         struct Proxy {
-            RHIRenderPrimitiveRef                                                 primitive{nullptr};
-            std::unique_ptr<Moer::Array<float>>                                   vertex_data{};
-            std::unique_ptr<Moer::Array<uint32_t>>                                index_data{};
-            bool                                                                  culling{false};
-            bool                                                                  cast_shadows{false};
-            SharedPtr<MeshInfo>                                                   mesh_info{};
-            Array<StaticArray<Render::VertexBuffer, EVertexAttributes::VETA_Num>> vertex_buffers{};
+            RHIRenderPrimitiveRef                            primitive{nullptr};
+            std::unique_ptr<Moer::Array<float>>              vertex_data{};
+            std::unique_ptr<Moer::Array<uint32_t>>           index_data{};
+            bool                                             culling{false};
+            bool                                             cast_shadows{false};
+            SharedPtr<MeshInfo>                              mesh_info{};
+            Array<StaticArray<Render::VertexBuffer, VA_NUM>> vertex_buffers{};
             // MaterialInstanceRef                    material_instance{nullptr};
             Array<MaterialInstanceRef> material_instances{};
             int                        instance_id      = -1;
@@ -75,16 +75,16 @@ namespace Moer {
         void SetInstanceID(Entity entity, int instance_id);
         void SetGeomInstanceID(Entity entity, int geom_instance_id);
 
-        RHIRenderPrimitiveRef                                        GetRenderPrimitive(Entity entity);
-        bool                                                         GetCulling(Entity entity);
-        const Moer::Array<float>&                                    GetVertexData(Entity entity);
-        const Moer::Array<uint32_t>&                                 GetIndexData(Entity entity);
-        std::span<MaterialInstanceRef>                               GetMaterialInstances(Entity _entity);
-        const SharedPtr<MeshInfo>&                                   GetMeshInfo(Entity entity);
-        void                                                         ModifyMeshInfo(Entity entity, std::function<void(MeshInfo&)>&& _func);
-        int                                                          GetInstanceID(Entity entity);
-        int                                                          GetGeomInstanceID(Entity entity);
-        std::span<const StaticArray<Render::VertexBuffer, VETA_Num>> GetVertexBuffer(Entity _entity);
+        RHIRenderPrimitiveRef                                      GetRenderPrimitive(Entity entity);
+        bool                                                       GetCulling(Entity entity);
+        const Moer::Array<float>&                                  GetVertexData(Entity entity);
+        const Moer::Array<uint32_t>&                               GetIndexData(Entity entity);
+        std::span<MaterialInstanceRef>                             GetMaterialInstances(Entity _entity);
+        const SharedPtr<MeshInfo>&                                 GetMeshInfo(Entity entity);
+        void                                                       ModifyMeshInfo(Entity entity, std::function<void(MeshInfo&)>&& _func);
+        int                                                        GetInstanceID(Entity entity);
+        int                                                        GetGeomInstanceID(Entity entity);
+        std::span<const StaticArray<Render::VertexBuffer, VA_NUM>> GetVertexBuffer(Entity _entity);
 
         static RenderableManager& Get();
 

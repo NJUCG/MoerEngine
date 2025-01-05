@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 #include <array>
+#include <any>
 
 #include "MMemory.h"
 #include <memory>
@@ -47,6 +48,8 @@ namespace Moer {
 
     template<typename T, size_t N>
     using StaticArray = std::array<T, N>;
+
+    using Any = std::any;
 
     template<typename T, class Deleter = MoerDeleter>
     using UniquePtr = std::unique_ptr<T, Deleter>;

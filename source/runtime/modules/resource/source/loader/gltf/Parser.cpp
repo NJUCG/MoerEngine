@@ -751,10 +751,14 @@ namespace Moer::Resource::Gltf {
             SharedPtr<MeshBuffers> mesh_buffer = MakeShared<MeshBuffers>();
             mesh_buffers.emplace_back(mesh_buffer);
 
-            mesh_buffer->positions.resize(total_vtx_cnt);
-            mesh_buffer->normals.resize(total_vtx_cnt);
-            mesh_buffer->tangents.resize(total_vtx_cnt);
-            mesh_buffer->texcoords0.resize(total_vtx_cnt);
+            mesh_buffer->vertex_factory_buffers = VertexFactoryBuffers(
+                {EVertexAttributes::VA_POSITION, EVertexAttributes::VA_NORMAL, EVertexAttributes::VA_TANGENT, EVertexAttributes::VA_TEXCOORD0});
+
+            // create temp buffers
+            Array<float3> position_buffer(total_vtx_cnt);
+            Array<uint>   normal_buffer(total_vtx_cnt);
+            Array<uint>   tangent_buffer(total_vtx_cnt);
+            Array<float2> texcoord0_buffer(total_vtx_cnt);
 
             mesh_buffer->indices.resize(total_idx_cnt);
 
@@ -790,25 +794,29 @@ namespace Moer::Resource::Gltf {
 
                     for (uint32_t j = 0; j < mesh->mNumVertices; j++) {
                         if (mesh->HasPositions()) {
-                            const auto& pos                           = mesh->mVertices[j];
-                            mesh_buffer->positions[total_vtx_cnt + j] = {pos.x, pos.y, pos.z};
+                            const auto& pos = mesh->mVertices[j];
+                            // old method: mesh_buffer->positions[total_vtx_cnt + j] = {pos.x, pos.y, pos.z};
+                            position_buffer[total_vtx_cnt + j] = {pos.x, pos.y, pos.z};
                         } else {
                             assert(false && "Mesh has no position");
                         }
 
                         if (mesh->HasNormals()) {
-                            const auto& nor                         = mesh->mNormals[j];
-                            float3      normal                      = {nor.x, nor.y, nor.z};
-                            mesh_buffer->normals[total_vtx_cnt + j] = Pack_RGB8_SNORM(normal);
+                            const auto& nor    = mesh->mNormals[j];
+                            float3      normal = {nor.x, nor.y, nor.z};
+                            // old method: mesh_buffer->normals[total_vtx_cnt + j] = Pack_RGB8_SNORM(normal);
+                            normal_buffer[total_vtx_cnt + j] = Pack_RGB8_SNORM(normal);
                         }
                         if (mesh->HasTangentsAndBitangents()) {
-                            const auto& tan                          = mesh->mTangents[j];
-                            float3      tangent                      = {tan.x, tan.y, tan.z};
-                            mesh_buffer->tangents[total_vtx_cnt + j] = Pack_RGB8_SNORM(tangent);
+                            const auto& tan     = mesh->mTangents[j];
+                            float3      tangent = {tan.x, tan.y, tan.z};
+                            // old method: mesh_buffer->tangents[total_vtx_cnt + j] = Pack_RGB8_SNORM(tangent);
+                            tangent_buffer[total_vtx_cnt + j] = Pack_RGB8_SNORM(tangent);
                         }
                         if (mesh->HasTextureCoords(0)) {
-                            const auto& uv0                            = mesh->mTextureCoords[0][j];
-                            mesh_buffer->texcoords0[total_vtx_cnt + j] = {uv0.x, uv0.y};
+                            const auto& uv0 = mesh->mTextureCoords[0][j];
+                            // old method: mesh_buffer->texcoords0[total_vtx_cnt + j] = {uv0.x, uv0.y};
+                            texcoord0_buffer[total_vtx_cnt + j] = {uv0.x, uv0.y};
                         }
                     }
                     for (uint32_t j = 0; j < mesh->mNumFaces; j++) {
@@ -821,8 +829,18 @@ namespace Moer::Resource::Gltf {
                     total_vtx_cnt += mesh->mNumVertices;
                     total_idx_cnt += mesh->mNumFaces * 3;
                 }
+
+                // use temp buffers to initialize vertex_factory_buffers
+                assert(total_vtx_cnt == position_buffer.size());
+                mesh_buffer->vertex_factory_buffers.AssignAllBuffers({
+                    {EVertexAttributes::VA_POSITION, position_buffer.data(), position_buffer.size()},
+                    {EVertexAttributes::VA_NORMAL, normal_buffer.data(), normal_buffer.size()},
+                    {EVertexAttributes::VA_TANGENT, tangent_buffer.data(), tangent_buffer.size()},
+                    {EVertexAttributes::VA_TEXCOORD0, texcoord0_buffer.data(), texcoord0_buffer.size()},
+                });
+
+                mesh_buffer->FillRanges();
             };
-            mesh_buffer->FillRanges();
 
             LoadNodes(gltf_scene, gltf_scene->mRootNode, on_load_node_post);
         }

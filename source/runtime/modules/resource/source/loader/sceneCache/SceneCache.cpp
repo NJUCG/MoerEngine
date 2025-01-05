@@ -722,23 +722,38 @@ namespace Moer {
             buf->index_buffer = device.CreateBuffer<uint32_t>(buf->indices.size(), EBufferUsageFlags::INDEX_BUFFER | EBufferUsageFlags::ACCELERATION_STRUCTURE);
             //calculate vertex buffer size
             uint vertex_size = 0;
-            vertex_size += buf->positions.size() * sizeof(float3);
-            vertex_size += buf->normals.size() * sizeof(uint);
-            vertex_size += buf->tangents.size() * sizeof(uint);
-            vertex_size += buf->texcoords0.size() * sizeof(float2);
-            vertex_size += buf->texcoords1.size() * sizeof(float2);
+
+            size_t buffer_length = buf->vertex_factory_buffers.GetBufferLength();
+
+            size_t position_buffer_size  = buffer_length * VertexAttributesTool::GetSize(EVertexAttributes::VA_POSITION);
+            size_t normal_buffer_size    = buffer_length * VertexAttributesTool::GetSize(EVertexAttributes::VA_NORMAL);
+            size_t tangent_buffer_size   = buffer_length * VertexAttributesTool::GetSize(EVertexAttributes::VA_TANGENT);
+            size_t texcoord0_buffer_size = buffer_length * VertexAttributesTool::GetSize(EVertexAttributes::VA_TEXCOORD0);
+            // size_t texcoord1_buffer_size = buffer_length * VertexAttributesTool::GetSize(EVertexAttributes::VA_TEXCOORD1);
+
+            auto position_buffer_ptr  = buf->vertex_factory_buffers.GetBufferData(EVertexAttributes::VA_POSITION);
+            auto normal_buffer_ptr    = buf->vertex_factory_buffers.GetBufferData(EVertexAttributes::VA_NORMAL);
+            auto tangent_buffer_ptr   = buf->vertex_factory_buffers.GetBufferData(EVertexAttributes::VA_TANGENT);
+            auto texcoord0_buffer_ptr = buf->vertex_factory_buffers.GetBufferData(EVertexAttributes::VA_TEXCOORD0);
+            // auto texcoord1_buffer_ptr = buf->vertex_factory_buffers.GetBufferData(EVertexAttributes::VA_TEXCOORD1);
+
+            vertex_size += position_buffer_size;
+            vertex_size += normal_buffer_size;
+            vertex_size += tangent_buffer_size;
+            vertex_size += texcoord0_buffer_size;
+            // vertex_size += texcoord1_buffer_size;
 
             buf->vertex_buffer   = device.CreateBuffer<byte>(vertex_size, EBufferUsageFlags::VERTEX_BUFFER | EBufferUsageFlags::ACCELERATION_STRUCTURE);
             buf->idx_bdls_handle = bindless_array->AllocateBuffer(buf->index_buffer->GetView());
             buf->vtx_bdls_handle = bindless_array->AllocateBuffer(buf->vertex_buffer->GetView());
             buf->vertex_buffer->SetName("soa_vertex_buffer");
             buf->index_buffer->SetName("index_buffer");
-            cmd_list.CopyFrom(std::span<byte>((byte*)buf->positions.data(), buf->positions.size() * sizeof(float3)), buf->vertex_buffer->GetView(0, buf->GetAttributeRange(EVertexAttributes::Position).size));
-            cmd_list.CopyFrom(std::span<byte>((byte*)buf->normals.data(), buf->normals.size() * sizeof(uint)), buf->vertex_buffer->GetView(buf->GetAttributeRange(EVertexAttributes::Normal).offset, buf->GetAttributeRange(EVertexAttributes::Normal).size));
-            cmd_list.CopyFrom(std::span<byte>((byte*)buf->tangents.data(), buf->tangents.size() * sizeof(uint)), buf->vertex_buffer->GetView(buf->GetAttributeRange(EVertexAttributes::Tangent).offset, buf->GetAttributeRange(EVertexAttributes::Tangent).size));
-            cmd_list.CopyFrom(std::span<byte>((byte*)buf->texcoords0.data(), buf->texcoords0.size() * sizeof(float2)), buf->vertex_buffer->GetView(buf->GetAttributeRange(EVertexAttributes::Texcoord0).offset, buf->GetAttributeRange(EVertexAttributes::Texcoord0).size));
-            if (buf->GetAttributeRange(EVertexAttributes::Texcoord1).size > 0)
-                cmd_list.CopyFrom(std::span<byte>((byte*)buf->texcoords1.data(), buf->texcoords1.size() * sizeof(float2)), buf->vertex_buffer->GetView(buf->GetAttributeRange(EVertexAttributes::Texcoord1).offset, buf->GetAttributeRange(EVertexAttributes::Texcoord1).size));
+            cmd_list.CopyFrom(std::span<byte>((byte*)position_buffer_ptr, position_buffer_size), buf->vertex_buffer->GetView(0, buf->GetAttributeRange(EVertexAttributes::VA_POSITION).size));
+            cmd_list.CopyFrom(std::span<byte>((byte*)normal_buffer_ptr, normal_buffer_size), buf->vertex_buffer->GetView(buf->GetAttributeRange(EVertexAttributes::VA_NORMAL).offset, buf->GetAttributeRange(EVertexAttributes::VA_NORMAL).size));
+            cmd_list.CopyFrom(std::span<byte>((byte*)tangent_buffer_ptr, tangent_buffer_size), buf->vertex_buffer->GetView(buf->GetAttributeRange(EVertexAttributes::VA_TANGENT).offset, buf->GetAttributeRange(EVertexAttributes::VA_TANGENT).size));
+            cmd_list.CopyFrom(std::span<byte>((byte*)texcoord0_buffer_ptr, texcoord0_buffer_size), buf->vertex_buffer->GetView(buf->GetAttributeRange(EVertexAttributes::VA_TEXCOORD0).offset, buf->GetAttributeRange(EVertexAttributes::VA_TEXCOORD0).size));
+            // if (buf->GetAttributeRange(EVertexAttributes::VA_TEXCOORD1).size > 0)
+            //     cmd_list.CopyFrom(std::span<byte>((byte*)texcoord1_buffer_ptr, texcoord1_buffer_size), buf->vertex_buffer->GetView(buf->GetAttributeRange(EVertexAttributes::VA_TEXCOORD1).offset, buf->GetAttributeRange(EVertexAttributes::VA_TEXCOORD1).size));
 
             cmd_list.CopyFrom(std::span<byte>((byte*)buf->indices.data(), buf->indices.size() * sizeof(uint32_t)), buf->index_buffer->GetView());
         }

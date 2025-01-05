@@ -25,17 +25,16 @@ target_link_libraries(ShaderReflectionTest
     )
 set_target_properties(ShaderReflectionTest PROPERTIES FOLDER ${moer_test_folder})
 
-add_executable(VulkanRHITest VulkanRHITest.cpp)
-target_include_directories(VulkanRHITest
-        PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/glfw/include>
-        PUBLIC $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
-)
-target_link_libraries(VulkanRHITest
-        PRIVATE MoerRender
-        PRIVATE glfw
-)
-
-set_target_properties(VulkanRHITest PROPERTIES FOLDER ${moer_test_folder})
+# add_executable(VulkanRHITest VulkanRHITest.cpp)
+# target_include_directories(VulkanRHITest
+#         PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/glfw/include>
+#         PUBLIC $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
+# )
+# target_link_libraries(VulkanRHITest
+#         PRIVATE MoerRender
+#         PRIVATE glfw
+# )
+# set_target_properties(VulkanRHITest PROPERTIES FOLDER ${moer_test_folder})
 
 
 add_executable(TaskGraphTest "TaskGraphTest.cpp")
@@ -48,25 +47,25 @@ target_link_libraries(TaskGraphTest
 )
 set_target_properties(TaskGraphTest PROPERTIES FOLDER ${moer_test_folder})
 
-add_executable(MeshProcessTest "MeshProcessTest.cpp")
+# add_executable(MeshProcessTest "MeshProcessTest.cpp")
+# target_include_directories(MeshProcessTest 
+#         PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
+#         PRIVATE $<BUILD_INTERFACE:${moer_third_party_dir}/AssetLoad/assimp/include>)
+# target_link_libraries(MeshProcessTest PRIVATE render MeshProcess AssetLoad)
+# set_target_properties(MeshProcessTest PROPERTIES FOLDER ${moer_test_folder})
 
-target_include_directories(MeshProcessTest 
-        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
-        PRIVATE $<BUILD_INTERFACE:${moer_third_party_dir}/AssetLoad/assimp/include>)
-target_link_libraries(MeshProcessTest PRIVATE render MeshProcess AssetLoad)
-set_target_properties(MeshProcessTest PROPERTIES FOLDER ${moer_test_folder})
+# add_executable(VulkanRTRHITest VulkanRTRHITest.cpp)
+# target_include_directories(VulkanRTRHITest
+#         PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/glfw/include>
+#         PUBLIC $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
+# )
+# target_link_libraries(VulkanRTRHITest
+#         PRIVATE MoerRender
+#         PRIVATE glfw
+# )
+# set_target_properties(VulkanRTRHITest PROPERTIES FOLDER ${moer_test_folder})
 
-add_executable(VulkanRTRHITest VulkanRTRHITest.cpp)
-target_include_directories(VulkanRTRHITest
-        PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/glfw/include>
-        PUBLIC $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
-)
-target_link_libraries(VulkanRTRHITest
-        PRIVATE MoerRender
-        PRIVATE glfw
-)
-set_target_properties(VulkanRTRHITest PROPERTIES FOLDER ${moer_test_folder})
-
+# RHITest
 add_executable(RHITest RHITest/RHITest.cpp RHITest/RHIUI.cpp)
 target_include_directories(RHITest
         PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>
@@ -81,6 +80,7 @@ target_link_libraries(RHITest
 )
 set_target_properties(RHITest PROPERTIES FOLDER ${moer_test_folder})
 
+# RaytracingTest
 file(GLOB_RECURSE RT_TEST_CPPS Raytracing/*.cpp)
 add_executable(RaytracingTest ${RT_TEST_CPPS})
 target_include_directories(RaytracingTest
@@ -96,3 +96,17 @@ target_link_libraries(RaytracingTest
 
 )
 set_target_properties(RaytracingTest PROPERTIES FOLDER ${moer_test_folder})
+
+# VertexFactoryTest
+add_executable(VertexFactoryTest VertexFactoryTest.cpp)
+target_include_directories(VertexFactoryTest
+        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>
+        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
+        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
+)
+target_link_libraries(VertexFactoryTest
+        PRIVATE MoerRender
+        PRIVATE glfw
+        PRIVATE MoerResource
+)
+set_target_properties(VertexFactoryTest PROPERTIES FOLDER ${moer_test_folder})
