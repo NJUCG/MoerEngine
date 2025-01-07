@@ -588,7 +588,7 @@ int main(int argc, const char** argv) {
         return manager
             .Raster()
             .Vertex("test/post_process/PostProcessFullScreenQuad.hlsl")
-            .Pixel("test/post_process/AO.hlsl")
+            .Pixel("test/post_process/Ao.hlsl")
             .Build<AoPipeline>(std::move(pso_full_screen_info));
     }();
 
@@ -612,8 +612,8 @@ int main(int argc, const char** argv) {
                                               {RHIColorAttachmentInfo::Preset(antialiasing_temporal_texture_1->GetFormat())});
         return manager
             .Raster()
-            .Vertex("test/post_process/SMAAWrapper.hlsl", "SMAAEdgeDetectionVS_Wrapper")
-            .Pixel("test/post_process/SMAAWrapper.hlsl", "SMAALumaEdgeDetectionPS_Wrapper")
+            .Vertex("test/post_process/SmaaWrapper.hlsl", "SMAAEdgeDetectionVS_Wrapper")
+            .Pixel("test/post_process/SmaaWrapper.hlsl", "SMAALumaEdgeDetectionPS_Wrapper")
             .Build<SmaaEdgeDetectionPipeline>(std::move(pso_full_screen_info));
     }();// IILE(Immediately Invoked Lambda Expression), usually for complex varaible initialization and avoid naming conflicts
 
@@ -623,8 +623,8 @@ int main(int argc, const char** argv) {
                                               {RHIColorAttachmentInfo::Preset(antialiasing_temporal_texture_2->GetFormat())});
         return manager
             .Raster()
-            .Vertex("test/post_process/SMAAWrapper.hlsl", "SMAABlendingWeightCalculationVS_Wrapper")
-            .Pixel("test/post_process/SMAAWrapper.hlsl", "SMAABlendingWeightCalculationPS_Wrapper")
+            .Vertex("test/post_process/SmaaWrapper.hlsl", "SMAABlendingWeightCalculationVS_Wrapper")
+            .Pixel("test/post_process/SmaaWrapper.hlsl", "SMAABlendingWeightCalculationPS_Wrapper")
             .Build<SmaaBlendingWeightPipeline>(std::move(pso_full_screen_info));
     }();
 
@@ -634,8 +634,8 @@ int main(int argc, const char** argv) {
                                               {RHIColorAttachmentInfo::Preset(antialiasing_output->GetFormat())});
         return manager
             .Raster()
-            .Vertex("test/post_process/SMAAWrapper.hlsl", "SMAANeighborhoodBlendingVS_Wrapper")
-            .Pixel("test/post_process/SMAAWrapper.hlsl", "SMAANeighborhoodBlendingPS_Wrapper")
+            .Vertex("test/post_process/SmaaWrapper.hlsl", "SMAANeighborhoodBlendingVS_Wrapper")
+            .Pixel("test/post_process/SmaaWrapper.hlsl", "SMAANeighborhoodBlendingPS_Wrapper")
             .Build<SmaaNeighborhoodBlendingPipeline>(std::move(pso_full_screen_info));
     }();
 
@@ -645,8 +645,8 @@ int main(int argc, const char** argv) {
                                               {RHIColorAttachmentInfo::Preset(antialiasing_temporal_texture_34[0]->GetFormat())});
         return manager
             .Raster()
-            .Vertex("test/post_process/SMAAWrapper.hlsl", "SMAANeighborhoodBlendingVS_Wrapper")
-            .Pixel("test/post_process/SMAAWrapper.hlsl", "SMAANeighborhoodBlendingPS_Wrapper")
+            .Vertex("test/post_process/SmaaWrapper.hlsl", "SMAANeighborhoodBlendingVS_Wrapper")
+            .Pixel("test/post_process/SmaaWrapper.hlsl", "SMAANeighborhoodBlendingPS_Wrapper")
             .Build<SmaaT2xNeighborhoodBlendingPipeline>(std::move(pso_full_screen_info));
     }();
 
@@ -656,8 +656,8 @@ int main(int argc, const char** argv) {
                                               {RHIColorAttachmentInfo::Preset(antialiasing_output->GetFormat())});
         return manager
             .Raster()
-            .Vertex("test/post_process/SMAAWrapper.hlsl", "SMAAResolveVS_Wrapper")
-            .Pixel("test/post_process/SMAAWrapper.hlsl", "SMAAResolvePS_Wrapper")
+            .Vertex("test/post_process/SmaaWrapper.hlsl", "SMAAResolveVS_Wrapper")
+            .Pixel("test/post_process/SmaaWrapper.hlsl", "SMAAResolvePS_Wrapper")
             .Build<SmaaT2xResolvePipeline>(std::move(pso_full_screen_info));
     }();
 
@@ -1010,6 +1010,7 @@ int main(int argc, const char** argv) {
              * TODO: use HiZ buffer to accelerate SSR (now, a simple heuristic and binary search is used for SSR)
              * TODO: glossy ssr
              * TODO: performance optimization
+             * TODO: fix some artifacts (jitter)
              */
             uint ssr_actual_input  = ao_actual_output;
             uint ssr_actual_output = ao_actual_output;

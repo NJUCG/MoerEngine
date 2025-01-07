@@ -13,6 +13,15 @@ namespace Moer {
             requires !std::is_pointer_v<T>;
         };
 
+    template<typename T>
+    concept NumericFloatType =
+        requires(T param) {
+            requires std::is_floating_point_v<T>;
+            requires !std::is_same_v<bool, T>;
+            requires std::is_arithmetic_v<decltype(param + 1)>;
+            requires !std::is_pointer_v<T>;
+        };
+
     template<NumericType T, size_t N>
         requires(N > 1 && N < 5)
     struct Vector {};
@@ -142,6 +151,7 @@ namespace Moer {
     template<NumericType T> struct IsVectorType<Vector<T, 4>> { static constexpr bool value = true; };
 
     template<typename T> concept VectorType = IsVectorType<T>::value;
+    template<typename T> concept VectorFloatType = std::is_floating_point_v<T> && IsVectorType<T>::value;
 
     template<size_t N> using Vectori  = Vector<int, N>;
     template<size_t N> using Vectorf  = Vector<float, N>;
