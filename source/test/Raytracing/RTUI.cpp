@@ -2,8 +2,34 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "math/Function.h"
-
+#include "shaderheaders/shared/ShaderParameters.h"
 namespace Moer::Render {
+
+    static constexpr std::string_view s_final_color_names[] = {
+        "SceneColor",
+        "Emissive",
+        "Diffuse",
+        "Specular",
+        "Normal",
+        "ViewDepth",
+        "Depth",
+        "Motion",
+        "Grid",
+        "Material"};
+    RTUI::RTUI(UIRenderer& _renderer)
+        : ui_renderer(_renderer) {
+
+        final_color_map["SceneColor"] = EFinalColor::EFC_SceneColor;
+        final_color_map["Emissive"]   = EFinalColor::EFC_EMISSIVE;
+        final_color_map["Diffuse"]    = EFinalColor::EFC_DIFFUSE;
+        final_color_map["Specular"]   = EFinalColor::EFC_SPECULAR;
+        final_color_map["Normal"]     = EFinalColor::EFC_NORMAL;
+        final_color_map["ViewDepth"]  = EFinalColor::EFC_VIEW_DEPTH;
+        final_color_map["Depth"]      = EFinalColor::EFC_DEPTH;
+        final_color_map["Motion"]     = EFinalColor::EFC_MOTION;
+        final_color_map["Grid"]       = EFinalColor::EFC_GRID;
+        final_color_map["Material"]   = EFinalColor::EFC_MATERIAL;
+    }
     void RTUI::TickUI() {
 
         static bool               opt_fullscreen  = true;
@@ -138,6 +164,17 @@ namespace Moer::Render {
             ImGui::End();
             return;
         }
+
+        if (ImGui::TreeNode("Final Color")) {
+            for (auto& [name, index] : final_color_map) {
+                if (ImGui::Selectable(name.c_str(), config.final_color == index)) {
+                    config.final_color = static_cast<EFinalColor>(index);
+                }
+            }
+
+            ImGui::TreePop();
+        }
+
         config.sun_direction = Normalizef(config.sun_direction);
         ImGui::SliderFloat3("Sun Direction", &config.sun_direction.x, -1.0f, 1.0f);
         ImGui::SliderFloat("Exposure", &config.exposure, 0.0f, 10.0f);

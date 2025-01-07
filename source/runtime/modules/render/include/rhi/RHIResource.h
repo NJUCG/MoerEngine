@@ -150,6 +150,7 @@ namespace Moer::Render {
     class BindlessArray;
     class RaytracingGeometry;
     class RaytracingScene;
+    class RaytracingTlas;
     using TextureRef            = CountableRef<Texture>;
     using BufferRef             = CountableRef<Buffer>;
     using FenceRef              = CountableRef<Fence>;
@@ -159,6 +160,7 @@ namespace Moer::Render {
     using BindlessArrayRef      = CountableRef<BindlessArray>;
     using RaytracingGeometryRef = CountableRef<RaytracingGeometry>;
     using RaytracingSceneRef    = CountableRef<RaytracingScene>;
+    using RaytracingTlasRef     = CountableRef<RaytracingTlas>;
 };// namespace Moer::Render
 
 class Shader;
@@ -942,15 +944,6 @@ namespace Moer::Render {
         ERaytracingBuildMode  mode;
     };
 
-    enum RTVisibleMask : uint8 {
-        RTVM_NONE,
-        RTVM_DISABLE     = 0x1,
-        RTVM_DEFAULT     = 0x2,
-        RTVM_TRANSPARANT = 0x4,
-        RTVM_EMISSION    = 0x8,
-        RTVM_ALL         = 0xff
-    };
-
     struct RaytracingMaterial {
         uint64 handle;
         uint64 sbt_offset;
@@ -974,6 +967,12 @@ namespace Moer::Render {
         Flag          flag;
     };
 
+    class RaytracingTlas : public RHIResource {
+    public:
+        RaytracingTlas() : RHIResource(RRT_RAYTRACING_TLAS) {}
+        virtual ~RaytracingTlas() = default;
+    };
+
     //container for scene TLAS and rt instances
     class RaytracingScene : public RHIResource {
     public:
@@ -985,16 +984,19 @@ namespace Moer::Render {
         virtual void                FreeInstance(uint _array_idx) = 0;
         virtual void                MarkModified(uint _array_idx) = 0;
         virtual UniquePtr<Command>  UpdateScene()                 = 0;
+        virtual void                AdvanceFrame()                = 0;
 
         virtual void RegisterGeometry(RaytracingGeometryRef _geom)   = 0;
         virtual void UnregisterGeometry(RaytracingGeometryRef _geom) = 0;
+
+        virtual RaytracingTlasRef GetTlas() const = 0;
+        virtual RaytracingTlasRef GetPrevTlas() const = 0;
 
         RENDER_API RaytracingInstance&       GetInstance(uint _array_idx);
         RENDER_API const RaytracingInstance& GetInstance(uint _array_idx) const;
 
     protected:
         Array<RaytracingInstance> instances;
-        RaytracingSizeInfos       size_infos;
     };
 
 }// namespace Moer::Render

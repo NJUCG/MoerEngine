@@ -1035,7 +1035,7 @@ namespace Moer::Render {
                 uint buffer_dst_slot_offset = bindless_array->buffers_offset_in_set / buffer_handle_stride;
                 for (size_t i = 0; i < buffer_slots.size(); ++i) {
                     VulkanBuffer* vk_buffer = ResourceCast(buffer_slots[i].buffer);
-                    uint          src_idx   = heap.GetBufferDescIdx(vk_buffer->GetView());
+                    uint          src_idx   = heap.GetBufferDescIdx(vk_buffer->GetView(), VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
                     memcpy(buffer_dat.data() + i * buffer_handle_stride, &heap.buffer_desc_data[src_idx], buffer_handle_stride);
                     buffer_indices_dat[i] = {i, buffer_slots[i].slot + buffer_dst_slot_offset};
 

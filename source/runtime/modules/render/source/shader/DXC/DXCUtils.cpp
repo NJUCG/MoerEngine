@@ -1,5 +1,7 @@
 #include "DXCUtils.h"
+#include "PixelFormat.h"
 #include "config/ConfigManager.h"
+#include "include/spirv/unified1/spirv.h"
 #include "platform/Platform.h"
 #include <format>
 #include "shader/ShaderCommon.h"
@@ -114,6 +116,101 @@ const auto* GetShaderTypeWChar(EShaderType _type) {
         default: break;
     }
     return L"";
+}
+
+EPixelFormat ToPixelFormat(SpvImageFormat _format) {
+    switch (_format) {
+
+        case SpvImageFormatUnknown:
+            return EPixelFormat::PF_R8_UNORM;
+        case SpvImageFormatRgba32f:
+            return EPixelFormat::PF_R32G32B32A32_SFLOAT;
+        case SpvImageFormatRgba16f:
+            return EPixelFormat::PF_R16G16B16A16_SFLOAT;
+        case SpvImageFormatR32f:
+            return EPixelFormat::PF_R32_SFLOAT;
+        case SpvImageFormatRgba8:
+            return EPixelFormat::PF_R8G8B8A8_UNORM;
+        case SpvImageFormatRgba8Snorm:
+            return EPixelFormat::PF_R8G8B8A8_SNORM;
+        case SpvImageFormatRg32f:
+            return EPixelFormat::PF_R32G32_SFLOAT;
+        case SpvImageFormatRg16f:
+            return EPixelFormat::PF_R16G16_SFLOAT;
+        case SpvImageFormatR11fG11fB10f:
+            return EPixelFormat::PF_B10G11R11_UFLOAT_PACK32;
+        case SpvImageFormatR16f:
+            return EPixelFormat::PF_R16_SFLOAT;
+        case SpvImageFormatRgba16:
+            return EPixelFormat::PF_R16G16B16A16_UNORM;
+        case SpvImageFormatRgb10A2:
+            return EPixelFormat::PF_A2B10G10R10_UNORM_PACK32;
+        case SpvImageFormatRg16:
+            return EPixelFormat::PF_R16G16_UNORM;
+        case SpvImageFormatRg8:
+            return EPixelFormat::PF_R8G8_UNORM;
+        case SpvImageFormatR16:
+            return EPixelFormat::PF_R16_UNORM;
+        case SpvImageFormatR8:
+            return EPixelFormat::PF_R8_UNORM;
+        case SpvImageFormatRgba16Snorm:
+            return EPixelFormat::PF_R16G16B16A16_SNORM;
+        case SpvImageFormatRg16Snorm:
+            return EPixelFormat::PF_R16G16_SNORM;
+        case SpvImageFormatRg8Snorm:
+            return EPixelFormat::PF_R8G8_SNORM;
+        case SpvImageFormatR16Snorm:
+            return EPixelFormat::PF_R16_SNORM;
+        case SpvImageFormatR8Snorm:
+            return EPixelFormat::PF_R8_SNORM;
+        case SpvImageFormatRgba32i:
+            return EPixelFormat::PF_R32G32B32A32_SINT;
+        case SpvImageFormatRgba16i:
+            return EPixelFormat::PF_R16G16B16A16_SINT;
+        case SpvImageFormatRgba8i:
+            return EPixelFormat::PF_R8G8B8A8_SINT;
+        case SpvImageFormatR32i:
+            return EPixelFormat::PF_R32_SINT;
+        case SpvImageFormatRg32i:
+            return EPixelFormat::PF_R32G32_SINT;
+        case SpvImageFormatRg16i:
+            return EPixelFormat::PF_R16G16_SINT;
+        case SpvImageFormatRg8i:
+            return EPixelFormat::PF_R8G8_SINT;
+        case SpvImageFormatR16i:
+            return EPixelFormat::PF_R16_SINT;
+
+        case SpvImageFormatR8i:
+
+            return EPixelFormat::PF_R8_SINT;
+        case SpvImageFormatRgba32ui:
+            return EPixelFormat::PF_R32G32B32A32_UINT;
+        case SpvImageFormatRgba16ui:
+            return EPixelFormat::PF_R16G16B16A16_UINT;
+        case SpvImageFormatRgba8ui:
+            return EPixelFormat::PF_R8G8B8A8_UINT;
+        case SpvImageFormatR32ui:
+            return EPixelFormat::PF_R32_UINT;
+        case SpvImageFormatRg32ui:
+            return EPixelFormat::PF_R32G32_UINT;
+        case SpvImageFormatRg16ui:
+            return EPixelFormat::PF_R16G16_UINT;
+        case SpvImageFormatRgb10a2ui:
+            return EPixelFormat::PF_A2B10G10R10_UINT_PACK32;
+        case SpvImageFormatRg8ui:
+            return EPixelFormat::PF_R8G8_UINT;
+        case SpvImageFormatR16ui:
+            return EPixelFormat::PF_R16_UINT;
+        case SpvImageFormatR8ui:
+            return EPixelFormat::PF_R8_UINT;
+        case SpvImageFormatR64ui:
+            return EPixelFormat::PF_R64_UINT;
+        case SpvImageFormatR64i:
+            return EPixelFormat::PF_R64_SINT;
+        case SpvImageFormatMax:
+            return PF_Num;
+    }
+    return EPixelFormat::PF_UNDEFINED;
 }
 
 const auto* GetShaderModel(EShaderPlatform _type) {

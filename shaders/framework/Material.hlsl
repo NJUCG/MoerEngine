@@ -10,11 +10,16 @@ T UnpackMaterialData(uint material_buffer_handle, uint material_index) {
 }
 
 template <typename T>
+T UnpackMaterialData(ByteAddressBuffer _material_buffer, uint material_index) {
+  return _material_buffer.Load<T>(material_index * 512);
+}
+
+template <typename T>
 T GetTextureData(uint bindless_handle, float2 uv, T defaultVal) {
-    if (bindless_handle == -1) {
-        return defaultVal;
-    }
-    return TextureHandle(bindless_handle).Sample2D<T>(uv);
+  if (bindless_handle == -1) {
+    return defaultVal;
+  }
+  return TextureHandle(bindless_handle).Sample2D<T>(uv);
 }
 
 #define Material_Standard_PBR 0

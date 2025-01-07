@@ -854,7 +854,7 @@ namespace Moer::Resource::Gltf {
             rt_instance.overload_m3 = model_2_world.r2;
 
             rt_instance.SetMaterial(0, m_scene_data->m_material_instance_indexes[m_scene_data->m_prim_infos[i].material_id]);
-            rt_instance.flags       = Render::RTVM_DEFAULT;
+            rt_instance.flags       = Render::RTVM_OPAQUE;
             rt_instance.prim_offset = rt_mesh_info.primitive_offset;
             rt_instance.vtx_offset  = rt_mesh_info.vertex_offset;
 

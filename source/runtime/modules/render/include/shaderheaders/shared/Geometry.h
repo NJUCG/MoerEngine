@@ -4,7 +4,9 @@
 #ifdef __cplusplus
 #include "misc/Traits.h"
 #include <algorithm>
-#define CONST       constexpr
+#ifndef CONST
+#define CONST constexpr
+#endif
 #define GLOBAL_FUNC static
 namespace Moer::Render {
 #else
@@ -29,6 +31,8 @@ namespace Moer {
         uint normal_offset;
         uint tangent_offset;
         uint mat_idx_and_type;//mat_idx:24, type:8
+
+        uint GetMaterialIdx() { return mat_idx_and_type >> 8; }
     };
 
     struct InstanceData {

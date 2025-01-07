@@ -126,7 +126,7 @@ public:                                                                         
 
 namespace Moer::Render {
     using TInvalidArg = uint;
-    using TArg        = std::variant<TInvalidArg, BufferView, TextureView, std::span<TextureView>, std::span<BufferView>, Sampler, BindlessArrayRef, RaytracingSceneRef>;
+    using TArg        = std::variant<TInvalidArg, BufferView, TextureView, std::span<TextureView>, std::span<BufferView>, Sampler, BindlessArrayRef, RaytracingTlasRef>;
 
     template<typename T>
     struct ShaderArgEnum {
@@ -301,7 +301,7 @@ namespace Moer::Render {
             requires std::is_same_v<std::remove_reference_t<T>, TextureView> || std::is_same_v<std::remove_reference_t<T>, t_texture_array_arg> ||
                      std::is_same_v<std::remove_reference_t<T>, BufferView> || std::is_same_v<std::remove_reference_t<T>, t_buffer_array_arg> || std::is_same_v<std::remove_reference_t<T>, Sampler> ||
                      std::is_same_v<std::remove_reference_t<T>, TextureRef> || std::is_same_v<std::remove_reference_t<T>, BufferRef> || std::is_same_v<typename TArg::type, TConstsant<std::remove_reference_t<T>>> ||
-                     std::is_same_v<std::remove_reference_t<T>, BindlessArrayRef> || std::is_same_v<std::remove_reference_t<T>, RaytracingSceneRef>
+                     std::is_same_v<std::remove_reference_t<T>, BindlessArrayRef> || std::is_same_v<std::remove_reference_t<T>, RaytracingTlasRef>
         static void SetParam(T&& _t, ArrayArguments& _arg_setter) {
             using cpp_type       = typename TArg::type;
             constexpr auto index = Index<TArg, tuple_helper>::value;

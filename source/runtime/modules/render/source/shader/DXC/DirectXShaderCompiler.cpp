@@ -460,6 +460,7 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> result, const ShaderParam
             res.desc_type              = binding.descriptor_type;
             res.resource_type          = binding.resource_type;
             res.count                  = binding.count;
+            res.format                 = ToPixelFormat(binding.image.image_format);
             param.spirv.resources.data = res;
         }
     }

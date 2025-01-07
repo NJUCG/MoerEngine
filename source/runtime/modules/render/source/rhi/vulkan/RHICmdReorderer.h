@@ -917,6 +917,9 @@ namespace Moer::Render {
                 case Command::EType::BuildTLAS:
                     VisitCmd(static_cast<const UpdateRaytracingSceneCmd*>(_cmd));
                     break;
+                case Command::EType::ClearResource:
+                    VisitCmd(static_cast<const ClearResourceCmd*>(_cmd));
+                    break;
                 default:
                     assert(false && "Command Type Not Supported for Reorder");
             }

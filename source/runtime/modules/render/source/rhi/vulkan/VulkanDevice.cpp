@@ -836,7 +836,7 @@ namespace Moer::Render {
                     set.bindings[resource.binding].param_idx = idx;
                     // _out_reflect_flags[idx]       = EncodeReflectInfo(resource.set, resource.binding, vk_binding.stageFlags);
                     _max_set                        = uint(std::max(int(_max_set), int(resource.set)));
-                    VulkanShaderResourceState state = VulkanShaderResourceState(SpvReflectDescriptorType(resource.desc_type), SpvReflectResourceType(resource.resource_type));
+                    VulkanShaderResourceState state = VulkanShaderResourceState(SpvReflectDescriptorType(resource.desc_type), SpvReflectResourceType(resource.resource_type), resource.format);
                     if (arg_info.type == SDA_Buffer) {
                     } else if (arg_info.type == SDA_Texture) {
                         state.b_sampled = resource.sampled;

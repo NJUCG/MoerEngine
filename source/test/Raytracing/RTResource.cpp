@@ -1,4 +1,5 @@
 #include "RTResource.h"
+#include "PixelFormat.h"
 #include "PreprocessLightPass.h"
 #include "config/ConfigManager.h"
 #include <cstdio>
@@ -148,6 +149,7 @@ namespace Moer::Render {
                                            PF_R32_UINT,
                                            ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED,
                                            uint(ceilf(log2f(float(std::max(_env_map_extent.x, _env_map_extent.y))))));
+        //
         {
             uint texture_width  = RoundUpToPowerOf2(uint(ceil(sqrt(double(light_buf_element)))));
             uint texture_height = RoundUpToPowerOf2(uint(ceil(double(light_buf_element) / texture_width)));
@@ -155,10 +157,33 @@ namespace Moer::Render {
 
             local_light_pdf_tex = device.CreateTexture("local_light_pdf_tex",
                                                        Extent2D(texture_width, texture_height),
-                                                       PF_R32_UINT,
+                                                       PF_R32_SFLOAT,
                                                        ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED,
                                                        mips);
-        };
+        }
+
+        task_buf->SetName("task_buf");
+        geo_instance_to_light_buf->SetName("geo_instance_to_light_buf");
+        light_mapping_buf->SetName("light_mapping_buf");
+        light_data_buf->SetName("light_data_buf");
+        prim_light_buf->SetName("prim_light_buf");
+    }
+
+    void RTContext::SetBindlessHandles(uint _geom_data_buf_handle, uint _instance_data_buf_handle, uint _material_data_buf_handle) {
+        geom_data_buf_handle     = _geom_data_buf_handle;
+        instance_data_buf_handle = _instance_data_buf_handle;
+        material_data_buf_handle = _material_data_buf_handle;
+    }
+
+    void RTContext::FillGBufferResources(uint2 _resolution) {
+        RenderDevice& device           = RenderDevice::Get();
+        gbuffer_res.view_depth         = device.CreateTexture("view_depth", Extent2D(_resolution), PF_R32_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+        gbuffer_res.diffuse_albedo     = device.CreateTexture("diffuse_albedo", Extent2D(_resolution), PF_R32_UINT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+        gbuffer_res.specular_roughness = device.CreateTexture("specular_roughness", Extent2D(_resolution), PF_R32_UINT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+        gbuffer_res.normal             = device.CreateTexture("normal", Extent2D(_resolution), PF_R32_UINT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+        gbuffer_res.emission           = device.CreateTexture("emission", Extent2D(_resolution), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+        gbuffer_res.motion             = device.CreateTexture("motion", Extent2D(_resolution), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+        gbuffer_res.clip_depth         = device.CreateTexture("clip_depth", Extent2D(_resolution), PF_R32_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
     }
 
 };// namespace Moer::Render

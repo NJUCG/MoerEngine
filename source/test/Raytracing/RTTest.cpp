@@ -1,11 +1,14 @@
 #include <filesystem>
 #include "Core.h"
+#include "GBufferPass.h"
 #include "PixelFormat.h"
+#include "PreprocessLightPass.h"
 #include "RTResource.h"
 #include "config/ConfigManager.h"
 #include "contrib/Open3DGC/o3dgcTimer.h"
 #include "imgui.h"
 #include "math/Matrix.h"
+#include "misc/STL.h"
 #include "misc/Traits.h"
 #include "renderer/UIRenderer.h"
 #include "rhi/RHI.h"
@@ -384,16 +387,6 @@ int main(int argc, const char** argv) {
     TextureRef out_shadow_info = device.CreateTexture("out_shadow_info", Extent2D(resolution.x, resolution.y), PF_R32G32_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
     TextureRef out_mv          = device.CreateTexture("out_mv", Extent2D(resolution.x, resolution.y), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
 
-    Array<TextureRef> test_bdls_texs(3);
-    Array<uint>       test_bdls_handles(3);
-    for (auto& tex : test_bdls_texs) {
-        tex = device.CreateTexture(
-            "test_bdls_tex",
-            Extent2D(1, 1),
-            PF_R8G8B8A8_SRGB,
-            ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT);
-    }
-
     auto create_frame_buffers = [&](uint2 _new_extent) {
         output = device.CreateTexture(
             "output",
@@ -444,6 +437,14 @@ int main(int argc, const char** argv) {
     Timer timer;
     timer.Start();
     uint64 last_time = 0ull;
+
+    //////////////////////////////////////////////////////////////////////////
+    //passes
+    //////////////////////////////////////////////////////////////////////////
+    UniquePtr<PrepareLightPass> prepare_light_pass = MakeUnique<PrepareLightPass>(device, manager, g_scene);
+    UniquePtr<GBufferPass>      g_buffer_pass      = MakeUnique<GBufferPass>(device, manager, g_scene);
+    UniquePtr<RTContext>        rt_ctx;
+
     while (WindowContext::ShouldClose(window_handle) == false) {
         WindowContext::Tick();
         gui.BeginGUIFrame();
@@ -478,6 +479,8 @@ int main(int argc, const char** argv) {
                 ETextureUsageFlags::COLOR_ATTACHMENT);
 
             create_frame_buffers(resolution);
+            rt_ctx->FillGBufferResources(resolution);
+            g_buffer_pass->UpdateMainView(resolution);
         }
 
         if (Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady()) {
@@ -488,6 +491,15 @@ int main(int argc, const char** argv) {
                 material_buffer_idx             = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::MaterialInfo)->GetView());
                 view_buffer_handle              = bindless_array->AllocateBuffer(rt_view_param_buffer->GetView());
                 light_buffer_handle             = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::LightInfo)->GetView());
+
+                uint num_emissive_meshes, num_emissive_triangles;
+                prepare_light_pass->CountEmissiveInstances(num_emissive_meshes, num_emissive_triangles);
+
+                rt_ctx = MakeUnique<RTContext>(num_emissive_meshes, num_emissive_triangles, g_scene.GetLights().size(), g_scene.GetGeometryInstances().size(), env_map->GetExtent().xy);
+                rt_ctx->SetBindlessHandles(geometry_buffer_handle, instance_buffer_handle, material_buffer_idx);
+                rt_ctx->FillGBufferResources(resolution);
+                rt_ctx->SetRaytracingScene(rt_scene);
+                g_buffer_pass->UpdateMainView(resolution);
 
                 if (env_map) {
                     Sampler sampler{SF_LINEAR, SAM_CLAMP_TO_BORDER};
@@ -579,7 +591,11 @@ int main(int argc, const char** argv) {
             rt_config_param.world2view_prev = camera->GetViewMatrix();
             rt_config_param.world2clip_prev = camera->GetProjectionMatrix() * camera->GetViewMatrix();
 
+            g_buffer_pass->PreTickCamera();
+
             camera->Tick();
+
+            g_buffer_pass->Process(cmd_list, *rt_ctx);
 
             rt_view_param.view2world = camera->GetToWorldMatrix();
             rt_view_param.world2view = camera->GetViewMatrix();
@@ -606,6 +622,9 @@ int main(int argc, const char** argv) {
             cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)&rt_config_param, sizeof(RTConfigParam)), rt_config_param_buffer->GetView());
 
             cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)&rt_view_param, sizeof(RTViewParam)), rt_view_param_buffer->GetView());
+
+            prepare_light_pass->Process(cmd_list, *rt_ctx);
+
             TestInlineRTShader::Param param;
             param.global_param_handle    = view_buffer_handle;
             param.material_buffer_handle = material_buffer_idx;
@@ -630,7 +649,7 @@ int main(int argc, const char** argv) {
                              out_mv,
                              out_shadow_info,
                              bindless_array,
-                             rt_scene)
+                             rt_scene->GetTlas())
                 .Dispatch(uint3((resolution.x + 15) >> 4, (resolution.y + 15) >> 4, 1), "PathTracing");
 
             //copy normal to output
@@ -640,10 +659,6 @@ int main(int argc, const char** argv) {
         // cmd_list.UpdateRaytracingScene(rt_scene);
         Sampler linear_sampler{SF_LINEAR, SAM_CLAMP_TO_BORDER};
 
-        if (time >= 3) {
-            bindless_array->FreeTexture(test_bdls_handles[time % 3]);
-        }
-        test_bdls_handles[time % 3] = bindless_array->AllocateTexture(test_bdls_texs[time % 3], linear_sampler);
         cmd_list.UpdateBindlessArray(bindless_array);
         if (rt_ui.IsSeperateWindow() && rt_ui.GetWindowFrameBuffer().GetTexture()) {
             auto frame_buffer = rt_ui.GetWindowFrameBuffer();
@@ -672,6 +687,8 @@ int main(int argc, const char** argv) {
         //     }
         // }
         gui.RenderGUI(cmd_list, output);
+        rt_scene->AdvanceFrame();
+
 
         time++;
         gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time));

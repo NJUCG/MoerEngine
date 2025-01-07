@@ -8,6 +8,7 @@
 #include "scene/light/LightComponentManager.h"
 #include "scene/light/PointLightComponent.h"
 #include "scene/light/SpotLightComponent.h"
+#include "shader/ShaderResourceManager.h"
 #include "shaderheaders/shared/lighting/ShaderParameters.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
@@ -20,7 +21,8 @@ namespace Moer::Render {
                                        ShaderManager& _manager,
                                        Scene&         _scene) : device(_device),
                                                         manager(_manager),
-                                                        scene(_scene) {
+                                                        scene(_scene),
+                                                        prepare_light_pipeline(ShaderManager::Get().Compute<PrepareLightShaderPipeline>("lighting/PrepareLights.hlsl")) {
     }
 
     void PrepareLightPass::CountEmissiveInstances(uint& _num_emissive_meshes, uint& _num_emissive_triangles) {
@@ -126,9 +128,9 @@ namespace Moer::Render {
                 DirectionalLightComponent* dir_light             = static_cast<DirectionalLightComponent*>(&_light);
                 float                      half_angluar_size_rad = Angle::DegreeToRadian(dir_light->angluar_size);
                 float                      solid_angle           = 2 * PI * (1 - cos(half_angluar_size_rad));
-                float3                     radiance              = dir_light->GetColor() * dir_light->GetIntensity() / solid_angle;
+                float3                     radiance              = dir_light->GetColor() * dir_light->GetIntensity() / std::max(solid_angle, 1e-6f);
 
-                _info.color_type_flags = (uint)PolyLightType::ELDirectional << g_poly_morphic_light_shift;
+                _info.color_type_flags = (uint)EPolyLightType::ELDirectional << g_poly_morphic_light_type_shift;
                 PackPolyLightColor(radiance, _info);
                 _info.direction1 = PackNormalizedVector(Normalizef(dir_light->GetDirection()));
                 _info.scalars    = Fp32ToFp16(half_angluar_size_rad) | (Fp32ToFp16(solid_angle) << 16);
@@ -140,7 +142,7 @@ namespace Moer::Render {
                 float3              flux       = spot_light->GetColor() * spot_light->GetIntensity();
                 float               softness   = Saturate(1.f / (spot_light->GetOuterConeAngle() - spot_light->GetInnerConeAngle()));
 
-                _info.color_type_flags = (uint)PolyLightType::ELSphere << g_poly_morphic_light_shift;
+                _info.color_type_flags = (uint)EPolyLightType::ELSphere << g_poly_morphic_light_type_shift;
                 _info.color_type_flags |= g_poly_morphic_light_shaping_bit;
                 PackPolyLightColor(flux, _info);
                 _info.center                  = spot_light->GetPosition();
@@ -152,7 +154,7 @@ namespace Moer::Render {
             case Moer::ELightComponentType::POINT: {
                 PointLightComponent* point_light = static_cast<PointLightComponent*>(&_light);
                 float3               flux        = point_light->GetColor() * point_light->GetIntensity();
-                _info.color_type_flags           = (uint)PolyLightType::ELSphere << g_poly_morphic_light_shift;
+                _info.color_type_flags           = (uint)EPolyLightType::ELSphere << g_poly_morphic_light_type_shift;
                 PackPolyLightColor(flux, _info);
                 _info.center = point_light->GetPosition();
                 return true;
@@ -161,7 +163,7 @@ namespace Moer::Render {
             case Moer::ELightComponentType::ENV: {
                 EnvironmentLightComponent* env_light = static_cast<EnvironmentLightComponent*>(&_light);
                 if (!env_light->bdls_handle) return false;
-                _info.color_type_flags = (uint)PolyLightType::ELEnv << g_poly_morphic_light_shift;
+                _info.color_type_flags = (uint)EPolyLightType::ELEnv << g_poly_morphic_light_type_shift;
                 PackPolyLightColor(env_light->GetColorScale(), _info);
                 _info.direction1 = env_light->bdls_handle;
                 _info.direction2 = env_light->size.x | (env_light->size.y << 16);
@@ -189,8 +191,10 @@ namespace Moer::Render {
 
         scene.ForEach([&](Entity _entity) {
             {
-                const MeshInfo&                mesh_info     = *RenderableManager::Get().GetMeshInfo(_entity).get();
-                std::span<MaterialInstanceRef> mat_instances = RenderableManager::Get().GetMaterialInstances(_entity);
+                const MeshInfo& mesh_info   = *RenderableManager::Get().GetMeshInfo(_entity).get();
+                uint            instance_id = RenderableManager::Get().GetInstanceID(_entity);
+                std::span<MaterialInstanceRef>
+                    mat_instances = RenderableManager::Get().GetMaterialInstances(_entity);
 
                 for (uint i = 0; i < mesh_info.geometries.size(); ++i) {
                     const MaterialInstanceRef& mat_instance      = mat_instances[i];
@@ -199,15 +203,16 @@ namespace Moer::Render {
                     uint64                     instance_geo_hash = 0;
                     HashCombine(instance_geo_hash, &_entity, i);
 
-                    if (emissive != float3(0.f)) {
+                    if (emissive == float3(0.f)) {
                         instance_light_buffer_offsets.erase(instance_geo_hash);
+                        continue;
                     }
                     geo_instance_to_light[idx] = light_buf_offset;
 
                     auto iter = instance_light_buffer_offsets.find(instance_geo_hash);
 
                     PrepareLightsTask task{};
-                    task.instance_geo_idx  = (idx << 12 | uint(0 & 0xfff));
+                    task.instance_geo_idx  = (instance_id << 12 | uint(i & 0xfff));
                     task.light_offset      = light_buf_offset;
                     task.num_triangles     = geom_info.local_idx_count / 3;
                     task.prev_light_offset = iter == instance_light_buffer_offsets.end() ? -1 : iter->second;
@@ -245,7 +250,7 @@ namespace Moer::Render {
             auto pre_iter = primitive_light_buffer_offsets.find(uint64(light_data.Get()));
 
             PrepareLightsTask task{};
-            task.instance_geo_idx  = (idx << 12 | uint(0 & 0xfff)) | g_task_prim_light_bit;
+            task.instance_geo_idx  = prim_light_infos.size() | g_task_prim_light_bit;
             task.light_offset      = light_buf_offset;
             task.num_triangles     = 1;
             task.prev_light_offset = pre_iter == primitive_light_buffer_offsets.end() ? -1 : pre_iter->second;
@@ -265,6 +270,7 @@ namespace Moer::Render {
         }
 
         _cmd_list.CopyFrom(std::span<byte>((byte*)geo_instance_to_light.data(), geo_instance_to_light.size() * sizeof(uint)), _rt_ctx.geo_instance_to_light_buf->GetView());
+        _cmd_list.CopyFrom(std::span<byte>((byte*)tasks.data(), tasks.size() * sizeof(PrepareLightsTask)), _rt_ctx.task_buf->GetView(0, tasks.size() * sizeof(PrepareLightsTask)));
         if (!prim_light_infos.empty()) {
             _cmd_list.CopyFrom(std::span<byte>((byte*)prim_light_infos.data(), prim_light_infos.size() * sizeof(PolymorphicLightInfo)), _rt_ctx.prim_light_buf->GetView());
         }
@@ -273,11 +279,26 @@ namespace Moer::Render {
         _cmd_list.ClearResource(_rt_ctx.local_light_pdf_tex->GetView(), float4(0.f));
 
         PrepareLightsParams param{};
-        param.num_tasks = tasks.size();
+        param.num_tasks            = tasks.size();
+        param.geometry_data_handle = _rt_ctx.geom_data_buf_handle;
+        param.instance_data_handle = _rt_ctx.instance_data_buf_handle;
+        param.material_data_handle = _rt_ctx.material_data_buf_handle;
 
-        uint max_lights_in_buffer         = uint(_rt_ctx.light_data_buf->GetNumElement() / 2);
-        param.current_frame_light_offset  = max_lights_in_buffer * b_odd_frame;
-        param.previous_frame_light_offset = max_lights_in_buffer * !b_odd_frame;
+        uint max_lights_in_buffer = uint(_rt_ctx.light_data_buf->GetNumElement() / 2);
+        param.cur_light_offset    = max_lights_in_buffer * b_odd_frame;
+        param.prev_light_offset   = max_lights_in_buffer * !b_odd_frame;
+
+        _cmd_list.Compute(prepare_light_pipeline, param, _rt_ctx.light_data_buf->GetView(), _rt_ctx.light_mapping_buf->GetView(), _rt_ctx.local_light_pdf_tex->GetView(), _rt_ctx.prim_light_buf->GetView(), _rt_ctx.task_buf->GetView(), scene.GetBindlessArray())
+            .Dispatch(uint3((light_buf_offset + 255) / 256, 1, 1));
+
+        // device.GetCommandQueue(EQueueType::Graphics).Execute(_cmd_list.Submit());
+        // device.GetCommandQueue(EQueueType::Graphics).Sync();
+        // uint num_lights = num_finite_prim_lights + num_infinite_prim_lights + num_is_env_lights;
+        _cmd_list.AddCallback([geo_instance_to_light(std::move(geo_instance_to_light)),
+                               prim_light_infos(std::move(prim_light_infos)),
+                               tasks(std::move(tasks))]() {
+
+        });
     }
 
 }// namespace Moer::Render

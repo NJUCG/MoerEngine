@@ -131,6 +131,7 @@ namespace Moer {
                 geo_data.num_indices          = geo->local_idx_count;
                 geo_data.num_vertices         = geo->local_vtx_count;
                 geo_data.vertex_offset        = vtx_offset;
+                geo_data.prev_vertex_offset   = ~0u;
                 geo_data.normal_offset        = buffers.GetAttributeRange(EVertexAttributes::Normal).offset + vtx_offset * sizeof(uint);
                 geo_data.tangent_offset       = buffers.GetAttributeRange(EVertexAttributes::Tangent).offset + vtx_offset * sizeof(uint);
                 geo_data.texcoord0_offset     = buffers.GetAttributeRange(EVertexAttributes::Texcoord0).offset + vtx_offset * sizeof(float2);
