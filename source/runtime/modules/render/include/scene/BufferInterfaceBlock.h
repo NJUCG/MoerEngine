@@ -188,7 +188,7 @@ namespace Moer {
     class RENDER_API UniformBuffer {
     public:
         void        SetData(const void* data, size_t size, size_t offset);
-        const void* GetData() const;
+        const void* GetData(size_t _offset = 0) const;
         uint32_t    GetSize() const;
         UniformBuffer(uint32_t size);
         ~UniformBuffer();

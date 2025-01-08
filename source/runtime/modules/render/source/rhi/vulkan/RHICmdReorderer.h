@@ -594,7 +594,17 @@ namespace Moer::Render {
                 } else if constexpr (std::is_same_v<T, TextureView>) {
                     EmplaceArg((uint64)(_arg.GetTexture()), ResourceType::Texture_Buffer, Range(_arg.mip_level, _arg.num_mips), m_funcs.is_resource_write(_flag));
                     // _layer = GetLastLayer(uint64(_arg.GetTexture()), Range(_arg.mip_level, _arg.num_mips), ResourceType::Texture_Buffer);
-                } else if constexpr (std::is_same_v<T, RaytracingSceneRef>) {
+                } else if constexpr (std::is_same_v<T, std::span<TextureView>>) {
+                    for (auto&& tex : _arg) {
+                        EmplaceArg((uint64)(tex.GetTexture()), ResourceType::Texture_Buffer, Range(tex.mip_level, tex.num_mips), m_funcs.is_resource_write(_flag));
+                    }
+                } else if constexpr (std::is_same_v<T, std::span<BufferView>>) {
+                    for (auto&& buf : _arg) {
+                        EmplaceArg((uint64)(buf.GetBuffer()), ResourceType::Texture_Buffer, Range(buf.GetByteOffset(), buf.GetByteSize()), m_funcs.is_resource_write(_flag));
+                    }
+                }
+
+                else if constexpr (std::is_same_v<T, RaytracingSceneRef>) {
                     EmplaceArg((uint64)(_arg.Get()), ResourceType::Accel, Range{}, false);
                 } else if constexpr (std::is_same_v<T, BindlessArrayRef>) {
                     for (auto&& res : m_write_resources) {
@@ -700,8 +710,12 @@ namespace Moer::Render {
 
                 for (const auto& [handle, state] : _cmd->ImportTextures()) {
                     RangeHandle* range_handle = static_cast<RangeHandle*>(GetHandle(uint64(handle.GetTexture()), ResourceType::Texture_Buffer));
-                    layer                     = GetLastLayerRead(range_handle, Range(handle.mip_level, handle.num_mips));
+                    layer                     = GetLastLayerWrite(range_handle, Range(handle.mip_level, handle.num_mips));
                     assert(layer == 0 && std::format("Import Texture {} should be the first command", handle.GetTexture()->GetName()).c_str());
+                }
+                for (const auto& [handle, state] : _cmd->ImportTextures()) {
+                    RangeHandle* range_handle = static_cast<RangeHandle*>(GetHandle(uint64(handle.GetTexture()), ResourceType::Texture_Buffer));
+                    range_handle->EmplaceWriteLayer(Range(handle.mip_level, handle.num_mips), layer);
                 }
             } else {
                 barrier_resources.reserve(_cmd->ExportTextures().size());
@@ -712,6 +726,11 @@ namespace Moer::Render {
                     layer                     = GetLastLayerWrite(range_handle, Range(handle.mip_level, handle.num_mips));
                     //TODO: store export resources and check later usages
                     // assert(layer == 0 && std::format("Export Texture {} should be the first command", handle.GetTexture()->GetName()).c_str());
+                }
+
+                for (const auto& [handle, state] : _cmd->ExportTextures()) {
+                    RangeHandle* range_handle = static_cast<RangeHandle*>(GetHandle(uint64(handle.GetTexture()), ResourceType::Texture_Buffer));
+                    range_handle->EmplaceWriteLayer(Range(handle.mip_level, handle.num_mips), layer);
                 }
             }
 
@@ -772,6 +791,18 @@ namespace Moer::Render {
         void VisitCmd(const UpdateBindlessArrayCmd* _cmd) {
             //TODO: important here
             AddCmd(_cmd, SetWrite((uint64)(_cmd->Handle()->ArrayHandle()), Range(), ResourceType::Bindless));
+        }
+
+        void VisitCmd(const ClearResourceCmd* _cmd) {
+            std::visit([&](auto&& _arg) {
+                using T = std::decay_t<decltype(_arg)>;
+                if constexpr (std::is_same_v<T, BufferView>) {
+                    AddCmd(_cmd, SetWrite((uint64)(_arg.GetBuffer()), Range(_arg.GetByteOffset(), _arg.GetByteSize()), ResourceType::Texture_Buffer));
+                } else if constexpr (std::is_same_v<T, TextureView>) {
+                    AddCmd(_cmd, SetWrite((uint64)(_arg.GetTexture()), Range(_arg.mip_level, _arg.num_mips), ResourceType::Texture_Buffer));
+                }
+            },
+                       _cmd->Resource());
         }
 
         void VisitCmd(const DispatchCmd* _cmd) {
@@ -915,6 +946,9 @@ namespace Moer::Render {
                     break;
                 case Command::EType::BuildTLAS:
                     VisitCmd(static_cast<const UpdateRaytracingSceneCmd*>(_cmd));
+                    break;
+                case Command::EType::ClearResource:
+                    VisitCmd(static_cast<const ClearResourceCmd*>(_cmd));
                     break;
                 case Command::EType::Custom:
                     VisitCmd(static_cast<const CustomCmd*>(_cmd));

@@ -26,9 +26,12 @@ namespace Moer {
 
         const static float k_pitch_min;
         const static float k_pitch_max;
+        const static float k_fov_default;
         const static float k_fov_min;
         const static float k_fov_max;
+        const static float k_fov_multiplier;
         const static float k_mouse_sensitivity;
+        const static float k_mouse_sensitivity_mouse_moving;
         const static float k_camera_speed_multiplier;
 
         const static float k_camera_speed_default;
@@ -83,6 +86,12 @@ namespace Moer {
         void SetNearClip(float near_clip) noexcept;
         void SetFarClip(float far_clip) noexcept;
 
+        // Jitter Matrix only affect the view_projection_matrix
+        void       SetJitterMatrix(const Matrix4x4f& jitter_matrix) noexcept;
+        void       SetJitterMatrix(const Vector2f& jitter) noexcept;
+        Matrix4x4f GetJitterMatrix() const noexcept;
+        void       ResetJitterMatrix() noexcept;
+
         void SetWorldTransform(const Transform& to_world_transform) noexcept;
 
         /**
@@ -97,8 +106,10 @@ namespace Moer {
 
         /**
          * ## Update the camera based on input per frame
+         * 
+         * @param aspect_ratio: aspect ratio of the window. If not set, use wndInput.aspect_ratio instead.
          */
-        void Tick();//update camera per frame
+        void Tick(float aspect_ratio = -1.0f);//update camera per frame
 
         bool IsDirty() const;//judge if camera changed compared to last frame
 
@@ -126,6 +137,7 @@ namespace Moer {
         void UpdatePlanesAndFrustum();
 
         void MoveForward(float);
+        void MoveFront(float);
         void MoveRight(float);
         void MoveUp(float);
         void ApplyRotation(float, float);
@@ -159,6 +171,9 @@ namespace Moer {
         float m_aspect_ratio;
         float m_near_clip;
         float m_far_clip;
+
+        bool       m_is_jittered_matrix_modified = false;
+        Matrix4x4f m_jittered_matrix             = Matrix4x4f::Identity();// only affect view_projection_matrix
 
         // bool yaw_reverse   = false;// reverse left and right
         // bool pitch_reverse = false;// reverse up and down

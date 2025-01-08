@@ -2,10 +2,12 @@
 #define VULKAN_RHI_DESCRIPTOR_H
 
 #include <volk.h>
+#include "PixelFormat.h"
 #include "rhi/RHIResource.h"
 #include "VulkanTypeDefs.h"
 #include "VulkanRHIResource.h"
 #include "spirv_reflect.h"
+#include "vulkan/vulkan_core.h"
 
 #define VK_DESCRIPTOR_TYPE_BEGIN_RANGE (VK_DESCRIPTOR_TYPE_SAMPLER)
 #define VK_DESCRIPTOR_TYPE_END_RANGE   (VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT)
@@ -44,11 +46,12 @@ namespace Moer::Render {
 
     struct VulkanShaderResourceState {
         SpvReflectDescriptorType desc_type;
-        uint                     b_sampled : 8;
-        SpvReflectResourceType   resource_type : 8;
+        uint8                    resource_type;//SpvReflectResourceType
+        uint8                    b_sampled;
+        EPixelFormat             format;
 
         VulkanShaderResourceState() = default;
-        VulkanShaderResourceState(SpvReflectDescriptorType _type, SpvReflectResourceType _resource_type) : desc_type(_type), resource_type(_resource_type), b_sampled(0) {}
+        VulkanShaderResourceState(SpvReflectDescriptorType _type, SpvReflectResourceType _resource_type, EPixelFormat _fmt) : desc_type(_type), resource_type(_resource_type), b_sampled(0), format(_fmt) {}
 
         VulkanShaderResourceState(uint64 _value) {
             memcpy(this, &_value, sizeof(VulkanShaderResourceState));
@@ -215,7 +218,7 @@ namespace Moer::Render {
         uint64 image_offset;
         uint64 accel_offset;
 
-        uint GetBufferDescIdx(const BufferView& _in_buffer);
+        uint GetBufferDescIdx(const BufferView& _in_buffer, VkDescriptorType _type, VkFormat _format = VK_FORMAT_UNDEFINED);
         void FreeBufferDescIdx(uint _idx);
         uint GetImageDescIdx(const TextureView* _in_image, VkImageLayout _layout);
         void FreeImageDescIdx(uint _idx);
@@ -245,6 +248,8 @@ namespace Moer::Render {
 
         uint storage_desc_stride;
         uint uniform_desc_stride;
+        uint storage_texel_desc_stride;
+        uint uniform_texel_desc_stride;
         uint buffer_desc_stride;
 
         uint image_desc_stride;

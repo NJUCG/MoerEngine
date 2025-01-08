@@ -162,17 +162,17 @@ namespace Moer::Render {
             requires std::is_base_of_v<RasterPipeline, TPipeline>
         TPipeline Build(GfxPsoCreateInfo&& _pso_info) {
             auto                    hash_array     = TPipeline::GetHashArray();
-            auto                    arg_type_array = TPipeline::GetArgTypeArray();
+            auto                    arg_type_array = TPipeline::GetArgInfoArray();
             Array<std::string_view> hash_values(hash_array.size());
-            Array<EShaderArgType>   arg_type_values(hash_array.size());
+            Array<ShaderArgCppInfo> arg_type_values(hash_array.size());
             std::memcpy(hash_values.data(), hash_array.data(), hash_array.size() * sizeof(std::string_view));
-            std::memcpy(arg_type_values.data(), arg_type_array.data(), arg_type_array.size() * sizeof(EShaderArgType));
+            std::memcpy(arg_type_values.data(), arg_type_array.data(), arg_type_array.size() * sizeof(ShaderArgCppInfo));
             PipelineHandle handle = CreatePipeline(std::move(_pso_info), std::move(hash_values), std::move(arg_type_values));
             return TPipeline(handle);
         };
 
     private:
-        RENDER_API PipelineHandle CreatePipeline(GfxPsoCreateInfo&& _pso_info, Array<std::string_view>&& _hash_values, Array<EShaderArgType>&& _arg_type_values);
+        RENDER_API PipelineHandle CreatePipeline(GfxPsoCreateInfo&& _pso_info, Array<std::string_view>&& _hash_values, Array<ShaderArgCppInfo>&& _arg_type_values);
 
         ShaderInfo vertex_path;
         ShaderInfo pixel_path;
@@ -189,12 +189,12 @@ namespace Moer::Render {
             requires std::is_base_of_v<ComputePipeline, TPipeline>
         TPipeline Build() {
             auto hash_array     = TPipeline::GetHashArray();
-            auto arg_type_array = TPipeline::GetArgTypeArray();
+            auto arg_type_array = TPipeline::GetArgInfoArray();
 
             Array<std::string_view> hash_values(hash_array.size());
-            Array<EShaderArgType>   arg_type_values(hash_array.size());
+            Array<ShaderArgCppInfo> arg_type_values(hash_array.size());
             std::memcpy(hash_values.data(), hash_array.data(), hash_array.size() * sizeof(std::string_view));
-            std::memcpy(arg_type_values.data(), arg_type_array.data(), arg_type_array.size() * sizeof(EShaderArgType));
+            std::memcpy(arg_type_values.data(), arg_type_array.data(), arg_type_array.size() * sizeof(ShaderArgCppInfo));
             PipelineHandle handle = CreatePipeline(std::move(hash_values), std::move(arg_type_values));
             return std::move(TPipeline(handle));
         };
@@ -204,18 +204,18 @@ namespace Moer::Render {
             requires std::is_base_of_v<ComputePipeline, TPipeline>
         PipelineShaderInfo CompileShaderInfo() {
             auto hash_array     = TPipeline::GetHashArray();
-            auto arg_type_array = TPipeline::GetArgTypeArray();
+            auto arg_type_array = TPipeline::GetArgInfoArray();
 
             Array<std::string_view> hash_values(hash_array.size());
-            Array<EShaderArgType>   arg_type_values(hash_array.size());
+            Array<ShaderArgCppInfo> arg_type_values(hash_array.size());
             std::memcpy(hash_values.data(), hash_array.data(), hash_array.size() * sizeof(std::string_view));
-            std::memcpy(arg_type_values.data(), arg_type_array.data(), arg_type_array.size() * sizeof(EShaderArgType));
+            std::memcpy(arg_type_values.data(), arg_type_array.data(), arg_type_array.size() * sizeof(ShaderArgCppInfo));
             return CompileShaderInfo(std::move(hash_values), std::move(arg_type_values));
         }
 
     private:
-        RENDER_API PipelineHandle CreatePipeline(Array<std::string_view>&& _hash_values, Array<EShaderArgType>&& _arg_type_values);
-        PipelineShaderInfo        CompileShaderInfo(Array<std::string_view>&& _hash_values, Array<EShaderArgType>&& _arg_type_values);
+        RENDER_API PipelineHandle CreatePipeline(Array<std::string_view>&& _hash_values, Array<ShaderArgCppInfo>&& _arg_type_values);
+        PipelineShaderInfo        CompileShaderInfo(Array<std::string_view>&& _hash_values, Array<ShaderArgCppInfo>&& _arg_type_values);
 
         ShaderInfo            shader_info;
         Render::RenderDevice& device;

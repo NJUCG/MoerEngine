@@ -13,14 +13,52 @@ namespace Moer {
         MouseButtonFirst = Left,
     } MouseButtons;
 
-    // restores the input information after processing (including camera control logic)
-    struct WindowInput {
+    typedef enum {
+        A,
+        B,
+        C,
+        D,
+        E,
+        F,
+        G,
+        H,
+        I,
+        J,
+        K,
+        L,
+        M,
+        N,
+        O,
+        P,
+        Q,
+        R,
+        S,
+        T,
+        U,
+        V,
+        W,
+        X,
+        Y,
+        Z,
+        UP,
+        DOWN,
+        LEFT,
+        RIGHT,
+        ESCAPE,
 
+        KeyButtonCount,
+        KeyButtonFirst = A,
+    } KeyButtons;
+
+    // restores the input information after processing (including camera control logic)
+
+    struct WindowInput {
         // cursor
         float cursor_last_x  = 0.0f;
         float cursor_last_y  = 0.0f;
         float cursor_delta_x = 0.0f;
         float cursor_delta_y = 0.0f;
+        float scroll_offset  = 0.0f;
 
         bool is_cursor_dirty = true;// origin "firstMouse", presents if the cursor is needed to be reset (such as when you press F key 2 times)
 
@@ -45,12 +83,12 @@ namespace Moer {
         float height       = 720.f;
         float aspect_ratio = width / height;
 
-        // fov
-        float fov = 60.f;
-
         // mouse button state
-        bool                                              is_cursor_hiding   = false;
-        StaticArray<bool, MouseButtons::MouseButtonCount> mouse_button_state = {false};
+        bool is_cursor_hiding = false;
+
+        StaticArray<bool, MouseButtons::MouseButtonCount> mouse_button_state      = {false};
+        StaticArray<bool, KeyButtons::KeyButtonCount>     key_button_state        = {false};// Press or Release
+        StaticArray<bool, KeyButtons::KeyButtonCount>     key_button_switch_state = {false};// Press once to switch state
 
         // singleton
         static WindowInput& GetInstance();

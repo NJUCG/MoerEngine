@@ -931,7 +931,7 @@ namespace Moer::Render {
             m_pipeline = VK_NULL_HANDLE;
         }
         for (auto& layout : descriptor_set_layouts) {
-            if (layout) {
+            if (layout && layout != m_device->GetEmptyDescriptorSetLayout()) {
                 vkDestroyDescriptorSetLayout(m_device->GetDevice(), layout, nullptr);
                 layout = VK_NULL_HANDLE;
             }
@@ -1104,7 +1104,9 @@ namespace Moer::Render {
                         switch (binding.descriptorType){
                             
                             case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
-                            case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:{
+                            case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+                            case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
+                            case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:{
                                 descriptor_info.info_idx = _binder.buffer_infos.size();
                                 _binder.buffer_infos.emplace_back(VK_NULL_HANDLE, 0, VK_WHOLE_SIZE);
                                 write_info.pBufferInfo = &_binder.buffer_infos.back();
@@ -1574,7 +1576,11 @@ namespace Moer::Render {
             vmaDestroyBuffer(m_device->GetVmaAllocator(), m_alloc.buffer, m_alloc.alloc); 
         }
         if (m_descriptor_idx >= 0) { m_device->GetGlobalDescriptorHeap().FreeBufferDescIdx(m_descriptor_idx); }
-        for (const auto& idx : m_descriptor_indices) { m_device->GetGlobalDescriptorHeap().FreeBufferDescIdx(idx.second); }
+        // for (const auto& idx : m_descriptor_indices) { m_device->GetGlobalDescriptorHeap().FreeBufferDescIdx(idx.second); }
+
+        for (uint i = 0; i < 4; ++i) {
+            for (const auto& idx : m_descriptor_indices[i]) { m_device->GetGlobalDescriptorHeap().FreeBufferDescIdx(idx.second); }
+        }
     }
 
     VulkanBuffer::VulkanBuffer(const BufferInfo& _info, VulkanDevice& _device): Buffer(_info), VulkanDeviceObject(&_device) {
@@ -1613,6 +1619,18 @@ namespace Moer::Render {
             info.buffer      = m_alloc.buffer;
             m_device_address = vkGetBufferDeviceAddress(m_device->GetDevice(), &info);
         }       
+    }
+
+    UnorderedMap<uint64, uint>& VulkanBuffer::GetDescriptorIndices(VkDescriptorType _type) { 
+        switch (_type) {
+            case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER: return m_descriptor_indices[0];
+            case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER: return m_descriptor_indices[1];
+            case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER: return m_descriptor_indices[2];
+            case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER: return m_descriptor_indices[3];
+            default: assert(false); 
+        
+        }
+        return m_descriptor_indices[0]; 
     }
 
     VulkanBindlessArray::VulkanBindlessArray(VulkanDevice* _device, uint32 _max_size) : 
@@ -1870,11 +1888,13 @@ namespace Moer::Render {
 
     void GetBuildRaytracingGeometryInfo(
         Array<VkAccelerationStructureGeometryKHR>& _build_info,
+        Array<uint>& _primitive_counts,
         Array<VkAccelerationStructureBuildRangeInfoKHR>& _build_ranges,
         const RaytracingGeometryInfo& _info){
 
             _build_info.reserve(_info.segments.size());
             _build_ranges.reserve(_info.segments.size());
+            _primitive_counts.reserve(_info.segments.size());
 
             VulkanBuffer* vertex_buffer =  ResourceCast(_info.vertex_buffer.Get());
             VulkanBuffer* index_buffer =  ResourceCast(_info.index_buffer.Get());
@@ -1884,7 +1904,7 @@ namespace Moer::Render {
             assert(_info.segments.size() > 0 && "No segment to build");
 
             VkGeometryTypeKHR geometry_type = VulkanEnumTranslator::METoVKGeometryType(_info.segments[0].type);
-
+            
             for (const auto& segment : _info.segments) {
                 //TODO: currently only support triangle
                 assert(segment.type == RTGT_TRIANGLES && "Unsupported geometry type");
@@ -1894,17 +1914,18 @@ namespace Moer::Render {
                 geometry.geometry.triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
                 geometry.geometry.triangles.vertexFormat = g_platform_pixel_formats[_info.vertex_format].format;
                 geometry.geometry.triangles.vertexStride = segment.vertex_stride;
-                geometry.geometry.triangles.vertexData.deviceAddress = vtx_addr + segment.vertex_offset * segment.vertex_stride;
-                geometry.geometry.triangles.maxVertex = _info.max_vertex_count;
+                geometry.geometry.triangles.vertexData.deviceAddress = vtx_addr + segment.vertex_offset;
+                geometry.geometry.triangles.maxVertex = _info.max_vertex_count - segment.vertex_offset;
                 geometry.geometry.triangles.indexType = VulkanEnumTranslator::METoVKIndexType(_info.index_type);
-                geometry.geometry.triangles.indexData.deviceAddress = idx_addr + segment.primitive_offset * 3 * (_info.index_type == IET_UINT32 ? 4 : 2); 
+                geometry.geometry.triangles.indexData.deviceAddress = idx_addr + segment.index_offset; 
                 geometry.geometry.triangles.transformData.deviceAddress = 0;
 
                 _build_info.push_back(geometry);
+                _primitive_counts.push_back(segment.primitive_count);
 
                 VkAccelerationStructureBuildRangeInfoKHR range{};
-                range.firstVertex = 0;
-                range.primitiveOffset = 0;
+                range.firstVertex = segment.first_vertex;
+                range.primitiveOffset = segment.first_primitive * 3 * (_info.index_type == EIndexElementType::IET_UINT16 ? 2 : 4);
                 range.primitiveCount = segment.primitive_count;
                 range.transformOffset = 0;
 
@@ -1916,8 +1937,8 @@ namespace Moer::Render {
         
         VkAccelerationStructureBuildTypeKHR                 build_type = VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR;
         VkAccelerationStructureBuildGeometryInfoKHR build_info{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
-        
-        GetBuildRaytracingGeometryInfo(build_geometries, build_ranges, _info);
+        Array<uint> primitive_counts;
+        GetBuildRaytracingGeometryInfo(build_geometries,primitive_counts, build_ranges, _info);
         build_info.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
         build_info.flags = VulkanEnumTranslator::METoVKAccelerationStructureBuildType(_info.build_flags);
         build_info.geometryCount = build_geometries.size();
@@ -1926,7 +1947,7 @@ namespace Moer::Render {
             m_device->GetDevice(), 
             build_type, 
             &build_info, 
-            &_info.primitive_count, 
+            primitive_counts.data(), 
             &build_sizes_info);
 
 
@@ -1972,7 +1993,7 @@ namespace Moer::Render {
     
     }
 
-    VulkanAccelerationStructure::VulkanAccelerationStructure(VulkanDevice& _device):device(_device), RHIResource(RRT_RAYTRACING_ACCELERATION_STRUCTURE){}
+    VulkanAccelerationStructure::VulkanAccelerationStructure(VulkanDevice& _device, VulkanRaytracingScene& _scene):device(_device), src_scene(_scene), RaytracingTlas(){}
 
     VulkanRaytracingGeometry::~VulkanRaytracingGeometry(){
         if(acc != VK_NULL_HANDLE){
@@ -1981,7 +2002,6 @@ namespace Moer::Render {
         }
 
         if(underlying_buffer){
-            MoerDelete(underlying_buffer);
             underlying_buffer = nullptr;
         }
     }
@@ -1993,7 +2013,6 @@ namespace Moer::Render {
         }
 
         if (underlying_buffer) {
-            MoerDelete(underlying_buffer);
             underlying_buffer = nullptr;
         }
         if(m_descriptor_idx >= 0){
@@ -2116,8 +2135,21 @@ namespace Moer::Render {
             RefitInstanceBuffer();
             b_full_refit = true;
         }
-        RefitTLASAndScratchBuffer();
+        b_full_refit |= RefitTLASAndScratchBuffer();
 
+        for(auto prev_idx : prev_modified_instance_ids){
+            if(!temp_modified_instance_ids.contains(prev_idx)){
+                temp_update_instance_ids.push_back(prev_idx);
+            }
+        }
+        prev_modified_instance_ids.clear();
+
+        b_current_full_refit |= b_full_refit;
+
+        if(b_prev_full_refit){
+            b_full_refit = true;
+            b_prev_full_refit = false;
+        }
 
         if(b_full_refit){
             temp_update_instances.reserve(instances.size() * sizeof(VkAccelerationStructureInstanceKHR));
@@ -2128,6 +2160,7 @@ namespace Moer::Render {
             for(uint i = 0; i < instances.size(); i++){
                 temp_update_instance_ids.push_back(i);
             }
+            
         }else{
 
             temp_update_instances.resize(temp_update_instance_ids.size() * sizeof(VkAccelerationStructureInstanceKHR));
@@ -2157,9 +2190,10 @@ namespace Moer::Render {
 
 
         //maybe we should calculate relative blas here
-
+        // Array<uint> instance_ids_to_update = temp_update_instance_ids;
+        
         // RefitTLASAndScratchBuffer();
-        temp_modified_instance_ids.clear();
+        // temp_modified_instance_ids.clear();
         return MakeUnique<UpdateRaytracingSceneCmd>(
             std::move(related_geometries),
             uint64(this),
@@ -2170,6 +2204,28 @@ namespace Moer::Render {
             std::move(temp_update_instances),
             vk_instances.size(),
             b_full_refit);
+    }
+
+    void VulkanRaytracingScene::AdvanceFrame(){  
+        
+        assert(prev_modified_instance_ids.empty() && "There are still modified instances not updated, call UpdateScene() first");
+        assert(!b_prev_full_refit && "There are still modified instances not updated, call UpdateScene() first");
+        
+        prev_modified_instance_ids.swap( temp_modified_instance_ids);
+        b_prev_full_refit = b_current_full_refit;
+        b_current_full_refit = false;
+
+        std::swap(prev_instance_capacity, instance_capacity);
+        std::swap(prev_size_infos, size_infos);
+        std::swap(prev_tlas, tlas);
+    }
+
+    RaytracingTlasRef VulkanRaytracingScene::GetTlas() const{
+        return RaytracingTlasRef(tlas.Get());
+    }
+
+    RaytracingTlasRef VulkanRaytracingScene::GetPrevTlas() const{
+        return RaytracingTlasRef(prev_tlas.Get());
     }
 
     void VulkanRaytracingScene::RefitInstanceBuffer(){
@@ -2260,10 +2316,10 @@ namespace Moer::Render {
                 buffer_ci.usage = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
                 VK_CHECK_RESULT(vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &current_handle, &alloc, nullptr));
                 
-                tlas = MoerNew(VulkanAccelerationStructure)(*m_device);
+                tlas = MoerNew(VulkanAccelerationStructure)(*m_device, *this);
 
-                tlas->underlying_buffer = MoerNew(VulkanBuffer)(BufferInfo{buffer_ci.size, 1, EBufferUsageFlags::ACCELERATION_STRUCTURE}, *m_device, current_handle, alloc, true, true);
-
+                tlas->underlying_buffer = MoerNew(VulkanBuffer)(BufferInfo{buffer_ci.size, 1, EBufferUsageFlags::ACCELERATION_STRUCTURE}, *m_device, current_handle, alloc, false, true);
+                tlas->underlying_buffer->SetName("TLAS underly buffer Ping");
 
                 //create new TLAS
                 VkAccelerationStructureCreateInfoKHR create_info{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
@@ -2274,7 +2330,18 @@ namespace Moer::Render {
                 create_info.offset = 0;
                 create_info.size = tlas->underlying_buffer->GetByteSize();
                 VK_CHECK_RESULT(vkCreateAccelerationStructureKHR(m_device->GetDevice(), &create_info, nullptr, &tlas->handle));
-            
+                
+                //create previous tlas
+                if(prev_size_infos.result_size == 0){
+                    
+                    VK_CHECK_RESULT(vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &current_handle, &alloc, nullptr));
+                    prev_tlas = MoerNew(VulkanAccelerationStructure)(*m_device, *this);
+                    prev_tlas->underlying_buffer = MoerNew(VulkanBuffer)(BufferInfo{buffer_ci.size, 1, EBufferUsageFlags::ACCELERATION_STRUCTURE}, *m_device, current_handle, alloc, false, true);
+                    prev_tlas->underlying_buffer->SetName("TLAS underly buffer Pong");
+                    create_info.buffer = prev_tlas->underlying_buffer->GetHandle();
+                    VK_CHECK_RESULT(vkCreateAccelerationStructureKHR(m_device->GetDevice(), &create_info, nullptr, &prev_tlas->handle));
+                    prev_size_infos = build_sizes_info;
+                }
             }
             size_infos = build_sizes_info;
             return true;

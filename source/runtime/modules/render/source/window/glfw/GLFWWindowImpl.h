@@ -24,6 +24,10 @@ namespace Moer {
         virtual void* GetNativeWindow(WindowHandle*) const override;
 
     private:
+        void TickCursorState();
+        void SetCursorHide();
+        void SetCursorNormal();
+
         GLFWWindowImpl();
         virtual void Init(const SurfaceInitInfo&) override;
         virtual void OnCharCallbackImpl(WindowType* window, unsigned int codepoint) override;

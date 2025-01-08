@@ -37,6 +37,7 @@ namespace Moer {
 
         Matrix4x4f GetMatrix4x4() const noexcept { return matrix; }
         Matrix3x4f GetMatrix3x4() const noexcept;
+        Matrix3x4f GetMatrix3x4ColumnMajor() const noexcept;
         Transform  Inverse() const noexcept;
 
         bool                 IsAffine() const noexcept;

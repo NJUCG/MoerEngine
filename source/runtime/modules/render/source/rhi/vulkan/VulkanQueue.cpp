@@ -14,6 +14,7 @@
 
 #include <memory>
 #include <mutex>
+#include <variant>
 namespace Moer::Render {
 
 #pragma region[ utils ]
@@ -155,7 +156,7 @@ namespace Moer::Render {
                 case SpvReflectResourceType::SPV_REFLECT_RESOURCE_FLAG_SRV:
                     return VK_ACCESS_2_SHADER_READ_BIT;
                 case SpvReflectResourceType::SPV_REFLECT_RESOURCE_FLAG_UAV:
-                    return VK_ACCESS_2_SHADER_WRITE_BIT;
+                    return VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT;
                 default:
                     assert(false && "Invalid texture resource type");
                     return VK_ACCESS_2_SHADER_READ_BIT;
@@ -193,7 +194,17 @@ namespace Moer::Render {
                     if (_flag.resource_type == SPV_REFLECT_RESOURCE_FLAG_UNDEFINED) return;
                     auto* vk_texture = reinterpret_cast<VulkanTexture*>(_arg.GetTexture());
                     tracker.RecordState(vk_texture, GetTextureAccess(_flag), GetTextureLayout(_flag), _pipelines, _arg.mip_level, _arg.num_mips);
-                } else if constexpr (std::is_same_v<T, BindlessArrayRef>) {
+                } else if constexpr (std::is_same_v<T, std::span<TextureView>>) {
+                    for (auto&& i : _arg) {
+                        VisitArgs(i, _flag, _pipelines);
+                    }
+                } else if constexpr (std::is_same_v<T, std::span<BufferView>>) {
+                    for (auto&& i : _arg) {
+                        VisitArgs(i, _flag, _pipelines);
+                    }
+                }
+
+                else if constexpr (std::is_same_v<T, BindlessArrayRef>) {
                     HandleBindless(_arg, _pipelines);
                 } else if constexpr (std::is_same_v<T, RaytracingSceneRef>) {
                     VulkanRaytracingScene* vk_as = ResourceCast(_arg.Get());
@@ -246,6 +257,10 @@ namespace Moer::Render {
                     break;
                 case Command::EType::UpdateBindlessArray:
                     Visit(static_cast<const UpdateBindlessArrayCmd*>(_cmd));
+                    break;
+
+                case Command::EType::ClearResource:
+                    Visit(static_cast<const ClearResourceCmd*>(_cmd));
                     break;
                 case Command::EType::Custom:
                     Visit(static_cast<const CustomCmd*>(_cmd));
@@ -450,7 +465,6 @@ namespace Moer::Render {
                     auto*         vk_texture = ResourceCast(barrier.texture.GetTexture());
                     auto          access     = tracker.ReadTexture(vk_texture, barrier.state);
                     VkImageLayout src_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                    device.GetComputeQueue();
                     tracker.QueueTransferAcquireResource(
                         vk_texture,
                         device.GetQueueFamilyIndex(_cmd->src_queue),
@@ -548,6 +562,26 @@ namespace Moer::Render {
             }
         }
 
+        void Visit(const ClearResourceCmd* _cmd) {
+            std::visit(
+                [&](auto&& _arg) {
+                    using T = std::decay_t<decltype(_arg)>;
+                    if constexpr (std::is_same_v<T, TextureView>) {
+                        auto* vk_texture = ResourceCast(_arg.GetTexture());
+                        tracker.RecordState(vk_texture,
+                                            VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                            VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                                            _arg.mip_level,
+                                            _arg.num_mips);
+                    } else if constexpr (std::is_same_v<T, BufferView>) {
+                        auto* vk_buffer = ResourceCast(_arg.GetBuffer());
+                        tracker.RecordState(vk_buffer, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
+                    }
+                },
+                _cmd->Resource());
+        }
+
         void Visit(const CustomCmd* _cmd) {
             switch (_cmd->CustomId()) {
                 case CustomCmd::CustomCmdId::CUSTOM_RASTER:
@@ -628,6 +662,9 @@ namespace Moer::Render {
                     break;
                 case Command::EType::SetDrawState:
                     Visit(static_cast<const SetDrawStateCmd&>(*_cmd));
+                    break;
+                case Command::EType::ClearResource:
+                    Visit(static_cast<const ClearResourceCmd&>(*_cmd));
                     break;
                 case Command::EType::TraceRay:
                     assert(false && "TraceRay not implemented");
@@ -909,6 +946,37 @@ namespace Moer::Render {
             cmd_list.EndLabel();
         }
 
+        void Visit(const ClearResourceCmd& _cmd) {
+            std::visit(
+                [&](auto&& _arg) {
+                    using T = std::decay_t<decltype(_arg)>;
+                    if constexpr (std::is_same_v<T, TextureView>) {
+                        auto*                   vk_texture = ResourceCast(_arg.GetTexture());
+                        VkImageSubresourceRange range{
+                            .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
+                            .baseMipLevel   = _arg.mip_level,
+                            .levelCount     = _arg.num_mips,
+                            .baseArrayLayer = 0,
+                            .layerCount     = 1};
+                        VkClearColorValue value;
+                        std::visit([&](auto&& _val) {
+                            using T = std::decay_t<decltype(_val)>;
+                            if constexpr (std::is_same_v<T, float4>) {
+                                value = VkClearColorValue{.float32 = {_val.x, _val.y, _val.z, _val.w}};
+                            } else if constexpr (std::is_same_v<T, uint4>) {
+                                value = VkClearColorValue{.uint32 = {_val, _val, _val, _val}};
+                            }
+                        },
+                                   _cmd.ClearValue());
+                        cmd_list.ClearTexture(vk_texture, value, range);
+                    } else if constexpr (std::is_same_v<T, BufferView>) {
+                        auto* vk_buffer = ResourceCast(_arg.GetBuffer());
+                        cmd_list.ClearBufferUInt(vk_buffer, _arg.GetByteOffset(), _arg.GetByteSize(), _cmd.UIntValue());
+                    }
+                },
+                _cmd.Resource());
+        }
+
         void Visit(const UpdateBindlessArrayCmd& _cmd) {
             VulkanBindlessArray* bindless_array = reinterpret_cast<VulkanBindlessArray*>(_cmd.Handle());
             auto                 texture_slots  = _cmd.StealTextureUpdates();
@@ -990,7 +1058,7 @@ namespace Moer::Render {
                 uint buffer_dst_slot_offset = bindless_array->buffers_offset_in_set / buffer_handle_stride;
                 for (size_t i = 0; i < buffer_slots.size(); ++i) {
                     VulkanBuffer* vk_buffer = ResourceCast(buffer_slots[i].buffer);
-                    uint          src_idx   = heap.GetBufferDescIdx(vk_buffer->GetView());
+                    uint          src_idx   = heap.GetBufferDescIdx(vk_buffer->GetView(), VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
                     memcpy(buffer_dat.data() + i * buffer_handle_stride, &heap.buffer_desc_data[src_idx], buffer_handle_stride);
                     buffer_indices_dat[i] = {i, buffer_slots[i].slot + buffer_dst_slot_offset};
 
@@ -1472,23 +1540,25 @@ namespace Moer::Render {
     WaitEvent VkCommandQueue::Execute(CmdSubmit&& _submit) {
         Timer timer{};
         timer.Start();
-        auto  allocator_ptr = std::move(GetAllocator());
-        auto& vk_allocator  = *allocator_ptr;
-        auto& tracker       = vk_allocator.GetTracker();
 
-        VkCmdVisitor  visitor(vk_device, vk_allocator, tracker, vk_allocator.GetCmdList());
         FunctionTable function_table{
             .is_resource_write       = &IsBufferTextureWrite,
             .is_resource_read        = &IsBufferTextureRead,
             .is_texture_sampled      = &IsTextureSampled,
             .is_resource_in_bindless = &IsResourceInBindlessArray};
         CmdReorderer reorderer{function_table};
-
-        VkCmdPreprocessor preprocessor(vk_device, tracker, vk_allocator, function_table);
-
         for (const auto& cmd : _submit.cmds) {
             reorderer.AcceptCmd(cmd.get());
         }
+        std::unique_lock<std::mutex> lock(exec_mtx);//currently only one thread can execute commands at a time
+
+        auto  allocator_ptr = std::move(GetAllocator());
+        auto& vk_allocator  = *allocator_ptr;
+        auto& tracker       = vk_allocator.GetTracker();
+
+        VkCmdVisitor visitor(vk_device, vk_allocator, tracker, vk_allocator.GetCmdList());
+
+        VkCmdPreprocessor preprocessor(vk_device, tracker, vk_allocator, function_table);
 
         timer.Stop();
         // LOG_INFO("Reorderer time {}", timer.ElapsedMilliseconds());
@@ -1601,7 +1671,8 @@ namespace Moer::Render {
     void VkCommandQueue::Present(SwapchainRef _sc, TextureView _view) {
         VkSwapchain* sc = ResourceCast(_sc.Get());
         // auto         allocator    = std::move(GetAllocator());
-        auto presentor = std::move(GetPresentor());
+        std::unique_lock<std::mutex> lock(exec_mtx);//currently only one thread can execute commands at a time
+        auto                         presentor = std::move(GetPresentor());
         // auto& vk_allocator = *allocator;
         auto& vk_allocator = *presentor;
         auto& vk_cmd_list  = vk_allocator.GetCmdList();
@@ -1825,10 +1896,7 @@ namespace Moer::Render {
 
         auto current_timeline = last_frame;
         if (!cmds.empty()) {
-            auto          allocator    = GetAllocator();
-            auto&         vk_allocator = *allocator;
-            auto&         vk_cmd_list  = vk_allocator.GetCmdList();
-            auto&         vk_tracker   = vk_allocator.GetTracker();
+
             FunctionTable function_table{
                 .is_resource_write       = &IsBufferTextureWrite,
                 .is_resource_read        = &IsBufferTextureRead,
@@ -1837,6 +1905,10 @@ namespace Moer::Render {
             CmdReorderer reorderer{function_table};
 
             std::unique_lock<std::mutex> lk(exec_mutex);
+            auto                         allocator    = GetAllocator();
+            auto&                        vk_allocator = *allocator;
+            auto&                        vk_cmd_list  = vk_allocator.GetCmdList();
+            auto&                        vk_tracker   = vk_allocator.GetTracker();
 
             VkCmdPreprocessor preprocessor(device, vk_tracker, vk_allocator, {}, EQueueType::Copy);
             VkCmdVisitor      visitor(device, vk_allocator, vk_tracker, vk_cmd_list);

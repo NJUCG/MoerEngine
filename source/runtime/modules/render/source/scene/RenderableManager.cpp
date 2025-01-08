@@ -1,7 +1,10 @@
 #include "scene/RenderableManager.h"
 
 #include "rhi/RHI.h"
+#include "scene/Material.h"
+#include "scene/Scene.h"
 #include "scene/TransformManager.h"
+#include "shaderheaders/shared/Geometry.h"
 
 // struct Entry {
 //     EPrimitiveType type;
@@ -70,28 +73,28 @@ namespace Moer {
     }
 
     void RenderableManager::Builder::Build(Entity entity) noexcept {
-        RenderableManager::Get().Create(*this, entity);
+        RenderableManager::Get().CreateMesh(*this, entity);
 
         auto& transfor_manager = TransformManager::Get();
         if (!transfor_manager.HasComponent(entity)) { transfor_manager.Create(entity); }
     }
 
-    void RenderableManager::Create(Builder& builder, Entity entity) {
-        m_manager.AddComponent(entity);
+    void RenderableManager::CreateMesh(Builder& _builder, Entity _entity) {
+        m_manager.AddComponent(_entity);
 
-        SetCulling(entity, builder->m_culling);
-        SetCastShadows(entity, builder->m_cast_shadows);
+        SetCulling(_entity, _builder->m_culling);
+        SetCastShadows(_entity, _builder->m_cast_shadows);
 
-        m_manager[entity].vertex_data = std::make_unique<Moer::Array<float>>(std::move(builder->vertex_data));
-        m_manager[entity].index_data  = std::make_unique<Moer::Array<uint32_t>>(std::move(builder->index_data));
+        m_manager[_entity].vertex_data = std::make_unique<Moer::Array<float>>(std::move(_builder->vertex_data));
+        m_manager[_entity].index_data  = std::make_unique<Moer::Array<uint32_t>>(std::move(_builder->index_data));
     }
 
-    void RenderableManager::Create(Entity entity) {
-        m_manager.AddComponent(entity);
+    void RenderableManager::CreateMeshInstance(Entity _entity) {
+        m_manager.AddComponent(_entity);
     }
 
-    void RenderableManager::SetRHIRenderPrimitiveRef(Entity entity, RHIRenderPrimitiveRef primitive) {
-        m_manager[entity].primitive = primitive;
+    void RenderableManager::SetRHIRenderPrimitiveRef(Entity entity, RHIRenderPrimitiveRef _primitive) {
+        m_manager[entity].primitive = _primitive;
     }
     void RenderableManager::SetCulling(Entity entity, bool culling) {
         m_manager[entity].culling = culling;
@@ -99,25 +102,32 @@ namespace Moer {
     void RenderableManager::SetCastShadows(Entity entity, bool castShadows) {
         m_manager[entity].cast_shadows = castShadows;
     }
-    void RenderableManager::SetMaterialInstance(Entity entity, MaterialInstanceRef material_instance) {
-        m_manager[entity].material_instance = material_instance;
+    void RenderableManager::SetMaterialInstances(Entity _entity, Array<MaterialInstanceRef>&& _material_instance) {
+        m_manager[_entity].material_instances = std::move(_material_instance);
     }
-    void RenderableManager::SetMeshInfo(Entity entity, const MeshInfo& mesh_info) {
-        m_manager[entity].mesh_info = mesh_info;
-    }
-
-    void RenderableManager::SetRTMeshInfo(Entity entity, const RTMeshInfo& rt_mesh_info) {
-        m_manager[entity].rt_mesh_info = rt_mesh_info;
+    void RenderableManager::SetMeshInfo(Entity entity, SharedPtr<MeshInfo> _mesh_info) {
+        // m_manager[entity]. = mesh_info;
+        m_manager[entity].mesh_info = _mesh_info;
     }
 
-    const MeshInfo& RenderableManager::GetMeshInfo(Entity entity) {
+    void RenderableManager::SetInstanceID(Entity entity, int instance_id) {
+        m_manager[entity].instance_id = instance_id;
+    }
+
+    void RenderableManager::SetGeomInstanceID(Entity entity, int geom_instance_id) {
+        m_manager[entity].geom_instance_id = geom_instance_id;
+    }
+
+    void RenderableManager::ModifyMeshInfo(Entity entity, std::function<void(MeshInfo&)>&& _func) {
+        _func(*m_manager[entity].mesh_info);
+    }
+
+    const SharedPtr<MeshInfo>& RenderableManager::GetMeshInfo(Entity entity) {
         return m_manager[entity].mesh_info;
     }
-    const RTMeshInfo& RenderableManager::GetRTMeshInfo(Entity entity) {
-        return m_manager[entity].rt_mesh_info;
-    }
-    MaterialInstanceRef RenderableManager::GetMaterialInstance(Entity entity) {
-        return m_manager[entity].material_instance;
+
+    std::span<MaterialInstanceRef> RenderableManager::GetMaterialInstances(Entity _entity) {
+        return m_manager[_entity].material_instances;
     }
 
     RenderableManager& RenderableManager::Get() {
@@ -150,4 +160,17 @@ namespace Moer {
         //   return m_manager[entity].index_data;
         return *m_manager[entity].index_data;
     }
+
+    int RenderableManager::GetInstanceID(Entity _entity) {
+        return m_manager[_entity].instance_id;
+    }
+
+    int RenderableManager::GetGeomInstanceID(Entity _entity) {
+        return m_manager[_entity].geom_instance_id;
+    }
+
+    std::span<const StaticArray<Render::VertexBuffer, VETA_Num>> RenderableManager::GetVertexBuffer(Entity _entity) {
+        return m_manager[_entity].vertex_buffers;
+    }
+
 }// namespace Moer

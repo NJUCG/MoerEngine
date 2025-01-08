@@ -90,12 +90,12 @@ namespace Moer::Render {
         : cmd_list(_cmd_list), pso(_pso), args({}) {
     }
 
-    void CommandList::ComputeDispatcher::Dispatch(uint3 _group_count, std::string_view _name) {
+    void CommandList::ComputeDispatcher::Dispatch(uint3 _group_count, std::string_view _name, ProfileSection _section) {
         cmd_list.commands.push_back(MakeUnique<DispatchCmd>(std::move(args), pso.handle, _group_count));
         cmd_list.commands.back()->name = _name;
     }
 
-    void CommandList::ComputeDispatcher::DispatchIndirect(BufferView _indirect, std::string_view _name) {
+    void CommandList::ComputeDispatcher::DispatchIndirect(BufferView _indirect, std::string_view _name, ProfileSection _section) {
         cmd_list.commands.push_back(MakeUnique<DispatchCmd>(std::move(args), pso.handle, _indirect));
         cmd_list.commands.back()->name = _name;
     }
@@ -231,6 +231,17 @@ namespace Moer::Render {
         commands.push_back(_array->CreateUpdateCommand());
     }
 
+    void CommandList::ClearResource(BufferView _buffer, uint _value) {
+        commands.emplace_back(MakeUnique<ClearResourceCmd>(_buffer, _value));
+    }
+
+    void CommandList::ClearResource(TextureView _texture, float4 _color) {
+        commands.emplace_back(MakeUnique<ClearResourceCmd>(_texture, _color));
+    }
+
+    void CommandList::ClearResource(TextureView _texture, uint _value) {
+        commands.emplace_back(MakeUnique<ClearResourceCmd>(_texture, _value));
+    }
 #pragma region[ raytracing ]
 
     void CommandList::BuildAccelerationStructures(Array<AccelerationStructureBuildParam>&& _geometries) {

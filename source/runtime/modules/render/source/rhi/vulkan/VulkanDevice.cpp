@@ -376,14 +376,18 @@ namespace Moer::Render {
         volkLoadDevice(m_device);
 
         vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.graphics.value(), 0, &m_graphics_queue);
+
         vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.present.value(), 0, &m_present_queue);
         vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.compute.value(), 0, &m_compute_queue);
         vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.transfer.value(), 0, &m_transfer_queue);
         vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.raytracing.value(), 0, &m_raytracing_queue);
-        gfx_queue     = MakeUnique<VkCommandQueue>(*this, EQueueType::Graphics);
+        gfx_queue = MakeUnique<VkCommandQueue>(*this, EQueueType::Graphics);
+        SetResourceName(uint64(m_graphics_queue), VK_OBJECT_TYPE_QUEUE, "GraphicsQueue");
         compute_queue = MakeUnique<VkCommandQueue>(*this, EQueueType::Compute);
+        SetResourceName(uint64(m_compute_queue), VK_OBJECT_TYPE_QUEUE, "ComputeQueue");
         // transfer_queue = MakeUnique<VkCommandQueue>(*this, EQueueType::Copy);
         copy_queue = MakeUnique<VkCopyQueue>(*this);
+        SetResourceName(uint64(m_transfer_queue), VK_OBJECT_TYPE_QUEUE, "TransferQueue");
     }
 
     void VulkanDevice::CreateMemoryAllocator(VkInstance _instance, uint32 _api_version) {
@@ -719,15 +723,15 @@ namespace Moer::Render {
         uint& _max_set// max set index, calculate descriptor set count
     ) {
         for (const auto& hash : _shader_info.layout_hash) {
-            uint idx                       = uint(&hash - _shader_info.layout_hash.data());
-            _out_hash_2_idx[GetHash(hash)] = idx;
-            EShaderArgType arg_type        = _shader_info.arg_types[idx];
+            uint idx                         = uint(&hash - _shader_info.layout_hash.data());
+            _out_hash_2_idx[GetHash(hash)]   = idx;
+            const ShaderArgCppInfo& arg_info = _shader_info.arg_cpp_info[idx];
 
             const UnorderedMap<std::string, ReflectParamInfo>& reflect_map  = _info.shader_param_map.reflect_map;
             const auto                                         binding_iter = reflect_map.find(hash.data());
             bool                                               b_found      = binding_iter != reflect_map.end();
-            if (arg_type != SDA_BindlessArray && !b_found) { continue; }
-            switch (arg_type) {
+            if (arg_info.type != SDA_BindlessArray && !b_found) { continue; }
+            switch (arg_info.type) {
                 case SDA_BindlessArray: {
                     auto bdls_iter = reflect_map.find(ReflectParamInfo::bdls_name.data());
                     if (bdls_iter == reflect_map.end()) {
@@ -829,15 +833,15 @@ namespace Moer::Render {
                     auto& vk_binding           = set[resource.binding];
                     vk_binding.binding         = resource.binding;
                     vk_binding.descriptorType  = desc_type;
-                    vk_binding.descriptorCount = 1;
+                    vk_binding.descriptorCount = std::max(resource.count, arg_info.array_size);
                     vk_binding.stageFlags |= _stage;
                     vk_binding.pImmutableSamplers            = nullptr;
                     set.bindings[resource.binding].param_idx = idx;
                     // _out_reflect_flags[idx]       = EncodeReflectInfo(resource.set, resource.binding, vk_binding.stageFlags);
                     _max_set                        = uint(std::max(int(_max_set), int(resource.set)));
-                    VulkanShaderResourceState state = VulkanShaderResourceState(SpvReflectDescriptorType(resource.desc_type), SpvReflectResourceType(resource.resource_type));
-                    if (arg_type == SDA_Buffer) {
-                    } else if (arg_type == SDA_Texture) {
+                    VulkanShaderResourceState state = VulkanShaderResourceState(SpvReflectDescriptorType(resource.desc_type), SpvReflectResourceType(resource.resource_type), resource.format);
+                    if (arg_info.type == SDA_Buffer) {
+                    } else if (arg_info.type == SDA_Texture) {
                         state.b_sampled = resource.sampled;
                     }
                     _out_reflect_flags[idx].state_flags = state();

@@ -973,9 +973,9 @@ namespace Moer {
             g_scene->ForEach([&](Entity _entity) {
                 if (RenderableManager::Get().Contains(_entity)) {
 
-                    auto mi = RenderableManager::Get().GetMaterialInstance(_entity);
-                    material_types.insert(mi->GetMaterial()->GetType());
-                    material_instances[mi->GetMaterial()->GetType()].push_back(mi);
+                    // auto mi = RenderableManager::Get().GetMaterialInstance(_entity);
+                    // material_types.insert(mi->GetMaterial()->GetType());
+                    // material_instances[mi->GetMaterial()->GetType()].push_back(mi);
                 }
             });
 

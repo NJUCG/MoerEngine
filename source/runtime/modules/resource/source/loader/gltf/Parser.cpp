@@ -20,6 +20,7 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "scene/BufferInterfaceBlock.h"
+#include "scene/Entity.h"
 #include "scene/EntityManager.h"
 #include "scene/CameraManager.h"
 #include "scene/Material.h"
@@ -37,9 +38,13 @@
 #include <atomic>
 #include <cmath>
 #include <filesystem>
+#include <functional>
 #include <future>
 #include <stb/stb_image.h>
 #include <meshoptimizer.h>
+
+#include "shaderheaders/shared/Geometry.h"
+#include "shaderheaders/shared/utils/Packing.h"
 
 namespace Moer::Resource::Gltf {
 
@@ -54,19 +59,26 @@ namespace Moer::Resource::Gltf {
         UniquePtr<SceneData> LoadSceneFromFile(const std::filesystem::path& file_path, bool _delete_after_load = false);
         void                 LoadSceneFromFileAsync(const std::filesystem::path& file_path);
         void                 LoadNode(const aiNode* node, const aiScene* scene);
-        void                 LoadCameras(const aiScene* scene);
-        void                 LoadMaterial(const aiScene* ai_scene, const aiMaterial* ai_material, const std::string& materialName);
-        void                 LoadTexture(const aiScene* scene, const aiString& texture_path, MaterialInstanceRef& mat, const std::string& param_name);
-        void                 LoadLights(const aiScene* scene);
+
+        void LoadNodes(const aiScene* scene, const aiNode* node, std::function<void(const aiNode*)>& _on_load_node);
+        void LoadCameras(const aiScene* scene);
+        void LoadMaterial(const aiScene* _ai_scene, const aiMaterial* _ai_material, const std::string& _material_name);
+        void LoadTexture(const aiScene* scene, const aiString& texture_path, MaterialInstanceRef& mat, const std::string& param_name);
+        void LoadLights(const aiScene* scene);
         ~Impl() = default;
 
         // Moer::Array<RHIRenderPrimitiveRef>                   m_primitives{};
-        Moer::UnorderedMap<std::string, TextureData>         m_textures{};
-        Moer::UnorderedMap<std::string, MaterialInstanceRef> m_material_instances{};
-        Moer::UnorderedMap<std::string, MaterialRef>         m_materials{};
-        Moer::Array<MeshInfo>                                m_mesh_infos{};
-        Moer::Array<InstanceData>                            m_instance_data{};
-        Moer::Array<InstanceMeshInfo>                        m_instance_mesh_info{};
+        Moer::UnorderedMap<std::string, TextureData> m_textures{};
+        Moer::UnorderedMap<std::string, uint>        m_material_idx{};
+        Array<MaterialInstanceRef>                   material_instance_list{};
+        Moer::UnorderedMap<std::string, MaterialRef> m_materials{};
+        Moer::Array<SharedPtr<MeshInfo>>             mesh_infos{};
+        Moer::Array<SharedPtr<MeshGeometry>>         mesh_geometries{};
+
+        uint mesh_instance_count = 0;
+
+        Moer::Array<Render::InstanceData> m_instance_data{};
+        Moer::Array<InstanceMeshInfo>     m_instance_mesh_info{};
 
         Moer::Array<MeshletDesc>  m_meshlet_descs{};
         Moer::Array<MeshletBound> m_meshlet_bounds{};
@@ -147,20 +159,20 @@ namespace Moer::Resource::Gltf {
         stride                         = 0;
         VertexAttributeFlags attribute = 0;
         if (mesh->HasPositions()) {
-            attribute |= E_VERTEX_ATTRIBUTE::E_POSITION;
+            attribute |= EVertexAttributeFlags::E_POSITION;
             stride += 3;
         }
         if (mesh->HasNormals()) {
-            attribute |= E_VERTEX_ATTRIBUTE::E_NORMAL;
+            attribute |= EVertexAttributeFlags::E_NORMAL;
             stride += 3;
         }
         if (mesh->HasTangentsAndBitangents()) {
-            attribute |= E_VERTEX_ATTRIBUTE::E_TANGENT;
+            attribute |= EVertexAttributeFlags::E_TANGENT;
             // attribute |= E_VERTEX_ATTRIBUTE::E_BITANGENT;
             stride += 3;
         }
         if (mesh->HasTextureCoords(0)) {
-            attribute |= E_VERTEX_ATTRIBUTE::E_UV0;
+            attribute |= EVertexAttributeFlags::E_UV0;
             stride += 2;
         }
         return attribute;
@@ -289,10 +301,7 @@ namespace Moer::Resource::Gltf {
         } else {
             LOG_INFO("Found {} lights in the scene", light_num);
 
-            LOG_WARNING("Due to the Sponza scene only has a dark light, loader will use default lights instead. Please remove this warning and the following code after adding a new scene with lights");
-            m_scene_data->m_lights = std::move(LightComponent::CreateDefaultLightComponents());
-            return;
-
+            LOG_WARNING("gltf LoadLights function isn't tested fully. It may not work as expected.");
             // The following code isn't tested fully. It may not work as expected.
             // TODO: Add a new scene with lights to test the following code
             for (uint32_t i = 0; i < light_num; i++) {
@@ -301,7 +310,8 @@ namespace Moer::Resource::Gltf {
                     LightComponentRef light_component = MoerNew(DirectionalLightComponent)(
                         ToVector3f(light->mColorDiffuse),// color
                         1.0f,                            // intensity
-                        ToVector3f(light->mDirection)    // direction
+                        ToVector3f(light->mDirection),   // direction
+                        0.f                              // angular_size
                     );
                     m_scene_data->m_lights.push_back(light_component);
 
@@ -354,55 +364,57 @@ namespace Moer::Resource::Gltf {
         return materialBuilder.Build();
     }
 
-    void Parser::Impl::LoadMaterial(const aiScene* ai_scene, const aiMaterial* ai_material, const std::string& materialName) {
+    void Parser::Impl::LoadMaterial(const aiScene* _ai_scene, const aiMaterial* _ai_material, const std::string& _material_name) {
 
         if (!m_materials.contains("standered")) {
             m_materials["standered"] = GetDefaultMaterial();
         }
         const auto material = m_materials["standered"];
 
-        m_material_instances[materialName] = material->CreateInstance();
-        MaterialInstanceRef mi             = m_material_instances[materialName];
-        mi->SetName(materialName);
+        MaterialInstanceRef mi         = material_instance_list.emplace_back(material->CreateInstance());
+        uint                load_idx   = material_instance_list.size() - 1;
+        m_material_idx[_material_name] = load_idx;
+
+        mi->SetName(_material_name);
 
         aiString base_color_path, normal_path, metallic_roughness_path, ao_path, emissive_path;
-        if (ai_material->GetTexture(AI_MATKEY_BASE_COLOR_TEXTURE, &base_color_path) == AI_SUCCESS) {
-            LoadTexture(ai_scene, base_color_path, mi, "albedo_map");
+        if (_ai_material->GetTexture(AI_MATKEY_BASE_COLOR_TEXTURE, &base_color_path) == AI_SUCCESS) {
+            LoadTexture(_ai_scene, base_color_path, mi, "albedo_map");
         }
-        if (ai_material->GetTexture(aiTextureType_NORMALS, 0, &normal_path) == AI_SUCCESS) {
-            LoadTexture(ai_scene, normal_path, mi, "normal_map");
+        if (_ai_material->GetTexture(aiTextureType_NORMALS, 0, &normal_path) == AI_SUCCESS) {
+            LoadTexture(_ai_scene, normal_path, mi, "normal_map");
         }
-        if (ai_material->GetTexture(AI_MATKEY_GLTF_PBRMETALLICROUGHNESS_METALLICROUGHNESS_TEXTURE, &metallic_roughness_path) == AI_SUCCESS) {
-            LoadTexture(ai_scene, metallic_roughness_path, mi, "metallic_roughness_map");
+        if (_ai_material->GetTexture(AI_MATKEY_GLTF_PBRMETALLICROUGHNESS_METALLICROUGHNESS_TEXTURE, &metallic_roughness_path) == AI_SUCCESS) {
+            LoadTexture(_ai_scene, metallic_roughness_path, mi, "metallic_roughness_map");
         }
-        if (ai_material->GetTexture(aiTextureType_LIGHTMAP, 0, &ao_path) == AI_SUCCESS) {
-            LoadTexture(ai_scene, ao_path, mi, "ao_map");
+        if (_ai_material->GetTexture(aiTextureType_LIGHTMAP, 0, &ao_path) == AI_SUCCESS) {
+            LoadTexture(_ai_scene, ao_path, mi, "ao_map");
         }
-        if (ai_material->GetTexture(aiTextureType_EMISSIVE, 0, &emissive_path) == AI_SUCCESS) {
-            LoadTexture(ai_scene, emissive_path, mi, "emissive_map");
+        if (_ai_material->GetTexture(aiTextureType_EMISSIVE, 0, &emissive_path) == AI_SUCCESS) {
+            LoadTexture(_ai_scene, emissive_path, mi, "emissive_map");
         }
 
-        aiColor4D baseColorFactor;
-        aiColor3D emissiveFactor;
-        float     metallicFactor  = 1.0;
-        float     roughnessFactor = 1.0;
+        aiColor4D base_color_factor;
+        aiColor3D emissive_factor;
+        float     metallic_factor  = 1.0;
+        float     roughness_factor = 1.0;
 
-        if (ai_material->Get(AI_MATKEY_COLOR_DIFFUSE, baseColorFactor) == AI_SUCCESS) {
-            Vector4f base_color_factor_cast = *reinterpret_cast<Vector4f*>(&baseColorFactor);
+        if (_ai_material->Get(AI_MATKEY_COLOR_DIFFUSE, base_color_factor) == AI_SUCCESS) {
+            Vector4f base_color_factor_cast = *reinterpret_cast<Vector4f*>(&base_color_factor);
             mi->SetParameter("base_color_factor", base_color_factor_cast);
         }
 
-        if (ai_material->Get(AI_MATKEY_COLOR_EMISSIVE, emissiveFactor) == AI_SUCCESS) {
-            Vector3f emissive_factor_cast = *reinterpret_cast<Vector3f*>(&emissiveFactor);
+        if (_ai_material->Get(AI_MATKEY_COLOR_EMISSIVE, emissive_factor) == AI_SUCCESS) {
+            Vector3f emissive_factor_cast = *reinterpret_cast<Vector3f*>(&emissive_factor);
             mi->SetParameter("emissive_factor", emissive_factor_cast);
         }
 
-        if (ai_material->Get(AI_MATKEY_GLTF_PBRMETALLICROUGHNESS_METALLIC_FACTOR, metallicFactor) == AI_SUCCESS) {
-            mi->SetParameter("metalic_factor", metallicFactor);
+        if (_ai_material->Get(AI_MATKEY_GLTF_PBRMETALLICROUGHNESS_METALLIC_FACTOR, metallic_factor) == AI_SUCCESS) {
+            mi->SetParameter("metalic_factor", metallic_factor);
         }
 
-        if (ai_material->Get(AI_MATKEY_GLTF_PBRMETALLICROUGHNESS_ROUGHNESS_FACTOR, roughnessFactor) == AI_SUCCESS) {
-            mi->SetParameter("roughness_factor", roughnessFactor);
+        if (_ai_material->Get(AI_MATKEY_GLTF_PBRMETALLICROUGHNESS_ROUGHNESS_FACTOR, roughness_factor) == AI_SUCCESS) {
+            mi->SetParameter("roughness_factor", roughness_factor);
         }
 
         mi->SetParameter("ao", 1.0f);
@@ -426,6 +438,36 @@ namespace Moer::Resource::Gltf {
 
         return uv_area == 0 ? 1.0f : sqrt(uv_area / world_area);
     }
+
+    using GeomSet = Moer::UnorderedSet<aiMesh*>;
+
+    struct GeomSetHash {
+        size_t operator()(const GeomSet& _set) const {
+            size_t hash = 0;
+            for (auto& mesh : _set) {
+                hash ^= std::hash<aiMesh*>{}(mesh);
+            }
+            return hash;
+        }
+    };
+
+    struct GeomSetEqual {
+        bool operator()(const GeomSet& _lhs, const GeomSet& _rhs) const {
+            if (_lhs.size() != _rhs.size()) {
+                return false;
+            }
+            for (auto& mesh : _lhs) {
+                if (_rhs.find(mesh) == _rhs.end()) {
+                    return false;
+                }
+            }
+            return true;
+        }
+    };
+    using GeomRecord = UnorderedMap<GeomSet, SharedPtr<MeshInfo>, GeomSetHash, GeomSetEqual>;
+    struct LoadCtx {
+    };
+
     UniquePtr<SceneData> Parser::Impl::LoadSceneFromFile(const std::filesystem::path& _file_path, bool _delete_after_load) {
 
         GpuPrimitiveBuilder::InitBuild();
@@ -473,7 +515,7 @@ namespace Moer::Resource::Gltf {
         rt_vtx_cnt  = 0;
         rt_prim_cnt = 0;
 
-        m_mesh_infos.resize(gltf_scene->mNumMeshes);
+        mesh_infos.reserve(gltf_scene->mNumMeshes);
 
         uint32_t vertex_count = 0, index_count = 0, meshlet_count = 0;
         for (uint32_t i = 0; i < gltf_scene->mNumMeshes; i++) {
@@ -516,14 +558,14 @@ namespace Moer::Resource::Gltf {
             m_meshlet_bounds.insert(m_meshlet_bounds.end(), output.meshlet_bounds.begin(), output.meshlet_bounds.end());
             m_meshlet_descs.insert(m_meshlet_descs.end(), output.meshlets.begin(), output.meshlets.end());
 
-            m_mesh_infos[i] = {.center         = {aabb_center.x, aabb_center.y, aabb_center.z},
-                               .vertex_offset  = vertex_count,
-                               .extent         = {aabb_extent.x, aabb_extent.y, aabb_extent.z},
-                               .index_offset   = index_count,
-                               .vertex_count   = (uint32_t)(output.meshlet_vertex_data.size() / (stride / sizeof(float))),
-                               .index_count    = (uint32_t)output.primitive_indices.size(),
-                               .meshlet_offset = meshlet_count,
-                               .meshlet_count  = (uint32_t)output.meshlets.size()};
+            // m_mesh_infos[i] = {.center         = {aabb_center.x, aabb_center.y, aabb_center.z},
+            //                    .vertex_offset  = vertex_count,
+            //                    .extent         = {aabb_extent.x, aabb_extent.y, aabb_extent.z},
+            //                    .index_offset   = index_count,
+            //                    .vertex_count   = (uint32_t)(output.meshlet_vertex_data.size() / (stride / sizeof(float))),
+            //                    .index_count    = (uint32_t)output.primitive_indices.size(),
+            //                    .meshlet_offset = meshlet_count,
+            //                    .meshlet_count  = (uint32_t)output.meshlets.size()};
 
             m_vertex_data.insert(m_vertex_data.end(), output.meshlet_vertex_data.begin(), output.meshlet_vertex_data.end());
             m_index_data.insert(m_index_data.end(), output.primitive_indices.begin(), output.primitive_indices.end());
@@ -576,14 +618,219 @@ namespace Moer::Resource::Gltf {
         //     index_offset += cur_index_count;
         // }
 
+        Moer::Array<Render::GeometryData> geometry_infos;
+        Moer::Array<Array<byte>>          geom_datas;
+        //////////////////////////////////////////////////////////////////////////
+        // new implementation
+
+        auto float3_to_snorm8 = [](const float* _data) {
+            float3 data = float3(_data[0], _data[1], _data[2]);
+            return Pack_RGB8_SNORM(data);
+        };
+
+        //////////////////////////////////////////////////////////////////////////
+
         //Todo Load Lights
         LoadCameras(gltf_scene);
-        LoadNode(gltf_scene->mRootNode, gltf_scene);
+        // LoadNode(gltf_scene->mRootNode, gltf_scene);
+
+        GeomRecord geom_record;
+
+        UnorderedMap<const aiNode*, uint> node2instance;
+
+        uint total_vtx_cnt        = 0;
+        uint total_idx_cnt        = 0;
+        uint geom_instance_offset = 0;
+
+        Moer::Array<Render::InstanceData> instance_data;
+        Array<MeshInstance>               mesh_instances{};
+
+        std::function<void(const aiNode*)> on_load_node_prev = [&](const aiNode* _node) {
+            if (_node->mMeshes) {
+                GeomSet geo_set;
+
+                MeshInstance& mesh_instance    = mesh_instances.emplace_back();
+                mesh_instance.instance_id      = mesh_instances.size() - 1;
+                mesh_instance.geom_instance_id = geom_instance_offset;
+                node2instance[_node]           = mesh_instance.instance_id;
+
+                for (uint32_t i = 0; i < _node->mNumMeshes; i++) {
+                    auto* mesh = gltf_scene->mMeshes[_node->mMeshes[i]];
+                    geo_set.insert(mesh);
+                }
+                auto geo_iter = geom_record.find(geo_set);
+
+                if (geo_iter == geom_record.end()) {
+                    uint  local_vtx_cnt = 0;
+                    uint  local_idx_cnt = 0;
+                    Box3D bounding_box;
+
+                    SharedPtr<MeshInfo>& mesh_info = mesh_infos.emplace_back(MakeShared<MeshInfo>());
+                    mesh_info->geometries.resize(geo_set.size());
+                    mesh_info->global_mesh_idx = mesh_infos.size() - 1;
+                    mesh_info->name            = _node->mName.C_Str();
+
+                    //for serialization
+                    mesh_info->buf_idx = 0;
+                    for (uint32_t i = 0; i < _node->mNumMeshes; i++) {
+                        auto* mesh = gltf_scene->mMeshes[_node->mMeshes[i]];
+
+                        Box3D current_box{
+                            {mesh->mAABB.mMin.x, mesh->mAABB.mMin.y, mesh->mAABB.mMin.z},
+                            {mesh->mAABB.mMax.x, mesh->mAABB.mMax.y, mesh->mAABB.mMax.z}};
+                        bounding_box.Expand(current_box);
+                        uint material_id = mesh->mMaterialIndex;
+
+                        aiMaterial const* material = gltf_scene->mMaterials[material_id];
+
+                        aiString    name;
+                        std::string material_name;
+
+                        if (material->Get(AI_MATKEY_NAME, name) == AI_SUCCESS) {
+                            material_name = name.C_Str();
+                        } else {
+                            material_name = std::string("_default_material_Name") + std::to_string(material_id);
+                        }
+
+                        m_scene_data->m_material_instance_indexes[material_name] = material_id;
+
+                        if (!m_material_idx.contains(material_name)) {
+                            LoadMaterial(gltf_scene, material, material_name);
+                        }
+
+                        SharedPtr<MeshGeometry> mesh_geometry = mesh_geometries.emplace_back(MakeShared<MeshGeometry>());
+                        mesh_geometry->local_idx_count        = mesh->mNumFaces * 3;
+                        mesh_geometry->local_vtx_count        = mesh->mNumVertices;
+                        mesh_geometry->local_idx_offset       = local_idx_cnt;
+                        mesh_geometry->local_vtx_offset       = local_vtx_cnt;
+                        mesh_geometry->material_id            = m_material_idx[material_name];
+                        mesh_geometry->global_geom_idx        = mesh_geometries.size() - 1;
+
+                        local_vtx_cnt += mesh->mNumVertices;
+                        local_idx_cnt += mesh->mNumFaces * 3;
+
+                        mesh_info->geometries[i] = mesh_geometry;
+                    }
+
+                    mesh_info->vtx_offset   = total_vtx_cnt;
+                    mesh_info->idx_offset   = total_idx_cnt;
+                    mesh_info->vtx_count    = local_vtx_cnt;
+                    mesh_info->idx_count    = local_idx_cnt;
+                    mesh_info->bounding_box = bounding_box;
+
+                    //for serialization
+                    mesh_info->geom_start_idx = mesh_geometries.size() - _node->mNumMeshes;
+
+                    total_vtx_cnt += local_vtx_cnt;
+                    total_idx_cnt += local_idx_cnt;
+
+                    geom_record[geo_set] = mesh_info;
+                }
+                geo_iter = geom_record.find(geo_set);
+
+                Render::InstanceData& inst   = instance_data.emplace_back();
+                inst.geom_count              = _node->mNumMeshes;
+                inst.first_geom_idx          = geo_iter->second->geometries[0]->global_geom_idx;
+                inst.first_geom_instance_idx = mesh_instance.geom_instance_id;
+                inst.model2world             = GetTransform(_node).GetMatrix3x4();
+                inst.prev_model2world        = inst.model2world;
+
+                //for serialization
+                mesh_instance.mesh_info_idx = geo_iter->second->global_mesh_idx;
+                mesh_instance.mesh_info     = geo_iter->second;
+                geom_instance_offset += _node->mNumMeshes;
+            }
+        };
+        mesh_instance_count = geom_instance_offset;
+
+        LoadNodes(gltf_scene, gltf_scene->mRootNode, on_load_node_prev);
+
+        Array<SharedPtr<MeshBuffers>> mesh_buffers;
+        {
+
+            SharedPtr<MeshBuffers> mesh_buffer = MakeShared<MeshBuffers>();
+            mesh_buffers.emplace_back(mesh_buffer);
+
+            mesh_buffer->positions.resize(total_vtx_cnt);
+            mesh_buffer->normals.resize(total_vtx_cnt);
+            mesh_buffer->tangents.resize(total_vtx_cnt);
+            mesh_buffer->texcoords0.resize(total_vtx_cnt);
+
+            mesh_buffer->indices.resize(total_idx_cnt);
+
+            total_idx_cnt = 0;
+            total_vtx_cnt = 0;
+            geom_record.clear();
+            std::function<void(const aiNode*)> on_load_node_post = [&](const aiNode* _node) {
+                if (!_node->mMeshes) return;
+                uint idx = node2instance[_node];
+
+                const auto& instance  = mesh_instances[idx];
+                auto&       mesh_info = mesh_infos[instance.mesh_info_idx];
+
+                //check if need loading
+                GeomSet geo_set;
+                for (uint32_t i = 0; i < _node->mNumMeshes; i++) {
+                    auto* mesh = gltf_scene->mMeshes[_node->mMeshes[i]];
+                    geo_set.insert(mesh);
+                }
+
+                auto geo_iter      = geom_record.find(geo_set);
+                mesh_info->buffers = mesh_buffer;
+                //already loaded
+                if (geo_iter != geom_record.end()) {
+                    return;
+                }
+
+                geom_record[geo_set] = mesh_info;
+
+                for (uint32_t i = 0; i < _node->mNumMeshes; i++) {
+
+                    const auto* mesh = gltf_scene->mMeshes[_node->mMeshes[i]];
+
+                    for (uint32_t j = 0; j < mesh->mNumVertices; j++) {
+                        if (mesh->HasPositions()) {
+                            const auto& pos                           = mesh->mVertices[j];
+                            mesh_buffer->positions[total_vtx_cnt + j] = {pos.x, pos.y, pos.z};
+                        } else {
+                            assert(false && "Mesh has no position");
+                        }
+
+                        if (mesh->HasNormals()) {
+                            const auto& nor                         = mesh->mNormals[j];
+                            float3      normal                      = {nor.x, nor.y, nor.z};
+                            mesh_buffer->normals[total_vtx_cnt + j] = Pack_RGB8_SNORM(normal);
+                        }
+                        if (mesh->HasTangentsAndBitangents()) {
+                            const auto& tan                          = mesh->mTangents[j];
+                            float3      tangent                      = {tan.x, tan.y, tan.z};
+                            mesh_buffer->tangents[total_vtx_cnt + j] = Pack_RGB8_SNORM(tangent);
+                        }
+                        if (mesh->HasTextureCoords(0)) {
+                            const auto& uv0                            = mesh->mTextureCoords[0][j];
+                            mesh_buffer->texcoords0[total_vtx_cnt + j] = {uv0.x, uv0.y};
+                        }
+                    }
+                    for (uint32_t j = 0; j < mesh->mNumFaces; j++) {
+                        const auto& face                                = mesh->mFaces[j];
+                        mesh_buffer->indices[total_idx_cnt + j * 3 + 0] = face.mIndices[0];
+                        mesh_buffer->indices[total_idx_cnt + j * 3 + 1] = face.mIndices[1];
+                        mesh_buffer->indices[total_idx_cnt + j * 3 + 2] = face.mIndices[2];
+                    }
+
+                    total_vtx_cnt += mesh->mNumVertices;
+                    total_idx_cnt += mesh->mNumFaces * 3;
+                }
+            };
+            mesh_buffer->FillRanges();
+
+            LoadNodes(gltf_scene, gltf_scene->mRootNode, on_load_node_post);
+        }
+
         LoadLights(gltf_scene);
 
-        auto                      instance_id = 0;
-        Moer::Array<InstanceData> instance_data;
-        Moer::Array<RTInstance>   rt_instances;
+        auto                    instance_id = 0;
+        Moer::Array<RTInstance> rt_instances;
         rt_instances.reserve(m_scene_data->m_prim_infos.size());
 
         Moer::Array<InstanceMeshInfo> instance_mesh_info;
@@ -591,33 +838,12 @@ namespace Moer::Resource::Gltf {
         // instance_data.reserve(entities.size());
         for (int i = 0; i < m_scene_data->m_prim_infos.size(); i++) {
             auto              transform    = m_scene_data->m_prim_infos[i].transform;
-            auto              mesh_info    = m_mesh_infos[m_scene_data->m_prim_infos[i].mesh_id];
+            auto              mesh_info    = mesh_infos[m_scene_data->m_prim_infos[i].mesh_id];
             const RTMeshInfo& rt_mesh_info = rt_mesh_infos[m_scene_data->m_prim_infos[i].mesh_id];
 
             auto model_2_world = transform.GetMatrix4x4();
             //todo material data not correct
             auto scale = transform.AffineDecomposition().scaling;
-            instance_data.emplace_back(model_2_world,
-                                       Inverse(model_2_world),
-                                       std::max(scale.x, std::max(scale.y, scale.z)),
-                                       0,
-                                       m_scene_data->m_material_instance_indexes[m_scene_data->m_prim_infos[i].material_id],
-                                       0);
-            Vector4f corner[8];
-            corner[0]    = model_2_world * Vector4f(mesh_info.center + mesh_info.extent, 1.0f);
-            corner[1]    = model_2_world * Vector4f(mesh_info.center - Vector3f(mesh_info.extent.x, mesh_info.extent.y, -mesh_info.extent.z), 1.0f);
-            corner[2]    = model_2_world * Vector4f(mesh_info.center - Vector3f(mesh_info.extent.x, -mesh_info.extent.y, mesh_info.extent.z), 1.0f);
-            corner[3]    = model_2_world * Vector4f(mesh_info.center - Vector3f(mesh_info.extent.x, -mesh_info.extent.y, -mesh_info.extent.z), 1.0f);
-            corner[4]    = model_2_world * Vector4f(mesh_info.center - Vector3f(-mesh_info.extent.x, mesh_info.extent.y, mesh_info.extent.z), 1.0f);
-            corner[5]    = model_2_world * Vector4f(mesh_info.center - Vector3f(-mesh_info.extent.x, mesh_info.extent.y, -mesh_info.extent.z), 1.0f);
-            corner[6]    = model_2_world * Vector4f(mesh_info.center - Vector3f(-mesh_info.extent.x, -mesh_info.extent.y, mesh_info.extent.z), 1.0f);
-            corner[7]    = model_2_world * Vector4f(mesh_info.center - mesh_info.extent, 1.0f);
-            auto new_min = corner[0];
-            auto new_max = corner[0];
-            for (int i = 1; i < 8; i++) {
-                new_min = Min(new_min, corner[i]);
-                new_max = Max(new_max, corner[i]);
-            }
 
             RTInstance rt_instance;
             rt_instance.overload_m1 = model_2_world.r0;
@@ -625,46 +851,27 @@ namespace Moer::Resource::Gltf {
             rt_instance.overload_m3 = model_2_world.r2;
 
             rt_instance.SetMaterial(0, m_scene_data->m_material_instance_indexes[m_scene_data->m_prim_infos[i].material_id]);
-            rt_instance.flags       = Render::RTVM_DEFAULT;
+            rt_instance.flags       = Render::RTVM_OPAQUE;
             rt_instance.prim_offset = rt_mesh_info.primitive_offset;
             rt_instance.vtx_offset  = rt_mesh_info.vertex_offset;
 
             rt_instances.push_back(rt_instance);
-
-            instance_mesh_info.emplace_back(
-                Vector3f(new_min + new_max) * 0.5f,
-                mesh_info.vertex_offset,
-                Vector3f(new_max - new_min) * 0.5f,
-                mesh_info.vertex_count,
-                mesh_info.index_offset,
-                mesh_info.index_count,
-                mesh_info.meshlet_offset,
-                mesh_info.meshlet_count);
-
             instance_ids.push_back(instance_id);
             instance_id++;
         }
-
-        if (IsCurrentlyGameThread()) {
-            RenderThreadFence fence;
-            fence.Wait();
-        }
-        // if (!IsCurrentlyRenderThread()) {
-        //     ScopeEventRef event;
-        //     EnqueueRenderTask([&event]() {
-        //         event.Trigger();
-        //     });
-        // }
-        // TaskGraph::QueueTask()
 
         m_scene_data->m_vertex_data        = std::move(m_vertex_data);
         m_scene_data->m_index_data         = std::move(m_index_data);
         m_scene_data->m_meshlet_descs      = std::move(m_meshlet_descs);
         m_scene_data->m_meshlet_bounds     = std::move(m_meshlet_bounds);
-        m_scene_data->m_mesh_infos         = std::move(m_mesh_infos);
-        m_scene_data->m_instance_data      = std::move(instance_data);
         m_scene_data->m_instance_mesh_info = std::move(instance_mesh_info);
         m_scene_data->m_instance_id        = std::move(instance_ids);
+
+        m_scene_data->instance_infos    = std::move(instance_data);
+        m_scene_data->m_mesh_instances  = std::move(mesh_instances);
+        m_scene_data->m_mesh_buffers    = std::move(mesh_buffers);
+        m_scene_data->m_mesh_infos      = std::move(mesh_infos);
+        m_scene_data->m_mesh_geometries = std::move(mesh_geometries);
 
         m_scene_data->rt_instances  = std::move(rt_instances);
         m_scene_data->rt_vertices   = std::move(rt_vertices);
@@ -672,13 +879,14 @@ namespace Moer::Resource::Gltf {
         m_scene_data->rt_indices    = std::move(rt_indices);
         m_scene_data->rt_mesh_infos = std::move(rt_mesh_infos);
 
-        m_scene_data->m_materials          = std::move(m_materials);
-        m_scene_data->m_material_instances = std::move(m_material_instances);
-        m_scene_data->m_textures           = std::move(m_textures);
-        m_scene_data->m_cameras            = std::move(m_scene_data->m_cameras);
-        m_scene_data->m_path               = _file_path.string();
-        m_scene_data->m_vertex_stride      = stride;
-        m_scene_data->m_index_stride       = sizeof(uint32_t);
+        m_scene_data->m_materials                 = std::move(m_materials);
+        m_scene_data->m_material_instances        = std::move(material_instance_list);
+        m_scene_data->m_material_instance_indexes = std::move(m_material_idx);
+        m_scene_data->m_textures                  = std::move(m_textures);
+        m_scene_data->m_cameras                   = std::move(m_scene_data->m_cameras);
+        m_scene_data->m_path                      = _file_path.string();
+        m_scene_data->m_vertex_stride             = stride;
+        m_scene_data->m_index_stride              = sizeof(uint32_t);
 
         auto scene_data = std::move(m_scene_data);
 
@@ -749,7 +957,7 @@ namespace Moer::Resource::Gltf {
 
                 m_scene_data->m_material_instance_indexes[material_name] = material_id;
 
-                if (!m_material_instances.contains(material_name)) {
+                if (!m_material_idx.contains(material_name)) {
                     LoadMaterial(scene, material, material_name);
                 }
 
@@ -760,6 +968,15 @@ namespace Moer::Resource::Gltf {
         }
         for (uint32_t i = 0; i < node->mNumChildren; i++) {
             LoadNode(node->mChildren[i], scene);
+        }
+    }
+
+    void Parser::Impl::LoadNodes(const aiScene* _scene, const aiNode* _node, std::function<void(const aiNode*)>& _on_load_node) {
+        for (uint32_t i = 0; i < _node->mNumChildren; i++) {
+            LoadNodes(_scene, _node->mChildren[i], _on_load_node);
+        }
+        if (_node->mMeshes) {
+            _on_load_node(_node);
         }
     }
 

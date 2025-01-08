@@ -826,14 +826,17 @@ namespace Moer::Render {
             return m_alloc.buffer;
         }
 
-        VkAccessFlags2             m_access_flags   = VK_ACCESS_2_NONE;
-        VkPipelineStageFlags2      m_stage_flags    = VK_PIPELINE_STAGE_2_NONE;
-        int                        m_descriptor_idx = -1;
-        UnorderedMap<uint64, uint> m_descriptor_indices;
+        VkAccessFlags2        m_access_flags   = VK_ACCESS_2_NONE;
+        VkPipelineStageFlags2 m_stage_flags    = VK_PIPELINE_STAGE_2_NONE;
+        int                   m_descriptor_idx = -1;
+        // UnorderedMap<uint64, uint> m_descriptor_indices;
+        UnorderedMap<uint64, uint> m_descriptor_indices[4];
 
         VkDescriptorType GetDescriptorType() const {
             return m_descriptor_type;
         }
+
+        UnorderedMap<uint64, uint>& GetDescriptorIndices(VkDescriptorType _type);
 
     private:
         friend class TempBufferAllocator;
@@ -1004,15 +1007,17 @@ namespace Moer::Render {
         Array<VkAccelerationStructureBuildRangeInfoKHR>& _build_ranges,
         const RaytracingGeometryInfo&                    _info);
 
-    struct VulkanAccelerationStructure : RHIResource {
-        VulkanAccelerationStructure(VulkanDevice& _device);
+    class VulkanRaytracingScene;
+    struct VulkanAccelerationStructure : public RaytracingTlas {
+        VulkanAccelerationStructure(VulkanDevice& _device, VulkanRaytracingScene& _src_scene);
         virtual ~VulkanAccelerationStructure() override;
         void Destroy() override;
 
         VkAccelerationStructureKHR handle            = VK_NULL_HANDLE;
-        VulkanBuffer*              underlying_buffer = nullptr;
+        VulkanBufferRef            underlying_buffer = nullptr;
         int                        m_descriptor_idx  = -1;
         VulkanDevice&              device;
+        VulkanRaytracingScene&     src_scene;
     };
 
     using VulkanAccelRef = CountableRef<VulkanAccelerationStructure>;
@@ -1037,7 +1042,7 @@ namespace Moer::Render {
     private:
     private:
         VkAccelerationStructureKHR acc;
-        VulkanBuffer*              underlying_buffer;
+        VulkanBufferRef            underlying_buffer;
     };
 
     class VulkanRaytracingScene final : public RaytracingScene, public VulkanDeviceObject {
@@ -1052,7 +1057,11 @@ namespace Moer::Render {
         void RegisterGeometry(RaytracingGeometryRef _geometry) override;
         void UnregisterGeometry(RaytracingGeometryRef _geometry) override;
 
+        RaytracingTlasRef GetTlas() const override;
+        RaytracingTlasRef GetPrevTlas() const override;
+
         UniquePtr<Command> UpdateScene() override;
+        void               AdvanceFrame() override;
 
     public:
         void                RefitInstanceBuffer();
@@ -1064,9 +1073,13 @@ namespace Moer::Render {
 
         Array<byte> temp_update_instances;
 
+        Set<uint> prev_modified_instance_ids;
+
     public:
         RaytracingSizeInfos size_infos{};
+        RaytracingSizeInfos prev_size_infos{};
         VulkanAccelRef      tlas           = nullptr;
+        VulkanAccelRef      prev_tlas      = nullptr;
         VulkanBufferRef     scratch_buffer = nullptr;
 
         VulkanBufferRef instance_buffer = nullptr;
@@ -1079,10 +1092,14 @@ namespace Moer::Render {
         std::mutex                 geom_mutex;
         UnorderedMap<uint64, uint> related_geometries;
 
+        bool b_prev_full_refit    = false;
+        bool b_current_full_refit = false;
+
     private:
-        uint instance_capacity = 1000;
-        uint exponent          = 2;
-        uint instance_offset   = 1;
+        uint instance_capacity      = 1000;
+        uint prev_instance_capacity = 1000;
+        uint exponent               = 2;
+        uint instance_offset        = 1;
     };
 
 #pragma endregion
@@ -1151,6 +1168,7 @@ namespace Moer::Render {
 
     RESOURCE_CAST(RaytracingGeometry, VulkanRaytracingGeometry)
     RESOURCE_CAST(RaytracingScene, VulkanRaytracingScene)
+    RESOURCE_CAST(RaytracingTlas, VulkanAccelerationStructure)
 #pragma endregion
 
 #pragma region viewable resources view definitions

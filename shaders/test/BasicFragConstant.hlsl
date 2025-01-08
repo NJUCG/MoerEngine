@@ -1,6 +1,7 @@
 #include "framework/Bindless.hlsl"
 #include "framework/Common.hlsl"
 BINDLESS_BINDINGS(3, 2, 4, 5)
+#include "shared/Geometry.h"
 struct PixelInput {
   float4 Position : SV_POSITION;
   float3 world_position : POSITION;
@@ -14,6 +15,8 @@ struct Constsant {
   uint texture;
   uint buffer;
   uint instance_data;
+  uint geometry_data;
+  uint geometry_instance_data;
   float4x4 camera_view_proj;
 };
 
@@ -25,21 +28,24 @@ struct PS_OUTPUT {
 };
 
 [[vk::push_constant]] ConstantBuffer<Constsant> param;
-//StructuredBuffer<InstanceData> instance_data : register(t0, space0);
+// StructuredBuffer<InstanceData> instance_data : register(t0, space0);
 Texture2D<float> texture : register(t0, space1);
 SamplerState defaultSampler : register(s0, space0);
 
 PS_OUTPUT main(PixelInput input) : SV_TARGET {
-  ArrayBuffer instance_data_array = ArrayBuffer(param.instance_data);
-  InstanceData instance_data = instance_data_array.Load<InstanceData>(input.InstanceID);
- 
+  ArrayBuffer geometry_data_array = ArrayBuffer(param.geometry_data);
+
+  Moer::GeometryData geom_data = Moer::LoadGeometryData(geometry_data_array.GetByteAddressBuffer(), input.InstanceID * sizeof(Moer::GeometryData));
+
   PS_OUTPUT output;
-  output.mat = instance_data.material_id << 8 |
-               instance_data.material_type;
+  output.mat = geom_data.mat_idx_and_type;
   output.normal = float4(input.normal * 0.5f + 0.5f, 1.0f);
   output.uv = input.uv;
   output.position = float4(input.world_position, 1.0f);
-
-  //printf("position: %f %f %f\n", input.world_position.x, input.world_position.y, input.world_position.z);
+  if(geom_data.mat_idx_and_type & 0xff != 0){
+    //  printf("mat_idx_and_type: %d geo_id %d index_buffer %d vtx_buffer  %d param.geom_data %d\n", geom_data.mat_idx_and_type, input.InstanceID, geom_data.index_buffer_handle, geom_data.vertex_buffer_handle, param.geometry_data);
+  }
+  // printf("position: %f %f %f\n", input.world_position.x,
+  // input.world_position.y, input.world_position.z);
   return output;
 }

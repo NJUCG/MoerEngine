@@ -60,14 +60,6 @@ float3 fresnelSchlick(float3 F0, float cosTheta) {
     return F0 + (1.0 - F0) * pow(1.0 - cosTheta, 5.0);
 }
 
-template <typename T>
-T GetTextureData(uint bindless_handle, float2 uv, T defaultVal) {
-    if (bindless_handle == -1) {
-        return defaultVal;
-    }
-    return TextureHandle(bindless_handle).Sample2D<T>(uv);
-}
-
 static const float3 Fdielectric = 0.04;
 static const float Epsilon = 0.0001;
 struct PBRInfo {
@@ -104,7 +96,7 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     uint gbuffer_mat = TextureHandle(param.vbuffer).Sample2D<uint>(in_uv);
     uint mat_type = gbuffer_mat & 0x000000FF;
     if (mat_type != param.material_type) {
-        printf("mat_type:%d, param.material_type:%d\n", mat_type, param.material_type);
+        // printf("mat_type:%d, param.material_type:%d\n", mat_type, param.material_type);
         discard;
     }
     float2 uv = TextureHandle(param.gbuffer_uv).Sample2D<float2>(in_uv);

@@ -150,6 +150,7 @@ namespace Moer::Render {
     class BindlessArray;
     class RaytracingGeometry;
     class RaytracingScene;
+    class RaytracingTlas;
     using TextureRef            = CountableRef<Texture>;
     using BufferRef             = CountableRef<Buffer>;
     using FenceRef              = CountableRef<Fence>;
@@ -159,6 +160,7 @@ namespace Moer::Render {
     using BindlessArrayRef      = CountableRef<BindlessArray>;
     using RaytracingGeometryRef = CountableRef<RaytracingGeometry>;
     using RaytracingSceneRef    = CountableRef<RaytracingScene>;
+    using RaytracingTlasRef     = CountableRef<RaytracingTlas>;
 };// namespace Moer::Render
 
 class Shader;
@@ -844,6 +846,15 @@ namespace Moer::Render {
         TextureRef tex_handle;
     };
 
+    struct VertexBuffer {
+        Buffer* buffer;
+        uint64  offset{0};
+    };
+    struct IndexBuffer {
+        BufferView        buffer;
+        EIndexElementType stride;
+    };
+
     class RENDER_API BindlessArray : public RHIResource {
     public:
         struct TextureUpdateInfo {
@@ -863,7 +874,7 @@ namespace Moer::Render {
         };
 
         BindlessArray();
-        virtual ~BindlessArray()                                                       = default;
+        virtual ~BindlessArray()                                                    = default;
         virtual uint AllocateTexture(const TextureView& _texture, Sampler _sampler) = 0;
         virtual uint AllocateBuffer(BufferView _buffer)                             = 0;
 
@@ -892,9 +903,12 @@ namespace Moer::Render {
     };
     struct RaytracingSegment {
         uint vertex_offset;
+        uint index_offset;
+
+        uint first_vertex;
         uint vertex_count;
         uint vertex_stride;
-        uint primitive_offset;
+        uint first_primitive;
         uint primitive_count;
 
         ERayTracingGeometryType  type             = RTGT_TRIANGLES;
@@ -930,15 +944,6 @@ namespace Moer::Render {
         ERaytracingBuildMode  mode;
     };
 
-    enum RTVisibleMask : uint8 {
-        RTVM_NONE,
-        RTVM_DISABLE     = 0x1,
-        RTVM_DEFAULT     = 0x2,
-        RTVM_TRANSPARANT = 0x4,
-        RTVM_EMISSION    = 0x8,
-        RTVM_ALL         = 0xff
-    };
-
     struct RaytracingMaterial {
         uint64 handle;
         uint64 sbt_offset;
@@ -962,6 +967,12 @@ namespace Moer::Render {
         Flag          flag;
     };
 
+    class RaytracingTlas : public RHIResource {
+    public:
+        RaytracingTlas() : RHIResource(RRT_RAYTRACING_TLAS) {}
+        virtual ~RaytracingTlas() = default;
+    };
+
     //container for scene TLAS and rt instances
     class RaytracingScene : public RHIResource {
     public:
@@ -973,16 +984,19 @@ namespace Moer::Render {
         virtual void                FreeInstance(uint _array_idx) = 0;
         virtual void                MarkModified(uint _array_idx) = 0;
         virtual UniquePtr<Command>  UpdateScene()                 = 0;
+        virtual void                AdvanceFrame()                = 0;
 
         virtual void RegisterGeometry(RaytracingGeometryRef _geom)   = 0;
         virtual void UnregisterGeometry(RaytracingGeometryRef _geom) = 0;
+
+        virtual RaytracingTlasRef GetTlas() const = 0;
+        virtual RaytracingTlasRef GetPrevTlas() const = 0;
 
         RENDER_API RaytracingInstance&       GetInstance(uint _array_idx);
         RENDER_API const RaytracingInstance& GetInstance(uint _array_idx) const;
 
     protected:
         Array<RaytracingInstance> instances;
-        RaytracingSizeInfos       size_infos;
     };
 
 }// namespace Moer::Render
@@ -3029,12 +3043,17 @@ namespace Moer::Render {
         SDA_Num
     };
 
+    struct ShaderArgCppInfo {
+        uint           array_size;
+        EShaderArgType type;
+    };
+
     using ShaderOutputGroup = std::variant<ShaderVsGsPs, ShaderVsPs, ShaderMsPs, ShaderTsMsPs, ShaderCs, ShaderRT>;
 
     struct PipelineShaderInfo {
         ShaderOutputGroup       shader_group;
         Array<std::string_view> layout_hash;
-        Array<EShaderArgType>   arg_types;
+        Array<ShaderArgCppInfo> arg_cpp_info;
     };
 
     struct GfxPsoCreateInfo {

@@ -14,11 +14,19 @@ namespace Moer {
             m_sampler_group.SetSampler(sampler_index, texture, sampler);
         }
         void SetParameter(const std::string& name, uint32 texture) {
-            SetParameter(name,&texture,sizeof(uint32));
+            SetParameter(name, &texture, sizeof(uint32));
         }
         void SetParameter(const std::string& name, const void* value, size_t size) {
             auto offset = m_material->GetBufferInterfaceBlock().GetFieldInfo(name)->offset;
             m_uniform.SetData(value, size, offset);
+        }
+
+        void GetParameter(const std::string& _name, void* _value, size_t _size) {
+            auto offset = m_material->GetBufferInterfaceBlock().GetFieldInfo(_name)->offset;
+            if (m_material->GetBufferInterfaceBlock().GetFieldInfo(_name)) {
+                const void* src_data = m_uniform.GetData(offset);
+                memcpy(_value, src_data, _size);
+            }
         }
         void SetUnifomBuffer(const void* data, size_t size, size_t offset) {
             m_uniform.SetData(data, size, offset);
@@ -54,7 +62,7 @@ namespace Moer {
         UniformBuffer m_uniform;
         std::string   m_name;
     };
-    
+
     SamplerGroup::SamplerGroup(uint32_t size) {
         this->m_samplers = Array<SamplerDescriptor>(size);
     }
@@ -64,6 +72,10 @@ namespace Moer {
     }
     void MaterialInstance::SetParameter(const std::string& name, const void* value, size_t size) {
         m_impl->SetParameter(name, value, size);
+    }
+
+    void MaterialInstance::GetParameter(const std::string& _name, void* _value, size_t _size) {
+        m_impl->GetParameter(_name, _value, _size);
     }
     // void MaterialInstance::SetTexture(const std::string& name, const uint texture_handle) {
     //     m_impl->SetParameter(name,texture_handle);
@@ -108,4 +120,4 @@ namespace Moer {
         return m_samplers[index].texture;
     }
 
-}
+}// namespace Moer

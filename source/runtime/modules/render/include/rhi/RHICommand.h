@@ -6,6 +6,7 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "RenderAPI.h"
+#include "scene/Scene.h"
 #include "shader/ShaderPipeline.h"
 #include <functional>
 #include <optional>
@@ -68,7 +69,7 @@ public:
 
 class RHIGraphicsCommandList : public RHICommandListBase {
 public:
-    virtual ~RHIGraphicsCommandList() {};
+    virtual ~RHIGraphicsCommandList(){};
     virtual void SetPipelineState(RHIGfxPso* _graphics_pso)    = 0;
     virtual void SetPipelineState(RHIComputePso* _compute_pso) = 0;
     // virtual void Open()                                                    = 0;
@@ -178,7 +179,7 @@ public:
 
 class RHIComputeCommandList : public RHICommandListBase {
 public:
-    virtual ~RHIComputeCommandList() {};
+    virtual ~RHIComputeCommandList(){};
     virtual void SetPipelineState(RHIComputePso* _compute_pso)                                       = 0;
     virtual void Dispatch(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z) = 0;
     virtual void DispatchIndirect(RHIBuffer* _buffer, uint64_t _offset)                              = 0;
@@ -194,7 +195,7 @@ public:
 
 class RHIRayTracingCommandList : public RHICommandListBase {
 public:
-    virtual ~RHIRayTracingCommandList() {};
+    virtual ~RHIRayTracingCommandList(){};
     virtual void SetPipelineState(RHIRTPso* _raytracing_pso)                  = 0;
     virtual void TraceRay(uint32_t _width, uint32_t _height, uint32_t _depth) = 0;
     virtual void TraceRayIndirect()                                           = 0;
@@ -210,7 +211,7 @@ public:
 
 class RHICopyCommandList : public RHICommandListBase {
 public:
-    virtual ~RHICopyCommandList() {};
+    virtual ~RHICopyCommandList(){};
     virtual void CopyBuffer(const RHICopyBufferInfo& _copy_info, RHIBuffer* _src, RHIBuffer* _dst)                              = 0;
     virtual void CopyTexture(const RHICopyTextureInfo& _copy_info, RHITexture* _src, RHITexture* _dst)                          = 0;
     virtual void CopyBufferToTexture(const RHICopyBufferToTextureInfo& _info, RHIBuffer* _src_buffer, RHITexture* _dst_texture) = 0;
@@ -228,7 +229,7 @@ struct RHISubmitInfo;
 
 class RHICommandQueue {
 public:
-    virtual ~RHICommandQueue() {};
+    virtual ~RHICommandQueue(){};
     virtual void SubmitCommands(
         uint32_t                  _num_command_lists,
         const RHICommandListBase* _command_lists,
@@ -280,6 +281,11 @@ namespace Moer::Render {
         Ignore
     };
 
+    struct ProfileSection {
+        std::string_view name;
+        explicit ProfileSection(const char* _name) : name(_name) {}
+    };
+
     struct Command {
     public:
         enum class EType {
@@ -298,6 +304,7 @@ namespace Moer::Render {
             QueueTransfer,
             SetDrawState,
             UpdateBindlessArray,
+            ClearResource,
             // UpdateDrawState,
             // SetParams,
             // SetConstants,
@@ -320,6 +327,7 @@ namespace Moer::Render {
             "QueueTransfer",
             "SetDrawState",
             "UpdateBindlessArray",
+            "ClearResource",
             "Custom"};
 
     private:
@@ -347,15 +355,6 @@ namespace Moer::Render {
     template<typename TRenderTarget>
     concept is_render_target = std::is_same_v<TRenderTarget, ColorAttachment>;
 
-    struct VertexBuffer {
-        Buffer* buffer;
-        uint64  offset{0};
-    };
-    struct IndexBuffer {
-        BufferView        buffer;
-        EIndexElementType stride;
-    };
-
     struct SingleDrawParam {
         uint index_cnt;
         uint instance_cnt;
@@ -364,9 +363,9 @@ namespace Moer::Render {
         uint first_instance;
     };
     struct MeshDrawData {
-        StaticArray<VertexBuffer, 4>    vtx_views;
-        std::variant<IndexBuffer, uint> idx_view = 0u;
-        uint                            vtx_cnt  = 0;
+        StaticArray<VertexBuffer, EVertexAttributes::VETA_Num> vtx_views;
+        std::variant<IndexBuffer, uint>                        idx_view = 0u;
+        uint                                                   vtx_cnt  = 0;
 
         Array<SingleDrawParam> draw_params;
 
@@ -375,11 +374,13 @@ namespace Moer::Render {
         MeshDrawData(MeshDrawData&& _other) noexcept {
             vtx_views   = std::move(_other.vtx_views);
             idx_view    = std::move(_other.idx_view);
+            vtx_cnt     = _other.vtx_cnt;
             draw_params = std::move(_other.draw_params);
         }
         MeshDrawData& operator=(MeshDrawData&& _other) noexcept {
             vtx_views   = std::move(_other.vtx_views);
             idx_view    = std::move(_other.idx_view);
+            vtx_cnt     = _other.vtx_cnt;
             draw_params = std::move(_other.draw_params);
             return *this;
         }
@@ -655,14 +656,14 @@ namespace Moer::Render {
             RTPipeline&    pso;
         };
         struct RENDER_API ComputeDispatcher {
-            void Dispatch(Vector2ui _group_count, std::string_view _name = Command::typenames[(uint)Command::EType::ShaderDispatch]) {
-                Dispatch(uint3(_group_count, 1), _name);
+            void Dispatch(Vector2ui _group_count, std::string_view _name = Command::typenames[(uint)Command::EType::ShaderDispatch], ProfileSection _section = ProfileSection("Other")) {
+                Dispatch(uint3(_group_count, 1), _name, _section);
             }
-            void Dispatch(Vector3ui _group_count, std::string_view _name = Command::typenames[(uint)Command::EType::ShaderDispatch]);
-            void Dispatch(uint _group_cnt, std::string_view _name = Command::typenames[(uint)Command::EType::ShaderDispatch]) {
-                Dispatch(Vector3ui(_group_cnt, 1, 1), _name);
+            void Dispatch(Vector3ui _group_count, std::string_view _name = Command::typenames[(uint)Command::EType::ShaderDispatch], ProfileSection _section = ProfileSection("Other"));
+            void Dispatch(uint _group_cnt, std::string_view _name = Command::typenames[(uint)Command::EType::ShaderDispatch], ProfileSection _section = ProfileSection("Other")) {
+                Dispatch(Vector3ui(_group_cnt, 1, 1), _name, _section);
             }
-            void DispatchIndirect(BufferView, std::string_view _name = Command::typenames[(uint)Command::EType::ShaderDispatch]);
+            void DispatchIndirect(BufferView, std::string_view _name = Command::typenames[(uint)Command::EType::ShaderDispatch], ProfileSection _section = ProfileSection("Other"));
             ComputeDispatcher(ComputePipeline& _pso, CommandList& _cmd_list, ArrayArguments&& _args);
             ComputeDispatcher(ComputePipeline& _pso, CommandList& _cmd_list);
             // template<typename T>
@@ -734,6 +735,10 @@ namespace Moer::Render {
         RENDER_API void CopyFrom(BufferView _src, std::span<byte> _data, std::string_view _name = Command::typenames[(uint)Command::EType::CopyBackBuffer]);
 
         RENDER_API void UpdateBindlessArray(BindlessArrayRef _array);
+
+        RENDER_API void ClearResource(BufferView _buffer, uint32_t _value);
+        RENDER_API void ClearResource(TextureView _texture, float4 _color);
+        RENDER_API void ClearResource(TextureView _texture, uint32_t _value);
 
         template<typename T, typename... Args>
         struct CountType;
@@ -882,7 +887,7 @@ namespace Moer::Render {
 
     class RENDER_API CommandQueue {
     public:
-        CommandQueue() {};
+        CommandQueue(){};
         CommandQueue(EQueueType _type, RenderDevice& _device);
         void              Test();
         virtual void      Wait(WaitEvent _event)                                = 0;
@@ -893,7 +898,7 @@ namespace Moer::Render {
 
     class RENDER_API CopyQueue {
     public:
-        CopyQueue() {};
+        CopyQueue(){};
         ~CopyQueue()                                      = default;
         virtual IOWaitEvt Execute(IOSubmission&& _submit) = 0;
         virtual IOWaitEvt Execute(CmdSubmit&& _submit)    = 0;

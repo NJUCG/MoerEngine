@@ -4,21 +4,28 @@
 // #include "loader/gltf/Parser.h"
 #include "log/LogSystem.h"
 #include "misc/STL.h"
+#include "rhi/RHICommand.h"
 #include "rhi/RHIResource.h"
 #include "scene/EntityManager.h"
+#include "scene/Material.h"
 #include "scene/RenderableManager.h"
 #include "rhi/RHI.h"
+#include "scene/TransformManager.h"
 #include <atomic>
 
 namespace Moer {
     // Scene * Scene::default_scene = nullptr;
     Scene* g_scene = nullptr;
 
+    //////////////////////////////////////////////////////////////////////////
+    // Scene::Impl
+    //////////////////////////////////////////////////////////////////////////
     class RENDER_API Scene::Impl {
         friend class Scene;
 
     public:
         Impl() noexcept;
+        ~Impl() noexcept;
         void         AddEntity(Entity _entity) noexcept { m_entities.emplace(_entity); }
         void         AddCamera(Entity _entity) noexcept { m_cameras.emplace(_entity); }
         void         AddLight(Entity _entity) noexcept { m_lights.emplace(_entity); }
@@ -42,6 +49,11 @@ namespace Moer {
 
         GpuScene& GetGpuScene() noexcept { return gpu_scene; }
 
+        void                                      UpdateGpuData();
+        std::span<const Render::GeometryData>     GetGeometryDatas() const noexcept { return geometry_datas; }
+        std::span<const Render::InstanceData>     GetInstanceDatas() const noexcept { return instance_datas; }
+        std::span<const Render::GeometryInstance> GetGeometryInstances() { return geom_instances; }
+
     protected:
         Map<std::string, RHIBufferRef> m_buffers;
         Map<std::string, RHIUAVRef>    m_uavs;
@@ -53,6 +65,12 @@ namespace Moer {
 
         static AsyncSceneLoadInfoRef m_load_info;
         GpuScene                     gpu_scene;
+
+        Array<Render::GeometryData>                        geometry_datas;
+        Array<Render::InstanceData>                        instance_datas;
+        Array<StaticArray<Render::VertexBuffer, VETA_Num>> vtx_views;
+        Array<Render::IndexBuffer>                         idx_views;
+        Array<Render::GeometryInstance>                    geom_instances;
     };
     AsyncSceneLoadInfoRef Scene::Impl::m_load_info{nullptr};
 
@@ -86,6 +104,85 @@ namespace Moer {
         }
         return result;
     }
+
+    void Scene::Impl::UpdateGpuData() {
+        uint geometry_count = 0;
+        uint instance_count = 0;
+        for (auto& entity : m_entities) {
+            const MeshInfo& info = *RenderableManager::Get().GetMeshInfo(entity);
+            geometry_count += info.geometries.size();
+            instance_count += 1;
+        }
+
+        geometry_datas.resize(geometry_count);
+        geom_instances.resize(geometry_count);
+        vtx_views.resize(instance_count);
+        idx_views.resize(instance_count);
+        instance_datas.resize(instance_count);
+
+        for (auto& entity : m_entities) {
+            const MeshInfo&                info          = *RenderableManager::Get().GetMeshInfo(entity);
+            std::span<MaterialInstanceRef> mat_instances = RenderableManager::Get().GetMaterialInstances(entity);
+            const MeshBuffers&             buffers       = *info.buffers;
+            for (auto& geo : info.geometries) {
+                uint  vtx_offset              = geo->local_vtx_offset + info.vtx_offset;
+                uint  geo_idx                 = &geo - info.geometries.data();
+                auto& geo_data                = geometry_datas[geo->global_geom_idx];
+                geo_data.num_indices          = geo->local_idx_count;
+                geo_data.num_vertices         = geo->local_vtx_count;
+                geo_data.vertex_offset        = vtx_offset;
+                geo_data.prev_vertex_offset   = ~0u;
+                geo_data.normal_offset        = buffers.GetAttributeRange(EVertexAttributes::Normal).offset + vtx_offset * sizeof(uint);
+                geo_data.tangent_offset       = buffers.GetAttributeRange(EVertexAttributes::Tangent).offset + vtx_offset * sizeof(uint);
+                geo_data.texcoord0_offset     = buffers.GetAttributeRange(EVertexAttributes::Texcoord0).offset + vtx_offset * sizeof(float2);
+                geo_data.texcoord1_offset     = buffers.GetAttributeRange(EVertexAttributes::Texcoord1).offset + vtx_offset * sizeof(float2);
+                geo_data.mat_idx_and_type     = geo->material_id << 8 | (uint)mat_instances[geo_idx]->GetMaterial()->GetType();
+                geo_data.index_offset         = (geo->local_idx_offset + info.idx_offset) * sizeof(uint);
+                geo_data.index_buffer_handle  = buffers.idx_bdls_handle;
+                geo_data.vertex_buffer_handle = buffers.vtx_bdls_handle;
+
+                auto& geom_instance        = geom_instances[geo->global_geom_idx];
+                geom_instance.instance_idx = RenderableManager::Get().GetInstanceID(entity);
+                geom_instance.geom_idx     = geo->global_geom_idx;
+            }
+
+            StaticArray<Render::VertexBuffer, VETA_Num>& vtx_view = vtx_views[info.global_mesh_idx];
+            vtx_view[EVertexAttributes::Position]                 = {buffers.vertex_buffer.Get(), buffers.GetAttributeRange(EVertexAttributes::Position).offset};
+            vtx_view[EVertexAttributes::Normal]                   = {buffers.vertex_buffer.Get(), buffers.GetAttributeRange(EVertexAttributes::Normal).offset};
+            vtx_view[EVertexAttributes::Tangent]                  = {buffers.vertex_buffer.Get(), buffers.GetAttributeRange(EVertexAttributes::Tangent).offset};
+            vtx_view[EVertexAttributes::Texcoord0]                = {buffers.vertex_buffer.Get(), buffers.GetAttributeRange(EVertexAttributes::Texcoord0).offset};
+            vtx_view[EVertexAttributes::Texcoord1]                = {buffers.vertex_buffer.Get(), buffers.GetAttributeRange(EVertexAttributes::Texcoord1).offset};
+
+            idx_views[info.global_mesh_idx] = {buffers.index_buffer->GetView(),
+                                               EIndexElementType::IET_UINT32};
+
+            uint  id                          = RenderableManager::Get().GetInstanceID(entity);
+            auto& inst_data                   = instance_datas[id];
+            inst_data.first_geom_idx          = info.geometries.front()->global_geom_idx;
+            inst_data.geom_count              = info.geometries.size();
+            inst_data.first_geom_instance_idx = info.global_mesh_idx;
+            inst_data.model2world             = TransformManager::Get().Get(entity).GetMatrix3x4();
+            // auto row_maj                      = TransformManager ::Get().Get(entity).GetMatrix3x4();
+            // auto col_maj                      = TransformManager ::Get().Get(entity).GetMatrix3x4ColumnMajor();
+
+            inst_data.prev_model2world = inst_data.model2world;
+            inst_data.padding          = 0;
+        }
+    }
+
+    Scene::Impl::~Impl() noexcept {
+
+        for (auto& entity : m_entities) {
+            MeshInfo&    info     = *RenderableManager::Get().GetMeshInfo(entity);
+            MeshBuffers& buffers  = *info.buffers;
+            buffers.index_buffer  = nullptr;
+            buffers.vertex_buffer = nullptr;
+        }
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    // Scene
+    //////////////////////////////////////////////////////////////////////////
 
     Scene::Scene() noexcept {
         m_impl = MoerNew(Impl)();
@@ -186,6 +283,31 @@ namespace Moer {
     GpuScene& Scene::GetGpuScene() noexcept {
         return m_impl->GetGpuScene();
     }
+
+    void Scene::UpdateGpuData() {
+        m_impl->UpdateGpuData();
+    }
+
+    std::span<const Render::GeometryData> Scene::GetGeometryDatas() const noexcept {
+        return m_impl->GetGeometryDatas();
+    }
+
+    std::span<const Render::InstanceData> Scene::GetInstanceDatas() const noexcept {
+        return m_impl->GetInstanceDatas();
+    }
+
+    std::span<const StaticArray<Render::VertexBuffer, VETA_Num>> Scene::GetVertexBufferViews() {
+        return m_impl->vtx_views;
+    }
+
+    std::span<const Render::IndexBuffer> Scene::GetIndexBufferViews() {
+        return m_impl->idx_views;
+    }
+
+    std::span<const Render::GeometryInstance> Scene::GetGeometryInstances() const noexcept {
+        return m_impl->GetGeometryInstances();
+    }
+
     void Scene::SetVertexBuffer(Render::BufferRef _buffer) noexcept {
         m_impl->gpu_scene.vertex_buffer = _buffer;
     }

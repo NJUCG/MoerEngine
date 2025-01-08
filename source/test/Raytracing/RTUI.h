@@ -1,8 +1,10 @@
 #ifndef MOER_TEST_RTUI_H
 #define MOER_TEST_RTUI_H
 #include "Core.h"
+#include "misc/STL.h"
 #include "renderer/UIRenderer.h"
 #include "rhi/RHIResource.h"
+#include "shaderheaders/shared/ShaderParameters.h"
 namespace Moer::Render {
 
     class RTUI {
@@ -12,8 +14,10 @@ namespace Moer::Render {
             float  exposure             = 80.f;
             float  sun_angular_diameter = 0.533f;
             uint   max_bounce           = 4;
+
+            EFinalColor final_color = EFinalColor::EFC_SceneColor;
         };
-        RTUI(UIRenderer& _renderer) : ui_renderer(_renderer) {}
+        RTUI(UIRenderer& _renderer);
         ~RTUI() = default;
         void TickUI();
 
@@ -35,6 +39,8 @@ namespace Moer::Render {
         float2 scene_color_pos;
         bool   b_show = true;
         Config config;
+
+        UnorderedMap<std::string, uint> final_color_map;
 
         UIRenderer& ui_renderer;
     };

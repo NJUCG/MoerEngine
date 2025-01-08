@@ -3,7 +3,7 @@ set(MODULE_DIR ${moer_runtime_module_root_dir}/render)
 
 configure_file(${MODULE_DIR}/include/config.h.in ${MODULE_DIR}/include/config.h)
 
-file(GLOB_RECURSE RENDER_MODULE_HEADERS "include/*.h")
+file(GLOB_RECURSE RENDER_MODULE_HEADERS "include/*.h" "include/*.hlsli")
 file(GLOB_RECURSE RENDER_MODULE_SOURCES "source/*.cpp" "source/*.h")
 
 
@@ -66,7 +66,8 @@ target_link_libraries(${MODULE_NAME}
 if(WIN32)
 target_compile_definitions(${MODULE_NAME}
     PUBLIC "MOER_VK_LAYER_PATH=${moer_third_party_dir}/VulkanSDK/binary/Windows"
-    PUBLIC "NOMINMAX")
+    PUBLIC "NOMINMAX"
+    )
 elseif(LINUX)
 endif()
 
@@ -79,6 +80,12 @@ if(MSVC)
              MSVC_RUNTIME_LIBRARY  "${CMAKE_MSVC_RUNTIME_LIBRARY}")
 
 endif() 
+
+if(WIN32)
+target_compile_definitions(MoerRuntimeCore
+    PUBLIC "DEVELOP_SHADER_SHARED_PATH=${CMAKE_CURRENT_SOURCE_DIR}/include/shaderheaders"
+    )
+endif()
 
 
 

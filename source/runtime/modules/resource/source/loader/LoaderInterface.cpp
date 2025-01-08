@@ -1,4 +1,5 @@
 #include "loader/LoaderInterface.h"
+#include "scene/MaterialInstance.h"
 #include "ResourceAPI.h"
 #include "loader/gltf/Parser.h"
 #include "loader/ply/Ply.h"
@@ -37,6 +38,7 @@ namespace Resource {
 
     void LoaderInterface::LoadSceneFromFileAsync(const std::filesystem::path& _file_path, Scene* scene) noexcept {
         auto file_path_str = _file_path.string();
+        LOG_INFO("Loading scene from file: {}", file_path_str);
         if (_file_path.string().ends_with(".ply")) {
             auto gs_scene = PlyLoader::LoadSceneFromFile(_file_path);
             scene->SetBuffer(EGpuSceneResource::GaussianSplattingVertex, gs_scene->GetBuffer(EGpuSceneResource::GaussianSplattingVertex));

@@ -531,6 +531,45 @@ namespace Moer::Render {
         auto                                      StealFreeSlots() const { return std::move(free_slots); }
     };
 
+    using TClearResource = std::variant<BufferView, TextureView>;
+    using TClearVar      = std::variant<uint, float4>;
+    struct ClearResourceCmd : public Command {
+    private:
+        ClearResourceCmd() : Command(EType::ClearResource) {}
+
+    public:
+        ClearResourceCmd(BufferView _buffer, uint _value, std::string_view _name = typenames[uint(EType::ClearResource)]) : Command(EType::ClearResource, _name), resource(_buffer), clear_value(_value) {}
+        ClearResourceCmd(TextureView _texture, float4 _value, std::string_view _name = typenames[uint(EType::ClearResource)]) : Command(EType::ClearResource, _name), resource(_texture), clear_value(_value) {}
+        ClearResourceCmd(TextureView _texture, uint _value, std::string_view _name = typenames[uint(EType::ClearResource)]) : Command(EType::ClearResource, _name), resource(_texture), clear_value(_value) {}
+
+        EQueueType  GetQueueType() const override { return EQueueType::Graphics; }
+        const auto& Resource() const { return resource; }
+        const auto& ClearValue() const { return clear_value; }
+
+        bool IsBuffer() const { return std::holds_alternative<BufferView>(resource); }
+        bool IsTexture() const { return std::holds_alternative<TextureView>(resource); }
+
+        const auto& Buffer() const { return std::get<BufferView>(resource); }
+        const auto& Texture() const { return std::get<TextureView>(resource); }
+
+        const auto& UIntValue() const { return std::get<uint>(clear_value); }
+        const auto& Float4Value() const { return std::get<float4>(clear_value); }
+
+        bool IsUInt() const { return std::holds_alternative<uint>(clear_value); }
+        bool IsFloat4() const { return std::holds_alternative<float4>(clear_value); }
+
+        uint64 UnderlyingHandle() const {
+            if (IsBuffer()) {
+                return uint64(Buffer().GetBuffer());
+            }
+            return uint64(Texture().texture);
+        }
+
+    private:
+        TClearResource resource;
+        TClearVar      clear_value;
+    };
+
     struct BufferRange {
         uint64 min;
         uint64 max;

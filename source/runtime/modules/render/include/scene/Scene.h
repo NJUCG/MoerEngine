@@ -10,8 +10,24 @@
 #include "misc/CountableRef.h"
 #include "misc/STL.h"
 #include "rhi/RHIResource.h"
+#include "scene/TransformManager.h"
+#include "serialize/Serializer.h"
+#include "shaderheaders/shared/Geometry.h"
 
 namespace Moer {
+
+    enum EVertexAttributes {
+        Position = 0,
+        Normal,
+        Tangent,
+        Texcoord0,
+        Texcoord1,
+        Color,
+        JointIndices,
+        JointWeights,
+        VETA_Num
+    };
+
     enum class EGpuSceneResource {
         MeshInfo,
         InstanceInfo,
@@ -20,20 +36,18 @@ namespace Moer {
         CameraInfo,
         GaussianSplattingVertex,
         RTInstance,
-        RTIndex,
-        RTPrimitive,
-        RTVertex,
-        RTMeshInfo,
+        GeometryInfo,
+        GeometryInstance,
         Num
     };
-    struct InstanceData {
-        Matrix4x4f model2world;
-        Matrix4x4f inv_model2world;
-        float      scale;
-        uint       padding;
-        uint       material_id;
-        uint       material_type;
-    };
+    // [deprecated] struct InstanceData {
+    //     Matrix4x4f model2world;
+    //     Matrix4x4f inv_model2world;
+    //     float      scale;
+    //     uint       padding;
+    //     uint       material_id;
+    //     uint       material_type;
+    // };
 
     struct RTInstance {
         static constexpr uint material_type_mask = 0xff;
@@ -54,6 +68,148 @@ namespace Moer {
             material_type_and_id = (_type & material_type_mask) | ((_id << material_id_offset) & ~material_type_mask);
         }
     };
+    struct Range {
+        uint64 offset;
+        uint64 size;
+    };
+
+    struct Box3D {
+        float3 min;
+        float3 max;
+
+        float3 GetCenter() const noexcept { return (min + max) * 0.5f; }
+        float3 GetExtent() const noexcept { return max - min; }
+
+        void Expand(const float3& _point) noexcept {
+            min = Min(min, _point);
+            max = Max(max, _point);
+        }
+        void Expand(const Box3D& _box) noexcept {
+            min = Min(min, _box.min);
+            max = Max(max, _box.max);
+        }
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    //cpu data
+    //////////////////////////////////////////////////////////////////////////
+    struct MeshBuffers {
+        Render::BufferRef vertex_buffer;
+        Render::BufferRef index_buffer;
+        Render::BufferRef instance_buffer;
+
+        int vtx_bdls_handle;
+        int idx_bdls_handle;
+        int inst_bdls_handle;
+
+        StaticArray<Range, EVertexAttributes::VETA_Num> vertex_ranges;
+
+        //cpu datas
+        Array<uint>   indices;
+        Array<float3> positions;
+        Array<uint>   normals;
+        Array<uint>   tangents;
+        Array<float2> texcoords0;
+        Array<float2> texcoords1;
+
+        Array<Array<uint16>> joint_data;
+        Array<float4>        joint_weights;
+
+        bool   HasAttribute(EVertexAttributes _attr) const noexcept { return vertex_ranges[_attr].size > 0; }
+        Range  GetAttributeRange(EVertexAttributes _attr) const noexcept { return vertex_ranges[_attr]; }
+        Range& GetAttributeRange(EVertexAttributes _attr) noexcept { return vertex_ranges[_attr]; }
+
+        void FillRanges() {
+            vertex_ranges[EVertexAttributes::Position]     = {0, positions.size() * sizeof(float3)};
+            vertex_ranges[EVertexAttributes::Normal]       = {vertex_ranges[EVertexAttributes::Position].size, normals.size() * sizeof(uint)};
+            vertex_ranges[EVertexAttributes::Tangent]      = {vertex_ranges[EVertexAttributes::Normal].offset + vertex_ranges[EVertexAttributes::Normal].size, tangents.size() * sizeof(uint)};
+            vertex_ranges[EVertexAttributes::Texcoord0]    = {vertex_ranges[EVertexAttributes::Tangent].offset + vertex_ranges[EVertexAttributes::Tangent].size, texcoords0.size() * sizeof(float2)};
+            vertex_ranges[EVertexAttributes::Texcoord1]    = {vertex_ranges[EVertexAttributes::Texcoord0].offset + vertex_ranges[EVertexAttributes::Texcoord0].size, texcoords1.size() * sizeof(float2)};
+            vertex_ranges[EVertexAttributes::JointIndices] = {vertex_ranges[EVertexAttributes::Texcoord1].offset + vertex_ranges[EVertexAttributes::Texcoord1].size, joint_data.size() * sizeof(uint16)};
+            vertex_ranges[EVertexAttributes::JointWeights] = {vertex_ranges[EVertexAttributes::JointIndices].offset + vertex_ranges[EVertexAttributes::JointIndices].size, joint_weights.size() * sizeof(float4)};
+        }
+
+        InputStream& operator>>(InputStream& _stream) {
+            _stream >> vertex_ranges >> indices >> positions >> normals >> tangents >> texcoords0 >> texcoords1 >> joint_data >> joint_weights;
+            return _stream;
+        }
+
+        OutputStream& operator<<(OutputStream& _stream) const {
+            _stream << vertex_ranges << indices << positions << normals << tangents << texcoords0 << texcoords1 << joint_data << joint_weights;
+            return _stream;
+        }
+    };
+
+    struct MeshGeometry {
+        Box3D bounding_box;
+        uint  material_id;
+        uint  local_idx_offset;
+        uint  local_idx_count;
+        uint  local_vtx_offset;
+        uint  local_vtx_count;
+        uint  global_geom_idx;
+    };
+
+    struct MeshInfo {
+        SharedPtr<MeshBuffers>         buffers{nullptr};
+        uint                           buf_idx;//for serialization
+        std::string                    name;
+        Array<SharedPtr<MeshGeometry>> geometries;
+        uint                           geom_start_idx;//for serialization
+        Box3D                          bounding_box;
+
+        uint idx_offset;
+        uint idx_count;
+        uint vtx_offset;
+        uint vtx_count;
+        uint global_mesh_idx;
+
+        InputStream& operator>>(InputStream& _stream) {
+            _stream >> buf_idx >> name;
+            uint size;
+            _stream >> size;
+            geometries.resize(size);
+            _stream >> geom_start_idx >> bounding_box >> idx_offset >> idx_count >> vtx_offset >> vtx_count >> global_mesh_idx;
+            return _stream;
+        }
+
+        OutputStream& operator<<(OutputStream& _stream) const {
+            _stream << buf_idx << name << uint(geometries.size()) << geom_start_idx << bounding_box << idx_offset << idx_count << vtx_offset << vtx_count << global_mesh_idx;
+            return _stream;
+        }
+    };
+
+    struct MeshInstance {
+        int                 instance_id;
+        int                 geom_instance_id;
+        SharedPtr<MeshInfo> mesh_info;
+        uint                mesh_info_idx;//for serialization
+
+        InputStream& operator>>(InputStream& _stream) {
+            _stream >> instance_id >> geom_instance_id >> mesh_info_idx;
+            return _stream;
+        }
+
+        OutputStream& operator<<(OutputStream& _stream) const {
+            _stream << instance_id << geom_instance_id << mesh_info_idx;
+            return _stream;
+        }
+    };
+
+    struct InstanceInfo {
+        Transform transform;
+        uint      mesh_instance_id;
+    };
+
+    struct GeometryInstance {
+        uint first_geo_idx;
+        uint geo_count;
+        uint instance_id;
+    };
+
+    //////////////////////////////////////////////////////////////////////////
+    //gpu data
+    //////////////////////////////////////////////////////////////////////////
 
     struct RTMeshInfo {
         uint32_t vertex_offset;
@@ -151,6 +307,13 @@ namespace Moer {
         Render::BufferRef        GetIndexBuffer() const noexcept;
         Render::BufferRef        GetInstanceBuffer() const noexcept;
         Render::BindlessArrayRef GetBindlessArray() const noexcept;
+
+        void                                                         UpdateGpuData();
+        std::span<const Render::GeometryData>                        GetGeometryDatas() const noexcept;
+        std::span<const Render::InstanceData>                        GetInstanceDatas() const noexcept;
+        std::span<const StaticArray<Render::VertexBuffer, VETA_Num>> GetVertexBufferViews();
+        std::span<const Render::IndexBuffer>                         GetIndexBufferViews();
+        std::span<const Render::GeometryInstance>                    GetGeometryInstances() const noexcept;
 
     protected:
         class Impl;

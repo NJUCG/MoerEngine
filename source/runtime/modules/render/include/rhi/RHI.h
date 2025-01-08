@@ -268,6 +268,19 @@ namespace Moer::Render {
     template<typename T>
     static T ResolveConfigAs(const MoerRHIConfigAsJSON& _config_as_json);
 
+    template<typename T>
+    struct user_trivial_type {
+        //has user defined const expr user_flag
+        template<typename U>
+        static auto Test(U* _p) -> decltype(U::user_trival_type, std::true_type{});
+        static auto Test(...) -> std::false_type;
+
+        static constexpr bool value = decltype(Test(static_cast<T*>(nullptr)))::value;
+    };
+
+    template<typename T>
+    static constexpr bool user_trivial_type_v = user_trivial_type<T>::value;
+
     struct DeviceConfig {
         uint b_support_ray_tracing : 1;
         uint b_support_mesh_shader : 1;
@@ -294,7 +307,7 @@ namespace Moer::Render {
 
     public:
         template<typename TElement>
-            requires(std::is_trivially_copyable_v<TElement> && std::is_standard_layout_v<TElement> || NumericType<TElement>)
+            requires(std::is_trivially_copyable_v<TElement> && std::is_standard_layout_v<TElement> || NumericType<TElement> || user_trivial_type_v<TElement>)
         BufferRef CreateBuffer(uint _element_cnt, EBufferUsageFlags _usage) {
             return CreateBuffer(_element_cnt, sizeof(TElement), _usage);
         }

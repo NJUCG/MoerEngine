@@ -245,8 +245,8 @@ namespace Moer {
                         RHIBatchedShaderParameters batched_params;
                         batched_params.SetParameters(ShaderResourceManager::GetInstance().GetShader<MeshDebugRendererVertexShader>(), params);
 
-                        auto mi = RenderableManager::Get().GetMaterialInstance(entity);
-                        mi->Use(batched_params);
+                        // auto mi = RenderableManager::Get().GetMaterialInstance(entity);
+                        // mi->Use(batched_params);
 
                         // g_rhi->RHISetBatchedShaderParameters(pipeline_state, batched_params, true);
 
