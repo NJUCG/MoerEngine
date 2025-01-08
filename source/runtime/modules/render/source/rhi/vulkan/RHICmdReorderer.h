@@ -871,6 +871,37 @@ namespace Moer::Render {
             AddCmd(_cmd, layer);
         }
 
+        void VisitCmd(const CustomCmd* _cmd) {
+            switch (_cmd->CustomId()) {
+                case CustomCmd::CustomCmdId::CUSTOM_RASTER:
+                    assert(false && "Custom raster draw scene not implemented");
+                    break;
+                case CustomCmd::CustomCmdId::CUSTOM_DISPATCH:
+                    VisitCmd(static_cast<const CustomDispatchCmd*>(_cmd));
+                    break;
+                default:
+                    assert(false && "Custom Command Not Supported for Reorder");
+            }
+        }
+
+        void VisitCmd(const CustomDispatchCmd* _cmd) {
+            m_arg_write_resources.clear();
+            m_arg_read_resources.clear();
+            auto func = [&](const TArg& _arg, ParamInfoFlags _flag) {
+                VisitArgs(_arg, _flag.state_flags);
+            };
+            _cmd->IterateArgs(func);
+
+            for (const auto& write_res : m_arg_write_resources) {
+                RecordWrite(std::get<1>(write_res), std::get<0>(write_res), m_dispatch_layer);
+            }
+            for (const auto& read_res : m_arg_read_resources) {
+                RecordRead(std::get<1>(read_res), std::get<0>(read_res), m_dispatch_layer);
+            }
+            AddCmd(_cmd, m_dispatch_layer);
+            ++m_dispatch_layer;// make custom dispatch command in a separate layer
+        }
+
         void AcceptCmd(const Command* _cmd) {
             assert(_cmd && "Invalid Command");
             switch (_cmd->Type()) {
@@ -881,7 +912,6 @@ namespace Moer::Render {
                     VisitCmd(static_cast<const CopyBackBufferCmd*>(_cmd));
                     break;
                 case Command::EType::BufferToBuffer:
-
                     VisitCmd(static_cast<const CopyBufferCmd*>(_cmd));
                     break;
                 case Command::EType::BufferToTexture:
@@ -919,6 +949,9 @@ namespace Moer::Render {
                     break;
                 case Command::EType::ClearResource:
                     VisitCmd(static_cast<const ClearResourceCmd*>(_cmd));
+                    break;
+                case Command::EType::Custom:
+                    VisitCmd(static_cast<const CustomCmd*>(_cmd));
                     break;
                 default:
                     assert(false && "Command Type Not Supported for Reorder");

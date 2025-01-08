@@ -130,7 +130,7 @@ public:
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
     DEFINE_SHADER_BUFFER(rt_config);
     DEFINE_SHADER_TEX(out_normal_roughness);
-    DEFINE_SHADER_TEX(out_base_color_metalness);
+    DEFINE_SHADER_TEX(out_basecolor_metalness);
     DEFINE_SHADER_TEX(out_direct_lighting);
     DEFINE_SHADER_TEX(out_emission);
     DEFINE_SHADER_TEX(out_diffuse);
@@ -142,7 +142,7 @@ public:
     DEFINE_SHADER_TLAS(tlas);
     DEFINE_SHADER_CONSTANT_STRUCT(Param, param);
 
-    DEFINE_SHADER_ARGS(param, rt_config, out_normal_roughness, out_base_color_metalness, out_direct_lighting, out_emission, out_diffuse, out_specular, out_view_z, out_mv, out_shadow_info, bdls, tlas);
+    DEFINE_SHADER_ARGS(param, rt_config, out_normal_roughness, out_basecolor_metalness, out_direct_lighting, out_emission, out_diffuse, out_specular, out_view_z, out_mv, out_shadow_info, bdls, tlas);
 };
 
 class CombineUIPipeline : public RasterPipeline {
@@ -362,8 +362,8 @@ int main(int argc, const char** argv) {
         PF_R8G8B8A8_UNORM,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
 
-    TextureRef out_base_color_matalness = device.CreateTexture(
-        "out_base_color_matalness",
+    TextureRef out_basecolor_metalness = device.CreateTexture(
+        "out_basecolor_metalness",
         Extent3D(resolution.x, resolution.y),
         PF_R8G8B8A8_UNORM,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
@@ -400,8 +400,8 @@ int main(int argc, const char** argv) {
             PF_R8G8B8A8_UNORM,
             ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
 
-        out_base_color_matalness = device.CreateTexture(
-            "out_base_color_matalness",
+        out_basecolor_metalness = device.CreateTexture(
+            "out_basecolor_metalness",
             Extent2D(_new_extent.x, _new_extent.y),
             PF_R8G8B8A8_UNORM,
             ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
@@ -640,7 +640,7 @@ int main(int argc, const char** argv) {
                              param,
                              rt_config_param_buffer,
                              out_normal_roughness,
-                             out_base_color_matalness,
+                             out_basecolor_metalness,
                              out_direct_lighting,
                              out_emission,
                              out_diffuse,
@@ -688,7 +688,6 @@ int main(int argc, const char** argv) {
         // }
         gui.RenderGUI(cmd_list, output);
         rt_scene->AdvanceFrame();
-
 
         time++;
         gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time));
