@@ -1,4 +1,5 @@
 #include <filesystem>
+#include "Configs.h"
 #include "Core.h"
 #include "GBufferPass.h"
 #include "PixelFormat.h"
@@ -34,6 +35,7 @@
 #include "shaderheaders/shared/utils/ShaderParameters.h"
 
 #include "RTUI.h"
+#include "ShaderUtils.h"
 
 using namespace Moer::Render;
 using namespace Moer;
@@ -171,25 +173,6 @@ public:
     DEFINE_SHADER_ARGS(src_color, spl);
 };
 
-struct GenerateMipPdfPipeline : public ComputePipeline {
-public:
-    DEFINE_COMPUTE_PIPELINE_CLASS(GenerateMipPdfPipeline);
-    DEFINE_SHADER_TEX(env_map);
-    DEFINE_SHADER_TEX_ARRAY(integrated_mips, 10);
-    DEFINE_SHADER_CONSTANT_STRUCT(PreprocessEnvironmentMapParams, param);
-
-    DEFINE_SHADER_ARGS(env_map, integrated_mips, param);
-};
-
-struct GenerateMipsPipeline : public ComputePipeline {
-public:
-    DEFINE_COMPUTE_PIPELINE_CLASS(GenerateMipsPipeline);
-    DEFINE_SHADER_TEX_ARRAY(mips, 10);
-    DEFINE_SHADER_CONSTANT_STRUCT(BuildMipsParam, param);
-
-    DEFINE_SHADER_ARGS(mips, param);
-};
-
 int main(int argc, const char** argv) {
 
     using namespace Moer::Render;
@@ -281,9 +264,17 @@ int main(int argc, const char** argv) {
                                            .Pixel("utils/CopyTexture.frag.hlsl")
                                            .Build<SampleTexturePipeline>(std::move(sample_tex_pso_info));
 
-    GenerateMipPdfPipeline sd_generate_mip_pdf = manager.Compute<GenerateMipPdfPipeline>("lighting/ProcessEnvironmentMap.hlsl");
-    GenerateMipsPipeline   sd_generate_mips    = manager.Compute<GenerateMipsPipeline>("utils/BuildMips.hlsl");
-    auto                   copy_queue_timeline = copy_queue.GetFenceHandle();
+    // GenerateMipPdfPipeline sd_generate_mip_pdf = manager.Compute<GenerateMipPdfPipeline>("lighting/ProcessEnvironmentMap.hlsl");
+    // GenerateMipsPipeline   sd_generate_mips    = manager.Compute<GenerateMipsPipeline>("utils/BuildMips.hlsl");
+
+    ShaderUtils sd_utils(device, manager);
+
+    ImportantSamplingParams is_params{};
+    is_params.render_size = resolution;
+    ImportanceSamplingContext
+        is_ctx(is_params);
+
+    auto copy_queue_timeline = copy_queue.GetFenceHandle();
 
     {
         Array<ImportTexture> import_textures;
@@ -295,31 +286,33 @@ int main(int argc, const char** argv) {
         gfx_queue.Execute(cmd_list.Submit().Wait(copy_queue_timeline, copy_queue_timeline->GetValue()));
         gfx_queue.Sync();
 
-        uint width  = env_map->GetExtent().x;
-        uint height = env_map->GetExtent().y;
+        // uint width  = env_map->GetExtent().x;
+        // uint height = env_map->GetExtent().y;
 
-        for (uint i = 0; i < env_map->GetNumMips(); i += 5) {
-            BuildMipsParam param{};
-            param.num_mip_levels = env_map->GetNumMips();
-            param.src_mip_level  = i;
-            param.src_size       = uint2(width, height);
-            cmd_list.Compute(sd_generate_mips, std::span<TextureView>(env_mips.data(), env_mips.size()), param).Dispatch(uint3(ceil(width / 32), ceil(height / 32), 1));
+        // for (uint i = 0; i < env_map->GetNumMips(); i += 5) {
+        //     BuildMipsParam param{};
+        //     param.num_mip_levels = env_map->GetNumMips();
+        //     param.src_mip_level  = i;
+        //     param.src_size       = uint2(width, height);
+        //     cmd_list.Compute(sd_utils.GetGenerateMipsPipeline(), std::span<TextureView>(env_mips.data(), env_mips.size()), param).Dispatch(uint3(ceil(width / 32), ceil(height / 32), 1));
 
-            width  = std::max(1u, width >> 5);
-            height = std::max(1u, height >> 5);
-        }
+        //     width  = std::max(1u, width >> 5);
+        //     height = std::max(1u, height >> 5);
+        // }
 
-        PreprocessEnvironmentMapParams preprocess_param{};
-        width  = env_map->GetExtent().x;
-        height = env_map->GetExtent().y;
-        for (uint i = 0; i < env_pdf->GetNumMips(); i += 5) {
-            preprocess_param.src_mip_level  = i;
-            preprocess_param.num_mip_levels = env_pdf->GetNumMips();
-            preprocess_param.src_size       = uint2(width, height);
-            cmd_list.Compute(sd_generate_mip_pdf, env_map->GetView(0), std::span<TextureView>(env_pdf_mips.data(), env_pdf_mips.size()), preprocess_param).Dispatch(uint3(ceil(width / 32), ceil(height / 32), 1));
-            width  = std::max(1u, width >> 5);
-            height = std::max(1u, height >> 5);
-        }
+        // PreprocessEnvironmentMapParams preprocess_param{};
+        // width  = env_map->GetExtent().x;
+        // height = env_map->GetExtent().y;
+        // for (uint i = 0; i < env_pdf->GetNumMips(); i += 5) {
+        //     preprocess_param.src_mip_level  = i;
+        //     preprocess_param.num_mip_levels = env_pdf->GetNumMips();
+        //     preprocess_param.src_size       = uint2(width, height);
+        //     cmd_list.Compute(sd_utils.GetGenerateMipPdfPipeline(), env_map->GetView(0), std::span<TextureView>(env_pdf_mips.data(), env_pdf_mips.size()), preprocess_param).Dispatch(uint3(ceil(width / 32), ceil(height / 32), 1));
+        //     width  = std::max(1u, width >> 5);
+        //     height = std::max(1u, height >> 5);
+        // }
+        sd_utils.GenerateMips(cmd_list, env_mips);
+        sd_utils.GenerateMipPdf(cmd_list, env_map->GetView(0), env_pdf_mips);
     }
 
     // gfx_queue.Execute(cmd_list.Submit().Wait(copy_queue_timeline, copy_queue_timeline->GetValue()));
@@ -481,6 +474,9 @@ int main(int argc, const char** argv) {
             create_frame_buffers(resolution);
             rt_ctx->FillGBufferResources(resolution);
             g_buffer_pass->UpdateMainView(resolution);
+            is_ctx.~ImportanceSamplingContext();
+            is_params.render_size = resolution;
+            new (&is_ctx) ImportanceSamplingContext(is_params);
         }
 
         if (Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady()) {
@@ -495,10 +491,17 @@ int main(int argc, const char** argv) {
                 uint num_emissive_meshes, num_emissive_triangles;
                 prepare_light_pass->CountEmissiveInstances(num_emissive_meshes, num_emissive_triangles);
 
-                rt_ctx = MakeUnique<RTContext>(num_emissive_meshes, num_emissive_triangles, g_scene.GetLights().size(), g_scene.GetGeometryInstances().size(), env_map->GetExtent().xy);
+                rt_ctx = MakeUnique<RTContext>(sd_utils,
+                                               is_ctx,
+                                               num_emissive_meshes,
+                                               num_emissive_triangles,
+                                               g_scene.GetLights().size(),
+                                               g_scene.GetGeometryInstances().size(),
+                                               env_map->GetExtent().xy);
                 rt_ctx->SetBindlessHandles(geometry_buffer_handle, instance_buffer_handle, material_buffer_idx);
                 rt_ctx->FillGBufferResources(resolution);
                 rt_ctx->SetRaytracingScene(rt_scene);
+                rt_ctx->FillLowDiscrepancySequence(cmd_list);
                 g_buffer_pass->UpdateMainView(resolution);
 
                 if (env_map) {
@@ -688,7 +691,6 @@ int main(int argc, const char** argv) {
         // }
         gui.RenderGUI(cmd_list, output);
         rt_scene->AdvanceFrame();
-
 
         time++;
         gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time));

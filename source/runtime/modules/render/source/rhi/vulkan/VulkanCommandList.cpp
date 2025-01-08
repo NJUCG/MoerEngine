@@ -1454,8 +1454,9 @@ namespace Moer::Render {
                                 case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE: {
 
                                     if (writer.descriptorCount > 1) {
-                                        std::span<TextureView> textures = std::get<std::span<TextureView>>(_args[set_info.param_idx]);
-                                        for (uint j = 0; j < writer.descriptorCount; ++j) {
+                                        std::span<TextureView> textures  = std::get<std::span<TextureView>>(_args[set_info.param_idx]);
+                                        uint                   desc_size = std::min(writer.descriptorCount, uint(textures.size()));
+                                        for (uint j = 0; j < desc_size; ++j) {
                                             VkImageLayout layout     = GetSamplerImageLayout(textures[j]);
                                             uint64        src_handle = descriptor_heap.GetImageDescIdx(&textures[j], layout);
                                             descriptor_heap.PushImageDesc(src_handle, _binder.binding_infos[i].offset + j * device.GetOptionalProperties().descriptor_buffer_properties.sampledImageDescriptorSize);
@@ -1470,8 +1471,9 @@ namespace Moer::Render {
                                 }
                                 case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE: {
                                     if (writer.descriptorCount > 1) {
-                                        std::span<TextureView> textures = std::get<std::span<TextureView>>(_args[set_info.param_idx]);
-                                        for (uint j = 0; j < writer.descriptorCount; ++j) {
+                                        std::span<TextureView> textures  = std::get<std::span<TextureView>>(_args[set_info.param_idx]);
+                                        uint                   desc_size = std::min(writer.descriptorCount, uint(textures.size()));
+                                        for (uint j = 0; j < desc_size; ++j) {
                                             uint64 src_handle = descriptor_heap.GetImageDescIdx(&textures[j], VK_IMAGE_LAYOUT_GENERAL);
                                             descriptor_heap.PushImageDesc(src_handle, _binder.binding_infos[i].offset + j * device.GetOptionalProperties().descriptor_buffer_properties.storageImageDescriptorSize);
                                         }

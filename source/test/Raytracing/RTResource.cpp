@@ -1,6 +1,8 @@
 #include "RTResource.h"
+#include "Configs.h"
 #include "PixelFormat.h"
 #include "PreprocessLightPass.h"
+#include "ShaderUtils.h"
 #include "config/ConfigManager.h"
 #include <cstdio>
 #include <filesystem>
@@ -23,6 +25,11 @@ namespace Moer::Render {
     }
 
     RTResource::~RTResource() {
+    }
+
+    static uint CalcMaxMipCount(uint2 _extent) {
+        uint max_dim = std::max(_extent.x, _extent.y);
+        return 1 + static_cast<uint>(std::floor(std::log2(max_dim)));
     }
 
     void RTResource::LoadResources() {
@@ -81,7 +88,7 @@ namespace Moer::Render {
                             Extent2D(width, height),
                             PF_R32G32B32A32_SFLOAT,
                             ETextureUsageFlags::SAMPLED | ETextureUsageFlags::UNORDERED_ACCESS,
-                            10);
+                            CalcMaxMipCount(uint2(width, height)));
                         exp_textures.emplace_back(texture, ETextureState::SAMPLE);
 
                         cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)data, width * height * 4 * sizeof(float)), texture);
@@ -124,14 +131,19 @@ namespace Moer::Render {
         return nullptr;
     }
 
-    RTContext::RTContext(uint  _num_emissive_meshes,
-                         uint  _num_emissive_triangles,
-                         uint  _num_prim_lights,
-                         uint  _num_geom_instance,
-                         uint2 _env_map_extent) : max_emissive_meshes(_num_emissive_meshes),
-                                                  max_emissive_triangles(_num_emissive_triangles),
-                                                  max_geom_instance(_num_geom_instance),
-                                                  max_prim_lights(_num_prim_lights) {
+    RTContext::RTContext(
+        ShaderUtils&               _sd_utils,
+        ImportanceSamplingContext& _is_ctx,
+        uint                       _num_emissive_meshes,
+        uint                       _num_emissive_triangles,
+        uint                       _num_prim_lights,
+        uint                       _num_geom_instance,
+        uint2                      _env_map_extent) : max_emissive_meshes(_num_emissive_meshes),
+                                 max_emissive_triangles(_num_emissive_triangles),
+                                 max_geom_instance(_num_geom_instance),
+                                 max_prim_lights(_num_prim_lights),
+                                 sd_utils(_sd_utils),
+                                 is_ctx(_is_ctx) {
         RenderDevice& device = RenderDevice::Get();
         task_buf             = device.CreateBuffer<PrepareLightsTask>(max_emissive_meshes + max_prim_lights, EBufferUsageFlags::UNORDERED_ACCESS);
 
@@ -162,11 +174,20 @@ namespace Moer::Render {
                                                        mips);
         }
 
+        //restir
+        {
+            neighbor_offset_buf = device.CreateBuffer<byte>(
+                is_ctx.GetNeighborOffsetCnt() * 2 * sizeof(float),
+                EBufferUsageFlags::UNORDERED_ACCESS);
+        }
+
         task_buf->SetName("task_buf");
         geo_instance_to_light_buf->SetName("geo_instance_to_light_buf");
         light_mapping_buf->SetName("light_mapping_buf");
         light_data_buf->SetName("light_data_buf");
         prim_light_buf->SetName("prim_light_buf");
+
+        neighbor_offset_buf->SetName("neighbor_offset_buf");
     }
 
     void RTContext::SetBindlessHandles(uint _geom_data_buf_handle, uint _instance_data_buf_handle, uint _material_data_buf_handle) {
@@ -184,6 +205,18 @@ namespace Moer::Render {
         gbuffer_res.emission           = device.CreateTexture("emission", Extent2D(_resolution), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
         gbuffer_res.motion             = device.CreateTexture("motion", Extent2D(_resolution), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
         gbuffer_res.clip_depth         = device.CreateTexture("clip_depth", Extent2D(_resolution), PF_R32_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+    }
+
+    void RTContext::SetResolution(uint2 _resolution) {
+        FillGBufferResources(_resolution);
+    }
+
+    void RTContext::FillLowDiscrepancySequence(CommandList& _cmd_list) {
+        GenLowDiscrepancySequenceParam param;
+        param.num_dimensions = 2;
+        param.num_samples    = is_ctx.GetNeighborOffsetCnt();
+        sd_utils.GenerateLowDiscrepancySequence(_cmd_list, param, neighbor_offset_buf->GetView());
+        // _cmd_list.Compute(sd_utils.gen_low_discrepancy_pipeline, _param, _output).Dispatch(uint3(DivCeil(_param.num_samples, 256), 1, 1), "GenerateLowDiscrepancySequence");
     }
 
 };// namespace Moer::Render

@@ -1,5 +1,6 @@
 #ifndef MOER_MATH_HLSL
 #define MOER_MATH_HLSL
+#include <MathLib/STL.hlsli>
 
 #define PI 3.1415926535897932384626433832795
 
@@ -128,16 +129,16 @@ float3 SampleHemisphere(float2 rand) {
 }
 
 float3 SampleHemisphereCosine(float2 rand) {
-    float2 disk = SampleDisk(rand);
-    float z = sqrt(max(0.f, 1.f - rand.y));
-    return float3(disk, z);
+  float2 disk = SampleDisk(rand);
+  float z = sqrt(max(0.f, 1.f - rand.y));
+  return float3(disk, z);
 }
 
 float3 SampleHemisphereCosineWithPdf(float2 rand, out float pdf) {
-    float2 disk = SampleDisk(rand);
-    float z = sqrt(max(0.f, 1.f - rand.y));
-    pdf = z / PI;
-    return float3(disk, z);
+  float2 disk = SampleDisk(rand);
+  float z = sqrt(max(0.f, 1.f - rand.y));
+  pdf = z / PI;
+  return float3(disk, z);
 }
 
 float3 SampleSphere(float2 _rnd, out float _pdf) {
@@ -168,19 +169,114 @@ float2 DirToEquirectangularUV(float3 _dir) {
   return uv;
 }
 
-float3 Rand2ToBaryCentrics(float2 _uv){
-    float sqrt_x = sqrt(_uv.x);
-    return float3(1.0 - sqrt_x, _uv.y * sqrt_x, (1.0 - _uv.y) * sqrt_x);
+float3 Rand2ToBaryCentrics(float2 _uv) {
+  float sqrt_x = sqrt(_uv.x);
+  return float3(1.0 - sqrt_x, _uv.y * sqrt_x, (1.0 - _uv.y) * sqrt_x);
 }
 
-float3 HitUVToBarycentrics(float2 _uv){
-    return float3(1.0 - _uv.x - _uv.y, _uv.x, _uv.y);
+float3 HitUVToBarycentrics(float2 _uv) {
+  return float3(1.0 - _uv.x - _uv.y, _uv.x, _uv.y);
 }
 
-float2 BaryCentricsToRand2(float3 _bary){
-    float sqrt_x = 1.f - _bary.x;
-    return float2(sqrt_x * sqrt_x, _bary.y / sqrt_x);
+float2 BaryCentricsToRand2(float3 _bary) {
+  float sqrt_x = 1.f - _bary.x;
+  return float2(sqrt_x * sqrt_x, _bary.y / sqrt_x);
 }
+
+// Random State
+
+namespace Rng {
+
+struct Tea {
+  uint2 val;
+
+  void Init(uint _linear_idx, uint _frame_idx, uint _spin_num = 16) {
+    val.x = _linear_idx;
+    val.y = _frame_idx;
+
+    uint s = 0;
+    [unroll] for (uint n = 0; n < _spin_num; n++) {
+      s += 0x9E3779B9;
+      val.x += ((val.y << 4) + 0xA341316C) ^ (val.y + s) ^
+               ((val.y >> 5) + 0xC8013EA4);
+      val.y += ((val.x << 4) + 0xAD90777D) ^ (val.x + s) ^
+               ((val.x >> 5) + 0x7E95761E);
+    }
+  }
+
+  void Init(uint2 _pos, uint _frame_idx) {
+    Init(STL::Sequence::Zorder(_pos), _frame_idx);
+  }
+
+  uint GetUint() {
+    val.x = STL::Rng::_Next(val.x);
+
+    return val.x;
+  }
+
+  uint2 GetUint2() {
+    val.x = STL::Rng::_Next(val.x);
+    val.y = STL::Rng::_Next(val.y);
+
+    return val;
+  }
+
+  uint4 GetUint4() { return float4(GetUint2(), GetUint2()); }
+
+  float GetFloat() {
+    uint x = GetUint();
+    return _UintToFloat01(x);
+  }
+
+  float2 GetFloat2() {
+    uint2 x = GetUint2();
+    return _UintToFloat01(x);
+  }
+
+  float4 GetFloat4() {
+    uint4 x = GetUint4();
+    return _UintToFloat01(x);
+  }
+};
+
+struct Hash {
+  uint state;
+
+  void Init(uint _linear_idx, uint _frame_idx) {
+    state = STL::Sequence::HashCombine(
+        STL::Sequence::Hash(_frame_idx + 0x035F9F29), _linear_idx);
+  }
+
+  void Initialize(uint2 _pos, uint _frame_idx) {
+    Initialize(STL::Sequence::Zorder(_pos), _frame_idx);
+  }
+
+  uint GetUint() {
+    state = STL::Rng::_Next(state);
+
+    return state;
+  }
+
+  uint2 GetUint2() { return uint2(GetUint(), GetUint()); }
+
+  uint4 GetUint4() { return float4(GetUint2(), GetUint2()); }
+
+  float GetFloat() {
+    uint x = GetUint();
+    return _UintToFloat01(x);
+  }
+
+  float2 GetFloat2() {
+    uint2 x = GetUint2();
+    return _UintToFloat01(x);
+  }
+
+  float4 GetFloat4() {
+    uint4 x = GetUint4();
+    return _UintToFloat01(x);
+  }
+};
+} // namespace Rng
 
 } // namespace Math
 #endif

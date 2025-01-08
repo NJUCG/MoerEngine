@@ -1,35 +1,43 @@
 #ifndef MOER_SHARED_SHADER_PARAMETERS_H
 #define MOER_SHARED_SHADER_PARAMETERS_H
+
+#ifdef CONST
+#undef CONST
+#endif
+
 #ifdef __cplusplus
+#define CONST constexpr
 #include "shaderheaders/shared/lighting/ShaderParameters.h"
 #include "misc/Traits.h"
 #include "lighting/ShaderParameters.h"
 
 namespace Moer::Render {
 #else
+#define CONST const
 #include <shared/lighting/ShaderParameters.h>
 namespace Moer {
 #endif
 
-    static const uint s_di_light_compact_bit = 0x80000000u;//mask in ris buffer for compact light
-    static const uint s_di_light_idx_mask    = 0x7fffffffu;
+    static CONST uint s_di_light_compact_bit    = 0x80000000u;//mask in ris buffer for compact light
+    static CONST uint s_di_light_idx_mask       = 0x7fffffffu;
+    static CONST uint s_di_reservoir_block_size = 16;
 
-    static const uint s_di_bias_correction_none      = 0;//1/M normaliztion
-    static const uint s_di_bias_correction_basic     = 1;//mis normalization
-    static const uint s_di_bias_correction_pair_wise = 2;//pair-wise mis normalization
-    static const uint s_di_bias_correction_traced    = 3;//unbiased, using traced visibility
+    static CONST uint s_di_bias_correction_none      = 0;//1/M normaliztion
+    static CONST uint s_di_bias_correction_basic     = 1;//mis normalization
+    static CONST uint s_di_bias_correction_pair_wise = 2;//pair-wise mis normalization
+    static CONST uint s_di_bias_correction_traced    = 3;//unbiased, using traced visibility
 
     //local light initial sample mode
-    static const uint s_di_local_light_sample_mode_uniform   = 0;
-    static const uint s_di_local_light_sample_mode_power_ris = 1;//power based ris
-    static const uint s_di_local_light_sample_mode_grid      = 2;//grid based
+    static CONST uint s_di_local_light_sample_mode_uniform   = 0;
+    static CONST uint s_di_local_light_sample_mode_power_ris = 1;//power based ris
+    static CONST uint s_di_local_light_sample_mode_grid      = 2;//grid based
 
-    static const uint s_invalid_light_idx = 0xffffffffu;
-    #ifdef __cplusplus
+    static CONST uint s_invalid_light_idx = 0xffffffffu;
+#ifdef __cplusplus
     enum RTVisibleMask : uint8 {
-        #else
-        enum RTVisibleMask{
-        #endif
+#else
+    enum RTVisibleMask {
+#endif
         RTVM_NONE,
         RTVM_DISABLE      = 0x1,
         RTVM_OPAQUE       = 0x2,
@@ -175,6 +183,8 @@ namespace Moer {
 
         uint2 env_pdf_size;
         uint2 local_light_pdf_size;
+
+        uint enable_prev_tlas;
     };
 
 #ifdef __cplusplus
@@ -182,5 +192,6 @@ namespace Moer {
 #else
 }
 #endif
+#undef CONST
 
 #endif//MOER_SHARED_LIGHTING_SHADER_PARAMETERS_H

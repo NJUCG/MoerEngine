@@ -123,6 +123,7 @@ namespace Moer {
     };// namespace GridLights
 
     namespace DI {
+
         struct PackedReservoir {
             uint  light_data;
             uint  uv_data;
@@ -140,7 +141,7 @@ namespace Moer {
         };
 
         struct CommonParams {
-            uint neighbor_offset;
+            uint neighbor_offset_mask;
             uint padding0;
             uint padding1;
             uint padding2;

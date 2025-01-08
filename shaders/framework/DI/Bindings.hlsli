@@ -13,18 +13,19 @@
 #include <hwrt/GBufferUtils.hlsli>
 
 [[vk::binding(0, DI_BINDING_SLOT)]] RaytracingAccelerationStructure tlas;
+[[vk::binding(1, DI_BINDING_SLOT)]] RaytracingAccelerationStructure prev_tlas;
 
-[[vk::binding(1, DI_BINDING_SLOT)]] ConstantBuffer<Moer::ResampleConstants> resample_params;
-[[vk::binding(2, DI_BINDING_SLOT)]] RWStructuredBuffer<PackedDIReservoir> light_reservoirs;
-[[vk::binding(3, DI_BINDING_SLOT)]] RWTexture2D<float4> rw_diffuse_lighting;
-[[vk::binding(4, DI_BINDING_SLOT)]] RWTexture2D<float4> rw_specular_lighting;
-[[vk::binding(5, DI_BINDING_SLOT)]] RWTexture2DArray<float4> rw_gradients;
-[[vk::binding(6, DI_BINDING_SLOT)]] RWTexture2D<float2> rw_restir_luminance;
+[[vk::binding(2, DI_BINDING_SLOT)]] ConstantBuffer<Moer::ResampleConstants> resample_params;
+[[vk::binding(3, DI_BINDING_SLOT)]] RWStructuredBuffer<PackedDIReservoir> light_reservoirs;
+[[vk::binding(4, DI_BINDING_SLOT)]] RWTexture2D<float4> rw_diffuse_lighting;
+[[vk::binding(5, DI_BINDING_SLOT)]] RWTexture2D<float4> rw_specular_lighting;
+[[vk::binding(6, DI_BINDING_SLOT)]] RWTexture2DArray<float4> rw_gradients;
+[[vk::binding(7, DI_BINDING_SLOT)]] RWTexture2D<float2> rw_restir_luminance;
 
-[[vk::binding(7, DI_BINDING_SLOT)]] RWTexture2D<float4> rw_diffuse_lighting_prev;
+[[vk::binding(8, DI_BINDING_SLOT)]] RWTexture2D<float4> rw_diffuse_lighting_prev;
 
-[[vk::binding(8, DI_BINDING_SLOT)]] RWBuffer<float2> rw_ris_buffer;
-[[vk::binding(9, DI_BINDING_SLOT)]] RWBuffer<uint4> rw_ris_light_data_buffer;
+[[vk::binding(9, DI_BINDING_SLOT)]] RWBuffer<float2> rw_ris_buffer;
+[[vk::binding(10, DI_BINDING_SLOT)]] RWBuffer<uint4> rw_ris_light_data_buffer;
 
 BINDLESS_BINDINGS(3, 2, 4, 5)
 #include <framework/Material.hlsl>
@@ -32,16 +33,7 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 
 namespace Moer{
 
-    void InitRandom(uint2 _pixel_pos, uint _pass){
-        STL::Rng::Hash::Initialize(_pixel_pos, _pass * 13 + resample_params.frame_idx);
-    }
-    float GetNextRandom(){
-        return STL::Rng::Hash::GetFloat();
-    }
-
-    float2 GetNextRandom2(){
-        return STL::Rng::Hash::GetFloat2();
-    }
+    typedef Math::Rng::Hash RandomState;
 
     float3 DiffuseTerm(float3 _v, float3 _n, float3 _l, float _roughness){
         float nol = saturate(dot(_n, _l));
@@ -142,11 +134,11 @@ namespace Moer{
             return b * _h.x + t * _h.y + n * _h.z;
         }
 
-        bool GetBrdfSample(out float3 _dir){
+        bool GetBrdfSample(out float3 _dir, inout RandomState _rng){
             float3 rnd;
-            rnd.x = GetNextRandom();
-            rnd.y = GetNextRandom();
-            rnd.z = GetNextRandom();
+            rnd.x = rng.GetFloat();
+            rnd.y = rng.GetFloat();
+            rnd.z = rng.GetFloat();
 
             if(rnd.z < diffuse_prob){
                 float pdf;
@@ -445,6 +437,17 @@ namespace Moer{
         #endif
 
         return b_visible;
+    }
+
+    bool GetCurrentConservativeVisibility(Surface _surface, float3 _sample_pos){
+        return RaytraceConservativeVisibility(tlas, _surface, _sample_pos);
+    }
+
+    bool GetPreviousConservativeVisibility(Surface _surface, float3 _sample_pos){
+        if(!resample_params.enable_prev_tlas)
+            return RaytraceConservativeVisibility(tlas, _surface, _sample_pos);
+        else
+            return RaytraceConservativeVisibility(prev_tlas, _surface, _sample_pos);
     }
 }
 
