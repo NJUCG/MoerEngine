@@ -105,6 +105,32 @@ namespace Moer::Render {
         void SetResourceName(uint64 _object, VkObjectType _object_type, const std::string_view _name);
 
     public:
+        DeviceExtension* LoadExtension(std::string_view _name) override;
+
+        struct Ext {
+            using Ctor = std::function<DeviceExtension*(VulkanDevice*)>;
+            using Dtor = std::function<void(DeviceExtension*)>;
+            DeviceExtension* ext;
+            Ctor             ctor;
+            Dtor             dtor;
+            Ext(Ctor ctor, Dtor dtor) : ext{nullptr}, ctor{ctor}, dtor{dtor} {}
+            Ext(Ext const&) = delete;
+            Ext(Ext&& rhs) : ext{rhs.ext}, ctor{rhs.ctor}, dtor{rhs.dtor} {
+                rhs.ext = nullptr;
+            }
+            ~Ext() {
+                if (ext) {
+                    dtor(ext);
+                }
+            }
+        };
+
+    private:
+        std::mutex                     ext_mutex;
+        UnorderedMap<std::string, Ext> exts;
+
+        void LoadDefaultExtensions();
+
     public:
         inline VkPhysicalDevice GetGpu() const {
             return m_gpu;

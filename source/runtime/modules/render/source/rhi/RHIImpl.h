@@ -792,6 +792,62 @@ namespace Moer::Render {
         UnorderedMap<uint64, uint> related_geometries;
     };
 
+    struct CustomCmd : public Command {
+    public:
+        enum class CustomCmdId : uint8 {
+            CUSTOM_CMD_NONE = 0u,
+            CUSTOM_RASTER,
+            CUSTOM_DISPATCH,
+            // ...
+            CUSTOM_CMD_END = 0xffu,
+        };
+
+        static constexpr std::string_view custom_cmd_names[] = {
+            "CUSTOM_CMD_NONE",
+            "CUSTOM_RASTER",
+            "CUSTOM_DISPATCH",
+        };
+
+    private:
+        CustomCmd() : custom_id(CustomCmdId::CUSTOM_CMD_NONE), Command(EType::Custom) {}
+
+        CustomCmdId custom_id;
+
+    public:
+        explicit CustomCmd(CustomCmdId _id) : custom_id(_id), Command(EType::Custom, custom_cmd_names[uint(_id)]) {}
+        explicit CustomCmd(CustomCmdId _id, std::string_view _name) : custom_id(_id), Command(EType::Custom, _name) {}
+        virtual ~CustomCmd() = default;
+        CustomCmdId CustomId() const { return custom_id; }
+    };
+
+    struct CustomDispatchCmd : public CustomCmd {
+    public:
+        struct ResourceUsage {
+            TArg           resource;
+            ParamInfoFlags state_flags;
+            template<typename Arg>
+                requires(std::is_constructible_v<TArg, Arg &&>)
+            ResourceUsage(
+                Arg&&          _resource,
+                ParamInfoFlags _state_flags)
+                : resource{std::forward<Arg>(_resource)},
+                  state_flags{_state_flags} {}
+        };
+
+    private:
+        virtual std::span<const ResourceUsage> GetResourceUsages() const = 0;
+
+    public:
+        CustomDispatchCmd() : CustomCmd(CustomCmdId::CUSTOM_DISPATCH) {}
+        ~CustomDispatchCmd() = default;
+
+        void IterateArgs(std::function<void(const TArg&, ParamInfoFlags _usage)> _func) const {
+            for (const auto& usage : GetResourceUsages()) {
+                _func(usage.resource, usage.state_flags);
+            }
+        }
+    };
+
     class RenderDevice::Impl {
     public:
         Impl() {}
@@ -833,6 +889,8 @@ namespace Moer::Render {
 
         virtual PipelineHandle CreatePipeline(GfxPsoCreateInfo&& _pso_info, PipelineShaderInfo&& _shaders) = 0;//gfx
         virtual PipelineHandle CreatePipeline(PipelineShaderInfo&& _shaders)                               = 0;//compute
+
+        virtual DeviceExtension* LoadExtension(std::string_view _name) { return nullptr; }
     };
 
 }// namespace Moer::Render

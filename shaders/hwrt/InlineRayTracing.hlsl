@@ -29,7 +29,7 @@ struct Param {
     : register(t0, space0);
 [[vk::binding(0, 1)]] RWTexture2D<float4> out_normal_roughness
     : register(u0, space1);
-[[vk::binding(1, 1)]] RWTexture2D<float4> out_base_color_metalness
+[[vk::binding(1, 1)]] RWTexture2D<float4> out_basecolor_metalness
     : register(u1, space1);
 [[vk::binding(2, 1)]] RWTexture2D<float3> out_direct_lighting
     : register(u3, space1);
@@ -695,7 +695,7 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
       Raytracing::EstimateDiffuseProbability(hit_info, mat);
 
   out_normal_roughness[pixel_pos] = float4(hit_info.n, mat.roughness);
-  out_base_color_metalness[pixel_pos] =
+  out_basecolor_metalness[pixel_pos] =
       float4(STL::Color::LinearToSrgb(mat.base_color), mat.metalness);
 
   out_direct_lighting[pixel_pos] = mat.l_direct;

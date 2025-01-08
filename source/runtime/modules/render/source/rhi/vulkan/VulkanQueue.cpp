@@ -9,7 +9,9 @@
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
-#include "vulkan/vulkan_core.h"
+
+#include "VulkanCustomCommand.h"
+
 #include <memory>
 #include <mutex>
 #include <variant>
@@ -253,14 +255,15 @@ namespace Moer::Render {
                 case Command::EType::QueueTransfer:
                     Visit(static_cast<const QueueTransferCmd*>(_cmd));
                     break;
-                case Command::EType::Custom:
-                    break;
                 case Command::EType::UpdateBindlessArray:
                     Visit(static_cast<const UpdateBindlessArrayCmd*>(_cmd));
                     break;
 
                 case Command::EType::ClearResource:
                     Visit(static_cast<const ClearResourceCmd*>(_cmd));
+                    break;
+                case Command::EType::Custom:
+                    Visit(static_cast<const CustomCmd*>(_cmd));
                     break;
                 default:
                     assert(false && "Invalid command type");
@@ -578,6 +581,26 @@ namespace Moer::Render {
                 },
                 _cmd->Resource());
         }
+
+        void Visit(const CustomCmd* _cmd) {
+            switch (_cmd->CustomId()) {
+                case CustomCmd::CustomCmdId::CUSTOM_RASTER:
+                    assert(false && "Custom raster draw scene not implemented");
+                    break;
+                case CustomCmd::CustomCmdId::CUSTOM_DISPATCH:
+                    Visit(static_cast<const CustomDispatchCmd*>(_cmd));
+                    break;
+                default:
+                    assert(false && "Invalid Custom Command for VkCmdPreprocessor");
+            }
+        }
+
+        void Visit(const CustomDispatchCmd* _cmd) {
+            auto func = [&](const TArg& _arg, ParamInfoFlags _flag) {
+                VisitArgs(_arg, (VulkanShaderResourceState)_flag.state_flags, _flag.pipeline_flags);
+            };
+            _cmd->IterateArgs(func);
+        }
     };
 
 #pragma endregion
@@ -643,15 +666,15 @@ namespace Moer::Render {
                 case Command::EType::ClearResource:
                     Visit(static_cast<const ClearResourceCmd&>(*_cmd));
                     break;
-                case Command::EType::TraceRay: {
+                case Command::EType::TraceRay:
                     assert(false && "TraceRay not implemented");
                     break;
-                }
-                case Command::EType::Custom: break;
-                case Command::EType::UpdateBindlessArray: {
+                case Command::EType::UpdateBindlessArray:
                     Visit(static_cast<const UpdateBindlessArrayCmd&>(*_cmd));
                     break;
-                };
+                case Command::EType::Custom:
+                    Visit(static_cast<const CustomCmd&>(*_cmd));
+                    break;
             }
         };
         void Visit(const UploadBufferCmd& _cmd) {
@@ -1305,6 +1328,31 @@ namespace Moer::Render {
             cmd_list.BeginLabel(std::format("UpdateTLAS with {} instances", _cmd.InstanceCount()), {});
             vkCmdBuildAccelerationStructuresKHR(cmd_list.GetHandle(), 1, &build_info, &range);
             cmd_list.EndLabel();
+        }
+
+        void Visit(const CustomCmd& _cmd) {
+            static float4 custom_color = {0.0f, 1.0f, 1.0f, 1.0f};
+            cmd_list.BeginLabel(_cmd.name, custom_color);
+            switch (_cmd.CustomId()) {
+                case CustomCmd::CustomCmdId::CUSTOM_RASTER:
+                    assert(false && "Custom raster draw scene not implemented");
+                    break;
+                case CustomCmd::CustomCmdId::CUSTOM_DISPATCH:
+                    Visit(static_cast<const VkCustomDispatchCmd&>(_cmd));
+                    break;
+                default: assert(false && "Custom Command Not Supported for VkCmdVisitor");
+            }
+            cmd_list.EndLabel();
+        }
+
+        void Visit(const VkCustomDispatchCmd& _cmd) {
+            const VkCustomDispatchCmd::VkDispatchContext context = {
+                m_device->GetInstance(),
+                m_device->GetGpu(),
+                m_device->GetDevice(),
+                cmd_list.GetHandle(),
+                &this->tracker};
+            _cmd.Execute(context);
         }
 
         // void Visit(const UpdateDrawStateCmd& _cmd) {

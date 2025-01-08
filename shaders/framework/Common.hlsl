@@ -92,6 +92,7 @@ struct RTConfigParam {
   float4x4 world2view_prev;
   float4x4 world2clip;
   float4x4 world2clip_prev;
+  float4 nrd_hit_dist_params;
   float4 sun_direction_gexposure;
   float4 camera_origin_gmip_bias;
   float4 view_direction_gorthomode;

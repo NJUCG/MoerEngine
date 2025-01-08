@@ -62,3 +62,55 @@ set_target_folder(volk ${third_party_folder}/volk)
 # Load smaa precomputed textures
 include(${CMAKE_CURRENT_SOURCE_DIR}/smaa.cmake)
 set_target_folder(smaa ${third_party_folder}/smaa)
+
+# Find Windows SDK
+get_filename_component (MOER_WINDOWS_SDK_PATH "[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows Kits\\Installed Roots;KitsRoot10]" ABSOLUTE CACHE)
+if (MOER_WINDOWS_SDK_PATH)
+    message(STATUS "Windows SDK found: ${MOER_WINDOWS_SDK_PATH}")
+else ()
+    message(WARNING "Windows SDK not found. DirectX backend, NRI and NRD may not build correctly.")
+endif ()
+find_file(MOER_WINDOWS_SDK_MANIFEST_PATH "SDKManifest.xml" HINTS "${MOER_WINDOWS_SDK_PATH}" NO_DEFAULT_PATH)
+if (MOER_WINDOWS_SDK_MANIFEST_PATH)
+    file(STRINGS "${MOER_WINDOWS_SDK_MANIFEST_PATH}" MOER_WINDOWS_SDK_IDENTITY REGEX "PlatformIdentity")
+    if (MOER_WINDOWS_SDK_IDENTITY)
+        string(REGEX REPLACE "PlatformIdentity = \".*Version=([0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+)\"" "\\1" MOER_WINDOWS_SDK_VERSION "${MOER_WINDOWS_SDK_IDENTITY}")
+        string(STRIP "${MOER_WINDOWS_SDK_VERSION}" MOER_WINDOWS_SDK_VERSION)
+        if (MOER_WINDOWS_SDK_VERSION MATCHES "PlatformIdentity")
+            set(MOER_WINDOWS_SDK_VERSION "")
+        endif ()
+    endif ()
+    if (MOER_WINDOWS_SDK_VERSION)
+        message(STATUS "Windows SDK found: ${MOER_WINDOWS_SDK_VERSION}")
+    else ()
+        message(WARNING "Windows SDK found but failed to parse the version. DirectX backend, NRI and NRD may not build correctly.")
+    endif ()
+else ()
+    message(WARNING "Windows SDK not found. DirectX backend, NRI and NRD may not build correctly.")
+endif ()
+# NRI
+set(CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION ${MOER_WINDOWS_SDK_VERSION})
+add_subdirectory(NRI)
+# NRD
+set(NRD_SHADERS_PATH ${moer_third_party_dir}/NRD/Shaders/Binary)
+set(NRD_NORMAL_ENCODING "0")
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    add_compile_options(-msse4.1)
+endif()
+add_subdirectory(NRD)
+
+# post build
+set(NRD_ENCODING_FILE "${moer_third_party_dir}/NRD/Shaders/Include/NRDEncoding.hlsli")
+set(MOER_SHADER_NRD_DIR "${moer_shader_dir}/nrd")
+add_custom_command(
+    OUTPUT "${MOER_SHADER_NRD_DIR}/NRDEncoding.hlsli"
+    COMMAND ${CMAKE_COMMAND} -E copy "${NRD_ENCODING_FILE}" "${MOER_SHADER_NRD_DIR}/NRDEncoding.hlsli"
+    DEPENDS "${NRD_ENCODING_FILE}"
+    COMMENT "Copying NRDEncoding.hlsli to ${MOER_SHADER_NRD_DIR}"
+)
+
+add_custom_target(CopyNRDEncodingFile ALL
+    DEPENDS "${MOER_SHADER_NRD_DIR}/NRDEncoding.hlsli"
+)
+
+add_dependencies(NRD CopyNRDEncodingFile)
