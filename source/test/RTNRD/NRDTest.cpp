@@ -36,6 +36,7 @@
 #include "RTUI.h"
 
 #include "rhi/extension//NrdExtension.h"
+#include "shaderheaders/shared/nrd/NRDDefinition.h"
 
 using namespace Moer::Render;
 using namespace Moer;
@@ -60,6 +61,7 @@ struct RTConfigParam {
     Matrix4x4f world2view_prev;
     Matrix4x4f world2clip;
     Matrix4x4f world2clip_prev;
+    float4     nrd_hit_dist_params;
     float4     sun_direction_gexposure;
     float4     camera_origin_gmipbias;
     float4     view_direction_gorthomode;
@@ -132,7 +134,7 @@ public:
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
     DEFINE_SHADER_BUFFER(rt_config);
     DEFINE_SHADER_TEX(out_normal_roughness);
-    DEFINE_SHADER_TEX(out_base_color_metalness);
+    DEFINE_SHADER_TEX(out_basecolor_metalness);
     DEFINE_SHADER_TEX(out_direct_lighting);
     DEFINE_SHADER_TEX(out_emission);
     DEFINE_SHADER_TEX(out_diffuse);
@@ -144,7 +146,7 @@ public:
     DEFINE_SHADER_TLAS(tlas);
     DEFINE_SHADER_CONSTANT_STRUCT(Param, param);
 
-    DEFINE_SHADER_ARGS(param, rt_config, out_normal_roughness, out_base_color_metalness, out_direct_lighting, out_emission, out_diffuse, out_specular, out_view_z, out_mv, out_shadow_info, bdls, tlas);
+    DEFINE_SHADER_ARGS(param, rt_config, out_normal_roughness, out_basecolor_metalness, out_direct_lighting, out_emission, out_diffuse, out_specular, out_view_z, out_mv, out_shadow_info, bdls, tlas);
 };
 
 class CombineUIPipeline : public RasterPipeline {
@@ -190,6 +192,38 @@ public:
     DEFINE_SHADER_CONSTANT_STRUCT(BuildMipsParam, param);
 
     DEFINE_SHADER_ARGS(mips, param);
+};
+
+struct CompositionCSPipeline : public ComputePipeline {
+public:
+    struct Param {
+        float4x4 view2world;
+        float4   frustum;
+        float3   dir;
+        float    orthomode;
+        uint2    rect;
+        float2   inv_rect;
+        float2   jitter;
+        uint     denoiser_type;
+    };
+    DEFINE_COMPUTE_PIPELINE_CLASS(CompositionCSPipeline);
+
+    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
+    DEFINE_SHADER_TEX(in_normal_roughness);
+    DEFINE_SHADER_TEX(in_basecolor_metalness);
+    DEFINE_SHADER_TEX(in_view_z);
+    DEFINE_SHADER_TEX(in_mv);
+    DEFINE_SHADER_TEX(in_shadow_info);
+    DEFINE_SHADER_TEX(in_diffuse);
+    DEFINE_SHADER_TEX(in_specular);
+    DEFINE_SHADER_TEX(in_direct_lighting);
+    DEFINE_SHADER_TEX(in_emission);
+    DEFINE_SHADER_TEX(out_composed_diff);
+    DEFINE_SHADER_TEX(out_composed_spec);
+
+    DEFINE_SHADER_CONSTANT_STRUCT(Param, param);
+
+    DEFINE_SHADER_ARGS(param, in_normal_roughness, in_basecolor_metalness, in_view_z, in_mv, in_shadow_info, in_diffuse, in_specular, in_direct_lighting, in_emission, out_composed_diff, out_composed_spec);
 };
 
 int main(int argc, const char** argv) {
@@ -261,8 +295,9 @@ int main(int argc, const char** argv) {
     rt_view_param_buffer->SetName("rt_view_param_buffer");
     rt_config_param_buffer->SetName("rt_config_param_buffer");
 
-    RaytracingSceneRef rt_scene  = device.CreateRaytracingScene();
-    TestInlineRTShader rt_shader = manager.Compute<TestInlineRTShader>("hwrt/InlineRayTracing.hlsl");
+    RaytracingSceneRef    rt_scene    = device.CreateRaytracingScene();
+    TestInlineRTShader    rt_shader   = manager.Compute<TestInlineRTShader>("hwrt/InlineRayTracingWithNRD.hlsl");
+    CompositionCSPipeline composition = manager.Compute<CompositionCSPipeline>("hwrt/Composition.cs.hlsl");
 
     GfxPsoCreateInfo  combine_pso_info(RHIRasterizeInfo::Preset(),
                                        {},
@@ -364,8 +399,8 @@ int main(int argc, const char** argv) {
         PF_R8G8B8A8_UNORM,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
 
-    TextureRef out_base_color_matalness = device.CreateTexture(
-        "out_base_color_matalness",
+    TextureRef out_basecolor_metalness = device.CreateTexture(
+        "out_basecolor_metalness",
         Extent3D(resolution.x, resolution.y),
         PF_R8G8B8A8_UNORM,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
@@ -386,11 +421,14 @@ int main(int argc, const char** argv) {
     TextureRef out_diffuse     = device.CreateTexture("out_diffuse", Extent2D(resolution.x, resolution.y), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
     TextureRef out_specular    = device.CreateTexture("out_specular", Extent2D(resolution.x, resolution.y), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
     TextureRef out_view_z      = device.CreateTexture("out_view_z", Extent2D(resolution.x, resolution.y), PF_R32_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-    TextureRef out_shadow_info = device.CreateTexture("out_shadow_info", Extent2D(resolution.x, resolution.y), PF_R32G32_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+    TextureRef out_shadow_info = device.CreateTexture("out_shadow_info", Extent2D(resolution.x, resolution.y), PF_R32G32B32A32_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
     TextureRef out_mv          = device.CreateTexture("out_mv", Extent2D(resolution.x, resolution.y), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
 
     TextureRef denoised_diffuse  = device.CreateTexture("denoised_diffuse", Extent2D(resolution.x, resolution.y), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
     TextureRef denoised_specular = device.CreateTexture("denoised_specular", Extent2D(resolution.x, resolution.y), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+
+    TextureRef composed_diff = device.CreateTexture("composed_diffuse", Extent2D(resolution.x, resolution.y), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+    TextureRef composed_spec = device.CreateTexture("composed_specular", Extent2D(resolution.x, resolution.y), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
 
     auto create_frame_buffers = [&](uint2 _new_extent) {
         output = device.CreateTexture(
@@ -405,8 +443,8 @@ int main(int argc, const char** argv) {
             PF_R8G8B8A8_UNORM,
             ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
 
-        out_base_color_matalness = device.CreateTexture(
-            "out_base_color_matalness",
+        out_basecolor_metalness = device.CreateTexture(
+            "out_basecolor_metalness",
             Extent2D(_new_extent.x, _new_extent.y),
             PF_R8G8B8A8_UNORM,
             ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
@@ -433,11 +471,14 @@ int main(int argc, const char** argv) {
         out_diffuse     = device.CreateTexture("out_diffuse", Extent2D(_new_extent.x, _new_extent.y), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
         out_specular    = device.CreateTexture("out_specular", Extent2D(_new_extent.x, _new_extent.y), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
         out_view_z      = device.CreateTexture("out_view_z", Extent2D(_new_extent.x, _new_extent.y), PF_R32_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-        out_shadow_info = device.CreateTexture("out_shadow_info", Extent2D(_new_extent.x, _new_extent.y), PF_R32G32_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+        out_shadow_info = device.CreateTexture("out_shadow_info", Extent2D(resolution.x, resolution.y), PF_R32G32B32A32_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
         out_mv          = device.CreateTexture("out_mv", Extent2D(_new_extent.x, _new_extent.y), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
 
         denoised_diffuse  = device.CreateTexture("denoised_diffuse", Extent2D(resolution.x, resolution.y), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
         denoised_specular = device.CreateTexture("denoised_specular", Extent2D(resolution.x, resolution.y), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+
+        composed_diff = device.CreateTexture("composed_diffuse", Extent2D(resolution.x, resolution.y), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+        composed_spec = device.CreateTexture("composed_specular", Extent2D(resolution.x, resolution.y), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
     };
 
     RTUI rt_ui{gui};
@@ -457,6 +498,11 @@ int main(int argc, const char** argv) {
     auto* nrd_ext       = device.LoadExtension<Ext::NRDExtension>();
     auto  nrd_interface = nrd_ext->CreateInterface(3, resolution.x, resolution.y);
     nrd_interface->UseDenoiser(nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR);
+
+    nrd::HitDistanceParameters hit_distance_parameters = {};
+    rt_config_param.nrd_hit_dist_params                = float4(hit_distance_parameters.A, hit_distance_parameters.B, hit_distance_parameters.C, hit_distance_parameters.D);
+    rt_config_param.denoiser_type                      = DENOISER_REBLUR;
+    rt_config_param.rect_size                          = float2(resolution.x, resolution.y);
 
     while (WindowContext::ShouldClose(window_handle) == false) {
         WindowContext::Tick();
@@ -501,7 +547,9 @@ int main(int argc, const char** argv) {
             g_buffer_pass->UpdateMainView(resolution);
 
             // nrd recreation
-            nrd_interface = nrd_ext->RecreateInterface(std::move(nrd_interface), resolution.x, resolution.y);
+            nrd_interface                  = nrd_ext->RecreateInterface(std::move(nrd_interface), resolution.x, resolution.y);
+            rt_config_param.rect_size_prev = rt_config_param.rect_size;
+            rt_config_param.rect_size      = float2(resolution.x, resolution.y);
         }
 
         if (Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady()) {
@@ -661,7 +709,7 @@ int main(int argc, const char** argv) {
                              param,
                              rt_config_param_buffer,
                              out_normal_roughness,
-                             out_base_color_matalness,
+                             out_basecolor_metalness,
                              out_direct_lighting,
                              out_emission,
                              out_diffuse,
@@ -678,8 +726,8 @@ int main(int argc, const char** argv) {
             nrd_interface->SetInput(Ext::NRDInterface::EInResource::MOTION_VECTOR, out_mv);
             nrd_interface->SetInput(Ext::NRDInterface::EInResource::NORMAL_ROUGHNESS, out_normal_roughness);
             nrd_interface->SetInput(Ext::NRDInterface::EInResource::VIEW_Z, out_view_z);
-            nrd_interface->SetInput(Ext::NRDInterface::EInResource::BASECOLOR_METALNESS, out_base_color_matalness);
-            nrd_interface->SetInput(Ext::NRDInterface::EInResource::IN_DIFFUSE, out_direct_lighting);
+            nrd_interface->SetInput(Ext::NRDInterface::EInResource::BASECOLOR_METALNESS, out_basecolor_metalness);
+            nrd_interface->SetInput(Ext::NRDInterface::EInResource::IN_DIFFUSE, out_diffuse);
             nrd_interface->SetInput(Ext::NRDInterface::EInResource::IN_SPECULAR, out_specular);
             nrd_interface->SetOutput(Ext::NRDInterface::EOutResource::OUT_DIFFUSE, denoised_diffuse);
             nrd_interface->SetOutput(Ext::NRDInterface::EOutResource::OUT_SPECULAR, denoised_specular);
@@ -687,9 +735,35 @@ int main(int argc, const char** argv) {
                 time,
                 Vector2ui(resolution.x, resolution.y),
                 Vector2f(0.f, 0.f),
-                camera->GetViewMatrix(),
-                camera->GetProjectionMatrix());
+                Transpose(camera->GetViewMatrix()),
+                Transpose(camera->GetProjectionMatrix()));
             nrd_interface->Denoise(cmd_list);
+
+            CompositionCSPipeline::Param composition_param;
+            composition_param.view2world    = camera->GetToWorldMatrix();
+            composition_param.frustum       = camera->GetFrustum();
+            composition_param.dir           = camera->GetDirection();
+            composition_param.orthomode     = 0;
+            composition_param.rect          = uint2(resolution.x, resolution.y);
+            composition_param.inv_rect      = float2(1.f / resolution.x, 1.f / resolution.y);
+            composition_param.jitter        = float2(0, 0);
+            composition_param.denoiser_type = rt_config_param.denoiser_type;
+
+            cmd_list.Compute(
+                        composition,
+                        composition_param,
+                        out_normal_roughness,
+                        out_basecolor_metalness,
+                        out_view_z,
+                        out_mv,
+                        out_shadow_info,
+                        denoised_diffuse,
+                        denoised_specular,
+                        out_direct_lighting,
+                        out_emission,
+                        composed_diff,
+                        composed_spec)
+                .Dispatch(uint3((resolution.x + 15) >> 4, (resolution.y + 15) >> 4, 1), "Composition");
 
             //copy normal to output
             // cmd_list.CopyFrom(out_direct_lighting->GetView(), scene_color->GetView());
@@ -703,12 +777,12 @@ int main(int argc, const char** argv) {
             auto frame_buffer = rt_ui.GetWindowFrameBuffer();
             auto scene_res    = rt_ui.GetSceneColorResolution();
             auto scene_pos    = rt_ui.GetSceneColorPos();
-            cmd_list.Gfx(sample_tex, denoised_specular, linear_sampler).Draw("SampleTexture", Rect2D(scene_pos.x, scene_pos.y, scene_res.x, scene_res.y), {}, 3, {SingleDrawParam(3, 1, 0, 0, 0)}, ColorAttachment(frame_buffer.GetTexture()));
+            cmd_list.Gfx(sample_tex, composed_diff, linear_sampler).Draw("SampleTexture", Rect2D(scene_pos.x, scene_pos.y, scene_res.x, scene_res.y), {}, 3, {SingleDrawParam(3, 1, 0, 0, 0)}, ColorAttachment(frame_buffer.GetTexture()));
         } else {
             float2 f_res  = float2(resolution.x, resolution.y);
             float2 min_xy = rt_ui.GetSceneColorPos() / f_res;
             float2 max_xy = (rt_ui.GetSceneColorPos() + rt_ui.GetSceneColorResolution()) / f_res;
-            cmd_list.Gfx(combine_ui, denoised_specular, ui_frame_buffer, linear_sampler, CombineUIPipeline::Param{min_xy, max_xy})
+            cmd_list.Gfx(combine_ui, composed_diff, ui_frame_buffer, linear_sampler, CombineUIPipeline::Param{min_xy, max_xy})
                 .Draw("CombineUI",
                       Rect2D(0, 0, resolution.x, resolution.y),
                       {},

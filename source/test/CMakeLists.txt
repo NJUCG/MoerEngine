@@ -105,6 +105,7 @@ target_include_directories(NRDTest
         PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
         PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
         PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Raytracing>
+        PRIVATE $<BUILD_INTERFACE:${moer_shader_dir}/nrd>
 )
 target_link_libraries(NRDTest
         PRIVATE MoerRender

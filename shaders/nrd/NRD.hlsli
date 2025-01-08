@@ -88,7 +88,7 @@ values of "nrd::HitDistanceParameters"
 #include "MathLib/STL.hlsli"
 #include "NRDEncoding.hlsli"
 
-#include "NRDShared.h"
+#include "shared/nrd/NRDDefinition.h"
 
 #pragma region[ helper functions ]
 
@@ -260,7 +260,67 @@ bool _NRD_IsInvalid(float x) { return isnan(x) || isinf(x); }
 
 #pragma endregion
 
-#pragma region[ resource encode&decode ]
+#pragma region[ sh ]
+
+//==============================================================================================================================================
+// SPHERICAL HARMONICS:
+// https://media.contentapi.ea.com/content/dam/eacom/frostbite/files/gdc2018-precomputedgiobalilluminationinfrostbite.pdf
+// SPHERICAL GAUSSIAN:
+// https://therealmjp.github.io/posts/sg-series-part-1-a-brief-and-incomplete-history-of-baked-lighting-representations/
+//==============================================================================================================================================
+
+struct NRD_SG {
+  float c0;
+  float2 chroma;
+  float normHitDist;
+
+  float3 c1;
+  float sharpness;
+};
+
+NRD_SG _NRD_SG_Create(float3 radiance, float3 direction, float normHitDist) {
+  float3 YCoCg = _NRD_LinearToYCoCg(radiance);
+
+  NRD_SG sg;
+  sg.c0 = YCoCg.x;
+  sg.chroma = YCoCg.yz;
+  sg.c1 = direction * YCoCg.x;
+  sg.normHitDist = normHitDist;
+  sg.sharpness = 0.0; // TODO: currently not used
+
+  return sg;
+}
+
+float3 _NRD_SG_ExtractDirection(NRD_SG sg) {
+  return sg.c1 / max(length(sg.c1), NRD_EPS);
+}
+
+float _NRD_SG_IntegralApprox(NRD_SG sg) {
+  return 2.0 * NRD_PI * (sg.c0 / sg.sharpness);
+}
+
+float _NRD_SG_Integral(NRD_SG sg) {
+  float expTerm = 1.0 - exp(-2.0 * sg.sharpness);
+
+  return _NRD_SG_IntegralApprox(sg) * expTerm;
+}
+
+float _NRD_SG_InnerProduct(NRD_SG a, NRD_SG b) {
+  // Integral of the product of two SGs
+  float d = length(a.sharpness * _NRD_SG_ExtractDirection(a) +
+                   b.sharpness * _NRD_SG_ExtractDirection(b));
+  float c = exp(d - a.sharpness - b.sharpness);
+  c *= 1.0 - exp(-2.0 * d);
+  c /= max(d, NRD_EPS);
+
+  // Original version is without "saturate" ( needed to avoid rare fireflies in
+  // our case, energy is already preserved )
+  return NRD_PI * saturate(2.0 * c * a.c0) * b.c0;
+}
+
+#pragma endregion
+
+#pragma region[ frontend ]
 
 //=================================================================================================================================
 // FRONT-END - GENERAL
@@ -514,6 +574,276 @@ float4 SIGMA_FrontEnd_PackTranslucency(float distanceToOccluder,
   r.yzw = saturate(translucency);
 
   return r;
+}
+
+#pragma endregion
+
+#pragma region[ backend ]
+
+//=================================================================================================================================
+// BACK-END - REBLUR
+//=================================================================================================================================
+
+// OUT_DIFF_RADIANCE_HITDIST => X
+// OUT_SPEC_RADIANCE_HITDIST => X
+float4 REBLUR_BackEnd_UnpackRadianceAndNormHitDist(float4 data) {
+  data.xyz = _NRD_YCoCgToLinear(data.xyz);
+
+  return data;
+}
+
+// OUT_DIFF_SH0 and OUT_DIFF_SH1 => X
+// OUT_SPEC_SH0 and OUT_SPEC_SH1 => X
+NRD_SG REBLUR_BackEnd_UnpackSh(float4 sh0, float4 sh1) {
+  NRD_SG sg;
+  sg.c0 = sh0.x;
+  sg.chroma = sh0.yz;
+  sg.normHitDist = sh0.w;
+  sg.c1 = sh1.xyz;
+  sg.sharpness = sh1.w;
+
+  return sg;
+}
+
+// OUT_DIFF_DIRECTION_HITDIST => X
+NRD_SG REBLUR_BackEnd_UnpackDirectionalOcclusion(float4 data) {
+  NRD_SG sg;
+  sg.c0 = data.w;
+  sg.chroma = float2(0, 0);
+  sg.normHitDist = data.w;
+  sg.c1 = data.xyz;
+  sg.sharpness = 0.0;
+
+  return sg;
+}
+
+//=================================================================================================================================
+// BACK-END - RELAX
+//=================================================================================================================================
+
+// OUT_DIFF_RADIANCE_HITDIST => X
+// OUT_SPEC_RADIANCE_HITDIST => X
+float4 RELAX_BackEnd_UnpackRadiance(float4 color) { return color; }
+
+// OUT_DIFF_SH0 and OUT_DIFF_SH1 => X
+// OUT_SPEC_SH0 and OUT_SPEC_SH1 => X
+NRD_SG RELAX_BackEnd_UnpackSh(float4 sh0, float4 sh1) {
+  NRD_SG sg;
+  sg.c0 = sh0.x;
+  sg.chroma = sh0.yz;
+  sg.normHitDist = sh0.w;
+  sg.c1 = sh1.xyz;
+  sg.sharpness = sh1.w;
+
+  return sg;
+}
+
+//=================================================================================================================================
+// BACK-END - SIGMA
+//=================================================================================================================================
+
+// OUT_SHADOW_TRANSLUCENCY => X
+//   SIGMA_SHADOW / SIGMA_SHADOW_TRANSLUCENCY:
+//      float shadow = SIGMA_BackEnd_UnpackShadow( OUT_SHADOW_TRANSLUCENCY ).x;
+//   SIGMA_SHADOW_TRANSLUCENCY:
+//      float3 translucentShadow = SIGMA_BackEnd_UnpackShadow(
+//      OUT_SHADOW_TRANSLUCENCY ).yzw;
+#define SIGMA_BackEnd_UnpackShadow(shadow) (shadow * shadow)
+
+//=================================================================================================================================
+// BACK-END - HIGH QUALITY RESOLVE
+//=================================================================================================================================
+
+float3 NRD_SG_ExtractColor(NRD_SG sg) {
+  return _NRD_YCoCgToLinear(float3(sg.c0, sg.chroma));
+}
+
+float3 NRD_SG_ExtractDirection(NRD_SG sg) {
+  return _NRD_SG_ExtractDirection(sg);
+}
+
+float NRD_SG_ExtractRoughnessAA(NRD_SG sg) { return sg.sharpness; }
+
+void NRD_SG_Rotate(inout NRD_SG sg, float3x3 rotation) {
+  sg.c1 = mul(rotation, sg.c1);
+}
+
+float3 NRD_SG_ResolveDiffuse(NRD_SG sg, float3 N) {
+  // https://therealmjp.github.io/posts/sg-series-part-3-diffuse-lighting-from-an-sg-light-source/
+
+#if 1
+  // Numerical integration of the resulting irradiance from an SG diffuse light
+  // source ( with sharpness of 4.0 )
+  sg.sharpness = 4.0;
+
+  float c0 = 0.36;
+  float c1 = 1.0 / (4.0 * c0);
+
+  float e = exp(-sg.sharpness);
+  float e2 = e * e;
+  float r = 1.0 / sg.sharpness;
+
+  float scale = 1.0 + 2.0 * e2 - r;
+  float bias = (e - e2) * r - e2;
+
+  float NoL = dot(N, _NRD_SG_ExtractDirection(sg));
+  float x = sqrt(saturate(1.0 - scale));
+  float x0 = c0 * NoL;
+  float x1 = c1 * x;
+  float n = x0 + x1;
+
+  float y = saturate(NoL);
+  if (abs(x0) <= x1)
+    y = n * n / x;
+
+  float Y = scale * y + bias;
+  Y *= _NRD_SG_IntegralApprox(sg);
+#else
+  // "SG light" sharpness
+  sg.sharpness =
+      2.0; // TODO: another sharpness = another normalization needed...
+
+  // Approximate NDF
+  NRD_SG ndf;
+  ndf.c0 = 1.0;
+  ndf.c1 = N;
+  ndf.sharpness = 2.0;
+  ndf.chroma = float2(0, 0);
+  ndf.normHitDist = 0;
+
+  // Non-magic scale
+  ndf.c0 *= 0.75;
+
+  // Multiply two SGs and integrate the result
+  float Y = _NRD_SG_InnerProduct(ndf, sg);
+#endif
+
+  return _NRD_YCoCgToLinear_Corrected(Y, sg.c0, sg.chroma);
+}
+
+float3 NRD_SG_ResolveSpecular(NRD_SG sg, float3 N, float3 V, float roughness) {
+  // https://therealmjp.github.io/posts/sg-series-part-4-specular-lighting-from-an-sg-light-source/
+
+  // Clamp roughness to avoid numerical imprecision
+  roughness = max(roughness, NRD_ROUGHNESS_EPS);
+
+  // "SG light" sharpness
+  sg.sharpness =
+      2.0; // TODO: another sharpness = another normalization needed...
+
+  // Approximate NDF
+  float3 H = normalize(_NRD_SG_ExtractDirection(sg) + V);
+  H = normalize(lerp(N, H, roughness)); // Fixed H // TODO: roughness => smc?
+
+  float m = roughness * roughness;
+  float m2 = m * m;
+
+  NRD_SG ndf;
+  ndf.c0 = 1.0 / (NRD_PI * m2);
+  ndf.c1 = H;
+  ndf.sharpness = 2.0 / max(m2, NRD_EPS);
+  ndf.chroma = float2(0, 0);
+  ndf.normHitDist = 0;
+
+  // Non-magic scale
+  ndf.c0 *= lerp(1.0, 0.75 * 2.0 * NRD_PI, m2);
+
+  // Warp NDF
+  NRD_SG ndfWarped;
+  ndfWarped.c0 = ndf.c0;
+  ndfWarped.c1 = reflect(-V, ndf.c1);
+  ndfWarped.sharpness = ndf.sharpness / max(4.0 * abs(dot(ndf.c1, V)), NRD_EPS);
+  ndfWarped.chroma = float2(0, 0);
+  ndfWarped.normHitDist = 0;
+
+  // Cosine term & visibility term evaluated at the center of the warped BRDF
+  // lobe
+  float NoV = abs(dot(N, V));
+  float NoL = saturate(dot(N, ndfWarped.c1));
+
+  ndfWarped.c0 *= NoL;
+  ndfWarped.c0 *= _NRD_GeometryTerm(roughness, NoL, NoV);
+
+  // Multiply two SGs and integrate the result
+  float Y = _NRD_SG_InnerProduct(ndfWarped, sg);
+
+  return _NRD_YCoCgToLinear_Corrected(Y, sg.c0, sg.chroma);
+}
+
+/*
+Offsets:
+e = int2( 1,  0 )
+w = int2(-1,  0 )
+n = int2( 0,  1 )
+s = int2( 0, -1 )
+*/
+float2 NRD_SG_ReJitter(NRD_SG diffSg, NRD_SG specSg, float3 Rf0, float3 V,
+                       float roughness, float Z, float Ze, float Zw, float Zn,
+                       float Zs, float3 N, float3 Ne, float3 Nw, float3 Nn,
+                       float3 Ns) {
+  // Clamp roughness to avoid numerical imprecision
+  roughness = max(roughness, NRD_ROUGHNESS_EPS);
+
+  // Extract Rf0 and diff & spec dominant light directions
+  float rf0 = _NRD_Luminance(Rf0);
+  float3 Ld = _NRD_SG_ExtractDirection(diffSg);
+  float3 Ls = _NRD_SG_ExtractDirection(specSg);
+
+  // Ls is accumulated, ideally it shouldn't for low roughness, but it's not a
+  // bug on the NRD side. The hack below is not needed if stochastic per-pixel
+  // jittering is used. Otherwise, the best approach is to resolve against
+  // jittered "view" vector. Despite that this approach looks very biased, it
+  // doesn't changes the energy of the output signal
+  float smc = _NRD_GetSpecMagicCurve(roughness);
+  Ls = normalize(lerp(V, Ls, smc));
+
+  // BRDF at center
+  float2 brdfCenter = _NRD_ComputeBrdfs(Ld, Ls, N, V, rf0, roughness);
+
+  // BRDFs at neighbors
+  float2 brdfAverage = _NRD_ComputeBrdfs(Ld, Ls, Ne, V, rf0, roughness);
+  brdfAverage += _NRD_ComputeBrdfs(Ld, Ls, Nn, V, rf0, roughness);
+  brdfAverage += _NRD_ComputeBrdfs(Ld, Ls, Nw, V, rf0, roughness);
+  brdfAverage += _NRD_ComputeBrdfs(Ld, Ls, Ns, V, rf0, roughness);
+
+  // Viewing angle corrected Z threshold
+  float NoV = abs(dot(N, V));
+  float zThreshold =
+      NRD_REJITTER_VIEWZ_THRESHOLD * abs(Z) / (NoV * 0.95 + 0.05);
+
+  // Sum of all weights
+  // Exploit: out of screen fetches return "0", which auto-disables resolve on
+  // screen edges
+  uint sum = abs(Ze - Z) < zThreshold && dot(Ne, N) > 0.0 ? 1 : 0;
+  sum += abs(Zn - Z) < zThreshold && dot(Nn, N) > 0.0 ? 1 : 0;
+  sum += abs(Zw - Z) < zThreshold && dot(Nw, N) > 0.0 ? 1 : 0;
+  sum += abs(Zs - Z) < zThreshold && dot(Ns, N) > 0.0 ? 1 : 0;
+
+  // Jacobian
+  float2 f = (brdfCenter * 4.0 + NRD_EPS) / (brdfAverage + NRD_EPS);
+
+  // Use re-jitter only if all samples are valid to minimize ringing
+  return sum != 4 ? float2(1, 1) : clamp(f, 1.0 / NRD_PI, NRD_PI);
+}
+
+//=================================================================================================================================
+// SPHERICAL HARMONICS ( MEDIUM QUALITY )
+//=================================================================================================================================
+
+float3 NRD_SH_ResolveDiffuse(NRD_SG sh, float3 N) {
+  float Y = dot(N, sh.c1) + 0.5 * sh.c0;
+
+  return _NRD_YCoCgToLinear_Corrected(Y, sh.c0, sh.chroma);
+}
+
+float3 NRD_SH_ResolveSpecular(NRD_SG sh, float3 N, float3 V, float roughness) {
+  float NoV = abs(dot(N, V));
+  float f = _NRD_GetSpecularDominantFactor(NoV, roughness);
+  float3 D = _NRD_GetSpecularDominantDirection(N, V, f);
+
+  float Y = dot(D, sh.c1) + 0.5 * sh.c0;
+
+  return _NRD_YCoCgToLinear_Corrected(Y, sh.c0, sh.chroma);
 }
 
 #pragma endregion

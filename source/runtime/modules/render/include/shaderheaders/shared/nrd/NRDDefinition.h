@@ -1,5 +1,24 @@
-#ifndef MOER_NRD_SHARED_H
-#define MOER_NRD_SHARED_H
+#ifndef MOER_NRD_DEFINITION_H
+#define MOER_NRD_DEFINITION_H
+
+//=============================================================================================
+// SETTINGS
+//=============================================================================================
+
+// // Fused or separate denoising selection
+// // 0 - DIFFUSE and SPECULAR
+// // 1 - DIFFUSE_SPECULAR
+// #define NRD_COMBINED 1
+
+// // NORMAL - common (non specialized) denoisers
+// // SH - SH (spherical harmonics or spherical gaussian) denoisers
+// // OCCLUSION - OCCLUSION (ambient or specular occlusion only) denoisers
+// // DIRECTIONAL_OCCLUSION - DIRECTIONAL_OCCLUSION (ambient occlusion in SH mode) denoisers
+// #define NRD_MODE          NORMAL// NORMAL, SH, OCCLUSION, DIRECTIONAL_OCCLUSION
+// #define SIGMA_TRANSLUCENT 1
+
+// Default = 0
+#define USE_SANITIZATION 0// NRD sample is NAN/INF free
 
 // NRD variant
 #define NORMAL                0
