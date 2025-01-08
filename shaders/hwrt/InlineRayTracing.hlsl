@@ -11,7 +11,6 @@ BINDLESS_BINDINGS(3, 2, 4, 5);
 #include <shared/ShaderParameters.h>
 #include <shared/utils/Packing.h>
 
-#include <nrd/NRD.hlsli>
 
 struct Param {
   uint instance_buffer_handle;
@@ -39,7 +38,7 @@ struct Param {
 [[vk::binding(5, 1)]] RWTexture2D<float4> out_specular;
 [[vk::binding(6, 1)]] RWTexture2D<float> out_view_z;
 [[vk::binding(7, 1)]] RWTexture2D<float3> out_mv;
-[[vk::binding(8, 1)]] RWTexture2D<float4> out_shadow_info;
+[[vk::binding(8, 1)]] RWTexture2D<float2> out_shadow_info;
 
 #define SKY_INTENSITY 1.0
 #define SUN_INTENSITY 8.0
@@ -395,13 +394,10 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
 
   PathTracingResult pt_result = (PathTracingResult)0;
 
-  pt_result.specular_hit_dist = NRD_FrontEnd_SpecHitDistAveraging_Begin();
-
   uint path_num = pt_desc.path_num;
   uint diffuse_path_num = 0;
 
-  [loop]
-  for (uint i = 0; i < path_num; i++) {
+  [loop] for (uint i = 0; i < path_num; i++) {
     RTHitInfo hit_info = pt_desc.hit_info;
     RTMaterialProp mat = pt_desc.mat;
 
@@ -420,8 +416,9 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
 
       is_diffuse_path = rnd < diffuse_probablility;
     }
-    [loop]
-    for (uint bounce = 1; bounce <= pt_desc.bounce_num && !hit_info.IsSky(); bounce++) {
+    [loop] for (uint bounce = 1;
+                bounce <= pt_desc.bounce_num && !hit_info.IsSky(); bounce++) {
+
       bool is_diffuse = is_diffuse_path;
       //   if(bounce > 3){
       //     printf("bounce %d\n", bounce);
@@ -435,7 +432,7 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
 
         if (bounce > 1) {
           is_diffuse = rnd < diffuse_probablility;
-          path_throughput *= abs(float(!is_diffuse) - diffuse_probablility);  // ?
+          path_throughput *= abs(float(!is_diffuse) - diffuse_probablility);
         }
         if (bounce == 1) {
           is_diffuse_path = is_diffuse;
@@ -606,21 +603,17 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
     // TODO: add ambient
 
     float norm_hit_distance = accumulate_hit_dist;
-    if (rt_config.denoiser_type != DENOISER_RELAX)
-      norm_hit_distance = REBLUR_FrontEnd_GetNormHitDist(accumulate_hit_dist, view_z, rt_config.nrd_hit_dist_params, is_diffuse_path ? 1.0 : mat.roughness);
-
     if (is_diffuse_path) {
       pt_result.diffuse_radiance += l_sum;
       pt_result.diffuse_hit_dist += norm_hit_distance;
       diffuse_path_num++;
     } else {
       pt_result.specular_radiance += l_sum;
-      NRD_FrontEnd_SpecHitDistAveraging_Add(pt_result.specular_hit_dist, norm_hit_distance);
+      pt_result.specular_hit_dist += norm_hit_distance;
       //   printf("specular path flux: %f", STL::Color::Luminance(l_sum));
     }
   }
 
-  // Material de-modulation ( convert irradiance into radiance )
   float3 albedo, Rf0;
 
   STL::BRDF::ConvertBaseColorMetalnessToAlbedoRf0(
@@ -630,10 +623,6 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
   float3 fenv = STL::BRDF::EnvironmentTerm_Rtg(Rf0, nov, pt_desc.mat.roughness);
   float3 diff_demod = (1.f - fenv) * albedo * 0.99 + 0.01;
   float3 spec_demod = fenv * 0.99 + 0.01;
-  
-  // de-modulation
-  pt_result.diffuse_radiance /= diff_demod;
-  pt_result.specular_radiance /= spec_demod;
 
   float radiance_norm = 1.f / float(pt_desc.path_num);
   pt_result.diffuse_radiance *= radiance_norm;
@@ -696,16 +685,16 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
   out_mv[pixel_pos] = motion;
 
   if (hit_info.IsSky()) {
-    // out_shadow_info[pixel_pos] = float4(0.f, 0.f, 0.f, 0.f);
+    out_shadow_info[pixel_pos] = float2(0.f, 0.f);
     out_emission[pixel_pos] = mat.l_emi;
-    // out_direct_lighting[pixel_pos] = mat.l_emi;
+    out_direct_lighting[pixel_pos] = mat.l_emi;
     return;
   }
 
   float diffuse_probablility =
       Raytracing::EstimateDiffuseProbability(hit_info, mat);
 
-  out_normal_roughness[pixel_pos] = NRD_FrontEnd_PackNormalAndRoughness(hit_info.n, mat.roughness, hit_info.GetMaterialID());
+  out_normal_roughness[pixel_pos] = float4(hit_info.n, mat.roughness);
   out_basecolor_metalness[pixel_pos] =
       float4(STL::Color::LinearToSrgb(mat.base_color), mat.metalness);
 
@@ -753,7 +742,8 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
       shadow_distance += shadow_hit_info.tmin;
     }
 
-    float4 shadow_info = float4(shadow_translucency, shadow_distance);
+    float2 shadow_info =
+        float2(shadow_distance == INF ? INF : shadow_distance, 0.f);
     out_shadow_info[pixel_pos] = shadow_info;
   }
 
@@ -769,11 +759,30 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
 
   PathTracingResult pt_result = PathTracing(pt_desc);
 
-  if (rt_config.denoiser_type == DENOISER_REBLUR) {
-    out_diffuse[pixel_pos] = REBLUR_FrontEnd_PackRadianceAndNormHitDist(pt_result.diffuse_radiance, pt_result.diffuse_hit_dist, USE_SANITIZATION);
-    out_specular[pixel_pos] = REBLUR_FrontEnd_PackRadianceAndNormHitDist(pt_result.specular_radiance, pt_result.specular_hit_dist, USE_SANITIZATION);
-  } else {
-    out_diffuse[pixel_pos] = RELAX_FrontEnd_PackRadianceAndHitDist(pt_result.diffuse_radiance, pt_result.diffuse_hit_dist, USE_SANITIZATION);
-    out_specular[pixel_pos] = RELAX_FrontEnd_PackRadianceAndHitDist(pt_result.specular_radiance, pt_result.specular_hit_dist, USE_SANITIZATION);
-  }
+  float3 l_sum = mat.l_direct * (shadow_translucency) + mat.l_emi;
+
+  // composition
+
+  float3 albedo, Rf0;
+  STL::BRDF::ConvertBaseColorMetalnessToAlbedoRf0(mat.base_color, mat.metalness,
+                                                  albedo, Rf0);
+  float3 nov = abs(dot(hit_info.n, hit_info.v));
+  float3 f_env = STL::BRDF::EnvironmentTerm_Rtg(Rf0, nov, mat.roughness);
+
+  float3 diff_demod = (1.0 - f_env) * albedo * 0.99 + 0.01;
+  float3 spec_demod = f_env * 0.99 + 0.01;
+
+  float3 l_diff = pt_result.diffuse_radiance * diff_demod;
+  float3 l_spec = pt_result.specular_radiance * spec_demod;
+
+  //   if (STL::Color::Luminance(shadow_translucency) > 0.0f)
+  //     printf("mat.l_direct %f %f %f shadow_distance %f\n", mat.l_emi,
+  //     mat.l_emi,
+  //            mat.l_emi, shadow_translucency);
+  //   out_position[pixel_pos] = float4(hit_info.x, 1.0f);
+  out_direct_lighting[pixel_pos] = l_sum + l_diff + l_spec;
+  out_diffuse[pixel_pos] =
+      float4(pt_result.diffuse_radiance, pt_result.diffuse_hit_dist);
+  out_specular[pixel_pos] =
+      float4(pt_result.specular_radiance, pt_result.specular_hit_dist);
 }
