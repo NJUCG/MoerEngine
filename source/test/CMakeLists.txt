@@ -97,22 +97,9 @@ target_link_libraries(RaytracingTest
 )
 set_target_properties(RaytracingTest PROPERTIES FOLDER ${moer_test_folder})
 
-add_executable(RaytracingSceneTest Raytracing/RTSceneTest.cpp)
-target_include_directories(RaytracingSceneTest
-        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>
-        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
-        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
-        PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Raytracing>
-)
-target_link_libraries(RaytracingSceneTest
-        PRIVATE MoerRender
-        PRIVATE glfw
-        PRIVATE MoerResource
-)
-set_target_properties(RaytracingSceneTest PROPERTIES FOLDER ${moer_test_folder})
-
 # nrd
-add_executable(NRDTest Raytracing/NRDTest.cpp Raytracing/RTUI.cpp)
+file(GLOB_RECURSE RT_NRD_TEST_CPPS RTNRD/*.cpp)
+add_executable(NRDTest ${RT_NRD_TEST_CPPS})
 target_include_directories(NRDTest
         PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>
         PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>

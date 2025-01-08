@@ -1,17 +1,25 @@
 #include <filesystem>
 #include "Core.h"
+#include "GBufferPass.h"
 #include "PixelFormat.h"
+#include "PreprocessLightPass.h"
+#include "RTResource.h"
 #include "config/ConfigManager.h"
+#include "contrib/Open3DGC/o3dgcTimer.h"
 #include "imgui.h"
 #include "math/Matrix.h"
+#include "misc/STL.h"
 #include "misc/Traits.h"
 #include "renderer/UIRenderer.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
+#include "scene/EntityManager.h"
 #include "scene/Scene.h"
 #include "scene/TransformManager.h"
+#include "scene/light/LightComponent.h"
+#include "scene/light/LightComponentManager.h"
 #include "shader/ShaderPipeline.h"
 #include "shader/ShaderResourceManager.h"
 #include "taskgraph/TaskSystem.h"
@@ -22,6 +30,8 @@
 #include "scene/Material.h"
 #include "scene/RenderableManager.h"
 #include "scene/Scene.h"
+#include "shaderheaders/shared/lighting/ShaderParameters.h"
+#include "shaderheaders/shared/utils/ShaderParameters.h"
 
 #include "RTUI.h"
 
@@ -108,9 +118,8 @@ class TestInlineRTShader : public ComputePipeline {
 public:
     struct Param {
         uint   instance_buffer_handle;
+        uint   geometry_buffer_handle;
         uint   material_buffer_handle;
-        uint   primitive_buffer_handle;
-        uint   vtx_buffer_handle;
         uint   global_param_handle;
         uint   light_buffer_handle;
         uint2  rect;
@@ -164,6 +173,25 @@ public:
     DEFINE_SHADER_ARGS(src_color, spl);
 };
 
+struct GenerateMipPdfPipeline : public ComputePipeline {
+public:
+    DEFINE_COMPUTE_PIPELINE_CLASS(GenerateMipPdfPipeline);
+    DEFINE_SHADER_TEX(env_map);
+    DEFINE_SHADER_TEX_ARRAY(integrated_mips, 10);
+    DEFINE_SHADER_CONSTANT_STRUCT(PreprocessEnvironmentMapParams, param);
+
+    DEFINE_SHADER_ARGS(env_map, integrated_mips, param);
+};
+
+struct GenerateMipsPipeline : public ComputePipeline {
+public:
+    DEFINE_COMPUTE_PIPELINE_CLASS(GenerateMipsPipeline);
+    DEFINE_SHADER_TEX_ARRAY(mips, 10);
+    DEFINE_SHADER_CONSTANT_STRUCT(BuildMipsParam, param);
+
+    DEFINE_SHADER_ARGS(mips, param);
+};
+
 int main(int argc, const char** argv) {
 
     using namespace Moer::Render;
@@ -199,17 +227,23 @@ int main(int argc, const char** argv) {
 
     Scene g_scene{};
     Resource::LoaderInterface::LoadSceneFromFileAsync(ConfigManager::GetInstance().GetScenePath(), &g_scene);
-    auto&&           load_scene_scope = OnScopeExit([&] {
+    auto&&     load_scene_scope = OnScopeExit([&] {
         Scene::ResetAsyncLoadInfo();
     });
-    BindlessArrayRef bindless_array   = g_scene.GetBindlessArray();
+    RTResource rt_res(ConfigManager::GetInstance().GetEditorResourcePath());
+    rt_res.LoadResources();
+    TextureRef         env_map = rt_res.GetDefaultEnvMap();
+    Array<TextureView> env_mips;
+    TextureRef         env_pdf = device.CreateTexture("env_pdf", env_map->GetExtent(), PF_R16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED, env_map->GetNumMips());
+    Array<TextureView> env_pdf_mips;
+    for (int i = 0; i < env_map->GetNumMips(); ++i) {
+        env_mips.push_back(env_map->GetView(i));
+        env_pdf_mips.push_back(env_pdf->GetView(i));
+    }
 
-    FenceRef copy_timeline = device.CreateFence();
+    BindlessArrayRef bindless_array = g_scene.GetBindlessArray();
 
     CommandList cmd_list;
-
-    gfx_queue.Execute(cmd_list.Submit());
-    gfx_queue.Sync();
 
     struct Vertex {
         float3 pos;
@@ -249,13 +283,58 @@ int main(int argc, const char** argv) {
                                            .Pixel("utils/CopyTexture.frag.hlsl")
                                            .Build<SampleTexturePipeline>(std::move(sample_tex_pso_info));
 
+    GenerateMipPdfPipeline sd_generate_mip_pdf = manager.Compute<GenerateMipPdfPipeline>("lighting/ProcessEnvironmentMap.hlsl");
+    GenerateMipsPipeline   sd_generate_mips    = manager.Compute<GenerateMipsPipeline>("utils/BuildMips.hlsl");
+    auto                   copy_queue_timeline = copy_queue.GetFenceHandle();
+
+    {
+        Array<ImportTexture> import_textures;
+        const auto&          rt_res_textures = rt_res.GetTextures();
+        for (auto& [name, tex] : rt_res_textures) {
+            import_textures.emplace_back(ImportTexture(tex->GetView(0, tex->GetNumMips()), ETextureState::SAMPLE));
+        }
+        cmd_list.ImportTextureFromQueue(EQueueType::Copy, std::move(import_textures));
+        gfx_queue.Execute(cmd_list.Submit().Wait(copy_queue_timeline, copy_queue_timeline->GetValue()));
+        gfx_queue.Sync();
+
+        uint width  = env_map->GetExtent().x;
+        uint height = env_map->GetExtent().y;
+
+        for (uint i = 0; i < env_map->GetNumMips(); i += 5) {
+            BuildMipsParam param{};
+            param.num_mip_levels = env_map->GetNumMips();
+            param.src_mip_level  = i;
+            param.src_size       = uint2(width, height);
+            cmd_list.Compute(sd_generate_mips, std::span<TextureView>(env_mips.data(), env_mips.size()), param).Dispatch(uint3(ceil(width / 32), ceil(height / 32), 1));
+
+            width  = std::max(1u, width >> 5);
+            height = std::max(1u, height >> 5);
+        }
+
+        PreprocessEnvironmentMapParams preprocess_param{};
+        width  = env_map->GetExtent().x;
+        height = env_map->GetExtent().y;
+        for (uint i = 0; i < env_pdf->GetNumMips(); i += 5) {
+            preprocess_param.src_mip_level  = i;
+            preprocess_param.num_mip_levels = env_pdf->GetNumMips();
+            preprocess_param.src_size       = uint2(width, height);
+            cmd_list.Compute(sd_generate_mip_pdf, env_map->GetView(0), std::span<TextureView>(env_pdf_mips.data(), env_pdf_mips.size()), preprocess_param).Dispatch(uint3(ceil(width / 32), ceil(height / 32), 1));
+            width  = std::max(1u, width >> 5);
+            height = std::max(1u, height >> 5);
+        }
+    }
+
+    // gfx_queue.Execute(cmd_list.Submit().Wait(copy_queue_timeline, copy_queue_timeline->GetValue()));
+    // gfx_queue.Sync();
+
     bool   first_load = true;
     uint   instance_buffer_handle;
+    uint   geometry_buffer_handle;
+    uint   geometry_instance_buffer_handle;
     uint   material_buffer_idx;
     uint   light_buffer_handle     = 0;
     uint64 last_io_change_timeline = 0;
     uint   view_buffer_handle      = 0;
-    auto   copy_queue_timeline     = copy_queue.GetFenceHandle();
 
     //gbuffer bdls handle
     uint bdls_tex_handle_uv      = 0;
@@ -263,9 +342,6 @@ int main(int argc, const char** argv) {
     uint bdls_tex_handle_vbuffer = 0;
     uint bdls_tex_handle_depth   = 0;
 
-    uint                         rt_vtx_handle      = 0;
-    uint                         rt_prim_handle     = 0;
-    uint                         rt_instance_handle = 0;
     Array<RaytracingGeometryRef> rt_geometries;
 
     auto   timeline = device.CreateFence();
@@ -315,16 +391,6 @@ int main(int argc, const char** argv) {
 
     TextureRef denoised_diffuse  = device.CreateTexture("denoised_diffuse", Extent2D(resolution.x, resolution.y), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
     TextureRef denoised_specular = device.CreateTexture("denoised_specular", Extent2D(resolution.x, resolution.y), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-
-    Array<TextureRef> test_bdls_texs(3);
-    Array<uint>       test_bdls_handles(3);
-    for (auto& tex : test_bdls_texs) {
-        tex = device.CreateTexture(
-            "test_bdls_tex",
-            Extent2D(1, 1),
-            PF_R8G8B8A8_SRGB,
-            ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT);
-    }
 
     auto create_frame_buffers = [&](uint2 _new_extent) {
         output = device.CreateTexture(
@@ -380,6 +446,13 @@ int main(int argc, const char** argv) {
     timer.Start();
     uint64 last_time = 0ull;
 
+    //////////////////////////////////////////////////////////////////////////
+    //passes
+    //////////////////////////////////////////////////////////////////////////
+    UniquePtr<PrepareLightPass> prepare_light_pass = MakeUnique<PrepareLightPass>(device, manager, g_scene);
+    UniquePtr<GBufferPass>      g_buffer_pass      = MakeUnique<GBufferPass>(device, manager, g_scene);
+    UniquePtr<RTContext>        rt_ctx;
+
     // nrd extension
     auto* nrd_ext       = device.LoadExtension<Ext::NRDExtension>();
     auto  nrd_interface = nrd_ext->CreateInterface(3, resolution.x, resolution.y);
@@ -424,6 +497,8 @@ int main(int argc, const char** argv) {
                 ETextureUsageFlags::COLOR_ATTACHMENT);
 
             create_frame_buffers(resolution);
+            rt_ctx->FillGBufferResources(resolution);
+            g_buffer_pass->UpdateMainView(resolution);
 
             // nrd recreation
             nrd_interface = nrd_ext->RecreateInterface(std::move(nrd_interface), resolution.x, resolution.y);
@@ -431,14 +506,32 @@ int main(int argc, const char** argv) {
 
         if (Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady()) {
             if (first_load) {
-                instance_buffer_handle = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::InstanceInfo)->GetView());
-                material_buffer_idx    = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::MaterialInfo)->GetView());
-                rt_vtx_handle          = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::RTVertex)->GetView());
-                rt_prim_handle         = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::RTPrimitive)->GetView());
-                rt_instance_handle     = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::RTInstance)->GetView());
-                view_buffer_handle     = bindless_array->AllocateBuffer(rt_view_param_buffer->GetView());
-                light_buffer_handle    = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::LightInfo)->GetView());
-                first_load             = false;
+                instance_buffer_handle          = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::InstanceInfo)->GetView());
+                geometry_buffer_handle          = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::GeometryInfo)->GetView());
+                geometry_instance_buffer_handle = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::GeometryInstance)->GetView());
+                material_buffer_idx             = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::MaterialInfo)->GetView());
+                view_buffer_handle              = bindless_array->AllocateBuffer(rt_view_param_buffer->GetView());
+                light_buffer_handle             = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::LightInfo)->GetView());
+
+                uint num_emissive_meshes, num_emissive_triangles;
+                prepare_light_pass->CountEmissiveInstances(num_emissive_meshes, num_emissive_triangles);
+
+                rt_ctx = MakeUnique<RTContext>(num_emissive_meshes, num_emissive_triangles, g_scene.GetLights().size(), g_scene.GetGeometryInstances().size(), env_map->GetExtent().xy);
+                rt_ctx->SetBindlessHandles(geometry_buffer_handle, instance_buffer_handle, material_buffer_idx);
+                rt_ctx->FillGBufferResources(resolution);
+                rt_ctx->SetRaytracingScene(rt_scene);
+                g_buffer_pass->UpdateMainView(resolution);
+
+                if (env_map) {
+                    Sampler sampler{SF_LINEAR, SAM_CLAMP_TO_BORDER};
+
+                    Moer::EnvironmentLightComponent* env_light = MoerNew(Moer::EnvironmentLightComponent)(float3(1.f));
+                    env_light->bdls_handle                     = bindless_array->AllocateTexture(env_map->GetView(0, env_map->GetNumMips()), sampler);
+
+                    auto entity = EntityManager::Get().Create();
+                    LightComponentManager::Get().Put(entity, env_light);
+                }
+                first_load = false;
 
                 cmd_list.UpdateBindlessArray(bindless_array);
                 last_io_change_timeline = copy_queue_timeline->GetValue();
@@ -448,31 +541,35 @@ int main(int argc, const char** argv) {
                 rt_geometries.reserve(g_scene.GetEntityCount());
                 Array<AccelerationStructureBuildParam> build_params;
                 build_params.reserve(g_scene.GetEntityCount());
-                auto vertex_buffer = g_scene.GetBuffer(EGpuSceneResource::RTVertex);
 
-                auto index_buffer = g_scene.GetBuffer(EGpuSceneResource::RTIndex);
                 g_scene.ForEach([&](Entity _entity) {
-                    auto&                  mesh = RenderableManager::Get().GetRTMeshInfo(_entity);
+                    auto& mesh = RenderableManager::Get().GetMeshInfo(_entity);
+
+                    const MeshBuffers&     mesh_buffers = *mesh->buffers;
                     RaytracingGeometryInfo rt_geo_info{};
                     rt_geo_info.build_flags      = ERayTracingAccelerationStructureBuildFlags::PREFER_FAST_TRACE;
                     rt_geo_info.vertex_format    = PF_R32G32B32_SFLOAT;
-                    rt_geo_info.vertex_buffer    = vertex_buffer;
-                    rt_geo_info.index_buffer     = index_buffer;
+                    rt_geo_info.vertex_buffer    = mesh_buffers.vertex_buffer;
+                    rt_geo_info.index_buffer     = mesh_buffers.index_buffer;
                     rt_geo_info.index_type       = IET_UINT32;
-                    rt_geo_info.max_vertex_count = mesh.vertex_count;
-                    rt_geo_info.primitive_count  = mesh.primitive_count;
-                    rt_geo_info.segments.emplace_back(mesh.vertex_offset, mesh.vertex_count, sizeof(RTVertex), mesh.primitive_offset, mesh.primitive_count);
+                    rt_geo_info.max_vertex_count = mesh->vtx_count;
+                    rt_geo_info.primitive_count  = mesh->idx_count / 3;
+
+                    for (uint i = 0; i < mesh->geometries.size(); i++) {
+                        uint vtx_offset = mesh->vtx_offset + mesh->geometries[i]->local_vtx_offset;
+                        uint vtx_count  = mesh->geometries[i]->local_vtx_count;
+                        uint idx_offset = mesh->idx_offset + mesh->geometries[i]->local_idx_offset;
+                        uint idx_count  = mesh->geometries[i]->local_idx_count;
+
+                        rt_geo_info.segments.emplace_back(0, 0, vtx_offset, vtx_count, sizeof(float3), idx_offset / 3, idx_count / 3);
+                    }
 
                     RaytracingGeometryRef blas = device.CreateRaytracingGeometry(rt_geo_info);
                     rt_geometries.push_back(blas);
 
-                    auto prim = RenderableManager::Get().GetRenderPrimitive(_entity);
-
                     auto& instance     = rt_scene->AddInstance();
                     instance.geom      = blas;
                     instance.transform = TransformManager::Get().Get(_entity).GetMatrix3x4();
-
-                    LOG_INFO("instance transform w {} {} {} ", instance.transform.r0.w, instance.transform.r1.w, instance.transform.r2.w);
 
                     instance.flag.need_create = true;
                     instance.custom_index     = instance.instance_id;
@@ -515,7 +612,11 @@ int main(int argc, const char** argv) {
             rt_config_param.world2view_prev = camera->GetViewMatrix();
             rt_config_param.world2clip_prev = camera->GetProjectionMatrix() * camera->GetViewMatrix();
 
+            g_buffer_pass->PreTickCamera();
+
             camera->Tick();
+
+            g_buffer_pass->Process(cmd_list, *rt_ctx);
 
             rt_view_param.view2world = camera->GetToWorldMatrix();
             rt_view_param.world2view = camera->GetViewMatrix();
@@ -542,17 +643,19 @@ int main(int argc, const char** argv) {
             cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)&rt_config_param, sizeof(RTConfigParam)), rt_config_param_buffer->GetView());
 
             cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)&rt_view_param, sizeof(RTViewParam)), rt_view_param_buffer->GetView());
+
+            prepare_light_pass->Process(cmd_list, *rt_ctx);
+
             TestInlineRTShader::Param param;
-            param.global_param_handle     = view_buffer_handle;
-            param.material_buffer_handle  = material_buffer_idx;
-            param.instance_buffer_handle  = rt_instance_handle;
-            param.primitive_buffer_handle = rt_prim_handle;
-            param.vtx_buffer_handle       = rt_vtx_handle;
-            param.light_buffer_handle     = light_buffer_handle;
-            param.rect                    = uint2(resolution.x, resolution.y);
-            param.inv_rect                = float2(1.f / resolution.x, 1.f / resolution.y);
-            param.jitter                  = float2(0, 0);
-            param.frame_idx               = time;
+            param.global_param_handle    = view_buffer_handle;
+            param.material_buffer_handle = material_buffer_idx;
+            param.instance_buffer_handle = instance_buffer_handle;
+            param.geometry_buffer_handle = geometry_buffer_handle;
+            param.light_buffer_handle    = light_buffer_handle;
+            param.rect                   = uint2(resolution.x, resolution.y);
+            param.inv_rect               = float2(1.f / resolution.x, 1.f / resolution.y);
+            param.jitter                 = float2(0, 0);
+            param.frame_idx              = time;
 
             cmd_list.Compute(rt_shader,
                              param,
@@ -567,7 +670,7 @@ int main(int argc, const char** argv) {
                              out_mv,
                              out_shadow_info,
                              bindless_array,
-                             rt_scene)
+                             rt_scene->GetTlas())
                 .Dispatch(uint3((resolution.x + 15) >> 4, (resolution.y + 15) >> 4, 1), "PathTracing");
 
             // denoise
@@ -595,10 +698,6 @@ int main(int argc, const char** argv) {
         // cmd_list.UpdateRaytracingScene(rt_scene);
         Sampler linear_sampler{SF_LINEAR, SAM_CLAMP_TO_BORDER};
 
-        if (time >= 3) {
-            bindless_array->FreeTexture(test_bdls_handles[time % 3]);
-        }
-        test_bdls_handles[time % 3] = bindless_array->AllocateTexture(test_bdls_texs[time % 3], linear_sampler);
         cmd_list.UpdateBindlessArray(bindless_array);
         if (rt_ui.IsSeperateWindow() && rt_ui.GetWindowFrameBuffer().GetTexture()) {
             auto frame_buffer = rt_ui.GetWindowFrameBuffer();
@@ -618,6 +717,7 @@ int main(int argc, const char** argv) {
                       ColorAttachment(output));
         }
         gui.RenderGUI(cmd_list, output);
+        rt_scene->AdvanceFrame();
 
         time++;
         gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time));
