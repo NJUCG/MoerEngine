@@ -389,7 +389,7 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
   RTViewParam view =
       ArrayBuffer(param.global_param_handle).Load<RTViewParam>(0);
 
-  float view_z = mul(view.world2view, float4(pt_desc.hit_info.x, 1.f)).z;
+  float view_z = mul(float4(pt_desc.hit_info.x, 1.f), view.world2view).z;
 
   // Pathtracing from primary hit
 
@@ -400,8 +400,7 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
   uint path_num = pt_desc.path_num;
   uint diffuse_path_num = 0;
 
-  [loop]
-  for (uint i = 0; i < path_num; i++) {
+  [loop] for (uint i = 0; i < path_num; i++) {
     RTHitInfo hit_info = pt_desc.hit_info;
     RTMaterialProp mat = pt_desc.mat;
 
@@ -420,8 +419,8 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
 
       is_diffuse_path = rnd < diffuse_probablility;
     }
-    [loop]
-    for (uint bounce = 1; bounce <= pt_desc.bounce_num && !hit_info.IsSky(); bounce++) {
+    [loop] for (uint bounce = 1;
+                bounce <= pt_desc.bounce_num && !hit_info.IsSky(); bounce++) {
       bool is_diffuse = is_diffuse_path;
       //   if(bounce > 3){
       //     printf("bounce %d\n", bounce);
@@ -435,7 +434,8 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
 
         if (bounce > 1) {
           is_diffuse = rnd < diffuse_probablility;
-          path_throughput *= abs(float(!is_diffuse) - diffuse_probablility);  // ?
+          path_throughput *=
+              abs(float(!is_diffuse) - diffuse_probablility); // ?
         }
         if (bounce == 1) {
           is_diffuse_path = is_diffuse;
@@ -607,16 +607,21 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
 
     float norm_hit_distance = accumulate_hit_dist;
     if (rt_config.denoiser_type != DENOISER_RELAX)
-      norm_hit_distance = REBLUR_FrontEnd_GetNormHitDist(accumulate_hit_dist, view_z, rt_config.nrd_hit_dist_params, is_diffuse_path ? 1.0 : mat.roughness);
+      norm_hit_distance = REBLUR_FrontEnd_GetNormHitDist(
+          accumulate_hit_dist, view_z, rt_config.nrd_hit_dist_params,
+          is_diffuse_path ? 1.0 : mat.roughness);
 
-    if (is_diffuse_path) {
-      pt_result.diffuse_radiance += l_sum;
-      pt_result.diffuse_hit_dist += norm_hit_distance;
-      diffuse_path_num++;
-    } else {
-      pt_result.specular_radiance += l_sum;
-      NRD_FrontEnd_SpecHitDistAveraging_Add(pt_result.specular_hit_dist, norm_hit_distance);
-      //   printf("specular path flux: %f", STL::Color::Luminance(l_sum));
+    if (!(any(isnan(l_sum)) || any(isinf(l_sum)))) {
+      if (is_diffuse_path) {
+        pt_result.diffuse_radiance += l_sum;
+        pt_result.diffuse_hit_dist += norm_hit_distance;
+        diffuse_path_num++;
+      } else {
+        pt_result.specular_radiance += l_sum;
+        NRD_FrontEnd_SpecHitDistAveraging_Add(pt_result.specular_hit_dist,
+                                              norm_hit_distance);
+        //   printf("specular path flux: %f", STL::Color::Luminance(l_sum));
+      }
     }
   }
 
@@ -630,7 +635,7 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
   float3 fenv = STL::BRDF::EnvironmentTerm_Rtg(Rf0, nov, pt_desc.mat.roughness);
   float3 diff_demod = (1.f - fenv) * albedo * 0.99 + 0.01;
   float3 spec_demod = fenv * 0.99 + 0.01;
-  
+
   // de-modulation
   pt_result.diffuse_radiance /= diff_demod;
   pt_result.specular_radiance /= spec_demod;
@@ -687,7 +692,10 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
   RTMaterialProp mat = GetMaterialProps(hit_info);
 
   // view z
-  float view_z = mul(view.world2view, float4(hit_info.x, 1.f)).z;
+  float view_z = mul(float4(hit_info.x, 1.f), view.world2view).z;
+  // if(view_z < 0.f){
+  //   printf("view_z %f\n", view_z);
+  // }
   view_z = hit_info.IsSky() ? STL::Math::Sign(view_z) * INF : view_z;
   out_view_z[pixel_pos] = view_z;
 
@@ -698,14 +706,14 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
   if (hit_info.IsSky()) {
     // out_shadow_info[pixel_pos] = float4(0.f, 0.f, 0.f, 0.f);
     out_emission[pixel_pos] = mat.l_emi;
-    // out_direct_lighting[pixel_pos] = mat.l_emi;
     return;
   }
 
   float diffuse_probablility =
       Raytracing::EstimateDiffuseProbability(hit_info, mat);
 
-  out_normal_roughness[pixel_pos] = NRD_FrontEnd_PackNormalAndRoughness(hit_info.n, mat.roughness, hit_info.GetMaterialID());
+  out_normal_roughness[pixel_pos] = NRD_FrontEnd_PackNormalAndRoughness(
+      hit_info.n, mat.roughness, hit_info.GetMaterialID());
   out_basecolor_metalness[pixel_pos] =
       float4(STL::Color::LinearToSrgb(mat.base_color), mat.metalness);
 
@@ -770,10 +778,18 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
   PathTracingResult pt_result = PathTracing(pt_desc);
 
   if (rt_config.denoiser_type == DENOISER_REBLUR) {
-    out_diffuse[pixel_pos] = REBLUR_FrontEnd_PackRadianceAndNormHitDist(pt_result.diffuse_radiance, pt_result.diffuse_hit_dist, USE_SANITIZATION);
-    out_specular[pixel_pos] = REBLUR_FrontEnd_PackRadianceAndNormHitDist(pt_result.specular_radiance, pt_result.specular_hit_dist, USE_SANITIZATION);
+    out_diffuse[pixel_pos] = REBLUR_FrontEnd_PackRadianceAndNormHitDist(
+        pt_result.diffuse_radiance, pt_result.diffuse_hit_dist,
+        USE_SANITIZATION);
+    out_specular[pixel_pos] = REBLUR_FrontEnd_PackRadianceAndNormHitDist(
+        pt_result.specular_radiance, pt_result.specular_hit_dist,
+        USE_SANITIZATION);
   } else {
-    out_diffuse[pixel_pos] = RELAX_FrontEnd_PackRadianceAndHitDist(pt_result.diffuse_radiance, pt_result.diffuse_hit_dist, USE_SANITIZATION);
-    out_specular[pixel_pos] = RELAX_FrontEnd_PackRadianceAndHitDist(pt_result.specular_radiance, pt_result.specular_hit_dist, USE_SANITIZATION);
+    out_diffuse[pixel_pos] = RELAX_FrontEnd_PackRadianceAndHitDist(
+        pt_result.diffuse_radiance, pt_result.diffuse_hit_dist,
+        USE_SANITIZATION);
+    out_specular[pixel_pos] = RELAX_FrontEnd_PackRadianceAndHitDist(
+        pt_result.specular_radiance, pt_result.specular_hit_dist,
+        USE_SANITIZATION);
   }
 }

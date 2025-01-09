@@ -191,7 +191,7 @@ int main(int argc, const char** argv) {
     RenderDevice::Init(std::move(info));
     auto&           device = RenderDevice::Get();
     ShaderManager   manager(device);
-    uint2           resolution = {1280, 720};
+    uint2           resolution = {1920, 1080};
     SurfaceInitInfo surface_info("Vulkan", resolution.x, resolution.y, "RaytracingTest", false);
     WindowContext::Init(surface_info);
     auto&& scope_exit    = OnScopeExit([&] {
@@ -573,9 +573,14 @@ int main(int argc, const char** argv) {
                 }
 
                 cmd_list.ImportTextureFromQueue(EQueueType::Copy, std::move(sampled_textures));
+                cmd_list.UpdateRaytracingScene(rt_scene);
 
                 // cmd_list.UpdateRaytracingScene(rt_scene);
                 gfx_queue.Execute(cmd_list.Submit().Wait(copy_queue_timeline, last_io_change_timeline));
+                gfx_queue.Sync();
+                rt_scene->AdvanceFrame();
+                cmd_list.UpdateRaytracingScene(rt_scene);
+                gfx_queue.Execute(cmd_list.Submit());
                 gfx_queue.Sync();
             }
 
@@ -664,6 +669,7 @@ int main(int argc, const char** argv) {
         Sampler linear_sampler{SF_LINEAR, SAM_CLAMP_TO_BORDER};
 
         cmd_list.UpdateBindlessArray(bindless_array);
+
         if (rt_ui.IsSeperateWindow() && rt_ui.GetWindowFrameBuffer().GetTexture()) {
             auto frame_buffer = rt_ui.GetWindowFrameBuffer();
             auto scene_res    = rt_ui.GetSceneColorResolution();
@@ -681,6 +687,8 @@ int main(int argc, const char** argv) {
                       {SingleDrawParam(3, 1, 0, 0, 0)},
                       ColorAttachment(output));
         }
+        gui.RenderGUI(cmd_list, output);
+
         // {
         //     for (uint i = 0; i < env_map->GetNumMips(); i += 5) {
         //         BuildMipsParam param{};
@@ -690,7 +698,6 @@ int main(int argc, const char** argv) {
         //         cmd_list.Compute(sd_generate_mips, std::span<TextureView>(env_mips.data(), env_mips.size()), param).Dispatch(uint3(env_map->GetExtent().x, env_map->GetExtent().y, 1));
         //     }
         // }
-        gui.RenderGUI(cmd_list, output);
         rt_scene->AdvanceFrame();
 
         time++;

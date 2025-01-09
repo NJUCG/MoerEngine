@@ -777,6 +777,8 @@ namespace Moer::Render {
 
         bool HasGeometry(uint64 _handle) const { return related_geometries.find(_handle) != related_geometries.end(); }
 
+        bool ForceUpdate() const { return b_full_refit; }
+
     private:
         uint64      scene_handle;
         Array<uint> instance_to_update_ids;

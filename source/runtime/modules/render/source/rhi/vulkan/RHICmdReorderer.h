@@ -604,7 +604,7 @@ namespace Moer::Render {
                     }
                 }
 
-                else if constexpr (std::is_same_v<T, RaytracingSceneRef>) {
+                else if constexpr (std::is_same_v<T, RaytracingTlasRef>) {
                     EmplaceArg((uint64)(_arg.Get()), ResourceType::Accel, Range{}, false);
                 } else if constexpr (std::is_same_v<T, BindlessArrayRef>) {
                     for (auto&& res : m_write_resources) {
@@ -839,14 +839,14 @@ namespace Moer::Render {
         }
 
         void VisitCmd(const UpdateRaytracingSceneCmd* _cmd) {
-            if (_cmd->InstancesToUpdate().size() == 0) {
+            if (_cmd->InstancesToUpdate().size() == 0 && !_cmd->ForceUpdate()) {
                 return;
             }
-            int64 layer        = SetWrite((uint64)_cmd->SceneHandle(), Range(0), ResourceType::Accel);
-            auto* scene_handle = static_cast<NoRangeHandle*>(GetHandle((uint64)_cmd->SceneHandle(), ResourceType::Accel));
+            int64 layer       = SetWrite((uint64)_cmd->TlasHandle(), Range(0), ResourceType::Accel);
+            auto* tlas_handle = static_cast<NoRangeHandle*>(GetHandle((uint64)_cmd->TlasHandle(), ResourceType::Accel));
 
             {
-                layer = GetLastLayerWrite(scene_handle);
+                layer = GetLastLayerWrite(tlas_handle);
             }
             for (const uint64& handle : m_writed_geometry) {
                 if (_cmd->HasGeometry(handle)) {
@@ -865,8 +865,8 @@ namespace Moer::Render {
                 }
             }
 
-            scene_handle->view.write_layer = layer;
-            scene_handle->view.read_layer  = layer;
+            tlas_handle->view.write_layer = layer;
+            tlas_handle->view.read_layer  = layer;
 
             AddCmd(_cmd, layer);
         }

@@ -243,7 +243,7 @@ int main(int argc, const char** argv) {
     RenderDevice::Init(std::move(info));
     auto&           device = RenderDevice::Get();
     ShaderManager   manager(device);
-    uint2           resolution = {1280, 720};
+    uint2           resolution = {1920, 1080};
     SurfaceInitInfo surface_info("Vulkan", resolution.x, resolution.y, "RaytracingTest", false);
     WindowContext::Init(surface_info);
     auto&& scope_exit    = OnScopeExit([&] {

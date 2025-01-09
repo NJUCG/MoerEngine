@@ -206,9 +206,9 @@ namespace Moer::Render {
 
                 else if constexpr (std::is_same_v<T, BindlessArrayRef>) {
                     HandleBindless(_arg, _pipelines);
-                } else if constexpr (std::is_same_v<T, RaytracingSceneRef>) {
-                    VulkanRaytracingScene* vk_as = ResourceCast(_arg.Get());
-                    tracker.RecordState(vk_as->tlas->underlying_buffer, VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR, _pipelines);
+                } else if constexpr (std::is_same_v<T, RaytracingTlasRef>) {
+                    VulkanAccelerationStructure* vk_as = ResourceCast(_arg.Get());
+                    tracker.RecordState(vk_as->underlying_buffer, VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR, _pipelines);
                 }
             },
                        _arg);
@@ -364,7 +364,7 @@ namespace Moer::Render {
         }
 
         void Visit(const UpdateRaytracingSceneCmd* _cmd) {
-            if (_cmd->InstancesToUpdate().empty()) {
+            if (_cmd->InstancesToUpdate().empty() && !_cmd->ForceUpdate()) {
                 return;
             }
             //instance buffer
@@ -372,7 +372,12 @@ namespace Moer::Render {
             VulkanBuffer*                scratch_buffer  = reinterpret_cast<VulkanBuffer*>(_cmd->ScratchBufferHandle());
             VulkanAccelerationStructure* tlas            = reinterpret_cast<VulkanAccelerationStructure*>(_cmd->TlasHandle());
 
-            tracker.RecordState(instance_buffer, {VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT});
+            if (_cmd->ForceUpdate() && _cmd->InstancesToUpdate().empty()) {
+                tracker.RecordState(instance_buffer, {VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR});
+            } else {
+                tracker.RecordState(instance_buffer, {VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT});
+            }
+            // tracker.RecordState(instance_buffer, {VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT});
             tracker.RecordState(scratch_buffer, {VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR | VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR});
             tracker.RecordState(tlas->underlying_buffer, {VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR});
 
@@ -1245,53 +1250,54 @@ namespace Moer::Render {
             VulkanBuffer*                scratch_buffer  = reinterpret_cast<VulkanBuffer*>(_cmd.ScratchBufferHandle());
             VulkanAccelerationStructure* tlas            = reinterpret_cast<VulkanAccelerationStructure*>(_cmd.TlasHandle());
 
-            if (to_update.size() == 0) {
+            if (to_update.size() == 0 && !_cmd.ForceUpdate()) {
                 return;
             }
             // VulkanRaytracingScene* scene   = reinterpret_cast<VulkanRaytracingScene*>(_cmd.Handle());
-            BufferView staging = allocator.AllocateShaderBuffer(to_update.size() * sizeof(VkAccelerationStructureInstanceKHR));
-            BufferView indices = allocator.AllocateShaderBuffer(to_update.size() * sizeof(uint32) * 2);
+            if (to_update.size() != 0) {
+                BufferView staging = allocator.AllocateShaderBuffer(to_update.size() * sizeof(VkAccelerationStructureInstanceKHR));
+                BufferView indices = allocator.AllocateShaderBuffer(to_update.size() * sizeof(uint32) * 2);
 
-            Array<std::pair<uint, uint>> to_update_indices(to_update.size());
+                Array<std::pair<uint, uint>> to_update_indices(to_update.size());
 
-            for (size_t i = 0; i < to_update.size(); ++i) {
-                const auto& id       = to_update[i];
-                to_update_indices[i] = {i, id};
+                for (size_t i = 0; i < to_update.size(); ++i) {
+                    const auto& id       = to_update[i];
+                    to_update_indices[i] = {i, id};
+                }
+
+                cmd_list.CopyData(staging, _cmd.InstanceData().data(), to_update.size() * sizeof(VkAccelerationStructureInstanceKHR));
+                cmd_list.CopyData(indices, to_update_indices.data(), to_update.size() * sizeof(uint32) * 2);
+
+                auto& shuffle_sd = m_device->internal_shaders->sd_component_shuffle;
+                cmd_list.SetPso(shuffle_sd.handle);
+
+                ComponentShuffleShader::Arg arg;
+                arg.component_cnt = to_update.size();
+                arg.stride        = sizeof(VkAccelerationStructureInstanceKHR) >> 2;
+
+                cmd_list.BindDescriptors(shuffle_sd.handle, shuffle_sd.SetArgs(arg, indices, staging, instance_buffer->GetView()));
+
+                cmd_list.Dispatch((to_update.size() + 63) / 64, 1, 1);
+
+                VkBufferMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
+                barrier.srcAccessMask       = VK_ACCESS_2_SHADER_WRITE_BIT;
+                barrier.dstAccessMask       = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+                barrier.srcStageMask        = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT_KHR;
+                barrier.dstStageMask        = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+                barrier.buffer              = instance_buffer->GetHandle();
+                barrier.offset              = 0;
+                barrier.size                = VK_WHOLE_SIZE;
+                barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+
+                VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                dependency.bufferMemoryBarrierCount = 1;
+                dependency.pBufferMemoryBarriers    = &barrier;
+
+                vkCmdPipelineBarrier2(cmd_list.GetHandle(), &dependency);
+                tracker.FlushSrcState(instance_buffer, VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR);
+                // tracker.RecordState(instance_buffer, {VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR});
             }
-
-            cmd_list.CopyData(staging, _cmd.InstanceData().data(), to_update.size() * sizeof(VkAccelerationStructureInstanceKHR));
-            cmd_list.CopyData(indices, to_update_indices.data(), to_update.size() * sizeof(uint32) * 2);
-
-            auto& shuffle_sd = m_device->internal_shaders->sd_component_shuffle;
-            cmd_list.SetPso(shuffle_sd.handle);
-
-            ComponentShuffleShader::Arg arg;
-            arg.component_cnt = to_update.size();
-            arg.stride        = sizeof(VkAccelerationStructureInstanceKHR) >> 2;
-
-            cmd_list.BindDescriptors(shuffle_sd.handle, shuffle_sd.SetArgs(arg, indices, staging, instance_buffer->GetView()));
-
-            cmd_list.Dispatch((to_update.size() + 63) / 64, 1, 1);
-
-            VkBufferMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
-            barrier.srcAccessMask       = VK_ACCESS_2_SHADER_WRITE_BIT;
-            barrier.dstAccessMask       = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-            barrier.srcStageMask        = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT_KHR;
-            barrier.dstStageMask        = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
-            barrier.buffer              = instance_buffer->GetHandle();
-            barrier.offset              = 0;
-            barrier.size                = VK_WHOLE_SIZE;
-            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-
-            VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-            dependency.bufferMemoryBarrierCount = 1;
-            dependency.pBufferMemoryBarriers    = &barrier;
-
-            vkCmdPipelineBarrier2(cmd_list.GetHandle(), &dependency);
-            tracker.FlushSrcState(instance_buffer, VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR);
-            // tracker.RecordState(instance_buffer, {VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR});
-
             VkAccelerationStructureBuildGeometryInfoKHR build_info{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
             build_info.dstAccelerationStructure = tlas->handle;
             build_info.type                     = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;

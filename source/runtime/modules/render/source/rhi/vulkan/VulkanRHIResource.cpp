@@ -2135,33 +2135,39 @@ namespace Moer::Render {
             RefitInstanceBuffer();
             b_full_refit = true;
         }
-        b_full_refit |= RefitTLASAndScratchBuffer();
+        bool b_need_force_build = RefitTLASAndScratchBuffer();
 
-        for(auto prev_idx : prev_modified_instance_ids){
-            if(!temp_modified_instance_ids.contains(prev_idx)){
-                temp_update_instance_ids.push_back(prev_idx);
-            }
+        // for(auto prev_idx : prev_modified_instance_ids){
+        //     if(!temp_modified_instance_ids.contains(prev_idx)){
+        //         temp_update_instance_ids.push_back(prev_idx);
+        //     }
+        // }
+        if(!prev_modified_instance_ids.empty()){
+            b_need_force_build = true;
         }
+
         prev_modified_instance_ids.clear();
 
-        b_current_full_refit |= b_full_refit;
 
-        if(b_prev_full_refit){
-            b_full_refit = true;
-            b_prev_full_refit = false;
-        }
+        // b_current_full_refit |= b_full_refit;
+
+        // if(b_prev_full_refit){
+        //     b_full_refit = true;
+        //     b_prev_full_refit = false;
+        // }
 
         if(b_full_refit){
             temp_update_instances.reserve(instances.size() * sizeof(VkAccelerationStructureInstanceKHR));
             std::span<byte> temp_span((byte*)vk_instances.data(), vk_instances.size() * sizeof(VkAccelerationStructureInstanceKHR));
-            temp_update_instances.insert(temp_update_instances.begin(), temp_span.begin(), temp_span.end());
 
             temp_update_instance_ids.clear();
             for(uint i = 0; i < instances.size(); i++){
                 temp_update_instance_ids.push_back(i);
             }
-            
-        }else{
+
+        }
+        
+        {
 
             temp_update_instances.resize(temp_update_instance_ids.size() * sizeof(VkAccelerationStructureInstanceKHR));
             //update cpu size vk_instance datas
@@ -2203,20 +2209,21 @@ namespace Moer::Render {
             std::move(temp_update_instance_ids),
             std::move(temp_update_instances),
             vk_instances.size(),
-            b_full_refit);
+            b_full_refit || b_need_force_build);
     }
 
     void VulkanRaytracingScene::AdvanceFrame(){  
         
         assert(prev_modified_instance_ids.empty() && "There are still modified instances not updated, call UpdateScene() first");
-        assert(!b_prev_full_refit && "There are still modified instances not updated, call UpdateScene() first");
         
         prev_modified_instance_ids.swap( temp_modified_instance_ids);
-        b_prev_full_refit = b_current_full_refit;
         b_current_full_refit = false;
 
         std::swap(prev_instance_capacity, instance_capacity);
+        prev_size_infos.build_scratch_size = size_infos.build_scratch_size;
+        prev_size_infos.update_scratch_size = size_infos.update_scratch_size;
         std::swap(prev_size_infos, size_infos);
+
         std::swap(prev_tlas, tlas);
     }
 
@@ -2331,17 +2338,17 @@ namespace Moer::Render {
                 create_info.size = tlas->underlying_buffer->GetByteSize();
                 VK_CHECK_RESULT(vkCreateAccelerationStructureKHR(m_device->GetDevice(), &create_info, nullptr, &tlas->handle));
                 
-                //create previous tlas
-                if(prev_size_infos.result_size == 0){
+                // //create previous tlas
+                // if(prev_size_infos.result_size == 0){
                     
-                    VK_CHECK_RESULT(vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &current_handle, &alloc, nullptr));
-                    prev_tlas = MoerNew(VulkanAccelerationStructure)(*m_device, *this);
-                    prev_tlas->underlying_buffer = MoerNew(VulkanBuffer)(BufferInfo{buffer_ci.size, 1, EBufferUsageFlags::ACCELERATION_STRUCTURE}, *m_device, current_handle, alloc, false, true);
-                    prev_tlas->underlying_buffer->SetName("TLAS underly buffer Pong");
-                    create_info.buffer = prev_tlas->underlying_buffer->GetHandle();
-                    VK_CHECK_RESULT(vkCreateAccelerationStructureKHR(m_device->GetDevice(), &create_info, nullptr, &prev_tlas->handle));
-                    prev_size_infos = build_sizes_info;
-                }
+                //     VK_CHECK_RESULT(vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &current_handle, &alloc, nullptr));
+                //     prev_tlas = MoerNew(VulkanAccelerationStructure)(*m_device, *this);
+                //     prev_tlas->underlying_buffer = MoerNew(VulkanBuffer)(BufferInfo{buffer_ci.size, 1, EBufferUsageFlags::ACCELERATION_STRUCTURE}, *m_device, current_handle, alloc, false, true);
+                //     prev_tlas->underlying_buffer->SetName("TLAS underly buffer Pong");
+                //     create_info.buffer = prev_tlas->underlying_buffer->GetHandle();
+                //     VK_CHECK_RESULT(vkCreateAccelerationStructureKHR(m_device->GetDevice(), &create_info, nullptr, &prev_tlas->handle));
+                //     prev_size_infos = build_sizes_info;
+                // }
             }
             size_infos = build_sizes_info;
             return true;

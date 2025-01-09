@@ -1078,9 +1078,11 @@ namespace Moer::Render {
     public:
         RaytracingSizeInfos size_infos{};
         RaytracingSizeInfos prev_size_infos{};
-        VulkanAccelRef      tlas           = nullptr;
-        VulkanAccelRef      prev_tlas      = nullptr;
-        VulkanBufferRef     scratch_buffer = nullptr;
+
+    private:
+        VulkanAccelRef  tlas           = nullptr;
+        VulkanAccelRef  prev_tlas      = nullptr;
+        VulkanBufferRef scratch_buffer = nullptr;
 
         VulkanBufferRef instance_buffer = nullptr;
 
@@ -1091,9 +1093,7 @@ namespace Moer::Render {
 
         std::mutex                 geom_mutex;
         UnorderedMap<uint64, uint> related_geometries;
-
-        bool b_prev_full_refit    = false;
-        bool b_current_full_refit = false;
+        bool                       b_current_full_refit = false;
 
     private:
         uint instance_capacity      = 1000;

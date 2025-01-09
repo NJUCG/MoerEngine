@@ -107,7 +107,7 @@ namespace Moer::Render::Ext {
         nrd_common_settings.rectOrigin[0]                       = 0;
         nrd_common_settings.rectOrigin[1]                       = 0;
         nrd_common_settings.timeDeltaBetweenFrames              = 0.0f;
-        nrd_common_settings.denoisingRange                      = 1000.0f;
+        nrd_common_settings.denoisingRange                      = 50000.0f;
         nrd_common_settings.disocclusionThreshold               = 0.01f;
         nrd_common_settings.disocclusionThresholdAlternate      = 0.05f;
         nrd_common_settings.splitScreen                         = 0.0f;

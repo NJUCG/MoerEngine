@@ -388,7 +388,7 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
   RTViewParam view =
       ArrayBuffer(param.global_param_handle).Load<RTViewParam>(0);
 
-  float view_z = mul(view.world2view, float4(pt_desc.hit_info.x, 1.f)).z;
+  float view_z = mul(float4(pt_desc.hit_info.x, 1.f), view.world2view).z;
 
   // Pathtracing from primary hit
 
@@ -676,7 +676,7 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
   RTMaterialProp mat = GetMaterialProps(hit_info);
 
   // view z
-  float view_z = mul(view.world2view, float4(hit_info.x, 1.f)).z;
+  float view_z = mul(float4(hit_info.x, 1.f), view.world2view).z;
   view_z = hit_info.IsSky() ? STL::Math::Sign(view_z) * INF : view_z;
   out_view_z[pixel_pos] = view_z;
 
