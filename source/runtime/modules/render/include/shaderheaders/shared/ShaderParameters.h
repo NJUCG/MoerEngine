@@ -30,7 +30,6 @@ namespace Moer {
     //local light initial sample mode
     static CONST uint s_di_local_light_sample_mode_uniform   = 0;
     static CONST uint s_di_local_light_sample_mode_power_ris = 1;//power based ris
-    static CONST uint s_di_local_light_sample_mode_grid      = 2;//grid based
 
     static CONST uint s_invalid_light_idx = 0xffffffffu;
 #ifdef __cplusplus
@@ -140,6 +139,11 @@ namespace Moer {
         uint geo_instance_to_light;
         uint local_light_pdf;
         uint env_pdf;
+
+        uint env_map;
+        uint padding0;
+        uint padding1;
+        uint padding2;
     };
 
     struct SceneGlobalParams {
@@ -156,12 +160,12 @@ namespace Moer {
         RaytracingBindlessHandles bindless_handles;
 
         SceneGlobalParams          scene_params;
-        DI::LightBufferParams      light_buffer;
+        DI::LightBufferParams      light_buffer_params;
         DI::RISBufferSegmentParams local_light_ris_buffer_params;
         DI::RISBufferSegmentParams env_light_ris_buffer_params;
 
         DI::ReSTIRDIParams restir_di_params;
-        GridLights::Params grid_light_params;
+        Grid::Params       grid_params;
 
         uint frame_idx;
         uint enable_accumulation;

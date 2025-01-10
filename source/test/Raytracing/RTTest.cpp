@@ -225,7 +225,6 @@ int main(int argc, const char** argv) {
                                        std::atomic_thread_fence(std::memory_order_acq_rel);
                                        b_new_env_map = true;
                                    }).Dispatch();
-    // rt_res.LoadResources();
 
     TextureRef         env_map{};
     Array<TextureView> env_mips;
@@ -277,9 +276,6 @@ int main(int argc, const char** argv) {
                                            .Pixel("utils/CopyTexture.frag.hlsl")
                                            .Build<SampleTexturePipeline>(std::move(sample_tex_pso_info));
 
-    // GenerateMipPdfPipeline sd_generate_mip_pdf = manager.Compute<GenerateMipPdfPipeline>("lighting/ProcessEnvironmentMap.hlsl");
-    // GenerateMipsPipeline   sd_generate_mips    = manager.Compute<GenerateMipsPipeline>("utils/BuildMips.hlsl");
-
     ShaderUtils sd_utils(device, manager);
 
     ImportantSamplingParams is_params{};
@@ -288,40 +284,6 @@ int main(int argc, const char** argv) {
         is_ctx(is_params);
 
     auto copy_queue_timeline = copy_queue.GetFenceHandle();
-
-    {
-
-        // uint width  = env_map->GetExtent().x;
-        // uint height = env_map->GetExtent().y;
-
-        // for (uint i = 0; i < env_map->GetNumMips(); i += 5) {
-        //     BuildMipsParam param{};
-        //     param.num_mip_levels = env_map->GetNumMips();
-        //     param.src_mip_level  = i;
-        //     param.src_size       = uint2(width, height);
-        //     cmd_list.Compute(sd_utils.GetGenerateMipsPipeline(), std::span<TextureView>(env_mips.data(), env_mips.size()), param).Dispatch(uint3(ceil(width / 32), ceil(height / 32), 1));
-
-        //     width  = std::max(1u, width >> 5);
-        //     height = std::max(1u, height >> 5);
-        // }
-
-        // PreprocessEnvironmentMapParams preprocess_param{};
-        // width  = env_map->GetExtent().x;
-        // height = env_map->GetExtent().y;
-        // for (uint i = 0; i < env_pdf->GetNumMips(); i += 5) {
-        //     preprocess_param.src_mip_level  = i;
-        //     preprocess_param.num_mip_levels = env_pdf->GetNumMips();
-        //     preprocess_param.src_size       = uint2(width, height);
-        //     cmd_list.Compute(sd_utils.GetGenerateMipPdfPipeline(), env_map->GetView(0), std::span<TextureView>(env_pdf_mips.data(), env_pdf_mips.size()), preprocess_param).Dispatch(uint3(ceil(width / 32), ceil(height / 32), 1));
-        //     width  = std::max(1u, width >> 5);
-        //     height = std::max(1u, height >> 5);
-        // }
-        // sd_utils.GenerateMips(cmd_list, env_mips);
-        // sd_utils.GenerateMipPdf(cmd_list, env_map->GetView(0), env_pdf_mips);
-    }
-
-    // gfx_queue.Execute(cmd_list.Submit().Wait(copy_queue_timeline, copy_queue_timeline->GetValue()));
-    // gfx_queue.Sync();
 
     bool   first_load = true;
     uint   instance_buffer_handle;
@@ -441,7 +403,7 @@ int main(int argc, const char** argv) {
     //////////////////////////////////////////////////////////////////////////
     UniquePtr<PrepareLightPass> prepare_light_pass = MakeUnique<PrepareLightPass>(device, manager, g_scene);
     UniquePtr<GBufferPass>      g_buffer_pass      = MakeUnique<GBufferPass>(device, manager, g_scene);
-    UniquePtr<RTContext>        rt_ctx;
+    UniquePtr<RTContext>        rt_ctx             = MakeUnique<RTContext>(sd_utils, is_ctx, bindless_array);
 
     while (WindowContext::ShouldClose(window_handle) == false) {
         WindowContext::Tick();
@@ -478,8 +440,7 @@ int main(int argc, const char** argv) {
 
             create_frame_buffers(resolution);
             if (rt_ctx)
-                rt_ctx->FillGBufferResources(resolution);
-            g_buffer_pass->UpdateMainView(resolution);
+                rt_ctx->FillFrameResources(resolution);
             is_ctx.~ImportanceSamplingContext();
             is_params.render_size = resolution;
             new (&is_ctx) ImportanceSamplingContext(is_params);
@@ -496,20 +457,10 @@ int main(int argc, const char** argv) {
                 view_buffer_handle              = bindless_array->AllocateBuffer(rt_view_param_buffer->GetView());
                 light_buffer_handle             = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::LightInfo)->GetView());
 
-                uint num_emissive_meshes, num_emissive_triangles;
-                prepare_light_pass->CountEmissiveInstances(num_emissive_meshes, num_emissive_triangles);
-
-                rt_ctx = MakeUnique<RTContext>(sd_utils,
-                                               is_ctx,
-                                               num_emissive_meshes,
-                                               num_emissive_triangles,
-                                               g_scene.GetLights().size(),
-                                               g_scene.GetGeometryInstances().size());
                 rt_ctx->SetBindlessHandles(geometry_buffer_handle, instance_buffer_handle, material_buffer_idx);
-                rt_ctx->FillGBufferResources(resolution);
+                rt_ctx->FillFrameResources(resolution);
                 rt_ctx->SetRaytracingScene(rt_scene);
                 rt_ctx->FillLowDiscrepancySequence(cmd_list);
-                g_buffer_pass->UpdateMainView(resolution);
 
                 if (env_map) {
                 }
@@ -583,7 +534,7 @@ int main(int argc, const char** argv) {
                 // gfx_queue.Sync();
             }
 
-            if (b_new_env_map) {
+            if (b_new_env_map && load_res_event->IsComplete()) {
                 env_map = rt_res.GetDefaultEnvMap();
 
                 Array<ImportTexture> import_textures;
@@ -600,11 +551,12 @@ int main(int argc, const char** argv) {
                 assert(env_map && "env map is null");
                 Sampler sampler{SF_LINEAR, SAM_CLAMP_TO_BORDER};
 
-                Moer::EnvironmentLightComponent* env_light = MoerNew(Moer::EnvironmentLightComponent)(float3(1.f));
+                Moer::EnvironmentLightComponent* env_light = MoerNew(Moer::EnvironmentLightComponent)(float3(1.f), env_map->GetExtent().xy);
                 env_light->bdls_handle                     = bindless_array->AllocateTexture(env_map->GetView(0, env_map->GetNumMips()), sampler);
 
                 auto entity = EntityManager::Get().Create();
                 LightComponentManager::Get().Put(entity, env_light);
+                g_scene.AddLight(entity);
 
                 for (int i = 0; i < env_map->GetNumMips(); ++i) {
                     env_mips.push_back(env_map->GetView(i));
@@ -628,23 +580,18 @@ int main(int argc, const char** argv) {
                 }
                 cmd_list.UpdateRaytracingScene(rt_scene);
             }
-
+            auto camera_entity = g_scene.GetCameras()[0];
+            auto camera        = CameraManager::Get().Get(camera_entity);
             //prepare frame
             {
                 cmd_list.UpdateBindlessArray(bindless_array);
-
-                auto camera_entity = g_scene.GetCameras()[0];
-                auto camera        = CameraManager::Get().Get(camera_entity);
 
                 rt_config_param.world2view_prev = camera->GetViewMatrix();
                 rt_config_param.world2clip_prev = camera->GetProjectionMatrix() * camera->GetViewMatrix();
 
                 rt_ctx->FillLowDiscrepancySequence(cmd_list);
-                g_buffer_pass->PreTickCamera();
 
                 camera->Tick();
-
-                g_buffer_pass->Process(cmd_list, *rt_ctx);
 
                 rt_view_param.view2world = camera->GetToWorldMatrix();
                 rt_view_param.world2view = camera->GetViewMatrix();
@@ -672,7 +619,19 @@ int main(int argc, const char** argv) {
 
                 cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)&rt_view_param, sizeof(RTViewParam)), rt_view_param_buffer->GetView());
             }
+
+            is_ctx.TickFrame(time);
+
+            uint num_emissive_meshes, num_emissive_triangles;
+            prepare_light_pass->CountEmissiveInstances(num_emissive_meshes, num_emissive_triangles);
+
+            rt_ctx->CreateBuffersIfNeeded(num_emissive_meshes, num_emissive_triangles, g_scene.GetLights().size(), g_scene.GetGeometryInstances().size());
+
+            rt_ctx->Tick(camera);
+
             prepare_light_pass->Process(cmd_list, *rt_ctx);
+
+            g_buffer_pass->Process(cmd_list, *rt_ctx);
 
             TestInlineRTShader::Param param;
             param.global_param_handle    = view_buffer_handle;

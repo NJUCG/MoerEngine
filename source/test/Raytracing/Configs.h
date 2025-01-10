@@ -2,12 +2,14 @@
 #define MOER_RAYTRACING_CONFIGS_H
 
 #include "misc/Traits.h"
+#include "rhi/RHICommand.h"
 #include "shaderheaders/shared/ShaderParameters.h"
 #include "shaderheaders/shared/lighting/ShaderParameters.h"
 namespace Moer::Render {
 
     static constexpr uint s_grid_mode_none                = 0;
     static constexpr uint s_grid_mode_uniform             = 1;
+    static constexpr uint s_grid_mode_power_ris           = 2;
     static constexpr uint s_num_restirdi_reservoir_buffer = 3;
 
     inline static uint JekinsHash(uint _key) {
@@ -33,7 +35,7 @@ namespace Moer::Render {
 
     struct GridConfig {
         uint3 grid_size{16};
-        uint  grid_mode      = s_grid_mode_uniform;
+        uint  grid_mode      = s_grid_mode_power_ris - 1;
         uint  light_per_ceil = 512;
     };
 
@@ -170,6 +172,10 @@ namespace Moer::Render {
             return di_shading_params;
         }
 
+        const DI::ReSTIRDIBufferIndices& GetReSTIRDIBufferIndices() const {
+            return di_buffer_indices;
+        }
+
         uint GetNeighborOffsetCnt() const {
             return restir_di_config.neighbor_offset_cnt;
         }
@@ -225,6 +231,12 @@ namespace Moer::Render {
         const SimpleSegmentAllocator& GetSegmentAllocator() const {
             return segment_allocator;
         }
+
+        uint GetFrameIdx() const {
+            return frame_idx;
+        }
+
+        void TickFrame(uint _frame_idx);
 
     private:
         void ComputeGridLightSlotCnt();

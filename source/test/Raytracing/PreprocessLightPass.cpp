@@ -297,6 +297,7 @@ namespace Moer::Render {
         _cmd_list.Compute(prepare_light_pipeline, param, _rt_ctx.light_data_buf->GetView(), _rt_ctx.light_mapping_buf->GetView(), _rt_ctx.local_light_pdf_tex->GetView(), _rt_ctx.prim_light_buf->GetView(), _rt_ctx.task_buf->GetView(), scene.GetBindlessArray())
             .Dispatch(uint3((light_buf_offset + 255) / 256, 1, 1));
 
+        _rt_ctx.sd_utils.GenerateMips(_cmd_list, _rt_ctx.local_light_pdf_mips);
         // device.GetCommandQueue(EQueueType::Graphics).Execute(_cmd_list.Submit());
         // device.GetCommandQueue(EQueueType::Graphics).Sync();
         // uint num_lights = num_finite_prim_lights + num_infinite_prim_lights + num_is_env_lights;

@@ -247,8 +247,8 @@ struct Hash {
         STL::Sequence::Hash(_frame_idx + 0x035F9F29), _linear_idx);
   }
 
-  void Initialize(uint2 _pos, uint _frame_idx) {
-    Initialize(STL::Sequence::Zorder(_pos), _frame_idx);
+  void Init(uint2 _pos, uint _frame_idx) {
+    Init(STL::Sequence::Zorder(_pos), _frame_idx);
   }
 
   uint GetUint() {

@@ -83,7 +83,13 @@ namespace Moer::Render {
             di_last_frame_output_reservoir            = di_current_frame_output_reservoir;
             di_temporal_resample_params.random_number = JekinsHash(frame_idx);
             UpdateReSTIRDIBufferIndices();
+
+            di_initial_sample_params.env_map_is = light_buffer_params.env_light.light_cnt;
         }
+    }
+
+    void ImportanceSamplingContext::TickFrame(uint _frame_idx) {
+        AdvanceFrameIdx(_frame_idx);
     }
 
     SimpleSegmentAllocator::SimpleSegmentAllocator() : total_element_cnt(0) {
@@ -98,4 +104,5 @@ namespace Moer::Render {
     uint SimpleSegmentAllocator::GetTotalSize() const {
         return total_element_cnt;
     }
+
 }// namespace Moer::Render

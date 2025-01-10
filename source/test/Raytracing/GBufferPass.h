@@ -39,9 +39,7 @@ namespace Moer::Render {
     class GBufferPass {
     public:
         GBufferPass(class RenderDevice& _device, class ShaderManager& _manager, Scene& _scene);
-        void PreTickCamera();
         void Process(class CommandList& _cmd_list, RTContext& _rt_ctx);
-        void UpdateMainView(uint2 _rect);
 
     private:
         class RenderDevice&  device;

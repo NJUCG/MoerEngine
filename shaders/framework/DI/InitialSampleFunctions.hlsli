@@ -61,8 +61,8 @@ Reservoir SampleSurface(inout RandomState _rng, inout RandomState _coherent_rng,
                         in LightBufferParams _light_buffer_params,
                         in RISBufferSegmentParams _local_light_ris_params,
                         in RISBufferSegmentParams _env_light_ris_params,
-                        in GridLights::Params _grid_light_params,
-                        uint _sample_mode, out LightSample _light_sample) {
+                        in Grid::Params _grid_light_params, uint _sample_mode,
+                        out LightSample _light_sample) {
   _light_sample = LightSample::EmptyLightSample();
 
   Reservoir local_res;

@@ -858,7 +858,7 @@ namespace Moer::Render {
     class RENDER_API BindlessArray : public RHIResource {
     public:
         struct TextureUpdateInfo {
-            Texture*     texture;
+            TextureRef   texture;
             Sampler      sampler;
             EPixelFormat format;
             uint         array_idx;
@@ -868,9 +868,9 @@ namespace Moer::Render {
         };
 
         struct BufferUpdateInfo {
-            Buffer* buffer;
-            uint    array_idx;
-            uint    slot;
+            BufferRef buffer;
+            uint      array_idx;
+            uint      slot;
         };
 
         BindlessArray();
@@ -989,7 +989,7 @@ namespace Moer::Render {
         virtual void RegisterGeometry(RaytracingGeometryRef _geom)   = 0;
         virtual void UnregisterGeometry(RaytracingGeometryRef _geom) = 0;
 
-        virtual RaytracingTlasRef GetTlas() const = 0;
+        virtual RaytracingTlasRef GetTlas() const     = 0;
         virtual RaytracingTlasRef GetPrevTlas() const = 0;
 
         RENDER_API RaytracingInstance&       GetInstance(uint _array_idx);

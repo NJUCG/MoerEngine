@@ -12,38 +12,19 @@ namespace Moer::Render {
         gbuffer_constants->SetName("gbuffer_constants");
     }
 
-    void GBufferPass::PreTickCamera() {
-        constants.prev_view = constants.main_view;
-    }
-
-    void GBufferPass::UpdateMainView(uint2 _rect) {
-        Entity main_cam_entity = scene.GetMainCamera();
-
-        auto main_cam                  = CameraManager::Get().Get(main_cam_entity);
-        constants.main_view.view2world = main_cam->GetToWorldMatrix();
-        constants.main_view.world2view = main_cam->GetViewMatrix();
-        constants.main_view.world2clip = main_cam->GetProjectionMatrix() * main_cam->GetViewMatrix();
-        constants.main_view.view2clip  = main_cam->GetProjectionMatrix();
-        constants.main_view.clip2view  = Inverse(constants.main_view.view2clip);
-        constants.main_view.clip2world = Inverse(constants.main_view.world2clip);
-        constants.main_view.frustum    = main_cam->GetFrustum();
-        constants.main_view.near_far   = float2(main_cam->GetNearClip(), main_cam->GetFarClip());
-        constants.main_view.rect       = float2(_rect);
-        constants.main_view.inv_rect   = float2(1.f / constants.main_view.rect.x, 1.f / constants.main_view.rect.y);
-        constants.main_view.dir_or_pos = float4(main_cam->GetPosition(), 1.f);
-    }
-
     void GBufferPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
-        GBufferPassParams params{};
-        params.geometry_data_handle = _rt_ctx.geom_data_buf_handle;
-        params.instance_data_handle = _rt_ctx.instance_data_buf_handle;
-        params.material_data_handle = _rt_ctx.material_data_buf_handle;
+        GBufferPassParams         params{};
+        RaytracingBindlessHandles bindless_handles = _rt_ctx.GetBindlessHandles();
+        params.geometry_data_handle                = bindless_handles.geom_data;
+        params.instance_data_handle                = bindless_handles.instance_data;
+        params.material_data_handle                = bindless_handles.material_data;
 
         Entity main_cam_entity = scene.GetMainCamera();
 
-        UpdateMainView(_rt_ctx.gbuffer_res.view_depth->GetExtent().xy);
+        constants.main_view = constants.main_view;
+        constants.prev_view = constants.prev_view;
 
-        GBufferResources& gbuffer_res = _rt_ctx.gbuffer_res;
+        FrameResources& gbuffer_res = _rt_ctx.frame_rt;
 
         _cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)&constants, sizeof(GBufferConstants)), gbuffer_constants->GetView());
 

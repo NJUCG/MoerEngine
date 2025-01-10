@@ -5,6 +5,7 @@
 #include "ShaderUtils.h"
 #include "misc/STL.h"
 #include "rhi/RHIResource.h"
+#include "scene/Camera.h"
 #include "shaderheaders/shared/ShaderParameters.h"
 #include <filesystem>
 #include <string_view>
@@ -32,7 +33,7 @@ namespace Moer::Render {
         UnorderedMap<std::string, TextureRef> textures;
     };
 
-    struct GBufferResources {
+    struct FrameResources {
         TextureRef view_depth;
         TextureRef diffuse_albedo;
         TextureRef specular_roughness;
@@ -40,6 +41,12 @@ namespace Moer::Render {
         TextureRef emission;
         TextureRef motion;
         TextureRef clip_depth;
+
+        TextureRef odd_view_depth;
+        TextureRef odd_diffuse_albedo;
+        TextureRef odd_specular_roughness;
+        TextureRef odd_normal;
+        TextureRef odd_luminance;
     };
 
     struct RTContext {
@@ -51,14 +58,12 @@ namespace Moer::Render {
     public:
         RTContext(ShaderUtils&               _sd_utils,
                   ImportanceSamplingContext& _is_ctx,
-                  uint                       _num_emissive_meshes,
-                  uint                       _num_emissive_triangles,
-                  uint                       _num_prim_lights,
-                  uint                       _num_geom_instance);
+                  BindlessArrayRef           _bindless_array);
 
         void SetBindlessHandles(uint _geom_data_buf_handle, uint _instance_data_buf_handle, uint _material_data_buf_handle);
 
-        void FillGBufferResources(
+        void
+        FillFrameResources(
             uint2 _resolution);
 
         void SetResolution(uint2 _resolution);
@@ -69,8 +74,29 @@ namespace Moer::Render {
 
         void CreateEnvMapResources(TextureRef _env_map, CommandList& _cmd_list);
 
+        //Create light sampling buffers
+        void CreateBuffersIfNeeded(
+            uint _num_emissive_meshes,
+            uint _num_emissive_triangles,
+            uint _num_prim_lights,
+            uint _num_geom_instance);
+
+        void Tick(CameraRef _camera);
+
+        void SetEnvMapInfos(float _scale, float _rotation);
+
+        const RaytracingBindlessHandles& GetBindlessHandles() const { return bindless_handles; }
+
+    private:
+        void AllocateAndFreeBdlsIfNeeded(uint& _target, const TextureView& _view, Sampler _sampler);
+        void AllocateAndFreeBdlsIfNeeded(uint& _target, const BufferView& _view);
+
     public:
-        Config config;
+        Config            config;
+        SceneGlobalParams scene_params{};
+
+        ViewParam main_view;
+        ViewParam prev_view;
 
         BufferRef geo_instance_to_light_buf;
         BufferRef light_mapping_buf;
@@ -87,9 +113,12 @@ namespace Moer::Render {
 
         BufferRef light_reservoir_buf;
 
+        TextureRef env_map = nullptr;
+
         TextureRef         env_pdf_tex;
         Array<TextureView> env_pdf_mips;
         TextureRef         local_light_pdf_tex;
+        Array<TextureView> local_light_pdf_mips;
 
         uint max_emissive_meshes;
         uint max_emissive_triangles;
@@ -101,12 +130,16 @@ namespace Moer::Render {
         uint instance_data_buf_handle;
         uint material_data_buf_handle;
 
-        GBufferResources gbuffer_res;
+        FrameResources frame_rt;
 
         ImportanceSamplingContext& is_ctx;
         ShaderUtils&               sd_utils;
 
         RaytracingSceneRef rt_scene;
+
+    private:
+        RaytracingBindlessHandles bindless_handles{};
+        BindlessArrayRef          bdls;
     };
 }// namespace Moer::Render
 

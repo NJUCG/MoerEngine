@@ -91,7 +91,7 @@ namespace Moer {
         uint  num_mip_levels;
     };
 
-    namespace GridLights {
+    namespace Grid {
         struct CommonParams {
             uint  local_light_sampling_mode;
             float center_x;
@@ -99,8 +99,8 @@ namespace Moer {
             float center_z;
 
             uint  ris_buffer_offset;
-            uint  lights_per_ceil;
-            float ceil_size;
+            uint  lights_per_cell;
+            float cell_size;
             float jitter;
 
             uint local_light_presample_mode;
@@ -110,9 +110,9 @@ namespace Moer {
         };
 
         struct GridParameters {
-            uint ceil_x;
-            uint ceil_y;
-            uint ceil_z;
+            uint cell_x;
+            uint cell_y;
+            uint cell_z;
             uint padding0;
         };
 
@@ -120,7 +120,7 @@ namespace Moer {
             CommonParams   common_params;
             GridParameters grid_params;
         };
-    };// namespace GridLights
+    };// namespace Grid
 
     namespace DI {
 

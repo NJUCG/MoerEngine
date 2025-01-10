@@ -1784,10 +1784,12 @@ namespace Moer::Render {
     }
 
     UniquePtr<Command> VulkanBindlessArray::CreateUpdateCommand(){
+        auto buffer_allocated_copy = buffers_allocated;
+        auto textures_allocated_copy = textures_allocated;
         std::unique_lock<std::mutex> lk(mtx);
         return MakeUnique<UpdateBindlessArrayCmd>(this, 
-        std::move(buffers_allocated), 
-        std::move(textures_allocated),
+        std::move(buffer_allocated_copy), 
+        std::move(textures_allocated_copy),
         std::move(buffers_freed),
         std::move(textures_freed),
         std::move(slots_freed));
@@ -1837,7 +1839,7 @@ namespace Moer::Render {
         }else if (handle.type == Buffer){
             buffers_freed.push_back(handle.slot);
         }
-        // resource_allocated_set.erase((uint64)(textures_allocated[_array_idx].texture));
+        resource_allocated_set.erase((uint64)(textures_allocated[handle.slot].texture.Get()));
     }
 
     void VulkanBindlessArray::FreeBuffer(uint _array_idx) {
@@ -1849,7 +1851,7 @@ namespace Moer::Render {
         }else if (handle.type == Buffer){
             buffers_freed.push_back(handle.slot);
         }
-        resource_allocated_set.erase((uint64)(buffers_allocated[_array_idx].buffer));
+        resource_allocated_set.erase((uint64)(buffers_allocated[handle.slot].buffer.Get()));
     }
     
     bool VulkanBindlessArray::IsResourceAllocated(uint64 _resource) const {

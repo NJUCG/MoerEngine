@@ -573,7 +573,7 @@ int main(int argc, const char** argv) {
                 if (env_map) {
                     Sampler sampler{SF_LINEAR, SAM_CLAMP_TO_BORDER};
 
-                    Moer::EnvironmentLightComponent* env_light = MoerNew(Moer::EnvironmentLightComponent)(float3(1.f));
+                    Moer::EnvironmentLightComponent* env_light = MoerNew(Moer::EnvironmentLightComponent)(float3(1.f), env_map->GetExtent().xy);
                     env_light->bdls_handle                     = bindless_array->AllocateTexture(env_map->GetView(0, env_map->GetNumMips()), sampler);
 
                     auto entity = EntityManager::Get().Create();
