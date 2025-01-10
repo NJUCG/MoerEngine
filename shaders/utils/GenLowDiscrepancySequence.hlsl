@@ -7,7 +7,7 @@ RWBuffer<float2> output : register(u0);
 
 [numthreads(256, 1, 1)]
 
-void main(uint gtid: SV_GROUPTHREADID){
+void main(uint gtid: SV_DISPATCHTHREADID){
 
     if(gtid >= param.num_samples){
         return;

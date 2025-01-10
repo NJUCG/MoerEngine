@@ -189,10 +189,6 @@ namespace Moer::Render {
             return env_light_ris_buffer_params;
         }
 
-        void SetLightBufferParams(const DI::LightBufferParams& _params) {
-            light_buffer_params = _params;
-        }
-
         const DI::LightBufferParams& GetLightBufferParams() const {
             return light_buffer_params;
         }
@@ -200,6 +196,9 @@ namespace Moer::Render {
         void SetChangeableGridConfig(const GridChangableConfig& _config) {
             grid_changable_config = _config;
         }
+
+        //called in prepare lights in each frame
+        void SetLightBufferParams(uint _frame_offset, uint _num_finit_lights, uint _num_infinit_prim_lights, uint _num_env_lights);
 
         GridConfig GetGridConfig() const {
             return grid_config;
@@ -214,6 +213,17 @@ namespace Moer::Render {
         }
         uint GetGridCeillOffset() const {
             return grid_runtime_config.num_light_slot;
+        }
+
+        const DI::ReSTIRDIRuntimeConfig& GetReSTIRDIRuntimeConfig() const {
+            return restir_di_runtime_config;
+        }
+
+        const DI::ReSTIRDIConfig& GetReSTIRDIConfig() const {
+            return restir_di_config;
+        }
+        const SimpleSegmentAllocator& GetSegmentAllocator() const {
+            return segment_allocator;
         }
 
     private:

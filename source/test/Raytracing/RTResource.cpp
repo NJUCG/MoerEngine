@@ -137,13 +137,12 @@ namespace Moer::Render {
         uint                       _num_emissive_meshes,
         uint                       _num_emissive_triangles,
         uint                       _num_prim_lights,
-        uint                       _num_geom_instance,
-        uint2                      _env_map_extent) : max_emissive_meshes(_num_emissive_meshes),
-                                 max_emissive_triangles(_num_emissive_triangles),
-                                 max_geom_instance(_num_geom_instance),
-                                 max_prim_lights(_num_prim_lights),
-                                 sd_utils(_sd_utils),
-                                 is_ctx(_is_ctx) {
+        uint                       _num_geom_instance) : max_emissive_meshes(_num_emissive_meshes),
+                                   max_emissive_triangles(_num_emissive_triangles),
+                                   max_geom_instance(_num_geom_instance),
+                                   max_prim_lights(_num_prim_lights),
+                                   sd_utils(_sd_utils),
+                                   is_ctx(_is_ctx) {
         RenderDevice& device = RenderDevice::Get();
         task_buf             = device.CreateBuffer<PrepareLightsTask>(max_emissive_meshes + max_prim_lights, EBufferUsageFlags::UNORDERED_ACCESS);
 
@@ -156,11 +155,6 @@ namespace Moer::Render {
         light_data_buf    = device.CreateBuffer<PolymorphicLightInfo>(light_buf_element, EBufferUsageFlags::UNORDERED_ACCESS);
         prim_light_buf    = device.CreateBuffer<PolymorphicLightInfo>(max_prim_lights, EBufferUsageFlags::UNORDERED_ACCESS);
 
-        env_pdf_tex = device.CreateTexture("env_pdf_tex",
-                                           Extent2D(_env_map_extent.x, _env_map_extent.y),
-                                           PF_R32_UINT,
-                                           ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED,
-                                           uint(ceilf(log2f(float(std::max(_env_map_extent.x, _env_map_extent.y))))));
         //
         {
             uint texture_width  = RoundUpToPowerOf2(uint(ceil(sqrt(double(light_buf_element)))));
@@ -179,6 +173,13 @@ namespace Moer::Render {
             neighbor_offset_buf = device.CreateBuffer<byte>(
                 is_ctx.GetNeighborOffsetCnt() * 2 * sizeof(float),
                 EBufferUsageFlags::UNORDERED_ACCESS);
+
+            light_reservoir_buf = device.CreateBuffer<DI::PackedReservoir>(
+                is_ctx.GetReSTIRDIRuntimeConfig().reservoir_buffer_params.block_array_pitch * s_num_restirdi_reservoir_buffer,
+                EBufferUsageFlags::UNORDERED_ACCESS);
+
+            ris_buf            = device.CreateBuffer<uint>(2 * std::max(_is_ctx.GetSegmentAllocator().GetTotalSize(), 1u), EBufferUsageFlags::UNORDERED_ACCESS);
+            ris_light_data_buf = device.CreateBuffer<uint4>(2 * std::max(_is_ctx.GetSegmentAllocator().GetTotalSize(), 1u), EBufferUsageFlags::UNORDERED_ACCESS);
         }
 
         task_buf->SetName("task_buf");
@@ -188,6 +189,7 @@ namespace Moer::Render {
         prim_light_buf->SetName("prim_light_buf");
 
         neighbor_offset_buf->SetName("neighbor_offset_buf");
+        light_reservoir_buf->SetName("light_reservoir_buf");
     }
 
     void RTContext::SetBindlessHandles(uint _geom_data_buf_handle, uint _instance_data_buf_handle, uint _material_data_buf_handle) {
@@ -212,11 +214,33 @@ namespace Moer::Render {
     }
 
     void RTContext::FillLowDiscrepancySequence(CommandList& _cmd_list) {
+        if (b_has_neighbor_offset) {
+            return;
+        }
         GenLowDiscrepancySequenceParam param;
         param.num_dimensions = 2;
         param.num_samples    = is_ctx.GetNeighborOffsetCnt();
         sd_utils.GenerateLowDiscrepancySequence(_cmd_list, param, neighbor_offset_buf->GetView());
+        b_has_neighbor_offset = true;
         // _cmd_list.Compute(sd_utils.gen_low_discrepancy_pipeline, _param, _output).Dispatch(uint3(DivCeil(_param.num_samples, 256), 1, 1), "GenerateLowDiscrepancySequence");
+    }
+
+    void RTContext::CreateEnvMapResources(TextureRef _env_map, CommandList& _cmd_list) {
+
+        uint2         extent = _env_map->GetExtent().xy;
+        RenderDevice& device = RenderDevice::Get();
+
+        env_pdf_mips.clear();
+        env_pdf_tex = device.CreateTexture("env_pdf_tex",
+                                           Extent2D(extent.x, extent.y),
+                                           PF_R32_UINT,
+                                           ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED,
+                                           uint(ceilf(log2f(float(std::max(extent.x, extent.y))))));
+
+        for (int i = 0; i < env_pdf_tex->GetNumMips(); ++i) {
+            env_pdf_mips.push_back(env_pdf_tex->GetView(i));
+        }
+        sd_utils.GenerateMipPdf(_cmd_list, _env_map, env_pdf_mips);
     }
 
 };// namespace Moer::Render

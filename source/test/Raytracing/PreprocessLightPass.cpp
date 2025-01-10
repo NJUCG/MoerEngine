@@ -288,6 +288,12 @@ namespace Moer::Render {
         param.cur_light_offset    = max_lights_in_buffer * b_odd_frame;
         param.prev_light_offset   = max_lights_in_buffer * !b_odd_frame;
 
+        _rt_ctx.is_ctx.SetLightBufferParams(
+            param.cur_light_offset,
+            num_finite_prim_lights,
+            num_infinite_prim_lights,
+            num_is_env_lights);
+
         _cmd_list.Compute(prepare_light_pipeline, param, _rt_ctx.light_data_buf->GetView(), _rt_ctx.light_mapping_buf->GetView(), _rt_ctx.local_light_pdf_tex->GetView(), _rt_ctx.prim_light_buf->GetView(), _rt_ctx.task_buf->GetView(), scene.GetBindlessArray())
             .Dispatch(uint3((light_buf_offset + 255) / 256, 1, 1));
 
@@ -299,6 +305,7 @@ namespace Moer::Render {
                                tasks(std::move(tasks))]() {
 
         });
+        b_odd_frame = !b_odd_frame;
     }
 
 }// namespace Moer::Render

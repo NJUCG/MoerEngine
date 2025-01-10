@@ -1,3 +1,4 @@
+#include <atomic>
 #include <filesystem>
 #include "Configs.h"
 #include "Core.h"
@@ -11,6 +12,7 @@
 #include "math/Matrix.h"
 #include "misc/STL.h"
 #include "misc/Traits.h"
+#include "platform/Platform.h"
 #include "renderer/UIRenderer.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
@@ -23,6 +25,8 @@
 #include "scene/light/LightComponentManager.h"
 #include "shader/ShaderPipeline.h"
 #include "shader/ShaderResourceManager.h"
+#include "taskgraph/GraphTask.h"
+#include "taskgraph/TaskGraph.h"
 #include "taskgraph/TaskSystem.h"
 #include "window/WindowContext.h"
 #include "loader/LoaderInterface.h"
@@ -213,15 +217,23 @@ int main(int argc, const char** argv) {
         Scene::ResetAsyncLoadInfo();
     });
     RTResource rt_res(ConfigManager::GetInstance().GetEditorResourcePath());
-    rt_res.LoadResources();
-    TextureRef         env_map = rt_res.GetDefaultEnvMap();
+    bool       b_new_env_map = false;
+
+    GraphEventRef load_res_event = LambdaTask::Create([&rt_res, &b_new_env_map]() {
+                                       rt_res.LoadResources();
+                                       //memory barrier
+                                       std::atomic_thread_fence(std::memory_order_acq_rel);
+                                       b_new_env_map = true;
+                                   }).Dispatch();
+    // rt_res.LoadResources();
+
+    TextureRef         env_map{};
     Array<TextureView> env_mips;
-    TextureRef         env_pdf = device.CreateTexture("env_pdf", env_map->GetExtent(), PF_R16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED, env_map->GetNumMips());
-    Array<TextureView> env_pdf_mips;
-    for (int i = 0; i < env_map->GetNumMips(); ++i) {
-        env_mips.push_back(env_map->GetView(i));
-        env_pdf_mips.push_back(env_pdf->GetView(i));
-    }
+    TextureRef         env_pdf{};
+    Array<TextureView>
+        env_pdf_mips;
+
+    bool b_new_env_pdf = false;
 
     BindlessArrayRef bindless_array = g_scene.GetBindlessArray();
 
@@ -278,14 +290,6 @@ int main(int argc, const char** argv) {
     auto copy_queue_timeline = copy_queue.GetFenceHandle();
 
     {
-        Array<ImportTexture> import_textures;
-        const auto&          rt_res_textures = rt_res.GetTextures();
-        for (auto& [name, tex] : rt_res_textures) {
-            import_textures.emplace_back(ImportTexture(tex->GetView(0, tex->GetNumMips()), ETextureState::SAMPLE));
-        }
-        cmd_list.ImportTextureFromQueue(EQueueType::Copy, std::move(import_textures));
-        gfx_queue.Execute(cmd_list.Submit().Wait(copy_queue_timeline, copy_queue_timeline->GetValue()));
-        gfx_queue.Sync();
 
         // uint width  = env_map->GetExtent().x;
         // uint height = env_map->GetExtent().y;
@@ -312,8 +316,8 @@ int main(int argc, const char** argv) {
         //     width  = std::max(1u, width >> 5);
         //     height = std::max(1u, height >> 5);
         // }
-        sd_utils.GenerateMips(cmd_list, env_mips);
-        sd_utils.GenerateMipPdf(cmd_list, env_map->GetView(0), env_pdf_mips);
+        // sd_utils.GenerateMips(cmd_list, env_mips);
+        // sd_utils.GenerateMipPdf(cmd_list, env_map->GetView(0), env_pdf_mips);
     }
 
     // gfx_queue.Execute(cmd_list.Submit().Wait(copy_queue_timeline, copy_queue_timeline->GetValue()));
@@ -473,7 +477,8 @@ int main(int argc, const char** argv) {
                 ETextureUsageFlags::COLOR_ATTACHMENT);
 
             create_frame_buffers(resolution);
-            rt_ctx->FillGBufferResources(resolution);
+            if (rt_ctx)
+                rt_ctx->FillGBufferResources(resolution);
             g_buffer_pass->UpdateMainView(resolution);
             is_ctx.~ImportanceSamplingContext();
             is_params.render_size = resolution;
@@ -481,6 +486,8 @@ int main(int argc, const char** argv) {
         }
 
         if (Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady()) {
+
+            //load scene
             if (first_load) {
                 instance_buffer_handle          = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::InstanceInfo)->GetView());
                 geometry_buffer_handle          = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::GeometryInfo)->GetView());
@@ -497,8 +504,7 @@ int main(int argc, const char** argv) {
                                                num_emissive_meshes,
                                                num_emissive_triangles,
                                                g_scene.GetLights().size(),
-                                               g_scene.GetGeometryInstances().size(),
-                                               env_map->GetExtent().xy);
+                                               g_scene.GetGeometryInstances().size());
                 rt_ctx->SetBindlessHandles(geometry_buffer_handle, instance_buffer_handle, material_buffer_idx);
                 rt_ctx->FillGBufferResources(resolution);
                 rt_ctx->SetRaytracingScene(rt_scene);
@@ -506,13 +512,6 @@ int main(int argc, const char** argv) {
                 g_buffer_pass->UpdateMainView(resolution);
 
                 if (env_map) {
-                    Sampler sampler{SF_LINEAR, SAM_CLAMP_TO_BORDER};
-
-                    Moer::EnvironmentLightComponent* env_light = MoerNew(Moer::EnvironmentLightComponent)(float3(1.f));
-                    env_light->bdls_handle                     = bindless_array->AllocateTexture(env_map->GetView(0, env_map->GetNumMips()), sampler);
-
-                    auto entity = EntityManager::Get().Create();
-                    LightComponentManager::Get().Put(entity, env_light);
                 }
                 first_load = false;
 
@@ -578,10 +577,46 @@ int main(int argc, const char** argv) {
                 // cmd_list.UpdateRaytracingScene(rt_scene);
                 gfx_queue.Execute(cmd_list.Submit().Wait(copy_queue_timeline, last_io_change_timeline));
                 gfx_queue.Sync();
-                rt_scene->AdvanceFrame();
-                cmd_list.UpdateRaytracingScene(rt_scene);
-                gfx_queue.Execute(cmd_list.Submit());
-                gfx_queue.Sync();
+                // rt_scene->AdvanceFrame();
+                // cmd_list.UpdateRaytracingScene(rt_scene);
+                // gfx_queue.Execute(cmd_list.Submit());
+                // gfx_queue.Sync();
+            }
+
+            if (b_new_env_map) {
+                env_map = rt_res.GetDefaultEnvMap();
+
+                Array<ImportTexture> import_textures;
+                {
+                    const auto& rt_res_textures = rt_res.GetTextures();
+                    for (auto& [name, tex] : rt_res_textures) {
+                        import_textures.emplace_back(ImportTexture(tex->GetView(0, tex->GetNumMips()), ETextureState::SAMPLE));
+                    }
+                    cmd_list.ImportTextureFromQueue(EQueueType::Copy, std::move(import_textures));
+                    gfx_queue.Execute(cmd_list.Submit().Wait(copy_queue_timeline, copy_queue_timeline->GetValue()));
+                    gfx_queue.Sync();
+                }
+
+                assert(env_map && "env map is null");
+                Sampler sampler{SF_LINEAR, SAM_CLAMP_TO_BORDER};
+
+                Moer::EnvironmentLightComponent* env_light = MoerNew(Moer::EnvironmentLightComponent)(float3(1.f));
+                env_light->bdls_handle                     = bindless_array->AllocateTexture(env_map->GetView(0, env_map->GetNumMips()), sampler);
+
+                auto entity = EntityManager::Get().Create();
+                LightComponentManager::Get().Put(entity, env_light);
+
+                for (int i = 0; i < env_map->GetNumMips(); ++i) {
+                    env_mips.push_back(env_map->GetView(i));
+                }
+                sd_utils.GenerateMips(cmd_list, env_mips);
+                b_new_env_pdf = true;
+                b_new_env_map = false;
+            }
+
+            if (b_new_env_pdf && rt_ctx) {
+                rt_ctx->CreateEnvMapResources(env_map, cmd_list);
+                b_new_env_pdf = false;
             }
 
             if (Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady()) {
@@ -594,44 +629,49 @@ int main(int argc, const char** argv) {
                 cmd_list.UpdateRaytracingScene(rt_scene);
             }
 
-            auto camera_entity = g_scene.GetCameras()[0];
-            auto camera        = CameraManager::Get().Get(camera_entity);
+            //prepare frame
+            {
+                cmd_list.UpdateBindlessArray(bindless_array);
 
-            rt_config_param.world2view_prev = camera->GetViewMatrix();
-            rt_config_param.world2clip_prev = camera->GetProjectionMatrix() * camera->GetViewMatrix();
+                auto camera_entity = g_scene.GetCameras()[0];
+                auto camera        = CameraManager::Get().Get(camera_entity);
 
-            g_buffer_pass->PreTickCamera();
+                rt_config_param.world2view_prev = camera->GetViewMatrix();
+                rt_config_param.world2clip_prev = camera->GetProjectionMatrix() * camera->GetViewMatrix();
 
-            camera->Tick();
+                rt_ctx->FillLowDiscrepancySequence(cmd_list);
+                g_buffer_pass->PreTickCamera();
 
-            g_buffer_pass->Process(cmd_list, *rt_ctx);
+                camera->Tick();
 
-            rt_view_param.view2world = camera->GetToWorldMatrix();
-            rt_view_param.world2view = camera->GetViewMatrix();
-            rt_view_param.frustum    = camera->GetFrustum();
-            rt_view_param.near_far   = float2(camera->GetNearClip(), camera->GetFarClip());
-            rt_view_param.rect       = uint2(resolution.x, resolution.y);
-            rt_view_param.inv_rect   = float2(1.f / resolution.x, 1.f / resolution.y);
-            rt_view_param.jitter     = float2(0, 0);
-            rt_view_param.dir        = camera->GetDirection();
-            rt_view_param.orthomode  = 0;
+                g_buffer_pass->Process(cmd_list, *rt_ctx);
 
-            const RTUI::Config& rt_ui_config = rt_ui.GetConfig();
+                rt_view_param.view2world = camera->GetToWorldMatrix();
+                rt_view_param.world2view = camera->GetViewMatrix();
+                rt_view_param.frustum    = camera->GetFrustum();
+                rt_view_param.near_far   = float2(camera->GetNearClip(), camera->GetFarClip());
+                rt_view_param.rect       = uint2(resolution.x, resolution.y);
+                rt_view_param.inv_rect   = float2(1.f / resolution.x, 1.f / resolution.y);
+                rt_view_param.jitter     = float2(0, 0);
+                rt_view_param.dir        = camera->GetDirection();
+                rt_view_param.orthomode  = 0;
 
-            rt_config_param.view2world = camera->GetToWorldMatrix();
-            rt_config_param.view2clip  = camera->GetProjectionMatrix();
-            rt_config_param.world2view = camera->GetViewMatrix();
-            rt_config_param.world2clip = camera->GetProjectionMatrix() * camera->GetViewMatrix();
+                const RTUI::Config& rt_ui_config = rt_ui.GetConfig();
 
-            rt_config_param.tan_pixel_angular_radius = tanf(Angle::DegreeToRadian(camera->GetFov()));
-            rt_config_param.tan_sun_angular_radius   = tanf(Angle::DegreeToRadian(rt_ui_config.sun_angular_diameter * 0.5f));
-            rt_config_param.bounce_num               = rt_ui_config.max_bounce;
-            float3 sun_dir                           = Normalizef(rt_ui_config.sun_direction);
-            rt_config_param.sun_direction_gexposure  = float4(sun_dir, rt_ui_config.exposure);
-            cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)&rt_config_param, sizeof(RTConfigParam)), rt_config_param_buffer->GetView());
+                rt_config_param.view2world = camera->GetToWorldMatrix();
+                rt_config_param.view2clip  = camera->GetProjectionMatrix();
+                rt_config_param.world2view = camera->GetViewMatrix();
+                rt_config_param.world2clip = camera->GetProjectionMatrix() * camera->GetViewMatrix();
 
-            cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)&rt_view_param, sizeof(RTViewParam)), rt_view_param_buffer->GetView());
+                rt_config_param.tan_pixel_angular_radius = tanf(Angle::DegreeToRadian(camera->GetFov()));
+                rt_config_param.tan_sun_angular_radius   = tanf(Angle::DegreeToRadian(rt_ui_config.sun_angular_diameter * 0.5f));
+                rt_config_param.bounce_num               = rt_ui_config.max_bounce;
+                float3 sun_dir                           = Normalizef(rt_ui_config.sun_direction);
+                rt_config_param.sun_direction_gexposure  = float4(sun_dir, rt_ui_config.exposure);
+                cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)&rt_config_param, sizeof(RTConfigParam)), rt_config_param_buffer->GetView());
 
+                cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)&rt_view_param, sizeof(RTViewParam)), rt_view_param_buffer->GetView());
+            }
             prepare_light_pass->Process(cmd_list, *rt_ctx);
 
             TestInlineRTShader::Param param;
@@ -664,11 +704,10 @@ int main(int argc, const char** argv) {
             //copy normal to output
             // cmd_list.CopyFrom(out_direct_lighting->GetView(), scene_color->GetView());
         }
+
         // rt_scene->MarkModified(0);
         // cmd_list.UpdateRaytracingScene(rt_scene);
         Sampler linear_sampler{SF_LINEAR, SAM_CLAMP_TO_BORDER};
-
-        cmd_list.UpdateBindlessArray(bindless_array);
 
         if (rt_ui.IsSeperateWindow() && rt_ui.GetWindowFrameBuffer().GetTexture()) {
             auto frame_buffer = rt_ui.GetWindowFrameBuffer();

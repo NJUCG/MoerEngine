@@ -54,8 +54,7 @@ namespace Moer::Render {
                   uint                       _num_emissive_meshes,
                   uint                       _num_emissive_triangles,
                   uint                       _num_prim_lights,
-                  uint                       _num_geom_instance,
-                  uint2                      _env_map_extent);
+                  uint                       _num_geom_instance);
 
         void SetBindlessHandles(uint _geom_data_buf_handle, uint _instance_data_buf_handle, uint _material_data_buf_handle);
 
@@ -68,6 +67,8 @@ namespace Moer::Render {
 
         void FillLowDiscrepancySequence(CommandList& _cmd_list);
 
+        void CreateEnvMapResources(TextureRef _env_map, CommandList& _cmd_list);
+
     public:
         Config config;
 
@@ -75,12 +76,20 @@ namespace Moer::Render {
         BufferRef light_mapping_buf;
         BufferRef prim_light_buf;
         BufferRef task_buf;
+        //polymorphic light info
         BufferRef light_data_buf;
 
-        BufferRef neighbor_offset_buf;
+        BufferRef ris_buf;
+        BufferRef ris_light_data_buf;
 
-        TextureRef env_pdf_tex;
-        TextureRef local_light_pdf_tex;
+        BufferRef neighbor_offset_buf;// for spatial resampling
+        bool      b_has_neighbor_offset = false;
+
+        BufferRef light_reservoir_buf;
+
+        TextureRef         env_pdf_tex;
+        Array<TextureView> env_pdf_mips;
+        TextureRef         local_light_pdf_tex;
 
         uint max_emissive_meshes;
         uint max_emissive_triangles;

@@ -104,19 +104,6 @@ namespace Moer {
         uint padding1;
     };
 
-    struct EnvLightParams {
-        uint light_valid;
-        uint light_idx;
-        uint padding0;
-        uint padding1;
-    };
-
-    struct LightBufferParams {
-        LightRegion    local_light_region;
-        LightRegion    infinite_light_region;
-        EnvLightParams env_light;
-    };
-
     struct GBufferPassParams {
         uint geometry_instance_handle;
         uint geometry_data_handle;

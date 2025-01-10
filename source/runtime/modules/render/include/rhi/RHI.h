@@ -278,6 +278,27 @@ namespace Moer::Render {
         static constexpr bool value = decltype(Test(static_cast<T*>(nullptr)))::value;
     };
 
+#define USER_TRIVIAL_TYPE(T)                \
+    template<>                              \
+    struct user_trivial_type<T> {           \
+        static constexpr bool value = true; \
+    }
+
+    USER_TRIVIAL_TYPE(uint2);
+    USER_TRIVIAL_TYPE(uint3);
+    USER_TRIVIAL_TYPE(uint4);
+    USER_TRIVIAL_TYPE(int2);
+    USER_TRIVIAL_TYPE(int3);
+    USER_TRIVIAL_TYPE(int4);
+    USER_TRIVIAL_TYPE(float2);
+    USER_TRIVIAL_TYPE(float3);
+    USER_TRIVIAL_TYPE(float4);
+    USER_TRIVIAL_TYPE(float2x2);
+    USER_TRIVIAL_TYPE(float3x3);
+    USER_TRIVIAL_TYPE(float4x4);
+
+#undef USER_TRIVIAL_TYPE
+
     template<typename T>
     static constexpr bool user_trivial_type_v = user_trivial_type<T>::value;
 

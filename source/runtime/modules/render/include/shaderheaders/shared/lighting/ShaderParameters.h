@@ -148,7 +148,7 @@ namespace Moer {
         };
 
         struct EnvLightParams {
-            uint light_valid;
+            uint light_cnt;
             uint light_idx;
             uint padding0;
             uint padding1;
