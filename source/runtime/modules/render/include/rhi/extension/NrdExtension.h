@@ -24,11 +24,9 @@ namespace Moer::Render::Ext {
 
         virtual void Reinitialize(uint16 _frame_width, uint16 _frame_height) = 0;
 
-    private:
-        nrd::CommonSettings nrd_common_settings = {};
-
     public:
-        enum struct EInResource : uint8 {
+        enum struct EResourceSlot : uint8 {
+            // Reblur/Relax
             MOTION_VECTOR,
             NORMAL_ROUGHNESS,
             VIEW_Z,
@@ -36,19 +34,23 @@ namespace Moer::Render::Ext {
             IN_DIFFUSE,
             IN_SPECULAR,
 
-            INPUT_NUM
-        };
+            // Sigma
+            IN_PENUMBRA,
+            IN_TRANSLUCENCY,
 
-        enum struct EOutResource : uint8 {
+            // Reblur/Relax
             OUT_DIFFUSE,
             OUT_SPECULAR,
 
-            OUTPUT_NUM
+            // Sigma
+            OUT_SHADOW_TRANSLUCENCY,
+
+            SLOT_NUM
         };
 
     public:
-        virtual void SetInput(EInResource _index, TextureRef _texture)   = 0;
-        virtual void SetOutput(EOutResource _index, TextureRef _texture) = 0;
+        virtual void SetInput(EResourceSlot _index, TextureRef _texture)  = 0;
+        virtual void SetOutput(EResourceSlot _index, TextureRef _texture) = 0;
 
         RENDER_API void UseDenoiser(const nrd::Denoiser _denoiser);
         RENDER_API void UpdateCommonSettings(uint32 _frame_index, const Vector2ui& _size, const Vector2f& _jitter, const Matrix4x4f& _view, const Matrix4x4f& _proj);
@@ -61,6 +63,8 @@ namespace Moer::Render::Ext {
         void SetDefaultCommonSettings(uint16 _frame_width, uint16 _frame_height);
 
     protected:
+        nrd::CommonSettings nrd_common_settings = {};
+
         nrd::Denoiser type = nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR;
 
         struct NRDEntry {
@@ -88,7 +92,9 @@ namespace Moer::Render::Ext {
 
         NRDEntry nrd = {};
 
-        StaticArray<nri::TextureBarrierDesc, uint8(EInResource::INPUT_NUM) + uint8(EOutResource::OUTPUT_NUM)> texture_barrier_descs = {};
+        StaticArray<nri::TextureBarrierDesc, uint8(EResourceSlot::SLOT_NUM)> texture_barrier_descs = {};
+
+        UnorderedMap<uint64, nri::CommandBuffer*> cmd_lists_on_use = {};
     };
 
     class NRDExtension : public DeviceExtension {

@@ -7,7 +7,9 @@ namespace Moer::Render::Ext {
             nrd.nri.rhi.DestroyTexture(*desc.texture);
         }
 
-        nrd.nri.rhi.DestroyCommandBuffer(*nrd.nri.cmd_list);
+        for (auto& [_, cmd_list] : cmd_lists_on_use) {
+            nrd.nri.rhi.DestroyCommandBuffer(*cmd_list);
+        }
 
         nrd.integration.Destroy();
 

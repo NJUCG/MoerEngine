@@ -129,8 +129,6 @@ namespace Moer::Render::Ext {
         }
 
         void Begin() override {
-            resource_usages.clear();
-
             // Must be called once on a frame start
             nrd.integration.NewFrame();
         }
@@ -211,124 +209,140 @@ namespace Moer::Render::Ext {
             }
         }
 
-        void SetInput(EInResource _index, TextureRef _texture) override {
+        void SetInput(EResourceSlot _index, TextureRef _texture) override {
+            assert(_index < EResourceSlot::OUT_DIFFUSE && "Invalid resource slot index");
             auto* vk_tex = ResourceCast(_texture);
-            // Wrap required textures (better do it only once on initialization)
+
             auto& tex_barrier_desc = texture_barrier_descs[uint8(_index)];
 
-            nri::TextureVKDesc tex_desc = {};
+            if (tex_barrier_desc.texture == nullptr) {
+                // Wrap required textures (better do it only once on initialization)
+                nri::TextureVKDesc tex_desc = {};
 
-            tex_desc.vkImage     = uint64(vk_tex->GetHandle());
-            tex_desc.vkFormat    = Moer::Render::VulkanEnumTranslator::METoVKFormat(vk_tex->GetFormat());
-            tex_desc.vkImageType = Moer::Render::VulkanEnumTranslator::METoVKImageType(vk_tex->GetDimension());
-            tex_desc.width       = vk_tex->GetWidth();
-            tex_desc.height      = vk_tex->GetHeight();
-            tex_desc.depth       = vk_tex->GetDepth();
-            tex_desc.mipNum      = vk_tex->GetNumMips();
-            tex_desc.layerNum    = vk_tex->GetNumArray();
-            tex_desc.sampleNum   = 1;// 1x texture sampling
+                tex_desc.vkImage     = uint64(vk_tex->GetHandle());
+                tex_desc.vkFormat    = Moer::Render::VulkanEnumTranslator::METoVKFormat(vk_tex->GetFormat());
+                tex_desc.vkImageType = Moer::Render::VulkanEnumTranslator::METoVKImageType(vk_tex->GetDimension());
+                tex_desc.width       = vk_tex->GetWidth();
+                tex_desc.height      = vk_tex->GetHeight();
+                tex_desc.depth       = vk_tex->GetDepth();
+                tex_desc.mipNum      = vk_tex->GetNumMips();
+                tex_desc.layerNum    = vk_tex->GetNumArray();
+                tex_desc.sampleNum   = 1;// 1x texture sampling
 
-            nrd.nri.rhi.CreateTextureVK(*nrd.nri.device, tex_desc, (nri::Texture*&)tex_barrier_desc.texture);
-
-            // You need to specify the current state of the resource here, after denoising NRD can modify
-            // this state. Application must continue state tracking from this point.
-            // Useful information:
-            //    SRV = nri::AccessBits::SHADER_RESOURCE, nri::TextureLayout::SHADER_RESOURCE
-            //    UAV = nri::AccessBits::SHADER_RESOURCE_STORAGE, nri::TextureLayout::GENERAL
-            tex_barrier_desc.before.access = nri::AccessBits::SHADER_RESOURCE;
-            tex_barrier_desc.before.layout = nri::Layout::SHADER_RESOURCE;
-            tex_barrier_desc.before.stages = nri::StageBits::COMPUTE_SHADER;
-            tex_barrier_desc.after.access  = nri::AccessBits::SHADER_RESOURCE;
-            tex_barrier_desc.after.layout  = nri::Layout::SHADER_RESOURCE;
-            tex_barrier_desc.after.stages  = nri::StageBits::COMPUTE_SHADER;
-            tex_barrier_desc.mipOffset     = 0;
-            tex_barrier_desc.mipNum        = vk_tex->GetNumMips();
-            tex_barrier_desc.layerOffset   = 0;
-            tex_barrier_desc.layerNum      = vk_tex->GetNumArray();
-            tex_barrier_desc.planes        = nri::PlaneBits::COLOR;
+                // You need to specify the current state of the resource here, after denoising NRD can modify
+                // this state. Application must continue state tracking from this point.
+                // Useful information:
+                //    SRV = nri::AccessBits::SHADER_RESOURCE, nri::TextureLayout::SHADER_RESOURCE
+                //    UAV = nri::AccessBits::SHADER_RESOURCE_STORAGE, nri::TextureLayout::GENERAL
+                nrd.nri.rhi.CreateTextureVK(*nrd.nri.device, tex_desc, (nri::Texture*&)tex_barrier_desc.texture);
+                tex_barrier_desc.before.access = nri::AccessBits::SHADER_RESOURCE;
+                tex_barrier_desc.before.layout = nri::Layout::SHADER_RESOURCE;
+                tex_barrier_desc.before.stages = nri::StageBits::COMPUTE_SHADER;
+                tex_barrier_desc.after.access  = nri::AccessBits::SHADER_RESOURCE;
+                tex_barrier_desc.after.layout  = nri::Layout::SHADER_RESOURCE;
+                tex_barrier_desc.after.stages  = nri::StageBits::COMPUTE_SHADER;
+                tex_barrier_desc.mipOffset     = 0;
+                tex_barrier_desc.mipNum        = vk_tex->GetNumMips();
+                tex_barrier_desc.layerOffset   = 0;
+                tex_barrier_desc.layerNum      = vk_tex->GetNumArray();
+                tex_barrier_desc.planes        = nri::PlaneBits::COLOR;
+                nrd::Integration_SetResource(nrd.user_pool, ResourceSlot(_index), &tex_barrier_desc);
+            } else if (type < nrd::Denoiser::RELAX_DIFFUSE && _index == EResourceSlot::MOTION_VECTOR) {
+                // The 'nri::TextureBarrierDesc.after' of motion vector has been trasitioned to GENERAL by NRD REBLUR Denoisers, so we need to reset it
+                tex_barrier_desc.after.access = nri::AccessBits::SHADER_RESOURCE;
+                tex_barrier_desc.after.layout = nri::Layout::SHADER_RESOURCE;
+                nrd::Integration_SetResource(nrd.user_pool, ResourceSlot(_index), &tex_barrier_desc);
+            }
 
             // Resource usage
-            VulkanShaderResourceState pipeline_flags{};
-            pipeline_flags.desc_type     = SpvReflectDescriptorType::SPV_REFLECT_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-            pipeline_flags.b_sampled     = 1;
-            pipeline_flags.resource_type = SpvReflectResourceType::SPV_REFLECT_RESOURCE_FLAG_SRV;
+            if (resource_usages_indices[uint8(_index)] == 0) {
+                VulkanShaderResourceState pipeline_flags{};
+                pipeline_flags.desc_type     = SpvReflectDescriptorType::SPV_REFLECT_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+                pipeline_flags.b_sampled     = 1;
+                pipeline_flags.resource_type = SpvReflectResourceType::SPV_REFLECT_RESOURCE_FLAG_SRV;
 
-            ParamInfoFlags read_flag = {
-                pipeline_flags(),
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT};
+                ParamInfoFlags read_flag = {
+                    pipeline_flags(),
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT};
 
-            resource_usages.emplace_back(_texture, read_flag);
-
-            nrd::Integration_SetResource(nrd.user_pool, ResourceSlot(uint8(_index)), &tex_barrier_desc);
+                resource_usages.emplace_back(_texture, read_flag);
+                resource_usages_indices[uint8(_index)] = resource_usages.size();
+            }
         }
 
-        void SetOutput(EOutResource _index, TextureRef _texture) override {
+        void SetOutput(EResourceSlot _index, TextureRef _texture) override {
+            assert(_index >= EResourceSlot::OUT_DIFFUSE && "Output resource index is invalid");
             auto* vk_tex = ResourceCast(_texture);
-            // Wrap required textures (better do it only once on initialization)
-            auto& tex_barrier_desc = texture_barrier_descs[uint8(EInResource::INPUT_NUM) + uint8(_index)];
 
-            nri::TextureVKDesc tex_desc = {};
+            auto& tex_barrier_desc = texture_barrier_descs[uint8(_index)];
 
-            tex_desc.vkImage     = uint64(vk_tex->GetHandle());
-            tex_desc.vkFormat    = Moer::Render::VulkanEnumTranslator::METoVKFormat(vk_tex->GetFormat());
-            tex_desc.vkImageType = Moer::Render::VulkanEnumTranslator::METoVKImageType(vk_tex->GetDimension());
-            tex_desc.width       = vk_tex->GetWidth();
-            tex_desc.height      = vk_tex->GetHeight();
-            tex_desc.depth       = vk_tex->GetDepth();
-            tex_desc.mipNum      = vk_tex->GetNumMips();
-            tex_desc.layerNum    = vk_tex->GetNumArray();
-            tex_desc.sampleNum   = 1;// 1x texture sampling
+            if (tex_barrier_desc.texture == nullptr) {
+                // Wrap required textures (better do it only once on initialization)
+                nri::TextureVKDesc tex_desc = {};
 
-            nrd.nri.rhi.CreateTextureVK(*nrd.nri.device, tex_desc, (nri::Texture*&)tex_barrier_desc.texture);
+                tex_desc.vkImage     = uint64(vk_tex->GetHandle());
+                tex_desc.vkFormat    = Moer::Render::VulkanEnumTranslator::METoVKFormat(vk_tex->GetFormat());
+                tex_desc.vkImageType = Moer::Render::VulkanEnumTranslator::METoVKImageType(vk_tex->GetDimension());
+                tex_desc.width       = vk_tex->GetWidth();
+                tex_desc.height      = vk_tex->GetHeight();
+                tex_desc.depth       = vk_tex->GetDepth();
+                tex_desc.mipNum      = vk_tex->GetNumMips();
+                tex_desc.layerNum    = vk_tex->GetNumArray();
+                tex_desc.sampleNum   = 1;// 1x texture sampling
 
-            // You need to specify the current state of the resource here, after denoising NRD can modify
-            // this state. Application must continue state tracking from this point.
-            // Useful information:
-            //    SRV = nri::AccessBits::SHADER_RESOURCE, nri::TextureLayout::SHADER_RESOURCE
-            //    UAV = nri::AccessBits::SHADER_RESOURCE_STORAGE, nri::TextureLayout::GENERAL
-            tex_barrier_desc.before.access = nri::AccessBits::SHADER_RESOURCE_STORAGE;
-            tex_barrier_desc.before.layout = nri::Layout::SHADER_RESOURCE_STORAGE;
-            tex_barrier_desc.before.stages = nri::StageBits::COMPUTE_SHADER;
-            tex_barrier_desc.after.access  = nri::AccessBits::SHADER_RESOURCE_STORAGE;
-            tex_barrier_desc.after.layout  = nri::Layout::SHADER_RESOURCE_STORAGE;
-            tex_barrier_desc.after.stages  = nri::StageBits::COMPUTE_SHADER;
-            tex_barrier_desc.mipOffset     = 0;
-            tex_barrier_desc.mipNum        = vk_tex->GetNumMips();
-            tex_barrier_desc.layerOffset   = 0;
-            tex_barrier_desc.layerNum      = vk_tex->GetNumArray();
-            tex_barrier_desc.planes        = nri::PlaneBits::COLOR;
+                // You need to specify the current state of the resource here, after denoising NRD can modify
+                // this state. Application must continue state tracking from this point.
+                // Useful information:
+                //    SRV = nri::AccessBits::SHADER_RESOURCE, nri::TextureLayout::SHADER_RESOURCE
+                //    UAV = nri::AccessBits::SHADER_RESOURCE_STORAGE, nri::TextureLayout::GENERAL
+                nrd.nri.rhi.CreateTextureVK(*nrd.nri.device, tex_desc, (nri::Texture*&)tex_barrier_desc.texture);
+                tex_barrier_desc.before.access = nri::AccessBits::SHADER_RESOURCE_STORAGE;
+                tex_barrier_desc.before.layout = nri::Layout::SHADER_RESOURCE_STORAGE;
+                tex_barrier_desc.before.stages = nri::StageBits::COMPUTE_SHADER;
+                tex_barrier_desc.after.access  = nri::AccessBits::SHADER_RESOURCE_STORAGE;
+                tex_barrier_desc.after.layout  = nri::Layout::SHADER_RESOURCE_STORAGE;
+                tex_barrier_desc.after.stages  = nri::StageBits::COMPUTE_SHADER;
+                tex_barrier_desc.mipOffset     = 0;
+                tex_barrier_desc.mipNum        = vk_tex->GetNumMips();
+                tex_barrier_desc.layerOffset   = 0;
+                tex_barrier_desc.layerNum      = vk_tex->GetNumArray();
+                tex_barrier_desc.planes        = nri::PlaneBits::COLOR;
+                nrd::Integration_SetResource(nrd.user_pool, ResourceSlot(_index), &tex_barrier_desc);
+            }
 
             // Resource usage
-            VulkanShaderResourceState pipeline_flags{};
-            pipeline_flags.desc_type     = SpvReflectDescriptorType::SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            pipeline_flags.b_sampled     = 0;
-            pipeline_flags.resource_type = SpvReflectResourceType::SPV_REFLECT_RESOURCE_FLAG_UAV;
+            if (resource_usages_indices[uint8(_index)] == 0) {
+                VulkanShaderResourceState pipeline_flags{};
+                pipeline_flags.desc_type     = SpvReflectDescriptorType::SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                pipeline_flags.b_sampled     = 1;
+                pipeline_flags.resource_type = SpvReflectResourceType::SPV_REFLECT_RESOURCE_FLAG_UAV;
 
-            ParamInfoFlags write_flag = {
-                pipeline_flags(),
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT};
+                ParamInfoFlags read_flag = {
+                    pipeline_flags(),
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT};
 
-            resource_usages.emplace_back(_texture, write_flag);
-
-            nrd::Integration_SetResource(nrd.user_pool, ResourceSlot(uint8(EInResource::INPUT_NUM) + uint8(_index)), &tex_barrier_desc);
+                resource_usages.emplace_back(_texture, read_flag);
+                resource_usages_indices[uint8(_index)] = resource_usages.size();
+            }
         };
 
     private:
-        Array<CustomDispatchCmd::ResourceUsage> resource_usages;
-        int8                                    mv_index = -1;
+        Array<CustomDispatchCmd::ResourceUsage>            resource_usages;
+        StaticArray<uint8, uint8(EResourceSlot::SLOT_NUM)> resource_usages_indices = {};
 
-        constexpr nrd::ResourceType ResourceSlot(const uint8 _index) {
+        constexpr nrd::ResourceType ResourceSlot(const EResourceSlot _index) {
             switch (_index) {
-                case uint8(EInResource::MOTION_VECTOR):
-                    mv_index = resource_usages.size() - 1;
-                    return nrd::ResourceType::IN_MV;
-                case uint8(EInResource::NORMAL_ROUGHNESS): return nrd::ResourceType::IN_NORMAL_ROUGHNESS;
-                case uint8(EInResource::VIEW_Z): return nrd::ResourceType::IN_VIEWZ;
-                case uint8(EInResource::BASECOLOR_METALNESS): return nrd::ResourceType::IN_BASECOLOR_METALNESS;
-                case uint8(EInResource::IN_DIFFUSE): return nrd::ResourceType::IN_DIFF_RADIANCE_HITDIST;
-                case uint8(EInResource::IN_SPECULAR): return nrd::ResourceType::IN_SPEC_RADIANCE_HITDIST;
-                case uint8(EInResource::INPUT_NUM) + uint8(EOutResource::OUT_DIFFUSE): return nrd::ResourceType::OUT_DIFF_RADIANCE_HITDIST;
-                case uint8(EInResource::INPUT_NUM) + uint8(EOutResource::OUT_SPECULAR): return nrd::ResourceType::OUT_SPEC_RADIANCE_HITDIST;
+                case EResourceSlot::MOTION_VECTOR: return nrd::ResourceType::IN_MV;
+                case EResourceSlot::NORMAL_ROUGHNESS: return nrd::ResourceType::IN_NORMAL_ROUGHNESS;
+                case EResourceSlot::VIEW_Z: return nrd::ResourceType::IN_VIEWZ;
+                case EResourceSlot::BASECOLOR_METALNESS: return nrd::ResourceType::IN_BASECOLOR_METALNESS;
+                case EResourceSlot::IN_DIFFUSE: return nrd::ResourceType::IN_DIFF_RADIANCE_HITDIST;
+                case EResourceSlot::IN_SPECULAR: return nrd::ResourceType::IN_SPEC_RADIANCE_HITDIST;
+                case EResourceSlot::IN_PENUMBRA: return nrd::ResourceType::IN_PENUMBRA;
+                case EResourceSlot::IN_TRANSLUCENCY: return nrd::ResourceType::IN_TRANSLUCENCY;
+                case EResourceSlot::OUT_DIFFUSE: return nrd::ResourceType::OUT_DIFF_RADIANCE_HITDIST;
+                case EResourceSlot::OUT_SPECULAR: return nrd::ResourceType::OUT_SPEC_RADIANCE_HITDIST;
+                case EResourceSlot::OUT_SHADOW_TRANSLUCENCY: return nrd::ResourceType::OUT_SHADOW_TRANSLUCENCY;
                 default: return nrd::ResourceType::MAX_NUM;
             }
         }
@@ -381,18 +395,23 @@ namespace Moer::Render::Ext {
             // RENDER - DENOISE
             //=======================================================================================================
             // Wrap a command buffer
-            nri::CommandBufferVKDesc cmd_buffer_desc = {};
-            cmd_buffer_desc.commandQueueType         = nri::CommandQueueType::GRAPHICS;
-            cmd_buffer_desc.vkCommandBuffer          = _context.cmd_list;
-
-            nri.rhi.CreateCommandBufferVK(*nri.device, cmd_buffer_desc, nri.cmd_list);
+            if (nrd_interface.cmd_lists_on_use.contains(uint64(_context.cmd_list))) {
+                nri.cmd_list = nrd_interface.cmd_lists_on_use[uint64(_context.cmd_list)];
+            } else {
+                nri::CommandBufferVKDesc cmd_buffer_desc = {};
+                cmd_buffer_desc.commandQueueType         = nri::CommandQueueType::GRAPHICS;
+                cmd_buffer_desc.vkCommandBuffer          = _context.cmd_list;
+                nri.rhi.CreateCommandBufferVK(*nri.device, cmd_buffer_desc, nri.cmd_list);
+                nrd_interface.cmd_lists_on_use[uint64(_context.cmd_list)] = nri.cmd_list;
+            }
 
             const nrd::Identifier denoiser = nrd::Identifier(denoiser_type);
             nrd_integration.Denoise(&denoiser, 1, *nri.cmd_list, nrd_interface.nrd.user_pool);
 
             // The motion vector has been trasitioned to GENERAL layout by NRD REBLUR Denoisers, so we need to flush the state
-            if (nrd_interface.type < nrd::Denoiser::RELAX_DIFFUSE && nrd_interface.mv_index >= 0) {
-                auto* mv         = ResourceCast(std::get<TextureView>(nrd_interface.resource_usages[nrd_interface.mv_index].resource).GetTexture());
+            auto mv_usage_slot = nrd_interface.resource_usages_indices[uint8(NRDInterface::EResourceSlot::MOTION_VECTOR)];
+            if (nrd_interface.type < nrd::Denoiser::RELAX_DIFFUSE && mv_usage_slot) {
+                auto* mv         = ResourceCast(std::get<TextureView>(nrd_interface.resource_usages[mv_usage_slot - 1].resource).GetTexture());
                 auto* vk_tracker = (VkTracker*)_context.user_data;
                 vk_tracker->FlushSrcState(
                     mv,

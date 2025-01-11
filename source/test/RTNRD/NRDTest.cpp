@@ -497,7 +497,6 @@ int main(int argc, const char** argv) {
     // nrd extension
     auto* nrd_ext       = device.LoadExtension<Ext::NRDExtension>();
     auto  nrd_interface = nrd_ext->CreateInterface(3, resolution.x, resolution.y);
-    nrd_interface->UseDenoiser(nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR);
 
     nrd::HitDistanceParameters hit_distance_parameters = {};
     rt_config_param.nrd_hit_dist_params                = float4(hit_distance_parameters.A, hit_distance_parameters.B, hit_distance_parameters.C, hit_distance_parameters.D);
@@ -723,20 +722,26 @@ int main(int argc, const char** argv) {
 
             // denoise
             nrd_interface->Begin();
-            nrd_interface->SetInput(Ext::NRDInterface::EInResource::MOTION_VECTOR, out_mv);
-            nrd_interface->SetInput(Ext::NRDInterface::EInResource::NORMAL_ROUGHNESS, out_normal_roughness);
-            nrd_interface->SetInput(Ext::NRDInterface::EInResource::VIEW_Z, out_view_z);
-            nrd_interface->SetInput(Ext::NRDInterface::EInResource::BASECOLOR_METALNESS, out_basecolor_metalness);
-            nrd_interface->SetInput(Ext::NRDInterface::EInResource::IN_DIFFUSE, out_diffuse);
-            nrd_interface->SetInput(Ext::NRDInterface::EInResource::IN_SPECULAR, out_specular);
-            nrd_interface->SetOutput(Ext::NRDInterface::EOutResource::OUT_DIFFUSE, denoised_diffuse);
-            nrd_interface->SetOutput(Ext::NRDInterface::EOutResource::OUT_SPECULAR, denoised_specular);
             nrd_interface->UpdateCommonSettings(
                 time,
                 Vector2ui(resolution.x, resolution.y),
                 Vector2f(0.f, 0.f),
                 Transpose(camera->GetViewMatrix()),
                 Transpose(camera->GetProjectionMatrix()));
+
+            nrd_interface->UseDenoiser(nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR);
+
+            nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::MOTION_VECTOR, out_mv);
+            nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::NORMAL_ROUGHNESS, out_normal_roughness);
+            nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::VIEW_Z, out_view_z);
+            nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::BASECOLOR_METALNESS, out_basecolor_metalness);
+            nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::IN_DIFFUSE, out_diffuse);
+            nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::IN_SPECULAR, out_specular);
+            nrd_interface->SetOutput(Ext::NRDInterface::EResourceSlot::OUT_DIFFUSE, denoised_diffuse);
+            nrd_interface->SetOutput(Ext::NRDInterface::EResourceSlot::OUT_SPECULAR, denoised_specular);
+
+            // nrd_interface->UseDenoiser(nrd::Denoiser::SIGMA_SHADOW_TRANSLUCENCY);
+
             nrd_interface->Denoise(cmd_list);
 
             CompositionCSPipeline::Param composition_param;
