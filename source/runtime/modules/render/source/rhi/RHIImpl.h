@@ -496,39 +496,49 @@ namespace Moer::Render {
     struct UpdateBindlessArrayCmd : public Command {
     private:
         UpdateBindlessArrayCmd() : Command(EType::UpdateBindlessArray) {}
-        mutable BindlessArrayRef                        array;
-        mutable Array<BindlessArray::BufferUpdateInfo>  buffer_updates;
-        mutable Array<BindlessArray::TextureUpdateInfo> texture_updates;
-
-        mutable Array<uint> free_buffers;
-        mutable Array<uint> free_textures;
-        mutable Array<uint> free_slots;
+        mutable BindlessArrayRef        array;
+        Array<BindlessArray::UpdateCmd> update_cmds;
+        Array<byte>                     array_data;
+        Array<std::pair<uint, uint>>    array_indices_dat;
+        Array<byte>                     buffer_data;
+        Array<std::pair<uint, uint>>    buffer_indices_dat;
+        Array<byte>                     texture_data;
+        Array<std::pair<uint, uint>>    texture_indices_dat;
 
     public:
-        UpdateBindlessArrayCmd(BindlessArrayRef                          _array,
-                               Array<BindlessArray::BufferUpdateInfo>&&  _update_buffers,
-                               Array<BindlessArray::TextureUpdateInfo>&& _update_textures,
-                               Array<uint>&&                             _free_buffers,
-                               Array<uint>&&                             _free_textures,
-                               Array<uint>&&                             _free_slots,
-                               std::string_view                          _name = typenames[uint(EType::UpdateBindlessArray)]) : Command(EType::UpdateBindlessArray, _name), array(_array),
-                                                                                                       buffer_updates(std::move(_update_buffers)),
-                                                                                                       texture_updates(std::move(_update_textures)),
-                                                                                                       free_buffers(std::move(_free_buffers)),
-                                                                                                       free_textures(std::move(_free_textures)),
-                                                                                                       free_slots(std::move(_free_slots)) {
+        UpdateBindlessArrayCmd(BindlessArrayRef                  _array,
+                               Array<BindlessArray::UpdateCmd>&& _update_cmds,
+                               Array<byte>&&                     _array_data,
+                               Array<std::pair<uint, uint>>&&    _array_indices_dat,
+                               Array<byte>&&                     _buffer_data,
+                               Array<std::pair<uint, uint>>&&    _buffer_indices_dat,
+                               Array<byte>&&                     _texture_data,
+                               Array<std::pair<uint, uint>>&&    _texture_indices_dat,
+                               std::string_view                  _name = typenames[uint(EType::UpdateBindlessArray)]) : Command(EType::UpdateBindlessArray, _name), array(_array),
+                                                                                                       update_cmds(_update_cmds),
+                                                                                                       array_data(std::move(_array_data)),
+                                                                                                       array_indices_dat(std::move(_array_indices_dat)),
+                                                                                                       buffer_data(std::move(_buffer_data)),
+                                                                                                       buffer_indices_dat(std::move(_buffer_indices_dat)),
+                                                                                                       texture_data(std::move(_texture_data)),
+                                                                                                       texture_indices_dat(std::move(_texture_indices_dat)) {
 
             // assert(texture_updates.size() < 20 && "too many textures");
         }
-        auto*                                     Handle() const { return array.Get(); }
-        EQueueType                                GetQueueType() const override { return EQueueType::Graphics; }
-        const auto&                               BufferUpdates() const { return buffer_updates; }
-        const auto&                               TextureUpdates() const { return texture_updates; }
-        auto                                      StealBufferUpdates() const { return std::move(buffer_updates); }
-        Array<BindlessArray::TextureUpdateInfo>&& StealTextureUpdates() const { return std::move(texture_updates); }
-        auto                                      StealFreeBuffers() const { return std::move(free_buffers); }
-        auto                                      StealFreeTextures() const { return std::move(free_textures); }
-        auto                                      StealFreeSlots() const { return std::move(free_slots); }
+        auto*       Handle() const { return array.Get(); }
+        EQueueType  GetQueueType() const override { return EQueueType::Graphics; }
+        const auto& UpdateCommands() const { return update_cmds; }
+
+        auto StealArrayData() const { return std::move(array_data); }
+        auto StealArrayIndicesData() const { return std::move(array_indices_dat); }
+        auto StealBufferIndicesData() const { return std::move(buffer_indices_dat); }
+        auto StealTextureIndicesData() const { return std::move(texture_indices_dat); }
+        auto StealBufferData() const { return std::move(buffer_data); }
+        auto StealTextureData() const { return std::move(texture_data); }
+
+        bool HasUpdates() const { return !array_indices_dat.empty(); }
+        bool HasBufferUpdates() const { return !buffer_indices_dat.empty(); }
+        bool HasTextureUpdates() const { return !texture_indices_dat.empty(); }
     };
 
     using TClearResource = std::variant<BufferView, TextureView>;

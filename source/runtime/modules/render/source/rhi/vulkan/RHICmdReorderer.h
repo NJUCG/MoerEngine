@@ -22,11 +22,16 @@ namespace Moer::Render {
         using IsResourceRead       = bool (*)(uint64 _flag);
         using IsTextureSampled     = bool (*)(uint64 _flag);
         using IsResourceInBindless = bool (*)(uint64 _resource, uint64 _bdls_handle);
+        using LockBdlsArray        = void (*)(uint64 _bdls_handle);
+        using UnlockBdlsArray      = LockBdlsArray;
 
         IsResourceWrite      is_resource_write;
         IsResourceRead       is_resource_read;
         IsTextureSampled     is_texture_sampled;
         IsResourceInBindless is_resource_in_bindless;
+
+        LockBdlsArray   lock_bdls_array;
+        UnlockBdlsArray unlock_bdls_array;
     };
     struct ArenaAllocator {
         struct LinkedChunk {
@@ -607,11 +612,13 @@ namespace Moer::Render {
                 else if constexpr (std::is_same_v<T, RaytracingTlasRef>) {
                     EmplaceArg((uint64)(_arg.Get()), ResourceType::Accel, Range{}, false);
                 } else if constexpr (std::is_same_v<T, BindlessArrayRef>) {
+                    m_funcs.lock_bdls_array((uint64)(_arg.Get()));
                     for (auto&& res : m_write_resources) {
                         if (m_funcs.is_resource_in_bindless(res, (uint64)(_arg.Get()))) {
                             EmplaceArg(res, ResourceType::Texture_Buffer, Range{}, false);
                         }
                     }
+                    m_funcs.unlock_bdls_array((uint64)(_arg.Get()));
                     //emplace self
                     EmplaceArg((uint64)(_arg->ArrayHandle()), ResourceType::Bindless, Range{}, false);
                 }

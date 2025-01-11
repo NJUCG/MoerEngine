@@ -943,12 +943,17 @@ namespace Moer::Render {
             Buffer
         };
         struct Handle {
+            uint ptr_1;
+            uint ptr_2;
             uint slot : 22;
             uint attrib : 8;
             uint type : 2;
 
-            bool IsTexture() const { return type == Texture; }
-            bool IsBuffer() const { return type == Buffer; }
+            Handle(uint64 _ptr, uint _slot, uint _attrib, uint _type) : ptr_1(_ptr >> 32), ptr_2(_ptr & 0xffffffff), slot(_slot), attrib(_attrib), type(_type) {}
+            Handle() : ptr_1(0), ptr_2(0), slot(0), attrib(0), type(0) {}
+            bool   IsTexture() const { return type == Texture; }
+            bool   IsBuffer() const { return type == Buffer; }
+            uint64 Ptr() const { return uint64(ptr_1) << 32 | uint64(ptr_2); }
         };
 
         VulkanBindlessArray(VulkanDevice* _device, uint32 _max_size);
@@ -959,6 +964,7 @@ namespace Moer::Render {
         void FreeTexture(uint _slot) override;
         void FreeBuffer(uint _slot) override;
         bool IsResourceAllocated(uint64 _handle) const;
+        void DeAllocateResource(uint64 _handle);
 
         //call on frame end free
         void OnFree(const Array<uint>& _slots_freed, const Array<uint>& _textures_freed, const Array<uint>& _buffers_freed);
@@ -990,12 +996,17 @@ namespace Moer::Render {
         std::atomic_uint              buffer_slot_offset;
         std::atomic_uint              slot_offset;
         //frame resources
-        Array<TextureUpdateInfo> textures_allocated;
-        Array<BufferUpdateInfo>  buffers_allocated;
+        // Array<TextureUpdateInfo>     textures_allocated;
+        // Array<BufferUpdateInfo>      buffers_allocated;
+        Array<UpdateCmd>             update_cmds;
+        Array<std::pair<uint, uint>> array_indices_dat;
+        Array<byte>                  array_dat;
+        Array<std::pair<uint, uint>> texture_indices_dat;
+        Array<byte>                  texture_dat;
+        Array<std::pair<uint, uint>> buffer_indices_dat;
+        Array<byte>                  buffer_dat;
+        UnorderedMap<uint, uint>     temp_slot_to_cmd;
 
-        Array<uint>          textures_freed;
-        Array<uint>          buffers_freed;
-        Array<uint>          slots_freed;
         UnorderedSet<uint64> resource_allocated_set;
     };
 

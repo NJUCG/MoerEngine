@@ -649,7 +649,12 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
   float2 uv = (float2(pixel_pos) + 0.5f) * param.inv_rect;
 
   ArrayBuffer instance_buffer = ArrayBuffer(param.instance_buffer_handle);
+
   ArrayBuffer global_params = ArrayBuffer(param.global_param_handle);
+
+    // uint array_handle =                                                        
+    //     g__array_114514_bdls[NonUniformResourceIndex(global_params.handle)];
+    //     printf("array_handle %d\n", array_handle);
 
   RTViewParam view = global_params.Load<RTViewParam>(0);
 

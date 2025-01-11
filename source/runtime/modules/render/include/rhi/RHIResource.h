@@ -865,13 +865,21 @@ namespace Moer::Render {
             uint         slot;
             uint8        mip_level;
             uint8        num_mips;
+            bool         free;
         };
 
         struct BufferUpdateInfo {
             BufferRef buffer;
             uint      array_idx;
             uint      slot;
+            bool      free;
         };
+
+        struct InvalidUpdateInfo {
+            uint array_idx;
+        };
+
+        using UpdateCmd = std::variant<TextureUpdateInfo, BufferUpdateInfo, InvalidUpdateInfo>;
 
         BindlessArray();
         virtual ~BindlessArray()                                                    = default;
