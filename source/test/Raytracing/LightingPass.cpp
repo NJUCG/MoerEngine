@@ -9,6 +9,10 @@ namespace Moer::Render {
         presample_light_pipeline      = std::move(_manager.Compute<PresampleLightPipeline>("lighting/PresampleLight.hlsl"));
         presample_env_map_pipeline    = std::move(_manager.Compute<PresampleEnvMapPipeline>("lighting/PresampleEnvMap.hlsl"));
         presample_light_grid_pipeline = std::move(_manager.Compute<PresampleLightGridPipeline>("lighting/PresampleLightGrid.hlsl"));
+
+        auto& device    = RenderDevice::Get();
+        resample_params = device.CreateBuffer<byte>(sizeof(ResampleConstants), EBufferUsageFlags::CONSTANT_BUFFER);
+        resample_params->SetName("DI::resample_params");
     }
 
     void LightingPass::Process(
@@ -58,6 +62,48 @@ namespace Moer::Render {
         constants.enable_accumulation     = 1;
         constants.discount_native_samples = 1;
         constants.visualize_cells         = 0;
+
+        _cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)&constants, sizeof(ResampleConstants)), resample_params->GetView());
+
+#define DI_BINDING_ARGS(ctx)               \
+    ctx.rt_scene->GetTlas(),               \
+        ctx.rt_scene->GetPrevTlas(),       \
+        resample_params,                   \
+        ctx.light_reservoir_buf,           \
+        ctx.frame_rt.diffuse_lighting,     \
+        ctx.frame_rt.specular_lighting,    \
+        ctx.frame_rt.gradients,            \
+        ctx.frame_rt.restir_luminance,     \
+        ctx.frame_rt.odd_diffuse_lighting, \
+        ctx.ris_buf,                       \
+        ctx.ris_light_data_buf,            \
+        scene.GetBindlessArray()
+
+        auto div_ceil = [](uint _a, uint _b) -> uint {
+            return (_a + _b - 1) / _b;
+        };
+
+        if (is_ctx.GetLightBufferParams().local_light_region.light_cnt) {
+            uint2 dispatch_size = uint2(div_ceil(is_ctx.GetLocalLightRISBufferParams().tile_size, 256), is_ctx.GetLocalLightRISBufferParams().tile_cnt);
+            _cmd_list.Compute(presample_light_pipeline,
+                              DI_BINDING_ARGS(_rt_ctx))
+                .Dispatch(uint3(dispatch_size, 1), "PresampleLight");
+        }
+
+        if (is_ctx.GetLightBufferParams().env_light.light_cnt) {
+            uint2 dispatch_size = uint2(div_ceil(is_ctx.GetEnvLightRISBufferParams().tile_size, 256), is_ctx.GetEnvLightRISBufferParams().tile_cnt);
+            _cmd_list.Compute(presample_env_map_pipeline,
+                              DI_BINDING_ARGS(_rt_ctx))
+                .Dispatch(uint3(dispatch_size, 1), "PresampleEnvMap");
+        }
+
+        if (is_ctx.GetLightBufferParams().local_light_region.light_cnt) {
+            uint2 dispatch_size = uint2(div_ceil(is_ctx.GetGridRuntimeConfig().num_light_slot, 256), 1);
+            _cmd_list.Compute(presample_light_grid_pipeline,
+                              DI_BINDING_ARGS(_rt_ctx))
+                .Dispatch(uint3(dispatch_size, 1), "PresampleLightGrid");
+        }
+#undef DI_BINDING_ARGS
     }
 
 }// namespace Moer::Render

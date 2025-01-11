@@ -46,7 +46,17 @@ namespace Moer::Render {
         TextureRef odd_diffuse_albedo;
         TextureRef odd_specular_roughness;
         TextureRef odd_normal;
+
+        TextureRef normal_roughness;//for denoising
+        TextureRef diffuse_lighting;
+        TextureRef odd_diffuse_lighting;
+        TextureRef specular_lighting;
+        TextureRef odd_specular_lighting;
+        TextureRef gradients;
+        TextureRef restir_luminance;
         TextureRef odd_luminance;
+        TextureRef denoised_diffuse_lighting;
+        TextureRef denoised_specular_lighting;
     };
 
     struct RTContext {
@@ -124,11 +134,6 @@ namespace Moer::Render {
         uint max_emissive_triangles;
         uint max_geom_instance;
         uint max_prim_lights;
-
-        //bdls handles
-        uint geom_data_buf_handle;
-        uint instance_data_buf_handle;
-        uint material_data_buf_handle;
 
         FrameResources frame_rt;
 

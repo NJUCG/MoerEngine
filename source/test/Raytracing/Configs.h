@@ -44,7 +44,7 @@ namespace Moer::Render {
     };
 
     struct GridChangableConfig {
-        float  ceil_size = 1.f;
+        float  ceil_size = 25.f;
         float3 center    = float3(0.f);
 
         float grid_jitter            = 1.f;

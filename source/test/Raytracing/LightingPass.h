@@ -10,7 +10,7 @@ namespace Moer {
 #define DI_BINDINGS()                               \
     DEFINE_SHADER_TLAS(tlas);                       \
     DEFINE_SHADER_TLAS(prev_tlas);                  \
-    DEFINE_SHADER_BUFFER(resample_arams);           \
+    DEFINE_SHADER_BUFFER(resample_params);          \
     DEFINE_SHADER_BUFFER(light_reservoirs);         \
     DEFINE_SHADER_TEX(rw_diffuse_lighting);         \
     DEFINE_SHADER_TEX(rw_specular_lighting);        \
@@ -22,7 +22,7 @@ namespace Moer {
     DEFINE_SHADER_BINDLESS_ARRAY(bdls)
 
 #define DI_SHADER_ARGS() \
-    tlas, prev_tlas, resample_arams, light_reservoirs, rw_diffuse_lighting, rw_specular_lighting, rw_gradients, rw_restir_luminance, rw_diffuse_lighting_prev, rw_ris_buffer, rw_ris_light_data_buffer, bdls
+    tlas, prev_tlas, resample_params, light_reservoirs, rw_diffuse_lighting, rw_specular_lighting, rw_gradients, rw_restir_luminance, rw_diffuse_lighting_prev, rw_ris_buffer, rw_ris_light_data_buffer, bdls
 
         class PresampleLightPipeline : public ComputePipeline {
         public:
@@ -96,6 +96,8 @@ namespace Moer {
 
             FusedResamplingPipeline fused_resampling_pipeline;
             DIShadeSamplePipeline   di_shade_sample_pipeline;
+
+            BufferRef resample_params;
         };
     }// namespace Render
 }// namespace Moer

@@ -92,8 +92,8 @@ struct Reservoir {
     return select;
   }
 
-  bool RIS(const Reservoir _other, float _random, float _target_pdf = 1.f,
-           float _normalization = 1.f, float _M) {
+  bool Resample(const Reservoir _other, float _random, float _target_pdf = 1.f,
+                float _normalization = 1.f, float _M = 1.f) {
     float ris_weight = _target_pdf * _normalization;
     M += _M;
     weight_sum += ris_weight;
@@ -110,8 +110,7 @@ struct Reservoir {
     return select;
   }
 
-  bool CombineReservoirs(const Reservoir _other, float _random,
-                         float _target_pdf = 1.f) {
+  bool Combine(const Reservoir _other, float _random, float _target_pdf = 1.f) {
     return Resample(_other, _random, _target_pdf, _other.weight_sum * _other.M,
                     _other.M);
   }

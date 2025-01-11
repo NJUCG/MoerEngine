@@ -170,7 +170,7 @@ namespace Moer {
         struct RISBufferSegmentParams {
             uint buffer_offset;
             uint tile_size;
-            uint tile_count;
+            uint tile_cnt;
             uint padding0;
         };
 

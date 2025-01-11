@@ -3,6 +3,7 @@
 #include "Configs.h"
 #include "Core.h"
 #include "GBufferPass.h"
+#include "LightingPass.h"
 #include "PixelFormat.h"
 #include "PreprocessLightPass.h"
 #include "RTResource.h"
@@ -403,6 +404,7 @@ int main(int argc, const char** argv) {
     //////////////////////////////////////////////////////////////////////////
     UniquePtr<PrepareLightPass> prepare_light_pass = MakeUnique<PrepareLightPass>(device, manager, g_scene);
     UniquePtr<GBufferPass>      g_buffer_pass      = MakeUnique<GBufferPass>(device, manager, g_scene);
+    UniquePtr<LightingPass>     lighting_pass      = MakeUnique<LightingPass>(manager, g_scene);
     UniquePtr<RTContext>        rt_ctx             = MakeUnique<RTContext>(sd_utils, is_ctx, bindless_array);
 
     while (WindowContext::ShouldClose(window_handle) == false) {
@@ -621,6 +623,9 @@ int main(int argc, const char** argv) {
             }
 
             is_ctx.TickFrame(time);
+            auto grid_cfg   = is_ctx.GetGridChangableConfig();
+            grid_cfg.center = camera->GetPosition();
+            is_ctx.SetChangeableGridConfig(grid_cfg);
 
             uint num_emissive_meshes, num_emissive_triangles;
             prepare_light_pass->CountEmissiveInstances(num_emissive_meshes, num_emissive_triangles);
@@ -632,6 +637,7 @@ int main(int argc, const char** argv) {
             prepare_light_pass->Process(cmd_list, *rt_ctx);
 
             g_buffer_pass->Process(cmd_list, *rt_ctx);
+            lighting_pass->Process(cmd_list, *rt_ctx);
 
             TestInlineRTShader::Param param;
             param.global_param_handle    = view_buffer_handle;

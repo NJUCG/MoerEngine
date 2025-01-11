@@ -42,12 +42,7 @@ static const float Acrylic = 1.49f;
 static const float Polystyrene = 1.59f;
 static const float Polyethylene = 1.51f;
 static const float Polypropylene = 1.49f;
-}; // namespace IOR
+} // namespace IOR
 
-void BaseColorMetalnessToAlbedoRf0(float3 base_color, float metalness,
-                                   out float3 albedo, out float rf0) {
-  albedo = base_color * saturate(1.0f - metalness);
-  rf0 = lerp(RF0_DIELECTRICS, base_color, metalness);
-}
-}; // namespace BRDF
+} // namespace BRDF
 #endif

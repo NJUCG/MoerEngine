@@ -102,7 +102,7 @@ bool FindTask(uint dtid, out Moer::PrepareLightsTask task) {
     tri_light.radiance = emissive;
 
     light_info = tri_light.ToLightInfo();
-    // printf("emissive rgb %f %f %f \n", emissive.x, emissive.y, emissive.z);
+    // printf("mat_idx %d\n", param.material_data_handle);
     // printf("emissive power %f \n",Moer::PolymorphicLight::GetPower(light_info));
   }
 

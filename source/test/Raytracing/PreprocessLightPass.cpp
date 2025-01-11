@@ -280,9 +280,9 @@ namespace Moer::Render {
 
         PrepareLightsParams param{};
         param.num_tasks            = tasks.size();
-        param.geometry_data_handle = _rt_ctx.geom_data_buf_handle;
-        param.instance_data_handle = _rt_ctx.instance_data_buf_handle;
-        param.material_data_handle = _rt_ctx.material_data_buf_handle;
+        param.geometry_data_handle = _rt_ctx.GetBindlessHandles().geom_data;
+        param.instance_data_handle = _rt_ctx.GetBindlessHandles().instance_data;
+        param.material_data_handle = _rt_ctx.GetBindlessHandles().material_data;
 
         uint max_lights_in_buffer = uint(_rt_ctx.light_data_buf->GetNumElement() / 2);
         param.cur_light_offset    = max_lights_in_buffer * b_odd_frame;

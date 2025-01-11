@@ -176,6 +176,16 @@ namespace Moer::Render {
         frame_rt.odd_normal             = device.CreateTexture("odd_normal", Extent2D(_resolution), PF_R32_UINT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
         frame_rt.odd_luminance          = device.CreateTexture("prev_luminance", Extent2D(_resolution), PF_R16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
 
+        frame_rt.normal_roughness           = device.CreateTexture("normal_roughness", Extent2D(_resolution), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+        frame_rt.diffuse_lighting           = device.CreateTexture("diffuse_lighting", Extent2D(_resolution), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+        frame_rt.odd_diffuse_lighting       = device.CreateTexture("odd_diffuse_lighting", Extent2D(_resolution), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+        frame_rt.specular_lighting          = device.CreateTexture("specular_lighting", Extent2D(_resolution), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+        frame_rt.odd_specular_lighting      = device.CreateTexture("odd_specular_lighting", Extent2D(_resolution), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+        frame_rt.gradients                  = device.CreateTexture("gradients", Extent2D(_resolution), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED, 1, 2);
+        frame_rt.restir_luminance           = device.CreateTexture("restir_luminance", Extent2D(_resolution), PF_R16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+        frame_rt.denoised_diffuse_lighting  = device.CreateTexture("denoised_diffuse_lighting", Extent2D(_resolution), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+        frame_rt.denoised_specular_lighting = device.CreateTexture("denoised_specular_lighting", Extent2D(_resolution), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+
         Sampler spl{ESamplerFilter::SF_LINEAR, ESamplerAddressMode::SAM_CLAMP_TO_EDGE};
         AllocateAndFreeBdlsIfNeeded(bindless_handles.gbuffer_depth, frame_rt.view_depth->GetView(), spl);
         AllocateAndFreeBdlsIfNeeded(bindless_handles.gbuffer_normal, frame_rt.normal->GetView(), spl);
@@ -213,7 +223,7 @@ namespace Moer::Render {
         env_pdf_mips.clear();
         env_pdf_tex = device.CreateTexture("env_pdf_tex",
                                            Extent2D(extent.x, extent.y),
-                                           PF_R32_UINT,
+                                           PF_R16_SFLOAT,
                                            ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED,
                                            uint(ceilf(log2f(float(std::max(extent.x, extent.y))))));
 

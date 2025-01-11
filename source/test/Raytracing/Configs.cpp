@@ -17,11 +17,11 @@ namespace Moer::Render {
 
         local_light_ris_buffer_params.buffer_offset = segment_allocator.Allocate(_param.local_light_ris_buffer_segment_params.tile_size * _param.local_light_ris_buffer_segment_params.tile_count);
         local_light_ris_buffer_params.tile_size     = _param.local_light_ris_buffer_segment_params.tile_size;
-        local_light_ris_buffer_params.tile_count    = _param.local_light_ris_buffer_segment_params.tile_count;
+        local_light_ris_buffer_params.tile_cnt      = _param.local_light_ris_buffer_segment_params.tile_count;
 
         env_light_ris_buffer_params.buffer_offset = segment_allocator.Allocate(_param.env_light_ris_buffer_segment_params.tile_size * _param.env_light_ris_buffer_segment_params.tile_count);
         env_light_ris_buffer_params.tile_size     = _param.env_light_ris_buffer_segment_params.tile_size;
-        env_light_ris_buffer_params.tile_count    = _param.env_light_ris_buffer_segment_params.tile_count;
+        env_light_ris_buffer_params.tile_cnt      = _param.env_light_ris_buffer_segment_params.tile_count;
 
         grid_config = _param.grid_config;
 

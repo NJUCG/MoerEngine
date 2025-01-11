@@ -7,7 +7,9 @@
 template <typename T> T square(T x) { return x * x; }
 namespace Math {
 
+#ifndef _Pi
 #define _Pi(x) radians(180.0 * x)
+#endif
 
 float Pi(float x) { return _Pi(x); }
 
@@ -17,7 +19,9 @@ float3 Pi(float3 x) { return _Pi(x); }
 
 float4 Pi(float4 x) { return _Pi(x); }
 
+#ifndef _RadToDeg
 #define _RadToDeg(x) (x * 180.0 / Pi(1.0))
+#endif
 
 float RadToDeg(float x) { return _RadToDeg(x); }
 
@@ -27,7 +31,9 @@ float3 RadToDeg(float3 x) { return _RadToDeg(x); }
 
 float4 RadToDeg(float4 x) { return _RadToDeg(x); }
 
+#ifndef _DegToRad
 #define _DegToRad(x) (x * Pi(1.0) / 180.0)
+#endif
 
 float DegToRad(float x) { return _DegToRad(x); }
 
@@ -204,6 +210,17 @@ struct Tea {
     }
   }
 
+  static Tea Create(uint _linear_idx, uint _frame_idx) {
+    Tea result;
+    result.Init(_linear_idx, _frame_idx);
+    return result;
+  }
+
+  static Tea Create(uint2 _pos, uint _frame_idx) {
+    Tea result;
+    result.Init(STL::Sequence::Zorder(_pos), _frame_idx);
+    return result;
+  }
   void Init(uint2 _pos, uint _frame_idx) {
     Init(STL::Sequence::Zorder(_pos), _frame_idx);
   }
@@ -241,6 +258,18 @@ struct Tea {
 
 struct Hash {
   uint state;
+
+  static Hash Create(uint _linear_idx, uint _frame_idx) {
+    Hash result;
+    result.Init(_linear_idx, _frame_idx);
+    return result;
+  }
+
+  static Hash Create(uint2 _pos, uint _frame_idx) {
+    Hash result;
+    result.Init(_pos, _frame_idx);
+    return result;
+  }
 
   void Init(uint _linear_idx, uint _frame_idx) {
     state = STL::Sequence::HashCombine(

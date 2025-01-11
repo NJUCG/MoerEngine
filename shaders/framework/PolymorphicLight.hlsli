@@ -96,6 +96,11 @@ LightShaping UnpackLightShaping(PolymorphicLightInfo _info) {
   return shaping;
 }
 
+PolymorphicLightInfo EmptyLightInfo() {
+  PolymorphicLightInfo info = (PolymorphicLightInfo)0;
+  return info;
+}
+
 #pragma endregion
 
 #pragma region[ PolymorphicLightInfo ]
@@ -143,7 +148,8 @@ void PackLightColor(inout PolymorphicLightInfo _info, float3 _radiance) {
     float3 normalized_radiance = saturate(_radiance / unpacked_radiance);
 
     _info.log_radiance |= packed_radiance;
-    // printf("normalized_radiance %f %f %f \n", normalized_radiance.x, normalized_radiance.y, normalized_radiance.z);
+    // printf("normalized_radiance %f %f %f \n", normalized_radiance.x,
+    // normalized_radiance.y, normalized_radiance.z);
     _info.color_type_flags |= Moer::Pack_R8G8B8_UFLOAT(normalized_radiance);
   }
 }

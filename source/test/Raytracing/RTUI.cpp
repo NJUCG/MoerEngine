@@ -185,6 +185,7 @@ namespace Moer::Render {
         config.max_bounce = max_bounce;
         //show fps
         ImGui::Text("FPS: %.1f", io.Framerate);
+        ImGui::Text("Frame Time: %.1f ms", 1000.0f / io.Framerate);
 
         ImGui::End();
     }

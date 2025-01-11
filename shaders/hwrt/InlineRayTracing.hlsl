@@ -11,7 +11,6 @@ BINDLESS_BINDINGS(3, 2, 4, 5);
 #include <shared/ShaderParameters.h>
 #include <shared/utils/Packing.h>
 
-
 struct Param {
   uint instance_buffer_handle;
   uint geometry_buffer_handle;
@@ -652,9 +651,9 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
 
   ArrayBuffer global_params = ArrayBuffer(param.global_param_handle);
 
-    // uint array_handle =                                                        
-    //     g__array_114514_bdls[NonUniformResourceIndex(global_params.handle)];
-    //     printf("array_handle %d\n", array_handle);
+  // uint array_handle =
+  //     g__array_114514_bdls[NonUniformResourceIndex(global_params.handle)];
+  //     printf("array_handle %d\n", array_handle);
 
   RTViewParam view = global_params.Load<RTViewParam>(0);
 
@@ -771,7 +770,7 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
   float3 albedo, Rf0;
   STL::BRDF::ConvertBaseColorMetalnessToAlbedoRf0(mat.base_color, mat.metalness,
                                                   albedo, Rf0);
-  float3 nov = abs(dot(hit_info.n, hit_info.v));
+  float nov = abs(dot(hit_info.n, hit_info.v));
   float3 f_env = STL::BRDF::EnvironmentTerm_Rtg(Rf0, nov, mat.roughness);
 
   float3 diff_demod = (1.0 - f_env) * albedo * 0.99 + 0.01;
