@@ -213,9 +213,19 @@ namespace Moer::Render::Ext {
             assert(_index < EResourceSlot::OUT_DIFFUSE && "Invalid resource slot index");
             auto* vk_tex = ResourceCast(_texture);
 
-            auto& tex_barrier_desc = texture_barrier_descs[uint8(_index)];
+            auto& tex_barrier_desc_map = texture_barrier_descs[uint8(_index)];
 
-            if (tex_barrier_desc.texture == nullptr) {
+            auto desc_key = uint64(vk_tex->GetHandle());
+            if (tex_barrier_desc_map.contains(desc_key)) {
+                auto& tex_barrier_desc = tex_barrier_desc_map[desc_key];
+                if (type < nrd::Denoiser::RELAX_DIFFUSE && _index == EResourceSlot::MOTION_VECTOR) {
+                    // The 'nri::TextureBarrierDesc.after' of motion vector has been trasitioned to GENERAL by NRD REBLUR Denoisers, so we need to reset it
+                    tex_barrier_desc.after.access = nri::AccessBits::SHADER_RESOURCE;
+                    tex_barrier_desc.after.layout = nri::Layout::SHADER_RESOURCE;
+                }
+                nrd::Integration_SetResource(nrd.user_pool, ResourceSlot(_index), &tex_barrier_desc);
+            } else {
+                auto& tex_barrier_desc = tex_barrier_desc_map[desc_key];
                 // Wrap required textures (better do it only once on initialization)
                 nri::TextureVKDesc tex_desc = {};
 
@@ -247,11 +257,6 @@ namespace Moer::Render::Ext {
                 tex_barrier_desc.layerNum      = vk_tex->GetNumArray();
                 tex_barrier_desc.planes        = nri::PlaneBits::COLOR;
                 nrd::Integration_SetResource(nrd.user_pool, ResourceSlot(_index), &tex_barrier_desc);
-            } else if (type < nrd::Denoiser::RELAX_DIFFUSE && _index == EResourceSlot::MOTION_VECTOR) {
-                // The 'nri::TextureBarrierDesc.after' of motion vector has been trasitioned to GENERAL by NRD REBLUR Denoisers, so we need to reset it
-                tex_barrier_desc.after.access = nri::AccessBits::SHADER_RESOURCE;
-                tex_barrier_desc.after.layout = nri::Layout::SHADER_RESOURCE;
-                nrd::Integration_SetResource(nrd.user_pool, ResourceSlot(_index), &tex_barrier_desc);
             }
 
             // Resource usage
@@ -267,6 +272,10 @@ namespace Moer::Render::Ext {
 
                 resource_usages.emplace_back(_texture, read_flag);
                 resource_usages_indices[uint8(_index)] = resource_usages.size();
+            } else {
+                // Update resource usage
+                auto& usage    = resource_usages[resource_usages_indices[uint8(_index)] - 1];
+                usage.resource = _texture;
             }
         }
 
@@ -274,9 +283,14 @@ namespace Moer::Render::Ext {
             assert(_index >= EResourceSlot::OUT_DIFFUSE && "Output resource index is invalid");
             auto* vk_tex = ResourceCast(_texture);
 
-            auto& tex_barrier_desc = texture_barrier_descs[uint8(_index)];
+            auto& tex_barrier_desc_map = texture_barrier_descs[uint8(_index)];
 
-            if (tex_barrier_desc.texture == nullptr) {
+            auto desc_key = uint64(vk_tex->GetHandle());
+            if (tex_barrier_desc_map.contains(desc_key)) {
+                auto& tex_barrier_desc = tex_barrier_desc_map[desc_key];
+                nrd::Integration_SetResource(nrd.user_pool, ResourceSlot(_index), &tex_barrier_desc);
+            } else {
+                auto& tex_barrier_desc = tex_barrier_desc_map[desc_key];
                 // Wrap required textures (better do it only once on initialization)
                 nri::TextureVKDesc tex_desc = {};
 
@@ -317,12 +331,16 @@ namespace Moer::Render::Ext {
                 pipeline_flags.b_sampled     = 1;
                 pipeline_flags.resource_type = SpvReflectResourceType::SPV_REFLECT_RESOURCE_FLAG_UAV;
 
-                ParamInfoFlags read_flag = {
+                ParamInfoFlags write_flag = {
                     pipeline_flags(),
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT};
 
-                resource_usages.emplace_back(_texture, read_flag);
+                resource_usages.emplace_back(_texture, write_flag);
                 resource_usages_indices[uint8(_index)] = resource_usages.size();
+            } else {
+                // Update resource usage
+                auto& usage    = resource_usages[resource_usages_indices[uint8(_index)] - 1];
+                usage.resource = _texture;
             }
         };
 

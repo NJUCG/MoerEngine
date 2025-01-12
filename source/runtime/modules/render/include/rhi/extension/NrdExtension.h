@@ -92,7 +92,7 @@ namespace Moer::Render::Ext {
 
         NRDEntry nrd = {};
 
-        StaticArray<nri::TextureBarrierDesc, uint8(EResourceSlot::SLOT_NUM)> texture_barrier_descs = {};
+        StaticArray<Map<uint64, nri::TextureBarrierDesc>, uint8(EResourceSlot::SLOT_NUM)> texture_barrier_descs = {};
 
         UnorderedMap<uint64, nri::CommandBuffer*> cmd_lists_on_use = {};
     };

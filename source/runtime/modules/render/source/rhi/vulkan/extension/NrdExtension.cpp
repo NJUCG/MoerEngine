@@ -3,8 +3,10 @@
 namespace Moer::Render::Ext {
 
     NRDInterface::~NRDInterface() {
-        for (auto& desc : texture_barrier_descs) {
-            nrd.nri.rhi.DestroyTexture(*desc.texture);
+        for (auto& desc_map : texture_barrier_descs) {
+            for (auto& [_, desc] : desc_map) {
+                nrd.nri.rhi.DestroyTexture(*desc.texture);
+            }
         }
 
         for (auto& [_, cmd_list] : cmd_lists_on_use) {
