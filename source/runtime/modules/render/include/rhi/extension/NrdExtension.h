@@ -20,7 +20,7 @@ namespace Moer::Render::Ext {
 
         virtual void Begin() = 0;
 
-        virtual void Denoise(CommandList& _cmd_list) = 0;
+        virtual void Denoise(CommandList& _cmd_list, const nrd::Denoiser _denoiser, std::string_view _name) = 0;
 
         virtual void Reinitialize(uint16 _frame_width, uint16 _frame_height) = 0;
 
@@ -52,11 +52,10 @@ namespace Moer::Render::Ext {
         virtual void SetInput(EResourceSlot _index, TextureRef _texture)  = 0;
         virtual void SetOutput(EResourceSlot _index, TextureRef _texture) = 0;
 
-        RENDER_API void UseDenoiser(const nrd::Denoiser _denoiser);
         RENDER_API void UpdateCommonSettings(uint32 _frame_index, const Vector2ui& _size, const Vector2f& _jitter, const Matrix4x4f& _view, const Matrix4x4f& _proj);
         RENDER_API void SetCommonSettings(const nrd::CommonSettings& _settings);
-        RENDER_API void SetDenoiserSettings(const nrd::ReblurSettings& _settings);
-        RENDER_API void SetDenoiserSettings(const nrd::RelaxSettings& _settings);
+        RENDER_API void SetDenoiserSettings(const nrd::Denoiser _type, const nrd::ReblurSettings& _settings);
+        RENDER_API void SetDenoiserSettings(const nrd::Denoiser _type, const nrd::RelaxSettings& _settings);
 
     protected:
         void SetDefaultDenoiserSettings(const nrd::Identifier _denoiser_id);
@@ -64,8 +63,6 @@ namespace Moer::Render::Ext {
 
     protected:
         nrd::CommonSettings nrd_common_settings = {};
-
-        nrd::Denoiser type = nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR;
 
         struct NRDEntry {
             struct NRIEntry {

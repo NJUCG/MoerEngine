@@ -141,12 +141,13 @@ public:
     DEFINE_SHADER_TEX(out_specular);
     DEFINE_SHADER_TEX(out_view_z);
     DEFINE_SHADER_TEX(out_mv);
-    DEFINE_SHADER_TEX(out_shadow_info);
+    DEFINE_SHADER_TEX(out_shadow_penumbra);
+    DEFINE_SHADER_TEX(out_shadow_translucency);
 
     DEFINE_SHADER_TLAS(tlas);
     DEFINE_SHADER_CONSTANT_STRUCT(Param, param);
 
-    DEFINE_SHADER_ARGS(param, rt_config, out_normal_roughness, out_basecolor_metalness, out_direct_lighting, out_emission, out_diffuse, out_specular, out_view_z, out_mv, out_shadow_info, bdls, tlas);
+    DEFINE_SHADER_ARGS(param, rt_config, out_normal_roughness, out_basecolor_metalness, out_direct_lighting, out_emission, out_diffuse, out_specular, out_view_z, out_mv, out_shadow_penumbra, out_shadow_translucency, bdls, tlas);
 };
 
 class CombineUIPipeline : public RasterPipeline {
@@ -213,7 +214,7 @@ public:
     DEFINE_SHADER_TEX(in_basecolor_metalness);
     DEFINE_SHADER_TEX(in_view_z);
     DEFINE_SHADER_TEX(in_mv);
-    DEFINE_SHADER_TEX(in_shadow_info);
+    DEFINE_SHADER_TEX(in_shadow);
     DEFINE_SHADER_TEX(in_diffuse);
     DEFINE_SHADER_TEX(in_specular);
     DEFINE_SHADER_TEX(in_direct_lighting);
@@ -223,7 +224,7 @@ public:
 
     DEFINE_SHADER_CONSTANT_STRUCT(Param, param);
 
-    DEFINE_SHADER_ARGS(param, in_normal_roughness, in_basecolor_metalness, in_view_z, in_mv, in_shadow_info, in_diffuse, in_specular, in_direct_lighting, in_emission, out_composed_diff, out_composed_spec);
+    DEFINE_SHADER_ARGS(param, in_normal_roughness, in_basecolor_metalness, in_view_z, in_mv, in_shadow, in_diffuse, in_specular, in_direct_lighting, in_emission, out_composed_diff, out_composed_spec);
 };
 
 int main(int argc, const char** argv) {
@@ -417,15 +418,18 @@ int main(int argc, const char** argv) {
         PF_R8G8B8A8_SRGB,
         ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED);
 
-    TextureRef out_emission    = device.CreateTexture("out_emission", Extent2D(resolution.x, resolution.y), PF_B10G11R11_UFLOAT_PACK32, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-    TextureRef out_diffuse     = device.CreateTexture("out_diffuse", Extent2D(resolution.x, resolution.y), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-    TextureRef out_specular    = device.CreateTexture("out_specular", Extent2D(resolution.x, resolution.y), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-    TextureRef out_view_z      = device.CreateTexture("out_view_z", Extent2D(resolution.x, resolution.y), PF_R32_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-    TextureRef out_shadow_info = device.CreateTexture("out_shadow_info", Extent2D(resolution.x, resolution.y), PF_R32G32B32A32_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-    TextureRef out_mv          = device.CreateTexture("out_mv", Extent2D(resolution.x, resolution.y), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+    TextureRef out_emission            = device.CreateTexture("out_emission", Extent2D(resolution.x, resolution.y), PF_B10G11R11_UFLOAT_PACK32, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+    TextureRef out_diffuse             = device.CreateTexture("out_diffuse", Extent2D(resolution.x, resolution.y), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+    TextureRef out_specular            = device.CreateTexture("out_specular", Extent2D(resolution.x, resolution.y), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+    TextureRef out_view_z              = device.CreateTexture("out_view_z", Extent2D(resolution.x, resolution.y), PF_R32_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+    TextureRef out_shadow_penumbra     = device.CreateTexture("out_shadow_penumbra", Extent2D(resolution.x, resolution.y), PF_R16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+    TextureRef out_shadow_translucency = device.CreateTexture("out_shadow_translucency", Extent2D(resolution.x, resolution.y), PF_R32G32B32A32_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+    TextureRef out_mv                  = device.CreateTexture("out_mv", Extent2D(resolution.x, resolution.y), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
 
     TextureRef denoised_diffuse  = device.CreateTexture("denoised_diffuse", Extent2D(resolution.x, resolution.y), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
     TextureRef denoised_specular = device.CreateTexture("denoised_specular", Extent2D(resolution.x, resolution.y), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+    // SIGMA_TRANSLUCENT ? RGBA8_UNORM : R8_UNORM;
+    TextureRef denoised_shadow = device.CreateTexture("denoised_shadow", Extent2D(resolution.x, resolution.y), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
 
     TextureRef composed_diff = device.CreateTexture("composed_diffuse", Extent2D(resolution.x, resolution.y), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
     TextureRef composed_spec = device.CreateTexture("composed_specular", Extent2D(resolution.x, resolution.y), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
@@ -467,15 +471,17 @@ int main(int argc, const char** argv) {
             PF_R8G8B8A8_SRGB,
             ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED);
 
-        out_emission    = device.CreateTexture("out_emission", Extent2D(_new_extent.x, _new_extent.y), PF_B10G11R11_UFLOAT_PACK32, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-        out_diffuse     = device.CreateTexture("out_diffuse", Extent2D(_new_extent.x, _new_extent.y), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-        out_specular    = device.CreateTexture("out_specular", Extent2D(_new_extent.x, _new_extent.y), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-        out_view_z      = device.CreateTexture("out_view_z", Extent2D(_new_extent.x, _new_extent.y), PF_R32_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-        out_shadow_info = device.CreateTexture("out_shadow_info", Extent2D(resolution.x, resolution.y), PF_R32G32B32A32_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-        out_mv          = device.CreateTexture("out_mv", Extent2D(_new_extent.x, _new_extent.y), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+        out_emission            = device.CreateTexture("out_emission", Extent2D(_new_extent.x, _new_extent.y), PF_B10G11R11_UFLOAT_PACK32, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+        out_diffuse             = device.CreateTexture("out_diffuse", Extent2D(_new_extent.x, _new_extent.y), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+        out_specular            = device.CreateTexture("out_specular", Extent2D(_new_extent.x, _new_extent.y), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+        out_view_z              = device.CreateTexture("out_view_z", Extent2D(_new_extent.x, _new_extent.y), PF_R32_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+        out_shadow_penumbra     = device.CreateTexture("out_shadow_penumbra", Extent2D(resolution.x, resolution.y), PF_R16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+        out_shadow_translucency = device.CreateTexture("out_shadow_translucency", Extent2D(resolution.x, resolution.y), PF_R32G32B32A32_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+        out_mv                  = device.CreateTexture("out_mv", Extent2D(_new_extent.x, _new_extent.y), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
 
         denoised_diffuse  = device.CreateTexture("denoised_diffuse", Extent2D(resolution.x, resolution.y), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
         denoised_specular = device.CreateTexture("denoised_specular", Extent2D(resolution.x, resolution.y), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+        denoised_shadow   = device.CreateTexture("denoised_shadow", Extent2D(resolution.x, resolution.y), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
 
         composed_diff = device.CreateTexture("composed_diffuse", Extent2D(resolution.x, resolution.y), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
         composed_spec = device.CreateTexture("composed_specular", Extent2D(resolution.x, resolution.y), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
@@ -715,7 +721,8 @@ int main(int argc, const char** argv) {
                              out_specular,
                              out_view_z,
                              out_mv,
-                             out_shadow_info,
+                             out_shadow_penumbra,
+                             out_shadow_translucency,
                              bindless_array,
                              rt_scene->GetTlas())
                 .Dispatch(uint3((resolution.x + 15) >> 4, (resolution.y + 15) >> 4, 1), "PathTracing");
@@ -729,20 +736,33 @@ int main(int argc, const char** argv) {
                 Transpose(camera->GetViewMatrix()),
                 Transpose(camera->GetProjectionMatrix()));
 
-            nrd_interface->UseDenoiser(nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR);
+            // shadow
+            {
+                nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::MOTION_VECTOR, out_mv);
+                nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::NORMAL_ROUGHNESS, out_normal_roughness);
+                nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::VIEW_Z, out_view_z);
+                nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::BASECOLOR_METALNESS, out_basecolor_metalness);
 
-            nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::MOTION_VECTOR, out_mv);
-            nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::NORMAL_ROUGHNESS, out_normal_roughness);
-            nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::VIEW_Z, out_view_z);
-            nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::BASECOLOR_METALNESS, out_basecolor_metalness);
-            nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::IN_DIFFUSE, out_diffuse);
-            nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::IN_SPECULAR, out_specular);
-            nrd_interface->SetOutput(Ext::NRDInterface::EResourceSlot::OUT_DIFFUSE, denoised_diffuse);
-            nrd_interface->SetOutput(Ext::NRDInterface::EResourceSlot::OUT_SPECULAR, denoised_specular);
+                nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::IN_PENUMBRA, out_shadow_penumbra);
+                nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::IN_TRANSLUCENCY, out_shadow_translucency);
+                nrd_interface->SetOutput(Ext::NRDInterface::EResourceSlot::OUT_SHADOW_TRANSLUCENCY, denoised_shadow);
 
-            // nrd_interface->UseDenoiser(nrd::Denoiser::SIGMA_SHADOW_TRANSLUCENCY);
+                nrd_interface->Denoise(cmd_list, nrd::Denoiser::SIGMA_SHADOW_TRANSLUCENCY, "Shadow Denoising");
+            }
 
-            nrd_interface->Denoise(cmd_list);
+            // opaque
+            {
+                nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::MOTION_VECTOR, out_mv);
+                nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::NORMAL_ROUGHNESS, out_normal_roughness);
+                nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::VIEW_Z, out_view_z);
+                nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::BASECOLOR_METALNESS, out_basecolor_metalness);
+                nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::IN_DIFFUSE, out_diffuse);
+                nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::IN_SPECULAR, out_specular);
+                nrd_interface->SetOutput(Ext::NRDInterface::EResourceSlot::OUT_DIFFUSE, denoised_diffuse);
+                nrd_interface->SetOutput(Ext::NRDInterface::EResourceSlot::OUT_SPECULAR, denoised_specular);
+
+                nrd_interface->Denoise(cmd_list, nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR, "Radiance Denoising");
+            }
 
             CompositionCSPipeline::Param composition_param;
             composition_param.view2world    = camera->GetToWorldMatrix();
@@ -761,7 +781,7 @@ int main(int argc, const char** argv) {
                         out_basecolor_metalness,
                         out_view_z,
                         out_mv,
-                        out_shadow_info,
+                        denoised_shadow,
                         denoised_diffuse,
                         denoised_specular,
                         out_direct_lighting,

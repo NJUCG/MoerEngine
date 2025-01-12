@@ -18,11 +18,6 @@ namespace Moer::Render::Ext {
         nri::nriDestroyDevice(*nrd.nri.device);
     }
 
-    void NRDInterface::UseDenoiser(const nrd::Denoiser _denoiser) {
-        type = _denoiser;
-        SetDefaultDenoiserSettings(nrd::Identifier(_denoiser));
-    }
-
     void NRDInterface::UpdateCommonSettings(uint32 _frame_index, const Vector2ui& _size, const Vector2f& _jitter, const Matrix4x4f& _view, const Matrix4x4f& _proj) {
         nrd_common_settings.frameIndex = _frame_index;
 
@@ -59,14 +54,14 @@ namespace Moer::Render::Ext {
         nrd.integration.SetCommonSettings(_settings);
     }
 
-    void NRDInterface::SetDenoiserSettings(const nrd::ReblurSettings& _settings) {
-        assert(type < nrd::Denoiser::RELAX_DIFFUSE && "Denoiser type is not reblur");
-        nrd.integration.SetDenoiserSettings(nrd::Identifier(type), &_settings);
+    void NRDInterface::SetDenoiserSettings(const nrd::Denoiser _type, const nrd::ReblurSettings& _settings) {
+        assert(_type < nrd::Denoiser::RELAX_DIFFUSE && "Denoiser type is not reblur");
+        nrd.integration.SetDenoiserSettings(nrd::Identifier(_type), &_settings);
     }
 
-    void NRDInterface::SetDenoiserSettings(const nrd::RelaxSettings& _settings) {
-        assert(type >= nrd::Denoiser::RELAX_DIFFUSE && type < nrd::Denoiser::SIGMA_SHADOW && "Denoiser type is not relax");
-        nrd.integration.SetDenoiserSettings(nrd::Identifier(type), &_settings);
+    void NRDInterface::SetDenoiserSettings(const nrd::Denoiser _type, const nrd::RelaxSettings& _settings) {
+        assert(_type >= nrd::Denoiser::RELAX_DIFFUSE && _type < nrd::Denoiser::SIGMA_SHADOW && "Denoiser type is not relax");
+        nrd.integration.SetDenoiserSettings(nrd::Identifier(_type), &_settings);
     }
 
     void NRDInterface::SetDefaultDenoiserSettings(const nrd::Identifier _denoiser_id) {

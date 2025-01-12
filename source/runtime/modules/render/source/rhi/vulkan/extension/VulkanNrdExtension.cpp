@@ -97,12 +97,11 @@ namespace Moer::Render::Ext {
                     {NRD_ID(RELAX_DIFFUSE), nrd::Denoiser::RELAX_DIFFUSE},
                     {NRD_ID(RELAX_SPECULAR), nrd::Denoiser::RELAX_SPECULAR},
                     // SIGMA
-                    // {NRD_ID(SIGMA_SHADOW_TRANSLUCENCY), nrd::Denoiser::SIGMA_SHADOW_TRANSLUCENCY},
-                    // {NRD_ID(SIGMA_SHADOW), nrd::Denoiser::SIGMA_SHADOW_TRANSLUCENCY},
+                    {NRD_ID(SIGMA_SHADOW_TRANSLUCENCY), nrd::Denoiser::SIGMA_SHADOW_TRANSLUCENCY},
+                    {NRD_ID(SIGMA_SHADOW), nrd::Denoiser::SIGMA_SHADOW_TRANSLUCENCY},
                     // REFERENCE
                     // {NRD_ID(REFERENCE), nrd::Denoiser::REFERENCE},
                 };
-#undef NRD_ID
 
                 nrd::InstanceCreationDesc instance_desc = {};
                 instance_desc.denoisers                 = denoiser_descs.data();
@@ -124,8 +123,16 @@ namespace Moer::Render::Ext {
 
             {
                 SetDefaultCommonSettings(_frame_width, _frame_height);
-                SetDefaultDenoiserSettings(nrd::Identifier(type));
+                SetDefaultDenoiserSettings(NRD_ID(REBLUR_DIFFUSE_SPECULAR));
+                SetDefaultDenoiserSettings(NRD_ID(REBLUR_DIFFUSE));
+                SetDefaultDenoiserSettings(NRD_ID(REBLUR_SPECULAR));
+                SetDefaultDenoiserSettings(NRD_ID(RELAX_DIFFUSE_SPECULAR));
+                SetDefaultDenoiserSettings(NRD_ID(RELAX_DIFFUSE));
+                SetDefaultDenoiserSettings(NRD_ID(RELAX_SPECULAR));
+                SetDefaultDenoiserSettings(NRD_ID(SIGMA_SHADOW_TRANSLUCENCY));
+                SetDefaultDenoiserSettings(NRD_ID(SIGMA_SHADOW));
             }
+#undef NRD_ID
         }
 
         void Begin() override {
@@ -133,7 +140,7 @@ namespace Moer::Render::Ext {
             nrd.integration.NewFrame();
         }
 
-        void Denoise(CommandList& _cmd_list) override;
+        void Denoise(CommandList& _cmd_list, const nrd::Denoiser _denoiser, std::string_view _name) override;
 
         void Reinitialize(uint16 _frame_width, uint16 _frame_height) override {
             //=======================================================================================================
@@ -179,12 +186,11 @@ namespace Moer::Render::Ext {
                     {NRD_ID(RELAX_DIFFUSE), nrd::Denoiser::RELAX_DIFFUSE},
                     {NRD_ID(RELAX_SPECULAR), nrd::Denoiser::RELAX_SPECULAR},
                     // SIGMA
-                    // {NRD_ID(SIGMA_SHADOW_TRANSLUCENCY), nrd::Denoiser::SIGMA_SHADOW_TRANSLUCENCY},
-                    // {NRD_ID(SIGMA_SHADOW), nrd::Denoiser::SIGMA_SHADOW_TRANSLUCENCY},
+                    {NRD_ID(SIGMA_SHADOW_TRANSLUCENCY), nrd::Denoiser::SIGMA_SHADOW_TRANSLUCENCY},
+                    {NRD_ID(SIGMA_SHADOW), nrd::Denoiser::SIGMA_SHADOW_TRANSLUCENCY},
                     // REFERENCE
                     // {NRD_ID(REFERENCE), nrd::Denoiser::REFERENCE},
                 };
-#undef NRD_ID
 
                 nrd::InstanceCreationDesc instance_desc = {};
                 instance_desc.denoisers                 = denoiser_descs.data();
@@ -206,7 +212,16 @@ namespace Moer::Render::Ext {
 
             {
                 SetDefaultCommonSettings(_frame_width, _frame_height);
+                SetDefaultDenoiserSettings(NRD_ID(REBLUR_DIFFUSE_SPECULAR));
+                SetDefaultDenoiserSettings(NRD_ID(REBLUR_DIFFUSE));
+                SetDefaultDenoiserSettings(NRD_ID(REBLUR_SPECULAR));
+                SetDefaultDenoiserSettings(NRD_ID(RELAX_DIFFUSE_SPECULAR));
+                SetDefaultDenoiserSettings(NRD_ID(RELAX_DIFFUSE));
+                SetDefaultDenoiserSettings(NRD_ID(RELAX_SPECULAR));
+                SetDefaultDenoiserSettings(NRD_ID(SIGMA_SHADOW_TRANSLUCENCY));
+                SetDefaultDenoiserSettings(NRD_ID(SIGMA_SHADOW));
             }
+#undef NRD_ID
         }
 
         void SetInput(EResourceSlot _index, TextureRef _texture) override {
@@ -218,7 +233,7 @@ namespace Moer::Render::Ext {
             auto desc_key = uint64(vk_tex->GetHandle());
             if (tex_barrier_desc_map.contains(desc_key)) {
                 auto& tex_barrier_desc = tex_barrier_desc_map[desc_key];
-                if (type < nrd::Denoiser::RELAX_DIFFUSE && _index == EResourceSlot::MOTION_VECTOR) {
+                if (_index == EResourceSlot::MOTION_VECTOR) {
                     // The 'nri::TextureBarrierDesc.after' of motion vector has been trasitioned to GENERAL by NRD REBLUR Denoisers, so we need to reset it
                     tex_barrier_desc.after.access = nri::AccessBits::SHADER_RESOURCE;
                     tex_barrier_desc.after.layout = nri::Layout::SHADER_RESOURCE;
@@ -398,17 +413,17 @@ namespace Moer::Render::Ext {
 
     private:
         VkNRDInterface& nrd_interface;
+        nrd::Denoiser   denoiser;
 
     public:
-        VkNrdDenoiseCmd(VkNRDInterface& _nrd)
-            : nrd_interface(_nrd) {}
+        VkNrdDenoiseCmd(VkNRDInterface& _nrd, const nrd::Denoiser _denoiser)
+            : nrd_interface(_nrd), denoiser(_denoiser) {}
 
         EQueueType GetQueueType() const override { return EQueueType::Graphics; }
 
         void Execute(const VkDispatchContext& _context) const override {
-            const auto& denoiser_type   = nrd_interface.type;
-            auto&       nrd_integration = nrd_interface.nrd.integration;
-            auto&       nri             = nrd_interface.nrd.nri;
+            auto& nrd_integration = nrd_interface.nrd.integration;
+            auto& nri             = nrd_interface.nrd.nri;
             //=======================================================================================================
             // RENDER - DENOISE
             //=======================================================================================================
@@ -423,12 +438,12 @@ namespace Moer::Render::Ext {
                 nrd_interface.cmd_lists_on_use[uint64(_context.cmd_list)] = nri.cmd_list;
             }
 
-            const nrd::Identifier denoiser = nrd::Identifier(denoiser_type);
-            nrd_integration.Denoise(&denoiser, 1, *nri.cmd_list, nrd_interface.nrd.user_pool);
+            const nrd::Identifier denoiser_id = nrd::Identifier(denoiser);
+            nrd_integration.Denoise(&denoiser_id, 1, *nri.cmd_list, nrd_interface.nrd.user_pool);
 
             // The motion vector has been trasitioned to GENERAL layout by NRD REBLUR Denoisers, so we need to flush the state
             auto mv_usage_slot = nrd_interface.resource_usages_indices[uint8(NRDInterface::EResourceSlot::MOTION_VECTOR)];
-            if (nrd_interface.type < nrd::Denoiser::RELAX_DIFFUSE && mv_usage_slot) {
+            if (denoiser < nrd::Denoiser::RELAX_DIFFUSE && mv_usage_slot) {
                 auto* mv         = ResourceCast(std::get<TextureView>(nrd_interface.resource_usages[mv_usage_slot - 1].resource).GetTexture());
                 auto* vk_tracker = (VkTracker*)_context.user_data;
                 vk_tracker->FlushSrcState(
@@ -441,10 +456,10 @@ namespace Moer::Render::Ext {
         }
     };
 
-    void VkNRDInterface::Denoise(CommandList& _cmd_list) {
+    void VkNRDInterface::Denoise(CommandList& _cmd_list, const nrd::Denoiser _denoiser, std::string_view _name) {
         _cmd_list.AddCustomCommand(
-            MakeUnique<VkNrdDenoiseCmd>(*this),
-            "NRD Denoising");
+            MakeUnique<VkNrdDenoiseCmd>(*this, _denoiser),
+            _name);
     }
 
 }// namespace Moer::Render::Ext
