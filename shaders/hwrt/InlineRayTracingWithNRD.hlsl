@@ -39,7 +39,8 @@ struct Param {
 [[vk::binding(5, 1)]] RWTexture2D<float4> out_specular;
 [[vk::binding(6, 1)]] RWTexture2D<float> out_view_z;
 [[vk::binding(7, 1)]] RWTexture2D<float3> out_mv;
-[[vk::binding(8, 1)]] RWTexture2D<float4> out_shadow_info;
+[[vk::binding(8, 1)]] RWTexture2D<float> out_shadow_penumbra;
+[[vk::binding(9, 1)]] RWTexture2D<float4> out_shadow_translucency;
 
 #define SKY_INTENSITY 1.0
 #define SUN_INTENSITY 8.0
@@ -764,8 +765,10 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
       shadow_distance += shadow_hit_info.tmin;
     }
 
-    float4 shadow_info = float4(shadow_translucency, shadow_distance);
-    out_shadow_info[pixel_pos] = shadow_info;
+    float penumbra = SIGMA_FrontEnd_PackPenumbra(shadow_distance, rt_config.tan_sun_angular_radius);
+    float4 translucency = SIGMA_FrontEnd_PackTranslucency(shadow_distance, shadow_translucency);
+    out_shadow_penumbra[pixel_pos] = penumbra;
+    out_shadow_translucency[pixel_pos] = translucency;
   }
 
   // secondary ray

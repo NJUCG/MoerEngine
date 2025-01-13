@@ -23,7 +23,7 @@ struct Param {
 [[vk::binding(1, 0)]] Texture2D<float4> in_basecolor_metalness: register(t1, space0);
 [[vk::binding(2, 0)]] Texture2D<float> in_view_z : register(t2, space0);
 [[vk::binding(3, 0)]] Texture2D<float3> in_mv : register(t3, space0);
-[[vk::binding(4, 0)]] Texture2D<float4> in_shadow_info;
+[[vk::binding(4, 0)]] Texture2D<float4> in_shadow;
 [[vk::binding(5, 0)]] Texture2D<float4> in_diffuse;
 [[vk::binding(6, 0)]] Texture2D<float4> in_specular;
 [[vk::binding(7, 0)]] Texture2D<float3> in_direct_lighting;
@@ -57,15 +57,15 @@ struct Param {
     }
 
     // Direct sun lighting * shadow + emission
-    float4 shadow_data = in_shadow_info[pixel_pos];
+    float4 shadow_data = in_shadow[pixel_pos];
 
     // #if( SIGMA_TRANSLUCENT == 1 )
-    //     float3 shadow = SIGMA_BackEnd_UnpackShadow( shadowData ).yzw;
+    float3 shadow = SIGMA_BackEnd_UnpackShadow(shadow_data).yzw;
     // #else
-    //     float shadow = SIGMA_BackEnd_UnpackShadow( shadowData ).x;
+    // float shadow = SIGMA_BackEnd_UnpackShadow(shadow_data).x;
     // #endif
 
-    float3 l_direct = in_direct_lighting[pixel_pos] * shadow_data.x + lemi;
+    float3 l_direct = in_direct_lighting[pixel_pos] * shadow + lemi;
 
     // G-buffer
     float3 albedo, Rf0;
