@@ -186,6 +186,9 @@ namespace Moer::Render {
         frame_rt.denoised_diffuse_lighting  = device.CreateTexture("denoised_diffuse_lighting", Extent2D(_resolution), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
         frame_rt.denoised_specular_lighting = device.CreateTexture("denoised_specular_lighting", Extent2D(_resolution), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
 
+        frame_rt.debug_color = device.CreateTexture("debug_color", Extent2D(_resolution), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+        frame_rt.scene_color = device.CreateTexture("scene_color", Extent2D(_resolution), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+
         Sampler spl{ESamplerFilter::SF_LINEAR, ESamplerAddressMode::SAM_CLAMP_TO_EDGE};
         AllocateAndFreeBdlsIfNeeded(bindless_handles.gbuffer_depth, frame_rt.view_depth->GetView(), spl);
         AllocateAndFreeBdlsIfNeeded(bindless_handles.gbuffer_normal, frame_rt.normal->GetView(), spl);
@@ -330,12 +333,12 @@ namespace Moer::Render {
         auto& device = RenderDevice::Get();
         prev_view    = main_view;
 
-        main_view.view2world = _camera->GetToWorldMatrix();
-        main_view.world2view = _camera->GetViewMatrix();
-        main_view.world2clip = _camera->GetProjectionMatrix() * _camera->GetViewMatrix();
-        main_view.view2clip  = _camera->GetProjectionMatrix();
-        main_view.clip2view  = Inverse(main_view.view2clip);
-        main_view.clip2world = Inverse(main_view.world2clip);
+        main_view.view2world = Transpose(_camera->GetToWorldMatrix());
+        main_view.world2view = Transpose(_camera->GetViewMatrix());
+        main_view.world2clip = Transpose(_camera->GetViewProjectionMatrix());
+        main_view.view2clip  = Transpose(_camera->GetProjectionMatrix());
+        main_view.clip2view  = Transpose(_camera->GetProjectionMatrixInv());
+        main_view.clip2world = Transpose(_camera->GetViewProjectionMatrixInv());
         main_view.frustum    = _camera->GetFrustum();
         main_view.near_far   = float2(_camera->GetNearClip(), _camera->GetFarClip());
         main_view.rect       = float2(is_ctx.GetReSTIRDIConfig().render_width, is_ctx.GetReSTIRDIConfig().render_height);

@@ -1,5 +1,6 @@
 #ifndef MOER_TEST_RTUI_H
 #define MOER_TEST_RTUI_H
+#include "Configs.h"
 #include "Core.h"
 #include "misc/STL.h"
 #include "renderer/UIRenderer.h"
@@ -9,12 +10,18 @@ namespace Moer::Render {
 
     class RTUI {
     public:
+        struct GridConfig {
+            int   grid_mode      = 1;
+            int   light_per_ceil = 512;
+            float cell_size      = 1.f;
+        };
         struct Config {
             float3 sun_direction        = float3(0.f, 0.5f, 0.16f);
             float  exposure             = 80.f;
             float  sun_angular_diameter = 0.533f;
             uint   max_bounce           = 4;
 
+            GridConfig  grid_config{};
             EFinalColor final_color = EFinalColor::EFC_SceneColor;
         };
         RTUI(UIRenderer& _renderer);

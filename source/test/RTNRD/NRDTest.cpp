@@ -657,8 +657,8 @@ int main(int argc, const char** argv) {
             auto camera_entity = g_scene.GetCameras()[0];
             auto camera        = CameraManager::Get().Get(camera_entity);
 
-            rt_config_param.world2view_prev = camera->GetViewMatrix();
-            rt_config_param.world2clip_prev = camera->GetProjectionMatrix() * camera->GetViewMatrix();
+            rt_config_param.world2view_prev = Transpose(camera->GetViewMatrix());
+            rt_config_param.world2clip_prev = Transpose(camera->GetProjectionMatrix() * camera->GetViewMatrix());
 
             g_buffer_pass->PreTickCamera();
 
@@ -666,8 +666,8 @@ int main(int argc, const char** argv) {
 
             g_buffer_pass->Process(cmd_list, *rt_ctx);
 
-            rt_view_param.view2world = camera->GetToWorldMatrix();
-            rt_view_param.world2view = camera->GetViewMatrix();
+            rt_view_param.view2world = Transpose(camera->GetToWorldMatrix());
+            rt_view_param.world2view = Transpose(camera->GetViewMatrix());
             rt_view_param.frustum    = camera->GetFrustum();
             rt_view_param.near_far   = float2(camera->GetNearClip(), camera->GetFarClip());
             rt_view_param.rect       = uint2(resolution.x, resolution.y);
@@ -678,10 +678,10 @@ int main(int argc, const char** argv) {
 
             const RTUI::Config& rt_ui_config = rt_ui.GetConfig();
 
-            rt_config_param.view2world = camera->GetToWorldMatrix();
-            rt_config_param.view2clip  = camera->GetProjectionMatrix();
-            rt_config_param.world2view = camera->GetViewMatrix();
-            rt_config_param.world2clip = camera->GetProjectionMatrix() * camera->GetViewMatrix();
+            rt_config_param.view2world = Transpose(camera->GetToWorldMatrix());
+            rt_config_param.view2clip  = Transpose(camera->GetProjectionMatrix());
+            rt_config_param.world2view = Transpose(camera->GetViewMatrix());
+            rt_config_param.world2clip = Transpose(camera->GetProjectionMatrix() * camera->GetViewMatrix());
 
             rt_config_param.tan_pixel_angular_radius = tanf(Angle::DegreeToRadian(camera->GetFov()));
             rt_config_param.tan_sun_angular_radius   = tanf(Angle::DegreeToRadian(rt_ui_config.sun_angular_diameter * 0.5f));
@@ -740,7 +740,7 @@ int main(int argc, const char** argv) {
             nrd_interface->Denoise(cmd_list);
 
             CompositionCSPipeline::Param composition_param;
-            composition_param.view2world    = camera->GetToWorldMatrix();
+            composition_param.view2world    = Transpose(camera->GetToWorldMatrix());
             composition_param.frustum       = camera->GetFrustum();
             composition_param.dir           = camera->GetDirection();
             composition_param.orthomode     = 0;

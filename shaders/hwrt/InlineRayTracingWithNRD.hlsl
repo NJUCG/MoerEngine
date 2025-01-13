@@ -389,7 +389,8 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
   RTViewParam view =
       ArrayBuffer(param.global_param_handle).Load<RTViewParam>(0);
 
-  float view_z = mul(float4(pt_desc.hit_info.x, 1.f), view.world2view).z;
+  // float view_z = mul(float4(pt_desc.hit_info.x, 1.f), view.world2view).z;
+  float view_z = mul(rt_config.world2view, float4(pt_desc.hit_info.x, 1.f)).z;
 
   // Pathtracing from primary hit
 
@@ -672,11 +673,11 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
   float3 cam_ray_origion_v = Raytracing::ReconstructViewPosition(
       uv, view.frustum, -view.near_far.x, view.orthomode);
   float3 cam_ray_origion_w =
-      mul(float4(cam_ray_origion_v, 1.0f), view.view2world).xyz;
+      mul(view.view2world, float4(cam_ray_origion_v, 1.0f)).xyz;
 
   float3 cam_ray_dir_w =
       view.orthomode == 0
-          ? normalize(mul(cam_ray_origion_v, (float3x3)view.view2world))
+          ? normalize(mul((float3x3)view.view2world, cam_ray_origion_v))
           : -view.dir;
   // if(pixel_pos.x == 140 && pixel_pos.y == 140)
   //   printf("cam_ray_dir_w %f %f %f\n", cam_ray_dir_w.x, cam_ray_dir_w.y,
@@ -692,7 +693,9 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
   RTMaterialProp mat = GetMaterialProps(hit_info);
 
   // view z
-  float view_z = mul(float4(hit_info.x, 1.f), view.world2view).z;
+  // float view_z = mul(float4(hit_info.x, 1.f), view.world2view).z;
+  float view_z = mul(rt_config.world2view, float4(hit_info.x, 1.f)).z;
+
   // if(view_z < 0.f){
   //   printf("view_z %f\n", view_z);
   // }

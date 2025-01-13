@@ -170,7 +170,7 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
         arguments.push_back(Moer::ConfigManager::GetInstance().GetEngineShaderPath().generic_wstring());
         arguments.push_back(L"-I");
         arguments.push_back(Moer::ConfigManager::GetInstance().GetEngineShaderSharedPath().generic_wstring());
-        arguments.push_back(L"-Zpr");
+        // arguments.push_back(L"-Zpr");
         // arguments.push_back(L"-all-resources-bound");
         if (_platform == SP_WIN_D3D_SM6)
             add_dx_arg(arguments);

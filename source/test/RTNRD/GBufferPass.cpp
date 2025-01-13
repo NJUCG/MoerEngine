@@ -20,10 +20,10 @@ namespace Moer::Render {
         Entity main_cam_entity = scene.GetMainCamera();
 
         auto main_cam                  = CameraManager::Get().Get(main_cam_entity);
-        constants.main_view.view2world = main_cam->GetToWorldMatrix();
-        constants.main_view.world2view = main_cam->GetViewMatrix();
-        constants.main_view.world2clip = main_cam->GetProjectionMatrix() * main_cam->GetViewMatrix();
-        constants.main_view.view2clip  = main_cam->GetProjectionMatrix();
+        constants.main_view.view2world = Transpose(main_cam->GetToWorldMatrix());
+        constants.main_view.world2view = Transpose(main_cam->GetViewMatrix());
+        constants.main_view.world2clip = Transpose(main_cam->GetProjectionMatrix() * main_cam->GetViewMatrix());
+        constants.main_view.view2clip  = Transpose(main_cam->GetProjectionMatrix());
         constants.main_view.clip2view  = Inverse(constants.main_view.view2clip);
         constants.main_view.clip2world = Inverse(constants.main_view.world2clip);
         constants.main_view.frustum    = main_cam->GetFrustum();

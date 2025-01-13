@@ -6,7 +6,7 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 #include "framework/Material.hlsl"
 
 struct LightingData {
-    float4x4 inv_view_proj;
+    column_major float4x4 inv_view_proj;
     uint light_count;
     uint3 padding;
     float3 camera_position;
@@ -87,7 +87,7 @@ struct PBRInfo {
 
  float3 WorldPosFromDepth(float depth, float2 screen_uv,float4x4 inv_view_proj) {
      float4 clip    = float4(screen_uv.x * 2.f - 1.f, 1.f - screen_uv.y * 2.f, depth, 1.0);
-     float4 world_w = mul(clip, inv_view_proj);
+     float4 world_w = mul(inv_view_proj, clip);
      float3 pos     = world_w.xyz / world_w.w;
      return pos;
  }

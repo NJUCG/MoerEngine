@@ -455,16 +455,25 @@ void GUIRender(void* _draw_data, const TextureView& _frame_buffer, CommandList& 
     GUIPipelineBdls::Constant constant;
 
     {
-        float l         = draw_data->DisplayPos.x;
-        float r         = draw_data->DisplayPos.x + draw_data->DisplaySize.x;
-        float t         = draw_data->DisplayPos.y;
-        float b         = draw_data->DisplayPos.y + draw_data->DisplaySize.y;
+        float l = draw_data->DisplayPos.x;
+        float r = draw_data->DisplayPos.x + draw_data->DisplaySize.x;
+        float t = draw_data->DisplayPos.y;
+        float b = draw_data->DisplayPos.y + draw_data->DisplaySize.y;
+        // float mvp[4][4] = {
+        //     {2.0f / (r - l), 0.0f, 0.0f, (r + l) / (l - r)},
+        //     {0.0f, 2.0f / (t - b), 0.5f, (t + b) / (b - t)},
+        //     {0.0f, 0.0f, 0.f, 0.5f},
+        //     {0.f, 0.0f, 0.0f, 1.0f},
+        // };
+
+        //transposed
         float mvp[4][4] = {
-            {2.0f / (r - l), 0.0f, 0.0f, (r + l) / (l - r)},
-            {0.0f, 2.0f / (t - b), 0.5f, (t + b) / (b - t)},
-            {0.0f, 0.0f, 0.f, 0.5f},
-            {0.f, 0.0f, 0.0f, 1.0f},
+            {2.0f / (r - l), 0.0f, 0.0f, 0.0f},
+            {0.0f, 2.0f / (t - b), 0.0f, 0.0f},
+            {0.0f, 0.0f, 0.f, 0.0f},
+            {(r + l) / (l - r), (t + b) / (b - t), 0.5f, 1.0f},
         };
+
         memcpy(&constant.mvp, mvp, sizeof(mvp));
     }
     for (int32_t n = 0; n < draw_data->CmdListsCount; n++) {

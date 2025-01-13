@@ -38,7 +38,7 @@ struct Param {
 [[vk::binding(6, 1)]] RWTexture2D<float> out_view_z;
 [[vk::binding(7, 1)]] RWTexture2D<float3> out_mv;
 [[vk::binding(8, 1)]] RWTexture2D<float2> out_shadow_info;
-
+[[vk::binding(9, 1)]] RWTexture2D<float4> out_scene_color;
 #define SKY_INTENSITY 1.0
 #define SUN_INTENSITY 8.0
 
@@ -387,7 +387,7 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
   RTViewParam view =
       ArrayBuffer(param.global_param_handle).Load<RTViewParam>(0);
 
-  float view_z = mul(float4(pt_desc.hit_info.x, 1.f), view.world2view).z;
+  float view_z = mul(view.world2view, float4(pt_desc.hit_info.x, 1.f)).z;
 
   // Pathtracing from primary hit
 
@@ -660,11 +660,11 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
   float3 cam_ray_origion_v = Raytracing::ReconstructViewPosition(
       uv, view.frustum, -view.near_far.x, view.orthomode);
   float3 cam_ray_origion_w =
-      mul(float4(cam_ray_origion_v, 1.0f), view.view2world).xyz;
+      mul(view.view2world, float4(cam_ray_origion_v, 1.0f)).xyz;
 
   float3 cam_ray_dir_w =
       view.orthomode == 0
-          ? normalize(mul(cam_ray_origion_v, (float3x3)view.view2world))
+          ? normalize(mul( (float3x3)view.view2world, cam_ray_origion_v))
           : -view.dir;
   // if(pixel_pos.x == 140 && pixel_pos.y == 140)
   //   printf("cam_ray_dir_w %f %f %f\n", cam_ray_dir_w.x, cam_ray_dir_w.y,
@@ -680,7 +680,7 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
   RTMaterialProp mat = GetMaterialProps(hit_info);
 
   // view z
-  float view_z = mul(float4(hit_info.x, 1.f), view.world2view).z;
+  float view_z = mul(view.world2view, float4(hit_info.x, 1.f)).z;
   view_z = hit_info.IsSky() ? STL::Math::Sign(view_z) * INF : view_z;
   out_view_z[pixel_pos] = view_z;
 
@@ -691,7 +691,8 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
   if (hit_info.IsSky()) {
     out_shadow_info[pixel_pos] = float2(0.f, 0.f);
     out_emission[pixel_pos] = mat.l_emi;
-    out_direct_lighting[pixel_pos] = mat.l_emi;
+    // out_direct_lighting[pixel_pos] = mat.l_emi;
+    out_scene_color[pixel_pos] = float4(mat.l_emi, 1.f);
     return;
   }
 
@@ -784,7 +785,7 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
   //     mat.l_emi,
   //            mat.l_emi, shadow_translucency);
   //   out_position[pixel_pos] = float4(hit_info.x, 1.0f);
-  out_direct_lighting[pixel_pos] = l_sum + l_diff + l_spec;
+  out_scene_color[pixel_pos] = float4(l_sum + l_diff + l_spec, 1.f);
   out_diffuse[pixel_pos] =
       float4(pt_result.diffuse_radiance, pt_result.diffuse_hit_dist);
   out_specular[pixel_pos] =

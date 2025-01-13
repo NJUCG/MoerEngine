@@ -46,18 +46,7 @@ namespace Moer::Render {
         constants.local_light_ris_buffer_params = is_ctx.GetLocalLightRISBufferParams();
         constants.env_light_ris_buffer_params   = is_ctx.GetEnvLightRISBufferParams();
 
-        constants.grid_params.common_params.center_x                   = is_ctx.GetGridChangableConfig().center.x;
-        constants.grid_params.common_params.center_y                   = is_ctx.GetGridChangableConfig().center.y;
-        constants.grid_params.common_params.center_z                   = is_ctx.GetGridChangableConfig().center.z;
-        constants.grid_params.common_params.cell_size                  = is_ctx.GetGridChangableConfig().ceil_size;
-        constants.grid_params.common_params.jitter                     = is_ctx.GetGridChangableConfig().grid_jitter;
-        constants.grid_params.common_params.num_build_samples          = is_ctx.GetGridChangableConfig().num_grid_build_samples;
-        constants.grid_params.common_params.local_light_sampling_mode  = is_ctx.GetGridConfig().light_per_ceil;
-        constants.grid_params.common_params.local_light_presample_mode = is_ctx.GetGridConfig().grid_mode;
-        constants.grid_params.grid_params.cell_x                       = is_ctx.GetGridConfig().grid_size.x;
-        constants.grid_params.grid_params.cell_y                       = is_ctx.GetGridConfig().grid_size.y;
-        constants.grid_params.grid_params.cell_z                       = is_ctx.GetGridConfig().grid_size.z;
-
+        constants.grid_params             = is_ctx.GetGridParams();
         constants.scene_params            = _rt_ctx.scene_params;
         constants.enable_accumulation     = 1;
         constants.discount_native_samples = 1;

@@ -28,15 +28,16 @@ float3 GetMotion(Moer::ViewParam _view, Moer::ViewParam _prev_view,
   float3 world_pos_prev =
       mul(_instance.prev_model2world, float4(_model_pos_prev, 1.0f)).xyz;
 
-  //   float4 clip_pos = mul(_view.world2clip, float4(world_pos, 1.0f));
-  //   clip_pos.xyz /= clip_pos.w;
-  float4 clip_pos = mul(float4(world_pos, 1.0f), _view.world2clip);
+  float4 clip_pos = mul(_view.world2clip, float4(world_pos, 1.0f));
+
   float4 clip_pos_prev =
-      mul(float4(world_pos_prev, 1.0f), _prev_view.world2clip);
+      mul(_prev_view.world2clip, float4(world_pos_prev, 1.0f));
   clip_pos_prev.xyz /= clip_pos_prev.w;
+  clip_pos.xyz /= clip_pos.w;
 
   _view_depth = clip_pos.w;
   _clip_depth = clip_pos.z;
+
   if (clip_pos.w <= 0 || clip_pos_prev.w <= 0) {
     return float3(0, 0, 0);
   }
@@ -52,11 +53,11 @@ float3 ViewdepthToWorldPos(Moer::ViewParam _view, int2 _pixel_pos,
                            float _view_depth) {
   float2 uv = (float2(_pixel_pos) + 0.5f) * _view.inv_rect;
   float4 clip_pos = float4(uv.x * 2.f - 1.f, 1.f - uv.y * 2.f, 0.5f, 1.f);
-  float4 view_pos = mul(clip_pos, _view.clip2view);
+  float4 view_pos = mul(_view.clip2view, clip_pos);
   view_pos.xy /= view_pos.z;
   view_pos.zw = float2(1.f, 1.f);
   view_pos.xyz *= _view_depth;
-  return mul(view_pos, _view.view2world).xyz;
+  return mul(_view.view2world, view_pos).xyz;
 }
 
 } // namespace Moer

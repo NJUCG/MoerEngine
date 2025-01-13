@@ -44,7 +44,7 @@ namespace Moer::Render {
     };
 
     struct GridChangableConfig {
-        float  ceil_size = 25.f;
+        float  cell_size = 25.f;
         float3 center    = float3(0.f);
 
         float grid_jitter            = 1.f;
@@ -200,7 +200,13 @@ namespace Moer::Render {
         }
 
         void SetChangeableGridConfig(const GridChangableConfig& _config) {
-            grid_changable_config = _config;
+            grid_changable_config                       = _config;
+            grid_params.common_params.cell_size         = _config.cell_size;
+            grid_params.common_params.center_x          = _config.center.x;
+            grid_params.common_params.center_y          = _config.center.y;
+            grid_params.common_params.center_z          = _config.center.z;
+            grid_params.common_params.jitter            = _config.grid_jitter;
+            grid_params.common_params.num_build_samples = _config.num_grid_build_samples;
         }
 
         //called in prepare lights in each frame
@@ -217,6 +223,11 @@ namespace Moer::Render {
         GridChangableConfig GetGridChangableConfig() const {
             return grid_changable_config;
         }
+
+        const Grid::Params& GetGridParams() const {
+            return grid_params;
+        }
+
         uint GetGridCeillOffset() const {
             return grid_runtime_config.num_light_slot;
         }
@@ -260,6 +271,8 @@ namespace Moer::Render {
         GridConfig          grid_config;
         GridRuntimeConfig   grid_runtime_config;
         GridChangableConfig grid_changable_config;
+
+        Grid::Params grid_params;
 
         SimpleSegmentAllocator segment_allocator;
 

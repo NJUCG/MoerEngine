@@ -7,6 +7,7 @@
 #include "PixelFormat.h"
 #include "PreprocessLightPass.h"
 #include "RTResource.h"
+#include "VisualizePass.h"
 #include "config/ConfigManager.h"
 #include "contrib/Open3DGC/o3dgcTimer.h"
 #include "imgui.h"
@@ -26,6 +27,7 @@
 #include "scene/light/LightComponentManager.h"
 #include "shader/ShaderPipeline.h"
 #include "shader/ShaderResourceManager.h"
+#include "shaderheaders/shared/ShaderParameters.h"
 #include "taskgraph/GraphTask.h"
 #include "taskgraph/TaskGraph.h"
 #include "taskgraph/TaskSystem.h"
@@ -146,11 +148,12 @@ public:
     DEFINE_SHADER_TEX(out_view_z);
     DEFINE_SHADER_TEX(out_mv);
     DEFINE_SHADER_TEX(out_shadow_info);
+    DEFINE_SHADER_TEX(out_scene_color);
 
     DEFINE_SHADER_TLAS(tlas);
     DEFINE_SHADER_CONSTANT_STRUCT(Param, param);
 
-    DEFINE_SHADER_ARGS(param, rt_config, out_normal_roughness, out_basecolor_metalness, out_direct_lighting, out_emission, out_diffuse, out_specular, out_view_z, out_mv, out_shadow_info, bdls, tlas);
+    DEFINE_SHADER_ARGS(param, rt_config, out_normal_roughness, out_basecolor_metalness, out_direct_lighting, out_emission, out_diffuse, out_specular, out_view_z, out_mv, out_shadow_info, out_scene_color, bdls, tlas);
 };
 
 class CombineUIPipeline : public RasterPipeline {
@@ -178,6 +181,8 @@ public:
 
     DEFINE_SHADER_ARGS(src_color, spl);
 };
+
+static Box3D scene_bounding{};
 
 int main(int argc, const char** argv) {
 
@@ -405,7 +410,13 @@ int main(int argc, const char** argv) {
     UniquePtr<PrepareLightPass> prepare_light_pass = MakeUnique<PrepareLightPass>(device, manager, g_scene);
     UniquePtr<GBufferPass>      g_buffer_pass      = MakeUnique<GBufferPass>(device, manager, g_scene);
     UniquePtr<LightingPass>     lighting_pass      = MakeUnique<LightingPass>(manager, g_scene);
+    UniquePtr<VisualizePass>    visualize_pass     = MakeUnique<VisualizePass>(device, manager);
     UniquePtr<RTContext>        rt_ctx             = MakeUnique<RTContext>(sd_utils, is_ctx, bindless_array);
+
+    VisualizeConfig visualize_config{};
+    visualize_config.b_split        = false;
+    visualize_config.split_ratio    = 0.5f;
+    visualize_config.visualize_mode = EFC_SceneColor;
 
     while (WindowContext::ShouldClose(window_handle) == false) {
         WindowContext::Tick();
@@ -452,6 +463,20 @@ int main(int argc, const char** argv) {
 
             //load scene
             if (first_load) {
+                //calculate bounding box
+
+                g_scene.ForEach([&](Entity _entity) {
+                    auto& mesh = RenderableManager::Get().GetMeshInfo(_entity);
+                    scene_bounding.Expand(mesh->bounding_box);
+                });
+
+                //new_cell size
+                float3 extent = scene_bounding.max - scene_bounding.min;
+
+                float max_extent                        = std::max(std::max(extent.x, extent.y), extent.z);
+                float cell_size                         = max_extent * 2 / is_ctx.GetGridConfig().grid_size.x;
+                rt_ui.GetConfig().grid_config.cell_size = cell_size;
+
                 instance_buffer_handle          = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::InstanceInfo)->GetView());
                 geometry_buffer_handle          = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::GeometryInfo)->GetView());
                 geometry_instance_buffer_handle = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::GeometryInstance)->GetView());
@@ -588,15 +613,15 @@ int main(int argc, const char** argv) {
             {
                 cmd_list.UpdateBindlessArray(bindless_array);
 
-                rt_config_param.world2view_prev = camera->GetViewMatrix();
-                rt_config_param.world2clip_prev = camera->GetProjectionMatrix() * camera->GetViewMatrix();
+                rt_config_param.world2view_prev = Transpose(camera->GetViewMatrix());
+                rt_config_param.world2clip_prev = Transpose(camera->GetProjectionMatrix() * camera->GetViewMatrix());
 
                 rt_ctx->FillLowDiscrepancySequence(cmd_list);
 
                 camera->Tick();
 
-                rt_view_param.view2world = camera->GetToWorldMatrix();
-                rt_view_param.world2view = camera->GetViewMatrix();
+                rt_view_param.view2world = Transpose(camera->GetToWorldMatrix());
+                rt_view_param.world2view = Transpose(camera->GetViewMatrix());
                 rt_view_param.frustum    = camera->GetFrustum();
                 rt_view_param.near_far   = float2(camera->GetNearClip(), camera->GetFarClip());
                 rt_view_param.rect       = uint2(resolution.x, resolution.y);
@@ -607,10 +632,10 @@ int main(int argc, const char** argv) {
 
                 const RTUI::Config& rt_ui_config = rt_ui.GetConfig();
 
-                rt_config_param.view2world = camera->GetToWorldMatrix();
-                rt_config_param.view2clip  = camera->GetProjectionMatrix();
-                rt_config_param.world2view = camera->GetViewMatrix();
-                rt_config_param.world2clip = camera->GetProjectionMatrix() * camera->GetViewMatrix();
+                rt_config_param.view2world = Transpose(camera->GetToWorldMatrix());
+                rt_config_param.view2clip  = Transpose(camera->GetProjectionMatrix());
+                rt_config_param.world2view = Transpose(camera->GetViewMatrix());
+                rt_config_param.world2clip = Transpose(camera->GetViewProjectionMatrix());
 
                 rt_config_param.tan_pixel_angular_radius = tanf(Angle::DegreeToRadian(camera->GetFov()));
                 rt_config_param.tan_sun_angular_radius   = tanf(Angle::DegreeToRadian(rt_ui_config.sun_angular_diameter * 0.5f));
@@ -622,10 +647,19 @@ int main(int argc, const char** argv) {
                 cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)&rt_view_param, sizeof(RTViewParam)), rt_view_param_buffer->GetView());
             }
 
+            //fill ui data
+            {
+                auto grid_cfg      = is_ctx.GetGridChangableConfig();
+                grid_cfg.cell_size = rt_ui.GetConfig().grid_config.cell_size;
+
+                is_ctx.SetChangeableGridConfig(grid_cfg);
+            }
+
             is_ctx.TickFrame(time);
             auto grid_cfg   = is_ctx.GetGridChangableConfig();
             grid_cfg.center = camera->GetPosition();
             is_ctx.SetChangeableGridConfig(grid_cfg);
+            visualize_config.visualize_mode = rt_ui.GetConfig().final_color;
 
             uint num_emissive_meshes, num_emissive_triangles;
             prepare_light_pass->CountEmissiveInstances(num_emissive_meshes, num_emissive_triangles);
@@ -662,10 +696,11 @@ int main(int argc, const char** argv) {
                              out_view_z,
                              out_mv,
                              out_shadow_info,
+                             rt_ctx->frame_rt.scene_color,
                              bindless_array,
                              rt_scene->GetTlas())
                 .Dispatch(uint3((resolution.x + 15) >> 4, (resolution.y + 15) >> 4, 1), "PathTracing");
-
+            visualize_pass->Process(cmd_list, *rt_ctx, visualize_config);
             //copy normal to output
             // cmd_list.CopyFrom(out_direct_lighting->GetView(), scene_color->GetView());
         }
@@ -678,12 +713,12 @@ int main(int argc, const char** argv) {
             auto frame_buffer = rt_ui.GetWindowFrameBuffer();
             auto scene_res    = rt_ui.GetSceneColorResolution();
             auto scene_pos    = rt_ui.GetSceneColorPos();
-            cmd_list.Gfx(sample_tex, out_direct_lighting, linear_sampler).Draw("SampleTexture", Rect2D(scene_pos.x, scene_pos.y, scene_res.x, scene_res.y), {}, 3, {SingleDrawParam(3, 1, 0, 0, 0)}, ColorAttachment(frame_buffer.GetTexture()));
+            cmd_list.Gfx(sample_tex, rt_ctx->frame_rt.debug_color, linear_sampler).Draw("SampleTexture", Rect2D(scene_pos.x, scene_pos.y, scene_res.x, scene_res.y), {}, 3, {SingleDrawParam(3, 1, 0, 0, 0)}, ColorAttachment(frame_buffer.GetTexture()));
         } else {
             float2 f_res  = float2(resolution.x, resolution.y);
             float2 min_xy = rt_ui.GetSceneColorPos() / f_res;
             float2 max_xy = (rt_ui.GetSceneColorPos() + rt_ui.GetSceneColorResolution()) / f_res;
-            cmd_list.Gfx(combine_ui, out_direct_lighting, ui_frame_buffer, linear_sampler, CombineUIPipeline::Param{min_xy, max_xy})
+            cmd_list.Gfx(combine_ui, rt_ctx->frame_rt.debug_color, ui_frame_buffer, linear_sampler, CombineUIPipeline::Param{min_xy, max_xy})
                 .Draw("CombineUI",
                       Rect2D(0, 0, resolution.x, resolution.y),
                       {},

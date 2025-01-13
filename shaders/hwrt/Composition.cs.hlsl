@@ -73,9 +73,9 @@ struct Param {
     STL::BRDF::ConvertBaseColorMetalnessToAlbedoRf0(basecolor_metalness.xyz, basecolor_metalness.w, albedo, Rf0);
 
     float3 x_view = STL::Geometry::ReconstructViewPosition(sample_uv, param.frustum, view_z, param.orthomode);
-    float3 x = mul(float4(x_view, 1.f), param.view2world).xyz;
+    float3 x = mul(param.view2world, float4(x_view, 1.f)).xyz;
     // float3 view = param.orthomode == 0 ? normalize(STL::Geometry::RotateVector(param.view2world, -x_view)) : param.dir.xyz;
-    float3 view = param.orthomode == 0 ? normalize(mul(-x_view, (float3x3)param.view2world)) : param.dir.xyz;
+    float3 view = param.orthomode == 0 ? normalize(mul((float3x3)param.view2world, -x_view)) : param.dir.xyz;
 
     // Sample NRD outputs
     float4 diff = in_diffuse[pixel_pos];

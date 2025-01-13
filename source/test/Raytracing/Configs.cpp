@@ -85,6 +85,20 @@ namespace Moer::Render {
             UpdateReSTIRDIBufferIndices();
 
             di_initial_sample_params.env_map_is = light_buffer_params.env_light.light_cnt;
+
+            grid_params.grid_params.cell_x = grid_config.grid_size.x;
+            grid_params.grid_params.cell_y = grid_config.grid_size.y;
+            grid_params.grid_params.cell_z = grid_config.grid_size.z;
+
+            grid_params.common_params.center_x                   = grid_changable_config.center.x;
+            grid_params.common_params.center_y                   = grid_changable_config.center.y;
+            grid_params.common_params.center_z                   = grid_changable_config.center.z;
+            grid_params.common_params.cell_size                  = grid_changable_config.cell_size;
+            grid_params.common_params.jitter                     = grid_changable_config.grid_jitter;
+            grid_params.common_params.num_build_samples          = grid_changable_config.num_grid_build_samples;
+            grid_params.common_params.local_light_sampling_mode  = grid_config.light_per_ceil;
+            grid_params.common_params.local_light_presample_mode = grid_config.grid_mode;
+            grid_params.common_params.num_build_samples          = grid_changable_config.num_grid_build_samples;
         }
     }
 

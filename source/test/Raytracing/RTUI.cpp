@@ -6,7 +6,8 @@
 namespace Moer::Render {
 
     static constexpr std::string_view s_final_color_names[] = {
-        "SceneColor",
+        "SceneColor"
+        "DI",
         "Emissive",
         "Diffuse",
         "Specular",
@@ -20,6 +21,7 @@ namespace Moer::Render {
         : ui_renderer(_renderer) {
 
         final_color_map["SceneColor"] = EFinalColor::EFC_SceneColor;
+        final_color_map["DI"]         = EFinalColor::EFC_DI;
         final_color_map["Emissive"]   = EFinalColor::EFC_EMISSIVE;
         final_color_map["Diffuse"]    = EFinalColor::EFC_DIFFUSE;
         final_color_map["Specular"]   = EFinalColor::EFC_SPECULAR;
@@ -172,6 +174,14 @@ namespace Moer::Render {
                 }
             }
 
+            ImGui::TreePop();
+        }
+
+        //Grid Config
+        if (ImGui::TreeNode("Grid Config")) {
+            ImGui::SliderInt("Grid Mode", &config.grid_config.grid_mode, 0, 1);
+            ImGui::SliderInt("Light Per Ceil", &config.grid_config.light_per_ceil, 1, 1024);
+            ImGui::SliderFloat("Cell Size", &config.grid_config.cell_size, 1.f, 400.f);
             ImGui::TreePop();
         }
 

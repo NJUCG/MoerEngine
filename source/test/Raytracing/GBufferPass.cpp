@@ -21,23 +21,23 @@ namespace Moer::Render {
 
         Entity main_cam_entity = scene.GetMainCamera();
 
-        constants.main_view = constants.main_view;
-        constants.prev_view = constants.prev_view;
+        constants.main_view = _rt_ctx.main_view;
+        constants.prev_view = _rt_ctx.prev_view;
 
-        FrameResources& gbuffer_res = _rt_ctx.frame_rt;
+        FrameResources& frame_rt = _rt_ctx.frame_rt;
 
         _cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)&constants, sizeof(GBufferConstants)), gbuffer_constants->GetView());
 
         _cmd_list.Compute(gbuffer_pass_pipeline,
                           params,
                           gbuffer_constants,
-                          gbuffer_res.view_depth,
-                          gbuffer_res.diffuse_albedo,
-                          gbuffer_res.specular_roughness,
-                          gbuffer_res.normal,
-                          gbuffer_res.emission,
-                          gbuffer_res.motion,
-                          gbuffer_res.clip_depth,
+                          frame_rt.view_depth,
+                          frame_rt.diffuse_albedo,
+                          frame_rt.specular_roughness,
+                          frame_rt.normal,
+                          frame_rt.emission,
+                          frame_rt.motion,
+                          frame_rt.clip_depth,
                           _rt_ctx.rt_scene->GetTlas(),
                           scene.GetBindlessArray())
             .Dispatch(uint3(ceil(constants.main_view.rect.x / 16), ceil(constants.main_view.rect.y / 16), 1));

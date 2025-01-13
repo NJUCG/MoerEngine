@@ -65,6 +65,18 @@ bool ProcessAnyHit(inout RayPayload payload, uint instance_id, uint geom_id,
   return alpha_mask;
 }
 
+// test
+float3 UintHashToColor(uint _idx) {
+  uint hash = STL::Sequence::Hash(_idx);
+  // r11g11b10
+
+  float r = (hash & 0x7ff) / 2047.f;
+  float g = ((hash >> 11) & 0x7ff) / 2047.f;
+  float b = ((hash >> 22) & 0x3ff) / 1023.f;
+
+  return float3(r, g, b);
+}
+
 #define USE_RAYQUERY 1
 #if USE_RAYQUERY
 [numthreads(16, 16, 1)] void main(uint2 pixel_pos
@@ -82,9 +94,9 @@ bool ProcessAnyHit(inout RayPayload payload, uint instance_id, uint geom_id,
   uint instance_mask = Moer::RTVM_ALL;
   uint ray_flags = RAY_FLAG_NONE;
 
-//   if(pixel_pos.x == 140 && pixel_pos.y == 140)
-//   printf("ray direction %f %f %f\n", ray.Direction.x, ray.Direction.y,
-//          ray.Direction.z);
+  //   if(pixel_pos.x == 140 && pixel_pos.y == 140)
+  //   printf("ray direction %f %f %f\n", ray.Direction.x, ray.Direction.y,
+  //          ray.Direction.z);
   RayPayload payload;
   payload.min_glass_ray_t = ray.TMax + 1.f;
   payload.committed_ray_t = 0.f;
@@ -167,7 +179,6 @@ bool ProcessAnyHit(inout RayPayload payload, uint instance_id, uint geom_id,
 
     float2 tex_grad_x = (texcoord_x - texcoord_0);
     float2 tex_grad_y = (texcoord_y - texcoord_0);
-
     // sample gradient
     Moer::MaterialSample mat_sample = Moer::SampleGeometryMaterial(
         geom, tex_grad_x, tex_grad_y, -1.f, Moer::EMA_All);
@@ -185,6 +196,7 @@ bool ProcessAnyHit(inout RayPayload payload, uint instance_id, uint geom_id,
     gbuffer_specular_roughness[pixel_pos] = Moer::Pack_R8G8B8A8_Gamma_UFLOAT(
         float4(mat_sample.specular_f0, mat_sample.roughness));
     gbuffer_normal[pixel_pos] = Math::NdirToOctUnorm32(mat_sample.normal);
+  
     gbuffer_emissive[pixel_pos] = float4(mat_sample.emissive, max_glass_hit_t);
     gbuffer_motion[pixel_pos] = float4(motion, 0.f);
 

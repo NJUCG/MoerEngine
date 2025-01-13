@@ -57,6 +57,9 @@ namespace Moer::Render {
         TextureRef odd_luminance;
         TextureRef denoised_diffuse_lighting;
         TextureRef denoised_specular_lighting;
+
+        TextureRef debug_color;
+        TextureRef scene_color;
     };
 
     struct RTContext {

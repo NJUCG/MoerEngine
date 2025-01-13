@@ -32,6 +32,14 @@ namespace Moer {
     static CONST uint s_di_local_light_sample_mode_power_ris = 1;//power based ris
 
     static CONST uint s_invalid_light_idx = 0xffffffffu;
+
+    static CONST uint s_vis_mode_color             = 0;
+    static CONST uint s_vis_mode_direct_lighting   = 1;
+    static CONST uint s_vis_mode_emission          = 2;
+    static CONST uint s_vis_mode_diffuse_lighting  = 3;
+    static CONST uint s_vis_mode_specular_lighting = 4;
+    static CONST uint s_vis_mode_grid              = 5;
+
 #ifdef __cplusplus
     enum RTVisibleMask : uint8 {
 #else
@@ -47,6 +55,7 @@ namespace Moer {
 
     enum EFinalColor {
         EFC_SceneColor,
+        EFC_DI,
         EFC_EMISSIVE,
         EFC_DIFFUSE,
         EFC_SPECULAR,
@@ -176,6 +185,20 @@ namespace Moer {
         uint2 local_light_pdf_size;
 
         uint enable_prev_tlas;
+    };
+
+    struct VisualizeParams {
+        ViewParam                 main_view;
+        RaytracingBindlessHandles bindless_handles;
+        Grid::Params              grid_params;
+
+        uint2  output_size;
+        float2 resolution_scale;
+
+        uint  visualize_mode;
+        uint  b_split;
+        float split_ratio;
+        uint  padding0;
     };
 
 #ifdef __cplusplus
