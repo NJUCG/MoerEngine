@@ -22,6 +22,7 @@
 #include "shader/ShaderResourceManager.h"
 #include "log/LogSystem.h"
 #include "RenderThread.h"
+#include "shaderheaders/shared/ShaderParameters.h"
 #include "taskgraph/GraphTask.h"
 #include "taskgraph/TaskGraph.h"
 #include "taskgraph/TaskSystem.h"
@@ -86,7 +87,8 @@ public:
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
     DEFINE_SHADER_TEX(texture);
     DEFINE_SHADER_SAMPLER(defaultSampler);
-    DEFINE_SHADER_ARGS(defaultSampler, texture, bdls, param);
+    DEFINE_SHADER_BUFFER(constants);
+    DEFINE_SHADER_ARGS(defaultSampler, constants, texture, bdls, param);
 };
 
 class TestTrianglePipelineBdls : public RasterPipeline {
@@ -803,8 +805,9 @@ int main(int argc, const char** argv) {
     uint lighting_data_handle   = 0;
 
     BufferRef lighting_buffer = device.CreateBuffer<byte>(1 * sizeof(LightingData), EBufferUsageFlags::UNORDERED_ACCESS);
-
-    RHIUI rhi_ui(
+    BufferRef camera_buffer   = device.CreateBuffer<byte>(sizeof(ViewParam), EBufferUsageFlags::CONSTANT_BUFFER);
+    ViewParam view_param;
+    RHIUI     rhi_ui(
         gui,
         create_frame_buffer_and_name_array(),
         rhi_ui_default_selected_frame_buffer_index);
@@ -921,6 +924,15 @@ int main(int argc, const char** argv) {
                 geom_idx += mesh->geometries.size();
             });
 
+            view_param.clip2view  = Transpose(camera->GetProjectionMatrixInv());
+            view_param.view2clip  = Transpose(camera->GetProjectionMatrix());
+            view_param.view2world = Transpose(camera->GetViewMatrixInv());
+            view_param.world2view = Transpose(camera->GetViewMatrix());
+            view_param.world2clip = Transpose(camera->GetViewProjectionMatrix());
+            view_param.clip2world = Transpose(camera->GetViewProjectionMatrixInv());
+
+            cmd_list.CopyFrom(std::span<byte>((byte*)&view_param, sizeof(view_param)), camera_buffer->GetView());
+
             TestBindlessParam param;
             param.color                    = color_red;
             param.texture_handle           = bdls_tex_handle_red;
@@ -928,8 +940,8 @@ int main(int argc, const char** argv) {
             param.instance_buffer_handle   = instance_buffer_handle;
             param.geometry_data_handle     = geom_data_buffer_handle;
             param.geometry_instance_handle = geom_instance_buffer_handle;
-            param.camera_view_proj         = camera->GetViewProjectionMatrix();
-            cmd_list.Gfx(raster_pipeline_constant_color, sampler, red_tex, bindless_array, param)
+            param.camera_view_proj         = Transpose(camera->GetViewProjectionMatrix());
+            cmd_list.Gfx(raster_pipeline_constant_color, sampler, camera_buffer, red_tex, bindless_array, param)
                 .Draw(Rect2D(0, 0, resolution.x, resolution.y), std::move(mesh_draw_datas), DepthAttachment(depth->GetView().GetTexture()), ColorAttachment(vbuffer), ColorAttachment(normal), ColorAttachment(uv), ColorAttachment(position));
 
             // MARK: PBR Pass
@@ -945,7 +957,7 @@ int main(int argc, const char** argv) {
             material_param.light_buffer        = light_buffer_handle;
 
             LightingData lighting_data;
-            lighting_data.inv_view_proj   = camera->GetViewProjectionMatrixInv();
+            lighting_data.inv_view_proj   = Transpose(camera->GetViewProjectionMatrixInv());
             lighting_data.light_count     = scene.GetLights().size();
             lighting_data.camera_position = camera->GetPosition();
             cmd_list.CopyFrom(std::span<byte>((byte*)&lighting_data, sizeof(lighting_data)), lighting_buffer->GetView());
@@ -1018,7 +1030,7 @@ int main(int argc, const char** argv) {
                 ssr_actual_output = bdls_tex_handle_ssr_output;// update actual output when ssr is enabled
 
                 SsrPipelineBindlessParam param;
-                param.view_projection_matrix         = camera->GetViewProjectionMatrix();
+                param.view_projection_matrix         = Transpose(camera->GetViewProjectionMatrix());
                 param.camera_position                = camera->GetPosition();
                 param.near_clip                      = camera->GetNearClip();
                 param.resolution                     = float2(resolution);
@@ -1165,7 +1177,7 @@ int main(int argc, const char** argv) {
                         param.point_sampler           = GetSamplerIdx(Sampler(SF_NEAREST, SAM_CLAMP_TO_EDGE));
                         param.linear_sampler          = GetSamplerIdx(Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE));
                         param.rt_metrics              = float4(1.0f / resolution.x, 1.0f / resolution.y, resolution.x, resolution.y);
-                        param.curr_inv_vp_and_prev_vp = previous_view_proj * current_inv_view_proj;
+                        param.curr_inv_vp_and_prev_vp = Transpose(previous_view_proj * current_inv_view_proj);
                         return param;
                     }();
 

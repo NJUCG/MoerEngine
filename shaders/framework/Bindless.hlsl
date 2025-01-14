@@ -136,12 +136,31 @@ struct SamplerHeapHandle {
         level, offset);                                                        \
   }
 
+#define INNER_GENERATE_TEXTURE_TYPE_SAMPLE_GRAD(NativeType, TextureType,       \
+                                                CoordType, OffsetType)         \
+  NativeType SampleGrad(TextureType##SampleHandle<NativeType> handle,          \
+                        CoordType uv, OffsetType offset, CoordType grad_x,     \
+                        CoordType grad_y) {                                    \
+    uint tex_handle =                                                          \
+        g__array_114514_bdls[NonUniformResourceIndex(handle.internalIndex)];   \
+    uint tex_idx = tex_handle >> 8;                                            \
+    uint sampler_idx = tex_handle & 0xff;                                      \
+    TextureType<NativeType> tex = TextureType<NativeType>(                     \
+        g##TextureType##NativeType##__114514_bdls[NonUniformResourceIndex(     \
+            tex_idx)]);                                                        \
+    return tex.SampleGrad(                                                     \
+        gsampler__114514_bdls[NonUniformResourceIndex(sampler_idx)], uv,       \
+        grad_x, grad_y, offset);                                               \
+  }
+
 #define DEFINE_FETCH_TEXTURE_TYPE_AND_FORMATS(TextureType, CoordType,          \
                                               OffsetType)                      \
   ITERATE_TEXTURE_TYPES(INNER_GENERATE_TEXTURE_TYPE_FETCH, TextureType)        \
   ITERATE_TEXTURE_TYPES(INNER_GENERATE_TEXTURE_TYPE_SAMPLE, TextureType,       \
                         CoordType, OffsetType)                                 \
   ITERATE_TEXTURE_TYPES(INNER_GENERATE_TEXTURE_TYPE_SAMPLE_LEVEL, TextureType, \
+                        CoordType, OffsetType)                                 \
+  ITERATE_TEXTURE_TYPES(INNER_GENERATE_TEXTURE_TYPE_SAMPLE_GRAD, TextureType,  \
                         CoordType, OffsetType)
 
 #define INNER_GENERATE_BUFFER_FETCH()                                          \
@@ -188,6 +207,11 @@ struct SamplerHeapHandle {
 #define DESCRIPTOR_HEAP_SAMPLE_LEVEL(HandleType, handle, uv, offset, level)    \
   vkResourceDescriptorHeap.SampleLevel(HandleType(handle), uv, offset, level)
 
+#define DESCRIPTOR_HEAP_SAMPLE_GRAD(HandleType, handle, uv, offset, grad_x,    \
+                                    grad_y)                                    \
+  vkResourceDescriptorHeap.SampleGrad(HandleType(handle), uv, offset, grad_x,  \
+                                      grad_y)
+
 #elif DXIL
 
 #define DESCRIPTOR_HEAP_UNIFORM(HandleType, handle)                            \
@@ -221,10 +245,16 @@ struct SamplerHeapHandle {
                                     handle, uv, offset);                       \
     }                                                                          \
     template <typename TextureValue>                                           \
-    TextureValue SampleLevel2D(float2 uv, float level = 0.f) {                 \
+    TextureValue SampleLevel(float2 uv, float level = 0.f) {                   \
       int2 offset = int2(0, 0);                                                \
       return DESCRIPTOR_HEAP_SAMPLE_LEVEL(Texture2DSampleHandle<TextureValue>, \
                                           handle, uv, offset, level);          \
+    }                                                                          \
+    template <typename TextureValue>                                           \
+    TextureValue SampleGrad(float2 uv, float2 grad_x, float2 grad_y) {         \
+      int2 offset = int2(0, 0);                                                \
+      return DESCRIPTOR_HEAP_SAMPLE_GRAD(Texture2DSampleHandle<TextureValue>,  \
+                                         handle, uv, offset, grad_x, grad_y);  \
     }                                                                          \
     template <typename TextureValue> Texture2D<TextureValue> GetTexture2D() {  \
       return DESCRIPTOR_HEAP(Texture2DHandle<TextureValue>, handle);           \

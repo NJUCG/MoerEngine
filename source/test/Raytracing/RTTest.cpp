@@ -1,12 +1,20 @@
+#include <atomic>
 #include <filesystem>
+#include "Configs.h"
 #include "Core.h"
+#include "GBufferPass.h"
+#include "LightingPass.h"
 #include "PixelFormat.h"
+#include "PreprocessLightPass.h"
 #include "RTResource.h"
+#include "VisualizePass.h"
 #include "config/ConfigManager.h"
 #include "contrib/Open3DGC/o3dgcTimer.h"
 #include "imgui.h"
 #include "math/Matrix.h"
+#include "misc/STL.h"
 #include "misc/Traits.h"
+#include "platform/Platform.h"
 #include "renderer/UIRenderer.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
@@ -19,6 +27,9 @@
 #include "scene/light/LightComponentManager.h"
 #include "shader/ShaderPipeline.h"
 #include "shader/ShaderResourceManager.h"
+#include "shaderheaders/shared/ShaderParameters.h"
+#include "taskgraph/GraphTask.h"
+#include "taskgraph/TaskGraph.h"
 #include "taskgraph/TaskSystem.h"
 #include "window/WindowContext.h"
 #include "loader/LoaderInterface.h"
@@ -31,6 +42,7 @@
 #include "shaderheaders/shared/utils/ShaderParameters.h"
 
 #include "RTUI.h"
+#include "ShaderUtils.h"
 
 using namespace Moer::Render;
 using namespace Moer;
@@ -55,6 +67,7 @@ struct RTConfigParam {
     Matrix4x4f world2view_prev;
     Matrix4x4f world2clip;
     Matrix4x4f world2clip_prev;
+    float4     nrd_hit_dist_params_dummy;
     float4     sun_direction_gexposure;
     float4     camera_origin_gmipbias;
     float4     view_direction_gorthomode;
@@ -127,7 +140,7 @@ public:
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
     DEFINE_SHADER_BUFFER(rt_config);
     DEFINE_SHADER_TEX(out_normal_roughness);
-    DEFINE_SHADER_TEX(out_base_color_metalness);
+    DEFINE_SHADER_TEX(out_basecolor_metalness);
     DEFINE_SHADER_TEX(out_direct_lighting);
     DEFINE_SHADER_TEX(out_emission);
     DEFINE_SHADER_TEX(out_diffuse);
@@ -135,11 +148,12 @@ public:
     DEFINE_SHADER_TEX(out_view_z);
     DEFINE_SHADER_TEX(out_mv);
     DEFINE_SHADER_TEX(out_shadow_info);
+    DEFINE_SHADER_TEX(out_scene_color);
 
     DEFINE_SHADER_TLAS(tlas);
     DEFINE_SHADER_CONSTANT_STRUCT(Param, param);
 
-    DEFINE_SHADER_ARGS(param, rt_config, out_normal_roughness, out_base_color_metalness, out_direct_lighting, out_emission, out_diffuse, out_specular, out_view_z, out_mv, out_shadow_info, bdls, tlas);
+    DEFINE_SHADER_ARGS(param, rt_config, out_normal_roughness, out_basecolor_metalness, out_direct_lighting, out_emission, out_diffuse, out_specular, out_view_z, out_mv, out_shadow_info, out_scene_color, bdls, tlas);
 };
 
 class CombineUIPipeline : public RasterPipeline {
@@ -168,24 +182,7 @@ public:
     DEFINE_SHADER_ARGS(src_color, spl);
 };
 
-struct GenerateMipPdfPipeline : public ComputePipeline {
-public:
-    DEFINE_COMPUTE_PIPELINE_CLASS(GenerateMipPdfPipeline);
-    DEFINE_SHADER_TEX(env_map);
-    DEFINE_SHADER_TEX_ARRAY(integrated_mips, 10);
-    DEFINE_SHADER_CONSTANT_STRUCT(PreprocessEnvironmentMapParams, param);
-
-    DEFINE_SHADER_ARGS(env_map, integrated_mips, param);
-};
-
-struct GenerateMipsPipeline : public ComputePipeline {
-public:
-    DEFINE_COMPUTE_PIPELINE_CLASS(GenerateMipsPipeline);
-    DEFINE_SHADER_TEX_ARRAY(mips, 10);
-    DEFINE_SHADER_CONSTANT_STRUCT(BuildMipsParam, param);
-
-    DEFINE_SHADER_ARGS(mips, param);
-};
+static Box3D scene_bounding{};
 
 int main(int argc, const char** argv) {
 
@@ -204,7 +201,7 @@ int main(int argc, const char** argv) {
     RenderDevice::Init(std::move(info));
     auto&           device = RenderDevice::Get();
     ShaderManager   manager(device);
-    uint2           resolution = {1280, 720};
+    uint2           resolution = {1920, 1080};
     SurfaceInitInfo surface_info("Vulkan", resolution.x, resolution.y, "RaytracingTest", false);
     WindowContext::Init(surface_info);
     auto&& scope_exit    = OnScopeExit([&] {
@@ -226,15 +223,22 @@ int main(int argc, const char** argv) {
         Scene::ResetAsyncLoadInfo();
     });
     RTResource rt_res(ConfigManager::GetInstance().GetEditorResourcePath());
-    rt_res.LoadResources();
-    TextureRef         env_map = rt_res.GetDefaultEnvMap();
+    bool       b_new_env_map = false;
+
+    GraphEventRef load_res_event = LambdaTask::Create([&rt_res, &b_new_env_map]() {
+                                       rt_res.LoadResources();
+                                       //memory barrier
+                                       std::atomic_thread_fence(std::memory_order_acq_rel);
+                                       b_new_env_map = true;
+                                   }).Dispatch();
+
+    TextureRef         env_map{};
     Array<TextureView> env_mips;
-    TextureRef         env_pdf = device.CreateTexture("env_pdf", env_map->GetExtent(), PF_R16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED, env_map->GetNumMips());
-    Array<TextureView> env_pdf_mips;
-    for (int i = 0; i < env_map->GetNumMips(); ++i) {
-        env_mips.push_back(env_map->GetView(i));
-        env_pdf_mips.push_back(env_pdf->GetView(i));
-    }
+    TextureRef         env_pdf{};
+    Array<TextureView>
+        env_pdf_mips;
+
+    bool b_new_env_pdf = false;
 
     BindlessArrayRef bindless_array = g_scene.GetBindlessArray();
 
@@ -278,49 +282,14 @@ int main(int argc, const char** argv) {
                                            .Pixel("utils/CopyTexture.frag.hlsl")
                                            .Build<SampleTexturePipeline>(std::move(sample_tex_pso_info));
 
-    GenerateMipPdfPipeline sd_generate_mip_pdf = manager.Compute<GenerateMipPdfPipeline>("lighting/ProcessEnvironmentMap.hlsl");
-    GenerateMipsPipeline   sd_generate_mips    = manager.Compute<GenerateMipsPipeline>("utils/BuildMips.hlsl");
-    auto                   copy_queue_timeline = copy_queue.GetFenceHandle();
+    ShaderUtils sd_utils(device, manager);
 
-    {
-        Array<ImportTexture> import_textures;
-        const auto&          rt_res_textures = rt_res.GetTextures();
-        for (auto& [name, tex] : rt_res_textures) {
-            import_textures.emplace_back(ImportTexture(tex->GetView(0, tex->GetNumMips()), ETextureState::SAMPLE));
-        }
-        cmd_list.ImportTextureFromQueue(EQueueType::Copy, std::move(import_textures));
-        gfx_queue.Execute(cmd_list.Submit().Wait(copy_queue_timeline, copy_queue_timeline->GetValue()));
-        gfx_queue.Sync();
+    ImportantSamplingParams is_params{};
+    is_params.render_size = resolution;
+    ImportanceSamplingContext
+        is_ctx(is_params);
 
-        uint width  = env_map->GetExtent().x;
-        uint height = env_map->GetExtent().y;
-
-        for (uint i = 0; i < env_map->GetNumMips(); i += 5) {
-            BuildMipsParam param{};
-            param.num_mip_levels = env_map->GetNumMips();
-            param.src_mip_level  = i;
-            param.src_size       = uint2(width, height);
-            cmd_list.Compute(sd_generate_mips, std::span<TextureView>(env_mips.data(), env_mips.size()), param).Dispatch(uint3(ceil(width / 32), ceil(height / 32), 1));
-
-            width  = std::max(1u, width >> 5);
-            height = std::max(1u, height >> 5);
-        }
-
-        PreprocessEnvironmentMapParams preprocess_param{};
-        width  = env_map->GetExtent().x;
-        height = env_map->GetExtent().y;
-        for (uint i = 0; i < env_pdf->GetNumMips(); i += 5) {
-            preprocess_param.src_mip_level  = i;
-            preprocess_param.num_mip_levels = env_pdf->GetNumMips();
-            preprocess_param.src_size       = uint2(width, height);
-            cmd_list.Compute(sd_generate_mip_pdf, env_map->GetView(0), std::span<TextureView>(env_pdf_mips.data(), env_pdf_mips.size()), preprocess_param).Dispatch(uint3(ceil(width / 32), ceil(height / 32), 1));
-            width  = std::max(1u, width >> 5);
-            height = std::max(1u, height >> 5);
-        }
-    }
-
-    // gfx_queue.Execute(cmd_list.Submit().Wait(copy_queue_timeline, copy_queue_timeline->GetValue()));
-    // gfx_queue.Sync();
+    auto copy_queue_timeline = copy_queue.GetFenceHandle();
 
     bool   first_load = true;
     uint   instance_buffer_handle;
@@ -359,8 +328,8 @@ int main(int argc, const char** argv) {
         PF_R8G8B8A8_UNORM,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
 
-    TextureRef out_base_color_matalness = device.CreateTexture(
-        "out_base_color_matalness",
+    TextureRef out_basecolor_metalness = device.CreateTexture(
+        "out_basecolor_metalness",
         Extent3D(resolution.x, resolution.y),
         PF_R8G8B8A8_UNORM,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
@@ -384,16 +353,6 @@ int main(int argc, const char** argv) {
     TextureRef out_shadow_info = device.CreateTexture("out_shadow_info", Extent2D(resolution.x, resolution.y), PF_R32G32_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
     TextureRef out_mv          = device.CreateTexture("out_mv", Extent2D(resolution.x, resolution.y), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
 
-    Array<TextureRef> test_bdls_texs(3);
-    Array<uint>       test_bdls_handles(3);
-    for (auto& tex : test_bdls_texs) {
-        tex = device.CreateTexture(
-            "test_bdls_tex",
-            Extent2D(1, 1),
-            PF_R8G8B8A8_SRGB,
-            ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT);
-    }
-
     auto create_frame_buffers = [&](uint2 _new_extent) {
         output = device.CreateTexture(
             "output",
@@ -407,8 +366,8 @@ int main(int argc, const char** argv) {
             PF_R8G8B8A8_UNORM,
             ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
 
-        out_base_color_matalness = device.CreateTexture(
-            "out_base_color_matalness",
+        out_basecolor_metalness = device.CreateTexture(
+            "out_basecolor_metalness",
             Extent2D(_new_extent.x, _new_extent.y),
             PF_R8G8B8A8_UNORM,
             ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
@@ -444,6 +403,21 @@ int main(int argc, const char** argv) {
     Timer timer;
     timer.Start();
     uint64 last_time = 0ull;
+
+    //////////////////////////////////////////////////////////////////////////
+    //passes
+    //////////////////////////////////////////////////////////////////////////
+    UniquePtr<PrepareLightPass> prepare_light_pass = MakeUnique<PrepareLightPass>(device, manager, g_scene);
+    UniquePtr<GBufferPass>      g_buffer_pass      = MakeUnique<GBufferPass>(device, manager, g_scene);
+    UniquePtr<LightingPass>     lighting_pass      = MakeUnique<LightingPass>(manager, g_scene);
+    UniquePtr<VisualizePass>    visualize_pass     = MakeUnique<VisualizePass>(device, manager);
+    UniquePtr<RTContext>        rt_ctx             = MakeUnique<RTContext>(sd_utils, is_ctx, bindless_array);
+
+    VisualizeConfig visualize_config{};
+    visualize_config.b_split        = false;
+    visualize_config.split_ratio    = 0.5f;
+    visualize_config.visualize_mode = EFC_SceneColor;
+
     while (WindowContext::ShouldClose(window_handle) == false) {
         WindowContext::Tick();
         gui.BeginGUIFrame();
@@ -478,10 +452,31 @@ int main(int argc, const char** argv) {
                 ETextureUsageFlags::COLOR_ATTACHMENT);
 
             create_frame_buffers(resolution);
+            if (rt_ctx)
+                rt_ctx->FillFrameResources(resolution);
+            is_ctx.~ImportanceSamplingContext();
+            is_params.render_size = resolution;
+            new (&is_ctx) ImportanceSamplingContext(is_params);
         }
 
         if (Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady()) {
+
+            //load scene
             if (first_load) {
+                //calculate bounding box
+
+                g_scene.ForEach([&](Entity _entity) {
+                    auto& mesh = RenderableManager::Get().GetMeshInfo(_entity);
+                    scene_bounding.Expand(mesh->bounding_box);
+                });
+
+                //new_cell size
+                float3 extent = scene_bounding.max - scene_bounding.min;
+
+                float max_extent                        = std::max(std::max(extent.x, extent.y), extent.z);
+                float cell_size                         = max_extent * 2 / is_ctx.GetGridConfig().grid_size.x;
+                rt_ui.GetConfig().grid_config.cell_size = cell_size;
+
                 instance_buffer_handle          = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::InstanceInfo)->GetView());
                 geometry_buffer_handle          = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::GeometryInfo)->GetView());
                 geometry_instance_buffer_handle = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::GeometryInstance)->GetView());
@@ -489,14 +484,12 @@ int main(int argc, const char** argv) {
                 view_buffer_handle              = bindless_array->AllocateBuffer(rt_view_param_buffer->GetView());
                 light_buffer_handle             = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::LightInfo)->GetView());
 
+                rt_ctx->SetBindlessHandles(geometry_buffer_handle, instance_buffer_handle, material_buffer_idx);
+                rt_ctx->FillFrameResources(resolution);
+                rt_ctx->SetRaytracingScene(rt_scene);
+                rt_ctx->FillLowDiscrepancySequence(cmd_list);
+
                 if (env_map) {
-                    Sampler sampler{SF_LINEAR, SAM_CLAMP_TO_BORDER};
-
-                    Moer::EnvironmentLightComponent* env_light = MoerNew(Moer::EnvironmentLightComponent)(float3(1.f));
-                    env_light->bdls_handle                     = bindless_array->AllocateTexture(env_map->GetView(0, env_map->GetNumMips()), sampler);
-
-                    auto entity = EntityManager::Get().Create();
-                    LightComponentManager::Get().Put(entity, env_light);
                 }
                 first_load = false;
 
@@ -557,10 +550,52 @@ int main(int argc, const char** argv) {
                 }
 
                 cmd_list.ImportTextureFromQueue(EQueueType::Copy, std::move(sampled_textures));
+                cmd_list.UpdateRaytracingScene(rt_scene);
 
                 // cmd_list.UpdateRaytracingScene(rt_scene);
                 gfx_queue.Execute(cmd_list.Submit().Wait(copy_queue_timeline, last_io_change_timeline));
                 gfx_queue.Sync();
+                // rt_scene->AdvanceFrame();
+                // cmd_list.UpdateRaytracingScene(rt_scene);
+                // gfx_queue.Execute(cmd_list.Submit());
+                // gfx_queue.Sync();
+            }
+
+            if (b_new_env_map && load_res_event->IsComplete()) {
+                env_map = rt_res.GetDefaultEnvMap();
+
+                Array<ImportTexture> import_textures;
+                {
+                    const auto& rt_res_textures = rt_res.GetTextures();
+                    for (auto& [name, tex] : rt_res_textures) {
+                        import_textures.emplace_back(ImportTexture(tex->GetView(0, tex->GetNumMips()), ETextureState::SAMPLE));
+                    }
+                    cmd_list.ImportTextureFromQueue(EQueueType::Copy, std::move(import_textures));
+                    gfx_queue.Execute(cmd_list.Submit().Wait(copy_queue_timeline, copy_queue_timeline->GetValue()));
+                    gfx_queue.Sync();
+                }
+
+                assert(env_map && "env map is null");
+                Sampler sampler{SF_LINEAR, SAM_CLAMP_TO_BORDER};
+
+                Moer::EnvironmentLightComponent* env_light = MoerNew(Moer::EnvironmentLightComponent)(float3(1.f), env_map->GetExtent().xy);
+                env_light->bdls_handle                     = bindless_array->AllocateTexture(env_map->GetView(0, env_map->GetNumMips()), sampler);
+
+                auto entity = EntityManager::Get().Create();
+                LightComponentManager::Get().Put(entity, env_light);
+                g_scene.AddLight(entity);
+
+                for (int i = 0; i < env_map->GetNumMips(); ++i) {
+                    env_mips.push_back(env_map->GetView(i));
+                }
+                sd_utils.GenerateMips(cmd_list, env_mips);
+                b_new_env_pdf = true;
+                b_new_env_map = false;
+            }
+
+            if (b_new_env_pdf && rt_ctx) {
+                rt_ctx->CreateEnvMapResources(env_map, cmd_list);
+                b_new_env_pdf = false;
             }
 
             if (Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady()) {
@@ -572,40 +607,72 @@ int main(int argc, const char** argv) {
                 }
                 cmd_list.UpdateRaytracingScene(rt_scene);
             }
-
             auto camera_entity = g_scene.GetCameras()[0];
             auto camera        = CameraManager::Get().Get(camera_entity);
+            //prepare frame
+            {
+                cmd_list.UpdateBindlessArray(bindless_array);
 
-            rt_config_param.world2view_prev = camera->GetViewMatrix();
-            rt_config_param.world2clip_prev = camera->GetProjectionMatrix() * camera->GetViewMatrix();
+                rt_config_param.world2view_prev = Transpose(camera->GetViewMatrix());
+                rt_config_param.world2clip_prev = Transpose(camera->GetProjectionMatrix() * camera->GetViewMatrix());
 
-            camera->Tick();
+                rt_ctx->FillLowDiscrepancySequence(cmd_list);
 
-            rt_view_param.view2world = camera->GetToWorldMatrix();
-            rt_view_param.world2view = camera->GetViewMatrix();
-            rt_view_param.frustum    = camera->GetFrustum();
-            rt_view_param.near_far   = float2(camera->GetNearClip(), camera->GetFarClip());
-            rt_view_param.rect       = uint2(resolution.x, resolution.y);
-            rt_view_param.inv_rect   = float2(1.f / resolution.x, 1.f / resolution.y);
-            rt_view_param.jitter     = float2(0, 0);
-            rt_view_param.dir        = camera->GetDirection();
-            rt_view_param.orthomode  = 0;
+                camera->Tick();
 
-            const RTUI::Config& rt_ui_config = rt_ui.GetConfig();
+                rt_view_param.view2world = Transpose(camera->GetToWorldMatrix());
+                rt_view_param.world2view = Transpose(camera->GetViewMatrix());
+                rt_view_param.frustum    = camera->GetFrustum();
+                rt_view_param.near_far   = float2(camera->GetNearClip(), camera->GetFarClip());
+                rt_view_param.rect       = uint2(resolution.x, resolution.y);
+                rt_view_param.inv_rect   = float2(1.f / resolution.x, 1.f / resolution.y);
+                rt_view_param.jitter     = float2(0, 0);
+                rt_view_param.dir        = camera->GetDirection();
+                rt_view_param.orthomode  = 0;
 
-            rt_config_param.view2world = camera->GetToWorldMatrix();
-            rt_config_param.view2clip  = camera->GetProjectionMatrix();
-            rt_config_param.world2view = camera->GetViewMatrix();
-            rt_config_param.world2clip = camera->GetProjectionMatrix() * camera->GetViewMatrix();
+                const RTUI::Config& rt_ui_config = rt_ui.GetConfig();
 
-            rt_config_param.tan_pixel_angular_radius = tanf(Angle::DegreeToRadian(camera->GetFov()));
-            rt_config_param.tan_sun_angular_radius   = tanf(Angle::DegreeToRadian(rt_ui_config.sun_angular_diameter * 0.5f));
-            rt_config_param.bounce_num               = rt_ui_config.max_bounce;
-            float3 sun_dir                           = Normalizef(rt_ui_config.sun_direction);
-            rt_config_param.sun_direction_gexposure  = float4(sun_dir, rt_ui_config.exposure);
-            cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)&rt_config_param, sizeof(RTConfigParam)), rt_config_param_buffer->GetView());
+                rt_config_param.view2world = Transpose(camera->GetToWorldMatrix());
+                rt_config_param.view2clip  = Transpose(camera->GetProjectionMatrix());
+                rt_config_param.world2view = Transpose(camera->GetViewMatrix());
+                rt_config_param.world2clip = Transpose(camera->GetViewProjectionMatrix());
 
-            cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)&rt_view_param, sizeof(RTViewParam)), rt_view_param_buffer->GetView());
+                rt_config_param.tan_pixel_angular_radius = tanf(Angle::DegreeToRadian(camera->GetFov()));
+                rt_config_param.tan_sun_angular_radius   = tanf(Angle::DegreeToRadian(rt_ui_config.sun_angular_diameter * 0.5f));
+                rt_config_param.bounce_num               = rt_ui_config.max_bounce;
+                float3 sun_dir                           = Normalizef(rt_ui_config.sun_direction);
+                rt_config_param.sun_direction_gexposure  = float4(sun_dir, rt_ui_config.exposure);
+                cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)&rt_config_param, sizeof(RTConfigParam)), rt_config_param_buffer->GetView());
+
+                cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)&rt_view_param, sizeof(RTViewParam)), rt_view_param_buffer->GetView());
+            }
+
+            //fill ui data
+            {
+                auto grid_cfg      = is_ctx.GetGridChangableConfig();
+                grid_cfg.cell_size = rt_ui.GetConfig().grid_config.cell_size;
+
+                is_ctx.SetChangeableGridConfig(grid_cfg);
+            }
+
+            is_ctx.TickFrame(time);
+            auto grid_cfg   = is_ctx.GetGridChangableConfig();
+            grid_cfg.center = camera->GetPosition();
+            is_ctx.SetChangeableGridConfig(grid_cfg);
+            visualize_config.visualize_mode = rt_ui.GetConfig().final_color;
+
+            uint num_emissive_meshes, num_emissive_triangles;
+            prepare_light_pass->CountEmissiveInstances(num_emissive_meshes, num_emissive_triangles);
+
+            rt_ctx->CreateBuffersIfNeeded(num_emissive_meshes, num_emissive_triangles, g_scene.GetLights().size(), g_scene.GetGeometryInstances().size());
+
+            rt_ctx->Tick(camera);
+
+            prepare_light_pass->Process(cmd_list, *rt_ctx);
+
+            g_buffer_pass->Process(cmd_list, *rt_ctx);
+            lighting_pass->Process(cmd_list, *rt_ctx);
+
             TestInlineRTShader::Param param;
             param.global_param_handle    = view_buffer_handle;
             param.material_buffer_handle = material_buffer_idx;
@@ -621,7 +688,7 @@ int main(int argc, const char** argv) {
                              param,
                              rt_config_param_buffer,
                              out_normal_roughness,
-                             out_base_color_matalness,
+                             out_basecolor_metalness,
                              out_direct_lighting,
                              out_emission,
                              out_diffuse,
@@ -629,32 +696,29 @@ int main(int argc, const char** argv) {
                              out_view_z,
                              out_mv,
                              out_shadow_info,
+                             rt_ctx->frame_rt.scene_color,
                              bindless_array,
-                             rt_scene)
+                             rt_scene->GetTlas())
                 .Dispatch(uint3((resolution.x + 15) >> 4, (resolution.y + 15) >> 4, 1), "PathTracing");
-
+            visualize_pass->Process(cmd_list, *rt_ctx, visualize_config);
             //copy normal to output
             // cmd_list.CopyFrom(out_direct_lighting->GetView(), scene_color->GetView());
         }
+
         // rt_scene->MarkModified(0);
         // cmd_list.UpdateRaytracingScene(rt_scene);
         Sampler linear_sampler{SF_LINEAR, SAM_CLAMP_TO_BORDER};
 
-        if (time >= 3) {
-            bindless_array->FreeTexture(test_bdls_handles[time % 3]);
-        }
-        test_bdls_handles[time % 3] = bindless_array->AllocateTexture(test_bdls_texs[time % 3], linear_sampler);
-        cmd_list.UpdateBindlessArray(bindless_array);
         if (rt_ui.IsSeperateWindow() && rt_ui.GetWindowFrameBuffer().GetTexture()) {
             auto frame_buffer = rt_ui.GetWindowFrameBuffer();
             auto scene_res    = rt_ui.GetSceneColorResolution();
             auto scene_pos    = rt_ui.GetSceneColorPos();
-            cmd_list.Gfx(sample_tex, out_direct_lighting, linear_sampler).Draw("SampleTexture", Rect2D(scene_pos.x, scene_pos.y, scene_res.x, scene_res.y), {}, 3, {SingleDrawParam(3, 1, 0, 0, 0)}, ColorAttachment(frame_buffer.GetTexture()));
+            cmd_list.Gfx(sample_tex, rt_ctx->frame_rt.debug_color, linear_sampler).Draw("SampleTexture", Rect2D(scene_pos.x, scene_pos.y, scene_res.x, scene_res.y), {}, 3, {SingleDrawParam(3, 1, 0, 0, 0)}, ColorAttachment(frame_buffer.GetTexture()));
         } else {
             float2 f_res  = float2(resolution.x, resolution.y);
             float2 min_xy = rt_ui.GetSceneColorPos() / f_res;
             float2 max_xy = (rt_ui.GetSceneColorPos() + rt_ui.GetSceneColorResolution()) / f_res;
-            cmd_list.Gfx(combine_ui, out_direct_lighting, ui_frame_buffer, linear_sampler, CombineUIPipeline::Param{min_xy, max_xy})
+            cmd_list.Gfx(combine_ui, rt_ctx->frame_rt.debug_color, ui_frame_buffer, linear_sampler, CombineUIPipeline::Param{min_xy, max_xy})
                 .Draw("CombineUI",
                       Rect2D(0, 0, resolution.x, resolution.y),
                       {},
@@ -662,6 +726,8 @@ int main(int argc, const char** argv) {
                       {SingleDrawParam(3, 1, 0, 0, 0)},
                       ColorAttachment(output));
         }
+        gui.RenderGUI(cmd_list, output);
+
         // {
         //     for (uint i = 0; i < env_map->GetNumMips(); i += 5) {
         //         BuildMipsParam param{};
@@ -671,7 +737,7 @@ int main(int argc, const char** argv) {
         //         cmd_list.Compute(sd_generate_mips, std::span<TextureView>(env_mips.data(), env_mips.size()), param).Dispatch(uint3(env_map->GetExtent().x, env_map->GetExtent().y, 1));
         //     }
         // }
-        gui.RenderGUI(cmd_list, output);
+        rt_scene->AdvanceFrame();
 
         time++;
         gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time));

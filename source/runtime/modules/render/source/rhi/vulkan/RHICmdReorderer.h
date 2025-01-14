@@ -22,11 +22,16 @@ namespace Moer::Render {
         using IsResourceRead       = bool (*)(uint64 _flag);
         using IsTextureSampled     = bool (*)(uint64 _flag);
         using IsResourceInBindless = bool (*)(uint64 _resource, uint64 _bdls_handle);
+        using LockBdlsArray        = void (*)(uint64 _bdls_handle);
+        using UnlockBdlsArray      = LockBdlsArray;
 
         IsResourceWrite      is_resource_write;
         IsResourceRead       is_resource_read;
         IsTextureSampled     is_texture_sampled;
         IsResourceInBindless is_resource_in_bindless;
+
+        LockBdlsArray   lock_bdls_array;
+        UnlockBdlsArray unlock_bdls_array;
     };
     struct ArenaAllocator {
         struct LinkedChunk {
@@ -604,14 +609,16 @@ namespace Moer::Render {
                     }
                 }
 
-                else if constexpr (std::is_same_v<T, RaytracingSceneRef>) {
+                else if constexpr (std::is_same_v<T, RaytracingTlasRef>) {
                     EmplaceArg((uint64)(_arg.Get()), ResourceType::Accel, Range{}, false);
                 } else if constexpr (std::is_same_v<T, BindlessArrayRef>) {
+                    m_funcs.lock_bdls_array((uint64)(_arg.Get()));
                     for (auto&& res : m_write_resources) {
                         if (m_funcs.is_resource_in_bindless(res, (uint64)(_arg.Get()))) {
                             EmplaceArg(res, ResourceType::Texture_Buffer, Range{}, false);
                         }
                     }
+                    m_funcs.unlock_bdls_array((uint64)(_arg.Get()));
                     //emplace self
                     EmplaceArg((uint64)(_arg->ArrayHandle()), ResourceType::Bindless, Range{}, false);
                 }
@@ -839,14 +846,14 @@ namespace Moer::Render {
         }
 
         void VisitCmd(const UpdateRaytracingSceneCmd* _cmd) {
-            if (_cmd->InstancesToUpdate().size() == 0) {
+            if (_cmd->InstancesToUpdate().size() == 0 && !_cmd->ForceUpdate()) {
                 return;
             }
-            int64 layer        = SetWrite((uint64)_cmd->SceneHandle(), Range(0), ResourceType::Accel);
-            auto* scene_handle = static_cast<NoRangeHandle*>(GetHandle((uint64)_cmd->SceneHandle(), ResourceType::Accel));
+            int64 layer       = SetWrite((uint64)_cmd->TlasHandle(), Range(0), ResourceType::Accel);
+            auto* tlas_handle = static_cast<NoRangeHandle*>(GetHandle((uint64)_cmd->TlasHandle(), ResourceType::Accel));
 
             {
-                layer = GetLastLayerWrite(scene_handle);
+                layer = GetLastLayerWrite(tlas_handle);
             }
             for (const uint64& handle : m_writed_geometry) {
                 if (_cmd->HasGeometry(handle)) {
@@ -865,10 +872,41 @@ namespace Moer::Render {
                 }
             }
 
-            scene_handle->view.write_layer = layer;
-            scene_handle->view.read_layer  = layer;
+            tlas_handle->view.write_layer = layer;
+            tlas_handle->view.read_layer  = layer;
 
             AddCmd(_cmd, layer);
+        }
+
+        void VisitCmd(const CustomCmd* _cmd) {
+            switch (_cmd->CustomId()) {
+                case CustomCmd::CustomCmdId::CUSTOM_RASTER:
+                    assert(false && "Custom raster draw scene not implemented");
+                    break;
+                case CustomCmd::CustomCmdId::CUSTOM_DISPATCH:
+                    VisitCmd(static_cast<const CustomDispatchCmd*>(_cmd));
+                    break;
+                default:
+                    assert(false && "Custom Command Not Supported for Reorder");
+            }
+        }
+
+        void VisitCmd(const CustomDispatchCmd* _cmd) {
+            m_arg_write_resources.clear();
+            m_arg_read_resources.clear();
+            auto func = [&](const TArg& _arg, ParamInfoFlags _flag) {
+                VisitArgs(_arg, _flag.state_flags);
+            };
+            _cmd->IterateArgs(func);
+
+            for (const auto& write_res : m_arg_write_resources) {
+                RecordWrite(std::get<1>(write_res), std::get<0>(write_res), m_dispatch_layer);
+            }
+            for (const auto& read_res : m_arg_read_resources) {
+                RecordRead(std::get<1>(read_res), std::get<0>(read_res), m_dispatch_layer);
+            }
+            AddCmd(_cmd, m_dispatch_layer);
+            ++m_dispatch_layer;// make custom dispatch command in a separate layer
         }
 
         void AcceptCmd(const Command* _cmd) {
@@ -881,7 +919,6 @@ namespace Moer::Render {
                     VisitCmd(static_cast<const CopyBackBufferCmd*>(_cmd));
                     break;
                 case Command::EType::BufferToBuffer:
-
                     VisitCmd(static_cast<const CopyBufferCmd*>(_cmd));
                     break;
                 case Command::EType::BufferToTexture:
@@ -916,6 +953,12 @@ namespace Moer::Render {
                     break;
                 case Command::EType::BuildTLAS:
                     VisitCmd(static_cast<const UpdateRaytracingSceneCmd*>(_cmd));
+                    break;
+                case Command::EType::ClearResource:
+                    VisitCmd(static_cast<const ClearResourceCmd*>(_cmd));
+                    break;
+                case Command::EType::Custom:
+                    VisitCmd(static_cast<const CustomCmd*>(_cmd));
                     break;
                 default:
                     assert(false && "Command Type Not Supported for Reorder");

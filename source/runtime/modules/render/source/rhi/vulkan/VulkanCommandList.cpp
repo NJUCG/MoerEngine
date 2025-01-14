@@ -1444,6 +1444,7 @@ namespace Moer::Render {
                             auto& writer = _binder.writers[i];
                             if (writer.descriptorCount < 1) continue;
                             const VulkanDescriptorInfo& set_info = _binder.bind_infos[i];
+                            VkFormat                    format   = g_platform_pixel_formats[VulkanShaderResourceState(_pso_handle.binding_infos[set_info.param_idx].state_flags).format].format;
                             switch (writer.descriptorType) {
                                 case VK_DESCRIPTOR_TYPE_SAMPLER: {
                                     uint64 src_handle = descriptor_heap.GetSamplerDescIdx(std::get<Sampler>(_args[set_info.param_idx]));
@@ -1453,8 +1454,9 @@ namespace Moer::Render {
                                 case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE: {
 
                                     if (writer.descriptorCount > 1) {
-                                        std::span<TextureView> textures = std::get<std::span<TextureView>>(_args[set_info.param_idx]);
-                                        for (uint j = 0; j < writer.descriptorCount; ++j) {
+                                        std::span<TextureView> textures  = std::get<std::span<TextureView>>(_args[set_info.param_idx]);
+                                        uint                   desc_size = std::min(writer.descriptorCount, uint(textures.size()));
+                                        for (uint j = 0; j < desc_size; ++j) {
                                             VkImageLayout layout     = GetSamplerImageLayout(textures[j]);
                                             uint64        src_handle = descriptor_heap.GetImageDescIdx(&textures[j], layout);
                                             descriptor_heap.PushImageDesc(src_handle, _binder.binding_infos[i].offset + j * device.GetOptionalProperties().descriptor_buffer_properties.sampledImageDescriptorSize);
@@ -1469,8 +1471,9 @@ namespace Moer::Render {
                                 }
                                 case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE: {
                                     if (writer.descriptorCount > 1) {
-                                        std::span<TextureView> textures = std::get<std::span<TextureView>>(_args[set_info.param_idx]);
-                                        for (uint j = 0; j < writer.descriptorCount; ++j) {
+                                        std::span<TextureView> textures  = std::get<std::span<TextureView>>(_args[set_info.param_idx]);
+                                        uint                   desc_size = std::min(writer.descriptorCount, uint(textures.size()));
+                                        for (uint j = 0; j < desc_size; ++j) {
                                             uint64 src_handle = descriptor_heap.GetImageDescIdx(&textures[j], VK_IMAGE_LAYOUT_GENERAL);
                                             descriptor_heap.PushImageDesc(src_handle, _binder.binding_infos[i].offset + j * device.GetOptionalProperties().descriptor_buffer_properties.storageImageDescriptorSize);
                                         }
@@ -1480,28 +1483,30 @@ namespace Moer::Render {
                                     descriptor_heap.PushImageDesc(src_handle, _binder.binding_infos[i].offset);
                                     break;
                                 }
+                                case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
                                 case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER: {
                                     // VulkanBuffer* buffer     = ResourceCast(std::get<BufferView>(_args[set_info.param_idx]).GetBuffer());
-                                    uint64 src_handle = descriptor_heap.GetBufferDescIdx(std::get<BufferView>(_args[set_info.param_idx]));
+                                    uint64 src_handle = descriptor_heap.GetBufferDescIdx(std::get<BufferView>(_args[set_info.param_idx]), writer.descriptorType, format);
                                     descriptor_heap.PushUniformDesc(src_handle, _binder.binding_infos[i].offset);
                                     break;
                                 }
+                                case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
                                 case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER: {
                                     if (writer.descriptorCount > 1) {
                                         std::span<BufferView> buffers = std::get<std::span<BufferView>>(_args[set_info.param_idx]);
                                         for (uint j = 0; j < writer.descriptorCount; ++j) {
-                                            uint64 src_handle = descriptor_heap.GetBufferDescIdx(buffers[j]);
+                                            uint64 src_handle = descriptor_heap.GetBufferDescIdx(buffers[j], writer.descriptorType, format);
                                             descriptor_heap.PushStorageDesc(src_handle, _binder.binding_infos[i].offset + j * device.GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize);
                                         }
                                         break;
                                     }
                                     // VulkanBuffer* buffer     = ResourceCast(std::get<BufferView>(_args[set_info.param_idx]).GetBuffer());
-                                    uint64 src_handle = descriptor_heap.GetBufferDescIdx(std::get<BufferView>(_args[set_info.param_idx]));
+                                    uint64 src_handle = descriptor_heap.GetBufferDescIdx(std::get<BufferView>(_args[set_info.param_idx]), writer.descriptorType, format);
                                     descriptor_heap.PushStorageDesc(src_handle, _binder.binding_infos[i].offset);
                                     break;
                                 }
                                 case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR: {
-                                    VulkanAccelerationStructure* as         = ResourceCast(std::get<RaytracingSceneRef>(_args[set_info.param_idx]).Get())->tlas;
+                                    VulkanAccelerationStructure* as         = ResourceCast(std::get<RaytracingTlasRef>(_args[set_info.param_idx]).Get());
                                     uint64                       src_handle = descriptor_heap.GetAccelDescIdx(as);
                                     descriptor_heap.PushAccelDesc(src_handle, _binder.binding_infos[i].offset);
                                     break;

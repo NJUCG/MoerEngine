@@ -4,6 +4,7 @@
 
 #include "PixelFormat.h"
 
+#include <type_traits>
 #include <volk.h>
 #include "VulkanMacroUtils.h"
 #include "VulkanDevice.h"
@@ -931,7 +932,7 @@ namespace Moer::Render {
             m_pipeline = VK_NULL_HANDLE;
         }
         for (auto& layout : descriptor_set_layouts) {
-            if (layout) {
+            if (layout && layout != m_device->GetEmptyDescriptorSetLayout()) {
                 vkDestroyDescriptorSetLayout(m_device->GetDevice(), layout, nullptr);
                 layout = VK_NULL_HANDLE;
             }
@@ -1104,7 +1105,9 @@ namespace Moer::Render {
                         switch (binding.descriptorType){
                             
                             case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
-                            case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:{
+                            case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+                            case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
+                            case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:{
                                 descriptor_info.info_idx = _binder.buffer_infos.size();
                                 _binder.buffer_infos.emplace_back(VK_NULL_HANDLE, 0, VK_WHOLE_SIZE);
                                 write_info.pBufferInfo = &_binder.buffer_infos.back();
@@ -1574,7 +1577,11 @@ namespace Moer::Render {
             vmaDestroyBuffer(m_device->GetVmaAllocator(), m_alloc.buffer, m_alloc.alloc); 
         }
         if (m_descriptor_idx >= 0) { m_device->GetGlobalDescriptorHeap().FreeBufferDescIdx(m_descriptor_idx); }
-        for (const auto& idx : m_descriptor_indices) { m_device->GetGlobalDescriptorHeap().FreeBufferDescIdx(idx.second); }
+        // for (const auto& idx : m_descriptor_indices) { m_device->GetGlobalDescriptorHeap().FreeBufferDescIdx(idx.second); }
+
+        for (uint i = 0; i < 4; ++i) {
+            for (const auto& idx : m_descriptor_indices[i]) { m_device->GetGlobalDescriptorHeap().FreeBufferDescIdx(idx.second); }
+        }
     }
 
     VulkanBuffer::VulkanBuffer(const BufferInfo& _info, VulkanDevice& _device): Buffer(_info), VulkanDeviceObject(&_device) {
@@ -1613,6 +1620,18 @@ namespace Moer::Render {
             info.buffer      = m_alloc.buffer;
             m_device_address = vkGetBufferDeviceAddress(m_device->GetDevice(), &info);
         }       
+    }
+
+    UnorderedMap<uint64, uint>& VulkanBuffer::GetDescriptorIndices(VkDescriptorType _type) { 
+        switch (_type) {
+            case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER: return m_descriptor_indices[0];
+            case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER: return m_descriptor_indices[1];
+            case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER: return m_descriptor_indices[2];
+            case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER: return m_descriptor_indices[3];
+            default: assert(false); 
+        
+        }
+        return m_descriptor_indices[0]; 
     }
 
     VulkanBindlessArray::VulkanBindlessArray(VulkanDevice* _device, uint32 _max_size) : 
@@ -1766,13 +1785,145 @@ namespace Moer::Render {
     }
 
     UniquePtr<Command> VulkanBindlessArray::CreateUpdateCommand(){
+
+        {
+            uint64 texture_handle_stride = m_device->GetOptionalProperties().descriptor_buffer_properties.sampledImageDescriptorSize;
+            uint64 buffer_handle_stride  = m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize;
+            uint64 array_handle_stride   = sizeof(uint);
+
+            //update all cpu data here instead of during execution
+
+            //handle update data first
+            VulkanDescriptorHeap& heap = m_device->GetGlobalDescriptorHeap();
+
+            uint array_idx = 0;
+            uint texture_cnt = 0;
+            uint buffer_cnt = 0;
+
+            //lock for resource_allocated_set
+            Lock();
+            for(const UpdateCmd& cmd : update_cmds){
+                std::visit(
+                    [&](auto&& _cmd){
+                        using Tcmd = std::decay_t<decltype(_cmd)>;
+                        if constexpr (std::is_same_v<Tcmd, TextureUpdateInfo>){
+                            if(_cmd.free){
+                                auto& handle = handles[_cmd.array_idx];
+                                assert(handle.type == VulkanBindlessArray::Texture && handle.Ptr() && "Invalid texture handle");
+                                free_slots.Push(_cmd.array_idx);
+                                free_texture_slots.Push(_cmd.slot);
+                                resource_allocated_set.erase(handle.Ptr());
+
+                                handle = Handle(0ull, 0, 0, 0);
+    
+                            }else{
+                                ++array_idx;
+                                ++texture_cnt;
+                            }
+
+                        }
+                        else if constexpr (std::is_same_v<Tcmd, BufferUpdateInfo>){
+                            if(_cmd.free){
+                                auto& handle = handles[_cmd.array_idx];
+                                assert(handle.type == VulkanBindlessArray::Buffer && handle.Ptr() && "Invalid buffer handle");
+                                free_slots.Push(_cmd.array_idx);
+                                free_buffer_slots.Push(_cmd.slot);
+                                resource_allocated_set.erase(handle.Ptr());
+
+                                handle = Handle(0ull, 0, 0, 0);
+    
+                            }else{
+                                ++array_idx;
+                                ++buffer_cnt;
+                            }
+                        }
+                    }, cmd
+                );
+            }
+            Unlock();
+
+            array_indices_dat.resize(array_idx);
+            texture_indices_dat.resize(texture_cnt);
+            buffer_indices_dat.resize(buffer_cnt);
+
+            array_dat.resize(array_idx * array_handle_stride);
+            texture_dat.resize(texture_cnt * texture_handle_stride);
+            buffer_dat.resize(buffer_cnt * buffer_handle_stride);
+
+            array_idx = 0;
+            texture_cnt = 0;
+            buffer_cnt = 0;
+
+            //buffer desc buffer has array_buffer for offset 0 and allocate from slot 1(0 for invalid handle)
+            //array buffer is in same set with other bindless buffer descs, so we need to offset the slot by array_buffer slot(size of storage buffer handle)
+            //in gpu:
+            // bindless_array_buffer: [binding 0, offset 0]
+            // bindless_buffer_descs: [binding 1, offset $sizeofhandle)]
+            uint buffer_dst_slot_offset = buffers_offset_in_set / buffer_handle_stride;
+            for(const UpdateCmd& cmd : update_cmds){
+                std::visit(
+                    [&](auto&& _cmd){
+                        using Tcmd = std::decay_t<decltype(_cmd)>;
+                        if constexpr (std::is_same_v<Tcmd, TextureUpdateInfo>){
+                            if(!_cmd.free){
+                                handles[_cmd.array_idx] = Handle((uint64)_cmd.texture.Get(), _cmd.slot, 1, VulkanBindlessArray::Texture);
+                                VulkanTexture* vk_texture = ResourceCast(_cmd.texture.Get());
+                                TextureView    view(vk_texture, _cmd.format, _cmd.mip_level, _cmd.num_mips);
+
+                                uint           src_idx;
+                                if (uint(vk_texture->GetAspectFlags() & ETextureAspectFlags::DEPTH_SLICE) != 0) {
+                                    // view.aspect_flags = ETextureAspectFlags::COLOR;
+                                    src_idx = heap.GetImageDescIdx(&view, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+
+                                } else {
+                                    src_idx = heap.GetImageDescIdx(&view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                                }
+
+                                memcpy(texture_dat.data() + texture_cnt * texture_handle_stride, &heap.image_desc_data[src_idx], texture_handle_stride);
+                                uint indirect_handle = (m_device->GetSamplerIdx(_cmd.sampler) & 0xff) | (_cmd.slot & 0xffffff) << 8;
+                                memcpy(array_dat.data() + array_idx * array_handle_stride, &indirect_handle, array_handle_stride);
+                                array_indices_dat[array_idx] = {array_idx, _cmd.array_idx};
+                                texture_indices_dat[texture_cnt] = {texture_cnt, _cmd.slot};
+
+                                ++array_idx;
+                                ++texture_cnt;
+                            }
+
+                        }
+                        else if constexpr (std::is_same_v<Tcmd, BufferUpdateInfo>){
+                            if(!_cmd.free){
+                                handles[_cmd.array_idx] = Handle((uint64)_cmd.buffer.Get(), _cmd.slot, 0, VulkanBindlessArray::Buffer);
+                                VulkanBuffer* vk_buffer = ResourceCast(_cmd.buffer.Get());
+                                uint          src_idx   = heap.GetBufferDescIdx(vk_buffer->GetView(), VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+                                
+                                memcpy(buffer_dat.data() + buffer_cnt * buffer_handle_stride, &heap.buffer_desc_data[src_idx], buffer_handle_stride);
+                                memcpy(array_dat.data() + array_idx * array_handle_stride, &_cmd.slot, sizeof(uint));
+                                array_indices_dat[array_idx] = {array_idx, _cmd.array_idx};
+                                buffer_indices_dat[buffer_cnt] = {buffer_cnt, _cmd.slot + buffer_dst_slot_offset};
+
+                                ++array_idx;
+                                ++buffer_cnt;
+                            }
+                        }
+
+                    }, cmd
+                );
+            }
+
+        }
+        temp_slot_to_cmd.clear();
         std::unique_lock<std::mutex> lk(mtx);
-        return MakeUnique<UpdateBindlessArrayCmd>(this, 
-        std::move(buffers_allocated), 
-        std::move(textures_allocated),
-        std::move(buffers_freed),
-        std::move(textures_freed),
-        std::move(slots_freed));
+        UniquePtr<Command> cmd = MakeUnique<UpdateBindlessArrayCmd>(this, 
+        std::move(update_cmds),
+        std::move(array_dat),
+        std::move(array_indices_dat),
+        std::move(buffer_dat),
+        std::move(buffer_indices_dat),
+        std::move(texture_dat),
+        std::move(texture_indices_dat));
+
+        update_cmds.clear();
+        return cmd;
     }
 
     uint VulkanBindlessArray::AllocateTexture(const TextureView& _texture, Sampler _sampler) {
@@ -1786,8 +1937,10 @@ namespace Moer::Render {
         uint texture_slot_ptr = free_texture_slots.Pop();
         if (texture_slot_ptr == 0) { texture_slot = texture_slot_offset++; } else { texture_slot = texture_slot_ptr; }
 
+        update_cmds.emplace_back(TextureUpdateInfo{_texture.texture, _sampler, _texture.format, slot_idx, texture_slot, _texture.mip_level, _texture.num_mips, false});
+        temp_slot_to_cmd[slot_idx] = update_cmds.size() - 1;
         std::unique_lock<std::mutex> lk(mtx);
-        textures_allocated.emplace_back(_texture.texture, _sampler, _texture.format, slot_idx, texture_slot, _texture.mip_level, _texture.num_mips);
+        // textures_allocated.emplace_back(_texture.texture, _sampler, _texture.format, slot_idx, texture_slot, _texture.mip_level, _texture.num_mips);
         resource_allocated_set.insert(uint64(_texture.texture));
         return slot_idx;
     }
@@ -1804,38 +1957,123 @@ namespace Moer::Render {
         uint buffer_slot_ptr = free_buffer_slots.Pop();
         if (buffer_slot_ptr == 0) { buffer_slot = buffer_slot_offset++; } else { buffer_slot = buffer_slot_ptr; }
 
+        update_cmds.emplace_back(BufferUpdateInfo{_buffer.buffer, slot_idx, buffer_slot, false});
+        temp_slot_to_cmd[slot_idx] = update_cmds.size() - 1;
         std::unique_lock<std::mutex> lk(mtx);
-        buffers_allocated.emplace_back(_buffer.buffer, slot_idx, buffer_slot);
+        // buffers_allocated.emplace_back(_buffer.buffer, slot_idx, buffer_slot);
         resource_allocated_set.insert(uint64(_buffer.buffer));
         return slot_idx;
     }
-
+    static const Sampler s_spl = {ESamplerFilter::SF_LINEAR, SAM_CLAMP_TO_BORDER};
     void VulkanBindlessArray::FreeTexture(uint _array_idx) {
-        std::unique_lock<std::mutex> lk(mtx);
-        slots_freed.push_back(_array_idx);
+        // std::unique_lock<std::mutex> lk(mtx);
+
+        if(auto iter = temp_slot_to_cmd.find(_array_idx); iter != temp_slot_to_cmd.end()){
+            const UpdateCmd& src_cmd = update_cmds[iter->second];
+
+            std::visit(
+                [&](auto&& _cmd){
+                    using TCmd = std::decay_t<decltype(_cmd)>;
+                    if constexpr (std::is_same_v<TCmd, TextureUpdateInfo>){
+                        if(_cmd.free){
+                            LOG_WARNING("You are releasing a bindless texture that's pending releasing, array index: {}", _array_idx);
+                            return;
+                        }else{
+                            //TODO: invalidate update command
+                            LOG_WARNING("You are releasing a bindless texture that's pending updating, array index: {}", _array_idx);
+                            std::unique_lock<std::mutex> lk(mtx);
+
+                            resource_allocated_set.erase((uint64)_cmd.texture.Get());
+
+                            update_cmds[iter->second] = InvalidUpdateInfo{_array_idx};
+                        }
+                    } else if constexpr (std::is_same_v<TCmd, BufferUpdateInfo>){
+                        if(_cmd.free){
+                            LOG_WARNING("You are releasing a bindless buffer that's pending releasing, array index: {}", _array_idx);
+                            return;
+                        }else{
+                            LOG_WARNING("You are releasing a bindless texture that's pending updating, array index: {}", _array_idx);
+                            std::unique_lock<std::mutex> lk(mtx);
+
+                            resource_allocated_set.erase((uint64)_cmd.buffer.Get());
+                            update_cmds[iter->second] = InvalidUpdateInfo{_array_idx};
+                        }
+                    } else if constexpr (std::is_same_v<TCmd, InvalidUpdateInfo>){
+                        
+                    }
+                }, src_cmd
+            );
+            return;
+        }
+
+
         const auto& handle = handles[_array_idx];
         if(handle.type == Texture){
-            textures_freed.push_back(handle.slot);
+            update_cmds.emplace_back(TextureUpdateInfo{nullptr, s_spl, PF_UNDEFINED, _array_idx, handle.slot, 0, 0, true});
+            // textures_freed.push_back(handle.slot);
         }else if (handle.type == Buffer){
-            buffers_freed.push_back(handle.slot);
+            // buffers_freed.push_back(handle.slot);
+            update_cmds.emplace_back(BufferUpdateInfo{nullptr, _array_idx, handle.slot, true});
         }
-        // resource_allocated_set.erase((uint64)(textures_allocated[_array_idx].texture));
+        // resource_allocated_set.erase((uint64)(textures_allocated[handle.slot].texture.Get()));
     }
 
     void VulkanBindlessArray::FreeBuffer(uint _array_idx) {
-        std::unique_lock<std::mutex> lk(mtx);
-        slots_freed.push_back(_array_idx);
+        // std::unique_lock<std::mutex> lk(mtx);
+
+        if(auto iter = temp_slot_to_cmd.find(_array_idx); iter != temp_slot_to_cmd.end()){
+            const UpdateCmd& src_cmd = update_cmds[iter->second];
+
+            std::visit(
+                [&](auto&& _cmd){
+                    using TCmd = std::decay_t<decltype(_cmd)>;
+                    if constexpr (std::is_same_v<TCmd, TextureUpdateInfo>){
+                        if(_cmd.free){
+                            LOG_WARNING("You are releasing a bindless texture that's pending releasing, array index: {}", _array_idx);
+                            return;
+                        }else{
+                            LOG_WARNING("You are releasing a bindless buffer that's pending updating, array index: {}", _array_idx);
+                            std::unique_lock<std::mutex> lk(mtx);
+
+                            resource_allocated_set.erase((uint64)_cmd.texture.Get());
+                            update_cmds[iter->second] = InvalidUpdateInfo{_array_idx};
+                        }
+                    } else if constexpr (std::is_same_v<TCmd, BufferUpdateInfo>){
+                        if(_cmd.free){
+                            LOG_WARNING("You are releasing a bindless buffer that's pending releasing, array index: {}", _array_idx);
+                            return;
+                        }else{
+                            LOG_WARNING("You are releasing a bindless buffer that's pending updating, array index: {}", _array_idx);
+                            std::unique_lock<std::mutex> lk(mtx);
+
+                            resource_allocated_set.erase((uint64)_cmd.buffer.Get());
+                            update_cmds[iter->second] = InvalidUpdateInfo{_array_idx};
+                        }
+                    } else if constexpr (std::is_same_v<TCmd, InvalidUpdateInfo>){
+                        
+                    }
+                }, src_cmd
+            );
+            return;
+        }
+
         const auto& handle = handles[_array_idx];
         if(handle.type == Texture){
-            textures_freed.push_back(handle.slot);
+            // textures_freed.push_back(handle.slot);
+            update_cmds.emplace_back(TextureUpdateInfo{nullptr, s_spl, PF_UNDEFINED, _array_idx, handle.slot, 0, 0, true});
         }else if (handle.type == Buffer){
-            buffers_freed.push_back(handle.slot);
+            // buffers_freed.push_back(handle.slot);
+            update_cmds.emplace_back(BufferUpdateInfo{nullptr, _array_idx, handle.slot, true});
         }
-        resource_allocated_set.erase((uint64)(buffers_allocated[_array_idx].buffer));
+        // resource_allocated_set.erase((uint64)(buffers_allocated[handle.slot].buffer.Get()));
     }
     
     bool VulkanBindlessArray::IsResourceAllocated(uint64 _resource) const {
         return resource_allocated_set.find(_resource) != resource_allocated_set.end();
+    }
+
+    void VulkanBindlessArray::DeAllocateResource(uint64 _res){
+        resource_allocated_set.erase(_res);
     }
     
     struct CopyPair{
@@ -1844,7 +2082,8 @@ namespace Moer::Render {
     };
 
     void VulkanBindlessArray::OnFree(const Array<uint>& _slots_freed, const Array<uint>& _textures_freed, const Array<uint>& _buffers_freed) {
-        for (const uint& idx : _textures_freed) { free_texture_slots.Push(idx); }
+        for (const uint& idx : _textures_freed) { free_texture_slots.Push(idx);
+         }
         for (const uint& idx : _buffers_freed) { free_buffer_slots.Push(idx); }
 
         for (const uint& idx : _slots_freed) { free_slots.Push(idx); }
@@ -1975,7 +2214,7 @@ namespace Moer::Render {
     
     }
 
-    VulkanAccelerationStructure::VulkanAccelerationStructure(VulkanDevice& _device):device(_device), RHIResource(RRT_RAYTRACING_ACCELERATION_STRUCTURE){}
+    VulkanAccelerationStructure::VulkanAccelerationStructure(VulkanDevice& _device, VulkanRaytracingScene& _scene):device(_device), src_scene(_scene), RaytracingTlas(){}
 
     VulkanRaytracingGeometry::~VulkanRaytracingGeometry(){
         if(acc != VK_NULL_HANDLE){
@@ -1984,7 +2223,6 @@ namespace Moer::Render {
         }
 
         if(underlying_buffer){
-            MoerDelete(underlying_buffer);
             underlying_buffer = nullptr;
         }
     }
@@ -1996,7 +2234,6 @@ namespace Moer::Render {
         }
 
         if (underlying_buffer) {
-            MoerDelete(underlying_buffer);
             underlying_buffer = nullptr;
         }
         if(m_descriptor_idx >= 0){
@@ -2119,19 +2356,39 @@ namespace Moer::Render {
             RefitInstanceBuffer();
             b_full_refit = true;
         }
-        RefitTLASAndScratchBuffer();
+        bool b_need_force_build = RefitTLASAndScratchBuffer();
 
+        // for(auto prev_idx : prev_modified_instance_ids){
+        //     if(!temp_modified_instance_ids.contains(prev_idx)){
+        //         temp_update_instance_ids.push_back(prev_idx);
+        //     }
+        // }
+        if(!prev_modified_instance_ids.empty()){
+            b_need_force_build = true;
+        }
+
+        prev_modified_instance_ids.clear();
+
+
+        // b_current_full_refit |= b_full_refit;
+
+        // if(b_prev_full_refit){
+        //     b_full_refit = true;
+        //     b_prev_full_refit = false;
+        // }
 
         if(b_full_refit){
             temp_update_instances.reserve(instances.size() * sizeof(VkAccelerationStructureInstanceKHR));
             std::span<byte> temp_span((byte*)vk_instances.data(), vk_instances.size() * sizeof(VkAccelerationStructureInstanceKHR));
-            temp_update_instances.insert(temp_update_instances.begin(), temp_span.begin(), temp_span.end());
 
             temp_update_instance_ids.clear();
             for(uint i = 0; i < instances.size(); i++){
                 temp_update_instance_ids.push_back(i);
             }
-        }else{
+
+        }
+        
+        {
 
             temp_update_instances.resize(temp_update_instance_ids.size() * sizeof(VkAccelerationStructureInstanceKHR));
             //update cpu size vk_instance datas
@@ -2160,9 +2417,10 @@ namespace Moer::Render {
 
 
         //maybe we should calculate relative blas here
-
+        // Array<uint> instance_ids_to_update = temp_update_instance_ids;
+        
         // RefitTLASAndScratchBuffer();
-        temp_modified_instance_ids.clear();
+        // temp_modified_instance_ids.clear();
         return MakeUnique<UpdateRaytracingSceneCmd>(
             std::move(related_geometries),
             uint64(this),
@@ -2172,7 +2430,30 @@ namespace Moer::Render {
             std::move(temp_update_instance_ids),
             std::move(temp_update_instances),
             vk_instances.size(),
-            b_full_refit);
+            b_full_refit || b_need_force_build);
+    }
+
+    void VulkanRaytracingScene::AdvanceFrame(){  
+        
+        assert(prev_modified_instance_ids.empty() && "There are still modified instances not updated, call UpdateScene() first");
+        
+        prev_modified_instance_ids.swap( temp_modified_instance_ids);
+        b_current_full_refit = false;
+
+        std::swap(prev_instance_capacity, instance_capacity);
+        prev_size_infos.build_scratch_size = size_infos.build_scratch_size;
+        prev_size_infos.update_scratch_size = size_infos.update_scratch_size;
+        std::swap(prev_size_infos, size_infos);
+
+        std::swap(prev_tlas, tlas);
+    }
+
+    RaytracingTlasRef VulkanRaytracingScene::GetTlas() const{
+        return RaytracingTlasRef(tlas.Get());
+    }
+
+    RaytracingTlasRef VulkanRaytracingScene::GetPrevTlas() const{
+        return RaytracingTlasRef(prev_tlas.Get());
     }
 
     void VulkanRaytracingScene::RefitInstanceBuffer(){
@@ -2263,10 +2544,10 @@ namespace Moer::Render {
                 buffer_ci.usage = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
                 VK_CHECK_RESULT(vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &current_handle, &alloc, nullptr));
                 
-                tlas = MoerNew(VulkanAccelerationStructure)(*m_device);
+                tlas = MoerNew(VulkanAccelerationStructure)(*m_device, *this);
 
-                tlas->underlying_buffer = MoerNew(VulkanBuffer)(BufferInfo{buffer_ci.size, 1, EBufferUsageFlags::ACCELERATION_STRUCTURE}, *m_device, current_handle, alloc, true, true);
-
+                tlas->underlying_buffer = MoerNew(VulkanBuffer)(BufferInfo{buffer_ci.size, 1, EBufferUsageFlags::ACCELERATION_STRUCTURE}, *m_device, current_handle, alloc, false, true);
+                tlas->underlying_buffer->SetName("TLAS underly buffer Ping");
 
                 //create new TLAS
                 VkAccelerationStructureCreateInfoKHR create_info{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
@@ -2277,7 +2558,18 @@ namespace Moer::Render {
                 create_info.offset = 0;
                 create_info.size = tlas->underlying_buffer->GetByteSize();
                 VK_CHECK_RESULT(vkCreateAccelerationStructureKHR(m_device->GetDevice(), &create_info, nullptr, &tlas->handle));
-            
+                
+                // //create previous tlas
+                // if(prev_size_infos.result_size == 0){
+                    
+                //     VK_CHECK_RESULT(vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &current_handle, &alloc, nullptr));
+                //     prev_tlas = MoerNew(VulkanAccelerationStructure)(*m_device, *this);
+                //     prev_tlas->underlying_buffer = MoerNew(VulkanBuffer)(BufferInfo{buffer_ci.size, 1, EBufferUsageFlags::ACCELERATION_STRUCTURE}, *m_device, current_handle, alloc, false, true);
+                //     prev_tlas->underlying_buffer->SetName("TLAS underly buffer Pong");
+                //     create_info.buffer = prev_tlas->underlying_buffer->GetHandle();
+                //     VK_CHECK_RESULT(vkCreateAccelerationStructureKHR(m_device->GetDevice(), &create_info, nullptr, &prev_tlas->handle));
+                //     prev_size_infos = build_sizes_info;
+                // }
             }
             size_infos = build_sizes_info;
             return true;

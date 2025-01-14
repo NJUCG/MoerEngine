@@ -5,12 +5,14 @@
 #include <limits>
 #include <optional>
 #include <variant>
+#include "PixelFormat.h"
 #include "RenderCommon.h"
 #include "RenderAPI.h"
 #include "math/Base.h"
 #include "misc/EnumBitOperation.h"
 #include "misc/STL.h"
 #include "misc/Traits.h"
+#include "shaderheaders/shared/ShaderParameters.h"
 #pragma region CommonEnums
 /** Maximum number of miplevels in a texture. */
 enum { MAX_TEXTURE_MIP_COUNT = 0xff };
@@ -113,6 +115,8 @@ struct Extent2D {
     Extent2D() : x(0), y(0) {
     }
     Extent2D(const Moer::Vector2i& _v) : x(_v.x), y(_v.y) {
+    }
+    Extent2D(Moer::uint2 _v) : x(_v.x), y(_v.y) {
     }
     operator Moer::Vector2i() {
         return Moer::Vector2i(x, y);
@@ -468,6 +472,7 @@ enum ERHIResourceType {
     RRT_CONSTANT_BUFFER_VIEW,
     RRT_RAYTRACING_ACCELERATION_STRUCTURE,
     RRT_RAYTRACING_GEOMETRY,
+    RRT_RAYTRACING_TLAS,
     RRT_RAYTRACING_SCENE,
     RRT_STAGING_BUFFER,
     RRT_SHADER_LIBRARY,
@@ -1153,12 +1158,13 @@ namespace Moer {
             memset(this, 0, sizeof(ReflectParamInfo));
         };
         struct Resource {
-            uint set;
-            uint binding;
-            uint sampled;
-            uint desc_type;
-            uint resource_type;
-            uint count;
+            uint         set;
+            uint         binding;
+            uint         sampled;
+            uint         desc_type;
+            uint         resource_type;
+            uint         count;
+            EPixelFormat format;
         };
         struct Constant {
             uint size;

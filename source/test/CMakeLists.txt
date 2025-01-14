@@ -97,6 +97,24 @@ target_link_libraries(RaytracingTest
 )
 set_target_properties(RaytracingTest PROPERTIES FOLDER ${moer_test_folder})
 
+# nrd
+file(GLOB_RECURSE RT_NRD_TEST_CPPS RTNRD/*.cpp)
+add_executable(NRDTest ${RT_NRD_TEST_CPPS})
+target_include_directories(NRDTest
+        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>
+        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
+        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
+        PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Raytracing>
+        PRIVATE $<BUILD_INTERFACE:${moer_shader_dir}/nrd>
+)
+target_link_libraries(NRDTest
+        PRIVATE MoerRender
+        PRIVATE glfw
+        PRIVATE MoerResource
+
+)
+set_target_properties(NRDTest PROPERTIES FOLDER ${moer_test_folder})
+
 # VertexFactoryTest
 add_executable(VertexFactoryTest VertexFactoryTest.cpp)
 target_include_directories(VertexFactoryTest

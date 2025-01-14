@@ -261,6 +261,15 @@ namespace Moer::Render {
     //     commands.push_back(MakeUnique<SetConstantCmd>(_pso, std::move(_constants)));
     // }
 
+#pragma region[ custom commands ]
+
+    void CommandList::AddCustomCommand(UniquePtr<Command>&& _cmd, std::string_view _name) {
+        commands.push_back(std::move(_cmd));
+        commands.back()->name = _name;
+    }
+
+#pragma endregion
+
     void CommandList::AddCallback(std::function<void()>&& _callback) {
         callbacks.emplace_back(std::move(_callback));
     }

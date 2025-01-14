@@ -2,8 +2,36 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "math/Function.h"
-
+#include "shaderheaders/shared/ShaderParameters.h"
 namespace Moer::Render {
+
+    static constexpr std::string_view s_final_color_names[] = {
+        "SceneColor"
+        "DI",
+        "Emissive",
+        "Diffuse",
+        "Specular",
+        "Normal",
+        "ViewDepth",
+        "Depth",
+        "Motion",
+        "Grid",
+        "Material"};
+    RTUI::RTUI(UIRenderer& _renderer)
+        : ui_renderer(_renderer) {
+
+        final_color_map["SceneColor"] = EFinalColor::EFC_SceneColor;
+        final_color_map["DI"]         = EFinalColor::EFC_DI;
+        final_color_map["Emissive"]   = EFinalColor::EFC_EMISSIVE;
+        final_color_map["Diffuse"]    = EFinalColor::EFC_DIFFUSE;
+        final_color_map["Specular"]   = EFinalColor::EFC_SPECULAR;
+        final_color_map["Normal"]     = EFinalColor::EFC_NORMAL;
+        final_color_map["ViewDepth"]  = EFinalColor::EFC_VIEW_DEPTH;
+        final_color_map["Depth"]      = EFinalColor::EFC_DEPTH;
+        final_color_map["Motion"]     = EFinalColor::EFC_MOTION;
+        final_color_map["Grid"]       = EFinalColor::EFC_GRID;
+        final_color_map["Material"]   = EFinalColor::EFC_MATERIAL;
+    }
     void RTUI::TickUI() {
 
         static bool               opt_fullscreen  = true;
@@ -138,6 +166,25 @@ namespace Moer::Render {
             ImGui::End();
             return;
         }
+
+        if (ImGui::TreeNode("Final Color")) {
+            for (auto& [name, index] : final_color_map) {
+                if (ImGui::Selectable(name.c_str(), config.final_color == index)) {
+                    config.final_color = static_cast<EFinalColor>(index);
+                }
+            }
+
+            ImGui::TreePop();
+        }
+
+        //Grid Config
+        if (ImGui::TreeNode("Grid Config")) {
+            ImGui::SliderInt("Grid Mode", &config.grid_config.grid_mode, 0, 1);
+            ImGui::SliderInt("Light Per Ceil", &config.grid_config.light_per_ceil, 1, 1024);
+            ImGui::SliderFloat("Cell Size", &config.grid_config.cell_size, 1.f, 400.f);
+            ImGui::TreePop();
+        }
+
         config.sun_direction = Normalizef(config.sun_direction);
         ImGui::SliderFloat3("Sun Direction", &config.sun_direction.x, -1.0f, 1.0f);
         ImGui::SliderFloat("Exposure", &config.exposure, 0.0f, 10.0f);
@@ -148,6 +195,7 @@ namespace Moer::Render {
         config.max_bounce = max_bounce;
         //show fps
         ImGui::Text("FPS: %.1f", io.Framerate);
+        ImGui::Text("Frame Time: %.1f ms", 1000.0f / io.Framerate);
 
         ImGui::End();
     }

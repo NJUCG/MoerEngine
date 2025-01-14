@@ -9,7 +9,9 @@
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
-#include "vulkan/vulkan_core.h"
+
+#include "VulkanCustomCommand.h"
+
 #include <memory>
 #include <mutex>
 #include <variant>
@@ -82,6 +84,16 @@ namespace Moer::Render {
                 return true;
             default: return false;
         }
+    }
+
+    static void LockBindlessArray(uint64 _handle) {
+        VulkanBindlessArray* bdls_array = reinterpret_cast<VulkanBindlessArray*>(_handle);
+        bdls_array->Lock();
+    }
+
+    static void UnlockBindlessArray(uint64 _handle) {
+        VulkanBindlessArray* bdls_array = reinterpret_cast<VulkanBindlessArray*>(_handle);
+        bdls_array->Unlock();
     }
 
 #pragma endregion
@@ -204,9 +216,9 @@ namespace Moer::Render {
 
                 else if constexpr (std::is_same_v<T, BindlessArrayRef>) {
                     HandleBindless(_arg, _pipelines);
-                } else if constexpr (std::is_same_v<T, RaytracingSceneRef>) {
-                    VulkanRaytracingScene* vk_as = ResourceCast(_arg.Get());
-                    tracker.RecordState(vk_as->tlas->underlying_buffer, VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR, _pipelines);
+                } else if constexpr (std::is_same_v<T, RaytracingTlasRef>) {
+                    VulkanAccelerationStructure* vk_as = ResourceCast(_arg.Get());
+                    tracker.RecordState(vk_as->underlying_buffer, VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR, _pipelines);
                 }
             },
                        _arg);
@@ -253,14 +265,15 @@ namespace Moer::Render {
                 case Command::EType::QueueTransfer:
                     Visit(static_cast<const QueueTransferCmd*>(_cmd));
                     break;
-                case Command::EType::Custom:
-                    break;
                 case Command::EType::UpdateBindlessArray:
                     Visit(static_cast<const UpdateBindlessArrayCmd*>(_cmd));
                     break;
 
                 case Command::EType::ClearResource:
                     Visit(static_cast<const ClearResourceCmd*>(_cmd));
+                    break;
+                case Command::EType::Custom:
+                    Visit(static_cast<const CustomCmd*>(_cmd));
                     break;
                 default:
                     assert(false && "Invalid command type");
@@ -361,7 +374,7 @@ namespace Moer::Render {
         }
 
         void Visit(const UpdateRaytracingSceneCmd* _cmd) {
-            if (_cmd->InstancesToUpdate().empty()) {
+            if (_cmd->InstancesToUpdate().empty() && !_cmd->ForceUpdate()) {
                 return;
             }
             //instance buffer
@@ -369,7 +382,12 @@ namespace Moer::Render {
             VulkanBuffer*                scratch_buffer  = reinterpret_cast<VulkanBuffer*>(_cmd->ScratchBufferHandle());
             VulkanAccelerationStructure* tlas            = reinterpret_cast<VulkanAccelerationStructure*>(_cmd->TlasHandle());
 
-            tracker.RecordState(instance_buffer, {VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT});
+            if (_cmd->ForceUpdate() && _cmd->InstancesToUpdate().empty()) {
+                tracker.RecordState(instance_buffer, {VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR});
+            } else {
+                tracker.RecordState(instance_buffer, {VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT});
+            }
+            // tracker.RecordState(instance_buffer, {VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT});
             tracker.RecordState(scratch_buffer, {VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR | VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR});
             tracker.RecordState(tlas->underlying_buffer, {VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR});
 
@@ -544,19 +562,45 @@ namespace Moer::Render {
             // auto* vk_bindless_array = reinterpret_cast<VulkanBindlessArray*>(_cmd->Handle());
             // tracker.RecordState(vk_bindless_array, VK_ACCESS_2_SHADER_READ_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
 
-            if (_cmd->TextureUpdates().empty() && _cmd->BufferUpdates().empty()) {
+            if (!_cmd->HasUpdates()) {
                 return;
             }
 
             VulkanBindlessArray* vk_bindless_array = reinterpret_cast<VulkanBindlessArray*>(_cmd->Handle());
             tracker.RecordState(vk_bindless_array->bindless_array_buffer, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
-            if (!_cmd->TextureUpdates().empty()) {
+            // if (!_cmd->TextureUpdates().empty()) {
+            //     tracker.RecordState(vk_bindless_array->bindless_texture_descs, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
+            // }
+
+            // if (!_cmd->BufferUpdates().empty()) {
+            //     tracker.RecordState(vk_bindless_array->bindless_buffer_descs, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
+            // }
+
+            if (_cmd->HasBufferUpdates()) {
+                tracker.RecordState(vk_bindless_array->bindless_buffer_descs, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
+            }
+
+            if (_cmd->HasTextureUpdates()) {
                 tracker.RecordState(vk_bindless_array->bindless_texture_descs, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
             }
 
-            if (!_cmd->BufferUpdates().empty()) {
-                tracker.RecordState(vk_bindless_array->bindless_buffer_descs, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
-            }
+            // const Array<BindlessArray::UpdateCmd>& update_cmds = _cmd->UpdateCommands();
+            // for (const BindlessArray::UpdateCmd& cmd : update_cmds) {
+            //     std::visit(
+            //         [&](auto&& _arg) {
+            //             using T = std::decay_t<decltype(_arg)>;
+            //             if constexpr (std::is_same_v<T, BindlessArray::TextureUpdateInfo>) {
+            //                 if (_arg.free) return;
+            //                 auto* vk_texture = ResourceCast(_arg.texture.Get());
+            //                 tracker.RecordState(vk_texture, VK_ACCESS_2_SHADER_READ_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
+            //             } else if constexpr (std::is_same_v<T, BindlessArray::BufferUpdateInfo>) {
+            //                 if (_arg.free) return;
+            //                 auto* vk_buffer = ResourceCast(_arg.buffer.Get());
+            //                 tracker.RecordState(vk_buffer, VK_ACCESS_2_SHADER_READ_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
+            //             }
+            //         },
+            //         cmd);
+            // }
         }
 
         void Visit(const ClearResourceCmd* _cmd) {
@@ -577,6 +621,26 @@ namespace Moer::Render {
                     }
                 },
                 _cmd->Resource());
+        }
+
+        void Visit(const CustomCmd* _cmd) {
+            switch (_cmd->CustomId()) {
+                case CustomCmd::CustomCmdId::CUSTOM_RASTER:
+                    assert(false && "Custom raster draw scene not implemented");
+                    break;
+                case CustomCmd::CustomCmdId::CUSTOM_DISPATCH:
+                    Visit(static_cast<const CustomDispatchCmd*>(_cmd));
+                    break;
+                default:
+                    assert(false && "Invalid Custom Command for VkCmdPreprocessor");
+            }
+        }
+
+        void Visit(const CustomDispatchCmd* _cmd) {
+            auto func = [&](const TArg& _arg, ParamInfoFlags _flag) {
+                VisitArgs(_arg, (VulkanShaderResourceState)_flag.state_flags, _flag.pipeline_flags);
+            };
+            _cmd->IterateArgs(func);
         }
     };
 
@@ -643,15 +707,15 @@ namespace Moer::Render {
                 case Command::EType::ClearResource:
                     Visit(static_cast<const ClearResourceCmd&>(*_cmd));
                     break;
-                case Command::EType::TraceRay: {
+                case Command::EType::TraceRay:
                     assert(false && "TraceRay not implemented");
                     break;
-                }
-                case Command::EType::Custom: break;
-                case Command::EType::UpdateBindlessArray: {
+                case Command::EType::UpdateBindlessArray:
                     Visit(static_cast<const UpdateBindlessArrayCmd&>(*_cmd));
                     break;
-                };
+                case Command::EType::Custom:
+                    Visit(static_cast<const CustomCmd&>(*_cmd));
+                    break;
             }
         };
         void Visit(const UploadBufferCmd& _cmd) {
@@ -956,94 +1020,107 @@ namespace Moer::Render {
 
         void Visit(const UpdateBindlessArrayCmd& _cmd) {
             VulkanBindlessArray* bindless_array = reinterpret_cast<VulkanBindlessArray*>(_cmd.Handle());
-            auto                 texture_slots  = _cmd.StealTextureUpdates();
-            auto                 buffer_slots   = _cmd.StealBufferUpdates();
+            // auto                 texture_slots  = _cmd.StealTextureUpdates();
+            // auto                 buffer_slots   = _cmd.StealBufferUpdates();
+
+            // auto free_textures = _cmd.StealFreeTextures();
+            // auto free_buffers  = _cmd.StealFreeBuffers();
+            // auto free_slots    = _cmd.StealFreeSlots();
+
+            auto          array_data          = _cmd.StealArrayData();
+            auto          array_indices_dat   = _cmd.StealArrayIndicesData();
+            auto          texture_data        = _cmd.StealTextureData();
+            auto          texture_indices_dat = _cmd.StealTextureIndicesData();
+            Array<byte>&& buffer_data         = _cmd.StealBufferData();
+            auto          buffer_indices_dat  = _cmd.StealBufferIndicesData();
 
             //update bindless array
-            {
-                bindless_array->Lock();
-                for (const VulkanBindlessArray::TextureUpdateInfo& texture : texture_slots) {
-                    uint indirect_handle                       = (m_device->GetSamplerIdx(texture.sampler) & 0xff) | (texture.slot & 0xffffff) << 8;
-                    bindless_array->handles[texture.array_idx] = {texture.slot, 1, VulkanBindlessArray::Texture};
-                }
-                for (const auto& buffer : buffer_slots) {
-                    uint indirect_handle                      = buffer.slot;
-                    bindless_array->handles[buffer.array_idx] = {buffer.slot, 0, VulkanBindlessArray::Buffer};
-                }
-                bindless_array->Unlock();
-            }
-            uint64 texture_handle_stride = m_device->GetOptionalProperties().descriptor_buffer_properties.sampledImageDescriptorSize;
-            uint64 buffer_handle_stride  = m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize;
-            uint64 array_handle_stride   = sizeof(uint);
+            // {
+            //     bindless_array->Lock();
+            //     for (const VulkanBindlessArray::TextureUpdateInfo& texture : texture_slots) {
+            //         uint indirect_handle                       = (m_device->GetSamplerIdx(texture.sampler) & 0xff) | (texture.slot & 0xffffff) << 8;
+            //         bindless_array->handles[texture.array_idx] = {texture.slot, 1, VulkanBindlessArray::Texture};
+            //     }
+            //     for (const auto& buffer : buffer_slots) {
+            //         uint indirect_handle                      = buffer.slot;
+            //         bindless_array->handles[buffer.array_idx] = {buffer.slot, 0, VulkanBindlessArray::Buffer};
+            //     }
 
-            //cpu side data
-            Array<std::pair<uint, uint>> array_indices_dat(buffer_slots.size() + texture_slots.size());
-            Array<ubyte>                 array_dat((texture_slots.size() + buffer_slots.size()) * array_handle_stride);
+            //     bindless_array->OnFree(free_slots, free_textures, free_buffers);
+            //     bindless_array->Unlock();
+            // }
+            // uint64 texture_handle_stride = m_device->GetOptionalProperties().descriptor_buffer_properties.sampledImageDescriptorSize;
+            // uint64 buffer_handle_stride  = m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize;
+            // uint64 array_handle_stride   = sizeof(uint);
 
-            Array<std::pair<uint, uint>> texture_indices_dat(texture_slots.size());
-            Array<ubyte>                 texture_dat(texture_slots.size() * texture_handle_stride);
+            // // //cpu side data
+            // Array<std::pair<uint, uint>> array_indices_dat(buffer_slots.size() + texture_slots.size());
+            // Array<ubyte>                 array_dat((texture_slots.size() + buffer_slots.size()) * array_handle_stride);
 
-            Array<std::pair<uint, uint>> buffer_indices_dat(buffer_slots.size());
-            Array<ubyte>                 buffer_dat(buffer_slots.size() * buffer_handle_stride);
+            // Array<std::pair<uint, uint>> texture_indices_dat(texture_slots.size());
+            // Array<ubyte>                 texture_dat(texture_slots.size() * texture_handle_stride);
 
-            VulkanDescriptorHeap& heap = m_device->GetGlobalDescriptorHeap();
+            // Array<std::pair<uint, uint>> buffer_indices_dat(buffer_slots.size());
+            // Array<ubyte>                 buffer_dat(buffer_slots.size() * buffer_handle_stride);
+
+            // VulkanDescriptorHeap& heap = m_device->GetGlobalDescriptorHeap();
 
             //shuffle copy shader
             auto& shuffle_sd = m_device->internal_shaders->sd_component_shuffle;
 
-            byte* mapped_image_descs  = nullptr;
-            byte* mapped_buffer_descs = nullptr;
+            // byte* mapped_image_descs  = nullptr;
+            // byte* mapped_buffer_descs = nullptr;
 
             uint array_idx = 0;
 
-            bool b_array   = !texture_slots.empty() || !buffer_slots.empty();
-            bool b_texture = !texture_slots.empty();
-            bool b_buffer  = !buffer_slots.empty();
+            bool b_array   = !texture_data.empty() || !buffer_data.empty();
+            bool b_texture = !texture_data.empty();
+            bool b_buffer  = !buffer_data.empty();
 
-            if (b_texture) {
-                //copy texture handles
-                for (size_t i = 0; i < texture_slots.size(); ++i) {
-                    const auto&    texture    = texture_slots[i];
-                    VulkanTexture* vk_texture = ResourceCast(texture_slots[i].texture);
-                    TextureView    view(vk_texture, texture.format, texture.mip_level, texture.num_mips);
-                    uint           src_idx;
-                    if (uint(vk_texture->GetAspectFlags() & ETextureAspectFlags::DEPTH_SLICE) != 0) {
-                        // view.aspect_flags = ETextureAspectFlags::COLOR;
-                        src_idx = heap.GetImageDescIdx(&view, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+            // if (b_texture) {
+            //     //copy texture handles
+            //     for (size_t i = 0; i < texture_slots.size(); ++i) {
+            //         const auto&    texture    = texture_slots[i];
+            //         VulkanTexture* vk_texture = ResourceCast(texture_slots[i].texture);
+            //         TextureView    view(vk_texture, texture.format, texture.mip_level, texture.num_mips);
+            //         uint           src_idx;
+            //         if (uint(vk_texture->GetAspectFlags() & ETextureAspectFlags::DEPTH_SLICE) != 0) {
+            //             // view.aspect_flags = ETextureAspectFlags::COLOR;
+            //             src_idx = heap.GetImageDescIdx(&view, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
 
-                    } else {
-                        src_idx = heap.GetImageDescIdx(&view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-                    }
-                    memcpy(texture_dat.data() + i * texture_handle_stride, &heap.image_desc_data[src_idx], texture_handle_stride);
-                    texture_indices_dat[i]       = {i, texture_slots[i].slot};
-                    array_indices_dat[array_idx] = {array_idx, texture_slots[i].array_idx};
+            //         } else {
+            //             src_idx = heap.GetImageDescIdx(&view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            //         }
+            //         memcpy(texture_dat.data() + i * texture_handle_stride, &heap.image_desc_data[src_idx], texture_handle_stride);
+            //         texture_indices_dat[i]       = {i, texture_slots[i].slot};
+            //         array_indices_dat[array_idx] = {array_idx, texture_slots[i].array_idx};
 
-                    uint indirect_handle = (m_device->GetSamplerIdx(texture.sampler) & 0xff) | (texture.slot & 0xffffff) << 8;
-                    memcpy(array_dat.data() + array_idx * array_handle_stride, &indirect_handle, array_handle_stride);
-                    array_idx++;
-                }
-            }
+            //         uint indirect_handle = (m_device->GetSamplerIdx(texture.sampler) & 0xff) | (texture.slot & 0xffffff) << 8;
+            //         memcpy(array_dat.data() + array_idx * array_handle_stride, &indirect_handle, array_handle_stride);
+            //         array_idx++;
+            //     }
+            // }
 
-            if (b_buffer) {
-                //copy buffer handles
+            // if (b_buffer) {
+            //     //copy buffer handles
 
-                //buffer desc buffer has array_buffer for offset 0 and allocate from slot 1(0 for invalid handle)
-                //array buffer is in same set with other bindless buffer descs, so we need to offset the slot by array_buffer slot(size of storage buffer handle)
-                //in gpu:
-                // bindless_array_buffer: [binding 0, offset 0]
-                // bindless_buffer_descs: [binding 1, offset $sizeofhandle)]
-                uint buffer_dst_slot_offset = bindless_array->buffers_offset_in_set / buffer_handle_stride;
-                for (size_t i = 0; i < buffer_slots.size(); ++i) {
-                    VulkanBuffer* vk_buffer = ResourceCast(buffer_slots[i].buffer);
-                    uint          src_idx   = heap.GetBufferDescIdx(vk_buffer->GetView());
-                    memcpy(buffer_dat.data() + i * buffer_handle_stride, &heap.buffer_desc_data[src_idx], buffer_handle_stride);
-                    buffer_indices_dat[i] = {i, buffer_slots[i].slot + buffer_dst_slot_offset};
+            //     //buffer desc buffer has array_buffer for offset 0 and allocate from slot 1(0 for invalid handle)
+            //     //array buffer is in same set with other bindless buffer descs, so we need to offset the slot by array_buffer slot(size of storage buffer handle)
+            //     //in gpu:
+            //     // bindless_array_buffer: [binding 0, offset 0]
+            //     // bindless_buffer_descs: [binding 1, offset $sizeofhandle)]
+            //     uint buffer_dst_slot_offset = bindless_array->buffers_offset_in_set / buffer_handle_stride;
+            //     for (size_t i = 0; i < buffer_slots.size(); ++i) {
+            //         VulkanBuffer* vk_buffer = ResourceCast(buffer_slots[i].buffer);
+            //         uint          src_idx   = heap.GetBufferDescIdx(vk_buffer->GetView(), vk_buffer->GetDescriptorType());
+            //         memcpy(buffer_dat.data() + i * buffer_handle_stride, &heap.buffer_desc_data[src_idx], buffer_handle_stride);
+            //         buffer_indices_dat[i] = {i, buffer_slots[i].slot + buffer_dst_slot_offset};
 
-                    array_indices_dat[array_idx] = {array_idx, buffer_slots[i].array_idx};
-                    memcpy(array_dat.data() + array_idx * sizeof(uint), &buffer_slots[i].slot, sizeof(uint));
-                    array_idx++;
-                }
-            }
+            //         array_indices_dat[array_idx] = {array_idx, buffer_slots[i].array_idx};
+            //         memcpy(array_dat.data() + array_idx * sizeof(uint), &buffer_slots[i].slot, sizeof(uint));
+            //         array_idx++;
+            //     }
+            // }
 
             //buffer for all data
             BufferView staging_buffer{};
@@ -1074,29 +1151,29 @@ namespace Moer::Render {
                 uint array_indices_size = 0, texture_indices_size = 0, buffer_indices_size = 0;
 
                 if (b_array) {
-                    array_staging_size   = sizeof(uint) * (texture_slots.size() + buffer_slots.size());
+                    array_staging_size   = array_data.size();
                     staging_size         = array_staging_size;
                     array_indices_offset = align2(array_staging_size, storage_alignment);
 
-                    array_indices_size = sizeof(uint) * (texture_slots.size() + buffer_slots.size()) * 2;
+                    array_indices_size = sizeof(uint) * (array_indices_dat.size()) * 2;
 
                     current_offset = align2(array_indices_size + array_indices_offset, storage_alignment);
                 }
 
                 if (b_texture) {
-                    texture_staging_size   = texture_handle_stride * texture_slots.size();
+                    texture_staging_size   = texture_data.size();
                     texture_staging_offset = current_offset;
 
                     texture_indices_offset = align2(texture_staging_size + texture_staging_offset, storage_alignment);
-                    texture_indices_size   = sizeof(uint) * texture_slots.size() * 2;
+                    texture_indices_size   = sizeof(uint) * texture_indices_dat.size() * 2;
                     current_offset         = align2(texture_indices_size + texture_indices_offset, storage_alignment);
                 }
 
                 if (b_buffer) {
-                    buffer_staging_size   = buffer_handle_stride * buffer_slots.size();
+                    buffer_staging_size   = buffer_data.size();
                     buffer_staging_offset = current_offset;
                     buffer_indices_offset = align2(buffer_staging_size + buffer_staging_offset, storage_alignment);
-                    buffer_indices_size   = sizeof(uint) * buffer_slots.size() * 2;
+                    buffer_indices_size   = sizeof(uint) * buffer_indices_dat.size() * 2;
 
                     current_offset = align2(buffer_indices_size + buffer_indices_offset, storage_alignment);
                 }
@@ -1109,21 +1186,21 @@ namespace Moer::Render {
                 if (b_array) {
                     array_staging     = staging_buffer.buffer->GetView(array_staging_offset, array_staging_size);
                     array_indices_buf = staging_buffer.buffer->GetView(array_indices_offset, array_indices_size);
-                    cmd_list.CopyData(array_staging, array_dat.data(), array_staging_size);
+                    cmd_list.CopyData(array_staging, array_data.data(), array_staging_size);
                     cmd_list.CopyData(array_indices_buf, array_indices_dat.data(), array_indices_size);
                 }
 
                 if (b_texture) {
                     texture_desc_staging = staging_buffer.buffer->GetView(texture_staging_offset, texture_staging_size);
                     texture_indices_buf  = staging_buffer.buffer->GetView(texture_indices_offset, texture_indices_size);
-                    cmd_list.CopyData(texture_desc_staging, texture_dat.data(), texture_staging_size);
+                    cmd_list.CopyData(texture_desc_staging, texture_data.data(), texture_staging_size);
                     cmd_list.CopyData(texture_indices_buf, texture_indices_dat.data(), texture_indices_size);
                 }
 
                 if (b_buffer) {
                     buffer_desc_staging = staging_buffer.buffer->GetView(buffer_staging_offset, buffer_staging_size);
                     buffer_indices_buf  = staging_buffer.buffer->GetView(buffer_indices_offset, buffer_indices_size);
-                    cmd_list.CopyData(buffer_desc_staging, buffer_dat.data(), buffer_staging_size);
+                    cmd_list.CopyData(buffer_desc_staging, buffer_data.data(), buffer_staging_size);
                     cmd_list.CopyData(buffer_indices_buf, buffer_indices_dat.data(), buffer_indices_size);
                 }
             }
@@ -1136,38 +1213,38 @@ namespace Moer::Render {
 
                 {
                     //bindless array update
-                    arg.component_cnt = texture_slots.size() + buffer_slots.size();
+                    arg.component_cnt = array_indices_dat.size();
                     arg.stride        = sizeof(uint) >> 2;
 
                     cmd_list.BindDescriptors(shuffle_sd.handle, shuffle_sd.SetArgs(arg, array_indices_buf, array_staging, bindless_array->bindless_array_buffer->GetView()));
-                    cmd_list.Dispatch((texture_slots.size() + buffer_slots.size() + 63) / 64, 1, 1);
+                    cmd_list.Dispatch((array_indices_dat.size() + 63) / 64, 1, 1);
                 }
 
                 if (b_texture) {
-                    arg.component_cnt = texture_slots.size();
+                    arg.component_cnt = texture_indices_dat.size();
                     arg.stride        = m_device->GetOptionalProperties().descriptor_buffer_properties.sampledImageDescriptorSize >> 2;
 
                     cmd_list.BindDescriptors(shuffle_sd.handle, shuffle_sd.SetArgs(arg, texture_indices_buf, texture_desc_staging, bindless_array->bindless_texture_descs->GetView(bindless_array->texture_offset_in_buffer)));
-                    cmd_list.Dispatch((texture_slots.size() + 63) / 64, 1, 1);
+                    cmd_list.Dispatch((texture_indices_dat.size() + 63) / 64, 1, 1);
                 }
 
-                if (!buffer_slots.empty()) {
-                    arg.component_cnt = buffer_slots.size();
+                if (b_buffer) {
+                    arg.component_cnt = buffer_indices_dat.size();
                     arg.stride        = m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize >> 2;
 
                     cmd_list.BindDescriptors(shuffle_sd.handle, shuffle_sd.SetArgs(arg, buffer_indices_buf, buffer_desc_staging, bindless_array->bindless_buffer_descs->GetView()));
-                    cmd_list.Dispatch((buffer_slots.size() + 63) / 64, 1, 1);
+                    cmd_list.Dispatch((buffer_indices_dat.size() + 63) / 64, 1, 1);
                 }
 
                 cmd_list.EndLabel();
             }
 
-            allocator.AddOnComplete([bindless_array,
-                                     free_slots(_cmd.StealFreeSlots()),
-                                     free_buffers(_cmd.StealFreeBuffers()),
-                                     free_textures(std::move(_cmd.StealFreeTextures()))]() {
-                bindless_array->OnFree(std::move(free_slots), std::move(free_textures), free_buffers);
-            });
+            // allocator.AddOnComplete([bindless_array,
+            //                          free_slots(_cmd.StealFreeSlots()),
+            //                          free_buffers(_cmd.StealFreeBuffers()),
+            //                          free_textures(std::move(_cmd.StealFreeTextures()))]() {
+            //     bindless_array->OnFree(std::move(free_slots), std::move(free_textures), free_buffers);
+            // });
         }
 
         void Visit(const BuildAccelerationStructuresCmd& _cmd) {
@@ -1222,53 +1299,54 @@ namespace Moer::Render {
             VulkanBuffer*                scratch_buffer  = reinterpret_cast<VulkanBuffer*>(_cmd.ScratchBufferHandle());
             VulkanAccelerationStructure* tlas            = reinterpret_cast<VulkanAccelerationStructure*>(_cmd.TlasHandle());
 
-            if (to_update.size() == 0) {
+            if (to_update.size() == 0 && !_cmd.ForceUpdate()) {
                 return;
             }
             // VulkanRaytracingScene* scene   = reinterpret_cast<VulkanRaytracingScene*>(_cmd.Handle());
-            BufferView staging = allocator.AllocateShaderBuffer(to_update.size() * sizeof(VkAccelerationStructureInstanceKHR));
-            BufferView indices = allocator.AllocateShaderBuffer(to_update.size() * sizeof(uint32) * 2);
+            if (to_update.size() != 0) {
+                BufferView staging = allocator.AllocateShaderBuffer(to_update.size() * sizeof(VkAccelerationStructureInstanceKHR));
+                BufferView indices = allocator.AllocateShaderBuffer(to_update.size() * sizeof(uint32) * 2);
 
-            Array<std::pair<uint, uint>> to_update_indices(to_update.size());
+                Array<std::pair<uint, uint>> to_update_indices(to_update.size());
 
-            for (size_t i = 0; i < to_update.size(); ++i) {
-                const auto& id       = to_update[i];
-                to_update_indices[i] = {i, id};
+                for (size_t i = 0; i < to_update.size(); ++i) {
+                    const auto& id       = to_update[i];
+                    to_update_indices[i] = {i, id};
+                }
+
+                cmd_list.CopyData(staging, _cmd.InstanceData().data(), to_update.size() * sizeof(VkAccelerationStructureInstanceKHR));
+                cmd_list.CopyData(indices, to_update_indices.data(), to_update.size() * sizeof(uint32) * 2);
+
+                auto& shuffle_sd = m_device->internal_shaders->sd_component_shuffle;
+                cmd_list.SetPso(shuffle_sd.handle);
+
+                ComponentShuffleShader::Arg arg;
+                arg.component_cnt = to_update.size();
+                arg.stride        = sizeof(VkAccelerationStructureInstanceKHR) >> 2;
+
+                cmd_list.BindDescriptors(shuffle_sd.handle, shuffle_sd.SetArgs(arg, indices, staging, instance_buffer->GetView()));
+
+                cmd_list.Dispatch((to_update.size() + 63) / 64, 1, 1);
+
+                VkBufferMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
+                barrier.srcAccessMask       = VK_ACCESS_2_SHADER_WRITE_BIT;
+                barrier.dstAccessMask       = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+                barrier.srcStageMask        = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT_KHR;
+                barrier.dstStageMask        = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+                barrier.buffer              = instance_buffer->GetHandle();
+                barrier.offset              = 0;
+                barrier.size                = VK_WHOLE_SIZE;
+                barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+
+                VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                dependency.bufferMemoryBarrierCount = 1;
+                dependency.pBufferMemoryBarriers    = &barrier;
+
+                vkCmdPipelineBarrier2(cmd_list.GetHandle(), &dependency);
+                tracker.FlushSrcState(instance_buffer, VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR);
+                // tracker.RecordState(instance_buffer, {VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR});
             }
-
-            cmd_list.CopyData(staging, _cmd.InstanceData().data(), to_update.size() * sizeof(VkAccelerationStructureInstanceKHR));
-            cmd_list.CopyData(indices, to_update_indices.data(), to_update.size() * sizeof(uint32) * 2);
-
-            auto& shuffle_sd = m_device->internal_shaders->sd_component_shuffle;
-            cmd_list.SetPso(shuffle_sd.handle);
-
-            ComponentShuffleShader::Arg arg;
-            arg.component_cnt = to_update.size();
-            arg.stride        = sizeof(VkAccelerationStructureInstanceKHR) >> 2;
-
-            cmd_list.BindDescriptors(shuffle_sd.handle, shuffle_sd.SetArgs(arg, indices, staging, instance_buffer->GetView()));
-
-            cmd_list.Dispatch((to_update.size() + 63) / 64, 1, 1);
-
-            VkBufferMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
-            barrier.srcAccessMask       = VK_ACCESS_2_SHADER_WRITE_BIT;
-            barrier.dstAccessMask       = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-            barrier.srcStageMask        = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT_KHR;
-            barrier.dstStageMask        = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
-            barrier.buffer              = instance_buffer->GetHandle();
-            barrier.offset              = 0;
-            barrier.size                = VK_WHOLE_SIZE;
-            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-
-            VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-            dependency.bufferMemoryBarrierCount = 1;
-            dependency.pBufferMemoryBarriers    = &barrier;
-
-            vkCmdPipelineBarrier2(cmd_list.GetHandle(), &dependency);
-            tracker.FlushSrcState(instance_buffer, VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR);
-            // tracker.RecordState(instance_buffer, {VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR});
-
             VkAccelerationStructureBuildGeometryInfoKHR build_info{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
             build_info.dstAccelerationStructure = tlas->handle;
             build_info.type                     = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
@@ -1305,6 +1383,31 @@ namespace Moer::Render {
             cmd_list.BeginLabel(std::format("UpdateTLAS with {} instances", _cmd.InstanceCount()), {});
             vkCmdBuildAccelerationStructuresKHR(cmd_list.GetHandle(), 1, &build_info, &range);
             cmd_list.EndLabel();
+        }
+
+        void Visit(const CustomCmd& _cmd) {
+            static float4 custom_color = {0.0f, 1.0f, 1.0f, 1.0f};
+            cmd_list.BeginLabel(_cmd.name, custom_color);
+            switch (_cmd.CustomId()) {
+                case CustomCmd::CustomCmdId::CUSTOM_RASTER:
+                    assert(false && "Custom raster draw scene not implemented");
+                    break;
+                case CustomCmd::CustomCmdId::CUSTOM_DISPATCH:
+                    Visit(static_cast<const VkCustomDispatchCmd&>(_cmd));
+                    break;
+                default: assert(false && "Custom Command Not Supported for VkCmdVisitor");
+            }
+            cmd_list.EndLabel();
+        }
+
+        void Visit(const VkCustomDispatchCmd& _cmd) {
+            const VkCustomDispatchCmd::VkDispatchContext context = {
+                m_device->GetInstance(),
+                m_device->GetGpu(),
+                m_device->GetDevice(),
+                cmd_list.GetHandle(),
+                &this->tracker};
+            _cmd.Execute(context);
         }
 
         // void Visit(const UpdateDrawStateCmd& _cmd) {
@@ -1497,7 +1600,10 @@ namespace Moer::Render {
             .is_resource_write       = &IsBufferTextureWrite,
             .is_resource_read        = &IsBufferTextureRead,
             .is_texture_sampled      = &IsTextureSampled,
-            .is_resource_in_bindless = &IsResourceInBindlessArray};
+            .is_resource_in_bindless = &IsResourceInBindlessArray,
+            .lock_bdls_array         = &LockBindlessArray,
+            .unlock_bdls_array       = &UnlockBindlessArray};
+
         CmdReorderer reorderer{function_table};
         for (const auto& cmd : _submit.cmds) {
             reorderer.AcceptCmd(cmd.get());

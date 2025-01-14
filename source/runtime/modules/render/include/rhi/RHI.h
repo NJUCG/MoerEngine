@@ -262,6 +262,7 @@ protected:
 protected:
     RHIInfo m_rhi_info;
 };
+
 namespace Moer::Render {
 
     template<typename T>
@@ -277,6 +278,27 @@ namespace Moer::Render {
         static constexpr bool value = decltype(Test(static_cast<T*>(nullptr)))::value;
     };
 
+#define USER_TRIVIAL_TYPE(T)                \
+    template<>                              \
+    struct user_trivial_type<T> {           \
+        static constexpr bool value = true; \
+    }
+
+    USER_TRIVIAL_TYPE(uint2);
+    USER_TRIVIAL_TYPE(uint3);
+    USER_TRIVIAL_TYPE(uint4);
+    USER_TRIVIAL_TYPE(int2);
+    USER_TRIVIAL_TYPE(int3);
+    USER_TRIVIAL_TYPE(int4);
+    USER_TRIVIAL_TYPE(float2);
+    USER_TRIVIAL_TYPE(float3);
+    USER_TRIVIAL_TYPE(float4);
+    USER_TRIVIAL_TYPE(float2x2);
+    USER_TRIVIAL_TYPE(float3x3);
+    USER_TRIVIAL_TYPE(float4x4);
+
+#undef USER_TRIVIAL_TYPE
+
     template<typename T>
     static constexpr bool user_trivial_type_v = user_trivial_type<T>::value;
 
@@ -288,6 +310,16 @@ namespace Moer::Render {
         uint b_support_direct_storage : 1;
         uint b_support_virtual_texture : 1;
     };
+
+    class DeviceExtension {
+    protected:
+        virtual ~DeviceExtension() = default;
+    };
+
+    template<typename T>
+    concept DeviceExt = std::is_base_of_v<DeviceExtension, T> &&
+                        std::is_same_v<const std::string_view, decltype(T::name)>;
+
     class RenderDevice {
     public:
         RENDER_API static void          Init(DeviceInitInfo&& _info);
@@ -341,6 +373,11 @@ namespace Moer::Render {
         RENDER_API RaytracingSceneRef CreateRaytracingScene();
 
         class Impl;
+
+        RENDER_API Impl* GetImpl() const { return impl.get(); }
+
+        template<DeviceExt Ext>
+        RENDER_API Ext* LoadExtension() const;
 
     protected:
     private:

@@ -70,8 +70,8 @@ namespace Moer {
         EnvironmentLightComponent() noexcept
             : LightComponent(Vector3f(1.0f), 1.0f, ELightComponentType::ENV) {}
 
-        EnvironmentLightComponent(float3 _scale) noexcept
-            : LightComponent(_scale, 1.0f, ELightComponentType::ENV) {}
+        EnvironmentLightComponent(float3 _scale, uint2 _size) noexcept
+            : LightComponent(_scale, 1.0f, ELightComponentType::ENV), size(_size) {}
 
         float3                     GetColorScale() const noexcept { return GetColor(); }
         virtual LightComponentData ToData() const noexcept override {

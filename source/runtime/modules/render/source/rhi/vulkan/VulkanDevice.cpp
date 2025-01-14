@@ -12,6 +12,7 @@
 #include "VulkanQueue.h"
 #include "VulkanRHIResource.h"
 #include "VulkanPlatform.h"
+#include "extension/VulkanNrdExtension.h"
 
 #include "log/LogSystem.h"
 #include "misc/STL.h"
@@ -58,6 +59,8 @@ namespace Moer::Render {
         CreateMemoryAllocator(m_instance, _config.api_version);
 
         CreateInternalResources();
+
+        LoadDefaultExtensions();
     }
 
     void VulkanDevice::PostInit() {
@@ -836,7 +839,7 @@ namespace Moer::Render {
                     set.bindings[resource.binding].param_idx = idx;
                     // _out_reflect_flags[idx]       = EncodeReflectInfo(resource.set, resource.binding, vk_binding.stageFlags);
                     _max_set                        = uint(std::max(int(_max_set), int(resource.set)));
-                    VulkanShaderResourceState state = VulkanShaderResourceState(SpvReflectDescriptorType(resource.desc_type), SpvReflectResourceType(resource.resource_type));
+                    VulkanShaderResourceState state = VulkanShaderResourceState(SpvReflectDescriptorType(resource.desc_type), SpvReflectResourceType(resource.resource_type), resource.format);
                     if (arg_info.type == SDA_Buffer) {
                     } else if (arg_info.type == SDA_Texture) {
                         state.b_sampled = resource.sampled;
@@ -1381,6 +1384,30 @@ namespace Moer::Render {
         name_info.objectHandle = _handle;
         name_info.pObjectName  = _name.data();
         vkSetDebugUtilsObjectNameEXT(m_device, &name_info);
+    }
+
+    DeviceExtension* VulkanDevice::LoadExtension(std::string_view _name) {
+        auto ite = exts.find(_name.data());
+        if (ite == exts.end()) return nullptr;
+        auto& v = ite->second;
+        {
+            std::lock_guard lck{ext_mutex};
+            if (v.ext == nullptr) {
+                v.ext = v.ctor(this);
+            }
+        }
+        return v.ext;
+    }
+
+    void VulkanDevice::LoadDefaultExtensions() {
+        exts.try_emplace(
+            Moer::Render::Ext::NRDExtension::name.data(),
+            [](VulkanDevice* _device) -> DeviceExtension* {
+                return MoerNew(Moer::Render::Ext::VkNRDExtension(_device));
+            },
+            [](DeviceExtension* _ext) {
+                MoerDelete(static_cast<Moer::Render::Ext::VkNRDExtension*>(_ext));
+            });
     }
 
     // RHIViewportRef VulkanDevice::CreateViewport(const RHIViewportInitializer& _init) {

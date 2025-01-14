@@ -1,0 +1,104 @@
+#ifndef MOER_LIGHTING_PASS_H
+#define MOER_LIGHTING_PASS_H
+#include "RTResource.h"
+#include "rhi/RHI.h"
+#include "shader/ShaderPipeline.h"
+namespace Moer {
+    class Scene;
+    namespace Render {
+
+#define DI_BINDINGS()                               \
+    DEFINE_SHADER_TLAS(tlas);                       \
+    DEFINE_SHADER_TLAS(prev_tlas);                  \
+    DEFINE_SHADER_BUFFER(resample_params);          \
+    DEFINE_SHADER_BUFFER(light_reservoirs);         \
+    DEFINE_SHADER_TEX(rw_diffuse_lighting);         \
+    DEFINE_SHADER_TEX(rw_specular_lighting);        \
+    DEFINE_SHADER_TEX(rw_gradients);                \
+    DEFINE_SHADER_TEX(rw_restir_luminance);         \
+    DEFINE_SHADER_TEX(rw_diffuse_lighting_prev);    \
+    DEFINE_SHADER_BUFFER(rw_ris_buffer);            \
+    DEFINE_SHADER_BUFFER(rw_ris_light_data_buffer); \
+    DEFINE_SHADER_BINDLESS_ARRAY(bdls)
+
+#define DI_SHADER_ARGS() \
+    tlas, prev_tlas, resample_params, light_reservoirs, rw_diffuse_lighting, rw_specular_lighting, rw_gradients, rw_restir_luminance, rw_diffuse_lighting_prev, rw_ris_buffer, rw_ris_light_data_buffer, bdls
+
+        class PresampleLightPipeline : public ComputePipeline {
+        public:
+            DEFINE_COMPUTE_PIPELINE_CLASS(PresampleLightPipeline);
+
+            DI_BINDINGS();
+
+            DEFINE_SHADER_ARGS(DI_SHADER_ARGS());
+        };
+
+        class PresampleEnvMapPipeline : public ComputePipeline {
+        public:
+            DEFINE_COMPUTE_PIPELINE_CLASS(PresampleEnvMapPipeline);
+
+            DI_BINDINGS();
+
+            DEFINE_SHADER_ARGS(DI_SHADER_ARGS());
+        };
+
+        class PresampleLightGridPipeline : public ComputePipeline {
+        public:
+            DEFINE_COMPUTE_PIPELINE_CLASS(PresampleLightGridPipeline);
+
+            DI_BINDINGS();
+
+            DEFINE_SHADER_ARGS(DI_SHADER_ARGS());
+        };
+
+        class GenerateInitialSamplePipeline : public ComputePipeline {
+        public:
+            DEFINE_COMPUTE_PIPELINE_CLASS(GenerateInitialSamplePipeline);
+        };
+
+        class TemporalResmaplePipeline : public ComputePipeline {
+        public:
+            DEFINE_COMPUTE_PIPELINE_CLASS(TemporalResmaplePipeline);
+        };
+
+        class SpatialResamplePipeline : public ComputePipeline {
+        public:
+            DEFINE_COMPUTE_PIPELINE_CLASS(SpatialResamplePipeline);
+        };
+
+        class FusedResamplingPipeline : public ComputePipeline {
+        public:
+            DEFINE_COMPUTE_PIPELINE_CLASS(FusedResamplingPipeline);
+        };
+
+        class DIShadeSamplePipeline : public ComputePipeline {
+        public:
+            DEFINE_COMPUTE_PIPELINE_CLASS(DIShadeSamplePipeline);
+        };
+
+        class LightingPass {
+        public:
+            LightingPass(class ShaderManager& _manager, Scene& _scene);
+
+            void Process(CommandList& _cmd_list, RTContext& _rt_ctx);
+
+        private:
+            Scene& scene;
+
+            ResampleConstants resample_constants;
+
+            PresampleLightPipeline        presample_light_pipeline;
+            PresampleEnvMapPipeline       presample_env_map_pipeline;
+            PresampleLightGridPipeline    presample_light_grid_pipeline;
+            GenerateInitialSamplePipeline generate_initial_sample_pipeline;
+            TemporalResmaplePipeline      temporal_resmaple_pipeline;
+            SpatialResamplePipeline       spatial_resample_pipeline;
+
+            FusedResamplingPipeline fused_resampling_pipeline;
+            DIShadeSamplePipeline   di_shade_sample_pipeline;
+
+            BufferRef resample_params;
+        };
+    }// namespace Render
+}// namespace Moer
+#endif

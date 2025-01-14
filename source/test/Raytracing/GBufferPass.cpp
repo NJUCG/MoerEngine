@@ -1,0 +1,45 @@
+#include "GBufferPass.h"
+#include "RTResource.h"
+#include "scene/CameraManager.h"
+#include "scene/RenderableManager.h"
+#include "shader/ShaderResourceManager.h"
+#include "shaderheaders/shared/ShaderParameters.h"
+#include "scene/Scene.h"
+namespace Moer::Render {
+    GBufferPass::GBufferPass(RenderDevice& _device, ShaderManager& _manager, Scene& _scene)
+        : device(_device), manager(_manager), scene(_scene), gbuffer_pass_pipeline{manager.Compute<RaytracingGBufferPipeline>("hwrt/GBufferRT.hlsl")} {
+        gbuffer_constants = device.CreateBuffer<Moer::byte>(sizeof(GBufferConstants), EBufferUsageFlags::CONSTANT_BUFFER);
+        gbuffer_constants->SetName("gbuffer_constants");
+    }
+
+    void GBufferPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
+        GBufferPassParams         params{};
+        RaytracingBindlessHandles bindless_handles = _rt_ctx.GetBindlessHandles();
+        params.geometry_data_handle                = bindless_handles.geom_data;
+        params.instance_data_handle                = bindless_handles.instance_data;
+        params.material_data_handle                = bindless_handles.material_data;
+
+        Entity main_cam_entity = scene.GetMainCamera();
+
+        constants.main_view = _rt_ctx.main_view;
+        constants.prev_view = _rt_ctx.prev_view;
+
+        FrameResources& frame_rt = _rt_ctx.frame_rt;
+
+        _cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)&constants, sizeof(GBufferConstants)), gbuffer_constants->GetView());
+
+        _cmd_list.Compute(gbuffer_pass_pipeline,
+                          params,
+                          gbuffer_constants,
+                          frame_rt.view_depth,
+                          frame_rt.diffuse_albedo,
+                          frame_rt.specular_roughness,
+                          frame_rt.normal,
+                          frame_rt.emission,
+                          frame_rt.motion,
+                          frame_rt.clip_depth,
+                          _rt_ctx.rt_scene->GetTlas(),
+                          scene.GetBindlessArray())
+            .Dispatch(uint3(ceil(constants.main_view.rect.x / 16), ceil(constants.main_view.rect.y / 16), 1));
+    }
+}// namespace Moer::Render
