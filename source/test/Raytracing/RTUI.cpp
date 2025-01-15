@@ -4,6 +4,27 @@
 #include "math/Function.h"
 #include "shaderheaders/shared/ShaderParameters.h"
 namespace Moer::Render {
+    enum ELocalLightSelectionMode {
+        ELLS_Uniform   = s_di_local_light_sample_mode_uniform,
+        ELLS_Power_RIS = s_di_local_light_sample_mode_power_ris,
+        ELLS_Grid      = s_di_local_light_sample_mode_grid,
+        ELLS_Num
+    };
+
+    enum EGridLightPresampleMode {
+        EGLPM_Uniform   = s_di_local_light_sample_mode_uniform,
+        EGLPM_Power_RIS = s_di_local_light_sample_mode_power_ris,
+        EGLPM_Num
+    };
+
+    static constexpr std::string_view s_local_light_sample_mode_names[] = {
+        "Uniform",
+        "Power RIS",
+        "Grid"};
+
+    static constexpr std::string_view s_grid_light_presample_mode_names[] = {
+        "Uniform",
+        "Power RIS"};
 
     static constexpr std::string_view s_final_color_names[] = {
         "SceneColor"
@@ -179,9 +200,44 @@ namespace Moer::Render {
 
         //Grid Config
         if (ImGui::TreeNode("Grid Config")) {
-            ImGui::SliderInt("Grid Mode", &config.grid_config.grid_mode, 0, 1);
+
+            if (ImGui::TreeNode("Presample Mode")) {
+                for (auto& name : s_grid_light_presample_mode_names) {
+                    uint idx = &name - s_grid_light_presample_mode_names;
+                    if (ImGui::Selectable(name.data(), config.grid_config.grid_mode == idx)) {
+                        config.grid_config.grid_mode = idx;
+                    }
+                }
+                ImGui::TreePop();
+            }
             ImGui::SliderInt("Light Per Ceil", &config.grid_config.light_per_ceil, 1, 1024);
             ImGui::SliderFloat("Cell Size", &config.grid_config.cell_size, 1.f, 400.f);
+            ImGui::TreePop();
+        }
+
+        if (ImGui::TreeNode("ReSTIRDI")) {
+            if (ImGui::TreeNode("InitialSampleSettings")) {
+                if (ImGui::TreeNode("LocalLightSelection")) {
+                    for (auto& name : s_local_light_sample_mode_names) {
+                        uint idx = &name - s_local_light_sample_mode_names;
+                        if (ImGui::Selectable(name.data(), config.restir_di_cfg.initial_local_light_sample_mode == idx)) {
+                            config.restir_di_cfg.initial_local_light_sample_mode = idx;
+                        }
+                    }
+                    ImGui::TreePop();
+                }
+                ImGui::TreePop();
+            }
+
+            if (ImGui::TreeNode("TemporalResampleSettings")) {
+
+                ImGui::TreePop();
+            }
+
+            if (ImGui::TreeNode("SpatialResampleSettings")) {
+                ImGui::TreePop();
+            }
+
             ImGui::TreePop();
         }
 

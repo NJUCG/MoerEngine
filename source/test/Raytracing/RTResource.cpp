@@ -194,6 +194,7 @@ namespace Moer::Render {
         AllocateAndFreeBdlsIfNeeded(bindless_handles.gbuffer_normal, frame_rt.normal->GetView(), spl);
         AllocateAndFreeBdlsIfNeeded(bindless_handles.gbuffer_diffuse_albedo, frame_rt.diffuse_albedo->GetView(), spl);
         AllocateAndFreeBdlsIfNeeded(bindless_handles.gbuffer_specular_roughness, frame_rt.specular_roughness->GetView(), spl);
+        AllocateAndFreeBdlsIfNeeded(bindless_handles.motion, frame_rt.motion->GetView(), spl);
 
         AllocateAndFreeBdlsIfNeeded(bindless_handles.gbuffer_prev_depth, frame_rt.view_depth->GetView(), spl);
         AllocateAndFreeBdlsIfNeeded(bindless_handles.gbuffer_prev_normal, frame_rt.normal->GetView(), spl);

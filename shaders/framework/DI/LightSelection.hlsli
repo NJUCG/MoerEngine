@@ -5,8 +5,6 @@
 namespace Moer {
 
 namespace DI {
-static const uint sd_di_local_light_sample_mode_uniform = 0;
-static const uint sd_di_local_light_sample_mode_power_ris = 1;
 
 void GetLightInfoFromRisData(uint2 _tile_data, uint _ris_buf_idx,
                              out PolymorphicLightInfo _light_info,
@@ -52,14 +50,14 @@ struct LocalLightSelectionContext {
   static LocalLightSelectionContext
   CreateUniform(LightBufferRegion _light_region) {
     LocalLightSelectionContext result;
-    result.sample_mode = sd_di_local_light_sample_mode_uniform;
+    result.sample_mode = s_di_local_light_sample_mode_uniform;
     result.light_region = _light_region;
     return result;
   }
 
   static LocalLightSelectionContext CreatePowerRIS(RISTileInfo _ris_tile_info) {
     LocalLightSelectionContext result;
-    result.sample_mode = sd_di_local_light_sample_mode_power_ris;
+    result.sample_mode = s_di_local_light_sample_mode_power_ris;
     result.ris_tile_info = _ris_tile_info;
     return result;
   }
@@ -67,7 +65,7 @@ struct LocalLightSelectionContext {
   static LocalLightSelectionContext
   CreatePowerRIS(inout RandomState _rng, RISBufferSegmentParams _ris_params) {
     LocalLightSelectionContext result;
-    result.sample_mode = sd_di_local_light_sample_mode_power_ris;
+    result.sample_mode = s_di_local_light_sample_mode_power_ris;
     result.ris_tile_info = RandomlySelectRISTile(_rng, _ris_params);
     return result;
   }
@@ -76,13 +74,13 @@ struct LocalLightSelectionContext {
                   out uint _light_idx, out float _inv_pdf) {
     switch (sample_mode) {
 
-    case sd_di_local_light_sample_mode_power_ris:
+    case s_di_local_light_sample_mode_power_ris:
       RandomlySelectLightFromRISTile(_rng, ris_tile_info, _light_info,
                                      _light_idx, _inv_pdf);
       break;
 
     default:
-    case sd_di_local_light_sample_mode_uniform:
+    case s_di_local_light_sample_mode_uniform:
       RandomlySelectLightDataUniformly(_rng, light_region, _light_info,
                                        _light_idx, _inv_pdf);
       break;

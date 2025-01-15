@@ -58,13 +58,16 @@ namespace Moer::Render {
         return attachment_info;
     }
 
-    static bool IsBufferTextureWrite(uint64 _flags) {
-        VulkanShaderResourceState state(_flags);
-        switch (state.resource_type) {
+    static bool IsBufferTextureWrite(VulkanShaderResourceState _state) {
+        switch (_state.resource_type) {
             case SpvReflectResourceType::SPV_REFLECT_RESOURCE_FLAG_UAV:
                 return true;
             default: return false;
         }
+    }
+
+    static bool IsBufferTextureWrite(uint64 _flags) {
+        return IsBufferTextureWrite(VulkanShaderResourceState(_flags));
     }
 
     static bool IsTextureSampled(uint64 _flags) {
@@ -106,6 +109,8 @@ namespace Moer::Render {
         VulkanDevice&    device;
         EQueueType       current_queue;
 
+        UnorderedSet<uint64> writed_resources;
+
         VkCmdPreprocessor(VulkanDevice& _device, VkTracker& _tracker, VulkanAllocator& _allocator, FunctionTable _funcs, EQueueType _current_queue = EQueueType::Graphics) : device(_device), tracker(_tracker), allocator(_allocator), m_funcs(_funcs), current_queue(_current_queue) {}
         void HandleBindless(BindlessArrayRef _bindless_array, VkPipelineStageFlagBits2 _pipeline_stages) {
             EPassType pass_type = EPassType::Graphics;
@@ -119,25 +124,25 @@ namespace Moer::Render {
             }
             auto* vk_bindless_array = reinterpret_cast<VulkanBindlessArray*>(_bindless_array.Get());
 
-            Moer::Array<VulkanTexture*> write_map_textures;
+            Moer::Array<VulkanTexture*> to_read_textures;
             for (auto&& i : tracker.GetWritedStateTextures()) {
-                if (vk_bindless_array->IsResourceAllocated(uint64(i))) {
-                    write_map_textures.push_back(i);
+                if (vk_bindless_array->IsResourceAllocated(uint64(i) && !writed_resources.contains(uint64(i)))) {
+                    to_read_textures.push_back(i);
                 }
             }
-            if (!write_map_textures.empty()) {
-                for (auto&& i : write_map_textures) {
+            if (!to_read_textures.empty()) {
+                for (auto&& i : to_read_textures) {
                     tracker.RecordState(i, tracker.ReadTexture(i, ETextureState::SAMPLE, pass_type));
                 }
             }
-            Moer::Array<VulkanBuffer*> write_map_buffers;
+            Moer::Array<VulkanBuffer*> to_read_buffers;
             for (auto&& i : tracker.GetWritedStateBuffers()) {
-                if (vk_bindless_array->IsResourceAllocated(uint64(i))) {
-                    write_map_buffers.push_back(i);
+                if (vk_bindless_array->IsResourceAllocated(uint64(i)) && !writed_resources.contains(uint64(i))) {
+                    to_read_buffers.push_back(i);
                 }
             }
-            if (!write_map_buffers.empty()) {
-                for (auto&& i : write_map_buffers) {
+            if (!to_read_buffers.empty()) {
+                for (auto&& i : to_read_buffers) {
                     tracker.RecordState(i, VK_ACCESS_2_SHADER_READ_BIT, _pipeline_stages);
                 }
             }
@@ -200,10 +205,16 @@ namespace Moer::Render {
                     if (_flag.resource_type == SPV_REFLECT_RESOURCE_FLAG_UNDEFINED) return;
                     auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(_arg.GetBuffer());
                     tracker.RecordState(vk_buffer, GetBufferAccess(_flag), _pipelines);
+                    if (IsBufferTextureWrite(_flag)) {
+                        writed_resources.insert(uint64(vk_buffer));
+                    }
                 } else if constexpr (std::is_same_v<T, TextureView>) {
                     if (_flag.resource_type == SPV_REFLECT_RESOURCE_FLAG_UNDEFINED) return;
                     auto* vk_texture = reinterpret_cast<VulkanTexture*>(_arg.GetTexture());
                     tracker.RecordState(vk_texture, GetTextureAccess(_flag), GetTextureLayout(_flag), _pipelines, _arg.mip_level, _arg.num_mips);
+                    if (IsBufferTextureWrite(_flag)) {
+                        writed_resources.insert(uint64(vk_texture));
+                    }
                 } else if constexpr (std::is_same_v<T, std::span<TextureView>>) {
                     for (auto&& i : _arg) {
                         VisitArgs(i, _flag, _pipelines);
@@ -215,7 +226,8 @@ namespace Moer::Render {
                 }
 
                 else if constexpr (std::is_same_v<T, BindlessArrayRef>) {
-                    HandleBindless(_arg, _pipelines);
+                    // HandleBindless(_arg, _pipelines);
+                    assert(false && "Bindless array not supported");
                 } else if constexpr (std::is_same_v<T, RaytracingTlasRef>) {
                     VulkanAccelerationStructure* vk_as = ResourceCast(_arg.Get());
                     tracker.RecordState(vk_as->underlying_buffer, VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR, _pipelines);
@@ -223,6 +235,7 @@ namespace Moer::Render {
             },
                        _arg);
         }
+
         bool VisitCmd(const Command* _cmd) {
             assert(_cmd != nullptr);
             switch (_cmd->Type()) {
@@ -330,11 +343,26 @@ namespace Moer::Render {
                 }
             },
                        _cmd->Param());
-            // _cmd->Pipeline().binding_infos;
-            auto func = [&](const TArg& _arg, ParamInfoFlags _flag) {
-                VisitArgs(_arg, _flag.state_flags, _flag.pipeline_flags);
+
+            const auto& pipeline = _cmd->Pipeline();
+
+            writed_resources.clear();
+
+            auto func = [&](const TArg& _arg, uint _idx) {
+                if (pipeline.valid_bits & (1 << _idx))
+                    VisitArgs(_arg, pipeline.binding_infos[_idx].state_flags, pipeline.binding_infos[_idx].pipeline_flags);
             };
-            _cmd->IterateArgs(func);
+            auto bdls_post_func = [&](const TArg& _arg, uint _idx) {
+                if (pipeline.valid_bits & (1 << _idx))
+                    HandleBindless(std::get<BindlessArrayRef>(_arg), pipeline.binding_infos[_idx].pipeline_flags);
+            };
+
+            _cmd->IterateArgs(func, bdls_post_func);
+
+            // auto func = [&](const TArg& _arg, ParamInfoFlags _flag) {
+            //     VisitArgs(_arg, _flag.state_flags, _flag.pipeline_flags);
+            // };
+            // _cmd->IterateArgs(func);
         }
 
         // void Visit(const SetParamsCmd* _cmd) {
@@ -518,10 +546,24 @@ namespace Moer::Render {
                 tracker.RecordState(vk_buffer, VK_ACCESS_2_INDEX_READ_BIT, VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT);
             }
 
-            auto func = [&](const TArg& _arg, ParamInfoFlags _flag) {
-                VisitArgs(_arg, (VulkanShaderResourceState)_flag.state_flags, _flag.pipeline_flags);
+            // auto func = [&](const TArg& _arg, ParamInfoFlags _flag) {
+            //     VisitArgs(_arg, (VulkanShaderResourceState)_flag.state_flags, _flag.pipeline_flags);
+            // };
+            // _cmd->IterateArgs(func);
+
+            writed_resources.clear();
+
+            const auto& pipeline = _cmd->Pipeline();
+            auto        func     = [&](const TArg& _arg, uint _idx) {
+                if (pipeline.valid_bits & (1 << _idx))
+                    VisitArgs(_arg, pipeline.binding_infos[_idx].state_flags, pipeline.binding_infos[_idx].pipeline_flags);
             };
-            _cmd->IterateArgs(func);
+            auto bdls_post_func = [&](const TArg& _arg, uint _idx) {
+                if (pipeline.valid_bits & (1 << _idx))
+                    HandleBindless(std::get<BindlessArrayRef>(_arg), pipeline.binding_infos[_idx].pipeline_flags);
+            };
+
+            _cmd->IterateArgs(func, bdls_post_func);
 
             for (const auto& rt : _cmd->RenderPassInfo().color_attachments) {
                 auto* vk_texture = ResourceCast(rt.target);

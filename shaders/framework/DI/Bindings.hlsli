@@ -5,13 +5,16 @@
 #define DI_BINDING_SLOT 0
 #endif
 
+#include <shared/ShaderParameters.h>
+
 #include <framework/Bindless.hlsl>
 #include <framework/Common.hlsl>
-#include <framework/DI/Reservoirs.hlsli>
 #include <framework/Math.hlsli>
 #include <hwrt/GBufferUtils.hlsli>
 #include <shared/Geometry.h>
 #include <shared/utils/MoerMath.hlsli>
+
+#define USE_RAYQUERY 1
 
 [[vk::binding(0, DI_BINDING_SLOT)]] RaytracingAccelerationStructure tlas;
 [[vk::binding(1, DI_BINDING_SLOT)]] RaytracingAccelerationStructure prev_tlas;
@@ -36,6 +39,12 @@
 BINDLESS_BINDINGS(3, 2, 4, 5)
 #include <framework/Material.hlsl>
 #include <framework/PolymorphicLight.hlsli>
+
+#ifndef DI_LIGHT_RESERVOIR_BUFFER
+#define DI_LIGHT_RESERVOIR_BUFFER light_reservoirs
+#endif
+
+#include <framework/DI/Reservoirs.hlsli>
 
 namespace Moer {
 
@@ -205,8 +214,8 @@ struct Surface {
     return res;
   }
 
-  void GetLightDirDistance(LightSample _light, out float3 _dir,
-                           out float _distance) {
+  void GetLightDirAndDist(LightSample _light, out float3 _dir,
+                          out float _distance) {
 
     if (_light.type == EPolyLightType::ELEnv) {
       _dir = -_light.n;
@@ -258,7 +267,7 @@ Surface GetGBufferSurface(int2 _pixel_pos, ViewParam _view_param,
   return s;
 }
 
-template <bool _prev_frame = false> Surface GetGBufferSurface(int2 _pixel_pos) {
+Surface GetGBufferSurface(int2 _pixel_pos, const bool _prev_frame = false) {
 
   TextureHandle gbuffer_depth;
   TextureHandle gbuffer_normal;
@@ -299,7 +308,7 @@ template <bool _prev_frame = false> Surface GetGBufferSurface(int2 _pixel_pos) {
                            gbuffer_specular_roughness_tex);
 }
 
-float2 GetEnvironmentMapXYFromDir(float3 _dir) {
+float2 GetEnvironmentMapUVFromDir(float3 _dir) {
   float2 uv = Math::DirToEquirectangularUV(_dir);
   uv.x -= resample_params.scene_params.env_map_rotation;
   uv = frac(uv);
@@ -310,7 +319,7 @@ float EvalEnvMapPdf(float3 _dir) {
   if (!resample_params.scene_params.enable_env_map) {
     return 1.f;
   }
-  float2 uv = GetEnvironmentMapXYFromDir(_dir);
+  float2 uv = GetEnvironmentMapUVFromDir(_dir);
   uint2 pdf_tex_size = resample_params.env_pdf_size;
   uint2 texel_pos = uint2(uv * float2(pdf_tex_size));
 
@@ -417,8 +426,7 @@ bool RaytraceLocalLightVisibility(float3 _origin, float3 _direction,
 #if USE_RAYQUERY
   RayQuery<RAY_FLAG_CULL_NON_OPAQUE | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES>
       ray_query;
-  ray_query.TraceRayInline(tlas, RAY_FLAG_NONE, INSTANCE_FLAG_GEOMETRY_ALL,
-                           ray_desc);
+  ray_query.TraceRayInline(tlas, RAY_FLAG_NONE, RTVM_ALL, ray_desc);
   ray_query.Proceed();
 
   b_hit = ray_query.CommittedStatus() == COMMITTED_TRIANGLE_HIT;

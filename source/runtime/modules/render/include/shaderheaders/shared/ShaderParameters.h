@@ -30,6 +30,7 @@ namespace Moer {
     //local light initial sample mode
     static CONST uint s_di_local_light_sample_mode_uniform   = 0;
     static CONST uint s_di_local_light_sample_mode_power_ris = 1;//power based ris
+    static CONST uint s_di_local_light_sample_mode_grid      = 2;//presample light grid
 
     static CONST uint s_invalid_light_idx = 0xffffffffu;
 
@@ -39,6 +40,8 @@ namespace Moer {
     static CONST uint s_vis_mode_diffuse_lighting  = 3;
     static CONST uint s_vis_mode_specular_lighting = 4;
     static CONST uint s_vis_mode_grid              = 5;
+
+#define DI_SCREEN_TILE_SIZE 16
 
 #ifdef __cplusplus
     enum RTVisibleMask : uint8 {

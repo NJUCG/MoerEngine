@@ -412,6 +412,7 @@ int main(int argc, const char** argv) {
     UniquePtr<LightingPass>     lighting_pass      = MakeUnique<LightingPass>(manager, g_scene);
     UniquePtr<VisualizePass>    visualize_pass     = MakeUnique<VisualizePass>(device, manager);
     UniquePtr<RTContext>        rt_ctx             = MakeUnique<RTContext>(sd_utils, is_ctx, bindless_array);
+    rt_ctx->FillFrameResources(resolution);
 
     VisualizeConfig visualize_config{};
     visualize_config.b_split        = false;
@@ -485,7 +486,6 @@ int main(int argc, const char** argv) {
                 light_buffer_handle             = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::LightInfo)->GetView());
 
                 rt_ctx->SetBindlessHandles(geometry_buffer_handle, instance_buffer_handle, material_buffer_idx);
-                rt_ctx->FillFrameResources(resolution);
                 rt_ctx->SetRaytracingScene(rt_scene);
                 rt_ctx->FillLowDiscrepancySequence(cmd_list);
 
@@ -649,16 +649,18 @@ int main(int argc, const char** argv) {
 
             //fill ui data
             {
-                auto grid_cfg      = is_ctx.GetGridChangableConfig();
-                grid_cfg.cell_size = rt_ui.GetConfig().grid_config.cell_size;
-
+                auto grid_cfg                  = is_ctx.GetGridChangableConfig();
+                grid_cfg.cell_size             = rt_ui.GetConfig().grid_config.cell_size;
+                grid_cfg.center                = camera->GetPosition();
+                auto grid_static_cfg           = is_ctx.GetGridConfig();
+                grid_static_cfg.light_per_ceil = rt_ui.GetConfig().grid_config.light_per_ceil;
+                grid_static_cfg.grid_mode      = rt_ui.GetConfig().grid_config.grid_mode;
+                is_ctx.SetGridConfig(grid_static_cfg);
                 is_ctx.SetChangeableGridConfig(grid_cfg);
+                is_ctx.SetReSTIRDIInitialSampleMode(rt_ui.GetConfig().restir_di_cfg.initial_local_light_sample_mode);
             }
 
             is_ctx.TickFrame(time);
-            auto grid_cfg   = is_ctx.GetGridChangableConfig();
-            grid_cfg.center = camera->GetPosition();
-            is_ctx.SetChangeableGridConfig(grid_cfg);
             visualize_config.visualize_mode = rt_ui.GetConfig().final_color;
 
             uint num_emissive_meshes, num_emissive_triangles;

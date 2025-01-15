@@ -7,9 +7,6 @@
 #include "shaderheaders/shared/lighting/ShaderParameters.h"
 namespace Moer::Render {
 
-    static constexpr uint s_grid_mode_none                = 0;
-    static constexpr uint s_grid_mode_uniform             = 1;
-    static constexpr uint s_grid_mode_power_ris           = 2;
     static constexpr uint s_num_restirdi_reservoir_buffer = 3;
 
     inline static uint JekinsHash(uint _key) {
@@ -35,7 +32,7 @@ namespace Moer::Render {
 
     struct GridConfig {
         uint3 grid_size{16};
-        uint  grid_mode      = s_grid_mode_power_ris - 1;
+        uint  grid_mode      = s_di_local_light_sample_mode_power_ris;
         uint  light_per_ceil = 512;
     };
 
@@ -81,7 +78,7 @@ namespace Moer::Render {
         params.brdf_cutoff                 = 0.001f;
         params.enable_initial_visiblity    = 1;
         params.env_map_is                  = 1;
-        params.local_light_sample_mode     = s_di_local_light_sample_mode_uniform;
+        params.local_light_sample_mode     = s_di_local_light_sample_mode_grid;
         return params;
     }
 
@@ -209,6 +206,15 @@ namespace Moer::Render {
             grid_params.common_params.num_build_samples = _config.num_grid_build_samples;
         }
 
+        void SetGridConfig(const GridConfig& _config) {
+            grid_config = _config;
+            ComputeGridLightSlotCnt();
+        }
+
+        void SetReSTIRDIInitialSampleMode(uint _sample_mode) {
+            di_initial_sample_params.local_light_sample_mode = _sample_mode;
+        }
+
         //called in prepare lights in each frame
         void SetLightBufferParams(uint _frame_offset, uint _num_finit_lights, uint _num_infinit_prim_lights, uint _num_env_lights);
 
@@ -276,7 +282,7 @@ namespace Moer::Render {
 
         SimpleSegmentAllocator segment_allocator;
 
-        uint grid_ceil_offset = 0;
+        uint grid_cell_offset = 0;
         uint light_slot_cnt   = 0;
 
         uint frame_idx = 0;

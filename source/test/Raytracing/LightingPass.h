@@ -54,6 +54,10 @@ namespace Moer {
         class GenerateInitialSamplePipeline : public ComputePipeline {
         public:
             DEFINE_COMPUTE_PIPELINE_CLASS(GenerateInitialSamplePipeline);
+
+            DI_BINDINGS();
+
+            DEFINE_SHADER_ARGS(DI_SHADER_ARGS());
         };
 
         class TemporalResmaplePipeline : public ComputePipeline {
@@ -85,7 +89,7 @@ namespace Moer {
         private:
             Scene& scene;
 
-            ResampleConstants resample_constants;
+            ResampleConstants constants;
 
             PresampleLightPipeline        presample_light_pipeline;
             PresampleEnvMapPipeline       presample_env_map_pipeline;

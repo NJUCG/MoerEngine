@@ -30,7 +30,7 @@ void VisualizeGrid(uint2 _pixel_pos, out float4 _final_color) {
   float3 dbg_color =
       Moer::Grid::GetVisualizeGridColor(param.grid_params, world_pos);
   _final_color *= float4(dbg_color, 1.f);
-  // _final_color = float4(dbg_color, 1.f);
+  _final_color = float4(dbg_color, 1.f);
 }
 
 [numthreads(16, 16, 1)] void main(uint2 dtid

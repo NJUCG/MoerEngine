@@ -189,6 +189,7 @@ namespace Moer::Render {
 
         uint idx = 0;
 
+        uint num_prim_lights = 0;
         scene.ForEach([&](Entity _entity) {
             {
                 const MeshInfo& mesh_info   = *RenderableManager::Get().GetMeshInfo(_entity).get();
@@ -233,7 +234,7 @@ namespace Moer::Render {
         std::sort(light_entities.begin(), light_entities.end(), [](Entity _lhs, Entity _rhs) {
             return LightPriority(LightComponentManager::Get().Get(_lhs)) < LightPriority(LightComponentManager::Get().Get(_rhs));
         });
-
+        num_prim_lights               = light_buf_offset;
         uint num_finite_prim_lights   = 0;
         uint num_infinite_prim_lights = 0;
         uint num_is_env_lights        = 0;
@@ -290,7 +291,7 @@ namespace Moer::Render {
 
         _rt_ctx.is_ctx.SetLightBufferParams(
             param.cur_light_offset,
-            num_finite_prim_lights,
+            num_finite_prim_lights + num_prim_lights,
             num_infinite_prim_lights,
             num_is_env_lights);
 

@@ -142,11 +142,10 @@ void SampleLocalLightsForGrid(inout RandomState _rng,
       1.f / float(_grid_params.common_params.num_build_samples);
 
   DI::LocalLightSelectionContext ctx;
-  switch (_grid_params.common_params.local_light_sampling_mode) {
+  switch (_grid_params.common_params.local_light_sample_mode) {
   case s_di_local_light_sample_mode_power_ris:
     ctx = DI::LocalLightSelectionContext::CreatePowerRIS(_rng, _ris_params);
     break;
-
   default:
     ctx = DI::LocalLightSelectionContext::CreateUniform(_local_light_region);
     break;

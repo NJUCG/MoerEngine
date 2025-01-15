@@ -6,6 +6,7 @@
 #include "renderer/UIRenderer.h"
 #include "rhi/RHIResource.h"
 #include "shaderheaders/shared/ShaderParameters.h"
+#include "shaderheaders/shared/lighting/ShaderParameters.h"
 namespace Moer::Render {
 
     class RTUI {
@@ -15,14 +16,19 @@ namespace Moer::Render {
             int   light_per_ceil = 512;
             float cell_size      = 1.f;
         };
+
+        struct ReSTIRDIConfig {
+            uint initial_local_light_sample_mode = 0;
+        };
         struct Config {
             float3 sun_direction        = float3(0.f, 0.5f, 0.16f);
             float  exposure             = 80.f;
             float  sun_angular_diameter = 0.533f;
             uint   max_bounce           = 4;
 
-            GridConfig  grid_config{};
-            EFinalColor final_color = EFinalColor::EFC_SceneColor;
+            GridConfig     grid_config{};
+            ReSTIRDIConfig restir_di_cfg{};
+            EFinalColor    final_color = EFinalColor::EFC_SceneColor;
         };
         RTUI(UIRenderer& _renderer);
         ~RTUI() = default;

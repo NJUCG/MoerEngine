@@ -594,11 +594,11 @@ namespace Moer::Render {
             std::visit([&](auto&& _arg) {
                 using T = std::decay_t<decltype(_arg)>;
                 if constexpr (std::is_same_v<T, BufferView>) {
-                    EmplaceArg((uint64)(_arg.GetBuffer()), ResourceType::Texture_Buffer, Range(_arg.GetByteOffset(), _arg.GetByteSize()), m_funcs.is_resource_write(_flag));
-                    // _layer = std::max(_layer, GetLastLayer((uint64)(_arg.GetBuffer()), Range(_arg.GetByteOffset(), _arg.GetByteSize()), ResourceType::Texture_Buffer));
+                    bool b_write = m_funcs.is_resource_write(_flag);
+                    EmplaceArg((uint64)(_arg.GetBuffer()), ResourceType::Texture_Buffer, Range(_arg.GetByteOffset(), _arg.GetByteSize()), b_write);
                 } else if constexpr (std::is_same_v<T, TextureView>) {
-                    EmplaceArg((uint64)(_arg.GetTexture()), ResourceType::Texture_Buffer, Range(_arg.mip_level, _arg.num_mips), m_funcs.is_resource_write(_flag));
-                    // _layer = GetLastLayer(uint64(_arg.GetTexture()), Range(_arg.mip_level, _arg.num_mips), ResourceType::Texture_Buffer);
+                    bool b_write = m_funcs.is_resource_write(_flag);
+                    EmplaceArg((uint64)(_arg.GetTexture()), ResourceType::Texture_Buffer, Range(_arg.mip_level, _arg.num_mips), b_write);
                 } else if constexpr (std::is_same_v<T, std::span<TextureView>>) {
                     for (auto&& tex : _arg) {
                         EmplaceArg((uint64)(tex.GetTexture()), ResourceType::Texture_Buffer, Range(tex.mip_level, tex.num_mips), m_funcs.is_resource_write(_flag));
@@ -612,18 +612,32 @@ namespace Moer::Render {
                 else if constexpr (std::is_same_v<T, RaytracingTlasRef>) {
                     EmplaceArg((uint64)(_arg.Get()), ResourceType::Accel, Range{}, false);
                 } else if constexpr (std::is_same_v<T, BindlessArrayRef>) {
-                    m_funcs.lock_bdls_array((uint64)(_arg.Get()));
-                    for (auto&& res : m_write_resources) {
-                        if (m_funcs.is_resource_in_bindless(res, (uint64)(_arg.Get()))) {
-                            EmplaceArg(res, ResourceType::Texture_Buffer, Range{}, false);
-                        }
-                    }
-                    m_funcs.unlock_bdls_array((uint64)(_arg.Get()));
-                    //emplace self
-                    EmplaceArg((uint64)(_arg->ArrayHandle()), ResourceType::Bindless, Range{}, false);
+                    // m_funcs.lock_bdls_array((uint64)(_arg.Get()));
+                    // for (auto&& res : m_write_resources) {
+                    //     if (m_funcs.is_resource_in_bindless(res, (uint64)(_arg.Get()))) {
+                    //         EmplaceArg(res, ResourceType::Texture_Buffer, Range{}, false);
+                    //     }
+                    // }
+                    // m_funcs.unlock_bdls_array((uint64)(_arg.Get()));
+                    // //emplace self
+                    // EmplaceArg((uint64)(_arg->ArrayHandle()), ResourceType::Bindless, Range{}, false);
+
+                    assert(false && "Not support iterate BindlessArrayRef with other args");
                 }
             },
                        _arg);
+        }
+
+        void VisitBindlessArg(BindlessArrayRef _bdls, const UnorderedSet<uint64>& _temp_write_resources) {
+            m_funcs.lock_bdls_array((uint64)(_bdls.Get()));
+            for (auto&& res : m_write_resources) {
+                if (!_temp_write_resources.contains(res) && m_funcs.is_resource_in_bindless(res, (uint64)(_bdls.Get()))) {
+                    EmplaceArg(res, ResourceType::Texture_Buffer, Range{}, false);
+                }
+            }
+            m_funcs.unlock_bdls_array((uint64)(_bdls.Get()));
+            //emplace self
+            EmplaceArg((uint64)(_bdls->ArrayHandle()), ResourceType::Bindless, Range{}, false);
         }
 
         void VisitCmd(const UploadBufferCmd* _cmd) {
@@ -749,10 +763,16 @@ namespace Moer::Render {
             m_arg_read_resources.clear();
             m_arg_write_resources.clear();
 
-            auto func = [&](const TArg& _arg, ParamInfoFlags _flag) {
-                VisitArgs(_arg, _flag.state_flags);
+            const auto& pipeline = _cmd->Pipeline();
+            auto        func     = [&](const TArg& _arg, uint _idx) {
+                VisitArgs(_arg, pipeline.binding_infos[_idx].state_flags);
             };
-            _cmd->IterateArgs(func);
+
+            auto bdls_post_func = [&](const TArg& _arg, uint _idx) {
+                VisitBindlessArg(std::get<BindlessArrayRef>(_arg), m_write_resources);
+            };
+
+            _cmd->IterateArgs(func, bdls_post_func);
 
             const auto& vbs = _cmd->VertexBuffers();
             for (const auto& vb : vbs) {
@@ -815,10 +835,24 @@ namespace Moer::Render {
         void VisitCmd(const DispatchCmd* _cmd) {
             m_arg_write_resources.clear();
             m_arg_read_resources.clear();
-            auto func = [&](const TArg& _arg, ParamInfoFlags _flag) {
-                VisitArgs(_arg, _flag.state_flags);
+            // auto func = [&](const TArg& _arg, ParamInfoFlags _flag) {
+            //     VisitArgs(_arg, _flag.state_flags);
+            // };
+            // _cmd->IterateArgs(func);
+
+            const auto& pipeline = _cmd->Pipeline();
+
+            auto func = [&](const TArg& _arg, uint _idx) {
+                if (pipeline.valid_bits & (1 << _idx))
+                    VisitArgs(_arg, pipeline.binding_infos[_idx].state_flags);
             };
-            _cmd->IterateArgs(func);
+
+            auto bdls_post_func = [&](const TArg& _arg, uint _idx) {
+                if (pipeline.valid_bits & (1 << _idx))
+                    VisitBindlessArg(std::get<BindlessArrayRef>(_arg), m_write_resources);
+            };
+
+            _cmd->IterateArgs(func, bdls_post_func);
 
             for (const auto& write_res : m_arg_write_resources) {
                 RecordWrite(std::get<1>(write_res), std::get<0>(write_res), m_dispatch_layer);

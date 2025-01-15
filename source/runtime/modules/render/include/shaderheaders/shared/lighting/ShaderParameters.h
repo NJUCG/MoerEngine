@@ -93,7 +93,7 @@ namespace Moer {
 
     namespace Grid {
         struct CommonParams {
-            uint  local_light_sampling_mode;
+            uint  local_light_sampling_fallback_mode;
             float center_x;
             float center_y;
             float center_z;
@@ -103,7 +103,7 @@ namespace Moer {
             float cell_size;
             float jitter;
 
-            uint local_light_presample_mode;
+            uint local_light_sample_mode;
             uint num_build_samples;
             uint padding0;
             uint padding1;
