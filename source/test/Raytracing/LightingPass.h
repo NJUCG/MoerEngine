@@ -78,6 +78,10 @@ namespace Moer {
         class DIShadeSamplePipeline : public ComputePipeline {
         public:
             DEFINE_COMPUTE_PIPELINE_CLASS(DIShadeSamplePipeline);
+
+            DI_BINDINGS();
+
+            DEFINE_SHADER_ARGS(DI_SHADER_ARGS());
         };
 
         class LightingPass {

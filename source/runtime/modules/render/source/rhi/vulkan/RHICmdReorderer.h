@@ -315,8 +315,10 @@ namespace Moer::Render {
         //temporal resources
         Array<std::tuple<Range, ResourceHandle*>> m_arg_read_resources;
         Array<std::tuple<Range, ResourceHandle*>> m_arg_write_resources;
-        int64                                     m_dispatch_layer = -1;
-        int64                                     m_max_bdls_layer = -1;//optimization
+        UnorderedSet<uint64>                      temp_writed_resources;
+
+        int64 m_dispatch_layer = -1;
+        int64 m_max_bdls_layer = -1;//optimization
 
         ArenaAllocator                      m_arena;
         ArenaAllocatorWrapper<ResourceView> m_arena_stl;
@@ -573,6 +575,7 @@ namespace Moer::Render {
                     } break;
                 }
                 m_arg_write_resources.emplace_back(_range, handle);
+                temp_writed_resources.emplace(_handle);
             } else {
                 switch (_type) {
                     case ResourceType::Texture_Buffer: {
@@ -762,6 +765,7 @@ namespace Moer::Render {
             int64 layer = 0;
             m_arg_read_resources.clear();
             m_arg_write_resources.clear();
+            temp_writed_resources.clear();
 
             const auto& pipeline = _cmd->Pipeline();
             auto        func     = [&](const TArg& _arg, uint _idx) {
@@ -769,7 +773,7 @@ namespace Moer::Render {
             };
 
             auto bdls_post_func = [&](const TArg& _arg, uint _idx) {
-                VisitBindlessArg(std::get<BindlessArrayRef>(_arg), m_write_resources);
+                VisitBindlessArg(std::get<BindlessArrayRef>(_arg), temp_writed_resources);
             };
 
             _cmd->IterateArgs(func, bdls_post_func);
@@ -835,6 +839,7 @@ namespace Moer::Render {
         void VisitCmd(const DispatchCmd* _cmd) {
             m_arg_write_resources.clear();
             m_arg_read_resources.clear();
+            temp_writed_resources.clear();
             // auto func = [&](const TArg& _arg, ParamInfoFlags _flag) {
             //     VisitArgs(_arg, _flag.state_flags);
             // };
@@ -849,7 +854,7 @@ namespace Moer::Render {
 
             auto bdls_post_func = [&](const TArg& _arg, uint _idx) {
                 if (pipeline.valid_bits & (1 << _idx))
-                    VisitBindlessArg(std::get<BindlessArrayRef>(_arg), m_write_resources);
+                    VisitBindlessArg(std::get<BindlessArrayRef>(_arg), temp_writed_resources);
             };
 
             _cmd->IterateArgs(func, bdls_post_func);

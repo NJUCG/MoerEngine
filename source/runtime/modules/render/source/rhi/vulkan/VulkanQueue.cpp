@@ -1678,7 +1678,12 @@ namespace Moer::Render {
             vk_allocator.GetCmdList().BeginLabel(queue_label, {1.0f, 0.0f, 0.0f, 1.0f});
         }
 
+        uint layer = 0;
+
         for (const CmdReorderer::LinkedCommandList& cmd_list : cmd_lists) {
+            if (layer == 0) {
+                vk_allocator.GetCmdList().BeginLabel("Begin Layers", {0.0f, 0.0f, 1.0f, 1.0f});
+            }
             if (cmd_list.head == nullptr) {
                 continue;
             }
@@ -1687,10 +1692,14 @@ namespace Moer::Render {
             }
             tracker.ResolveBarriers();
             tracker.DispatchBarriers(vk_allocator.GetCmdList());
+            vk_allocator.GetCmdList().InsertLabel(std::format("Layer {}", layer++), {0.0f, 0.0f, 1.0f, 1.0f});
             for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
                 const auto* cmd = cmdnode->cmd;
                 visitor.VisitCmd(cmd);
             }
+        }
+        if (layer > 0) {
+            vk_allocator.GetCmdList().EndLabel();
         }
 
         if (has_cmd) {

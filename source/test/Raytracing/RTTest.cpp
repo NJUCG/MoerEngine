@@ -611,7 +611,6 @@ int main(int argc, const char** argv) {
             auto camera        = CameraManager::Get().Get(camera_entity);
             //prepare frame
             {
-                cmd_list.UpdateBindlessArray(bindless_array);
 
                 rt_config_param.world2view_prev = Transpose(camera->GetViewMatrix());
                 rt_config_param.world2clip_prev = Transpose(camera->GetProjectionMatrix() * camera->GetViewMatrix());
@@ -667,6 +666,7 @@ int main(int argc, const char** argv) {
             prepare_light_pass->CountEmissiveInstances(num_emissive_meshes, num_emissive_triangles);
 
             rt_ctx->CreateBuffersIfNeeded(num_emissive_meshes, num_emissive_triangles, g_scene.GetLights().size(), g_scene.GetGeometryInstances().size());
+            cmd_list.UpdateBindlessArray(bindless_array);
 
             rt_ctx->Tick(camera);
 

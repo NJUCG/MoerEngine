@@ -206,6 +206,11 @@ void StoreReservoir(Reservoir _res, ReservoirBufferParams _params,
   DI_LIGHT_RESERVOIR_BUFFER[idx] = _res.Pack();
 }
 
+Reservoir LoadReservoir(ReservoirBufferParams _params, uint2 _reservoir_pos,
+                        uint _array_idx) {
+  uint idx = ReservoirPositionToIndex(_params, _reservoir_pos, _array_idx);
+  return Reservoir::Unpack(DI_LIGHT_RESERVOIR_BUFFER[idx]);
+}
 // Reservoir UnpackReservoir(PackedReservoir r) {
 //   Reservoir unpacked;
 //   unpacked.light_data = r.light_data;

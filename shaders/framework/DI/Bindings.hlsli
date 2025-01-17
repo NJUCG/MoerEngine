@@ -44,13 +44,11 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 #define DI_LIGHT_RESERVOIR_BUFFER light_reservoirs
 #endif
 
-#include <framework/DI/Reservoirs.hlsli>
-
 namespace Moer {
 
 typedef Math::Rng::Hash RandomState;
 
-float3 DiffuseTerm(float3 _v, float3 _n, float3 _l, float _roughness) {
+float DiffuseTerm(float3 _v, float3 _n, float3 _l, float _roughness) {
   float nol = saturate(dot(_n, _l));
   float nov = saturate(dot(_n, _v));
   float voh = saturate(dot(_v, _l));
@@ -237,6 +235,16 @@ struct Surface {
     ray.TMin = _x_offset;
     ray.TMax = max(_x_offset, length(l) - 2 * _x_offset);
     return ray;
+  }
+
+  void EvalBrdf(float3 _sample_pos, out float _diffuse, out float3 _specular) {
+    float3 l = _sample_pos - x;
+    _diffuse = DiffuseTerm(v, n, normalize(l), roughness);
+    if (roughness == 0.f) {
+      _specular = 0.f;
+    } else {
+      _specular = SpecularTerm(v, normalize(l), n, roughness, specular_f0);
+    }
   }
 };
 

@@ -85,12 +85,12 @@ namespace Moer::Render {
         float max_radiance = Max(Max(_color.x, _color.y), _color.z);
         if (max_radiance < 0.f) return;
 
-        float log_radiance     = (std::log2f(max_radiance) - g_poly_morphic_light_min_log2_radiance) / (g_poly_morphic_light_max_log2_radiance - g_poly_morphic_light_min_log2_radiance) * 65535.f;
+        float log_radiance     = (std::log2f(max_radiance) - g_poly_morphic_light_min_log2_radiance) / (g_poly_morphic_light_max_log2_radiance - g_poly_morphic_light_min_log2_radiance);
         log_radiance           = std::clamp(log_radiance, 0.f, 1.f);
         uint packed_radiance   = std::min(uint(ceilf(log_radiance * 65534.f)) + 1, 0xffffu);
         uint unpacked_radiance = std::exp2f((float(packed_radiance - 1) / 65534.f) * (g_poly_morphic_light_max_log2_radiance - g_poly_morphic_light_min_log2_radiance) + g_poly_morphic_light_min_log2_radiance);
 
-        _info.color_type_flags |= FloaT3ToR8G8B8Unorm(_color.x / unpacked_radiance, _color.y / unpacked_radiance, _color.z / unpacked_radiance) << 8;
+        _info.color_type_flags |= FloaT3ToR8G8B8Unorm(_color.x / unpacked_radiance, _color.y / unpacked_radiance, _color.z / unpacked_radiance);
         _info.log_radiance = packed_radiance;
     }
 
@@ -127,7 +127,7 @@ namespace Moer::Render {
             case Moer::ELightComponentType::DIRECTIONAL: {
                 DirectionalLightComponent* dir_light             = static_cast<DirectionalLightComponent*>(&_light);
                 float                      half_angluar_size_rad = Angle::DegreeToRadian(dir_light->angluar_size);
-                float                      solid_angle           = 2 * PI * (1 - cos(half_angluar_size_rad));
+                float                      solid_angle           = std::max(2 * PI * (1 - cos(half_angluar_size_rad)), 0.001f);
                 float3                     radiance              = dir_light->GetColor() * dir_light->GetIntensity() / std::max(solid_angle, 1e-6f);
 
                 _info.color_type_flags = (uint)EPolyLightType::ELDirectional << g_poly_morphic_light_type_shift;
@@ -277,7 +277,7 @@ namespace Moer::Render {
         }
 
         _cmd_list.ClearResource(_rt_ctx.light_mapping_buf->GetView(), 0u);
-        _cmd_list.ClearResource(_rt_ctx.local_light_pdf_tex->GetView(), float4(0.f));
+        _cmd_list.ClearResource(_rt_ctx.local_light_pdf_tex->GetView(0, _rt_ctx.local_light_pdf_tex->GetNumMips()), float4(0.f));
 
         PrepareLightsParams param{};
         param.num_tasks            = tasks.size();
@@ -296,7 +296,7 @@ namespace Moer::Render {
             num_is_env_lights);
 
         _cmd_list.Compute(prepare_light_pipeline, param, _rt_ctx.light_data_buf->GetView(), _rt_ctx.light_mapping_buf->GetView(), _rt_ctx.local_light_pdf_tex->GetView(), _rt_ctx.prim_light_buf->GetView(), _rt_ctx.task_buf->GetView(), scene.GetBindlessArray())
-            .Dispatch(uint3((light_buf_offset + 255) / 256, 1, 1));
+            .Dispatch(uint3((light_buf_offset + 255) / 256, 1, 1), "PrepareLights");
 
         _rt_ctx.sd_utils.GenerateMips(_cmd_list, _rt_ctx.local_light_pdf_mips);
         // device.GetCommandQueue(EQueueType::Graphics).Execute(_cmd_list.Submit());

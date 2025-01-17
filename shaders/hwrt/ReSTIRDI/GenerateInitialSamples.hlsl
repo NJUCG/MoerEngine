@@ -13,8 +13,8 @@ main(uint2 dtid
 
   Moer::Surface surface = Moer::GetGBufferSurface(pixel_pos);
 
-  rw_diffuse_lighting[pixel_pos] = float4(surface.x, 0.f);
-  rw_specular_lighting[pixel_pos] = float4(surface.v_z, 0.f, 0.f, 0.f);
+  // rw_diffuse_lighting[pixel_pos] = float4(surface.x, 0.f);
+  // rw_specular_lighting[pixel_pos] = float4(surface.v_z, 0.f, 0.f, 0.f);
   Moer::DI::SampleConfigs params = Moer::DI::SampleConfigs::Create(
       resample_params.restir_di_params.initial_sample_params
           .num_primary_local_lights,

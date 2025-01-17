@@ -12,7 +12,7 @@ void GetLightInfoFromRisData(uint2 _tile_data, uint _ris_buf_idx,
   _light_idx = _tile_data.x & s_di_light_idx_mask;
   _inv_pdf = asfloat(_tile_data.y);
 
-  if (_light_idx & s_di_light_compact_bit) {
+  if (_tile_data.x & s_di_light_compact_bit) {
     _light_info = LoadCompactLightInfo(_ris_buf_idx);
   } else {
     _light_info = LoadLightInfo(_light_idx);
@@ -37,9 +37,9 @@ void RandomlySelectLightDataUniformly(inout RandomState _rng,
   float rng = _rng.GetFloat();
   _inv_pdf = 1.f / float(_region.light_cnt);
   _light_idx =
-      min(uint(floor(rng * _region.light_cnt)), _region.light_cnt - 1) +
-      _region.first_light_idx;
-  _light_info = LoadLightInfo(_light_idx);
+      min(uint(floor(rng * _region.light_cnt)), _region.light_cnt - 1);
+  _light_info = LoadLightInfo(_light_idx  +
+      _region.first_light_idx);
 }
 
 struct LocalLightSelectionContext {

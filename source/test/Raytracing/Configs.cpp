@@ -65,7 +65,7 @@ namespace Moer::Render {
         di_buffer_indices.temperal_resample_output_buff_idx = (di_buffer_indices.temperal_resample_input_buff_idx + 1) % s_num_restirdi_reservoir_buffer;
         di_buffer_indices.spatial_resample_input_buff_idx   = di_buffer_indices.temperal_resample_output_buff_idx;
         di_buffer_indices.spatial_resample_output_buff_idx  = (di_buffer_indices.spatial_resample_input_buff_idx + 1) % s_num_restirdi_reservoir_buffer;
-        di_buffer_indices.shading_input_buff_idx            = di_buffer_indices.spatial_resample_output_buff_idx;
+        di_buffer_indices.shading_input_buff_idx            = di_buffer_indices.initial_sample_output_buff_idx;
         di_current_frame_output_reservoir                   = di_buffer_indices.shading_input_buff_idx;
     }
 
