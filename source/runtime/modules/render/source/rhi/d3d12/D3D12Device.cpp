@@ -1742,13 +1742,28 @@ namespace Moer::Render {
         pending_buffers.insert(buffer);
     }
 
+    static bool IsReadOnlyAccess(D3D12_BARRIER_ACCESS access) {
+        // clang-format off
+        constexpr D3D12_BARRIER_ACCESS kReadOnlySet = D3D12_BARRIER_ACCESS_VERTEX_BUFFER
+                                                    | D3D12_BARRIER_ACCESS_INDEX_BUFFER
+                                                    | D3D12_BARRIER_ACCESS_CONSTANT_BUFFER
+                                                    | D3D12_BARRIER_ACCESS_DEPTH_STENCIL_READ
+                                                    | D3D12_BARRIER_ACCESS_SHADER_RESOURCE
+                                                    | D3D12_BARRIER_ACCESS_INDIRECT_ARGUMENT
+                                                    | D3D12_BARRIER_ACCESS_COPY_SOURCE
+                                                    | D3D12_BARRIER_ACCESS_RESOLVE_SOURCE
+                                                    | D3D12_BARRIER_ACCESS_RAYTRACING_ACCELERATION_STRUCTURE_READ;
+        return (access & ~kReadOnlySet) == 0;
+        // clang-format on
+    }
+
     void D3D12ResourceStateTracker::ResolveBarriers() {
         for (auto& tex : pending_textures) {
             ASSERT(texture_states.contains(tex));
             auto& texState = texture_states[tex];
 
             auto& state = texState;
-            if (state.before == state.after && state.after.access != D3D12_BARRIER_ACCESS_UNORDERED_ACCESS && state.before.access != D3D12_BARRIER_ACCESS_UNORDERED_ACCESS) {
+            if (state.before == state.after && IsReadOnlyAccess(state.before.access)) {
                 continue;
             }
 
@@ -1772,7 +1787,7 @@ namespace Moer::Render {
             ASSERT(buffer_states.contains(buf));
             auto& state = buffer_states[buf];
 
-            if (state.before == state.after && state.after.access != D3D12_BARRIER_ACCESS_UNORDERED_ACCESS && state.before.access != D3D12_BARRIER_ACCESS_UNORDERED_ACCESS) {
+            if (state.before == state.after && IsReadOnlyAccess(state.before.access)) {
                 continue;
             }
 
