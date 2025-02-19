@@ -87,12 +87,10 @@ namespace Moer::Render {
             di_temporal_resample_params.random_number = JekinsHash(frame_idx);
             UpdateReSTIRDIBufferIndices();
 
-            di_initial_sample_params.env_map_is              = light_buffer_params.env_light.light_cnt;
-            di_initial_sample_params.local_light_sample_mode = restir_di_runtime_config.resample_mode;
-
-            grid_params.grid_params.cell_x = grid_config.grid_size.x;
-            grid_params.grid_params.cell_y = grid_config.grid_size.y;
-            grid_params.grid_params.cell_z = grid_config.grid_size.z;
+            di_initial_sample_params.env_map_is = light_buffer_params.env_light.light_cnt;
+            grid_params.grid_params.cell_x      = grid_config.grid_size.x;
+            grid_params.grid_params.cell_y      = grid_config.grid_size.y;
+            grid_params.grid_params.cell_z      = grid_config.grid_size.z;
 
             grid_params.common_params.center_x                           = grid_changable_config.center.x;
             grid_params.common_params.center_y                           = grid_changable_config.center.y;

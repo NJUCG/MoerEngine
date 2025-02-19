@@ -68,10 +68,10 @@ namespace Moer {
     class RENDER_API EnvironmentLightComponent : public LightComponent {
     public:
         EnvironmentLightComponent() noexcept
-            : LightComponent(Vector3f(1.0f), 1.0f, ELightComponentType::ENV) {}
+            : LightComponent(Vector3f(1.0f), 1.0f, ELightComponentType::ENV), rotation(0.f) {}
 
         EnvironmentLightComponent(float3 _scale, uint2 _size) noexcept
-            : LightComponent(_scale, 1.0f, ELightComponentType::ENV), size(_size) {}
+            : LightComponent(_scale, 1.0f, ELightComponentType::ENV), size(_size), rotation(0.f) {}
 
         float3                     GetColorScale() const noexcept { return GetColor(); }
         virtual LightComponentData ToData() const noexcept override {

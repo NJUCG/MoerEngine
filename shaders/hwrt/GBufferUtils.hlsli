@@ -35,7 +35,7 @@ float3 GetMotion(Moer::ViewParam _view, Moer::ViewParam _prev_view,
   clip_pos_prev.xyz /= clip_pos_prev.w;
   clip_pos.xyz /= clip_pos.w;
 
-  _view_depth = clip_pos.w;
+  _view_depth = -clip_pos.w;
   _clip_depth = clip_pos.z;
 
   if (clip_pos.w <= 0 || clip_pos_prev.w <= 0) {

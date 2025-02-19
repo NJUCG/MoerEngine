@@ -664,7 +664,7 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
 
   float3 cam_ray_dir_w =
       view.orthomode == 0
-          ? normalize(mul( (float3x3)view.view2world, cam_ray_origion_v))
+          ? normalize(mul((float3x3)view.view2world, cam_ray_origion_v))
           : -view.dir;
   // if(pixel_pos.x == 140 && pixel_pos.y == 140)
   //   printf("cam_ray_dir_w %f %f %f\n", cam_ray_dir_w.x, cam_ray_dir_w.y,

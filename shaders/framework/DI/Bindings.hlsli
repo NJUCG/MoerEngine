@@ -190,7 +190,9 @@ struct Surface {
       s = SpecularTerm(v, l, n, roughness, specular_f0);
     }
     float3 reflect_radiance = (d * diffuse_albedo + s) * _sample.radiance;
-
+    // if(_sample.type == 4){
+    //   printf("d: %f %f %f reflect_radiance %f target pdf %f\n", d.x, d.y, d.z, STL::Color::Luminance(reflect_radiance), _sample.solid_angle_pdf);
+    // }
     return STL::Color::Luminance(reflect_radiance) / _sample.solid_angle_pdf;
   }
 
@@ -458,14 +460,23 @@ bool RaytraceConservativeVisibility(RaytracingAccelerationStructure _tlas,
   RayDesc ray = _surface.SetupVisibilityRay(_sample_pos);
 
   bool b_visible = false;
-
 #if USE_RAYQUERY
-  RayQuery<RAY_FLAG_CULL_NON_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH>
+  RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH>
       ray_query;
 
-  ray_query.TraceRayInline(_tlas, RAY_FLAG_NONE, RTVM_OPAQUE, ray);
+  ray_query.TraceRayInline(_tlas, RAY_FLAG_NONE, RTVM_ALL, ray);
+  // while (ray_query.Proceed()) {
+  //   if (ray_query.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE) {
+  //     ray_query.CommitNonOpaqueTriangleHit();
+  //   } else {
+  //     ray_query.Abort();
+  //     break;
+  //   }
+  // }
+
   ray_query.Proceed();
-  b_visible = ray_query.CommittedStatus() == COMMITTED_NOTHING;
+
+  b_visible = (ray_query.CommittedStatus() == COMMITTED_NOTHING);
 
 #else
 #endif

@@ -11,6 +11,6 @@
       TextureHandle(resample_params.bindless_handles.env_pdf);
   Texture2D<float> env_pdf_tex = env_pdf_handle.GetTexture2D<float>();
   Moer::SampleFunc::SampleEnvMap(rng, env_pdf_tex, resample_params.env_pdf_size,
-                                 in_tile_idx, tile_idx,
+                                 tile_idx, in_tile_idx,
                                  resample_params.env_light_ris_buffer_params);
 }

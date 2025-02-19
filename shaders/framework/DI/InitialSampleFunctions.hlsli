@@ -38,7 +38,7 @@ struct SampleConfigs {
     result.local_light_mis_weight =
         float(_num_local_light) / float(result.num_mis);
     result.env_map_mis_weight =
-        float(_num_infinite_light) / float(result.num_mis);
+        float(_num_envmap) / float(result.num_mis);
     result.brdf_mis_weight = float(_num_brdf) / float(result.num_mis);
     result.brdf_cutoff = _brdf_cutoff;
     result.brdf_ray_tmin = _brdf_ray_tmin;
@@ -92,15 +92,16 @@ float2 RandomlySelectLocalLightUV(inout RandomState _rng) {
 
 bool StreamLocalLightAtUV(inout RandomState _rng, SampleConfigs _configs,
                           Surface _surface, uint _light_idx, float2 _uv,
-                          float _src_pdf, PolymorphicLightInfo _light_info,
+                          float _inv_src_pdf, PolymorphicLightInfo _light_info,
                           inout Reservoir _reservoir,
                           inout LightSample _light_sample) {
 
   LightSample candidate = _surface.SamplePolymorphicLight(_light_info, _uv);
-  float mis_src_pdf = ComputeLightBrdfMisWeight(_surface, candidate, _src_pdf,
-                                                _configs.local_light_mis_weight,
-                                                false, _configs);
+  float mis_src_pdf = ComputeLightBrdfMisWeight(
+      _surface, candidate, 1.f / _inv_src_pdf, _configs.local_light_mis_weight,
+      false, _configs);
   float target_pdf = _surface.GetLightSampleTargetPdf(candidate);
+  // printf("ris weight %f\n", 1.f / mis_src_pdf * target_pdf);
   float rnd = _rng.GetFloat();
 
   if (mis_src_pdf == 0.f) {
@@ -140,7 +141,7 @@ RISTileInfo GetLocalLightGridTileInfo(int _cell_idx,
 
   RISTileInfo result;
   uint cell_offset = uint(_cell_idx) * _params.lights_per_cell;
-  result.tile_offset = cell_offset;
+  result.tile_offset = cell_offset + _params.ris_buffer_offset;
   result.tile_size = _params.lights_per_cell;
   return result;
 }
@@ -199,9 +200,7 @@ Reservoir SampleLocalLights(inout RandomState _rng,
   Reservoir res = Reservoir::EmptyReservoir();
 
   if (_sample_configs.num_local_light == 0 ||
-      _light_buffer_params.local_light_region.light_cnt == 0){
-    
-    // printf("num_local_light: %d, light_cnt: %d\n", _sample_configs.num_local_light, _light_buffer_params.local_light_region.light_cnt);
+      _light_buffer_params.local_light_region.light_cnt == 0) {
     return res;
   }
 
@@ -217,15 +216,16 @@ Reservoir SampleLocalLights(inout RandomState _rng,
     ctx.SelectNext(_rng, light_info, light_idx, inv_pdf);
 
     float2 uv = _rng.GetFloat2();
-
     if (StreamLocalLightAtUV(_rng, _sample_configs, _surface, light_idx, uv,
-                             1.f / inv_pdf, light_info, res, _light_sample)) {
+                             inv_pdf, light_info, res, _light_sample)) {
       continue;
     }
   }
 
   res.FinializeRIS(1.f, _sample_configs.num_mis);
   res.M = 1.f;
+
+  // printf("local light res weight_sum: %f\n", res.weight_sum);
 
   return res;
 }
@@ -236,7 +236,7 @@ Reservoir SampleLocalLights(inout RandomState _rng,
 
 void StreamInfiniteLightAtUV(inout RandomState _rng, Surface _surface,
                              PolymorphicLightInfo _light_info, uint _light_idx,
-                             float2 _uv, float _src_pdf,
+                             float2 _uv, float _inv_src_pdf,
                              inout Reservoir _reservoir,
                              inout LightSample _light_sample) {
   LightSample candidate = _surface.SamplePolymorphicLight(_light_info, _uv);
@@ -244,10 +244,11 @@ void StreamInfiniteLightAtUV(inout RandomState _rng, Surface _surface,
   float rnd = _rng.GetFloat();
 
   bool selected =
-      _reservoir.StreamSample(_light_idx, _uv, rnd, target_pdf, 1.f / _src_pdf);
+      _reservoir.StreamSample(_light_idx, _uv, rnd, target_pdf, _inv_src_pdf);
   if (selected) {
     _light_sample = candidate;
   }
+  // printf("infinite light res weight_sum: %f\n", _reservoir.weight_sum);
 }
 
 Reservoir SampleInfiniteLights(inout RandomState _rng, Surface _surface,
@@ -268,11 +269,10 @@ Reservoir SampleInfiniteLights(inout RandomState _rng, Surface _surface,
 
     RandomlySelectLightDataUniformly(_rng, _infinite_light_region, light_info,
                                      light_idx, inv_pdf);
-
     float2 uv = _rng.GetFloat2();
 
-    StreamInfiniteLightAtUV(_rng, _surface, light_info, light_idx, uv,
-                            1.f / inv_pdf, res, _light_sample);
+    StreamInfiniteLightAtUV(_rng, _surface, light_info, light_idx, uv, inv_pdf,
+                            res, _light_sample);
   }
 
   res.FinializeRIS(1.f, res.M);
@@ -303,17 +303,17 @@ void RandomlySelectEnvLightFromRISTile(inout RandomState _rng,
 
 void StreamEnvLightAtUV(inout RandomState _rng, SampleConfigs _configs,
                         Surface _surface, PolymorphicLightInfo _light_info,
-                        uint _light_idx, float2 _uv, float _src_pdf,
+                        uint _light_idx, float2 _uv, float _inv_src_pdf,
                         inout Reservoir _reservoir,
                         inout LightSample _light_sample) {
-  
+
   LightSample candidate = _surface.SamplePolymorphicLight(_light_info, _uv);
   float target_pdf = _surface.GetLightSampleTargetPdf(candidate);
-  // printf("target_pdf: %f\n", target_pdf);
   float rnd = _rng.GetFloat();
   float mis_src_pdf =
-      ComputeLightBrdfMisWeight(_surface, candidate, _src_pdf,
+      ComputeLightBrdfMisWeight(_surface, candidate, 1.f / _inv_src_pdf,
                                 _configs.env_map_mis_weight, true, _configs);
+  // printf("target_pdf: %f mis_src_pdf %f\n", target_pdf, mis_src_pdf);
 
   bool selected = _reservoir.StreamSample(_light_idx, _uv, rnd, target_pdf,
                                           1.f / mis_src_pdf);
@@ -343,13 +343,13 @@ Reservoir SampleEnvMap(inout RandomState _rng, inout RandomState _coherent_rng,
 
     RandomlySelectEnvLightFromRISTile(_rng, tile_info, uv, inv_src_pdf);
     StreamEnvLightAtUV(_rng, _sample_configs, _surface, light_info,
-                       _env_light_params.light_idx, uv, 1.f / inv_src_pdf, res,
+                       _env_light_params.light_idx, uv, inv_src_pdf, res,
                        _light_sample);
   }
 
   res.FinializeRIS(1.f, _sample_configs.num_mis);
   res.M = 1.f;
-  // printf("light sample radiance %f %f %f\n", _light_sample.radiance.x, _light_sample.radiance.y, _light_sample.radiance.z);
+
   return res;
 }
 
@@ -459,7 +459,6 @@ SampleLightsForSurface(inout RandomState _rng, inout RandomState _coherent_rng,
   Reservoir env_res = SampleEnvMap(_rng, _coherent_rng, _sample_configs,
                                    _surface, _env_light_ris_params,
                                    _light_buffer_params.env_light, env_sample);
-
   // sample brdf
   LightSample brdf_sample = LightSample::EmptyLightSample();
   Reservoir brdf_res = SampleBrdf(_rng, _sample_configs, _light_buffer_params,
@@ -478,17 +477,15 @@ SampleLightsForSurface(inout RandomState _rng, inout RandomState _coherent_rng,
   final_res.FinializeRIS(1.f, 1.f);
   final_res.M = 1.f;
 
-  if(select_brdf){
+  if (select_brdf) {
     _light_sample = brdf_sample;
-  } else if(select_env){
+  } else if (select_env) {
     _light_sample = env_sample;
-  } else if(select_infinite){
+  } else if (select_infinite) {
     _light_sample = infinite_sample;
-    // printf("weight_sum: %f\n", final_res.weight_sum);
   } else {
     _light_sample = local_light_sample;
   }
-
 
   return final_res;
 }

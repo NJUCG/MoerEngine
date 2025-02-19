@@ -126,8 +126,8 @@ namespace Moer::Render {
         switch (_light.GetType()) {
             case Moer::ELightComponentType::DIRECTIONAL: {
                 DirectionalLightComponent* dir_light             = static_cast<DirectionalLightComponent*>(&_light);
-                float                      half_angluar_size_rad = Angle::DegreeToRadian(dir_light->angluar_size);
-                float                      solid_angle           = std::max(2 * PI * (1 - cos(half_angluar_size_rad)), 0.001f);
+                float                      half_angluar_size_rad = Angle::DegreeToRadian(std::max(dir_light->angluar_size, 0.1f));
+                float                      solid_angle           = 2 * PI * (1 - cos(half_angluar_size_rad));
                 float3                     radiance              = dir_light->GetColor() * dir_light->GetIntensity() / std::max(solid_angle, 1e-6f);
 
                 _info.color_type_flags = (uint)EPolyLightType::ELDirectional << g_poly_morphic_light_type_shift;
@@ -255,7 +255,10 @@ namespace Moer::Render {
             task.light_offset      = light_buf_offset;
             task.num_triangles     = 1;
             task.prev_light_offset = pre_iter == primitive_light_buffer_offsets.end() ? -1 : pre_iter->second;
-
+            {
+                uint prim_id = task.instance_geo_idx & ~g_task_prim_light_bit;
+                int  i       = 1;
+            }
             primitive_light_buffer_offsets[uint64(light_data.Get())] = light_buf_offset;
             light_buf_offset += task.num_triangles;
             tasks.emplace_back(task);

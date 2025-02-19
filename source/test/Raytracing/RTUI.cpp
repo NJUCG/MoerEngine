@@ -37,7 +37,8 @@ namespace Moer::Render {
         "Depth",
         "Motion",
         "Grid",
-        "Material"};
+        "Material",
+        "Position"};
     RTUI::RTUI(UIRenderer& _renderer)
         : ui_renderer(_renderer) {
 
@@ -52,6 +53,7 @@ namespace Moer::Render {
         final_color_map["Motion"]     = EFinalColor::EFC_MOTION;
         final_color_map["Grid"]       = EFinalColor::EFC_GRID;
         final_color_map["Material"]   = EFinalColor::EFC_MATERIAL;
+        final_color_map["Position"]   = EFinalColor::EFC_POSITION;
     }
     void RTUI::TickUI() {
 

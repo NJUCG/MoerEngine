@@ -53,8 +53,6 @@ bool FindTask(uint dtid, out Moer::PrepareLightsTask task) {
 
   Moer::PolymorphicLightInfo light_info = (Moer::PolymorphicLightInfo)0;
 
-  // printf("is_prim_light %d\n", is_prim_light);
-
   if (is_prim_light) {
     uint prim_light_idx = task.instance_geo_idx & ~Moer::g_task_prim_light_bit;
     light_info = prim_lights[prim_light_idx];

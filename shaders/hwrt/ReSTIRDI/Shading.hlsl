@@ -38,7 +38,6 @@ bool ShadeSurface(inout Moer::DI::Reservoir _res, Moer::Surface _surface,
       } else {
         vis = Moer::GetCurrentConservativeVisibility(_surface, _sample.x);
       }
-
       _res.StoreVisibility(
           vis, resample_params.restir_di_params.temporal_resample_params
                    .discard_inviable_samples);
@@ -76,7 +75,6 @@ main(uint2 dtid
   Moer::DI::Reservoir res =
       Moer::DI::LoadReservoir(params.reservoir_buffer_params, pixel_pos,
                               params.buffer_indices.shading_input_buff_idx);
-
   float3 diffuse = 0.f;
   float3 specular = 0.f;
   float light_dist = 0.f;
@@ -89,7 +87,6 @@ main(uint2 dtid
 
     Moer::LightSample l_sample =
         surface.SamplePolymorphicLight(light_info, res.GetUV());
-
     bool b_store = ShadeSurface(
         res, surface, l_sample, resample_params.enable_prev_tlas,
         true /* visibility reuse */, diffuse, specular, light_dist);
@@ -98,6 +95,9 @@ main(uint2 dtid
     cur_luminance.y = STL::Color::Luminance(specular);
 
     specular = specular / max(0.001f, surface.specular_f0);
+    diffuse *= surface.diffuse_albedo;
+
+    // printf("diffuse: %f %f %f\n", diffuse.x, diffuse.y, diffuse.z);
 
     if (b_store) {
       Moer::DI::StoreReservoir(res, params.reservoir_buffer_params, pixel_pos,

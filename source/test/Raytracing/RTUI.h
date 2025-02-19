@@ -18,7 +18,7 @@ namespace Moer::Render {
         };
 
         struct ReSTIRDIConfig {
-            uint initial_local_light_sample_mode = 0;
+            uint initial_local_light_sample_mode = s_di_local_light_sample_mode_grid;
         };
         struct Config {
             float3 sun_direction        = float3(0.f, 0.5f, 0.16f);

@@ -80,7 +80,6 @@ void SampleLocalLights(inout RandomState _rng, Texture2D<float> _pdf_tex,
   if (compact) {
     light_idx |= s_di_light_compact_bit;
   }
-
   rw_ris_buffer[ris_idx] = uint2(light_idx, asuint(inv_pdf));
 }
 
@@ -97,7 +96,6 @@ void SampleEnvMap(inout RandomState _rng, Texture2D<float> _pdf_tex,
 
   uint packed_uv =
       uint(saturate(uv.x) * 0xffff) | (uint(saturate(uv.y) * 0xffff) << 16);
-
   float inv_pdf = pdf > 0.f ? 1.f / pdf : 0.f;
   uint ris_idx = _ris_params.buffer_offset + _ris_params.tile_size * _tile_idx +
                  _sample_in_tile;
@@ -172,7 +170,6 @@ void SampleLocalLightsForGrid(inout RandomState _rng,
       light_info = cur_light_info;
       seleted = rnd_light_idx;
       selected_target_pdf = target_pdf;
-
     }
   }
 
@@ -187,7 +184,6 @@ void SampleLocalLightsForGrid(inout RandomState _rng,
   if (compact) {
     seleted |= s_di_light_compact_bit;
   }
-
   rw_ris_buffer[ris_idx] = uint2(seleted, asuint(weight));
 }
 

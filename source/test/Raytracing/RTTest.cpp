@@ -23,6 +23,7 @@
 #include "scene/EntityManager.h"
 #include "scene/Scene.h"
 #include "scene/TransformManager.h"
+#include "scene/light/DirectionalLightComponent.h"
 #include "scene/light/LightComponent.h"
 #include "scene/light/LightComponentManager.h"
 #include "shader/ShaderPipeline.h"
@@ -644,6 +645,17 @@ int main(int argc, const char** argv) {
                 cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)&rt_config_param, sizeof(RTConfigParam)), rt_config_param_buffer->GetView());
 
                 cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)&rt_view_param, sizeof(RTViewParam)), rt_view_param_buffer->GetView());
+            }
+
+            //update light direction from ui data
+            {
+                auto light_entity = g_scene.GetLights()[0];
+                auto light        = LightComponentManager::Get().Get(light_entity);
+                if (light->GetType() == ELightComponentType::DIRECTIONAL) {
+                    DirectionalLightComponent* dir_light = static_cast<DirectionalLightComponent*>(light.Get());
+                    dir_light->SetDirection(-rt_ui.GetConfig().sun_direction);
+                    dir_light->SetIntensity(rt_ui.GetConfig().exposure);
+                }
             }
 
             //fill ui data

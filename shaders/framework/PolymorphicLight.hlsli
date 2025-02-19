@@ -9,7 +9,7 @@
 namespace Moer {
 
 static const float s_light_epsilon = 1e-10f;
-static const float s_light_max_distance = 1e6f;
+static const float s_light_max_distance = 50000.f;
 
 #pragma region[ light shaping ]
 
@@ -541,7 +541,7 @@ struct DirectionalLight {
     const float3 disk_dir = direction + t * disk_sample.x * sin_half_angle +
                             b * disk_sample.y * sin_half_angle;
 
-    const float3 sample_pos = _vp - disk_dir * s_light_max_distance;
+    const float3 sample_pos = _vp - disk_dir * s_light_max_distance * 0.6f;
     const float3 sample_normal = disk_dir;
 
     ls.pos = sample_pos;

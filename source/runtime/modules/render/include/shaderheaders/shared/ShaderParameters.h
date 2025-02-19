@@ -69,6 +69,7 @@ namespace Moer {
         EFC_GRID,
         EFC_MATERIAL,
         EFC_INSTANCE,
+        EFC_POSITION,
         EFC_NUM
     };
 

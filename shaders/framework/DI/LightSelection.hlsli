@@ -35,7 +35,7 @@ void RandomlySelectLightDataUniformly(inout RandomState _rng,
                                       out PolymorphicLightInfo _light_info,
                                       out uint _light_idx, out float _inv_pdf) {
   float rng = _rng.GetFloat();
-  _inv_pdf = 1.f / float(_region.light_cnt);
+  _inv_pdf = float(_region.light_cnt);
   _light_idx =
       min(uint(floor(rng * _region.light_cnt)), _region.light_cnt - 1);
   _light_info = LoadLightInfo(_light_idx  +
