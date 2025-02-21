@@ -1420,10 +1420,12 @@ namespace Moer::Render {
         VulkanDescriptorHeap&      descriptor_heap      = device.GetGlobalDescriptorHeap();
         auto&                      set_binders          = bind_template.set_binders;
         uint64                     g_global_desc_offset = descriptor_heap.current_offset;
+
         for (auto& [set, binder] : set_binders) {
             std::visit(
                 [&](auto& _binder) {
                     using T = std::decay_t<decltype(_binder)>;
+
                     if constexpr (std::is_same_v<T, VulkanBindlessSetArray>) {
                         BindlessArrayRef     array                           = std::get<BindlessArrayRef>(_args[_binder.param_idx]);
                         VulkanBindlessArray* bindless_array                  = static_cast<VulkanBindlessArray*>(array.Get());
@@ -1444,7 +1446,9 @@ namespace Moer::Render {
                             auto& writer = _binder.writers[i];
                             if (writer.descriptorCount < 1) continue;
                             const VulkanDescriptorInfo& set_info = _binder.bind_infos[i];
-                            VkFormat                    format   = g_platform_pixel_formats[VulkanShaderResourceState(_pso_handle.binding_infos[set_info.param_idx].state_flags).format].format;
+                            if (!(_pso_handle.valid_bits & (1 << set_info.param_idx))) continue;
+
+                            VkFormat format = g_platform_pixel_formats[VulkanShaderResourceState(_pso_handle.binding_infos[set_info.param_idx].state_flags).format].format;
                             switch (writer.descriptorType) {
                                 case VK_DESCRIPTOR_TYPE_SAMPLER: {
                                     uint64 src_handle = descriptor_heap.GetSamplerDescIdx(std::get<Sampler>(_args[set_info.param_idx]));
@@ -1520,6 +1524,7 @@ namespace Moer::Render {
                                 }
                             }
                         }
+
                         //set desc buffer offset
                         bind_template.desc_buffer_offsets[_binder.offset_idx].offset = descriptor_heap.current_offset;
                         descriptor_heap.IncrementOffset(_binder.size);

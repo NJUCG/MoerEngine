@@ -53,13 +53,10 @@ bool FindTask(uint dtid, out Moer::PrepareLightsTask task) {
 
   Moer::PolymorphicLightInfo light_info = (Moer::PolymorphicLightInfo)0;
 
-  // printf("is_prim_light %d\n", is_prim_light);
-
   if (is_prim_light) {
     uint prim_light_idx = task.instance_geo_idx & ~Moer::g_task_prim_light_bit;
     light_info = prim_lights[prim_light_idx];
-    // printf("directlight %f", Moer::PolymorphicLight::GetPower(light_info));
-    // printf("prim_light_idx %d\n", prim_light_idx);
+    uint type = Moer::GetLightType(light_info);
   } else {
     ArrayBuffer instance_data_array = ArrayBuffer(param.instance_data_handle);
     ArrayBuffer geom_data_array = ArrayBuffer(param.geometry_data_handle);
@@ -103,23 +100,22 @@ bool FindTask(uint dtid, out Moer::PrepareLightsTask task) {
 
     light_info = tri_light.ToLightInfo();
     // printf("mat_idx %d\n", param.material_data_handle);
-    // printf("emissive power %f \n",Moer::PolymorphicLight::GetPower(light_info));
+    // float power = Moer::PolymorphicLight::GetPower(light_info);
   }
 
   uint light_buf_idx = task.light_offset + tri_idx;
-  light_data[light_buf_idx] = light_info;
+  light_data[param.cur_light_offset + light_buf_idx] = light_info;
 
   if (task.prev_light_offset >= 0) {
     uint prev_light_buf_idx = task.prev_light_offset + tri_idx;
     light_index_mapping[prev_light_buf_idx + param.prev_light_offset] =
-        light_buf_idx + param.cur_light_offset;
+        light_buf_idx + param.cur_light_offset + 1;
 
     light_index_mapping[light_buf_idx + param.cur_light_offset] =
-        prev_light_buf_idx + param.prev_light_offset;
+        prev_light_buf_idx + param.prev_light_offset + 1;
   }
 
   float emissive_flux = Moer::PolymorphicLight::GetPower(light_info);
-  // printf("emissive_flux %f\n", emissive_flux);
   uint2 pdf_position = Math::LinearIndexToZCurve(light_buf_idx);
   local_light_pdf[pdf_position] = emissive_flux;
 }

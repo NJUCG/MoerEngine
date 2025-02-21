@@ -1,5 +1,7 @@
 #include "LightingPass.h"
 #include "Configs.h"
+#include "rhi/RHI.h"
+#include "rhi/RHICommand.h"
 #include "shaderheaders/shared/ShaderParameters.h"
 #include "shader/ShaderResourceManager.h"
 namespace Moer::Render {
@@ -9,6 +11,11 @@ namespace Moer::Render {
         presample_light_pipeline      = std::move(_manager.Compute<PresampleLightPipeline>("lighting/PresampleLight.hlsl"));
         presample_env_map_pipeline    = std::move(_manager.Compute<PresampleEnvMapPipeline>("lighting/PresampleEnvMap.hlsl"));
         presample_light_grid_pipeline = std::move(_manager.Compute<PresampleLightGridPipeline>("lighting/PresampleLightGrid.hlsl"));
+
+        generate_initial_sample_pipeline = std::move(_manager.Compute<GenerateInitialSamplePipeline>("hwrt/ReSTIRDI/GenerateInitialSamples.hlsl"));
+        temporal_resmaple_pipeline       = std::move(_manager.Compute<TemporalResmaplePipeline>("hwrt/ReSTIRDI/TemporalResampling.hlsl"));
+        // spatial_resample_pipeline        = std::move(_manager.Compute<SpatialResamplePipeline>("hwrt/ReSTIRDI/SpatialResample.hlsl"));
+        di_shade_sample_pipeline = std::move(_manager.Compute<DIShadeSamplePipeline>("hwrt/ReSTIRDI/Shading.hlsl"));
 
         auto& device    = RenderDevice::Get();
         resample_params = device.CreateBuffer<byte>(sizeof(ResampleConstants), EBufferUsageFlags::CONSTANT_BUFFER);
@@ -24,7 +31,6 @@ namespace Moer::Render {
 
         const ImportanceSamplingContext& is_ctx = _rt_ctx.is_ctx;
 
-        ResampleConstants constants{};
         constants.frame_idx            = _rt_ctx.is_ctx.GetFrameIdx();
         constants.main_view            = _rt_ctx.main_view;
         constants.prev_view            = _rt_ctx.prev_view;
@@ -34,6 +40,8 @@ namespace Moer::Render {
         constants.env_pdf_size         = _rt_ctx.env_pdf_tex ? _rt_ctx.env_pdf_tex->GetExtent().xy : uint2(0);
         constants.bindless_handles     = _rt_ctx.GetBindlessHandles();
 
+        // static constexpr uint offset_of_prev_view           = offsetof(ResampleConstants, prev_view);
+        // static constexpr uint offset_of_main_view           = offsetof(ViewParam, near_far);
         constants.di_params                                 = restir_di_runtime_config.common_params;
         constants.restir_di_params.initial_sample_params    = is_ctx.GetDIInitialSampleParams();
         constants.restir_di_params.temporal_resample_params = is_ctx.GetDITemporalResampleParams();
@@ -53,19 +61,21 @@ namespace Moer::Render {
         constants.visualize_cells         = 0;
 
         _cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)&constants, sizeof(ResampleConstants)), resample_params->GetView());
+        bool b_current_frame = _rt_ctx.b_current_frame;
 
-#define DI_BINDING_ARGS(ctx)               \
-    ctx.rt_scene->GetTlas(),               \
-        ctx.rt_scene->GetPrevTlas(),       \
-        resample_params,                   \
-        ctx.light_reservoir_buf,           \
-        ctx.frame_rt.diffuse_lighting,     \
-        ctx.frame_rt.specular_lighting,    \
-        ctx.frame_rt.gradients,            \
-        ctx.frame_rt.restir_luminance,     \
-        ctx.frame_rt.odd_diffuse_lighting, \
-        ctx.ris_buf,                       \
-        ctx.ris_light_data_buf,            \
+#define DI_BINDING_ARGS(ctx)                                                                 \
+    ctx.rt_scene->GetTlas(),                                                                 \
+        ctx.rt_scene->GetPrevTlas() ? ctx.rt_scene->GetPrevTlas() : ctx.rt_scene->GetTlas(), \
+        resample_params,                                                                     \
+        ctx.light_reservoir_buf,                                                             \
+        ctx.frame_rt.diffuse_lighting,                                                       \
+        ctx.frame_rt.specular_lighting,                                                      \
+        ctx.frame_rt.temporal_sample_pos,                                                    \
+        ctx.frame_rt.gradients,                                                              \
+        b_current_frame ? ctx.frame_rt.restir_luminance : ctx.frame_rt.prev_luminance,       \
+        ctx.frame_rt.prev_diffuse_lighting,                                                  \
+        ctx.ris_buf,                                                                         \
+        ctx.ris_light_data_buf,                                                              \
         scene.GetBindlessArray()
 
         auto div_ceil = [](uint _a, uint _b) -> uint {
@@ -91,6 +101,25 @@ namespace Moer::Render {
             _cmd_list.Compute(presample_light_grid_pipeline,
                               DI_BINDING_ARGS(_rt_ctx))
                 .Dispatch(uint3(dispatch_size, 1), "PresampleLightGrid");
+        }
+
+        //direct lighting
+        {
+            uint2 dispatch_size = _rt_ctx.frame_rt.diffuse_lighting->GetExtent().xy;
+            dispatch_size.x     = div_ceil(dispatch_size.x, DI_SCREEN_TILE_SIZE);
+            dispatch_size.y     = div_ceil(dispatch_size.y, DI_SCREEN_TILE_SIZE);
+
+            _cmd_list.Compute(generate_initial_sample_pipeline,
+                              DI_BINDING_ARGS(_rt_ctx))
+                .Dispatch(uint3(dispatch_size, 1), "GenerateInitialSample");
+
+            _cmd_list.Compute(temporal_resmaple_pipeline,
+                              DI_BINDING_ARGS(_rt_ctx))
+                .Dispatch(uint3(dispatch_size, 1), "TemporalResample");
+
+            _cmd_list.Compute(di_shade_sample_pipeline,
+                              DI_BINDING_ARGS(_rt_ctx))
+                .Dispatch(uint3(dispatch_size, 1), "ShadeSample");
         }
 #undef DI_BINDING_ARGS
     }

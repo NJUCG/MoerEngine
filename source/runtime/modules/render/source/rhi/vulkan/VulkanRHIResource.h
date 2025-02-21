@@ -447,10 +447,10 @@ namespace Moer::Render {
         //descriptor buffer index
         uint desc_idx;
     };
-
+    using TBinder = std::variant<VulkanDescriptorSetBinder, VulkanBindlessSetArray, VulkanBindlessSetImage, VulkanBindlessSetSampler>;
     struct VulkanPipelineParamBinder {
-        UnorderedMap<uint, std::variant<VulkanDescriptorSetBinder, VulkanBindlessSetArray, VulkanBindlessSetImage, VulkanBindlessSetSampler>> set_binders;
-        VkPushConstantsInfoKHR                                                                                                                push_constants_info;
+        UnorderedMap<uint, TBinder> set_binders;
+        VkPushConstantsInfoKHR      push_constants_info;
         //descriptor buffer bind template
         Array<VkDescriptorBufferBindingInfoEXT> desc_buffers;
         //set offsets in descriptor buffers

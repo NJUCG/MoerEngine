@@ -332,8 +332,9 @@ namespace Moer::Render {
         bool read_layout = _layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL || _layout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         if (read_layout) return false;
 
-        bool read_access = _access & VK_ACCESS_2_SHADER_READ_BIT || _access & VK_ACCESS_2_SHADER_SAMPLED_READ_BIT || _access & VK_ACCESS_2_TRANSFER_READ_BIT;
-        if (read_access) return false;
+        bool read_access  = _access & VK_ACCESS_2_SHADER_READ_BIT || _access & VK_ACCESS_2_SHADER_SAMPLED_READ_BIT || _access & VK_ACCESS_2_TRANSFER_READ_BIT;
+        bool write_access = _access & VK_ACCESS_2_SHADER_WRITE_BIT || _access & VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT || _access & VK_ACCESS_2_MEMORY_WRITE_BIT || _access & VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        if (read_access && !write_access) return false;
         return true;
         // switch (layout) {
         //     case VK_IMAGE_LAYOUT_GENERAL:
@@ -611,7 +612,7 @@ namespace Moer::Render {
 
             if (auto it = buffer_states.find(buffer); it != buffer_states.end()) {
                 auto& state = it->second;
-                if (state.src_access == state.dst_access && state.src_stage == state.dst_stage) {
+                if (((state.dst_access & VK_ACCESS_2_SHADER_WRITE_BIT) == 0) && state.src_access == state.dst_access && state.src_stage == state.dst_stage) {
                     state.dst_access       = VK_ACCESS_2_NONE;
                     state.dst_stage        = VK_PIPELINE_STAGE_2_NONE;
                     state.src_queue_family = VK_QUEUE_FAMILY_IGNORED;
@@ -644,7 +645,7 @@ namespace Moer::Render {
         for (VulkanTexture* texture : pending_textures) {
             if (auto it = texture_states.find(texture); it != texture_states.end()) {
                 auto& state = it->second;
-                if (((state.dst_access | VK_ACCESS_2_SHADER_WRITE_BIT) == 0) && state.src_access == state.dst_access && state.src_stage == state.dst_stage && state.src_layout == state.dst_layout && exported_textures.find(texture) == exported_textures.end()) {
+                if (((state.dst_access & VK_ACCESS_2_SHADER_WRITE_BIT) == 0) && state.src_access == state.dst_access && state.src_stage == state.dst_stage && state.src_layout == state.dst_layout && exported_textures.find(texture) == exported_textures.end()) {
                     state.dst_access       = VK_ACCESS_2_NONE;
                     state.dst_stage        = VK_PIPELINE_STAGE_2_NONE;
                     state.dst_layout       = VK_IMAGE_LAYOUT_UNDEFINED;

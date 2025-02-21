@@ -5,13 +5,16 @@
 #define DI_BINDING_SLOT 0
 #endif
 
+#include <shared/ShaderParameters.h>
+
 #include <framework/Bindless.hlsl>
 #include <framework/Common.hlsl>
-#include <framework/DI/Reservoirs.hlsli>
 #include <framework/Math.hlsli>
 #include <hwrt/GBufferUtils.hlsli>
 #include <shared/Geometry.h>
 #include <shared/utils/MoerMath.hlsli>
+
+#define USE_RAYQUERY 1
 
 [[vk::binding(0, DI_BINDING_SLOT)]] RaytracingAccelerationStructure tlas;
 [[vk::binding(1, DI_BINDING_SLOT)]] RaytracingAccelerationStructure prev_tlas;
@@ -24,24 +27,31 @@
     light_reservoirs;
 [[vk::binding(4, DI_BINDING_SLOT)]] RWTexture2D<float4> rw_diffuse_lighting;
 [[vk::binding(5, DI_BINDING_SLOT)]] RWTexture2D<float4> rw_specular_lighting;
-[[vk::binding(6, DI_BINDING_SLOT)]] RWTexture2DArray<float4> rw_gradients;
-[[vk::binding(7, DI_BINDING_SLOT)]] RWTexture2D<float2> rw_restir_luminance;
+[[vk::binding(6, DI_BINDING_SLOT)]] RWTexture2D<int2> rw_temporal_sample_pos;
+[[vk::binding(7, DI_BINDING_SLOT)]] RWTexture2DArray<float4> rw_gradients;
+[[vk::binding(8, DI_BINDING_SLOT)]] RWTexture2D<float2> rw_restir_luminance;
 
-[[vk::binding(8,
+[[vk::binding(9,
               DI_BINDING_SLOT)]] RWTexture2D<float4> rw_diffuse_lighting_prev;
 
-[[vk::binding(9, DI_BINDING_SLOT)]] RWBuffer<float2> rw_ris_buffer;
-[[vk::binding(10, DI_BINDING_SLOT)]] RWBuffer<uint4> rw_ris_light_data_buffer;
+[[vk::binding(10, DI_BINDING_SLOT)]] RWBuffer<float2> rw_ris_buffer;
+[[vk::binding(11, DI_BINDING_SLOT)]] RWBuffer<uint4> rw_ris_light_data_buffer;
 
 BINDLESS_BINDINGS(3, 2, 4, 5)
 #include <framework/Material.hlsl>
 #include <framework/PolymorphicLight.hlsli>
 
+#include <framework/RaytracingCommon.hlsli>
+
+#ifndef DI_LIGHT_RESERVOIR_BUFFER
+#define DI_LIGHT_RESERVOIR_BUFFER light_reservoirs
+#endif
+
 namespace Moer {
 
 typedef Math::Rng::Hash RandomState;
 
-float3 DiffuseTerm(float3 _v, float3 _n, float3 _l, float _roughness) {
+float DiffuseTerm(float3 _v, float3 _n, float3 _l, float _roughness) {
   float nol = saturate(dot(_n, _l));
   float nov = saturate(dot(_n, _v));
   float voh = saturate(dot(_v, _l));
@@ -183,7 +193,10 @@ struct Surface {
       s = SpecularTerm(v, l, n, roughness, specular_f0);
     }
     float3 reflect_radiance = (d * diffuse_albedo + s) * _sample.radiance;
-
+    // if(_sample.type == 4){
+    //   printf("d: %f %f %f reflect_radiance %f target pdf %f\n", d.x, d.y,
+    //   d.z, STL::Color::Luminance(reflect_radiance), _sample.solid_angle_pdf);
+    // }
     return STL::Color::Luminance(reflect_radiance) / _sample.solid_angle_pdf;
   }
 
@@ -205,8 +218,8 @@ struct Surface {
     return res;
   }
 
-  void GetLightDirDistance(LightSample _light, out float3 _dir,
-                           out float _distance) {
+  void GetLightDirAndDist(LightSample _light, out float3 _dir,
+                          out float _distance) {
 
     if (_light.type == EPolyLightType::ELEnv) {
       _dir = -_light.n;
@@ -229,7 +242,26 @@ struct Surface {
     ray.TMax = max(_x_offset, length(l) - 2 * _x_offset);
     return ray;
   }
+
+  void EvalBrdf(float3 _sample_pos, out float _diffuse, out float3 _specular) {
+    float3 l = _sample_pos - x;
+    _diffuse = DiffuseTerm(v, n, normalize(l), roughness);
+    if (roughness == 0.f) {
+      _specular = 0.f;
+    } else {
+      _specular = SpecularTerm(v, normalize(l), n, roughness, specular_f0);
+    }
+  }
 };
+
+// prev to current & current to prev
+int GetMappedLightIndex(int _cur_light_idx) {
+  ArrayBuffer light_idx_buf =
+      ArrayBuffer(resample_params.bindless_handles.light_index);
+
+  uint mapped = light_idx_buf.Load<uint>(_cur_light_idx);
+  return int(mapped) - 1;
+}
 
 Surface GetGBufferSurface(int2 _pixel_pos, ViewParam _view_param,
                           Texture2D<float> _gbuffer_depth,
@@ -258,7 +290,7 @@ Surface GetGBufferSurface(int2 _pixel_pos, ViewParam _view_param,
   return s;
 }
 
-template <bool _prev_frame = false> Surface GetGBufferSurface(int2 _pixel_pos) {
+Surface GetGBufferSurface(int2 _pixel_pos, const bool _prev_frame = false) {
 
   TextureHandle gbuffer_depth;
   TextureHandle gbuffer_normal;
@@ -299,7 +331,7 @@ template <bool _prev_frame = false> Surface GetGBufferSurface(int2 _pixel_pos) {
                            gbuffer_specular_roughness_tex);
 }
 
-float2 GetEnvironmentMapXYFromDir(float3 _dir) {
+float2 GetEnvironmentMapUVFromDir(float3 _dir) {
   float2 uv = Math::DirToEquirectangularUV(_dir);
   uv.x -= resample_params.scene_params.env_map_rotation;
   uv = frac(uv);
@@ -310,7 +342,7 @@ float EvalEnvMapPdf(float3 _dir) {
   if (!resample_params.scene_params.enable_env_map) {
     return 1.f;
   }
-  float2 uv = GetEnvironmentMapXYFromDir(_dir);
+  float2 uv = GetEnvironmentMapUVFromDir(_dir);
   uint2 pdf_tex_size = resample_params.env_pdf_size;
   uint2 texel_pos = uint2(uv * float2(pdf_tex_size));
 
@@ -417,8 +449,7 @@ bool RaytraceLocalLightVisibility(float3 _origin, float3 _direction,
 #if USE_RAYQUERY
   RayQuery<RAY_FLAG_CULL_NON_OPAQUE | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES>
       ray_query;
-  ray_query.TraceRayInline(tlas, RAY_FLAG_NONE, INSTANCE_FLAG_GEOMETRY_ALL,
-                           ray_desc);
+  ray_query.TraceRayInline(tlas, RAY_FLAG_NONE, RTVM_ALL, ray_desc);
   ray_query.Proceed();
 
   b_hit = ray_query.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
@@ -442,14 +473,15 @@ bool RaytraceConservativeVisibility(RaytracingAccelerationStructure _tlas,
   RayDesc ray = _surface.SetupVisibilityRay(_sample_pos);
 
   bool b_visible = false;
-
 #if USE_RAYQUERY
-  RayQuery<RAY_FLAG_CULL_NON_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH>
+  RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES |
+           RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH>
       ray_query;
 
-  ray_query.TraceRayInline(_tlas, RAY_FLAG_NONE, RTVM_OPAQUE, ray);
+  ray_query.TraceRayInline(_tlas, RAY_FLAG_NONE, RTVM_ALL, ray);
   ray_query.Proceed();
-  b_visible = ray_query.CommittedStatus() == COMMITTED_NOTHING;
+
+  b_visible = (ray_query.CommittedStatus() == COMMITTED_NOTHING);
 
 #else
 #endif
@@ -466,6 +498,114 @@ bool GetPreviousConservativeVisibility(Surface _surface, float3 _sample_pos) {
     return RaytraceConservativeVisibility(tlas, _surface, _sample_pos);
   else
     return RaytraceConservativeVisibility(prev_tlas, _surface, _sample_pos);
+}
+
+struct RayPayload {
+  float3 throughput;
+  float committed_ray_t;
+  uint instance_id;
+  uint geom_id;
+  uint prim_id;
+  float2 barycentrics;
+  bool front_face;
+};
+
+bool EvalTransparentMaterial(uint _instance_id, uint _geom_id, uint _tri_id,
+                             float2 _ray_barycentrics,
+                             inout float3 _throughput) {
+  ArrayBuffer instance_data_array =
+      ArrayBuffer(resample_params.bindless_handles.instance_data);
+  ArrayBuffer geom_data_array =
+      ArrayBuffer(resample_params.bindless_handles.geom_data);
+  ArrayBuffer material_data_array =
+      ArrayBuffer(resample_params.bindless_handles.material_data);
+  Moer::GeometryRecord geom = Moer::GetGeometryRecordFrom(
+      _instance_id, _geom_id, _tri_id, _ray_barycentrics, Moer::EGA_UV,
+      instance_data_array.GetByteAddressBuffer(),
+      geom_data_array.GetByteAddressBuffer(),
+      material_data_array.GetByteAddressBuffer());
+
+  Moer::MaterialSample mat = Moer::SampleGeometryMaterial(
+      geom, 0.f, 0.f, 0.f, Moer::EMA_BaseColor | Moer::EMA_Transmission);
+
+  // bool alpha_masked = mat.opacity >= gs.material.alpha_cutoff;
+
+  // if (gs.material.domain == MaterialDomain_AlphaTested)
+  //     return alphaMask;
+
+  // if (gs.material.domain == MaterialDomain_AlphaBlended)
+  // {
+  //     throughput *= (1.0 - ms.opacity);
+  //     return false;
+  // }
+
+  // if (gs.material.domain == MaterialDomain_Transmissive ||
+  //     (gs.material.domain == MaterialDomain_TransmissiveAlphaTested &&
+  //     alphaMask) || gs.material.domain ==
+  //     MaterialDomain_TransmissiveAlphaBlended)
+  // {
+  //     throughput *= ms.transmission;
+
+  //     if (ms.hasMetalRoughParams)
+  //         throughput *= (1.0 - ms.metalness) * ms.baseColor;
+
+  //     if (gs.material.domain == MaterialDomain_TransmissiveAlphaBlended)
+  //         throughput *= (1.0 - ms.opacity);
+
+  //     return all(throughput == 0);
+  // }
+  _throughput *= (1.f - mat.opacity);
+  return false;
+}
+
+float3 GetFinalVisibility(RaytracingAccelerationStructure _tlas,
+                          Surface _surface, float3 _sample_pos) {
+  RayDesc ray = _surface.SetupVisibilityRay(_sample_pos);
+
+  uint instance_mask = RTVM_ALL;
+  uint ray_flags = RAY_FLAG_NONE;
+
+  RayPayload payload = (RayPayload)0;
+  payload.instance_id = ~0u;
+  payload.throughput = 1.f;
+
+  RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> ray_query;
+
+  ray_query.TraceRayInline(_tlas, ray_flags, instance_mask, ray);
+  while (ray_query.Proceed()) {
+    if (ray_query.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE) {
+      if (EvalTransparentMaterial(ray_query.CandidateInstanceID(),
+                                  ray_query.CandidateGeometryIndex(),
+                                  ray_query.CandidatePrimitiveIndex(),
+                                  ray_query.CandidateTriangleBarycentrics(),
+                                  payload.throughput)) {
+        ray_query.CommitNonOpaqueTriangleHit();
+      }
+    }
+  }
+  if (ray_query.CandidateType() == COMMITTED_TRIANGLE_HIT) {
+    payload.instance_id = ray_query.CommittedInstanceID();
+    payload.geom_id = ray_query.CommittedGeometryIndex();
+    payload.prim_id = ray_query.CommittedPrimitiveIndex();
+    payload.barycentrics = ray_query.CommittedTriangleBarycentrics();
+    payload.committed_ray_t = ray_query.CommittedRayT();
+    payload.front_face = ray_query.CommittedTriangleFrontFace();
+  }
+
+  if (payload.instance_id == ~0u)
+    return payload.throughput.xyz;
+  else
+    return 0.f;
+}
+
+void PermutationSampling(inout int2 _prev_pixel_pos, uint _rnd) {
+  int2 offset = int2(_rnd & 3, (_rnd >> 2) & 3);
+  _prev_pixel_pos += offset;
+
+  _prev_pixel_pos.x ^= 3;
+  _prev_pixel_pos.y ^= 3;
+
+  _prev_pixel_pos -= offset;
 }
 } // namespace Moer
 

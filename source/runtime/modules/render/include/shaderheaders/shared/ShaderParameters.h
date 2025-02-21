@@ -30,6 +30,7 @@ namespace Moer {
     //local light initial sample mode
     static CONST uint s_di_local_light_sample_mode_uniform   = 0;
     static CONST uint s_di_local_light_sample_mode_power_ris = 1;//power based ris
+    static CONST uint s_di_local_light_sample_mode_grid      = 2;//presample light grid
 
     static CONST uint s_invalid_light_idx = 0xffffffffu;
 
@@ -39,6 +40,8 @@ namespace Moer {
     static CONST uint s_vis_mode_diffuse_lighting  = 3;
     static CONST uint s_vis_mode_specular_lighting = 4;
     static CONST uint s_vis_mode_grid              = 5;
+
+#define DI_SCREEN_TILE_SIZE 16
 
 #ifdef __cplusplus
     enum RTVisibleMask : uint8 {
@@ -66,6 +69,7 @@ namespace Moer {
         EFC_GRID,
         EFC_MATERIAL,
         EFC_INSTANCE,
+        EFC_POSITION,
         EFC_NUM
     };
 
@@ -89,13 +93,6 @@ namespace Moer {
     struct GBufferConstants {
         ViewParam main_view;
         ViewParam prev_view;
-    };
-
-    struct DIParams {
-        uint neigbor_offset_mask;//spatial reuse
-        uint padding;
-        uint padding1;
-        uint padding2;
     };
 
     struct DIReservoirParams {
@@ -130,7 +127,7 @@ namespace Moer {
         uint gbuffer_prev_diffuse_albedo;
         uint gbuffer_prev_specular_roughness;
 
-        uint gbuffer_prev_luminance;
+        uint restir_prev_luminance;
         uint motion;
         uint denoiser_normal_roughness;
 
@@ -150,7 +147,7 @@ namespace Moer {
         uint env_pdf;
 
         uint env_map;
-        uint padding0;
+        uint restir_luminance;
         uint padding1;
         uint padding2;
     };

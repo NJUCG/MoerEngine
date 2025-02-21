@@ -85,12 +85,12 @@ namespace Moer::Render {
         float max_radiance = Max(Max(_color.x, _color.y), _color.z);
         if (max_radiance < 0.f) return;
 
-        float log_radiance     = (std::log2f(max_radiance) - g_poly_morphic_light_min_log2_radiance) / (g_poly_morphic_light_max_log2_radiance - g_poly_morphic_light_min_log2_radiance) * 65535.f;
+        float log_radiance     = (std::log2f(max_radiance) - g_poly_morphic_light_min_log2_radiance) / (g_poly_morphic_light_max_log2_radiance - g_poly_morphic_light_min_log2_radiance);
         log_radiance           = std::clamp(log_radiance, 0.f, 1.f);
         uint packed_radiance   = std::min(uint(ceilf(log_radiance * 65534.f)) + 1, 0xffffu);
         uint unpacked_radiance = std::exp2f((float(packed_radiance - 1) / 65534.f) * (g_poly_morphic_light_max_log2_radiance - g_poly_morphic_light_min_log2_radiance) + g_poly_morphic_light_min_log2_radiance);
 
-        _info.color_type_flags |= FloaT3ToR8G8B8Unorm(_color.x / unpacked_radiance, _color.y / unpacked_radiance, _color.z / unpacked_radiance) << 8;
+        _info.color_type_flags |= FloaT3ToR8G8B8Unorm(_color.x / unpacked_radiance, _color.y / unpacked_radiance, _color.z / unpacked_radiance);
         _info.log_radiance = packed_radiance;
     }
 
@@ -126,7 +126,7 @@ namespace Moer::Render {
         switch (_light.GetType()) {
             case Moer::ELightComponentType::DIRECTIONAL: {
                 DirectionalLightComponent* dir_light             = static_cast<DirectionalLightComponent*>(&_light);
-                float                      half_angluar_size_rad = Angle::DegreeToRadian(dir_light->angluar_size);
+                float                      half_angluar_size_rad = Angle::DegreeToRadian(std::max(dir_light->angluar_size, 0.1f));
                 float                      solid_angle           = 2 * PI * (1 - cos(half_angluar_size_rad));
                 float3                     radiance              = dir_light->GetColor() * dir_light->GetIntensity() / std::max(solid_angle, 1e-6f);
 
@@ -189,6 +189,7 @@ namespace Moer::Render {
 
         uint idx = 0;
 
+        uint num_prim_lights = 0;
         scene.ForEach([&](Entity _entity) {
             {
                 const MeshInfo& mesh_info   = *RenderableManager::Get().GetMeshInfo(_entity).get();
@@ -201,7 +202,7 @@ namespace Moer::Render {
                     const MeshGeometry&        geom_info         = *mesh_info.geometries[i];
                     float3                     emissive          = mat_instance->GetParameter<float3>("emissive_factor");
                     uint64                     instance_geo_hash = 0;
-                    HashCombine(instance_geo_hash, &_entity, i);
+                    HashCombine(instance_geo_hash, uint64(_entity.getId()), i);
 
                     if (emissive == float3(0.f)) {
                         instance_light_buffer_offsets.erase(instance_geo_hash);
@@ -233,7 +234,7 @@ namespace Moer::Render {
         std::sort(light_entities.begin(), light_entities.end(), [](Entity _lhs, Entity _rhs) {
             return LightPriority(LightComponentManager::Get().Get(_lhs)) < LightPriority(LightComponentManager::Get().Get(_rhs));
         });
-
+        num_prim_lights               = light_buf_offset;
         uint num_finite_prim_lights   = 0;
         uint num_infinite_prim_lights = 0;
         uint num_is_env_lights        = 0;
@@ -276,7 +277,7 @@ namespace Moer::Render {
         }
 
         _cmd_list.ClearResource(_rt_ctx.light_mapping_buf->GetView(), 0u);
-        _cmd_list.ClearResource(_rt_ctx.local_light_pdf_tex->GetView(), float4(0.f));
+        _cmd_list.ClearResource(_rt_ctx.local_light_pdf_tex->GetView(0, _rt_ctx.local_light_pdf_tex->GetNumMips()), float4(0.f));
 
         PrepareLightsParams param{};
         param.num_tasks            = tasks.size();
@@ -290,12 +291,12 @@ namespace Moer::Render {
 
         _rt_ctx.is_ctx.SetLightBufferParams(
             param.cur_light_offset,
-            num_finite_prim_lights,
+            num_finite_prim_lights + num_prim_lights,
             num_infinite_prim_lights,
             num_is_env_lights);
 
         _cmd_list.Compute(prepare_light_pipeline, param, _rt_ctx.light_data_buf->GetView(), _rt_ctx.light_mapping_buf->GetView(), _rt_ctx.local_light_pdf_tex->GetView(), _rt_ctx.prim_light_buf->GetView(), _rt_ctx.task_buf->GetView(), scene.GetBindlessArray())
-            .Dispatch(uint3((light_buf_offset + 255) / 256, 1, 1));
+            .Dispatch(uint3((light_buf_offset + 255) / 256, 1, 1), "PrepareLights");
 
         _rt_ctx.sd_utils.GenerateMips(_cmd_list, _rt_ctx.local_light_pdf_mips);
         // device.GetCommandQueue(EQueueType::Graphics).Execute(_cmd_list.Submit());

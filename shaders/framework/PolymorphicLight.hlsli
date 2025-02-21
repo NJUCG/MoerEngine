@@ -9,7 +9,7 @@
 namespace Moer {
 
 static const float s_light_epsilon = 1e-10f;
-static const float s_light_max_distance = 1e6f;
+static const float s_light_max_distance = 50000.f;
 
 #pragma region[ light shaping ]
 
@@ -142,7 +142,7 @@ void PackLightColor(inout PolymorphicLightInfo _info, float3 _radiance) {
         saturate((log2(intensity) - g_poly_morphic_light_min_log2_radiance) /
                  (g_poly_morphic_light_max_log2_radiance -
                   g_poly_morphic_light_min_log2_radiance));
-    uint packed_radiance = min(uint(ceil(log_radiance * 65534.f) + 1), 0xffff);
+    uint packed_radiance = min(uint(ceil(log_radiance * 65534.f)) + 1, 0xffff);
 
     float unpacked_radiance = UnpackLightRadiance(packed_radiance);
     float3 normalized_radiance = saturate(_radiance / unpacked_radiance);
@@ -507,7 +507,6 @@ struct RectLight {
 
     float approx_solid_angle = GetSurfaceArea() / square(dist);
     approx_solid_angle = min(approx_solid_angle, 2 * PI);
-
     return approx_solid_angle * STL::Color::Luminance(radiance);
   }
 
@@ -542,7 +541,7 @@ struct DirectionalLight {
     const float3 disk_dir = direction + t * disk_sample.x * sin_half_angle +
                             b * disk_sample.y * sin_half_angle;
 
-    const float3 sample_pos = _vp - disk_dir * s_light_max_distance;
+    const float3 sample_pos = _vp - disk_dir * s_light_max_distance * 0.6f;
     const float3 sample_normal = disk_dir;
 
     ls.pos = sample_pos;
@@ -595,7 +594,7 @@ struct TriangleLight {
     l2p /= dist;
 
     const float area_pdf = 1.0f / area;
-    const float cos_theta = dot(l2p, -_sample_normal);
+    const float cos_theta = saturate(dot(l2p, -_sample_normal));
 
     return area_pdf * square(dist) / cos_theta;
   }
@@ -604,17 +603,16 @@ struct TriangleLight {
 
   float GetVolumeWeight(in const float3 _center, in const float _radius) {
     float dist = dot(_center - v0, normal);
-
     if (dist < -_radius) {
       return 0.0f;
     }
+    float3 bary_center = v0 + (edge1 + edge2) / 3.0f;
 
-    dist = length(_center - v0);
+    dist = length(bary_center - _center);
     dist = AvgDistanceToVolume(dist, _radius);
 
     float approx_solid_angle = area / square(dist);
     approx_solid_angle = min(approx_solid_angle, 2 * PI);
-
     return approx_solid_angle * STL::Color::Luminance(radiance);
   }
 
@@ -626,7 +624,7 @@ struct TriangleLight {
     tl.edge2 = Math::OctToNdirUnorm32(_info.direction2) *
                f16tof32(_info.scalars >> 16);
     tl.radiance = UnpackLightColor(_info);
-    tl.normal = normalize(cross(tl.edge1, tl.edge2));
+    tl.normal = cross(tl.edge1, tl.edge2);
 
     float normal_length = length(tl.normal);
     if (normal_length > 0.0f) {
@@ -636,7 +634,6 @@ struct TriangleLight {
       tl.area = 0.0f;
       tl.normal = 0.0f;
     }
-
     return tl;
   }
 

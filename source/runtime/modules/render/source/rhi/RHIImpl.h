@@ -652,7 +652,24 @@ namespace Moer::Render {
 
         void IterateArgs(std::function<void(const TArg&, ParamInfoFlags _flag)> _func) const {
             for (int i = 0; i < args.args.size(); i++) {
-                std::visit([&_func, i, this](const auto& _arg) { _func(_arg, pipeline->binding_infos[i]); }, args.args[i]);
+                if (pipeline->valid_bits & (1 << i))
+                    _func(args.args[i], pipeline->binding_infos[i]);
+            }
+        }
+
+        void IterateArgs(std::function<void(const TArg&, uint _idx)> _func, std::function<void(const TArg&, uint _idx)> _bdls_post_func) const {
+            int bdls_idx = -1;
+            for (int i = 0; i < args.args.size(); i++) {
+                if (std::holds_alternative<BindlessArrayRef>(args.args[i])) {
+                    bdls_idx = i;
+                    continue;
+                    ;
+                }
+                _func(args.args[i], i);
+            }
+
+            if (bdls_idx != -1) {
+                _bdls_post_func(args.args[bdls_idx], bdls_idx);
             }
         }
         const auto& VertexBuffers() const {
@@ -688,9 +705,25 @@ namespace Moer::Render {
         const auto& Args() const { return args; }
         auto&       Pipeline() const { return *pipeline; }
         auto        Param() const { return param; }
-        void        IterateArgs(std::function<void(const TArg&, ParamInfoFlags _flag)> _func) const {
+        // void        IterateArgs(std::function<void(const TArg&, ParamInfoFlags _flag)> _func) const {
+        //     for (int i = 0; i < args.args.size(); i++) {
+        //         if (pipeline->valid_bits & (1 << i))
+        //             _func(args.args[i], pipeline->binding_infos[i]);
+        //     }
+        // }
+
+        void IterateArgs(std::function<void(const TArg&, uint _idx)> _func, std::function<void(const TArg&, uint _idx)> _bdls_post_func) const {
+            int bdls_idx = -1;
             for (int i = 0; i < args.args.size(); i++) {
-                std::visit([&_func, i, this](const auto& _arg) { _func(_arg, pipeline->binding_infos[i]); }, args.args[i]);
+                if (std::holds_alternative<BindlessArrayRef>(args.args[i])) {
+                    bdls_idx = i;
+                    continue;
+                }
+                _func(args.args[i], i);
+            }
+
+            if (bdls_idx != -1) {
+                _bdls_post_func(args.args[bdls_idx], bdls_idx);
             }
         }
     };
@@ -717,7 +750,8 @@ namespace Moer::Render {
         auto        Param() const { return param; }
         void        IterateArgs(const std::function<void(const TArg&, ParamInfoFlags _flag)>& _func) const {
             for (int i = 0; i < args.args.size(); i++) {
-                std::visit([&_func, i, this](const auto& _arg) { _func(_arg, pipeline.binding_infos[i]); }, args.args[i]);
+                if (pipeline.valid_bits & (1 << i))
+                    std::visit([&_func, i, this](const auto& _arg) { _func(_arg, pipeline.binding_infos[i]); }, args.args[i]);
             }
         }
     };

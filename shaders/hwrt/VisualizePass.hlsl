@@ -14,6 +14,7 @@
 float3 ViewdepthToWorldPos(Moer::ViewParam _view, int2 _pixel_pos,
                            float _view_depth) {
   float2 uv = (float2(_pixel_pos) + 0.5f) * _view.inv_rect;
+
   float4 clip_pos = float4(uv.x * 2.f - 1.f, 1.f - uv.y * 2.f, 0.5f, 1.f);
   float4 view_pos = mul(_view.clip2view, clip_pos);
   view_pos.xy /= view_pos.z;
@@ -30,7 +31,7 @@ void VisualizeGrid(uint2 _pixel_pos, out float4 _final_color) {
   float3 dbg_color =
       Moer::Grid::GetVisualizeGridColor(param.grid_params, world_pos);
   _final_color *= float4(dbg_color, 1.f);
-  // _final_color = float4(dbg_color, 1.f);
+  _final_color = float4(dbg_color, 1.f);
 }
 
 [numthreads(16, 16, 1)] void main(uint2 dtid
@@ -61,6 +62,9 @@ void VisualizeGrid(uint2 _pixel_pos, out float4 _final_color) {
     break;
   case Moer::EFC_GRID:
     VisualizeGrid(pixel_pos, final_color);
+    break;
+  case Moer::EFC_POSITION:
+    final_color = float4(ViewdepthToWorldPos(param.main_view, pixel_pos, view_depth[pixel_pos]), 1.f);
     break;
   }
   output[pixel_pos] = final_color;

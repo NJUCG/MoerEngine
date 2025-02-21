@@ -1,7 +1,6 @@
 
 #ifndef MOER_DI_PRESAMPLE_FUNCTIONS_HLSLI
 #define MOER_DI_PRESAMPLE_FUNCTIONS_HLSLI
-
 #include <framework/DI/GridCommon.hlsli>
 #include <framework/DI/LightSelection.hlsli>
 namespace Moer {
@@ -11,14 +10,14 @@ namespace SampleFunc {
 void SamplePdfMip(inout RandomState _rng, Texture2D<float> _pdf_tex,
                   uint2 tex_size, out uint2 _pos, out float _pdf) {
   int last_mip = max(0, int(floor(log2(float(tex_size.x)))));
-
+  //   printf("last_mip: %d\n", last_mip);
   _pos = uint2(0, 0);
   _pdf = 1.f;
 
   // sample from last mip to first mip
   for (int mip = last_mip; mip >= 0; mip--) {
 
-    _pos >>= 1;
+    _pos <<= 1;
 
     float4 pdf_samples =
         float4(max(0.f, _pdf_tex.Load(int3(_pos.x, _pos.y, mip))),
@@ -64,9 +63,9 @@ void SampleLocalLights(inout RandomState _rng, Texture2D<float> _pdf_tex,
   uint2 tex_pos;
   float pdf;
   SamplePdfMip(_rng, _pdf_tex, _tex_size, tex_pos, pdf);
-
   uint light_idx = Math::ZCurveToLinearIndex(tex_pos);
-  uint ris_idx = _ris_params.tile_size * _tile_idx + _sample_in_tile;
+  uint ris_idx = _ris_params.buffer_offset + _ris_params.tile_size * _tile_idx +
+                 _sample_in_tile;
 
   float inv_pdf = 0.f;
   bool compact = false;
@@ -74,7 +73,6 @@ void SampleLocalLights(inout RandomState _rng, Texture2D<float> _pdf_tex,
   light_idx += _local_light_region.first_light_idx;
   if (pdf > 0.f) {
     inv_pdf = 1.f / pdf;
-
     PolymorphicLightInfo light_info = LoadLightInfo(light_idx);
     compact = StoreCompactLightInfo(ris_idx, light_info);
   }
@@ -82,7 +80,6 @@ void SampleLocalLights(inout RandomState _rng, Texture2D<float> _pdf_tex,
   if (compact) {
     light_idx |= s_di_light_compact_bit;
   }
-
   rw_ris_buffer[ris_idx] = uint2(light_idx, asuint(inv_pdf));
 }
 
@@ -99,9 +96,9 @@ void SampleEnvMap(inout RandomState _rng, Texture2D<float> _pdf_tex,
 
   uint packed_uv =
       uint(saturate(uv.x) * 0xffff) | (uint(saturate(uv.y) * 0xffff) << 16);
-
   float inv_pdf = pdf > 0.f ? 1.f / pdf : 0.f;
-  uint ris_idx = _ris_params.tile_size * _tile_idx + _sample_in_tile;
+  uint ris_idx = _ris_params.buffer_offset + _ris_params.tile_size * _tile_idx +
+                 _sample_in_tile;
 
   rw_ris_buffer[ris_idx] = uint2(packed_uv, asuint(inv_pdf));
 }
@@ -142,11 +139,10 @@ void SampleLocalLightsForGrid(inout RandomState _rng,
       1.f / float(_grid_params.common_params.num_build_samples);
 
   DI::LocalLightSelectionContext ctx;
-  switch (_grid_params.common_params.local_light_sampling_mode) {
+  switch (_grid_params.common_params.local_light_sample_mode) {
   case s_di_local_light_sample_mode_power_ris:
     ctx = DI::LocalLightSelectionContext::CreatePowerRIS(_rng, _ris_params);
     break;
-
   default:
     ctx = DI::LocalLightSelectionContext::CreateUniform(_local_light_region);
     break;
@@ -188,7 +184,6 @@ void SampleLocalLightsForGrid(inout RandomState _rng,
   if (compact) {
     seleted |= s_di_light_compact_bit;
   }
-
   rw_ris_buffer[ris_idx] = uint2(seleted, asuint(weight));
 }
 

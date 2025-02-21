@@ -98,8 +98,8 @@ int NdirToOctUnorm32(float3 _v) {
   return int(p.x * 65535.f) | (int(p.y * 65535.f) << 16);
 }
 
-float3 OctToNdirUnorm32(int _p) {
-  float2 p = float2(_p & 0xffff, _p >> 16) * (1.f / 65535.f);
+float3 OctToNdirUnorm32(uint _p) {
+  float2 p = float2(float(_p & 0xffff), float(_p >> 16)) * (1.f / 65535.f);
   return OctToNdirSigned(p * 2.f - 1.f);
 }
 
@@ -156,11 +156,11 @@ float3 SampleSphere(float2 _rnd, out float _pdf) {
 }
 
 float3 EquirectangularUVToDir(float2 _uv, out float _cos) {
-  float theta = _uv.x * 2.f * PI;
-  float phi = (_uv.y - 0.5f) * PI;
+  float theta = (_uv.x + 0.25f) * 2.f * PI;
+  float phi = (0.5f - _uv.y) * PI;
 
   _cos = cos(phi);
-  return float3(_cos * sin(theta), sin(phi), cos(theta) * _cos);
+  return float3(_cos * cos(theta), sin(phi), sin(theta) * _cos);
 }
 
 float2 DirToEquirectangularUV(float3 _dir) {
@@ -170,8 +170,8 @@ float2 DirToEquirectangularUV(float3 _dir) {
     theta = atan2(_dir.z, _dir.x);
 
   float2 uv;
-  uv.x = theta / (2.f * PI);
-  uv.y = phi / PI + 0.5f;
+  uv.x = theta / (2.f * PI) - 0.25f;
+  uv.y = 0.5f - phi / PI;
   return uv;
 }
 
@@ -307,5 +307,17 @@ struct Hash {
 };
 } // namespace Rng
 
+bool CompareDifferance(float _reference, float _canddiate, float _threshold) {
+  return abs(_reference - _canddiate) < _threshold;
+}
+
+bool IsValidNeighbor(float3 _cur_norm, float3 _other_norm, float _cur_depth,
+                     float _other_depth, float _norm_threshold,
+                     float _depth_threshold) {
+  float depth_diff = abs(_cur_depth - _other_depth);
+  float norm_diff = dot(_other_norm, _cur_norm);
+  return norm_diff >= _norm_threshold &&
+         CompareDifferance(_cur_depth, _other_depth, _depth_threshold);
+}
 } // namespace Math
 #endif

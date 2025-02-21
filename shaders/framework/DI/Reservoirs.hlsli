@@ -1,6 +1,7 @@
 #ifndef MOER_FRAMEWORK_DI_RESERVOIRS_HLSLI
 #define MOER_FRAMEWORK_DI_RESERVOIRS_HLSLI
-#include "shared/lighting/ShaderParameters.h"
+#include <framework/DI/Utils.hlsli>
+#include <shared/lighting/ShaderParameters.h>
 
 namespace Moer {
 namespace DI {
@@ -43,6 +44,19 @@ struct Reservoir {
   uint age;               // frame
   float canonical_weight; // Cannonical weight when using pairwise MIS
 
+  static Reservoir EmptyReservoir() {
+    Reservoir r;
+    r.light_data = 0;
+    r.uv_data = 0;
+    r.weight_sum = 0;
+    r.target_pdf = 0;
+    r.M = 0;
+    r.packed_visibility = 0;
+    r.spatial_dist = int2(0, 0);
+    r.age = 0;
+    r.canonical_weight = 0;
+    return r;
+  }
   bool GetVisibility(const VisibilityResuseParam _param,
                      out float3 _visibility) {
     if (age > 0 && age < _param.max_age &&
@@ -71,7 +85,8 @@ struct Reservoir {
   bool IsValid() { return light_data != 0; }
 
   float2 GetUV() {
-    return float2((uv_data & 0xffff) / float(0xffff), (uv_data >> 16) / 0xffff);
+    return float2((uv_data & 0xffff) / float(0xffff),
+                  (uv_data >> 16) / float(0xffff));
   }
   float GetInvPdf() { return weight_sum; }
 
@@ -116,67 +131,107 @@ struct Reservoir {
   }
 
   // pi and pi_sum in equation 6
-  void FinializeRIS(float _normalized_numerator,
-                    float _normalized_denominator) {
+  void FinalizeRIS(float _normalized_numerator, float _normalized_denominator) {
     float denominator = _normalized_denominator * target_pdf;
     weight_sum *= (denominator == 0) ? 0 : _normalized_numerator / denominator;
   }
+
+  void StoreVisibility(const float3 _visibility, bool _b_discard_if_invisible) {
+    packed_visibility =
+        uint(saturate(_visibility.x) *
+             s_packed_di_reservoir_visibility_channel_max) |
+        (uint(saturate(_visibility.y) *
+              s_packed_di_reservoir_visibility_channel_max)
+         << s_packed_di_reservoir_visibility_channel_shift) |
+        (uint(saturate(_visibility.z) *
+              s_packed_di_reservoir_visibility_channel_max)
+         << (s_packed_di_reservoir_visibility_channel_shift * 2));
+
+    spatial_dist = int2(0, 0);
+    age = 0;
+
+    if (_b_discard_if_invisible && _visibility.x == 0 && _visibility.y == 0 &&
+        _visibility.z == 0) {
+      light_data = 0;
+      weight_sum = 0;
+    }
+  }
+
+  PackedReservoir Pack() {
+    PackedReservoir packed;
+    packed.light_data = light_data;
+    packed.uv_data = uv_data;
+    packed.target_pdf = target_pdf;
+    packed.visibility =
+        packed_visibility | (min(uint(M), s_packed_di_reservoir_max_M)
+                             << s_packed_di_reservoir_M_shift);
+    packed.distance_age =
+        (uint(spatial_dist.x) & s_packed_di_reservoir_distance_mask)
+            << s_packed_di_reservoir_distance_x_shift |
+        (uint(spatial_dist.y) & s_packed_di_reservoir_distance_mask)
+            << s_packed_di_reservoir_distance_y_shift |
+        clamp(age, 0, s_packed_di_reservoir_max_age)
+            << s_packed_di_reservoir_age_shift;
+    packed.weight = weight_sum;
+    return packed;
+  }
+
+  static Reservoir Unpack(PackedReservoir r) {
+    Reservoir unpacked;
+    unpacked.light_data = r.light_data;
+    unpacked.uv_data = r.uv_data;
+    unpacked.target_pdf = r.target_pdf;
+    unpacked.packed_visibility = r.visibility;
+    unpacked.M = (r.visibility >> s_packed_di_reservoir_M_shift) &
+                 s_packed_di_reservoir_max_M;
+    unpacked.spatial_dist =
+        int2((r.distance_age >> s_packed_di_reservoir_distance_x_shift) &
+                 s_packed_di_reservoir_distance_mask,
+             (r.distance_age >> s_packed_di_reservoir_distance_y_shift) &
+                 s_packed_di_reservoir_distance_mask);
+    unpacked.age = (r.distance_age >> s_packed_di_reservoir_age_shift) &
+                   s_packed_di_reservoir_max_age;
+    unpacked.weight_sum = r.weight;
+
+    if (isinf(unpacked.weight_sum) || isnan(unpacked.weight_sum))
+      unpacked = Reservoir::EmptyReservoir();
+    return unpacked;
+  }
 };
 
-PackedReservoir PackReservoir(Reservoir r) {
-  PackedReservoir packed;
-  packed.light_data = r.light_data;
-  packed.uv_data = r.uv_data;
-  packed.target_pdf = r.target_pdf;
-  packed.visibility =
-      r.packed_visibility | (min(uint(r.M), s_packed_di_reservoir_max_M)
-                             << s_packed_di_reservoir_M_shift);
-  packed.distance_age =
-      (uint(r.spatial_dist.x) & s_packed_di_reservoir_distance_mask)
-          << s_packed_di_reservoir_distance_x_shift |
-      (uint(r.spatial_dist.y) & s_packed_di_reservoir_distance_mask)
-          << s_packed_di_reservoir_distance_y_shift |
-      clamp(r.age, 0, s_packed_di_reservoir_max_age)
-          << s_packed_di_reservoir_age_shift;
-  packed.weight = r.weight_sum;
-  return packed;
+void StoreReservoir(Reservoir _res, ReservoirBufferParams _params,
+                    uint2 _reservoir_pos, uint _array_idx) {
+
+  uint idx = ReservoirPositionToIndex(_params, _reservoir_pos, _array_idx);
+  DI_LIGHT_RESERVOIR_BUFFER[idx] = _res.Pack();
 }
 
-Reservoir EmptyReservoir() {
-  Reservoir r;
-  r.light_data = 0;
-  r.uv_data = 0;
-  r.weight_sum = 0;
-  r.target_pdf = 0;
-  r.M = 0;
-  r.packed_visibility = 0;
-  r.spatial_dist = int2(0, 0);
-  r.age = 0;
-  r.canonical_weight = 0;
-  return r;
+Reservoir LoadReservoir(ReservoirBufferParams _params, uint2 _reservoir_pos,
+                        uint _array_idx) {
+  uint idx = ReservoirPositionToIndex(_params, _reservoir_pos, _array_idx);
+  return Reservoir::Unpack(DI_LIGHT_RESERVOIR_BUFFER[idx]);
 }
+// Reservoir UnpackReservoir(PackedReservoir r) {
+//   Reservoir unpacked;
+//   unpacked.light_data = r.light_data;
+//   unpacked.uv_data = r.uv_data;
+//   unpacked.target_pdf = r.target_pdf;
+//   unpacked.packed_visibility = r.visibility;
+//   unpacked.M = (r.visibility >> s_packed_di_reservoir_M_shift) &
+//                s_packed_di_reservoir_max_M;
+//   unpacked.spatial_dist =
+//       int2((r.distance_age >> s_packed_di_reservoir_distance_x_shift) &
+//                s_packed_di_reservoir_distance_mask,
+//            (r.distance_age >> s_packed_di_reservoir_distance_y_shift) &
+//                s_packed_di_reservoir_distance_mask);
+//   unpacked.age = (r.distance_age >> s_packed_di_reservoir_age_shift) &
+//                  s_packed_di_reservoir_max_age;
+//   unpacked.weight_sum = r.weight;
 
-Reservoir UnpackReservoir(PackedReservoir r) {
-  Reservoir unpacked;
-  unpacked.light_data = r.light_data;
-  unpacked.uv_data = r.uv_data;
-  unpacked.target_pdf = r.target_pdf;
-  unpacked.packed_visibility = r.visibility;
-  unpacked.M = (r.visibility >> s_packed_di_reservoir_M_shift) &
-               s_packed_di_reservoir_max_M;
-  unpacked.spatial_dist =
-      int2((r.distance_age >> s_packed_di_reservoir_distance_x_shift) &
-               s_packed_di_reservoir_distance_mask,
-           (r.distance_age >> s_packed_di_reservoir_distance_y_shift) &
-               s_packed_di_reservoir_distance_mask);
-  unpacked.age = (r.distance_age >> s_packed_di_reservoir_age_shift) &
-                 s_packed_di_reservoir_max_age;
-  unpacked.weight_sum = r.weight;
-
-  if (isinf(unpacked.weight_sum) || isnan(unpacked.weight_sum))
-    unpacked = EmptyReservoir();
-  return unpacked;
-}
+//   if (isinf(unpacked.weight_sum) || isnan(unpacked.weight_sum))
+//     unpacked = Reservoir::EmptyReservoir();
+//   return unpacked;
+// }
 } // namespace DI
 
 } // namespace Moer
