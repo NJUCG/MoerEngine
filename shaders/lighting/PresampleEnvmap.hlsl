@@ -3,7 +3,7 @@
 
 [numthreads(256, 1, 1)] void main(uint3 dtid
                                   : SV_DispatchThreadID) {
-  Moer::RandomState rng = Moer::RandomState::Create(dtid.xy, 0);
+  Moer::RandomState rng = Moer::RandomState::Create(dtid.xy, resample_params.frame_idx);
 
   uint tile_idx = dtid.y;
   uint in_tile_idx = dtid.x;

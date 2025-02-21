@@ -24,17 +24,17 @@ namespace Moer::Render {
         constants.main_view = _rt_ctx.main_view;
         constants.prev_view = _rt_ctx.prev_view;
 
-        FrameResources& frame_rt = _rt_ctx.frame_rt;
-
+        FrameResources& frame_rt        = _rt_ctx.frame_rt;
+        bool            b_current_frame = _rt_ctx.b_current_frame;
         _cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)&constants, sizeof(GBufferConstants)), gbuffer_constants->GetView());
 
         _cmd_list.Compute(gbuffer_pass_pipeline,
                           params,
                           gbuffer_constants,
-                          frame_rt.view_depth,
-                          frame_rt.diffuse_albedo,
-                          frame_rt.specular_roughness,
-                          frame_rt.normal,
+                          b_current_frame ? frame_rt.view_depth : frame_rt.prev_view_depth,
+                          b_current_frame ? frame_rt.diffuse_albedo : frame_rt.prev_diffuse_albedo,
+                          b_current_frame ? frame_rt.specular_roughness : frame_rt.prev_specular_roughness,
+                          b_current_frame ? frame_rt.normal : frame_rt.prev_normal,
                           frame_rt.emission,
                           frame_rt.motion,
                           frame_rt.clip_depth,

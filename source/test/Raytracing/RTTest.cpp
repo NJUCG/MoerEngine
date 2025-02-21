@@ -752,6 +752,7 @@ int main(int argc, const char** argv) {
         //     }
         // }
         rt_scene->AdvanceFrame();
+        rt_ctx->AdvanceFrame();
 
         time++;
         gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time));

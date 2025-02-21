@@ -109,17 +109,13 @@ bool FindTask(uint dtid, out Moer::PrepareLightsTask task) {
   if (task.prev_light_offset >= 0) {
     uint prev_light_buf_idx = task.prev_light_offset + tri_idx;
     light_index_mapping[prev_light_buf_idx + param.prev_light_offset] =
-        light_buf_idx + param.cur_light_offset;
+        light_buf_idx + param.cur_light_offset + 1;
 
     light_index_mapping[light_buf_idx + param.cur_light_offset] =
-        prev_light_buf_idx + param.prev_light_offset;
+        prev_light_buf_idx + param.prev_light_offset + 1;
   }
 
   float emissive_flux = Moer::PolymorphicLight::GetPower(light_info);
-  // printf("emissive_flux %f\n", emissive_flux);
-  // if(emissive_flux <= 0.0f){
-  //   printf("emissive_flux %f light_offset %d tri_idx %d\n", emissive_flux, task.light_offset, tri_idx);
-  // }
   uint2 pdf_position = Math::LinearIndexToZCurve(light_buf_idx);
   local_light_pdf[pdf_position] = emissive_flux;
 }

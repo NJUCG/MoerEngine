@@ -125,24 +125,24 @@ namespace Moer::Render {
             auto* vk_bindless_array = reinterpret_cast<VulkanBindlessArray*>(_bindless_array.Get());
 
             Moer::Array<VulkanTexture*> to_read_textures;
-            for (auto&& i : tracker.GetWritedStateTextures()) {
-                if (vk_bindless_array->IsResourceAllocated(uint64(i) && !writed_resources.contains(uint64(i)))) {
+            for (const auto& i : tracker.GetWritedStateTextures()) {
+                if (vk_bindless_array->IsResourceAllocated(uint64(i)) && !writed_resources.contains(uint64(i))) {
                     to_read_textures.push_back(i);
                 }
             }
             if (!to_read_textures.empty()) {
-                for (auto&& i : to_read_textures) {
+                for (const auto& i : to_read_textures) {
                     tracker.RecordState(i, tracker.ReadTexture(i, ETextureState::SAMPLE, pass_type));
                 }
             }
             Moer::Array<VulkanBuffer*> to_read_buffers;
-            for (auto&& i : tracker.GetWritedStateBuffers()) {
+            for (const auto& i : tracker.GetWritedStateBuffers()) {
                 if (vk_bindless_array->IsResourceAllocated(uint64(i)) && !writed_resources.contains(uint64(i))) {
                     to_read_buffers.push_back(i);
                 }
             }
             if (!to_read_buffers.empty()) {
-                for (auto&& i : to_read_buffers) {
+                for (const auto& i : to_read_buffers) {
                     tracker.RecordState(i, VK_ACCESS_2_SHADER_READ_BIT, _pipeline_stages);
                 }
             }

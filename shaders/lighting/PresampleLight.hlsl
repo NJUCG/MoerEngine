@@ -3,7 +3,7 @@
 
 [numthreads(256, 1, 1)] void main(uint3 dtid
                                   : SV_DispatchThreadID) {
-  Moer::RandomState rng = Moer::RandomState::Create(dtid.xy, 0);
+  Moer::RandomState rng = Moer::RandomState::Create(dtid.xy, resample_params.frame_idx);
 
   TextureHandle local_light_pdf_handle =
       TextureHandle(resample_params.bindless_handles.local_light_pdf);

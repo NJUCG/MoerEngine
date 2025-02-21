@@ -42,19 +42,20 @@ namespace Moer::Render {
         TextureRef motion;
         TextureRef clip_depth;
 
-        TextureRef odd_view_depth;
-        TextureRef odd_diffuse_albedo;
-        TextureRef odd_specular_roughness;
-        TextureRef odd_normal;
+        TextureRef prev_view_depth;
+        TextureRef prev_diffuse_albedo;
+        TextureRef prev_specular_roughness;
+        TextureRef prev_normal;
 
         TextureRef normal_roughness;//for denoising
         TextureRef diffuse_lighting;
-        TextureRef odd_diffuse_lighting;
+        TextureRef prev_diffuse_lighting;
         TextureRef specular_lighting;
-        TextureRef odd_specular_lighting;
+        TextureRef prev_specular_lighting;
+        TextureRef temporal_sample_pos;
         TextureRef gradients;
         TextureRef restir_luminance;
-        TextureRef odd_luminance;
+        TextureRef prev_luminance;
         TextureRef denoised_diffuse_lighting;
         TextureRef denoised_specular_lighting;
 
@@ -95,6 +96,7 @@ namespace Moer::Render {
             uint _num_geom_instance);
 
         void Tick(CameraRef _camera);
+        void AdvanceFrame();
 
         void SetEnvMapInfos(float _scale, float _rotation);
 
@@ -144,6 +146,7 @@ namespace Moer::Render {
         ShaderUtils&               sd_utils;
 
         RaytracingSceneRef rt_scene;
+        bool               b_current_frame = true;
 
     private:
         RaytracingBindlessHandles bindless_handles{};

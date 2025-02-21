@@ -34,9 +34,9 @@ bool ShadeSurface(inout Moer::DI::Reservoir _res, Moer::Surface _surface,
 
     if (!reused) {
       if (_b_prev_tlas && resample_params.enable_prev_tlas) {
-        vis = Moer::GetPreviousConservativeVisibility(_surface, _sample.x);
+        vis = Moer::GetFinalVisibility(prev_tlas, _surface, _sample.x);
       } else {
-        vis = Moer::GetCurrentConservativeVisibility(_surface, _sample.x);
+        vis = Moer::GetFinalVisibility(tlas, _surface, _sample.x);
       }
       _res.StoreVisibility(
           vis, resample_params.restir_di_params.temporal_resample_params
@@ -79,7 +79,10 @@ main(uint2 dtid
   float3 specular = 0.f;
   float light_dist = 0.f;
   float2 cur_luminance = 0.f;
-
+ 
+  float3 debug_color_red = float3(1, 0, 0);
+  float3 debug_color_green = float3(0, 1, 0);
+  bool b_use_red = false;
   if (res.IsValid()) {
 
     Moer::PolymorphicLightInfo light_info =
@@ -103,10 +106,17 @@ main(uint2 dtid
       Moer::DI::StoreReservoir(res, params.reservoir_buffer_params, pixel_pos,
                                params.buffer_indices.shading_input_buff_idx);
     }
+    if(res.age > 0){
+      b_use_red = true;
+    }
   }
 
   rw_restir_luminance[pixel_pos] = cur_luminance;
 
   rw_diffuse_lighting[pixel_pos] = float4(diffuse, light_dist);
   rw_specular_lighting[pixel_pos] = float4(specular, light_dist);
+  // rw_specular_lighting[pixel_pos] = float4(b_use_red ? debug_color_red : debug_color_green, light_dist);
+
+  //test
+  // rw_diffuse_lighting[pixel_pos] = float4(diffuse + specular, light_dist);
 }

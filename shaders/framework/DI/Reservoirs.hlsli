@@ -85,7 +85,8 @@ struct Reservoir {
   bool IsValid() { return light_data != 0; }
 
   float2 GetUV() {
-    return float2((uv_data & 0xffff) / float(0xffff), (uv_data >> 16) / float(0xffff));
+    return float2((uv_data & 0xffff) / float(0xffff),
+                  (uv_data >> 16) / float(0xffff));
   }
   float GetInvPdf() { return weight_sum; }
 
@@ -130,8 +131,7 @@ struct Reservoir {
   }
 
   // pi and pi_sum in equation 6
-  void FinializeRIS(float _normalized_numerator,
-                    float _normalized_denominator) {
+  void FinalizeRIS(float _normalized_numerator, float _normalized_denominator) {
     float denominator = _normalized_denominator * target_pdf;
     weight_sum *= (denominator == 0) ? 0 : _normalized_numerator / denominator;
   }

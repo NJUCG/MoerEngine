@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <stb_image.h>
+#include <utility>
 #include "math/Function.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
@@ -170,17 +171,18 @@ namespace Moer::Render {
         frame_rt.motion             = device.CreateTexture("motion", Extent2D(_resolution), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
         frame_rt.clip_depth         = device.CreateTexture("clip_depth", Extent2D(_resolution), PF_R32_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
 
-        frame_rt.odd_view_depth         = device.CreateTexture("odd_view_depth", Extent2D(_resolution), PF_R32_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-        frame_rt.odd_diffuse_albedo     = device.CreateTexture("odd_diffuse_albedo", Extent2D(_resolution), PF_R32_UINT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-        frame_rt.odd_specular_roughness = device.CreateTexture("odd_specular_roughness", Extent2D(_resolution), PF_R32_UINT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-        frame_rt.odd_normal             = device.CreateTexture("odd_normal", Extent2D(_resolution), PF_R32_UINT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-        frame_rt.odd_luminance          = device.CreateTexture("prev_luminance", Extent2D(_resolution), PF_R16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+        frame_rt.prev_view_depth         = device.CreateTexture("prev_view_depth", Extent2D(_resolution), PF_R32_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+        frame_rt.prev_diffuse_albedo     = device.CreateTexture("prev_diffuse_albedo", Extent2D(_resolution), PF_R32_UINT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+        frame_rt.prev_specular_roughness = device.CreateTexture("prev_specular_roughness", Extent2D(_resolution), PF_R32_UINT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+        frame_rt.prev_normal             = device.CreateTexture("prev_normal", Extent2D(_resolution), PF_R32_UINT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+        frame_rt.prev_luminance          = device.CreateTexture("prev_luminance", Extent2D(_resolution), PF_R16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
 
         frame_rt.normal_roughness           = device.CreateTexture("normal_roughness", Extent2D(_resolution), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
         frame_rt.diffuse_lighting           = device.CreateTexture("diffuse_lighting", Extent2D(_resolution), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-        frame_rt.odd_diffuse_lighting       = device.CreateTexture("odd_diffuse_lighting", Extent2D(_resolution), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+        frame_rt.prev_diffuse_lighting      = device.CreateTexture("prev_diffuse_lighting", Extent2D(_resolution), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
         frame_rt.specular_lighting          = device.CreateTexture("specular_lighting", Extent2D(_resolution), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-        frame_rt.odd_specular_lighting      = device.CreateTexture("odd_specular_lighting", Extent2D(_resolution), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+        frame_rt.prev_specular_lighting     = device.CreateTexture("prev_specular_lighting", Extent2D(_resolution), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+        frame_rt.temporal_sample_pos        = device.CreateTexture("temporal_sample_pos", Extent2D(_resolution), PF_R16G16_SINT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
         frame_rt.gradients                  = device.CreateTexture("gradients", Extent2D(_resolution), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED, 1, 2);
         frame_rt.restir_luminance           = device.CreateTexture("restir_luminance", Extent2D(_resolution), PF_R16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
         frame_rt.denoised_diffuse_lighting  = device.CreateTexture("denoised_diffuse_lighting", Extent2D(_resolution), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
@@ -196,11 +198,12 @@ namespace Moer::Render {
         AllocateAndFreeBdlsIfNeeded(bindless_handles.gbuffer_specular_roughness, frame_rt.specular_roughness->GetView(), spl);
         AllocateAndFreeBdlsIfNeeded(bindless_handles.motion, frame_rt.motion->GetView(), spl);
 
-        AllocateAndFreeBdlsIfNeeded(bindless_handles.gbuffer_prev_depth, frame_rt.view_depth->GetView(), spl);
-        AllocateAndFreeBdlsIfNeeded(bindless_handles.gbuffer_prev_normal, frame_rt.normal->GetView(), spl);
-        AllocateAndFreeBdlsIfNeeded(bindless_handles.gbuffer_prev_diffuse_albedo, frame_rt.diffuse_albedo->GetView(), spl);
-        AllocateAndFreeBdlsIfNeeded(bindless_handles.gbuffer_prev_specular_roughness, frame_rt.specular_roughness->GetView(), spl);
-        AllocateAndFreeBdlsIfNeeded(bindless_handles.gbuffer_prev_luminance, frame_rt.odd_luminance->GetView(), spl);
+        AllocateAndFreeBdlsIfNeeded(bindless_handles.gbuffer_prev_depth, frame_rt.prev_view_depth->GetView(), spl);
+        AllocateAndFreeBdlsIfNeeded(bindless_handles.gbuffer_prev_normal, frame_rt.prev_normal->GetView(), spl);
+        AllocateAndFreeBdlsIfNeeded(bindless_handles.gbuffer_prev_diffuse_albedo, frame_rt.prev_diffuse_albedo->GetView(), spl);
+        AllocateAndFreeBdlsIfNeeded(bindless_handles.gbuffer_prev_specular_roughness, frame_rt.prev_specular_roughness->GetView(), spl);
+        AllocateAndFreeBdlsIfNeeded(bindless_handles.restir_prev_luminance, frame_rt.prev_luminance->GetView(), spl);
+        AllocateAndFreeBdlsIfNeeded(bindless_handles.denoiser_normal_roughness, frame_rt.normal_roughness->GetView(), spl);
     }
 
     void RTContext::SetResolution(uint2 _resolution) {
@@ -365,5 +368,14 @@ namespace Moer::Render {
                 ris_light_data_buf->SetName("ris_light_data_buf");
             }
         }
+    }
+
+    void RTContext::AdvanceFrame() {
+        b_current_frame = !b_current_frame;
+        std::swap(bindless_handles.gbuffer_normal, bindless_handles.gbuffer_prev_normal);
+        std::swap(bindless_handles.gbuffer_depth, bindless_handles.gbuffer_prev_depth);
+        std::swap(bindless_handles.gbuffer_diffuse_albedo, bindless_handles.gbuffer_prev_diffuse_albedo);
+        std::swap(bindless_handles.gbuffer_specular_roughness, bindless_handles.gbuffer_prev_specular_roughness);
+        std::swap(bindless_handles.restir_luminance, bindless_handles.restir_prev_luminance);
     }
 };// namespace Moer::Render

@@ -765,8 +765,10 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
       shadow_distance += shadow_hit_info.tmin;
     }
 
-    float penumbra = SIGMA_FrontEnd_PackPenumbra(shadow_distance, rt_config.tan_sun_angular_radius);
-    float4 translucency = SIGMA_FrontEnd_PackTranslucency(shadow_distance, shadow_translucency);
+    float penumbra = SIGMA_FrontEnd_PackPenumbra(
+        shadow_distance, rt_config.tan_sun_angular_radius);
+    float4 translucency =
+        SIGMA_FrontEnd_PackTranslucency(shadow_distance, shadow_translucency);
     out_shadow_penumbra[pixel_pos] = penumbra;
     out_shadow_translucency[pixel_pos] = translucency;
   }

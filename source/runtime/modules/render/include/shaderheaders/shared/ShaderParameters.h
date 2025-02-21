@@ -95,13 +95,6 @@ namespace Moer {
         ViewParam prev_view;
     };
 
-    struct DIParams {
-        uint neigbor_offset_mask;//spatial reuse
-        uint padding;
-        uint padding1;
-        uint padding2;
-    };
-
     struct DIReservoirParams {
         uint block_row_pitch;
         uint block_col_pitch;
@@ -134,7 +127,7 @@ namespace Moer {
         uint gbuffer_prev_diffuse_albedo;
         uint gbuffer_prev_specular_roughness;
 
-        uint gbuffer_prev_luminance;
+        uint restir_prev_luminance;
         uint motion;
         uint denoiser_normal_roughness;
 
@@ -154,7 +147,7 @@ namespace Moer {
         uint env_pdf;
 
         uint env_map;
-        uint padding0;
+        uint restir_luminance;
         uint padding1;
         uint padding2;
     };

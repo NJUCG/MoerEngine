@@ -202,7 +202,7 @@ namespace Moer::Render {
                     const MeshGeometry&        geom_info         = *mesh_info.geometries[i];
                     float3                     emissive          = mat_instance->GetParameter<float3>("emissive_factor");
                     uint64                     instance_geo_hash = 0;
-                    HashCombine(instance_geo_hash, &_entity, i);
+                    HashCombine(instance_geo_hash, uint64(_entity.getId()), i);
 
                     if (emissive == float3(0.f)) {
                         instance_light_buffer_offsets.erase(instance_geo_hash);
@@ -255,10 +255,7 @@ namespace Moer::Render {
             task.light_offset      = light_buf_offset;
             task.num_triangles     = 1;
             task.prev_light_offset = pre_iter == primitive_light_buffer_offsets.end() ? -1 : pre_iter->second;
-            {
-                uint prim_id = task.instance_geo_idx & ~g_task_prim_light_bit;
-                int  i       = 1;
-            }
+
             primitive_light_buffer_offsets[uint64(light_data.Get())] = light_buf_offset;
             light_buf_offset += task.num_triangles;
             tasks.emplace_back(task);

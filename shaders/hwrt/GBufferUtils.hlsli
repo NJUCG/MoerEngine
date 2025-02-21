@@ -44,7 +44,7 @@ float3 GetMotion(Moer::ViewParam _view, Moer::ViewParam _prev_view,
 
   float3 motion;
   motion.xy = clip_pos_prev.xy - clip_pos.xy;
-  motion.z = clip_pos_prev.w - clip_pos.w;
+  motion.z = -clip_pos_prev.w + clip_pos.w;
 
   return motion; // 2.5D motion
 }
@@ -58,6 +58,14 @@ float3 ViewdepthToWorldPos(Moer::ViewParam _view, int2 _pixel_pos,
   view_pos.zw = float2(1.f, 1.f);
   view_pos.xyz *= _view_depth;
   return mul(_view.view2world, view_pos).xyz;
+}
+
+float3 MotionToPixelSpace(Moer::ViewParam _view, Moer::ViewParam _prev_view,
+                          int2 _pixel_pos, float3 _motion) {
+  float2 cur_center = float2(_pixel_pos) + 0.5f;
+  float2 prev_pos = cur_center + _motion.xy;
+  _motion.xy = prev_pos - cur_center;
+  return _motion;
 }
 
 } // namespace Moer

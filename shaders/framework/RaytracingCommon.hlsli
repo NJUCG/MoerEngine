@@ -80,11 +80,12 @@ GeometryRecord GetGeometryRecordFrom(uint _instance_idx, uint _geometry_idx,
   geo_record.instance = Moer::LoadInstanceData(
       _instance_data, _instance_idx * sizeof(Moer::InstanceData));
   geo_record.geometry = Moer::LoadGeometryData(
-      _geometry_data, _geometry_idx + geo_record.instance.first_geom_idx * sizeof(Moer::GeometryData));
+      _geometry_data, _geometry_idx + geo_record.instance.first_geom_idx *
+                                          sizeof(Moer::GeometryData));
   geo_record.material = UnpackMaterialData<MaterialData>(
       _material_data, geo_record.geometry.GetMaterialIdx());
 
-    //   printf("material_id %d\n", geo_record.geometry.GetMaterialIdx());
+  //   printf("material_id %d\n", geo_record.geometry.GetMaterialIdx());
 
   ArrayBuffer vtx_buffer =
       ArrayBuffer(geo_record.geometry.vertex_buffer_handle);
@@ -177,8 +178,8 @@ MaterialSample SampleGeometryMaterial(GeometryRecord _geo_record,
   float4 materlic_roughness = 0.f;
   float4 transmission = 0.f;
 
-  bool has_base_color = _attribs & EMA_BaseColor &&
-                        _geo_record.material.albedo_map != 0;
+  bool has_base_color =
+      _attribs & EMA_BaseColor && _geo_record.material.albedo_map != 0;
   if (has_base_color) {
     TextureHandle albedo_tex = TextureHandle(_geo_record.material.albedo_map);
     if (_mip >= 0.f) {
@@ -241,8 +242,10 @@ MaterialSample SampleGeometryMaterial(GeometryRecord _geo_record,
 
   // use metallic roughness workflow
 
-  result.base_color = has_base_color ?
-      base_color.xyz * _geo_record.material.base_color_factor.xyz : _geo_record.material.base_color_factor.xyz;
+  result.base_color =
+      has_base_color
+          ? base_color.xyz * _geo_record.material.base_color_factor.xyz
+          : _geo_record.material.base_color_factor.xyz;
   result.roughness = _geo_record.material.roughness_factor;
   result.metalness = _geo_record.material.metallic_factor;
 
@@ -254,10 +257,13 @@ MaterialSample SampleGeometryMaterial(GeometryRecord _geo_record,
   result.transmission = 0.f;
   result.emissive = _geo_record.material.emissive_factor;
 
-//   if(_geo_record.geometry.GetMaterialIdx() != 1)
-//   printf("material_id %d base_color %f %f %f matalic %f roughness %f emissive %f %f %f\n", _geo_record.geometry.GetMaterialIdx(), result.base_color.x, result.base_color.y, result.base_color.z, result.metalness, result.roughness,
-//          result.emissive.x, result.emissive.y, result.emissive.z);
-  
+  //   if(_geo_record.geometry.GetMaterialIdx() != 1)
+  //   printf("material_id %d base_color %f %f %f matalic %f roughness %f
+  //   emissive %f %f %f\n", _geo_record.geometry.GetMaterialIdx(),
+  //   result.base_color.x, result.base_color.y, result.base_color.z,
+  //   result.metalness, result.roughness,
+  //          result.emissive.x, result.emissive.y, result.emissive.z);
+
   return result;
 }
 
@@ -281,15 +287,15 @@ float3 RayIntersectBarycentrics(float3 _ray_origin, float3 _ray_dir, float3 _v0,
   return float3(1.f - u - v, u, v);
 }
 
-struct Surface{
-    float3 pos_w;
-    float3 view_dir;
-    float view_depth;
-    float3 normal;
-    float3 albedo;
-    float3 f0;
-    float roughness;
-    float diffuse_prob;
-};
+// struct Surface {
+//   float3 pos_w;
+//   float3 view_dir;
+//   float view_depth;
+//   float3 normal;
+//   float3 albedo;
+//   float3 f0;
+//   float roughness;
+//   float diffuse_prob;
+// };
 } // namespace Moer
 #endif

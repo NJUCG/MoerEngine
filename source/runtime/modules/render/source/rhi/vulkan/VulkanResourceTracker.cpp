@@ -332,8 +332,9 @@ namespace Moer::Render {
         bool read_layout = _layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL || _layout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         if (read_layout) return false;
 
-        bool read_access = _access & VK_ACCESS_2_SHADER_READ_BIT || _access & VK_ACCESS_2_SHADER_SAMPLED_READ_BIT || _access & VK_ACCESS_2_TRANSFER_READ_BIT;
-        if (read_access) return false;
+        bool read_access  = _access & VK_ACCESS_2_SHADER_READ_BIT || _access & VK_ACCESS_2_SHADER_SAMPLED_READ_BIT || _access & VK_ACCESS_2_TRANSFER_READ_BIT;
+        bool write_access = _access & VK_ACCESS_2_SHADER_WRITE_BIT || _access & VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT || _access & VK_ACCESS_2_MEMORY_WRITE_BIT || _access & VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        if (read_access && !write_access) return false;
         return true;
         // switch (layout) {
         //     case VK_IMAGE_LAYOUT_GENERAL:

@@ -307,5 +307,17 @@ struct Hash {
 };
 } // namespace Rng
 
+bool CompareDifferance(float _reference, float _canddiate, float _threshold) {
+  return abs(_reference - _canddiate) < _threshold;
+}
+
+bool IsValidNeighbor(float3 _cur_norm, float3 _other_norm, float _cur_depth,
+                     float _other_depth, float _norm_threshold,
+                     float _depth_threshold) {
+  float depth_diff = abs(_cur_depth - _other_depth);
+  float norm_diff = dot(_other_norm, _cur_norm);
+  return norm_diff >= _norm_threshold &&
+         CompareDifferance(_cur_depth, _other_depth, _depth_threshold);
+}
 } // namespace Math
 #endif
