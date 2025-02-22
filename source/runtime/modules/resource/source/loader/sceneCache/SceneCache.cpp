@@ -640,11 +640,6 @@ namespace Moer {
     void SceneCache::ConvertToScene(SceneData& _scene_data, Scene* _scene, bool _need_cache) {
         using namespace Moer::Render;
         using namespace Moer;
-        size_t hash    = HashSceneData(_scene_data);
-        bool   updated = true;
-        if (updated && _need_cache) {
-            Cache(_scene_data, hash);
-        }
 
         auto& device = Render::RenderDevice::Get();
         for (auto& instance : _scene_data.m_mesh_instances) {
@@ -666,6 +661,8 @@ namespace Moer {
 
             TransformManager::Get().Set(entity, _scene_data.instance_infos[instance.instance_id].model2world);
         }
+
+        assert(_scene_data.m_mesh_instances.size() != 0 && "Mesh instances should not be empty");
 
         for (auto& camera : _scene_data.m_cameras) {
             auto entity = EntityManager::Get().Create();
@@ -810,6 +807,16 @@ namespace Moer {
         copy_queue.Sync(evt.timeline);
 
         // BuildSceneRaytracing(scene_data,scene.get());
+
+        // Cache the scene data
+        // Tip: I move this function to the end of the function, to avoid storing wrong cache to disk.
+        //      Wrong cache may be caused by out-date loader code.
+        //      When loading wrong cache, the engine will crash with no information.
+        size_t hash    = HashSceneData(_scene_data);
+        bool   updated = true;
+        if (updated && _need_cache) {
+            Cache(_scene_data, hash);
+        }
     }
     void SceneCache::LoadSceneFromCacheAsync(const std::filesystem::path& path, Scene* scene) {
         LambdaTask::Dispatch([path, scene]() {
