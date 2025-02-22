@@ -234,12 +234,13 @@ namespace Moer::Resource::JsonScene {
             RenderThreadFence fence;
             fence.Wait();
         }
-        if (!IsCurrentlyRenderThread()) {
-            ScopeEventRef event;
-            EnqueueRenderTask([&event]() {
-                event.Trigger();
-            });
-        }
+        // FIXME: The following code will block the program. Maybe currently we have only one thread? Fix this in the future.
+        // if (!IsCurrentlyRenderThread()) {
+        //     ScopeEventRef event;
+        //     EnqueueRenderTask([&event]() {
+        //         event.Trigger();
+        //     });
+        // }
         return std::move(ret_scene.scn_dat);
     }
 

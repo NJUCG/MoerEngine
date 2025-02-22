@@ -33,13 +33,13 @@ else()
     set(output_dir "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>") 
 endif()
 
-# copy resource
-add_custom_command( 
-    TARGET ${target_name} 
-    POST_BUILD 
+# copy resources
+# Tip: I have removed `POST_BUILD` to copy resources when building ${target_name} fails
+add_custom_target(
+	CopyResources ALL
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${output_dir}/resource"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/resource" "${output_dir}/resource"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${moer_root_dir}/asset" "${output_dir}/resource"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${moer_source_dir}/${moer_config_dir}" "${output_dir}/config"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${moer_root_dir}/shaders" "${output_dir}/resource/shaders"
-    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/resource ${moer_source_dir}/${moer_config_dir}
 )
