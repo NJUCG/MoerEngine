@@ -522,7 +522,7 @@ int main(int argc, const char** argv) {
                         uint idx_offset = mesh->idx_offset + mesh->geometries[i]->local_idx_offset;
                         uint idx_count  = mesh->geometries[i]->local_idx_count;
 
-                        rt_geo_info.segments.emplace_back(0, 0, vtx_offset, vtx_count, sizeof(float3), idx_offset / 3, idx_count / 3);
+                        rt_geo_info.segments.emplace_back(0, 0, vtx_offset, vtx_count, sizeof(float3), idx_offset / 3, idx_count / 3, RTGT_TRIANGLES, ERayTracingGeometryFlags::GEOMETRY_OPAQUE);
                     }
 
                     RaytracingGeometryRef blas = device.CreateRaytracingGeometry(rt_geo_info);
@@ -714,7 +714,7 @@ int main(int argc, const char** argv) {
                              bindless_array,
                              rt_scene->GetTlas())
                 .Dispatch(uint3((resolution.x + 15) >> 4, (resolution.y + 15) >> 4, 1), "PathTracing");
-            visualize_pass->Process(cmd_list, *rt_ctx, visualize_config);
+            visualize_pass->Process(cmd_list, *rt_ctx, visualize_config, bindless_array);
             //copy normal to output
             // cmd_list.CopyFrom(out_direct_lighting->GetView(), scene_color->GetView());
         }

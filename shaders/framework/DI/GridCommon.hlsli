@@ -15,7 +15,8 @@ int CellIdxFromWorldPos(Params _params, float3 _world_pos) {
   const int3 grid_cell_cnt =
       int3(_params.grid_params.cell_x, _params.grid_params.cell_y,
            _params.grid_params.cell_z);
-//    printf("grid_center %f %f %f\n", grid_center.x, grid_center.y, grid_center.z);
+  //    printf("grid_center %f %f %f\n", grid_center.x, grid_center.y,
+  //    grid_center.z);
   const float3 grid_origin = grid_center - float3(grid_cell_cnt) *
                                                _params.common_params.cell_size *
                                                0.5f;
@@ -47,7 +48,6 @@ bool WorldPosFromCellIdx(Params _params, int _cell_idx, out float3 _world_pos,
   cell_pos.x = _cell_idx % grid_cell_cnt.x;
   cell_pos.y = (_cell_idx / grid_cell_cnt.x) % grid_cell_cnt.y;
   cell_pos.z = _cell_idx / (grid_cell_cnt.x * grid_cell_cnt.y);
-
   if (cell_pos.z >= grid_cell_cnt.z) {
     _world_pos = float3(0.f, 0.f, 0.f);
     _cell_radius = 0.f;
@@ -65,7 +65,7 @@ bool WorldPosFromCellIdx(Params _params, int _cell_idx, out float3 _world_pos,
 float3 GetVisualizeGridColor(Params _params, float3 _pos) {
   int idx = CellIdxFromWorldPos(_params, _pos);
   uint hash = STL::Sequence::Hash(idx);
-    // printf("idx %d hash %d\n", idx, hash);
+  // printf("idx %d hash %d\n", idx, hash);
   // r11g11b10
   float3 color =
       float3((hash & 0x7ff) / 2047.f, ((hash >> 11) & 0x7ff) / 2047.f,

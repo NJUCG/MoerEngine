@@ -28,7 +28,7 @@ struct SampleConfigs {
   static SampleConfigs Create(uint _num_local_light, uint _num_infinite_light,
                               uint _num_envmap, uint _num_brdf,
                               float _brdf_cutoff = 0.f,
-                              float _brdf_ray_tmin = 0.001f) {
+                              float _brdf_ray_tmin = 0.1f) {
     SampleConfigs result;
     result.num_local_light = _num_local_light;
     result.num_infinite_light = _num_infinite_light;
@@ -48,7 +48,7 @@ struct SampleConfigs {
 float HeuresticMaxDistanceFromBrdfPdf(float _brdf_cutoff, float _brdf_pdf) {
   // float32 max
   const float s_ray_tmax = 1e30f;
-  return _brdf_cutoff > 0.f ? sqrt(_brdf_pdf / _brdf_cutoff - _brdf_pdf)
+  return _brdf_cutoff > 0.f ? sqrt((rcp(_brdf_cutoff) - 1.f) * _brdf_pdf)
                             : s_ray_tmax;
 }
 
@@ -149,7 +149,6 @@ LocalLightSelectionContext CreateLocalLightGridSelectionContextForGrid(
     Moer::DI::RISBufferSegmentParams _local_light_ris_params,
     LightBufferRegion _local_light_region, Surface _surface) {
   int cell_idx = GetLightGridCellIdx(_rng, _params, _surface);
-
   if (cell_idx >= 0) {
     RISTileInfo tile_info =
         GetLocalLightGridTileInfo(cell_idx, _params.common_params);
@@ -212,12 +211,19 @@ Reservoir SampleLocalLights(inout RandomState _rng,
     float inv_pdf = 0.f;
 
     ctx.SelectNext(_rng, light_info, light_idx, inv_pdf);
+    // printf("ctx.ris_tile_info %d %d\n", ctx.ris_tile_info.tile_offset,
+    //        ctx.ris_tile_info.tile_size);
     float2 uv = _rng.GetFloat2();
     if (StreamLocalLightAtUV(_rng, _sample_configs, _surface, light_idx, uv,
                              inv_pdf, light_info, res, _light_sample)) {
       continue;
     }
   }
+  // if(res.IsValid() && res.GetLightIndex() != s_invalid_light_idx){
+  //   printf("light idx %d\n", res.GetLightIndex());
+  // }
+  // printf("light sample normal %f %f %f\n", _light_sample.n.x,
+  //        _light_sample.n.y, _light_sample.n.z);
 
   res.FinalizeRIS(1.f, _sample_configs.num_mis);
   res.M = 1.f;
@@ -380,6 +386,7 @@ Reservoir SampleBrdf(inout RandomState _rng, SampleConfigs _sample_configs,
           float3 light_dir;
           float light_dist;
           _surface.GetLightDirAndDist(candidate, light_dir, light_dist);
+          // printf("%f dir dot light dir \n", dot(dir, light_dir));
 
           float brdf_pdf = _surface.GetBrdfPdf(light_dir);
           float max_dist = HeuresticMaxDistanceFromBrdfPdf(
@@ -390,7 +397,7 @@ Reservoir SampleBrdf(inout RandomState _rng, SampleConfigs _sample_configs,
         }
 
         if (light_idx != s_invalid_light_idx) {
-          src_pdf = EvalLocalLightSrcPdf(light_idx);
+          src_pdf = EvalLocalLightSrcPdf(light_idx);//local light selection pdf
         }
       } else if (!b_hit && (_light_buffer_params.env_light.light_cnt != 0)) {
         // Sample envmap
@@ -399,6 +406,7 @@ Reservoir SampleBrdf(inout RandomState _rng, SampleConfigs _sample_configs,
         rnd = GetEnvironmentMapUVFromDir(dir);
         candidate = _surface.SamplePolymorphicLight(light_info, rnd);
         src_pdf = EvalEnvMapPdf(dir);
+
       }
     }
 

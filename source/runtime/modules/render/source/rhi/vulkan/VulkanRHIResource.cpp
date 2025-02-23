@@ -2131,7 +2131,7 @@ namespace Moer::Render {
                 assert(segment.type == RTGT_TRIANGLES && "Unsupported geometry type");
                 VkAccelerationStructureGeometryKHR geometry{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
                 geometry.geometryType = VulkanEnumTranslator::METoVKGeometryType(segment.type);
-                geometry.flags = 0;
+                geometry.flags = VulkanEnumTranslator::METoVKGeometryFlags(segment.flags);
                 geometry.geometry.triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
                 geometry.geometry.triangles.vertexFormat = g_platform_pixel_formats[_info.vertex_format].format;
                 geometry.geometry.triangles.vertexStride = segment.vertex_stride;

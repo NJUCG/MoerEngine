@@ -1,6 +1,7 @@
 #include "VisualizePass.h"
 #include "RTResource.h"
 #include "rhi/RHICommand.h"
+#include "rhi/RHIResource.h"
 #include "shader/ShaderResourceManager.h"
 
 namespace Moer::Render {
@@ -11,7 +12,7 @@ namespace Moer::Render {
         visualize_params_buffer = device.CreateBuffer<Moer::byte>(sizeof(VisualizeParams), EBufferUsageFlags::CONSTANT_BUFFER);
     }
 
-    void VisualizePass::Process(CommandList& _cmdlist, RTContext& _ctx, const VisualizeConfig& _cfg) {
+    void VisualizePass::Process(CommandList& _cmdlist, RTContext& _ctx, const VisualizeConfig& _cfg, BindlessArrayRef _bdls_array) {
 
         params.grid_params      = _ctx.is_ctx.GetGridParams();
         params.b_split          = _cfg.b_split;
@@ -33,9 +34,10 @@ namespace Moer::Render {
                          _ctx.frame_rt.scene_color,
                          _ctx.frame_rt.diffuse_lighting,
                          _ctx.frame_rt.specular_lighting,
-                         _ctx.frame_rt.view_depth,
+                         _ctx.b_current_frame ? _ctx.frame_rt.view_depth : _ctx.frame_rt.prev_view_depth,
                          _ctx.frame_rt.emission,
-                         _ctx.frame_rt.debug_color)
+                         _ctx.frame_rt.debug_color,
+                         _bdls_array)
             .Dispatch(
                 uint3(div_ceil(params.output_size.x, 16), div_ceil(params.output_size.y, 16), 1), "Visualize");
     }

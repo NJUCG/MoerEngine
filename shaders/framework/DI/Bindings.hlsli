@@ -34,7 +34,7 @@
 [[vk::binding(9,
               DI_BINDING_SLOT)]] RWTexture2D<float4> rw_diffuse_lighting_prev;
 
-[[vk::binding(10, DI_BINDING_SLOT)]] RWBuffer<float2> rw_ris_buffer;
+[[vk::binding(10, DI_BINDING_SLOT)]] RWBuffer<uint2> rw_ris_buffer;
 [[vk::binding(11, DI_BINDING_SLOT)]] RWBuffer<uint4> rw_ris_light_data_buffer;
 
 BINDLESS_BINDINGS(3, 2, 4, 5)
@@ -52,17 +52,17 @@ namespace Moer {
 typedef Math::Rng::Hash RandomState;
 
 float DiffuseTerm(float3 _v, float3 _n, float3 _l, float _roughness) {
+  float3 h = normalize(_v + _l);
   float nol = saturate(dot(_n, _l));
   float nov = saturate(dot(_n, _v));
-  float voh = saturate(dot(_v, _l));
+  float voh = saturate(dot(_v, h));
 
   // use lambert here to reduce the cost
-  return STL::BRDF::DiffuseTerm_Lambert(_roughness, nol, nov, voh) *
-         max(nol, 0.f);
+  return STL::BRDF::DiffuseTerm(_roughness, nol, nov, voh) * max(nol, 0.f);
 }
 
 float3 SpecularTerm(float3 _v, float3 _l, float3 _n, float _roughness,
-                    float3 _f0) {
+                    float3 _f0, out float3 _fresnel) {
   float3 h = normalize(_v + _l);
   float noh = saturate(dot(_n, h));
   float nov = saturate(dot(_n, _v));
@@ -72,10 +72,11 @@ float3 SpecularTerm(float3 _v, float3 _l, float3 _n, float _roughness,
   if (nol <= 0.f)
     return 0.f;
 
-  float3 fresnel = STL::BRDF::FresnelTerm(_f0, voh);
+  _fresnel = STL::BRDF::FresnelTerm(_f0, voh);
   float ndf = STL::BRDF::DistributionTerm(_roughness, noh);
   float g = STL::BRDF::GeometryTermMod(_roughness, nol, nov, voh, noh);
-  return fresnel * ndf * g * nol;
+  float3 spec_term = _fresnel * ndf * g * nol;
+  return spec_term;
 }
 
 struct LightSample {
@@ -108,9 +109,12 @@ struct Surface {
   float diffuse_prob;
 
   float GetDiffuseProbability() {
-    float diffuse_weight = STL::Color::Luminance(diffuse_albedo);
-    float specular_weight = STL::Color::Luminance(
-        STL::BRDF::FresnelTerm_Schlick(specular_f0, dot(v, n)));
+    float3 fresnel =
+        STL::BRDF::FresnelTerm_Schlick(specular_f0, abs(dot(v, n)));
+    float specular_weight = STL::Color::Luminance(fresnel);
+    float diffuse_weight =
+        STL::Color::Luminance(diffuse_albedo * (1.f - fresnel));
+
     float sum_weight = diffuse_weight + specular_weight;
     return sum_weight < 1e-6f ? 1.f : diffuse_weight / sum_weight;
   }
@@ -172,8 +176,7 @@ struct Surface {
     float specular_pdf =
         STL::ImportanceSampling::VNDF::GetPDF(nov, noh, roughness);
 
-    return cos_theta > 0.f ? lerp(diffuse_pdf, specular_pdf, 1.f - diffuse_prob)
-                           : 0.f;
+    return cos_theta > 0.f ? specular_pdf : 0.f;
   }
 
   float GetLightSampleTargetPdf(LightSample _sample) {
@@ -184,19 +187,17 @@ struct Surface {
     if (dot(l, n) <= 0.f)
       return 0.f;
 
-    float3 d = DiffuseTerm(v, n, l, roughness);
-
+    float d = DiffuseTerm(v, n, l, roughness);
+    float3 fresnel;
     float3 s;
-    if (roughness == 0.f)
-      s = 0.f;
-    else {
-      s = SpecularTerm(v, l, n, roughness, specular_f0);
+
+    s = SpecularTerm(v, l, n, roughness, specular_f0, fresnel);
+    if (roughness == 0.f) {
+      // perfect reflection, diffuse term is 0
+      d = 0.f;
     }
-    float3 reflect_radiance = (d * diffuse_albedo + s) * _sample.radiance;
-    // if(_sample.type == 4){
-    //   printf("d: %f %f %f reflect_radiance %f target pdf %f\n", d.x, d.y,
-    //   d.z, STL::Color::Luminance(reflect_radiance), _sample.solid_angle_pdf);
-    // }
+    float3 reflect_radiance =
+        ((1.f - fresnel) * d * diffuse_albedo + s) * _sample.radiance;
     return STL::Color::Luminance(reflect_radiance) / _sample.solid_angle_pdf;
   }
 
@@ -231,7 +232,7 @@ struct Surface {
     }
   }
 
-  RayDesc SetupVisibilityRay(float3 _sample_pos, float _x_offset = 0.001f) {
+  RayDesc SetupVisibilityRay(float3 _sample_pos, float _x_offset = 0.1f) {
 
     float3 l = _sample_pos - x;
 
@@ -243,14 +244,13 @@ struct Surface {
     return ray;
   }
 
-  void EvalBrdf(float3 _sample_pos, out float _diffuse, out float3 _specular) {
+  void EvalBrdf(float3 _sample_pos, out float3 _diffuse, out float3 _specular) {
     float3 l = _sample_pos - x;
     _diffuse = DiffuseTerm(v, n, normalize(l), roughness);
-    if (roughness == 0.f) {
-      _specular = 0.f;
-    } else {
-      _specular = SpecularTerm(v, normalize(l), n, roughness, specular_f0);
-    }
+    float3 fresnel;
+    _specular =
+        SpecularTerm(v, normalize(l), n, roughness, specular_f0, fresnel);
+    _diffuse *= (1.f - fresnel);
   }
 };
 
@@ -421,7 +421,6 @@ uint GetLightIndex(uint _instance_idx, uint _geom_idx, uint _prim_idx) {
   InstanceData instance =
       LoadInstanceData(inst_buf, _instance_idx * sizeof(InstanceData));
   uint geom_idx = instance.first_geom_idx + _geom_idx;
-
   ArrayBuffer geom_to_light_arr =
       (ArrayBuffer)resample_params.bindless_handles.geo_instance_to_light;
   light_idx = geom_to_light_arr.Load<uint>(geom_idx);
@@ -437,34 +436,47 @@ bool RaytraceLocalLightVisibility(float3 _origin, float3 _direction,
   _light_idx = s_invalid_light_idx;
   _rand = 0.f;
 
-  RayDesc ray_desc;
-  ray_desc.Origin = _origin;
-  ray_desc.Direction = _direction;
-  ray_desc.TMin = _tmin;
-  ray_desc.TMax = _tmax;
+  RayDesc ray;
+  ray.Origin = _origin;
+  ray.Direction = _direction;
+  ray.TMin = _tmin;
+  ray.TMax = _tmax;
 
   float2 uv;
-  bool b_hit;
+  bool b_hit = false;
 
 #if USE_RAYQUERY
   RayQuery<RAY_FLAG_CULL_NON_OPAQUE | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES>
       ray_query;
-  ray_query.TraceRayInline(tlas, RAY_FLAG_NONE, RTVM_ALL, ray_desc);
+  ray_query.TraceRayInline(tlas, RAY_FLAG_NONE, RTVM_ALL, ray);
   ray_query.Proceed();
 
-  b_hit = ray_query.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
+  b_hit = (ray_query.CommittedStatus() == COMMITTED_TRIANGLE_HIT);
+
   if (b_hit) {
     _light_idx = GetLightIndex(ray_query.CommittedInstanceID(),
                                ray_query.CommittedGeometryIndex(),
                                ray_query.CommittedPrimitiveIndex());
     uv = ray_query.CommittedTriangleBarycentrics();
+
+    // calculate intersection point
+    // if (_light_idx != s_invalid_light_idx) {
+    //   float3 pos = ray_query.CommittedRayT() * _direction + _origin;
+    //   float2 rand = Math::BaryCentricsToRand2(Math::HitUVToBarycentrics(uv));
+    //   PolymorphicLightSample sp =
+    //       TriangleLight::Create(LoadLightInfo(_light_idx))
+    //           .Sample(rand, _origin);
+    //   printf("pos %f %f %f sample pos %f %f %f\n", pos.x, pos.y, pos.z,
+    //          sp.pos.x, sp.pos.y, sp.pos.z);
+    // }
+    // printf("calc dir dot ray dir %f\n", dot(calc_dir, _direction));
   }
 #else
 #endif
 
-  if (_light_idx == s_invalid_light_idx)
-    return b_hit;
-  _rand = Math::BaryCentricsToRand2(Math::HitUVToBarycentrics(uv));
+  if (_light_idx != s_invalid_light_idx)
+    _rand = Math::BaryCentricsToRand2(Math::HitUVToBarycentrics(uv));
+
   return b_hit;
 }
 
@@ -482,7 +494,6 @@ bool RaytraceConservativeVisibility(RaytracingAccelerationStructure _tlas,
   ray_query.Proceed();
 
   b_visible = (ray_query.CommittedStatus() == COMMITTED_NOTHING);
-
 #else
 #endif
 

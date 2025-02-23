@@ -66,7 +66,6 @@ void SampleLocalLights(inout RandomState _rng, Texture2D<float> _pdf_tex,
   uint light_idx = Math::ZCurveToLinearIndex(tex_pos);
   uint ris_idx = _ris_params.buffer_offset + _ris_params.tile_size * _tile_idx +
                  _sample_in_tile;
-
   float inv_pdf = 0.f;
   bool compact = false;
 
@@ -80,6 +79,7 @@ void SampleLocalLights(inout RandomState _rng, Texture2D<float> _pdf_tex,
   if (compact) {
     light_idx |= s_di_light_compact_bit;
   }
+  // printf("s_di_light_compact_bit %d\n", s_di_light_compact_bit);
   rw_ris_buffer[ris_idx] = uint2(light_idx, asuint(inv_pdf));
 }
 
@@ -99,7 +99,6 @@ void SampleEnvMap(inout RandomState _rng, Texture2D<float> _pdf_tex,
   float inv_pdf = pdf > 0.f ? 1.f / pdf : 0.f;
   uint ris_idx = _ris_params.buffer_offset + _ris_params.tile_size * _tile_idx +
                  _sample_in_tile;
-
   rw_ris_buffer[ris_idx] = uint2(packed_uv, asuint(inv_pdf));
 }
 
@@ -109,26 +108,25 @@ void SampleLocalLightsForGrid(inout RandomState _rng,
                               DI::RISBufferSegmentParams _ris_params,
                               Grid::Params _grid_params) {
   uint ris_idx = _grid_params.common_params.ris_buffer_offset + _light_slot;
-
   if (_grid_params.common_params.num_build_samples == 0) {
     rw_ris_buffer[ris_idx] = uint2(0, 0);
     return;
   }
 
   uint light_in_ceil = _light_slot % _grid_params.common_params.lights_per_cell;
-  uint ceil_idx = _light_slot / _grid_params.common_params.lights_per_cell;
+  uint cell_idx = _light_slot / _grid_params.common_params.lights_per_cell;
 
-  float3 ceil_center;
-  float ceil_radius;
+  float3 cell_center;
+  float cell_radius;
 
-  if (!Grid::WorldPosFromCellIdx(_grid_params, int(ceil_idx), ceil_center,
-                                 ceil_radius)) {
+  if (!Grid::WorldPosFromCellIdx(_grid_params, int(cell_idx), cell_center,
+                                 cell_radius)) {
     rw_ris_buffer[ris_idx] = uint2(0, 0);
     return;
   }
 
   // apply jitter
-  ceil_radius *= (_grid_params.common_params.jitter + 1.f);
+  cell_radius *= (_grid_params.common_params.jitter + 1.f);
 
   PolymorphicLightInfo light_info = EmptyLightInfo();
   uint seleted = 0;
@@ -160,7 +158,7 @@ void SampleLocalLightsForGrid(inout RandomState _rng,
     inv_pdf *= inv_num_samples;
 
     float target_pdf = PolymorphicLight::GetVolumeWeight(
-        cur_light_info, ceil_center, ceil_radius);
+        cur_light_info, cell_center, cell_radius);
     float ris_rnd = _rng.GetFloat();
 
     float ris_weight = target_pdf * inv_pdf;
@@ -182,6 +180,7 @@ void SampleLocalLightsForGrid(inout RandomState _rng,
   }
 
   if (compact) {
+    // printf("selected %d ris_weight %f\n", seleted, weight);
     seleted |= s_di_light_compact_bit;
   }
   rw_ris_buffer[ris_idx] = uint2(seleted, asuint(weight));

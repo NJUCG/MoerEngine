@@ -185,7 +185,7 @@ namespace Moer::Render {
 
         uint light_buf_offset = 0;
 
-        Array<uint> geo_instance_to_light(scene.GetEntityCount());
+        Array<uint> geo_instance_to_light(scene.GetEntityCount(), s_invalid_light_idx);
 
         uint idx = 0;
 
