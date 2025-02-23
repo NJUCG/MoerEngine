@@ -575,7 +575,7 @@ struct TriangleLight {
   PolymorphicLightSample Sample(in const float2 _rnd, in const float3 _vp) {
     PolymorphicLightSample ls;
 
-    const float3 bary = Math::SampleTriangle(_rnd);
+    const float3 bary = Math::Rand2ToBaryCentrics(_rnd);
     const float3 sample_pos = v0 + edge1 * bary.y + edge2 * bary.z;
     const float3 sample_normal = normal;
 
@@ -618,11 +618,13 @@ struct TriangleLight {
 
   static TriangleLight Create(in const PolymorphicLightInfo _info) {
     TriangleLight tl;
-    tl.v0 = _info.center.xyz;
     tl.edge1 = Math::OctToNdirUnorm32(_info.direction1) *
                f16tof32(_info.scalars & 0xffff);
     tl.edge2 = Math::OctToNdirUnorm32(_info.direction2) *
                f16tof32(_info.scalars >> 16);
+
+    tl.v0 = _info.center.xyz - (tl.edge1 + tl.edge2) / 3.0f;
+
     tl.radiance = UnpackLightColor(_info);
     tl.normal = cross(tl.edge1, tl.edge2);
 

@@ -81,6 +81,7 @@ namespace Moer::Render {
         auto div_ceil = [](uint _a, uint _b) -> uint {
             return (_a + _b - 1) / _b;
         };
+        int i = s_di_light_compact_bit;
 
         if (is_ctx.GetLightBufferParams().local_light_region.light_cnt) {
             uint2 dispatch_size = uint2(div_ceil(is_ctx.GetLocalLightRISBufferParams().tile_size, 256), is_ctx.GetLocalLightRISBufferParams().tile_cnt);

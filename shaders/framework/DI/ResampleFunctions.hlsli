@@ -31,6 +31,7 @@ Reservoir TemporalResampling(uint2 _pixel_pos, Surface _surface,
                              out int2 _temporal_sample_pos,
                              inout LightSample _out_sample) {
 
+  [branch]
   if (_t_params.bias_correction_mode == s_di_bias_correction_pair_wise) {
     _t_params.bias_correction_mode = s_di_bias_correction_basic;
   }
@@ -50,6 +51,7 @@ Reservoir TemporalResampling(uint2 _pixel_pos, Surface _surface,
   float3 motion = _t_params.screen_motion;
 
   // permutation sample
+  [branch]
   if (!_t_params.enable_permutation_sampling) {
     motion.xy += float2(_rng.GetFloat(), _rng.GetFloat()) - 0.5f;
   }
@@ -138,6 +140,7 @@ Reservoir TemporalResampling(uint2 _pixel_pos, Surface _surface,
     }
   }
 
+  [branch]
   if (_t_params.bias_correction_mode >= s_di_bias_correction_basic) {
 
     float pi = res.target_pdf;

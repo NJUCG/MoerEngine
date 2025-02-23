@@ -80,12 +80,10 @@ GeometryRecord GetGeometryRecordFrom(uint _instance_idx, uint _geometry_idx,
   geo_record.instance = Moer::LoadInstanceData(
       _instance_data, _instance_idx * sizeof(Moer::InstanceData));
   geo_record.geometry = Moer::LoadGeometryData(
-      _geometry_data, _geometry_idx + geo_record.instance.first_geom_idx *
+      _geometry_data, (_geometry_idx + geo_record.instance.first_geom_idx) *
                                           sizeof(Moer::GeometryData));
   geo_record.material = UnpackMaterialData<MaterialData>(
       _material_data, geo_record.geometry.GetMaterialIdx());
-
-  //   printf("material_id %d\n", geo_record.geometry.GetMaterialIdx());
 
   ArrayBuffer vtx_buffer =
       ArrayBuffer(geo_record.geometry.vertex_buffer_handle);
@@ -148,7 +146,9 @@ GeometryRecord GetGeometryRecordFrom(uint _instance_idx, uint _geometry_idx,
     normals[2] = Moer::Unpack_RGB8_SNORM(
         vtx_buffer.Load<uint>(indices.z, geo_record.geometry.normal_offset));
 
-    geo_record.normal = Moer::Interpolate(normals, barycentrics);
+    float3 local_normal = Moer::Interpolate(normals, barycentrics);
+    
+    geo_record.normal = normalize(mul((float3x3)geo_record.instance.model2world, local_normal));
   }
 
   if (_attrib & EGA_Tangent) {
@@ -163,6 +163,7 @@ GeometryRecord GetGeometryRecordFrom(uint _instance_idx, uint _geometry_idx,
         vtx_buffer.Load<uint>(indices.z, geo_record.geometry.tangent_offset));
 
     geo_record.tangent = Moer::Interpolate(tangents, barycentrics);
+    geo_record.tangent = normalize(mul((float3x3)geo_record.instance.model2world, geo_record.tangent));
   }
 
   return geo_record;
@@ -249,14 +250,22 @@ MaterialSample SampleGeometryMaterial(GeometryRecord _geo_record,
   result.roughness = _geo_record.material.roughness_factor;
   result.metalness = _geo_record.material.metallic_factor;
 
-  STL::BRDF::ConvertBaseColorMetalnessToAlbedoRf0(
-      result.base_color, result.metalness, result.diffuse_albedo,
-      result.specular_f0);
+  result.emissive = _geo_record.material.emissive_factor;
+
+
   result.occlusion = 1.f;
   result.opacity = 1.f; // todo: support opacity map and factor
   result.transmission = 0.f;
-  result.emissive = _geo_record.material.emissive_factor;
 
+  float emission_level = STL::Color::Luminance(result.emissive);
+  emission_level = saturate(emission_level * 50.0);
+
+  result.metalness = lerp(result.metalness, 0.0, emission_level);
+  result.roughness = lerp(result.roughness, 1.0, emission_level);
+
+  STL::BRDF::ConvertBaseColorMetalnessToAlbedoRf0(
+      result.base_color, result.metalness, result.diffuse_albedo,
+      result.specular_f0);
   //   if(_geo_record.geometry.GetMaterialIdx() != 1)
   //   printf("material_id %d base_color %f %f %f matalic %f roughness %f
   //   emissive %f %f %f\n", _geo_record.geometry.GetMaterialIdx(),

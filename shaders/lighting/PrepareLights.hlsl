@@ -7,6 +7,7 @@
 BINDLESS_BINDINGS(3, 2, 4, 5)
 #include <framework/Material.hlsl>
 #include <framework/PolymorphicLight.hlsli>
+#include <shared/utils/Packing.h>
 
 [[vk::push_constant]] ConstantBuffer<Moer::PrepareLightsParams> param;
 
@@ -67,7 +68,7 @@ bool FindTask(uint dtid, out Moer::PrepareLightsTask task) {
 
     Moer::GeometryData geom = Moer::LoadGeometryData(
         geom_data_array.GetByteAddressBuffer(),
-        (task.instance_geo_idx & 0xfff) * sizeof(Moer::GeometryData));
+        (inst.first_geom_idx + (task.instance_geo_idx & 0xfff)) * sizeof(Moer::GeometryData));
 
     ArrayBuffer vtx_buffer = ArrayBuffer(geom.vertex_buffer_handle);
     ArrayBuffer idx_buffer = ArrayBuffer(geom.index_buffer_handle);
@@ -99,8 +100,17 @@ bool FindTask(uint dtid, out Moer::PrepareLightsTask task) {
     tri_light.radiance = emissive;
 
     light_info = tri_light.ToLightInfo();
-    // printf("mat_idx %d\n", param.material_data_handle);
-    // float power = Moer::PolymorphicLight::GetPower(light_info);
+    tri_light = Moer::TriangleLight::Create(light_info);
+
+    // float3 test_bary = float3(0.1f, 0.3f, 0.6f);
+
+    // float3 test_pos = Moer::Interpolate(positions, test_bary);
+    // float sqrt_x = 1.f - test_bary.x;
+    // float2 rand2 = float2(sqrt_x * sqrt_x, test_bary.z / sqrt_x);
+    // Moer::PolymorphicLightSample sp = tri_light.Sample(rand2, 0.f);
+    // float3 sp_pos = sp.pos;
+    // printf("test_pos %f %f %f sp_pos %f %f %f\n", test_pos.x, test_pos.y,
+    //        test_pos.z, sp_pos.x, sp_pos.y, sp_pos.z);
   }
 
   uint light_buf_idx = task.light_offset + tri_idx;

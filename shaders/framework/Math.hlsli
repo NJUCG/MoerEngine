@@ -124,7 +124,7 @@ float2 SampleDisk(float2 rand) {
 
 float3 SampleTriangle(float2 rand) {
   float u = sqrt(rand.x);
-  return float3(1 - u, u * rand.y, u * (1 - rand.y));
+  return float3(1 - u, u * (1 - rand.y), u * rand.y);
 }
 
 float3 SampleHemisphere(float2 rand) {
@@ -142,7 +142,7 @@ float3 SampleHemisphereCosine(float2 rand) {
 
 float3 SampleHemisphereCosineWithPdf(float2 rand, out float pdf) {
   float2 disk = SampleDisk(rand);
-  float z = sqrt(max(0.f, 1.f - rand.y));
+  float z = sqrt(saturate(1.f - rand.y));
   pdf = z / PI;
   return float3(disk, z);
 }
@@ -177,16 +177,16 @@ float2 DirToEquirectangularUV(float3 _dir) {
 
 float3 Rand2ToBaryCentrics(float2 _uv) {
   float sqrt_x = sqrt(_uv.x);
-  return float3(1.0 - sqrt_x, _uv.y * sqrt_x, (1.0 - _uv.y) * sqrt_x);
+  return float3(1.f - sqrt_x, (1.f - _uv.y) * sqrt_x, _uv.y * sqrt_x);
 }
 
 float3 HitUVToBarycentrics(float2 _uv) {
-  return float3(1.0 - _uv.x - _uv.y, _uv.x, _uv.y);
+  return float3(1.f - _uv.x - _uv.y, _uv.x, _uv.y);
 }
 
 float2 BaryCentricsToRand2(float3 _bary) {
   float sqrt_x = 1.f - _bary.x;
-  return float2(sqrt_x * sqrt_x, _bary.y / sqrt_x);
+  return float2(sqrt_x * sqrt_x, _bary.z / sqrt_x);
 }
 
 // Random State

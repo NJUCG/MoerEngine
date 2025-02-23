@@ -16,8 +16,9 @@ namespace Moer::Render {
         DEFINE_SHADER_TEX(view_depth);
         DEFINE_SHADER_TEX(emission);
         DEFINE_SHADER_TEX(output);
+        DEFINE_SHADER_BINDLESS_ARRAY(bdls);
 
-        DEFINE_SHADER_ARGS(param, direct_lighting, diffuse_lighting, specular_lighting, view_depth, emission, output);
+        DEFINE_SHADER_ARGS(param, direct_lighting, diffuse_lighting, specular_lighting, view_depth, emission, output, bdls);
     };
 
     struct VisualizeConfig {
@@ -29,7 +30,7 @@ namespace Moer::Render {
     class VisualizePass {
     public:
         VisualizePass(RenderDevice& _device, class ShaderManager& _manager);
-        void Process(CommandList& _cmd_list, RTContext& _rt_ctx, const VisualizeConfig& _config);
+        void Process(CommandList& _cmd_list, RTContext& _rt_ctx, const VisualizeConfig& _config, BindlessArrayRef _bdls_array);
 
     private:
         RenderDevice&  device;
