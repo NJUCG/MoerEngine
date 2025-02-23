@@ -1598,7 +1598,12 @@ namespace Moer::Render {
         alloc_create_info.usage = VulkanMemoryManager::MEGenerateVmaMemoryUsage();
 
         VmaAllocator allocator = m_device->GetVmaAllocator();
-        VK_CHECK_RESULT(vmaCreateBuffer(allocator, &buffer_create_info, &alloc_create_info, &m_alloc.buffer, &m_alloc.alloc, nullptr));
+        auto result = vmaCreateBuffer(allocator, &buffer_create_info, &alloc_create_info, &m_alloc.buffer, &m_alloc.alloc, nullptr);
+        if (result == VkResult::VK_ERROR_INITIALIZATION_FAILED) {
+            LOG_CRITICAL("Failed to create buffer, buffer size: {} = {} * {}", buffer_create_info.size, _info.size, _info.stride);
+        } else {
+            VK_CHECK_RESULT(result);
+        }
 
         //get device address
         VkBufferDeviceAddressInfo info{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};

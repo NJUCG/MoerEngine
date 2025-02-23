@@ -298,7 +298,7 @@ namespace Moer {
     ImageReadDesc ImageIO::ReadFromFile(const std::filesystem::path& path, uint32_t desired_channal) {
         ImageReadDesc desc;
         const auto&   path_str = path.string();
-        if (path_str.ends_with(".png") || path_str.ends_with("jpg")) {
+        if (path_str.ends_with(".png") || path_str.ends_with("jpg") || path_str.ends_with("jpeg")) {
             desc.data = stbi_load(path_str.c_str(), reinterpret_cast<int*>(&desc.width), reinterpret_cast<int*>(&desc.height), reinterpret_cast<int*>(&desc.channal), desired_channal);
             if (!desc.data) {
                 return desc;

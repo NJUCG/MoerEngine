@@ -32,6 +32,7 @@ namespace Resource {
             if (auto scene_data = std::move(scene_load_function_maps[ext](_file_path))) {
                 SceneCache::ConvertToScene(*scene_data, _scene, true);
                 load_info->progress.store(1);
+                LOG_INFO("Scene loaded successfully from file: {}", _file_path.string());
             }
         });
     }
@@ -47,6 +48,7 @@ namespace Resource {
                 LambdaTask::Dispatch([_file_path, scene]() {
                     try {
                         SceneCache::LoadSceneFromCache(_file_path, scene);
+                        LOG_INFO("Scene loaded successfully from cache: {}", _file_path.string());
                     } catch (const std::exception& e) {
                         LOG_ERROR("Failed to load scene from cache: {} retrying to load from file", e.what());
                         Scene::ResetAsyncLoadInfo();
