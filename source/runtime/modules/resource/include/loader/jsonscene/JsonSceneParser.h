@@ -14,7 +14,6 @@ namespace Moer::Resource::JsonScene {
         ~JsonSceneParser() noexcept;
 
         static RESOURCE_API UniquePtr<SceneData> LoadSceneFromFile(const Path& abs_scn_json_path) noexcept;
-        static RESOURCE_API void                 LoadSceneFromFileAsync(const Path& abs_scn_json_path) noexcept;
 
     private:
         class Impl;

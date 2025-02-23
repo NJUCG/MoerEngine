@@ -68,40 +68,39 @@ namespace Moer::Resource::JsonScene {
         void PushbackMeshInfo(SharedPtr<MeshInfo> info, const MeshProcessOutput& output) {
             scn_dat->m_mesh_infos.push_back(info);
             PushbackMeshlets(output);
-            scn_dat->m_vertex_data.insert(scn_dat->m_vertex_data.end(), output.meshlet_vertex_data.begin(), output.meshlet_vertex_data.end());
-            scn_dat->m_index_data.insert(scn_dat->m_index_data.end(), output.primitive_indices.begin(), output.primitive_indices.end());
+            // scn_dat->m_vertex_data.insert(scn_dat->m_vertex_data.end(), output.meshlet_vertex_data.begin(), output.meshlet_vertex_data.end());
+            // scn_dat->m_index_data.insert(scn_dat->m_index_data.end(), output.primitive_indices.begin(), output.primitive_indices.end());
             vertex_cnt += info->vtx_count;
             index_cnt += info->idx_count;
         }
-        void PushbackVertexData(const Array<float>& data) {
-            scn_dat->m_vertex_data.insert(scn_dat->m_vertex_data.end(), data.begin(), data.end());
-        }
-        void PushbackIndexData(const Array<uint32_t>& data) {
-            scn_dat->m_index_data.insert(scn_dat->m_index_data.end(), data.begin(), data.end());
-        }
+        // void PushbackVertexData(const Array<float>& data) {
+        //     scn_dat->m_vertex_data.insert(scn_dat->m_vertex_data.end(), data.begin(), data.end());
+        // }
+        // void PushbackIndexData(const Array<uint32_t>& data) {
+        //     scn_dat->m_index_data.insert(scn_dat->m_index_data.end(), data.begin(), data.end());
+        // }
 
-        void PushbackInstanceMeshInfo(const InstanceMeshInfo& info) {
-            scn_dat->m_instance_mesh_info.push_back(info);
-        }
+        // void PushbackInstanceMeshInfo(const InstanceMeshInfo& info) {
+        //     scn_dat->m_instance_mesh_info.push_back(info);
+        // }
 
         void saveTextureData(const std::string& rel_texture_path, const TextureData& texture_data, MaterialInstanceRef& mat, const std::string& param_name) {
             scn_dat->m_textures[rel_texture_path] = texture_data;
             scn_dat->m_mat_instance_textures[mat->GetName()].textures.push_back({param_name, rel_texture_path});
         }
         void PushbackInstanceData(Matrix4x4f model2world, float max_scale, uint32_t padding) {
-            uint32_t instance_id = static_cast<uint32_t>(scn_dat->instance_infos.size());
+            uint32_t instance_id = static_cast<uint32_t>(scn_dat->m_instance_infos.size());
 
             //TODO: use new instance data
             float3x4             overload_m1 = Matrix3x4f{model2world.r0, model2world.r1, model2world.r2};
             Render::InstanceData data{
                 .model2world      = overload_m1,
                 .prev_model2world = overload_m1};
-            scn_dat->instance_infos.push_back(data);
-            scn_dat->m_instance_id.push_back(instance_id);
+            scn_dat->m_instance_infos.push_back(data);
         }
-        void PushbackPrimInfo(const uint32_t& mesh_id, const std::string& material_name, const Transform& transform) {
-            scn_dat->m_prim_infos.emplace_back(mesh_id, material_name, transform);
-        }
+        // void PushbackPrimInfo(const uint32_t& mesh_id, const std::string& material_name, const Transform& transform) {
+        //     scn_dat->m_prim_infos.emplace_back(mesh_id, material_name, transform);
+        // }
 
     private:
         void PushbackMeshlets(const MeshProcessOutput& output) {
@@ -122,7 +121,6 @@ namespace Moer::Resource::JsonScene {
     class JsonSceneParser::Impl {
     public:
         UniquePtr<SceneData> LoadSceneFromFile(const Path& abs_scn_json_path, bool _delete_after_load = false);
-        void                 LoadSceneFromFileAsync(const Path& abs_scn_json_path);
         ~Impl() = default;
 
     private:
@@ -165,34 +163,11 @@ namespace Moer::Resource::JsonScene {
         return std::move(UniquePtr<SceneData>(impl.LoadSceneFromFile(abs_scn_json_path)));
     }
 
-    RESOURCE_API void Moer::Resource::JsonScene::JsonSceneParser::LoadSceneFromFileAsync(const std::filesystem::path& abs_scn_json_path) noexcept {
-        // Impl* impl = MoerNew(Impl);
-        // impl->LoadSceneFromFileAsync(abs_scn_json_path);
-    }
-
-    // void JsonSceneParser::Impl::LoadSceneFromFileAsync(const Path& abs_scn_json_path) {
-    //     AsyncSceneLoadInfoRef load_info = MoerNew(AsyncSceneLoadInfo);
-    //     load_info->b_valid              = true;
-    //     load_info->progress.store(0);
-    //     Scene::RegisterAsyncLoadInfo(load_info);
-    //     LambdaTask::Dispatch(
-    //         [this, path(abs_scn_json_path), info(load_info)]() {
-    //             Timer* timer = MoerNew(Timer);
-    //             timer->Start();
-    //             auto load_info  = Scene::GetCurrentSceneLoadInfo();
-    //             auto scene_data = this->LoadSceneFromFile(path, true);
-    //             EnqueueRenderTask([load_info = std::move(load_info), scene_data = std::move(scene_data), timer]() {
-    //                 load_info->scene = SceneCache::ConvertToScene(*scene_data).release();
-    //                 Scene::SetCurrentScene(std::move(load_info->scene));
-    //                 load_info->progress.store(1);
-    //                 timer->Stop();
-    //                 LOG_INFO("Load Json Scene {} Success, Time:{}", scene_data->m_path.string(), timer->ElapsedMilliseconds());
-    //                 MoerDelete(timer);
-    //             });
-    //         });
-    // }
-
     UniquePtr<SceneData> JsonSceneParser::Impl::LoadSceneFromFile(const Path& abs_scn_json_path, bool _delete_after_load) {
+
+        LOG_ERROR("JSON Scene Loader needs a huge refactor. JSON scene is not supported yet.");
+        assert(false);
+
         GpuPrimitiveBuilder::InitBuild();
         ExtendedSceneData ret_scene;
         auto              real_path = std::filesystem::weakly_canonical(abs_scn_json_path);
@@ -262,7 +237,7 @@ namespace Moer::Resource::JsonScene {
             if (entity_json["type"] == "quad") {
                 transform = transform * GetQuadTransform(entity_json);
             }
-            dst.PushbackPrimInfo(mesh_id, material_name, transform);
+            // dst.PushbackPrimInfo(mesh_id, material_name, transform);
 
             auto  model_2_world = transform.GetMatrix4x4();
             auto  scale         = transform.AffineDecomposition().scaling;
