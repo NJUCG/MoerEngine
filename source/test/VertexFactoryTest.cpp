@@ -3,6 +3,7 @@
 #include "resources/vertexfactory/VertexAttributes.h"
 #include "resources/vertexfactory/VertexFactoryBuffers.h"
 #include "misc/STL.h"
+#include "log/LogSystem.h"
 
 using namespace Moer;
 
@@ -21,13 +22,13 @@ void TestVertexAttributes() {
 // MARK: Main Function
 int main(int argc, const char** argv) {
 
-    std::cout << "VertexFactoryTest Start!" << std::endl;
+    LOG_INFO("VertexFactoryTest Start!");
 
     TestVertexAttributes();
 
     TestVertexFactoryBuffers();// in VertexFactory.h
 
-    std::cout << "VertexFactoryTest Passed!" << std::endl;
+    LOG_INFO("VertexFactoryTest Passed!");
 
     return 0;
 }

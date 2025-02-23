@@ -22,20 +22,14 @@ namespace Moer {
      * The buffer length and data can be dynamically set after instantiation
      */
     class RENDER_API VertexFactoryBuffers {
-        using Buffers           = Array<Array<uint8>>;
-        using Attributes        = Array<EVertexAttributes>;
-        using AttributesToIdMap = StaticArray<size_t, VA_NUM>;
 
     private:
         // assert m_num_of_attributes == m_buffers.size() == m_attributes.size() == m_pixel_formats.size()
         size_t m_num_of_attributes;
 
-        // assert m_buffers_length == all buffers length
-        size_t m_buffers_length;
-
-        Buffers           m_buffers;
-        Attributes        m_attributes;
-        AttributesToIdMap m_attributes_map;
+        Array<Array<uint8>>         m_buffers;// Buffer length == m_buffers[0].length() / m_attribute_sizes[0]
+        Array<EVertexAttributes>    m_attributes;
+        StaticArray<size_t, VA_NUM> m_attributes_map;
 
         Array<EPixelFormat> m_pixel_formats;  // cache, could be instead by VertexAttributesTool
         Array<size_t>       m_attribute_sizes;// cache, could be instead by VertexAttributesTool
@@ -53,7 +47,7 @@ namespace Moer {
 
         EPixelFormat GetPixelFormatOfAttribute(EVertexAttributes attr) const;
 
-        size_t GetBufferLength() const;
+        size_t GetBufferLength(EVertexAttributes attr) const;
 
         const void* GetBufferData(EVertexAttributes attr) const;
 
@@ -64,7 +58,16 @@ namespace Moer {
          * 
          * Example: TestVertexFactoryBuffers => unsafe method
          */
-        void SetBufferLength(size_t length);
+        void SetBufferLength(EVertexAttributes attr, size_t length);
+
+        /**
+         * Safe but slow method. (Need an extra memory copy)
+         * 
+         * Example: TestVertexFactoryBuffers => safe method
+         * 
+         * If you want a fast but unsafe method, you can write your own AssignAllBuffers.
+         */
+        void AssignBuffer(EVertexAttributes attr, const void* data, size_t size);
 
         /**
          * Safe but slow method. (Need an extra memory copy)
@@ -81,8 +84,6 @@ namespace Moer {
 
     private:
         size_t GetAttributeIndex(EVertexAttributes attr) const;
-
-        void AssignBuffer(EVertexAttributes attr, const void* data, size_t size);
     };
 
     void RENDER_API TestVertexFactoryBuffers();

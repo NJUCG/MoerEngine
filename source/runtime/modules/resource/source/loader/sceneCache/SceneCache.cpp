@@ -720,13 +720,17 @@ namespace Moer {
             //calculate vertex buffer size
             uint vertex_size = 0;
 
-            size_t buffer_length = buf->vertex_factory_buffers.GetBufferLength();
+            size_t position_buffer_length  = buf->vertex_factory_buffers.GetBufferLength(EVertexAttributes::VA_POSITION);
+            size_t normal_buffer_length    = buf->vertex_factory_buffers.GetBufferLength(EVertexAttributes::VA_NORMAL);
+            size_t tangent_buffer_length   = buf->vertex_factory_buffers.GetBufferLength(EVertexAttributes::VA_TANGENT);
+            size_t texcoord0_buffer_length = buf->vertex_factory_buffers.GetBufferLength(EVertexAttributes::VA_TEXCOORD0);
+            // size_t texcoord1_buffer_length = buf->vertex_factory_buffers.GetBufferLength(EVertexAttributes::VA_TEXCOORD1);
 
-            size_t position_buffer_size  = buffer_length * VertexAttributesTool::GetSize(EVertexAttributes::VA_POSITION);
-            size_t normal_buffer_size    = buffer_length * VertexAttributesTool::GetSize(EVertexAttributes::VA_NORMAL);
-            size_t tangent_buffer_size   = buffer_length * VertexAttributesTool::GetSize(EVertexAttributes::VA_TANGENT);
-            size_t texcoord0_buffer_size = buffer_length * VertexAttributesTool::GetSize(EVertexAttributes::VA_TEXCOORD0);
-            // size_t texcoord1_buffer_size = buffer_length * VertexAttributesTool::GetSize(EVertexAttributes::VA_TEXCOORD1);
+            size_t position_buffer_size  = position_buffer_length * VertexAttributesTool::GetSize(EVertexAttributes::VA_POSITION);
+            size_t normal_buffer_size    = normal_buffer_length * VertexAttributesTool::GetSize(EVertexAttributes::VA_NORMAL);
+            size_t tangent_buffer_size   = tangent_buffer_length * VertexAttributesTool::GetSize(EVertexAttributes::VA_TANGENT);
+            size_t texcoord0_buffer_size = texcoord0_buffer_length * VertexAttributesTool::GetSize(EVertexAttributes::VA_TEXCOORD0);
+            // size_t texcoord1_buffer_size = texcoord1_buffer_length * VertexAttributesTool::GetSize(EVertexAttributes::VA_TEXCOORD1);
 
             auto position_buffer_ptr  = buf->vertex_factory_buffers.GetBufferData(EVertexAttributes::VA_POSITION);
             auto normal_buffer_ptr    = buf->vertex_factory_buffers.GetBufferData(EVertexAttributes::VA_NORMAL);

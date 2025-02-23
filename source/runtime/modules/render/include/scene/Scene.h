@@ -120,7 +120,7 @@ namespace Moer {
             for (size_t i = 0; i < vertex_factory_buffers.GetAttributesCount(); i++) {
                 EVertexAttributes attr = vertex_factory_buffers.GetAttribute(i);
 
-                vertex_ranges[static_cast<size_t>(attr)] = {offset, vertex_factory_buffers.GetBufferLength() * vertex_factory_buffers.GetSizeOfAttribute(attr)};
+                vertex_ranges[static_cast<size_t>(attr)] = {offset, vertex_factory_buffers.GetBufferLength(attr) * vertex_factory_buffers.GetSizeOfAttribute(attr)};
 
                 offset += vertex_ranges[static_cast<size_t>(attr)].size;
             }
