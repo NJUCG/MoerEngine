@@ -28,6 +28,10 @@ float3 ViewdepthToWorldPos(Moer::ViewParam _view, int2 _pixel_pos,
   return mul(_view.view2world, view_pos).xyz;
 }
 
+float2 GetUV(int2 _pixel_pos, Moer::ViewParam _view) {
+  return (float2(_pixel_pos) + 0.5f) * _view.inv_rect;
+}
+
 float3 GetNormal(Moer::ViewParam _view, int2 _pixel_pos) {
   float2 v = (float2(_pixel_pos) + 0.5f) * _view.inv_rect;
 
@@ -35,6 +39,15 @@ float3 GetNormal(Moer::ViewParam _view, int2 _pixel_pos) {
       (TextureHandle)param.bindless_handles.gbuffer_normal;
   uint normal = tex_handle.SampleLevel<uint>(v, 0);
   return Math::OctToNdirUnorm32(normal);
+}
+
+float3 GetMotion(Moer::ViewParam _view, int2 _pixel_pos){
+  float2 uv = GetUV(_pixel_pos, _view);
+  TextureHandle tex_handle =
+      (TextureHandle)param.bindless_handles.motion;
+
+  float3 motion = tex_handle.SampleLevel<float3>(uv, 0);
+  return motion;
 }
 
 void VisualizeGrid(uint2 _pixel_pos, out float4 _final_color) {
@@ -103,7 +116,11 @@ float4 GetMaterialColor(Moer::ViewParam _view, uint2 _pixel_pos) {
   case Moer::EFC_MATERIAL:
     final_color = GetMaterialColor(param.main_view, pixel_pos);
     break;
+  case Moer::EFC_MOTION:
+    final_color = float4(GetMotion(param.main_view, pixel_pos), 1.f);
+    break;
   }
+  
 
   output[pixel_pos] = final_color;
 }
