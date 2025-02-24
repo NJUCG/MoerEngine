@@ -22,7 +22,7 @@ namespace Moer::Render {
         };
         struct Config {
             float3 sun_direction        = float3(0.f, 0.5f, 0.16f);
-            float  exposure             = 80.f;
+            float  exposure             = 6.f;
             float  sun_angular_diameter = 0.533f;
             uint   max_bounce           = 4;
 

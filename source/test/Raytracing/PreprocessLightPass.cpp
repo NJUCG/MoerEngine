@@ -185,7 +185,7 @@ namespace Moer::Render {
 
         uint light_buf_offset = 0;
 
-        Array<uint> geo_instance_to_light(scene.GetEntityCount(), s_invalid_light_idx);
+        Array<uint> geo_instance_to_light(scene.GetGeometryInstances().size(), s_invalid_light_idx);
 
         uint idx = 0;
 
@@ -208,7 +208,8 @@ namespace Moer::Render {
                         instance_light_buffer_offsets.erase(instance_geo_hash);
                         continue;
                     }
-                    geo_instance_to_light[idx] = light_buf_offset;
+                    geo_instance_to_light[scene.GetInstanceDatas()[instance_id].first_geom_instance_idx + i] = light_buf_offset;
+                    // scene.GetInstanceDatas()[instance_id].first_geom_instance_idx
 
                     auto iter = instance_light_buffer_offsets.find(instance_geo_hash);
 
@@ -288,6 +289,9 @@ namespace Moer::Render {
         uint max_lights_in_buffer = uint(_rt_ctx.light_data_buf->GetNumElement() / 2);
         param.cur_light_offset    = max_lights_in_buffer * b_odd_frame;
         param.prev_light_offset   = max_lights_in_buffer * !b_odd_frame;
+
+        //test
+        param.geom_inst_to_light = _rt_ctx.GetBindlessHandles().geo_instance_to_light;
 
         _rt_ctx.is_ctx.SetLightBufferParams(
             param.cur_light_offset,

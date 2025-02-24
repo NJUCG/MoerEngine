@@ -188,6 +188,12 @@ float3 UintHashToColor(uint _idx) {
     float3 motion = Moer::GetMotion(
         gbuffer_constants.main_view, gbuffer_constants.prev_view, geom.instance,
         geom.model_pos, geom.model_pos_prev, clip_depth, view_depth);
+    float4 clip_xy = mul(
+        gbuffer_constants.main_view.world2clip,
+        float4(mul(geom.instance.model2world, float4(geom.model_pos, 1.0f)).xyz,
+               1.f));
+
+    clip_xy.xyz /= clip_xy.w;
 
     gbuffer_view_depth[pixel_pos] = view_depth;
     gbuffer_clip_depth[pixel_pos] = clip_depth;
@@ -195,9 +201,11 @@ float3 UintHashToColor(uint _idx) {
         Moer::Pack_R11G11B10_UFLOAT(mat_sample.base_color);
     gbuffer_specular_roughness[pixel_pos] = Moer::Pack_R8G8B8A8_Gamma_UFLOAT(
         float4(mat_sample.specular_f0, mat_sample.roughness));
-    // float4 before_pack = float4(mat_sample.specular_f0, mat_sample.roughness);
-    // float4 unpacked = Moer::Unpack_R8G8B8A8_Gamma_UFLOAT(gbuffer_specular_roughness[pixel_pos]);
-    // printf("before pack %f %f %f %f unpacked %f %f %f %f\n", before_pack.x, before_pack.y, before_pack.z,
+    // float4 before_pack = float4(mat_sample.specular_f0,
+    // mat_sample.roughness); float4 unpacked =
+    // Moer::Unpack_R8G8B8A8_Gamma_UFLOAT(gbuffer_specular_roughness[pixel_pos]);
+    // printf("before pack %f %f %f %f unpacked %f %f %f %f\n", before_pack.x,
+    // before_pack.y, before_pack.z,
     //        before_pack.w, unpacked.x, unpacked.y, unpacked.z, unpacked.w);
     gbuffer_normal[pixel_pos] = Math::NdirToOctUnorm32(mat_sample.normal);
 

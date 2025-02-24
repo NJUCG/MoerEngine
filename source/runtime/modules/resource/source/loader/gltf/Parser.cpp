@@ -704,20 +704,20 @@ namespace Moer::Resource::Gltf {
                     total_vtx_cnt += mesh->mNumVertices;
                     total_idx_cnt += mesh->mNumFaces * 3;
                 }
-
-                // use temp buffers to initialize vertex_factory_buffers
-                assert(total_vtx_cnt == position_buffer.size());
-                mesh_buffer->vertex_factory_buffers.AssignAllBuffers({
-                    {EVertexAttributes::VA_POSITION, position_buffer.data(), position_buffer.size()},
-                    {EVertexAttributes::VA_NORMAL, normal_buffer.data(), normal_buffer.size()},
-                    {EVertexAttributes::VA_TANGENT, tangent_buffer.data(), tangent_buffer.size()},
-                    {EVertexAttributes::VA_TEXCOORD0, texcoord0_buffer.data(), texcoord0_buffer.size()},
-                });
-
-                mesh_buffer->FillRanges();
             };
 
             LoadNodes(gltf_scene, gltf_scene->mRootNode, on_load_node_post);
+
+            // use temp buffers to initialize vertex_factory_buffers
+            assert(total_vtx_cnt == position_buffer.size());
+            mesh_buffer->vertex_factory_buffers.AssignAllBuffers({
+                {EVertexAttributes::VA_POSITION, position_buffer.data(), position_buffer.size()},
+                {EVertexAttributes::VA_NORMAL, normal_buffer.data(), normal_buffer.size()},
+                {EVertexAttributes::VA_TANGENT, tangent_buffer.data(), tangent_buffer.size()},
+                {EVertexAttributes::VA_TEXCOORD0, texcoord0_buffer.data(), texcoord0_buffer.size()},
+            });
+
+            mesh_buffer->FillRanges();
         }
 
         // MARK: Part 4 Camera&Light

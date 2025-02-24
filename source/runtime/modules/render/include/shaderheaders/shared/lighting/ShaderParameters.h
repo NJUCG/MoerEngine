@@ -80,6 +80,7 @@ namespace Moer {
         uint num_tasks;
         uint cur_light_offset;
         uint prev_light_offset;
+        uint geom_inst_to_light;
     };
 
     struct EnvironmentMapParams {

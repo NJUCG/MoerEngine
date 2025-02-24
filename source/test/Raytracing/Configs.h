@@ -91,7 +91,7 @@ namespace Moer::Render {
         params.discard_inviable_samples     = 0;
         params.max_history_length           = 16;
         params.bias_correction_mode         = s_di_bias_correction_traced;
-        params.depth_threshold              = 4.f;
+        params.depth_threshold              = 0.1f;
         params.normal_threshold             = 0.5f;
         return params;
     }

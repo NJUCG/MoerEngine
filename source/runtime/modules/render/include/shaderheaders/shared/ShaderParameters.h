@@ -88,6 +88,11 @@ namespace Moer {
         float2 inv_rect;
         float2 jitter;
 
+        float2 clip2window_scale;
+        float2 clip2window_bias;
+        float2 window2clip_scale;
+        float2 window2clip_bias;
+
         float4 dir_or_pos;//dir for ortho, pos for perspective//w 0 for dir
     };
     struct GBufferConstants {

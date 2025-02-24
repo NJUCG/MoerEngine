@@ -11,6 +11,9 @@ float TargetPdf(const Reservoir _res, const Surface _surface) {
   return _surface.GetLightSampleTargetPdf(l_sample);
 }
 
+//////////////////////////////////////////////////////////////////////////
+// Temporal Resampling
+//////////////////////////////////////////////////////////////////////////
 struct TemporalResampleParams {
   float3 screen_motion;
   uint src_buffer_idx;
@@ -31,8 +34,8 @@ Reservoir TemporalResampling(uint2 _pixel_pos, Surface _surface,
                              out int2 _temporal_sample_pos,
                              inout LightSample _out_sample) {
 
-  [branch]
-  if (_t_params.bias_correction_mode == s_di_bias_correction_pair_wise) {
+  [branch] if (_t_params.bias_correction_mode ==
+               s_di_bias_correction_pair_wise) {
     _t_params.bias_correction_mode = s_di_bias_correction_basic;
   }
 
@@ -51,8 +54,7 @@ Reservoir TemporalResampling(uint2 _pixel_pos, Surface _surface,
   float3 motion = _t_params.screen_motion;
 
   // permutation sample
-  [branch]
-  if (!_t_params.enable_permutation_sampling) {
+  [branch] if (!_t_params.enable_permutation_sampling) {
     motion.xy += float2(_rng.GetFloat(), _rng.GetFloat()) - 0.5f;
   }
 
@@ -140,8 +142,7 @@ Reservoir TemporalResampling(uint2 _pixel_pos, Surface _surface,
     }
   }
 
-  [branch]
-  if (_t_params.bias_correction_mode >= s_di_bias_correction_basic) {
+  [branch] if (_t_params.bias_correction_mode >= s_di_bias_correction_basic) {
 
     float pi = res.target_pdf;
     float pi_sum = res.target_pdf * _cur_res.M;
@@ -166,12 +167,81 @@ Reservoir TemporalResampling(uint2 _pixel_pos, Surface _surface,
     }
 
     res.FinalizeRIS(pi, pi_sum);
-  } else {
+  }
+  else {
     res.FinalizeRIS(1.f, res.M);
   }
 
   return res;
 }
+
+//////////////////////////////////////////////////////////////////////////
+// Spatial Resampling
+//////////////////////////////////////////////////////////////////////////
+float PairWiseMisWeight(float _w0, float _w1, float _M0, float _M1) {
+  // balanced heuristic
+  float denom = _w0 * _M0 + _w1 * _M1;
+  return denom > 0.f ? max((_w0 * _M0), 0.f) / denom : 0.f;
+}
+
+float MFactor(float _q0, float _q1) {
+  return (_q0 <= 0.0f) ? 1.0f
+                       : clamp(pow(min(_q1 / _q0, 1.0f), 8.0f), 0.0f, 1.0f);
+}
+
+bool StreamNeighborWithPairwiseMIS(inout Reservoir _res, float _rnd,
+                                   const Reservoir _neighbor_res,
+                                   const Surface _neigbor_surface,
+                                   const Reservoir _canonical_res,
+                                   const Surface _canonical_surface,
+                                   const uint _num_neighbors) {
+
+  float neighbor_weight_at_canonical =
+      max(0.f, TargetPdf(_neighbor_res, _canonical_surface));
+  float canonical_weight_at_neighbor =
+      max(0.f, TargetPdf(_canonical_res, _neigbor_surface));
+  float neighbor_weight_at_neighbor =
+      max(0.f, TargetPdf(_neighbor_res, _neigbor_surface));
+  float canonical_weight_at_canonical =
+      max(0.f, TargetPdf(_canonical_res, _canonical_surface));
+
+  // neighbor weight sum factor
+  float w0 = PairWiseMisWeight(
+      neighbor_weight_at_neighbor, neighbor_weight_at_canonical,
+      _neighbor_res.M * _num_neighbors, _canonical_res.M);
+
+  // canonical weight sum factor
+  float w1 = PairWiseMisWeight(
+      canonical_weight_at_neighbor, canonical_weight_at_canonical,
+      _neighbor_res.M * _num_neighbors, _canonical_res.M);
+
+  // Symmetric Weight
+  float M =
+      _neighbor_res.M *
+      min(MFactor(neighbor_weight_at_neighbor, neighbor_weight_at_canonical),
+          MFactor(canonical_weight_at_neighbor, canonical_weight_at_canonical));
+
+  // overweight canonical sample _num_neighbors times
+  _res.canonical_weight += (1.f - w1);
+  return _res.Resample(_neighbor_res, _rnd, neighbor_weight_at_canonical,
+                       w0 * _neighbor_res.weight_sum, M);
+}
+
+bool StreamCanonicalWithPairwiseMIS(inout Reservoir _res, float _rnd,
+                                    const Reservoir _canonical_res,
+                                    const Surface _canonical_surface) {
+
+  return _res.Resample(_canonical_res, _rnd, _canonical_res.target_pdf,
+                       _canonical_res.weight_sum * _res.canonical_weight,
+                       _canonical_res.M);
+}
+
+struct SpatialResampleParams {
+  uint src_buffer_idx;
+  uint num_samples;
+  uint max_history_length;
+};
+
 } // namespace DI
 } // namespace Moer
 #endif // MOER_DI_RESAMPLE_FUNCTIONS_HLSLI

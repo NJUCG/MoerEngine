@@ -337,18 +337,21 @@ namespace Moer::Render {
         auto& device = RenderDevice::Get();
         prev_view    = main_view;
 
-        main_view.view2world = Transpose(_camera->GetToWorldMatrix());
-        main_view.world2view = Transpose(_camera->GetViewMatrix());
-        main_view.world2clip = Transpose(_camera->GetViewProjectionMatrix());
-        main_view.view2clip  = Transpose(_camera->GetProjectionMatrix());
-        main_view.clip2view  = Transpose(_camera->GetProjectionMatrixInv());
-        main_view.clip2world = Transpose(_camera->GetViewProjectionMatrixInv());
-        main_view.frustum    = _camera->GetFrustum();
-        main_view.near_far   = float2(_camera->GetNearClip(), _camera->GetFarClip());
-        main_view.rect       = float2(is_ctx.GetReSTIRDIConfig().render_width, is_ctx.GetReSTIRDIConfig().render_height);
-        main_view.inv_rect   = float2(1.f / main_view.rect.x, 1.f / main_view.rect.y);
-        main_view.dir_or_pos = float4(_camera->GetPosition(), 1.f);
-
+        main_view.view2world        = Transpose(_camera->GetToWorldMatrix());
+        main_view.world2view        = Transpose(_camera->GetViewMatrix());
+        main_view.world2clip        = Transpose(_camera->GetViewProjectionMatrix());
+        main_view.view2clip         = Transpose(_camera->GetProjectionMatrix());
+        main_view.clip2view         = Transpose(_camera->GetProjectionMatrixInv());
+        main_view.clip2world        = Transpose(_camera->GetViewProjectionMatrixInv());
+        main_view.frustum           = _camera->GetFrustum();
+        main_view.near_far          = float2(_camera->GetNearClip(), _camera->GetFarClip());
+        main_view.rect              = float2(is_ctx.GetReSTIRDIConfig().render_width, is_ctx.GetReSTIRDIConfig().render_height);
+        main_view.inv_rect          = float2(1.f / main_view.rect.x, 1.f / main_view.rect.y);
+        main_view.dir_or_pos        = float4(_camera->GetPosition(), 1.f);
+        main_view.clip2window_scale = float2(0.5f * main_view.rect.x, 0.5f * main_view.rect.y);
+        main_view.clip2window_bias  = float2(0.5f * main_view.rect.x, 0.5f * main_view.rect.y);
+        main_view.window2clip_scale = float2(2.f / main_view.rect.x, 2.f / main_view.rect.y);
+        main_view.window2clip_bias  = float2(-1.f, -1.f);
         //restir
         {
 
