@@ -627,7 +627,7 @@ namespace Moer {
 
         for (auto& buf : _scene_data.m_mesh_buffers) {
 
-            buf->index_buffer = device.CreateBuffer<uint32_t>(buf->indices.size(), EBufferUsageFlags::INDEX_BUFFER | EBufferUsageFlags::ACCELERATION_STRUCTURE);
+            buf->index_buffer = device.CreateBuffer<uint32_t>(buf->indices.size(), EBufferUsageFlags::INDEX_BUFFER | EBufferUsageFlags::ACCELERATION_STRUCTURE | EBufferUsageFlags::UNORDERED_ACCESS);
             //calculate vertex buffer size
             uint vertex_size = 0;
 
@@ -655,7 +655,7 @@ namespace Moer {
             vertex_size += texcoord0_buffer_size;
             // vertex_size += texcoord1_buffer_size;
 
-            buf->vertex_buffer   = device.CreateBuffer<byte>(vertex_size, EBufferUsageFlags::VERTEX_BUFFER | EBufferUsageFlags::ACCELERATION_STRUCTURE);
+            buf->vertex_buffer   = device.CreateBuffer<byte>(vertex_size, EBufferUsageFlags::VERTEX_BUFFER | EBufferUsageFlags::ACCELERATION_STRUCTURE | EBufferUsageFlags::UNORDERED_ACCESS);
             buf->idx_bdls_handle = bindless_array->AllocateBuffer(buf->index_buffer->GetView());
             buf->vtx_bdls_handle = bindless_array->AllocateBuffer(buf->vertex_buffer->GetView());
             buf->vertex_buffer->SetName("soa_vertex_buffer");
