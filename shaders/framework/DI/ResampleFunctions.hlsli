@@ -64,9 +64,8 @@ Reservoir TemporalResampling(uint2 _pixel_pos, Surface _surface,
 
   Surface temporal_surface = Surface::EmptySurface();
   bool found_neighbor = false;
-  const float radius = 8.f;
+  const float radius = 4.f;
   int2 spatial_offset = int2(0, 0);
-
   // search around previous screen position to find a valid neighbor
   [unroll] for (int i = 0; i < 9; i++) {
     int2 offset = 0;
@@ -89,7 +88,7 @@ Reservoir TemporalResampling(uint2 _pixel_pos, Surface _surface,
     if (!Math::IsValidNeighbor(
             _surface.GetNormal(), temporal_surface.GetNormal(),
             expected_depth_linear, temporal_surface.GetLinearDepth(),
-            _t_params.normal_threshold, _t_params.depth_threshold)) {
+            _t_params.normal_threshold, 2.f)) {
 
       continue;
     }
@@ -112,6 +111,7 @@ Reservoir TemporalResampling(uint2 _pixel_pos, Surface _surface,
     prev_res.age += 1;
 
     uint original_light_idx = prev_res.GetLightIndex();
+
     if (prev_res.IsValid()) {
       if (prev_res.age <= 1) {
         _temporal_sample_pos = prev_pos;
@@ -121,6 +121,7 @@ Reservoir TemporalResampling(uint2 _pixel_pos, Surface _surface,
       if (mapped_light_idx < 0) {
         prev_res.weight_sum = 0.f;
         prev_res.light_data = 0;
+
       } else {
         prev_res.light_data = mapped_light_idx | s_di_reservoir_light_valid_bit;
       }
@@ -136,6 +137,7 @@ Reservoir TemporalResampling(uint2 _pixel_pos, Surface _surface,
 
     bool selected = res.Combine(prev_res, _rng.GetFloat(), current_weight);
     if (selected) {
+
       selected_prev_sample = true;
       prev_light_id = int(original_light_idx);
       _out_sample = candidate;
@@ -154,9 +156,10 @@ Reservoir TemporalResampling(uint2 _pixel_pos, Surface _surface,
           temporal_surface.SamplePolymorphicLight(selected_prev, res.GetUV());
       temporal_p = temporal_surface.GetLightSampleTargetPdf(selected_temporal);
 
-      if (_t_params.bias_correction_mode == s_di_bias_correction_traced &&
+      if (_t_params.bias_correction_mode >= s_di_bias_correction_traced &&
+          temporal_p > 0.f &&
           (!selected_prev_sample || !_t_params.enable_prior_visibility)) {
-        if (!GetPreviousConservativeVisibility(temporal_surface,
+        if (!GetPreviousConservativeVisibility(_surface,
                                                selected_temporal.x)) {
           temporal_p = 0.f;
         }
@@ -239,9 +242,227 @@ bool StreamCanonicalWithPairwiseMIS(inout Reservoir _res, float _rnd,
 struct SpatialResampleParams {
   uint src_buffer_idx;
   uint num_samples;
+  uint num_disocclusion_samples;
   uint max_history_length;
+  uint bias_correction_mode;
+  float sampling_radius;
+  float depth_threshold;
+  float normal_threshold;
+  bool b_test_material_similarity;
+  bool discount_native_samples;
 };
 
+Reservoir SpatialResampleWithPairwiseMIS(
+    uint2 _pixel_pos, Surface _surface, Reservoir _cur_res,
+    inout RandomState _rng, DI::CommonParams _params,
+    ReservoirBufferParams _reservoir_buffer_params,
+    SpatialResampleParams _s_params, inout LightSample _out_sample) {
+
+  Reservoir res = Reservoir::EmptyReservoir();
+  res.canonical_weight = 0.f;
+
+  uint num_samples =
+      (_cur_res.M < _s_params.max_history_length)
+          ? max(_s_params.num_disocclusion_samples, _s_params.num_samples)
+          : _s_params.num_samples;
+
+  uint start_idx = uint(_rng.GetFloat() * _params.neighbor_offset_mask);
+  uint num_valid_samples = 0;
+  uint i;
+
+  ArrayBuffer neighbor_offset_buf =
+      (ArrayBuffer)resample_params.bindless_handles.neighbor_offset;
+
+  for (i = 0; i < num_samples; i++) {
+    uint sample_idx = (start_idx + i) & _params.neighbor_offset_mask;
+    int2 spatial_offset = int2(neighbor_offset_buf.Load<float2>(sample_idx) *
+                               _s_params.sampling_radius);
+    int2 idx = int2(_pixel_pos) + spatial_offset;
+    idx = ClampScreenPosition(idx);
+
+    Surface neighbor_surface = GetGBufferSurface(idx);
+
+    if (!neighbor_surface.IsValid()) {
+      continue;
+    }
+
+    if (!Math::IsValidNeighbor(
+            _surface.GetNormal(), neighbor_surface.GetNormal(),
+            _surface.GetLinearDepth(), neighbor_surface.GetLinearDepth(),
+            _s_params.normal_threshold, _s_params.depth_threshold)) {
+      continue;
+    }
+
+    if (_s_params.b_test_material_similarity &&
+        !_surface.HasSimilarMaterial(neighbor_surface)) {
+      continue;
+    }
+
+    Reservoir neighbor_res =
+        LoadReservoir(_reservoir_buffer_params, idx, _s_params.src_buffer_idx);
+
+    if (neighbor_res.IsValid()) {
+      if (_s_params.discount_native_samples &&
+          neighbor_res.M < NAIVE_SAMPLING_M_THRESHOLD)
+        continue;
+    }
+    num_valid_samples++;
+
+    if (neighbor_res.M <= 0) {
+      continue;
+    }
+
+    StreamNeighborWithPairwiseMIS(res, _rng.GetFloat(), neighbor_res,
+                                  neighbor_surface, _cur_res, _surface,
+                                  num_samples);
+  }
+
+  res.canonical_weight = (num_valid_samples > 0) ? res.canonical_weight : 1.f;
+
+  StreamCanonicalWithPairwiseMIS(res, _rng.GetFloat(), _cur_res, _surface);
+  res.FinalizeRIS(1.f, float(max(1, num_valid_samples)));
+
+  _out_sample = _surface.SamplePolymorphicLight(
+      LoadLightInfo(res.GetLightIndex()), res.GetUV());
+  return res;
+}
+
+Reservoir SpatialResampling(uint2 _pixel_pos, Surface _surface,
+                            Reservoir _cur_res, inout RandomState _rng,
+                            DI::CommonParams _params,
+                            ReservoirBufferParams _reservoir_buffer_params,
+                            SpatialResampleParams _s_params,
+                            inout LightSample _out_sample) {
+
+  if (_s_params.bias_correction_mode == s_di_bias_correction_pair_wise) {
+    return SpatialResampleWithPairwiseMIS(_pixel_pos, _surface, _cur_res, _rng,
+                                          _params, _reservoir_buffer_params,
+                                          _s_params, _out_sample);
+  }
+
+  Reservoir res = Reservoir::EmptyReservoir();
+  float normalization_weight = 1.f;
+
+  int selected = -1;
+  PolymorphicLightInfo selected_light_info = EmptyLightInfo();
+
+  if (_cur_res.IsValid()) {
+    selected_light_info = LoadLightInfo(_cur_res.GetLightIndex());
+  }
+
+  res.Combine(_cur_res, 0.5f, _cur_res.target_pdf);
+  uint start_idx = uint(_rng.GetFloat() * _params.neighbor_offset_mask);
+
+  uint num_samples =
+      _cur_res.M < _s_params.max_history_length
+          ? max(_s_params.num_disocclusion_samples, _s_params.num_samples)
+          : _s_params.num_samples;
+
+  num_samples = min(num_samples, 32);
+  uint result_mask = 0;
+
+  uint i;
+  ArrayBuffer neighbor_offset_buf =
+      (ArrayBuffer)resample_params.bindless_handles.neighbor_offset;
+  // two iteration over the samples
+  for (i = 0; i < num_samples; i++) {
+    uint sample_idx = (start_idx + i) & _params.neighbor_offset_mask;
+    int2 spatial_offset = int2(neighbor_offset_buf.Load<float2>(sample_idx) *
+                               _s_params.sampling_radius);
+    int2 idx = int2(_pixel_pos) + spatial_offset;
+    idx = ClampScreenPosition(idx);
+
+    Surface neighbor_surface = GetGBufferSurface(idx);
+
+    if (!neighbor_surface.IsValid()) {
+      continue;
+    }
+
+    if (!Math::IsValidNeighbor(
+            _surface.GetNormal(), neighbor_surface.GetNormal(),
+            _surface.GetLinearDepth(), neighbor_surface.GetLinearDepth(),
+            _s_params.normal_threshold, _s_params.depth_threshold)) {
+      continue;
+    }
+
+    if (_s_params.b_test_material_similarity &&
+        !_surface.HasSimilarMaterial(neighbor_surface)) {
+      continue;
+    }
+
+    Reservoir neighbor_res =
+        LoadReservoir(_reservoir_buffer_params, idx, _s_params.src_buffer_idx);
+
+    neighbor_res.spatial_dist += spatial_offset;
+    result_mask |= 1u << i;
+
+    PolymorphicLightInfo light_info = EmptyLightInfo();
+    float neighbor_weight = 0.f;
+    LightSample l_sample = LightSample::EmptyLightSample();
+
+    if (neighbor_res.IsValid()) {
+      if (_s_params.discount_native_samples &&
+          neighbor_res.M < NAIVE_SAMPLING_M_THRESHOLD) {
+        continue;
+      }
+
+      light_info = LoadLightInfo(neighbor_res.GetLightIndex());
+      l_sample =
+          _surface.SamplePolymorphicLight(light_info, neighbor_res.GetUV());
+      neighbor_weight = _surface.GetLightSampleTargetPdf(l_sample);
+    }
+
+    if (res.Combine(neighbor_res, _rng.GetFloat(), neighbor_weight)) {
+      selected = int(i);
+      selected_light_info = light_info;
+      _out_sample = l_sample;
+    }
+  }
+
+  if (res.IsValid()) {
+    if (_s_params.bias_correction_mode >= s_di_bias_correction_basic) {
+      float pi = res.target_pdf;
+      float pi_sum = res.target_pdf * _cur_res.M;
+
+      // second iteration to update visibility
+      for (i = 0; i < num_samples; i++) {
+        if ((result_mask & (1u << i)) == 0) {
+          continue;
+        }
+        uint sample_idx = (start_idx + i) & _params.neighbor_offset_mask;
+        int2 spatial_offset =
+            int2(neighbor_offset_buf.Load<float2>(sample_idx) *
+                 _s_params.sampling_radius);
+        int2 idx = int2(_pixel_pos) + spatial_offset;
+        idx = ClampScreenPosition(idx);
+
+        Surface neighbor_surface = GetGBufferSurface(idx);
+
+        LightSample neighbor_sample = neighbor_surface.SamplePolymorphicLight(
+            selected_light_info, res.GetUV());
+        float ps = neighbor_surface.GetLightSampleTargetPdf(neighbor_sample);
+
+        if (_s_params.bias_correction_mode >= s_di_bias_correction_traced &&
+            ps > 0.f) {
+          if (!GetCurrentConservativeVisibility(neighbor_surface, neighbor_sample.x)) {
+            ps = 0.f;
+          }
+        }
+
+        Reservoir neighbor_res = LoadReservoir(_reservoir_buffer_params, idx,
+                                               _s_params.src_buffer_idx);
+        pi = selected == i ? ps : pi;
+        pi_sum += ps * neighbor_res.M;
+      }
+
+      res.FinalizeRIS(pi, pi_sum);
+    } else {
+      res.FinalizeRIS(1.f, res.M);
+    }
+  }
+
+  return res;
+}
 } // namespace DI
 } // namespace Moer
 #endif // MOER_DI_RESAMPLE_FUNCTIONS_HLSLI

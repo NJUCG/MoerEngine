@@ -47,7 +47,7 @@ bool ShadeSurface(inout Moer::DI::Reservoir _res, Moer::Surface _surface,
     _sample.radiance *= vis;
   }
   _sample.radiance *= _res.GetInvPdf() / _sample.solid_angle_pdf;
-  
+
   if (any(_sample.radiance > 0.f)) {
     float3 diffuse_term = 0.f;
     float3 specular_term = 0.f;
@@ -79,7 +79,7 @@ main(uint2 dtid
   float3 specular = 0.f;
   float light_dist = 0.f;
   float2 cur_luminance = 0.f;
- 
+
   float3 debug_color_red = float3(1, 0, 0);
   float3 debug_color_green = float3(0, 1, 0);
   bool b_use_red = false;
@@ -102,12 +102,11 @@ main(uint2 dtid
     specular = specular;
     diffuse *= surface.diffuse_albedo;
 
-
     if (b_store) {
       Moer::DI::StoreReservoir(res, params.reservoir_buffer_params, pixel_pos,
                                params.buffer_indices.shading_input_buff_idx);
     }
-    if(res.age > 0){
+    if (res.age > 0) {
       b_use_red = true;
     }
   }
@@ -115,8 +114,17 @@ main(uint2 dtid
 
   rw_diffuse_lighting[pixel_pos] = float4(diffuse, light_dist);
   rw_specular_lighting[pixel_pos] = float4(specular, light_dist);
-  // rw_specular_lighting[pixel_pos] = float4(b_use_red ? debug_color_red : debug_color_green, light_dist);
+  // rw_specular_lighting[pixel_pos] = float4(b_use_red ? debug_color_red :
+  // debug_color_green, light_dist);
+  // rw_diffuse_lighting[pixel_pos] = float4(0.f, 0.f, 0.f, 0.f);
+  // Moer::DI::Reservoir prev_res = Moer::DI::LoadReservoir(
+  //     params.reservoir_buffer_params, pixel_pos,
+  //     params.buffer_indices.temperal_resample_input_buff_idx);
+  // if (prev_res.IsValid()) {
+  //   rw_diffuse_lighting[pixel_pos] = float4(
+  //       float3(0.2f, 0.2f, 0.1f), prev_res.GetInvPdf());
+  // }
 
-  //test
-  // rw_diffuse_lighting[pixel_pos] = float4(diffuse + specular, light_dist);
+  // test
+  //  rw_diffuse_lighting[pixel_pos] = float4(diffuse + specular, light_dist);
 }

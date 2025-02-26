@@ -717,6 +717,7 @@ int main(int argc, const char** argv) {
             visualize_pass->Process(cmd_list, *rt_ctx, visualize_config, bindless_array);
             //copy normal to output
             // cmd_list.CopyFrom(out_direct_lighting->GetView(), scene_color->GetView());
+            rt_ctx->AdvanceFrame();
         }
 
         // rt_scene->MarkModified(0);
@@ -752,7 +753,6 @@ int main(int argc, const char** argv) {
         //     }
         // }
         rt_scene->AdvanceFrame();
-        rt_ctx->AdvanceFrame();
 
         time++;
         gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time));

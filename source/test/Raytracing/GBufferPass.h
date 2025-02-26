@@ -48,6 +48,7 @@ namespace Moer::Render {
 
         BufferRef        gbuffer_constants;
         GBufferConstants constants{};
+        Array<byte>      upload_data;
 
         RaytracingGBufferPipeline gbuffer_pass_pipeline;
     };

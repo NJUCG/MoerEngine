@@ -103,6 +103,7 @@ namespace Moer {
             Scene& scene;
 
             ResampleConstants constants;
+            Array<byte>       upload_data;
 
             PresampleLightPipeline        presample_light_pipeline;
             PresampleEnvMapPipeline       presample_env_map_pipeline;

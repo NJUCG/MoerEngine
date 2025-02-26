@@ -23,10 +23,12 @@ namespace Moer::Render {
 
         constants.main_view = _rt_ctx.main_view;
         constants.prev_view = _rt_ctx.prev_view;
+        upload_data.resize(sizeof(GBufferConstants));
+        std::memcpy(upload_data.data(), &constants, sizeof(GBufferConstants));
 
         FrameResources& frame_rt        = _rt_ctx.frame_rt;
         bool            b_current_frame = _rt_ctx.b_current_frame;
-        _cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)&constants, sizeof(GBufferConstants)), gbuffer_constants->GetView());
+        _cmd_list.CopyFrom(std::move(upload_data), gbuffer_constants->GetView());
 
         _cmd_list.Compute(gbuffer_pass_pipeline,
                           params,

@@ -8,7 +8,8 @@ main(uint2 dtid
   uint2 pixel_pos = dtid.xy;
   // printf("pixel_pos: %d %d\n", pixel_pos.x, pixel_pos.y);
 
-  Moer::RandomState rng = Moer::RandomState::Create(pixel_pos, 1 * 13 + resample_params.frame_idx);
+  Moer::RandomState rng =
+      Moer::RandomState::Create(pixel_pos, 2 * 13 + resample_params.frame_idx);
 
   Moer::Surface surface = Moer::GetGBufferSurface(pixel_pos);
 

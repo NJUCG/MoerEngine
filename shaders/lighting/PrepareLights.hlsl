@@ -101,23 +101,6 @@ bool FindTask(uint dtid, out Moer::PrepareLightsTask task) {
     tri_light.radiance = emissive;
 
     light_info = tri_light.ToLightInfo();
-    tri_light = Moer::TriangleLight::Create(light_info);
-
-    // float3 test_bary = float3(0.1f, 0.3f, 0.6f);
-    ArrayBuffer geo_inst_to_light_handle =
-        ArrayBuffer(param.geom_inst_to_light);
-
-    uint geo_inst_idx = inst.first_geom_idx + (task.instance_geo_idx & 0xfff);
-    uint li_idx = geo_inst_to_light_handle.Load<uint>(geo_inst_idx);
-
-    // printf("light_buf_idx %d idx %d geo_inst_idx %d\n", task.light_offset + tri_idx, li_idx, geo_inst_idx);
-    // float3 test_pos = Moer::Interpolate(positions, test_bary);
-    // float sqrt_x = 1.f - test_bary.x;
-    // float2 rand2 = float2(sqrt_x * sqrt_x, test_bary.z / sqrt_x);
-    // Moer::PolymorphicLightSample sp = tri_light.Sample(rand2, 0.f);
-    // float3 sp_pos = sp.pos;
-    // printf("test_pos %f %f %f sp_pos %f %f %f\n", test_pos.x, test_pos.y,
-    //        test_pos.z, sp_pos.x, sp_pos.y, sp_pos.z);
   }
 
   uint light_buf_idx = task.light_offset + tri_idx;

@@ -14,8 +14,8 @@ namespace Moer::Render {
 
         generate_initial_sample_pipeline = std::move(_manager.Compute<GenerateInitialSamplePipeline>("hwrt/ReSTIRDI/GenerateInitialSamples.hlsl"));
         temporal_resmaple_pipeline       = std::move(_manager.Compute<TemporalResmaplePipeline>("hwrt/ReSTIRDI/TemporalResampling.hlsl"));
-        // spatial_resample_pipeline        = std::move(_manager.Compute<SpatialResamplePipeline>("hwrt/ReSTIRDI/SpatialResample.hlsl"));
-        di_shade_sample_pipeline = std::move(_manager.Compute<DIShadeSamplePipeline>("hwrt/ReSTIRDI/Shading.hlsl"));
+        spatial_resample_pipeline        = std::move(_manager.Compute<SpatialResamplePipeline>("hwrt/ReSTIRDI/SpatialResampling.hlsl"));
+        di_shade_sample_pipeline         = std::move(_manager.Compute<DIShadeSamplePipeline>("hwrt/ReSTIRDI/Shading.hlsl"));
 
         auto& device    = RenderDevice::Get();
         resample_params = device.CreateBuffer<byte>(sizeof(ResampleConstants), EBufferUsageFlags::CONSTANT_BUFFER);
@@ -59,8 +59,9 @@ namespace Moer::Render {
         constants.enable_accumulation     = 1;
         constants.discount_native_samples = 1;
         constants.visualize_cells         = 0;
-
-        _cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)&constants, sizeof(ResampleConstants)), resample_params->GetView());
+        upload_data.resize(sizeof(ResampleConstants));
+        std::memcpy(upload_data.data(), &constants, sizeof(ResampleConstants));
+        _cmd_list.CopyFrom(std::move(upload_data), resample_params->GetView());
         bool b_current_frame = _rt_ctx.b_current_frame;
 
 #define DI_BINDING_ARGS(ctx)                                                                 \
@@ -117,6 +118,10 @@ namespace Moer::Render {
             _cmd_list.Compute(temporal_resmaple_pipeline,
                               DI_BINDING_ARGS(_rt_ctx))
                 .Dispatch(uint3(dispatch_size, 1), "TemporalResample");
+
+            // _cmd_list.Compute(spatial_resample_pipeline,
+            //                   DI_BINDING_ARGS(_rt_ctx))
+            //     .Dispatch(uint3(dispatch_size, 1), "SpatialResample");
 
             _cmd_list.Compute(di_shade_sample_pipeline,
                               DI_BINDING_ARGS(_rt_ctx))

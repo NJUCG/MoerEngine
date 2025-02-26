@@ -91,18 +91,18 @@ namespace Moer::Render {
         params.discard_inviable_samples     = 0;
         params.max_history_length           = 16;
         params.bias_correction_mode         = s_di_bias_correction_traced;
-        params.depth_threshold              = 0.1f;
+        params.depth_threshold              = 10.1f;
         params.normal_threshold             = 0.5f;
         return params;
     }
 
     inline static DI::ReSTIRDISpatialResampleParams GetDefaultReSTIRDISpatialResampleParams() {
         DI::ReSTIRDISpatialResampleParams params;
-        params.bias_correction_mode     = s_di_bias_correction_basic;
+        params.bias_correction_mode     = s_di_bias_correction_traced;
         params.depth_threshold          = 0.1f;
-        params.normal_threshold         = 0.5f;
+        params.normal_threshold         = 0.6f;
         params.num_disocclusion_samples = 8;
-        params.num_spatial_samples      = 1;
+        params.num_spatial_samples      = 2;
         params.radius                   = 32.f;
         return params;
     }

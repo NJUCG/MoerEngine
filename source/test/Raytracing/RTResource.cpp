@@ -348,10 +348,10 @@ namespace Moer::Render {
         main_view.rect              = float2(is_ctx.GetReSTIRDIConfig().render_width, is_ctx.GetReSTIRDIConfig().render_height);
         main_view.inv_rect          = float2(1.f / main_view.rect.x, 1.f / main_view.rect.y);
         main_view.dir_or_pos        = float4(_camera->GetPosition(), 1.f);
-        main_view.clip2window_scale = float2(0.5f * main_view.rect.x, 0.5f * main_view.rect.y);
+        main_view.clip2window_scale = float2(0.5f * main_view.rect.x, -0.5f * main_view.rect.y);
         main_view.clip2window_bias  = float2(0.5f * main_view.rect.x, 0.5f * main_view.rect.y);
-        main_view.window2clip_scale = float2(2.f / main_view.rect.x, 2.f / main_view.rect.y);
-        main_view.window2clip_bias  = float2(-1.f, -1.f);
+        main_view.window2clip_scale = float2(2.f / main_view.rect.x, -2.f / main_view.rect.y);
+        main_view.window2clip_bias  = float2(-1.f, 1.f);
         //restir
         {
 

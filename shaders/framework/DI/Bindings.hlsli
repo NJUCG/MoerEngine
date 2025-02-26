@@ -252,6 +252,27 @@ struct Surface {
         SpecularTerm(v, normalize(l), n, roughness, specular_f0, fresnel);
     _diffuse *= (1.f - fresnel);
   }
+
+  bool HasSimilarMaterial(Surface _other) {
+
+    const float roughness_threshold = 0.15f;
+    const float reflectance_threshold = 0.25f;
+    const float albedo_threshold = 0.25f;
+
+    if (!Math::CompareDifferance(roughness, _other.roughness,
+                                 roughness_threshold))
+      return false;
+
+    if (abs(STL::Color::Luminance(diffuse_albedo) -
+            STL::Color::Luminance(_other.diffuse_albedo)) > albedo_threshold)
+      return false;
+
+    if (abs(STL::Color::Luminance(specular_f0) -
+            STL::Color::Luminance(_other.specular_f0)) > reflectance_threshold)
+      return false;
+
+    return true;
+  }
 };
 
 // prev to current & current to prev
@@ -427,6 +448,22 @@ uint GetLightIndex(uint _instance_idx, uint _geom_idx, uint _prim_idx) {
   if (light_idx == s_invalid_light_idx)
     return light_idx;
   return light_idx + _prim_idx;
+}
+
+int2 ClampScreenPosition(int2 _pixel_pos) {
+  int width = resample_params.main_view.rect.x;
+  int height = resample_params.main_view.rect.y;
+
+  if (_pixel_pos.x < 0)
+    _pixel_pos.x = -_pixel_pos.x;
+  if (_pixel_pos.y < 0)
+    _pixel_pos.y = -_pixel_pos.y;
+  if (_pixel_pos.x >= width)
+    _pixel_pos.x = 2 * width - _pixel_pos.x - 1;
+  if (_pixel_pos.y >= height)
+    _pixel_pos.y = 2 * height - _pixel_pos.y - 1;
+
+  return _pixel_pos;
 }
 
 bool RaytraceLocalLightVisibility(float3 _origin, float3 _direction,
