@@ -50,6 +50,11 @@ Reservoir TemporalResampling(uint2 _pixel_pos, Surface _surface,
   _temporal_sample_pos = int2(-1, -1);
   Reservoir res = Reservoir::EmptyReservoir();
   res.Combine(_cur_res, 0.5f, _cur_res.target_pdf);
+
+  //DEBUG
+  // res.FinalizeRIS(1.f, _cur_res.M);
+  // return res;
+
   bool b_valid_cur_res = res.IsValid();
   float3 motion = _t_params.screen_motion;
 
@@ -88,7 +93,7 @@ Reservoir TemporalResampling(uint2 _pixel_pos, Surface _surface,
     if (!Math::IsValidNeighbor(
             _surface.GetNormal(), temporal_surface.GetNormal(),
             expected_depth_linear, temporal_surface.GetLinearDepth(),
-            _t_params.normal_threshold, 2.f)) {
+            _t_params.normal_threshold, _t_params.depth_threshold)) {
 
       continue;
     }
@@ -341,7 +346,6 @@ Reservoir SpatialResampling(uint2 _pixel_pos, Surface _surface,
   }
 
   Reservoir res = Reservoir::EmptyReservoir();
-  float normalization_weight = 1.f;
 
   int selected = -1;
   PolymorphicLightInfo selected_light_info = EmptyLightInfo();
@@ -351,6 +355,8 @@ Reservoir SpatialResampling(uint2 _pixel_pos, Surface _surface,
   }
 
   res.Combine(_cur_res, 0.5f, _cur_res.target_pdf);
+  // res.FinalizeRIS(1.f, _cur_res.M);
+  // return res;
   uint start_idx = uint(_rng.GetFloat() * _params.neighbor_offset_mask);
 
   uint num_samples =
@@ -360,7 +366,6 @@ Reservoir SpatialResampling(uint2 _pixel_pos, Surface _surface,
 
   num_samples = min(num_samples, 32);
   uint result_mask = 0;
-
   uint i;
   ArrayBuffer neighbor_offset_buf =
       (ArrayBuffer)resample_params.bindless_handles.neighbor_offset;
@@ -370,6 +375,7 @@ Reservoir SpatialResampling(uint2 _pixel_pos, Surface _surface,
     int2 spatial_offset = int2(neighbor_offset_buf.Load<float2>(sample_idx) *
                                _s_params.sampling_radius);
     int2 idx = int2(_pixel_pos) + spatial_offset;
+    int2 test_idx = idx;
     idx = ClampScreenPosition(idx);
 
     Surface neighbor_surface = GetGBufferSurface(idx);
@@ -392,9 +398,9 @@ Reservoir SpatialResampling(uint2 _pixel_pos, Surface _surface,
 
     Reservoir neighbor_res =
         LoadReservoir(_reservoir_buffer_params, idx, _s_params.src_buffer_idx);
+    result_mask |= 1u << i;
 
     neighbor_res.spatial_dist += spatial_offset;
-    result_mask |= 1u << i;
 
     PolymorphicLightInfo light_info = EmptyLightInfo();
     float neighbor_weight = 0.f;
@@ -410,6 +416,8 @@ Reservoir SpatialResampling(uint2 _pixel_pos, Surface _surface,
       l_sample =
           _surface.SamplePolymorphicLight(light_info, neighbor_res.GetUV());
       neighbor_weight = _surface.GetLightSampleTargetPdf(l_sample);
+
+
     }
 
     if (res.Combine(neighbor_res, _rng.GetFloat(), neighbor_weight)) {
@@ -417,6 +425,7 @@ Reservoir SpatialResampling(uint2 _pixel_pos, Surface _surface,
       selected_light_info = light_info;
       _out_sample = l_sample;
     }
+
   }
 
   if (res.IsValid()) {
@@ -426,31 +435,36 @@ Reservoir SpatialResampling(uint2 _pixel_pos, Surface _surface,
 
       // second iteration to update visibility
       for (i = 0; i < num_samples; i++) {
-        if ((result_mask & (1u << i)) == 0) {
+        if ((result_mask & (1u << uint(i))) == 0) {
           continue;
         }
         uint sample_idx = (start_idx + i) & _params.neighbor_offset_mask;
-        int2 spatial_offset =
-            int2(neighbor_offset_buf.Load<float2>(sample_idx) *
-                 _s_params.sampling_radius);
+        int2 spatial_offset = int2(neighbor_offset_buf.Load<float2>(sample_idx) *
+                                  _s_params.sampling_radius);
+
         int2 idx = int2(_pixel_pos) + spatial_offset;
         idx = ClampScreenPosition(idx);
 
         Surface neighbor_surface = GetGBufferSurface(idx);
 
-        LightSample neighbor_sample = neighbor_surface.SamplePolymorphicLight(
+        LightSample neighbor_sample = _surface.SamplePolymorphicLight(
             selected_light_info, res.GetUV());
         float ps = neighbor_surface.GetLightSampleTargetPdf(neighbor_sample);
 
         if (_s_params.bias_correction_mode >= s_di_bias_correction_traced &&
             ps > 0.f) {
-          if (!GetCurrentConservativeVisibility(neighbor_surface, neighbor_sample.x)) {
+          if (!GetCurrentConservativeVisibility(_surface, neighbor_sample.x)) {
             ps = 0.f;
           }
         }
 
         Reservoir neighbor_res = LoadReservoir(_reservoir_buffer_params, idx,
                                                _s_params.src_buffer_idx);
+
+        // if(!neighbor_res.IsValid() && ps > 0.f) {
+        //   // printf("neighbor_res is invalid\n");
+        //   continue;
+        // }
         pi = selected == i ? ps : pi;
         pi_sum += ps * neighbor_res.M;
       }

@@ -413,12 +413,12 @@ int main(int argc, const char** argv) {
     UniquePtr<LightingPass>     lighting_pass      = MakeUnique<LightingPass>(manager, g_scene);
     UniquePtr<VisualizePass>    visualize_pass     = MakeUnique<VisualizePass>(device, manager);
     UniquePtr<RTContext>        rt_ctx             = MakeUnique<RTContext>(sd_utils, is_ctx, bindless_array);
-    rt_ctx->FillFrameResources(resolution);
+    rt_ctx->SetResolution(resolution);
 
     VisualizeConfig visualize_config{};
     visualize_config.b_split        = false;
     visualize_config.split_ratio    = 0.5f;
-    visualize_config.visualize_mode = EFC_SceneColor;
+    visualize_config.visualize_mode = EFC_DI;
 
     while (WindowContext::ShouldClose(window_handle) == false) {
         WindowContext::Tick();
@@ -455,7 +455,7 @@ int main(int argc, const char** argv) {
 
             create_frame_buffers(resolution);
             if (rt_ctx)
-                rt_ctx->FillFrameResources(resolution);
+                rt_ctx->SetResolution(resolution);
             is_ctx.~ImportanceSamplingContext();
             is_params.render_size = resolution;
             new (&is_ctx) ImportanceSamplingContext(is_params);
@@ -660,7 +660,8 @@ int main(int argc, const char** argv) {
 
             //fill ui data
             {
-                auto grid_cfg                  = is_ctx.GetGridChangableConfig();
+                auto        grid_cfg           = is_ctx.GetGridChangableConfig();
+                const auto& ui_cfg             = rt_ui.GetConfig();
                 grid_cfg.cell_size             = rt_ui.GetConfig().grid_config.cell_size;
                 grid_cfg.center                = camera->GetPosition();
                 auto grid_static_cfg           = is_ctx.GetGridConfig();
@@ -668,7 +669,17 @@ int main(int argc, const char** argv) {
                 grid_static_cfg.grid_mode      = rt_ui.GetConfig().grid_config.grid_mode;
                 is_ctx.SetGridConfig(grid_static_cfg);
                 is_ctx.SetChangeableGridConfig(grid_cfg);
-                is_ctx.SetReSTIRDIInitialSampleMode(rt_ui.GetConfig().restir_di_cfg.initial_local_light_sample_mode);
+
+                auto di_initial_sample_config                      = is_ctx.GetDIInitialSampleParams();
+                auto di_temporal_resampling_config                 = is_ctx.GetDITemporalResampleParams();
+                auto di_spatial_resampling_config                  = is_ctx.GetDISpatialResampleParams();
+                di_initial_sample_config.local_light_sample_mode   = ui_cfg.restir_di_cfg.initial_sample_config.local_light_sample_mode;
+                di_temporal_resampling_config.bias_correction_mode = ui_cfg.restir_di_cfg.temporal_resample_config.bias_correction;
+                di_spatial_resampling_config.bias_correction_mode  = ui_cfg.restir_di_cfg.spatial_resample_config.bias_correction;
+
+                is_ctx.SetReSTIRDIIInitialSampleParams(di_initial_sample_config);
+                is_ctx.SetReSTIRDITemporalResampleParams(di_temporal_resampling_config);
+                is_ctx.SetReSTIRDISpatialResampleParams(di_spatial_resampling_config);
             }
 
             is_ctx.TickFrame(time);
@@ -698,22 +709,22 @@ int main(int argc, const char** argv) {
             param.jitter                 = float2(0, 0);
             param.frame_idx              = time;
 
-            cmd_list.Compute(rt_shader,
-                             param,
-                             rt_config_param_buffer,
-                             out_normal_roughness,
-                             out_basecolor_metalness,
-                             out_direct_lighting,
-                             out_emission,
-                             out_diffuse,
-                             out_specular,
-                             out_view_z,
-                             out_mv,
-                             out_shadow_info,
-                             rt_ctx->frame_rt.scene_color,
-                             bindless_array,
-                             rt_scene->GetTlas())
-                .Dispatch(uint3((resolution.x + 15) >> 4, (resolution.y + 15) >> 4, 1), "PathTracing");
+            // cmd_list.Compute(rt_shader,
+            //                  param,
+            //                  rt_config_param_buffer,
+            //                  out_normal_roughness,
+            //                  out_basecolor_metalness,
+            //                  out_direct_lighting,
+            //                  out_emission,
+            //                  out_diffuse,
+            //                  out_specular,
+            //                  out_view_z,
+            //                  out_mv,
+            //                  out_shadow_info,
+            //                  rt_ctx->frame_rt.scene_color,
+            //                  bindless_array,
+            //                  rt_scene->GetTlas())
+            //     .Dispatch(uint3((resolution.x + 15) >> 4, (resolution.y + 15) >> 4, 1), "PathTracing");
             visualize_pass->Process(cmd_list, *rt_ctx, visualize_config, bindless_array);
             //copy normal to output
             // cmd_list.CopyFrom(out_direct_lighting->GetView(), scene_color->GetView());

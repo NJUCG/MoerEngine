@@ -17,8 +17,22 @@ namespace Moer::Render {
             float cell_size      = 1.f;
         };
 
+        struct ReSTIRDIInitialSampleConfig {
+            uint local_light_sample_mode = s_di_local_light_sample_mode_grid;
+        };
+
+        struct ReSTIRDITemporalResampleConfig {
+            uint bias_correction = s_di_bias_correction_traced;
+        };
+
+        struct ReSTIRDISpatialResampleConfig {
+            uint bias_correction = s_di_bias_correction_pair_wise;
+        };
+
         struct ReSTIRDIConfig {
-            uint initial_local_light_sample_mode = s_di_local_light_sample_mode_grid;
+            ReSTIRDIInitialSampleConfig    initial_sample_config;
+            ReSTIRDITemporalResampleConfig temporal_resample_config;
+            ReSTIRDISpatialResampleConfig  spatial_resample_config;
         };
         struct Config {
             float3 sun_direction        = float3(0.f, 0.5f, 0.16f);
@@ -28,7 +42,7 @@ namespace Moer::Render {
 
             GridConfig     grid_config{};
             ReSTIRDIConfig restir_di_cfg{};
-            EFinalColor    final_color = EFinalColor::EFC_SceneColor;
+            EFinalColor    final_color = EFinalColor::EFC_DI;
         };
         RTUI(UIRenderer& _renderer);
         ~RTUI() = default;
