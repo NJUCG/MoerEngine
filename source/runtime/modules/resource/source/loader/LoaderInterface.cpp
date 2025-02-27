@@ -30,6 +30,7 @@ namespace Resource {
         Scene::RegisterAsyncLoadInfo(load_info);
         LambdaTask::Dispatch([_file_path, _scene, load_info, ext]() {
             if (auto scene_data = std::move(scene_load_function_maps[ext](_file_path))) {
+                LOG_INFO("Raw data is loaded to SceneData successfully, converting to Scene...");
                 SceneCache::ConvertToScene(*scene_data, _scene, true);
                 load_info->progress.store(1);
                 LOG_INFO("Scene loaded successfully from file: {}", _file_path.string());

@@ -660,25 +660,44 @@ namespace Moer {
             buf->vtx_bdls_handle = bindless_array->AllocateBuffer(buf->vertex_buffer->GetView());
             buf->vertex_buffer->SetName("soa_vertex_buffer");
             buf->index_buffer->SetName("index_buffer");
-            cmd_list.CopyFrom(std::span<byte>((byte*)position_buffer_ptr, position_buffer_size), buf->vertex_buffer->GetView(0, buf->GetAttributeRange(EVertexAttributes::VA_POSITION).size));
-            cmd_list.CopyFrom(std::span<byte>((byte*)normal_buffer_ptr, normal_buffer_size), buf->vertex_buffer->GetView(buf->GetAttributeRange(EVertexAttributes::VA_NORMAL).offset, buf->GetAttributeRange(EVertexAttributes::VA_NORMAL).size));
-            cmd_list.CopyFrom(std::span<byte>((byte*)tangent_buffer_ptr, tangent_buffer_size), buf->vertex_buffer->GetView(buf->GetAttributeRange(EVertexAttributes::VA_TANGENT).offset, buf->GetAttributeRange(EVertexAttributes::VA_TANGENT).size));
-            cmd_list.CopyFrom(std::span<byte>((byte*)texcoord0_buffer_ptr, texcoord0_buffer_size), buf->vertex_buffer->GetView(buf->GetAttributeRange(EVertexAttributes::VA_TEXCOORD0).offset, buf->GetAttributeRange(EVertexAttributes::VA_TEXCOORD0).size));
+            cmd_list.CopyFrom(
+                std::span<byte>((byte*)position_buffer_ptr, position_buffer_size),
+                buf->vertex_buffer->GetView(0, buf->GetAttributeRange(EVertexAttributes::VA_POSITION).size),
+                "CopyFrom MeshBuffers position_buffer");
+            cmd_list.CopyFrom(
+                std::span<byte>((byte*)normal_buffer_ptr, normal_buffer_size),
+                buf->vertex_buffer->GetView(buf->GetAttributeRange(EVertexAttributes::VA_NORMAL).offset, buf->GetAttributeRange(EVertexAttributes::VA_NORMAL).size),
+                "CopyFrom MeshBuffers normal_buffer");
+            cmd_list.CopyFrom(
+                std::span<byte>((byte*)tangent_buffer_ptr, tangent_buffer_size),
+                buf->vertex_buffer->GetView(buf->GetAttributeRange(EVertexAttributes::VA_TANGENT).offset, buf->GetAttributeRange(EVertexAttributes::VA_TANGENT).size),
+                "CopyFrom MeshBuffers tangent_buffer");
+            cmd_list.CopyFrom(
+                std::span<byte>((byte*)texcoord0_buffer_ptr, texcoord0_buffer_size),
+                buf->vertex_buffer->GetView(buf->GetAttributeRange(EVertexAttributes::VA_TEXCOORD0).offset, buf->GetAttributeRange(EVertexAttributes::VA_TEXCOORD0).size),
+                "CopyFrom MeshBuffers texcoord0_buffer");
             // if (buf->GetAttributeRange(EVertexAttributes::VA_TEXCOORD1).size > 0)
             //     cmd_list.CopyFrom(std::span<byte>((byte*)texcoord1_buffer_ptr, texcoord1_buffer_size), buf->vertex_buffer->GetView(buf->GetAttributeRange(EVertexAttributes::VA_TEXCOORD1).offset, buf->GetAttributeRange(EVertexAttributes::VA_TEXCOORD1).size));
 
-            cmd_list.CopyFrom(std::span<byte>((byte*)buf->indices.data(), buf->indices.size() * sizeof(uint32_t)), buf->index_buffer->GetView());
+            cmd_list.CopyFrom(
+                std::span<byte>((byte*)buf->indices.data(), buf->indices.size() * sizeof(uint32_t)),
+                buf->index_buffer->GetView(),
+                "CopyFrom MeshBuffers index_buffer");
         }
 
         _scene->UpdateGpuData();
 
         auto& copy_queue = device.GetCopyQueue();
 
-        auto meshlet_bounds_buffer = device.CreateBuffer<byte>(_scene_data.m_meshlet_bounds.size() * sizeof(MeshletBound), EBufferUsageFlags::UNORDERED_ACCESS);
-        auto meshlet_descs_buffer  = device.CreateBuffer<byte>(_scene_data.m_meshlet_descs.size() * sizeof(MeshletDesc), EBufferUsageFlags::UNORDERED_ACCESS);
-        auto mesh_infos_buffer     = device.CreateBuffer<byte>(_scene_data.m_mesh_infos.size() * sizeof(MeshInfo), EBufferUsageFlags::UNORDERED_ACCESS);
-        auto instance_data_buffer  = device.CreateBuffer<byte>(_scene->GetInstanceDatas().size_bytes(), EBufferUsageFlags::UNORDERED_ACCESS);
-        auto material_buffer       = device.CreateBuffer<byte>(_scene_data.m_material_instances.size() * Material::MaterialBytesNum, EBufferUsageFlags::UNORDERED_ACCESS);
+        // The following 3 buffers are not used, so I comment them.
+        // BE CAREFUL: `mesh_infos_buffer` should not be created, because it's a SharedPtr<..> vector! It may cause random crash.
+        //
+        // auto meshlet_bounds_buffer = device.CreateBuffer<byte>(_scene_data.m_meshlet_bounds.size() * sizeof(MeshletBound), EBufferUsageFlags::UNORDERED_ACCESS);
+        // auto meshlet_descs_buffer  = device.CreateBuffer<byte>(_scene_data.m_meshlet_descs.size() * sizeof(MeshletDesc), EBufferUsageFlags::UNORDERED_ACCESS);
+        // // auto mesh_infos_buffer     = device.CreateBuffer<byte>(_scene_data.m_mesh_infos.size() * sizeof(MeshInfo), EBufferUsageFlags::UNORDERED_ACCESS);
+
+        auto instance_data_buffer = device.CreateBuffer<byte>(_scene->GetInstanceDatas().size_bytes(), EBufferUsageFlags::UNORDERED_ACCESS);
+        auto material_buffer      = device.CreateBuffer<byte>(_scene_data.m_material_instances.size() * Material::MaterialBytesNum, EBufferUsageFlags::UNORDERED_ACCESS);
 
         auto geometry_data_buffer     = device.CreateBuffer<byte>(_scene->GetGeometryDatas().size_bytes(), EBufferUsageFlags::UNORDERED_ACCESS);
         auto geometry_instance_buffer = device.CreateBuffer<byte>(_scene->GetGeometryInstances().size_bytes(), EBufferUsageFlags::UNORDERED_ACCESS);
@@ -690,16 +709,47 @@ namespace Moer {
 
         BufferRef light_buffer = device.CreateBuffer<byte>(lights.size() * sizeof(LightComponentData), EBufferUsageFlags::UNORDERED_ACCESS);
 
-        cmd_list.CopyFrom(std::span<byte>((byte*)_scene_data.m_meshlet_bounds.data(), _scene_data.m_meshlet_bounds.size() * sizeof(MeshletBound)), meshlet_bounds_buffer->GetView());
-        cmd_list.CopyFrom(std::span<byte>((byte*)_scene_data.m_meshlet_descs.data(), _scene_data.m_meshlet_descs.size() * sizeof(MeshletDesc)), meshlet_descs_buffer->GetView());
-        cmd_list.CopyFrom(std::span<byte>((byte*)_scene_data.m_mesh_infos.data(), _scene_data.m_mesh_infos.size() * sizeof(MeshInfo)), mesh_infos_buffer->GetView());
-        cmd_list.CopyFrom(material_data, material_buffer->GetView());
+        // The following 3 buffers are not used, so I comment them.
+        // BE CAREFUL: `mesh_infos_buffer` should not be created, because it's a SharedPtr<..> vector! It may cause random crash.
+        //
+        // cmd_list.CopyFrom(
+        //     std::span<byte>((byte*)_scene_data.m_meshlet_bounds.data(), _scene_data.m_meshlet_bounds.size() * sizeof(MeshletBound)),
+        //     meshlet_bounds_buffer->GetView(),
+        //     "CopyFrom meshlet_bounds_buffer");
+        // cmd_list.CopyFrom(
+        //     std::span<byte>((byte*)_scene_data.m_meshlet_descs.data(), _scene_data.m_meshlet_descs.size() * sizeof(MeshletDesc)),
+        //     meshlet_descs_buffer->GetView(),
+        //     "CopyFrom meshlet_descs_buffer");
+        // // cmd_list.CopyFrom(
+        // //     std::span<byte>((byte*)_scene_data.m_mesh_infos.data(), _scene_data.m_mesh_infos.size() * sizeof(MeshInfo)),
+        // //     mesh_infos_buffer->GetView(),
+        // //     "CopyFrom mesh_infos_buffer");
 
-        cmd_list.CopyFrom(std::span<byte>((byte*)lights.data(), lights.size() * sizeof(LightComponentData)), light_buffer->GetView());
+        cmd_list.CopyFrom(
+            material_data,
+            material_buffer->GetView(),
+            "CopyFrom material_buffer");
 
-        cmd_list.CopyFrom(std::span<byte>((byte*)_scene->GetInstanceDatas().data(), _scene->GetInstanceDatas().size() * sizeof(Render::InstanceData)), instance_data_buffer->GetView());
-        cmd_list.CopyFrom(std::span<byte>((byte*)_scene->GetGeometryDatas().data(), _scene->GetGeometryDatas().size() * sizeof(Render::GeometryData)), geometry_data_buffer->GetView());
-        cmd_list.CopyFrom(std::span<byte>((byte*)_scene->GetGeometryInstances().data(), _scene->GetGeometryInstances().size() * sizeof(Render::GeometryInstance)), geometry_instance_buffer->GetView());
+        cmd_list.CopyFrom(
+            std::span<byte>((byte*)lights.data(), lights.size() * sizeof(LightComponentData)),
+            light_buffer->GetView(),
+            "CopyFrom light_buffer");
+
+        cmd_list.CopyFrom(
+            std::span<byte>((byte*)_scene->GetInstanceDatas().data(), _scene->GetInstanceDatas().size() * sizeof(Render::InstanceData)),
+            instance_data_buffer->GetView(),
+            "CopyFrom instance_data_buffer");
+
+        cmd_list.CopyFrom(
+            std::span<byte>((byte*)_scene->GetGeometryDatas().data(), _scene->GetGeometryDatas().size() * sizeof(Render::GeometryData)),
+            geometry_data_buffer->GetView(),
+            "CopyFrom geometry_data_buffer");
+
+        cmd_list.CopyFrom(
+            std::span<byte>((byte*)_scene->GetGeometryInstances().data(), _scene->GetGeometryInstances().size() * sizeof(Render::GeometryInstance)),
+            geometry_instance_buffer->GetView(),
+            "CopyFrom geometry_instance_buffer");
+
         auto evt = copy_queue.Execute(cmd_list.Submit());
         copy_queue.Sync(evt.timeline);
 
